@@ -4,7 +4,7 @@ import { api } from "../lib/api";
 
 /**
  * 批量管理动作栏（manage 模式时显示在主区顶部）。
- * 删除 / 移入新文件夹 / 批量生成提示词（Mock） + 完成。
+ * 删除 / 移入新文件夹 / 批量生成提示词（codex CLI 看图） + 完成。
  * 不用 window.confirm/prompt：Tauri 2 WKWebView 会拦截原生对话框。
  */
 export function BatchBar() {
@@ -63,7 +63,7 @@ export function BatchBar() {
     try {
       for (let i = 0; i < ids.length; i++) {
         setGenProgress(`生成中 ${i + 1}/${ids.length}`);
-        await api.codexGeneratePromptForAsset(ids[i], genRole, false);
+        await api.codexGeneratePromptForAsset(ids[i], genRole);
       }
       setGenProgress(`已完成 ${ids.length} 张`);
     } catch (e) {
@@ -138,7 +138,7 @@ export function BatchBar() {
           onClick={generatePrompts}
           disabled={busy || empty}
           className="rounded bg-panel2 px-2.5 py-1 text-xs hover:bg-edge disabled:opacity-50"
-          title="Mock provider 生成占位提示词并写库；真实多模态待 Phase 5"
+          title="codex CLI 看图生成提示词并写库"
         >
           批量生成提示词
         </button>

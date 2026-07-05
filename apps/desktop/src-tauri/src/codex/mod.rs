@@ -1,8 +1,8 @@
 //! Codex Provider 抽象（开发计划 §2.4）。
 //!
-//! 统一 trait，首期实现 ClaudeCode（`claude -p`）+ Mock（开发/离线）。
-//! Phase 3 会验证 `claude -p` 的多模态看图传参机制（路径/编码/MCP），届时
-//! 在 `claude_code.rs` 内部切换，trait 不变。
+//! 当前唯一实现 [`CodexCliProvider`]（`codex exec --image`，ChatGPT 订阅认证，
+//! 真正多模态看图）。Mock / ClaudeCode / DeepSeek / OpenAI HTTP 路线均已移除
+//! （详见 PROJECT.md「多模态看图四条路径实测」与关键约定 1）。
 
 use async_trait::async_trait;
 use tokio::sync::mpsc;
@@ -12,8 +12,7 @@ use crate::error::AppError;
 use self::types::{Chunk, CodexRequest, CodexResult};
 
 pub mod types;
-pub mod mock;
-pub mod claude_code;
+pub mod codex_cli;
 
 #[async_trait]
 pub trait CodexProvider: Send + Sync {

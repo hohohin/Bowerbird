@@ -67,9 +67,7 @@ export function Toolbar({ onRefresh }: { onRefresh: () => Promise<void> }) {
           清除
         </button>
       )}
-      <div className="ml-auto text-xs text-muted">
-        {busy ? "处理中…" : ""}
-      </div>
+      <div className="ml-auto text-xs text-muted">{busy ? "处理中…" : ""}</div>
     </div>
   );
 }

@@ -64,6 +64,7 @@ export function AssetDetail() {
 
   const [analyses, setAnalyses] = useState<Analysis[]>([]);
   const [describing, setDescribing] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
 
   async function loadAnalyses() {
     if (!id) return;
@@ -81,11 +82,13 @@ export function AssetDetail() {
   async function describe() {
     if (!id) return;
     setDescribing(true);
+    setErr(null);
     try {
-      await api.describeAsset(id, false);
+      await api.describeAsset(id);
       await loadAnalyses();
     } catch (e) {
       console.error(e);
+      setErr(typeof e === "string" ? e : JSON.stringify(e));
     } finally {
       setDescribing(false);
     }
@@ -162,7 +165,7 @@ export function AssetDetail() {
             )}
           </div>
 
-          {/* Phase 5 简化：反推（让 codex 描述这张图） */}
+          {/* Phase 5 简化：反推（让 codex CLI 描述这张图） */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <div className="text-xs font-medium uppercase tracking-wide text-muted">
@@ -172,14 +175,19 @@ export function AssetDetail() {
                 onClick={describe}
                 disabled={describing}
                 className="rounded bg-accent px-2.5 py-1 text-xs font-medium text-black disabled:opacity-50"
-                title="发 codex：请描述这张图片（默认 Mock）"
+                title="发 codex CLI：请描述这张图片"
               >
                 {describing ? "反推中…" : "反推"}
               </button>
             </div>
+            {err && (
+              <div className="whitespace-pre-wrap rounded bg-red-500/15 p-2 text-xs text-red-300">
+                {err}
+              </div>
+            )}
             {captions.length === 0 ? (
               <div className="text-xs text-muted">
-                点「反推」让 AI 描述这张图（默认 Mock；真实 claude 看图能力待 Phase 5 spike）
+                点「反推」让 codex 描述这张图（需本地 codex login）
               </div>
             ) : (
               captions.map((a) => (

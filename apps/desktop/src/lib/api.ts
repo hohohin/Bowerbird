@@ -16,7 +16,6 @@ export const api = {
   // 健康检查
   ping: (name: string) => invoke<string>("ping", { name }),
   dbHealth: () => invoke<string>("db_health"),
-  codexHealth: () => invoke<string>("codex_health"),
 
   // 导入
   importFiles: (sources: string[]) => invoke<Asset[]>("import_files", { sources }),
@@ -53,7 +52,7 @@ export const api = {
     return (r as string | null) ?? null;
   },
 
-  // 提示词 / 创作包 / codex
+  // 提示词 / 创作包 / codex（统一走 codex CLI）
   createPrompt: (body: string, title?: string, kind?: string) =>
     invoke<string>("create_prompt", { body, title, kind }),
   updatePrompt: (id: string, body: string, title?: string) =>
@@ -67,15 +66,14 @@ export const api = {
     invoke<AssetPrompt[]>("list_prompts_by_asset", { assetId }),
   assemblePack: (assetIds: string[]) =>
     invoke<CreationPack>("assemble_pack", { assetIds }),
-  codexRun: (req: CodexRequest, useReal?: boolean) =>
-    invoke<CodexResult>("codex_run", { req, useReal }),
-  codexRunStream: (req: CodexRequest, useReal?: boolean) =>
-    invoke<void>("codex_run_stream", { req, useReal }),
-  codexGeneratePromptForAsset: (assetId: string, role: string, useReal = false) =>
-    invoke<string>("codex_generate_prompt_for_asset", { assetId, role, useReal }),
-  // Phase 5：反推（描述图片）+ 分析结果
-  describeAsset: (assetId: string, useReal = false) =>
-    invoke<string>("codex_describe_asset", { assetId, useReal }),
+  codexRun: (req: CodexRequest) => invoke<CodexResult>("codex_run", { req }),
+  codexRunStream: (req: CodexRequest) =>
+    invoke<void>("codex_run_stream", { req }),
+  codexGeneratePromptForAsset: (assetId: string, role: string) =>
+    invoke<string>("codex_generate_prompt_for_asset", { assetId, role }),
+  // Phase 5：反推（codex CLI 描述图片）+ 分析结果
+  describeAsset: (assetId: string) =>
+    invoke<string>("codex_describe_asset", { assetId }),
   listAnalysesByAsset: (assetId: string) =>
     invoke<Analysis[]>("list_analyses_by_asset", { assetId }),
 };

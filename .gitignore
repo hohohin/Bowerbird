@@ -18,6 +18,10 @@ apps/desktop/src-tauri/gen/
 .idea/
 *.log
 
+# secrets / local env
+.env
+.env.*
+
 # library data (created at runtime when user opens a library)
 *.db
 *.db-journal

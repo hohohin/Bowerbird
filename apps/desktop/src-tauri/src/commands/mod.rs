@@ -8,9 +8,6 @@ use std::sync::Arc;
 
 use tauri::State;
 
-use crate::codex::mock::MockProvider;
-use crate::codex::types::CodexRequest;
-use crate::codex::CodexProvider;
 use crate::core::task_queue::{Task, TaskStatus};
 use crate::db::Database;
 use crate::error::AppError;
@@ -37,19 +34,4 @@ pub async fn db_health(db: State<'_, Arc<Database>>) -> Result<String, AppError>
     Ok(format!(
         "tables={tables} | fts5={fts5} | queued_tasks={queued}"
     ))
-}
-
-/// Codex 通路：用 MockProvider 跑一次，验证 trait + 类型流转。
-#[tauri::command]
-pub async fn codex_health() -> Result<String, AppError> {
-    let provider = MockProvider::default();
-    let req = CodexRequest {
-        instruction: "描述这张参考图的构图与配色".to_string(),
-        reference_images: vec!["/tmp/sample.png".into()],
-        context_prompts: vec!["cyberpunk city".to_string()],
-        output_schema: None,
-    };
-    let r = provider.run(req).await?;
-    let head: String = r.text.chars().take(80).collect();
-    Ok(format!("[{}] {}ms — {}", r.provider, r.elapsed_ms, head))
 }

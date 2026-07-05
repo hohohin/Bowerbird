@@ -54,7 +54,6 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::ping,
             commands::db_health,
-            commands::codex_health,
             commands::library::import_files,
             commands::library::import_folder,
             commands::library::list_assets,

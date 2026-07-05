@@ -16,7 +16,6 @@ export function PackPanel() {
   const [prompt, setPrompt] = useState("");
   const [streaming, setStreaming] = useState("");
   const [busy, setBusy] = useState(false);
-  const [useReal, setUseReal] = useState(false);
 
   async function reload() {
     if (ids.length === 0) return;
@@ -56,14 +55,11 @@ export function PackPanel() {
     setBusy(true);
     setStreaming("");
     try {
-      await api.codexRunStream(
-        {
-          instruction: "优化并扩写以下创作包的提示词，使其更适合 MJ/SD 使用：",
-          context_prompts: [prompt],
-          reference_images: pack?.references ?? [],
-        },
-        useReal
-      );
+      await api.codexRunStream({
+        instruction: "优化并扩写以下创作包的提示词，使其更适合 MJ/SD 使用：",
+        context_prompts: [prompt],
+        reference_images: pack?.references ?? [],
+      });
     } finally {
       setBusy(false);
     }
@@ -92,16 +88,8 @@ export function PackPanel() {
           disabled={busy}
           className="rounded bg-accent px-3 py-1 text-xs font-medium text-black disabled:opacity-50"
         >
-          {busy ? "处理中…" : `发 codex 优化（${useReal ? "真实" : "Mock"}）`}
+          {busy ? "处理中…" : "发 codex 优化"}
         </button>
-        <label className="flex items-center gap-1 text-xs text-muted">
-          <input
-            type="checkbox"
-            checked={useReal}
-            onChange={(e) => setUseReal(e.target.checked)}
-          />
-          真实 claude（需登录 + 消耗 token）
-        </label>
       </div>
       {streaming && (
         <div className="max-h-60 overflow-y-auto whitespace-pre-wrap rounded bg-panel2 p-2 text-xs text-ink">

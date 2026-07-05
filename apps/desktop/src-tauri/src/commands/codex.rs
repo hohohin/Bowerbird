@@ -1,7 +1,8 @@
-//! Codex 调用命令（单次 + 流式）。
+//! Codex 调用命令（单次 + 流式 + 反推）。
 //!
+//! 全部走 [`CodexCliProvider`]（`codex exec --image`，ChatGPT 订阅认证，
+//! 真正多模态看图；Mock / DeepSeek / OpenAI HTTP 路线已移除，详见 PROJECT.md）。
 //! 流式：通过 event `codex://chunk` 推 Chunk（Delta / Done / Error）。
-//! 默认走 MockProvider；`use_real=true` 时启用 ClaudeCodeProvider（需 claude CLI 登录）。
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -10,38 +11,23 @@ use tauri::{AppHandle, Emitter, State};
 use tokio::sync::mpsc;
 use ulid::Ulid;
 
-use crate::codex::claude_code::ClaudeCodeProvider;
-use crate::codex::mock::MockProvider;
+use crate::codex::codex_cli::CodexCliProvider;
 use crate::codex::types::{Chunk, CodexRequest, CodexResult};
 use crate::codex::CodexProvider;
 use crate::db::Database;
 use crate::error::AppError;
 
-fn provider(use_real: bool) -> Box<dyn CodexProvider> {
-    if use_real {
-        let mut p = ClaudeCodeProvider::default();
-        p.enabled = true;
-        Box::new(p)
-    } else {
-        Box::new(MockProvider::default())
-    }
-}
-
 #[tauri::command]
-pub async fn codex_run(
-    req: CodexRequest,
-    use_real: Option<bool>,
-) -> Result<CodexResult, AppError> {
-    Ok(provider(use_real.unwrap_or(false)).run(req).await?)
+pub async fn codex_run(req: CodexRequest) -> Result<CodexResult, AppError> {
+    Ok(CodexCliProvider::default().run(req).await?)
 }
 
 #[tauri::command]
 pub async fn codex_run_stream(
     app: AppHandle,
     req: CodexRequest,
-    use_real: Option<bool>,
 ) -> Result<(), AppError> {
-    let p = provider(use_real.unwrap_or(false));
+    let p = CodexCliProvider::default();
     let (tx, mut rx) = mpsc::channel::<Chunk>(64);
     let app_clone = app.clone();
     tokio::spawn(async move {
@@ -53,43 +39,28 @@ pub async fn codex_run_stream(
     Ok(())
 }
 
-/// 为单个资产生成提示词并写回 asset_prompts（批量调用由前端循环）。
-/// 默认 Mock provider 走通数据链路；真实多模态（让 Claude 看图）依赖 Phase 5 spike，
-/// 当前 build_prompt 仍是路径文本占位。
+/// 为单个资产生成提示词并写回 asset_prompts（批量由前端循环）。
 #[tauri::command]
 pub async fn codex_generate_prompt_for_asset(
     db: State<'_, Arc<Database>>,
     asset_id: String,
     role: String,
-    use_real: Option<bool>,
 ) -> Result<String, AppError> {
-    // 1. 取 asset.store_path（spawn_blocking 走 DB）。
-    let db_for_get = db.inner().clone();
-    let aid_for_get = asset_id.clone();
-    let asset = tokio::task::spawn_blocking(move || db_for_get.get_asset(&aid_for_get))
-        .await
-        .map_err(|e| AppError::Other(e.to_string()))??
-        .ok_or_else(|| AppError::NotFound(asset_id.clone()))?;
-    let store_path = asset
-        .store_path
-        .ok_or_else(|| AppError::Media(format!("asset {asset_id} has no store_path")))?;
+    let store_path = get_asset_store_path(&db, &asset_id).await?;
 
-    // 2. 调 provider（默认 Mock）。
     let req = CodexRequest {
         instruction: "为这张图片生成一段适合 AI 绘画的提示词（描述主体、风格、构图、光影）".into(),
         reference_images: vec![PathBuf::from(store_path)],
         context_prompts: vec![],
         output_schema: None,
     };
-    let p = provider(use_real.unwrap_or(false));
+    let p = CodexCliProvider::default();
     let provider_name = p.name().to_string();
     let result = p.run(req).await?;
 
-    // 3. 写 prompts + asset_prompts。
     let prompt_id = Ulid::new().to_string();
     let db_for_write = db.inner().clone();
-    let (pid, aid, role_for_write) =
-        (prompt_id.clone(), asset_id.clone(), role.clone());
+    let (pid, aid, role_for_write) = (prompt_id.clone(), asset_id.clone(), role.clone());
     let (text, pname) = (result.text, provider_name);
     tokio::task::spawn_blocking(move || {
         db_for_write.create_prompt(&pid, None, &text, Some("generated"), Some(&pname))?;
@@ -103,23 +74,12 @@ pub async fn codex_generate_prompt_for_asset(
 }
 
 /// 「反推」：让 codex 描述指定资产，结果落 analyses(kind=caption)。
-/// 默认 Mock（回显占位）；use_real=true 走真实 Claude（多模态看图能力依赖 build_prompt，
-/// 当前为路径文本占位 —— Phase 5 spike 待实测替换）。
 #[tauri::command]
 pub async fn codex_describe_asset(
     db: State<'_, Arc<Database>>,
     asset_id: String,
-    use_real: Option<bool>,
 ) -> Result<String, AppError> {
-    let db_for_get = db.inner().clone();
-    let aid_for_get = asset_id.clone();
-    let asset = tokio::task::spawn_blocking(move || db_for_get.get_asset(&aid_for_get))
-        .await
-        .map_err(|e| AppError::Other(e.to_string()))??
-        .ok_or_else(|| AppError::NotFound(asset_id.clone()))?;
-    let store_path = asset
-        .store_path
-        .ok_or_else(|| AppError::Media(format!("asset {asset_id} has no store_path")))?;
+    let store_path = get_asset_store_path(&db, &asset_id).await?;
 
     let req = CodexRequest {
         instruction: "请描述这张图片".into(),
@@ -127,7 +87,7 @@ pub async fn codex_describe_asset(
         context_prompts: vec![],
         output_schema: None,
     };
-    let p = provider(use_real.unwrap_or(false));
+    let p = CodexCliProvider::default();
     let provider_name = p.name().to_string();
     let result = p.run(req).await?;
 
@@ -146,4 +106,20 @@ pub async fn codex_describe_asset(
         .await
         .map_err(|e| AppError::Other(e.to_string()))??;
     Ok(id)
+}
+
+/// 取资产的 store_path（spawn_blocking 读 DB），不存在或无 store_path 报错。
+async fn get_asset_store_path(
+    db: &State<'_, Arc<Database>>,
+    asset_id: &str,
+) -> Result<String, AppError> {
+    let db_for_get = db.inner().clone();
+    let aid_for_get = asset_id.to_string();
+    let asset = tokio::task::spawn_blocking(move || db_for_get.get_asset(&aid_for_get))
+        .await
+        .map_err(|e| AppError::Other(e.to_string()))??
+        .ok_or_else(|| AppError::NotFound(asset_id.to_string()))?;
+    asset
+        .store_path
+        .ok_or_else(|| AppError::Media(format!("asset {asset_id} has no store_path")))
 }
