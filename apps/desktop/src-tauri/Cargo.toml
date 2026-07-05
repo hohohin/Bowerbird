@@ -1,0 +1,80 @@
+[package]
+name = "bowerbird-desktop"
+version = "0.1.0"
+description = "Bowerbird desktop app"
+authors = ["Bowerbird"]
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "bowerbird_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+# --- 构建脚本：tauri-build 生成 context ---
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+# --- 运行时依赖（按开发计划 §2.3）---
+[dependencies]
+# Tauri 核心 + 常用插件
+tauri = { version = "2", features = ["protocol-asset"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-shell = "2"
+
+# 序列化 / 错误 / 日志
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# 异步运行时
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+futures-util = "0.3"
+
+# SQLite + FTS5 + 迁移
+#   rusqlite bundled 自带 SQLite（libsqlite3-sys 0.30 bundled 模式默认启用 FTS5/JSON1）；
+#   运行时用 Database::fts5_enabled() 校验。
+rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite_migration = "1"
+
+# 图像处理（Phase 1 导入流水线用）
+image = { version = "0.25", default-features = false, features = [
+  "jpeg",
+  "png",
+  "webp",
+  "gif",
+  "bmp",
+] }
+fast_image_resize = "3"
+# 注：img_hash 3.2 绑定 image 0.23，与本项目 0.25 冲突 —— 改自实现 dHash（media/phash.rs），去重够用。
+# 颜色提取（Phase 2 K-Means 提色，LAB 空间）
+palette = "0.7"
+
+# 网络（Phase 1 扩展采集下载用；rustls 避免系统 openssl 链接）
+reqwest = { version = "0.12", default-features = false, features = [
+  "rustls-tls",
+  "json",
+  "stream",
+] }
+# WS Server（接收浏览器扩展采集消息）
+axum = { version = "0.7", features = ["ws"] }
+
+# ID / 时间
+ulid = { version = "1", features = ["serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+# --- 发布优化 ---
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
+
+# dev 下用更快编译
+[profile.dev]
+incremental = true

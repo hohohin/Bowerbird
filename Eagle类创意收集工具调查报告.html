@@ -1,0 +1,1062 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Eagle 类创意收集工具实现方式调查报告</title>
+<style>
+  :root{
+    --bg:#0f1117;
+    --panel:#161a23;
+    --panel-2:#1d2230;
+    --panel-3:#242b3b;
+    --line:#2b3242;
+    --text:#e7eaf0;
+    --text-dim:#9aa3b2;
+    --text-mute:#6b7384;
+    --brand:#ff7849;     /* eagle-ish orange */
+    --brand-2:#7c5cff;   /* purple */
+    --brand-3:#3ddc97;   /* mint */
+    --brand-4:#4cc2ff;   /* cyan */
+    --warn:#ffb454;
+    --danger:#ff6b6b;
+    --radius:14px;
+    --shadow:0 10px 30px rgba(0,0,0,.35);
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0;
+    font-family:"PingFang SC","Microsoft YaHei",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:var(--bg);
+    color:var(--text);
+    line-height:1.75;
+    -webkit-font-smoothing:antialiased;
+    background-image:
+      radial-gradient(900px 500px at 85% -5%, rgba(124,92,255,.13), transparent 60%),
+      radial-gradient(700px 400px at -5% 10%, rgba(255,120,73,.10), transparent 55%);
+  }
+  a{color:var(--brand-4);text-decoration:none}
+  a:hover{text-decoration:underline}
+
+  /* ---------- layout ---------- */
+  .wrap{max-width:1080px;margin:0 auto;padding:0 22px}
+
+  /* hero */
+  .hero{
+    padding:78px 0 56px;
+    border-bottom:1px solid var(--line);
+    position:relative;
+    overflow:hidden;
+  }
+  .hero .eyebrow{
+    display:inline-block;
+    font-size:13px;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--brand);
+    border:1px solid rgba(255,120,73,.4);
+    padding:6px 14px;border-radius:999px;
+    background:rgba(255,120,73,.08);
+    margin-bottom:24px;
+  }
+  .hero h1{
+    font-size:46px;line-height:1.18;margin:0 0 18px;font-weight:800;letter-spacing:-.5px;
+    background:linear-gradient(90deg,#fff 0%,#cfd6e6 60%,#9aa6c4 100%);
+    -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;
+  }
+  .hero p.sub{font-size:18px;color:var(--text-dim);max-width:720px;margin:0 0 26px}
+  .hero .meta{display:flex;flex-wrap:wrap;gap:10px}
+  .chip{
+    font-size:13px;color:var(--text-dim);
+    background:var(--panel);border:1px solid var(--line);
+    padding:7px 13px;border-radius:8px;
+  }
+  .chip b{color:var(--text);font-weight:600}
+
+  /* nav */
+  nav.toc{
+    position:sticky;top:0;z-index:50;
+    background:rgba(15,17,23,.82);backdrop-filter:blur(12px);
+    border-bottom:1px solid var(--line);
+  }
+  nav.toc .wrap{display:flex;gap:6px;overflow-x:auto;padding:10px 22px;scrollbar-width:none}
+  nav.toc .wrap::-webkit-scrollbar{display:none}
+  nav.toc a{
+    color:var(--text-dim);font-size:13.5px;white-space:nowrap;
+    padding:7px 12px;border-radius:8px;transition:.15s;
+  }
+  nav.toc a:hover{background:var(--panel);color:var(--text);text-decoration:none}
+
+  section{padding:54px 0;border-bottom:1px solid var(--line)}
+  section:last-of-type{border-bottom:none}
+  h2.section-title{
+    font-size:30px;margin:0 0 8px;font-weight:750;letter-spacing:-.3px;
+    display:flex;align-items:center;gap:14px;
+  }
+  h2.section-title .num{
+    font-size:15px;font-weight:700;color:var(--bg);
+    background:linear-gradient(135deg,var(--brand),var(--brand-2));
+    width:38px;height:38px;border-radius:10px;
+    display:inline-flex;align-items:center;justify-content:center;flex:none;
+  }
+  .section-desc{color:var(--text-dim);margin:0 0 30px;font-size:15.5px;max-width:780px}
+  h3{font-size:20px;margin:34px 0 12px;font-weight:680;color:#fff}
+  h4{font-size:16px;margin:22px 0 8px;font-weight:650;color:var(--text)}
+  p{margin:12px 0}
+
+  /* card */
+  .card{
+    background:var(--panel);border:1px solid var(--line);
+    border-radius:var(--radius);padding:22px 24px;box-shadow:var(--shadow);
+  }
+  .grid{display:grid;gap:18px}
+  .grid-2{grid-template-columns:repeat(2,1fr)}
+  .grid-3{grid-template-columns:repeat(3,1fr)}
+  .grid-4{grid-template-columns:repeat(4,1fr)}
+  @media(max-width:860px){.grid-2,.grid-3,.grid-4{grid-template-columns:1fr}}
+
+  .feat{transition:.18s}
+  .feat:hover{border-color:rgba(255,120,73,.5);transform:translateY(-2px)}
+  .feat .ico{
+    width:42px;height:42px;border-radius:10px;
+    display:flex;align-items:center;justify-content:center;font-size:20px;margin-bottom:12px;
+  }
+  .feat h4{margin:0 0 6px}
+  .feat p{margin:0;font-size:14px;color:var(--text-dim)}
+
+  /* tldr */
+  .tldr{
+    background:linear-gradient(135deg, rgba(124,92,255,.12), rgba(255,120,73,.08));
+    border:1px solid rgba(124,92,255,.35);
+  }
+  .tldr ul{margin:10px 0 0;padding-left:20px}
+  .tldr li{margin:7px 0}
+  .tldr li b{color:#fff}
+
+  /* code */
+  pre{
+    background:#0b0d13;border:1px solid var(--line);border-radius:12px;
+    padding:18px 20px;overflow:auto;font-size:13.5px;line-height:1.7;margin:14px 0;
+  }
+  code{font-family:"SF Mono",Menlo,Consolas,"JetBrains Mono",monospace}
+  :not(pre)>code{
+    background:var(--panel-2);border:1px solid var(--line);
+    padding:2px 7px;border-radius:6px;font-size:13px;color:var(--brand-4);
+  }
+  .c-key{color:#c792ea}.c-str{color:#c3e88d}.c-com{color:#6b7384}
+  .c-fn{color:#82aaff}.c-num{color:#f78c6c}.c-dir{color:#ffcb6b}
+
+  /* table */
+  .table-wrap{overflow:auto;border:1px solid var(--line);border-radius:var(--radius)}
+  table{border-collapse:collapse;width:100%;font-size:13.8px;min-width:640px}
+  th,td{padding:13px 15px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:var(--panel-2);color:#fff;font-weight:650;position:sticky;top:0}
+  tr:last-child td{border-bottom:none}
+  tbody tr:hover{background:rgba(255,255,255,.02)}
+  td .tag{display:inline-block;font-size:12px;padding:2px 8px;border-radius:6px;margin-right:4px}
+  .t-yes{background:rgba(61,220,151,.15);color:var(--brand-3)}
+  .t-no{background:rgba(255,107,107,.14);color:var(--danger)}
+  .t-mid{background:rgba(255,180,84,.15);color:var(--warn)}
+
+  /* callout */
+  .callout{
+    border-left:3px solid var(--brand-2);
+    background:rgba(124,92,255,.07);
+    padding:14px 18px;border-radius:0 10px 10px 0;margin:18px 0;
+  }
+  .callout.warn{border-color:var(--warn);background:rgba(255,180,84,.07)}
+  .callout.tip{border-color:var(--brand-3);background:rgba(61,220,151,.07)}
+  .callout .label{font-weight:700;font-size:13px;letter-spacing:.04em;display:block;margin-bottom:4px}
+  .callout.warn .label{color:var(--warn)}
+  .callout.tip .label{color:var(--brand-3)}
+  .callout .label{color:var(--brand-2)}
+  .callout p{margin:0;font-size:14.5px;color:var(--text-dim)}
+
+  /* ---------- architecture diagram ---------- */
+  .arch{
+    background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+    padding:26px;box-shadow:var(--shadow);
+  }
+  .layer{
+    border:1px dashed var(--line);border-radius:12px;padding:14px;margin-bottom:14px;
+    background:var(--panel-2);
+  }
+  .layer:last-child{margin-bottom:0}
+  .layer .ltitle{
+    font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-mute);
+    margin-bottom:10px;font-weight:600;
+  }
+  .nodes{display:flex;flex-wrap:wrap;gap:10px}
+  .node{
+    background:var(--panel-3);border:1px solid var(--line);border-radius:9px;
+    padding:9px 13px;font-size:13.5px;flex:1;min-width:120px;text-align:center;
+  }
+  .node small{display:block;color:var(--text-mute);font-size:11.5px;margin-top:2px}
+  .l-ui .node{border-top:2px solid var(--brand)}
+  .l-app .node{border-top:2px solid var(--brand-2)}
+  .l-data .node{border-top:2px solid var(--brand-3)}
+  .l-ai .node{border-top:2px solid var(--warn)}
+  .l-collect .node{border-top:2px solid var(--brand-4)}
+  .arrow-down{text-align:center;color:var(--text-mute);font-size:18px;margin:-6px 0 2px}
+
+  /* flow */
+  .flow{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:16px 0}
+  .flow .step{
+    background:var(--panel-2);border:1px solid var(--line);border-radius:10px;
+    padding:12px 16px;font-size:13.5px;flex:1;min-width:130px;text-align:center;
+  }
+  .flow .step b{display:block;color:#fff;margin-bottom:3px}
+  .flow .step small{color:var(--text-mute)}
+  .flow .arr{color:var(--brand);font-size:20px;font-weight:700}
+
+  /* pipeline */
+  .pipeline{display:grid;grid-template-columns:1fr;gap:0}
+  .pstep{
+    display:flex;gap:16px;align-items:flex-start;
+    padding:16px 0;border-bottom:1px dashed var(--line);
+  }
+  .pstep:last-child{border-bottom:none}
+  .pnum{
+    width:34px;height:34px;border-radius:50%;flex:none;
+    background:linear-gradient(135deg,var(--brand),var(--brand-2));
+    color:var(--bg);font-weight:800;display:flex;align-items:center;justify-content:center;
+    font-size:15px;
+  }
+  .pbody h4{margin:6px 0 4px}
+  .pbody p{margin:0;font-size:14px;color:var(--text-dim)}
+
+  /* badge legend */
+  .legend{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:14px;font-size:13px;color:var(--text-dim)}
+
+  /* color demo */
+  .colors{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+  .swatch{width:30px;height:30px;border-radius:7px;border:1px solid rgba(255,255,255,.12)}
+
+  /* pros/cons */
+  .pc{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:700px){.pc{grid-template-columns:1fr}}
+  .pc .col{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px}
+  .pc .col h4{margin:0 0 10px}
+  .pc .pro h4{color:var(--brand-3)}
+  .pc .con h4{color:var(--danger)}
+  .pc ul{margin:0;padding-left:18px}
+  .pc li{margin:6px 0;font-size:14px;color:var(--text-dim)}
+
+  footer{padding:46px 0 70px;color:var(--text-mute);font-size:13.5px}
+  footer .wrap{max-width:1080px}
+  .refs{columns:2;column-gap:36px;margin-top:8px}
+  @media(max-width:700px){.refs{columns:1}}
+  .refs div{break-inside:avoid;margin-bottom:9px;font-size:12.8px;line-height:1.55}
+  .note-box{font-size:12.5px;color:var(--text-mute);background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin-top:22px}
+
+  .pill{font-size:11.5px;padding:3px 9px;border-radius:999px;font-weight:600;letter-spacing:.03em}
+  .pill.local{background:rgba(61,220,151,.15);color:var(--brand-3)}
+  .pill.cloud{background:rgba(76,194,255,.15);color:var(--brand-4)}
+  .pill.hybrid{background:rgba(255,180,84,.15);color:var(--warn)}
+
+  .big-quote{
+    font-size:19px;color:#fff;font-weight:600;line-height:1.6;
+    border-left:3px solid var(--brand);padding-left:18px;margin:18px 0;
+  }
+</style>
+</head>
+<body>
+
+<!-- ============ HERO ============ -->
+<header class="hero">
+  <div class="wrap">
+    <span class="eyebrow">Technical Survey · 技术调查报告</span>
+    <h1>Eagle 类创意收集工具的实现方式</h1>
+    <p class="sub">围绕以 Eagle 为代表的「素材 / 灵感收集与管理」类桌面工具，拆解其 Local-First 架构、采集机制、检索算法与边缘 AI 部署的工程实现，并横向对比同类产品。</p>
+    <div class="meta">
+      <span class="chip">📅 报告日期：<b>2026 年 7 月</b></span>
+      <span class="chip">🎯 主题：<b>桌面创意收集工具</b></span>
+      <span class="chip">🔍 调研维度：<b>架构 · 存储 · 检索 · AI · 插件</b></span>
+    </div>
+  </div>
+</header>
+
+<!-- ============ NAV ============ -->
+<nav class="toc">
+  <div class="wrap">
+    <a href="#summary">执行摘要</a>
+    <a href="#what">① 定义与产品</a>
+    <a href="#arch">② 整体架构</a>
+    <a href="#collect">③ 采集机制</a>
+    <a href="#store">④ 存储方案</a>
+    <a href="#preview">⑤ 预览与缩略图</a>
+    <a href="#color">⑥ 颜色提取</a>
+    <a href="#search">⑦ 全文/以图搜索</a>
+    <a href="#ai">⑧ 边缘 AI</a>
+    <a href="#plugin">⑨ 插件系统</a>
+    <a href="#comm">⑩ 通信机制</a>
+    <a href="#compare">⑪ 竞品对比</a>
+    <a href="#build">⑫ 实现路线</a>
+    <a href="#end">总结</a>
+  </div>
+</nav>
+
+<!-- ============ SUMMARY ============ -->
+<section id="summary">
+  <div class="wrap">
+    <h2 class="section-title"><span class="num">★</span> 执行摘要</h2>
+    <p class="section-desc">如果只读一段，请读这里。Eagle 类工具的「秘密」并不在某个单一技术，而是一组围绕<strong>「本地优先 + 性能 + 可扩展」</strong>的工程取舍。</p>
+
+    <div class="card tldr">
+      <div class="big-quote">它本质是一个<strong>本地优先 (Local-First) 的桌面素材数据库</strong>，外接一个浏览器「采集探针」与一个本地「AI 加速器」，并用进程隔离的插件系统保证可扩展而不崩溃。</div>
+      <ul>
+        <li><b>形态</b>：Electron 跨平台桌面应用 + 浏览器扩展，数据 100% 落地用户本地磁盘。</li>
+        <li><b>存储</b>：早期版本采用 <code>Electron + JSON</code>，后演进为 <b>SQLite</b>（标签 / 元数据 / 索引）+ 独立缩略图目录 + 原图不修改原则，磁盘 I/O 降至读原图的 1/50–1/10。</li>
+        <li><b>采集</b>：浏览器扩展抓取图片 URL，经本地 <code>ws://localhost:{port}</code> 推送给桌面端下载，绕开扩展 5MB 存储限制与下载不稳问题。</li>
+        <li><b>检索</b>：全文搜索用 SQLite <b>FTS5</b>；颜色筛选用 <b>K-Means / 中位切分 / 八叉树</b> 主色提取；以图搜图用 <b>pHash 感知哈希 + 汉明距离</b>。</li>
+        <li><b>AI</b>：语义搜索 / 自动标签 / 图像放大全部 <b>ONNX Runtime 边缘推理</b>，零云端依赖、保护隐私。</li>
+        <li><b>插件</b>：独立进程运行，通过 IPC 通信，<strong>插件崩溃不拖垮主程序</strong>，且不直接访问数据库。</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 1 WHAT ============ -->
+<section id="what">
+  <div class="wrap">
+    <h2 class="section-title"><span class="num">01</span> 什么是「Eagle 类」创意收集工具</h2>
+    <p class="section-desc">先界定品类边界——我们要研究的是一类怎样的工具。</p>
+
+    <p>Eagle（eagle.cool）是一款面向设计师的<strong>素材 / 灵感收集与管理工具</strong>，覆盖「案例、灵感、截图、图片、视频、音频、情绪板」等各类创意素材。它围绕设计师的四大核心工作流设计：<strong>收集 → 整理 → 搜索 → 浏览</strong>。所谓「Eagle 类工具」，即指具备下列特征的桌面 / 跨端应用：</p>
+
+    <div class="grid grid-4">
+      <div class="card feat">
+        <div class="ico" style="background:rgba(255,120,73,.15)">📥</div>
+        <h4>一键采集</h4>
+        <p>浏览器扩展、拖拽、剪贴板、文件夹监听等多通道，从网页/本地快速收割素材。</p>
+      </div>
+      <div class="card feat">
+        <div class="ico" style="background:rgba(124,92,255,.15)">🗂️</div>
+        <h4>结构化整理</h4>
+        <p>文件夹、标签、智能文件夹、评分、颜色标注等组织维度。</p>
+      </div>
+      <div class="card feat">
+        <div class="ico" style="background:rgba(61,220,151,.15)">🔎</div>
+        <h4>多维检索</h4>
+        <p>关键词全文搜索、颜色筛选、形状筛选、以图搜图、AI 语义搜索。</p>
+      </div>
+      <div class="card feat">
+        <div class="ico" style="background:rgba(76,194,255,.15)">🖼️</div>
+        <h4>极速浏览</h4>
+        <p>海量缩略图瀑布流，支持 PSD/AI/SVG/视频/3D 等格式原生预览。</p>
+      </div>
+    </div>
+
+    <h3>市场代表产品一览</h3>
+    <div class="grid grid-3">
+      <div class="card"><h4>🦅 Eagle</h4><p style="color:var(--text-dim);font-size:14px;margin:0">本报告主角。付费、本地优先、格式支持最全、AI 边缘部署。</p></div>
+      <div class="card"><h4>🐟 Billfish</h4><p style="color:var(--text-dim);font-size:14px;margin:0">免费国产竞品。最大特色是<strong>索引模式</strong>——不复制文件，直接读取已有文件夹结构。</p></div>
+      <div class="card"><h4>🎨 Pixcall</h4><p style="color:var(--text-dim);font-size:14px;margin:0">本地派，界面品质感突出。</p></div>
+      <div class="card"><h4>🔗 Raindrop.io</h4><p style="color:var(--text-dim);font-size:14px;margin:0">云端书签管理器，Pro 版缓存网页快照。</p></div>
+      <div class="card"><h4>🧠 mymind</h4><p style="color:var(--text-dim);font-size:14px;margin:0">云端「无分类」灵感库，主打 AI 自动打标与语义搜索。</p></div>
+      <div class="card"><h4>📋 Milanote</h4><p style="color:var(--text-dim);font-size:14px;margin:0">云端无限画布白板，可视化组织创意项目。</p></div>
+    </div>
+
+    <div class="callout">
+      <span class="label">关键分野</span>
+      <p>这类工具最大的技术路线分歧是 <b>本地派（Eagle / Billfish / Pixcall）</b> vs <b>云端派（mymind / Raindrop / Milanote）</b>。Eagle 选择本地优先，是它能在数万素材下保持极速、并能在无网环境使用的根本原因。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 2 ARCH ============ -->
+<section id="arch">
+  <div class="wrap">
+    <h2 class="section-title"><span class="num">02</span> 整体技术架构</h2>
+    <p class="section-desc">Eagle 是一个分层清晰的本地优先桌面应用。下图是其核心技术栈分层。</p>
+
+    <div class="arch">
+      <div class="layer l-collect">
+        <div class="ltitle">⑤ 采集层 · Collection</div>
+        <div class="nodes">
+          <div class="node">浏览器扩展<small>Chrome/Edge · DOM 抓取</small></div>
+          <div class="node">拖拽 / 剪贴板<small>本地文件导入</small></div>
+          <div class="node">文件夹监听<small>自动入库</small></div>
+          <div class="node">截图悬浮窗<small>类 Snipaste</small></div>
+        </div>
+      </div>
+      <div class="arrow-down">▼ ws://localhost:{port} · IPC</div>
+
+      <div class="layer l-ui">
+        <div class="ltitle">① UI 层 · Presentation（Electron 渲染进程 / Web 技术）</div>
+        <div class="nodes">
+          <div class="node">瀑布流浏览<small>虚拟滚动</small></div>
+          <div class="node">检索面板<small>筛选 / 颜色环</small></div>
+          <div class="node">详情与标注<small>多格式预览</small></div>
+          <div class="node">标签/文件夹树<small>智能文件夹</small></div>
+        </div>
+      </div>
+      <div class="arrow-down">▼ IPC</div>
+
+      <div class="layer l-app">
+        <div class="ltitle">② 应用层 · Application（Electron 主进程 / Node.js）</div>
+        <div class="nodes">
+          <div class="node">资源库引擎<small>增删改查编排</small></div>
+          <div class="node">导入 / 下载器<small>断点续传</small></div>
+          <div class="node">缩略图生成<small>Worker 线程池</small></div>
+          <div class="node">索引 / 全文<small>FTS5 维护</small></div>
+          <div class="node">插件宿主<small>子进程隔离</small></div>
+        </div>
+      </div>
+      <div class="arrow-down">▼</div>
+
+      <div class="layer l-ai">
+        <div class="ltitle">④ AI 层 · Edge Inference（ONNX Runtime · 本地）</div>
+        <div class="nodes">
+          <div class="node">语义搜索<small>CLIP 蒸馏 · 向量</small></div>
+          <div class="node">自动标签<small>ResNet/ViT · Top-K</small></div>
+          <div class="node">图像放大<small>Real-ESRGAN</small></div>
+          <div class="node">智能抠图<small>分割模型</small></div>
+        </div>
+      </div>
+
+      <div class="layer l-data">
+        <div class="ltitle">③ 数据层 · Storage（本地磁盘）</div>
+        <div class="nodes">
+          <div class="node">library.db<small>SQLite · 元数据/索引</small></div>
+          <div class="node">images/<small>原始文件（不修改）</small></div>
+          <div class="node">thumbnails/<small>JPEG 缩略图缓存</small></div>
+          <div class="node">.eaglepack<small>导出包=带元数据 ZIP</small></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid grid-2" style="margin-top:22px">
+      <div class="card">
+        <h4>为什么是 Electron？</h4>
+        <p style="font-size:14px;color:var(--text-dim);margin:0">跨平台（Win/macOS/Linux 一套代码）、可复用庞大 Web 生态、渲染层用 HTML/CSS/JS 快速构建精美瀑布流 UI、主进程用 Node.js 直接操作文件系统与原生模块。代价是体积与内存占用——对「常驻 + 海量图片」的素材工具而言是可接受 trade-off。</p>
+      </div>
+      <div class="card">
+        <h4>为什么是 Local-First？</h4>
+        <p style="font-size:14px;color:var(--text-dim);margin:0">设计师素材动辄数万、单个 PSD 上百 MB；全量上云成本高、同步慢、隐私敏感。本地存储换来<strong>数据主权 + 极速响应 + 离线可用</strong>，这正是云端派（mymind / Milanote）被用户诟病「无网即废」的短板。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 3 COLLECT ============ -->
+<section id="collect">
+  <div class="wrap">
+    <h2 class="section-title"><span class="num">03</span> 素材采集机制</h2>
+    <p class="section-desc">「收集」是这类工具的第一性体验。Eagle 的采集核心是<strong>浏览器扩展 + 本地 WebSocket 隧道</strong>。</p>
+
+    <h3>采集数据流</h3>
+    <div class="flow">
+      <div class="step"><b>① 浏览器扩展</b><small>扫描页面 DOM，提取高清图 URL</small></div>
+      <span class="arr">→</span>
+      <div class="step"><b>② 本地 WebSocket</b><small>ws://localhost:{port} 推送</small></div>
+      <span class="arr">→</span>
+      <div class="step"><b>③ 桌面端下载器</b><small>断点续传、UA 伪装、去重</small></div>
+      <span class="arr">→</span>
+      <div class="step"><b>④ 入库流水线</b><small>存图 → 缩略图 → 提色 → 索引</small></div>
+    </div>
+
+    <div class="callout tip">
+      <span class="label">为什么用 WebSocket 而不是扩展直接下载？</span>
+      <p>① 绕开 Chrome 扩展 <code>localStorage</code> 仅 5MB 的存储上限；② 桌面端下载模块比浏览器扩展更稳定，支持断点续传与大文件；③ 实时性好，比「扩展下载→存指定文件夹→本地应用轮询」的间接方案可靠得多。</p>
+    </div>
+
+    <h3>扩展抓取图片的典型手段</h3>
+    <div class="grid grid-2">
+      <div class="card">
+        <h4>DOM 扫描</h4>
+        <p style="font-size:14px;color:var(--text-dim);margin:0">遍历 <code>&lt;img&gt;</code>、背景图 <code>background-image</code>、<code>&lt;picture&gt;</code> / srcset、<code>&lt;video&gt;</code> poster，提取最高清版本。新版扩展还支持<strong>批量保存</strong>与抓取「受限图片」（懒加载/防盗链场景）。</p>
+      </div>
+      <div class="card">
+        <h4>悬浮保存按钮</h4>
+        <p style="font-size:14px;color:var(--text-dim);margin:0">向页面注入 content script，在每张图上浮一个「保存到 Eagle」按钮，点击即采集——这是同类工具（Pinterest 保存按钮、mymind）的通用交互范式。</p>
+      </div>
+    </div>
+
+    <h3>本地多通道采集</h3>
+    <div class="grid grid-4">
+      <div class="card feat"><div class="ico" style="background:rgba(255,120,73,.15)">🖱️</div><h4>拖拽</h4><p>从 Finder/资源管理器或网页直接拖入应用窗口。</p></div>
+      <div class="card feat"><div class="ico" style="background:rgba(124,92,255,.15)">📋</div><h4>剪贴板</h4><p>复制图片后快捷键粘贴（含截图工具的剪贴板）。</p></div>
+      <div class="card feat"><div class="ico" style="background:rgba(61,220,151,.15)">📁</div><h4>文件夹监听</h4><p>指定目录自动入库，常配合「截图保存目录」。</p></div>
+      <div class="card feat"><div class="ico" style="background:rgba(76,194,255,.15)">⌨️</div><h4>悬浮窗截图</h4><p>类 Snipaste 截屏，直接进入素材库。</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 4 STORE ============ -->
+<section id="store">
+  <div class="wrap">
+    <h2 class="section-title"><span class="num">04</span> 本地存储方案</h2>
+    <p class="section-desc">存储是性能与稳定性的根基。Eagle 的资源库是一个结构清晰的本地目录。</p>
+
+    <h3>资源库目录结构</h3>
+<pre><code><span class="c-com"># 一个 Eagle 资源库 (Library) = 一个自包含的目录</span>
+my-library/
+├─ <span class="c-dir">library.db</span>      <span class="c-com"># SQLite 数据库：标签、元数据、缩略图索引、FTS5</span>
+├─ <span class="c-dir">thumbnails/</span>     <span class="c-com"># 缩略图缓存，统一 JPEG 格式，供浏览模式快速读取</span>
+├─ <span class="c-dir">images/</span>         <span class="c-com"># 原始素材文件，保持原始格式不修改</span>
+│   └─ <span class="c-str">&lt;random-id&gt;.psd</span>
+└─ <span class="c-dir">.eaglepack</span>      <span class="c-com"># 导出包格式（本质是带元数据的 ZIP 归档，可迁移/分享）</span>
+</code></pre>
+
+    <h3>三个核心设计取舍</h3>
+    <div class="grid grid-3">
+      <div class="card feat">
+        <div class="ico" style="background:rgba(255,120,73,.15)">🗄️</div>
+        <h4>SQLite 而非 JSON/NoSQL</h4>
+        <p>素材查询天然是关系型的（多条件筛选 = 多字段 WHERE）。SQLite 单文件部署、跨平台兼容、事务可靠，胜过早期 JSON 方案与 LevelDB 等。</p>
+      </div>
+      <div class="card feat">
+        <div class="ico" style="background:rgba(124,92,255,.15)">🖼️</div>
+        <h4>原图与缩略图分离</h4>
+        <p>缩略图统一转 JPEG。浏览模式只访问缩略图目录，磁盘 I/O 降至直接读原图的 <strong>1/50 – 1/10</strong>，对机械硬盘尤其关键。</p>
+      </div>
+      <div class="card feat">
+        <div class="ico" style="background:rgba(61,220,151,.15)">🔒</div>
+        <h4>原图不修改原则</h4>
+        <p>素材存入后不做格式转换或压缩。好处是数据完整性（不会因转换失败损坏源文件），代价是存储空间不优化。</p>
+      </div>
+    </div>
+
+    <div class="callout warn">
+      <span class="label">演进教训：JSON → SQLite</span>
+      <p>有技术评测指出，Eagle 早期采用 <code>Electron + JSON</code> 存储。但 JSON 本质是「数据交换语言」而非「数据存储与处理」格式——在海量素材下，全量读写、并发、查询性能都吃力。这正是后来迁移到 SQLite 的工程原因，也是 Billfish 等竞品在数据层必须「魔改数据库」才能支撑快速索引的痛点。</p>
+    </div>
+
+    <h3>关键表结构（推断）</h3>
+<pre><code><span class="c-key">CREATE TABLE</span> assets (
+  id          <span class="c-fn">TEXT</span> <span class="c-key">PRIMARY KEY</span>,
+  name        <span class="c-fn">TEXT</span>,
+  ext         <span class="c-fn">TEXT</span>,           <span class="c-com"># psd / png / mp4 ...</span>
+  path        <span class="c-fn">TEXT</span>,           <span class="c-com"># 原图相对路径</span>
+  thumb_path  <span class="c-fn">TEXT</span>,           <span class="c-com"># 缩略图路径</span>
+  size        <span class="c-fn">INTEGER</span>,
+  width       <span class="c-fn">INTEGER</span>,
+  height      <span class="c-fn">INTEGER</span>,
+  colors      <span class="c-fn">TEXT</span>,           <span class="c-com"># JSON: 主色调数组</span>
+  phash       <span class="c-fn">TEXT</span>,           <span class="c-com"># 感知哈希（以图搜图）</span>
+  rating      <span class="c-fn">INTEGER</span>,
+  folder_id   <span class="c-fn">TEXT</span>,
+  created_at  <span class="c-fn">INTEGER</span>
+);
+
+<span class="c-com">-- 全文搜索虚拟表（见 ⑦）</span>
+<span class="c-key">CREATE VIRTUAL TABLE</span> assets_fts <span class="c-key">USING</span> fts5(name, tags, annotation, ...);
+</code></pre>
+  </div>
+</section>
+
+<!-- ============ 5 PREVIEW ============ -->
+<section id="preview">
+  <div class="wrap">
+    <h2 class="section-title"><span class="num">05</span> 缩略图与多格式预览</h2>
+    <p class="section-desc">「秒开数万张图」是这类工具的核心体感，背后是缩略图策略 + 格式解码器。</p>
+
+    <div class="grid grid-2">
+      <div class="card">
+        <h4>多尺寸缩略图 + 懒加载</h4>
+        <p style="font-size:14px;color:var(--text-dim);margin:0">为每张图预生成小/中尺寸 JPEG 缩略图；UI 层虚拟滚动 + 视口懒加载，只解码可见区域，内存占用恒定。</p>
+      </div>
+      <div class="card">
+        <h4>统一 JPEG 缓存</h4>
+        <p style="font-size:14px;color:var(--text-dim);margin:0">无论原图是 PSD/AI/SVG/RAW，缩略图都转成通用 JPEG。浏览器渲染进程无需为每种格式加载专门解码器，渲染极快。</p>
+      </div>
+    </div>
+
+    <h3>多格式原生预览的工程难点</h3>
+    <div class="callout">
+      <span class="label">PSD / AI / SVG / EPS / 3D / 视频</span>
+      <p>这些设计格式浏览器原生不支持。实现思路：① 用原生模块（如 <code>libpsd</code>、ImageMagick、各格式 SDK）在<strong>主进程 Worker 线程池</strong>里栅格化生成预览；② SVG/字体类用矢量直接渲染；③ 视频抽帧做封面 + 内嵌播放器；④ RAW 相片用 LibRaw 解码。这条「格式适配层」是同类工具的核心壁垒之一——格式支持广度直接决定产品力。</p>
+    </div>
+
+    <div class="callout warn">
+      <span class="label">对比：Win11 自带照片为何卡顿</span>
+      <p>系统照片应用用 UWP 即时解码、无预生成缩略图缓存、后台索引耗资源，导致大图秒开困难。Eagle 这类工具反其道行之：<strong>预生成 + 缓存 + 分离存储</strong>，用空间换时间。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 6 COLOR ============ -->
+<section id="color">
+  <div class="wrap">
+    <h2 class="section-title"><span class="num">06</span> 颜色提取与筛选</h2>
+    <p class="section-desc">「按颜色找图」是设计师刚需。底层是<strong>主色调提取算法</strong>，结果入库后用于颜色筛选。</p>
+
+    <div class="grid grid-3">
+      <div class="card feat">
+        <div class="ico" style="background:rgba(255,120,73,.15)">🎯</div>
+        <h4>K-Means 聚类</h4>
+        <p>在 RGB/LAB 空间聚类（K=5~8），质心即主色调。简单高效、无需训练数据，最常用。</p>
+      </div>
+      <div class="card feat">
+        <div class="ico" style="background:rgba(124,92,255,.15)">✂️</div>
+        <h4>中位切分法 (Median Cut)</h4>
+        <p>递归地把颜色空间按最长轴中位数切分，直到得到 K 个色彩盒。速度快、实现简洁。</p>
+      </div>
+      <div class="card feat">
+        <div class="ico" style="background:rgba(61,220,151,.15)">🌳</div>
+        <h4>八叉树 (Octree)</h4>
+        <p>用八叉树颜色量化，内存友好，适合实时提取，是经典图像处理方案。</p>
+      </div>
+    </div>
+
+    <h4>提取流程示意</h4>
+<pre><code><span class="c-com"># Python 伪代码：K-Means 主色提取</span>
+<span class="c-key">from</span> sklearn.cluster <span class="c-key">import</span> KMeans
+<span class="c-key">import</span> cv2
+
+img = cv2.imread(<span class="c-str">'thumb.jpg'</span>)[:, :, ::-<span class="c-num">1</span>]          <span class="c-com"># BGR → RGB</span>
+pixels = img.reshape(-<span class="c-num">1</span>, <span class="c-num">3</span>)                        <span class="c-com"># 展平成像素列表</span>
+pixels = pixels[::<span class="c-num">50</span>]                              <span class="c-com"># 降采样加速</span>
+
+kmeans = KMeans(n_clusters=<span class="c-num">6</span>, n_init=<span class="c-num">3</span>).fit(pixels)
+palette = kmeans.cluster_centers_.astype(<span class="c-fn">int</span>)          <span class="c-com"># 6 个主色 RGB</span>
+dominance = np.bincount(kmeans.labels_)                 <span class="c-com"># 各色占比</span>
+<span class="c-com"># → 存入 assets.colors（JSON），供颜色筛选环使用</span>
+</code></pre>
+
+    <div class="card" style="margin-top:18px">
+      <h4 style="margin-top:0">入库后的颜色筛选 UI</h4>
+      <p style="font-size:14px;color:var(--text-dim);margin:0 0 6px">用户点击调色环上的某个色块，系统用「目标色与图片主色的 LAB 距离 ≤ 阈值」做筛选——这是为什么提取时建议在 <strong>LAB 空间</strong>聚类（LAB 的欧氏距离更贴近人眼色差感知）。</p>
+      <div class="colors">
+        <div class="swatch" style="background:#ff7849"></div>
+        <div class="swatch" style="background:#7c5cff"></div>
+        <div class="swatch" style="background:#3ddc97"></div>
+        <div class="swatch" style="background:#4cc2ff"></div>
+        <div class="swatch" style="background:#ffb454"></div>
+        <div class="swatch" style="background:#e75480"></div>
+        <div class="swatch" style="background:#2c3e50"></div>
+        <div class="swatch" style="background:#f4f1ea"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 7 SEARCH ============ -->
+<section id="search">
+  <div class="wrap">
+    <h2 class="section-title"><span class="num">07</span> 全文搜索与以图搜图</h2>
+    <p class="section-desc">检索能力决定「素材库」能否真正被用起来。Eagle 类工具通常提供三种正交检索。</p>
+
+    <h3>① 全文搜索 — SQLite FTS5</h3>
+    <p>对文件名、标签、注释、OCR 文本建立 <strong>FTS5 虚拟表</strong>（倒排索引），用 <code>MATCH</code> 做毫秒级模糊匹配。中文需配合分词（<code>simple</code> / <code>trigram</code> tokenizer 或外部分词）。</p>
+<pre><code><span class="c-key">CREATE VIRTUAL TABLE</span> assets_fts <span class="c-key">USING</span> fts5(
+  name, tags, annotation,
+  content=<span class="c-str">'assets'</span>, content_rowid=<span class="c-str">'rowid'</span>
+);
+
+<span class="c-com">-- 毫秒级检索：文件名/标签/注释任意命中</span>
+<span class="c-key">SELECT</span> a.* <span class="c-key">FROM</span> assets_fts f
+<span class="c-key">JOIN</span> assets a <span class="c-key">ON</span> a.rowid = f.rowid
+<span class="c-key">WHERE</span> assets_fts <span class="c-key">MATCH</span> <span class="c-str">'蓝色 海报'</span>;
+</code></pre>
+
+    <h3>② 以图搜图 — pHash 感知哈希</h3>
+    <div class="grid grid-2">
+      <div class="card">
+        <h4>原理</h4>
+        <p style="font-size:14px;color:var(--text-dim);margin:0">对图片缩放成 8×8 灰度图 → DCT 变换 → 取低频 → 与均值比较生成 <strong>64-bit 哈希</strong>。两张图越像，哈希的<strong>汉明距离 (Hamming Distance)</strong> 越小。</p>
+      </div>
+      <div class="card">
+        <h4>工程加速</h4>
+        <p style="font-size:14px;color:var(--text-dim);margin:0">把 64-bit hash 拆成多个 <code>BIGINT</code> 列，用 SQL 位运算预筛，避免全表线性扫描；或用 <strong>sqlite-vec / sqlite-vss</strong> 向量扩展存 CNN embedding 做语义级相似检索。</p>
+      </div>
+    </div>
+<pre><code><span class="c-com"># 感知哈希 + 汉明距离（以图搜图核心）</span>
+<span class="c-key">def</span> <span class="c-fn">phash</span>(img_path):
+    img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+    img = cv2.resize(img, (<span class="c-num">32</span>, <span class="c-num">32</span>))            <span class="c-com"># 缩放</span>
+    dct = cv2.dct(np.float32(img))            <span class="c-com"># DCT 变换</span>
+    dct_low = dct[:<span class="c-num">8</span>, :<span class="c-num">8</span>]                  <span class="c-com"># 取左上低频</span>
+    avg = dct_low.mean()
+    bits = (dct_low &gt; avg).flatten()
+    <span class="c-key">return</span> <span class="c-str">''</span>.join([<span class="c-str">'1'</span> <span class="c-key">if</span> b <span class="c-key">else</span> <span class="c-str">'0'</span> <span class="c-key">for</span> b <span class="c-key">in</span> bits])
+
+<span class="c-com"># 距离越小越相似（&lt;=5 通常视为近似重复）</span>
+distance = bin(h1 ^ h2).count(<span class="c-str">'1'</span>)
+</code></pre>
+
+    <h3>③ 形状 / 类型 / 评分筛选</h3>
+    <p>这是结构化字段过滤（宽高比判断横竖方、扩展名判断类型、rating 判断评分），走普通 SQL 索引即可，与上述两种正交组合。</p>
+
+    <div class="callout tip">
+      <span class="label">小结：三种检索的关系</span>
+      <p><b>全文</b>管「文字能描述的」、<b>pHash</b> 管「长得像的」、<b>语义搜索（见 ⑧）</b>管「感觉接近但说不清的」。三者叠加 + 颜色/形状筛选，构成完整检索体验。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 8 AI ============ -->
+<section id="ai">
+  <div class="wrap">
+    <h2 class="section-title"><span class="num">08</span> 边缘 AI 能力</h2>
+    <p class="section-desc">Eagle 的 AI 功能（语义搜索、自动标签、图像放大）<strong>全部在本地运行，不上传云端</strong>——这是 Local-First 路线在 AI 时代的延伸。</p>
+
+    <div class="grid grid-3">
+      <div class="card feat">
+        <div class="ico" style="background:rgba(255,180,84,.15)">🧩</div>
+        <h4>语义搜索</h4>
+        <p>轻量 <strong>CLIP 蒸馏</strong> 文本-图像 embedding 模型，CPU 推理。常驻内存，查询走余弦相似度，零网络请求。</p>
+      </div>
+      <div class="card feat">
+        <div class="ico" style="background:rgba(124,92,255,.15)">🏷️</div>
+        <h4>自动标签</h4>
+        <p>图像分类模型（ONNX Runtime 上的 <strong>ResNet/ViT 蒸馏</strong>），输出 Top-K 分类作为标签建议。无 GPU 也能秒级完成单图。</p>
+      </div>
+      <div class="card feat">
+        <div class="ico" style="background:rgba(61,220,151,.15)">🔍</div>
+        <h4>图像放大</h4>
+        <p><strong>Real-ESRGAN</strong> 等轻量超分模型，ONNX Runtime 本地执行，批量处理用 Worker 线程池并行。</p>
+      </div>
+    </div>
+
+    <div class="callout">
+      <span class="label">工程结论：ONNX Runtime + 模型蒸馏</span>
+      <p>这是当前桌面应用<strong>性价比最高的 AI 边缘部署方案</strong>——无需 GPU 驱动兼容性处理、无网络依赖、模型可打包进安装包或首启下载缓存。在云端 API 成本上升、隐私监管趋严的背景下，它提供了一条「不上云也能 AI」的可行路线，也是 mymind（云端 AI）之外的另一极。</p>
+    </div>
+
+    <h3>语义搜索的数据流</h3>
+    <div class="flow">
+      <div class="step"><b>① 入库时</b><small>CLIP 对图片生成 512 维向量</small></div>
+      <span class="arr">→</span>
+      <div class="step"><b>② 存储</b><small>向量入库（sqlite-vec / 本地表）</small></div>
+      <span class="arr">→</span>
+      <div class="step"><b>③ 查询时</b><small>对查询文本同样 embedding</small></div>
+      <span class="arr">→</span>
+      <div class="step"><b>④ 余弦相似度</b><small>Top-K 最近邻返回</small></div>
+    </div>
+    <p style="color:var(--text-dim);font-size:14px">模型体积控制在数百 MB，首启加载常驻内存；向量库可用 SQLite 3.45+ 原生向量支持、<code>sqlite-vec</code> 或 <code>sqlite-vss</code> 扩展，保持「单文件、无外部服务」的纯粹本地架构。</p>
+  </div>
+</section>
+
+<!-- ============ 9 PLUGIN ============ -->
+<section id="plugin">
+  <div class="wrap">
+    <h2 class="section-title"><span class="num">09</span> 插件系统：进程隔离</h2>
+    <p class="section-desc">Eagle 4.0 引入的插件系统，允许第三方扩展（AI 放大、智能抠图等）。关键设计是<strong>进程级隔离 + IPC</strong>。</p>
+
+    <div class="grid grid-2">
+      <div class="card">
+        <h4>独立进程运行</h4>
+        <p style="font-size:14px;color:var(--text-dim);margin:0">插件跑在单独的子进程中，通过 IPC 与主进程通信。<strong>插件崩溃不会拖垮主程序</strong>——对管理数万素材的资源库至关重要。Electron 可用 <code>child_process.fork()</code> 实现。</p>
+      </div>
+      <div class="card">
+        <h4>技术栈自由 + 受限 API</h4>
+        <p style="font-size:14px;color:var(--text-dim);margin:0">插件可用 HTML/CSS/JS + Node.js 原生 API + 第三方模块（甚至 Python / 本地二进制），但<strong>不能直接访问数据库</strong>，只能通过主进程暴露的受限 API（类 RESTful）读写文件，保证安全。</p>
+      </div>
+    </div>
+
+    <div class="callout tip">
+      <span class="label">通用启示</span>
+      <p>当你<strong>不信任插件的稳定性</strong>时，进程级隔离的成本远低于崩溃恢复的成本。这一模式（VS Code 的 Extension Host、Chrome 的多进程）是桌面应用可扩展性的黄金范式。</p>
+    </div>
+
+    <h3>插件通信模型</h3>
+<pre><code><span class="c-com">// 主进程：暴露受限 API（伪代码）</span>
+<span class="c-key">const</span> { ipcMain } = <span class="c-fn">require</span>(<span class="c-str">'electron'</span>);
+
+ipcMain.<span class="c-fn">handle</span>(<span class="c-str">'plugin:getSelectedAssets'</span>, <span class="c-key">async</span> (e, pluginId) =&gt; {
+  <span class="c-com">// 仅返回插件被授权访问的资产，不暴露 DB 句柄</span>
+  <span class="c-key">return</span> assetStore.<span class="c-fn">getSelectedFor</span>(pluginId);
+});
+
+<span class="c-com">// 插件子进程：只能调 API，碰不到底层</span>
+<span class="c-key">const</span> assets = <span class="c-key">await</span> eagle.<span class="c-fn">item</span>.<span class="c-fn">getSelected</span>();
+<span class="c-key">const</span> upscaled = <span class="c-key">await</span> runOnnx(<span class="c-str">'realesrgan.onnx'</span>, assets);
+<span class="c-key">await</span> eagle.<span class="c-fn">item</span>.<span class="c-fn">replace</span>(upscaled);
+</code></pre>
+  </div>
+</section>
+
+<!-- ============ 10 COMM ============ -->
+<section id="comm">
+  <div class="wrap">
+    <h2 class="section-title"><span class="num">10</span> 浏览器扩展 ↔ 本地应用：通信机制对比</h2>
+    <p class="section-desc">这是「收集」环节最关键的技术选型。共有三种主流方案，Eagle 选择了 WebSocket。</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>方案</th><th>通信方式</th><th>优势</th><th>劣势</th><th>典型场景</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>Native Messaging</b></td>
+            <td>Chrome 官方机制，<code>stdin/stdout</code> + JSON，独立进程</td>
+            <td>官方支持、安全性高、突破沙箱</td>
+            <td>需注册 Native Host、配置繁琐、扩展主动发起</td>
+            <td>RPA 选取网页内容</td>
+          </tr>
+          <tr style="background:rgba(255,120,73,.06)">
+            <td><b>本地 WebSocket</b> <span class="pill local">Eagle 选用</span></td>
+            <td>本地 App 起 WS Server，扩展作 client 连 <code>ws://localhost</code></td>
+            <td>App 可主动推送、实时、可靠、支持大文件</td>
+            <td>需占本地端口、需处理连接保活</td>
+            <td>素材采集、断点续传下载</td>
+          </tr>
+          <tr>
+            <td><b>本地 HTTP Server</b></td>
+            <td>扩展 <code>fetch</code> 请求 localhost</td>
+            <td>最简单、请求-响应模式</td>
+            <td>不支持双向推送、CORS 处理</td>
+            <td>简单一次性请求</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout warn">
+      <span class="label">为什么不选「文件夹轮询」？</span>
+      <p>一种 naive 方案是「扩展下载图片→存到约定文件夹→本地 App 轮询该目录」。它的问题：① 实时性差（轮询间隔）；② 扩展下载不稳定、受限图抓不到；③ 多一层落盘冗余。WebSocket 隧道让桌面端<strong>直接接管下载</strong>，绕开所有这些坑——这是 Eagle 采集又快又稳的根因。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 11 COMPARE ============ -->
+<section id="compare">
+  <div class="wrap">
+    <h2 class="section-title"><span class="num">11</span> 竞品技术栈横向对比</h2>
+    <p class="section-desc">把视野放大，看「Eagle 类」工具的不同技术路线选择。</p>
+
+    <div class="legend">
+      <span><span class="pill local">本地优先</span> 数据在用户磁盘、离线可用</span>
+      <span><span class="pill cloud">云端原生</span> 数据平台托管、依赖网络</span>
+      <span><span class="pill hybrid">混合</span> 本地为主 + 可选云同步</span>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>工具</th><th>路线</th><th>存储</th><th>离线</th><th>AI 能力</th><th>协作</th><th>定位</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>🦅 Eagle</b></td>
+            <td><span class="pill hybrid">混合</span></td>
+            <td>本地 SQLite + 缩略图分离</td>
+            <td><span class="tag t-yes">✓ 完全可用</span></td>
+            <td><span class="tag t-yes">边缘 AI</span> 语义/标签/放大</td>
+            <td>弱（个人为主）</td>
+            <td>设计师素材管理（格式最全）</td>
+          </tr>
+          <tr>
+            <td><b>🐟 Billfish</b></td>
+            <td><span class="pill local">本地优先</span></td>
+            <td>SQLite（需魔改支持快速索引）</td>
+            <td><span class="tag t-yes">✓ 完全可用</span></td>
+            <td><span class="tag t-no">无</span></td>
+            <td>弱</td>
+            <td>免费 · 索引模式（不复制文件）</td>
+          </tr>
+          <tr>
+            <td><b>🎨 Pixcall</b></td>
+            <td><span class="pill local">本地优先</span></td>
+            <td>本地文件系统</td>
+            <td><span class="tag t-yes">✓ 完全可用</span></td>
+            <td><span class="tag t-mid">部分</span></td>
+            <td>弱</td>
+            <td>本地素材管理（界面品质好）</td>
+          </tr>
+          <tr>
+            <td><b>🧠 mymind</b></td>
+            <td><span class="pill cloud">云端原生</span></td>
+            <td>云端私有空间</td>
+            <td><span class="tag t-no">✗</span></td>
+            <td><span class="tag t-yes">云端 AI</span> 自动标签/语义搜索</td>
+            <td><span class="tag t-no">纯个人</span></td>
+            <td>「无分类」灵感库（AI 替你整理）</td>
+          </tr>
+          <tr>
+            <td><b>🔗 Raindrop.io</b></td>
+            <td><span class="pill cloud">云端原生</span></td>
+            <td>云端（Pro 含网页快照）</td>
+            <td><span class="tag t-mid">仅缓存查看</span></td>
+            <td><span class="tag t-mid">智能推荐标签</span></td>
+            <td><span class="tag t-yes">共享集合</span></td>
+            <td>书签 / 文章 / 链接收藏</td>
+          </tr>
+          <tr>
+            <td><b>📋 Milanote</b></td>
+            <td><span class="pill cloud">云端原生</span></td>
+            <td>云端</td>
+            <td><span class="tag t-no">✗（用户吐槽）</span></td>
+            <td><span class="tag t-no">无</span></td>
+            <td><span class="tag t-yes">共享看板</span></td>
+            <td>无限画布白板 / 情绪板</td>
+          </tr>
+          <tr>
+            <td><b>🎯 Pixso</b></td>
+            <td><span class="pill cloud">云端原生</span></td>
+            <td>云端工作区</td>
+            <td><span class="tag t-no">✗</span></td>
+            <td><span class="tag t-yes">AI 生成设计稿</span></td>
+            <td><span class="tag t-yes">实时多人</span></td>
+            <td>云端设计协作（类 Figma）</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="pc" style="margin-top:22px">
+      <div class="col pro">
+        <h4>本地派（Eagle / Billfish / Pixcall）</h4>
+        <ul>
+          <li>✓ 数据主权，文件就在磁盘上，可备份/迁移</li>
+          <li>✓ 离线可用，数万素材毫秒响应</li>
+          <li>✓ 隐私天然安全（不上传）</li>
+          <li>✓ AI 可边缘部署，无 API 成本</li>
+        </ul>
+      </div>
+      <div class="col con">
+        <h4>云端派（mymind / Raindrop / Milanote）</h4>
+        <ul>
+          <li>✗ 无网即废，依赖平台存活</li>
+          <li>✗ 数据锁定，导出/迁移困难</li>
+          <li>✗ 长期订阅成本，大文件上云贵</li>
+          <li>✓ 但胜在：多端同步、零安装、团队协作、AI 算力强</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 12 BUILD ============ -->
+<section id="build">
+  <div class="wrap">
+    <h2 class="section-title"><span class="num">12</span> 从零实现的推荐技术路线</h2>
+    <p class="section-desc">如果要做一款 Eagle 类工具，推荐的 MVP 技术栈与落地顺序。</p>
+
+    <h3>推荐技术栈</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>层级</th><th>推荐方案</th><th>备选</th></tr></thead>
+        <tbody>
+          <tr><td>桌面壳</td><td><b>Electron</b>（主进程 Node.js + 渲染 Web）</td><td>Tauri（更轻、Rust 后端）</td></tr>
+          <tr><td>数据库</td><td><b>SQLite (better-sqlite3)</b> + FTS5</td><td>DuckDB / LevelDB</td></tr>
+          <tr><td>向量检索</td><td><b>sqlite-vec</b>（嵌入式、零服务）</td><td>sqlite-vss / 本地 hnswlib</td></tr>
+          <tr><td>缩略图/解码</td><td><b>sharp</b> + libpsd / ImageMagick / LibRaw</td><td>jimp / 原生 SDK</td></tr>
+          <tr><td>颜色提取</td><td><b>K-Means</b>（LAB 空间）/ 中位切分</td><td>node-vibrant / 八叉树</td></tr>
+          <tr><td>以图搜图</td><td><b>pHash</b>（imagehash）+ 汉明距离</td><td>dHash / aHash / CNN embedding</td></tr>
+          <tr><td>边缘 AI</td><td><b>ONNX Runtime</b> + CLIP / ResNet / Real-ESRGAN</td><td>TensorFlow.js / llama.cpp</td></tr>
+          <tr><td>浏览器扩展</td><td>Manifest V3 + content script + <b>本地 WS</b></td><td>Native Messaging</td></tr>
+          <tr><td>插件宿主</td><td><b>child_process.fork()</b> 进程隔离 + IPC</td><td>Worker Threads / iframe 沙箱</td></tr>
+          <tr><td>语言</td><td>TypeScript（全栈）</td><td>Python（若侧重算法原型）</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>落地顺序（MVP → 完整版）</h3>
+    <div class="pipeline card">
+      <div class="pstep">
+        <div class="pnum">1</div>
+        <div class="pbody">
+          <h4>骨架：本地资源库 + 瀑布流</h4>
+          <p>Electron + SQLite，实现拖拽/文件夹导入 → 存原图 → 生成 JPEG 缩略图 → 虚拟滚动瀑布流浏览。先跑通「存 + 看」。</p>
+        </div>
+      </div>
+      <div class="pstep">
+        <div class="pnum">2</div>
+        <div class="pbody">
+          <h4>整理：文件夹 / 标签 / 智能文件夹</h4>
+          <p>关系型数据建模，标签多对多，智能文件夹 = 保存的筛选条件。</p>
+        </div>
+      </div>
+      <div class="pstep">
+        <div class="pnum">3</div>
+        <div class="pbody">
+          <h4>检索：FTS5 + 颜色 + pHash</h4>
+          <p>建 FTS5 虚拟表；入库时跑 K-Means 存主色；计算 pHash 存库。三种检索正交组合。</p>
+        </div>
+      </div>
+      <div class="pstep">
+        <div class="pnum">4</div>
+        <div class="pbody">
+          <h4>采集：浏览器扩展 + 本地 WebSocket</h4>
+          <p>桌面端起 WS Server，扩展抓 DOM 推 URL，桌面端下载入库。这是体验飞跃点。</p>
+        </div>
+      </div>
+      <div class="pstep">
+        <div class="pnum">5</div>
+        <div class="pbody">
+          <h4>AI：ONNX 边缘部署</h4>
+          <p>集成 CLIP（语义搜索）+ 分类模型（自动标签）。可选 Real-ESRGAN 放大。模型首启下载缓存。</p>
+        </div>
+      </div>
+      <div class="pstep">
+        <div class="pnum">6</div>
+        <div class="pbody">
+          <h4>生态：进程隔离插件系统</h4>
+          <p>fork 子进程跑第三方插件，IPC + 受限 API。开放扩展能力同时保证主程序稳定。</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="callout tip">
+      <span class="label">一句话路线</span>
+      <p><b>Electron + SQLite/FTS5 + 本地 WS 采集 + ONNX 边缘 AI + 进程隔离插件</b>——这是一条被 Eagle 验证过、可在数万素材下保持极速的成熟工程路线。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ END ============ -->
+<section id="end">
+  <div class="wrap">
+    <h2 class="section-title"><span class="num">∑</span> 总结与展望</h2>
+    <p class="section-desc">回到最初的问题：Eagle 类创意收集工具到底是怎么实现的？</p>
+
+    <div class="card tldr">
+      <div class="big-quote">它不是一个「黑科技」，而是一组<strong>克制而精准的工程取舍</strong>的组合：把数据库放本地、把缩略图与原图分离、把下载交给桌面端、把 AI 跑在 CPU 上、把插件关进子进程。</div>
+      <ul>
+        <li><b>本地优先</b>是这类工具的灵魂——数据主权、极速、离线、隐私，一举四得。</li>
+        <li><b>SQLite + 缩略图分离 + 原图不修改</b>是性能三角，让数万素材秒级响应。</li>
+        <li><b>浏览器扩展 + 本地 WebSocket</b>是采集体验的关键，比文件夹轮询可靠得多。</li>
+        <li><b>FTS5 / K-Means / pHash / ONNX</b>四件套，覆盖从文字、颜色、图像到语义的全维度检索。</li>
+        <li><b>进程隔离插件</b>是可扩展性与稳定性的平衡术。</li>
+      </ul>
+    </div>
+
+    <div class="grid grid-2" style="margin-top:22px">
+      <div class="card">
+        <h4>🔮 趋势：本地 AI 普惠化</h4>
+        <p style="font-size:14px;color:var(--text-dim);margin:0">随着 ONNX Runtime / Apple Silicon NPU / 端侧小模型成熟，「不上云的 AI」会越来越强。mymind 式的「AI 替你整理」体验，将能在本地复刻且不牺牲隐私——这正是 Eagle 类工具的下一个增长极。</p>
+      </div>
+      <div class="card">
+        <h4>⚖️ 待解的张力</h4>
+        <p style="font-size:14px;color:var(--text-dim);margin:0">本地派与云端派的根本张力是<strong>「数据主权」vs「多端协作」</strong>。未来的赢家可能是一个<strong>本地优先 + 可选端到端加密云同步</strong>的混合体——既保留 Eagle 的所有权与速度，又获得 mymind / Milanote 的多端便利。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ FOOTER / REFS ============ -->
+<footer>
+  <div class="wrap">
+    <h3 style="font-size:18px;color:var(--text)">📚 参考来源</h3>
+    <div class="refs">
+      <div>• Eagle 官网 — <a href="https://cn.eagle.cool/" target="_blank" rel="noopener">cn.eagle.cool</a> · <a href="https://en.eagle.cool/extensions" target="_blank" rel="noopener">浏览器扩展</a></div>
+      <div>• 少数派专访 — <a href="https://sspai.com/post/46131" target="_blank" rel="noopener">他开发出了图片管理工具中的「印象笔记」</a></div>
+      <div>• 稀土掘金 — <a href="https://juejin.cn/post/6844903475935969293" target="_blank" rel="noopener">《Eagle》一款 Electron 开发的图片管理应用</a></div>
+      <div>• CSDN 深度技术分析 — <a href="https://blog.csdn.net/2401_89926894/article/details/161999030" target="_blank" rel="noopener">从 Eagle 插件系统到 AI 能力边缘集成</a></div>
+      <div>• 知乎 — <a href="https://zhuanlan.zhihu.com/p/415942467" target="_blank" rel="noopener">替代 Eagle 的素材管理工具评测</a></div>
+      <div>• 博客园 Civet — <a href="https://www.cnblogs.com/webbery/p/12912200.html" target="_blank" rel="noopener">开源图片管理 / Billfish 数据存储分析</a></div>
+      <div>• Eagle Plugin API 官方文档 — <a href="https://developer.eagle.cool/plugin-api/zh-cn" target="_blank" rel="noopener">developer.eagle.cool</a></div>
+      <div>• Chrome Native Messaging — <a href="https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging" target="_blank" rel="noopener">Chrome for Developers</a></div>
+      <div>• MDN — <a href="https://developer.mozilla.org/zh-CN/docs/Mozilla/Add-ons/WebExtensions/Native_messaging" target="_blank" rel="noopener">与本地应用通信 (Native Messaging)</a></div>
+      <div>• SQLite FTS5 — <a href="https://www.sqlite.org/fts5.html" target="_blank" rel="noopener">sqlite.org/fts5</a></div>
+      <div>• PhotoPrism 感知哈希文档 — <a href="https://docs.photoprism.app/developer-guide/metadata/perceptual-hashes/" target="_blank" rel="noopener">Perceptual Hashes</a></div>
+      <div>• imagehash (Python) — <a href="https://github.com/JohannesBuchner/imagehash" target="_blank" rel="noopener">github.com/JohannesBuchner/imagehash</a></div>
+      <div>• color-extraction 算法 — <a href="https://github.com/xiong35/color-extraction" target="_blank" rel="noopener">K-Means / 中位切分 / 八叉树</a></div>
+      <div>• 少数派 — <a href="https://sspai.com/post/76222" target="_blank" rel="noopener">Eagle / Billfish / MuseDAM 横评</a></div>
+      <div>• mymind 官网 — <a href="https://mymind.com/" target="_blank" rel="noopener">mymind.com</a> · Raindrop.io · Milanote · Pixso</div>
+    </div>
+    <div class="note-box">
+      <b>说明：</b>本报告基于公开资料（官网、技术博客、官方文档、社区评测）整理与推断。Eagle 为闭源商业软件，其内部实现细节部分来自第三方技术分析文章的合理推断（如 SQLite/ONNX/WebSocket 等选型），并非官方源码披露。架构图、表结构与伪代码为辅助理解的示意，不代表真实实现。报告日期 2026 年 7 月。
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>
