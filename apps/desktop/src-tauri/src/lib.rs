@@ -65,6 +65,8 @@ pub fn run() {
             commands::library::move_assets_to_folder,
             commands::library::search_assets,
             commands::library::list_analyses_by_asset,
+            commands::library::delete_analysis,
+            commands::library::list_prompted_assets,
             commands::prompt::create_prompt,
             commands::prompt::update_prompt,
             commands::prompt::delete_prompt,
@@ -74,8 +76,11 @@ pub fn run() {
             commands::prompt::assemble_pack,
             commands::codex::codex_run,
             commands::codex::codex_run_stream,
+            commands::codex::codex_health,
             commands::codex::codex_generate_prompt_for_asset,
             commands::codex::codex_describe_asset,
+            commands::codex::cancel_codex_describe,
+            commands::codex::open_codex_session,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

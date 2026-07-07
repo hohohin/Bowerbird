@@ -7,7 +7,7 @@ use tauri::State;
 use ulid::Ulid;
 
 use crate::core::ingest;
-use crate::core::library::{Analysis, Asset, Folder};
+use crate::core::library::{Analysis, Asset, Folder, PromptedAsset};
 use crate::core::paths::LibraryPaths;
 use crate::db::Database;
 use crate::error::AppError;
@@ -156,6 +156,26 @@ pub async fn list_analyses_by_asset(
 ) -> Result<Vec<Analysis>, AppError> {
     let db = db.inner().clone();
     tokio::task::spawn_blocking(move || db.list_analyses_by_asset(&asset_id))
+        .await
+        .map_err(|e| AppError::Other(e.to_string()))?
+}
+
+/// 删除单条分析结果（如旧的 caption）。DB 方法已存在，此处仅 Tauri 命令包装。
+#[tauri::command]
+pub async fn delete_analysis(db: State<'_, Arc<Database>>, id: String) -> Result<(), AppError> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || db.delete_analysis(&id))
+        .await
+        .map_err(|e| AppError::Other(e.to_string()))?
+}
+
+/// 创作板用：有 caption（反推）的资产 + 最新 caption 正文（§5.4）。
+#[tauri::command]
+pub async fn list_prompted_assets(
+    db: State<'_, Arc<Database>>,
+) -> Result<Vec<PromptedAsset>, AppError> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || db.list_prompted_assets())
         .await
         .map_err(|e| AppError::Other(e.to_string()))?
 }

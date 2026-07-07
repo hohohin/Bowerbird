@@ -4,10 +4,12 @@ import type {
   Analysis,
   Asset,
   AssetPrompt,
+  CodexHealth,
   CodexRequest,
   CodexResult,
   CreationPack,
   Folder,
+  PromptedAsset,
 } from "./types";
 
 const IMAGE_EXT = ["jpg", "jpeg", "png", "webp", "gif", "bmp", "tiff", "tif"];
@@ -64,6 +66,7 @@ export const api = {
     invoke<void>("unlink_prompt", { assetId, promptId }),
   listPromptsByAsset: (assetId: string) =>
     invoke<AssetPrompt[]>("list_prompts_by_asset", { assetId }),
+  listPromptedAssets: () => invoke<PromptedAsset[]>("list_prompted_assets"),
   assemblePack: (assetIds: string[]) =>
     invoke<CreationPack>("assemble_pack", { assetIds }),
   codexRun: (req: CodexRequest) => invoke<CodexResult>("codex_run", { req }),
@@ -72,8 +75,13 @@ export const api = {
   codexGeneratePromptForAsset: (assetId: string, role: string) =>
     invoke<string>("codex_generate_prompt_for_asset", { assetId, role }),
   // Phase 5：反推（codex CLI 描述图片）+ 分析结果
-  describeAsset: (assetId: string) =>
-    invoke<string>("codex_describe_asset", { assetId }),
+  describeAsset: (assetId: string, instruction?: string) =>
+    invoke<string>("codex_describe_asset", { assetId, instruction }),
   listAnalysesByAsset: (assetId: string) =>
     invoke<Analysis[]>("list_analyses_by_asset", { assetId }),
+  openCodexSession: (sessionId: string) =>
+    invoke<void>("open_codex_session", { sessionId }),
+  deleteAnalysis: (id: string) => invoke<void>("delete_analysis", { id }),
+  cancelCodexDescribe: () => invoke<void>("cancel_codex_describe"),
+  codexHealth: () => invoke<CodexHealth>("codex_health"),
 };

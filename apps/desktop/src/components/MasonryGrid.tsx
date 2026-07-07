@@ -59,11 +59,16 @@ function Thumb({ asset }: { asset: Asset }) {
       className={`mb-2 break-inside-avoid cursor-pointer overflow-hidden rounded-md ring-2 transition ${
         selected ? "ring-accent" : "ring-transparent hover:ring-edge"
       }`}
-      onClick={(e) => {
+      onClick={() => {
         const st = useStore.getState();
-        if (st.mode === "manage") st.toggleSelect(asset.id);
+        // 创作板 @ 挑图态优先：把资产 id 交给创作板插入到编辑框当前位置
+        if (st.boardPickMode) {
+          window.dispatchEvent(
+            new CustomEvent("bowerbird://board-asset-picked", { detail: asset.id })
+          );
+          st.finishBoardImagePick();
+        } else if (st.mode === "manage") st.toggleSelect(asset.id);
         else st.openDetail(asset.id);
-        void e; // shift 多选已并入 manage 模式，不再需要修饰键
       }}
     >
       <img
@@ -89,6 +94,8 @@ function Thumb({ asset }: { asset: Asset }) {
 export function MasonryGrid() {
   const assets = useStore((s) => s.assets);
   const colorFilter = useStore((s) => s.colorFilter);
+  const boardOpen = useStore((s) => s.boardOpen);
+  const boardPickMode = useStore((s) => s.boardPickMode);
 
   const filtered = useMemo(() => {
     if (!colorFilter) return assets;
@@ -99,17 +106,31 @@ export function MasonryGrid() {
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted">
         {assets.length === 0
-          ? "还没有素材 —— 用顶部按钮导入图片或文件夹"
+          ? boardOpen
+            ? "还没有反推过的图 —— 先在详情页给一些图点「反推」，它们就会出现在这里供创作板挑选"
+            : "还没有素材 —— 用顶部按钮导入图片或文件夹"
           : "当前筛选下无素材"}
       </div>
     );
   }
 
   return (
-    <div className="columns-2 gap-2 p-2 md:columns-3 lg:columns-4 xl:columns-5 h-full overflow-y-auto">
-      {filtered.map((a) => (
-        <Thumb key={a.id} asset={a} />
-      ))}
+    <div className="flex h-full flex-col">
+      {boardPickMode && (
+        <div className="relative shrink-0 overflow-hidden border-b border-accent/40 bg-accent/10 px-3 py-1.5 text-xs text-accent">
+          <div className="absolute inset-y-0 left-0 w-24 animate-pulse bg-accent/20" />
+          <span className="relative">👆 请选择一张图片插入到 @ 位置</span>
+        </div>
+      )}
+      <div
+        className={`columns-2 gap-2 p-2 md:columns-3 lg:columns-4 xl:columns-5 h-full overflow-y-auto ${
+          boardPickMode ? "cursor-crosshair ring-2 ring-inset ring-accent/40" : ""
+        }`}
+      >
+        {filtered.map((a) => (
+          <Thumb key={a.id} asset={a} />
+        ))}
+      </div>
     </div>
   );
 }

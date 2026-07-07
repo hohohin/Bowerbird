@@ -4,6 +4,10 @@
 
 ---
 
+## 子文档索引
+
+- [analyse-panel-todo.md](analyse-panel-todo.md) — 详情页「反推」面板待优化清单（结果管理 / 流式取消 / 术语统一 / 未登录置灰 等，2026-07-07 评审，P0–P2 分级）
+
 ## 项目说明
 
 **Bowerbird（园丁鸟）** —— 为 AI 图像创作服务的、本地优先的「提示词 + 参考图」素材库与编排工作台。形态：Tauri 2 桌面应用 + 浏览器扩展。
@@ -19,9 +23,9 @@
 
 ## 目前进展
 
-> 更新时间：2026-07-06
+> 更新时间：2026-07-08
 
-**当前阶段：1.0 功能路径打通 + v1 范围扩展到生成（⑥）+ 创作板 UI 设计定稿。** 详情页「反推」真正看图（codex CLI + gpt-5.5，ChatGPT 订阅，绕过 API quota）；FTS5 文件名搜索可用；**创作板（拟文本编辑器）设计完成**（[桌面端UI设计.html](桌面端UI设计.html)），代码待建；**生成（⑥）纳入 v1**，待 spike 验证 codex CLI 的画图能力。
+**当前阶段：1.0 功能路径打通 + v1 范围扩展到生成（⑥）+ 创作板 UI 已实现。** 详情页「反推」真正看图（codex CLI + gpt-5.5，ChatGPT 订阅，绕过 API quota）；FTS5 文件名搜索可用；**创作板（真实 prompt 文本编辑器 + @ 选图）已落地**（[CreationBoard.tsx](apps/desktop/src/components/CreationBoard.tsx)）；**生成（⑥）纳入 v1**，待 spike 验证 codex CLI 的画图能力。
 
 **源码树（按开发计划 §7）：** `apps/desktop/{src, src-tauri}`、`apps/extension/`、`packages/shared/`。常用命令：`pnpm install`、`pnpm tauri dev`、`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml`。
 
@@ -33,15 +37,17 @@
 - **桌面端 UX 重构（2026-07-05）**：浏览/批量双模式（默认浏览：点图→详情页；「批量管理」进入多选）；详情页（大图 `store_path` + 元信息 + 提示词板块 + 来源外链）；`move_assets_to_folder` 命令；`codex_generate_prompt_for_asset` 命令（Mock 走通，真实多模态待 Phase 5 spike）。瀑布流缩略图抖动已修（`aspect-ratio` 占位）。
 - **Phase 4（P2 检索 · 部分）**：FTS5 同步触发器（`0002_fts.sql`：assets INSERT/UPDATE/DELETE → `library_fts`）+ 存量回填；`search_assets` 命令（trigram match，按 `rank`）；Toolbar 搜索框 + 清除；App 在 `searchQuery` 非空时切到搜索结果。
 - **Phase 5（P3 拆解分析 · 简化版）**：`analyses` CRUD + `codex_describe_asset` 命令（**反推：固定发"请描述这张图片"**，结果入 `analyses(kind=caption)`）；详情页「反推」按钮 + caption 卡片呈现。按用户要求**仅做反推**，未做 OCR/版式/灵感卡/关键词模板集。
+- **反推提示词维度归类（2026-07-07）**：caption payload 从纯 `{text}` 增量升级为结构化 JSON（`schema_version/text/instruction/session_id/sections/dimensions/parse_status`）。解析器**动态识别所有 markdown 维度标题**（`**任意维度**` / `- **任意维度**` / `### 维度` / `维度：内容`），原样保留进 `sections`；同时经别名表把常用维度归一化为五大标准键 `composition/light/palette/action/mood` 写入 `dimensions`。详情页按模型实际输出的 sections 顺序展示（含 类型 / 材质 / 反推提示词 等），创作板 `@图片 + 维度` 只注入对应 section 正文，缺失时回退整段 caption。旧 `{text}` 数据继续兼容。
+- **创作板 UI（2026-07-08）**：[CreationBoard.tsx](apps/desktop/src/components/CreationBoard.tsx) 落地「真实 prompt 文本编辑器」——右侧面板，用户像跟 AI 输入 prompt 一样自由书写；输入 `@` 触发图片选择（创作板变灰 + 瀑布流跑马灯高亮，且瀑布流仅显示已反推的图），点图后焦点回编辑框并插入「缩略图 + 图名」token；图片后浮现维度 chips（取自该图反推 `sections` 标题，见约定 10），点击插入蓝色下划线维度 token，**面板常驻可连续点多个维度**（同图的光影/类型/氛围… 不用重新 `@` 选图；Esc / ✕ 收起）；手输维度按空格/回车/标点自动识别转 token。底部「实际发送 prompt」把图片 token 按所选维度展开为 `@图名 的【维度】：section 正文`，多维度各自取片段（详见踩坑「多维度序列化」）。后端新增 `list_prompted_assets` 命令（只返回有 caption 的资产 + sections）。入口为 Toolbar 右侧「🎬 创作板」按钮（非批量管理）；旧 `PackPanel.tsx` 已删。
 
-**测试：** `cargo test` 8 通过（导入/去重/多图过滤 + assemble_pack + **FTS5 文件名搜索 + analyses 读写**）；前端 `tsc --noEmit` 通过。
+**测试：** `cargo test` 17 通过（导入/去重/多图过滤 + assemble_pack + FTS5 文件名搜索 + analyses 读写 + caption sections 解析 + list_prompted_assets）；前端 `tsc --noEmit` 通过。
 
 **未开始 / 待办：**
-- **关键 spike（多模态看图）已接通 — codex CLI 路线**：实测后确定 `codex exec --image` 是当前唯一真正看图的路径（走 **ChatGPT 订阅**，绕过 OpenAI API quota；国内 `chatgpt.com` WS reset 但 codex 自动回退 HTTPS，慢但成功）。`CodexCliProvider`（[codex/codex_cli.rs](apps/desktop/src-tauri/src/codex/codex_cli.rs)）spawn `codex exec --skip-git-repo-check --image <path>`，stdin 喂指令，解析 `\ncodex\n<answer>\ntokens used`。**三条备选路线均不通**（已验证）：① `claude -p` 无头把图传 CDN 但不传给模型（"unable to view"）；② DeepSeek HTTP 不接受 OpenAI 的 `image_url` variant（`unknown variant image_url, expected text`）；③ OpenAI HTTP 受账户 `insufficient_quota` 限制。Mock / ClaudeCode（`claude -p`）/ DeepSeek / OpenAI HTTP 路线均已验证看图不通或冗余，**已全部移除**（`codex/` 仅剩 `codex_cli.rs` + `types.rs`）；详情页「反推」/ 创作包「发 codex 优化」/ 批量生成提示词统一走 codex CLI，不再有「真实看图」切换或 in-app apikey 配置（`SettingsDialog` / ⚙️ 按钮 / `config.json` / 后端 `Settings` 模块 + `codex_health` 命令 + `base64` 依赖一并删除）。修复了本地 codex CLI（`npm install -g @openai/codex` 0.142.5，之前平台二进制 ENOENT）。`gpt-image-2` 是生成模型，不适合描述，已排除。
+- **关键 spike（多模态看图）已接通 — codex CLI 路线**：实测后确定 `codex exec --image` 是当前唯一真正看图的路径（走 **ChatGPT 订阅**，绕过 OpenAI API quota；国内 `chatgpt.com` WS reset 但 codex 自动回退 HTTPS，慢但成功）。`CodexCliProvider`（[codex/codex_cli.rs](apps/desktop/src-tauri/src/codex/codex_cli.rs)）spawn `codex exec --skip-git-repo-check --json --image <path>`，stdin 喂指令，解析 JSONL 事件流（`thread.started`→thread_id、`item.completed`(agent_message)→正文）。**反推支持会话回看**：thread_id 落 caption payload，详情页 caption 卡片「在 codex 中打开」按钮调 `open_codex_session` → osascript 唤起 Terminal.app 跑 `codex resume <thread_id>`，用户在 TUI 看该次反推的完整对话含图（Codex.app 无法定位特定 session，故走 CLI TUI）。**三条备选路线均不通**（已验证）：① `claude -p` 无头把图传 CDN 但不传给模型（"unable to view"）；② DeepSeek HTTP 不接受 OpenAI 的 `image_url` variant（`unknown variant image_url, expected text`）；③ OpenAI HTTP 受账户 `insufficient_quota` 限制。Mock / ClaudeCode（`claude -p`）/ DeepSeek / OpenAI HTTP 路线均已验证看图不通或冗余，**已全部移除**（`codex/` 仅剩 `codex_cli.rs` + `types.rs`）；详情页「反推」/ 创作包「发 codex 优化」/ 批量生成提示词统一走 codex CLI，不再有「真实看图」切换或 in-app apikey 配置（`SettingsDialog` / ⚙️ 按钮 / `config.json` / 后端 `Settings` 模块 + `codex_health` 命令 + `base64` 依赖一并删除）。修复了本地 codex CLI（`npm install -g @openai/codex` 0.142.5，之前平台二进制 ENOENT）。`gpt-image-2` 是生成模型，不适合描述，已排除。
 - **Phase 4 剩余**：FTS5 当前仅同步 `name`；`tags/prompt_body/annotation/ocr` 的同步（搜提示词正文等）+ codex 批量自动打标待做。
 - **Phase 5 剩余**：用户已简化为只做反推（caption）；OCR/版式/关键词/灵感卡模板集 + 批量分析队列留待需要时再做。
 - PSD 预览（计划 §1.3 P1）暂未做（SVG/视频已覆盖；psd crate 与 image 0.25 兼容未验证，留后续）。
-- **创作板（拟文本编辑器）—— 核心交互 UI**（2026-07-06 设计定稿）：右侧面板的「拟文本编辑器」，用户选缩略图 + 选维度下拉组成一句中文，每个控件背后映射 prompt 片段，底部「确认生成」拼完整 prompt + 参考图发 codex。底层 `assemble_pack` 已就绪；前端编辑器控件（chips / 虚线占位 / 维度→prompt 映射表；映射复用 `analyses(kind=caption)` 与 `prompts(kind=template)`）待新建；现 `PackPanel.tsx` 未挂载，将按此构思重做。设计稿 [桌面端UI设计.html](桌面端UI设计.html)。
+- **创作板 UI**：已实现（见上方「已完成」）。原「占位填空 + 维度下拉」设计在实现中演化为「真实文本编辑器 + `@` 选图 + 维度 chips 来自图片 sections」；剩余仅图像生成 spike（见下条）。
 - **v1 范围扩展：图像生成（⑥）**（2026-07-06 决策）：原计划 v1 不做生成，现纳入。生成走 codex CLI 的 tool-use（自行调用画图工具），不自建扩散模型。**关键假设待 spike**：codex CLI（gpt-5.5 / ChatGPT 订阅）能否在 `codex exec` 流程里触发图像生成并取回产物（路径 / 格式 / 落库）。落库需补回 `generations` 表（开发计划 v1.2 §4.2 原移除，与本次决策冲突，需后续同步开发计划）。UI 上生成由创作板底部「确认生成」按钮触发。
 
 **里程碑：** 内部 Alpha（Phase 1 ✅）→ 公开 Beta 0.5（Phase 3 ✅）→ 1.0 正式版（Phase 5 简化版 ✅，真实 VLM 看图 spike 后转正）→ **1.x 生成（⑥，创作板 + codex 画图 spike 后转正）**。
@@ -61,7 +67,9 @@
 7. **离线/无账号降级**：未配置 codex 时，分析类功能置灰并提示，而非崩溃。
 8. **浏览/批量双模式交互**：默认浏览模式（点图 → 详情页覆盖主区：大图 + 元信息 + PromptEditor + 来源外链）；Toolbar「批量管理」进入多选模式（点图 = 切换选中，含取消），BatchBar 提供「删除 / 移入新文件夹 / 批量生成提示词」。详情页大图走 `store_path`（原图全尺寸），来源外链用 `source_url`（`@tauri-apps/plugin-shell` 的 `open` 经系统浏览器打开，`shell:allow-open` 已授权）。
 
-9. **创作板 = 核心交互的 UI 形态**（拟文本编辑器，2026-07-06 定稿；设计稿 [桌面端UI设计.html](桌面端UI设计.html)）：右侧面板呈现一段中文句子（如「我想要一张 `[调性▾]` 像 `[缩略图]` 的，`｛人物动作｝`，`｛构图｝`… 的图片」），用户**选缩略图 + 选维度下拉**填空，全程不写提示词。每个控件背后挂真实 prompt 片段：① **维度聚合**——「调性」= 光影/色调/光比/空间感 等子维度打包成一个下拉；② **缩略图** = 该图 codex 反推出的提示词（复用 `analyses(kind=caption)`）；③ **维度下拉选项** = 预置 prompt 片段（存为 `prompts(kind=template)`）。**虚线占位项**（`｛人物动作｝`…）点击即升级为「`[维度▾]` 像 `[缩略图]`」完整子句。底部「**确认生成**」= `assemble_pack` 拼完整 prompt + 参考图集 → 发 codex CLI（优化 / 扩写 / 生成）。底层 `assemble_pack` 已就绪，前端编辑器控件待新建；现 `PackPanel.tsx` 写好但未挂载，将按此构思重做。
+9. **创作板 = 核心交互的 UI 形态**（2026-07-06 定稿，2026-07-08 实现；设计稿 [桌面端UI设计.html](桌面端UI设计.html)）：右侧面板的「真实 prompt 文本编辑器」——用户像跟 AI 输入 prompt 一样自由书写，输入 `@` 触发图片选择（创作板变灰、瀑布流跑马灯高亮且仅显示已反推的图），点图后插入「缩略图 + 图名」token 并焦点回编辑框；图片后浮现维度 chips，点击插入蓝色下划线维度 token，**面板常驻可连续点多个维度**（同图的光影/类型/氛围… 不用重新 `@` 选图；Esc / ✕ 收起）；手输维度按空格/回车/标点自动识别转 token。底部「确认生成」把图片 token 按所选维度展开为 `@图名 的【维度】：section 正文`（多维度各自取片段，详见踩坑「多维度序列化」）+ 参考图集 → 发 codex CLI（优化 / 扩写 / 生成；生成待 §5.9 spike）。**维度 chips 不来自预置 `prompts(kind=template)`**，而是按图动态生成（取该图反推 `sections` 标题，见约定 10）；早期 `0003_templates.sql` seed 的 template 行已被 `0004_templates_clear.sql` 清空（迁移历史保留，net DB 无 template 行）。入口为 Toolbar 右侧「🎬 创作板」按钮，非批量管理模式。
+
+10. **反推 caption 维度片段存储约定**（2026-07-07）：不新增 `asset_dimension_prompts` 表；反推仍是分析数据，落 `analyses(kind=caption).payload`。payload 兼容旧 `{text}`，新版包含 `schema_version/text/instruction/session_id/sections/dimensions/parse_status`；`sections` 是模型实际输出的全部维度（按文档顺序，动态、不固定），`dimensions` 是经别名表归一化的五大标准键（`composition/light/palette/action/mood`，用于 `parse_status` 判定）。**创作板维度下拉按图动态生成**：取该图 `sections` 的标题作为可选项，`@图片 + 维度` 只注入对应 section 正文，缺失时回退整段 caption。
 
 ---
 
@@ -152,4 +160,21 @@
   - **OpenAI HTTP** ❌：账户 `insufficient_quota`（429）。
 - 结论：看图走 [`CodexCliProvider`](apps/desktop/src-tauri/src/codex/codex_cli.rs)（`codex exec --skip-git-repo-check --image <path>` + stdin 指令 + 解析 `\ncodex\n<answer>\ntokens used`）。Mock / ClaudeCode / DeepSeek / OpenAI HTTP 路线随后已清理移除，全链路只走 codex CLI。
 - 前置：`npm install -g @openai/codex` 修复本地 codex（0.142.5，之前平台二进制 ENOENT），`codex login` 登录 ChatGPT 订阅。
-- 相关文件：[codex/codex_cli.rs](apps/desktop/src-tauri/src/codex/codex_cli.rs)、[commands/codex.rs](apps/desktop/src-tauri/src/commands/codex.rs)（`provider()` 工厂按 `active_provider` 分流：codex/deepseek/openai）。
+- 相关文件：[codex/codex_cli.rs](apps/desktop/src-tauri/src/codex/codex_cli.rs)、[commands/codex.rs](apps/desktop/src-tauri/src/commands/codex.rs)。
+
+### codex exec --json 事件结构 + 会话回看（2026-07-06）
+- 需求：反推保留 headless 自动入库（创作板依赖 caption），同时让用户能直观看到 codex 收到的输入与对话。
+- 实测：`codex exec --json --skip-git-repo-check` 的 stdout 是 **JSONL 事件流**（逐行 JSON，非整体）：
+  - `{"type":"thread.started","thread_id":"<UUID>"}` —— 会话 id（也 = `~/.codex/sessions/YYYY/MM/DD/rollout-<时间>-<thread_id>.jsonl` 文件名里的 ULID）
+  - `{"type":"item.completed","item":{"type":"agent_message","text":"..."}}` —— 最终答案正文（可能多条，拼接）
+  - `{"type":"turn.completed","usage":{...}}` —— 收尾
+  - 注意：tracing 的 ERROR 行（如 `wss reset`）走 **stderr**，不污染 stdout 的 JSONL；但 codex 的提示行 `Reading additional input from stdin...` 在 stdout，解析按「行首非 `{` 跳过」过滤。
+- 回看：`codex resume <thread_id>`（位置参数，UUID 直接 parse，绕过 picker）进 TUI 看该次完整对话含图。**Codex.app 的 `codex app` 只接 `[PATH]`、无法定位特定 session**；URL scheme `codex://` 未文档化、靠不住。故会话回看只能走 CLI TUI（macOS 用 osascript 唤起 Terminal.app 跑 `codex resume`）。WS reset 后 codex 自动回退 HTTPS，`codex exec --json` 仍能在 stdout 拿到完整 JSONL，不影响解析。
+- 落库：caption payload 存 `{"text":...,"session_id":...}`（不动 analyses 表结构，最小改动）；前端 `parseCaptionSessionId` 取出，渲染「在 codex 中打开」按钮 → `open_codex_session` 命令。
+- 相关文件：[codex/codex_cli.rs](apps/desktop/src-tauri/src/codex/codex_cli.rs)（`parse_jsonl`）、[commands/codex.rs](apps/desktop/src-tauri/src/commands/codex.rs)（`codex_describe_asset` payload + `open_codex_session`）、[AssetDetail.tsx](apps/desktop/src/components/AssetDetail.tsx)（按钮）。
+
+### 创作板多维度序列化只展开第一个维度（2026-07-08）
+- 现象：创作板里 `@图片A的【光影】和【类型】，【氛围】`，实际发送的 prompt 只有 `【光影】` 取到了该图 section 正文，`【类型】`、`【氛围】` 都是裸标签无片段。
+- 根因：[serializePrompt](apps/desktop/src/components/CreationBoard.tsx) 旧逻辑只让图片 token 通过 `nextSectionTitle` 吞掉**紧跟着的第一个**维度关键词并展开（`@图名 的【维度】：片段`），其余 keyword token 走 `out += 【${t.text}】` 分支只输出裸标签。这是「一张图只点一个维度」时代的逻辑，与新的「面板常驻、连续点多维度」不匹配。
+- 解决：遍历时记录 `currentImageId`（最近遇到的图片 token），未被图片吞掉的独立关键词 token 改走新增的 `serializeKeyword`——到这张图 `sections` 里按标题查 body，查到就输出 `【维度】：片段`。第一个维度仍由图片 token 吞掉（保持 `@图名 的【维度】：片段` 不变），后续维度各自取片段。
+- 相关文件：[CreationBoard.tsx](apps/desktop/src/components/CreationBoard.tsx)（`serializePrompt` / `serializeKeyword`）。

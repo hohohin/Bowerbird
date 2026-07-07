@@ -27,6 +27,19 @@ export interface Folder {
   smart_query?: string | null;
 }
 
+export interface CaptionSection {
+  title: string;
+  body: string;
+}
+
+/** 创作板用：有 caption（反推）的资产 + 最新 caption 正文与结构化维度。 */
+export interface PromptedAsset extends Asset {
+  caption?: string | null;
+  sections?: CaptionSection[] | null;
+  dimensions?: Record<string, string> | null;
+  parse_status?: string | null;
+}
+
 export interface Prompt {
   id: string;
   title?: string | null;
@@ -51,6 +64,12 @@ export interface Analysis {
   created_at?: number | null;
 }
 
+/** codex 可用性检测结果（反推按钮据此置灰，约定 7）。 */
+export interface CodexHealth {
+  ok: boolean;
+  reason: string;
+}
+
 export interface CreationPack {
   prompt: string;
   references: string[];
@@ -69,6 +88,7 @@ export interface CodexResult {
   structured?: unknown;
   provider: string;
   elapsed_ms: number;
+  session_id?: string | null;
 }
 
 export type CodexChunk =

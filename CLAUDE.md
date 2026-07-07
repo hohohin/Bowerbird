@@ -13,6 +13,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `Eagle类创意收集工具调查报告.html` | 前序竞品调研，计划的依据 | 需要背景/对标时 |
 | `draft.md`、`reference/theory.md` | 早期 UX 路径与素材分类（A–F 类）草稿，部分已被计划取代 | 仅在追溯原始意图时 |
 | `桌面端UI设计.html` | 桌面端 UI 面板与入口设计稿（三区外壳 + 创作板拟文本编辑器 + 现状对照） | 桌面端 UI 工作前必读 |
+| `analyse-panel-todo.md` | 详情页「反推」面板待优化清单（P0–P2 分级） | 反推面板 / AssetDetail 相关工作前 |
 
 ## 文档维护规则
 

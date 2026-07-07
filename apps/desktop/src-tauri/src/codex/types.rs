@@ -25,6 +25,10 @@ pub struct CodexResult {
     pub structured: Option<serde_json::Value>,
     pub provider: String,
     pub elapsed_ms: u64,
+    /// codex 会话 id（`codex exec --json` 的 `thread_id`），可用 `codex resume <id>`
+    /// 在 TUI 里回看本次调用的完整对话（含图）。仅 CodexCliProvider 填充。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 /// 流式分片：增量文本 / 完成 / 错误。

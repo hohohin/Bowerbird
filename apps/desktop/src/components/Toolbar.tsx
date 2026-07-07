@@ -1,12 +1,14 @@
 import { useStore } from "../store";
 import { api } from "../lib/api";
 
-/** 顶部工具栏：导入 + 搜索 + 批量管理入口。 */
+/** 顶部工具栏：导入 + 搜索 + 批量管理 + 创作板入口。 */
 export function Toolbar({ onRefresh }: { onRefresh: () => Promise<void> }) {
   const setLoading = useStore((s) => s.setLoading);
   const busy = useStore((s) => s.loading);
   const mode = useStore((s) => s.mode);
   const enterManage = useStore((s) => s.enterManage);
+  const boardOpen = useStore((s) => s.boardOpen);
+  const toggleBoard = useStore((s) => s.toggleBoard);
   const searchQuery = useStore((s) => s.searchQuery);
   const setSearchQuery = useStore((s) => s.setSearchQuery);
 
@@ -67,7 +69,20 @@ export function Toolbar({ onRefresh }: { onRefresh: () => Promise<void> }) {
           清除
         </button>
       )}
-      <div className="ml-auto text-xs text-muted">{busy ? "处理中…" : ""}</div>
+      <div className="ml-auto flex items-center gap-2">
+        <span className="text-xs text-muted">{busy ? "处理中…" : ""}</span>
+        <button
+          onClick={toggleBoard}
+          className={`rounded-md px-3 py-1.5 text-sm font-medium ${
+            boardOpen
+              ? "bg-accent text-black hover:opacity-90"
+              : "bg-panel2 text-ink hover:bg-edge"
+          }`}
+          title="打开创作板（核心枢纽）"
+        >
+          🎬 创作板
+        </button>
+      </div>
     </div>
   );
 }

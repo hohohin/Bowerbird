@@ -1,6 +1,8 @@
 //! 资源库 CRUD：assets / folders / tags 的结构与查询。
 //! Database 的业务方法 split-impl 在本文件（连接管理仍在 db/mod.rs）。
 
+use std::collections::BTreeMap;
+
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
@@ -66,6 +68,47 @@ pub struct Analysis {
     pub payload: String,
     pub provider: Option<String>,
     pub created_at: Option<i64>,
+}
+
+/// 反推 caption 解析出的一个维度片段（动态标题 + 正文）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CaptionSection {
+    pub title: String,
+    pub body: String,
+}
+
+/// 创作板用：带反推 caption 的资产。`asset` flatten 后直接作 Asset 序列化，
+/// 额外附 `caption`（最新一条 analyses(kind=caption) 的正文）与结构化维度片段。
+/// `sections` 是模型实际输出的全部维度（按文档顺序），创作板据此动态生成维度下拉。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PromptedAsset {
+    #[serde(flatten)]
+    pub asset: Asset,
+    pub caption: Option<String>,
+    pub sections: Option<Vec<CaptionSection>>,
+    pub dimensions: Option<BTreeMap<String, String>>,
+    pub parse_status: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CaptionPayload {
+    sections: Option<Vec<CaptionSection>>,
+    dimensions: Option<BTreeMap<String, String>>,
+    parse_status: Option<String>,
+}
+
+fn parse_caption_payload(
+    payload: Option<String>,
+) -> (Option<Vec<CaptionSection>>, Option<BTreeMap<String, String>>, Option<String>) {
+    let Some(payload) = payload else {
+        return (None, None, None);
+    };
+    let Ok(parsed) = serde_json::from_str::<CaptionPayload>(&payload) else {
+        return (None, None, None);
+    };
+    let sections = parsed.sections.filter(|s| !s.is_empty());
+    let dimensions = parsed.dimensions.filter(|d| !d.is_empty());
+    (sections, dimensions, parsed.parse_status)
 }
 
 fn asset_from_row(r: &rusqlite::Row) -> rusqlite::Result<Asset> {
@@ -488,6 +531,45 @@ impl Database {
         Ok(out)
     }
 
+    /// 创作板用：有 caption（反推）的资产 + 最新 caption 正文（开发计划 §5.4）。
+    /// 创作板打开时瀑布流只显示这些；缩略图槽的 prompt 内容来自 caption / dimensions。
+    pub fn list_prompted_assets(&self) -> AppResult<Vec<PromptedAsset>> {
+        let conn = self.conn.lock().unwrap();
+        // 无 JOIN → ASSET_COLS 不需表前缀；caption 取最新 analyses(kind=caption) 的 $.text。
+        // caption_payload 用于反序列化结构化 dimensions；旧 payload 只有 text 时也兼容。
+        let sql = format!(
+            "SELECT {ASSET_COLS}, (\
+               SELECT json_extract(payload, '$.text') FROM analyses \
+               WHERE asset_id = assets.id AND kind = 'caption' \
+               ORDER BY created_at DESC LIMIT 1\
+             ) AS caption, (\
+               SELECT payload FROM analyses \
+               WHERE asset_id = assets.id AND kind = 'caption' \
+               ORDER BY created_at DESC LIMIT 1\
+             ) AS caption_payload \
+             FROM assets \
+             WHERE EXISTS (SELECT 1 FROM analyses WHERE asset_id = assets.id AND kind = 'caption') \
+             ORDER BY created_at DESC"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map([], |r| {
+            let (sections, dimensions, parse_status) =
+                parse_caption_payload(r.get::<_, Option<String>>("caption_payload")?);
+            Ok(PromptedAsset {
+                asset: asset_from_row(r)?,
+                caption: r.get::<_, Option<String>>("caption")?,
+                sections,
+                dimensions,
+                parse_status,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
     pub fn delete_analysis(&self, id: &str) -> AppResult<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute("DELETE FROM analyses WHERE id = ?1", rusqlite::params![id])?;
@@ -562,5 +644,81 @@ mod tests {
         assert_eq!(list[0].kind, "caption");
         db.delete_analysis(&an_id).unwrap();
         assert_eq!(db.list_analyses_by_asset(&aid).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn prompted_assets_filter_and_caption() {
+        // list_prompted_assets 只返回有 caption 的资产，并带最新 caption 正文与结构化维度。
+        let db = db();
+        let a1 = put_asset(&db, "with-caption");
+        let _a2 = put_asset(&db, "no-caption"); // 未反推，不应出现
+
+        db.insert_analysis(&Analysis {
+            id: Ulid::new().to_string(),
+            asset_id: a1.clone(),
+            kind: "caption".to_string(),
+            payload: serde_json::json!({
+                "schema_version": 1,
+                "text": "a neon-lit city street",
+                "sections": [
+                    { "title": "类型", "body": "摄影 / 街景" },
+                    { "title": "光影", "body": "neon rim light" },
+                    { "title": "色调", "body": "cyan and magenta" }
+                ],
+                "dimensions": {
+                    "light": "neon rim light",
+                    "palette": "cyan and magenta"
+                },
+                "parse_status": "partial"
+            })
+            .to_string(),
+            provider: Some("codex-cli".into()),
+            created_at: None,
+        })
+        .unwrap();
+
+        let r = db.list_prompted_assets().unwrap();
+        assert_eq!(r.len(), 1, "只应有 1 个有 caption 的资产");
+        assert_eq!(r[0].asset.id, a1);
+        assert_eq!(
+            r[0].caption.as_deref(),
+            Some("a neon-lit city street"),
+            "应取最新 caption 的 $.text"
+        );
+        assert_eq!(r[0].parse_status.as_deref(), Some("partial"));
+        let sections = r[0].sections.as_ref().expect("应有 sections");
+        assert_eq!(sections.len(), 3);
+        assert_eq!(sections[0].title, "类型");
+        assert_eq!(sections[1].body, "neon rim light");
+        assert_eq!(
+            r[0]
+                .dimensions
+                .as_ref()
+                .and_then(|d| d.get("light"))
+                .map(String::as_str),
+            Some("neon rim light")
+        );
+    }
+
+    #[test]
+    fn prompted_assets_support_legacy_caption_payload() {
+        let db = db();
+        let a1 = put_asset(&db, "legacy-caption");
+
+        db.insert_analysis(&Analysis {
+            id: Ulid::new().to_string(),
+            asset_id: a1.clone(),
+            kind: "caption".to_string(),
+            payload: r#"{"text":"legacy raw caption"}"#.to_string(),
+            provider: Some("codex-cli".into()),
+            created_at: None,
+        })
+        .unwrap();
+
+        let r = db.list_prompted_assets().unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].caption.as_deref(), Some("legacy raw caption"));
+        assert!(r[0].dimensions.is_none());
+        assert!(r[0].parse_status.is_none());
     }
 }

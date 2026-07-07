@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { api } from "./lib/api";
-import type { Asset, Folder } from "./lib/types";
+import type { Asset, Folder, PromptedAsset } from "./lib/types";
 
 type Mode = "browse" | "manage";
 
@@ -15,6 +15,10 @@ interface State {
   mode: Mode;
   detailAssetId: string | null; // 浏览模式打开的详情页资产
   folders: Folder[];
+  // —— 创作板（核心枢纽）——
+  boardOpen: boolean;
+  boardPickMode: boolean; // 输入 @ 后等待瀑布流点选图片
+  promptedAssets: PromptedAsset[]; // 创作板打开时，瀑布流只显示这些（有 caption 的资产）
   setAssets: (a: Asset[]) => void;
   setTotal: (n: number) => void;
   toggleSelect: (id: string) => void;
@@ -23,12 +27,17 @@ interface State {
   setCurrentFolder: (id: string | null) => void;
   setColorFilter: (c: string | null) => void;
   setSearchQuery: (q: string) => void;
-  enterManage: () => void; // 进入批量管理模式
-  exitManage: () => void; // 退出并清空选中
+  enterManage: () => void;
+  exitManage: () => void;
   openDetail: (id: string) => void;
   closeDetail: () => void;
   setFolders: (f: Folder[]) => void;
   reloadFolders: () => Promise<void>;
+  toggleBoard: () => void;
+  startBoardImagePick: () => void;
+  finishBoardImagePick: () => void;
+  cancelBoardImagePick: () => void;
+  setPromptedAssets: (a: PromptedAsset[]) => void;
 }
 
 export const useStore = create<State>((set) => ({
@@ -42,6 +51,9 @@ export const useStore = create<State>((set) => ({
   mode: "browse",
   detailAssetId: null,
   folders: [],
+  boardOpen: false,
+  boardPickMode: false,
+  promptedAssets: [],
   setAssets: (assets) => set({ assets }),
   setTotal: (total) => set({ total }),
   toggleSelect: (id) =>
@@ -70,4 +82,19 @@ export const useStore = create<State>((set) => ({
       console.error("reloadFolders failed", e);
     }
   },
+  // —— 创作板 ——
+  toggleBoard: () =>
+    set((s) => {
+      const turningOn = !s.boardOpen;
+      return {
+        boardOpen: turningOn,
+        boardPickMode: false,
+        // 打开创作板时收起详情页，让瀑布流（仅反推过的图）可见以便 @ 挑图
+        detailAssetId: turningOn ? null : s.detailAssetId,
+      };
+    }),
+  startBoardImagePick: () => set({ boardOpen: true, boardPickMode: true, detailAssetId: null }),
+  finishBoardImagePick: () => set({ boardPickMode: false }),
+  cancelBoardImagePick: () => set({ boardPickMode: false }),
+  setPromptedAssets: (promptedAssets) => set({ promptedAssets }),
 }));
