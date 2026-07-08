@@ -43,7 +43,7 @@
 
 - **反推后台化 + 全局可见（2026-07-08）**：反推不再绑死在 AssetDetail 组件生命周期——执行状态提到 zustand store（`describingId` / `describeQueue` / `describeStartedAt`），详情页点反推后返回瀑布流**继续后台跑**、结果照常入库；**瀑布流缩略图右上角标**「反推中 / 排队 N」（点击即取消：运行中 kill 子进程、排队中移出队列）；**前端单槽排队**——连点几张图串行执行（不并发打 ChatGPT 订阅），根治此前「连点反推 → 后端单例 sender 被 replace → 前一张被静默 kill」的坑（详见踩坑）。后端 `codex_describe_asset` 加 `AppHandle`，`insert_analysis` 后 emit `analyses://changed`，让创作板（`promptedAssets`）/ 当前详情页（`analyses`）按需自动刷新，无需手动 refresh。
 
-- **图像生成（⑥）打通（2026-07-08）**：创作板底部「✓ 发送 codex 生成」把最终 prompt + 参考图发 codex（`codex exec --image`，与反推同机制），codex 调内置 `imagegen` 技能出图。[codex_cli.rs](apps/desktop/src-tauri/src/codex/codex_cli.rs) 新增 `generate_image`：按行读 JSONL，把每条 `item.completed(agent_message)` 即时推 `codex://chunk`（Delta，**真流式**，app 内可见过程——旧 `run_stream` 是一次性 Done、且前端 done 回调没渲染 `c.text` 连最终文本都看不见，本次一并修）；跑完在 `spawn_blocking` 里扫 `~/.codex/generated_images/` 取本次（mtime≥start）新增图，copy 进 `library/generations/`，随 `Chunk::Done.images` 回前端 convertFileSrc 渲染。新增 [commands/codex.rs](apps/desktop/src-tauri/src/commands/codex.rs) `codex_create_image` / `cancel_codex_create`（独立 `GENERATE_CANCEL`，与反推互斥无关、可中断）；[core/paths.rs](apps/desktop/src-tauri/src/core/paths.rs) 加 `generations` 字段。codex 不可用时按钮置灰 + 显原因（约定 7）。**关键约定 2 的 spike 转正**：codex exec 能触发画图并取回产物（取图机制见踩坑）。
+- **图像生成（⑥）打通（2026-07-08）**：创作板底部「✓ 发送 codex 生成」把最终 prompt + 参考图发 codex（`codex exec --image`，与反推同机制），codex 调内置 `imagegen` 技能出图。[codex_cli.rs](apps/desktop/src-tauri/src/codex/codex_cli.rs) 新增 `generate_image`：按行读 JSONL，把每条 `item.completed(agent_message)` 即时推 `codex://chunk`（Delta，**真流式**，app 内可见过程——旧 `run_stream` 是一次性 Done、且前端 done 回调没渲染 `c.text` 连最终文本都看不见，本次一并修）；跑完在 `spawn_blocking` 里扫 `~/.codex/generated_images/` 取本次（mtime≥start）新增图，copy 进 `library/generations/`，随 `Chunk::Done.images` 回前端 convertFileSrc 渲染。新增 [commands/codex.rs](apps/desktop/src-tauri/src/commands/codex.rs) `codex_create_image` / `cancel_codex_create`（独立 `GENERATE_CANCEL`，与反推互斥无关、可中断）；[core/paths.rs](apps/desktop/src-tauri/src/core/paths.rs) 加 `generations` 字段。codex 不可用时按钮置灰 + 显原因（约定 7）。**端到端实测跑通（2026-07-08）**：创作板推送 → codex imagegen 生成 → app 内回显生成图整条流程实测通过（关键约定 2 转正，取图机制见踩坑）。
 - **生成图对话迭代修改（2026-07-08）**：图片难一次满意，创作板支持多轮对话——首轮生成拿到 `session_id`（`Done.session_id`）后，「提修改意见」输入框带它走 `codex exec resume <id>` 续接同一 codex 会话：codex 记得上一张图与对话上下文，按修改意见编辑出新一轮图（spike 实测可行）。[codex_cli.rs](apps/desktop/src-tauri/src/codex/codex_cli.rs) `generate_image` / [commands/codex.rs](apps/desktop/src-tauri/src/commands/codex.rs) `codex_create_image` 加 `session_id` 参数（Some→`resume <id> -`、None→新 exec）；[CreationBoard.tsx](apps/desktop/src/components/CreationBoard.tsx) turns 时间线展示各轮 prompt + 产出图，「重新生成（新会话）」可重置。
 
 **测试：** `cargo test` 24 通过（导入/去重/多图过滤 + assemble_pack + FTS5 文件名搜索 + analyses 读写 + caption sections 解析 + list_prompted_assets + **采集即命名 `clean_name`/`split_name_and_desc` + caption 共享模块**）；前端 `tsc --noEmit` 通过。
@@ -56,7 +56,7 @@
 - **创作板 UI**：已实现（见上方「已完成」）。原「占位填空 + 维度下拉」设计在实现中演化为「真实文本编辑器 + `@` 选图 + 维度 chips 来自图片 sections」；剩余仅图像生成 spike（见下条）。
 - **图像生成（⑥）已通（2026-07-08）**：创作板底部「✓ 发送 codex 生成」走 codex exec imagegen，流式回显 + 生成图 copy 进 `library/generations/` 回显；生成后可「提修改意见」走 `codex exec resume` 多轮迭代（详见「已完成」）。**剩余**：`generations` 表落库（开发计划 v1.2 §4.2 原移除）+ 生成图作为一等资产进瀑布流。
 
-**里程碑：** 内部 Alpha（Phase 1 ✅）→ 公开 Beta 0.5（Phase 3 ✅）→ 1.0 正式版（Phase 5 简化版 ✅，真实 VLM 看图 spike 后转正）→ **1.x 生成（⑥，codex imagegen spike 已通转正，2026-07-08）**。
+**里程碑：** 内部 Alpha（Phase 1 ✅）→ 公开 Beta 0.5（Phase 3 ✅）→ 1.0 正式版（Phase 5 简化版 ✅，真实 VLM 看图 spike 后转正）→ **1.x 生成（⑥，codex imagegen 端到端实测跑通，2026-07-08）**。
 
 ---
 
