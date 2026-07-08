@@ -119,16 +119,16 @@ pub fn walk_images(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
-/// 导入目录下所有图片，返回成功入库数（去重的不计）。
-pub fn ingest_dir(paths: &LibraryPaths, db: &Database, dir: &Path) -> AppResult<usize> {
-    let mut count = 0;
+/// 导入目录下所有图片，返回成功入库的资产（含 dHash 命中的已有资产）。
+pub fn ingest_dir(paths: &LibraryPaths, db: &Database, dir: &Path) -> AppResult<Vec<Asset>> {
+    let mut assets = Vec::new();
     for p in walk_images(dir) {
         match ingest_file(paths, db, &p) {
-            Ok(_) => count += 1,
+            Ok(a) => assets.push(a),
             Err(e) => tracing::warn!("ingest failed for {}: {e}", p.display()),
         }
     }
-    Ok(count)
+    Ok(assets)
 }
 
 /// 下载扩展采集的图（Phase 1 简化版：reqwest 直链下载到临时文件后走 ingest）。
@@ -259,8 +259,8 @@ mod tests {
         make_gradient(&tmp.dir.join("b.png"), 120);
         make_gradient(&tmp.dir.join("c.png"), 200);
 
-        let n = ingest_dir(&paths, &db, &tmp.dir).unwrap();
-        assert_eq!(n, 3, "three distinct images should all be ingested");
+        let assets = ingest_dir(&paths, &db, &tmp.dir).unwrap();
+        assert_eq!(assets.len(), 3, "three distinct images should all be ingested");
         assert_eq!(db.count_assets().unwrap(), 3);
     }
 

@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use tauri::State;
+use tauri::{AppHandle, State};
 use ulid::Ulid;
 
 use crate::core::ingest;
@@ -14,16 +14,18 @@ use crate::error::AppError;
 
 #[tauri::command]
 pub async fn import_files(
+    app: AppHandle,
     paths: State<'_, Arc<LibraryPaths>>,
     db: State<'_, Arc<Database>>,
     sources: Vec<String>,
 ) -> Result<Vec<Asset>, AppError> {
     let paths = paths.inner().clone();
     let db = db.inner().clone();
-    tokio::task::spawn_blocking(move || {
+    let db_for_ingest = db.clone();
+    let assets = tokio::task::spawn_blocking(move || {
         let mut assets = Vec::with_capacity(sources.len());
         for s in sources {
-            match ingest::ingest_file(&paths, &db, &PathBuf::from(&s)) {
+            match ingest::ingest_file(&paths, &db_for_ingest, &PathBuf::from(&s)) {
                 Ok(a) => assets.push(a),
                 Err(e) => tracing::warn!("ingest failed for {s}: {e}"),
             }
@@ -31,22 +33,33 @@ pub async fn import_files(
         Ok::<_, AppError>(assets)
     })
     .await
-    .map_err(|e| AppError::Other(e.to_string()))?
+    .map_err(|e| AppError::Other(e.to_string()))??;
+    // 后台命名 + 反推（非阻塞，约定 7 离线降级）。
+    for a in &assets {
+        crate::core::autoname::spawn_auto_analyze(app.clone(), db.clone(), a.clone());
+    }
+    Ok(assets)
 }
 
 #[tauri::command]
 pub async fn import_folder(
+    app: AppHandle,
     paths: State<'_, Arc<LibraryPaths>>,
     db: State<'_, Arc<Database>>,
     path: String,
 ) -> Result<usize, AppError> {
     let paths = paths.inner().clone();
     let db = db.inner().clone();
-    tokio::task::spawn_blocking(move || {
-        ingest::ingest_dir(&paths, &db, &PathBuf::from(path))
+    let db_for_ingest = db.clone();
+    let assets = tokio::task::spawn_blocking(move || {
+        ingest::ingest_dir(&paths, &db_for_ingest, &PathBuf::from(path))
     })
     .await
-    .map_err(|e| AppError::Other(e.to_string()))?
+    .map_err(|e| AppError::Other(e.to_string()))??;
+    for a in &assets {
+        crate::core::autoname::spawn_auto_analyze(app.clone(), db.clone(), a.clone());
+    }
+    Ok(assets.len())
 }
 
 #[tauri::command]

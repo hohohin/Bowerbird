@@ -54,6 +54,12 @@ async fn handle_message(text: &str, state: &AppState) -> String {
             }
             match ingest::ingest_from_url(&state.paths, &state.db, url).await {
                 Ok(a) => {
+                    // 后台命名 + 反推（非阻塞，约定 7 离线降级；完成后再 emit 一次刷新名）。
+                    crate::core::autoname::spawn_auto_analyze(
+                        state.app.clone(),
+                        state.db.clone(),
+                        a.clone(),
+                    );
                     // 通知前端刷新（扩展批量采集时会连发多条，前端去抖合并）。
                     let _ = state.app.emit("library://assets-changed", ());
                     serde_json::json!({

@@ -207,6 +207,17 @@ impl Database {
         Ok(n)
     }
 
+    /// 改资产名。命中 0002_fts.sql 的 `AFTER UPDATE OF name` 触发器，
+    /// FTS5 搜索索引自动重建（DELETE+INSERT），无需额外同步。
+    pub fn update_asset_name(&self, id: &str, name: &str) -> AppResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE assets SET name = ?1 WHERE id = ?2",
+            rusqlite::params![name, id],
+        )?;
+        Ok(())
+    }
+
     pub fn find_asset_by_phash(&self, phash: &str) -> AppResult<Option<Asset>> {
         let conn = self.conn.lock().unwrap();
         let sql = format!("SELECT {ASSET_COLS} FROM assets WHERE phash = ?1 LIMIT 1");
@@ -529,6 +540,17 @@ impl Database {
             out.push(r?);
         }
         Ok(out)
+    }
+
+    /// 该资产是否已有指定 kind 的分析结果（采集即命名用：已有 caption 则跳过，避免重复调 codex）。
+    pub fn has_analysis(&self, asset_id: &str, kind: &str) -> AppResult<bool> {
+        let conn = self.conn.lock().unwrap();
+        let exists: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM analyses WHERE asset_id = ?1 AND kind = ?2)",
+            rusqlite::params![asset_id, kind],
+            |r| r.get(0),
+        )?;
+        Ok(exists)
     }
 
     /// 创作板用：有 caption（反推）的资产 + 最新 caption 正文（开发计划 §5.4）。
