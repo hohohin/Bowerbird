@@ -10,6 +10,9 @@ type Token =
   | { kind: "image"; assetId: string }
   | { kind: "keyword"; text: string };
 
+/** 一轮生成对话：用户输入（首轮 = 编辑器 finalPrompt，后续 = 修改意见）+ 本轮产出图。 */
+type Turn = { id: number; prompt: string; images: string[] };
+
 function tokenKey(t: Token, i: number) {
   if (t.kind === "image") return `img-${t.assetId}-${i}`;
   if (t.kind === "keyword") return `kw-${t.text}-${i}`;
@@ -42,7 +45,12 @@ export function CreationBoard() {
   const [streaming, setStreaming] = useState("");
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [images, setImages] = useState<string[]>([]);
+  // 生成对话：turns = 各轮（首轮来自编辑器、后续来自修改意见）；sessionId = codex 会话 id，
+  // 首轮 Done 后拿到，后续轮带它 codex exec resume 续接同一对话。
+  const [turns, setTurns] = useState<Turn[]>([]);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [revise, setRevise] = useState("");
+  const turnIdRef = useRef(0);
   const [codexHealth, setCodexHealth] = useState<CodexHealth | null>(null);
 
   const assetById = useMemo(() => {
@@ -78,7 +86,16 @@ export function CreationBoard() {
       if (c.kind === "delta") setStreaming((s) => s + c.text);
       else if (c.kind === "done") {
         setStreaming((s) => s + `\n\n—— done · ${c.elapsed_ms}ms via ${c.provider}`);
-        if (c.images && c.images.length > 0) setImages(c.images);
+        if (c.session_id) setSessionId(c.session_id);
+        const imgs = c.images ?? [];
+        if (imgs.length > 0) {
+          // 把本轮产出图追加到 turns 最后一轮（发送时已 push 占位 turn）。
+          setTurns((prev) => {
+            if (prev.length === 0) return prev;
+            const last = prev[prev.length - 1];
+            return [...prev.slice(0, -1), { ...last, images: [...last.images, ...imgs] }];
+          });
+        }
       } else if (c.kind === "error") setStreaming((s) => s + `\n[error: ${c.message}]`);
     }).then((u) => (unlisten = u));
     return () => unlisten?.();
@@ -176,24 +193,54 @@ export function CreationBoard() {
     setTimeout(() => setCopied(false), 1500);
   }
 
+  function nextTurnId() {
+    turnIdRef.current += 1;
+    return turnIdRef.current;
+  }
+
+  // 首轮 / 新会话：用编辑器 finalPrompt + 参考图发 codex（新会话），重置对话。
   async function sendCodex() {
     if (!codexHealth?.ok || !finalPrompt) return;
-    setBusy(true);
+    const prompt = finalPrompt;
+    const refs = references;
+    setSessionId(null);
+    setTurns([{ id: nextTurnId(), prompt, images: [] }]);
     setStreaming("");
-    setImages([]);
+    setBusy(true);
     try {
-      await api.codexCreateImage({
-        prompt: finalPrompt,
-        referenceImages: references,
-      });
+      await api.codexCreateImage({ prompt, referenceImages: refs });
     } catch (e) {
-      const msg = typeof e === "string" ? e : JSON.stringify(e);
-      setStreaming((s) =>
-        s + (msg.includes("已取消") ? "\n\n—— 已取消" : `\n[error: ${msg}]`)
-      );
+      handleGenError(e);
     } finally {
       setBusy(false);
     }
+  }
+
+  // 续轮：带 sessionId 走 codex exec resume 续接同一会话，按修改意见让 codex 编辑上一张图。
+  async function sendRevise() {
+    if (!codexHealth?.ok || !sessionId || !revise.trim()) return;
+    const prompt = revise.trim();
+    setRevise("");
+    setTurns((prev) => [...prev, { id: nextTurnId(), prompt, images: [] }]);
+    setStreaming("");
+    setBusy(true);
+    try {
+      await api.codexCreateImage({ prompt, referenceImages: [], sessionId });
+    } catch (e) {
+      handleGenError(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // 取消 / 出错时若最后一轮没产出图，移除占位 turn，避免空轮留在时间线。
+  function handleGenError(e: unknown) {
+    const msg = typeof e === "string" ? e : JSON.stringify(e);
+    const cancelled = msg.includes("已取消");
+    setStreaming((s) => s + (cancelled ? "\n\n—— 已取消" : `\n[error: ${msg}]`));
+    setTurns((prev) =>
+      prev.length > 0 && prev[prev.length - 1].images.length === 0 ? prev.slice(0, -1) : prev
+    );
   }
 
   return (
@@ -290,24 +337,65 @@ export function CreationBoard() {
       </div>
 
       <div className="space-y-2 border-t border-edge p-3">
-        {images.length > 0 && (
-          <div className="space-y-1">
+        {turns.length > 0 && (
+          <div className="space-y-2">
             <div className="text-[10px] uppercase tracking-wide text-muted">
-              codex 生成结果（{images.length}）
+              生成对话（{turns.length} 轮 · {turns.reduce((n, t) => n + t.images.length, 0)} 图）
             </div>
-            <div className="grid grid-cols-2 gap-1.5">
-              {images.map((p) => (
-                <a key={p} href={convertFileSrc(p)} target="_blank" rel="noreferrer" title={p}>
-                  <img
-                    src={convertFileSrc(p)}
-                    alt=""
-                    className="w-full rounded border border-edge object-cover"
-                  />
-                </a>
-              ))}
+            {turns.map((t, i) => (
+              <div key={t.id} className="space-y-1 rounded bg-panel2/50 p-2">
+                <div className="line-clamp-2 text-[11px] text-muted" title={t.prompt}>
+                  <span className="text-accent">{i === 0 ? "首版" : `修改 ${i}`}：</span>
+                  {t.prompt}
+                </div>
+                {t.images.length > 0 ? (
+                  <div className={`grid gap-1.5 ${t.images.length > 1 ? "grid-cols-2" : "grid-cols-1"}`}>
+                    {t.images.map((p) => (
+                      <a key={p} href={convertFileSrc(p)} target="_blank" rel="noreferrer" title={p}>
+                        <img
+                          src={convertFileSrc(p)}
+                          alt=""
+                          className="w-full rounded border border-edge object-cover"
+                        />
+                      </a>
+                    ))}
+                  </div>
+                ) : busy && i === turns.length - 1 ? (
+                  <div className="text-[10px] text-muted animate-pulse">codex 生成中…</div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {sessionId && (
+          <div className="space-y-1">
+            <div className="text-[10px] text-muted">提修改意见（续接同一 codex 会话，记得上一张图）</div>
+            <div className="flex gap-1.5">
+              <input
+                value={revise}
+                onChange={(e) => setRevise(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    sendRevise();
+                  }
+                }}
+                disabled={busy}
+                placeholder="如：背景改成白天、去掉霓虹、猫换成狗…"
+                className="min-w-0 flex-1 rounded bg-panel2 px-2 py-1.5 text-xs text-ink outline-none ring-1 ring-edge focus:ring-accent disabled:opacity-50"
+              />
+              <button
+                onClick={sendRevise}
+                disabled={busy || !revise.trim()}
+                className="shrink-0 rounded bg-accent px-3 py-1.5 text-xs font-semibold text-black disabled:opacity-50"
+              >
+                继续修改
+              </button>
             </div>
           </div>
         )}
+
         <button
           onClick={copy}
           disabled={!finalPrompt}
@@ -321,18 +409,20 @@ export function CreationBoard() {
           title={
             !codexHealth?.ok
               ? codexHealth?.reason || "codex 不可用"
-              : "把最终 prompt + 参考图发 codex CLI 生成图像"
+              : turns.length > 0
+                ? "用当前编辑器 prompt 开新会话重新生成（清空上方对话）"
+                : "把最终 prompt + 参考图发 codex CLI 生成图像"
           }
           className={`w-full rounded-md px-3 py-2 text-sm font-semibold disabled:opacity-50 ${
             busy ? "border border-edge bg-panel2 text-ink hover:text-red-300" : "bg-accent text-black"
           }`}
         >
-          {busy ? "取消生成" : "✓ 发送 codex 生成"}
+          {busy ? "取消生成" : turns.length > 0 ? "重新生成（新会话）" : "✓ 发送 codex 生成"}
         </button>
         <div className="text-[10px] text-muted">
           {codexHealth && !codexHealth.ok
             ? codexHealth.reason
-            : "🎨 把最终 prompt + 参考图发 codex（imagegen）生成图像；过程文本流式回显。"}
+            : "🎨 生成 → 提修改意见续接同一 codex 会话迭代出图。"}
         </div>
         {streaming && (
           <pre className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded bg-panel2 p-2 text-[11px] text-ink">

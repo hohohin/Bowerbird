@@ -81,10 +81,16 @@ export const api = {
   codexHealth: () => invoke<CodexHealth>("codex_health"),
   // 创作板「生成」：把最终 prompt + 参考图发 codex（codex exec --image，同反推机制）出图。
   // 流式文本经 codex://chunk（Delta）回；生成图 copy 进 library/generations 后随 Done.images 回。
-  codexCreateImage: (req: { prompt: string; referenceImages: string[] }) =>
+  // sessionId 非空 → codex exec resume 续接同一会话（多轮迭代修改，codex 记得上一张图）。
+  codexCreateImage: (req: {
+    prompt: string;
+    referenceImages: string[];
+    sessionId?: string | null;
+  }) =>
     invoke<void>("codex_create_image", {
       prompt: req.prompt,
       referenceImages: req.referenceImages,
+      sessionId: req.sessionId ?? null,
     }),
   cancelCodexCreate: () => invoke<void>("cancel_codex_create"),
 };

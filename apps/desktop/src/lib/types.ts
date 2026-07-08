@@ -84,5 +84,6 @@ export type CodexChunk =
       provider: string;
       elapsed_ms: number;
       images?: string[];
+      session_id?: string | null;
     }
   | { kind: "error"; message: string };

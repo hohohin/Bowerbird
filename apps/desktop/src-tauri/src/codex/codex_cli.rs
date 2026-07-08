@@ -57,6 +57,7 @@ impl CodexCliProvider {
         req: CodexRequest,
         generations_dir: PathBuf,
         tx: mpsc::Sender<Chunk>,
+        resume_session: Option<String>,
     ) -> Result<(), AppError> {
         if !self.enabled {
             return Err(AppError::Codex("CodexCliProvider 未启用".into()));
@@ -67,8 +68,22 @@ impl CodexCliProvider {
         cmd.arg("exec")
             .arg("--skip-git-repo-check")
             .arg("--json");
-        for img in &req.reference_images {
-            cmd.arg("--image").arg(img);
+        match &resume_session {
+            // 续接：codex 记得本会话历史 + 上一张图，按新指令编辑出图（spike 实测可行）。
+            // `resume <sid> -`：`-` 让 resume 从 stdin 读本轮指令；--image 通常不需要（codex
+            // 已有上一张图），但若调用方传了新参考图也支持。
+            Some(sid) => {
+                cmd.arg("resume");
+                for img in &req.reference_images {
+                    cmd.arg("--image").arg(img);
+                }
+                cmd.arg(sid).arg("-");
+            }
+            None => {
+                for img in &req.reference_images {
+                    cmd.arg("--image").arg(img);
+                }
+            }
         }
         if !self.model.is_empty() {
             cmd.arg("-m").arg(&self.model);

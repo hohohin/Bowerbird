@@ -204,10 +204,16 @@ pub async fn codex_create_image(
     paths: State<'_, Arc<LibraryPaths>>,
     prompt: String,
     reference_images: Vec<String>,
+    session_id: Option<String>,
 ) -> Result<(), AppError> {
-    let instruction = format!(
-        "请使用图像生成工具，根据以下提示词和参考图生成一张新图片。\n\n{prompt}"
-    );
+    // 首轮（无 session_id）：包一句明确要 codex 出图，触发 imagegen；
+    // 续轮（有 session_id = resume）：codex 已在画图上下文里，用户修改意见原样发。
+    let instruction = match &session_id {
+        Some(_) => prompt,
+        None => format!(
+            "请使用图像生成工具，根据以下提示词和参考图生成一张新图片。\n\n{prompt}"
+        ),
+    };
     let req = CodexRequest {
         instruction,
         reference_images: reference_images.into_iter().map(PathBuf::from).collect(),
@@ -227,7 +233,7 @@ pub async fn codex_create_image(
     GENERATE_CANCEL.lock().unwrap().replace(cancel_tx);
 
     let p = CodexCliProvider::default();
-    let gen_fut = p.generate_image(req, generations_dir, tx);
+    let gen_fut = p.generate_image(req, generations_dir, tx, session_id);
     tokio::pin!(gen_fut);
     let result = tokio::select! {
         r = &mut gen_fut => r,
