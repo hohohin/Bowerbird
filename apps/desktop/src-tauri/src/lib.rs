@@ -74,8 +74,6 @@ pub fn run() {
             commands::prompt::unlink_prompt,
             commands::prompt::list_prompts_by_asset,
             commands::prompt::assemble_pack,
-            commands::codex::codex_run,
-            commands::codex::codex_run_stream,
             commands::codex::codex_health,
             commands::codex::codex_generate_prompt_for_asset,
             commands::codex::codex_describe_asset,

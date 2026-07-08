@@ -5,8 +5,6 @@ import type {
   Asset,
   AssetPrompt,
   CodexHealth,
-  CodexRequest,
-  CodexResult,
   CreationPack,
   Folder,
   PromptedAsset,
@@ -69,9 +67,6 @@ export const api = {
   listPromptedAssets: () => invoke<PromptedAsset[]>("list_prompted_assets"),
   assemblePack: (assetIds: string[]) =>
     invoke<CreationPack>("assemble_pack", { assetIds }),
-  codexRun: (req: CodexRequest) => invoke<CodexResult>("codex_run", { req }),
-  codexRunStream: (req: CodexRequest) =>
-    invoke<void>("codex_run_stream", { req }),
   codexGeneratePromptForAsset: (assetId: string, role: string) =>
     invoke<string>("codex_generate_prompt_for_asset", { assetId, role }),
   // Phase 5：反推（codex CLI 描述图片）+ 分析结果

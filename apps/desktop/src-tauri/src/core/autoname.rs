@@ -64,7 +64,6 @@ async fn auto_analyze(app: &AppHandle, db: &Arc<Database>, asset: Asset) -> Resu
         instruction: AUTO_INSTRUCTION.to_string(),
         reference_images: vec![store_path.into()],
         context_prompts: vec![],
-        output_schema: None,
     };
     let provider = CodexCliProvider::default();
     let provider_name = provider.name().to_string();

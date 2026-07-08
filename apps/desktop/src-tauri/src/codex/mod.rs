@@ -5,11 +5,10 @@
 //! （详见 PROJECT.md「多模态看图四条路径实测」与关键约定 1）。
 
 use async_trait::async_trait;
-use tokio::sync::mpsc;
 
 use crate::error::AppError;
 
-use self::types::{Chunk, CodexRequest, CodexResult};
+use self::types::{CodexRequest, CodexResult};
 
 pub mod types;
 pub mod codex_cli;
@@ -19,13 +18,7 @@ pub trait CodexProvider: Send + Sync {
     /// provider 标识（落库 `analyses.provider` / `prompts.source_model`）。
     fn name(&self) -> &'static str;
 
-    /// 单轮：给定 prompt + 参考图，返回结构化结果（批量分析用）。
+    /// 单轮：给定 prompt + 参考图，返回结果（反推 / 自动命名 / 生成提示词用）。
+    /// 生成（出图）与流式见 `CodexCliProvider::generate_image`（inherent 方法）。
     async fn run(&self, req: CodexRequest) -> Result<CodexResult, AppError>;
-
-    /// 流式：逐 token 推送（交互式拆解 / 实时呈现用）。
-    async fn run_stream(
-        &self,
-        req: CodexRequest,
-        tx: mpsc::Sender<Chunk>,
-    ) -> Result<(), AppError>;
 }

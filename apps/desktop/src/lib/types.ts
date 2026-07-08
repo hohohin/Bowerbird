@@ -76,21 +76,6 @@ export interface CreationPack {
   asset_ids: string[];
 }
 
-export interface CodexRequest {
-  instruction: string;
-  reference_images?: string[];
-  context_prompts?: string[];
-  output_schema?: unknown;
-}
-
-export interface CodexResult {
-  text: string;
-  structured?: unknown;
-  provider: string;
-  elapsed_ms: number;
-  session_id?: string | null;
-}
-
 export type CodexChunk =
   | { kind: "delta"; text: string }
   | {
@@ -98,7 +83,6 @@ export type CodexChunk =
       text: string;
       provider: string;
       elapsed_ms: number;
-      structured?: unknown;
       images?: string[];
     }
   | { kind: "error"; message: string };

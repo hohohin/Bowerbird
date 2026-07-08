@@ -13,7 +13,7 @@ use tokio::sync::mpsc;
 use ulid::Ulid;
 
 use crate::codex::codex_cli::CodexCliProvider;
-use crate::codex::types::{Chunk, CodexRequest, CodexResult};
+use crate::codex::types::{Chunk, CodexRequest};
 use crate::codex::CodexProvider;
 use crate::core::caption;
 use crate::core::paths::LibraryPaths;
@@ -21,28 +21,6 @@ use crate::db::Database;
 use crate::error::AppError;
 
 const DEFAULT_DESCRIBE_INSTRUCTION: &str = "请描述这张图片";
-
-#[tauri::command]
-pub async fn codex_run(req: CodexRequest) -> Result<CodexResult, AppError> {
-    Ok(CodexCliProvider::default().run(req).await?)
-}
-
-#[tauri::command]
-pub async fn codex_run_stream(
-    app: AppHandle,
-    req: CodexRequest,
-) -> Result<(), AppError> {
-    let p = CodexCliProvider::default();
-    let (tx, mut rx) = mpsc::channel::<Chunk>(64);
-    let app_clone = app.clone();
-    tokio::spawn(async move {
-        while let Some(chunk) = rx.recv().await {
-            let _ = app_clone.emit("codex://chunk", &chunk);
-        }
-    });
-    p.run_stream(req, tx).await?;
-    Ok(())
-}
 
 /// codex 可用性检测结果。`ok=false` 时 `reason` 给出置灰提示文案。
 #[derive(Debug, Clone, Serialize)]
@@ -100,7 +78,6 @@ pub async fn codex_generate_prompt_for_asset(
         instruction: "为这张图片生成一段适合 AI 绘画的提示词（描述主体、风格、构图、光影）".into(),
         reference_images: vec![PathBuf::from(store_path)],
         context_prompts: vec![],
-        output_schema: None,
     };
     let p = CodexCliProvider::default();
     let provider_name = p.name().to_string();
@@ -147,7 +124,6 @@ pub async fn codex_describe_asset(
         instruction: instruction.clone(),
         reference_images: vec![PathBuf::from(store_path)],
         context_prompts: vec![],
-        output_schema: None,
     };
     let p = CodexCliProvider::default();
     let provider_name = p.name().to_string();
@@ -236,7 +212,6 @@ pub async fn codex_create_image(
         instruction,
         reference_images: reference_images.into_iter().map(PathBuf::from).collect(),
         context_prompts: vec![],
-        output_schema: None,
     };
 
     let (tx, mut rx) = mpsc::channel::<Chunk>(64);

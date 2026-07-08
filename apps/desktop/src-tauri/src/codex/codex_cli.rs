@@ -187,7 +187,6 @@ impl CodexCliProvider {
 
         let result = CodexResult {
             text: texts.join("\n"),
-            structured: None,
             provider: self.name().to_string(),
             elapsed_ms: start.elapsed().unwrap_or_default().as_millis() as u64,
             session_id,
@@ -368,22 +367,10 @@ impl CodexProvider for CodexCliProvider {
 
         Ok(CodexResult {
             text,
-            structured: None,
             provider: self.name().to_string(),
             elapsed_ms: start.elapsed().as_millis() as u64,
             session_id,
             images: Vec::new(),
         })
-    }
-
-    async fn run_stream(
-        &self,
-        req: CodexRequest,
-        tx: mpsc::Sender<Chunk>,
-    ) -> Result<(), AppError> {
-        // codex exec 是整体输出（非流），run 完一次性 Done。
-        let r = self.run(req).await?;
-        let _ = tx.send(Chunk::Done(r)).await;
-        Ok(())
     }
 }

@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-/// 发给 codex 的请求：指令 + 参考图 + 上下文提示词 + 期望输出 schema。
+/// 发给 codex 的请求：指令 + 参考图 + 上下文提示词。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CodexRequest {
     pub instruction: String,
@@ -12,17 +12,12 @@ pub struct CodexRequest {
     pub reference_images: Vec<PathBuf>,
     #[serde(default)]
     pub context_prompts: Vec<String>,
-    /// 期望结构化输出的 JSON Schema（可选；provider 尽力满足）。
-    #[serde(default)]
-    pub output_schema: Option<serde_json::Value>,
 }
 
 /// 单次调用结果。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CodexResult {
     pub text: String,
-    #[serde(default)]
-    pub structured: Option<serde_json::Value>,
     pub provider: String,
     pub elapsed_ms: u64,
     /// codex 会话 id（`codex exec --json` 的 `thread_id`），可用 `codex resume <id>`
