@@ -368,9 +368,18 @@ export function CreationBoard() {
           </div>
         )}
 
-        {sessionId && (
+        {/* 主操作区：按状态切换 —— 未生成=发送、已生成=迭代修改（续接同一会话）、生成中=取消 */}
+        {busy ? (
+          <button
+            onClick={() => api.cancelCodexCreate().catch(console.error)}
+            className="w-full rounded-md border border-edge bg-panel2 px-3 py-2 text-sm font-semibold text-ink hover:text-red-300"
+          >
+            取消生成
+          </button>
+        ) : sessionId ? (
+          // 已生成：迭代是主流程（codex 续接同一会话编辑上一张图）。回车也可提交。
           <div className="space-y-1">
-            <div className="text-[10px] text-muted">提修改意见（续接同一 codex 会话，记得上一张图）</div>
+            <div className="text-[10px] text-muted">提修改意见，codex 续接同一会话编辑上一张图</div>
             <div className="flex gap-1.5">
               <input
                 value={revise}
@@ -381,44 +390,54 @@ export function CreationBoard() {
                     sendRevise();
                   }
                 }}
-                disabled={busy}
                 placeholder="如：背景改成白天、去掉霓虹、猫换成狗…"
-                className="min-w-0 flex-1 rounded bg-panel2 px-2 py-1.5 text-xs text-ink outline-none ring-1 ring-edge focus:ring-accent disabled:opacity-50"
+                className="min-w-0 flex-1 rounded bg-panel2 px-2 py-1.5 text-xs text-ink outline-none ring-1 ring-edge focus:ring-accent"
               />
               <button
                 onClick={sendRevise}
-                disabled={busy || !revise.trim()}
+                disabled={!revise.trim() || !codexHealth?.ok}
                 className="shrink-0 rounded bg-accent px-3 py-1.5 text-xs font-semibold text-black disabled:opacity-50"
               >
                 继续修改
               </button>
             </div>
           </div>
+        ) : (
+          // 未生成：首轮
+          <button
+            onClick={sendCodex}
+            disabled={!finalPrompt || !codexHealth?.ok}
+            title={
+              !codexHealth?.ok
+                ? codexHealth?.reason || "codex 不可用"
+                : "把最终 prompt + 参考图发 codex CLI 生成图像"
+            }
+            className="w-full rounded-md bg-accent px-3 py-2 text-sm font-semibold text-black disabled:opacity-50"
+          >
+            ✓ 发送 codex 生成
+          </button>
         )}
 
-        <button
-          onClick={copy}
-          disabled={!finalPrompt}
-          className="w-full rounded-md bg-panel2 px-3 py-1.5 text-xs text-ink hover:bg-edge disabled:opacity-50"
-        >
-          {copied ? "已复制 ✓" : "复制（prompt + 参考图）"}
-        </button>
-        <button
-          onClick={busy ? () => api.cancelCodexCreate().catch(console.error) : sendCodex}
-          disabled={!busy && (!finalPrompt || !codexHealth?.ok)}
-          title={
-            !codexHealth?.ok
-              ? codexHealth?.reason || "codex 不可用"
-              : turns.length > 0
-                ? "用当前编辑器 prompt 开新会话重新生成（清空上方对话）"
-                : "把最终 prompt + 参考图发 codex CLI 生成图像"
-          }
-          className={`w-full rounded-md px-3 py-2 text-sm font-semibold disabled:opacity-50 ${
-            busy ? "border border-edge bg-panel2 text-ink hover:text-red-300" : "bg-accent text-black"
-          }`}
-        >
-          {busy ? "取消生成" : turns.length > 0 ? "重新生成（新会话）" : "✓ 发送 codex 生成"}
-        </button>
+        {/* 次要操作：复制 + （已生成时）另起新会话重新生成 */}
+        <div className="flex gap-1.5">
+          <button
+            onClick={copy}
+            disabled={!finalPrompt}
+            className="flex-1 rounded-md bg-panel2 px-3 py-1.5 text-xs text-ink hover:bg-edge disabled:opacity-50"
+          >
+            {copied ? "已复制 ✓" : "复制"}
+          </button>
+          {sessionId && !busy && (
+            <button
+              onClick={sendCodex}
+              disabled={!finalPrompt || !codexHealth?.ok}
+              title="用当前编辑器 prompt 开新会话（清空上方对话）"
+              className="flex-1 rounded-md bg-panel2 px-3 py-1.5 text-xs text-ink hover:bg-edge disabled:opacity-50"
+            >
+              ↻ 重新生成
+            </button>
+          )}
+        </div>
         <div className="text-[10px] text-muted">
           {codexHealth && !codexHealth.ok
             ? codexHealth.reason

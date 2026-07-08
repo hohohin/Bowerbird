@@ -64,6 +64,7 @@ pub fn run() {
             commands::library::delete_asset,
             commands::library::move_assets_to_folder,
             commands::library::search_assets,
+            commands::library::list_assets_smart,
             commands::library::list_analyses_by_asset,
             commands::library::delete_analysis,
             commands::library::list_prompted_assets,

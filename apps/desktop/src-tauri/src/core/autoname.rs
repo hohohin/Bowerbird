@@ -33,6 +33,10 @@ const AUTO_INSTRUCTION: &str = "请描述这张图片并取名。严格按照以
 const MAX_CONCURRENT: usize = 3;
 static AUTO_SEM: Semaphore = Semaphore::const_new(MAX_CONCURRENT);
 
+/// 生成图命名专用指令：只取名、不要描述（生成图不进创作板 @ 引用池，不需要 caption）。
+const NAME_ONLY_INSTRUCTION: &str = "请给这张图片取一个不超过 8 个字的中文名字。\
+  只回复名字本身，不要标点符号、不要描述、不要解释。";
+
 /// 采集/导入入库后调用：后台让 codex 看图 → 产出命名 + caption，写回 DB 并 emit 刷新。
 /// 立即返回（不阻塞导入）；任一失败静默降级。
 pub fn spawn_auto_analyze(app: AppHandle, db: Arc<Database>, asset: Asset) {
@@ -123,6 +127,50 @@ where
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())
+}
+
+/// 生成图入库后调用：后台让 codex 看图 → **只取名**（≤8 字），写回 DB + emit 刷新。
+///
+/// 与 `spawn_auto_analyze` 的区别：**不写 caption**——生成图不需要进创作板 `@` 引用池
+/// （`list_prompted_assets` 按 caption 过滤），只想要个人能读的名字（替代 codex 默认的
+/// `ig_<hash>`）。立即返回（不阻塞）；任一失败静默降级（保留原文件名，约定 7）。
+pub fn spawn_auto_name_only(app: AppHandle, db: Arc<Database>, asset: Asset) {
+    tokio::spawn(async move {
+        if let Err(e) = auto_name_only(&app, &db, asset).await {
+            tracing::warn!("auto-name-only: {e}");
+        }
+    });
+}
+
+async fn auto_name_only(app: &AppHandle, db: &Arc<Database>, asset: Asset) -> Result<(), String> {
+    let asset_id = asset.id.clone();
+    let Some(store_path) = asset.store_path.clone() else {
+        return Ok(()); // 无 store_path 无法看图
+    };
+
+    let _permit = AUTO_SEM.acquire().await.map_err(|e| e.to_string())?;
+
+    let req = CodexRequest {
+        instruction: NAME_ONLY_INSTRUCTION.to_string(),
+        reference_images: vec![store_path.into()],
+        context_prompts: vec![],
+    };
+    let provider = CodexCliProvider::default();
+    // codex 不可用/超时 → 静默降级（保留原文件名）。
+    let result = provider.run(req).await.map_err(|e| e.to_string())?;
+
+    // 指令要求单行；用 split_name_and_desc 取首行经 clean_name，防模型偶尔多嘴。
+    let name = split_name_and_desc(&result.text).0;
+    if let Some(n) = name {
+        let (idn, nn) = (asset_id.clone(), n);
+        match db_call(db, move |db| db.update_asset_name(&idn, &nn)).await {
+            Ok(()) => {
+                let _ = app.emit("library://assets-changed", ());
+            }
+            Err(e) => tracing::warn!("auto-name-only update_asset_name {asset_id}: {e}"),
+        }
+    }
+    Ok(())
 }
 
 /// 把 codex 首行结果清洗成 ≤8 字命名。

@@ -12,6 +12,7 @@ interface State {
   currentFolderId: string | null;
   colorFilter: string | null; // hex；前端过滤
   searchQuery: string; // FTS5 搜索；空串 = 不搜
+  smartFilter: string | null; // 智能查询（如 source:codex），与文件夹/搜索互斥；侧栏「✨ 生成图」用
   mode: Mode;
   detailAssetId: string | null; // 浏览模式打开的详情页资产
   folders: Folder[];
@@ -27,6 +28,7 @@ interface State {
   setCurrentFolder: (id: string | null) => void;
   setColorFilter: (c: string | null) => void;
   setSearchQuery: (q: string) => void;
+  setSmartFilter: (q: string | null) => void;
   enterManage: () => void;
   exitManage: () => void;
   openDetail: (id: string) => void;
@@ -85,6 +87,7 @@ export const useStore = create<State>((set, get) => {
   currentFolderId: null,
   colorFilter: null,
   searchQuery: "",
+  smartFilter: null,
   mode: "browse",
   detailAssetId: null,
   folders: [],
@@ -104,9 +107,13 @@ export const useStore = create<State>((set, get) => {
   setLoading: (loading) => set({ loading }),
   // 切文件夹时清颜色筛选与详情（详情指向的图可能不在新文件夹里）。
   setCurrentFolder: (currentFolderId) =>
-    set({ currentFolderId, colorFilter: null, detailAssetId: null }),
+    set({ currentFolderId, colorFilter: null, detailAssetId: null, smartFilter: null }),
   setColorFilter: (colorFilter) => set({ colorFilter }),
-  setSearchQuery: (searchQuery) => set({ searchQuery, detailAssetId: null }),
+  setSearchQuery: (searchQuery) =>
+    set({ searchQuery, detailAssetId: null, smartFilter: null }),
+  // 智能查询（如 source:codex）与文件夹/搜索互斥：设它就清 folder/colorFilter。
+  setSmartFilter: (smartFilter) =>
+    set({ smartFilter, currentFolderId: null, colorFilter: null, detailAssetId: null }),
   enterManage: () => set({ mode: "manage", detailAssetId: null }),
   exitManage: () => set({ mode: "browse", selectedIds: new Set() }),
   openDetail: (detailAssetId) => set({ detailAssetId }),

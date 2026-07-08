@@ -26,6 +26,8 @@ export const api = {
     invoke<Asset[]>("list_assets", { folderId, limit, offset }),
   searchAssets: (query: string, limit = 500) =>
     invoke<Asset[]>("search_assets", { query, limit }),
+  listAssetsSmart: (query: string) =>
+    invoke<Asset[]>("list_assets_smart", { query }),
   countAssets: () => invoke<number>("count_assets"),
   deleteAsset: (id: string) => invoke<void>("delete_asset", { id }),
   moveAssetsToFolder: (assetIds: string[], folderId: string) =>

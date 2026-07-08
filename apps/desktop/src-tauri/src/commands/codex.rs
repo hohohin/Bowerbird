@@ -13,7 +13,7 @@ use tokio::sync::mpsc;
 use ulid::Ulid;
 
 use crate::codex::codex_cli::CodexCliProvider;
-use crate::codex::types::{Chunk, CodexRequest};
+use crate::codex::types::{Chunk, CodexRequest, CodexResult};
 use crate::codex::CodexProvider;
 use crate::core::caption;
 use crate::core::paths::LibraryPaths;
@@ -201,6 +201,7 @@ static GENERATE_CANCEL: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>
 #[tauri::command]
 pub async fn codex_create_image(
     app: AppHandle,
+    db: State<'_, Arc<Database>>,
     paths: State<'_, Arc<LibraryPaths>>,
     prompt: String,
     reference_images: Vec<String>,
@@ -208,6 +209,9 @@ pub async fn codex_create_image(
 ) -> Result<(), AppError> {
     // 首轮（无 session_id）：包一句明确要 codex 出图，触发 imagegen；
     // 续轮（有 session_id = resume）：codex 已在画图上下文里，用户修改意见原样发。
+    // prompt / reference_images 留一份给 generation_meta（req 会 move 走原值）。
+    let prompt_for_meta = prompt.clone();
+    let refs_for_meta = reference_images.clone();
     let instruction = match &session_id {
         Some(_) => prompt,
         None => format!(
@@ -228,19 +232,94 @@ pub async fn codex_create_image(
         }
     });
 
-    let generations_dir = paths.generations.clone();
     let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
     GENERATE_CANCEL.lock().unwrap().replace(cancel_tx);
 
     let p = CodexCliProvider::default();
-    let gen_fut = p.generate_image(req, generations_dir, tx, session_id);
-    tokio::pin!(gen_fut);
-    let result = tokio::select! {
-        r = &mut gen_fut => r,
-        _ = &mut cancel_rx => return Err(AppError::Codex("已取消".into())),
+    let provider_name = p.name().to_string();
+    // generate_image 借用 tx 推 Delta；用 block 限定借期，结束后 command 才能 reuse tx 发 Done。
+    let outcome = {
+        let gen_fut = p.generate_image(req, &tx, session_id);
+        tokio::pin!(gen_fut);
+        let r = tokio::select! {
+            res = &mut gen_fut => res,
+            _ = &mut cancel_rx => return Err(AppError::Codex("已取消".into())),
+        };
+        r?
     };
     GENERATE_CANCEL.lock().unwrap().take();
-    result
+
+    // codex 生成的源图（~/.codex/...）ingest 进库 → asset（asset scope 内可渲染 + 进瀑布流）。
+    // ingest_generated 不做 pHash 去重，迭代各版相似图都各自保留。
+    let dbw = db.inner().clone();
+    let pw = paths.inner().clone();
+    let srcs = outcome.source_images.clone();
+    let gen_assets: Vec<crate::core::library::Asset> =
+        tokio::task::spawn_blocking(
+            move || -> Result<Vec<crate::core::library::Asset>, AppError> {
+                let mut out = Vec::new();
+                for src in &srcs {
+                    out.push(crate::core::ingest::ingest_generated(&pw, &dbw, src)?);
+                }
+                Ok(out)
+            },
+        )
+        .await
+        .map_err(|e| AppError::Other(e.to_string()))??;
+
+    let asset_paths: Vec<PathBuf> = gen_assets
+        .iter()
+        .filter_map(|a| a.store_path.clone().map(PathBuf::from))
+        .collect();
+    let session_id = outcome.session_id.clone();
+    let _ = tx
+        .send(Chunk::Done(CodexResult {
+            text: outcome.text,
+            provider: provider_name.clone(),
+            elapsed_ms: outcome.elapsed_ms,
+            session_id: outcome.session_id,
+            images: asset_paths,
+        }))
+        .await;
+    drop(tx);
+
+    // 生成来源落库（analyses kind=generation_meta）：prompt / session_id / 参考图路径，
+    // 详情页据此展示「这张图怎么来的」+ 可点进 codex resume 回看会话。
+    let meta_payload = serde_json::json!({
+        "prompt": prompt_for_meta,
+        "session_id": session_id,
+        "references": refs_for_meta,
+    })
+    .to_string();
+    let ids: Vec<String> = gen_assets.iter().map(|a| a.id.clone()).collect();
+    let dbm = db.inner().clone();
+    let provider_for_meta = provider_name.clone();
+    tokio::task::spawn_blocking(move || -> Result<(), AppError> {
+        for id in &ids {
+            let row = crate::core::library::Analysis {
+                id: Ulid::new().to_string(),
+                asset_id: id.clone(),
+                kind: "generation_meta".to_string(),
+                payload: meta_payload.clone(),
+                provider: Some(provider_for_meta.clone()),
+                created_at: None,
+            };
+            dbm.insert_analysis(&row)?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| AppError::Other(e.to_string()))??;
+
+    // 后台自动命名（每张生成图各跑一次 codex 看图取名，替代 codex 默认的 ig_<hash>；
+    // 不写 caption——生成图不进创作板 @ 引用池）。
+    for a in gen_assets {
+        crate::core::autoname::spawn_auto_name_only(app.clone(), db.inner().clone(), a);
+    }
+
+    // 生成图已入库，通知瀑布流刷新（角标/命名到位后 assets-changed 再刷一次）。
+    let _ = app.emit("library://assets-changed", ());
+    Ok(())
 }
 
 /// 取消正在进行的图像生成（`codex_create_image`）。无任务在跑则空操作。

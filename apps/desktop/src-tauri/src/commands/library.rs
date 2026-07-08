@@ -77,6 +77,23 @@ pub async fn list_assets(
     .map_err(|e| AppError::Other(e.to_string()))?
 }
 
+/// 按 smart_query 直接查资产（`source:codex` 等），供侧栏「✨ 生成图」一键入口用
+/// （无需先建一个智能文件夹）。
+#[tauri::command]
+pub async fn list_assets_smart(
+    db: State<'_, Arc<Database>>,
+    query: String,
+    limit: Option<i64>,
+    offset: Option<i64>,
+) -> Result<Vec<Asset>, AppError> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        db.list_assets_smart(&query, limit.unwrap_or(500), offset.unwrap_or(0))
+    })
+    .await
+    .map_err(|e| AppError::Other(e.to_string()))?
+}
+
 #[tauri::command]
 pub async fn count_assets(db: State<'_, Arc<Database>>) -> Result<i64, AppError> {
     let db = db.inner().clone();

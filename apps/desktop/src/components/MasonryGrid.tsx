@@ -103,6 +103,14 @@ function Thumb({ asset }: { asset: Asset }) {
           <span>{describeStatus === "running" ? "反推中" : `排队 ${queuePos}`}</span>
         </button>
       )}
+      {asset.source === "codex" && (
+        <span
+          className="absolute left-1 top-1 z-10 rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-white backdrop-blur"
+          title="codex 生成图"
+        >
+          ✨
+        </span>
+      )}
       <img
         ref={imgRef}
         className="block w-full bg-panel2"

@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-shell";
@@ -354,6 +354,22 @@ export function AssetDetail() {
   const src = asset.store_path ? convertFileSrc(asset.store_path) : "";
   const colors = parseColors(asset.colors);
   const captions = analyses.filter((a) => a.kind === "caption");
+  // 生成图来源（codex_create_image 落的 generation_meta）：prompt / session_id / 参考图。
+  const genMeta = useMemo(() => {
+    const row = analyses.find((a) => a.kind === "generation_meta");
+    if (!row) return null;
+    try {
+      const v = JSON.parse(row.payload);
+      return {
+        prompt: typeof v.prompt === "string" ? v.prompt : undefined,
+        session_id: typeof v.session_id === "string" ? v.session_id : undefined,
+        references:
+          Array.isArray(v.references) ? v.references.filter((x: unknown): x is string => typeof x === "string") : undefined,
+      };
+    } catch {
+      return null;
+    }
+  }, [analyses]);
   const promptEmpty = describePrompt.trim().length === 0;
 
   return (
@@ -369,11 +385,13 @@ export function AssetDetail() {
           {asset.name}
           {asset.ext ? `.${asset.ext}` : ""}
         </div>
-        {asset.source && (
+        {asset.source === "codex" ? (
+          <span className="rounded bg-accent/15 px-1.5 py-0.5 text-[10px] text-accent">✨ codex 生成</span>
+        ) : asset.source ? (
           <span className="rounded bg-edge px-1.5 py-0.5 text-[10px] uppercase text-muted">
             {asset.source}
           </span>
-        )}
+        ) : null}
       </header>
 
       <div className="flex flex-1 overflow-hidden">
@@ -414,6 +432,48 @@ export function AssetDetail() {
               </div>
             )}
           </div>
+
+          {/* ✨ 生成来源：codex_create_image 落的 generation_meta（prompt / 参考图 / 会话）。 */}
+          {genMeta && (
+            <div className="space-y-2 rounded bg-panel2 p-2 text-xs text-ink">
+              <div className="text-xs font-medium uppercase tracking-wide text-accent">
+                ✨ 生成来源
+              </div>
+              {genMeta.prompt && (
+                <div className="whitespace-pre-wrap rounded bg-panel p-1.5 text-[11px]">
+                  {genMeta.prompt}
+                </div>
+              )}
+              {genMeta.references && genMeta.references.length > 0 && (
+                <div>
+                  <div className="mb-1 text-[10px] text-muted">
+                    参考图（{genMeta.references.length}）
+                  </div>
+                  <div className="flex flex-wrap gap-1">
+                    {genMeta.references.map((p: string) => (
+                      <img
+                        key={p}
+                        src={convertFileSrc(p)}
+                        className="h-12 rounded border border-edge object-cover"
+                        alt=""
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+              {genMeta.session_id && (
+                <button
+                  onClick={() =>
+                    api.openCodexSession(genMeta.session_id!).catch(console.error)
+                  }
+                  className="text-[10px] text-accent hover:underline"
+                  title="在 Terminal 里 codex resume，看这次生成的完整对话含图"
+                >
+                  在 codex 中打开会话 ↗
+                </button>
+              )}
+            </div>
+          )}
 
           {/* 反推：让 codex CLI 按当前指令描述这张图。codex 不可用时置灰（约定 7）。 */}
           <div className="space-y-2">

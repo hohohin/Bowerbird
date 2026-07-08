@@ -98,6 +98,69 @@ pub fn ingest_file(paths: &LibraryPaths, db: &Database, source: &Path) -> AppRes
     Ok(asset)
 }
 
+/// 导入 codex 生成的图：probe → 复制到 store → 缩略图 → 入库。
+///
+/// 与 `ingest_file` 的区别：**不做 pHash 去重**——生成的图即便彼此相似（迭代修改的各版）
+/// 也应各自保留，去重会让修订版被当重复吞掉；也不算 pHash（生成图不需要采重去重）。
+/// `source` 标 `"codex"` 便于在库里区分 / 建智能文件夹。
+pub fn ingest_generated(paths: &LibraryPaths, db: &Database, source: &Path) -> AppResult<Asset> {
+    let meta = media::probe::probe(source)?;
+    let id = Ulid::new().to_string();
+    let name = source
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("generated")
+        .to_string();
+
+    let store_path = paths.asset_store_path(&id, &meta.ext);
+    fs::create_dir_all(store_path.parent().unwrap())?;
+    fs::copy(source, &store_path)?;
+
+    let thumb_path = if meta.ext == "svg" {
+        store_path.clone()
+    } else {
+        let p = paths.thumb_path(&id);
+        if meta.width > 0 && meta.height > 0 {
+            if let Err(e) = media::thumb::generate(&store_path, &p, 480) {
+                tracing::warn!("thumb failed for {}: {e}", source.display());
+            }
+        }
+        p
+    };
+
+    let colors = if meta.width > 0 {
+        media::color::extract(&store_path, 5)
+            .ok()
+            .map(|c| serde_json::to_string(&c).unwrap_or_default())
+    } else {
+        None
+    };
+
+    let now = Utc::now().timestamp();
+    let asset = Asset {
+        id: id.clone(),
+        name,
+        ext: Some(meta.ext),
+        origin_path: Some(source.to_string_lossy().into_owned()),
+        store_path: Some(store_path.to_string_lossy().into_owned()),
+        thumb_path: Some(thumb_path.to_string_lossy().into_owned()),
+        size: Some(meta.size as i64),
+        width: Some(meta.width as i64),
+        height: Some(meta.height as i64),
+        duration: Some(meta.duration),
+        phash: None,
+        colors,
+        rating: Some(0),
+        source: Some("codex".to_string()),
+        source_url: None,
+        folder_id: None,
+        created_at: Some(now),
+        file_mtime: Some(now),
+    };
+    db.insert_asset(&asset)?;
+    Ok(asset)
+}
+
 /// 递归遍历目录，返回所有支持图片格式的文件路径。
 pub fn walk_images(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();

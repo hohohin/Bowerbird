@@ -17,9 +17,8 @@ use async_trait::async_trait;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::mpsc;
-use ulid::Ulid;
 
-use crate::codex::types::{Chunk, CodexRequest, CodexResult};
+use crate::codex::types::{Chunk, CodexRequest, CodexResult, GenOutcome};
 use crate::codex::CodexProvider;
 use crate::error::AppError;
 
@@ -55,14 +54,23 @@ impl CodexCliProvider {
     pub async fn generate_image(
         &self,
         req: CodexRequest,
-        generations_dir: PathBuf,
-        tx: mpsc::Sender<Chunk>,
+        tx: &mpsc::Sender<Chunk>,
         resume_session: Option<String>,
-    ) -> Result<(), AppError> {
+    ) -> Result<GenOutcome, AppError> {
         if !self.enabled {
             return Err(AppError::Codex("CodexCliProvider 未启用".into()));
         }
         let start = SystemTime::now();
+
+        // codex 内置 imagegen 把产物固定写进 ~/.codex/generated_images/（见踩坑）。
+        // 跑前快照已有图，跑完按「新增文件」copy —— 比 mtime 稳：不受时钟精度 / 落盘时机 /
+        // resume 续接另起 session 子目录影响（mtime 偶发漏图）。
+        let codex_home = std::env::var("CODEX_HOME")
+            .map(PathBuf::from)
+            .ok()
+            .or_else(|| std::env::var("HOME").map(|h| PathBuf::from(h).join(".codex")).ok());
+        let gen_root = codex_home.map(|h| h.join("generated_images"));
+        let before = list_generated_images(gen_root.as_deref());
 
         let mut cmd = Command::new(&self.binary);
         cmd.arg("exec")
@@ -188,82 +196,73 @@ impl CodexCliProvider {
             )));
         }
 
-        // 扫 codex generated_images 取本次（mtime ≥ start）新增图 → copy 进库。
-        let codex_home = std::env::var("CODEX_HOME")
-            .map(PathBuf::from)
-            .ok()
-            .or_else(|| std::env::var("HOME").map(|h| PathBuf::from(h).join(".codex")).ok());
-        let gen_root = codex_home.map(|h| h.join("generated_images"));
-        let copied = tokio::task::spawn_blocking(move || {
-            scan_and_copy_generated(gen_root.as_deref(), &generations_dir, start)
+        // 扫 codex generated_images，取「跑前快照之后新增」的源图路径（在 ~/.codex/，
+        // 不在 asset scope 内，由 command 层 ingest_generated 进库后才能渲染）。
+        let source_images = tokio::task::spawn_blocking(move || {
+            list_new_generated(gen_root.as_deref(), &before)
         })
         .await
         .map_err(|e| AppError::Other(e.to_string()))?;
 
-        let result = CodexResult {
+        Ok(GenOutcome {
             text: texts.join("\n"),
-            provider: self.name().to_string(),
-            elapsed_ms: start.elapsed().unwrap_or_default().as_millis() as u64,
             session_id,
-            images: copied,
-        };
-        let _ = tx.send(Chunk::Done(result)).await;
-        Ok(())
+            elapsed_ms: start.elapsed().unwrap_or_default().as_millis() as u64,
+            source_images,
+        })
     }
 }
 
-/// 扫 `~/.codex/generated_images/<uuid>/ig_*.{png,webp,jpg,jpeg}`，取 mtime ≥ `start` 的文件，
-/// copy 到 `dst_dir/<ulid>-<n>.<ext>`，返回 copy 后的库内路径。
-/// `root=None`（解析不出 CODEX_HOME/HOME）时返回空。
-fn scan_and_copy_generated(
-    root: Option<&std::path::Path>,
-    dst_dir: &std::path::Path,
-    start: SystemTime,
-) -> Vec<PathBuf> {
-    let mut copied = Vec::new();
-    let Some(root) = root else {
-        return copied;
-    };
-    let _ = std::fs::create_dir_all(dst_dir);
-    let ulid = Ulid::new().to_string();
-    let exts = ["png", "webp", "jpg", "jpeg"];
-    let Ok(rd) = std::fs::read_dir(root) else {
-        return copied;
+const GEN_IMAGE_EXTS: [&str; 4] = ["png", "webp", "jpg", "jpeg"];
+
+fn is_gen_image(p: &std::path::Path) -> bool {
+    p.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| GEN_IMAGE_EXTS.contains(&e.to_lowercase().as_str()))
+        .unwrap_or(false)
+}
+
+/// 递归收集 dir 下所有图片文件的绝对路径（跑前/跑后快照用）。
+fn collect_gen_images(dir: &std::path::Path, out: &mut std::collections::HashSet<PathBuf>) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
     };
     for entry in rd.flatten() {
-        // 每条是 <uuid> 子目录，内含 ig_*.png。
-        if !entry.path().is_dir() {
-            continue;
-        }
-        let Ok(sub) = std::fs::read_dir(entry.path()) else {
-            continue;
-        };
-        for f in sub.flatten() {
-            let p = f.path();
-            let Some(ext) = p.extension().and_then(|e| e.to_str()) else {
-                continue;
-            };
-            let ext_lower = ext.to_lowercase();
-            if !exts.contains(&ext_lower.as_str()) {
-                continue;
-            }
-            let Ok(meta) = f.metadata() else {
-                continue;
-            };
-            let Ok(mtime) = meta.modified() else {
-                continue;
-            };
-            if mtime < start {
-                continue;
-            }
-            let n = copied.len();
-            let dst = dst_dir.join(format!("{ulid}-{n}.{ext}"));
-            if std::fs::copy(&p, &dst).is_ok() {
-                copied.push(dst);
-            }
+        let p = entry.path();
+        if p.is_dir() {
+            collect_gen_images(&p, out);
+        } else if is_gen_image(&p) {
+            out.insert(p);
         }
     }
-    copied
+}
+
+fn list_generated_images(root: Option<&std::path::Path>) -> std::collections::HashSet<PathBuf> {
+    let mut set = std::collections::HashSet::new();
+    if let Some(r) = root {
+        collect_gen_images(r, &mut set);
+    }
+    set
+}
+
+/// 取 `~/.codex/generated_images/` 里「跑前快照 `before` 之后新增」的图片源路径（按路径排序）。
+/// 不 copy（command 层 `ingest_generated` 进库）；比 mtime 稳：不受时钟精度 / 落盘时机 /
+/// resume 另起 session 子目录影响（mtime 偶发漏图）。
+fn list_new_generated(
+    root: Option<&std::path::Path>,
+    before: &std::collections::HashSet<PathBuf>,
+) -> Vec<PathBuf> {
+    let mut after = std::collections::HashSet::new();
+    if let Some(r) = root {
+        collect_gen_images(r, &mut after);
+    }
+    let mut new_files: Vec<PathBuf> = after
+        .iter()
+        .filter(|p| !before.contains(*p))
+        .cloned()
+        .collect();
+    new_files.sort();
+    new_files
 }
 
 /// 解析 `codex exec --json` 的 JSONL 事件流：
@@ -387,5 +386,39 @@ impl CodexProvider for CodexCliProvider {
             session_id,
             images: Vec::new(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use ulid::Ulid;
+
+    #[test]
+    fn list_new_only_returns_files_new_since_snapshot() {
+        let root = std::env::temp_dir().join(format!("bb-scan-root-{}", Ulid::new()));
+        fs::create_dir_all(&root).unwrap();
+
+        // 跑前快照：已有一张旧图（不该返回）。
+        fs::write(root.join("old.png"), b"old").unwrap();
+        let before = list_generated_images(Some(&root));
+
+        // 跑后新增两张图（该返回），外加一个非图片（不该返回）。
+        fs::write(root.join("new1.png"), b"n1").unwrap();
+        fs::write(root.join("new2.webp"), b"n2").unwrap();
+        fs::write(root.join("note.txt"), b"x").unwrap();
+
+        let new_files = list_new_generated(Some(&root), &before);
+
+        assert_eq!(new_files.len(), 2, "应只返回跑后新增的 2 张图，旧图与非图片排除");
+        let names: Vec<String> = new_files
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()).map(String::from))
+            .collect();
+        assert!(names.contains(&"new1.png".to_string()));
+        assert!(names.contains(&"new2.webp".to_string()));
+
+        fs::remove_dir_all(&root).ok();
     }
 }

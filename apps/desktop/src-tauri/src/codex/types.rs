@@ -43,3 +43,14 @@ pub enum Chunk {
     /// 流中错误。
     Error { message: String },
 }
+
+/// `CodexCliProvider::generate_image` 的产出：codex 跑完后的文本 + 会话 id + 生成的源图
+/// （在 `~/.codex/generated_images/`，不在 asset scope 内，不能直渲染）。command 层把它
+/// `ingest_generated` 进库后，拼成 `CodexResult`（images = 库内 asset 路径）发 `Done`。
+#[derive(Debug, Clone)]
+pub struct GenOutcome {
+    pub text: String,
+    pub session_id: Option<String>,
+    pub elapsed_ms: u64,
+    pub source_images: Vec<PathBuf>,
+}

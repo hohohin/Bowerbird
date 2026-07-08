@@ -12,6 +12,8 @@ export function Sidebar() {
   const colorFilter = useStore((s) => s.colorFilter);
   const setColorFilter = useStore((s) => s.setColorFilter);
   const folders = useStore((s) => s.folders);
+  const smartFilter = useStore((s) => s.smartFilter);
+  const setSmartFilter = useStore((s) => s.setSmartFilter);
 
   // 全库 top-12 主色（聚合 assets.colors）。
   const topColors = useMemo(() => {
@@ -65,11 +67,22 @@ export function Sidebar() {
       <div className="space-y-1">
         <div
           className={`flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 ${
-            currentFolderId === null ? "bg-panel2" : "hover:bg-panel2"
+            currentFolderId === null && !smartFilter ? "bg-panel2" : "hover:bg-panel2"
           }`}
           onClick={() => setCurrentFolder(null)}
         >
           📚 全部
+        </div>
+        <div
+          className={`flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 ${
+            smartFilter === "source:codex" ? "bg-panel2" : "hover:bg-panel2"
+          }`}
+          onClick={() =>
+            setSmartFilter(smartFilter === "source:codex" ? null : "source:codex")
+          }
+          title="只看 codex 生成的图（source:codex）"
+        >
+          ✨ 生成图
         </div>
         {folders
           .filter((f) => f.id !== "root")
