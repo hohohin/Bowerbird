@@ -93,5 +93,12 @@ export interface CodexResult {
 
 export type CodexChunk =
   | { kind: "delta"; text: string }
-  | { kind: "done"; text: string; provider: string; elapsed_ms: number; structured?: unknown }
+  | {
+      kind: "done";
+      text: string;
+      provider: string;
+      elapsed_ms: number;
+      structured?: unknown;
+      images?: string[];
+    }
   | { kind: "error"; message: string };

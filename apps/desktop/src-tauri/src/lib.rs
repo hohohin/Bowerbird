@@ -80,6 +80,8 @@ pub fn run() {
             commands::codex::codex_generate_prompt_for_asset,
             commands::codex::codex_describe_asset,
             commands::codex::cancel_codex_describe,
+            commands::codex::codex_create_image,
+            commands::codex::cancel_codex_create,
             commands::codex::open_codex_session,
         ])
         .run(tauri::generate_context!())

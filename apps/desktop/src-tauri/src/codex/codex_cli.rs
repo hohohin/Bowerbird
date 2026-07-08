@@ -9,13 +9,15 @@
 //! 可用 `codex resume <id>` 在 TUI 回看完整对话），从 `item.completed` 取
 //! `agent_message` 正文作为最终答案。
 
+use std::path::PathBuf;
 use std::process::Stdio;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use async_trait::async_trait;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::mpsc;
+use ulid::Ulid;
 
 use crate::codex::types::{Chunk, CodexRequest, CodexResult};
 use crate::codex::CodexProvider;
@@ -37,6 +39,217 @@ impl Default for CodexCliProvider {
             enabled: true,
         }
     }
+}
+
+impl CodexCliProvider {
+    /// 图像生成：spawn `codex exec --json --image ...`，prompt 经 stdin 喂入。
+    ///
+    /// 与 `run`（反推用、整输出）不同——逐行读 JSONL，每条 `agent_message` 即时推为
+    /// `Chunk::Delta`（app 内流式反馈）；跑完扫 `~/.codex/generated_images/` 取本次新增图
+    /// （mtime ≥ start），copy 进 `generations_dir`（落在 asset scope `$APPDATA/**` 内，
+    /// 可被 convertFileSrc 渲染），最后发 `Chunk::Done`（`images` = copy 后的库内路径）。
+    ///
+    /// 取图走 mtime 扫盘而非事件解析：codex 内置 imagegen 技能把产物固定写到
+    /// `~/.codex/generated_images/<uuid>/ig_*.png`，路径不在 JSONL 一等字段里（spike 实测），
+    /// 扫盘最稳。codex exec 默认只读沙箱会阻止写 cwd，故不能改用 cwd 扫盘。
+    pub async fn generate_image(
+        &self,
+        req: CodexRequest,
+        generations_dir: PathBuf,
+        tx: mpsc::Sender<Chunk>,
+    ) -> Result<(), AppError> {
+        if !self.enabled {
+            return Err(AppError::Codex("CodexCliProvider 未启用".into()));
+        }
+        let start = SystemTime::now();
+
+        let mut cmd = Command::new(&self.binary);
+        cmd.arg("exec")
+            .arg("--skip-git-repo-check")
+            .arg("--json");
+        for img in &req.reference_images {
+            cmd.arg("--image").arg(img);
+        }
+        if !self.model.is_empty() {
+            cmd.arg("-m").arg(&self.model);
+        }
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            // 生成可取消：select 命中取消信号时本 future 被 drop，靠此自动 kill codex 子进程。
+            .kill_on_drop(true);
+
+        let mut child = cmd.spawn().map_err(|e| {
+            AppError::Codex(format!(
+                "启动 codex 失败: {e}（未安装/未登录？运行 `codex login`）"
+            ))
+        })?;
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(req.instruction.as_bytes()).await;
+        }
+
+        // stderr 异步排空到 String，供失败时拼错误信息（不阻塞 stdout 行读）。
+        let stderr_handle = child.stderr.take();
+        let stderr_task = tokio::spawn(async move {
+            use tokio::io::AsyncReadExt;
+            let mut buf = Vec::new();
+            if let Some(mut s) = stderr_handle {
+                let _ = s.read_to_end(&mut buf).await;
+            }
+            String::from_utf8_lossy(&buf).to_string()
+        });
+
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| AppError::Codex("无法获取 codex stdout".into()))?;
+        let mut lines = BufReader::new(stdout).lines();
+
+        // 读行 + 等退出整体套 300s 超时（防 codex 挂住不关 stdout 时无限阻塞）。
+        let (status, session_id, texts) = match tokio::time::timeout(
+            Duration::from_secs(300),
+            async {
+                let mut session_id: Option<String> = None;
+                let mut texts: Vec<String> = Vec::new();
+                while let Some(line) = lines
+                    .next_line()
+                    .await
+                    .map_err(|e| AppError::Codex(format!("读 codex 输出失败: {e}")))?
+                {
+                    let line = line.trim();
+                    if line.is_empty() || !line.starts_with('{') {
+                        continue;
+                    }
+                    let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+                        continue;
+                    };
+                    match v.get("type").and_then(|t| t.as_str()) {
+                        Some("thread.started") => {
+                            if let Some(id) =
+                                v.get("thread_id").and_then(|i| i.as_str())
+                            {
+                                session_id = Some(id.to_string());
+                            }
+                        }
+                        Some("item.completed") => {
+                            if let Some(item) = v.get("item") {
+                                if item.get("type").and_then(|t| t.as_str())
+                                    == Some("agent_message")
+                                {
+                                    if let Some(text) =
+                                        item.get("text").and_then(|t| t.as_str())
+                                    {
+                                        let _ = tx
+                                            .send(Chunk::Delta { text: text.to_string() })
+                                            .await;
+                                        texts.push(text.to_string());
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                let status = child
+                    .wait()
+                    .await
+                    .map_err(|e| AppError::Codex(format!("等待 codex 失败: {e}")))?;
+                Ok::<_, AppError>((status, session_id, texts))
+            },
+        )
+        .await
+        {
+            Ok(Ok(v)) => v,
+            Ok(Err(e)) => return Err(e),
+            Err(_) => return Err(AppError::Codex("codex 生成超时（300s）".into())),
+        };
+
+        let stderr_str = stderr_task.await.unwrap_or_default();
+        if !status.success() && texts.is_empty() {
+            let stderr_head: String = stderr_str.trim().chars().take(500).collect();
+            return Err(AppError::Codex(format!(
+                "codex 退出 {} | stderr: {stderr_head}",
+                status
+            )));
+        }
+
+        // 扫 codex generated_images 取本次（mtime ≥ start）新增图 → copy 进库。
+        let codex_home = std::env::var("CODEX_HOME")
+            .map(PathBuf::from)
+            .ok()
+            .or_else(|| std::env::var("HOME").map(|h| PathBuf::from(h).join(".codex")).ok());
+        let gen_root = codex_home.map(|h| h.join("generated_images"));
+        let copied = tokio::task::spawn_blocking(move || {
+            scan_and_copy_generated(gen_root.as_deref(), &generations_dir, start)
+        })
+        .await
+        .map_err(|e| AppError::Other(e.to_string()))?;
+
+        let result = CodexResult {
+            text: texts.join("\n"),
+            structured: None,
+            provider: self.name().to_string(),
+            elapsed_ms: start.elapsed().unwrap_or_default().as_millis() as u64,
+            session_id,
+            images: copied,
+        };
+        let _ = tx.send(Chunk::Done(result)).await;
+        Ok(())
+    }
+}
+
+/// 扫 `~/.codex/generated_images/<uuid>/ig_*.{png,webp,jpg,jpeg}`，取 mtime ≥ `start` 的文件，
+/// copy 到 `dst_dir/<ulid>-<n>.<ext>`，返回 copy 后的库内路径。
+/// `root=None`（解析不出 CODEX_HOME/HOME）时返回空。
+fn scan_and_copy_generated(
+    root: Option<&std::path::Path>,
+    dst_dir: &std::path::Path,
+    start: SystemTime,
+) -> Vec<PathBuf> {
+    let mut copied = Vec::new();
+    let Some(root) = root else {
+        return copied;
+    };
+    let _ = std::fs::create_dir_all(dst_dir);
+    let ulid = Ulid::new().to_string();
+    let exts = ["png", "webp", "jpg", "jpeg"];
+    let Ok(rd) = std::fs::read_dir(root) else {
+        return copied;
+    };
+    for entry in rd.flatten() {
+        // 每条是 <uuid> 子目录，内含 ig_*.png。
+        if !entry.path().is_dir() {
+            continue;
+        }
+        let Ok(sub) = std::fs::read_dir(entry.path()) else {
+            continue;
+        };
+        for f in sub.flatten() {
+            let p = f.path();
+            let Some(ext) = p.extension().and_then(|e| e.to_str()) else {
+                continue;
+            };
+            let ext_lower = ext.to_lowercase();
+            if !exts.contains(&ext_lower.as_str()) {
+                continue;
+            }
+            let Ok(meta) = f.metadata() else {
+                continue;
+            };
+            let Ok(mtime) = meta.modified() else {
+                continue;
+            };
+            if mtime < start {
+                continue;
+            }
+            let n = copied.len();
+            let dst = dst_dir.join(format!("{ulid}-{n}.{ext}"));
+            if std::fs::copy(&p, &dst).is_ok() {
+                copied.push(dst);
+            }
+        }
+    }
+    copied
 }
 
 /// 解析 `codex exec --json` 的 JSONL 事件流：
@@ -159,6 +372,7 @@ impl CodexProvider for CodexCliProvider {
             provider: self.name().to_string(),
             elapsed_ms: start.elapsed().as_millis() as u64,
             session_id,
+            images: Vec::new(),
         })
     }
 

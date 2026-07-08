@@ -67,6 +67,29 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentFolderId, searchQuery, boardOpen]);
 
+  // 反推后台化后，触发反推的组件可能早已卸载；后端 emit `analyses://changed`
+  // 通知数据落地。仅创作板模式需要刷新 promptedAssets（浏览瀑布流只显缩略图，
+  // 详情页各自监听本图事件自刷新）。
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    listen<{ asset_id: string; kind: string }>("analyses://changed", () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(async () => {
+        if (!useStore.getState().boardOpen) return;
+        try {
+          setPromptedAssets(await api.listPromptedAssets());
+        } catch (e) {
+          console.error("refresh promptedAssets failed", e);
+        }
+      }, 300);
+    }).then((u) => (unlisten = u));
+    return () => {
+      unlisten?.();
+      if (timer) clearTimeout(timer);
+    };
+  }, [setPromptedAssets]);
+
   const showDetail = mode === "browse" && detailAssetId !== null;
 
   return (

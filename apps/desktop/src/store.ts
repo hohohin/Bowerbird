@@ -38,9 +38,46 @@ interface State {
   finishBoardImagePick: () => void;
   cancelBoardImagePick: () => void;
   setPromptedAssets: (a: PromptedAsset[]) => void;
+  // —— 反推（全局后台串行）——
+  // 反推不绑 AssetDetail 生命周期：返回瀑布流后继续跑、缩略图角标可见、可取消。
+  // 单槽 + 前端排队：同一时刻只调一次 codex_describe_asset（后端 DESCRIBE_CANCEL 单例）。
+  describingId: string | null;
+  describeQueue: { assetId: string; instruction: string }[];
+  describeStartedAt: number | null; // 当前任务开始时间戳；跨组件已耗时显示用
+  runDescribe: (assetId: string, instruction: string) => void;
+  cancelDescribe: (assetId: string) => Promise<void>;
 }
 
-export const useStore = create<State>((set) => ({
+export const useStore = create<State>((set, get) => {
+  // 反推队列的串行推进：同一时刻只跑一个 codex_describe_asset（后端单槽）。
+  // runDescribe 入队后调一次；任务结束（成功/取消/失败）的 finally 再调一次推下一张。
+  // 放在 create 闭包里而非 state 上，避免被组件意外调用。
+  async function pumpDescribe() {
+    if (get().describingId) return;
+    const queue = get().describeQueue;
+    const next = queue[0];
+    if (!next) return;
+    set({
+      describeQueue: queue.slice(1),
+      describingId: next.assetId,
+      describeStartedAt: Date.now(),
+    });
+    try {
+      await api.describeAsset(next.assetId, next.instruction);
+    } catch (e) {
+      const msg = typeof e === "string" ? e : JSON.stringify(e);
+      // 「已取消」是用户主动中断，静默；其它错误记录（后续可扩展为 per-asset 提示）。
+      if (!msg.includes("已取消")) console.error("describe failed", e);
+    } finally {
+      // 仅当仍是本次任务时清空（cancel 路径已让后端返回「已取消」走 catch）。
+      if (get().describingId === next.assetId) {
+        set({ describingId: null, describeStartedAt: null });
+      }
+      void pumpDescribe();
+    }
+  }
+
+  return {
   assets: [],
   total: 0,
   selectedIds: new Set(),
@@ -97,4 +134,45 @@ export const useStore = create<State>((set) => ({
   finishBoardImagePick: () => set({ boardPickMode: false }),
   cancelBoardImagePick: () => set({ boardPickMode: false }),
   setPromptedAssets: (promptedAssets) => set({ promptedAssets }),
-}));
+  // —— 反推（全局后台串行）——
+  describingId: null,
+  describeQueue: [],
+  describeStartedAt: null,
+  runDescribe: (assetId, instruction) => {
+    const trimmed = instruction.trim();
+    if (!trimmed) return;
+    const s = get();
+    // 同一张图不重复入队（正在跑或已排队）。
+    if (
+      s.describingId === assetId ||
+      s.describeQueue.some((q) => q.assetId === assetId)
+    ) {
+      return;
+    }
+    set({
+      describeQueue: [...s.describeQueue, { assetId, instruction: trimmed }],
+    });
+    void pumpDescribe();
+  },
+  cancelDescribe: async (assetId) => {
+    const s = get();
+    if (s.describingId === assetId) {
+      // 正在跑：后端 kill 子进程 → codex_describe_asset 返回「已取消」
+      // → pumpDescribe 的 await reject → finally 清空 describingId 并推进下一张。
+      try {
+        await api.cancelCodexDescribe();
+      } catch (e) {
+        console.error(e);
+      }
+      return;
+    }
+    // 还在排队：直接移出队列，不打断当前任务。
+    const idx = s.describeQueue.findIndex((q) => q.assetId === assetId);
+    if (idx >= 0) {
+      const q = [...s.describeQueue];
+      q.splice(idx, 1);
+      set({ describeQueue: q });
+    }
+  },
+  };
+});

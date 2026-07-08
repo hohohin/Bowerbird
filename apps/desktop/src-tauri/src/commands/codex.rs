@@ -16,6 +16,7 @@ use crate::codex::codex_cli::CodexCliProvider;
 use crate::codex::types::{Chunk, CodexRequest, CodexResult};
 use crate::codex::CodexProvider;
 use crate::core::caption;
+use crate::core::paths::LibraryPaths;
 use crate::db::Database;
 use crate::error::AppError;
 
@@ -131,6 +132,7 @@ static DESCRIBE_CANCEL: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>
 /// 可取消：前端调 `cancel_codex_describe` 即中断本次 codex 执行（子进程被 kill）。
 #[tauri::command]
 pub async fn codex_describe_asset(
+    app: AppHandle,
     db: State<'_, Arc<Database>>,
     asset_id: String,
     instruction: Option<String>,
@@ -189,6 +191,12 @@ pub async fn codex_describe_asset(
     tokio::task::spawn_blocking(move || db_for_write.insert_analysis(&analysis))
         .await
         .map_err(|e| AppError::Other(e.to_string()))??;
+    // 通知前端数据变更：触发反推后台化后，触发反推的组件可能早已卸载，
+    // 由 App / AssetDetail 监听此事件按需刷新（创作板的 promptedAssets、详情页 analyses）。
+    let _ = app.emit(
+        "analyses://changed",
+        serde_json::json!({ "asset_id": asset_id, "kind": "caption" }),
+    );
     Ok(id)
 }
 
@@ -196,6 +204,68 @@ pub async fn codex_describe_asset(
 #[tauri::command]
 pub async fn cancel_codex_describe() -> Result<(), AppError> {
     if let Some(tx) = DESCRIBE_CANCEL.lock().unwrap().take() {
+        let _ = tx.send(());
+    }
+    Ok(())
+}
+
+/// 当前图像生成任务的取消信号（与反推 `DESCRIBE_CANCEL` 独立，互不影响）。
+static GENERATE_CANCEL: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>> =
+    std::sync::Mutex::new(None);
+
+/// 创作板「生成」：把最终 prompt + 参考图发 codex（`codex exec --image`，与反推同机制），
+/// 让 codex 调内置 imagegen 技能出图。
+///
+/// - 流式：codex 的逐条 `agent_message` 经 event `codex://chunk`（Delta）回前端；
+/// - 取图：跑完扫 `~/.codex/generated_images/` 本次新增图，copy 进 `library/generations/`，
+///   随 `Done.images`（库内路径）回前端 convertFileSrc 渲染；
+/// - 不写 `analyses`（生成 ≠ 分析）；`generations` 表落库是后续（见 PROJECT.md 约定 2）。
+/// 可取消：前端调 `cancel_codex_create`，select 命中后 future 被 drop，codex 子进程靠
+/// `kill_on_drop` 自动终止。
+#[tauri::command]
+pub async fn codex_create_image(
+    app: AppHandle,
+    paths: State<'_, Arc<LibraryPaths>>,
+    prompt: String,
+    reference_images: Vec<String>,
+) -> Result<(), AppError> {
+    let instruction = format!(
+        "请使用图像生成工具，根据以下提示词和参考图生成一张新图片。\n\n{prompt}"
+    );
+    let req = CodexRequest {
+        instruction,
+        reference_images: reference_images.into_iter().map(PathBuf::from).collect(),
+        context_prompts: vec![],
+        output_schema: None,
+    };
+
+    let (tx, mut rx) = mpsc::channel::<Chunk>(64);
+    let app_clone = app.clone();
+    tokio::spawn(async move {
+        while let Some(chunk) = rx.recv().await {
+            let _ = app_clone.emit("codex://chunk", &chunk);
+        }
+    });
+
+    let generations_dir = paths.generations.clone();
+    let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
+    GENERATE_CANCEL.lock().unwrap().replace(cancel_tx);
+
+    let p = CodexCliProvider::default();
+    let gen_fut = p.generate_image(req, generations_dir, tx);
+    tokio::pin!(gen_fut);
+    let result = tokio::select! {
+        r = &mut gen_fut => r,
+        _ = &mut cancel_rx => return Err(AppError::Codex("已取消".into())),
+    };
+    GENERATE_CANCEL.lock().unwrap().take();
+    result
+}
+
+/// 取消正在进行的图像生成（`codex_create_image`）。无任务在跑则空操作。
+#[tauri::command]
+pub async fn cancel_codex_create() -> Result<(), AppError> {
+    if let Some(tx) = GENERATE_CANCEL.lock().unwrap().take() {
         let _ = tx.send(());
     }
     Ok(())

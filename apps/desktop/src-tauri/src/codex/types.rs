@@ -29,6 +29,12 @@ pub struct CodexResult {
     /// 在 TUI 里回看本次调用的完整对话（含图）。仅 CodexCliProvider 填充。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    /// codex 本次生成的图像（已 copy 进 `library/generations/`，前端 convertFileSrc 直渲染）。
+    /// 仅 `codex_create_image`（图像生成流程）填充；反推 / 生成提示词不填。
+    /// 落盘位置固定在 `~/.codex/generated_images/<uuid>/ig_*.png`（codex 内置 imagegen 技能），
+    /// 由 `generate_image` 按 mtime 扫出并 copy。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<PathBuf>,
 }
 
 /// 流式分片：增量文本 / 完成 / 错误。

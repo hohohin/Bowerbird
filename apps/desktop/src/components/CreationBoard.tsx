@@ -3,7 +3,7 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useStore } from "../store";
 import { api } from "../lib/api";
-import type { CaptionSection, CodexChunk, PromptedAsset } from "../lib/types";
+import type { CaptionSection, CodexChunk, CodexHealth, PromptedAsset } from "../lib/types";
 
 type Token =
   | { kind: "text"; text: string }
@@ -42,6 +42,8 @@ export function CreationBoard() {
   const [streaming, setStreaming] = useState("");
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [images, setImages] = useState<string[]>([]);
+  const [codexHealth, setCodexHealth] = useState<CodexHealth | null>(null);
 
   const assetById = useMemo(() => {
     const m = new Map<string, PromptedAsset>();
@@ -57,6 +59,14 @@ export function CreationBoard() {
       : [];
   }, [chipAssetId, assetById]);
 
+  // 进入创作板时探测 codex 可用性，生成按钮据此置灰（约定 7：离线/无账号降级置灰）。
+  useEffect(() => {
+    api
+      .codexHealth()
+      .then(setCodexHealth)
+      .catch(() => setCodexHealth({ ok: false, reason: "codex 状态检测失败" }));
+  }, []);
+
   useEffect(() => {
     inputRef.current?.focus();
   }, [tokens.length, boardPickMode]);
@@ -66,9 +76,10 @@ export function CreationBoard() {
     listen<CodexChunk>("codex://chunk", (e) => {
       const c = e.payload;
       if (c.kind === "delta") setStreaming((s) => s + c.text);
-      else if (c.kind === "done")
+      else if (c.kind === "done") {
         setStreaming((s) => s + `\n\n—— done · ${c.elapsed_ms}ms via ${c.provider}`);
-      else if (c.kind === "error") setStreaming((s) => s + `\n[error: ${c.message}]`);
+        if (c.images && c.images.length > 0) setImages(c.images);
+      } else if (c.kind === "error") setStreaming((s) => s + `\n[error: ${c.message}]`);
     }).then((u) => (unlisten = u));
     return () => unlisten?.();
   }, []);
@@ -78,7 +89,9 @@ export function CreationBoard() {
     function onPick(e: Event) {
       const assetId = (e as CustomEvent<string>).detail;
       flushDraft();
-      setTokens((ts) => [...ts, { kind: "image", assetId }, { kind: "text", text: "的" }]);
+      // 不自动插「的」：纯参考引用（@B）不该拖个「的」；维度展开时 serializeImageToken
+      // 会自带「的」（@A 的【维度】），用户也可自己打。这样「将@B 变为@A 的调性」才写得出来。
+      setTokens((ts) => [...ts, { kind: "image", assetId }]);
       setDraft("");
       setChipAssetId(assetId);
       setShowKeywordHints(true);
@@ -164,15 +177,20 @@ export function CreationBoard() {
   }
 
   async function sendCodex() {
+    if (!codexHealth?.ok || !finalPrompt) return;
     setBusy(true);
     setStreaming("");
+    setImages([]);
     try {
-      await api.codexRunStream({
-        instruction:
-          "基于以下用户 prompt 和参考图片描述，优化并扩写成一段适合图像生成的提示词：",
-        context_prompts: [finalPrompt],
-        reference_images: references,
+      await api.codexCreateImage({
+        prompt: finalPrompt,
+        referenceImages: references,
       });
+    } catch (e) {
+      const msg = typeof e === "string" ? e : JSON.stringify(e);
+      setStreaming((s) =>
+        s + (msg.includes("已取消") ? "\n\n—— 已取消" : `\n[error: ${msg}]`)
+      );
     } finally {
       setBusy(false);
     }
@@ -272,6 +290,24 @@ export function CreationBoard() {
       </div>
 
       <div className="space-y-2 border-t border-edge p-3">
+        {images.length > 0 && (
+          <div className="space-y-1">
+            <div className="text-[10px] uppercase tracking-wide text-muted">
+              codex 生成结果（{images.length}）
+            </div>
+            <div className="grid grid-cols-2 gap-1.5">
+              {images.map((p) => (
+                <a key={p} href={convertFileSrc(p)} target="_blank" rel="noreferrer" title={p}>
+                  <img
+                    src={convertFileSrc(p)}
+                    alt=""
+                    className="w-full rounded border border-edge object-cover"
+                  />
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
         <button
           onClick={copy}
           disabled={!finalPrompt}
@@ -280,14 +316,23 @@ export function CreationBoard() {
           {copied ? "已复制 ✓" : "复制（prompt + 参考图）"}
         </button>
         <button
-          onClick={sendCodex}
-          disabled={busy || !finalPrompt}
-          className="w-full rounded-md bg-accent px-3 py-2 text-sm font-semibold text-black disabled:opacity-50"
+          onClick={busy ? () => api.cancelCodexCreate().catch(console.error) : sendCodex}
+          disabled={!busy && (!finalPrompt || !codexHealth?.ok)}
+          title={
+            !codexHealth?.ok
+              ? codexHealth?.reason || "codex 不可用"
+              : "把最终 prompt + 参考图发 codex CLI 生成图像"
+          }
+          className={`w-full rounded-md px-3 py-2 text-sm font-semibold disabled:opacity-50 ${
+            busy ? "border border-edge bg-panel2 text-ink hover:text-red-300" : "bg-accent text-black"
+          }`}
         >
-          {busy ? "处理中…" : "✓ 发送 codex"}
+          {busy ? "取消生成" : "✓ 发送 codex 生成"}
         </button>
         <div className="text-[10px] text-muted">
-          🎨 图像生成 = 创作板 + codex 画图 spike（§5.9，待验证）
+          {codexHealth && !codexHealth.ok
+            ? codexHealth.reason
+            : "🎨 把最终 prompt + 参考图发 codex（imagegen）生成图像；过程文本流式回显。"}
         </div>
         {streaming && (
           <pre className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded bg-panel2 p-2 text-[11px] text-ink">
@@ -396,5 +441,7 @@ function serializeImageToken(
       : `@${name} 的【${sectionTitle}】`;
   }
 
-  return caption ? `@${name}（${caption}）` : `@${name}`;
+  // 不选维度 = 纯参考引用：只输出 @图名（图本身已通过 reference_images 传给 codex），
+  // 不灌整段 caption，保持灵活（如「将@B 变为@A 的调性」里的 @B）。
+  return `@${name}`;
 }

@@ -17,6 +17,19 @@ function Thumb({ asset }: { asset: Asset }) {
   const imgRef = useRef<HTMLImageElement>(null);
   const selected = useStore((s) => s.mode === "manage" && s.selectedIds.has(asset.id));
   const colors = useMemo(() => parseColors(asset.colors), [asset.colors]);
+  // 反推全局可见：本缩略图正在反推 / 在队列里。角标点击 = 取消（运行中 kill 子进程 / 排队中移出队列）。
+  const describeStatus = useStore((s) =>
+    s.describingId === asset.id
+      ? "running"
+      : s.describeQueue.some((q) => q.assetId === asset.id)
+        ? "queued"
+        : null
+  );
+  const queuePos = useStore((s) => {
+    const i = s.describeQueue.findIndex((q) => q.assetId === asset.id);
+    return i >= 0 ? i + 1 : 0;
+  });
+  const cancelDescribe = useStore((s) => s.cancelDescribe);
 
   // 懒加载：进入视口前不加载缩略图（千图级性能保障）。
   useEffect(() => {
@@ -56,7 +69,7 @@ function Thumb({ asset }: { asset: Asset }) {
 
   return (
     <div
-      className={`mb-2 break-inside-avoid cursor-pointer overflow-hidden rounded-md ring-2 transition ${
+      className={`relative mb-2 break-inside-avoid cursor-pointer overflow-hidden rounded-md ring-2 transition ${
         selected ? "ring-accent" : "ring-transparent hover:ring-edge"
       }`}
       onClick={() => {
@@ -71,6 +84,25 @@ function Thumb({ asset }: { asset: Asset }) {
         else st.openDetail(asset.id);
       }}
     >
+      {describeStatus && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            cancelDescribe(asset.id);
+          }}
+          className="absolute right-1 top-1 z-10 flex items-center gap-1 rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-white backdrop-blur transition hover:bg-red-500/80"
+          title={
+            describeStatus === "running" ? "反推中，点击取消" : `排队 ${queuePos}，点击移除`
+          }
+        >
+          {describeStatus === "running" ? (
+            <span className="inline-block h-2.5 w-2.5 animate-spin rounded-full border border-white/40 border-t-white" />
+          ) : (
+            <span>⏳</span>
+          )}
+          <span>{describeStatus === "running" ? "反推中" : `排队 ${queuePos}`}</span>
+        </button>
+      )}
       <img
         ref={imgRef}
         className="block w-full bg-panel2"

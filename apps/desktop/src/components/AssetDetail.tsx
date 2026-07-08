@@ -1,5 +1,6 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-shell";
 import { useStore } from "../store";
 import { api } from "../lib/api";
@@ -209,10 +210,19 @@ export function AssetDetail() {
   const id = useStore((s) => s.detailAssetId);
   const assets = useStore((s) => s.assets);
   const closeDetail = useStore((s) => s.closeDetail);
+  const runDescribe = useStore((s) => s.runDescribe);
+  const cancelDescribe = useStore((s) => s.cancelDescribe);
+  const describeStartedAt = useStore((s) => s.describeStartedAt);
+  // 本图反推状态：正在跑 / 在队列里（位置从 1 起）/ 空闲。
+  const describing = useStore((s) => s.describingId === id);
+  const queuePosition = useStore((s) => {
+    const i = s.describeQueue.findIndex((q) => q.assetId === id);
+    return i >= 0 ? i + 1 : 0;
+  });
+  const queued = queuePosition > 0;
   const asset: Asset | undefined = assets.find((a) => a.id === id);
 
   const [analyses, setAnalyses] = useState<Analysis[]>([]);
-  const [describing, setDescribing] = useState(false);
   const [editingPrompt, setEditingPrompt] = useState(false);
   const [describePrompt, setDescribePrompt] = useState(loadDescribePrompt);
   const [describePromptHistory, setDescribePromptHistory] = useState(
@@ -237,6 +247,17 @@ export function AssetDetail() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
+  // 反推后台化：本图在别处（或本页点反推后离开再回来）跑完落地时，
+  // 后端 emit analyses://changed；命中本图则自动刷新 analyses。
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    listen<{ asset_id: string }>("analyses://changed", (e) => {
+      if (e.payload.asset_id === id) loadAnalyses();
+    }).then((u) => (unlisten = u));
+    return () => unlisten?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
   // 进入详情页时检测 codex 可用性，反推按钮据此置灰（约定 7：离线/无账号降级置灰）。
   useEffect(() => {
     api
@@ -255,12 +276,30 @@ export function AssetDetail() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [analyses]);
 
-  // 卸载时清理已耗时计时器，避免泄漏。
+  // 已耗时计时器：跟随本图 describing 状态。用 store 的 describeStartedAt 作起点，
+  // 即使中途离开详情页再回来（组件重挂）仍准确。describing 结束或卸载时清 interval。
   useEffect(() => {
+    if (!describing) {
+      if (timerRef.current != null) {
+        window.clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+      setElapsedMs(0);
+      return;
+    }
+    const start = describeStartedAt ?? Date.now();
+    setElapsedMs(Date.now() - start);
+    timerRef.current = window.setInterval(
+      () => setElapsedMs(Date.now() - start),
+      1000
+    );
     return () => {
-      if (timerRef.current != null) window.clearInterval(timerRef.current);
+      if (timerRef.current != null) {
+        window.clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
     };
-  }, []);
+  }, [describing, describeStartedAt]);
 
   function rememberDescribePrompt(prompt: string) {
     const trimmed = prompt.trim();
@@ -274,49 +313,15 @@ export function AssetDetail() {
     saveDescribePrompt(trimmed);
   }
 
-  function startTimer() {
-    setElapsedMs(0);
-    const start = Date.now();
-    timerRef.current = window.setInterval(() => setElapsedMs(Date.now() - start), 1000);
-  }
-
-  function stopTimer() {
-    if (timerRef.current != null) {
-      window.clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
-  }
-
-  async function describe() {
+  function handleDescribe() {
     if (!id) return;
     const instruction = describePrompt.trim();
     if (!instruction) return;
-    setDescribing(true);
     setErr(null);
     rememberDescribePrompt(instruction);
-    startTimer();
-    try {
-      await api.describeAsset(id, instruction);
-      await loadAnalyses();
-    } catch (e) {
-      const msg = typeof e === "string" ? e : JSON.stringify(e);
-      // 「已取消」是用户主动中断，不算错误，静默处理。
-      if (!msg.includes("已取消")) {
-        setErr(msg);
-      }
-    } finally {
-      stopTimer();
-      setElapsedMs(0);
-      setDescribing(false);
-    }
-  }
-
-  async function cancelDescribe() {
-    try {
-      await api.cancelCodexDescribe();
-    } catch (e) {
-      console.error(e);
-    }
+    // 入全局队列（fire-and-forget）；执行状态走 store，本组件不再 await。
+    // 跑完落地后由 analyses://changed 监听器自动 loadAnalyses。
+    runDescribe(id, instruction);
   }
 
   async function deleteCaption(anId: string) {
@@ -419,29 +424,29 @@ export function AssetDetail() {
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => setEditingPrompt((v) => !v)}
-                  disabled={describing}
+                  disabled={describing || queued}
                   className="text-xs text-muted hover:text-accent disabled:opacity-50"
                   title="编辑即将发送给 codex 的反推指令"
                 >
                   修改指令
                 </button>
-                {describing && (
+                {(describing || queued) && (
                   <>
                     <span className="text-[10px] tabular-nums text-muted">
-                      {Math.round(elapsedMs / 1000)}s
+                      {describing ? `${Math.round(elapsedMs / 1000)}s` : `排队 ${queuePosition}`}
                     </span>
                     <button
-                      onClick={cancelDescribe}
+                      onClick={() => cancelDescribe(id)}
                       className="rounded border border-edge px-2 py-1 text-xs text-muted hover:text-red-300"
-                      title="中断本次 codex 反推"
+                      title={describing ? "中断本次 codex 反推" : "从队列移除"}
                     >
                       取消
                     </button>
                   </>
                 )}
                 <button
-                  onClick={describe}
-                  disabled={describing || promptEmpty || !codexHealth?.ok}
+                  onClick={handleDescribe}
+                  disabled={describing || queued || promptEmpty || !codexHealth?.ok}
                   className="rounded bg-accent px-2.5 py-1 text-xs font-medium text-black disabled:opacity-50"
                   title={
                     !codexHealth?.ok
@@ -449,7 +454,7 @@ export function AssetDetail() {
                       : "发 codex CLI：按当前反推指令分析这张图片"
                   }
                 >
-                  {describing ? "反推中…" : "反推"}
+                  {describing ? "反推中…" : queued ? "排队中…" : "反推"}
                 </button>
               </div>
             </div>
@@ -472,14 +477,14 @@ export function AssetDetail() {
                   <div className="flex gap-2">
                     <button
                       onClick={() => saveDescribePrompt(describePrompt.trim())}
-                      disabled={describing}
+                      disabled={describing || queued}
                       className="hover:text-accent disabled:opacity-50"
                     >
                       保存为默认
                     </button>
                     <button
                       onClick={() => setDescribePrompt(DEFAULT_DESCRIBE_PROMPT)}
-                      disabled={describing}
+                      disabled={describing || queued}
                       className="hover:text-accent disabled:opacity-50"
                     >
                       恢复默认
@@ -496,7 +501,7 @@ export function AssetDetail() {
                         <button
                           key={p}
                           onClick={() => setDescribePrompt(p)}
-                          disabled={describing}
+                          disabled={describing || queued}
                           className="line-clamp-2 rounded bg-panel2 px-2 py-1 text-left text-[10px] text-muted hover:text-accent disabled:opacity-50"
                           title={p}
                         >
@@ -553,7 +558,7 @@ export function AssetDetail() {
                       </button>
                       <button
                         onClick={() => deleteCaption(a.id)}
-                        disabled={describing}
+                        disabled={describing || queued}
                         className="shrink-0 text-[10px] text-muted hover:text-red-300 disabled:opacity-50"
                         title="删除这条反推结果"
                       >
