@@ -27,6 +27,19 @@ export interface Folder {
   smart_query?: string | null;
 }
 
+/** 自动归类侧栏聚合：tag + 资产计数（count>0）。 */
+export interface TagCount {
+  id: string;
+  name: string;
+  count: number;
+}
+
+/** 某资产的 tag（name + source）。source: auto(codex) | manual(用户)。 */
+export interface AssetTag {
+  name: string;
+  source: string;
+}
+
 export interface CaptionSection {
   title: string;
   body: string;

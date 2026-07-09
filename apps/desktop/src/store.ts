@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { api } from "./lib/api";
-import type { Asset, Folder, PromptedAsset } from "./lib/types";
+import type { Asset, Folder, PromptedAsset, TagCount } from "./lib/types";
 
 type Mode = "browse" | "manage";
 
@@ -16,6 +16,9 @@ interface State {
   mode: Mode;
   detailAssetId: string | null; // 浏览模式打开的详情页资产
   folders: Folder[];
+  // —— 自动归类（P2）——
+  autoTags: TagCount[]; // 侧栏「自动归类」分区（source='auto' tag + 计数）
+  classifyProgress: { done: number; total: number } | null; // 批量重归类进度
   // —— 创作板（核心枢纽）——
   boardOpen: boolean;
   boardPickMode: boolean; // 输入 @ 后等待瀑布流点选图片
@@ -35,6 +38,9 @@ interface State {
   closeDetail: () => void;
   setFolders: (f: Folder[]) => void;
   reloadFolders: () => Promise<void>;
+  setAutoTags: (t: TagCount[]) => void;
+  reloadAutoTags: () => Promise<void>;
+  setClassifyProgress: (p: { done: number; total: number } | null) => void;
   toggleBoard: () => void;
   startBoardImagePick: () => void;
   finishBoardImagePick: () => void;
@@ -48,6 +54,14 @@ interface State {
   describeStartedAt: number | null; // 当前任务开始时间戳；跨组件已耗时显示用
   runDescribe: (assetId: string, instruction: string) => void;
   cancelDescribe: (assetId: string) => Promise<void>;
+  // —— 生成（创作板 codex 画图，单槽无队列）——
+  // 状态全局可见：状态圈在顶部工具栏最右侧，故提到 store（不绑创作板生命周期）。
+  generating: boolean;
+  setGenerating: (g: boolean) => void;
+  // —— 导入即基础分析（autoname，后台 fire-and-forget）——
+  // 在途计数（后端 codex://auto-active 事件推来）；>0 顶部状态圈算「分析中」。
+  autoAnalyzing: number;
+  setAutoAnalyzing: (n: number) => void;
 }
 
 export const useStore = create<State>((set, get) => {
@@ -91,6 +105,8 @@ export const useStore = create<State>((set, get) => {
   mode: "browse",
   detailAssetId: null,
   folders: [],
+  autoTags: [],
+  classifyProgress: null,
   boardOpen: false,
   boardPickMode: false,
   promptedAssets: [],
@@ -126,6 +142,15 @@ export const useStore = create<State>((set, get) => {
       console.error("reloadFolders failed", e);
     }
   },
+  setAutoTags: (autoTags) => set({ autoTags }),
+  reloadAutoTags: async () => {
+    try {
+      set({ autoTags: await api.listTags("auto") });
+    } catch (e) {
+      console.error("reloadAutoTags failed", e);
+    }
+  },
+  setClassifyProgress: (classifyProgress) => set({ classifyProgress }),
   // —— 创作板 ——
   toggleBoard: () =>
     set((s) => {
@@ -181,5 +206,11 @@ export const useStore = create<State>((set, get) => {
       set({ describeQueue: q });
     }
   },
+  // —— 生成（创作板 codex 画图）——
+  generating: false,
+  setGenerating: (generating) => set({ generating }),
+  // —— 导入即基础分析（autoname）——
+  autoAnalyzing: 0,
+  setAutoAnalyzing: (autoAnalyzing) => set({ autoAnalyzing }),
   };
 });

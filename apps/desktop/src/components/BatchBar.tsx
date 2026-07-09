@@ -10,11 +10,16 @@ import { api } from "../lib/api";
 export function BatchBar() {
   const ids = useStore((s) => Array.from(s.selectedIds));
   const exitManage = useStore((s) => s.exitManage);
+  const folders = useStore((s) => s.folders);
+  // 移入已有只列普通夹（排除 root 与智能夹）。
+  const existingFolders = folders.filter((f) => f.id !== "root" && f.kind !== "smart");
 
   const [busy, setBusy] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [folderInput, setFolderInput] = useState(false);
   const [folderName, setFolderName] = useState("");
+  const [moveExisting, setMoveExisting] = useState(false);
+  const [targetFolderId, setTargetFolderId] = useState("");
   const [genRole, setGenRole] = useState("main");
   const [genProgress, setGenProgress] = useState<string | null>(null);
 
@@ -57,6 +62,25 @@ export function BatchBar() {
     }
   }
 
+  async function moveToExisting() {
+    if (!targetFolderId) return;
+    setBusy(true);
+    try {
+      await api.moveAssetsToFolder(ids, targetFolderId);
+      const st = useStore.getState();
+      st.clearSelect();
+      st.exitManage();
+      st.setCurrentFolder(targetFolderId);
+      await st.reloadFolders();
+    } catch (e) {
+      console.error("move failed", e);
+    } finally {
+      setBusy(false);
+      setMoveExisting(false);
+      setTargetFolderId("");
+    }
+  }
+
   async function generatePrompts() {
     if (empty) return;
     setBusy(true);
@@ -79,14 +103,65 @@ export function BatchBar() {
     <div className="flex flex-wrap items-center gap-2 border-b border-edge bg-panel px-3 py-2 text-sm">
       <span className="text-muted">已选 {ids.length} 张</span>
 
-      {!folderInput ? (
-        <button
-          onClick={() => setFolderInput(true)}
-          disabled={busy || empty}
-          className="rounded bg-panel2 px-2.5 py-1 text-xs hover:bg-edge disabled:opacity-50"
-        >
-          移入新文件夹
-        </button>
+      {!folderInput && !moveExisting ? (
+        <>
+          <button
+            onClick={() => setFolderInput(true)}
+            disabled={busy || empty}
+            className="rounded bg-panel2 px-2.5 py-1 text-xs hover:bg-edge disabled:opacity-50"
+          >
+            移入新文件夹
+          </button>
+          <button
+            onClick={() => {
+              setTargetFolderId(existingFolders[0]?.id ?? "");
+              setMoveExisting(true);
+            }}
+            disabled={busy || empty || existingFolders.length === 0}
+            className="rounded bg-panel2 px-2.5 py-1 text-xs hover:bg-edge disabled:opacity-50"
+            title={existingFolders.length === 0 ? "还没有普通文件夹" : "移入已有文件夹"}
+          >
+            移入已有
+          </button>
+        </>
+      ) : moveExisting ? (
+        <div className="flex items-center gap-1">
+          <select
+            autoFocus
+            value={targetFolderId}
+            onChange={(e) => setTargetFolderId(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                setMoveExisting(false);
+                setTargetFolderId("");
+              }
+            }}
+            className="max-w-[10rem] rounded bg-panel2 px-1.5 py-1 text-xs outline-none ring-1 ring-edge focus:ring-accent"
+          >
+            {existingFolders.map((f) => (
+              <option key={f.id} value={f.id}>
+                {f.name}
+              </option>
+            ))}
+          </select>
+          <button
+            onClick={moveToExisting}
+            disabled={busy || !targetFolderId}
+            className="rounded bg-accent px-2 py-1 text-xs text-black disabled:opacity-50"
+          >
+            确定
+          </button>
+          <button
+            onClick={() => {
+              setMoveExisting(false);
+              setTargetFolderId("");
+            }}
+            disabled={busy}
+            className="text-xs text-muted hover:text-ink"
+          >
+            取消
+          </button>
+        </div>
       ) : (
         <div className="flex items-center gap-1">
           <input

@@ -9,6 +9,7 @@
 //! 一次 codex 调用同时得到命名和描述，描述按反推规则落 `analyses(kind=caption)`，
 //! 让新采集的图自动成为「创作板就绪」（`list_prompted_assets` 会带上它）。
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use tauri::{AppHandle, Emitter};
@@ -23,15 +24,67 @@ use crate::core::library::{Analysis, Asset};
 use crate::db::Database;
 use crate::error::AppResult;
 
-/// 第 1 行 = 命名（无标点），第 2 行起 = 图片描述。基础分析不要求按维度分点；
-/// 维度结构（构图/光影/...）交给用户后续手动「反推」按需做。
-const AUTO_INSTRUCTION: &str = "请描述这张图片并取名。严格按照以下格式回复：\
-  第一行只回复命名本身，不要有标点符号；\
-  第二行回复图片的描述。";
+/// 受控类别词表查空时的硬编码兜底（避免 codex 无类可选）。正常情况词表来自 tags(source='auto')。
+const FALLBACK_VOCAB: &[&str] = &[
+    "人像", "风景", "静物", "美食", "动物", "建筑", "抽象", "插画", "室内", "街景",
+];
+
+/// 采集即命名 + 归类指令：看图 → 取名 + 描述 + 从词表选 1-2 个主类。
+/// 类别用哨兵 `[[CAT: ...]]` 标注（extract_categories 抽取，不污染描述正文）。
+/// 词表查空时用 FALLBACK_VOCAB。
+fn build_auto_instruction(vocab: &[String]) -> String {
+    let list = if vocab.is_empty() {
+        FALLBACK_VOCAB.join("、")
+    } else {
+        vocab.join("、")
+    };
+    format!(
+        "请描述这张图片并取名。严格按照以下格式回复：\
+         第一行只回复命名本身，不要有标点符号；\
+         第二行起回复图片的描述；\
+         最后一行单独用 [[CAT: 类别1, 类别2]] 标注主类（最多 2 个，必须从词表里选，只回类别名）。\
+         词表：{list}。"
+    )
+}
+
+/// 批量重归类指令：喂已有 caption 文本（不看图）→ 只回 `[[CAT: ...]]` 一行。
+fn build_classify_instruction(vocab: &[String], caption: &str) -> String {
+    let list = if vocab.is_empty() {
+        FALLBACK_VOCAB.join("、")
+    } else {
+        vocab.join("、")
+    };
+    format!(
+        "下面是一张图片的描述，请据此判断它属于哪个类别。\
+         从词表里选 1-2 个最合适的主类，只用 [[CAT: 类别1, 类别2]] 格式回复这一行，不要其它内容。\
+         词表：{list}。\n\n图片描述：\n{caption}"
+    )
+}
 
 /// 同时跑的 codex 子进程上限（批量采集/导入时节流）。
 const MAX_CONCURRENT: usize = 3;
 static AUTO_SEM: Semaphore = Semaphore::const_new(MAX_CONCURRENT);
+
+/// 在途的「采集即分析」codex 调用数（拿到信号量后才计）。emit 给前端顶部状态圈。
+static AUTO_ACTIVE: AtomicUsize = AtomicUsize::new(0);
+
+/// RAII：构造即在途 +1 并 emit；drop 即 -1 并 emit，跨早退/出错路径都安全复位。
+struct AutoActiveGuard(AppHandle);
+impl AutoActiveGuard {
+    fn new(app: AppHandle) -> Self {
+        let n = AUTO_ACTIVE.fetch_add(1, Ordering::SeqCst) + 1;
+        let _ = app.emit("codex://auto-active", n);
+        Self(app)
+    }
+}
+impl Drop for AutoActiveGuard {
+    fn drop(&mut self) {
+        let n = AUTO_ACTIVE
+            .fetch_sub(1, Ordering::SeqCst)
+            .saturating_sub(1);
+        let _ = self.0.emit("codex://auto-active", n);
+    }
+}
 
 /// 生成图命名专用指令：只取名、不要描述（生成图不进创作板 @ 引用池，不需要 caption）。
 const NAME_ONLY_INSTRUCTION: &str = "请给这张图片取一个不超过 8 个字的中文名字。\
@@ -63,9 +116,17 @@ async fn auto_analyze(app: &AppHandle, db: &Arc<Database>, asset: Asset) -> Resu
     };
 
     let _permit = AUTO_SEM.acquire().await.map_err(|e| e.to_string())?;
+    // 拿到信号量（即将真正调 codex）才计入在途，emit 让前端状态圈反映导入基础分析。
+    let _active = AutoActiveGuard::new(app.clone());
+
+    // 受控类别词表（codex 只见 auto 类别）；查失败用兜底（build_auto_instruction 处理空词表）。
+    let vocab = db_call(db, |db| db.list_auto_tag_names())
+        .await
+        .unwrap_or_default();
+    let instruction = build_auto_instruction(&vocab);
 
     let req = CodexRequest {
-        instruction: AUTO_INSTRUCTION.to_string(),
+        instruction: instruction.clone(),
         reference_images: vec![store_path.into()],
         context_prompts: vec![],
     };
@@ -74,7 +135,9 @@ async fn auto_analyze(app: &AppHandle, db: &Arc<Database>, asset: Asset) -> Resu
     // codex 不可用/超时 → 向上抛 Err，spawn wrapper 统一 warn（保留原文件名）。
     let result = provider.run(req).await.map_err(|e| e.to_string())?;
 
-    let (name, desc) = split_name_and_desc(&result.text);
+    // 抽类别哨兵 → (类别, 剥哨兵后的文本)；name/desc/caption 都基于剥哨兵文本（不含类别）。
+    let (cats, clean_text) = extract_categories(&result.text);
+    let (name, desc) = split_name_and_desc(&clean_text);
     let mut changed = false;
 
     // 1) 命名写回（best-effort，失败不阻断 caption）
@@ -86,12 +149,12 @@ async fn auto_analyze(app: &AppHandle, db: &Arc<Database>, asset: Asset) -> Resu
         }
     }
 
-    // 2) 描述落 caption（不浪费这次分析；desc 为空则跳过）
+    // 2) 描述落 caption（剥哨兵；desc 为空则跳过）
     if !desc.is_empty() {
         let analysis_parsed = caption::parse(&desc);
         let payload = caption::build_payload(
             &desc,
-            AUTO_INSTRUCTION,
+            &instruction,
             result.session_id.as_deref(),
             &provider_name,
             &analysis_parsed,
@@ -107,6 +170,16 @@ async fn auto_analyze(app: &AppHandle, db: &Arc<Database>, asset: Asset) -> Resu
         match db_call(db, move |db| db.insert_analysis(&row)).await {
             Ok(()) => changed = true,
             Err(e) => tracing::warn!("auto-name insert_analysis {asset_id}: {e}"),
+        }
+    }
+
+    // 3) 自动归类：codex 选中的类别精确匹配词表才写 auto tag；仅当该图尚无 auto tag（防顶手改）。
+    if !cats.is_empty() {
+        let id_for_tag = asset_id.clone();
+        match db_call(db, move |db| apply_auto_categories(&id_for_tag, &cats, db)).await {
+            Ok(true) => changed = true,
+            Ok(false) => {}
+            Err(e) => tracing::warn!("auto-name classify {asset_id}: {e}"),
         }
     }
 
@@ -209,6 +282,111 @@ fn split_name_and_desc(text: &str) -> (Option<String>, String) {
     (clean_name(first), rest.trim().to_string())
 }
 
+/// 从 codex 回复里抽 `[[CAT: 类1, 类2]]` 哨兵 → (类别列表, 剥哨兵后的描述)。
+/// 无哨兵返回空 + 原文（trim）；类别按 `,、，` 切并 trim、去空。是否在词表由调用方过滤。
+fn extract_categories(text: &str) -> (Vec<String>, String) {
+    let Some(start) = text.find("[[CAT:") else {
+        return (Vec::new(), text.trim().to_string());
+    };
+    let after = &text[start + "[[CAT:".len()..];
+    let Some(end) = after.find("]]") else {
+        return (Vec::new(), text.trim().to_string());
+    };
+    let inner = &after[..end];
+    let cats: Vec<String> = inner
+        .split(|c| matches!(c, ',' | '、' | '，'))
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let sentinel_len = "[[CAT:".len() + end + "]]".len();
+    let mut cleaned = String::with_capacity(text.len());
+    cleaned.push_str(&text[..start]);
+    cleaned.push_str(&text[start + sentinel_len..]);
+    (cats, cleaned.trim().to_string())
+}
+
+/// 给资产写 auto 类别：仅当尚无 auto tag（防顶手改）；只收精确匹配词表的类别
+/// （codex 偶尔回不在词表的，丢弃不污染词表）。返回是否有变更。
+fn apply_auto_categories(asset_id: &str, cats: &[String], db: &Arc<Database>) -> AppResult<bool> {
+    if db.has_auto_tag(asset_id)? {
+        return Ok(false);
+    }
+    let vocab: std::collections::HashSet<String> =
+        db.list_auto_tag_names()?.into_iter().collect();
+    let ids: Vec<String> = cats
+        .iter()
+        .filter(|c| vocab.contains(*c))
+        .filter_map(|c| db.get_or_create_tag(c, "auto").ok())
+        .collect();
+    if ids.is_empty() {
+        return Ok(false);
+    }
+    db.set_asset_tags(asset_id, &ids, "auto")?;
+    Ok(true)
+}
+
+/// 批量重归类入口：对所有「无 auto tag 且有 caption」的资产，喂 caption 文本（不看图）
+/// 让 codex 分类。复用 AUTO_SEM 节流；逐张 emit 进度 `classify://progress {done,total,ended?}`。
+/// 无 auto tag 的过滤由 list_assets_to_classify 保证；apply_auto_categories 再查一次防并发竞态。
+pub fn spawn_reclassify_all(app: AppHandle, db: Arc<Database>) {
+    tokio::spawn(async move {
+        let ids = db_call(&db, |db| db.list_assets_to_classify())
+            .await
+            .unwrap_or_default();
+        let total = ids.len();
+        let _ = app.emit(
+            "classify://progress",
+            serde_json::json!({ "done": 0, "total": total }),
+        );
+        for (i, asset_id) in ids.iter().enumerate() {
+            if let Err(e) = classify_one(&app, &db, asset_id).await {
+                tracing::warn!("reclassify {asset_id}: {e}");
+            }
+            let _ = app.emit(
+                "classify://progress",
+                serde_json::json!({ "done": i + 1, "total": total }),
+            );
+        }
+        let _ = app.emit(
+            "classify://progress",
+            serde_json::json!({ "done": total, "total": total, "ended": true }),
+        );
+    });
+}
+
+/// 单张重归类：取最新 caption 文本 → 纯文本 run()（不看图）→ 抽类别 → 写 auto tag。
+async fn classify_one(app: &AppHandle, db: &Arc<Database>, asset_id: &str) -> Result<(), String> {
+    let id_for_cap = asset_id.to_string();
+    let caption_text = db_call(db, move |db| db.latest_caption_text(&id_for_cap))
+        .await?
+        .unwrap_or_default();
+    if caption_text.trim().is_empty() {
+        return Ok(()); // 无 caption 无法分类
+    }
+
+    let _permit = AUTO_SEM.acquire().await.map_err(|e| e.to_string())?;
+    let vocab = db_call(db, |db| db.list_auto_tag_names())
+        .await
+        .unwrap_or_default();
+    let req = CodexRequest {
+        instruction: build_classify_instruction(&vocab, &caption_text),
+        reference_images: vec![],
+        context_prompts: vec![],
+    };
+    let result = CodexCliProvider::default()
+        .run(req)
+        .await
+        .map_err(|e| e.to_string())?;
+    let (cats, _) = extract_categories(&result.text);
+
+    let id_for_tag = asset_id.to_string();
+    let changed = db_call(db, move |db| apply_auto_categories(&id_for_tag, &cats, db)).await?;
+    if changed {
+        let _ = app.emit("library://assets-changed", ());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -269,5 +447,38 @@ mod tests {
         let (name, desc) = split_name_and_desc("。。。\n这是一张雨夜的照片。");
         assert_eq!(name, None);
         assert_eq!(desc, "这是一张雨夜的照片。");
+    }
+
+    #[test]
+    fn extract_categories_parses_sentinel_and_strips() {
+        let (cats, desc) =
+            extract_categories("雨夜霓虹\n这是一张雨夜的照片。\n[[CAT: 风景, 街景]]");
+        assert_eq!(cats, vec!["风景".to_string(), "街景".to_string()]);
+        assert!(!desc.contains("[[CAT"), "哨兵应从描述里剥除");
+        assert!(desc.contains("雨夜的照片"));
+    }
+
+    #[test]
+    fn extract_categories_no_sentinel_returns_clean() {
+        let (cats, desc) = extract_categories("雨夜霓虹\n这是一张雨夜的照片。");
+        assert!(cats.is_empty());
+        assert_eq!(desc, "雨夜霓虹\n这是一张雨夜的照片。");
+    }
+
+    #[test]
+    fn extract_categories_keeps_multiline_desc_after_strip() {
+        // 描述里本来就有换行；哨兵在最后，剥掉后多行描述结构保留。
+        let (cats, desc) = extract_categories("名字\n第一行描述\n第二行描述\n[[CAT: 人像]]");
+        assert_eq!(cats, vec!["人像".to_string()]);
+        assert_eq!(desc, "名字\n第一行描述\n第二行描述");
+    }
+
+    #[test]
+    fn extract_categories_splits_cn_punctuation() {
+        let (cats, _) = extract_categories("[[CAT: 风景、美食，街景]]");
+        assert_eq!(
+            cats,
+            vec!["风景".to_string(), "美食".to_string(), "街景".to_string()]
+        );
     }
 }

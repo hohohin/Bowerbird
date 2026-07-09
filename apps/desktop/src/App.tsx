@@ -14,6 +14,9 @@ function App() {
   const setTotal = useStore((s) => s.setTotal);
   const setPromptedAssets = useStore((s) => s.setPromptedAssets);
   const reloadFolders = useStore((s) => s.reloadFolders);
+  const reloadAutoTags = useStore((s) => s.reloadAutoTags);
+  const setClassifyProgress = useStore((s) => s.setClassifyProgress);
+  const setAutoAnalyzing = useStore((s) => s.setAutoAnalyzing);
   const currentFolderId = useStore((s) => s.currentFolderId);
   const searchQuery = useStore((s) => s.searchQuery);
   const smartFilter = useStore((s) => s.smartFilter);
@@ -42,6 +45,7 @@ function App() {
         setTotal(total);
       }
       await reloadFolders();
+      await reloadAutoTags();
     } catch (e) {
       console.error("refresh failed", e);
     }
@@ -92,6 +96,30 @@ function App() {
       if (timer) clearTimeout(timer);
     };
   }, [setPromptedAssets]);
+
+  // 批量重归类进度（P2）：classify://progress {done,total,ended?}；ended 时清空。
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    listen<{ done: number; total: number; ended?: boolean }>(
+      "classify://progress",
+      (e) => {
+        setClassifyProgress(
+          e.payload.ended ? null : { done: e.payload.done, total: e.payload.total }
+        );
+      }
+    ).then((u) => (unlisten = u));
+    return () => unlisten?.();
+  }, [setClassifyProgress]);
+
+  // 导入即基础分析在途计数（autoname 后台跑，fire-and-forget 否则前端无感）：
+  // 后端拿到信号量 +1 / 释放 -1 时 emit `codex://auto-active`，>0 顶部状态圈算分析中。
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    listen<number>("codex://auto-active", (e) => setAutoAnalyzing(e.payload)).then(
+      (u) => (unlisten = u)
+    );
+    return () => unlisten?.();
+  }, [setAutoAnalyzing]);
 
   const showDetail = mode === "browse" && detailAssetId !== null;
 

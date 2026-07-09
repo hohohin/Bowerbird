@@ -43,7 +43,9 @@ export function CreationBoard() {
   // 维度 chips 作用于「最近插入的那张图」——它的 sections 即下拉选项。
   const [chipAssetId, setChipAssetId] = useState<string | null>(null);
   const [streaming, setStreaming] = useState("");
-  const [busy, setBusy] = useState(false);
+  // busy（生成中）提到 store：状态圈在顶栏全局可见，且创作板中途关闭也能由 finally 复位。
+  const busy = useStore((s) => s.generating);
+  const setBusy = useStore((s) => s.setGenerating);
   const [copied, setCopied] = useState(false);
   // 生成对话：turns = 各轮（首轮来自编辑器、后续来自修改意见）；sessionId = codex 会话 id，
   // 首轮 Done 后拿到，后续轮带它 codex exec resume 续接同一对话。
@@ -266,13 +268,15 @@ export function CreationBoard() {
             @ 参考图输入
           </span>
         </div>
-        <button
-          onClick={toggleBoard}
-          className="rounded px-2 py-0.5 text-muted hover:bg-panel2 hover:text-ink"
-          title="收起创作板"
-        >
-          ✕
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={toggleBoard}
+            className="rounded px-2 py-0.5 text-muted hover:bg-panel2 hover:text-ink"
+            title="收起创作板"
+          >
+            ✕
+          </button>
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto p-3">

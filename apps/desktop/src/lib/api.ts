@@ -4,10 +4,12 @@ import type {
   Analysis,
   Asset,
   AssetPrompt,
+  AssetTag,
   CodexHealth,
   CreationPack,
   Folder,
   PromptedAsset,
+  TagCount,
 } from "./types";
 
 const IMAGE_EXT = ["jpg", "jpeg", "png", "webp", "gif", "bmp", "tiff", "tif"];
@@ -39,6 +41,9 @@ export const api = {
     invoke<string>("create_folder", { name, parentId }),
   createSmartFolder: (name: string, smartQuery: string) =>
     invoke<string>("create_smart_folder", { name, smartQuery }),
+  renameFolder: (id: string, name: string) =>
+    invoke<void>("rename_folder", { id, name }),
+  deleteFolder: (id: string) => invoke<void>("delete_folder", { id }),
 
   // 文件选择对话框
   pickImageFiles: async (): Promise<string[]> => {
@@ -67,6 +72,15 @@ export const api = {
   listPromptsByAsset: (assetId: string) =>
     invoke<AssetPrompt[]>("list_prompts_by_asset", { assetId }),
   listPromptedAssets: () => invoke<PromptedAsset[]>("list_prompted_assets"),
+
+  // 标签 / 自动归类（P2）
+  listTags: (source?: string) =>
+    invoke<TagCount[]>("list_tags", { source: source ?? null }),
+  listAssetTags: (assetId: string) =>
+    invoke<AssetTag[]>("list_asset_tags", { assetId }),
+  setAssetTags: (assetId: string, names: string[], source: string) =>
+    invoke<void>("set_asset_tags", { assetId, names, source }),
+  reclassifyAll: () => invoke<void>("reclassify_all"),
   assemblePack: (assetIds: string[]) =>
     invoke<CreationPack>("assemble_pack", { assetIds }),
   codexGeneratePromptForAsset: (assetId: string, role: string) =>

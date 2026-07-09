@@ -3,6 +3,7 @@
 //! - `0002_fts.sql`：FTS5 同步触发器 + 存量回填
 //! - `0003_templates.sql`：维度模板 seed（后交互收敛，由 0004 清空）
 //! - `0004_templates_clear.sql`：清空 seed 模板行（创作板改用前端维度标签 + 图 caption）
+//! - `0005_tags_source.sql`：tags 加 source 列 + seed 预置自动归类词表（P2）
 
 use rusqlite_migration::{M, Migrations};
 
@@ -12,5 +13,6 @@ pub fn migrations() -> Migrations<'static> {
         M::up(include_str!("../../sql/0002_fts.sql")),
         M::up(include_str!("../../sql/0003_templates.sql")),
         M::up(include_str!("../../sql/0004_templates_clear.sql")),
+        M::up(include_str!("../../sql/0005_tags_source.sql")),
     ])
 }

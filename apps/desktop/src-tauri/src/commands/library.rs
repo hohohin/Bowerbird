@@ -3,11 +3,12 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 use ulid::Ulid;
 
+use crate::core::autoname;
 use crate::core::ingest;
-use crate::core::library::{Analysis, Asset, Folder, PromptedAsset};
+use crate::core::library::{Analysis, Asset, AssetTag, Folder, PromptedAsset, TagCount};
 use crate::core::paths::LibraryPaths;
 use crate::db::Database;
 use crate::error::AppError;
@@ -168,6 +169,26 @@ pub async fn create_smart_folder(
 }
 
 #[tauri::command]
+pub async fn rename_folder(
+    db: State<'_, Arc<Database>>,
+    id: String,
+    name: String,
+) -> Result<(), AppError> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || db.rename_folder(&id, &name))
+        .await
+        .map_err(|e| AppError::Other(e.to_string()))?
+}
+
+#[tauri::command]
+pub async fn delete_folder(db: State<'_, Arc<Database>>, id: String) -> Result<(), AppError> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || db.delete_folder(&id))
+        .await
+        .map_err(|e| AppError::Other(e.to_string()))?
+}
+
+#[tauri::command]
 pub async fn search_assets(
     db: State<'_, Arc<Database>>,
     query: String,
@@ -208,4 +229,73 @@ pub async fn list_prompted_assets(
     tokio::task::spawn_blocking(move || db.list_prompted_assets())
         .await
         .map_err(|e| AppError::Other(e.to_string()))?
+}
+
+// ============ 标签 / 自动归类（P2）============
+
+/// 侧栏「自动归类」分区：某 source（默认 auto）的 tag + 资产计数（count>0）。
+#[tauri::command]
+pub async fn list_tags(
+    db: State<'_, Arc<Database>>,
+    source: Option<String>,
+) -> Result<Vec<TagCount>, AppError> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || db.list_tags_with_count(source.as_deref().unwrap_or("auto")))
+        .await
+        .map_err(|e| AppError::Other(e.to_string()))?
+}
+
+/// 详情页：某资产的全部 tag（name + source，区分 auto/manual）。
+#[tauri::command]
+pub async fn list_asset_tags(
+    db: State<'_, Arc<Database>>,
+    asset_id: String,
+) -> Result<Vec<AssetTag>, AppError> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || db.list_asset_tags(&asset_id))
+        .await
+        .map_err(|e| AppError::Other(e.to_string()))?
+}
+
+/// 全量替换某资产在指定 source 下的 tag（按 name，get_or_create 转 id）。
+/// source='auto'（codex）/ 'manual'（用户），按 source 隔离互不误伤。
+#[tauri::command]
+pub async fn set_asset_tags(
+    app: AppHandle,
+    db: State<'_, Arc<Database>>,
+    asset_id: String,
+    names: Vec<String>,
+    source: String,
+) -> Result<(), AppError> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        let ids: Vec<String> = names
+            .iter()
+            .filter_map(|n| {
+                let n = n.trim();
+                if n.is_empty() {
+                    None
+                } else {
+                    db.get_or_create_tag(n, &source).ok()
+                }
+            })
+            .collect();
+        db.set_asset_tags(&asset_id, &ids, &source)
+    })
+    .await
+    .map_err(|e| AppError::Other(e.to_string()))??;
+    // 类别归属变了 → 刷侧栏 autoTags 计数（App 监听 library://assets-changed → reloadAutoTags）。
+    let _ = app.emit("library://assets-changed", ());
+    Ok(())
+}
+
+/// 批量重归类：对所有「无 auto tag 且有 caption」的资产喂 caption 文本让 codex 分类。
+/// 立即返回，后台逐张跑并 emit `classify://progress {done,total,ended?}`。
+#[tauri::command]
+pub async fn reclassify_all(
+    app: AppHandle,
+    db: State<'_, Arc<Database>>,
+) -> Result<(), AppError> {
+    autoname::spawn_reclassify_all(app, db.inner().clone());
+    Ok(())
 }

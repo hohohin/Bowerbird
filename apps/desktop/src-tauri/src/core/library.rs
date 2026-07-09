@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
+use ulid::Ulid;
 
 use crate::db::Database;
 use crate::error::AppResult;
@@ -88,6 +89,21 @@ pub struct PromptedAsset {
     pub sections: Option<Vec<CaptionSection>>,
     pub dimensions: Option<BTreeMap<String, String>>,
     pub parse_status: Option<String>,
+}
+
+/// 自动归类侧栏聚合用：某 source 的 tag + 资产计数（count>0）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TagCount {
+    pub id: String,
+    pub name: String,
+    pub count: i64,
+}
+
+/// 某资产的 tag（name + source，详情页区分 auto/manual）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssetTag {
+    pub name: String,
+    pub source: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -322,6 +338,28 @@ impl Database {
         Ok(f)
     }
 
+    /// 改文件夹名。排除 root（可信层防护，前端已过滤）。
+    /// FTS5 不受影响：library_fts 只跟 assets.name，folders 表操作不触碰它。
+    pub fn rename_folder(&self, id: &str, name: &str) -> AppResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE folders SET name = ?1 WHERE id = ?2 AND id != 'root'",
+            rusqlite::params![name, id],
+        )?;
+        Ok(())
+    }
+
+    /// 删文件夹。排除 root。依赖外键：普通夹素材 ON DELETE SET NULL 回「全部」、
+    /// smart 夹无影响（查询型）、子夹 CASCADE（当前 flat 无嵌套）。
+    pub fn delete_folder(&self, id: &str) -> AppResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM folders WHERE id = ?1 AND id != 'root'",
+            rusqlite::params![id],
+        )?;
+        Ok(())
+    }
+
     /// 智能文件夹。smart_query 简化为 `source:<s>` 或 `ext:<e>` 前缀语法。
     pub fn create_smart_folder(&self, id: &str, name: &str, smart_query: &str) -> AppResult<()> {
         let conn = self.conn.lock().unwrap();
@@ -333,13 +371,29 @@ impl Database {
         Ok(())
     }
 
-    /// 按 smart_query 过滤资产（`source:xxx` / `ext:xxx`，未知前缀返回全部）。
+    /// 按 smart_query 过滤资产。前缀：`source:xxx` / `ext:xxx` / `tag:<name>`（未知前缀返回全部）。
+    /// `tag:` 走 asset_tags JOIN——不进 FTS（0002 触发器不维护 tags 列，见 P2 设计）。
     pub fn list_assets_smart(
         &self,
         query: &str,
         limit: i64,
         offset: i64,
     ) -> AppResult<Vec<Asset>> {
+        let conn = self.conn.lock().unwrap();
+        if let Some(name) = query.strip_prefix("tag:") {
+            let sql = format!(
+                "SELECT {ASSET_COLS} FROM assets WHERE id IN (\
+                   SELECT at.asset_id FROM asset_tags at JOIN tags t ON t.id = at.tag_id WHERE t.name = ?3\
+                 ) ORDER BY created_at DESC LIMIT ?1 OFFSET ?2"
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(rusqlite::params![limit, offset, name], asset_from_row)?;
+            let mut out = Vec::new();
+            for r in rows {
+                out.push(r?);
+            }
+            return Ok(out);
+        }
         let (cond, val): (&str, String) = if let Some(v) = query.strip_prefix("source:") {
             ("source = ?3", v.to_string())
         } else if let Some(v) = query.strip_prefix("ext:") {
@@ -347,7 +401,6 @@ impl Database {
         } else {
             ("1=1", String::new())
         };
-        let conn = self.conn.lock().unwrap();
         let sql = format!(
             "SELECT {ASSET_COLS} FROM assets WHERE {cond} ORDER BY created_at DESC LIMIT ?1 OFFSET ?2"
         );
@@ -597,6 +650,156 @@ impl Database {
         conn.execute("DELETE FROM analyses WHERE id = ?1", rusqlite::params![id])?;
         Ok(())
     }
+
+    // ============ 标签 / 自动归类（P2）============
+    // tags 表（0001_init.sql）早就在；source 列由 0005 加（auto=codex / manual=用户）。
+    // 不碰 FTS：tag 检索走 list_assets_smart 的 tag: JOIN（0002 触发器不维护 tags 列）。
+
+    /// 幂等取/建 tag。name UNIQUE 兜底；source 区分 auto(codex) / manual(用户)。
+    pub fn get_or_create_tag(&self, name: &str, source: &str) -> AppResult<String> {
+        let conn = self.conn.lock().unwrap();
+        if let Some(id) = conn
+            .query_row(
+                "SELECT id FROM tags WHERE name = ?1",
+                rusqlite::params![name],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()?
+        {
+            return Ok(id);
+        }
+        let id = Ulid::new().to_string();
+        conn.execute(
+            "INSERT OR IGNORE INTO tags (id, name, source) VALUES (?1, ?2, ?3)",
+            rusqlite::params![id, name, source],
+        )?;
+        Ok(id)
+    }
+
+    /// 全量替换某资产在指定 source 下的 tag 关联（删该 source 旧关联 + 插新）。
+    /// auto 与 manual 互不干扰（按 source 隔离）。
+    pub fn set_asset_tags(
+        &self,
+        asset_id: &str,
+        tag_ids: &[String],
+        source: &str,
+    ) -> AppResult<()> {
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        tx.execute(
+            "DELETE FROM asset_tags WHERE asset_id = ?1 \
+             AND tag_id IN (SELECT id FROM tags WHERE source = ?2)",
+            rusqlite::params![asset_id, source],
+        )?;
+        for tid in tag_ids {
+            tx.execute(
+                "INSERT OR IGNORE INTO asset_tags (asset_id, tag_id) VALUES (?1, ?2)",
+                rusqlite::params![asset_id, tid],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// 某资产的全部 tag：按 source 再 name 排序（详情页区分 auto/manual）。
+    pub fn list_asset_tags(&self, asset_id: &str) -> AppResult<Vec<AssetTag>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT t.name, t.source FROM tags t \
+             JOIN asset_tags at ON at.tag_id = t.id WHERE at.asset_id = ?1 \
+             ORDER BY t.source, t.name",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![asset_id], |r| {
+            Ok(AssetTag {
+                name: r.get::<_, String>(0)?,
+                source: r.get::<_, String>(1)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    /// 该资产是否已有 auto tag（防顶手改：自动归类仅对无 auto tag 的图跑）。
+    pub fn has_auto_tag(&self, asset_id: &str) -> AppResult<bool> {
+        let conn = self.conn.lock().unwrap();
+        let exists: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM asset_tags at JOIN tags t ON t.id = at.tag_id \
+             WHERE at.asset_id = ?1 AND t.source = 'auto')",
+            rusqlite::params![asset_id],
+            |r| r.get(0),
+        )?;
+        Ok(exists)
+    }
+
+    /// 全部 auto 词表名（注入 codex instruction 的受控词表）。
+    pub fn list_auto_tag_names(&self) -> AppResult<Vec<String>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT name FROM tags WHERE source = 'auto' ORDER BY name")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    /// 侧栏聚合：某 source 的 tag + 每个的资产计数（count>0），不受 list_assets 的 500 限制。
+    pub fn list_tags_with_count(&self, source: &str) -> AppResult<Vec<TagCount>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT t.id, t.name, COUNT(at.asset_id) AS cnt FROM tags t \
+             LEFT JOIN asset_tags at ON at.tag_id = t.id WHERE t.source = ?1 \
+             GROUP BY t.id HAVING cnt > 0 ORDER BY cnt DESC",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![source], |r| {
+            Ok(TagCount {
+                id: r.get::<_, String>(0)?,
+                name: r.get::<_, String>(1)?,
+                count: r.get::<_, i64>(2)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    /// 取某资产最新 caption 的正文 $.text（批量重归类喂给 codex 用）；无则 None。
+    pub fn latest_caption_text(&self, asset_id: &str) -> AppResult<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        let text: Option<String> = conn
+            .query_row(
+                "SELECT json_extract(payload, '$.text') FROM analyses \
+                 WHERE asset_id = ?1 AND kind = 'caption' ORDER BY created_at DESC LIMIT 1",
+                rusqlite::params![asset_id],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten();
+        Ok(text)
+    }
+
+    /// 列出所有「无 auto tag 且有 caption」的资产 id（批量重归类目标）。
+    pub fn list_assets_to_classify(&self) -> AppResult<Vec<String>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT a.id FROM assets a \
+             WHERE NOT EXISTS (SELECT 1 FROM asset_tags at JOIN tags t ON t.id = at.tag_id \
+                               WHERE at.asset_id = a.id AND t.source = 'auto') \
+             AND EXISTS (SELECT 1 FROM analyses an WHERE an.asset_id = a.id AND an.kind = 'caption') \
+             ORDER BY a.created_at DESC",
+        )?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
 }
 
 #[cfg(test)]
@@ -742,5 +945,109 @@ mod tests {
         assert_eq!(r[0].caption.as_deref(), Some("legacy raw caption"));
         assert!(r[0].dimensions.is_none());
         assert!(r[0].parse_status.is_none());
+    }
+
+    #[test]
+    fn rename_and_delete_folder_guard_root_and_null_assets() {
+        let db = db();
+        let fid = Ulid::new().to_string();
+        db.create_folder(&fid, "临时", None).unwrap();
+
+        let aid = Ulid::new().to_string();
+        db.insert_asset(&Asset {
+            id: aid.clone(),
+            name: "x".into(),
+            ext: Some("png".into()),
+            origin_path: None,
+            store_path: None,
+            thumb_path: None,
+            size: Some(0),
+            width: Some(1),
+            height: Some(1),
+            duration: Some(0.0),
+            phash: None,
+            colors: None,
+            rating: Some(0),
+            source: Some("imported".into()),
+            source_url: None,
+            folder_id: Some(fid.clone()),
+            created_at: Some(0),
+            file_mtime: Some(0),
+        })
+        .unwrap();
+
+        // rename 改名生效。
+        db.rename_folder(&fid, "改名后").unwrap();
+        assert_eq!(db.get_folder(&fid).unwrap().unwrap().name, "改名后");
+
+        // root 受保护：改名/删除都不生效（名仍「全部」、行仍在）。
+        db.rename_folder("root", "hack").unwrap();
+        assert_eq!(db.get_folder("root").unwrap().unwrap().name, "全部");
+        db.delete_folder("root").unwrap();
+        assert!(db.get_folder("root").unwrap().is_some());
+
+        // 删普通夹：夹消失，素材 folder_id 被 FK 置 NULL（回到「全部」）。
+        db.delete_folder(&fid).unwrap();
+        assert!(db.get_folder(&fid).unwrap().is_none());
+        let a = db.get_asset(&aid).unwrap().unwrap();
+        assert!(a.folder_id.is_none(), "删夹后素材应回全部（folder_id NULL）");
+    }
+
+    #[test]
+    fn tags_get_or_create_idempotent_and_source_isolated() {
+        let db = db();
+        // get_or_create 幂等（同名返回同 id；seed 已有「风景」也走查同一行）
+        let id1 = db.get_or_create_tag("风景", "auto").unwrap();
+        let id2 = db.get_or_create_tag("风景", "auto").unwrap();
+        assert_eq!(id1, id2);
+
+        let aid = put_asset(&db, "x");
+        let auto_id = db.get_or_create_tag("风景", "auto").unwrap();
+        db.set_asset_tags(&aid, &[auto_id], "auto").unwrap();
+        let manual_id = db.get_or_create_tag("我的收藏", "manual").unwrap();
+        db.set_asset_tags(&aid, &[manual_id], "manual").unwrap();
+
+        assert!(db.has_auto_tag(&aid).unwrap());
+        let names: Vec<String> = db.list_asset_tags(&aid).unwrap().into_iter().map(|t| t.name).collect();
+        assert!(names.contains(&"风景".to_string()));
+        assert!(names.contains(&"我的收藏".to_string()));
+
+        // 重设 auto（换类别）不应误删 manual
+        let auto2 = db.get_or_create_tag("人像", "auto").unwrap();
+        db.set_asset_tags(&aid, &[auto2], "auto").unwrap();
+        let names: Vec<String> = db.list_asset_tags(&aid).unwrap().into_iter().map(|t| t.name).collect();
+        assert!(!names.contains(&"风景".to_string()), "旧 auto 应被替换");
+        assert!(names.contains(&"人像".to_string()));
+        assert!(names.contains(&"我的收藏".to_string()), "manual 不应被 auto 操作误删");
+    }
+
+    #[test]
+    fn list_assets_smart_tag_prefix_filters() {
+        let db = db();
+        let a1 = put_asset(&db, "有标签");
+        let _a2 = put_asset(&db, "无标签");
+        let tid = db.get_or_create_tag("风景", "auto").unwrap();
+        db.set_asset_tags(&a1, &[tid], "auto").unwrap();
+
+        let r = db.list_assets_smart("tag:风景", 100, 0).unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].id, a1);
+        // 未知标签 → 空（不是返回全部）
+        assert_eq!(db.list_assets_smart("tag:不存在", 100, 0).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn list_tags_with_count_only_returns_used() {
+        let db = db();
+        let a1 = put_asset(&db, "x");
+        let tid = db.get_or_create_tag("风景", "auto").unwrap();
+        db.set_asset_tags(&a1, &[tid], "auto").unwrap();
+        // 另建一个 auto tag 但不关联任何资产 → 不出现（HAVING count>0）
+        let _ = db.get_or_create_tag("静物", "auto").unwrap();
+
+        let counts = db.list_tags_with_count("auto").unwrap();
+        assert_eq!(counts.len(), 1, "只有被用到的 auto tag 才出现（seed 其余 count=0）");
+        assert_eq!(counts[0].name, "风景");
+        assert_eq!(counts[0].count, 1);
     }
 }

@@ -1,5 +1,6 @@
 import { useStore } from "../store";
 import { api } from "../lib/api";
+import { CodexStatus } from "./CodexStatus";
 
 /** 顶部工具栏：导入 + 搜索 + 批量管理 + 创作板入口。 */
 export function Toolbar({ onRefresh }: { onRefresh: () => Promise<void> }) {
@@ -11,6 +12,7 @@ export function Toolbar({ onRefresh }: { onRefresh: () => Promise<void> }) {
   const toggleBoard = useStore((s) => s.toggleBoard);
   const searchQuery = useStore((s) => s.searchQuery);
   const setSearchQuery = useStore((s) => s.setSearchQuery);
+  const classifyProgress = useStore((s) => s.classifyProgress);
 
   async function withBusy(fn: () => Promise<unknown>) {
     setLoading(true);
@@ -55,6 +57,19 @@ export function Toolbar({ onRefresh }: { onRefresh: () => Promise<void> }) {
       >
         批量管理
       </button>
+      <button
+        onClick={() => void api.reclassifyAll()}
+        disabled={busy || !!classifyProgress}
+        className="rounded-md bg-panel2 px-3 py-1.5 text-sm text-ink hover:bg-edge disabled:opacity-50"
+        title="对所有「无类别且已反推」的图，按描述重新自动归类（后台跑，仅归类不改名/描述）"
+      >
+        智能归类全部
+      </button>
+      {classifyProgress && (
+        <span className="text-xs tabular-nums text-muted">
+          归类中 {classifyProgress.done}/{classifyProgress.total}
+        </span>
+      )}
       <input
         value={searchQuery}
         onChange={(e) => setSearchQuery(e.target.value)}
@@ -82,6 +97,7 @@ export function Toolbar({ onRefresh }: { onRefresh: () => Promise<void> }) {
         >
           🎬 创作板
         </button>
+        <CodexStatus />
       </div>
     </div>
   );

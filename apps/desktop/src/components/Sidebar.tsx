@@ -1,6 +1,7 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useStore } from "../store";
 import { api } from "../lib/api";
+import type { Folder } from "../lib/types";
 
 /** 左侧栏：素材统计 + 文件夹/智能文件夹 + 颜色筛选。 */
 export function Sidebar() {
@@ -14,6 +15,14 @@ export function Sidebar() {
   const folders = useStore((s) => s.folders);
   const smartFilter = useStore((s) => s.smartFilter);
   const setSmartFilter = useStore((s) => s.setSmartFilter);
+  const reloadFolders = useStore((s) => s.reloadFolders);
+  const autoTags = useStore((s) => s.autoTags);
+
+  // inline 新建表单：none | folder | smart（避开 window.prompt——Tauri WKWebView 拦截原生对话框）。
+  const [creating, setCreating] = useState<"none" | "folder" | "smart">("none");
+  const [draftName, setDraftName] = useState("");
+  const [smartKind, setSmartKind] = useState<"source" | "ext">("source");
+  const [smartValue, setSmartValue] = useState("");
 
   // 全库 top-12 主色（聚合 assets.colors）。
   const topColors = useMemo(() => {
@@ -36,15 +45,36 @@ export function Sidebar() {
       .map(([c]) => c);
   }, [assets]);
 
-  async function addSmartFolder() {
-    const name = window.prompt("智能文件夹名称（如：扩展采集）");
+  function resetCreate() {
+    setCreating("none");
+    setDraftName("");
+    setSmartKind("source");
+    setSmartValue("");
+  }
+
+  async function submitCreate() {
+    const name = draftName.trim();
     if (!name) return;
-    const kind = window.prompt("按什么过滤？输入 source 或 ext", "source");
-    if (kind !== "source" && kind !== "ext") return;
-    const val = window.prompt(`${kind} 的值？例如 source 用 extension，ext 用 png`, kind === "source" ? "extension" : "png");
-    if (!val) return;
-    await api.createSmartFolder(name, `${kind}:${val}`);
-    await useStore.getState().reloadFolders();
+    try {
+      if (creating === "folder") {
+        await api.createFolder(name);
+      } else {
+        const val = smartValue.trim();
+        if (!val) return;
+        // 前端限定 source/ext 前缀：list_assets_smart 未知前缀会静默走 1=1（返回全部）。
+        await api.createSmartFolder(name, `${smartKind}:${val}`);
+      }
+      await reloadFolders();
+    } catch (e) {
+      console.error("create folder failed", e);
+    }
+    resetCreate();
+  }
+
+  function startCreate(kind: "folder" | "smart") {
+    setCreating(kind);
+    setDraftName("");
+    setSmartValue("");
   }
 
   return (
@@ -56,14 +86,74 @@ export function Sidebar() {
 
       <div className="mb-2 flex items-center justify-between text-xs uppercase tracking-wide text-muted">
         <span>文件夹</span>
-        <button
-          onClick={addSmartFolder}
-          className="rounded text-accent hover:opacity-80"
-          title="创建智能文件夹"
-        >
-          + 智能
-        </button>
+        <span className="flex gap-2 normal-case tracking-normal">
+          <button
+            onClick={() => (creating === "folder" ? resetCreate() : startCreate("folder"))}
+            className="rounded text-accent hover:opacity-80"
+            title="新建文件夹"
+          >
+            + 文件夹
+          </button>
+          <button
+            onClick={() => (creating === "smart" ? resetCreate() : startCreate("smart"))}
+            className="rounded text-accent hover:opacity-80"
+            title="新建智能文件夹"
+          >
+            + 智能
+          </button>
+        </span>
       </div>
+
+      {creating !== "none" && (
+        <div className="mb-2 flex flex-col gap-1.5 rounded bg-panel2 p-2 normal-case">
+          <input
+            autoFocus
+            value={draftName}
+            onChange={(e) => setDraftName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") submitCreate();
+              if (e.key === "Escape") resetCreate();
+            }}
+            placeholder={creating === "folder" ? "文件夹名" : "智能文件夹名"}
+            className="rounded bg-panel px-2 py-1 outline-none ring-1 ring-edge focus:ring-accent"
+          />
+          {creating === "smart" && (
+            <div className="flex items-center gap-1">
+              <select
+                value={smartKind}
+                onChange={(e) => setSmartKind(e.target.value as "source" | "ext")}
+                className="rounded bg-panel px-1.5 py-1"
+              >
+                <option value="source">来源 source</option>
+                <option value="ext">格式 ext</option>
+              </select>
+              <input
+                value={smartValue}
+                onChange={(e) => setSmartValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") submitCreate();
+                  if (e.key === "Escape") resetCreate();
+                }}
+                placeholder={smartKind === "source" ? "如 codex / extension" : "如 png"}
+                className="flex-1 rounded bg-panel px-2 py-1 outline-none ring-1 ring-edge focus:ring-accent"
+              />
+            </div>
+          )}
+          <div className="flex gap-2">
+            <button
+              onClick={submitCreate}
+              disabled={!draftName.trim() || (creating === "smart" && !smartValue.trim())}
+              className="rounded bg-accent px-2 py-0.5 text-black disabled:opacity-50"
+            >
+              确定
+            </button>
+            <button onClick={resetCreate} className="text-xs text-muted hover:text-ink">
+              取消
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="space-y-1">
         <div
           className={`flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 ${
@@ -87,18 +177,43 @@ export function Sidebar() {
         {folders
           .filter((f) => f.id !== "root")
           .map((f) => (
-            <div
-              key={f.id}
-              className={`flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 ${
-                currentFolderId === f.id ? "bg-panel2" : "hover:bg-panel2"
-              }`}
-              onClick={() => setCurrentFolder(f.id)}
-              title={f.smart_query ?? ""}
-            >
-              {f.kind === "smart" ? "🔍" : "📁"} {f.name}
-            </div>
+            <FolderRow key={f.id} folder={f} />
           ))}
       </div>
+
+      {autoTags.length > 0 && (
+        <>
+          <div className="mb-2 mt-4 flex items-center justify-between text-xs uppercase tracking-wide text-muted">
+            <span>自动归类</span>
+            {smartFilter?.startsWith("tag:") && (
+              <button
+                onClick={() => setSmartFilter(null)}
+                className="text-accent hover:opacity-80"
+              >
+                清除
+              </button>
+            )}
+          </div>
+          <div className="space-y-1">
+            {autoTags.map((t) => {
+              const active = smartFilter === `tag:${t.name}`;
+              return (
+                <div
+                  key={t.id}
+                  className={`flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 ${
+                    active ? "bg-panel2" : "hover:bg-panel2"
+                  }`}
+                  onClick={() => setSmartFilter(active ? null : `tag:${t.name}`)}
+                  title={`tag:${t.name}`}
+                >
+                  <span className="flex-1 truncate">🏷️ {t.name}</span>
+                  <span className="text-[10px] tabular-nums text-muted">{t.count}</span>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
 
       {topColors.length > 0 && (
         <>
@@ -137,5 +252,139 @@ export function Sidebar() {
         </>
       )}
     </aside>
+  );
+}
+
+/** 单个文件夹行：点击进入 + hover/当前时露出 改名/删除（inline，避开原生对话框）。
+ *  改名 = 行内 input（Enter 存 / Esc 取消）；删除 = 两段式确认。 */
+function FolderRow({ folder }: { folder: Folder }) {
+  const currentFolderId = useStore((s) => s.currentFolderId);
+  const setCurrentFolder = useStore((s) => s.setCurrentFolder);
+  const reloadFolders = useStore((s) => s.reloadFolders);
+  const isSmart = folder.kind === "smart";
+  const active = currentFolderId === folder.id;
+
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(folder.name);
+  const [confirming, setConfirming] = useState(false);
+
+  async function saveRename() {
+    const n = name.trim();
+    setEditing(false);
+    if (!n || n === folder.name) return;
+    try {
+      await api.renameFolder(folder.id, n);
+      await reloadFolders();
+    } catch (e) {
+      console.error("rename failed", e);
+    }
+  }
+
+  async function doDelete() {
+    setConfirming(false);
+    try {
+      await api.deleteFolder(folder.id);
+      // 删的是当前所在夹 → 回「全部」，否则 currentFolderId 悬空导致 list_assets 空白。
+      if (useStore.getState().currentFolderId === folder.id) setCurrentFolder(null);
+      await reloadFolders();
+    } catch (e) {
+      console.error("delete folder failed", e);
+    }
+  }
+
+  if (editing) {
+    return (
+      <div className="flex items-center gap-1 rounded px-1 py-0.5">
+        <input
+          autoFocus
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onFocus={(e) => e.target.select()}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") saveRename();
+            if (e.key === "Escape") setEditing(false);
+          }}
+          className="flex-1 rounded bg-panel2 px-2 py-1 text-xs outline-none ring-1 ring-accent"
+        />
+        <button onClick={saveRename} className="text-xs text-accent hover:opacity-80" title="保存">
+          ✓
+        </button>
+        <button
+          onClick={() => setEditing(false)}
+          className="text-xs text-muted hover:text-ink"
+          title="取消"
+        >
+          ✕
+        </button>
+      </div>
+    );
+  }
+
+  if (confirming) {
+    return (
+      <div className="flex items-center gap-1 rounded bg-panel2 px-2 py-1.5 text-[10px] text-muted">
+        <span className="flex-1 truncate">
+          {isSmart ? "不影响素材，删除？" : "素材回到全部，删除？"}
+        </span>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            doDelete();
+          }}
+          className="rounded bg-red-500 px-1.5 py-0.5 text-white"
+        >
+          删除
+        </button>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            setConfirming(false);
+          }}
+          className="text-muted hover:text-ink"
+        >
+          取消
+        </button>
+      </div>
+    );
+  }
+
+  // hover 或 当前行 才露出操作（否则当前选中夹的操作永远够不着）。
+  const actionCls = active ? "opacity-100" : "opacity-0 group-hover:opacity-100";
+
+  return (
+    <div
+      className={`group flex cursor-pointer items-center gap-1 rounded px-2 py-1.5 ${
+        active ? "bg-panel2" : "hover:bg-panel2"
+      }`}
+      onClick={() => setCurrentFolder(folder.id)}
+      title={folder.smart_query ?? ""}
+    >
+      <span className="flex-1 truncate">
+        {isSmart ? "🔍" : "📁"} {folder.name}
+      </span>
+      <span className={`flex items-center gap-0.5 ${actionCls}`}>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            setEditing(true);
+            setName(folder.name);
+          }}
+          className="rounded px-1 text-xs text-muted hover:text-accent"
+          title="改名"
+        >
+          ✎
+        </button>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            setConfirming(true);
+          }}
+          className="rounded px-1 text-xs text-muted hover:text-red-400"
+          title={isSmart ? "删除（不影响素材）" : "删除（素材回到全部）"}
+        >
+          ✕
+        </button>
+      </span>
+    </div>
   );
 }

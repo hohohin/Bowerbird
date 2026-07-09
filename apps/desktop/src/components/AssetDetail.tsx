@@ -5,7 +5,7 @@ import { open } from "@tauri-apps/plugin-shell";
 import { useStore } from "../store";
 import { api } from "../lib/api";
 import { PromptEditor } from "./PromptEditor";
-import type { Analysis, Asset, CodexHealth } from "../lib/types";
+import type { Analysis, Asset, AssetTag, CodexHealth } from "../lib/types";
 
 const VIDEO_EXTS = ["mp4", "mov", "webm", "mkv", "avi", "m4v"];
 // 反推默认指令：带维度的结构化模板。产出 `- **维度名**` 段落，后端 caption::parse
@@ -232,6 +232,9 @@ export function AssetDetail() {
   const [elapsedMs, setElapsedMs] = useState(0);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [codexHealth, setCodexHealth] = useState<CodexHealth | null>(null);
+  const [tags, setTags] = useState<AssetTag[]>([]);
+  const [addingTag, setAddingTag] = useState(false);
+  const [tagDraft, setTagDraft] = useState("");
   const timerRef = useRef<number | null>(null);
 
   async function loadAnalyses() {
@@ -242,8 +245,45 @@ export function AssetDetail() {
       console.error(e);
     }
   }
+
+  // 类别（P2）：auto=codex 自动归类、manual=用户手加。改后本页 reload + 全局 emit 刷侧栏计数。
+  async function loadTags() {
+    if (!id) return;
+    try {
+      setTags(await api.listAssetTags(id));
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  async function removeTag(t: AssetTag) {
+    if (!id) return;
+    // 按 source 全量替换：移除该 tag，同 source 的其余保留。
+    const keep = tags.filter((x) => x.source === t.source && x.name !== t.name).map((x) => x.name);
+    try {
+      await api.setAssetTags(id, keep, t.source);
+      await loadTags();
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  async function addTag() {
+    const n = tagDraft.trim();
+    if (!id || !n) return;
+    const manuals = tags.filter((x) => x.source === "manual").map((x) => x.name);
+    try {
+      await api.setAssetTags(id, [...manuals, n], "manual");
+      setAddingTag(false);
+      setTagDraft("");
+      await loadTags();
+    } catch (e) {
+      console.error(e);
+    }
+  }
   useEffect(() => {
     loadAnalyses();
+    loadTags();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
@@ -430,6 +470,77 @@ export function AssetDetail() {
                   <div key={i} className="flex-1" style={{ background: c }} />
                 ))}
               </div>
+            )}
+          </div>
+
+          {/* 类别（P2 自动归类 + 手动）：codex 归的为 auto（灰），用户加的为 manual（强调）。 */}
+          <div className="space-y-2">
+            <div className="text-xs font-medium uppercase tracking-wide text-muted">类别</div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {tags.length === 0 && !addingTag && (
+                <span className="text-xs text-muted">
+                  无（采集后会自动归类，也可手动加）
+                </span>
+              )}
+              {tags.map((t) => (
+                <span
+                  key={`${t.source}:${t.name}`}
+                  className={`flex items-center gap-1 rounded px-2 py-0.5 text-[11px] ${
+                    t.source === "auto" ? "bg-panel2 text-muted" : "bg-accent/15 text-accent"
+                  }`}
+                  title={t.source === "auto" ? "自动归类（codex）" : "手动添加"}
+                >
+                  🏷️ {t.name}
+                  <button
+                    onClick={() => removeTag(t)}
+                    className="text-[10px] opacity-60 hover:opacity-100"
+                    title="移除"
+                  >
+                    ✕
+                  </button>
+                </span>
+              ))}
+            </div>
+            {addingTag ? (
+              <div className="flex items-center gap-1">
+                <input
+                  autoFocus
+                  value={tagDraft}
+                  onChange={(e) => setTagDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") addTag();
+                    if (e.key === "Escape") {
+                      setAddingTag(false);
+                      setTagDraft("");
+                    }
+                  }}
+                  placeholder="新类别名"
+                  className="w-32 rounded bg-panel2 px-2 py-1 text-xs outline-none ring-1 ring-edge focus:ring-accent"
+                />
+                <button
+                  onClick={addTag}
+                  disabled={!tagDraft.trim()}
+                  className="rounded bg-accent px-2 py-1 text-xs text-black disabled:opacity-50"
+                >
+                  加
+                </button>
+                <button
+                  onClick={() => {
+                    setAddingTag(false);
+                    setTagDraft("");
+                  }}
+                  className="text-xs text-muted hover:text-ink"
+                >
+                  取消
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setAddingTag(true)}
+                className="text-xs text-accent hover:opacity-80"
+              >
+                + 加类别
+              </button>
             )}
           </div>
 
