@@ -163,14 +163,19 @@ export function MasonryGrid() {
           <span className="relative">👆 请选择一张图片插入到 @ 位置</span>
         </div>
       )}
+      {/* 滚动容器（固定高度 + 竖向滚动）与 columns 容器必须分离：
+          columns 一旦有固定高度，多余内容会横向溢出开新列 → 横向滚动。
+          内层 columns 不设高度，内容平分到 N 列后纵向增长，由本层竖向滚动。 */}
       <div
-        className={`columns-2 gap-2 p-2 md:columns-3 lg:columns-4 xl:columns-5 h-full overflow-y-auto ${
+        className={`h-full overflow-y-auto ${
           boardPickMode ? "cursor-crosshair ring-2 ring-inset ring-accent/40" : ""
         }`}
       >
-        {filtered.map((a) => (
-          <Thumb key={a.id} asset={a} />
-        ))}
+        <div className="columns-2 gap-2 p-2 md:columns-3 lg:columns-4 xl:columns-5">
+          {filtered.map((a) => (
+            <Thumb key={a.id} asset={a} />
+          ))}
+        </div>
       </div>
     </div>
   );
