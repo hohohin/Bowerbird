@@ -23,7 +23,7 @@
 
 ## 目前进展
 
-> 更新时间：2026-07-09
+> 更新时间：2026-07-10
 
 **当前阶段：1.0 功能路径打通 + v1 范围扩展到生成（⑥）+ 创作板 UI 已实现。** 详情页「反推」真正看图（codex CLI + gpt-5.5，ChatGPT 订阅，绕过 API quota）；FTS5 文件名搜索可用；**创作板（真实 prompt 文本编辑器 + @ 选图）已落地**（[CreationBoard.tsx](apps/desktop/src/components/CreationBoard.tsx)）；**生成（⑥）纳入 v1**，待 spike 验证 codex CLI 的画图能力。
 
@@ -48,7 +48,7 @@
 - **生成图入库（2026-07-08 续）**：生成图不再是孤立副本，而是 `ingest_generated` 进库为正式资产（`source=codex`、不算 pHash 故迭代各版相似图都各自保留、不参与去重），进瀑布流浏览。`generate_image` 重构为借用 tx 推 Delta + 返回源图路径（不再 copy / 发 Done），command 层 ingest 后以 asset 路径发 `Done` + emit `library://assets-changed`；移除原 `LibraryPaths.generations` 中转目录。
 - **生成图标记（视觉 + 筛选 + 追溯 + 命名，2026-07-08 续）**：① 视觉——瀑布流缩略图左上 ✨ 角标、详情页头部「✨ codex 生成」徽章（[MasonryGrid.tsx](apps/desktop/src/components/MasonryGrid.tsx) / [AssetDetail.tsx](apps/desktop/src/components/AssetDetail.tsx)）；② 筛选——侧栏「✨ 生成图」走 `source:codex`（新增 [list_assets_smart](apps/desktop/src-tauri/src/commands/library.rs) 命令 + store `smartFilter`，与文件夹/搜索互斥）；③ 来源追溯——`codex_create_image` 把 `{prompt, session_id, references}` 落 `analyses(kind=generation_meta)`，详情页「生成来源」卡片展示 + 「在 codex 中打开会话」；④ 自动命名——[autoname.rs](apps/desktop/src-tauri/src/core/autoname.rs) `spawn_auto_name_only` 给生成图 codex 看图取 ≤8 字中文名（**只命名不写 caption**，不进创作板 @ 引用池），替代 codex 默认的 `ig_<hash>`。
 
-- **P2 标签 + 自动归类（2026-07-09）**：`tags` 表加 `source` 列（auto=codex / manual=用户，[0005_tags_source.sql](apps/desktop/src-tauri/sql/0005_tags_source.sql) + seed 10 个预置词表：人像/风景/静物/美食/动物/建筑/抽象/插画/室内/街景）。**采集即归类**——`spawn_auto_analyze` 除命名 + caption 外，还从 codex 回复抽 `[[CAT: 类别]]` 哨兵 → 写 auto tag（仅当该图尚无 auto tag，防顶手改）；**批量重归类** `reclassify_all`（Toolbar「智能归类全部」）对「无 auto tag 且有 caption」的图喂 caption 文本（不看图）让 codex 重新分类，emit `classify://progress {done,total,ended?}`。tag 检索走 `list_assets_smart` 的 `tag:<name>` JOIN（**不进 FTS**——0002 触发器不维护 tags 列）；侧栏「自动归类」分区 = auto tag + 计数（count>0），点击即 `tag:` 过滤；详情页「类别」板块区分 auto（灰）/ manual（强调），可加/删（按 source 隔离全量替换，互不误伤）。相关 [core/library.rs](apps/desktop/src-tauri/src/core/library.rs)（`get_or_create_tag`/`set_asset_tags`/`list_tags_with_count`/`has_auto_tag`/`list_assets_to_classify`）、[autoname.rs](apps/desktop/src-tauri/src/core/autoname.rs)（`extract_categories`/`apply_auto_categories`/`spawn_reclassify_all`）、[Sidebar.tsx](apps/desktop/src/components/Sidebar.tsx)、[AssetDetail.tsx](apps/desktop/src/components/AssetDetail.tsx)。
+- **P2 标签 + 自动归类（2026-07-09）**：`tags` 表加 `source` 列（auto=codex / manual=用户，[0005_tags_source.sql](apps/desktop/src-tauri/sql/0005_tags_source.sql) + seed 10 个预置词表：人像/风景/静物/美食/动物/建筑/抽象/插画/室内/街景）。**采集即归类**——`spawn_auto_analyze` 除命名 + caption 外，还从 codex 回复抽 `[[CAT: 类别]]` 哨兵 → 写 auto tag（仅当该图尚无 auto tag，防顶手改）；**批量重归类** `reclassify_all`（Toolbar「智能归类全部」）对「无 auto tag 且有 caption」的图喂 caption 文本（不看图）让 codex 重新分类，emit `classify://progress {done,total,ended?}`。tag 检索走 `list_assets_smart` 的 `tag:<name>` JOIN（**不进 FTS**——0002 触发器不维护 tags 列）；侧栏「自动归类」分区（一行两列、tag 以 `#` 前缀展示替代 emoji）= auto tag + 计数（count>0），点击即 `tag:` 过滤；详情页「类别」板块区分 auto（灰）/ manual（强调），可加/删（按 source 隔离全量替换，互不误伤）。相关 [core/library.rs](apps/desktop/src-tauri/src/core/library.rs)（`get_or_create_tag`/`set_asset_tags`/`list_tags_with_count`/`has_auto_tag`/`list_assets_to_classify`）、[autoname.rs](apps/desktop/src-tauri/src/core/autoname.rs)（`extract_categories`/`apply_auto_categories`/`spawn_reclassify_all`）、[Sidebar.tsx](apps/desktop/src/components/Sidebar.tsx)、[AssetDetail.tsx](apps/desktop/src/components/AssetDetail.tsx)。
 - **文件夹管理增强（2026-07-09）**：侧栏文件夹行 inline 改名 / 删除（两段式确认，避开 Tauri WKWebView 对 `window.prompt`/`confirm` 的拦截；新建文件夹/智能文件夹也改 inline 表单）；BatchBar「移入已有文件夹」（select 已有普通夹）。后端新增 `rename_folder` / `delete_folder`（均排除 root）。
 - **全局 codex 状态圈（2026-07-09）**：顶部工具栏最右侧一个圆，反映全局 codex 调用状态——空闲（静态圆环）/ 反推中（圆环旋转，有排队时环内嵌实心圆 + 队列数）/ 导入基础分析中（旋转环）/ 生成中（六格 pulse loader，[uiverse spotty-starfish-76](https://uiverse.io/cosnametv/spotty-starfish-76)，CSS 在 [styles.css](apps/desktop/src/styles.css)）。codex 调用是全局的（反推 / 创作板生成 / 导入基础分析都会触发），故指示器常驻顶栏而非只在创作板（初版放创作板内是错的）。三路信号：反推 `describingId`/`describeQueue`（store 已有）、生成 `generating`（从 CreationBoard 本地态提到 store）、导入分析 `autoAnalyzing`（后端 [autoname.rs](apps/desktop/src-tauri/src/core/autoname.rs) `AUTO_ACTIVE` AtomicUsize + RAII `AutoActiveGuard`，拿信号量 +1 / 释放 -1 时 emit `codex://auto-active`）。组件 [CodexStatus.tsx](apps/desktop/src/components/CodexStatus.tsx)。
 - **P3 色板量化修复（2026-07-09）**：补颜色量化层——12 命名桶（LAB ΔE / CIE76，复用 [color.rs](apps/desktop/src-tauri/src/media/color.rs) `lab_dist`），新建 `asset_colors(asset_id, bucket)` 多对多表（[0006_color_buckets.sql](apps/desktop/src-tauri/sql/0006_color_buckets.sql)，与 `asset_tags` 对称）；入库时 [ingest.rs](apps/desktop/src-tauri/src/core/ingest.rs) `link_colors` 量化挂钩、存量靠 Toolbar「重建色板」（`recompute_colors` 后台扫全库 + emit `color://rebuild-progress`）。色板/筛选全走后端：`palette_overview` 返回 `{key,count,hex}`（hex 后端注入消除前后端双源）、`list_assets_by_color` 带 folder 上下文（folder+color 叠加，在风景夹里筛红色）；colorFilter 与 smartFilter/search 互斥、与 folder 叠加。缩略图色条仍用 `assets.colors` 原始中心色（视觉准确）。
@@ -73,7 +73,7 @@
 
 1. **AI 全外包，不自建模型**：所有理解/分析（VLM 描述、OCR、版式、关键词、灵感卡）**与图像生成**均走 headless codex 子进程（抽象 `CodexProvider` trait，**唯一实现 `CodexCliProvider`** = `codex exec --image`，走 ChatGPT 订阅认证，真正看图）。**禁止** ONNX / CLIP / 本地扩散 / 本地 VLM / tesseract / 向量等任何本地模型（生成亦不自建扩散模型，由 codex 的 tool-use 调用外部画图工具）。Mock / ClaudeCode（`claude -p`）/ DeepSeek / OpenAI HTTP 路线均已验证看图不通或冗余，**已全部移除**（详见踩坑「多模态看图四条路径实测」）。
 2. **v1 做图像生成（⑥）**（2026-07-06 决策，**覆盖开发计划 v1.2 §1.4「不做生成」**）：在原五件套（收集/浏览/搜索/整理/分析）基础上加入生成。生成走 codex CLI 的 tool-use（codex 内置 `imagegen` 技能，不自建扩散模型）。**已端到端打通（2026-07-08）**：codex exec 触发 `imagegen` 画图，产物落 `~/.codex/generated_images/<thread>/`（路径不在 JSONL 一等字段，靠**快照差分**取图，详见踩坑）；创作板生成 → 真流式回显 → `ingest_generated` 入库为正式资产（`source=codex`、不算 pHash 不去重、进瀑布流）→ 多轮 `codex exec resume` 迭代修改 → 生成图标记（✨ 角标 / `source:codex` 筛选 / `generation_meta` 来源追溯 / 自动命名）。**剩余**：`generations` 表落库（开发计划 §4.2 原移除；目前用 `analyses(kind=generation_meta)` 存来源元信息，够用）。
-3. **检索用 FTS5 全文**（文件名 / 标签 / **提示词正文** / 描述 / OCR，`trigram` 起步）。pHash **仅用于采集去重**，不做以图搜图；无 CLIP 语义/向量搜索。
+3. **检索用 FTS5 全文**（`trigram` 起步；**当前仅 `name` 已同步**，`prompt_body`/`annotation`/`ocr` 待 Phase 4）。pHash **仅用于采集去重**，不做以图搜图；无 CLIP 语义/向量搜索。**标签/颜色不走 FTS**——`tag:<name>` 走 `list_assets_smart` JOIN（P2）、颜色走 `asset_colors` JOIN（P3）。
 4. **性能目标：千图级流畅**，不追求万图秒开（据此决定虚拟滚动/缓存不要过度优化）。
 5. **codex 调用走独立 Worker + 持久化 SQLite 任务队列**（可取消 / 重试 / 并发上限）；单个 codex 子进程崩溃/超时不得拖垮主进程与资源库。
 6. **核心数据是「图片 ↔ 提示词映射」**（`asset_prompts`，`role`: main / ref / desc）—— 连接素材管理与 AI 编排的枢纽，所有 P1→P3 功能围绕它展开。
@@ -217,6 +217,7 @@
 - 决策：用 `assets.source="codex"` + 缩略图 ✨ 角标 + 侧栏「✨ 生成图」（`list_assets_smart` 按 `source:codex` 查），**不**用 tags 系统。
 - 根因：`tags` / `asset_tags` 表 + FTS5 `tags` 列虽在 [0001_init.sql](apps/desktop/src-tauri/sql/0001_init.sql) / [0002_fts.sql](apps/desktop/src-tauri/sql/0002_fts.sql) 就绪，但 DB 方法 / Tauri 命令 / 前端 UI **全缺**（纯骨架），从零补成本高；而 `source:` 智能文件夹后端 `list_assets_smart` 已支持、生成图天然有 `source=codex`，零成本即可分类。tags 留待真正需要「一张图多标签 / 用户自定义标签」时再补。
 - 相关文件：[commands/library.rs](apps/desktop/src-tauri/src/commands/library.rs)（`list_assets_smart` 命令）、[MasonryGrid.tsx](apps/desktop/src/components/MasonryGrid.tsx)（✨ 角标）、[Sidebar.tsx](apps/desktop/src/components/Sidebar.tsx)（生成图入口）。
+- **2026-07-09 更新**：tags 系统已于 P2 补全（`get_or_create_tag`/`set_asset_tags`/`reclassify_all` + 前端类别板块，见「P2 标签 + 自动归类」）。上文根因「tags 全缺」是 2026-07-08 当时的事实、现已过时；**生成图仍用 `source` 而非 tag**——`source` 是结构化枚举，更适合「是否 codex 生成」这个二元属性，tag 留给多值语义分类（人像/风景…）。
 
 ### 创作板 codex chunk 监听器泄漏 → 生成图重复（2026-07-09）
 - 现象：生成图「一次返回 2 张一样的」——同一张图被 append 多次。
@@ -236,3 +237,17 @@
 - 解决：colorFilter 加进 refresh useEffect + `library://assets-changed` useEffect 的依赖数组；refresh 加 `colorFilter ? listAssetsByColor(colorFilter, currentFolderId) : ...` 分支。
 - 教训：前端筛选 state 驱动**后端查询**时，承载它的 useEffect 依赖数组必须含该 state，否则「state 变了但查询没重跑」静默失效（从「前端过滤」迁移到「后端查询」时尤易漏）。
 - 相关文件：[App.tsx](apps/desktop/src/App.tsx)（refresh useEffect 依赖）、[store.ts](apps/desktop/src/store.ts)（colorFilter）。
+
+### 创作板图片间文字消失（onPick 陈旧闭包）（2026-07-10）
+- 现象：用户在创作板编辑框打了一串字（如「请参考」），不按回车直接点瀑布流图，预期：文字 + 图都进 token 流；实际：**文字被丢掉**，只剩图。
+- 根因：[CreationBoard.tsx](apps/desktop/src/components/CreationBoard.tsx) 的 `bowerbird://board-asset-picked` 监听器注册在 `useEffect([], ...)` 里，闭包捕获的是**首次渲染**的 `flushDraft`，后者关上了首次渲染的 `draft`（初值 `""`）。React 函数组件每次渲染产生新闭包，但 `useEffect([])` 的那个监听器永远指向第一帧——后续 `setDraft` 更新的是新闭包里的 `draft`，监听器读到的仍是初值 `""`，`flushDraft` 判 `draft ? ... : ts` 走 falsy 分支、不 push 文本 token。**典型 React 陈旧闭包陷阱**。
+- 解决：加 `draftRef = useRef("")`，每次渲染 `draftRef.current = draft` 同步最新值；`flushDraft` 改读 `draftRef.current`。监听器闭包虽陈旧，但 ref 是**可变容器**、`.current` 永远拿到最新值，绕开闭包捕获。未动 useEffect 依赖（仍为 `[]`，避免重复注册监听器）。
+- 教训：`useEffect([])` 里注册的事件监听 / 定时器 / 订阅，其回调访问的 state 必须走 ref；或把回调本身 `useCallback` + 加进依赖。前者更省事。
+- 相关文件：[CreationBoard.tsx](apps/desktop/src/components/CreationBoard.tsx)（`draftRef` + `flushDraft`）。
+
+### 退格删太多（文本 token 原子删）（2026-07-10）
+- 现象：编辑框里退格一次，期望删一个字符；实际**整段文字一闪没了**（或退格一次吞掉一段长文字）。
+- 根因：尾部 `<input>` + token 流模型下，未提交的草稿在 input 里，提交后变 text token。退格分支原本无条件 `setTokens(ts => ts.slice(0, -1))`——把最后一个 token（无论 text / image / keyword）**原子删除**。text token 可能是几十字的整段，一次退格就全没，违反「退格 = 逐字」的用户预期。image / keyword chip 反而希望原子删（一次退格删一个引用）。
+- 解决：退格分支按 token 类型分流：`text` → `slice(0, -1)` 把它移出 token 流 + `setDraft(last.text.slice(0, -1))` 拉回 input 草稿框（少 1 字），用户继续退格就继续在草稿里逐字删；`image` / `keyword` → 原子 `slice(0, -1)`。这样：文字逐字删、引用一次删，符合直觉。
+- 局限（诚实标注）：本编辑器是**尾部 input 模型**（只能从末尾追加 / 删），光标定位到中段编辑不支持。中段编辑需重写为 contenteditable / ProseMirror，本次不做。
+- 相关文件：[CreationBoard.tsx](apps/desktop/src/components/CreationBoard.tsx)（`onKeyDown` Backspace 分支）。

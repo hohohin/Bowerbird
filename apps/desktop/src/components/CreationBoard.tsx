@@ -35,10 +35,14 @@ export function CreationBoard() {
   const cancelPick = useStore((s) => s.cancelBoardImagePick);
 
   const inputRef = useRef<HTMLInputElement>(null);
+  // draft 的 ref 镜像：onPick 注册在 useEffect([]) 里是「首渲染闭包」，直接读 draft 会拿到
+  // 永远为 "" 的初值 → 点图时 flushDraft 把用户刚打的字（图与图之间的文字）丢掉。用 ref 取最新值。
+  const draftRef = useRef("");
   const [tokens, setTokens] = useState<Token[]>([
     { kind: "text", text: "请参考" },
   ]);
   const [draft, setDraft] = useState("");
+  draftRef.current = draft; // 每次渲染同步，供 onPick 陈旧闭包读取最新 draft
   const [showKeywordHints, setShowKeywordHints] = useState(false);
   // 维度 chips 作用于「最近插入的那张图」——它的 sections 即下拉选项。
   const [chipAssetId, setChipAssetId] = useState<string | null>(null);
@@ -132,7 +136,8 @@ export function CreationBoard() {
   }, []);
 
   function flushDraft() {
-    setTokens((ts) => (draft ? [...ts, { kind: "text", text: draft }] : ts));
+    const d = draftRef.current;
+    setTokens((ts) => (d ? [...ts, { kind: "text", text: d }] : ts));
     setDraft("");
   }
 
@@ -168,7 +173,15 @@ export function CreationBoard() {
     }
     if (e.key === "Backspace" && !draft && tokens.length > 0) {
       e.preventDefault();
-      setTokens((ts) => ts.slice(0, -1));
+      const last = tokens[tokens.length - 1];
+      if (last.kind === "text") {
+        // 文本 token 拉回 draft 逐字删，避免一次退格吞掉整段文字
+        setTokens((ts) => ts.slice(0, -1));
+        setDraft(last.text.slice(0, -1));
+      } else {
+        // image / keyword chip：原子删除（一次退格删一个引用 / 维度）
+        setTokens((ts) => ts.slice(0, -1));
+      }
       return;
     }
     if ([" ", "Enter", "，", ",", "。", "."].includes(e.key)) {
