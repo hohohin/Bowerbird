@@ -490,7 +490,7 @@ export function AssetDetail() {
                   }`}
                   title={t.source === "auto" ? "自动归类（codex）" : "手动添加"}
                 >
-                  🏷️ {t.name}
+                  <span className="opacity-50">#</span> {t.name}
                   <button
                     onClick={() => removeTag(t)}
                     className="text-[10px] opacity-60 hover:opacity-100"

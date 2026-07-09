@@ -194,19 +194,20 @@ export function Sidebar() {
               </button>
             )}
           </div>
-          <div className="space-y-1">
+          <div className="grid grid-cols-2 gap-1">
             {autoTags.map((t) => {
               const active = smartFilter === `tag:${t.name}`;
               return (
                 <div
                   key={t.id}
-                  className={`flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 ${
+                  className={`flex cursor-pointer items-center gap-1 rounded px-2 py-1.5 text-xs ${
                     active ? "bg-panel2" : "hover:bg-panel2"
                   }`}
                   onClick={() => setSmartFilter(active ? null : `tag:${t.name}`)}
                   title={`tag:${t.name}`}
                 >
-                  <span className="flex-1 truncate">🏷️ {t.name}</span>
+                  <span className="text-muted">#</span>
+                  <span className="flex-1 truncate">{t.name}</span>
                   <span className="text-[10px] tabular-nums text-muted">{t.count}</span>
                 </div>
               );
