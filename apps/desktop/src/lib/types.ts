@@ -40,6 +40,13 @@ export interface AssetTag {
   source: string;
 }
 
+/** 色板聚合：颜色桶 + 资产数 + 桶代表 hex（hex 由后端注入，消除双源）。 */
+export interface ColorBucket {
+  key: string;
+  count: number;
+  hex: string;
+}
+
 export interface CaptionSection {
   title: string;
   body: string;

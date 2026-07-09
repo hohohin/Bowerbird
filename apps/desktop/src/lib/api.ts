@@ -5,6 +5,7 @@ import type {
   Asset,
   AssetPrompt,
   AssetTag,
+  ColorBucket,
   CodexHealth,
   CreationPack,
   Folder,
@@ -81,6 +82,12 @@ export const api = {
   setAssetTags: (assetId: string, names: string[], source: string) =>
     invoke<void>("set_asset_tags", { assetId, names, source }),
   reclassifyAll: () => invoke<void>("reclassify_all"),
+
+  // 颜色量化（P3）
+  paletteOverview: () => invoke<ColorBucket[]>("palette_overview"),
+  listAssetsByColor: (bucket: string, folderId?: string) =>
+    invoke<Asset[]>("list_assets_by_color", { bucket, folderId: folderId ?? null }),
+  recomputeColors: () => invoke<void>("recompute_colors"),
   assemblePack: (assetIds: string[]) =>
     invoke<CreationPack>("assemble_pack", { assetIds }),
   codexGeneratePromptForAsset: (assetId: string, role: string) =>

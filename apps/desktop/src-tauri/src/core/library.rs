@@ -106,6 +106,14 @@ pub struct AssetTag {
     pub source: String,
 }
 
+/// 色板聚合：某颜色桶 + 资产数 + 桶代表 hex（前端色块渲染，hex 由后端注入消除双源）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ColorBucket {
+    pub key: String,
+    pub count: i64,
+    pub hex: String,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct CaptionPayload {
     sections: Option<Vec<CaptionSection>>,
@@ -800,6 +808,84 @@ impl Database {
         }
         Ok(out)
     }
+
+    // ============ 颜色量化桶（P3）============
+    // asset_colors(asset_id, bucket) 多对多；与 asset_tags 对称。不进 FTS（结构化查询）。
+
+    /// 全量替换某资产的颜色桶（事务 DELETE + INSERT OR IGNORE，幂等）。
+    pub fn set_asset_colors(&self, asset_id: &str, buckets: &[&str]) -> AppResult<()> {
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        tx.execute(
+            "DELETE FROM asset_colors WHERE asset_id = ?1",
+            rusqlite::params![asset_id],
+        )?;
+        for b in buckets {
+            tx.execute(
+                "INSERT OR IGNORE INTO asset_colors (asset_id, bucket) VALUES (?1, ?2)",
+                rusqlite::params![asset_id, b],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// 按颜色桶筛选资产，带 folder 上下文（folder + color 叠加）。folder_id=None 表示全库。
+    pub fn list_assets_by_color(
+        &self,
+        folder_id: Option<&str>,
+        bucket: &str,
+        limit: i64,
+        offset: i64,
+    ) -> AppResult<Vec<Asset>> {
+        let conn = self.conn.lock().unwrap();
+        let sql = format!(
+            "SELECT {ASSET_COLS} FROM assets \
+             WHERE (?3 IS NULL OR folder_id IS ?3) \
+             AND id IN (SELECT asset_id FROM asset_colors WHERE bucket = ?4) \
+             ORDER BY created_at DESC LIMIT ?1 OFFSET ?2"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params![limit, offset, folder_id, bucket], asset_from_row)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    /// 全库色板：每个桶 + 资产数（count>0），hex 从 color::BUCKETS 注入。不受 500 限制。
+    pub fn palette_overview(&self) -> AppResult<Vec<ColorBucket>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT bucket, COUNT(*) AS cnt FROM asset_colors \
+             GROUP BY bucket HAVING cnt > 0 ORDER BY cnt DESC LIMIT 12",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+        let mut out = Vec::new();
+        for r in rows {
+            let (key, count) = r?;
+            let hex = crate::media::color::BUCKETS
+                .iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, h)| h.to_string())
+                .unwrap_or_else(|| "#888888".to_string());
+            out.push(ColorBucket { key, count, hex });
+        }
+        Ok(out)
+    }
+
+    /// 列出所有有 colors 的 (id, colors_json)，供重建色板（P3 recompute_colors）。
+    pub fn list_colors_for_recompute(&self) -> AppResult<Vec<(String, String)>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT id, colors FROM assets WHERE colors IS NOT NULL")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
 }
 
 #[cfg(test)]
@@ -1049,5 +1135,40 @@ mod tests {
         assert_eq!(counts.len(), 1, "只有被用到的 auto tag 才出现（seed 其余 count=0）");
         assert_eq!(counts[0].name, "风景");
         assert_eq!(counts[0].count, 1);
+    }
+
+    #[test]
+    fn asset_colors_set_idempotent_and_palette_and_folder_filter() {
+        let db = db();
+        let a1 = put_asset(&db, "红图"); // put_asset 返回 id(String)
+        let a2 = put_asset(&db, "蓝图");
+
+        // a1 放进一个夹（测 folder + color 叠加）
+        let fid = "01TESTCOLORFOLDER".to_string();
+        db.create_folder(&fid, "色夹", None).unwrap();
+        db.set_assets_folder(&[a1.clone()], &fid).unwrap();
+
+        // set 桶（幂等：重复跑不重复）
+        db.set_asset_colors(&a1, &["red", "orange"]).unwrap();
+        db.set_asset_colors(&a1, &["red", "orange"]).unwrap();
+        db.set_asset_colors(&a2, &["blue"]).unwrap();
+
+        // palette_overview：3 桶，hex 从 BUCKETS 注入
+        let pal = db.palette_overview().unwrap();
+        assert_eq!(pal.len(), 3);
+        let red = pal.iter().find(|c| c.key == "red").unwrap();
+        assert_eq!(red.count, 1);
+        assert_eq!(red.hex, "#D92424");
+
+        // 全库 red → a1
+        let reds = db.list_assets_by_color(None, "red", 100, 0).unwrap();
+        assert_eq!(reds.len(), 1);
+        assert_eq!(reds[0].id, a1);
+
+        // 带文件夹：色夹里 blue → 空（a2 不在夹）；色夹里 red → a1
+        assert!(db.list_assets_by_color(Some(&fid), "blue", 100, 0).unwrap().is_empty());
+        let in_folder = db.list_assets_by_color(Some(&fid), "red", 100, 0).unwrap();
+        assert_eq!(in_folder.len(), 1);
+        assert_eq!(in_folder[0].id, a1);
     }
 }

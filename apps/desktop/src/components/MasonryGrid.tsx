@@ -131,17 +131,13 @@ function Thumb({ asset }: { asset: Asset }) {
   );
 }
 
-/** 瀑布流（CSS columns masonry + 缩略图懒加载 + 颜色前端过滤）。 */
+/** 瀑布流（CSS columns masonry + 缩略图懒加载）。颜色筛选走后端（App refresh 按 colorFilter 分流），非前端过滤。 */
 export function MasonryGrid() {
   const assets = useStore((s) => s.assets);
-  const colorFilter = useStore((s) => s.colorFilter);
   const boardOpen = useStore((s) => s.boardOpen);
   const boardPickMode = useStore((s) => s.boardPickMode);
 
-  const filtered = useMemo(() => {
-    if (!colorFilter) return assets;
-    return assets.filter((a) => parseColors(a.colors).includes(colorFilter));
-  }, [assets, colorFilter]);
+  const filtered = assets;
 
   if (filtered.length === 0) {
     return (

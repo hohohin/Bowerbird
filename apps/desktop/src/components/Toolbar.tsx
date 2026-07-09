@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useStore } from "../store";
 import { api } from "../lib/api";
 import { CodexStatus } from "./CodexStatus";
@@ -13,6 +15,24 @@ export function Toolbar({ onRefresh }: { onRefresh: () => Promise<void> }) {
   const searchQuery = useStore((s) => s.searchQuery);
   const setSearchQuery = useStore((s) => s.setSearchQuery);
   const classifyProgress = useStore((s) => s.classifyProgress);
+  const [colorRebuild, setColorRebuild] = useState<{ done: number; total: number } | null>(null);
+
+  // 重建色板进度（P3）：color://rebuild-progress。
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    let alive = true;
+    listen<{ done: number; total: number; ended?: boolean }>("color://rebuild-progress", (e) => {
+      if (!alive) return;
+      setColorRebuild(e.payload.ended ? null : { done: e.payload.done, total: e.payload.total });
+    }).then((u) => {
+      if (alive) unlisten = u;
+      else u();
+    });
+    return () => {
+      alive = false;
+      unlisten?.();
+    };
+  }, []);
 
   async function withBusy(fn: () => Promise<unknown>) {
     setLoading(true);
@@ -68,6 +88,19 @@ export function Toolbar({ onRefresh }: { onRefresh: () => Promise<void> }) {
       {classifyProgress && (
         <span className="text-xs tabular-nums text-muted">
           归类中 {classifyProgress.done}/{classifyProgress.total}
+        </span>
+      )}
+      <button
+        onClick={() => void api.recomputeColors()}
+        disabled={busy || !!colorRebuild}
+        className="rounded-md bg-panel2 px-3 py-1.5 text-sm text-ink hover:bg-edge disabled:opacity-50"
+        title="重新量化全库主色到颜色桶（存量图补上色板）"
+      >
+        重建色板
+      </button>
+      {colorRebuild && (
+        <span className="text-xs tabular-nums text-muted">
+          重建中 {colorRebuild.done}/{colorRebuild.total}
         </span>
       )}
       <input

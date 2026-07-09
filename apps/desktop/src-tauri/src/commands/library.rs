@@ -8,7 +8,7 @@ use ulid::Ulid;
 
 use crate::core::autoname;
 use crate::core::ingest;
-use crate::core::library::{Analysis, Asset, AssetTag, Folder, PromptedAsset, TagCount};
+use crate::core::library::{Analysis, Asset, AssetTag, ColorBucket, Folder, PromptedAsset, TagCount};
 use crate::core::paths::LibraryPaths;
 use crate::db::Database;
 use crate::error::AppError;
@@ -297,5 +297,70 @@ pub async fn reclassify_all(
     db: State<'_, Arc<Database>>,
 ) -> Result<(), AppError> {
     autoname::spawn_reclassify_all(app, db.inner().clone());
+    Ok(())
+}
+
+// ============ 颜色量化（P3）============
+
+/// 全库色板：每个桶 + 资产数 + 桶代表 hex（侧栏色板渲染）。
+#[tauri::command]
+pub async fn palette_overview(db: State<'_, Arc<Database>>) -> Result<Vec<ColorBucket>, AppError> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || db.palette_overview())
+        .await
+        .map_err(|e| AppError::Other(e.to_string()))?
+}
+
+/// 按颜色桶筛选资产，带 folder 上下文（folder+color 叠加）。folder_id=None 全库。
+#[tauri::command]
+pub async fn list_assets_by_color(
+    db: State<'_, Arc<Database>>,
+    folder_id: Option<String>,
+    bucket: String,
+    limit: Option<i64>,
+    offset: Option<i64>,
+) -> Result<Vec<Asset>, AppError> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        db.list_assets_by_color(folder_id.as_deref(), &bucket, limit.unwrap_or(500), offset.unwrap_or(0))
+    })
+    .await
+    .map_err(|e| AppError::Other(e.to_string()))?
+}
+
+/// 重建色板：扫所有 colors 非空的图，重新量化写 asset_colors（幂等）。
+/// 立即返回，后台逐张跑并 emit `color://rebuild-progress {done,total,ended?}`。
+#[tauri::command]
+pub async fn recompute_colors(
+    app: AppHandle,
+    db: State<'_, Arc<Database>>,
+) -> Result<(), AppError> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        let rows = match db.list_colors_for_recompute() {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!("recompute_colors list: {e}");
+                return;
+            }
+        };
+        let total = rows.len();
+        let _ = app.emit(
+            "color://rebuild-progress",
+            serde_json::json!({ "done": 0, "total": total }),
+        );
+        for (i, (id, colors)) in rows.iter().enumerate() {
+            let buckets = crate::media::color::colors_to_buckets(colors);
+            let _ = db.set_asset_colors(id, &buckets);
+            let _ = app.emit(
+                "color://rebuild-progress",
+                serde_json::json!({ "done": i + 1, "total": total }),
+            );
+        }
+        let _ = app.emit(
+            "color://rebuild-progress",
+            serde_json::json!({ "done": total, "total": total, "ended": true }),
+        );
+    });
     Ok(())
 }

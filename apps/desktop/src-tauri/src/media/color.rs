@@ -36,7 +36,7 @@ fn lab_to_hex(lab: Lab) -> String {
     format!("#{r:02x}{g:02x}{b:02x}")
 }
 
-fn lab_dist(a: &Lab, b: &Lab) -> f32 {
+pub(crate) fn lab_dist(a: &Lab, b: &Lab) -> f32 {
     ((a.l - b.l).powi(2) + (a.a - b.a).powi(2) + (a.b - b.b).powi(2)).sqrt()
 }
 
@@ -73,4 +73,98 @@ fn kmeans(pixels: &[Lab], k: usize, iters: usize) -> Vec<Lab> {
         }
     }
     centers
+}
+
+/// 12 个命名色桶（key, 代表 hex）。量化时取 LAB ΔE 最近桶。
+/// 略降饱和 / 避开纯红纯黑，更贴近真实照片主色。key 用英文（DB 存 key），前端做中文映射。
+pub const BUCKETS: &[(&str, &str)] = &[
+    ("red", "#D92424"),
+    ("orange", "#E8722C"),
+    ("yellow", "#E8C62A"),
+    ("green", "#3DA535"),
+    ("cyan", "#1FB5C4"),
+    ("blue", "#2D5BD9"),
+    ("purple", "#7B3FD9"),
+    ("pink", "#E056B0"),
+    ("brown", "#7A4A1E"),
+    ("gray", "#8A8A8A"),
+    ("white", "#F2F2F2"),
+    ("black", "#1A1A1A"),
+];
+
+/// hex(`#rrggbb`) → Lab。非 6 位 hex 返回 None。
+fn hex_to_lab(hex: &str) -> Option<Lab> {
+    let h = hex.trim().trim_start_matches('#');
+    if h.len() != 6 {
+        return None;
+    }
+    let r = u8::from_str_radix(&h[0..2], 16).ok()?;
+    let g = u8::from_str_radix(&h[2..4], 16).ok()?;
+    let b = u8::from_str_radix(&h[4..6], 16).ok()?;
+    Some(Srgb::new(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0).into_color())
+}
+
+/// 把一个 hex 量化到最近的命名桶（LAB ΔE 最小，CIE76）。非法 hex → None。
+pub fn hex_to_bucket(hex: &str) -> Option<&'static str> {
+    let target = hex_to_lab(hex)?;
+    let mut best: Option<(&'static str, f32)> = None;
+    for (key, bhex) in BUCKETS {
+        let Some(blab) = hex_to_lab(bhex) else { continue };
+        let d = lab_dist(&target, &blab);
+        match best {
+            Some((_, bd)) if d >= bd => {}
+            _ => best = Some((key, d)),
+        }
+    }
+    best.map(|(k, _)| k)
+}
+
+/// `assets.colors` 的 JSON（hex 数组）→ 去重保序的桶 key 列表（入库 + 回填共用）。
+pub fn colors_to_buckets(colors_json: &str) -> Vec<&'static str> {
+    let Ok(arr) = serde_json::from_str::<Vec<String>>(colors_json) else {
+        return Vec::new();
+    };
+    let mut out: Vec<&'static str> = Vec::new();
+    for hex in arr {
+        if let Some(b) = hex_to_bucket(&hex) {
+            if !out.contains(&b) {
+                out.push(b);
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hex_to_bucket_maps_primary_colors() {
+        assert_eq!(hex_to_bucket("#D92424"), Some("red")); // 桶代表色本身
+        assert_eq!(hex_to_bucket("#ff0000"), Some("red")); // 纯红 → red
+        assert_eq!(hex_to_bucket("#ffffff"), Some("white"));
+        assert_eq!(hex_to_bucket("#000000"), Some("black"));
+        assert_eq!(hex_to_bucket("#1FB5C4"), Some("cyan"));
+        assert_eq!(hex_to_bucket("#2D5BD9"), Some("blue"));
+    }
+
+    #[test]
+    fn hex_to_bucket_rejects_invalid() {
+        assert_eq!(hex_to_bucket("not-a-color"), None);
+        assert_eq!(hex_to_bucket("#abc"), None); // 非 6 位
+    }
+
+    #[test]
+    fn colors_to_buckets_dedups_same_bucket() {
+        // 两个不同红 hex 都归 red → 去重为一个 red；cyan 单独保留。
+        let bs = colors_to_buckets(r##"["#ff0000","#ee2222","#1FB5C4"]"##);
+        assert_eq!(bs, vec!["red", "cyan"]);
+    }
+
+    #[test]
+    fn colors_to_buckets_handles_bad_json() {
+        assert!(colors_to_buckets("not json").is_empty());
+        assert!(colors_to_buckets(r##"["#bad"]"##).is_empty());
+    }
 }

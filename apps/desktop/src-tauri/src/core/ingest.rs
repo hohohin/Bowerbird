@@ -95,6 +95,7 @@ pub fn ingest_file(paths: &LibraryPaths, db: &Database, source: &Path) -> AppRes
         file_mtime: Some(file_mtime),
     };
     db.insert_asset(&asset)?;
+    link_colors(db, &asset.id, asset.colors.as_deref());
     Ok(asset)
 }
 
@@ -158,7 +159,21 @@ pub fn ingest_generated(paths: &LibraryPaths, db: &Database, source: &Path) -> A
         file_mtime: Some(now),
     };
     db.insert_asset(&asset)?;
+    link_colors(db, &asset.id, asset.colors.as_deref());
     Ok(asset)
+}
+
+/// 把 assets.colors（JSON hex 数组）量化成桶写入 asset_colors（P3）。
+/// ingest_file / ingest_generated 共用；colors 为空或量化无桶则跳过。
+fn link_colors(db: &Database, id: &str, colors: Option<&str>) {
+    let Some(json) = colors else { return };
+    let buckets = media::color::colors_to_buckets(json);
+    if buckets.is_empty() {
+        return;
+    }
+    if let Err(e) = db.set_asset_colors(id, &buckets) {
+        tracing::warn!("link_colors {id}: {e}");
+    }
 }
 
 /// 递归遍历目录，返回所有支持图片格式的文件路径。

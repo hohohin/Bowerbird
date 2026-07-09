@@ -1,12 +1,18 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useStore } from "../store";
 import { api } from "../lib/api";
 import type { Folder } from "../lib/types";
 
+/** 颜色桶 key → 中文 label（P3；hex 由后端 palette_overview 带回）。 */
+const COLOR_LABELS: Record<string, string> = {
+  red: "红", orange: "橙", yellow: "黄", green: "绿", cyan: "青",
+  blue: "蓝", purple: "紫", pink: "粉", brown: "棕", gray: "灰",
+  white: "白", black: "黑",
+};
+
 /** 左侧栏：素材统计 + 文件夹/智能文件夹 + 颜色筛选。 */
 export function Sidebar() {
   const total = useStore((s) => s.total);
-  const assets = useStore((s) => s.assets);
   const selectedCount = useStore((s) => s.selectedIds.size);
   const currentFolderId = useStore((s) => s.currentFolderId);
   const setCurrentFolder = useStore((s) => s.setCurrentFolder);
@@ -24,26 +30,7 @@ export function Sidebar() {
   const [smartKind, setSmartKind] = useState<"source" | "ext">("source");
   const [smartValue, setSmartValue] = useState("");
 
-  // 全库 top-12 主色（聚合 assets.colors）。
-  const topColors = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const a of assets) {
-      try {
-        const cs = a.colors ? (JSON.parse(a.colors) as unknown) : [];
-        if (Array.isArray(cs)) {
-          for (const c of cs) {
-            if (typeof c === "string") counts.set(c, (counts.get(c) ?? 0) + 1);
-          }
-        }
-      } catch {
-        /* ignore */
-      }
-    }
-    return Array.from(counts.entries())
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 12)
-      .map(([c]) => c);
-  }, [assets]);
+  const palette = useStore((s) => s.palette);
 
   function resetCreate() {
     setCreating("none");
@@ -216,7 +203,7 @@ export function Sidebar() {
         </>
       )}
 
-      {topColors.length > 0 && (
+      {palette.length > 0 && (
         <>
           <div className="mb-2 mt-4 flex items-center justify-between text-xs uppercase tracking-wide text-muted">
             <span>颜色</span>
@@ -230,15 +217,15 @@ export function Sidebar() {
             )}
           </div>
           <div className="grid grid-cols-6 gap-1.5">
-            {topColors.map((c) => (
+            {palette.map((c) => (
               <button
-                key={c}
-                onClick={() => setColorFilter(colorFilter === c ? null : c)}
+                key={c.key}
+                onClick={() => setColorFilter(colorFilter === c.key ? null : c.key)}
                 className={`aspect-square rounded ring-offset-2 ring-offset-panel ${
-                  colorFilter === c ? "ring-2 ring-accent" : ""
+                  colorFilter === c.key ? "ring-2 ring-accent" : ""
                 }`}
-                style={{ background: c }}
-                title={c}
+                style={{ background: c.hex }}
+                title={`${COLOR_LABELS[c.key] ?? c.key} (${c.count})`}
               />
             ))}
           </div>

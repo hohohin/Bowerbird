@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { api } from "./lib/api";
-import type { Asset, Folder, PromptedAsset, TagCount } from "./lib/types";
+import type { Asset, ColorBucket, Folder, PromptedAsset, TagCount } from "./lib/types";
 
 type Mode = "browse" | "manage";
 
@@ -10,7 +10,8 @@ interface State {
   selectedIds: Set<string>;
   loading: boolean;
   currentFolderId: string | null;
-  colorFilter: string | null; // hex；前端过滤
+  colorFilter: string | null; // 颜色桶 key（P3，后端 list_assets_by_color 查询）
+  palette: ColorBucket[]; // 全库色板（侧栏渲染，后端 palette_overview）
   searchQuery: string; // FTS5 搜索；空串 = 不搜
   smartFilter: string | null; // 智能查询（如 source:codex），与文件夹/搜索互斥；侧栏「✨ 生成图」用
   mode: Mode;
@@ -40,6 +41,8 @@ interface State {
   reloadFolders: () => Promise<void>;
   setAutoTags: (t: TagCount[]) => void;
   reloadAutoTags: () => Promise<void>;
+  setPalette: (p: ColorBucket[]) => void;
+  reloadPalette: () => Promise<void>;
   setClassifyProgress: (p: { done: number; total: number } | null) => void;
   toggleBoard: () => void;
   startBoardImagePick: () => void;
@@ -107,6 +110,7 @@ export const useStore = create<State>((set, get) => {
   folders: [],
   autoTags: [],
   classifyProgress: null,
+  palette: [],
   boardOpen: false,
   boardPickMode: false,
   promptedAssets: [],
@@ -121,12 +125,14 @@ export const useStore = create<State>((set, get) => {
     }),
   clearSelect: () => set({ selectedIds: new Set() }),
   setLoading: (loading) => set({ loading }),
-  // 切文件夹时清颜色筛选与详情（详情指向的图可能不在新文件夹里）。
+  // 切文件夹保留颜色筛选（P3：folder + color 叠加）；清详情 + smartFilter（互斥）。
   setCurrentFolder: (currentFolderId) =>
-    set({ currentFolderId, colorFilter: null, detailAssetId: null, smartFilter: null }),
-  setColorFilter: (colorFilter) => set({ colorFilter }),
+    set({ currentFolderId, detailAssetId: null, smartFilter: null }),
+  // 颜色与 smartFilter/search 互斥（保留 folder 叠加）。
+  setColorFilter: (colorFilter) =>
+    set({ colorFilter, smartFilter: null, searchQuery: "" }),
   setSearchQuery: (searchQuery) =>
-    set({ searchQuery, detailAssetId: null, smartFilter: null }),
+    set({ searchQuery, detailAssetId: null, smartFilter: null, colorFilter: null }),
   // 智能查询（如 source:codex）与文件夹/搜索互斥：设它就清 folder/colorFilter。
   setSmartFilter: (smartFilter) =>
     set({ smartFilter, currentFolderId: null, colorFilter: null, detailAssetId: null }),
@@ -148,6 +154,14 @@ export const useStore = create<State>((set, get) => {
       set({ autoTags: await api.listTags("auto") });
     } catch (e) {
       console.error("reloadAutoTags failed", e);
+    }
+  },
+  setPalette: (palette) => set({ palette }),
+  reloadPalette: async () => {
+    try {
+      set({ palette: await api.paletteOverview() });
+    } catch (e) {
+      console.error("reloadPalette failed", e);
     }
   },
   setClassifyProgress: (classifyProgress) => set({ classifyProgress }),
