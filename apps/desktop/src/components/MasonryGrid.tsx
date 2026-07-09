@@ -74,12 +74,13 @@ function Thumb({ asset }: { asset: Asset }) {
       }`}
       onClick={() => {
         const st = useStore.getState();
-        // 创作板 @ 挑图态优先：把资产 id 交给创作板插入到编辑框当前位置
-        if (st.boardPickMode) {
+        // 创作板打开 = 挑图上下文：点瀑布流图即插入编辑器（等同 @，但无需先打 @）。
+        // @ 挑图态（boardPickMode）是同一条路径的「显式高亮」版本，插入后退出挑图态。
+        if (st.boardOpen) {
           window.dispatchEvent(
             new CustomEvent("bowerbird://board-asset-picked", { detail: asset.id })
           );
-          st.finishBoardImagePick();
+          if (st.boardPickMode) st.finishBoardImagePick();
         } else if (st.mode === "manage") st.toggleSelect(asset.id);
         else st.openDetail(asset.id);
       }}

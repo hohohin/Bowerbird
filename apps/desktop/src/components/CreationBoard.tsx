@@ -81,6 +81,7 @@ export function CreationBoard() {
 
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
+    let cancelled = false;
     listen<CodexChunk>("codex://chunk", (e) => {
       const c = e.payload;
       if (c.kind === "delta") setStreaming((s) => s + c.text);
@@ -97,8 +98,17 @@ export function CreationBoard() {
           });
         }
       } else if (c.kind === "error") setStreaming((s) => s + `\n[error: ${c.message}]`);
-    }).then((u) => (unlisten = u));
-    return () => unlisten?.();
+    }).then((u) => {
+      // listen() 是异步的：若 cleanup 已先跑（StrictMode 双挂载 / 开关创作板卸载），
+      // unlisten 还是 undefined 会被漏掉 → 监听器泄漏 → Done 被多个监听器各收一次
+      // → 同一张图 append 多次（"一次返回 2 张一样的"）。这里 resolve 时若已 cancel 立即注销。
+      if (cancelled) u();
+      else unlisten = u;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
   }, []);
 
   // 瀑布流选中图片后，由 MasonryGrid dispatch 此事件。
@@ -268,7 +278,7 @@ export function CreationBoard() {
       <div className="flex-1 overflow-y-auto p-3">
         <div className="rounded-lg border border-edge bg-[#13171f] p-3 text-sm leading-8 text-ink">
           <div className="mb-2 text-[11px] text-muted">
-            像跟 AI 输入 prompt 一样书写；输入 <span className="rounded bg-panel2 px-1 text-accent">@</span> 选择图片。
+            像跟 AI 输入 prompt 一样书写；<span className="rounded bg-panel2 px-1 text-accent">点瀑布流图片</span> 或输入 <span className="rounded bg-panel2 px-1 text-accent">@</span> 插入参考图。
           </div>
           <div
             className="min-h-36 cursor-text rounded bg-panel2/40 p-2 outline-none ring-1 ring-edge focus-within:ring-accent"
@@ -283,7 +293,7 @@ export function CreationBoard() {
               onChange={(e) => onDraftChange(e.target.value)}
               onKeyDown={onKeyDown}
               disabled={boardPickMode}
-              placeholder={tokens.length === 0 ? "请输入 prompt，输入 @ 选择图片…" : ""}
+              placeholder={tokens.length === 0 ? "请输入 prompt（点图片或输 @ 插入参考图）…" : ""}
               className="min-w-16 bg-transparent text-ink outline-none placeholder:text-muted disabled:cursor-wait"
             />
           </div>
