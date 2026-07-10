@@ -254,12 +254,18 @@ pub async fn codex_create_image(
     let dbw = db.inner().clone();
     let pw = paths.inner().clone();
     let srcs = outcome.source_images.clone();
+    let session_for_ingest = outcome.session_id.clone();
     let gen_assets: Vec<crate::core::library::Asset> =
         tokio::task::spawn_blocking(
             move || -> Result<Vec<crate::core::library::Asset>, AppError> {
                 let mut out = Vec::new();
                 for src in &srcs {
-                    out.push(crate::core::ingest::ingest_generated(&pw, &dbw, src)?);
+                    out.push(crate::core::ingest::ingest_generated(
+                        &pw,
+                        &dbw,
+                        src,
+                        session_for_ingest.as_deref(),
+                    )?);
                 }
                 Ok(out)
             },

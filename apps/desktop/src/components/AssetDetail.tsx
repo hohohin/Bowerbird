@@ -210,6 +210,7 @@ export function AssetDetail() {
   const id = useStore((s) => s.detailAssetId);
   const assets = useStore((s) => s.assets);
   const closeDetail = useStore((s) => s.closeDetail);
+  const openDetail = useStore((s) => s.openDetail);
   const runDescribe = useStore((s) => s.runDescribe);
   const cancelDescribe = useStore((s) => s.cancelDescribe);
   const describeStartedAt = useStore((s) => s.describeStartedAt);
@@ -220,7 +221,11 @@ export function AssetDetail() {
     return i >= 0 ? i + 1 : 0;
   });
   const queued = queuePosition > 0;
-  const asset: Asset | undefined = assets.find((a) => a.id === id);
+  const [group, setGroup] = useState<Asset[]>([]);
+  // 同流程轮播：生成图取整组过程图。sibling 可能被合并出主列表，故从 group 解析后再回退 assets。
+  const asset: Asset | undefined = group.find((a) => a.id === id) ?? assets.find((a) => a.id === id);
+  // 同流程轮播位置（生成图组内第几张；-1 = 不在组 / 非生成图）。
+  const groupPos = asset ? group.findIndex((a) => a.id === asset.id) : -1;
 
   const [analyses, setAnalyses] = useState<Analysis[]>([]);
   const [editingPrompt, setEditingPrompt] = useState(false);
@@ -286,6 +291,52 @@ export function AssetDetail() {
     loadTags();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+
+  // 同流程轮播：本图是生成图（或被合并掉的 sibling）时取整组过程图。非生成图置空。
+  // sibling 不在主列表 → assets.find 落空 → 仍走 listGenerationGroup 取组。
+  // 组已含 id（轮播切 sibling）→ 跳过，免每次切换都 fetch。
+  useEffect(() => {
+    if (!id) {
+      setGroup([]);
+      return;
+    }
+    if (group.some((a) => a.id === id)) return;
+    const inList = assets.find((a) => a.id === id);
+    if (inList && !inList.generation_session_id) {
+      setGroup([]);
+      return;
+    }
+    let alive = true;
+    api
+      .listGenerationGroup(id)
+      .then((g) => {
+        if (alive) setGroup(g);
+      })
+      .catch((e) => console.error("listGenerationGroup failed", e));
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
+  // 左右方向键切换过程图（输入框内不拦截，留给光标移动）。
+  useEffect(() => {
+    if (group.length <= 1 || groupPos < 0) return;
+    function onKey(e: KeyboardEvent) {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable))
+        return;
+      if (e.key === "ArrowLeft" && groupPos > 0) {
+        e.preventDefault();
+        openDetail(group[groupPos - 1].id);
+      } else if (e.key === "ArrowRight" && groupPos < group.length - 1) {
+        e.preventDefault();
+        openDetail(group[groupPos + 1].id);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [group, groupPos, openDetail]);
 
   // 反推后台化：本图在别处（或本页点反推后离开再回来）跑完落地时，
   // 后端 emit analyses://changed；命中本图则自动刷新 analyses。
@@ -435,17 +486,43 @@ export function AssetDetail() {
       </header>
 
       <div className="flex flex-1 overflow-hidden">
-        <div className="flex flex-1 items-center justify-center overflow-auto bg-canvas p-4">
-          {src &&
-            (isVideo(asset.ext) ? (
-              <video src={src} controls className="max-h-full max-w-full" />
-            ) : (
-              <img
-                src={src}
-                alt={asset.name}
-                className="max-h-full max-w-full object-contain"
-              />
-            ))}
+        <div className="flex flex-1 flex-col overflow-hidden bg-canvas">
+          <div className="flex flex-1 items-center justify-center overflow-auto p-4">
+            {src &&
+              (isVideo(asset.ext) ? (
+                <video src={src} controls className="max-h-full max-w-full" />
+              ) : (
+                <img
+                  src={src}
+                  alt={asset.name}
+                  className="max-h-full max-w-full object-contain"
+                />
+              ))}
+          </div>
+          {/* 过程图轮播：图片下方常驻「◀ 1/2 ▶」+ 左右方向键切换 */}
+          {group.length > 1 && groupPos >= 0 && (
+            <div className="flex shrink-0 items-center justify-center gap-2 border-t border-edge bg-panel py-1.5 text-muted">
+              <button
+                onClick={() => openDetail(group[groupPos - 1].id)}
+                disabled={groupPos === 0}
+                className="flex h-7 w-7 items-center justify-center rounded-full hover:bg-panel2 hover:text-ink disabled:opacity-30"
+                title="上一张过程图（←）"
+              >
+                ◀
+              </button>
+              <span className="min-w-[3rem] text-center tabular-nums text-xs">
+                {groupPos + 1} / {group.length}
+              </span>
+              <button
+                onClick={() => openDetail(group[groupPos + 1].id)}
+                disabled={groupPos === group.length - 1}
+                className="flex h-7 w-7 items-center justify-center rounded-full hover:bg-panel2 hover:text-ink disabled:opacity-30"
+                title="下一张过程图（→）"
+              >
+                ▶
+              </button>
+            </div>
+          )}
         </div>
 
         <aside className="w-96 shrink-0 space-y-4 overflow-y-auto border-l border-edge bg-panel p-3">

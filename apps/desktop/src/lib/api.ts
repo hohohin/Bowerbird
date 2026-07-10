@@ -73,6 +73,11 @@ export const api = {
   listPromptsByAsset: (assetId: string) =>
     invoke<AssetPrompt[]>("list_prompts_by_asset", { assetId }),
   listPromptedAssets: () => invoke<PromptedAsset[]>("list_prompted_assets"),
+  // 生成图同流程合并：取某资产的整组过程图（详情轮播 / 批量取可见组）
+  listGenerationGroup: (assetId: string) =>
+    invoke<Asset[]>("list_generation_group", { assetId }),
+  listGenerationGroups: (assetIds: string[]) =>
+    invoke<Record<string, Asset[]>>("list_generation_groups", { assetIds }),
 
   // 标签 / 自动归类（P2）
   listTags: (source?: string) =>

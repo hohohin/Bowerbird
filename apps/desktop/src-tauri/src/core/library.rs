@@ -30,6 +30,7 @@ pub struct Asset {
     pub folder_id: Option<String>,
     pub created_at: Option<i64>,
     pub file_mtime: Option<i64>,
+    pub generation_session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -155,11 +156,28 @@ fn asset_from_row(r: &rusqlite::Row) -> rusqlite::Result<Asset> {
         folder_id: r.get("folder_id")?,
         created_at: r.get("created_at")?,
         file_mtime: r.get("file_mtime")?,
+        generation_session_id: r.get("generation_session_id")?,
     })
 }
 
 const ASSET_COLS: &str = "id, name, ext, origin_path, store_path, thumb_path, size, width, height, \
-    duration, phash, colors, rating, source, source_url, folder_id, created_at, file_mtime";
+    duration, phash, colors, rating, source, source_url, folder_id, created_at, file_mtime, \
+    generation_session_id";
+
+/// 瀑布流「同流程合并」：列表已 `ORDER BY created_at DESC` → 同 generation_session_id 的首见者
+/// 即最新一张。按 session 去重保首见、丢后续过程图；无 session（非生成图）原样全留。
+/// search_assets 走 rank 序，首见=最高相关一张，可接受。泛型：Asset 与 PromptedAsset 各传
+/// 一个 session 提取闭包即可（commands 层应用）。
+pub fn collapse_generation_groups<T>(items: Vec<T>, session: impl Fn(&T) -> Option<&str>) -> Vec<T> {
+    let mut seen = std::collections::HashSet::new();
+    items
+        .into_iter()
+        .filter(|x| match session(x) {
+            Some(s) => seen.insert(s.to_string()), // 新 session → 插入成功=保留(true)；已见 → false 丢弃
+            None => true,                          // 非生成图：全留
+        })
+        .collect()
+}
 
 impl Database {
     pub fn insert_asset(&self, a: &Asset) -> AppResult<()> {
@@ -167,7 +185,8 @@ impl Database {
         conn.execute(
             "INSERT INTO assets (id, name, ext, origin_path, store_path, thumb_path, size, width, \
              height, duration, phash, colors, rating, source, source_url, folder_id, created_at, \
-             file_mtime) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
+             file_mtime, generation_session_id) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)",
             rusqlite::params![
                 a.id,
                 a.name,
@@ -187,6 +206,7 @@ impl Database {
                 a.folder_id,
                 a.created_at,
                 a.file_mtime,
+                a.generation_session_id,
             ],
         )?;
         Ok(())
@@ -557,7 +577,7 @@ impl Database {
         // JOIN 后 assets 与 library_fts 都有 name 列 → 必须用 a. 前缀消歧。
         let sql = "SELECT a.id, a.name, a.ext, a.origin_path, a.store_path, a.thumb_path, \
             a.size, a.width, a.height, a.duration, a.phash, a.colors, a.rating, a.source, \
-            a.source_url, a.folder_id, a.created_at, a.file_mtime \
+            a.source_url, a.folder_id, a.created_at, a.file_mtime, a.generation_session_id \
             FROM assets a JOIN library_fts f ON f.asset_id = a.id \
             WHERE library_fts MATCH ?1 ORDER BY rank LIMIT ?2";
         let mut stmt = conn.prepare(sql)?;
@@ -638,6 +658,26 @@ impl Database {
             }
         }
         Ok(chain)
+    }
+
+    /// 取该资产所属生成会话的全部图（含自己），按 id ASC（ULID 时序 = 过程顺序）。
+    /// 资产无 generation_session_id（非生成图）→ 子查询返回 NULL → `generation_session_id = NULL`
+    /// 恒假 → 返回空（前端据此判断「非组、无轮播」）。
+    pub fn list_generation_group(&self, asset_id: &str) -> AppResult<Vec<Asset>> {
+        let conn = self.conn.lock().unwrap();
+        let sql = format!(
+            "SELECT {ASSET_COLS} FROM assets \
+             WHERE generation_session_id = \
+               (SELECT generation_session_id FROM assets WHERE id = ?1) \
+             ORDER BY id ASC"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params![asset_id], asset_from_row)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
     }
 
     /// 创作板用：有 caption（反推）的资产 + 最新 caption 正文（开发计划 §5.4）。
@@ -946,6 +986,7 @@ mod tests {
             folder_id: None,
             created_at: Some(0),
             file_mtime: Some(0),
+            generation_session_id: None,
         })
         .unwrap();
         id
@@ -1013,6 +1054,84 @@ mod tests {
 
         let chain = db.generation_prompt_chain(session).unwrap();
         assert_eq!(chain, vec!["首版".to_string(), "修改1".to_string()]);
+    }
+
+    #[test]
+    fn collapse_generation_groups_keeps_latest_per_session() {
+        // 纯函数测试：列表已 created_at DESC，同 session 首见=最新，去重保首见；非生成图全留。
+        let mk = |id: &str, session: Option<&str>| Asset {
+            id: id.into(),
+            name: id.into(),
+            ext: None,
+            origin_path: None,
+            store_path: None,
+            thumb_path: None,
+            size: None,
+            width: None,
+            height: None,
+            duration: None,
+            phash: None,
+            colors: None,
+            rating: None,
+            source: None,
+            source_url: None,
+            folder_id: None,
+            created_at: None,
+            file_mtime: None,
+            generation_session_id: session.map(String::from),
+        };
+        let items = vec![
+            mk("a1", Some("s1")), // s1 最新
+            mk("a2", Some("s1")), // s1 过程图（应丢）
+            mk("b1", None),       // 非生成图（留）
+            mk("c1", Some("s2")), // s2
+        ];
+        let out = collapse_generation_groups(items, |a| a.generation_session_id.as_deref());
+        let ids: Vec<&str> = out.iter().map(|a| a.id.as_str()).collect();
+        assert_eq!(ids, vec!["a1", "b1", "c1"]);
+    }
+
+    #[test]
+    fn list_generation_group_returns_session_siblings_ordered() {
+        // 同 session 的图按 id ASC（时序）返回；异 session 不混入；非生成图（无 session）返回空。
+        let db = db();
+        fn put_codex(db: &Database, id: &str, session: &str) {
+            db.insert_asset(&Asset {
+                id: id.into(),
+                name: id.into(),
+                ext: Some("png".into()),
+                origin_path: None,
+                store_path: Some(format!("/tmp/{id}.png")),
+                thumb_path: None,
+                size: Some(0),
+                width: Some(10),
+                height: Some(10),
+                duration: Some(0.0),
+                phash: None,
+                colors: None,
+                rating: Some(0),
+                source: Some("codex".into()),
+                source_url: None,
+                folder_id: None,
+                created_at: Some(0),
+                file_mtime: Some(0),
+                generation_session_id: Some(session.into()),
+            })
+            .unwrap();
+        }
+        put_codex(&db, "01A", "sess-A");
+        put_codex(&db, "01B", "sess-A");
+        put_codex(&db, "01C", "sess-A");
+        put_codex(&db, "02X", "sess-B"); // 异 session
+
+        let group = db.list_generation_group("01A").unwrap();
+        let ids: Vec<&str> = group.iter().map(|a| a.id.as_str()).collect();
+        assert_eq!(ids, vec!["01A", "01B", "01C"]); // id ASC = 过程顺序
+        assert!(!ids.contains(&"02X"));
+
+        // 非生成图（无 session）→ 子查询 NULL → 空。
+        let plain = put_asset(&db, "plain");
+        assert!(db.list_generation_group(&plain).unwrap().is_empty());
     }
 
     #[test]
@@ -1117,6 +1236,7 @@ mod tests {
             folder_id: Some(fid.clone()),
             created_at: Some(0),
             file_mtime: Some(0),
+            generation_session_id: None,
         })
         .unwrap();
 

@@ -17,6 +17,7 @@ export interface Asset {
   folder_id?: string | null;
   created_at?: number | null;
   file_mtime?: number | null;
+  generation_session_id?: string | null;
 }
 
 export interface Folder {

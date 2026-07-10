@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { useStore } from "../store";
+import { api } from "../lib/api";
 import type { Asset } from "../lib/types";
 
 function parseColors(c: string | null | undefined): string[] {
@@ -13,10 +14,9 @@ function parseColors(c: string | null | undefined): string[] {
   }
 }
 
-function Thumb({ asset }: { asset: Asset }) {
+function Thumb({ asset, group }: { asset: Asset; group?: Asset[] }) {
   const imgRef = useRef<HTMLImageElement>(null);
   const selected = useStore((s) => s.mode === "manage" && s.selectedIds.has(asset.id));
-  const colors = useMemo(() => parseColors(asset.colors), [asset.colors]);
   // 反推全局可见：本缩略图正在反推 / 在队列里。角标点击 = 取消（运行中 kill 子进程 / 排队中移出队列）。
   const describeStatus = useStore((s) =>
     s.describingId === asset.id
@@ -31,11 +31,28 @@ function Thumb({ asset }: { asset: Asset }) {
   });
   const cancelDescribe = useStore((s) => s.cancelDescribe);
 
-  // 懒加载：进入视口前不加载缩略图（千图级性能保障）。
+  // 同流程合并：组内 >1 张才显轮播。组到达 / 变化时回到末位（最新一张 = 列表里展示的那张）。
+  const groupLen = group && group.length > 1 ? group.length : 0;
+  const [idx, setIdx] = useState(0);
+  useEffect(() => {
+    setIdx(groupLen > 0 ? groupLen - 1 : 0);
+  }, [groupLen]);
+  const shown: Asset = groupLen > 0 ? group![idx] ?? asset : asset;
+  const colors = useMemo(() => parseColors(shown.colors), [shown.colors]);
+
+  function step(delta: number) {
+    setIdx((cur) => {
+      if (!group) return cur;
+      return Math.max(0, Math.min(group.length - 1, cur + delta));
+    });
+  }
+
+  // 懒加载：进入视口前不加载缩略图（千图级性能保障）。key 跟随 shown.thumb_path ——
+  // 轮播切过程图时若仍在视口，observer 立即触发设 src。
   useEffect(() => {
     const img = imgRef.current;
-    if (!img || !asset.thumb_path) return;
-    const path = asset.thumb_path;
+    if (!img || !shown.thumb_path) return;
+    const path = shown.thumb_path;
     const obs = new IntersectionObserver(
       (entries) => {
         for (const e of entries) {
@@ -49,13 +66,13 @@ function Thumb({ asset }: { asset: Asset }) {
     );
     obs.observe(img);
     return () => obs.disconnect();
-  }, [asset.thumb_path]);
+  }, [shown.thumb_path]);
 
   // 没有缩略图的占位（非图片格式或解码失败）。
-  if (!asset.thumb_path) {
+  if (!shown.thumb_path) {
     return (
       <div className="mb-2 flex h-32 break-inside-avoid items-center justify-center rounded-md bg-panel2 text-xs text-muted">
-        {asset.ext?.toUpperCase() ?? "?"}
+        {shown.ext?.toUpperCase() ?? "?"}
       </div>
     );
   }
@@ -63,13 +80,12 @@ function Thumb({ asset }: { asset: Asset }) {
   // 瀑布流（CSS columns）抖动根因：缩略图加载前 <img> 高度为 0，加载完成撑高
   // → columns 反复重新平衡列高 → 整个网格持续重排。用 DB 已有的 width/height
   // 设 aspect-ratio，让占位高度等于最终高度，加载后高度不变，columns 不再重排。
-  // SVG/PSD probe 为 0×0，回退到无 aspect-ratio（占比极少，不影响整体）。
   const ratio =
-    asset.width && asset.height ? `${asset.width}/${asset.height}` : undefined;
+    shown.width && shown.height ? `${shown.width}/${shown.height}` : undefined;
 
   return (
     <div
-      className={`relative mb-2 break-inside-avoid cursor-pointer overflow-hidden rounded-md ring-2 transition ${
+      className={`group relative mb-2 break-inside-avoid cursor-pointer overflow-hidden rounded-md ring-2 transition ${
         selected ? "ring-accent" : "ring-transparent hover:ring-edge"
       }`}
       onClick={() => {
@@ -78,11 +94,11 @@ function Thumb({ asset }: { asset: Asset }) {
         // @ 挑图态（boardPickMode）是同一条路径的「显式高亮」版本，插入后退出挑图态。
         if (st.boardOpen) {
           window.dispatchEvent(
-            new CustomEvent("bowerbird://board-asset-picked", { detail: asset.id })
+            new CustomEvent("bowerbird://board-asset-picked", { detail: shown.id })
           );
           if (st.boardPickMode) st.finishBoardImagePick();
-        } else if (st.mode === "manage") st.toggleSelect(asset.id);
-        else st.openDetail(asset.id);
+        } else if (st.mode === "manage") st.toggleSelect(shown.id);
+        else st.openDetail(shown.id);
       }}
     >
       {describeStatus && (
@@ -104,20 +120,47 @@ function Thumb({ asset }: { asset: Asset }) {
           <span>{describeStatus === "running" ? "反推中" : `排队 ${queuePos}`}</span>
         </button>
       )}
-      {asset.source === "codex" && (
+      {shown.source === "codex" && (
         <span
           className="absolute left-1 top-1 z-10 rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-white backdrop-blur"
-          title="codex 生成图"
+          title={groupLen > 1 ? `生成图 · 同流程 ${groupLen} 张` : "codex 生成图"}
         >
-          ✨
+          ✨{groupLen > 1 ? ` ${idx + 1}/${groupLen}` : ""}
         </span>
+      )}
+      {/* 过程图轮播箭头（同流程 >1 张时悬浮显示） */}
+      {groupLen > 1 && (
+        <>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              step(-1);
+            }}
+            disabled={idx === 0}
+            className="absolute left-0 top-1/2 z-10 -translate-y-1/2 bg-black/50 px-1 text-xs text-white opacity-0 transition hover:bg-black/80 disabled:opacity-0 group-hover:opacity-100"
+            title="上一张过程图"
+          >
+            ◀
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              step(1);
+            }}
+            disabled={idx === groupLen - 1}
+            className="absolute right-0 top-1/2 z-10 -translate-y-1/2 bg-black/50 px-1 text-xs text-white opacity-0 transition hover:bg-black/80 disabled:opacity-0 group-hover:opacity-100"
+            title="下一张过程图"
+          >
+            ▶
+          </button>
+        </>
       )}
       <img
         ref={imgRef}
         className="block w-full bg-panel2"
         style={{ aspectRatio: ratio }}
         loading="lazy"
-        alt={asset.name}
+        alt={shown.name}
         draggable={false}
       />
       {colors.length > 0 && (
@@ -136,6 +179,26 @@ export function MasonryGrid() {
   const assets = useStore((s) => s.assets);
   const boardOpen = useStore((s) => s.boardOpen);
   const boardPickMode = useStore((s) => s.boardPickMode);
+  const [groupMap, setGroupMap] = useState<Record<string, Asset[]>>({});
+
+  // 同流程生成图：批量取可见 codex 组的过程图，供缩略图轮播。无生成图时清空。
+  useEffect(() => {
+    const ids = assets.filter((a) => a.generation_session_id).map((a) => a.id);
+    if (ids.length === 0) {
+      setGroupMap({});
+      return;
+    }
+    let alive = true;
+    api
+      .listGenerationGroups(ids)
+      .then((m) => {
+        if (alive) setGroupMap(m);
+      })
+      .catch((e) => console.error("listGenerationGroups failed", e));
+    return () => {
+      alive = false;
+    };
+  }, [assets]);
 
   const filtered = assets;
 
@@ -169,7 +232,7 @@ export function MasonryGrid() {
       >
         <div className="columns-2 gap-2 p-2 md:columns-3 lg:columns-4 xl:columns-5">
           {filtered.map((a) => (
-            <Thumb key={a.id} asset={a} />
+            <Thumb key={a.id} asset={a} group={groupMap[a.id]} />
           ))}
         </div>
       </div>

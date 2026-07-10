@@ -70,6 +70,8 @@ pub fn run() {
             commands::library::list_analyses_by_asset,
             commands::library::delete_analysis,
             commands::library::list_prompted_assets,
+            commands::library::list_generation_group,
+            commands::library::list_generation_groups,
             commands::library::list_tags,
             commands::library::list_asset_tags,
             commands::library::set_asset_tags,

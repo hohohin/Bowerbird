@@ -5,6 +5,7 @@
 //! - `0004_templates_clear.sql`：清空 seed 模板行（创作板改用前端维度标签 + 图 caption）
 //! - `0005_tags_source.sql`：tags 加 source 列 + seed 预置自动归类词表（P2）
 //! - `0006_color_buckets.sql`：asset_colors 颜色量化桶表（P3）
+//! - `0007_generation_groups.sql`：assets 加 generation_session_id + 回填（生成图同流程合并）
 
 use rusqlite_migration::{M, Migrations};
 
@@ -16,5 +17,6 @@ pub fn migrations() -> Migrations<'static> {
         M::up(include_str!("../../sql/0004_templates_clear.sql")),
         M::up(include_str!("../../sql/0005_tags_source.sql")),
         M::up(include_str!("../../sql/0006_color_buckets.sql")),
+        M::up(include_str!("../../sql/0007_generation_groups.sql")),
     ])
 }

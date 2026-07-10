@@ -1,5 +1,6 @@
 //! 库相关命令（前端 invoke 入口）。
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -8,7 +9,10 @@ use ulid::Ulid;
 
 use crate::core::autoname;
 use crate::core::ingest;
-use crate::core::library::{Analysis, Asset, AssetTag, ColorBucket, Folder, PromptedAsset, TagCount};
+use crate::core::library::{
+    collapse_generation_groups, Analysis, Asset, AssetTag, ColorBucket, Folder, PromptedAsset,
+    TagCount,
+};
 use crate::core::paths::LibraryPaths;
 use crate::db::Database;
 use crate::error::AppError;
@@ -71,11 +75,13 @@ pub async fn list_assets(
     offset: Option<i64>,
 ) -> Result<Vec<Asset>, AppError> {
     let db = db.inner().clone();
-    tokio::task::spawn_blocking(move || {
+    let v = tokio::task::spawn_blocking(move || {
         db.list_assets(folder_id.as_deref(), limit.unwrap_or(500), offset.unwrap_or(0))
     })
     .await
-    .map_err(|e| AppError::Other(e.to_string()))?
+    .map_err(|e| AppError::Other(e.to_string()))??;
+    // 同流程生成图合并：每组只留最新一张（列表已 created_at DESC，首见即最新）。
+    Ok(collapse_generation_groups(v, |a: &Asset| a.generation_session_id.as_deref()))
 }
 
 /// 按 smart_query 直接查资产（`source:codex` 等），供侧栏「✨ 生成图」一键入口用
@@ -88,11 +94,12 @@ pub async fn list_assets_smart(
     offset: Option<i64>,
 ) -> Result<Vec<Asset>, AppError> {
     let db = db.inner().clone();
-    tokio::task::spawn_blocking(move || {
+    let v = tokio::task::spawn_blocking(move || {
         db.list_assets_smart(&query, limit.unwrap_or(500), offset.unwrap_or(0))
     })
     .await
-    .map_err(|e| AppError::Other(e.to_string()))?
+    .map_err(|e| AppError::Other(e.to_string()))??;
+    Ok(collapse_generation_groups(v, |a: &Asset| a.generation_session_id.as_deref()))
 }
 
 #[tauri::command]
@@ -195,9 +202,10 @@ pub async fn search_assets(
     limit: Option<i64>,
 ) -> Result<Vec<Asset>, AppError> {
     let db = db.inner().clone();
-    tokio::task::spawn_blocking(move || db.search_assets(&query, limit.unwrap_or(500)))
+    let v = tokio::task::spawn_blocking(move || db.search_assets(&query, limit.unwrap_or(500)))
         .await
-        .map_err(|e| AppError::Other(e.to_string()))?
+        .map_err(|e| AppError::Other(e.to_string()))??;
+    Ok(collapse_generation_groups(v, |a: &Asset| a.generation_session_id.as_deref()))
 }
 
 #[tauri::command]
@@ -226,9 +234,47 @@ pub async fn list_prompted_assets(
     db: State<'_, Arc<Database>>,
 ) -> Result<Vec<PromptedAsset>, AppError> {
     let db = db.inner().clone();
-    tokio::task::spawn_blocking(move || db.list_prompted_assets())
+    let v = tokio::task::spawn_blocking(move || db.list_prompted_assets())
+        .await
+        .map_err(|e| AppError::Other(e.to_string()))??;
+    Ok(collapse_generation_groups(v, |p: &PromptedAsset| {
+        p.asset.generation_session_id.as_deref()
+    }))
+}
+
+/// 取某资产所属生成会话的全部图（含自己），按 id ASC（过程顺序）。详情页轮播用。
+/// 非生成图（无 generation_session_id）返回空。
+#[tauri::command]
+pub async fn list_generation_group(
+    db: State<'_, Arc<Database>>,
+    asset_id: String,
+) -> Result<Vec<Asset>, AppError> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || db.list_generation_group(&asset_id))
         .await
         .map_err(|e| AppError::Other(e.to_string()))?
+}
+
+/// 批量取多资产的生成组：key=输入 asset_id，value=该资产所在组的全部图（仅生成图、且组存在）。
+/// 瀑布流缩略图轮播用：一次 invoke 拿到所有可见 codex 组，免每缩略图各发一次。
+#[tauri::command]
+pub async fn list_generation_groups(
+    db: State<'_, Arc<Database>>,
+    asset_ids: Vec<String>,
+) -> Result<HashMap<String, Vec<Asset>>, AppError> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || -> Result<HashMap<String, Vec<Asset>>, AppError> {
+        let mut out = HashMap::new();
+        for id in &asset_ids {
+            let group = db.list_generation_group(id)?;
+            if !group.is_empty() {
+                out.insert(id.clone(), group);
+            }
+        }
+        Ok(out)
+    })
+    .await
+    .map_err(|e| AppError::Other(e.to_string()))?
 }
 
 // ============ 标签 / 自动归类（P2）============
@@ -321,11 +367,12 @@ pub async fn list_assets_by_color(
     offset: Option<i64>,
 ) -> Result<Vec<Asset>, AppError> {
     let db = db.inner().clone();
-    tokio::task::spawn_blocking(move || {
+    let v = tokio::task::spawn_blocking(move || {
         db.list_assets_by_color(folder_id.as_deref(), &bucket, limit.unwrap_or(500), offset.unwrap_or(0))
     })
     .await
-    .map_err(|e| AppError::Other(e.to_string()))?
+    .map_err(|e| AppError::Other(e.to_string()))??;
+    Ok(collapse_generation_groups(v, |a: &Asset| a.generation_session_id.as_deref()))
 }
 
 /// 重建色板：扫所有 colors 非空的图，重新量化写 asset_colors（幂等）。
