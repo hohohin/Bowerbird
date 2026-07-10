@@ -1,6 +1,15 @@
 import { create } from "zustand";
 import { api } from "./lib/api";
-import type { Asset, ColorBucket, Folder, PromptedAsset, TagCount } from "./lib/types";
+import type {
+  Asset,
+  CodexChunk,
+  CodexHealth,
+  ColorBucket,
+  Folder,
+  GenTurn,
+  PromptedAsset,
+  TagCount,
+} from "./lib/types";
 
 type Mode = "browse" | "manage";
 
@@ -60,11 +69,27 @@ interface State {
   // —— 生成（创作板 codex 画图，单槽无队列）——
   // 状态全局可见：状态圈在顶部工具栏最右侧，故提到 store（不绑创作板生命周期）。
   generating: boolean;
-  setGenerating: (g: boolean) => void;
   // —— 导入即基础分析（autoname，后台 fire-and-forget）——
   // 在途计数（后端 codex://auto-active 事件推来）；>0 顶部状态圈算「分析中」。
   autoAnalyzing: number;
   setAutoAnalyzing: (n: number) => void;
+  // —— codex 可用性（App 挂载取一次；创作板/生成面板共用，约定 7 置灰依据）——
+  codexHealth: CodexHealth | null;
+  setCodexHealth: (h: CodexHealth | null) => void;
+  // —— 生成结果面板（独立于创作板；主区覆盖层，可随时开合，状态在 store 不丢）——
+  genPanelOpen: boolean;
+  genTurns: GenTurn[];
+  genSessionId: string | null;
+  genStreaming: string;
+  genLastPrompt: string; // 最近一次发送 prompt，供「新会话重新生成」复用
+  genLastRefs: string[]; // 最近一次发送参考图
+  genUnread: boolean; // 面板关时落地新图 → 顶栏按钮红点
+  toggleGenPanel: () => void;
+  setGenPanelOpen: (open: boolean) => void;
+  startGeneration: (prompt: string, referenceImages: string[]) => Promise<void>;
+  sendGenRevise: (instruction: string) => Promise<void>;
+  cancelGeneration: () => void;
+  applyGenChunk: (c: CodexChunk) => void;
 }
 
 export const useStore = create<State>((set, get) => {
@@ -94,6 +119,24 @@ export const useStore = create<State>((set, get) => {
       }
       void pumpDescribe();
     }
+  }
+
+  // —— 生成对话：turn id 计数 + 错误处理（内部，不暴露）——
+  let genTurnSeq = 0;
+  function nextGenTurnId() {
+    genTurnSeq += 1;
+    return genTurnSeq;
+  }
+  function genHandleError(msg: string) {
+    const cancelled = msg.includes("已取消");
+    set((s) => ({
+      genStreaming: s.genStreaming + (cancelled ? "\n\n—— 已取消" : `\n[error: ${msg}]`),
+      // 取消/出错时若最后一轮没产出图，移除占位 turn，避免空轮留在时间线
+      genTurns:
+        s.genTurns.length > 0 && s.genTurns[s.genTurns.length - 1].images.length === 0
+          ? s.genTurns.slice(0, -1)
+          : s.genTurns,
+    }));
   }
 
   return {
@@ -222,9 +265,88 @@ export const useStore = create<State>((set, get) => {
   },
   // —— 生成（创作板 codex 画图）——
   generating: false,
-  setGenerating: (generating) => set({ generating }),
   // —— 导入即基础分析（autoname）——
   autoAnalyzing: 0,
   setAutoAnalyzing: (autoAnalyzing) => set({ autoAnalyzing }),
+  // —— codex 可用性 ——
+  codexHealth: null,
+  setCodexHealth: (codexHealth) => set({ codexHealth }),
+  // —— 生成结果面板 ——
+  genPanelOpen: false,
+  genTurns: [],
+  genSessionId: null,
+  genStreaming: "",
+  genLastPrompt: "",
+  genLastRefs: [],
+  genUnread: false,
+  toggleGenPanel: () =>
+    set((s) => {
+      const opening = !s.genPanelOpen;
+      return { genPanelOpen: opening, genUnread: opening ? false : s.genUnread };
+    }),
+  setGenPanelOpen: (open) =>
+    set((s) => ({ genPanelOpen: open, genUnread: open ? false : s.genUnread })),
+  startGeneration: async (prompt, referenceImages) => {
+    if (get().generating) return; // 单槽：进行中不再发
+    set({
+      genLastPrompt: prompt,
+      genLastRefs: referenceImages,
+      genSessionId: null,
+      genStreaming: "",
+      genTurns: [{ id: nextGenTurnId(), prompt, images: [] }],
+      genPanelOpen: true, // 自动弹面板给即时反馈（创作板在右槽仍可编辑）
+      genUnread: false,
+    });
+    set({ generating: true });
+    try {
+      await api.codexCreateImage({ prompt, referenceImages });
+    } catch (e) {
+      genHandleError(typeof e === "string" ? e : JSON.stringify(e));
+    } finally {
+      set({ generating: false });
+    }
+  },
+  sendGenRevise: async (instruction) => {
+    const sid = get().genSessionId;
+    const text = instruction.trim();
+    if (get().generating || !sid || !text) return;
+    set((s) => ({
+      genTurns: [...s.genTurns, { id: nextGenTurnId(), prompt: text, images: [] }],
+      genStreaming: "",
+    }));
+    set({ generating: true });
+    try {
+      await api.codexCreateImage({ prompt: text, referenceImages: [], sessionId: sid });
+    } catch (e) {
+      genHandleError(typeof e === "string" ? e : JSON.stringify(e));
+    } finally {
+      set({ generating: false });
+    }
+  },
+  cancelGeneration: () => {
+    void api.cancelCodexCreate().catch(console.error);
+  },
+  applyGenChunk: (c) => {
+    if (c.kind === "delta") {
+      set((s) => ({ genStreaming: s.genStreaming + c.text }));
+    } else if (c.kind === "done") {
+      const imgs = c.images ?? [];
+      set((s) => {
+        const base = {
+          genSessionId: c.session_id ?? s.genSessionId,
+          genStreaming: s.genStreaming + `\n\n—— done · ${c.elapsed_ms}ms via ${c.provider}`,
+          genUnread: imgs.length > 0 && !s.genPanelOpen ? true : s.genUnread,
+        };
+        if (s.genTurns.length === 0) return base;
+        const last = s.genTurns[s.genTurns.length - 1];
+        return {
+          ...base,
+          genTurns: [...s.genTurns.slice(0, -1), { ...last, images: [...last.images, ...imgs] }],
+        };
+      });
+    } else if (c.kind === "error") {
+      set((s) => ({ genStreaming: s.genStreaming + `\n[error: ${c.message}]` }));
+    }
+  },
   };
 });

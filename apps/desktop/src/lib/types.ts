@@ -96,6 +96,13 @@ export interface CreationPack {
   asset_ids: string[];
 }
 
+/** 生成对话一轮：用户输入（首轮=编辑器 finalPrompt，后续=修改意见）+ 本轮产出图（asset 路径）。 */
+export interface GenTurn {
+  id: number;
+  prompt: string;
+  images: string[];
+}
+
 export type CodexChunk =
   | { kind: "delta"; text: string }
   | {

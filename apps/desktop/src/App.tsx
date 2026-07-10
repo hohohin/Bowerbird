@@ -6,8 +6,10 @@ import { MasonryGrid } from "./components/MasonryGrid";
 import { AssetDetail } from "./components/AssetDetail";
 import { BatchBar } from "./components/BatchBar";
 import { CreationBoard } from "./components/CreationBoard";
+import { GenerationPanel } from "./components/GenerationPanel";
 import { useStore } from "./store";
 import { api } from "./lib/api";
+import type { CodexChunk } from "./lib/types";
 
 function App() {
   const setAssets = useStore((s) => s.setAssets);
@@ -25,6 +27,8 @@ function App() {
   const mode = useStore((s) => s.mode);
   const detailAssetId = useStore((s) => s.detailAssetId);
   const boardOpen = useStore((s) => s.boardOpen);
+  const genPanelOpen = useStore((s) => s.genPanelOpen);
+  const setCodexHealth = useStore((s) => s.setCodexHealth);
 
   async function refresh() {
     try {
@@ -126,6 +130,32 @@ function App() {
     return () => unlisten?.();
   }, [setAutoAnalyzing]);
 
+  // 生成结果流式回显（创作板「发送」/ 生成面板「继续修改」触发）：
+  // 生成 UI 独立成面板后，codex://chunk 监听挪到全局。App 单次挂载，但 StrictMode 双挂载下
+  // 仍需 alive 守卫——否则同一 Done 被两个监听器各收一次 → 同一张图 append 两次（见踩坑）。
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    let alive = true;
+    listen<CodexChunk>("codex://chunk", (e) => useStore.getState().applyGenChunk(e.payload)).then(
+      (u) => {
+        if (alive) unlisten = u;
+        else u();
+      }
+    );
+    return () => {
+      alive = false;
+      unlisten?.();
+    };
+  }, []);
+
+  // codex 可用性：App 挂载取一次，创作板/生成面板共用（约定 7 置灰依据）。
+  useEffect(() => {
+    api
+      .codexHealth()
+      .then(setCodexHealth)
+      .catch(() => setCodexHealth({ ok: false, reason: "codex 状态检测失败" }));
+  }, [setCodexHealth]);
+
   const showDetail = mode === "browse" && detailAssetId !== null;
 
   return (
@@ -135,8 +165,10 @@ function App() {
         <Sidebar />
         <main className="flex flex-1 flex-col overflow-hidden bg-canvas">
           {mode === "manage" && <BatchBar />}
-          <div className="flex-1 overflow-hidden">
+          <div className="relative flex-1 overflow-hidden">
             {showDetail ? <AssetDetail /> : <MasonryGrid />}
+            {/* 生成结果面板：主区覆盖层（像详情页），创作板在右槽始终可用 */}
+            {genPanelOpen && <GenerationPanel />}
           </div>
         </main>
         {/* 创作板（核心枢纽）：Toolbar「🎬 创作板」按钮唤起，右侧常驻 */}

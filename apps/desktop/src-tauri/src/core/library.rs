@@ -614,6 +614,32 @@ impl Database {
         Ok(exists)
     }
 
+    /// 取某 codex 生成会话的 prompt 链（按时间顺序、相邻去重 → 一轮一条）。
+    /// 生成图 caption 用：generation_meta 的 $.session_id 匹配，取 $.prompt；
+    /// 同一轮可能产出多张图（多行同 prompt），相邻去重后得到「轮次」序列
+    /// [首版 prompt, 修改1, 修改2, ...]。id 是 ULID（时间序），跨轮时序稳定。
+    pub fn generation_prompt_chain(&self, session_id: &str) -> AppResult<Vec<String>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT json_extract(payload, '$.prompt') FROM analyses \
+             WHERE kind = 'generation_meta' \
+               AND json_extract(payload, '$.session_id') = ?1 \
+             ORDER BY created_at ASC, id ASC",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![session_id], |r| {
+            r.get::<_, Option<String>>(0)
+        })?;
+        let mut chain: Vec<String> = Vec::new();
+        for r in rows {
+            if let Some(p) = r? {
+                if chain.last().map(String::as_str) != Some(p.as_str()) {
+                    chain.push(p);
+                }
+            }
+        }
+        Ok(chain)
+    }
+
     /// 创作板用：有 caption（反推）的资产 + 最新 caption 正文（开发计划 §5.4）。
     /// 创作板打开时瀑布流只显示这些；缩略图槽的 prompt 内容来自 caption / dimensions。
     pub fn list_prompted_assets(&self) -> AppResult<Vec<PromptedAsset>> {
@@ -955,6 +981,38 @@ mod tests {
         assert_eq!(list[0].kind, "caption");
         db.delete_analysis(&an_id).unwrap();
         assert_eq!(db.list_analyses_by_asset(&aid).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn generation_prompt_chain_orders_and_dedups() {
+        // 同一会话两轮 generation_meta（首轮 2 图同 prompt、次轮 1 图）→ 按时序相邻去重为
+        // [首版, 修改1]；另一会话的行被 session 过滤排除。analysis id 字典序保证跨轮时序。
+        let db = db();
+        let a1 = put_asset(&db, "g1");
+        let a2 = put_asset(&db, "g2");
+        let a3 = put_asset(&db, "g3");
+        let _a4 = put_asset(&db, "g4");
+
+        fn put_meta(db: &Database, id: &str, aid: &str, prompt: &str, sid: &str) {
+            db.insert_analysis(&Analysis {
+                id: id.to_string(),
+                asset_id: aid.to_string(),
+                kind: "generation_meta".to_string(),
+                payload: serde_json::json!({ "prompt": prompt, "session_id": sid }).to_string(),
+                provider: Some("codex-cli".into()),
+                created_at: None,
+            })
+            .unwrap();
+        }
+
+        let session = "sess-A";
+        put_meta(&db, "01T1A", &a1, "首版", session);
+        put_meta(&db, "01T1B", &a2, "首版", session); // 同轮另一图（同 prompt，应被去重）
+        put_meta(&db, "01T2", &a3, "修改1", session);
+        put_meta(&db, "01XX", &_a4, "别的会话", "sess-B"); // 不同会话，应被排除
+
+        let chain = db.generation_prompt_chain(session).unwrap();
+        assert_eq!(chain, vec!["首版".to_string(), "修改1".to_string()]);
     }
 
     #[test]

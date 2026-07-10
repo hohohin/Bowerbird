@@ -1,17 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useStore } from "../store";
-import { api } from "../lib/api";
-import type { CaptionSection, CodexChunk, CodexHealth, PromptedAsset } from "../lib/types";
+import type { CaptionSection, PromptedAsset } from "../lib/types";
 
 type Token =
   | { kind: "text"; text: string }
   | { kind: "image"; assetId: string }
   | { kind: "keyword"; text: string };
-
-/** 一轮生成对话：用户输入（首轮 = 编辑器 finalPrompt，后续 = 修改意见）+ 本轮产出图。 */
-type Turn = { id: number; prompt: string; images: string[] };
 
 function tokenKey(t: Token, i: number) {
   if (t.kind === "image") return `img-${t.assetId}-${i}`;
@@ -20,7 +15,11 @@ function tokenKey(t: Token, i: number) {
 }
 
 /**
- * 创作板：真实 prompt 编辑器 + @ 插图引用。
+ * 创作板：真实 prompt 编辑器 + @ 插图引用。只管「组稿」。
+ *
+ * 生成对话（轮次 / 流式 / 修改意见）已拆到独立 GenerationPanel + store；本组件
+ * 点「发送」把 finalPrompt + 参考图交给 store.startGeneration，结果进生成面板。
+ * 故生成期间本板不受任何生成 UI 干扰，可继续组下一轮稿。
  *
  * 用户正常输入；输入 @ 后创作板变灰、瀑布流高亮，下一次点击瀑布流图片会
  * 在编辑器当前位置插入「缩略图 + 图片名」token。插入图片后显示维度 chips
@@ -33,6 +32,9 @@ export function CreationBoard() {
   const toggleBoard = useStore((s) => s.toggleBoard);
   const startPick = useStore((s) => s.startBoardImagePick);
   const cancelPick = useStore((s) => s.cancelBoardImagePick);
+  const generating = useStore((s) => s.generating);
+  const codexHealth = useStore((s) => s.codexHealth);
+  const startGeneration = useStore((s) => s.startGeneration);
 
   const inputRef = useRef<HTMLInputElement>(null);
   // draft 的 ref 镜像：onPick 注册在 useEffect([]) 里是「首渲染闭包」，直接读 draft 会拿到
@@ -46,18 +48,7 @@ export function CreationBoard() {
   const [showKeywordHints, setShowKeywordHints] = useState(false);
   // 维度 chips 作用于「最近插入的那张图」——它的 sections 即下拉选项。
   const [chipAssetId, setChipAssetId] = useState<string | null>(null);
-  const [streaming, setStreaming] = useState("");
-  // busy（生成中）提到 store：状态圈在顶栏全局可见，且创作板中途关闭也能由 finally 复位。
-  const busy = useStore((s) => s.generating);
-  const setBusy = useStore((s) => s.setGenerating);
   const [copied, setCopied] = useState(false);
-  // 生成对话：turns = 各轮（首轮来自编辑器、后续来自修改意见）；sessionId = codex 会话 id，
-  // 首轮 Done 后拿到，后续轮带它 codex exec resume 续接同一对话。
-  const [turns, setTurns] = useState<Turn[]>([]);
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const [revise, setRevise] = useState("");
-  const turnIdRef = useRef(0);
-  const [codexHealth, setCodexHealth] = useState<CodexHealth | null>(null);
 
   const assetById = useMemo(() => {
     const m = new Map<string, PromptedAsset>();
@@ -73,49 +64,9 @@ export function CreationBoard() {
       : [];
   }, [chipAssetId, assetById]);
 
-  // 进入创作板时探测 codex 可用性，生成按钮据此置灰（约定 7：离线/无账号降级置灰）。
-  useEffect(() => {
-    api
-      .codexHealth()
-      .then(setCodexHealth)
-      .catch(() => setCodexHealth({ ok: false, reason: "codex 状态检测失败" }));
-  }, []);
-
   useEffect(() => {
     inputRef.current?.focus();
   }, [tokens.length, boardPickMode]);
-
-  useEffect(() => {
-    let unlisten: UnlistenFn | undefined;
-    let cancelled = false;
-    listen<CodexChunk>("codex://chunk", (e) => {
-      const c = e.payload;
-      if (c.kind === "delta") setStreaming((s) => s + c.text);
-      else if (c.kind === "done") {
-        setStreaming((s) => s + `\n\n—— done · ${c.elapsed_ms}ms via ${c.provider}`);
-        if (c.session_id) setSessionId(c.session_id);
-        const imgs = c.images ?? [];
-        if (imgs.length > 0) {
-          // 把本轮产出图追加到 turns 最后一轮（发送时已 push 占位 turn）。
-          setTurns((prev) => {
-            if (prev.length === 0) return prev;
-            const last = prev[prev.length - 1];
-            return [...prev.slice(0, -1), { ...last, images: [...last.images, ...imgs] }];
-          });
-        }
-      } else if (c.kind === "error") setStreaming((s) => s + `\n[error: ${c.message}]`);
-    }).then((u) => {
-      // listen() 是异步的：若 cleanup 已先跑（StrictMode 双挂载 / 开关创作板卸载），
-      // unlisten 还是 undefined 会被漏掉 → 监听器泄漏 → Done 被多个监听器各收一次
-      // → 同一张图 append 多次（"一次返回 2 张一样的"）。这里 resolve 时若已 cancel 立即注销。
-      if (cancelled) u();
-      else unlisten = u;
-    });
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, []);
 
   // 瀑布流选中图片后，由 MasonryGrid dispatch 此事件。
   useEffect(() => {
@@ -218,54 +169,11 @@ export function CreationBoard() {
     setTimeout(() => setCopied(false), 1500);
   }
 
-  function nextTurnId() {
-    turnIdRef.current += 1;
-    return turnIdRef.current;
-  }
-
-  // 首轮 / 新会话：用编辑器 finalPrompt + 参考图发 codex（新会话），重置对话。
-  async function sendCodex() {
-    if (!codexHealth?.ok || !finalPrompt) return;
-    const prompt = finalPrompt;
-    const refs = references;
-    setSessionId(null);
-    setTurns([{ id: nextTurnId(), prompt, images: [] }]);
-    setStreaming("");
-    setBusy(true);
-    try {
-      await api.codexCreateImage({ prompt, referenceImages: refs });
-    } catch (e) {
-      handleGenError(e);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  // 续轮：带 sessionId 走 codex exec resume 续接同一会话，按修改意见让 codex 编辑上一张图。
-  async function sendRevise() {
-    if (!codexHealth?.ok || !sessionId || !revise.trim()) return;
-    const prompt = revise.trim();
-    setRevise("");
-    setTurns((prev) => [...prev, { id: nextTurnId(), prompt, images: [] }]);
-    setStreaming("");
-    setBusy(true);
-    try {
-      await api.codexCreateImage({ prompt, referenceImages: [], sessionId });
-    } catch (e) {
-      handleGenError(e);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  // 取消 / 出错时若最后一轮没产出图，移除占位 turn，避免空轮留在时间线。
-  function handleGenError(e: unknown) {
-    const msg = typeof e === "string" ? e : JSON.stringify(e);
-    const cancelled = msg.includes("已取消");
-    setStreaming((s) => s + (cancelled ? "\n\n—— 已取消" : `\n[error: ${msg}]`));
-    setTurns((prev) =>
-      prev.length > 0 && prev[prev.length - 1].images.length === 0 ? prev.slice(0, -1) : prev
-    );
+  // 把当前组稿发 codex 生成。生成期间编辑器仍可继续组下一轮稿（prompt 在此快照进 store，
+  // 不受后续编辑影响）；发送按钮单槽置灰防止并发发起第二次生成。
+  function send() {
+    if (!codexHealth?.ok || !finalPrompt || generating) return;
+    void startGeneration(finalPrompt, references);
   }
 
   return (
@@ -363,118 +271,31 @@ export function CreationBoard() {
         </div>
       </div>
 
-      <div className="space-y-2 border-t border-edge p-3">
-        {turns.length > 0 && (
-          <div className="space-y-2">
-            <div className="text-[10px] uppercase tracking-wide text-muted">
-              生成对话（{turns.length} 轮 · {turns.reduce((n, t) => n + t.images.length, 0)} 图）
-            </div>
-            {turns.map((t, i) => (
-              <div key={t.id} className="space-y-1 rounded bg-panel2/50 p-2">
-                <div className="line-clamp-2 text-[11px] text-muted" title={t.prompt}>
-                  <span className="text-accent">{i === 0 ? "首版" : `修改 ${i}`}：</span>
-                  {t.prompt}
-                </div>
-                {t.images.length > 0 ? (
-                  <div className={`grid gap-1.5 ${t.images.length > 1 ? "grid-cols-2" : "grid-cols-1"}`}>
-                    {t.images.map((p) => (
-                      <a key={p} href={convertFileSrc(p)} target="_blank" rel="noreferrer" title={p}>
-                        <img
-                          src={convertFileSrc(p)}
-                          alt=""
-                          className="w-full rounded border border-edge object-cover"
-                        />
-                      </a>
-                    ))}
-                  </div>
-                ) : busy && i === turns.length - 1 ? (
-                  <div className="text-[10px] text-muted animate-pulse">codex 生成中…</div>
-                ) : null}
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* 主操作区：按状态切换 —— 未生成=发送、已生成=迭代修改（续接同一会话）、生成中=取消 */}
-        {busy ? (
-          <button
-            onClick={() => api.cancelCodexCreate().catch(console.error)}
-            className="w-full rounded-md border border-edge bg-panel2 px-3 py-2 text-sm font-semibold text-ink hover:text-red-300"
-          >
-            取消生成
-          </button>
-        ) : sessionId ? (
-          // 已生成：迭代是主流程（codex 续接同一会话编辑上一张图）。回车也可提交。
-          <div className="space-y-1">
-            <div className="text-[10px] text-muted">提修改意见，codex 续接同一会话编辑上一张图</div>
-            <div className="flex gap-1.5">
-              <input
-                value={revise}
-                onChange={(e) => setRevise(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    sendRevise();
-                  }
-                }}
-                placeholder="如：背景改成白天、去掉霓虹、猫换成狗…"
-                className="min-w-0 flex-1 rounded bg-panel2 px-2 py-1.5 text-xs text-ink outline-none ring-1 ring-edge focus:ring-accent"
-              />
-              <button
-                onClick={sendRevise}
-                disabled={!revise.trim() || !codexHealth?.ok}
-                className="shrink-0 rounded bg-accent px-3 py-1.5 text-xs font-semibold text-black disabled:opacity-50"
-              >
-                继续修改
-              </button>
-            </div>
-          </div>
-        ) : (
-          // 未生成：首轮
-          <button
-            onClick={sendCodex}
-            disabled={!finalPrompt || !codexHealth?.ok}
-            title={
-              !codexHealth?.ok
-                ? codexHealth?.reason || "codex 不可用"
-                : "把最终 prompt + 参考图发 codex CLI 生成图像"
-            }
-            className="w-full rounded-md bg-accent px-3 py-2 text-sm font-semibold text-black disabled:opacity-50"
-          >
-            ✓ 发送 codex 生成
-          </button>
-        )}
-
-        {/* 次要操作：复制 + （已生成时）另起新会话重新生成 */}
-        <div className="flex gap-1.5">
-          <button
-            onClick={copy}
-            disabled={!finalPrompt}
-            className="flex-1 rounded-md bg-panel2 px-3 py-1.5 text-xs text-ink hover:bg-edge disabled:opacity-50"
-          >
-            {copied ? "已复制 ✓" : "复制"}
-          </button>
-          {sessionId && !busy && (
-            <button
-              onClick={sendCodex}
-              disabled={!finalPrompt || !codexHealth?.ok}
-              title="用当前编辑器 prompt 开新会话（清空上方对话）"
-              className="flex-1 rounded-md bg-panel2 px-3 py-1.5 text-xs text-ink hover:bg-edge disabled:opacity-50"
-            >
-              ↻ 重新生成
-            </button>
-          )}
-        </div>
+      <div className="shrink-0 space-y-2 border-t border-edge p-3">
+        <button
+          onClick={send}
+          disabled={!finalPrompt || !codexHealth?.ok || generating}
+          title={
+            !codexHealth?.ok
+              ? codexHealth?.reason || "codex 不可用"
+              : "把最终 prompt + 参考图发 codex CLI 生成图像（结果进「生成结果」面板）"
+          }
+          className="w-full rounded-md bg-accent px-3 py-2 text-sm font-semibold text-black disabled:opacity-50"
+        >
+          {generating ? "生成中…（见「生成结果」面板）" : "✓ 发送 codex 生成"}
+        </button>
+        <button
+          onClick={copy}
+          disabled={!finalPrompt}
+          className="w-full rounded-md bg-panel2 px-3 py-1.5 text-xs text-ink hover:bg-edge disabled:opacity-50"
+        >
+          {copied ? "已复制 ✓" : "复制 prompt + 参考图清单"}
+        </button>
         <div className="text-[10px] text-muted">
           {codexHealth && !codexHealth.ok
             ? codexHealth.reason
-            : "🎨 生成 → 提修改意见续接同一 codex 会话迭代出图。"}
+            : "🎨 发送后自动弹出「生成结果」面板；生成期间本板可继续组下一轮稿。"}
         </div>
-        {streaming && (
-          <pre className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded bg-panel2 p-2 text-[11px] text-ink">
-            {streaming}
-          </pre>
-        )}
       </div>
     </aside>
   );
