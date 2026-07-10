@@ -7,6 +7,7 @@ import { AssetDetail } from "./components/AssetDetail";
 import { BatchBar } from "./components/BatchBar";
 import { CreationBoard } from "./components/CreationBoard";
 import { GenerationPanel } from "./components/GenerationPanel";
+import { CodexOnboarding } from "./components/CodexOnboarding";
 import { useStore } from "./store";
 import { api } from "./lib/api";
 import type { CodexChunk } from "./lib/types";
@@ -163,6 +164,8 @@ function App() {
 
   return (
     <div className="flex h-full w-full flex-col">
+      {/* codex 首启引导：未装/未登录时全屏遮罩（组件自管可见性，已就绪或已看过则返回 null） */}
+      <CodexOnboarding />
       <Toolbar onRefresh={refresh} />
       <div className="flex flex-1 overflow-hidden">
         <Sidebar />
