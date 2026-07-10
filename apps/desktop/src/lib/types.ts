@@ -20,11 +20,13 @@ export interface Asset {
   generation_session_id?: string | null;
 }
 
+export type FolderKind = "folder" | "smart" | "collection";
+
 export interface Folder {
   id: string;
   name: string;
   parent_id?: string | null;
-  kind?: string | null;
+  kind?: FolderKind | null;
   smart_query?: string | null;
 }
 

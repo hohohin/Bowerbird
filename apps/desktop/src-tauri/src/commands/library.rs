@@ -138,6 +138,87 @@ pub async fn create_folder(
 }
 
 #[tauri::command]
+pub async fn create_collection(
+    app: AppHandle,
+    db: State<'_, Arc<Database>>,
+    name: String,
+) -> Result<String, AppError> {
+    let id = Ulid::new().to_string();
+    let db = db.inner().clone();
+    let id_clone = id.clone();
+    tokio::task::spawn_blocking(move || db.create_collection(&id_clone, &name))
+        .await
+        .map_err(|e| AppError::Other(e.to_string()))??;
+    let _ = app.emit("library://assets-changed", ());
+    Ok(id)
+}
+
+#[tauri::command]
+pub async fn list_collections(db: State<'_, Arc<Database>>) -> Result<Vec<Folder>, AppError> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || db.list_collections())
+        .await
+        .map_err(|e| AppError::Other(e.to_string()))?
+}
+
+#[tauri::command]
+pub async fn list_asset_collections(
+    db: State<'_, Arc<Database>>,
+    asset_id: String,
+) -> Result<Vec<Folder>, AppError> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || db.list_collections_for_asset(&asset_id))
+        .await
+        .map_err(|e| AppError::Other(e.to_string()))?
+}
+
+#[tauri::command]
+pub async fn add_asset_to_collection(
+    app: AppHandle,
+    db: State<'_, Arc<Database>>,
+    asset_id: String,
+    collection_id: String,
+) -> Result<(), AppError> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || db.add_asset_to_collection(&asset_id, &collection_id))
+        .await
+        .map_err(|e| AppError::Other(e.to_string()))??;
+    let _ = app.emit("library://assets-changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn remove_asset_from_collection(
+    app: AppHandle,
+    db: State<'_, Arc<Database>>,
+    asset_id: String,
+    collection_id: String,
+) -> Result<(), AppError> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || db.remove_asset_from_collection(&asset_id, &collection_id))
+        .await
+        .map_err(|e| AppError::Other(e.to_string()))??;
+    let _ = app.emit("library://assets-changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn list_assets_by_collection(
+    db: State<'_, Arc<Database>>,
+    collection_id: String,
+    limit: Option<i64>,
+    offset: Option<i64>,
+) -> Result<Vec<Asset>, AppError> {
+    let db = db.inner().clone();
+    let v = tokio::task::spawn_blocking(move || {
+        db.list_assets_by_collection(&collection_id, limit.unwrap_or(500), offset.unwrap_or(0))
+    })
+    .await
+    .map_err(|e| AppError::Other(e.to_string()))??;
+    Ok(collapse_generation_groups(v, |a: &Asset| a.generation_session_id.as_deref()))
+}
+
+#[tauri::command]
 pub async fn delete_asset(
     db: State<'_, Arc<Database>>,
     id: String,

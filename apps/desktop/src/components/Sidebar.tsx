@@ -15,6 +15,7 @@ export function Sidebar() {
   const total = useStore((s) => s.total);
   const selectedCount = useStore((s) => s.selectedIds.size);
   const currentFolderId = useStore((s) => s.currentFolderId);
+  const currentCollectionId = useStore((s) => s.currentCollectionId);
   const setCurrentFolder = useStore((s) => s.setCurrentFolder);
   const colorFilter = useStore((s) => s.colorFilter);
   const setColorFilter = useStore((s) => s.setColorFilter);
@@ -24,13 +25,18 @@ export function Sidebar() {
   const reloadFolders = useStore((s) => s.reloadFolders);
   const autoTags = useStore((s) => s.autoTags);
 
-  // inline 新建表单：none | folder | smart（避开 window.prompt——Tauri WKWebView 拦截原生对话框）。
-  const [creating, setCreating] = useState<"none" | "folder" | "smart">("none");
+  // inline 新建表单：none | folder | smart | collection（避开 window.prompt——Tauri WKWebView 拦截原生对话框）。
+  const [creating, setCreating] = useState<"none" | "folder" | "smart" | "collection">("none");
   const [draftName, setDraftName] = useState("");
   const [smartKind, setSmartKind] = useState<"source" | "ext">("source");
   const [smartValue, setSmartValue] = useState("");
 
   const palette = useStore((s) => s.palette);
+  const normalFolders = folders.filter(
+    (f) => f.id !== "root" && (f.kind ?? "folder") === "folder"
+  );
+  const smartFolders = folders.filter((f) => f.id !== "root" && f.kind === "smart");
+  const collections = folders.filter((f) => f.id !== "root" && f.kind === "collection");
 
   function resetCreate() {
     setCreating("none");
@@ -45,6 +51,8 @@ export function Sidebar() {
     try {
       if (creating === "folder") {
         await api.createFolder(name);
+      } else if (creating === "collection") {
+        await api.createCollection(name);
       } else {
         const val = smartValue.trim();
         if (!val) return;
@@ -58,7 +66,7 @@ export function Sidebar() {
     resetCreate();
   }
 
-  function startCreate(kind: "folder" | "smart") {
+  function startCreate(kind: "folder" | "smart" | "collection") {
     setCreating(kind);
     setDraftName("");
     setSmartValue("");
@@ -88,6 +96,13 @@ export function Sidebar() {
           >
             + 智能
           </button>
+          <button
+            onClick={() => (creating === "collection" ? resetCreate() : startCreate("collection"))}
+            className="rounded text-accent hover:opacity-80"
+            title="新建收藏夹"
+          >
+            + 收藏
+          </button>
         </span>
       </div>
 
@@ -101,7 +116,13 @@ export function Sidebar() {
               if (e.key === "Enter") submitCreate();
               if (e.key === "Escape") resetCreate();
             }}
-            placeholder={creating === "folder" ? "文件夹名" : "智能文件夹名"}
+            placeholder={
+              creating === "folder"
+                ? "文件夹名"
+                : creating === "collection"
+                  ? "收藏夹名"
+                  : "智能文件夹名"
+            }
             className="rounded bg-panel px-2 py-1 outline-none ring-1 ring-edge focus:ring-accent"
           />
           {creating === "smart" && (
@@ -144,7 +165,7 @@ export function Sidebar() {
       <div className="space-y-1">
         <div
           className={`flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 ${
-            currentFolderId === null && !smartFilter ? "bg-panel2" : "hover:bg-panel2"
+            currentFolderId === null && !smartFilter && !currentCollectionId ? "bg-panel2" : "hover:bg-panel2"
           }`}
           onClick={() => setCurrentFolder(null)}
         >
@@ -161,12 +182,32 @@ export function Sidebar() {
         >
           ✨ 生成图
         </div>
-        {folders
-          .filter((f) => f.id !== "root")
-          .map((f) => (
-            <FolderRow key={f.id} folder={f} />
-          ))}
+        {normalFolders.map((f) => (
+          <FolderRow key={f.id} folder={f} />
+        ))}
       </div>
+
+      {collections.length > 0 && (
+        <>
+          <div className="mb-2 mt-4 text-xs uppercase tracking-wide text-muted">收藏夹</div>
+          <div className="space-y-1">
+            {collections.map((f) => (
+              <FolderRow key={f.id} folder={f} />
+            ))}
+          </div>
+        </>
+      )}
+
+      {smartFolders.length > 0 && (
+        <>
+          <div className="mb-2 mt-4 text-xs uppercase tracking-wide text-muted">智能文件夹</div>
+          <div className="space-y-1">
+            {smartFolders.map((f) => (
+              <FolderRow key={f.id} folder={f} />
+            ))}
+          </div>
+        </>
+      )}
 
       {autoTags.length > 0 && (
         <>
@@ -247,10 +288,13 @@ export function Sidebar() {
  *  改名 = 行内 input（Enter 存 / Esc 取消）；删除 = 两段式确认。 */
 function FolderRow({ folder }: { folder: Folder }) {
   const currentFolderId = useStore((s) => s.currentFolderId);
+  const currentCollectionId = useStore((s) => s.currentCollectionId);
   const setCurrentFolder = useStore((s) => s.setCurrentFolder);
+  const setCurrentCollection = useStore((s) => s.setCurrentCollection);
   const reloadFolders = useStore((s) => s.reloadFolders);
   const isSmart = folder.kind === "smart";
-  const active = currentFolderId === folder.id;
+  const isCollection = folder.kind === "collection";
+  const active = isCollection ? currentCollectionId === folder.id : currentFolderId === folder.id;
 
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(folder.name);
@@ -272,8 +316,9 @@ function FolderRow({ folder }: { folder: Folder }) {
     setConfirming(false);
     try {
       await api.deleteFolder(folder.id);
-      // 删的是当前所在夹 → 回「全部」，否则 currentFolderId 悬空导致 list_assets 空白。
+      // 删的是当前所在夹/收藏夹 → 回「全部」，否则当前 scope 悬空导致列表空白。
       if (useStore.getState().currentFolderId === folder.id) setCurrentFolder(null);
+      if (useStore.getState().currentCollectionId === folder.id) setCurrentCollection(null);
       await reloadFolders();
     } catch (e) {
       console.error("delete folder failed", e);
@@ -312,7 +357,7 @@ function FolderRow({ folder }: { folder: Folder }) {
     return (
       <div className="flex items-center gap-1 rounded bg-panel2 px-2 py-1.5 text-[10px] text-muted">
         <span className="flex-1 truncate">
-          {isSmart ? "不影响素材，删除？" : "素材回到全部，删除？"}
+          {isSmart ? "不影响素材，删除？" : isCollection ? "只移除收藏关系，删除？" : "素材回到全部，删除？"}
         </span>
         <button
           onClick={(e) => {
@@ -344,11 +389,11 @@ function FolderRow({ folder }: { folder: Folder }) {
       className={`group flex cursor-pointer items-center gap-1 rounded px-2 py-1.5 ${
         active ? "bg-panel2" : "hover:bg-panel2"
       }`}
-      onClick={() => setCurrentFolder(folder.id)}
+      onClick={() => (isCollection ? setCurrentCollection(folder.id) : setCurrentFolder(folder.id))}
       title={folder.smart_query ?? ""}
     >
       <span className="flex-1 truncate">
-        {isSmart ? "🔍" : "📁"} {folder.name}
+        {isSmart ? "🔍" : isCollection ? "★" : "📁"} {folder.name}
       </span>
       <span className={`flex items-center gap-0.5 ${actionCls}`}>
         <button
@@ -368,7 +413,7 @@ function FolderRow({ folder }: { folder: Folder }) {
             setConfirming(true);
           }}
           className="rounded px-1 text-xs text-muted hover:text-red-400"
-          title={isSmart ? "删除（不影响素材）" : "删除（素材回到全部）"}
+          title={isSmart ? "删除（不影响素材）" : isCollection ? "删除（只移除收藏关系）" : "删除（素材回到全部）"}
         >
           ✕
         </button>

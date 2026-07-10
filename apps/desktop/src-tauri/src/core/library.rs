@@ -163,6 +163,9 @@ fn asset_from_row(r: &rusqlite::Row) -> rusqlite::Result<Asset> {
 const ASSET_COLS: &str = "id, name, ext, origin_path, store_path, thumb_path, size, width, height, \
     duration, phash, colors, rating, source, source_url, folder_id, created_at, file_mtime, \
     generation_session_id";
+const ASSET_COLS_A: &str = "a.id, a.name, a.ext, a.origin_path, a.store_path, a.thumb_path, \
+    a.size, a.width, a.height, a.duration, a.phash, a.colors, a.rating, a.source, \
+    a.source_url, a.folder_id, a.created_at, a.file_mtime, a.generation_session_id";
 
 /// 瀑布流「同流程合并」：列表已 `ORDER BY created_at DESC` → 同 generation_session_id 的首见者
 /// 即最新一张。按 session 去重保首见、丢后续过程图；无 session（非生成图）原样全留。
@@ -397,6 +400,106 @@ impl Database {
             rusqlite::params![id, name, smart_query],
         )?;
         Ok(())
+    }
+
+    pub fn create_collection(&self, id: &str, name: &str) -> AppResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO folders (id, name, parent_id, kind, created_at) \
+             VALUES (?1, ?2, NULL, 'collection', strftime('%s','now'))",
+            rusqlite::params![id, name],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_collections(&self) -> AppResult<Vec<Folder>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, parent_id, kind, smart_query \
+             FROM folders WHERE kind = 'collection' ORDER BY name",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(Folder {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                parent_id: r.get(2)?,
+                kind: r.get(3)?,
+                smart_query: r.get(4)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    pub fn list_collections_for_asset(&self, asset_id: &str) -> AppResult<Vec<Folder>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT f.id, f.name, f.parent_id, f.kind, f.smart_query \
+             FROM folders f JOIN asset_collections ac ON ac.folder_id = f.id \
+             WHERE ac.asset_id = ?1 AND f.kind = 'collection' \
+             ORDER BY f.name",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![asset_id], |r| {
+            Ok(Folder {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                parent_id: r.get(2)?,
+                kind: r.get(3)?,
+                smart_query: r.get(4)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    pub fn add_asset_to_collection(&self, asset_id: &str, collection_id: &str) -> AppResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO asset_collections (asset_id, folder_id, created_at) \
+             VALUES (?1, ?2, strftime('%s','now'))",
+            rusqlite::params![asset_id, collection_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn remove_asset_from_collection(&self, asset_id: &str, collection_id: &str) -> AppResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM asset_collections WHERE asset_id = ?1 AND folder_id = ?2",
+            rusqlite::params![asset_id, collection_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_assets_by_collection(
+        &self,
+        collection_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> AppResult<Vec<Asset>> {
+        let conn = self.conn.lock().unwrap();
+        let sql = format!(
+            "SELECT {ASSET_COLS_A} FROM assets a \
+             JOIN asset_collections ac ON ac.asset_id = a.id \
+             WHERE ac.folder_id = ?1 \
+             ORDER BY a.created_at DESC LIMIT ?2 OFFSET ?3"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(
+            rusqlite::params![collection_id, limit, offset],
+            asset_from_row,
+        )?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
     }
 
     /// 按 smart_query 过滤资产。前缀：`source:xxx` / `ext:xxx` / `tag:<name>`（未知前缀返回全部）。
@@ -966,6 +1069,10 @@ mod tests {
     }
 
     fn put_asset(db: &Database, name: &str) -> String {
+        put_asset_at(db, name, 0)
+    }
+
+    fn put_asset_at(db: &Database, name: &str, created_at: i64) -> String {
         let id = Ulid::new().to_string();
         db.insert_asset(&Asset {
             id: id.clone(),
@@ -984,7 +1091,7 @@ mod tests {
             source: Some("imported".into()),
             source_url: None,
             folder_id: None,
-            created_at: Some(0),
+            created_at: Some(created_at),
             file_mtime: Some(0),
             generation_session_id: None,
         })
@@ -1313,6 +1420,49 @@ mod tests {
         assert_eq!(counts.len(), 1, "只有被用到的 auto tag 才出现（seed 其余 count=0）");
         assert_eq!(counts[0].name, "风景");
         assert_eq!(counts[0].count, 1);
+    }
+
+    #[test]
+    fn collection_roundtrip_and_guards() {
+        let db = db();
+        let a1 = put_asset_at(&db, "a1", 1);
+        let a2 = put_asset_at(&db, "a2", 2);
+        let c1 = Ulid::new().to_string();
+        let c2 = Ulid::new().to_string();
+        db.create_collection(&c1, "收藏 A").unwrap();
+        db.create_collection(&c2, "收藏 B").unwrap();
+
+        let collections = db.list_collections().unwrap();
+        assert_eq!(collections.len(), 2);
+        assert!(collections.iter().all(|f| f.kind.as_deref() == Some("collection")));
+
+        // 幂等：重复收藏不产生重复行。
+        db.add_asset_to_collection(&a1, &c1).unwrap();
+        db.add_asset_to_collection(&a1, &c1).unwrap();
+        db.add_asset_to_collection(&a1, &c2).unwrap();
+        let linked = db.list_collections_for_asset(&a1).unwrap();
+        assert_eq!(linked.len(), 2);
+
+        // collection 查询只返回关联资产，并按 created_at DESC。
+        db.add_asset_to_collection(&a2, &c1).unwrap();
+        let assets = db.list_assets_by_collection(&c1, 100, 0).unwrap();
+        let ids: Vec<&str> = assets.iter().map(|a| a.id.as_str()).collect();
+        assert_eq!(ids, vec![a2.as_str(), a1.as_str()]);
+
+        // 普通文件夹不能作为收藏目标（trigger 防误用）。
+        let fid = Ulid::new().to_string();
+        db.create_folder(&fid, "普通夹", None).unwrap();
+        assert!(db.add_asset_to_collection(&a1, &fid).is_err());
+
+        // 删除收藏夹只清关系，不删素材。
+        db.delete_folder(&c1).unwrap();
+        assert!(db.get_asset(&a1).unwrap().is_some());
+        assert_eq!(db.list_assets_by_collection(&c1, 100, 0).unwrap().len(), 0);
+        assert_eq!(db.list_collections_for_asset(&a1).unwrap().len(), 1);
+
+        // 删除素材清理收藏关系。
+        db.delete_asset(&a1).unwrap();
+        assert!(db.list_collections_for_asset(&a1).unwrap().is_empty());
     }
 
     #[test]

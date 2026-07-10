@@ -42,6 +42,17 @@ export const api = {
     invoke<string>("create_folder", { name, parentId }),
   createSmartFolder: (name: string, smartQuery: string) =>
     invoke<string>("create_smart_folder", { name, smartQuery }),
+  createCollection: (name: string) =>
+    invoke<string>("create_collection", { name }),
+  listCollections: () => invoke<Folder[]>("list_collections"),
+  listAssetCollections: (assetId: string) =>
+    invoke<Folder[]>("list_asset_collections", { assetId }),
+  addAssetToCollection: (assetId: string, collectionId: string) =>
+    invoke<void>("add_asset_to_collection", { assetId, collectionId }),
+  removeAssetFromCollection: (assetId: string, collectionId: string) =>
+    invoke<void>("remove_asset_from_collection", { assetId, collectionId }),
+  listAssetsByCollection: (collectionId: string, limit = 500, offset = 0) =>
+    invoke<Asset[]>("list_assets_by_collection", { collectionId, limit, offset }),
   renameFolder: (id: string, name: string) =>
     invoke<void>("rename_folder", { id, name }),
   deleteFolder: (id: string) => invoke<void>("delete_folder", { id }),

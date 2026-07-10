@@ -11,8 +11,8 @@ export function BatchBar() {
   const ids = useStore((s) => Array.from(s.selectedIds));
   const exitManage = useStore((s) => s.exitManage);
   const folders = useStore((s) => s.folders);
-  // 移入已有只列普通夹（排除 root 与智能夹）。
-  const existingFolders = folders.filter((f) => f.id !== "root" && f.kind !== "smart");
+  // 移入已有只列普通夹（排除 root、智能夹与收藏夹）。
+  const existingFolders = folders.filter((f) => f.id !== "root" && (f.kind ?? "folder") === "folder");
 
   const [busy, setBusy] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);

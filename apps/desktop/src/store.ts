@@ -19,6 +19,7 @@ interface State {
   selectedIds: Set<string>;
   loading: boolean;
   currentFolderId: string | null;
+  currentCollectionId: string | null;
   colorFilter: string | null; // 颜色桶 key（P3，后端 list_assets_by_color 查询）
   palette: ColorBucket[]; // 全库色板（侧栏渲染，后端 palette_overview）
   searchQuery: string; // FTS5 搜索；空串 = 不搜
@@ -39,6 +40,7 @@ interface State {
   clearSelect: () => void;
   setLoading: (b: boolean) => void;
   setCurrentFolder: (id: string | null) => void;
+  setCurrentCollection: (id: string | null) => void;
   setColorFilter: (c: string | null) => void;
   setSearchQuery: (q: string) => void;
   setSmartFilter: (q: string | null) => void;
@@ -145,6 +147,7 @@ export const useStore = create<State>((set, get) => {
   selectedIds: new Set(),
   loading: false,
   currentFolderId: null,
+  currentCollectionId: null,
   colorFilter: null,
   searchQuery: "",
   smartFilter: null,
@@ -168,17 +171,39 @@ export const useStore = create<State>((set, get) => {
     }),
   clearSelect: () => set({ selectedIds: new Set() }),
   setLoading: (loading) => set({ loading }),
-  // 切文件夹保留颜色筛选（P3：folder + color 叠加）；清详情 + smartFilter（互斥）。
+  // 切文件夹保留颜色筛选（P3：folder + color 叠加）；清详情 + smartFilter/收藏夹（互斥）。
   setCurrentFolder: (currentFolderId) =>
-    set({ currentFolderId, detailAssetId: null, smartFilter: null }),
-  // 颜色与 smartFilter/search 互斥（保留 folder 叠加）。
+    set({ currentFolderId, currentCollectionId: null, detailAssetId: null, smartFilter: null }),
+  // 收藏夹是独立 scope：不与普通文件夹/颜色/搜索/智能查询叠加。
+  setCurrentCollection: (currentCollectionId) =>
+    set({
+      currentCollectionId,
+      currentFolderId: null,
+      detailAssetId: null,
+      smartFilter: null,
+      searchQuery: "",
+      colorFilter: null,
+    }),
+  // 颜色与 smartFilter/search/收藏夹互斥（保留 folder 叠加）。
   setColorFilter: (colorFilter) =>
-    set({ colorFilter, smartFilter: null, searchQuery: "" }),
+    set({ colorFilter, currentCollectionId: null, smartFilter: null, searchQuery: "" }),
   setSearchQuery: (searchQuery) =>
-    set({ searchQuery, detailAssetId: null, smartFilter: null, colorFilter: null }),
-  // 智能查询（如 source:codex）与文件夹/搜索互斥：设它就清 folder/colorFilter。
+    set({
+      searchQuery,
+      currentCollectionId: null,
+      detailAssetId: null,
+      smartFilter: null,
+      colorFilter: null,
+    }),
+  // 智能查询（如 source:codex）与文件夹/收藏夹/搜索互斥：设它就清 folder/colorFilter。
   setSmartFilter: (smartFilter) =>
-    set({ smartFilter, currentFolderId: null, colorFilter: null, detailAssetId: null }),
+    set({
+      smartFilter,
+      currentFolderId: null,
+      currentCollectionId: null,
+      colorFilter: null,
+      detailAssetId: null,
+    }),
   enterManage: () => set({ mode: "manage", detailAssetId: null }),
   exitManage: () => set({ mode: "browse", selectedIds: new Set() }),
   openDetail: (detailAssetId) => set({ detailAssetId }),

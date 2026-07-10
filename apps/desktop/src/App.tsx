@@ -22,6 +22,7 @@ function App() {
   const setClassifyProgress = useStore((s) => s.setClassifyProgress);
   const setAutoAnalyzing = useStore((s) => s.setAutoAnalyzing);
   const currentFolderId = useStore((s) => s.currentFolderId);
+  const currentCollectionId = useStore((s) => s.currentCollectionId);
   const searchQuery = useStore((s) => s.searchQuery);
   const smartFilter = useStore((s) => s.smartFilter);
   const mode = useStore((s) => s.mode);
@@ -44,9 +45,11 @@ function App() {
             ? api.searchAssets(searchQuery)
             : smartFilter
               ? api.listAssetsSmart(smartFilter)
-              : colorFilter
-                ? api.listAssetsByColor(colorFilter, currentFolderId ?? undefined)
-                : api.listAssets(currentFolderId ?? undefined),
+              : currentCollectionId
+                ? api.listAssetsByCollection(currentCollectionId)
+                : colorFilter
+                  ? api.listAssetsByColor(colorFilter, currentFolderId ?? undefined)
+                  : api.listAssets(currentFolderId ?? undefined),
           api.countAssets(),
         ]);
         setAssets(assets);
@@ -64,7 +67,7 @@ function App() {
     refresh();
     // 依赖 currentFolderId / searchQuery / boardOpen：切换文件夹、搜索或开关创作板时重拉
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentFolderId, searchQuery, smartFilter, colorFilter, boardOpen]);
+  }, [currentFolderId, currentCollectionId, searchQuery, smartFilter, colorFilter, boardOpen]);
 
   // 浏览器扩展采集入库后后端 emit `library://assets-changed`，
   // 去抖合并（扩展批量采集会连发多条 WS 消息）后刷新。
@@ -81,7 +84,7 @@ function App() {
     };
     // boardOpen 进依赖：保证刷新闭包看到最新 boardOpen（创作板模式下取 prompted 集合）
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentFolderId, searchQuery, smartFilter, colorFilter, boardOpen]);
+  }, [currentFolderId, currentCollectionId, searchQuery, smartFilter, colorFilter, boardOpen]);
 
   // 反推后台化后，触发反推的组件可能早已卸载；后端 emit `analyses://changed`
   // 通知数据落地。仅创作板模式需要刷新 promptedAssets（浏览瀑布流只显缩略图，

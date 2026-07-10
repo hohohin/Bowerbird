@@ -5,7 +5,7 @@ import { open } from "@tauri-apps/plugin-shell";
 import { useStore } from "../store";
 import { api } from "../lib/api";
 import { PromptEditor } from "./PromptEditor";
-import type { Analysis, Asset, AssetTag, CodexHealth } from "../lib/types";
+import type { Analysis, Asset, AssetTag, CodexHealth, Folder } from "../lib/types";
 
 const VIDEO_EXTS = ["mp4", "mov", "webm", "mkv", "avi", "m4v"];
 // 反推默认指令：带维度的结构化模板。产出 `- **维度名**` 段落，后端 caption::parse
@@ -214,6 +214,8 @@ export function AssetDetail() {
   const runDescribe = useStore((s) => s.runDescribe);
   const cancelDescribe = useStore((s) => s.cancelDescribe);
   const describeStartedAt = useStore((s) => s.describeStartedAt);
+  const folders = useStore((s) => s.folders);
+  const reloadFolders = useStore((s) => s.reloadFolders);
   // 本图反推状态：正在跑 / 在队列里（位置从 1 起）/ 空闲。
   const describing = useStore((s) => s.describingId === id);
   const queuePosition = useStore((s) => {
@@ -240,6 +242,12 @@ export function AssetDetail() {
   const [tags, setTags] = useState<AssetTag[]>([]);
   const [addingTag, setAddingTag] = useState(false);
   const [tagDraft, setTagDraft] = useState("");
+  const [assetCollections, setAssetCollections] = useState<Folder[]>([]);
+  const [collectionPanelOpen, setCollectionPanelOpen] = useState(false);
+  const [targetCollectionId, setTargetCollectionId] = useState("");
+  const [creatingCollection, setCreatingCollection] = useState(false);
+  const [collectionName, setCollectionName] = useState("");
+  const [collectionBusy, setCollectionBusy] = useState(false);
   const timerRef = useRef<number | null>(null);
 
   async function loadAnalyses() {
@@ -286,9 +294,71 @@ export function AssetDetail() {
       console.error(e);
     }
   }
+
+  async function loadCollections() {
+    if (!id) return;
+    try {
+      setAssetCollections(await api.listAssetCollections(id));
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  async function addToCollection(collectionId: string) {
+    if (!id || !collectionId) return;
+    setCollectionBusy(true);
+    try {
+      await api.addAssetToCollection(id, collectionId);
+      await loadCollections();
+      await reloadFolders();
+      setTargetCollectionId("");
+      setCollectionPanelOpen(false);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setCollectionBusy(false);
+    }
+  }
+
+  async function createAndAddCollection() {
+    const name = collectionName.trim();
+    if (!id || !name) return;
+    setCollectionBusy(true);
+    try {
+      const collectionId = await api.createCollection(name);
+      await api.addAssetToCollection(id, collectionId);
+      setCreatingCollection(false);
+      setCollectionName("");
+      await reloadFolders();
+      await loadCollections();
+      setCollectionPanelOpen(false);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setCollectionBusy(false);
+    }
+  }
+
+  async function removeFromCollection(collectionId: string) {
+    if (!id) return;
+    setCollectionBusy(true);
+    try {
+      await api.removeAssetFromCollection(id, collectionId);
+      await loadCollections();
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setCollectionBusy(false);
+    }
+  }
   useEffect(() => {
     loadAnalyses();
     loadTags();
+    loadCollections();
+    setCollectionPanelOpen(false);
+    setTargetCollectionId("");
+    setCreatingCollection(false);
+    setCollectionName("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
@@ -462,6 +532,9 @@ export function AssetDetail() {
     }
   }, [analyses]);
   const promptEmpty = describePrompt.trim().length === 0;
+  const collections = folders.filter((f) => f.kind === "collection");
+  const collectedIds = new Set(assetCollections.map((f) => f.id));
+  const availableCollections = collections.filter((f) => !collectedIds.has(f.id));
 
   return (
     <div className="flex h-full w-full flex-col">
@@ -483,6 +556,19 @@ export function AssetDetail() {
             {asset.source}
           </span>
         ) : null}
+        <button
+          onClick={() => setCollectionPanelOpen((v) => !v)}
+          className={`ml-auto rounded px-2 py-1 text-sm hover:bg-panel2 ${
+            assetCollections.length > 0 ? "text-accent" : "text-muted hover:text-ink"
+          }`}
+          title={
+            assetCollections.length > 0
+              ? `已收藏到 ${assetCollections.length} 个收藏夹`
+              : "收藏"
+          }
+        >
+          {assetCollections.length > 0 ? "★" : "☆"} 收藏
+        </button>
       </header>
 
       <div className="flex flex-1 overflow-hidden">
@@ -526,6 +612,112 @@ export function AssetDetail() {
         </div>
 
         <aside className="w-96 shrink-0 space-y-4 overflow-y-auto border-l border-edge bg-panel p-3">
+          {collectionPanelOpen && (
+            <div className="space-y-2 rounded bg-panel2 p-2 text-xs">
+              <div className="flex items-center justify-between">
+                <div className="font-medium uppercase tracking-wide text-accent">收藏到</div>
+                <button
+                  onClick={() => setCollectionPanelOpen(false)}
+                  className="text-muted hover:text-ink"
+                  title="关闭"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="flex flex-wrap gap-1.5">
+                {assetCollections.length === 0 ? (
+                  <span className="text-muted">尚未收藏到任何收藏夹</span>
+                ) : (
+                  assetCollections.map((c) => (
+                    <span
+                      key={c.id}
+                      className="flex items-center gap-1 rounded bg-accent/15 px-2 py-0.5 text-[11px] text-accent"
+                    >
+                      ★ {c.name}
+                      <button
+                        onClick={() => removeFromCollection(c.id)}
+                        disabled={collectionBusy}
+                        className="text-[10px] opacity-60 hover:opacity-100 disabled:opacity-30"
+                        title="从该收藏夹移除"
+                      >
+                        ✕
+                      </button>
+                    </span>
+                  ))
+                )}
+              </div>
+
+              {creatingCollection ? (
+                <div className="flex items-center gap-1">
+                  <input
+                    autoFocus
+                    value={collectionName}
+                    onChange={(e) => setCollectionName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") createAndAddCollection();
+                      if (e.key === "Escape") {
+                        setCreatingCollection(false);
+                        setCollectionName("");
+                      }
+                    }}
+                    placeholder="收藏夹名"
+                    className="w-32 rounded bg-panel px-2 py-1 text-xs outline-none ring-1 ring-edge focus:ring-accent"
+                  />
+                  <button
+                    onClick={createAndAddCollection}
+                    disabled={collectionBusy || !collectionName.trim()}
+                    className="rounded bg-accent px-2 py-1 text-xs text-black disabled:opacity-50"
+                  >
+                    创建并收藏
+                  </button>
+                  <button
+                    onClick={() => {
+                      setCreatingCollection(false);
+                      setCollectionName("");
+                    }}
+                    disabled={collectionBusy}
+                    className="text-xs text-muted hover:text-ink"
+                  >
+                    取消
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-1">
+                  <select
+                    value={targetCollectionId}
+                    onChange={(e) => setTargetCollectionId(e.target.value)}
+                    disabled={collectionBusy || availableCollections.length === 0}
+                    className="min-w-0 flex-1 rounded bg-panel px-1.5 py-1 text-xs outline-none ring-1 ring-edge focus:ring-accent disabled:opacity-50"
+                  >
+                    <option value="">
+                      {availableCollections.length === 0 ? "没有可选收藏夹" : "选择收藏夹"}
+                    </option>
+                    {availableCollections.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={() => addToCollection(targetCollectionId)}
+                    disabled={collectionBusy || !targetCollectionId}
+                    className="rounded bg-accent px-2 py-1 text-xs text-black disabled:opacity-50"
+                  >
+                    确定
+                  </button>
+                  <button
+                    onClick={() => setCreatingCollection(true)}
+                    disabled={collectionBusy}
+                    className="text-xs text-accent hover:opacity-80 disabled:opacity-50"
+                  >
+                    + 新建
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="space-y-1.5">
             <div className="text-xs font-medium uppercase tracking-wide text-muted">
               信息

@@ -6,6 +6,7 @@
 //! - `0005_tags_source.sql`：tags 加 source 列 + seed 预置自动归类词表（P2）
 //! - `0006_color_buckets.sql`：asset_colors 颜色量化桶表（P3）
 //! - `0007_generation_groups.sql`：assets 加 generation_session_id + 回填（生成图同流程合并）
+//! - `0008_collections.sql`：多对多收藏夹（folders.kind='collection' + asset_collections）
 
 use rusqlite_migration::{M, Migrations};
 
@@ -18,5 +19,6 @@ pub fn migrations() -> Migrations<'static> {
         M::up(include_str!("../../sql/0005_tags_source.sql")),
         M::up(include_str!("../../sql/0006_color_buckets.sql")),
         M::up(include_str!("../../sql/0007_generation_groups.sql")),
+        M::up(include_str!("../../sql/0008_collections.sql")),
     ])
 }
