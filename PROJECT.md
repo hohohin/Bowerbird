@@ -23,7 +23,7 @@
 
 ## 目前进展
 
-> 更新时间：2026-07-10
+> 更新时间：2026-07-14
 
 **当前阶段：1.0 功能路径打通 + v1 范围扩展到生成（⑥）+ 创作板 UI 已实现。** 详情页「反推」真正看图（codex CLI + gpt-5.5，ChatGPT 订阅，绕过 API quota）；FTS5 文件名搜索可用；**创作板（真实 prompt 文本编辑器 + @ 选图）已落地**（[CreationBoard.tsx](apps/desktop/src/components/CreationBoard.tsx)）；**生成（⑥）纳入 v1**，待 spike 验证 codex CLI 的画图能力。
 
@@ -32,6 +32,8 @@
 **已完成：**
 - **Phase 0（脚手架）**：monorepo（pnpm workspace）、Tauri 2 + React 18 + Vite + Tailwind + Zustand、`rusqlite`(bundled, FTS5) + 迁移（§4.2 全表）、`CodexProvider` trait + Mock + ClaudeCode（默认禁用）、SQLite 任务队列骨架。
 - **Phase 1（P0 MVP）**：导入流水线（probe → 缩略图 → dHash → 去重 → 入库）、资源库 CRUD、瀑布流（CSS columns + 缩略图懒加载）、侧栏、浏览器扩展采集（MV3 + WS `127.0.0.1:39871` + 下载入库）。
+- **小红书采集 P0（2026-07-14）**：扩展为 `xiaohongshu.com` 增加结构化适配——发现页读 `feed.feeds` 只采笔记封面（滚动新增卡片由笔记链接内主图补齐，排除头像/装饰），图文详情读 `noteDetailMap.note.imageList` 采完整有序图片；视频笔记仅采封面，不读取 Cookie、不调用私有 API。扩展由「每图一个 WS」改 `save_batch` 单连接批次协议，逐项携带 `media_url`（下载）+ 笔记 `source_url`（追溯）并返回逐项结果；桌面下载器复用 `reqwest::Client`，带 UA/Referer、按文件魔数/Content-Type 识别 WebP 等真实格式、ULID 安全临时文件、30s 超时/50 MiB 上限/最多 5 次安全重定向，并拒绝本机与常见内网直连。相关 [content.js](apps/extension/content.js)、[ws_server.rs](apps/desktop/src-tauri/src/collect/ws_server.rs)、[ingest.rs](apps/desktop/src-tauri/src/core/ingest.rs)、[扩展 README](apps/extension/README.md)。
+- **品牌标识 + Windows 安装包（2026-07-14）**：使用用户提供的 `BowerBird logo2.png` 作为唯一图形源，确定性裁去外层无效黑边并透明化外角（不重绘鸟/巢/深蓝底），生成 Tauri 的 Windows/macOS/iOS/Android 全套应用图标；扩展 Manifest 增加 16/32/48/128 图标，网页悬浮采集入口由 🐦 改为新 Logo（根目录扩展、Windows override、Windows 独立加载版三处同步）。NSIS 显式配置安装器/卸载器图标为 `icons/icon.ico`；[Windows/build.ps1](Windows/build.ps1) 已修正单返回值路径解析并成功产出 [Bowerbird_0.1.0_x64-setup.exe](Windows/dist/Bowerbird_0.1.0_x64-setup.exe)（Windows x64，一键安装，未签名；SHA-256 `8D68FD99CFA1D87F1C083320FDE4ACEF3C7F832D03041A01957B7768AB32D4EF`）。
 - **Phase 2（P1）**：K-Means 提色（LAB）+ 主色条 + 颜色筛选、多格式预览（SVG 前端直渲染 / 视频 ffmpeg 抽帧）、智能文件夹（`source:`/`ext:` 过滤）。
 - **Phase 3（核心枢纽）**：prompts/asset_prompts CRUD、提示词编辑器（绑定 main/ref/desc）、**选图组创作包 `assemble_pack`**、创作包导出（prompt + 参考图清单）、`ClaudeCodeProvider` 真实接入（`claude -p --output-format stream-json` 流式）+ 前端 event 流式呈现。
 - **桌面端 UX 重构（2026-07-05）**：浏览/批量双模式（默认浏览：点图→详情页；「批量管理」进入多选）；详情页（大图 `store_path` + 元信息 + 提示词板块 + 来源外链）；`move_assets_to_folder` 命令；`codex_generate_prompt_for_asset` 命令（Mock 走通，真实多模态待 Phase 5 spike）。瀑布流缩略图抖动已修（`aspect-ratio` 占位）。
@@ -59,7 +61,7 @@
 
 - **新用户上手：codex 首启引导页 + 未签名 dmg（2026-07-10）**：① 新用户原本拿不到 app、且 codex 未就绪时 UI 只置灰按钮 + 小字 `reason`、不知 codex 为何物/如何配置。新增 [CodexOnboarding.tsx](apps/desktop/src/components/CodexOnboarding.tsx)——项目首个全屏 Modal（`fixed inset-0 z-50` + `bg-black/60` 遮罩 + 居中卡片，组件自管可见性、不满足条件直接 `return null`）：`codexHealth` 未就绪且未「稍后」/未通过检测时弹出，三步引导（`npm i -g @openai/codex` / `codex login` 登录 ChatGPT 订阅 / 重新检测）+ 命令复制按钮 +「稍后再说」（localStorage `bowerbird.onboardingSeen` 持久不再弹）/「重新检测」（重跑 `codexHealth`、通过即关）；[App.tsx](apps/desktop/src/App.tsx) 最外层 div 内、`<Toolbar>` 前无条件渲染 `{<CodexOnboarding />}`。`codexHealth` 复用 store（App 挂载已取、不重复调），「已看过」flag 照 [AssetDetail.tsx](apps/desktop/src/components/AssetDetail.tsx) 的 localStorage 范式不入 store。② **首个未签名 dmg 出包**：`pnpm tauri build` → `target/release/bundle/dmg/Bowerbird_0.1.0_x64.dmg`（未签名，首次打开需右键→打开绕 Gatekeeper，或 `xattr -dr com.apple.quarantine`）。**范围**：纯前端、仅 macOS；Windows 三处 bug（登录检测死读 `$HOME` / 安装检测找不到 `codex.cmd` shim / `codex_cli.rs:68` 取图路径同 bug）/ 签名公证 / 登录态轮询 / `codex_health` 加 `CODEX_HOME` 一致性 均留后续。详见关键约定 13。
 
-**测试：** `cargo test` 47 通过（导入/去重/多图过滤 + assemble_pack + FTS5 文件名搜索 + analyses 读写 + caption sections 解析 + list_prompted_assets + 采集即命名 `clean_name`/`split_name_and_desc` + caption 共享模块 + 生成图取图快照差分 `list_new_generated` + 标签 `get_or_create`/`set_asset_tags` source 隔离 + `tag:` 智能查询 + `list_tags_with_count` + 色板 `hex_to_bucket`/`colors_to_buckets` + `asset_colors` 幂等/folder 过滤 + 会话 prompt 链 `generation_prompt_chain` + 生成图 prompt 维度识别 `extract_dim_sections`/`build_generation_caption` + 同流程合并 `collapse_generation_groups`/`list_generation_group` + 收藏夹 `collection_roundtrip_and_guards`）；前端 `tsc --noEmit` 通过。
+**测试：** `cargo test` 50 通过（导入/去重/多图过滤 + 扩展下载格式识别/本机内网 URL 拒绝 + assemble_pack + FTS5 文件名搜索 + analyses 读写 + caption sections 解析 + list_prompted_assets + 采集即命名 `clean_name`/`split_name_and_desc` + caption 共享模块 + 生成图取图快照差分 `list_new_generated` + 标签 `get_or_create`/`set_asset_tags` source 隔离 + `tag:` 智能查询 + `list_tags_with_count` + 色板 `hex_to_bucket`/`colors_to_buckets` + `asset_colors` 幂等/folder 过滤 + 会话 prompt 链 `generation_prompt_chain` + 生成图 prompt 维度识别 `extract_dim_sections`/`build_generation_caption` + 同流程合并 `collapse_generation_groups`/`list_generation_group` + 收藏夹 `collection_roundtrip_and_guards`）；前端 `tsc --noEmit` 通过；扩展三份 `content.js` / 两份 `background.js` 均通过 `node --check`，三份 Manifest 均通过 JSON 解析。
 
 **未开始 / 待办：**
 - **关键 spike（多模态看图）已接通 — codex CLI 路线**：实测后确定 `codex exec --image` 是当前唯一真正看图的路径（走 **ChatGPT 订阅**，绕过 OpenAI API quota；国内 `chatgpt.com` WS reset 但 codex 自动回退 HTTPS，慢但成功）。`CodexCliProvider`（[codex/codex_cli.rs](apps/desktop/src-tauri/src/codex/codex_cli.rs)）spawn `codex exec --skip-git-repo-check --json --image <path>`，stdin 喂指令，解析 JSONL 事件流（`thread.started`→thread_id、`item.completed`(agent_message)→正文）。**反推支持会话回看**：thread_id 落 caption payload，详情页 caption 卡片「在 codex 中打开」按钮调 `open_codex_session` → osascript 唤起 Terminal.app 跑 `codex resume <thread_id>`，用户在 TUI 看该次反推的完整对话含图（Codex.app 无法定位特定 session，故走 CLI TUI）。**三条备选路线均不通**（已验证）：① `claude -p` 无头把图传 CDN 但不传给模型（"unable to view"）；② DeepSeek HTTP 不接受 OpenAI 的 `image_url` variant（`unknown variant image_url, expected text`）；③ OpenAI HTTP 受账户 `insufficient_quota` 限制。Mock / ClaudeCode（`claude -p`）/ DeepSeek / OpenAI HTTP 路线均已验证看图不通或冗余，**已全部移除**（`codex/` 仅剩 `codex_cli.rs` + `types.rs` + `mod.rs` 仅放 `CodexProvider` trait 定义）；详情页「反推」/ 创作包「发 codex 优化」/ 批量生成提示词统一走 codex CLI，不再有「真实看图」切换或 in-app apikey 配置（`SettingsDialog` / ⚙️ 按钮 / `config.json` / 后端 `Settings` 模块 + `base64` 依赖一并删除）。**`codex_health` 命令保留**——详情页进入时调一次探测 codex CLI 可用性，反推按钮据此置灰并提示原因（约定 7 离线/无账号降级的入口），非看图路线、与上述清理无关。修复了本地 codex CLI（`npm install -g @openai/codex` 0.142.5，之前平台二进制 ENOENT）。`gpt-image-2` 是生成模型，不适合描述，已排除。
@@ -268,3 +270,15 @@
 - 解决：改正向 `(f.kind ?? 'folder') === 'folder'`，只列普通文件夹；收藏夹不进 `folder_id` 选择池。
 - 教训：用「枚举白名单」而非「排除黑名单」过滤可放入 `folder_id` 的容器——新增 kind 时黑名单必然漏。
 - 相关文件：[BatchBar.tsx](apps/desktop/src/components/BatchBar.tsx)。
+
+### 小红书 DOM 扫描漏轮播图、混头像，且 CDN URL 无扩展名（2026-07-14）
+- 现象：发现页通用 `img[src]` 扫描会把头像、Logo、活动图一起采集；图文详情示例标示 10 张，但轮播 DOM 当时只挂 4 张唯一大图，通用扫描漏 6 张。小红书 CDN URL 通常没有文件扩展名，旧下载器把 URL 最后一段直接当 Windows 临时文件名，还可能带 `?` 等非法字符；即使下载内容实际是 WebP，也会得到空/错误扩展名。
+- 根因：小红书是懒加载/虚拟轮播，素材权威列表在内嵌 `window.__INITIAL_STATE__`：发现页为 `feed.feeds[].noteCard.cover`，详情页为 `note.noteDetailMap[id].note.imageList`；CDN 格式由响应内容决定，不由路径后缀决定。旧 WS 收到 `page_url` 却未使用，`source_url` 错存成临时 CDN 地址。
+- 解决：小红书专用适配器安全解析内嵌状态（只在字符串外把 `undefined` 转 `null` 后 `JSON.parse`，绝不执行页面文本）；站内 SPA 打开详情而首屏 script 未更新时，以 `credentials: omit` 重取当前公开详情 HTML，结构化仍失败再回退限定 DOM。`save_batch` 分开传 `media_url` / 笔记 `source_url`；下载器按魔数/Content-Type 定格式并使用 ULID 临时文件。公开 CDN 实测无需 Cookie，P0 明确不申请 Cookie 权限、不绕过登录/风控。
+- 相关文件：[content.js](apps/extension/content.js)、[ws_server.rs](apps/desktop/src-tauri/src/collect/ws_server.rs)、[ingest.rs](apps/desktop/src-tauri/src/core/ingest.rs)。
+
+### PowerShell 单返回值再取 `[-1]` 会退化成路径末字符（2026-07-14）
+- 现象：`prepare.ps1` 明明输出 `D:\H\Project\Bowerbird\Windows\.work`，`build.ps1` 随后却尝试 `Push-Location D:\H\Project\Bowerbird\k`。
+- 根因：PowerShell 命令只有一条成功输出时，赋值结果是标量字符串而非数组；对字符串做 `$WorkDir[-1]` 取得的是最后一个字符 `k`。只有命令返回多条输出时，同一写法才表现为「取最后一项」，因此问题会随输出数量摇摆。
+- 解决：构建与开发脚本统一改为 `... | Select-Object -Last 1`，无论上游返回标量还是数组都取得最后一条完整路径。
+- 相关文件：[Windows/build.ps1](Windows/build.ps1)、[Windows/dev.ps1](Windows/dev.ps1)。

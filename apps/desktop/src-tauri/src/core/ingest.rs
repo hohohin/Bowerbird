@@ -2,10 +2,13 @@
 //! 视频/PSD/SVG 等多格式在 Phase 2 接入；Phase 1 覆盖常见光栅图。
 
 use std::fs;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, UNIX_EPOCH};
 
 use chrono::Utc;
+use futures_util::StreamExt;
+use reqwest::header::{ACCEPT, CONTENT_LENGTH, CONTENT_TYPE, REFERER, USER_AGENT};
 use ulid::Ulid;
 
 use crate::core::library::Asset;
@@ -216,13 +219,44 @@ pub fn ingest_dir(paths: &LibraryPaths, db: &Database, dir: &Path) -> AppResult<
     Ok(assets)
 }
 
-/// 下载扩展采集的图（Phase 1 简化版：reqwest 直链下载到临时文件后走 ingest）。
+const MAX_DOWNLOAD_BYTES: u64 = 50 * 1024 * 1024;
+
+pub fn download_client() -> Result<reqwest::Client, reqwest::Error> {
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if attempt.previous().len() >= 5 || !is_safe_remote_url(attempt.url().as_str()) {
+                attempt.stop()
+            } else {
+                attempt.follow()
+            }
+        }))
+        .build()
+}
+
+/// 下载扩展采集的图，按实际内容识别格式后走统一 ingest 流水线。
 pub async fn ingest_from_url(
+    client: &reqwest::Client,
     paths: &LibraryPaths,
     db: &Database,
     url: &str,
+    source_url: Option<&str>,
 ) -> AppResult<Asset> {
-    let resp = reqwest::get(url)
+    validate_remote_url(url)?;
+    let mut request = client
+        .get(url)
+        .header(
+            USER_AGENT,
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
+             (KHTML, like Gecko) Chrome/126.0 Safari/537.36 Bowerbird/0.1",
+        )
+        .header(ACCEPT, "image/avif,image/webp,image/apng,image/*,*/*;q=0.8");
+    if let Some(referer) = source_url.filter(|value| is_http_url(value)) {
+        request = request.header(REFERER, referer);
+    }
+    let resp = request
+        .send()
         .await
         .map_err(|e| AppError::Media(format!("download {url}: {e}")))?;
     if !resp.status().is_success() {
@@ -231,46 +265,146 @@ pub async fn ingest_from_url(
             resp.status()
         )));
     }
-    let bytes = resp
-        .bytes()
-        .await
-        .map_err(|e| AppError::Media(format!("read body: {e}")))?;
+    validate_remote_url(resp.url().as_str())?;
+    if resp
+        .headers()
+        .get(CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .is_some_and(|size| size > MAX_DOWNLOAD_BYTES)
+    {
+        return Err(AppError::Media(format!(
+            "download exceeds {} MiB limit",
+            MAX_DOWNLOAD_BYTES / 1024 / 1024
+        )));
+    }
+    let content_type = resp
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let mut bytes = Vec::new();
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| AppError::Media(format!("read body: {e}")))?;
+        if bytes.len() as u64 + chunk.len() as u64 > MAX_DOWNLOAD_BYTES {
+            return Err(AppError::Media(format!(
+                "download exceeds {} MiB limit",
+                MAX_DOWNLOAD_BYTES / 1024 / 1024
+            )));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    let ext = downloaded_image_extension(content_type.as_deref(), &bytes)?;
+    let source_path = std::env::temp_dir().join(format!("bowerbird-{}.{}", Ulid::new(), ext));
+    fs::write(&source_path, &bytes)?;
 
-    // 从 URL 推断扩展名
-    let ext = url_path_extension(url);
-    let tmp = std::env::temp_dir().join(format!("bowerbird-{}.{}", Ulid::new(), ext));
-    fs::write(&tmp, &bytes)?;
-
-    // source 的文件名用于 asset.name
-    let source_name = url.rsplit('/').next().unwrap_or("extension-image");
-    let source_path = std::env::temp_dir().join(source_name);
-    let _ = fs::rename(&tmp, &source_path);
-
-    // ingest_file 不会读 source URL；source 标记靠后面 update。这里直接 ingest，再改 source。
-    let mut asset = ingest_file(paths, db, &source_path)?;
+    let ingested = ingest_file(paths, db, &source_path);
+    let _ = fs::remove_file(&source_path);
+    let mut asset = ingested?;
     // 标记来源为 extension + source_url。
+    let source_url = source_url.filter(|value| is_http_url(value)).unwrap_or(url);
     {
         let conn = db.conn.lock().unwrap();
         conn.execute(
             "UPDATE assets SET source='extension', source_url=?1 WHERE id=?2",
-            rusqlite::params![url, asset.id],
+            rusqlite::params![source_url, asset.id],
         )?;
     }
     asset.source = Some("extension".to_string());
-    asset.source_url = Some(url.to_string());
-
-    let _ = fs::remove_file(&source_path);
+    asset.source_url = Some(source_url.to_string());
     Ok(asset)
 }
 
-fn url_path_extension(url: &str) -> String {
-    let path = url.split('?').next().unwrap_or(url);
-    let ext = path.rsplit('.').next().unwrap_or("");
-    if media::is_image_ext(ext) {
-        ext.to_string()
-    } else {
-        "jpg".to_string()
+fn downloaded_image_extension(content_type: Option<&str>, bytes: &[u8]) -> AppResult<&'static str> {
+    if content_type.is_some_and(|value| {
+        value
+            .split(';')
+            .next()
+            .is_some_and(|mime| mime.trim().eq_ignore_ascii_case("image/svg+xml"))
+    }) {
+        return Ok("svg");
     }
+    let format = image::guess_format(bytes)
+        .map_err(|_| AppError::Media("download is not a supported image".to_string()))?;
+    match format {
+        image::ImageFormat::Jpeg => Ok("jpg"),
+        image::ImageFormat::Png => Ok("png"),
+        image::ImageFormat::WebP => Ok("webp"),
+        image::ImageFormat::Gif => Ok("gif"),
+        image::ImageFormat::Bmp => Ok("bmp"),
+        image::ImageFormat::Tiff => Ok("tiff"),
+        _ => Err(AppError::Media(format!(
+            "unsupported downloaded image format: {format:?}"
+        ))),
+    }
+}
+
+fn validate_remote_url(value: &str) -> AppResult<()> {
+    if is_safe_remote_url(value) {
+        Ok(())
+    } else {
+        Err(AppError::Media(
+            "unsafe or invalid download url".to_string(),
+        ))
+    }
+}
+
+fn is_http_url(value: &str) -> bool {
+    reqwest::Url::parse(value)
+        .ok()
+        .is_some_and(|url| matches!(url.scheme(), "http" | "https"))
+}
+
+fn is_safe_remote_url(value: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(value) else {
+        return false;
+    };
+    if !matches!(url.scheme(), "http" | "https") {
+        return false;
+    }
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    if host.eq_ignore_ascii_case("localhost") || host.ends_with(".localhost") {
+        return false;
+    }
+    let ip_host = host
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+        .unwrap_or(host);
+    ip_host.parse::<IpAddr>().map(is_public_ip).unwrap_or(true)
+}
+
+fn is_public_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => is_public_ipv4(ip),
+        IpAddr::V6(ip) => is_public_ipv6(ip),
+    }
+}
+
+fn is_public_ipv4(ip: Ipv4Addr) -> bool {
+    let [a, b, ..] = ip.octets();
+    !(a == 0
+        || a == 10
+        || a == 127
+        || (a == 100 && (64..=127).contains(&b))
+        || (a == 169 && b == 254)
+        || (a == 172 && (16..=31).contains(&b))
+        || (a == 192 && b == 168)
+        || a >= 224)
+}
+
+fn is_public_ipv6(ip: Ipv6Addr) -> bool {
+    if let Some(ipv4) = ip.to_ipv4_mapped() {
+        return is_public_ipv4(ipv4);
+    }
+    let first = ip.segments()[0];
+    !(ip.is_unspecified()
+        || ip.is_loopback()
+        || ip.is_multicast()
+        || (first & 0xfe00) == 0xfc00
+        || (first & 0xffc0) == 0xfe80)
 }
 
 #[cfg(test)]
@@ -314,6 +448,30 @@ mod tests {
             ])
         });
         img.save(path).unwrap();
+    }
+
+    #[test]
+    fn downloaded_format_uses_content_not_url_suffix() {
+        let webp_header = b"RIFF\x00\x00\x00\x00WEBP";
+        assert_eq!(
+            downloaded_image_extension(Some("image/webp"), webp_header).unwrap(),
+            "webp"
+        );
+        assert_eq!(
+            downloaded_image_extension(Some("image/svg+xml; charset=utf-8"), b"<svg/>").unwrap(),
+            "svg"
+        );
+        assert!(downloaded_image_extension(Some("text/html"), b"<html></html>").is_err());
+    }
+
+    #[test]
+    fn remote_url_rejects_local_targets() {
+        assert!(is_safe_remote_url("https://sns-webpic-qc.xhscdn.com/a"));
+        assert!(!is_safe_remote_url("file:///tmp/a.png"));
+        assert!(!is_safe_remote_url("http://localhost/a.png"));
+        assert!(!is_safe_remote_url("http://127.0.0.1/a.png"));
+        assert!(!is_safe_remote_url("http://192.168.1.2/a.png"));
+        assert!(!is_safe_remote_url("http://[::1]/a.png"));
     }
 
     #[test]

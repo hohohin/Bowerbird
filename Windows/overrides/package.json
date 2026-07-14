@@ -1,0 +1,17 @@
+{
+  "name": "bowerbird",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Bowerbird — 本地优先的「提示词 + 参考图」素材库与编排工作台",
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm --filter @bowerbird/desktop dev",
+    "build": "pnpm --filter @bowerbird/desktop build",
+    "tauri": "pnpm --filter @bowerbird/desktop tauri",
+    "lint": "pnpm --filter @bowerbird/desktop lint"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4"
+  },
+  "packageManager": "pnpm@11.10.0"
+}
