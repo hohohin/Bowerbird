@@ -27,3 +27,6 @@ apps/desktop/src-tauri/gen/
 *.db-journal
 library.db
 my-library/
+
+# spec-workflow MCP tool artifacts
+.spec-workflow/
