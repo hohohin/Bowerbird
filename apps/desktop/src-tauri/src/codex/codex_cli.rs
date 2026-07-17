@@ -33,7 +33,7 @@ pub struct CodexCliProvider {
 impl Default for CodexCliProvider {
     fn default() -> Self {
         Self {
-            binary: "codex".to_string(),
+            binary: resolve_codex_binary().unwrap_or_else(|| "codex".to_string()),
             model: String::new(),
             enabled: true,
         }
@@ -65,14 +65,11 @@ impl CodexCliProvider {
         // codex 内置 imagegen 把产物固定写进 ~/.codex/generated_images/（见踩坑）。
         // 跑前快照已有图，跑完按「新增文件」copy —— 比 mtime 稳：不受时钟精度 / 落盘时机 /
         // resume 续接另起 session 子目录影响（mtime 偶发漏图）。
-        let codex_home = std::env::var("CODEX_HOME")
-            .map(PathBuf::from)
-            .ok()
-            .or_else(|| std::env::var("HOME").map(|h| PathBuf::from(h).join(".codex")).ok());
+        let codex_home = codex_home();
         let gen_root = codex_home.map(|h| h.join("generated_images"));
         let before = list_generated_images(gen_root.as_deref());
 
-        let mut cmd = Command::new(&self.binary);
+        let mut cmd = codex_command(&self.binary);
         cmd.arg("exec")
             .arg("--skip-git-repo-check")
             .arg("--json");
@@ -126,20 +123,30 @@ impl CodexCliProvider {
             .stdout
             .take()
             .ok_or_else(|| AppError::Codex("无法获取 codex stdout".into()))?;
-        let mut lines = BufReader::new(stdout).lines();
+        let mut stdout = BufReader::new(stdout);
 
-        // 读行 + 等退出整体套 300s 超时（防 codex 挂住不关 stdout 时无限阻塞）。
+        // 读行 + 等退出整体套 600s 超时（防 codex 挂住不关 stdout 时无限阻塞）。
+        // 多张图串行生成耗时翻倍（每张数十秒），故比反推的 180s 宽松；覆盖典型 4–6 张。
         let (status, session_id, texts) = match tokio::time::timeout(
-            Duration::from_secs(300),
+            Duration::from_secs(600),
             async {
                 let mut session_id: Option<String> = None;
                 let mut texts: Vec<String> = Vec::new();
-                while let Some(line) = lines
-                    .next_line()
-                    .await
-                    .map_err(|e| AppError::Codex(format!("读 codex 输出失败: {e}")))?
-                {
-                    let line = line.trim();
+                let mut line_bytes = Vec::new();
+                loop {
+                    line_bytes.clear();
+                    let read = stdout
+                        .read_until(b'\n', &mut line_bytes)
+                        .await
+                        .map_err(|e| AppError::Codex(format!("读 codex 输出失败: {e}")))?;
+                    if read == 0 {
+                        break;
+                    }
+                    // Windows 的 npm shim / CLI 偶发在 JSONL 流混入本地代码页字节；
+                    // 严格 lines() 会因 invalid UTF-8 终止整个生成，lossy 解码只替换异常字节，
+                    // 完整 JSON 事件仍能照常解析。
+                    let line_lossy = String::from_utf8_lossy(&line_bytes);
+                    let line = line_lossy.trim();
                     if line.is_empty() || !line.starts_with('{') {
                         continue;
                     }
@@ -184,7 +191,20 @@ impl CodexCliProvider {
         {
             Ok(Ok(v)) => v,
             Ok(Err(e)) => return Err(e),
-            Err(_) => return Err(AppError::Codex("codex 生成超时（300s）".into())),
+            Err(_) => {
+                let _ = child.kill().await;
+                let stderr_str = stderr_task.await.unwrap_or_default();
+                let stderr_head: String = stderr_str.trim().chars().take(500).collect();
+                let detail = if stderr_head.is_empty() {
+                    "codex 未输出 stderr；请在命令提示符运行 codex --version 和 codex login"
+                        .to_string()
+                } else {
+                    format!("stderr: {stderr_head}")
+                };
+                return Err(AppError::Codex(format!(
+                    "codex 生成超时（600s） | {detail}"
+                )));
+            }
         };
 
         let stderr_str = stderr_task.await.unwrap_or_default();
@@ -203,6 +223,16 @@ impl CodexCliProvider {
         })
         .await
         .map_err(|e| AppError::Other(e.to_string()))?;
+
+        if source_images.is_empty() {
+            let reply: String = texts.join("\n").trim().chars().take(500).collect();
+            let detail = if reply.is_empty() {
+                "codex 没有返回文字，也没有在 generated_images 中写入图片".to_string()
+            } else {
+                format!("codex 回复：{reply}")
+            };
+            return Err(AppError::Codex(format!("codex 未生成图片 | {detail}")));
+        }
 
         Ok(GenOutcome {
             text: texts.join("\n"),
@@ -330,7 +360,7 @@ impl CodexProvider for CodexCliProvider {
         }
         let start = Instant::now();
 
-        let mut cmd = Command::new(&self.binary);
+        let mut cmd = codex_command(&self.binary);
         cmd.arg("exec")
             .arg("--skip-git-repo-check")
             .arg("--json");
@@ -386,6 +416,87 @@ impl CodexProvider for CodexCliProvider {
             session_id,
             images: Vec::new(),
         })
+    }
+}
+
+/// Windows 的 npm 全局入口通常是 `codex.cmd`，不能直接交给 CreateProcess；
+/// 同时覆盖 GUI 应用常见的 PATH 不完整场景，主动检查 npm 默认目录。
+/// 非 Windows 直接在 PATH 找 `codex`。可用 `BOWERBIRD_CODEX_BINARY` 环境变量显式覆盖。
+pub(crate) fn resolve_codex_binary() -> Option<String> {
+    if let Ok(explicit) = std::env::var("BOWERBIRD_CODEX_BINARY") {
+        if !explicit.trim().is_empty() {
+            return Some(explicit);
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let names = ["codex.exe", "codex.cmd", "codex.bat"];
+        // Codex Desktop 自带的 WindowsApps CLI 可能落后于服务端模型缓存格式。
+        // 优先使用 onboarding 指引安装的 npm CLI，再回退到 PATH 中的版本。
+        if let Some(appdata) = std::env::var_os("APPDATA") {
+            for name in names {
+                let candidate = PathBuf::from(&appdata).join("npm").join(name);
+                if candidate.is_file() {
+                    return Some(candidate.to_string_lossy().into_owned());
+                }
+            }
+        }
+        if let Some(path) = std::env::var_os("PATH") {
+            for dir in std::env::split_paths(&path) {
+                for name in names {
+                    let candidate = dir.join(name);
+                    if candidate.is_file() {
+                        return Some(candidate.to_string_lossy().into_owned());
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    if let Some(path) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path) {
+            let candidate = dir.join("codex");
+            if candidate.is_file() {
+                return Some(candidate.to_string_lossy().into_owned());
+            }
+        }
+    }
+    None
+}
+
+/// codex 凭证/产物根目录：`CODEX_HOME` 优先，否则 `USERPROFILE`（Windows）/ `HOME`（Unix）+ `.codex`。
+/// 与反推/生成的取图快照、auth.json 检测共用，保证三处对「codex home」的判定一致。
+pub(crate) fn codex_home() -> Option<PathBuf> {
+    std::env::var_os("CODEX_HOME").map(PathBuf::from).or_else(|| {
+        std::env::var_os("USERPROFILE")
+            .or_else(|| std::env::var_os("HOME"))
+            .map(|home| PathBuf::from(home).join(".codex"))
+    })
+}
+
+/// 构造跨平台的 codex 子进程 Command。
+/// Windows 上 `.cmd`/`.bat` 入口必须经 `cmd.exe /D /S /C` 调起（CreateProcess 不解析 PATHEXT）；
+/// 并加 `CREATE_NO_WINDOW`（0x08000000）—— Tauri release 是 windows_subsystem="windows"，
+/// 不加此 flag 时 console 子进程会弹出空白 cmd 窗口（stderr/stdout 仍由 pipe 正常捕获）。
+pub(crate) fn codex_command(binary: &str) -> Command {
+    #[cfg(target_os = "windows")]
+    {
+        let lower = binary.to_ascii_lowercase();
+        if lower.ends_with(".cmd") || lower.ends_with(".bat") {
+            let mut command = Command::new("cmd.exe");
+            command.arg("/D").arg("/S").arg("/C").arg(binary);
+            command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+            return command;
+        }
+        let mut command = Command::new(binary);
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        return command;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Command::new(binary)
     }
 }
 

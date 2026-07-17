@@ -12,7 +12,7 @@ use tauri::{AppHandle, Emitter, State};
 use tokio::sync::mpsc;
 use ulid::Ulid;
 
-use crate::codex::codex_cli::CodexCliProvider;
+use crate::codex::codex_cli::{codex_command, codex_home, resolve_codex_binary, CodexCliProvider};
 use crate::codex::types::{Chunk, CodexRequest, CodexResult};
 use crate::codex::CodexProvider;
 use crate::core::caption;
@@ -29,27 +29,32 @@ pub struct CodexHealth {
     pub reason: String,
 }
 
-/// 检测 codex 是否可用于反推：① `codex --version` 可执行；② `~/.codex/auth.json` 存在且非空（已登录）。
+/// 检测 codex 是否可用于反推：① CLI 可执行；② CODEX_HOME（或用户目录）内 auth.json 非空。
 /// 任一不满足返回 `ok=false` + 中文 reason，前端据此置灰反推按钮（约定 7：离线/无账号降级置灰）。
-/// 注：依赖 `$HOME`（macOS/Linux）；Windows 的 codex 凭证路径不同，暂未覆盖。
+/// 跨平台：binary 经 `resolve_codex_binary`（Windows 找 codex.cmd、补 %APPDATA%\npm）、
+/// home 经 `codex_home`（CODEX_HOME → USERPROFILE/HOME），不再死读 `$HOME`。
 #[tauri::command]
 pub async fn codex_health() -> Result<CodexHealth, AppError> {
-    let binary_ok = tokio::process::Command::new("codex")
-        .arg("--version")
-        .output()
-        .await
-        .map(|o| o.status.success())
-        .unwrap_or(false);
+    let binary = resolve_codex_binary();
+    let binary_ok = if let Some(binary) = binary.as_deref() {
+        codex_command(binary)
+            .arg("--version")
+            .output()
+            .await
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    } else {
+        false
+    };
     if !binary_ok {
         return Ok(CodexHealth {
             ok: false,
             reason: "未检测到 codex CLI（需 npm install -g @openai/codex 并在 PATH）".into(),
         });
     }
-    let logged_in = std::env::var("HOME")
-        .ok()
+    let logged_in = codex_home()
         .map(|h| {
-            let p = std::path::PathBuf::from(h).join(".codex").join("auth.json");
+            let p = h.join("auth.json");
             std::fs::metadata(&p).map(|m| m.len() > 0).unwrap_or(false)
         })
         .unwrap_or(false);
@@ -215,7 +220,7 @@ pub async fn codex_create_image(
     let instruction = match &session_id {
         Some(_) => prompt,
         None => format!(
-            "请使用图像生成工具，根据以下提示词和参考图生成一张新图片。\n\n{prompt}"
+            "请使用图像生成工具，根据以下提示词和参考图生成图片（张数完全以提示词要求为准；提示词未指定张数时生成一张）。\n\n{prompt}"
         ),
     };
     let req = CodexRequest {
@@ -548,8 +553,30 @@ pub async fn open_codex_session(session_id: String) -> Result<(), AppError> {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = sid;
-        Err(AppError::Codex("open_codex_session 仅支持 macOS".into()))
+        #[cfg(target_os = "windows")]
+        {
+            // session_id 是 codex 输出的 UUID，仍按白名单校验防注入；`start "" cmd.exe /K`
+            // 经 cmd.exe 另开一个常驻命令提示符跑 `codex resume <sid>`。
+            if !sid.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+                return Err(AppError::Codex("session_id 格式无效".into()));
+            }
+            tokio::process::Command::new("cmd.exe")
+                .arg("/D")
+                .arg("/C")
+                .arg("start")
+                .arg("")
+                .arg("cmd.exe")
+                .arg("/K")
+                .arg(format!("codex resume {sid}"))
+                .spawn()
+                .map_err(|e| AppError::Codex(format!("启动命令提示符失败: {e}")))?;
+            Ok(())
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = sid;
+            Err(AppError::Codex("当前系统暂不支持打开 codex 会话".into()))
+        }
     }
 }
 
