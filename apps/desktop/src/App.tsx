@@ -20,7 +20,9 @@ function App() {
   const reloadAutoTags = useStore((s) => s.reloadAutoTags);
   const colorFilter = useStore((s) => s.colorFilter);
   const reloadPalette = useStore((s) => s.reloadPalette);
+  const reloadPresets = useStore((s) => s.reloadPresets);
   const setClassifyProgress = useStore((s) => s.setClassifyProgress);
+  const setColorRebuild = useStore((s) => s.setColorRebuild);
   const setAutoAnalyzing = useStore((s) => s.setAutoAnalyzing);
   const currentFolderId = useStore((s) => s.currentFolderId);
   const currentCollectionId = useStore((s) => s.currentCollectionId);
@@ -59,6 +61,7 @@ function App() {
       await reloadFolders();
       await reloadAutoTags();
       await reloadPalette();
+      await reloadPresets();
     } catch (e) {
       console.error("refresh failed", e);
     }
@@ -86,6 +89,15 @@ function App() {
     // boardOpen 进依赖：保证刷新闭包看到最新 boardOpen（创作板模式下取 prompted 集合）
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentFolderId, currentCollectionId, searchQuery, smartFilter, colorFilter, boardOpen]);
+
+  // 用途（preset）CRUD 后后端 emit `presets://changed`，刷新创作板下拉。
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    listen("presets://changed", () => {
+      void reloadPresets();
+    }).then((u) => (unlisten = u));
+    return () => unlisten?.();
+  }, [reloadPresets]);
 
   // 反推后台化后，触发反推的组件可能早已卸载；后端 emit `analyses://changed`
   // 通知数据落地。仅创作板模式需要刷新 promptedAssets（浏览瀑布流只显缩略图，
@@ -123,6 +135,21 @@ function App() {
     ).then((u) => (unlisten = u));
     return () => unlisten?.();
   }, [setClassifyProgress]);
+
+  // 重建色板进度（P3）：color://rebuild-progress {done,total,ended?}；ended 时清空。
+  // 从 Toolbar 提到全局——设置面板开关不影响后台重建进度的跟踪。
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    listen<{ done: number; total: number; ended?: boolean }>(
+      "color://rebuild-progress",
+      (e) => {
+        setColorRebuild(
+          e.payload.ended ? null : { done: e.payload.done, total: e.payload.total }
+        );
+      }
+    ).then((u) => (unlisten = u));
+    return () => unlisten?.();
+  }, [setColorRebuild]);
 
   // 导入即基础分析在途计数（autoname 后台跑，fire-and-forget 否则前端无感）：
   // 后端拿到信号量 +1 / 释放 -1 时 emit `codex://auto-active`，>0 顶部状态圈算分析中。

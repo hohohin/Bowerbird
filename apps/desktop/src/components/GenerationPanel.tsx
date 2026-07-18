@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { useStore } from "../store";
+import { api } from "../lib/api";
 import type { GenTurn } from "../lib/types";
+import { Lightbox } from "./Lightbox";
 
 /**
  * 生成结果面板（独立于创作板）。
@@ -16,20 +18,39 @@ export function GenerationPanel() {
   const generating = useStore((s) => s.generating);
   const genSessionId = useStore((s) => s.genSessionId);
   const genLastPrompt = useStore((s) => s.genLastPrompt);
-  const genLastRefs = useStore((s) => s.genLastRefs);
+  const genRefAssets = useStore((s) => s.genRefAssets);
+
   const codexHealth = useStore((s) => s.codexHealth);
   const setGenPanelOpen = useStore((s) => s.setGenPanelOpen);
   const sendGenRevise = useStore((s) => s.sendGenRevise);
   const cancelGeneration = useStore((s) => s.cancelGeneration);
   const startGeneration = useStore((s) => s.startGeneration);
+  const reusePromptToBoard = useStore((s) => s.reusePromptToBoard);
+  const reloadPresets = useStore((s) => s.reloadPresets);
 
   const [revise, setRevise] = useState("");
+  // 把当前会话首轮 prompt 登记为用途（preset）的 inline 起名态。
+  const [savingPreset, setSavingPreset] = useState(false);
+  const [presetName, setPresetName] = useState("");
+  const [presetSaved, setPresetSaved] = useState(false);
+  // 生成图放大查看（Lightbox）：images = 各轮图拍平，index = 全局下标。
+  const [lightbox, setLightbox] = useState<{ images: string[]; index: number } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const imageCount = useMemo(
     () => genTurns.reduce((n, t) => n + t.images.length, 0),
     [genTurns]
   );
+  // 跨轮 Lightbox：把各轮图拍平成一个列表；每轮记起始 offset，点某图算出全局 index。
+  const allImages = useMemo(() => genTurns.flatMap((t) => t.images), [genTurns]);
+  const turnsWithOffset = useMemo(() => {
+    let offset = 0;
+    return genTurns.map((t) => {
+      const imageOffset = offset;
+      offset += t.images.length;
+      return { turn: t, imageOffset };
+    });
+  }, [genTurns]);
 
   // 新结果落地时把滚动体拉到底，让最新图进视野。用标量 imageCount 作依赖——打字/流式
   // 刷字不触发；末轮 busy 占位（「codex 生成中…」）不增 imageCount，不会对着 spinner 滚。
@@ -47,7 +68,23 @@ export function GenerationPanel() {
 
   function regenerate() {
     if (!genLastPrompt || !codexHealth?.ok || generating) return;
-    void startGeneration(genLastPrompt, genLastRefs);
+    void startGeneration(genLastPrompt, genRefAssets);
+  }
+
+  // 把当前会话首轮 prompt 登记为用途（preset）：起名 → createPreset + 刷新下拉。
+  async function saveGenPreset() {
+    const name = presetName.trim();
+    if (!name || !genLastPrompt) return;
+    try {
+      await api.createPreset(name, genLastPrompt);
+      await reloadPresets();
+      setSavingPreset(false);
+      setPresetName("");
+      setPresetSaved(true);
+      setTimeout(() => setPresetSaved(false), 1500);
+    } catch (e) {
+      console.error("createPreset failed", e);
+    }
   }
 
   return (
@@ -77,12 +114,14 @@ export function GenerationPanel() {
           </div>
         ) : (
           <div className="mx-auto flex max-w-3xl flex-col gap-3">
-            {genTurns.map((t, i) => (
+            {turnsWithOffset.map(({ turn, imageOffset }, i) => (
               <TurnView
-                key={t.id}
-                turn={t}
+                key={turn.id}
+                turn={turn}
                 index={i}
-                busy={generating && i === genTurns.length - 1}
+                busy={generating && i === turnsWithOffset.length - 1}
+                imageOffset={imageOffset}
+                onOpenLightbox={(g) => setLightbox({ images: allImages, index: g })}
               />
             ))}
             {genStreaming && (
@@ -142,12 +181,84 @@ export function GenerationPanel() {
               : "🎨 生成图在创作板点「✓ 发送 codex 生成」触发；出图后可在此提修改意见续接迭代。"}
           </div>
         )}
+        {!generating && genLastPrompt && (
+          <div className="space-y-1.5 border-t border-edge pt-2">
+            {savingPreset ? (
+              <div className="flex gap-1.5">
+                <input
+                  autoFocus
+                  value={presetName}
+                  onChange={(e) => setPresetName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void saveGenPreset();
+                    if (e.key === "Escape") setSavingPreset(false);
+                  }}
+                  placeholder="用途名"
+                  className="min-w-0 flex-1 rounded bg-panel2 px-2 py-1 text-xs text-ink outline-none ring-1 ring-edge focus:ring-accent"
+                />
+                <button
+                  onClick={saveGenPreset}
+                  disabled={!presetName.trim()}
+                  className="shrink-0 rounded bg-accent px-2 py-1 text-xs font-semibold text-black disabled:opacity-50"
+                >
+                  保存
+                </button>
+                <button
+                  onClick={() => {
+                    setSavingPreset(false);
+                    setPresetName("");
+                  }}
+                  className="shrink-0 rounded bg-panel2 px-2 py-1 text-xs text-ink hover:bg-edge"
+                >
+                  ✕
+                </button>
+              </div>
+            ) : (
+              <div className="flex gap-1.5">
+                <button
+                  onClick={() => reusePromptToBoard(genLastPrompt)}
+                  className="flex-1 rounded bg-panel2 px-2 py-1.5 text-xs text-ink hover:bg-edge"
+                  title="把首轮 prompt + 参考图载入创作板，可在其基础上编辑后重新生成"
+                >
+                  📋 复用到创作板
+                </button>
+                <button
+                  onClick={() => setSavingPreset(true)}
+                  className="flex-1 rounded bg-panel2 px-2 py-1.5 text-xs text-ink hover:bg-edge"
+                  title="把首轮 prompt 登记为一个用途（之后可在创作板编辑/删除）"
+                >
+                  {presetSaved ? "已登记 ✓" : "🔖 登记为用途"}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
+      {lightbox && (
+        <Lightbox
+          images={lightbox.images}
+          index={lightbox.index}
+          onClose={() => setLightbox(null)}
+          onIndexChange={(i) => setLightbox({ ...lightbox, index: i })}
+        />
+      )}
     </div>
   );
 }
 
-function TurnView({ turn, index, busy }: { turn: GenTurn; index: number; busy: boolean }) {
+function TurnView({
+  turn,
+  index,
+  busy,
+  imageOffset,
+  onOpenLightbox,
+}: {
+  turn: GenTurn;
+  index: number;
+  busy: boolean;
+  imageOffset: number;
+  onOpenLightbox: (globalIdx: number) => void;
+}) {
   return (
     <div className="space-y-1.5 rounded bg-panel2/50 p-3">
       <div className="line-clamp-2 text-xs text-muted" title={turn.prompt}>
@@ -156,13 +267,13 @@ function TurnView({ turn, index, busy }: { turn: GenTurn; index: number; busy: b
       </div>
       {turn.images.length > 0 ? (
         <div className={`grid gap-1.5 ${turn.images.length > 1 ? "grid-cols-2" : "grid-cols-1"}`}>
-          {turn.images.map((p) => (
-            <a
+          {turn.images.map((p, j) => (
+            <button
               key={p}
-              href={convertFileSrc(p)}
-              target="_blank"
-              rel="noreferrer"
-              title="点击查看原图"
+              type="button"
+              onClick={() => onOpenLightbox(imageOffset + j)}
+              className="cursor-zoom-in"
+              title="点击放大"
             >
               <img
                 src={convertFileSrc(p)}
@@ -173,7 +284,7 @@ function TurnView({ turn, index, busy }: { turn: GenTurn; index: number; busy: b
                     : "block mx-auto max-h-[320px] w-auto max-w-full rounded border border-edge object-contain"
                 }
               />
-            </a>
+            </button>
           ))}
         </div>
       ) : busy ? (

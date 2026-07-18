@@ -4,7 +4,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-shell";
 import { useStore } from "../store";
 import { api } from "../lib/api";
-import { PromptEditor } from "./PromptEditor";
+import { useImageZoom } from "../lib/useImageZoom";
 import type { Analysis, Asset, AssetTag, CodexHealth, Folder } from "../lib/types";
 
 const VIDEO_EXTS = ["mp4", "mov", "webm", "mkv", "avi", "m4v"];
@@ -216,6 +216,8 @@ export function AssetDetail() {
   const describeStartedAt = useStore((s) => s.describeStartedAt);
   const folders = useStore((s) => s.folders);
   const reloadFolders = useStore((s) => s.reloadFolders);
+  const viewGenerationHistory = useStore((s) => s.viewGenerationHistory);
+  const generating = useStore((s) => s.generating);
   // 本图反推状态：正在跑 / 在队列里（位置从 1 起）/ 空闲。
   const describing = useStore((s) => s.describingId === id);
   const queuePosition = useStore((s) => {
@@ -504,6 +506,9 @@ export function AssetDetail() {
     });
   }
 
+  const src = asset?.store_path ? convertFileSrc(asset.store_path) : undefined;
+  const zoom = useImageZoom(src);
+
   if (!asset || !id) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted">
@@ -511,8 +516,6 @@ export function AssetDetail() {
       </div>
     );
   }
-
-  const src = asset.store_path ? convertFileSrc(asset.store_path) : "";
   const colors = parseColors(asset.colors);
   const captions = analyses.filter((a) => a.kind === "caption");
   // 生成图来源（codex_create_image 落的 generation_meta）：prompt / session_id / 参考图。
@@ -573,15 +576,20 @@ export function AssetDetail() {
 
       <div className="flex flex-1 overflow-hidden">
         <div className="flex flex-1 flex-col overflow-hidden bg-canvas">
-          <div className="flex flex-1 items-center justify-center overflow-auto p-4">
+          <div className="flex flex-1 items-center justify-center overflow-hidden p-4">
             {src &&
               (isVideo(asset.ext) ? (
                 <video src={src} controls className="max-h-full max-w-full" />
               ) : (
                 <img
+                  ref={zoom.imgRef}
                   src={src}
                   alt={asset.name}
-                  className="max-h-full max-w-full object-contain"
+                  draggable={false}
+                  onMouseDown={zoom.onMouseDown}
+                  onDoubleClick={zoom.onDoubleClick}
+                  className="max-h-full max-w-full select-none object-contain"
+                  style={zoom.style}
                 />
               ))}
           </div>
@@ -842,15 +850,25 @@ export function AssetDetail() {
                 </div>
               )}
               {genMeta.session_id && (
-                <button
-                  onClick={() =>
-                    api.openCodexSession(genMeta.session_id!).catch(console.error)
-                  }
-                  className="text-[10px] text-accent hover:underline"
-                  title="在 Terminal 里 codex resume，看这次生成的完整对话含图"
-                >
-                  在 codex 中打开会话 ↗
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    onClick={() => viewGenerationHistory(asset.id)}
+                    disabled={generating}
+                    className="rounded bg-accent px-2 py-1 text-[11px] font-semibold text-black disabled:opacity-50"
+                    title="像回看对话一样，看这张图生成时的各轮 prompt 与产出图，并可继续提修改意见"
+                  >
+                    💬 回看生成对话
+                  </button>
+                  <button
+                    onClick={() =>
+                      api.openCodexSession(genMeta.session_id!).catch(console.error)
+                    }
+                    className="text-[10px] text-accent hover:underline"
+                    title="在 Terminal 里 codex resume，看这次生成的完整对话含图"
+                  >
+                    在 codex 中打开会话 ↗
+                  </button>
+                </div>
               )}
             </div>
           )}
@@ -1057,8 +1075,6 @@ export function AssetDetail() {
               })
             )}
           </div>
-
-          <PromptEditor assetId={id} />
 
           <div className="space-y-1.5">
             <div className="text-xs font-medium uppercase tracking-wide text-muted">

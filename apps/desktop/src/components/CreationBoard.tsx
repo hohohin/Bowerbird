@@ -1,167 +1,56 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { useMemo, useState } from "react";
 import { useStore } from "../store";
-import type { CaptionSection, PromptedAsset } from "../lib/types";
-
-type Token =
-  | { kind: "text"; text: string }
-  | { kind: "image"; assetId: string }
-  | { kind: "keyword"; text: string };
-
-function tokenKey(t: Token, i: number) {
-  if (t.kind === "image") return `img-${t.assetId}-${i}`;
-  if (t.kind === "keyword") return `kw-${t.text}-${i}`;
-  return `txt-${i}`;
-}
+import { api } from "../lib/api";
+import { useCreationEditor } from "./creation/useCreationEditor";
 
 /**
- * 创作板：真实 prompt 编辑器 + @ 插图引用。只管「组稿」。
+ * 创作板 UI 外壳。编辑器内核（ProseMirror doc / 光标 / 序列化）下沉到
+ * useCreationEditor + creation/* 模块，本组件只管「组稿周边」：
+ * 用途（preset）CRUD / 复制 / 发送 / 维度 chips 面板 / 预览。
  *
- * 生成对话（轮次 / 流式 / 修改意见）已拆到独立 GenerationPanel + store；本组件
- * 点「发送」把 finalPrompt + 参考图交给 store.startGeneration，结果进生成面板。
- * 故生成期间本板不受任何生成 UI 干扰，可继续组下一轮稿。
- *
- * 用户正常输入；输入 @ 后创作板变灰、瀑布流高亮，下一次点击瀑布流图片会
- * 在编辑器当前位置插入「缩略图 + 图片名」token。插入图片后显示维度 chips
- * ——chips 取自该图反推出的 sections（有多少属性就有多少维度），点击即可
- * 插入蓝色下划线维度；用户也可手输维度，按空格/回车/标点时自动识别并转 token。
+ * 参考图入口：boardOpen 时点瀑布流任意图即在光标处插 image chip；也可手输 @图名，
+ * 空格/标点后自动识别为 image chip。维度 chips 取自该图反推 sections，点击插 keyword chip。
  */
 export function CreationBoard() {
-  const promptedAssets = useStore((s) => s.promptedAssets);
-  const boardPickMode = useStore((s) => s.boardPickMode);
   const toggleBoard = useStore((s) => s.toggleBoard);
-  const startPick = useStore((s) => s.startBoardImagePick);
-  const cancelPick = useStore((s) => s.cancelBoardImagePick);
   const generating = useStore((s) => s.generating);
   const codexHealth = useStore((s) => s.codexHealth);
   const startGeneration = useStore((s) => s.startGeneration);
+  const presets = useStore((s) => s.presets);
+  const activePresetId = useStore((s) => s.activePresetId);
+  const setActivePreset = useStore((s) => s.setActivePreset);
+  const reloadPresets = useStore((s) => s.reloadPresets);
 
-  const inputRef = useRef<HTMLInputElement>(null);
-  // draft 的 ref 镜像：onPick 注册在 useEffect([]) 里是「首渲染闭包」，直接读 draft 会拿到
-  // 永远为 "" 的初值 → 点图时 flushDraft 把用户刚打的字（图与图之间的文字）丢掉。用 ref 取最新值。
-  const draftRef = useRef("");
-  const [tokens, setTokens] = useState<Token[]>([
-    { kind: "text", text: "请参考" },
-  ]);
-  const [draft, setDraft] = useState("");
-  draftRef.current = draft; // 每次渲染同步，供 onPick 陈旧闭包读取最新 draft
-  const [showKeywordHints, setShowKeywordHints] = useState(false);
-  // 维度 chips 作用于「最近插入的那张图」——它的 sections 即下拉选项。
-  const [chipAssetId, setChipAssetId] = useState<string | null>(null);
+  const {
+    hostRef,
+    focus,
+    finalPrompt,
+    references,
+    chipSections,
+    showKeywordHints,
+    setShowKeywordHints,
+    insertKeyword,
+  } = useCreationEditor();
+
   const [copied, setCopied] = useState(false);
-
-  const assetById = useMemo(() => {
-    const m = new Map<string, PromptedAsset>();
-    for (const a of promptedAssets) m.set(a.id, a);
-    return m;
-  }, [promptedAssets]);
-
-  // 当前维度 chips = 最近插入图片的 sections（动态）。没有 sections 则回退五大常用维度。
-  const chipSections: CaptionSection[] = useMemo(() => {
-    const asset = chipAssetId ? assetById.get(chipAssetId) : undefined;
-    return asset?.sections && asset.sections.length > 0
-      ? asset.sections
-      : [];
-  }, [chipAssetId, assetById]);
-
-  useEffect(() => {
-    inputRef.current?.focus();
-  }, [tokens.length, boardPickMode]);
-
-  // 瀑布流选中图片后，由 MasonryGrid dispatch 此事件。
-  useEffect(() => {
-    function onPick(e: Event) {
-      const assetId = (e as CustomEvent<string>).detail;
-      flushDraft();
-      // 不自动插「的」：纯参考引用（@B）不该拖个「的」；维度展开时 serializeImageToken
-      // 会自带「的」（@A 的【维度】），用户也可自己打。这样「将@B 变为@A 的调性」才写得出来。
-      setTokens((ts) => [...ts, { kind: "image", assetId }]);
-      setDraft("");
-      setChipAssetId(assetId);
-      setShowKeywordHints(true);
-      setTimeout(() => inputRef.current?.focus(), 0);
-    }
-    window.addEventListener("bowerbird://board-asset-picked", onPick);
-    return () => window.removeEventListener("bowerbird://board-asset-picked", onPick);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  function flushDraft() {
-    const d = draftRef.current;
-    setTokens((ts) => (d ? [...ts, { kind: "text", text: d }] : ts));
-    setDraft("");
-  }
-
-  function addKeyword(keyword: string) {
-    const before = draft.replace(new RegExp(`${keyword}$`), "");
-    setTokens((ts) => [
-      ...ts,
-      ...(before ? [{ kind: "text" as const, text: before }] : []),
-      { kind: "keyword", text: keyword },
-    ]);
-    setDraft("");
-    // 不收起面板：给同一张图连点多个维度（色调→和→构图）时不用重新 @ 选图。
-    // 面板只在 新 @ 选图 / ✕ / Escape 时隐藏。
-    setTimeout(() => inputRef.current?.focus(), 0);
-  }
-
-  function onDraftChange(value: string) {
-    if (value.includes("@")) {
-      const before = value.replace("@", "");
-      if (before) setTokens((ts) => [...ts, { kind: "text", text: before }]);
-      setDraft("");
-      setShowKeywordHints(false);
-      startPick();
-      return;
-    }
-    setDraft(value);
-  }
-
-  function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (e.key === "Escape" && showKeywordHints) {
-      setShowKeywordHints(false);
-      return;
-    }
-    if (e.key === "Backspace" && !draft && tokens.length > 0) {
-      e.preventDefault();
-      const last = tokens[tokens.length - 1];
-      if (last.kind === "text") {
-        // 文本 token 拉回 draft 逐字删，避免一次退格吞掉整段文字
-        setTokens((ts) => ts.slice(0, -1));
-        setDraft(last.text.slice(0, -1));
-      } else {
-        // image / keyword chip：原子删除（一次退格删一个引用 / 维度）
-        setTokens((ts) => ts.slice(0, -1));
-      }
-      return;
-    }
-    if ([" ", "Enter", "，", ",", "。", "."].includes(e.key)) {
-      const trimmed = draft.trim();
-      const match = chipSections.find(
-        (s) => s.title === trimmed || trimmed.endsWith(s.title)
-      );
-      if (match) {
-        e.preventDefault();
-        addKeyword(match.title);
-        if (e.key !== "Enter") setTokens((ts) => [...ts, { kind: "text", text: e.key }]);
-      }
-    }
-  }
-
-  const finalPrompt = useMemo(() => serializePrompt(tokens, draft, assetById), [tokens, draft, assetById]);
-  const references = useMemo(() => {
-    const refs: string[] = [];
-    const seen = new Set<string>();
-    for (const t of tokens) {
-      if (t.kind !== "image") continue;
-      const p = assetById.get(t.assetId)?.store_path;
-      if (p && seen.add(p)) refs.push(p);
-    }
-    return refs;
-  }, [tokens, assetById]);
+  // 创作板「用途」（preset）登记：只需用途名，body 取当前编辑框内容
+  const [creatingPreset, setCreatingPreset] = useState(false);
+  const [newName, setNewName] = useState("");
+  // 用途编辑/删除（inline）
+  const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editBody, setEditBody] = useState("");
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const activePreset = useMemo(
+    () => presets.find((p) => p.id === activePresetId) ?? null,
+    [presets, activePresetId]
+  );
 
   function copy() {
-    const text = `# Prompt\n${finalPrompt}\n\n# References (${references.length})\n${references
+    const refPaths = references
+      .map((r) => r.store_path)
+      .filter((p): p is string => !!p);
+    const text = `# Prompt\n${finalPrompt}\n\n# References (${refPaths.length})\n${refPaths
       .map((r) => `- ${r}`)
       .join("\n")}`;
     navigator.clipboard.writeText(text);
@@ -169,24 +58,65 @@ export function CreationBoard() {
     setTimeout(() => setCopied(false), 1500);
   }
 
-  // 把当前组稿发 codex 生成。生成期间编辑器仍可继续组下一轮稿（prompt 在此快照进 store，
-  // 不受后续编辑影响）；发送按钮单槽置灰防止并发发起第二次生成。
+  // 把当前组稿发 codex 生成。生成期间编辑器仍可继续组下一轮稿（prompt 在此快照进 store）。
   function send() {
     if (!codexHealth?.ok || !finalPrompt || generating) return;
     void startGeneration(finalPrompt, references);
   }
 
+  // 登记=把当前编辑框内容（finalPrompt）存为用途，只需用户给个名字。
+  async function savePreset() {
+    const name = newName.trim();
+    const body = finalPrompt.trim();
+    if (!name || !body) return;
+    try {
+      const id = await api.createPreset(name, body);
+      await reloadPresets();
+      setActivePreset(id);
+      setCreatingPreset(false);
+      setNewName("");
+    } catch (e) {
+      console.error("createPreset failed", e);
+    }
+  }
+
+  function startEditPreset() {
+    if (!activePreset) return;
+    setEditingPresetId(activePreset.id);
+    setEditName(activePreset.name);
+    setEditBody(activePreset.body);
+    setConfirmDeleteId(null);
+  }
+
+  async function saveEditPreset() {
+    if (!editingPresetId) return;
+    const name = editName.trim();
+    const body = editBody.trim();
+    if (!name || !body) return;
+    try {
+      await api.updatePreset(editingPresetId, name, body);
+      setEditingPresetId(null);
+    } catch (e) {
+      console.error("updatePreset failed", e);
+    }
+  }
+
+  async function deletePresetById(id: string) {
+    try {
+      await api.deletePreset(id);
+      if (activePreset?.id === id) setActivePreset(null);
+    } catch (e) {
+      console.error("deletePreset failed", e);
+    }
+  }
+
   return (
-    <aside
-      className={`flex w-[420px] shrink-0 flex-col border-l border-edge bg-panel transition ${
-        boardPickMode ? "opacity-55 grayscale" : ""
-      }`}
-    >
+    <aside className="flex w-[420px] shrink-0 flex-col border-l border-edge bg-panel">
       <div className="flex items-center justify-between border-b border-edge px-3 py-2">
         <div className="flex items-center gap-2">
           <span className="text-sm font-semibold">🎬 创作板</span>
           <span className="rounded-full border border-accent/40 bg-accent/15 px-2 py-0.5 text-[10px] text-accent">
-            @ 参考图输入
+            点图 / @图名 插参考图
           </span>
         </div>
         <div className="flex items-center gap-2">
@@ -201,29 +131,152 @@ export function CreationBoard() {
       </div>
 
       <div className="flex-1 overflow-y-auto p-3">
+        {/* 用途（preset）：发送时作为基底注入；登记=把当前编辑框内容存为用途（只需用途名） */}
+        <div className="mb-2 flex flex-wrap items-center gap-1.5 text-xs">
+          <span className="shrink-0 text-muted">用途</span>
+          <select
+            value={activePresetId ?? ""}
+            onChange={(e) => setActivePreset(e.target.value || null)}
+            className="min-w-0 flex-1 rounded bg-panel2 px-1.5 py-1 text-ink outline-none ring-1 ring-edge focus:ring-accent"
+          >
+            <option value="">默认</option>
+            {presets.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+          {creatingPreset ? (
+            <>
+              <input
+                autoFocus
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void savePreset();
+                  if (e.key === "Escape") setCreatingPreset(false);
+                }}
+                placeholder="用途名"
+                className="w-24 rounded bg-panel2 px-1.5 py-1 text-ink outline-none ring-1 ring-edge focus:ring-accent"
+              />
+              <button
+                onClick={savePreset}
+                disabled={!newName.trim() || !finalPrompt.trim()}
+                className="shrink-0 rounded bg-accent px-2 py-1 font-semibold text-black disabled:opacity-50"
+                title="把当前编辑框内容存为该用途"
+              >
+                ✓
+              </button>
+              <button
+                onClick={() => {
+                  setCreatingPreset(false);
+                  setNewName("");
+                }}
+                className="shrink-0 rounded bg-panel2 px-2 py-1 text-ink hover:bg-edge"
+              >
+                ✕
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={() => setCreatingPreset(true)}
+              disabled={!finalPrompt.trim()}
+              className="shrink-0 rounded bg-panel2 px-2 py-1 text-ink hover:bg-edge disabled:opacity-50"
+              title={finalPrompt.trim() ? "把当前编辑框内容登记为一个用途" : "编辑框为空，无内容可登记"}
+            >
+              登记
+            </button>
+          )}
+        </div>
+        {activePreset && editingPresetId === activePreset.id ? (
+          <div className="mb-2 space-y-1.5 rounded bg-panel2 p-2">
+            <input
+              autoFocus
+              value={editName}
+              onChange={(e) => setEditName(e.target.value)}
+              placeholder="用途名"
+              className="w-full rounded bg-panel px-1.5 py-1 text-xs text-ink outline-none ring-1 ring-edge focus:ring-accent"
+            />
+            <textarea
+              value={editBody}
+              onChange={(e) => setEditBody(e.target.value)}
+              rows={4}
+              placeholder="用途内容（发送时作为基底注入）"
+              className="max-h-40 w-full resize-y overflow-y-auto rounded bg-panel px-1.5 py-1 text-[11px] leading-5 text-ink outline-none ring-1 ring-edge focus:ring-accent"
+            />
+            <div className="flex gap-1.5">
+              <button
+                onClick={saveEditPreset}
+                disabled={!editName.trim() || !editBody.trim()}
+                className="shrink-0 rounded bg-accent px-2 py-1 text-xs font-semibold text-black disabled:opacity-50"
+              >
+                保存
+              </button>
+              <button
+                onClick={() => setEditingPresetId(null)}
+                className="shrink-0 rounded bg-panel px-2 py-1 text-xs text-ink hover:bg-edge"
+              >
+                取消
+              </button>
+            </div>
+          </div>
+        ) : activePreset ? (
+          <div className="mb-2 space-y-1">
+            <div className="flex items-start gap-2">
+              <div
+                className="line-clamp-2 flex-1 text-[10px] leading-4 text-muted"
+                title={activePreset.body}
+              >
+                基底：{activePreset.body}
+              </div>
+              <button
+                onClick={startEditPreset}
+                className="shrink-0 text-[10px] text-accent hover:underline"
+                title="编辑该用途的名字与内容"
+              >
+                编辑
+              </button>
+              {confirmDeleteId === activePreset.id ? (
+                <>
+                  <button
+                    onClick={() => {
+                      void deletePresetById(activePreset.id);
+                      setConfirmDeleteId(null);
+                    }}
+                    className="shrink-0 text-[10px] text-red-400 hover:underline"
+                  >
+                    确认删除
+                  </button>
+                  <button
+                    onClick={() => setConfirmDeleteId(null)}
+                    className="shrink-0 text-[10px] text-muted hover:underline"
+                  >
+                    取消
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={() => setConfirmDeleteId(activePreset.id)}
+                  className="shrink-0 text-[10px] text-muted hover:text-red-400 hover:underline"
+                  title="删除该用途"
+                >
+                  删除
+                </button>
+              )}
+            </div>
+          </div>
+        ) : null}
         <div className="rounded-lg border border-edge bg-[#13171f] p-3 text-sm leading-8 text-ink">
           <div className="mb-2 text-[11px] text-muted">
-            像跟 AI 输入 prompt 一样书写；<span className="rounded bg-panel2 px-1 text-accent">点瀑布流图片</span> 或输入 <span className="rounded bg-panel2 px-1 text-accent">@</span> 插入参考图。
+            像跟 AI 输入 prompt 一样书写；<span className="rounded bg-panel2 px-1 text-accent">点瀑布流图片</span> 在光标处插入参考图，或输入 <span className="rounded bg-panel2 px-1 text-accent">@图名</span>（空格/标点后自动识别）。
           </div>
           <div
-            className="min-h-36 cursor-text rounded bg-panel2/40 p-2 outline-none ring-1 ring-edge focus-within:ring-accent"
-            onClick={() => inputRef.current?.focus()}
-          >
-            {tokens.map((t, i) => (
-              <TokenView key={tokenKey(t, i)} token={t} asset={t.kind === "image" ? assetById.get(t.assetId) : undefined} />
-            ))}
-            <input
-              ref={inputRef}
-              value={draft}
-              onChange={(e) => onDraftChange(e.target.value)}
-              onKeyDown={onKeyDown}
-              disabled={boardPickMode}
-              placeholder={tokens.length === 0 ? "请输入 prompt（点图片或输 @ 插入参考图）…" : ""}
-              className="min-w-16 bg-transparent text-ink outline-none placeholder:text-muted disabled:cursor-wait"
-            />
-          </div>
+            ref={hostRef}
+            onClick={focus}
+            className="creation-editor min-h-36 cursor-text rounded bg-panel2/40 p-2 ring-1 ring-edge focus-within:ring-accent"
+          />
 
-          {showKeywordHints && !boardPickMode && (
+          {showKeywordHints && (
             <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
               {chipSections.length > 0 ? (
                 <>
@@ -231,7 +284,7 @@ export function CreationBoard() {
                   {chipSections.map((section) => (
                     <button
                       key={section.title}
-                      onClick={() => addKeyword(section.title)}
+                      onClick={() => insertKeyword(section.title)}
                       className="rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 text-accent hover:bg-accent/20"
                     >
                       {section.title}
@@ -250,15 +303,6 @@ export function CreationBoard() {
               </button>
             </div>
           )}
-
-          {boardPickMode && (
-            <div className="mt-2 rounded border border-accent/40 bg-accent/10 px-2 py-1 text-xs text-accent">
-              已触发 @ 选择图片：请在瀑布流里点一张已反推的图片。
-              <button onClick={cancelPick} className="ml-2 underline">
-                取消
-              </button>
-            </div>
-          )}
         </div>
 
         <div className="mt-3">
@@ -266,7 +310,7 @@ export function CreationBoard() {
             实际发送 prompt（图片 token 会按所选维度展开为片段）
           </div>
           <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap rounded bg-panel2 p-2 text-[11px] text-ink">
-            {finalPrompt || "（开始输入 prompt，或用 @ 插入参考图）"}
+            {finalPrompt || "（开始输入 prompt，或点瀑布流图片插入参考图）"}
           </pre>
         </div>
       </div>
@@ -299,106 +343,4 @@ export function CreationBoard() {
       </div>
     </aside>
   );
-}
-
-function TokenView({ token, asset }: { token: Token; asset?: PromptedAsset }) {
-  if (token.kind === "text") return <span>{token.text}</span>;
-  if (token.kind === "keyword") {
-    return <span className="mx-0.5 underline decoration-accent text-accent underline-offset-4">【{token.text}】</span>;
-  }
-  const name = asset ? `${asset.name}${asset.ext ? `.${asset.ext}` : ""}` : token.assetId;
-  const thumb = asset?.thumb_path;
-  return (
-    <span className="mx-1 inline-flex items-center gap-1 rounded border border-accent/40 bg-accent/10 px-1.5 py-0.5 align-middle text-xs text-accent">
-      {thumb ? (
-        <img src={convertFileSrc(thumb)} alt="" className="h-6 w-8 rounded object-cover" />
-      ) : (
-        <span className="flex h-6 w-8 items-center justify-center rounded bg-panel2 text-[10px]">IMG</span>
-      )}
-      <span className="max-w-28 truncate" title={name}>{name}</span>
-    </span>
-  );
-}
-
-function serializePrompt(tokens: Token[], draft: string, assetById: Map<string, PromptedAsset>) {
-  let out = "";
-  let currentImageId: string | null = null;
-  for (let i = 0; i < tokens.length; i++) {
-    const t = tokens[i];
-    if (t.kind === "text") {
-      out += t.text;
-      continue;
-    }
-    if (t.kind === "image") {
-      currentImageId = t.assetId;
-      const section = nextSectionTitle(tokens, i);
-      if (section) {
-        out += serializeImageToken(t, section.title, assetById);
-        i += section.consumed;
-      } else {
-        out += serializeImageToken(t, null, assetById);
-      }
-      continue;
-    }
-    // 独立关键词 token（未被图片吞掉的后续维度）：按「最近一张图」的对应 section
-    // 展开成片段，这样同一张图的多个维度（光影/类型/氛围…）都能取到各自片段。
-    out += serializeKeyword(t.text, currentImageId, assetById);
-  }
-  out += draft;
-  return out.trim();
-}
-
-function serializeKeyword(
-  title: string,
-  currentImageId: string | null,
-  assetById: Map<string, PromptedAsset>
-) {
-  if (!currentImageId) return `【${title}】`;
-  const fragment = assetById
-    .get(currentImageId)
-    ?.sections?.find((s) => s.title === title)?.body.trim();
-  return fragment ? `【${title}】：${fragment}` : `【${title}】`;
-}
-
-// 找出紧随图片 token 的维度关键词（可能中间隔了一个「的」），返回其标题与吞掉的 token 数。
-function nextSectionTitle(
-  tokens: Token[],
-  imageIndex: number
-): { title: string; consumed: number } | null {
-  const next = tokens[imageIndex + 1];
-  if (next?.kind === "keyword") {
-    return { title: next.text, consumed: 1 };
-  }
-
-  if (next?.kind === "text" && next.text.trim() === "的") {
-    const afterParticle = tokens[imageIndex + 2];
-    if (afterParticle?.kind === "keyword") {
-      return { title: afterParticle.text, consumed: 2 };
-    }
-  }
-
-  return null;
-}
-
-function serializeImageToken(
-  token: Extract<Token, { kind: "image" }>,
-  sectionTitle: string | null,
-  assetById: Map<string, PromptedAsset>
-) {
-  const a = assetById.get(token.assetId);
-  const name = a ? `${a.name}${a.ext ? `.${a.ext}` : ""}` : token.assetId;
-  const caption = a?.caption?.trim();
-
-  if (sectionTitle) {
-    // 按标题在该图的 sections 里查正文；查不到就回退整段 caption，避免片段为空。
-    const fragment =
-      a?.sections?.find((s) => s.title === sectionTitle)?.body.trim() || caption;
-    return fragment
-      ? `@${name} 的【${sectionTitle}】：${fragment}`
-      : `@${name} 的【${sectionTitle}】`;
-  }
-
-  // 不选维度 = 纯参考引用：只输出 @图名（图本身已通过 reference_images 传给 codex），
-  // 不灌整段 caption，保持灵活（如「将@B 变为@A 的调性」里的 @B）。
-  return `@${name}`;
 }

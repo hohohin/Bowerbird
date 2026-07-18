@@ -7,6 +7,7 @@ import type {
   ColorBucket,
   Folder,
   GenTurn,
+  Preset,
   PromptedAsset,
   TagCount,
 } from "./lib/types";
@@ -30,10 +31,13 @@ interface State {
   // —— 自动归类（P2）——
   autoTags: TagCount[]; // 侧栏「自动归类」分区（source='auto' tag + 计数）
   classifyProgress: { done: number; total: number } | null; // 批量重归类进度
+  colorRebuild: { done: number; total: number } | null; // 重建色板进度（P3）
   // —— 创作板（核心枢纽）——
   boardOpen: boolean;
-  boardPickMode: boolean; // 输入 @ 后等待瀑布流点选图片
   promptedAssets: PromptedAsset[]; // 创作板打开时，瀑布流只显示这些（有 caption 的资产）
+  // —— 创作板「用途」（preset）——
+  presets: Preset[]; // 命名 prompt 预设，发送时作为基底注入（不进编辑器）
+  activePresetId: string | null; // 当前选中用途；null=不注入
   setAssets: (a: Asset[]) => void;
   setTotal: (n: number) => void;
   toggleSelect: (id: string) => void;
@@ -50,16 +54,16 @@ interface State {
   closeDetail: () => void;
   setFolders: (f: Folder[]) => void;
   reloadFolders: () => Promise<void>;
+  reloadPresets: () => Promise<void>;
   setAutoTags: (t: TagCount[]) => void;
   reloadAutoTags: () => Promise<void>;
   setPalette: (p: ColorBucket[]) => void;
   reloadPalette: () => Promise<void>;
   setClassifyProgress: (p: { done: number; total: number } | null) => void;
+  setColorRebuild: (p: { done: number; total: number } | null) => void;
   toggleBoard: () => void;
-  startBoardImagePick: () => void;
-  finishBoardImagePick: () => void;
-  cancelBoardImagePick: () => void;
   setPromptedAssets: (a: PromptedAsset[]) => void;
+  setActivePreset: (id: string | null) => void;
   // —— 反推（全局后台串行）——
   // 反推不绑 AssetDetail 生命周期：返回瀑布流后继续跑、缩略图角标可见、可取消。
   // 单槽 + 前端排队：同一时刻只调一次 codex_describe_asset（后端 DESCRIBE_CANCEL 单例）。
@@ -84,14 +88,22 @@ interface State {
   genSessionId: string | null;
   genStreaming: string;
   genLastPrompt: string; // 最近一次发送 prompt，供「新会话重新生成」复用
-  genLastRefs: string[]; // 最近一次发送参考图
+  genLastRefs: string[]; // 最近一次发送参考图（store_path）
+  genRefAssets: Asset[]; // 最近一次发送参考图的完整 asset，「复用到创作板」还原参考图用
   genUnread: boolean; // 面板关时落地新图 → 顶栏按钮红点
   toggleGenPanel: () => void;
   setGenPanelOpen: (open: boolean) => void;
-  startGeneration: (prompt: string, referenceImages: string[]) => Promise<void>;
+  startGeneration: (prompt: string, references: Asset[]) => Promise<void>;
   sendGenRevise: (instruction: string) => Promise<void>;
   cancelGeneration: () => void;
   applyGenChunk: (c: CodexChunk) => void;
+  // 「回看生成对话」：拉某生成图所在会话的历史时间线 → load 进 genTurns，复用 GenerationPanel
+  // 展示 + 续轮 resume（genSessionId=历史 sid）。generating 中拒绝（不覆盖进行中的会话）。
+  viewGenerationHistory: (assetId: string) => Promise<void>;
+  // 「复用到创作板」：把某段 prompt（如生成会话首轮）载入创作板编辑器。
+  // 开创作板 + 关详情/生成面板/挑图态，延时一帧再 dispatch board-load-prompt，
+  // 确保 CreationBoard 已挂载注册 listener（同步 dispatch 会丢）。
+  reusePromptToBoard: (prompt: string) => void;
 }
 
 export const useStore = create<State>((set, get) => {
@@ -156,10 +168,12 @@ export const useStore = create<State>((set, get) => {
   folders: [],
   autoTags: [],
   classifyProgress: null,
+  colorRebuild: null,
   palette: [],
   boardOpen: false,
-  boardPickMode: false,
   promptedAssets: [],
+  presets: [],
+  activePresetId: null,
   setAssets: (assets) => set({ assets }),
   setTotal: (total) => set({ total }),
   toggleSelect: (id) =>
@@ -216,6 +230,13 @@ export const useStore = create<State>((set, get) => {
       console.error("reloadFolders failed", e);
     }
   },
+  reloadPresets: async () => {
+    try {
+      set({ presets: await api.listPresets() });
+    } catch (e) {
+      console.error("reloadPresets failed", e);
+    }
+  },
   setAutoTags: (autoTags) => set({ autoTags }),
   reloadAutoTags: async () => {
     try {
@@ -233,21 +254,19 @@ export const useStore = create<State>((set, get) => {
     }
   },
   setClassifyProgress: (classifyProgress) => set({ classifyProgress }),
+  setColorRebuild: (colorRebuild) => set({ colorRebuild }),
   // —— 创作板 ——
   toggleBoard: () =>
     set((s) => {
       const turningOn = !s.boardOpen;
       return {
         boardOpen: turningOn,
-        boardPickMode: false,
-        // 打开创作板时收起详情页，让瀑布流（仅反推过的图）可见以便 @ 挑图
+        // 打开创作板时收起详情页，让瀑布流（仅反推过的图）可见以便挑图
         detailAssetId: turningOn ? null : s.detailAssetId,
       };
     }),
-  startBoardImagePick: () => set({ boardOpen: true, boardPickMode: true, detailAssetId: null }),
-  finishBoardImagePick: () => set({ boardPickMode: false }),
-  cancelBoardImagePick: () => set({ boardPickMode: false }),
   setPromptedAssets: (promptedAssets) => set({ promptedAssets }),
+  setActivePreset: (id) => set({ activePresetId: id }),
   // —— 反推（全局后台串行）——
   describingId: null,
   describeQueue: [],
@@ -303,6 +322,7 @@ export const useStore = create<State>((set, get) => {
   genStreaming: "",
   genLastPrompt: "",
   genLastRefs: [],
+  genRefAssets: [],
   genUnread: false,
   toggleGenPanel: () =>
     set((s) => {
@@ -311,20 +331,29 @@ export const useStore = create<State>((set, get) => {
     }),
   setGenPanelOpen: (open) =>
     set((s) => ({ genPanelOpen: open, genUnread: open ? false : s.genUnread })),
-  startGeneration: async (prompt, referenceImages) => {
+  startGeneration: async (prompt, references) => {
     if (get().generating) return; // 单槽：进行中不再发
+    // 用途（preset）注入：选中用途时，其 body 作为基底拼在用户组稿前（类 CLAUDE.md 上下文，
+    // 不进编辑器）。续轮 sendGenRevise 不注入——用途是首轮基底，续轮是修改意见。
+    const pid = get().activePresetId;
+    const preset = pid ? get().presets.find((p) => p.id === pid) : null;
+    const sentPrompt = preset ? `${preset.body}\n\n${prompt}` : prompt;
+    const refPaths = references
+      .map((r) => r.store_path)
+      .filter((p): p is string => !!p);
     set({
-      genLastPrompt: prompt,
-      genLastRefs: referenceImages,
+      genLastPrompt: sentPrompt,
+      genLastRefs: refPaths,
+      genRefAssets: references,
       genSessionId: null,
       genStreaming: "",
-      genTurns: [{ id: nextGenTurnId(), prompt, images: [] }],
+      genTurns: [{ id: nextGenTurnId(), prompt: sentPrompt, images: [] }],
       genPanelOpen: true, // 自动弹面板给即时反馈（创作板在右槽仍可编辑）
       genUnread: false,
     });
     set({ generating: true });
     try {
-      await api.codexCreateImage({ prompt, referenceImages });
+      await api.codexCreateImage({ prompt: sentPrompt, referenceImages: refPaths });
     } catch (e) {
       genHandleError(typeof e === "string" ? e : JSON.stringify(e));
     } finally {
@@ -372,6 +401,50 @@ export const useStore = create<State>((set, get) => {
     } else if (c.kind === "error") {
       set((s) => ({ genStreaming: s.genStreaming + `\n[error: ${c.message}]` }));
     }
+  },
+  viewGenerationHistory: async (assetId) => {
+    if (get().generating) return; // 进行中不覆盖当前会话
+    try {
+      const hist = await api.generationHistory(assetId);
+      set({
+        genTurns: hist.turns.map((t) => ({
+          id: nextGenTurnId(),
+          prompt: t.prompt,
+          images: t.images,
+        })),
+        genSessionId: hist.session_id,
+        genLastPrompt: hist.turns[0]?.prompt ?? "",
+        genLastRefs: hist.references
+          .map((r) => r.store_path)
+          .filter((p): p is string => !!p),
+        genRefAssets: hist.references,
+        genStreaming: "",
+        genPanelOpen: true, // 弹生成面板（盖住详情页，关面板回详情页）
+        genUnread: false,
+      });
+    } catch (e) {
+      console.error("viewGenerationHistory failed", e);
+    }
+  },
+  reusePromptToBoard: (prompt) => {
+    const body = prompt.trim();
+    if (!body) return;
+    set({
+      boardOpen: true,
+      detailAssetId: null,
+      genPanelOpen: false, // 聚焦创作板编辑
+      // 载入的 prompt 已含完整内容（含原 preset body），清选中避免发送时 startGeneration 重复拼 body
+      activePresetId: null,
+    });
+    const refs = get().genRefAssets;
+    // 延一帧：set(boardOpen) 后 CreationBoard 才挂载注册 listener，同步 dispatch 会丢失。
+    setTimeout(() => {
+      window.dispatchEvent(
+        new CustomEvent("bowerbird://board-load-prompt", {
+          detail: { prompt: body, refs },
+        })
+      );
+    }, 0);
   },
   };
 });

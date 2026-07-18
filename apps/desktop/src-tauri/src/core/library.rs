@@ -53,6 +53,16 @@ pub struct Prompt {
     pub updated_at: Option<i64>,
 }
 
+/// 创作板「用途」：命名的预设 prompt 片段，发送 codex 时作为基底注入（不进编辑器）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Preset {
+    pub id: String,
+    pub name: String,
+    pub body: String,
+    pub created_at: Option<i64>,
+    pub updated_at: Option<i64>,
+}
+
 /// 资产 ↔ 提示词 的关联（含 role）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AssetPrompt {
@@ -70,6 +80,23 @@ pub struct Analysis {
     pub payload: String,
     pub provider: Option<String>,
     pub created_at: Option<i64>,
+}
+
+/// 生成对话一轮（回看用）：用户输入的 prompt + 本轮产出的图（store_path）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenerationHistoryTurn {
+    pub prompt: String,
+    pub images: Vec<String>,
+}
+
+/// 某生成图所在 codex 会话的完整生成时间线（「回看生成对话」用）。
+/// `references` 取首版 generation_meta 的参考图（按 store_path 反查的完整 asset，含 name/
+/// thumb_path/store_path）：前端「复用到创作板」据此还原参考图，「新会话重新生成」从 store_path 派生。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenerationHistory {
+    pub session_id: Option<String>,
+    pub turns: Vec<GenerationHistoryTurn>,
+    pub references: Vec<Asset>,
 }
 
 /// 反推 caption 解析出的一个维度片段（动态标题 + 正文）。
@@ -502,6 +529,54 @@ impl Database {
         Ok(out)
     }
 
+    /// 创建「用途」预设（命名 prompt 片段，发送时作为基底注入）。
+    pub fn create_preset(&self, id: &str, name: &str, body: &str) -> AppResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO presets (id, name, body, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, strftime('%s','now'), strftime('%s','now'))",
+            rusqlite::params![id, name, body],
+        )?;
+        Ok(())
+    }
+
+    /// 全部用途，按 name 排序。
+    pub fn list_presets(&self) -> AppResult<Vec<Preset>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt =
+            conn.prepare("SELECT id, name, body, created_at, updated_at FROM presets ORDER BY name")?;
+        let rows = stmt.query_map([], |r| {
+            Ok(Preset {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                body: r.get(2)?,
+                created_at: r.get(3)?,
+                updated_at: r.get(4)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    /// 改用途的 name + body（更新 updated_at）。
+    pub fn update_preset(&self, id: &str, name: &str, body: &str) -> AppResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE presets SET name = ?1, body = ?2, updated_at = strftime('%s','now') WHERE id = ?3",
+            rusqlite::params![name, body, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_preset(&self, id: &str) -> AppResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM presets WHERE id = ?1", rusqlite::params![id])?;
+        Ok(())
+    }
+
     /// 按 smart_query 过滤资产。前缀：`source:xxx` / `ext:xxx` / `tag:<name>`（未知前缀返回全部）。
     /// `tag:` 走 asset_tags JOIN——不进 FTS（0002 触发器不维护 tags 列，见 P2 设计）。
     pub fn list_assets_smart(
@@ -781,6 +856,102 @@ impl Database {
             out.push(r?);
         }
         Ok(out)
+    }
+
+    /// 取某生成图所在 codex 会话的完整生成时间线（「回看生成对话」用）：每轮 prompt + 该轮
+    /// 产出的图（store_path）。从 generation_meta 重建——按 created_at ASC, id ASC 排序，相邻
+    /// 相同 prompt 合并为同一轮（一次 codex_create_image 产多张图 → 多行同 prompt、时序相邻）。
+    /// `first_references` 取首版 generation_meta 的参考图，供前端「新会话重新生成」复用。
+    /// 非生成图（assets.generation_session_id 为 NULL）→ session_id=None、turns 空。
+    pub fn generation_history(&self, asset_id: &str) -> AppResult<GenerationHistory> {
+        let conn = self.conn.lock().unwrap();
+        // 先取会话 id；asset 不存在或无 session_id（非生成图）→ 空 history。
+        let session_id: Option<String> = conn
+            .query_row(
+                "SELECT generation_session_id FROM assets WHERE id = ?1",
+                rusqlite::params![asset_id],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten();
+        let Some(session_id) = session_id else {
+            return Ok(GenerationHistory {
+                session_id: None,
+                turns: vec![],
+                references: vec![],
+            });
+        };
+        let mut stmt = conn.prepare(
+            "SELECT json_extract(an.payload, '$.prompt'), a.store_path, an.payload \
+             FROM analyses an JOIN assets a ON a.id = an.asset_id \
+             WHERE an.kind = 'generation_meta' \
+               AND json_extract(an.payload, '$.session_id') = ?1 \
+             ORDER BY an.created_at ASC, an.id ASC",
+        )?;
+        let mut turns: Vec<GenerationHistoryTurn> = Vec::new();
+        let mut first_references: Vec<String> = Vec::new();
+        let mut refs_done = false;
+        let rows = stmt.query_map(rusqlite::params![session_id], |r| {
+            Ok((
+                r.get::<_, Option<String>>(0)?, // prompt
+                r.get::<_, Option<String>>(1)?, // store_path
+                r.get::<_, String>(2)?,         // payload
+            ))
+        })?;
+        for row in rows {
+            let (prompt, store_path, payload) = row?;
+            // 首版 generation_meta 的参考图（供「新会话重新生成」复用）。
+            if !refs_done {
+                refs_done = true;
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&payload) {
+                    if let Some(arr) = v.get("references").and_then(|x| x.as_array()) {
+                        first_references = arr
+                            .iter()
+                            .filter_map(|x| x.as_str().map(String::from))
+                            .collect();
+                    }
+                }
+            }
+            let (Some(prompt), Some(path)) = (prompt, store_path) else {
+                continue;
+            };
+            // 相邻同 prompt = 同一轮多图，合并；否则开新轮。
+            if turns.last().map(|t| t.prompt.as_str()) == Some(prompt.as_str()) {
+                turns.last_mut().unwrap().images.push(path);
+            } else {
+                turns.push(GenerationHistoryTurn {
+                    prompt,
+                    images: vec![path],
+                });
+            }
+        }
+        // 首版参考图：按 store_path 反查完整 asset（复用还原参考图用；图已删则该项缺失、被跳过）。
+        let references = if first_references.is_empty() {
+            Vec::new()
+        } else {
+            let placeholders = (0..first_references.len())
+                .map(|i| format!("?{}", i + 1))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql = format!(
+                "SELECT {ASSET_COLS} FROM assets WHERE store_path IN ({placeholders})"
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(
+                rusqlite::params_from_iter(first_references.iter()),
+                |r| asset_from_row(r),
+            )?;
+            let mut out = Vec::new();
+            for r in rows {
+                out.push(r?);
+            }
+            out
+        };
+        Ok(GenerationHistory {
+            session_id: Some(session_id),
+            turns,
+            references,
+        })
     }
 
     /// 创作板用：有 caption（反推）的资产 + 最新 caption 正文（开发计划 §5.4）。
@@ -1164,6 +1335,117 @@ mod tests {
     }
 
     #[test]
+    fn generation_history_rebuilds_turns_with_images() {
+        // 同一会话两轮 generation_meta：首轮 2 图（同 prompt）合并为一轮多图、次轮 1 图；
+        // first_references 取首版参考图；另一会话被排除；非生成图返回空。回看历史的核心契约。
+        let db = db();
+        // put_asset 辅助不设 generation_session_id，故生成图直接 insert_asset 带 session。
+        fn put_gen(db: &Database, id: &str, session: &str) {
+            db.insert_asset(&Asset {
+                id: id.into(),
+                name: id.into(),
+                ext: Some("png".into()),
+                origin_path: None,
+                store_path: Some(format!("/tmp/{id}.png")),
+                thumb_path: None,
+                size: Some(0),
+                width: Some(10),
+                height: Some(10),
+                duration: Some(0.0),
+                phash: None,
+                colors: None,
+                rating: Some(0),
+                source: Some("codex".into()),
+                source_url: None,
+                folder_id: None,
+                created_at: None,
+                file_mtime: Some(0),
+                generation_session_id: Some(session.into()),
+            })
+            .unwrap();
+        }
+        put_gen(&db, "g1", "sess-H");
+        put_gen(&db, "g2", "sess-H");
+        put_gen(&db, "g3", "sess-H");
+        put_gen(&db, "g4", "sess-B"); // 别的会话（应被排除）
+
+        fn put_meta(
+            db: &Database,
+            id: &str,
+            aid: &str,
+            prompt: &str,
+            sid: &str,
+            refs: Option<Vec<&str>>,
+        ) {
+            let payload = match refs {
+                Some(rs) => serde_json::json!({ "prompt": prompt, "session_id": sid, "references": rs }),
+                None => serde_json::json!({ "prompt": prompt, "session_id": sid }),
+            };
+            db.insert_analysis(&Analysis {
+                id: id.to_string(),
+                asset_id: aid.to_string(),
+                kind: "generation_meta".to_string(),
+                payload: payload.to_string(),
+                provider: Some("codex-cli".into()),
+                created_at: None,
+            })
+            .unwrap();
+        }
+
+        let session = "sess-H";
+        // 参考图：真实 asset（store_path 与 generation_meta.references 对应），供 references 反查。
+        fn put_ref(db: &Database, id: &str, store_path: &str) {
+            db.insert_asset(&Asset {
+                id: id.into(),
+                name: id.into(),
+                ext: Some("png".into()),
+                origin_path: None,
+                store_path: Some(store_path.into()),
+                thumb_path: None,
+                size: Some(0),
+                width: Some(10),
+                height: Some(10),
+                duration: Some(0.0),
+                phash: None,
+                colors: None,
+                rating: Some(0),
+                source: Some("imported".into()),
+                source_url: None,
+                folder_id: None,
+                created_at: None,
+                file_mtime: Some(0),
+                generation_session_id: None,
+            })
+            .unwrap();
+        }
+        put_ref(&db, "ra", "/ref/a.png");
+        put_ref(&db, "rb", "/ref/b.png");
+        put_meta(&db, "02T1A", "g1", "首版", session, Some(vec!["/ref/a.png", "/ref/b.png"]));
+        put_meta(&db, "02T1B", "g2", "首版", session, None); // 同轮另一图（合并）
+        put_meta(&db, "02T2", "g3", "修改1", session, None);
+        put_meta(&db, "02XX", "g4", "别的会话", "sess-B", None); // 排除
+
+        let h = db.generation_history("g1").unwrap();
+        assert_eq!(h.session_id.as_deref(), Some(session));
+        assert_eq!(h.turns.len(), 2, "两轮：首版（2图合并）+ 修改1");
+        assert_eq!(h.turns[0].prompt, "首版");
+        assert_eq!(h.turns[0].images.len(), 2);
+        assert_eq!(h.turns[1].prompt, "修改1");
+        assert_eq!(h.turns[1].images.len(), 1);
+        // 首版参考图按 store_path 反查为完整 asset（复用还原用）。
+        let ref_ids: Vec<String> = h.references.iter().map(|a| a.id.clone()).collect();
+        assert_eq!(ref_ids.len(), 2, "两参考图均命中");
+        assert!(ref_ids.contains(&"ra".to_string()));
+        assert!(ref_ids.contains(&"rb".to_string()));
+
+        // 非生成图（无 generation_session_id）→ 空 history。
+        let plain = put_asset(&db, "plain");
+        let h2 = db.generation_history(&plain).unwrap();
+        assert!(h2.session_id.is_none());
+        assert!(h2.turns.is_empty());
+    }
+
+    #[test]
     fn collapse_generation_groups_keeps_latest_per_session() {
         // 纯函数测试：列表已 created_at DESC，同 session 首见=最新，去重保首见；非生成图全留。
         let mk = |id: &str, session: Option<&str>| Asset {
@@ -1463,6 +1745,33 @@ mod tests {
         // 删除素材清理收藏关系。
         db.delete_asset(&a1).unwrap();
         assert!(db.list_collections_for_asset(&a1).unwrap().is_empty());
+    }
+
+    #[test]
+    fn preset_crud_roundtrip() {
+        let db = db();
+        db.create_preset("p1", "用途B", "body-b").unwrap();
+        db.create_preset("p2", "用途A", "body-a").unwrap();
+
+        // list 按 name 排序（用途A < 用途B）。
+        let list = db.list_presets().unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].name, "用途A");
+        assert_eq!(list[1].body, "body-b");
+
+        // update 改 name + body。
+        db.update_preset("p1", "用途C", "body-c").unwrap();
+        let p1 = db.list_presets()
+            .unwrap()
+            .into_iter()
+            .find(|p| p.id == "p1")
+            .unwrap();
+        assert_eq!(p1.name, "用途C");
+        assert_eq!(p1.body, "body-c");
+
+        // delete。
+        db.delete_preset("p2").unwrap();
+        assert_eq!(db.list_presets().unwrap().len(), 1);
     }
 
     #[test]

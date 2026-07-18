@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useStore } from "../store";
 import { api } from "../lib/api";
+import { getDragAssets } from "../lib/dragPayload";
 import type { Folder } from "../lib/types";
 
 /** 颜色桶 key → 中文 label（P3；hex 由后端 palette_overview 带回）。 */
@@ -299,6 +300,8 @@ function FolderRow({ folder }: { folder: Folder }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(folder.name);
   const [confirming, setConfirming] = useState(false);
+  // 拖拽放置高亮：用计数器防 dragleave 抖动（子元素进出会触发父 dragenter/dragleave 成对）。
+  const [dragOver, setDragOver] = useState(0);
 
   async function saveRename() {
     const n = name.trim();
@@ -387,10 +390,41 @@ function FolderRow({ folder }: { folder: Folder }) {
   return (
     <div
       className={`group flex cursor-pointer items-center gap-1 rounded px-2 py-1.5 ${
-        active ? "bg-panel2" : "hover:bg-panel2"
+        dragOver > 0
+          ? "ring-2 ring-accent bg-accent/10"
+          : active
+            ? "bg-panel2"
+            : "hover:bg-panel2"
       }`}
       onClick={() => (isCollection ? setCurrentCollection(folder.id) : setCurrentFolder(folder.id))}
       title={folder.smart_query ?? ""}
+      // 拖拽放置：仅普通文件夹（folder）接收（约定 12：collection 多对多、smart 无意义）。
+      // collection/smart 行 onDragOver 不 preventDefault → 不允许 drop。
+      onDragOver={(e) => {
+        if (isCollection || isSmart) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+      }}
+      onDragEnter={(e) => {
+        if (isCollection || isSmart || !getDragAssets()) return;
+        e.preventDefault();
+        setDragOver((c) => c + 1);
+      }}
+      onDragLeave={() => setDragOver((c) => Math.max(0, c - 1))}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragOver(0);
+        if (isCollection || isSmart) return;
+        const ids = getDragAssets();
+        if (!ids || ids.length === 0) return;
+        // 当前所在夹幂等跳过（省无用 emit）；移动后 clearSelect（manage 选中集可能被移走），
+        // 列表刷新交给 assets-changed 监听器。
+        if (useStore.getState().currentFolderId === folder.id) return;
+        api.moveAssetsToFolder(ids, folder.id).then(
+          () => useStore.getState().clearSelect(),
+          (err) => console.error("move failed", err)
+        );
+      }}
     >
       <span className="flex-1 truncate">
         {isSmart ? "🔍" : isCollection ? "★" : "📁"} {folder.name}

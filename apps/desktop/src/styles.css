@@ -78,3 +78,17 @@ body {
     transform: scale(1);
   }
 }
+
+/*
+ * 创作板 ProseMirror 编辑器
+ * .ProseMirror 是 EditorView 自动创建的 contenteditable 根，需手工 reset outline/段落默认 margin。
+ */
+.creation-editor .ProseMirror {
+  outline: none;
+  min-height: 7rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.creation-editor .ProseMirror p {
+  margin: 0;
+}

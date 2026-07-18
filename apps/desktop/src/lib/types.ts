@@ -63,21 +63,6 @@ export interface PromptedAsset extends Asset {
   parse_status?: string | null;
 }
 
-export interface Prompt {
-  id: string;
-  title?: string | null;
-  body: string;
-  kind?: string | null;
-  source_model?: string | null;
-  created_at?: number | null;
-  updated_at?: number | null;
-}
-
-export interface AssetPrompt {
-  prompt: Prompt;
-  role: string;
-}
-
 export interface Analysis {
   id: string;
   asset_id: string;
@@ -99,11 +84,32 @@ export interface CreationPack {
   asset_ids: string[];
 }
 
+/** 创作板「用途」：命名的预设 prompt 片段，发送 codex 时作为基底注入（不进编辑器）。 */
+export interface Preset {
+  id: string;
+  name: string;
+  body: string;
+  created_at?: number | null;
+  updated_at?: number | null;
+}
+
 /** 生成对话一轮：用户输入（首轮=编辑器 finalPrompt，后续=修改意见）+ 本轮产出图（asset 路径）。 */
 export interface GenTurn {
   id: number;
   prompt: string;
   images: string[];
+}
+
+/** 「回看生成对话」：某生成图所在 codex 会话的完整时间线（后端 generation_history 返回）。 */
+export interface GenerationHistoryTurn {
+  prompt: string;
+  images: string[]; // store_path
+}
+
+export interface GenerationHistory {
+  session_id: string | null;
+  turns: GenerationHistoryTurn[];
+  references: Asset[]; // 首版参考图完整 asset：「复用到创作板」还原参考图 + 「新会话重新生成」派生 store_path
 }
 
 export type CodexChunk =

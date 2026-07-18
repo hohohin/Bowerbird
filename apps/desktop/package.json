@@ -11,12 +11,19 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
+    "@tanstack/react-virtual": "^3.10.7",
     "@tauri-apps/api": "^2.1.1",
     "@tauri-apps/plugin-dialog": "^2.0.1",
     "@tauri-apps/plugin-fs": "^2.0.1",
     "@tauri-apps/plugin-shell": "^2.0.1",
-    "@tanstack/react-virtual": "^3.10.7",
     "lucide-react": "^0.453.0",
+    "prosemirror-commands": "^1.7.1",
+    "prosemirror-history": "^1.5.0",
+    "prosemirror-inputrules": "^1.5.1",
+    "prosemirror-keymap": "^1.2.3",
+    "prosemirror-model": "^1.25.11",
+    "prosemirror-state": "^1.4.4",
+    "prosemirror-view": "^1.42.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "zustand": "^4.5.5"

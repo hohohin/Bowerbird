@@ -10,8 +10,8 @@ use ulid::Ulid;
 use crate::core::autoname;
 use crate::core::ingest;
 use crate::core::library::{
-    collapse_generation_groups, Analysis, Asset, AssetTag, ColorBucket, Folder, PromptedAsset,
-    TagCount,
+    collapse_generation_groups, Analysis, Asset, AssetTag, ColorBucket, Folder, GenerationHistory,
+    Preset, PromptedAsset, TagCount,
 };
 use crate::core::paths::LibraryPaths;
 use crate::db::Database;
@@ -218,6 +218,63 @@ pub async fn list_assets_by_collection(
     Ok(collapse_generation_groups(v, |a: &Asset| a.generation_session_id.as_deref()))
 }
 
+/// 创作板「用途」：命名的预设 prompt 片段，发送 codex 时作为基底注入（不进编辑器）。
+/// 写命令 emit `presets://changed`，创作板下拉据此即时刷新。
+#[tauri::command]
+pub async fn create_preset(
+    app: AppHandle,
+    db: State<'_, Arc<Database>>,
+    name: String,
+    body: String,
+) -> Result<String, AppError> {
+    let id = Ulid::new().to_string();
+    let db = db.inner().clone();
+    let (id_clone, name_clone, body_clone) = (id.clone(), name, body);
+    tokio::task::spawn_blocking(move || db.create_preset(&id_clone, &name_clone, &body_clone))
+        .await
+        .map_err(|e| AppError::Other(e.to_string()))??;
+    let _ = app.emit("presets://changed", ());
+    Ok(id)
+}
+
+#[tauri::command]
+pub async fn list_presets(db: State<'_, Arc<Database>>) -> Result<Vec<Preset>, AppError> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || db.list_presets())
+        .await
+        .map_err(|e| AppError::Other(e.to_string()))?
+}
+
+#[tauri::command]
+pub async fn update_preset(
+    app: AppHandle,
+    db: State<'_, Arc<Database>>,
+    id: String,
+    name: String,
+    body: String,
+) -> Result<(), AppError> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || db.update_preset(&id, &name, &body))
+        .await
+        .map_err(|e| AppError::Other(e.to_string()))??;
+    let _ = app.emit("presets://changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn delete_preset(
+    app: AppHandle,
+    db: State<'_, Arc<Database>>,
+    id: String,
+) -> Result<(), AppError> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || db.delete_preset(&id))
+        .await
+        .map_err(|e| AppError::Other(e.to_string()))??;
+    let _ = app.emit("presets://changed", ());
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn delete_asset(
     db: State<'_, Arc<Database>>,
@@ -231,6 +288,7 @@ pub async fn delete_asset(
 
 #[tauri::command]
 pub async fn move_assets_to_folder(
+    app: AppHandle,
     db: State<'_, Arc<Database>>,
     asset_ids: Vec<String>,
     folder_id: String,
@@ -238,7 +296,10 @@ pub async fn move_assets_to_folder(
     let db = db.inner().clone();
     tokio::task::spawn_blocking(move || db.set_assets_folder(&asset_ids, &folder_id))
         .await
-        .map_err(|e| AppError::Other(e.to_string()))?
+        .map_err(|e| AppError::Other(e.to_string()))??;
+    // 移动后 emit 刷新：拖拽整理不改 currentFolderId，当前视图靠此事件重拉才会让移走的图消失。
+    let _ = app.emit("library://assets-changed", ());
+    Ok(())
 }
 
 #[tauri::command]
@@ -356,6 +417,20 @@ pub async fn list_generation_groups(
     })
     .await
     .map_err(|e| AppError::Other(e.to_string()))?
+}
+
+/// 「回看生成对话」：取某生成图所在 codex 会话的完整生成时间线（各轮 prompt + 产出图 store_path）。
+/// 前端把它 load 进 genTurns，复用 GenerationPanel 的时间线展示 + 「继续修改」resume 续接。
+/// 非生成图（无 generation_session_id）返回空 turns。
+#[tauri::command]
+pub async fn generation_history(
+    db: State<'_, Arc<Database>>,
+    asset_id: String,
+) -> Result<GenerationHistory, AppError> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || db.generation_history(&asset_id))
+        .await
+        .map_err(|e| AppError::Other(e.to_string()))?
 }
 
 // ============ 标签 / 自动归类（P2）============

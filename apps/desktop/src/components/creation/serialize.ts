@@ -1,0 +1,134 @@
+import type { Node as PmNode } from "prosemirror-model";
+import type { PromptedAsset } from "../../lib/types";
+
+/**
+ * doc 扁平化后的内联节点表示（对应旧版 Token 类型，便于原样移植序列化逻辑）。
+ * image 带 name（attrs 快照）作兜底：assetById 查不到时用 attrs.name（doc 自描述）。
+ */
+type Inline =
+  | { kind: "text"; text: string }
+  | { kind: "image"; assetId: string; silent?: boolean; name: string }
+  | { kind: "keyword"; title: string };
+
+/** 把 doc 扁平化成内联序列：段间插换行（多段编辑，\n 对后端 extract_dim_sections 安全）。 */
+function docToInline(doc: PmNode): Inline[] {
+  const flat: Inline[] = [];
+  doc.forEach((para, pIdx) => {
+    if (pIdx > 0) flat.push({ kind: "text", text: "\n" });
+    para.forEach((node) => {
+      if (node.isText) {
+        flat.push({ kind: "text", text: node.text ?? "" });
+      } else if (node.type.name === "image") {
+        flat.push({
+          kind: "image",
+          assetId: node.attrs.assetId,
+          silent: node.attrs.silent,
+          name: node.attrs.name ?? "",
+        });
+      } else if (node.type.name === "keyword") {
+        flat.push({ kind: "keyword", title: node.attrs.title });
+      }
+    });
+  });
+  return flat;
+}
+
+export interface Serialized {
+  finalPrompt: string;
+  references: PromptedAsset[];
+}
+
+/**
+ * 序列化 doc → { finalPrompt, references }。
+ * 逻辑与旧版 serializePrompt 完全一致（currentImageId / nextSectionTitle / serializeKeyword），
+ * 只是数据源从 tokens[] 换成 doc 扁平序列。draft 恒为 ""（所有内容已在 doc 里）。
+ */
+export function serializeDoc(
+  doc: PmNode,
+  assetById: Map<string, PromptedAsset>
+): Serialized {
+  const flat = docToInline(doc);
+  let out = "";
+  let currentImageId: string | null = null;
+  for (let i = 0; i < flat.length; i++) {
+    const n = flat[i];
+    if (n.kind === "text") {
+      out += n.text;
+      continue;
+    }
+    if (n.kind === "image") {
+      if (n.silent) continue; // 还原的参考图：正文已含，不重复输出 @图名（references 仍收集）
+      currentImageId = n.assetId;
+      const section = nextSectionTitle(flat, i);
+      if (section) {
+        out += serializeImageToken(n, section.title, assetById);
+        i += section.consumed; // 跳过被图片吞掉的 keyword（及中间的「的」），避免再被 serializeKeyword 重复输出
+      } else {
+        out += serializeImageToken(n, null, assetById);
+      }
+      continue;
+    }
+    // 独立 keyword（未被图片吞掉的后续维度）：按「最近一张图」展开片段
+    out += serializeKeyword(n.title, currentImageId, assetById);
+  }
+  // references：所有 image（含 silent）按 assetId 去重
+  const references: PromptedAsset[] = [];
+  const seen = new Set<string>();
+  for (const n of flat) {
+    if (n.kind !== "image") continue;
+    const a = assetById.get(n.assetId);
+    if (a && seen.add(a.id)) references.push(a);
+  }
+  return { finalPrompt: out.trim(), references };
+}
+
+function serializeKeyword(
+  title: string,
+  currentImageId: string | null,
+  assetById: Map<string, PromptedAsset>
+) {
+  if (!currentImageId) return `【${title}】`;
+  const fragment = assetById
+    .get(currentImageId)
+    ?.sections?.find((s) => s.title === title)?.body.trim();
+  return fragment ? `【${title}】：${fragment}` : `【${title}】`;
+}
+
+/** 紧随图片的维度关键词（可能中间隔一个「的」），返回其标题与吞掉的元素数。 */
+function nextSectionTitle(
+  flat: Inline[],
+  imageIndex: number
+): { title: string; consumed: number } | null {
+  const next = flat[imageIndex + 1];
+  if (next?.kind === "keyword") {
+    return { title: next.title, consumed: 1 };
+  }
+  if (next?.kind === "text" && next.text.trim() === "的") {
+    const after = flat[imageIndex + 2];
+    if (after?.kind === "keyword") {
+      return { title: after.title, consumed: 2 };
+    }
+  }
+  return null;
+}
+
+function serializeImageToken(
+  node: Extract<Inline, { kind: "image" }>,
+  sectionTitle: string | null,
+  assetById: Map<string, PromptedAsset>
+) {
+  const a = assetById.get(node.assetId);
+  // 优先用 assetById 最新名，查不到回退 attrs 快照 name（doc 自描述）
+  const name = a ? `${a.name}${a.ext ? `.${a.ext}` : ""}` : node.name || node.assetId;
+  const caption = a?.caption?.trim();
+
+  if (sectionTitle) {
+    const fragment =
+      a?.sections?.find((s) => s.title === sectionTitle)?.body.trim() || caption;
+    return fragment
+      ? `@${name} 的【${sectionTitle}】：${fragment}`
+      : `@${name} 的【${sectionTitle}】`;
+  }
+  // 不选维度 = 纯参考引用：只输出 @图名（图本身已通过 reference_images 传给 codex）
+  return `@${name}`;
+}

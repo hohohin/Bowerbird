@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { useStore } from "../store";
 import { api } from "../lib/api";
+import { setDragAssets } from "../lib/dragPayload";
 import type { Asset } from "../lib/types";
 
 function parseColors(c: string | null | undefined): string[] {
@@ -17,6 +18,7 @@ function parseColors(c: string | null | undefined): string[] {
 function Thumb({ asset, group }: { asset: Asset; group?: Asset[] }) {
   const imgRef = useRef<HTMLImageElement>(null);
   const selected = useStore((s) => s.mode === "manage" && s.selectedIds.has(asset.id));
+  const boardOpen = useStore((s) => s.boardOpen);
   // 反推全局可见：本缩略图正在反推 / 在队列里。角标点击 = 取消（运行中 kill 子进程 / 排队中移出队列）。
   const describeStatus = useStore((s) =>
     s.describingId === asset.id
@@ -88,18 +90,30 @@ function Thumb({ asset, group }: { asset: Asset; group?: Asset[] }) {
       className={`group relative mb-2 break-inside-avoid cursor-pointer overflow-hidden rounded-md ring-2 transition ${
         selected ? "ring-accent" : "ring-transparent hover:ring-edge"
       }`}
+      draggable={!boardOpen}
       onClick={() => {
         const st = useStore.getState();
-        // 创作板打开 = 挑图上下文：点瀑布流图即插入编辑器（等同 @，但无需先打 @）。
-        // @ 挑图态（boardPickMode）是同一条路径的「显式高亮」版本，插入后退出挑图态。
+        // 创作板打开 = 挑图上下文：点瀑布流图即在光标处插入编辑器。
         if (st.boardOpen) {
           window.dispatchEvent(
             new CustomEvent("bowerbird://board-asset-picked", { detail: shown.id })
           );
-          if (st.boardPickMode) st.finishBoardImagePick();
         } else if (st.mode === "manage") st.toggleSelect(shown.id);
         else st.openDetail(shown.id);
       }}
+      onDragStart={(e) => {
+        const st = useStore.getState();
+        // manage 模式拖已选中项 = 拖全部选中（与 BatchBar 一致）；否则只拖这一张。
+        const ids =
+          st.mode === "manage" && st.selectedIds.has(shown.id)
+            ? Array.from(st.selectedIds)
+            : [shown.id];
+        setDragAssets(ids);
+        e.dataTransfer.effectAllowed = "move";
+        // setData 必须有一次否则部分浏览器不认这次拖拽；payload 实际走模块变量（dragPayload.ts）。
+        e.dataTransfer.setData("text/plain", ids.join(","));
+      }}
+      onDragEnd={() => setDragAssets(null)}
     >
       {describeStatus && (
         <button
@@ -178,7 +192,6 @@ function Thumb({ asset, group }: { asset: Asset; group?: Asset[] }) {
 export function MasonryGrid() {
   const assets = useStore((s) => s.assets);
   const boardOpen = useStore((s) => s.boardOpen);
-  const boardPickMode = useStore((s) => s.boardPickMode);
   const [groupMap, setGroupMap] = useState<Record<string, Asset[]>>({});
 
   // 同流程生成图：批量取可见 codex 组的过程图，供缩略图轮播。无生成图时清空。
@@ -216,20 +229,10 @@ export function MasonryGrid() {
 
   return (
     <div className="flex h-full flex-col">
-      {boardPickMode && (
-        <div className="relative shrink-0 overflow-hidden border-b border-accent/40 bg-accent/10 px-3 py-1.5 text-xs text-accent">
-          <div className="absolute inset-y-0 left-0 w-24 animate-pulse bg-accent/20" />
-          <span className="relative">👆 请选择一张图片插入到 @ 位置</span>
-        </div>
-      )}
       {/* 滚动容器（固定高度 + 竖向滚动）与 columns 容器必须分离：
           columns 一旦有固定高度，多余内容会横向溢出开新列 → 横向滚动。
           内层 columns 不设高度，内容平分到 N 列后纵向增长，由本层竖向滚动。 */}
-      <div
-        className={`h-full overflow-y-auto ${
-          boardPickMode ? "cursor-crosshair ring-2 ring-inset ring-accent/40" : ""
-        }`}
-      >
+      <div className="h-full overflow-y-auto">
         <div className="columns-2 gap-2 p-2 md:columns-3 lg:columns-4 xl:columns-5">
           {filtered.map((a) => (
             <Thumb key={a.id} asset={a} group={groupMap[a.id]} />

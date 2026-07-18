@@ -3,12 +3,13 @@ import { open } from "@tauri-apps/plugin-dialog";
 import type {
   Analysis,
   Asset,
-  AssetPrompt,
   AssetTag,
   ColorBucket,
   CodexHealth,
   CreationPack,
   Folder,
+  GenerationHistory,
+  Preset,
   PromptedAsset,
   TagCount,
 } from "./types";
@@ -57,6 +58,14 @@ export const api = {
     invoke<void>("rename_folder", { id, name }),
   deleteFolder: (id: string) => invoke<void>("delete_folder", { id }),
 
+  // 创作板「用途」（preset）：命名 prompt 片段，发送时作为基底注入（类 CLAUDE.md 上下文）。
+  createPreset: (name: string, body: string) =>
+    invoke<string>("create_preset", { name, body }),
+  listPresets: () => invoke<Preset[]>("list_presets"),
+  updatePreset: (id: string, name: string, body: string) =>
+    invoke<void>("update_preset", { id, name, body }),
+  deletePreset: (id: string) => invoke<void>("delete_preset", { id }),
+
   // 文件选择对话框
   pickImageFiles: async (): Promise<string[]> => {
     const r = await open({
@@ -71,24 +80,16 @@ export const api = {
     return (r as string | null) ?? null;
   },
 
-  // 提示词 / 创作包 / codex（统一走 codex CLI）
-  createPrompt: (body: string, title?: string, kind?: string) =>
-    invoke<string>("create_prompt", { body, title, kind }),
-  updatePrompt: (id: string, body: string, title?: string) =>
-    invoke<void>("update_prompt", { id, body, title }),
-  deletePrompt: (id: string) => invoke<void>("delete_prompt", { id }),
-  linkPrompt: (assetId: string, promptId: string, role: string) =>
-    invoke<void>("link_prompt", { assetId, promptId, role }),
-  unlinkPrompt: (assetId: string, promptId: string) =>
-    invoke<void>("unlink_prompt", { assetId, promptId }),
-  listPromptsByAsset: (assetId: string) =>
-    invoke<AssetPrompt[]>("list_prompts_by_asset", { assetId }),
+  // 创作板（统一走 codex CLI）
   listPromptedAssets: () => invoke<PromptedAsset[]>("list_prompted_assets"),
   // 生成图同流程合并：取某资产的整组过程图（详情轮播 / 批量取可见组）
   listGenerationGroup: (assetId: string) =>
     invoke<Asset[]>("list_generation_group", { assetId }),
   listGenerationGroups: (assetIds: string[]) =>
     invoke<Record<string, Asset[]>>("list_generation_groups", { assetIds }),
+  // 「回看生成对话」：取某生成图所在会话的完整生成时间线（各轮 prompt + 产出图 store_path）。
+  generationHistory: (assetId: string) =>
+    invoke<GenerationHistory>("generation_history", { assetId }),
 
   // 标签 / 自动归类（P2）
   listTags: (source?: string) =>
