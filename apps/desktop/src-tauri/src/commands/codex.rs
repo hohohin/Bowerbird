@@ -211,16 +211,22 @@ pub async fn codex_create_image(
     prompt: String,
     reference_images: Vec<String>,
     session_id: Option<String>,
+    ratio: Option<String>,
 ) -> Result<(), AppError> {
     // 首轮（无 session_id）：包一句明确要 codex 出图，触发 imagegen；
     // 续轮（有 session_id = resume）：codex 已在画图上下文里，用户修改意见原样发。
     // prompt / reference_images 留一份给 generation_meta（req 会 move 走原值）。
+    // ratio（如 "16:9"）仅首轮注入 instruction（续轮 codex resume 记得首轮比例，不重复指定）。
     let prompt_for_meta = prompt.clone();
     let refs_for_meta = reference_images.clone();
+    let ratio_clause = match ratio.as_deref().map(str::trim).filter(|r| !r.is_empty()) {
+        Some(r) => format!("；画面比例为 {r}"),
+        None => String::new(),
+    };
     let instruction = match &session_id {
         Some(_) => prompt,
         None => format!(
-            "请使用图像生成工具，根据以下提示词和参考图生成图片（张数完全以提示词要求为准；提示词未指定张数时生成一张）。\n\n{prompt}"
+            "请使用图像生成工具，根据以下提示词和参考图生成图片（张数完全以提示词要求为准；提示词未指定张数时生成一张{ratio_clause}）。\n\n{prompt}"
         ),
     };
     let req = CodexRequest {

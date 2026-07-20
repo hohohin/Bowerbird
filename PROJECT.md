@@ -25,7 +25,7 @@
 
 ## 目前进展
 
-> 更新时间：2026-07-18
+> 更新时间：2026-07-20
 
 **当前阶段：1.0 功能路径打通 + v1 范围扩展到生成（⑥）+ 创作板 UI 已实现（2026-07-18 重写为 ProseMirror）。** 详情页「反推」真正看图（codex CLI + gpt-5.5，ChatGPT 订阅，绕过 API quota）；FTS5 文件名搜索可用；**创作板（真实 prompt 文本编辑器 + @ 选图）已落地**（[CreationBoard.tsx](apps/desktop/src/components/CreationBoard.tsx)）；**生成（⑥）纳入 v1**，待 spike 验证 codex CLI 的画图能力。
 
@@ -79,6 +79,8 @@
 - **生成图点击放大 Lightbox（2026-07-18）**：to-do 第5条。生成面板里生成图点击原先 `<a href={convertFileSrc(p)} target="_blank">` 跳系统浏览器，而 convertFileSrc 走 Tauri asset 协议浏览器无权解析、**本就打不开**；改为 app 内全屏放大。新增 [Lightbox.tsx](apps/desktop/src/components/Lightbox.tsx)（`fixed inset-0 z-50 bg-black/90`，约定 13 全屏遮罩形态；createPortal 到 document.body 渲染（脱离 GenerationPanel 多层 overflow-hidden 父链，避免任何祖先层叠上下文/transform 吞掉 fixed 遮罩），稳定盖整屏）；点背景/Esc/✕ 关闭、点大图本体不关（stopPropagation）。**跨轮导航**：各轮图拍平成 `allImages`、每轮记起始 offset，点某图算全局 index，←/→ 键或箭头切换整个会话的所有版本（「回看生成对话」场景尤自然），单图无箭头。[GenerationPanel.tsx](apps/desktop/src/components/GenerationPanel.tsx) TurnView `<a>` 换 `<button type="button">`（cursor-zoom-in），map 时累加 imageOffset；预览图与大图同 URL 命中浏览器缓存、开图瞬时。
 
 - **图片浏览缩放交互统一（2026-07-18）**：所有「看大图」场景统一为成熟图片查看器交互——**滚轮以光标为锚点缩放（zoom-to-cursor）+ 按住拖动平移（grab/grabbing 光标）+ 双击 1x↔2x 切换**，换图自动 reset。新增 [useImageZoom.ts](apps/desktop/src/lib/useImageZoom.ts) hook 供 [Lightbox.tsx](apps/desktop/src/components/Lightbox.tsx) 与 [AssetDetail.tsx](apps/desktop/src/components/AssetDetail.tsx) 大图共用：transform `translate+scale`，zoom-to-cursor 数学 `tx'=tx+C·(1-k)`（C=鼠标相对当前 imgRect 中心、k=s'/s）；wheel 走原生 `addEventListener` + `passive:false` 才能 preventDefault 阻止页面滚动（React onWheel 在部分浏览器为 passive、preventDefault 无效）；拖动 move/up 挂 window，拖出元素仍跟手。视频保留 `<video controls>` 不缩放；AssetDetail 容器 `overflow-auto`→`overflow-hidden`（平移走 transform 不用滚动条）。瀑布流缩略图不纳入（网格导航，滚轮应滚动列表）。
+
+- **创作板 ratio 选择下拉菜单（2026-07-20）**：创作板编辑框上方加**可扩展工具条**（ratio 在左、右侧留位，未来可加更多功能），首项 = 画面比例选择器。形态 = **inline 展开**（复用项目既有 inline 面板范式：toggle 按钮 + 下方 chip 面板 + 选中即收 / ✕，无 absolute 浮层 / 点外部关闭 / z-index / shadow——项目无下拉浮层先例，故不发明新范式）；档位 1:1 / 3:4 / 4:3 / 2:3 / 3:2 / 16:9 / 9:16 + 自动，icon = CSS 描边矩形按比例缩放（直观体现横竖）。**ratio 作为独立参数透传后端**（创作板本地 state + localStorage `bowerbird.boardRatio` 跨会话记忆，照 AssetDetail 范式；null=自动不注入），[codex.rs](apps/desktop/src-tauri/src/commands/codex.rs) `codex_create_image` 加 `ratio` 参数，**首轮** instruction 拼入「；画面比例为 16:9」，**续轮 resume 不注入**（codex 记得首轮比例）；用户 prompt 预览保持干净，未来即梦接入（[AI-PROVIDERS.md](AI-PROVIDERS.md) §5.3）可直接对接其 `size` 参数。新增 [creation/ratios.ts](apps/desktop/src/components/creation/ratios.ts)（档位数据 + `ratioIconBox` 尺寸 helper）、[creation/RatioSelect.tsx](apps/desktop/src/components/creation/RatioSelect.tsx)（inline 选择器 + RatioIcon）；透传链路 [store.ts](apps/desktop/src/store.ts) `startGeneration` / [api.ts](apps/desktop/src/lib/api.ts) `codexCreateImage` / [CreationBoard.tsx](apps/desktop/src/components/CreationBoard.tsx) `send`。
 
 **测试：** `cargo test` 51 通过（导入/去重/多图过滤 + 扩展下载格式识别/本机内网 URL 拒绝 + assemble_pack + FTS5 文件名搜索 + analyses 读写 + caption sections 解析 + list_prompted_assets + 采集即命名 `clean_name`/`split_name_and_desc` + caption 共享模块 + 生成图取图快照差分 `list_new_generated` + 标签 `get_or_create`/`set_asset_tags` source 隔离 + `tag:` 智能查询 + `list_tags_with_count` + 色板 `hex_to_bucket`/`colors_to_buckets` + `asset_colors` 幂等/folder 过滤 + 会话 prompt 链 `generation_prompt_chain` + 生成图 prompt 维度识别 `extract_dim_sections`/`build_generation_caption` + 同流程合并 `collapse_generation_groups`/`list_generation_group` + 收藏夹 `collection_roundtrip_and_guards` + 生成历史回看 `generation_history`）；前端 `tsc --noEmit` 通过；扩展三份 `content.js` / 两份 `background.js` 均通过 `node --check`，三份 Manifest 均通过 JSON 解析。
 

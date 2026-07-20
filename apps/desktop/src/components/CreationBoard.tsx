@@ -2,6 +2,27 @@ import { useMemo, useState } from "react";
 import { useStore } from "../store";
 import { api } from "../lib/api";
 import { useCreationEditor } from "./creation/useCreationEditor";
+import { RATIOS } from "./creation/ratios";
+import { RatioSelect } from "./creation/RatioSelect";
+
+// 画面比例偏好记忆（照 AssetDetail 的 localStorage 范式：bowerbird.<name> 前缀、try/catch 兜底）。
+const BOARD_RATIO_KEY = "bowerbird.boardRatio";
+function loadBoardRatio(): string | null {
+  try {
+    const v = localStorage.getItem(BOARD_RATIO_KEY);
+    return v && RATIOS.some((r) => r.key === v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+function saveBoardRatio(v: string | null) {
+  try {
+    if (v) localStorage.setItem(BOARD_RATIO_KEY, v);
+    else localStorage.removeItem(BOARD_RATIO_KEY);
+  } catch {
+    // ignore storage errors
+  }
+}
 
 /**
  * 创作板 UI 外壳。编辑器内核（ProseMirror doc / 光标 / 序列化）下沉到
@@ -33,6 +54,12 @@ export function CreationBoard() {
   } = useCreationEditor();
 
   const [copied, setCopied] = useState(false);
+  // 画面比例（null=自动/不指定，发送时不注入 instruction）。记忆进 localStorage，跨会话保留。
+  const [ratio, setRatio] = useState<string | null>(loadBoardRatio);
+  const selectRatio = (v: string | null) => {
+    setRatio(v);
+    saveBoardRatio(v);
+  };
   // 创作板「用途」（preset）登记：只需用途名，body 取当前编辑框内容
   const [creatingPreset, setCreatingPreset] = useState(false);
   const [newName, setNewName] = useState("");
@@ -61,7 +88,7 @@ export function CreationBoard() {
   // 把当前组稿发 codex 生成。生成期间编辑器仍可继续组下一轮稿（prompt 在此快照进 store）。
   function send() {
     if (!codexHealth?.ok || !finalPrompt || generating) return;
-    void startGeneration(finalPrompt, references);
+    void startGeneration(finalPrompt, references, ratio);
   }
 
   // 登记=把当前编辑框内容（finalPrompt）存为用途，只需用户给个名字。
@@ -269,6 +296,10 @@ export function CreationBoard() {
         <div className="rounded-lg border border-edge bg-[#13171f] p-3 text-sm leading-8 text-ink">
           <div className="mb-2 text-[11px] text-muted">
             像跟 AI 输入 prompt 一样书写；<span className="rounded bg-panel2 px-1 text-accent">点瀑布流图片</span> 在光标处插入参考图，或输入 <span className="rounded bg-panel2 px-1 text-accent">@图名</span>（空格/标点后自动识别）。
+          </div>
+          {/* 工具条：编辑框上方的快捷参数；作 hostRef 的兄弟（不触发其 onClick={focus}）。未来可在此加更多功能。 */}
+          <div className="mb-2 flex items-center gap-2">
+            <RatioSelect value={ratio} onChange={selectRatio} />
           </div>
           <div
             ref={hostRef}
