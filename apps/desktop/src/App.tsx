@@ -33,6 +33,8 @@ function App() {
   const boardOpen = useStore((s) => s.boardOpen);
   const genPanelOpen = useStore((s) => s.genPanelOpen);
   const setCodexHealth = useStore((s) => s.setCodexHealth);
+  const setExtensionConnected = useStore((s) => s.setExtensionConnected);
+  const setCollectedNotice = useStore((s) => s.setCollectedNotice);
 
   async function refresh() {
     try {
@@ -78,7 +80,8 @@ function App() {
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    listen("library://assets-changed", () => {
+    listen<{ name?: string }>("library://assets-changed", (e) => {
+      if (e.payload?.name) setCollectedNotice(e.payload.name);
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => refresh(), 300);
     }).then((u) => (unlisten = u));
@@ -88,7 +91,7 @@ function App() {
     };
     // boardOpen 进依赖：保证刷新闭包看到最新 boardOpen（创作板模式下取 prompted 集合）
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentFolderId, currentCollectionId, searchQuery, smartFilter, colorFilter, boardOpen]);
+  }, [currentFolderId, currentCollectionId, searchQuery, smartFilter, colorFilter, boardOpen, setCollectedNotice]);
 
   // 用途（preset）CRUD 后后端 emit `presets://changed`，刷新创作板下拉。
   useEffect(() => {
@@ -160,6 +163,15 @@ function App() {
     );
     return () => unlisten?.();
   }, [setAutoAnalyzing]);
+
+  // 浏览器扩展加载后及之后每 15 秒向本地 WS 发 ping；后端收到后 emit collect://extension-connected。
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    listen("collect://extension-connected", () => setExtensionConnected(true)).then(
+      (u) => (unlisten = u)
+    );
+    return () => unlisten?.();
+  }, [setExtensionConnected]);
 
   // 生成结果流式回显（创作板「发送」/ 生成面板「继续修改」触发）：
   // 生成 UI 独立成面板后，codex://chunk 监听挪到全局。App 单次挂载，但 StrictMode 双挂载下

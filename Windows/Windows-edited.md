@@ -174,6 +174,9 @@
 
 ## 7. 桌面端新用户体验与采集可见性
 
+> **2026-07-20 更新**：本节所述四个前端 override（`store.ts` / `App.tsx` / `Toolbar.tsx` / `WelcomePanel.tsx`）已**删除**，其差异化功能（扩展连接状态 `extensionConnected`、采集提示 `collectedNotice`、环境状态面板）已并入主项目源码（`apps/desktop/src/store.ts` / `App.tsx` / `components/SettingsDialog.tsx` / `Toolbar.tsx`）。
+> 原因：主项目 store 演进（presets / colorRebuild 进 store / 删 boardPickMode / startGeneration 改签名）后，整文件覆盖式 override 与主项目分叉，导致 `.work` 里「主项目新组件 + override 旧 store」类型对不上、`tsc` 失败。codex / ingest / ws_server 等 Rust override 不受影响、保留。
+
 ### `Windows/overrides/apps/desktop/src/App.tsx`
 
 - 空素材库时显示新的首次使用面板，不再用 Codex 配置遮罩阻止进入应用。
@@ -219,9 +222,9 @@
 ### `Windows/dist/Bowerbird_0.1.0_x64-setup.exe`
 
 - 当前 Windows x64 NSIS 安装包。
-- 最后构建时间：2026-07-14 16:42:24（Asia/Shanghai）。
-- 文件大小：3,631,594 bytes。
-- SHA-256：`8D68FD99CFA1D87F1C083320FDE4ACEF3C7F832D03041A01957B7768AB32D4EF`。
+- 最后构建时间：2026-07-20 16:06:58（Asia/Shanghai）。
+- 文件大小：3,660,865 bytes。
+- SHA-256：`6CD2331FB9D5B9A29F5A8A184863341F4C01186F2E7892140668FFEF94E6F24D`。
 - 安装器、卸载器与应用本体均使用新的 Bowerbird Logo；安装包尚未做 Authenticode 代码签名。
 
 ## 9. 验证结果
@@ -229,7 +232,7 @@
 - 插件 `content.js` 和 `background.js` 已通过 `node --check`。
 - 两份扩展 Manifest 均可正常解析。
 - TypeScript `pnpm lint` 通过。
-- Windows 覆盖工作树 Rust 测试：50 项通过，0 项失败。
+- Windows 覆盖工作树 Rust 测试：52 项通过，0 项失败（2026-07-20 重新验证）。
 - Tauri release 构建成功。
 - NSIS 安装包生成成功。
 - 本机实际故障文件检查确认：旧 `extension-image` 破图对应的 `.jpg` 实际内容是 HTML；同一次拖拽的另一条 `.webp` 才是真图片，验证了原 `2/2` 的根因。

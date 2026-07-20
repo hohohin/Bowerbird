@@ -18,7 +18,23 @@ export function Toolbar({ onRefresh }: { onRefresh: () => Promise<void> }) {
   const genUnread = useStore((s) => s.genUnread);
   const searchQuery = useStore((s) => s.searchQuery);
   const setSearchQuery = useStore((s) => s.setSearchQuery);
+  const collectedNotice = useStore((s) => s.collectedNotice);
+  const setCollectedNotice = useStore((s) => s.setCollectedNotice);
+  const setCurrentFolder = useStore((s) => s.setCurrentFolder);
+  const setCurrentCollection = useStore((s) => s.setCurrentCollection);
+  const setSmartFilter = useStore((s) => s.setSmartFilter);
+  const setColorFilter = useStore((s) => s.setColorFilter);
   const [settingsOpen, setSettingsOpen] = useState(false);
+
+  // 扩展采集入根库；清空当前范围让用户立刻看见新素材。
+  function showCollectedAsset() {
+    setCurrentCollection(null);
+    setCurrentFolder(null);
+    setSearchQuery("");
+    setSmartFilter(null);
+    setColorFilter(null);
+    setCollectedNotice(null);
+  }
 
   async function withBusy(fn: () => Promise<unknown>) {
     setLoading(true);
@@ -79,6 +95,15 @@ export function Toolbar({ onRefresh }: { onRefresh: () => Promise<void> }) {
       )}
       <div className="ml-auto flex items-center gap-2">
         <span className="text-xs text-muted">{busy ? "处理中…" : ""}</span>
+        {collectedNotice && (
+          <button
+            onClick={showCollectedAsset}
+            className="max-w-48 truncate rounded-md bg-green-500/15 px-2.5 py-1.5 text-xs text-green-300 hover:bg-green-500/25"
+            title={`已采集：${collectedNotice}。点击回到总库查看。`}
+          >
+            已采集：{collectedNotice} · 查看
+          </button>
+        )}
         <button
           onClick={() => setSettingsOpen(true)}
           className="rounded-md bg-panel2 px-3 py-1.5 text-sm text-ink hover:bg-edge"

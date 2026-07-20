@@ -15,6 +15,7 @@ import { api } from "../lib/api";
 export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const codexHealth = useStore((s) => s.codexHealth);
   const setCodexHealth = useStore((s) => s.setCodexHealth);
+  const extensionConnected = useStore((s) => s.extensionConnected);
   const classifyProgress = useStore((s) => s.classifyProgress);
   const colorRebuild = useStore((s) => s.colorRebuild);
 
@@ -111,6 +112,18 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
             >
               重新检测
             </button>
+          </div>
+          <div className="mt-2 flex items-center gap-2">
+            <div
+              className={`rounded px-2 py-1 text-xs ${
+                extensionConnected ? "bg-accent/15 text-accent" : "bg-amber-500/15 text-amber-300"
+              }`}
+            >
+              {extensionConnected ? "浏览器扩展已连接" : "浏览器扩展未连接"}
+            </div>
+            <span className="text-xs text-muted">
+              {extensionConnected ? "本机采集服务在线" : "打开网页后等待扩展心跳"}
+            </span>
           </div>
         </section>
 

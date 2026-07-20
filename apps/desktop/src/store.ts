@@ -82,6 +82,12 @@ interface State {
   // —— codex 可用性（App 挂载取一次；创作板/生成面板共用，约定 7 置灰依据）——
   codexHealth: CodexHealth | null;
   setCodexHealth: (h: CodexHealth | null) => void;
+  // —— 浏览器扩展采集 ——
+  // 扩展连上本地 WS 后后端 emit collect://extension-connected；采集入库 emit library://assets-changed 带 name。
+  extensionConnected: boolean;
+  collectedNotice: string | null; // 最近一次采集入库的素材名；null=不显提示
+  setExtensionConnected: (connected: boolean) => void;
+  setCollectedNotice: (name: string | null) => void;
   // —— 生成结果面板（独立于创作板；主区覆盖层，可随时开合，状态在 store 不丢）——
   genPanelOpen: boolean;
   genTurns: GenTurn[];
@@ -315,6 +321,11 @@ export const useStore = create<State>((set, get) => {
   // —— codex 可用性 ——
   codexHealth: null,
   setCodexHealth: (codexHealth) => set({ codexHealth }),
+  // —— 浏览器扩展采集 ——
+  extensionConnected: false,
+  collectedNotice: null,
+  setExtensionConnected: (extensionConnected) => set({ extensionConnected }),
+  setCollectedNotice: (collectedNotice) => set({ collectedNotice }),
   // —— 生成结果面板 ——
   genPanelOpen: false,
   genTurns: [],
