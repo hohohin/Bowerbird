@@ -70,7 +70,7 @@
 
 ## 3. 即梦能力调研（基于官方 dreamina CLI，2026-07-23）
 
-> ✅ 本节基于官方安装脚本、`dreamina -h` 公开用法、官方 SKILL.md、第三方 `dreamina-cli-skill` 仓库的命令清单综合。**命令面 / 登录方式 / 本地状态文件已查清，可直接写代码**；标注 ⚠️ 的点仍待 Phase 0 本机 spike 实测确认（§9）。
+> ✅ 本节基于官方安装脚本、`dreamina -h`、官方 SKILL.md、第三方 `dreamina-cli-skill` 综合，并经 **2026-07-23 本机 spike 实测**（Win11 + dreamina CLI + maestro 会员）：安装 / 登录 / `text2image` / `query_result` 全链路跑通，stdout JSON 结构、下载命名、积分行为均已确认（§3.3/§3.6）。**Phase 0 通过，可直接进 Phase 1。**
 
 ### 3.1 dreamina CLI 是什么
 
@@ -97,13 +97,13 @@
 | `dreamina list_task` / `user_credit` / `session` / `version` | 任务列表 / 积分 / 会话归组 / 版本 | 辅助（health 用 `user_credit`） |
 | `dreamina login` / `login checklogin` / `relogin` / `logout` | 登录态管理 | ✅ 首启登录引导（§7.4） |
 
-**关键命令实例**（raw CLI，下划线参数风格）：
+**关键命令实例**（raw CLI，下划线参数风格，来自 `text2image -h`/`image2image -h`/`query_result -h` 实测 2026-07-23）：
 
 ```bash
-# 文生图（ratio 直接对接创作板选择器；--poll 让 CLI 内部轮询 N 秒）
-dreamina text2image --prompt="..." --ratio=1:1 --resolution_type=2k --poll=30
+# 文生图（--resolution_type 必需；--generate_num 原生一次出多张 1-10；--poll 轮询）
+dreamina text2image --prompt="..." --ratio=1:1 --resolution_type=2k --generate_num=1 --poll=30
 
-# 图生图（续轮：--images 传上一轮产出图）
+# 图生图（续轮：--images 传 1-10 张本地参考图）
 dreamina image2image --images ./prev.png --prompt="改成水彩风格" --resolution_type=2k --poll=30
 
 # 取图下载（直接下到指定目录）
@@ -113,7 +113,14 @@ dreamina query_result --submit_id=<id> --download_dir=<库内临时目录>
 dreamina user_credit
 ```
 
-> 参数命名：raw CLI 用**下划线** `--resolution_type`/`--submit_id`/`--download_dir`；第三方 Python wrapper 用连字符 `--resolution-type` 并转换。**Bowerbird 直连 raw CLI，用下划线。**
+**参数要点（`-h` 实测）**：
+- `--resolution_type`（1k/2k/4k）**必需**，非可选——Bowerbird 始终传（默认 2k）。
+- `--model_version` 默认 **5.0**（支持 3.0/3.1/4.0/4.1/4.5/4.6/4.7/5.0/5.0Pro；image2image 仅 4.0+）。**v1 设想的「Seedream lite」在 dreamina CLI 不存在**（开放问题 3 据此修正）。
+- `--ratio` 默认 16:9，支持 21:9/16:9/3:2/4:3/1:1/3:4/2:3/9:16 共 9 档（Bowerbird 创作板 8 档，dreamina 多一个 21:9；Bowerbird「自动」= omit `--ratio` 走默认 16:9）。
+- **`--generate_num` 1-10**：dreamina **原生支持一次出多张**——比 codex 靠 prompt 驱动数量（约定 2）更可靠，即梦 provider 直接用此参数控数量（§5.3）。
+- `--poll N`：submit 后**每秒轮询一次、最多 N 秒**，完成返回结果、超时 CLI 退出（保留 submit_id 事后 `query_result` 续查，§3.3）。
+
+> 参数命名：raw CLI 用**下划线** `--resolution_type`/`--submit_id`/`--download_dir`/`--model_version`/`--generate_num`；第三方 Python wrapper 用连字符并转换。**Bowerbird 直连 raw CLI，用下划线。**
 
 ### 3.2 认证：OAuth Device Flow（v2 取代 AK/SK）
 
@@ -142,13 +149,26 @@ dreamina user_credit
 
 与 codex「同步流式出图、自动落盘」不同，dreamina 是**异步任务制**：
 
-1. `text2image --poll N`：提交任务返回 `submit_id` + `gen_status`（`querying`/`success`/`fail`）；`--poll N` 让 CLI 内部轮询 N 秒。
-   - ⚠️ spike 待确认：`--poll` 超时未完成时 stdout 长什么样、是否要存 `submit_id` 事后用 `query_result` 续查。
-2. `query_result --submit_id=<id> --download_dir=<dir>`：查任务结果 + 把图下载到指定目录。
+1. `text2image --poll N`：提交任务返回 `submit_id` + `gen_status`；`--poll N` 让 CLI **每秒轮询一次、最多 N 秒**（`-h` 实测），完成则返回结果、超时则 CLI 退出——保留 `submit_id` 事后 `query_result` 续查。
+   - **stdout 直接是 JSON**（spike 实测，无需 `--json` flag）。完成时结构：
+     ```json
+     { "submit_id": "5138eb49-...-9dc39a727e86", "gen_status": "success",
+       "result_json": { "images": [ { "image_url": "https://.../x.png?...&x-expires=...&x-signature=...", "width": 2048, "height": 2048 } ], "videos": [] },
+       "queue_info": { "queue_status": "Finish", ... } }
+     ```
+   - ⚠️ **`image_url` 是临时签名 URL（带 `x-expires` + `x-signature`）**，会过期 → **必须及时下载入库**，不能存 URL 等以后用（过期 403）。
+2. `query_result --submit_id=<id> --download_dir=<dir>`：下载图到指定目录。stdout 结构同上，但 `images[].image_url` 换成**本地 `path`**：
+   ```json
+   { "result_json": { "images": [ { "path": "C:\\Users\\...\\<submit_id>_image_1.png", "width": 2048, "height": 2048 } ] } }
+   ```
+   - **下载命名（spike 实测）**：`{submit_id}_image_{N}.png`（N 从 1 起，多张依次）；PNG；2k 的 1:1 = 2048×2048。
+   - **`path` 是 OS 原生路径**（Windows 反斜杠 `C:\\...`，JSON 转义；macOS/Linux 正斜杠），Rust `PathBuf` 直接解析即可。
    - **比 codex 更可控**：直接下到 Bowerbird asset scope（`$APPDATA/**`）内，省掉 codex 那套「跑前快照 `~/.codex/generated_images/` 跑后差分」的绕法（见 [codex_cli.rs](apps/desktop/src-tauri/src/codex/codex_cli.rs) `list_new_generated`）。
 3. 下载后 `ingest_generated` 入库（source="jimeng"，与 source="codex" 对称）。
 
-**判定提交成功**（来自官方 SKILL.md 输出契约）：`submit_id` 存在 **且** `gen_status ∈ {querying, success}`。`gen_status=fail` 视为失败。
+**判定提交成功**（官方 SKILL.md 契约 + spike 实测）：`submit_id` 存在 **且** `gen_status ∈ {querying, success}`。`gen_status=fail` 视为失败。
+
+**积分消耗（spike 实测，待进一步确认）**：maestro 高级会员一次 `text2image`（1 张 / 2k）后 `total_credit` **未变化**（15080→15080）—— 可能 maestro 文生图权益免费、或扣除有延迟；视频（Seedance 2.0）才显著扣分。**对 Bowerbird 图像生成场景利好**，但 UI 仍应 `user_credit` 显余额。
 
 **无逐字流式**（与 codex `agent_message` Delta 不同）：dreamina 只有任务状态，无「看它画」过程。GenerationPanel 在即梦侧走「伪进度 Delta」（§6.3 方案 A）。
 
@@ -183,15 +203,15 @@ dreamina user_credit
 
 排查口诀（来自官方 skill 文档）：生成命令报权限/登录/环境异常 → 先查 `config.toml` 是否有效 + `dreamina user_credit` 是否能返回余额 JSON。
 
-### 3.6 ⚠️ spike 待确认项（Phase 0，§9）
+### 3.6 spike 验证项（Phase 0，2026-07-23 本机实测 Win11）
 
-1. `text2image --poll` stdout 的 JSON 结构（`submit_id`/`gen_status`/图片 URL 字段名），raw CLI 是否有 `--json` 之类 flag。
-2. `--poll` 超时未完成的续接策略（再 poll？存 submit_id 事后 `query_result`？）。
-3. `query_result --download_dir` 下载图的格式 / 命名 / 多张图行为。
-4. `login --headless` stdout 标记（`verification_uri`/`user_code`/`device_code` 的确切字段）。
-5. Windows：`%USERPROFILE%\bin\dreamina.exe` 能否被 Tauri GUI 进程 spawn（PATH 生效问题）、`CREATE_NO_WINDOW` 是否足够。
-6. 单次生图积分消耗（UI 明示成本用）。
-7. `AigcComplianceConfirmationRequired`：某些模型首次调用需网页侧合规确认，要识别为「需用户操作」而非「重试循环」。
+1. ✅ **参数契约 + stdout JSON 结构**：`text2image -h` 拿到全部参数（§3.1）；实测 `text2image --poll` stdout 直接是 JSON（无 `--json` flag），`submit_id`(UUID)/`gen_status`/`result_json.images[].image_url` 结构见 §3.3。
+2. ✅ **`--poll` 超时续接**：每秒轮询、最多 N 秒、超时 fall back 手动 `query_result --submit_id`（`-h` + 实测）。
+3. ✅ **`query_result --download_dir`**：下载到指定目录，命名 `{submit_id}_image_{N}.png`，PNG，`images[].path` 给本地 OS 路径（§3.3）。
+4. ✅ **登录**：`dreamina login` OAuth 跑通，`user_credit` 返回 `{total_credit, user_id, vip_level}` JSON = 登录态生效。headless 字段（verification_uri/user_code/device_code）以 `-h` 为准（本次用非 headless）。
+5. ⏳ **Windows GUI spawn**：命令行已证二进制可用；Tauri GUI 进程 spawn 的 PATH 问题由 `resolve_dreamina_binary` 主动查 `%USERPROFILE%\bin` 解决（§5.3），留实现时验证。
+6. ⏳ **积分消耗**：maestro 本次未扣分（见 §3.3，待进一步确认是免费权益还是延迟）。
+7. ⏳ **`AigcComplianceConfirmationRequired`**：本次 5.0 模型未触发；实现时识别为「需用户网页确认」而非重试。
 
 ---
 
@@ -483,12 +503,12 @@ pub async fn dreamina_health(...) -> Health {
 
 > 每个阶段都可独立验证、可回退。**Phase 0 必须先做**（仿项目「多模态看图四条路径实测」传统，dreamina CLI 虽调研清楚，本机链路仍有未知）。
 
-### Phase 0 · spike dreamina CLI 调通（验证可行性，不改主源码架构）
+### Phase 0 · spike dreamina CLI 调通 ✅（2026-07-23 完成，Win11 + maestro 会员）
 
 - 目标：本机装 dreamina、登录、跑通一次 `text2image --poll` + `query_result --download_dir`，图下载到本地。
 - 验证项（对应 §3.6）：① `text2image` stdout JSON 结构 + submit_id/gen_status 字段；② `--poll` 超时续接策略；③ `query_result` 下载图格式/命名；④ `login --headless` OAuth 字段；⑤ Windows `%USERPROFILE%\bin\dreamina.exe` 能否被 GUI 进程 spawn；⑥ 积分消耗；⑦ `AigcComplianceConfirmationRequired` 处理。
-- 产出：一份 spike 笔记（类似 PROJECT.md 踩坑「codex exec --json 事件结构」），修正本方案 §3.6 的假设。
-- **门槛**：spike 通了才进 Phase 1；不通则评估回退到火山引擎 HTTP API（v1 路线保底）或换 provider 候选。
+- **结果**：①②③④ 通过（stdout 直接 JSON、`{submit_id}_image_N.png` 下载、OAuth 登录 + `user_credit` 验证）；⑤⑥⑦ 留实现时验证（Windows GUI spawn / 积分是否延迟扣 / 合规确认）。详见 §3.3/§3.6。
+- **门槛已过**：进 Phase 1。回退到火山引擎 HTTP API（v1）的保底路线无需启用。
 
 ### Phase 1 · provider 抽象重构（行为不变，纯解耦）
 
@@ -546,7 +566,7 @@ pub async fn dreamina_health(...) -> Health {
 |---|---|---|
 | 1 | 命令是否从 `codex_create_image` 改名为 `create_image`？ | 改名更准确，但破坏前端 api 与历史调用；倾向**加新名 `create_image`，旧名保留为 codex 别名**，迁移完再删 |
 | 2 | ~~即梦认证走方舟 API Key 还是火山 AK/SK？~~（v2 消解） | **都不用**——走 dreamina CLI OAuth Device Flow（§3.2），无签名 |
-| 3 | 即梦首选模型（4.0 vs Seedream lite）？ | 通过 `--model-version` 选择；**先 spike `text2image` 默认模型**验证链路，再定首选 |
+| 3 | 即梦首选 `--model_version`？ | ✅ 默认 **5.0**（`-h` 实测，支持 3.0/3.1/4.0/4.1/4.5/4.6/4.7/5.0/5.0Pro；v1 设想的「Seedream lite」在 dreamina CLI 不存在）；Bowerbird 用默认 5.0 起步，质量不足再升 5.0Pro |
 | 4 | ~~凭据存储明文 JSON vs keychain？~~（v2 消解） | **不存**——dreamina 自管 credential.json（§7.2） |
 | 5 | 即梦多轮失忆是否给 UI 提示？ | **是**，续轮切换即梦时 tooltip 提示「即梦仅参考上一张图」 |
 | 6 | 即梦是否纳入 Pro 付费墙？ | **本方案不锁**，留商业化决策（见 [PRICING.md](PRICING.md) §4） |
@@ -561,3 +581,4 @@ pub async fn dreamina_health(...) -> Health {
 |---|---|
 | 2026-07-18 | 首版方案草案（v1）：泛化 GenerationPanel + 全局默认/单次覆盖 + codex/即梦首批；理解类仍只走 codex；即梦走火山引擎 HTTP API；待 spike 后定稿。 |
 | 2026-07-23 | v2 修订：即梦官方推出 CLI（`dreamina`，单二进制 + OAuth 登录 + 积分制），接入路线**整体从火山引擎 HTTP API 改为官方 dreamina CLI**（与 codex 同构子进程）。消解签名实现（开放问题 2）、凭据存储（开放问题 4）两个老大难；关键约定 1 演进更纯粹（所有 provider 都是 CLI，不开 HTTP 口子）。命令面/登录/状态文件已调研清楚（§3），Phase 0 改为 dreamina CLI 本机 spike。 |
+| 2026-07-23 | Phase 0 spike 通过（Win11 + maestro）：`text2image --poll` + `query_result --download_dir` 全链路实测跑通；stdout 直接 JSON、下载 `{submit_id}_image_N.png`、OAuth 登录 + `user_credit` 验证。maestro 文生图本次未扣分（待确认是免费权益还是延迟）。详见 §3.3/§3.6，进 Phase 1。 |
