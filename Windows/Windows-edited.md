@@ -149,6 +149,7 @@
   - 返回 asset id 和名称给浏览器扩展。
 - 收到扩展 `ping` 或旧 `save` 请求时发出 `collect://extension-connected`。
 - 保留旧 URL 下载协议以兼容旧版扩展，并把页面 URL 作为 Referer 传入。
+- 增加 `save_batch` 协议分支：主线扩展（含小红书结构化采集）批量提交 `save_batch`，override 原先只认 `save_blob` 会回 `unknown type`。现在逐项走 URL 下载入库（适用 xhscdn 等公开图床），响应对齐主线 `{ok, saved, total, results}`；`save_blob` 通路保留，按扩展协议自动分流。
 
 ### `Windows/overrides/apps/desktop/src-tauri/src/core/ingest.rs`
 
@@ -175,7 +176,7 @@
 ## 7. 桌面端新用户体验与采集可见性
 
 > **2026-07-20 更新**：本节所述四个前端 override（`store.ts` / `App.tsx` / `Toolbar.tsx` / `WelcomePanel.tsx`）已**删除**，其差异化功能（扩展连接状态 `extensionConnected`、采集提示 `collectedNotice`、环境状态面板）已并入主项目源码（`apps/desktop/src/store.ts` / `App.tsx` / `components/SettingsDialog.tsx` / `Toolbar.tsx`）。
-> 原因：主项目 store 演进（presets / colorRebuild 进 store / 删 boardPickMode / startGeneration 改签名）后，整文件覆盖式 override 与主项目分叉，导致 `.work` 里「主项目新组件 + override 旧 store」类型对不上、`tsc` 失败。codex / ingest / ws_server 等 Rust override 不受影响、保留。
+> 原因：主项目 store 演进（presets / colorRebuild 进 store / 删 boardPickMode / startGeneration 改签名）后，整文件覆盖式 override 与主项目分叉，导致 `.work` 里「主项目新组件 + override 旧 store」类型对不上、`tsc` 失败。codex / ingest 等 Rust override 不受影响、保留；ws_server override 因主线新增 `save_batch` 协议曾导致小红书采集报 `unknown type`，已在 override 侧补齐 `save_batch` 分支（见 §6）。
 
 ### `Windows/overrides/apps/desktop/src/App.tsx`
 

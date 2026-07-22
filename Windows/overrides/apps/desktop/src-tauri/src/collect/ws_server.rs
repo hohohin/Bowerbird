@@ -102,8 +102,77 @@ async fn handle_message(text: &str, state: &AppState) -> String {
                 Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }).to_string(),
             }
         }
+        // 主线扩展（含小红书结构化采集）批量提交走 save_batch：逐项 URL 下载入库。
+        // 与 save_blob 不同：那条通路靠浏览器上传字节保留登录态；这条由桌面端直接下载，
+        // 适用于 xhscdn 等公开图床。两条并存，按扩展协议自动分流。
+        "save_batch" => {
+            let _ = state.app.emit("collect://extension-connected", ());
+            let Some(items) = v.get("items").and_then(|items| items.as_array()) else {
+                return r#"{"ok":false,"error":"items must be an array","results":[]}"#.to_string();
+            };
+            if items.is_empty() {
+                return r#"{"ok":false,"error":"empty items","results":[]}"#.to_string();
+            }
+            if items.len() > 100 {
+                return r#"{"ok":false,"error":"batch limit is 100","results":[]}"#.to_string();
+            }
+            let mut results = Vec::with_capacity(items.len());
+            let mut saved = 0usize;
+            for item in items {
+                let url = item
+                    .get("media_url")
+                    .or_else(|| item.get("url"))
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("");
+                let source_url = item
+                    .get("source_url")
+                    .or_else(|| v.get("source_url"))
+                    .or_else(|| v.get("page_url"))
+                    .and_then(|value| value.as_str());
+                let mut result = if url.is_empty() {
+                    serde_json::json!({ "ok": false, "error": "empty media_url" })
+                } else {
+                    match ingest_one(state, url, source_url).await {
+                        Ok(asset) => {
+                            saved += 1;
+                            let _ = state.app.emit(
+                                "library://assets-changed",
+                                serde_json::json!({ "asset_id": asset.id, "name": asset.name }),
+                            );
+                            serde_json::json!({ "ok": true, "asset_id": asset.id, "name": asset.name })
+                        }
+                        Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }),
+                    }
+                };
+                if let Some(object) = result.as_object_mut() {
+                    for key in ["source_id", "index", "media_kind"] {
+                        if let Some(value) = item.get(key) {
+                            object.insert(key.to_string(), value.clone());
+                        }
+                    }
+                }
+                results.push(result);
+            }
+            serde_json::json!({
+                "ok": saved == items.len(),
+                "saved": saved,
+                "total": items.len(),
+                "results": results,
+            })
+            .to_string()
+        }
         _ => r#"{"ok":false,"error":"unknown type"}"#.to_string(),
     }
+}
+
+async fn ingest_one(
+    state: &AppState,
+    url: &str,
+    source_url: Option<&str>,
+) -> crate::error::AppResult<crate::core::library::Asset> {
+    let asset = ingest::ingest_from_url(&state.paths, &state.db, url, source_url).await?;
+    crate::core::autoname::spawn_auto_analyze(state.app.clone(), state.db.clone(), asset.clone());
+    Ok(asset)
 }
 
 pub async fn start(

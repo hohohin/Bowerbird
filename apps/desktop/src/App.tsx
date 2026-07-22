@@ -39,11 +39,16 @@ function App() {
   async function refresh() {
     try {
       if (boardOpen) {
-        // 创作板模式：瀑布流只显示有 caption（反推）的资产，它们即可作为槽的参考图
-        const prompted = await api.listPromptedAssets();
+        // 创作板模式：瀑布流显示全部资产（含未反推），任意图点一下即可插为参考图；
+        // promptedAssets 给编辑器补 caption/sections —— 有反推的图可展开维度片段，没反推的作纯参考图。
+        const [assets, prompted, total] = await Promise.all([
+          api.listAssets(undefined),
+          api.listPromptedAssets(),
+          api.countAssets(),
+        ]);
         setPromptedAssets(prompted);
-        setAssets(prompted);
-        setTotal(await api.countAssets());
+        setAssets(assets);
+        setTotal(total);
       } else {
         const [assets, total] = await Promise.all([
           searchQuery

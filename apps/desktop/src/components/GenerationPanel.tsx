@@ -25,6 +25,7 @@ export function GenerationPanel() {
   const sendGenRevise = useStore((s) => s.sendGenRevise);
   const cancelGeneration = useStore((s) => s.cancelGeneration);
   const startGeneration = useStore((s) => s.startGeneration);
+  const retryLastGenTurn = useStore((s) => s.retryLastGenTurn);
   const reusePromptToBoard = useStore((s) => s.reusePromptToBoard);
   const reloadPresets = useStore((s) => s.reloadPresets);
 
@@ -122,6 +123,8 @@ export function GenerationPanel() {
                 busy={generating && i === turnsWithOffset.length - 1}
                 imageOffset={imageOffset}
                 onOpenLightbox={(g) => setLightbox({ images: allImages, index: g })}
+                onRetry={retryLastGenTurn}
+                canRetry={!!codexHealth?.ok && !generating}
               />
             ))}
             {genStreaming && (
@@ -252,12 +255,16 @@ function TurnView({
   busy,
   imageOffset,
   onOpenLightbox,
+  onRetry,
+  canRetry,
 }: {
   turn: GenTurn;
   index: number;
   busy: boolean;
   imageOffset: number;
   onOpenLightbox: (globalIdx: number) => void;
+  onRetry: () => void;
+  canRetry: boolean;
 }) {
   return (
     <div className="space-y-1.5 rounded bg-panel2/50 p-3">
@@ -286,6 +293,19 @@ function TurnView({
               />
             </button>
           ))}
+        </div>
+      ) : turn.error ? (
+        <div className="space-y-1.5 rounded border border-red-500/40 bg-red-500/10 p-2">
+          <div className="text-[11px] font-semibold text-red-300">❌ 生成失败</div>
+          <pre className="whitespace-pre-wrap break-all text-[11px] text-red-200/90">{turn.error}</pre>
+          <button
+            onClick={onRetry}
+            disabled={!canRetry}
+            title={canRetry ? "用同样的内容重发" : "codex 当前不可用"}
+            className="rounded bg-panel2 px-2.5 py-1 text-[11px] font-semibold text-ink hover:bg-edge disabled:opacity-50"
+          >
+            ↻ 重试
+          </button>
         </div>
       ) : busy ? (
         <div className="text-[10px] animate-pulse text-muted">codex 生成中…</div>

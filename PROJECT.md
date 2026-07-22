@@ -8,7 +8,7 @@
 
 - [analyse-panel-todo.md](analyse-panel-todo.md) — 详情页「反推」面板待优化清单（结果管理 / 流式取消 / 术语统一 / 未登录置灰 等，2026-07-07 评审，P0–P2 分级）
 - [PRICING.md](PRICING.md) — 商业模式与定价策略（架构张力 / 竞品定价实测 / 免费·付费功能切法 / 价位卡位，2026-07-18）
-- [AI-PROVIDERS.md](AI-PROVIDERS.md) — AI provider 可切换方案（泛化 GenerationPanel + 全局默认/单次覆盖 + codex/即梦首批 + 即梦接入调研 + 关键约定 1 演进，2026-07-18 草案）
+- [AI-PROVIDERS.md](AI-PROVIDERS.md) — AI provider 可切换方案（泛化 GenerationPanel + 全局默认/单次覆盖 + codex/即梦首批 + 即梦走官方 dreamina CLI + 关键约定 1 演进，v2 草案 2026-07-23）
 
 ## 项目说明
 
@@ -25,7 +25,7 @@
 
 ## 目前进展
 
-> 更新时间：2026-07-20
+> 更新时间：2026-07-23
 
 **当前阶段：1.0 功能路径打通 + v1 范围扩展到生成（⑥）+ 创作板 UI 已实现（2026-07-18 重写为 ProseMirror）。** 详情页「反推」真正看图（codex CLI + gpt-5.5，ChatGPT 订阅，绕过 API quota）；FTS5 文件名搜索可用；**创作板（真实 prompt 文本编辑器 + @ 选图）已落地**（[CreationBoard.tsx](apps/desktop/src/components/CreationBoard.tsx)）；**生成（⑥）纳入 v1**，待 spike 验证 codex CLI 的画图能力。
 
@@ -82,6 +82,14 @@
 - **图片浏览缩放交互统一（2026-07-18）**：所有「看大图」场景统一为成熟图片查看器交互——**滚轮以光标为锚点缩放（zoom-to-cursor）+ 按住拖动平移（grab/grabbing 光标）+ 双击 1x↔2x 切换**，换图自动 reset。新增 [useImageZoom.ts](apps/desktop/src/lib/useImageZoom.ts) hook 供 [Lightbox.tsx](apps/desktop/src/components/Lightbox.tsx) 与 [AssetDetail.tsx](apps/desktop/src/components/AssetDetail.tsx) 大图共用：transform `translate+scale`，zoom-to-cursor 数学 `tx'=tx+C·(1-k)`（C=鼠标相对当前 imgRect 中心、k=s'/s）；wheel 走原生 `addEventListener` + `passive:false` 才能 preventDefault 阻止页面滚动（React onWheel 在部分浏览器为 passive、preventDefault 无效）；拖动 move/up 挂 window，拖出元素仍跟手。视频保留 `<video controls>` 不缩放；AssetDetail 容器 `overflow-auto`→`overflow-hidden`（平移走 transform 不用滚动条）。瀑布流缩略图不纳入（网格导航，滚轮应滚动列表）。
 
 - **创作板 ratio 选择下拉菜单（2026-07-20）**：创作板编辑框上方加**可扩展工具条**（ratio 在左、右侧留位，未来可加更多功能），首项 = 画面比例选择器。形态 = **inline 展开**（复用项目既有 inline 面板范式：toggle 按钮 + 下方 chip 面板 + 选中即收 / ✕，无 absolute 浮层 / 点外部关闭 / z-index / shadow——项目无下拉浮层先例，故不发明新范式）；档位 1:1 / 3:4 / 4:3 / 2:3 / 3:2 / 16:9 / 9:16 + 自动，icon = CSS 描边矩形按比例缩放（直观体现横竖）。**ratio 作为独立参数透传后端**（创作板本地 state + localStorage `bowerbird.boardRatio` 跨会话记忆，照 AssetDetail 范式；null=自动不注入），[codex.rs](apps/desktop/src-tauri/src/commands/codex.rs) `codex_create_image` 加 `ratio` 参数，**首轮** instruction 拼入「；画面比例为 16:9」，**续轮 resume 不注入**（codex 记得首轮比例）；用户 prompt 预览保持干净，未来即梦接入（[AI-PROVIDERS.md](AI-PROVIDERS.md) §5.3）可直接对接其 `size` 参数。新增 [creation/ratios.ts](apps/desktop/src/components/creation/ratios.ts)（档位数据 + `ratioIconBox` 尺寸 helper）、[creation/RatioSelect.tsx](apps/desktop/src/components/creation/RatioSelect.tsx)（inline 选择器 + RatioIcon）；透传链路 [store.ts](apps/desktop/src/store.ts) `startGeneration` / [api.ts](apps/desktop/src/lib/api.ts) `codexCreateImage` / [CreationBoard.tsx](apps/desktop/src/components/CreationBoard.tsx) `send`。
+
+- **桌面端素材交互升级（2026-07-23）**：一批围绕瀑布流图片的体验改进——
+  ① **右键菜单**：新增 [ContextMenu.tsx](apps/desktop/src/components/ContextMenu.tsx)（createPortal 到 body 避开瀑布流 overflow 裁剪、测尺寸做边界翻转、透明遮罩+Esc 关）；[MasonryGrid.tsx](apps/desktop/src/components/MasonryGrid.tsx) 缩略图 `onContextMenu` 弹五项——在资源管理器中显示 / 用系统程序打开 / 复制文件路径 / 反推提示词 / 删除（两段式确认避开 WKWebView 对 `confirm` 的拦截）；后端新增 `reveal_path_in_explorer` / `open_path_with_system`（跨平台 spawn，不经 shell scope 故 capabilities 不改）+ [lib.rs](apps/desktop/src-tauri/src/lib.rs) 注册、[api.ts](apps/desktop/src/lib/api.ts) 加对应方法。
+  ② **hover 放大预览**：[MasonryGrid.tsx](apps/desktop/src/components/MasonryGrid.tsx) 缩略图悬停 2.8s 弹放大图（portal 到 body，= 缩略图渲染尺寸 ×200%，跟鼠标定位、靠右/下边时翻转到左/上）；视频 / 无 store_path 不启用。
+  ③ **创作板全量挑图 + 草稿持久化**：创作板模式瀑布流从「仅反推图」放宽到「全量资产」，任意图点一下即插为参考图（无 caption 的作纯参考，[useCreationEditor.ts](apps/desktop/src/components/creation/useCreationEditor.ts) `assetById` 并入 allAssets 让 references 收集到）；编辑器草稿即时持久化 localStorage（`bowerbird.boardDraft`，400ms 去抖），重挂载 `nodeFromJSON` 保真恢复（保留 image/keyword chip 不降级纯文本）；首发生成成功且期间未编辑时清空编辑器+草稿（组稿已交付），编辑过则保留（保护「生成期间继续组下一轮稿」，约定 9）。[App.tsx](apps/desktop/src/App.tsx) 创作板模式瀑布流显示全部资产、`promptedAssets` 仍并行拉取供编辑器给有反推的图补 sections。
+  ④ **codex 生成失败可见 + 可重试**：此前失败仅显示「尚未生成…」，根因是 `genHandleError` 删失败占位轮 + `genStreaming` 只在有轮时渲染 → 错误被双重藏匿（详见踩坑）。改为失败挂到那一轮（`GenTurn.error`）成时间线可见的失败态（❌+原始错误+重试按钮），后端错误文本本就够可读（codex 退出码+stderr 前 500 字）。详见踩坑「codex 生成失败提示被双重藏匿」。
+  ⑤ **反推提示词模块抽离**：把 `DEFAULT_DESCRIBE_PROMPT` 模板 + localStorage 存取从 [AssetDetail.tsx](apps/desktop/src/components/AssetDetail.tsx) 内联抽到独立 [describePrompt.ts](apps/desktop/src/lib/describePrompt.ts)，详情页「反推」与瀑布流右键「反推提示词」共用同一份默认指令与存储。
+  ⑥ **Windows 采集 save_batch 协议**：[ws_server.rs](Windows/overrides/apps/desktop/src-tauri/src/collect/ws_server.rs) override 补 `save_batch` 分支（原只认 `save_blob` 致小红书批量提交 `unknown type`），逐项 URL 下载入库、批量上限 100、逐项 emit `library://assets-changed`；[Windows-edited.md](Windows/Windows-edited.md) 同步更正。
 
 **测试：** `cargo test` 52 通过（导入/去重/多图过滤 + 扩展下载格式识别/本机内网 URL 拒绝 + assemble_pack + FTS5 文件名搜索 + analyses 读写 + caption sections 解析 + list_prompted_assets + 采集即命名 `clean_name`/`split_name_and_desc` + caption 共享模块 + 生成图取图快照差分 `list_new_generated` + 标签 `get_or_create`/`set_asset_tags` source 隔离 + `tag:` 智能查询 + `list_tags_with_count` + 色板 `hex_to_bucket`/`colors_to_buckets` + `asset_colors` 幂等/folder 过滤 + 会话 prompt 链 `generation_prompt_chain` + 生成图 prompt 维度识别 `extract_dim_sections`/`build_generation_caption` + 同流程合并 `collapse_generation_groups`/`list_generation_group` + 收藏夹 `collection_roundtrip_and_guards` + 生成历史回看 `generation_history` + 用途 preset `preset_crud_roundtrip`）；前端 `tsc --noEmit` 通过；扩展三份 `content.js` / 两份 `background.js` 均通过 `node --check`，三份 Manifest 均通过 JSON 解析。
 
@@ -373,3 +381,9 @@
 - 解决：把四个 override 的差异化功能（`extensionConnected` / `collectedNotice` + 环境状态展示）并入主项目源码——[store.ts](apps/desktop/src/store.ts) 加两字段+setter、[App.tsx](apps/desktop/src/App.tsx) 加 `collect://extension-connected` 与 `library://assets-changed`(payload.name) 两 listener、[SettingsDialog.tsx](apps/desktop/src/components/SettingsDialog.tsx) 环境状态区加「浏览器扩展」连接行、[Toolbar.tsx](apps/desktop/src/components/Toolbar.tsx) 加「已采集：xxx · 查看」提示条——然后删掉这四个 override（`.work` 直接用主项目源码）。Rust overrides（ingest/ws_server + 已并入的 codex）不受影响、保留。
 - 教训：overrides 只作平台适配过渡，差异化功能应直接进主源码、合并后即删；**整文件覆盖**会在主源码演进时静默分叉，下次出包才以 tsc 失败暴露（dev 跑纯主源码测不出）。剩余 overrides 仅留 Rust 层（平台二进制/路径差异），前端零 override。
 - 相关文件：[store.ts](apps/desktop/src/store.ts)、[App.tsx](apps/desktop/src/App.tsx)、[components/SettingsDialog.tsx](apps/desktop/src/components/SettingsDialog.tsx)、[components/Toolbar.tsx](apps/desktop/src/components/Toolbar.tsx)、[Windows/prepare.ps1](Windows/prepare.ps1)。
+
+### codex 生成失败提示被双重藏匿（2026-07-23）
+- 现象：创作板发 codex 生成失败时，生成面板只显示「尚未生成。在创作板组稿后点『✓ 发送 codex 生成』。」，用户看不到失败原因、也无重试入口。后端其实返回了可读错误（codex 退出码 + stderr 前 500 字，经 `AppError` 序列化成纯字符串到前端）。
+- 根因：前端双重藏匿——① `genHandleError` 把 `[error: msg]` 塞进 `genStreaming` 的**同时删掉失败的占位轮**（设计初衷是避免空轮留在时间线）；② `GenerationPanel` 的 `genStreaming`（含错误）**只在 `genTurns` 非空时渲染**。首发失败 → 占位轮被删 → `genTurns=[]` → 命中空态文案 → 错误永不可见。
+- 解决 / 绕过：失败不再「删轮 + 藏 streaming」，改为挂到那一轮——`GenTurn` 加 `error` 字段，未出图的占位轮记 error 成「失败轮」（时间线可见 + 可重试），不追加 streaming 避免与失败态重复。两个守卫：① 取消（「已取消」）仍删轮不留红字（取消非失败）；② **已出图后的后置失败**（done 已到、meta/caption 写库失败）最后一轮已有图，错误降级进 streaming、绝不把成功出图轮误标失败。续轮失败重试先移除失败轮再 resume，避免同 prompt 编号递增的重复轮。两条错误路径（invoke reject 走 `genHandleError` / chunk Error 走 `applyGenChunk`）统一经 `applyGenError`。
+- 相关文件：[store.ts](apps/desktop/src/store.ts)（`applyGenError` / `genHandleError` / `retryLastGenTurn`）、[GenerationPanel.tsx](apps/desktop/src/components/GenerationPanel.tsx)（`TurnView` 失败态）、[lib/types.ts](apps/desktop/src/lib/types.ts)（`GenTurn.error`）。

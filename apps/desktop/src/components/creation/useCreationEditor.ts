@@ -12,11 +12,38 @@ import { buildPlugins } from "./plugins";
 
 const PICK_EVENT = "bowerbird://board-asset-picked";
 const LOAD_EVENT = "bowerbird://board-load-prompt";
+// store 在创作板首发生成成功时通知编辑器清草稿（见 store.ts applyGenChunk）。
+const GEN_START_EVENT = "bowerbird://board-gen-start";
+const GEN_SUCCESS_EVENT = "bowerbird://board-gen-success";
 
 function initialDoc() {
   return creationSchema.topNodeType.create(null, [
     creationSchema.nodes.paragraph.create(null, [creationSchema.text("请参考")]),
   ]);
+}
+
+// 创作板草稿即时持久化：用户常暂时收起创作板去找素材 / 看详情再回来，其间组件卸载、
+// EditorView 销毁。把 doc 序列化进 localStorage（跨会话也保留），重挂载时 nodeFromJSON
+// 恢复 —— 保真保留 image/keyword chip（而非展开成纯文本，那样维度 token 会降级）。
+const BOARD_DRAFT_KEY = "bowerbird.boardDraft";
+type BoardDraft = { doc: unknown; refs: PromptedAsset[] };
+function loadDraft(): BoardDraft | null {
+  try {
+    const raw = localStorage.getItem(BOARD_DRAFT_KEY);
+    if (!raw) return null;
+    const v = JSON.parse(raw);
+    if (!v || typeof v !== "object" || !Array.isArray(v.refs)) return null;
+    return { doc: v.doc, refs: v.refs };
+  } catch {
+    return null;
+  }
+}
+function saveDraft(doc: unknown, refs: PromptedAsset[]) {
+  try {
+    localStorage.setItem(BOARD_DRAFT_KEY, JSON.stringify({ doc, refs }));
+  } catch {
+    // ignore storage errors（quota / 无痕模式）
+  }
 }
 
 /**
@@ -26,7 +53,13 @@ function initialDoc() {
  */
 export function useCreationEditor() {
   const promptedAssets = useStore((s) => s.promptedAssets);
+  // boardOpen 时 s.assets = 全部挑图（含未反推）；并入 assetById 让无 caption 图也能插为参考图，
+  // 否则 serialize 的 references 收集不到 → 发送时不传 codex，且 chip 只能拿 assetId 兜底显示。
+  // promptedAssets 后置覆盖，给有反推的图补 caption/sections（展开维度片段）。
+  const allAssets = useStore((s) => s.assets);
   const [extraAssets, setExtraAssets] = useState<PromptedAsset[]>([]);
+  const extraAssetsRef = useRef(extraAssets);
+  extraAssetsRef.current = extraAssets;
 
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -37,10 +70,11 @@ export function useCreationEditor() {
 
   const assetById = useMemo(() => {
     const m = new Map<string, PromptedAsset>();
+    for (const a of allAssets) m.set(a.id, a); // boardOpen 时 = 全部挑图（含未反推，无 caption）
     for (const a of extraAssets) m.set(a.id, a);
     for (const a of promptedAssets) m.set(a.id, a); // promptedAssets 优先覆盖（含 caption）
     return m;
-  }, [promptedAssets, extraAssets]);
+  }, [allAssets, promptedAssets, extraAssets]);
 
   const chipSections: CaptionSection[] = useMemo(() => {
     const asset = chipAssetId ? assetById.get(chipAssetId) : undefined;
@@ -52,15 +86,36 @@ export function useCreationEditor() {
   assetByIdRef.current = assetById;
   const chipSectionsRef = useRef(chipSections);
   chipSectionsRef.current = chipSections;
+  // 自上次「创作板首发」起是否编辑过——生成成功时未编辑才清空，编辑过则保留（期间编辑保护）。
+  const dirtyRef = useRef(false);
 
   useEffect(() => {
     if (!hostRef.current) return;
     const plugins = buildPlugins({ viewRef, assetByIdRef, chipSectionsRef });
+    // 恢复上次草稿：nodeFromJSON 保真恢复 doc；refs 补进 extraAssets 供序列化匹配。
+    const saved = loadDraft();
+    let startDoc;
+    try {
+      startDoc = saved ? creationSchema.nodeFromJSON(saved.doc) : initialDoc();
+    } catch {
+      startDoc = initialDoc();
+    }
+    if (saved && saved.refs.length) setExtraAssets(saved.refs);
+    // 去抖保存：编辑频繁，400ms 静止后落盘（避免每次按键都写 localStorage）。
+    let saveTimer: ReturnType<typeof setTimeout> | undefined;
+    const scheduleSave = () => {
+      if (saveTimer) clearTimeout(saveTimer);
+      saveTimer = setTimeout(() => {
+        saveDraft(view.state.doc.toJSON(), extraAssetsRef.current);
+      }, 400);
+    };
     const view = new EditorView(hostRef.current, {
-      state: EditorState.create({ doc: initialDoc(), plugins }),
+      state: EditorState.create({ doc: startDoc, plugins }),
       dispatchTransaction: (tr) => {
         view.updateState(view.state.apply(tr));
+        dirtyRef.current = true;
         setTick((t) => t + 1);
+        scheduleSave();
       },
       clipboardTextParser: (text: string, $context: ResolvedPos) => {
         // 粘贴也走 @图名 解析：按换行分段，每段 parsePromptToInline。单段返回 inline slice
@@ -114,14 +169,44 @@ export function useCreationEditor() {
       setChipAssetId(null);
       setShowKeywordHints(false);
       setTick((t) => t + 1);
+      scheduleSave();
       setTimeout(() => v.focus(), 0);
+    }
+
+    // 创作板首发开始：重置 dirty（此后任何 dispatchTransaction 会把它置 true）。
+    function onGenStart() {
+      dirtyRef.current = false;
+    }
+    // 生成成功：若发送后未再编辑，清空编辑器 + 草稿（这轮组稿已交付，不必保留）；
+    // 若期间又编辑了新内容则保留——保护「生成期间继续组下一轮稿」的体验（约定 9）。
+    function onGenSuccess() {
+      if (dirtyRef.current) return;
+      const v = viewRef.current;
+      if (!v) return;
+      if (saveTimer) clearTimeout(saveTimer);
+      try {
+        localStorage.removeItem(BOARD_DRAFT_KEY);
+      } catch {
+        // ignore storage errors
+      }
+      v.updateState(EditorState.create({ doc: initialDoc(), plugins: v.state.plugins }));
+      setExtraAssets([]);
+      setChipAssetId(null);
+      setShowKeywordHints(false);
+      dirtyRef.current = false;
+      setTick((t) => t + 1);
     }
 
     window.addEventListener(PICK_EVENT, onPick);
     window.addEventListener(LOAD_EVENT, onLoad);
+    window.addEventListener(GEN_START_EVENT, onGenStart);
+    window.addEventListener(GEN_SUCCESS_EVENT, onGenSuccess);
     return () => {
       window.removeEventListener(PICK_EVENT, onPick);
       window.removeEventListener(LOAD_EVENT, onLoad);
+      window.removeEventListener(GEN_START_EVENT, onGenStart);
+      window.removeEventListener(GEN_SUCCESS_EVENT, onGenSuccess);
+      if (saveTimer) clearTimeout(saveTimer);
       view.destroy();
       viewRef.current = null;
     };

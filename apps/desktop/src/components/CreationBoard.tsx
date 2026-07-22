@@ -297,15 +297,15 @@ export function CreationBoard() {
           <div className="mb-2 text-[11px] text-muted">
             像跟 AI 输入 prompt 一样书写；<span className="rounded bg-panel2 px-1 text-accent">点瀑布流图片</span> 在光标处插入参考图，或输入 <span className="rounded bg-panel2 px-1 text-accent">@图名</span>（空格/标点后自动识别）。
           </div>
-          {/* 工具条：编辑框上方的快捷参数；作 hostRef 的兄弟（不触发其 onClick={focus}）。未来可在此加更多功能。 */}
-          <div className="mb-2 flex items-center gap-2">
-            <RatioSelect value={ratio} onChange={selectRatio} />
-          </div>
           <div
             ref={hostRef}
             onClick={focus}
             className="creation-editor min-h-36 cursor-text rounded bg-panel2/40 p-2 ring-1 ring-edge focus-within:ring-accent"
           />
+          {/* 工具条：编辑框下方的快捷参数。未来可在此加更多功能。 */}
+          <div className="mt-2 flex items-center gap-2">
+            <RatioSelect value={ratio} onChange={selectRatio} />
+          </div>
 
           {showKeywordHints && (
             <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-muted">

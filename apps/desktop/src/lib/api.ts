@@ -36,6 +36,9 @@ export const api = {
   deleteAsset: (id: string) => invoke<void>("delete_asset", { id }),
   moveAssetsToFolder: (assetIds: string[], folderId: string) =>
     invoke<void>("move_assets_to_folder", { assetIds, folderId }),
+  // 右键菜单：在资源管理器中定位 / 用默认程序打开（store_path 由前端传，后端直接 spawn，不经 shell scope）。
+  revealInFolder: (path: string) => invoke<void>("reveal_path_in_explorer", { path }),
+  openWithSystem: (path: string) => invoke<void>("open_path_with_system", { path }),
 
   // 整理
   listFolders: () => invoke<Folder[]>("list_folders"),

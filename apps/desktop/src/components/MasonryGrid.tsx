@@ -1,8 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { createPortal } from "react-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { useStore } from "../store";
 import { api } from "../lib/api";
 import { setDragAssets } from "../lib/dragPayload";
+import { loadDescribePrompt } from "../lib/describePrompt";
+import { ContextMenu } from "./ContextMenu";
 import type { Asset } from "../lib/types";
 
 function parseColors(c: string | null | undefined): string[] {
@@ -15,7 +18,15 @@ function parseColors(c: string | null | undefined): string[] {
   }
 }
 
-function Thumb({ asset, group }: { asset: Asset; group?: Asset[] }) {
+function Thumb({
+  asset,
+  group,
+  onContext,
+}: {
+  asset: Asset;
+  group?: Asset[];
+  onContext: (assetId: string, storePath: string, x: number, y: number) => void;
+}) {
   const imgRef = useRef<HTMLImageElement>(null);
   const selected = useStore((s) => s.mode === "manage" && s.selectedIds.has(asset.id));
   const boardOpen = useStore((s) => s.boardOpen);
@@ -85,12 +96,62 @@ function Thumb({ asset, group }: { asset: Asset; group?: Asset[] }) {
   const ratio =
     shown.width && shown.height ? `${shown.width}/${shown.height}` : undefined;
 
+  // hover 放大预览：鼠标悬浮缩略图 2.8s 后弹出放大图（portal 到 body，避开外层 overflow 裁剪），
+  // 移走即消失。放大尺寸 = 缩略图当前渲染尺寸 × 200%（放大镜式，随列宽变化）。视频/无原图时不启用。
+  const previewSrc =
+    shown.store_path && !shown.duration ? convertFileSrc(shown.store_path) : null;
+  const [preview, setPreview] = useState<{
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+  } | null>(null);
+  const mouseRef = useRef({ x: 0, y: 0 });
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  function onEnter(e: MouseEvent<HTMLDivElement>) {
+    if (!previewSrc) return;
+    mouseRef.current = { x: e.clientX, y: e.clientY };
+    // 2.8s 延迟：到点时取缩略图实际渲染尺寸，×2 作为放大尺寸（保证对每张图「200%」都真正成立）。
+    hoverTimer.current = setTimeout(() => {
+      const rect = imgRef.current?.getBoundingClientRect();
+      if (!rect || !rect.width || !rect.height) return;
+      setPreview({ ...mouseRef.current, w: rect.width * 2, h: rect.height * 2 });
+    }, 2800);
+  }
+  function onMove(e: MouseEvent<HTMLDivElement>) {
+    mouseRef.current = { x: e.clientX, y: e.clientY };
+    // hover 期间缩略图尺寸不变，只跟随鼠标更新位置。
+    setPreview((p) => (p ? { ...p, x: e.clientX, y: e.clientY } : p));
+  }
+  function onLeave() {
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    setPreview(null);
+  }
+  // 浮层定位：默认鼠标右下偏移，靠右/下边时翻转到左/上，留 pad 不贴边。尺寸跟随缩略图×2。
+  let previewLeft = 0;
+  let previewTop = 0;
+  if (preview) {
+    const off = 18;
+    const pad = 8;
+    previewLeft = preview.x + off;
+    previewTop = preview.y + off;
+    if (previewLeft + preview.w > window.innerWidth - pad)
+      previewLeft = preview.x - preview.w - off;
+    if (previewTop + preview.h > window.innerHeight - pad)
+      previewTop = preview.y - preview.h - off;
+    previewLeft = Math.max(pad, previewLeft);
+    previewTop = Math.max(pad, previewTop);
+  }
+
   return (
     <div
       className={`group relative mb-2 break-inside-avoid cursor-pointer overflow-hidden rounded-md ring-2 transition ${
         selected ? "ring-accent" : "ring-transparent hover:ring-edge"
       }`}
       draggable={!boardOpen}
+      onMouseEnter={onEnter}
+      onMouseMove={onMove}
+      onMouseLeave={onLeave}
       onClick={() => {
         const st = useStore.getState();
         // 创作板打开 = 挑图上下文：点瀑布流图即在光标处插入编辑器。
@@ -100,6 +161,12 @@ function Thumb({ asset, group }: { asset: Asset; group?: Asset[] }) {
           );
         } else if (st.mode === "manage") st.toggleSelect(shown.id);
         else st.openDetail(shown.id);
+      }}
+      onContextMenu={(e) => {
+        // 右键图片：有原图路径才弹菜单（视频等带 store_path 的也支持定位/打开）。
+        if (!shown.store_path) return;
+        e.preventDefault();
+        onContext(shown.id, shown.store_path, e.clientX, e.clientY);
       }}
       onDragStart={(e) => {
         const st = useStore.getState();
@@ -184,6 +251,18 @@ function Thumb({ asset, group }: { asset: Asset; group?: Asset[] }) {
           ))}
         </div>
       )}
+      {preview &&
+        previewSrc &&
+        createPortal(
+          <img
+            src={previewSrc}
+            alt=""
+            draggable={false}
+            className="pointer-events-none fixed z-50 rounded-md border border-edge bg-panel object-contain shadow-xl"
+            style={{ left: previewLeft, top: previewTop, width: preview.w, height: preview.h }}
+          />,
+          document.body
+        )}
     </div>
   );
 }
@@ -193,6 +272,43 @@ export function MasonryGrid() {
   const assets = useStore((s) => s.assets);
   const boardOpen = useStore((s) => s.boardOpen);
   const [groupMap, setGroupMap] = useState<Record<string, Asset[]>>({});
+  // 右键图片菜单：定位到鼠标坐标，存 storePath + assetId（定位/打开只用路径；删除/反推用 id）。
+  const [ctxMenu, setCtxMenu] = useState<{
+    x: number;
+    y: number;
+    storePath: string;
+    assetId: string;
+  } | null>(null);
+  // 删除两段式确认：点「删除」后原位换成确认菜单（避开 Tauri WKWebView 对 window.confirm 的拦截）。
+  const [deleteConfirm, setDeleteConfirm] = useState<{
+    x: number;
+    y: number;
+    assetId: string;
+  } | null>(null);
+  const runDescribe = useStore((s) => s.runDescribe);
+
+  async function deleteOne(id: string) {
+    try {
+      await api.deleteAsset(id);
+      const st = useStore.getState();
+      st.setAssets(st.assets.filter((a) => a.id !== id));
+      st.setTotal(Math.max(0, st.total - 1));
+      // 该图若在选中集里，仅移除它（manage 模式右键删单图不清空其它选中）。
+      if (st.selectedIds.has(id)) {
+        const sel = new Set(st.selectedIds);
+        sel.delete(id);
+        useStore.setState({ selectedIds: sel });
+      }
+    } catch (e) {
+      console.error("delete failed", e);
+    }
+  }
+
+  // 反推项是否置灰：该图正在反推或已排队（runDescribe 内部已去重，置灰仅为给用户明确反馈）。
+  const ctxDescribing = ctxMenu
+    ? useStore.getState().describingId === ctxMenu.assetId ||
+      useStore.getState().describeQueue.some((q) => q.assetId === ctxMenu.assetId)
+    : false;
 
   // 同流程生成图：批量取可见 codex 组的过程图，供缩略图轮播。无生成图时清空。
   useEffect(() => {
@@ -220,7 +336,7 @@ export function MasonryGrid() {
       <div className="flex h-full items-center justify-center text-sm text-muted">
         {assets.length === 0
           ? boardOpen
-            ? "还没有反推过的图 —— 先在详情页给一些图点「反推」，它们就会出现在这里供创作板挑选"
+            ? "还没有素材 —— 用顶部按钮导入图片，点瀑布流任意图即可插为参考图"
             : "还没有素材 —— 用顶部按钮导入图片或文件夹"
           : "当前筛选下无素材"}
       </div>
@@ -235,10 +351,76 @@ export function MasonryGrid() {
       <div className="h-full overflow-y-auto">
         <div className="columns-2 gap-2 p-2 md:columns-3 lg:columns-4 xl:columns-5">
           {filtered.map((a) => (
-            <Thumb key={a.id} asset={a} group={groupMap[a.id]} />
+            <Thumb
+              key={a.id}
+              asset={a}
+              group={groupMap[a.id]}
+              onContext={(assetId, storePath, x, y) =>
+                setCtxMenu({ x, y, storePath, assetId })
+              }
+            />
           ))}
         </div>
       </div>
+      {ctxMenu && (
+        <ContextMenu
+          x={ctxMenu.x}
+          y={ctxMenu.y}
+          onClose={() => setCtxMenu(null)}
+          items={[
+            {
+              label: "在文件资源管理器中显示",
+              onClick: () => api.revealInFolder(ctxMenu.storePath),
+            },
+            {
+              label: "用系统程序打开",
+              onClick: () => api.openWithSystem(ctxMenu.storePath),
+            },
+            {
+              label: "复制文件路径",
+              onClick: () => {
+                void navigator.clipboard.writeText(ctxMenu.storePath);
+              },
+            },
+            {
+              // 反推提示词：用当前默认指令（详情页可改）入全局反推队列。正在跑/已排队时置灰。
+              label: "反推提示词",
+              disabled: ctxDescribing,
+              onClick: () => runDescribe(ctxMenu.assetId, loadDescribePrompt()),
+            },
+            {
+              label: "删除",
+              danger: true,
+              onClick: () =>
+                setDeleteConfirm({
+                  x: ctxMenu.x,
+                  y: ctxMenu.y,
+                  assetId: ctxMenu.assetId,
+                }),
+            },
+          ]}
+        />
+      )}
+      {deleteConfirm && (
+        <ContextMenu
+          x={deleteConfirm.x}
+          y={deleteConfirm.y}
+          onClose={() => setDeleteConfirm(null)}
+          items={[
+            {
+              label: "确认删除",
+              danger: true,
+              onClick: () => {
+                void deleteOne(deleteConfirm.assetId);
+              },
+            },
+            {
+              label: "取消",
+              onClick: () => {},
+            },
+          ]}
+        />
+      )}
     </div>
   );
 }
