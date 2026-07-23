@@ -130,12 +130,14 @@ export const api = {
     referenceImages: string[];
     sessionId?: string | null;
     ratio?: string | null;
+    provider?: string | null;
   }) =>
     invoke<void>("codex_create_image", {
       prompt: req.prompt,
       referenceImages: req.referenceImages,
       sessionId: req.sessionId ?? null,
       ratio: req.ratio ?? null,
+      provider: req.provider ?? null,
     }),
   cancelCodexCreate: () => invoke<void>("cancel_codex_create"),
 };

@@ -150,7 +150,7 @@ dreamina user_credit
 与 codex「同步流式出图、自动落盘」不同，dreamina 是**异步任务制**：
 
 1. `text2image --poll N`：提交任务返回 `submit_id` + `gen_status`；`--poll N` 让 CLI **每秒轮询一次、最多 N 秒**（`-h` 实测），完成则返回结果、超时则 CLI 退出——保留 `submit_id` 事后 `query_result` 续查。
-   - **stdout 直接是 JSON**（spike 实测，无需 `--json` flag）。完成时结构：
+   - **stdout 直接是 JSON**（spike 实测，无需 `--json` flag，**pretty 多行格式——整体解析为一个对象、不能按 JSONL 行解析**，见 PROJECT.md 踩坑）。完成时结构：
      ```json
      { "submit_id": "5138eb49-...-9dc39a727e86", "gen_status": "success",
        "result_json": { "images": [ { "image_url": "https://.../x.png?...&x-expires=...&x-signature=...", "width": 2048, "height": 2048 } ], "videos": [] },
@@ -517,12 +517,12 @@ pub async fn dreamina_health(...) -> Health {
 - 加 `Capabilities` / `health`。
 - 验证：`cargo test` 全绿；现有生成 / 反推 / 回看行为完全不变（回归）。
 
-### Phase 2 · 即梦 provider 实现
+### Phase 2 · 即梦 provider 实现 ✅（2026-07-23 完成）
 
 - 新建 `codex/jimeng.rs`（§5.3），实现 `GenProvider`——spawn dreamina 子进程。
-- 多轮模拟（§5.4）、`source="jimeng"` 入库、`generation_meta.provider` 落库（§5.5）。
-- `dreamina_health` / `dreamina_login` 命令（§7.3/7.5）。
-- 验证：后端单测 + 一次端到端即梦生成（首轮 + 续轮）。
+- `source="jimeng"` 入库、`generation_meta.provider` 落库（§5.5）；`dreamina_health` / `dreamina_login` 命令（§7.3/7.5）。
+- **首轮 only**（text2image/image2image by 参考图有无）；续轮 image2image 传上一轮图留后续（需前端协议 + session 语义）。
+- **验证**：`cargo check`/`test` 通过 + **端到端实测通过**（Win11 + maestro，带参考图 image2image 出图入库 source=jimeng + codex 命名）。踩坑：dreamina stdout pretty JSON 不能按行解析（PROJECT.md）。
 
 ### Phase 3 · 前端切换 UI + 配置
 
@@ -582,3 +582,4 @@ pub async fn dreamina_health(...) -> Health {
 | 2026-07-18 | 首版方案草案（v1）：泛化 GenerationPanel + 全局默认/单次覆盖 + codex/即梦首批；理解类仍只走 codex；即梦走火山引擎 HTTP API；待 spike 后定稿。 |
 | 2026-07-23 | v2 修订：即梦官方推出 CLI（`dreamina`，单二进制 + OAuth 登录 + 积分制），接入路线**整体从火山引擎 HTTP API 改为官方 dreamina CLI**（与 codex 同构子进程）。消解签名实现（开放问题 2）、凭据存储（开放问题 4）两个老大难；关键约定 1 演进更纯粹（所有 provider 都是 CLI，不开 HTTP 口子）。命令面/登录/状态文件已调研清楚（§3），Phase 0 改为 dreamina CLI 本机 spike。 |
 | 2026-07-23 | Phase 0 spike 通过（Win11 + maestro）：`text2image --poll` + `query_result --download_dir` 全链路实测跑通；stdout 直接 JSON、下载 `{submit_id}_image_N.png`、OAuth 登录 + `user_credit` 验证。maestro 文生图本次未扣分（待确认是免费权益还是延迟）。详见 §3.3/§3.6，进 Phase 1。 |
+| 2026-07-23 | Phase 2 完成：`DreaminaCliProvider` 实现 `GenProvider`（spawn dreamina text2image/image2image + query_result 下载 + ingest source=jimeng）+ `dreamina_health`/`dreamina_login` 命令 + `CodexRequest.ratio`/`GenOutcome.temp_dir`/`ingest_generated.source_tag` 配套 + 前端 api/store 透传 provider。端到端实测通过（image2image 出图入库）。多轮首轮 only、切换 UI 留 Phase 3。踩坑：dreamina stdout pretty JSON 不能按行解析。关键约定 1 随存档演进。 |

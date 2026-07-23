@@ -15,6 +15,7 @@ use self::types::{Capabilities, Chunk, CodexRequest, CodexResult, GenOutcome};
 
 pub mod types;
 pub mod codex_cli;
+pub mod jimeng;
 
 /// 生成 / 理解 provider。codex（理解 + 生成）与即梦（仅生成，Phase 2）各一实现。
 /// 命令层经 [`resolve_gen_provider`] 按 `provider` 参数取实现（AI-PROVIDERS.md §5.2）。
@@ -24,6 +25,7 @@ pub trait GenProvider: Send + Sync {
     fn name(&self) -> &'static str;
 
     /// 能力自述：理解类（chat / caption）仅 codex；generate 两者都有（AI-PROVIDERS.md §4.3）。
+    #[allow(dead_code)] // Phase 3 前端 provider 切换 UI 消费；Phase 1/2 仅 provider 自述、暂无调用方
     fn capabilities(&self) -> Capabilities;
 
     /// 单轮：给定 prompt + 参考图，返回结果（反推 / 自动命名 / 生成提示词用）。
@@ -50,7 +52,7 @@ pub trait GenProvider: Send + Sync {
 pub fn resolve_gen_provider(provider: Option<&str>) -> Result<Box<dyn GenProvider>, AppError> {
     match provider.unwrap_or("codex") {
         "codex" | "default" => Ok(Box::new(CodexCliProvider::default())),
-        "jimeng" => Err(AppError::Codex("即梦 provider 暂未接入（Phase 2）".into())),
+        "jimeng" => Ok(Box::new(jimeng::DreaminaCliProvider::default())),
         other => Err(AppError::Codex(format!("未知 provider: {other}").into())),
     }
 }

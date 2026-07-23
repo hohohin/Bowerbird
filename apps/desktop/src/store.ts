@@ -99,8 +99,8 @@ interface State {
   genUnread: boolean; // 面板关时落地新图 → 顶栏按钮红点
   toggleGenPanel: () => void;
   setGenPanelOpen: (open: boolean) => void;
-  startGeneration: (prompt: string, references: Asset[], ratio?: string | null) => Promise<void>;
-  sendGenRevise: (instruction: string) => Promise<void>;
+  startGeneration: (prompt: string, references: Asset[], ratio?: string | null, provider?: string | null) => Promise<void>;
+  sendGenRevise: (instruction: string, provider?: string | null) => Promise<void>;
   cancelGeneration: () => void;
   applyGenChunk: (c: CodexChunk) => void;
   // 重试末尾失败轮：首轮失败 → startGeneration（清空重发），续轮失败 → sendGenRevise（resume 续接）。
@@ -365,7 +365,7 @@ export const useStore = create<State>((set, get) => {
     }),
   setGenPanelOpen: (open) =>
     set((s) => ({ genPanelOpen: open, genUnread: open ? false : s.genUnread })),
-  startGeneration: async (prompt, references, ratio) => {
+  startGeneration: async (prompt, references, ratio, provider) => {
     if (get().generating) return; // 单槽：进行中不再发
     // 用途（preset）注入：选中用途时，其 body 作为基底拼在用户组稿前（类 CLAUDE.md 上下文，
     // 不进编辑器）。续轮 sendGenRevise 不注入——用途是首轮基底，续轮是修改意见。
@@ -390,14 +390,14 @@ export const useStore = create<State>((set, get) => {
     window.dispatchEvent(new CustomEvent("bowerbird://board-gen-start"));
     set({ generating: true });
     try {
-      await api.codexCreateImage({ prompt: sentPrompt, referenceImages: refPaths, ratio });
+      await api.codexCreateImage({ prompt: sentPrompt, referenceImages: refPaths, ratio, provider });
     } catch (e) {
       genHandleError(typeof e === "string" ? e : JSON.stringify(e));
     } finally {
       set({ generating: false });
     }
   },
-  sendGenRevise: async (instruction) => {
+  sendGenRevise: async (instruction, provider) => {
     const sid = get().genSessionId;
     const text = instruction.trim();
     if (get().generating || !sid || !text) return;
@@ -408,7 +408,7 @@ export const useStore = create<State>((set, get) => {
     }));
     set({ generating: true });
     try {
-      await api.codexCreateImage({ prompt: text, referenceImages: [], sessionId: sid });
+      await api.codexCreateImage({ prompt: text, referenceImages: [], sessionId: sid, provider });
     } catch (e) {
       genHandleError(typeof e === "string" ? e : JSON.stringify(e));
     } finally {

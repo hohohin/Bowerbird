@@ -12,6 +12,10 @@ pub struct CodexRequest {
     pub reference_images: Vec<PathBuf>,
     #[serde(default)]
     pub context_prompts: Vec<String>,
+    /// 出图比例（如 "16:9"）。仅即梦 provider 读（拼 dreamina `--ratio`）；
+    /// codex 不用此字段（ratio 已注入 instruction 文本，见 codex_create_image）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ratio: Option<String>,
 }
 
 /// 单次调用结果。
@@ -53,6 +57,9 @@ pub struct GenOutcome {
     pub session_id: Option<String>,
     pub elapsed_ms: u64,
     pub source_images: Vec<PathBuf>,
+    /// `source_images` 所在临时目录（如有）。command 层 `ingest_generated` 后应删此目录；
+    /// `None` 表示源图在持久位置（如 codex 的 `~/.codex/`），不需清理。即梦 provider 用（下载目录）。
+    pub temp_dir: Option<PathBuf>,
 }
 
 /// provider 能力自述（AI-PROVIDERS.md §4.3：理解类只走 codex，切换只发生在生成）。

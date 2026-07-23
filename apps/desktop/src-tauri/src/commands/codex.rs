@@ -83,6 +83,7 @@ pub async fn codex_generate_prompt_for_asset(
         instruction: "为这张图片生成一段适合 AI 绘画的提示词（描述主体、风格、构图、光影）".into(),
         reference_images: vec![PathBuf::from(store_path)],
         context_prompts: vec![],
+        ratio: None,
     };
     let p = CodexCliProvider::default();
     let provider_name = p.name().to_string();
@@ -129,6 +130,7 @@ pub async fn codex_describe_asset(
         instruction: instruction.clone(),
         reference_images: vec![PathBuf::from(store_path)],
         context_prompts: vec![],
+        ratio: None,
     };
     let p = CodexCliProvider::default();
     let provider_name = p.name().to_string();
@@ -234,6 +236,7 @@ pub async fn codex_create_image(
         instruction,
         reference_images: reference_images.into_iter().map(PathBuf::from).collect(),
         context_prompts: vec![],
+        ratio: ratio.clone(),
     };
 
     let (tx, mut rx) = mpsc::channel::<Chunk>(64);
@@ -266,10 +269,16 @@ pub async fn codex_create_image(
 
     // codex 生成的源图（~/.codex/...）ingest 进库 → asset（asset scope 内可渲染 + 进瀑布流）。
     // ingest_generated 不做 pHash 去重，迭代各版相似图都各自保留。
+    // source 按 provider 标记（codex/jimeng），落 assets.source 供智能筛选 / 角标区分。
+    let source_tag: String = match provider.as_deref().unwrap_or("codex") {
+        "jimeng" => "jimeng".to_string(),
+        _ => "codex".to_string(),
+    };
     let dbw = db.inner().clone();
     let pw = paths.inner().clone();
     let srcs = outcome.source_images.clone();
     let session_for_ingest = outcome.session_id.clone();
+    let temp_dir = outcome.temp_dir.clone();
     let gen_assets: Vec<crate::core::library::Asset> =
         tokio::task::spawn_blocking(
             move || -> Result<Vec<crate::core::library::Asset>, AppError> {
@@ -280,7 +289,12 @@ pub async fn codex_create_image(
                         &dbw,
                         src,
                         session_for_ingest.as_deref(),
+                        &source_tag,
                     )?);
+                }
+                // 源图已 copy 进库，删临时下载目录（即梦 provider 用；codex 为 None 不删）。
+                if let Some(dir) = &temp_dir {
+                    let _ = std::fs::remove_dir_all(dir);
                 }
                 Ok(out)
             },

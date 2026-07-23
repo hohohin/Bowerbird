@@ -107,12 +107,13 @@ pub fn ingest_file(paths: &LibraryPaths, db: &Database, source: &Path) -> AppRes
 ///
 /// 与 `ingest_file` 的区别：**不做 pHash 去重**——生成的图即便彼此相似（迭代修改的各版）
 /// 也应各自保留，去重会让修订版被当重复吞掉；也不算 pHash（生成图不需要采重去重）。
-/// `source` 标 `"codex"` 便于在库里区分 / 建智能文件夹。
+/// `source_tag` 标记生成来源（`"codex"` / `"jimeng"`），落 `assets.source` 便于在库里区分 / 建智能文件夹。
 pub fn ingest_generated(
     paths: &LibraryPaths,
     db: &Database,
     source: &Path,
     session_id: Option<&str>,
+    source_tag: &str,
 ) -> AppResult<Asset> {
     let meta = media::probe::probe(source)?;
     let id = Ulid::new().to_string();
@@ -161,7 +162,7 @@ pub fn ingest_generated(
         phash: None,
         colors,
         rating: Some(0),
-        source: Some("codex".to_string()),
+        source: Some(source_tag.to_string()),
         source_url: None,
         folder_id: None,
         created_at: Some(now),

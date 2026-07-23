@@ -1,6 +1,7 @@
 //! Tauri commands（前端 invoke 入口）。
 
 pub mod codex;
+pub mod jimeng;
 pub mod library;
 pub mod prompt;
 

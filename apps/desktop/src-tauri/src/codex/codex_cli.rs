@@ -423,6 +423,7 @@ impl GenProvider for CodexCliProvider {
             session_id,
             elapsed_ms: start.elapsed().unwrap_or_default().as_millis() as u64,
             source_images,
+            temp_dir: None,
         })
     }
 }

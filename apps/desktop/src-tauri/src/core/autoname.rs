@@ -129,6 +129,7 @@ async fn auto_analyze(app: &AppHandle, db: &Arc<Database>, asset: Asset) -> Resu
         instruction: instruction.clone(),
         reference_images: vec![store_path.into()],
         context_prompts: vec![],
+        ratio: None,
     };
     let provider = CodexCliProvider::default();
     let provider_name = provider.name().to_string();
@@ -227,6 +228,7 @@ async fn auto_name_only(app: &AppHandle, db: &Arc<Database>, asset: Asset) -> Re
         instruction: NAME_ONLY_INSTRUCTION.to_string(),
         reference_images: vec![store_path.into()],
         context_prompts: vec![],
+        ratio: None,
     };
     let provider = CodexCliProvider::default();
     // codex 不可用/超时 → 静默降级（保留原文件名）。
@@ -372,6 +374,7 @@ async fn classify_one(app: &AppHandle, db: &Arc<Database>, asset_id: &str) -> Re
         instruction: build_classify_instruction(&vocab, &caption_text),
         reference_images: vec![],
         context_prompts: vec![],
+        ratio: None,
     };
     let result = CodexCliProvider::default()
         .run(req)

@@ -106,6 +106,8 @@ pub fn run() {
             commands::codex::codex_create_image,
             commands::codex::cancel_codex_create,
             commands::codex::open_codex_session,
+            commands::jimeng::dreamina_health,
+            commands::jimeng::dreamina_login,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
