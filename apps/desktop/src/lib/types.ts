@@ -98,6 +98,8 @@ export interface GenTurn {
   id: number;
   prompt: string;
   images: string[];
+  // 本轮用的 provider（done 事件回填，"codex-cli"/"jimeng"）；TurnView 角标「via ...」。
+  provider?: string;
   // 失败轮的原始错误文本（codex 退出码/stderr 等）；undefined/null=非失败轮。纯 UI，不入库
   // （失败轮无 done → 无 ingest → 无 DB，error 只活在内存）。
   error?: string | null;

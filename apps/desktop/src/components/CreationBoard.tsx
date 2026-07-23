@@ -4,6 +4,7 @@ import { api } from "../lib/api";
 import { useCreationEditor } from "./creation/useCreationEditor";
 import { RATIOS } from "./creation/ratios";
 import { RatioSelect } from "./creation/RatioSelect";
+import { ProviderSelect } from "./creation/ProviderSelect";
 
 // 画面比例偏好记忆（照 AssetDetail 的 localStorage 范式：bowerbird.<name> 前缀、try/catch 兜底）。
 const BOARD_RATIO_KEY = "bowerbird.boardRatio";
@@ -36,6 +37,9 @@ export function CreationBoard() {
   const toggleBoard = useStore((s) => s.toggleBoard);
   const generating = useStore((s) => s.generating);
   const codexHealth = useStore((s) => s.codexHealth);
+  const dreaminaHealth = useStore((s) => s.dreaminaHealth);
+  const activeGenProvider = useStore((s) => s.activeGenProvider);
+  const setActiveGenProvider = useStore((s) => s.setActiveGenProvider);
   const startGeneration = useStore((s) => s.startGeneration);
   const presets = useStore((s) => s.presets);
   const activePresetId = useStore((s) => s.activePresetId);
@@ -85,9 +89,14 @@ export function CreationBoard() {
     setTimeout(() => setCopied(false), 1500);
   }
 
-  // 把当前组稿发 codex 生成。生成期间编辑器仍可继续组下一轮稿（prompt 在此快照进 store）。
+  // 按当前选中的 provider 判健康（codex/即梦各自可用性，约定 7 置灰依据）。
+  const targetHealth = activeGenProvider === "jimeng" ? dreaminaHealth : codexHealth;
+  const targetProviderLabel = activeGenProvider === "jimeng" ? "即梦" : "codex";
+
+  // 把当前组稿发 provider 生成。生成期间编辑器仍可继续组下一轮稿（prompt 在此快照进 store）。
+  // provider 由 store 内 activeGenProvider 兜底（send 不显式传）。
   function send() {
-    if (!codexHealth?.ok || !finalPrompt || generating) return;
+    if (!targetHealth?.ok || !finalPrompt || generating) return;
     void startGeneration(finalPrompt, references, ratio);
   }
 
@@ -305,6 +314,12 @@ export function CreationBoard() {
           {/* 工具条：编辑框下方的快捷参数。未来可在此加更多功能。 */}
           <div className="mt-2 flex items-center gap-2">
             <RatioSelect value={ratio} onChange={selectRatio} />
+            <ProviderSelect
+              value={activeGenProvider}
+              onChange={setActiveGenProvider}
+              codexHealth={codexHealth}
+              dreaminaHealth={dreaminaHealth}
+            />
           </div>
 
           {showKeywordHints && (
@@ -349,15 +364,15 @@ export function CreationBoard() {
       <div className="shrink-0 space-y-2 border-t border-edge p-3">
         <button
           onClick={send}
-          disabled={!finalPrompt || !codexHealth?.ok || generating}
+          disabled={!finalPrompt || !targetHealth?.ok || generating}
           title={
-            !codexHealth?.ok
-              ? codexHealth?.reason || "codex 不可用"
-              : "把最终 prompt + 参考图发 codex CLI 生成图像（结果进「生成结果」面板）"
+            !targetHealth?.ok
+              ? targetHealth?.reason || `${targetProviderLabel} 不可用`
+              : `把最终 prompt + 参考图发 ${targetProviderLabel} 生成图像（结果进「生成结果」面板）`
           }
           className="w-full rounded-md bg-accent px-3 py-2 text-sm font-semibold text-black disabled:opacity-50"
         >
-          {generating ? "生成中…（见「生成结果」面板）" : "✓ 发送 codex 生成"}
+          {generating ? "生成中…（见「生成结果」面板）" : `✓ 发送 ${targetProviderLabel} 生成`}
         </button>
         <button
           onClick={copy}
@@ -367,8 +382,8 @@ export function CreationBoard() {
           {copied ? "已复制 ✓" : "复制 prompt + 参考图清单"}
         </button>
         <div className="text-[10px] text-muted">
-          {codexHealth && !codexHealth.ok
-            ? codexHealth.reason
+          {targetHealth && !targetHealth.ok
+            ? targetHealth.reason
             : "🎨 发送后自动弹出「生成结果」面板；生成期间本板可继续组下一轮稿。"}
         </div>
       </div>

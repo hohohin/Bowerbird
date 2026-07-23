@@ -68,19 +68,13 @@ impl GenProvider for DreaminaCliProvider {
     async fn generate_image(
         &self,
         req: CodexRequest,
-        tx: &mpsc::Sender<Chunk>,
+        _tx: &mpsc::Sender<Chunk>, // 即梦无逐字流式，不推 Delta（生成中态由 GenerationPanel busy 占位显示）
         _resume_session: Option<String>,
     ) -> Result<GenOutcome, AppError> {
         if !self.enabled {
             return Err(AppError::Codex("DreaminaCliProvider 未启用".into()));
         }
         let start = SystemTime::now();
-        // dreamina 无逐字流式，推一条伪进度 Delta（AI-PROVIDERS.md §6.3 方案 A）。
-        let _ = tx
-            .send(Chunk::Delta {
-                text: "[即梦] 生成中…".to_string(),
-            })
-            .await;
 
         // ① 提交生成任务：无参考图走 text2image，有则 image2image（参考图作 --images）。
         let mut submit = dreamina_command(&self.binary);
@@ -173,7 +167,9 @@ impl GenProvider for DreaminaCliProvider {
 
         Ok(GenOutcome {
             text: format!("[即梦] 生成 {} 张图", source_images.len()),
-            session_id: None, // 首轮 only；续轮（image2image 传上一轮图）留后续。
+            // submit_id 作会话标识：落 generation_session_id + generation_meta.session_id，让详情页
+            // 「回看生成对话」入口可见、generation_history 可查。续轮 image2image 传上一轮图留后续。
+            session_id: Some(submit_id),
             elapsed_ms: start.elapsed().unwrap_or_default().as_millis() as u64,
             source_images,
             temp_dir: Some(download_dir), // command 层 ingest 后删此目录。
@@ -264,13 +260,6 @@ pub(crate) fn resolve_dreamina_binary() -> Option<String> {
         }
     }
     None
-}
-
-/// dreamina 配置/登录态根目录：`USERPROFILE`（Windows）/ `HOME`（Unix）+ `.dreamina_cli`。
-pub(crate) fn dreamina_home() -> Option<PathBuf> {
-    std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
-        .map(|home| PathBuf::from(home).join(".dreamina_cli"))
 }
 
 /// 构造跨平台的 dreamina 子进程 Command。

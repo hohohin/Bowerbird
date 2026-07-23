@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { useStore } from "../store";
 import { api } from "../lib/api";
+import { ProviderSelect } from "./creation/ProviderSelect";
+import { DreaminaLoginDialog } from "./DreaminaLoginDialog";
 
 /**
  * 设置面板（全屏 Modal，约定 13 形态：fixed inset-0 z-50 + bg-black/60 遮罩）。
@@ -15,11 +17,18 @@ import { api } from "../lib/api";
 export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const codexHealth = useStore((s) => s.codexHealth);
   const setCodexHealth = useStore((s) => s.setCodexHealth);
+  const dreaminaHealth = useStore((s) => s.dreaminaHealth);
+  const setDreaminaHealth = useStore((s) => s.setDreaminaHealth);
+  const defaultProvider = useStore((s) => s.defaultProvider);
+  const setDefaultProvider = useStore((s) => s.setDefaultProvider);
   const extensionConnected = useStore((s) => s.extensionConnected);
   const classifyProgress = useStore((s) => s.classifyProgress);
   const colorRebuild = useStore((s) => s.colorRebuild);
 
   const [checking, setChecking] = useState(false);
+  const [dreaminaChecking, setDreaminaChecking] = useState(false);
+  const [dreaminaLoginOpen, setDreaminaLoginOpen] = useState(false);
+  const [copiedInstall, setCopiedInstall] = useState(false);
 
   // 打开时刷新一次 codex 状态（看到的是当前环境，而非 App 挂载时的快照）。
   useEffect(() => {
@@ -42,7 +51,53 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
     };
   }, [open, setCodexHealth]);
 
+  // 打开时也刷一次即梦状态（独立 checking 态，不卡 codex 检测）。
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    setDreaminaChecking(true);
+    api
+      .dreaminaHealth()
+      .then((h) => {
+        if (alive) setDreaminaHealth(h);
+      })
+      .catch(() => {
+        if (alive) setDreaminaHealth({ ok: false, reason: "dreamina 状态检测失败" });
+      })
+      .finally(() => {
+        if (alive) setDreaminaChecking(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [open, setDreaminaHealth]);
+
   if (!open) return null;
+
+  async function recheckDreamina() {
+    setDreaminaChecking(true);
+    try {
+      setDreaminaHealth(await api.dreaminaHealth());
+    } catch {
+      setDreaminaHealth({ ok: false, reason: "dreamina 状态检测失败" });
+    } finally {
+      setDreaminaChecking(false);
+    }
+  }
+
+  // 即梦状态分态：未装（reason 含「未检测到」）/ 未登录 / 就绪——决定显示安装命令还是登录按钮。
+  const dreaminaReason = dreaminaHealth?.reason ?? "";
+  const dreaminaNotInstalled = !dreaminaHealth?.ok && dreaminaReason.includes("未检测到");
+  const dreaminaNeedsLogin = !dreaminaHealth?.ok && !dreaminaNotInstalled;
+
+  function copyInstallCmd() {
+    navigator.clipboard
+      .writeText("curl -s https://jimeng.jianying.com/cli | bash")
+      .then(() => {
+        setCopiedInstall(true);
+        setTimeout(() => setCopiedInstall(false), 1200);
+      });
+  }
 
   async function recheck() {
     setChecking(true);
@@ -127,6 +182,81 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
           </div>
         </section>
 
+        {/* AI 出图引擎（Phase 3：codex / 即梦 多 provider 切换） */}
+        <section className="mt-5">
+          <h3 className="text-sm font-medium text-ink">AI 出图引擎</h3>
+          <p className="mt-1 text-xs text-muted">
+            默认用哪个 provider 出图（创作板发送时使用，可在创作板临时切换）。
+          </p>
+          <div className="mt-2 flex items-center gap-2">
+            <ProviderSelect
+              value={defaultProvider}
+              onChange={setDefaultProvider}
+              codexHealth={codexHealth}
+              dreaminaHealth={dreaminaHealth}
+            />
+          </div>
+          <div className="mt-2 flex items-center gap-2">
+            <div
+              className={`rounded px-2 py-1 text-xs ${
+                dreaminaHealth?.ok
+                  ? "bg-accent/15 text-accent"
+                  : "bg-amber-500/15 text-amber-300"
+              }`}
+            >
+              {dreaminaChecking
+                ? "检测中…"
+                : dreaminaHealth?.ok
+                  ? "即梦已就绪"
+                  : dreaminaNotInstalled
+                    ? "dreamina CLI 未安装"
+                    : dreaminaHealth?.reason || "即梦未就绪"}
+            </div>
+            <button
+              onClick={() => void recheckDreamina()}
+              disabled={dreaminaChecking}
+              className="rounded-md bg-panel2 px-3 py-1 text-xs text-ink hover:bg-edge disabled:opacity-50"
+            >
+              重新检测
+            </button>
+            <button
+              onClick={() => setDreaminaLoginOpen(true)}
+              disabled={!dreaminaNeedsLogin || dreaminaChecking}
+              className="rounded-md bg-panel2 px-3 py-1 text-xs text-ink hover:bg-edge disabled:opacity-50"
+              title={
+                dreaminaHealth?.ok
+                  ? "已登录"
+                  : dreaminaNotInstalled
+                    ? "先安装 dreamina CLI"
+                    : "dreamina login（OAuth Device Flow）"
+              }
+            >
+              登录即梦账号
+            </button>
+          </div>
+          {dreaminaNotInstalled && (
+            <div className="mt-2 rounded bg-panel2 p-2">
+              <div className="text-[10px] uppercase tracking-wide text-muted">
+                安装 dreamina CLI（终端运行，一行命令）
+              </div>
+              <div className="mt-1 flex items-center gap-2">
+                <code className="flex-1 truncate rounded bg-edge px-2 py-1 font-mono text-[11px] text-ink">
+                  curl -s https://jimeng.jianying.com/cli | bash
+                </code>
+                <button
+                  onClick={copyInstallCmd}
+                  className="shrink-0 rounded bg-edge px-2 py-0.5 text-[11px] text-ink hover:opacity-80"
+                >
+                  {copiedInstall ? "已复制 ✓" : "复制"}
+                </button>
+              </div>
+              <div className="mt-1 text-[10px] text-muted">
+                装后重开终端使 PATH 生效，再点「重新检测」→「登录即梦账号」。
+              </div>
+            </div>
+          )}
+        </section>
+
         {/* 重建色板 */}
         <section className="mt-5">
           <h3 className="text-sm font-medium text-ink">重建色板</h3>
@@ -179,6 +309,9 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
             完成
           </button>
         </div>
+        {dreaminaLoginOpen && (
+          <DreaminaLoginDialog open onClose={() => setDreaminaLoginOpen(false)} />
+        )}
       </div>
     </div>
   );

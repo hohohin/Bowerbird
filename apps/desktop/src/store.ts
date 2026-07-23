@@ -12,6 +12,25 @@ import type {
   TagCount,
 } from "./lib/types";
 
+// —— 默认出图 provider（localStorage，照 boardRatio 枚举校验）——
+const DEFAULT_PROVIDER_KEY = "bowerbird.defaultProvider";
+const PROVIDERS = ["codex", "jimeng"] as const;
+function loadDefaultProvider(): string {
+  try {
+    const v = localStorage.getItem(DEFAULT_PROVIDER_KEY);
+    return v && (PROVIDERS as readonly string[]).includes(v) ? v : "codex";
+  } catch {
+    return "codex";
+  }
+}
+function saveDefaultProvider(v: string) {
+  try {
+    localStorage.setItem(DEFAULT_PROVIDER_KEY, v);
+  } catch {
+    /* localStorage 不可用时忽略 */
+  }
+}
+
 type Mode = "browse" | "manage";
 
 interface State {
@@ -82,6 +101,19 @@ interface State {
   // —— codex 可用性（App 挂载取一次；创作板/生成面板共用，约定 7 置灰依据）——
   codexHealth: CodexHealth | null;
   setCodexHealth: (h: CodexHealth | null) => void;
+  // —— 即梦（dreamina）可用性 + 出图 provider 切换（Phase 3）——
+  dreaminaHealth: CodexHealth | null;
+  setDreaminaHealth: (h: CodexHealth | null) => void;
+  defaultProvider: string; // 全局默认出图 provider（"codex"/"jimeng"，localStorage 持久化）
+  setDefaultProvider: (p: string) => void;
+  activeGenProvider: string; // 当前会话出图 provider（创作板切换条改它，初值=defaultProvider，不持久化）
+  setActiveGenProvider: (p: string) => void;
+  // —— dreamina 登录流程（OAuth Device Flow；dreamina://login 逐行透传 stdout）——
+  dreaminaLoginLines: string[];
+  dreaminaLoginActive: boolean;
+  setDreaminaLoginActive: (b: boolean) => void;
+  pushDreaminaLoginLine: (line: string) => void;
+  clearDreaminaLogin: () => void;
   // —— 浏览器扩展采集 ——
   // 扩展连上本地 WS 后后端 emit collect://extension-connected；采集入库 emit library://assets-changed 带 name。
   extensionConnected: boolean;
@@ -344,6 +376,23 @@ export const useStore = create<State>((set, get) => {
   // —— codex 可用性 ——
   codexHealth: null,
   setCodexHealth: (codexHealth) => set({ codexHealth }),
+  // —— 即梦 + provider（Phase 3）——
+  dreaminaHealth: null,
+  setDreaminaHealth: (dreaminaHealth) => set({ dreaminaHealth }),
+  defaultProvider: loadDefaultProvider(),
+  setDefaultProvider: (defaultProvider) => {
+    saveDefaultProvider(defaultProvider);
+    // 改默认同步切当前选择（用户期望「默认」生效立即）。
+    set({ defaultProvider, activeGenProvider: defaultProvider });
+  },
+  activeGenProvider: loadDefaultProvider(),
+  setActiveGenProvider: (activeGenProvider) => set({ activeGenProvider }),
+  dreaminaLoginLines: [],
+  dreaminaLoginActive: false,
+  setDreaminaLoginActive: (dreaminaLoginActive) => set({ dreaminaLoginActive }),
+  pushDreaminaLoginLine: (line) =>
+    set((s) => ({ dreaminaLoginLines: [...s.dreaminaLoginLines, line] })),
+  clearDreaminaLogin: () => set({ dreaminaLoginLines: [], dreaminaLoginActive: false }),
   // —— 浏览器扩展采集 ——
   extensionConnected: false,
   collectedNotice: null,
@@ -367,6 +416,8 @@ export const useStore = create<State>((set, get) => {
     set((s) => ({ genPanelOpen: open, genUnread: open ? false : s.genUnread })),
   startGeneration: async (prompt, references, ratio, provider) => {
     if (get().generating) return; // 单槽：进行中不再发
+    // provider 兜底：调用点没传（CreationBoard send / retry）→ 当前选择 → 全局默认。
+    const prov = provider ?? get().activeGenProvider ?? get().defaultProvider;
     // 用途（preset）注入：选中用途时，其 body 作为基底拼在用户组稿前（类 CLAUDE.md 上下文，
     // 不进编辑器）。续轮 sendGenRevise 不注入——用途是首轮基底，续轮是修改意见。
     const pid = get().activePresetId;
@@ -381,7 +432,7 @@ export const useStore = create<State>((set, get) => {
       genRefAssets: references,
       genSessionId: null,
       genStreaming: "",
-      genTurns: [{ id: nextGenTurnId(), prompt: sentPrompt, images: [] }],
+      genTurns: [{ id: nextGenTurnId(), prompt: sentPrompt, images: [], provider: prov }],
       genPanelOpen: true, // 自动弹面板给即时反馈（创作板在右槽仍可编辑）
       genUnread: false,
     });
@@ -390,7 +441,7 @@ export const useStore = create<State>((set, get) => {
     window.dispatchEvent(new CustomEvent("bowerbird://board-gen-start"));
     set({ generating: true });
     try {
-      await api.codexCreateImage({ prompt: sentPrompt, referenceImages: refPaths, ratio, provider });
+      await api.codexCreateImage({ prompt: sentPrompt, referenceImages: refPaths, ratio, provider: prov });
     } catch (e) {
       genHandleError(typeof e === "string" ? e : JSON.stringify(e));
     } finally {
@@ -401,14 +452,15 @@ export const useStore = create<State>((set, get) => {
     const sid = get().genSessionId;
     const text = instruction.trim();
     if (get().generating || !sid || !text) return;
+    const prov = provider ?? get().activeGenProvider ?? get().defaultProvider;
     pendingBoardClear = false; // 续轮修改不清创作板草稿
     set((s) => ({
-      genTurns: [...s.genTurns, { id: nextGenTurnId(), prompt: text, images: [] }],
+      genTurns: [...s.genTurns, { id: nextGenTurnId(), prompt: text, images: [], provider: prov }],
       genStreaming: "",
     }));
     set({ generating: true });
     try {
-      await api.codexCreateImage({ prompt: text, referenceImages: [], sessionId: sid, provider });
+      await api.codexCreateImage({ prompt: text, referenceImages: [], sessionId: sid, provider: prov });
     } catch (e) {
       genHandleError(typeof e === "string" ? e : JSON.stringify(e));
     } finally {
@@ -440,14 +492,14 @@ export const useStore = create<State>((set, get) => {
       set((s) => {
         const base = {
           genSessionId: c.session_id ?? s.genSessionId,
-          genStreaming: s.genStreaming + `\n\n—— done · ${c.elapsed_ms}ms via ${c.provider}`,
+          genStreaming: "", // done 后清流式（图已到；provider 在 turn 角标、耗时勿扰）
           genUnread: imgs.length > 0 && !s.genPanelOpen ? true : s.genUnread,
         };
         if (s.genTurns.length === 0) return base;
         const last = s.genTurns[s.genTurns.length - 1];
         return {
           ...base,
-          genTurns: [...s.genTurns.slice(0, -1), { ...last, images: [...last.images, ...imgs] }],
+          genTurns: [...s.genTurns.slice(0, -1), { ...last, images: [...last.images, ...imgs], provider: c.provider }],
         };
       });
       // 创作板首发且有图产出 = 生成成功 → 通知编辑器清草稿（编辑器据 dirty 决定是否真清）。

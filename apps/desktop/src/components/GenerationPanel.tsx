@@ -21,6 +21,7 @@ export function GenerationPanel() {
   const genRefAssets = useStore((s) => s.genRefAssets);
 
   const codexHealth = useStore((s) => s.codexHealth);
+  const activeGenProvider = useStore((s) => s.activeGenProvider);
   const setGenPanelOpen = useStore((s) => s.setGenPanelOpen);
   const sendGenRevise = useStore((s) => s.sendGenRevise);
   const cancelGeneration = useStore((s) => s.cancelGeneration);
@@ -96,6 +97,7 @@ export function GenerationPanel() {
           {genTurns.length > 0 && (
             <span className="text-xs text-muted">
               {genTurns.length} 轮 · {imageCount} 图
+              {activeGenProvider === "jimeng" ? " · 即梦" : ""}
             </span>
           )}
         </div>
@@ -271,6 +273,11 @@ function TurnView({
       <div className="line-clamp-2 text-xs text-muted" title={turn.prompt}>
         <span className="text-accent">{index === 0 ? "首版" : `修改 ${index}`}：</span>
         {turn.prompt}
+        {turn.provider && turn.provider !== "codex-cli" && (
+          <span className="ml-1 text-[10px] opacity-70">
+            via {turn.provider === "jimeng" ? "即梦" : turn.provider}
+          </span>
+        )}
       </div>
       {turn.images.length > 0 ? (
         <div className={`grid gap-1.5 ${turn.images.length > 1 ? "grid-cols-2" : "grid-cols-1"}`}>
@@ -308,7 +315,7 @@ function TurnView({
           </button>
         </div>
       ) : busy ? (
-        <div className="text-[10px] animate-pulse text-muted">codex 生成中…</div>
+        <div className="text-[10px] animate-pulse text-muted">生成中…</div>
       ) : null}
     </div>
   );

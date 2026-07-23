@@ -8,7 +8,7 @@ use std::process::Stdio;
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-use crate::codex::jimeng::{dreamina_command, dreamina_home, resolve_dreamina_binary};
+use crate::codex::jimeng::{dreamina_command, resolve_dreamina_binary};
 use crate::commands::codex::CodexHealth;
 use crate::error::AppError;
 
@@ -34,12 +34,23 @@ pub async fn dreamina_health() -> Result<CodexHealth, AppError> {
             reason: "未检测到 dreamina CLI（运行 curl -s https://jimeng.jianying.com/cli | bash 安装）".into(),
         });
     }
-    let logged_in = dreamina_home()
-        .map(|h| {
-            let p = h.join("credential.json");
-            std::fs::metadata(&p).map(|m| m.len() > 0).unwrap_or(false)
-        })
-        .unwrap_or(false);
+    // 登录态：dreamina user_credit 成功（exit 0 + stdout 含余额 JSON）= 已登录。比静态查文件准
+    // ——登录态文件 dreamina 自管（实测非 credential.json，在 ~/.dreamina_cli/ 他处）+ 能检测
+    // token 过期（AI-PROVIDERS.md §7.5）。
+    let logged_in = match dreamina_command(binary.as_deref().unwrap_or("dreamina"))
+        .arg("user_credit")
+        .output()
+        .await
+    {
+        Ok(o) => {
+            o.status.success()
+                && {
+                    let s = String::from_utf8_lossy(&o.stdout);
+                    s.contains("total_credit") || s.contains("user_id") || s.contains("vip_level")
+                }
+        }
+        Err(_) => false,
+    };
     if !logged_in {
         return Ok(CodexHealth {
             ok: false,

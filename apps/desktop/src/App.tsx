@@ -33,6 +33,7 @@ function App() {
   const boardOpen = useStore((s) => s.boardOpen);
   const genPanelOpen = useStore((s) => s.genPanelOpen);
   const setCodexHealth = useStore((s) => s.setCodexHealth);
+  const setDreaminaHealth = useStore((s) => s.setDreaminaHealth);
   const setExtensionConnected = useStore((s) => s.setExtensionConnected);
   const setCollectedNotice = useStore((s) => s.setCollectedNotice);
 
@@ -203,6 +204,34 @@ function App() {
       .then(setCodexHealth)
       .catch(() => setCodexHealth({ ok: false, reason: "codex 状态检测失败" }));
   }, [setCodexHealth]);
+
+  // 即梦可用性：同 codex，挂载取一次（provider 切换置灰依据）。
+  useEffect(() => {
+    api
+      .dreaminaHealth()
+      .then(setDreaminaHealth)
+      .catch(() => setDreaminaHealth({ ok: false, reason: "dreamina 状态检测失败" }));
+  }, [setDreaminaHealth]);
+
+  // dreamina 登录（OAuth Device Flow）：dreamina_login 命令逐行透传 stdout 到 store，
+  // DreaminaLoginDialog 读 dreaminaLoginLines 展示 verification_uri/user_code。
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    listen<string>("dreamina://login", (e) => {
+      useStore.getState().pushDreaminaLoginLine(e.payload);
+    }).then((u) => (unlisten = u));
+    return () => unlisten?.();
+  }, []);
+
+  // 登录子进程结束 → 标记流程结束 + 刷 dreaminaHealth（登录态可能已变）。
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    listen("dreamina://login-done", () => {
+      useStore.getState().setDreaminaLoginActive(false);
+      api.dreaminaHealth().then(setDreaminaHealth).catch(() => {});
+    }).then((u) => (unlisten = u));
+    return () => unlisten?.();
+  }, [setDreaminaHealth]);
 
   const showDetail = mode === "browse" && detailAssetId !== null;
 

@@ -201,10 +201,10 @@ function Thumb({
           <span>{describeStatus === "running" ? "反推中" : `排队 ${queuePos}`}</span>
         </button>
       )}
-      {shown.source === "codex" && (
+      {(shown.source === "codex" || shown.source === "jimeng") && (
         <span
           className="absolute left-1 top-1 z-10 rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-white backdrop-blur"
-          title={groupLen > 1 ? `生成图 · 同流程 ${groupLen} 张` : "codex 生成图"}
+          title={groupLen > 1 ? `生成图 · 同流程 ${groupLen} 张` : "生成图"}
         >
           ✨{groupLen > 1 ? ` ${idx + 1}/${groupLen}` : ""}
         </span>

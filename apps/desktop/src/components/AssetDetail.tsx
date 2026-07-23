@@ -435,6 +435,7 @@ export function AssetDetail() {
         session_id: typeof v.session_id === "string" ? v.session_id : undefined,
         references:
           Array.isArray(v.references) ? v.references.filter((x: unknown): x is string => typeof x === "string") : undefined,
+        provider: typeof v.provider === "string" ? v.provider : undefined,
       };
     } catch {
       return null;
@@ -458,8 +459,10 @@ export function AssetDetail() {
           {asset.name}
           {asset.ext ? `.${asset.ext}` : ""}
         </div>
-        {asset.source === "codex" ? (
-          <span className="rounded bg-accent/15 px-1.5 py-0.5 text-[10px] text-accent">✨ codex 生成</span>
+        {(asset.source === "codex" || asset.source === "jimeng") ? (
+          <span className="rounded bg-accent/15 px-1.5 py-0.5 text-[10px] text-accent">
+            ✨ {asset.source === "jimeng" ? "即梦" : "codex"} 生成
+          </span>
         ) : asset.source ? (
           <span className="rounded bg-edge px-1.5 py-0.5 text-[10px] uppercase text-muted">
             {asset.source}
@@ -765,15 +768,17 @@ export function AssetDetail() {
                   >
                     💬 回看生成对话
                   </button>
-                  <button
-                    onClick={() =>
-                      api.openCodexSession(genMeta.session_id!).catch(console.error)
-                    }
-                    className="text-[10px] text-accent hover:underline"
-                    title="在 Terminal 里 codex resume，看这次生成的完整对话含图"
-                  >
-                    在 codex 中打开会话 ↗
-                  </button>
+                  {genMeta.provider !== "jimeng" && (
+                    <button
+                      onClick={() =>
+                        api.openCodexSession(genMeta.session_id!).catch(console.error)
+                      }
+                      className="text-[10px] text-accent hover:underline"
+                      title="在 Terminal 里 codex resume，看这次生成的完整对话含图"
+                    >
+                      在 codex 中打开会话 ↗
+                    </button>
+                  )}
                 </div>
               )}
             </div>

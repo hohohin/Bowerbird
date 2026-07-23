@@ -524,12 +524,18 @@ pub async fn dreamina_health(...) -> Health {
 - **首轮 only**（text2image/image2image by 参考图有无）；续轮 image2image 传上一轮图留后续（需前端协议 + session 语义）。
 - **验证**：`cargo check`/`test` 通过 + **端到端实测通过**（Win11 + maestro，带参考图 image2image 出图入库 source=jimeng + codex 命名）。踩坑：dreamina stdout pretty JSON 不能按行解析（PROJECT.md）。
 
-### Phase 3 · 前端切换 UI + 配置
+### Phase 3 · 前端切换 UI + 配置 ✅（2026-07-23 完成）
 
-- store `defaultProvider` / `activeGenProvider`（§6.1）。
-- GenerationPanel 顶部 provider 切换条（§6.2）。
-- SettingsDialog 即梦配置区 + 默认 provider（§7.1）。
-- dreamina 登录引导（§7.4）。
+- 创作板工具条 provider 按钮组（新建 `ProviderSelect`，inline segmented **非下拉**）+ GenerationPanel header/`TurnView` 显示 provider。
+- store `defaultProvider`（localStorage）+ `activeGenProvider` + `dreaminaHealth` + provider 兜底下沉 `startGeneration`/`sendGenRevise`。
+- SettingsDialog「AI 出图引擎」section（默认 provider + 即梦状态 badge + 重新检测 + 登录）+ dreamina **安装引导**（未装显 `curl | bash` 命令块 + 复制，登录按钮未装置灰）。
+- 新建 `DreaminaLoginDialog`（约定 13 Modal，OAuth Device Flow：透传 `dreamina://login` stdout）+ App `dreamina://login(-done)` 监听。
+- **dreamina_health 改用 `user_credit` 动态验证**（原静态查 credential.json 错——登录态文件非该名，user_credit 才准，§7.5）。
+- **偏离 §6.2**（理由见存档计划）：切换条放**创作板工具条**（非 GenerationPanel header——后者发送后才弹）+ inline 按钮组（非下拉）+ 独立 DreaminaLoginDialog（非 inline）。
+- **即梦生成图对等**：瀑布流 ✨ 角标 + 详情页 badge + 回看入口（jimeng `session_id=Some(submit_id)`）+ 复用 + 「在 codex 中打开会话」按 provider 隐藏；生成中文案「生成中…」+ jimeng 去伪进度 Delta。
+- **验证**：tsc + 端到端通过（创作板选即梦出图 + 角标/badge/回看）。
+- **遗留**：续轮 image2image（Phase 2 遗留）、OAuth headless 实测、CodexOnboarding 一视同仁重构。
+- **原则（用户定）**：provider **一视同仁**——无默认强制、新用户自由选、未来可扩展。
 - 验证：创作板发送 → 选即梦 → 出图 → 提修改 → 续轮 → 入库 → 回看，全链路。
 
 ### Phase 4 · 文档与约定收尾
@@ -583,3 +589,4 @@ pub async fn dreamina_health(...) -> Health {
 | 2026-07-23 | v2 修订：即梦官方推出 CLI（`dreamina`，单二进制 + OAuth 登录 + 积分制），接入路线**整体从火山引擎 HTTP API 改为官方 dreamina CLI**（与 codex 同构子进程）。消解签名实现（开放问题 2）、凭据存储（开放问题 4）两个老大难；关键约定 1 演进更纯粹（所有 provider 都是 CLI，不开 HTTP 口子）。命令面/登录/状态文件已调研清楚（§3），Phase 0 改为 dreamina CLI 本机 spike。 |
 | 2026-07-23 | Phase 0 spike 通过（Win11 + maestro）：`text2image --poll` + `query_result --download_dir` 全链路实测跑通；stdout 直接 JSON、下载 `{submit_id}_image_N.png`、OAuth 登录 + `user_credit` 验证。maestro 文生图本次未扣分（待确认是免费权益还是延迟）。详见 §3.3/§3.6，进 Phase 1。 |
 | 2026-07-23 | Phase 2 完成：`DreaminaCliProvider` 实现 `GenProvider`（spawn dreamina text2image/image2image + query_result 下载 + ingest source=jimeng）+ `dreamina_health`/`dreamina_login` 命令 + `CodexRequest.ratio`/`GenOutcome.temp_dir`/`ingest_generated.source_tag` 配套 + 前端 api/store 透传 provider。端到端实测通过（image2image 出图入库）。多轮首轮 only、切换 UI 留 Phase 3。踩坑：dreamina stdout pretty JSON 不能按行解析。关键约定 1 随存档演进。 |
+| 2026-07-23 | Phase 3 完成：前端 provider 切换 UI（创作板 `ProviderSelect` + SettingsDialog 即梦区/安装引导 + `DreaminaLoginDialog`）+ dreamina_health 改 `user_credit` 动态验证（原静态查 credential.json 错）+ 即梦生成图对等（✨ 角标 / badge / 回看入口 session_id=submit_id / 复用）。偏离 §6.2：切换条放创作板（非 GenerationPanel header）+ inline 按钮组（非下拉）+ 独立登录 Modal。原则（用户定）：provider 一视同仁（无默认强制）。端到端通过。遗留：续轮 image2image、OAuth headless 实测、CodexOnboarding 一视同仁重构。 |
