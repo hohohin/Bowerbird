@@ -18,7 +18,7 @@ use ulid::Ulid;
 
 use crate::codex::codex_cli::CodexCliProvider;
 use crate::codex::types::CodexRequest;
-use crate::codex::CodexProvider;
+use crate::codex::GenProvider;
 use crate::core::caption;
 use crate::core::library::{Analysis, Asset};
 use crate::db::Database;

@@ -14,7 +14,7 @@ use ulid::Ulid;
 
 use crate::codex::codex_cli::{codex_command, codex_home, resolve_codex_binary, CodexCliProvider};
 use crate::codex::types::{Chunk, CodexRequest, CodexResult};
-use crate::codex::CodexProvider;
+use crate::codex::{resolve_gen_provider, GenProvider};
 use crate::core::caption;
 use crate::core::paths::LibraryPaths;
 use crate::db::Database;
@@ -212,6 +212,7 @@ pub async fn codex_create_image(
     reference_images: Vec<String>,
     session_id: Option<String>,
     ratio: Option<String>,
+    provider: Option<String>,
 ) -> Result<(), AppError> {
     // 首轮（无 session_id）：包一句明确要 codex 出图，触发 imagegen；
     // 续轮（有 session_id = resume）：codex 已在画图上下文里，用户修改意见原样发。
@@ -243,11 +244,14 @@ pub async fn codex_create_image(
         }
     });
 
+    // 先解析 provider（可能出错 → ?）：必须在注册 GENERATE_CANCEL 之前，否则出错提前返回
+    // 会留下 stale cancel sender（下次 cancel_codex_create take 到它）。None → codex（默认）。
+    let p = resolve_gen_provider(provider.as_deref())?;
+    let provider_name = p.name().to_string();
+
     let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
     GENERATE_CANCEL.lock().unwrap().replace(cancel_tx);
 
-    let p = CodexCliProvider::default();
-    let provider_name = p.name().to_string();
     // generate_image 借用 tx 推 Delta；用 block 限定借期，结束后 command 才能 reuse tx 发 Done。
     let outcome = {
         let gen_fut = p.generate_image(req, &tx, session_id);
@@ -306,6 +310,7 @@ pub async fn codex_create_image(
         "prompt": prompt_for_meta,
         "session_id": session_id,
         "references": refs_for_meta,
+        "provider": provider_name.clone(),
     })
     .to_string();
     let ids: Vec<String> = gen_assets.iter().map(|a| a.id.clone()).collect();

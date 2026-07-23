@@ -54,3 +54,14 @@ pub struct GenOutcome {
     pub elapsed_ms: u64,
     pub source_images: Vec<PathBuf>,
 }
+
+/// provider 能力自述（AI-PROVIDERS.md §4.3：理解类只走 codex，切换只发生在生成）。
+/// 理解类（`chat` / `caption`）仅 codex；`generate` codex + 即梦都有。
+/// UI 据此决定 provider 下拉项是否可选、续轮能否切换。
+#[allow(dead_code)] // Phase 3 前端 provider 切换 UI 消费；Phase 1/2 仅 codex 实现自述、暂无调用方
+#[derive(Debug, Clone, Copy)]
+pub struct Capabilities {
+    pub chat: bool,
+    pub caption: bool,
+    pub generate: bool,
+}
