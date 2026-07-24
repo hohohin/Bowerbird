@@ -453,6 +453,10 @@ export const useStore = create<State>((set, get) => {
     const text = instruction.trim();
     if (get().generating || !sid || !text) return;
     const prov = provider ?? get().activeGenProvider ?? get().defaultProvider;
+    // 即梦续轮：image2image 传上一轮产出图（codex resume 记得上一轮图、不需传）。
+    const turns = get().genTurns;
+    const lastImages = turns[turns.length - 1]?.images ?? [];
+    const reviseRefs = prov === "jimeng" ? lastImages : [];
     pendingBoardClear = false; // 续轮修改不清创作板草稿
     set((s) => ({
       genTurns: [...s.genTurns, { id: nextGenTurnId(), prompt: text, images: [], provider: prov }],
@@ -460,7 +464,7 @@ export const useStore = create<State>((set, get) => {
     }));
     set({ generating: true });
     try {
-      await api.codexCreateImage({ prompt: text, referenceImages: [], sessionId: sid, provider: prov });
+      await api.codexCreateImage({ prompt: text, referenceImages: reviseRefs, sessionId: sid, provider: prov });
     } catch (e) {
       genHandleError(typeof e === "string" ? e : JSON.stringify(e));
     } finally {

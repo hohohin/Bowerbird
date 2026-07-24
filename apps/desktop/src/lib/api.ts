@@ -124,6 +124,8 @@ export const api = {
   codexHealth: () => invoke<CodexHealth>("codex_health"),
   dreaminaHealth: () => invoke<CodexHealth>("dreamina_health"),
   dreaminaLogin: () => invoke<void>("dreamina_login"),
+  dreaminaCheckLogin: (deviceCode: string) =>
+    invoke<CodexHealth>("dreamina_check_login", { deviceCode }),
   // 创作板「生成」：把最终 prompt + 参考图发 codex（codex exec --image，同反推机制）出图。
   // 流式文本经 codex://chunk（Delta）回；生成图 copy 进 library/generations 后随 Done.images 回。
   // sessionId 非空 → codex exec resume 续接同一会话（多轮迭代修改，codex 记得上一张图）。

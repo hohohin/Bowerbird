@@ -56,7 +56,7 @@ impl GenProvider for DreaminaCliProvider {
 
     /// 即梦无文本对话能力（仅生成），理解类任务不支持（AI-PROVIDERS.md §4.3）。
     async fn run(&self, _req: CodexRequest) -> Result<CodexResult, AppError> {
-        Err(AppError::Codex(
+        Err(AppError::Jimeng(
             "即梦无文本对话能力（仅生成；理解类走 codex）".into(),
         ))
     }
@@ -69,10 +69,10 @@ impl GenProvider for DreaminaCliProvider {
         &self,
         req: CodexRequest,
         _tx: &mpsc::Sender<Chunk>, // 即梦无逐字流式，不推 Delta（生成中态由 GenerationPanel busy 占位显示）
-        _resume_session: Option<String>,
+        resume_session: Option<String>,
     ) -> Result<GenOutcome, AppError> {
         if !self.enabled {
-            return Err(AppError::Codex("DreaminaCliProvider 未启用".into()));
+            return Err(AppError::Jimeng("DreaminaCliProvider 未启用".into()));
         }
         let start = SystemTime::now();
 
@@ -107,9 +107,9 @@ impl GenProvider for DreaminaCliProvider {
 
         let submit_out = tokio::time::timeout(Duration::from_secs(CMD_TIMEOUT_SECS), submit.output())
             .await
-            .map_err(|_| AppError::Codex(format!("dreamina 提交超时（{CMD_TIMEOUT_SECS}s）")))?
+            .map_err(|_| AppError::Jimeng(format!("dreamina 提交超时（{CMD_TIMEOUT_SECS}s）")))?
             .map_err(|e| {
-                AppError::Codex(format!(
+                AppError::Jimeng(format!(
                     "启动 dreamina 失败: {e}（未安装/未登录？运行 `dreamina login`）"
                 ))
             })?;
@@ -118,7 +118,7 @@ impl GenProvider for DreaminaCliProvider {
             let stderr_head: String =
                 String::from_utf8_lossy(&submit_out.stderr).trim().chars().take(500).collect();
             let stdout_head: String = submit_stdout.trim().chars().take(300).collect();
-            return Err(AppError::Codex(format!(
+            return Err(AppError::Jimeng(format!(
                 "dreamina 提交退出 {} | stderr: {stderr_head} | stdout: {stdout_head}",
                 submit_out.status
             )));
@@ -143,13 +143,13 @@ impl GenProvider for DreaminaCliProvider {
             .kill_on_drop(true);
         let query_out = tokio::time::timeout(Duration::from_secs(CMD_TIMEOUT_SECS), query.output())
             .await
-            .map_err(|_| AppError::Codex(format!("dreamina query_result 超时（{CMD_TIMEOUT_SECS}s）")))?
-            .map_err(|e| AppError::Codex(format!("启动 dreamina query_result 失败: {e}")))?;
+            .map_err(|_| AppError::Jimeng(format!("dreamina query_result 超时（{CMD_TIMEOUT_SECS}s）")))?
+            .map_err(|e| AppError::Jimeng(format!("启动 dreamina query_result 失败: {e}")))?;
 
         if !query_out.status.success() {
             let stderr_head: String =
                 String::from_utf8_lossy(&query_out.stderr).trim().chars().take(500).collect();
-            return Err(AppError::Codex(format!(
+            return Err(AppError::Jimeng(format!(
                 "dreamina query_result 退出 {} | stderr: {stderr_head}",
                 query_out.status
             )));
@@ -160,16 +160,15 @@ impl GenProvider for DreaminaCliProvider {
         if source_images.is_empty() {
             let qstdout = String::from_utf8_lossy(&query_out.stdout);
             let head: String = qstdout.trim().chars().take(300).collect();
-            return Err(AppError::Codex(format!(
+            return Err(AppError::Jimeng(format!(
                 "dreamina 未下载到图片（submit_id={submit_id}） | query stdout: {head}"
             )));
         }
 
         Ok(GenOutcome {
             text: format!("[即梦] 生成 {} 张图", source_images.len()),
-            // submit_id 作会话标识：落 generation_session_id + generation_meta.session_id，让详情页
-            // 「回看生成对话」入口可见、generation_history 可查。续轮 image2image 传上一轮图留后续。
-            session_id: Some(submit_id),
+            // 会话标识：续轮（resume_session）沿用首轮 submit_id（回看关联各轮）；首轮用本次 submit_id。
+            session_id: resume_session.clone().or(Some(submit_id)),
             elapsed_ms: start.elapsed().unwrap_or_default().as_millis() as u64,
             source_images,
             temp_dir: Some(download_dir), // command 层 ingest 后删此目录。
@@ -187,16 +186,16 @@ fn parse_submit_id(stdout: &str) -> Result<String, AppError> {
     // 取第一个 '{' 起（容忍前导提示行），流式解析取首个值（容忍尾随文本）。
     let start = stdout
         .find('{')
-        .ok_or_else(|| AppError::Codex(format!("dreamina 提交输出无 JSON | stdout: {}", head())))?;
+        .ok_or_else(|| AppError::Jimeng(format!("dreamina 提交输出无 JSON | stdout: {}", head())))?;
     let v: serde_json::Value = serde_json::Deserializer::from_str(&stdout[start..])
         .into_iter()
         .next()
-        .ok_or_else(|| AppError::Codex("dreamina 提交输出 JSON 为空".into()))?
+        .ok_or_else(|| AppError::Jimeng("dreamina 提交输出 JSON 为空".into()))?
         .map_err(|e| {
-            AppError::Codex(format!("dreamina 提交输出 JSON 解析失败: {e} | stdout: {}", head()))
+            AppError::Jimeng(format!("dreamina 提交输出 JSON 解析失败: {e} | stdout: {}", head()))
         })?;
     if v.get("gen_status").and_then(|s| s.as_str()) == Some("fail") {
-        return Err(AppError::Codex(format!(
+        return Err(AppError::Jimeng(format!(
             "dreamina 生成失败（gen_status=fail） | stdout: {}",
             head()
         )));
@@ -204,7 +203,7 @@ fn parse_submit_id(stdout: &str) -> Result<String, AppError> {
     v.get("submit_id")
         .and_then(|i| i.as_str())
         .map(|s| s.to_string())
-        .ok_or_else(|| AppError::Codex(format!("dreamina 提交输出未含 submit_id | stdout: {}", head())))
+        .ok_or_else(|| AppError::Jimeng(format!("dreamina 提交输出未含 submit_id | stdout: {}", head())))
 }
 
 /// dreamina 二进制解析（对称 `resolve_codex_binary`）：
