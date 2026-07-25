@@ -126,6 +126,8 @@ export const api = {
   dreaminaLogin: () => invoke<void>("dreamina_login"),
   dreaminaCheckLogin: (deviceCode: string) =>
     invoke<CodexHealth>("dreamina_check_login", { deviceCode }),
+  // 拉起系统终端跑 `dreamina login`（真 TTY；app 内 spawn 非 TTY 不写 token，见后端命令注释）。
+  openDreaminaLogin: () => invoke<void>("open_dreamina_login"),
   // 创作板「生成」：把最终 prompt + 参考图发 codex（codex exec --image，同反推机制）出图。
   // 流式文本经 codex://chunk（Delta）回；生成图 copy 进 library/generations 后随 Done.images 回。
   // sessionId 非空 → codex exec resume 续接同一会话（多轮迭代修改，codex 记得上一张图）。

@@ -1,7 +1,9 @@
 //! 即梦 dreamina CLI 的可用性检测与登录命令（Phase 2）。
 //!
-//! 与 `codex_health` 对称：检测 binary + 登录态（`credential.json`）。
-//! `dreamina_login` 透传 OAuth Device Flow 的 stdout 给前端（UI Phase 3）。
+//! 与 `codex_health` 对称：检测 binary + 登录态（spawn `user_credit` 动态验证；token 由
+//! dreamina 自管于 authsdk store，实测非 credential.json）。
+//! `dreamina_login` 透传 OAuth Device Flow 的 stdout 给前端（UI Phase 3，已搁置——app spawn
+//! 非 TTY 不写 token；改用 `open_dreamina_login` 拉起系统终端登录）。
 
 use std::process::Stdio;
 
@@ -12,8 +14,8 @@ use crate::codex::jimeng::{dreamina_command, resolve_dreamina_binary};
 use crate::commands::codex::CodexHealth;
 use crate::error::AppError;
 
-/// 检测 dreamina 是否可用：① CLI 可执行（`dreamina version`）；
-/// ② `~/.dreamina_cli/credential.json` 非空（已登录）。
+/// 检测 dreamina 是否可用：① CLI 可执行（`dreamina version`）；② 已登录。
+/// 登录态由 `check_dreamina_logged_in` spawn `user_credit` 动态验证（返回余额 JSON = 有效）。
 /// 任一不满足返回 `ok=false` + 中文 reason，前端据此置灰（约定 7）。
 #[tauri::command]
 pub async fn dreamina_health() -> Result<CodexHealth, AppError> {
@@ -129,5 +131,47 @@ pub async fn dreamina_check_login(device_code: String) -> Result<CodexHealth, Ap
             ok: false,
             reason: format!("授权未完成（device_code {dc_head}…, checklogin exit {}）| {diag}", out.status),
         })
+    }
+}
+
+/// 「打开即梦登录终端」：唤起系统终端跑 `dreamina login`（OAuth）。
+/// dreamina login 非 headless 依赖 stdout 是真 TTY 才走完 OAuth + 写 token；app 内 spawn
+/// （Stdio::piped）非 TTY 会让进程早退、不写 token（PROJECT.md 踩坑），故拉起真正的系统终端
+/// 窗口（真 TTY）让 dreamina 完整跑完。对称 `open_codex_session`。
+#[tauri::command]
+pub async fn open_dreamina_login() -> Result<(), AppError> {
+    #[cfg(target_os = "macos")]
+    {
+        // dreamina login 是固定串、非用户输入，osascript do script 单参传入无注入风险。
+        let script = "tell application \"Terminal\"\nactivate\ndo script \"dreamina login\"\nend tell";
+        tokio::process::Command::new("osascript")
+            .arg("-e")
+            .arg(script)
+            .spawn()
+            .map_err(|e| AppError::Jimeng(format!("启动 Terminal 失败: {e}")))?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        #[cfg(target_os = "windows")]
+        {
+            // `start "" cmd.exe /K` 另开常驻命令提示符跑 `dreamina login`；/K 跑完留窗让用户看到
+            // 「登录成功」。dreamina login 是固定串无注入风险（对称 macOS 分支，无白名单校验）。
+            tokio::process::Command::new("cmd.exe")
+                .arg("/D")
+                .arg("/C")
+                .arg("start")
+                .arg("")
+                .arg("cmd.exe")
+                .arg("/K")
+                .arg("dreamina login")
+                .spawn()
+                .map_err(|e| AppError::Jimeng(format!("启动命令提示符失败: {e}")))?;
+            Ok(())
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            Err(AppError::Jimeng("当前系统暂不支持打开即梦登录终端".into()))
+        }
     }
 }

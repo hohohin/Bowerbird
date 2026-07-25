@@ -192,16 +192,18 @@ dreamina user_credit
 
 ### 3.5 dreamina 本地状态文件（spike 排查 / health 检测用）
 
-`~/.dreamina_cli/` 下：
+`~/.dreamina_cli/` 下（2026-07-25 实测）：
 
 | 文件 | 用途 |
 |---|---|
-| `credential.json` | **登录态**（health 检测主依据，对称 codex auth.json） |
-| `config.toml` | 环境配置 |
-| `tasks.db` | 本地任务记录 |
-| `logs/` | 运行日志 |
+| `tasks.db` (+ -wal/-shm) | 本地任务记录 |
+| `dreamina/SKILL.md` | 给 AI agent 用的用法文档 |
+| `version.json` | 版本信息 |
+| `logs/dreamina.log.*` | 运行日志（**OAuth login 流程排查金矿**，进程「持续 poll 到完成」vs「早退」可辨，见 PROJECT.md 踩坑） |
 
-排查口诀（来自官方 skill 文档）：生成命令报权限/登录/环境异常 → 先查 `config.toml` 是否有效 + `dreamina user_credit` 是否能返回余额 JSON。
+⚠️ **登录态 token 不在 `~/.dreamina_cli/` 下任何文件**——早期推测的 `credential.json` / `config.toml` 实测**均不存在**。token 走字节内部 `authsdk` store（日志 `[authsdk:ensureActiveRecord]` 可见，确切路径/机制不公开）。故 Bowerbird 检测登录态**只能动态**：spawn `user_credit` 看是否返回余额 JSON（§7.5），**不查文件**。
+
+排查口诀（来自官方 SKILL.md）：生成命令报权限/登录/环境异常 → 先查 `dreamina user_credit` 是否返回余额 JSON + 翻 `logs/` 最新日志。
 
 ### 3.6 spike 验证项（Phase 0，2026-07-23 本机实测 Win11）
 
@@ -440,7 +442,7 @@ createImage: (req: { prompt; referenceImages; sessionId?; ratio?; provider? }) =
 
 ### 7.2 凭据存储：不存（v2 关键简化）
 
-**v1 曾在此节纠结「明文 JSON vs OS keychain」**（开放问题 4）——**v2 整体删除**。原因：dreamina 自己把登录态存进 `~/.dreamina_cli/credential.json`（OAuth token），Bowerbird **完全不碰凭据、零持久化**，与 codex 处理 auth.json 的方式完全一致（codex 的登录态也是 codex CLI 自管，Bowerbird 从不存储）。
+**v1 曾在此节纠结「明文 JSON vs OS keychain」**（开放问题 4）——**v2 整体删除**。原因：dreamina 自己把登录态存进字节内部 authsdk store（非 `~/.dreamina_cli/` 下文件，§3.5），Bowerbird **完全不碰凭据、零持久化**，与 codex 处理 auth.json 的方式完全一致（codex 的登录态也是 codex CLI 自管，Bowerbird 从不存储）。
 
 - 好处：不新增持久化层、不引入 keyring 依赖、无凭据泄露面。
 - 代价：卸载 Bowerbird 不会清 dreamina 登录态（与 codex 同理，可接受）。
@@ -449,35 +451,32 @@ createImage: (req: { prompt; referenceImages; sessionId?; ratio?; provider? }) =
 
 v1 曾规划新建 `core/provider_config.rs` 读写凭据 JSON + `get_provider_config`/`set_provider_config` 命令——**v2 全部不需要**（无凭据可存）。改为：
 
-- `dreamina_health` 命令：检测 dreamina 二进制 + `~/.dreamina_cli/credential.json` + 可选 `dreamina user_credit` ping（§7.5）。
-- `dreamina_login` 命令：spawn `dreamina login --headless`，把 OAuth 授权材料（verification_uri/user_code/device_code）流式推给前端引导（§7.4）。
+- `dreamina_health` 命令：检测 dreamina 二进制（spawn `version`）+ 登录态（spawn `user_credit` 返回余额 JSON = 已登录；**不查文件**，token 走 authsdk store，§3.5/§7.5）。
+- `open_dreamina_login` 命令：拉起系统终端跑 `dreamina login`（真 TTY；app 内 spawn 非 TTY 不写 token，§7.4）。
 - 默认 provider 的存储：仅一个字符串（`"codex"`/`"jimeng"`），与现有「项目零 zustand persist」一致——照 AssetDetail 范式存 `localStorage`（`bowerbird.defaultProvider`），不入库、不需后端命令。
 
-### 7.4 即梦登录引导（唯一比 codex 复杂的新 UI）
+### 7.4 即梦登录引导（方案 A：拉起系统终端——2026-07-25 实现）
 
-codex 登录是 `codex login` 跳浏览器完事；dreamina `login --headless` 是 OAuth Device Flow，需在 app 内展示授权材料。方案：仿 [CodexOnboarding.tsx](apps/desktop/src/components/CodexOnboarding.tsx)（约定 13 全屏 Modal）做一个 dreamina 登录流程：
+codex 登录是 `codex login` 跳浏览器完事；dreamina `login`（非 headless）**依赖 `isatty(stdout)`**——app 内 `Stdio::piped()` 让 stdout 非 TTY，dreamina 在 `[OAuthLogin] start login flow` 后静默早退、**不写 token**（CREATE_NO_WINDOW/CREATE_NEW_CONSOLE 都无效，只控弹黑窗不改 isatty；详见 PROJECT.md 踩坑「dreamina OAuth app spawn 不写 token」）。故 in-app spawn login 这条路被否。
 
-1. 检测 dreamina 未登录 → 弹引导。
-2. 点「登录」→ 后端 spawn `dreamina login --headless` → stdout 解析出 `verification_uri` + `user_code` + `device_code` → Modal 内展示（一个可点链接 + 一串短码 + 「打开浏览器输入此码」）。
-3. 用户浏览器授权后 → 后端 `dreamina login checklogin --device_code=<code> --poll=30` → 成功则 `dreamina user_credit` 取余额 → 关 Modal。
-4. `AigcComplianceConfirmationRequired` → 提示「需在即梦网页完成一次合规确认」。
+**实际方案（方案 A）**：新增 `open_dreamina_login` 命令，**拉起一个真正的系统终端窗口**（Windows `cmd.exe /D /C start "" cmd.exe /K "dreamina login"`、macOS `osascript`→Terminal.app）跑 `dreamina login`——真 TTY 保证 dreamina 完整走完 OAuth + 写 token。对称 codex 的 `open_codex_session`（「在终端打开会话」已验证同模式）。[DreaminaLoginDialog](apps/desktop/src/components/DreaminaLoginDialog.tsx)（约定 13 Modal）：第 1 步主按钮「打开终端登录」调该命令（+「复制命令」兜底）→ 第 2 步终端内扫码/浏览器授权 → 第 3 步回 app「重新检测」（`user_credit` 动态验证）。端到端实测通过。
 
-> **首版兜底**：也可让用户自己在终端 `dreamina login`（最省事），app 只检测 `credential.json` + `user_credit` 登录态——与 codex onboarding 早期做法一致，in-app OAuth 引导后续再补。
+**未采用的方案 B**（纯 in-app 不弹终端）：`dreamina login --headless` 打印 verification_uri/user_code/device_code 后退出（不依赖 TTY）→ app 内展示短码 + 链接 → 用户授权后 `dreamina login checklogin --device_code=<code> --poll=N` 补完写 token。UX 更好，但 device_code 时序敏感（曾踩「过期」，需立即回传 + 倒计时 + 过期自动重发自愈）+ headless 输出格式 / checklogin 在 app spawn 写 token 未实测，且即梦登录一次性、方案 A 已够用。保留 dead 的 `dreamina_login`/`dreamina_check_login` 命令备方案 B 复用。
 
 ### 7.5 dreamina_health 检测（对称 codex_health）
 
-照 [codex.rs](apps/desktop/src-tauri/src/commands/codex.rs) `codex_health`（查二进制 + auth.json）对称写：
+照 [codex.rs](apps/desktop/src-tauri/src/commands/codex.rs) `codex_health`（查二进制 + auth.json）对称写，但**登录态用动态 ping 而非查文件**（token 走 authsdk store 非文件，§3.5）：
 
 ```rust
 pub async fn dreamina_health(...) -> Health {
-    // 1. 二进制存在 → resolve_dreamina_binary().is_some()
-    //    否则 reason = "未安装 dreamina CLI（运行 curl -s https://jimeng.jianying.com/cli | bash）"
-    // 2. 登录态 → ~/.dreamina_cli/credential.json 存在
-    //    否则 reason = "未登录（运行 dreamina login）"
-    // 3. 可选 ping → spawn dreamina user_credit，返回 JSON = token 有效
-    //    失败 reason = "登录态可能过期，请 dreamina relogin"
+    // 1. 二进制可执行 → spawn `dreamina version` success
+    //    否则 reason = "未检测到 dreamina CLI（运行 curl -s https://jimeng.jianying.com/cli | bash 安装）"
+    // 2. 登录态 → spawn `dreamina user_credit`，exit 0 + stdout 含 total_credit/user_id/vip_level = 已登录
+    //    否则 reason = "dreamina 未登录（运行 dreamina login）"
 }
 ```
+
+> 实测要点：**不要**静态查 `~/.dreamina_cli/credential.json`（该文件不存在，§3.5）。`user_credit` 动态 ping 是唯一准的登录态判据（Phase 3 踩坑纠正）。登录引导见 §7.4（拉起终端）。
 
 未就绪时按约定 7 置灰生成按钮 + 显 reason（跟 codex 一致）。
 
