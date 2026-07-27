@@ -4,9 +4,11 @@
 
 ## 1. 修改范围与组织方式
 
-- 原始项目目录中的源码没有被直接改写。
-- 所有手写的 Windows 适配文件都位于根目录 `Windows/`。
-- `Windows/prepare.ps1` 会把原项目复制到 `Windows/.work/`，再用 `Windows/overrides/` 中的文件覆盖对应路径。
+> **2026-07-27 当前状态**：Windows 平台行为已经全部并入 canonical 主源码；`Windows/overrides/` 的源码、扩展和 workspace payload 已删除，只保留退役说明。下文带 `Windows/overrides/...` 的路径是历史适配记录，不再是现行构建输入。
+
+- Windows 与 macOS 共用 `apps/desktop/`、`apps/extension/` 和根 workspace 配置。
+- 平台差异以可移植实现或小范围 `#[cfg(target_os = "...")]` 维护，不再整文件覆盖。
+- `Windows/prepare.ps1` 会把 canonical 项目复制到 `Windows/.work/`，不再应用 override。
 - `Windows/.work/` 和 `Windows/.cargo-target-*` 是生成目录，不是手写源码。
 - `Windows/dist/` 存放最终 Windows 安装包。
 - `Windows/extension/` 是供 Chrome / Edge 直接“加载已解压的扩展程序”的独立扩展目录。
@@ -17,9 +19,9 @@
 
 - 检查 Node.js、pnpm、Rust 和 Cargo 是否可用。
 - 强制要求 Rust 使用 Windows MSVC target，避免 GNU/MSVC 工具链混用。
-- 使用 `robocopy` 将仓库复制到 `Windows/.work/`。
+- 使用 `robocopy` 将 canonical 仓库复制到 `Windows/.work/`。
 - 排除 `.git`、`Windows`、`node_modules`、`target`、`dist` 和 `AGENTS.md`，避免递归复制和污染工作目录。
-- 将 `Windows/overrides/` 覆盖到临时工作树。
+- 不再应用 `Windows/overrides/`；`.work` 直接使用 canonical 源码。
 - 支持 `-Clean` 重建工作树。
 
 ### `Windows/dev.ps1`
@@ -47,18 +49,22 @@
 
 ## 3. pnpm 在 Windows 上的兼容调整
 
-### `Windows/overrides/package.json`
+> **当前实现**：版本和构建脚本许可都维护在 canonical 根配置，不再保留 Windows 副本。
+
+### 根 `package.json`
 
 - 固定 `packageManager` 为 `pnpm@11.10.0`，使 Corepack 和构建环境使用一致版本。
 
-### `Windows/overrides/pnpm-workspace.yaml`
+### 根 `pnpm-workspace.yaml`
 
-- 将 pnpm 11 的 `allowBuilds.esbuild` 设置为 `true`。
-- 允许 esbuild 执行安装阶段的平台二进制准备，避免 Windows 前端构建缺少 esbuild 可执行文件。
+- 使用 pnpm 11 的 `allowBuilds.esbuild: true`。
+- 允许 esbuild 执行安装阶段的平台二进制准备；该配置取代旧的 `onlyBuiltDependencies` 与 placeholder `allowBuilds`。
 
 ## 4. Codex CLI Windows 适配
 
-### `Windows/overrides/apps/desktop/src-tauri/src/codex/codex_cli.rs`
+> 本节能力已并入 canonical [codex_cli.rs](../apps/desktop/src-tauri/src/codex/codex_cli.rs) 与 [commands/codex.rs](../apps/desktop/src-tauri/src/commands/codex.rs)；以下旧 override 路径仅用于追溯最初实现。
+
+### 历史：`Windows/overrides/apps/desktop/src-tauri/src/codex/codex_cli.rs`
 
 - 新增 Codex 可执行文件解析：
   - 支持 `BOWERBIRD_CODEX_BINARY` 显式指定。
@@ -76,7 +82,7 @@
 - Codex 超时时主动终止子进程，并把 stderr 摘要返回给前端。
 - Codex 未生成图片时返回明确错误，并附带文字回复摘要，不再只显示笼统“生成失败”。
 
-### `Windows/overrides/apps/desktop/src-tauri/src/commands/codex.rs`
+### 历史：`Windows/overrides/apps/desktop/src-tauri/src/commands/codex.rs`
 
 - Codex 健康检查改用 Windows 可执行文件解析和 Windows 用户目录。
 - 修正生成取消句柄的清理位置，保证生成 future 结束时及时移除旧句柄。
@@ -131,14 +137,16 @@
 - 说明 `save_blob + 二进制帧` 协议。
 - 说明修改扩展后必须在扩展管理页重新加载，并刷新待采集网页。
 
-### `Windows/overrides/apps/extension/`
+### `Windows/overrides/apps/extension/`（已退役）
 
-- 保存与 `Windows/extension/` 功能相同的 `manifest.json`、`background.js`、`content.js`。
-- `prepare.ps1` 会将它们覆盖到 Windows 工作树中的原扩展目录。
+- 该第三份扩展镜像已删除，不再由 `prepare.ps1` 覆盖。
+- canonical `apps/extension/` 保留 `save_batch` 结构化 URL 采集；`Windows/extension/` 是可独立加载的 `save_blob + binary` 版本。
 
 ## 6. 桌面端采集服务与入库修复
 
-### `Windows/overrides/apps/desktop/src-tauri/src/collect/ws_server.rs`
+> **2026-07-27 当前实现**：下述能力已并入 canonical [ws_server.rs](../apps/desktop/src-tauri/src/collect/ws_server.rs) 与 [ingest.rs](../apps/desktop/src-tauri/src/core/ingest.rs)，旧 Rust override 已删除。服务端统一保留 `save_batch` 和 `save_blob + binary` 两条协议。
+
+### 历史：`Windows/overrides/apps/desktop/src-tauri/src/collect/ws_server.rs`
 
 - WebSocket 增加 `save_blob` 协议。
 - 文本帧保存图片元数据，紧随其后的二进制帧作为图片内容。
@@ -151,7 +159,7 @@
 - 保留旧 URL 下载协议以兼容旧版扩展，并把页面 URL 作为 Referer 传入。
 - 增加 `save_batch` 协议分支：主线扩展（含小红书结构化采集）批量提交 `save_batch`，override 原先只认 `save_blob` 会回 `unknown type`。现在逐项走 URL 下载入库（适用 xhscdn 等公开图床），响应对齐主线 `{ok, saved, total, results}`；`save_blob` 通路保留，按扩展协议自动分流。
 
-### `Windows/overrides/apps/desktop/src-tauri/src/core/ingest.rs`
+### 历史：`Windows/overrides/apps/desktop/src-tauri/src/core/ingest.rs`
 
 - 旧 URL 下载器增加：
   - 45 秒超时。
@@ -175,8 +183,8 @@
 
 ## 7. 桌面端新用户体验与采集可见性
 
-> **2026-07-20 更新**：本节所述四个前端 override（`store.ts` / `App.tsx` / `Toolbar.tsx` / `WelcomePanel.tsx`）已**删除**，其差异化功能（扩展连接状态 `extensionConnected`、采集提示 `collectedNotice`、环境状态面板）已并入主项目源码（`apps/desktop/src/store.ts` / `App.tsx` / `components/SettingsDialog.tsx` / `Toolbar.tsx`）。
-> 原因：主项目 store 演进（presets / colorRebuild 进 store / 删 boardPickMode / startGeneration 改签名）后，整文件覆盖式 override 与主项目分叉，导致 `.work` 里「主项目新组件 + override 旧 store」类型对不上、`tsc` 失败。codex / ingest 等 Rust override 不受影响、保留；ws_server override 因主线新增 `save_batch` 协议曾导致小红书采集报 `unknown type`，已在 override 侧补齐 `save_batch` 分支（见 §6）。
+> **2026-07-20 历史更新**：本节所述四个前端 override（`store.ts` / `App.tsx` / `Toolbar.tsx` / `WelcomePanel.tsx`）已删除，其差异化功能已经并入主项目源码。
+> **2026-07-27 当前状态**：剩余 Rust/扩展/workspace override 也已并入或由 canonical 实现取代；`prepare.ps1` 不再应用任何 override。下列路径仅作历史追溯。
 
 ### `Windows/overrides/apps/desktop/src/App.tsx`
 
@@ -229,6 +237,8 @@
 - 安装器、卸载器与应用本体均使用新的 Bowerbird Logo；安装包尚未做 Authenticode 代码签名。
 
 ## 9. 验证结果
+
+> 以下安装包与 release 构建结果是 **2026-07-20 的历史验证**，不代表自动包含 2026-07-27 的 canonical 收敛改动。
 
 - 插件 `content.js` 和 `background.js` 已通过 `node --check`。
 - 两份扩展 Manifest 均可正常解析。

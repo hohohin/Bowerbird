@@ -220,6 +220,89 @@ pub fn ingest_dir(paths: &LibraryPaths, db: &Database, dir: &Path) -> AppResult<
     Ok(assets)
 }
 
+/// 浏览器扩展已经在浏览器登录态内取到图片字节；桌面端只负责落临时文件并走标准入库。
+/// 这条路径避免桌面端二次下载丢失 Cookie / 授权头 / 页面会话。
+pub fn ingest_from_bytes(
+    paths: &LibraryPaths,
+    db: &Database,
+    bytes: &[u8],
+    source_url: &str,
+    file_name: Option<&str>,
+    content_type: Option<&str>,
+) -> AppResult<Asset> {
+    if bytes.is_empty() {
+        return Err(AppError::Media("extension uploaded an empty image".into()));
+    }
+
+    // URL、文件名和 Content-Type 都可能撒谎（拖拽页面链接时甚至会返回 HTML）。
+    // 以实际字节能否解码为准，同时用真实格式决定库内扩展名。
+    let ext = uploaded_image_extension(bytes, content_type)?;
+    let safe_stem = file_name
+        .and_then(|name| Path::new(name).file_stem().and_then(|s| s.to_str()))
+        .map(|stem| {
+            stem.chars()
+                .filter(|c| !matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'))
+                .take(80)
+                .collect::<String>()
+        })
+        .filter(|stem| !stem.trim().is_empty())
+        .unwrap_or_else(|| "extension-image".to_string());
+
+    let tmp_dir = std::env::temp_dir().join(format!("bowerbird-upload-{}", Ulid::new()));
+    fs::create_dir_all(&tmp_dir)?;
+    let source_path = tmp_dir.join(format!("{safe_stem}.{ext}"));
+    fs::write(&source_path, bytes)?;
+
+    let result = (|| -> AppResult<Asset> {
+        let mut asset = ingest_file(paths, db, &source_path)?;
+        let conn = db.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE assets SET source='extension', source_url=?1 WHERE id=?2",
+            rusqlite::params![source_url, asset.id],
+        )?;
+        asset.source = Some("extension".to_string());
+        asset.source_url = Some(source_url.to_string());
+        Ok(asset)
+    })();
+    let _ = fs::remove_dir_all(&tmp_dir);
+    result
+}
+
+fn uploaded_image_extension(bytes: &[u8], content_type: Option<&str>) -> AppResult<&'static str> {
+    let is_svg = content_type
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("image/svg+xml"));
+    if is_svg {
+        let text = std::str::from_utf8(bytes)
+            .map_err(|_| AppError::Media("browser returned invalid SVG bytes".into()))?;
+        if text.trim_start().starts_with("<svg") || text.contains("<svg") {
+            return Ok("svg");
+        }
+        return Err(AppError::Media(
+            "browser response says SVG but contains no SVG".into(),
+        ));
+    }
+
+    let format = image::guess_format(bytes).map_err(|_| {
+        AppError::Media("browser returned content that is not a supported image".into())
+    })?;
+    let ext = match format {
+        image::ImageFormat::Jpeg => "jpg",
+        image::ImageFormat::Png => "png",
+        image::ImageFormat::WebP => "webp",
+        image::ImageFormat::Gif => "gif",
+        image::ImageFormat::Bmp => "bmp",
+        _ => {
+            return Err(AppError::Media(format!(
+                "browser returned unsupported image format: {format:?}"
+            )))
+        }
+    };
+    image::load_from_memory_with_format(bytes, format)
+        .map_err(|error| AppError::Media(format!("browser returned undecodable image: {error}")))?;
+    Ok(ext)
+}
+
 const MAX_DOWNLOAD_BYTES: u64 = 50 * 1024 * 1024;
 
 pub fn download_client() -> Result<reqwest::Client, reqwest::Error> {
@@ -413,7 +496,8 @@ mod tests {
     use super::*;
     use crate::core::paths::LibraryPaths;
     use crate::db::Database;
-    use image::{ImageBuffer, Rgb};
+    use image::{DynamicImage, ImageBuffer, ImageFormat, Rgb};
+    use std::io::Cursor;
     use ulid::Ulid;
 
     struct Tmp {
@@ -449,6 +533,77 @@ mod tests {
             ])
         });
         img.save(path).unwrap();
+    }
+
+    fn png_bytes(w: u32, h: u32, rgb: [u8; 3]) -> Vec<u8> {
+        let image = DynamicImage::ImageRgb8(ImageBuffer::from_pixel(w, h, Rgb(rgb)));
+        let mut bytes = Cursor::new(Vec::new());
+        image.write_to(&mut bytes, ImageFormat::Png).unwrap();
+        bytes.into_inner()
+    }
+
+    #[test]
+    fn uploaded_bytes_use_real_format_and_extension_source() {
+        let (_tmp, paths, db) = setup();
+        let bytes = png_bytes(32, 24, [12, 34, 56]);
+
+        let asset = ingest_from_bytes(
+            &paths,
+            &db,
+            &bytes,
+            "https://example.com/image-without-extension",
+            Some("claimed.webp"),
+            Some("image/webp"),
+        )
+        .unwrap();
+
+        assert_eq!(asset.ext.as_deref(), Some("png"));
+        assert_eq!(asset.width, Some(32));
+        assert_eq!(asset.height, Some(24));
+        assert_eq!(asset.source.as_deref(), Some("extension"));
+        assert_eq!(
+            asset.source_url.as_deref(),
+            Some("https://example.com/image-without-extension")
+        );
+        assert!(asset
+            .store_path
+            .as_deref()
+            .is_some_and(|path| path.ends_with(".png")));
+        assert_eq!(db.count_assets().unwrap(), 1);
+    }
+
+    #[test]
+    fn uploaded_bytes_reject_empty_html_and_fake_svg() {
+        let (_tmp, paths, db) = setup();
+
+        assert!(ingest_from_bytes(
+            &paths,
+            &db,
+            &[],
+            "https://example.com/empty",
+            None,
+            Some("image/png"),
+        )
+        .is_err());
+        assert!(ingest_from_bytes(
+            &paths,
+            &db,
+            b"<!doctype html><title>login</title>",
+            "https://example.com/login",
+            Some("image.jpg"),
+            Some("text/html"),
+        )
+        .is_err());
+        assert!(ingest_from_bytes(
+            &paths,
+            &db,
+            b"not actually svg",
+            "https://example.com/fake.svg",
+            Some("fake.svg"),
+            Some("image/svg+xml"),
+        )
+        .is_err());
+        assert_eq!(db.count_assets().unwrap(), 0);
     }
 
     #[test]
@@ -504,7 +659,11 @@ mod tests {
         make_gradient(&tmp.dir.join("c.png"), 200);
 
         let assets = ingest_dir(&paths, &db, &tmp.dir).unwrap();
-        assert_eq!(assets.len(), 3, "three distinct images should all be ingested");
+        assert_eq!(
+            assets.len(),
+            3,
+            "three distinct images should all be ingested"
+        );
         assert_eq!(db.count_assets().unwrap(), 3);
     }
 
@@ -517,14 +676,26 @@ mod tests {
         let asset = ingest_file(&paths, &db, &img_path).unwrap();
         let store = asset.store_path.clone().unwrap();
         let thumb = asset.thumb_path.clone().unwrap();
-        assert!(Path::new(&store).exists(), "store file should exist before delete");
-        assert!(Path::new(&thumb).exists(), "thumb file should exist before delete");
+        assert!(
+            Path::new(&store).exists(),
+            "store file should exist before delete"
+        );
+        assert!(
+            Path::new(&thumb).exists(),
+            "thumb file should exist before delete"
+        );
 
         db.delete_asset(&asset.id).unwrap();
 
         assert_eq!(db.count_assets().unwrap(), 0, "db row should be gone");
-        assert!(!Path::new(&store).exists(), "store file should be physically deleted");
-        assert!(!Path::new(&thumb).exists(), "thumb file should be physically deleted");
+        assert!(
+            !Path::new(&store).exists(),
+            "store file should be physically deleted"
+        );
+        assert!(
+            !Path::new(&thumb).exists(),
+            "thumb file should be physically deleted"
+        );
     }
 
     #[test]
