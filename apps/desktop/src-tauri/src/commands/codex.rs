@@ -5,14 +5,18 @@
 //! 流式：通过 event `codex://chunk` 推 Chunk（Delta / Done / Error）。
 
 use std::path::PathBuf;
+use std::process::Stdio;
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::mpsc;
 use ulid::Ulid;
 
-use crate::codex::codex_cli::{codex_command, codex_home, resolve_codex_binary, CodexCliProvider};
+use crate::codex::codex_cli::{
+    codex_command, codex_home, npm_command, resolve_codex_binary, resolve_npm_binary, CodexCliProvider,
+};
 use crate::codex::types::{Chunk, CodexRequest, CodexResult};
 use crate::codex::CodexProvider;
 use crate::core::caption;
@@ -68,6 +72,200 @@ pub async fn codex_health() -> Result<CodexHealth, AppError> {
         ok: true,
         reason: String::new(),
     })
+}
+
+/// 当前安装/登录引导的取消信号（与反推 `DESCRIBE_CANCEL` / 生成 `GENERATE_CANCEL` 独立；
+/// onboarding 顺序执行，不会并发）。
+static SETUP_CANCEL: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>> =
+    std::sync::Mutex::new(None);
+
+/// 一键安装 codex CLI（`codex exec` 主线零改动，仅替代用户手敲 `npm install -g`）：
+/// 找 npm（找不到 = Node 未装，返回 reason 让前端引导装 Node）→ spawn
+/// `npm install -g @openai/codex`（Windows 经 cmd.exe + CREATE_NO_WINDOW 不弹黑窗），
+/// 逐行 stdout/stderr 经 `codex://setup-progress` 推前端。跑完复查 codex 二进制是否就位。
+/// 可取消（`kill_on_drop` + `SETUP_CANCEL`）。成功 emit `codex://health-changed` 让各处自刷新。
+#[tauri::command]
+pub async fn codex_install(app: AppHandle) -> Result<CodexHealth, AppError> {
+    // npm 找不到 = Node 未装（npm 随 Node 附带）。返回 reason 让前端引导装 Node。
+    let npm = match resolve_npm_binary() {
+        Some(n) => n,
+        None => {
+            return Ok(CodexHealth {
+                ok: false,
+                reason: "未检测到 Node.js / npm，请先安装 Node（npm 随 Node 附带）".into(),
+            })
+        }
+    };
+
+    let mut cmd = npm_command(&npm, &["install", "-g", "@openai/codex"]);
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    let mut child = cmd.spawn().map_err(|e| {
+        AppError::Codex(format!("启动 npm 失败: {e}"))
+    })?;
+
+    // 逐行读 stdout + stderr → emit 进度（两个 task 并发读，互不阻塞）。
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let app_out = app.clone();
+    let stdout_task = tokio::spawn(async move {
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        let mut lines: Vec<String> = Vec::new();
+        if let Some(out) = stdout {
+            let mut r = BufReader::new(out).lines();
+            while let Ok(Some(line)) = r.next_line().await {
+                let _ = app_out.emit(
+                    "codex://setup-progress",
+                    serde_json::json!({ "stage": "install", "line": line }),
+                );
+                lines.push(line);
+            }
+        }
+        lines
+    });
+    let app_err = app.clone();
+    let stderr_task = tokio::spawn(async move {
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        let mut lines: Vec<String> = Vec::new();
+        if let Some(e) = stderr {
+            let mut r = BufReader::new(e).lines();
+            while let Ok(Some(line)) = r.next_line().await {
+                let _ = app_err.emit(
+                    "codex://setup-progress",
+                    serde_json::json!({ "stage": "install", "line": line }),
+                );
+                lines.push(line);
+            }
+        }
+        lines
+    });
+
+    let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
+    SETUP_CANCEL.lock().unwrap().replace(cancel_tx);
+
+    // 等退出（180s 超时 + 可取消；任一分支 return 后 child drop → kill_on_drop 终止 npm）。
+    let status = tokio::select! {
+        r = tokio::time::timeout(Duration::from_secs(180), child.wait()) => match r {
+            Ok(s) => s.map_err(|e| AppError::Codex(format!("等待 npm 失败: {e}")))?,
+            Err(_) => return Err(AppError::Codex("npm 安装超时（180s），请重试或检查网络".into())),
+        },
+        _ = &mut cancel_rx => return Err(AppError::Codex("已取消".into())),
+    };
+    SETUP_CANCEL.lock().unwrap().take();
+    let stdout_lines = stdout_task.await.unwrap_or_default();
+    let stderr_lines = stderr_task.await.unwrap_or_default();
+
+    if !status.success() {
+        // npm 的错误常打在 stdout（进度/错误混合），stderr 可能空；两者拼起来才看得到真因。
+        let combined = format!("{}\n{}", stdout_lines.join("\n"), stderr_lines.join("\n"));
+        let tail: String = combined.trim().chars().take(500).collect();
+        return Ok(CodexHealth {
+            ok: false,
+            reason: format!("npm 安装失败（退出 {}）| {tail}", status),
+        });
+    }
+    // 复查 codex 二进制是否就位（npm 装完应出现在 %APPDATA%\npm 或 PATH）。
+    if resolve_codex_binary().is_none() {
+        return Ok(CodexHealth {
+            ok: false,
+            reason: "npm 安装已完成但未找到 codex，请重启应用使其进入 PATH".into(),
+        });
+    }
+    let _ = app.emit("codex://health-changed", ());
+    Ok(CodexHealth {
+        ok: true,
+        reason: String::new(),
+    })
+}
+
+/// 一键 OAuth 登录：spawn `codex login`（codex 自己开系统浏览器走 ChatGPT 授权），
+/// 等其退出后复查 `~/.codex/auth.json`。可取消（300s 超时 + `kill_on_drop`）。
+/// 成功 emit `codex://health-changed` 让各处自刷新。
+#[tauri::command]
+pub async fn codex_login(app: AppHandle) -> Result<CodexHealth, AppError> {
+    let binary = resolve_codex_binary().ok_or_else(|| {
+        AppError::Codex("未检测到 codex CLI，请先点「安装 codex CLI」".into())
+    })?;
+    let mut cmd = codex_command(&binary);
+    cmd.arg("login");
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    let mut child = cmd.spawn().map_err(|e| {
+        AppError::Codex(format!("启动 codex login 失败: {e}"))
+    })?;
+
+    // codex login 会自己打开浏览器；提示用户去浏览器完成授权。
+    let _ = app.emit(
+        "codex://setup-progress",
+        serde_json::json!({ "stage": "login", "line": "请在打开的浏览器中登录 ChatGPT…" }),
+    );
+
+    // 排空 stdout/stderr（device code / 提示可能打到 stdout），供失败诊断。
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let drain = tokio::spawn(async move {
+        use tokio::io::AsyncReadExt;
+        let mut buf = Vec::new();
+        if let Some(mut s) = stdout {
+            let _ = s.read_to_end(&mut buf).await;
+        }
+        if let Some(mut s) = stderr {
+            let _ = s.read_to_end(&mut buf).await;
+        }
+        String::from_utf8_lossy(&buf).to_string()
+    });
+
+    let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
+    SETUP_CANCEL.lock().unwrap().replace(cancel_tx);
+
+    let status = tokio::select! {
+        r = tokio::time::timeout(Duration::from_secs(300), child.wait()) => match r {
+            Ok(s) => s.map_err(|e| AppError::Codex(format!("等待 codex login 失败: {e}")))?,
+            Err(_) => return Err(AppError::Codex("codex login 超时（300s），请重试".into())),
+        },
+        _ = &mut cancel_rx => return Err(AppError::Codex("已取消".into())),
+    };
+    SETUP_CANCEL.lock().unwrap().take();
+    let drain_str = drain.await.unwrap_or_default();
+
+    if !status.success() {
+        let head: String = drain_str.trim().chars().take(500).collect();
+        return Ok(CodexHealth {
+            ok: false,
+            reason: format!("codex login 退出 {} | {head}", status),
+        });
+    }
+    // 复查 auth.json（复用 codex_health 的登录态判定）。
+    let logged_in = codex_home()
+        .map(|h| {
+            let p = h.join("auth.json");
+            std::fs::metadata(&p).map(|m| m.len() > 0).unwrap_or(false)
+        })
+        .unwrap_or(false);
+    if !logged_in {
+        return Ok(CodexHealth {
+            ok: false,
+            reason: "codex login 已结束但未检测到登录态；可重试，或手动在终端跑一次 codex login".into(),
+        });
+    }
+    let _ = app.emit("codex://health-changed", ());
+    Ok(CodexHealth {
+        ok: true,
+        reason: String::new(),
+    })
+}
+
+/// 取消正在进行的安装 / 登录（`codex_install` / `codex_login`）。无任务在跑则空操作。
+#[tauri::command]
+pub async fn cancel_codex_setup() -> Result<(), AppError> {
+    if let Some(tx) = SETUP_CANCEL.lock().unwrap().take() {
+        let _ = tx.send(());
+    }
+    Ok(())
 }
 
 /// 为单个资产生成提示词并写回 asset_prompts（批量由前端循环）。
@@ -383,6 +581,53 @@ pub async fn cancel_codex_create() -> Result<(), AppError> {
         let _ = tx.send(());
     }
     Ok(())
+}
+
+/// `[spike]` OpenAI API 生图（非 codex CLI）：调 OpenAI Images API（`gpt-image-1`），
+/// `b64_json` 落盘后 `ingest_generated` 进库为正式资产、进瀑布流。
+///
+/// **spike 性质**：不接 `CodexProvider` trait、不加 UI、不存 `generation_meta`；
+/// devtools invoke 触发验证。需设 `OPENAI_API_KEY`（可选 `OPENAI_BASE_URL` / `HTTPS_PROXY`）。
+/// `reference_images` 空 → `/images/generations`（纯文）；非空 → `/images/edits`（带参考图，≤16）。
+/// 跑通后正式整合（settings + provider 抽象 + UI）是独立后续工作，详见 plans/spike。
+#[tauri::command]
+pub async fn openai_spike_generate_image(
+    app: AppHandle,
+    db: State<'_, Arc<Database>>,
+    paths: State<'_, Arc<LibraryPaths>>,
+    prompt: String,
+    reference_images: Vec<String>,
+    n: Option<u32>,
+    size: Option<String>,
+    quality: Option<String>,
+) -> Result<Vec<String>, AppError> {
+    let req = crate::codex::openai_api::OpenAiImageReq {
+        prompt,
+        reference_images: reference_images.into_iter().map(PathBuf::from).collect(),
+        n: n.unwrap_or(1),
+        size: size.unwrap_or_else(|| "1024x1024".to_string()),
+        quality: quality.unwrap_or_else(|| "auto".to_string()),
+        model: String::new(), // 空 → 默认 gpt-image-1
+    };
+    let srcs = crate::codex::openai_api::generate_images(req).await?;
+
+    let dbw = db.inner().clone();
+    let pw = paths.inner().clone();
+    let ids: Vec<String> = tokio::task::spawn_blocking(
+        move || -> Result<Vec<String>, AppError> {
+            let mut out = Vec::new();
+            for src in &srcs {
+                let asset = crate::core::ingest::ingest_generated(&pw, &dbw, src, None)?;
+                out.push(asset.id);
+            }
+            Ok(out)
+        },
+    )
+    .await
+    .map_err(|e| AppError::Other(e.to_string()))??;
+
+    let _ = app.emit("library://assets-changed", ());
+    Ok(ids)
 }
 
 /// 把生成会话的 prompt 链转成 caption 正文：从中识别 `【维度】：正文` 片段（创作板序列化时由

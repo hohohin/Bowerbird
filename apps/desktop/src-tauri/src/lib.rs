@@ -104,6 +104,10 @@ pub fn run() {
             commands::codex::codex_create_image,
             commands::codex::cancel_codex_create,
             commands::codex::open_codex_session,
+            commands::codex::openai_spike_generate_image,
+            commands::codex::codex_install,
+            commands::codex::codex_login,
+            commands::codex::cancel_codex_setup,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

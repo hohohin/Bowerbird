@@ -23,9 +23,9 @@
 
 ## 目前进展
 
-> 更新时间：2026-07-18
+> 更新时间：2026-07-29
 
-**当前阶段：1.0 功能路径打通 + v1 范围扩展到生成（⑥）+ 创作板 UI 已实现（2026-07-18 重写为 ProseMirror）。** 详情页「反推」真正看图（codex CLI + gpt-5.5，ChatGPT 订阅，绕过 API quota）；FTS5 文件名搜索可用；**创作板（真实 prompt 文本编辑器 + @ 选图）已落地**（[CreationBoard.tsx](apps/desktop/src/components/CreationBoard.tsx)）；**生成（⑥）纳入 v1**，待 spike 验证 codex CLI 的画图能力。
+**当前阶段：1.0 功能路径打通 + v1 范围扩展到生成（⑥）+ 创作板 UI 已实现（2026-07-18 重写为 ProseMirror）+ codex CLI 隐形（2026-07-29，首启一键安装/OAuth 登录，用户不碰终端）。** 详情页「反推」真正看图（codex CLI + gpt-5.5，ChatGPT 订阅，绕过 API quota）；FTS5 文件名搜索可用；**创作板（真实 prompt 文本编辑器 + @ 选图）已落地**（[CreationBoard.tsx](apps/desktop/src/components/CreationBoard.tsx)）；**生成（⑥）纳入 v1**，待 spike 验证 codex CLI 的画图能力。
 
 **源码树（按开发计划 §7）：** `apps/desktop/{src, src-tauri}`、`apps/extension/`、`packages/shared/`。常用命令：`pnpm install`、`pnpm tauri dev`、`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml`。
 
@@ -78,6 +78,10 @@
 
 - **图片浏览缩放交互统一（2026-07-18）**：所有「看大图」场景统一为成熟图片查看器交互——**滚轮以光标为锚点缩放（zoom-to-cursor）+ 按住拖动平移（grab/grabbing 光标）+ 双击 1x↔2x 切换**，换图自动 reset。新增 [useImageZoom.ts](apps/desktop/src/lib/useImageZoom.ts) hook 供 [Lightbox.tsx](apps/desktop/src/components/Lightbox.tsx) 与 [AssetDetail.tsx](apps/desktop/src/components/AssetDetail.tsx) 大图共用：transform `translate+scale`，zoom-to-cursor 数学 `tx'=tx+C·(1-k)`（C=鼠标相对当前 imgRect 中心、k=s'/s）；wheel 走原生 `addEventListener` + `passive:false` 才能 preventDefault 阻止页面滚动（React onWheel 在部分浏览器为 passive、preventDefault 无效）；拖动 move/up 挂 window，拖出元素仍跟手。视频保留 `<video controls>` 不缩放；AssetDetail 容器 `overflow-auto`→`overflow-hidden`（平移走 transform 不用滚动条）。瀑布流缩略图不纳入（网格导航，滚轮应滚动列表）。
 
+- **OpenAI API 生图 spike（备选路线，2026-07-28）**：探索不走 codex CLI、改走 OpenAI Images API 生图（`gpt-image-1`，`/v1/images/generations` 纯文 + `/v1/images/edits` 带 ≤16 参考图，返回 `b64_json` 落盘走 `ingest_generated`）。新增 [codex/openai_api.rs](apps/desktop/src-tauri/src/codex/openai_api.rs) + `openai_spike_generate_image` command（devtools invoke 触发，未接 UI）。**未接入主线**——经可行性研究确认 ChatGPT 订阅额度**不对第三方 API 开放**、codex CLI 是 OpenAI 给的唯一合法订阅通道，故转向「CLI 隐形」（下条）而非换 provider；此 spike 留作 codex CLI 不可用 / 用户有 API key 时的备选。
+
+- **codex CLI 隐形 · B 升级（2026-07-29）**：首启引导从「复制命令让用户去终端跑」升级为 **app 内一键执行**——step1 `codex_install`（spawn `npm install -g @openai/codex`，逐行 stdout/stderr 经 `codex://setup-progress` 流式，Windows 含空格 npm.cmd 路径走 `raw_arg`，见踩坑）+ step2 `codex_login`（spawn `codex login`，codex 自己开系统浏览器走 ChatGPT OAuth → 写 `~/.codex/auth.json`）。**用户全程不碰终端**。后端 spawn 走 `tokio::process::Command`（**不受 Tauri shell scope 限制**，capabilities 零改动）。Node/npm 缺失返回 reason，前端给「打开 Node 官网」按钮。安装/登录成功 emit `codex://health-changed`，App + AssetDetail 各自监听重取 codexHealth（修 AssetDetail 独立 useState 不同步，见踩坑）。新增 [codex_cli.rs](apps/desktop/src-tauri/src/codex/codex_cli.rs) `resolve_npm_binary`/`npm_command`、[commands/codex.rs](apps/desktop/src-tauri/src/commands/codex.rs) `codex_install`/`codex_login`/`cancel_codex_setup`、[api.ts](apps/desktop/src/lib/api.ts) 对应封装、[CodexOnboarding.tsx](apps/desktop/src/components/CodexOnboarding.tsx) 改造（复制→执行 + 进度/状态/可取消）、[App.tsx](apps/desktop/src/App.tsx)/[AssetDetail.tsx](apps/desktop/src/components/AssetDetail.tsx) 加 health-changed listener。顺带清 [Toolbar.tsx](apps/desktop/src/components/Toolbar.tsx) 的 SettingsDialog 死引用（vite 拦死引用，见踩坑）。**端到端实测跑通**：一键安装（npm 进度流式 → ✓）→ 一键登录（浏览器 OAuth → ✓）→ onboarding 自动关。
+
 **测试：** `cargo test` 51 通过（导入/去重/多图过滤 + 扩展下载格式识别/本机内网 URL 拒绝 + assemble_pack + FTS5 文件名搜索 + analyses 读写 + caption sections 解析 + list_prompted_assets + 采集即命名 `clean_name`/`split_name_and_desc` + caption 共享模块 + 生成图取图快照差分 `list_new_generated` + 标签 `get_or_create`/`set_asset_tags` source 隔离 + `tag:` 智能查询 + `list_tags_with_count` + 色板 `hex_to_bucket`/`colors_to_buckets` + `asset_colors` 幂等/folder 过滤 + 会话 prompt 链 `generation_prompt_chain` + 生成图 prompt 维度识别 `extract_dim_sections`/`build_generation_caption` + 同流程合并 `collapse_generation_groups`/`list_generation_group` + 收藏夹 `collection_roundtrip_and_guards` + 生成历史回看 `generation_history`）；前端 `tsc --noEmit` 通过；扩展三份 `content.js` / 两份 `background.js` 均通过 `node --check`，三份 Manifest 均通过 JSON 解析。
 
 **未开始 / 待办：**
@@ -124,6 +128,8 @@
 12. **收藏夹是多对多、独立于「文件夹位置」的维度（2026-07-10）**：现有 `assets.folder_id` 是 1对1 位置语义（素材只在一个文件夹，`move_assets_to_folder` = 换位置）；**收藏夹另起一套多对多**——`asset_collections(asset_id, folder_id, created_at)` 关联表 + `folders.kind='collection'` 标识（与 `asset_tags`/`asset_colors` 多对多表对称）。一个素材可同时收进多个收藏夹、`folder_id` 原位置不变。`folders.kind` 三态：`folder`（位置容器）/ `smart`（智能查询）/ `collection`（收藏夹）。入口：详情页 header ☆/★ 按钮（行内 panel 选已有 / 新建）。**凡按 kind 过滤「可放入 `folder_id` 的容器」处，必须正向判 `kind==='folder'`**（排除式 `kind!=='smart'` 会漏掉 collection → 收藏夹污染 folder_id，见踩坑）。
 
 13. **首个 Modal 形态：全屏遮罩（2026-07-10）**：项目此前**无 Dialog/Modal/`fixed` 先例**——唯一的「盖住主区」覆盖层 GenerationPanel 用 `absolute inset-0 z-10`（只盖主区、不盖 Toolbar/Sidebar、无 backdrop）。首启引导页 [CodexOnboarding.tsx](apps/desktop/src/components/CodexOnboarding.tsx) 新立全屏模态：`fixed inset-0 z-50`（盖住整个 app）+ `bg-black/60` 半透明遮罩 + 居中卡片（`bg-panel border border-edge rounded-lg`，项目首个用 box-shadow 的浮层）。组件**自管可见性**（不满足条件直接 `return null`），挂载点 `App.tsx` 最外层 div 内、`<Toolbar>` 前，**无条件渲染** `{<CodexOnboarding />}`；「已看过」flag 不入 store（项目零 zustand persist），照 [AssetDetail.tsx](apps/desktop/src/components/AssetDetail.tsx) 直接读写 `localStorage`（key 前缀 `bowerbird.`）。后续再加 Modal/Dialog/确认框 沿用此形态。
+
+14. **codex CLI 隐形（一键安装 + OAuth 登录）**（2026-07-29）：codex CLI 仍是唯一 provider（约定 1 不变），但用户**无需碰终端**——首启引导（[CodexOnboarding.tsx](apps/desktop/src/components/CodexOnboarding.tsx)）从「复制命令让用户去终端跑」升级为 app 内一键执行：step1 `codex_install`（spawn `npm install -g @openai/codex`，逐行进度经 `codex://setup-progress` 流式）+ step2 `codex_login`（spawn `codex login`，codex 自己开浏览器走 ChatGPT OAuth，写 `~/.codex/auth.json`）。后端 spawn 走 `tokio::process::Command`（**不受 Tauri shell scope 限制**，不改 capabilities）。Node/npm 缺失返回 reason，前端引导装 Node。安装/登录成功 emit `codex://health-changed`，App + AssetDetail 各自监听重取 codexHealth（修 AssetDetail 独立 useState 不同步，见踩坑）。Windows 上 npm.cmd 路径常含空格（`C:\Program Files\nodejs`），`npm_command` 用 `raw_arg` 拼 `cmd /S /C ""path" args"`（详见踩坑）。**备选**：[codex/openai_api.rs](apps/desktop/src-tauri/src/codex/openai_api.rs)（OpenAI Images API 生图，API key 路线，未接入主线）——经研究 ChatGPT 订阅额度不对第三方 API 开放、codex CLI 是唯一合法订阅通道，故走 CLI 隐形而非换 provider。
 
 ---
 
@@ -361,3 +367,22 @@
 - 根因：Tauri 2 [tauri.conf.json](apps/desktop/src-tauri/tauri.conf.json) 的 `app.windows[].dragDropEnabled` **默认 true**，但语义反直觉——true = 「Tauri 原生拖拽启用 **且 HTML5 DnD 被禁用**」：原生层拦截拖拽事件走 `tauri://drag-drop` 用于「文件拖入窗口」，前端 dragover/drop 收不到 → 浏览器判「不允许 drop」显示禁止光标（见 [Issue #14373](https://github.com/tauri-apps/tauri/issues/14373)）。v1 叫 `fileDropEnabled`，v2 改名 `dragDropEnabled`。
 - 解决：项目无任何 Tauri 原生 onDragDrop 用法（导入走对话框 / 扩展采集），把 `app.windows[0].dragDropEnabled` 设 `false` 恢复 HTML5 DnD。**注意是 window 级键**（`app.windows[]` 内），不是 app 顶层。改动需**重启** `pnpm tauri dev` 才生效（tauri.conf.json 不热更新）。
 - 相关文件：[tauri.conf.json](apps/desktop/src-tauri/tauri.conf.json)、[MasonryGrid.tsx](apps/desktop/src/components/MasonryGrid.tsx)、[Sidebar.tsx](apps/desktop/src/components/Sidebar.tsx)。
+
+### npm.cmd 路径含空格 + cmd.exe /C 引号陷阱（2026-07-29）
+- 现象：首启「一键安装」点了立刻报 `npm 安装失败（退出 exit code: 1）`，但终端手敲 `npm install -g @openai/codex` 成功。
+- 根因：用户 npm 本体在 `C:\Program Files\nodejs\npm.cmd`（**路径含空格**）。`npm_command` 用标准 `.arg(binary)` 把含空格路径交给 `cmd.exe /C`——Rust 的 arg 转义（给含空格 arg 加引号）与 cmd 自身引号规则冲突，cmd 把 `C:\Program` 当程序名 → 解析失败 exit 1。codex 没踩坑是因其二进制在 `%APPDATA%\npm\`（无空格）。另：失败 reason 最初只拼 stderr（空），npm 错误实际在 stdout，导致看不到真因。
+- 解决：① `npm_command` 改用 `raw_arg`（`std::os::windows::process::CommandExt`）拼 `cmd /D /S /C ""<binary>" <args>"`——外层引号包整条命令、内层包路径，`/S` 让 cmd 剥外层引号后正确解析含空格路径 + args；args 随 `npm_command(binary, &args)` 构造时传入（不再 `.arg` 追加）。② `codex_install` 失败 reason 同时拼 stdout+stderr（npm 错误常在 stdout）。
+- 教训：Windows 上 spawn 用户机器的 `.cmd`（npm/git/node…）必须假设路径含空格（Program Files），走 `raw_arg` + `/S /C ""path" args"`，别用标准 `.arg`。
+- 相关文件：[codex_cli.rs](apps/desktop/src-tauri/src/codex/codex_cli.rs)（`npm_command`）、[commands/codex.rs](apps/desktop/src-tauri/src/commands/codex.rs)（`codex_install` reason）。
+
+### vite 会拦死引用（不只 tsc）（2026-07-29）
+- 现象：`pnpm tauri dev` 报 `Failed to resolve import "./SettingsDialog" from Toolbar.tsx`，前端白屏。
+- 根因：SettingsDialog 模块之前删 settings 时删了，Toolbar 的 import/state/⚙按钮/渲染漏清成死引用。误判「vite/esbuild 不跑完整 tsc，类型错误不影响 dev」——**错**：vite 的 import-analysis 插件会**实打实解析 import**，模块不存在直接报错白屏，比 `tsc --noEmit` 更硬。
+- 解决：清掉 [Toolbar.tsx](apps/desktop/src/components/Toolbar.tsx) 的 SettingsDialog 残留（import / `useState` / ⚙按钮 / 渲染 + 没用的 `useState` import）。
+- 教训：删模块时 grep 全仓 import 别漏；vite 报 import 错是硬阻塞（白屏），不是 tsc 那种「类型警告不影响 dev」。
+
+### AssetDetail 独立 codexHealth 副本不同步（2026-07-29）
+- 现象：onboarding 一键登录成功后，CreationBoard/GenerationPanel 的置灰按钮（走 store codexHealth）刷新了，但 AssetDetail 反推按钮还置灰（要关重开详情页才刷新）。
+- 根因：[AssetDetail.tsx](apps/desktop/src/components/AssetDetail.tsx) 有独立的 `const [codexHealth, setCodexHealth] = useState(...)`，**不走 store**，登录成功后没人通知它刷新。
+- 解决：`codex_install`/`codex_login` 成功后端 emit `codex://health-changed`；App（写 store）+ AssetDetail（自己的 useState）各自 listen 重取 codexHealth。最小改动（不动 AssetDetail 的 state 结构，只加 listener）。
+- 教训：同一份状态（codexHealth）在多个组件有副本时，变更要广播 event 让所有副本自刷新，否则部分组件展示过期。

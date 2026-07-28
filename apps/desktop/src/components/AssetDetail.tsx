@@ -432,6 +432,20 @@ export function AssetDetail() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
+  // 安装/登录成功后端 emit `codex://health-changed` → 重取，反推按钮置灰态随之刷新
+  // （AssetDetail 的 codexHealth 是独立 useState，不走 store，故自己监听；修同步坑）。
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    let alive = true;
+    listen("codex://health-changed", () => {
+      api.codexHealth().then(setCodexHealth).catch(() => {});
+    }).then((u) => (alive ? (unlisten = u) : u()));
+    return () => {
+      alive = false;
+      unlisten?.();
+    };
+  }, []);
+
   // captions 变化（反推成功 / 删除）后，默认只展开最新一条，其余折叠为摘要。
   useEffect(() => {
     const caps = analyses.filter((a) => a.kind === "caption");

@@ -12,6 +12,7 @@ use self::types::{CodexRequest, CodexResult};
 
 pub mod types;
 pub mod codex_cli;
+pub mod openai_api;
 
 #[async_trait]
 pub trait CodexProvider: Send + Sync {

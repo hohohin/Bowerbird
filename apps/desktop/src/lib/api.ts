@@ -119,6 +119,11 @@ export const api = {
   deleteAnalysis: (id: string) => invoke<void>("delete_analysis", { id }),
   cancelCodexDescribe: () => invoke<void>("cancel_codex_describe"),
   codexHealth: () => invoke<CodexHealth>("codex_health"),
+  // 一键安装 codex CLI / OAuth 登录（让 CLI 对用户隐形，B 升级）。
+  // 进度经 codex://setup-progress {stage:"install"|"login", line} 推；成功后端 emit codex://health-changed。
+  codexInstall: () => invoke<CodexHealth>("codex_install"),
+  codexLogin: () => invoke<CodexHealth>("codex_login"),
+  cancelCodexSetup: () => invoke<void>("cancel_codex_setup"),
   // 创作板「生成」：把最终 prompt + 参考图发 codex（codex exec --image，同反推机制）出图。
   // 流式文本经 codex://chunk（Delta）回；生成图 copy 进 library/generations 后随 Done.images 回。
   // sessionId 非空 → codex exec resume 续接同一会话（多轮迭代修改，codex 记得上一张图）。

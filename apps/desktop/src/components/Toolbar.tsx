@@ -1,8 +1,6 @@
-import { useState } from "react";
 import { useStore } from "../store";
 import { api } from "../lib/api";
 import { CodexStatus } from "./CodexStatus";
-import { SettingsDialog } from "./SettingsDialog";
 
 /** 顶部工具栏：导入 + 搜索 + 批量管理 + 创作板入口。 */
 export function Toolbar({ onRefresh }: { onRefresh: () => Promise<void> }) {
@@ -18,7 +16,6 @@ export function Toolbar({ onRefresh }: { onRefresh: () => Promise<void> }) {
   const genUnread = useStore((s) => s.genUnread);
   const searchQuery = useStore((s) => s.searchQuery);
   const setSearchQuery = useStore((s) => s.setSearchQuery);
-  const [settingsOpen, setSettingsOpen] = useState(false);
 
   async function withBusy(fn: () => Promise<unknown>) {
     setLoading(true);
@@ -80,13 +77,6 @@ export function Toolbar({ onRefresh }: { onRefresh: () => Promise<void> }) {
       <div className="ml-auto flex items-center gap-2">
         <span className="text-xs text-muted">{busy ? "处理中…" : ""}</span>
         <button
-          onClick={() => setSettingsOpen(true)}
-          className="rounded-md bg-panel2 px-3 py-1.5 text-sm text-ink hover:bg-edge"
-          title="设置（环境状态 / 重建色板 / 智能归类）"
-        >
-          ⚙ 设置
-        </button>
-        <button
           onClick={toggleBoard}
           className={`rounded-md px-3 py-1.5 text-sm font-medium ${
             boardOpen
@@ -117,9 +107,6 @@ export function Toolbar({ onRefresh }: { onRefresh: () => Promise<void> }) {
         </button>
         <CodexStatus />
       </div>
-      {settingsOpen && (
-        <SettingsDialog open onClose={() => setSettingsOpen(false)} />
-      )}
     </div>
   );
 }

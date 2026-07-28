@@ -55,11 +55,15 @@ fast_image_resize = "3"
 palette = "0.7"
 
 # 网络（Phase 1 扩展采集下载用；rustls 避免系统 openssl 链接）
+#   multipart：OpenAI Images /v1/images/edits 带参考图生图（spike）需要。
 reqwest = { version = "0.12", default-features = false, features = [
   "rustls-tls",
   "json",
   "stream",
+  "multipart",
 ] }
+# OpenAI gpt-image-1 生图返回 b64_json，解码落盘用（spike）。
+base64 = "0.22"
 # WS Server（接收浏览器扩展采集消息）
 axum = { version = "0.7", features = ["ws"] }
 

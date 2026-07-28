@@ -500,6 +500,76 @@ pub(crate) fn codex_command(binary: &str) -> Command {
     }
 }
 
+/// npm 二进制发现（一键安装 codex CLI 用）：`BOWERBIRD_NPM_BINARY` 显式覆盖；
+/// Windows 先找 `%APPDATA%\npm\npm.{cmd,exe,bat}`（与 codex 同目录，装 Node 后默认在此），
+/// 再扫 PATH；非 Windows 在 PATH 找 `npm`。
+pub(crate) fn resolve_npm_binary() -> Option<String> {
+    if let Ok(explicit) = std::env::var("BOWERBIRD_NPM_BINARY") {
+        if !explicit.trim().is_empty() {
+            return Some(explicit);
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let names = ["npm.exe", "npm.cmd", "npm.bat"];
+        if let Some(appdata) = std::env::var_os("APPDATA") {
+            for name in names {
+                let candidate = PathBuf::from(&appdata).join("npm").join(name);
+                if candidate.is_file() {
+                    return Some(candidate.to_string_lossy().into_owned());
+                }
+            }
+        }
+        if let Some(path) = std::env::var_os("PATH") {
+            for dir in std::env::split_paths(&path) {
+                for name in names {
+                    let candidate = dir.join(name);
+                    if candidate.is_file() {
+                        return Some(candidate.to_string_lossy().into_owned());
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    if let Some(path) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path) {
+            let candidate = dir.join("npm");
+            if candidate.is_file() {
+                return Some(candidate.to_string_lossy().into_owned());
+            }
+        }
+    }
+    None
+}
+
+/// 构造跨平台的 npm 子进程 Command（一键安装用）。args 随构造时传入。
+/// Windows 上 npm.cmd 路径常含空格（如 `C:\Program Files\nodejs\npm.cmd`），cmd.exe /C
+/// 对含空格 .cmd 必须用「外层引号包整条命令 + 内层引号包路径」的形式（`/S /C ""path" args"`），
+/// 并用 `raw_arg` 绕开 Rust 标准 arg 转义与 cmd 引号规则的冲突——标准 `.arg` 会让 cmd
+/// 把含空格路径拆成多 token 解析失败 exit 1。非 Windows 直接 spawn + args。
+pub(crate) fn npm_command(binary: &str, args: &[&str]) -> Command {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        let joined = args.join(" ");
+        let mut command = Command::new("cmd.exe");
+        command.raw_arg(format!("/D /S /C \"\"{binary}\" {joined}\""));
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        command
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let mut command = Command::new(binary);
+        for a in args {
+            command.arg(a);
+        }
+        command
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

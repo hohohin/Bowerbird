@@ -1,45 +1,67 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { open } from "@tauri-apps/plugin-shell";
 import { useStore } from "../store";
 import { api } from "../lib/api";
 
 /** localStorage key：用户已看过/已跳过引导，不再自动弹出。 */
 const SEEN_KEY = "bowerbird.onboardingSeen";
+const NODE_SITE = "https://nodejs.org";
 
-const STEPS: { n: number; title: string; cmd?: string; note: string }[] = [
-  {
-    n: 1,
-    title: "安装 codex CLI",
-    cmd: "npm install -g @openai/codex",
-    note: "需要先装好 Node.js（npm 随 Node 附带）。",
-  },
-  {
-    n: 2,
-    title: "登录 ChatGPT 订阅",
-    cmd: "codex login",
-    note: "会打开浏览器授权，用你的 ChatGPT 账号（需 Plus / Pro 等订阅）。",
-  },
-  {
-    n: 3,
-    title: "回到这里点「重新检测」",
-    note: "检测通过后即可使用反推、生成图、采集即命名。",
-  },
-];
+type StepState = "idle" | "running" | "done" | "error";
 
 /**
- * codex 首启引导（约定 7：离线/无账号降级的入口）。
+ * codex 首启引导（约定 7：离线/无账号降级的入口；B 升级：一键安装 + 一键 OAuth 登录）。
  *
- * codexHealth 已由 App 挂载时取好并存进 store，这里不重复探测，仅消费。三态：
- * `null`（检测中，不闪）、`{ok:true}`（就绪，不显）、`{ok:false}`（未就绪，显引导）。
- * 用户点「稍后再说」或检测通过后写 localStorage，持久不再自动弹出。
+ * codexHealth 已由 App 挂载时取好并存进 store，这里仅消费。三态：`null`（检测中，不闪）、
+ * `{ok:true}`（就绪，不显）、`{ok:false}`（未就绪，显引导）。用户点「稍后再说」或检测通过后
+ * 写 localStorage，持久不再自动弹出。
+ *
+ * step1「一键安装」→ `codex_install`（spawn npm，进度经 `codex://setup-progress` 推）；
+ * step2「一键登录」→ `codex_login`（spawn codex login，codex 自己开浏览器 OAuth）。
+ * 成功后端 emit `codex://health-changed` → 自动重检 → ok 则关闭引导。
  */
 export function CodexOnboarding() {
   const codexHealth = useStore((s) => s.codexHealth);
   const setCodexHealth = useStore((s) => s.setCodexHealth);
-  const [seen, setSeen] = useState(
-    () => localStorage.getItem(SEEN_KEY) === "1"
-  );
+  const [seen, setSeen] = useState(() => localStorage.getItem(SEEN_KEY) === "1");
   const [checking, setChecking] = useState(false);
-  const [copied, setCopied] = useState<number | null>(null);
+
+  const [installState, setInstallState] = useState<StepState>("idle");
+  const [installReason, setInstallReason] = useState("");
+  const [loginState, setLoginState] = useState<StepState>("idle");
+  const [loginReason, setLoginReason] = useState("");
+  const [lines, setLines] = useState<string[]>([]);
+
+  // 安装进度行（stage=install）；保留最后 50 行避免无限增长。
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    let alive = true;
+    listen<{ stage: string; line: string }>("codex://setup-progress", (e) => {
+      if (e.payload.stage === "install") {
+        setLines((ls) => [...ls.slice(-50), e.payload.line]);
+      }
+    }).then((u) => (alive ? (unlisten = u) : u()));
+    return () => {
+      alive = false;
+      unlisten?.();
+    };
+  }, []);
+
+  // 安装/登录成功后端 emit `codex://health-changed` → 自动重检（ok 则关闭引导）。
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    let alive = true;
+    listen("codex://health-changed", () => void recheck()).then((u) =>
+      alive ? (unlisten = u) : u()
+    );
+    return () => {
+      alive = false;
+      unlisten?.();
+    };
+    // recheck 仅用稳定 setter + api，陈旧闭包安全。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // 还没检测完 / 已就绪 / 已看过 → 不显示
   if (seen || !codexHealth || codexHealth.ok) return null;
@@ -55,7 +77,6 @@ export function CodexOnboarding() {
       const h = await api.codexHealth();
       setCodexHealth(h);
       if (h.ok) {
-        // 配好了：记 seen，之后即使状态变化也不再自动弹
         localStorage.setItem(SEEN_KEY, "1");
         setSeen(true);
       }
@@ -66,15 +87,53 @@ export function CodexOnboarding() {
     }
   }
 
-  function copy(step: number, text: string) {
+  async function doInstall() {
+    if (installState === "running") {
+      void api.cancelCodexSetup();
+      return;
+    }
+    setInstallState("running");
+    setInstallReason("");
+    setLines([]);
     try {
-      void navigator.clipboard.writeText(text);
-      setCopied(step);
-      setTimeout(() => setCopied((c) => (c === step ? null : c)), 1200);
-    } catch {
-      // 剪贴板不可用（如非安全上下文）时静默忽略，用户仍可手动选中复制
+      const h = await api.codexInstall();
+      if (h.ok) setInstallState("done");
+      else {
+        setInstallState("error");
+        setInstallReason(h.reason);
+      }
+    } catch (e) {
+      const msg = String(e);
+      // 取消不算失败，回 idle 让用户可重试。
+      setInstallState(msg.includes("已取消") ? "idle" : "error");
+      if (!msg.includes("已取消")) setInstallReason(msg);
     }
   }
+
+  async function doLogin() {
+    if (loginState === "running") {
+      void api.cancelCodexSetup();
+      return;
+    }
+    setLoginState("running");
+    setLoginReason("");
+    try {
+      const h = await api.codexLogin();
+      if (h.ok) setLoginState("done");
+      else {
+        setLoginState("error");
+        setLoginReason(h.reason);
+      }
+    } catch (e) {
+      const msg = String(e);
+      setLoginState(msg.includes("已取消") ? "idle" : "error");
+      if (!msg.includes("已取消")) setLoginReason(msg);
+    }
+  }
+
+  const installDone = installState === "done";
+  const needNode =
+    installState === "error" && installReason.includes("Node");
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
@@ -90,30 +149,93 @@ export function CodexOnboarding() {
         </div>
 
         <ol className="mt-4 space-y-3">
-          {STEPS.map((s) => (
-            <li key={s.n} className="text-sm">
-              <div className="flex items-center gap-2">
-                <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/15 text-[11px] font-semibold text-accent">
-                  {s.n}
-                </span>
-                <span className="text-ink">{s.title}</span>
-              </div>
-              {s.cmd && (
-                <div className="mt-1.5 flex items-center gap-1.5 pl-7">
-                  <code className="min-w-0 flex-1 truncate rounded bg-panel2 px-2 py-1 text-[12px] text-ink">
-                    {s.cmd}
-                  </code>
-                  <button
-                    onClick={() => copy(s.n, s.cmd!)}
-                    className="shrink-0 rounded bg-panel2 px-2 py-1 text-[11px] text-muted hover:text-ink"
-                  >
-                    {copied === s.n ? "已复制" : "复制"}
-                  </button>
+          {/* step 1 一键安装 */}
+          <li className="text-sm">
+            <div className="flex items-center gap-2">
+              <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/15 text-[11px] font-semibold text-accent">
+                1
+              </span>
+              <span className="text-ink">安装 codex CLI</span>
+              {installDone && <span className="text-xs text-green-400">✓ 已安装</span>}
+            </div>
+            <div className="mt-1.5 pl-7">
+              <button
+                onClick={() => void doInstall()}
+                disabled={installDone}
+                className="rounded-md bg-accent px-3 py-1 text-[12px] font-medium text-black hover:opacity-90 disabled:opacity-50"
+              >
+                {installState === "running"
+                  ? "安装中…（点击取消）"
+                  : installDone
+                    ? "已安装"
+                    : "一键安装 codex CLI"}
+              </button>
+              {installState === "running" && lines.length > 0 && (
+                <pre className="mt-1.5 max-h-28 overflow-auto rounded bg-panel2 p-2 text-[11px] text-muted">
+                  {lines.join("\n")}
+                </pre>
+              )}
+              {installState === "error" && (
+                <div className="mt-1.5 text-xs text-red-300">
+                  {installReason}
+                  {needNode && (
+                    <button
+                      onClick={() => void open(NODE_SITE)}
+                      className="ml-2 rounded bg-panel2 px-2 py-0.5 text-[11px] text-ink hover:bg-edge"
+                    >
+                      打开 Node 官网
+                    </button>
+                  )}
                 </div>
               )}
-              <div className="mt-1 pl-7 text-xs text-muted">{s.note}</div>
-            </li>
-          ))}
+            </div>
+            <div className="mt-1 pl-7 text-xs text-muted">
+              app 自动执行 npm install，无需打开终端。
+            </div>
+          </li>
+
+          {/* step 2 一键登录 */}
+          <li className="text-sm">
+            <div className="flex items-center gap-2">
+              <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/15 text-[11px] font-semibold text-accent">
+                2
+              </span>
+              <span className="text-ink">登录 ChatGPT 订阅</span>
+              {loginState === "done" && <span className="text-xs text-green-400">✓ 已登录</span>}
+            </div>
+            <div className="mt-1.5 pl-7">
+              <button
+                onClick={() => void doLogin()}
+                disabled={!installDone || loginState === "done"}
+                className="rounded-md bg-accent px-3 py-1 text-[12px] font-medium text-black hover:opacity-90 disabled:opacity-50"
+              >
+                {loginState === "running"
+                  ? "等待浏览器登录…（点击取消）"
+                  : loginState === "done"
+                    ? "已登录"
+                    : "一键登录 ChatGPT"}
+              </button>
+              {loginState === "error" && (
+                <div className="mt-1.5 text-xs text-red-300">{loginReason}</div>
+              )}
+            </div>
+            <div className="mt-1 pl-7 text-xs text-muted">
+              点击后会打开浏览器，用你的 ChatGPT 账号授权（需 Plus / Pro 等订阅）。
+            </div>
+          </li>
+
+          {/* step 3 自动检测 */}
+          <li className="text-sm">
+            <div className="flex items-center gap-2">
+              <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/15 text-[11px] font-semibold text-accent">
+                3
+              </span>
+              <span className="text-ink">完成后自动检测</span>
+            </div>
+            <div className="mt-1 pl-7 text-xs text-muted">
+              登录成功后会自动检测并关闭此窗口；也可手动重新检测。
+            </div>
+          </li>
         </ol>
 
         <div className="mt-6 flex justify-end gap-2">
@@ -126,7 +248,7 @@ export function CodexOnboarding() {
           <button
             onClick={() => void recheck()}
             disabled={checking}
-            className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-black hover:opacity-90 disabled:opacity-50"
+            className="rounded-md bg-panel2 px-3 py-1.5 text-sm text-ink hover:bg-edge disabled:opacity-50"
           >
             {checking ? "检测中…" : "重新检测"}
           </button>

@@ -187,6 +187,20 @@ function App() {
       .catch(() => setCodexHealth({ ok: false, reason: "codex 状态检测失败" }));
   }, [setCodexHealth]);
 
+  // 安装/登录成功后端 emit `codex://health-changed` → 重取 codexHealth（创作板/生成面板置灰按钮
+  // 据此刷新；AssetDetail 有独立 codexHealth 副本，自己监听自刷新）。
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    let alive = true;
+    listen("codex://health-changed", () => {
+      api.codexHealth().then(setCodexHealth).catch(() => {});
+    }).then((u) => (alive ? (unlisten = u) : u()));
+    return () => {
+      alive = false;
+      unlisten?.();
+    };
+  }, [setCodexHealth]);
+
   const showDetail = mode === "browse" && detailAssetId !== null;
 
   return (
