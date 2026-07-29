@@ -235,6 +235,98 @@ pub fn download_client() -> Result<reqwest::Client, reqwest::Error> {
         .build()
 }
 
+/// 浏览器扩展已经在浏览器登录态内取到图片字节；桌面端只负责落临时文件并走标准入库。
+/// 这条路径避免桌面端二次下载丢失 Cookie / 授权头 / 系统代理（Pinterest 等站必需）。
+pub fn ingest_from_bytes(
+    paths: &LibraryPaths,
+    db: &Database,
+    bytes: &[u8],
+    source_url: &str,
+    file_name: Option<&str>,
+    content_type: Option<&str>,
+) -> AppResult<Asset> {
+    if bytes.is_empty() {
+        return Err(AppError::Media("extension uploaded an empty image".into()));
+    }
+    if bytes.len() as u64 > MAX_DOWNLOAD_BYTES {
+        return Err(AppError::Media(format!(
+            "extension upload exceeds {} MiB limit",
+            MAX_DOWNLOAD_BYTES / 1024 / 1024
+        )));
+    }
+
+    // URL、文件名和 Content-Type 都可能撒谎（拖拽页面链接时甚至会返回 HTML）。
+    // 以实际字节能否解码为准，同时用真实格式决定库内扩展名。
+    let ext = uploaded_image_extension(bytes, content_type)?;
+    let safe_stem = file_name
+        .and_then(|name| Path::new(name).file_stem().and_then(|s| s.to_str()))
+        .map(|stem| {
+            stem.chars()
+                .filter(|c| !matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'))
+                .take(80)
+                .collect::<String>()
+        })
+        .filter(|stem| !stem.trim().is_empty())
+        .unwrap_or_else(|| "extension-image".to_string());
+
+    let tmp_dir = std::env::temp_dir().join(format!("bowerbird-upload-{}", Ulid::new()));
+    fs::create_dir_all(&tmp_dir)?;
+    let source_path = tmp_dir.join(format!("{safe_stem}.{ext}"));
+    fs::write(&source_path, bytes)?;
+
+    let result = (|| -> AppResult<Asset> {
+        let mut asset = ingest_file(paths, db, &source_path)?;
+        let conn = db.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE assets SET source='extension', source_url=?1 WHERE id=?2",
+            rusqlite::params![source_url, asset.id],
+        )?;
+        asset.source = Some("extension".to_string());
+        asset.source_url = Some(source_url.to_string());
+        Ok(asset)
+    })();
+    let _ = fs::remove_dir_all(&tmp_dir);
+    result
+}
+
+fn uploaded_image_extension(bytes: &[u8], content_type: Option<&str>) -> AppResult<&'static str> {
+    let is_svg = content_type
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("image/svg+xml"));
+    if is_svg {
+        let text = std::str::from_utf8(bytes)
+            .map_err(|_| AppError::Media("browser returned invalid SVG bytes".into()))?;
+        if text.trim_start().starts_with("<svg") || text.contains("<svg") {
+            return Ok("svg");
+        }
+        return Err(AppError::Media("browser response says SVG but contains no SVG".into()));
+    }
+
+    let format = image::guess_format(bytes)
+        .map_err(|_| AppError::Media("browser returned content that is not a supported image".into()))?;
+    let ext = match format {
+        image::ImageFormat::Jpeg => "jpg",
+        image::ImageFormat::Png => "png",
+        image::ImageFormat::WebP => "webp",
+        image::ImageFormat::Gif => "gif",
+        image::ImageFormat::Bmp => "bmp",
+        _ => {
+            return Err(AppError::Media(format!(
+                "browser returned unsupported image format: {format:?}"
+            )))
+        }
+    };
+    let decoded = image::load_from_memory_with_format(bytes, format)
+        .map_err(|error| AppError::Media(format!("browser returned undecodable image: {error}")))?;
+    let (width, height) = (decoded.width() as u64, decoded.height() as u64);
+    if width > 32_768 || height > 32_768 || width.saturating_mul(height) > 100_000_000 {
+        return Err(AppError::Media(format!(
+            "browser image dimensions too large: {width}x{height}"
+        )));
+    }
+    Ok(ext)
+}
+
 /// 下载扩展采集的图，按实际内容识别格式后走统一 ingest 流水线。
 pub async fn ingest_from_url(
     client: &reqwest::Client,
@@ -493,6 +585,77 @@ mod tests {
         // 去重：再导入同一张 → 不新增
         let _ = ingest_file(&paths, &db, &img_path).unwrap();
         assert_eq!(db.count_assets().unwrap(), 1, "duplicate should be deduped");
+    }
+
+    #[test]
+    fn ingest_browser_uploaded_bytes() {
+        let (tmp, paths, db) = setup();
+        let source = tmp.dir.join("browser-source.png");
+        make_png(&source, 37, 29, [12, 34, 56]);
+        let bytes = std::fs::read(&source).unwrap();
+
+        let asset = ingest_from_bytes(
+            &paths,
+            &db,
+            &bytes,
+            "https://example.test/protected/image?id=42",
+            Some("captured.png"),
+            Some("image/png"),
+        )
+        .unwrap();
+
+        assert_eq!(asset.name, "captured");
+        assert_eq!(asset.source.as_deref(), Some("extension"));
+        assert_eq!(
+            asset.source_url.as_deref(),
+            Some("https://example.test/protected/image?id=42")
+        );
+        assert_eq!(asset.width, Some(37));
+        assert_eq!(asset.height, Some(29));
+        assert!(Path::new(asset.store_path.as_deref().unwrap()).exists());
+        assert_eq!(db.count_assets().unwrap(), 1);
+    }
+
+    #[test]
+    fn browser_upload_uses_byte_format_instead_of_name() {
+        let (tmp, paths, db) = setup();
+        let source = tmp.dir.join("actual.webp");
+        make_png(&source, 31, 23, [42, 84, 126]);
+        let bytes = std::fs::read(&source).unwrap();
+
+        let asset = ingest_from_bytes(
+            &paths,
+            &db,
+            &bytes,
+            "https://example.test/image-without-extension",
+            Some("extension-image"),
+            Some("application/octet-stream"),
+        )
+        .unwrap();
+
+        // image::save follows the .webp extension above, so byte sniffing must win over metadata.
+        assert_eq!(asset.ext.as_deref(), Some("webp"));
+        assert!(asset.store_path.as_deref().unwrap().ends_with(".webp"));
+        assert!(Path::new(asset.thumb_path.as_deref().unwrap()).exists());
+    }
+
+    #[test]
+    fn browser_upload_rejects_html_without_creating_asset() {
+        let (_tmp, paths, db) = setup();
+        let html = b"<!DOCTYPE html><html><body>not an image</body></html>";
+
+        let error = ingest_from_bytes(
+            &paths,
+            &db,
+            html,
+            "https://example.test/page",
+            Some("extension-image"),
+            Some("text/html; charset=utf-8"),
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("not a supported image"));
+        assert_eq!(db.count_assets().unwrap(), 0);
     }
 
     #[test]

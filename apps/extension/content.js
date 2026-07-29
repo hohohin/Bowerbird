@@ -64,15 +64,22 @@
     btn.style.boxShadow = "0 0 0 3px #5fd35f,0 2px 12px rgba(0,0,0,0.35)";
   });
   btn.addEventListener("dragleave", resetBtnStyle);
-  btn.addEventListener("drop", (e) => {
+  btn.addEventListener("drop", async (e) => {
     e.preventDefault();
     resetBtnStyle();
-    const urls = urlsFromDropEvent(e);
-    if (urls.length === 0) {
+    const candidates = candidatesFromDropEvent(e);
+    if (candidates.length === 0) {
       showToast("未识别到图片地址", false);
       return;
     }
-    saveBatch(makeGenericBatch(urls));
+    const local = candidates.find((item) => item.kind === "blob" || item.kind === "data");
+    if (local) {
+      showToast("正在读取页面内嵌图片…");
+      const result = await saveLocalCandidate(local, location.href);
+      showToast(result.ok ? "已保存到 Bowerbird" : result.error, result.ok);
+      return;
+    }
+    saveBatch(makeGenericBatch(candidates));
   });
   document.documentElement.appendChild(btn);
 
@@ -107,7 +114,7 @@
       const domBatch = collectXhsDomMaterials();
       if (domBatch.items.length > 0) return domBatch;
     }
-    return makeGenericBatch(collectDomImages());
+    return makeGenericBatch(collectGenericCandidates());
   }
 
   async function collectXiaohongshu() {
@@ -320,23 +327,177 @@
     });
   }
 
-  function collectDomImages() {
-    const set = new Set();
-    document.querySelectorAll("img[src]").forEach((image) => {
-      const src = normalizeMediaUrl(image.currentSrc || image.src);
-      if (src) set.add(src);
-    });
-    return Array.from(set);
+  const C = globalThis.BowerbirdCandidates;
+  const LAZY_URL_ATTRS = [
+    "data-src", "data-original", "data-lazy-src", "data-url", "data-image", "data-original-src",
+  ];
+  const LAZY_SRCSET_ATTRS = ["data-srcset", "data-lazy-srcset"];
+
+  function elementVisible(el) {
+    const rect = el.getBoundingClientRect?.();
+    if (!rect) return true;
+    const style = getComputedStyle(el);
+    return style.display !== "none" && style.visibility !== "hidden" && Number(style.opacity || 1) > 0;
   }
 
-  function makeGenericBatch(urls, sourceUrl = location.href) {
-    const unique = dedupeBy(urls.map(normalizeMediaUrl).filter(Boolean), (url) => url);
+  function addElementImageCandidates(out, image, pageUrl, priority = 80) {
+    const visible = elementVisible(image);
+    const options = {
+      pageUrl,
+      width: image.naturalWidth || image.clientWidth || 0,
+      height: image.naturalHeight || image.clientHeight || 0,
+      visible,
+    };
+    const current = C.candidate(image.currentSrc || image.getAttribute("src"), document.baseURI, {
+      ...options, source: "currentSrc", priority: priority + 20,
+    });
+    if (current) out.push(current);
+
+    const ownSrcset = C.parseSrcset(image.getAttribute("srcset"), document.baseURI);
+    if (ownSrcset) out.push(C.candidate(ownSrcset.url, document.baseURI, {
+      ...options, source: "srcset", priority: priority + 15,
+    }));
+    image.closest("picture")?.querySelectorAll("source[srcset]").forEach((source) => {
+      const selected = C.parseSrcset(source.getAttribute("srcset"), document.baseURI);
+      if (selected) out.push(C.candidate(selected.url, document.baseURI, {
+        ...options, source: "picture", priority: priority + 15,
+      }));
+    });
+    for (const attr of LAZY_URL_ATTRS) {
+      const value = image.getAttribute(attr);
+      if (value) out.push(C.candidate(value, document.baseURI, {
+        ...options, source: "lazy", priority: priority + 10,
+      }));
+    }
+    for (const attr of LAZY_SRCSET_ATTRS) {
+      const selected = C.parseSrcset(image.getAttribute(attr), document.baseURI);
+      if (selected) out.push(C.candidate(selected.url, document.baseURI, {
+        ...options, source: "lazy-srcset", priority: priority + 10,
+      }));
+    }
+  }
+
+  function cssBackgroundCandidates(el, pageUrl, priority = 55) {
+    if (!elementVisible(el)) return [];
+    const rect = el.getBoundingClientRect?.();
+    if (rect && rect.width * rect.height < 4096) return [];
+    const background = getComputedStyle(el).backgroundImage || "";
+    const found = [];
+    const re = /url\(\s*["']?([^"')]+)["']?\s*\)/gi;
+    let match;
+    while ((match = re.exec(background))) {
+      found.push(C.candidate(match[1], document.baseURI, {
+        source: "css", priority, pageUrl,
+        width: rect?.width || 0, height: rect?.height || 0, visible: true,
+      }));
+    }
+    return found.filter(Boolean);
+  }
+
+  function collectRoots() {
+    const roots = [document];
+    let seenNodes = 0;
+    for (let i = 0; i < roots.length && seenNodes < 5000; i += 1) {
+      const nodes = roots[i].querySelectorAll?.("*") || [];
+      for (const node of nodes) {
+        seenNodes += 1;
+        if (node.shadowRoot) roots.push(node.shadowRoot);
+        if (seenNodes >= 5000) break;
+      }
+    }
+    return roots;
+  }
+
+  function collectMetadataCandidates(out, pageUrl) {
+    const selectors = [
+      'meta[property="og:image:secure_url"]', 'meta[property="og:image"]',
+      'meta[name="twitter:image"]', 'meta[name="twitter:image:src"]', 'link[rel="image_src"]',
+    ];
+    for (const selector of selectors) {
+      document.querySelectorAll(selector).forEach((el) => {
+        const value = el.getAttribute("content") || el.getAttribute("href");
+        out.push(C.candidate(value, document.baseURI, { source: "metadata", priority: 70, pageUrl }));
+      });
+    }
+
+    let totalJson = 0;
+    document.querySelectorAll('script[type="application/ld+json"]').forEach((script) => {
+      const text = script.textContent || "";
+      totalJson += text.length;
+      if (totalJson > 1024 * 1024 || text.length > 512 * 1024) return;
+      try {
+        const visit = (value, depth = 0) => {
+          if (depth > 8 || value == null) return;
+          if (typeof value === "string") return;
+          if (Array.isArray(value)) return value.forEach((v) => visit(v, depth + 1));
+          if (typeof value !== "object") return;
+          for (const key of ["image", "contentUrl", "thumbnailUrl"]) {
+            const image = value[key];
+            const add = (v) => {
+              const url = typeof v === "string" ? v : v?.url || v?.contentUrl;
+              out.push(C.candidate(url, document.baseURI, { source: "jsonld", priority: 65, pageUrl }));
+            };
+            if (Array.isArray(image)) image.forEach(add);
+            else if (image) add(image);
+          }
+          for (const [key, child] of Object.entries(value)) {
+            if (["image", "contentUrl", "thumbnailUrl"].includes(key)) continue;
+            if (key === "@graph" || key === "itemListElement" || key === "mainEntity") visit(child, depth + 1);
+          }
+        };
+        visit(JSON.parse(text));
+      } catch { /* malformed JSON-LD is common; skip */ }
+    });
+  }
+
+  function collectGenericCandidates() {
+    const pageUrl = location.href;
+    const out = [];
+    const roots = collectRoots();
+    for (const root of roots) {
+      root.querySelectorAll?.("img").forEach((img) => addElementImageCandidates(out, img, pageUrl));
+      root.querySelectorAll?.("video[poster]").forEach((video) => {
+        out.push(C.candidate(video.poster || video.getAttribute("poster"), document.baseURI, {
+          source: "poster", priority: 60, pageUrl,
+          width: video.videoWidth || video.clientWidth, height: video.videoHeight || video.clientHeight,
+          visible: elementVisible(video),
+        }));
+      });
+      root.querySelectorAll?.('svg image[href], svg image[xlink\\:href]').forEach((image) => {
+        out.push(C.candidate(image.getAttribute("href") || image.getAttribute("xlink:href"), document.baseURI, {
+          source: "svg-image", priority: 60, pageUrl, visible: elementVisible(image),
+        }));
+      });
+      const cssSelector = '[style*="background"], [role="img"], [class*="image" i], [class*="photo" i], [class*="hero" i], [class*="cover" i], [class*="gallery" i], [class*="product" i]';
+      Array.from(root.querySelectorAll?.(cssSelector) || []).slice(0, 1000).forEach((el) => {
+        out.push(...cssBackgroundCandidates(el, pageUrl));
+      });
+    }
+    document.querySelectorAll('link[rel="preload"][as="image"]').forEach((link) => {
+      out.push(C.candidate(link.href, document.baseURI, { source: "preload", priority: 55, pageUrl }));
+    });
+    collectMetadataCandidates(out, pageUrl);
+    return C.rankAndDedupe(out);
+  }
+
+  function makeGenericBatch(values, sourceUrl = location.href) {
+    const candidates = values.map((value) => {
+      if (typeof value === "string") {
+        return C.candidate(value, document.baseURI, {
+          source: "legacy", priority: 50, pageUrl: sourceUrl,
+        });
+      }
+      return value;
+    });
+    const unique = C.rankAndDedupe(candidates);
     return {
       source_site: "web",
       label: `发现 ${unique.length} 张图片，全部采集？`,
-      items: unique.map((url, index) => ({
-        media_url: url,
-        source_url: sourceUrl,
+      items: unique.map((item, index) => ({
+        media_url: item.url,
+        source_url: item.pageUrl || sourceUrl,
+        candidate_kind: item.kind,
+        candidate_source: item.source,
         index,
         total: unique.length,
         media_kind: "image",
@@ -344,24 +505,14 @@
     };
   }
 
-  function urlsFromDropEvent(e) {
+  function candidatesFromDropEvent(e) {
     const dt = e.dataTransfer;
-    const found = new Set();
-    const push = (url) => {
-      const normalized = normalizeMediaUrl(url);
-      if (normalized) found.add(normalized);
-    };
-    for (const type of ["text/uri-list", "text/plain"]) {
-      (dt.getData(type) || "")
-        .trim()
-        .split(/\s+/)
-        .forEach(push);
-    }
-    const html = dt.getData("text/html") || "";
-    const re = /<img[^>]+src=["']?([^"'\s>]+)/gi;
-    let match;
-    while ((match = re.exec(html))) push(match[1]);
-    return Array.from(found);
+    return C.dropCandidatesFromValues({
+      html: dt.getData("text/html") || "",
+      uriList: dt.getData("text/uri-list") || "",
+      plain: dt.getData("text/plain") || "",
+      base: location.href,
+    });
   }
 
   function showConfirm(batch) {
@@ -417,18 +568,121 @@
     document.getElementById("__bowerbird_confirm")?.remove();
   }
 
+  async function uploadLocalBytes(bytes, metadata) {
+    if (!bytes || bytes.byteLength === 0) return { ok: false, error: "页面图片字节为空" };
+    if (bytes.byteLength > 20 * 1024 * 1024) {
+      return { ok: false, error: "页面内嵌图片超过 20 MiB 上限" };
+    }
+    return new Promise((resolve) => {
+      let finished = false;
+      let ws;
+      const finish = (value) => {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timer);
+        try { ws?.close(); } catch { /* ignore */ }
+        resolve(value);
+      };
+      const timer = setTimeout(() => finish({ ok: false, error: "桌面端接收图片超时" }), 55000);
+      try {
+        ws = new WebSocket(WS_URL);
+        ws.binaryType = "arraybuffer";
+        ws.onopen = () => {
+          ws.send(JSON.stringify({ type: "save_blob", ...metadata }));
+          ws.send(bytes);
+        };
+        ws.onmessage = (event) => {
+          try { finish(JSON.parse(event.data)); }
+          catch { finish({ ok: false, error: "桌面端响应无法解析" }); }
+        };
+        ws.onerror = () => finish({ ok: false, error: "无法连接 Bowerbird 桌面端" });
+      } catch (error) {
+        finish({ ok: false, error: String(error) });
+      }
+    });
+  }
+
+  async function saveLocalCandidate(candidate, pageUrl) {
+    try {
+      const response = await fetch(candidate.url);
+      if (!response.ok) return { ok: false, error: `页面读取图片失败：HTTP ${response.status}` };
+      const contentType = response.headers.get("content-type") || "";
+      const bytes = await response.arrayBuffer();
+      return uploadLocalBytes(bytes, {
+        requested_url: pageUrl,
+        effective_url: pageUrl,
+        page_url: pageUrl,
+        url: pageUrl,
+        file_name: "page-image",
+        content_type: contentType,
+        candidate_source: candidate.source,
+      });
+    } catch (error) {
+      return { ok: false, error: `页面读取内嵌图片失败：${String(error)}` };
+    }
+  }
+
+  async function saveCanvas(canvas, pageUrl) {
+    try {
+      const blob = await new Promise((resolve, reject) => {
+        try {
+          canvas.toBlob((value) => (value ? resolve(value) : reject(new Error("canvas 导出为空"))), "image/png");
+        } catch (error) { reject(error); }
+      });
+      return uploadLocalBytes(await blob.arrayBuffer(), {
+        requested_url: pageUrl,
+        effective_url: pageUrl,
+        page_url: pageUrl,
+        url: pageUrl,
+        file_name: "canvas.png",
+        content_type: "image/png",
+        candidate_source: "canvas",
+      });
+    } catch (error) {
+      return { ok: false, error: `Canvas 无法导出（可能受跨域保护）：${String(error)}` };
+    }
+  }
+
   document.addEventListener(
     "click",
-    (e) => {
+    async (e) => {
       if (!e.altKey) return;
-      const target = e.target;
-      if (!target || target.tagName !== "IMG") return;
-      const src = normalizeMediaUrl(target.currentSrc || target.src);
-      if (!src) return;
+      const path = typeof e.composedPath === "function" ? e.composedPath() : [e.target];
+      const canvas = path.find((node) => node?.tagName === "CANVAS");
+      if (canvas) {
+        e.preventDefault();
+        e.stopPropagation();
+        showToast("正在导出 Canvas…");
+        const result = await saveCanvas(canvas, location.href);
+        showToast(result.ok ? "Canvas 已保存到 Bowerbird" : result.error, result.ok);
+        return;
+      }
+      const image = path.find((node) => node?.tagName === "IMG");
+      let candidates = [];
+      let sourceElement = image;
+      if (image) {
+        const out = [];
+        addElementImageCandidates(out, image, location.href, 1000);
+        candidates = C.rankAndDedupe(out);
+      } else {
+        sourceElement = path.find(
+          (node) => node instanceof Element && cssBackgroundCandidates(node, location.href, 1000).length > 0
+        );
+        if (sourceElement) candidates = cssBackgroundCandidates(sourceElement, location.href, 1000);
+      }
+      if (candidates.length === 0) return;
       e.preventDefault();
       e.stopPropagation();
-      const noteLink = target.closest('a[href*="/explore/"]')?.href;
-      saveBatch(makeGenericBatch([src], noteLink || location.href));
+      const noteLink = sourceElement?.closest?.('a[href*="/explore/"]')?.href;
+      candidates = candidates.map((item) => ({ ...item, explicit: true, pageUrl: noteLink || location.href }));
+      const local = candidates.find((item) => item.kind === "blob" || item.kind === "data");
+      if (local) {
+        showToast("正在读取页面内嵌图片…");
+        const result = await saveLocalCandidate(local, noteLink || location.href);
+        showToast(result.ok ? "已保存到 Bowerbird" : result.error, result.ok);
+        return;
+      }
+      saveBatch(makeGenericBatch(candidates, noteLink || location.href));
     },
     true
   );
@@ -439,52 +693,58 @@
     saveViaWs(batch).then((response) => {
       const results = Array.isArray(response?.results) ? response.results : [response];
       const ok = results.filter((item) => item?.ok).length;
-      showToast(`已保存 ${ok}/${batch.items.length} 项到 Bowerbird`, ok > 0);
+      const firstError = results.find((item) => !item?.ok)?.error;
+      const detail = firstError ? `；首个失败：${String(firstError).slice(0, 80)}` : "";
+      showToast(`已保存 ${ok}/${batch.items.length} 项到 Bowerbird${detail}`, ok > 0);
     });
   }
 
-  // 一个批次只建立一个 WS；桌面端顺序下载并一次性返回逐项结果。
-  function saveViaWs(batch) {
-    return new Promise((resolve) => {
-      let settled = false;
-      const done = (value) => {
-        if (!settled) {
+  // 浏览器内取图：逐项交给 background service worker fetch（自动走浏览器系统代理 + Cookie），
+  // background 再经 save_blob（metadata text + binary bytes）上传桌面端。避免桌面 reqwest 二次下载
+  // 丢代理/登录态；Pinterest 等国外/Cookie 保护站走这条成熟路径。
+  async function saveViaWs(batch) {
+    const results = [];
+    for (const item of batch.items) {
+      const result = await new Promise((resolve) => {
+        let settled = false;
+        const finish = (value) => {
+          if (settled) return;
           settled = true;
+          clearTimeout(timer);
           resolve(value);
-        }
-      };
-      try {
-        const ws = new WebSocket(WS_URL);
-        const timeoutMs = Math.min(180000, Math.max(15000, batch.items.length * 5000));
-        const timer = setTimeout(() => {
-          done({ ok: false, error: "timeout", results: [] });
-          ws.close();
-        }, timeoutMs);
-        ws.onopen = () => {
-          ws.send(
-            JSON.stringify({
-              type: "save_batch",
-              source_site: batch.source_site,
-              items: batch.items,
-            })
+        };
+        const timer = setTimeout(
+          () => finish({ ok: false, error: "扩展后台读取图片超时" }),
+          55000
+        );
+        try {
+          chrome.runtime.sendMessage(
+            {
+              type: "save_image",
+              url: item.media_url,
+              pageUrl: item.source_url || location.href,
+              candidateKind: item.candidate_kind || "image-url",
+              candidateSource: item.candidate_source || "unknown",
+            },
+            (response) => {
+              if (chrome.runtime.lastError) {
+                finish({ ok: false, error: chrome.runtime.lastError.message });
+              } else {
+                finish(response || { ok: false, error: "扩展后台未响应" });
+              }
+            }
           );
-        };
-        ws.onmessage = (event) => {
-          clearTimeout(timer);
-          try {
-            done(JSON.parse(event.data));
-          } catch {
-            done({ ok: false, error: "bad reply", results: [] });
-          }
-          ws.close();
-        };
-        ws.onerror = () => {
-          clearTimeout(timer);
-          done({ ok: false, error: "ws error（桌面端未开启？）", results: [] });
-        };
-      } catch (err) {
-        done({ ok: false, error: String(err), results: [] });
-      }
-    });
+        } catch (error) {
+          finish({ ok: false, error: String(error) });
+        }
+      });
+      results.push(result);
+    }
+    return {
+      ok: results.every((item) => item?.ok),
+      saved: results.filter((item) => item?.ok).length,
+      total: results.length,
+      results,
+    };
   }
 })();

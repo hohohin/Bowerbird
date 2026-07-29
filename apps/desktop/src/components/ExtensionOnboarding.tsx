@@ -5,6 +5,7 @@ import { api } from "../lib/api";
 import guide1 from "../assets/bowerbird-extension-guide-1.gif";
 import guide2 from "../assets/bowerbird-extension-guide-2.gif";
 import guide3 from "../assets/bowerbird-extension-guide-3.gif";
+import guide4 from "../assets/bowerbird-extension-guide-4.png";
 
 /** localStorage key：用户已看过/已跳过引导，未连时不再自动弹出（点灰点仍可手动唤起）。 */
 const SEEN_KEY = "bowerbird.extensionOnboardingSeen";
@@ -17,7 +18,7 @@ function Shot({ src, alt, onZoom }: { src: string; alt: string; onZoom: () => vo
       src={src}
       alt={alt}
       onClick={onZoom}
-      className="mt-1.5 ml-7 max-h-44 cursor-zoom-in rounded border border-edge hover:opacity-90"
+      className="mt-1.5 ml-7 max-h-36 cursor-zoom-in rounded border border-edge hover:opacity-90"
     />
   );
 }
@@ -110,13 +111,13 @@ export function ExtensionOnboarding() {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-      <div className="w-full max-w-lg rounded-lg border border-edge bg-panel p-6 shadow-2xl">
+      <div className="w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-lg border border-edge bg-panel p-6 shadow-2xl">
         <h2 className="text-lg font-semibold text-ink">安装浏览器扩展以启用采集</h2>
         <p className="mt-1.5 text-sm text-muted">
           装好后，在任意网页拖图到右下角 Logo、点 Logo 批量采集、或 Alt+点击图片单张保存到 Bowerbird。
         </p>
 
-        <ol className="mt-4 space-y-3 text-sm">
+        <ol className="mt-4 grid grid-cols-1 gap-3 text-sm md:grid-cols-2">
           <li>
             <div className="flex items-center gap-2">
               <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/15 text-[11px] font-semibold text-accent">
@@ -185,10 +186,23 @@ export function ExtensionOnboarding() {
               <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/15 text-[11px] font-semibold text-accent">
                 4
               </span>
+              <span className="text-ink">打开真实网页验证</span>
+            </div>
+            <div className="mt-1 pl-7 text-xs text-muted">
+              打开任意<b className="text-ink">带图片的真实网页</b>（如小红书、Pinterest、图片站；新标签页 / chrome 内部页不会注入扩展），查看<b className="text-ink">右下角是否有 Bowerbird 悬浮 Logo</b>。看得到就说明装好了。
+            </div>
+            <Shot src={guide4} alt="网页右下角的 Bowerbird 悬浮图标" onZoom={() => setZoom(guide4)} />
+          </li>
+
+          <li>
+            <div className="flex items-center gap-2">
+              <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/15 text-[11px] font-semibold text-accent">
+                5
+              </span>
               <span className="text-ink">装好后自动检测</span>
             </div>
             <div className="mt-1 pl-7 text-xs text-muted">
-              扩展加载后约 15 秒内本窗口自动关闭，工具栏出现绿色圆点。
+              真实网页打开后扩展心跳约 15 秒内连上，本窗口自动关闭、工具栏角标消失。
             </div>
           </li>
         </ol>

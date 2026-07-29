@@ -137,7 +137,7 @@ export function CodexOnboarding() {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-      <div className="w-full max-w-lg rounded-lg border border-edge bg-panel p-6 shadow-2xl">
+      <div className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-lg border border-edge bg-panel p-6 shadow-2xl">
         <h2 className="text-lg font-semibold text-ink">配置 codex 以启用 AI 功能</h2>
         <p className="mt-1.5 text-sm text-muted">
           反推、生成图、采集即命名都依赖 codex CLI（走你的 ChatGPT 订阅）。不配置也能正常使用本地素材库——浏览、搜索、整理、收藏。
@@ -148,7 +148,7 @@ export function CodexOnboarding() {
           当前状态：{codexHealth.reason}
         </div>
 
-        <ol className="mt-4 space-y-3">
+        <ol className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
           {/* step 1 一键安装 */}
           <li className="text-sm">
             <div className="flex items-center gap-2">

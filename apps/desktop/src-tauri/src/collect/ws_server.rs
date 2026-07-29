@@ -72,18 +72,136 @@ async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl
 }
 
 async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: AppState) {
-    tracing::info!("collect ws: connection opened");
+    tracing::debug!("collect ws: connection opened");
+    // save_blob 两帧协议：先 Text metadata，再 Binary 图片字节（浏览器 background fetch，带 Cookie/代理）。
+    let mut pending_upload: Option<serde_json::Value> = None;
     while let Some(Ok(msg)) = socket.recv().await {
-        if let Message::Text(text) = msg {
-            // 任意消息（ping / save / save_batch）= 扩展在线；touch 并在 false→true 跳变时 emit。
-            if state.status.touch() {
-                let _ = state.app.emit("collect://extension-connected", ());
+        match msg {
+            Message::Text(text) => {
+                // 任意消息（ping / save / save_batch / save_blob metadata）= 扩展在线。
+                if state.status.touch() {
+                    let _ = state.app.emit("collect://extension-connected", ());
+                }
+                if text.len() > 64 * 1024 {
+                    let _ = socket
+                        .send(Message::Text(
+                            serde_json::json!({ "ok": false, "error": "metadata exceeds 64 KiB limit" })
+                                .to_string(),
+                        ))
+                        .await;
+                    continue;
+                }
+                let parsed = serde_json::from_str::<serde_json::Value>(&text).ok();
+                if parsed
+                    .as_ref()
+                    .and_then(|v| v.get("type"))
+                    .and_then(|v| v.as_str())
+                    == Some("save_blob")
+                {
+                    if pending_upload.is_some() {
+                        let _ = socket
+                            .send(Message::Text(
+                                serde_json::json!({ "ok": false, "error": "save_blob metadata already pending" })
+                                    .to_string(),
+                            ))
+                            .await;
+                        continue;
+                    }
+                    tracing::info!("collect ws recv: kind=save_blob");
+                    pending_upload = parsed;
+                } else {
+                    let resp = handle_message(&text, &state).await;
+                    let _ = socket.send(Message::Text(resp)).await;
+                }
             }
-            let resp = handle_message(&text, &state).await;
-            let _ = socket.send(Message::Text(resp)).await;
+            Message::Binary(bytes) => {
+                let resp = match pending_upload.take() {
+                    Some(meta) if bytes.len() <= 50 * 1024 * 1024 => {
+                        handle_blob(bytes.as_ref(), &meta, &state)
+                    }
+                    Some(_) => serde_json::json!({
+                        "ok": false,
+                        "error": "binary payload exceeds 50 MiB limit"
+                    })
+                    .to_string(),
+                    None => serde_json::json!({
+                        "ok": false,
+                        "error": "binary payload without save_blob metadata"
+                    })
+                    .to_string(),
+                };
+                let _ = socket.send(Message::Text(resp)).await;
+            }
+            _ => {}
         }
     }
-    tracing::info!("collect ws: connection closed");
+    tracing::debug!("collect ws: connection closed");
+}
+
+/// 浏览器 background 已在登录态/系统代理环境内 fetch 图片；收到二进制后直接按真实字节入库。
+fn handle_blob(bytes: &[u8], meta: &serde_json::Value, state: &AppState) -> String {
+    let requested_url = meta
+        .get("requested_url")
+        .or_else(|| meta.get("url"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let effective_url = meta
+        .get("effective_url")
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.is_empty())
+        .unwrap_or(requested_url);
+    let page_url = meta
+        .get("page_url")
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.is_empty());
+    let file_name = meta.get("file_name").and_then(|v| v.as_str());
+    let content_type = meta.get("content_type").and_then(|v| v.as_str());
+    if requested_url.is_empty() {
+        return serde_json::json!({ "ok": false, "error": "empty source url" }).to_string();
+    }
+    // 追溯优先页面 URL（如 Pinterest pin），无则最终图片 URL。
+    let source_url = page_url.unwrap_or(effective_url);
+    match ingest::ingest_from_bytes(
+        &state.paths,
+        &state.db,
+        bytes,
+        source_url,
+        file_name,
+        content_type,
+    ) {
+        Ok(asset) => {
+            tracing::info!(
+                "collect ws save_blob ok: {} -> {}",
+                redact_url(requested_url),
+                asset.id
+            );
+            crate::core::autoname::spawn_auto_analyze(
+                state.app.clone(),
+                state.db.clone(),
+                asset.clone(),
+            );
+            let _ = state.app.emit("library://assets-changed", ());
+            asset_result(&asset).to_string()
+        }
+        Err(error) => {
+            tracing::warn!(
+                "collect ws save_blob fail: {} | {error}",
+                redact_url(requested_url)
+            );
+            serde_json::json!({ "ok": false, "error": error.to_string() }).to_string()
+        }
+    }
+}
+
+fn redact_url(value: &str) -> String {
+    match reqwest::Url::parse(value) {
+        Ok(mut url) => {
+            url.set_query(None);
+            url.set_fragment(None);
+            url.to_string()
+        }
+        Err(_) => value.chars().take(200).collect(),
+    }
 }
 
 async fn handle_message(text: &str, state: &AppState) -> String {
@@ -92,6 +210,9 @@ async fn handle_message(text: &str, state: &AppState) -> String {
         Err(_) => return r#"{"ok":false,"error":"bad json"}"#.to_string(),
     };
     let kind = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
+    if kind != "ping" {
+        tracing::info!("collect ws recv: kind={kind}");
+    }
     match kind {
         "ping" => r#"{"ok":true,"pong":true}"#.to_string(),
         "save" => {
@@ -175,8 +296,16 @@ async fn save_one(
     url: &str,
     source_url: Option<&str>,
 ) -> crate::error::AppResult<crate::core::library::Asset> {
-    let asset =
-        ingest::ingest_from_url(&state.client, &state.paths, &state.db, url, source_url).await?;
+    let asset = match ingest::ingest_from_url(&state.client, &state.paths, &state.db, url, source_url).await {
+        Ok(a) => {
+            tracing::info!("collect ws save_one ok: {url} -> {}", a.id);
+            a
+        }
+        Err(e) => {
+            tracing::warn!("collect ws save_one fail: {url} | {e}");
+            return Err(e);
+        }
+    };
     // 后台命名 + 基础分析（非阻塞；完成后 autoname 再 emit 刷新）。
     crate::core::autoname::spawn_auto_analyze(state.app.clone(), state.db.clone(), asset.clone());
     Ok(asset)

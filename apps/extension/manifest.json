@@ -17,10 +17,13 @@
       "matches": ["<all_urls>"]
     }
   ],
+  "background": {
+    "service_worker": "background.js"
+  },
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["content.js"],
+      "js": ["candidate-utils.js", "content.js"],
       "run_at": "document_idle"
     }
   ]
