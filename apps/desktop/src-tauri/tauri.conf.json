@@ -36,6 +36,9 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "resources": {
+      "../../extension/**/*": "extension/"
+    },
     "windows": {
       "nsis": {
         "installerIcon": "icons/icon.ico",

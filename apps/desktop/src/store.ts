@@ -82,6 +82,12 @@ interface State {
   // —— codex 可用性（App 挂载取一次；创作板/生成面板共用，约定 7 置灰依据）——
   codexHealth: CodexHealth | null;
   setCodexHealth: (h: CodexHealth | null) => void;
+  // 扩展连接状态（心跳/采集触发；App 挂载取 + listen collect://extension-connected/disconnected）。
+  extensionConnected: boolean;
+  setExtensionConnected: (v: boolean) => void;
+  // 手动唤起扩展引导（点工具栏灰点设 true）；连上时自动清。
+  extensionOnboardingForceOpen: boolean;
+  setExtensionOnboardingForceOpen: (v: boolean) => void;
   // —— 生成结果面板（独立于创作板；主区覆盖层，可随时开合，状态在 store 不丢）——
   genPanelOpen: boolean;
   genTurns: GenTurn[];
@@ -315,6 +321,11 @@ export const useStore = create<State>((set, get) => {
   // —— codex 可用性 ——
   codexHealth: null,
   setCodexHealth: (codexHealth) => set({ codexHealth }),
+  extensionConnected: false,
+  setExtensionConnected: (extensionConnected) => set({ extensionConnected }),
+  extensionOnboardingForceOpen: false,
+  setExtensionOnboardingForceOpen: (extensionOnboardingForceOpen) =>
+    set({ extensionOnboardingForceOpen }),
   // —— 生成结果面板 ——
   genPanelOpen: false,
   genTurns: [],

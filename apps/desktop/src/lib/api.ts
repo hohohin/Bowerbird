@@ -138,4 +138,7 @@ export const api = {
       sessionId: req.sessionId ?? null,
     }),
   cancelCodexCreate: () => invoke<void>("cancel_codex_create"),
+  // 扩展小白化：连接状态 + 扩展文件夹路径（引导「一键复制」用，不自动打开——Windows 上不稳）。
+  extensionStatus: () => invoke<boolean>("extension_status"),
+  extensionFolderPath: () => invoke<string>("extension_folder_path"),
 };

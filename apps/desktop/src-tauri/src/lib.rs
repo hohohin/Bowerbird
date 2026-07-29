@@ -37,16 +37,20 @@ pub fn run() {
                 db.fts5_enabled()?
             );
 
-            // collect WS server（接收浏览器扩展采集消息，开发计划 §5.2）
+            // collect WS server（接收浏览器扩展采集消息，开发计划 §5.2）。
+            // extension_status 共享给 extension_status command + 后台心跳超时 tick。
+            let extension_status = collect::ws_server::ExtensionStatus::new();
             let paths_ws = paths.clone();
             let db_ws = db.clone();
             let app_handle = app.handle().clone();
+            let status_ws = extension_status.clone();
             tauri::async_runtime::spawn(async move {
-                if let Err(e) = collect::ws_server::start(paths_ws, db_ws, app_handle).await {
+                if let Err(e) = collect::ws_server::start(paths_ws, db_ws, app_handle, status_ws).await {
                     tracing::error!("collect ws server stopped: {e}");
                 }
             });
 
+            app.manage(extension_status);
             app.manage(paths);
             app.manage(db);
             Ok(())
@@ -108,6 +112,8 @@ pub fn run() {
             commands::codex::codex_install,
             commands::codex::codex_login,
             commands::codex::cancel_codex_setup,
+            commands::collect::extension_status,
+            commands::collect::extension_folder_path,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

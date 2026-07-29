@@ -553,7 +553,6 @@ pub(crate) fn resolve_npm_binary() -> Option<String> {
 pub(crate) fn npm_command(binary: &str, args: &[&str]) -> Command {
     #[cfg(target_os = "windows")]
     {
-        use std::os::windows::process::CommandExt;
         let joined = args.join(" ");
         let mut command = Command::new("cmd.exe");
         command.raw_arg(format!("/D /S /C \"\"{binary}\" {joined}\""));

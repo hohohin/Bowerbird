@@ -20,12 +20,51 @@ use crate::db::Database;
 
 pub const ADDR: &str = "127.0.0.1:39871";
 
+/// 扩展连接状态（ws_server 写、`extension_status` command 读，经 lib.rs `manage` 共享）。
+/// 内部 Arc，Clone 共享同一份 last_seen / connected。
+#[derive(Clone, Default)]
+pub struct ExtensionStatus {
+    last_seen: Arc<std::sync::Mutex<Option<std::time::Instant>>>,
+    connected: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl ExtensionStatus {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    /// 收到扩展任意消息（ping/save/save_batch）时调：更新 last_seen；
+    /// 返回是否「刚连上」（false→true 跳变），供调用方 emit `collect://extension-connected`。
+    pub fn touch(&self) -> bool {
+        *self.last_seen.lock().unwrap() = Some(std::time::Instant::now());
+        !self.connected.swap(true, std::sync::atomic::Ordering::Relaxed)
+    }
+    pub fn is_connected(&self) -> bool {
+        self.connected.load(std::sync::atomic::Ordering::Relaxed)
+    }
+    /// 心跳超时检查：距上次消息超过 `timeout` 且当前 connected → 清 last_seen 并置 false，
+    /// 返回是否「刚断开」（true→false 跳变），供 tick task emit `collect://extension-disconnected`。
+    pub fn check_timeout(&self, timeout: std::time::Duration) -> bool {
+        let mut guard = self.last_seen.lock().unwrap();
+        if let Some(t) = *guard {
+            if t.elapsed() > timeout {
+                *guard = None;
+                drop(guard);
+                return self
+                    .connected
+                    .swap(false, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+        false
+    }
+}
+
 #[derive(Clone)]
 struct AppState {
     paths: Arc<LibraryPaths>,
     db: Arc<Database>,
     app: AppHandle,
     client: reqwest::Client,
+    status: ExtensionStatus,
 }
 
 async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
@@ -33,12 +72,18 @@ async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl
 }
 
 async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: AppState) {
+    tracing::info!("collect ws: connection opened");
     while let Some(Ok(msg)) = socket.recv().await {
         if let Message::Text(text) = msg {
+            // 任意消息（ping / save / save_batch）= 扩展在线；touch 并在 false→true 跳变时 emit。
+            if state.status.touch() {
+                let _ = state.app.emit("collect://extension-connected", ());
+            }
             let resp = handle_message(&text, &state).await;
             let _ = socket.send(Message::Text(resp)).await;
         }
     }
+    tracing::info!("collect ws: connection closed");
 }
 
 async fn handle_message(text: &str, state: &AppState) -> String {
@@ -149,14 +194,30 @@ pub async fn start(
     paths: Arc<LibraryPaths>,
     db: Arc<Database>,
     app: AppHandle,
+    status: ExtensionStatus,
 ) -> Result<(), std::io::Error> {
     let client = ingest::download_client().map_err(std::io::Error::other)?;
     let state = AppState {
         paths,
         db,
-        app,
+        app: app.clone(),
         client,
+        status: status.clone(),
     };
+    // 心跳超时 tick：每 5s 检查，距上次消息 > 30s（错过 1 个 15s 心跳）→ emit disconnected。
+    // 让前端状态指示器在扩展被 disable / 卸载后及时变灰，而非永久卡绿。
+    let tick_status = status.clone();
+    let tick_app = app.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+        let timeout = std::time::Duration::from_secs(30);
+        loop {
+            interval.tick().await;
+            if tick_status.check_timeout(timeout) {
+                let _ = tick_app.emit("collect://extension-disconnected", ());
+            }
+        }
+    });
     let app = Router::new()
         .route("/ws", get(ws_handler))
         .with_state(state);

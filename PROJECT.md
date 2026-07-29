@@ -25,7 +25,7 @@
 
 > 更新时间：2026-07-29
 
-**当前阶段：1.0 功能路径打通 + v1 范围扩展到生成（⑥）+ 创作板 UI 已实现（2026-07-18 重写为 ProseMirror）+ codex CLI 隐形（2026-07-29，首启一键安装/OAuth 登录，用户不碰终端）。** 详情页「反推」真正看图（codex CLI + gpt-5.5，ChatGPT 订阅，绕过 API quota）；FTS5 文件名搜索可用；**创作板（真实 prompt 文本编辑器 + @ 选图）已落地**（[CreationBoard.tsx](apps/desktop/src/components/CreationBoard.tsx)）；**生成（⑥）纳入 v1**，待 spike 验证 codex CLI 的画图能力。
+**当前阶段：1.0 功能路径打通 + v1 范围扩展到生成（⑥）+ 创作板 UI 已实现（2026-07-18 重写为 ProseMirror）+ codex CLI 隐形（2026-07-29，首启一键安装/OAuth 登录，用户不碰终端）+ 扩展小白化（2026-07-29，引导 + 心跳 + 状态指示器 + 随包内嵌）。** 详情页「反推」真正看图（codex CLI + gpt-5.5，ChatGPT 订阅，绕过 API quota）；FTS5 文件名搜索可用；**创作板（真实 prompt 文本编辑器 + @ 选图）已落地**（[CreationBoard.tsx](apps/desktop/src/components/CreationBoard.tsx)）；**生成（⑥）纳入 v1**，待 spike 验证 codex CLI 的画图能力。
 
 **源码树（按开发计划 §7）：** `apps/desktop/{src, src-tauri}`、`apps/extension/`、`packages/shared/`。常用命令：`pnpm install`、`pnpm tauri dev`、`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml`。
 
@@ -82,6 +82,8 @@
 
 - **codex CLI 隐形 · B 升级（2026-07-29）**：首启引导从「复制命令让用户去终端跑」升级为 **app 内一键执行**——step1 `codex_install`（spawn `npm install -g @openai/codex`，逐行 stdout/stderr 经 `codex://setup-progress` 流式，Windows 含空格 npm.cmd 路径走 `raw_arg`，见踩坑）+ step2 `codex_login`（spawn `codex login`，codex 自己开系统浏览器走 ChatGPT OAuth → 写 `~/.codex/auth.json`）。**用户全程不碰终端**。后端 spawn 走 `tokio::process::Command`（**不受 Tauri shell scope 限制**，capabilities 零改动）。Node/npm 缺失返回 reason，前端给「打开 Node 官网」按钮。安装/登录成功 emit `codex://health-changed`，App + AssetDetail 各自监听重取 codexHealth（修 AssetDetail 独立 useState 不同步，见踩坑）。新增 [codex_cli.rs](apps/desktop/src-tauri/src/codex/codex_cli.rs) `resolve_npm_binary`/`npm_command`、[commands/codex.rs](apps/desktop/src-tauri/src/commands/codex.rs) `codex_install`/`codex_login`/`cancel_codex_setup`、[api.ts](apps/desktop/src/lib/api.ts) 对应封装、[CodexOnboarding.tsx](apps/desktop/src/components/CodexOnboarding.tsx) 改造（复制→执行 + 进度/状态/可取消）、[App.tsx](apps/desktop/src/App.tsx)/[AssetDetail.tsx](apps/desktop/src/components/AssetDetail.tsx) 加 health-changed listener。顺带清 [Toolbar.tsx](apps/desktop/src/components/Toolbar.tsx) 的 SettingsDialog 死引用（vite 拦死引用，见踩坑）。**端到端实测跑通**：一键安装（npm 进度流式 → ✓）→ 一键登录（浏览器 OAuth → ✓）→ onboarding 自动关。
 
+- **扩展小白化安装（2026-07-29）**：浏览器扩展从「README 手工装 + app 零反馈」升级为 app 内引导 + 心跳连接跟踪 + 状态指示器 + 随包内嵌。① [content.js](apps/extension/content.js) 加心跳（每 15s ping，移植自 Windows 版）；② [ws_server.rs](apps/desktop/src-tauri/src/collect/ws_server.rs) 加 `ExtensionStatus`（last_seen + connected）——收任意消息 touch/emit `collect://extension-connected`，后台 tick 30s 超时 emit `collect://extension-disconnected`；③ 新增 [ExtensionOnboarding.tsx](apps/desktop/src/components/ExtensionOnboarding.tsx)（4 步引导：复制 `chrome://extensions` → 开发者模式 → 复制扩展文件夹路径 → 自动检测；三步带 gif 截图、点击放大）+ [ExtensionStatus.tsx](apps/desktop/src/components/ExtensionStatus.tsx)（工具栏绿/灰点，点灰点重弹引导）；④ [tauri.conf.json](apps/desktop/src-tauri/tauri.conf.json) `bundle.resources` 内嵌扩展（release 开箱即有）。**不自动 spawn 打开 chrome/explorer**（Windows 上 Chrome 单实例丢 URL、explorer 不认含 `..` 路径，详见踩坑），改「一键复制 + 教粘贴」。**端到端实测**：复制粘贴装好 → ~15s 绿点 + 引导自动关 → 关扩展 30s 变灰。
+
 **测试：** `cargo test` 51 通过（导入/去重/多图过滤 + 扩展下载格式识别/本机内网 URL 拒绝 + assemble_pack + FTS5 文件名搜索 + analyses 读写 + caption sections 解析 + list_prompted_assets + 采集即命名 `clean_name`/`split_name_and_desc` + caption 共享模块 + 生成图取图快照差分 `list_new_generated` + 标签 `get_or_create`/`set_asset_tags` source 隔离 + `tag:` 智能查询 + `list_tags_with_count` + 色板 `hex_to_bucket`/`colors_to_buckets` + `asset_colors` 幂等/folder 过滤 + 会话 prompt 链 `generation_prompt_chain` + 生成图 prompt 维度识别 `extract_dim_sections`/`build_generation_caption` + 同流程合并 `collapse_generation_groups`/`list_generation_group` + 收藏夹 `collection_roundtrip_and_guards` + 生成历史回看 `generation_history`）；前端 `tsc --noEmit` 通过；扩展三份 `content.js` / 两份 `background.js` 均通过 `node --check`，三份 Manifest 均通过 JSON 解析。
 
 **未开始 / 待办：**
@@ -130,6 +132,8 @@
 13. **首个 Modal 形态：全屏遮罩（2026-07-10）**：项目此前**无 Dialog/Modal/`fixed` 先例**——唯一的「盖住主区」覆盖层 GenerationPanel 用 `absolute inset-0 z-10`（只盖主区、不盖 Toolbar/Sidebar、无 backdrop）。首启引导页 [CodexOnboarding.tsx](apps/desktop/src/components/CodexOnboarding.tsx) 新立全屏模态：`fixed inset-0 z-50`（盖住整个 app）+ `bg-black/60` 半透明遮罩 + 居中卡片（`bg-panel border border-edge rounded-lg`，项目首个用 box-shadow 的浮层）。组件**自管可见性**（不满足条件直接 `return null`），挂载点 `App.tsx` 最外层 div 内、`<Toolbar>` 前，**无条件渲染** `{<CodexOnboarding />}`；「已看过」flag 不入 store（项目零 zustand persist），照 [AssetDetail.tsx](apps/desktop/src/components/AssetDetail.tsx) 直接读写 `localStorage`（key 前缀 `bowerbird.`）。后续再加 Modal/Dialog/确认框 沿用此形态。
 
 14. **codex CLI 隐形（一键安装 + OAuth 登录）**（2026-07-29）：codex CLI 仍是唯一 provider（约定 1 不变），但用户**无需碰终端**——首启引导（[CodexOnboarding.tsx](apps/desktop/src/components/CodexOnboarding.tsx)）从「复制命令让用户去终端跑」升级为 app 内一键执行：step1 `codex_install`（spawn `npm install -g @openai/codex`，逐行进度经 `codex://setup-progress` 流式）+ step2 `codex_login`（spawn `codex login`，codex 自己开浏览器走 ChatGPT OAuth，写 `~/.codex/auth.json`）。后端 spawn 走 `tokio::process::Command`（**不受 Tauri shell scope 限制**，不改 capabilities）。Node/npm 缺失返回 reason，前端引导装 Node。安装/登录成功 emit `codex://health-changed`，App + AssetDetail 各自监听重取 codexHealth（修 AssetDetail 独立 useState 不同步，见踩坑）。Windows 上 npm.cmd 路径常含空格（`C:\Program Files\nodejs`），`npm_command` 用 `raw_arg` 拼 `cmd /S /C ""path" args"`（详见踩坑）。**备选**：[codex/openai_api.rs](apps/desktop/src-tauri/src/codex/openai_api.rs)（OpenAI Images API 生图，API key 路线，未接入主线）——经研究 ChatGPT 订阅额度不对第三方 API 开放、codex CLI 是唯一合法订阅通道，故走 CLI 隐形而非换 provider。
+
+15. **扩展引导 + 心跳连接跟踪（2026-07-29）**：canonical 扩展（[apps/extension/](apps/extension/)）加心跳（每 15s WS ping，移植自 Windows 版），后端 ws_server 用 `ExtensionStatus`（last_seen + connected）跟踪——收任意消息（ping/save/save_batch）touch + emit `collect://extension-connected`，后台 tick 30s 超时 emit `collect://extension-disconnected`。前端 store `extensionConnected` + [ExtensionOnboarding](apps/desktop/src/components/ExtensionOnboarding.tsx)（未连自动弹 / 灰点重弹 / 连上自关）+ [ExtensionStatus](apps/desktop/src/components/ExtensionStatus.tsx)（工具栏绿/灰点）。随包内嵌（tauri resources `../../extension/**` → `extension/`，release 开箱即有；dev 走源码 `apps/extension/`）。**不自动 spawn 打开 chrome://extensions / 文件夹**——Windows 上不稳（Chrome 单实例丢 URL、explorer 不认含 `..` 路径，详见踩坑），改「一键复制 + 教用户粘贴」。Windows 独立 save_blob 版（[Windows/extension/](Windows/extension/)）心跳已存（约定 14），本次给 canonical 补齐对等能力。
 
 ---
 
@@ -386,3 +390,29 @@
 - 根因：[AssetDetail.tsx](apps/desktop/src/components/AssetDetail.tsx) 有独立的 `const [codexHealth, setCodexHealth] = useState(...)`，**不走 store**，登录成功后没人通知它刷新。
 - 解决：`codex_install`/`codex_login` 成功后端 emit `codex://health-changed`；App（写 store）+ AssetDetail（自己的 useState）各自 listen 重取 codexHealth。最小改动（不动 AssetDetail 的 state 结构，只加 listener）。
 - 教训：同一份状态（codexHealth）在多个组件有副本时，变更要广播 event 让所有副本自刷新，否则部分组件展示过期。
+
+### tauri.conf resources 路径相对 src-tauri（2026-07-29）
+- 现象：`cargo check` 报 `glob pattern ../../apps/extension/**/* path not found`，build script 失败。
+- 根因：bundle.resources 路径相对 **tauri.conf.json 所在目录（src-tauri）**，到 `apps/extension` 是 `../../extension`（src-tauri→apps/desktop→apps→extension），多写一层 `apps` 成 `apps/apps/extension`。
+- 解决：`"../../extension/**/*": "extension/"`。
+- 相关文件：[tauri.conf.json](apps/desktop/src-tauri/tauri.conf.json)。
+
+### explorer 不认含 .. 路径 + Chrome 单实例丢 URL → 改「复制 + 教粘贴」（2026-07-29）
+- 现象：`open_extension_folder` 用 `CARGO_MANIFEST_DIR/../../extension`（含 `..`）→ explorer 兜底开「文档」；`open_extensions_page` 用 `start chrome URL` → 开新 Chrome 但 URL 丢。
+- 根因：① explorer.exe 不认含 `..` 的路径，兜底开默认库（文档）；② Chrome 已跑时 `start chrome URL` 的 URL arg 被单实例吞掉，只开空窗口。即便定位 chrome.exe + `--new-window` 也因用户装位置不一而不稳。
+- 解决：放弃自动打开，改**一键复制**——`chrome://extensions` 前端直接复制固定串；扩展文件夹路径后端 `extension_folder_path` 返回（dev 用 `parent().parent()` 拼绝对路径避免 `..`），前端复制 + 教用户粘贴到 chrome「加载已解压」对话框地址栏。
+- 教训：Windows 上「自动打开外部程序 + 传参」坑多（路径含空格/`..`、浏览器单实例），引导类功能优先「复制 + 教粘贴」，稳且跨浏览器。
+- 相关文件：[commands/collect.rs](apps/desktop/src-tauri/src/commands/collect.rs)、[ExtensionOnboarding.tsx](apps/desktop/src/components/ExtensionOnboarding.tsx)。
+
+### 残留扩展心跳导致引导反复消失（2026-07-29）
+- 现象：移除一个浏览器的 Bowerbird 扩展后，ExtensionOnboarding 仍反复消失/出现（绿点亮灭）。
+- 根因：扩展跟着浏览器走（不随 git 分支），别的浏览器（如 Edge）或未刷新页面的残留 content script 仍每 15s 心跳连 WS → `collect://extension-connected` → 引导判定「已连」自动关；扩展断开 30s 超时 → 又弹，反复。
+- 排查：ws_server 加 `tracing::info!("collect ws: connection opened/closed")` 日志看频率 + `netstat -ano | findstr 39871` 找连接进程。
+- 解决：找出并移除所有浏览器的扩展 / 刷新页面清残留 content script。
+- 相关文件：[ws_server.rs](apps/desktop/src-tauri/src/collect/ws_server.rs)（连接日志）。
+
+### tokio Command 的 creation_flags/raw_arg 是 inherent 方法（2026-07-29）
+- 现象：`use std::os::windows::process::CommandExt;` 报 unused import，但 `.creation_flags()` / `.raw_arg()` 能调。
+- 根因：tokio::process::Command 在 Windows 自带 creation_flags/raw_arg（inherent 方法），不需 std trait 在 scope。
+- 解决：删多余的 `use std::os::windows::process::CommandExt;`。
+- 相关文件：[codex_cli.rs](apps/desktop/src-tauri/src/codex/codex_cli.rs)、[collect.rs](apps/desktop/src-tauri/src/commands/collect.rs)。

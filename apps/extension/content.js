@@ -8,6 +8,20 @@
   const WS_URL = "ws://127.0.0.1:39871/ws";
   const XHS_HOST = "www.xiaohongshu.com";
 
+  // 心跳：让桌面端知道扩展已安装且当前浏览器可连接（每 15s 建短连发 ping）。
+  // 不影响采集（采集走独立的 save_batch 连接）；桌面端据此显示「扩展已连接」。
+  function heartbeat() {
+    try {
+      const ws = new WebSocket(WS_URL);
+      const timer = setTimeout(() => ws.close(), 3000);
+      ws.onopen = () => ws.send(JSON.stringify({ type: "ping" }));
+      ws.onmessage = () => { clearTimeout(timer); ws.close(); };
+      ws.onerror = () => { clearTimeout(timer); };
+    } catch { /* 桌面端未启动时静默，采集时再给明确提示 */ }
+  }
+  heartbeat();
+  setInterval(heartbeat, 15000);
+
   const btn = document.createElement("div");
   const btnLogo = document.createElement("img");
   btnLogo.src = chrome.runtime.getURL("icons/48x48.png");

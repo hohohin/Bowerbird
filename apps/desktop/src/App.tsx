@@ -8,6 +8,7 @@ import { BatchBar } from "./components/BatchBar";
 import { CreationBoard } from "./components/CreationBoard";
 import { GenerationPanel } from "./components/GenerationPanel";
 import { CodexOnboarding } from "./components/CodexOnboarding";
+import { ExtensionOnboarding } from "./components/ExtensionOnboarding";
 import { useStore } from "./store";
 import { api } from "./lib/api";
 import type { CodexChunk } from "./lib/types";
@@ -33,6 +34,7 @@ function App() {
   const boardOpen = useStore((s) => s.boardOpen);
   const genPanelOpen = useStore((s) => s.genPanelOpen);
   const setCodexHealth = useStore((s) => s.setCodexHealth);
+  const setExtensionConnected = useStore((s) => s.setExtensionConnected);
 
   async function refresh() {
     try {
@@ -201,12 +203,33 @@ function App() {
     };
   }, [setCodexHealth]);
 
+  // 扩展连接状态：挂载取一次 + listen 连/断（心跳经 collect://extension-connected/disconnected）。
+  useEffect(() => {
+    api.extensionStatus().then(setExtensionConnected).catch(() => {});
+    let unlistenConn: UnlistenFn | undefined;
+    let unlistenDisc: UnlistenFn | undefined;
+    let alive = true;
+    listen("collect://extension-connected", () => setExtensionConnected(true)).then(
+      (u) => (alive ? (unlistenConn = u) : u())
+    );
+    listen("collect://extension-disconnected", () => setExtensionConnected(false)).then(
+      (u) => (alive ? (unlistenDisc = u) : u())
+    );
+    return () => {
+      alive = false;
+      unlistenConn?.();
+      unlistenDisc?.();
+    };
+  }, [setExtensionConnected]);
+
   const showDetail = mode === "browse" && detailAssetId !== null;
 
   return (
     <div className="flex h-full w-full flex-col">
       {/* codex 首启引导：未装/未登录时全屏遮罩（组件自管可见性，已就绪或已看过则返回 null） */}
       <CodexOnboarding />
+      {/* 扩展安装引导：未连时全屏遮罩（点工具栏灰点可手动唤起），连上自动关 */}
+      <ExtensionOnboarding />
       <Toolbar onRefresh={refresh} />
       <div className="flex flex-1 overflow-hidden">
         <Sidebar />
