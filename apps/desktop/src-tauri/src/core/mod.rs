@@ -4,5 +4,8 @@ pub mod autoname;
 pub mod caption;
 pub mod ingest;
 pub mod library;
+pub mod migrate;
 pub mod paths;
+pub mod projects;
+pub mod settings;
 pub mod task_queue;

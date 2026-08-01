@@ -4,27 +4,27 @@ import { open } from "@tauri-apps/plugin-shell";
 import { useStore } from "../store";
 import { api } from "../lib/api";
 
-/** localStorage key：用户已看过/已跳过引导，不再自动弹出。 */
-const SEEN_KEY = "bowerbird.onboardingSeen";
 const NODE_SITE = "https://nodejs.org";
 
 type StepState = "idle" | "running" | "done" | "error";
 
 /**
- * codex 首启引导（约定 7：离线/无账号降级的入口；B 升级：一键安装 + 一键 OAuth 登录）。
+ * codex 配置引导（一级「环境状态」总览的二级弹窗；约定 7 离线/无账号降级的入口）。
  *
- * codexHealth 已由 App 挂载时取好并存进 store，这里仅消费。三态：`null`（检测中，不闪）、
- * `{ok:true}`（就绪，不显）、`{ok:false}`（未就绪，显引导）。用户点「稍后再说」或检测通过后
- * 写 localStorage，持久不再自动弹出。
+ * 不再自行判断 seen、不自动弹——只由一级总览卡片经 `codexOnboardingForceOpen` 跳转唤起；
+ * 「稍后再说」与检测成功均返回一级总览，由一级负责最终关闭与写 seen。
  *
  * step1「一键安装」→ `codex_install`（spawn npm，进度经 `codex://setup-progress` 推）；
  * step2「一键登录」→ `codex_login`（spawn codex login，codex 自己开浏览器 OAuth）。
- * 成功后端 emit `codex://health-changed` → 自动重检 → ok 则关闭引导。
+ * 成功后端 emit `codex://health-changed` → 自动重检 → ok 则回一级。
  */
 export function CodexOnboarding() {
   const codexHealth = useStore((s) => s.codexHealth);
   const setCodexHealth = useStore((s) => s.setCodexHealth);
-  const [seen, setSeen] = useState(() => localStorage.getItem(SEEN_KEY) === "1");
+  const forceOpen = useStore((s) => s.codexOnboardingForceOpen);
+  const setForceOpen = useStore((s) => s.setCodexOnboardingForceOpen);
+  // 点「稍后再说」/检测成功回一级总览（而非直接关回主界面）。
+  const setOverviewOpen = useStore((s) => s.setOnboardingForceOpen);
   const [checking, setChecking] = useState(false);
 
   const [installState, setInstallState] = useState<StepState>("idle");
@@ -48,7 +48,7 @@ export function CodexOnboarding() {
     };
   }, []);
 
-  // 安装/登录成功后端 emit `codex://health-changed` → 自动重检（ok 则关闭引导）。
+  // 安装/登录成功后端 emit `codex://health-changed` → 自动重检（ok 则回一级）。
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
     let alive = true;
@@ -63,12 +63,12 @@ export function CodexOnboarding() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 还没检测完 / 已就绪 / 已看过 → 不显示
-  if (seen || !codexHealth || codexHealth.ok) return null;
+  // 只由一级总览卡片跳转唤起（forceOpen）；不自动弹。
+  if (!forceOpen) return null;
 
   function dismiss() {
-    localStorage.setItem(SEEN_KEY, "1");
-    setSeen(true);
+    setForceOpen(false);
+    setOverviewOpen(true);
   }
 
   async function recheck() {
@@ -76,9 +76,10 @@ export function CodexOnboarding() {
     try {
       const h = await api.codexHealth();
       setCodexHealth(h);
+      // 检测通过：关二级 + 回一级总览（一级只能由用户关闭，不在此处自动收）。
       if (h.ok) {
-        localStorage.setItem(SEEN_KEY, "1");
-        setSeen(true);
+        setForceOpen(false);
+        setOverviewOpen(true);
       }
     } catch {
       setCodexHealth({ ok: false, reason: "codex 状态检测失败" });
@@ -131,7 +132,12 @@ export function CodexOnboarding() {
     }
   }
 
-  const installDone = installState === "done";
+  // CLI 已装即可登录：本地装过 / 已就绪 / 后端判「已装但未登录」三种都算。
+  const installDone =
+    installState === "done" ||
+    codexHealth?.ok === true ||
+    codexHealth?.reason.includes("未登录") === true;
+  const loginDone = loginState === "done" || codexHealth?.ok === true;
   const needNode =
     installState === "error" && installReason.includes("Node");
 
@@ -143,10 +149,16 @@ export function CodexOnboarding() {
           反推、生成图、采集即命名都依赖 codex CLI（走你的 ChatGPT 订阅）。不配置也能正常使用本地素材库——浏览、搜索、整理、收藏。
         </p>
 
-        {/* 当前状态（复用后端 reason 文案） */}
-        <div className="mt-4 rounded bg-red-500/15 p-2 text-xs text-red-300">
-          当前状态：{codexHealth.reason}
-        </div>
+        {/* 当前状态：就绪 → 绿（提示可直接关闭）；未就绪 → 红 + 后端 reason。 */}
+        {codexHealth?.ok ? (
+          <div className="mt-4 rounded bg-green-500/15 p-2 text-xs text-green-400">
+            ✓ codex 已就绪，无需配置，可直接关闭此窗口。
+          </div>
+        ) : (
+          <div className="mt-4 rounded bg-red-500/15 p-2 text-xs text-red-300">
+            当前状态：{codexHealth?.reason ?? "检测中…"}
+          </div>
+        )}
 
         <ol className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
           {/* step 1 一键安装 */}
@@ -201,17 +213,17 @@ export function CodexOnboarding() {
                 2
               </span>
               <span className="text-ink">登录 ChatGPT 订阅</span>
-              {loginState === "done" && <span className="text-xs text-green-400">✓ 已登录</span>}
+              {loginDone && <span className="text-xs text-green-400">✓ 已登录</span>}
             </div>
             <div className="mt-1.5 pl-7">
               <button
                 onClick={() => void doLogin()}
-                disabled={!installDone || loginState === "done"}
+                disabled={!installDone || loginDone}
                 className="rounded-md bg-accent px-3 py-1 text-[12px] font-medium text-black hover:opacity-90 disabled:opacity-50"
               >
                 {loginState === "running"
                   ? "等待浏览器登录…（点击取消）"
-                  : loginState === "done"
+                  : loginDone
                     ? "已登录"
                     : "一键登录 ChatGPT"}
               </button>
@@ -233,7 +245,7 @@ export function CodexOnboarding() {
               <span className="text-ink">完成后自动检测</span>
             </div>
             <div className="mt-1 pl-7 text-xs text-muted">
-              登录成功后会自动检测并关闭此窗口；也可手动重新检测。
+              登录成功后会自动检测并返回环境状态总览；也可手动重新检测。
             </div>
           </li>
         </ol>

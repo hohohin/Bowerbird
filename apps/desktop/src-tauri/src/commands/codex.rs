@@ -409,6 +409,7 @@ pub async fn codex_create_image(
     prompt: String,
     reference_images: Vec<String>,
     session_id: Option<String>,
+    project_id: Option<String>,
 ) -> Result<(), AppError> {
     // 首轮（无 session_id）：包一句明确要 codex 出图，触发 imagegen；
     // 续轮（有 session_id = resume）：codex 已在画图上下文里，用户修改意见原样发。
@@ -475,6 +476,12 @@ pub async fn codex_create_image(
         )
         .await
         .map_err(|e| AppError::Other(e.to_string()))??;
+    if let Some(project_id) = project_id.as_deref() {
+        let ids: Vec<String> = gen_assets.iter().map(|asset| asset.id.clone()).collect();
+        if let Err(e) = db.add_assets_to_project(project_id, &ids) {
+            tracing::warn!("failed to link generated assets to project {project_id}: {e}");
+        }
+    }
 
     let asset_paths: Vec<PathBuf> = gen_assets
         .iter()

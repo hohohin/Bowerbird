@@ -2,6 +2,7 @@
 //! Database 的业务方法 split-impl 在本文件（连接管理仍在 db/mod.rs）。
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
@@ -209,6 +210,20 @@ pub fn collapse_generation_groups<T>(items: Vec<T>, session: impl Fn(&T) -> Opti
         .collect()
 }
 
+pub fn delete_asset_files(store_path: Option<&Path>, thumb_path: Option<&Path>) {
+    let mut seen = std::collections::HashSet::new();
+    for path in [store_path, thumb_path].into_iter().flatten() {
+        if !seen.insert(path.to_path_buf()) {
+            continue;
+        }
+        if let Err(error) = std::fs::remove_file(path) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!("delete file failed for {}: {error}", path.display());
+            }
+        }
+    }
+}
+
 impl Database {
     pub fn insert_asset(&self, a: &Asset) -> AppResult<()> {
         let conn = self.conn.lock().unwrap();
@@ -246,6 +261,7 @@ impl Database {
     pub fn list_assets(
         &self,
         folder_id: Option<&str>,
+        project_id: Option<&str>,
         limit: i64,
         offset: i64,
     ) -> AppResult<Vec<Asset>> {
@@ -254,6 +270,7 @@ impl Database {
                 if folder.kind.as_deref() == Some("smart") {
                     return self.list_assets_smart(
                         folder.smart_query.as_deref().unwrap_or(""),
+                        project_id,
                         limit,
                         offset,
                     );
@@ -262,11 +279,17 @@ impl Database {
         }
         let conn = self.conn.lock().unwrap();
         let sql = format!(
-            "SELECT {ASSET_COLS} FROM assets WHERE (?1 IS NULL OR folder_id IS ?1) \
-             ORDER BY created_at DESC LIMIT ?2 OFFSET ?3"
+            "SELECT {ASSET_COLS} FROM assets \
+             WHERE (?1 IS NULL OR folder_id IS ?1) \
+             AND (?2 IS NULL OR EXISTS(SELECT 1 FROM project_assets pa \
+                 WHERE pa.asset_id = assets.id AND pa.project_id IS ?2)) \
+             ORDER BY created_at DESC LIMIT ?3 OFFSET ?4"
         );
         let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map(rusqlite::params![folder_id, limit, offset], asset_from_row)?;
+        let rows = stmt.query_map(
+            rusqlite::params![folder_id, project_id, limit, offset],
+            asset_from_row,
+        )?;
         let mut out = Vec::new();
         for r in rows {
             out.push(r?);
@@ -274,10 +297,15 @@ impl Database {
         Ok(out)
     }
 
-    pub fn count_assets(&self) -> AppResult<i64> {
+    pub fn count_assets(&self, project_id: Option<&str>) -> AppResult<i64> {
         let conn = self.conn.lock().unwrap();
-        let n: i64 =
-            conn.query_row("SELECT COUNT(*) FROM assets", [], |r| r.get(0))?;
+        let n: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM assets a WHERE (?1 IS NULL OR EXISTS(\
+               SELECT 1 FROM project_assets pa WHERE pa.asset_id = a.id AND pa.project_id IS ?1\
+             ))",
+            rusqlite::params![project_id],
+            |r| r.get(0),
+        )?;
         Ok(n)
     }
 
@@ -315,20 +343,10 @@ impl Database {
             .unwrap_or((None, None));
         conn.execute("DELETE FROM assets WHERE id = ?1", rusqlite::params![id])?;
         drop(conn); // 释放锁后再做文件 IO，避免阻塞其它 DB 操作。
-
-        // 物理删除：去重（SVG 的 thumb_path == store_path），best-effort
-        // （文件已不存在不算错——例如导入时缩略图生成失败留下的空引用）。
-        let mut seen = std::collections::HashSet::new();
-        for p in [store_path, thumb_path].into_iter().flatten() {
-            if !seen.insert(p.clone()) {
-                continue;
-            }
-            if let Err(e) = std::fs::remove_file(&p) {
-                if e.kind() != std::io::ErrorKind::NotFound {
-                    tracing::warn!("delete file failed for {p}: {e}");
-                }
-            }
-        }
+        delete_asset_files(
+            store_path.as_deref().map(Path::new),
+            thumb_path.as_deref().map(Path::new),
+        );
         Ok(())
     }
 
@@ -507,6 +525,7 @@ impl Database {
     pub fn list_assets_by_collection(
         &self,
         collection_id: &str,
+        project_id: Option<&str>,
         limit: i64,
         offset: i64,
     ) -> AppResult<Vec<Asset>> {
@@ -515,11 +534,13 @@ impl Database {
             "SELECT {ASSET_COLS_A} FROM assets a \
              JOIN asset_collections ac ON ac.asset_id = a.id \
              WHERE ac.folder_id = ?1 \
-             ORDER BY a.created_at DESC LIMIT ?2 OFFSET ?3"
+             AND (?2 IS NULL OR EXISTS(SELECT 1 FROM project_assets pa \
+                 WHERE pa.asset_id = a.id AND pa.project_id IS ?2)) \
+             ORDER BY a.created_at DESC LIMIT ?3 OFFSET ?4"
         );
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(
-            rusqlite::params![collection_id, limit, offset],
+            rusqlite::params![collection_id, project_id, limit, offset],
             asset_from_row,
         )?;
         let mut out = Vec::new();
@@ -582,6 +603,7 @@ impl Database {
     pub fn list_assets_smart(
         &self,
         query: &str,
+        project_id: Option<&str>,
         limit: i64,
         offset: i64,
     ) -> AppResult<Vec<Asset>> {
@@ -589,11 +611,16 @@ impl Database {
         if let Some(name) = query.strip_prefix("tag:") {
             let sql = format!(
                 "SELECT {ASSET_COLS} FROM assets WHERE id IN (\
-                   SELECT at.asset_id FROM asset_tags at JOIN tags t ON t.id = at.tag_id WHERE t.name = ?3\
-                 ) ORDER BY created_at DESC LIMIT ?1 OFFSET ?2"
+                   SELECT at.asset_id FROM asset_tags at JOIN tags t ON t.id = at.tag_id WHERE t.name = ?4\
+                 ) AND (?3 IS NULL OR EXISTS(SELECT 1 FROM project_assets pa \
+                   WHERE pa.asset_id = assets.id AND pa.project_id IS ?3)) \
+                 ORDER BY created_at DESC LIMIT ?1 OFFSET ?2"
             );
             let mut stmt = conn.prepare(&sql)?;
-            let rows = stmt.query_map(rusqlite::params![limit, offset, name], asset_from_row)?;
+            let rows = stmt.query_map(
+                rusqlite::params![limit, offset, project_id, name],
+                asset_from_row,
+            )?;
             let mut out = Vec::new();
             for r in rows {
                 out.push(r?);
@@ -608,10 +635,16 @@ impl Database {
             ("1=1", String::new())
         };
         let sql = format!(
-            "SELECT {ASSET_COLS} FROM assets WHERE {cond} ORDER BY created_at DESC LIMIT ?1 OFFSET ?2"
+            "SELECT {ASSET_COLS} FROM assets WHERE {cond} \
+             AND (?4 IS NULL OR EXISTS(SELECT 1 FROM project_assets pa \
+               WHERE pa.asset_id = assets.id AND pa.project_id IS ?4)) \
+             ORDER BY created_at DESC LIMIT ?1 OFFSET ?2"
         );
         let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map(rusqlite::params![limit, offset, val], asset_from_row)?;
+        let rows = stmt.query_map(
+            rusqlite::params![limit, offset, val, project_id],
+            asset_from_row,
+        )?;
         let mut out = Vec::new();
         for r in rows {
             out.push(r?);
@@ -750,16 +783,27 @@ impl Database {
     }
 
     /// 全文检索（FTS5，trigram）。匹配 name/tags/prompt_body/annotation/ocr。
-    pub fn search_assets(&self, query: &str, limit: i64) -> AppResult<Vec<Asset>> {
+    pub fn search_assets(
+        &self,
+        query: &str,
+        project_id: Option<&str>,
+        limit: i64,
+    ) -> AppResult<Vec<Asset>> {
         let conn = self.conn.lock().unwrap();
         // JOIN 后 assets 与 library_fts 都有 name 列 → 必须用 a. 前缀消歧。
         let sql = "SELECT a.id, a.name, a.ext, a.origin_path, a.store_path, a.thumb_path, \
             a.size, a.width, a.height, a.duration, a.phash, a.colors, a.rating, a.source, \
             a.source_url, a.folder_id, a.created_at, a.file_mtime, a.generation_session_id \
             FROM assets a JOIN library_fts f ON f.asset_id = a.id \
-            WHERE library_fts MATCH ?1 ORDER BY rank LIMIT ?2";
+            WHERE library_fts MATCH ?1 \
+            AND (?2 IS NULL OR EXISTS(SELECT 1 FROM project_assets pa \
+                WHERE pa.asset_id = a.id AND pa.project_id IS ?2)) \
+            ORDER BY rank LIMIT ?3";
         let mut stmt = conn.prepare(sql)?;
-        let rows = stmt.query_map(rusqlite::params![query, limit], asset_from_row)?;
+        let rows = stmt.query_map(
+            rusqlite::params![query, project_id, limit],
+            asset_from_row,
+        )?;
         let mut out = Vec::new();
         for r in rows {
             out.push(r?);
@@ -841,16 +885,25 @@ impl Database {
     /// 取该资产所属生成会话的全部图（含自己），按 id ASC（ULID 时序 = 过程顺序）。
     /// 资产无 generation_session_id（非生成图）→ 子查询返回 NULL → `generation_session_id = NULL`
     /// 恒假 → 返回空（前端据此判断「非组、无轮播」）。
-    pub fn list_generation_group(&self, asset_id: &str) -> AppResult<Vec<Asset>> {
+    pub fn list_generation_group(
+        &self,
+        asset_id: &str,
+        project_id: Option<&str>,
+    ) -> AppResult<Vec<Asset>> {
         let conn = self.conn.lock().unwrap();
         let sql = format!(
             "SELECT {ASSET_COLS} FROM assets \
              WHERE generation_session_id = \
                (SELECT generation_session_id FROM assets WHERE id = ?1) \
+             AND (?2 IS NULL OR EXISTS(SELECT 1 FROM project_assets pa \
+               WHERE pa.asset_id = assets.id AND pa.project_id IS ?2)) \
              ORDER BY id ASC"
         );
         let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map(rusqlite::params![asset_id], asset_from_row)?;
+        let rows = stmt.query_map(
+            rusqlite::params![asset_id, project_id],
+            asset_from_row,
+        )?;
         let mut out = Vec::new();
         for r in rows {
             out.push(r?);
@@ -863,13 +916,19 @@ impl Database {
     /// 相同 prompt 合并为同一轮（一次 codex_create_image 产多张图 → 多行同 prompt、时序相邻）。
     /// `first_references` 取首版 generation_meta 的参考图，供前端「新会话重新生成」复用。
     /// 非生成图（assets.generation_session_id 为 NULL）→ session_id=None、turns 空。
-    pub fn generation_history(&self, asset_id: &str) -> AppResult<GenerationHistory> {
+    pub fn generation_history(
+        &self,
+        asset_id: &str,
+        project_id: Option<&str>,
+    ) -> AppResult<GenerationHistory> {
         let conn = self.conn.lock().unwrap();
-        // 先取会话 id；asset 不存在或无 session_id（非生成图）→ 空 history。
+        // 先取会话 id；asset 不存在、无 session_id 或不在项目 scope → 空 history。
         let session_id: Option<String> = conn
             .query_row(
-                "SELECT generation_session_id FROM assets WHERE id = ?1",
-                rusqlite::params![asset_id],
+                "SELECT generation_session_id FROM assets a WHERE a.id = ?1 \
+                 AND (?2 IS NULL OR EXISTS(SELECT 1 FROM project_assets pa \
+                   WHERE pa.asset_id = a.id AND pa.project_id IS ?2))",
+                rusqlite::params![asset_id, project_id],
                 |r| r.get::<_, Option<String>>(0),
             )
             .optional()?
@@ -886,12 +945,14 @@ impl Database {
              FROM analyses an JOIN assets a ON a.id = an.asset_id \
              WHERE an.kind = 'generation_meta' \
                AND json_extract(an.payload, '$.session_id') = ?1 \
+               AND (?2 IS NULL OR EXISTS(SELECT 1 FROM project_assets pa \
+                 WHERE pa.asset_id = a.id AND pa.project_id IS ?2)) \
              ORDER BY an.created_at ASC, an.id ASC",
         )?;
         let mut turns: Vec<GenerationHistoryTurn> = Vec::new();
         let mut first_references: Vec<String> = Vec::new();
         let mut refs_done = false;
-        let rows = stmt.query_map(rusqlite::params![session_id], |r| {
+        let rows = stmt.query_map(rusqlite::params![session_id, project_id], |r| {
             Ok((
                 r.get::<_, Option<String>>(0)?, // prompt
                 r.get::<_, Option<String>>(1)?, // store_path
@@ -943,7 +1004,19 @@ impl Database {
             )?;
             let mut out = Vec::new();
             for r in rows {
-                out.push(r?);
+                let asset = r?;
+                if let Some(project_id) = project_id {
+                    let visible: bool = conn.query_row(
+                        "SELECT EXISTS(SELECT 1 FROM project_assets \
+                         WHERE project_id = ?1 AND asset_id = ?2)",
+                        rusqlite::params![project_id, &asset.id],
+                        |row| row.get(0),
+                    )?;
+                    if !visible {
+                        continue;
+                    }
+                }
+                out.push(asset);
             }
             out
         };
@@ -956,7 +1029,10 @@ impl Database {
 
     /// 创作板用：有 caption（反推）的资产 + 最新 caption 正文（开发计划 §5.4）。
     /// 创作板打开时瀑布流只显示这些；缩略图槽的 prompt 内容来自 caption / dimensions。
-    pub fn list_prompted_assets(&self) -> AppResult<Vec<PromptedAsset>> {
+    pub fn list_prompted_assets(
+        &self,
+        project_id: Option<&str>,
+    ) -> AppResult<Vec<PromptedAsset>> {
         let conn = self.conn.lock().unwrap();
         // 无 JOIN → ASSET_COLS 不需表前缀；caption 取最新 analyses(kind=caption) 的 $.text。
         // caption_payload 用于反序列化结构化 dimensions；旧 payload 只有 text 时也兼容。
@@ -972,10 +1048,12 @@ impl Database {
              ) AS caption_payload \
              FROM assets \
              WHERE EXISTS (SELECT 1 FROM analyses WHERE asset_id = assets.id AND kind = 'caption') \
+             AND (?1 IS NULL OR EXISTS(SELECT 1 FROM project_assets pa \
+               WHERE pa.asset_id = assets.id AND pa.project_id IS ?1)) \
              ORDER BY created_at DESC"
         );
         let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map([], |r| {
+        let rows = stmt.query_map(rusqlite::params![project_id], |r| {
             let (sections, dimensions, parse_status) =
                 parse_caption_payload(r.get::<_, Option<String>>("caption_payload")?);
             Ok(PromptedAsset {
@@ -1095,14 +1173,22 @@ impl Database {
     }
 
     /// 侧栏聚合：某 source 的 tag + 每个的资产计数（count>0），不受 list_assets 的 500 限制。
-    pub fn list_tags_with_count(&self, source: &str) -> AppResult<Vec<TagCount>> {
+    pub fn list_tags_with_count(
+        &self,
+        source: &str,
+        project_id: Option<&str>,
+    ) -> AppResult<Vec<TagCount>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT t.id, t.name, COUNT(at.asset_id) AS cnt FROM tags t \
-             LEFT JOIN asset_tags at ON at.tag_id = t.id WHERE t.source = ?1 \
+             LEFT JOIN asset_tags at ON at.tag_id = t.id \
+             WHERE t.source = ?1 AND (?2 IS NULL OR EXISTS(\
+               SELECT 1 FROM project_assets pa \
+               WHERE pa.asset_id = at.asset_id AND pa.project_id IS ?2\
+             )) \
              GROUP BY t.id HAVING cnt > 0 ORDER BY cnt DESC",
         )?;
-        let rows = stmt.query_map(rusqlite::params![source], |r| {
+        let rows = stmt.query_map(rusqlite::params![source, project_id], |r| {
             Ok(TagCount {
                 id: r.get::<_, String>(0)?,
                 name: r.get::<_, String>(1)?,
@@ -1174,6 +1260,7 @@ impl Database {
     pub fn list_assets_by_color(
         &self,
         folder_id: Option<&str>,
+        project_id: Option<&str>,
         bucket: &str,
         limit: i64,
         offset: i64,
@@ -1182,11 +1269,16 @@ impl Database {
         let sql = format!(
             "SELECT {ASSET_COLS} FROM assets \
              WHERE (?3 IS NULL OR folder_id IS ?3) \
-             AND id IN (SELECT asset_id FROM asset_colors WHERE bucket = ?4) \
+             AND (?4 IS NULL OR EXISTS(SELECT 1 FROM project_assets pa \
+               WHERE pa.asset_id = assets.id AND pa.project_id IS ?4)) \
+             AND id IN (SELECT asset_id FROM asset_colors WHERE bucket = ?5) \
              ORDER BY created_at DESC LIMIT ?1 OFFSET ?2"
         );
         let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map(rusqlite::params![limit, offset, folder_id, bucket], asset_from_row)?;
+        let rows = stmt.query_map(
+            rusqlite::params![limit, offset, folder_id, project_id, bucket],
+            asset_from_row,
+        )?;
         let mut out = Vec::new();
         for r in rows {
             out.push(r?);
@@ -1195,13 +1287,17 @@ impl Database {
     }
 
     /// 全库色板：每个桶 + 资产数（count>0），hex 从 color::BUCKETS 注入。不受 500 限制。
-    pub fn palette_overview(&self) -> AppResult<Vec<ColorBucket>> {
+    pub fn palette_overview(&self, project_id: Option<&str>) -> AppResult<Vec<ColorBucket>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT bucket, COUNT(*) AS cnt FROM asset_colors \
-             GROUP BY bucket HAVING cnt > 0 ORDER BY cnt DESC LIMIT 12",
+            "SELECT ac.bucket, COUNT(*) AS cnt FROM asset_colors ac \
+             WHERE (?1 IS NULL OR EXISTS(SELECT 1 FROM project_assets pa \
+               WHERE pa.asset_id = ac.asset_id AND pa.project_id IS ?1)) \
+             GROUP BY ac.bucket HAVING cnt > 0 ORDER BY cnt DESC LIMIT 12",
         )?;
-        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+        let rows = stmt.query_map(rusqlite::params![project_id], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+        })?;
         let mut out = Vec::new();
         for r in rows {
             let (key, count) = r?;
@@ -1276,7 +1372,7 @@ mod tests {
         let id = put_asset(&db, "cyberpunk-cityscape");
         put_asset(&db, "portrait-001");
         // trigram：搜 "cyberpunk" 应只命中第一张
-        let r = db.search_assets("cyberpunk", 10).unwrap();
+        let r = db.search_assets("cyberpunk", None, 10).unwrap();
         assert!(r.iter().any(|a| a.id == id), "FTS5 应按文件名命中");
         assert_eq!(r.len(), 1);
     }
@@ -1425,7 +1521,7 @@ mod tests {
         put_meta(&db, "02T2", "g3", "修改1", session, None);
         put_meta(&db, "02XX", "g4", "别的会话", "sess-B", None); // 排除
 
-        let h = db.generation_history("g1").unwrap();
+        let h = db.generation_history("g1", None).unwrap();
         assert_eq!(h.session_id.as_deref(), Some(session));
         assert_eq!(h.turns.len(), 2, "两轮：首版（2图合并）+ 修改1");
         assert_eq!(h.turns[0].prompt, "首版");
@@ -1440,7 +1536,7 @@ mod tests {
 
         // 非生成图（无 generation_session_id）→ 空 history。
         let plain = put_asset(&db, "plain");
-        let h2 = db.generation_history(&plain).unwrap();
+        let h2 = db.generation_history(&plain, None).unwrap();
         assert!(h2.session_id.is_none());
         assert!(h2.turns.is_empty());
     }
@@ -1513,14 +1609,14 @@ mod tests {
         put_codex(&db, "01C", "sess-A");
         put_codex(&db, "02X", "sess-B"); // 异 session
 
-        let group = db.list_generation_group("01A").unwrap();
+        let group = db.list_generation_group("01A", None).unwrap();
         let ids: Vec<&str> = group.iter().map(|a| a.id.as_str()).collect();
         assert_eq!(ids, vec!["01A", "01B", "01C"]); // id ASC = 过程顺序
         assert!(!ids.contains(&"02X"));
 
         // 非生成图（无 session）→ 子查询 NULL → 空。
         let plain = put_asset(&db, "plain");
-        assert!(db.list_generation_group(&plain).unwrap().is_empty());
+        assert!(db.list_generation_group(&plain, None).unwrap().is_empty());
     }
 
     #[test]
@@ -1554,7 +1650,7 @@ mod tests {
         })
         .unwrap();
 
-        let r = db.list_prompted_assets().unwrap();
+        let r = db.list_prompted_assets(None).unwrap();
         assert_eq!(r.len(), 1, "只应有 1 个有 caption 的资产");
         assert_eq!(r[0].asset.id, a1);
         assert_eq!(
@@ -1592,7 +1688,7 @@ mod tests {
         })
         .unwrap();
 
-        let r = db.list_prompted_assets().unwrap();
+        let r = db.list_prompted_assets(None).unwrap();
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].caption.as_deref(), Some("legacy raw caption"));
         assert!(r[0].dimensions.is_none());
@@ -1682,11 +1778,11 @@ mod tests {
         let tid = db.get_or_create_tag("风景", "auto").unwrap();
         db.set_asset_tags(&a1, &[tid], "auto").unwrap();
 
-        let r = db.list_assets_smart("tag:风景", 100, 0).unwrap();
+        let r = db.list_assets_smart("tag:风景", None, 100, 0).unwrap();
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].id, a1);
         // 未知标签 → 空（不是返回全部）
-        assert_eq!(db.list_assets_smart("tag:不存在", 100, 0).unwrap().len(), 0);
+        assert_eq!(db.list_assets_smart("tag:不存在", None, 100, 0).unwrap().len(), 0);
     }
 
     #[test]
@@ -1698,7 +1794,7 @@ mod tests {
         // 另建一个 auto tag 但不关联任何资产 → 不出现（HAVING count>0）
         let _ = db.get_or_create_tag("静物", "auto").unwrap();
 
-        let counts = db.list_tags_with_count("auto").unwrap();
+        let counts = db.list_tags_with_count("auto", None).unwrap();
         assert_eq!(counts.len(), 1, "只有被用到的 auto tag 才出现（seed 其余 count=0）");
         assert_eq!(counts[0].name, "风景");
         assert_eq!(counts[0].count, 1);
@@ -1727,7 +1823,7 @@ mod tests {
 
         // collection 查询只返回关联资产，并按 created_at DESC。
         db.add_asset_to_collection(&a2, &c1).unwrap();
-        let assets = db.list_assets_by_collection(&c1, 100, 0).unwrap();
+        let assets = db.list_assets_by_collection(&c1, None, 100, 0).unwrap();
         let ids: Vec<&str> = assets.iter().map(|a| a.id.as_str()).collect();
         assert_eq!(ids, vec![a2.as_str(), a1.as_str()]);
 
@@ -1739,7 +1835,7 @@ mod tests {
         // 删除收藏夹只清关系，不删素材。
         db.delete_folder(&c1).unwrap();
         assert!(db.get_asset(&a1).unwrap().is_some());
-        assert_eq!(db.list_assets_by_collection(&c1, 100, 0).unwrap().len(), 0);
+        assert_eq!(db.list_assets_by_collection(&c1, None, 100, 0).unwrap().len(), 0);
         assert_eq!(db.list_collections_for_asset(&a1).unwrap().len(), 1);
 
         // 删除素材清理收藏关系。
@@ -1775,6 +1871,25 @@ mod tests {
     }
 
     #[test]
+    fn project_scope_intersects_library_queries() {
+        let db = db();
+        let in_project = put_asset_at(&db, "cyberpunk-project", 2);
+        let outside = put_asset_at(&db, "cyberpunk-global", 1);
+        db.create_project("p1", "P1", "/tmp/p1", "/tmp/p1")
+            .unwrap();
+        db.add_assets_to_project("p1", std::slice::from_ref(&in_project))
+            .unwrap();
+
+        assert_eq!(db.count_assets(None).unwrap(), 2);
+        assert_eq!(db.count_assets(Some("p1")).unwrap(), 1);
+        assert_eq!(db.list_assets(None, Some("p1"), 100, 0).unwrap()[0].id, in_project);
+        let search = db.search_assets("cyberpunk", Some("p1"), 100).unwrap();
+        assert_eq!(search.len(), 1);
+        assert_eq!(search[0].id, in_project);
+        assert_ne!(outside, in_project);
+    }
+
+    #[test]
     fn asset_colors_set_idempotent_and_palette_and_folder_filter() {
         let db = db();
         let a1 = put_asset(&db, "红图"); // put_asset 返回 id(String)
@@ -1791,20 +1906,20 @@ mod tests {
         db.set_asset_colors(&a2, &["blue"]).unwrap();
 
         // palette_overview：3 桶，hex 从 BUCKETS 注入
-        let pal = db.palette_overview().unwrap();
+        let pal = db.palette_overview(None).unwrap();
         assert_eq!(pal.len(), 3);
         let red = pal.iter().find(|c| c.key == "red").unwrap();
         assert_eq!(red.count, 1);
         assert_eq!(red.hex, "#D92424");
 
         // 全库 red → a1
-        let reds = db.list_assets_by_color(None, "red", 100, 0).unwrap();
+        let reds = db.list_assets_by_color(None, None, "red", 100, 0).unwrap();
         assert_eq!(reds.len(), 1);
         assert_eq!(reds[0].id, a1);
 
         // 带文件夹：色夹里 blue → 空（a2 不在夹）；色夹里 red → a1
-        assert!(db.list_assets_by_color(Some(&fid), "blue", 100, 0).unwrap().is_empty());
-        let in_folder = db.list_assets_by_color(Some(&fid), "red", 100, 0).unwrap();
+        assert!(db.list_assets_by_color(Some(&fid), None, "blue", 100, 0).unwrap().is_empty());
+        let in_folder = db.list_assets_by_color(Some(&fid), None, "red", 100, 0).unwrap();
         assert_eq!(in_folder.len(), 1);
         assert_eq!(in_folder[0].id, a1);
     }

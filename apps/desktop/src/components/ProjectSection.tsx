@@ -1,0 +1,194 @@
+import { useState } from "react";
+import { api } from "../lib/api";
+import { useStore } from "../store";
+import type { Project, ProjectDeleteMode } from "../lib/types";
+
+/** 物理删除独占素材的确认口令（避开 window.confirm——Tauri WKWebView 拦截原生对话框）。 */
+const CONFIRM_TEXT = "确认删除";
+
+export function ProjectSection() {
+  const projects = useStore((s) => s.projects);
+  const currentProjectId = useStore((s) => s.currentProjectId);
+  const reloadProjects = useStore((s) => s.reloadProjects);
+  const enterProject = useStore((s) => s.enterProject);
+  const exitProject = useStore((s) => s.exitProject);
+  const [creating, setCreating] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const [confirmText, setConfirmText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  async function create() {
+    const path = await api.pickFolder();
+    if (!path) return;
+    setCreating(true);
+    setMessage(null);
+    try {
+      const result = await api.createProject(path);
+      await reloadProjects();
+      await enterProject(result.project.id);
+      setMessage(`已导入 ${result.imported_count} 张素材`);
+    } catch (error) {
+      setMessage(typeof error === "string" ? error : "创建项目失败");
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  function resetDelete() {
+    setDeletingId(null);
+    setConfirmingId(null);
+    setConfirmText("");
+  }
+
+  async function remove(project: Project, mode: ProjectDeleteMode) {
+    setBusy(true);
+    setMessage(null);
+    try {
+      const result = await api.deleteProject(project.id, mode);
+      if (currentProjectId === project.id) await exitProject();
+      await reloadProjects();
+      resetDelete();
+      setMessage(
+        mode === "keep"
+          ? "项目已删除，素材仍保留在全局"
+          : mode === "move_out"
+            ? `已移出 ${result.moved_assets} 张素材回 workspace，保留 ${result.preserved_shared} 张共享素材` +
+              (result.failed_moves.length > 0
+                ? `；${result.failed_moves.length} 张移出失败已保留在全局`
+                : "")
+            : `已物理删除 ${result.deleted_assets} 张独占素材，保留 ${result.preserved_shared} 张共享素材`
+      );
+    } catch (error) {
+      setMessage(typeof error === "string" ? error : "删除项目失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="mb-4 border-b border-edge pb-4">
+      <div className="mb-2 flex items-center justify-between text-xs uppercase tracking-wide text-muted">
+        <span>项目</span>
+        <button
+          onClick={create}
+          disabled={creating}
+          className="normal-case tracking-normal text-accent hover:opacity-80 disabled:opacity-50"
+        >
+          {creating ? "导入中…" : "+ 新建项目"}
+        </button>
+      </div>
+
+      <div className="space-y-1">
+        {projects.map((project) => {
+          const active = project.id === currentProjectId;
+          if (deletingId === project.id) {
+            if (busy) {
+              return (
+                <div key={project.id} className="rounded bg-panel2 p-2 text-[10px] text-muted">
+                  处理中…
+                </div>
+              );
+            }
+            if (confirmingId === project.id) {
+              return (
+                <div key={project.id} className="rounded bg-panel2 p-2 text-[10px]">
+                  <div className="mb-1.5 text-red-300">
+                    独占素材将从全局及所有项目物理删除，不可恢复；共享素材保留。
+                  </div>
+                  <input
+                    value={confirmText}
+                    onChange={(e) => setConfirmText(e.target.value)}
+                    placeholder={`输入「${CONFIRM_TEXT}」`}
+                    className="mb-1.5 w-full rounded bg-panel px-2 py-1 text-ink outline-none ring-1 ring-edge focus:ring-red-400/60"
+                  />
+                  <div className="flex flex-col gap-1">
+                    <button
+                      onClick={() => remove(project, "delete_exclusive")}
+                      disabled={confirmText !== CONFIRM_TEXT}
+                      className="rounded bg-red-500/25 px-2 py-1 text-left text-red-200 hover:bg-red-500/35 disabled:opacity-40"
+                    >
+                      物理删除独占素材
+                    </button>
+                    <button onClick={resetDelete} className="text-muted hover:text-ink">
+                      取消
+                    </button>
+                  </div>
+                </div>
+              );
+            }
+            return (
+              <div key={project.id} className="rounded bg-panel2 p-2 text-[10px]">
+                <div className="mb-1.5 text-muted">共享素材始终保留在全局</div>
+                <div className="flex flex-col gap-1">
+                  <button
+                    onClick={() => remove(project, "keep")}
+                    className="rounded bg-panel px-2 py-1 text-left hover:bg-edge"
+                  >
+                    仅删除项目 · 素材留在全局
+                  </button>
+                  <button
+                    onClick={() => remove(project, "move_out")}
+                    className="rounded bg-panel px-2 py-1 text-left hover:bg-edge"
+                  >
+                    删除项目并将文件移出园丁鸟 · 独占素材移回 workspace
+                  </button>
+                  <button
+                    onClick={() => setConfirmingId(project.id)}
+                    className="rounded bg-red-500/15 px-2 py-1 text-left text-red-300 hover:bg-red-500/25"
+                  >
+                    物理删除独占素材 · 需输入「{CONFIRM_TEXT}」
+                  </button>
+                  <button onClick={resetDelete} className="text-muted hover:text-ink">
+                    取消
+                  </button>
+                </div>
+              </div>
+            );
+          }
+          return (
+            <div
+              key={project.id}
+              className={`group rounded px-2 py-1.5 ${
+                active ? "bg-panel2 ring-1 ring-accent/40" : "hover:bg-panel2"
+              }`}
+            >
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => enterProject(project.id)}
+                  className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                  title={project.workspace_path}
+                >
+                  <span className={`h-1.5 w-1.5 rounded-full ${active ? "bg-accent" : "bg-muted"}`} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-xs text-ink">{project.name}</span>
+                    <span className="block truncate text-[10px] text-muted">
+                      {project.asset_count} 张 · {project.workspace_path}
+                    </span>
+                  </span>
+                </button>
+                <button
+                  onClick={() => setDeletingId(project.id)}
+                  className="px-1 text-xs text-muted opacity-0 hover:text-red-400 group-hover:opacity-100"
+                  title="删除项目"
+                >
+                  ✕
+                </button>
+              </div>
+              {active && (
+                <button
+                  onClick={exitProject}
+                  className="mt-1 w-full rounded bg-panel px-2 py-1 text-[10px] text-accent hover:bg-edge"
+                >
+                  退出项目 · 返回全局素材
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {message && <div className="mt-2 break-words text-[10px] text-muted">{message}</div>}
+    </section>
+  );
+}

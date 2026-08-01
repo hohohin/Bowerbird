@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import type {
   Analysis,
+  AppSettings,
   Asset,
   AssetTag,
   ColorBucket,
@@ -10,6 +11,10 @@ import type {
   Folder,
   GenerationHistory,
   Preset,
+  Project,
+  ProjectCreateResult,
+  ProjectDeleteMode,
+  ProjectDeleteResult,
   PromptedAsset,
   TagCount,
 } from "./types";
@@ -21,18 +26,34 @@ export const api = {
   ping: (name: string) => invoke<string>("ping", { name }),
   dbHealth: () => invoke<string>("db_health"),
 
+  // 项目 workspace
+  createProject: (workspacePath: string) =>
+    invoke<ProjectCreateResult>("create_project", { workspacePath }),
+  listProjects: () => invoke<Project[]>("list_projects"),
+  setActiveProject: (projectId?: string | null) =>
+    invoke<void>("set_active_project", { projectId: projectId ?? null }),
+  addAssetsToProject: (projectId: string, assetIds: string[]) =>
+    invoke<number>("add_assets_to_project", { projectId, assetIds }),
+  removeAssetsFromProject: (projectId: string, assetIds: string[]) =>
+    invoke<number>("remove_assets_from_project", { projectId, assetIds }),
+  deleteProject: (projectId: string, mode: ProjectDeleteMode) =>
+    invoke<ProjectDeleteResult>("delete_project", { projectId, mode }),
+
   // 导入
-  importFiles: (sources: string[]) => invoke<Asset[]>("import_files", { sources }),
-  importFolder: (path: string) => invoke<number>("import_folder", { path }),
+  importFiles: (sources: string[], projectId?: string | null) =>
+    invoke<Asset[]>("import_files", { sources, projectId: projectId ?? null }),
+  importFolder: (path: string, projectId?: string | null) =>
+    invoke<number>("import_folder", { path, projectId: projectId ?? null }),
 
   // 浏览
-  listAssets: (folderId?: string, limit = 500, offset = 0) =>
-    invoke<Asset[]>("list_assets", { folderId, limit, offset }),
-  searchAssets: (query: string, limit = 500) =>
-    invoke<Asset[]>("search_assets", { query, limit }),
-  listAssetsSmart: (query: string) =>
-    invoke<Asset[]>("list_assets_smart", { query }),
-  countAssets: () => invoke<number>("count_assets"),
+  listAssets: (folderId?: string, projectId?: string | null, limit = 500, offset = 0) =>
+    invoke<Asset[]>("list_assets", { folderId, projectId: projectId ?? null, limit, offset }),
+  searchAssets: (query: string, projectId?: string | null, limit = 500) =>
+    invoke<Asset[]>("search_assets", { query, projectId: projectId ?? null, limit }),
+  listAssetsSmart: (query: string, projectId?: string | null) =>
+    invoke<Asset[]>("list_assets_smart", { query, projectId: projectId ?? null }),
+  countAssets: (projectId?: string | null) =>
+    invoke<number>("count_assets", { projectId: projectId ?? null }),
   deleteAsset: (id: string) => invoke<void>("delete_asset", { id }),
   moveAssetsToFolder: (assetIds: string[], folderId: string) =>
     invoke<void>("move_assets_to_folder", { assetIds, folderId }),
@@ -52,8 +73,18 @@ export const api = {
     invoke<void>("add_asset_to_collection", { assetId, collectionId }),
   removeAssetFromCollection: (assetId: string, collectionId: string) =>
     invoke<void>("remove_asset_from_collection", { assetId, collectionId }),
-  listAssetsByCollection: (collectionId: string, limit = 500, offset = 0) =>
-    invoke<Asset[]>("list_assets_by_collection", { collectionId, limit, offset }),
+  listAssetsByCollection: (
+    collectionId: string,
+    projectId?: string | null,
+    limit = 500,
+    offset = 0
+  ) =>
+    invoke<Asset[]>("list_assets_by_collection", {
+      collectionId,
+      projectId: projectId ?? null,
+      limit,
+      offset,
+    }),
   renameFolder: (id: string, name: string) =>
     invoke<void>("rename_folder", { id, name }),
   deleteFolder: (id: string) => invoke<void>("delete_folder", { id }),
@@ -81,19 +112,23 @@ export const api = {
   },
 
   // 创作板（统一走 codex CLI）
-  listPromptedAssets: () => invoke<PromptedAsset[]>("list_prompted_assets"),
+  listPromptedAssets: (projectId?: string | null) =>
+    invoke<PromptedAsset[]>("list_prompted_assets", { projectId: projectId ?? null }),
   // 生成图同流程合并：取某资产的整组过程图（详情轮播 / 批量取可见组）
-  listGenerationGroup: (assetId: string) =>
-    invoke<Asset[]>("list_generation_group", { assetId }),
-  listGenerationGroups: (assetIds: string[]) =>
-    invoke<Record<string, Asset[]>>("list_generation_groups", { assetIds }),
+  listGenerationGroup: (assetId: string, projectId?: string | null) =>
+    invoke<Asset[]>("list_generation_group", { assetId, projectId: projectId ?? null }),
+  listGenerationGroups: (assetIds: string[], projectId?: string | null) =>
+    invoke<Record<string, Asset[]>>("list_generation_groups", {
+      assetIds,
+      projectId: projectId ?? null,
+    }),
   // 「回看生成对话」：取某生成图所在会话的完整生成时间线（各轮 prompt + 产出图 store_path）。
-  generationHistory: (assetId: string) =>
-    invoke<GenerationHistory>("generation_history", { assetId }),
+  generationHistory: (assetId: string, projectId?: string | null) =>
+    invoke<GenerationHistory>("generation_history", { assetId, projectId: projectId ?? null }),
 
   // 标签 / 自动归类（P2）
-  listTags: (source?: string) =>
-    invoke<TagCount[]>("list_tags", { source: source ?? null }),
+  listTags: (source?: string, projectId?: string | null) =>
+    invoke<TagCount[]>("list_tags", { source: source ?? null, projectId: projectId ?? null }),
   listAssetTags: (assetId: string) =>
     invoke<AssetTag[]>("list_asset_tags", { assetId }),
   setAssetTags: (assetId: string, names: string[], source: string) =>
@@ -101,9 +136,14 @@ export const api = {
   reclassifyAll: () => invoke<void>("reclassify_all"),
 
   // 颜色量化（P3）
-  paletteOverview: () => invoke<ColorBucket[]>("palette_overview"),
-  listAssetsByColor: (bucket: string, folderId?: string) =>
-    invoke<Asset[]>("list_assets_by_color", { bucket, folderId: folderId ?? null }),
+  paletteOverview: (projectId?: string | null) =>
+    invoke<ColorBucket[]>("palette_overview", { projectId: projectId ?? null }),
+  listAssetsByColor: (bucket: string, folderId?: string, projectId?: string | null) =>
+    invoke<Asset[]>("list_assets_by_color", {
+      bucket,
+      folderId: folderId ?? null,
+      projectId: projectId ?? null,
+    }),
   recomputeColors: () => invoke<void>("recompute_colors"),
   assemblePack: (assetIds: string[]) =>
     invoke<CreationPack>("assemble_pack", { assetIds }),
@@ -131,14 +171,24 @@ export const api = {
     prompt: string;
     referenceImages: string[];
     sessionId?: string | null;
+    projectId?: string | null;
   }) =>
     invoke<void>("codex_create_image", {
       prompt: req.prompt,
       referenceImages: req.referenceImages,
       sessionId: req.sessionId ?? null,
+      projectId: req.projectId ?? null,
     }),
   cancelCodexCreate: () => invoke<void>("cancel_codex_create"),
   // 扩展小白化：连接状态 + 扩展文件夹路径（引导「一键复制」用，不自动打开——Windows 上不稳）。
   extensionStatus: () => invoke<boolean>("extension_status"),
   extensionFolderPath: () => invoke<string>("extension_folder_path"),
+  // 设置
+  getSettings: () => invoke<AppSettings>("get_settings"),
+  updateSettings: (settings: AppSettings) =>
+    invoke<void>("update_settings", { settings }),
+  libraryRoot: () => invoke<string>("library_root"),
+  migrateLibraryRoot: (newRoot: string) =>
+    invoke<void>("migrate_library_root", { newRoot }),
+  restartApp: () => invoke<void>("restart_app"),
 };

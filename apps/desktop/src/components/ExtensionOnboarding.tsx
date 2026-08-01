@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useStore } from "../store";
 import { api } from "../lib/api";
@@ -7,8 +7,6 @@ import guide2 from "../assets/bowerbird-extension-guide-2.gif";
 import guide3 from "../assets/bowerbird-extension-guide-3.gif";
 import guide4 from "../assets/bowerbird-extension-guide-4.png";
 
-/** localStorage key：用户已看过/已跳过引导，未连时不再自动弹出（点灰点仍可手动唤起）。 */
-const SEEN_KEY = "bowerbird.extensionOnboardingSeen";
 const EXT_PAGE_URL = "chrome://extensions";
 
 /** 截图：限高 + 圆角边框，ml-7 与步骤编号对齐；点击放大（cursor-zoom-in 提示可点）。 */
@@ -60,10 +58,11 @@ function ZoomImage({ src, onClose }: { src: string; onClose: () => void }) {
 }
 
 /**
- * 扩展安装引导（约定 13 全屏 Modal 形态，类比 CodexOnboarding）。
+ * 扩展安装引导（一级「环境状态」总览的二级弹窗；约定 13 全屏 Modal 形态）。
  *
- * 显示条件：`forceOpen || (!extensionConnected && !seen)`。首启/未装自动弹（未连 + 未 seen）；
- * 用户点工具栏灰点可手动唤起（forceOpen）。扩展连上后自动关闭。
+ * 只由一级总览卡片经 `extensionOnboardingForceOpen` 跳转唤起，不再自行判断 seen、不自动弹；
+ * 「稍后再说」与「打开期间由未连接变为已连接」均返回一级总览，由一级负责最终关闭与写 seen。
+ * 打开时若扩展已连接，仍保持可重看教程（不首帧自动关闭）。
  *
  * 不自动打开 chrome://extensions / 文件夹——Windows 上 Chrome 单实例丢 URL、explorer 不认
  * 含 `..` 路径，都不稳。改为**一键复制 + 教用户粘贴**，小白照做即可。
@@ -72,22 +71,32 @@ export function ExtensionOnboarding() {
   const connected = useStore((s) => s.extensionConnected);
   const forceOpen = useStore((s) => s.extensionOnboardingForceOpen);
   const setForceOpen = useStore((s) => s.setExtensionOnboardingForceOpen);
-  const [seen, setSeen] = useState(() => localStorage.getItem(SEEN_KEY) === "1");
+  // 点「稍后再说」/连接成功回一级总览（而非直接关回主界面）。
+  const setOverviewOpen = useStore((s) => s.setOnboardingForceOpen);
   const [copied, setCopied] = useState<string | null>(null); // "page" | "folder"
   const [zoom, setZoom] = useState<string | null>(null); // 放大的 gif src
+  const prevConnected = useRef(connected);
 
-  // 扩展连上后：清 forceOpen（避免断开后又自动弹）。
+  // 仅在二级打开期间由「未连接 → 已连接」跃迁才视为本次配置成功：关二级 + 回一级总览
+  // （一级只能由用户关闭，不在此处自动收）。打开时本就已连接则保持可重看教程。
   useEffect(() => {
-    if (connected) setForceOpen(false);
-  }, [connected, setForceOpen]);
+    if (!forceOpen) {
+      prevConnected.current = connected;
+      return;
+    }
+    if (!prevConnected.current && connected) {
+      setForceOpen(false);
+      setOverviewOpen(true);
+    }
+    prevConnected.current = connected;
+  }, [connected, forceOpen, setForceOpen, setOverviewOpen]);
 
-  if (connected) return null;
-  if (!forceOpen && seen) return null;
+  // 只由一级总览卡片跳转唤起（forceOpen）；不自动弹。
+  if (!forceOpen) return null;
 
   function dismiss() {
-    localStorage.setItem(SEEN_KEY, "1");
-    setSeen(true);
     setForceOpen(false);
+    setOverviewOpen(true);
   }
 
   async function copy(text: string, tag: string) {
@@ -171,7 +180,7 @@ export function ExtensionOnboarding() {
                 {copied === "folder" ? "已复制 ✓" : "一键复制扩展文件夹路径"}
               </button>
               <div className="mt-1 text-xs text-muted">
-                回到扩展页点「加载已解压的扩展程序」，在弹出的对话框<b className="text-ink">顶部地址栏</b>粘贴此路径并回车，定位到扩展文件夹后点「选择文件夹」。
+                回到扩展页点「加载已解压的扩展程序」，在弹出的对话框中定位到扩展文件夹：Windows 在<b className="text-ink">顶部地址栏</b>粘贴此路径并回车；macOS 按 <b className="text-ink">⌘⇧G</b>（前往文件夹）粘贴后回车，再点「选择文件夹」。
               </div>
             </div>
             <Shot
@@ -202,7 +211,7 @@ export function ExtensionOnboarding() {
               <span className="text-ink">装好后自动检测</span>
             </div>
             <div className="mt-1 pl-7 text-xs text-muted">
-              真实网页打开后扩展心跳约 15 秒内连上，本窗口自动关闭、工具栏角标消失。
+              真实网页打开后扩展心跳约 15 秒内连上，自动返回环境状态总览、工具栏角标消失。
             </div>
           </li>
         </ol>

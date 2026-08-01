@@ -3,7 +3,9 @@
 pub mod collect;
 pub mod codex;
 pub mod library;
+pub mod projects;
 pub mod prompt;
+pub mod settings;
 
 use std::sync::Arc;
 

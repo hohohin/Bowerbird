@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useStore } from "../store";
 import { api } from "../lib/api";
 import { getDragAssets } from "../lib/dragPayload";
+import { ProjectSection } from "./ProjectSection";
 import type { Folder } from "../lib/types";
 
 /** 颜色桶 key → 中文 label（P3；hex 由后端 palette_overview 带回）。 */
@@ -16,6 +17,7 @@ export function Sidebar() {
   const total = useStore((s) => s.total);
   const selectedCount = useStore((s) => s.selectedIds.size);
   const currentFolderId = useStore((s) => s.currentFolderId);
+  const currentProjectId = useStore((s) => s.currentProjectId);
   const currentCollectionId = useStore((s) => s.currentCollectionId);
   const setCurrentFolder = useStore((s) => s.setCurrentFolder);
   const colorFilter = useStore((s) => s.colorFilter);
@@ -76,9 +78,13 @@ export function Sidebar() {
   return (
     <aside className="w-56 shrink-0 overflow-y-auto border-r border-edge bg-panel p-3 text-sm">
       <div className="mb-4">
-        <div className="text-xs uppercase tracking-wide text-muted">素材总数</div>
+        <div className="text-xs uppercase tracking-wide text-muted">
+          {currentProjectId ? "项目素材" : "素材总数"}
+        </div>
         <div className="text-2xl font-semibold">{total}</div>
       </div>
+
+      <ProjectSection />
 
       <div className="mb-2 flex items-center justify-between text-xs uppercase tracking-wide text-muted">
         <span>文件夹</span>
@@ -170,7 +176,7 @@ export function Sidebar() {
           }`}
           onClick={() => setCurrentFolder(null)}
         >
-          📚 全部
+          {currentProjectId ? "📚 项目全部" : "📚 全部"}
         </div>
         <div
           className={`flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 ${

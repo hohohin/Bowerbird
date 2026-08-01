@@ -14,7 +14,11 @@ pub fn generate(src: &Path, dst: &Path, max_size: u32) -> AppResult<()> {
         .with_guessed_format()?
         .decode()
         .map_err(|e| AppError::Media(format!("decode: {e}")))?;
+    generate_from_image(&img, dst, max_size)
+}
 
+/// 同 `generate`，但从已解码的 `DynamicImage` 生成（省一次 decode）。
+pub fn generate_from_image(img: &image::DynamicImage, dst: &Path, max_size: u32) -> AppResult<()> {
     let (w, h) = (img.width(), img.height());
     let (dst_w, dst_h) = if w.max(h) <= max_size {
         (w, h)

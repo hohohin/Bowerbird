@@ -11,11 +11,16 @@ export function BatchBar() {
   const ids = useStore((s) => Array.from(s.selectedIds));
   const exitManage = useStore((s) => s.exitManage);
   const folders = useStore((s) => s.folders);
+  const projects = useStore((s) => s.projects);
+  const currentProjectId = useStore((s) => s.currentProjectId);
   // 移入已有只列普通夹（排除 root、智能夹与收藏夹）。
   const existingFolders = folders.filter((f) => f.id !== "root" && (f.kind ?? "folder") === "folder");
 
   const [busy, setBusy] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleteMode, setDeleteMode] = useState<"remove" | "global" | null>(null);
+  const [projectInput, setProjectInput] = useState(false);
+  const [targetProjectId, setTargetProjectId] = useState("");
   const [folderInput, setFolderInput] = useState(false);
   const [folderName, setFolderName] = useState("");
   const [moveExisting, setMoveExisting] = useState(false);
@@ -28,17 +33,37 @@ export function BatchBar() {
   async function del() {
     setBusy(true);
     try {
-      await Promise.all(ids.map((id) => api.deleteAsset(id)));
-      const remove = new Set(ids);
+      if (currentProjectId && deleteMode === "remove") {
+        await api.removeAssetsFromProject(currentProjectId, ids);
+      } else {
+        await Promise.all(ids.map((id) => api.deleteAsset(id)));
+      }
       const st = useStore.getState();
-      st.setAssets(st.assets.filter((a) => !remove.has(a.id)));
-      st.setTotal(Math.max(0, st.total - ids.length));
       st.clearSelect();
+      await st.reloadProjects();
     } catch (e) {
       console.error("delete failed", e);
     } finally {
       setBusy(false);
       setConfirmingDelete(false);
+      setDeleteMode(null);
+    }
+  }
+
+  async function addToProject() {
+    if (!targetProjectId) return;
+    setBusy(true);
+    try {
+      await api.addAssetsToProject(targetProjectId, ids);
+      const st = useStore.getState();
+      st.clearSelect();
+      await st.reloadProjects();
+    } catch (e) {
+      console.error("add to project failed", e);
+    } finally {
+      setBusy(false);
+      setProjectInput(false);
+      setTargetProjectId("");
     }
   }
 
@@ -219,25 +244,88 @@ export function BatchBar() {
         </button>
       </div>
 
+      {!currentProjectId && projects.length > 0 && !projectInput && (
+        <button
+          onClick={() => {
+            setTargetProjectId(projects[0]?.id ?? "");
+            setProjectInput(true);
+          }}
+          disabled={busy || empty}
+          className="rounded bg-panel2 px-2.5 py-1 text-xs hover:bg-edge disabled:opacity-50"
+        >
+          加入项目
+        </button>
+      )}
+      {!currentProjectId && projectInput && (
+        <div className="flex items-center gap-1">
+          <select
+            value={targetProjectId}
+            onChange={(e) => setTargetProjectId(e.target.value)}
+            className="max-w-[10rem] rounded bg-panel2 px-1.5 py-1 text-xs"
+          >
+            {projects.map((project) => (
+              <option key={project.id} value={project.id}>
+                {project.name}
+              </option>
+            ))}
+          </select>
+          <button onClick={addToProject} className="rounded bg-accent px-2 py-1 text-xs text-black">
+            确定
+          </button>
+          <button onClick={() => setProjectInput(false)} className="text-xs text-muted">
+            取消
+          </button>
+        </div>
+      )}
+
       {!confirmingDelete ? (
         <button
-          onClick={() => setConfirmingDelete(true)}
+          onClick={() => {
+            setConfirmingDelete(true);
+            setDeleteMode(currentProjectId ? null : "global");
+          }}
           disabled={busy || empty}
           className="rounded bg-panel2 px-2.5 py-1 text-xs text-muted hover:text-red-400 disabled:opacity-50"
         >
           删除
         </button>
+      ) : currentProjectId && deleteMode === null ? (
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setDeleteMode("remove")}
+            className="rounded bg-panel2 px-2 py-1 text-xs hover:bg-edge"
+          >
+            仅移出当前项目
+          </button>
+          <button
+            onClick={() => setDeleteMode("global")}
+            className="rounded bg-red-500/15 px-2 py-1 text-xs text-red-300 hover:bg-red-500/25"
+          >
+            从全局彻底删除
+          </button>
+          <button onClick={() => setConfirmingDelete(false)} className="text-xs text-muted">
+            取消
+          </button>
+        </div>
       ) : (
         <div className="flex items-center gap-1">
           <button
             onClick={del}
             disabled={busy}
             className="rounded bg-red-500 px-2 py-1 text-xs text-white disabled:opacity-50"
+            title={deleteMode === "global" ? "素材将从全局及所有项目消失" : undefined}
           >
-            {busy ? "删除中…" : `确认删除 ${ids.length} 张`}
+            {busy
+              ? "处理中…"
+              : deleteMode === "remove"
+                ? `确认移出 ${ids.length} 张`
+                : `确认全局删除 ${ids.length} 张`}
           </button>
           <button
-            onClick={() => setConfirmingDelete(false)}
+            onClick={() => {
+              setConfirmingDelete(false);
+              setDeleteMode(null);
+            }}
             disabled={busy}
             className="text-xs text-muted hover:text-ink"
           >

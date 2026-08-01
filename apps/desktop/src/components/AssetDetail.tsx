@@ -209,6 +209,7 @@ function Meta({ label, value }: { label: string; value: ReactNode }) {
 export function AssetDetail() {
   const id = useStore((s) => s.detailAssetId);
   const assets = useStore((s) => s.assets);
+  const currentProjectId = useStore((s) => s.currentProjectId);
   const closeDetail = useStore((s) => s.closeDetail);
   const openDetail = useStore((s) => s.openDetail);
   const runDescribe = useStore((s) => s.runDescribe);
@@ -380,7 +381,7 @@ export function AssetDetail() {
     }
     let alive = true;
     api
-      .listGenerationGroup(id)
+      .listGenerationGroup(id, currentProjectId)
       .then((g) => {
         if (alive) setGroup(g);
       })
@@ -389,7 +390,7 @@ export function AssetDetail() {
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  }, [id, currentProjectId]);
 
   // 左右方向键切换过程图（输入框内不拦截，留给光标移动）。
   useEffect(() => {

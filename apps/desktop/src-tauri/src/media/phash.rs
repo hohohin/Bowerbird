@@ -16,6 +16,11 @@ pub fn compute(path: &Path) -> AppResult<Option<String>> {
         Ok(i) => i,
         Err(_) => return Ok(None),
     };
+    Ok(Some(compute_from_image(&img)))
+}
+
+/// 同 `compute`，但从已解码的 `DynamicImage` 计算（省一次 decode）。
+pub fn compute_from_image(img: &image::DynamicImage) -> String {
     // 9×8 灰度，比较水平相邻像素 → 64 bit。
     let small = img
         .resize_exact(9, 8, FilterType::Nearest)
@@ -32,7 +37,7 @@ pub fn compute(path: &Path) -> AppResult<Option<String>> {
             idx += 1;
         }
     }
-    Ok(Some(format!("{bits:016x}")))
+    format!("{bits:016x}")
 }
 
 /// 海明距离（用于后续按阈值模糊匹配；Phase 1 去重暂用精确匹配）。

@@ -16,6 +16,7 @@ use tauri::{AppHandle, Emitter};
 
 use crate::core::ingest;
 use crate::core::paths::LibraryPaths;
+use crate::core::projects::ActiveProjectContext;
 use crate::db::Database;
 
 pub const ADDR: &str = "127.0.0.1:39871";
@@ -65,6 +66,7 @@ struct AppState {
     app: AppHandle,
     client: reqwest::Client,
     status: ExtensionStatus,
+    active_project: ActiveProjectContext,
 }
 
 async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
@@ -74,7 +76,7 @@ async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl
 async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: AppState) {
     tracing::debug!("collect ws: connection opened");
     // save_blob 两帧协议：先 Text metadata，再 Binary 图片字节（浏览器 background fetch，带 Cookie/代理）。
-    let mut pending_upload: Option<serde_json::Value> = None;
+    let mut pending_upload: Option<(serde_json::Value, Option<String>)> = None;
     while let Some(Ok(msg)) = socket.recv().await {
         match msg {
             Message::Text(text) => {
@@ -108,7 +110,7 @@ async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: AppState
                         continue;
                     }
                     tracing::info!("collect ws recv: kind=save_blob");
-                    pending_upload = parsed;
+                    pending_upload = parsed.map(|meta| (meta, state.active_project.get()));
                 } else {
                     let resp = handle_message(&text, &state).await;
                     let _ = socket.send(Message::Text(resp)).await;
@@ -116,8 +118,8 @@ async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: AppState
             }
             Message::Binary(bytes) => {
                 let resp = match pending_upload.take() {
-                    Some(meta) if bytes.len() <= 50 * 1024 * 1024 => {
-                        handle_blob(bytes.as_ref(), &meta, &state)
+                    Some((meta, project_id)) if bytes.len() <= 50 * 1024 * 1024 => {
+                        handle_blob(bytes.as_ref(), &meta, project_id.as_deref(), &state)
                     }
                     Some(_) => serde_json::json!({
                         "ok": false,
@@ -139,7 +141,12 @@ async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: AppState
 }
 
 /// 浏览器 background 已在登录态/系统代理环境内 fetch 图片；收到二进制后直接按真实字节入库。
-fn handle_blob(bytes: &[u8], meta: &serde_json::Value, state: &AppState) -> String {
+fn handle_blob(
+    bytes: &[u8],
+    meta: &serde_json::Value,
+    project_id: Option<&str>,
+    state: &AppState,
+) -> String {
     let requested_url = meta
         .get("requested_url")
         .or_else(|| meta.get("url"))
@@ -170,6 +177,14 @@ fn handle_blob(bytes: &[u8], meta: &serde_json::Value, state: &AppState) -> Stri
         content_type,
     ) {
         Ok(asset) => {
+            if let Some(project_id) = project_id {
+                if let Err(error) = state
+                    .db
+                    .add_assets_to_project(project_id, std::slice::from_ref(&asset.id))
+                {
+                    tracing::warn!("link collected asset {} to project failed: {error}", asset.id);
+                }
+            }
             tracing::info!(
                 "collect ws save_blob ok: {} -> {}",
                 redact_url(requested_url),
@@ -205,6 +220,7 @@ fn redact_url(value: &str) -> String {
 }
 
 async fn handle_message(text: &str, state: &AppState) -> String {
+    let project_id = state.active_project.get();
     let v: serde_json::Value = match serde_json::from_str(text) {
         Ok(v) => v,
         Err(_) => return r#"{"ok":false,"error":"bad json"}"#.to_string(),
@@ -224,7 +240,7 @@ async fn handle_message(text: &str, state: &AppState) -> String {
                 .get("source_url")
                 .or_else(|| v.get("page_url"))
                 .and_then(|value| value.as_str());
-            match save_one(state, url, source_url).await {
+            match save_one(state, url, source_url, project_id.as_deref()).await {
                 Ok(a) => {
                     let _ = state.app.emit("library://assets-changed", ());
                     asset_result(&a).to_string()
@@ -259,7 +275,7 @@ async fn handle_message(text: &str, state: &AppState) -> String {
                 let mut result = if url.is_empty() {
                     serde_json::json!({ "ok": false, "error": "empty media_url" })
                 } else {
-                    match save_one(state, url, source_url).await {
+                    match save_one(state, url, source_url, project_id.as_deref()).await {
                         Ok(asset) => {
                             saved += 1;
                             asset_result(&asset)
@@ -295,6 +311,7 @@ async fn save_one(
     state: &AppState,
     url: &str,
     source_url: Option<&str>,
+    project_id: Option<&str>,
 ) -> crate::error::AppResult<crate::core::library::Asset> {
     let asset = match ingest::ingest_from_url(&state.client, &state.paths, &state.db, url, source_url).await {
         Ok(a) => {
@@ -306,6 +323,14 @@ async fn save_one(
             return Err(e);
         }
     };
+    if let Some(project_id) = project_id {
+        if let Err(error) = state
+            .db
+            .add_assets_to_project(project_id, std::slice::from_ref(&asset.id))
+        {
+            tracing::warn!("link collected asset {} to project failed: {error}", asset.id);
+        }
+    }
     // 后台命名 + 基础分析（非阻塞；完成后 autoname 再 emit 刷新）。
     crate::core::autoname::spawn_auto_analyze(state.app.clone(), state.db.clone(), asset.clone());
     Ok(asset)
@@ -324,6 +349,7 @@ pub async fn start(
     db: Arc<Database>,
     app: AppHandle,
     status: ExtensionStatus,
+    active_project: ActiveProjectContext,
 ) -> Result<(), std::io::Error> {
     let client = ingest::download_client().map_err(std::io::Error::other)?;
     let state = AppState {
@@ -332,6 +358,7 @@ pub async fn start(
         app: app.clone(),
         client,
         status: status.clone(),
+        active_project,
     };
     // 心跳超时 tick：每 5s 检查，距上次消息 > 30s（错过 1 个 15s 心跳）→ emit disconnected。
     // 让前端状态指示器在扩展被 disable / 卸载后及时变灰，而非永久卡绿。

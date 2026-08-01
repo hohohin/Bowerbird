@@ -12,7 +12,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Semaphore;
 use ulid::Ulid;
 
@@ -21,6 +21,7 @@ use crate::codex::types::CodexRequest;
 use crate::codex::CodexProvider;
 use crate::core::caption;
 use crate::core::library::{Analysis, Asset};
+use crate::core::settings::SettingsState;
 use crate::db::Database;
 use crate::error::AppResult;
 
@@ -32,20 +33,27 @@ const FALLBACK_VOCAB: &[&str] = &[
 /// 采集即命名 + 归类指令：看图 → 取名 + 描述 + 从词表选 1-2 个主类。
 /// 类别用哨兵 `[[CAT: ...]]` 标注（extract_categories 抽取，不污染描述正文）。
 /// 词表查空时用 FALLBACK_VOCAB。
-fn build_auto_instruction(vocab: &[String]) -> String {
+///
+/// `template` 为空时使用默认硬编码模板；否则用 `{vocab}` 占位符替换词表。
+fn build_auto_instruction(vocab: &[String], template: Option<&str>) -> String {
     let list = if vocab.is_empty() {
         FALLBACK_VOCAB.join("、")
     } else {
         vocab.join("、")
     };
-    format!(
-        "请描述这张图片并取名。严格按照以下格式回复：\
-         第一行只回复命名本身，不要有标点符号；\
-         第二行起回复图片的描述；\
-         最后一行单独用 [[CAT: 类别1, 类别2]] 标注主类（最多 2 个，必须从词表里选，只回类别名）。\
-         词表：{list}。"
-    )
+    let tpl = template
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(DEFAULT_HARDCODED_INSTRUCTION);
+    tpl.replace("{vocab}", &list)
 }
+
+/// 硬编码默认模板（与 settings 的 DEFAULT_AUTO_ANALYZE_PROMPT 保持一致）。
+const DEFAULT_HARDCODED_INSTRUCTION: &str = "请描述这张图片并取名。严格按照以下格式回复：\
+ 第一行只回复命名本身，不要有标点符号；\
+ 第二行起回复图片的描述；\
+ 最后一行单独用 [[CAT: 类别1, 类别2]] 标注主类（最多 2 个，必须从词表里选，只回类别名）。\
+ 词表：{vocab}。";
 
 /// 批量重归类指令：喂已有 caption 文本（不看图）→ 只回 `[[CAT: ...]]` 一行。
 fn build_classify_instruction(vocab: &[String], caption: &str) -> String {
@@ -103,6 +111,15 @@ pub fn spawn_auto_analyze(app: AppHandle, db: Arc<Database>, asset: Asset) {
 async fn auto_analyze(app: &AppHandle, db: &Arc<Database>, asset: Asset) -> Result<(), String> {
     let asset_id = asset.id.clone();
 
+    // 检查设置：关闭「入库时自动反推」→ 直接跳过。
+    let settings = app
+        .try_state::<SettingsState>()
+        .map(|s| s.get())
+        .unwrap_or_default();
+    if !settings.auto_analyze_on_ingest {
+        return Ok(());
+    }
+
     // 已有 caption → 跳过（dHash 去重返回已有资产 / 重导入）。查失败也继续（宁多跑一次）。
     let id_for_check = asset_id.clone();
     match db_call(db, move |db| db.has_analysis(&id_for_check, "caption")).await {
@@ -123,7 +140,7 @@ async fn auto_analyze(app: &AppHandle, db: &Arc<Database>, asset: Asset) -> Resu
     let vocab = db_call(db, |db| db.list_auto_tag_names())
         .await
         .unwrap_or_default();
-    let instruction = build_auto_instruction(&vocab);
+    let instruction = build_auto_instruction(&vocab, Some(&settings.auto_analyze_prompt));
 
     let req = CodexRequest {
         instruction: instruction.clone(),

@@ -23,6 +23,7 @@ pub async fn import_files(
     paths: State<'_, Arc<LibraryPaths>>,
     db: State<'_, Arc<Database>>,
     sources: Vec<String>,
+    project_id: Option<String>,
 ) -> Result<Vec<Asset>, AppError> {
     let paths = paths.inner().clone();
     let db = db.inner().clone();
@@ -39,6 +40,12 @@ pub async fn import_files(
     })
     .await
     .map_err(|e| AppError::Other(e.to_string()))??;
+    if let Some(project_id) = project_id.as_deref() {
+        let ids: Vec<String> = assets.iter().map(|asset| asset.id.clone()).collect();
+        if let Err(e) = db.add_assets_to_project(project_id, &ids) {
+            tracing::warn!("failed to link imported assets to project {project_id}: {e}");
+        }
+    }
     // 后台命名 + 反推（非阻塞，约定 7 离线降级）。
     for a in &assets {
         crate::core::autoname::spawn_auto_analyze(app.clone(), db.clone(), a.clone());
@@ -52,6 +59,7 @@ pub async fn import_folder(
     paths: State<'_, Arc<LibraryPaths>>,
     db: State<'_, Arc<Database>>,
     path: String,
+    project_id: Option<String>,
 ) -> Result<usize, AppError> {
     let paths = paths.inner().clone();
     let db = db.inner().clone();
@@ -61,6 +69,12 @@ pub async fn import_folder(
     })
     .await
     .map_err(|e| AppError::Other(e.to_string()))??;
+    if let Some(project_id) = project_id.as_deref() {
+        let ids: Vec<String> = assets.iter().map(|asset| asset.id.clone()).collect();
+        if let Err(e) = db.add_assets_to_project(project_id, &ids) {
+            tracing::warn!("failed to link imported assets to project {project_id}: {e}");
+        }
+    }
     for a in &assets {
         crate::core::autoname::spawn_auto_analyze(app.clone(), db.clone(), a.clone());
     }
@@ -71,12 +85,18 @@ pub async fn import_folder(
 pub async fn list_assets(
     db: State<'_, Arc<Database>>,
     folder_id: Option<String>,
+    project_id: Option<String>,
     limit: Option<i64>,
     offset: Option<i64>,
 ) -> Result<Vec<Asset>, AppError> {
     let db = db.inner().clone();
     let v = tokio::task::spawn_blocking(move || {
-        db.list_assets(folder_id.as_deref(), limit.unwrap_or(500), offset.unwrap_or(0))
+        db.list_assets(
+            folder_id.as_deref(),
+            project_id.as_deref(),
+            limit.unwrap_or(500),
+            offset.unwrap_or(0),
+        )
     })
     .await
     .map_err(|e| AppError::Other(e.to_string()))??;
@@ -90,12 +110,18 @@ pub async fn list_assets(
 pub async fn list_assets_smart(
     db: State<'_, Arc<Database>>,
     query: String,
+    project_id: Option<String>,
     limit: Option<i64>,
     offset: Option<i64>,
 ) -> Result<Vec<Asset>, AppError> {
     let db = db.inner().clone();
     let v = tokio::task::spawn_blocking(move || {
-        db.list_assets_smart(&query, limit.unwrap_or(500), offset.unwrap_or(0))
+        db.list_assets_smart(
+            &query,
+            project_id.as_deref(),
+            limit.unwrap_or(500),
+            offset.unwrap_or(0),
+        )
     })
     .await
     .map_err(|e| AppError::Other(e.to_string()))??;
@@ -103,9 +129,12 @@ pub async fn list_assets_smart(
 }
 
 #[tauri::command]
-pub async fn count_assets(db: State<'_, Arc<Database>>) -> Result<i64, AppError> {
+pub async fn count_assets(
+    db: State<'_, Arc<Database>>,
+    project_id: Option<String>,
+) -> Result<i64, AppError> {
     let db = db.inner().clone();
-    tokio::task::spawn_blocking(move || db.count_assets())
+    tokio::task::spawn_blocking(move || db.count_assets(project_id.as_deref()))
         .await
         .map_err(|e| AppError::Other(e.to_string()))?
 }
@@ -206,12 +235,18 @@ pub async fn remove_asset_from_collection(
 pub async fn list_assets_by_collection(
     db: State<'_, Arc<Database>>,
     collection_id: String,
+    project_id: Option<String>,
     limit: Option<i64>,
     offset: Option<i64>,
 ) -> Result<Vec<Asset>, AppError> {
     let db = db.inner().clone();
     let v = tokio::task::spawn_blocking(move || {
-        db.list_assets_by_collection(&collection_id, limit.unwrap_or(500), offset.unwrap_or(0))
+        db.list_assets_by_collection(
+            &collection_id,
+            project_id.as_deref(),
+            limit.unwrap_or(500),
+            offset.unwrap_or(0),
+        )
     })
     .await
     .map_err(|e| AppError::Other(e.to_string()))??;
@@ -277,13 +312,17 @@ pub async fn delete_preset(
 
 #[tauri::command]
 pub async fn delete_asset(
+    app: AppHandle,
     db: State<'_, Arc<Database>>,
     id: String,
 ) -> Result<(), AppError> {
     let db = db.inner().clone();
     tokio::task::spawn_blocking(move || db.delete_asset(&id))
         .await
-        .map_err(|e| AppError::Other(e.to_string()))?
+        .map_err(|e| AppError::Other(e.to_string()))??;
+    let _ = app.emit("projects://changed", ());
+    let _ = app.emit("library://assets-changed", ());
+    Ok(())
 }
 
 #[tauri::command]
@@ -341,10 +380,13 @@ pub async fn delete_folder(db: State<'_, Arc<Database>>, id: String) -> Result<(
 pub async fn search_assets(
     db: State<'_, Arc<Database>>,
     query: String,
+    project_id: Option<String>,
     limit: Option<i64>,
 ) -> Result<Vec<Asset>, AppError> {
     let db = db.inner().clone();
-    let v = tokio::task::spawn_blocking(move || db.search_assets(&query, limit.unwrap_or(500)))
+    let v = tokio::task::spawn_blocking(move || {
+        db.search_assets(&query, project_id.as_deref(), limit.unwrap_or(500))
+    })
         .await
         .map_err(|e| AppError::Other(e.to_string()))??;
     Ok(collapse_generation_groups(v, |a: &Asset| a.generation_session_id.as_deref()))
@@ -374,9 +416,10 @@ pub async fn delete_analysis(db: State<'_, Arc<Database>>, id: String) -> Result
 #[tauri::command]
 pub async fn list_prompted_assets(
     db: State<'_, Arc<Database>>,
+    project_id: Option<String>,
 ) -> Result<Vec<PromptedAsset>, AppError> {
     let db = db.inner().clone();
-    let v = tokio::task::spawn_blocking(move || db.list_prompted_assets())
+    let v = tokio::task::spawn_blocking(move || db.list_prompted_assets(project_id.as_deref()))
         .await
         .map_err(|e| AppError::Other(e.to_string()))??;
     Ok(collapse_generation_groups(v, |p: &PromptedAsset| {
@@ -390,9 +433,12 @@ pub async fn list_prompted_assets(
 pub async fn list_generation_group(
     db: State<'_, Arc<Database>>,
     asset_id: String,
+    project_id: Option<String>,
 ) -> Result<Vec<Asset>, AppError> {
     let db = db.inner().clone();
-    tokio::task::spawn_blocking(move || db.list_generation_group(&asset_id))
+    tokio::task::spawn_blocking(move || {
+        db.list_generation_group(&asset_id, project_id.as_deref())
+    })
         .await
         .map_err(|e| AppError::Other(e.to_string()))?
 }
@@ -403,12 +449,13 @@ pub async fn list_generation_group(
 pub async fn list_generation_groups(
     db: State<'_, Arc<Database>>,
     asset_ids: Vec<String>,
+    project_id: Option<String>,
 ) -> Result<HashMap<String, Vec<Asset>>, AppError> {
     let db = db.inner().clone();
     tokio::task::spawn_blocking(move || -> Result<HashMap<String, Vec<Asset>>, AppError> {
         let mut out = HashMap::new();
         for id in &asset_ids {
-            let group = db.list_generation_group(id)?;
+            let group = db.list_generation_group(id, project_id.as_deref())?;
             if !group.is_empty() {
                 out.insert(id.clone(), group);
             }
@@ -426,9 +473,10 @@ pub async fn list_generation_groups(
 pub async fn generation_history(
     db: State<'_, Arc<Database>>,
     asset_id: String,
+    project_id: Option<String>,
 ) -> Result<GenerationHistory, AppError> {
     let db = db.inner().clone();
-    tokio::task::spawn_blocking(move || db.generation_history(&asset_id))
+    tokio::task::spawn_blocking(move || db.generation_history(&asset_id, project_id.as_deref()))
         .await
         .map_err(|e| AppError::Other(e.to_string()))?
 }
@@ -440,9 +488,12 @@ pub async fn generation_history(
 pub async fn list_tags(
     db: State<'_, Arc<Database>>,
     source: Option<String>,
+    project_id: Option<String>,
 ) -> Result<Vec<TagCount>, AppError> {
     let db = db.inner().clone();
-    tokio::task::spawn_blocking(move || db.list_tags_with_count(source.as_deref().unwrap_or("auto")))
+    tokio::task::spawn_blocking(move || {
+        db.list_tags_with_count(source.as_deref().unwrap_or("auto"), project_id.as_deref())
+    })
         .await
         .map_err(|e| AppError::Other(e.to_string()))?
 }
@@ -506,9 +557,12 @@ pub async fn reclassify_all(
 
 /// 全库色板：每个桶 + 资产数 + 桶代表 hex（侧栏色板渲染）。
 #[tauri::command]
-pub async fn palette_overview(db: State<'_, Arc<Database>>) -> Result<Vec<ColorBucket>, AppError> {
+pub async fn palette_overview(
+    db: State<'_, Arc<Database>>,
+    project_id: Option<String>,
+) -> Result<Vec<ColorBucket>, AppError> {
     let db = db.inner().clone();
-    tokio::task::spawn_blocking(move || db.palette_overview())
+    tokio::task::spawn_blocking(move || db.palette_overview(project_id.as_deref()))
         .await
         .map_err(|e| AppError::Other(e.to_string()))?
 }
@@ -518,13 +572,20 @@ pub async fn palette_overview(db: State<'_, Arc<Database>>) -> Result<Vec<ColorB
 pub async fn list_assets_by_color(
     db: State<'_, Arc<Database>>,
     folder_id: Option<String>,
+    project_id: Option<String>,
     bucket: String,
     limit: Option<i64>,
     offset: Option<i64>,
 ) -> Result<Vec<Asset>, AppError> {
     let db = db.inner().clone();
     let v = tokio::task::spawn_blocking(move || {
-        db.list_assets_by_color(folder_id.as_deref(), &bucket, limit.unwrap_or(500), offset.unwrap_or(0))
+        db.list_assets_by_color(
+            folder_id.as_deref(),
+            project_id.as_deref(),
+            &bucket,
+            limit.unwrap_or(500),
+            offset.unwrap_or(0),
+        )
     })
     .await
     .map_err(|e| AppError::Other(e.to_string()))??;

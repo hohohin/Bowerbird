@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { api } from "./lib/api";
 import type {
+  AppSettings,
   Asset,
   CodexChunk,
   CodexHealth,
@@ -8,6 +9,7 @@ import type {
   Folder,
   GenTurn,
   Preset,
+  Project,
   PromptedAsset,
   TagCount,
 } from "./lib/types";
@@ -28,6 +30,12 @@ interface State {
   mode: Mode;
   detailAssetId: string | null; // 浏览模式打开的详情页资产
   folders: Folder[];
+  // —— 项目 workspace ——
+  projects: Project[];
+  currentProjectId: string | null;
+  reloadProjects: () => Promise<void>;
+  enterProject: (id: string) => Promise<void>;
+  exitProject: () => Promise<void>;
   // —— 自动归类（P2）——
   autoTags: TagCount[]; // 侧栏「自动归类」分区（source='auto' tag + 计数）
   classifyProgress: { done: number; total: number } | null; // 批量重归类进度
@@ -85,9 +93,17 @@ interface State {
   // 扩展连接状态（心跳/采集触发；App 挂载取 + listen collect://extension-connected/disconnected）。
   extensionConnected: boolean;
   setExtensionConnected: (v: boolean) => void;
-  // 手动唤起扩展引导（点工具栏灰点设 true）；连上时自动清。
+  // 统一「环境状态」总览；子引导只由总览卡片跳转唤起。
+  onboardingForceOpen: boolean;
+  setOnboardingForceOpen: (v: boolean) => void;
+  codexOnboardingForceOpen: boolean;
+  setCodexOnboardingForceOpen: (v: boolean) => void;
   extensionOnboardingForceOpen: boolean;
   setExtensionOnboardingForceOpen: (v: boolean) => void;
+  // —— 应用设置（从后端 settings.json 加载）——
+  settings: AppSettings | null;
+  loadSettings: () => Promise<void>;
+  updateSettings: (s: AppSettings) => Promise<void>;
   // —— 生成结果面板（独立于创作板；主区覆盖层，可随时开合，状态在 store 不丢）——
   genPanelOpen: boolean;
   genTurns: GenTurn[];
@@ -96,6 +112,7 @@ interface State {
   genLastPrompt: string; // 最近一次发送 prompt，供「新会话重新生成」复用
   genLastRefs: string[]; // 最近一次发送参考图（store_path）
   genRefAssets: Asset[]; // 最近一次发送参考图的完整 asset，「复用到创作板」还原参考图用
+  genProjectId: string | null; // 生成会话所属项目快照；续轮不随当前项目切换漂移
   genUnread: boolean; // 面板关时落地新图 → 顶栏按钮红点
   toggleGenPanel: () => void;
   setGenPanelOpen: (open: boolean) => void;
@@ -172,6 +189,8 @@ export const useStore = create<State>((set, get) => {
   mode: "browse",
   detailAssetId: null,
   folders: [],
+  projects: [],
+  currentProjectId: null,
   autoTags: [],
   classifyProgress: null,
   colorRebuild: null,
@@ -236,6 +255,65 @@ export const useStore = create<State>((set, get) => {
       console.error("reloadFolders failed", e);
     }
   },
+  reloadProjects: async () => {
+    try {
+      const projects = await api.listProjects();
+      const current = get().currentProjectId;
+      if (current && !projects.some((project) => project.id === current)) {
+        await api.setActiveProject(null);
+        set({
+          projects,
+          currentProjectId: null,
+          currentFolderId: null,
+          currentCollectionId: null,
+          colorFilter: null,
+          searchQuery: "",
+          smartFilter: null,
+          detailAssetId: null,
+          selectedIds: new Set(),
+          mode: "browse",
+          boardOpen: false,
+          activePresetId: null,
+        });
+      } else {
+        set({ projects });
+      }
+    } catch (e) {
+      console.error("reloadProjects failed", e);
+    }
+  },
+  enterProject: async (id) => {
+    await api.setActiveProject(id);
+    set({
+      currentProjectId: id,
+      currentFolderId: null,
+      currentCollectionId: null,
+      colorFilter: null,
+      searchQuery: "",
+      smartFilter: null,
+      detailAssetId: null,
+      selectedIds: new Set(),
+      mode: "browse",
+      boardOpen: false,
+      activePresetId: null,
+    });
+  },
+  exitProject: async () => {
+    await api.setActiveProject(null);
+    set({
+      currentProjectId: null,
+      currentFolderId: null,
+      currentCollectionId: null,
+      colorFilter: null,
+      searchQuery: "",
+      smartFilter: null,
+      detailAssetId: null,
+      selectedIds: new Set(),
+      mode: "browse",
+      boardOpen: false,
+      activePresetId: null,
+    });
+  },
   reloadPresets: async () => {
     try {
       set({ presets: await api.listPresets() });
@@ -246,7 +324,7 @@ export const useStore = create<State>((set, get) => {
   setAutoTags: (autoTags) => set({ autoTags }),
   reloadAutoTags: async () => {
     try {
-      set({ autoTags: await api.listTags("auto") });
+      set({ autoTags: await api.listTags("auto", get().currentProjectId) });
     } catch (e) {
       console.error("reloadAutoTags failed", e);
     }
@@ -254,7 +332,7 @@ export const useStore = create<State>((set, get) => {
   setPalette: (palette) => set({ palette }),
   reloadPalette: async () => {
     try {
-      set({ palette: await api.paletteOverview() });
+      set({ palette: await api.paletteOverview(get().currentProjectId) });
     } catch (e) {
       console.error("reloadPalette failed", e);
     }
@@ -323,9 +401,31 @@ export const useStore = create<State>((set, get) => {
   setCodexHealth: (codexHealth) => set({ codexHealth }),
   extensionConnected: false,
   setExtensionConnected: (extensionConnected) => set({ extensionConnected }),
+  onboardingForceOpen: false,
+  setOnboardingForceOpen: (onboardingForceOpen) => set({ onboardingForceOpen }),
+  codexOnboardingForceOpen: false,
+  setCodexOnboardingForceOpen: (codexOnboardingForceOpen) =>
+    set({ codexOnboardingForceOpen }),
   extensionOnboardingForceOpen: false,
   setExtensionOnboardingForceOpen: (extensionOnboardingForceOpen) =>
     set({ extensionOnboardingForceOpen }),
+  // —— 应用设置 ——
+  settings: null,
+  loadSettings: async () => {
+    try {
+      set({ settings: await api.getSettings() });
+    } catch (e) {
+      console.error("loadSettings failed", e);
+    }
+  },
+  updateSettings: async (settings) => {
+    try {
+      await api.updateSettings(settings);
+      set({ settings });
+    } catch (e) {
+      console.error("updateSettings failed", e);
+    }
+  },
   // —— 生成结果面板 ——
   genPanelOpen: false,
   genTurns: [],
@@ -334,6 +434,7 @@ export const useStore = create<State>((set, get) => {
   genLastPrompt: "",
   genLastRefs: [],
   genRefAssets: [],
+  genProjectId: null,
   genUnread: false,
   toggleGenPanel: () =>
     set((s) => {
@@ -356,6 +457,7 @@ export const useStore = create<State>((set, get) => {
       genLastPrompt: sentPrompt,
       genLastRefs: refPaths,
       genRefAssets: references,
+      genProjectId: get().currentProjectId,
       genSessionId: null,
       genStreaming: "",
       genTurns: [{ id: nextGenTurnId(), prompt: sentPrompt, images: [] }],
@@ -364,7 +466,11 @@ export const useStore = create<State>((set, get) => {
     });
     set({ generating: true });
     try {
-      await api.codexCreateImage({ prompt: sentPrompt, referenceImages: refPaths });
+      await api.codexCreateImage({
+        prompt: sentPrompt,
+        referenceImages: refPaths,
+        projectId: get().genProjectId,
+      });
     } catch (e) {
       genHandleError(typeof e === "string" ? e : JSON.stringify(e));
     } finally {
@@ -381,7 +487,12 @@ export const useStore = create<State>((set, get) => {
     }));
     set({ generating: true });
     try {
-      await api.codexCreateImage({ prompt: text, referenceImages: [], sessionId: sid });
+      await api.codexCreateImage({
+        prompt: text,
+        referenceImages: [],
+        sessionId: sid,
+        projectId: get().genProjectId,
+      });
     } catch (e) {
       genHandleError(typeof e === "string" ? e : JSON.stringify(e));
     } finally {
@@ -416,7 +527,7 @@ export const useStore = create<State>((set, get) => {
   viewGenerationHistory: async (assetId) => {
     if (get().generating) return; // 进行中不覆盖当前会话
     try {
-      const hist = await api.generationHistory(assetId);
+      const hist = await api.generationHistory(assetId, get().currentProjectId);
       set({
         genTurns: hist.turns.map((t) => ({
           id: nextGenTurnId(),
@@ -429,6 +540,7 @@ export const useStore = create<State>((set, get) => {
           .map((r) => r.store_path)
           .filter((p): p is string => !!p),
         genRefAssets: hist.references,
+        genProjectId: get().currentProjectId,
         genStreaming: "",
         genPanelOpen: true, // 弹生成面板（盖住详情页，关面板回详情页）
         genUnread: false,

@@ -20,6 +20,31 @@ export interface Asset {
   generation_session_id?: string | null;
 }
 
+export interface Project {
+  id: string;
+  name: string;
+  workspace_path: string;
+  created_at: number;
+  asset_count: number;
+}
+
+export interface ProjectCreateResult {
+  project: Project;
+  imported_count: number;
+  member_count: number;
+}
+
+/** 删除项目时对独占素材的处理方式；共享素材永远保留在全局。 */
+export type ProjectDeleteMode = "keep" | "move_out" | "delete_exclusive";
+
+export interface ProjectDeleteResult {
+  removed_members: number;
+  deleted_assets: number;
+  preserved_shared: number;
+  moved_assets: number;
+  failed_moves: string[];
+}
+
 export type FolderKind = "folder" | "smart" | "collection";
 
 export interface Folder {
@@ -110,6 +135,20 @@ export interface GenerationHistory {
   session_id: string | null;
   turns: GenerationHistoryTurn[];
   references: Asset[]; // 首版参考图完整 asset：「复用到创作板」还原参考图 + 「新会话重新生成」派生 store_path
+}
+
+/** 应用设置（后端 settings.json 持久化） */
+export interface AppSettings {
+  auto_analyze_on_ingest: boolean;
+  auto_analyze_prompt: string;
+  library_root: string | null;
+}
+
+/** 素材库迁移进度（library://migrate-progress）。 */
+export interface MigrateProgress {
+  stage: string;
+  done: number;
+  total: number;
 }
 
 export type CodexChunk =

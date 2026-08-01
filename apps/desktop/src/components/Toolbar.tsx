@@ -16,6 +16,7 @@ export function Toolbar({ onRefresh }: { onRefresh: () => Promise<void> }) {
   const generating = useStore((s) => s.generating);
   const genUnread = useStore((s) => s.genUnread);
   const searchQuery = useStore((s) => s.searchQuery);
+  const currentProjectId = useStore((s) => s.currentProjectId);
   const setSearchQuery = useStore((s) => s.setSearchQuery);
 
   async function withBusy(fn: () => Promise<unknown>) {
@@ -34,7 +35,7 @@ export function Toolbar({ onRefresh }: { onRefresh: () => Promise<void> }) {
         onClick={() =>
           withBusy(async () => {
             const paths = await api.pickImageFiles();
-            if (paths.length) await api.importFiles(paths);
+            if (paths.length) await api.importFiles(paths, currentProjectId);
           })
         }
         disabled={busy}
@@ -46,7 +47,7 @@ export function Toolbar({ onRefresh }: { onRefresh: () => Promise<void> }) {
         onClick={() =>
           withBusy(async () => {
             const p = await api.pickFolder();
-            if (p) await api.importFolder(p);
+            if (p) await api.importFolder(p, currentProjectId);
           })
         }
         disabled={busy}

@@ -23,9 +23,9 @@
 
 ## 目前进展
 
-> 更新时间：2026-07-29
+> 更新时间：2026-08-01
 
-**当前阶段：1.0 功能路径打通 + v1 范围扩展到生成（⑥）+ 创作板 UI 已实现（2026-07-18 重写为 ProseMirror）+ codex CLI 隐形（2026-07-29，首启一键安装/OAuth 登录，用户不碰终端）+ 扩展小白化（2026-07-29，引导 + 心跳 + 状态指示器 + 随包内嵌）。** 详情页「反推」真正看图（codex CLI + gpt-5.5，ChatGPT 订阅，绕过 API quota）；FTS5 文件名搜索可用；**创作板（真实 prompt 文本编辑器 + @ 选图）已落地**（[CreationBoard.tsx](apps/desktop/src/components/CreationBoard.tsx)）；**生成（⑥）纳入 v1**，待 spike 验证 codex CLI 的画图能力。
+**当前阶段：1.0 功能路径打通 + v1 范围扩展到生成（⑥）+ 创作板 UI 已实现（2026-07-18 重写为 ProseMirror）+ codex CLI 隐形（2026-07-29，首启一键安装/OAuth 登录，用户不碰终端）+ 扩展小白化（2026-07-29，引导 + 心跳 + 状态指示器 + 随包内嵌）+ 项目 Workspace（2026-07-30，全局中央库之上的多对多隔离视图）+ 统一环境状态 Onboarding（2026-07-31，一级三卡片总览 + 二级 forceOpen 跳转，自 mac 最新提交语义移植）+ 自定义素材库位置与完整迁移（2026-08-01）。** 详情页「反推」真正看图（codex CLI + gpt-5.5，ChatGPT 订阅，绕过 API quota）；FTS5 文件名搜索可用；**创作板（真实 prompt 文本编辑器 + @ 选图）已落地**（[CreationBoard.tsx](apps/desktop/src/components/CreationBoard.tsx)）；**生成（⑥）纳入 v1**，已由 codex imagegen 端到端跑通。
 
 **源码树（按开发计划 §7）：** `apps/desktop/{src, src-tauri}`、`apps/extension/`、`packages/shared/`。常用命令：`pnpm install`、`pnpm tauri dev`、`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml`。
 
@@ -86,7 +86,15 @@
 
 - **Windows 最终安装包（2026-07-29 20:12）**：用户确认通用采集可运行后，主源码 `pnpm tauri build`（canonical + 内嵌扩展，绕 `Windows/overrides`）成功产出 NSIS [Bowerbird_0.1.0_x64-setup.exe](apps/desktop/src-tauri/target/release/bundle/nsis/Bowerbird_0.1.0_x64-setup.exe) 46,556,111 bytes，SHA-256 `8153C4213A634E09F8B26A8CAD8300D8F8D7B4CF3B5F7D137D51985BAE309565`；MSI [Bowerbird_0.1.0_x64_en-US.msi](apps/desktop/src-tauri/target/release/bundle/msi/Bowerbird_0.1.0_x64_en-US.msi) 48,222,208 bytes，SHA-256 `5F99D7148E319D70444975D7A65E368560234FCDB518B8488E716E04FD9CE3F0`。该包即本次通用采集最终版。
 
-**测试：** `cargo test` 54 通过（原 51 + 浏览器字节上传成功 / 字节格式覆盖文件名 / HTML 拒绝）；候选工具 Node tests 7/7；前端 `tsc --noEmit` 通过；扩展 `candidate-utils.js` / `content.js` / `background.js` 均通过 `node --check`，Manifest JSON 解析通过；Pinterest/商品页真机通过。
+- **项目 Workspace（2026-07-30）**：保留全局素材库，并在其上新增项目隔离视图。迁移 [0010_projects.sql](apps/desktop/src-tauri/sql/0010_projects.sql) 建 `projects` + `project_assets` 多对多关系；项目选择用户目录创建，目录 basename 即项目名，首次递归导入已有图片，后续不监听、不写回、不删除原 workspace。图片仍统一进入 Bowerbird 中央库，dHash 命中只新增成员关系、不重复占磁盘。普通列表、文件夹、搜索、智能筛选、收藏夹、颜色、标签、创作板、生成组/历史均在 SQL 层与项目成员取交集；项目内文件/文件夹导入、扩展采集和生成自动归入当前项目，同时全局可见。侧栏新增 [ProjectSection.tsx](apps/desktop/src/components/ProjectSection.tsx)（新建/进入/退出/两种删除），全局批量素材可「加入项目」，项目内删除每次选择「仅移出当前项目」或「从全局彻底删除」。删除项目可只删关系，或同时删除项目独占的中央库素材；共享素材与原 workspace 始终保留。应用启动默认全局，不持久化上次 active project。后端扩展采集通过 `ActiveProjectContext` 在消息到达时快照归属，生成流程由 store 的 `genProjectId` 首轮快照保证续轮不随界面切换漂移。开发版已真实启动，数据库迁移到 v10，侧栏项目区可见；自动验证 Rust 58 tests、TypeScript、Vite build、cargo check 全通过。
+
+- **统一环境状态 Onboarding（2026-07-31，语义移植自 mac 最新提交 `977c37f`）**：原 codex / 扩展两个各自自动弹的引导收敛为两级状态机——一级新增 [Onboarding.tsx](apps/desktop/src/components/Onboarding.tsx)「环境状态」总览（三卡片：codex CLI / 浏览器扩展 / 新手教程占位，portal 全屏 Modal），二级 [CodexOnboarding.tsx](apps/desktop/src/components/CodexOnboarding.tsx) / [ExtensionOnboarding.tsx](apps/desktop/src/components/ExtensionOnboarding.tsx) 只由一级卡片经 store 三个 `*ForceOpen` 跳转唤起、不再各自自动弹；二级「稍后再说」与配置成功（codex 重检 ok / 扩展打开期间由未连接变为已连接）均返回一级，一级只由用户主动关闭（✕ / 稍后再说）并写 `bowerbird.onboardingSeen`。设置面板 [SettingsDialog.tsx](apps/desktop/src/components/SettingsDialog.tsx) 的环境项收敛为单一「打开环境状态」入口 + 聚合徽章（全部就绪 / 有待完成项）。边界修正（不照抄 mac）：扩展已连接时仍可重看教程（仅「未连接→已连接」跃迁才自动返回）；codex 已装未登录时登录按钮直接可用（reason 含「未登录」即视为已装）；扩展路径说明同时覆盖 Windows 地址栏与 macOS `⌘⇧G`；新手教程按钮禁用标注待补充。详见关键约定 15。
+
+- **删除项目三选项 + 移出园丁鸟（2026-07-31）**：删除项目从两选项扩为三选项——① 仅删除项目（素材留全局）；② **删除项目并将文件移出园丁鸟**：独占素材文件**移回项目 workspace 文件夹**（素材名净化命名、重名追加 id 前缀不覆盖、跨卷 rename 失败回退 copy；移动成功才删资产行，失败的保留全局并计数报告；缩略图为 Bowerbird 中间产物直接删除），项目内素材不进全局也不物理删除；③ 物理删除独占素材（红色入口 + **手动输入「确认删除」** 才能点确认，避开 WKWebView 对原生 confirm 的拦截）。共享素材三种模式一律保留。后端 `delete_project` 改收 `mode: "keep" | "move_out" | "delete_exclusive"`，`ProjectDeleteResult` 增 `moved_assets` / `failed_moves`；核心实现在 [core/projects.rs](apps/desktop/src-tauri/src/core/projects.rs)（`move_destination` / `move_file` / 移出分支），UI 在 [ProjectSection.tsx](apps/desktop/src/components/ProjectSection.tsx)。新增 2 个 Rust 测试（移出+共享保留、目的地命名净化与防覆盖），全量 60 通过。
+
+- **自定义素材库位置 + 完整迁移（2026-07-31）**：库根不再写死应用数据目录。设置新增 `library_root`（[core/settings.rs](apps/desktop/src-tauri/src/core/settings.rs)，只存指向、体量小可留 C 盘）；[lib.rs](apps/desktop/src-tauri/src/lib.rs) 启动先读设置定根，用自定义根打开成功后清理 app_data_dir 里的旧库残留（images/thumbnails/library.db*），彻底释放系统盘。[core/migrate.rs](apps/desktop/src-tauri/src/core/migrate.rs) 实现迁移：校验（新旧不得相同/嵌套、目标不可含 library.db、可写探测）→ 递归复制 images/thumbnails（逐文件进度经 `library://migrate-progress`）→ `VACUUM INTO` 一致性 DB 快照 → 用 `REPLACE` 改写新库中 `store_path`/`thumb_path`/analyses payload 的绝对路径前缀 → 返回新根由命令层写设置。命令 `library_root` / `migrate_library_root` / `restart_app`（`app.restart()` 返回 `!`，直接作尾表达式）；前端 [SettingsDialog.tsx](apps/desktop/src/components/SettingsDialog.tsx)「素材库位置」区：展示当前路径 + 更改并迁移 → 确认 → 进度条 → 自动重启（顺带修复 `commitSettings` 全量覆盖丢 `library_root` 的隐患）。新增 2 个 Rust 测试（迁移改写与旧根保留、嵌套/相同目标拒绝），全量 62 通过。
+
+**测试：** `cargo test` 62 通过（含项目多对多幂等、共享素材安全删除、项目 scope 查询、移出园丁鸟文件迁移与目的地命名、素材库迁移改写与目标校验）；候选工具 Node tests 7/7；前端 `tsc --noEmit` 通过；Vite production build 通过；`cargo check` 通过（仅 3 个既有 dead-code warnings）；扩展 `candidate-utils.js` / `content.js` / `background.js` 均通过 `node --check`，Manifest JSON 解析通过；Pinterest/商品页真机通过；Tauri 开发版启动并完成迁移 v10。
 
 **未开始 / 待办：**
 - **关键 spike（多模态看图）已接通 — codex CLI 路线**：实测后确定 `codex exec --image` 是当前唯一真正看图的路径（走 **ChatGPT 订阅**，绕过 OpenAI API quota；国内 `chatgpt.com` WS reset 但 codex 自动回退 HTTPS，慢但成功）。`CodexCliProvider`（[codex/codex_cli.rs](apps/desktop/src-tauri/src/codex/codex_cli.rs)）spawn `codex exec --skip-git-repo-check --json --image <path>`，stdin 喂指令，解析 JSONL 事件流（`thread.started`→thread_id、`item.completed`(agent_message)→正文）。**反推支持会话回看**：thread_id 落 caption payload，详情页 caption 卡片「在 codex 中打开」按钮调 `open_codex_session` → osascript 唤起 Terminal.app 跑 `codex resume <thread_id>`，用户在 TUI 看该次反推的完整对话含图（Codex.app 无法定位特定 session，故走 CLI TUI）。**三条备选路线均不通**（已验证）：① `claude -p` 无头把图传 CDN 但不传给模型（"unable to view"）；② DeepSeek HTTP 不接受 OpenAI 的 `image_url` variant（`unknown variant image_url, expected text`）；③ OpenAI HTTP 受账户 `insufficient_quota` 限制。Mock / ClaudeCode（`claude -p`）/ DeepSeek / OpenAI HTTP 路线均已验证看图不通或冗余，**已全部移除**（`codex/` 仅剩 `codex_cli.rs` + `types.rs` + `mod.rs` 仅放 `CodexProvider` trait 定义）；详情页「反推」/ 创作包「发 codex 优化」/ 批量生成提示词统一走 codex CLI，不再有「真实看图」切换或 in-app apikey 配置（`SettingsDialog` / ⚙️ 按钮 / `config.json` / 后端 `Settings` 模块 + `base64` 依赖一并删除）。**`codex_health` 命令保留**——详情页进入时调一次探测 codex CLI 可用性，反推按钮据此置灰并提示原因（约定 7 离线/无账号降级的入口），非看图路线、与上述清理无关。修复了本地 codex CLI（`npm install -g @openai/codex` 0.142.5，之前平台二进制 ENOENT）。`gpt-image-2` 是生成模型，不适合描述，已排除。
@@ -135,9 +143,13 @@
 
 14. **codex CLI 隐形（一键安装 + OAuth 登录）**（2026-07-29）：codex CLI 仍是唯一 provider（约定 1 不变），但用户**无需碰终端**——首启引导（[CodexOnboarding.tsx](apps/desktop/src/components/CodexOnboarding.tsx)）从「复制命令让用户去终端跑」升级为 app 内一键执行：step1 `codex_install`（spawn `npm install -g @openai/codex`，逐行进度经 `codex://setup-progress` 流式）+ step2 `codex_login`（spawn `codex login`，codex 自己开浏览器走 ChatGPT OAuth，写 `~/.codex/auth.json`）。后端 spawn 走 `tokio::process::Command`（**不受 Tauri shell scope 限制**，不改 capabilities）。Node/npm 缺失返回 reason，前端引导装 Node。安装/登录成功 emit `codex://health-changed`，App + AssetDetail 各自监听重取 codexHealth（修 AssetDetail 独立 useState 不同步，见踩坑）。Windows 上 npm.cmd 路径常含空格（`C:\Program Files\nodejs`），`npm_command` 用 `raw_arg` 拼 `cmd /S /C ""path" args"`（详见踩坑）。**备选**：[codex/openai_api.rs](apps/desktop/src-tauri/src/codex/openai_api.rs)（OpenAI Images API 生图，API key 路线，未接入主线）——经研究 ChatGPT 订阅额度不对第三方 API 开放、codex CLI 是唯一合法订阅通道，故走 CLI 隐形而非换 provider。
 
-15. **扩展引导 + 心跳连接跟踪（2026-07-29）**：canonical 扩展（[apps/extension/](apps/extension/)）每 15s WS ping；后端 `ExtensionStatus`（last_seen + connected）收任意消息 touch/emit connected、后台 tick 30s 超时 emit disconnected。前端状态入口统一为 [SettingsButton](apps/desktop/src/components/SettingsButton.tsx) 齿轮（不再单独绿/灰圆点）：codex/扩展任一未就绪挂红 `!`；SettingsDialog 展示两路健康状态、扩展安装引导入口、新手教程占位。ExtensionOnboarding 未连自动弹/连上自关，5 步横向图文引导，复制 `chrome://extensions`/扩展路径而非 spawn（Windows 外部程序参数不稳），4 张图可放大；CodexOnboarding 同步横向。随包内嵌（tauri resources `../../extension/**` → `extension/`；dev 源码、release resource）。
+15. **统一环境状态 Onboarding + 心跳连接跟踪（2026-07-31 收敛）**：引导分两级——一级 [Onboarding.tsx](apps/desktop/src/components/Onboarding.tsx)「环境状态」总览（三卡片：codex / 扩展 / 新手教程），二级 CodexOnboarding / ExtensionOnboarding **只由一级经 store `onboardingForceOpen` / `codexOnboardingForceOpen` / `extensionOnboardingForceOpen` 跳转唤起，禁止各自自动弹**；二级取消或配置成功一律返回一级，**一级只由用户主动关闭**并写 `bowerbird.onboardingSeen`（二级不写任何 seen；旧 `bowerbird.extensionOnboardingSeen` 遗留不再读取，不主动删除）。设置面板只保留「打开环境状态」单一入口（先关设置再开一级，无双遮罩）；任一二级 force-open 时一级不渲染，防双层 Modal。扩展教程在「打开期间未连接→已连接」跃迁时才自动返回，已连接重看不自动关。canonical 扩展（[apps/extension/](apps/extension/)）每 15s WS ping；后端 `ExtensionStatus`（last_seen + connected）收任意消息 touch/emit connected、后台 tick 30s 超时 emit disconnected。工具栏 [SettingsButton](apps/desktop/src/components/SettingsButton.tsx) 齿轮在 codex/扩展任一未就绪时挂红 `!`。随包内嵌（tauri resources `../../extension/**` → `extension/`；dev 源码、release resource）。
 
 16. **扩展采集统一走浏览器 save_blob + 通用候选管线（2026-07-29）**：canonical 与旧 Windows 版不再分叉——[background.js](apps/extension/background.js) 在浏览器会话内 fetch（继承代理/Cookie/登录态）后，以 `save_blob` metadata + binary WS 上传；桌面 [ws_server.rs](apps/desktop/src-tauri/src/collect/ws_server.rs) → [ingest_from_bytes](apps/desktop/src-tauri/src/core/ingest.rs) 按真实字节 sniff/decode，**禁止退回桌面 reqwest 二次下载作为主路径**（Pinterest/登录态站会回归）。通用候选见 [candidate-utils.js](apps/extension/candidate-utils.js)：`img/currentSrc`、srcset/picture、lazy data-*、CSS background、OG/Twitter、JSON-LD、poster/SVG、open shadow；拖拽 HTML 图片优先，禁止把外层商品页 URL混为图片；Alt 明确目标支持 overlay/CSS/blob/data/canvas。XHS 结构化适配保留为高置信度增强但共用后续管线。安全边界：候选≤100、fetch 45s、图片≤50MiB、HTML fallback≤2MiB且深度1、防循环、Rust 100MP/32768边界、metadata状态机/长度限制、日志 query 脱敏；不绕 closed shadow/跨域 iframe/tainted canvas。真机以 Pinterest + `petcollars.com.au` 商品页通过为验收。
+
+17. **项目是中央素材库上的多对多 Workspace 视图（2026-07-30）**：`projects` 只登记 canonical workspace 路径与名称，`project_assets` 只登记成员关系；项目**不是第二套素材库**，不改变 `assets.folder_id` 的全局位置语义。创建项目只在登记时递归导入目录现有图片，之后不监听/同步、不写回、不删除用户原目录；所有素材仍复制到 Bowerbird 中央库，dHash 去重命中时仅新增项目关系。进入项目后，所有素材查询与成员集合取交集，文件夹/收藏夹/标签/颜色元数据仍为全局共享；项目内导入、扩展采集、生成均同时进入中央库和当前项目。应用启动默认全局，不持久化 active project。项目内单次删除必须每次二选一（仅移出 / 全局彻删）；删除项目三选一（2026-07-31）：仅删关系 / **移出独占素材文件回 workspace 并删行**（这是唯一会写 workspace 的操作，且由用户显式触发）/ 物理删除独占素材（红色 + 手输「确认删除」），被其他项目共享的素材必须保留。扩展的 active project 由后端 `ActiveProjectContext` 快照，生成续轮使用首轮 `genProjectId` 快照，禁止因中途切换 scope 造成归属漂移。
+
+18. **素材库根可自定义并可整体迁移（2026-08-01）**：库根不再写死应用数据目录——`settings.json` 增 `library_root`（只存指向，文件体量小可留系统盘），[lib.rs](apps/desktop/src-tauri/src/lib.rs) 启动先读设置定根，默认仍为应用数据目录。迁移只复制不删除，用自定义根打开成功后由启动流程清理 app_data_dir 旧库残留（images/thumbnails/library.db*），彻底释放系统盘；`VACUUM INTO` 拿一致性 DB 快照、`REPLACE` 改写新库 `store_path`/`thumb_path`/analyses payload 绝对路径前缀。**`convertFileSrc` 走 asset 协议、受目录白名单约束（默认仅应用数据目录）**——自定义库根必须 `asset_protocol_scope().allow_directory(&paths.root, true)` 显式放行，否则迁移后全部破图（见踩坑「迁移素材库到自定义位置后全部图片破图」）。
 
 ---
 
@@ -434,3 +446,33 @@
 - 解决：新增可测试 [candidate-utils.js](apps/extension/candidate-utils.js)：拖拽 **HTML 图片命中即忽略 uri-list/plain**（7个Node回归测试）；统一候选模型/优先级/去重≤100，content 覆盖 currentSrc/srcset/picture/lazy/CSS/meta/JSON-LD/open shadow，background 对 page-or-image/HTML 做一次 OG fallback，最终仍由 Rust 字节 sniff。
 - 教训：候选 URL 必须带 `kind/source/priority`，字符串 URL 本身不能隐含“必是图片”；页面发现、浏览器 fetch、字节验证是三层职责，不能只靠末端拒绝 HTML。
 - 相关文件：[candidate-utils.js](apps/extension/candidate-utils.js)、[candidate-utils.test.js](apps/extension/candidate-utils.test.js)、[content.js](apps/extension/content.js)、[background.js](apps/extension/background.js)。
+
+### 迁移素材库到自定义位置后全部图片破图（2026-08-01）
+- 现象：设置里把素材库迁到 `D:\Tools\BowerbirdLibrary` 后重启，应用能启动、数据库正常读取，但瀑布流与详情页图片全破；终端刷 `asset protocol not configured to allow the path: D:\Tools\BowerbirdLibrary\thumbnails\...`。
+- 根因：迁移本身成功（文件在、DB 路径已改写），破图是 **Tauri asset 协议白名单**问题——前端 `convertFileSrc()` 走 `asset://` 协议，其 scope 默认只放行应用数据目录；自定义库根不在白名单内，后端逐张拒绝。
+- 解决：在 [lib.rs](apps/desktop/src-tauri/src/lib.rs) setup 里 `app.asset_protocol_scope().allow_directory(&paths.root, true)?`，把**当前实际库根**（默认或自定义）显式加入白名单；随库根走，迁移后天然放行。
+- 教训：任何会改变前端图片加载路径目录的功能（库迁移、自定义目录），必须同步考虑 asset 协议 scope；`convertFileSrc` 不是"能读任意路径"，而是受 Tauri 配置的目录白名单约束。
+- 相关文件：[lib.rs](apps/desktop/src-tauri/src/lib.rs)。
+
+### 异步入库若实时读取当前项目会发生归属漂移（2026-07-30）
+- 现象：用户在扩展上传二进制帧或 codex 续轮生成完成前切换项目，若完成时才读取 `currentProjectId`，素材会被错误归入后来进入的项目。
+- 根因：项目选择是界面瞬时状态，而扩展 metadata→binary、生成首轮→续轮都是跨时异步流程；浏览器扩展协议又不携带项目 ID，不能把「任务完成时的当前项目」误当成「任务发起时的项目」。
+- 解决：扩展后端用 `ActiveProjectContext`，在收到 save 消息或 blob metadata 时快照项目并随 pending upload 保存；生成前端在首轮 `startGeneration` 时写 `genProjectId`，所有续轮沿用；显式导入命令直接传调用时的 `project_id`。项目在途中被删时，中央库入库仍成功，成员关联失败只告警、不回滚素材。
+- 教训：所有跨 await/跨消息边界的项目归属都必须在流程起点快照，禁止在完成回调重新读取 active scope。
+- 相关文件：[ws_server.rs](apps/desktop/src-tauri/src/collect/ws_server.rs)、[projects.rs](apps/desktop/src-tauri/src/core/projects.rs)、[store.ts](apps/desktop/src/store.ts)、[codex.rs](apps/desktop/src-tauri/src/commands/codex.rs)。
+
+### 全仓 cargo fmt --check 被既有格式漂移阻塞（2026-07-30）
+- 现象：项目 Workspace 改动本身已格式化，但 `cargo fmt --check --manifest-path apps/desktop/src-tauri/Cargo.toml` 仍在 `codex_cli.rs`、`autoname.rs`、`caption.rs` 等本次未修改文件报告差异。
+- 根因：仓库已有未归一的 rustfmt 漂移；直接运行全仓 `cargo fmt` 会产生大量与功能无关的改动，违反外科式修改原则，也会污染本次 diff。
+- 解决：只对本次新增 Rust 文件运行 rustfmt，并用 `cargo check`、`cargo test`、`git diff --check` 验证编译、测试和空白错误；既有格式漂移留待独立格式化提交处理。
+- 相关文件：[projects.rs](apps/desktop/src-tauri/src/core/projects.rs)、[projects.rs](apps/desktop/src-tauri/src/commands/projects.rs)。
+
+### StrictMode 双挂载泄漏 Tauri 监听器 → 新建项目后瀑布流被旧 scope 覆盖（2026-07-31）
+- 现象：新建项目成功、侧栏已进入项目（`currentProjectId` 已变），瀑布流却仍显示全局素材；点击已有项目进入则正常。
+- 根因（三层叠加）：
+  1. `listen(...).then(u => unlisten = u)` + cleanup `unlisten?.()` 的经典竞态：React StrictMode 双挂载下，第一次 effect 的 `listen()` promise 未 resolved 时 cleanup 已跑（`unlisten` 还是 undefined），promise 随后把注销函数写进**死闭包**——监听器永久泄漏，且冻结着**首帧渲染的 `refresh` 闭包**（`currentProjectId=null`，全局 scope）。App 里 `codex://chunk` / 扩展连接两个监听器早有 `alive` 守卫防此坑，`library://assets-changed` 等其余六个漏了。
+  2. 新建项目时 `create_project` 会 emit `library://assets-changed`（点已有项目不 emit，所以只有新建触发）：泄漏监听器以全局 scope 排了 300ms 去抖刷新，它的 cleanup 是死闭包、定时器**清不掉**。
+  3. `refreshVersion` 守卫只防「旧请求晚到」，防不了「晚发起的新请求」：泄漏的全局刷新在项目刷新**之后**启动，拿到更高 version，守卫反而保护了它 → 项目结果先正确显示，300ms 后被全局结果覆盖。
+- 解决：App.tsx 全部 Tauri 事件监听器统一补 `alive` 守卫（`then(u => alive ? unlisten = u : u())`，cleanup 先置 `alive=false`），与 `codex://chunk` 既有模式一致。**注意：已泄漏的监听器只活在当前页面里，必须重启/重载应用窗口才会消失**，HMR 热更新清不掉。
+- 教训：Tauri 前端所有 `listen()` 都必须按「cleanup 可能先于注册完成」写；闭包捕获渲染态（而非 `useStore.getState()` 或 store 稳定函数）的监听器一旦泄漏就是陈旧 scope 炸弹。
+- 相关文件：[App.tsx](apps/desktop/src/App.tsx)。

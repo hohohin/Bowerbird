@@ -31,6 +31,9 @@ pub fn ingest_file(paths: &LibraryPaths, db: &Database, source: &Path) -> AppRes
     fs::create_dir_all(store_path.parent().unwrap())?;
     fs::copy(source, &store_path)?;
 
+    // 解码一次，后续缩略图 / pHash / 提色均复用（每张大图 3 次 decode → 1 次）。
+    let decoded = image::open(&store_path).ok();
+
     // 缩略图：图片用 image resize；视频用 ffmpeg 抽帧；SVG 用原文件（前端直渲染）。
     let thumb_path = if media::probe::is_video(&meta.ext) {
         let p = paths.thumb_path(&id);
@@ -43,18 +46,27 @@ pub fn ingest_file(paths: &LibraryPaths, db: &Database, source: &Path) -> AppRes
     } else {
         let p = paths.thumb_path(&id);
         if meta.width > 0 && meta.height > 0 {
-            if let Err(e) = media::thumb::generate(&store_path, &p, 480) {
+            if let Some(ref img) = decoded {
+                if let Err(e) = media::thumb::generate_from_image(img, &p, 480) {
+                    tracing::warn!("thumb failed for {}: {e}", source.display());
+                }
+            } else if let Err(e) = media::thumb::generate(&store_path, &p, 480) {
                 tracing::warn!("thumb failed for {}: {e}", source.display());
             }
         }
         p
     };
 
-    let phash = media::phash::compute(&store_path).ok().flatten();
+    let phash = decoded
+        .as_ref()
+        .map(|img| Some(media::phash::compute_from_image(img)))
+        .unwrap_or_else(|| media::phash::compute(&store_path).ok().flatten());
 
     let colors = if meta.width > 0 {
-        media::color::extract(&store_path, 5)
-            .ok()
+        decoded
+            .as_ref()
+            .map(|img| media::color::extract_from_image(img, 5))
+            .or_else(|| media::color::extract(&store_path, 5).ok())
             .map(|c| serde_json::to_string(&c).unwrap_or_default())
     } else {
         None
@@ -126,12 +138,18 @@ pub fn ingest_generated(
     fs::create_dir_all(store_path.parent().unwrap())?;
     fs::copy(source, &store_path)?;
 
+    let decoded = image::open(&store_path).ok();
+
     let thumb_path = if meta.ext == "svg" {
         store_path.clone()
     } else {
         let p = paths.thumb_path(&id);
         if meta.width > 0 && meta.height > 0 {
-            if let Err(e) = media::thumb::generate(&store_path, &p, 480) {
+            if let Some(ref img) = decoded {
+                if let Err(e) = media::thumb::generate_from_image(img, &p, 480) {
+                    tracing::warn!("thumb failed for {}: {e}", source.display());
+                }
+            } else if let Err(e) = media::thumb::generate(&store_path, &p, 480) {
                 tracing::warn!("thumb failed for {}: {e}", source.display());
             }
         }
@@ -139,8 +157,10 @@ pub fn ingest_generated(
     };
 
     let colors = if meta.width > 0 {
-        media::color::extract(&store_path, 5)
-            .ok()
+        decoded
+            .as_ref()
+            .map(|img| media::color::extract_from_image(img, 5))
+            .or_else(|| media::color::extract(&store_path, 5).ok())
             .map(|c| serde_json::to_string(&c).unwrap_or_default())
     } else {
         None
@@ -576,7 +596,7 @@ mod tests {
         assert_eq!(asset.width, Some(100));
         assert_eq!(asset.height, Some(80));
         assert!(asset.phash.is_some(), "phash should be computed");
-        assert_eq!(db.count_assets().unwrap(), 1);
+        assert_eq!(db.count_assets(None).unwrap(), 1);
 
         // 缩略图文件应存在
         let thumb = asset.thumb_path.as_deref().unwrap();
@@ -584,7 +604,7 @@ mod tests {
 
         // 去重：再导入同一张 → 不新增
         let _ = ingest_file(&paths, &db, &img_path).unwrap();
-        assert_eq!(db.count_assets().unwrap(), 1, "duplicate should be deduped");
+        assert_eq!(db.count_assets(None).unwrap(), 1, "duplicate should be deduped");
     }
 
     #[test]
@@ -613,7 +633,7 @@ mod tests {
         assert_eq!(asset.width, Some(37));
         assert_eq!(asset.height, Some(29));
         assert!(Path::new(asset.store_path.as_deref().unwrap()).exists());
-        assert_eq!(db.count_assets().unwrap(), 1);
+        assert_eq!(db.count_assets(None).unwrap(), 1);
     }
 
     #[test]
@@ -655,7 +675,7 @@ mod tests {
         .unwrap_err();
 
         assert!(error.to_string().contains("not a supported image"));
-        assert_eq!(db.count_assets().unwrap(), 0);
+        assert_eq!(db.count_assets(None).unwrap(), 0);
     }
 
     #[test]
@@ -667,7 +687,7 @@ mod tests {
 
         let assets = ingest_dir(&paths, &db, &tmp.dir).unwrap();
         assert_eq!(assets.len(), 3, "three distinct images should all be ingested");
-        assert_eq!(db.count_assets().unwrap(), 3);
+        assert_eq!(db.count_assets(None).unwrap(), 3);
     }
 
     #[test]
@@ -684,7 +704,7 @@ mod tests {
 
         db.delete_asset(&asset.id).unwrap();
 
-        assert_eq!(db.count_assets().unwrap(), 0, "db row should be gone");
+        assert_eq!(db.count_assets(None).unwrap(), 0, "db row should be gone");
         assert!(!Path::new(&store).exists(), "store file should be physically deleted");
         assert!(!Path::new(&thumb).exists(), "thumb file should be physically deleted");
     }

@@ -192,6 +192,7 @@ function Thumb({ asset, group }: { asset: Asset; group?: Asset[] }) {
 export function MasonryGrid() {
   const assets = useStore((s) => s.assets);
   const boardOpen = useStore((s) => s.boardOpen);
+  const currentProjectId = useStore((s) => s.currentProjectId);
   const [groupMap, setGroupMap] = useState<Record<string, Asset[]>>({});
 
   // 同流程生成图：批量取可见 codex 组的过程图，供缩略图轮播。无生成图时清空。
@@ -203,7 +204,7 @@ export function MasonryGrid() {
     }
     let alive = true;
     api
-      .listGenerationGroups(ids)
+      .listGenerationGroups(ids, currentProjectId)
       .then((m) => {
         if (alive) setGroupMap(m);
       })
@@ -211,7 +212,7 @@ export function MasonryGrid() {
     return () => {
       alive = false;
     };
-  }, [assets]);
+  }, [assets, currentProjectId]);
 
   const filtered = assets;
 

@@ -8,6 +8,7 @@
 //! - `0007_generation_groups.sql`：assets 加 generation_session_id + 回填（生成图同流程合并）
 //! - `0008_collections.sql`：多对多收藏夹（folders.kind='collection' + asset_collections）
 //! - `0009_presets.sql`：创作板「用途」预设（presets 表，命名 prompt 片段，发送时注入）
+//! - `0010_projects.sql`：项目 workspace 登记 + project_assets 素材多对多成员关系
 
 use rusqlite_migration::{M, Migrations};
 
@@ -22,5 +23,6 @@ pub fn migrations() -> Migrations<'static> {
         M::up(include_str!("../../sql/0007_generation_groups.sql")),
         M::up(include_str!("../../sql/0008_collections.sql")),
         M::up(include_str!("../../sql/0009_presets.sql")),
+        M::up(include_str!("../../sql/0010_projects.sql")),
     ])
 }
