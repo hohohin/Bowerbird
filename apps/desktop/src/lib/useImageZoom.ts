@@ -76,6 +76,8 @@ export function useImageZoom(src?: string, opts: Opts = {}) {
   }, [min, max, step]);
 
   const onMouseDown = useCallback((e: React.MouseEvent) => {
+    // 仅左键拖动平移；右键留给 onContextMenu（避免右键误触发平移）。
+    if (e.button !== 0) return;
     // preventDefault 防止 img 原生拖拽 / 选区；stopPropagation 不冒泡到背景关闭层。
     e.preventDefault();
     e.stopPropagation();

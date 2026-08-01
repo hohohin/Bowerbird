@@ -119,6 +119,8 @@ pub fn run() {
             commands::library::rename_folder,
             commands::library::delete_folder,
             commands::library::delete_asset,
+            commands::library::delete_asset_with_mode,
+            commands::library::reveal_asset_folder,
             commands::library::move_assets_to_folder,
             commands::library::search_assets,
             commands::library::list_assets_smart,

@@ -46,6 +46,30 @@ pub enum ProjectDeleteMode {
     DeleteExclusive,
 }
 
+/// 右键单素材删除三选项（与「删除项目」语义对齐）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssetDeleteMode {
+    /// 仅移出当前项目（素材留在全局）；非项目内时等价于 `Keep` 无操作。
+    Keep,
+    /// 文件移回原始位置（origin_path）并删资产行；同项目的独占素材直接删除。
+    MoveOut,
+    /// 从全局及所有项目物理删除（删文件 + 删行 + 级联清理）。
+    Delete,
+}
+
+/// 单素材删除结果（前端消息提示用）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssetDeleteResult {
+    /// 实际从中央库删除的资产数（keep 为 0）。
+    pub deleted_assets: usize,
+    /// keep 模式：从当前项目移出的成员关系数。
+    pub removed_members: usize,
+    /// move_out 模式：成功移回原始位置的文件数。
+    pub moved_files: usize,
+    /// move_out 模式：移回失败的原始路径（素材保留在全局）。
+    pub failed_moves: Vec<String>,
+}
+
 /// 移出目的地文件名：素材名净化（Windows 非法字符 → `_`），空则回退 store 文件名（ulid）；
 /// 重名时追加资产 id 前缀防覆盖。
 fn move_destination(workspace: &Path, name: &str, store_path: &Path, id: &str) -> PathBuf {
@@ -359,6 +383,149 @@ impl Database {
             failed_moves: Vec::new(),
         })
     }
+
+    /// 单素材删除（右键菜单），三选项语义与「删除项目」对齐：
+    /// - `Keep`：仅移出当前项目（素材留全局）。`project_id=None` 时无操作。
+    /// - `MoveOut`：文件移回原始位置（origin_path）并删资产行；同项目的独占素材直接删除；
+    ///   共享素材移回后仍留全局（行保留）。
+    /// - `Delete`：从全局及所有项目物理删除。
+    pub fn delete_asset_with_mode(
+        &self,
+        asset_id: &str,
+        mode: AssetDeleteMode,
+        project_id: Option<&str>,
+    ) -> AppResult<AssetDeleteResult> {
+        let conn = self.conn.lock().unwrap();
+        // 直接在当前持有连接上取行（self.get_asset() 会再锁 conn，死锁）。
+        let (name, origin_path, store_path): (String, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT name, origin_path, store_path FROM assets WHERE id = ?1",
+                rusqlite::params![asset_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?
+            .ok_or_else(|| AppError::NotFound(format!("asset {asset_id}")))?;
+
+        // 共享判定：该素材是否还被其它项目引用（在中央库层面复用项目的共享语义）。
+        let shared_in_other_project: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM project_assets pa \
+                 WHERE pa.asset_id = ?1 AND pa.project_id != COALESCE(?2, ''))",
+                rusqlite::params![asset_id, project_id],
+                |r| r.get(0),
+            )?;
+
+        match mode {
+            AssetDeleteMode::Keep => {
+                // 仅移出当前项目：素材留全局。
+                let mut removed_members = 0;
+                if let Some(pid) = project_id {
+                    removed_members = conn.execute(
+                        "DELETE FROM project_assets WHERE project_id = ?1 AND asset_id = ?2",
+                        rusqlite::params![pid, asset_id],
+                    )?;
+                }
+                Ok(AssetDeleteResult {
+                    deleted_assets: 0,
+                    removed_members,
+                    moved_files: 0,
+                    failed_moves: Vec::new(),
+                })
+            }
+            AssetDeleteMode::Delete => {
+                // 从全局及所有项目物理删除（删行删文件，成员关系由 ON DELETE CASCADE 清理）。
+                drop(conn); // 先释放锁，delete_asset 内部会再拿锁（文件 IO 前 drop）。
+                self.delete_asset(asset_id)?;
+                Ok(AssetDeleteResult {
+                    deleted_assets: 1,
+                    removed_members: 0,
+                    moved_files: 0,
+                    failed_moves: Vec::new(),
+                })
+            }
+            AssetDeleteMode::MoveOut => {
+                if shared_in_other_project {
+                    // 共享素材：仍被其它项目引用，不能从库删除，库内文件也不能动（行保留、
+                    // 缩略图/详情页仍按 store_path 渲染）。只移出当前项目视图；原始文件在位
+                    // 即算「已恢复」，原始文件不在时如实报告失败。
+                    let mut removed_members = 0;
+                    if let Some(pid) = project_id {
+                        removed_members = conn.execute(
+                            "DELETE FROM project_assets WHERE project_id = ?1 AND asset_id = ?2",
+                            rusqlite::params![pid, asset_id],
+                        )?;
+                    }
+                    let origin_exists = origin_path
+                        .as_deref()
+                        .map(Path::new)
+                        .is_some_and(|p| p.exists());
+                    return Ok(AssetDeleteResult {
+                        deleted_assets: 0,
+                        removed_members,
+                        moved_files: 0,
+                        failed_moves: if origin_exists {
+                            Vec::new()
+                        } else {
+                            vec![name.clone()]
+                        },
+                    });
+                }
+
+                // 独占素材的「移出园丁鸟」：把素材文件交回原始位置。原始位置优先取 origin_path；
+                // 原文件已不在（被移动/删除，或扩展临时目录已清）时把库内文件移回 origin_path。
+                let mut restored = false;
+                let mut failed_moves = Vec::new();
+                let mut moved_files = 0;
+                if let Some(dst) = origin_path.as_deref().map(Path::new) {
+                    if dst.exists() {
+                        // 原文件仍在原始位置：素材已就位，库内只是副本，无需移动。
+                        restored = true;
+                    } else if let Some(src) = store_path.as_deref().map(Path::new) {
+                        // 原文件已不在：把库内文件移回原始位置（move_file 目标不存在时才走到这里）。
+                        match move_file(src, dst) {
+                            Ok(()) => {
+                                restored = true;
+                                moved_files = 1;
+                            }
+                            Err(error) => {
+                                tracing::warn!(
+                                    "move asset {asset_id} back to {} failed: {error}",
+                                    dst.display()
+                                );
+                                failed_moves.push(name.clone());
+                            }
+                        }
+                    } else {
+                        failed_moves.push(name.clone());
+                    }
+                } else {
+                    failed_moves.push(name.clone());
+                }
+
+                // 独占素材：恢复成功（或原文件本就在位）→ 从库删行删文件（ON DELETE CASCADE
+                // 清掉该素材在全部项目的成员关系）。store_path 与 origin_path 相同（病态导入）
+                // 时不删，避免删掉用户原始文件。
+                if restored && store_path.as_deref() != origin_path.as_deref() {
+                    drop(conn);
+                    self.delete_asset(asset_id)?;
+                    Ok(AssetDeleteResult {
+                        deleted_assets: 1,
+                        removed_members: 0,
+                        moved_files,
+                        failed_moves: Vec::new(),
+                    })
+                } else {
+                    // 恢复失败：素材保留在全局，不删任何东西。
+                    Ok(AssetDeleteResult {
+                        deleted_assets: 0,
+                        removed_members: 0,
+                        moved_files,
+                        failed_moves,
+                    })
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -517,5 +684,205 @@ mod tests {
         let dst = move_destination(&workspace, "dup", store, "01ABCDEFGH99");
         assert_eq!(dst.file_name().unwrap(), "dup-01ABCDEF.png");
         let _ = std::fs::remove_dir_all(&workspace);
+    }
+
+    #[test]
+    fn asset_delete_keep_only_removes_project_membership() {
+        let db = db();
+        put_asset(&db, "a1");
+        put_project(&db, "p1");
+        db.add_assets_to_project("p1", &["a1".into()]).unwrap();
+
+        let result = db
+            .delete_asset_with_mode("a1", AssetDeleteMode::Keep, Some("p1"))
+            .unwrap();
+        assert_eq!(result.deleted_assets, 0);
+        assert_eq!(result.removed_members, 1);
+        // 素材留全局。
+        assert!(db.get_asset("a1").unwrap().is_some());
+    }
+
+    #[test]
+    fn asset_delete_delete_removes_row_and_all_memberships() {
+        let db = db();
+        put_asset(&db, "a1");
+        put_project(&db, "p1");
+        put_project(&db, "p2");
+        db.add_assets_to_project("p1", &["a1".into()]).unwrap();
+        db.add_assets_to_project("p2", &["a1".into()]).unwrap();
+
+        let result = db
+            .delete_asset_with_mode("a1", AssetDeleteMode::Delete, None)
+            .unwrap();
+        assert_eq!(result.deleted_assets, 1);
+        assert!(db.get_asset("a1").unwrap().is_none());
+        // 两个项目的成员关系都被级联清理。
+        assert_eq!(db.get_project("p1").unwrap().unwrap().asset_count, 0);
+        assert_eq!(db.get_project("p2").unwrap().unwrap().asset_count, 0);
+    }
+
+    #[test]
+    fn asset_move_out_moves_shared_back_and_keeps_row() {
+        let stamp = ulid::Ulid::new().to_string();
+        let origin_dir = std::env::temp_dir().join(format!("bowerbird-origin-{stamp}"));
+        let store_dir = std::env::temp_dir().join(format!("bowerbird-store2-{stamp}"));
+        std::fs::create_dir_all(&origin_dir).unwrap();
+        std::fs::create_dir_all(&store_dir).unwrap();
+        let origin_file = origin_dir.join("shared.png");
+        let store_file = store_dir.join("shared-ulid.png");
+        std::fs::write(&origin_file, b"original").unwrap();
+        std::fs::write(&store_file, b"library copy").unwrap();
+
+        let db = db();
+        put_asset_with_store(&db, "shared", Some(&store_file));
+        // 直接把 origin_path 改成源文件。
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE assets SET origin_path = ?1 WHERE id = 'shared'",
+                rusqlite::params![origin_file.to_string_lossy().to_string()],
+            )
+            .unwrap();
+        }
+        put_project(&db, "p1");
+        put_project(&db, "p2");
+        db.add_assets_to_project("p1", &["shared".into()]).unwrap();
+        db.add_assets_to_project("p2", &["shared".into()]).unwrap();
+
+        // 共享素材：原始文件仍在 → 视为已就位（无需移动），资产行保留在全局（含库内副本），
+        // 项目 p1 成员关系被移除。
+        let result = db
+            .delete_asset_with_mode("shared", AssetDeleteMode::MoveOut, Some("p1"))
+            .unwrap();
+        assert_eq!(result.deleted_assets, 0);
+        assert_eq!(result.moved_files, 0);
+        assert!(db.get_asset("shared").unwrap().is_some());
+        assert_eq!(db.get_project("p1").unwrap().unwrap().asset_count, 0);
+        assert_eq!(db.get_project("p2").unwrap().unwrap().asset_count, 1);
+        assert!(store_file.exists());
+
+        let _ = std::fs::remove_dir_all(&origin_dir);
+        let _ = std::fs::remove_dir_all(&store_dir);
+    }
+
+    #[test]
+    fn asset_move_out_exclusive_removes_row() {
+        let stamp = ulid::Ulid::new().to_string();
+        let origin_dir = std::env::temp_dir().join(format!("bowerbird-origin2-{stamp}"));
+        let store_dir = std::env::temp_dir().join(format!("bowerbird-store3-{stamp}"));
+        std::fs::create_dir_all(&origin_dir).unwrap();
+        std::fs::create_dir_all(&store_dir).unwrap();
+        let origin_file = origin_dir.join("exclusive.png");
+        let store_file = store_dir.join("exclusive-ulid.png");
+        std::fs::write(&origin_file, b"original").unwrap();
+        std::fs::write(&store_file, b"library copy").unwrap();
+
+        let db = db();
+        put_asset_with_store(&db, "ex", Some(&store_file));
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE assets SET origin_path = ?1 WHERE id = 'ex'",
+                rusqlite::params![origin_file.to_string_lossy().to_string()],
+            )
+            .unwrap();
+        }
+        put_project(&db, "p1");
+        db.add_assets_to_project("p1", &["ex".into()]).unwrap();
+
+        // 独占素材：原始文件仍在 → 视为已就位（无需移动），资产行从库删除、文件保留在原始位置。
+        let result = db
+            .delete_asset_with_mode("ex", AssetDeleteMode::MoveOut, Some("p1"))
+            .unwrap();
+        assert_eq!(result.deleted_assets, 1);
+        assert_eq!(result.moved_files, 0);
+        assert!(db.get_asset("ex").unwrap().is_none());
+        assert_eq!(db.get_project("p1").unwrap().unwrap().asset_count, 0);
+        // 原始文件还在；库内副本已随删行被删除。
+        assert!(origin_file.exists());
+        assert!(!store_file.exists());
+
+        let _ = std::fs::remove_dir_all(&origin_dir);
+        let _ = std::fs::remove_dir_all(&store_dir);
+    }
+
+    #[test]
+    fn asset_move_out_moves_library_file_back_when_origin_missing() {
+        let stamp = ulid::Ulid::new().to_string();
+        let origin_dir = std::env::temp_dir().join(format!("bowerbird-origin3-{stamp}"));
+        let store_dir = std::env::temp_dir().join(format!("bowerbird-store4-{stamp}"));
+        std::fs::create_dir_all(&origin_dir).unwrap();
+        std::fs::create_dir_all(&store_dir).unwrap();
+        let origin_file = origin_dir.join("gone.png");
+        let store_file = store_dir.join("gone-ulid.png");
+        // 原始文件已不在（用户删了/移动了）。
+        std::fs::write(&store_file, b"library copy").unwrap();
+
+        let db = db();
+        put_asset_with_store(&db, "gone", Some(&store_file));
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE assets SET origin_path = ?1 WHERE id = 'gone'",
+                rusqlite::params![origin_file.to_string_lossy().to_string()],
+            )
+            .unwrap();
+        }
+        put_project(&db, "p1");
+        db.add_assets_to_project("p1", &["gone".into()]).unwrap();
+
+        // 独占素材：库内文件真实移回原始位置 + 资产行删除。
+        let result = db
+            .delete_asset_with_mode("gone", AssetDeleteMode::MoveOut, Some("p1"))
+            .unwrap();
+        assert_eq!(result.deleted_assets, 1);
+        assert_eq!(result.moved_files, 1);
+        assert!(db.get_asset("gone").unwrap().is_none());
+        assert!(origin_file.exists());
+        assert!(!store_file.exists());
+
+        let _ = std::fs::remove_dir_all(&origin_dir);
+        let _ = std::fs::remove_dir_all(&store_dir);
+    }
+
+    #[test]
+    fn asset_move_out_shared_with_missing_origin_keeps_library_copy() {
+        let stamp = ulid::Ulid::new().to_string();
+        let origin_dir = std::env::temp_dir().join(format!("bowerbird-origin4-{stamp}"));
+        let store_dir = std::env::temp_dir().join(format!("bowerbird-store5-{stamp}"));
+        std::fs::create_dir_all(&origin_dir).unwrap();
+        std::fs::create_dir_all(&store_dir).unwrap();
+        let origin_file = origin_dir.join("missing.png"); // 原始文件不存在
+        let store_file = store_dir.join("missing-ulid.png");
+        std::fs::write(&store_file, b"library copy").unwrap();
+
+        let db = db();
+        put_asset_with_store(&db, "missing", Some(&store_file));
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE assets SET origin_path = ?1 WHERE id = 'missing'",
+                rusqlite::params![origin_file.to_string_lossy().to_string()],
+            )
+            .unwrap();
+        }
+        put_project(&db, "p1");
+        put_project(&db, "p2");
+        db.add_assets_to_project("p1", &["missing".into()]).unwrap();
+        db.add_assets_to_project("p2", &["missing".into()]).unwrap();
+
+        // 共享素材：原始文件不在 → 不能动库内文件（会破坏 p2 的引用），如实报告失败。
+        let result = db
+            .delete_asset_with_mode("missing", AssetDeleteMode::MoveOut, Some("p1"))
+            .unwrap();
+        assert_eq!(result.deleted_assets, 0);
+        assert_eq!(result.removed_members, 1);
+        assert!(!result.failed_moves.is_empty());
+        assert!(db.get_asset("missing").unwrap().is_some());
+        assert!(store_file.exists());
+        assert_eq!(db.get_project("p2").unwrap().unwrap().asset_count, 1);
+
+        let _ = std::fs::remove_dir_all(&origin_dir);
+        let _ = std::fs::remove_dir_all(&store_dir);
     }
 }

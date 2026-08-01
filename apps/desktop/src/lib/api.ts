@@ -4,6 +4,8 @@ import type {
   Analysis,
   AppSettings,
   Asset,
+  AssetDeleteMode,
+  AssetDeleteResult,
   AssetTag,
   ColorBucket,
   CodexHealth,
@@ -55,6 +57,14 @@ export const api = {
   countAssets: (projectId?: string | null) =>
     invoke<number>("count_assets", { projectId: projectId ?? null }),
   deleteAsset: (id: string) => invoke<void>("delete_asset", { id }),
+  /** 右键单素材删除（三选项，与「删除项目」对齐）：keep=仅移出当前项目；move_out=移出园丁鸟；delete=全局物理删除。 */
+  deleteAssetWithMode: (
+    id: string,
+    mode: AssetDeleteMode,
+    projectId?: string | null
+  ) => invoke<AssetDeleteResult>("delete_asset_with_mode", { id, mode, projectId: projectId ?? null }),
+  /** 右键「打开所在文件夹」：原始位置优先，失效回退素材库内位置。 */
+  revealAssetFolder: (id: string) => invoke<void>("reveal_asset_folder", { id }),
   moveAssetsToFolder: (assetIds: string[], folderId: string) =>
     invoke<void>("move_assets_to_folder", { assetIds, folderId }),
 

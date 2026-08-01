@@ -4,6 +4,7 @@ import { Toolbar } from "./components/Toolbar";
 import { Sidebar } from "./components/Sidebar";
 import { MasonryGrid } from "./components/MasonryGrid";
 import { AssetDetail } from "./components/AssetDetail";
+import { AssetContextMenu } from "./components/AssetContextMenu";
 import { BatchBar } from "./components/BatchBar";
 import { CreationBoard } from "./components/CreationBoard";
 import { GenerationPanel } from "./components/GenerationPanel";
@@ -314,6 +315,8 @@ function App() {
       {/* 二级引导：点总览卡片「前往配置」唤起，不再各自自动弹 */}
       <CodexOnboarding />
       <ExtensionOnboarding />
+      {/* 图片右键菜单（全局单实例，store.contextMenu 驱动） */}
+      <AssetContextMenu />
       <Toolbar onRefresh={refresh} />
       <div className="flex flex-1 overflow-hidden">
         <Sidebar />

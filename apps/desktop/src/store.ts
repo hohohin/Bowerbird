@@ -127,6 +127,10 @@ interface State {
   // 开创作板 + 关详情/生成面板/挑图态，延时一帧再 dispatch board-load-prompt，
   // 确保 CreationBoard 已挂载注册 listener（同步 dispatch 会丢）。
   reusePromptToBoard: (prompt: string) => void;
+  // —— 右键菜单（瀑布流缩略图 / 详情页大图）——
+  contextMenu: { x: number; y: number; assetId: string } | null;
+  openContextMenu: (x: number, y: number, assetId: string) => void;
+  closeContextMenu: () => void;
 }
 
 export const useStore = create<State>((set, get) => {
@@ -569,5 +573,9 @@ export const useStore = create<State>((set, get) => {
       );
     }, 0);
   },
+  // —— 右键菜单 ——
+  contextMenu: null,
+  openContextMenu: (x, y, assetId) => set({ contextMenu: { x, y, assetId } }),
+  closeContextMenu: () => set({ contextMenu: null }),
   };
 });

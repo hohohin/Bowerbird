@@ -19,6 +19,7 @@ function Thumb({ asset, group }: { asset: Asset; group?: Asset[] }) {
   const imgRef = useRef<HTMLImageElement>(null);
   const selected = useStore((s) => s.mode === "manage" && s.selectedIds.has(asset.id));
   const boardOpen = useStore((s) => s.boardOpen);
+  const openContextMenu = useStore((s) => s.openContextMenu);
   // 反推全局可见：本缩略图正在反推 / 在队列里。角标点击 = 取消（运行中 kill 子进程 / 排队中移出队列）。
   const describeStatus = useStore((s) =>
     s.describingId === asset.id
@@ -100,6 +101,11 @@ function Thumb({ asset, group }: { asset: Asset; group?: Asset[] }) {
           );
         } else if (st.mode === "manage") st.toggleSelect(shown.id);
         else st.openDetail(shown.id);
+      }}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        openContextMenu(e.clientX, e.clientY, shown.id);
       }}
       onDragStart={(e) => {
         const st = useStore.getState();

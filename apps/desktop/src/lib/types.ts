@@ -45,6 +45,17 @@ export interface ProjectDeleteResult {
   failed_moves: string[];
 }
 
+/** 右键单素材删除三选项（与「删除项目」语义对齐）。 */
+export type AssetDeleteMode = "keep" | "move_out" | "delete";
+
+/** 右键单素材删除结果。 */
+export interface AssetDeleteResult {
+  deleted_assets: number;
+  removed_members: number;
+  moved_files: number;
+  failed_moves: string[];
+}
+
 export type FolderKind = "folder" | "smart" | "collection";
 
 export interface Folder {

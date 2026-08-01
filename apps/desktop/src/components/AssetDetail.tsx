@@ -219,6 +219,7 @@ export function AssetDetail() {
   const reloadFolders = useStore((s) => s.reloadFolders);
   const viewGenerationHistory = useStore((s) => s.viewGenerationHistory);
   const generating = useStore((s) => s.generating);
+  const openContextMenu = useStore((s) => s.openContextMenu);
   // 本图反推状态：正在跑 / 在队列里（位置从 1 起）/ 空闲。
   const describing = useStore((s) => s.describingId === id);
   const queuePosition = useStore((s) => {
@@ -603,6 +604,12 @@ export function AssetDetail() {
                   draggable={false}
                   onMouseDown={zoom.onMouseDown}
                   onDoubleClick={zoom.onDoubleClick}
+                  onContextMenu={(e) => {
+                    // 右键打开菜单；preventDefault 让 zoom onMouseDown 不会误平移。
+                    e.preventDefault();
+                    e.stopPropagation();
+                    openContextMenu(e.clientX, e.clientY, asset.id);
+                  }}
                   className="max-h-full max-w-full select-none object-contain"
                   style={zoom.style}
                 />

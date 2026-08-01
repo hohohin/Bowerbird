@@ -1,9 +1,11 @@
 //! 库相关命令（前端 invoke 入口）。
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
 
+use rusqlite::OptionalExtension;
 use tauri::{AppHandle, Emitter, State};
 use ulid::Ulid;
 
@@ -14,6 +16,7 @@ use crate::core::library::{
     Preset, PromptedAsset, TagCount,
 };
 use crate::core::paths::LibraryPaths;
+use crate::core::projects::{AssetDeleteMode, AssetDeleteResult};
 use crate::db::Database;
 use crate::error::AppError;
 
@@ -325,6 +328,35 @@ pub async fn delete_asset(
     Ok(())
 }
 
+/// 单素材删除（右键菜单）：与「删除项目」三选项一致的语义——
+/// `keep`=仅移出当前项目（素材留全局）；`move_out`=文件移回原始位置并删资产行（同项目的独占素材直接删除）；
+/// `delete`=从全局及所有项目物理删除。`project_id` 只在 `keep` 且当前处于项目时使用。
+#[tauri::command]
+pub async fn delete_asset_with_mode(
+    app: AppHandle,
+    db: State<'_, Arc<Database>>,
+    id: String,
+    mode: String,
+    project_id: Option<String>,
+) -> Result<AssetDeleteResult, AppError> {
+    let mode = match mode.as_str() {
+        "keep" => AssetDeleteMode::Keep,
+        "move_out" => AssetDeleteMode::MoveOut,
+        "delete" => AssetDeleteMode::Delete,
+        other => return Err(AppError::Other(format!("未知删除模式: {other}"))),
+    };
+    let db = db.inner().clone();
+    let result = tokio::task::spawn_blocking(move || {
+        db.delete_asset_with_mode(&id, mode, project_id.as_deref())
+    })
+    .await
+    .map_err(|e| AppError::Other(e.to_string()))??;
+    // 项目成员/素材均可能变化：两个事件都发，前端刷新计数与视图。
+    let _ = app.emit("projects://changed", ());
+    let _ = app.emit("library://assets-changed", ());
+    Ok(result)
+}
+
 #[tauri::command]
 pub async fn move_assets_to_folder(
     app: AppHandle,
@@ -425,6 +457,71 @@ pub async fn list_prompted_assets(
     Ok(collapse_generation_groups(v, |p: &PromptedAsset| {
         p.asset.generation_session_id.as_deref()
     }))
+}
+
+/// 右键「打开所在文件夹」：原始位置（origin_path）优先，不存在则回退素材库内位置（store_path）。
+/// 平台分支：Windows 打开资源管理器并选中该文件（`explorer /select,"..."`）；macOS/Linux 打开所在目录。
+#[tauri::command]
+pub async fn reveal_asset_folder(
+    db: State<'_, Arc<Database>>,
+    id: String,
+) -> Result<(), AppError> {
+    let db = db.inner().clone();
+    let id_for_query = id.clone();
+    let (origin, store) = tokio::task::spawn_blocking(move || {
+        let conn = db.conn.lock().unwrap();
+        let (origin, store): (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT origin_path, store_path FROM assets WHERE id = ?1",
+                rusqlite::params![id_for_query],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?
+            .unwrap_or((None, None));
+        Ok::<_, AppError>((origin, store))
+    })
+    .await
+    .map_err(|e| AppError::Other(e.to_string()))??;
+
+    // 原始位置优先；原始文件不在时（扩展临时目录/生成图缓存已删）回退素材库内文件。
+    let target = [origin.as_deref(), store.as_deref()]
+        .into_iter()
+        .flatten()
+        .map(Path::new)
+        .find(|p| p.exists());
+
+    let Some(target) = target else {
+        return Err(AppError::NotFound(format!("asset 文件: {id}")));
+    };
+    reveal_in_file_manager(target);
+    Ok(())
+}
+
+/// 在系统文件管理器中显示/打开目标。Windows 用 `explorer /select,` 选中文件（并打开所在文件夹）；
+/// 其它平台打开所在目录（macOS `open`、Linux `xdg-open`）。
+fn reveal_in_file_manager(target: &Path) {
+    #[cfg(target_os = "windows")]
+    {
+        let path = target.to_string_lossy();
+        // explorer /select 无法定位目标时（罕见）会自动打开所在文件夹；参数按单个 arg 传入避免引号歧义。
+        if let Err(error) = Command::new("explorer").arg(format!("/select,{path}")).spawn() {
+            tracing::warn!("explorer reveal failed: {error}");
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let dir = target.parent().unwrap_or(target);
+        if let Err(error) = Command::new("open").arg(dir).spawn() {
+            tracing::warn!("open reveal failed: {error}");
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let dir = target.parent().unwrap_or(target);
+        if let Err(error) = Command::new("xdg-open").arg(dir).spawn() {
+            tracing::warn!("xdg-open reveal failed: {error}");
+        }
+    }
 }
 
 /// 取某资产所属生成会话的全部图（含自己），按 id ASC（过程顺序）。详情页轮播用。
