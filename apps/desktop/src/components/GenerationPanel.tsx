@@ -21,10 +21,12 @@ export function GenerationPanel() {
   const genRefAssets = useStore((s) => s.genRefAssets);
 
   const codexHealth = useStore((s) => s.codexHealth);
+  const activeGenProvider = useStore((s) => s.activeGenProvider);
   const setGenPanelOpen = useStore((s) => s.setGenPanelOpen);
   const sendGenRevise = useStore((s) => s.sendGenRevise);
   const cancelGeneration = useStore((s) => s.cancelGeneration);
   const startGeneration = useStore((s) => s.startGeneration);
+  const retryLastGenTurn = useStore((s) => s.retryLastGenTurn);
   const reusePromptToBoard = useStore((s) => s.reusePromptToBoard);
   const reloadPresets = useStore((s) => s.reloadPresets);
 
@@ -95,6 +97,7 @@ export function GenerationPanel() {
           {genTurns.length > 0 && (
             <span className="text-xs text-muted">
               {genTurns.length} 轮 · {imageCount} 图
+              {activeGenProvider === "jimeng" ? " · 即梦" : ""}
             </span>
           )}
         </div>
@@ -122,6 +125,8 @@ export function GenerationPanel() {
                 busy={generating && i === turnsWithOffset.length - 1}
                 imageOffset={imageOffset}
                 onOpenLightbox={(g) => setLightbox({ images: allImages, index: g })}
+                onRetry={retryLastGenTurn}
+                canRetry={!!codexHealth?.ok && !generating}
               />
             ))}
             {genStreaming && (
@@ -252,18 +257,27 @@ function TurnView({
   busy,
   imageOffset,
   onOpenLightbox,
+  onRetry,
+  canRetry,
 }: {
   turn: GenTurn;
   index: number;
   busy: boolean;
   imageOffset: number;
   onOpenLightbox: (globalIdx: number) => void;
+  onRetry: () => void;
+  canRetry: boolean;
 }) {
   return (
     <div className="space-y-1.5 rounded bg-panel2/50 p-3">
       <div className="line-clamp-2 text-xs text-muted" title={turn.prompt}>
         <span className="text-accent">{index === 0 ? "首版" : `修改 ${index}`}：</span>
         {turn.prompt}
+        {turn.provider && turn.provider !== "codex-cli" && (
+          <span className="ml-1 text-[10px] opacity-70">
+            via {turn.provider === "jimeng" ? "即梦" : turn.provider}
+          </span>
+        )}
       </div>
       {turn.images.length > 0 ? (
         <div className={`grid gap-1.5 ${turn.images.length > 1 ? "grid-cols-2" : "grid-cols-1"}`}>
@@ -287,8 +301,21 @@ function TurnView({
             </button>
           ))}
         </div>
+      ) : turn.error ? (
+        <div className="space-y-1.5 rounded border border-red-500/40 bg-red-500/10 p-2">
+          <div className="text-[11px] font-semibold text-red-300">❌ 生成失败</div>
+          <pre className="whitespace-pre-wrap break-all text-[11px] text-red-200/90">{turn.error}</pre>
+          <button
+            onClick={onRetry}
+            disabled={!canRetry}
+            title={canRetry ? "用同样的内容重发" : "codex 当前不可用"}
+            className="rounded bg-panel2 px-2.5 py-1 text-[11px] font-semibold text-ink hover:bg-edge disabled:opacity-50"
+          >
+            ↻ 重试
+          </button>
+        </div>
       ) : busy ? (
-        <div className="text-[10px] animate-pulse text-muted">codex 生成中…</div>
+        <div className="text-[10px] animate-pulse text-muted">生成中…</div>
       ) : null}
     </div>
   );

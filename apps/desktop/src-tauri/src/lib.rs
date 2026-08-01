@@ -137,6 +137,8 @@ pub fn run() {
             commands::library::palette_overview,
             commands::library::list_assets_by_color,
             commands::library::recompute_colors,
+            commands::library::reveal_path_in_explorer,
+            commands::library::open_path_with_system,
             commands::prompt::create_prompt,
             commands::prompt::update_prompt,
             commands::prompt::delete_prompt,
@@ -162,6 +164,10 @@ pub fn run() {
             commands::settings::library_root,
             commands::settings::migrate_library_root,
             commands::settings::restart_app,
+            commands::jimeng::dreamina_health,
+            commands::jimeng::dreamina_login,
+            commands::jimeng::dreamina_check_login,
+            commands::jimeng::open_dreamina_login,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -18,7 +18,7 @@ use crate::codex::codex_cli::{
     codex_command, codex_home, npm_command, resolve_codex_binary, resolve_npm_binary, CodexCliProvider,
 };
 use crate::codex::types::{Chunk, CodexRequest, CodexResult};
-use crate::codex::CodexProvider;
+use crate::codex::{resolve_gen_provider, GenProvider};
 use crate::core::caption;
 use crate::core::paths::LibraryPaths;
 use crate::db::Database;
@@ -281,6 +281,7 @@ pub async fn codex_generate_prompt_for_asset(
         instruction: "为这张图片生成一段适合 AI 绘画的提示词（描述主体、风格、构图、光影）".into(),
         reference_images: vec![PathBuf::from(store_path)],
         context_prompts: vec![],
+        ratio: None,
     };
     let p = CodexCliProvider::default();
     let provider_name = p.name().to_string();
@@ -327,6 +328,7 @@ pub async fn codex_describe_asset(
         instruction: instruction.clone(),
         reference_images: vec![PathBuf::from(store_path)],
         context_prompts: vec![],
+        ratio: None,
     };
     let p = CodexCliProvider::default();
     let provider_name = p.name().to_string();
@@ -409,23 +411,31 @@ pub async fn codex_create_image(
     prompt: String,
     reference_images: Vec<String>,
     session_id: Option<String>,
+    ratio: Option<String>,
+    provider: Option<String>,
     project_id: Option<String>,
 ) -> Result<(), AppError> {
     // 首轮（无 session_id）：包一句明确要 codex 出图，触发 imagegen；
     // 续轮（有 session_id = resume）：codex 已在画图上下文里，用户修改意见原样发。
     // prompt / reference_images 留一份给 generation_meta（req 会 move 走原值）。
+    // ratio（如 "16:9"）仅首轮注入 instruction（续轮 codex resume 记得首轮比例，不重复指定）。
     let prompt_for_meta = prompt.clone();
     let refs_for_meta = reference_images.clone();
+    let ratio_clause = match ratio.as_deref().map(str::trim).filter(|r| !r.is_empty()) {
+        Some(r) => format!("；画面比例为 {r}"),
+        None => String::new(),
+    };
     let instruction = match &session_id {
         Some(_) => prompt,
         None => format!(
-            "请使用图像生成工具，根据以下提示词和参考图生成图片（张数完全以提示词要求为准；提示词未指定张数时生成一张）。\n\n{prompt}"
+            "请使用图像生成工具，根据以下提示词和参考图生成图片（张数完全以提示词要求为准；提示词未指定张数时生成一张{ratio_clause}）。\n\n{prompt}"
         ),
     };
     let req = CodexRequest {
         instruction,
         reference_images: reference_images.into_iter().map(PathBuf::from).collect(),
         context_prompts: vec![],
+        ratio: ratio.clone(),
     };
 
     let (tx, mut rx) = mpsc::channel::<Chunk>(64);
@@ -436,11 +446,14 @@ pub async fn codex_create_image(
         }
     });
 
+    // 先解析 provider（可能出错 → ?）：必须在注册 GENERATE_CANCEL 之前，否则出错提前返回
+    // 会留下 stale cancel sender（下次 cancel_codex_create take 到它）。None → codex（默认）。
+    let p = resolve_gen_provider(provider.as_deref())?;
+    let provider_name = p.name().to_string();
+
     let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
     GENERATE_CANCEL.lock().unwrap().replace(cancel_tx);
 
-    let p = CodexCliProvider::default();
-    let provider_name = p.name().to_string();
     // generate_image 借用 tx 推 Delta；用 block 限定借期，结束后 command 才能 reuse tx 发 Done。
     let outcome = {
         let gen_fut = p.generate_image(req, &tx, session_id);
@@ -455,10 +468,16 @@ pub async fn codex_create_image(
 
     // codex 生成的源图（~/.codex/...）ingest 进库 → asset（asset scope 内可渲染 + 进瀑布流）。
     // ingest_generated 不做 pHash 去重，迭代各版相似图都各自保留。
+    // source 按 provider 标记（codex/jimeng），落 assets.source 供智能筛选 / 角标区分。
+    let source_tag: String = match provider.as_deref().unwrap_or("codex") {
+        "jimeng" => "jimeng".to_string(),
+        _ => "codex".to_string(),
+    };
     let dbw = db.inner().clone();
     let pw = paths.inner().clone();
     let srcs = outcome.source_images.clone();
     let session_for_ingest = outcome.session_id.clone();
+    let temp_dir = outcome.temp_dir.clone();
     let gen_assets: Vec<crate::core::library::Asset> =
         tokio::task::spawn_blocking(
             move || -> Result<Vec<crate::core::library::Asset>, AppError> {
@@ -469,7 +488,12 @@ pub async fn codex_create_image(
                         &dbw,
                         src,
                         session_for_ingest.as_deref(),
+                        &source_tag,
                     )?);
+                }
+                // 源图已 copy 进库，删临时下载目录（即梦 provider 用；codex 为 None 不删）。
+                if let Some(dir) = &temp_dir {
+                    let _ = std::fs::remove_dir_all(dir);
                 }
                 Ok(out)
             },
@@ -505,6 +529,7 @@ pub async fn codex_create_image(
         "prompt": prompt_for_meta,
         "session_id": session_id,
         "references": refs_for_meta,
+        "provider": provider_name.clone(),
     })
     .to_string();
     let ids: Vec<String> = gen_assets.iter().map(|a| a.id.clone()).collect();
@@ -624,7 +649,7 @@ pub async fn openai_spike_generate_image(
         move || -> Result<Vec<String>, AppError> {
             let mut out = Vec::new();
             for src in &srcs {
-                let asset = crate::core::ingest::ingest_generated(&pw, &dbw, src, None)?;
+                let asset = crate::core::ingest::ingest_generated(&pw, &dbw, src, None, "codex")?;
                 out.push(asset.id);
             }
             Ok(out)

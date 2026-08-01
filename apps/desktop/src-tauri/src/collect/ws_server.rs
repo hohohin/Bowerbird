@@ -1,9 +1,10 @@
-//! axum WS server：接收浏览器扩展的采集消息，下载入库。
+//! axum WS server：接收浏览器扩展的采集消息，下载或接收字节后入库。
 //!
-//! 消息协议（JSON）：
-//!   `{ "type": "ping" }`                                    → `{ "ok": true, "pong": true }`
-//!   `{ "type": "save", "url": "...", "page_url": "..." }`    → `{ "ok": true, "asset_id": "..." }`
+//! 消息协议：
+//!   `{ "type": "ping" }`                                      → `{ "ok": true, "pong": true }`
+//!   `{ "type": "save", "url": "...", "page_url": "..." }`      → `{ "ok": true, "asset_id": "..." }`
 //!   `{ "type": "save_batch", "items": [...] }`                    → `{ "ok": true, "results": [...] }`
+//!   `{ "type": "save_blob", ... }` Text + 下一帧 Binary 图片字节 → `{ "ok": true, "asset_id": "..." }`
 
 use std::sync::Arc;
 
@@ -230,8 +231,12 @@ async fn handle_message(text: &str, state: &AppState) -> String {
         tracing::info!("collect ws recv: kind={kind}");
     }
     match kind {
-        "ping" => r#"{"ok":true,"pong":true}"#.to_string(),
+        "ping" => {
+            let _ = state.app.emit("collect://extension-connected", ());
+            r#"{"ok":true,"pong":true}"#.to_string()
+        }
         "save" => {
+            let _ = state.app.emit("collect://extension-connected", ());
             let url = v.get("url").and_then(|u| u.as_str()).unwrap_or("");
             if url.is_empty() {
                 return r#"{"ok":false,"error":"empty url"}"#.to_string();
@@ -245,10 +250,13 @@ async fn handle_message(text: &str, state: &AppState) -> String {
                     let _ = state.app.emit("library://assets-changed", ());
                     asset_result(&a).to_string()
                 }
-                Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }).to_string(),
+                Err(error) => {
+                    serde_json::json!({ "ok": false, "error": error.to_string() }).to_string()
+                }
             }
         }
         "save_batch" => {
+            let _ = state.app.emit("collect://extension-connected", ());
             let Some(items) = v.get("items").and_then(|items| items.as_array()) else {
                 return r#"{"ok":false,"error":"items must be an array","results":[]}"#.to_string();
             };
@@ -278,9 +286,11 @@ async fn handle_message(text: &str, state: &AppState) -> String {
                     match save_one(state, url, source_url, project_id.as_deref()).await {
                         Ok(asset) => {
                             saved += 1;
-                            asset_result(&asset)
+                            save_succeeded(asset, state)
                         }
-                        Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }),
+                        Err(error) => {
+                            serde_json::json!({ "ok": false, "error": error.to_string() })
+                        }
                     }
                 };
                 if let Some(object) = result.as_object_mut() {
@@ -291,9 +301,6 @@ async fn handle_message(text: &str, state: &AppState) -> String {
                     }
                 }
                 results.push(result);
-            }
-            if saved > 0 {
-                let _ = state.app.emit("library://assets-changed", ());
             }
             serde_json::json!({
                 "ok": saved == items.len(),
@@ -342,6 +349,15 @@ fn asset_result(asset: &crate::core::library::Asset) -> serde_json::Value {
         "asset_id": asset.id,
         "name": asset.name,
     })
+}
+
+fn save_succeeded(asset: crate::core::library::Asset, state: &AppState) -> serde_json::Value {
+    crate::core::autoname::spawn_auto_analyze(state.app.clone(), state.db.clone(), asset.clone());
+    let _ = state.app.emit(
+        "library://assets-changed",
+        serde_json::json!({ "asset_id": asset.id.clone(), "name": asset.name.clone() }),
+    );
+    serde_json::json!({ "ok": true, "asset_id": asset.id, "name": asset.name })
 }
 
 pub async fn start(

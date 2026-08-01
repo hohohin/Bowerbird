@@ -40,7 +40,9 @@ function App() {
   const boardOpen = useStore((s) => s.boardOpen);
   const genPanelOpen = useStore((s) => s.genPanelOpen);
   const setCodexHealth = useStore((s) => s.setCodexHealth);
+  const setDreaminaHealth = useStore((s) => s.setDreaminaHealth);
   const setExtensionConnected = useStore((s) => s.setExtensionConnected);
+  const setCollectedNotice = useStore((s) => s.setCollectedNotice);
   const loadSettings = useStore((s) => s.loadSettings);
 
   // 应用设置：App 挂载时加载一次。
@@ -52,14 +54,16 @@ function App() {
     const version = ++refreshVersion;
     try {
       if (boardOpen) {
-        // 创作板模式：瀑布流只显示有 caption（反推）的资产，它们即可作为槽的参考图
-        const [prompted, total] = await Promise.all([
+        // 创作板模式：瀑布流显示全部资产（含未反推），任意图点一下即可插为参考图；
+        // promptedAssets 给编辑器补 caption/sections —— 有反推的图可展开维度片段，没反推的作纯参考图。
+        const [assets, prompted, total] = await Promise.all([
+          api.listAssets(undefined, currentProjectId),
           api.listPromptedAssets(currentProjectId),
           api.countAssets(currentProjectId),
         ]);
         if (version !== refreshVersion) return;
         setPromptedAssets(prompted);
-        setAssets(prompted);
+        setAssets(assets);
         setTotal(total);
       } else {
         const [assets, total] = await Promise.all([
@@ -108,7 +112,8 @@ function App() {
     let unlisten: UnlistenFn | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let alive = true;
-    listen("library://assets-changed", () => {
+    listen<{ name?: string }>("library://assets-changed", (e) => {
+      if (e.payload?.name) setCollectedNotice(e.payload.name);
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => refresh(), 300);
     }).then((u) => {
@@ -123,9 +128,9 @@ function App() {
       unlisten?.();
       if (timer) clearTimeout(timer);
     };
-    // boardOpen 进依赖：保证刷新闭包看到最新 boardOpen（创作板模式下取 prompted 集合）
+    // boardOpen 进依赖：保证刷新闭包看到最新 boardOpen（创作板模式下取全量资产 + prompted 集合）
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentProjectId, currentFolderId, currentCollectionId, searchQuery, smartFilter, colorFilter, boardOpen]);
+  }, [currentProjectId, currentFolderId, currentCollectionId, searchQuery, smartFilter, colorFilter, boardOpen, setCollectedNotice]);
 
   // 项目成员/列表变化：刷新侧栏项目计数；项目被删时 reloadProjects 会安全退回全局。
   useEffect(() => {
@@ -247,6 +252,15 @@ function App() {
     };
   }, [setAutoAnalyzing]);
 
+  // 浏览器扩展加载后及之后每 15 秒向本地 WS 发 ping；后端收到后 emit collect://extension-connected。
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    listen("collect://extension-connected", () => setExtensionConnected(true)).then(
+      (u) => (unlisten = u)
+    );
+    return () => unlisten?.();
+  }, [setExtensionConnected]);
+
   // 生成结果流式回显（创作板「发送」/ 生成面板「继续修改」触发）：
   // 生成 UI 独立成面板后，codex://chunk 监听挪到全局。App 单次挂载，但 StrictMode 双挂载下
   // 仍需 alive 守卫——否则同一 Done 被两个监听器各收一次 → 同一张图 append 两次（见踩坑）。
@@ -305,6 +319,34 @@ function App() {
       unlistenDisc?.();
     };
   }, [setExtensionConnected]);
+
+  // 即梦可用性：同 codex，挂载取一次（provider 切换置灰依据）。
+  useEffect(() => {
+    api
+      .dreaminaHealth()
+      .then(setDreaminaHealth)
+      .catch(() => setDreaminaHealth({ ok: false, reason: "dreamina 状态检测失败" }));
+  }, [setDreaminaHealth]);
+
+  // dreamina 登录（OAuth Device Flow）：dreamina_login 命令逐行透传 stdout 到 store，
+  // DreaminaLoginDialog 读 dreaminaLoginLines 展示 verification_uri/user_code。
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    listen<string>("dreamina://login", (e) => {
+      useStore.getState().pushDreaminaLoginLine(e.payload);
+    }).then((u) => (unlisten = u));
+    return () => unlisten?.();
+  }, []);
+
+  // 登录子进程结束 → 标记流程结束 + 刷 dreaminaHealth（登录态可能已变）。
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    listen("dreamina://login-done", () => {
+      useStore.getState().setDreaminaLoginActive(false);
+      api.dreaminaHealth().then(setDreaminaHealth).catch(() => {});
+    }).then((u) => (unlisten = u));
+    return () => unlisten?.();
+  }, [setDreaminaHealth]);
 
   const showDetail = mode === "browse" && detailAssetId !== null;
 

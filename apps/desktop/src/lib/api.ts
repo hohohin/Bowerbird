@@ -67,6 +67,9 @@ export const api = {
   revealAssetFolder: (id: string) => invoke<void>("reveal_asset_folder", { id }),
   moveAssetsToFolder: (assetIds: string[], folderId: string) =>
     invoke<void>("move_assets_to_folder", { assetIds, folderId }),
+  // 右键菜单：在资源管理器中定位 / 用默认程序打开（store_path 由前端传，后端直接 spawn，不经 shell scope）。
+  revealInFolder: (path: string) => invoke<void>("reveal_path_in_explorer", { path }),
+  openWithSystem: (path: string) => invoke<void>("open_path_with_system", { path }),
 
   // 整理
   listFolders: () => invoke<Folder[]>("list_folders"),
@@ -174,6 +177,12 @@ export const api = {
   codexInstall: () => invoke<CodexHealth>("codex_install"),
   codexLogin: () => invoke<CodexHealth>("codex_login"),
   cancelCodexSetup: () => invoke<void>("cancel_codex_setup"),
+  dreaminaHealth: () => invoke<CodexHealth>("dreamina_health"),
+  dreaminaLogin: () => invoke<void>("dreamina_login"),
+  dreaminaCheckLogin: (deviceCode: string) =>
+    invoke<CodexHealth>("dreamina_check_login", { deviceCode }),
+  // 拉起系统终端跑 `dreamina login`（真 TTY；app 内 spawn 非 TTY 不写 token，见后端命令注释）。
+  openDreaminaLogin: () => invoke<void>("open_dreamina_login"),
   // 创作板「生成」：把最终 prompt + 参考图发 codex（codex exec --image，同反推机制）出图。
   // 流式文本经 codex://chunk（Delta）回；生成图 copy 进 library/generations 后随 Done.images 回。
   // sessionId 非空 → codex exec resume 续接同一会话（多轮迭代修改，codex 记得上一张图）。
@@ -181,12 +190,16 @@ export const api = {
     prompt: string;
     referenceImages: string[];
     sessionId?: string | null;
+    ratio?: string | null;
+    provider?: string | null;
     projectId?: string | null;
   }) =>
     invoke<void>("codex_create_image", {
       prompt: req.prompt,
       referenceImages: req.referenceImages,
       sessionId: req.sessionId ?? null,
+      ratio: req.ratio ?? null,
+      provider: req.provider ?? null,
       projectId: req.projectId ?? null,
     }),
   cancelCodexCreate: () => invoke<void>("cancel_codex_create"),

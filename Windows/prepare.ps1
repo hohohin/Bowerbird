@@ -34,11 +34,7 @@ if ($LASTEXITCODE -ge 8) {
     throw "Failed to copy the project into Windows/.work (robocopy exit $LASTEXITCODE)."
 }
 
-$Overrides = Join-Path $WindowsDir "overrides"
-& robocopy $Overrides $WorkDir /E | Out-Null
-if ($LASTEXITCODE -ge 8) {
-    throw "Failed to apply Windows overrides (robocopy exit $LASTEXITCODE)."
-}
+# Windows 平台差异已并入 canonical 源码；.work 直接使用上面复制的项目内容。
 
 Write-Host "Windows worktree prepared: $WorkDir" -ForegroundColor Green
 Write-Output $WorkDir

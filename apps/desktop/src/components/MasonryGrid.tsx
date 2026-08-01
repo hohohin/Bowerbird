@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { createPortal } from "react-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { useStore } from "../store";
 import { api } from "../lib/api";
@@ -15,7 +16,13 @@ function parseColors(c: string | null | undefined): string[] {
   }
 }
 
-function Thumb({ asset, group }: { asset: Asset; group?: Asset[] }) {
+function Thumb({
+  asset,
+  group,
+}: {
+  asset: Asset;
+  group?: Asset[];
+}) {
   const imgRef = useRef<HTMLImageElement>(null);
   const selected = useStore((s) => s.mode === "manage" && s.selectedIds.has(asset.id));
   const boardOpen = useStore((s) => s.boardOpen);
@@ -86,12 +93,62 @@ function Thumb({ asset, group }: { asset: Asset; group?: Asset[] }) {
   const ratio =
     shown.width && shown.height ? `${shown.width}/${shown.height}` : undefined;
 
+  // hover 放大预览：鼠标悬浮缩略图 2.8s 后弹出放大图（portal 到 body，避开外层 overflow 裁剪），
+  // 移走即消失。放大尺寸 = 缩略图当前渲染尺寸 × 200%（放大镜式，随列宽变化）。视频/无原图时不启用。
+  const previewSrc =
+    shown.store_path && !shown.duration ? convertFileSrc(shown.store_path) : null;
+  const [preview, setPreview] = useState<{
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+  } | null>(null);
+  const mouseRef = useRef({ x: 0, y: 0 });
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  function onEnter(e: MouseEvent<HTMLDivElement>) {
+    if (!previewSrc) return;
+    mouseRef.current = { x: e.clientX, y: e.clientY };
+    // 2.8s 延迟：到点时取缩略图实际渲染尺寸，×2 作为放大尺寸（保证对每张图「200%」都真正成立）。
+    hoverTimer.current = setTimeout(() => {
+      const rect = imgRef.current?.getBoundingClientRect();
+      if (!rect || !rect.width || !rect.height) return;
+      setPreview({ ...mouseRef.current, w: rect.width * 2, h: rect.height * 2 });
+    }, 2800);
+  }
+  function onMove(e: MouseEvent<HTMLDivElement>) {
+    mouseRef.current = { x: e.clientX, y: e.clientY };
+    // hover 期间缩略图尺寸不变，只跟随鼠标更新位置。
+    setPreview((p) => (p ? { ...p, x: e.clientX, y: e.clientY } : p));
+  }
+  function onLeave() {
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    setPreview(null);
+  }
+  // 浮层定位：默认鼠标右下偏移，靠右/下边时翻转到左/上，留 pad 不贴边。尺寸跟随缩略图×2。
+  let previewLeft = 0;
+  let previewTop = 0;
+  if (preview) {
+    const off = 18;
+    const pad = 8;
+    previewLeft = preview.x + off;
+    previewTop = preview.y + off;
+    if (previewLeft + preview.w > window.innerWidth - pad)
+      previewLeft = preview.x - preview.w - off;
+    if (previewTop + preview.h > window.innerHeight - pad)
+      previewTop = preview.y - preview.h - off;
+    previewLeft = Math.max(pad, previewLeft);
+    previewTop = Math.max(pad, previewTop);
+  }
+
   return (
     <div
       className={`group relative mb-2 break-inside-avoid cursor-pointer overflow-hidden rounded-md ring-2 transition ${
         selected ? "ring-accent" : "ring-transparent hover:ring-edge"
       }`}
       draggable={!boardOpen}
+      onMouseEnter={onEnter}
+      onMouseMove={onMove}
+      onMouseLeave={onLeave}
       onClick={() => {
         const st = useStore.getState();
         // 创作板打开 = 挑图上下文：点瀑布流图即在光标处插入编辑器。
@@ -140,10 +197,10 @@ function Thumb({ asset, group }: { asset: Asset; group?: Asset[] }) {
           <span>{describeStatus === "running" ? "反推中" : `排队 ${queuePos}`}</span>
         </button>
       )}
-      {shown.source === "codex" && (
+      {(shown.source === "codex" || shown.source === "jimeng") && (
         <span
           className="absolute left-1 top-1 z-10 rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-white backdrop-blur"
-          title={groupLen > 1 ? `生成图 · 同流程 ${groupLen} 张` : "codex 生成图"}
+          title={groupLen > 1 ? `生成图 · 同流程 ${groupLen} 张` : "生成图"}
         >
           ✨{groupLen > 1 ? ` ${idx + 1}/${groupLen}` : ""}
         </span>
@@ -190,6 +247,18 @@ function Thumb({ asset, group }: { asset: Asset; group?: Asset[] }) {
           ))}
         </div>
       )}
+      {preview &&
+        previewSrc &&
+        createPortal(
+          <img
+            src={previewSrc}
+            alt=""
+            draggable={false}
+            className="pointer-events-none fixed z-50 rounded-md border border-edge bg-panel object-contain shadow-xl"
+            style={{ left: previewLeft, top: previewTop, width: preview.w, height: preview.h }}
+          />,
+          document.body
+        )}
     </div>
   );
 }
@@ -227,7 +296,7 @@ export function MasonryGrid() {
       <div className="flex h-full items-center justify-center text-sm text-muted">
         {assets.length === 0
           ? boardOpen
-            ? "还没有反推过的图 —— 先在详情页给一些图点「反推」，它们就会出现在这里供创作板挑选"
+            ? "还没有素材 —— 用顶部按钮导入图片，点瀑布流任意图即可插为参考图"
             : "还没有素材 —— 用顶部按钮导入图片或文件夹"
           : "当前筛选下无素材"}
       </div>

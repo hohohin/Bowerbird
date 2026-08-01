@@ -14,6 +14,25 @@ import type {
   TagCount,
 } from "./lib/types";
 
+// —— 默认出图 provider（localStorage，照 boardRatio 枚举校验）——
+const DEFAULT_PROVIDER_KEY = "bowerbird.defaultProvider";
+const PROVIDERS = ["codex", "jimeng"] as const;
+function loadDefaultProvider(): string {
+  try {
+    const v = localStorage.getItem(DEFAULT_PROVIDER_KEY);
+    return v && (PROVIDERS as readonly string[]).includes(v) ? v : "codex";
+  } catch {
+    return "codex";
+  }
+}
+function saveDefaultProvider(v: string) {
+  try {
+    localStorage.setItem(DEFAULT_PROVIDER_KEY, v);
+  } catch {
+    /* localStorage 不可用时忽略 */
+  }
+}
+
 type Mode = "browse" | "manage";
 
 interface State {
@@ -42,7 +61,7 @@ interface State {
   colorRebuild: { done: number; total: number } | null; // 重建色板进度（P3）
   // —— 创作板（核心枢纽）——
   boardOpen: boolean;
-  promptedAssets: PromptedAsset[]; // 创作板打开时，瀑布流只显示这些（有 caption 的资产）
+  promptedAssets: PromptedAsset[]; // 创作板挑图集合中带 caption（反推）的子集，供编辑器补 sections / 展开维度片段
   // —— 创作板「用途」（preset）——
   presets: Preset[]; // 命名 prompt 预设，发送时作为基底注入（不进编辑器）
   activePresetId: string | null; // 当前选中用途；null=不注入
@@ -104,6 +123,23 @@ interface State {
   settings: AppSettings | null;
   loadSettings: () => Promise<void>;
   updateSettings: (s: AppSettings) => Promise<void>;
+  // —— 即梦（dreamina）可用性 + 出图 provider 切换（Phase 3）——
+  dreaminaHealth: CodexHealth | null;
+  setDreaminaHealth: (h: CodexHealth | null) => void;
+  defaultProvider: string; // 全局默认出图 provider（"codex"/"jimeng"，localStorage 持久化）
+  setDefaultProvider: (p: string) => void;
+  activeGenProvider: string; // 当前会话出图 provider（创作板切换条改它，初值=defaultProvider，不持久化）
+  setActiveGenProvider: (p: string) => void;
+  // —— dreamina 登录流程（OAuth Device Flow；dreamina://login 逐行透传 stdout）——
+  dreaminaLoginLines: string[];
+  dreaminaLoginActive: boolean;
+  setDreaminaLoginActive: (b: boolean) => void;
+  pushDreaminaLoginLine: (line: string) => void;
+  clearDreaminaLogin: () => void;
+  // —— 浏览器扩展采集 ——
+  // 扩展连上本地 WS 后后端 emit collect://extension-connected；采集入库 emit library://assets-changed 带 name。
+  collectedNotice: string | null; // 最近一次采集入库的素材名；null=不显提示
+  setCollectedNotice: (name: string | null) => void;
   // —— 生成结果面板（独立于创作板；主区覆盖层，可随时开合，状态在 store 不丢）——
   genPanelOpen: boolean;
   genTurns: GenTurn[];
@@ -116,10 +152,12 @@ interface State {
   genUnread: boolean; // 面板关时落地新图 → 顶栏按钮红点
   toggleGenPanel: () => void;
   setGenPanelOpen: (open: boolean) => void;
-  startGeneration: (prompt: string, references: Asset[]) => Promise<void>;
-  sendGenRevise: (instruction: string) => Promise<void>;
+  startGeneration: (prompt: string, references: Asset[], ratio?: string | null, provider?: string | null) => Promise<void>;
+  sendGenRevise: (instruction: string, provider?: string | null) => Promise<void>;
   cancelGeneration: () => void;
   applyGenChunk: (c: CodexChunk) => void;
+  // 重试末尾失败轮：首轮失败 → startGeneration（清空重发），续轮失败 → sendGenRevise（resume 续接）。
+  retryLastGenTurn: () => void;
   // 「回看生成对话」：拉某生成图所在会话的历史时间线 → load 进 genTurns，复用 GenerationPanel
   // 展示 + 续轮 resume（genSessionId=历史 sid）。generating 中拒绝（不覆盖进行中的会话）。
   viewGenerationHistory: (assetId: string) => Promise<void>;
@@ -168,17 +206,38 @@ export const useStore = create<State>((set, get) => {
     genTurnSeq += 1;
     return genTurnSeq;
   }
-  function genHandleError(msg: string) {
-    const cancelled = msg.includes("已取消");
-    set((s) => ({
-      genStreaming: s.genStreaming + (cancelled ? "\n\n—— 已取消" : `\n[error: ${msg}]`),
-      // 取消/出错时若最后一轮没产出图，移除占位 turn，避免空轮留在时间线
-      genTurns:
-        s.genTurns.length > 0 && s.genTurns[s.genTurns.length - 1].images.length === 0
-          ? s.genTurns.slice(0, -1)
-          : s.genTurns,
-    }));
+  // 把一次生成失败落到状态（genHandleError 真失败分支与 applyGenChunk 的 error 分支共用）：
+  //  - 未出图的占位轮 → 记 error 成「失败轮」（时间线可见 + 可重试），不追加 streaming（避免与
+  //    TurnView 失败态重复；streaming 保留 codex 本次叙述性 delta 作诊断上下文）。
+  //  - 已出图后的后置失败（done 已到、meta/caption 写库失败）→ 不污染成功轮，错误降级进 streaming。
+  function applyGenError(msg: string) {
+    set((s) => {
+      if (s.genTurns.length === 0) return {};
+      const last = s.genTurns[s.genTurns.length - 1];
+      if (last.images.length === 0) {
+        return { genTurns: [...s.genTurns.slice(0, -1), { ...last, error: msg }] };
+      }
+      return { genStreaming: s.genStreaming + `\n[error: ${msg}]` };
+    });
   }
+  function genHandleError(msg: string) {
+    if (msg.includes("已取消")) {
+      // 用户主动取消：删末尾空轮 + streaming 标「已取消」，不算失败、不留红字轮。
+      set((s) => ({
+        genStreaming: s.genStreaming + "\n\n—— 已取消",
+        genTurns:
+          s.genTurns.length > 0 && s.genTurns[s.genTurns.length - 1].images.length === 0
+            ? s.genTurns.slice(0, -1)
+            : s.genTurns,
+      }));
+      return;
+    }
+    applyGenError(msg);
+  }
+
+  // 创作板首发（startGeneration）的生成：done 有图 = 成功，通知编辑器清草稿——
+  // 这轮组稿已交付，不必再作为草稿保留。续轮 sendGenRevise 不置此 flag（续轮不清创作板）。
+  let pendingBoardClear = false;
 
   return {
   assets: [],
@@ -349,7 +408,7 @@ export const useStore = create<State>((set, get) => {
       const turningOn = !s.boardOpen;
       return {
         boardOpen: turningOn,
-        // 打开创作板时收起详情页，让瀑布流（仅反推过的图）可见以便挑图
+        // 打开创作板时收起详情页，让瀑布流（全部图，任意图可插为参考图）可见以便挑图
         detailAssetId: turningOn ? null : s.detailAssetId,
       };
     }),
@@ -430,6 +489,26 @@ export const useStore = create<State>((set, get) => {
       console.error("updateSettings failed", e);
     }
   },
+  // —— 即梦 + provider（Phase 3）——
+  dreaminaHealth: null,
+  setDreaminaHealth: (dreaminaHealth) => set({ dreaminaHealth }),
+  defaultProvider: loadDefaultProvider(),
+  setDefaultProvider: (defaultProvider) => {
+    saveDefaultProvider(defaultProvider);
+    // 改默认同步切当前选择（用户期望「默认」生效立即）。
+    set({ defaultProvider, activeGenProvider: defaultProvider });
+  },
+  activeGenProvider: loadDefaultProvider(),
+  setActiveGenProvider: (activeGenProvider) => set({ activeGenProvider }),
+  dreaminaLoginLines: [],
+  dreaminaLoginActive: false,
+  setDreaminaLoginActive: (dreaminaLoginActive) => set({ dreaminaLoginActive }),
+  pushDreaminaLoginLine: (line) =>
+    set((s) => ({ dreaminaLoginLines: [...s.dreaminaLoginLines, line] })),
+  clearDreaminaLogin: () => set({ dreaminaLoginLines: [], dreaminaLoginActive: false }),
+  // —— 浏览器扩展采集 ——
+  collectedNotice: null,
+  setCollectedNotice: (collectedNotice) => set({ collectedNotice }),
   // —— 生成结果面板 ——
   genPanelOpen: false,
   genTurns: [],
@@ -447,8 +526,10 @@ export const useStore = create<State>((set, get) => {
     }),
   setGenPanelOpen: (open) =>
     set((s) => ({ genPanelOpen: open, genUnread: open ? false : s.genUnread })),
-  startGeneration: async (prompt, references) => {
+  startGeneration: async (prompt, references, ratio, provider) => {
     if (get().generating) return; // 单槽：进行中不再发
+    // provider 兜底：调用点没传（CreationBoard send / retry）→ 当前选择 → 全局默认。
+    const prov = provider ?? get().activeGenProvider ?? get().defaultProvider;
     // 用途（preset）注入：选中用途时，其 body 作为基底拼在用户组稿前（类 CLAUDE.md 上下文，
     // 不进编辑器）。续轮 sendGenRevise 不注入——用途是首轮基底，续轮是修改意见。
     const pid = get().activePresetId;
@@ -464,15 +545,20 @@ export const useStore = create<State>((set, get) => {
       genProjectId: get().currentProjectId,
       genSessionId: null,
       genStreaming: "",
-      genTurns: [{ id: nextGenTurnId(), prompt: sentPrompt, images: [] }],
+      genTurns: [{ id: nextGenTurnId(), prompt: sentPrompt, images: [], provider: prov }],
       genPanelOpen: true, // 自动弹面板给即时反馈（创作板在右槽仍可编辑）
       genUnread: false,
     });
+    // 标记本轮为「创作板首发」：done 有图时通知编辑器清草稿（编辑器据 dirty 决定是否清）。
+    pendingBoardClear = true;
+    window.dispatchEvent(new CustomEvent("bowerbird://board-gen-start"));
     set({ generating: true });
     try {
       await api.codexCreateImage({
         prompt: sentPrompt,
         referenceImages: refPaths,
+        ratio,
+        provider: prov,
         projectId: get().genProjectId,
       });
     } catch (e) {
@@ -481,20 +567,27 @@ export const useStore = create<State>((set, get) => {
       set({ generating: false });
     }
   },
-  sendGenRevise: async (instruction) => {
+  sendGenRevise: async (instruction, provider) => {
     const sid = get().genSessionId;
     const text = instruction.trim();
     if (get().generating || !sid || !text) return;
+    const prov = provider ?? get().activeGenProvider ?? get().defaultProvider;
+    // 即梦续轮：image2image 传上一轮产出图（codex resume 记得上一轮图、不需传）。
+    const turns = get().genTurns;
+    const lastImages = turns[turns.length - 1]?.images ?? [];
+    const reviseRefs = prov === "jimeng" ? lastImages : [];
+    pendingBoardClear = false; // 续轮修改不清创作板草稿
     set((s) => ({
-      genTurns: [...s.genTurns, { id: nextGenTurnId(), prompt: text, images: [] }],
+      genTurns: [...s.genTurns, { id: nextGenTurnId(), prompt: text, images: [], provider: prov }],
       genStreaming: "",
     }));
     set({ generating: true });
     try {
       await api.codexCreateImage({
         prompt: text,
-        referenceImages: [],
+        referenceImages: reviseRefs,
         sessionId: sid,
+        provider: prov,
         projectId: get().genProjectId,
       });
     } catch (e) {
@@ -506,6 +599,20 @@ export const useStore = create<State>((set, get) => {
   cancelGeneration: () => {
     void api.cancelCodexCreate().catch(console.error);
   },
+  retryLastGenTurn: () => {
+    const s = get();
+    if (s.generating || !s.codexHealth?.ok) return;
+    const last = s.genTurns[s.genTurns.length - 1];
+    if (!last?.error) return; // 没有失败轮可重试
+    if (s.genSessionId) {
+      // 续轮失败：先移除失败轮再 resume，重试轮顶替原位（避免同 prompt 编号递增的重复轮）。
+      set({ genTurns: s.genTurns.slice(0, -1) });
+      void s.sendGenRevise(last.prompt);
+    } else {
+      // 首轮失败：startGeneration 会清空 genTurns，失败轮自然消失。
+      void s.startGeneration(s.genLastPrompt, s.genRefAssets);
+    }
+  },
   applyGenChunk: (c) => {
     if (c.kind === "delta") {
       set((s) => ({ genStreaming: s.genStreaming + c.text }));
@@ -514,18 +621,23 @@ export const useStore = create<State>((set, get) => {
       set((s) => {
         const base = {
           genSessionId: c.session_id ?? s.genSessionId,
-          genStreaming: s.genStreaming + `\n\n—— done · ${c.elapsed_ms}ms via ${c.provider}`,
+          genStreaming: "", // done 后清流式（图已到；provider 在 turn 角标、耗时勿扰）
           genUnread: imgs.length > 0 && !s.genPanelOpen ? true : s.genUnread,
         };
         if (s.genTurns.length === 0) return base;
         const last = s.genTurns[s.genTurns.length - 1];
         return {
           ...base,
-          genTurns: [...s.genTurns.slice(0, -1), { ...last, images: [...last.images, ...imgs] }],
+          genTurns: [...s.genTurns.slice(0, -1), { ...last, images: [...last.images, ...imgs], provider: c.provider }],
         };
       });
+      // 创作板首发且有图产出 = 生成成功 → 通知编辑器清草稿（编辑器据 dirty 决定是否真清）。
+      if (imgs.length > 0 && pendingBoardClear) {
+        pendingBoardClear = false;
+        window.dispatchEvent(new CustomEvent("bowerbird://board-gen-success"));
+      }
     } else if (c.kind === "error") {
-      set((s) => ({ genStreaming: s.genStreaming + `\n[error: ${c.message}]` }));
+      applyGenError(c.message);
     }
   },
   viewGenerationHistory: async (assetId) => {

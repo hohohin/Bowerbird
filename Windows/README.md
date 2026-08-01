@@ -1,6 +1,6 @@
 # Bowerbird Windows 版
 
-这里存放 Bowerbird 的 Windows 适配文件。原项目源码不会被改写：脚本将项目复制到 `Windows/.work/`，再覆盖 `Windows/overrides/` 中的 Windows 版本文件。
+这里存放 Bowerbird 的 Windows 开发、构建与独立扩展加载工具。平台兼容行为已经并入项目主源码；脚本只把 canonical 项目复制到 `Windows/.work/`，不再用整文件 override 替换源码。`Windows/overrides/` 仅保留退役说明，不参与构建。
 
 ## 已适配
 
@@ -8,6 +8,7 @@
 - 兼容 npm 全局安装生成的 `codex.cmd`，并在 GUI 的 PATH 不完整时检查 `%APPDATA%\npm`。
 - 登录检测支持 `CODEX_HOME` 和 `%USERPROFILE%\.codex\auth.json`。
 - “在 codex 中打开会话”会启动 Windows 命令提示符并运行 `codex resume`。
+- 浏览器采集服务的 `save_batch` 与 `save_blob + binary` 两条协议均位于 canonical Rust 源码；`apps/extension/` 与 `Windows/extension/` 分别使用对应协议。
 - 用户数据继续由 Tauri 写入 Windows AppData，不写入安装目录。
 
 ## 环境要求

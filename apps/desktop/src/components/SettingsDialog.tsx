@@ -3,6 +3,8 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useStore } from "../store";
 import { api } from "../lib/api";
 import { DEFAULT_AUTO_ANALYZE_PROMPT } from "../lib/constants";
+import { ProviderSelect } from "./creation/ProviderSelect";
+import { DreaminaLoginDialog } from "./DreaminaLoginDialog";
 import type { MigrateProgress } from "../lib/types";
 
 const STAGE_LABEL: Record<string, string> = {
@@ -12,16 +14,24 @@ const STAGE_LABEL: Record<string, string> = {
 };
 
 /**
- * 设置面板（约定 13 全屏 Modal 形态）：环境状态统一入口 + 入库自动反推配置 + 素材库位置迁移。
+ * 设置面板（约定 13 全屏 Modal 形态）：环境状态统一入口 + 入库自动反推配置 + 素材库位置迁移 +
+ * AI 出图引擎（codex / 即梦 provider 切换）+ 重建色板 + 智能归类全部。
  * 由工具栏齿轮按钮唤起。点背景 / ✕ 关闭。
  */
 export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const codexHealth = useStore((s) => s.codexHealth);
+  const setCodexHealth = useStore((s) => s.setCodexHealth);
   const extensionConnected = useStore((s) => s.extensionConnected);
   const setOnboardingForceOpen = useStore((s) => s.setOnboardingForceOpen);
   const settings = useStore((s) => s.settings);
   const loadSettings = useStore((s) => s.loadSettings);
   const updateSettings = useStore((s) => s.updateSettings);
+  const dreaminaHealth = useStore((s) => s.dreaminaHealth);
+  const setDreaminaHealth = useStore((s) => s.setDreaminaHealth);
+  const defaultProvider = useStore((s) => s.defaultProvider);
+  const setDefaultProvider = useStore((s) => s.setDefaultProvider);
+  const classifyProgress = useStore((s) => s.classifyProgress);
+  const colorRebuild = useStore((s) => s.colorRebuild);
 
   // 本地编辑态：打开面板时从 store 快照初始化，失焦/按键时写回。
   const [autoAnalyzeOnIngest, setAutoAnalyzeOnIngest] = useState(false);
@@ -35,6 +45,11 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [migrating, setMigrating] = useState(false);
   const [migrateProgress, setMigrateProgress] = useState<MigrateProgress | null>(null);
   const [migrateError, setMigrateError] = useState<string | null>(null);
+
+  // —— 即梦 ——
+  const [dreaminaChecking, setDreaminaChecking] = useState(false);
+  const [dreaminaLoginOpen, setDreaminaLoginOpen] = useState(false);
+  const [copiedInstall, setCopiedInstall] = useState(false);
 
   useEffect(() => {
     api.libraryRoot().then(setLibRoot).catch(() => {});
@@ -55,6 +70,42 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
       unlisten?.();
     };
   }, []);
+
+  // 打开时刷新一次 codex 状态（看到的是当前环境，而非 App 挂载时的快照）。
+  useEffect(() => {
+    let alive = true;
+    api
+      .codexHealth()
+      .then((h) => {
+        if (alive) setCodexHealth(h);
+      })
+      .catch(() => {
+        if (alive) setCodexHealth({ ok: false, reason: "codex 状态检测失败" });
+      });
+    return () => {
+      alive = false;
+    };
+  }, [setCodexHealth]);
+
+  // 打开时也刷一次即梦状态（独立 checking 态，不卡 codex 检测）。
+  useEffect(() => {
+    let alive = true;
+    setDreaminaChecking(true);
+    api
+      .dreaminaHealth()
+      .then((h) => {
+        if (alive) setDreaminaHealth(h);
+      })
+      .catch(() => {
+        if (alive) setDreaminaHealth({ ok: false, reason: "dreamina 状态检测失败" });
+      })
+      .finally(() => {
+        if (alive) setDreaminaChecking(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [setDreaminaHealth]);
 
   useEffect(() => {
     if (!initialized.current) {
@@ -95,6 +146,47 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     } catch (error) {
       setMigrating(false);
       setMigrateError(typeof error === "string" ? error : "迁移失败");
+    }
+  }
+
+  // 即梦状态分态：未装（reason 含「未检测到」）/ 未登录 / 就绪——决定显示安装命令还是登录按钮。
+  const dreaminaReason = dreaminaHealth?.reason ?? "";
+  const dreaminaNotInstalled = !dreaminaHealth?.ok && dreaminaReason.includes("未检测到");
+  const dreaminaNeedsLogin = !dreaminaHealth?.ok && !dreaminaNotInstalled;
+
+  function copyInstallCmd() {
+    navigator.clipboard
+      .writeText("curl -s https://jimeng.jianying.com/cli | bash")
+      .then(() => {
+        setCopiedInstall(true);
+        setTimeout(() => setCopiedInstall(false), 1200);
+      });
+  }
+
+  async function recheckDreamina() {
+    setDreaminaChecking(true);
+    try {
+      setDreaminaHealth(await api.dreaminaHealth());
+    } catch {
+      setDreaminaHealth({ ok: false, reason: "dreamina 状态检测失败" });
+    } finally {
+      setDreaminaChecking(false);
+    }
+  }
+
+  async function reclassifyAll() {
+    try {
+      await api.reclassifyAll();
+    } catch (e) {
+      console.error("reclassifyAll failed", e);
+    }
+  }
+
+  async function recomputeColors() {
+    try {
+      await api.recomputeColors();
+    } catch (e) {
+      console.error("recomputeColors failed", e);
     }
   }
 
@@ -183,6 +275,81 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             )}
           </div>
 
+          {/* AI 出图引擎（Phase 3：codex / 即梦 多 provider 切换） */}
+          <div className="rounded bg-panel2 px-3 py-2.5">
+            <div className="text-ink">AI 出图引擎</div>
+            <p className="mt-1 text-[11px] text-muted">
+              默认用哪个 provider 出图（创作板发送时使用，可在创作板临时切换）。
+            </p>
+            <div className="mt-2 flex items-center gap-2">
+              <ProviderSelect
+                value={defaultProvider}
+                onChange={setDefaultProvider}
+                codexHealth={codexHealth}
+                dreaminaHealth={dreaminaHealth}
+              />
+            </div>
+            <div className="mt-2 flex items-center gap-2">
+              <div
+                className={`rounded px-2 py-1 text-xs ${
+                  dreaminaHealth?.ok
+                    ? "bg-accent/15 text-accent"
+                    : "bg-amber-500/15 text-amber-300"
+                }`}
+              >
+                {dreaminaChecking
+                  ? "检测中…"
+                  : dreaminaHealth?.ok
+                    ? "即梦已就绪"
+                    : dreaminaNotInstalled
+                      ? "dreamina CLI 未安装"
+                      : dreaminaHealth?.reason || "即梦未就绪"}
+              </div>
+              <button
+                onClick={() => void recheckDreamina()}
+                disabled={dreaminaChecking}
+                className="rounded-md bg-panel2 px-3 py-1 text-xs text-ink hover:bg-edge disabled:opacity-50"
+              >
+                重新检测
+              </button>
+              <button
+                onClick={() => setDreaminaLoginOpen(true)}
+                disabled={!dreaminaNeedsLogin || dreaminaChecking}
+                className="rounded-md bg-panel2 px-3 py-1 text-xs text-ink hover:bg-edge disabled:opacity-50"
+                title={
+                  dreaminaHealth?.ok
+                    ? "已登录"
+                    : dreaminaNotInstalled
+                      ? "先安装 dreamina CLI"
+                      : "dreamina login（OAuth Device Flow）"
+                }
+              >
+                登录即梦账号
+              </button>
+            </div>
+            {dreaminaNotInstalled && (
+              <div className="mt-2 rounded bg-panel p-2">
+                <div className="text-[10px] uppercase tracking-wide text-muted">
+                  安装 dreamina CLI（终端运行，一行命令）
+                </div>
+                <div className="mt-1 flex items-center gap-2">
+                  <code className="flex-1 truncate rounded bg-edge px-2 py-1 font-mono text-[11px] text-ink">
+                    curl -s https://jimeng.jianying.com/cli | bash
+                  </code>
+                  <button
+                    onClick={copyInstallCmd}
+                    className="shrink-0 rounded bg-edge px-2 py-0.5 text-[11px] text-ink hover:opacity-80"
+                  >
+                    {copiedInstall ? "已复制 ✓" : "复制"}
+                  </button>
+                </div>
+                <div className="mt-1 text-[10px] text-muted">
+                  装后重开终端使 PATH 生效，再点「重新检测」→「登录即梦账号」。
+                </div>
+              </div>
+            )}
+          </div>
+
           {/* 素材库位置 */}
           <div className="rounded bg-panel2 px-3 py-2.5">
             <div className="text-ink">素材库位置</div>
@@ -259,6 +426,50 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             )}
           </div>
 
+          {/* 重建色板 */}
+          <div className="rounded bg-panel2 px-3 py-2.5">
+            <div className="text-ink">重建色板</div>
+            <p className="mt-1 text-[11px] text-muted">
+              重新量化全库主色到颜色桶（存量图补上色板）。后台跑，完成后侧栏色板自动刷新。
+            </p>
+            <div className="mt-2 flex items-center gap-2">
+              <button
+                onClick={() => void recomputeColors()}
+                disabled={!!colorRebuild}
+                className="rounded-md bg-panel px-3 py-1 text-[12px] text-ink hover:bg-edge disabled:opacity-50"
+              >
+                重建色板
+              </button>
+              {colorRebuild && (
+                <span className="text-xs tabular-nums text-muted">
+                  重建中 {colorRebuild.done}/{colorRebuild.total}
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* 智能归类全部 */}
+          <div className="rounded bg-panel2 px-3 py-2.5">
+            <div className="text-ink">智能归类全部</div>
+            <p className="mt-1 text-[11px] text-muted">
+              对所有「无类别且已反推」的图，按描述重新自动归类（后台跑，仅归类不改名/描述）。
+            </p>
+            <div className="mt-2 flex items-center gap-2">
+              <button
+                onClick={() => void reclassifyAll()}
+                disabled={!!classifyProgress}
+                className="rounded-md bg-panel px-3 py-1 text-[12px] text-ink hover:bg-edge disabled:opacity-50"
+              >
+                智能归类全部
+              </button>
+              {classifyProgress && (
+                <span className="text-xs tabular-nums text-muted">
+                  归类中 {classifyProgress.done}/{classifyProgress.total}
+                </span>
+              )}
+            </div>
+          </div>
+
           {/* 新手教程（占位，后续替换为视频/图片） */}
           <div className="rounded bg-panel2 px-3 py-2">
             <div className="text-ink">新手教程</div>
@@ -271,11 +482,14 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
         <div className="mt-6 flex justify-end">
           <button
             onClick={onClose}
-            className="rounded-md bg-panel2 px-3 py-1.5 text-sm text-ink hover:bg-edge"
+            className="rounded-md bg-accent px-4 py-1.5 text-sm font-medium text-black hover:opacity-90"
           >
-            关闭
+            完成
           </button>
         </div>
+        {dreaminaLoginOpen && (
+          <DreaminaLoginDialog open onClose={() => setDreaminaLoginOpen(false)} />
+        )}
       </div>
     </div>
   );

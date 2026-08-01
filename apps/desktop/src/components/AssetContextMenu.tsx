@@ -2,13 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useStore } from "../store";
 import { api } from "../lib/api";
+import { loadDescribePrompt } from "../lib/describePrompt";
 import type { AssetDeleteMode, AssetDeleteResult } from "../lib/types";
 
 /** 物理删除的确认口令（与「删除项目」一致，避开 window.confirm——Tauri WKWebView 拦截原生对话框）。 */
 const CONFIRM_TEXT = "确认删除";
 
 const MENU_WIDTH = 232;
-const MENU_HEIGHT = 190;
+const MENU_HEIGHT = 280;
 
 function resultMessage(mode: AssetDeleteMode, result: AssetDeleteResult): string {
   if (mode === "keep") {
@@ -32,6 +33,8 @@ export function AssetContextMenu() {
   const closeContextMenu = useStore((s) => s.closeContextMenu);
   const currentProjectId = useStore((s) => s.currentProjectId);
   const reloadProjects = useStore((s) => s.reloadProjects);
+  const assets = useStore((s) => s.assets);
+  const runDescribe = useStore((s) => s.runDescribe);
 
   const [busy, setBusy] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -83,6 +86,11 @@ export function AssetContextMenu() {
 
   // 守卫后捕获，闭包里直接用（TS 不会把守卫的收窄带进嵌套函数）。
   const assetId = menu.assetId;
+  const storePath = assets.find((a) => a.id === assetId)?.store_path ?? null;
+  // 反推项置灰：该图正在反推或已排队（runDescribe 内部已去重，置灰仅为给用户明确反馈）。
+  const describing =
+    useStore.getState().describingId === assetId ||
+    useStore.getState().describeQueue.some((q) => q.assetId === assetId);
 
   // 菜单定位：固定到鼠标位置，超右/下边缘时收进来（近似估算尺寸即可）。
   const x = Math.max(4, Math.min(menu.x, window.innerWidth - MENU_WIDTH - 8));
@@ -141,6 +149,40 @@ export function AssetContextMenu() {
         className="block w-full rounded px-2 py-1.5 text-left text-ink hover:bg-panel2 disabled:opacity-50"
       >
         打开所在文件夹
+      </button>
+      {storePath && (
+        <>
+          <button
+            onClick={() => {
+              void api.openWithSystem(storePath);
+              closeContextMenu();
+            }}
+            disabled={busy || done !== null}
+            className="block w-full rounded px-2 py-1.5 text-left text-ink hover:bg-panel2 disabled:opacity-50"
+          >
+            用系统程序打开
+          </button>
+          <button
+            onClick={() => {
+              void navigator.clipboard.writeText(storePath);
+              closeContextMenu();
+            }}
+            disabled={busy || done !== null}
+            className="block w-full rounded px-2 py-1.5 text-left text-ink hover:bg-panel2 disabled:opacity-50"
+          >
+            复制文件路径
+          </button>
+        </>
+      )}
+      <button
+        onClick={() => {
+          runDescribe(assetId, loadDescribePrompt());
+          closeContextMenu();
+        }}
+        disabled={busy || done !== null || describing}
+        className="block w-full rounded px-2 py-1.5 text-left text-ink hover:bg-panel2 disabled:opacity-50"
+      >
+        反推提示词
       </button>
 
       <div className="my-1 border-t border-edge" />

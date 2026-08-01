@@ -30,3 +30,7 @@ my-library/
 
 # spec-workflow MCP tool artifacts
 .spec-workflow/
+
+# Claude Code / agent 工具临时目录（含嵌入式 git 仓库与工作记忆，不入库）
+.claude/
+.workbuddy/

@@ -725,3 +725,88 @@ pub async fn recompute_colors(
     });
     Ok(())
 }
+
+// --- 系统交互：在资源管理器中定位 / 用默认程序打开 ---
+// 右键图片菜单的后端。前端把 asset.store_path 传来（Thumb 已持有，不必查 DB）；
+// 后端 Rust 直接 spawn 子进程，不经 shell plugin scope，故 capabilities 无需改动。
+
+/// 校验文件存在并返回 PathBuf（路径失效时给前端明确报错，而非让 explorer 弹系统对话框）。
+fn require_existing_file(path: &str) -> Result<PathBuf, AppError> {
+    let p = PathBuf::from(path);
+    if !p.is_file() {
+        return Err(AppError::Other(format!("文件不存在: {path}")));
+    }
+    Ok(p)
+}
+
+/// 在系统文件资源管理器中定位并选中该文件（reveal in folder）。
+#[tauri::command]
+pub async fn reveal_path_in_explorer(path: String) -> Result<(), AppError> {
+    let p = require_existing_file(&path)?;
+    spawn_locate_or_open(&p, true).await
+}
+
+/// 用系统默认程序打开该文件（等价于双击）。
+#[tauri::command]
+pub async fn open_path_with_system(path: String) -> Result<(), AppError> {
+    let p = require_existing_file(&path)?;
+    spawn_locate_or_open(&p, false).await
+}
+
+/// 跨平台启动资源管理器定位 / 默认程序打开。spawn 后立即返回（fire-and-forget，不 wait）。
+///   Windows  reveal → explorer.exe /select,<path>（在资源管理器里选中）
+///   Windows  open   → cmd /C start "" <path>（ShellExecute 用关联程序打开，CREATE_NO_WINDOW 防闪黑窗）
+///   macOS    reveal → open -R；open → open <path>
+///   Linux    reveal → xdg-open 父目录（无统一「定位选中」协议，退化为打开所在目录）；open → xdg-open <path>
+async fn spawn_locate_or_open(path: &PathBuf, reveal: bool) -> Result<(), AppError> {
+    let path_str = path.to_string_lossy().into_owned();
+    let action = if reveal { "定位文件" } else { "打开文件" };
+    #[cfg(target_os = "windows")]
+    {
+        if reveal {
+            tokio::process::Command::new("explorer.exe")
+                .arg(format!("/select,{path_str}"))
+                .spawn()
+                .map_err(|e| AppError::Other(format!("{action}失败: {e}")))?;
+        } else {
+            tokio::process::Command::new("cmd.exe")
+                .args(["/D", "/C", "start", "", &path_str])
+                .creation_flags(0x08000000) // CREATE_NO_WINDOW
+                .spawn()
+                .map_err(|e| AppError::Other(format!("{action}失败: {e}")))?;
+        }
+        Ok(())
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut cmd = tokio::process::Command::new("open");
+        if reveal {
+            cmd.arg("-R").arg(&path_str);
+        } else {
+            cmd.arg(&path_str);
+        }
+        cmd.spawn()
+            .map_err(|e| AppError::Other(format!("{action}失败: {e}")))?;
+        Ok(())
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let target = if reveal {
+            path.parent()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or(path_str)
+        } else {
+            path_str
+        };
+        tokio::process::Command::new("xdg-open")
+            .arg(target)
+            .spawn()
+            .map_err(|e| AppError::Other(format!("{action}失败: {e}")))?;
+        Ok(())
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        let _ = path_str;
+        Err(AppError::Other(format!("当前系统不支持{action}")))
+    }
+}

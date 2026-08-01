@@ -119,12 +119,13 @@ pub fn ingest_file(paths: &LibraryPaths, db: &Database, source: &Path) -> AppRes
 ///
 /// 与 `ingest_file` 的区别：**不做 pHash 去重**——生成的图即便彼此相似（迭代修改的各版）
 /// 也应各自保留，去重会让修订版被当重复吞掉；也不算 pHash（生成图不需要采重去重）。
-/// `source` 标 `"codex"` 便于在库里区分 / 建智能文件夹。
+/// `source_tag` 标记生成来源（`"codex"` / `"jimeng"`），落 `assets.source` 便于在库里区分 / 建智能文件夹。
 pub fn ingest_generated(
     paths: &LibraryPaths,
     db: &Database,
     source: &Path,
     session_id: Option<&str>,
+    source_tag: &str,
 ) -> AppResult<Asset> {
     let meta = media::probe::probe(source)?;
     let id = Ulid::new().to_string();
@@ -181,7 +182,7 @@ pub fn ingest_generated(
         phash: None,
         colors,
         rating: Some(0),
-        source: Some("codex".to_string()),
+        source: Some(source_tag.to_string()),
         source_url: None,
         folder_id: None,
         created_at: Some(now),
@@ -239,6 +240,8 @@ pub fn ingest_dir(paths: &LibraryPaths, db: &Database, dir: &Path) -> AppResult<
     Ok(assets)
 }
 
+/// 浏览器扩展已经在浏览器登录态内取到图片字节；桌面端只负责落临时文件并走标准入库。
+/// 这条路径避免桌面端二次下载丢失 Cookie / 授权头 / 页面会话。
 const MAX_DOWNLOAD_BYTES: u64 = 50 * 1024 * 1024;
 
 pub fn download_client() -> Result<reqwest::Client, reqwest::Error> {
@@ -524,7 +527,8 @@ mod tests {
     use super::*;
     use crate::core::paths::LibraryPaths;
     use crate::db::Database;
-    use image::{ImageBuffer, Rgb};
+    use image::{DynamicImage, ImageBuffer, ImageFormat, Rgb};
+    use std::io::Cursor;
     use ulid::Ulid;
 
     struct Tmp {
@@ -560,6 +564,77 @@ mod tests {
             ])
         });
         img.save(path).unwrap();
+    }
+
+    fn png_bytes(w: u32, h: u32, rgb: [u8; 3]) -> Vec<u8> {
+        let image = DynamicImage::ImageRgb8(ImageBuffer::from_pixel(w, h, Rgb(rgb)));
+        let mut bytes = Cursor::new(Vec::new());
+        image.write_to(&mut bytes, ImageFormat::Png).unwrap();
+        bytes.into_inner()
+    }
+
+    #[test]
+    fn uploaded_bytes_use_real_format_and_extension_source() {
+        let (_tmp, paths, db) = setup();
+        let bytes = png_bytes(32, 24, [12, 34, 56]);
+
+        let asset = ingest_from_bytes(
+            &paths,
+            &db,
+            &bytes,
+            "https://example.com/image-without-extension",
+            Some("claimed.webp"),
+            Some("image/webp"),
+        )
+        .unwrap();
+
+        assert_eq!(asset.ext.as_deref(), Some("png"));
+        assert_eq!(asset.width, Some(32));
+        assert_eq!(asset.height, Some(24));
+        assert_eq!(asset.source.as_deref(), Some("extension"));
+        assert_eq!(
+            asset.source_url.as_deref(),
+            Some("https://example.com/image-without-extension")
+        );
+        assert!(asset
+            .store_path
+            .as_deref()
+            .is_some_and(|path| path.ends_with(".png")));
+        assert_eq!(db.count_assets(None).unwrap(), 1);
+    }
+
+    #[test]
+    fn uploaded_bytes_reject_empty_html_and_fake_svg() {
+        let (_tmp, paths, db) = setup();
+
+        assert!(ingest_from_bytes(
+            &paths,
+            &db,
+            &[],
+            "https://example.com/empty",
+            None,
+            Some("image/png"),
+        )
+        .is_err());
+        assert!(ingest_from_bytes(
+            &paths,
+            &db,
+            b"<!doctype html><title>login</title>",
+            "https://example.com/login",
+            Some("image.jpg"),
+            Some("text/html"),
+        )
+        .is_err());
+        assert!(ingest_from_bytes(
+            &paths,
+            &db,
+            b"not actually svg",
+            "https://example.com/fake.svg",
+            Some("fake.svg"),
+            Some("image/svg+xml"),
+        )
+        .is_err());
+        assert_eq!(db.count_assets(None).unwrap(), 0);
     }
 
     #[test]
@@ -699,8 +774,14 @@ mod tests {
         let asset = ingest_file(&paths, &db, &img_path).unwrap();
         let store = asset.store_path.clone().unwrap();
         let thumb = asset.thumb_path.clone().unwrap();
-        assert!(Path::new(&store).exists(), "store file should exist before delete");
-        assert!(Path::new(&thumb).exists(), "thumb file should exist before delete");
+        assert!(
+            Path::new(&store).exists(),
+            "store file should exist before delete"
+        );
+        assert!(
+            Path::new(&thumb).exists(),
+            "thumb file should exist before delete"
+        );
 
         db.delete_asset(&asset.id).unwrap();
 

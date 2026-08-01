@@ -2,6 +2,7 @@
 
 pub mod collect;
 pub mod codex;
+pub mod jimeng;
 pub mod library;
 pub mod projects;
 pub mod prompt;
