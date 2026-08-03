@@ -76,6 +76,15 @@ function resolveProvider() {
   return providerConfigured(primary) || !providerConfigured(fallback) ? primary : fallback;
 }
 
+function publicHttpsUrl(value) {
+  try {
+    const url = new URL(value || "");
+    return url.protocol === "https:" ? url.href : "";
+  } catch {
+    return "";
+  }
+}
+
 function publicConfig() {
   const provider = resolveProvider();
   const trial = trialSettings();
@@ -88,6 +97,7 @@ function publicConfig() {
     trialLimit: trial.perIpLimit,
     globalDailyLimit: trial.globalDailyLimit,
     trialDay: currentTrialDay(trial.timeZone),
+    windowsDownloadUrl: publicHttpsUrl(process.env.BOWERBIRD_WINDOWS_DOWNLOAD_URL),
   };
 }
 

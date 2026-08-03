@@ -21,6 +21,8 @@ services:
         value: Asia/Shanghai
       - key: BOWERBIRD_TRUST_PROXY
         value: "1"
+      - key: BOWERBIRD_WINDOWS_DOWNLOAD_URL
+        sync: false
       - key: VOLCENGINE_ARK_API_KEY
         sync: false
       - key: VOLCENGINE_SEEDREAM_MODEL

@@ -557,6 +557,8 @@ const providerStatus = document.getElementById("provider-status");
 const generatedImage = document.getElementById("generated-image");
 const windowAssetCount = document.getElementById("window-asset-count");
 const paneAssetCount = document.getElementById("pane-asset-count");
+const windowsDownload = document.getElementById("windows-download");
+const windowsDownloadNote = document.getElementById("windows-download-note");
 const DEMO_COMPLETED_KEY = "bowerbird.websiteDemoCompleted";
 let demoDailyLimit = 3;
 let demoCurrentDay = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(new Date());
@@ -649,6 +651,14 @@ function showGenerationMessage(title, detail, state = "ready") {
   providerStatus.hidden = !detail;
 }
 
+function applyDownloadConfig(url) {
+  if (typeof url !== "string" || !url.startsWith("https://")) return;
+  windowsDownload.href = url;
+  windowsDownload.removeAttribute("aria-disabled");
+  windowsDownload.classList.remove("is-disabled");
+  windowsDownloadNote.textContent = "Windows x64 · 免费 Beta";
+}
+
 async function loadImageService() {
   if (window.location.protocol === "file:") {
     showGenerationMessage("当前是静态预览", "运行 pnpm --filter @bowerbird/website dev 后即可真实生成");
@@ -660,6 +670,7 @@ async function loadImageService() {
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || "生成服务不可用");
     imageService = payload;
+    applyDownloadConfig(payload.windowsDownloadUrl);
     demoDailyLimit = Number.isFinite(payload.trialLimit) ? payload.trialLimit : 3;
     demoCurrentDay = payload.trialDay || demoCurrentDay;
     if (hasCompletedDemo()) {
