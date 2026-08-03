@@ -1,6 +1,7 @@
 packages:
   - "apps/*"
   - "packages/*"
+  - "website"
 
 # 允许 esbuild 跑 postinstall（下载平台二进制）；其余仍按 pnpm 默认拦截
 allowBuilds:

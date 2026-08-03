@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: bowerbird-demo
+    runtime: node
+    plan: free
+    rootDir: website
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /healthz
+    autoDeployTrigger: commit
+    envVars:
+      - key: BOWERBIRD_IMAGE_REGION
+        value: cn
+      - key: BOWERBIRD_IMAGE_PROVIDER
+        value: auto
+      - key: BOWERBIRD_GENERATION_LIMIT
+        value: "3"
+      - key: BOWERBIRD_GLOBAL_DAILY_LIMIT
+        value: "100"
+      - key: BOWERBIRD_TRIAL_TIME_ZONE
+        value: Asia/Shanghai
+      - key: BOWERBIRD_TRUST_PROXY
+        value: "1"
+      - key: VOLCENGINE_ARK_API_KEY
+        sync: false
+      - key: VOLCENGINE_SEEDREAM_MODEL
+        value: doubao-seedream-5-0-260128
+      - key: VOLCENGINE_SEEDREAM_SIZE
+        value: 2K
