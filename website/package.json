@@ -5,9 +5,9 @@
   "type": "module",
   "scripts": {
     "bundle:file": "vite build --config vite.file.config.js",
-    "dev": "pnpm run bundle:file && node server.mjs --root .",
-    "dev:vite": "pnpm run bundle:file && vite --host 127.0.0.1",
-    "build": "pnpm run bundle:file && vite build",
+    "dev": "npm run bundle:file && node server.mjs --root .",
+    "dev:vite": "npm run bundle:file && vite --host 127.0.0.1",
+    "build": "npm run bundle:file && vite build",
     "preview": "node server.mjs --root dist",
     "start": "node server.mjs --root dist"
   },
