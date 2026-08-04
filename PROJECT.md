@@ -25,13 +25,15 @@
 
 ## 目前进展
 
-> 更新时间：2026-08-01
+> 更新时间：2026-08-04
 
 **当前阶段：1.0 功能路径打通 + v1 范围扩展到生成（⑥）+ 创作板 UI 已实现（2026-07-18 重写为 ProseMirror）+ codex CLI 隐形（2026-07-29，首启一键安装/OAuth 登录，用户不碰终端）+ 扩展小白化（2026-07-29，引导 + 心跳 + 状态指示器 + 随包内嵌）+ 项目 Workspace（2026-07-30，全局中央库之上的多对多隔离视图）+ 统一环境状态 Onboarding（2026-07-31，一级三卡片总览 + 二级 forceOpen 跳转，自 mac 最新提交语义移植）+ 自定义素材库位置与完整迁移（2026-08-01）+ 图片右键菜单（2026-08-01，打开所在文件夹 + 删除三选项与「删除项目」对齐）。** 详情页「反推」真正看图（codex CLI + gpt-5.5，ChatGPT 订阅，绕过 API quota）；FTS5 文件名搜索可用；**创作板（真实 prompt 文本编辑器 + @ 选图）已落地**（[CreationBoard.tsx](apps/desktop/src/components/CreationBoard.tsx)）；**生成（⑥）纳入 v1**，已由 codex imagegen 端到端跑通。
 
 **源码树（按开发计划 §7）：** `apps/desktop/{src, src-tauri}`、`apps/extension/`、`packages/shared/`。常用命令：`pnpm install`、`pnpm tauri dev`、`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml`。
 
 **已完成：**
+- **官网部署 Render + launch 视频本地化 + pnpm 构建统一（2026-08-04）**：官网正式部署到 Render（[render.yaml](render.yaml) Blueprint，`runtime: node` free plan、rootDir `website`，push 到 **`codex/render-deploy`** 分支自动部署，非 main/dev/mac）。① **构建统一 pnpm**：原 `npm ci && npm run build` 改为 `npm i -g pnpm@11.10.0 --prefix $HOME/.npm-global && $HOME/.npm-global/bin/pnpm install --frozen-lockfile && pnpm build`，本地 pnpm workspace 与 Render 同一套包管理器，消除「为给 Render 生成 `package-lock.json` 而在 website 跑 `npm install` 破坏本地 node_modules」的冲突（详见踩坑）；删 `website/package-lock.json`，[website/package.json](website/package.json) 脚本内 `npm run` 全改 `pnpm run`。② **launch 视频本地部署**：首屏 hero 下方加入产品宣传片——原挂 R2 外链 `r2.dev` 直连（实测国内 ~23KB/s 极慢、且 `r2.dev` 子域不经边缘缓存），改为 [website/assets/Bowerbird-launch-video/](website/assets/Bowerbird-launch-video/) 本地原片（16.8M）+ poster 封面，经 [server.mjs](website/server.mjs) 同源伺服（已支持 MP4 Range `206 Partial Content`，进度条可拖），与现有 COLLECT/CREATE 两个 demo 视频一致；dist 64M ≪ Render free 512MB 磁盘。③ **首屏与下载按钮**：hero 下载按钮正下方放视频容器（创作板 hatch-band 之上）；「MADE FOR REAL WORK」与 FAQ 上方各加 hatch-band 分割；底部下载区删掉「下载地址配置中」小字、恢复可点按钮（默认 `#download`，配置 `BOWERBIRD_WINDOWS_DOWNLOAD_URL` 后 [server.mjs](website/server.mjs) 仍实时接管 href）。本地 `pnpm --filter @bowerbird/website build` 验证通过；Render 部署实测上线。
+- **官网试用创作板接入真实生图（2026-08-03）**：[`website/`](website/) 的首屏创作板新增服务端 `/api/generate`，会把编辑器序列化的真实 prompt 与最多 8 张本地演示参考图一起发送给图像 provider；国内默认 Seedream 5.0 Lite（火山方舟），海外默认 FLUX.2 Klein 9B（BFL），可由服务端环境变量切换。API Key 只读 `website/.env.local`、不进入浏览器 bundle；含参考图白名单、64 KiB 请求上限、每 IP 每自然日 3 次 + 全站每日 100 次的双层试用限流与上游超时。官网不展示编辑器内核名，也不提供生成图下载按钮；成功后右侧呈现大图展示创作实力，同时把结果作为「AI 新作 · 已入库」卡片加入左侧素材库，演示 Bowerbird 的生成→入库闭环；当天第 3 次后隐藏生成按钮，状态区直接展示下载 CTA。首屏不再明文展示或提供复制实际发送 Prompt，改用类似 ComfyUI 的动态节点图表达「参考图 → 所选维度 → 生成图」：图片作为来源分组，每个维度是独立节点、独立输出端口与独立连线，生成完成后输出节点同步显示入库结果；实际 prompt 仅在点击生成时由内部序列化提交。试用区 8 张占位 SVG 已换成 `D:\Tools\BowerbirdLibrary\images\2026\08` 的 8 张 JPG，并同步图名与维度描述；工作流 01/03 改用 `COLLECT-DEMO.mp4` / `CREATE-DEMO.mp4` 静音自动播放、循环与元数据预载，本地服务支持 MP4 Range 分段请求，02 左侧分析视觉字号统一 +2px。此为**官网独立 HTTP 服务**，不改变桌面端 codex / dreamina CLI provider 架构。
 - **Phase 0（脚手架）**：monorepo（pnpm workspace）、Tauri 2 + React 18 + Vite + Tailwind + Zustand、`rusqlite`(bundled, FTS5) + 迁移（§4.2 全表）、`CodexProvider` trait + Mock + ClaudeCode（默认禁用）、SQLite 任务队列骨架。
 - **Phase 1（P0 MVP）**：导入流水线（probe → 缩略图 → dHash → 去重 → 入库）、资源库 CRUD、瀑布流（CSS columns + 缩略图懒加载）、侧栏、浏览器扩展采集（MV3 + WS `127.0.0.1:39871` + 下载入库）。
 - **小红书采集 P0（2026-07-14）**：扩展为 `xiaohongshu.com` 增加结构化适配——发现页读 `feed.feeds` 只采笔记封面（滚动新增卡片由笔记链接内主图补齐，排除头像/装饰），图文详情读 `noteDetailMap.note.imageList` 采完整有序图片；视频笔记仅采封面，不读取 Cookie、不调用私有 API。扩展由「每图一个 WS」改 `save_batch` 单连接批次协议，逐项携带 `media_url`（下载）+ 笔记 `source_url`（追溯）并返回逐项结果；桌面下载器复用 `reqwest::Client`，带 UA/Referer、按文件魔数/Content-Type 识别 WebP 等真实格式、ULID 安全临时文件、30s 超时/50 MiB 上限/最多 5 次安全重定向，并拒绝本机与常见内网直连。相关 [content.js](apps/extension/content.js)、[ws_server.rs](apps/desktop/src-tauri/src/collect/ws_server.rs)、[ingest.rs](apps/desktop/src-tauri/src/core/ingest.rs)、[扩展 README](apps/extension/README.md)。
@@ -179,6 +181,10 @@
 
 20. **图片删除统一走三模式，与「删除项目」语义对齐（2026-08-01）**：单素材删除（右键菜单）与删除项目共用同一套语义——`keep`=仅移出当前项目（素材留全局）；`move_out`=移出园丁鸟（独占素材文件移回 `origin_path` 原始位置并删资产行；共享素材只移出当前项目成员、资产行与库内文件保留，原始文件不在时如实报告失败）；`delete`=从全局及所有项目物理删除（红色入口 + 手输「确认删除」口令，避开 WKWebView 对 `window.confirm` 的拦截）。删除项目三选项（约定 18）与右键三模式只差在粒度（项目 vs 单素材）与「move_out 时独占判定」的覆盖范围（项目内 vs 当前项目视角），核心 `move_file` / `move_destination` 复用。**删资产前必须先 `drop(conn)` 释放锁再走 `delete_asset`**（`delete_asset` 内部会再拿锁 + 文件 IO，锁内调用即死锁）。
 
+21. **官网试用创作板的生图 provider 独立于桌面端（2026-08-02）**：官网运行在浏览器，禁止把 API Key 写进 `index.html` / `app.js` / bundle；真实生成统一经 [`website/server.mjs`](website/server.mjs) 的同源服务端代理。`BOWERBIRD_IMAGE_REGION=cn` 时首选 Seedream 5.0 Lite，其他地区首选 FLUX.2 Klein 9B；`BOWERBIRD_IMAGE_PROVIDER` 可显式覆盖。编辑器只提交 prompt 与演示图 ID，服务端按固定白名单读取参考图并转 data URI。官网试用的产品目标是**演示生成后自动入库**，不是提供免费生图：前端不提供下载按钮；服务端默认每 IP 每自然日 3 次、全站 100 次/日（均可由环境变量收紧），第 3 次后前端隐藏生成按钮并展示下载 CTA。首屏只用动态节点图解释参考图、维度与输出图的关系，不明文展示或复制最终 prompt；图作为来源分组，组内每个维度必须拥有独立节点、端口和到输出图的连线，未选维度的纯参考图以「整图参考」节点接线；但底层序列化与 API 请求保持真实 prompt，不因可视化改变生成语义。内存计数服务重启后清空，公开部署仍应叠加 CDN/WAF 限流。官网 HTTP provider 只服务公开试用页，**不推翻桌面端“本地 CLI 子进程”约定**。
+
+22. **官网本地与 Render 统一 pnpm，部署在 codex/render-deploy 分支（2026-08-04）**：[`website/`](website/) 是 pnpm workspace 成员（锁文件用根 `pnpm-lock.yaml`），本地与 Render 必须用同一套包管理器（pnpm@11.10.0，根 [package.json](package.json) 的 `packageManager` 字段），**禁止在 website 目录跑 `npm install`**——会生成 `package-lock.json` 并破坏 pnpm 的 `node_modules/.bin`（详见踩坑）。Render Blueprint（[render.yaml](render.yaml)）push 到 **`codex/render-deploy`** 分支触发自动部署（这是 Render 实际监听的分支，不是 main/dev/mac）。Render 构建环境 `/usr/lib/node_modules` 与 `/usr/bin` 只读，`corepack enable` 与 `npm i -g` 都失败，buildCommand 必须把 pnpm 装到用户可写目录 `$HOME/.npm-global`（`npm i -g pnpm@11.10.0 --prefix $HOME/.npm-global`）并用绝对路径调用（详见踩坑）。官网静态资源（含 mp4）经 [server.mjs](website/server.mjs) 同源伺服，已支持 MP4 Range 分段请求（`206`），大视频可拖动进度条。
+
 
 ---
 
@@ -194,6 +200,12 @@
 - 解决 / 绕过：
 - 相关文件：
 ```
+
+### 官网 ProseMirror 光标偶发跳到下一行开头（2026-08-02）
+- 现象：试用创作板中点击正文、再插入素材或维度时，光标偶发跳到下一视觉行开头。
+- 根因：正文点击事件冒泡到 `editor-wrap` 后被重复 `view.focus()`，覆盖 ProseMirror 刚根据点击坐标计算的选区；素材/维度 `<button>` 的 `mousedown` 又会先夺走编辑器焦点，形成第二处选区竞争。
+- 解决 / 绕过：正文内点击完全交给 ProseMirror 处理，外层只在真正空白区聚焦；素材网格与动态维度列表在鼠标左键 `mousedown` 时 `preventDefault()`，保留编辑器选区，同时不影响后续 `click` 插入和键盘操作。
+- 相关文件：[website/app.js](website/app.js)。
 
 ### cargo 运行即 dyld 崩溃（2026-07-05）
 - 现象：`cargo --version` 报 `dyld: Library not loaded: libllhttp.9.3.dylib`。
@@ -532,3 +544,17 @@
 - 解决：新增 [`open_dreamina_login`](apps/desktop/src-tauri/src/commands/jimeng.rs) 命令，**拉起真正的系统终端窗口**（Windows `cmd.exe /D /C start "" cmd.exe /K "dreamina login"`、macOS `osascript`→Terminal.app `do script`）跑 `dreamina login`——真 TTY 保证 dreamina 完整走完 OAuth + 写 token。对称 [`open_codex_session`](apps/desktop/src-tauri/src/commands/codex.rs)（codex「在终端打开会话」已验证同模式）。[`DreaminaLoginDialog`](apps/desktop/src/components/DreaminaLoginDialog.tsx) 主按钮「打开终端登录」调该命令 + 复制命令降为兜底。端到端实测通过。**未采用的备选**：方案 B（`--headless` + `checklogin` 纯 in-app，UX 更好不弹终端）——headless 不依赖 TTY、机制可行（SKILL.md 证实 device flow 打印 verification_uri/user_code/device_code 后退出，checklogin 跨进程补完写 token），但 device_code 时序敏感（2026-07-24 踩过「过期」）+ headless 输出格式 / checklogin 在 app spawn 写 token 未实测，且即梦登录一次性、方案 A 已够用；保留 dead 的 `dreamina_login`/`dreamina_check_login` 命令备方案 B 复用。
 - 教训：① CLI 的交互式 OAuth（渲染二维码/链接 + 等 authorization）常依赖 `isatty(stdout)`，GUI app `Stdio::piped()` 会破坏 TTY 身份触发早退——先查 isatty，别往 console/credential store/DPAPI 方向猜。② 命令行验证通≠app spawn 通；登录类操作若必须交互式，拉起一个真终端窗口（真 TTY）是最可靠的 app 内方案。③ 实测 CLI OAuth 时优先翻 `~/.dreamina_cli/logs/`，进程「持续 poll 到完成」vs「早退」一眼可辨。
 - 相关文件：[commands/jimeng.rs](apps/desktop/src-tauri/src/commands/jimeng.rs)（`open_dreamina_login`）、[DreaminaLoginDialog.tsx](apps/desktop/src/components/DreaminaLoginDialog.tsx)、[commands/codex.rs](apps/desktop/src-tauri/src/commands/codex.rs)（`open_codex_session` 模板）。
+
+### website 跑 npm install 破坏 pnpm 的 node_modules/.bin（2026-08-04）
+- 现象：`pnpm --filter @bowerbird/website dev` 报 `'vite' 不是内部或外部命令`；查 `website/node_modules/.bin` 目录不存在，但 vite/prosemirror 等软链还在（指向根 `.pnpm` store）。
+- 根因：项目是 pnpm workspace（`pnpm-lock.yaml` + `pnpm-workspace.yaml`），但 `website/` 下出现 `package-lock.json`（npm 产物）——为给 Render 的 `npm ci` 生成锁文件，曾在 website 目录跑过 `npm install`。npm 接管 node_modules 时未正确重建 pnpm 的 `.bin` shim 目录（软链还在、`.bin` 被清），pnpm 又认为依赖「已是最新」不主动重建（`pnpm install` / `--force` 都提示 up to date、无效）。
+- 解决：删除残缺的 `website/node_modules` 后 `pnpm install` 重建 `.bin`；并从根本上让 Render 也用 pnpm（删 `package-lock.json`、[render.yaml](render.yaml) 改 pnpm 构建），消除「为 Render 生成 npm lock 而本地跑 npm」的诱因。
+- 教训：pnpm workspace 项目里任何子包都不要跑 `npm install`——会生成 `package-lock.json` + 破坏 pnpm 的 node_modules 结构。若必须给 npm 环境提供锁文件，用 `npm install --package-lock-only`（只生成 lock 不动 node_modules）。
+- 相关文件：[website/package.json](website/package.json)、[render.yaml](render.yaml)。
+
+### Render 构建环境 /usr 只读，corepack enable 与 npm i -g 都失败（2026-08-04）
+- 现象：Render 部署官网，buildCommand 依次试 `corepack enable && pnpm install` 与 `npm i -g pnpm@11.10.0 && pnpm install` 都失败：① corepack 报 `EROFS: read-only file system, unlink '/usr/bin/pnpm'`；② npm 报 `EROFS ... rename '/usr/lib/node_modules/pnpm'`。
+- 根因：Render 的 Node 运行时把整个 `/usr`（预装 Node 全局目录 `/usr/lib/node_modules` + `/usr/bin`）挂成只读。`corepack enable` 要在 `/usr/bin` 创建 pnpm shim、`npm i -g` 要写 `/usr/lib/node_modules`，两者撞同一堵墙。`COREPACK_HOME` 环境变量只重定向 corepack 的包缓存目录、**不改 shim 安装位置**，故无效。
+- 解决：buildCommand 把 pnpm 装到用户主目录（POSIX 保证可写）并用绝对路径调用：`npm i -g pnpm@11.10.0 --prefix $HOME/.npm-global && $HOME/.npm-global/bin/pnpm install --frozen-lockfile && pnpm build`。`--prefix` 让 npm 全局装到 `$HOME/.npm-global/{lib/node_modules,bin}`，绝对路径调用不依赖 PATH、不碰 `/usr`。备选（未采用）：`npx pnpm@11.10.0 ...`（npx 下载到用户缓存 `~/.npm/_npx`，同样可写）。
+- 教训：PaaS 构建环境（Render / Heroku 类）常把系统 Node 目录设只读，任何全局安装（`corepack enable` / `npm i -g`）都要指定可写 `--prefix` 或用 `npx`（下载到用户缓存）。`COREPACK_HOME` 不解决 shim 写系统目录的问题。
+- 相关文件：[render.yaml](render.yaml)。
