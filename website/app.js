@@ -558,7 +558,6 @@ const generatedImage = document.getElementById("generated-image");
 const windowAssetCount = document.getElementById("window-asset-count");
 const paneAssetCount = document.getElementById("pane-asset-count");
 const windowsDownload = document.getElementById("windows-download");
-const windowsDownloadNote = document.getElementById("windows-download-note");
 const DEMO_COMPLETED_KEY = "bowerbird.websiteDemoCompleted";
 let demoDailyLimit = 3;
 let demoCurrentDay = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(new Date());
@@ -656,7 +655,6 @@ function applyDownloadConfig(url) {
   windowsDownload.href = url;
   windowsDownload.removeAttribute("aria-disabled");
   windowsDownload.classList.remove("is-disabled");
-  windowsDownloadNote.textContent = "Windows x64 · 免费 Beta";
 }
 
 async function loadImageService() {

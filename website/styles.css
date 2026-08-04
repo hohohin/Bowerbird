@@ -63,6 +63,8 @@ img { display: block; max-width: 100%; }
 .hatch-band.compact { height: 52px; border-top: 1px solid var(--line); }
 
 .product-stage { padding-top: 64px; padding-bottom: 28px; }
+.launch-video-frame { padding-top: 64px; padding-bottom: 64px; margin: 0; }
+.launch-video-frame video { width: 100%; height: auto; display: block; border: 1px solid #353232; border-radius: 16px; background: #141212; box-shadow: 0 32px 90px rgba(0,0,0,.4); }
 .app-window { overflow: hidden; border: 1px solid #353232; border-radius: 16px; background: #141212; box-shadow: 0 32px 90px rgba(0,0,0,.4); }
 .window-bar { height: 56px; padding: 0 18px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); background: #191717; }
 .window-brand { display: flex; align-items: center; gap: 10px; font-size: 12px; }
