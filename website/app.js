@@ -642,6 +642,7 @@ function addGeneratedAsset(imageUrl) {
 }
 
 function showGenerationMessage(title, detail, state = "ready") {
+  if (!generationResult) return;
   generationResult.classList.toggle("is-loading", state === "loading");
   generationResult.classList.toggle("is-error", state === "error");
   generationPlaceholder.hidden = false;
@@ -703,7 +704,7 @@ generateButton.addEventListener("click", async () => {
 
   generateButton.disabled = true;
   generateButton.querySelector("span").textContent = "生成中…";
-  generatedImage.hidden = true;
+  if (generatedImage) generatedImage.hidden = true;
   graphOutputImage = "";
   graphOutputState = "loading";
   renderCreationGraph();
@@ -736,8 +737,10 @@ generateButton.addEventListener("click", async () => {
     if (!payload.image) throw new Error("服务未返回图片");
 
     addGeneratedAsset(payload.image);
-    generatedImage.src = payload.image;
-    generatedImage.hidden = false;
+    if (generatedImage) {
+      generatedImage.src = payload.image;
+      generatedImage.hidden = false;
+    }
     graphOutputImage = payload.image;
     graphOutputState = "complete";
     renderCreationGraph();
@@ -755,7 +758,7 @@ generateButton.addEventListener("click", async () => {
     if (!hasCompletedDemo()) {
       generateButton.hidden = false;
       generateButton.disabled = false;
-      generateButton.querySelector("span").textContent = "试用一次";
+      generateButton.querySelector("span").textContent = "创作图片";
     }
   }
 });
