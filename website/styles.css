@@ -161,6 +161,10 @@ kbd { padding: 1px 5px; border: 1px solid var(--line); border-radius: 4px; backg
 .generate-button:disabled { opacity: .56; cursor: wait; }
 .generate-button[data-state="complete"]:disabled { cursor: not-allowed; }
 .generate-button b { font-size: 13px; font-weight: 400; }
+.generation-result { margin-top: 12px; border-radius: 10px; overflow: hidden; }
+.generation-result:has(img:not([hidden])) { border: 1px solid var(--line); background: #0b0a0c; }
+.generation-result > img { width: 100%; max-height: 440px; display: block; object-fit: contain; background: #0b0a0c; }
+.generation-result > img[hidden] { display: none; }
 
 .ticker { width: 100%; overflow: hidden; padding: 17px 0; border-block: 1px solid var(--line); background: var(--blue); color: #fff; font-size: 12px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; white-space: nowrap; }
 .ticker-track { width: max-content; display: flex; animation: ticker 24s linear infinite; will-change: transform; }

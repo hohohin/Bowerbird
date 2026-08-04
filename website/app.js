@@ -642,7 +642,7 @@ function addGeneratedAsset(imageUrl) {
 }
 
 function showGenerationMessage(title, detail, state = "ready") {
-  if (!generationResult) return;
+  if (!generationStatus) return;
   generationResult.classList.toggle("is-loading", state === "loading");
   generationResult.classList.toggle("is-error", state === "error");
   generationPlaceholder.hidden = false;
@@ -704,7 +704,7 @@ generateButton.addEventListener("click", async () => {
 
   generateButton.disabled = true;
   generateButton.querySelector("span").textContent = "生成中…";
-  if (generatedImage) generatedImage.hidden = true;
+  generatedImage.hidden = true;
   graphOutputImage = "";
   graphOutputState = "loading";
   renderCreationGraph();
@@ -737,10 +737,8 @@ generateButton.addEventListener("click", async () => {
     if (!payload.image) throw new Error("服务未返回图片");
 
     addGeneratedAsset(payload.image);
-    if (generatedImage) {
-      generatedImage.src = payload.image;
-      generatedImage.hidden = false;
-    }
+    generatedImage.src = payload.image;
+    generatedImage.hidden = false;
     graphOutputImage = payload.image;
     graphOutputState = "complete";
     renderCreationGraph();
