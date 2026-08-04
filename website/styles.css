@@ -226,7 +226,10 @@ kbd { padding: 1px 5px; border: 1px solid var(--line); border-radius: 4px; backg
 .section-title { min-height: 430px; padding-top: 86px; padding-bottom: 74px; border-bottom: 1px solid var(--line); }
 .section-title h2 { max-width: 760px; }
 .section-lead { max-width: 620px; margin: 0 0 0 auto; color: var(--muted); font-size: 15px; line-height: 1.75; }
-.coming-soon { min-height: 360px; padding: 86px 24px 74px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; text-align: center; border-bottom: 1px solid var(--line); }
+.coming-soon { position: relative; min-height: 360px; padding: 86px 24px 74px; display: flex; align-items: center; justify-content: center; border-bottom: 1px solid var(--line); overflow: hidden; }
+.coming-soon-bg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.coming-soon-overlay { position: absolute; inset: 0; background: rgba(16,14,14,.72); }
+.coming-soon-content { position: relative; z-index: 1; display: flex; flex-direction: column; align-items: center; gap: 14px; text-align: center; }
 .coming-soon h2 { max-width: 760px; margin: 0; }
 .coming-soon p { max-width: 560px; margin: 0; color: var(--muted); font-size: 15px; line-height: 1.75; }
 .feature-grid { display: grid; grid-template-columns: repeat(3,1fr); }
