@@ -140,15 +140,42 @@ function validateGenerationInput(input) {
   if (!Array.isArray(input.referenceIds)) throw httpError(400, "referenceIds 必须是数组");
   const referenceIds = [...new Set(input.referenceIds)];
   if (referenceIds.length > 8) throw httpError(400, "最多支持 8 张参考图");
-  if (referenceIds.some((id) => typeof id !== "string" || !ASSET_FILES.has(id))) {
+  const uploads = normalizeUploads(input.referenceUploads);
+  for (const id of referenceIds) {
+    if (typeof id !== "string") throw httpError(400, "包含未知参考图");
+    if (ASSET_FILES.has(id)) continue; // 预设图
+    if (uploads.has(id)) { validateUploadDataUri(uploads.get(id)); continue; } // 用户上传图
     throw httpError(400, "包含未知参考图");
   }
-  return { prompt, referenceIds };
+  return { prompt, referenceIds, uploads };
 }
 
 function positiveNumber(value, fallback) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+const GENERATE_BODY_LIMIT = Math.floor(positiveNumber(process.env.BOWERBIRD_GENERATE_BODY_LIMIT, 20 * 1024 * 1024));
+const UPLOAD_MAX_BYTES = 4 * 1024 * 1024;
+const UPLOAD_DATAURI_RE = /^data:image\/(jpeg|jpg|png|webp);base64,([A-Za-z0-9+/=]+)$/;
+
+// 用户上传图：{id,dataUri}[] -> Map<id,dataUri>（仅归一，不校验内容）
+function normalizeUploads(input) {
+  const map = new Map();
+  if (!Array.isArray(input)) return map;
+  for (const item of input) {
+    if (!item || typeof item !== "object") continue;
+    const id = typeof item.id === "string" ? item.id : null;
+    const dataUri = typeof item.dataUri === "string" ? item.dataUri : null;
+    if (id && dataUri) map.set(id, dataUri);
+  }
+  return map;
+}
+
+function validateUploadDataUri(dataUri) {
+  const match = dataUri.match(UPLOAD_DATAURI_RE);
+  if (!match) throw httpError(400, "参考图格式无效");
+  if (Math.ceil((match[2].length * 3) / 4) > UPLOAD_MAX_BYTES) throw httpError(400, "参考图过大");
 }
 
 function trialSettings() {
@@ -203,11 +230,14 @@ function enforceRateLimit(request) {
   return { limit: perIpLimit, remaining: perIpLimit - ipUsed, day };
 }
 
-async function referenceDataUris(referenceIds) {
+async function referenceDataUris(referenceIds, uploads) {
   return Promise.all(
     referenceIds.map(async (id) => {
-      const bytes = await readFile(join(SCRIPT_DIR, "assets", "presets", ASSET_FILES.get(id)));
-      return `data:image/jpeg;base64,${bytes.toString("base64")}`;
+      if (ASSET_FILES.has(id)) {
+        const bytes = await readFile(join(SCRIPT_DIR, "assets", "presets", ASSET_FILES.get(id)));
+        return `data:image/jpeg;base64,${bytes.toString("base64")}`;
+      }
+      return uploads.get(id); // 用户上传图：已校验过的 dataUri 原样透传
     }),
   );
 }
@@ -294,9 +324,9 @@ async function handleGenerate(request, response) {
       : "BFL_API_KEY";
     throw httpError(503, `请先在 website/.env.local 配置 ${missing}`);
   }
-  const { prompt, referenceIds } = validateGenerationInput(await readJsonBody(request));
+  const { prompt, referenceIds, uploads } = validateGenerationInput(await readJsonBody(request, GENERATE_BODY_LIMIT));
   const trial = enforceRateLimit(request);
-  const references = await referenceDataUris(referenceIds);
+  const references = await referenceDataUris(referenceIds, uploads);
   const image = config.provider === "seedream"
     ? await generateWithSeedream(prompt, references)
     : await generateWithFlux(prompt, references);

@@ -1,0 +1,393 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#100e0e" />
+    <meta
+      name="description"
+      content="Bowerbird 是为 AI 图像创作而生的本地素材库与创作工作台：收集灵感、反推维度，在创作板里拼出下一张作品。"
+    />
+    <meta name="robots" content="noindex" />
+    <title>Bowerbird 试用版 — 可导入素材创作</title>
+    <link rel="icon" type="image/png" href="./assets/logo.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="header-inner">
+        <a class="brand" href="#top" aria-label="Bowerbird 首页">
+          <span class="brand-mark"><img src="./assets/logo.png" alt="" /></span>
+          <span>Bowerbird</span>
+        </a>
+        <button class="menu-toggle" id="menu-toggle" type="button" aria-expanded="false" aria-label="打开导航">
+          <span></span><span></span>
+        </button>
+        <nav class="site-nav" id="site-nav" aria-label="主导航">
+          <a href="#workflow">工作流</a>
+          <a href="#features">功能</a>
+          <a href="#projects">项目</a>
+          <a href="#use-cases">场景</a>
+          <a href="#faq">常见问题</a>
+          <a class="nav-download" href="#download">下载 Beta <span>↘</span></a>
+        </nav>
+      </div>
+    </header>
+
+    <main>
+      <section class="module hero" id="top">
+        <div class="center-guide" aria-hidden="true"></div>
+        <div class="hero-copy page-pad reveal">
+          <div class="hero-kicker"><span class="status-dot"></span> 公开 Beta · Windows · macOS 即将推出 · 本地优先</div>
+          <h1>把每一份灵感，<br /><span>变成下一张作品。</span></h1>
+          <div class="hero-bottom">
+            <p>Bowerbird 把散落的参考图变成可搜索、可拆解、可直接交给 AI 的创作资产。你只管选图与意图，提示词交给创作板。</p>
+            <div class="hero-actions">
+              <a class="button button-solid" href="#download">免费下载 <span>↘</span></a>
+              <a class="button button-ghost" href="#board-demo">试试创作板</a>
+            </div>
+          </div>
+        </div>
+
+        <div class="launch-video-frame page-pad reveal">
+          <video
+            src="./assets/Bowerbird-launch-video/Bowerbird-launch-video.mp4"
+            poster="./assets/Bowerbird-launch-video/Bowerbird-launch-video-封面.jpg"
+            aria-label="Bowerbird 产品宣传视频"
+            controls
+            playsinline
+            preload="metadata"
+          ></video>
+        </div>
+
+        <div class="hatch-band" aria-hidden="true"><span></span></div>
+
+        <div class="product-stage page-pad reveal" id="board-demo">
+          <div class="app-window">
+            <div class="window-bar">
+              <div class="window-brand"><span class="mini-logo">B</span><strong>灵感库</strong><small>全部素材 · <span id="window-asset-count">8</span></small></div>
+              <div class="window-status"><span></span> 创作板已就绪</div>
+            </div>
+
+            <div class="workspace">
+              <section class="asset-pane" aria-label="演示素材库">
+                <div class="pane-head">
+                  <div><small>01 / 选择素材</small><h2>点一张图，或导入你的素材。</h2></div>
+                  <div class="pane-actions">
+                    <button class="import-button" id="import-button" type="button">导入图片 <span>↗</span></button>
+                    <span class="pane-count"><span id="pane-asset-count">8</span> 张</span>
+                  </div>
+                </div>
+                <input type="file" id="import-input" accept="image/*" multiple hidden />
+                <div class="asset-grid" id="asset-grid">
+                  <button class="asset-card is-active" type="button" data-id="p1" aria-label="插入花影黑白猫">
+                    <img src="./assets/presets/p1.jpg" alt="花影黑白猫" /><span>花影黑白猫</span><i>01</i>
+                  </button>
+                  <button class="asset-card" type="button" data-id="p2" aria-label="插入桃粉线描猫">
+                    <img src="./assets/presets/p2.jpg" alt="桃粉线描猫" /><span>桃粉线描猫</span><i>02</i>
+                  </button>
+                  <button class="asset-card" type="button" data-id="p3" aria-label="插入午后茶歇">
+                    <img src="./assets/presets/p3.jpg" alt="午后茶歇" /><span>午后茶歇</span><i>03</i>
+                  </button>
+                  <button class="asset-card" type="button" data-id="p4" aria-label="插入红调咖啡馆">
+                    <img src="./assets/presets/p4.jpg" alt="红调咖啡馆" /><span>红调咖啡馆</span><i>04</i>
+                  </button>
+                  <button class="asset-card" type="button" data-id="p5" aria-label="插入户外茶饮">
+                    <img src="./assets/presets/p5.jpg" alt="户外茶饮" /><span>户外茶饮</span><i>05</i>
+                  </button>
+                  <button class="asset-card" type="button" data-id="p6" aria-label="插入夏日旋转">
+                    <img src="./assets/presets/p6.jpg" alt="夏日旋转" /><span>夏日旋转</span><i>06</i>
+                  </button>
+                  <button class="asset-card" type="button" data-id="p7" aria-label="插入玻璃兰花">
+                    <img src="./assets/presets/p7.jpg" alt="玻璃兰花" /><span>玻璃兰花</span><i>07</i>
+                  </button>
+                  <button class="asset-card" type="button" data-id="p8" aria-label="插入粉色柚光">
+                    <img src="./assets/presets/p8.jpg" alt="粉色柚光" /><span>粉色柚光</span><i>08</i>
+                  </button>
+                </div>
+              </section>
+
+              <section class="board-pane" aria-label="可交互创作板">
+                <div class="pane-head">
+                  <div><small>02 / 组装意图</small><h2>像聊天一样写，素材就是词。</h2></div>
+                </div>
+                <p class="editor-help">点击左侧图片、用「导入图片」或拖拽图片到瀑布流，也可输入 <kbd>@图名</kbd> 后按空格。图片和维度都是可撤销、可原子删除的节点。</p>
+                <div class="editor-wrap" id="editor-wrap">
+                  <div id="board-editor" aria-label="创作板编辑器"></div>
+                  <div class="editor-meta"><span id="editor-state">光标已就绪</span><span><kbd>⌘/Ctrl</kbd> + <kbd>Z</kbd> 撤销</span></div>
+                </div>
+
+                <div class="dimension-panel">
+                  <div class="dimension-heading">
+                    <span>03 / 选择来自该图反推的维度</span>
+                    <strong id="active-asset-name">花影黑白猫</strong>
+                  </div>
+                  <div class="dimension-list" id="dimension-list"></div>
+                </div>
+
+                <div class="creation-graph-panel">
+                  <div class="graph-heading">
+                    <div><small>04 / 生成关系图</small><strong>节点随创作板实时更新</strong></div>
+                    <span id="graph-summary">2 图 · 3 维度</span>
+                  </div>
+                  <div class="creation-graph" id="creation-graph" role="img" aria-label="参考图与所选维度共同生成新图">
+                    <svg class="graph-connections" id="graph-connections" aria-hidden="true"></svg>
+                    <div class="graph-source-list" id="graph-sources"></div>
+                    <article class="graph-node graph-output-node" id="graph-output-node">
+                      <span class="graph-handle graph-output-handle" aria-hidden="true"></span>
+                      <span class="graph-node-kicker">IMAGE OUTPUT</span>
+                      <div class="graph-output-preview">
+                        <span id="graph-output-mark">✦</span>
+                        <img id="graph-output-image" alt="节点图中的生成结果" hidden />
+                      </div>
+                      <strong id="graph-output-title">生成新图</strong>
+                      <small id="graph-output-meta">等待节点输入</small>
+                    </article>
+                  </div>
+                  <div class="graph-actions">
+                    <span><i></i>参考图与维度共同决定输出</span>
+                    <button class="generate-button" id="generate-image" type="button"><span>创作图片</span><b>↗</b></button>
+                  </div>
+                </div>
+
+                <div class="generation-result" id="generation-result" aria-live="polite">
+                  <img id="generated-image" alt="Bowerbird 创作板生成的大图结果" hidden />
+                </div>
+              </section>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="ticker" aria-label="核心能力">
+        <div class="ticker-track">
+          <div class="ticker-sequence">
+            <span>自由采集</span><i>✦</i>
+            <span>不写提示词</span><i>✦</i>
+            <span>瀑布流素材库</span><i>✦</i>
+            <span>统一风格</span><i>✦</i>
+            <span>系统化反推</span><i>✦</i>
+          </div>
+          <div class="ticker-sequence" aria-hidden="true">
+            <span>自由采集</span><i>✦</i>
+            <span>不写提示词</span><i>✦</i>
+            <span>瀑布流素材库</span><i>✦</i>
+            <span>统一风格</span><i>✦</i>
+            <span>系统化反推</span><i>✦</i>
+          </div>
+        </div>
+      </section>
+
+      <section class="module workflow" id="workflow">
+        <div class="center-guide" aria-hidden="true"></div>
+        <article class="split-row reveal">
+          <div class="story-copy page-pad-side">
+            <span class="section-index">01 — COLLECT</span>
+            <h2>看到好图，<br />一键收进巢。</h2>
+            <p>浏览器扩展常驻网页。Pinterest、小红书、商品页里的灵感，连同来源链接一起进入本地素材库。</p>
+            <ul class="micro-list"><li>保留网页登录态</li><li>自动命名与归类</li><li>图片不上传 Bowerbird 云端</li></ul>
+          </div>
+          <div class="story-visual capture-visual">
+            <figure class="workflow-media-frame">
+              <video src="./assets/COLLECT-DEMO.mp4" aria-label="Bowerbird 浏览器采集演示" autoplay muted loop playsinline preload="metadata"></video>
+            </figure>
+          </div>
+        </article>
+
+        <div class="hatch-band compact" aria-hidden="true"><span></span></div>
+
+        <article class="split-row reverse reveal">
+          <div class="story-copy page-pad-side">
+            <span class="section-index">02 — REVERSE</span>
+            <h2>每张图，<br />都会开口说话。</h2>
+            <p>codex 真正看图，把构图、光影、色调、主体动作与氛围拆成结构化片段。它们不是标签，而是随时可复用的提示词零件。</p>
+            <ul class="micro-list"><li>动态识别全部维度</li><li>片段与原图永久绑定</li><li>结果可搜索、可编辑</li></ul>
+          </div>
+          <div class="story-visual analyse-visual">
+            <div class="analyse-image"><img src="./assets/presets/p2.jpg" alt="桃粉线描猫示意图" /><span>桃粉线描猫</span></div>
+            <div class="analyse-lines">
+              <div><span>构图</span><p>猫的背影居中，线条向外散开形成流动轮廓</p></div>
+              <div><span>光影</span><p>纯黑背景上的桃粉自发光线条，高反差边缘光</p></div>
+              <div><span>色调</span><p>黑色底面与荧光桃粉形成极简双色关系</p></div>
+              <div><span>氛围</span><p>神秘、俏皮，带数字霓虹与手绘涂鸦感</p></div>
+            </div>
+          </div>
+        </article>
+
+        <div class="hatch-band compact" aria-hidden="true"><span></span></div>
+
+        <article class="split-row reveal">
+          <div class="story-copy page-pad-side">
+            <span class="section-index">03 — CREATE</span>
+            <h2>不写提示词，<br />也能精确创作。</h2>
+            <p>自由写下意图，在任意光标处插入参考图，再选用它的维度。创作板自动展开真实 prompt，并把参考图一起交给 AI。</p>
+            <ul class="micro-list"><li>多参考图自由编排</li><li>Seedream / FLUX 自动选择</li><li>生成图自动回到素材库</li></ul>
+          </div>
+          <div class="story-visual create-visual">
+            <figure class="workflow-media-frame">
+              <video src="./assets/CREATE-DEMO.mp4" aria-label="Bowerbird 创作板生成与入库演示" autoplay muted loop playsinline preload="metadata"></video>
+            </figure>
+          </div>
+        </article>
+
+        <div class="hatch-band" aria-hidden="true"><span></span></div>
+        <div class="coming-soon reveal">
+          <video class="coming-soon-bg" src="./assets/Bowerbird-launch-video/Bowerbird-launch-video.mp4" poster="./assets/Bowerbird-launch-video/Bowerbird-launch-video-封面.jpg" autoplay muted loop playsinline preload="metadata" aria-hidden="true"></video>
+          <div class="coming-soon-overlay" aria-hidden="true"></div>
+          <div class="coming-soon-content">
+            <span class="section-index">VIDEO GENERATE · 开发中</span>
+            <h2>视频生成，即将推出</h2>
+            <p>本地化、项目化管理你的生成素材，提高生成一致性和管理效率。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="module feature-section" id="features">
+        <div class="center-guide" aria-hidden="true"></div>
+        <div class="hatch-band" aria-hidden="true"><span></span></div>
+        <div class="section-title page-pad reveal">
+          <span class="section-index">BUILT AROUND YOUR FLOW</span>
+          <h2>从收集到生成，<br />每一步都连着。</h2>
+        </div>
+        <div class="feature-grid">
+          <article><span>01</span><h3>本地优先</h3><p>原图、提示词和分析结果留在你的电脑；离线照常浏览整理。</p></article>
+          <article><span>02</span><h3>网页采集</h3><p>浏览器会话内取图，适配登录态、懒加载与复杂商品页。</p></article>
+          <article><span>03</span><h3>智能归类</h3><p>进库即命名、描述与受控词表归类，素材落地就能用。</p></article>
+          <article><span>04</span><h3>结构化反推</h3><p>不是一段笼统描述，而是可以逐项取用的动态维度。</p></article>
+          <article><span>05</span><h3>项目 Workspace</h3><p>中央素材库上的多项目视图，不复制文件，也不串项目。</p></article>
+          <article><span>06</span><h3>生成即资产</h3><p>多轮生成结果自动入库，保留来源 prompt 与会话链路。</p></article>
+        </div>
+      </section>
+
+      <section class="module project-section" id="projects">
+        <div class="center-guide" aria-hidden="true"></div>
+        <div class="section-title page-pad reveal">
+          <span class="section-index">PROJECT WORKSPACE</span>
+          <h2>一个项目，<br />就是一套视觉上下文。</h2>
+          <p class="section-lead">把同一品牌、客户或创作主题的参考图、反推维度与生成结果放进独立工作区。创作时只看当前项目，风格不串线，素材也不用重复存。</p>
+        </div>
+        <div class="project-showcase">
+          <div class="project-copy page-pad-side reveal">
+            <span class="section-index">从素材库，到可持续的创作系统</span>
+            <h3>不是建文件夹，<br />而是圈定创作边界。</h3>
+            <p>项目是中央素材库上的专属视图。为每个品牌建立项目后，从采集、反推到生成，新的资产都会沿着当前项目持续沉淀。</p>
+            <ol class="project-steps">
+              <li><span>01</span><div><strong>建立项目</strong><small>按品牌、客户、活动或栏目划分工作区。</small></div></li>
+              <li><span>02</span><div><strong>收拢视觉语言</strong><small>把情绪板、竞品图、构图与色调维度放在一起。</small></div></li>
+              <li><span>03</span><div><strong>持续生成与回收</strong><small>在项目中出图，结果自动回到同一上下文继续复用。</small></div></li>
+            </ol>
+            <p class="project-note">同一张素材可以服务多个项目，中央库只保留一份原图。</p>
+          </div>
+          <div class="project-visual reveal" aria-label="品牌项目工作区示意">
+            <div class="project-window">
+              <div class="project-window-head">
+                <div><span class="project-status"></span><strong>野岸茶饮</strong></div>
+                <small>品牌视觉项目 · 24 项资产</small>
+              </div>
+              <div class="project-filter-row">
+                <span class="is-active">全部</span><span>参考图</span><span>AI 新作</span><span>配色</span>
+              </div>
+              <div class="project-assets">
+                <figure class="project-asset project-asset-tall"><img src="./assets/presets/p5.jpg" alt="户外茶饮品牌参考图" /><figcaption>自然场景</figcaption></figure>
+                <figure class="project-asset"><img src="./assets/presets/p3.jpg" alt="午后茶歇品牌参考图" /><figcaption>产品静物</figcaption></figure>
+                <figure class="project-asset"><img src="./assets/presets/p4.jpg" alt="红调咖啡馆品牌参考图" /><figcaption>空间氛围</figcaption></figure>
+                <figure class="project-asset project-asset-wide"><img src="./assets/presets/p8.jpg" alt="粉色光影品牌参考图" /><figcaption>品牌色调</figcaption></figure>
+              </div>
+              <div class="project-window-foot"><span>当前项目上下文</span><strong>自然光 · 暖调 · 松弛感</strong></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="module use-case-section" id="use-cases">
+        <div class="center-guide" aria-hidden="true"></div>
+        <div class="hatch-band" aria-hidden="true"><span></span></div>
+        <div class="section-title page-pad reveal">
+          <span class="section-index">MADE FOR REAL WORK</span>
+          <h2>灵感不只被收藏，<br />更能服务每一次交付。</h2>
+        </div>
+        <div class="use-case-grid">
+          <article class="use-case use-case-featured reveal">
+            <div class="use-case-art" aria-hidden="true">
+              <img src="./assets/presets/p3.jpg" alt="" />
+              <img src="./assets/presets/p5.jpg" alt="" />
+              <img src="./assets/presets/p4.jpg" alt="" />
+            </div>
+            <div class="use-case-copy">
+              <span>01 / BRAND BUILDING</span>
+              <h3>品牌构建</h3>
+              <p>把品牌的色调、光影、构图和产品参考沉淀为项目资产。之后无论生成包装主视觉、社媒配图还是活动海报，都从同一套视觉语言出发，稳定输出统一风格的图片。</p>
+              <ul><li>品牌情绪板</li><li>系列产品图</li><li>社媒视觉</li></ul>
+            </div>
+          </article>
+          <article class="use-case reveal">
+            <div class="use-case-number">02</div>
+            <div class="use-case-copy">
+              <span>CAMPAIGN SERIES</span>
+              <h3>营销系列产出</h3>
+              <p>围绕一次新品发布或节日活动建立项目，组合固定调性与不同主体，快速迭代横幅、海报和渠道尺寸，让整组物料彼此呼应。</p>
+              <ul><li>新品发布</li><li>节日活动</li><li>多渠道物料</li></ul>
+            </div>
+          </article>
+          <article class="use-case reveal">
+            <div class="use-case-number">03</div>
+            <div class="use-case-copy">
+              <span>CONTENT SYSTEM</span>
+              <h3>内容栏目运营</h3>
+              <p>为长期栏目保存常用场景、人物动作与配色，下一期直接复用成熟维度。少从零摸索，把更多时间留给选题和表达。</p>
+              <ul><li>栏目封面</li><li>内容配图</li><li>风格复用</li></ul>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="module faq-section" id="faq">
+        <div class="center-guide" aria-hidden="true"></div>
+        <div class="hatch-band" aria-hidden="true"><span></span></div>
+        <div class="faq-layout">
+          <div class="faq-title page-pad-side reveal"><span class="section-index">FAQ</span><h2>常见问题，<br />一次说清。</h2></div>
+          <div class="faq-list reveal">
+            <details><summary>素材会上传到 Bowerbird 云端吗？<span></span></summary><p>不会。图片、缩略图、SQLite 数据库、提示词与分析结果都保存在你选择的本地素材库目录中。AI 分析和生成会通过你自己的 provider 账号联网执行。</p></details>
+            <details><summary>不会写提示词，也可以使用吗？<span></span></summary><p>可以。收集后的图片会被拆成可选维度；创作时只需写中文意图、选图、点维度，创作板会组装完整 prompt 和参考图。</p></details>
+            <details><summary>AI 功能需要什么账号？<span></span></summary><p>反推使用你的 ChatGPT 订阅（经 codex CLI）；生成支持 codex，也可以切换即梦。未登录时素材管理仍可正常使用。</p></details>
+            <details><summary>支持哪些平台？<span></span></summary><p>Windows x64 已开放公开 Beta；macOS 版本即将推出。浏览器扩展支持 Chrome 及兼容 Manifest V3 的浏览器。</p></details>
+          </div>
+        </div>
+      </section>
+
+      <section class="module download-section" id="download">
+        <div class="center-guide" aria-hidden="true"></div>
+        <div class="download-inner reveal">
+          <span class="section-index">PUBLIC BETA</span>
+          <h2>现在，把灵感<br />收进自己的巢。</h2>
+          <p>本地优先 · 免费 Beta · AI 使用你自己的订阅</p>
+          <div class="download-actions">
+            <div class="download-option">
+              <a id="windows-download" class="button button-light" href="#download">Windows x64 <span>↓</span></a>
+            </div>
+            <div class="download-option">
+              <span class="button button-ghost is-disabled" aria-disabled="true">macOS <span>↓</span></span>
+              <small>即将推出</small>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="footer-main">
+        <div><a class="brand" href="#top"><span class="brand-mark"><img src="./assets/logo.png" alt="" /></span><span>Bowerbird</span></a><p>为 AI 图像创作服务的本地素材库与编排工作台。</p></div>
+        <div class="footer-links"><div><strong>产品</strong><a href="#workflow">工作流</a><a href="#features">功能</a><a href="#projects">项目</a><a href="#download">下载</a></div><div><strong>了解更多</strong><a href="#use-cases">应用场景</a><a href="#faq">常见问题</a><a href="#board-demo">交互演示</a></div></div>
+      </div>
+      <div class="footer-bottom"><span>© 2026 Bowerbird</span><span>园丁鸟衔来的每片灵感，都值得被收好。</span></div>
+    </footer>
+
+    <script src="./app-v2.bundle.js?rev=20260806-v2-1"></script>
+  </body>
+</html>
