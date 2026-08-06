@@ -7,7 +7,7 @@ import type {
   CodexHealth,
   ColorBucket,
   Folder,
-  GenTurn,
+  GenJob,
   Preset,
   Project,
   PromptedAsset,
@@ -99,8 +99,8 @@ interface State {
   describeStartedAt: number | null; // 当前任务开始时间戳；跨组件已耗时显示用
   runDescribe: (assetId: string, instruction: string) => void;
   cancelDescribe: (assetId: string) => Promise<void>;
-  // —— 生成（创作板 codex 画图，单槽无队列）——
-  // 状态全局可见：状态圈在顶部工具栏最右侧，故提到 store（不绑创作板生命周期）。
+  // —— 生成（创作板 codex/即梦 画图，多 job 并行）——
+  // 派生量：任一 job running 即 true。状态圈在顶部工具栏最右侧（全局可见，不绑创作板生命周期）。
   generating: boolean;
   // —— 导入即基础分析（autoname，后台 fire-and-forget）——
   // 在途计数（后端 codex://auto-active 事件推来）；>0 顶部状态圈算「分析中」。
@@ -140,29 +140,25 @@ interface State {
   // 扩展连上本地 WS 后后端 emit collect://extension-connected；采集入库 emit library://assets-changed 带 name。
   collectedNotice: string | null; // 最近一次采集入库的素材名；null=不显提示
   setCollectedNotice: (name: string | null) => void;
-  // —— 生成结果面板（独立于创作板；主区覆盖层，可随时开合，状态在 store 不丢）——
+  // —— 生成结果面板（多 job；主区覆盖层，可随时开合，状态在 store 不丢）——
   genPanelOpen: boolean;
-  genTurns: GenTurn[];
-  genSessionId: string | null;
-  genStreaming: string;
-  genLastPrompt: string; // 最近一次发送 prompt，供「新会话重新生成」复用
-  genLastRefs: string[]; // 最近一次发送参考图（store_path）
-  genRefAssets: Asset[]; // 最近一次发送参考图的完整 asset，「复用到创作板」还原参考图用
-  genProjectId: string | null; // 生成会话所属项目快照；续轮不随当前项目切换漂移
+  genJobs: Record<string, GenJob>; // 所有生成会话（首轮创建，续轮追加 turn）
+  genJobOrder: string[]; // job 创建顺序（标签栏稳定排序）
+  activeJobId: string | null; // 当前查看/操作的 job（续轮/复用/取消/重试基于它）
   genUnread: boolean; // 面板关时落地新图 → 顶栏按钮红点
-  currentGenJobId: string | null; // Phase A task 2：当前生成 job_id（per-job 取消引用）
+  setActiveJob: (id: string) => void;
   toggleGenPanel: () => void;
   setGenPanelOpen: (open: boolean) => void;
   startGeneration: (prompt: string, references: Asset[], ratio?: string | null, provider?: string | null) => Promise<void>;
   sendGenRevise: (instruction: string, provider?: string | null) => Promise<void>;
-  cancelGeneration: () => void;
+  cancelGeneration: (jobId?: string) => void; // 默认取消 activeJob
   applyGenChunk: (c: CodexChunk) => void;
-  // 重试末尾失败轮：首轮失败 → startGeneration（清空重发），续轮失败 → sendGenRevise（resume 续接）。
+  // 重试 activeJob 末尾失败轮：首轮失败 → startGeneration（新建 job 重发），续轮失败 → sendGenRevise（resume 续接）。
   retryLastGenTurn: () => void;
-  // 「回看生成对话」：拉某生成图所在会话的历史时间线 → load 进 genTurns，复用 GenerationPanel
-  // 展示 + 续轮 resume（genSessionId=历史 sid）。generating 中拒绝（不覆盖进行中的会话）。
+  // 「回看生成对话」：拉某生成图所在会话的历史时间线 → 新建 running=false 的 job 并选中，
+  // 复用 GenerationPanel 展示 + 续轮 resume（sessionId=历史 sid）。
   viewGenerationHistory: (assetId: string) => Promise<void>;
-  // 「复用到创作板」：把某段 prompt（如生成会话首轮）载入创作板编辑器。
+  // 「复用到创作板」：把 activeJob 首轮 prompt + 参考图载入创作板编辑器。
   // 开创作板 + 关详情/生成面板/挑图态，延时一帧再 dispatch board-load-prompt，
   // 确保 CreationBoard 已挂载注册 listener（同步 dispatch 会丢）。
   reusePromptToBoard: (prompt: string) => void;
@@ -201,44 +197,56 @@ export const useStore = create<State>((set, get) => {
     }
   }
 
-  // —— 生成对话：turn id 计数 + 错误处理（内部，不暴露）——
+  // —— 生成对话：turn id 计数 + per-job 更新/错误处理（内部，不暴露）——
   let genTurnSeq = 0;
   function nextGenTurnId() {
     genTurnSeq += 1;
     return genTurnSeq;
   }
-  // 把一次生成失败落到状态（genHandleError 真失败分支与 applyGenChunk 的 error 分支共用）：
+  // 更新单个 job（按 id）并重算全局 generating（任一 job running 即 true）。job 不存在则空操作
+  // （如后端事件到达但前端无此 job —— 理论不发生，稳健处理）。extra 随本次 set 一并合并。
+  function updateJob(id: string, fn: (j: GenJob) => GenJob, extra: Partial<State> = {}) {
+    set((s) => {
+      const prev = s.genJobs[id];
+      if (!prev) return {};
+      const next = fn(prev);
+      const genJobs = { ...s.genJobs, [id]: next };
+      return {
+        genJobs,
+        generating: Object.values(genJobs).some((j) => j.running),
+        ...extra,
+      };
+    });
+  }
+  // 把一次生成失败落到指定 job：
   //  - 未出图的占位轮 → 记 error 成「失败轮」（时间线可见 + 可重试），不追加 streaming（避免与
   //    TurnView 失败态重复；streaming 保留 codex 本次叙述性 delta 作诊断上下文）。
   //  - 已出图后的后置失败（done 已到、meta/caption 写库失败）→ 不污染成功轮，错误降级进 streaming。
-  function applyGenError(msg: string) {
-    set((s) => {
-      if (s.genTurns.length === 0) return {};
-      const last = s.genTurns[s.genTurns.length - 1];
+  function applyGenError(id: string, msg: string) {
+    updateJob(id, (j) => {
+      if (j.turns.length === 0) return j;
+      const last = j.turns[j.turns.length - 1];
       if (last.images.length === 0) {
-        return { genTurns: [...s.genTurns.slice(0, -1), { ...last, error: msg }] };
+        return { ...j, turns: [...j.turns.slice(0, -1), { ...last, error: msg }] };
       }
-      return { genStreaming: s.genStreaming + `\n[error: ${msg}]` };
+      return { ...j, streaming: j.streaming + `\n[error: ${msg}]` };
     });
   }
-  function genHandleError(msg: string) {
+  function genHandleError(id: string, msg: string) {
     if (msg.includes("已取消")) {
       // 用户主动取消：删末尾空轮 + streaming 标「已取消」，不算失败、不留红字轮。
-      set((s) => ({
-        genStreaming: s.genStreaming + "\n\n—— 已取消",
-        genTurns:
-          s.genTurns.length > 0 && s.genTurns[s.genTurns.length - 1].images.length === 0
-            ? s.genTurns.slice(0, -1)
-            : s.genTurns,
+      updateJob(id, (j) => ({
+        ...j,
+        streaming: j.streaming + "\n\n—— 已取消",
+        turns:
+          j.turns.length > 0 && j.turns[j.turns.length - 1].images.length === 0
+            ? j.turns.slice(0, -1)
+            : j.turns,
       }));
       return;
     }
-    applyGenError(msg);
+    applyGenError(id, msg);
   }
-
-  // 创作板首发（startGeneration）的生成：done 有图 = 成功，关闭创作板（草稿由编辑器
-  // 卸载时落盘保留，重开即恢复刚交付的组稿）。续轮 sendGenRevise 不置此 flag（续轮不关创作板）。
-  let pendingBoardClose = false;
 
   return {
   assets: [],
@@ -510,17 +518,12 @@ export const useStore = create<State>((set, get) => {
   // —— 浏览器扩展采集 ——
   collectedNotice: null,
   setCollectedNotice: (collectedNotice) => set({ collectedNotice }),
-  // —— 生成结果面板 ——
+  // —— 生成结果面板（多 job）——
   genPanelOpen: false,
-  genTurns: [],
-  genSessionId: null,
-  genStreaming: "",
-  genLastPrompt: "",
-  genLastRefs: [],
-  genRefAssets: [],
-  genProjectId: null,
+  genJobs: {},
+  genJobOrder: [],
+  activeJobId: null,
   genUnread: false,
-  currentGenJobId: null,
   toggleGenPanel: () =>
     set((s) => {
       const opening = !s.genPanelOpen;
@@ -528,8 +531,9 @@ export const useStore = create<State>((set, get) => {
     }),
   setGenPanelOpen: (open) =>
     set((s) => ({ genPanelOpen: open, genUnread: open ? false : s.genUnread })),
+  setActiveJob: (id) => set({ activeJobId: id }),
   startGeneration: async (prompt, references, ratio, provider) => {
-    if (get().generating) return; // 单槽：进行中不再发
+    // 多 job：不再因 generating 阻塞（并发发起多个生成，各自独立流转）。
     // provider 兜底：调用点没传（CreationBoard send / retry）→ 当前选择 → 全局默认。
     const prov = provider ?? get().activeGenProvider ?? get().defaultProvider;
     // 用途（preset）注入：选中用途时，其 body 作为基底拼在用户组稿前（类 CLAUDE.md 上下文，
@@ -540,135 +544,172 @@ export const useStore = create<State>((set, get) => {
     const refPaths = references
       .map((r) => r.store_path)
       .filter((p): p is string => !!p);
-    set({
-      genLastPrompt: sentPrompt,
-      genLastRefs: refPaths,
-      genRefAssets: references,
-      genProjectId: get().currentProjectId,
-      genSessionId: null,
-      genStreaming: "",
-      genTurns: [{ id: nextGenTurnId(), prompt: sentPrompt, images: [], provider: prov }],
+    // 前端生成 jobId：创建 GenJob 即知 id，chunk 按 id 路由无 race；后端 task_queue upsert。
+    const jobId = crypto.randomUUID();
+    const job: GenJob = {
+      id: jobId,
+      turns: [{ id: nextGenTurnId(), prompt: sentPrompt, images: [], provider: prov }],
+      sessionId: null,
+      streaming: "",
+      lastPrompt: sentPrompt,
+      lastRefs: refPaths,
+      refAssets: references,
+      lastRatio: ratio ?? null,
+      provider: prov,
+      projectId: get().currentProjectId,
+      createdAt: Date.now(),
+      running: true,
+      pendingBoardClose: true, // 首轮：done 有图则关创作板（草稿由编辑器卸载时落盘保留）
+    };
+    set((s) => ({
+      genJobs: { ...s.genJobs, [jobId]: job },
+      genJobOrder: [...s.genJobOrder, jobId],
+      activeJobId: jobId, // 新发 job 自动选中（续轮/复用/取消聚焦它）
       genPanelOpen: true, // 自动弹面板给即时反馈（创作板在右槽仍可编辑）
       genUnread: false,
-    });
-    // 标记本轮为「创作板首发」：done 有图时关闭创作板（草稿由编辑器卸载时落盘保留）。
-    pendingBoardClose = true;
-    set({ generating: true });
+      generating: true, // 新 job running → 至少此 job 在跑
+    }));
     try {
-      const jobId = await api.codexCreateImage({
+      await api.codexCreateImage({
+        jobId,
         prompt: sentPrompt,
         referenceImages: refPaths,
         ratio,
         provider: prov,
-        projectId: get().genProjectId,
+        projectId: job.projectId,
       });
-      set({ currentGenJobId: jobId });
     } catch (e) {
-      genHandleError(typeof e === "string" ? e : JSON.stringify(e));
-    } finally {
-      set({ generating: false });
+      genHandleError(jobId, typeof e === "string" ? e : JSON.stringify(e));
+      updateJob(jobId, (j) => ({ ...j, running: false }));
     }
   },
   sendGenRevise: async (instruction, provider) => {
-    const sid = get().genSessionId;
+    const id = get().activeJobId;
+    if (!id) return;
+    const job = get().genJobs[id];
     const text = instruction.trim();
-    if (get().generating || !sid || !text) return;
-    const prov = provider ?? get().activeGenProvider ?? get().defaultProvider;
+    if (!job || !job.sessionId || !text) return;
+    const prov = provider ?? job.provider ?? get().activeGenProvider ?? get().defaultProvider;
     // 即梦续轮：image2image 传上一轮产出图（codex resume 记得上一轮图、不需传）。
-    const turns = get().genTurns;
-    const lastImages = turns[turns.length - 1]?.images ?? [];
+    const lastImages = job.turns[job.turns.length - 1]?.images ?? [];
     const reviseRefs = prov === "jimeng" ? lastImages : [];
-    pendingBoardClose = false; // 续轮修改不关闭创作板
-    set((s) => ({
-      genTurns: [...s.genTurns, { id: nextGenTurnId(), prompt: text, images: [], provider: prov }],
-      genStreaming: "",
+    // 续轮复用同 jobId（同一会话）；后端 task_queue upsert 刷新回 running。
+    updateJob(id, (j) => ({
+      ...j,
+      turns: [...j.turns, { id: nextGenTurnId(), prompt: text, images: [], provider: prov }],
+      streaming: "",
+      running: true,
+      pendingBoardClose: false, // 续轮修改不关闭创作板
     }));
-    set({ generating: true });
     try {
-      const jobId = await api.codexCreateImage({
+      await api.codexCreateImage({
+        jobId: id,
         prompt: text,
         referenceImages: reviseRefs,
-        sessionId: sid,
+        sessionId: job.sessionId,
         provider: prov,
-        projectId: get().genProjectId,
+        projectId: job.projectId,
       });
-      set({ currentGenJobId: jobId });
     } catch (e) {
-      genHandleError(typeof e === "string" ? e : JSON.stringify(e));
-    } finally {
-      set({ generating: false });
+      genHandleError(id, typeof e === "string" ? e : JSON.stringify(e));
+      updateJob(id, (j) => ({ ...j, running: false }));
     }
   },
-  cancelGeneration: () => {
-    const jobId = get().currentGenJobId;
-    if (jobId) void api.cancelCodexCreate(jobId).catch(console.error);
+  cancelGeneration: (jobId) => {
+    const id = jobId ?? get().activeJobId;
+    if (!id) return;
+    void api.cancelCodexCreate(id).catch(console.error);
   },
   retryLastGenTurn: () => {
     const s = get();
-    if (s.generating || !s.codexHealth?.ok) return;
-    const last = s.genTurns[s.genTurns.length - 1];
+    const id = s.activeJobId;
+    if (!id) return;
+    const job = s.genJobs[id];
+    if (!job || !s.codexHealth?.ok) return;
+    const last = job.turns[job.turns.length - 1];
     if (!last?.error) return; // 没有失败轮可重试
-    if (s.genSessionId) {
+    if (job.sessionId) {
       // 续轮失败：先移除失败轮再 resume，重试轮顶替原位（避免同 prompt 编号递增的重复轮）。
-      set({ genTurns: s.genTurns.slice(0, -1) });
+      updateJob(id, (j) => ({ ...j, turns: j.turns.slice(0, -1) }));
       void s.sendGenRevise(last.prompt);
     } else {
-      // 首轮失败：startGeneration 会清空 genTurns，失败轮自然消失。
-      void s.startGeneration(s.genLastPrompt, s.genRefAssets);
+      // 首轮失败：startGeneration 新建 job 重发（旧失败 job 保留可切回查看）。
+      void s.startGeneration(job.lastPrompt, job.refAssets, job.lastRatio);
     }
   },
   applyGenChunk: (c) => {
-    if (c.kind === "started") {
-      if (c.job_id) set({ currentGenJobId: c.job_id });
-      return;
-    }
+    if (c.kind === "started") return; // 前端已自生成 jobId 创建 job；started 无需处理
+    const id = c.job_id;
+    if (!id) return; // 无 job_id 的事件忽略（理论不发生）
     if (c.kind === "delta") {
-      set((s) => ({ genStreaming: s.genStreaming + c.text }));
+      updateJob(id, (j) => ({ ...j, streaming: j.streaming + c.text }));
     } else if (c.kind === "done") {
       const imgs = c.images ?? [];
-      set((s) => {
-        const base = {
-          genSessionId: c.session_id ?? s.genSessionId,
-          genStreaming: "", // done 后清流式（图已到；provider 在 turn 角标、耗时勿扰）
-          genUnread: imgs.length > 0 && !s.genPanelOpen ? true : s.genUnread,
-        };
-        if (s.genTurns.length === 0) return base;
-        const last = s.genTurns[s.genTurns.length - 1];
-        return {
-          ...base,
-          genTurns: [...s.genTurns.slice(0, -1), { ...last, images: [...last.images, ...imgs], provider: c.provider }],
-        };
-      });
-      // 创作板首发且有图产出 = 生成成功 → 关闭创作板（编辑器卸载时草稿落盘，重开恢复）。
-      if (imgs.length > 0 && pendingBoardClose) {
-        pendingBoardClose = false;
+      const panelOpen = get().genPanelOpen;
+      updateJob(
+        id,
+        (j) => {
+          const last = j.turns[j.turns.length - 1];
+          const turns = last
+            ? [...j.turns.slice(0, -1), { ...last, images: [...last.images, ...imgs], provider: c.provider }]
+            : j.turns;
+          return {
+            ...j,
+            turns,
+            running: false,
+            streaming: "", // done 后清流式（图已到；provider 在 turn 角标、耗时勿扰）
+            sessionId: c.session_id ?? j.sessionId,
+          };
+        },
+        { genUnread: imgs.length > 0 && !panelOpen ? true : get().genUnread },
+      );
+      // 创作板首发（per-job 标记）且本轮有图 = 生成成功 → 关闭创作板（草稿由编辑器卸载时落盘）。
+      const job = get().genJobs[id];
+      if (imgs.length > 0 && job?.pendingBoardClose) {
+        updateJob(id, (j) => ({ ...j, pendingBoardClose: false }));
         set({ boardOpen: false });
       }
     } else if (c.kind === "error") {
-      applyGenError(c.message);
+      genHandleError(id, c.message);
+      updateJob(id, (j) => ({ ...j, running: false }));
     }
   },
   viewGenerationHistory: async (assetId) => {
-    if (get().generating) return; // 进行中不覆盖当前会话
+    // 回看历史：生成会话已结束（DB 有 generation_meta），新建一个 running=false 的 job 并选中，
+    // 复用 GenerationPanel 展示时间线 + 续轮 resume（sessionId=历史 sid）。
     try {
       const hist = await api.generationHistory(assetId, get().currentProjectId);
-      set({
-        genTurns: hist.turns.map((t) => ({
-          id: nextGenTurnId(),
-          prompt: t.prompt,
-          images: t.images,
-        })),
-        genSessionId: hist.session_id,
-        genLastPrompt: hist.turns[0]?.prompt ?? "",
-        genLastRefs: hist.references
-          .map((r) => r.store_path)
-          .filter((p): p is string => !!p),
-        genRefAssets: hist.references,
-        genProjectId: get().currentProjectId,
-        genStreaming: "",
+      // 同 sessionId 已有 job 则切过去（避免回看累积重复历史 job）；session_id 为空不去重。
+      const existing = hist.session_id
+        ? Object.values(get().genJobs).find((j) => j.sessionId === hist.session_id)
+        : undefined;
+      if (existing) {
+        set({ activeJobId: existing.id, genPanelOpen: true, genUnread: false });
+        return;
+      }
+      const jobId = crypto.randomUUID();
+      const job: GenJob = {
+        id: jobId,
+        turns: hist.turns.map((t) => ({ id: nextGenTurnId(), prompt: t.prompt, images: t.images })),
+        sessionId: hist.session_id,
+        streaming: "",
+        lastPrompt: hist.turns[0]?.prompt ?? "",
+        lastRefs: hist.references.map((r) => r.store_path).filter((p): p is string => !!p),
+        refAssets: hist.references,
+        lastRatio: null,
+        provider: "",
+        projectId: get().currentProjectId,
+        createdAt: Date.now(),
+        running: false,
+        pendingBoardClose: false,
+      };
+      set((s) => ({
+        genJobs: { ...s.genJobs, [jobId]: job },
+        genJobOrder: [...s.genJobOrder, jobId],
+        activeJobId: jobId,
         genPanelOpen: true, // 弹生成面板（盖住详情页，关面板回详情页）
         genUnread: false,
-      });
+      }));
     } catch (e) {
       console.error("viewGenerationHistory failed", e);
     }
@@ -683,13 +724,15 @@ export const useStore = create<State>((set, get) => {
       // 载入的 prompt 已含完整内容（含原 preset body），清选中避免发送时 startGeneration 重复拼 body
       activePresetId: null,
     });
-    const refs = get().genRefAssets;
+    // 参考图取自 activeJob（复用入口在 GenerationPanel 基于选中 job）。
+    const id = get().activeJobId;
+    const refs = id ? get().genJobs[id]?.refAssets ?? [] : [];
     // 延一帧：set(boardOpen) 后 CreationBoard 才挂载注册 listener，同步 dispatch 会丢失。
     setTimeout(() => {
       window.dispatchEvent(
         new CustomEvent("bowerbird://board-load-prompt", {
           detail: { prompt: body, refs },
-        })
+        }),
       );
     }, 0);
   },

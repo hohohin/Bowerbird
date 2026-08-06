@@ -186,6 +186,7 @@ export const api = {
   // 创作板「生成」：把最终 prompt + 参考图发 codex（codex exec --image，同反推机制）出图。
   // 流式文本经 codex://chunk（Delta）回；生成图 copy 进 library/generations 后随 Done.images 回。
   // sessionId 非空 → codex exec resume 续接同一会话（多轮迭代修改，codex 记得上一张图）。
+  // jobId 由前端 crypto.randomUUID 生成：多 job 路由 + per-job 取消引用；续轮复用同 id（后端 upsert）。
   codexCreateImage: (req: {
     prompt: string;
     referenceImages: string[];
@@ -193,6 +194,7 @@ export const api = {
     ratio?: string | null;
     provider?: string | null;
     projectId?: string | null;
+    jobId: string;
   }) =>
     invoke<string>("codex_create_image", {
       prompt: req.prompt,
@@ -201,6 +203,7 @@ export const api = {
       ratio: req.ratio ?? null,
       provider: req.provider ?? null,
       projectId: req.projectId ?? null,
+      jobId: req.jobId,
     }),
   cancelCodexCreate: (jobId: string) => invoke<void>("cancel_codex_create", { jobId }),
   // 扩展小白化：连接状态 + 扩展文件夹路径（引导「一键复制」用，不自动打开——Windows 上不稳）。

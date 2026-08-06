@@ -141,6 +141,28 @@ export interface GenTurn {
   error?: string | null;
 }
 
+/**
+ * 一个生成会话（多 job 模型）：首轮创建，续轮（resume 同一 codex/dreamina session）追加 turn。
+ * id 由前端 `crypto.randomUUID()` 生成并传后端（chunk 事件按 id 路由无 race；续轮复用同 id，
+ * 后端 task_queue upsert）。`running` = 该 job 当前有一个 turn 在跑（用于派生全局 generating）。
+ */
+export interface GenJob {
+  id: string;
+  turns: GenTurn[];
+  sessionId: string | null;
+  streaming: string;
+  lastPrompt: string; // 首轮发送 prompt（新会话重生成 + 复用到创作板 + 登记用途）
+  lastRefs: string[]; // 首轮发送参考图 store_path
+  refAssets: Asset[]; // 首轮参考图完整 asset（复用还原）
+  lastRatio: string | null;
+  provider: string;
+  projectId: string | null; // 首轮项目快照；续轮不随当前项目切换漂移
+  createdAt: number;
+  running: boolean;
+  // 创作板首发标记：本轮 done 有图则关闭创作板（编辑器卸载落盘保留草稿）。续轮置 false。
+  pendingBoardClose: boolean;
+}
+
 /** 「回看生成对话」：某生成图所在 codex 会话的完整时间线（后端 generation_history 返回）。 */
 export interface GenerationHistoryTurn {
   prompt: string;

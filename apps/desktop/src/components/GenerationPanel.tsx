@@ -2,26 +2,25 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { useStore } from "../store";
 import { api } from "../lib/api";
-import type { GenTurn } from "../lib/types";
+import type { GenJob, GenTurn } from "../lib/types";
 import { Lightbox } from "./Lightbox";
 
 /**
- * 生成结果面板（独立于创作板）。
+ * 生成结果面板（多 job，独立于创作板）。
  *
- * 创作板只管组稿与「发送」，生成对话（轮次 + 产出图 + 流式 + 修改意见）全部落到
- * store，由本面板呈现。形态：主区覆盖层（像详情页那样盖住主区），创作板在右侧槽
- * 始终在场、可继续组下一轮稿。面板可随时打开/收起，开合都不丢对话。
+ * 创作板只管组稿与「发送」，生成会话（一个 GenJob = 首轮 + 续轮 turn 链）全部落到 store。
+ * 本面板顶部一排 job 标签切换 activeJob，主区展示 activeJob 的时间线 / 流式 / 续轮 / 复用。
+ * 形态：主区覆盖层（像详情页那样盖住主区），创作板在右侧槽始终在场。面板可随时打开/收起，不丢对话。
  */
 export function GenerationPanel() {
-  const genTurns = useStore((s) => s.genTurns);
-  const genStreaming = useStore((s) => s.genStreaming);
+  const genJobs = useStore((s) => s.genJobs);
+  const genJobOrder = useStore((s) => s.genJobOrder);
+  const activeJobId = useStore((s) => s.activeJobId);
+  const setActiveJob = useStore((s) => s.setActiveJob);
   const generating = useStore((s) => s.generating);
-  const genSessionId = useStore((s) => s.genSessionId);
-  const genLastPrompt = useStore((s) => s.genLastPrompt);
-  const genRefAssets = useStore((s) => s.genRefAssets);
 
   const codexHealth = useStore((s) => s.codexHealth);
-  const activeGenProvider = useStore((s) => s.activeGenProvider);
+  const dreaminaHealth = useStore((s) => s.dreaminaHealth);
   const setGenPanelOpen = useStore((s) => s.setGenPanelOpen);
   const sendGenRevise = useStore((s) => s.sendGenRevise);
   const cancelGeneration = useStore((s) => s.cancelGeneration);
@@ -35,50 +34,58 @@ export function GenerationPanel() {
   const [savingPreset, setSavingPreset] = useState(false);
   const [presetName, setPresetName] = useState("");
   const [presetSaved, setPresetSaved] = useState(false);
-  // 生成图放大查看（Lightbox）：images = 各轮图拍平，index = 全局下标。
+  // 生成图放大查看（Lightbox）：images = activeJob 各轮图拍平，index = 全局下标。
   const [lightbox, setLightbox] = useState<{ images: string[]; index: number } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  const activeJob: GenJob | null = activeJobId ? genJobs[activeJobId] ?? null : null;
+
+  // 按 activeJob.provider 判健康（codex/即梦各自可用性，约定 7 置灰依据）。
+  const targetHealth = activeJob?.provider === "jimeng" ? dreaminaHealth : codexHealth;
+  const targetProviderLabel = activeJob?.provider === "jimeng" ? "即梦" : "codex";
+
   const imageCount = useMemo(
-    () => genTurns.reduce((n, t) => n + t.images.length, 0),
-    [genTurns]
+    () => activeJob?.turns.reduce((n, t) => n + t.images.length, 0) ?? 0,
+    [activeJob]
   );
-  // 跨轮 Lightbox：把各轮图拍平成一个列表；每轮记起始 offset，点某图算出全局 index。
-  const allImages = useMemo(() => genTurns.flatMap((t) => t.images), [genTurns]);
+  // 跨轮 Lightbox：把 activeJob 各轮图拍平成一个列表；每轮记起始 offset，点某图算出全局 index。
+  const allImages = useMemo(() => activeJob?.turns.flatMap((t) => t.images) ?? [], [activeJob]);
   const turnsWithOffset = useMemo(() => {
+    if (!activeJob) return [];
     let offset = 0;
-    return genTurns.map((t) => {
+    return activeJob.turns.map((t) => {
       const imageOffset = offset;
       offset += t.images.length;
       return { turn: t, imageOffset };
     });
-  }, [genTurns]);
+  }, [activeJob]);
 
   // 新结果落地时把滚动体拉到底，让最新图进视野。用标量 imageCount 作依赖——打字/流式
-  // 刷字不触发；末轮 busy 占位（「codex 生成中…」）不增 imageCount，不会对着 spinner 滚。
+  // 刷字不触发；末轮 busy 占位（「生成中…」）不增 imageCount，不会对着 spinner 滚。
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
     el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-  }, [imageCount]);
+  }, [imageCount, activeJobId]);
 
-  const canRevise = !generating && !!genSessionId && !!codexHealth?.ok;
+  const running = !!activeJob?.running;
+  const canRevise = !running && !!activeJob?.sessionId && !!targetHealth?.ok;
   function doRevise() {
     if (!canRevise || !revise.trim()) return;
     void sendGenRevise(revise).then(() => setRevise(""));
   }
 
   function regenerate() {
-    if (!genLastPrompt || !codexHealth?.ok || generating) return;
-    void startGeneration(genLastPrompt, genRefAssets);
+    if (!activeJob?.lastPrompt || !targetHealth?.ok || running) return;
+    void startGeneration(activeJob.lastPrompt, activeJob.refAssets, activeJob.lastRatio);
   }
 
-  // 把当前会话首轮 prompt 登记为用途（preset）：起名 → createPreset + 刷新下拉。
+  // 把 activeJob 首轮 prompt 登记为用途（preset）：起名 → createPreset + 刷新下拉。
   async function saveGenPreset() {
     const name = presetName.trim();
-    if (!name || !genLastPrompt) return;
+    if (!name || !activeJob?.lastPrompt) return;
     try {
-      await api.createPreset(name, genLastPrompt);
+      await api.createPreset(name, activeJob.lastPrompt);
       await reloadPresets();
       setSavingPreset(false);
       setPresetName("");
@@ -94,10 +101,10 @@ export function GenerationPanel() {
       <div className="flex shrink-0 items-center justify-between border-b border-edge bg-panel px-4 py-2">
         <div className="flex items-center gap-2">
           <span className="text-sm font-semibold">🖼 生成结果</span>
-          {genTurns.length > 0 && (
+          {activeJob && (
             <span className="text-xs text-muted">
-              {genTurns.length} 轮 · {imageCount} 图
-              {activeGenProvider === "jimeng" ? " · 即梦" : ""}
+              {activeJob.turns.length} 轮 · {imageCount} 图
+              {activeJob.provider === "jimeng" ? " · 即梦" : ""}
             </span>
           )}
         </div>
@@ -110,8 +117,53 @@ export function GenerationPanel() {
         </button>
       </div>
 
+      {/* job 标签栏：每个生成会话一个标签，点击切 activeJob；横向滚动容纳多个。 */}
+      {genJobOrder.length > 0 && (
+        <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-edge bg-panel px-2 py-1">
+          {genJobOrder.map((id, i) => {
+            const j = genJobs[id];
+            if (!j) return null;
+            const isActive = id === activeJobId;
+            const imgs = j.turns.reduce((n, t) => n + t.images.length, 0);
+            const failed = j.turns.some((t) => t.error);
+            return (
+              <button
+                key={id}
+                onClick={() => setActiveJob(id)}
+                title={`Job ${i + 1} · ${j.provider === "jimeng" ? "即梦" : "codex"} · ${imgs} 图`}
+                className={`flex shrink-0 items-center gap-1 rounded px-2 py-1 text-[11px] ${
+                  isActive
+                    ? "bg-accent font-semibold text-black"
+                    : "bg-panel2 text-muted hover:text-ink"
+                }`}
+              >
+                <span>{i + 1}</span>
+                <span className="text-[9px] opacity-80">
+                  {j.provider === "jimeng" ? "即梦" : "codex"}
+                </span>
+                {j.running ? (
+                  <span className="animate-pulse" title="生成中">
+                    ●
+                  </span>
+                ) : failed ? (
+                  <span title="有失败轮">❌</span>
+                ) : imgs > 0 ? (
+                  <span>{imgs}</span>
+                ) : (
+                  <span className="opacity-50">·</span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-4">
-        {genTurns.length === 0 ? (
+        {!activeJob ? (
+          <div className="flex h-full items-center justify-center text-sm text-muted">
+            尚未生成。在创作板组稿后点「✓ 发送 codex 生成」。
+          </div>
+        ) : turnsWithOffset.length === 0 ? (
           <div className="flex h-full items-center justify-center text-sm text-muted">
             尚未生成。在创作板组稿后点「✓ 发送 codex 生成」。
           </div>
@@ -122,16 +174,16 @@ export function GenerationPanel() {
                 key={turn.id}
                 turn={turn}
                 index={i}
-                busy={generating && i === turnsWithOffset.length - 1}
+                busy={running && i === turnsWithOffset.length - 1}
                 imageOffset={imageOffset}
                 onOpenLightbox={(g) => setLightbox({ images: allImages, index: g })}
                 onRetry={retryLastGenTurn}
-                canRetry={!!codexHealth?.ok && !generating}
+                canRetry={!!targetHealth?.ok && !running}
               />
             ))}
-            {genStreaming && (
+            {activeJob.streaming && (
               <pre className="max-h-60 overflow-y-auto whitespace-pre-wrap rounded bg-panel2 p-2 text-[11px] text-ink">
-                {genStreaming}
+                {activeJob.streaming}
               </pre>
             )}
           </div>
@@ -139,16 +191,18 @@ export function GenerationPanel() {
       </div>
 
       <div className="shrink-0 space-y-2 border-t border-edge bg-panel p-3">
-        {generating ? (
+        {running ? (
           <button
-            onClick={cancelGeneration}
+            onClick={() => cancelGeneration()}
             className="w-full rounded-md border border-edge bg-panel2 px-3 py-2 text-sm font-semibold text-ink hover:text-red-300"
           >
             取消生成
           </button>
-        ) : genSessionId ? (
+        ) : activeJob?.sessionId ? (
           <div className="space-y-1">
-            <div className="text-[10px] text-muted">提修改意见，codex 续接同一会话编辑上一张图</div>
+            <div className="text-[10px] text-muted">
+              提修改意见，{targetProviderLabel} 续接同一会话编辑上一张图
+            </div>
             <div className="flex gap-1.5">
               <input
                 value={revise}
@@ -172,8 +226,8 @@ export function GenerationPanel() {
             </div>
             <button
               onClick={regenerate}
-              disabled={!genLastPrompt || !codexHealth?.ok}
-              title="用最近一次的 prompt + 参考图开新会话（清空上方对话）"
+              disabled={!activeJob?.lastPrompt || !targetHealth?.ok}
+              title="用最近一次的 prompt + 参考图开新会话（新建一个生成任务）"
               className="w-full rounded-md bg-panel2 px-3 py-1.5 text-xs text-ink hover:bg-edge disabled:opacity-50"
             >
               ↻ 新会话重新生成
@@ -181,12 +235,12 @@ export function GenerationPanel() {
           </div>
         ) : (
           <div className="text-[10px] text-muted">
-            {codexHealth && !codexHealth.ok
-              ? codexHealth.reason
+            {targetHealth && !targetHealth.ok
+              ? targetHealth.reason
               : "🎨 生成图在创作板点「✓ 发送 codex 生成」触发；出图后可在此提修改意见续接迭代。"}
           </div>
         )}
-        {!generating && genLastPrompt && (
+        {!running && activeJob?.lastPrompt && (
           <div className="space-y-1.5 border-t border-edge pt-2">
             {savingPreset ? (
               <div className="flex gap-1.5">
@@ -221,7 +275,7 @@ export function GenerationPanel() {
             ) : (
               <div className="flex gap-1.5">
                 <button
-                  onClick={() => reusePromptToBoard(genLastPrompt)}
+                  onClick={() => reusePromptToBoard(activeJob!.lastPrompt)}
                   className="flex-1 rounded bg-panel2 px-2 py-1.5 text-xs text-ink hover:bg-edge"
                   title="把首轮 prompt + 参考图载入创作板，可在其基础上编辑后重新生成"
                 >
@@ -246,6 +300,12 @@ export function GenerationPanel() {
           onClose={() => setLightbox(null)}
           onIndexChange={(i) => setLightbox({ ...lightbox, index: i })}
         />
+      )}
+      {/* generating 在此仅用于抑制空态下的提示文案（有 job 在跑时给一句反馈），核心状态走 activeJob.running。 */}
+      {generating && !activeJob && (
+        <div className="pointer-events-none absolute bottom-20 left-1/2 -translate-x-1/2 text-[10px] text-muted">
+          生成中…
+        </div>
       )}
     </div>
   );
@@ -308,7 +368,7 @@ function TurnView({
           <button
             onClick={onRetry}
             disabled={!canRetry}
-            title={canRetry ? "用同样的内容重发" : "codex 当前不可用"}
+            title={canRetry ? "用同样的内容重发" : "当前 provider 不可用"}
             className="rounded bg-panel2 px-2.5 py-1 text-[11px] font-semibold text-ink hover:bg-edge disabled:opacity-50"
           >
             ↻ 重试

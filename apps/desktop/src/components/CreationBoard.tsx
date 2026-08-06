@@ -35,7 +35,6 @@ function saveBoardRatio(v: string | null) {
  */
 export function CreationBoard() {
   const toggleBoard = useStore((s) => s.toggleBoard);
-  const generating = useStore((s) => s.generating);
   const codexHealth = useStore((s) => s.codexHealth);
   const dreaminaHealth = useStore((s) => s.dreaminaHealth);
   const activeGenProvider = useStore((s) => s.activeGenProvider);
@@ -96,7 +95,7 @@ export function CreationBoard() {
   // 把当前组稿发 provider 生成。生成期间编辑器仍可继续组下一轮稿（prompt 在此快照进 store）。
   // provider 由 store 内 activeGenProvider 兜底（send 不显式传）。
   function send() {
-    if (!targetHealth?.ok || !finalPrompt || generating) return;
+    if (!targetHealth?.ok || !finalPrompt) return;
     void startGeneration(finalPrompt, references, ratio);
   }
 
@@ -364,7 +363,7 @@ export function CreationBoard() {
       <div className="shrink-0 space-y-2 border-t border-edge p-3">
         <button
           onClick={send}
-          disabled={!finalPrompt || !targetHealth?.ok || generating}
+          disabled={!finalPrompt || !targetHealth?.ok}
           title={
             !targetHealth?.ok
               ? targetHealth?.reason || `${targetProviderLabel} 不可用`
@@ -372,7 +371,7 @@ export function CreationBoard() {
           }
           className="w-full rounded-md bg-accent px-3 py-2 text-sm font-semibold text-black disabled:opacity-50"
         >
-          {generating ? "生成中…（见「生成结果」面板）" : `✓ 发送 ${targetProviderLabel} 生成`}
+          {`✓ 发送 ${targetProviderLabel} 生成`}
         </button>
         <button
           onClick={copy}
@@ -384,7 +383,7 @@ export function CreationBoard() {
         <div className="text-[10px] text-muted">
           {targetHealth && !targetHealth.ok
             ? targetHealth.reason
-            : "🎨 发送后自动弹出「生成结果」面板；生成期间本板可继续组下一轮稿。"}
+            : "🎨 发送后自动弹出「生成结果」面板；生成成功自动收起创作板，草稿保留可再打开续用。"}
         </div>
       </div>
     </aside>

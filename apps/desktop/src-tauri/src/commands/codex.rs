@@ -423,6 +423,7 @@ pub async fn codex_create_image(
     ratio: Option<String>,
     provider: Option<String>,
     project_id: Option<String>,
+    job_id: String,
 ) -> Result<String, AppError> {
     // 首轮（无 session_id）：包一句明确要 codex 出图，触发 imagegen；
     // 续轮（有 session_id = resume）：codex 已在画图上下文里，用户修改意见原样发。
@@ -430,8 +431,8 @@ pub async fn codex_create_image(
     // ratio（如 "16:9"）仅首轮注入 instruction（续轮 codex resume 记得首轮比例，不重复指定）。
     let prompt_for_meta = prompt.clone();
     let refs_for_meta = reference_images.clone();
-    // Phase A task 2：本次生成的 job_id（事件携带 + task_queue 记录 + per-job 取消 key）。
-    let job_id = Ulid::new().to_string();
+    // job_id 由前端生成（crypto.randomUUID）传入：前端创建 GenJob 时即知 id，chunk 事件按 job_id
+    // 路由无 race；续轮（resume 同一 session）复用同一 job_id，task_queue 行 upsert 刷新回 running。
     let ratio_clause = match ratio.as_deref().map(str::trim).filter(|r| !r.is_empty()) {
         Some(r) => format!("；画面比例为 {r}"),
         None => String::new(),
@@ -492,7 +493,7 @@ pub async fn codex_create_image(
             started_at: Some(now_ts),
             finished_at: None,
         };
-        crate::core::task_queue::Task::enqueue_gen_job(db.inner(), &job)?;
+        crate::core::task_queue::Task::upsert_gen_job(db.inner(), &job)?;
     }
 
     // 生成开始即通知前端 job_id：同步模型下命令 await 到完成才返回 job_id，生成中前端拿不到

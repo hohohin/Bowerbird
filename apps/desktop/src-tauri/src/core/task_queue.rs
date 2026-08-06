@@ -149,6 +149,31 @@ impl Task {
         Ok(job.id.clone())
     }
 
+    /// 入队或覆盖一个生成 job（按 `job.id` upsert）。
+    ///
+    /// 首轮 INSERT 新行；续轮（同一会话 = 同一 `job_id` 再次 `codex_create_image`）ON CONFLICT
+    /// 更新现有行：刷新 payload/status/started_at/provider，清空 finished_at/error，让会话级 job
+    /// 重新进入 running。前端 `GenJob` = 一个生成会话（多轮），`task_queue` 行随会话级 job_id 复用，
+    /// 故续轮不能再 INSERT（主键冲突）。
+    pub fn upsert_gen_job(db: &Database, job: &GenJob) -> AppResult<String> {
+        let coarse = GenJob::coarse_status(&job.status);
+        let payload = serde_json::to_string(job)?;
+        let conn = db.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO task_queue (id, kind, payload, status, created_at, started_at, finished_at, provider)
+             VALUES (?1, 'generation', ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(id) DO UPDATE SET
+                payload=excluded.payload,
+                status=excluded.status,
+                started_at=excluded.started_at,
+                finished_at=excluded.finished_at,
+                error=NULL,
+                provider=excluded.provider",
+            rusqlite::params![&job.id, &payload, coarse, job.created_at, job.started_at, job.finished_at, &job.provider],
+        )?;
+        Ok(job.id.clone())
+    }
+
     /// 取下一个 queued 任务（按 created_at 升序）。
     pub fn next(db: &Database) -> AppResult<Option<Task>> {
         let conn = db.conn.lock().unwrap();
@@ -384,5 +409,28 @@ mod tests {
         let t = Task::by_id(&db, &id).unwrap().unwrap();
         assert_eq!(t.kind, "other");
         assert!(t.gen_job().is_none());
+    }
+
+    #[test]
+    fn upsert_gen_job_reuses_row_on_revise() {
+        let db = db();
+        // 首轮：INSERT 新行（running）。
+        let mut j = job("codex", "running");
+        j.started_at = Some(j.created_at);
+        Task::upsert_gen_job(&db, &j).unwrap();
+        let t1 = Task::by_id(&db, &j.id).unwrap().unwrap();
+        assert_eq!(t1.status, "running");
+        // 完成 → done。
+        Task::mark_done(&db, &j.id).unwrap();
+        assert_eq!(Task::by_id(&db, &j.id).unwrap().unwrap().status, "done");
+        // 续轮：同 job_id 再次 upsert（running），不冲突；行被刷新回 running，error 清空。
+        j.status = "running".into();
+        j.error = None;
+        Task::upsert_gen_job(&db, &j).unwrap();
+        let t2 = Task::by_id(&db, &j.id).unwrap().unwrap();
+        assert_eq!(t2.status, "running");
+        assert!(t2.error.is_none());
+        // 仍是同一行（不会因续轮多出新行）。
+        assert_eq!(Task::list_recent(&db, 10).unwrap().len(), 1);
     }
 }
