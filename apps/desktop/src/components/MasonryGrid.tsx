@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent } from "react";
 import { createPortal } from "react-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { useStore } from "../store";
@@ -14,6 +14,16 @@ function parseColors(c: string | null | undefined): string[] {
   } catch {
     return [];
   }
+}
+
+/** 读 File 为 data URL（拖拽 / 粘贴入库用，传后端 base64 解码）。 */
+function readFileAsDataURL(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result as string);
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(file);
+  });
 }
 
 function Thumb({
@@ -269,6 +279,9 @@ export function MasonryGrid() {
   const boardOpen = useStore((s) => s.boardOpen);
   const currentProjectId = useStore((s) => s.currentProjectId);
   const [groupMap, setGroupMap] = useState<Record<string, Asset[]>>({});
+  // 拖拽外部图片入库（仅瀑布流区域）：HTML5 DnD，dragDropEnabled=false 保持内部拖拽到侧栏。
+  const [dragOver, setDragOver] = useState(false);
+  const [importing, setImporting] = useState(false);
 
   // 同流程生成图：批量取可见 codex 组的过程图，供缩略图轮播。无生成图时清空。
   useEffect(() => {
@@ -291,30 +304,87 @@ export function MasonryGrid() {
 
   const filtered = assets;
 
-  if (filtered.length === 0) {
-    return (
-      <div className="flex h-full items-center justify-center text-sm text-muted">
-        {assets.length === 0
-          ? boardOpen
-            ? "还没有素材 —— 用顶部按钮导入图片，点瀑布流任意图即可插为参考图"
-            : "还没有素材 —— 用顶部按钮导入图片或文件夹"
-          : "当前筛选下无素材"}
-      </div>
+  // 拖入外部图片文件 → dataURL → importImageBytes（source=imported，进当前 project scope）。
+  // 串行导入（失败隔离）：单张失败不中断后续，错误打控制台。
+  async function handleDrop(e: DragEvent<HTMLDivElement>) {
+    e.preventDefault();
+    setDragOver(false);
+    const files = Array.from(e.dataTransfer.files).filter((f) =>
+      f.type.startsWith("image/")
     );
+    if (files.length === 0) return;
+    setImporting(true);
+    try {
+      for (const f of files) {
+        try {
+          const dataUrl = await readFileAsDataURL(f);
+          await api.importImageBytes({
+            dataUrl,
+            fileName: f.name,
+            projectId: currentProjectId,
+            source: "imported",
+          });
+        } catch (err) {
+          console.error("drop import failed", f.name, err);
+        }
+      }
+    } finally {
+      setImporting(false);
+    }
   }
 
   return (
-    <div className="flex h-full flex-col">
-      {/* 滚动容器（固定高度 + 竖向滚动）与 columns 容器必须分离：
-          columns 一旦有固定高度，多余内容会横向溢出开新列 → 横向滚动。
-          内层 columns 不设高度，内容平分到 N 列后纵向增长，由本层竖向滚动。 */}
-      <div className="h-full overflow-y-auto">
-        <div className="columns-2 gap-2 p-2 md:columns-3 lg:columns-4 xl:columns-5">
-          {filtered.map((a) => (
-            <Thumb key={a.id} asset={a} group={groupMap[a.id]} />
-          ))}
+    <div
+      className="relative flex h-full flex-col"
+      onDragOver={(e) => {
+        // 仅响应外部文件拖入（含 "Files"）；preventDefault 才能触发 drop。
+        if (Array.from(e.dataTransfer.types).includes("Files")) {
+          e.preventDefault();
+          setDragOver(true);
+        }
+      }}
+      onDragLeave={(e) => {
+        // relatedTarget 不在容器内 = 真离开，清遮罩（防子元素进出抖动）。
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+          setDragOver(false);
+        }
+      }}
+      onDrop={handleDrop}
+    >
+      {filtered.length === 0 ? (
+        <div className="flex h-full items-center justify-center text-sm text-muted">
+          {assets.length === 0
+            ? boardOpen
+              ? "还没有素材 —— 用顶部按钮导入图片，点瀑布流任意图即可插为参考图"
+              : "还没有素材 —— 用顶部按钮导入图片或文件夹，或直接拖图进来 / 截图后 Ctrl+V"
+            : "当前筛选下无素材"}
         </div>
-      </div>
+      ) : (
+        <div className="h-full overflow-y-auto">
+          {/* 滚动容器（固定高度 + 竖向滚动）与 columns 容器必须分离：
+              columns 一旦有固定高度，多余内容会横向溢出开新列 → 横向滚动。
+              内层 columns 不设高度，内容平分到 N 列后纵向增长，由本层竖向滚动。 */}
+          <div className="columns-2 gap-2 p-2 md:columns-3 lg:columns-4 xl:columns-5">
+            {filtered.map((a) => (
+              <Thumb key={a.id} asset={a} group={groupMap[a.id]} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 拖拽遮罩：拖文件进入瀑布流时提示「松开导入」。 */}
+      {dragOver && (
+        <div className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center bg-accent/10 ring-2 ring-inset ring-accent">
+          <div className="rounded-lg bg-panel/95 px-4 py-2 text-sm font-medium text-accent shadow-lg">
+            松开导入{currentProjectId ? "到当前项目" : "到素材库"}
+          </div>
+        </div>
+      )}
+      {importing && !dragOver && (
+        <div className="pointer-events-none absolute right-2 top-2 z-30 rounded bg-panel/95 px-2 py-1 text-xs text-muted shadow">
+          导入中…
+        </div>
+      )}
     </div>
   );
 }

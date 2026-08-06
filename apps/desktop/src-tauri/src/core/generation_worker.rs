@@ -13,7 +13,7 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::Semaphore;
 use ulid::Ulid;
 
-use crate::codex::jimeng::{query_and_download, resolve_dreamina_binary};
+use crate::codex::jimeng::{poll_query_and_download, resolve_dreamina_binary};
 use crate::core::library::{Analysis, Asset};
 use crate::core::paths::LibraryPaths;
 use crate::core::task_queue::{GenJob, Task};
@@ -162,8 +162,16 @@ pub fn spawn_recovery(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths
                 return;
             }
         };
+        tracing::info!("启动恢复：list_running 扫到 {} 条未完成 job", running.len());
         for task in running {
             let Some(job) = task.gen_job() else { continue };
+            tracing::info!(
+                "恢复扫描：job={} provider={} status={} submit_id={:?}",
+                job.id,
+                job.provider,
+                job.status,
+                job.submit_id
+            );
             if !matches!(job.provider.as_str(), "jimeng" | "dreamina") {
                 let _ = Task::mark_failed(&db, &job.id, "app 重启中断，codex 会话不可恢复");
                 let _ = app.emit(
@@ -220,6 +228,11 @@ async fn recover_one_jimeng_job(
     let binary = resolve_dreamina_binary().unwrap_or_else(|| "dreamina".to_string());
     match poll_query_and_download(&binary, &submit_id, 30, Duration::from_secs(10)).await {
         Ok(src_images) => {
+            tracing::info!(
+                "恢复续查成功：job={} 图={} 张",
+                job.id,
+                src_images.len()
+            );
             let temp_dir = src_images
                 .first()
                 .and_then(|p| p.parent().map(|x| x.to_path_buf()));
@@ -262,6 +275,7 @@ async fn recover_one_jimeng_job(
         }
         Err(e) => {
             let msg = e.to_string();
+            tracing::info!("恢复续查未完成：job={} err={}", job.id, msg);
             // 远端仍排队中（querying/未下载到图/轮询超时）→ 保持 running + 提示；真失败 mark_failed。
             if msg.contains("排队") || msg.contains("querying") || msg.contains("未下载到图片") {
                 let _ = app.emit(
@@ -277,49 +291,6 @@ async fn recover_one_jimeng_job(
             }
         }
     }
-}
-
-/// 策略 B：bounded poll loop。每次 `query_and_download`（新临时目录），间隔 `interval` 睡眠，
-/// 最多 `max_attempts` 次。`query_result` 对 querying 任务的真实行为（阻塞等待/一次性空返/报错）
-/// spike 未实证；本循环向下兼容——若 query_result 实际阻塞等待，首次即成、循环早退。
-/// 致命错（submit_id 无效/fail）早退；querying/空图类继续轮询到上限后返回末次错误。
-async fn poll_query_and_download(
-    binary: &str,
-    submit_id: &str,
-    max_attempts: u32,
-    interval: Duration,
-) -> AppResult<Vec<PathBuf>> {
-    let mut last_err: Option<AppError> = None;
-    for _ in 0..max_attempts {
-        let dir = std::env::temp_dir().join(format!("bowerbird-recover-{}", Ulid::new()));
-        if let Err(e) = std::fs::create_dir_all(&dir) {
-            last_err = Some(AppError::Other(format!("建临时目录失败: {e}")));
-            tokio::time::sleep(interval).await;
-            continue;
-        }
-        match query_and_download(binary, submit_id, &dir).await {
-            Ok(imgs) if !imgs.is_empty() => return Ok(imgs),
-            Ok(_) => {
-                let _ = std::fs::remove_dir_all(&dir);
-                last_err = Some(AppError::Jimeng("远端仍在排队，未下载到图片".into()));
-            }
-            Err(e) => {
-                let _ = std::fs::remove_dir_all(&dir);
-                let msg = e.to_string();
-                // 致命错（submit_id 无效 / fail / not found）早退；querying 类继续轮询。
-                let fatal = msg.contains("无效")
-                    || msg.contains("not found")
-                    || msg.contains("不存在")
-                    || msg.contains("fail");
-                if fatal {
-                    return Err(e);
-                }
-                last_err = Some(e);
-            }
-        }
-        tokio::time::sleep(interval).await;
-    }
-    Err(last_err.unwrap_or_else(|| AppError::Jimeng("恢复轮询超时，远端仍在排队".into())))
 }
 
 /// 把生成会话的 prompt 链转成 caption 正文：从中识别 `【维度】：正文` 片段（创作板序列化时由

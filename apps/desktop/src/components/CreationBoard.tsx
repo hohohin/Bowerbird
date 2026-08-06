@@ -5,6 +5,8 @@ import { useCreationEditor } from "./creation/useCreationEditor";
 import { RATIOS } from "./creation/ratios";
 import { RatioSelect } from "./creation/RatioSelect";
 import { ProviderSelect } from "./creation/ProviderSelect";
+import { CreationGraph } from "./creation/CreationGraph";
+import { Info } from "lucide-react";
 
 // 画面比例偏好记忆（照 AssetDetail 的 localStorage 范式：bowerbird.<name> 前缀、try/catch 兜底）。
 const BOARD_RATIO_KEY = "bowerbird.boardRatio";
@@ -50,13 +52,12 @@ export function CreationBoard() {
     focus,
     finalPrompt,
     references,
+    graphSources,
     chipSections,
     showKeywordHints,
-    setShowKeywordHints,
     insertKeyword,
   } = useCreationEditor();
 
-  const [copied, setCopied] = useState(false);
   // 画面比例（null=自动/不指定，发送时不注入 instruction）。记忆进 localStorage，跨会话保留。
   const [ratio, setRatio] = useState<string | null>(loadBoardRatio);
   const selectRatio = (v: string | null) => {
@@ -75,18 +76,6 @@ export function CreationBoard() {
     () => presets.find((p) => p.id === activePresetId) ?? null,
     [presets, activePresetId]
   );
-
-  function copy() {
-    const refPaths = references
-      .map((r) => r.store_path)
-      .filter((p): p is string => !!p);
-    const text = `# Prompt\n${finalPrompt}\n\n# References (${refPaths.length})\n${refPaths
-      .map((r) => `- ${r}`)
-      .join("\n")}`;
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  }
 
   // 按当前选中的 provider 判健康（codex/即梦各自可用性，约定 7 置灰依据）。
   const targetHealth = activeGenProvider === "jimeng" ? dreaminaHealth : codexHealth;
@@ -150,9 +139,12 @@ export function CreationBoard() {
       <div className="flex items-center justify-between border-b border-edge px-3 py-2">
         <div className="flex items-center gap-2">
           <span className="text-sm font-semibold">🎬 创作板</span>
-          <span className="rounded-full border border-accent/40 bg-accent/15 px-2 py-0.5 text-[10px] text-accent">
-            点图 / @图名 插参考图
-          </span>
+          <div className="group relative">
+            <Info size={14} className="cursor-help text-muted/50 group-hover:text-muted" />
+            <div className="pointer-events-none absolute left-0 top-full z-10 mt-1 hidden w-60 rounded bg-panel2 p-2 text-[11px] leading-4 text-muted ring-1 ring-edge group-hover:block">
+              像跟 AI 输入 prompt 一样书写；<span className="text-accent">点瀑布流图片</span> 在光标处插入参考图，或输入 <span className="text-accent">@图名</span>（空格/标点后自动识别）。
+            </div>
+          </div>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -302,13 +294,10 @@ export function CreationBoard() {
           </div>
         ) : null}
         <div className="rounded-lg border border-edge bg-[#13171f] p-3 text-sm leading-8 text-ink">
-          <div className="mb-2 text-[11px] text-muted">
-            像跟 AI 输入 prompt 一样书写；<span className="rounded bg-panel2 px-1 text-accent">点瀑布流图片</span> 在光标处插入参考图，或输入 <span className="rounded bg-panel2 px-1 text-accent">@图名</span>（空格/标点后自动识别）。
-          </div>
           <div
             ref={hostRef}
             onClick={focus}
-            className="creation-editor min-h-36 cursor-text rounded bg-panel2/40 p-2 ring-1 ring-edge focus-within:ring-accent"
+            className="creation-editor min-h-48 cursor-text rounded bg-panel2/40 p-2 ring-1 ring-edge focus-within:ring-accent"
           />
           {/* 工具条：编辑框下方的快捷参数。未来可在此加更多功能。 */}
           <div className="mt-2 flex items-center gap-2">
@@ -339,25 +328,11 @@ export function CreationBoard() {
               ) : (
                 <span>该图没有反推维度片段，可直接输入文字，或先在详情页反推生成维度。</span>
               )}
-              <button
-                onClick={() => setShowKeywordHints(false)}
-                className="ml-auto rounded px-1 text-muted hover:bg-panel2 hover:text-ink"
-                title="收起维度面板（Esc）"
-              >
-                ✕
-              </button>
             </div>
           )}
         </div>
 
-        <div className="mt-3">
-          <div className="mb-1 text-[10px] uppercase tracking-wide text-muted">
-            实际发送 prompt（图片 token 会按所选维度展开为片段）
-          </div>
-          <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap rounded bg-panel2 p-2 text-[11px] text-ink">
-            {finalPrompt || "（开始输入 prompt，或点瀑布流图片插入参考图）"}
-          </pre>
-        </div>
+        <CreationGraph sources={graphSources} />
       </div>
 
       <div className="shrink-0 space-y-2 border-t border-edge p-3">
@@ -372,13 +347,6 @@ export function CreationBoard() {
           className="w-full rounded-md bg-accent px-3 py-2 text-sm font-semibold text-black disabled:opacity-50"
         >
           {`✓ 发送 ${targetProviderLabel} 生成`}
-        </button>
-        <button
-          onClick={copy}
-          disabled={!finalPrompt}
-          className="w-full rounded-md bg-panel2 px-3 py-1.5 text-xs text-ink hover:bg-edge disabled:opacity-50"
-        >
-          {copied ? "已复制 ✓" : "复制 prompt + 参考图清单"}
         </button>
         <div className="text-[10px] text-muted">
           {targetHealth && !targetHealth.ok

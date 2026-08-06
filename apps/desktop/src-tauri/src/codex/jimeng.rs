@@ -20,8 +20,10 @@ use crate::codex::GenProvider;
 use crate::core::ingest::walk_images;
 use crate::error::AppError;
 
-/// `text2image --poll` 等待秒数。spike 实测单图 60s 内完成，给 120s 余量。
-const POLL_SECS: u64 = 120;
+/// `text2image --poll` 等待秒数：仅用于 submit 后快速拿 submit_id（落库），**不等生成完成**。
+/// 1s 退出（dreamina 仍在云端生成，stdout 给 querying JSON 含 submit_id）；后续 `query_result`
+/// 自己 poll（poll_query_and_download）直到生成完成下载。这样 submit_id 秒级落库，app 被杀也能恢复。
+const POLL_SECS: u64 = 1;
 /// 单次子进程（提交 / 查询）整体超时上限。
 const CMD_TIMEOUT_SECS: u64 = 180;
 
@@ -131,11 +133,13 @@ impl GenProvider for DreaminaCliProvider {
             })
             .await;
 
-        // ② 下载：query_result --download_dir 到临时目录（对标 ingest_from_url 临时目录惯例）。
-        let download_dir = std::env::temp_dir().join(format!("bowerbird-dreamina-{}", Ulid::new()));
-        std::fs::create_dir_all(&download_dir)
-            .map_err(|e| AppError::Other(format!("建临时目录失败: {e}")))?;
-        let source_images = query_and_download(&self.binary, &submit_id, &download_dir).await?;
+        // ② poll query_result 下载：submit --poll 1 只拿 submit_id（dreamina 仍在云端生成），
+        //    这里轮询 query_result 直到生成完成下载到图。submit_id 已落库，app 被杀也能恢复续查。
+        let source_images =
+            poll_query_and_download(&self.binary, &submit_id, 30, Duration::from_secs(10)).await?;
+        let temp_dir = source_images
+            .first()
+            .and_then(|p| p.parent().map(|x| x.to_path_buf()));
 
         Ok(GenOutcome {
             text: format!("[即梦] 生成 {} 张图", source_images.len()),
@@ -144,7 +148,7 @@ impl GenProvider for DreaminaCliProvider {
             submit_id: Some(submit_id),
             elapsed_ms: start.elapsed().unwrap_or_default().as_millis() as u64,
             source_images,
-            temp_dir: Some(download_dir), // command 层 ingest 后删此目录。
+            temp_dir, // command 层 ingest 后删此目录（poll 最后一次成功的下载目录）。
         })
     }
 }
@@ -220,6 +224,47 @@ pub(crate) async fn query_and_download(
         )));
     }
     Ok(source_images)
+}
+
+/// 策略 B：bounded poll loop（默认 30 次 × 10s = 5min 上限）。每次 `query_and_download`（新临时目录），
+/// 间隔睡眠。供 `generate_image`（submit --poll 1 后轮询下载）与启动恢复 worker 复用。
+/// 致命错（submit_id 无效/fail）早退；querying/空图类继续轮询到上限后返回末次错误。
+pub(crate) async fn poll_query_and_download(
+    binary: &str,
+    submit_id: &str,
+    max_attempts: u32,
+    interval: Duration,
+) -> Result<Vec<PathBuf>, AppError> {
+    let mut last_err: Option<AppError> = None;
+    for _ in 0..max_attempts {
+        let dir = std::env::temp_dir().join(format!("bowerbird-dreamina-{}", Ulid::new()));
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            last_err = Some(AppError::Other(format!("建临时目录失败: {e}")));
+            tokio::time::sleep(interval).await;
+            continue;
+        }
+        match query_and_download(binary, submit_id, &dir).await {
+            Ok(imgs) if !imgs.is_empty() => return Ok(imgs),
+            Ok(_) => {
+                let _ = std::fs::remove_dir_all(&dir);
+                last_err = Some(AppError::Jimeng("远端仍在生成，未下载到图片".into()));
+            }
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&dir);
+                let msg = e.to_string();
+                let fatal = msg.contains("无效")
+                    || msg.contains("not found")
+                    || msg.contains("不存在")
+                    || msg.contains("fail");
+                if fatal {
+                    return Err(e);
+                }
+                last_err = Some(e);
+            }
+        }
+        tokio::time::sleep(interval).await;
+    }
+    Err(last_err.unwrap_or_else(|| AppError::Jimeng("轮询超时，远端仍在生成".into())))
 }
 
 /// dreamina 二进制解析（对称 `resolve_codex_binary`）：

@@ -94,21 +94,39 @@
 
   function extractImageCandidatesFromHtml(html, base, options = {}) {
     const found = [];
-    const tags = String(html || "").match(/<(?:img|source)\b[^>]*>/gi) || [];
-    for (const tag of tags) {
+    const makeTagCandidate = (tag) => {
       const srcset = attr(tag, "srcset") || attr(tag, "data-srcset") || attr(tag, "data-lazy-srcset");
       const selected = parseSrcset(srcset, base);
       if (selected) {
-        found.push(candidate(selected.url, base, {
+        return candidate(selected.url, base, {
           source: "drop-srcset", priority: 1000, pageUrl: options.pageUrl || base, explicit: true,
-        }));
+        });
       }
       for (const name of ["src", "data-src", "data-original", "data-lazy-src", "data-original-src"]) {
         const value = attr(tag, name);
-        if (value) found.push(candidate(value, base, {
-          source: "drop-html", priority: 1000, pageUrl: options.pageUrl || base, explicit: true,
-        }));
+        if (value) {
+          return candidate(value, base, {
+            source: "drop-html", priority: 1000, pageUrl: options.pageUrl || base, explicit: true,
+          });
+        }
       }
+      return null;
+    };
+
+    // 同一 <img>/<source> 标签里的 srcset / src / data-src 通常指向**同一张图的不同分辨率**。
+    // 若全部发出，拖拽一张图会产出多张 → 瀑布流出现重复。每个标签只取**最高分辨率**那张：
+    // srcset（选最高描述符）优先，其次 src 系属性。
+    // <picture> 内的多个 <source> 与回退 <img> 也只是同一逻辑图片，因此整组只取一个。
+    const remaining = String(html || "").replace(/<picture\b[^>]*>[\s\S]*?<\/picture\s*>/gi, (picture) => {
+      const tags = picture.match(/<(?:img|source)\b[^>]*>/gi) || [];
+      const best = tags.map(makeTagCandidate).find(Boolean);
+      if (best) found.push(best);
+      return "";
+    });
+    const tags = remaining.match(/<(?:img|source)\b[^>]*>/gi) || [];
+    for (const tag of tags) {
+      const best = makeTagCandidate(tag);
+      if (best) found.push(best);
     }
     return rankAndDedupe(found, MAX_CANDIDATES);
   }

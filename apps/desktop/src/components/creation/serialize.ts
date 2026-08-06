@@ -132,3 +132,50 @@ function serializeImageToken(
   // 不选维度 = 纯参考引用：只输出 @图名（图本身已通过 reference_images 传给 codex）
   return `@${name}`;
 }
+
+/** 节点图源节点：一张参考图 + 它被选用的维度列表（维度为空 = 整图参考）。 */
+export interface GraphSource {
+  asset: PromptedAsset;
+  dimensions: string[];
+}
+
+/**
+ * 从 doc 提取节点图数据：每个 image 一个源节点，紧跟其后的 keyword 归为该图的维度。
+ * 与官网 graphSourcesFromDoc 同构，但桌面端 keyword 节点无 assetId attr，靠「最近 image」
+ * currentImageId 关联（与 serializeDoc 的关联逻辑一致）。silent 参考图（reuse 复用）也作为
+ * 源节点显示（整图参考），但不更新 currentImageId、不接收后续维度（其维度已内化在正文里）。
+ */
+export function graphSourcesFromDoc(
+  doc: PmNode,
+  assetById: Map<string, PromptedAsset>
+): GraphSource[] {
+  const sources = new Map<string, GraphSource>();
+  const order: string[] = [];
+  const ensure = (assetId: string): GraphSource | null => {
+    const asset = assetById.get(assetId);
+    if (!asset) return null;
+    if (!sources.has(assetId)) {
+      sources.set(assetId, { asset, dimensions: [] });
+      order.push(assetId);
+    }
+    return sources.get(assetId)!;
+  };
+
+  let currentImageId: string | null = null;
+  doc.forEach((para) => {
+    para.forEach((node) => {
+      if (node.type.name === "image") {
+        const assetId: string = node.attrs.assetId;
+        if (!node.attrs.silent) currentImageId = assetId;
+        ensure(assetId);
+      } else if (node.type.name === "keyword") {
+        if (currentImageId) {
+          const s = ensure(currentImageId);
+          const title: string = node.attrs.title;
+          if (s && !s.dimensions.includes(title)) s.dimensions.push(title);
+        }
+      }
+    });
+  });
+  return order.map((id) => sources.get(id)!);
+}

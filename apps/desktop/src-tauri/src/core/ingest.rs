@@ -267,6 +267,7 @@ pub fn ingest_from_bytes(
     source_url: &str,
     file_name: Option<&str>,
     content_type: Option<&str>,
+    source: &str,
 ) -> AppResult<Asset> {
     if bytes.is_empty() {
         return Err(AppError::Media("extension uploaded an empty image".into()));
@@ -301,10 +302,10 @@ pub fn ingest_from_bytes(
         let mut asset = ingest_file(paths, db, &source_path)?;
         let conn = db.conn.lock().unwrap();
         conn.execute(
-            "UPDATE assets SET source='extension', source_url=?1 WHERE id=?2",
-            rusqlite::params![source_url, asset.id],
+            "UPDATE assets SET source=?1, source_url=?2 WHERE id=?3",
+            rusqlite::params![source, source_url, asset.id],
         )?;
-        asset.source = Some("extension".to_string());
+        asset.source = Some(source.to_string());
         asset.source_url = Some(source_url.to_string());
         Ok(asset)
     })();
@@ -531,6 +532,8 @@ mod tests {
     use std::io::Cursor;
     use ulid::Ulid;
 
+    use crate::media::phash::testutil::make_photo_file;
+
     struct Tmp {
         dir: PathBuf,
     }
@@ -585,6 +588,7 @@ mod tests {
             "https://example.com/image-without-extension",
             Some("claimed.webp"),
             Some("image/webp"),
+            "extension",
         )
         .unwrap();
 
@@ -614,6 +618,7 @@ mod tests {
             "https://example.com/empty",
             None,
             Some("image/png"),
+            "extension",
         )
         .is_err());
         assert!(ingest_from_bytes(
@@ -623,6 +628,7 @@ mod tests {
             "https://example.com/login",
             Some("image.jpg"),
             Some("text/html"),
+            "extension",
         )
         .is_err());
         assert!(ingest_from_bytes(
@@ -632,6 +638,7 @@ mod tests {
             "https://example.com/fake.svg",
             Some("fake.svg"),
             Some("image/svg+xml"),
+            "extension",
         )
         .is_err());
         assert_eq!(db.count_assets(None).unwrap(), 0);
@@ -664,12 +671,13 @@ mod tests {
     #[test]
     fn ingest_basic_and_dedupe() {
         let (tmp, paths, db) = setup();
-        let img_path = tmp.dir.join("test.png");
-        make_png(&img_path, 100, 80, [255, 0, 0]);
+        // 用高熵（照片感）图：纯色图 dHash 会退化为全 0（无法可靠判重，见踩坑「纯色图 dHash 退化」），
+        // 低熵保护下不去重；真实素材都是高熵，用照片感图验证去重。
+        let img_path = make_photo_file(&tmp.dir, "test.png", 320, 7);
 
         let asset = ingest_file(&paths, &db, &img_path).unwrap();
-        assert_eq!(asset.width, Some(100));
-        assert_eq!(asset.height, Some(80));
+        assert_eq!(asset.width, Some(320));
+        assert_eq!(asset.height, Some(320));
         assert!(asset.phash.is_some(), "phash should be computed");
         assert_eq!(db.count_assets(None).unwrap(), 1);
 
@@ -680,6 +688,37 @@ mod tests {
         // 去重：再导入同一张 → 不新增
         let _ = ingest_file(&paths, &db, &img_path).unwrap();
         assert_eq!(db.count_assets(None).unwrap(), 1, "duplicate should be deduped");
+    }
+
+    /// 报告 bug 的回归：浏览器扩展把同一张图以两种分辨率采集（如 Pinterest 236w 缩略图
+    /// 与完整图），精确 phash 相等匹配会漏 → 瀑布流出现两张一样素材。
+    /// dHash 阈值去重后：第二张（不同分辨率）应归并到第一张，不新增资产。
+    #[test]
+    fn same_image_at_different_resolutions_dedupes() {
+        let (tmp, paths, db) = setup();
+        // 构造一张有真实照片结构（有限带宽纹理，非纯色/渐变，避免低熵退化）的图，
+        // 再生成低分辨率的变体。
+        let dir = tmp.dir.join("variants");
+        std::fs::create_dir_all(&dir).unwrap();
+        let full = make_photo_file(&dir, "full.png", 640, 0);
+        // 低分辨率变体（模拟浏览器网格缩略图），用与浏览器一致的低通缩放。
+        let small_path = dir.join("small.png");
+        let small_img = image::open(&full)
+            .unwrap()
+            .resize_exact(236, 236, image::imageops::FilterType::Triangle);
+        small_img.save(&small_path).unwrap();
+
+        let first = ingest_file(&paths, &db, &full).unwrap();
+        assert_eq!(db.count_assets(None).unwrap(), 1);
+
+        // 导入低清变体：应被模糊去重归并到高分图，不新增。
+        let merged = ingest_file(&paths, &db, &small_path).unwrap();
+        assert_eq!(
+            db.count_assets(None).unwrap(),
+            1,
+            "同一张图的不同分辨率变体应被去重，只保留 1 条"
+        );
+        assert_eq!(merged.id, first.id, "应归并到已存在的资产");
     }
 
     #[test]
@@ -696,6 +735,7 @@ mod tests {
             "https://example.test/protected/image?id=42",
             Some("captured.png"),
             Some("image/png"),
+            "extension",
         )
         .unwrap();
 
@@ -725,6 +765,7 @@ mod tests {
             "https://example.test/image-without-extension",
             Some("extension-image"),
             Some("application/octet-stream"),
+            "extension",
         )
         .unwrap();
 
@@ -746,6 +787,7 @@ mod tests {
             "https://example.test/page",
             Some("extension-image"),
             Some("text/html; charset=utf-8"),
+            "extension",
         )
         .unwrap_err();
 

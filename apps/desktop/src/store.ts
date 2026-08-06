@@ -119,6 +119,8 @@ interface State {
   setCodexOnboardingForceOpen: (v: boolean) => void;
   extensionOnboardingForceOpen: boolean;
   setExtensionOnboardingForceOpen: (v: boolean) => void;
+  dreaminaOnboardingForceOpen: boolean;
+  setDreaminaOnboardingForceOpen: (v: boolean) => void;
   // —— 应用设置（从后端 settings.json 加载）——
   settings: AppSettings | null;
   loadSettings: () => Promise<void>;
@@ -482,6 +484,9 @@ export const useStore = create<State>((set, get) => {
   extensionOnboardingForceOpen: false,
   setExtensionOnboardingForceOpen: (extensionOnboardingForceOpen) =>
     set({ extensionOnboardingForceOpen }),
+  dreaminaOnboardingForceOpen: false,
+  setDreaminaOnboardingForceOpen: (dreaminaOnboardingForceOpen) =>
+    set({ dreaminaOnboardingForceOpen }),
   // —— 应用设置 ——
   settings: null,
   loadSettings: async () => {
@@ -540,6 +545,7 @@ export const useStore = create<State>((set, get) => {
       set((s) => {
         const genJobs = { ...s.genJobs };
         const genJobOrder = [...s.genJobOrder];
+        let firstRecoveredId: string | null = null;
         for (const j of jobs) {
           if (genJobs[j.id]) continue; // 已存在（用户本轮新发）不覆盖
           genJobs[j.id] = {
@@ -560,12 +566,13 @@ export const useStore = create<State>((set, get) => {
             remoteStatus: j.running ? "querying" : null,
           };
           if (!genJobOrder.includes(j.id)) genJobOrder.push(j.id);
+          if (firstRecoveredId === null) firstRecoveredId = j.id;
         }
-        return {
-          genJobs,
-          genJobOrder,
-          generating: Object.values(genJobs).some((x) => x.running),
-        };
+        const generating = Object.values(genJobs).some((x) => x.running);
+        // 有恢复中 job → 自动弹面板 + 选中首个（用户看得见恢复进度，与 startGeneration 自动弹一致）。
+        return firstRecoveredId
+          ? { genJobs, genJobOrder, generating, genPanelOpen: true, activeJobId: s.activeJobId ?? firstRecoveredId }
+          : { genJobs, genJobOrder, generating };
       });
     } catch (e) {
       console.error("loadGenJobs failed", e);
@@ -710,6 +717,7 @@ export const useStore = create<State>((set, get) => {
           genJobOrder: [...s.genJobOrder, rid],
           activeJobId: s.activeJobId ?? rid,
           generating: true,
+          genPanelOpen: true, // 恢复中弹面板（用户看得见恢复进度）
         };
       });
       return;

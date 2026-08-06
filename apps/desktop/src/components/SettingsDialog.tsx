@@ -23,6 +23,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const setCodexHealth = useStore((s) => s.setCodexHealth);
   const extensionConnected = useStore((s) => s.extensionConnected);
   const setOnboardingForceOpen = useStore((s) => s.setOnboardingForceOpen);
+  const setDreaminaOnboardingForceOpen = useStore((s) => s.setDreaminaOnboardingForceOpen);
   const settings = useStore((s) => s.settings);
   const loadSettings = useStore((s) => s.loadSettings);
   const updateSettings = useStore((s) => s.updateSettings);
@@ -49,7 +50,6 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   // —— 即梦 ——
   const [dreaminaChecking, setDreaminaChecking] = useState(false);
   const [dreaminaLoginOpen, setDreaminaLoginOpen] = useState(false);
-  const [copiedInstall, setCopiedInstall] = useState(false);
 
   useEffect(() => {
     api.libraryRoot().then(setLibRoot).catch(() => {});
@@ -153,15 +153,6 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const dreaminaReason = dreaminaHealth?.reason ?? "";
   const dreaminaNotInstalled = !dreaminaHealth?.ok && dreaminaReason.includes("未检测到");
   const dreaminaNeedsLogin = !dreaminaHealth?.ok && !dreaminaNotInstalled;
-
-  function copyInstallCmd() {
-    navigator.clipboard
-      .writeText("curl -s https://jimeng.jianying.com/cli | bash")
-      .then(() => {
-        setCopiedInstall(true);
-        setTimeout(() => setCopiedInstall(false), 1200);
-      });
-  }
 
   async function recheckDreamina() {
     setDreaminaChecking(true);
@@ -330,21 +321,19 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             {dreaminaNotInstalled && (
               <div className="mt-2 rounded bg-panel p-2">
                 <div className="text-[10px] uppercase tracking-wide text-muted">
-                  安装 dreamina CLI（终端运行，一行命令）
+                  安装 dreamina CLI
                 </div>
-                <div className="mt-1 flex items-center gap-2">
-                  <code className="flex-1 truncate rounded bg-edge px-2 py-1 font-mono text-[11px] text-ink">
-                    curl -s https://jimeng.jianying.com/cli | bash
-                  </code>
-                  <button
-                    onClick={copyInstallCmd}
-                    className="shrink-0 rounded bg-edge px-2 py-0.5 text-[11px] text-ink hover:opacity-80"
-                  >
-                    {copiedInstall ? "已复制 ✓" : "复制"}
-                  </button>
-                </div>
+                <button
+                  onClick={() => {
+                    setDreaminaOnboardingForceOpen(true);
+                    onClose();
+                  }}
+                  className="mt-1 rounded-md bg-accent px-3 py-1 text-[12px] font-medium text-black hover:opacity-90"
+                >
+                  一键安装 dreamina CLI
+                </button>
                 <div className="mt-1 text-[10px] text-muted">
-                  装后重开终端使 PATH 生效，再点「重新检测」→「登录即梦账号」。
+                  app 自动下载官方二进制，无需打开终端；装完点「登录即梦账号」。
                 </div>
               </div>
             )}

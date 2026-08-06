@@ -60,3 +60,32 @@ test("candidate list is capped at 100", () => {
   );
   assert.equal(c.rankAndDedupe(list).length, 100);
 });
+
+test("img tag with srcset+src emits only the highest-res variant (no duplicate resolutions)", () => {
+  const result = c.extractImageCandidatesFromHtml(
+    '<img src="https://cdn.example/thumb.jpg" srcset="https://cdn.example/thumb-236w.jpg 236w, https://cdn.example/full-736w.jpg 736w">',
+    "https://example.com/page"
+  );
+  assert.equal(result.length, 1);
+  assert.equal(result[0].url, "https://cdn.example/full-736w.jpg");
+  assert.equal(result[0].source, "drop-srcset");
+});
+
+test("img tag with src + data-src emits only one (no duplicate from lazy attrs)", () => {
+  const result = c.extractImageCandidatesFromHtml(
+    '<img src="https://cdn.example/a.jpg" data-src="https://cdn.example/a-lazy.jpg">',
+    "https://example.com/page"
+  );
+  assert.equal(result.length, 1);
+  assert.equal(result[0].url, "https://cdn.example/a.jpg");
+});
+
+test("picture source and fallback img emit one logical image", () => {
+  const result = c.extractImageCandidatesFromHtml(
+    '<picture><source srcset="https://cdn.example/x-400w.jpg 400w, https://cdn.example/x-1200w.jpg 1200w"><img src="https://cdn.example/x-fallback.jpg"></picture>',
+    "https://example.com/page"
+  );
+  // source 与 fallback img 同属一个 picture，只应采一张。
+  assert.equal(result.length, 1);
+  assert.equal(result[0].url, "https://cdn.example/x-1200w.jpg");
+});

@@ -454,16 +454,28 @@ pub async fn codex_create_image(
             if let Chunk::Submit { ref submit_id } = chunk {
                 if let Some(db) = app_clone.try_state::<Arc<Database>>() {
                     let db = db.inner();
-                    if let Some(mut job) =
-                        crate::core::task_queue::Task::by_id(db, &job_id_for_emit)
-                            .ok()
-                            .flatten()
-                            .and_then(|t| t.gen_job())
+                    match crate::core::task_queue::Task::by_id(db, &job_id_for_emit)
+                        .ok()
+                        .flatten()
+                        .and_then(|t| t.gen_job())
                     {
-                        job.submit_id = Some(submit_id.clone());
-                        job.status = "querying".to_string();
-                        let _ = crate::core::task_queue::Task::upsert_gen_job(db, &job);
+                        Some(mut job) => {
+                            job.submit_id = Some(submit_id.clone());
+                            job.status = "querying".to_string();
+                            let _ = crate::core::task_queue::Task::upsert_gen_job(db, &job);
+                            tracing::info!(
+                                "gen: submit_id 落库 job={} sid={}",
+                                job_id_for_emit,
+                                submit_id
+                            );
+                        }
+                        None => tracing::warn!(
+                            "gen: Submit 收到但 job {} 不在 task_queue",
+                            job_id_for_emit
+                        ),
                     }
+                } else {
+                    tracing::warn!("gen: Submit 收到但 Database state 不可用");
                 }
             }
             // job_id 注入 chunk JSON 顶层（前端 c.kind/c.text 仍可用 + 新增 c.job_id 路由）。

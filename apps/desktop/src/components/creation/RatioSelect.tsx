@@ -58,7 +58,7 @@ export function RatioSelect({
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-1 rounded bg-panel2 px-2 py-1 text-xs text-ink outline-none ring-1 ring-edge hover:bg-edge focus:ring-accent"
+        className="flex h-7 items-center gap-1 rounded bg-panel2 px-2 text-xs text-ink outline-none ring-1 ring-edge hover:bg-edge focus:ring-accent"
         title="选择画面比例"
       >
         {current ? (

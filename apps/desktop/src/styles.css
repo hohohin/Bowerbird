@@ -92,3 +92,247 @@ body {
 .creation-editor .ProseMirror p {
   margin: 0;
 }
+
+/*
+ * 创作板节点图（CreationGraph）
+ * 移植自官网 website/styles.css 的 .creation-graph* 系列，配色改用桌面端 token：
+ * accent #7c9cff = 输入侧（源节点彩条 / 维度胶囊 / handle / 连线），
+ * lime #d9ff52 = 输出侧（输出节点彩条 / handle，Tailwind 默认调色板自带、非新增 token）。
+ * 尺寸按 420px 窄面板紧凑化（官网 board-pane 更宽）。连线为一条底层 SVG，由组件在 rAF 里
+ * 按 handle 实时坐标画三次贝塞尔 path。
+ */
+.creation-graph-panel {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #2a3140; /* edge */
+}
+.graph-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+.graph-heading > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.graph-heading small {
+  color: #8b93a3; /* muted */
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.graph-heading strong {
+  color: #e6e9ef; /* ink */
+  font-size: 11px;
+  font-weight: 600;
+}
+.graph-heading > span {
+  flex: 0 0 auto;
+  color: #9fb0ff; /* accent 浅 */
+  font-size: 10px;
+}
+
+.creation-graph {
+  position: relative;
+  min-height: 140px;
+  margin-top: 10px;
+  padding: 12px;
+  overflow: hidden;
+  border: 1px solid #2a3140; /* edge */
+  border-radius: 10px;
+  display: grid;
+  grid-template-columns: minmax(138px, 1fr) minmax(96px, 0.58fr);
+  align-items: center;
+  gap: 32px;
+  background-color: #0e1015;
+  background-image: linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+  background-size: 16px 16px;
+}
+.graph-connections {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.graph-connections path {
+  fill: none;
+  stroke: rgba(124, 156, 255, 0.64); /* accent 半透明 */
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+.graph-source-list {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+.graph-node {
+  position: relative;
+  min-width: 0;
+  border: 1px solid #353d4d;
+  border-top: 2px solid #7c9cff; /* accent = 输入侧 */
+  border-radius: 8px;
+  background: rgba(23, 26, 33, 0.96); /* panel */
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.28);
+}
+.graph-node-kicker {
+  display: block;
+  color: #9fb0ff; /* accent 浅 */
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+.graph-source-node {
+  min-height: 56px;
+  padding: 7px 10px 8px 8px;
+}
+.graph-source-node.is-empty {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  border-style: dashed;
+  opacity: 0.7;
+}
+.graph-source-node.is-empty strong {
+  color: #8b93a3; /* muted */
+  font-size: 10px;
+  font-weight: 500;
+}
+.graph-source-main {
+  margin-top: 5px;
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+}
+.graph-source-identity {
+  min-width: 0;
+  padding: 3px;
+  overflow: hidden;
+  border: 1px solid #353d4d;
+  border-radius: 6px;
+  background: #13171f;
+}
+.graph-source-identity img {
+  width: 100%;
+  height: 30px;
+  display: block;
+  border-radius: 3px;
+  object-fit: cover;
+}
+.graph-source-identity strong {
+  display: block;
+  overflow: hidden;
+  padding: 3px 2px 1px;
+  color: #d7dae0;
+  font-size: 8px;
+  font-weight: 600;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.graph-dimension-nodes {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+.graph-dimension-node {
+  position: relative;
+  min-height: 21px;
+  padding: 3px 14px 3px 7px;
+  border: 1px solid rgba(124, 156, 255, 0.35);
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  background: rgba(124, 156, 255, 0.105);
+  color: #bdc6ff;
+  font-size: 9px;
+  line-height: 1.2;
+}
+.graph-dimension-node::before {
+  content: "DIM";
+  margin-right: 6px;
+  color: rgba(124, 156, 255, 0.58);
+  font-size: 7px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+.graph-dimension-node > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.graph-dimension-node.is-reference {
+  border-color: #3a3f4d;
+  background: rgba(255, 255, 255, 0.035);
+  color: #8b93a3; /* muted */
+}
+.graph-dimension-node.is-reference::before {
+  content: "REF";
+  color: #77727c;
+}
+.graph-handle {
+  position: absolute;
+  top: 50%;
+  width: 9px;
+  height: 9px;
+  z-index: 2;
+  border: 2px solid #0e1015;
+  border-radius: 50%;
+  background: #7c9cff; /* accent */
+  transform: translateY(-50%);
+  box-shadow: 0 0 0 1px rgba(124, 156, 255, 0.45);
+}
+.graph-dimension-handle {
+  right: -16px;
+}
+.graph-output-handle {
+  left: -6px;
+  background: #d9ff52; /* lime = 输出侧 */
+  box-shadow: 0 0 0 1px rgba(217, 255, 82, 0.38);
+}
+.graph-output-node {
+  z-index: 1;
+  min-height: 100px;
+  padding: 10px;
+  border-top-color: #d9ff52; /* lime = 输出侧 */
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.graph-output-preview {
+  height: 44px;
+  margin: 6px 0 7px;
+  overflow: hidden;
+  border: 1px solid #353d4d;
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+  background: radial-gradient(circle at 50% 120%, rgba(124, 156, 255, 0.26), transparent 62%),
+    #13171f;
+  color: #bdc6ff;
+}
+.graph-output-preview > span {
+  font-size: 16px;
+}
+.graph-output-node > strong {
+  overflow: hidden;
+  color: #e6e9ef; /* ink */
+  font-size: 10px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.graph-output-node > small {
+  margin-top: 3px;
+  color: #8b93a3; /* muted */
+  font-size: 8px;
+}

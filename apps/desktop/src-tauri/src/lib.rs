@@ -109,6 +109,7 @@ pub fn run() {
             commands::projects::delete_project,
             commands::library::import_files,
             commands::library::import_folder,
+            commands::library::import_image_bytes,
             commands::library::list_assets,
             commands::library::count_assets,
             commands::library::list_folders,
@@ -177,6 +178,8 @@ pub fn run() {
             commands::jimeng::dreamina_login,
             commands::jimeng::dreamina_check_login,
             commands::jimeng::open_dreamina_login,
+            commands::jimeng::dreamina_install,
+            commands::jimeng::cancel_dreamina_setup,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

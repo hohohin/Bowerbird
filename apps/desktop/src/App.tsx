@@ -11,6 +11,7 @@ import { GenerationPanel } from "./components/GenerationPanel";
 import { Onboarding } from "./components/Onboarding";
 import { CodexOnboarding } from "./components/CodexOnboarding";
 import { ExtensionOnboarding } from "./components/ExtensionOnboarding";
+import { DreaminaOnboarding } from "./components/DreaminaOnboarding";
 import { useStore } from "./store";
 import { api } from "./lib/api";
 import type { CodexChunk } from "./lib/types";
@@ -285,6 +286,49 @@ function App() {
     void useStore.getState().loadGenJobs();
   }, []);
 
+  // 全局粘贴入库（Ctrl+V）：截图后直接粘贴图片进当前项目 scope（source=clipboard）。
+  // 焦点在 input/textarea/contenteditable（搜索框/创作板 ProseMirror）时不拦截，让正常文本/图片粘贴。
+  useEffect(() => {
+    function onPaste(e: ClipboardEvent) {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      let imageFile: File | null = null;
+      for (const it of items) {
+        if (it.kind === "file" && it.type.startsWith("image/")) {
+          imageFile = it.getAsFile();
+          if (imageFile) break;
+        }
+      }
+      if (!imageFile) return;
+      const ae = document.activeElement;
+      if (
+        ae instanceof HTMLInputElement ||
+        ae instanceof HTMLTextAreaElement ||
+        (ae instanceof HTMLElement && ae.isContentEditable)
+      ) {
+        return;
+      }
+      e.preventDefault();
+      const file = imageFile;
+      const projectId = useStore.getState().currentProjectId;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = reader.result as string;
+        api
+          .importImageBytes({
+            dataUrl,
+            fileName: file.name || "clipboard.png",
+            projectId,
+            source: "clipboard",
+          })
+          .catch((err) => console.error("paste import failed", err));
+      };
+      reader.readAsDataURL(file);
+    }
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, []);
+
   // codex 可用性：App 挂载取一次，创作板/生成面板共用（约定 7 置灰依据）。
   useEffect(() => {
     api
@@ -334,6 +378,20 @@ function App() {
       .catch(() => setDreaminaHealth({ ok: false, reason: "dreamina 状态检测失败" }));
   }, [setDreaminaHealth]);
 
+  // dreamina 一键安装成功后端 emit `dreamina://health-changed` → 重取 dreaminaHealth
+  // （provider 切换置灰依据 + DreaminaOnboarding 自动重检回一级）。
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    let alive = true;
+    listen("dreamina://health-changed", () => {
+      api.dreaminaHealth().then(setDreaminaHealth).catch(() => {});
+    }).then((u) => (alive ? (unlisten = u) : u()));
+    return () => {
+      alive = false;
+      unlisten?.();
+    };
+  }, [setDreaminaHealth]);
+
   // dreamina 登录（OAuth Device Flow）：dreamina_login 命令逐行透传 stdout 到 store，
   // DreaminaLoginDialog 读 dreaminaLoginLines 展示 verification_uri/user_code。
   useEffect(() => {
@@ -363,6 +421,7 @@ function App() {
       {/* 二级引导：点总览卡片「前往配置」唤起，不再各自自动弹 */}
       <CodexOnboarding />
       <ExtensionOnboarding />
+      <DreaminaOnboarding />
       {/* 图片右键菜单（全局单实例，store.contextMenu 驱动） */}
       <AssetContextMenu />
       <Toolbar onRefresh={refresh} />

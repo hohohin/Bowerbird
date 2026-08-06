@@ -47,6 +47,19 @@ export const api = {
     invoke<Asset[]>("import_files", { sources, projectId: projectId ?? null }),
   importFolder: (path: string, projectId?: string | null) =>
     invoke<number>("import_folder", { path, projectId: projectId ?? null }),
+  // 拖拽（source=imported）/ 剪切板粘贴（source=clipboard）图片入库：data URL（base64）传后端解码。
+  importImageBytes: (req: {
+    dataUrl: string;
+    fileName?: string | null;
+    projectId?: string | null;
+    source: string;
+  }) =>
+    invoke<Asset>("import_image_bytes", {
+      dataUrl: req.dataUrl,
+      fileName: req.fileName ?? null,
+      projectId: req.projectId ?? null,
+      source: req.source,
+    }),
 
   // 浏览
   listAssets: (folderId?: string, projectId?: string | null, limit = 500, offset = 0) =>
@@ -184,6 +197,10 @@ export const api = {
     invoke<CodexHealth>("dreamina_check_login", { deviceCode }),
   // 拉起系统终端跑 `dreamina login`（真 TTY；app 内 spawn 非 TTY 不写 token，见后端命令注释）。
   openDreaminaLogin: () => invoke<void>("open_dreamina_login"),
+  // 一键安装 dreamina CLI（app 内 reqwest 下载二进制，绕过 curl|bash 在 Windows 的坑）。
+  // 进度经 dreamina://setup-progress {stage:"install", line} 推；成功后端 emit dreamina://health-changed。
+  dreaminaInstall: () => invoke<CodexHealth>("dreamina_install"),
+  cancelDreaminaSetup: () => invoke<void>("cancel_dreamina_setup"),
   // 创作板「生成」：把最终 prompt + 参考图发 codex（codex exec --image，同反推机制）出图。
   // 流式文本经 codex://chunk（Delta）回；生成图 copy 进 library/generations 后随 Done.images 回。
   // sessionId 非空 → codex exec resume 续接同一会话（多轮迭代修改，codex 记得上一张图）。

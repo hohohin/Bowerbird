@@ -4,16 +4,16 @@ import { useStore } from "../store";
 
 const SEEN_KEY = "bowerbird.onboardingSeen";
 
-function StatusBadge({ ok, reason }: { ok?: boolean; reason?: string }) {
+function StatusBadge({ ok }: { ok?: boolean; reason?: string }) {
   if (ok === true)
     return (
       <span className="rounded bg-green-500/15 px-2 py-0.5 text-xs text-green-400">✓ 就绪</span>
     );
   if (ok === false)
+    // 四列卡片空间有限，不展开长 reason（如 dreamina 的「运行 curl … 安装」），
+    // 只显「未就绪」；详细原因在二级引导（Codex/Dreamina/Extension Onboarding）里看。
     return (
-      <span className="rounded bg-red-500/15 px-2 py-0.5 text-xs text-red-300">
-        ✗ {reason || "未就绪"}
-      </span>
+      <span className="rounded bg-red-500/15 px-2 py-0.5 text-xs text-red-300">✗ 未就绪</span>
     );
   return <span className="rounded bg-panel2 px-2 py-0.5 text-xs text-muted">—</span>;
 }
@@ -67,16 +67,19 @@ function Card({
 export function Onboarding() {
   const codexHealth = useStore((s) => s.codexHealth);
   const extensionConnected = useStore((s) => s.extensionConnected);
+  const dreaminaHealth = useStore((s) => s.dreaminaHealth);
   const forceOpen = useStore((s) => s.onboardingForceOpen);
   const setForceOpen = useStore((s) => s.setOnboardingForceOpen);
   const codexOpen = useStore((s) => s.codexOnboardingForceOpen);
   const extensionOpen = useStore((s) => s.extensionOnboardingForceOpen);
+  const dreaminaOpen = useStore((s) => s.dreaminaOnboardingForceOpen);
   const setCodexOpen = useStore((s) => s.setCodexOnboardingForceOpen);
   const setExtensionOpen = useStore((s) => s.setExtensionOnboardingForceOpen);
+  const setDreaminaOpen = useStore((s) => s.setDreaminaOnboardingForceOpen);
   const [seen, setSeen] = useState(() => localStorage.getItem(SEEN_KEY) === "1");
 
   // 任一二級打开时一级不渲染，避免自动显示场景下产生双层 Modal。
-  if (codexOpen || extensionOpen) return null;
+  if (codexOpen || extensionOpen || dreaminaOpen) return null;
 
   // 一级只能由用户关闭（✕ / 「稍后再说」）：不因 codex/扩展状态变化自动收。
   // seen 仅在用户主动 dismiss 时写入，用于「首启未配齐才自动弹一次，用户看过就不再骚扰」。
@@ -96,6 +99,10 @@ export function Onboarding() {
   function goExtension() {
     setForceOpen(false);
     setExtensionOpen(true);
+  }
+  function goDreamina() {
+    setForceOpen(false);
+    setDreaminaOpen(true);
   }
 
   return createPortal(
@@ -123,7 +130,7 @@ export function Onboarding() {
         </header>
 
         <div className="flex-1 overflow-y-auto p-5">
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-4">
             <Card
               n={1}
               title="codex CLI"
@@ -144,6 +151,15 @@ export function Onboarding() {
             />
             <Card
               n={3}
+              title="即梦 dreamina CLI"
+              subtitle="备选出图引擎"
+              ok={dreaminaHealth?.ok}
+              reason={dreaminaHealth?.ok ? undefined : dreaminaHealth?.reason}
+              actionLabel={dreaminaHealth?.ok ? "查看引导" : "前往配置"}
+              onAction={goDreamina}
+            />
+            <Card
+              n={4}
               title="新手教程"
               subtitle="视频引导（待补充）"
               actionLabel="即将推出"

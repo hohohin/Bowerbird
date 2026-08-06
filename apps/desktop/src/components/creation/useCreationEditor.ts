@@ -6,15 +6,12 @@ import type { Node as PmNode, ResolvedPos } from "prosemirror-model";
 import { useStore } from "../../store";
 import type { Asset, CaptionSection, PromptedAsset } from "../../lib/types";
 import { creationSchema, imageAttrs } from "./schema";
-import { serializeDoc } from "./serialize";
+import { serializeDoc, graphSourcesFromDoc } from "./serialize";
 import { parsePromptToDoc, parsePromptToInline } from "./parse";
 import { buildPlugins } from "./plugins";
 
 const PICK_EVENT = "bowerbird://board-asset-picked";
 const LOAD_EVENT = "bowerbird://board-load-prompt";
-// store 在创作板首发生成成功时通知编辑器清草稿（见 store.ts applyGenChunk）。
-const GEN_START_EVENT = "bowerbird://board-gen-start";
-const GEN_SUCCESS_EVENT = "bowerbird://board-gen-success";
 
 function initialDoc() {
   return creationSchema.topNodeType.create(null, [
@@ -86,8 +83,6 @@ export function useCreationEditor() {
   assetByIdRef.current = assetById;
   const chipSectionsRef = useRef(chipSections);
   chipSectionsRef.current = chipSections;
-  // 自上次「创作板首发」起是否编辑过——生成成功时未编辑才清空，编辑过则保留（期间编辑保护）。
-  const dirtyRef = useRef(false);
 
   useEffect(() => {
     if (!hostRef.current) return;
@@ -113,7 +108,6 @@ export function useCreationEditor() {
       state: EditorState.create({ doc: startDoc, plugins }),
       dispatchTransaction: (tr) => {
         view.updateState(view.state.apply(tr));
-        dirtyRef.current = true;
         setTick((t) => t + 1);
         scheduleSave();
       },
@@ -173,40 +167,15 @@ export function useCreationEditor() {
       setTimeout(() => v.focus(), 0);
     }
 
-    // 创作板首发开始：重置 dirty（此后任何 dispatchTransaction 会把它置 true）。
-    function onGenStart() {
-      dirtyRef.current = false;
-    }
-    // 生成成功：若发送后未再编辑，清空编辑器 + 草稿（这轮组稿已交付，不必保留）；
-    // 若期间又编辑了新内容则保留——保护「生成期间继续组下一轮稿」的体验（约定 9）。
-    function onGenSuccess() {
-      if (dirtyRef.current) return;
-      const v = viewRef.current;
-      if (!v) return;
-      if (saveTimer) clearTimeout(saveTimer);
-      try {
-        localStorage.removeItem(BOARD_DRAFT_KEY);
-      } catch {
-        // ignore storage errors
-      }
-      v.updateState(EditorState.create({ doc: initialDoc(), plugins: v.state.plugins }));
-      setExtraAssets([]);
-      setChipAssetId(null);
-      setShowKeywordHints(false);
-      dirtyRef.current = false;
-      setTick((t) => t + 1);
-    }
-
+    // 生成成功关闭创作板 / 手动收起 / 切项目 → 卸载。卸载即把当前 doc 落盘
+    // （比 400ms 去抖更可靠——刚编辑完就关板时去抖计时器还挂着），重开创作板恢复。
     window.addEventListener(PICK_EVENT, onPick);
     window.addEventListener(LOAD_EVENT, onLoad);
-    window.addEventListener(GEN_START_EVENT, onGenStart);
-    window.addEventListener(GEN_SUCCESS_EVENT, onGenSuccess);
     return () => {
       window.removeEventListener(PICK_EVENT, onPick);
       window.removeEventListener(LOAD_EVENT, onLoad);
-      window.removeEventListener(GEN_START_EVENT, onGenStart);
-      window.removeEventListener(GEN_SUCCESS_EVENT, onGenSuccess);
       if (saveTimer) clearTimeout(saveTimer);
+      saveDraft(view.state.doc.toJSON(), extraAssetsRef.current);
       view.destroy();
       viewRef.current = null;
     };
@@ -217,6 +186,13 @@ export function useCreationEditor() {
     const doc = viewRef.current?.state.doc;
     if (!doc) return { finalPrompt: "", references: [] as PromptedAsset[] };
     return serializeDoc(doc, assetByIdRef.current);
+  }, [tick, assetById]);
+
+  // 节点图数据：与序列化同源（同一个 doc / assetById），随编辑实时更新。
+  const graphSources = useMemo(() => {
+    const doc = viewRef.current?.state.doc;
+    if (!doc) return [];
+    return graphSourcesFromDoc(doc, assetByIdRef.current);
   }, [tick, assetById]);
 
   const insertKeyword = useCallback((title: string) => {
@@ -235,11 +211,11 @@ export function useCreationEditor() {
     focus,
     finalPrompt: serialized.finalPrompt,
     references: serialized.references,
+    graphSources,
     chipAssetId,
     setChipAssetId,
     chipSections,
     showKeywordHints,
-    setShowKeywordHints,
     insertKeyword,
   };
 }

@@ -74,9 +74,9 @@
     }
     const local = candidates.find((item) => item.kind === "blob" || item.kind === "data");
     if (local) {
-      showToast("正在读取页面内嵌图片…");
+      showToast("采集中…");
       const result = await saveLocalCandidate(local, location.href);
-      showToast(result.ok ? "已保存到 Bowerbird" : result.error, result.ok);
+      showCollectResult(result.ok);
       return;
     }
     saveBatch(makeGenericBatch(candidates));
@@ -89,7 +89,9 @@
   }
 
   function showToast(text, ok = true) {
+    document.getElementById("__bowerbird_toast")?.remove();
     const t = document.createElement("div");
+    t.id = "__bowerbird_toast";
     t.textContent = text;
     t.style.cssText = [
       "position:fixed",
@@ -105,6 +107,10 @@
     ].join(";");
     document.documentElement.appendChild(t);
     setTimeout(() => t.remove(), 3000);
+  }
+
+  function showCollectResult(ok) {
+    showToast(ok ? "采集成功" : "采集失败", ok);
   }
 
   async function collectMaterials() {
@@ -348,33 +354,61 @@
       height: image.naturalHeight || image.clientHeight || 0,
       visible,
     };
+    // 同一 <img> 元素在 currentSrc / srcset / picture / lazy data-* 里通常指向**同一张图
+    // 的不同分辨率版本**（如 Pinterest 236w 网格缩略图与完整图）。若全部发出，扩展会把它
+    // 当作多张采集 → 瀑布流出现两张一样素材（即使后端已做 dHash 阈值去重，也尽量在源头
+    // 收敛）。故每个元素只取一张候选：按来源可信度取最高清版本（见 pickBestVariant）。
+    const candidates = [];
     const current = C.candidate(image.currentSrc || image.getAttribute("src"), document.baseURI, {
       ...options, source: "currentSrc", priority: priority + 20,
     });
-    if (current) out.push(current);
+    if (current) candidates.push(current);
 
     const ownSrcset = C.parseSrcset(image.getAttribute("srcset"), document.baseURI);
-    if (ownSrcset) out.push(C.candidate(ownSrcset.url, document.baseURI, {
+    if (ownSrcset) candidates.push(C.candidate(ownSrcset.url, document.baseURI, {
       ...options, source: "srcset", priority: priority + 15,
     }));
     image.closest("picture")?.querySelectorAll("source[srcset]").forEach((source) => {
       const selected = C.parseSrcset(source.getAttribute("srcset"), document.baseURI);
-      if (selected) out.push(C.candidate(selected.url, document.baseURI, {
+      if (selected) candidates.push(C.candidate(selected.url, document.baseURI, {
         ...options, source: "picture", priority: priority + 15,
       }));
     });
     for (const attr of LAZY_URL_ATTRS) {
       const value = image.getAttribute(attr);
-      if (value) out.push(C.candidate(value, document.baseURI, {
+      if (value) candidates.push(C.candidate(value, document.baseURI, {
         ...options, source: "lazy", priority: priority + 10,
       }));
     }
     for (const attr of LAZY_SRCSET_ATTRS) {
       const selected = C.parseSrcset(image.getAttribute(attr), document.baseURI);
-      if (selected) out.push(C.candidate(selected.url, document.baseURI, {
+      if (selected) candidates.push(C.candidate(selected.url, document.baseURI, {
         ...options, source: "lazy-srcset", priority: priority + 10,
       }));
     }
+    const best = pickBestVariant(candidates);
+    if (best) out.push(best);
+  }
+
+  // 从同一元素的多分辨率候选中挑「最高分辨率」的一张。
+  // 同一 <img> 的 currentSrc / srcset / lazy data-* 通常指向同一张图的不同分辨率版本；
+  // 且 `naturalWidth/clientWidth` 是该元素**当前显示**的尺寸、对所有候选相同，无法据此区分
+  // 各 URL 的真实分辨率。故按来源可信度分级：
+  //   0 srcset/picture/lazy-srcset —— 显式的分辨率集合，选中的最高描述符就是最高清版本
+  //   1 lazy data-*（data-src 等）—— 懒加载的真实大图（占位符只是 currentSrc）
+  //   2 currentSrc —— 当前显示的（可能是缩略图/占位符）
+  // 同层内优先宽高更大的（srcset 已按最高描述符选中，通常同 URL）。
+  function pickBestVariant(candidates) {
+    const tier = (source) =>
+      source === "srcset" || source === "picture" || source === "lazy-srcset"
+        ? 0
+        : source === "lazy"
+          ? 1
+          : 2;
+    return candidates
+      .filter(Boolean)
+      .map((item) => ({ item, key: tier(item.source), area: (item.width || 0) * (item.height || 0) }))
+      .sort((a, b) => a.key - b.key || b.area - a.area)[0]?.item || null;
   }
 
   function cssBackgroundCandidates(el, pageUrl, priority = 55) {
@@ -652,9 +686,9 @@
       if (canvas) {
         e.preventDefault();
         e.stopPropagation();
-        showToast("正在导出 Canvas…");
+        showToast("采集中…");
         const result = await saveCanvas(canvas, location.href);
-        showToast(result.ok ? "Canvas 已保存到 Bowerbird" : result.error, result.ok);
+        showCollectResult(result.ok);
         return;
       }
       const image = path.find((node) => node?.tagName === "IMG");
@@ -677,9 +711,9 @@
       candidates = candidates.map((item) => ({ ...item, explicit: true, pageUrl: noteLink || location.href }));
       const local = candidates.find((item) => item.kind === "blob" || item.kind === "data");
       if (local) {
-        showToast("正在读取页面内嵌图片…");
+        showToast("采集中…");
         const result = await saveLocalCandidate(local, noteLink || location.href);
-        showToast(result.ok ? "已保存到 Bowerbird" : result.error, result.ok);
+        showCollectResult(result.ok);
         return;
       }
       saveBatch(makeGenericBatch(candidates, noteLink || location.href));
@@ -689,13 +723,10 @@
 
   function saveBatch(batch) {
     if (batch.items.length === 0) return;
-    showToast(`采集中…（${batch.items.length} 项）`);
+    showToast("采集中…");
     saveViaWs(batch).then((response) => {
       const results = Array.isArray(response?.results) ? response.results : [response];
-      const ok = results.filter((item) => item?.ok).length;
-      const firstError = results.find((item) => !item?.ok)?.error;
-      const detail = firstError ? `；首个失败：${String(firstError).slice(0, 80)}` : "";
-      showToast(`已保存 ${ok}/${batch.items.length} 项到 Bowerbird${detail}`, ok > 0);
+      showCollectResult(results.length > 0 && results.every((item) => item?.ok));
     });
   }
 

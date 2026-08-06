@@ -5,7 +5,9 @@
 //! `dreamina_login` 透传 OAuth Device Flow 的 stdout 给前端（UI Phase 3，已搁置——app spawn
 //! 非 TTY 不写 token；改用 `open_dreamina_login` 拉起系统终端登录）。
 
+use std::path::PathBuf;
 use std::process::Stdio;
+use std::time::Duration;
 
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -174,4 +176,183 @@ pub async fn open_dreamina_login() -> Result<(), AppError> {
             Err(AppError::Jimeng("当前系统暂不支持打开即梦登录终端".into()))
         }
     }
+}
+
+/// dreamina 官方二进制下载基址（spike 实测，与官方 install 脚本 DOWNLOAD_BASE 一致）。
+const DREAMINA_DOWNLOAD_BASE: &str =
+    "https://lf3-static.bytednsdoc.com/obj/eden-cn/psj_hupthlyk/ljhwZthlaukjlkulzlp/dreamina_cli_beta";
+
+/// 当前平台的 (下载 URL, 安装路径)。安装路径与 `resolve_dreamina_binary` 查的目录一致
+/// （Windows `%USERPROFILE%\bin\dreamina.exe`、Unix `~/.local/bin/dreamina`），故无需改 PATH。
+fn dreamina_install_target() -> (String, PathBuf) {
+    #[cfg(target_os = "windows")]
+    {
+        // 官方 install 脚本 Windows 仅支持 amd64（arm64 暂不支持）。
+        let url = format!("{}/dreamina_cli_windows_amd64.exe", DREAMINA_DOWNLOAD_BASE);
+        let dir = PathBuf::from(std::env::var_os("USERPROFILE").unwrap_or_default()).join("bin");
+        (url, dir.join("dreamina.exe"))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let arch = if cfg!(target_arch = "aarch64") { "arm64" } else { "amd64" };
+        let url = format!("{}/dreamina_cli_darwin_{}", DREAMINA_DOWNLOAD_BASE, arch);
+        let dir = PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
+            .join(".local")
+            .join("bin");
+        (url, dir.join("dreamina"))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let arch = if cfg!(target_arch = "aarch64") { "arm64" } else { "amd64" };
+        let url = format!("{}/dreamina_cli_linux_{}", DREAMINA_DOWNLOAD_BASE, arch);
+        let dir = PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
+            .join(".local")
+            .join("bin");
+        (url, dir.join("dreamina"))
+    }
+}
+
+/// 当前 dreamina 安装的取消信号（独立于 codex SETUP_CANCEL / 生成取消；onboarding 顺序执行不并发）。
+static DREAMINA_SETUP_CANCEL: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>> =
+    std::sync::Mutex::new(None);
+
+/// 一键安装 dreamina CLI（对称 `codex_install`）：app 内 reqwest 下载官方二进制到本地，
+/// 绕过 `curl | bash`——Windows 无 bash、PowerShell 的 curl 是 Invoke-WebRequest 别名，用户手敲必失败。
+/// 不改 PATH——`resolve_dreamina_binary` 主动查 `%USERPROFILE%\bin` / `~/.local/bin`。
+/// 流式进度经 `dreamina://setup-progress`（stage=install）；成功复查 + emit `dreamina://health-changed`。
+#[tauri::command]
+pub async fn dreamina_install(app: AppHandle) -> Result<CodexHealth, AppError> {
+    let (url, install_path) = dreamina_install_target();
+    let install_dir = install_path
+        .parent()
+        .ok_or_else(|| AppError::Jimeng("无法解析 dreamina 安装目录".into()))?
+        .to_path_buf();
+    let file_name = install_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("dreamina")
+        .to_string();
+    let tmp_path = install_dir.join(format!(".{file_name}.tmp"));
+
+    tokio::fs::create_dir_all(&install_dir)
+        .await
+        .map_err(|e| AppError::Jimeng(format!("创建安装目录失败 {}: {e}", install_dir.display())))?;
+    let _ = app.emit(
+        "dreamina://setup-progress",
+        serde_json::json!({ "stage": "install", "line": format!("下载 {url}") }),
+    );
+
+    let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
+    DREAMINA_SETUP_CANCEL.lock().unwrap().replace(cancel_tx);
+
+    let app_for_dl = app.clone();
+    let download = async {
+        use futures_util::StreamExt;
+        use tokio::io::AsyncWriteExt;
+        let client = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(15))
+            .timeout(Duration::from_secs(300))
+            .build()
+            .map_err(|e| AppError::Jimeng(format!("构建 HTTP client 失败: {e}")))?;
+        let resp = client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| AppError::Jimeng(format!("请求 dreamina 二进制失败: {e}")))?;
+        if !resp.status().is_success() {
+            return Err(AppError::Jimeng(format!("下载失败 HTTP {}", resp.status())));
+        }
+        let total = resp.content_length();
+        let mut file = tokio::fs::File::create(&tmp_path)
+            .await
+            .map_err(|e| AppError::Jimeng(format!("创建临时文件失败: {e}")))?;
+        let mut stream = resp.bytes_stream();
+        let mut downloaded: u64 = 0;
+        let mut last_pct: u64 = 0;
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| AppError::Jimeng(format!("下载中断: {e}")))?;
+            file.write_all(&chunk)
+                .await
+                .map_err(|e| AppError::Jimeng(format!("写入失败: {e}")))?;
+            downloaded += chunk.len() as u64;
+            if let Some(t) = total {
+                let pct = downloaded * 100 / t.max(1);
+                if pct >= last_pct + 10 {
+                    last_pct = pct;
+                    let _ = app_for_dl.emit(
+                        "dreamina://setup-progress",
+                        serde_json::json!({ "stage": "install", "line": format!("下载 {}%", pct) }),
+                    );
+                }
+            }
+        }
+        file.flush()
+            .await
+            .map_err(|e| AppError::Jimeng(format!("flush 失败: {e}")))?;
+        Ok::<(), AppError>(())
+    };
+
+    let result = tokio::select! {
+        r = download => r,
+        _ = &mut cancel_rx => {
+            let _ = tokio::fs::remove_file(&tmp_path).await;
+            DREAMINA_SETUP_CANCEL.lock().unwrap().take();
+            return Err(AppError::Jimeng("已取消".into()));
+        }
+    };
+    DREAMINA_SETUP_CANCEL.lock().unwrap().take();
+    result?;
+
+    // .tmp → 目标（同目录 rename，不跨卷）。
+    tokio::fs::rename(&tmp_path, &install_path)
+        .await
+        .map_err(|e| AppError::Jimeng(format!("安装文件落位失败: {e}")))?;
+
+    // Unix 设可执行权限（Windows exe 无需）。
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(&install_path) {
+            let mut perms = meta.permissions();
+            perms.set_mode(0o755);
+            let _ = std::fs::set_permissions(&install_path, perms);
+        }
+    }
+
+    let _ = app.emit(
+        "dreamina://setup-progress",
+        serde_json::json!({ "stage": "install", "line": "下载完成，验证中…" }),
+    );
+
+    // 复查：spawn `dreamina version` 成功 = 二进制可执行。
+    let binary_ok = if let Some(b) = resolve_dreamina_binary() {
+        dreamina_command(&b)
+            .arg("version")
+            .output()
+            .await
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    } else {
+        false
+    };
+    if !binary_ok {
+        return Ok(CodexHealth {
+            ok: false,
+            reason: "dreamina 下载完成但无法执行；请重启应用后再试".into(),
+        });
+    }
+    let _ = app.emit("dreamina://health-changed", ());
+    Ok(CodexHealth {
+        ok: true,
+        reason: String::new(),
+    })
+}
+
+/// 取消正在进行的 dreamina 安装（`dreamina_install`）。无任务在跑则空操作。
+#[tauri::command]
+pub async fn cancel_dreamina_setup() -> Result<(), AppError> {
+    if let Some(tx) = DREAMINA_SETUP_CANCEL.lock().unwrap().take() {
+        let _ = tx.send(());
+    }
+    Ok(())
 }

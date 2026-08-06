@@ -176,6 +176,7 @@ fn handle_blob(
         source_url,
         file_name,
         content_type,
+        "extension",
     ) {
         Ok(asset) => {
             if let Some(project_id) = project_id {

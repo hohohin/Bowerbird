@@ -84,6 +84,57 @@ pub async fn import_folder(
     Ok(assets.len())
 }
 
+/// 解析 data URL（`data:image/png;base64,xxxx`，兼容裸 base64）为原始字节。
+fn decode_data_url_bytes(data_url: &str) -> Result<Vec<u8>, AppError> {
+    use base64::Engine;
+    let payload = data_url
+        .split_once(',')
+        .map(|(_, tail)| tail)
+        .unwrap_or(data_url);
+    base64::engine::general_purpose::STANDARD
+        .decode(payload)
+        .map_err(|e| AppError::Media(format!("data URL base64 解码失败: {e}")))
+}
+
+/// 拖拽 / 剪切板粘贴入库：前端把图片字节以 data URL（base64）传入，复用 `ingest_from_bytes`。
+/// source = "imported"（拖拽）/ "clipboard"（粘贴）；project_id 非空时关联当前项目。
+#[tauri::command]
+pub async fn import_image_bytes(
+    app: AppHandle,
+    paths: State<'_, Arc<LibraryPaths>>,
+    db: State<'_, Arc<Database>>,
+    data_url: String,
+    file_name: Option<String>,
+    project_id: Option<String>,
+    source: String,
+) -> Result<Asset, AppError> {
+    let bytes = decode_data_url_bytes(&data_url)?;
+    let paths = paths.inner().clone();
+    let db = db.inner().clone();
+    let db_for_ingest = db.clone();
+    let asset = tokio::task::spawn_blocking(move || {
+        ingest::ingest_from_bytes(
+            &paths,
+            &db_for_ingest,
+            &bytes,
+            "",
+            file_name.as_deref(),
+            None,
+            &source,
+        )
+    })
+    .await
+    .map_err(|e| AppError::Other(e.to_string()))??;
+    if let Some(pid) = project_id.as_deref() {
+        if let Err(e) = db.add_assets_to_project(pid, std::slice::from_ref(&asset.id)) {
+            tracing::warn!("link pasted/dropped asset {} to project failed: {e}", asset.id);
+        }
+    }
+    crate::core::autoname::spawn_auto_analyze(app.clone(), db.clone(), asset.clone());
+    let _ = app.emit("library://assets-changed", ());
+    Ok(asset)
+}
+
 #[tauri::command]
 pub async fn list_assets(
     db: State<'_, Arc<Database>>,

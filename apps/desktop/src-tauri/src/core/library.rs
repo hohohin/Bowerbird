@@ -320,13 +320,49 @@ impl Database {
         Ok(())
     }
 
+    /// 按 dHash 阈值找「近似重复」的已有资产（采集去重）。
+    ///
+    /// 同一张图被以不同分辨率采集（Pinterest 236w 网格缩略图 vs 原图 / srcset 变体）时，
+    /// dHash 距离很小（实测个位数），精确相等匹配会漏 → 瀑布流出现两张一样的素材。
+    /// 故从精确匹配升级为海明距离 ≤ [`crate::media::phash::DEDUP_HAMMING_MAX`] 的阈值匹配：
+    /// 对带 phash 的存量资产做一次扫描（千图级，毫秒级），命中即视为重复。
+    /// 多张命中时保留分辨率最大（更早，防抖动）的那张——高分图入库后，低分变体被归并掉。
+    /// 低熵保护：纯色/平滑渐变等低熵图的 dHash 会退化为全 0 / 极低置位（不同纯色可能同值），
+    /// 无法可靠判定身份，一律不做去重（见踩坑「纯色图 dHash 退化」）。
     pub fn find_asset_by_phash(&self, phash: &str) -> AppResult<Option<Asset>> {
+        if !crate::media::phash::is_high_entropy(phash) {
+            // 新图低熵：退化哈希不可信，不去重（否则会误并两张不同的纯色图）。
+            return Ok(None);
+        }
         let conn = self.conn.lock().unwrap();
-        let sql = format!("SELECT {ASSET_COLS} FROM assets WHERE phash = ?1 LIMIT 1");
-        let asset = conn
-            .query_row(&sql, rusqlite::params![phash], asset_from_row)
-            .optional()?;
-        Ok(asset)
+        let sql = format!("SELECT {ASSET_COLS} FROM assets WHERE phash IS NOT NULL");
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map([], asset_from_row)?;
+        let mut best: Option<Asset> = None;
+        for row in rows {
+            let asset = row?;
+            let Some(candidate) = asset.phash.as_deref() else {
+                continue;
+            };
+            // 存量低熵哈希同样不可信，跳过。
+            if !crate::media::phash::is_high_entropy(candidate) {
+                continue;
+            }
+            let Some(dist) = crate::media::phash::hamming(phash, candidate) else {
+                continue;
+            };
+            if dist > crate::media::phash::DEDUP_HAMMING_MAX {
+                continue;
+            }
+            let area = |a: &Asset| {
+                a.width.unwrap_or(0)
+                    .saturating_mul(a.height.unwrap_or(0))
+            };
+            if best.as_ref().is_none_or(|b| area(b) < area(&asset)) {
+                best = Some(asset);
+            }
+        }
+        Ok(best)
     }
 
     pub fn delete_asset(&self, id: &str) -> AppResult<()> {
