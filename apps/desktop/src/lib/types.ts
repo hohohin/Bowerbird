@@ -168,7 +168,8 @@ export interface MigrateProgress {
 }
 
 export type CodexChunk =
-  | { kind: "delta"; text: string }
+  | { kind: "started"; job_id: string }
+  | { kind: "delta"; text: string; job_id?: string }
   | {
       kind: "done";
       text: string;
@@ -176,5 +177,6 @@ export type CodexChunk =
       elapsed_ms: number;
       images?: string[];
       session_id?: string | null;
+      job_id?: string;
     }
-  | { kind: "error"; message: string };
+  | { kind: "error"; message: string; job_id?: string };

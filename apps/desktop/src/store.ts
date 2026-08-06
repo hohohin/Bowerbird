@@ -150,6 +150,7 @@ interface State {
   genRefAssets: Asset[]; // 最近一次发送参考图的完整 asset，「复用到创作板」还原参考图用
   genProjectId: string | null; // 生成会话所属项目快照；续轮不随当前项目切换漂移
   genUnread: boolean; // 面板关时落地新图 → 顶栏按钮红点
+  currentGenJobId: string | null; // Phase A task 2：当前生成 job_id（per-job 取消引用）
   toggleGenPanel: () => void;
   setGenPanelOpen: (open: boolean) => void;
   startGeneration: (prompt: string, references: Asset[], ratio?: string | null, provider?: string | null) => Promise<void>;
@@ -235,9 +236,9 @@ export const useStore = create<State>((set, get) => {
     applyGenError(msg);
   }
 
-  // 创作板首发（startGeneration）的生成：done 有图 = 成功，通知编辑器清草稿——
-  // 这轮组稿已交付，不必再作为草稿保留。续轮 sendGenRevise 不置此 flag（续轮不清创作板）。
-  let pendingBoardClear = false;
+  // 创作板首发（startGeneration）的生成：done 有图 = 成功，关闭创作板（草稿由编辑器
+  // 卸载时落盘保留，重开即恢复刚交付的组稿）。续轮 sendGenRevise 不置此 flag（续轮不关创作板）。
+  let pendingBoardClose = false;
 
   return {
   assets: [],
@@ -519,6 +520,7 @@ export const useStore = create<State>((set, get) => {
   genRefAssets: [],
   genProjectId: null,
   genUnread: false,
+  currentGenJobId: null,
   toggleGenPanel: () =>
     set((s) => {
       const opening = !s.genPanelOpen;
@@ -549,18 +551,18 @@ export const useStore = create<State>((set, get) => {
       genPanelOpen: true, // 自动弹面板给即时反馈（创作板在右槽仍可编辑）
       genUnread: false,
     });
-    // 标记本轮为「创作板首发」：done 有图时通知编辑器清草稿（编辑器据 dirty 决定是否清）。
-    pendingBoardClear = true;
-    window.dispatchEvent(new CustomEvent("bowerbird://board-gen-start"));
+    // 标记本轮为「创作板首发」：done 有图时关闭创作板（草稿由编辑器卸载时落盘保留）。
+    pendingBoardClose = true;
     set({ generating: true });
     try {
-      await api.codexCreateImage({
+      const jobId = await api.codexCreateImage({
         prompt: sentPrompt,
         referenceImages: refPaths,
         ratio,
         provider: prov,
         projectId: get().genProjectId,
       });
+      set({ currentGenJobId: jobId });
     } catch (e) {
       genHandleError(typeof e === "string" ? e : JSON.stringify(e));
     } finally {
@@ -576,20 +578,21 @@ export const useStore = create<State>((set, get) => {
     const turns = get().genTurns;
     const lastImages = turns[turns.length - 1]?.images ?? [];
     const reviseRefs = prov === "jimeng" ? lastImages : [];
-    pendingBoardClear = false; // 续轮修改不清创作板草稿
+    pendingBoardClose = false; // 续轮修改不关闭创作板
     set((s) => ({
       genTurns: [...s.genTurns, { id: nextGenTurnId(), prompt: text, images: [], provider: prov }],
       genStreaming: "",
     }));
     set({ generating: true });
     try {
-      await api.codexCreateImage({
+      const jobId = await api.codexCreateImage({
         prompt: text,
         referenceImages: reviseRefs,
         sessionId: sid,
         provider: prov,
         projectId: get().genProjectId,
       });
+      set({ currentGenJobId: jobId });
     } catch (e) {
       genHandleError(typeof e === "string" ? e : JSON.stringify(e));
     } finally {
@@ -597,7 +600,8 @@ export const useStore = create<State>((set, get) => {
     }
   },
   cancelGeneration: () => {
-    void api.cancelCodexCreate().catch(console.error);
+    const jobId = get().currentGenJobId;
+    if (jobId) void api.cancelCodexCreate(jobId).catch(console.error);
   },
   retryLastGenTurn: () => {
     const s = get();
@@ -614,6 +618,10 @@ export const useStore = create<State>((set, get) => {
     }
   },
   applyGenChunk: (c) => {
+    if (c.kind === "started") {
+      if (c.job_id) set({ currentGenJobId: c.job_id });
+      return;
+    }
     if (c.kind === "delta") {
       set((s) => ({ genStreaming: s.genStreaming + c.text }));
     } else if (c.kind === "done") {
@@ -631,10 +639,10 @@ export const useStore = create<State>((set, get) => {
           genTurns: [...s.genTurns.slice(0, -1), { ...last, images: [...last.images, ...imgs], provider: c.provider }],
         };
       });
-      // 创作板首发且有图产出 = 生成成功 → 通知编辑器清草稿（编辑器据 dirty 决定是否真清）。
-      if (imgs.length > 0 && pendingBoardClear) {
-        pendingBoardClear = false;
-        window.dispatchEvent(new CustomEvent("bowerbird://board-gen-success"));
+      // 创作板首发且有图产出 = 生成成功 → 关闭创作板（编辑器卸载时草稿落盘，重开恢复）。
+      if (imgs.length > 0 && pendingBoardClose) {
+        pendingBoardClose = false;
+        set({ boardOpen: false });
       }
     } else if (c.kind === "error") {
       applyGenError(c.message);

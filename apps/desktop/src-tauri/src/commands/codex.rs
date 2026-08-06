@@ -390,9 +390,18 @@ pub async fn cancel_codex_describe() -> Result<(), AppError> {
     Ok(())
 }
 
-/// 当前图像生成任务的取消信号（与反推 `DESCRIBE_CANCEL` 独立，互不影响）。
-static GENERATE_CANCEL: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>> =
-    std::sync::Mutex::new(None);
+/// 当前进行中的图像生成任务取消信号（per-job，key=job_id）。与反推 `DESCRIBE_CANCEL` 独立。
+/// Phase A（视频 spec task 2）：单槽 `Option<Sender>` → `HashMap<job_id, Sender>`，
+/// 支持多任务并行 + 各自独立取消。
+static GENERATE_CANCEL: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<()>>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+/// 即梦同账号视频/图片并发上限 = 1（spike 实测 ExceedConcurrencyLimit，ret=1310）。
+/// permit=1 Semaphore 让即梦 job 在 Bowerbird 侧串行（同时只 1 个 dreamina 子进程），
+/// 避免多 job 并发撞限制；codex 不受此限可并行。
+static JIMENG_FLY: std::sync::LazyLock<tokio::sync::Semaphore> =
+    std::sync::LazyLock::new(|| tokio::sync::Semaphore::new(1));
 
 /// 创作板「生成」：把最终 prompt + 参考图发 codex（`codex exec --image`，与反推同机制），
 /// 让 codex 调内置 imagegen 技能出图。
@@ -414,13 +423,15 @@ pub async fn codex_create_image(
     ratio: Option<String>,
     provider: Option<String>,
     project_id: Option<String>,
-) -> Result<(), AppError> {
+) -> Result<String, AppError> {
     // 首轮（无 session_id）：包一句明确要 codex 出图，触发 imagegen；
     // 续轮（有 session_id = resume）：codex 已在画图上下文里，用户修改意见原样发。
     // prompt / reference_images 留一份给 generation_meta（req 会 move 走原值）。
     // ratio（如 "16:9"）仅首轮注入 instruction（续轮 codex resume 记得首轮比例，不重复指定）。
     let prompt_for_meta = prompt.clone();
     let refs_for_meta = reference_images.clone();
+    // Phase A task 2：本次生成的 job_id（事件携带 + task_queue 记录 + per-job 取消 key）。
+    let job_id = Ulid::new().to_string();
     let ratio_clause = match ratio.as_deref().map(str::trim).filter(|r| !r.is_empty()) {
         Some(r) => format!("；画面比例为 {r}"),
         None => String::new(),
@@ -440,9 +451,18 @@ pub async fn codex_create_image(
 
     let (tx, mut rx) = mpsc::channel::<Chunk>(64);
     let app_clone = app.clone();
+    let job_id_for_emit = job_id.clone();
     tokio::spawn(async move {
         while let Some(chunk) = rx.recv().await {
-            let _ = app_clone.emit("codex://chunk", &chunk);
+            // Phase A task 2：job_id 注入 chunk JSON 顶层（前端 c.kind/c.text 仍可用 + 新增 c.job_id 路由）。
+            let mut v = serde_json::to_value(&chunk).unwrap_or(serde_json::Value::Null);
+            if let serde_json::Value::Object(ref mut map) = v {
+                map.insert(
+                    "job_id".into(),
+                    serde_json::Value::String(job_id_for_emit.clone()),
+                );
+            }
+            let _ = app_clone.emit("codex://chunk", v);
         }
     });
 
@@ -451,8 +471,51 @@ pub async fn codex_create_image(
     let p = resolve_gen_provider(provider.as_deref())?;
     let provider_name = p.name().to_string();
 
+    // Phase A task 2：入队 task_queue（status=running），供任务中心 / 启动恢复 / 取消引用。
+    let now_ts = chrono::Utc::now().timestamp();
+    {
+        let job = crate::core::task_queue::GenJob {
+            id: job_id.clone(),
+            media: "image".to_string(),
+            provider: provider_name.clone(),
+            status: "running".to_string(),
+            prompt: prompt_for_meta.clone(),
+            references: refs_for_meta.clone(),
+            session_id: session_id.clone(),
+            ratio: ratio.clone(),
+            submit_id: None,
+            video_options: None,
+            turns: serde_json::json!([]),
+            error: None,
+            queue_idx: None,
+            created_at: now_ts,
+            started_at: Some(now_ts),
+            finished_at: None,
+        };
+        crate::core::task_queue::Task::enqueue_gen_job(db.inner(), &job)?;
+    }
+
+    // 生成开始即通知前端 job_id：同步模型下命令 await 到完成才返回 job_id，生成中前端拿不到
+    // → currentGenJobId 为 null → 取消失效。started 事件让前端早 set currentGenJobId，取消可生效。
+    let _ = app.emit(
+        "codex://chunk",
+        serde_json::json!({ "kind": "started", "job_id": &job_id }),
+    );
+
     let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
-    GENERATE_CANCEL.lock().unwrap().replace(cancel_tx);
+    GENERATE_CANCEL
+        .lock()
+        .unwrap()
+        .insert(job_id.clone(), cancel_tx);
+
+    // 即梦并发=1（spike 实测）：permit=1 Semaphore 串行化即梦 job，避免多 job 同时跑 dreamina
+    // 子进程撞 ExceedConcurrencyLimit；codex 不受限可并行。持有到 fn 结束（return 时 drop 释放名额）。
+    // 排队中取消：等拿到名额后 provider select 命中 cancel（MVP 简化，不中断 acquire）。
+    let _jimeng_permit = if matches!(provider_name.as_str(), "jimeng" | "dreamina") {
+        Some(JIMENG_FLY.acquire().await.unwrap())
+    } else {
+        None
+    };
 
     // generate_image 借用 tx 推 Delta；用 block 限定借期，结束后 command 才能 reuse tx 发 Done。
     let outcome = {
@@ -464,7 +527,7 @@ pub async fn codex_create_image(
         };
         r?
     };
-    GENERATE_CANCEL.lock().unwrap().take();
+    GENERATE_CANCEL.lock().unwrap().remove(&job_id);
 
     // codex 生成的源图（~/.codex/...）ingest 进库 → asset（asset scope 内可渲染 + 进瀑布流）。
     // ingest_generated 不做 pHash 去重，迭代各版相似图都各自保留。
@@ -602,16 +665,22 @@ pub async fn codex_create_image(
     }
 
     // 生成图已入库，通知瀑布流刷新（角标/命名到位后 assets-changed 再刷一次）。
+    let _ = crate::core::task_queue::Task::mark_done(db.inner(), &job_id);
     let _ = app.emit("library://assets-changed", ());
-    Ok(())
+    Ok(job_id)
 }
 
-/// 取消正在进行的图像生成（`codex_create_image`）。无任务在跑则空操作。
+/// 取消指定的图像生成任务（per-job）。无此 job 在跑则空操作。
+/// 本地停止 CLI 子进程；远端即梦任务可能仍在运行（已扣积分），submit_id 保留可事后取回。
 #[tauri::command]
-pub async fn cancel_codex_create() -> Result<(), AppError> {
-    if let Some(tx) = GENERATE_CANCEL.lock().unwrap().take() {
+pub async fn cancel_codex_create(
+    db: State<'_, Arc<Database>>,
+    job_id: String,
+) -> Result<(), AppError> {
+    if let Some(tx) = GENERATE_CANCEL.lock().unwrap().remove(&job_id) {
         let _ = tx.send(());
     }
+    let _ = crate::core::task_queue::Task::mark_cancelled(db.inner(), &job_id);
     Ok(())
 }
 

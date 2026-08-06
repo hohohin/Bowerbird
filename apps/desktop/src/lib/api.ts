@@ -194,7 +194,7 @@ export const api = {
     provider?: string | null;
     projectId?: string | null;
   }) =>
-    invoke<void>("codex_create_image", {
+    invoke<string>("codex_create_image", {
       prompt: req.prompt,
       referenceImages: req.referenceImages,
       sessionId: req.sessionId ?? null,
@@ -202,7 +202,7 @@ export const api = {
       provider: req.provider ?? null,
       projectId: req.projectId ?? null,
     }),
-  cancelCodexCreate: () => invoke<void>("cancel_codex_create"),
+  cancelCodexCreate: (jobId: string) => invoke<void>("cancel_codex_create", { jobId }),
   // 扩展小白化：连接状态 + 扩展文件夹路径（引导「一键复制」用，不自动打开——Windows 上不稳）。
   extensionStatus: () => invoke<boolean>("extension_status"),
   extensionFolderPath: () => invoke<string>("extension_folder_path"),

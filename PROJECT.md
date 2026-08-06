@@ -25,7 +25,7 @@
 
 ## 目前进展
 
-> 更新时间：2026-08-04
+> 更新时间：2026-08-06
 
 **当前阶段：1.0 功能路径打通 + v1 范围扩展到生成（⑥）+ 创作板 UI 已实现（2026-07-18 重写为 ProseMirror）+ codex CLI 隐形（2026-07-29，首启一键安装/OAuth 登录，用户不碰终端）+ 扩展小白化（2026-07-29，引导 + 心跳 + 状态指示器 + 随包内嵌）+ 项目 Workspace（2026-07-30，全局中央库之上的多对多隔离视图）+ 统一环境状态 Onboarding（2026-07-31，一级三卡片总览 + 二级 forceOpen 跳转，自 mac 最新提交语义移植）+ 自定义素材库位置与完整迁移（2026-08-01）+ 图片右键菜单（2026-08-01，打开所在文件夹 + 删除三选项与「删除项目」对齐）。** 详情页「反推」真正看图（codex CLI + gpt-5.5，ChatGPT 订阅，绕过 API quota）；FTS5 文件名搜索可用；**创作板（真实 prompt 文本编辑器 + @ 选图）已落地**（[CreationBoard.tsx](apps/desktop/src/components/CreationBoard.tsx)）；**生成（⑥）纳入 v1**，已由 codex imagegen 端到端跑通。
 
@@ -120,7 +120,9 @@
 
 - **图片右键菜单（2026-08-01）**：瀑布流缩略图 / 详情页大图右键弹出统一菜单——「打开所在文件夹」（`origin_path` 原始位置优先、失效回退素材库内 `store_path`；Windows 走 `explorer /select,` 选中文件、macOS/Linux 打开所在目录）+「删除三选项」（与「删除项目」语义对齐）。新增 [AssetContextMenu.tsx](apps/desktop/src/components/AssetContextMenu.tsx)（全局单实例，`store.contextMenu` 状态驱动、createPortal 挂 document.body，点菜单外/Esc 关闭；物理删除需手输「确认删除」口令避开 WKWebView 对原生 confirm 的拦截）+ 后端 `delete_asset_with_mode`（[core/projects.rs](apps/desktop/src-tauri/src/core/projects.rs) `AssetDeleteMode{Keep,MoveOut,Delete}` + `AssetDeleteResult`，Keep=仅移出当前项目素材留全局、MoveOut=独占素材文件移回 `origin_path` 并删行/共享素材只移出项目关系、Delete=从全局及所有项目物理删除，删文件前先 `drop(conn)` 防锁内文件 IO）/ `reveal_asset_folder`（[commands/library.rs](apps/desktop/src-tauri/src/commands/library.rs)，含 Windows/macOS/Linux 平台分支）。前端 [MasonryGrid.tsx](apps/desktop/src/components/MasonryGrid.tsx) / [AssetDetail.tsx](apps/desktop/src/components/AssetDetail.tsx) 各挂 onContextMenu（preventDefault 让详情页 zoom 不误平移），[useImageZoom.ts](apps/desktop/src/lib/useImageZoom.ts) 拖动平移只响应左键。新增 5 个 Rust 测试（keep 仅移成员、delete 级联清多项目、move_out 共享保留行/独占删行/原始缺失移库内文件回原位），全量 68 通过。
 
-**测试：** `cargo test` 68 通过（含项目多对多幂等、共享素材安全删除、项目 scope 查询、移出园丁鸟文件迁移与目的地命名、素材库迁移改写与目标校验、右键单素材删除三模式）；候选工具 Node tests 7/7；前端 `tsc --noEmit` 通过；Vite production build 通过；`cargo check` 通过（仅 3 个既有 dead-code warnings）；扩展 `candidate-utils.js` / `content.js` / `background.js` 均通过 `node --check`，Manifest JSON 解析通过；Pinterest/商品页真机通过；Tauri 开发版启动并完成迁移 v10。
+- **生成系统升级 Phase A 开工（2026-08-06，dev 线）**：为视频生成铺路的并行生成架构，落地前 3 步（总规划 [VIDEO-GENERATION.md](VIDEO-GENERATION.md) + spec-workflow 拆 requirements/design/tasks；`.spec-workflow/` 在 `.gitignore` 本地）。**Task 1** [task_queue.rs](apps/desktop/src-tauri/src/core/task_queue.rs) 扩 `GenJob`（生成任务载荷，序列化进 `task_queue.payload`，kind=generation）+ `enqueue_gen_job`/`mark_cancelled`/`by_id`/`list_running`/`list_recent`/`gen_job` + `coarse_status` 细→粗映射 + 7 单测。**Task 2** [codex.rs](apps/desktop/src-tauri/src/commands/codex.rs) per-job 取消：`GENERATE_CANCEL` 单槽 → `LazyLock<Mutex<HashMap<job_id,Sender>>>`（`HashMap::new` 非 const 必须 LazyLock，见踩坑）；`codex_create_image` 生成 job_id + enqueue(running) + emit `codex://chunk{kind:started,job_id}` + 成功 `mark_done` + 返回 `String(job_id)`；`cancel_codex_create(job_id)` + `mark_cancelled`（保留 submit_id 事后取回）；前端 `CodexChunk` 加 `started` 变体 + store `currentGenJobId`。**Task 4 简化**：即梦 `Semaphore(permit=1)` 串行即梦 job（spike 实证同账号并发=1，防 ExceedConcurrencyLimit），codex 不受限可并行；**不做完整异步 worker**（spawn 搬 100+ 行高风险），保留同步 invoke 模型（Tauri 命令后台 async、UI 不冻结），完整持久化 worker + 启动恢复留 Task 5。**踩坑**：同步模型下 `currentGenJobId` 在 `await` 完成才 set → 生成中取消失效，改用 `started` 事件让前端生成开始就 set（见踩坑）。**手测通过**（即梦生成中取消生效、不回归）；codex 额度耗尽（ChatGPT usage limit，8/8 重置）暂无法测 codex 路径。约定 23。
+
+**测试：** `cargo test` 85 通过（含项目多对多幂等、共享素材安全删除、项目 scope 查询、移出园丁鸟文件迁移与目的地命名、素材库迁移改写与目标校验、右键单素材删除三模式、task_queue GenJob 状态/取消/恢复）；候选工具 Node tests 7/7；前端 `tsc --noEmit` 通过；Vite production build 通过；`cargo check` 通过（仅 3 个既有 dead-code warnings）；扩展 `candidate-utils.js` / `content.js` / `background.js` 均通过 `node --check`，Manifest JSON 解析通过；Pinterest/商品页真机通过；Tauri 开发版启动并完成迁移 v10。
 
 **未开始 / 待办：**
 - **多模态看图 spike — 已接通（codex CLI），非待办**：四路径实测后定型为唯一 `CodexCliProvider`（`codex exec --image`，ChatGPT 订阅，绕过 API quota）；Mock / ClaudeCode / DeepSeek / OpenAI HTTP 路线已全部移除（`codex/` 仅 `codex_cli.rs` + `types.rs` + `mod.rs`），反推会话回看走 `open_codex_session`（`codex resume <thread_id>`）。详见关键约定 1 + 踩坑「多模态看图四条路径实测」。旧 provider 切换 / in-app apikey 配置已删（`config.json` / 后端 `Settings` 模块 / `base64` 依赖随路线移除）；**`SettingsDialog` / ⚙️ 设置按钮 2026-07-18 同名复活为「整库运维面板」**（codex 状态检测 / 重建色板 / 智能归类全部，[SettingsDialog.tsx](apps/desktop/src/components/SettingsDialog.tsx)，Toolbar ⚙ 入口、约定 13 全屏 Modal 形态），与 apikey 无关。`codex_health` 命令保留作离线/无账号降级探测（约定 7）。
@@ -184,6 +186,8 @@
 21. **官网试用创作板的生图 provider 独立于桌面端（2026-08-02）**：官网运行在浏览器，禁止把 API Key 写进 `index.html` / `app.js` / bundle；真实生成统一经 [`website/server.mjs`](website/server.mjs) 的同源服务端代理。`BOWERBIRD_IMAGE_REGION=cn` 时首选 Seedream 5.0 Lite，其他地区首选 FLUX.2 Klein 9B；`BOWERBIRD_IMAGE_PROVIDER` 可显式覆盖。编辑器只提交 prompt 与演示图 ID，服务端按固定白名单读取参考图并转 data URI。官网试用的产品目标是**演示生成后自动入库**，不是提供免费生图：前端不提供下载按钮；服务端默认每 IP 每自然日 3 次、全站 100 次/日（均可由环境变量收紧），第 3 次后前端隐藏生成按钮并展示下载 CTA。首屏只用动态节点图解释参考图、维度与输出图的关系，不明文展示或复制最终 prompt；图作为来源分组，组内每个维度必须拥有独立节点、端口和到输出图的连线，未选维度的纯参考图以「整图参考」节点接线；但底层序列化与 API 请求保持真实 prompt，不因可视化改变生成语义。内存计数服务重启后清空，公开部署仍应叠加 CDN/WAF 限流。官网 HTTP provider 只服务公开试用页，**不推翻桌面端“本地 CLI 子进程”约定**。
 
 22. **官网本地与 Render 统一 pnpm，部署在 codex/render-deploy 分支（2026-08-04）**：[`website/`](website/) 是 pnpm workspace 成员（锁文件用根 `pnpm-lock.yaml`），本地与 Render 必须用同一套包管理器（pnpm@11.10.0，根 [package.json](package.json) 的 `packageManager` 字段），**禁止在 website 目录跑 `npm install`**——会生成 `package-lock.json` 并破坏 pnpm 的 `node_modules/.bin`（详见踩坑）。Render Blueprint（[render.yaml](render.yaml)）push 到 **`codex/render-deploy`** 分支触发自动部署（这是 Render 实际监听的分支，不是 main/dev/mac）。Render 构建环境 `/usr/lib/node_modules` 与 `/usr/bin` 只读，`corepack enable` 与 `npm i -g` 都失败，buildCommand 必须把 pnpm 装到用户可写目录 `$HOME/.npm-global`（`npm i -g pnpm@11.10.0 --prefix $HOME/.npm-global`）并用绝对路径调用（详见踩坑）。官网静态资源（含 mp4）经 [server.mjs](website/server.mjs) 同源伺服，已支持 MP4 Range 分段请求（`206`），大视频可拖动进度条。
+
+23. **生成任务持久化 + per-job 取消 + 即梦串行（2026-08-06）**：生成（图片/视频）任务进 `task_queue`（kind=generation，payload = `GenJob` JSON：id/media/provider/status/prompt/references/session_id/ratio/submit_id/video_options/turns/queue_idx/timestamps）；`codex_create_image` 生成 job_id + enqueue(running) + emit `codex://chunk{kind:started,job_id}`（前端早 set `currentGenJobId`，生成中即可取消）+ 成功 `mark_done` / 取消 `mark_cancelled`（保留 submit_id 事后取回，演进约定 5）。**per-job 取消**：`GENERATE_CANCEL` 为 `HashMap<job_id, oneshot::Sender>`（非单槽），`cancel_codex_create(job_id)` 精确取消指定任务。**即梦同账号并发=1**（spike 实证 `ExceedConcurrencyLimit` ret=1310）：`JIMENG_FLY` Semaphore(permit=1) 串行化即梦 job，codex 不受此限可并行。**同步 invoke 模型**（命令阻塞到完成，但 Tauri 后台 async 不冻结 UI）；完整持久化 worker + 启动恢复（续跑未完成 job / 孤儿任务 `list_task` 比对取回）留待 Phase A Task 5。详见 [VIDEO-GENERATION.md](VIDEO-GENERATION.md)。
 
 
 ---
@@ -558,3 +562,17 @@
 - 解决：buildCommand 把 pnpm 装到用户主目录（POSIX 保证可写）并用绝对路径调用：`npm i -g pnpm@11.10.0 --prefix $HOME/.npm-global && $HOME/.npm-global/bin/pnpm install --frozen-lockfile && pnpm build`。`--prefix` 让 npm 全局装到 `$HOME/.npm-global/{lib/node_modules,bin}`，绝对路径调用不依赖 PATH、不碰 `/usr`。备选（未采用）：`npx pnpm@11.10.0 ...`（npx 下载到用户缓存 `~/.npm/_npx`，同样可写）。
 - 教训：PaaS 构建环境（Render / Heroku 类）常把系统 Node 目录设只读，任何全局安装（`corepack enable` / `npm i -g`）都要指定可写 `--prefix` 或用 `npx`（下载到用户缓存）。`COREPACK_HOME` 不解决 shim 写系统目录的问题。
 - 相关文件：[render.yaml](render.yaml)。
+
+### `HashMap::new()` 非 const，static 初值必须用 LazyLock（2026-08-06）
+- 现象：`static GENERATE_CANCEL: Mutex<HashMap<String, _>> = Mutex::new(HashMap::new())` 编译报 E0015「cannot call non-const associated function `HashMap::new` in statics」。
+- 根因：`HashMap::new()` 不是 const fn（HashMap 无 const 构造），不能进 static 初始化表达式（static 仅允许 const fn / tuple struct / variant）；`Option::new(None)` 能进 static 是因为 `None` 本身是 const。
+- 解决：改 `std::sync::LazyLock<Mutex<HashMap<...>>> = LazyLock::new(|| Mutex::new(HashMap::new()))`，首次访问时初始化；访问处 `.lock().unwrap()` 不变（LazyLock 自动 deref）。同模式适用于 `Semaphore::new` 等非 const 内部。
+- 教训：Rust static 放 `Mutex<HashMap>`/`Mutex<Vec>`/`Semaphore` 等非 const 内部，一律用 `LazyLock::new` 包。
+- 相关文件：[commands/codex.rs](apps/desktop/src-tauri/src/commands/codex.rs)（`GENERATE_CANCEL` HashMap、`JIMENG_FLY` Semaphore）。
+
+### 同步命令模型下 currentGenJobId 时机：生成中取消失效 → started 事件（2026-08-06）
+- 现象：Task 2 per-job 取消手测发现——生成中点取消无反馈，即梦取消后仍出图。
+- 根因：保留同步 invoke 模型（`codex_create_image` 阻塞到完成才返回）时，前端 `startGeneration` 的 `set currentGenJobId` 在 `await codexCreateImage` **完成后**才执行——生成中 `currentGenJobId` 仍为 null → `cancelGeneration` 的 `if (jobId)` 不执行 → 取消没调后端。
+- 解决：后端 enqueue 后立即 `emit("codex://chunk", {kind:"started", job_id})`，前端 `applyGenChunk` 加 `started` 分支 set `currentGenJobId`——生成开始就拿到 job_id，生成中可取消。取消命中后走既有 `genHandleError("已取消")`（streaming 显示「—— 已取消」+ 删空轮 + generating 停）。
+- 教训：同步 invoke 模型下「命令返回值」要到完成才到前端；生成中需要的信息（job_id）必须用**事件**尽早下发，不能只靠返回值。完整异步化（命令立即返回 + 后台 spawn）留后续，本坑用 started 事件最小修复。
+- 相关文件：[commands/codex.rs](apps/desktop/src-tauri/src/commands/codex.rs)（emit started）、[store.ts](apps/desktop/src/store.ts)（applyGenChunk started 分支 + currentGenJobId）、[types.ts](apps/desktop/src/lib/types.ts)（CodexChunk started 变体）。
