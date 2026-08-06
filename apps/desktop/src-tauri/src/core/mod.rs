@@ -2,6 +2,7 @@
 
 pub mod autoname;
 pub mod caption;
+pub mod generation_worker;
 pub mod ingest;
 pub mod library;
 pub mod migrate;

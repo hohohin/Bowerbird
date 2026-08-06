@@ -161,6 +161,10 @@ export interface GenJob {
   running: boolean;
   // 创作板首发标记：本轮 done 有图则关闭创作板（编辑器卸载落盘保留草稿）。续轮置 false。
   pendingBoardClose: boolean;
+  // 即梦 submit_id（Chunk::Submit 回填，恢复续查用）；codex job 为 null。
+  submitId?: string | null;
+  // 远端任务状态（恢复 worker 回填，展示「远端仍在排队」等）；非恢复 job 为 null。
+  remoteStatus?: "querying" | "success" | "fail" | null;
 }
 
 /** 「回看生成对话」：某生成图所在 codex 会话的完整时间线（后端 generation_history 返回）。 */
@@ -189,9 +193,26 @@ export interface MigrateProgress {
   total: number;
 }
 
+/** 未完成生成 job 摘要（list_gen_jobs 命令返回，前端启动重建 genJobs 用）。字段对齐后端 GenJobSummary。 */
+export interface GenJobSummary {
+  id: string;
+  media: string;
+  provider: string;
+  status: string;
+  prompt: string;
+  submit_id: string | null;
+  session_id: string | null;
+  project_id: string | null;
+  ratio: string | null;
+  references: string[];
+  created_at: number;
+  running: boolean;
+}
+
 export type CodexChunk =
   | { kind: "started"; job_id: string }
   | { kind: "delta"; text: string; job_id?: string }
+  | { kind: "submit"; submit_id: string; job_id?: string }
   | {
       kind: "done";
       text: string;
@@ -201,4 +222,6 @@ export type CodexChunk =
       session_id?: string | null;
       job_id?: string;
     }
+  | { kind: "recover_started"; job_id: string; prompt: string; provider: string }
+  | { kind: "recover_polling"; job_id: string; message: string }
   | { kind: "error"; message: string; job_id?: string };

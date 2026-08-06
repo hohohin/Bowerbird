@@ -152,6 +152,7 @@ interface State {
   startGeneration: (prompt: string, references: Asset[], ratio?: string | null, provider?: string | null) => Promise<void>;
   sendGenRevise: (instruction: string, provider?: string | null) => Promise<void>;
   cancelGeneration: (jobId?: string) => void; // 默认取消 activeJob
+  loadGenJobs: () => Promise<void>;
   applyGenChunk: (c: CodexChunk) => void;
   // 重试 activeJob 末尾失败轮：首轮失败 → startGeneration（新建 job 重发），续轮失败 → sendGenRevise（resume 续接）。
   retryLastGenTurn: () => void;
@@ -532,6 +533,44 @@ export const useStore = create<State>((set, get) => {
   setGenPanelOpen: (open) =>
     set((s) => ({ genPanelOpen: open, genUnread: open ? false : s.genUnread })),
   setActiveJob: (id) => set({ activeJobId: id }),
+  loadGenJobs: async () => {
+    // 启动恢复：拉本地未完成生成 job 重建 genJobs（恢复中 job 在面板可见）。
+    try {
+      const jobs = await api.listGenJobs();
+      set((s) => {
+        const genJobs = { ...s.genJobs };
+        const genJobOrder = [...s.genJobOrder];
+        for (const j of jobs) {
+          if (genJobs[j.id]) continue; // 已存在（用户本轮新发）不覆盖
+          genJobs[j.id] = {
+            id: j.id,
+            turns: [{ id: nextGenTurnId(), prompt: j.prompt, images: [], provider: j.provider }],
+            sessionId: j.session_id ?? j.submit_id ?? null,
+            streaming: "",
+            lastPrompt: j.prompt,
+            lastRefs: j.references ?? [],
+            refAssets: [],
+            lastRatio: j.ratio ?? null,
+            provider: j.provider,
+            projectId: j.project_id ?? null,
+            createdAt: j.created_at,
+            running: j.running,
+            pendingBoardClose: false,
+            submitId: j.submit_id ?? null,
+            remoteStatus: j.running ? "querying" : null,
+          };
+          if (!genJobOrder.includes(j.id)) genJobOrder.push(j.id);
+        }
+        return {
+          genJobs,
+          genJobOrder,
+          generating: Object.values(genJobs).some((x) => x.running),
+        };
+      });
+    } catch (e) {
+      console.error("loadGenJobs failed", e);
+    }
+  },
   startGeneration: async (prompt, references, ratio, provider) => {
     // 多 job：不再因 generating 阻塞（并发发起多个生成，各自独立流转）。
     // provider 兜底：调用点没传（CreationBoard send / retry）→ 当前选择 → 全局默认。
@@ -639,6 +678,53 @@ export const useStore = create<State>((set, get) => {
   },
   applyGenChunk: (c) => {
     if (c.kind === "started") return; // 前端已自生成 jobId 创建 job；started 无需处理
+    if (c.kind === "submit") {
+      // 即梦 submit_id 到（Chunk::Submit 回填）：记录到 job，纯展示（恢复续查用）。
+      const sid = c.job_id;
+      if (sid) updateJob(sid, (j) => ({ ...j, submitId: c.submit_id, remoteStatus: "querying" }));
+      return;
+    }
+    if (c.kind === "recover_started") {
+      // 后端启动恢复：自包含造占位 job（防 done 早于 loadGenJobs 丢事件）。
+      const rid = c.job_id;
+      if (!rid) return;
+      set((s) => {
+        if (s.genJobs[rid]) return {}; // 已在（loadGenJobs 已拉到）
+        const job: GenJob = {
+          id: rid,
+          turns: [{ id: nextGenTurnId(), prompt: c.prompt, images: [], provider: c.provider }],
+          sessionId: null,
+          streaming: "",
+          lastPrompt: c.prompt,
+          lastRefs: [],
+          refAssets: [],
+          lastRatio: null,
+          provider: c.provider,
+          projectId: null,
+          createdAt: Date.now(),
+          running: true,
+          pendingBoardClose: false,
+        };
+        return {
+          genJobs: { ...s.genJobs, [rid]: job },
+          genJobOrder: [...s.genJobOrder, rid],
+          activeJobId: s.activeJobId ?? rid,
+          generating: true,
+        };
+      });
+      return;
+    }
+    if (c.kind === "recover_polling") {
+      // 远端仍在排队（querying）：保持 running，streaming 显示提示（下次启动再试）。
+      const rid = c.job_id;
+      if (rid)
+        updateJob(rid, (j) => ({
+          ...j,
+          streaming: c.message ? `远端仍在排队：${c.message}` : "远端仍在排队…",
+          remoteStatus: "querying",
+        }));
+      return;
+    }
     const id = c.job_id;
     if (!id) return; // 无 job_id 的事件忽略（理论不发生）
     if (c.kind === "delta") {

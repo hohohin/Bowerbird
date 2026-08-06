@@ -279,6 +279,12 @@ function App() {
     };
   }, []);
 
+  // 启动恢复（Task 5）：挂载拉本地未完成生成 job 重建 genJobs（恢复中 job 在面板可见）。
+  // 必须在 codex://chunk listener 注册之后（listener 先就绪，后端 recover_started 早到也不丢）。
+  useEffect(() => {
+    void useStore.getState().loadGenJobs();
+  }, []);
+
   // codex 可用性：App 挂载取一次，创作板/生成面板共用（约定 7 置灰依据）。
   useEffect(() => {
     api

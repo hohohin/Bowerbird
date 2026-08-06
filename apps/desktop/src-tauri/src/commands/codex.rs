@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::mpsc;
 use ulid::Ulid;
 
@@ -397,12 +397,6 @@ static GENERATE_CANCEL: std::sync::LazyLock<
     std::sync::Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<()>>>,
 > = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
-/// 即梦同账号视频/图片并发上限 = 1（spike 实测 ExceedConcurrencyLimit，ret=1310）。
-/// permit=1 Semaphore 让即梦 job 在 Bowerbird 侧串行（同时只 1 个 dreamina 子进程），
-/// 避免多 job 并发撞限制；codex 不受此限可并行。
-static JIMENG_FLY: std::sync::LazyLock<tokio::sync::Semaphore> =
-    std::sync::LazyLock::new(|| tokio::sync::Semaphore::new(1));
-
 /// 创作板「生成」：把最终 prompt + 参考图发 codex（`codex exec --image`，与反推同机制），
 /// 让 codex 调内置 imagegen 技能出图。
 ///
@@ -455,7 +449,24 @@ pub async fn codex_create_image(
     let job_id_for_emit = job_id.clone();
     tokio::spawn(async move {
         while let Some(chunk) = rx.recv().await {
-            // Phase A task 2：job_id 注入 chunk JSON 顶层（前端 c.kind/c.text 仍可用 + 新增 c.job_id 路由）。
+            // Chunk::Submit：即梦 submit 拿到 submit_id 的瞬间 → 立即 upsert 落库（submit_id + 细粒度
+            // status=querying）。app 在下载完成前被杀也能凭持久化的 submit_id 恢复续查（Task 5）。
+            if let Chunk::Submit { ref submit_id } = chunk {
+                if let Some(db) = app_clone.try_state::<Arc<Database>>() {
+                    let db = db.inner();
+                    if let Some(mut job) =
+                        crate::core::task_queue::Task::by_id(db, &job_id_for_emit)
+                            .ok()
+                            .flatten()
+                            .and_then(|t| t.gen_job())
+                    {
+                        job.submit_id = Some(submit_id.clone());
+                        job.status = "querying".to_string();
+                        let _ = crate::core::task_queue::Task::upsert_gen_job(db, &job);
+                    }
+                }
+            }
+            // job_id 注入 chunk JSON 顶层（前端 c.kind/c.text 仍可用 + 新增 c.job_id 路由）。
             let mut v = serde_json::to_value(&chunk).unwrap_or(serde_json::Value::Null);
             if let serde_json::Value::Object(ref mut map) = v {
                 map.insert(
@@ -483,6 +494,7 @@ pub async fn codex_create_image(
             prompt: prompt_for_meta.clone(),
             references: refs_for_meta.clone(),
             session_id: session_id.clone(),
+            project_id: project_id.clone(),
             ratio: ratio.clone(),
             submit_id: None,
             video_options: None,
@@ -513,7 +525,7 @@ pub async fn codex_create_image(
     // 子进程撞 ExceedConcurrencyLimit；codex 不受限可并行。持有到 fn 结束（return 时 drop 释放名额）。
     // 排队中取消：等拿到名额后 provider select 命中 cancel（MVP 简化，不中断 acquire）。
     let _jimeng_permit = if matches!(provider_name.as_str(), "jimeng" | "dreamina") {
-        Some(JIMENG_FLY.acquire().await.unwrap())
+        Some(crate::core::generation_worker::JIMENG_FLY.acquire().await.unwrap())
     } else {
         None
     };
@@ -530,52 +542,27 @@ pub async fn codex_create_image(
     };
     GENERATE_CANCEL.lock().unwrap().remove(&job_id);
 
-    // codex 生成的源图（~/.codex/...）ingest 进库 → asset（asset scope 内可渲染 + 进瀑布流）。
-    // ingest_generated 不做 pHash 去重，迭代各版相似图都各自保留。
-    // source 按 provider 标记（codex/jimeng），落 assets.source 供智能筛选 / 角标区分。
-    let source_tag: String = match provider.as_deref().unwrap_or("codex") {
-        "jimeng" => "jimeng".to_string(),
-        _ => "codex".to_string(),
-    };
-    let dbw = db.inner().clone();
-    let pw = paths.inner().clone();
-    let srcs = outcome.source_images.clone();
-    let session_for_ingest = outcome.session_id.clone();
-    let temp_dir = outcome.temp_dir.clone();
-    let gen_assets: Vec<crate::core::library::Asset> =
-        tokio::task::spawn_blocking(
-            move || -> Result<Vec<crate::core::library::Asset>, AppError> {
-                let mut out = Vec::new();
-                for src in &srcs {
-                    out.push(crate::core::ingest::ingest_generated(
-                        &pw,
-                        &dbw,
-                        src,
-                        session_for_ingest.as_deref(),
-                        &source_tag,
-                    )?);
-                }
-                // 源图已 copy 进库，删临时下载目录（即梦 provider 用；codex 为 None 不删）。
-                if let Some(dir) = &temp_dir {
-                    let _ = std::fs::remove_dir_all(dir);
-                }
-                Ok(out)
-            },
-        )
-        .await
-        .map_err(|e| AppError::Other(e.to_string()))??;
-    if let Some(project_id) = project_id.as_deref() {
-        let ids: Vec<String> = gen_assets.iter().map(|asset| asset.id.clone()).collect();
-        if let Err(e) = db.add_assets_to_project(project_id, &ids) {
-            tracing::warn!("failed to link generated assets to project {project_id}: {e}");
-        }
-    }
+    // 源图收尾入库（ingest + project link + generation_meta + caption + 自动命名）—— 抽到
+    // generation_worker::finalize_generation_assets，与启动恢复 worker 共用、元数据一致。
+    let gen_assets = crate::core::generation_worker::finalize_generation_assets(
+        app.clone(),
+        db.inner().clone(),
+        paths.inner().clone(),
+        outcome.source_images.clone(),
+        outcome.temp_dir.clone(),
+        prompt_for_meta.clone(),
+        refs_for_meta.clone(),
+        outcome.session_id.clone(),
+        outcome.submit_id.clone(),
+        provider_name.clone(),
+        project_id.clone(),
+    )
+    .await?;
 
     let asset_paths: Vec<PathBuf> = gen_assets
         .iter()
         .filter_map(|a| a.store_path.clone().map(PathBuf::from))
         .collect();
-    let session_id = outcome.session_id.clone();
     let _ = tx
         .send(Chunk::Done(CodexResult {
             text: outcome.text,
@@ -587,85 +574,7 @@ pub async fn codex_create_image(
         .await;
     drop(tx);
 
-    // 生成来源落库（analyses kind=generation_meta）：prompt / session_id / 参考图路径，
-    // 详情页据此展示「这张图怎么来的」+ 可点进 codex resume 回看会话。
-    let meta_payload = serde_json::json!({
-        "prompt": prompt_for_meta,
-        "session_id": session_id,
-        "references": refs_for_meta,
-        "provider": provider_name.clone(),
-    })
-    .to_string();
-    let ids: Vec<String> = gen_assets.iter().map(|a| a.id.clone()).collect();
-    let dbm = db.inner().clone();
-    let provider_for_meta = provider_name.clone();
-    // 生成图 caption（反推提示结果）：从「生成它的 prompt」里识别 【维度】：正文 片段（创作板序列化
-    // 注入），按维度分段落库，免再调 codex 反推去猜。session_id 在则按会话取整条 prompt 链（本轮
-    // generation_meta 刚写入可见）→ 同名维度后出现者覆盖（修订版优先）。无维度时回退整段。
-    // 原文（prompt / session_id / 参考图）另存 generation_meta，由「✨ 生成来源」卡片展示。
-    let session_for_chain = session_id.clone();
-    let prompt_for_chain = prompt_for_meta.clone();
-    tokio::task::spawn_blocking(move || -> Result<(), AppError> {
-        for id in &ids {
-            let row = crate::core::library::Analysis {
-                id: Ulid::new().to_string(),
-                asset_id: id.clone(),
-                kind: "generation_meta".to_string(),
-                payload: meta_payload.clone(),
-                provider: Some(provider_for_meta.clone()),
-                created_at: None,
-            };
-            dbm.insert_analysis(&row)?;
-        }
-
-        // caption 正文：session 在则取会话 prompt 链（首版 + 各轮修改），否则退化为仅本轮 prompt。
-        let chain = match &session_for_chain {
-            Some(sid) => dbm
-                .generation_prompt_chain(sid)
-                .unwrap_or_else(|_| vec![prompt_for_chain.clone()]),
-            None => vec![prompt_for_chain.clone()],
-        };
-        let caption_text = build_generation_caption(&chain);
-        let analysis_parsed = caption::parse(&caption_text);
-        let caption_payload = caption::build_payload(
-            &caption_text,
-            "由生成提示词填充（非反推）",
-            session_for_chain.as_deref(),
-            &provider_for_meta,
-            &analysis_parsed,
-        );
-        for id in &ids {
-            let row = crate::core::library::Analysis {
-                id: Ulid::new().to_string(),
-                asset_id: id.clone(),
-                kind: "caption".to_string(),
-                payload: caption_payload.clone(),
-                provider: Some(provider_for_meta.clone()),
-                created_at: None,
-            };
-            dbm.insert_analysis(&row)?;
-        }
-        Ok(())
-    })
-    .await
-    .map_err(|e| AppError::Other(e.to_string()))??;
-
-    // caption 落库后通知创作板 @ 池刷新（与反推同机制：analyses://changed → App 重载 promptedAssets；
-    // 创作板在生成期间常驻右侧槽，新生成图应即时进 @ 池）。
-    for a in &gen_assets {
-        let _ = app.emit(
-            "analyses://changed",
-            serde_json::json!({ "asset_id": a.id, "kind": "caption" }),
-        );
-    }
-
-    // 后台自动命名（每张生成图各跑一次 codex 看图取名，替代 codex 默认的 ig_<hash>；
-    // caption 已由上方按生成 prompt 直填，命名与之独立）。
-    for a in gen_assets {
-        crate::core::autoname::spawn_auto_name_only(app.clone(), db.inner().clone(), a);
-    }
-
-    // 生成图已入库，通知瀑布流刷新（角标/命名到位后 assets-changed 再刷一次）。
+    // 生成图已入库，通知瀑布流刷新（finalize 已 emit analyses://changed + 自动命名）。
     let _ = crate::core::task_queue::Task::mark_done(db.inner(), &job_id);
     let _ = app.emit("library://assets-changed", ());
     Ok(job_id)
@@ -683,6 +592,56 @@ pub async fn cancel_codex_create(
     }
     let _ = crate::core::task_queue::Task::mark_cancelled(db.inner(), &job_id);
     Ok(())
+}
+
+/// 未完成生成 job 的摘要（前端启动重建 genJobs 用，Task 5 启动恢复）。
+#[derive(Debug, Clone, Serialize)]
+pub struct GenJobSummary {
+    pub id: String,
+    pub media: String,
+    pub provider: String,
+    pub status: String,
+    pub prompt: String,
+    pub submit_id: Option<String>,
+    pub session_id: Option<String>,
+    pub project_id: Option<String>,
+    pub ratio: Option<String>,
+    pub references: Vec<String>,
+    pub created_at: i64,
+    pub running: bool,
+}
+
+/// 列出未完成的生成 job（queued/running），供前端启动时重建 genJobs（恢复中 job 可见）。
+/// done/failed 不返回（已是资产或显失败）。codex job 也返回（前端展示「app 重启中断」失败态）。
+#[tauri::command]
+pub async fn list_gen_jobs(db: State<'_, Arc<Database>>) -> Result<Vec<GenJobSummary>, AppError> {
+    let dbw = db.inner().clone();
+    tokio::task::spawn_blocking(move || -> Result<Vec<GenJobSummary>, AppError> {
+        let tasks = crate::core::task_queue::Task::list_running(&dbw)?;
+        Ok(tasks
+            .into_iter()
+            .filter_map(|t| t.gen_job())
+            .map(|j| GenJobSummary {
+                running: matches!(
+                    j.status.as_str(),
+                    "running" | "querying" | "downloading" | "ingesting" | "submitting" | "queued"
+                ),
+                id: j.id,
+                media: j.media,
+                provider: j.provider,
+                status: j.status,
+                prompt: j.prompt,
+                submit_id: j.submit_id,
+                session_id: j.session_id,
+                project_id: j.project_id,
+                ratio: j.ratio,
+                references: j.references,
+                created_at: j.created_at,
+            })
+            .collect())
+    })
+    .await
+    .map_err(|e| AppError::Other(e.to_string()))?
 }
 
 /// `[spike]` OpenAI API 生图（非 codex CLI）：调 OpenAI Images API（`gpt-image-1`），
@@ -730,150 +689,6 @@ pub async fn openai_spike_generate_image(
 
     let _ = app.emit("library://assets-changed", ());
     Ok(ids)
-}
-
-/// 把生成会话的 prompt 链转成 caption 正文：从中识别 `【维度】：正文` 片段（创作板序列化时由
-/// `@图名 的【维度】：section 正文` / 独立 `【维度】：正文` 注入），按 `**维度**\n正文` 段落输出，
-/// 正中 caption::parse 的 section 识别 → 详情页按段展示、创作板维度 chips 随之生成。
-///
-/// 生成图本就由这些维度片段变换得来，无需 AI 反推，只做固定特征解析。同名维度后出现者覆盖
-/// （修订版维度优先）；一条都没识别到时回退整段 prompt（caption::parse 作 raw_fallback 整段展示）。
-/// prompt 完整原文另存于 generation_meta（详情页「✨ 生成来源」卡片），此处只管维度视图。
-fn build_generation_caption(chain: &[String]) -> String {
-    let mut dims: Vec<(String, String)> = Vec::new();
-    for prompt in chain {
-        for (title, body) in extract_dim_sections(prompt) {
-            if let Some(slot) = dims.iter_mut().find(|(t, _)| t == &title) {
-                slot.1 = body; // 后出现覆盖（修订版维度优先）
-            } else {
-                dims.push((title, body));
-            }
-        }
-    }
-    if dims.is_empty() {
-        return chain.join("\n\n"); // 无维度片段 → 整段回退
-    }
-    let mut out = String::new();
-    for (title, body) in &dims {
-        if !out.is_empty() {
-            out.push_str("\n\n");
-        }
-        out.push_str("**");
-        out.push_str(title);
-        out.push_str("**\n");
-        out.push_str(body);
-    }
-    out
-}
-
-/// 从一段 prompt 文本里抽 `【标题】：正文` 片段。正文延伸到下一个 `【` 或 `@` 或串尾（下一个维度
-/// 或 @图名 引用即正文终点），再按最后一个句末标点（。！？）截断以去掉尾随连接词（如「，以及」）。
-/// 标题须通过 `is_valid_dim_title`（与 caption::parse 的 section 标题规则一致），否则当普通 `【】` 跳过。
-fn extract_dim_sections(text: &str) -> Vec<(String, String)> {
-    let mut out = Vec::new();
-    let mut rest = text;
-    while let Some(open) = rest.find('【') {
-        let after_bracket = &rest[open + '【'.len_utf8()..];
-        let Some(close) = after_bracket.find('】') else { break; };
-        let title = after_bracket[..close].trim();
-        let after_close = &after_bracket[close + '】'.len_utf8()..];
-        let body_rest = after_close
-            .strip_prefix('：')
-            .or_else(|| after_close.strip_prefix(':'));
-        match (is_valid_dim_title(title), body_rest) {
-            (true, Some(body_rest)) => {
-                let body_end = body_rest
-                    .find(|c| c == '【' || c == '@')
-                    .unwrap_or(body_rest.len());
-                let body = cut_trailing_connector(body_rest[..body_end].trim());
-                out.push((title.to_string(), body.to_string()));
-                rest = &body_rest[body_end..];
-            }
-            _ => {
-                // 非维度 【】（标题非法或 】 后无冒号）→ 跳过这个括号，从其后继续找。
-                rest = after_close;
-            }
-        }
-    }
-    out
-}
-
-/// 句末标点（。！？）之后的尾随文字多为连接词（如「，以及」「，然后」），截掉。
-/// 无句末标点则原样返回（正文可能本就不含句号）。
-fn cut_trailing_connector(s: &str) -> &str {
-    match s.rfind(|c| matches!(c, '。' | '！' | '？')) {
-        Some(idx) => {
-            let ch_len = s[idx..].chars().next().map_or(0, |c| c.len_utf8());
-            &s[..idx + ch_len]
-        }
-        None => s,
-    }
-}
-
-/// 维度标题有效性：非空、≤16 字、不含 ASCII 数字与反引号（与 caption::parse 的
-/// `looks_like_section_label` 一致，保证 `**标题**` 能被解析成 section）。
-fn is_valid_dim_title(title: &str) -> bool {
-    let t = title.trim();
-    !t.is_empty()
-        && t.chars().count() <= 16
-        && !t.chars().any(|c| c.is_ascii_digit() || c == '`')
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // 用户给的范例（略缩短）：色调 / 光影 是现成维度，其余为 @图名 引用与自由指令。
-    const EXAMPLE: &str = "请参考@街头倚坐 的【色调】：整体以暖米色、奶油黄为主。色彩饱和度不高，具有夏日街头的色彩情绪。【光影】：自然日光为主，光线柔和偏散射，没有强烈硬阴影。人物面部曝光均匀。整体对比度中等，带有胶片摄影常见的柔和层次和低锐度边缘。，以及@紫垫白猫.jpg的场景和主体动作，并为猫咪戴上@彩虹宠物项圈广告.jpg中紫色的项圈。";
-
-    #[test]
-    fn extract_dims_from_generation_prompt() {
-        let dims = extract_dim_sections(EXAMPLE);
-        let titles: Vec<&str> = dims.iter().map(|(t, _)| t.as_str()).collect();
-        assert_eq!(titles, vec!["色调", "光影"]);
-
-        let palette = dims.iter().find(|(t, _)| t == "色调").unwrap();
-        assert!(palette.1.contains("暖米色"));
-        assert!(palette.1.ends_with('。'));
-        assert!(!palette.1.contains("@"));
-
-        let light = dims.iter().find(|(t, _)| t == "光影").unwrap();
-        assert!(light.1.ends_with("低锐度边缘。"), "got: {}", light.1);
-        assert!(!light.1.contains("，以及"), "尾随连接词应被截掉");
-        assert!(!light.1.contains("@紫垫白猫"), "正文不应吞掉后续 @图名");
-    }
-
-    #[test]
-    fn build_caption_with_dims_as_sections() {
-        let caption = build_generation_caption(&[EXAMPLE.to_string()]);
-        assert!(caption.contains("**色调**"));
-        assert!(caption.contains("**光影**"));
-        // 不应回退成整段（有维度时走分段）。
-        assert!(!caption.contains("以及@紫垫白猫"));
-    }
-
-    #[test]
-    fn build_caption_falls_back_to_raw_when_no_dims() {
-        let caption = build_generation_caption(&["把背景改成白天".to_string()]);
-        assert_eq!(caption, "把背景改成白天");
-    }
-
-    #[test]
-    fn later_dim_overrides_earlier() {
-        let chain = vec!["【色调】：暖色调".to_string(), "【色调】：冷色调".to_string()];
-        let caption = build_generation_caption(&chain);
-        assert!(caption.contains("冷色调"));
-        assert!(!caption.contains("暖色调"));
-        assert_eq!(caption.matches("**色调**").count(), 1);
-    }
-
-    #[test]
-    fn skips_non_dimension_brackets() {
-        // 【...】 后无冒号 → 不当维度，继续找下一个。
-        let dims = extract_dim_sections("一段【普通括号】文字【光影】：柔和光线。");
-        let titles: Vec<&str> = dims.iter().map(|(t, _)| t.as_str()).collect();
-        assert_eq!(titles, vec!["光影"]);
-    }
 }
 
 /// 「在 codex 中打开会话」：唤起系统终端跑 `codex resume <session_id>`，

@@ -83,6 +83,14 @@ pub fn run() {
                 }
             });
 
+            // 启动恢复：扫 task_queue 未完成的即梦 job → dreamina query_result 续查入库（Task 5）。
+            // codex job 不可恢复 → mark_failed；即梦 job + submit_id → 后台续查。异步不阻塞启动。
+            core::generation_worker::spawn_recovery(
+                app.handle().clone(),
+                db.clone(),
+                paths.clone(),
+            );
+
             app.manage(extension_status);
             app.manage(active_project);
             app.manage(settings_state);
@@ -152,6 +160,7 @@ pub fn run() {
             commands::codex::cancel_codex_describe,
             commands::codex::codex_create_image,
             commands::codex::cancel_codex_create,
+            commands::codex::list_gen_jobs,
             commands::codex::open_codex_session,
             commands::codex::openai_spike_generate_image,
             commands::codex::codex_install,

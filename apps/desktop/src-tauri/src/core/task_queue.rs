@@ -66,6 +66,9 @@ pub struct GenJob {
     pub references: Vec<String>,
     #[serde(default)]
     pub session_id: Option<String>,
+    /// 首轮项目快照（恢复时把资产 link 回项目；codex_create_image 入队时填）。
+    #[serde(default)]
+    pub project_id: Option<String>,
     #[serde(default)]
     pub ratio: Option<String>,
     #[serde(default)]
@@ -309,6 +312,7 @@ mod tests {
             prompt: "p".into(),
             references: vec![],
             session_id: None,
+            project_id: None,
             ratio: None,
             submit_id: None,
             video_options: None,

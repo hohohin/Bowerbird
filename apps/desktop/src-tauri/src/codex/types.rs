@@ -42,6 +42,10 @@ pub struct CodexResult {
 pub enum Chunk {
     /// 增量文本（一段 token）。
     Delta { text: String },
+    /// 即梦 submit 拿到 submit_id 即回填（provider 拿到瞬间发，不等下载）。
+    /// command 转发 task 据此立即 upsert GenJob.submit_id + status=querying，
+    /// app 在下载完成前被杀也能凭持久化的 submit_id 恢复续查。
+    Submit { submit_id: String },
     /// 流结束，附带最终结果。
     Done(CodexResult),
     /// 流中错误。
@@ -55,6 +59,9 @@ pub enum Chunk {
 pub struct GenOutcome {
     pub text: String,
     pub session_id: Option<String>,
+    /// 即梦本次提交的 submit_id（首轮）。provider 拿到瞬间已通过 [`Chunk::Submit`] 落库，
+    /// 此字段供 command 层事后核对 / generation_meta 用。codex provider 无 submit_id 概念，为 None。
+    pub submit_id: Option<String>,
     pub elapsed_ms: u64,
     pub source_images: Vec<PathBuf>,
     /// `source_images` 所在临时目录（如有）。command 层 `ingest_generated` 后应删此目录；

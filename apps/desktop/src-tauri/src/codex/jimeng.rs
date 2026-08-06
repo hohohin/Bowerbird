@@ -6,7 +6,7 @@
 //!
 //! 依赖：`dreamina` CLI 已登录（`dreamina login`）且在 PATH（或 `%USERPROFILE%\bin`）。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, SystemTime};
 
@@ -68,7 +68,7 @@ impl GenProvider for DreaminaCliProvider {
     async fn generate_image(
         &self,
         req: CodexRequest,
-        _tx: &mpsc::Sender<Chunk>, // 即梦无逐字流式，不推 Delta（生成中态由 GenerationPanel busy 占位显示）
+        tx: &mpsc::Sender<Chunk>, // 即梦无逐字流式不推 Delta；但 submit 拿到 submit_id 时推 Submit（持久化 + 恢复用）
         resume_session: Option<String>,
     ) -> Result<GenOutcome, AppError> {
         if !self.enabled {
@@ -124,51 +124,24 @@ impl GenProvider for DreaminaCliProvider {
             )));
         }
         let submit_id = parse_submit_id(&submit_stdout)?;
+        // 立即回填 submit_id：app 在下载完成前被杀也能恢复续查（provider 拿到瞬间发，不等下载）。
+        let _ = tx
+            .send(Chunk::Submit {
+                submit_id: submit_id.clone(),
+            })
+            .await;
 
         // ② 下载：query_result --download_dir 到临时目录（对标 ingest_from_url 临时目录惯例）。
         let download_dir = std::env::temp_dir().join(format!("bowerbird-dreamina-{}", Ulid::new()));
         std::fs::create_dir_all(&download_dir)
             .map_err(|e| AppError::Other(format!("建临时目录失败: {e}")))?;
-
-        let mut query = dreamina_command(&self.binary);
-        query
-            .arg("query_result")
-            .arg("--submit_id")
-            .arg(&submit_id)
-            .arg("--download_dir")
-            .arg(&download_dir);
-        query
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-        let query_out = tokio::time::timeout(Duration::from_secs(CMD_TIMEOUT_SECS), query.output())
-            .await
-            .map_err(|_| AppError::Jimeng(format!("dreamina query_result 超时（{CMD_TIMEOUT_SECS}s）")))?
-            .map_err(|e| AppError::Jimeng(format!("启动 dreamina query_result 失败: {e}")))?;
-
-        if !query_out.status.success() {
-            let stderr_head: String =
-                String::from_utf8_lossy(&query_out.stderr).trim().chars().take(500).collect();
-            return Err(AppError::Jimeng(format!(
-                "dreamina query_result 退出 {} | stderr: {stderr_head}",
-                query_out.status
-            )));
-        }
-
-        // 扫下载目录里的图（query_result 可能一次下多张）。
-        let source_images = walk_images(&download_dir);
-        if source_images.is_empty() {
-            let qstdout = String::from_utf8_lossy(&query_out.stdout);
-            let head: String = qstdout.trim().chars().take(300).collect();
-            return Err(AppError::Jimeng(format!(
-                "dreamina 未下载到图片（submit_id={submit_id}） | query stdout: {head}"
-            )));
-        }
+        let source_images = query_and_download(&self.binary, &submit_id, &download_dir).await?;
 
         Ok(GenOutcome {
             text: format!("[即梦] 生成 {} 张图", source_images.len()),
             // 会话标识：续轮（resume_session）沿用首轮 submit_id（回看关联各轮）；首轮用本次 submit_id。
-            session_id: resume_session.clone().or(Some(submit_id)),
+            session_id: resume_session.clone().or(Some(submit_id.clone())),
+            submit_id: Some(submit_id),
             elapsed_ms: start.elapsed().unwrap_or_default().as_millis() as u64,
             source_images,
             temp_dir: Some(download_dir), // command 层 ingest 后删此目录。
@@ -204,6 +177,49 @@ fn parse_submit_id(stdout: &str) -> Result<String, AppError> {
         .and_then(|i| i.as_str())
         .map(|s| s.to_string())
         .ok_or_else(|| AppError::Jimeng(format!("dreamina 提交输出未含 submit_id | stdout: {}", head())))
+}
+
+/// dreamina `query_result --submit_id --download_dir` → `walk_images` 扫产物。
+/// 供正常 `generate_image` 与启动恢复 worker 复用。失败返回原始状态/stderr 错误（恢复 worker
+/// 据此区分「远端仍在 querying」与致命错，见 generation_worker::poll_query_and_download）。
+pub(crate) async fn query_and_download(
+    binary: &str,
+    submit_id: &str,
+    download_dir: &Path,
+) -> Result<Vec<PathBuf>, AppError> {
+    let mut query = dreamina_command(binary);
+    query
+        .arg("query_result")
+        .arg("--submit_id")
+        .arg(submit_id)
+        .arg("--download_dir")
+        .arg(download_dir);
+    query
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    let query_out = tokio::time::timeout(Duration::from_secs(CMD_TIMEOUT_SECS), query.output())
+        .await
+        .map_err(|_| AppError::Jimeng(format!("dreamina query_result 超时（{CMD_TIMEOUT_SECS}s）")))?
+        .map_err(|e| AppError::Jimeng(format!("启动 dreamina query_result 失败: {e}")))?;
+    if !query_out.status.success() {
+        let stderr_head: String =
+            String::from_utf8_lossy(&query_out.stderr).trim().chars().take(500).collect();
+        return Err(AppError::Jimeng(format!(
+            "dreamina query_result 退出 {} | stderr: {stderr_head}",
+            query_out.status
+        )));
+    }
+    // 扫下载目录里的图（query_result 可能一次下多张）。
+    let source_images = walk_images(download_dir);
+    if source_images.is_empty() {
+        let qstdout = String::from_utf8_lossy(&query_out.stdout);
+        let head: String = qstdout.trim().chars().take(300).collect();
+        return Err(AppError::Jimeng(format!(
+            "dreamina 未下载到图片（submit_id={submit_id}） | query stdout: {head}"
+        )));
+    }
+    Ok(source_images)
 }
 
 /// dreamina 二进制解析（对称 `resolve_codex_binary`）：

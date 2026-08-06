@@ -12,6 +12,7 @@ import type {
   CreationPack,
   Folder,
   GenerationHistory,
+  GenJobSummary,
   Preset,
   Project,
   ProjectCreateResult,
@@ -206,6 +207,8 @@ export const api = {
       jobId: req.jobId,
     }),
   cancelCodexCreate: (jobId: string) => invoke<void>("cancel_codex_create", { jobId }),
+  // 启动恢复（Task 5）：列出未完成生成 job，前端挂载时拉取重建 genJobs（恢复中 job 可见）。
+  listGenJobs: () => invoke<GenJobSummary[]>("list_gen_jobs"),
   // 扩展小白化：连接状态 + 扩展文件夹路径（引导「一键复制」用，不自动打开——Windows 上不稳）。
   extensionStatus: () => invoke<boolean>("extension_status"),
   extensionFolderPath: () => invoke<string>("extension_folder_path"),

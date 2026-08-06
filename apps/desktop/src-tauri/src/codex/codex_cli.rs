@@ -421,6 +421,7 @@ impl GenProvider for CodexCliProvider {
         Ok(GenOutcome {
             text: texts.join("\n"),
             session_id,
+            submit_id: None, // codex provider 无 submit_id 概念（仅即梦走 Chunk::Submit 回填）
             elapsed_ms: start.elapsed().unwrap_or_default().as_millis() as u64,
             source_images,
             temp_dir: None,
