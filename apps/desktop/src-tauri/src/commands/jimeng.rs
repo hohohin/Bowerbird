@@ -142,39 +142,47 @@ pub async fn dreamina_check_login(device_code: String) -> Result<CodexHealth, Ap
 /// 窗口（真 TTY）让 dreamina 完整跑完。对称 `open_codex_session`。
 #[tauri::command]
 pub async fn open_dreamina_login() -> Result<(), AppError> {
+    let binary = resolve_dreamina_binary()
+        .ok_or_else(|| AppError::Jimeng("未检测到 dreamina CLI，请先安装".into()))?;
     #[cfg(target_os = "macos")]
     {
-        // dreamina login 是固定串、非用户输入，osascript do script 单参传入无注入风险。
-        let script = "tell application \"Terminal\"\nactivate\ndo script \"dreamina login\"\nend tell";
+        // binary 是 resolve_dreamina_binary 返回的固定路径（env 或 ~/.local/bin/dreamina），
+        // 非用户自由输入，osascript do script 单参传入无注入风险。
+        let script = format!(
+            "tell application \"Terminal\"\nactivate\ndo script \"{binary} login\"\nend tell"
+        );
         tokio::process::Command::new("osascript")
             .arg("-e")
-            .arg(script)
+            .arg(&script)
             .spawn()
             .map_err(|e| AppError::Jimeng(format!("启动 Terminal 失败: {e}")))?;
         Ok(())
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(target_os = "windows"))]
     {
-        #[cfg(target_os = "windows")]
-        {
-            // `start "" cmd.exe /K` 另开常驻命令提示符跑 `dreamina login`；/K 跑完留窗让用户看到
-            // 「登录成功」。dreamina login 是固定串无注入风险（对称 macOS 分支，无白名单校验）。
-            tokio::process::Command::new("cmd.exe")
-                .arg("/D")
-                .arg("/C")
-                .arg("start")
-                .arg("")
-                .arg("cmd.exe")
-                .arg("/K")
-                .arg("dreamina login")
-                .spawn()
-                .map_err(|e| AppError::Jimeng(format!("启动命令提示符失败: {e}")))?;
-            Ok(())
-        }
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(not(target_os = "macos"))]
         {
             Err(AppError::Jimeng("当前系统暂不支持打开即梦登录终端".into()))
         }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // `start "" cmd.exe /K` 另开常驻命令提示符跑 `dreamina login`；/K 跑完留窗让用户看到
+        // 「登录成功」。用 resolve_dreamina_binary 的完整路径而非裸 `dreamina`——install 把二进制
+        // 装到 %USERPROFILE%\bin 且故意不改 PATH（resolve_dreamina_binary 主动查该目录），
+        // 裸命令在新终端的 PATH 里找不到会报「不是内部或外部命令」。路径可能含空格，用引号包裹；
+        // binary 非用户自由输入，无注入风险。
+        tokio::process::Command::new("cmd.exe")
+            .arg("/D")
+            .arg("/C")
+            .arg("start")
+            .arg("")
+            .arg("cmd.exe")
+            .arg("/K")
+            .arg(format!("\"{binary}\" login"))
+            .spawn()
+            .map_err(|e| AppError::Jimeng(format!("启动命令提示符失败: {e}")))?;
+        Ok(())
     }
 }
 

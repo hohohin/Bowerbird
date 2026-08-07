@@ -26,6 +26,7 @@ export function DreaminaOnboarding() {
   const [installState, setInstallState] = useState<InstallState>("idle");
   const [installReason, setInstallReason] = useState("");
   const [loginOpened, setLoginOpened] = useState(false);
+  const [loginError, setLoginError] = useState("");
   const [lines, setLines] = useState<string[]>([]);
 
   // 安装进度行（stage=install）；保留最后 50 行避免无限增长。
@@ -106,11 +107,12 @@ export function DreaminaOnboarding() {
   }
 
   async function openLogin() {
+    setLoginError("");
     try {
       await api.openDreaminaLogin();
       setLoginOpened(true);
     } catch (e) {
-      console.error("open dreamina login failed", e);
+      setLoginError(String(e));
     }
   }
 
@@ -195,6 +197,9 @@ export function DreaminaOnboarding() {
               >
                 {ready ? "已登录" : loginOpened ? "再开一次终端" : "打开终端登录"}
               </button>
+              {loginError && (
+                <div className="mt-1.5 text-xs text-red-300">{loginError}</div>
+              )}
             </div>
             <div className="mt-1 pl-7 text-xs text-muted">
               会打开系统终端，按提示扫码 / 浏览器授权（dreamina 登录依赖终端环境，无法在 app 内完成）。
