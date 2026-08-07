@@ -170,17 +170,19 @@ pub async fn open_dreamina_login() -> Result<(), AppError> {
         // `start "" cmd.exe /K` 另开常驻命令提示符跑 `dreamina login`；/K 跑完留窗让用户看到
         // 「登录成功」。用 resolve_dreamina_binary 的完整路径而非裸 `dreamina`——install 把二进制
         // 装到 %USERPROFILE%\bin 且故意不改 PATH（resolve_dreamina_binary 主动查该目录），
-        // 裸命令在新终端的 PATH 里找不到会报「不是内部或外部命令」。路径可能含空格，用引号包裹；
-        // binary 非用户自由输入，无注入风险。
-        tokio::process::Command::new("cmd.exe")
-            .arg("/D")
+        // 裸命令在新终端的 PATH 里找不到会报「不是内部或外部命令」。
+        // 最后一段含引号 + 空格的命令串必须用 raw_arg 原样拼进 cmd 命令行：若走 .arg()，Rust 会按
+        // Windows 规则再转义一层（把字面引号双包/破坏），cmd 剥不掉引号、把 `"C:\...\dreamina.exe"`
+        // 整串当命令名，同样报「不是内部或外部命令」。binary 非用户自由输入，无注入风险。
+        let mut cmd = tokio::process::Command::new("cmd.exe");
+        cmd.arg("/D")
             .arg("/C")
             .arg("start")
             .arg("")
             .arg("cmd.exe")
-            .arg("/K")
-            .arg(format!("\"{binary}\" login"))
-            .spawn()
+            .arg("/K");
+        cmd.raw_arg(&format!("\"{binary}\" login"));
+        cmd.spawn()
             .map_err(|e| AppError::Jimeng(format!("启动命令提示符失败: {e}")))?;
         Ok(())
     }
