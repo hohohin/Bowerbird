@@ -77,9 +77,13 @@
             <div class="workspace">
               <section class="asset-pane" aria-label="演示素材库">
                 <div class="pane-head">
-                  <div><small>01 / 选择素材</small><h2>点一张图，插到光标处。</h2></div>
-                  <span class="pane-count"><span id="pane-asset-count">8</span> 张</span>
+                  <div><small>01 / 选择素材</small><h2>点一张图，或导入你的素材。</h2></div>
+                  <div class="pane-actions">
+                    <button class="import-button" id="import-button" type="button">导入图片 <span>↗</span></button>
+                    <span class="pane-count"><span id="pane-asset-count">8</span> 张</span>
+                  </div>
                 </div>
+                <input type="file" id="import-input" accept="image/*" multiple hidden />
                 <div class="asset-grid" id="asset-grid">
                   <button class="asset-card is-active" type="button" data-id="p1" aria-label="插入花影黑白猫">
                     <img src="./assets/presets/p1.jpg" alt="花影黑白猫" /><span>花影黑白猫</span><i>01</i>
@@ -112,7 +116,7 @@
                 <div class="pane-head">
                   <div><small>02 / 组装意图</small><h2>像聊天一样写，素材就是词。</h2></div>
                 </div>
-                <p class="editor-help">点击左侧图片，或输入 <kbd>@图名</kbd> 后按空格。图片和维度都是可撤销、可原子删除的节点。</p>
+                <p class="editor-help">点击左侧图片、用「导入图片」或拖拽图片到瀑布流，也可输入 <kbd>@图名</kbd> 后按空格。图片和维度都是可撤销、可原子删除的节点。</p>
                 <div class="editor-wrap" id="editor-wrap">
                   <div id="board-editor" aria-label="创作板编辑器"></div>
                   <div class="editor-meta"><span id="editor-state">光标已就绪</span><span><kbd>⌘/Ctrl</kbd> + <kbd>Z</kbd> 撤销</span></div>
@@ -383,6 +387,6 @@
       <div class="footer-bottom"><span>© 2026 Bowerbird</span><span>园丁鸟衔来的每片灵感，都值得被收好。</span></div>
     </footer>
 
-    <script src="./app.bundle.js?rev=20260804-1"></script>
+    <script src="./app-v2.bundle.js?rev=20260807-1"></script>
   </body>
 </html>
