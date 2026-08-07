@@ -165,6 +165,16 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     }
   }
 
+  async function logoutDreamina() {
+    try {
+      await api.dreaminaLogout();
+      // logout 后刷新 health（应变「未登录」）。
+      await recheckDreamina();
+    } catch (e) {
+      console.error("dreamina logout failed", e);
+    }
+  }
+
   async function reclassifyAll() {
     try {
       await api.reclassifyAll();
@@ -316,6 +326,14 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                 }
               >
                 登录即梦账号
+              </button>
+              <button
+                onClick={() => void logoutDreamina()}
+                disabled={dreaminaHealth?.ok !== true || dreaminaChecking}
+                className="rounded-md bg-panel2 px-3 py-1 text-xs text-ink hover:bg-red-500/20 hover:text-red-300 disabled:opacity-50"
+                title="登出即梦账号（dreamina logout）"
+              >
+                登出即梦账号
               </button>
             </div>
             {dreaminaNotInstalled && (

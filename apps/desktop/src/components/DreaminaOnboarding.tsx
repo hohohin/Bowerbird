@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { open } from "@tauri-apps/plugin-shell";
 import { useStore } from "../store";
 import { api } from "../lib/api";
+import type { DreaminaDeviceFlow } from "../lib/types";
 
 type InstallState = "idle" | "running" | "done" | "error";
 
@@ -27,6 +29,8 @@ export function DreaminaOnboarding() {
   const [installReason, setInstallReason] = useState("");
   const [loginOpened, setLoginOpened] = useState(false);
   const [loginError, setLoginError] = useState("");
+  const [flow, setFlow] = useState<DreaminaDeviceFlow | null>(null);
+  const [finishing, setFinishing] = useState(false);
   const [lines, setLines] = useState<string[]>([]);
 
   // 安装进度行（stage=install）；保留最后 50 行避免无限增长。
@@ -106,13 +110,39 @@ export function DreaminaOnboarding() {
     }
   }
 
-  async function openLogin() {
+  // 方案 B（app 内自动登录）：spawn login --headless 拿 device flow 字段 → 自动开浏览器授权页
+  // → 用户授权后「我已完成授权」checklogin 补完写 token。不依赖终端/真 TTY。
+  async function startLogin() {
     setLoginError("");
+    setFlow(null);
     try {
-      await api.openDreaminaLogin();
+      const f = await api.dreaminaLoginHeadless();
+      setFlow(f);
       setLoginOpened(true);
+      // 一步化：拿到授权链接自动打开浏览器（shell:allow-open 已授权，CodexOnboarding 同款）。
+      void open(f.verification_uri).catch((e) => setLoginError(`打开浏览器失败：${e}`));
     } catch (e) {
       setLoginError(String(e));
+    }
+  }
+
+  async function finishLogin() {
+    if (!flow) return;
+    setFinishing(true);
+    setLoginError("");
+    try {
+      const h = await api.dreaminaCheckLogin(flow.device_code);
+      setDreaminaHealth(h);
+      if (h.ok) {
+        setForceOpen(false);
+        setOverviewOpen(true);
+      } else {
+        setLoginError(h.reason || "授权未完成，请确认已在浏览器完成授权后重试");
+      }
+    } catch (e) {
+      setLoginError(String(e));
+    } finally {
+      setFinishing(false);
     }
   }
 
@@ -180,7 +210,7 @@ export function DreaminaOnboarding() {
             </div>
           </li>
 
-          {/* step 2 打开终端登录 */}
+          {/* step 2 自动授权登录 */}
           <li className="text-sm">
             <div className="flex items-center gap-2">
               <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/15 text-[11px] font-semibold text-accent">
@@ -191,31 +221,55 @@ export function DreaminaOnboarding() {
             </div>
             <div className="mt-1.5 pl-7">
               <button
-                onClick={() => void openLogin()}
-                disabled={!installDone || ready}
+                onClick={() => void startLogin()}
+                disabled={!installDone || ready || finishing}
                 className="rounded-md bg-accent px-3 py-1 text-[12px] font-medium text-black hover:opacity-90 disabled:opacity-50"
               >
-                {ready ? "已登录" : loginOpened ? "再开一次终端" : "打开终端登录"}
+                {ready
+                  ? "已登录"
+                  : loginOpened
+                    ? "重新打开授权页面"
+                    : "自动打开浏览器授权"}
               </button>
+              {flow && (
+                <div className="mt-1.5 text-[11px] text-muted">
+                  已在浏览器打开授权页。若未自动打开，请访问：
+                  <div className="mt-0.5 break-all text-accent">{flow.verification_uri}</div>
+                  {flow.user_code && (
+                    <div className="mt-1">
+                      如需输入授权码：<span className="font-mono text-ink">{flow.user_code}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+              {loginOpened && !ready && (
+                <button
+                  onClick={() => void finishLogin()}
+                  disabled={!flow || finishing}
+                  className="mt-2 rounded-md bg-accent px-3 py-1 text-[12px] font-medium text-black hover:opacity-90 disabled:opacity-50"
+                >
+                  {finishing ? "检测中…" : "我已完成授权，登录"}
+                </button>
+              )}
               {loginError && (
                 <div className="mt-1.5 text-xs text-red-300">{loginError}</div>
               )}
             </div>
             <div className="mt-1 pl-7 text-xs text-muted">
-              会打开系统终端，按提示扫码 / 浏览器授权（dreamina 登录依赖终端环境，无法在 app 内完成）。
+              点击后自动打开浏览器完成授权，全程无需终端。
             </div>
           </li>
 
-          {/* step 3 重新检测 */}
+          {/* step 3 检测 */}
           <li className="text-sm">
             <div className="flex items-center gap-2">
               <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/15 text-[11px] font-semibold text-accent">
                 3
               </span>
-              <span className="text-ink">终端授权后重新检测</span>
+              <span className="text-ink">完成后自动检测</span>
             </div>
             <div className="mt-1 pl-7 text-xs text-muted">
-              在终端完成授权后回这里点「重新检测」，通过即配置完成。
+              授权完成后点「我已完成授权，登录」自动检测，通过即配置完成。
             </div>
           </li>
         </ol>

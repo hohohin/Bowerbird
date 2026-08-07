@@ -5,10 +5,11 @@
 //! `dreamina_login` 透传 OAuth Device Flow 的 stdout 给前端（UI Phase 3，已搁置——app spawn
 //! 非 TTY 不写 token；改用 `open_dreamina_login` 拉起系统终端登录）。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
+use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, BufReader};
 
@@ -167,21 +168,17 @@ pub async fn open_dreamina_login() -> Result<(), AppError> {
     }
     #[cfg(target_os = "windows")]
     {
-        // `start "" cmd.exe /K` 另开常驻命令提示符跑 `dreamina login`；/K 跑完留窗让用户看到
-        // 「登录成功」。用 resolve_dreamina_binary 的完整路径而非裸 `dreamina`——install 把二进制
-        // 装到 %USERPROFILE%\bin 且故意不改 PATH（resolve_dreamina_binary 主动查该目录），
-        // 裸命令在新终端的 PATH 里找不到会报「不是内部或外部命令」。
-        // 最后一段含引号 + 空格的命令串必须用 raw_arg 原样拼进 cmd 命令行：若走 .arg()，Rust 会按
-        // Windows 规则再转义一层（把字面引号双包/破坏），cmd 剥不掉引号、把 `"C:\...\dreamina.exe"`
-        // 整串当命令名，同样报「不是内部或外部命令」。binary 非用户自由输入，无注入风险。
+        // cmd /D /S /K 直接执行完整路径的 dreamina（绕开 `start`——start 的引号重组在剥引号时
+        // 会把含空格的路径退化成裸命令名，PATH 找不到就报「无法将 … 项识别为…」）。
+        // 用 resolve_dreamina_binary 的完整路径而非裸 `dreamina`；`/D /S /K ""path" login"`
+        // 是 PROJECT.md 踩坑已验证的 cmd 引号模式（npm_command），raw_arg 绕开 Rust 二次转义。
+        // binary 非用户自由输入，无注入风险。
         let mut cmd = tokio::process::Command::new("cmd.exe");
-        cmd.arg("/D")
-            .arg("/C")
-            .arg("start")
-            .arg("")
-            .arg("cmd.exe")
-            .arg("/K");
-        cmd.raw_arg(&format!("\"{binary}\" login"));
+        cmd.raw_arg(&format!("/D /S /K \"\"{binary}\" login\""));
+        // CREATE_NEW_CONSOLE（0x10）：强制 cmd 开新终端窗口。dev 模式 Bowerbird 是 console 子系统
+        // （attach 到 `npm run tauri dev` 的终端），cmd 默认继承父 console 而不开新窗——dreamina login
+        // 输出流进 dev 终端、无独立交互；CREATE_NEW_CONSOLE 总是开独立窗口（与 release GUI 行为一致）。
+        cmd.creation_flags(0x00000010);
         cmd.spawn()
             .map_err(|e| AppError::Jimeng(format!("启动命令提示符失败: {e}")))?;
         Ok(())
@@ -191,6 +188,26 @@ pub async fn open_dreamina_login() -> Result<(), AppError> {
 /// dreamina 官方二进制下载基址（spike 实测，与官方 install 脚本 DOWNLOAD_BASE 一致）。
 const DREAMINA_DOWNLOAD_BASE: &str =
     "https://lf3-static.bytednsdoc.com/obj/eden-cn/psj_hupthlyk/ljhwZthlaukjlkulzlp/dreamina_cli_beta";
+
+/// 把 dir 追加到 Windows 用户级 PATH（SetEnvironmentVariable 'User'，官方 install 脚本同款做法）。
+/// dreamina_install 装到 %USERPROFILE%\bin 后调用，让新开终端能直接输 `dreamina`。
+/// GUI 里已运行的进程 PATH 不刷新（resolve_dreamina_binary 主动查目录兜底，App 内无需重启）。
+#[cfg(target_os = "windows")]
+fn ensure_dir_in_user_path(dir: &Path) {
+    // dir 来自 dreamina_install_target（基于 USERPROFILE），无需再取环境变量。
+    let script = format!(
+        r#"$t='{dir}';$c=[Environment]::GetEnvironmentVariable('Path','User');if([string]::IsNullOrWhiteSpace($c)){{[Environment]::SetEnvironmentVariable('Path',$t,'User')}}elseif(-not($c.Split(';')-contains $t)){{[Environment]::SetEnvironmentVariable('Path',$c+';'+$t,'User')}}"#,
+        dir = dir.display()
+    );
+    let _ = tokio::process::Command::new("powershell.exe")
+        .arg("-NoProfile")
+        .arg("-NonInteractive")
+        .arg("-Command")
+        .arg(script)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+}
 
 /// 当前平台的 (下载 URL, 安装路径)。安装路径与 `resolve_dreamina_binary` 查的目录一致
 /// （Windows `%USERPROFILE%\bin\dreamina.exe`、Unix `~/.local/bin/dreamina`），故无需改 PATH。
@@ -318,6 +335,10 @@ pub async fn dreamina_install(app: AppHandle) -> Result<CodexHealth, AppError> {
         .await
         .map_err(|e| AppError::Jimeng(format!("安装文件落位失败: {e}")))?;
 
+    // Windows 追加安装目录到 User PATH（让新开终端能直接输 `dreamina`；App 内 resolve 已兜底）。
+    #[cfg(target_os = "windows")]
+    ensure_dir_in_user_path(&install_dir);
+
     // Unix 设可执行权限（Windows exe 无需）。
     #[cfg(unix)]
     {
@@ -365,4 +386,101 @@ pub async fn cancel_dreamina_setup() -> Result<(), AppError> {
         let _ = tx.send(());
     }
     Ok(())
+}
+
+/// 登出即梦：app 内 spawn `dreamina logout`（非交互，无需终端 TTY），清 dreamina 自管的登录态。
+/// 前端调用后自行 recheck 刷新 health（logout 后 dreaminaHealth 应变「未登录」）。
+#[tauri::command]
+pub async fn dreamina_logout() -> Result<(), AppError> {
+    let binary = resolve_dreamina_binary()
+        .ok_or_else(|| AppError::Jimeng("未检测到 dreamina CLI".into()))?;
+    let out = dreamina_command(&binary)
+        .arg("logout")
+        .output()
+        .await
+        .map_err(|e| AppError::Jimeng(format!("启动 dreamina logout 失败: {e}")))?;
+    if !out.status.success() {
+        let head: String = String::from_utf8_lossy(&out.stderr)
+            .trim()
+            .chars()
+            .take(200)
+            .collect();
+        return Err(AppError::Jimeng(format!(
+            "dreamina logout 退出 {} | {head}",
+            out.status
+        )));
+    }
+    Ok(())
+}
+
+/// `dreamina login --headless` 的 OAuth Device Flow 字段（spike 实测输出，2026-08-07）。
+/// 用于 app 内自动完成登录（方案 B）：app spawn headless 拿这些字段 → 自动开浏览器 → 展示授权码
+/// → `dreamina_check_login` 用 device_code 补完写 token。不依赖真 TTY（headless 打印后即退出）。
+#[derive(Debug, Clone, Serialize)]
+pub struct DreaminaDeviceFlow {
+    pub verification_uri: String,
+    pub user_code: String,
+    pub device_code: String,
+    pub poll_interval_secs: Option<u64>,
+    pub expires_at: Option<String>,
+}
+
+/// 启动 `dreamina login --headless`（app 内 spawn 即可，不依赖 TTY），解析并返回 OAuth
+/// Device Flow 字段。调用方拿到 verification_uri 后应自动打开浏览器 + 展示 user_code。
+#[tauri::command]
+pub async fn dreamina_login_headless() -> Result<DreaminaDeviceFlow, AppError> {
+    let binary = resolve_dreamina_binary()
+        .ok_or_else(|| AppError::Jimeng("未检测到 dreamina CLI，请先安装".into()))?;
+    let mut cmd = dreamina_command(&binary);
+    cmd.arg("login").arg("--headless");
+    // headless 非交互（打印字段后退出），stderr 丢弃；stdout 全量读。
+    cmd.stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    let out = tokio::time::timeout(Duration::from_secs(20), cmd.output())
+        .await
+        .map_err(|_| AppError::Jimeng("dreamina login --headless 超时（20s）".into()))?
+        .map_err(|e| AppError::Jimeng(format!("启动 dreamina login --headless 失败: {e}")))?;
+    if !out.status.success() {
+        let head: String = String::from_utf8_lossy(&out.stdout)
+            .trim()
+            .chars()
+            .take(200)
+            .collect();
+        return Err(AppError::Jimeng(format!(
+            "dreamina login --headless 退出 {} | {head}",
+            out.status
+        )));
+    }
+    // spike 实测输出：`verification_uri: <uri>` / `user_code:` / `device_code:` / `poll_interval:` / `expires_at:`。
+    // 已有本地登录态时仅输出「已复用当前本地 OAuth 登录态。」——让前端先 recheck 判定。
+    let text = String::from_utf8_lossy(&out.stdout);
+    let uri = text
+        .lines()
+        .find_map(|l| l.strip_prefix("verification_uri:").map(|v| v.trim().to_string()))
+        .ok_or_else(|| AppError::Jimeng("未从 dreamina 输出解析到 verification_uri".into()))?;
+    let user_code = text
+        .lines()
+        .find_map(|l| l.strip_prefix("user_code:").map(|v| v.trim().to_string()))
+        .ok_or_else(|| AppError::Jimeng("未解析到 user_code".into()))?;
+    let device_code = text
+        .lines()
+        .find_map(|l| l.strip_prefix("device_code:").map(|v| v.trim().to_string()))
+        .ok_or_else(|| AppError::Jimeng("未解析到 device_code".into()))?;
+    let poll_interval_secs = text
+        .lines()
+        .find_map(|l| {
+            l.strip_prefix("poll_interval:")
+                .and_then(|v| v.trim().trim_end_matches('s').parse::<u64>().ok())
+        });
+    let expires_at = text
+        .lines()
+        .find_map(|l| l.strip_prefix("expires_at:").map(|v| v.trim().to_string()));
+    Ok(DreaminaDeviceFlow {
+        verification_uri: uri,
+        user_code,
+        device_code,
+        poll_interval_secs,
+        expires_at,
+    })
 }

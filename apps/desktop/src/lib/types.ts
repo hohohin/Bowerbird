@@ -114,6 +114,15 @@ export interface CodexHealth {
   reason: string;
 }
 
+/** `dreamina login --headless` 的 OAuth Device Flow 字段（app 内自动登录用）。 */
+export interface DreaminaDeviceFlow {
+  verification_uri: string;
+  user_code: string;
+  device_code: string;
+  poll_interval_secs?: number | null;
+  expires_at?: string | null;
+}
+
 export interface CreationPack {
   prompt: string;
   references: string[];

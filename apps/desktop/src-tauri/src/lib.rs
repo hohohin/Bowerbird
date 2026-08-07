@@ -180,6 +180,8 @@ pub fn run() {
             commands::jimeng::open_dreamina_login,
             commands::jimeng::dreamina_install,
             commands::jimeng::cancel_dreamina_setup,
+            commands::jimeng::dreamina_logout,
+            commands::jimeng::dreamina_login_headless,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

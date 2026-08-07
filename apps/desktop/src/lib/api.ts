@@ -10,6 +10,7 @@ import type {
   ColorBucket,
   CodexHealth,
   CreationPack,
+  DreaminaDeviceFlow,
   Folder,
   GenerationHistory,
   GenJobSummary,
@@ -201,6 +202,9 @@ export const api = {
   // 进度经 dreamina://setup-progress {stage:"install", line} 推；成功后端 emit dreamina://health-changed。
   dreaminaInstall: () => invoke<CodexHealth>("dreamina_install"),
   cancelDreaminaSetup: () => invoke<void>("cancel_dreamina_setup"),
+  dreaminaLogout: () => invoke<void>("dreamina_logout"),
+  // app 内自动登录（方案 B）：spawn `login --headless` 返回 device flow 字段，前端自动开浏览器 + 展示授权码 + checklogin 补完。
+  dreaminaLoginHeadless: () => invoke<DreaminaDeviceFlow>("dreamina_login_headless"),
   // 创作板「生成」：把最终 prompt + 参考图发 codex（codex exec --image，同反推机制）出图。
   // 流式文本经 codex://chunk（Delta）回；生成图 copy 进 library/generations 后随 Done.images 回。
   // sessionId 非空 → codex exec resume 续接同一会话（多轮迭代修改，codex 记得上一张图）。
