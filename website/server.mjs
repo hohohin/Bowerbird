@@ -22,6 +22,8 @@ const PROVIDERS = {
   seedream: { label: "Seedream 5.0 Lite", model: () => process.env.VOLCENGINE_SEEDREAM_MODEL || "" },
   flux: { label: "FLUX.2 Klein 9B", model: () => process.env.BFL_FLUX_ENDPOINT || "flux-2-klein-9b" },
 };
+const DEFAULT_WINDOWS_DOWNLOAD_URL =
+  "https://pub-5e4c00c218cd4682b622cbab5e58563e.r2.dev/Bowerbird_26.8.7_x64-setup.exe";
 const rateBuckets = new Map();
 
 await loadLocalEnv(join(SCRIPT_DIR, ".env.local"));
@@ -97,7 +99,7 @@ function publicConfig() {
     trialLimit: trial.perIpLimit,
     globalDailyLimit: trial.globalDailyLimit,
     trialDay: currentTrialDay(trial.timeZone),
-    windowsDownloadUrl: publicHttpsUrl(process.env.BOWERBIRD_WINDOWS_DOWNLOAD_URL),
+    windowsDownloadUrl: publicHttpsUrl(process.env.BOWERBIRD_WINDOWS_DOWNLOAD_URL) || DEFAULT_WINDOWS_DOWNLOAD_URL,
   };
 }
 
