@@ -10,7 +10,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 |---|---|---|
 | `PROJECT.md` | **活文档（项目内容唯一权威）**：项目说明 / 目前进展 / 关键约定 / 踩坑记录 | 每次开工前先读「目前进展」与「关键约定」 |
 | `Bowerbird开发计划.md` | 完整开发计划 v1.3（定位 / 技术栈 / 数据模型 / Roadmap / 风险）；同名 HTML 是其渲染版 | 任何实现工作之前必读，技术权威源 |
-| `PRICING.md` | 商业模式与定价策略（架构张力 / 竞品定价实测 / 免费·付费功能切法 / 价位卡位） | 商业化、定价、license 功能门控相关工作前必读 |
+| `Bowerbird定价方案v2-订阅积分制.md` | 定价方案 v2（免费 + 订阅 + 积分混合制，独立于旧 PRICING.md 的重新设计） | 商业化、定价、license 功能门控相关工作前必读 |
+| `Bowerbird市场调研-竞争格局与优势分析.md` | 竞争格局与优势分析（v2 形态下 vs 竞品） | 商业化、竞品对标时 |
+| `Bowerbird收费链路与定价方案.md` | 收费链路实施层：用户系统 / license / 支付渠道 / 积分适用 / 分阶段落地 | 落地收费、接支付/账号系统前必读 |
+| `研究报告-服务器化CLI与API化改造可行性.md` | 生成能力服务器化/API 化改造可行性研究 | 远程化、API 化架构调整前必读 |
+| `FRAMEWORK_ADJUST.md` | 架构调整清单（为收费服务，含账号系统等调整项） | 收费落地、架构调整前必读 |
 | `AI-PROVIDERS.md` | AI provider 可切换方案（泛化 GenerationPanel + codex/即梦首批 + 即梦接入调研 + 关键约定 1 演进；草案） | provider 切换 / 即梦接入 / 生成能力多 provider 解耦相关工作前必读 |
 | `VIDEO-GENERATION.md` | 生成系统总规划（并行生成前置 + 视频生成 / dreamina 视频 CLI 真机 spike 实证 / 多 job 模型 + 即梦并发=1 队列 + submit_id 持久化恢复 / 协议泛化 image→media / 创作板视频模式 / 分阶段 Roadmap；草案） | 生成系统（并行 / 视频）相关工作前必读 |
 | `Eagle类创意收集工具调查报告.html` | 前序竞品调研，计划的依据 | 需要背景/对标时 |

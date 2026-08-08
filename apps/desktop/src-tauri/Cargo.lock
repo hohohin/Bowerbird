@@ -234,7 +234,7 @@ dependencies = [
 
 [[package]]
 name = "bowerbird-desktop"
-version = "26.8.7"
+version = "26.8.8"
 dependencies = [
  "anyhow",
  "async-trait",
