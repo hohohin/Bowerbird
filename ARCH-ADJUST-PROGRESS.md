@@ -7,29 +7,21 @@
 
 ## 一句话现状
 
-收费化架构（账号 / 积分 / 托管算力 / 订阅支付 / 功能门控，对应计划 P0–P8）**代码已全部完成并通过本地回归**；Supabase 与火山方舟已接入**真实凭据**并做了**真实契约级联调**（出图、视觉理解均成功）。**唯一未完成项 = 把云端 schema 与 Edge Functions 真正部署到 Supabase 项目**（当前数据库表在云端是 404）。支付保持 Mock。
+收费化架构（账号 / 积分 / 托管算力 / 订阅支付 / 功能门控，对应计划 P0–P8）已完成代码、本地回归与真实云端部署：Supabase `0001~0009`、5 个 Edge Functions、Cloud Secrets 均已上线；东京节点真实闭环已通过（注册 30 分 → Seedream 出图 → 扣 5 分 → 余额 25 → 临时账号清理）。支付保持 Mock。
 
 ---
 
-## 当前阻塞点（下一步唯一要做的事）
+## 当前状态与下一步
 
-**云端尚未部署**，因此「登录 → 积分 → 云生成 → 扣费/回滚」的真机闭环还跑不起来。
+**云端基础闭环无阻塞。** 2026-08-10 已完成：
 
-- 已实测：Supabase 项目可达（secret key 打 `/rest/v1/` 返回 200；publishable key 打同端点 401 属预期，因为该端点只认 secret）。
-- 已实测：**所有计费表在云端返回 404** —— 即 `0001~0007` 迁移尚未 push 到云端。
-- 缺的不是代码，是**本机没有 Supabase CLI**（`npx --yes supabase` 安装曾被权限拦下，需用户授权或用户自装）。
+- Bowerbird Supabase 项目已链接并推送 `0001~0009`；`0008` 修复注册初始化与 RLS，`0009` 修复 `credit_hold` 的 PL/pgSQL record/alias 遮蔽。
+- 5 个 Edge Functions 均为 ACTIVE；`payment-webhook` 关闭网关 JWT、函数内自行验支付签名，其余函数保持 JWT 校验。
+- Secrets 已上传：真实方舟开启、支付 Mock 保持；方舟上游超时为 140 秒。
+- 真实 E2E 从东京 `ap-northeast-1` 执行成功：耗时 76.3 秒，图片 111,058 字节，注册积分 30、实际扣费 5、生成后 25，临时账号自动清理。
+- 桌面端与官网正式云函数调用默认固定东京节点；客户端总超时 145 秒，为 Edge 的 140 秒上游超时留响应余量。
 
-### 解锁步骤（详见 `apps/cloud/DEPLOY.md`，按序执行）
-
-1. 装 Supabase CLI：`npm install -g supabase`（或 `scoop install supabase`）。
-2. `supabase login`（浏览器授权）。
-3. `supabase link --project-ref wpupyuurwmaeozyvkyuo`（project-ref 见 `apps/cloud/.env` 的 SUPABASE_URL 主机段）。
-4. `cd apps/cloud && supabase db push`（执行 `0001`~`0007`；`0007_deploy_helper.sql` 幂等，可重复跑做修补）。
-5. `supabase functions deploy generate-proxy understand-proxy entitlement create-checkout payment-webhook`。
-6. `supabase secrets set ...`（清单见 DEPLOY.md 第 4 节；**保持 `BOWERBIRD_CLOUD_MOCK=false`、`BOWERBIRD_PAYMENT_MOCK=true`**）。
-7. 验证：`supabase db reset` + `psql -f supabase/tests/billing.sql` + `node scripts/test-billing.mjs` + `node scripts/test-payment.mjs`。
-
-> 完成后告诉 Claude「已部署」，接着做真机验收（登录 → 领 30 分 → 云出图扣分 → 流水 → 取消/失败回滚）。
+下一步只剩产品级手测：桌面 Magic Link 登录、创作板选择 Bowerbird Cloud、积分流水 UI；以及官网登录后的共享余额。真实支付、Seedance、微信登录仍是凭据/决策驱动的后续项。
 
 ---
 
@@ -55,7 +47,7 @@
   - Seedance 视频：**未配置**（`ARK_VIDEO_MODEL` 是 placeholder，adapter 返回 not_configured，视频留待真实 model id）。
 
 ### 测试基线（全绿）
-`cargo test` **96 passed**（含 cloud/entitlement/auth/policy/source-tag 新增，原有用例无回退）；桌面 `tsc --noEmit` + Vite build 过；官网 build 过；扩展 Node tests 7/7；`apps/cloud` 脚本 `node --check` 过。Supabase CLI/Deno 本机未装，故 `supabase db reset` 与 Function 运行测试标「待工具」。
+原基线 `cargo test` **96 passed**（含 cloud/entitlement/auth/policy/source-tag 新增，原有用例无回退）；桌面 `tsc --noEmit` + Vite build 过；官网 build 过；扩展 Node tests 7/7。部署后增量验证：云配置测试 3/3、官网与 E2E 脚本 `node --check` 通过、东京真实 Cloud E2E 通过。
 
 ---
 
@@ -98,9 +90,9 @@
 | 原始计划 | `ARCH-ADJUST-PLAN.md` |
 | 部署手册 | `apps/cloud/DEPLOY.md` |
 | 云端说明 | `apps/cloud/README.md` |
-| DB 迁移 | `apps/cloud/supabase/migrations/0001~0007` |
+| DB 迁移 | `apps/cloud/supabase/migrations/0001~0009` |
 | Edge Functions | `apps/cloud/supabase/functions/{generate-proxy,understand-proxy,entitlement,create-checkout,payment-webhook}/index.ts` + `_shared/{auth,ark,billing,errors,limits}.ts` |
-| DB 测试 | `apps/cloud/supabase/tests/billing.sql`、`apps/cloud/scripts/test-{billing,payment}.mjs` |
+| DB / 云闭环测试 | `apps/cloud/supabase/tests/billing.sql`、`apps/cloud/scripts/test-{billing,payment,cloud-e2e}.mjs` |
 | 桌面云边界 | `apps/desktop/src-tauri/src/cloud/{config,client,auth,entitlement,policy}.rs` |
 | 云 Provider | `apps/desktop/src-tauri/src/codex/bowerbird_cloud.rs`、`codex/understand.rs` |
 | 云命令 | `apps/desktop/src-tauri/src/commands/cloud.rs` |
@@ -111,8 +103,7 @@
 
 ## 待办（凭据/决策驱动，非本次范围）
 
-- **云端部署**（见上文「当前阻塞点」）——唯一阻塞真机闭环的项。
-- 部署后**真机验收**：登录 → 首日 30 分 → 云出图扣分 → 流水 → 取消/失败回滚 → 余额官网/桌面一致。
+- **产品 UI 真机验收**：桌面登录 → 云出图 → 流水，以及官网/桌面余额一致；API 层真实闭环已通过。
 - Seedance 视频 adapter（需真实 video model endpoint id）。
 - 微信登录真实联调（H5 凭据，邮箱 Magic Link 已先行）。
 - 真实支付渠道决策 + 接入（见 Mock 开关表）。

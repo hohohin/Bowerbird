@@ -373,14 +373,20 @@ async function handleAuthenticatedGenerate(request, response, accessToken) {
       return { mime, base64, _index: index };
     }),
   };
-  const upstream = await fetch(`${cloudUrl}/functions/v1/generate-proxy`, {
+  const functionUrl = new URL(`${cloudUrl}/functions/v1/generate-proxy`);
+  functionUrl.searchParams.set(
+    "forceFunctionRegion",
+    process.env.SUPABASE_FUNCTION_REGION || "ap-northeast-1",
+  );
+  const upstream = await fetch(functionUrl, {
     method: "POST",
     headers: {
       authorization: `Bearer ${accessToken}`,
       "content-type": "application/json",
     },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(120_000),
+    // Edge waits at most 140s for Ark; keep a small envelope for its response.
+    signal: AbortSignal.timeout(145_000),
   });
   const payload = await upstream.json().catch(() => ({}));
   if (!upstream.ok) {

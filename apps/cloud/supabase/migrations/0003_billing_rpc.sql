@@ -188,7 +188,7 @@ declare
   needed integer;
   take_amount integer;
   created_hold_id uuid;
-  lot record;
+  credit_lot record;
   snapshot public.user_credits;
 begin
   if p_idempotency_key is null or btrim(p_idempotency_key) = '' then
@@ -227,9 +227,9 @@ begin
   end if;
 
   -- Expired lots are excluded; daily/sub/topup priority is explicit, then earliest expiry/creation.
-  select coalesce(sum(lot.remaining_amount), 0) into available
-  from public.credit_lots as lot
-  where lot.user_id = p_user_id and lot.remaining_amount > 0 and lot.expires_at > now();
+  select coalesce(sum(credits.remaining_amount), 0) into available
+  from public.credit_lots as credits
+  where credits.user_id = p_user_id and credits.remaining_amount > 0 and credits.expires_at > now();
 
   if available < charge then
     raise exception 'insufficient credits' using errcode = 'P0001', detail = 'insufficient_credits';
@@ -240,7 +240,7 @@ begin
   returning id into created_hold_id;
 
   needed := charge;
-  for lot in
+  for credit_lot in
     select credits.id, credits.remaining_amount
     from public.credit_lots as credits
     where credits.user_id = p_user_id
@@ -251,15 +251,15 @@ begin
     for update
   loop
     exit when needed = 0;
-    take_amount := least(needed, lot.remaining_amount);
+    take_amount := least(needed, credit_lot.remaining_amount);
 
     update public.credit_lots
       set remaining_amount = remaining_amount - take_amount
-      where id = lot.id;
+      where id = credit_lot.id;
     insert into public.credit_hold_allocations (user_id, hold_id, lot_id, amount)
-      values (p_user_id, created_hold_id, lot.id, take_amount);
+      values (p_user_id, created_hold_id, credit_lot.id, take_amount);
     insert into public.credit_transactions (user_id, hold_id, lot_id, kind, amount, service)
-      values (p_user_id, created_hold_id, lot.id, 'hold', -take_amount, p_service);
+      values (p_user_id, created_hold_id, credit_lot.id, 'hold', -take_amount, p_service);
 
     needed := needed - take_amount;
   end loop;

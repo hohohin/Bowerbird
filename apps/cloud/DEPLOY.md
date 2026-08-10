@@ -9,9 +9,9 @@
 
 任选其一：
 
-- **npm**（推荐，与 pnpm 共存）：
+- **npx**（无需全局安装）：
   ```bash
-  npm install -g supabase
+  npx --yes supabase@latest --version
   ```
 - **Scoop**（Windows）：
   ```powershell
@@ -24,15 +24,17 @@
 
 验证：
 ```bash
-supabase --version
+npx --yes supabase@latest --version
 ```
+
+下文的 `supabase ...` 命令在未全局安装时可统一替换为 `npx --yes supabase@latest --agent no ...`。
 
 ### 2. 登录并链接项目
 
 ```bash
-supabase login
+npx --yes supabase@latest --agent no --output-format text login
 # 会打开浏览器授权，授权后回终端
-supabase link --project-ref <你的-project-ref>
+npx --yes supabase@latest --agent no link --project-ref <你的-project-ref>
 ```
 
 `<project-ref>` 在 Supabase 项目 Settings → General → Reference ID。
@@ -41,11 +43,10 @@ supabase link --project-ref <你的-project-ref>
 
 ```bash
 cd apps/cloud
-supabase db push
+npx --yes supabase@latest --agent no db push
 ```
 
-会依次执行 `supabase/migrations/0001_*.sql` 到 `0007_deploy_helper.sql`。  
-`0007_deploy_helper.sql` 是幂等的，可在已有库上重复执行做 schema 修补。
+会依次执行 `supabase/migrations/0001_*.sql` 到 `0009_repair_credit_hold_shadowing.sql`。
 
 ### 4. 部署 Edge Functions 并注入 Secrets
 
@@ -68,7 +69,7 @@ supabase secrets set ARK_VIDEO_MODEL=$ARK_VIDEO_MODEL
 supabase secrets set ARK_VISION_MODEL=$ARK_VISION_MODEL
 supabase secrets set ALLOWED_ORIGINS="https://<你的官网域名>"
 supabase secrets set DAILY_COST_LIMIT_CNY=500
-supabase secrets set UPSTREAM_TIMEOUT_MS=120000
+supabase secrets set UPSTREAM_TIMEOUT_MS=140000
 supabase secrets set RATE_LIMIT_PER_USER_PER_MIN=10
 supabase secrets set BOWERBIRD_CLOUD_MOCK=false
 supabase secrets set BOWERBIRD_PAYMENT_MOCK=true
@@ -96,12 +97,18 @@ node scripts/test-payment.mjs
 supabase functions serve --env-file .env
 # 另一个终端：
 curl -H "Authorization: Bearer <测试用户 access token>" \
-  "$SUPABASE_URL/functions/v1/entitlement"
+  "$SUPABASE_URL/functions/v1/entitlement?forceFunctionRegion=ap-northeast-1"
+
+# 3. 真实注册 → 预授权 → 方舟出图 → 确认扣分 → 清理临时账号
+# 会产生一次真实方舟费用；脚本从 .env 读取凭据，不输出 key。
+$env:CLOUD_E2E_FUNCTION_REGION='ap-northeast-1'
+node --env-file=.env scripts/test-cloud-e2e.mjs
+Remove-Item Env:CLOUD_E2E_FUNCTION_REGION
 ```
 
 ## 7. 桌面端/官网真机验收
 
-- 桌面端：设置 → Bowerbird Cloud 连接 → 启用云端 + Mock 算力 → 保存连接配置 → 重启 app → 邮箱 Magic Link 登录 → 创作板选「Bowerbird Cloud」出图 → 查看积分扣减与流水。
+- 桌面端：设置 → Bowerbird Cloud 连接 → 启用云端 → 保存连接配置 → 重启 app → 邮箱 Magic Link 登录 → 创作板选「Bowerbird Cloud」出图 → 查看积分扣减与流水。正式调用默认路由到东京 `ap-northeast-1`。
 - 官网：把 `SUPABASE_URL` 与 `SUPABASE_PUBLISHABLE_KEY` 填到 `website/.env.local` 与 Render 环境变量，重启后登录验证共享积分。
 
 ## 支付（Mock）

@@ -50,8 +50,8 @@ function requiredEnv(name: string): string {
 }
 
 function upstreamTimeout(): number {
-  const value = Number.parseInt(Deno.env.get("UPSTREAM_TIMEOUT_MS") ?? "120000", 10);
-  return Number.isFinite(value) && value > 0 ? value : 120_000;
+  const value = Number.parseInt(Deno.env.get("UPSTREAM_TIMEOUT_MS") ?? "140000", 10);
+  return Number.isFinite(value) && value > 0 ? value : 140_000;
 }
 
 function dataUri(image: ImageInput): string {

@@ -50,7 +50,7 @@ export function assertReferenceImages(images: unknown, maxCount = 10): void {
 }
 
 export async function withTimeout<T>(promise: Promise<T>, timeoutMs?: number): Promise<T> {
-  const timeout = timeoutMs ?? envInt("UPSTREAM_TIMEOUT_MS", 120_000);
+  const timeout = timeoutMs ?? envInt("UPSTREAM_TIMEOUT_MS", 140_000);
   let timer: number | undefined;
   try {
     return await Promise.race([

@@ -39,3 +39,8 @@ enable_confirmations = false
 enabled = true
 policy = "per_worker"
 inspector_port = 8083
+
+# Payment providers cannot send a Supabase access token. The function validates
+# the provider signature itself before applying any order state transition.
+[functions.payment-webhook]
+verify_jwt = false

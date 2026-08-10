@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+const FUNCTION_REGION: &str = "ap-northeast-1";
+
 /// 桌面端可持有的公开云配置。机密 key 不属于这个结构。
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CloudConfig {
@@ -22,7 +24,9 @@ impl CloudConfig {
         if base.is_empty() {
             return None;
         }
-        Some(format!("{base}/functions/v1/{function}"))
+        Some(format!(
+            "{base}/functions/v1/{function}?forceFunctionRegion={FUNCTION_REGION}"
+        ))
     }
 }
 
@@ -77,7 +81,9 @@ mod tests {
         };
         assert_eq!(
             config.endpoint("generate-proxy").as_deref(),
-            Some("https://example.supabase.co/functions/v1/generate-proxy")
+            Some(
+                "https://example.supabase.co/functions/v1/generate-proxy?forceFunctionRegion=ap-northeast-1"
+            )
         );
     }
 
