@@ -2,10 +2,12 @@ import { create } from "zustand";
 import { api } from "./lib/api";
 import type {
   AppSettings,
+  AuthSnapshot,
   Asset,
   CodexChunk,
   CodexHealth,
   ColorBucket,
+  EntitlementSnapshot,
   Folder,
   GenJob,
   Preset,
@@ -16,7 +18,7 @@ import type {
 
 // —— 默认出图 provider（localStorage，照 boardRatio 枚举校验）——
 const DEFAULT_PROVIDER_KEY = "bowerbird.defaultProvider";
-const PROVIDERS = ["codex", "jimeng"] as const;
+const PROVIDERS = ["codex", "jimeng", "bowerbird-cloud"] as const;
 function loadDefaultProvider(): string {
   try {
     const v = localStorage.getItem(DEFAULT_PROVIDER_KEY);
@@ -121,10 +123,23 @@ interface State {
   setExtensionOnboardingForceOpen: (v: boolean) => void;
   dreaminaOnboardingForceOpen: boolean;
   setDreaminaOnboardingForceOpen: (v: boolean) => void;
+  accountOnboardingForceOpen: boolean;
+  setAccountOnboardingForceOpen: (v: boolean) => void;
   // —— 应用设置（从后端 settings.json 加载）——
   settings: AppSettings | null;
   loadSettings: () => Promise<void>;
   updateSettings: (s: AppSettings) => Promise<void>;
+  // —— Bowerbird 账号与权益（token 不进前端）——
+  cloudAuth: AuthSnapshot | null;
+  cloudEntitlement: EntitlementSnapshot | null;
+  cloudBusy: boolean;
+  cloudError: string | null;
+  loadCloudAccount: () => Promise<void>;
+  startCloudEmailLogin: (email: string) => Promise<void>;
+  syncCloudEntitlement: () => Promise<void>;
+  logoutCloud: () => Promise<void>;
+  setCloudAuth: (snapshot: AuthSnapshot) => void;
+  setCloudError: (error: string | null) => void;
   // —— 即梦（dreamina）可用性 + 出图 provider 切换（Phase 3）——
   dreaminaHealth: CodexHealth | null;
   setDreaminaHealth: (h: CodexHealth | null) => void;
@@ -487,6 +502,9 @@ export const useStore = create<State>((set, get) => {
   dreaminaOnboardingForceOpen: false,
   setDreaminaOnboardingForceOpen: (dreaminaOnboardingForceOpen) =>
     set({ dreaminaOnboardingForceOpen }),
+  accountOnboardingForceOpen: false,
+  setAccountOnboardingForceOpen: (accountOnboardingForceOpen) =>
+    set({ accountOnboardingForceOpen }),
   // —— 应用设置 ——
   settings: null,
   loadSettings: async () => {
@@ -502,6 +520,65 @@ export const useStore = create<State>((set, get) => {
       set({ settings });
     } catch (e) {
       console.error("updateSettings failed", e);
+    }
+  },
+  // —— Bowerbird 账号与权益 ——
+  cloudAuth: null,
+  cloudEntitlement: null,
+  cloudBusy: false,
+  cloudError: null,
+  setCloudAuth: (cloudAuth) => set({ cloudAuth }),
+  setCloudError: (cloudError) => set({ cloudError }),
+  loadCloudAccount: async () => {
+    set({ cloudBusy: true, cloudError: null });
+    try {
+      let cloudAuth = await api.cloudAuthSnapshot();
+      if (!cloudAuth.logged_in) {
+        try {
+          cloudAuth = await api.cloudRestoreSession();
+        } catch {
+          // 没有 keychain 凭据/离线时仍展示脱敏未登录 snapshot。
+        }
+      }
+      const cloudEntitlement = await api.cloudEntitlement();
+      set({ cloudAuth, cloudEntitlement });
+    } catch (e) {
+      set({ cloudError: typeof e === "string" ? e : "账号状态读取失败" });
+    } finally {
+      set({ cloudBusy: false });
+    }
+  },
+  startCloudEmailLogin: async (email) => {
+    set({ cloudBusy: true, cloudError: null });
+    try {
+      await api.cloudStartEmailLogin(email);
+    } catch (e) {
+      set({ cloudError: typeof e === "string" ? e : "登录邮件发送失败" });
+      throw e;
+    } finally {
+      set({ cloudBusy: false });
+    }
+  },
+  syncCloudEntitlement: async () => {
+    set({ cloudBusy: true, cloudError: null });
+    try {
+      set({ cloudEntitlement: await api.cloudSyncEntitlement() });
+    } catch (e) {
+      set({ cloudError: typeof e === "string" ? e : "权益同步失败" });
+    } finally {
+      set({ cloudBusy: false });
+    }
+  },
+  logoutCloud: async () => {
+    set({ cloudBusy: true, cloudError: null });
+    try {
+      const cloudAuth = await api.cloudLogout();
+      const cloudEntitlement = await api.cloudEntitlement();
+      set({ cloudAuth, cloudEntitlement });
+    } catch (e) {
+      set({ cloudError: typeof e === "string" ? e : "登出失败" });
+    } finally {
+      set({ cloudBusy: false });
     }
   },
   // —— 即梦 + provider（Phase 3）——

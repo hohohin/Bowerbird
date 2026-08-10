@@ -15,10 +15,11 @@ use tokio::sync::mpsc;
 use ulid::Ulid;
 
 use crate::codex::codex_cli::{
-    codex_command, codex_home, npm_command, resolve_codex_binary, resolve_npm_binary, CodexCliProvider,
+    codex_command, codex_home, npm_command, resolve_codex_binary, resolve_npm_binary,
 };
 use crate::codex::types::{Chunk, CodexRequest, CodexResult};
-use crate::codex::{resolve_gen_provider, GenProvider};
+use crate::codex::understand::{resolve_understand_provider, UnderstandOperation};
+use crate::codex::resolve_gen_provider;
 use crate::core::caption;
 use crate::core::paths::LibraryPaths;
 use crate::db::Database;
@@ -282,10 +283,11 @@ pub async fn codex_generate_prompt_for_asset(
         reference_images: vec![PathBuf::from(store_path)],
         context_prompts: vec![],
         ratio: None,
+        job_id: None,
     };
-    let p = CodexCliProvider::default();
+    let p = resolve_understand_provider(None, None)?;
     let provider_name = p.name().to_string();
-    let result = p.run(req).await?;
+    let result = p.understand(UnderstandOperation::Autoname, req).await?;
 
     let prompt_id = Ulid::new().to_string();
     let db_for_write = db.inner().clone();
@@ -329,8 +331,9 @@ pub async fn codex_describe_asset(
         reference_images: vec![PathBuf::from(store_path)],
         context_prompts: vec![],
         ratio: None,
+        job_id: None,
     };
-    let p = CodexCliProvider::default();
+    let p = resolve_understand_provider(None, None)?;
     let provider_name = p.name().to_string();
 
     // 可取消：select codex 执行 与 取消信号。取消时 run future 被 drop，
@@ -340,7 +343,7 @@ pub async fn codex_describe_asset(
         .lock()
         .unwrap()
         .replace(cancel_tx);
-    let run_fut = p.run(req);
+    let run_fut = p.understand(UnderstandOperation::Caption, req);
     tokio::pin!(run_fut);
     let result = tokio::select! {
         r = &mut run_fut => r,
@@ -411,6 +414,8 @@ pub async fn codex_create_image(
     app: AppHandle,
     db: State<'_, Arc<Database>>,
     paths: State<'_, Arc<LibraryPaths>>,
+    cloud_client: State<'_, crate::cloud::CloudClient>,
+    auth_client: State<'_, crate::cloud::AuthClient>,
     prompt: String,
     reference_images: Vec<String>,
     session_id: Option<String>,
@@ -442,6 +447,7 @@ pub async fn codex_create_image(
         reference_images: reference_images.into_iter().map(PathBuf::from).collect(),
         context_prompts: vec![],
         ratio: ratio.clone(),
+        job_id: Some(job_id.clone()),
     };
 
     let (tx, mut rx) = mpsc::channel::<Chunk>(64);
@@ -492,7 +498,9 @@ pub async fn codex_create_image(
 
     // 先解析 provider（可能出错 → ?）：必须在注册 GENERATE_CANCEL 之前，否则出错提前返回
     // 会留下 stale cancel sender（下次 cancel_codex_create take 到它）。None → codex（默认）。
-    let p = resolve_gen_provider(provider.as_deref())?;
+    let cloud_context = matches!(provider.as_deref(), Some("bowerbird-cloud"))
+        .then(|| (cloud_client.inner().clone(), auth_client.inner().clone()));
+    let p = resolve_gen_provider(provider.as_deref(), cloud_context)?;
     let provider_name = p.name().to_string();
 
     // Phase A task 2：入队 task_queue（status=running），供任务中心 / 启动恢复 / 取消引用。

@@ -21,6 +21,10 @@ tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-shell = "2"
+tauri-plugin-deep-link = "2"
+
+[target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 
 # 序列化 / 错误 / 日志
 serde = { version = "1", features = ["derive"] }
@@ -70,6 +74,9 @@ axum = { version = "0.7", features = ["ws"] }
 # ID / 时间
 ulid = { version = "1", features = ["serde"] }
 chrono = { version = "0.4", features = ["serde"] }
+# Supabase PKCE + OS 原生凭据库（refresh token 不落 settings.json）
+sha2 = "0.10"
+keyring = "3"
 
 # --- 发布优化 ---
 [profile.release]

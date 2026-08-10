@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useStore } from "../store";
+import { canStartAnotherJob, canUseByo } from "../lib/entitlement";
 import { api } from "../lib/api";
 import { useCreationEditor } from "./creation/useCreationEditor";
 import { RATIOS } from "./creation/ratios";
@@ -39,6 +40,10 @@ export function CreationBoard() {
   const toggleBoard = useStore((s) => s.toggleBoard);
   const codexHealth = useStore((s) => s.codexHealth);
   const dreaminaHealth = useStore((s) => s.dreaminaHealth);
+  const cloudAuth = useStore((s) => s.cloudAuth);
+  const cloudEntitlement = useStore((s) => s.cloudEntitlement);
+  const cloudEnabled = useStore((s) => s.settings?.cloud_enabled ?? false);
+  const runningJobCount = useStore((s) => Object.values(s.genJobs).filter((j) => j.running).length);
   const activeGenProvider = useStore((s) => s.activeGenProvider);
   const setActiveGenProvider = useStore((s) => s.setActiveGenProvider);
   const startGeneration = useStore((s) => s.startGeneration);
@@ -77,14 +82,26 @@ export function CreationBoard() {
     [presets, activePresetId]
   );
 
-  // 按当前选中的 provider 判健康（codex/即梦各自可用性，约定 7 置灰依据）。
-  const targetHealth = activeGenProvider === "jimeng" ? dreaminaHealth : codexHealth;
-  const targetProviderLabel = activeGenProvider === "jimeng" ? "即梦" : "codex";
+  // 按当前选中的 provider 判健康（云端需开关+登录+余额，其余读各自 health）。
+  const cloudBalance = cloudEntitlement
+    ? cloudEntitlement.balances.daily + cloudEntitlement.balances.sub + cloudEntitlement.balances.topup
+    : 0;
+  const targetReady = activeGenProvider === "bowerbird-cloud"
+    ? cloudEnabled && !!cloudAuth?.logged_in && cloudBalance > 0
+    : activeGenProvider === "jimeng"
+      ? canUseByo(cloudEntitlement) && !!dreaminaHealth?.ok
+      : canUseByo(cloudEntitlement) && !!codexHealth?.ok;
+  const targetProviderLabel = activeGenProvider === "jimeng"
+    ? "即梦"
+    : activeGenProvider === "bowerbird-cloud"
+      ? "Bowerbird Cloud"
+      : "codex";
 
   // 把当前组稿发 provider 生成。生成期间编辑器仍可继续组下一轮稿（prompt 在此快照进 store）。
   // provider 由 store 内 activeGenProvider 兜底（send 不显式传）。
   function send() {
-    if (!targetHealth?.ok || !finalPrompt) return;
+    if (!targetReady || !finalPrompt) return;
+    if (!canStartAnotherJob(cloudEntitlement, runningJobCount)) return;
     void startGeneration(finalPrompt, references, ratio);
   }
 
@@ -307,6 +324,9 @@ export function CreationBoard() {
               onChange={setActiveGenProvider}
               codexHealth={codexHealth}
               dreaminaHealth={dreaminaHealth}
+              cloudEnabled={cloudEnabled}
+              cloudAuth={cloudAuth}
+              cloudEntitlement={cloudEntitlement}
             />
           </div>
 
@@ -338,19 +358,21 @@ export function CreationBoard() {
       <div className="shrink-0 space-y-2 border-t border-edge p-3">
         <button
           onClick={send}
-          disabled={!finalPrompt || !targetHealth?.ok}
+          disabled={!finalPrompt || !targetReady || !canStartAnotherJob(cloudEntitlement, runningJobCount)}
           title={
-            !targetHealth?.ok
-              ? targetHealth?.reason || `${targetProviderLabel} 不可用`
-              : `把最终 prompt + 参考图发 ${targetProviderLabel} 生成图像（结果进「生成结果」面板）`
+            !targetReady
+              ? `${targetProviderLabel} 不可用`
+              : !canStartAnotherJob(cloudEntitlement, runningJobCount)
+                ? "已达当前档位的并行生成上限"
+                : `把最终 prompt + 参考图发 ${targetProviderLabel} 生成图像（结果进「生成结果」面板）`
           }
           className="w-full rounded-md bg-accent px-3 py-2 text-sm font-semibold text-black disabled:opacity-50"
         >
           {`✓ 发送 ${targetProviderLabel} 生成`}
         </button>
         <div className="text-[10px] text-muted">
-          {targetHealth && !targetHealth.ok
-            ? targetHealth.reason
+          {!targetReady
+            ? "请先登录 Bowerbird 账号或在「设置 · AI 出图引擎」选择可用引擎"
             : "🎨 发送后自动弹出「生成结果」面板；生成成功自动收起创作板，草稿保留可再打开续用。"}
         </div>
       </div>

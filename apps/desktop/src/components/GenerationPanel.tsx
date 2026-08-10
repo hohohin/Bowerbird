@@ -42,7 +42,11 @@ export function GenerationPanel() {
 
   // 按 activeJob.provider 判健康（codex/即梦各自可用性，约定 7 置灰依据）。
   const targetHealth = activeJob?.provider === "jimeng" ? dreaminaHealth : codexHealth;
-  const targetProviderLabel = activeJob?.provider === "jimeng" ? "即梦" : "codex";
+  const targetProviderLabel = activeJob?.provider === "jimeng"
+    ? "即梦"
+    : activeJob?.provider === "bowerbird-cloud"
+      ? "Bowerbird Cloud"
+      : "codex";
 
   const imageCount = useMemo(
     () => activeJob?.turns.reduce((n, t) => n + t.images.length, 0) ?? 0,
@@ -104,7 +108,11 @@ export function GenerationPanel() {
           {activeJob && (
             <span className="text-xs text-muted">
               {activeJob.turns.length} 轮 · {imageCount} 图
-              {activeJob.provider === "jimeng" ? " · 即梦" : ""}
+              {activeJob.provider === "jimeng"
+                ? " · 即梦"
+                : activeJob.provider === "bowerbird-cloud"
+                  ? " · Bowerbird Cloud"
+                  : ""}
             </span>
           )}
         </div>
@@ -130,7 +138,7 @@ export function GenerationPanel() {
               <button
                 key={id}
                 onClick={() => setActiveJob(id)}
-                title={`Job ${i + 1} · ${j.provider === "jimeng" ? "即梦" : "codex"} · ${imgs} 图`}
+                title={`Job ${i + 1} · ${j.provider === "jimeng" ? "即梦" : j.provider === "bowerbird-cloud" ? "Bowerbird Cloud" : "codex"} · ${imgs} 图`}
                 className={`flex shrink-0 items-center gap-1 rounded px-2 py-1 text-[11px] ${
                   isActive
                     ? "bg-accent font-semibold text-black"
@@ -139,7 +147,7 @@ export function GenerationPanel() {
               >
                 <span>{i + 1}</span>
                 <span className="text-[9px] opacity-80">
-                  {j.provider === "jimeng" ? "即梦" : "codex"}
+                  {j.provider === "jimeng" ? "即梦" : j.provider === "bowerbird-cloud" ? "云端" : "codex"}
                 </span>
                 {j.running ? (
                   <span className="animate-pulse" title="生成中">

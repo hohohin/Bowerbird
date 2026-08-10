@@ -193,6 +193,50 @@ export interface AppSettings {
   auto_analyze_on_ingest: boolean;
   auto_analyze_prompt: string;
   library_root: string | null;
+  cloud_enabled: boolean;
+  cloud_supabase_url: string | null;
+  cloud_supabase_publishable_key: string | null;
+  cloud_mock: boolean;
+  cloud_auto_understand: boolean;
+}
+
+export interface AuthSnapshot {
+  logged_in: boolean;
+  user_id: string | null;
+  email: string | null;
+  access_expires_at: string | null;
+  reason: string | null;
+}
+
+export interface FeaturePolicy {
+  can_use_byo: boolean;
+  can_use_cloud: boolean;
+  max_parallel_jobs: number;
+  understand_daily_limit: number | null;
+  can_use_priority_queue: boolean;
+  can_hd_export: boolean;
+}
+
+export interface CreditTransaction {
+  kind: string;
+  amount: number;
+  service: string | null;
+  created_at: string;
+}
+
+export interface EntitlementSnapshot {
+  user_id: string;
+  tier: "free" | "pro" | "studio";
+  balances: { daily: number; sub: number; topup: number };
+  policy: FeaturePolicy;
+  recent_transactions: CreditTransaction[];
+  issued_at: string;
+  refresh_after: string;
+  grace_until: string;
+  entitlement_version: number;
+  signature_version: number;
+  signature: string | null;
+  offline_state: "fresh" | "grace" | "expired" | "invalid" | null;
 }
 
 /** 素材库迁移进度（library://migrate-progress）。 */

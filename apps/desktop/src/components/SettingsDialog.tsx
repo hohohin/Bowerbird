@@ -33,10 +33,22 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const setDefaultProvider = useStore((s) => s.setDefaultProvider);
   const classifyProgress = useStore((s) => s.classifyProgress);
   const colorRebuild = useStore((s) => s.colorRebuild);
+  const cloudAuth = useStore((s) => s.cloudAuth);
+  const cloudEntitlement = useStore((s) => s.cloudEntitlement);
+  const cloudBusy = useStore((s) => s.cloudBusy);
+  const cloudError = useStore((s) => s.cloudError);
+  const loadCloudAccount = useStore((s) => s.loadCloudAccount);
+  const startCloudEmailLogin = useStore((s) => s.startCloudEmailLogin);
+  const syncCloudEntitlement = useStore((s) => s.syncCloudEntitlement);
+  const logoutCloud = useStore((s) => s.logoutCloud);
 
   // 本地编辑态：打开面板时从 store 快照初始化，失焦/按键时写回。
   const [autoAnalyzeOnIngest, setAutoAnalyzeOnIngest] = useState(false);
   const [promptText, setPromptText] = useState("");
+  const [cloudEmail, setCloudEmail] = useState("");
+  const [cloudEmailSent, setCloudEmailSent] = useState(false);
+  const [cloudUrl, setCloudUrl] = useState("");
+  const [cloudPublishableKey, setCloudPublishableKey] = useState("");
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const initialized = useRef(false);
 
@@ -70,6 +82,10 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
       unlisten?.();
     };
   }, []);
+
+  useEffect(() => {
+    void loadCloudAccount();
+  }, [loadCloudAccount]);
 
   // 打开时刷新一次 codex 状态（看到的是当前环境，而非 App 挂载时的快照）。
   useEffect(() => {
@@ -120,17 +136,24 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     if (settings) {
       setAutoAnalyzeOnIngest(settings.auto_analyze_on_ingest);
       setPromptText(settings.auto_analyze_prompt || DEFAULT_AUTO_ANALYZE_PROMPT);
+      setCloudUrl(settings.cloud_supabase_url ?? "");
+      setCloudPublishableKey(settings.cloud_supabase_publishable_key ?? "");
     }
   }, [settings]);
 
   const allReady = codexHealth?.ok === true && extensionConnected;
 
   const commitSettings = (onIngest: boolean, prompt: string) => {
-    // 全量覆盖：保留 library_root，只改自动反推两项。
+    // 全量覆盖：只改自动反推两项，其余设置保持不变。
     void updateSettings({
       auto_analyze_on_ingest: onIngest,
       auto_analyze_prompt: prompt || DEFAULT_AUTO_ANALYZE_PROMPT,
       library_root: settings?.library_root ?? null,
+      cloud_enabled: settings?.cloud_enabled ?? false,
+      cloud_supabase_url: settings?.cloud_supabase_url ?? null,
+      cloud_supabase_publishable_key: settings?.cloud_supabase_publishable_key ?? null,
+      cloud_mock: settings?.cloud_mock ?? true,
+      cloud_auto_understand: settings?.cloud_auto_understand ?? false,
     });
   };
 
@@ -235,6 +258,107 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             </button>
           </div>
 
+          {/* Bowerbird Cloud 连接：公开 URL/publishable key 可存设置；secret key 永不进桌面。 */}
+          <div className="rounded bg-panel2 px-3 py-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-ink">Bowerbird Cloud 连接</span>
+              <span className={`rounded px-2 py-0.5 text-xs ${settings?.cloud_enabled ? "bg-green-500/15 text-green-400" : "bg-muted/15 text-muted"}`}>
+                {settings?.cloud_enabled ? (settings.cloud_mock ? "Mock" : "真实服务") : "关闭"}
+              </span>
+            </div>
+            <p className="mt-1 text-[11px] text-muted">这里只保存公开 Project URL 与 publishable key；secret key 只放 Edge Functions。</p>
+            <div className="mt-2 space-y-1.5">
+              <input value={cloudUrl} onChange={(e) => setCloudUrl(e.target.value)} placeholder="https://xxxx.supabase.co" className="w-full rounded border border-edge bg-panel px-2 py-1 text-xs text-ink" />
+              <input value={cloudPublishableKey} onChange={(e) => setCloudPublishableKey(e.target.value)} placeholder="sb_publishable_..." className="w-full rounded border border-edge bg-panel px-2 py-1 font-mono text-xs text-ink" />
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <label className="flex items-center gap-1.5 text-[11px] text-muted">
+                <input type="checkbox" checked={settings?.cloud_enabled ?? false} onChange={(e) => settings && void updateSettings({ ...settings, cloud_enabled: e.target.checked })} className="accent-accent" />
+                启用云端
+              </label>
+              <label className="flex items-center gap-1.5 text-[11px] text-muted">
+                <input type="checkbox" checked={settings?.cloud_mock ?? true} onChange={(e) => settings && void updateSettings({ ...settings, cloud_mock: e.target.checked })} className="accent-accent" />
+                Mock 算力
+              </label>
+              <button
+                onClick={() => settings && void updateSettings({
+                  ...settings,
+                  cloud_supabase_url: cloudUrl.trim() || null,
+                  cloud_supabase_publishable_key: cloudPublishableKey.trim() || null,
+                })}
+                className="rounded-md bg-accent px-3 py-1 text-xs font-medium text-black"
+              >保存连接配置</button>
+            </div>
+            <p className="mt-1 text-[10px] text-amber-300">连接配置在 app 启动时载入；保存或切换真实/Mock 后请重启 Bowerbird。</p>
+          </div>
+
+          {/* Bowerbird 账号：token 只存在 Rust/keychain，前端仅展示脱敏状态。 */}
+          <div className="rounded bg-panel2 px-3 py-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-ink">Bowerbird 账号</span>
+              <span className={`rounded px-2 py-0.5 text-xs ${cloudAuth?.logged_in ? "bg-green-500/15 text-green-400" : "bg-amber-500/15 text-amber-300"}`}>
+                {cloudAuth?.logged_in ? cloudEntitlement?.tier?.toUpperCase() || "已登录" : cloudAuth?.reason || "未登录"}
+              </span>
+            </div>
+            {cloudAuth?.logged_in ? (
+              <>
+                <p className="mt-1 text-xs text-muted">{cloudAuth.email || cloudAuth.user_id}</p>
+                <div className="mt-2 grid grid-cols-3 gap-1 text-center text-[11px]">
+                  <div className="rounded bg-panel p-1.5"><div className="text-muted">每日</div><div className="text-ink">{cloudEntitlement?.balances.daily ?? 0}</div></div>
+                  <div className="rounded bg-panel p-1.5"><div className="text-muted">订阅</div><div className="text-ink">{cloudEntitlement?.balances.sub ?? 0}</div></div>
+                  <div className="rounded bg-panel p-1.5"><div className="text-muted">充值</div><div className="text-ink">{cloudEntitlement?.balances.topup ?? 0}</div></div>
+                </div>
+                <div className="mt-2 flex gap-2">
+                  <button onClick={() => void syncCloudEntitlement()} disabled={cloudBusy} className="rounded-md bg-panel px-3 py-1 text-xs text-ink hover:bg-edge disabled:opacity-50">刷新权益</button>
+                  <button onClick={() => void logoutCloud()} disabled={cloudBusy} className="rounded-md bg-panel px-3 py-1 text-xs text-ink hover:bg-red-500/20 hover:text-red-300 disabled:opacity-50">登出</button>
+                </div>
+                {(cloudEntitlement?.recent_transactions?.length ?? 0) > 0 && (
+                  <div className="mt-3 border-t border-edge pt-2">
+                    <div className="text-[10px] uppercase tracking-wide text-muted">最近积分流水</div>
+                    <ul className="mt-1 max-h-40 space-y-1 overflow-y-auto text-[11px]">
+                      {cloudEntitlement!.recent_transactions.slice(0, 50).map((tx, index) => (
+                        <li key={`${tx.created_at}-${index}`} className="flex items-center justify-between gap-2 text-muted">
+                          <span className="truncate">{tx.kind}{tx.service ? ` · ${tx.service}` : ""}</span>
+                          <span className={tx.amount >= 0 ? "text-green-400" : "text-red-300"}>{tx.amount >= 0 ? `+${tx.amount}` : tx.amount}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                <p className="mt-1 text-xs text-muted">邮箱魔法链接登录。素材库仍完全本地；只有明确选择云能力时才临时发送所选内容。</p>
+                <div className="mt-2 flex gap-2">
+                  <input type="email" value={cloudEmail} onChange={(e) => setCloudEmail(e.target.value)} placeholder="you@example.com" className="min-w-0 flex-1 rounded border border-edge bg-panel px-2 py-1 text-xs text-ink" />
+                  <button
+                    onClick={async () => {
+                      try {
+                        await startCloudEmailLogin(cloudEmail);
+                        setCloudEmailSent(true);
+                      } catch { /* store 已展示错误 */ }
+                    }}
+                    disabled={cloudBusy || !settings?.cloud_enabled || !cloudEmail}
+                    className="rounded-md bg-accent px-3 py-1 text-xs font-medium text-black disabled:opacity-40"
+                    title={!settings?.cloud_enabled ? "先在配置中启用 Bowerbird Cloud" : "发送登录邮件"}
+                  >发送链接</button>
+                </div>
+                {cloudEmailSent && <p className="mt-1 text-[11px] text-green-400">登录邮件已发送，请在本机浏览器完成验证。</p>}
+              </>
+            )}
+            {cloudError && <p className="mt-1 text-[11px] text-red-300">{cloudError}</p>}
+            <label className="mt-3 flex cursor-pointer items-start gap-2 border-t border-edge pt-2 text-[11px] text-muted">
+              <input
+                type="checkbox"
+                checked={settings?.cloud_auto_understand ?? false}
+                onChange={(e) => settings && void updateSettings({ ...settings, cloud_auto_understand: e.target.checked })}
+                disabled={!settings?.cloud_enabled}
+                className="mt-0.5 size-3.5 accent-accent"
+              />
+              <span>允许入库自动分析时，把新图片临时发送到 Bowerbird Cloud 理解（默认关闭；请求结束不保存图片）</span>
+            </label>
+          </div>
+
           {/* 入库时自动反推 */}
           <div className="rounded bg-panel2 px-3 py-2.5">
             <label className="flex items-center gap-2 cursor-pointer select-none">
@@ -288,6 +412,9 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                 onChange={setDefaultProvider}
                 codexHealth={codexHealth}
                 dreaminaHealth={dreaminaHealth}
+                cloudEnabled={settings?.cloud_enabled ?? false}
+                cloudAuth={cloudAuth}
+                cloudEntitlement={cloudEntitlement}
               />
             </div>
             <div className="mt-2 flex items-center gap-2">

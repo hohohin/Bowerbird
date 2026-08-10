@@ -1,10 +1,12 @@
 import { useState } from "react";
-import type { CodexHealth } from "../../lib/types";
+import type { AuthSnapshot, CodexHealth, EntitlementSnapshot } from "../../lib/types";
+import { canUseByo } from "../../lib/entitlement";
 
-/** 出图 provider 选项（Phase 3：codex / 即梦）。 */
+/** 出图 provider 选项（codex / 即梦 / Bowerbird Cloud）。 */
 const PROVIDERS = [
   { key: "codex", label: "codex" },
   { key: "jimeng", label: "即梦" },
+  { key: "bowerbird-cloud", label: "Bowerbird Cloud" },
 ] as const;
 
 /**
@@ -17,11 +19,17 @@ export function ProviderSelect({
   onChange,
   codexHealth,
   dreaminaHealth,
+  cloudEnabled = false,
+  cloudAuth = null,
+  cloudEntitlement = null,
 }: {
   value: string;
   onChange: (p: string) => void;
   codexHealth: CodexHealth | null;
   dreaminaHealth: CodexHealth | null;
+  cloudEnabled?: boolean;
+  cloudAuth?: AuthSnapshot | null;
+  cloudEntitlement?: EntitlementSnapshot | null;
 }) {
   const [open, setOpen] = useState(false);
   const current = PROVIDERS.find((p) => p.key === value) ?? PROVIDERS[0];
@@ -41,8 +49,25 @@ export function ProviderSelect({
       {open && (
         <div className="mt-1 flex flex-col gap-1 rounded bg-panel2 p-2">
           {PROVIDERS.map((p) => {
+            const isCloud = p.key === "bowerbird-cloud";
+            const isByo = !isCloud;
+            const byoLocked = isByo && !canUseByo(cloudEntitlement);
             const health = p.key === "jimeng" ? dreaminaHealth : codexHealth;
-            const ok = !!health?.ok;
+            const cloudBalance = cloudEntitlement
+              ? cloudEntitlement.balances.daily + cloudEntitlement.balances.sub + cloudEntitlement.balances.topup
+              : 0;
+            const reason = isCloud
+              ? !cloudEnabled
+                ? "Bowerbird Cloud 未启用"
+                : !cloudAuth?.logged_in
+                  ? "请先登录 Bowerbird 账号"
+                  : cloudBalance <= 0
+                    ? "积分不足"
+                    : undefined
+              : byoLocked
+                ? "升级 Pro 解锁 BYO 引擎"
+                : undefined;
+            const ok = isCloud ? reason === undefined : byoLocked ? false : !!health?.ok;
             const selected = value === p.key;
             return (
               <button
@@ -55,7 +80,7 @@ export function ProviderSelect({
                   }
                 }}
                 disabled={!ok}
-                title={!ok ? health?.reason || `${p.label} 不可用` : `用 ${p.label} 出图`}
+                title={!ok ? (isCloud ? reason : health?.reason) || `${p.label} 不可用` : `用 ${p.label} 出图`}
                 className={
                   "rounded px-2 py-1 text-left text-xs " +
                   (selected

@@ -1,5 +1,6 @@
 //! Tauri commands（前端 invoke 入口）。
 
+pub mod cloud;
 pub mod collect;
 pub mod codex;
 pub mod jimeng;

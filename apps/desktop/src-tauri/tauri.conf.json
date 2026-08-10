@@ -33,6 +33,13 @@
       }
     }
   },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["bowerbird"]
+      }
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",

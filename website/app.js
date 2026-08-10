@@ -550,6 +550,7 @@ assetGrid.addEventListener("click", (event) => {
 });
 
 const generateButton = document.getElementById("generate-image");
+const accountState = document.getElementById("account-state");
 const generationResult = document.getElementById("generation-result");
 const generationPlaceholder = document.getElementById("generation-placeholder");
 const generationStatus = document.getElementById("generation-status");
@@ -563,6 +564,75 @@ let demoDailyLimit = 3;
 let demoCurrentDay = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(new Date());
 let displayedAssetCount = ASSETS.length;
 let imageService = null;
+
+// Bowerbird account integration: when SUPABASE_URL is configured on the server, allow email
+// magic-link login so generation uses the shared cloud credits instead of the per-IP demo quota.
+// The demo path stays fully functional when cloud auth is not configured.
+let supabaseClient = null;
+let supabaseAccessToken = null;
+let supabaseEmail = null;
+
+function hasSupabaseAuth() {
+  return Boolean(supabaseClient && imageService?.supabaseUrl);
+}
+
+async function initSupabaseAuth() {
+  if (!window.supabase || !imageService?.supabaseUrl) return;
+  try {
+    supabaseClient = window.supabase.createClient(
+      imageService.supabaseUrl,
+      imageService.supabasePublishableKey || imageService.supabaseAnonKey || imageService.supabaseUrl || "anon",
+      { auth: { persistSession: true, autoRefreshToken: true, flowType: "pkce" } },
+    );
+    const { data } = await supabaseClient.auth.getSession();
+    supabaseAccessToken = data.session?.access_token || null;
+    supabaseEmail = data.session?.user?.email || null;
+    if (supabaseClient && window.supabase && supabaseClient.auth) {
+      supabaseClient.auth.onAuthStateChange((_event, session) => {
+        supabaseAccessToken = session?.access_token || null;
+        supabaseEmail = session?.user?.email || null;
+        renderAccountState();
+      });
+    }
+    renderAccountState();
+  } catch {
+    // Cloud auth unavailable: fall back to demo quota.
+    supabaseClient = null;
+  }
+}
+
+function renderAccountState() {
+  if (!accountState) return;
+  if (!hasSupabaseAuth()) {
+    accountState.hidden = true;
+    return;
+  }
+  accountState.hidden = false;
+  if (supabaseAccessToken) {
+    accountState.textContent = `已登录 · ${supabaseEmail || "账号"}`;
+    accountState.title = "已登录，使用云端积分生成；点击可退出";
+    accountState.onclick = async () => {
+      await supabaseClient?.auth.signOut();
+    };
+  } else {
+    accountState.textContent = "登录后使用云端积分";
+    accountState.title = "邮箱魔法链接登录，积分随账号跨官网与桌面使用";
+    accountState.onclick = async () => {
+      const email = window.prompt("输入邮箱登录 Bowerbird：");
+      if (!email || !email.includes("@")) return;
+      try {
+        await supabaseClient?.auth.signInWithOtp({
+          email,
+          options: { emailRedirectTo: window.location.origin },
+        });
+        accountState.textContent = "邮件已发送，请查收并点击验证链接";
+        accountState.onclick = null;
+      } catch (error) {
+        accountState.textContent = "登录邮件发送失败，请重试";
+      }
+    };
+  }
+}
 
 function readDemoUsage() {
   try {
@@ -672,6 +742,7 @@ async function loadImageService() {
     applyDownloadConfig(payload.windowsDownloadUrl);
     demoDailyLimit = Number.isFinite(payload.trialLimit) ? payload.trialLimit : 3;
     demoCurrentDay = payload.trialDay || demoCurrentDay;
+    if (window.supabase) initSupabaseAuth();
     if (hasCompletedDemo()) {
       showDemoLimitReached();
       return;
@@ -720,16 +791,24 @@ generateButton.addEventListener("click", async () => {
   try {
     const response = await fetch("/api/generate", {
       method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        ...(supabaseAccessToken ? { Authorization: `Bearer ${supabaseAccessToken}` } : {}),
+      },
       body: JSON.stringify({ prompt, referenceIds: references }),
       signal: controller.signal,
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
-      if (response.status === 429) {
+      if (response.status === 429 || response.status === 402) {
         graphOutputState = "error";
         renderCreationGraph();
-        showDemoLimitReached();
+        if (response.status === 402) {
+          showGenerationMessage("云端积分不足", "可在桌面端购买积分包，或登录后刷新积分", "error");
+        } else {
+          showDemoLimitReached();
+        }
         return;
       }
       throw new Error(payload.error || `生成失败（${response.status}）`);
@@ -760,6 +839,12 @@ generateButton.addEventListener("click", async () => {
     }
   }
 });
+
+// Supabase SDK 从官方 CDN 加载（仅当服务端暴露了 supabaseUrl 才初始化）。
+const supabaseScript = document.createElement("script");
+supabaseScript.src = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
+supabaseScript.onload = () => initSupabaseAuth();
+document.head.appendChild(supabaseScript);
 
 const menuToggle = document.getElementById("menu-toggle");
 const siteNav = document.getElementById("site-nav");

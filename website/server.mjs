@@ -90,6 +90,7 @@ function publicHttpsUrl(value) {
 function publicConfig() {
   const provider = resolveProvider();
   const trial = trialSettings();
+  const supabaseUrl = (process.env.SUPABASE_URL || "").replace(/\/+$/, "");
   return {
     provider,
     label: PROVIDERS[provider].label,
@@ -100,6 +101,9 @@ function publicConfig() {
     globalDailyLimit: trial.globalDailyLimit,
     trialDay: currentTrialDay(trial.timeZone),
     windowsDownloadUrl: publicHttpsUrl(process.env.BOWERBIRD_WINDOWS_DOWNLOAD_URL) || DEFAULT_WINDOWS_DOWNLOAD_URL,
+    supabaseUrl: supabaseUrl || null,
+    supabasePublishableKey:
+      process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY || null,
   };
 }
 
@@ -320,6 +324,16 @@ async function generateWithFlux(prompt, references) {
 
 async function handleGenerate(request, response) {
   const config = publicConfig();
+  const authHeader = request.headers.authorization || "";
+
+  // Authenticated account path: verify the Supabase JWT and forward to the shared generate-proxy,
+  // so the website and the desktop share the same credits/billing contract (P8).
+  if (authHeader.startsWith("Bearer ")) {
+    return await handleAuthenticatedGenerate(request, response, authHeader.slice(7));
+  }
+
+  // Legacy unauthenticated demo path (per-IP trial). Kept until account-based limits are verified,
+  // then removed per P8-T3.
   if (!config.configured) {
     const missing = config.provider === "seedream"
       ? "VOLCENGINE_ARK_API_KEY 和 VOLCENGINE_SEEDREAM_MODEL"
@@ -340,6 +354,50 @@ async function handleGenerate(request, response) {
     trialLimit: trial.limit,
     trialRemaining: trial.remaining,
     trialDay: trial.day,
+  });
+}
+
+async function handleAuthenticatedGenerate(request, response, accessToken) {
+  const cloudUrl = (process.env.SUPABASE_URL || "").replace(/\/+$/, "");
+  if (!cloudUrl) throw httpError(503, "云端服务未配置");
+  const { prompt, referenceIds, uploads } = validateGenerationInput(await readJsonBody(request, GENERATE_BODY_LIMIT));
+  const references = await referenceDataUris(referenceIds, uploads);
+  const body = {
+    idempotency_key: crypto.randomUUID(),
+    media: "image",
+    prompt,
+    reference_images: references.map((dataUri, index) => {
+      const match = dataUri.match(/^data:(image\/[a-z0-9.+-]+);base64,(.*)$/);
+      const mime = match?.[1] || "image/jpeg";
+      const base64 = match?.[2] || dataUri;
+      return { mime, base64, _index: index };
+    }),
+  };
+  const upstream = await fetch(`${cloudUrl}/functions/v1/generate-proxy`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(120_000),
+  });
+  const payload = await upstream.json().catch(() => ({}));
+  if (!upstream.ok) {
+    const code = payload?.error?.code || "upstream_failed";
+    const message = payload?.error?.message || "云生成失败";
+    const status = code === "insufficient_credits" ? 402 : code === "rate_limited" ? 429 : 502;
+    throw httpError(status, message);
+  }
+  const image = payload?.images?.[0]?.base64;
+  if (!image) throw httpError(502, "云生成未返回图片");
+  jsonResponse(response, 200, {
+    image: `data:image/png;base64,${image}`,
+    provider: "bowerbird-cloud",
+    providerLabel: "Bowerbird Cloud",
+    model: "Seedream/Seedance",
+    charge: payload?.charge || null,
+    balance: payload?.balance || null,
   });
 }
 

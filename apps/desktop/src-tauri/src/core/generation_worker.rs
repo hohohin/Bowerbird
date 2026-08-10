@@ -27,6 +27,14 @@ use crate::error::{AppError, AppResult};
 ///（`recover_one_jimeng_job`）共用此令牌，FIFO 公平排队（恢复轮询久时新发即梦 job 等待，可接受）。
 pub static JIMENG_FLY: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(1));
 
+fn provider_source_tag(provider: &str) -> &'static str {
+    match provider {
+        "jimeng" | "dreamina" => "jimeng",
+        "bowerbird-cloud" => "bowerbird-cloud",
+        _ => "codex",
+    }
+}
+
 /// 把 provider 产出的源图收尾入库：ingest（每个 src，不算 pHash 不去重）→ 删临时下载目录 →
 /// project link → generation_meta（payload 增 `submit_id`）→ caption（从 prompt 识别维度，不调 AI）
 /// → emit `analyses://changed`（创作板 @ 池刷新）→ 后台自动命名。返回入库的资产。
@@ -46,11 +54,7 @@ pub async fn finalize_generation_assets(
     provider: String,
     project_id: Option<String>,
 ) -> AppResult<Vec<Asset>> {
-    let source_tag = match provider.as_str() {
-        "jimeng" | "dreamina" => "jimeng",
-        _ => "codex",
-    }
-    .to_string();
+    let source_tag = provider_source_tag(&provider).to_string();
 
     // ingest + 删 temp + project link + generation_meta + caption（同步 DB 写，spawn_blocking）
     let db_b = db.clone();
@@ -172,7 +176,7 @@ pub fn spawn_recovery(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths
                 job.status,
                 job.submit_id
             );
-            if !matches!(job.provider.as_str(), "jimeng" | "dreamina") {
+            if !matches!(job.provider.as_str(), "jimeng" | "dreamina" | "bowerbird-cloud") {
                 let _ = Task::mark_failed(&db, &job.id, "app 重启中断，codex 会话不可恢复");
                 let _ = app.emit(
                     "codex://chunk",
@@ -386,6 +390,13 @@ mod tests {
 
     // 用户给的范例（略缩短）：色调 / 光影 是现成维度，其余为 @图名 引用与自由指令。
     const EXAMPLE: &str = "请参考@街头倚坐 的【色调】：整体以暖米色、奶油黄为主。色彩饱和度不高，具有夏日街头的色彩情绪。【光影】：自然日光为主，光线柔和偏散射，没有强烈硬阴影。人物面部曝光均匀。整体对比度中等，带有胶片摄影常见的柔和层次和低锐度边缘。，以及@紫垫白猫.jpg的场景和主体动作，并为猫咪戴上@彩虹宠物项圈广告.jpg中紫色的项圈。";
+
+    #[test]
+    fn cloud_provider_keeps_own_source_tag() {
+        assert_eq!(provider_source_tag("bowerbird-cloud"), "bowerbird-cloud");
+        assert_eq!(provider_source_tag("jimeng"), "jimeng");
+        assert_eq!(provider_source_tag("codex"), "codex");
+    }
 
     #[test]
     fn extract_dims_from_generation_prompt() {

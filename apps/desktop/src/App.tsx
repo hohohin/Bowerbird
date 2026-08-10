@@ -12,9 +12,10 @@ import { Onboarding } from "./components/Onboarding";
 import { CodexOnboarding } from "./components/CodexOnboarding";
 import { ExtensionOnboarding } from "./components/ExtensionOnboarding";
 import { DreaminaOnboarding } from "./components/DreaminaOnboarding";
+import { AccountOnboarding } from "./components/AccountOnboarding";
 import { useStore } from "./store";
 import { api } from "./lib/api";
-import type { CodexChunk } from "./lib/types";
+import type { AuthSnapshot, CodexChunk } from "./lib/types";
 
 let refreshVersion = 0;
 
@@ -45,11 +46,35 @@ function App() {
   const setExtensionConnected = useStore((s) => s.setExtensionConnected);
   const setCollectedNotice = useStore((s) => s.setCollectedNotice);
   const loadSettings = useStore((s) => s.loadSettings);
+  const loadCloudAccount = useStore((s) => s.loadCloudAccount);
+  const setCloudAuth = useStore((s) => s.setCloudAuth);
+  const setCloudError = useStore((s) => s.setCloudError);
 
   // 应用设置：App 挂载时加载一次。
   useEffect(() => {
     void loadSettings();
-  }, [loadSettings]);
+    void loadCloudAccount();
+  }, [loadSettings, loadCloudAccount]);
+
+  // Auth callback 由 Rust deep-link/single-instance 处理，只把脱敏 snapshot/error 推给前端。
+  useEffect(() => {
+    let unlistenChanged: UnlistenFn | undefined;
+    let unlistenError: UnlistenFn | undefined;
+    let alive = true;
+    listen<AuthSnapshot>("cloud://auth-changed", (e) => {
+      setCloudAuth(e.payload);
+      setCloudError(null);
+      void useStore.getState().syncCloudEntitlement();
+    }).then((u) => alive ? (unlistenChanged = u) : u());
+    listen<string>("cloud://auth-error", (e) => setCloudError(e.payload)).then((u) =>
+      alive ? (unlistenError = u) : u()
+    );
+    return () => {
+      alive = false;
+      unlistenChanged?.();
+      unlistenError?.();
+    };
+  }, [setCloudAuth, setCloudError]);
 
   async function refresh() {
     const version = ++refreshVersion;
@@ -422,6 +447,7 @@ function App() {
       <CodexOnboarding />
       <ExtensionOnboarding />
       <DreaminaOnboarding />
+      <AccountOnboarding />
       {/* 图片右键菜单（全局单实例，store.contextMenu 驱动） */}
       <AssetContextMenu />
       <Toolbar onRefresh={refresh} />

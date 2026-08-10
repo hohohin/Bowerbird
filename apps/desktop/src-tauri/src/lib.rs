@@ -1,5 +1,6 @@
 //! Bowerbird 桌面应用入口。
 
+mod cloud;
 mod codex;
 mod collect;
 mod commands;
@@ -11,7 +12,32 @@ mod prompt;
 
 use std::sync::Arc;
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
+
+fn forward_auth_callback(app: &tauri::AppHandle, value: &str) {
+    if !value.starts_with("bowerbird://auth/callback") {
+        return;
+    }
+    let handle = app.clone();
+    let callback = value.to_string();
+    tauri::async_runtime::spawn(async move {
+        let result = match handle.try_state::<cloud::AuthClient>() {
+            Some(auth) => auth
+                .handle_callback(&callback)
+                .await
+                .map_err(|error| error.to_string()),
+            None => Err("账号服务尚未初始化".to_string()),
+        };
+        match result {
+            Ok(snapshot) => {
+                let _ = handle.emit("cloud://auth-changed", snapshot);
+            }
+            Err(error) => {
+                let _ = handle.emit("cloud://auth-error", error);
+            }
+        }
+    });
+}
 
 pub fn run() {
     let _ = tracing_subscriber::fmt()
@@ -22,7 +48,18 @@ pub fn run() {
         )
         .try_init();
 
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+    #[cfg(desktop)]
+    {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            for value in argv {
+                forward_auth_callback(app, &value);
+            }
+        }));
+    }
+
+    builder
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
@@ -32,10 +69,30 @@ pub fn run() {
             // 设置：从 <app_data>/settings.json 加载（文件不存在则用默认值）。
             let settings_path = app_dir.join("settings.json");
             let settings_state = core::settings::SettingsState::init(settings_path)?;
+            let mut settings_snapshot = settings_state.get();
+            // 已入库的 Supabase 连接配置以 apps/cloud/.env(.local) 为权威；桌面 settings.json 只保留
+            // 开关/Mock 选择，避免要求用户把公开 Project URL/key 再手动粘贴一遍。没有本地 env 时仍读 settings。
+            let env_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../cloud/.env");
+            let (env_url, env_key) = cloud::config::read_public_supabase_config(&env_path);
+            if let (Some(url), Some(key)) = (env_url, env_key) {
+                settings_snapshot.cloud_supabase_url = Some(url);
+                settings_snapshot.cloud_supabase_publishable_key = Some(key);
+            }
+            let cloud_client = cloud::CloudClient::new(cloud::config::CloudConfig {
+                enabled: settings_snapshot.cloud_enabled,
+                supabase_url: settings_snapshot.cloud_supabase_url.clone(),
+                supabase_publishable_key: settings_snapshot.cloud_supabase_publishable_key.clone(),
+                mock: settings_snapshot.cloud_mock,
+            })?;
+            let auth_client = cloud::AuthClient::new(cloud_client.clone());
+            let entitlement_service = cloud::EntitlementService::new(
+                cloud_client.clone(),
+                app_dir.join("entitlement.json"),
+            );
 
             // 素材库根：默认应用数据目录；迁移后走自定义根。
-            let library_root = settings_state
-                .get()
+            let library_root = settings_snapshot
                 .library_root
                 .map(std::path::PathBuf::from)
                 .filter(|root| root.is_dir());
@@ -44,7 +101,8 @@ pub fn run() {
             )?);
             // convertFileSrc 走 asset 协议，其 scope 默认只放行应用数据目录；
             // 自定义库根（迁移到非系统盘）必须显式加入，否则缩略图/原图全部被拒（见踩坑）。
-            app.asset_protocol_scope().allow_directory(&paths.root, true)?;
+            app.asset_protocol_scope()
+                .allow_directory(&paths.root, true)?;
             let db = Arc::new(db::Database::open(&paths.db)?);
             db.migrate()?;
 
@@ -94,13 +152,26 @@ pub fn run() {
             app.manage(extension_status);
             app.manage(active_project);
             app.manage(settings_state);
+            app.manage(cloud_client);
+            app.manage(auth_client);
+            app.manage(entitlement_service);
             app.manage(paths);
             app.manage(db);
+
+            for value in std::env::args() {
+                forward_auth_callback(app.handle(), &value);
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::ping,
             commands::db_health,
+            commands::cloud::cloud_auth_snapshot,
+            commands::cloud::cloud_start_email_login,
+            commands::cloud::cloud_restore_session,
+            commands::cloud::cloud_logout,
+            commands::cloud::cloud_entitlement,
+            commands::cloud::cloud_sync_entitlement,
             commands::projects::create_project,
             commands::projects::list_projects,
             commands::projects::set_active_project,

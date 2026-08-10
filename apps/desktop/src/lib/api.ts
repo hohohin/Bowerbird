@@ -3,6 +3,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import type {
   Analysis,
   AppSettings,
+  AuthSnapshot,
   Asset,
   AssetDeleteMode,
   AssetDeleteResult,
@@ -11,6 +12,7 @@ import type {
   CodexHealth,
   CreationPack,
   DreaminaDeviceFlow,
+  EntitlementSnapshot,
   Folder,
   GenerationHistory,
   GenJobSummary,
@@ -241,4 +243,13 @@ export const api = {
   migrateLibraryRoot: (newRoot: string) =>
     invoke<void>("migrate_library_root", { newRoot }),
   restartApp: () => invoke<void>("restart_app"),
+  // Bowerbird 账号（token 只留 Rust/keychain，前端仅看脱敏 snapshot）。
+  cloudAuthSnapshot: () => invoke<AuthSnapshot>("cloud_auth_snapshot"),
+  cloudStartEmailLogin: (email: string) =>
+    invoke<void>("cloud_start_email_login", { email }),
+  cloudRestoreSession: () => invoke<AuthSnapshot>("cloud_restore_session"),
+  cloudLogout: () => invoke<AuthSnapshot>("cloud_logout"),
+  cloudEntitlement: () => invoke<EntitlementSnapshot>("cloud_entitlement"),
+  cloudSyncEntitlement: () =>
+    invoke<EntitlementSnapshot>("cloud_sync_entitlement"),
 };

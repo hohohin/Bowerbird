@@ -20,6 +20,10 @@ fn default_auto_analyze_prompt() -> String {
     DEFAULT_AUTO_ANALYZE_PROMPT.to_string()
 }
 
+fn default_cloud_mock() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     /// 入库时自动反推 + 自动重命名
@@ -34,6 +38,27 @@ pub struct AppSettings {
     /// 由「迁移素材库位置」写入；仅存指向，文件体量很小，可留在 C 盘。
     #[serde(default)]
     pub library_root: Option<String>,
+
+    /// Bowerbird Cloud 总开关。默认关闭，关闭时不得发起任何云请求。
+    #[serde(default)]
+    pub cloud_enabled: bool,
+
+    /// Supabase 项目 URL（公开配置，不是机密）。
+    #[serde(default)]
+    pub cloud_supabase_url: Option<String>,
+
+    /// Supabase publishable key（公开配置；secret key 永不进入桌面端）。
+    /// `alias` 兼容旧 settings.json 的 cloud_supabase_anon_key，重新保存后使用新字段名。
+    #[serde(default, alias = "cloud_supabase_anon_key")]
+    pub cloud_supabase_publishable_key: Option<String>,
+
+    /// 外部凭据未就绪阶段使用 Mock Functions。默认 true，避免误触真实计费。
+    #[serde(default = "default_cloud_mock")]
+    pub cloud_mock: bool,
+
+    /// 入库自动理解是否允许把新图片临时发送到 Bowerbird Cloud。默认 false，必须显式开启。
+    #[serde(default)]
+    pub cloud_auto_understand: bool,
 }
 
 impl Default for AppSettings {
@@ -42,6 +67,11 @@ impl Default for AppSettings {
             auto_analyze_on_ingest: false,
             auto_analyze_prompt: DEFAULT_AUTO_ANALYZE_PROMPT.to_string(),
             library_root: None,
+            cloud_enabled: false,
+            cloud_supabase_url: None,
+            cloud_supabase_publishable_key: None,
+            cloud_mock: true,
+            cloud_auto_understand: false,
         }
     }
 }
@@ -84,5 +114,24 @@ impl SettingsState {
             std::fs::write(&self.path, &json)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AppSettings;
+
+    #[test]
+    fn old_settings_default_cloud_to_disabled_mock() {
+        let settings: AppSettings = serde_json::from_str(
+            r#"{"auto_analyze_on_ingest":true,"auto_analyze_prompt":"test","library_root":null}"#,
+        )
+        .unwrap();
+
+        assert!(!settings.cloud_enabled);
+        assert!(settings.cloud_mock);
+        assert_eq!(settings.cloud_supabase_url, None);
+        assert_eq!(settings.cloud_supabase_publishable_key, None);
+        assert!(!settings.cloud_auto_understand);
     }
 }

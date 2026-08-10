@@ -14,6 +14,8 @@ use self::codex_cli::CodexCliProvider;
 use self::types::{Capabilities, Chunk, CodexRequest, CodexResult, GenOutcome};
 
 pub mod types;
+pub mod understand;
+pub mod bowerbird_cloud;
 pub mod codex_cli;
 pub mod jimeng;
 pub mod openai_api;
@@ -50,10 +52,17 @@ pub trait GenProvider: Send + Sync {
 /// - 其他 → 报错。
 ///
 /// Phase 1 `None` 直接默认 codex；Phase 3 加全局默认配置后，`None` 改读配置。
-pub fn resolve_gen_provider(provider: Option<&str>) -> Result<Box<dyn GenProvider>, AppError> {
+pub fn resolve_gen_provider(
+    provider: Option<&str>,
+    cloud: Option<(crate::cloud::CloudClient, crate::cloud::AuthClient)>,
+) -> Result<Box<dyn GenProvider>, AppError> {
     match provider.unwrap_or("codex") {
         "codex" | "default" => Ok(Box::new(CodexCliProvider::default())),
         "jimeng" => Ok(Box::new(jimeng::DreaminaCliProvider::default())),
+        "bowerbird-cloud" => {
+            let (client, auth) = cloud.ok_or_else(|| AppError::Cloud("账号服务尚未初始化".into()))?;
+            Ok(Box::new(bowerbird_cloud::BowerbirdCloudProvider::new(client, auth)))
+        }
         other => Err(AppError::Codex(format!("未知 provider: {other}").into())),
     }
 }

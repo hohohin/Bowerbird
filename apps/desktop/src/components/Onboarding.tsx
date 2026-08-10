@@ -73,13 +73,17 @@ export function Onboarding() {
   const codexOpen = useStore((s) => s.codexOnboardingForceOpen);
   const extensionOpen = useStore((s) => s.extensionOnboardingForceOpen);
   const dreaminaOpen = useStore((s) => s.dreaminaOnboardingForceOpen);
+  const accountOpen = useStore((s) => s.accountOnboardingForceOpen);
+  const cloudAuth = useStore((s) => s.cloudAuth);
+  const cloudEnabled = useStore((s) => s.settings?.cloud_enabled ?? false);
   const setCodexOpen = useStore((s) => s.setCodexOnboardingForceOpen);
   const setExtensionOpen = useStore((s) => s.setExtensionOnboardingForceOpen);
   const setDreaminaOpen = useStore((s) => s.setDreaminaOnboardingForceOpen);
+  const setAccountOpen = useStore((s) => s.setAccountOnboardingForceOpen);
   const [seen, setSeen] = useState(() => localStorage.getItem(SEEN_KEY) === "1");
 
   // 任一二級打开时一级不渲染，避免自动显示场景下产生双层 Modal。
-  if (codexOpen || extensionOpen || dreaminaOpen) return null;
+  if (codexOpen || extensionOpen || dreaminaOpen || accountOpen) return null;
 
   // 一级只能由用户关闭（✕ / 「稍后再说」）：不因 codex/扩展状态变化自动收。
   // seen 仅在用户主动 dismiss 时写入，用于「首启未配齐才自动弹一次，用户看过就不再骚扰」。
@@ -103,6 +107,10 @@ export function Onboarding() {
   function goDreamina() {
     setForceOpen(false);
     setDreaminaOpen(true);
+  }
+  function goAccount() {
+    setForceOpen(false);
+    setAccountOpen(true);
   }
 
   return createPortal(
@@ -130,7 +138,7 @@ export function Onboarding() {
         </header>
 
         <div className="flex-1 overflow-y-auto p-5">
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-4">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-5">
             <Card
               n={1}
               title="codex CLI"
@@ -160,6 +168,15 @@ export function Onboarding() {
             />
             <Card
               n={4}
+              title="Bowerbird 账号"
+              subtitle="云端生成 / 积分 / 订阅"
+              ok={cloudAuth?.logged_in}
+              reason={cloudEnabled ? cloudAuth?.reason ?? undefined : "Cloud 未启用"}
+              actionLabel={cloudAuth?.logged_in ? "查看账号" : "前往登录"}
+              onAction={goAccount}
+            />
+            <Card
+              n={5}
               title="新手教程"
               subtitle="视频引导（待补充）"
               actionLabel="即将推出"

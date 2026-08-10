@@ -19,6 +19,9 @@ pub enum AppError {
     #[error("即梦: {0}")]
     Jimeng(String),
 
+    #[error("cloud: {0}")]
+    Cloud(String),
+
     #[error("media: {0}")]
     Media(String),
 
