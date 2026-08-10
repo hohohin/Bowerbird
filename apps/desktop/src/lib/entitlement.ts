@@ -20,6 +20,25 @@ export function canUseByo(entitlement: EntitlementSnapshot | null): boolean {
   return effectivePolicy(entitlement).can_use_byo;
 }
 
+/** 生成 provider 权限：Cloud 与本机 BYO 都只读取服务端派生 policy。 */
+export function canUseGenerationProvider(
+  entitlement: EntitlementSnapshot | null,
+  provider: string | null | undefined,
+): boolean {
+  const policy = effectivePolicy(entitlement);
+  return provider === "bowerbird-cloud" ? policy.can_use_cloud : policy.can_use_byo;
+}
+
+/** 理解类默认路由：Pro/Studio 走本机 CLI，免费档只能走 Cloud。 */
+export function understandProvider(
+  entitlement: EntitlementSnapshot | null,
+): "codex" | "bowerbird-cloud" | null {
+  const policy = effectivePolicy(entitlement);
+  if (policy.can_use_byo) return "codex";
+  if (policy.can_use_cloud) return "bowerbird-cloud";
+  return null;
+}
+
 /** 创作板发送时的并发闸：max_parallel_jobs 决定允许同时运行的生成任务数。 */
 export function canStartAnotherJob(
   entitlement: EntitlementSnapshot | null,

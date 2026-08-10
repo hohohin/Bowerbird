@@ -55,6 +55,7 @@ pub struct EntitlementService {
     cloud: CloudClient,
     cache_path: PathBuf,
     snapshot: RwLock<Option<EntitlementSnapshot>>,
+    online_trusted: RwLock<bool>,
 }
 
 impl EntitlementService {
@@ -66,6 +67,7 @@ impl EntitlementService {
             cloud,
             cache_path,
             snapshot: RwLock::new(snapshot),
+            online_trusted: RwLock::new(false),
         }
     }
 
@@ -73,7 +75,13 @@ impl EntitlementService {
         let cached = self.snapshot.read().unwrap().clone();
         match cached {
             Some(mut value) => {
-                let state = Self::evaluate(&value, now);
+                let state = if *self.online_trusted.read().unwrap()
+                    && value.signature_version <= 0
+                {
+                    Self::evaluate_online(&value, now)
+                } else {
+                    Self::evaluate(&value, now)
+                };
                 if matches!(state, OfflineState::Expired | OfflineState::Invalid) {
                     value.tier = "free".into();
                     value.policy = FeaturePolicy::free();
@@ -113,14 +121,32 @@ impl EntitlementService {
         // signature_version=0 intentionally cannot grant offline paid rights. It remains useful for
         // online UI while P3 signing is not configured.
         snapshot.last_trusted_server_time = snapshot.issued_at;
-        snapshot.offline_state = Some(Self::evaluate(&snapshot, Utc::now()));
+        snapshot.offline_state = Some(if snapshot.signature_version <= 0 {
+            Self::evaluate_online(&snapshot, Utc::now())
+        } else {
+            Self::evaluate(&snapshot, Utc::now())
+        });
         self.persist(&snapshot)?;
         *self.snapshot.write().unwrap() = Some(snapshot.clone());
+        *self.online_trusted.write().unwrap() = true;
         Ok(snapshot)
+    }
+
+    /// 优先使用仍有效的本地权益；无可信缓存时在线同步一次。
+    pub async fn current_or_sync(&self, auth: &AuthClient) -> EntitlementSnapshot {
+        let current = self.current(Utc::now());
+        if matches!(current.offline_state, Some(OfflineState::Fresh | OfflineState::Grace)) {
+            return current;
+        }
+        if !auth.snapshot().logged_in {
+            return current;
+        }
+        self.sync(auth).await.unwrap_or(current)
     }
 
     pub fn clear(&self) -> AppResult<()> {
         *self.snapshot.write().unwrap() = None;
+        *self.online_trusted.write().unwrap() = false;
         match std::fs::remove_file(&self.cache_path) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -144,6 +170,17 @@ impl EntitlementService {
             OfflineState::Grace
         } else {
             OfflineState::Expired
+        }
+    }
+
+    fn evaluate_online(snapshot: &EntitlementSnapshot, now: DateTime<Utc>) -> OfflineState {
+        if now + Duration::minutes(5) < snapshot.last_trusted_server_time {
+            return OfflineState::Invalid;
+        }
+        if now <= snapshot.refresh_after {
+            OfflineState::Fresh
+        } else {
+            OfflineState::Invalid
         }
     }
 
@@ -230,6 +267,22 @@ mod tests {
         let value = signed(now);
         assert_eq!(
             EntitlementService::evaluate(&value, now - Duration::hours(1)),
+            OfflineState::Invalid
+        );
+    }
+
+    #[test]
+    fn unsigned_snapshot_is_online_only_until_refresh() {
+        let now = Utc::now();
+        let mut value = signed(now);
+        value.signature_version = 0;
+        value.signature = None;
+        assert_eq!(
+            EntitlementService::evaluate_online(&value, now),
+            OfflineState::Fresh
+        );
+        assert_eq!(
+            EntitlementService::evaluate_online(&value, now + Duration::hours(7)),
             OfflineState::Invalid
         );
     }

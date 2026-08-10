@@ -56,6 +56,15 @@ function App() {
     void loadCloudAccount();
   }, [loadSettings, loadCloudAccount]);
 
+  // 在线账号每 6 小时刷新一次权益；具体操作前 Rust 仍会对过期/无可信缓存再同步。
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const state = useStore.getState();
+      if (state.cloudAuth?.logged_in) void state.syncCloudEntitlement();
+    }, 6 * 60 * 60 * 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
   // Auth callback 由 Rust deep-link/single-instance 处理，只把脱敏 snapshot/error 推给前端。
   useEffect(() => {
     let unlistenChanged: UnlistenFn | undefined;

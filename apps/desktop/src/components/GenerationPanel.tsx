@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { useStore } from "../store";
 import { api } from "../lib/api";
+import { canUseGenerationProvider } from "../lib/entitlement";
 import type { GenJob, GenTurn } from "../lib/types";
 import { Lightbox } from "./Lightbox";
 
@@ -21,6 +22,9 @@ export function GenerationPanel() {
 
   const codexHealth = useStore((s) => s.codexHealth);
   const dreaminaHealth = useStore((s) => s.dreaminaHealth);
+  const cloudAuth = useStore((s) => s.cloudAuth);
+  const cloudEntitlement = useStore((s) => s.cloudEntitlement);
+  const cloudEnabled = useStore((s) => s.settings?.cloud_enabled ?? false);
   const setGenPanelOpen = useStore((s) => s.setGenPanelOpen);
   const sendGenRevise = useStore((s) => s.sendGenRevise);
   const cancelGeneration = useStore((s) => s.cancelGeneration);
@@ -40,8 +44,31 @@ export function GenerationPanel() {
 
   const activeJob: GenJob | null = activeJobId ? genJobs[activeJobId] ?? null : null;
 
-  // 按 activeJob.provider 判健康（codex/即梦各自可用性，约定 7 置灰依据）。
-  const targetHealth = activeJob?.provider === "jimeng" ? dreaminaHealth : codexHealth;
+  // 历史任务也必须重新读取当前权益；降级后不可通过续改/重试绕过 BYO 门控。
+  const activeProvider = activeJob?.provider === "codex-cli" || !activeJob?.provider
+    ? "codex"
+    : activeJob.provider;
+  const targetHealth = activeProvider === "jimeng"
+    ? dreaminaHealth
+    : activeProvider === "bowerbird-cloud"
+      ? null
+      : codexHealth;
+  const cloudBalance = cloudEntitlement
+    ? cloudEntitlement.balances.daily + cloudEntitlement.balances.sub + cloudEntitlement.balances.topup
+    : 0;
+  const policyAllowsProvider = canUseGenerationProvider(cloudEntitlement, activeProvider);
+  const targetReady = policyAllowsProvider && (activeProvider === "bowerbird-cloud"
+    ? cloudEnabled && !!cloudAuth?.logged_in && cloudBalance > 0
+    : !!targetHealth?.ok);
+  const lockedReason = !policyAllowsProvider
+    ? "升级 Pro 解锁本机 Codex / 即梦 CLI"
+    : activeProvider === "bowerbird-cloud"
+      ? !cloudAuth?.logged_in
+        ? "请先登录 Bowerbird Cloud"
+        : cloudBalance <= 0
+          ? "积分不足"
+          : "Bowerbird Cloud 不可用"
+      : targetHealth?.reason || "当前 provider 不可用";
   const targetProviderLabel = activeJob?.provider === "jimeng"
     ? "即梦"
     : activeJob?.provider === "bowerbird-cloud"
@@ -73,15 +100,15 @@ export function GenerationPanel() {
   }, [imageCount, activeJobId]);
 
   const running = !!activeJob?.running;
-  const canRevise = !running && !!activeJob?.sessionId && !!targetHealth?.ok;
+  const canRevise = !running && !!activeJob?.sessionId && targetReady;
   function doRevise() {
     if (!canRevise || !revise.trim()) return;
-    void sendGenRevise(revise).then(() => setRevise(""));
+    void sendGenRevise(revise, activeProvider).then(() => setRevise(""));
   }
 
   function regenerate() {
-    if (!activeJob?.lastPrompt || !targetHealth?.ok || running) return;
-    void startGeneration(activeJob.lastPrompt, activeJob.refAssets, activeJob.lastRatio);
+    if (!activeJob?.lastPrompt || !targetReady || running) return;
+    void startGeneration(activeJob.lastPrompt, activeJob.refAssets, activeJob.lastRatio, activeProvider);
   }
 
   // 把 activeJob 首轮 prompt 登记为用途（preset）：起名 → createPreset + 刷新下拉。
@@ -186,7 +213,8 @@ export function GenerationPanel() {
                 imageOffset={imageOffset}
                 onOpenLightbox={(g) => setLightbox({ images: allImages, index: g })}
                 onRetry={retryLastGenTurn}
-                canRetry={!!targetHealth?.ok && !running}
+                canRetry={targetReady && !running}
+                retryReason={lockedReason}
               />
             ))}
             {activeJob.streaming && (
@@ -209,7 +237,9 @@ export function GenerationPanel() {
         ) : activeJob?.sessionId ? (
           <div className="space-y-1">
             <div className="text-[10px] text-muted">
-              提修改意见，{targetProviderLabel} 续接同一会话编辑上一张图
+              {targetReady
+                ? `提修改意见，${targetProviderLabel} 续接同一会话编辑上一张图`
+                : lockedReason}
             </div>
             <div className="flex gap-1.5">
               <input
@@ -234,8 +264,8 @@ export function GenerationPanel() {
             </div>
             <button
               onClick={regenerate}
-              disabled={!activeJob?.lastPrompt || !targetHealth?.ok}
-              title="用最近一次的 prompt + 参考图开新会话（新建一个生成任务）"
+              disabled={!activeJob?.lastPrompt || !targetReady}
+              title={targetReady ? "用最近一次的 prompt + 参考图开新会话（新建一个生成任务）" : lockedReason}
               className="w-full rounded-md bg-panel2 px-3 py-1.5 text-xs text-ink hover:bg-edge disabled:opacity-50"
             >
               ↻ 新会话重新生成
@@ -243,8 +273,8 @@ export function GenerationPanel() {
           </div>
         ) : (
           <div className="text-[10px] text-muted">
-            {targetHealth && !targetHealth.ok
-              ? targetHealth.reason
+            {!targetReady
+              ? lockedReason
               : "🎨 生成图在创作板点「✓ 发送 codex 生成」触发；出图后可在此提修改意见续接迭代。"}
           </div>
         )}
@@ -327,6 +357,7 @@ function TurnView({
   onOpenLightbox,
   onRetry,
   canRetry,
+  retryReason,
 }: {
   turn: GenTurn;
   index: number;
@@ -335,6 +366,7 @@ function TurnView({
   onOpenLightbox: (globalIdx: number) => void;
   onRetry: () => void;
   canRetry: boolean;
+  retryReason: string;
 }) {
   return (
     <div className="space-y-1.5 rounded bg-panel2/50 p-3">
@@ -376,7 +408,7 @@ function TurnView({
           <button
             onClick={onRetry}
             disabled={!canRetry}
-            title={canRetry ? "用同样的内容重发" : "当前 provider 不可用"}
+            title={canRetry ? "用同样的内容重发" : retryReason}
             className="rounded bg-panel2 px-2.5 py-1 text-[11px] font-semibold text-ink hover:bg-edge disabled:opacity-50"
           >
             ↻ 重试

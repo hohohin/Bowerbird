@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useStore } from "../store";
 import { api } from "../lib/api";
 import { DEFAULT_AUTO_ANALYZE_PROMPT } from "../lib/constants";
+import { understandProvider } from "../lib/entitlement";
 import { ProviderSelect } from "./creation/ProviderSelect";
 import { DreaminaLoginDialog } from "./DreaminaLoginDialog";
 import type { MigrateProgress } from "../lib/types";
@@ -51,6 +52,13 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [cloudPublishableKey, setCloudPublishableKey] = useState("");
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const initialized = useRef(false);
+  const understandRoute = understandProvider(cloudEntitlement);
+  const understandReady = understandRoute === "codex"
+    ? !!codexHealth?.ok
+    : understandRoute === "bowerbird-cloud"
+      ? !!settings?.cloud_enabled && !!cloudAuth?.logged_in
+      : false;
+  const understandLabel = understandRoute === "codex" ? "codex CLI" : "Bowerbird Cloud";
 
   // —— 素材库位置 ——
   const [libRoot, setLibRoot] = useState<string | null>(null);
@@ -375,7 +383,8 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
               <span className="text-ink">入库时自动反推</span>
             </label>
             <p className="mt-1 ml-6 text-xs text-muted">
-              开启后，新素材入库时自动调用 codex 进行反推描述与自动重命名。
+              开启后，新素材入库时自动调用当前账号可用的理解引擎进行反推描述与自动重命名。
+              {understandRoute === "bowerbird-cloud" && " 免费版还需开启上方“允许云端理解”。"}
             </p>
 
             {/* 二级选项：提示词文本框 */}
@@ -591,7 +600,10 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             <div className="mt-2 flex items-center gap-2">
               <button
                 onClick={() => void reclassifyAll()}
-                disabled={!!classifyProgress}
+                disabled={!!classifyProgress || !understandReady}
+                title={understandReady
+                  ? `使用 ${understandLabel} 重新归类`
+                  : "免费版需要先登录并启用 Bowerbird Cloud；Pro 可使用本机 CLI"}
                 className="rounded-md bg-panel px-3 py-1 text-[12px] text-ink hover:bg-edge disabled:opacity-50"
               >
                 智能归类全部

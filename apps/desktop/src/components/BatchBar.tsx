@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useStore } from "../store";
 import { api } from "../lib/api";
+import { understandProvider } from "../lib/entitlement";
 
 /**
  * 批量管理动作栏（manage 模式时显示在主区顶部）。
@@ -13,6 +14,10 @@ export function BatchBar() {
   const folders = useStore((s) => s.folders);
   const projects = useStore((s) => s.projects);
   const currentProjectId = useStore((s) => s.currentProjectId);
+  const codexHealth = useStore((s) => s.codexHealth);
+  const cloudAuth = useStore((s) => s.cloudAuth);
+  const cloudEntitlement = useStore((s) => s.cloudEntitlement);
+  const cloudEnabled = useStore((s) => s.settings?.cloud_enabled ?? false);
   // 移入已有只列普通夹（排除 root、智能夹与收藏夹）。
   const existingFolders = folders.filter((f) => f.id !== "root" && (f.kind ?? "folder") === "folder");
 
@@ -29,6 +34,13 @@ export function BatchBar() {
   const [genProgress, setGenProgress] = useState<string | null>(null);
 
   const empty = ids.length === 0;
+  const understandRoute = understandProvider(cloudEntitlement);
+  const understandReady = understandRoute === "codex"
+    ? !!codexHealth?.ok
+    : understandRoute === "bowerbird-cloud"
+      ? cloudEnabled && !!cloudAuth?.logged_in
+      : false;
+  const understandLabel = understandRoute === "codex" ? "codex CLI" : "Bowerbird Cloud";
 
   async function del() {
     setBusy(true);
@@ -236,9 +248,11 @@ export function BatchBar() {
         </select>
         <button
           onClick={generatePrompts}
-          disabled={busy || empty}
+          disabled={busy || empty || !understandReady}
           className="rounded bg-panel2 px-2.5 py-1 text-xs hover:bg-edge disabled:opacity-50"
-          title="codex CLI 看图生成提示词并写库"
+          title={understandReady
+            ? `${understandLabel} 看图生成提示词并写库`
+            : "免费版需要先登录并启用 Bowerbird Cloud；Pro 可使用本机 CLI"}
         >
           批量生成提示词
         </button>

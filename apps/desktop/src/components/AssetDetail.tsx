@@ -3,6 +3,7 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-shell";
 import { useStore } from "../store";
+import { canUseByo, understandProvider } from "../lib/entitlement";
 import { api } from "../lib/api";
 import { useImageZoom } from "../lib/useImageZoom";
 import type { Analysis, Asset, AssetTag, CodexHealth, Folder } from "../lib/types";
@@ -126,6 +127,9 @@ export function AssetDetail() {
   const viewGenerationHistory = useStore((s) => s.viewGenerationHistory);
   const generating = useStore((s) => s.generating);
   const openContextMenu = useStore((s) => s.openContextMenu);
+  const cloudAuth = useStore((s) => s.cloudAuth);
+  const cloudEntitlement = useStore((s) => s.cloudEntitlement);
+  const cloudEnabled = useStore((s) => s.settings?.cloud_enabled ?? false);
   // 本图反推状态：正在跑 / 在队列里（位置从 1 起）/ 空闲。
   const describing = useStore((s) => s.describingId === id);
   const queuePosition = useStore((s) => {
@@ -458,6 +462,20 @@ export function AssetDetail() {
     }
   }, [analyses]);
   const promptEmpty = describePrompt.trim().length === 0;
+  const understandRoute = understandProvider(cloudEntitlement);
+  const understandReady = understandRoute === "codex"
+    ? !!codexHealth?.ok
+    : understandRoute === "bowerbird-cloud"
+      ? cloudEnabled && !!cloudAuth?.logged_in
+      : false;
+  const understandReason = understandRoute === "codex"
+    ? codexHealth?.reason || "codex 不可用"
+    : !cloudEnabled
+      ? "Bowerbird Cloud 未启用"
+      : !cloudAuth?.logged_in
+        ? "免费版反推需要先登录 Bowerbird Cloud（每日 10 次）"
+        : "当前账号没有可用的理解引擎";
+  const understandLabel = understandRoute === "codex" ? "codex CLI" : "Bowerbird Cloud";
   const collections = folders.filter((f) => f.kind === "collection");
   const collectedIds = new Set(assetCollections.map((f) => f.id));
   const availableCollections = collections.filter((f) => !collectedIds.has(f.id));
@@ -806,7 +824,7 @@ export function AssetDetail() {
             </div>
           )}
 
-          {/* 反推：让 codex CLI 按当前指令描述这张图。codex 不可用时置灰（约定 7）。 */}
+          {/* 反推：免费档走 Cloud，Pro/Studio 走本机 CLI；当前路由不可用时置灰。 */}
           <div className="space-y-2">
             <div className="flex items-center justify-between gap-2">
               <div className="text-xs font-medium uppercase tracking-wide text-muted">
@@ -837,12 +855,12 @@ export function AssetDetail() {
                 )}
                 <button
                   onClick={handleDescribe}
-                  disabled={describing || queued || promptEmpty || !codexHealth?.ok}
+                  disabled={describing || queued || promptEmpty || !understandReady}
                   className="rounded bg-accent px-2.5 py-1 text-xs font-medium text-black disabled:opacity-50"
                   title={
-                    !codexHealth?.ok
-                      ? codexHealth?.reason || "codex 不可用"
-                      : "发 codex CLI：按当前反推指令分析这张图片"
+                    !understandReady
+                      ? understandReason
+                      : `发 ${understandLabel}：按当前反推指令分析这张图片`
                   }
                 >
                   {describing ? "反推中…" : queued ? "排队中…" : "反推"}
@@ -911,9 +929,9 @@ export function AssetDetail() {
             )}
             {captions.length === 0 ? (
               <div className="text-xs text-muted">
-                {codexHealth && !codexHealth.ok
-                  ? codexHealth.reason
-                  : "点「反推」让 codex 按当前指令分析这张图。"}
+                {!understandReady
+                  ? understandReason
+                  : `点「反推」让 ${understandLabel} 按当前指令分析这张图。`}
               </div>
             ) : (
               captions.map((a) => {
@@ -988,7 +1006,7 @@ export function AssetDetail() {
                             {a.provider}
                           </span>
                         )}
-                        {caption.sessionId && (
+                        {caption.sessionId && canUseByo(cloudEntitlement) && (
                           <button
                             onClick={() =>
                               api

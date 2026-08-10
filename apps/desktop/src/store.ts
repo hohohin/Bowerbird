@@ -1,5 +1,10 @@
 import { create } from "zustand";
 import { api } from "./lib/api";
+import {
+  canStartAnotherJob,
+  canUseGenerationProvider,
+  understandProvider,
+} from "./lib/entitlement";
 import type {
   AppSettings,
   AuthSnapshot,
@@ -184,6 +189,21 @@ interface State {
   contextMenu: { x: number; y: number; assetId: string } | null;
   openContextMenu: (x: number, y: number, assetId: string) => void;
   closeContextMenu: () => void;
+}
+
+function normalizeGenerationProvider(provider: string): string {
+  return provider === "codex-cli" || !provider ? "codex" : provider;
+}
+
+function generationGateError(state: State, provider: string): string | null {
+  if (!canUseGenerationProvider(state.cloudEntitlement, provider)) {
+    return "当前账号不可使用本机生成引擎；升级 Pro 解锁 Codex / 即梦 CLI";
+  }
+  const runningCount = Object.values(state.genJobs).filter((job) => job.running).length;
+  if (!canStartAnotherJob(state.cloudEntitlement, runningCount)) {
+    return "已达当前账号档位的并行生成上限";
+  }
+  return null;
 }
 
 export const useStore = create<State>((set, get) => {
@@ -449,6 +469,21 @@ export const useStore = create<State>((set, get) => {
     const trimmed = instruction.trim();
     if (!trimmed) return;
     const s = get();
+    const route = understandProvider(s.cloudEntitlement);
+    if (
+      route === null ||
+      (route === "codex" && !s.codexHealth?.ok) ||
+      (route === "bowerbird-cloud" &&
+        (!(s.settings?.cloud_enabled ?? false) || !s.cloudAuth?.logged_in))
+    ) {
+      set({
+        cloudError:
+          route === "bowerbird-cloud"
+            ? "免费版反推需要先登录并启用 Bowerbird Cloud"
+            : "当前账号没有可用的理解引擎",
+      });
+      return;
+    }
     // 同一张图不重复入队（正在跑或已排队）。
     if (
       s.describingId === assetId ||
@@ -540,8 +575,21 @@ export const useStore = create<State>((set, get) => {
           // 没有 keychain 凭据/离线时仍展示脱敏未登录 snapshot。
         }
       }
-      const cloudEntitlement = await api.cloudEntitlement();
-      set({ cloudAuth, cloudEntitlement });
+      let cloudEntitlement = await api.cloudEntitlement();
+      if (cloudAuth.logged_in) {
+        try {
+          cloudEntitlement = await api.cloudSyncEntitlement();
+        } catch {
+          // 离线时保留 Rust 已按签名/宽限期降级后的缓存结果。
+        }
+      }
+      set((s) => ({
+        cloudAuth,
+        cloudEntitlement,
+        activeGenProvider: canUseGenerationProvider(cloudEntitlement, s.defaultProvider)
+          ? s.defaultProvider
+          : "bowerbird-cloud",
+      }));
     } catch (e) {
       set({ cloudError: typeof e === "string" ? e : "账号状态读取失败" });
     } finally {
@@ -562,7 +610,13 @@ export const useStore = create<State>((set, get) => {
   syncCloudEntitlement: async () => {
     set({ cloudBusy: true, cloudError: null });
     try {
-      set({ cloudEntitlement: await api.cloudSyncEntitlement() });
+      const cloudEntitlement = await api.cloudSyncEntitlement();
+      set((s) => ({
+        cloudEntitlement,
+        activeGenProvider: canUseGenerationProvider(cloudEntitlement, s.defaultProvider)
+          ? s.defaultProvider
+          : "bowerbird-cloud",
+      }));
     } catch (e) {
       set({ cloudError: typeof e === "string" ? e : "权益同步失败" });
     } finally {
@@ -574,7 +628,7 @@ export const useStore = create<State>((set, get) => {
     try {
       const cloudAuth = await api.cloudLogout();
       const cloudEntitlement = await api.cloudEntitlement();
-      set({ cloudAuth, cloudEntitlement });
+      set({ cloudAuth, cloudEntitlement, activeGenProvider: "bowerbird-cloud" });
     } catch (e) {
       set({ cloudError: typeof e === "string" ? e : "登出失败" });
     } finally {
@@ -586,12 +640,16 @@ export const useStore = create<State>((set, get) => {
   setDreaminaHealth: (dreaminaHealth) => set({ dreaminaHealth }),
   defaultProvider: loadDefaultProvider(),
   setDefaultProvider: (defaultProvider) => {
+    if (!canUseGenerationProvider(get().cloudEntitlement, defaultProvider)) return;
     saveDefaultProvider(defaultProvider);
     // 改默认同步切当前选择（用户期望「默认」生效立即）。
     set({ defaultProvider, activeGenProvider: defaultProvider });
   },
   activeGenProvider: loadDefaultProvider(),
-  setActiveGenProvider: (activeGenProvider) => set({ activeGenProvider }),
+  setActiveGenProvider: (activeGenProvider) => {
+    if (!canUseGenerationProvider(get().cloudEntitlement, activeGenProvider)) return;
+    set({ activeGenProvider });
+  },
   dreaminaLoginLines: [],
   dreaminaLoginActive: false,
   setDreaminaLoginActive: (dreaminaLoginActive) => set({ dreaminaLoginActive }),
@@ -658,7 +716,11 @@ export const useStore = create<State>((set, get) => {
   startGeneration: async (prompt, references, ratio, provider) => {
     // 多 job：不再因 generating 阻塞（并发发起多个生成，各自独立流转）。
     // provider 兜底：调用点没传（CreationBoard send / retry）→ 当前选择 → 全局默认。
-    const prov = provider ?? get().activeGenProvider ?? get().defaultProvider;
+    const prov = normalizeGenerationProvider(
+      provider ?? get().activeGenProvider ?? get().defaultProvider,
+    );
+    const gateError = generationGateError(get(), prov);
+    if (gateError) throw new Error(gateError);
     // 用途（preset）注入：选中用途时，其 body 作为基底拼在用户组稿前（类 CLAUDE.md 上下文，
     // 不进编辑器）。续轮 sendGenRevise 不注入——用途是首轮基底，续轮是修改意见。
     const pid = get().activePresetId;
@@ -712,7 +774,11 @@ export const useStore = create<State>((set, get) => {
     const job = get().genJobs[id];
     const text = instruction.trim();
     if (!job || !job.sessionId || !text) return;
-    const prov = provider ?? job.provider ?? get().activeGenProvider ?? get().defaultProvider;
+    const prov = normalizeGenerationProvider(
+      provider ?? job.provider ?? get().activeGenProvider ?? get().defaultProvider,
+    );
+    const gateError = generationGateError(get(), prov);
+    if (gateError) throw new Error(gateError);
     // 即梦续轮：image2image 传上一轮产出图（codex resume 记得上一轮图、不需传）。
     const lastImages = job.turns[job.turns.length - 1]?.images ?? [];
     const reviseRefs = prov === "jimeng" ? lastImages : [];
@@ -748,16 +814,23 @@ export const useStore = create<State>((set, get) => {
     const id = s.activeJobId;
     if (!id) return;
     const job = s.genJobs[id];
-    if (!job || !s.codexHealth?.ok) return;
+    if (!job) return;
+    const provider = normalizeGenerationProvider(job.provider);
+    const targetHealthy = provider === "bowerbird-cloud"
+      ? (s.settings?.cloud_enabled ?? false) && !!s.cloudAuth?.logged_in
+      : provider === "jimeng"
+        ? !!s.dreaminaHealth?.ok
+        : !!s.codexHealth?.ok;
+    if (!targetHealthy || generationGateError(s, provider)) return;
     const last = job.turns[job.turns.length - 1];
     if (!last?.error) return; // 没有失败轮可重试
     if (job.sessionId) {
       // 续轮失败：先移除失败轮再 resume，重试轮顶替原位（避免同 prompt 编号递增的重复轮）。
       updateJob(id, (j) => ({ ...j, turns: j.turns.slice(0, -1) }));
-      void s.sendGenRevise(last.prompt);
+      void s.sendGenRevise(last.prompt, provider);
     } else {
       // 首轮失败：startGeneration 新建 job 重发（旧失败 job 保留可切回查看）。
-      void s.startGeneration(job.lastPrompt, job.refAssets, job.lastRatio);
+      void s.startGeneration(job.lastPrompt, job.refAssets, job.lastRatio, provider);
     }
   },
   applyGenChunk: (c) => {

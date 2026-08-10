@@ -16,9 +16,9 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Semaphore;
 use ulid::Ulid;
 
-use crate::codex::codex_cli::CodexCliProvider;
 use crate::codex::types::CodexRequest;
-use crate::codex::GenProvider;
+use crate::codex::understand::{resolve_entitled_understand_provider, UnderstandOperation};
+use crate::cloud::{AuthClient, CloudClient, EntitlementService};
 use crate::core::caption;
 use crate::core::library::{Analysis, Asset};
 use crate::core::settings::SettingsState;
@@ -149,10 +149,23 @@ async fn auto_analyze(app: &AppHandle, db: &Arc<Database>, asset: Asset) -> Resu
         ratio: None,
         job_id: None,
     };
-    let provider = CodexCliProvider::default();
+    let cloud = app.state::<CloudClient>().inner().clone();
+    let auth = app.state::<AuthClient>().inner().clone();
+    let entitlement = app.state::<EntitlementService>();
+    let provider = resolve_entitled_understand_provider(
+        &entitlement,
+        cloud,
+        auth,
+        settings.cloud_auto_understand,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
     let provider_name = provider.name().to_string();
     // codex 不可用/超时 → 向上抛 Err，spawn wrapper 统一 warn（保留原文件名）。
-    let result = provider.run(req).await.map_err(|e| e.to_string())?;
+    let result = provider
+        .understand(UnderstandOperation::Classify, req)
+        .await
+        .map_err(|e| e.to_string())?;
 
     // 抽类别哨兵 → (类别, 剥哨兵后的文本)；name/desc/caption 都基于剥哨兵文本（不含类别）。
     let (cats, clean_text) = extract_categories(&result.text);
@@ -249,9 +262,26 @@ async fn auto_name_only(app: &AppHandle, db: &Arc<Database>, asset: Asset) -> Re
         ratio: None,
         job_id: None,
     };
-    let provider = CodexCliProvider::default();
+    let settings = app
+        .try_state::<SettingsState>()
+        .map(|state| state.get())
+        .unwrap_or_default();
+    let cloud = app.state::<CloudClient>().inner().clone();
+    let auth = app.state::<AuthClient>().inner().clone();
+    let entitlement = app.state::<EntitlementService>();
+    let provider = resolve_entitled_understand_provider(
+        &entitlement,
+        cloud,
+        auth,
+        settings.cloud_auto_understand,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
     // codex 不可用/超时 → 静默降级（保留原文件名）。
-    let result = provider.run(req).await.map_err(|e| e.to_string())?;
+    let result = provider
+        .understand(UnderstandOperation::Autoname, req)
+        .await
+        .map_err(|e| e.to_string())?;
 
     // 指令要求单行；用 split_name_and_desc 取首行经 clean_name，防模型偶尔多嘴。
     let name = split_name_and_desc(&result.text).0;
@@ -384,6 +414,14 @@ async fn classify_one(app: &AppHandle, db: &Arc<Database>, asset_id: &str) -> Re
     if caption_text.trim().is_empty() {
         return Ok(()); // 无 caption 无法分类
     }
+    let id_for_path = asset_id.to_string();
+    let Some(store_path) = db_call(db, move |db| {
+        Ok(db.get_asset(&id_for_path)?.and_then(|asset| asset.store_path))
+    })
+    .await?
+    else {
+        return Ok(());
+    };
 
     let _permit = AUTO_SEM.acquire().await.map_err(|e| e.to_string())?;
     let vocab = db_call(db, |db| db.list_auto_tag_names())
@@ -391,13 +429,24 @@ async fn classify_one(app: &AppHandle, db: &Arc<Database>, asset_id: &str) -> Re
         .unwrap_or_default();
     let req = CodexRequest {
         instruction: build_classify_instruction(&vocab, &caption_text),
-        reference_images: vec![],
+        reference_images: vec![store_path.into()],
         context_prompts: vec![],
         ratio: None,
         job_id: None,
     };
-    let result = CodexCliProvider::default()
-        .run(req)
+    let cloud = app.state::<CloudClient>().inner().clone();
+    let auth = app.state::<AuthClient>().inner().clone();
+    let entitlement = app.state::<EntitlementService>();
+    let provider = resolve_entitled_understand_provider(
+        &entitlement,
+        cloud,
+        auth,
+        true,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    let result = provider
+        .understand(UnderstandOperation::Classify, req)
         .await
         .map_err(|e| e.to_string())?;
     let (cats, _) = extract_categories(&result.text);

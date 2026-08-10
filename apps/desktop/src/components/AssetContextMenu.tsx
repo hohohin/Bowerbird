@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { useStore } from "../store";
 import { api } from "../lib/api";
 import { loadDescribePrompt } from "../lib/describePrompt";
+import { understandProvider } from "../lib/entitlement";
 import type { AssetDeleteMode, AssetDeleteResult } from "../lib/types";
 
 /** 物理删除的确认口令（与「删除项目」一致，避开 window.confirm——Tauri WKWebView 拦截原生对话框）。 */
@@ -35,6 +36,10 @@ export function AssetContextMenu() {
   const reloadProjects = useStore((s) => s.reloadProjects);
   const assets = useStore((s) => s.assets);
   const runDescribe = useStore((s) => s.runDescribe);
+  const codexHealth = useStore((s) => s.codexHealth);
+  const cloudAuth = useStore((s) => s.cloudAuth);
+  const cloudEntitlement = useStore((s) => s.cloudEntitlement);
+  const cloudEnabled = useStore((s) => s.settings?.cloud_enabled ?? false);
 
   const [busy, setBusy] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -91,6 +96,17 @@ export function AssetContextMenu() {
   const describing =
     useStore.getState().describingId === assetId ||
     useStore.getState().describeQueue.some((q) => q.assetId === assetId);
+  const understandRoute = understandProvider(cloudEntitlement);
+  const understandReady = understandRoute === "codex"
+    ? !!codexHealth?.ok
+    : understandRoute === "bowerbird-cloud"
+      ? cloudEnabled && !!cloudAuth?.logged_in
+      : false;
+  const understandReason = understandRoute === "codex"
+    ? codexHealth?.reason || "codex 不可用"
+    : !cloudAuth?.logged_in
+      ? "免费版反推需要先登录 Bowerbird Cloud（每日 10 次）"
+      : "Bowerbird Cloud 不可用";
 
   // 菜单定位：固定到鼠标位置，超右/下边缘时收进来（近似估算尺寸即可）。
   const x = Math.max(4, Math.min(menu.x, window.innerWidth - MENU_WIDTH - 8));
@@ -179,7 +195,8 @@ export function AssetContextMenu() {
           runDescribe(assetId, loadDescribePrompt());
           closeContextMenu();
         }}
-        disabled={busy || done !== null || describing}
+        disabled={busy || done !== null || describing || !understandReady}
+        title={understandReady ? "反推提示词" : understandReason}
         className="block w-full rounded px-2 py-1.5 text-left text-ink hover:bg-panel2 disabled:opacity-50"
       >
         反推提示词

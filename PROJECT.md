@@ -9,7 +9,7 @@
 - [analyse-panel-todo.md](analyse-panel-todo.md) — 详情页「反推」面板待优化清单（结果管理 / 流式取消 / 术语统一 / 未登录置灰 等，2026-07-07 评审，P0–P2 分级）
 - [PRICING.md](PRICING.md) — 商业模式与定价策略（架构张力 / 竞品定价实测 / 免费·付费功能切法 / 价位卡位，2026-07-18）
 - [AI-PROVIDERS.md](AI-PROVIDERS.md) — AI provider 可切换方案（泛化 GenerationPanel + 全局默认/单次覆盖 + codex/即梦首批 + 即梦走官方 dreamina CLI + 关键约定 1 演进，v2 草案 2026-07-23）
-- [ARCH-ADJUST-PROGRESS.md](ARCH-ADJUST-PROGRESS.md) — 收费化架构调整（P0–P8）跨会话任务进度与交接（2026-08-10；原始计划见 ARCH-ADJUST-PLAN.md，部署步骤见 apps/cloud/DEPLOY.md）
+- [ARCH-ADJUST-PROGRESS.md](ARCH-ADJUST-PROGRESS.md) — 收费化架构调整（P0–P9）跨会话任务进度与交接（更新至 2026-08-11；原始计划见 ARCH-ADJUST-PLAN.md，部署步骤见 apps/cloud/DEPLOY.md）
 
 ## 项目说明
 
@@ -26,7 +26,7 @@
 
 ## 目前进展
 
-> 更新时间：2026-08-06
+> 更新时间：2026-08-11
 
 **当前阶段：1.0 功能路径打通 + v1 范围扩展到生成（⑥）+ 创作板 UI 已实现（2026-07-18 重写为 ProseMirror）+ codex CLI 隐形（2026-07-29，首启一键安装/OAuth 登录，用户不碰终端）+ 扩展小白化（2026-07-29，引导 + 心跳 + 状态指示器 + 随包内嵌）+ 项目 Workspace（2026-07-30，全局中央库之上的多对多隔离视图）+ 统一环境状态 Onboarding（2026-07-31，一级三卡片总览 + 二级 forceOpen 跳转，自 mac 最新提交语义移植）+ 自定义素材库位置与完整迁移（2026-08-01）+ 图片右键菜单（2026-08-01，打开所在文件夹 + 删除三选项与「删除项目」对齐）。** 详情页「反推」真正看图（codex CLI + gpt-5.5，ChatGPT 订阅，绕过 API quota）；FTS5 文件名搜索可用；**创作板（真实 prompt 文本编辑器 + @ 选图）已落地**（[CreationBoard.tsx](apps/desktop/src/components/CreationBoard.tsx)）；**生成（⑥）纳入 v1**，已由 codex imagegen 端到端跑通。
 
@@ -141,7 +141,11 @@
 
 - **收费化 P9-T4 文档收尾 + 版本 26.8.10（2026-08-10，dev 线）**：AGENTS/CLAUDE 文档索引补齐 `ARCH-ADJUST-PLAN.md` / `ARCH-ADJUST-PROGRESS.md`；桌面 `tauri.conf.json`、Cargo package/lock 统一由 `26.8.8` 更新为日期版本 `26.8.10`。P9-T2/T3 的回归、安全审计、0010、Function 部署与真实云端验收随本次存档提交。
 
-**测试：** 当前全量基线 `cargo test` 98 通过；候选工具 Node tests 10/10；桌面 `tsc --noEmit` + Vite production build、官网 build 均通过。云端部署后增量验证：桌面云配置 3/3、Auth 测试 3/3、官网/E2E/支付脚本 `node --check`、5 个 Edge Functions Deno type-check、东京真实 Cloud E2E、用量守卫 RPC、webhook 错误签名拒绝，以及桌面/官网免费档产品真机闭环全部通过；迁移 0001–0010 本地/远端一致，数据库 error 级 lint 0 项。
+- **真实支付因备案/商户资质暂停（2026-08-11 决策）**：真实支付接入需要先完成网站/主体备案及支付渠道要求的商户资质准备，用户决定等待前置手续完成后再继续，不在等待期内选择或实现真实 payment provider。当前 `BOWERBIRD_PAYMENT_MOCK=true` 必须保持；Mock checkout/webhook 只作为已验签的协议骨架，不能用于真实收款，也不把购买 Pro、800 分到账、续费/退款/到期降级标记为已验收。恢复条件：备案/主体资质完成、选定渠道、取得商户/沙箱凭据、拿到该渠道官方签名与 webhook 文档并确认结算/退款规则。等待期间账号、积分、Cloud 出图和免费档闭环可正常继续，其他非支付功能开发不受阻塞。
+
+- **P6.1 账号档位门控收口（2026-08-11，未提交）**：免费档只能使用 Bowerbird Cloud，Pro/Studio 才可使用 Codex/即梦本机 CLI。门控从创作板 ProviderSelect 扩展到 GenerationPanel 历史任务续改/重试/重新生成、Zustand store、Rust `codex_create_image`/直接 invoke、批量提示词、反推、自动命名/归类、OpenAI spike、打开 Codex 会话及即梦启动恢复；Rust 同时复核 `max_parallel_jobs`。理解路由统一为 Pro/Studio→本机 Codex、免费→Cloud，入库自动分析仍须显式开启 `cloud_auto_understand` 才可上传。App 启动、每 6 小时及无可信缓存的操作前同步权益。回归：Rust 101/101、桌面 TypeScript/Vite build 通过。**未完成边界**：线上 `entitlement` 仍为 `signature_version=0`，目前只能在当前进程的在线刷新期信任，真正的 7 天离线 Pro 需要补 Edge 私钥签发与桌面公钥验签；真实 Pro 升降级真机验收仍等待支付或测试订阅数据。
+
+**测试：** 当前全量基线 `cargo test` 101 通过；候选工具 Node tests 10/10；桌面 `tsc --noEmit` + Vite production build、官网 build 均通过。云端部署后增量验证：桌面云配置 3/3、Auth 测试 3/3、官网/E2E/支付脚本 `node --check`、5 个 Edge Functions Deno type-check、东京真实 Cloud E2E、用量守卫 RPC、webhook 错误签名拒绝，以及桌面/官网免费档产品真机闭环全部通过；迁移 0001–0010 本地/远端一致，数据库 error 级 lint 0 项。
 
 **未开始 / 待办：**
 - **多模态看图 spike — 已接通（codex CLI），非待办**：四路径实测后定型为唯一 `CodexCliProvider`（`codex exec --image`，ChatGPT 订阅，绕过 API quota）；Mock / ClaudeCode / DeepSeek / OpenAI HTTP 路线已全部移除（`codex/` 仅 `codex_cli.rs` + `types.rs` + `mod.rs`），反推会话回看走 `open_codex_session`（`codex resume <thread_id>`）。详见关键约定 1 + 踩坑「多模态看图四条路径实测」。旧 provider 切换 / in-app apikey 配置已删（`config.json` / 后端 `Settings` 模块 / `base64` 依赖随路线移除）；**`SettingsDialog` / ⚙️ 设置按钮 2026-07-18 同名复活为「整库运维面板」**（codex 状态检测 / 重建色板 / 智能归类全部，[SettingsDialog.tsx](apps/desktop/src/components/SettingsDialog.tsx)，Toolbar ⚙ 入口、约定 13 全屏 Modal 形态），与 apikey 无关。`codex_health` 命令保留作离线/无账号降级探测（约定 7）。
@@ -151,8 +155,8 @@
 - **创作板 UI — 已实现（见「已完成」，非待办）**：原「占位填空 + 维度下拉」设计演化为「真实 prompt 文本编辑器 + `@` 选图 + 维度 chips 来自图片 sections」（2026-07-18 重写为 ProseMirror）；图像生成亦已通。
 - **图像生成（⑥）— 已端到端打通（2026-07-08，见「已完成」，非待办）**：创作板→codex imagegen→真流式回显→入库进瀑布流→多轮修改（resume）→生成图标记（角标/筛选/来源/命名）整条打通。**剩余**：`generations` 表落库（开发计划 §4.2 原移除；目前用 `analyses(kind=generation_meta)` 存来源元信息，够用）。
 
-- **收费化 P9 剩余**：P9-T2/T3/T4 已完成；P9-T1 的购买 Pro、800 分到账与订阅门控等待真实支付渠道决策。跨会话细节见 [ARCH-ADJUST-PROGRESS.md](ARCH-ADJUST-PROGRESS.md)。
-- **收费化延后项（凭据/决策驱动）**：Seedance 视频 adapter（待真实 video model id）、微信登录真实联调（H5）、真实支付渠道决策与接入（superun 未证实存在；候选 虎皮椒/PayJS/支付宝当面付/微信支付商户号；Paddle 延后；决策前 `BOWERBIRD_PAYMENT_MOCK` 保持 true）。
+- **收费化 P9 剩余**：P9-T2/T3/T4 与 P6.1 多层权限门控代码已完成；P9-T1 的购买 Pro、800 分到账、续费/退款与真实订阅升降级验收明确暂停，等待备案/商户资质完成后恢复。可先用测试订阅数据验收 Pro/Studio；7 天离线宽限还需非对称 entitlement 签名。跨会话细节见 [ARCH-ADJUST-PROGRESS.md](ARCH-ADJUST-PROGRESS.md)。
+- **收费化延后项（凭据/决策驱动）**：Seedance 视频 adapter（待真实 video model id）、微信登录真实联调（H5）；真实支付在备案完成前不选 provider、不做真实联调，历史候选仅供恢复时重新调研，决策前 `BOWERBIRD_PAYMENT_MOCK` 保持 true。
 
 **里程碑：** 内部 Alpha（Phase 1 ✅）→ 公开 Beta 0.5（Phase 3 ✅）→ 1.0 正式版（Phase 5 简化版 ✅，真实 VLM 看图 spike 后转正）→ **1.x 生成（⑥，codex imagegen 端到端实测跑通 + 入库 + 标记，2026-07-08）**。
 
@@ -211,7 +215,7 @@
 
 23. **生成任务持久化 + per-job 取消 + 即梦串行 + 前端多 job（2026-08-06）**：生成（图片/视频）任务进 `task_queue`（kind=generation，payload = `GenJob` JSON：id/media/provider/status/prompt/references/session_id/ratio/submit_id/video_options/turns/queue_idx/timestamps）；`job_id` 由前端 `crypto.randomUUID()` 生成传入（多 job 路由无 race），`codex_create_image` upsert（续轮复用同 job_id 刷新回 running）+ emit `codex://chunk{job_id}` + 成功 `mark_done` / 取消 `mark_cancelled`（保留 submit_id 事后取回，演进约定 5）。**per-job 取消**：`GENERATE_CANCEL` 为 `HashMap<job_id, oneshot::Sender>`（非单槽），`cancel_codex_create(job_id)` 精确取消指定任务。**即梦同账号并发=1**（spike 实证 `ExceedConcurrencyLimit` ret=1310）：`JIMENG_FLY` Semaphore(permit=1) 串行化即梦 job，codex 不受此限可并行。**前端多 job 状态机**（Task 3，2026-08-06）：store `genJobs: Record<id, GenJob>` + `activeJobId`，`generating` 派生（任一 job running）；`startGeneration` 不再单槽阻塞（可并发发多个生成），chunk 按 `job_id` 路由；续轮/复用/取消/重试基于 activeJob；GenerationPanel 顶部 job 标签栏切换查看。**submit_id 事件回填持久化**（Task 5，2026-08-06）：jimeng provider 拿到 submit_id 瞬间经 `Chunk::Submit` 回传，转发 task 立即 upsert GenJob.submit_id + 细粒度 status=querying（app 此后被杀也有 submit_id 续查）。**启动恢复**（Task 5 阶段1+2，2026-08-06）：app 启动 `generation_worker::spawn_recovery` 扫 `list_running` → 即梦 job + submit_id 后台 `query_result` 续查入库（`finalize_generation_assets` 复用 meta/caption/autoname）/ codex job 不可恢复 `mark_failed`（codex exec 无 resume-from-mid）；前端挂载 `loadGenJobs` 重建 genJobs。**同步 invoke 模型**（命令阻塞到完成，但 Tauri 后台 async 不冻结 UI）；远端孤儿 `list_task` 取回 + 完整持久化 worker 留阶段 3。详见 [VIDEO-GENERATION.md](VIDEO-GENERATION.md)。
 
-24. **Bowerbird Cloud 收费化边界（2026-08-08，架构调整 P0–P8 第一阶段）**：云承载**只三件事**——账号（Auth）、积分（账本/预授权）、托管算力（官方 API 代理）。**素材、提示词、库数据永不上云、不形成云端资产库**；只有用户**明确选择**云生成/云理解（含设置里显式开启的 `cloud_auto_understand`）时，所选图片才在**请求期临时**发送给官方模型 API，Bowerbird 云端不持久化图片/提示词，日志只记 request id/user hash/service/状态。**门控单一事实源**：前端只镜像服务端派生的 `FeaturePolicy`（`effectivePolicy`/`canUseByo`/`canStartAnotherJob`，[entitlement.ts](apps/desktop/src/lib/entitlement.ts)），不在组件散落 tier 字符串比较；服务端仍独立复核订阅/额度/限流。**积分扣费三段式**：`credit_hold`（幂等、FIFO daily→sub→topup、行锁防透支）→ 上游 → `credit_confirm`/`credit_rollback`；异步任务先 `pending_settlement`，绝不在前端取消即盲退。**安全**：桌面端只持 publishable key + URL，refresh token 存 OS keychain（keyring）；secret/方舟/支付密钥只在 Edge Functions；计费表 RLS own-row 只读 + 写仅服务端 RPC；`SECURITY DEFINER` 固定 search_path；webhook 常量时间验签。H1（Supabase）/H2（方舟）已部署并通过东京节点真实积分出图闭环；H3 支付未决策前 `BOWERBIRD_PAYMENT_MOCK=true`，微信/superun/Paddle 仍未真实联调。`cloud_enabled` 默认 false；正式云函数调用固定东京 `ap-northeast-1`，方舟上游超时 140 秒。
+24. **Bowerbird Cloud 收费化边界（2026-08-08，2026-08-11 P6.1 收口）**：云承载**只三件事**——账号（Auth）、积分（账本/预授权）、托管算力（官方 API 代理）。**素材、提示词、库数据永不上云、不形成云端资产库**；只有用户**明确选择**云生成/云理解（含设置里显式开启的 `cloud_auto_understand`）时，所选图片才在**请求期临时**发送给官方模型 API，Bowerbird 云端不持久化图片/提示词，日志只记 request id/user hash/service/状态。**门控单一事实源**：前端只镜像服务端派生的 `FeaturePolicy`（`effectivePolicy`/`canUseByo`/`canStartAnotherJob`，[entitlement.ts](apps/desktop/src/lib/entitlement.ts)），不散落 tier 字符串比较；UI、store、Rust command、后台自动分析与任务恢复都必须复核它。免费档只能使用 Cloud，Pro/Studio 才能使用 Codex/即梦本机 CLI。**积分扣费三段式**：`credit_hold`（幂等、FIFO daily→sub→topup、行锁防透支）→ 上游 → `credit_confirm`/`credit_rollback`；异步任务先 `pending_settlement`，绝不在前端取消即盲退。**安全**：桌面端只持 publishable key + URL，refresh token 存 OS keychain（keyring）；secret/方舟/支付密钥只在 Edge Functions；计费表 RLS own-row 只读 + 写仅服务端 RPC；`SECURITY DEFINER` 固定 search_path；webhook 常量时间验签。当前 entitlement 响应尚未做非对称签名，在线响应只在当前进程刷新期使用，不能把 7 天离线 Pro 宣称为已上线。H1（Supabase）/H2（方舟）已部署并通过东京节点真实积分出图闭环。**H3 支付延期（2026-08-11 用户决策）**：真实支付需先完成备案/商户资质，前置手续完成前不选/不实现真实 provider，`BOWERBIRD_PAYMENT_MOCK=true` 必须保持；Mock checkout/webhook 只作协议骨架，不能对外收款。恢复时必须重新核对当时的官方渠道文档并取得商户/沙箱凭据，微信/superun/Paddle 均未真实联调。`cloud_enabled` 默认 false；正式云函数调用固定东京 `ap-northeast-1`，方舟上游超时 140 秒。
 
 
 

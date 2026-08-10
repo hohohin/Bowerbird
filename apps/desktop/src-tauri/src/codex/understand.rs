@@ -6,7 +6,7 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use ulid::Ulid;
 
-use crate::cloud::{AuthClient, CloudClient};
+use crate::cloud::{AuthClient, CloudClient, EntitlementService};
 use crate::codex::codex_cli::CodexCliProvider;
 use crate::codex::types::{CodexRequest, CodexResult};
 use crate::codex::GenProvider;
@@ -159,6 +159,31 @@ pub fn resolve_understand_provider(
         }
         other => Err(AppError::Cloud(format!("未知理解 provider: {other}"))),
     }
+}
+
+/// 按账号权益选择理解 provider：Pro/Studio 使用本机 CLI；免费档仅在明确允许上传时走 Cloud。
+pub async fn resolve_entitled_understand_provider(
+    entitlement: &EntitlementService,
+    cloud: CloudClient,
+    auth: AuthClient,
+    allow_cloud: bool,
+) -> Result<Box<dyn UnderstandProvider>, AppError> {
+    let snapshot = entitlement.current_or_sync(&auth).await;
+    let provider = snapshot
+        .policy
+        .understand_provider(allow_cloud)
+        .ok_or_else(|| {
+            AppError::Cloud(
+                "免费版只能使用 Bowerbird Cloud 理解；请登录并明确允许云端理解，或升级 Pro 解锁本机 CLI"
+                    .into(),
+            )
+        })?;
+    if provider == "bowerbird-cloud" && !auth.snapshot().logged_in {
+        return Err(AppError::Cloud(
+            "免费版反推需要先登录 Bowerbird Cloud（每日 10 次）".into(),
+        ));
+    }
+    resolve_understand_provider(Some(provider), Some((cloud, auth)))
 }
 
 async fn read_image(path: &PathBuf) -> Result<serde_json::Value, AppError> {

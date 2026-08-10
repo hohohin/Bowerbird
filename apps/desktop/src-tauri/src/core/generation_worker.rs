@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Semaphore;
 use ulid::Ulid;
 
@@ -159,6 +159,9 @@ pub async fn finalize_generation_assets(
 /// 异步不阻塞启动；恢复 job 的 permit 与正常生成公平排队（JIMENG_FLY FIFO）。
 pub fn spawn_recovery(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths>) {
     tauri::async_runtime::spawn(async move {
+        let auth = app.state::<crate::cloud::AuthClient>().inner().clone();
+        let entitlement = app.state::<crate::cloud::EntitlementService>();
+        let entitlement_snapshot = entitlement.current_or_sync(&auth).await;
         let running = match Task::list_running(&db) {
             Ok(v) => v,
             Err(e) => {
@@ -176,6 +179,17 @@ pub fn spawn_recovery(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths
                 job.status,
                 job.submit_id
             );
+            if matches!(job.provider.as_str(), "jimeng" | "dreamina")
+                && !entitlement_snapshot.policy.can_use_byo
+            {
+                let message = "当前账号已降级，升级 Pro 后才能恢复即梦 CLI 任务";
+                let _ = Task::mark_failed(&db, &job.id, message);
+                let _ = app.emit(
+                    "codex://chunk",
+                    serde_json::json!({ "kind": "error", "job_id": job.id, "message": message }),
+                );
+                continue;
+            }
             if !matches!(job.provider.as_str(), "jimeng" | "dreamina" | "bowerbird-cloud") {
                 let _ = Task::mark_failed(&db, &job.id, "app 重启中断，codex 会话不可恢复");
                 let _ = app.emit(

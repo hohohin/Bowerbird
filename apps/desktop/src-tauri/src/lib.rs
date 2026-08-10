@@ -149,13 +149,8 @@ pub fn run() {
                 }
             });
 
-            // 启动恢复：扫 task_queue 未完成的即梦 job → dreamina query_result 续查入库（Task 5）。
-            // codex job 不可恢复 → mark_failed；即梦 job + submit_id → 后台续查。异步不阻塞启动。
-            core::generation_worker::spawn_recovery(
-                app.handle().clone(),
-                db.clone(),
-                paths.clone(),
-            );
+            let recovery_db = db.clone();
+            let recovery_paths = paths.clone();
 
             app.manage(extension_status);
             app.manage(active_project);
@@ -165,6 +160,13 @@ pub fn run() {
             app.manage(entitlement_service);
             app.manage(paths);
             app.manage(db);
+
+            // 权益状态注册后再恢复任务，确保降级账号不能续跑历史 BYO job。
+            core::generation_worker::spawn_recovery(
+                app.handle().clone(),
+                recovery_db,
+                recovery_paths,
+            );
 
             for value in std::env::args() {
                 forward_auth_callback(app.handle(), &value);

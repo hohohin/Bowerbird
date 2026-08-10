@@ -18,14 +18,27 @@ use crate::codex::codex_cli::{
     codex_command, codex_home, npm_command, resolve_codex_binary, resolve_npm_binary,
 };
 use crate::codex::types::{Chunk, CodexRequest, CodexResult};
-use crate::codex::understand::{resolve_understand_provider, UnderstandOperation};
+use crate::codex::understand::{resolve_entitled_understand_provider, UnderstandOperation};
 use crate::codex::resolve_gen_provider;
+use crate::cloud::EntitlementService;
 use crate::core::caption;
 use crate::core::paths::LibraryPaths;
 use crate::db::Database;
 use crate::error::AppError;
 
 const DEFAULT_DESCRIBE_INSTRUCTION: &str = "请描述这张图片";
+
+async fn require_byo(
+    entitlement: &EntitlementService,
+    auth: &crate::cloud::AuthClient,
+) -> Result<(), AppError> {
+    let snapshot = entitlement.current_or_sync(auth).await;
+    if snapshot.policy.can_use_byo {
+        Ok(())
+    } else {
+        Err(AppError::Other("升级 Pro 解锁本机 Codex / 即梦 CLI".into()))
+    }
+}
 
 /// codex 可用性检测结果。`ok=false` 时 `reason` 给出置灰提示文案。
 #[derive(Debug, Clone, Serialize)]
@@ -273,6 +286,9 @@ pub async fn cancel_codex_setup() -> Result<(), AppError> {
 #[tauri::command]
 pub async fn codex_generate_prompt_for_asset(
     db: State<'_, Arc<Database>>,
+    cloud_client: State<'_, crate::cloud::CloudClient>,
+    auth_client: State<'_, crate::cloud::AuthClient>,
+    entitlement: State<'_, EntitlementService>,
     asset_id: String,
     role: String,
 ) -> Result<String, AppError> {
@@ -285,7 +301,13 @@ pub async fn codex_generate_prompt_for_asset(
         ratio: None,
         job_id: None,
     };
-    let p = resolve_understand_provider(None, None)?;
+    let p = resolve_entitled_understand_provider(
+        &entitlement,
+        cloud_client.inner().clone(),
+        auth_client.inner().clone(),
+        true,
+    )
+    .await?;
     let provider_name = p.name().to_string();
     let result = p.understand(UnderstandOperation::Autoname, req).await?;
 
@@ -317,6 +339,9 @@ static DESCRIBE_CANCEL: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>
 pub async fn codex_describe_asset(
     app: AppHandle,
     db: State<'_, Arc<Database>>,
+    cloud_client: State<'_, crate::cloud::CloudClient>,
+    auth_client: State<'_, crate::cloud::AuthClient>,
+    entitlement: State<'_, EntitlementService>,
     asset_id: String,
     instruction: Option<String>,
 ) -> Result<String, AppError> {
@@ -333,7 +358,13 @@ pub async fn codex_describe_asset(
         ratio: None,
         job_id: None,
     };
-    let p = resolve_understand_provider(None, None)?;
+    let p = resolve_entitled_understand_provider(
+        &entitlement,
+        cloud_client.inner().clone(),
+        auth_client.inner().clone(),
+        true,
+    )
+    .await?;
     let provider_name = p.name().to_string();
 
     // 可取消：select codex 执行 与 取消信号。取消时 run future 被 drop，
@@ -416,6 +447,7 @@ pub async fn codex_create_image(
     paths: State<'_, Arc<LibraryPaths>>,
     cloud_client: State<'_, crate::cloud::CloudClient>,
     auth_client: State<'_, crate::cloud::AuthClient>,
+    entitlement: State<'_, EntitlementService>,
     prompt: String,
     reference_images: Vec<String>,
     session_id: Option<String>,
@@ -449,6 +481,30 @@ pub async fn codex_create_image(
         ratio: ratio.clone(),
         job_id: Some(job_id.clone()),
     };
+
+    let entitlement_snapshot = entitlement.current_or_sync(&auth_client).await;
+    if !entitlement_snapshot
+        .policy
+        .allows_generation_provider(provider.as_deref())
+    {
+        return Err(AppError::Other(
+            "当前账号不可使用本机生成引擎；升级 Pro 解锁 Codex / 即梦 CLI".into(),
+        ));
+    }
+    let db_for_gate = db.inner().clone();
+    let gate_job_id = job_id.clone();
+    let running_count = tokio::task::spawn_blocking(move || -> Result<usize, AppError> {
+        Ok(crate::core::task_queue::Task::list_running(&db_for_gate)?
+            .into_iter()
+            .filter_map(|task| task.gen_job())
+            .filter(|job| job.id != gate_job_id)
+            .count())
+    })
+    .await
+    .map_err(|error| AppError::Other(error.to_string()))??;
+    if !entitlement_snapshot.policy.can_start_job(running_count) {
+        return Err(AppError::Other("已达当前账号档位的并行生成上限".into()));
+    }
 
     let (tx, mut rx) = mpsc::channel::<Chunk>(64);
     let app_clone = app.clone();
@@ -676,12 +732,15 @@ pub async fn openai_spike_generate_image(
     app: AppHandle,
     db: State<'_, Arc<Database>>,
     paths: State<'_, Arc<LibraryPaths>>,
+    auth_client: State<'_, crate::cloud::AuthClient>,
+    entitlement: State<'_, EntitlementService>,
     prompt: String,
     reference_images: Vec<String>,
     n: Option<u32>,
     size: Option<String>,
     quality: Option<String>,
 ) -> Result<Vec<String>, AppError> {
+    require_byo(&entitlement, &auth_client).await?;
     let req = crate::codex::openai_api::OpenAiImageReq {
         prompt,
         reference_images: reference_images.into_iter().map(PathBuf::from).collect(),
@@ -714,7 +773,12 @@ pub async fn openai_spike_generate_image(
 /// 「在 codex 中打开会话」：唤起系统终端跑 `codex resume <session_id>`，
 /// 让用户在 codex TUI 里翻看本次反推的完整对话（含图）。macOS 用 Terminal.app。
 #[tauri::command]
-pub async fn open_codex_session(session_id: String) -> Result<(), AppError> {
+pub async fn open_codex_session(
+    auth_client: State<'_, crate::cloud::AuthClient>,
+    entitlement: State<'_, EntitlementService>,
+    session_id: String,
+) -> Result<(), AppError> {
+    require_byo(&entitlement, &auth_client).await?;
     let sid = session_id.trim();
     if sid.is_empty() {
         return Err(AppError::Codex("session_id 为空".into()));

@@ -1,13 +1,13 @@
 # 收费化架构调整 · 任务进度（会话接续用）
 
 > 用途：跨会话交接。任何新会话接手本任务，**先读本文件**，再按需读 `ARCH-ADJUST-PLAN.md`（原始计划）与 `apps/cloud/DEPLOY.md`（部署操作手册）。
-> 更新时间：2026-08-10 ・ 当前分支：`dev` ・ 本文件随最近一次 commit 落盘。
+> 更新时间：2026-08-11 ・ 当前分支：`dev` ・ 2026-08-11 支付延期决策尚未提交。
 
 ---
 
 ## 一句话现状
 
-收费化架构（账号 / 积分 / 托管算力 / 订阅支付 / 功能门控，对应计划 P0–P8）已完成代码、P9-T2 全量回归、P9-T3 安全审计与真实云端部署：Supabase `0001~0010`、5 个 Edge Functions、Cloud Secrets 均已上线；桌面与官网同账号登录/共享余额、东京 Seedream 出图、本地入库、来源标记、扣费流水、幂等认领、限流与成本熔断均已验收。支付保持 Mock。
+收费化架构（账号 / 积分 / 托管算力 / 订阅支付 / 功能门控，对应计划 P0–P8）已完成代码、P9-T2 全量回归、P9-T3 安全审计与真实云端部署：Supabase `0001~0010`、5 个 Edge Functions、Cloud Secrets 均已上线；桌面与官网同账号登录/共享余额、东京 Seedream 出图、本地入库、来源标记、扣费流水、幂等认领、限流与成本熔断均已验收。P6.1 已把免费仅 Cloud、Pro/Studio 才可使用本机 CLI 的门控收口到 UI、store、Rust command、理解/自动分析及任务恢复层。真实支付因备案/商户资质前置周期由用户明确暂停，支付保持 Mock。
 
 ---
 
@@ -26,6 +26,10 @@ P9-T2 已完成：`cargo test` 98/98、桌面 TypeScript/Vite、官网 build、�
 
 P9-T4 文档收尾与版本日期化已完成：AGENTS/CLAUDE 索引已补齐，桌面版本由 `26.8.8` 更新为 `26.8.10`，本轮随用户“存档”指令提交。
 
+**2026-08-11 P6.1 门控收口：**免费档创作板只能使用 Bowerbird Cloud；Codex/即梦的首轮生成、历史会话续改、重新生成、失败重试、直接 Tauri invoke、OpenAI spike 与即梦启动恢复均在 store + Rust 层复核 `FeaturePolicy`，并发上限也在 Rust 层复核。反推、批量提示词、自动命名/归类统一经权益选择 `UnderstandProvider`：Pro/Studio 走本机 Codex，免费档手动操作走 Cloud；入库自动分析只有显式开启 `cloud_auto_understand` 才允许上传。App 启动、每 6 小时和无可信缓存的操作前会同步权益；Rust 101/101、桌面 TypeScript/Vite build 通过。**边界：**当前已部署 `entitlement` 仍返回 `signature_version=0`，因此在线响应只在当前进程、`refresh_after` 前可信；真正的 7 天离线 Pro 仍需非对称签名与客户端验签后才能启用。真实 Pro 订阅升降级真机验收仍等待支付或测试订阅数据。
+
+**2026-08-11 支付延期决策：**真实支付接入需要先完成网站/主体备案及支付渠道要求的商户资质准备，预计需要一段时间，因此当前不继续选择或实现真实支付 provider，也不执行真实扣款、退款或购买 Pro 联调。等待期间必须保持 `BOWERBIRD_PAYMENT_MOCK=true`；现有 Mock checkout/webhook 仅保留作协议骨架，不能对外宣称可收款。恢复支付开发的前置材料：备案/主体资质完成、选定渠道、商户/沙箱凭据、该渠道官方签名与 webhook 文档、结算/退款规则。该延期不影响已上线的账号、积分、Cloud 出图及免费档闭环，也不阻塞其他非支付功能开发。
+
 ---
 
 ## 已完成（不要重做）
@@ -34,9 +38,9 @@ P9-T4 文档收尾与版本日期化已完成：AGENTS/CLAUDE 索引已补齐，
 - **P0 云脚手架**：`apps/cloud/`（Supabase 迁移 + Edge Functions + README/DEPLOY）；桌面 `src-tauri/src/cloud/` 边界（公开配置 + 共享 client，`cloud_enabled` 默认 false）。
 - **P1 计费数据层**：`credit_lots`（FIFO daily→sub→topup）/ `credit_holds` + `credit_hold_allocations` / `credit_transactions`(append-only) / `user_credits` 快照 / `usage_daily`；RLS own-row 只读 + 写仅服务端 RPC；注册即发 30 分（与当日免费额度共用 daily lot，首日总计 30，不叠加）。
 - **P2 Edge Functions**：`_shared`（JWT、稳定错误码 401/402/413/429/502/503/504、CORS、体积/参考图校验、超时、脱敏日志）；`generate-proxy`（hold→上游→confirm/rollback，异步 pending_settlement+poll）；`understand-proxy`（Free 10 次/日）；`entitlement`（服务端派生 FeaturePolicy + 近 50 条流水）。
-- **P3 桌面账号**：`AuthClient`（邮箱 Magic Link、S256 PKCE、callback state 校验、keyring 存 refresh token、Rust 独占 token）、deep-link + single-instance（`bowerbird://auth/callback`）、`EntitlementService`（签名缓存 + 7 天离线宽限 + 时钟回拨检测）、设置账号区 + 统一 Onboarding 账号卡片。
+- **P3 桌面账号**：`AuthClient`（邮箱 Magic Link、S256 PKCE、callback state 校验、keyring 存 refresh token、Rust 独占 token）、deep-link + single-instance（`bowerbird://auth/callback`）、`EntitlementService`（fresh/grace/expired + 时钟回拨评估；生产签名/7 天离线宽限尚待非对称签名落地）、设置账号区 + 统一 Onboarding 账号卡片。
 - **P4 Provider**：`BowerbirdCloudProvider`（job_id 幂等、请求期 base64、异步 bounded poll）+ 独立 `UnderstandProvider`（Codex/Cloud）+ `bowerbird-cloud` source 显式映射 + `generation_worker` 恢复接受该 source。
-- **P5–P6**：积分流水面板、`FeaturePolicy` 唯一事实源（前端 `entitlement.ts` 镜像，BYO 免费禁用 + 并发闸）。
+- **P5–P6/P6.1**：积分流水面板、`FeaturePolicy` 唯一事实源；免费仅 Cloud、Pro/Studio 解锁 BYO，生成/续改/重试/理解/自动分析/恢复任务均有 UI + store + Rust 多层门控，并发闸在前后端同时复核。
 - **P7 Mock 支付**：`create-checkout`（服务端 SKU 映射）+ `payment-webhook`（常量时间验签、paid/refunded 幂等状态机、topup lot）+ 契约测试脚本。**两个函数都加了 Mock 守卫（`BOWERBIRD_PAYMENT_MOCK != "true"` 时 503），防误开真实扣款**。
 - **P8 官网账号化**：`website/server.mjs` `/api/generate` Bearer JWT 转发 generate-proxy、`website/app.js` CDN supabase-js 邮箱 Magic Link 登录 + 余额/402/429 处理，未登录保留旧每 IP demo 兜底。
 
@@ -70,9 +74,9 @@ P9-T4 文档收尾与版本日期化已完成：AGENTS/CLAUDE 索引已补齐，
 | 开关 | 值 | 含义 |
 |---|---|---|
 | `BOWERBIRD_CLOUD_MOCK` | `false` | 算力走**真实方舟**（已验证） |
-| `BOWERBIRD_PAYMENT_MOCK` | `true` | 支付走 **Mock**（保持，待真实支付渠道决策） |
+| `BOWERBIRD_PAYMENT_MOCK` | `true` | 支付走 **Mock**（备案/商户资质完成前保持） |
 
-> 支付真实化前需先定渠道：superun 未能证实存在（搜到的是无关产品）；候选 虎皮椒 / PayJS / 支付宝当面付 / 微信支付商户号；Paddle 延后。**不要在未决策前把 `BOWERBIRD_PAYMENT_MOCK` 改 false**（已加守卫，改 false 会 503 而非误扣款）。
+> 真实支付已于 2026-08-11 明确暂停，先等待备案/商户资质。恢复后再基于当时的官方资料重新评估渠道；历史候选为虎皮椒 / PayJS / 支付宝当面付 / 微信支付商户号，Paddle 延后，不能把候选清单当成已选方案。**备案和渠道决策完成前不要把 `BOWERBIRD_PAYMENT_MOCK` 改 false**（守卫会返回 503 而非误扣款）。
 
 ---
 
@@ -106,6 +110,8 @@ P9-T4 文档收尾与版本日期化已完成：AGENTS/CLAUDE 索引已补齐，
 
 ## 待办（凭据/决策驱动，非本次范围）
 
+- Entitlement 非对称签名：Edge Function 私钥签发 + 桌面内置公钥验签，完成后再启用并真机验收 7 天离线 Pro 宽限。
+- 用测试订阅数据验收 Pro/Studio 解锁、到期降级和历史任务阻断；真实购买/到账仍等待支付恢复。
 - Seedance 视频 adapter（需真实 video model endpoint id）。
 - 微信登录真实联调（H5 凭据，邮箱 Magic Link 已先行）。
-- 真实支付渠道决策 + 接入（见 Mock 开关表）。
+- 真实支付渠道决策 + 接入：**暂停，等待备案/商户资质完成**；恢复条件见“当前状态与下一步”。
