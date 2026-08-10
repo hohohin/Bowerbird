@@ -4,6 +4,7 @@ import { requireUser } from "../_shared/auth.ts";
 import { confirmCredits, holdCredits, rollbackCredits } from "../_shared/billing.ts";
 import { ApiError, errorResponse, jsonResponse, requestId, safeLog } from "../_shared/errors.ts";
 import { assertBodySize, assertReferenceImages, corsHeaders, withTimeout } from "../_shared/limits.ts";
+import { reserveManagedUsage } from "../_shared/usage.ts";
 
 interface UnderstandRequest {
   idempotency_key: string;
@@ -73,6 +74,7 @@ Deno.serve(async (request) => {
 
     const held = await holdCredits(admin, user.id, body.idempotency_key, "caption");
     holdId = held.holdId;
+    await reserveManagedUsage(admin, user.id, holdId, held.estimated);
     const result = await withTimeout(createArkAdapter().understand({
       operation: body.operation,
       image: body.image,

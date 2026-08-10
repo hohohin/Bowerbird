@@ -13,6 +13,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `Bowerbird定价方案v2-订阅积分制.md` | 定价方案 v2（免费 + 订阅 + 积分混合制，独立于旧 PRICING.md 的重新设计） | 商业化、定价、license 功能门控相关工作前必读 |
 | `Bowerbird市场调研-竞争格局与优势分析.md` | 竞争格局与优势分析（v2 形态下 vs 竞品） | 商业化、竞品对标时 |
 | `Bowerbird收费链路与定价方案.md` | 收费链路实施层：用户系统 / license / 支付渠道 / 积分适用 / 分阶段落地 | 落地收费、接支付/账号系统前必读 |
+| `ARCH-ADJUST-PLAN.md` | 收费化架构调整开发计划（账号 / 积分 / 托管 provider / 支付 / 门控，P0–P9 任务与验收） | 收费化 / 账号 / 积分 / 云端实现前必读 |
+| `ARCH-ADJUST-PROGRESS.md` | 收费化架构调整跨会话进度、部署状态、测试基线与剩余阻塞 | 接续收费化任务或核对线上状态时必读 |
 | `研究报告-服务器化CLI与API化改造可行性.md` | 生成能力服务器化/API 化改造可行性研究 | 远程化、API 化架构调整前必读 |
 | `FRAMEWORK_ADJUST.md` | 架构调整清单（为收费服务，含账号系统等调整项） | 收费落地、架构调整前必读 |
 | `AI-PROVIDERS.md` | AI provider 可切换方案（泛化 GenerationPanel + codex/即梦首批 + 即梦接入调研 + 关键约定 1 演进；草案） | provider 切换 / 即梦接入 / 生成能力多 provider 解耦相关工作前必读 |

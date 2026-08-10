@@ -26,7 +26,13 @@ port = 54324
 [auth]
 enabled = true
 site_url = "http://127.0.0.1:5173"
-additional_redirect_urls = ["bowerbird://auth/callback", "http://127.0.0.1:5173/auth/callback"]
+# Desktop PKCE appends a per-login `state` query parameter. The globstar keeps
+# the callback allow-listed while still restricting it to Bowerbird's scheme.
+additional_redirect_urls = [
+  "bowerbird://auth/callback**",
+  "http://127.0.0.1:5173/**",
+  "http://localhost:5173/**",
+]
 jwt_expiry = 3600
 enable_signup = true
 

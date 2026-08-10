@@ -21,6 +21,11 @@ declare
   grant_count integer;
   tx_count integer;
   rejected boolean;
+  guard_hold uuid;
+  guard_cost_before bigint;
+  guard_cost_after bigint;
+  guard_replayed boolean;
+  error_detail text;
 begin
   -- Create auth users: the production trigger must initialize exactly one daily lot worth 30.
   insert into auth.users (id, instance_id, aud, role, email, encrypted_password, email_confirmed_at, created_at, updated_at)
@@ -58,6 +63,64 @@ begin
     'FIFO continues into subscription',
     exists (select 1 from public.credit_lots where id = second_lot and remaining_amount = 7)
   );
+
+  -- Managed requests atomically claim a hold and reserve rate/cost only once.
+  select coalesce(cost_micros, 0) into guard_cost_before
+  from public.system_usage_daily
+  where business_date = timezone('Asia/Shanghai', now())::date;
+  guard_cost_before := coalesce(guard_cost_before, 0);
+  select result.already_reserved into guard_replayed
+  from public.reserve_managed_usage(user_a, hold, 235000, 1000000, 10) as result;
+  select cost_micros into guard_cost_after
+  from public.system_usage_daily
+  where business_date = timezone('Asia/Shanghai', now())::date;
+  insert into billing_test_results values (
+    'managed usage reserves estimated cost once',
+    not guard_replayed and guard_cost_after = guard_cost_before + 235000
+  );
+  select result.already_reserved into guard_replayed
+  from public.reserve_managed_usage(user_a, hold, 235000, 1000000, 10) as result;
+  insert into billing_test_results values (
+    'managed usage replay does not reserve twice',
+    guard_replayed and guard_cost_after = (
+      select cost_micros from public.system_usage_daily
+      where business_date = timezone('Asia/Shanghai', now())::date
+    )
+  );
+  perform public.consume_understand_quota(user_a, 10);
+  insert into billing_test_results values (
+    'understand quota does not double count managed request',
+    exists (
+      select 1 from public.usage_daily
+      where user_id = user_a
+        and business_date = timezone('Asia/Shanghai', now())::date
+        and understand_count = 1
+        and request_count = 1
+    )
+  );
+  perform public.undo_understand_quota(user_a);
+
+  select result.hold_id into guard_hold
+  from public.credit_hold(user_a, 'guard-rate', 'caption', 1) as result;
+  rejected := false;
+  error_detail := null;
+  begin
+    perform * from public.reserve_managed_usage(user_a, guard_hold, 47000, 1000000, 1);
+  exception when sqlstate 'P0001' then
+    get stacked diagnostics error_detail = pg_exception_detail;
+    rejected := error_detail = 'rate_limit_per_minute';
+  end;
+  insert into billing_test_results values ('managed per-minute rate limit rejects', rejected);
+
+  rejected := false;
+  error_detail := null;
+  begin
+    perform * from public.reserve_managed_usage(user_a, guard_hold, 47000, guard_cost_after, 10);
+  exception when sqlstate 'P0001' then
+    get stacked diagnostics error_detail = pg_exception_detail;
+    rejected := error_detail = 'daily_cost_limit';
+  end;
+  insert into billing_test_results values ('managed daily cost limit rejects', rejected);
 
   perform * from public.credit_confirm(hold, 3);
   select count(*) into tx_count from public.credit_holds where id = hold and status = 'confirmed' and actual_amount = 3;
@@ -107,6 +170,14 @@ begin
   insert into billing_test_results
   select 'authenticated cannot execute credit_hold', not has_function_privilege(
     'authenticated', 'public.credit_hold(uuid,text,text,integer)', 'EXECUTE'
+  );
+  insert into billing_test_results
+  select 'authenticated cannot read usage minute', not has_table_privilege(
+    'authenticated', 'public.usage_minute', 'SELECT'
+  );
+  insert into billing_test_results
+  select 'authenticated cannot execute managed usage guard', not has_function_privilege(
+    'authenticated', 'public.reserve_managed_usage(uuid,uuid,bigint,bigint,integer)', 'EXECUTE'
   );
 end;
 $$;

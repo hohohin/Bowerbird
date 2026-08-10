@@ -51,6 +51,26 @@ struct PendingPkce {
     verifier: String,
 }
 
+fn auth_error_detail(body: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    ["message", "msg", "error_description"]
+        .into_iter()
+        .find_map(|key| value.get(key)?.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn retry_seconds(retry_after: Option<&str>, detail: Option<&str>) -> Option<u64> {
+    retry_after
+        .and_then(|value| value.trim().parse().ok())
+        .or_else(|| {
+            detail?
+                .split(|character: char| !character.is_ascii_digit())
+                .find_map(|part| part.parse().ok())
+        })
+}
+
 #[derive(Clone)]
 pub struct AuthClient {
     inner: Arc<AuthInner>,
@@ -146,8 +166,23 @@ impl AuthClient {
             .map_err(|error| AppError::Cloud(format!("发送登录邮件失败: {error}")))?;
         if !response.status().is_success() {
             let status = response.status();
+            let retry_after = response
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string);
+            let body = response.text().await.unwrap_or_default();
+            let detail = auth_error_detail(&body);
+            if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                let message = match retry_seconds(retry_after.as_deref(), detail.as_deref()) {
+                    Some(seconds) => format!("登录邮件发送过于频繁，请 {seconds} 秒后重试"),
+                    None => "登录邮件发送已触发 Supabase 限流；内置邮件服务最多 2 封/小时，请等待额度恢复或配置自定义 SMTP".into(),
+                };
+                return Err(AppError::Cloud(message));
+            }
             return Err(AppError::Cloud(format!(
-                "发送登录邮件失败（HTTP {status}）"
+                "发送登录邮件失败（HTTP {status}{}）",
+                detail.map(|value| format!("：{value}")).unwrap_or_default()
             )));
         }
         Ok(())
@@ -293,7 +328,7 @@ impl AuthClient {
 
 #[cfg(test)]
 mod tests {
-    use super::{AuthClient, PendingPkce};
+    use super::{auth_error_detail, retry_seconds, AuthClient, PendingPkce};
     use crate::cloud::{config::CloudConfig, CloudClient};
 
     fn client() -> AuthClient {
@@ -306,6 +341,16 @@ mod tests {
             })
             .unwrap(),
         )
+    }
+
+    #[test]
+    fn parses_auth_rate_limit_wait() {
+        let detail = auth_error_detail(
+            r#"{"code":"over_email_send_rate_limit","message":"For security purposes, you can only request this after 47 seconds."}"#,
+        );
+        assert_eq!(detail.as_deref(), Some("For security purposes, you can only request this after 47 seconds."));
+        assert_eq!(retry_seconds(None, detail.as_deref()), Some(47));
+        assert_eq!(retry_seconds(Some("12"), detail.as_deref()), Some(12));
     }
 
     #[tokio::test]

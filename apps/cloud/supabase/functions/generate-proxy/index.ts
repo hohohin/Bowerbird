@@ -9,6 +9,7 @@ import {
 } from "../_shared/billing.ts";
 import { ApiError, errorResponse, jsonResponse, requestId, safeLog } from "../_shared/errors.ts";
 import { assertBodySize, assertReferenceImages, corsHeaders, withTimeout } from "../_shared/limits.ts";
+import { reserveManagedUsage } from "../_shared/usage.ts";
 
 // A queued remote task is durable in production via the credit_holds.pending_settlement row plus a
 // server reconciliation task. This Mock module keeps per-isolate state so dev async flows finish;
@@ -49,8 +50,14 @@ function validate(body: unknown): GenerateRequest {
 }
 
 function serviceFor(body: GenerateRequest): string {
-  if (body.service) return body.service;
-  return body.media === "video" ? "video_sd2_5s" : "image_sd";
+  const service = body.service ?? (body.media === "video" ? "video_sd2_5s" : "image_sd");
+  const allowed = body.media === "image"
+    ? ["image_sd", "image_hd"]
+    : ["video_sd2_5s", "video_sd2_15s", "video_sd25_5s", "video_sd25_15s", "video_sd25_30s"];
+  if (!allowed.includes(service)) {
+    throw new ApiError("invalid_request", "service 与生成媒体类型不匹配");
+  }
+  return service;
 }
 
 Deno.serve(async (request) => {
@@ -99,6 +106,7 @@ Deno.serve(async (request) => {
     const service = serviceFor(body);
     const held = await holdCredits(admin, user.id, body.idempotency_key, service);
     holdId = held.holdId;
+    await reserveManagedUsage(admin, user.id, holdId, held.estimated);
 
     const input: GenerateInput = {
       media: body.media,

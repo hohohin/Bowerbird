@@ -39,6 +39,20 @@ npx --yes supabase@latest --agent no link --project-ref <你的-project-ref>
 
 `<project-ref>` 在 Supabase 项目 Settings → General → Reference ID。
 
+### 2.1 配置 Auth 回调 URL（托管项目必须手工同步）
+
+打开 Supabase Dashboard → Authentication → URL Configuration：
+
+1. 在 **Redirect URLs** 添加 `bowerbird://auth/callback**`（桌面 PKCE 回调会附带动态 `state` 查询参数，不能只填无查询串的精确地址）。
+2. 本地官网开发再添加 `http://127.0.0.1:5173/**` 与 `http://localhost:5173/**`。
+3. 官网上线后，把正式 HTTPS origin 设为 **Site URL**，并把同一 origin 加入 Redirect URLs。
+4. Magic Link 邮件模板的按钮应使用 `{{ .ConfirmationURL }}`；若自定义模板直接使用 `{{ .SiteURL }}`，代码传入的 redirect URL 不会生效。
+
+未命中 Redirect URLs 时，Supabase 会回退到 Site URL；控制台默认值通常是 `http://localhost:3000`，表现为邮件链接验证后跳到无法访问的本机地址。
+Windows 用 `tauri dev` 验收时，桌面端会在 debug 环境运行时注册 `bowerbird://`；安装包则由系统安装过程注册。
+
+> Supabase 内置 SMTP 仅供试用，整个项目最多发送 2 封 Auth 邮件/小时；这与 OTP 接口的 60 秒单邮箱冷却、30 次/小时额度是不同层级。需要持续联调或对外发布前，应在 Authentication → Emails → SMTP Settings 配置自定义 SMTP。
+
 ### 3. 推送数据库迁移
 
 ```bash
@@ -46,7 +60,7 @@ cd apps/cloud
 npx --yes supabase@latest --agent no db push
 ```
 
-会依次执行 `supabase/migrations/0001_*.sql` 到 `0009_repair_credit_hold_shadowing.sql`。
+会依次执行 `supabase/migrations/0001_*.sql` 到 `0010_managed_usage_guard.sql`。`0010` 必须先于新版 `generate-proxy` / `understand-proxy` 部署，否则 Function 找不到用量守卫 RPC。
 
 ### 4. 部署 Edge Functions 并注入 Secrets
 
@@ -69,10 +83,12 @@ supabase secrets set ARK_VIDEO_MODEL=$ARK_VIDEO_MODEL
 supabase secrets set ARK_VISION_MODEL=$ARK_VISION_MODEL
 supabase secrets set ALLOWED_ORIGINS="https://<你的官网域名>"
 supabase secrets set DAILY_COST_LIMIT_CNY=500
+supabase secrets set COST_CNY_PER_CREDIT=0.047
 supabase secrets set UPSTREAM_TIMEOUT_MS=140000
 supabase secrets set RATE_LIMIT_PER_USER_PER_MIN=10
 supabase secrets set BOWERBIRD_CLOUD_MOCK=false
 supabase secrets set BOWERBIRD_PAYMENT_MOCK=true
+supabase secrets set SUPERUN_WEBHOOK_SECRET=$SUPERUN_WEBHOOK_SECRET
 ```
 
 > ⚠️ 目前 `.env` 里 `BOWERBIRD_CLOUD_MOCK=false` 已开启真实方舟；`BOWERBIRD_PAYMENT_MOCK=true` 保持 Mock 支付，**不要**提前改 false。
@@ -92,6 +108,7 @@ supabase db reset
 psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -f supabase/tests/billing.sql
 node scripts/test-billing.mjs
 node scripts/test-payment.mjs
+node --env-file=.env scripts/test-payment-webhook-smoke.mjs  # 本地有回调密钥时同时验证正确签名分支
 
 # 2. Edge Functions 冒烟（需要本地 Deno + Supabase CLI）
 supabase functions serve --env-file .env
@@ -118,5 +135,6 @@ Remove-Item Env:CLOUD_E2E_FUNCTION_REGION
 ## 注意事项
 
 - 所有 secrets 只在 Edge Functions 运行环境持有；桌面端只持 publishable key。
+- `DAILY_COST_LIMIT_CNY` 是上海自然日的全站预估成本上限；单次预估成本 = 预扣积分 × `COST_CNY_PER_CREDIT`（默认 ¥0.047）。`RATE_LIMIT_PER_USER_PER_MIN` 是同账号每分钟首次上游请求数；同一幂等键重放不重复占用额度，也不会重复提交上游。
 - `BOWERBIRD_CLOUD_MOCK` 与 `BOWERBIRD_PAYMENT_MOCK` 是两个独立开关：前者控制算力，后者控制支付。
 - 部署完成后请告诉我「已部署」，我会继续真机验收（登录 → 积分 → 生成 → 流水 → 扣费/回滚）。

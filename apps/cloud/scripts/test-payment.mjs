@@ -12,11 +12,11 @@ function readSecretKey() {
 const SERVICE_KEY = readSecretKey();
 const CHECKOUT = `${BASE}/functions/v1/create-checkout`;
 const WEBHOOK = `${BASE}/functions/v1/payment-webhook`;
-const SECRET = process.env.SUPERUN_WEBHOOK_SECRET ?? "mock-secret";
+const SECRET = process.env.SUPERUN_WEBHOOK_SECRET?.trim();
 const USER = process.env.BILLING_TEST_USER_ID;
 
-if (!BASE || !SERVICE_KEY || !USER) {
-  console.error("缺少 SUPABASE_URL / SUPABASE_SECRET_KEY（或 SUPABASE_SECRET_KEYS）/ BILLING_TEST_USER_ID；跳过支付 Mock 联调。");
+if (!BASE || !SERVICE_KEY || !USER || !SECRET) {
+  console.error("缺少 SUPABASE_URL / SUPABASE_SECRET_KEY（或 SUPABASE_SECRET_KEYS）/ BILLING_TEST_USER_ID / SUPERUN_WEBHOOK_SECRET；跳过支付 Mock 联调。");
   process.exit(2);
 }
 
@@ -48,8 +48,6 @@ const baseEvent = {
   event: "order.paid",
   provider_order_id: orderId,
   provider_event_id: `evt-${crypto.randomUUID()}`,
-  product: "credits_100",
-  user_id: USER,
 };
 
 // 1) Invalid signature is rejected.

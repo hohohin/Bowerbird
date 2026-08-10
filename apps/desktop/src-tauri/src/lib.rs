@@ -64,6 +64,14 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
+            // Windows/Linux 开发态不会像安装包那样自动注册自定义协议。
+            // 仅在这些环境运行时注册 tauri.conf.json 中已有的 bowerbird scheme。
+            #[cfg(any(target_os = "linux", all(debug_assertions, windows)))]
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                app.deep_link().register_all()?;
+            }
+
             let app_dir = app.path().app_data_dir()?;
 
             // 设置：从 <app_data>/settings.json 加载（文件不存在则用默认值）。

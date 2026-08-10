@@ -84,10 +84,10 @@ node scripts/test-payment.mjs
 
 | Function | Method | 用途 |
 |---|---|---|
-| `generate-proxy` | POST | JWT → hold → Mock/方舟生成 → confirm/rollback/pending settlement |
-| `understand-proxy` | POST | JWT → Free 日限额 → hold → 理解 → confirm/rollback |
+| `generate-proxy` | POST | JWT → hold → 幂等认领/限流/成本熔断 → Mock/方舟生成 → confirm/rollback/pending settlement |
+| `understand-proxy` | POST | JWT → Free 日限额 → hold → 幂等认领/限流/成本熔断 → 理解 → confirm/rollback |
 | `entitlement` | GET | 返回 tier、三类余额与 FeaturePolicy |
 
 统一错误：401 未登录 / 402 积分不足 / 413 体积超限 / 429 限流 / 502 上游失败 / 503 熔断或未配置 / 504 超时。`BOWERBIRD_CLOUD_MOCK=true` 时只用于开发；生产必须关闭，且未配置真实 adapter 时应返回 503，不能静默输出 Mock 结果。
 
-当前开发机器尚未安装 Supabase CLI 和 Deno，因此上述 Function 与数据库测试**尚未运行**；Rust、桌面、官网和扩展基线已通过。安装 CLI/Docker 后必须先执行 `supabase db reset`，不能用静态检查替代真实迁移结果。未实际运行的真实服务联调不得标记为通过。
+当前开发机器可通过 `npx` 使用 Supabase CLI 与 Deno，但没有 Docker/Podman，因此不能本地执行 `supabase db reset`。`0001~0010`、5 个 Functions 与东京真实 Cloud E2E 已在线验证；5 个 Functions 通过 Deno type-check，远端数据库 error 级 lint 0 项。真实 E2E 还覆盖了 `0010` 的成本预留、幂等重放、单用户分钟限流、全站每日成本熔断与测试 hold 回滚。事务型 `billing.sql` 全量脚本仍需在具备本地 Docker/Postgres 的环境补跑，不能把 REST/RPC 覆盖等同于整份脚本已执行。
