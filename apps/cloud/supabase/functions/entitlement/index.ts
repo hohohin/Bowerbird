@@ -1,4 +1,5 @@
 import { requireUser } from "../_shared/auth.ts";
+import { ensureDailyCredits } from "../_shared/billing.ts";
 import { ApiError, errorResponse, jsonResponse, requestId, safeLog } from "../_shared/errors.ts";
 import { corsHeaders } from "../_shared/limits.ts";
 
@@ -53,6 +54,7 @@ Deno.serve(async (request) => {
 
     const { user, admin } = await requireUser(request);
     userId = user.id;
+    await ensureDailyCredits(admin, user.id);
     const [{ data: subscription, error: subError }, { data: credits, error: creditError }, { data: transactions, error: txError }] =
       await Promise.all([
         admin.from("subscriptions").select("tier,status,current_period_end,entitlement_version").eq("user_id", user.id).maybeSingle(),

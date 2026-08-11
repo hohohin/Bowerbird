@@ -96,7 +96,7 @@ impl UnderstandProvider for CloudUnderstandProvider {
             .cloud
             .config()
             .endpoint("understand-proxy")
-            .ok_or_else(|| AppError::Cloud("Bowerbird Cloud 未启用或端点未配置".into()))?;
+            .ok_or_else(|| AppError::Cloud("当前构建未配置 Bowerbird Cloud".into()))?;
         let token = self.auth.access_token().await?;
         let image_path = req
             .reference_images

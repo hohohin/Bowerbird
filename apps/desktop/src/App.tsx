@@ -404,7 +404,7 @@ function App() {
     };
   }, [setExtensionConnected]);
 
-  // 即梦可用性：同 codex，挂载取一次（provider 切换置灰依据）。
+  // 即梦可用性：同 codex，挂载取一次（吃后端 TTL 缓存；provider 切换置灰依据）。
   useEffect(() => {
     api
       .dreaminaHealth()
@@ -412,13 +412,13 @@ function App() {
       .catch(() => setDreaminaHealth({ ok: false, reason: "dreamina 状态检测失败" }));
   }, [setDreaminaHealth]);
 
-  // dreamina 一键安装成功后端 emit `dreamina://health-changed` → 重取 dreaminaHealth
+  // dreamina 一键安装成功后端 emit `dreamina://health-changed` → 强制重取 dreaminaHealth
   // （provider 切换置灰依据 + DreaminaOnboarding 自动重检回一级）。
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
     let alive = true;
     listen("dreamina://health-changed", () => {
-      api.dreaminaHealth().then(setDreaminaHealth).catch(() => {});
+      api.dreaminaHealth(true).then(setDreaminaHealth).catch(() => {});
     }).then((u) => (alive ? (unlisten = u) : u()));
     return () => {
       alive = false;
@@ -436,12 +436,12 @@ function App() {
     return () => unlisten?.();
   }, []);
 
-  // 登录子进程结束 → 标记流程结束 + 刷 dreaminaHealth（登录态可能已变）。
+  // 登录子进程结束 → 标记流程结束 + 强制刷 dreaminaHealth（登录态可能已变）。
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
     listen("dreamina://login-done", () => {
       useStore.getState().setDreaminaLoginActive(false);
-      api.dreaminaHealth().then(setDreaminaHealth).catch(() => {});
+      api.dreaminaHealth(true).then(setDreaminaHealth).catch(() => {});
     }).then((u) => (unlisten = u));
     return () => unlisten?.();
   }, [setDreaminaHealth]);

@@ -57,7 +57,7 @@ impl GenProvider for BowerbirdCloudProvider {
     ) -> Result<GenOutcome, AppError> {
         let started = Instant::now();
         let endpoint = self.cloud.config().endpoint("generate-proxy")
-            .ok_or_else(|| AppError::Cloud("Bowerbird Cloud 未启用或端点未配置".into()))?;
+            .ok_or_else(|| AppError::Cloud("当前构建未配置 Bowerbird Cloud".into()))?;
         let token = self.auth.access_token().await?;
         let job_id = req.job_id.clone().ok_or_else(|| AppError::Cloud("云生成缺少 job id".into()))?;
 

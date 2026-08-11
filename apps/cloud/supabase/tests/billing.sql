@@ -42,6 +42,30 @@ begin
   select count(*) into grant_count from public.credit_lots where user_id = user_a and source_key like 'daily:%';
   insert into billing_test_results values ('daily grant replay is idempotent', grant_count = 1);
 
+  -- Simulate the next day: yesterday's expired lot still says 25 in the cached snapshot.
+  update public.credit_lots
+  set source_key = 'daily:' || (timezone('Asia/Shanghai', now())::date - 1)::text,
+      remaining_amount = 25,
+      expires_at = now() - interval '1 hour'
+  where user_id = user_a and source_key = 'daily:' || timezone('Asia/Shanghai', now())::date::text;
+  update public.user_credits set daily_balance = 25 where user_id = user_a;
+  perform * from public.ensure_daily_credits(user_a, 30);
+  insert into billing_test_results values (
+    'daily ensure replaces stale expired snapshot',
+    (select daily_balance from public.user_credits where user_id = user_a) = 30
+      and (select count(*) from public.credit_lots
+        where user_id = user_a
+          and source_key = 'daily:' || timezone('Asia/Shanghai', now())::date::text
+          and remaining_amount = 30) = 1
+  );
+  perform * from public.ensure_daily_credits(user_a, 30);
+  insert into billing_test_results values (
+    'daily ensure replay does not duplicate current lot',
+    (select count(*) from public.credit_lots
+      where user_id = user_a
+        and source_key = 'daily:' || timezone('Asia/Shanghai', now())::date::text) = 1
+  );
+
   -- Add two deterministic lots and consume daily before sub before topup.
   update public.credit_lots set remaining_amount = 0 where user_id = user_a;
   insert into public.credit_lots (user_id, bucket, source_key, original_amount, remaining_amount, expires_at)
@@ -170,6 +194,10 @@ begin
   insert into billing_test_results
   select 'authenticated cannot execute credit_hold', not has_function_privilege(
     'authenticated', 'public.credit_hold(uuid,text,text,integer)', 'EXECUTE'
+  );
+  insert into billing_test_results
+  select 'authenticated cannot execute daily ensure', not has_function_privilege(
+    'authenticated', 'public.ensure_daily_credits(uuid,integer)', 'EXECUTE'
   );
   insert into billing_test_results
   select 'authenticated cannot read usage minute', not has_table_privilege(

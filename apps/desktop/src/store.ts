@@ -474,12 +474,12 @@ export const useStore = create<State>((set, get) => {
       route === null ||
       (route === "codex" && !s.codexHealth?.ok) ||
       (route === "bowerbird-cloud" &&
-        (!(s.settings?.cloud_enabled ?? false) || !s.cloudAuth?.logged_in))
+        (!s.cloudAuth?.cloud_available || !s.cloudAuth.logged_in))
     ) {
       set({
         cloudError:
           route === "bowerbird-cloud"
-            ? "免费版反推需要先登录并启用 Bowerbird Cloud"
+            ? "免费版反推需要先登录 Bowerbird Cloud"
             : "当前账号没有可用的理解引擎",
       });
       return;
@@ -817,7 +817,7 @@ export const useStore = create<State>((set, get) => {
     if (!job) return;
     const provider = normalizeGenerationProvider(job.provider);
     const targetHealthy = provider === "bowerbird-cloud"
-      ? (s.settings?.cloud_enabled ?? false) && !!s.cloudAuth?.logged_in
+      ? !!s.cloudAuth?.cloud_available && !!s.cloudAuth.logged_in
       : provider === "jimeng"
         ? !!s.dreaminaHealth?.ok
         : !!s.codexHealth?.ok;

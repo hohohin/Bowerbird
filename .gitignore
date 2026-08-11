@@ -22,6 +22,7 @@ apps/desktop/src-tauri/gen/
 .env
 .env.*
 !website/.env.example
+!apps/cloud/.env.example
 
 # library data (created at runtime when user opens a library)
 *.db

@@ -1,7 +1,6 @@
 import { useStore } from "../store";
 import { api } from "../lib/api";
 import { CodexStatus } from "./CodexStatus";
-import { SettingsButton } from "./SettingsButton";
 
 /** 顶部工具栏：导入 + 搜索 + 批量管理 + 创作板入口。 */
 export function Toolbar({ onRefresh }: { onRefresh: () => Promise<void> }) {
@@ -132,7 +131,6 @@ export function Toolbar({ onRefresh }: { onRefresh: () => Promise<void> }) {
             <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-red-400" />
           )}
         </button>
-        <SettingsButton />
         <CodexStatus />
       </div>
     </div>

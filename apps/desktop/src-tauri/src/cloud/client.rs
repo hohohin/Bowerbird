@@ -28,10 +28,6 @@ impl CloudClient {
         Ok(Self { config, http })
     }
 
-    pub fn disabled() -> Result<Self, AppError> {
-        Self::new(CloudConfig::disabled())
-    }
-
     pub fn config(&self) -> &CloudConfig {
         &self.config
     }

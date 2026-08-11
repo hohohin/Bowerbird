@@ -194,7 +194,8 @@ export const api = {
   codexInstall: () => invoke<CodexHealth>("codex_install"),
   codexLogin: () => invoke<CodexHealth>("codex_login"),
   cancelCodexSetup: () => invoke<void>("cancel_codex_setup"),
-  dreaminaHealth: () => invoke<CodexHealth>("dreamina_health"),
+  // force=true 跳过后端 120s TTL 缓存强制重检（重新检测 / 安装 / 登录 / 登出后）。
+  dreaminaHealth: (force = false) => invoke<CodexHealth>("dreamina_health", { force }),
   dreaminaLogin: () => invoke<void>("dreamina_login"),
   dreaminaCheckLogin: (deviceCode: string) =>
     invoke<CodexHealth>("dreamina_check_login", { deviceCode }),

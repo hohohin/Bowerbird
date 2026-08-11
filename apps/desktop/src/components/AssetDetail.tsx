@@ -129,7 +129,7 @@ export function AssetDetail() {
   const openContextMenu = useStore((s) => s.openContextMenu);
   const cloudAuth = useStore((s) => s.cloudAuth);
   const cloudEntitlement = useStore((s) => s.cloudEntitlement);
-  const cloudEnabled = useStore((s) => s.settings?.cloud_enabled ?? false);
+  const cloudAvailable = cloudAuth?.cloud_available ?? false;
   // 本图反推状态：正在跑 / 在队列里（位置从 1 起）/ 空闲。
   const describing = useStore((s) => s.describingId === id);
   const queuePosition = useStore((s) => {
@@ -466,12 +466,12 @@ export function AssetDetail() {
   const understandReady = understandRoute === "codex"
     ? !!codexHealth?.ok
     : understandRoute === "bowerbird-cloud"
-      ? cloudEnabled && !!cloudAuth?.logged_in
+      ? cloudAvailable && !!cloudAuth?.logged_in
       : false;
   const understandReason = understandRoute === "codex"
     ? codexHealth?.reason || "codex 不可用"
-    : !cloudEnabled
-      ? "Bowerbird Cloud 未启用"
+    : !cloudAvailable
+      ? "当前版本未配置 Bowerbird Cloud"
       : !cloudAuth?.logged_in
         ? "免费版反推需要先登录 Bowerbird Cloud（每日 10 次）"
         : "当前账号没有可用的理解引擎";

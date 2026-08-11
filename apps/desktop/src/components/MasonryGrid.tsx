@@ -134,6 +134,12 @@ function Thumb({
     if (hoverTimer.current) clearTimeout(hoverTimer.current);
     setPreview(null);
   }
+  // 弹出面板（右键菜单/放大预览 portal 到 body）出现时同步收回预览——预览 z-30 低于面板
+  // z-40/z-50，但不收会被它盖住的是面板下方的交互；点图/拖拽/右键本身也应立刻收回。
+  function dismissPreview() {
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    setPreview(null);
+  }
   // 浮层定位：默认鼠标右下偏移，靠右/下边时翻转到左/上，留 pad 不贴边。尺寸跟随缩略图×2。
   let previewLeft = 0;
   let previewTop = 0;
@@ -160,6 +166,7 @@ function Thumb({
       onMouseMove={onMove}
       onMouseLeave={onLeave}
       onClick={() => {
+        dismissPreview();
         const st = useStore.getState();
         // 创作板打开 = 挑图上下文：点瀑布流图即在光标处插入编辑器。
         if (st.boardOpen) {
@@ -172,9 +179,11 @@ function Thumb({
       onContextMenu={(e) => {
         e.preventDefault();
         e.stopPropagation();
+        dismissPreview();
         openContextMenu(e.clientX, e.clientY, shown.id);
       }}
       onDragStart={(e) => {
+        dismissPreview();
         const st = useStore.getState();
         // manage 模式拖已选中项 = 拖全部选中（与 BatchBar 一致）；否则只拖这一张。
         const ids =
@@ -264,7 +273,7 @@ function Thumb({
             src={previewSrc}
             alt=""
             draggable={false}
-            className="pointer-events-none fixed z-50 rounded-md border border-edge bg-panel object-contain shadow-xl"
+            className="pointer-events-none fixed z-30 rounded-md border border-edge bg-panel object-contain shadow-xl"
             style={{ left: previewLeft, top: previewTop, width: preview.w, height: preview.h }}
           />,
           document.body

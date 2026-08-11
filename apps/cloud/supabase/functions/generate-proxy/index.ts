@@ -3,6 +3,7 @@ import { createArkAdapter, type GenerateInput, type ImageInput, type MockScenari
 import { requireUser } from "../_shared/auth.ts";
 import {
   confirmCredits,
+  ensureDailyCredits,
   holdCredits,
   markPendingSettlement,
   rollbackCredits,
@@ -101,6 +102,7 @@ Deno.serve(async (request) => {
         images: pending.images,
       }, 200, cors);
     }
+    await ensureDailyCredits(admin, user.id);
     const body = raw as GenerateRequest;
     validate(body);
     const service = serviceFor(body);

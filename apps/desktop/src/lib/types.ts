@@ -193,14 +193,11 @@ export interface AppSettings {
   auto_analyze_on_ingest: boolean;
   auto_analyze_prompt: string;
   library_root: string | null;
-  cloud_enabled: boolean;
-  cloud_supabase_url: string | null;
-  cloud_supabase_publishable_key: string | null;
-  cloud_mock: boolean;
   cloud_auto_understand: boolean;
 }
 
 export interface AuthSnapshot {
+  cloud_available: boolean;
   logged_in: boolean;
   user_id: string | null;
   email: string | null;

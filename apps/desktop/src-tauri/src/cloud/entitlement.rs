@@ -99,7 +99,7 @@ impl EntitlementService {
             .cloud
             .config()
             .endpoint("entitlement")
-            .ok_or_else(|| AppError::Cloud("Bowerbird Cloud 未启用或端点未配置".into()))?;
+            .ok_or_else(|| AppError::Cloud("当前构建未配置 Bowerbird Cloud".into()))?;
         let response = self
             .cloud
             .http()

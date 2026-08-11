@@ -2,7 +2,9 @@ import { useState } from "react";
 import { useStore } from "../store";
 import { api } from "../lib/api";
 import { getDragAssets } from "../lib/dragPayload";
+import { understandProvider } from "../lib/entitlement";
 import { ProjectSection } from "./ProjectSection";
+import { SidebarAccount } from "./SidebarAccount";
 import type { Folder } from "../lib/types";
 
 /** 颜色桶 key → 中文 label（P3；hex 由后端 palette_overview 带回）。 */
@@ -12,7 +14,7 @@ const COLOR_LABELS: Record<string, string> = {
   white: "白", black: "黑",
 };
 
-/** 左侧栏：素材统计 + 文件夹/智能文件夹 + 颜色筛选。 */
+/** 左侧栏：素材统计 + 文件夹/智能文件夹 + 颜色筛选 + 底部账号区。 */
 export function Sidebar() {
   const total = useStore((s) => s.total);
   const selectedCount = useStore((s) => s.selectedIds.size);
@@ -27,6 +29,19 @@ export function Sidebar() {
   const setSmartFilter = useStore((s) => s.setSmartFilter);
   const reloadFolders = useStore((s) => s.reloadFolders);
   const autoTags = useStore((s) => s.autoTags);
+  const colorRebuild = useStore((s) => s.colorRebuild);
+  const classifyProgress = useStore((s) => s.classifyProgress);
+  const codexHealth = useStore((s) => s.codexHealth);
+  const cloudAuth = useStore((s) => s.cloudAuth);
+  const cloudEntitlement = useStore((s) => s.cloudEntitlement);
+  // 智能归类可用性（照设置面板原算法）：free 需登录云端；Pro 可用本机 CLI。
+  const understandRoute = understandProvider(cloudEntitlement);
+  const understandReady = understandRoute === "codex"
+    ? !!codexHealth?.ok
+    : understandRoute === "bowerbird-cloud"
+      ? !!cloudAuth?.cloud_available && !!cloudAuth.logged_in
+      : false;
+  const understandLabel = understandRoute === "codex" ? "codex CLI" : "Bowerbird Cloud";
 
   // inline 新建表单：none | folder | smart | collection（避开 window.prompt——Tauri WKWebView 拦截原生对话框）。
   const [creating, setCreating] = useState<"none" | "folder" | "smart" | "collection">("none");
@@ -76,7 +91,8 @@ export function Sidebar() {
   }
 
   return (
-    <aside className="w-56 shrink-0 overflow-y-auto border-r border-edge bg-panel p-3 text-sm">
+    <aside className="flex w-56 shrink-0 flex-col border-r border-edge bg-panel text-sm">
+      <div className="flex-1 overflow-y-auto p-3">
       <div className="mb-4">
         <div className="text-xs uppercase tracking-wide text-muted">
           {currentProjectId ? "项目素材" : "素材总数"}
@@ -220,14 +236,35 @@ export function Sidebar() {
         <>
           <div className="mb-2 mt-4 flex items-center justify-between text-xs uppercase tracking-wide text-muted">
             <span>自动归类</span>
-            {smartFilter?.startsWith("tag:") && (
+            <span className="flex items-center gap-1.5 normal-case tracking-normal">
+              {classifyProgress && (
+                <span className="tabular-nums text-[10px] text-muted">
+                  归类中 {classifyProgress.done}/{classifyProgress.total}
+                </span>
+              )}
+              {smartFilter?.startsWith("tag:") && (
+                <button
+                  onClick={() => setSmartFilter(null)}
+                  className="text-accent hover:opacity-80"
+                >
+                  清除
+                </button>
+              )}
               <button
-                onClick={() => setSmartFilter(null)}
-                className="text-accent hover:opacity-80"
+                onClick={() =>
+                  api.reclassifyAll().catch((e) => console.error("reclassifyAll failed", e))
+                }
+                disabled={!!classifyProgress || !understandReady}
+                title={
+                  understandReady
+                    ? `使用 ${understandLabel} 重新归类`
+                    : "免费版需要先登录 Bowerbird Cloud；Pro 可使用本机 CLI"
+                }
+                className="text-accent hover:opacity-80 disabled:opacity-40"
               >
-                清除
+                ⟳ 刷新
               </button>
-            )}
+            </span>
           </div>
           <div className="grid grid-cols-2 gap-1">
             {autoTags.map((t) => {
@@ -255,14 +292,31 @@ export function Sidebar() {
         <>
           <div className="mb-2 mt-4 flex items-center justify-between text-xs uppercase tracking-wide text-muted">
             <span>颜色</span>
-            {colorFilter && (
+            <span className="flex items-center gap-1.5 normal-case tracking-normal">
+              {colorRebuild && (
+                <span className="tabular-nums text-[10px] text-muted">
+                  重建中 {colorRebuild.done}/{colorRebuild.total}
+                </span>
+              )}
+              {colorFilter && (
+                <button
+                  onClick={() => setColorFilter(null)}
+                  className="text-accent hover:opacity-80"
+                >
+                  清除
+                </button>
+              )}
               <button
-                onClick={() => setColorFilter(null)}
-                className="text-accent hover:opacity-80"
+                onClick={() =>
+                  api.recomputeColors().catch((e) => console.error("recomputeColors failed", e))
+                }
+                disabled={!!colorRebuild}
+                title="重建色板（后台重新量化全库主色）"
+                className="text-accent hover:opacity-80 disabled:opacity-40"
               >
-                清除
+                ⟳ 刷新
               </button>
-            )}
+            </span>
           </div>
           <div className="grid grid-cols-6 gap-1.5">
             {palette.map((c) => (
@@ -287,6 +341,9 @@ export function Sidebar() {
           <div className="mt-1 text-xs text-muted">批量模式 · 点击切换选中</div>
         </>
       )}
+      </div>
+      {/* 账号区：chatgpt 式，常驻左下角，不随内容滚动 */}
+      <SidebarAccount />
     </aside>
   );
 }

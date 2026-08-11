@@ -77,22 +77,10 @@ pub fn run() {
             // 设置：从 <app_data>/settings.json 加载（文件不存在则用默认值）。
             let settings_path = app_dir.join("settings.json");
             let settings_state = core::settings::SettingsState::init(settings_path)?;
-            let mut settings_snapshot = settings_state.get();
-            // 已入库的 Supabase 连接配置以 apps/cloud/.env(.local) 为权威；桌面 settings.json 只保留
-            // 开关/Mock 选择，避免要求用户把公开 Project URL/key 再手动粘贴一遍。没有本地 env 时仍读 settings。
-            let env_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../cloud/.env");
-            let (env_url, env_key) = cloud::config::read_public_supabase_config(&env_path);
-            if let (Some(url), Some(key)) = (env_url, env_key) {
-                settings_snapshot.cloud_supabase_url = Some(url);
-                settings_snapshot.cloud_supabase_publishable_key = Some(key);
-            }
-            let cloud_client = cloud::CloudClient::new(cloud::config::CloudConfig {
-                enabled: settings_snapshot.cloud_enabled,
-                supabase_url: settings_snapshot.cloud_supabase_url.clone(),
-                supabase_publishable_key: settings_snapshot.cloud_supabase_publishable_key.clone(),
-                mock: settings_snapshot.cloud_mock,
-            })?;
+            let settings_snapshot = settings_state.get();
+            // P9-T5：官方公开连接配置在构建时内置，不能由用户 settings.json 覆盖。
+            // Mock/真实 adapter 只由 Edge Function 的 BOWERBIRD_CLOUD_MOCK Secret 决定。
+            let cloud_client = cloud::CloudClient::new(cloud::config::CloudConfig::official())?;
             let auth_client = cloud::AuthClient::new(cloud_client.clone());
             let entitlement_service = cloud::EntitlementService::new(
                 cloud_client.clone(),

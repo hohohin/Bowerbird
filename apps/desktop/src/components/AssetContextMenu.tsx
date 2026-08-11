@@ -39,7 +39,7 @@ export function AssetContextMenu() {
   const codexHealth = useStore((s) => s.codexHealth);
   const cloudAuth = useStore((s) => s.cloudAuth);
   const cloudEntitlement = useStore((s) => s.cloudEntitlement);
-  const cloudEnabled = useStore((s) => s.settings?.cloud_enabled ?? false);
+  const cloudAvailable = cloudAuth?.cloud_available ?? false;
 
   const [busy, setBusy] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -100,7 +100,7 @@ export function AssetContextMenu() {
   const understandReady = understandRoute === "codex"
     ? !!codexHealth?.ok
     : understandRoute === "bowerbird-cloud"
-      ? cloudEnabled && !!cloudAuth?.logged_in
+      ? cloudAvailable && !!cloudAuth?.logged_in
       : false;
   const understandReason = understandRoute === "codex"
     ? codexHealth?.reason || "codex 不可用"

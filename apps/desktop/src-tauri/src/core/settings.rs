@@ -20,10 +20,6 @@ fn default_auto_analyze_prompt() -> String {
     DEFAULT_AUTO_ANALYZE_PROMPT.to_string()
 }
 
-fn default_cloud_mock() -> bool {
-    true
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     /// 入库时自动反推 + 自动重命名
@@ -39,23 +35,6 @@ pub struct AppSettings {
     #[serde(default)]
     pub library_root: Option<String>,
 
-    /// Bowerbird Cloud 总开关。默认关闭，关闭时不得发起任何云请求。
-    #[serde(default)]
-    pub cloud_enabled: bool,
-
-    /// Supabase 项目 URL（公开配置，不是机密）。
-    #[serde(default)]
-    pub cloud_supabase_url: Option<String>,
-
-    /// Supabase publishable key（公开配置；secret key 永不进入桌面端）。
-    /// `alias` 兼容旧 settings.json 的 cloud_supabase_anon_key，重新保存后使用新字段名。
-    #[serde(default, alias = "cloud_supabase_anon_key")]
-    pub cloud_supabase_publishable_key: Option<String>,
-
-    /// 外部凭据未就绪阶段使用 Mock Functions。默认 true，避免误触真实计费。
-    #[serde(default = "default_cloud_mock")]
-    pub cloud_mock: bool,
-
     /// 入库自动理解是否允许把新图片临时发送到 Bowerbird Cloud。默认 false，必须显式开启。
     #[serde(default)]
     pub cloud_auto_understand: bool,
@@ -67,10 +46,6 @@ impl Default for AppSettings {
             auto_analyze_on_ingest: false,
             auto_analyze_prompt: DEFAULT_AUTO_ANALYZE_PROMPT.to_string(),
             library_root: None,
-            cloud_enabled: false,
-            cloud_supabase_url: None,
-            cloud_supabase_publishable_key: None,
-            cloud_mock: true,
             cloud_auto_understand: false,
         }
     }
@@ -85,12 +60,30 @@ pub struct SettingsState {
 impl SettingsState {
     /// 从 settings.json 加载；文件不存在则用默认值。
     pub fn init(path: PathBuf) -> AppResult<Self> {
-        let settings = if path.exists() {
+        let (settings, had_legacy_cloud_fields) = if path.exists() {
             let json = std::fs::read_to_string(&path)?;
-            serde_json::from_str(&json).unwrap_or_default()
+            let value: serde_json::Value = serde_json::from_str(&json).unwrap_or_default();
+            let had_legacy = value.as_object().is_some_and(|object| {
+                [
+                    "cloud_enabled",
+                    "cloud_supabase_url",
+                    "cloud_supabase_publishable_key",
+                    "cloud_supabase_anon_key",
+                    "cloud_mock",
+                ]
+                .iter()
+                .any(|key| object.contains_key(*key))
+            });
+            (
+                serde_json::from_value(value).unwrap_or_default(),
+                had_legacy,
+            )
         } else {
-            AppSettings::default()
+            (AppSettings::default(), false)
         };
+        if had_legacy_cloud_fields {
+            std::fs::write(&path, serde_json::to_string_pretty(&settings)?)?;
+        }
         Ok(Self {
             settings: RwLock::new(settings),
             path,
@@ -119,19 +112,35 @@ impl SettingsState {
 
 #[cfg(test)]
 mod tests {
-    use super::AppSettings;
+    use super::{AppSettings, SettingsState};
 
     #[test]
-    fn old_settings_default_cloud_to_disabled_mock() {
+    fn old_settings_ignores_legacy_cloud_connection_fields() {
         let settings: AppSettings = serde_json::from_str(
-            r#"{"auto_analyze_on_ingest":true,"auto_analyze_prompt":"test","library_root":null}"#,
+            r#"{"auto_analyze_on_ingest":true,"auto_analyze_prompt":"test","library_root":null,"cloud_enabled":false,"cloud_supabase_url":"https://other.invalid","cloud_supabase_publishable_key":"old","cloud_mock":true,"cloud_auto_understand":true}"#,
         )
         .unwrap();
 
-        assert!(!settings.cloud_enabled);
-        assert!(settings.cloud_mock);
-        assert_eq!(settings.cloud_supabase_url, None);
-        assert_eq!(settings.cloud_supabase_publishable_key, None);
-        assert!(!settings.cloud_auto_understand);
+        assert!(settings.cloud_auto_understand);
+        assert_eq!(settings.auto_analyze_prompt, "test");
+    }
+
+    #[test]
+    fn init_removes_legacy_cloud_connection_fields_from_disk() {
+        let dir = std::env::temp_dir().join(format!("bb-settings-{}", ulid::Ulid::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{"cloud_enabled":false,"cloud_mock":true,"cloud_auto_understand":true}"#,
+        )
+        .unwrap();
+
+        let state = SettingsState::init(path.clone()).unwrap();
+        assert!(state.get().cloud_auto_understand);
+        let rewritten = std::fs::read_to_string(&path).unwrap();
+        assert!(!rewritten.contains("cloud_enabled"));
+        assert!(!rewritten.contains("cloud_mock"));
+        std::fs::remove_dir_all(dir).ok();
     }
 }

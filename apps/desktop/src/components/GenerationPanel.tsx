@@ -24,7 +24,7 @@ export function GenerationPanel() {
   const dreaminaHealth = useStore((s) => s.dreaminaHealth);
   const cloudAuth = useStore((s) => s.cloudAuth);
   const cloudEntitlement = useStore((s) => s.cloudEntitlement);
-  const cloudEnabled = useStore((s) => s.settings?.cloud_enabled ?? false);
+  const cloudAvailable = cloudAuth?.cloud_available ?? false;
   const setGenPanelOpen = useStore((s) => s.setGenPanelOpen);
   const sendGenRevise = useStore((s) => s.sendGenRevise);
   const cancelGeneration = useStore((s) => s.cancelGeneration);
@@ -58,7 +58,7 @@ export function GenerationPanel() {
     : 0;
   const policyAllowsProvider = canUseGenerationProvider(cloudEntitlement, activeProvider);
   const targetReady = policyAllowsProvider && (activeProvider === "bowerbird-cloud"
-    ? cloudEnabled && !!cloudAuth?.logged_in && cloudBalance > 0
+    ? cloudAvailable && !!cloudAuth?.logged_in && cloudBalance > 0
     : !!targetHealth?.ok);
   const lockedReason = !policyAllowsProvider
     ? "升级 Pro 解锁本机 Codex / 即梦 CLI"

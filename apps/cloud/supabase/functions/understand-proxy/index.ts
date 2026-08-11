@@ -1,7 +1,12 @@
 import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import { createArkAdapter, type ImageInput, type MockScenario } from "../_shared/ark.ts";
 import { requireUser } from "../_shared/auth.ts";
-import { confirmCredits, holdCredits, rollbackCredits } from "../_shared/billing.ts";
+import {
+  confirmCredits,
+  ensureDailyCredits,
+  holdCredits,
+  rollbackCredits,
+} from "../_shared/billing.ts";
 import { ApiError, errorResponse, jsonResponse, requestId, safeLog } from "../_shared/errors.ts";
 import { assertBodySize, assertReferenceImages, corsHeaders, withTimeout } from "../_shared/limits.ts";
 import { reserveManagedUsage } from "../_shared/usage.ts";
@@ -58,6 +63,7 @@ Deno.serve(async (request) => {
     userId = user.id;
     adminClient = admin;
     const body = validate(await request.json());
+    await ensureDailyCredits(admin, user.id);
     const tier = await tierFor(admin, user.id);
     if (tier === "free") {
       const limit = Number.parseInt(Deno.env.get("FREE_CAPTION_DAILY_LIMIT") ?? "10", 10);

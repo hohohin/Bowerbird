@@ -16,6 +16,7 @@ const CALLBACK_PREFIX: &str = "bowerbird://auth/callback";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AuthSnapshot {
+    pub cloud_available: bool,
     pub logged_in: bool,
     pub user_id: Option<String>,
     pub email: Option<String>,
@@ -95,8 +96,10 @@ impl AuthClient {
 
     pub fn snapshot(&self) -> AuthSnapshot {
         let session = self.inner.session.read().unwrap();
+        let cloud_available = self.inner.cloud.config().is_available();
         match session.as_ref() {
             Some(value) => AuthSnapshot {
+                cloud_available,
                 logged_in: true,
                 user_id: value.user_id.clone(),
                 email: value.email.clone(),
@@ -104,14 +107,15 @@ impl AuthClient {
                 reason: None,
             },
             None => AuthSnapshot {
+                cloud_available,
                 logged_in: false,
                 user_id: None,
                 email: None,
                 access_expires_at: None,
-                reason: Some(if self.inner.cloud.config().enabled {
+                reason: Some(if cloud_available {
                     "未登录 Bowerbird 账号".into()
                 } else {
-                    "Bowerbird Cloud 未启用".into()
+                    "当前版本未配置 Bowerbird Cloud".into()
                 }),
             },
         }
@@ -334,10 +338,8 @@ mod tests {
     fn client() -> AuthClient {
         AuthClient::new(
             CloudClient::new(CloudConfig {
-                enabled: true,
                 supabase_url: Some("https://example.supabase.co".into()),
                 supabase_publishable_key: Some("sb_publishable_test".into()),
-                mock: true,
             })
             .unwrap(),
         )

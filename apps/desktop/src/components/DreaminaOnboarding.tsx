@@ -163,10 +163,26 @@ export function DreaminaOnboarding() {
           即梦是国内图像生成模型，作为 codex 的备选出图 provider（消耗你的即梦会员积分）。配置后可在创作板切换使用。不配置也能正常使用 codex 出图与所有本地功能。
         </p>
 
-        {/* 当前状态：就绪 → 绿；未就绪 → 红 + 后端 reason。 */}
+        {/* 当前状态：就绪 → 绿；未就绪 → 红 + 后端 reason。已登录可登出（设置面板的登出入口已随
+            「AI 出图引擎」板块删除，登出收敛到这里）。 */}
         {ready ? (
-          <div className="mt-4 rounded bg-green-500/15 p-2 text-xs text-green-400">
-            ✓ dreamina 已就绪，无需配置，可直接关闭此窗口。
+          <div className="mt-4 flex items-center justify-between gap-2 rounded bg-green-500/15 p-2 text-xs text-green-400">
+            <span>✓ dreamina 已就绪，无需配置，可直接关闭此窗口。</span>
+            <button
+              onClick={async () => {
+                try {
+                  await api.dreaminaLogout();
+                  await recheck();
+                } catch (e) {
+                  setLoginError(String(e));
+                }
+              }}
+              disabled={checking}
+              className="shrink-0 rounded-md bg-panel px-3 py-1 text-xs text-ink hover:bg-red-500/20 hover:text-red-300 disabled:opacity-50"
+              title="登出即梦账号（dreamina logout）"
+            >
+              登出即梦账号
+            </button>
           </div>
         ) : (
           <div className="mt-4 rounded bg-red-500/15 p-2 text-xs text-red-300">

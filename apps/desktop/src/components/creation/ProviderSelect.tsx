@@ -19,7 +19,7 @@ export function ProviderSelect({
   onChange,
   codexHealth,
   dreaminaHealth,
-  cloudEnabled = false,
+  cloudAvailable = false,
   cloudAuth = null,
   cloudEntitlement = null,
 }: {
@@ -27,7 +27,7 @@ export function ProviderSelect({
   onChange: (p: string) => void;
   codexHealth: CodexHealth | null;
   dreaminaHealth: CodexHealth | null;
-  cloudEnabled?: boolean;
+  cloudAvailable?: boolean;
   cloudAuth?: AuthSnapshot | null;
   cloudEntitlement?: EntitlementSnapshot | null;
 }) {
@@ -57,8 +57,8 @@ export function ProviderSelect({
               ? cloudEntitlement.balances.daily + cloudEntitlement.balances.sub + cloudEntitlement.balances.topup
               : 0;
             const reason = isCloud
-              ? !cloudEnabled
-                ? "Bowerbird Cloud 未启用"
+              ? !cloudAvailable
+                ? "当前版本未配置 Bowerbird Cloud"
                 : !cloudAuth?.logged_in
                   ? "请先登录 Bowerbird 账号"
                   : cloudBalance <= 0

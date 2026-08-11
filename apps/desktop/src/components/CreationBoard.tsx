@@ -42,7 +42,7 @@ export function CreationBoard() {
   const dreaminaHealth = useStore((s) => s.dreaminaHealth);
   const cloudAuth = useStore((s) => s.cloudAuth);
   const cloudEntitlement = useStore((s) => s.cloudEntitlement);
-  const cloudEnabled = useStore((s) => s.settings?.cloud_enabled ?? false);
+  const cloudAvailable = cloudAuth?.cloud_available ?? false;
   const runningJobCount = useStore((s) => Object.values(s.genJobs).filter((j) => j.running).length);
   const activeGenProvider = useStore((s) => s.activeGenProvider);
   const setActiveGenProvider = useStore((s) => s.setActiveGenProvider);
@@ -87,7 +87,7 @@ export function CreationBoard() {
     ? cloudEntitlement.balances.daily + cloudEntitlement.balances.sub + cloudEntitlement.balances.topup
     : 0;
   const targetReady = activeGenProvider === "bowerbird-cloud"
-    ? cloudEnabled && !!cloudAuth?.logged_in && cloudBalance > 0
+    ? cloudAvailable && !!cloudAuth?.logged_in && cloudBalance > 0
     : activeGenProvider === "jimeng"
       ? canUseByo(cloudEntitlement) && !!dreaminaHealth?.ok
       : canUseByo(cloudEntitlement) && !!codexHealth?.ok;
@@ -324,7 +324,7 @@ export function CreationBoard() {
               onChange={setActiveGenProvider}
               codexHealth={codexHealth}
               dreaminaHealth={dreaminaHealth}
-              cloudEnabled={cloudEnabled}
+              cloudAvailable={cloudAvailable}
               cloudAuth={cloudAuth}
               cloudEntitlement={cloudEntitlement}
             />

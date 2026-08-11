@@ -250,6 +250,7 @@ create table orders (
 | P9-T2 | 回归基线：`cargo test` 全绿（含新增）、`tsc --noEmit`、Vite build、官网 build、扩展 node tests | CI 式清单全过 |
 | P9-T3 | 安全审计：RLS 全表复核、key 零入仓、webhook 验签、熔断值、日志脱敏 | 审计清单逐项过 |
 | P9-T4 | 文档收尾：按 AGENTS.md 维护规则更新 PROJECT.md（关键约定 1 演进为「托管 + BYO 双轨」、新增约定「云只承载账号/积分/算力」）、AGENTS.md/CLAUDE.md 索引、版本号日期化 | 存档 commit |
+| P9-T5 | 正式版 Cloud 配置收口：Supabase URL/publishable key 由构建环境内置，移除用户设置中的 URL/key/启用/Mock 技术选项；Mock/真实仅由 Edge Secret 决定；保留云端自动理解隐私授权并清理旧 settings 字段 | 设置页无可编辑云基础设施参数；旧配置不能改写官方 endpoint；登录/生成/理解门控读取实际构建可用状态；桌面 Rust/TS/Vite 回归全绿 |
 
 ---
 

@@ -60,7 +60,7 @@ cd apps/cloud
 npx --yes supabase@latest --agent no db push
 ```
 
-会依次执行 `supabase/migrations/0001_*.sql` 到 `0010_managed_usage_guard.sql`。`0010` 必须先于新版 `generate-proxy` / `understand-proxy` 部署，否则 Function 找不到用量守卫 RPC。
+会依次执行 `supabase/migrations/0001_*.sql` 到 `0011_ensure_daily_credits.sql`。`0010` 必须先于新版 `generate-proxy` / `understand-proxy` 部署，否则 Function 找不到用量守卫 RPC；`0011` 必须先于新版 `entitlement` / `generate-proxy` / `understand-proxy` 部署，否则 Function 找不到当日积分补发 RPC。
 
 ### 4. 部署 Edge Functions 并注入 Secrets
 
@@ -125,7 +125,7 @@ Remove-Item Env:CLOUD_E2E_FUNCTION_REGION
 
 ## 7. 桌面端/官网真机验收
 
-- 桌面端：设置 → Bowerbird Cloud 连接 → 启用云端 → 保存连接配置 → 重启 app → 邮箱 Magic Link 登录 → 创作板选「Bowerbird Cloud」出图 → 查看积分扣减与流水。正式调用默认路由到东京 `ap-northeast-1`。
+- 桌面端：构建前通过构建环境或 gitignored `apps/cloud/.env(.local)` 提供 `SUPABASE_URL` + publishable key；官方构建会将二者内置，用户设置不能修改。启动 app → 确认设置中 Bowerbird Cloud 显示“官方服务已配置” → 邮箱 Magic Link 登录 → 创作板选「Bowerbird Cloud」出图 → 查看积分扣减与流水。正式调用默认路由到东京 `ap-northeast-1`。
 - 官网：把 `SUPABASE_URL` 与 `SUPABASE_PUBLISHABLE_KEY` 填到 `website/.env.local` 与 Render 环境变量，重启后登录验证共享积分。
 
 ## 支付（Mock）
@@ -134,7 +134,7 @@ Remove-Item Env:CLOUD_E2E_FUNCTION_REGION
 
 ## 注意事项
 
-- 所有 secrets 只在 Edge Functions 运行环境持有；桌面端只持 publishable key。
+- 所有 secrets 只在 Edge Functions 运行环境持有；桌面端只持构建期内置的 URL/publishable key，用户不能编辑。
 - `DAILY_COST_LIMIT_CNY` 是上海自然日的全站预估成本上限；单次预估成本 = 预扣积分 × `COST_CNY_PER_CREDIT`（默认 ¥0.047）。`RATE_LIMIT_PER_USER_PER_MIN` 是同账号每分钟首次上游请求数；同一幂等键重放不重复占用额度，也不会重复提交上游。
 - `BOWERBIRD_CLOUD_MOCK` 与 `BOWERBIRD_PAYMENT_MOCK` 是两个独立开关：前者控制算力，后者控制支付。
 - 部署完成后请告诉我「已部署」，我会继续真机验收（登录 → 积分 → 生成 → 流水 → 扣费/回滚）。

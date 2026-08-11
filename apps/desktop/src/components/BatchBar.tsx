@@ -17,7 +17,7 @@ export function BatchBar() {
   const codexHealth = useStore((s) => s.codexHealth);
   const cloudAuth = useStore((s) => s.cloudAuth);
   const cloudEntitlement = useStore((s) => s.cloudEntitlement);
-  const cloudEnabled = useStore((s) => s.settings?.cloud_enabled ?? false);
+  const cloudAvailable = cloudAuth?.cloud_available ?? false;
   // 移入已有只列普通夹（排除 root、智能夹与收藏夹）。
   const existingFolders = folders.filter((f) => f.id !== "root" && (f.kind ?? "folder") === "folder");
 
@@ -38,7 +38,7 @@ export function BatchBar() {
   const understandReady = understandRoute === "codex"
     ? !!codexHealth?.ok
     : understandRoute === "bowerbird-cloud"
-      ? cloudEnabled && !!cloudAuth?.logged_in
+      ? cloudAvailable && !!cloudAuth?.logged_in
       : false;
   const understandLabel = understandRoute === "codex" ? "codex CLI" : "Bowerbird Cloud";
 
@@ -252,7 +252,7 @@ export function BatchBar() {
           className="rounded bg-panel2 px-2.5 py-1 text-xs hover:bg-edge disabled:opacity-50"
           title={understandReady
             ? `${understandLabel} 看图生成提示词并写库`
-            : "免费版需要先登录并启用 Bowerbird Cloud；Pro 可使用本机 CLI"}
+            : "免费版需要先登录 Bowerbird Cloud；Pro 可使用本机 CLI"}
         >
           批量生成提示词
         </button>

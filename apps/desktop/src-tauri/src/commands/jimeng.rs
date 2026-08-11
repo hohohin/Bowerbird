@@ -7,7 +7,8 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::time::Duration;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
@@ -17,11 +18,39 @@ use crate::codex::jimeng::{dreamina_command, resolve_dreamina_binary};
 use crate::commands::codex::CodexHealth;
 use crate::error::AppError;
 
+/// 即梦健康检测结果缓存（TTL 内重复检测直接复用，不重复 spawn `version`/`user_credit`——
+/// 后者是联网调用；健康状态短时间不会变，只有用户显式「重新检测」/安装/登录/登出才强制刷新）。
+const HEALTH_TTL: Duration = Duration::from_secs(120);
+static HEALTH_CACHE: Mutex<Option<(CodexHealth, Instant)>> = Mutex::new(None);
+
+fn cached_health() -> Option<CodexHealth> {
+    let cache = HEALTH_CACHE.lock().unwrap();
+    cache
+        .as_ref()
+        .filter(|(_, at)| at.elapsed() < HEALTH_TTL)
+        .map(|(h, _)| h.clone())
+}
+
+fn store_health(h: CodexHealth) -> CodexHealth {
+    *HEALTH_CACHE.lock().unwrap() = Some((h.clone(), Instant::now()));
+    h
+}
+
+fn clear_health_cache() {
+    *HEALTH_CACHE.lock().unwrap() = None;
+}
+
 /// 检测 dreamina 是否可用：① CLI 可执行（`dreamina version`）；② 已登录。
 /// 登录态由 `check_dreamina_logged_in` spawn `user_credit` 动态验证（返回余额 JSON = 有效）。
 /// 任一不满足返回 `ok=false` + 中文 reason，前端据此置灰（约定 7）。
+/// `force=true` 跳过缓存强制重检（手动「重新检测」/安装/登录/登出后），默认吃 120s TTL 缓存。
 #[tauri::command]
-pub async fn dreamina_health() -> Result<CodexHealth, AppError> {
+pub async fn dreamina_health(force: Option<bool>) -> Result<CodexHealth, AppError> {
+    if force != Some(true) {
+        if let Some(h) = cached_health() {
+            return Ok(h);
+        }
+    }
     let binary = resolve_dreamina_binary();
     let binary_ok = if let Some(binary) = binary.as_deref() {
         dreamina_command(binary)
@@ -34,22 +63,22 @@ pub async fn dreamina_health() -> Result<CodexHealth, AppError> {
         false
     };
     if !binary_ok {
-        return Ok(CodexHealth {
+        return Ok(store_health(CodexHealth {
             ok: false,
             reason: "未检测到 dreamina CLI（运行 curl -s https://jimeng.jianying.com/cli | bash 安装）".into(),
-        });
+        }));
     }
     let binary_str = binary.as_deref().unwrap_or("dreamina");
     if !check_dreamina_logged_in(binary_str).await {
-        return Ok(CodexHealth {
+        return Ok(store_health(CodexHealth {
             ok: false,
             reason: "dreamina 未登录（运行 dreamina login）".into(),
-        });
+        }));
     }
-    Ok(CodexHealth {
+    Ok(store_health(CodexHealth {
         ok: true,
         reason: String::new(),
-    })
+    }))
 }
 
 /// 检测 dreamina 登录态：spawn `user_credit`，exit 0 + stdout 含余额字段 = 已登录。
@@ -122,7 +151,7 @@ pub async fn dreamina_check_login(device_code: String) -> Result<CodexHealth, Ap
         .map_err(|_| AppError::Jimeng("dreamina checklogin 超时（90s）".into()))?
         .map_err(|e| AppError::Jimeng(format!("启动 checklogin 失败: {e}")))?;
     if check_dreamina_logged_in(&binary).await {
-        Ok(CodexHealth { ok: true, reason: String::new() })
+        Ok(store_health(CodexHealth { ok: true, reason: String::new() }))
     } else {
         // 诊断：附 device_code 前 8 + checklogin exit + 输出（如「登录已过期」/未授权）。
         let dc_head: String = device_code.chars().take(8).collect();
@@ -130,10 +159,10 @@ pub async fn dreamina_check_login(device_code: String) -> Result<CodexHealth, Ap
         let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
         let diag = if !stdout.is_empty() { stdout } else { stderr };
         let diag: String = diag.chars().take(200).collect();
-        Ok(CodexHealth {
+        Ok(store_health(CodexHealth {
             ok: false,
             reason: format!("授权未完成（device_code {dc_head}…, checklogin exit {}）| {diag}", out.status),
-        })
+        }))
     }
 }
 
@@ -410,6 +439,8 @@ pub async fn dreamina_logout() -> Result<(), AppError> {
             out.status
         )));
     }
+    // 登出后登录态已变，清缓存避免 TTL 内返回「已登录」。
+    clear_health_cache();
     Ok(())
 }
 
