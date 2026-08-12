@@ -196,12 +196,12 @@ export function Sidebar() {
         </div>
         <div
           className={`flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 ${
-            smartFilter === "source:codex" ? "bg-panel2" : "hover:bg-panel2"
+            smartFilter === "source:generated" ? "bg-panel2" : "hover:bg-panel2"
           }`}
           onClick={() =>
-            setSmartFilter(smartFilter === "source:codex" ? null : "source:codex")
+            setSmartFilter(smartFilter === "source:generated" ? null : "source:generated")
           }
-          title="只看 codex 生成的图（source:codex）"
+          title="只看生成图（codex / 即梦 / Bowerbird Cloud）"
         >
           ✨ 生成图
         </div>

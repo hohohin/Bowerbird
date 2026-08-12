@@ -144,9 +144,9 @@ export function CodexOnboarding() {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
       <div className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-lg border border-edge bg-panel p-6 shadow-2xl">
-        <h2 className="text-lg font-semibold text-ink">配置 codex 以启用 AI 功能</h2>
+        <h2 className="text-lg font-semibold text-ink">配置 codex CLI（可选）</h2>
         <p className="mt-1.5 text-sm text-muted">
-          反推、生成图、采集即命名都依赖 codex CLI（走你的 ChatGPT 订阅）。不配置也能正常使用本地素材库——浏览、搜索、整理、收藏。
+          codex CLI 用你的 ChatGPT 订阅做反推、生成图、采集即命名，质量最佳，仅 Pro/Studio 可用。免费档无需配置——登录 Bowerbird 账号即可用 Cloud 反推 / 生成图。不配置也能正常使用本地素材库：浏览、搜索、整理、收藏。
         </p>
 
         {/* 当前状态：就绪 → 绿（提示可直接关闭）；未就绪 → 红 + 后端 reason。 */}

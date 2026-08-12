@@ -67,9 +67,7 @@ mod tests {
     fn assemble_pack_aggregates_main_role_only() {
         let dir = std::env::temp_dir().join(format!("bb-prompt-{}", Ulid::new()));
         std::fs::create_dir_all(&dir).unwrap();
-        let tmp = Tmp {
-            dir: dir.clone(),
-        };
+        let tmp = Tmp { dir: dir.clone() };
         let paths = LibraryPaths::init(dir.clone()).unwrap();
         let db = Database::open_in_memory().unwrap();
         db.migrate().unwrap();

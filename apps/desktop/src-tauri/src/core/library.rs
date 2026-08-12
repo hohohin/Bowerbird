@@ -2,14 +2,14 @@
 //! Database 的业务方法 split-impl 在本文件（连接管理仍在 db/mod.rs）。
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use ulid::Ulid;
 
 use crate::db::Database;
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Asset {
@@ -152,7 +152,11 @@ struct CaptionPayload {
 
 fn parse_caption_payload(
     payload: Option<String>,
-) -> (Option<Vec<CaptionSection>>, Option<BTreeMap<String, String>>, Option<String>) {
+) -> (
+    Option<Vec<CaptionSection>>,
+    Option<BTreeMap<String, String>>,
+    Option<String>,
+) {
     let Some(payload) = payload else {
         return (None, None, None);
     };
@@ -188,7 +192,8 @@ fn asset_from_row(r: &rusqlite::Row) -> rusqlite::Result<Asset> {
     })
 }
 
-const ASSET_COLS: &str = "id, name, ext, origin_path, store_path, thumb_path, size, width, height, \
+const ASSET_COLS: &str =
+    "id, name, ext, origin_path, store_path, thumb_path, size, width, height, \
     duration, phash, colors, rating, source, source_url, folder_id, created_at, file_mtime, \
     generation_session_id";
 const ASSET_COLS_A: &str = "a.id, a.name, a.ext, a.origin_path, a.store_path, a.thumb_path, \
@@ -199,7 +204,10 @@ const ASSET_COLS_A: &str = "a.id, a.name, a.ext, a.origin_path, a.store_path, a.
 /// 即最新一张。按 session 去重保首见、丢后续过程图；无 session（非生成图）原样全留。
 /// search_assets 走 rank 序，首见=最高相关一张，可接受。泛型：Asset 与 PromptedAsset 各传
 /// 一个 session 提取闭包即可（commands 层应用）。
-pub fn collapse_generation_groups<T>(items: Vec<T>, session: impl Fn(&T) -> Option<&str>) -> Vec<T> {
+pub fn collapse_generation_groups<T>(
+    items: Vec<T>,
+    session: impl Fn(&T) -> Option<&str>,
+) -> Vec<T> {
     let mut seen = std::collections::HashSet::new();
     items
         .into_iter()
@@ -220,6 +228,67 @@ pub fn delete_asset_files(store_path: Option<&Path>, thumb_path: Option<&Path>) 
             if error.kind() != std::io::ErrorKind::NotFound {
                 tracing::warn!("delete file failed for {}: {error}", path.display());
             }
+        }
+    }
+}
+
+/// 文件 stem 净化（`rename_asset_files` 用）：替换 Windows 非法字符与控制字符
+/// （对齐 projects.rs `move_destination` 的替换表）、trim 首尾空白 + 尾随 `.`/空格、
+/// 限长 64 字符；空或命中 Windows 保留名（CON/PRN/AUX/NUL/COM1-9/LPT1-9）→ 回退 id。
+fn sanitize_file_stem(raw: &str, id: &str) -> String {
+    let mut s: String = raw
+        .chars()
+        .map(|c| if "/\\:*?\"<>|".contains(c) || c.is_control() { '_' } else { c })
+        .collect();
+    s = s.trim().trim_end_matches(|c| c == '.' || c == ' ').to_string();
+    if s.is_empty() {
+        return id.to_string();
+    }
+    if s.chars().count() > 64 {
+        s = s.chars().take(64).collect();
+    }
+    // Windows 保留名：带扩展名也算（CON.txt 同样保留）。
+    let base = s.split('.').next().unwrap_or("").to_ascii_uppercase();
+    const RESERVED: [&str; 22] = [
+        "CON", "PRN", "AUX", "NUL",
+        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+    if RESERVED.contains(&base.as_str()) {
+        let suffix: String = id.chars().take(6).collect();
+        return format!("{s}_{suffix}");
+    }
+    s
+}
+
+/// 同目录换名目标（`rename_asset_files` 用）：保留旧扩展名；目标已存在且不是自身 →
+/// 追加 `_<id 前6>`（对齐 move_destination 防覆盖）。
+fn unique_destination(old: &Path, stem: &str, id: &str) -> PathBuf {
+    let parent = old.parent().unwrap_or_else(|| Path::new("."));
+    let ext = old.extension().and_then(|v| v.to_str()).unwrap_or("");
+    let file_name = |stem: &str| {
+        if ext.is_empty() {
+            stem.to_string()
+        } else {
+            format!("{stem}.{ext}")
+        }
+    };
+    let candidate = parent.join(file_name(stem));
+    if candidate == old || !candidate.exists() {
+        candidate
+    } else {
+        let suffix: String = id.chars().take(6).collect();
+        parent.join(file_name(&format!("{stem}_{suffix}")))
+    }
+}
+
+/// 移动文件：优先 rename（同卷）；跨卷/失败时 copy + 删除源（与 projects.rs `move_file` 同款）。
+fn rename_file(src: &Path, dst: &Path) -> std::io::Result<()> {
+    match std::fs::rename(src, dst) {
+        Ok(()) => Ok(()),
+        Err(_) => {
+            std::fs::copy(src, dst)?;
+            std::fs::remove_file(src)
         }
     }
 }
@@ -320,6 +389,101 @@ impl Database {
         Ok(())
     }
 
+    /// 手动重命名素材：同步改磁盘文件名（store/thumb 同目录换名）+ DB name/store_path/thumb_path。
+    /// 文件名 = 净化后的新名（对齐 projects.rs move_destination 的净化 + Windows 保留名/尾随点空格），
+    /// 同目录重名时追加 `_<id 前6>`（不覆盖）；扩展名保留旧值。svg（thumb==store）的 thumb 跟随 store。
+    /// 先 rename 文件、后改 DB（FTS 由 0002 的 `AFTER UPDATE OF name` 触发器自动同步）；
+    /// DB 失败时回滚已移动的文件（best-effort），避免 DB 指向已改名文件造成破图。
+    /// 仅供用户手动改名调用——autoname 仍走 `update_asset_name`（只改 DB，不跟随）。
+    pub fn rename_asset_files(&self, id: &str, new_name: &str) -> AppResult<()> {
+        // 先取路径，drop conn 后再做文件 IO（delete_asset 同模式）。
+        let (store_path, thumb_path) = {
+            let conn = self.conn.lock().unwrap();
+            let row: Option<(Option<String>, Option<String>)> = conn
+                .query_row(
+                    "SELECT store_path, thumb_path FROM assets WHERE id = ?1",
+                    rusqlite::params![id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()?;
+            row.unwrap_or((None, None))
+        };
+        let Some(store_path) = store_path else {
+            return Err(AppError::Other("该素材没有本地文件，无法重命名".into()));
+        };
+        let old_store = Path::new(&store_path);
+        // 新 stem：净化新名（空/保留名回退 id）；同目录冲突追加 `_<id 前6>`。
+        let stem = sanitize_file_stem(new_name, id);
+        let new_store = unique_destination(old_store, &stem, id);
+        let new_store_str = new_store.to_string_lossy().into_owned();
+        let thumb_follows_store = thumb_path.as_deref() == Some(&store_path);
+        let new_thumb = if thumb_follows_store {
+            Some(new_store_str.clone())
+        } else {
+            thumb_path.as_deref().map(|tp| {
+                unique_destination(Path::new(tp), &stem, id)
+                    .to_string_lossy()
+                    .into_owned()
+            })
+        };
+
+        // 文件 rename（同卷优先，失败 copy+delete 回退——与 projects.rs move_file 同款）。
+        let store_moved = if old_store != new_store.as_path() {
+            rename_file(old_store, &new_store)?;
+            true
+        } else {
+            false
+        };
+        let thumb_moved = if thumb_follows_store {
+            // thumb==store（svg）：旧 thumb 已随 store 的 rename 移走，无需单独移动。
+            false
+        } else if let (Some(old_tp), Some(new_tp)) =
+            (thumb_path.as_deref(), new_thumb.as_deref())
+        {
+            if old_tp != new_tp {
+                rename_file(Path::new(old_tp), Path::new(new_tp))?;
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        // 写回 DB；失败回滚已移动的文件，避免 DB 指向已改名文件造成破图。
+        let db_result = self.update_asset_paths(id, new_name, &new_store_str, new_thumb.as_deref());
+        if let Err(e) = db_result {
+            if store_moved {
+                let _ = std::fs::rename(&new_store, old_store);
+            }
+            if thumb_moved {
+                if let (Some(old_tp), Some(new_tp)) =
+                    (thumb_path.as_deref(), new_thumb.as_deref())
+                {
+                    let _ = std::fs::rename(new_tp, old_tp);
+                }
+            }
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    /// `rename_asset_files` 的 DB 写回（name + store/thumb 路径）。
+    fn update_asset_paths(
+        &self,
+        id: &str,
+        name: &str,
+        store_path: &str,
+        thumb_path: Option<&str>,
+    ) -> AppResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE assets SET name = ?1, store_path = ?2, thumb_path = ?3 WHERE id = ?4",
+            rusqlite::params![name, store_path, thumb_path, id],
+        )?;
+        Ok(())
+    }
+
     /// 按 dHash 阈值找「近似重复」的已有资产（采集去重）。
     ///
     /// 同一张图被以不同分辨率采集（Pinterest 236w 网格缩略图 vs 原图 / srcset 变体）时，
@@ -354,10 +518,7 @@ impl Database {
             if dist > crate::media::phash::DEDUP_HAMMING_MAX {
                 continue;
             }
-            let area = |a: &Asset| {
-                a.width.unwrap_or(0)
-                    .saturating_mul(a.height.unwrap_or(0))
-            };
+            let area = |a: &Asset| a.width.unwrap_or(0).saturating_mul(a.height.unwrap_or(0));
             if best.as_ref().is_none_or(|b| area(b) < area(&asset)) {
                 best = Some(asset);
             }
@@ -402,9 +563,8 @@ impl Database {
 
     pub fn list_folders(&self) -> AppResult<Vec<Folder>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT id, name, parent_id, kind, smart_query FROM folders ORDER BY name",
-        )?;
+        let mut stmt = conn
+            .prepare("SELECT id, name, parent_id, kind, smart_query FROM folders ORDER BY name")?;
         let rows = stmt.query_map([], |r| {
             Ok(Folder {
                 id: r.get(0)?,
@@ -549,7 +709,11 @@ impl Database {
         Ok(())
     }
 
-    pub fn remove_asset_from_collection(&self, asset_id: &str, collection_id: &str) -> AppResult<()> {
+    pub fn remove_asset_from_collection(
+        &self,
+        asset_id: &str,
+        collection_id: &str,
+    ) -> AppResult<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "DELETE FROM asset_collections WHERE asset_id = ?1 AND folder_id = ?2",
@@ -600,8 +764,8 @@ impl Database {
     /// 全部用途，按 name 排序。
     pub fn list_presets(&self) -> AppResult<Vec<Preset>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt =
-            conn.prepare("SELECT id, name, body, created_at, updated_at FROM presets ORDER BY name")?;
+        let mut stmt = conn
+            .prepare("SELECT id, name, body, created_at, updated_at FROM presets ORDER BY name")?;
         let rows = stmt.query_map([], |r| {
             Ok(Preset {
                 id: r.get(0)?,
@@ -657,6 +821,24 @@ impl Database {
                 rusqlite::params![limit, offset, project_id, name],
                 asset_from_row,
             )?;
+            let mut out = Vec::new();
+            for r in rows {
+                out.push(r?);
+            }
+            return Ok(out);
+        }
+        // 「生成图」视图：任一 provider（codex / 即梦 / Bowerbird Cloud）出图入库时都写
+        // generation_session_id，按它过滤比枚举 source 值更面向未来（新 provider 自动覆盖）。
+        if query == "source:generated" {
+            let sql = format!(
+                "SELECT {ASSET_COLS} FROM assets WHERE generation_session_id IS NOT NULL \
+                 AND (?3 IS NULL OR EXISTS(SELECT 1 FROM project_assets pa \
+                   WHERE pa.asset_id = assets.id AND pa.project_id IS ?3)) \
+                 ORDER BY created_at DESC LIMIT ?1 OFFSET ?2"
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            let rows =
+                stmt.query_map(rusqlite::params![limit, offset, project_id], asset_from_row)?;
             let mut out = Vec::new();
             for r in rows {
                 out.push(r?);
@@ -791,11 +973,7 @@ impl Database {
     }
 
     /// 取某资产指定角色的提示词正文（assemble_pack 用）。
-    pub fn prompt_bodies_for_asset(
-        &self,
-        asset_id: &str,
-        role: &str,
-    ) -> AppResult<Vec<String>> {
+    pub fn prompt_bodies_for_asset(&self, asset_id: &str, role: &str) -> AppResult<Vec<String>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT p.body FROM prompts p JOIN asset_prompts ap ON ap.prompt_id = p.id \
@@ -836,10 +1014,7 @@ impl Database {
                 WHERE pa.asset_id = a.id AND pa.project_id IS ?2)) \
             ORDER BY rank LIMIT ?3";
         let mut stmt = conn.prepare(sql)?;
-        let rows = stmt.query_map(
-            rusqlite::params![query, project_id, limit],
-            asset_from_row,
-        )?;
+        let rows = stmt.query_map(rusqlite::params![query, project_id, limit], asset_from_row)?;
         let mut out = Vec::new();
         for r in rows {
             out.push(r?);
@@ -892,32 +1067,6 @@ impl Database {
         Ok(exists)
     }
 
-    /// 取某 codex 生成会话的 prompt 链（按时间顺序、相邻去重 → 一轮一条）。
-    /// 生成图 caption 用：generation_meta 的 $.session_id 匹配，取 $.prompt；
-    /// 同一轮可能产出多张图（多行同 prompt），相邻去重后得到「轮次」序列
-    /// [首版 prompt, 修改1, 修改2, ...]。id 是 ULID（时间序），跨轮时序稳定。
-    pub fn generation_prompt_chain(&self, session_id: &str) -> AppResult<Vec<String>> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT json_extract(payload, '$.prompt') FROM analyses \
-             WHERE kind = 'generation_meta' \
-               AND json_extract(payload, '$.session_id') = ?1 \
-             ORDER BY created_at ASC, id ASC",
-        )?;
-        let rows = stmt.query_map(rusqlite::params![session_id], |r| {
-            r.get::<_, Option<String>>(0)
-        })?;
-        let mut chain: Vec<String> = Vec::new();
-        for r in rows {
-            if let Some(p) = r? {
-                if chain.last().map(String::as_str) != Some(p.as_str()) {
-                    chain.push(p);
-                }
-            }
-        }
-        Ok(chain)
-    }
-
     /// 取该资产所属生成会话的全部图（含自己），按 id ASC（ULID 时序 = 过程顺序）。
     /// 资产无 generation_session_id（非生成图）→ 子查询返回 NULL → `generation_session_id = NULL`
     /// 恒假 → 返回空（前端据此判断「非组、无轮播」）。
@@ -936,10 +1085,7 @@ impl Database {
              ORDER BY id ASC"
         );
         let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map(
-            rusqlite::params![asset_id, project_id],
-            asset_from_row,
-        )?;
+        let rows = stmt.query_map(rusqlite::params![asset_id, project_id], asset_from_row)?;
         let mut out = Vec::new();
         for r in rows {
             out.push(r?);
@@ -1030,14 +1176,13 @@ impl Database {
                 .map(|i| format!("?{}", i + 1))
                 .collect::<Vec<_>>()
                 .join(", ");
-            let sql = format!(
-                "SELECT {ASSET_COLS} FROM assets WHERE store_path IN ({placeholders})"
-            );
+            let sql =
+                format!("SELECT {ASSET_COLS} FROM assets WHERE store_path IN ({placeholders})");
             let mut stmt = conn.prepare(&sql)?;
-            let rows = stmt.query_map(
-                rusqlite::params_from_iter(first_references.iter()),
-                |r| asset_from_row(r),
-            )?;
+            let rows = stmt
+                .query_map(rusqlite::params_from_iter(first_references.iter()), |r| {
+                    asset_from_row(r)
+                })?;
             let mut out = Vec::new();
             for r in rows {
                 let asset = r?;
@@ -1065,10 +1210,7 @@ impl Database {
 
     /// 创作板用：有 caption（反推）的资产 + 最新 caption 正文（开发计划 §5.4）。
     /// 创作板打开时瀑布流只显示这些；缩略图槽的 prompt 内容来自 caption / dimensions。
-    pub fn list_prompted_assets(
-        &self,
-        project_id: Option<&str>,
-    ) -> AppResult<Vec<PromptedAsset>> {
+    pub fn list_prompted_assets(&self, project_id: Option<&str>) -> AppResult<Vec<PromptedAsset>> {
         let conn = self.conn.lock().unwrap();
         // 无 JOIN → ASSET_COLS 不需表前缀；caption 取最新 analyses(kind=caption) 的 $.text。
         // caption_payload 用于反序列化结构化 dimensions；旧 payload 只有 text 时也兼容。
@@ -1100,6 +1242,24 @@ impl Database {
                 parse_status,
             })
         })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    /// 有 caption（反推数据）的资产 id 集合（轻量，供瀑布流标 🏷️，不拉 caption 正文）。
+    /// project 过滤与 list_prompted_assets 一致（生成组未 collapse，仅用于 id 存在性判断）。
+    pub fn list_captioned_asset_ids(&self, project_id: Option<&str>) -> AppResult<Vec<String>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT assets.id FROM assets \
+             WHERE EXISTS (SELECT 1 FROM analyses WHERE asset_id = assets.id AND kind = 'caption') \
+             AND (?1 IS NULL OR EXISTS(SELECT 1 FROM project_assets pa \
+               WHERE pa.asset_id = assets.id AND pa.project_id IS ?1))",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![project_id], |r| r.get::<_, String>(0))?;
         let mut out = Vec::new();
         for r in rows {
             out.push(r?);
@@ -1402,6 +1562,119 @@ mod tests {
         id
     }
 
+    /// 造带真实磁盘文件的 asset（store + 独立 thumb；thumb_follows=true 时 thumb==store，svg 场景）。
+    /// 返回 (store, thumb) 路径，测试结束时调用方负责 remove_dir_all 清理目录。
+    fn put_asset_with_files(
+        db: &Database,
+        dir: &std::path::Path,
+        id: &str,
+        ext: &str,
+        thumb_follows: bool,
+    ) -> (std::path::PathBuf, std::path::PathBuf) {
+        let store = dir.join("images").join(format!("{id}.{ext}"));
+        let thumb = if thumb_follows {
+            store.clone()
+        } else {
+            dir.join("thumbnails").join(format!("{id}.jpg"))
+        };
+        std::fs::create_dir_all(store.parent().unwrap()).unwrap();
+        if !thumb_follows {
+            std::fs::create_dir_all(thumb.parent().unwrap()).unwrap();
+        }
+        std::fs::write(&store, b"x").unwrap();
+        std::fs::write(&thumb, b"y").unwrap();
+        db.insert_asset(&Asset {
+            id: id.to_string(),
+            name: id.to_string(),
+            ext: Some(ext.to_string()),
+            origin_path: None,
+            store_path: Some(store.to_string_lossy().into_owned()),
+            thumb_path: Some(thumb.to_string_lossy().into_owned()),
+            size: Some(1),
+            width: Some(10),
+            height: Some(10),
+            duration: Some(0.0),
+            phash: None,
+            colors: None,
+            rating: None,
+            source: Some("imported".into()),
+            source_url: None,
+            folder_id: None,
+            created_at: None,
+            file_mtime: None,
+            generation_session_id: None,
+        })
+        .unwrap();
+        (store, thumb)
+    }
+
+    #[test]
+    fn rename_asset_files_renames_disk_and_db() {
+        let db = db();
+        let stamp = Ulid::new().to_string();
+        let dir = std::env::temp_dir().join(format!("bb-rename-{stamp}"));
+        let (store, thumb) = put_asset_with_files(&db, &dir, &stamp, "png", false);
+
+        db.rename_asset_files(&stamp, "夏日·海滩").unwrap();
+
+        let a = db.get_asset(&stamp).unwrap().unwrap();
+        assert_eq!(a.name, "夏日·海滩");
+        let new_store = a.store_path.unwrap();
+        let new_thumb = a.thumb_path.unwrap();
+        assert!(new_store.ends_with("夏日·海滩.png"), "got {new_store}");
+        assert!(new_thumb.ends_with("夏日·海滩.jpg"), "got {new_thumb}");
+        assert!(Path::new(&new_store).exists());
+        assert!(Path::new(&new_thumb).exists());
+        assert!(!store.exists(), "旧 store 文件应被移走");
+        assert!(!thumb.exists(), "旧 thumb 文件应被移走");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rename_asset_files_sanitizes_and_avoids_overwrite() {
+        let db = db();
+        let stamp = Ulid::new().to_string();
+        let dir = std::env::temp_dir().join(format!("bb-rename2-{stamp}"));
+        let (_store, _thumb) = put_asset_with_files(&db, &dir, &stamp, "png", false);
+        // 同目录先占一个「冲突名.png」，改名命中它时不得覆盖。
+        let conflict = dir.join("images").join("冲突名.png");
+        std::fs::write(&conflict, b"other").unwrap();
+
+        // 非法字符全净化成 _；目标已被占 → 追加 `_<id 前6>`。
+        db.rename_asset_files(&stamp, "冲突名/\\:*?\"<>|").unwrap();
+
+        let a = db.get_asset(&stamp).unwrap().unwrap();
+        let new_store = a.store_path.unwrap();
+        assert!(new_store.contains("冲突名_"), "got {new_store}");
+        let file_name = Path::new(&new_store)
+            .file_name()
+            .unwrap()
+            .to_string_lossy();
+        assert!(
+            !file_name.chars().any(|c| "\\/:*?\"<>|".contains(c)),
+            "非法字符应被净化，got {file_name}"
+        );
+        assert!(Path::new(&new_store).exists());
+        assert!(conflict.exists(), "已有文件不应被覆盖");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rename_asset_files_svg_thumb_follows_store() {
+        let db = db();
+        let stamp = Ulid::new().to_string();
+        let dir = std::env::temp_dir().join(format!("bb-rename3-{stamp}"));
+        let (store, _thumb) = put_asset_with_files(&db, &dir, &stamp, "svg", true);
+
+        db.rename_asset_files(&stamp, "矢量图").unwrap();
+
+        let a = db.get_asset(&stamp).unwrap().unwrap();
+        assert!(a.store_path.as_deref().unwrap().ends_with("矢量图.svg"));
+        assert_eq!(a.thumb_path, a.store_path, "svg 的 thumb 应跟随 store 路径");
+        assert!(!store.exists(), "旧 svg 文件应被移走");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn fts5_search_by_name() {
         let db = db();
@@ -1432,38 +1705,6 @@ mod tests {
         assert_eq!(list[0].kind, "caption");
         db.delete_analysis(&an_id).unwrap();
         assert_eq!(db.list_analyses_by_asset(&aid).unwrap().len(), 0);
-    }
-
-    #[test]
-    fn generation_prompt_chain_orders_and_dedups() {
-        // 同一会话两轮 generation_meta（首轮 2 图同 prompt、次轮 1 图）→ 按时序相邻去重为
-        // [首版, 修改1]；另一会话的行被 session 过滤排除。analysis id 字典序保证跨轮时序。
-        let db = db();
-        let a1 = put_asset(&db, "g1");
-        let a2 = put_asset(&db, "g2");
-        let a3 = put_asset(&db, "g3");
-        let _a4 = put_asset(&db, "g4");
-
-        fn put_meta(db: &Database, id: &str, aid: &str, prompt: &str, sid: &str) {
-            db.insert_analysis(&Analysis {
-                id: id.to_string(),
-                asset_id: aid.to_string(),
-                kind: "generation_meta".to_string(),
-                payload: serde_json::json!({ "prompt": prompt, "session_id": sid }).to_string(),
-                provider: Some("codex-cli".into()),
-                created_at: None,
-            })
-            .unwrap();
-        }
-
-        let session = "sess-A";
-        put_meta(&db, "01T1A", &a1, "首版", session);
-        put_meta(&db, "01T1B", &a2, "首版", session); // 同轮另一图（同 prompt，应被去重）
-        put_meta(&db, "01T2", &a3, "修改1", session);
-        put_meta(&db, "01XX", &_a4, "别的会话", "sess-B"); // 不同会话，应被排除
-
-        let chain = db.generation_prompt_chain(session).unwrap();
-        assert_eq!(chain, vec!["首版".to_string(), "修改1".to_string()]);
     }
 
     #[test]
@@ -1510,7 +1751,9 @@ mod tests {
             refs: Option<Vec<&str>>,
         ) {
             let payload = match refs {
-                Some(rs) => serde_json::json!({ "prompt": prompt, "session_id": sid, "references": rs }),
+                Some(rs) => {
+                    serde_json::json!({ "prompt": prompt, "session_id": sid, "references": rs })
+                }
                 None => serde_json::json!({ "prompt": prompt, "session_id": sid }),
             };
             db.insert_analysis(&Analysis {
@@ -1552,7 +1795,14 @@ mod tests {
         }
         put_ref(&db, "ra", "/ref/a.png");
         put_ref(&db, "rb", "/ref/b.png");
-        put_meta(&db, "02T1A", "g1", "首版", session, Some(vec!["/ref/a.png", "/ref/b.png"]));
+        put_meta(
+            &db,
+            "02T1A",
+            "g1",
+            "首版",
+            session,
+            Some(vec!["/ref/a.png", "/ref/b.png"]),
+        );
         put_meta(&db, "02T1B", "g2", "首版", session, None); // 同轮另一图（合并）
         put_meta(&db, "02T2", "g3", "修改1", session, None);
         put_meta(&db, "02XX", "g4", "别的会话", "sess-B", None); // 排除
@@ -1700,8 +1950,7 @@ mod tests {
         assert_eq!(sections[0].title, "类型");
         assert_eq!(sections[1].body, "neon rim light");
         assert_eq!(
-            r[0]
-                .dimensions
+            r[0].dimensions
                 .as_ref()
                 .and_then(|d| d.get("light"))
                 .map(String::as_str),
@@ -1775,7 +2024,10 @@ mod tests {
         db.delete_folder(&fid).unwrap();
         assert!(db.get_folder(&fid).unwrap().is_none());
         let a = db.get_asset(&aid).unwrap().unwrap();
-        assert!(a.folder_id.is_none(), "删夹后素材应回全部（folder_id NULL）");
+        assert!(
+            a.folder_id.is_none(),
+            "删夹后素材应回全部（folder_id NULL）"
+        );
     }
 
     #[test]
@@ -1793,17 +2045,30 @@ mod tests {
         db.set_asset_tags(&aid, &[manual_id], "manual").unwrap();
 
         assert!(db.has_auto_tag(&aid).unwrap());
-        let names: Vec<String> = db.list_asset_tags(&aid).unwrap().into_iter().map(|t| t.name).collect();
+        let names: Vec<String> = db
+            .list_asset_tags(&aid)
+            .unwrap()
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
         assert!(names.contains(&"风景".to_string()));
         assert!(names.contains(&"我的收藏".to_string()));
 
         // 重设 auto（换类别）不应误删 manual
         let auto2 = db.get_or_create_tag("人像", "auto").unwrap();
         db.set_asset_tags(&aid, &[auto2], "auto").unwrap();
-        let names: Vec<String> = db.list_asset_tags(&aid).unwrap().into_iter().map(|t| t.name).collect();
+        let names: Vec<String> = db
+            .list_asset_tags(&aid)
+            .unwrap()
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
         assert!(!names.contains(&"风景".to_string()), "旧 auto 应被替换");
         assert!(names.contains(&"人像".to_string()));
-        assert!(names.contains(&"我的收藏".to_string()), "manual 不应被 auto 操作误删");
+        assert!(
+            names.contains(&"我的收藏".to_string()),
+            "manual 不应被 auto 操作误删"
+        );
     }
 
     #[test]
@@ -1818,7 +2083,12 @@ mod tests {
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].id, a1);
         // 未知标签 → 空（不是返回全部）
-        assert_eq!(db.list_assets_smart("tag:不存在", None, 100, 0).unwrap().len(), 0);
+        assert_eq!(
+            db.list_assets_smart("tag:不存在", None, 100, 0)
+                .unwrap()
+                .len(),
+            0
+        );
     }
 
     #[test]
@@ -1831,7 +2101,11 @@ mod tests {
         let _ = db.get_or_create_tag("静物", "auto").unwrap();
 
         let counts = db.list_tags_with_count("auto", None).unwrap();
-        assert_eq!(counts.len(), 1, "只有被用到的 auto tag 才出现（seed 其余 count=0）");
+        assert_eq!(
+            counts.len(),
+            1,
+            "只有被用到的 auto tag 才出现（seed 其余 count=0）"
+        );
         assert_eq!(counts[0].name, "风景");
         assert_eq!(counts[0].count, 1);
     }
@@ -1848,7 +2122,9 @@ mod tests {
 
         let collections = db.list_collections().unwrap();
         assert_eq!(collections.len(), 2);
-        assert!(collections.iter().all(|f| f.kind.as_deref() == Some("collection")));
+        assert!(collections
+            .iter()
+            .all(|f| f.kind.as_deref() == Some("collection")));
 
         // 幂等：重复收藏不产生重复行。
         db.add_asset_to_collection(&a1, &c1).unwrap();
@@ -1871,7 +2147,12 @@ mod tests {
         // 删除收藏夹只清关系，不删素材。
         db.delete_folder(&c1).unwrap();
         assert!(db.get_asset(&a1).unwrap().is_some());
-        assert_eq!(db.list_assets_by_collection(&c1, None, 100, 0).unwrap().len(), 0);
+        assert_eq!(
+            db.list_assets_by_collection(&c1, None, 100, 0)
+                .unwrap()
+                .len(),
+            0
+        );
         assert_eq!(db.list_collections_for_asset(&a1).unwrap().len(), 1);
 
         // 删除素材清理收藏关系。
@@ -1893,7 +2174,8 @@ mod tests {
 
         // update 改 name + body。
         db.update_preset("p1", "用途C", "body-c").unwrap();
-        let p1 = db.list_presets()
+        let p1 = db
+            .list_presets()
             .unwrap()
             .into_iter()
             .find(|p| p.id == "p1")
@@ -1911,14 +2193,16 @@ mod tests {
         let db = db();
         let in_project = put_asset_at(&db, "cyberpunk-project", 2);
         let outside = put_asset_at(&db, "cyberpunk-global", 1);
-        db.create_project("p1", "P1", "/tmp/p1", "/tmp/p1")
-            .unwrap();
+        db.create_project("p1", "P1", "/tmp/p1", "/tmp/p1").unwrap();
         db.add_assets_to_project("p1", std::slice::from_ref(&in_project))
             .unwrap();
 
         assert_eq!(db.count_assets(None).unwrap(), 2);
         assert_eq!(db.count_assets(Some("p1")).unwrap(), 1);
-        assert_eq!(db.list_assets(None, Some("p1"), 100, 0).unwrap()[0].id, in_project);
+        assert_eq!(
+            db.list_assets(None, Some("p1"), 100, 0).unwrap()[0].id,
+            in_project
+        );
         let search = db.search_assets("cyberpunk", Some("p1"), 100).unwrap();
         assert_eq!(search.len(), 1);
         assert_eq!(search[0].id, in_project);
@@ -1954,8 +2238,13 @@ mod tests {
         assert_eq!(reds[0].id, a1);
 
         // 带文件夹：色夹里 blue → 空（a2 不在夹）；色夹里 red → a1
-        assert!(db.list_assets_by_color(Some(&fid), None, "blue", 100, 0).unwrap().is_empty());
-        let in_folder = db.list_assets_by_color(Some(&fid), None, "red", 100, 0).unwrap();
+        assert!(db
+            .list_assets_by_color(Some(&fid), None, "blue", 100, 0)
+            .unwrap()
+            .is_empty());
+        let in_folder = db
+            .list_assets_by_color(Some(&fid), None, "red", 100, 0)
+            .unwrap();
         assert_eq!(in_folder.len(), 1);
         assert_eq!(in_folder[0].id, a1);
     }

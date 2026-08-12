@@ -42,6 +42,14 @@ function saveDefaultProvider(v: string) {
 
 type Mode = "browse" | "manage";
 
+export interface DescribeFailure {
+  assetId: string;
+  instruction: string;
+  name: string;
+  reason: string;
+  failedAt: number;
+}
+
 interface State {
   assets: Asset[];
   total: number;
@@ -69,12 +77,14 @@ interface State {
   // —— 创作板（核心枢纽）——
   boardOpen: boolean;
   promptedAssets: PromptedAsset[]; // 创作板挑图集合中带 caption（反推）的子集，供编辑器补 sections / 展开维度片段
+  captionedIds: Set<string>; // 有反推（caption）的资产 id 集合（瀑布流标 🏷️，轻量，不带正文）
   // —— 创作板「用途」（preset）——
   presets: Preset[]; // 命名 prompt 预设，发送时作为基底注入（不进编辑器）
   activePresetId: string | null; // 当前选中用途；null=不注入
   setAssets: (a: Asset[]) => void;
   setTotal: (n: number) => void;
   toggleSelect: (id: string) => void;
+  selectAll: () => void;
   clearSelect: () => void;
   setLoading: (b: boolean) => void;
   setCurrentFolder: (id: string | null) => void;
@@ -97,15 +107,20 @@ interface State {
   setColorRebuild: (p: { done: number; total: number } | null) => void;
   toggleBoard: () => void;
   setPromptedAssets: (a: PromptedAsset[]) => void;
+  setCaptionedIds: (ids: string[]) => void;
   setActivePreset: (id: string | null) => void;
   // —— 反推（全局后台串行）——
   // 反推不绑 AssetDetail 生命周期：返回瀑布流后继续跑、缩略图角标可见、可取消。
   // 单槽 + 前端排队：同一时刻只调一次 codex_describe_asset（后端 DESCRIBE_CANCEL 单例）。
   describingId: string | null;
-  describeQueue: { assetId: string; instruction: string }[];
+  describingName: string | null; // 反推中素材名（随队列捕获，切视图仍可显示）
+  describeQueue: { assetId: string; instruction: string; name: string }[];
+  describeFailures: DescribeFailure[]; // 当前会话失败记录，供右上角 AI 任务清单展示/重试
   describeStartedAt: number | null; // 当前任务开始时间戳；跨组件已耗时显示用
   runDescribe: (assetId: string, instruction: string) => void;
   cancelDescribe: (assetId: string) => Promise<void>;
+  retryDescribeFailure: (assetId: string) => void;
+  dismissDescribeFailure: (assetId: string) => void;
   // —— 生成（创作板 codex/即梦 画图，多 job 并行）——
   // 派生量：任一 job running 即 true。状态圈在顶部工具栏最右侧（全局可见，不绑创作板生命周期）。
   generating: boolean;
@@ -169,7 +184,6 @@ interface State {
   activeJobId: string | null; // 当前查看/操作的 job（续轮/复用/取消/重试基于它）
   genUnread: boolean; // 面板关时落地新图 → 顶栏按钮红点
   setActiveJob: (id: string) => void;
-  toggleGenPanel: () => void;
   setGenPanelOpen: (open: boolean) => void;
   startGeneration: (prompt: string, references: Asset[], ratio?: string | null, provider?: string | null) => Promise<void>;
   sendGenRevise: (instruction: string, provider?: string | null) => Promise<void>;
@@ -181,10 +195,11 @@ interface State {
   // 「回看生成对话」：拉某生成图所在会话的历史时间线 → 新建 running=false 的 job 并选中，
   // 复用 GenerationPanel 展示 + 续轮 resume（sessionId=历史 sid）。
   viewGenerationHistory: (assetId: string) => Promise<void>;
-  // 「复用到创作板」：把 activeJob 首轮 prompt + 参考图载入创作板编辑器。
+  // 「复用到创作板」：把首轮 prompt + 参考图载入创作板编辑器。
   // 开创作板 + 关详情/生成面板/挑图态，延时一帧再 dispatch board-load-prompt，
   // 确保 CreationBoard 已挂载注册 listener（同步 dispatch 会丢）。
-  reusePromptToBoard: (prompt: string) => void;
+  // refs 显式传入优先（右键菜单按 generation_history 复用）；缺省取 activeJob（GenerationPanel 复用）。
+  reusePromptToBoard: (prompt: string, refs?: Asset[]) => void;
   // —— 右键菜单（瀑布流缩略图 / 详情页大图）——
   contextMenu: { x: number; y: number; assetId: string } | null;
   openContextMenu: (x: number, y: number, assetId: string) => void;
@@ -206,6 +221,16 @@ function generationGateError(state: State, provider: string): string | null {
   return null;
 }
 
+function taskErrorMessage(error: unknown): string {
+  if (typeof error === "string") return error;
+  if (error instanceof Error && error.message) return error.message;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
+
 export const useStore = create<State>((set, get) => {
   // 反推队列的串行推进：同一时刻只跑一个 codex_describe_asset（后端单槽）。
   // runDescribe 入队后调一次；任务结束（成功/取消/失败）的 finally 再调一次推下一张。
@@ -218,18 +243,33 @@ export const useStore = create<State>((set, get) => {
     set({
       describeQueue: queue.slice(1),
       describingId: next.assetId,
+      describingName: next.name,
       describeStartedAt: Date.now(),
     });
     try {
       await api.describeAsset(next.assetId, next.instruction);
     } catch (e) {
-      const msg = typeof e === "string" ? e : JSON.stringify(e);
-      // 「已取消」是用户主动中断，静默；其它错误记录（后续可扩展为 per-asset 提示）。
-      if (!msg.includes("已取消")) console.error("describe failed", e);
+      const msg = taskErrorMessage(e);
+      // 「已取消」是用户主动中断，静默；其它错误留在 AI 任务清单，便于看原因和重试。
+      if (!msg.includes("已取消")) {
+        console.error("describe failed", e);
+        set((s) => ({
+          describeFailures: [
+            {
+              assetId: next.assetId,
+              instruction: next.instruction,
+              name: next.name,
+              reason: msg || "未知错误",
+              failedAt: Date.now(),
+            },
+            ...s.describeFailures.filter((failure) => failure.assetId !== next.assetId),
+          ].slice(0, 20),
+        }));
+      }
     } finally {
       // 仅当仍是本次任务时清空（cancel 路径已让后端返回「已取消」走 catch）。
       if (get().describingId === next.assetId) {
-        set({ describingId: null, describeStartedAt: null });
+        set({ describingId: null, describingName: null, describeStartedAt: null });
       }
       void pumpDescribe();
     }
@@ -307,6 +347,7 @@ export const useStore = create<State>((set, get) => {
   palette: [],
   boardOpen: false,
   promptedAssets: [],
+  captionedIds: new Set<string>(),
   presets: [],
   activePresetId: null,
   setAssets: (assets) => set({ assets }),
@@ -319,6 +360,7 @@ export const useStore = create<State>((set, get) => {
       return { selectedIds: next };
     }),
   clearSelect: () => set({ selectedIds: new Set() }),
+  selectAll: () => set((s) => ({ selectedIds: new Set(s.assets.map((a) => a.id)) })),
   setLoading: (loading) => set({ loading }),
   // 切文件夹保留颜色筛选（P3：folder + color 叠加）；清详情 + smartFilter/收藏夹（互斥）。
   setCurrentFolder: (currentFolderId) =>
@@ -460,10 +502,13 @@ export const useStore = create<State>((set, get) => {
       };
     }),
   setPromptedAssets: (promptedAssets) => set({ promptedAssets }),
+  setCaptionedIds: (ids) => set({ captionedIds: new Set(ids) }),
   setActivePreset: (id) => set({ activePresetId: id }),
   // —— 反推（全局后台串行）——
   describingId: null,
+  describingName: null,
   describeQueue: [],
+  describeFailures: [],
   describeStartedAt: null,
   runDescribe: (assetId, instruction) => {
     const trimmed = instruction.trim();
@@ -492,7 +537,15 @@ export const useStore = create<State>((set, get) => {
       return;
     }
     set({
-      describeQueue: [...s.describeQueue, { assetId, instruction: trimmed }],
+      describeQueue: [
+        ...s.describeQueue,
+        {
+          assetId,
+          instruction: trimmed,
+          name: s.assets.find((a) => a.id === assetId)?.name ?? "未知素材",
+        },
+      ],
+      describeFailures: s.describeFailures.filter((failure) => failure.assetId !== assetId),
     });
     void pumpDescribe();
   },
@@ -516,6 +569,15 @@ export const useStore = create<State>((set, get) => {
       set({ describeQueue: q });
     }
   },
+  retryDescribeFailure: (assetId) => {
+    const failure = get().describeFailures.find((item) => item.assetId === assetId);
+    if (!failure) return;
+    get().runDescribe(failure.assetId, failure.instruction);
+  },
+  dismissDescribeFailure: (assetId) =>
+    set((s) => ({
+      describeFailures: s.describeFailures.filter((failure) => failure.assetId !== assetId),
+    })),
   // —— 生成（创作板 codex 画图）——
   generating: false,
   // —— 导入即基础分析（autoname）——
@@ -665,11 +727,6 @@ export const useStore = create<State>((set, get) => {
   genJobOrder: [],
   activeJobId: null,
   genUnread: false,
-  toggleGenPanel: () =>
-    set((s) => {
-      const opening = !s.genPanelOpen;
-      return { genPanelOpen: opening, genUnread: opening ? false : s.genUnread };
-    }),
   setGenPanelOpen: (open) =>
     set((s) => ({ genPanelOpen: open, genUnread: open ? false : s.genUnread })),
   setActiveJob: (id) => set({ activeJobId: id }),
@@ -958,7 +1015,7 @@ export const useStore = create<State>((set, get) => {
       console.error("viewGenerationHistory failed", e);
     }
   },
-  reusePromptToBoard: (prompt) => {
+  reusePromptToBoard: (prompt, refs) => {
     const body = prompt.trim();
     if (!body) return;
     set({
@@ -968,14 +1025,15 @@ export const useStore = create<State>((set, get) => {
       // 载入的 prompt 已含完整内容（含原 preset body），清选中避免发送时 startGeneration 重复拼 body
       activePresetId: null,
     });
-    // 参考图取自 activeJob（复用入口在 GenerationPanel 基于选中 job）。
+    // 参考图：显式传入优先（右键菜单按 generation_history 复用）；
+    // 否则取 activeJob（复用入口在 GenerationPanel 基于选中 job）。
     const id = get().activeJobId;
-    const refs = id ? get().genJobs[id]?.refAssets ?? [] : [];
+    const refAssets = refs ?? (id ? get().genJobs[id]?.refAssets ?? [] : []);
     // 延一帧：set(boardOpen) 后 CreationBoard 才挂载注册 listener，同步 dispatch 会丢失。
     setTimeout(() => {
       window.dispatchEvent(
         new CustomEvent("bowerbird://board-load-prompt", {
-          detail: { prompt: body, refs },
+          detail: { prompt: body, refs: refAssets },
         }),
       );
     }, 0);

@@ -86,7 +86,7 @@ Deno.serve(async (request) => {
       image: body.image,
       instruction: body.instruction,
       scenario: body.mock_scenario,
-    }));
+    }), 120_000);
     const confirmed = await confirmCredits(admin, holdId, result.actualCost);
     safeLog({ requestId: id, userId, service: "caption", status: "succeeded", elapsedMs: performance.now() - started, credits: result.actualCost });
     return jsonResponse({

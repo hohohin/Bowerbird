@@ -10,10 +10,6 @@ export function Toolbar({ onRefresh }: { onRefresh: () => Promise<void> }) {
   const enterManage = useStore((s) => s.enterManage);
   const boardOpen = useStore((s) => s.boardOpen);
   const toggleBoard = useStore((s) => s.toggleBoard);
-  const genPanelOpen = useStore((s) => s.genPanelOpen);
-  const toggleGenPanel = useStore((s) => s.toggleGenPanel);
-  const generating = useStore((s) => s.generating);
-  const genUnread = useStore((s) => s.genUnread);
   const searchQuery = useStore((s) => s.searchQuery);
   const currentProjectId = useStore((s) => s.currentProjectId);
   const setSearchQuery = useStore((s) => s.setSearchQuery);
@@ -112,24 +108,6 @@ export function Toolbar({ onRefresh }: { onRefresh: () => Promise<void> }) {
           title="打开创作板（核心枢纽）"
         >
           🎬 创作板
-        </button>
-        <button
-          onClick={toggleGenPanel}
-          className={`relative rounded-md px-3 py-1.5 text-sm font-medium ${
-            genPanelOpen
-              ? "bg-accent text-black hover:opacity-90"
-              : "bg-panel2 text-ink hover:bg-edge"
-          }`}
-          title="生成结果（随时打开/收起，与创作板互不绑定）"
-        >
-          🖼 生成结果
-          {/* 角标：面板关时——生成中转圈、有新结果红点；打开时不显（正在看） */}
-          {generating && !genPanelOpen && (
-            <span className="absolute -right-0.5 -top-0.5 h-2 w-2 animate-pulse rounded-full bg-accent" />
-          )}
-          {!generating && genUnread && !genPanelOpen && (
-            <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-red-400" />
-          )}
         </button>
         <CodexStatus />
       </div>

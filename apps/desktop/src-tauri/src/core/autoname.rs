@@ -1,12 +1,13 @@
-//! 采集即命名：图片一进库就后台调一次 codex，一次产出「≤8 字命名 + 反推 caption」。
+//! 采集即命名：图片一进库就后台调一次理解 provider，一次产出「≤8 字命名 + 反推 caption」。
+//! provider 经 `resolve_entitled_understand_provider` 按权益路由（Pro/Studio → codex CLI；免费 → Bowerbird Cloud）。
 //!
-//! - **非阻塞**：codex 单次 10–30s（HTTPS 回退更慢），图片必须先秒级落库可见；
+//! - **非阻塞**：单次 10–30s（codex HTTPS 回退更慢；Cloud 看网络），图片必须先秒级落库可见；
 //!   命名/caption 在后台完成后 emit `library://assets-changed` 让前端刷新。
-//! - **离线降级**（约定 7）：codex 不可用就 `warn` + 保留原文件名，不崩。
+//! - **离线降级**（约定 7）：理解引擎不可用就 `warn` + 保留原文件名，不崩。
 //! - **去重不重跑**：已有 caption 的资产（dHash 去重命中的已有资产 / 重导入）直接跳过。
-//! - **并发节流**：全局信号量限制同时跑的 codex 子进程数（批量采集/导入不爆订阅 + 资源）。
+//! - **并发节流**：全局信号量限制同时跑的调用数（批量采集/导入不爆订阅/配额 + 资源）。
 //!
-//! 一次 codex 调用同时得到命名和描述，描述按反推规则落 `analyses(kind=caption)`，
+//! 一次调用同时得到命名和描述，描述按反推规则落 `analyses(kind=caption)`，
 //! 让新采集的图自动成为「创作板就绪」（`list_prompted_assets` 会带上它）。
 
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -16,9 +17,9 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Semaphore;
 use ulid::Ulid;
 
+use crate::cloud::{AuthClient, CloudClient, EntitlementService};
 use crate::codex::types::CodexRequest;
 use crate::codex::understand::{resolve_entitled_understand_provider, UnderstandOperation};
-use crate::cloud::{AuthClient, CloudClient, EntitlementService};
 use crate::core::caption;
 use crate::core::library::{Analysis, Asset};
 use crate::core::settings::SettingsState;
@@ -87,9 +88,7 @@ impl AutoActiveGuard {
 }
 impl Drop for AutoActiveGuard {
     fn drop(&mut self) {
-        let n = AUTO_ACTIVE
-            .fetch_sub(1, Ordering::SeqCst)
-            .saturating_sub(1);
+        let n = AUTO_ACTIVE.fetch_sub(1, Ordering::SeqCst).saturating_sub(1);
         let _ = self.0.emit("codex://auto-active", n);
     }
 }
@@ -175,7 +174,11 @@ async fn auto_analyze(app: &AppHandle, db: &Arc<Database>, asset: Asset) -> Resu
     // 1) 命名写回（best-effort，失败不阻断 caption）
     if let Some(n) = name {
         let (id_for_name, n_for_name) = (asset_id.clone(), n);
-        match db_call(db, move |db| db.update_asset_name(&id_for_name, &n_for_name)).await {
+        match db_call(db, move |db| {
+            db.update_asset_name(&id_for_name, &n_for_name)
+        })
+        .await
+        {
             Ok(()) => changed = true,
             Err(e) => tracing::warn!("auto-name update_asset_name {asset_id}: {e}"),
         }
@@ -301,7 +304,15 @@ async fn auto_name_only(app: &AppHandle, db: &Arc<Database>, asset: Asset) -> Re
 /// 去前缀标签 / markdown 与引号类字符 / 末尾标点，再截断 8 字；空 → None。
 fn clean_name(raw: &str) -> Option<String> {
     // 前缀标签兜底（模型偶尔不守「第 1 行只写命名」格式）
-    const PREFIXES: &[&str] = &["命名：", "名称：", "名字：", "标题：", "Name:", "Name：", "name:"];
+    const PREFIXES: &[&str] = &[
+        "命名：",
+        "名称：",
+        "名字：",
+        "标题：",
+        "Name:",
+        "Name：",
+        "name:",
+    ];
     // 首尾需剥除的字符：中英文引号 / 书名号 / markdown / 列表标记
     const STRIP: &[char] = &[
         '"', '"', '\'', '\'', '「', '」', '『', '』', '《', '》', '`', '*', '#', '-', '•', '·',
@@ -362,8 +373,7 @@ fn apply_auto_categories(asset_id: &str, cats: &[String], db: &Arc<Database>) ->
     if db.has_auto_tag(asset_id)? {
         return Ok(false);
     }
-    let vocab: std::collections::HashSet<String> =
-        db.list_auto_tag_names()?.into_iter().collect();
+    let vocab: std::collections::HashSet<String> = db.list_auto_tag_names()?.into_iter().collect();
     let ids: Vec<String> = cats
         .iter()
         .filter(|c| vocab.contains(*c))
@@ -416,7 +426,9 @@ async fn classify_one(app: &AppHandle, db: &Arc<Database>, asset_id: &str) -> Re
     }
     let id_for_path = asset_id.to_string();
     let Some(store_path) = db_call(db, move |db| {
-        Ok(db.get_asset(&id_for_path)?.and_then(|asset| asset.store_path))
+        Ok(db
+            .get_asset(&id_for_path)?
+            .and_then(|asset| asset.store_path))
     })
     .await?
     else {
@@ -437,14 +449,9 @@ async fn classify_one(app: &AppHandle, db: &Arc<Database>, asset_id: &str) -> Re
     let cloud = app.state::<CloudClient>().inner().clone();
     let auth = app.state::<AuthClient>().inner().clone();
     let entitlement = app.state::<EntitlementService>();
-    let provider = resolve_entitled_understand_provider(
-        &entitlement,
-        cloud,
-        auth,
-        true,
-    )
-    .await
-    .map_err(|e| e.to_string())?;
+    let provider = resolve_entitled_understand_provider(&entitlement, cloud, auth, true)
+        .await
+        .map_err(|e| e.to_string())?;
     let result = provider
         .understand(UnderstandOperation::Classify, req)
         .await

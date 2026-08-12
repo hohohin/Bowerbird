@@ -1,8 +1,9 @@
-//! Codex 调用命令（单次 + 流式 + 反推 + 会话回看）。
+//! 反推 / 生成 / 安装登录 / 会话回看命令。
 //!
-//! 全部走 [`CodexCliProvider`]（`codex exec --image`，ChatGPT 订阅认证，
-//! 真正多模态看图；Mock / DeepSeek / OpenAI HTTP 路线已移除，详见 PROJECT.md）。
-//! 流式：通过 event `codex://chunk` 推 Chunk（Delta / Done / Error）。
+//! 理解类（反推 / 命名 / 归类）经 understand provider 抽象按权益路由（codex CLI 或
+//! Bowerbird Cloud）；生成经 gen provider 抽象可选 codex / 即梦 / Cloud。命令名仍叫
+//! `codex_*` 是历史保留（见 AI-PROVIDERS.md 开放问题 1），语义已泛化。
+//! 流式：通过 event `codex://chunk` 推 Chunk（Delta / Done / Error / Submit 等）。
 
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -14,13 +15,13 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::mpsc;
 use ulid::Ulid;
 
+use crate::cloud::EntitlementService;
 use crate::codex::codex_cli::{
     codex_command, codex_home, npm_command, resolve_codex_binary, resolve_npm_binary,
 };
+use crate::codex::resolve_gen_provider;
 use crate::codex::types::{Chunk, CodexRequest, CodexResult};
 use crate::codex::understand::{resolve_entitled_understand_provider, UnderstandOperation};
-use crate::codex::resolve_gen_provider;
-use crate::cloud::EntitlementService;
 use crate::core::caption;
 use crate::core::paths::LibraryPaths;
 use crate::db::Database;
@@ -47,8 +48,9 @@ pub struct CodexHealth {
     pub reason: String,
 }
 
-/// 检测 codex 是否可用于反推：① CLI 可执行；② CODEX_HOME（或用户目录）内 auth.json 非空。
-/// 任一不满足返回 `ok=false` + 中文 reason，前端据此置灰反推按钮（约定 7：离线/无账号降级置灰）。
+/// 检测 codex CLI 是否就绪（Pro/Studio 本机理解/生成引擎之一）：① CLI 可执行；② CODEX_HOME（或用户目录）内 auth.json 非空。
+/// 任一不满足返回 `ok=false` + 中文 reason。注意：免费档反推/生成走 Bowerbird Cloud，**不依赖此检测结果**——
+/// 前端「环境就绪」应按权益路由判断（见 `lib/entitlement.ts` understandReady），而非直判 codexHealth。
 /// 跨平台：binary 经 `resolve_codex_binary`（Windows 找 codex.cmd、补 %APPDATA%\npm）、
 /// home 经 `codex_home`（CODEX_HOME → USERPROFILE/HOME），不再死读 `$HOME`。
 #[tauri::command]
@@ -116,9 +118,9 @@ pub async fn codex_install(app: AppHandle) -> Result<CodexHealth, AppError> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    let mut child = cmd.spawn().map_err(|e| {
-        AppError::Codex(format!("启动 npm 失败: {e}"))
-    })?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| AppError::Codex(format!("启动 npm 失败: {e}")))?;
 
     // 逐行读 stdout + stderr → emit 进度（两个 task 并发读，互不阻塞）。
     let stdout = child.stdout.take();
@@ -199,18 +201,17 @@ pub async fn codex_install(app: AppHandle) -> Result<CodexHealth, AppError> {
 /// 成功 emit `codex://health-changed` 让各处自刷新。
 #[tauri::command]
 pub async fn codex_login(app: AppHandle) -> Result<CodexHealth, AppError> {
-    let binary = resolve_codex_binary().ok_or_else(|| {
-        AppError::Codex("未检测到 codex CLI，请先点「安装 codex CLI」".into())
-    })?;
+    let binary = resolve_codex_binary()
+        .ok_or_else(|| AppError::Codex("未检测到 codex CLI，请先点「安装 codex CLI」".into()))?;
     let mut cmd = codex_command(&binary);
     cmd.arg("login");
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    let mut child = cmd.spawn().map_err(|e| {
-        AppError::Codex(format!("启动 codex login 失败: {e}"))
-    })?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| AppError::Codex(format!("启动 codex login 失败: {e}")))?;
 
     // codex login 会自己打开浏览器；提示用户去浏览器完成授权。
     let _ = app.emit(
@@ -263,7 +264,8 @@ pub async fn codex_login(app: AppHandle) -> Result<CodexHealth, AppError> {
     if !logged_in {
         return Ok(CodexHealth {
             ok: false,
-            reason: "codex login 已结束但未检测到登录态；可重试，或手动在终端跑一次 codex login".into(),
+            reason: "codex login 已结束但未检测到登录态；可重试，或手动在终端跑一次 codex login"
+                .into(),
         });
     }
     let _ = app.emit("codex://health-changed", ());
@@ -327,14 +329,14 @@ pub async fn codex_generate_prompt_for_asset(
 }
 
 /// 当前反推任务的取消信号。同一时刻只支持一个反推任务（前端反推按钮 disabled 保证）；
-/// 取消时往 sender 发信号，select 命中后 run future 被 drop，codex 子进程靠
-/// `kill_on_drop` 自动终止（见 codex_cli.rs）。
+/// 取消时往 sender 发信号，select 命中后 future 被 drop，本机 CLI 子进程靠
+/// `kill_on_drop` 自动终止（见 codex_cli.rs）；Cloud 路由无子进程，drop future 即止。
 static DESCRIBE_CANCEL: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>> =
     std::sync::Mutex::new(None);
 
-/// 「反推」：让 codex 描述指定资产，结果落 analyses(kind=caption)。
-/// payload 同时存 session_id，前端「在 codex 中打开」按钮据此唤起 `codex resume`。
-/// 可取消：前端调 `cancel_codex_describe` 即中断本次 codex 执行（子进程被 kill）。
+/// 「反推」：让理解 provider 描述指定资产（按权益路由 codex CLI / Bowerbird Cloud），结果落 analyses(kind=caption)。
+/// payload 同时存 session_id（codex 路由才有，Cloud 无），前端「在 codex 中打开」按钮据此唤起 `codex resume`。
+/// 可取消：前端调 `cancel_codex_describe` 即中断本次执行（本机 CLI 子进程被 kill）。
 #[tauri::command]
 pub async fn codex_describe_asset(
     app: AppHandle,
@@ -370,10 +372,7 @@ pub async fn codex_describe_asset(
     // 可取消：select codex 执行 与 取消信号。取消时 run future 被 drop，
     // codex 子进程靠 kill_on_drop 自动 kill。
     let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
-    DESCRIBE_CANCEL
-        .lock()
-        .unwrap()
-        .replace(cancel_tx);
+    DESCRIBE_CANCEL.lock().unwrap().replace(cancel_tx);
     let run_fut = p.understand(UnderstandOperation::Caption, req);
     tokio::pin!(run_fut);
     let result = tokio::select! {
@@ -431,15 +430,14 @@ static GENERATE_CANCEL: std::sync::LazyLock<
     std::sync::Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<()>>>,
 > = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
-/// 创作板「生成」：把最终 prompt + 参考图发 codex（`codex exec --image`，与反推同机制），
-/// 让 codex 调内置 imagegen 技能出图。
+/// 创作板「生成」：把最终 prompt + 参考图交 provider 出图（`provider` 参数选实现，
+/// None/`codex` → CodexCliProvider、`jimeng` → DreaminaCliProvider、`bowerbird-cloud` →
+/// BowerbirdCloudProvider）。provider 产出的源图由 `finalize_generation_assets` 入库。
 ///
-/// - 流式：codex 的逐条 `agent_message` 经 event `codex://chunk`（Delta）回前端；
-/// - 取图：跑完扫 `~/.codex/generated_images/` 本次新增图，copy 进 `library/generations/`，
-///   随 `Done.images`（库内路径）回前端 convertFileSrc 渲染；
-/// - 不写 `analyses`（生成 ≠ 分析）；`generations` 表落库是后续（见 PROJECT.md 约定 2）。
-/// 可取消：前端调 `cancel_codex_create`，select 命中后 future 被 drop，codex 子进程靠
-/// `kill_on_drop` 自动终止。
+/// - 流式：经 event `codex://chunk` 回前端（codex=Delta 逐字、即梦/Cloud=状态/伪进度）；
+/// - 不写 `analyses`（生成 ≠ 分析）；来源元信息落 `generation_meta`。
+/// 可取消：前端调 `cancel_codex_create`，select 命中后 future 被 drop，本机 CLI 子进程靠
+/// `kill_on_drop` 自动终止（Cloud/远端任务可能仍在运行，submit_id 保留可事后取回）。
 #[tauri::command]
 pub async fn codex_create_image(
     app: AppHandle,
@@ -456,23 +454,26 @@ pub async fn codex_create_image(
     project_id: Option<String>,
     job_id: String,
 ) -> Result<String, AppError> {
-    // 首轮（无 session_id）：包一句明确要 codex 出图，触发 imagegen；
-    // 续轮（有 session_id = resume）：codex 已在画图上下文里，用户修改意见原样发。
+    // 首轮 instruction：codex 需一句自然语言触发其 imagegen 技能（含 ratio 文本注入）；
+    // 即梦 / Cloud 直接用用户原文——它们各有 ratio 参数通道（--ratio / req.ratio），
+    // 加这层前缀话反而会被当成画面描述污染出图。
+    // 续轮（有 session_id）：codex resume / 即梦 image2image / Cloud 重发，统一用用户修改意见原文。
     // prompt / reference_images 留一份给 generation_meta（req 会 move 走原值）。
-    // ratio（如 "16:9"）仅首轮注入 instruction（续轮 codex resume 记得首轮比例，不重复指定）。
     let prompt_for_meta = prompt.clone();
     let refs_for_meta = reference_images.clone();
     // job_id 由前端生成（crypto.randomUUID）传入：前端创建 GenJob 时即知 id，chunk 事件按 job_id
     // 路由无 race；续轮（resume 同一 session）复用同一 job_id，task_queue 行 upsert 刷新回 running。
+    let is_codex = matches!(provider.as_deref(), None | Some("codex" | "default"));
     let ratio_clause = match ratio.as_deref().map(str::trim).filter(|r| !r.is_empty()) {
         Some(r) => format!("；画面比例为 {r}"),
         None => String::new(),
     };
-    let instruction = match &session_id {
-        Some(_) => prompt,
-        None => format!(
+    let instruction = match (&session_id, is_codex) {
+        (Some(_), _) => prompt,
+        (None, true) => format!(
             "请使用图像生成工具，根据以下提示词和参考图生成图片（张数完全以提示词要求为准；提示词未指定张数时生成一张{ratio_clause}）。\n\n{prompt}"
         ),
+        (None, false) => prompt,
     };
     let req = CodexRequest {
         instruction,
@@ -601,7 +602,12 @@ pub async fn codex_create_image(
     // 子进程撞 ExceedConcurrencyLimit；codex 不受限可并行。持有到 fn 结束（return 时 drop 释放名额）。
     // 排队中取消：等拿到名额后 provider select 命中 cancel（MVP 简化，不中断 acquire）。
     let _jimeng_permit = if matches!(provider_name.as_str(), "jimeng" | "dreamina") {
-        Some(crate::core::generation_worker::JIMENG_FLY.acquire().await.unwrap())
+        Some(
+            crate::core::generation_worker::JIMENG_FLY
+                .acquire()
+                .await
+                .unwrap(),
+        )
     } else {
         None
     };
@@ -753,16 +759,14 @@ pub async fn openai_spike_generate_image(
 
     let dbw = db.inner().clone();
     let pw = paths.inner().clone();
-    let ids: Vec<String> = tokio::task::spawn_blocking(
-        move || -> Result<Vec<String>, AppError> {
-            let mut out = Vec::new();
-            for src in &srcs {
-                let asset = crate::core::ingest::ingest_generated(&pw, &dbw, src, None, "codex")?;
-                out.push(asset.id);
-            }
-            Ok(out)
-        },
-    )
+    let ids: Vec<String> = tokio::task::spawn_blocking(move || -> Result<Vec<String>, AppError> {
+        let mut out = Vec::new();
+        for src in &srcs {
+            let asset = crate::core::ingest::ingest_generated(&pw, &dbw, src, None, "openai")?;
+            out.push(asset.id);
+        }
+        Ok(out)
+    })
     .await
     .map_err(|e| AppError::Other(e.to_string()))??;
 

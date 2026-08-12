@@ -20,9 +20,7 @@ pub async fn cloud_start_email_login(
 }
 
 #[tauri::command]
-pub async fn cloud_restore_session(
-    auth: State<'_, AuthClient>,
-) -> Result<AuthSnapshot, AppError> {
+pub async fn cloud_restore_session(auth: State<'_, AuthClient>) -> Result<AuthSnapshot, AppError> {
     auth.restore().await
 }
 

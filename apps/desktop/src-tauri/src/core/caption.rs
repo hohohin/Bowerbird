@@ -150,7 +150,12 @@ fn parse_section_heading(line: &str) -> Option<(String, String)> {
 }
 
 fn clean_title(label: &str) -> String {
-    label.trim().trim_matches('*').trim_matches('`').trim().to_string()
+    label
+        .trim()
+        .trim_matches('*')
+        .trim_matches('`')
+        .trim()
+        .to_string()
 }
 
 fn looks_like_section_label(label: &str) -> bool {
@@ -204,7 +209,10 @@ fn strip_label_separator(s: &str) -> &str {
 fn dimension_key(label: &str) -> Option<&'static str> {
     let label = normalize_label(label);
     let aliases: [(&str, &[&str]); 5] = [
-        ("composition", &["构图/ratio", "构图", "ratio", "比例", "画幅", "布局"]),
+        (
+            "composition",
+            &["构图/ratio", "构图", "ratio", "比例", "画幅", "布局"],
+        ),
         ("light", &["光影", "光线", "lighting", "灯光", "照明"]),
         ("palette", &["色调", "色彩", "配色", "color", "颜色"]),
         ("action", &["主体动作", "人物动作", "动作", "姿态", "行为"]),
@@ -216,7 +224,9 @@ fn dimension_key(label: &str) -> Option<&'static str> {
             .iter()
             .any(|value| {
                 let value = normalize_label(value);
-                label == value || (label.starts_with(&value) && label.chars().count() <= value.chars().count() + 8)
+                label == value
+                    || (label.starts_with(&value)
+                        && label.chars().count() <= value.chars().count() + 8)
             })
             .then_some(*key)
     })
@@ -230,8 +240,23 @@ fn normalize_label(label: &str) -> String {
             !c.is_whitespace()
                 && !matches!(
                     c,
-                    '*' | '`' | '[' | ']' | '【' | '】' | '「' | '」' | '（' | '）' | '(' | ')'
-                        | '/' | '：' | ':' | '、' | '，' | ','
+                    '*' | '`'
+                        | '['
+                        | ']'
+                        | '【'
+                        | '】'
+                        | '「'
+                        | '」'
+                        | '（'
+                        | '）'
+                        | '('
+                        | ')'
+                        | '/'
+                        | '：'
+                        | ':'
+                        | '、'
+                        | '，'
+                        | ','
                 )
         })
         .collect::<String>()
@@ -256,11 +281,23 @@ mod tests {
 
         assert_eq!(parsed.parse_status, "structured");
         assert_eq!(parsed.sections.len(), 5);
-        assert_eq!(parsed.dimensions.get("composition").unwrap(), "竖幅近景，主体居中。");
-        assert_eq!(parsed.dimensions.get("light").unwrap(), "柔和侧光，阴影很浅。");
-        assert_eq!(parsed.dimensions.get("palette").unwrap(), "低饱和蓝灰配暖橙点缀。");
+        assert_eq!(
+            parsed.dimensions.get("composition").unwrap(),
+            "竖幅近景，主体居中。"
+        );
+        assert_eq!(
+            parsed.dimensions.get("light").unwrap(),
+            "柔和侧光，阴影很浅。"
+        );
+        assert_eq!(
+            parsed.dimensions.get("palette").unwrap(),
+            "低饱和蓝灰配暖橙点缀。"
+        );
         assert_eq!(parsed.dimensions.get("action").unwrap(), "人物侧身回头。");
-        assert_eq!(parsed.dimensions.get("mood").unwrap(), "安静、克制、带一点怀旧。");
+        assert_eq!(
+            parsed.dimensions.get("mood").unwrap(),
+            "安静、克制、带一点怀旧。"
+        );
     }
 
     #[test]
@@ -303,7 +340,10 @@ mod tests {
 
         assert_eq!(parsed.parse_status, "structured");
         assert_eq!(parsed.dimensions.len(), 5);
-        assert_eq!(parsed.dimensions.get("mood").unwrap(), "梦幻、治愈、轻盈、自由、明亮。");
+        assert_eq!(
+            parsed.dimensions.get("mood").unwrap(),
+            "梦幻、治愈、轻盈、自由、明亮。"
+        );
 
         let titles: Vec<&str> = parsed.sections.iter().map(|s| s.title.as_str()).collect();
         assert_eq!(

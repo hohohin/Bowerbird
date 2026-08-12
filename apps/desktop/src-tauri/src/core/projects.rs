@@ -79,7 +79,13 @@ fn move_destination(workspace: &Path, name: &str, store_path: &Path, id: &str) -
         .unwrap_or("");
     let stem: String = name
         .chars()
-        .map(|c| if "\\/:*?\"<>|".contains(c) || c.is_control() { '_' } else { c })
+        .map(|c| {
+            if "\\/:*?\"<>|".contains(c) || c.is_control() {
+                '_'
+            } else {
+                c
+            }
+        })
         .collect();
     let stem = stem.trim();
     let fallback = store_path
@@ -407,13 +413,12 @@ impl Database {
             .ok_or_else(|| AppError::NotFound(format!("asset {asset_id}")))?;
 
         // 共享判定：该素材是否还被其它项目引用（在中央库层面复用项目的共享语义）。
-        let shared_in_other_project: bool = conn
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM project_assets pa \
+        let shared_in_other_project: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM project_assets pa \
                  WHERE pa.asset_id = ?1 AND pa.project_id != COALESCE(?2, ''))",
-                rusqlite::params![asset_id, project_id],
-                |r| r.get(0),
-            )?;
+            rusqlite::params![asset_id, project_id],
+            |r| r.get(0),
+        )?;
 
         match mode {
             AssetDeleteMode::Keep => {
@@ -607,7 +612,9 @@ mod tests {
             .unwrap();
         db.add_assets_to_project("p2", &["shared".into()]).unwrap();
 
-        let result = db.delete_project("p1", ProjectDeleteMode::DeleteExclusive).unwrap();
+        let result = db
+            .delete_project("p1", ProjectDeleteMode::DeleteExclusive)
+            .unwrap();
         assert_eq!(result.removed_members, 2);
         assert_eq!(result.deleted_assets, 1);
         assert_eq!(result.preserved_shared, 1);

@@ -38,6 +38,10 @@ pub struct AppSettings {
     /// 入库自动理解是否允许把新图片临时发送到 Bowerbird Cloud。默认 false，必须显式开启。
     #[serde(default)]
     pub cloud_auto_understand: bool,
+
+    /// 首启预置示例图是否已注入完成。true = 不再重灌（配合 count_assets==0 双 gate）。
+    #[serde(default)]
+    pub samples_seeded: bool,
 }
 
 impl Default for AppSettings {
@@ -47,6 +51,7 @@ impl Default for AppSettings {
             auto_analyze_prompt: DEFAULT_AUTO_ANALYZE_PROMPT.to_string(),
             library_root: None,
             cloud_auto_understand: false,
+            samples_seeded: false,
         }
     }
 }

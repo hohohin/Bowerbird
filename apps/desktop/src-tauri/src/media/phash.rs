@@ -22,9 +22,7 @@ pub fn compute(path: &Path) -> AppResult<Option<String>> {
 /// 同 `compute`，但从已解码的 `DynamicImage` 计算（省一次 decode）。
 pub fn compute_from_image(img: &image::DynamicImage) -> String {
     // 9×8 灰度，比较水平相邻像素 → 64 bit。
-    let small = img
-        .resize_exact(9, 8, FilterType::Nearest)
-        .into_luma8();
+    let small = img.resize_exact(9, 8, FilterType::Nearest).into_luma8();
     let mut bits: u64 = 0;
     let mut idx = 0u32;
     for y in 0..8 {
@@ -95,7 +93,11 @@ pub(crate) mod testutil {
         };
         let mut field = Vec::with_capacity((GRID * GRID) as usize);
         for _ in 0..GRID * GRID {
-            field.push([(next() % 256) as u8, (next() % 256) as u8, (next() % 256) as u8]);
+            field.push([
+                (next() % 256) as u8,
+                (next() % 256) as u8,
+                (next() % 256) as u8,
+            ]);
         }
         let mut img = RgbImage::new(size, size);
         for y in 0..size {

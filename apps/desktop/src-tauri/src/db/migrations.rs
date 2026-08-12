@@ -12,7 +12,7 @@
 //! - `0011_dhash_fuzzy_dedupe.sql`：采集去重升级为 dHash 阈值去重；存量近重复搬进
 //!   「已合并去重（重复）」收藏夹（保留高分在主瀑布流，见 hook）
 
-use rusqlite_migration::{M, Migrations};
+use rusqlite_migration::{Migrations, M};
 
 /// 「已合并去重（重复）」收藏夹 id。hook 仅在确实搬入素材时才创建该收藏夹
 /// （空收藏夹会污染侧栏「收藏夹」区）。
@@ -32,9 +32,7 @@ pub fn migrations() -> Migrations<'static> {
         M::up(include_str!("../../sql/0010_projects.sql")),
         M::up_with_hook(
             include_str!("../../sql/0011_dhash_fuzzy_dedupe.sql"),
-            |tx: &rusqlite::Transaction| {
-                merge_existing_duplicates(tx)
-            },
+            |tx: &rusqlite::Transaction| merge_existing_duplicates(tx),
         ),
     ])
 }
@@ -235,9 +233,11 @@ mod tests {
 
         ms.to_latest(&mut conn).unwrap();
         let folder: i64 = conn
-            .query_row("SELECT COUNT(*) FROM folders WHERE id = 'merged_duplicates'", [], |r| {
-                r.get(0)
-            })
+            .query_row(
+                "SELECT COUNT(*) FROM folders WHERE id = 'merged_duplicates'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(folder, 0, "无近重复时不应创建收藏夹");
     }
@@ -265,8 +265,12 @@ mod tests {
         };
         let tmp = std::env::temp_dir().join(format!("bb-mig-{}", ulid::Ulid::new()));
         std::fs::create_dir_all(&tmp).unwrap();
-        let ha = phash::compute(&make_flat("red.png", red, &tmp)).unwrap().unwrap();
-        let hb = phash::compute(&make_flat("green.png", green, &tmp)).unwrap().unwrap();
+        let ha = phash::compute(&make_flat("red.png", red, &tmp))
+            .unwrap()
+            .unwrap();
+        let hb = phash::compute(&make_flat("green.png", green, &tmp))
+            .unwrap()
+            .unwrap();
         // 两种纯色的 dHash 大概率都低熵（置位 bit 少）。
         assert!(!phash::is_high_entropy(&ha) || !phash::is_high_entropy(&hb));
 

@@ -12,9 +12,7 @@ use crate::db::Database;
 use crate::error::AppError;
 /// 获取当前设置快照。
 #[tauri::command]
-pub async fn get_settings(
-    state: State<'_, SettingsState>,
-) -> Result<AppSettings, AppError> {
+pub async fn get_settings(state: State<'_, SettingsState>) -> Result<AppSettings, AppError> {
     Ok(state.get())
 }
 
@@ -53,7 +51,11 @@ pub async fn migrate_library_root(
         if done % 50 == 0 || done == total {
             let _ = app_for_progress.emit(
                 "library://migrate-progress",
-                crate::core::migrate::MigrateProgress { stage: stage.to_string(), done, total },
+                crate::core::migrate::MigrateProgress {
+                    stage: stage.to_string(),
+                    done,
+                    total,
+                },
             );
         }
     };

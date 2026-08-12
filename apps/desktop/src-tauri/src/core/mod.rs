@@ -8,5 +8,6 @@ pub mod library;
 pub mod migrate;
 pub mod paths;
 pub mod projects;
+pub mod samples;
 pub mod settings;
 pub mod task_queue;

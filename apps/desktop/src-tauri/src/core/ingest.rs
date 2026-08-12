@@ -323,11 +323,14 @@ fn uploaded_image_extension(bytes: &[u8], content_type: Option<&str>) -> AppResu
         if text.trim_start().starts_with("<svg") || text.contains("<svg") {
             return Ok("svg");
         }
-        return Err(AppError::Media("browser response says SVG but contains no SVG".into()));
+        return Err(AppError::Media(
+            "browser response says SVG but contains no SVG".into(),
+        ));
     }
 
-    let format = image::guess_format(bytes)
-        .map_err(|_| AppError::Media("browser returned content that is not a supported image".into()))?;
+    let format = image::guess_format(bytes).map_err(|_| {
+        AppError::Media("browser returned content that is not a supported image".into())
+    })?;
     let ext = match format {
         image::ImageFormat::Jpeg => "jpg",
         image::ImageFormat::Png => "png",
@@ -687,7 +690,11 @@ mod tests {
 
         // 去重：再导入同一张 → 不新增
         let _ = ingest_file(&paths, &db, &img_path).unwrap();
-        assert_eq!(db.count_assets(None).unwrap(), 1, "duplicate should be deduped");
+        assert_eq!(
+            db.count_assets(None).unwrap(),
+            1,
+            "duplicate should be deduped"
+        );
     }
 
     /// 报告 bug 的回归：浏览器扩展把同一张图以两种分辨率采集（如 Pinterest 236w 缩略图
@@ -703,9 +710,11 @@ mod tests {
         let full = make_photo_file(&dir, "full.png", 640, 0);
         // 低分辨率变体（模拟浏览器网格缩略图），用与浏览器一致的低通缩放。
         let small_path = dir.join("small.png");
-        let small_img = image::open(&full)
-            .unwrap()
-            .resize_exact(236, 236, image::imageops::FilterType::Triangle);
+        let small_img = image::open(&full).unwrap().resize_exact(
+            236,
+            236,
+            image::imageops::FilterType::Triangle,
+        );
         small_img.save(&small_path).unwrap();
 
         let first = ingest_file(&paths, &db, &full).unwrap();
@@ -803,7 +812,11 @@ mod tests {
         make_gradient(&tmp.dir.join("c.png"), 200);
 
         let assets = ingest_dir(&paths, &db, &tmp.dir).unwrap();
-        assert_eq!(assets.len(), 3, "three distinct images should all be ingested");
+        assert_eq!(
+            assets.len(),
+            3,
+            "three distinct images should all be ingested"
+        );
         assert_eq!(db.count_assets(None).unwrap(), 3);
     }
 
@@ -828,8 +841,14 @@ mod tests {
         db.delete_asset(&asset.id).unwrap();
 
         assert_eq!(db.count_assets(None).unwrap(), 0, "db row should be gone");
-        assert!(!Path::new(&store).exists(), "store file should be physically deleted");
-        assert!(!Path::new(&thumb).exists(), "thumb file should be physically deleted");
+        assert!(
+            !Path::new(&store).exists(),
+            "store file should be physically deleted"
+        );
+        assert!(
+            !Path::new(&thumb).exists(),
+            "thumb file should be physically deleted"
+        );
     }
 
     #[test]

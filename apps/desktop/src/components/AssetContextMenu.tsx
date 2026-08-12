@@ -3,14 +3,13 @@ import { createPortal } from "react-dom";
 import { useStore } from "../store";
 import { api } from "../lib/api";
 import { loadDescribePrompt } from "../lib/describePrompt";
+import { ConfirmDialog } from "./ConfirmDialog";
+import { RenameDialog } from "./RenameDialog";
 import { understandProvider } from "../lib/entitlement";
 import type { AssetDeleteMode, AssetDeleteResult } from "../lib/types";
 
-/** 物理删除的确认口令（与「删除项目」一致，避开 window.confirm——Tauri WKWebView 拦截原生对话框）。 */
-const CONFIRM_TEXT = "确认删除";
-
 const MENU_WIDTH = 232;
-const MENU_HEIGHT = 280;
+const MENU_HEIGHT = 312;
 
 function resultMessage(mode: AssetDeleteMode, result: AssetDeleteResult): string {
   if (mode === "keep") {
@@ -36,24 +35,29 @@ export function AssetContextMenu() {
   const reloadProjects = useStore((s) => s.reloadProjects);
   const assets = useStore((s) => s.assets);
   const runDescribe = useStore((s) => s.runDescribe);
+  const reusePromptToBoard = useStore((s) => s.reusePromptToBoard);
   const codexHealth = useStore((s) => s.codexHealth);
+  const mode = useStore((s) => s.mode);
+  const enterManage = useStore((s) => s.enterManage);
+  const toggleSelect = useStore((s) => s.toggleSelect);
   const cloudAuth = useStore((s) => s.cloudAuth);
   const cloudEntitlement = useStore((s) => s.cloudEntitlement);
   const cloudAvailable = cloudAuth?.cloud_available ?? false;
 
   const [busy, setBusy] = useState(false);
-  const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const [confirmText, setConfirmText] = useState("");
+  const [pendingDelete, setPendingDelete] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
+  const [renameTarget, setRenameTarget] = useState<{ id: string; name: string } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // 每次打开重置子状态；关闭时清掉自动关闭定时器。
+  // （renameTarget 不在此重置——「重命名」点击会先 closeContextMenu 再开 dialog，重置会把它清掉；
+  //   dialog 由自身的 onClose 清理。）
   useEffect(() => {
     setBusy(false);
-    setConfirmingDelete(false);
-    setConfirmText("");
+    setPendingDelete(false);
     setMessage(null);
     setDone(null);
     return () => {
@@ -91,7 +95,10 @@ export function AssetContextMenu() {
 
   // 守卫后捕获，闭包里直接用（TS 不会把守卫的收窄带进嵌套函数）。
   const assetId = menu.assetId;
-  const storePath = assets.find((a) => a.id === assetId)?.store_path ?? null;
+  const asset = assets.find((a) => a.id === assetId);
+  const storePath = asset?.store_path ?? null;
+  // 仅生成图显示「复用生成提示词」：generation_session_id 非 null 即任意 provider 的生成图。
+  const isGenerated = !!asset?.generation_session_id;
   // 反推项置灰：该图正在反推或已排队（runDescribe 内部已去重，置灰仅为给用户明确反馈）。
   const describing =
     useStore.getState().describingId === assetId ||
@@ -120,6 +127,26 @@ export function AssetContextMenu() {
       closeContextMenu();
     } catch (e) {
       setMessage(typeof e === "string" ? e : "无法打开所在文件夹");
+      setBusy(false);
+    }
+  }
+
+  async function reuseGeneration() {
+    setBusy(true);
+    setMessage(null);
+    try {
+      const hist = await api.generationHistory(assetId, currentProjectId);
+      const prompt = hist.turns[0]?.prompt ?? "";
+      if (!prompt) {
+        setMessage("该生成图没有可复用的提示词记录");
+        setBusy(false);
+        return;
+      }
+      // 复用首轮 prompt + 首版参考图（与 GenerationPanel「📋 复用」语义一致）→ 打开创作板载入。
+      reusePromptToBoard(prompt, hist.references);
+      closeContextMenu();
+    } catch (e) {
+      setMessage(typeof e === "string" ? e : "读取生成提示词失败");
       setBusy(false);
     }
   }
@@ -160,11 +187,35 @@ export function AssetContextMenu() {
       className="rounded-lg border border-edge bg-panel p-1 text-xs shadow-lg"
     >
       <button
+        onClick={() => {
+          // browse 模式：右键直接进 manage 并选中此图；manage 模式：仅切换选中。继续点其它图加选。
+          if (mode !== "manage") enterManage();
+          toggleSelect(assetId);
+          closeContextMenu();
+        }}
+        disabled={busy || done !== null}
+        className="block w-full rounded px-2 py-1.5 text-left text-ink hover:bg-panel2 disabled:opacity-50"
+      >
+        {mode === "manage" ? "选择/取消选择" : "选择"}
+      </button>
+      <button
         onClick={reveal}
         disabled={busy || done !== null}
         className="block w-full rounded px-2 py-1.5 text-left text-ink hover:bg-panel2 disabled:opacity-50"
       >
         打开所在文件夹
+      </button>
+      <button
+        onClick={() => {
+          // 先收菜单再开 dialog（菜单 z-60 高于 dialog z-50，不收会被盖住）。
+          setRenameTarget({ id: assetId, name: asset?.name ?? "" });
+          closeContextMenu();
+        }}
+        disabled={busy || done !== null || !storePath}
+        title={storePath ? "重命名（同步改磁盘文件名）" : "该素材没有本地文件，无法重命名"}
+        className="block w-full rounded px-2 py-1.5 text-left text-ink hover:bg-panel2 disabled:opacity-50"
+      >
+        重命名
       </button>
       {storePath && (
         <>
@@ -201,6 +252,16 @@ export function AssetContextMenu() {
       >
         反推提示词
       </button>
+      {isGenerated && (
+        <button
+          onClick={reuseGeneration}
+          disabled={busy || done !== null}
+          title="打开创作板，填入该图生成时的提示词与参考素材"
+          className="block w-full rounded px-2 py-1.5 text-left text-ink hover:bg-panel2 disabled:opacity-50"
+        >
+          复用生成提示词
+        </button>
+      )}
 
       <div className="my-1 border-t border-edge" />
 
@@ -208,37 +269,6 @@ export function AssetContextMenu() {
         <div className="px-2 py-1.5 text-emerald-400">{done}</div>
       ) : message ? (
         <div className="px-2 py-1.5 text-red-400">{message}</div>
-      ) : confirmingDelete ? (
-        <div className="space-y-1.5 px-1 py-1">
-          <div className="px-1 text-red-300">
-            素材将从全局及所有项目物理删除，不可恢复。
-          </div>
-          <input
-            autoFocus
-            value={confirmText}
-            onChange={(e) => setConfirmText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && confirmText === CONFIRM_TEXT) runDelete("delete");
-              if (e.key === "Escape") setConfirmingDelete(false);
-            }}
-            placeholder={`输入「${CONFIRM_TEXT}」`}
-            className="w-full rounded bg-panel px-2 py-1 text-xs text-ink outline-none ring-1 ring-edge focus:ring-red-400/60"
-          />
-          <button
-            onClick={() => runDelete("delete")}
-            disabled={busy || confirmText !== CONFIRM_TEXT}
-            className="block w-full rounded bg-red-500/25 px-2 py-1 text-left text-red-200 hover:bg-red-500/35 disabled:opacity-40"
-          >
-            物理删除
-          </button>
-          <button
-            onClick={() => setConfirmingDelete(false)}
-            disabled={busy}
-            className="block w-full rounded px-2 py-1 text-left text-muted hover:bg-panel2"
-          >
-            取消
-          </button>
-        </div>
       ) : (
         <div className="space-y-0.5">
           {currentProjectId && (
@@ -259,16 +289,33 @@ export function AssetContextMenu() {
             移出园丁鸟 · 文件回到原始位置
           </button>
           <button
-            onClick={() => {
-              setConfirmingDelete(true);
-              setConfirmText("");
-            }}
+            onClick={() => setPendingDelete(true)}
             disabled={busy}
             className="block w-full rounded px-2 py-1.5 text-left text-red-300 hover:bg-red-500/15 disabled:opacity-50"
           >
-            物理删除 · 需输入「{CONFIRM_TEXT}」
+            物理删除
           </button>
         </div>
+      )}
+      <ConfirmDialog
+        open={pendingDelete}
+        danger
+        title="物理删除素材"
+        message="素材将从全局及所有项目物理删除，不可恢复。"
+        confirmLabel="物理删除"
+        onConfirm={() => {
+          setPendingDelete(false);
+          void runDelete("delete");
+        }}
+        onCancel={() => setPendingDelete(false)}
+      />
+      {renameTarget && (
+        <RenameDialog
+          open
+          assetId={renameTarget.id}
+          currentName={renameTarget.name}
+          onClose={() => setRenameTarget(null)}
+        />
       )}
     </div>,
     document.body

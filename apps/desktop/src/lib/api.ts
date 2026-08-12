@@ -144,6 +144,12 @@ export const api = {
   // 创作板（统一走 codex CLI）
   listPromptedAssets: (projectId?: string | null) =>
     invoke<PromptedAsset[]>("list_prompted_assets", { projectId: projectId ?? null }),
+  // 有反推（caption）的资产 id 集合（轻量，瀑布流标 🏷️ 用，不带 caption 正文）。
+  listCaptionedAssetIds: (projectId?: string | null) =>
+    invoke<string[]>("list_captioned_asset_ids", { projectId: projectId ?? null }),
+  // 手动重命名素材：同步重命名磁盘文件（store/thumb）+ DB name/store_path/thumb_path。
+  renameAsset: (id: string, newName: string) =>
+    invoke<void>("rename_asset", { id, newName }),
   // 生成图同流程合并：取某资产的整组过程图（详情轮播 / 批量取可见组）
   listGenerationGroup: (assetId: string, projectId?: string | null) =>
     invoke<Asset[]>("list_generation_group", { assetId, projectId: projectId ?? null }),
@@ -174,8 +180,7 @@ export const api = {
       folderId: folderId ?? null,
       projectId: projectId ?? null,
     }),
-  recomputeColors: () => invoke<void>("recompute_colors"),
-  assemblePack: (assetIds: string[]) =>
+  recomputeColors: () => invoke<void>("recompute_colors"),  assemblePack: (assetIds: string[]) =>
     invoke<CreationPack>("assemble_pack", { assetIds }),
   codexGeneratePromptForAsset: (assetId: string, role: string) =>
     invoke<string>("codex_generate_prompt_for_asset", { assetId, role }),

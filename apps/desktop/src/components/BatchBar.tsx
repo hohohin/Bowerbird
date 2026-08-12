@@ -2,36 +2,46 @@ import { useState } from "react";
 import { useStore } from "../store";
 import { api } from "../lib/api";
 import { understandProvider } from "../lib/entitlement";
+import { loadDescribePrompt } from "../lib/describePrompt";
+import { ConfirmDialog } from "./ConfirmDialog";
+import type { AssetDeleteMode } from "../lib/types";
 
 /**
  * 批量管理动作栏（manage 模式时显示在主区顶部）。
- * 删除 / 移入新文件夹 / 批量生成提示词（codex CLI 看图） + 完成。
+ *
+ * 按语义分组：选择（已选/全选/清空）| 整理（移入新/已有文件夹、加入项目）| AI（批量反推）
+ * | 危险（删除，对齐右键菜单三模式 + ConfirmDialog）| 完成。
+ * 批量反推复用 store 的 describeQueue 串行队列：进度、取消、失败隔离全在状态圈会话面板可见。
  * 不用 window.confirm/prompt：Tauri 2 WKWebView 会拦截原生对话框。
  */
 export function BatchBar() {
   const ids = useStore((s) => Array.from(s.selectedIds));
   const exitManage = useStore((s) => s.exitManage);
+  const clearSelect = useStore((s) => s.clearSelect);
+  const selectAll = useStore((s) => s.selectAll);
   const folders = useStore((s) => s.folders);
   const projects = useStore((s) => s.projects);
   const currentProjectId = useStore((s) => s.currentProjectId);
   const codexHealth = useStore((s) => s.codexHealth);
   const cloudAuth = useStore((s) => s.cloudAuth);
   const cloudEntitlement = useStore((s) => s.cloudEntitlement);
+  const runDescribe = useStore((s) => s.runDescribe);
+  const reloadProjects = useStore((s) => s.reloadProjects);
+  const reloadFolders = useStore((s) => s.reloadFolders);
   const cloudAvailable = cloudAuth?.cloud_available ?? false;
   // 移入已有只列普通夹（排除 root、智能夹与收藏夹）。
   const existingFolders = folders.filter((f) => f.id !== "root" && (f.kind ?? "folder") === "folder");
 
   const [busy, setBusy] = useState(false);
-  const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const [deleteMode, setDeleteMode] = useState<"remove" | "global" | null>(null);
-  const [projectInput, setProjectInput] = useState(false);
-  const [targetProjectId, setTargetProjectId] = useState("");
   const [folderInput, setFolderInput] = useState(false);
   const [folderName, setFolderName] = useState("");
   const [moveExisting, setMoveExisting] = useState(false);
   const [targetFolderId, setTargetFolderId] = useState("");
-  const [genRole, setGenRole] = useState("main");
-  const [genProgress, setGenProgress] = useState<string | null>(null);
+  const [projectInput, setProjectInput] = useState(false);
+  const [targetProjectId, setTargetProjectId] = useState("");
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [pendingPhysicalDelete, setPendingPhysicalDelete] = useState(false);
+  const [failedNotice, setFailedNotice] = useState<string | null>(null);
 
   const empty = ids.length === 0;
   const understandRoute = understandProvider(cloudEntitlement);
@@ -41,25 +51,21 @@ export function BatchBar() {
       ? cloudAvailable && !!cloudAuth?.logged_in
       : false;
   const understandLabel = understandRoute === "codex" ? "codex CLI" : "Bowerbird Cloud";
+  const describeTitle = !understandReady
+    ? understandRoute === "bowerbird-cloud"
+      ? "免费版反推需要先登录 Bowerbird Cloud（每日 10 次）"
+      : "当前账号没有可用的理解引擎"
+    : understandRoute === "bowerbird-cloud" && ids.length > 10
+      ? `已选 ${ids.length} 张，免费档每日仅 10 次，超出将失败`
+      : `${understandLabel} 看图反推，结果进创作板 @ 池`;
 
-  async function del() {
-    setBusy(true);
-    try {
-      if (currentProjectId && deleteMode === "remove") {
-        await api.removeAssetsFromProject(currentProjectId, ids);
-      } else {
-        await Promise.all(ids.map((id) => api.deleteAsset(id)));
-      }
-      const st = useStore.getState();
-      st.clearSelect();
-      await st.reloadProjects();
-    } catch (e) {
-      console.error("delete failed", e);
-    } finally {
-      setBusy(false);
-      setConfirmingDelete(false);
-      setDeleteMode(null);
+  /** 批量反推：全部入 describeQueue 串行队列（runDescribe 内部去重），进度走状态圈会话面板。 */
+  function batchDescribe() {
+    if (empty) return;
+    for (const id of ids) {
+      runDescribe(id, loadDescribePrompt());
     }
+    exitManage();
   }
 
   async function addToProject() {
@@ -67,11 +73,11 @@ export function BatchBar() {
     setBusy(true);
     try {
       await api.addAssetsToProject(targetProjectId, ids);
-      const st = useStore.getState();
-      st.clearSelect();
-      await st.reloadProjects();
+      await reloadProjects();
+      exitManage();
     } catch (e) {
       console.error("add to project failed", e);
+      setFailedNotice(typeof e === "string" ? e : "加入项目失败");
     } finally {
       setBusy(false);
       setProjectInput(false);
@@ -85,13 +91,13 @@ export function BatchBar() {
     try {
       const folderId = await api.createFolder(folderName.trim());
       await api.moveAssetsToFolder(ids, folderId);
-      const st = useStore.getState();
-      st.clearSelect();
-      st.exitManage();
-      st.setCurrentFolder(folderId);
-      await st.reloadFolders();
+      clearSelect();
+      exitManage();
+      useStore.getState().setCurrentFolder(folderId);
+      await reloadFolders();
     } catch (e) {
       console.error("move failed", e);
+      setFailedNotice(typeof e === "string" ? e : "移入失败");
     } finally {
       setBusy(false);
       setFolderInput(false);
@@ -104,13 +110,13 @@ export function BatchBar() {
     setBusy(true);
     try {
       await api.moveAssetsToFolder(ids, targetFolderId);
-      const st = useStore.getState();
-      st.clearSelect();
-      st.exitManage();
-      st.setCurrentFolder(targetFolderId);
-      await st.reloadFolders();
+      clearSelect();
+      exitManage();
+      useStore.getState().setCurrentFolder(targetFolderId);
+      await reloadFolders();
     } catch (e) {
       console.error("move failed", e);
+      setFailedNotice(typeof e === "string" ? e : "移入失败");
     } finally {
       setBusy(false);
       setMoveExisting(false);
@@ -118,28 +124,68 @@ export function BatchBar() {
     }
   }
 
-  async function generatePrompts() {
-    if (empty) return;
+  /** 批量删除：keep=移出当前项目（数组 API 一次）；move_out/delete=循环单条 deleteAssetWithMode。
+   *  全成功 → exitManage；有失败 → 留在 manage 显示失败反馈。 */
+  async function runDelete(mode: AssetDeleteMode) {
     setBusy(true);
+    setFailedNotice(null);
+    let failedCount = 0;
     try {
-      for (let i = 0; i < ids.length; i++) {
-        setGenProgress(`生成中 ${i + 1}/${ids.length}`);
-        await api.codexGeneratePromptForAsset(ids[i], genRole);
+      if (mode === "keep") {
+        if (currentProjectId) await api.removeAssetsFromProject(currentProjectId, ids);
+      } else {
+        for (const id of ids) {
+          try {
+            await api.deleteAssetWithMode(id, mode, currentProjectId);
+          } catch (e) {
+            failedCount += 1;
+            console.error("delete one failed", e);
+          }
+        }
       }
-      setGenProgress(`已完成 ${ids.length} 张`);
+      await reloadProjects();
+      if (failedCount > 0) {
+        setFailedNotice(`${failedCount} 张删除失败，已保留在全局`);
+        return;
+      }
+      exitManage();
     } catch (e) {
-      console.error("generate failed", e);
-      setGenProgress("生成失败");
+      console.error("delete failed", e);
+      setFailedNotice(typeof e === "string" ? e : "删除失败");
     } finally {
       setBusy(false);
-      setTimeout(() => setGenProgress(null), 2000);
+      setDeleteOpen(false);
+      setPendingPhysicalDelete(false);
     }
+  }
+
+  function resetDelete() {
+    setDeleteOpen(false);
+    setPendingPhysicalDelete(false);
   }
 
   return (
     <div className="flex flex-wrap items-center gap-2 border-b border-edge bg-panel px-3 py-2 text-sm">
+      {/* 选择区 */}
       <span className="text-muted">已选 {ids.length} 张</span>
+      <button
+        onClick={selectAll}
+        disabled={busy}
+        className="text-xs text-accent hover:opacity-80 disabled:opacity-50"
+      >
+        全选
+      </button>
+      <button
+        onClick={clearSelect}
+        disabled={busy || empty}
+        className="text-xs text-muted hover:text-ink disabled:opacity-50"
+      >
+        清空
+      </button>
 
+      <Divider />
+
+      {/* 整理区：移入新/已有文件夹 + 加入项目 */}
       {!folderInput && !moveExisting ? (
         <>
           <button
@@ -235,29 +281,6 @@ export function BatchBar() {
         </div>
       )}
 
-      <div className="flex items-center gap-1">
-        <select
-          value={genRole}
-          onChange={(e) => setGenRole(e.target.value)}
-          disabled={busy}
-          title="生成提示词的角色"
-          className="rounded bg-panel2 px-1.5 py-1 text-xs"
-        >
-          <option value="main">main</option>
-          <option value="desc">desc</option>
-        </select>
-        <button
-          onClick={generatePrompts}
-          disabled={busy || empty || !understandReady}
-          className="rounded bg-panel2 px-2.5 py-1 text-xs hover:bg-edge disabled:opacity-50"
-          title={understandReady
-            ? `${understandLabel} 看图生成提示词并写库`
-            : "免费版需要先登录 Bowerbird Cloud；Pro 可使用本机 CLI"}
-        >
-          批量生成提示词
-        </button>
-      </div>
-
       {!currentProjectId && projects.length > 0 && !projectInput && (
         <button
           onClick={() => {
@@ -292,63 +315,63 @@ export function BatchBar() {
         </div>
       )}
 
-      {!confirmingDelete ? (
+      <Divider />
+
+      {/* AI 区：批量反推 */}
+      <button
+        onClick={batchDescribe}
+        disabled={busy || empty || !understandReady}
+        title={describeTitle}
+        className="rounded bg-panel2 px-2.5 py-1 text-xs hover:bg-edge disabled:opacity-50"
+      >
+        批量反推
+      </button>
+
+      {/* 危险区：删除三模式 */}
+      {!deleteOpen ? (
         <button
           onClick={() => {
-            setConfirmingDelete(true);
-            setDeleteMode(currentProjectId ? null : "global");
+            setFailedNotice(null);
+            setDeleteOpen(true);
           }}
           disabled={busy || empty}
           className="rounded bg-panel2 px-2.5 py-1 text-xs text-muted hover:text-red-400 disabled:opacity-50"
         >
           删除
         </button>
-      ) : currentProjectId && deleteMode === null ? (
-        <div className="flex items-center gap-1">
-          <button
-            onClick={() => setDeleteMode("remove")}
-            className="rounded bg-panel2 px-2 py-1 text-xs hover:bg-edge"
-          >
-            仅移出当前项目
-          </button>
-          <button
-            onClick={() => setDeleteMode("global")}
-            className="rounded bg-red-500/15 px-2 py-1 text-xs text-red-300 hover:bg-red-500/25"
-          >
-            从全局彻底删除
-          </button>
-          <button onClick={() => setConfirmingDelete(false)} className="text-xs text-muted">
-            取消
-          </button>
-        </div>
       ) : (
         <div className="flex items-center gap-1">
+          {currentProjectId && (
+            <button
+              onClick={() => runDelete("keep")}
+              disabled={busy}
+              className="rounded bg-panel2 px-2 py-1 text-xs hover:bg-edge disabled:opacity-50"
+            >
+              仅移出当前项目
+            </button>
+          )}
           <button
-            onClick={del}
+            onClick={() => runDelete("move_out")}
             disabled={busy}
-            className="rounded bg-red-500 px-2 py-1 text-xs text-white disabled:opacity-50"
-            title={deleteMode === "global" ? "素材将从全局及所有项目消失" : undefined}
+            title="把图片文件交回原始文件夹，并从素材库移除（共享素材仍保留在全局）"
+            className="rounded bg-panel2 px-2 py-1 text-xs hover:bg-edge disabled:opacity-50"
           >
-            {busy
-              ? "处理中…"
-              : deleteMode === "remove"
-                ? `确认移出 ${ids.length} 张`
-                : `确认全局删除 ${ids.length} 张`}
+            移出园丁鸟
           </button>
           <button
-            onClick={() => {
-              setConfirmingDelete(false);
-              setDeleteMode(null);
-            }}
+            onClick={() => setPendingPhysicalDelete(true)}
             disabled={busy}
-            className="text-xs text-muted hover:text-ink"
+            className="rounded bg-red-500/15 px-2 py-1 text-xs text-red-300 hover:bg-red-500/25 disabled:opacity-50"
           >
+            物理删除
+          </button>
+          <button onClick={resetDelete} disabled={busy} className="text-xs text-muted hover:text-ink">
             取消
           </button>
         </div>
       )}
 
-      {genProgress && <span className="text-xs text-muted">{genProgress}</span>}
+      {failedNotice && <span className="text-xs text-red-400">{failedNotice}</span>}
 
       <button
         onClick={exitManage}
@@ -357,6 +380,20 @@ export function BatchBar() {
       >
         完成
       </button>
+
+      <ConfirmDialog
+        open={pendingPhysicalDelete}
+        danger
+        title={`物理删除 ${ids.length} 张素材`}
+        message="这些素材将从全局及所有项目物理删除，不可恢复。"
+        confirmLabel="物理删除"
+        onConfirm={() => runDelete("delete")}
+        onCancel={resetDelete}
+      />
     </div>
   );
+}
+
+function Divider() {
+  return <span className="h-4 w-px bg-edge" />;
 }

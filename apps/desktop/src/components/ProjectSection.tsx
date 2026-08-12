@@ -2,9 +2,7 @@ import { useState } from "react";
 import { api } from "../lib/api";
 import { useStore } from "../store";
 import type { Project, ProjectDeleteMode } from "../lib/types";
-
-/** 物理删除独占素材的确认口令（避开 window.confirm——Tauri WKWebView 拦截原生对话框）。 */
-const CONFIRM_TEXT = "确认删除";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 export function ProjectSection() {
   const projects = useStore((s) => s.projects);
@@ -15,7 +13,6 @@ export function ProjectSection() {
   const [creating, setCreating] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
-  const [confirmText, setConfirmText] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -39,7 +36,6 @@ export function ProjectSection() {
   function resetDelete() {
     setDeletingId(null);
     setConfirmingId(null);
-    setConfirmText("");
   }
 
   async function remove(project: Project, mode: ProjectDeleteMode) {
@@ -91,33 +87,6 @@ export function ProjectSection() {
                 </div>
               );
             }
-            if (confirmingId === project.id) {
-              return (
-                <div key={project.id} className="rounded bg-panel2 p-2 text-[10px]">
-                  <div className="mb-1.5 text-red-300">
-                    独占素材将从全局及所有项目物理删除，不可恢复；共享素材保留。
-                  </div>
-                  <input
-                    value={confirmText}
-                    onChange={(e) => setConfirmText(e.target.value)}
-                    placeholder={`输入「${CONFIRM_TEXT}」`}
-                    className="mb-1.5 w-full rounded bg-panel px-2 py-1 text-ink outline-none ring-1 ring-edge focus:ring-red-400/60"
-                  />
-                  <div className="flex flex-col gap-1">
-                    <button
-                      onClick={() => remove(project, "delete_exclusive")}
-                      disabled={confirmText !== CONFIRM_TEXT}
-                      className="rounded bg-red-500/25 px-2 py-1 text-left text-red-200 hover:bg-red-500/35 disabled:opacity-40"
-                    >
-                      物理删除独占素材
-                    </button>
-                    <button onClick={resetDelete} className="text-muted hover:text-ink">
-                      取消
-                    </button>
-                  </div>
-                </div>
-              );
-            }
             return (
               <div key={project.id} className="rounded bg-panel2 p-2 text-[10px]">
                 <div className="mb-1.5 text-muted">共享素材始终保留在全局</div>
@@ -138,7 +107,7 @@ export function ProjectSection() {
                     onClick={() => setConfirmingId(project.id)}
                     className="rounded bg-red-500/15 px-2 py-1 text-left text-red-300 hover:bg-red-500/25"
                   >
-                    物理删除独占素材 · 需输入「{CONFIRM_TEXT}」
+                    物理删除独占素材
                   </button>
                   <button onClick={resetDelete} className="text-muted hover:text-ink">
                     取消
@@ -189,6 +158,19 @@ export function ProjectSection() {
         })}
       </div>
       {message && <div className="mt-2 break-words text-[10px] text-muted">{message}</div>}
+      <ConfirmDialog
+        open={confirmingId !== null}
+        danger
+        title="物理删除独占素材"
+        message="项目的独占素材将从全局及所有项目物理删除，不可恢复；共享素材保留。"
+        confirmLabel="物理删除"
+        onConfirm={() => {
+          const p = projects.find((x) => x.id === confirmingId);
+          resetDelete();
+          if (p) void remove(p, "delete_exclusive");
+        }}
+        onCancel={resetDelete}
+      />
     </section>
   );
 }

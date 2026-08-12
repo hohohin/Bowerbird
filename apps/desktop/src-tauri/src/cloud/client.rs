@@ -21,7 +21,7 @@ impl Clone for CloudClient {
 impl CloudClient {
     pub fn new(config: CloudConfig) -> Result<Self, AppError> {
         let http = reqwest::Client::builder()
-            // Edge waits at most 140s for Ark; keep a small envelope for its response.
+            // Vision 主动在 110s 终止、Edge 在 120s 兜底；额外时间用于计费回滚和返回具体错误。
             .timeout(Duration::from_secs(145))
             .build()
             .map_err(|error| AppError::Other(format!("构建云 HTTP client 失败: {error}")))?;

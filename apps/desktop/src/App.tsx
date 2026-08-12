@@ -23,6 +23,7 @@ function App() {
   const setAssets = useStore((s) => s.setAssets);
   const setTotal = useStore((s) => s.setTotal);
   const setPromptedAssets = useStore((s) => s.setPromptedAssets);
+  const setCaptionedIds = useStore((s) => s.setCaptionedIds);
   const reloadFolders = useStore((s) => s.reloadFolders);
   const reloadProjects = useStore((s) => s.reloadProjects);
   const reloadAutoTags = useStore((s) => s.reloadAutoTags);
@@ -141,6 +142,14 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentProjectId, currentFolderId, currentCollectionId, searchQuery, smartFilter, colorFilter, boardOpen]);
 
+  // 有反推的资产 id 集合（project 级，缩略图标 🏷️ 用）：只随项目切换重拉，切 folder/filter 不重拉。
+  useEffect(() => {
+    api
+      .listCaptionedAssetIds(currentProjectId)
+      .then(setCaptionedIds)
+      .catch((e) => console.error("load captionedIds failed", e));
+  }, [currentProjectId, setCaptionedIds]);
+
   // 浏览器扩展采集入库后后端 emit `library://assets-changed`，
   // 去抖合并（扩展批量采集会连发多条 WS 消息）后刷新。
   useEffect(() => {
@@ -200,8 +209,7 @@ function App() {
   }, [reloadPresets]);
 
   // 反推后台化后，触发反推的组件可能早已卸载；后端 emit `analyses://changed`
-  // 通知数据落地。仅创作板模式需要刷新 promptedAssets（浏览瀑布流只显缩略图，
-  // 详情页各自监听本图事件自刷新）。
+  // 通知数据落地。创作板模式刷新 promptedAssets；任何模式都刷新 captionedIds（瀑布流 🏷️ 标记）。
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -209,11 +217,15 @@ function App() {
     listen<{ asset_id: string; kind: string }>("analyses://changed", () => {
       if (timer) clearTimeout(timer);
       timer = setTimeout(async () => {
-        if (!useStore.getState().boardOpen) return;
+        const st = useStore.getState();
         try {
-          setPromptedAssets(await api.listPromptedAssets(useStore.getState().currentProjectId));
+          // caption（反推）变化 → 🏷️ 标记集合刷新（轻量，始终拉）。
+          setCaptionedIds(await api.listCaptionedAssetIds(st.currentProjectId));
+          if (st.boardOpen) {
+            setPromptedAssets(await api.listPromptedAssets(st.currentProjectId));
+          }
         } catch (e) {
-          console.error("refresh promptedAssets failed", e);
+          console.error("refresh after analyses changed failed", e);
         }
       }, 300);
     }).then((u) => {
@@ -225,7 +237,7 @@ function App() {
       unlisten?.();
       if (timer) clearTimeout(timer);
     };
-  }, [setPromptedAssets]);
+  }, [setPromptedAssets, setCaptionedIds]);
 
   // 批量重归类进度（P2）：classify://progress {done,total,ended?}；ended 时清空。
   useEffect(() => {

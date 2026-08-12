@@ -38,7 +38,9 @@ impl ExtensionStatus {
     /// 返回是否「刚连上」（false→true 跳变），供调用方 emit `collect://extension-connected`。
     pub fn touch(&self) -> bool {
         *self.last_seen.lock().unwrap() = Some(std::time::Instant::now());
-        !self.connected.swap(true, std::sync::atomic::Ordering::Relaxed)
+        !self
+            .connected
+            .swap(true, std::sync::atomic::Ordering::Relaxed)
     }
     pub fn is_connected(&self) -> bool {
         self.connected.load(std::sync::atomic::Ordering::Relaxed)
@@ -184,7 +186,10 @@ fn handle_blob(
                     .db
                     .add_assets_to_project(project_id, std::slice::from_ref(&asset.id))
                 {
-                    tracing::warn!("link collected asset {} to project failed: {error}", asset.id);
+                    tracing::warn!(
+                        "link collected asset {} to project failed: {error}",
+                        asset.id
+                    );
                 }
             }
             tracing::info!(
@@ -321,7 +326,15 @@ async fn save_one(
     source_url: Option<&str>,
     project_id: Option<&str>,
 ) -> crate::error::AppResult<crate::core::library::Asset> {
-    let asset = match ingest::ingest_from_url(&state.client, &state.paths, &state.db, url, source_url).await {
+    let asset = match ingest::ingest_from_url(
+        &state.client,
+        &state.paths,
+        &state.db,
+        url,
+        source_url,
+    )
+    .await
+    {
         Ok(a) => {
             tracing::info!("collect ws save_one ok: {url} -> {}", a.id);
             a
@@ -336,7 +349,10 @@ async fn save_one(
             .db
             .add_assets_to_project(project_id, std::slice::from_ref(&asset.id))
         {
-            tracing::warn!("link collected asset {} to project failed: {error}", asset.id);
+            tracing::warn!(
+                "link collected asset {} to project failed: {error}",
+                asset.id
+            );
         }
     }
     // 后台命名 + 基础分析（非阻塞；完成后 autoname 再 emit 刷新）。

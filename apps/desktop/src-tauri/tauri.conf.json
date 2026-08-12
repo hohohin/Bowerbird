@@ -44,7 +44,8 @@
     "active": true,
     "targets": "all",
     "resources": {
-      "../../extension/**/*": "extension/"
+      "../../extension/**/*": "extension/",
+      "resources/samples/*": "samples/"
     },
     "windows": {
       "nsis": {

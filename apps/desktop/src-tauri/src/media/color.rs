@@ -20,8 +20,12 @@ pub fn extract_from_image(img: &image::DynamicImage, k: usize) -> Vec<String> {
         .to_rgb8()
         .pixels()
         .map(|p| {
-            Srgb::new(p.0[0] as f32 / 255.0, p.0[1] as f32 / 255.0, p.0[2] as f32 / 255.0)
-                .into_color()
+            Srgb::new(
+                p.0[0] as f32 / 255.0,
+                p.0[1] as f32 / 255.0,
+                p.0[2] as f32 / 255.0,
+            )
+            .into_color()
         })
         .collect();
     let centers = kmeans(&pixels, k, 8);
@@ -109,7 +113,9 @@ pub fn hex_to_bucket(hex: &str) -> Option<&'static str> {
     let target = hex_to_lab(hex)?;
     let mut best: Option<(&'static str, f32)> = None;
     for (key, bhex) in BUCKETS {
-        let Some(blab) = hex_to_lab(bhex) else { continue };
+        let Some(blab) = hex_to_lab(bhex) else {
+            continue;
+        };
         let d = lab_dist(&target, &blab);
         match best {
             Some((_, bd)) if d >= bd => {}

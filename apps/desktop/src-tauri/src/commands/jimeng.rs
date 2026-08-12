@@ -65,7 +65,9 @@ pub async fn dreamina_health(force: Option<bool>) -> Result<CodexHealth, AppErro
     if !binary_ok {
         return Ok(store_health(CodexHealth {
             ok: false,
-            reason: "未检测到 dreamina CLI（运行 curl -s https://jimeng.jianying.com/cli | bash 安装）".into(),
+            reason:
+                "未检测到 dreamina CLI（运行 curl -s https://jimeng.jianying.com/cli | bash 安装）"
+                    .into(),
         }));
     }
     let binary_str = binary.as_deref().unwrap_or("dreamina");
@@ -86,11 +88,10 @@ pub async fn dreamina_health(force: Option<bool>) -> Result<CodexHealth, AppErro
 async fn check_dreamina_logged_in(binary: &str) -> bool {
     match dreamina_command(binary).arg("user_credit").output().await {
         Ok(o) => {
-            o.status.success()
-                && {
-                    let s = String::from_utf8_lossy(&o.stdout);
-                    s.contains("total_credit") || s.contains("user_id") || s.contains("vip_level")
-                }
+            o.status.success() && {
+                let s = String::from_utf8_lossy(&o.stdout);
+                s.contains("total_credit") || s.contains("user_id") || s.contains("vip_level")
+            }
         }
         Err(_) => false,
     }
@@ -106,8 +107,8 @@ pub async fn dreamina_login(app: AppHandle) -> Result<(), AppError> {
         .ok_or_else(|| AppError::Jimeng("未检测到 dreamina CLI（需安装）".into()))?;
     let mut cmd = dreamina_command(&binary);
     cmd.arg("login"); // 非 headless：输出链接 + 自动等授权完成（一步）
-    // stderr 丢弃（null）：dreamina login poll 期间往 stderr 输出状态，若 pipe 不读会塞满 → 子进程
-    // block 在写 stderr → 不 poll/不写 token（pipe deadlock，实测授权后未写登录态的根因）。stdout 仍 pipe 供读 verification_uri。
+                      // stderr 丢弃（null）：dreamina login poll 期间往 stderr 输出状态，若 pipe 不读会塞满 → 子进程
+                      // block 在写 stderr → 不 poll/不写 token（pipe deadlock，实测授权后未写登录态的根因）。stdout 仍 pipe 供读 verification_uri。
     cmd.stdout(Stdio::piped())
         .stderr(Stdio::null())
         .kill_on_drop(true);
@@ -151,7 +152,10 @@ pub async fn dreamina_check_login(device_code: String) -> Result<CodexHealth, Ap
         .map_err(|_| AppError::Jimeng("dreamina checklogin 超时（90s）".into()))?
         .map_err(|e| AppError::Jimeng(format!("启动 checklogin 失败: {e}")))?;
     if check_dreamina_logged_in(&binary).await {
-        Ok(store_health(CodexHealth { ok: true, reason: String::new() }))
+        Ok(store_health(CodexHealth {
+            ok: true,
+            reason: String::new(),
+        }))
     } else {
         // 诊断：附 device_code 前 8 + checklogin exit + 输出（如「登录已过期」/未授权）。
         let dc_head: String = device_code.chars().take(8).collect();
@@ -161,7 +165,10 @@ pub async fn dreamina_check_login(device_code: String) -> Result<CodexHealth, Ap
         let diag: String = diag.chars().take(200).collect();
         Ok(store_health(CodexHealth {
             ok: false,
-            reason: format!("授权未完成（device_code {dc_head}…, checklogin exit {}）| {diag}", out.status),
+            reason: format!(
+                "授权未完成（device_code {dc_head}…, checklogin exit {}）| {diag}",
+                out.status
+            ),
         }))
     }
 }
@@ -250,7 +257,11 @@ fn dreamina_install_target() -> (String, PathBuf) {
     }
     #[cfg(target_os = "macos")]
     {
-        let arch = if cfg!(target_arch = "aarch64") { "arm64" } else { "amd64" };
+        let arch = if cfg!(target_arch = "aarch64") {
+            "arm64"
+        } else {
+            "amd64"
+        };
         let url = format!("{}/dreamina_cli_darwin_{}", DREAMINA_DOWNLOAD_BASE, arch);
         let dir = PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
             .join(".local")
@@ -259,7 +270,11 @@ fn dreamina_install_target() -> (String, PathBuf) {
     }
     #[cfg(target_os = "linux")]
     {
-        let arch = if cfg!(target_arch = "aarch64") { "arm64" } else { "amd64" };
+        let arch = if cfg!(target_arch = "aarch64") {
+            "arm64"
+        } else {
+            "amd64"
+        };
         let url = format!("{}/dreamina_cli_linux_{}", DREAMINA_DOWNLOAD_BASE, arch);
         let dir = PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
             .join(".local")
@@ -290,9 +305,9 @@ pub async fn dreamina_install(app: AppHandle) -> Result<CodexHealth, AppError> {
         .to_string();
     let tmp_path = install_dir.join(format!(".{file_name}.tmp"));
 
-    tokio::fs::create_dir_all(&install_dir)
-        .await
-        .map_err(|e| AppError::Jimeng(format!("创建安装目录失败 {}: {e}", install_dir.display())))?;
+    tokio::fs::create_dir_all(&install_dir).await.map_err(|e| {
+        AppError::Jimeng(format!("创建安装目录失败 {}: {e}", install_dir.display()))
+    })?;
     let _ = app.emit(
         "dreamina://setup-progress",
         serde_json::json!({ "stage": "install", "line": format!("下载 {url}") }),
@@ -488,7 +503,10 @@ pub async fn dreamina_login_headless() -> Result<DreaminaDeviceFlow, AppError> {
     let text = String::from_utf8_lossy(&out.stdout);
     let uri = text
         .lines()
-        .find_map(|l| l.strip_prefix("verification_uri:").map(|v| v.trim().to_string()))
+        .find_map(|l| {
+            l.strip_prefix("verification_uri:")
+                .map(|v| v.trim().to_string())
+        })
         .ok_or_else(|| AppError::Jimeng("未从 dreamina 输出解析到 verification_uri".into()))?;
     let user_code = text
         .lines()
@@ -498,12 +516,10 @@ pub async fn dreamina_login_headless() -> Result<DreaminaDeviceFlow, AppError> {
         .lines()
         .find_map(|l| l.strip_prefix("device_code:").map(|v| v.trim().to_string()))
         .ok_or_else(|| AppError::Jimeng("未解析到 device_code".into()))?;
-    let poll_interval_secs = text
-        .lines()
-        .find_map(|l| {
-            l.strip_prefix("poll_interval:")
-                .and_then(|v| v.trim().trim_end_matches('s').parse::<u64>().ok())
-        });
+    let poll_interval_secs = text.lines().find_map(|l| {
+        l.strip_prefix("poll_interval:")
+            .and_then(|v| v.trim().trim_end_matches('s').parse::<u64>().ok())
+    });
     let expires_at = text
         .lines()
         .find_map(|l| l.strip_prefix("expires_at:").map(|v| v.trim().to_string()));

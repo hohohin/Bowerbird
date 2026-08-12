@@ -143,7 +143,11 @@ pub async fn generate_images(req: OpenAiImageReq) -> Result<Vec<PathBuf>, AppErr
         let b64 = item
             .get("b64_json")
             .and_then(|b| b.as_str())
-            .ok_or_else(|| AppError::Codex("OpenAI 响应 data 项无 b64_json（gpt-image-1 应返回 base64）".into()))?;
+            .ok_or_else(|| {
+                AppError::Codex(
+                    "OpenAI 响应 data 项无 b64_json（gpt-image-1 应返回 base64）".into(),
+                )
+            })?;
         let img_bytes = base64::engine::general_purpose::STANDARD
             .decode(b64)
             .map_err(|e| AppError::Codex(format!("base64 解码失败: {e}")))?;

@@ -133,7 +133,10 @@ pub fn migrate_library(
     progress("db", 0, 0);
     {
         let conn = db.conn.lock().unwrap();
-        conn.execute("VACUUM INTO ?1", rusqlite::params![new_paths.db.to_string_lossy()])?;
+        conn.execute(
+            "VACUUM INTO ?1",
+            rusqlite::params![new_paths.db.to_string_lossy()],
+        )?;
     }
 
     // 3. 改写新库中的绝对路径前缀（store/thumb 为关键；analyses payload 里 generation 引用
@@ -181,8 +184,8 @@ pub fn cleanup_legacy_root(app_data_dir: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::paths::LibraryPaths;
     use crate::core::library::Asset;
+    use crate::core::paths::LibraryPaths;
 
     fn temp_dir(tag: &str) -> PathBuf {
         std::env::temp_dir().join(format!("bowerbird-migrate-{tag}-{}", ulid::Ulid::new()))
@@ -192,7 +195,11 @@ mod tests {
     fn migrate_moves_media_rewrites_paths_and_cleans_up_old_root() {
         let old_root = temp_dir("old");
         let new_root = temp_dir("new");
-        let store_file = old_root.join("images").join("2026").join("07").join("asset-1.png");
+        let store_file = old_root
+            .join("images")
+            .join("2026")
+            .join("07")
+            .join("asset-1.png");
         std::fs::create_dir_all(store_file.parent().unwrap()).unwrap();
         std::fs::write(&store_file, b"data").unwrap();
 
@@ -225,10 +232,7 @@ mod tests {
         let mut progress: Box<ProgressFn> = Box::new(|_, _, _| {});
         let new_str = migrate_library(&db, &paths, &new_root, &mut *progress).unwrap();
         // 设置侧记录新根由命令层负责；这里直接断言返回值是新根路径。
-        assert_eq!(
-            new_str,
-            normalize(&new_root).unwrap().to_string_lossy()
-        );
+        assert_eq!(new_str, normalize(&new_root).unwrap().to_string_lossy());
 
         // 新根：媒体文件已复制、新库路径已改写。
         assert!(new_root.join("images/2026/07/asset-1.png").exists());

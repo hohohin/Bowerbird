@@ -5,6 +5,7 @@ use chrono::{DateTime, Utc};
 use keyring::Entry;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use tokio::sync::Mutex;
 use ulid::Ulid;
 
 use crate::cloud::CloudClient;
@@ -29,6 +30,7 @@ struct TokenResponse {
     access_token: String,
     refresh_token: String,
     expires_in: i64,
+    expires_at: Option<i64>,
     user: Option<AuthUser>,
 }
 
@@ -81,6 +83,20 @@ struct AuthInner {
     cloud: CloudClient,
     session: RwLock<Option<Session>>,
     pending: RwLock<Option<PendingPkce>>,
+    refresh_lock: Mutex<()>,
+}
+
+fn jwt_expires_at(access_token: &str) -> Option<DateTime<Utc>> {
+    let payload = access_token.split('.').nth(1)?;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .ok()?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    DateTime::from_timestamp(value.get("exp")?.as_i64()?, 0)
+}
+
+fn session_needs_refresh(session: &Session, now: DateTime<Utc>) -> bool {
+    session.expires_at <= now + chrono::Duration::seconds(60)
 }
 
 impl AuthClient {
@@ -90,6 +106,7 @@ impl AuthClient {
                 cloud,
                 session: RwLock::new(None),
                 pending: RwLock::new(None),
+                refresh_lock: Mutex::new(()),
             }),
         }
     }
@@ -155,7 +172,9 @@ impl AuthClient {
         otp_url
             .query_pairs_mut()
             .append_pair("redirect_to", &callback);
-        let response = self.inner.cloud
+        let response = self
+            .inner
+            .cloud
             .http()
             .post(otp_url)
             .header("apikey", anon)
@@ -210,7 +229,9 @@ impl AuthClient {
             .get("state")
             .filter(|value| !value.is_empty())
             .ok_or_else(|| AppError::Cloud("登录回调缺少 state".into()))?;
-        let pending = self.inner.pending
+        let pending = self
+            .inner
+            .pending
             .write()
             .unwrap()
             .take()
@@ -224,32 +245,119 @@ impl AuthClient {
     }
 
     pub async fn restore(&self) -> AppResult<AuthSnapshot> {
+        let _guard = self.inner.refresh_lock.lock().await;
+        self.refresh_from_keyring().await?;
+        Ok(self.snapshot())
+    }
+
+    async fn refresh_from_keyring(&self) -> AppResult<()> {
         let refresh_token = match Self::keyring_entry()?.get_password() {
             Ok(value) => value,
-            Err(keyring::Error::NoEntry) => return Ok(self.snapshot()),
+            Err(keyring::Error::NoEntry) => return Ok(()),
             Err(error) => return Err(AppError::Cloud(format!("读取系统凭据失败: {error}"))),
         };
         let token = self.refresh_with(&refresh_token).await?;
         self.store_session(token)?;
-        Ok(self.snapshot())
+        Ok(())
     }
 
     pub async fn access_token(&self) -> AppResult<String> {
-        let should_refresh = self.inner.session
+        if let Some(token) = self.valid_access_token() {
+            return Ok(token);
+        }
+        let _guard = self.inner.refresh_lock.lock().await;
+        if let Some(token) = self.valid_access_token() {
+            return Ok(token);
+        }
+        self.refresh_from_keyring().await?;
+        self.session_access_token()
+    }
+
+    fn valid_access_token(&self) -> Option<String> {
+        self.inner
+            .session
             .read()
             .unwrap()
             .as_ref()
-            .map(|session| session.expires_at <= Utc::now() + chrono::Duration::seconds(60))
-            .unwrap_or(true);
-        if should_refresh {
-            self.restore().await?;
-        }
-        self.inner.session
+            .filter(|session| !session_needs_refresh(session, Utc::now()))
+            .map(|session| session.access_token.clone())
+    }
+
+    fn session_access_token(&self) -> AppResult<String> {
+        self.inner
+            .session
             .read()
             .unwrap()
             .as_ref()
             .map(|session| session.access_token.clone())
             .ok_or_else(|| AppError::Cloud("请先登录 Bowerbird 账号".into()))
+    }
+
+    async fn refresh_after_unauthorized(&self, rejected_token: &str) -> AppResult<String> {
+        let _guard = self.inner.refresh_lock.lock().await;
+        if let Some(token) = self
+            .inner
+            .session
+            .read()
+            .unwrap()
+            .as_ref()
+            .map(|session| session.access_token.clone())
+            .filter(|token| token != rejected_token)
+        {
+            return Ok(token);
+        }
+        self.refresh_from_keyring().await?;
+        self.session_access_token()
+    }
+
+    fn authorize_request(
+        &self,
+        request: reqwest::RequestBuilder,
+        access_token: &str,
+    ) -> AppResult<reqwest::RequestBuilder> {
+        let publishable_key = self
+            .inner
+            .cloud
+            .config()
+            .supabase_publishable_key
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| AppError::Cloud("Supabase publishable key 未配置".into()))?;
+        Ok(request
+            .header("apikey", publishable_key)
+            .bearer_auth(access_token))
+    }
+
+    /// Send an authenticated Supabase Function request. A gateway 401 forces one serialized token
+    /// refresh and exactly one retry; concurrent failures reuse the first completed refresh.
+    pub async fn send_authorized(
+        &self,
+        request: reqwest::RequestBuilder,
+        context: &str,
+    ) -> AppResult<reqwest::Response> {
+        let retry = request
+            .try_clone()
+            .ok_or_else(|| AppError::Cloud(format!("{context}: 请求体不可重试")))?;
+        let token = self.access_token().await?;
+        let response = self
+            .authorize_request(request, &token)?
+            .send()
+            .await
+            .map_err(|error| cloud_request_error(context, error))?;
+        if response.status() != reqwest::StatusCode::UNAUTHORIZED {
+            return Ok(response);
+        }
+
+        let refreshed = self.refresh_after_unauthorized(&token).await?;
+        let response = self
+            .authorize_request(retry, &refreshed)?
+            .send()
+            .await
+            .map_err(|error| cloud_request_error(context, error))?;
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(AppError::Cloud("登录已失效，请重新登录".into()));
+        }
+        Ok(response)
     }
 
     pub fn logout(&self) -> AppResult<AuthSnapshot> {
@@ -291,7 +399,9 @@ impl AuthClient {
             .supabase_publishable_key
             .as_deref()
             .ok_or_else(|| AppError::Cloud("Supabase publishable key 未配置".into()))?;
-        let response = self.inner.cloud
+        let response = self
+            .inner
+            .cloud
             .http()
             .post(format!(
                 "{}/auth/v1/token?grant_type={grant}",
@@ -312,6 +422,13 @@ impl AuthClient {
     }
 
     fn store_session(&self, token: TokenResponse) -> AppResult<()> {
+        let expires_at = jwt_expires_at(&token.access_token)
+            .or_else(|| {
+                token
+                    .expires_at
+                    .and_then(|value| DateTime::from_timestamp(value, 0))
+            })
+            .unwrap_or_else(|| Utc::now() + chrono::Duration::seconds(token.expires_in.max(60)));
         Self::keyring_entry()?
             .set_password(&token.refresh_token)
             .map_err(|error| AppError::Cloud(format!("写入系统凭据失败: {error}")))?;
@@ -319,7 +436,7 @@ impl AuthClient {
             access_token: token.access_token,
             user_id: token.user.as_ref().map(|user| user.id.clone()),
             email: token.user.and_then(|user| user.email),
-            expires_at: Utc::now() + chrono::Duration::seconds(token.expires_in.max(60)),
+            expires_at,
         });
         Ok(())
     }
@@ -330,9 +447,27 @@ impl AuthClient {
     }
 }
 
+fn cloud_request_error(context: &str, error: reqwest::Error) -> AppError {
+    if error.is_timeout() {
+        AppError::Cloud(format!("{context}: 等待云端响应超时，请稍后重试"))
+    } else if error.is_connect() {
+        AppError::Cloud(format!(
+            "{context}: 无法连接 Bowerbird Cloud，请检查网络后重试"
+        ))
+    } else {
+        AppError::Cloud(format!("{context}: {error}"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{auth_error_detail, retry_seconds, AuthClient, PendingPkce};
+    use base64::Engine;
+    use chrono::{Duration, TimeZone, Utc};
+
+    use super::{
+        auth_error_detail, jwt_expires_at, retry_seconds, session_needs_refresh, AuthClient,
+        PendingPkce, Session,
+    };
     use crate::cloud::{config::CloudConfig, CloudClient};
 
     fn client() -> AuthClient {
@@ -350,9 +485,61 @@ mod tests {
         let detail = auth_error_detail(
             r#"{"code":"over_email_send_rate_limit","message":"For security purposes, you can only request this after 47 seconds."}"#,
         );
-        assert_eq!(detail.as_deref(), Some("For security purposes, you can only request this after 47 seconds."));
+        assert_eq!(
+            detail.as_deref(),
+            Some("For security purposes, you can only request this after 47 seconds.")
+        );
         assert_eq!(retry_seconds(None, detail.as_deref()), Some(47));
         assert_eq!(retry_seconds(Some("12"), detail.as_deref()), Some(12));
+    }
+
+    #[test]
+    fn parses_real_expiry_from_jwt_claim() {
+        let payload =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(br#"{"exp":1786453200}"#);
+        let token = format!("header.{payload}.signature");
+        assert_eq!(
+            jwt_expires_at(&token),
+            Utc.timestamp_opt(1_786_453_200, 0).single()
+        );
+        assert_eq!(jwt_expires_at("not-a-jwt"), None);
+    }
+
+    #[test]
+    fn refreshes_with_sixty_second_expiry_margin() {
+        let now = Utc::now();
+        let session = |expires_at| Session {
+            access_token: "token".into(),
+            user_id: None,
+            email: None,
+            expires_at,
+        };
+        assert!(session_needs_refresh(
+            &session(now + Duration::seconds(60)),
+            now
+        ));
+        assert!(!session_needs_refresh(
+            &session(now + Duration::seconds(61)),
+            now
+        ));
+    }
+
+    #[test]
+    fn authorized_function_request_has_both_headers() {
+        let auth = client();
+        let request = auth
+            .authorize_request(
+                auth.inner
+                    .cloud
+                    .http()
+                    .get("https://example.supabase.co/functions/v1/test"),
+                "user-jwt",
+            )
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_eq!(request.headers()["apikey"], "sb_publishable_test");
+        assert_eq!(request.headers()["authorization"], "Bearer user-jwt");
     }
 
     #[tokio::test]

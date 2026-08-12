@@ -3,9 +3,10 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-shell";
 import { useStore } from "../store";
-import { canUseByo, understandProvider } from "../lib/entitlement";
+import { understandProvider } from "../lib/entitlement";
 import { api } from "../lib/api";
 import { useImageZoom } from "../lib/useImageZoom";
+import { RenameDialog } from "./RenameDialog";
 import type { Analysis, Asset, AssetTag, CodexHealth, Folder } from "../lib/types";
 import {
   DEFAULT_DESCRIBE_PROMPT,
@@ -162,6 +163,7 @@ export function AssetDetail() {
   const [creatingCollection, setCreatingCollection] = useState(false);
   const [collectionName, setCollectionName] = useState("");
   const [collectionBusy, setCollectionBusy] = useState(false);
+  const [renameOpen, setRenameOpen] = useState(false);
   const timerRef = useRef<number | null>(null);
 
   async function loadAnalyses() {
@@ -493,9 +495,17 @@ export function AssetDetail() {
           {asset.name}
           {asset.ext ? `.${asset.ext}` : ""}
         </div>
-        {(asset.source === "codex" || asset.source === "jimeng") ? (
+        <button
+          onClick={() => setRenameOpen(true)}
+          disabled={!asset.store_path}
+          className="shrink-0 rounded px-1.5 text-xs text-muted hover:bg-panel2 hover:text-ink disabled:opacity-40"
+          title={asset.store_path ? "重命名（同步改磁盘文件名）" : "该素材没有本地文件，无法重命名"}
+        >
+          ✎
+        </button>
+        {(asset.source === "codex" || asset.source === "jimeng" || asset.source === "bowerbird-cloud") ? (
           <span className="rounded bg-accent/15 px-1.5 py-0.5 text-[10px] text-accent">
-            ✨ {asset.source === "jimeng" ? "即梦" : "codex"} 生成
+            ✨ {asset.source === "jimeng" ? "即梦" : asset.source === "bowerbird-cloud" ? "Cloud" : "codex"} 生成
           </span>
         ) : asset.source ? (
           <span className="rounded bg-edge px-1.5 py-0.5 text-[10px] uppercase text-muted">
@@ -808,7 +818,7 @@ export function AssetDetail() {
                   >
                     💬 回看生成对话
                   </button>
-                  {genMeta.provider !== "jimeng" && (
+                  {genMeta.provider === "codex" && (
                     <button
                       onClick={() =>
                         api.openCodexSession(genMeta.session_id!).catch(console.error)
@@ -835,7 +845,7 @@ export function AssetDetail() {
                   onClick={() => setEditingPrompt((v) => !v)}
                   disabled={describing || queued}
                   className="text-xs text-muted hover:text-accent disabled:opacity-50"
-                  title="编辑即将发送给 codex 的反推指令"
+                  title="编辑反推指令"
                 >
                   修改指令
                 </button>
@@ -847,7 +857,7 @@ export function AssetDetail() {
                     <button
                       onClick={() => cancelDescribe(id)}
                       className="rounded border border-edge px-2 py-1 text-xs text-muted hover:text-red-300"
-                      title={describing ? "中断本次 codex 反推" : "从队列移除"}
+                      title={describing ? "中断本次反推" : "从队列移除"}
                     >
                       取消
                     </button>
@@ -1006,7 +1016,7 @@ export function AssetDetail() {
                             {a.provider}
                           </span>
                         )}
-                        {caption.sessionId && canUseByo(cloudEntitlement) && (
+                        {caption.sessionId && a.provider === "codex" && (
                           <button
                             onClick={() =>
                               api
@@ -1048,6 +1058,12 @@ export function AssetDetail() {
           </div>
         </aside>
       </div>
+      <RenameDialog
+        open={renameOpen}
+        assetId={asset.id}
+        currentName={asset.name}
+        onClose={() => setRenameOpen(false)}
+      />
     </div>
   );
 }

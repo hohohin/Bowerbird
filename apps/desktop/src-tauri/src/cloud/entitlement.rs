@@ -75,8 +75,7 @@ impl EntitlementService {
         let cached = self.snapshot.read().unwrap().clone();
         match cached {
             Some(mut value) => {
-                let state = if *self.online_trusted.read().unwrap()
-                    && value.signature_version <= 0
+                let state = if *self.online_trusted.read().unwrap() && value.signature_version <= 0
                 {
                     Self::evaluate_online(&value, now)
                 } else {
@@ -94,20 +93,14 @@ impl EntitlementService {
     }
 
     pub async fn sync(&self, auth: &AuthClient) -> AppResult<EntitlementSnapshot> {
-        let token = auth.access_token().await?;
         let endpoint = self
             .cloud
             .config()
             .endpoint("entitlement")
             .ok_or_else(|| AppError::Cloud("当前构建未配置 Bowerbird Cloud".into()))?;
-        let response = self
-            .cloud
-            .http()
-            .get(endpoint)
-            .bearer_auth(token)
-            .send()
-            .await
-            .map_err(|error| AppError::Cloud(format!("同步权益失败: {error}")))?;
+        let response = auth
+            .send_authorized(self.cloud.http().get(endpoint), "同步权益失败")
+            .await?;
         if !response.status().is_success() {
             return Err(AppError::Cloud(format!(
                 "同步权益失败（HTTP {}）",
@@ -135,7 +128,10 @@ impl EntitlementService {
     /// 优先使用仍有效的本地权益；无可信缓存时在线同步一次。
     pub async fn current_or_sync(&self, auth: &AuthClient) -> EntitlementSnapshot {
         let current = self.current(Utc::now());
-        if matches!(current.offline_state, Some(OfflineState::Fresh | OfflineState::Grace)) {
+        if matches!(
+            current.offline_state,
+            Some(OfflineState::Fresh | OfflineState::Grace)
+        ) {
             return current;
         }
         if !auth.snapshot().logged_in {

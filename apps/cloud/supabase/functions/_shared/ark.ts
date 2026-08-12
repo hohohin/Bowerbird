@@ -54,6 +54,11 @@ function upstreamTimeout(): number {
   return Number.isFinite(value) && value > 0 ? value : 140_000;
 }
 
+function understandUpstreamTimeout(): number {
+  const value = Number.parseInt(Deno.env.get("UNDERSTAND_UPSTREAM_TIMEOUT_MS") ?? "110000", 10);
+  return Number.isFinite(value) && value > 0 ? value : 110_000;
+}
+
 function dataUri(image: ImageInput): string {
   return `data:${image.mime};base64,${image.base64}`;
 }
@@ -91,6 +96,7 @@ async function arkFetchJson(
   apiKey: string,
   path: string,
   body: unknown,
+  timeoutMs = upstreamTimeout(),
 ): Promise<Record<string, unknown>> {
   let response: Response;
   try {
@@ -101,7 +107,7 @@ async function arkFetchJson(
         "Content-Type": "application/json",
       },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(upstreamTimeout()),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (error) {
     if (error instanceof DOMException && error.name === "TimeoutError") {
@@ -272,7 +278,7 @@ export class VolcArkAdapter implements ArkAdapter {
         ],
       }],
       temperature: 0.2,
-    });
+    }, understandUpstreamTimeout());
     const choices = Array.isArray(payload.choices) ? payload.choices as Array<Record<string, unknown>> : [];
     const message = choices[0]?.message as Record<string, unknown> | undefined;
     const text = typeof message?.content === "string" ? message.content.trim() : "";

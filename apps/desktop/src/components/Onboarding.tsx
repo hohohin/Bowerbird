@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { createPortal } from "react-dom";
 import { useStore } from "../store";
+import { understandReady } from "../lib/entitlement";
 
 const SEEN_KEY = "bowerbird.onboardingSeen";
 
@@ -69,6 +70,8 @@ export function Onboarding() {
   const codexHealth = useStore((s) => s.codexHealth);
   const extensionConnected = useStore((s) => s.extensionConnected);
   const dreaminaHealth = useStore((s) => s.dreaminaHealth);
+  const cloudEntitlement = useStore((s) => s.cloudEntitlement);
+  const cloudAuth = useStore((s) => s.cloudAuth);
   const forceOpen = useStore((s) => s.onboardingForceOpen);
   const setForceOpen = useStore((s) => s.setOnboardingForceOpen);
   const codexOpen = useStore((s) => s.codexOnboardingForceOpen);
@@ -84,7 +87,9 @@ export function Onboarding() {
 
   // 一级只能由用户关闭（✕ / 「稍后再说」）：不因 codex/扩展状态变化自动收。
   // seen 仅在用户主动 dismiss 时写入，用于「首启未配齐才自动弹一次，用户看过就不再骚扰」。
-  const hasIssue = !codexHealth?.ok || !extensionConnected;
+  // 理解引擎就绪按权益路由判断（Pro→codex、免费→Cloud），不再直判 codexHealth：
+  // 否则免费档登录 Cloud 后这里仍误报「未就绪」、首启反复弹总览。
+  const hasIssue = !understandReady({ entitlement: cloudEntitlement, codexHealth, cloudAuth }) || !extensionConnected;
   if (!forceOpen && (seen || !hasIssue)) return null;
 
   function dismiss() {

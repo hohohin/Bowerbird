@@ -66,7 +66,7 @@ export const creationSchema = new Schema({
             "data-asset-id": assetId,
             contentEditable: "false",
             title: silent
-              ? `参考图：${display}（已含在正文，仅随发送传 codex）`
+              ? `参考图：${display}（已含在正文，随发送一并提交）`
               : display,
           },
           ...children,

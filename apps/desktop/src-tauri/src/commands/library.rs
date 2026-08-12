@@ -127,7 +127,10 @@ pub async fn import_image_bytes(
     .map_err(|e| AppError::Other(e.to_string()))??;
     if let Some(pid) = project_id.as_deref() {
         if let Err(e) = db.add_assets_to_project(pid, std::slice::from_ref(&asset.id)) {
-            tracing::warn!("link pasted/dropped asset {} to project failed: {e}", asset.id);
+            tracing::warn!(
+                "link pasted/dropped asset {} to project failed: {e}",
+                asset.id
+            );
         }
     }
     crate::core::autoname::spawn_auto_analyze(app.clone(), db.clone(), asset.clone());
@@ -155,7 +158,9 @@ pub async fn list_assets(
     .await
     .map_err(|e| AppError::Other(e.to_string()))??;
     // 同流程生成图合并：每组只留最新一张（列表已 created_at DESC，首见即最新）。
-    Ok(collapse_generation_groups(v, |a: &Asset| a.generation_session_id.as_deref()))
+    Ok(collapse_generation_groups(v, |a: &Asset| {
+        a.generation_session_id.as_deref()
+    }))
 }
 
 /// 按 smart_query 直接查资产（`source:codex` 等），供侧栏「✨ 生成图」一键入口用
@@ -179,7 +184,9 @@ pub async fn list_assets_smart(
     })
     .await
     .map_err(|e| AppError::Other(e.to_string()))??;
-    Ok(collapse_generation_groups(v, |a: &Asset| a.generation_session_id.as_deref()))
+    Ok(collapse_generation_groups(v, |a: &Asset| {
+        a.generation_session_id.as_deref()
+    }))
 }
 
 #[tauri::command]
@@ -304,7 +311,9 @@ pub async fn list_assets_by_collection(
     })
     .await
     .map_err(|e| AppError::Other(e.to_string()))??;
-    Ok(collapse_generation_groups(v, |a: &Asset| a.generation_session_id.as_deref()))
+    Ok(collapse_generation_groups(v, |a: &Asset| {
+        a.generation_session_id.as_deref()
+    }))
 }
 
 /// 创作板「用途」：命名的预设 prompt 片段，发送 codex 时作为基底注入（不进编辑器）。
@@ -470,9 +479,11 @@ pub async fn search_assets(
     let v = tokio::task::spawn_blocking(move || {
         db.search_assets(&query, project_id.as_deref(), limit.unwrap_or(500))
     })
-        .await
-        .map_err(|e| AppError::Other(e.to_string()))??;
-    Ok(collapse_generation_groups(v, |a: &Asset| a.generation_session_id.as_deref()))
+    .await
+    .map_err(|e| AppError::Other(e.to_string()))??;
+    Ok(collapse_generation_groups(v, |a: &Asset| {
+        a.generation_session_id.as_deref()
+    }))
 }
 
 #[tauri::command]
@@ -510,13 +521,43 @@ pub async fn list_prompted_assets(
     }))
 }
 
+/// 有反推（caption）的资产 id 集合——瀑布流缩略图标 🏷️ 用，比 list_prompted_assets 轻（不带正文）。
+/// project 过滤 + emit 由前端 refresh 驱动；反推入库后 analyses://changed → 前端重拉。
+#[tauri::command]
+pub async fn list_captioned_asset_ids(
+    db: State<'_, Arc<Database>>,
+    project_id: Option<String>,
+) -> Result<Vec<String>, AppError> {
+    let db = db.inner().clone();
+    let ids =
+        tokio::task::spawn_blocking(move || db.list_captioned_asset_ids(project_id.as_deref()))
+            .await
+            .map_err(|e| AppError::Other(e.to_string()))??;
+    Ok(ids)
+}
+
+/// 手动重命名素材：同步重命名磁盘文件（store/thumb）+ DB name/store_path/thumb_path。
+/// 成功后 emit library://assets-changed（前端 refresh 刷新瀑布流/详情页；store_path 变化后缩略图 src 重载）。
+#[tauri::command]
+pub async fn rename_asset(
+    app: AppHandle,
+    db: State<'_, Arc<Database>>,
+    id: String,
+    new_name: String,
+) -> Result<(), AppError> {
+    let db = db.inner().clone();
+    let id_for_emit = id.clone();
+    tokio::task::spawn_blocking(move || db.rename_asset_files(&id, &new_name))
+        .await
+        .map_err(|e| AppError::Other(e.to_string()))??;
+    let _ = app.emit("library://assets-changed", serde_json::json!({ "id": id_for_emit }));
+    Ok(())
+}
+
 /// 右键「打开所在文件夹」：原始位置（origin_path）优先，不存在则回退素材库内位置（store_path）。
 /// 平台分支：Windows 打开资源管理器并选中该文件（`explorer /select,"..."`）；macOS/Linux 打开所在目录。
 #[tauri::command]
-pub async fn reveal_asset_folder(
-    db: State<'_, Arc<Database>>,
-    id: String,
-) -> Result<(), AppError> {
+pub async fn reveal_asset_folder(db: State<'_, Arc<Database>>, id: String) -> Result<(), AppError> {
     let db = db.inner().clone();
     let id_for_query = id.clone();
     let (origin, store) = tokio::task::spawn_blocking(move || {
@@ -555,7 +596,10 @@ fn reveal_in_file_manager(target: &Path) {
     {
         let path = target.to_string_lossy();
         // explorer /select 无法定位目标时（罕见）会自动打开所在文件夹；参数按单个 arg 传入避免引号歧义。
-        if let Err(error) = Command::new("explorer").arg(format!("/select,{path}")).spawn() {
+        if let Err(error) = Command::new("explorer")
+            .arg(format!("/select,{path}"))
+            .spawn()
+        {
             tracing::warn!("explorer reveal failed: {error}");
         }
     }
@@ -584,15 +628,13 @@ pub async fn list_generation_group(
     project_id: Option<String>,
 ) -> Result<Vec<Asset>, AppError> {
     let db = db.inner().clone();
-    tokio::task::spawn_blocking(move || {
-        db.list_generation_group(&asset_id, project_id.as_deref())
-    })
+    tokio::task::spawn_blocking(move || db.list_generation_group(&asset_id, project_id.as_deref()))
         .await
         .map_err(|e| AppError::Other(e.to_string()))?
 }
 
 /// 批量取多资产的生成组：key=输入 asset_id，value=该资产所在组的全部图（仅生成图、且组存在）。
-/// 瀑布流缩略图轮播用：一次 invoke 拿到所有可见 codex 组，免每缩略图各发一次。
+/// 瀑布流缩略图轮播用：一次 invoke 拿到所有可见生成图组，免每缩略图各发一次。
 #[tauri::command]
 pub async fn list_generation_groups(
     db: State<'_, Arc<Database>>,
@@ -614,7 +656,7 @@ pub async fn list_generation_groups(
     .map_err(|e| AppError::Other(e.to_string()))?
 }
 
-/// 「回看生成对话」：取某生成图所在 codex 会话的完整生成时间线（各轮 prompt + 产出图 store_path）。
+/// 「回看生成对话」：取某生成图所在会话的完整生成时间线（各轮 prompt + 产出图 store_path）。
 /// 前端把它 load 进 genTurns，复用 GenerationPanel 的时间线展示 + 「继续修改」resume 续接。
 /// 非生成图（无 generation_session_id）返回空 turns。
 #[tauri::command]
@@ -642,8 +684,8 @@ pub async fn list_tags(
     tokio::task::spawn_blocking(move || {
         db.list_tags_with_count(source.as_deref().unwrap_or("auto"), project_id.as_deref())
     })
-        .await
-        .map_err(|e| AppError::Other(e.to_string()))?
+    .await
+    .map_err(|e| AppError::Other(e.to_string()))?
 }
 
 /// 详情页：某资产的全部 tag（name + source，区分 auto/manual）。
@@ -693,10 +735,7 @@ pub async fn set_asset_tags(
 /// 批量重归类：对所有「无 auto tag 且有 caption」的资产喂 caption 文本让 codex 分类。
 /// 立即返回，后台逐张跑并 emit `classify://progress {done,total,ended?}`。
 #[tauri::command]
-pub async fn reclassify_all(
-    app: AppHandle,
-    db: State<'_, Arc<Database>>,
-) -> Result<(), AppError> {
+pub async fn reclassify_all(app: AppHandle, db: State<'_, Arc<Database>>) -> Result<(), AppError> {
     autoname::spawn_reclassify_all(app, db.inner().clone());
     Ok(())
 }
@@ -737,7 +776,9 @@ pub async fn list_assets_by_color(
     })
     .await
     .map_err(|e| AppError::Other(e.to_string()))??;
-    Ok(collapse_generation_groups(v, |a: &Asset| a.generation_session_id.as_deref()))
+    Ok(collapse_generation_groups(v, |a: &Asset| {
+        a.generation_session_id.as_deref()
+    }))
 }
 
 /// 重建色板：扫所有 colors 非空的图，重新量化写 asset_colors（幂等）。
@@ -811,7 +852,11 @@ pub async fn open_path_with_system(path: String) -> Result<(), AppError> {
 ///   Linux    reveal → xdg-open 父目录（无统一「定位选中」协议，退化为打开所在目录）；open → xdg-open <path>
 async fn spawn_locate_or_open(path: &PathBuf, reveal: bool) -> Result<(), AppError> {
     let path_str = path.to_string_lossy().into_owned();
-    let action = if reveal { "定位文件" } else { "打开文件" };
+    let action = if reveal {
+        "定位文件"
+    } else {
+        "打开文件"
+    };
     #[cfg(target_os = "windows")]
     {
         if reveal {

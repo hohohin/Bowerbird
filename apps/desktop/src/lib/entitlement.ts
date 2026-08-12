@@ -46,3 +46,22 @@ export function canStartAnotherJob(
 ): boolean {
   return runningCount < effectivePolicy(entitlement).max_parallel_jobs;
 }
+
+/**
+ * 理解引擎（反推 / 命名 / 归类）当前是否就绪：按权益路由后判对应引擎健康。
+ * Pro/Studio → codex CLI；免费档 → Bowerbird Cloud（需 cloud_available + 已登录）。
+ * 供首启总览 / 设置就绪徽章 / 侧栏齿轮红点等「环境是否配齐」判断复用，
+ * 不再各处直判 codexHealth（否则免费档登录 Cloud 后仍误报「未就绪」）。
+ */
+export function understandReady(args: {
+  entitlement: EntitlementSnapshot | null;
+  codexHealth: { ok: boolean } | null;
+  cloudAuth: { cloud_available: boolean; logged_in: boolean } | null;
+}): boolean {
+  const route = understandProvider(args.entitlement);
+  if (route === "codex") return !!args.codexHealth?.ok;
+  if (route === "bowerbird-cloud") {
+    return !!args.cloudAuth?.cloud_available && !!args.cloudAuth.logged_in;
+  }
+  return false;
+}

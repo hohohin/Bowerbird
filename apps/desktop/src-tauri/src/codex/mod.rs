@@ -13,12 +13,12 @@ use crate::error::AppError;
 use self::codex_cli::CodexCliProvider;
 use self::types::{Capabilities, Chunk, CodexRequest, CodexResult, GenOutcome};
 
-pub mod types;
-pub mod understand;
 pub mod bowerbird_cloud;
 pub mod codex_cli;
 pub mod jimeng;
 pub mod openai_api;
+pub mod types;
+pub mod understand;
 
 /// 生成 / 理解 provider。codex（理解 + 生成）与即梦（仅生成，Phase 2）各一实现。
 /// 命令层经 [`resolve_gen_provider`] 按 `provider` 参数取实现（AI-PROVIDERS.md §5.2）。
@@ -60,8 +60,11 @@ pub fn resolve_gen_provider(
         "codex" | "default" => Ok(Box::new(CodexCliProvider::default())),
         "jimeng" => Ok(Box::new(jimeng::DreaminaCliProvider::default())),
         "bowerbird-cloud" => {
-            let (client, auth) = cloud.ok_or_else(|| AppError::Cloud("账号服务尚未初始化".into()))?;
-            Ok(Box::new(bowerbird_cloud::BowerbirdCloudProvider::new(client, auth)))
+            let (client, auth) =
+                cloud.ok_or_else(|| AppError::Cloud("账号服务尚未初始化".into()))?;
+            Ok(Box::new(bowerbird_cloud::BowerbirdCloudProvider::new(
+                client, auth,
+            )))
         }
         other => Err(AppError::Codex(format!("未知 provider: {other}").into())),
     }

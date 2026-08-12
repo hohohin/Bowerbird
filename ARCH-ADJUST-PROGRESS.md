@@ -32,6 +32,8 @@ P9-T4 文档收尾与版本日期化已完成：AGENTS/CLAUDE 索引已补齐，
 
 **2026-08-11 0011 每日积分补发修复：**Free 真机跨日反推暴露 `user_credits` 仍显示昨日剩余 25 分、但对应 `credit_lots` 已在上海零点过期，且系统没有实际 cron/请求路径调用 `grant_daily_credits`，导致预授权正确返回 402 而 UI 展示陈旧余额。新增服务端专属 `ensure_daily_credits`，按上海自然日、`daily:<date>` 唯一键在权益读取、Cloud 出图和 Cloud 反推前幂等补发并刷新快照；新增跨日快照、重复调用和权限断言。`0011` 已推送，远端迁移 0001–0011 一致；`entitlement` ACTIVE v4，`generate-proxy` / `understand-proxy` ACTIVE v5；三个 Function Deno type-check 通过。Free 真机刷新权益后余额 25→30；首次方舟 Vision 遇到 `429 RequestBurstTooFast` 时 hold 与次数均回滚，服务恢复后反推成功，确认扣 1 分、余额 29、当日反推次数 1，跨日闭环验收完成。
 
+**2026-08-11 桌面 Cloud JWT 401 永久修复（代码完成、待真机长时验证）：**用户在反推成功后稍晚重试出现 Functions 网关 HTTP 401，且远端没有新 hold，定位为桌面 access JWT 过期/陈旧而非方舟或计费失败。`AuthClient` 已统一管理所有 Function 认证请求：从 JWT `exp` 读取真实到期时间并提前 60 秒刷新，异步锁保证并发请求只刷新一次；首次 401 强制刷新并仅重放一次，并发失败复用新 token；请求固定同时带构建期 publishable `apikey` 与用户 Bearer。Cloud 反推、Cloud 出图、长任务轮询、权益同步均完成迁移。Auth 6/6、Rust 107/107、桌面 TypeScript/Vite production build 通过；纯桌面修复，无需部署 Supabase。
+
 **2026-08-11 支付延期决策：**真实支付接入需要先完成网站/主体备案及支付渠道要求的商户资质准备，预计需要一段时间，因此当前不继续选择或实现真实支付 provider，也不执行真实扣款、退款或购买 Pro 联调。等待期间必须保持 `BOWERBIRD_PAYMENT_MOCK=true`；现有 Mock checkout/webhook 仅保留作协议骨架，不能对外宣称可收款。恢复支付开发的前置材料：备案/主体资质完成、选定渠道、商户/沙箱凭据、该渠道官方签名与 webhook 文档、结算/退款规则。该延期不影响已上线的账号、积分、Cloud 出图及免费档闭环，也不阻塞其他非支付功能开发。
 
 ---
@@ -58,7 +60,7 @@ P9-T4 文档收尾与版本日期化已完成：AGENTS/CLAUDE 索引已补齐，
   - Seedance 视频：**未配置**（`ARK_VIDEO_MODEL` 是 placeholder，adapter 返回 not_configured，视频留待真实 model id）。
 
 ### 测试基线（全绿）
-当前基线 `cargo test` **101 passed**；桌面 `tsc --noEmit` + Vite build、官网 build、扩展 Node tests 10/10 均通过。部署后增量验证：云配置、Auth、官网/E2E/支付脚本 `node --check`、5 个 Edge Functions Deno type-check、桌面/官网免费档产品真机闭环均通过；`0011` 已在远端应用，迁移版本 0001–0011 本地/远端一致，数据库 error 级 lint 0 项，真实 Cloud E2E + 用量守卫断言全过。因本机无 Docker/Podman，事务型 `billing.sql` 全量脚本仍不能本地执行；本轮已通过远端 REST/RPC 覆盖 `0010` 的核心断言，并通过 Free 账号真机覆盖 `0011` 的跨日补发、失败回滚与成功扣费。
+当前基线 `cargo test` **105 passed**（2026-08-11 新增：samples 首启示例图注入 2 测试；生成图 caption 自动落库移除时删 2 解析测试，故 107→105）；桌面 `tsc --noEmit` + Vite build、官网 build、扩展 Node tests 10/10 均通过。部署后增量验证：云配置、Auth 6/6、官网/E2E/支付脚本 `node --check`、5 个 Edge Functions Deno type-check、桌面/官网免费档产品真机闭环均通过；`0011` 已在远端应用，迁移版本 0001–0011 本地/远端一致，数据库 error 级 lint 0 项，真实 Cloud E2E + 用量守卫断言全过。因本机无 Docker/Podman，事务型 `billing.sql` 全量脚本仍不能本地执行；本轮已通过远端 REST/RPC 覆盖 `0010` 的核心断言，并通过 Free 账号真机覆盖 `0011` 的跨日补发、失败回滚与成功扣费。桌面 JWT 401 修复已通过自动化回归，仍待保持登录超过 access token 生命周期后的真机验证。
 
 ---
 

@@ -107,18 +107,22 @@ impl GenProvider for DreaminaCliProvider {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
 
-        let submit_out = tokio::time::timeout(Duration::from_secs(CMD_TIMEOUT_SECS), submit.output())
-            .await
-            .map_err(|_| AppError::Jimeng(format!("dreamina 提交超时（{CMD_TIMEOUT_SECS}s）")))?
-            .map_err(|e| {
-                AppError::Jimeng(format!(
-                    "启动 dreamina 失败: {e}（未安装/未登录？运行 `dreamina login`）"
-                ))
-            })?;
+        let submit_out =
+            tokio::time::timeout(Duration::from_secs(CMD_TIMEOUT_SECS), submit.output())
+                .await
+                .map_err(|_| AppError::Jimeng(format!("dreamina 提交超时（{CMD_TIMEOUT_SECS}s）")))?
+                .map_err(|e| {
+                    AppError::Jimeng(format!(
+                        "启动 dreamina 失败: {e}（未安装/未登录？运行 `dreamina login`）"
+                    ))
+                })?;
         let submit_stdout = String::from_utf8_lossy(&submit_out.stdout);
         if !submit_out.status.success() {
-            let stderr_head: String =
-                String::from_utf8_lossy(&submit_out.stderr).trim().chars().take(500).collect();
+            let stderr_head: String = String::from_utf8_lossy(&submit_out.stderr)
+                .trim()
+                .chars()
+                .take(500)
+                .collect();
             let stdout_head: String = submit_stdout.trim().chars().take(300).collect();
             return Err(AppError::Jimeng(format!(
                 "dreamina 提交退出 {} | stderr: {stderr_head} | stdout: {stdout_head}",
@@ -161,15 +165,18 @@ impl GenProvider for DreaminaCliProvider {
 fn parse_submit_id(stdout: &str) -> Result<String, AppError> {
     let head = || -> String { stdout.trim().chars().take(400).collect() };
     // 取第一个 '{' 起（容忍前导提示行），流式解析取首个值（容忍尾随文本）。
-    let start = stdout
-        .find('{')
-        .ok_or_else(|| AppError::Jimeng(format!("dreamina 提交输出无 JSON | stdout: {}", head())))?;
+    let start = stdout.find('{').ok_or_else(|| {
+        AppError::Jimeng(format!("dreamina 提交输出无 JSON | stdout: {}", head()))
+    })?;
     let v: serde_json::Value = serde_json::Deserializer::from_str(&stdout[start..])
         .into_iter()
         .next()
         .ok_or_else(|| AppError::Jimeng("dreamina 提交输出 JSON 为空".into()))?
         .map_err(|e| {
-            AppError::Jimeng(format!("dreamina 提交输出 JSON 解析失败: {e} | stdout: {}", head()))
+            AppError::Jimeng(format!(
+                "dreamina 提交输出 JSON 解析失败: {e} | stdout: {}",
+                head()
+            ))
         })?;
     if v.get("gen_status").and_then(|s| s.as_str()) == Some("fail") {
         return Err(AppError::Jimeng(format!(
@@ -180,7 +187,12 @@ fn parse_submit_id(stdout: &str) -> Result<String, AppError> {
     v.get("submit_id")
         .and_then(|i| i.as_str())
         .map(|s| s.to_string())
-        .ok_or_else(|| AppError::Jimeng(format!("dreamina 提交输出未含 submit_id | stdout: {}", head())))
+        .ok_or_else(|| {
+            AppError::Jimeng(format!(
+                "dreamina 提交输出未含 submit_id | stdout: {}",
+                head()
+            ))
+        })
 }
 
 /// dreamina `query_result --submit_id --download_dir` → `walk_images` 扫产物。
@@ -204,11 +216,16 @@ pub(crate) async fn query_and_download(
         .kill_on_drop(true);
     let query_out = tokio::time::timeout(Duration::from_secs(CMD_TIMEOUT_SECS), query.output())
         .await
-        .map_err(|_| AppError::Jimeng(format!("dreamina query_result 超时（{CMD_TIMEOUT_SECS}s）")))?
+        .map_err(|_| {
+            AppError::Jimeng(format!("dreamina query_result 超时（{CMD_TIMEOUT_SECS}s）"))
+        })?
         .map_err(|e| AppError::Jimeng(format!("启动 dreamina query_result 失败: {e}")))?;
     if !query_out.status.success() {
-        let stderr_head: String =
-            String::from_utf8_lossy(&query_out.stderr).trim().chars().take(500).collect();
+        let stderr_head: String = String::from_utf8_lossy(&query_out.stderr)
+            .trim()
+            .chars()
+            .take(500)
+            .collect();
         return Err(AppError::Jimeng(format!(
             "dreamina query_result 退出 {} | stderr: {stderr_head}",
             query_out.status
@@ -305,7 +322,10 @@ pub(crate) fn resolve_dreamina_binary() -> Option<String> {
     {
         // Unix：安装脚本装到 ~/.local/bin。
         if let Some(home) = std::env::var_os("HOME") {
-            let candidate = PathBuf::from(&home).join(".local").join("bin").join("dreamina");
+            let candidate = PathBuf::from(&home)
+                .join(".local")
+                .join("bin")
+                .join("dreamina");
             if candidate.is_file() {
                 return Some(candidate.to_string_lossy().into_owned());
             }

@@ -196,11 +196,11 @@ export function GenerationPanel() {
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-4">
         {!activeJob ? (
           <div className="flex h-full items-center justify-center text-sm text-muted">
-            尚未生成。在创作板组稿后点「✓ 发送 codex 生成」。
+            尚未生成。在创作板组稿后点「✓ 发送」生成。
           </div>
         ) : turnsWithOffset.length === 0 ? (
           <div className="flex h-full items-center justify-center text-sm text-muted">
-            尚未生成。在创作板组稿后点「✓ 发送 codex 生成」。
+            尚未生成。在创作板组稿后点「✓ 发送」生成。
           </div>
         ) : (
           <div className="mx-auto flex max-w-3xl flex-col gap-3">
@@ -275,7 +275,7 @@ export function GenerationPanel() {
           <div className="text-[10px] text-muted">
             {!targetReady
               ? lockedReason
-              : "🎨 生成图在创作板点「✓ 发送 codex 生成」触发；出图后可在此提修改意见续接迭代。"}
+              : "🎨 生成图在创作板点「✓ 发送」触发；出图后可在此提修改意见续接迭代。"}
           </div>
         )}
         {!running && activeJob?.lastPrompt && (

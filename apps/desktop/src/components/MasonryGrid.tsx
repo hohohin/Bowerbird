@@ -59,6 +59,8 @@ function Thumb({
   }, [groupLen]);
   const shown: Asset = groupLen > 0 ? group![idx] ?? asset : asset;
   const colors = useMemo(() => parseColors(shown.colors), [shown.colors]);
+  // 有反推（caption）→ 左上角 🏷️ 标记（生成图同时在标时，🏷️ 排在 ✨ 右侧）。
+  const hasCaption = useStore((s) => s.captionedIds.has(shown.id));
 
   function step(delta: number) {
     setIdx((cur) => {
@@ -115,9 +117,24 @@ function Thumb({
   } | null>(null);
   const mouseRef = useRef({ x: 0, y: 0 });
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const [hovering, setHovering] = useState(false);
+  // 滚轮滚走后放大图卡住的根因：滚动把缩略图元素移走而指针静止时，浏览器不分派
+  // mouseleave，onLeave 不触发 → 放大图一直挂到指针重新进出该图才消失。整个 hover
+  // 生命周期（定时器等待期 + 放大图弹出期）监听 scroll，一旦滚动立刻清定时器 + 收回。
+  // 捕获阶段 + window：scroll 不冒泡，但捕获期能收到内部 overflow-y-auto 容器的滚动。
+  useEffect(() => {
+    if (!hovering) return;
+    function onScroll() {
+      if (hoverTimer.current) clearTimeout(hoverTimer.current);
+      setPreview(null);
+    }
+    window.addEventListener("scroll", onScroll, true);
+    return () => window.removeEventListener("scroll", onScroll, true);
+  }, [hovering]);
   function onEnter(e: MouseEvent<HTMLDivElement>) {
     if (!previewSrc) return;
     mouseRef.current = { x: e.clientX, y: e.clientY };
+    setHovering(true);
     // 2.8s 延迟：到点时取缩略图实际渲染尺寸，×2 作为放大尺寸（保证对每张图「200%」都真正成立）。
     hoverTimer.current = setTimeout(() => {
       const rect = imgRef.current?.getBoundingClientRect();
@@ -131,12 +148,14 @@ function Thumb({
     setPreview((p) => (p ? { ...p, x: e.clientX, y: e.clientY } : p));
   }
   function onLeave() {
+    setHovering(false);
     if (hoverTimer.current) clearTimeout(hoverTimer.current);
     setPreview(null);
   }
   // 弹出面板（右键菜单/放大预览 portal 到 body）出现时同步收回预览——预览 z-30 低于面板
   // z-40/z-50，但不收会被它盖住的是面板下方的交互；点图/拖拽/右键本身也应立刻收回。
   function dismissPreview() {
+    setHovering(false);
     if (hoverTimer.current) clearTimeout(hoverTimer.current);
     setPreview(null);
   }
@@ -216,13 +235,25 @@ function Thumb({
           <span>{describeStatus === "running" ? "反推中" : `排队 ${queuePos}`}</span>
         </button>
       )}
-      {(shown.source === "codex" || shown.source === "jimeng") && (
-        <span
-          className="absolute left-1 top-1 z-10 rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-white backdrop-blur"
-          title={groupLen > 1 ? `生成图 · 同流程 ${groupLen} 张` : "生成图"}
-        >
-          ✨{groupLen > 1 ? ` ${idx + 1}/${groupLen}` : ""}
-        </span>
+      {(shown.source === "codex" || shown.source === "jimeng" || shown.source === "bowerbird-cloud" || hasCaption) && (
+        <div className="absolute left-1 top-1 z-10 flex items-center gap-1">
+          {(shown.source === "codex" || shown.source === "jimeng" || shown.source === "bowerbird-cloud") && (
+            <span
+              className="rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-white backdrop-blur"
+              title={groupLen > 1 ? `生成图 · 同流程 ${groupLen} 张` : "生成图"}
+            >
+              ✨{groupLen > 1 ? ` ${idx + 1}/${groupLen}` : ""}
+            </span>
+          )}
+          {hasCaption && (
+            <span
+              className="rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-white backdrop-blur"
+              title="已反推（有提示词描述）"
+            >
+              🏷️
+            </span>
+          )}
+        </div>
       )}
       {/* 过程图轮播箭头（同流程 >1 张时悬浮显示） */}
       {groupLen > 1 && (

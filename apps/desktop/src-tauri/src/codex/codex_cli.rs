@@ -168,9 +168,7 @@ impl GenProvider for CodexCliProvider {
         let start = Instant::now();
 
         let mut cmd = codex_command(&self.binary);
-        cmd.arg("exec")
-            .arg("--skip-git-repo-check")
-            .arg("--json");
+        cmd.arg("exec").arg("--skip-git-repo-check").arg("--json");
         for img in &req.reference_images {
             cmd.arg("--image").arg(img);
         }
@@ -254,9 +252,7 @@ impl GenProvider for CodexCliProvider {
         let before = list_generated_images(gen_root.as_deref());
 
         let mut cmd = codex_command(&self.binary);
-        cmd.arg("exec")
-            .arg("--skip-git-repo-check")
-            .arg("--json");
+        cmd.arg("exec").arg("--skip-git-repo-check").arg("--json");
         match &resume_session {
             // 续接：codex 记得本会话历史 + 上一张图，按新指令编辑出图（spike 实测可行）。
             // `resume <sid> -`：`-` 让 resume 从 stdin 读本轮指令；--image 通常不需要（codex
@@ -311,9 +307,8 @@ impl GenProvider for CodexCliProvider {
 
         // 读行 + 等退出整体套 600s 超时（防 codex 挂住不关 stdout 时无限阻塞）。
         // 多张图串行生成耗时翻倍（每张数十秒），故比反推的 180s 宽松；覆盖典型 4–6 张。
-        let (status, session_id, texts) = match tokio::time::timeout(
-            Duration::from_secs(600),
-            async {
+        let (status, session_id, texts) =
+            match tokio::time::timeout(Duration::from_secs(600), async {
                 let mut session_id: Option<String> = None;
                 let mut texts: Vec<String> = Vec::new();
                 let mut line_bytes = Vec::new();
@@ -339,9 +334,7 @@ impl GenProvider for CodexCliProvider {
                     };
                     match v.get("type").and_then(|t| t.as_str()) {
                         Some("thread.started") => {
-                            if let Some(id) =
-                                v.get("thread_id").and_then(|i| i.as_str())
-                            {
+                            if let Some(id) = v.get("thread_id").and_then(|i| i.as_str()) {
                                 session_id = Some(id.to_string());
                             }
                         }
@@ -350,11 +343,11 @@ impl GenProvider for CodexCliProvider {
                                 if item.get("type").and_then(|t| t.as_str())
                                     == Some("agent_message")
                                 {
-                                    if let Some(text) =
-                                        item.get("text").and_then(|t| t.as_str())
-                                    {
+                                    if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
                                         let _ = tx
-                                            .send(Chunk::Delta { text: text.to_string() })
+                                            .send(Chunk::Delta {
+                                                text: text.to_string(),
+                                            })
                                             .await;
                                         texts.push(text.to_string());
                                     }
@@ -369,27 +362,26 @@ impl GenProvider for CodexCliProvider {
                     .await
                     .map_err(|e| AppError::Codex(format!("等待 codex 失败: {e}")))?;
                 Ok::<_, AppError>((status, session_id, texts))
-            },
-        )
-        .await
-        {
-            Ok(Ok(v)) => v,
-            Ok(Err(e)) => return Err(e),
-            Err(_) => {
-                let _ = child.kill().await;
-                let stderr_str = stderr_task.await.unwrap_or_default();
-                let stderr_head: String = stderr_str.trim().chars().take(500).collect();
-                let detail = if stderr_head.is_empty() {
-                    "codex 未输出 stderr；请在命令提示符运行 codex --version 和 codex login"
-                        .to_string()
-                } else {
-                    format!("stderr: {stderr_head}")
-                };
-                return Err(AppError::Codex(format!(
-                    "codex 生成超时（600s） | {detail}"
-                )));
-            }
-        };
+            })
+            .await
+            {
+                Ok(Ok(v)) => v,
+                Ok(Err(e)) => return Err(e),
+                Err(_) => {
+                    let _ = child.kill().await;
+                    let stderr_str = stderr_task.await.unwrap_or_default();
+                    let stderr_head: String = stderr_str.trim().chars().take(500).collect();
+                    let detail = if stderr_head.is_empty() {
+                        "codex 未输出 stderr；请在命令提示符运行 codex --version 和 codex login"
+                            .to_string()
+                    } else {
+                        format!("stderr: {stderr_head}")
+                    };
+                    return Err(AppError::Codex(format!(
+                        "codex 生成超时（600s） | {detail}"
+                    )));
+                }
+            };
 
         let stderr_str = stderr_task.await.unwrap_or_default();
         if !status.success() && texts.is_empty() {
@@ -402,11 +394,10 @@ impl GenProvider for CodexCliProvider {
 
         // 扫 codex generated_images，取「跑前快照之后新增」的源图路径（在 ~/.codex/，
         // 不在 asset scope 内，由 command 层 ingest_generated 进库后才能渲染）。
-        let source_images = tokio::task::spawn_blocking(move || {
-            list_new_generated(gen_root.as_deref(), &before)
-        })
-        .await
-        .map_err(|e| AppError::Other(e.to_string()))?;
+        let source_images =
+            tokio::task::spawn_blocking(move || list_new_generated(gen_root.as_deref(), &before))
+                .await
+                .map_err(|e| AppError::Other(e.to_string()))?;
 
         if source_images.is_empty() {
             let reply: String = texts.join("\n").trim().chars().take(500).collect();
@@ -479,11 +470,13 @@ pub(crate) fn resolve_codex_binary() -> Option<String> {
 /// codex 凭证/产物根目录：`CODEX_HOME` 优先，否则 `USERPROFILE`（Windows）/ `HOME`（Unix）+ `.codex`。
 /// 与反推/生成的取图快照、auth.json 检测共用，保证三处对「codex home」的判定一致。
 pub(crate) fn codex_home() -> Option<PathBuf> {
-    std::env::var_os("CODEX_HOME").map(PathBuf::from).or_else(|| {
-        std::env::var_os("USERPROFILE")
-            .or_else(|| std::env::var_os("HOME"))
-            .map(|home| PathBuf::from(home).join(".codex"))
-    })
+    std::env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("USERPROFILE")
+                .or_else(|| std::env::var_os("HOME"))
+                .map(|home| PathBuf::from(home).join(".codex"))
+        })
 }
 
 /// 构造跨平台的 codex 子进程 Command。
@@ -601,7 +594,11 @@ mod tests {
 
         let new_files = list_new_generated(Some(&root), &before);
 
-        assert_eq!(new_files.len(), 2, "应只返回跑后新增的 2 张图，旧图与非图片排除");
+        assert_eq!(
+            new_files.len(),
+            2,
+            "应只返回跑后新增的 2 张图，旧图与非图片排除"
+        );
         let names: Vec<String> = new_files
             .iter()
             .filter_map(|p| p.file_name().and_then(|n| n.to_str()).map(String::from))

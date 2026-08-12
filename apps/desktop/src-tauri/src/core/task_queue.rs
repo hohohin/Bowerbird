@@ -58,7 +58,7 @@ pub struct Task {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenJob {
     pub id: String,
-    pub media: String, // "image" | "video"
+    pub media: String,    // "image" | "video"
     pub provider: String, // "codex" | "jimeng"
     pub status: String, // queued|submitting|running|querying|downloading|ingesting|done|failed|cancelled_local
     pub prompt: String,
@@ -133,7 +133,13 @@ impl Task {
         conn.execute(
             "INSERT INTO task_queue (id, kind, payload, status, created_at, provider)
              VALUES (?1, ?2, ?3, 'queued', ?4, ?5)",
-            rusqlite::params![&id, kind, &payload.to_string(), Utc::now().timestamp(), provider],
+            rusqlite::params![
+                &id,
+                kind,
+                &payload.to_string(),
+                Utc::now().timestamp(),
+                provider
+            ],
         )?;
         Ok(id)
     }
@@ -235,8 +241,9 @@ impl Task {
     /// 按 id 查单个任务。
     pub fn by_id(db: &Database, id: &str) -> AppResult<Option<Task>> {
         let conn = db.conn.lock().unwrap();
-        let mut stmt =
-            conn.prepare(&format!("SELECT {TASK_COLS} FROM task_queue WHERE id=?1 LIMIT 1"))?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {TASK_COLS} FROM task_queue WHERE id=?1 LIMIT 1"
+        ))?;
         let mut rows = stmt.query(rusqlite::params![id])?;
         if let Some(r) = rows.next()? {
             Ok(Some(row_to_task(r)?))
@@ -263,8 +270,9 @@ impl Task {
     /// 最近 N 个任务（任意状态），按创建时间倒序：任务中心 UI 用。
     pub fn list_recent(db: &Database, limit: i64) -> AppResult<Vec<Task>> {
         let conn = db.conn.lock().unwrap();
-        let mut stmt =
-            conn.prepare(&format!("SELECT {TASK_COLS} FROM task_queue ORDER BY created_at DESC LIMIT ?1"))?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {TASK_COLS} FROM task_queue ORDER BY created_at DESC LIMIT ?1"
+        ))?;
         let rows = stmt.query_map(rusqlite::params![limit], row_to_task)?;
         let mut out = Vec::new();
         for r in rows {
@@ -374,7 +382,9 @@ mod tests {
         Task::enqueue_gen_job(&db, &job("jimeng", "failed")).unwrap();
         let running = Task::list_running(&db).unwrap();
         assert_eq!(running.len(), 2); // 仅 queued + running
-        assert!(running.iter().all(|t| t.status == "queued" || t.status == "running"));
+        assert!(running
+            .iter()
+            .all(|t| t.status == "queued" || t.status == "running"));
     }
 
     #[test]

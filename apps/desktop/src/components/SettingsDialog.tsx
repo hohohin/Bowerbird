@@ -3,7 +3,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useStore } from "../store";
 import { api } from "../lib/api";
 import { DEFAULT_AUTO_ANALYZE_PROMPT } from "../lib/constants";
-import { understandProvider } from "../lib/entitlement";
+import { understandProvider, understandReady } from "../lib/entitlement";
 import type { MigrateProgress } from "../lib/types";
 
 const STAGE_LABEL: Record<string, string> = {
@@ -95,7 +95,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     }
   }, [settings]);
 
-  const allReady = codexHealth?.ok === true && extensionConnected;
+  const allReady = understandReady({ entitlement: cloudEntitlement, codexHealth, cloudAuth }) && extensionConnected;
 
   const commitSettings = (onIngest: boolean, prompt: string) => {
     // 全量覆盖：只改自动反推两项，其余设置保持不变。

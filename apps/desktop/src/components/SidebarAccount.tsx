@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useStore } from "../store";
+import { understandReady } from "../lib/entitlement";
 import { SettingsDialog } from "./SettingsDialog";
 
 /**
@@ -24,7 +25,7 @@ export function SidebarAccount() {
   const loggedIn = cloudAuth?.logged_in === true;
   const name = cloudAuth?.email || cloudAuth?.user_id || "";
   const tier = cloudEntitlement?.tier?.toUpperCase() ?? "";
-  const hasIssue = !codexHealth?.ok || !extensionConnected;
+  const hasIssue = !understandReady({ entitlement: cloudEntitlement, codexHealth, cloudAuth }) || !extensionConnected;
 
   function openAccountDetail() {
     setOpen(false);
