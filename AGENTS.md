@@ -13,6 +13,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 | `Bowerbird定价方案v2-订阅积分制.md` | 商业模式与定价（免费+订阅+积分混合制 / 四档结构 / 积分消耗表 / 毛利测算；已取代 PRICING.md v1 买断制） | 商业化、定价、积分、功能门控相关工作前必读 |
 | `ARCH-ADJUST-PLAN.md` | 收费化架构调整开发计划（账号 / 积分 / 托管 provider / 支付 / 门控，P0–P9 阶段任务卡 + 验收标准；agent 执行用） | 收费化 / 账号 / 积分 / 云端任何实现工作前必读 |
 | `ARCH-ADJUST-PROGRESS.md` | 收费化架构调整跨会话进度、部署状态、测试基线与剩余阻塞 | 接续收费化任务或核对线上状态时必读 |
+| `AGENT-RUNTIME-PLAN.md` | Bowerbird 内置 Skill Agent Runtime 开发计划（VPS Worker / Supabase 控制面 / 方舟 / 桌面 Agent UI，A0–A8 任务卡） | Agent loop / 内置 Skill / VPS Worker / Agent 临时云工作区实现前必读 |
 | `FRAMEWORK_ADJUST.md` | 为收费的架构调整清单（7 项，ARCH-ADJUST-PLAN.md 的依据） | 收费化架构溯源时 |
 | `研究报告-服务器化CLI与API化改造可行性.md` | 服务器套壳 CLI vs 官方 API 可行性结论（推荐火山方舟官方 API） | 托管算力 / 远程化方向决策前必读 |
 | `AI-PROVIDERS.md` | AI provider 可切换方案（泛化 GenerationPanel + codex/即梦首批 + 即梦接入调研 + 关键约定 1 演进；草案） | provider 切换 / 即梦接入 / 生成能力多 provider 解耦相关工作前必读 |

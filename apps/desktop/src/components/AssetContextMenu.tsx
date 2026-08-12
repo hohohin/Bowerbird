@@ -45,7 +45,7 @@ export function AssetContextMenu() {
   const cloudAvailable = cloudAuth?.cloud_available ?? false;
 
   const [busy, setBusy] = useState(false);
-  const [pendingDelete, setPendingDelete] = useState(false);
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
   const [renameTarget, setRenameTarget] = useState<{ id: string; name: string } | null>(null);
@@ -53,11 +53,10 @@ export function AssetContextMenu() {
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // 每次打开重置子状态；关闭时清掉自动关闭定时器。
-  // （renameTarget 不在此重置——「重命名」点击会先 closeContextMenu 再开 dialog，重置会把它清掉；
-  //   dialog 由自身的 onClose 清理。）
+  // （pendingDeleteId / renameTarget 不在此重置——「物理删除」/「重命名」点击会先 closeContextMenu
+  //   再弹 dialog，menu=null 触发本 effect，重置会把尚需显示的 dialog 一起清掉；它们由自身回调清理。）
   useEffect(() => {
     setBusy(false);
-    setPendingDelete(false);
     setMessage(null);
     setDone(null);
     return () => {
@@ -91,7 +90,35 @@ export function AssetContextMenu() {
     };
   }, []);
 
-  if (!menu) return null;
+  // 物理删除确认 / 重命名 dialog：独立于菜单渲染。点「物理删除」/「重命名」会先 closeContextMenu
+  // 收菜单（菜单 z-60 高于 dialog z-50，不收会被盖住、点不到确认），menu=null 走此分支单独挂载。
+  if (!menu) {
+    return (
+      <>
+        <ConfirmDialog
+          open={pendingDeleteId !== null}
+          danger
+          title="物理删除素材"
+          message="素材将从全局及所有项目物理删除，不可恢复。"
+          confirmLabel="物理删除"
+          onConfirm={() => {
+            const id = pendingDeleteId;
+            setPendingDeleteId(null);
+            if (id) void runDelete(id, "delete");
+          }}
+          onCancel={() => setPendingDeleteId(null)}
+        />
+        {renameTarget && (
+          <RenameDialog
+            open
+            assetId={renameTarget.id}
+            currentName={renameTarget.name}
+            onClose={() => setRenameTarget(null)}
+          />
+        )}
+      </>
+    );
+  }
 
   // 守卫后捕获，闭包里直接用（TS 不会把守卫的收窄带进嵌套函数）。
   const assetId = menu.assetId;
@@ -136,7 +163,8 @@ export function AssetContextMenu() {
     setMessage(null);
     try {
       const hist = await api.generationHistory(assetId, currentProjectId);
-      const prompt = hist.turns[0]?.prompt ?? "";
+      // 优先未铺开的原始编辑框文本（维度 chip，不展开 body）；旧 meta 无 prompt_raw → 回退铺开 prompt。
+      const prompt = hist.turns[0]?.prompt_raw ?? hist.turns[0]?.prompt ?? "";
       if (!prompt) {
         setMessage("该生成图没有可复用的提示词记录");
         setBusy(false);
@@ -151,11 +179,11 @@ export function AssetContextMenu() {
     }
   }
 
-  async function runDelete(mode: AssetDeleteMode) {
+  async function runDelete(id: string, mode: AssetDeleteMode) {
     setBusy(true);
     setMessage(null);
     try {
-      const result = await api.deleteAssetWithMode(assetId, mode, currentProjectId);
+      const result = await api.deleteAssetWithMode(id, mode, currentProjectId);
       await reloadProjects();
       if (result.failed_moves.length > 0) {
         setMessage(`移出失败：${result.failed_moves.join("、")}，素材保留在全局`);
@@ -273,7 +301,7 @@ export function AssetContextMenu() {
         <div className="space-y-0.5">
           {currentProjectId && (
             <button
-              onClick={() => runDelete("keep")}
+              onClick={() => runDelete(assetId, "keep")}
               disabled={busy}
               className="block w-full rounded px-2 py-1.5 text-left text-ink hover:bg-panel2 disabled:opacity-50"
             >
@@ -281,7 +309,7 @@ export function AssetContextMenu() {
             </button>
           )}
           <button
-            onClick={() => runDelete("move_out")}
+            onClick={() => runDelete(assetId, "move_out")}
             disabled={busy}
             title="把图片文件交回原始文件夹，并从素材库移除（共享素材仍保留在全局）"
             className="block w-full rounded px-2 py-1.5 text-left text-ink hover:bg-panel2 disabled:opacity-50"
@@ -289,33 +317,17 @@ export function AssetContextMenu() {
             移出园丁鸟 · 文件回到原始位置
           </button>
           <button
-            onClick={() => setPendingDelete(true)}
+            onClick={() => {
+              // 先收菜单再弹确认（菜单 z-60 高于 dialog z-50，不收会被盖住、点不到确认）。
+              setPendingDeleteId(assetId);
+              closeContextMenu();
+            }}
             disabled={busy}
             className="block w-full rounded px-2 py-1.5 text-left text-red-300 hover:bg-red-500/15 disabled:opacity-50"
           >
             物理删除
           </button>
         </div>
-      )}
-      <ConfirmDialog
-        open={pendingDelete}
-        danger
-        title="物理删除素材"
-        message="素材将从全局及所有项目物理删除，不可恢复。"
-        confirmLabel="物理删除"
-        onConfirm={() => {
-          setPendingDelete(false);
-          void runDelete("delete");
-        }}
-        onCancel={() => setPendingDelete(false)}
-      />
-      {renameTarget && (
-        <RenameDialog
-          open
-          assetId={renameTarget.id}
-          currentName={renameTarget.name}
-          onClose={() => setRenameTarget(null)}
-        />
       )}
     </div>,
     document.body

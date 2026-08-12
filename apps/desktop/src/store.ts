@@ -78,6 +78,7 @@ interface State {
   boardOpen: boolean;
   promptedAssets: PromptedAsset[]; // 创作板挑图集合中带 caption（反推）的子集，供编辑器补 sections / 展开维度片段
   captionedIds: Set<string>; // 有反推（caption）的资产 id 集合（瀑布流标 🏷️，轻量，不带正文）
+  focusAssetId: string | null; // 创作板 chip 点击 → 瀑布流滚动定位+高亮的目标 id（消费后清空）
   // —— 创作板「用途」（preset）——
   presets: Preset[]; // 命名 prompt 预设，发送时作为基底注入（不进编辑器）
   activePresetId: string | null; // 当前选中用途；null=不注入
@@ -108,6 +109,8 @@ interface State {
   toggleBoard: () => void;
   setPromptedAssets: (a: PromptedAsset[]) => void;
   setCaptionedIds: (ids: string[]) => void;
+  focusAsset: (id: string) => void;
+  clearFocusAsset: () => void;
   setActivePreset: (id: string | null) => void;
   // —— 反推（全局后台串行）——
   // 反推不绑 AssetDetail 生命周期：返回瀑布流后继续跑、缩略图角标可见、可取消。
@@ -185,7 +188,7 @@ interface State {
   genUnread: boolean; // 面板关时落地新图 → 顶栏按钮红点
   setActiveJob: (id: string) => void;
   setGenPanelOpen: (open: boolean) => void;
-  startGeneration: (prompt: string, references: Asset[], ratio?: string | null, provider?: string | null) => Promise<void>;
+  startGeneration: (prompt: string, references: Asset[], ratio?: string | null, provider?: string | null, rawPrompt?: string) => Promise<void>;
   sendGenRevise: (instruction: string, provider?: string | null) => Promise<void>;
   cancelGeneration: (jobId?: string) => void; // 默认取消 activeJob
   loadGenJobs: () => Promise<void>;
@@ -348,6 +351,7 @@ export const useStore = create<State>((set, get) => {
   boardOpen: false,
   promptedAssets: [],
   captionedIds: new Set<string>(),
+  focusAssetId: null,
   presets: [],
   activePresetId: null,
   setAssets: (assets) => set({ assets }),
@@ -503,6 +507,8 @@ export const useStore = create<State>((set, get) => {
     }),
   setPromptedAssets: (promptedAssets) => set({ promptedAssets }),
   setCaptionedIds: (ids) => set({ captionedIds: new Set(ids) }),
+  focusAsset: (id) => set({ focusAssetId: id }),
+  clearFocusAsset: () => set({ focusAssetId: null }),
   setActivePreset: (id) => set({ activePresetId: id }),
   // —— 反推（全局后台串行）——
   describingId: null,
@@ -770,7 +776,7 @@ export const useStore = create<State>((set, get) => {
       console.error("loadGenJobs failed", e);
     }
   },
-  startGeneration: async (prompt, references, ratio, provider) => {
+  startGeneration: async (prompt, references, ratio, provider, rawPrompt) => {
     // 多 job：不再因 generating 阻塞（并发发起多个生成，各自独立流转）。
     // provider 兜底：调用点没传（CreationBoard send / retry）→ 当前选择 → 全局默认。
     const prov = normalizeGenerationProvider(
@@ -815,6 +821,7 @@ export const useStore = create<State>((set, get) => {
       await api.codexCreateImage({
         jobId,
         prompt: sentPrompt,
+        promptRaw: rawPrompt,
         referenceImages: refPaths,
         ratio,
         provider: prov,

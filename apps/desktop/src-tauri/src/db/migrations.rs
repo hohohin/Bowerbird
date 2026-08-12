@@ -34,6 +34,7 @@ pub fn migrations() -> Migrations<'static> {
             include_str!("../../sql/0011_dhash_fuzzy_dedupe.sql"),
             |tx: &rusqlite::Transaction| merge_existing_duplicates(tx),
         ),
+        M::up(include_str!("../../sql/0012_projects_builtin.sql")),
     ])
 }
 

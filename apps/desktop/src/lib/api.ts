@@ -225,6 +225,7 @@ export const api = {
     provider?: string | null;
     projectId?: string | null;
     jobId: string;
+    promptRaw?: string | null;
   }) =>
     invoke<string>("codex_create_image", {
       prompt: req.prompt,
@@ -234,6 +235,7 @@ export const api = {
       provider: req.provider ?? null,
       projectId: req.projectId ?? null,
       jobId: req.jobId,
+      promptRaw: req.promptRaw ?? null,
     }),
   cancelCodexCreate: (jobId: string) => invoke<void>("cancel_codex_create", { jobId }),
   // 启动恢复（Task 5）：列出未完成生成 job，前端挂载时拉取重建 genJobs（恢复中 job 可见）。

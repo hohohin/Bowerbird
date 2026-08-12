@@ -177,6 +177,7 @@ function Thumb({
 
   return (
     <div
+      id={`asset-${shown.id}`}
       className={`group relative mb-2 break-inside-avoid cursor-pointer overflow-hidden rounded-md ring-2 transition ${
         selected ? "ring-accent" : "ring-transparent hover:ring-edge"
       }`}
@@ -318,7 +319,25 @@ export function MasonryGrid() {
   const assets = useStore((s) => s.assets);
   const boardOpen = useStore((s) => s.boardOpen);
   const currentProjectId = useStore((s) => s.currentProjectId);
+  const focusAssetId = useStore((s) => s.focusAssetId);
+  const clearFocusAsset = useStore((s) => s.clearFocusAsset);
   const [groupMap, setGroupMap] = useState<Record<string, Asset[]>>({});
+  // 创作板 chip 点击 focus：滚动定位到该素材并闪烁高亮。读完即清 store，便于连续 focus 同一张。
+  const flashTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => {
+    if (!focusAssetId) return;
+    const id = focusAssetId;
+    clearFocusAsset();
+    const el = document.getElementById(`asset-${id}`);
+    if (!el) return;
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+    el.classList.add("board-focus-flash");
+    if (flashTimer.current) clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => {
+      el.classList.remove("board-focus-flash");
+      flashTimer.current = undefined;
+    }, 1600);
+  }, [focusAssetId, clearFocusAsset]);
   // 拖拽外部图片入库（仅瀑布流区域）：HTML5 DnD，dragDropEnabled=false 保持内部拖拽到侧栏。
   const [dragOver, setDragOver] = useState(false);
   const [importing, setImporting] = useState(false);

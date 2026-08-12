@@ -55,7 +55,7 @@ function smartPunct(punct: string, deps: PluginDeps): Command {
       }
     }
 
-    // ② 维度 endsWith
+    // ② 维度 endsWith（body 一并存入：手输触发时取当前 chipAssetId 同名维度的反推正文）
     const m = deps.chipSectionsRef.current.find((s) => before.endsWith(s.title));
     if (m) {
       if (dispatch) {
@@ -63,7 +63,7 @@ function smartPunct(punct: string, deps: PluginDeps): Command {
         tr.replaceWith(
           paraStart + before.length - m.title.length,
           $head.pos,
-          state.schema.nodes.keyword.create({ title: m.title })
+          state.schema.nodes.keyword.create({ title: m.title, body: m.body })
         );
         if (punct !== "Enter") tr.insertText(punct);
         dispatch(tr.scrollIntoView());

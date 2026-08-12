@@ -26,6 +26,7 @@ export interface Project {
   workspace_path: string;
   created_at: number;
   asset_count: number;
+  kind: "user" | "builtin";
 }
 
 export interface ProjectCreateResult {
@@ -179,6 +180,7 @@ export interface GenJob {
 /** 「回看生成对话」：某生成图所在 codex 会话的完整时间线（后端 generation_history 返回）。 */
 export interface GenerationHistoryTurn {
   prompt: string;
+  prompt_raw?: string | null; // 未铺开的原始编辑框文本（复用优先用它还原 chip）；旧 meta 为 null → 回退 prompt
   images: string[]; // store_path
 }
 

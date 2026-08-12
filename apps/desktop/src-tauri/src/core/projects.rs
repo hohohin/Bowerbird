@@ -17,6 +17,7 @@ pub struct Project {
     pub workspace_path: String,
     pub created_at: i64,
     pub asset_count: i64,
+    pub kind: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -151,6 +152,7 @@ fn project_from_row(row: &rusqlite::Row) -> rusqlite::Result<Project> {
         workspace_path: row.get("workspace_path")?,
         created_at: row.get("created_at")?,
         asset_count: row.get("asset_count")?,
+        kind: row.get("kind")?,
     })
 }
 
@@ -161,12 +163,13 @@ impl Database {
         name: &str,
         workspace_path: &str,
         workspace_key: &str,
+        kind: &str,
     ) -> AppResult<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO projects (id, name, workspace_path, workspace_key, created_at) \
-             VALUES (?1, ?2, ?3, ?4, strftime('%s','now'))",
-            rusqlite::params![id, name, workspace_path, workspace_key],
+            "INSERT INTO projects (id, name, workspace_path, workspace_key, kind, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, strftime('%s','now'))",
+            rusqlite::params![id, name, workspace_path, workspace_key, kind],
         )?;
         Ok(())
     }
@@ -174,7 +177,7 @@ impl Database {
     pub fn list_projects(&self) -> AppResult<Vec<Project>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT p.id, p.name, p.workspace_path, p.created_at, COUNT(pa.asset_id) AS asset_count \
+            "SELECT p.id, p.name, p.workspace_path, p.created_at, p.kind, COUNT(pa.asset_id) AS asset_count \
              FROM projects p LEFT JOIN project_assets pa ON pa.project_id = p.id \
              GROUP BY p.id ORDER BY p.created_at DESC, p.id DESC",
         )?;
@@ -189,7 +192,7 @@ impl Database {
     pub fn get_project(&self, id: &str) -> AppResult<Option<Project>> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT p.id, p.name, p.workspace_path, p.created_at, COUNT(pa.asset_id) AS asset_count \
+            "SELECT p.id, p.name, p.workspace_path, p.created_at, p.kind, COUNT(pa.asset_id) AS asset_count \
              FROM projects p LEFT JOIN project_assets pa ON pa.project_id = p.id \
              WHERE p.id = ?1 GROUP BY p.id",
             rusqlite::params![id],
@@ -250,14 +253,21 @@ impl Database {
         mode: ProjectDeleteMode,
     ) -> AppResult<ProjectDeleteResult> {
         let conn = self.conn.lock().unwrap();
-        let workspace_path: String = conn
+        let (workspace_path, kind): (String, String) = conn
             .query_row(
-                "SELECT workspace_path FROM projects WHERE id = ?1",
+                "SELECT workspace_path, kind FROM projects WHERE id = ?1",
                 rusqlite::params![project_id],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?
             .ok_or_else(|| AppError::NotFound(format!("project {project_id}")))?;
+        // 预置项目（如「欢迎来到园丁鸟」）：workspace_path 是虚拟值，无真实目录可移出，
+        // 成员素材（source='sample'）应留全局供未来按 source 清理。强制 Keep 语义，忽略传入 mode。
+        let mode = if kind == "builtin" {
+            ProjectDeleteMode::Keep
+        } else {
+            mode
+        };
 
         let members: Vec<(String, String, Option<String>, Option<String>, bool)> = {
             let mut stmt = conn.prepare(
@@ -578,7 +588,7 @@ mod tests {
     }
 
     fn put_project_at(db: &Database, id: &str, workspace: &str) {
-        db.create_project(id, id, workspace, workspace).unwrap();
+        db.create_project(id, id, workspace, workspace, "user").unwrap();
     }
 
     #[test]

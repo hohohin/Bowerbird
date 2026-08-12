@@ -87,6 +87,7 @@ pub struct Analysis {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenerationHistoryTurn {
     pub prompt: String,
+    pub prompt_raw: Option<String>,
     pub images: Vec<String>,
 }
 
@@ -1123,7 +1124,7 @@ impl Database {
             });
         };
         let mut stmt = conn.prepare(
-            "SELECT json_extract(an.payload, '$.prompt'), a.store_path, an.payload \
+            "SELECT json_extract(an.payload, '$.prompt'), json_extract(an.payload, '$.prompt_raw'), a.store_path, an.payload \
              FROM analyses an JOIN assets a ON a.id = an.asset_id \
              WHERE an.kind = 'generation_meta' \
                AND json_extract(an.payload, '$.session_id') = ?1 \
@@ -1137,12 +1138,13 @@ impl Database {
         let rows = stmt.query_map(rusqlite::params![session_id, project_id], |r| {
             Ok((
                 r.get::<_, Option<String>>(0)?, // prompt
-                r.get::<_, Option<String>>(1)?, // store_path
-                r.get::<_, String>(2)?,         // payload
+                r.get::<_, Option<String>>(1)?, // prompt_raw
+                r.get::<_, Option<String>>(2)?, // store_path
+                r.get::<_, String>(3)?,         // payload
             ))
         })?;
         for row in rows {
-            let (prompt, store_path, payload) = row?;
+            let (prompt, prompt_raw, store_path, payload) = row?;
             // 首版 generation_meta 的参考图（供「新会话重新生成」复用）。
             if !refs_done {
                 refs_done = true;
@@ -1158,12 +1160,13 @@ impl Database {
             let (Some(prompt), Some(path)) = (prompt, store_path) else {
                 continue;
             };
-            // 相邻同 prompt = 同一轮多图，合并；否则开新轮。
+            // 相邻同 prompt = 同一轮多图，合并；否则开新轮（首轮的 prompt_raw 随新轮记一次）。
             if turns.last().map(|t| t.prompt.as_str()) == Some(prompt.as_str()) {
                 turns.last_mut().unwrap().images.push(path);
             } else {
                 turns.push(GenerationHistoryTurn {
                     prompt,
+                    prompt_raw,
                     images: vec![path],
                 });
             }
@@ -1751,10 +1754,17 @@ mod tests {
             refs: Option<Vec<&str>>,
         ) {
             let payload = match refs {
-                Some(rs) => {
-                    serde_json::json!({ "prompt": prompt, "session_id": sid, "references": rs })
-                }
-                None => serde_json::json!({ "prompt": prompt, "session_id": sid }),
+                Some(rs) => serde_json::json!({
+                    "prompt": prompt,
+                    "prompt_raw": format!("{prompt}（未铺开）"),
+                    "session_id": sid,
+                    "references": rs,
+                }),
+                None => serde_json::json!({
+                    "prompt": prompt,
+                    "prompt_raw": format!("{prompt}（未铺开）"),
+                    "session_id": sid,
+                }),
             };
             db.insert_analysis(&Analysis {
                 id: id.to_string(),
@@ -1811,6 +1821,7 @@ mod tests {
         assert_eq!(h.session_id.as_deref(), Some(session));
         assert_eq!(h.turns.len(), 2, "两轮：首版（2图合并）+ 修改1");
         assert_eq!(h.turns[0].prompt, "首版");
+        assert_eq!(h.turns[0].prompt_raw.as_deref(), Some("首版（未铺开）"));
         assert_eq!(h.turns[0].images.len(), 2);
         assert_eq!(h.turns[1].prompt, "修改1");
         assert_eq!(h.turns[1].images.len(), 1);
@@ -2193,7 +2204,7 @@ mod tests {
         let db = db();
         let in_project = put_asset_at(&db, "cyberpunk-project", 2);
         let outside = put_asset_at(&db, "cyberpunk-global", 1);
-        db.create_project("p1", "P1", "/tmp/p1", "/tmp/p1").unwrap();
+        db.create_project("p1", "P1", "/tmp/p1", "/tmp/p1", "user").unwrap();
         db.add_assets_to_project("p1", std::slice::from_ref(&in_project))
             .unwrap();
 

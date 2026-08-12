@@ -7,6 +7,7 @@ import { RATIOS } from "./creation/ratios";
 import { RatioSelect } from "./creation/RatioSelect";
 import { ProviderSelect } from "./creation/ProviderSelect";
 import { CreationGraph } from "./creation/CreationGraph";
+import { BoardChipPreview } from "./creation/BoardChipPreview";
 import { Info } from "lucide-react";
 
 // 画面比例偏好记忆（照 AssetDetail 的 localStorage 范式：bowerbird.<name> 前缀、try/catch 兜底）。
@@ -56,6 +57,7 @@ export function CreationBoard() {
     hostRef,
     focus,
     finalPrompt,
+    rawPrompt,
     references,
     graphSources,
     chipSections,
@@ -102,7 +104,7 @@ export function CreationBoard() {
   function send() {
     if (!targetReady || !finalPrompt) return;
     if (!canStartAnotherJob(cloudEntitlement, runningJobCount)) return;
-    void startGeneration(finalPrompt, references, ratio);
+    void startGeneration(finalPrompt, references, ratio, undefined, rawPrompt);
   }
 
   // 登记=把当前编辑框内容（finalPrompt）存为用途，只需用户给个名字。
@@ -316,6 +318,8 @@ export function CreationBoard() {
             onClick={focus}
             className="creation-editor min-h-48 cursor-text rounded bg-panel2/40 p-2 ring-1 ring-edge focus-within:ring-accent"
           />
+          {/* 编辑框内 image/keyword chip 的交互浮层（hover 放大图/维度正文 + 点击定位瀑布流） */}
+          <BoardChipPreview hostRef={hostRef} />
           {/* 工具条：编辑框下方的快捷参数。未来可在此加更多功能。 */}
           <div className="mt-2 flex items-center gap-2">
             <RatioSelect value={ratio} onChange={selectRatio} />
@@ -338,7 +342,7 @@ export function CreationBoard() {
                   {chipSections.map((section) => (
                     <button
                       key={section.title}
-                      onClick={() => insertKeyword(section.title)}
+                      onClick={() => insertKeyword(section.title, section.body)}
                       className="rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 text-accent hover:bg-accent/20"
                     >
                       {section.title}

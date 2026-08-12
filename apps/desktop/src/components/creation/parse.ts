@@ -38,6 +38,8 @@ export function parsePromptToInline(
   const out: PmNode[] = [];
   let buf = "";
   let i = 0;
+  // 最近一张 image：维度 chip 无「：正文」尾随时，body 从它的 sections 回退取（hover 浮层用）。
+  let currentAsset: PromptedAsset | null = null;
   const flush = () => {
     if (buf) {
       out.push(schema.text(buf));
@@ -53,9 +55,44 @@ export function parsePromptToInline(
       if (matched) {
         flush();
         const a = assetByName.get(matched)!;
+        currentAsset = a;
         out.push(schema.nodes.image.create(imageAttrs(a.id, a, false)));
         i += 1 + matched.length;
+        // 兜底：序列化输出「@name.ext」，但 asset.ext=null 时 assetByName 只注册 name（不含 .ext），
+        // matched=name 后 .ext 会作为纯文本残留 → 若 matched 不以图片后缀结尾，吃掉紧跟的 .ext。
+        if (!/\.[A-Za-z0-9]{1,5}$/.test(matched)) {
+          const tail = text.slice(i).match(/^(\.[A-Za-z0-9]{1,5})/);
+          if (tail) i += tail[1].length;
+        }
         continue;
+      }
+    }
+    // 【维度名】[：正文] → keyword chip（还原 serializeImageToken 的「@图名 的【维度】：正文」）。
+    // body 从当前 image 的 sections 取（与序列化 serializeKeyword 同源），不靠文本边界吞——
+    // 避免把维度 chip 后用户续写的独立文字误并入 body（「多吞后方一个字」）。
+    if (text[i] === "【") {
+      const end = text.indexOf("】", i + 1);
+      if (end !== -1) {
+        const title = text.slice(i + 1, end).trim();
+        if (title) {
+          flush();
+          const sectionBody =
+            currentAsset?.sections?.find((s) => s.title === title)?.body?.trim() ?? "";
+          let consumed = end + 1;
+          // 序列化输出「【title】：fragment」（fragment = sectionBody）；文本与之精确匹配则吃掉，
+          // chip 后不残留正文；不匹配（sections 与文本不同步）只吃「：」，正文留纯文本。
+          if (text[consumed] === "：" || text[consumed] === ":") {
+            const after = consumed + 1;
+            if (sectionBody && text.slice(after, after + sectionBody.length) === sectionBody) {
+              consumed = after + sectionBody.length;
+            } else {
+              consumed = after;
+            }
+          }
+          out.push(schema.nodes.keyword.create({ title, body: sectionBody }));
+          i = consumed;
+          continue;
+        }
       }
     }
     buf += text[i++];
@@ -75,8 +112,12 @@ export function parsePromptToDoc(
   assetById: Map<string, PromptedAsset>,
   schema: Schema = creationSchema
 ): PmNode {
+  // refs 只补充 assetById 没有的图，不覆盖——保留 assetById 里已反推图的 sections
+  // （载入【维度】时按 sections 精确匹配 fragment，见 parsePromptToInline）。
   const fullMap = new Map(assetById);
-  for (const r of refs) fullMap.set(r.id, r);
+  for (const r of refs) {
+    if (!fullMap.has(r.id)) fullMap.set(r.id, r);
+  }
   const assetByName = buildAssetByName(fullMap);
 
   const lines = text.replace(/\r\n/g, "\n").split("\n");

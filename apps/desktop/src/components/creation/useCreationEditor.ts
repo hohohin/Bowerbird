@@ -154,9 +154,9 @@ export function useCreationEditor() {
       if (!body) return;
       const refAssets: PromptedAsset[] = (detail.refs ?? []).map((a) => ({ ...a }));
       setExtraAssets(refAssets);
-      const fullMap = new Map(assetByIdRef.current);
-      for (const r of refAssets) fullMap.set(r.id, r);
-      const doc = parsePromptToDoc(body, refAssets, fullMap);
+      // 传 assetByIdRef.current（含已反推图的 sections）；parsePromptToDoc 内部按「只补充」并入 refs，
+      // 不让 refs（无 sections）覆盖已反推图，以保证【维度】能按 sections 精确匹配 fragment。
+      const doc = parsePromptToDoc(body, refAssets, assetByIdRef.current);
       const v = viewRef.current;
       if (!v) return;
       v.updateState(EditorState.create({ doc, plugins: v.state.plugins }));
@@ -188,6 +188,14 @@ export function useCreationEditor() {
     return serializeDoc(doc, assetByIdRef.current);
   }, [tick, assetById]);
 
+  // 未铺开的「原始编辑框文本」（维度只出【title】、不展开 body）：存 generation_meta.prompt_raw，
+  // 复用时载入它还原 chip，避免铺开版 round-trip 的 body 残留 / 多吞。
+  const rawPrompt = useMemo(() => {
+    const doc = viewRef.current?.state.doc;
+    if (!doc) return "";
+    return serializeDoc(doc, assetByIdRef.current, { unfold: false }).finalPrompt;
+  }, [tick, assetById]);
+
   // 节点图数据：与序列化同源（同一个 doc / assetById），随编辑实时更新。
   const graphSources = useMemo(() => {
     const doc = viewRef.current?.state.doc;
@@ -195,11 +203,11 @@ export function useCreationEditor() {
     return graphSourcesFromDoc(doc, assetByIdRef.current);
   }, [tick, assetById]);
 
-  const insertKeyword = useCallback((title: string) => {
+  const insertKeyword = useCallback((title: string, body: string = "") => {
     const v = viewRef.current;
     if (!v) return;
     v.dispatch(
-      v.state.tr.replaceSelectionWith(v.state.schema.nodes.keyword.create({ title })).scrollIntoView()
+      v.state.tr.replaceSelectionWith(v.state.schema.nodes.keyword.create({ title, body })).scrollIntoView()
     );
     v.focus();
   }, []);
@@ -210,6 +218,7 @@ export function useCreationEditor() {
     hostRef,
     focus,
     finalPrompt: serialized.finalPrompt,
+    rawPrompt,
     references: serialized.references,
     graphSources,
     chipAssetId,

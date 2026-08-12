@@ -48,6 +48,7 @@ pub async fn finalize_generation_assets(
     src_images: Vec<PathBuf>,
     temp_dir: Option<PathBuf>,
     prompt: String,
+    prompt_raw: Option<String>,
     references: Vec<String>,
     session_id: Option<String>,
     submit_id: Option<String>,
@@ -82,8 +83,10 @@ pub async fn finalize_generation_assets(
         }
 
         // generation_meta（详情页「✨ 生成来源」卡片；payload 增 submit_id 供事后取回）。
+        // prompt = 铺开发 provider 用；prompt_raw = 未铺开的原始编辑框文本，复用时载入还原 chip。
         let meta_payload = serde_json::json!({
             "prompt": prompt,
+            "prompt_raw": prompt_raw,
             "session_id": session_id,
             "references": references,
             "provider": provider,
@@ -222,6 +225,7 @@ async fn recover_one_jimeng_job(
                 src_images,
                 temp_dir,
                 job.prompt.clone(),
+                None,
                 job.references.clone(),
                 Some(submit_id.clone()),
                 Some(submit_id.clone()),

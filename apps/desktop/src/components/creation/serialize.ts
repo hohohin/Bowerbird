@@ -45,8 +45,12 @@ export interface Serialized {
  */
 export function serializeDoc(
   doc: PmNode,
-  assetById: Map<string, PromptedAsset>
+  assetById: Map<string, PromptedAsset>,
+  opts: { unfold?: boolean } = {}
 ): Serialized {
+  // unfold=true（默认）= 发 provider 的铺开 prompt（维度展开 body）；false = 原始编辑框文本
+  // （维度只出【title】，不铺开 body），存 generation_meta.prompt_raw 供复用还原 chip。
+  const unfold = opts.unfold ?? true;
   const flat = docToInline(doc);
   let out = "";
   let currentImageId: string | null = null;
@@ -61,15 +65,15 @@ export function serializeDoc(
       currentImageId = n.assetId;
       const section = nextSectionTitle(flat, i);
       if (section) {
-        out += serializeImageToken(n, section.title, assetById);
+        out += serializeImageToken(n, section.title, assetById, unfold);
         i += section.consumed; // 跳过被图片吞掉的 keyword（及中间的「的」），避免再被 serializeKeyword 重复输出
       } else {
-        out += serializeImageToken(n, null, assetById);
+        out += serializeImageToken(n, null, assetById, unfold);
       }
       continue;
     }
     // 独立 keyword（未被图片吞掉的后续维度）：按「最近一张图」展开片段
-    out += serializeKeyword(n.title, currentImageId, assetById);
+    out += serializeKeyword(n.title, currentImageId, assetById, unfold);
   }
   // references：所有 image（含 silent）按 assetId 去重
   const references: PromptedAsset[] = [];
@@ -82,12 +86,15 @@ export function serializeDoc(
   return { finalPrompt: out.trim(), references };
 }
 
+// 发送 prompt 时取最新维度正文：走 assetById（PromptedAsset.sections），而非 keyword 节点 attrs.body
+// （后者只是插入时的展示快照，反推更新后不会回写到已插入的 chip）。保证生成用的始终是最新反推内容。
 function serializeKeyword(
   title: string,
   currentImageId: string | null,
-  assetById: Map<string, PromptedAsset>
+  assetById: Map<string, PromptedAsset>,
+  unfold: boolean = true
 ) {
-  if (!currentImageId) return `【${title}】`;
+  if (!currentImageId || !unfold) return `【${title}】`;
   const fragment = assetById
     .get(currentImageId)
     ?.sections?.find((s) => s.title === title)?.body.trim();
@@ -115,14 +122,17 @@ function nextSectionTitle(
 function serializeImageToken(
   node: Extract<Inline, { kind: "image" }>,
   sectionTitle: string | null,
-  assetById: Map<string, PromptedAsset>
+  assetById: Map<string, PromptedAsset>,
+  unfold: boolean = true
 ) {
   const a = assetById.get(node.assetId);
   // 优先用 assetById 最新名，查不到回退 attrs 快照 name（doc 自描述）
   const name = a ? `${a.name}${a.ext ? `.${a.ext}` : ""}` : node.name || node.assetId;
-  const caption = a?.caption?.trim();
 
   if (sectionTitle) {
+    // unfold=false（原始编辑框文本）：维度不铺开 body，只出 @图名 的【维度】
+    if (!unfold) return `@${name} 的【${sectionTitle}】`;
+    const caption = a?.caption?.trim();
     const fragment =
       a?.sections?.find((s) => s.title === sectionTitle)?.body.trim() || caption;
     return fragment

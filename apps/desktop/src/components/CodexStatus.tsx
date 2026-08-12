@@ -119,7 +119,7 @@ export function CodexStatus() {
         title={title}
         aria-label={title}
         aria-expanded={panelOpen}
-        className="relative flex cursor-pointer items-center justify-center rounded bg-transparent p-0.5 outline-none hover:bg-panel2"
+        className="relative flex h-6 w-6 cursor-pointer items-center justify-center rounded bg-transparent p-0.5 outline-none hover:bg-panel2"
       >
         {generating ? (
           <div className="codex-loader" aria-hidden>

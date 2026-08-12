@@ -49,7 +49,7 @@ pub async fn create_project(
     let db_for_import = db.clone();
     let id_for_import = project_id.clone();
     let assets = tokio::task::spawn_blocking(move || -> Result<Vec<_>, AppError> {
-        db_for_import.create_project(&id_for_import, &name, &display, &workspace_key)?;
+        db_for_import.create_project(&id_for_import, &name, &display, &workspace_key, "user")?;
         match ingest::ingest_dir(&paths, &db_for_import, &workspace) {
             Ok(assets) => {
                 let mut unique = std::collections::HashMap::new();

@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import type { GraphSource } from "./serialize";
+import { chipName } from "./schema";
 
 /**
  * 创作板节点图：参考图 → 所选维度 → 输出节点 的可视化（移植自官网 website/app.js + styles.css）。
@@ -99,7 +100,7 @@ export function CreationGraph({
                         src={thumb ? convertFileSrc(thumb) : undefined}
                         alt=""
                       />
-                      <strong>{source.asset.name}</strong>
+                      <strong>{chipName(source.asset)}</strong>
                     </div>
                     <div className="graph-dimension-nodes">
                       {visibleDims.map((title) => (
