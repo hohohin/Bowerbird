@@ -148,6 +148,13 @@ interface State {
   setDreaminaOnboardingForceOpen: (v: boolean) => void;
   accountOnboardingForceOpen: boolean;
   setAccountOnboardingForceOpen: (v: boolean) => void;
+  // 新手引导 tour（阶段 B）：spotlight 分步引导，废弃自动注入后用 tour 教导入 + 复用 + 创作。
+  tourActive: boolean;
+  tourStep: number;
+  setTourActive: (v: boolean) => void;
+  setTourStep: (n: number) => void;
+  startTour: () => void;
+  endTour: () => void;
   // —— 应用设置（从后端 settings.json 加载）——
   settings: AppSettings | null;
   loadSettings: () => Promise<void>;
@@ -608,6 +615,15 @@ export const useStore = create<State>((set, get) => {
   accountOnboardingForceOpen: false,
   setAccountOnboardingForceOpen: (accountOnboardingForceOpen) =>
     set({ accountOnboardingForceOpen }),
+  tourActive: false,
+  tourStep: 1,
+  setTourActive: (tourActive) => set({ tourActive }),
+  setTourStep: (tourStep) => set({ tourStep }),
+  startTour: () => set({ tourActive: true, tourStep: 1 }),
+  endTour: () => {
+    localStorage.setItem("bowerbird.tutorialSeen", "1");
+    set({ tourActive: false, tourStep: 1 });
+  },
   // —— 应用设置 ——
   settings: null,
   loadSettings: async () => {

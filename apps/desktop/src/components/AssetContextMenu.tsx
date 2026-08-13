@@ -282,6 +282,7 @@ export function AssetContextMenu() {
       </button>
       {isGenerated && (
         <button
+          data-tour="ctx-reuse-gen"
           onClick={reuseGeneration}
           disabled={busy || done !== null}
           title="打开创作板，填入该图生成时的提示词与参考素材"

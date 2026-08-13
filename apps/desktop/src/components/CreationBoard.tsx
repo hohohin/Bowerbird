@@ -316,6 +316,7 @@ export function CreationBoard() {
           <div
             ref={hostRef}
             onClick={focus}
+            data-tour="creation-editor"
             className="creation-editor min-h-48 cursor-text rounded bg-panel2/40 p-2 ring-1 ring-edge focus-within:ring-accent"
           />
           {/* 编辑框内 image/keyword chip 的交互浮层（hover 放大图/维度正文 + 点击定位瀑布流） */}

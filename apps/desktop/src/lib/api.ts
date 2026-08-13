@@ -136,10 +136,11 @@ export const api = {
     if (!r) return [];
     return Array.isArray(r) ? r : [r];
   },
-  pickFolder: async (): Promise<string | null> => {
-    const r = await open({ directory: true });
+  pickFolder: async (defaultPath?: string): Promise<string | null> => {
+    const r = await open({ directory: true, defaultPath });
     return (r as string | null) ?? null;
   },
+  releasePresetPack: () => invoke<string>("release_preset_pack"),
 
   // 创作板（统一走 codex CLI）
   listPromptedAssets: (projectId?: string | null) =>

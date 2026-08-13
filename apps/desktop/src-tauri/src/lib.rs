@@ -139,8 +139,6 @@ pub fn run() {
 
             let recovery_db = db.clone();
             let recovery_paths = paths.clone();
-            let samples_db = db.clone();
-            let samples_paths = paths.clone();
 
             app.manage(extension_status);
             app.manage(active_project);
@@ -158,9 +156,9 @@ pub fn run() {
                 recovery_paths,
             );
 
-            // 首启预置示例图注入（异步、不卡启动窗口）。
-            // 必须在 app.manage(settings_state) 之后，spawn 内经 app.state::<SettingsState>() 取并写旗标。
-            core::samples::seed_if_first_launch(app.handle().clone(), samples_db, samples_paths);
+            // 阶段 B：首启自动注入已废弃，改用 preset 模块（ingest 识别）+ 新手引导 tour
+            // （用户主动「导入文件夹」选预设图目录建项目）。samples.rs 保留供 release_preset_pack 复用。
+            // core::samples::seed_if_first_launch(app.handle().clone(), samples_db, samples_paths);
 
             for value in std::env::args() {
                 forward_auth_callback(app.handle(), &value);
@@ -177,6 +175,7 @@ pub fn run() {
             commands::cloud::cloud_entitlement,
             commands::cloud::cloud_sync_entitlement,
             commands::projects::create_project,
+            commands::preset::release_preset_pack,
             commands::projects::list_projects,
             commands::projects::set_active_project,
             commands::projects::add_assets_to_project,

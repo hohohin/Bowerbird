@@ -7,6 +7,7 @@ pub mod ingest;
 pub mod library;
 pub mod migrate;
 pub mod paths;
+pub mod preset;
 pub mod projects;
 pub mod samples;
 pub mod settings;

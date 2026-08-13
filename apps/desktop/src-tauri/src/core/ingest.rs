@@ -13,6 +13,7 @@ use ulid::Ulid;
 
 use crate::core::library::Asset;
 use crate::core::paths::LibraryPaths;
+use crate::core::preset;
 use crate::db::Database;
 use crate::error::{AppError, AppResult};
 use crate::media;
@@ -89,7 +90,7 @@ pub fn ingest_file(paths: &LibraryPaths, db: &Database, source: &Path) -> AppRes
         .map(|d| d.as_secs() as i64)
         .unwrap_or(now);
 
-    let asset = Asset {
+    let mut asset = Asset {
         id: id.clone(),
         name,
         ext: Some(meta.ext),
@@ -112,6 +113,8 @@ pub fn ingest_file(paths: &LibraryPaths, db: &Database, source: &Path) -> AppRes
     };
     db.insert_asset(&asset)?;
     link_colors(db, &asset.id, asset.colors.as_deref());
+    // 预设图识别：文件名命中内置 manifest → 预填 generation 身份 + meta（不调 codex）。
+    preset::recognize_and_prefill(db, source, &mut asset)?;
     Ok(asset)
 }
 

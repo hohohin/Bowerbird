@@ -13,6 +13,7 @@ import { CodexOnboarding } from "./components/CodexOnboarding";
 import { ExtensionOnboarding } from "./components/ExtensionOnboarding";
 import { DreaminaOnboarding } from "./components/DreaminaOnboarding";
 import { AccountOnboarding } from "./components/AccountOnboarding";
+import { OnboardingTour } from "./components/OnboardingTour";
 import { useStore } from "./store";
 import { api } from "./lib/api";
 import type { AuthSnapshot, CodexChunk } from "./lib/types";
@@ -260,6 +261,18 @@ function App() {
     };
   }, [setClassifyProgress]);
 
+  // 首启空库 → 起 tour（阶段 B，替代自动注入）。等 Onboarding dismiss（seen）才起，
+  // 避免 tour 高亮的元素被环境状态 Modal 盖住。
+  useEffect(() => {
+    if (localStorage.getItem("bowerbird.tutorialSeen") === "1") return;
+    const t = setTimeout(() => {
+      const onboardingSeen = localStorage.getItem("bowerbird.onboardingSeen") === "1";
+      const s = useStore.getState();
+      if (onboardingSeen && s.assets.length === 0) s.startTour();
+    }, 800);
+    return () => clearTimeout(t);
+  }, []);
+
   // 重建色板进度（P3）：color://rebuild-progress {done,total,ended?}；ended 时清空。
   // 从 Toolbar 提到全局——设置面板开关不影响后台重建进度的跟踪。
   useEffect(() => {
@@ -469,6 +482,8 @@ function App() {
       <ExtensionOnboarding />
       <DreaminaOnboarding />
       <AccountOnboarding />
+      {/* 新手引导 tour（阶段 B）：spotlight 分步引导，替代首启自动注入 */}
+      <OnboardingTour />
       {/* 图片右键菜单（全局单实例，store.contextMenu 驱动） */}
       <AssetContextMenu />
       <Toolbar onRefresh={refresh} />

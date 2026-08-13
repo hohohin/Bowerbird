@@ -96,6 +96,13 @@ export function Onboarding() {
     localStorage.setItem(SEEN_KEY, "1");
     setSeen(true);
     setForceOpen(false);
+    // 阶段 B：dismiss 环境状态后，若空库且没看过 tour → 起 tour（避免与 Onboarding Modal 叠）。
+    if (
+      localStorage.getItem("bowerbird.tutorialSeen") !== "1" &&
+      useStore.getState().assets.length === 0
+    ) {
+      useStore.getState().startTour();
+    }
   }
   // 跳转到详细子 onboarding：关总览 + 弹子。
   function goCodex() {
@@ -167,9 +174,12 @@ export function Onboarding() {
             <Card
               n={4}
               title="新手教程"
-              subtitle="视频引导（待补充）"
-              actionLabel="即将推出"
-              disabled
+              subtitle="分步引导走一遍核心流程"
+              actionLabel="开始引导"
+              onAction={() => {
+                useStore.getState().startTour();
+                setForceOpen(false);
+              }}
             />
           </div>
         </div>

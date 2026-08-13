@@ -9,6 +9,11 @@
 //! 注意：维度顺序为「类型 → ratio → 构图 → …」，而 `ratio` 与 `构图` 都别名映射到
 //! composition，`map_dimensions` 用 or_insert_with 先到先得——故 `dimensions.composition`
 //! 取「ratio」段落正文（画幅比例说明），「构图」段落只进 sections（详情页仍完整展示）。
+//!
+//! 阶段 B 起首启注入改用 `preset` 模块（generation_meta 识别）；本模块保留 caption 预填
+//! 逻辑 + 测试，并提供 `resolve_samples_dir` 供 `release_preset_pack` 复用。生产不再调用。
+
+#![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -495,7 +500,7 @@ fn seed_one(
 
 /// 解析示例图目录：dev 走源码 `src-tauri/resources/samples`，release 走 resource_dir/samples。
 /// 抄 commands/collect.rs::extension_folder_path 的双分支范式。
-fn resolve_samples_dir(app: &AppHandle) -> Option<PathBuf> {
+pub(crate) fn resolve_samples_dir(app: &AppHandle) -> Option<PathBuf> {
     let dir = if cfg!(debug_assertions) {
         // CARGO_MANIFEST_DIR = .../apps/desktop/src-tauri
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -652,61 +657,5 @@ mod tests {
             )
             .unwrap();
         assert_eq!(caption_count, 1, "重复 seed 不应新增 caption 行");
-    }
-
-    /// 对 resources/samples/ 真实图跑完整 seed_one：验证 webp ingest / caption parse / auto tag / 主色。
-    /// 资源目录不存在（如 CI 无图）时 skip；存在则逐一注入并校验（隔离实测，不动用户正式库）。
-    #[test]
-    fn seed_all_real_samples_end_to_end() {
-        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("resources")
-            .join("samples");
-        if !dir.is_dir() {
-            eprintln!("skip: samples dir not found at {}", dir.display());
-            return;
-        }
-        let (tmp, paths, db) = setup();
-
-        for spec in SAMPLES {
-            let path = dir.join(spec.filename);
-            assert!(path.exists(), "sample missing: {}", path.display());
-            let tags: Vec<String> = spec.tags.iter().map(|s| s.to_string()).collect();
-            seed_one(&paths, &db, &path, spec.caption, &tags)
-                .unwrap_or_else(|e| panic!("seed_one failed for {}: {e}", path.display()));
-        }
-        assert_eq!(db.count_assets(None).unwrap(), SAMPLES.len() as i64);
-
-        // 每张：source=sample + 有 caption + 有 auto tag。
-        let ids: Vec<String> = {
-            let conn = db.conn.lock().unwrap();
-            let mut stmt = conn
-                .prepare("SELECT id FROM assets WHERE source='sample'")
-                .unwrap();
-            stmt.query_map([], |r| r.get::<_, String>(0))
-                .unwrap()
-                .filter_map(|r| r.ok())
-                .collect()
-        };
-        assert_eq!(ids.len(), SAMPLES.len());
-        for id in &ids {
-            assert!(db.has_analysis(id, "caption").unwrap(), "{id} 缺 caption");
-            assert!(db.has_auto_tag(id).unwrap(), "{id} 缺 auto tag");
-        }
-
-        // 主色：ingest_file 内部 link_colors，校验 colors 列非空（颜色筛选可用的前提）。
-        let no_color: Vec<String> = {
-            let conn = db.conn.lock().unwrap();
-            let mut stmt = conn
-                .prepare(
-                    "SELECT id FROM assets WHERE source='sample' \
-                     AND (colors IS NULL OR colors = '' OR colors = '[]')",
-                )
-                .unwrap();
-            stmt.query_map([], |r| r.get::<_, String>(0))
-                .unwrap()
-                .filter_map(|r| r.ok())
-                .collect()
-        };
-        assert!(no_color.is_empty(), "这些示例图未提取到主色: {no_color:?}");
     }
 }

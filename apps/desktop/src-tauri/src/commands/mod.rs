@@ -5,6 +5,7 @@ pub mod codex;
 pub mod collect;
 pub mod jimeng;
 pub mod library;
+pub mod preset;
 pub mod projects;
 pub mod prompt;
 pub mod settings;
