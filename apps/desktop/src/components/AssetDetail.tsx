@@ -120,7 +120,7 @@ export function AssetDetail() {
   const currentProjectId = useStore((s) => s.currentProjectId);
   const closeDetail = useStore((s) => s.closeDetail);
   const openDetail = useStore((s) => s.openDetail);
-  const runDescribe = useStore((s) => s.runDescribe);
+  const openDescribePicker = useStore((s) => s.openDescribePicker);
   const cancelDescribe = useStore((s) => s.cancelDescribe);
   const describeStartedAt = useStore((s) => s.describeStartedAt);
   const folders = useStore((s) => s.folders);
@@ -404,15 +404,18 @@ export function AssetDetail() {
     saveDescribePrompt(trimmed);
   }
 
-  function handleDescribe() {
+  function handleDescribe(e: React.MouseEvent<HTMLButtonElement>) {
     if (!id) return;
     const instruction = describePrompt.trim();
     if (!instruction) return;
     setErr(null);
     rememberDescribePrompt(instruction);
-    // 入全局队列（fire-and-forget）；执行状态走 store，本组件不再 await。
-    // 跑完落地后由 analyses://changed 监听器自动 loadAnalyses。
-    runDescribe(id, instruction);
+    // 弹反推引擎选择浮层（Bowerbird Cloud / 本机 codex）；选定后 store 执行入队。
+    const r = e.currentTarget.getBoundingClientRect();
+    openDescribePicker(
+      { kind: "single", assetId: id, instruction },
+      { x: r.left, y: r.bottom },
+    );
   }
 
   async function deleteCaption(anId: string) {

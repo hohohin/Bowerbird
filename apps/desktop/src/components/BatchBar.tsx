@@ -25,7 +25,7 @@ export function BatchBar() {
   const codexHealth = useStore((s) => s.codexHealth);
   const cloudAuth = useStore((s) => s.cloudAuth);
   const cloudEntitlement = useStore((s) => s.cloudEntitlement);
-  const runDescribe = useStore((s) => s.runDescribe);
+  const openDescribePicker = useStore((s) => s.openDescribePicker);
   const reloadProjects = useStore((s) => s.reloadProjects);
   const reloadFolders = useStore((s) => s.reloadFolders);
   const cloudAvailable = cloudAuth?.cloud_available ?? false;
@@ -58,15 +58,6 @@ export function BatchBar() {
     : understandRoute === "bowerbird-cloud" && ids.length > 10
       ? `已选 ${ids.length} 张，免费档每日仅 10 次，超出将失败`
       : `${understandLabel} 看图反推，结果进创作板 @ 池`;
-
-  /** 批量反推：全部入 describeQueue 串行队列（runDescribe 内部去重），进度走状态圈会话面板。 */
-  function batchDescribe() {
-    if (empty) return;
-    for (const id of ids) {
-      runDescribe(id, loadDescribePrompt());
-    }
-    exitManage();
-  }
 
   async function addToProject() {
     if (!targetProjectId) return;
@@ -319,7 +310,13 @@ export function BatchBar() {
 
       {/* AI 区：批量反推 */}
       <button
-        onClick={batchDescribe}
+        onClick={(e) => {
+          const r = e.currentTarget.getBoundingClientRect();
+          openDescribePicker(
+            { kind: "batch", ids, instruction: loadDescribePrompt() },
+            { x: r.left, y: r.bottom },
+          );
+        }}
         disabled={busy || empty || !understandReady}
         title={describeTitle}
         className="rounded bg-panel2 px-2.5 py-1 text-xs hover:bg-edge disabled:opacity-50"

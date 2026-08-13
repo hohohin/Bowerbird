@@ -186,6 +186,33 @@ pub async fn resolve_entitled_understand_provider(
     resolve_understand_provider(Some(provider), Some((cloud, auth)))
 }
 
+/// 用户显式选择理解 provider 时使用：按选项 resolve，但仍按权益门控（免费档不能选 codex）。
+/// choice = None 时退回自动路由（resolve_entitled_understand_provider）。
+pub async fn resolve_understand_provider_with_choice(
+    entitlement: &EntitlementService,
+    cloud: CloudClient,
+    auth: AuthClient,
+    choice: Option<&str>,
+) -> Result<Box<dyn UnderstandProvider>, AppError> {
+    match choice {
+        None => resolve_entitled_understand_provider(entitlement, cloud, auth, true).await,
+        Some("codex") => {
+            let snapshot = entitlement.current_or_sync(&auth).await;
+            if !snapshot.policy.can_use_byo {
+                return Err(AppError::Cloud("升级 Pro 解锁本机 codex 反推".into()));
+            }
+            resolve_understand_provider(Some("codex"), None)
+        }
+        Some("bowerbird-cloud") => {
+            if !auth.snapshot().logged_in {
+                return Err(AppError::Cloud("反推需要先登录 Bowerbird Cloud".into()));
+            }
+            resolve_understand_provider(Some("bowerbird-cloud"), Some((cloud, auth)))
+        }
+        Some(other) => Err(AppError::Cloud(format!("未知理解 provider: {other}"))),
+    }
+}
+
 async fn read_image(path: &PathBuf) -> Result<serde_json::Value, AppError> {
     let path = path.clone();
     let bytes = tokio::task::spawn_blocking(move || prepare_cloud_image(&path))

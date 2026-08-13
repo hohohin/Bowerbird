@@ -177,6 +177,11 @@
   ④ 前端 [OnboardingTour.tsx](apps/desktop/src/components/OnboardingTour.tsx)：自写 spotlight tour（box-shadow 挖洞 z-70 + pulse ring + 气泡 z-71，零依赖），5 步：①高亮「导入文件夹」（[Toolbar](apps/desktop/src/components/Toolbar.tsx) tour 分支走 createProject + pickFolder defaultPath 定位预设图目录）→ ②高亮首图右键复用 → ③高亮创作板编辑框 → ④结束语「开始构建你的巢吧」。store tour 状态；Onboarding 第4卡激活；App mount/Onboarding-dismiss 触发（dismiss 后起 tour 避免 Modal 叠）。
   ⑤ 预设图临时占位（preset-01/02）+ prompt 占位，待用户提供真实图 + prompt 替换 manifest。
 
+- **反推引擎显式选择 + 状态圈会话面板 + 批量管理细节（2026-08-13，dev 线，本次存档）**：
+  ① **反推引擎显式选择**：单张（右键/详情页）与批量反推都改为先弹 [DescribeProviderPicker](apps/desktop/src/components/DescribeProviderPicker.tsx) 全局浮层选 **Bowerbird Cloud / 本机 codex**（dreamina `caption:false` 无文本能力、不列）；后端 [codex_describe_asset](apps/desktop/src-tauri/src/commands/codex.rs) 加 `provider` 参数，新增 [resolve_understand_provider_with_choice](apps/desktop/src-tauri/src/codex/understand.rs)（显式选仍按权益门控，免费档选 codex→「升级 Pro」）；store `runDescribe`/队列项/失败记录贯穿 provider，Picker 协调态（`describePicker`/`openDescribePicker`/`runDescribePicker`，批量循环入队+exitManage、单张单次）。三层门控（前端置灰/store 复核/后端复核）。取代此前反推按 entitlement 自动路由、用户无法指定。
+  ② **状态圈会话管理面板**：[CodexStatus](apps/desktop/src/components/CodexStatus.tsx) 从纯展示圆改为可点击 popover——上区「生成任务」（点击打开 GenerationPanel 并选中 job）、下区「反推中」（含 `describeFailures` 失败项展示/重试/清除）；移除 Toolbar「🖼 生成结果」按钮，未读红点转移到状态圈。反推队列项加 `name`/`provider`，切视图后素材名仍可见。
+  ③ **批量管理细节**：右键菜单加「选择」项（浏览模式直接进 manage 并选中，免先进「批量管理」）；BatchBar 各操作（批量反推 / 删除三模式 / 加入项目 / 移入文件夹）成功后自动 `exitManage`，失败留 manage 显示 `failedNotice`。
+
 **测试：** 当前全量基线 `cargo test` 110 通过（含 preset 识别测试 + samples 注入/caption 测试 + generation_history prompt_raw 断言）；候选工具 Node tests 10/10；桌面 `tsc --noEmit` + Vite production build、官网 build 均通过。云端部署后增量验证：桌面云配置 3/3、Auth 测试 6/6、官网/E2E/支付脚本 `node --check`、5 个 Edge Functions Deno type-check、东京真实 Cloud E2E、用量守卫 RPC、webhook 错误签名拒绝，以及桌面/官网免费档产品真机闭环全部通过；迁移 0001–0011 本地/远端一致，数据库 error 级 lint 0 项。
 
 **未开始 / 待办：**

@@ -5,6 +5,7 @@ import { Sidebar } from "./components/Sidebar";
 import { MasonryGrid } from "./components/MasonryGrid";
 import { AssetDetail } from "./components/AssetDetail";
 import { AssetContextMenu } from "./components/AssetContextMenu";
+import { DescribeProviderPicker } from "./components/DescribeProviderPicker";
 import { BatchBar } from "./components/BatchBar";
 import { CreationBoard } from "./components/CreationBoard";
 import { GenerationPanel } from "./components/GenerationPanel";
@@ -486,6 +487,8 @@ function App() {
       <OnboardingTour />
       {/* 图片右键菜单（全局单实例，store.contextMenu 驱动） */}
       <AssetContextMenu />
+      {/* 反推引擎选择浮层（全局单实例，store.describePicker 驱动） */}
+      <DescribeProviderPicker />
       <Toolbar onRefresh={refresh} />
       <div className="flex flex-1 overflow-hidden">
         <Sidebar />

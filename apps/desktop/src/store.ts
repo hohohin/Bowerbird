@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { api } from "./lib/api";
 import {
   canStartAnotherJob,
+  canUseByo,
   canUseGenerationProvider,
   understandProvider,
 } from "./lib/entitlement";
@@ -46,9 +47,15 @@ export interface DescribeFailure {
   assetId: string;
   instruction: string;
   name: string;
+  provider?: string;
   reason: string;
   failedAt: number;
 }
+
+/** 反推引擎选择 Picker 的待执行任务（批量 / 单张），由各反推入口打开 Picker 时传入。 */
+export type DescribeTask =
+  | { kind: "batch"; ids: string[]; instruction: string }
+  | { kind: "single"; assetId: string; instruction: string };
 
 interface State {
   assets: Asset[];
@@ -117,13 +124,17 @@ interface State {
   // 单槽 + 前端排队：同一时刻只调一次 codex_describe_asset（后端 DESCRIBE_CANCEL 单例）。
   describingId: string | null;
   describingName: string | null; // 反推中素材名（随队列捕获，切视图仍可显示）
-  describeQueue: { assetId: string; instruction: string; name: string }[];
+  describeQueue: { assetId: string; instruction: string; name: string; provider?: string }[];
   describeFailures: DescribeFailure[]; // 当前会话失败记录，供右上角 AI 任务清单展示/重试
   describeStartedAt: number | null; // 当前任务开始时间戳；跨组件已耗时显示用
-  runDescribe: (assetId: string, instruction: string) => void;
+  runDescribe: (assetId: string, instruction: string, provider?: string) => void;
   cancelDescribe: (assetId: string) => Promise<void>;
   retryDescribeFailure: (assetId: string) => void;
   dismissDescribeFailure: (assetId: string) => void;
+  describePicker: { task: DescribeTask; anchor: { x: number; y: number } } | null;
+  openDescribePicker: (task: DescribeTask, anchor: { x: number; y: number }) => void;
+  closeDescribePicker: () => void;
+  runDescribePicker: (provider: string) => void;
   // —— 生成（创作板 codex/即梦 画图，多 job 并行）——
   // 派生量：任一 job running 即 true。状态圈在顶部工具栏最右侧（全局可见，不绑创作板生命周期）。
   generating: boolean;
@@ -257,7 +268,7 @@ export const useStore = create<State>((set, get) => {
       describeStartedAt: Date.now(),
     });
     try {
-      await api.describeAsset(next.assetId, next.instruction);
+      await api.describeAsset(next.assetId, next.instruction, next.provider);
     } catch (e) {
       const msg = taskErrorMessage(e);
       // 「已取消」是用户主动中断，静默；其它错误留在 AI 任务清单，便于看原因和重试。
@@ -269,6 +280,7 @@ export const useStore = create<State>((set, get) => {
               assetId: next.assetId,
               instruction: next.instruction,
               name: next.name,
+              provider: next.provider,
               reason: msg || "未知错误",
               failedAt: Date.now(),
             },
@@ -523,23 +535,26 @@ export const useStore = create<State>((set, get) => {
   describeQueue: [],
   describeFailures: [],
   describeStartedAt: null,
-  runDescribe: (assetId, instruction) => {
+  runDescribe: (assetId, instruction, provider) => {
     const trimmed = instruction.trim();
     if (!trimmed) return;
     const s = get();
-    const route = understandProvider(s.cloudEntitlement);
-    if (
-      route === null ||
-      (route === "codex" && !s.codexHealth?.ok) ||
-      (route === "bowerbird-cloud" &&
-        (!s.cloudAuth?.cloud_available || !s.cloudAuth.logged_in))
-    ) {
-      set({
-        cloudError:
-          route === "bowerbird-cloud"
-            ? "免费版反推需要先登录 Bowerbird Cloud"
-            : "当前账号没有可用的理解引擎",
-      });
+    // provider 省略时沿用自动路由（Pro→codex、免费→Cloud）；显式指定时仍按权益门控（免费不能选 codex）。
+    const route = provider ?? understandProvider(s.cloudEntitlement);
+    const denyReason =
+      route === null
+        ? "当前账号没有可用的理解引擎"
+        : route === "codex"
+          ? !canUseByo(s.cloudEntitlement)
+            ? "升级 Pro 解锁本机 codex 反推"
+            : !s.codexHealth?.ok
+              ? s.codexHealth?.reason || "codex 不可用"
+              : null
+          : !s.cloudAuth?.cloud_available || !s.cloudAuth.logged_in
+            ? "反推需要先登录 Bowerbird Cloud"
+            : null;
+    if (denyReason) {
+      set({ cloudError: denyReason });
       return;
     }
     // 同一张图不重复入队（正在跑或已排队）。
@@ -556,6 +571,7 @@ export const useStore = create<State>((set, get) => {
           assetId,
           instruction: trimmed,
           name: s.assets.find((a) => a.id === assetId)?.name ?? "未知素材",
+          provider: route ?? undefined,
         },
       ],
       describeFailures: s.describeFailures.filter((failure) => failure.assetId !== assetId),
@@ -585,12 +601,27 @@ export const useStore = create<State>((set, get) => {
   retryDescribeFailure: (assetId) => {
     const failure = get().describeFailures.find((item) => item.assetId === assetId);
     if (!failure) return;
-    get().runDescribe(failure.assetId, failure.instruction);
+    get().runDescribe(failure.assetId, failure.instruction, failure.provider);
   },
   dismissDescribeFailure: (assetId) =>
     set((s) => ({
       describeFailures: s.describeFailures.filter((failure) => failure.assetId !== assetId),
     })),
+  describePicker: null,
+  openDescribePicker: (task, anchor) => set({ describePicker: { task, anchor } }),
+  closeDescribePicker: () => set({ describePicker: null }),
+  runDescribePicker: (provider) => {
+    const p = get().describePicker;
+    if (!p) return;
+    const { task } = p;
+    if (task.kind === "batch") {
+      for (const id of task.ids) get().runDescribe(id, task.instruction, provider);
+      get().exitManage();
+    } else {
+      get().runDescribe(task.assetId, task.instruction, provider);
+    }
+    set({ describePicker: null });
+  },
   // —— 生成（创作板 codex 画图）——
   generating: false,
   // —— 导入即基础分析（autoname）——

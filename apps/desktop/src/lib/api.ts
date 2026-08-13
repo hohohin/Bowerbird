@@ -186,8 +186,8 @@ export const api = {
   codexGeneratePromptForAsset: (assetId: string, role: string) =>
     invoke<string>("codex_generate_prompt_for_asset", { assetId, role }),
   // Phase 5：反推（codex CLI 描述图片）+ 分析结果
-  describeAsset: (assetId: string, instruction?: string) =>
-    invoke<string>("codex_describe_asset", { assetId, instruction }),
+  describeAsset: (assetId: string, instruction?: string, provider?: string) =>
+    invoke<string>("codex_describe_asset", { assetId, instruction, provider: provider ?? null }),
   listAnalysesByAsset: (assetId: string) =>
     invoke<Analysis[]>("list_analyses_by_asset", { assetId }),
   openCodexSession: (sessionId: string) =>

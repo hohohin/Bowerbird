@@ -34,7 +34,7 @@ export function AssetContextMenu() {
   const currentProjectId = useStore((s) => s.currentProjectId);
   const reloadProjects = useStore((s) => s.reloadProjects);
   const assets = useStore((s) => s.assets);
-  const runDescribe = useStore((s) => s.runDescribe);
+  const openDescribePicker = useStore((s) => s.openDescribePicker);
   const reusePromptToBoard = useStore((s) => s.reusePromptToBoard);
   const codexHealth = useStore((s) => s.codexHealth);
   const mode = useStore((s) => s.mode);
@@ -270,8 +270,12 @@ export function AssetContextMenu() {
         </>
       )}
       <button
-        onClick={() => {
-          runDescribe(assetId, loadDescribePrompt());
+        onClick={(e) => {
+          const r = e.currentTarget.getBoundingClientRect();
+          openDescribePicker(
+            { kind: "single", assetId, instruction: loadDescribePrompt() },
+            { x: r.left, y: r.bottom },
+          );
           closeContextMenu();
         }}
         disabled={busy || done !== null || describing || !understandReady}

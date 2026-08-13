@@ -21,7 +21,9 @@ use crate::codex::codex_cli::{
 };
 use crate::codex::resolve_gen_provider;
 use crate::codex::types::{Chunk, CodexRequest, CodexResult};
-use crate::codex::understand::{resolve_entitled_understand_provider, UnderstandOperation};
+use crate::codex::understand::{
+    resolve_entitled_understand_provider, resolve_understand_provider_with_choice, UnderstandOperation,
+};
 use crate::core::caption;
 use crate::core::paths::LibraryPaths;
 use crate::db::Database;
@@ -346,6 +348,7 @@ pub async fn codex_describe_asset(
     entitlement: State<'_, EntitlementService>,
     asset_id: String,
     instruction: Option<String>,
+    provider: Option<String>,
 ) -> Result<String, AppError> {
     let store_path = get_asset_store_path(&db, &asset_id).await?;
     let instruction = instruction
@@ -360,11 +363,11 @@ pub async fn codex_describe_asset(
         ratio: None,
         job_id: None,
     };
-    let p = resolve_entitled_understand_provider(
+    let p = resolve_understand_provider_with_choice(
         &entitlement,
         cloud_client.inner().clone(),
         auth_client.inner().clone(),
-        true,
+        provider.as_deref(),
     )
     .await?;
     let provider_name = p.name().to_string();
