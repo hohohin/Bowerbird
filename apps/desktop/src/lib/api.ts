@@ -16,6 +16,7 @@ import type {
   Folder,
   GenerationHistory,
   GenJobSummary,
+  LocalAgentRun,
   Preset,
   Project,
   ProjectCreateResult,
@@ -31,6 +32,22 @@ export const api = {
   // 健康检查
   ping: (name: string) => invoke<string>("ping", { name }),
   dbHealth: () => invoke<string>("db_health"),
+  localAgentHealth: () => invoke<boolean>("local_agent_health"),
+  localAgentStart: (assetId: string, goal: string) =>
+    invoke<LocalAgentRun>("local_agent_start", { assetId, goal }),
+  localAgentLatest: (assetId: string) =>
+    invoke<LocalAgentRun | null>("local_agent_latest", { assetId }),
+  localAgentResume: (
+    runId: string,
+    options: { approval?: boolean; toolResult?: { callId: string; result: unknown } }
+  ) =>
+    invoke<LocalAgentRun>("local_agent_resume", {
+      runId,
+      approval: options.approval,
+      toolResult: options.toolResult,
+    }),
+  localAgentFindAssetId: (storePath: string) =>
+    invoke<string | null>("local_agent_find_asset_id", { storePath }),
 
   // 项目 workspace
   createProject: (workspacePath: string) =>

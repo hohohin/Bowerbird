@@ -168,6 +168,11 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::ping,
             commands::db_health,
+            commands::agent::local_agent_health,
+            commands::agent::local_agent_start,
+            commands::agent::local_agent_resume,
+            commands::agent::local_agent_latest,
+            commands::agent::local_agent_find_asset_id,
             commands::cloud::cloud_auth_snapshot,
             commands::cloud::cloud_start_email_login,
             commands::cloud::cloud_restore_session,

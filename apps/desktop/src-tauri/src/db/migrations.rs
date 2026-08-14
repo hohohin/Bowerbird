@@ -11,6 +11,7 @@
 //! - `0010_projects.sql`：项目 workspace 登记 + project_assets 素材多对多成员关系
 //! - `0011_dhash_fuzzy_dedupe.sql`：采集去重升级为 dHash 阈值去重；存量近重复搬进
 //!   「已合并去重（重复）」收藏夹（保留高分在主瀑布流，见 hook）
+//! - `0013_local_agent_runs.sql`：本机 Agent 预览 checkpoint（不复用 generation task_queue）
 
 use rusqlite_migration::{Migrations, M};
 
@@ -35,6 +36,7 @@ pub fn migrations() -> Migrations<'static> {
             |tx: &rusqlite::Transaction| merge_existing_duplicates(tx),
         ),
         M::up(include_str!("../../sql/0012_projects_builtin.sql")),
+        M::up(include_str!("../../sql/0013_local_agent_runs.sql")),
     ])
 }
 

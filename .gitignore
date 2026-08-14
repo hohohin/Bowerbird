@@ -10,6 +10,7 @@ target/
 
 # tauri
 apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/target-codex-validation/
 apps/desktop/src-tauri/gen/
 
 # IDE / OS

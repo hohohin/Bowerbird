@@ -6,6 +6,7 @@ import guide1 from "../assets/bowerbird-extension-guide-1.gif";
 import guide2 from "../assets/bowerbird-extension-guide-2.gif";
 import guide3 from "../assets/bowerbird-extension-guide-3.gif";
 import guide4 from "../assets/bowerbird-extension-guide-4.png";
+import { ModalShell } from "./ModalShell";
 
 const EXT_PAGE_URL = "chrome://extensions";
 
@@ -21,7 +22,7 @@ function Shot({ src, alt, onZoom }: { src: string; alt: string; onZoom: () => vo
   );
 }
 
-/** 全屏放大查看（createPortal 到 document.body，z-[60] 盖过引导 z-50；Esc / 点背景 / ✕ 关闭）。 */
+/** 全屏放大查看（createPortal 到 document.body，z-[90] 盖过统一弹窗；Esc / 点背景 / ✕ 关闭）。 */
 function ZoomImage({ src, onClose }: { src: string; onClose: () => void }) {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -32,7 +33,10 @@ function ZoomImage({ src, onClose }: { src: string; onClose: () => void }) {
   }, [onClose]);
   return createPortal(
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/90 p-4"
+      className="fixed inset-0 z-[90] flex items-center justify-center bg-black/90 p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-label="示例图放大"
       onClick={onClose}
     >
       <img
@@ -119,15 +123,18 @@ export function ExtensionOnboarding() {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-      <div className="w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-lg border border-edge bg-panel p-6 shadow-2xl">
-        <h2 className="text-lg font-semibold text-ink">安装浏览器扩展以启用采集</h2>
-        <p className="mt-1.5 text-sm text-muted">
-          装好后，在任意网页拖图到右下角 Logo、点 Logo 批量采集、或 Alt+点击图片单张保存到 Bowerbird。
-        </p>
-
+    <>
+      <ModalShell
+        title="安装浏览器扩展以启用采集"
+        eyebrow="Browser collection"
+        description="安装后，可在网页拖图、批量采集，或用 Alt + 点击单张保存到 Bowerbird。"
+        width="lg"
+        preventClose={zoom !== null}
+        onClose={dismiss}
+        footer={<button type="button" onClick={dismiss} className="app-modal-button">稍后再说</button>}
+      >
         <ol className="mt-4 grid grid-cols-1 gap-3 text-sm md:grid-cols-2">
-          <li>
+          <li className="setup-card p-4">
             <div className="flex items-center gap-2">
               <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/15 text-[11px] font-semibold text-accent">
                 1
@@ -137,7 +144,7 @@ export function ExtensionOnboarding() {
             <div className="mt-1.5 pl-7">
               <button
                 onClick={() => void copy(EXT_PAGE_URL, "page")}
-                className="rounded-md bg-accent px-3 py-1 text-[12px] font-medium text-black hover:opacity-90"
+                className="app-modal-button is-primary"
               >
                 {copied === "page" ? "已复制 ✓" : "一键复制 chrome://extensions"}
               </button>
@@ -152,7 +159,7 @@ export function ExtensionOnboarding() {
             />
           </li>
 
-          <li>
+          <li className="setup-card p-4">
             <div className="flex items-center gap-2">
               <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/15 text-[11px] font-semibold text-accent">
                 2
@@ -165,7 +172,7 @@ export function ExtensionOnboarding() {
             <Shot src={guide2} alt="开发者模式开关位置" onZoom={() => setZoom(guide2)} />
           </li>
 
-          <li>
+          <li className="setup-card p-4">
             <div className="flex items-center gap-2">
               <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/15 text-[11px] font-semibold text-accent">
                 3
@@ -175,7 +182,7 @@ export function ExtensionOnboarding() {
             <div className="mt-1.5 pl-7">
               <button
                 onClick={() => void copyFolderPath()}
-                className="rounded-md bg-accent px-3 py-1 text-[12px] font-medium text-black hover:opacity-90"
+                className="app-modal-button is-primary"
               >
                 {copied === "folder" ? "已复制 ✓" : "一键复制扩展文件夹路径"}
               </button>
@@ -190,7 +197,7 @@ export function ExtensionOnboarding() {
             />
           </li>
 
-          <li>
+          <li className="setup-card p-4">
             <div className="flex items-center gap-2">
               <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/15 text-[11px] font-semibold text-accent">
                 4
@@ -203,7 +210,7 @@ export function ExtensionOnboarding() {
             <Shot src={guide4} alt="网页右下角的 Bowerbird 悬浮图标" onZoom={() => setZoom(guide4)} />
           </li>
 
-          <li>
+          <li className="setup-card p-4 md:col-span-2">
             <div className="flex items-center gap-2">
               <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/15 text-[11px] font-semibold text-accent">
                 5
@@ -216,17 +223,9 @@ export function ExtensionOnboarding() {
           </li>
         </ol>
 
-        <div className="mt-6 flex justify-end">
-          <button
-            onClick={dismiss}
-            className="rounded-md bg-panel2 px-3 py-1.5 text-sm text-ink hover:bg-edge"
-          >
-            稍后再说
-          </button>
-        </div>
-      </div>
+      </ModalShell>
 
       {zoom && <ZoomImage src={zoom} onClose={() => setZoom(null)} />}
-    </div>
+    </>
   );
 }

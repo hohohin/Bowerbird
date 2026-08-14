@@ -261,6 +261,61 @@ export interface GenJobSummary {
   running: boolean;
 }
 
+export interface LocalAgentPendingApproval {
+  kind: "refine_plan";
+  action: "submit_refine_plan";
+  arguments: { changes?: string; estimatedAdditionalCredits?: number };
+  planHash: string;
+}
+
+export interface LocalAgentPendingTool {
+  callId: string;
+  phase: string;
+  action: "refine_once" | "inspect_generated_image";
+  arguments: {
+    prompt?: string;
+    referenceAssetIds?: string[];
+    ratio?: string;
+    artifactCallId?: string;
+  };
+}
+
+export interface LocalAgentRecord {
+  callId: string;
+  phase: string;
+  action: string;
+  arguments: Record<string, unknown>;
+  result: unknown;
+  cost: number;
+  providerUsage: Record<string, unknown>;
+}
+
+export interface LocalAgentCheckpoint {
+  schemaVersion: 1;
+  runId: string;
+  input: { targetAssetId: string; goal: string; caption?: string | null };
+  phase: string;
+  status: string;
+  records: LocalAgentRecord[];
+  modelTurnCount: number;
+  generateAttemptCount: number;
+  spentCredits: number;
+  approval?: LocalAgentPendingApproval;
+  pendingTool?: LocalAgentPendingTool;
+  errorCode?: string;
+}
+
+export interface LocalAgentRun {
+  id: string;
+  skill_id: string;
+  target_asset_id: string;
+  status: string;
+  phase: string;
+  checkpoint: LocalAgentCheckpoint;
+  created_at: number;
+  updated_at: number;
+}
+
 export type CodexChunk =
   | { kind: "started"; job_id: string }
   | { kind: "delta"; text: string; job_id?: string }

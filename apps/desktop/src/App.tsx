@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Toolbar } from "./components/Toolbar";
 import { Sidebar } from "./components/Sidebar";
@@ -15,13 +15,27 @@ import { ExtensionOnboarding } from "./components/ExtensionOnboarding";
 import { DreaminaOnboarding } from "./components/DreaminaOnboarding";
 import { AccountOnboarding } from "./components/AccountOnboarding";
 import { OnboardingTour } from "./components/OnboardingTour";
+import { ToastViewport } from "./components/ToastViewport";
 import { useStore } from "./store";
 import { api } from "./lib/api";
+import { notifyError, notifySuccess } from "./lib/notify";
 import type { AuthSnapshot, CodexChunk } from "./lib/types";
 
 let refreshVersion = 0;
 
+function LibraryLoadingState() {
+  return (
+    <div className="library-loading" role="status" aria-label="正在加载素材库">
+      <div className="library-loading-grid" aria-hidden="true">
+        {Array.from({ length: 12 }, (_, index) => <span key={index} />)}
+      </div>
+      <span className="sr-only">正在加载素材库</span>
+    </div>
+  );
+}
+
 function App() {
+  const [initializing, setInitializing] = useState(true);
   const setAssets = useStore((s) => s.setAssets);
   const setTotal = useStore((s) => s.setTotal);
   const setPromptedAssets = useStore((s) => s.setPromptedAssets);
@@ -134,7 +148,12 @@ function App() {
       if (version !== refreshVersion) return;
       await reloadPresets();
     } catch (e) {
-      if (version === refreshVersion) console.error("refresh failed", e);
+      if (version === refreshVersion) {
+        console.error("refresh failed", e);
+        notifyError(e, "素材库加载失败");
+      }
+    } finally {
+      if (version === refreshVersion) setInitializing(false);
     }
   }
 
@@ -384,7 +403,11 @@ function App() {
             projectId,
             source: "clipboard",
           })
-          .catch((err) => console.error("paste import failed", err));
+          .then(() => notifySuccess("剪贴板图片已加入素材库"))
+          .catch((err) => {
+            console.error("paste import failed", err);
+            notifyError(err, "粘贴图片导入失败");
+          });
       };
       reader.readAsDataURL(file);
     }
@@ -478,7 +501,8 @@ function App() {
   const showDetail = mode === "browse" && detailAssetId !== null;
 
   return (
-    <div className="flex h-full w-full flex-col">
+    <div className={`app-shell flex h-full w-full flex-col ${boardOpen ? "has-board" : ""}`}>
+      <ToastViewport />
       {/* 统一「环境状态」总览：codex/扩展任一未就绪时首启自动弹（设置可手动唤起） */}
       <Onboarding />
       {/* 二级引导：点总览卡片「前往配置」唤起，不再各自自动弹 */}
@@ -493,12 +517,13 @@ function App() {
       {/* 反推引擎选择浮层（全局单实例，store.describePicker 驱动） */}
       <DescribeProviderPicker />
       <Toolbar onRefresh={refresh} />
-      <div className="flex flex-1 overflow-hidden">
+      <div className="app-shell-hatch" aria-hidden="true"><span /></div>
+      <div className="relative flex flex-1 overflow-hidden">
         <Sidebar />
-        <main className="flex flex-1 flex-col overflow-hidden bg-canvas">
+        <main className="app-workspace flex flex-1 flex-col overflow-hidden bg-canvas">
           {mode === "manage" && <BatchBar />}
           <div className="relative flex-1 overflow-hidden">
-            {showDetail ? <AssetDetail /> : <MasonryGrid />}
+            {initializing ? <LibraryLoadingState /> : showDetail ? <AssetDetail /> : <MasonryGrid />}
             {/* 生成结果面板：主区覆盖层（像详情页），创作板在右槽始终可用 */}
             {genPanelOpen && <GenerationPanel />}
           </div>

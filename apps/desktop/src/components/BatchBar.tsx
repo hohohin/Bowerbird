@@ -4,6 +4,7 @@ import { api } from "../lib/api";
 import { understandProvider } from "../lib/entitlement";
 import { loadDescribePrompt } from "../lib/describePrompt";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { notifyError, notifySuccess } from "../lib/notify";
 import type { AssetDeleteMode } from "../lib/types";
 
 /**
@@ -65,10 +66,11 @@ export function BatchBar() {
     try {
       await api.addAssetsToProject(targetProjectId, ids);
       await reloadProjects();
+      notifySuccess("素材已加入项目");
       exitManage();
     } catch (e) {
       console.error("add to project failed", e);
-      setFailedNotice(typeof e === "string" ? e : "加入项目失败");
+      notifyError(e, "加入项目失败");
     } finally {
       setBusy(false);
       setProjectInput(false);
@@ -86,9 +88,10 @@ export function BatchBar() {
       exitManage();
       useStore.getState().setCurrentFolder(folderId);
       await reloadFolders();
+      notifySuccess("素材已移入新文件夹");
     } catch (e) {
       console.error("move failed", e);
-      setFailedNotice(typeof e === "string" ? e : "移入失败");
+      notifyError(e, "移入失败");
     } finally {
       setBusy(false);
       setFolderInput(false);
@@ -105,9 +108,10 @@ export function BatchBar() {
       exitManage();
       useStore.getState().setCurrentFolder(targetFolderId);
       await reloadFolders();
+      notifySuccess("素材已移入文件夹");
     } catch (e) {
       console.error("move failed", e);
-      setFailedNotice(typeof e === "string" ? e : "移入失败");
+      notifyError(e, "移入失败");
     } finally {
       setBusy(false);
       setMoveExisting(false);
@@ -137,12 +141,21 @@ export function BatchBar() {
       await reloadProjects();
       if (failedCount > 0) {
         setFailedNotice(`${failedCount} 张删除失败，已保留在全局`);
+        notifyError(null, `${failedCount} 张删除失败，已保留在全局`);
         return;
       }
+      notifySuccess(
+        mode === "keep"
+          ? "素材已移出当前项目"
+          : mode === "move_out"
+            ? "素材已移出园丁鸟"
+            : "素材已物理删除"
+      );
       exitManage();
     } catch (e) {
       console.error("delete failed", e);
       setFailedNotice(typeof e === "string" ? e : "删除失败");
+      notifyError(e, "删除失败");
     } finally {
       setBusy(false);
       setDeleteOpen(false);

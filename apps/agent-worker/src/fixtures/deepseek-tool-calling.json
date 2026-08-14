@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "observedAt": "2026-08-14",
+  "provider": "deepseek",
+  "configuredModel": "deepseek-chat",
+  "baseUrlClass": "official-openai-compatible",
+  "flow": [
+    "record_observation",
+    "fake_tool_result",
+    "finish_spike"
+  ],
+  "usage": {
+    "first": {
+      "promptTokens": 368,
+      "completionTokens": 49,
+      "totalTokens": 417
+    },
+    "second": {
+      "promptTokens": 455,
+      "completionTokens": 40,
+      "totalTokens": 495
+    }
+  },
+  "elapsedMs": 3240,
+  "providerRequestIdReturned": true,
+  "containsUserData": false,
+  "containsPromptOrRawResponse": false,
+  "modelMigrationProbe": {
+    "model": "deepseek-v4-flash",
+    "status": 400,
+    "providerCode": "invalid_request_error",
+    "retryable": false
+  }
+}

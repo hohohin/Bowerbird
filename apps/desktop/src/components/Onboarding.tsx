@@ -1,5 +1,5 @@
-import { createPortal } from "react-dom";
 import { useStore } from "../store";
+import { ModalShell } from "./ModalShell";
 
 function StatusBadge({ ok }: { ok?: boolean; reason?: string }) {
   if (ok === true)
@@ -35,7 +35,7 @@ function Card({
   disabled?: boolean;
 }) {
   return (
-    <div className="flex flex-col gap-2 rounded-lg border border-edge bg-panel2/40 p-4">
+    <div className="setup-card flex min-h-40 flex-col gap-2 p-4">
       <div className="flex items-center gap-2">
         <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent/15 text-xs font-semibold text-accent">
           {n}
@@ -47,7 +47,7 @@ function Card({
       <button
         onClick={onAction}
         disabled={disabled}
-        className="mt-auto rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-black hover:opacity-90 disabled:opacity-50"
+        className={`app-modal-button mt-auto w-full ${ok === false || ok === undefined ? "is-primary" : ""}`}
       >
         {actionLabel}
       </button>
@@ -98,31 +98,15 @@ export function Onboarding() {
     setDreaminaOpen(true);
   }
 
-  return createPortal(
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-      role="dialog"
-      aria-modal="true"
-      aria-label="环境状态"
+  return (
+    <ModalShell
+      title="开始使用 Bowerbird"
+      eyebrow="Environment setup"
+      description="配置好以下环境后，反推、生成、采集即可使用。点「前往配置」查看详细引导。"
+      width="lg"
+      onClose={dismiss}
+      footer={<button type="button" onClick={dismiss} className="app-modal-button">稍后再说</button>}
     >
-      <div className="flex max-h-[88vh] w-full max-w-4xl flex-col rounded-lg border border-edge bg-panel shadow-2xl">
-        <header className="flex items-center justify-between border-b border-edge p-5">
-          <div>
-            <h2 className="text-lg font-semibold text-ink">环境状态</h2>
-            <p className="mt-0.5 text-xs text-muted">
-              配置好以下环境后，反推、生成、采集即可使用。点「前往配置」查看详细引导。
-            </p>
-          </div>
-          <button
-            onClick={dismiss}
-            className="rounded-md bg-panel2 px-2 py-1 text-sm text-muted hover:text-ink"
-            aria-label="关闭"
-          >
-            ✕
-          </button>
-        </header>
-
-        <div className="flex-1 overflow-y-auto p-5">
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-4">
             <Card
               n={1}
@@ -144,8 +128,8 @@ export function Onboarding() {
             />
             <Card
               n={3}
-              title="即梦 dreamina CLI"
-              subtitle="备选出图引擎"
+              title="即梦 CLI"
+              subtitle="dreamina · 备选出图"
               ok={dreaminaHealth?.ok}
               reason={dreaminaHealth?.ok ? undefined : dreaminaHealth?.reason}
               actionLabel={dreaminaHealth?.ok ? "查看引导" : "前往配置"}
@@ -162,18 +146,6 @@ export function Onboarding() {
               }}
             />
           </div>
-        </div>
-
-        <footer className="flex justify-end border-t border-edge p-5">
-          <button
-            onClick={dismiss}
-            className="rounded-md bg-panel2 px-4 py-1.5 text-sm text-ink hover:bg-edge"
-          >
-            稍后再说
-          </button>
-        </footer>
-      </div>
-    </div>,
-    document.body
+    </ModalShell>
   );
 }

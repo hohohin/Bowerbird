@@ -1,7 +1,7 @@
-# @bowerbird/agent-worker — Bowerbird Agent Runtime（M0：A0 + V0）
+# @bowerbird/agent-worker — Bowerbird Agent Runtime（M0 + 本机预览）
 
-> 状态：**M0 已完成（契约冻结 + FakeModel + 离线 fixture + eval，20 测试全过）**。
-> 本包**不含** worker 运行时、Supabase 迁移/Edge Function、真实 model/tool adapter（DeepSeek 文本 + 方舟出图/看图）、桌面 UI。
+> 状态：**M0 已完成；A0-T1 DeepSeek 真实 tool-calling 与本机 smart-refinement 暂停/恢复链路已通过（29 测试全过）**。
+> 本包包含开发态本机 step runner；仍**不含** VPS poll/lease Worker、Edge Function、真实方舟工具或云端结算。
 > 依据：[dev-doc/AGENT-RUNTIME-PLAN.md](../../../dev-doc/AGENT-RUNTIME-PLAN.md) §A0 / §V0。
 
 ## M0 做了什么
@@ -22,14 +22,17 @@
 - **视觉设定 V0**：caption → `VisualEvidenceCard` 规范化、`source_scope_hash`、确定性 map-reduce 提炼、
   token 预算分批；5 个纯 caption fixture。**不读取/上传图片，只用反推结构化数据。**
   - 见 [src/visual/](src/visual/)、[src/fixtures/visual-captions.ts](src/fixtures/visual-captions.ts)。
-- **eval**：`node --test` 跑 20 个用例（smoke 1 + 智能精修 7 + 对抗 7 + 视觉 6，全过）。
+- **DeepSeek ModelBackend + A0-T1 spike**：单 action 归一化、usage、坏 JSON、并行工具、HTTP 错误与取消均 fail closed；真实两回合已通过，脱敏结果见 [src/fixtures/deepseek-tool-calling.json](src/fixtures/deepseek-tool-calling.json)。
+- **本机预览 step runner**：从 JSON checkpoint 恢复，连续执行纯 workspace/kernel phase，在审批与真实 provider 工具前暂停；审批拒绝不生成，精修最多一次。
+  - 见 [src/local/](src/local/)；由桌面开发构建经 stdin/stdout 调用。
+- **eval**：`node --test` 跑 29 个用例（原 M0 20 + DeepSeek adapter 7 + 本机暂停/恢复 2，全过）。
 
 ## M0 明确不做（边界）
 
-- ❌ Worker 运行时（poll/claim/heartbeat/checkpoint-to-cloud）—— A2
+- ❌ 云端 Worker 运行时（poll/claim/heartbeat/checkpoint-to-cloud）—— A2；本机 checkpoint runner 仅开发预览
 - ❌ Supabase 迁移 / Edge Function / RPC —— A1（清单见 [A1-PREREQUISITES.md](A1-PREREQUISITES.md)）
-- ❌ 真实 **DeepSeek 文本** `ModelBackend` adapter + 方舟 `understand_image`/`generate_image` 实现 —— A3（DeepSeek 只做文本回合；出图/看图仍方舟，因 DeepSeek 无视觉）
-- ❌ 桌面 Agent Run UI / 审批 UI / 产物下载入库 —— A4
+- ✅ 真实 **DeepSeek 文本** `ModelBackend` adapter + A0-T1 合成 spike；❌ 方舟 `understand_image`/`generate_image` 实现 —— A3（DeepSeek 只做文本回合；出图/看图仍方舟，因 DeepSeek 无视觉）
+- ✅ 开发态桌面智能精修入口 / 审批 / 复用现有 provider 出图与复检；❌ 云端 Run UI / 产物下载 —— A4
 - ❌ 真实积分扣费 / 对账 / TTL 清理 —— A5
 - ❌ OpenClaw / Claude Code / MCP / shell / 用户 Skill / 多 Agent —— 永不做（计划 §1.2 / §7.1）
 - ❌ 视觉设定读取或上传图片 —— 永不做（计划 §8.2 三条不可变边界）
@@ -61,7 +64,7 @@ cd apps/agent-worker && node --test "src/**/*.test.ts"
 ## 仍未确认的前置项（不阻塞 M0，但阻塞 A1+ 真实联调）
 
 见 [A1-PREREQUISITES.md](A1-PREREQUISITES.md)「未确认前置项」一节：
-- DeepSeek 文本回合（`deepseek-chat`，支持 tool calling；⚠️ `deepseek-reasoner` 不可用）稳定性 + usage 返回（A0-T1，**已选定 DeepSeek，真实 spike 待做**）
+- DeepSeek 文本回合（`deepseek-chat`）真实两回合 tool-calling + usage（A0-T1，**已通过**）；新模型名 `deepseek-v4-flash` 在当前账号/端点返回 `400 invalid_request_error`，暂不迁移
 - Vision + Seedream 从 VPS 出站的区域/时延/并发（A0-T2，**未做真实 spike**）
 - `credit_hold` 承载预算上限的最小迁移（A0-T3，**仅列清单未实现**）
 - 预算档位 / 定价 / FeaturePolicy 正式字段（A0-T5，待运营确认）
@@ -77,11 +80,14 @@ src/
   contracts/      v1 契约（model/skill/snapshot/tools/events/clarification/preference/visual-profile/run）
   kernel/         纯函数门控（phase-machine/policy-engine/tool-ledger/budget）
   fakes/          FakeModel / FakeTools（确定性）
+  providers/      DeepSeek ModelBackend（文本回合）
+  local/          开发态 checkpoint step runner + stdin/stdout CLI
   skills/
     smart-refinement/        M0 可运行 Skill（manifest.ts + skill.json）
     series-creative-director/ 首个 Skill 冻结（skill.json + eval-cases.json，eval 在 A3）
   visual/          evidence/scope/extract/batch（纯函数，不读图）
-  fixtures/        visual-captions.ts（5 场景）
+  fixtures/        visual-captions.ts（5 场景）+ DeepSeek 脱敏 spike 结果
+  spikes/          真实 DeepSeek 两回合 tool-calling 验证（只输出安全摘要）
   eval/            runner.ts + *.eval.test.ts（smoke/smart-refinement/adversarial/visual-fixtures）
   types/           node-ambient.d.ts（零依赖类型声明）
 ```

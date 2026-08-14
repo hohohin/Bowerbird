@@ -4,6 +4,10 @@
 > M0 **未实现**任何迁移 / RPC / Function / UI；以下均为 A1 起需要落地的内容。
 > 依据：[dev-doc/AGENT-RUNTIME-PLAN.md](../../../dev-doc/AGENT-RUNTIME-PLAN.md) §5 / §6 / §9。
 
+> 2026-08-14 进展：A1-T1 已编码为 `apps/cloud/supabase/migrations/0012_agent_runtime_control_plane.sql`，
+> 覆盖 7 表、强制 RLS、own-row SELECT、claim/heartbeat/transition RPC；事务验收脚本为
+> `apps/cloud/supabase/tests/agent_runtime.sql`。本机无 Supabase CLI/psql/Docker，待 dev DB 实际执行后再标记验收完成。
+
 ## 1. Supabase 迁移（7 张 Agent 表 + 1 个私有 bucket）
 
 按计划 §5 的职责划分（不可合并成一个大 JSON 表）。命名可微调，职责不可变。
@@ -73,7 +77,7 @@ POC 阶段先用服务端 feature flag / 测试账号 allowlist；**正式档位
 
 | # | 项 | 计划任务 | 现状 |
 |---|---|---|---|
-| U1 | **DeepSeek 文本回合**（`deepseek-chat`，支持 tool calling；⚠️ `deepseek-reasoner` 不支持、不可用）稳定性 + usage 返回 | A0-T1 | **已选定 DeepSeek**（用户决策 2026-08-14，替代原方舟文本模型）。真实 spike + tool calling 稳定性 + 脱敏 fixture 待 A0-T1 做。**DeepSeek 不接受 image_url → 看图仍方舟 vision、出图方舟 Seedream**。 |
+| U1 | **DeepSeek 文本回合**（`deepseek-chat`；`deepseek-reasoner` 按项目约定禁用）tool calling + usage 返回 | A0-T1 | ✅ **真实两回合 spike 已通过**（2026-08-14）：模型 action → 本地假工具结果 → 模型继续，usage 与 provider request id 可审计；脱敏 fixture 为 `src/fixtures/deepseek-tool-calling.json`。官方新名称 `deepseek-v4-flash` 在当前账号/端点实测 `400 invalid_request_error`，故模型必须由 `DEEPSEEK_MODEL` 显式配置，暂保留已验证的 `deepseek-chat`。**DeepSeek 不接受 image_url → 看图仍方舟 vision、出图方舟 Seedream**。 |
 | U2 | **Vision + Seedream 从 VPS 出站**：区域、时延、并发、错误恢复（不得用用户素材，用合成图） | A0-T2 | **未做真实 spike**；复用现有 `_shared/ark.ts` 真实契约（Vision/Seedream 已联调通过），但「从腾讯云轻量 VPS 出站到方舟 + DeepSeek」未验证。 |
 | U3 | `credit_hold(p_estimated_amount)` 承载预算上限的最小迁移 | A0-T3 | **仅列清单（见 §1）**；未实现。现有 hold/confirm/rollback（0003/0004/0010）语义足够，A1 直接复用。 |
 | U4 | **预算档位 / 定价 / FeaturePolicy** | A0-T5 | ✅ 用户已定（2026-08-14）：smart-refinement **按 token 换算**、series-director **暂不开发**、**3 档（free/pro/studio）都可用**；FeaturePolicy 字段见 §3，POC 用 allowlist（`admin@bowerbird.cn`）。 |

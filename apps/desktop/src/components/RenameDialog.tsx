@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { api } from "../lib/api";
+import { notifySuccess } from "../lib/notify";
+import { ModalShell } from "./ModalShell";
 
 /**
  * 素材重命名弹窗（约定 13 全屏 Modal 形态，照 ConfirmDialog 范式 + 单 input）。
@@ -39,15 +40,6 @@ export function RenameDialog({
     inputRef.current?.select();
   }, [open]);
 
-  useEffect(() => {
-    if (!open) return;
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
-
   if (!open) return null;
 
   const trimmed = name.trim();
@@ -58,6 +50,7 @@ export function RenameDialog({
     setError(null);
     try {
       await api.renameAsset(assetId, trimmed);
+      notifySuccess("素材名称已更新");
       onClose();
     } catch (e) {
       setError(typeof e === "string" ? e : "重命名失败");
@@ -65,24 +58,36 @@ export function RenameDialog({
     }
   }
 
-  return createPortal(
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-      role="dialog"
-      aria-modal="true"
-      aria-label="重命名素材"
-      onClick={onClose}
+  return (
+    <ModalShell
+      title="重命名素材"
+      eyebrow="Asset name"
+      description="同时更新素材库中的本地文件名；扩展名会保留，同名文件不会被覆盖。"
+      onClose={onClose}
+      preventClose={busy}
+      footer={
+        <>
+          <button onClick={onClose} disabled={busy} className="app-modal-button">
+            取消
+          </button>
+          <button
+            onClick={() => void submit()}
+            disabled={!trimmed || busy}
+            className="app-modal-button is-primary"
+          >
+            {busy && <span className="app-spinner" aria-hidden />}
+            {busy ? "重命名中…" : "保存名称"}
+          </button>
+        </>
+      }
     >
-      <div
-        className="w-full max-w-sm rounded-lg border border-edge bg-panel p-5 shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <h3 className="text-sm font-semibold text-ink">重命名素材</h3>
-        <p className="mt-1 text-xs text-muted">
-          同时重命名库内磁盘文件（扩展名保留；同名时后端自动加标识不覆盖）。
-        </p>
+      <label className="block text-[11px] font-medium text-muted" htmlFor="rename-asset-input">
+        素材名称
+      </label>
         <input
+          id="rename-asset-input"
           ref={inputRef}
+          data-modal-autofocus
           value={name}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => {
@@ -91,27 +96,17 @@ export function RenameDialog({
           }}
           maxLength={64}
           placeholder="输入新名称"
-          className="mt-3 w-full rounded-md border border-edge bg-panel2 px-3 py-1.5 text-sm text-ink outline-none ring-1 ring-edge focus:ring-accent"
+          className="app-form-input mt-2 px-3 text-sm"
         />
-        {error && <p className="mt-2 text-xs text-red-300">{error}</p>}
-        <div className="mt-4 flex justify-end gap-2">
-          <button
-            onClick={onClose}
-            disabled={busy}
-            className="rounded-md bg-panel2 px-3 py-1.5 text-xs text-ink hover:bg-edge disabled:opacity-50"
-          >
-            取消
-          </button>
-          <button
-            onClick={() => void submit()}
-            disabled={!trimmed || busy}
-            className="rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-black hover:opacity-90 disabled:opacity-50"
-          >
-            {busy ? "重命名中…" : "重命名"}
-          </button>
-        </div>
+      <div className="mt-2 flex items-center justify-between gap-3 text-[10px] text-faint">
+        <span>最多 64 个字符</span>
+        <span>{name.length}/64</span>
       </div>
-    </div>,
-    document.body
+      {error && (
+        <p className="mt-3 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+          {error}
+        </p>
+      )}
+    </ModalShell>
   );
 }

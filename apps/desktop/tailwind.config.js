@@ -4,14 +4,20 @@ export default {
   theme: {
     extend: {
       colors: {
-        // 中性深色基底，参考图库类工具的常见配色
-        canvas: "#0f1115",
-        panel: "#171a21",
-        panel2: "#1f2430",
-        edge: "#2a3140",
-        ink: "#e6e9ef",
-        muted: "#8b93a3",
-        accent: "#7c9cff",
+        // 与官网共用的品牌色阶：暖黑基底、强蓝动作色、荧光绿状态色。
+        canvas: "#100e0e",
+        panel: "#171515",
+        panel2: "#1d1b1b",
+        edge: "#292727",
+        ink: "#fdfff0",
+        muted: "#969692",
+        faint: "#666460",
+        accent: "#4868ff",
+        "accent-soft": "#dfe5ff",
+        lime: "#d9ff52",
+      },
+      boxShadow: {
+        panel: "0 18px 55px rgba(0, 0, 0, 0.34)",
       },
     },
   },

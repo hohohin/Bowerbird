@@ -6,10 +6,11 @@ import { loadDescribePrompt } from "../lib/describePrompt";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { RenameDialog } from "./RenameDialog";
 import { understandProvider } from "../lib/entitlement";
+import { notifyError, notifySuccess } from "../lib/notify";
 import type { AssetDeleteMode, AssetDeleteResult } from "../lib/types";
 
 const MENU_WIDTH = 232;
-const MENU_HEIGHT = 312;
+const MENU_HEIGHT = 420;
 
 function resultMessage(mode: AssetDeleteMode, result: AssetDeleteResult): string {
   if (mode === "keep") {
@@ -46,22 +47,14 @@ export function AssetContextMenu() {
 
   const [busy, setBusy] = useState(false);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
-  const [done, setDone] = useState<string | null>(null);
   const [renameTarget, setRenameTarget] = useState<{ id: string; name: string } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // 每次打开重置子状态；关闭时清掉自动关闭定时器。
+  // 每次打开重置子状态。
   // （pendingDeleteId / renameTarget 不在此重置——「物理删除」/「重命名」点击会先 closeContextMenu
   //   再弹 dialog，menu=null 触发本 effect，重置会把尚需显示的 dialog 一起清掉；它们由自身回调清理。）
   useEffect(() => {
     setBusy(false);
-    setMessage(null);
-    setDone(null);
-    return () => {
-      if (closeTimer.current) clearTimeout(closeTimer.current);
-    };
   }, [menu]);
 
   // 菜单打开时：点击菜单外关闭、Esc 关闭。
@@ -73,25 +66,39 @@ export function AssetContextMenu() {
       }
     }
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") closeContextMenu();
+      if (e.key === "Escape") {
+        closeContextMenu();
+        return;
+      }
+      if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
+      const buttons = Array.from(menuRef.current?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") ?? []);
+      if (buttons.length === 0) return;
+      e.preventDefault();
+      if (e.key === "Home") {
+        buttons[0].focus();
+        return;
+      }
+      if (e.key === "End") {
+        buttons[buttons.length - 1].focus();
+        return;
+      }
+      const current = buttons.indexOf(document.activeElement as HTMLButtonElement);
+      const offset = e.key === "ArrowDown" ? 1 : -1;
+      buttons[(current + offset + buttons.length) % buttons.length].focus();
     }
     window.addEventListener("mousedown", onMouseDown);
     window.addEventListener("keydown", onKey);
+    window.requestAnimationFrame(() => {
+      menuRef.current?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
+    });
     return () => {
       window.removeEventListener("mousedown", onMouseDown);
       window.removeEventListener("keydown", onKey);
     };
   }, [menu, closeContextMenu]);
 
-  // 卸载时清掉自动关闭定时器。
-  useEffect(() => {
-    return () => {
-      if (closeTimer.current) clearTimeout(closeTimer.current);
-    };
-  }, []);
-
   // 物理删除确认 / 重命名 dialog：独立于菜单渲染。点「物理删除」/「重命名」会先 closeContextMenu
-  // 收菜单（菜单 z-60 高于 dialog z-50，不收会被盖住、点不到确认），menu=null 走此分支单独挂载。
+  // 收菜单，menu=null 走此分支单独挂载。
   if (!menu) {
     return (
       <>
@@ -148,53 +155,51 @@ export function AssetContextMenu() {
 
   async function reveal() {
     setBusy(true);
-    setMessage(null);
     try {
       await api.revealAssetFolder(assetId);
+      notifySuccess("已打开素材所在文件夹");
       closeContextMenu();
     } catch (e) {
-      setMessage(typeof e === "string" ? e : "无法打开所在文件夹");
+      notifyError(e, "无法打开所在文件夹");
       setBusy(false);
     }
   }
 
   async function reuseGeneration() {
     setBusy(true);
-    setMessage(null);
     try {
       const hist = await api.generationHistory(assetId, currentProjectId);
       // 优先未铺开的原始编辑框文本（维度 chip，不展开 body）；旧 meta 无 prompt_raw → 回退铺开 prompt。
       const prompt = hist.turns[0]?.prompt_raw ?? hist.turns[0]?.prompt ?? "";
       if (!prompt) {
-        setMessage("该生成图没有可复用的提示词记录");
+        notifyError(null, "该生成图没有可复用的提示词记录");
         setBusy(false);
         return;
       }
       // 复用首轮 prompt + 首版参考图（与 GenerationPanel「📋 复用」语义一致）→ 打开创作板载入。
       reusePromptToBoard(prompt, hist.references);
+      notifySuccess("生成提示词已载入创作板");
       closeContextMenu();
     } catch (e) {
-      setMessage(typeof e === "string" ? e : "读取生成提示词失败");
+      notifyError(e, "读取生成提示词失败");
       setBusy(false);
     }
   }
 
   async function runDelete(id: string, mode: AssetDeleteMode) {
     setBusy(true);
-    setMessage(null);
     try {
       const result = await api.deleteAssetWithMode(id, mode, currentProjectId);
       await reloadProjects();
       if (result.failed_moves.length > 0) {
-        setMessage(`移出失败：${result.failed_moves.join("、")}，素材保留在全局`);
+        notifyError(null, `移出失败：${result.failed_moves.join("、")}，素材保留在全局`);
         setBusy(false);
         return;
       }
-      setDone(resultMessage(mode, result));
-      // 短暂展示结果后自动关闭。
-      closeTimer.current = setTimeout(closeContextMenu, 1400);
+      notifySuccess(resultMessage(mode, result));
+      closeContextMenu();
     } catch (e) {
-      setMessage(typeof e === "string" ? e : "删除失败");
+      notifyError(e, "删除失败");
       setBusy(false);
     }
   }
@@ -212,64 +217,89 @@ export function AssetContextMenu() {
       ref={menuRef}
       style={menuStyle}
       onContextMenu={(e) => e.preventDefault()}
-      className="rounded-lg border border-edge bg-panel p-1 text-xs shadow-lg"
+      className="app-context-menu p-1.5 text-xs"
+      role="menu"
+      aria-label="素材操作"
     >
+      <div className="app-context-label">素材操作</div>
       <button
+        type="button"
+        role="menuitem"
         onClick={() => {
           // browse 模式：右键直接进 manage 并选中此图；manage 模式：仅切换选中。继续点其它图加选。
           if (mode !== "manage") enterManage();
           toggleSelect(assetId);
           closeContextMenu();
         }}
-        disabled={busy || done !== null}
-        className="block w-full rounded px-2 py-1.5 text-left text-ink hover:bg-panel2 disabled:opacity-50"
+        disabled={busy}
+        className="app-context-item px-2 py-1.5"
       >
         {mode === "manage" ? "选择/取消选择" : "选择"}
       </button>
       <button
+        type="button"
+        role="menuitem"
         onClick={reveal}
-        disabled={busy || done !== null}
-        className="block w-full rounded px-2 py-1.5 text-left text-ink hover:bg-panel2 disabled:opacity-50"
+        disabled={busy}
+        className="app-context-item px-2 py-1.5"
       >
         打开所在文件夹
       </button>
       <button
+        type="button"
+        role="menuitem"
         onClick={() => {
-          // 先收菜单再开 dialog（菜单 z-60 高于 dialog z-50，不收会被盖住）。
+          // 先收菜单再开 dialog，避免两个浮层同时存在。
           setRenameTarget({ id: assetId, name: asset?.name ?? "" });
           closeContextMenu();
         }}
-        disabled={busy || done !== null || !storePath}
+        disabled={busy || !storePath}
         title={storePath ? "重命名（同步改磁盘文件名）" : "该素材没有本地文件，无法重命名"}
-        className="block w-full rounded px-2 py-1.5 text-left text-ink hover:bg-panel2 disabled:opacity-50"
+        className="app-context-item px-2 py-1.5"
       >
         重命名
       </button>
       {storePath && (
         <>
           <button
-            onClick={() => {
-              void api.openWithSystem(storePath);
-              closeContextMenu();
+            type="button"
+            role="menuitem"
+            onClick={async () => {
+              try {
+                await api.openWithSystem(storePath);
+                notifySuccess("已用系统程序打开素材");
+                closeContextMenu();
+              } catch (e) {
+                notifyError(e, "无法用系统程序打开素材");
+              }
             }}
-            disabled={busy || done !== null}
-            className="block w-full rounded px-2 py-1.5 text-left text-ink hover:bg-panel2 disabled:opacity-50"
+            disabled={busy}
+            className="app-context-item px-2 py-1.5"
           >
             用系统程序打开
           </button>
           <button
-            onClick={() => {
-              void navigator.clipboard.writeText(storePath);
-              closeContextMenu();
+            type="button"
+            role="menuitem"
+            onClick={async () => {
+              try {
+                await navigator.clipboard.writeText(storePath);
+                notifySuccess("文件路径已复制");
+                closeContextMenu();
+              } catch (e) {
+                notifyError(e, "复制文件路径失败");
+              }
             }}
-            disabled={busy || done !== null}
-            className="block w-full rounded px-2 py-1.5 text-left text-ink hover:bg-panel2 disabled:opacity-50"
+            disabled={busy}
+            className="app-context-item px-2 py-1.5"
           >
             复制文件路径
           </button>
         </>
       )}
       <button
+        type="button"
+        role="menuitem"
         onClick={(e) => {
           const r = e.currentTarget.getBoundingClientRect();
           openDescribePicker(
@@ -278,62 +308,64 @@ export function AssetContextMenu() {
           );
           closeContextMenu();
         }}
-        disabled={busy || done !== null || describing || !understandReady}
+        disabled={busy || describing || !understandReady}
         title={understandReady ? "反推提示词" : understandReason}
-        className="block w-full rounded px-2 py-1.5 text-left text-ink hover:bg-panel2 disabled:opacity-50"
+        className="app-context-item px-2 py-1.5"
       >
         反推提示词
       </button>
       {isGenerated && (
         <button
+          type="button"
+          role="menuitem"
           data-tour="ctx-reuse-gen"
           onClick={reuseGeneration}
-          disabled={busy || done !== null}
+          disabled={busy}
           title="打开创作板，填入该图生成时的提示词与参考素材"
-          className="block w-full rounded px-2 py-1.5 text-left text-ink hover:bg-panel2 disabled:opacity-50"
+          className="app-context-item px-2 py-1.5"
         >
           复用生成提示词
         </button>
       )}
 
-      <div className="my-1 border-t border-edge" />
-
-      {done !== null ? (
-        <div className="px-2 py-1.5 text-emerald-400">{done}</div>
-      ) : message ? (
-        <div className="px-2 py-1.5 text-red-400">{message}</div>
-      ) : (
-        <div className="space-y-0.5">
+      <div className="app-context-divider" />
+      <div className="app-context-label">移出与删除</div>
+      <div className="space-y-0.5">
           {currentProjectId && (
             <button
+              type="button"
+              role="menuitem"
               onClick={() => runDelete(assetId, "keep")}
               disabled={busy}
-              className="block w-full rounded px-2 py-1.5 text-left text-ink hover:bg-panel2 disabled:opacity-50"
+              className="app-context-item px-2 py-1.5"
             >
               仅移出当前项目 · 素材留在全局
             </button>
           )}
           <button
+            type="button"
+            role="menuitem"
             onClick={() => runDelete(assetId, "move_out")}
             disabled={busy}
             title="把图片文件交回原始文件夹，并从素材库移除（共享素材仍保留在全局）"
-            className="block w-full rounded px-2 py-1.5 text-left text-ink hover:bg-panel2 disabled:opacity-50"
+            className="app-context-item px-2 py-1.5"
           >
             移出园丁鸟 · 文件回到原始位置
           </button>
           <button
+            type="button"
+            role="menuitem"
             onClick={() => {
-              // 先收菜单再弹确认（菜单 z-60 高于 dialog z-50，不收会被盖住、点不到确认）。
+              // 先收菜单再弹确认，避免两个浮层同时存在。
               setPendingDeleteId(assetId);
               closeContextMenu();
             }}
             disabled={busy}
-            className="block w-full rounded px-2 py-1.5 text-left text-red-300 hover:bg-red-500/15 disabled:opacity-50"
+            className="app-context-item is-danger px-2 py-1.5"
           >
             物理删除
           </button>
-        </div>
-      )}
+      </div>
     </div>,
     document.body
   );

@@ -5,19 +5,18 @@ import { api } from "../lib/api";
 import { canUseGenerationProvider } from "../lib/entitlement";
 import type { GenJob, GenTurn } from "../lib/types";
 import { Lightbox } from "./Lightbox";
+import { Bookmark, Copy, Images, RotateCcw, Sparkles, X } from "lucide-react";
 
 /**
  * 生成结果面板（多 job，独立于创作板）。
  *
  * 创作板只管组稿与「发送」，生成会话（一个 GenJob = 首轮 + 续轮 turn 链）全部落到 store。
- * 本面板顶部一排 job 标签切换 activeJob，主区展示 activeJob 的时间线 / 流式 / 续轮 / 复用。
+ * 会话切换/管理统一在侧栏 Status 任务区（SidebarStatus）；主区展示 activeJob 的时间线 / 流式 / 续轮 / 复用。
  * 形态：主区覆盖层（像详情页那样盖住主区），创作板在右侧槽始终在场。面板可随时打开/收起，不丢对话。
  */
 export function GenerationPanel() {
   const genJobs = useStore((s) => s.genJobs);
-  const genJobOrder = useStore((s) => s.genJobOrder);
   const activeJobId = useStore((s) => s.activeJobId);
-  const setActiveJob = useStore((s) => s.setActiveJob);
   const generating = useStore((s) => s.generating);
 
   const codexHealth = useStore((s) => s.codexHealth);
@@ -129,71 +128,34 @@ export function GenerationPanel() {
 
   return (
     <div className="absolute inset-0 z-10 flex flex-col bg-canvas">
-      <div className="flex shrink-0 items-center justify-between border-b border-edge bg-panel px-4 py-2">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-semibold">🖼 生成结果</span>
-          {activeJob && (
-            <span className="text-xs text-muted">
-              {activeJob.turns.length} 轮 · {imageCount} 图
-              {activeJob.provider === "jimeng"
-                ? " · 即梦"
-                : activeJob.provider === "bowerbird-cloud"
-                  ? " · Bowerbird Cloud"
-                  : ""}
-            </span>
-          )}
-        </div>
+      {/* 单行头部（约 38px）：图标 + 标题 + 统计 + 关闭 */}
+      <div className="flex min-h-[38px] shrink-0 items-center gap-2 border-b border-edge bg-canvas/90 px-3 py-1">
+        <span className="flex h-6 w-6 items-center justify-center rounded-md bg-lime/10 text-lime">
+          <Images size={14} />
+        </span>
+        <strong className="text-xs font-semibold">生成结果</strong>
+        {activeJob && (
+          <span className="rounded-full border border-edge px-2 py-0.5 text-[11px] text-muted">
+            {activeJob.turns.length} 轮 · {imageCount} 图
+            {activeJob.provider === "jimeng"
+              ? " · 即梦"
+              : activeJob.provider === "bowerbird-cloud"
+                ? " · Bowerbird Cloud"
+                : ""}
+          </span>
+        )}
         <button
           onClick={() => setGenPanelOpen(false)}
-          className="rounded px-2 py-0.5 text-muted hover:bg-panel2 hover:text-ink"
+          className="app-icon-button ml-auto"
           title="收起（回到瀑布流，生成照常后台跑）"
+          aria-label="收起生成结果"
         >
-          ✕
+          <X size={16} />
         </button>
       </div>
+      <div className="hatch-divider" aria-hidden="true"><span /></div>
 
-      {/* job 标签栏：每个生成会话一个标签，点击切 activeJob；横向滚动容纳多个。 */}
-      {genJobOrder.length > 0 && (
-        <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-edge bg-panel px-2 py-1">
-          {genJobOrder.map((id, i) => {
-            const j = genJobs[id];
-            if (!j) return null;
-            const isActive = id === activeJobId;
-            const imgs = j.turns.reduce((n, t) => n + t.images.length, 0);
-            const failed = j.turns.some((t) => t.error);
-            return (
-              <button
-                key={id}
-                onClick={() => setActiveJob(id)}
-                title={`Job ${i + 1} · ${j.provider === "jimeng" ? "即梦" : j.provider === "bowerbird-cloud" ? "Bowerbird Cloud" : "codex"} · ${imgs} 图`}
-                className={`flex shrink-0 items-center gap-1 rounded px-2 py-1 text-[11px] ${
-                  isActive
-                    ? "bg-accent font-semibold text-black"
-                    : "bg-panel2 text-muted hover:text-ink"
-                }`}
-              >
-                <span>{i + 1}</span>
-                <span className="text-[9px] opacity-80">
-                  {j.provider === "jimeng" ? "即梦" : j.provider === "bowerbird-cloud" ? "云端" : "codex"}
-                </span>
-                {j.running ? (
-                  <span className="animate-pulse" title="生成中">
-                    ●
-                  </span>
-                ) : failed ? (
-                  <span title="有失败轮">❌</span>
-                ) : imgs > 0 ? (
-                  <span>{imgs}</span>
-                ) : (
-                  <span className="opacity-50">·</span>
-                )}
-              </button>
-            );
-          })}
-        </div>
-      )}
-
-      <div ref={scrollRef} className="flex-1 overflow-y-auto p-4">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto p-5">
         {!activeJob ? (
           <div className="flex h-full items-center justify-center text-sm text-muted">
             尚未生成。在创作板组稿后点「✓ 发送」生成。
@@ -203,7 +165,7 @@ export function GenerationPanel() {
             尚未生成。在创作板组稿后点「✓ 发送」生成。
           </div>
         ) : (
-          <div className="mx-auto flex max-w-3xl flex-col gap-3">
+          <div className="mx-auto flex max-w-4xl flex-col gap-4">
             {turnsWithOffset.map(({ turn, imageOffset }, i) => (
               <TurnView
                 key={turn.id}
@@ -226,7 +188,7 @@ export function GenerationPanel() {
         )}
       </div>
 
-      <div className="shrink-0 space-y-2 border-t border-edge bg-panel p-3">
+      <div className="shrink-0 space-y-2 border-t border-edge bg-panel p-4">
         {running ? (
           <button
             onClick={() => cancelGeneration()}
@@ -268,7 +230,7 @@ export function GenerationPanel() {
               title={targetReady ? "用最近一次的 prompt + 参考图开新会话（新建一个生成任务）" : lockedReason}
               className="w-full rounded-md bg-panel2 px-3 py-1.5 text-xs text-ink hover:bg-edge disabled:opacity-50"
             >
-              ↻ 新会话重新生成
+              <span className="flex items-center justify-center gap-2"><RotateCcw size={13} />新会话重新生成</span>
             </button>
           </div>
         ) : (
@@ -317,14 +279,14 @@ export function GenerationPanel() {
                   className="flex-1 rounded bg-panel2 px-2 py-1.5 text-xs text-ink hover:bg-edge"
                   title="把首轮 prompt + 参考图载入创作板，可在其基础上编辑后重新生成"
                 >
-                  📋 复用到创作板
+                  <span className="flex items-center justify-center gap-2"><Copy size={13} />复用到创作板</span>
                 </button>
                 <button
                   onClick={() => setSavingPreset(true)}
                   className="flex-1 rounded bg-panel2 px-2 py-1.5 text-xs text-ink hover:bg-edge"
                   title="把首轮 prompt 登记为一个用途（之后可在创作板编辑/删除）"
                 >
-                  {presetSaved ? "已登记 ✓" : "🔖 登记为用途"}
+                  <span className="flex items-center justify-center gap-2"><Bookmark size={13} />{presetSaved ? "已登记" : "登记为用途"}</span>
                 </button>
               </div>
             )}
@@ -369,9 +331,12 @@ function TurnView({
   retryReason: string;
 }) {
   return (
-    <div className="space-y-1.5 rounded bg-panel2/50 p-3">
+    <div className="lineframe-panel space-y-2 border border-edge bg-panel/80 p-4">
       <div className="line-clamp-2 text-xs text-muted" title={turn.prompt}>
-        <span className="text-accent">{index === 0 ? "首版" : `修改 ${index}`}：</span>
+        <span className="mr-1 inline-flex items-center gap-1 text-accent-soft">
+          <Sparkles size={11} />
+          {index === 0 ? "首版" : `修改 ${index}`}：
+        </span>
         {turn.prompt}
         {turn.provider && turn.provider !== "codex-cli" && (
           <span className="ml-1 text-[10px] opacity-70">

@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent } from "react";
 import { createPortal } from "react-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { ImagePlus, SearchX } from "lucide-react";
 import { useStore } from "../store";
 import { api } from "../lib/api";
+import { notifyError, notifySuccess } from "../lib/notify";
 import { setDragAssets } from "../lib/dragPayload";
 import type { Asset } from "../lib/types";
 
@@ -33,6 +35,7 @@ function Thumb({
   asset: Asset;
   group?: Asset[];
 }) {
+  const cardRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
   const selected = useStore((s) => s.mode === "manage" && s.selectedIds.has(asset.id));
   const boardOpen = useStore((s) => s.boardOpen);
@@ -118,18 +121,49 @@ function Thumb({
   const mouseRef = useRef({ x: 0, y: 0 });
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [hovering, setHovering] = useState(false);
-  // 滚轮滚走后放大图卡住的根因：滚动把缩略图元素移走而指针静止时，浏览器不分派
-  // mouseleave，onLeave 不触发 → 放大图一直挂到指针重新进出该图才消失。整个 hover
-  // 生命周期（定时器等待期 + 放大图弹出期）监听 scroll，一旦滚动立刻清定时器 + 收回。
-  // 捕获阶段 + window：scroll 不冒泡，但捕获期能收到内部 overflow-y-auto 容器的滚动。
+  // mouseleave 并不覆盖全部退出路径：滚动可把卡片移出指针，指针也可能直接离开
+  // WebView 或切到别的应用。整个 hover 生命周期统一监听这些全局退出信号，避免预览残留。
   useEffect(() => {
     if (!hovering) return;
-    function onScroll() {
-      if (hoverTimer.current) clearTimeout(hoverTimer.current);
+
+    function dismiss() {
+      if (hoverTimer.current) {
+        clearTimeout(hoverTimer.current);
+        hoverTimer.current = undefined;
+      }
+      setHovering(false);
       setPreview(null);
     }
-    window.addEventListener("scroll", onScroll, true);
-    return () => window.removeEventListener("scroll", onScroll, true);
+
+    function onWindowMouseMove(event: globalThis.MouseEvent) {
+      const target = event.target;
+      if (!(target instanceof Node) || !cardRef.current?.contains(target)) dismiss();
+    }
+
+    function onDocumentMouseOut(event: globalThis.MouseEvent) {
+      if (event.relatedTarget === null) dismiss();
+    }
+
+    function onVisibilityChange() {
+      if (document.visibilityState !== "visible") dismiss();
+    }
+
+    window.addEventListener("scroll", dismiss, true);
+    window.addEventListener("mousemove", onWindowMouseMove, true);
+    window.addEventListener("blur", dismiss);
+    document.addEventListener("mouseout", onDocumentMouseOut);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.removeEventListener("scroll", dismiss, true);
+      window.removeEventListener("mousemove", onWindowMouseMove, true);
+      window.removeEventListener("blur", dismiss);
+      document.removeEventListener("mouseout", onDocumentMouseOut);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      if (hoverTimer.current) {
+        clearTimeout(hoverTimer.current);
+        hoverTimer.current = undefined;
+      }
+    };
   }, [hovering]);
   function onEnter(e: MouseEvent<HTMLDivElement>) {
     if (!previewSrc) return;
@@ -137,6 +171,12 @@ function Thumb({
     setHovering(true);
     // 2.8s 延迟：到点时取缩略图实际渲染尺寸，×2 作为放大尺寸（保证对每张图「200%」都真正成立）。
     hoverTimer.current = setTimeout(() => {
+      hoverTimer.current = undefined;
+      // 延迟期间可能已经离开窗口，而浏览器没有派发 mouseleave；弹出前以真实状态兜底。
+      if (!document.hasFocus() || !cardRef.current?.matches(":hover")) {
+        setHovering(false);
+        return;
+      }
       const rect = imgRef.current?.getBoundingClientRect();
       if (!rect || !rect.width || !rect.height) return;
       setPreview({ ...mouseRef.current, w: rect.width * 2, h: rect.height * 2 });
@@ -149,15 +189,31 @@ function Thumb({
   }
   function onLeave() {
     setHovering(false);
-    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    if (hoverTimer.current) {
+      clearTimeout(hoverTimer.current);
+      hoverTimer.current = undefined;
+    }
     setPreview(null);
   }
   // 弹出面板（右键菜单/放大预览 portal 到 body）出现时同步收回预览——预览 z-30 低于面板
   // z-40/z-50，但不收会被它盖住的是面板下方的交互；点图/拖拽/右键本身也应立刻收回。
   function dismissPreview() {
     setHovering(false);
-    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    if (hoverTimer.current) {
+      clearTimeout(hoverTimer.current);
+      hoverTimer.current = undefined;
+    }
     setPreview(null);
+  }
+  function activateAsset() {
+    dismissPreview();
+    const st = useStore.getState();
+    if (st.boardOpen) {
+      window.dispatchEvent(
+        new CustomEvent("bowerbird://board-asset-picked", { detail: shown.id })
+      );
+    } else if (st.mode === "manage") st.toggleSelect(shown.id);
+    else st.openDetail(shown.id);
   }
   // 浮层定位：默认鼠标右下偏移，靠右/下边时翻转到左/上，留 pad 不贴边。尺寸跟随缩略图×2。
   let previewLeft = 0;
@@ -177,25 +233,25 @@ function Thumb({
 
   return (
     <div
+      ref={cardRef}
       id={`asset-${shown.id}`}
       data-origin={shown.origin_path ?? undefined}
-      className={`group relative mb-2 break-inside-avoid cursor-pointer overflow-hidden rounded-md ring-2 transition ${
-        selected ? "ring-accent" : "ring-transparent hover:ring-edge"
+      role="button"
+      tabIndex={0}
+      aria-label={`${shown.name}${selected ? "，已选中" : ""}`}
+      className={`group relative mb-2 break-inside-avoid cursor-pointer overflow-hidden rounded-sm border bg-panel transition ${
+        selected ? "border-accent shadow-[inset_0_0_0_1px_#4868ff]" : "border-edge hover:border-[#55505a]"
       }`}
       draggable={!boardOpen}
       onMouseEnter={onEnter}
       onMouseMove={onMove}
       onMouseLeave={onLeave}
-      onClick={() => {
-        dismissPreview();
-        const st = useStore.getState();
-        // 创作板打开 = 挑图上下文：点瀑布流图即在光标处插入编辑器。
-        if (st.boardOpen) {
-          window.dispatchEvent(
-            new CustomEvent("bowerbird://board-asset-picked", { detail: shown.id })
-          );
-        } else if (st.mode === "manage") st.toggleSelect(shown.id);
-        else st.openDetail(shown.id);
+      onClick={activateAsset}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          activateAsset();
+        }
       }}
       onContextMenu={(e) => {
         e.preventDefault();
@@ -318,10 +374,16 @@ function Thumb({
 /** 瀑布流（CSS columns masonry + 缩略图懒加载）。颜色筛选走后端（App refresh 按 colorFilter 分流），非前端过滤。 */
 export function MasonryGrid() {
   const assets = useStore((s) => s.assets);
+  const total = useStore((s) => s.total);
   const boardOpen = useStore((s) => s.boardOpen);
   const currentProjectId = useStore((s) => s.currentProjectId);
   const focusAssetId = useStore((s) => s.focusAssetId);
   const clearFocusAsset = useStore((s) => s.clearFocusAsset);
+  const setSearchQuery = useStore((s) => s.setSearchQuery);
+  const setCurrentFolder = useStore((s) => s.setCurrentFolder);
+  const setCurrentCollection = useStore((s) => s.setCurrentCollection);
+  const setSmartFilter = useStore((s) => s.setSmartFilter);
+  const setColorFilter = useStore((s) => s.setColorFilter);
   const [groupMap, setGroupMap] = useState<Record<string, Asset[]>>({});
   // 创作板 chip 点击 focus：滚动定位到该素材并闪烁高亮。读完即清 store，便于连续 focus 同一张。
   const flashTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -374,6 +436,8 @@ export function MasonryGrid() {
     );
     if (files.length === 0) return;
     setImporting(true);
+    let imported = 0;
+    let failed = 0;
     try {
       for (const f of files) {
         try {
@@ -384,14 +448,28 @@ export function MasonryGrid() {
             projectId: currentProjectId,
             source: "imported",
           });
+          imported += 1;
         } catch (err) {
           console.error("drop import failed", f.name, err);
+          failed += 1;
         }
       }
     } finally {
       setImporting(false);
+      if (imported > 0) notifySuccess(`已导入 ${imported} 张素材`);
+      if (failed > 0) notifyError(null, `${failed} 张素材导入失败`);
     }
   }
+
+  function clearFilters() {
+    setSearchQuery("");
+    setCurrentFolder(null);
+    setCurrentCollection(null);
+    setSmartFilter(null);
+    setColorFilter(null);
+  }
+
+  const libraryEmpty = total === 0;
 
   return (
     <div
@@ -412,12 +490,48 @@ export function MasonryGrid() {
       onDrop={handleDrop}
     >
       {filtered.length === 0 ? (
-        <div className="flex h-full items-center justify-center text-sm text-muted">
-          {assets.length === 0
-            ? boardOpen
-              ? "还没有素材 —— 用顶部按钮导入图片，点瀑布流任意图即可插为参考图"
-              : "还没有素材 —— 用顶部按钮导入图片或文件夹，或直接拖图进来 / 截图后 Ctrl+V"
-            : "当前筛选下无素材"}
+        <div className="flex h-full items-center justify-center p-8 text-center">
+          <div className="library-empty-panel max-w-sm">
+            <div className="library-empty-hatch" aria-hidden="true"><span /></div>
+            <div className="library-empty-content">
+            <span className="library-empty-icon mx-auto flex items-center justify-center text-muted">
+              {libraryEmpty ? <ImagePlus size={20} /> : <SearchX size={20} />}
+            </span>
+            <h2 className="mt-4 text-base font-semibold text-ink">
+              {libraryEmpty
+                ? currentProjectId
+                  ? "这个项目还没有素材"
+                  : "收下第一份灵感"
+                : "没有匹配的素材"}
+            </h2>
+            <p className="mt-2 text-xs leading-5 text-muted">
+              {libraryEmpty
+                ? boardOpen
+                  ? "先从左上角导入图片；在素材库中点一下图片，就会进入当前创作板。"
+                  : "从左上角导入图片或文件夹，也可以把图片拖到这里，或粘贴刚刚截取的画面。"
+                : "试试清除搜索或侧栏筛选条件，回到更大的素材范围。"}
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                if (libraryEmpty) {
+                  document.querySelector<HTMLButtonElement>("[data-import-trigger]")?.click();
+                } else {
+                  clearFilters();
+                }
+              }}
+              className={`mt-4 ${libraryEmpty ? "app-button-dark" : "app-button-secondary"}`}
+            >
+              {libraryEmpty ? "导入第一批素材" : "清除筛选"}
+            </button>
+            {libraryEmpty && (
+              <div className="mt-4 flex items-center justify-center gap-2 text-[11px] text-faint">
+                <kbd className="rounded border border-edge bg-panel px-1.5 py-0.5">Ctrl V</kbd>
+                <span>粘贴图片</span>
+              </div>
+            )}
+            </div>
+          </div>
         </div>
       ) : (
         <div className="h-full overflow-y-auto">
@@ -435,14 +549,15 @@ export function MasonryGrid() {
       {/* 拖拽遮罩：拖文件进入瀑布流时提示「松开导入」。 */}
       {dragOver && (
         <div className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center bg-accent/10 ring-2 ring-inset ring-accent">
-          <div className="rounded-lg bg-panel/95 px-4 py-2 text-sm font-medium text-accent shadow-lg">
+          <div className="rounded-full border border-accent/30 bg-panel/95 px-4 py-2 text-sm font-medium text-accent-soft shadow-panel">
             松开导入{currentProjectId ? "到当前项目" : "到素材库"}
           </div>
         </div>
       )}
       {importing && !dragOver && (
-        <div className="pointer-events-none absolute right-2 top-2 z-30 rounded bg-panel/95 px-2 py-1 text-xs text-muted shadow">
-          导入中…
+        <div className="pointer-events-none absolute right-3 top-3 z-30 flex items-center gap-2 rounded-full border border-edge bg-panel/95 px-3 py-1.5 text-xs text-muted shadow-panel">
+          <span className="app-spinner" aria-hidden="true" />
+          正在导入素材…
         </div>
       )}
     </div>

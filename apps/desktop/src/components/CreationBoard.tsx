@@ -2,13 +2,14 @@ import { useEffect, useMemo, useState } from "react";
 import { useStore } from "../store";
 import { canStartAnotherJob, canUseByo } from "../lib/entitlement";
 import { api } from "../lib/api";
+import { notifyError, notifySuccess } from "../lib/notify";
 import { useCreationEditor } from "./creation/useCreationEditor";
 import { RATIOS } from "./creation/ratios";
 import { RatioSelect } from "./creation/RatioSelect";
 import { ProviderSelect } from "./creation/ProviderSelect";
 import { CreationGraph } from "./creation/CreationGraph";
 import { BoardChipPreview } from "./creation/BoardChipPreview";
-import { Info } from "lucide-react";
+import { Sparkles } from "lucide-react";
 
 // 画面比例偏好记忆（照 AssetDetail 的 localStorage 范式：bowerbird.<name> 前缀、try/catch 兜底）。
 const BOARD_RATIO_KEY = "bowerbird.boardRatio";
@@ -129,8 +130,10 @@ export function CreationBoard() {
       setActivePreset(id);
       setCreatingPreset(false);
       setNewName("");
+      notifySuccess("用途已保存");
     } catch (e) {
       console.error("createPreset failed", e);
+      notifyError(e, "保存用途失败");
     }
   }
 
@@ -150,8 +153,10 @@ export function CreationBoard() {
     try {
       await api.updatePreset(editingPresetId, name, body);
       setEditingPresetId(null);
+      notifySuccess("用途已更新");
     } catch (e) {
       console.error("updatePreset failed", e);
+      notifyError(e, "更新用途失败");
     }
   }
 
@@ -159,33 +164,37 @@ export function CreationBoard() {
     try {
       await api.deletePreset(id);
       if (activePreset?.id === id) setActivePreset(null);
+      notifySuccess("用途已删除");
     } catch (e) {
       console.error("deletePreset failed", e);
+      notifyError(e, "删除用途失败");
     }
   }
 
   return (
-    <aside className="flex w-[420px] shrink-0 flex-col border-l border-edge bg-panel">
-      <div className="flex items-center justify-between border-b border-edge px-3 py-2">
+    <aside className="creation-board-shell flex shrink-0 flex-col border-l border-edge bg-panel">
+      <div className="creation-board-header">
+        <div className="flex min-w-0 items-baseline gap-2">
+          <strong className="shrink-0 text-sm font-semibold text-ink">创作板</strong>
+          <span className="truncate text-[10px] text-muted">组合参考图与提示词</span>
+        </div>
         <div className="flex items-center gap-2">
-          <span className="text-sm font-semibold">🎬 创作板</span>
           <div className="group relative">
-            <Info size={14} className="cursor-help text-muted/50 group-hover:text-muted" />
-            <div className="pointer-events-none absolute left-0 top-full z-10 mt-1 hidden w-60 rounded bg-panel2 p-2 text-[11px] leading-4 text-muted ring-1 ring-edge group-hover:block">
+            <span className="cursor-help text-[10px] text-muted hover:text-ink">使用说明</span>
+            <div className="pointer-events-none absolute right-0 top-full z-10 mt-2 hidden w-60 rounded-lg bg-panel2 p-2 text-[11px] leading-4 text-muted ring-1 ring-edge group-hover:block">
               像跟 AI 输入 prompt 一样书写；<span className="text-accent">点瀑布流图片</span> 在光标处插入参考图，或输入 <span className="text-accent">@图名</span>（空格/标点后自动识别）。
             </div>
           </div>
-        </div>
-        <div className="flex items-center gap-2">
           <button
             onClick={toggleBoard}
-            className="rounded px-2 py-0.5 text-muted hover:bg-panel2 hover:text-ink"
+            className="rounded-md px-2 py-1 text-[10px] text-muted hover:bg-panel2 hover:text-ink"
             title="收起创作板"
           >
-            ✕
+            收起
           </button>
         </div>
       </div>
+      <div className="hatch-divider" aria-hidden="true"><span /></div>
 
       <div className="flex-1 overflow-y-auto p-3">
         {/* 用途（preset）：发送时作为基底注入；登记=把当前编辑框内容存为用途（只需用途名） */}
@@ -323,12 +332,12 @@ export function CreationBoard() {
             </div>
           </div>
         ) : null}
-        <div className="rounded-lg border border-edge bg-[#13171f] p-3 text-sm leading-8 text-ink">
+        <div className="lineframe-panel border border-edge bg-canvas p-3 text-sm leading-8 text-ink">
           <div
             ref={hostRef}
             onClick={focus}
             data-tour="creation-editor"
-            className="creation-editor min-h-48 cursor-text rounded bg-panel2/40 p-2 ring-1 ring-edge focus-within:ring-accent"
+            className="creation-editor min-h-48 cursor-text border border-edge bg-panel2/40 p-2 focus-within:border-accent"
           />
           {/* 编辑框内 image/keyword chip 的交互浮层（hover 放大图/维度正文 + 点击定位瀑布流） */}
           <BoardChipPreview hostRef={hostRef} />
@@ -365,7 +374,7 @@ export function CreationBoard() {
                           useStore.getState().setTourStep(10);
                         }
                       }}
-                      className="rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 text-accent hover:bg-accent/20"
+                      className="rounded-[2px] border border-accent/40 bg-accent/10 px-2 py-0.5 text-accent hover:bg-accent/20"
                     >
                       {section.title}
                     </button>
@@ -381,7 +390,7 @@ export function CreationBoard() {
         <CreationGraph sources={graphSources} />
       </div>
 
-      <div className="shrink-0 space-y-2 border-t border-edge p-3">
+      <div className="shrink-0 space-y-2 border-t border-edge bg-canvas/60 p-3">
         <button
           onClick={send}
           disabled={!finalPrompt || !targetReady || !canStartAnotherJob(cloudEntitlement, runningJobCount)}
@@ -392,14 +401,17 @@ export function CreationBoard() {
                 ? "已达当前档位的并行生成上限"
                 : `把最终 prompt + 参考图发 ${targetProviderLabel} 生成图像（结果进「生成结果」面板）`
           }
-          className="w-full rounded-md bg-accent px-3 py-2 text-sm font-semibold text-black disabled:opacity-50"
+          className="generation-glow-button flex min-h-11 w-full items-center justify-center rounded-full px-4 py-2 text-sm font-semibold disabled:opacity-50"
         >
-          {`✓ 发送 ${targetProviderLabel} 生成`}
+          <span className="generation-glow-button__content">
+            <Sparkles size={15} />
+            {`发送 ${targetProviderLabel} 生成`}
+          </span>
         </button>
         <div className="text-[10px] text-muted">
           {!targetReady
             ? "请先登录 Bowerbird 账号或在「设置 · AI 出图引擎」选择可用引擎"
-            : "🎨 发送后自动弹出「生成结果」面板；生成成功自动收起创作板，草稿保留可再打开续用。"}
+            : "发送后自动打开生成结果；创作板草稿会持续保留。"}
         </div>
       </div>
     </aside>

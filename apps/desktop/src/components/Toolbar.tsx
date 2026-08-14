@@ -1,17 +1,18 @@
+import { useEffect, useRef, useState } from "react";
+import { ChevronDown, FolderOpen, LoaderCircle, Search, Sparkles, Upload, X } from "lucide-react";
 import { useStore } from "../store";
 import { api } from "../lib/api";
-import { CodexStatus } from "./CodexStatus";
+import { notifyError, notifySuccess } from "../lib/notify";
 
-/** 顶部工具栏：导入 + 搜索 + 批量管理 + 创作板入口。 */
+/** 顶部工具栏：导入 + 搜索 + 创作板入口 + 运行状态。 */
 export function Toolbar({ onRefresh }: { onRefresh: () => Promise<void> }) {
   const setLoading = useStore((s) => s.setLoading);
   const busy = useStore((s) => s.loading);
-  const mode = useStore((s) => s.mode);
-  const enterManage = useStore((s) => s.enterManage);
   const boardOpen = useStore((s) => s.boardOpen);
   const toggleBoard = useStore((s) => s.toggleBoard);
   const searchQuery = useStore((s) => s.searchQuery);
   const currentProjectId = useStore((s) => s.currentProjectId);
+  const projects = useStore((s) => s.projects);
   const setSearchQuery = useStore((s) => s.setSearchQuery);
   const collectedNotice = useStore((s) => s.collectedNotice);
   const setCollectedNotice = useStore((s) => s.setCollectedNotice);
@@ -19,6 +20,37 @@ export function Toolbar({ onRefresh }: { onRefresh: () => Promise<void> }) {
   const setCurrentCollection = useStore((s) => s.setCurrentCollection);
   const setSmartFilter = useStore((s) => s.setSmartFilter);
   const setColorFilter = useStore((s) => s.setColorFilter);
+  const [importOpen, setImportOpen] = useState(false);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const importRef = useRef<HTMLDivElement>(null);
+
+  const currentProject = projects.find((p) => p.id === currentProjectId) ?? null;
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      const target = e.target as HTMLElement | null;
+      const typing =
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        !!target?.isContentEditable;
+      if (e.key === "/" && !typing) {
+        e.preventDefault();
+        searchRef.current?.focus();
+      }
+      if (e.key === "Escape" && document.activeElement === searchRef.current) {
+        searchRef.current?.blur();
+      }
+    }
+    function onPointerDown(e: MouseEvent) {
+      if (!importRef.current?.contains(e.target as Node)) setImportOpen(false);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("mousedown", onPointerDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("mousedown", onPointerDown);
+    };
+  }, []);
 
   // 扩展采集入根库；清空当前范围让用户立刻看见新素材。
   function showCollectedAsset() {
@@ -30,87 +62,126 @@ export function Toolbar({ onRefresh }: { onRefresh: () => Promise<void> }) {
     setCollectedNotice(null);
   }
 
-  async function withBusy(fn: () => Promise<unknown>) {
+  async function withBusy(fn: () => Promise<boolean>, successMessage: string) {
     setLoading(true);
     try {
-      await fn();
+      const changed = await fn();
+      if (!changed) return;
       await onRefresh();
+      notifySuccess(successMessage);
+    } catch (error) {
+      console.error(error);
+      notifyError(error, "导入失败，请稍后重试");
     } finally {
       setLoading(false);
     }
   }
 
+  function importFiles() {
+    setImportOpen(false);
+    void withBusy(async () => {
+      const paths = await api.pickImageFiles();
+      if (!paths.length) return false;
+      await api.importFiles(paths, currentProjectId);
+      return true;
+    }, "素材已导入");
+  }
+
+  function importFolder() {
+    setImportOpen(false);
+    void withBusy(async () => {
+      const path = await api.pickFolder();
+      if (!path) return false;
+      await api.importFolder(path, currentProjectId);
+      return true;
+    }, "文件夹已导入");
+  }
+
   return (
-    <div className="flex items-center gap-2 border-b border-edge bg-panel px-3 py-2">
-      <button
-        onClick={() =>
-          withBusy(async () => {
-            const paths = await api.pickImageFiles();
-            if (paths.length) await api.importFiles(paths, currentProjectId);
-          })
-        }
-        disabled={busy}
-        className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-black hover:opacity-90 disabled:opacity-50"
-      >
-        导入文件
-      </button>
-      <button
-        onClick={() =>
-          withBusy(async () => {
-            const p = await api.pickFolder();
-            if (p) await api.importFolder(p, currentProjectId);
-          })
-        }
-        disabled={busy}
-        className="rounded-md bg-panel2 px-3 py-1.5 text-sm text-ink hover:bg-edge disabled:opacity-50"
-      >
-        导入文件夹
-      </button>
-      <button
-        onClick={() => enterManage()}
-        disabled={busy || mode === "manage"}
-        className="rounded-md bg-panel2 px-3 py-1.5 text-sm text-ink hover:bg-edge disabled:opacity-50"
-      >
-        批量管理
-      </button>
-      <input
-        value={searchQuery}
-        onChange={(e) => setSearchQuery(e.target.value)}
-        placeholder="搜索文件名…"
-        className="ml-2 w-64 rounded-md bg-panel2 px-3 py-1.5 text-sm outline-none ring-1 ring-edge focus:ring-accent"
-      />
-      {searchQuery && (
+    <header className="app-topbar" aria-busy={busy}>
+      <div ref={importRef} className="app-topbar-import relative">
         <button
-          onClick={() => setSearchQuery("")}
-          className="text-xs text-muted hover:text-ink"
+          type="button"
+          data-import-trigger
+          onClick={() => setImportOpen((v) => !v)}
+          disabled={busy}
+          className="app-button-dark disabled:opacity-50"
+          aria-haspopup="menu"
+          aria-expanded={importOpen}
         >
-          清除
+          {busy ? <LoaderCircle size={15} className="animate-spin" /> : <Upload size={15} />}
+          {busy ? "导入中" : "导入"}
+          <ChevronDown size={13} className={importOpen ? "rotate-180" : ""} />
+        </button>
+        {importOpen && (
+          <div className="app-popover absolute left-0 top-full z-[70] mt-2 w-48" role="menu" aria-label="导入素材">
+            <button
+              type="button"
+              onClick={importFiles}
+              className="app-context-item px-3 py-2 text-xs"
+              role="menuitem"
+            >
+              <Upload size={14} className="text-muted" />
+              导入图片
+            </button>
+            <button
+              type="button"
+              onClick={importFolder}
+              className="app-context-item px-3 py-2 text-xs"
+              role="menuitem"
+            >
+              <FolderOpen size={14} className="text-muted" />
+              导入文件夹
+            </button>
+          </div>
+        )}
+      </div>
+
+      <div className="app-search">
+        <Search size={15} strokeWidth={1.8} aria-hidden />
+        <input
+          ref={searchRef}
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder={currentProject ? `搜索 ${currentProject.name} 中的素材…` : "搜索素材…"}
+          aria-label="搜索素材"
+        />
+        {searchQuery ? (
+          <button
+            type="button"
+            onClick={() => setSearchQuery("")}
+            className="app-search-clear"
+            title="清除搜索"
+            aria-label="清除搜索"
+          >
+            <X size={14} />
+          </button>
+        ) : (
+          <kbd>/</kbd>
+        )}
+      </div>
+
+      <div className="app-topbar-actions">
+        <button
+          type="button"
+          onClick={toggleBoard}
+          className={`app-button-light ${boardOpen ? "is-active" : ""}`}
+          title="打开创作板"
+        >
+          <Sparkles size={15} />
+          <span className="topbar-action-label">创作板</span>
+        </button>
+      </div>
+      {collectedNotice && (
+        <button
+          onClick={showCollectedAsset}
+          className="absolute right-4 top-[calc(100%+22px)] z-50 max-w-72 truncate rounded-full border border-lime/25 bg-panel px-3 py-2 text-xs text-lime shadow-panel hover:bg-panel2"
+          title={`已采集：${collectedNotice}。点击回到总库查看。`}
+        >
+          已采集「{collectedNotice}」 · 查看
         </button>
       )}
-      <div className="ml-auto flex items-center gap-2">
-        <span className="text-xs text-muted">{busy ? "处理中…" : ""}</span>
-        {collectedNotice && (
-          <button
-            onClick={showCollectedAsset}
-            className="max-w-48 truncate rounded-md bg-green-500/15 px-2.5 py-1.5 text-xs text-green-300 hover:bg-green-500/25"
-            title={`已采集：${collectedNotice}。点击回到总库查看。`}
-          >
-            已采集：{collectedNotice} · 查看
-          </button>
-        )}
-        <button
-          onClick={toggleBoard}
-          className={`rounded-md px-3 py-1.5 text-sm font-medium ${
-            boardOpen
-              ? "bg-accent text-black hover:opacity-90"
-              : "bg-panel2 text-ink hover:bg-edge"
-          }`}
-          title="打开创作板（核心枢纽）"
-        >
-          🎬 创作板
-        </button>
-        <CodexStatus />
-      </div>
-    </div>
+      {busy && <div className="app-progress-line" aria-hidden="true" />}
+    </header>
   );
 }

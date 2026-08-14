@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
+import { ArrowRight, Sparkles } from "lucide-react";
 import { useStore } from "../store";
+import { ModalShell } from "./ModalShell";
 
 type StepDef = { title?: string; body: string; side?: "below" | "right" };
 
@@ -230,54 +232,47 @@ export function OnboardingTour() {
 
   // step 0：引导入口弹窗（进入引导 / 跳过）。
   if (tourStep === 0) {
-    return createPortal(
-      <div
-        className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-        role="dialog"
-        aria-modal="true"
-        aria-label="新手引导"
+    return (
+      <ModalShell
+        title="把灵感变成下一张作品"
+        eyebrow="Welcome to Bowerbird"
+        description="花一分钟走一遍核心流程：导入素材、复用提示词、开始创作。"
+        width="sm"
+        onClose={endTour}
+        footer={(
+          <>
+            <button type="button" onClick={endTour} className="app-modal-button">跳过引导</button>
+            <button type="button" onClick={() => setTourStep(1)} className="app-modal-button is-primary">
+              进入引导模式 <ArrowRight size={15} />
+            </button>
+          </>
+        )}
       >
-        <div className="w-full max-w-md rounded-lg border border-edge bg-panel p-6 text-center shadow-2xl">
-          <div className="mb-3 text-4xl">🐦</div>
-          <h2 className="text-lg font-semibold text-ink">欢迎来到园丁鸟</h2>
-          <p className="mt-2 text-sm text-muted">
-            花一分钟走一遍核心流程：导入素材、复用提示词、开始创作。
-          </p>
-          <div className="mt-6 flex flex-col gap-2">
-            <button
-              onClick={() => setTourStep(1)}
-              className="rounded-md bg-accent px-5 py-2 text-sm font-medium text-black hover:opacity-90"
-            >
-              进入引导模式
-            </button>
-            <button
-              onClick={endTour}
-              className="rounded-md bg-panel2 px-5 py-2 text-sm text-muted hover:text-ink"
-            >
-              跳过引导
-            </button>
-          </div>
+        <div className="setup-card flex items-start gap-3 p-4">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent text-white"><Sparkles size={18} /></span>
+          <p className="text-xs leading-5 text-muted">你会创建第一个项目、导入预设素材，并把一张参考图的提示词带进创作板。</p>
         </div>
-      </div>,
-      document.body,
+      </ModalShell>
     );
   }
 
   // step 10：结束语居中模态（下半部分列状容器，预留动图/链接教程）。
   if (tourStep >= 10) {
-    return createPortal(
-      <div
-        className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-        role="dialog"
-        aria-modal="true"
-        aria-label="新手引导完成"
+    return (
+      <ModalShell
+        title="第一条创作路径已完成"
+        eyebrow="Tour complete"
+        description="随时能在「环境状态 · 新手教程」重温本引导。"
+        width="sm"
+        onClose={endTour}
+        footer={<button type="button" onClick={endTour} className="app-modal-button is-primary">开始使用</button>}
       >
-        <div className="w-full max-w-md rounded-lg border border-edge bg-panel p-6 text-center shadow-2xl">
-          <div className="mb-3 text-4xl">🐦</div>
-          <h2 className="text-lg font-semibold text-ink">开始构建你的巢吧</h2>
-          <p className="mt-2 text-sm text-muted">随时能在「环境状态 · 新手教程」重温本引导。</p>
+          <div className="mb-4 flex items-center gap-3 rounded-xl border border-lime/20 bg-lime/5 p-3 text-lime">
+            <Sparkles size={18} />
+            <span className="text-xs font-medium">素材已经进入创作工作流</span>
+          </div>
           {/* 下一步建议：列状容器，「配置素材采集插件」是按钮，点击结束 tour 并唤起扩展配置面板 */}
-          <div className="mt-5 border-t border-edge pt-4 text-left">
+          <div className="text-left">
             <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted">下一步建议</h3>
             <div className="flex flex-col gap-2">
               <button
@@ -285,7 +280,7 @@ export function OnboardingTour() {
                   endTour();
                   useStore.getState().setExtensionOnboardingForceOpen(true);
                 }}
-                className="flex items-center justify-between rounded-lg border border-edge bg-panel2/40 px-3 py-3 text-left hover:bg-panel2"
+                className="setup-card flex w-full items-center justify-between px-3 py-3 text-left hover:bg-panel2"
               >
                 <span>
                   <span className="block text-xs text-ink">配置素材采集插件</span>
@@ -295,15 +290,7 @@ export function OnboardingTour() {
               </button>
             </div>
           </div>
-          <button
-            onClick={endTour}
-            className="mt-5 rounded-md bg-accent px-5 py-2 text-sm font-medium text-black hover:opacity-90"
-          >
-            开始使用
-          </button>
-        </div>
-      </div>,
-      document.body,
+      </ModalShell>
     );
   }
 

@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { Check, ChevronDown } from "lucide-react";
 import type { AuthSnapshot, CodexHealth, EntitlementSnapshot } from "../../lib/types";
 import { canUseByo } from "../../lib/entitlement";
 
@@ -10,9 +11,8 @@ const PROVIDERS = [
 ] as const;
 
 /**
- * 出图 provider 下拉选择（按钮 toggle + 下方 inline 选项面板，与 RatioSelect 同范式，
- * 项目零浮层先例）。触发按钮与 RatioSelect 等高（h-7）。每个 provider 按各自健康状态置灰
- * （约定 7）：未就绪 disabled + tooltip 显 reason。
+ * 出图 provider 下拉选择。选项使用定宽浮层，不参与创作板正文布局；每个 provider 按各自
+ * 健康状态置灰（约定 7）：未就绪 disabled + tooltip 显 reason。
  */
 export function ProviderSelect({
   value,
@@ -32,22 +32,46 @@ export function ProviderSelect({
   cloudEntitlement?: EntitlementSnapshot | null;
 }) {
   const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
   const current = PROVIDERS.find((p) => p.key === value) ?? PROVIDERS[0];
 
+  useEffect(() => {
+    if (!open) return;
+    function closeOnOutsideClick(event: MouseEvent) {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    }
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("mousedown", closeOnOutsideClick);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeOnOutsideClick);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
   return (
-    <div className="relative">
+    <div ref={rootRef} className="relative shrink-0">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex h-7 items-center gap-1 rounded bg-panel2 px-2 text-xs text-ink outline-none ring-1 ring-edge hover:bg-edge focus:ring-accent"
+        className="flex h-7 items-center gap-1.5 rounded-[3px] border border-edge bg-panel2 px-2 text-xs text-ink outline-none hover:border-accent/60 hover:bg-edge focus:border-accent"
         title="选择出图引擎"
+        aria-haspopup="listbox"
+        aria-expanded={open}
       >
         <span>{current.label}</span>
-        <span className="text-muted">▾</span>
+        <ChevronDown size={12} className={`text-muted transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
 
       {open && (
-        <div className="mt-1 flex flex-col gap-1 rounded bg-panel2 p-2">
+        <div
+          className="app-popover absolute bottom-full left-0 z-30 mb-1 w-56 p-1.5"
+          role="listbox"
+          aria-label="出图引擎"
+        >
+          <div className="app-popover-title">出图引擎</div>
           {PROVIDERS.map((p) => {
             const isCloud = p.key === "bowerbird-cloud";
             const isByo = !isCloud;
@@ -80,28 +104,17 @@ export function ProviderSelect({
                   }
                 }}
                 disabled={!ok}
-                title={!ok ? (isCloud ? reason : health?.reason) || `${p.label} 不可用` : `用 ${p.label} 出图`}
-                className={
-                  "rounded px-2 py-1 text-left text-xs " +
-                  (selected
-                    ? "bg-accent font-semibold text-black"
-                    : ok
-                    ? "bg-panel text-ink hover:bg-edge"
-                    : "cursor-not-allowed bg-panel text-muted opacity-40")
-                }
+                title={!ok ? reason || health?.reason || `${p.label} 不可用` : `用 ${p.label} 出图`}
+                className={`app-popover-option provider-select-option px-2 text-xs ${selected ? "bg-panel2 text-ink" : ""}`}
+                role="option"
+                aria-selected={selected}
               >
-                {p.label}
+                <span className={`app-status-dot ${ok ? "is-ready" : ""}`} />
+                <span className="min-w-0 flex-1 truncate">{p.label}</span>
+                {selected && <Check size={13} className="text-accent" />}
               </button>
             );
           })}
-          <button
-            type="button"
-            onClick={() => setOpen(false)}
-            className="ml-auto shrink-0 self-end rounded px-1 text-muted hover:bg-panel hover:text-ink"
-            title="收起"
-          >
-            ✕
-          </button>
         </div>
       )}
     </div>

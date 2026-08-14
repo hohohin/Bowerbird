@@ -31,3 +31,20 @@ declare module "node:crypto" {
   export function createHash(algorithm: "sha256"): Hash;
   export function randomUUID(): string;
 }
+
+declare module "node:fs" {
+  export function readFileSync(path: number | string, encoding: "utf8"): string;
+}
+
+declare const console: {
+  log(...values: unknown[]): void;
+  error(...values: unknown[]): void;
+};
+
+declare const process: {
+  env: Record<string, string | undefined>;
+  exitCode?: number;
+};
+
+declare function setTimeout(callback: () => void, delayMs: number): unknown;
+declare function clearTimeout(handle: unknown): void;

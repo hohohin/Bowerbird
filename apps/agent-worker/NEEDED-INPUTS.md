@@ -12,7 +12,7 @@
 | 2 | VPS 规格 + 部署方式 | 🔶 A1 可先用 mock worker，A7 真机必需 | ✅ 已填 |
 | 3 | 预算档位 + 定价归属 | 🔶 POC 可用 allowlist，正式发布前定 | ✅ 已填 |
 | 4 | TTL 默认值确认 | ❌ 不阻塞，给个确认就行 | ✅ 已确认 |
-| 5 | DeepSeek key（文本）+ 方舟 key（出图/看图） | ✅ A3 联调必需 | 🔶 方舟 key 复用现有，DeepSeek 待你提供 |
+| 5 | DeepSeek key（文本）+ 方舟 key（出图/看图） | ✅ A3 联调必需 | ✅ 已就绪；DeepSeek A0-T1 真实 spike 已通过 |
 | 6 | POC 测试账号 allowlist | ❌ 不阻塞，给 1–3 个测试账号 | ✅ 已填 |
 
 ---
@@ -24,7 +24,7 @@
 - **预算**：smart-refinement 按 token 换算，**单次上限 ~15 分**；free/pro/studio **3 档都可用**；POC allowlist `admin@bowerbird.cn`。
 - **TTL**：输入/中间 24h、最终产物 7d。
 - **VPS**：腾讯云轻量云 Ubuntu 24.04 / 2vCPU / 2GiB / 50GiB；**加 2G swap + Worker 并发上限 1–2**；部署 **SSH + Docker**。
-- **唯一待你提供**：**DeepSeek API key**（填 Supabase Edge secret + VPS Worker secret `DEEPSEEK_API_KEY`，不进仓库/聊天）。
+- **DeepSeek API key 已就绪**：真实值仅在 gitignored `.env` / 后续 Supabase 与 VPS secret，未进入仓库或测试 fixture。
 
 ---
 
@@ -85,7 +85,7 @@
 - **方舟 API key**（出图 Seedream + 看图 vision，**DeepSeek 无视觉不能替代**）→ 复用现有 `ARK_API_KEY`（已在 Supabase secret），Worker secret 部署时也设一份。
 - 加密位置见 [apps/cloud/DEPLOY.md](../cloud/DEPLOY.md) 与现有 `ARK_API_KEY` 同处。
 
-> ✍️ 填这里 — DeepSeek key 是否就绪：（是 / 否）
+> ✍️ 填这里 — DeepSeek key 是否就绪：是（A0-T1 两回合真实 tool-calling 已通过）
 > ✍️ 填这里 — 方舟 key 是否复用现有 `ARK_API_KEY`：是（你已填「换成 deepseek 的 api」，确认方舟仍保留用于出图/看图）
 
 ---

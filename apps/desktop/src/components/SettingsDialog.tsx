@@ -5,6 +5,7 @@ import { api } from "../lib/api";
 import { DEFAULT_AUTO_ANALYZE_PROMPT } from "../lib/constants";
 import { understandProvider, understandReady } from "../lib/entitlement";
 import type { MigrateProgress } from "../lib/types";
+import { ModalShell } from "./ModalShell";
 
 const STAGE_LABEL: Record<string, string> = {
   images: "复制原图",
@@ -127,19 +128,27 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     : "";
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-      onClick={onClose}
+    <ModalShell
+      title="设置"
+      eyebrow="Preferences"
+      description="管理运行环境、自动分析和本地素材库位置。"
+      width="md"
+      preventClose={migrating}
+      onClose={onClose}
+      footer={
+        <button
+          onClick={onClose}
+          disabled={migrating}
+          className="app-modal-button is-primary"
+        >
+          {migrating && <span className="app-spinner" aria-hidden />}
+          {migrating ? "迁移进行中…" : "完成"}
+        </button>
+      }
     >
-      <div
-        className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-lg border border-edge bg-panel p-6 shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <h2 className="text-lg font-semibold text-ink">设置</h2>
-
-        <div className="mt-4 space-y-3 text-sm">
+        <div className="space-y-3 text-sm">
           {/* 环境状态：统一引导入口（codex CLI / 浏览器扩展 / 新手教程），开 Onboarding 大面板 */}
-          <div className="rounded bg-panel2 px-3 py-2.5">
+          <div className="settings-card px-3 py-2.5">
             <div className="flex items-center justify-between">
               <span className="text-ink">环境状态</span>
               <span
@@ -167,7 +176,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
           </div>
 
           {/* 官方 Cloud 连接只读展示；URL/key 与 Mock 开关不属于用户设置。 */}
-          <div className="rounded bg-panel2 px-3 py-2.5">
+          <div className="settings-card px-3 py-2.5">
             <div className="flex items-center justify-between gap-2">
               <span className="text-ink">Bowerbird Cloud</span>
               <span className={`rounded px-2 py-0.5 text-xs ${cloudAuth?.cloud_available ? "bg-green-500/15 text-green-400" : "bg-red-500/15 text-red-300"}`}>
@@ -178,7 +187,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
           </div>
 
           {/* 入库时自动反推 */}
-          <div className="rounded bg-panel2 px-3 py-2.5">
+          <div className="settings-card px-3 py-2.5">
             <label className="flex items-center gap-2 cursor-pointer select-none">
               <input
                 type="checkbox"
@@ -231,7 +240,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
           </div>
 
           {/* 素材库位置 */}
-          <div className="rounded bg-panel2 px-3 py-2.5">
+          <div className="settings-card px-3 py-2.5">
             <div className="text-ink">素材库位置</div>
             <p className="mt-1 break-all text-[11px] text-muted" title={libRoot ?? ""}>
               {libRoot ?? "读取中…"}
@@ -307,23 +316,13 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
           </div>
 
           {/* 新手教程（占位，后续替换为视频/图片） */}
-          <div className="rounded bg-panel2 px-3 py-2">
+          <div className="settings-card px-3 py-2">
             <div className="text-ink">新手教程</div>
             <div className="mt-1.5 flex h-20 items-center justify-center rounded border border-dashed border-edge text-[11px] text-muted">
               📷 教程视频 / 图片（待补充）
             </div>
           </div>
-        </div>
-
-        <div className="mt-6 flex justify-end">
-          <button
-            onClick={onClose}
-            className="rounded-md bg-accent px-4 py-1.5 text-sm font-medium text-black hover:opacity-90"
-          >
-            完成
-          </button>
-        </div>
       </div>
-    </div>
+    </ModalShell>
   );
 }

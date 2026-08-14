@@ -204,12 +204,14 @@ interface State {
   // —— 生成结果面板（多 job；主区覆盖层，可随时开合，状态在 store 不丢）——
   genPanelOpen: boolean;
   genJobs: Record<string, GenJob>; // 所有生成会话（首轮创建，续轮追加 turn）
-  genJobOrder: string[]; // job 创建顺序（标签栏稳定排序）
+  genJobOrder: string[]; // job 创建顺序（侧栏 Status 任务列表稳定排序）
   activeJobId: string | null; // 当前查看/操作的 job（续轮/复用/取消/重试基于它）
   genUnread: boolean; // 面板关时落地新图 → 顶栏按钮红点
   setActiveJob: (id: string) => void;
+  // 删除生成任务记录（仅前端 genJobs 记录；不取消后端任务、不删已入库图片）。
+  removeGenJob: (id: string) => void;
   setGenPanelOpen: (open: boolean) => void;
-  startGeneration: (prompt: string, references: Asset[], ratio?: string | null, provider?: string | null, rawPrompt?: string) => Promise<void>;
+  startGeneration: (prompt: string, references: Asset[], ratio?: string | null, provider?: string | null, rawPrompt?: string) => Promise<string>;
   sendGenRevise: (instruction: string, provider?: string | null) => Promise<void>;
   cancelGeneration: (jobId?: string) => void; // 默认取消 activeJob
   loadGenJobs: () => Promise<void>;
@@ -808,6 +810,17 @@ export const useStore = create<State>((set, get) => {
   setGenPanelOpen: (open) =>
     set((s) => ({ genPanelOpen: open, genUnread: open ? false : s.genUnread })),
   setActiveJob: (id) => set({ activeJobId: id }),
+  removeGenJob: (id) =>
+    set((s) => {
+      if (!s.genJobs[id]) return s;
+      const genJobs = { ...s.genJobs };
+      delete genJobs[id];
+      const genJobOrder = s.genJobOrder.filter((x) => x !== id);
+      const activeJobId =
+        s.activeJobId === id ? (genJobOrder.length > 0 ? genJobOrder[genJobOrder.length - 1] : null) : s.activeJobId;
+      const generating = Object.values(genJobs).some((x) => x.running);
+      return { genJobs, genJobOrder, activeJobId, generating };
+    }),
   loadGenJobs: async () => {
     // 启动恢复：拉本地未完成生成 job 重建 genJobs（恢复中 job 在面板可见）。
     try {
@@ -905,6 +918,7 @@ export const useStore = create<State>((set, get) => {
       genHandleError(jobId, message);
       updateJob(jobId, (j) => ({ ...j, running: false }));
     }
+    return jobId;
   },
   sendGenRevise: async (instruction, provider) => {
     const id = get().activeJobId;

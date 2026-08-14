@@ -2,12 +2,28 @@ import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-shell";
+import {
+  ArrowLeft,
+  Bookmark,
+  ChevronLeft,
+  ChevronRight,
+  Copy,
+  Edit3,
+  ExternalLink,
+  Info,
+  MessageSquare,
+  Sparkles,
+  X,
+} from "lucide-react";
 import { useStore } from "../store";
 import { understandProvider } from "../lib/entitlement";
 import { api } from "../lib/api";
 import { useImageZoom } from "../lib/useImageZoom";
+import { notifyError, notifySuccess } from "../lib/notify";
 import { RenameDialog } from "./RenameDialog";
-import type { Analysis, Asset, AssetTag, CodexHealth, Folder } from "../lib/types";
+import { LocalAgentPanel } from "./LocalAgentPanel";
+import { ReadonlyPrompt } from "./creation/ReadonlyPrompt";
+import type { Analysis, Asset, AssetTag, CodexHealth, Folder, GenerationHistory } from "../lib/types";
 import {
   DEFAULT_DESCRIBE_PROMPT,
   MAX_DESCRIBE_PROMPT_HISTORY,
@@ -164,6 +180,8 @@ export function AssetDetail() {
   const [collectionName, setCollectionName] = useState("");
   const [collectionBusy, setCollectionBusy] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
+  const [detailTab, setDetailTab] = useState<"create" | "info">("info");
+  const [generationSource, setGenerationSource] = useState<GenerationHistory | null>(null);
   const timerRef = useRef<number | null>(null);
 
   async function loadAnalyses() {
@@ -192,8 +210,10 @@ export function AssetDetail() {
     try {
       await api.setAssetTags(id, keep, t.source);
       await loadTags();
+      notifySuccess("类别已移除");
     } catch (e) {
       console.error(e);
+      notifyError(e, "移除类别失败");
     }
   }
 
@@ -206,8 +226,10 @@ export function AssetDetail() {
       setAddingTag(false);
       setTagDraft("");
       await loadTags();
+      notifySuccess("类别已添加");
     } catch (e) {
       console.error(e);
+      notifyError(e, "添加类别失败");
     }
   }
 
@@ -229,8 +251,10 @@ export function AssetDetail() {
       await reloadFolders();
       setTargetCollectionId("");
       setCollectionPanelOpen(false);
+      notifySuccess("已收藏素材");
     } catch (e) {
       console.error(e);
+      notifyError(e, "收藏失败");
     } finally {
       setCollectionBusy(false);
     }
@@ -248,8 +272,10 @@ export function AssetDetail() {
       await reloadFolders();
       await loadCollections();
       setCollectionPanelOpen(false);
+      notifySuccess("收藏夹已创建，素材已加入");
     } catch (e) {
       console.error(e);
+      notifyError(e, "创建收藏夹失败");
     } finally {
       setCollectionBusy(false);
     }
@@ -261,8 +287,10 @@ export function AssetDetail() {
     try {
       await api.removeAssetFromCollection(id, collectionId);
       await loadCollections();
+      notifySuccess("已从收藏夹移除");
     } catch (e) {
       console.error(e);
+      notifyError(e, "移出收藏夹失败");
     } finally {
       setCollectionBusy(false);
     }
@@ -275,8 +303,28 @@ export function AssetDetail() {
     setTargetCollectionId("");
     setCreatingCollection(false);
     setCollectionName("");
+    setDetailTab("info");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+
+  useEffect(() => {
+    let alive = true;
+    setGenerationSource(null);
+    if (!id) return;
+    api
+      .generationHistory(id, currentProjectId)
+      .then((history) => {
+        if (alive && (history.turns.length > 0 || history.references.length > 0)) {
+          setGenerationSource(history);
+        }
+      })
+      .catch(() => {
+        // 普通导入素材没有生成历史，详情页保持无来源卡片即可。
+      });
+    return () => {
+      alive = false;
+    };
+  }, [id, currentProjectId]);
 
   // 同流程轮播：本图是生成图（或被合并掉的 sibling）时取整组过程图。非生成图置空。
   // sibling 不在主列表 → assets.find 落空 → 仍走 listGenerationGroup 取组。
@@ -422,9 +470,38 @@ export function AssetDetail() {
     try {
       await api.deleteAnalysis(anId);
       await loadAnalyses();
+      notifySuccess("反推结果已删除");
     } catch (e) {
       console.error(e);
       setErr(typeof e === "string" ? e : JSON.stringify(e));
+      notifyError(e, "删除反推结果失败");
+    }
+  }
+
+  async function copyCaption(text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      notifySuccess("反推结果已复制");
+    } catch (e) {
+      notifyError(e, "复制失败");
+    }
+  }
+
+  async function openSession(sessionId: string) {
+    try {
+      await api.openCodexSession(sessionId);
+      notifySuccess("已在 Terminal 中打开会话");
+    } catch (e) {
+      console.error(e);
+      notifyError(e, "打开 codex 会话失败");
+    }
+  }
+
+  async function openSource(url: string) {
+    try {
+      await open(url);
+    } catch (e) {
+      notifyError(e, "打开来源网页失败");
     }
   }
 
@@ -457,6 +534,7 @@ export function AssetDetail() {
       const v = JSON.parse(row.payload);
       return {
         prompt: typeof v.prompt === "string" ? v.prompt : undefined,
+        prompt_raw: typeof v.prompt_raw === "string" ? v.prompt_raw : undefined,
         session_id: typeof v.session_id === "string" ? v.session_id : undefined,
         references:
           Array.isArray(v.references) ? v.references.filter((x: unknown): x is string => typeof x === "string") : undefined,
@@ -466,6 +544,20 @@ export function AssetDetail() {
       return null;
     }
   }, [analyses]);
+  const generationPrompt =
+    generationSource?.turns[0]?.prompt_raw?.trim() ||
+    genMeta?.prompt_raw?.trim() ||
+    generationSource?.turns[0]?.prompt?.trim() ||
+    genMeta?.prompt?.trim() ||
+    "";
+  const generationReferences = useMemo(() => {
+    if (generationSource?.references.length) return generationSource.references;
+    if (!genMeta?.references?.length) return [];
+    const available = [...group, ...assets];
+    return genMeta.references
+      .map((path: string) => available.find((candidate) => candidate.store_path === path))
+      .filter((candidate: Asset | undefined): candidate is Asset => !!candidate);
+  }, [generationSource, genMeta, group, assets]);
   const promptEmpty = describePrompt.trim().length === 0;
   const understandRoute = understandProvider(cloudEntitlement);
   const understandReady = understandRoute === "codex"
@@ -486,25 +578,32 @@ export function AssetDetail() {
   const availableCollections = collections.filter((f) => !collectedIds.has(f.id));
 
   return (
-    <div className="flex h-full w-full flex-col">
-      <header className="flex items-center gap-3 border-b border-edge bg-panel px-3 py-2">
+    <div className="asset-detail flex h-full w-full flex-col">
+      <header className="asset-detail-toolbar">
         <button
           onClick={closeDetail}
-          className="rounded px-2 py-1 text-sm text-muted hover:bg-panel2 hover:text-ink"
+          className="asset-detail-back"
         >
-          ← 返回
+          <ArrowLeft size={15} />
+          返回
         </button>
-        <div className="truncate text-sm font-medium">
-          {asset.name}
-          {asset.ext ? `.${asset.ext}` : ""}
+        <div className="min-w-0">
+          <div className="truncate text-sm font-medium text-ink">
+            {asset.name}
+            {asset.ext ? `.${asset.ext}` : ""}
+          </div>
+          <div className="mt-0.5 text-[10px] uppercase tracking-[0.16em] text-muted">
+            Asset workspace
+          </div>
         </div>
         <button
           onClick={() => setRenameOpen(true)}
           disabled={!asset.store_path}
-          className="shrink-0 rounded px-1.5 text-xs text-muted hover:bg-panel2 hover:text-ink disabled:opacity-40"
+          className="asset-detail-icon-button"
           title={asset.store_path ? "重命名（同步改磁盘文件名）" : "该素材没有本地文件，无法重命名"}
+          aria-label="重命名素材"
         >
-          ✎
+          <Edit3 size={14} />
         </button>
         {(asset.source === "codex" || asset.source === "jimeng" || asset.source === "bowerbird-cloud") ? (
           <span className="rounded bg-accent/15 px-1.5 py-0.5 text-[10px] text-accent">
@@ -516,9 +615,12 @@ export function AssetDetail() {
           </span>
         ) : null}
         <button
-          onClick={() => setCollectionPanelOpen((v) => !v)}
-          className={`ml-auto rounded px-2 py-1 text-sm hover:bg-panel2 ${
-            assetCollections.length > 0 ? "text-accent" : "text-muted hover:text-ink"
+          onClick={() => {
+            setDetailTab("info");
+            setCollectionPanelOpen((v) => !v);
+          }}
+          className={`asset-detail-collect ml-auto ${
+            assetCollections.length > 0 ? "is-active" : ""
           }`}
           title={
             assetCollections.length > 0
@@ -526,12 +628,14 @@ export function AssetDetail() {
               : "收藏"
           }
         >
-          {assetCollections.length > 0 ? "★" : "☆"} 收藏
+          <Bookmark size={14} fill={assetCollections.length > 0 ? "currentColor" : "none"} />
+          {assetCollections.length > 0 ? `已收藏 ${assetCollections.length}` : "收藏"}
         </button>
       </header>
+      <div className="hatch-divider is-compact" aria-hidden="true"><span /></div>
 
       <div className="flex flex-1 overflow-hidden">
-        <div className="flex flex-1 flex-col overflow-hidden bg-canvas">
+        <div className="asset-detail-stage flex flex-1 flex-col overflow-hidden bg-canvas">
           <div className="flex flex-1 items-center justify-center overflow-hidden p-4">
             {src &&
               (isVideo(asset.ext) ? (
@@ -564,7 +668,7 @@ export function AssetDetail() {
                 className="flex h-7 w-7 items-center justify-center rounded-full hover:bg-panel2 hover:text-ink disabled:opacity-30"
                 title="上一张过程图（←）"
               >
-                ◀
+                <ChevronLeft size={15} />
               </button>
               <span className="min-w-[3rem] text-center tabular-nums text-xs">
                 {groupPos + 1} / {group.length}
@@ -575,15 +679,46 @@ export function AssetDetail() {
                 className="flex h-7 w-7 items-center justify-center rounded-full hover:bg-panel2 hover:text-ink disabled:opacity-30"
                 title="下一张过程图（→）"
               >
-                ▶
+                <ChevronRight size={15} />
               </button>
             </div>
           )}
         </div>
 
-        <aside className="w-96 shrink-0 space-y-4 overflow-y-auto border-l border-edge bg-panel p-3">
+        <aside className="asset-detail-panel">
+          <div className="asset-detail-panel-header">
+            <div>
+              <div className="panel-kicker">Asset intelligence</div>
+              <div className="mt-1 text-sm font-semibold text-ink">素材洞察</div>
+            </div>
+            <div className="asset-detail-tabs" role="tablist" aria-label="详情内容">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={detailTab === "info"}
+                className={detailTab === "info" ? "is-active" : ""}
+                onClick={() => setDetailTab("info")}
+              >
+                <Info size={13} />
+                信息
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={detailTab === "create"}
+                className={detailTab === "create" ? "is-active" : ""}
+                onClick={() => setDetailTab("create")}
+              >
+                <Sparkles size={13} />
+                再创作
+              </button>
+            </div>
+          </div>
+
+          {detailTab === "info" && (
+            <>
           {collectionPanelOpen && (
-            <div className="space-y-2 rounded bg-panel2 p-2 text-xs">
+            <div className="asset-detail-card space-y-2 text-xs">
               <div className="flex items-center justify-between">
                 <div className="font-medium uppercase tracking-wide text-accent">收藏到</div>
                 <button
@@ -591,7 +726,7 @@ export function AssetDetail() {
                   className="text-muted hover:text-ink"
                   title="关闭"
                 >
-                  ✕
+                  <X size={13} />
                 </button>
               </div>
 
@@ -688,7 +823,7 @@ export function AssetDetail() {
             </div>
           )}
 
-          <div className="space-y-1.5">
+          <div className="asset-detail-card space-y-1.5">
             <div className="text-xs font-medium uppercase tracking-wide text-muted">
               信息
             </div>
@@ -713,7 +848,7 @@ export function AssetDetail() {
           </div>
 
           {/* 类别（P2 自动归类 + 手动）：codex 归的为 auto（灰），用户加的为 manual（强调）。 */}
-          <div className="space-y-2">
+          <div className="asset-detail-card space-y-2">
             <div className="text-xs font-medium uppercase tracking-wide text-muted">类别</div>
             <div className="flex flex-wrap items-center gap-1.5">
               {tags.length === 0 && !addingTag && (
@@ -783,32 +918,24 @@ export function AssetDetail() {
             )}
           </div>
 
-          {/* ✨ 生成来源：codex_create_image 落的 generation_meta（prompt / 参考图 / 会话）。 */}
+            </>
+          )}
+
+          {detailTab === "create" && (
+            <>
+
+          {/* 生成来源：只读还原首次生成时的原始创作板输入，而不是铺开发 provider 的 prompt。 */}
           {genMeta && (
-            <div className="space-y-2 rounded bg-panel2 p-2 text-xs text-ink">
-              <div className="text-xs font-medium uppercase tracking-wide text-accent">
-                ✨ 生成来源
-              </div>
-              {genMeta.prompt && (
-                <div className="whitespace-pre-wrap rounded bg-panel p-1.5 text-[11px]">
-                  {genMeta.prompt}
+            <div className="asset-detail-card space-y-2 text-xs text-ink">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-xs font-medium uppercase tracking-wide text-accent">
+                  生成来源
                 </div>
-              )}
-              {genMeta.references && genMeta.references.length > 0 && (
-                <div>
-                  <div className="mb-1 text-[10px] text-muted">
-                    参考图（{genMeta.references.length}）
-                  </div>
-                  <div className="flex flex-wrap gap-1">
-                    {genMeta.references.map((p: string) => (
-                      <img
-                        key={p}
-                        src={convertFileSrc(p)}
-                        className="h-12 rounded border border-edge object-cover"
-                        alt=""
-                      />
-                    ))}
-                  </div>
+                <span className="text-[9px] uppercase tracking-[0.12em] text-muted">只读</span>
+              </div>
+              {(generationPrompt || generationReferences.length > 0) && (
+                <div className="generation-source-editor border border-edge bg-canvas p-2 text-[11px] leading-7">
+                  <ReadonlyPrompt prompt={generationPrompt} references={generationReferences} />
                 </div>
               )}
               {genMeta.session_id && (
@@ -816,20 +943,19 @@ export function AssetDetail() {
                   <button
                     onClick={() => viewGenerationHistory(asset.id)}
                     disabled={generating}
-                    className="rounded bg-accent px-2 py-1 text-[11px] font-semibold text-black disabled:opacity-50"
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-2.5 py-1.5 text-[11px] font-semibold text-white disabled:opacity-50"
                     title="像回看对话一样，看这张图生成时的各轮 prompt 与产出图，并可继续提修改意见"
                   >
-                    💬 回看生成对话
+                    <MessageSquare size={13} />
+                    回看生成对话
                   </button>
                   {genMeta.provider === "codex" && (
                     <button
-                      onClick={() =>
-                        api.openCodexSession(genMeta.session_id!).catch(console.error)
-                      }
+                      onClick={() => void openSession(genMeta.session_id!)}
                       className="text-[10px] text-accent hover:underline"
                       title="在 Terminal 里 codex resume，看这次生成的完整对话含图"
                     >
-                      在 codex 中打开会话 ↗
+                      在 codex 中打开会话 <ExternalLink size={11} className="inline" />
                     </button>
                   )}
                 </div>
@@ -837,8 +963,22 @@ export function AssetDetail() {
             </div>
           )}
 
+          <LocalAgentPanel
+            asset={asset}
+            hasCaption={captions.length > 0}
+            onAnalyze={() => {
+              const instruction = describePrompt.trim();
+              if (!id || !instruction) return;
+              rememberDescribePrompt(instruction);
+              openDescribePicker(
+                { kind: "single", assetId: id, instruction },
+                { x: Math.max(12, window.innerWidth - 420), y: 260 },
+              );
+            }}
+          />
+
           {/* 反推：免费档走 Cloud，Pro/Studio 走本机 CLI；当前路由不可用时置灰。 */}
-          <div className="space-y-2">
+          <div className="asset-detail-card space-y-2">
             <div className="flex items-center justify-between gap-2">
               <div className="text-xs font-medium uppercase tracking-wide text-muted">
                 反推
@@ -894,11 +1034,14 @@ export function AssetDetail() {
                   className="h-24 w-full resize-none rounded bg-panel2 p-2 text-xs text-ink outline-none ring-1 ring-edge focus:ring-accent"
                   placeholder={DEFAULT_DESCRIBE_PROMPT}
                 />
-                <div className="flex items-center justify-between text-[10px] text-muted">
+                <div className="flex flex-col gap-2 text-[10px] text-muted">
                   <span>编辑后直接「反推」即用本次内容；「保存为默认」才作为下次默认指令。</span>
-                  <div className="flex gap-2">
+                  <div className="flex justify-end gap-3">
                     <button
-                      onClick={() => saveDescribePrompt(describePrompt.trim())}
+                      onClick={() => {
+                        saveDescribePrompt(describePrompt.trim());
+                        notifySuccess("已保存为默认反推指令");
+                      }}
                       disabled={describing || queued}
                       className="hover:text-accent disabled:opacity-50"
                     >
@@ -979,6 +1122,14 @@ export function AssetDetail() {
                         )}
                       </button>
                       <button
+                        onClick={() => void copyCaption(caption.text)}
+                        className="shrink-0 text-muted hover:text-accent"
+                        title="复制这条反推结果"
+                        aria-label="复制反推结果"
+                      >
+                        <Copy size={12} />
+                      </button>
+                      <button
                         onClick={() => deleteCaption(a.id)}
                         disabled={describing || queued}
                         className="shrink-0 text-[10px] text-muted hover:text-red-300 disabled:opacity-50"
@@ -1021,11 +1172,7 @@ export function AssetDetail() {
                         )}
                         {caption.sessionId && a.provider === "codex" && (
                           <button
-                            onClick={() =>
-                              api
-                                .openCodexSession(caption.sessionId!)
-                                .catch(console.error)
-                            }
+                            onClick={() => void openSession(caption.sessionId!)}
                             className="text-[10px] text-accent hover:underline"
                             title="在 Terminal 里跑 codex resume，看这次反推的完整对话（含图）"
                           >
@@ -1040,17 +1187,21 @@ export function AssetDetail() {
             )}
           </div>
 
-          <div className="space-y-1.5">
+            </>
+          )}
+
+          {detailTab === "info" && (
+          <div className="asset-detail-card space-y-1.5">
             <div className="text-xs font-medium uppercase tracking-wide text-muted">
               来源
             </div>
             {asset.source_url ? (
               <button
-                onClick={() => open(asset.source_url!)}
+                onClick={() => void openSource(asset.source_url!)}
                 className="block w-full truncate rounded bg-panel2 px-2 py-1.5 text-left text-xs text-accent hover:underline"
                 title={asset.source_url}
               >
-                打开来源网页 ↗
+                打开来源网页 <ExternalLink size={11} className="inline" />
               </button>
             ) : (
               <div className="text-xs text-muted">无来源链接</div>
@@ -1059,6 +1210,7 @@ export function AssetDetail() {
               <Meta label="本地来源" value={asset.origin_path} />
             )}
           </div>
+          )}
         </aside>
       </div>
       <RenameDialog

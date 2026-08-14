@@ -34,6 +34,15 @@
 
 **已完成：**
 - **Bowerbird Cloud 稳定性与错误可诊断性收口（2026-08-14，已存档并上线）**：针对登录偶发“回调缺少 code”/“登录状态已过时”、单任务误占满并行槽、Cloud 生成/反推超时及方舟 `400/422` 被统一显示为“内容未通过模型校验或请求参数无效”完成闭环修复。桌面认证现兼容 query/fragment 回调错误，按 JWT `exp` 提前刷新并在网关 401 后 singleflight 强刷一次；生成无论成功、失败或取消都会推进持久化任务终态，释放并行槽；参考图按真实内容解码并在请求期统一转为 JPEG，服务端校验 JPEG/PNG 文件头、单图/总大小。方舟错误响应只透出白名单错误码/request id，区分提示词/参考图/结果安全审核、图片格式、参数、限流与传输错误；真实日志中 135.45 秒的运行时取消已改判为超时，生产 `UPSTREAM_TIMEOUT_MS` 从 140 秒收紧为 120 秒，给 Edge 回滚与响应留余量。最终用户实测确认本轮主要生成失败来自提示词触发方舟内容安全规则，移除相关措辞后已成功生成；`generate-proxy` / `understand-proxy` 均已部署 `ACTIVE v8`。回归：桌面 Rust 119/119、TypeScript 检查通过，Cloud Deno 8/8。
+- **桌面端 UI/UX 第六阶段：创作板控件与生成来源语义修复（2026-08-14，dev 线）**：创作板 Provider 选择器从会撑高正文的行内选项组改为定宽浮层，支持外部点击与 Esc 关闭，并以紧凑状态点/勾选结构替代大块工程化按钮；caption 可选维度由胶囊圆角收敛为 2px 线框块。素材详情默认优先打开“信息”，原“信息与整理”简化为“信息”，原“分析与创作”改为“再创作”。生成来源不再展示铺开发生图 API 的完整 prompt，改为优先读取首轮 `prompt_raw`，并复用创作板 ProseMirror 解析器还原为不可编辑的原始输入视图：`@素材` 显示真实缩略图节点、`【维度】` 显示同款维度节点，缺少新字段的旧数据才回退历史 prompt；引用素材通过生成历史反查完整 Asset，避免只展示裸路径。TypeScript 与 Vite production build 通过（仅保留既有 chunk 体积提示）。
+- **本机 Agent Loop 预览纵向链路（2026-08-14，dev 线）**：按用户决定暂不等待 Supabase 迁移联调，先让本机 Bowerbird 可使用 `smart-refinement`。新增 `apps/agent-worker/src/local/` checkpoint step runner：复用 PhaseMachine/PolicyEngine，连续执行结构化意图→参考职责→分维评分，在精修计划审批和真实 provider 工具前确定性暂停；拒绝审批不生成，精修硬上限一次。桌面新增独立 SQLite `local_agent_runs`（不把 Agent phase 写进 generation `task_queue`）、开发态 Tauri→Node JSON stdin/stdout 桥，以及素材详情「智能精修」卡片；要求目标图已有反推摘要，DeepSeek 形成评分/计划，人工确认后复用当前 `GenProvider` 出图并沿用现有入库，再复用 `UnderstandProvider` 复检，失败可从 checkpoint 继续。DeepSeek key 仍只在 gitignored `apps/cloud/.env`，release 构建禁用入口。真实 DeepSeek 合成摘要已停在 `awaiting_approval`；Agent Worker 29/29、桌面 Rust 119/119、TypeScript 与 Vite production build 全过。**延期边界**：Supabase lease/跨设备恢复、VPS Worker、Agent 统一积分结算仍按 A1–A7；0012 仅编码未部署。
+- **Agent Runtime A0-T1 + A1-T1 编码（2026-08-14，dev 线）**：新增 `DeepSeekBackend`，把 OpenAI-compatible function call 确定性归一为单个 `ModelTurnResult.action`，返回 prompt/completion/total token 与 provider request id；坏参数 JSON、并行工具、网络/HTTP 限流/服务错误及预先取消均 fail closed。使用 gitignored `apps/cloud/.env` 中的真实 key 跑通“两回合模型 action → 本地假工具结果 → 模型继续”，脱敏 fixture 不含 prompt、原始响应或用户数据；agent-worker TypeScript 与 27/27 测试通过。当前 `deepseek-chat` 实测成功；官方新名称 `deepseek-v4-flash` 在当前账号/端点返回 `400 invalid_request_error`，因此 `DEEPSEEK_MODEL` 必须显式配置，暂不盲迁。A1-T1 已新增 `0012_agent_runtime_control_plane.sql`：7 张 Agent 表、强制 RLS/own-row 只读、原子 `claim_agent_run`、租约心跳与状态转换 RPC，并配事务验收脚本；因本机无 Supabase CLI/psql/Docker，尚待 dev DB 实际执行后转为“验收完成”，未部署线上。
+- **桌面端 UI/UX 第五阶段：官网线框与 hatch-band 视觉校准（2026-08-14，dev 线）**：根据实际评审将官网真正有辨识度的“简约线框 + 斜线带”结构语言补入桌面端，而非只复用配色。应用顶栏下新增贯穿式 hatch-band 与中心导线，侧栏资产摘要增加线框/斜线底带，主工作区恢复低对比度满铺网格；素材空态重构为带斜线顶带的模块框，瀑布流卡片改为常驻细边框；创作板、生成结果与素材详情增加紧凑 hatch 分隔，编辑器、生成轮次、详情卡、节点图、弹窗、设置/引导卡和轻量浮层统一降低圆角、渐变与悬浮阴影，恢复平面化线框层级。生成主按钮取消整块蓝色填充，改为深色线框底叠加官网底部 CTA 同源的圆形径向蓝光：默认小范围呼吸，悬停扩大光晕半径。弹窗正文自动带官网式斜线分隔带，同时保留品牌蓝/荧光绿顶线。TypeScript 与 production build 通过；此前已在实际渲染中完成空库外壳、折叠/展开侧栏、创作板及账号弹窗视觉校准，本轮本地浏览器预览因安全策略拒绝访问回环地址，未执行截图回归。
+- **桌面端 UI/UX 第四阶段：全应用交互收尾（2026-08-14，dev 线）**：统一账号面板、环境状态总览、codex / dreamina / 浏览器扩展详细引导及新手教程首尾页到 `ModalShell`，补齐统一标题层级、固定动作栏、忙碌锁定、品牌状态卡和宽屏/窄屏布局；反推 Provider 选择器、导入菜单、任务状态、账号菜单与素材右键菜单收敛为同一轻量浮层体系，支持 Esc、外部点击及方向键导航，复制路径、系统打开、复用、项目/批量整理与删除统一接入 Toast。素材库新增首屏瀑布流骨架，空状态可区分“库/项目为空”和“当前筛选无结果”并直接导入或清除筛选，拖拽导入显示进度与成功/失败数量；Lightbox 补齐语义、图标和键盘导航，通知层在创作板开启时自动避让右侧工作区。TypeScript 与 Vite production build 通过（仅保留既有约 545 KB chunk 提示），并完成应用外壳、折叠侧栏、创作板、账号弹窗、设置与两级环境引导的实际页面视觉回归。
+- **桌面端 UI/UX 第三阶段：统一弹窗与表单反馈（2026-08-14，dev 线）**：新增统一 `ModalShell`，集中提供品牌化遮罩/面板、标题与描述区、关闭按钮、固定底部动作栏、焦点循环、Esc/遮罩关闭、关闭后焦点恢复及处理中关闭锁定；确认框、素材重命名和设置面板完成迁移，统一主次/危险按钮与表单输入样式。重命名新增字符计数、错误卡片、加载旋转标识及成功 Toast；素材库迁移进行中时设置弹窗不可误关，底部按钮同步显示迁移状态；设置内容改为有边界的分组卡片和独立滚动区。弹窗增强品牌蓝/荧光绿顶线和更明确的前后景对比，已完成设置入口与真实窗口视觉 QA。
+- **桌面端应用外壳精简（2026-08-14，dev 线）**：按桌面应用语义移除顶栏 Bowerbird 品牌块与「批量管理」入口，深色导入按钮移至左上角，白色创作板按钮紧邻全局状态；创作板顶部去掉装饰图标与双层标题，压缩为 42px 文本工具栏；展开侧栏整体缩窄 20%，项目列表仅显示项目名与素材数、不再显示完整路径；侧栏新增可记忆的展开/收起状态，收起后成为 72px Discord 式项目轨，有当前项目时显示项目首字母圆标，未打开项目时固定显示代表 Global 的 `G` 圆标，点击圆标恢复完整侧栏；新手引导进入项目步骤时自动临时展开侧栏，空库导入文案同步改为“左上角”。
+- **桌面端 UI/UX 第二阶段：详情工作区 + 全局反馈（2026-08-14，dev 线）**：详情页从固定宽度的单列信息堆叠重构为「分析与创作 / 信息与整理」双层工作区，默认聚焦生成来源、反推指令与结果，将收藏、元信息、色板、类别和来源集中到整理视图；侧栏改用弹性宽度、粘性标题、分段卡片与窄窗口适配，详情顶栏、素材舞台、过程图导航同步品牌化并改用统一图标。新增全局 Toast 通知层（成功 / 错误 / 信息、自动消失、手动关闭、`aria-live`），接入导入、剪贴板入库、文件夹/收藏夹/智能文件夹 CRUD、用途 CRUD、详情收藏/类别/会话/反推结果等高频操作；反推结果新增一键复制。桌面 TypeScript、`git diff --check` 与 Vite production build 通过，并以本地测试场景完成两个详情标签及通知层的视觉与交互 QA。
+- **桌面端 UI/UX 第一阶段：品牌设计系统 + 应用外壳（2026-08-14，dev 线）**：官网视觉语言正式进入桌面端——Tailwind 与全局 CSS 统一为暖黑基底、米白文字、品牌蓝动作色、荧光绿状态色，并补齐字体、焦点、滚动条、动效降级与面板阴影令牌；顶部工具栏重构为「品牌/项目上下文—全局搜索—主操作」，导入文件/文件夹合并为单一菜单，新增 `/` 聚焦搜索；左侧导航增加资产摘要卡、清晰分组与统一图标，移除主要导航 emoji；创作板改为 `clamp(390px, 34vw, 520px)` 弹性工作区，≤1120px 自动覆盖主区、≤860px 进一步适配，生成结果与任务状态同步采用 CREATE/OUTPUT 层级；瀑布流空状态重写，素材卡补键盘 Enter/Space 访问；首次引导入口与环境状态面板同步品牌化。桌面 TypeScript 与 Vite production build 通过，并用本地构建在 1280×800 / 900×700 两档完成视觉 QA。
 - **新手引导体验完善 + 文档体系重组（2026-08-14 存档，dev 线）**：
   ① **预设图扩到 14 张 + 数据真实化**：从 2 张占位扩到 14 张（11 张收集图 source=extension 带反推 caption 维度 + 3 张生成图 source=codex/bowerbird-cloud 带 generation_meta prompt），数据快照自真实库原样保留（caption / generation_meta payload 直接 INSERT、不调 codex，约定 7）；生成图 prompt 的 @引用指向收集图 filename，预设后 name 保留原 filename → 创作板 @图名 能匹配还原 chip；识别下沉 `ingest_file`（所有导入入口咽喉）。[core/preset.rs](apps/desktop/src-tauri/src/core/preset.rs) `PresetSpec` 重构（source / session_id / caption_payload / generation_meta_payload）。
   ② **OnboardingTour 多步手把手引导**：`STEP_DEFS` 引导新用户 创建项目 → 选「初始引导」文件夹导入 → 右键复用生成提示词 → 进创作板写想法 → 生成；14 张预设图让 tour 每步有真实可操作素材。
@@ -266,6 +275,8 @@
 
 26. **Agent 对话与项目视觉设定（2026-08-13）**：Agent 只支持三个结构化交互节点：计划前有限澄清、计划审批/修改、结果接受/一次精修；工具运行期间不开放聊天。澄清模型只能提议，Kernel 按问题必要性、重复、次数和 intent field 影响决定是否询问；回答编译为 `IntentPatch`，变更已批准计划时必须使旧 hash 失效并重新审批。项目长期统一视觉采用**视觉设定**而非“品牌”模型；来源必须是用户在当前项目主动选择的专用普通文件夹，提炼输入严格限定为点击瞬间“项目成员 ∩ folder_id”的已有最新反推数据。视觉设定提炼**永不上传或读取图片、不调用视觉模型、不自动补反推、不扫描整个项目、不监听素材变化、不自动重算/提示**；数据不足就停止并请用户自行整理/反推。每次按钮点击冻结 `source_scope_hash` 并产生 draft，用户确认才把结构化规则/来源本地落盘为新版本。可选方向验证图仅用候选规则纯文生图且 `reference_assets=[]`，它验证的是文字规则可用性，不是原素材看图理解；未确认不入库、不成为设定证据。已确认 `VisualProfileCapsule` 可供直接生成、智能精修、系列创作导演读取，但任何 Agent/生成结果都无权反写视觉设定。
 
+27. **本机 Agent 预览先行（2026-08-14）**：Supabase A1 迁移部署可暂缓，本机开发构建先交付 `smart-refinement` 的可用纵向链路。checkpoint 必须独立落 `local_agent_runs`，不得把 Agent phase/审批/工具账本塞进 generation `task_queue`；本机 Agent 可复用现有单次 `GenProvider` 与 `UnderstandProvider`，但该预览不冒充 cloud lease、跨设备恢复或 Agent 统一积分结算已经完成。DeepSeek key 仅从 gitignored `apps/cloud/.env` 由本地 Node 子进程读取，React 不持 key，release 构建不开放该入口。
+
 
 
 ---
@@ -282,6 +293,12 @@
 - 解决 / 绕过：
 - 相关文件：
 ```
+
+### DeepSeek 新模型名与当前账号/端点不一致（2026-08-14）
+- 现象：相同的两回合 function-calling 合成请求，显式配置 `deepseek-chat` 成功并返回完整 usage；改为官方当前文档推荐的 `deepseek-v4-flash` 后返回 `400 invalid_request_error`（非重试型）。
+- 根因：官方文档已进入 V4 命名，但当前 API 账号/端点尚不接受该模型名；仅依据文档静态改名会让刚接入的 Worker 立即不可用。
+- 解决 / 绕过：`DEEPSEEK_MODEL` 改为必填，不在代码中静默猜测模型；POC 暂用真实验证通过的 `deepseek-chat`，后续迁移时用同一脱敏 spike 先验收新模型名，再更新 secret/约定。错误日志只保留 HTTP status 与经白名单过滤的 provider code，不记录上游 message、prompt 或响应正文。
+- 相关文件：[backend.ts](apps/agent-worker/src/providers/deepseek/backend.ts)、[deepseek-tool-calling.ts](apps/agent-worker/src/spikes/deepseek-tool-calling.ts)、[deepseek-tool-calling.json](apps/agent-worker/src/fixtures/deepseek-tool-calling.json)。
 
 ### Tauri bundle resources map+glob 拍平子目录，release 扩展图标加载失败（2026-08-14）
 - 现象：新用户加载浏览器扩展时 Chrome 报 `Could not load icon 'icons/16x16.png' specified in 'icons'` / `无法加载清单`；dev 本地一切正常，只有装 release 安装包的新用户中招。

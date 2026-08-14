@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-shell";
 import { useStore } from "../store";
 import { api } from "../lib/api";
+import { ModalShell } from "./ModalShell";
 
 const NODE_SITE = "https://nodejs.org";
 
@@ -142,27 +143,37 @@ export function CodexOnboarding() {
     installState === "error" && installReason.includes("Node");
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-      <div className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-lg border border-edge bg-panel p-6 shadow-2xl">
-        <h2 className="text-lg font-semibold text-ink">配置 codex CLI（可选）</h2>
-        <p className="mt-1.5 text-sm text-muted">
-          codex CLI 用你的 ChatGPT 订阅做反推、生成图、采集即命名，质量最佳，仅 Pro/Studio 可用。免费档无需配置——登录 Bowerbird 账号即可用 Cloud 反推 / 生成图。不配置也能正常使用本地素材库：浏览、搜索、整理、收藏。
-        </p>
-
+    <ModalShell
+      title="配置 codex CLI（可选）"
+      eyebrow="Local AI setup"
+      description="使用 ChatGPT 订阅进行反推、生成和命名，仅 Pro / Studio 可用；不配置也不影响本地素材库。"
+      width="lg"
+      preventClose={checking}
+      onClose={dismiss}
+      footer={(
+        <>
+          <button type="button" onClick={dismiss} disabled={checking} className="app-modal-button">稍后再说</button>
+          <button type="button" onClick={() => void recheck()} disabled={checking} className="app-modal-button">
+            {checking && <span className="app-spinner" aria-hidden="true" />}
+            {checking ? "检测中…" : "重新检测"}
+          </button>
+        </>
+      )}
+    >
         {/* 当前状态：就绪 → 绿（提示可直接关闭）；未就绪 → 红 + 后端 reason。 */}
         {codexHealth?.ok ? (
-          <div className="mt-4 rounded bg-green-500/15 p-2 text-xs text-green-400">
+          <div className="app-inline-status is-success">
             ✓ codex 已就绪，无需配置，可直接关闭此窗口。
           </div>
         ) : (
-          <div className="mt-4 rounded bg-red-500/15 p-2 text-xs text-red-300">
+          <div className="app-inline-status is-error">
             当前状态：{codexHealth?.reason ?? "检测中…"}
           </div>
         )}
 
         <ol className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
           {/* step 1 一键安装 */}
-          <li className="text-sm">
+          <li className="setup-card p-4 text-sm">
             <div className="flex items-center gap-2">
               <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/15 text-[11px] font-semibold text-accent">
                 1
@@ -174,7 +185,7 @@ export function CodexOnboarding() {
               <button
                 onClick={() => void doInstall()}
                 disabled={installDone}
-                className="rounded-md bg-accent px-3 py-1 text-[12px] font-medium text-black hover:opacity-90 disabled:opacity-50"
+                className="app-modal-button is-primary"
               >
                 {installState === "running"
                   ? "安装中…（点击取消）"
@@ -191,9 +202,9 @@ export function CodexOnboarding() {
                 <div className="mt-1.5 text-xs text-red-300">
                   {installReason}
                   {needNode && (
-                    <button
+                    <button type="button"
                       onClick={() => void open(NODE_SITE)}
-                      className="ml-2 rounded bg-panel2 px-2 py-0.5 text-[11px] text-ink hover:bg-edge"
+                      className="app-modal-button ml-2 min-h-7 px-2"
                     >
                       打开 Node 官网
                     </button>
@@ -207,7 +218,7 @@ export function CodexOnboarding() {
           </li>
 
           {/* step 2 一键登录 */}
-          <li className="text-sm">
+          <li className="setup-card p-4 text-sm">
             <div className="flex items-center gap-2">
               <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/15 text-[11px] font-semibold text-accent">
                 2
@@ -219,7 +230,7 @@ export function CodexOnboarding() {
               <button
                 onClick={() => void doLogin()}
                 disabled={!installDone || loginDone}
-                className="rounded-md bg-accent px-3 py-1 text-[12px] font-medium text-black hover:opacity-90 disabled:opacity-50"
+                className="app-modal-button is-primary"
               >
                 {loginState === "running"
                   ? "等待浏览器登录…（点击取消）"
@@ -237,7 +248,7 @@ export function CodexOnboarding() {
           </li>
 
           {/* step 3 自动检测 */}
-          <li className="text-sm">
+          <li className="setup-card p-4 text-sm">
             <div className="flex items-center gap-2">
               <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/15 text-[11px] font-semibold text-accent">
                 3
@@ -250,22 +261,6 @@ export function CodexOnboarding() {
           </li>
         </ol>
 
-        <div className="mt-6 flex justify-end gap-2">
-          <button
-            onClick={dismiss}
-            className="rounded-md bg-panel2 px-3 py-1.5 text-sm text-ink hover:bg-edge"
-          >
-            稍后再说
-          </button>
-          <button
-            onClick={() => void recheck()}
-            disabled={checking}
-            className="rounded-md bg-panel2 px-3 py-1.5 text-sm text-ink hover:bg-edge disabled:opacity-50"
-          >
-            {checking ? "检测中…" : "重新检测"}
-          </button>
-        </div>
-      </div>
-    </div>
+    </ModalShell>
   );
 }

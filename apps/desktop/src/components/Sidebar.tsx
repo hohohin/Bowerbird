@@ -1,10 +1,13 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { Library, PanelLeftClose, PanelLeftOpen, Sparkles } from "lucide-react";
 import { useStore } from "../store";
 import { api } from "../lib/api";
 import { getDragAssets } from "../lib/dragPayload";
 import { understandProvider } from "../lib/entitlement";
+import { notifyError, notifySuccess } from "../lib/notify";
 import { ProjectSection } from "./ProjectSection";
 import { SidebarAccount } from "./SidebarAccount";
+import { SidebarStatus } from "./SidebarStatus";
 import type { Folder } from "../lib/types";
 
 /** 颜色桶 key → 中文 label（P3；hex 由后端 palette_overview 带回）。 */
@@ -14,12 +17,23 @@ const COLOR_LABELS: Record<string, string> = {
   white: "白", black: "黑",
 };
 
+const SIDEBAR_COLLAPSED_KEY = "bowerbird.sidebarCollapsed";
+
+function loadSidebarCollapsed() {
+  try {
+    return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 /** 左侧栏：素材统计 + 文件夹/智能文件夹 + 颜色筛选 + 底部账号区。 */
 export function Sidebar() {
   const total = useStore((s) => s.total);
   const selectedCount = useStore((s) => s.selectedIds.size);
   const currentFolderId = useStore((s) => s.currentFolderId);
   const currentProjectId = useStore((s) => s.currentProjectId);
+  const projects = useStore((s) => s.projects);
   const currentCollectionId = useStore((s) => s.currentCollectionId);
   const setCurrentFolder = useStore((s) => s.setCurrentFolder);
   const colorFilter = useStore((s) => s.colorFilter);
@@ -34,6 +48,8 @@ export function Sidebar() {
   const codexHealth = useStore((s) => s.codexHealth);
   const cloudAuth = useStore((s) => s.cloudAuth);
   const cloudEntitlement = useStore((s) => s.cloudEntitlement);
+  const tourActive = useStore((s) => s.tourActive);
+  const tourStep = useStore((s) => s.tourStep);
   // 智能归类可用性（照设置面板原算法）：free 需登录云端；Pro 可用本机 CLI。
   const understandRoute = understandProvider(cloudEntitlement);
   const understandReady = understandRoute === "codex"
@@ -48,6 +64,7 @@ export function Sidebar() {
   const [draftName, setDraftName] = useState("");
   const [smartKind, setSmartKind] = useState<"source" | "ext">("source");
   const [smartValue, setSmartValue] = useState("");
+  const [collapsed, setCollapsed] = useState(loadSidebarCollapsed);
 
   const palette = useStore((s) => s.palette);
   const normalFolders = folders.filter(
@@ -55,6 +72,24 @@ export function Sidebar() {
   );
   const smartFolders = folders.filter((f) => f.id !== "root" && f.kind === "smart");
   const collections = folders.filter((f) => f.id !== "root" && f.kind === "collection");
+  const currentProject = projects.find((p) => p.id === currentProjectId) ?? null;
+  const currentContextName = currentProject?.name ?? "全局";
+  const currentContextInitial = currentProject
+    ? Array.from(currentProject.name.trim())[0]?.toUpperCase() ?? "P"
+    : "G";
+
+  function setSidebarCollapsed(next: boolean) {
+    setCollapsed(next);
+    try {
+      localStorage.setItem(SIDEBAR_COLLAPSED_KEY, next ? "1" : "0");
+    } catch {
+      // ignore storage errors
+    }
+  }
+
+  useEffect(() => {
+    if (tourActive && (tourStep === 1 || tourStep === 2)) setCollapsed(false);
+  }, [tourActive, tourStep]);
 
   function resetCreate() {
     setCreating("none");
@@ -78,8 +113,16 @@ export function Sidebar() {
         await api.createSmartFolder(name, `${smartKind}:${val}`);
       }
       await reloadFolders();
+      notifySuccess(
+        creating === "folder"
+          ? "文件夹已创建"
+          : creating === "collection"
+            ? "收藏夹已创建"
+            : "智能文件夹已创建"
+      );
     } catch (e) {
       console.error("create folder failed", e);
+      notifyError(e, "创建失败");
     }
     resetCreate();
   }
@@ -90,19 +133,50 @@ export function Sidebar() {
     setSmartValue("");
   }
 
+  if (collapsed) {
+    return (
+      <aside className="app-sidebar is-collapsed flex shrink-0 flex-col items-center border-r border-edge">
+        <button
+          type="button"
+          onClick={() => setSidebarCollapsed(false)}
+          className="app-sidebar-rail-toggle"
+          title="展开侧栏"
+          aria-label="展开侧栏"
+        >
+          <PanelLeftOpen size={17} />
+        </button>
+        <div className="app-sidebar-rail-divider" />
+        <SidebarStatus collapsed onExpand={() => setSidebarCollapsed(false)} />
+        <button
+          type="button"
+          onClick={() => setSidebarCollapsed(false)}
+          className={`app-sidebar-project-badge ${currentProject ? "is-project" : ""}`}
+          title={`${currentContextName} · 点击展开侧栏`}
+          aria-label={`当前项目：${currentContextName}。点击展开侧栏`}
+        >
+          {currentContextInitial}
+        </button>
+      </aside>
+    );
+  }
+
   return (
-    <aside className="flex w-56 shrink-0 flex-col border-r border-edge bg-panel text-sm">
-      <div className="flex-1 overflow-y-auto p-3">
-      <div className="mb-4">
-        <div className="text-xs uppercase tracking-wide text-muted">
-          {currentProjectId ? "项目素材" : "素材总数"}
-        </div>
-        <div className="text-2xl font-semibold">{total}</div>
-      </div>
+    <aside className="app-sidebar flex shrink-0 flex-col border-r border-edge text-sm">
+      <button
+        type="button"
+        onClick={() => setSidebarCollapsed(true)}
+        className="app-sidebar-expanded-toggle"
+        title="收起侧栏"
+        aria-label="收起侧栏"
+      >
+        <PanelLeftClose size={16} />
+      </button>
+      <div className="flex-1 overflow-y-auto p-3 pt-4">
+      <SidebarStatus />
 
       <ProjectSection />
 
-      <div className="mb-2 flex items-center justify-between text-xs uppercase tracking-wide text-muted">
+      <div className="panel-kicker mb-2 flex items-center justify-between">
         <span>文件夹</span>
         <span className="flex gap-2 normal-case tracking-normal">
           <button
@@ -186,16 +260,19 @@ export function Sidebar() {
       )}
 
       <div className="space-y-1">
-        <div
-          className={`flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 ${
+        <button
+          type="button"
+          className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left ${
             currentFolderId === null && !smartFilter && !currentCollectionId ? "bg-panel2" : "hover:bg-panel2"
           }`}
           onClick={() => setCurrentFolder(null)}
         >
-          {currentProjectId ? "📚 项目全部" : "📚 全部"}
-        </div>
-        <div
-          className={`flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 ${
+          <Library size={15} className="text-muted" />
+          {currentProjectId ? "项目全部" : "全部素材"}
+        </button>
+        <button
+          type="button"
+          className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left ${
             smartFilter === "source:generated" ? "bg-panel2" : "hover:bg-panel2"
           }`}
           onClick={() =>
@@ -203,8 +280,9 @@ export function Sidebar() {
           }
           title="只看生成图（codex / 即梦 / Bowerbird Cloud）"
         >
-          ✨ 生成图
-        </div>
+          <Sparkles size={15} className="text-muted" />
+          AI 新作
+        </button>
         {normalFolders.map((f) => (
           <FolderRow key={f.id} folder={f} />
         ))}
@@ -212,7 +290,7 @@ export function Sidebar() {
 
       {collections.length > 0 && (
         <>
-          <div className="mb-2 mt-4 text-xs uppercase tracking-wide text-muted">收藏夹</div>
+          <div className="panel-kicker mb-2 mt-5">收藏夹</div>
           <div className="space-y-1">
             {collections.map((f) => (
               <FolderRow key={f.id} folder={f} />
@@ -223,7 +301,7 @@ export function Sidebar() {
 
       {smartFolders.length > 0 && (
         <>
-          <div className="mb-2 mt-4 text-xs uppercase tracking-wide text-muted">智能文件夹</div>
+          <div className="panel-kicker mb-2 mt-5">智能文件夹</div>
           <div className="space-y-1">
             {smartFolders.map((f) => (
               <FolderRow key={f.id} folder={f} />
@@ -234,7 +312,7 @@ export function Sidebar() {
 
       {autoTags.length > 0 && (
         <>
-          <div className="mb-2 mt-4 flex items-center justify-between text-xs uppercase tracking-wide text-muted">
+          <div className="panel-kicker mb-2 mt-5 flex items-center justify-between">
             <span>自动归类</span>
             <span className="flex items-center gap-1.5 normal-case tracking-normal">
               {classifyProgress && (
@@ -290,7 +368,7 @@ export function Sidebar() {
 
       {palette.length > 0 && (
         <>
-          <div className="mb-2 mt-4 flex items-center justify-between text-xs uppercase tracking-wide text-muted">
+          <div className="panel-kicker mb-2 mt-5 flex items-center justify-between">
             <span>颜色</span>
             <span className="flex items-center gap-1.5 normal-case tracking-normal">
               {colorRebuild && (
@@ -342,7 +420,10 @@ export function Sidebar() {
         </>
       )}
       </div>
-      {/* 账号区：chatgpt 式，常驻左下角，不随内容滚动 */}
+      {/* 素材数量小字 + 账号区：常驻左下角，不随内容滚动 */}
+      <div className="px-3 pb-0.5 pt-2 text-[10px] uppercase tracking-wide text-muted">
+        {currentProjectId ? "Project assets" : "Library assets"} · {total}
+      </div>
       <SidebarAccount />
     </aside>
   );
@@ -373,8 +454,10 @@ function FolderRow({ folder }: { folder: Folder }) {
     try {
       await api.renameFolder(folder.id, n);
       await reloadFolders();
+      notifySuccess("名称已更新");
     } catch (e) {
       console.error("rename failed", e);
+      notifyError(e, "重命名失败");
     }
   }
 
@@ -386,8 +469,10 @@ function FolderRow({ folder }: { folder: Folder }) {
       if (useStore.getState().currentFolderId === folder.id) setCurrentFolder(null);
       if (useStore.getState().currentCollectionId === folder.id) setCurrentCollection(null);
       await reloadFolders();
+      notifySuccess("已删除");
     } catch (e) {
       console.error("delete folder failed", e);
+      notifyError(e, "删除失败");
     }
   }
 

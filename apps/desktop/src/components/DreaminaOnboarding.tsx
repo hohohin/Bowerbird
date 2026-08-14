@@ -4,6 +4,7 @@ import { open } from "@tauri-apps/plugin-shell";
 import { useStore } from "../store";
 import { api } from "../lib/api";
 import type { DreaminaDeviceFlow } from "../lib/types";
+import { ModalShell } from "./ModalShell";
 
 type InstallState = "idle" | "running" | "done" | "error";
 
@@ -154,19 +155,27 @@ export function DreaminaOnboarding() {
     installState === "done" || ready || (!!dreaminaHealth && !notInstalled);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-      <div className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-lg border border-edge bg-panel p-6 shadow-2xl">
-        <h2 className="text-lg font-semibold text-ink">
-          配置即梦 dreamina CLI（备选出图引擎）
-        </h2>
-        <p className="mt-1.5 text-sm text-muted">
-          即梦是国内图像生成模型，作为 codex 的备选出图 provider（消耗你的即梦会员积分）。配置后可在创作板切换使用。不配置也能正常使用 codex 出图与所有本地功能。
-        </p>
-
+    <ModalShell
+      title="配置即梦 dreamina CLI"
+      eyebrow="Alternative image provider"
+      description="使用即梦会员积分作为备选出图引擎；不配置也不影响 codex 出图和本地功能。"
+      width="lg"
+      preventClose={checking || finishing}
+      onClose={dismiss}
+      footer={(
+        <>
+          <button type="button" onClick={dismiss} disabled={checking || finishing} className="app-modal-button">稍后再说</button>
+          <button type="button" onClick={() => void recheck()} disabled={checking || finishing} className="app-modal-button">
+            {checking && <span className="app-spinner" aria-hidden="true" />}
+            {checking ? "检测中…" : "重新检测"}
+          </button>
+        </>
+      )}
+    >
         {/* 当前状态：就绪 → 绿；未就绪 → 红 + 后端 reason。已登录可登出（设置面板的登出入口已随
             「AI 出图引擎」板块删除，登出收敛到这里）。 */}
         {ready ? (
-          <div className="mt-4 flex items-center justify-between gap-2 rounded bg-green-500/15 p-2 text-xs text-green-400">
+          <div className="app-inline-status is-success flex items-center justify-between gap-2">
             <span>✓ dreamina 已就绪，无需配置，可直接关闭此窗口。</span>
             <button
               onClick={async () => {
@@ -178,21 +187,21 @@ export function DreaminaOnboarding() {
                 }
               }}
               disabled={checking}
-              className="shrink-0 rounded-md bg-panel px-3 py-1 text-xs text-ink hover:bg-red-500/20 hover:text-red-300 disabled:opacity-50"
+              className="app-modal-button is-danger shrink-0"
               title="登出即梦账号（dreamina logout）"
             >
               登出即梦账号
             </button>
           </div>
         ) : (
-          <div className="mt-4 rounded bg-red-500/15 p-2 text-xs text-red-300">
+          <div className="app-inline-status is-error">
             当前状态：{reason || "检测中…"}
           </div>
         )}
 
         <ol className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
           {/* step 1 一键安装 */}
-          <li className="text-sm">
+          <li className="setup-card p-4 text-sm">
             <div className="flex items-center gap-2">
               <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/15 text-[11px] font-semibold text-accent">
                 1
@@ -204,7 +213,7 @@ export function DreaminaOnboarding() {
               <button
                 onClick={() => void doInstall()}
                 disabled={installDone}
-                className="rounded-md bg-accent px-3 py-1 text-[12px] font-medium text-black hover:opacity-90 disabled:opacity-50"
+                className="app-modal-button is-primary"
               >
                 {installState === "running"
                   ? "下载中…（点击取消）"
@@ -227,7 +236,7 @@ export function DreaminaOnboarding() {
           </li>
 
           {/* step 2 自动授权登录 */}
-          <li className="text-sm">
+          <li className="setup-card p-4 text-sm">
             <div className="flex items-center gap-2">
               <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/15 text-[11px] font-semibold text-accent">
                 2
@@ -239,7 +248,7 @@ export function DreaminaOnboarding() {
               <button
                 onClick={() => void startLogin()}
                 disabled={!installDone || ready || finishing}
-                className="rounded-md bg-accent px-3 py-1 text-[12px] font-medium text-black hover:opacity-90 disabled:opacity-50"
+                className="app-modal-button is-primary"
               >
                 {ready
                   ? "已登录"
@@ -262,7 +271,7 @@ export function DreaminaOnboarding() {
                 <button
                   onClick={() => void finishLogin()}
                   disabled={!flow || finishing}
-                  className="mt-2 rounded-md bg-accent px-3 py-1 text-[12px] font-medium text-black hover:opacity-90 disabled:opacity-50"
+                  className="app-modal-button is-primary mt-2"
                 >
                   {finishing ? "检测中…" : "我已完成授权，登录"}
                 </button>
@@ -277,7 +286,7 @@ export function DreaminaOnboarding() {
           </li>
 
           {/* step 3 检测 */}
-          <li className="text-sm">
+          <li className="setup-card p-4 text-sm">
             <div className="flex items-center gap-2">
               <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/15 text-[11px] font-semibold text-accent">
                 3
@@ -290,22 +299,6 @@ export function DreaminaOnboarding() {
           </li>
         </ol>
 
-        <div className="mt-6 flex justify-end gap-2">
-          <button
-            onClick={dismiss}
-            className="rounded-md bg-panel2 px-3 py-1.5 text-sm text-ink hover:bg-edge"
-          >
-            稍后再说
-          </button>
-          <button
-            onClick={() => void recheck()}
-            disabled={checking}
-            className="rounded-md bg-panel2 px-3 py-1.5 text-sm text-ink hover:bg-edge disabled:opacity-50"
-          >
-            {checking ? "检测中…" : "重新检测"}
-          </button>
-        </div>
-      </div>
-    </div>
+    </ModalShell>
   );
 }
