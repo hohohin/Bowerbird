@@ -12,7 +12,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `dev-doc/Bowerbird开发计划.md` | 完整开发计划 v1.3（定位 / 技术栈 / 数据模型 / Roadmap / 风险）；同名 HTML 是其渲染版 | 任何实现工作之前必读，技术权威源 |
 | `dev-doc/Bowerbird定价方案v2-订阅积分制.md` | 定价方案 v2（免费 + 订阅 + 积分混合制，独立于旧 PRICING.md 的重新设计） | 商业化、定价、license 功能门控相关工作前必读 |
 | `dev-doc/Bowerbird市场调研-竞争格局与优势分析.md` | 竞争格局与优势分析（v2 形态下 vs 竞品） | 商业化、竞品对标时 |
-| `Bowerbird收费链路与定价方案.md` | 收费链路实施层：用户系统 / license / 支付渠道 / 积分适用 / 分阶段落地 | 落地收费、接支付/账号系统前必读 |
 | `dev-doc/ARCH-ADJUST-PLAN.md` | 收费化架构调整开发计划（账号 / 积分 / 托管 provider / 支付 / 门控，P0–P9 任务与验收） | 收费化 / 账号 / 积分 / 云端实现前必读 |
 | `dev-doc/ARCH-ADJUST-PROGRESS.md` | 收费化架构调整跨会话进度、部署状态、测试基线与剩余阻塞 | 接续收费化任务或核对线上状态时必读 |
 | `dev-doc/AGENT-RUNTIME-PLAN.md` | Bowerbird 内置 Skill Agent Runtime 开发计划（Agent Kernel / 有限澄清 / 项目视觉设定 / VPS Worker / Supabase / 方舟，A0–A8 + V0–V4） | Agent loop / 内置 Skill / 项目视觉设定 / VPS Worker / Agent 临时云工作区实现前必读 |

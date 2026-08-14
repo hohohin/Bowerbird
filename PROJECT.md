@@ -7,7 +7,6 @@
 ## 子文档索引
 
 - [dev-doc/analyse-panel-todo.md](dev-doc/analyse-panel-todo.md) — 详情页「反推」面板待优化清单（结果管理 / 流式取消 / 术语统一 / 未登录置灰 等，2026-07-07 评审，P0–P2 分级）
-- [PRICING.md](PRICING.md) — 商业模式与定价策略（架构张力 / 竞品定价实测 / 免费·付费功能切法 / 价位卡位，2026-07-18）
 - [dev-doc/AI-PROVIDERS.md](dev-doc/AI-PROVIDERS.md) — AI provider 可切换方案（泛化 GenerationPanel + 全局默认/单次覆盖 + codex/即梦首批 + 即梦走官方 dreamina CLI + 关键约定 1 演进，v2 草案 2026-07-23）
 - [dev-doc/ARCH-ADJUST-PROGRESS.md](dev-doc/ARCH-ADJUST-PROGRESS.md) — 收费化架构调整（P0–P9）跨会话任务进度与交接（更新至 2026-08-11；原始计划见 dev-doc/ARCH-ADJUST-PLAN.md，部署步骤见 apps/cloud/DEPLOY.md）
 - [dev-doc/AGENT-RUNTIME-PLAN.md](dev-doc/AGENT-RUNTIME-PLAN.md) — 仅运行 Bowerbird 官方内置 Skill 的 Agent Runtime 专项开发计划（Agent Kernel / 有限澄清 / 项目视觉设定 / VPS Worker / Supabase / 方舟 / 桌面 UI，A0–A8 + V0–V4，v1.2 2026-08-13）
