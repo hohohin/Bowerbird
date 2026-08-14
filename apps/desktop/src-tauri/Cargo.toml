@@ -76,7 +76,10 @@ ulid = { version = "1", features = ["serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 # Supabase PKCE + OS 原生凭据库（refresh token 不落 settings.json）
 sha2 = "0.10"
-keyring = "3"
+keyring = { version = "3", features = [
+  "apple-native",
+  "windows-native",
+] }
 
 # --- 发布优化 ---
 [profile.release]

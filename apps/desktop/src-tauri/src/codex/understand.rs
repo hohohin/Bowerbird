@@ -1,15 +1,11 @@
-use std::path::PathBuf;
 use std::time::Instant;
 
 use async_trait::async_trait;
-use base64::Engine;
-use image::codecs::jpeg::JpegEncoder;
-use image::imageops::FilterType;
-use image::{ExtendedColorType, ImageBuffer, ImageReader, Rgb};
 use serde::{Deserialize, Serialize};
 use ulid::Ulid;
 
 use crate::cloud::{AuthClient, CloudClient, EntitlementService};
+use crate::codex::cloud_image::read_cloud_jpeg;
 use crate::codex::codex_cli::CodexCliProvider;
 use crate::codex::types::{CodexRequest, CodexResult};
 use crate::codex::GenProvider;
@@ -104,7 +100,7 @@ impl UnderstandProvider for CloudUnderstandProvider {
             .reference_images
             .first()
             .ok_or_else(|| AppError::Cloud("云理解需要一张图片".into()))?;
-        let image = read_image(image_path).await?;
+        let image = read_cloud_jpeg(image_path, false).await?;
         let response = self
             .auth
             .send_authorized(
@@ -210,84 +206,5 @@ pub async fn resolve_understand_provider_with_choice(
             resolve_understand_provider(Some("bowerbird-cloud"), Some((cloud, auth)))
         }
         Some(other) => Err(AppError::Cloud(format!("未知理解 provider: {other}"))),
-    }
-}
-
-async fn read_image(path: &PathBuf) -> Result<serde_json::Value, AppError> {
-    let path = path.clone();
-    let bytes = tokio::task::spawn_blocking(move || prepare_cloud_image(&path))
-        .await
-        .map_err(|error| AppError::Cloud(format!("图片预处理任务失败: {error}")))??;
-    Ok(serde_json::json!({
-        "mime": "image/jpeg",
-        "base64": base64::engine::general_purpose::STANDARD.encode(bytes),
-    }))
-}
-
-const CLOUD_IMAGE_MAX_EDGE: u32 = 1_600;
-const CLOUD_IMAGE_JPEG_QUALITY: u8 = 88;
-
-/// 云理解只上传统一的静态 JPEG：限制长边、去除 EXIF/XMP/动画等容器元数据，并把透明区域铺白。
-/// 原始素材文件不变；本函数只生成请求期内存数据。
-fn prepare_cloud_image(path: &PathBuf) -> Result<Vec<u8>, AppError> {
-    let decoded = ImageReader::open(path)
-        .and_then(|reader| reader.with_guessed_format())
-        .map_err(|error| AppError::Cloud(format!("读取图片 {} 失败: {error}", path.display())))?
-        .decode()
-        .map_err(|error| AppError::Cloud(format!("解析图片 {} 失败: {error}", path.display())))?;
-    let longest = decoded.width().max(decoded.height());
-    let normalized = if longest > CLOUD_IMAGE_MAX_EDGE {
-        let width =
-            ((decoded.width() as u64 * CLOUD_IMAGE_MAX_EDGE as u64) / longest as u64).max(1) as u32;
-        let height = ((decoded.height() as u64 * CLOUD_IMAGE_MAX_EDGE as u64) / longest as u64)
-            .max(1) as u32;
-        decoded.resize(width, height, FilterType::Lanczos3)
-    } else {
-        decoded
-    };
-
-    let rgba = normalized.to_rgba8();
-    let (width, height) = rgba.dimensions();
-    let rgb = ImageBuffer::<Rgb<u8>, Vec<u8>>::from_fn(width, height, |x, y| {
-        let pixel = rgba.get_pixel(x, y).0;
-        let alpha = pixel[3] as u16;
-        let blend = |channel: u8| ((channel as u16 * alpha + 255 * (255 - alpha)) / 255) as u8;
-        Rgb([blend(pixel[0]), blend(pixel[1]), blend(pixel[2])])
-    });
-
-    let mut bytes = Vec::new();
-    JpegEncoder::new_with_quality(&mut bytes, CLOUD_IMAGE_JPEG_QUALITY)
-        .encode(&rgb, width, height, ExtendedColorType::Rgb8)
-        .map_err(|error| AppError::Cloud(format!("编码云理解图片失败: {error}")))?;
-    Ok(bytes)
-}
-
-#[cfg(test)]
-mod tests {
-    use base64::Engine;
-    use image::{DynamicImage, GenericImageView, ImageBuffer, ImageFormat, Rgba};
-
-    use super::{read_image, CLOUD_IMAGE_MAX_EDGE};
-
-    #[tokio::test]
-    async fn cloud_image_is_resized_flattened_and_encoded_as_jpeg() {
-        let path =
-            std::env::temp_dir().join(format!("bowerbird-cloud-image-{}.png", ulid::Ulid::new()));
-        let source =
-            DynamicImage::ImageRgba8(ImageBuffer::from_pixel(3_200, 1_600, Rgba([10, 20, 30, 0])));
-        source.save_with_format(&path, ImageFormat::Png).unwrap();
-
-        let payload = read_image(&path).await.unwrap();
-        let encoded = payload["base64"].as_str().unwrap();
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(encoded)
-            .unwrap();
-        let output = image::load_from_memory_with_format(&bytes, ImageFormat::Jpeg).unwrap();
-
-        assert_eq!(payload["mime"], "image/jpeg");
-        assert_eq!(output.dimensions(), (CLOUD_IMAGE_MAX_EDGE, 800));
-        let pixel = output.to_rgb8().get_pixel(0, 0).0;
-        assert!(pixel.iter().all(|channel| *channel > 245));
-        let _ = std::fs::remove_file(path);
     }
 }

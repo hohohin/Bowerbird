@@ -433,6 +433,21 @@ static GENERATE_CANCEL: std::sync::LazyLock<
     std::sync::Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<()>>>,
 > = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
+/// 无论 provider、下载还是入库在哪一步失败，都必须把持久化任务推进到终态；否则下一次
+/// 生成会把这条幽灵 `running` 行计入账号并发上限。
+fn settle_generation_task(db: &Database, job_id: &str, result: &Result<(), AppError>) {
+    let settled = match result {
+        Ok(()) => crate::core::task_queue::Task::mark_done(db, job_id),
+        Err(AppError::Codex(message)) if message == "已取消" => {
+            crate::core::task_queue::Task::mark_cancelled(db, job_id)
+        }
+        Err(error) => crate::core::task_queue::Task::mark_failed(db, job_id, &error.to_string()),
+    };
+    if let Err(error) = settled {
+        tracing::warn!("gen: failed to settle task {job_id}: {error}");
+    }
+}
+
 /// 创作板「生成」：把最终 prompt + 参考图交 provider 出图（`provider` 参数选实现，
 /// None/`codex` → CodexCliProvider、`jimeng` → DreaminaCliProvider、`bowerbird-cloud` →
 /// BowerbirdCloudProvider）。provider 产出的源图由 `finalize_generation_assets` 入库。
@@ -616,53 +631,56 @@ pub async fn codex_create_image(
         None
     };
 
-    // generate_image 借用 tx 推 Delta；用 block 限定借期，结束后 command 才能 reuse tx 发 Done。
-    let outcome = {
-        let gen_fut = p.generate_image(req, &tx, session_id);
-        tokio::pin!(gen_fut);
-        let r = tokio::select! {
-            res = &mut gen_fut => res,
-            _ = &mut cancel_rx => return Err(AppError::Codex("已取消".into())),
+    let generation_result: Result<(), AppError> = async {
+        // generate_image 借用 tx 推 Delta；用 block 限定借期，结束后 command 才能 reuse tx 发 Done。
+        let outcome = {
+            let gen_fut = p.generate_image(req, &tx, session_id);
+            tokio::pin!(gen_fut);
+            tokio::select! {
+                res = &mut gen_fut => res,
+                _ = &mut cancel_rx => Err(AppError::Codex("已取消".into())),
+            }?
         };
-        r?
-    };
+
+        // 源图收尾入库（ingest + project link + generation_meta + caption + 自动命名）—— 抽到
+        // generation_worker::finalize_generation_assets，与启动恢复 worker 共用、元数据一致。
+        let gen_assets = crate::core::generation_worker::finalize_generation_assets(
+            app.clone(),
+            db.inner().clone(),
+            paths.inner().clone(),
+            outcome.source_images.clone(),
+            outcome.temp_dir.clone(),
+            prompt_for_meta.clone(),
+            prompt_raw,
+            refs_for_meta.clone(),
+            outcome.session_id.clone(),
+            outcome.submit_id.clone(),
+            provider_name.clone(),
+            project_id.clone(),
+        )
+        .await?;
+
+        let asset_paths: Vec<PathBuf> = gen_assets
+            .iter()
+            .filter_map(|a| a.store_path.clone().map(PathBuf::from))
+            .collect();
+        let _ = tx
+            .send(Chunk::Done(CodexResult {
+                text: outcome.text,
+                provider: provider_name.clone(),
+                elapsed_ms: outcome.elapsed_ms,
+                session_id: outcome.session_id,
+                images: asset_paths,
+            }))
+            .await;
+        Ok(())
+    }
+    .await;
     GENERATE_CANCEL.lock().unwrap().remove(&job_id);
-
-    // 源图收尾入库（ingest + project link + generation_meta + caption + 自动命名）—— 抽到
-    // generation_worker::finalize_generation_assets，与启动恢复 worker 共用、元数据一致。
-    let gen_assets = crate::core::generation_worker::finalize_generation_assets(
-        app.clone(),
-        db.inner().clone(),
-        paths.inner().clone(),
-        outcome.source_images.clone(),
-        outcome.temp_dir.clone(),
-        prompt_for_meta.clone(),
-        prompt_raw,
-        refs_for_meta.clone(),
-        outcome.session_id.clone(),
-        outcome.submit_id.clone(),
-        provider_name.clone(),
-        project_id.clone(),
-    )
-    .await?;
-
-    let asset_paths: Vec<PathBuf> = gen_assets
-        .iter()
-        .filter_map(|a| a.store_path.clone().map(PathBuf::from))
-        .collect();
-    let _ = tx
-        .send(Chunk::Done(CodexResult {
-            text: outcome.text,
-            provider: provider_name.clone(),
-            elapsed_ms: outcome.elapsed_ms,
-            session_id: outcome.session_id,
-            images: asset_paths,
-        }))
-        .await;
-    drop(tx);
+    settle_generation_task(db.inner(), &job_id, &generation_result);
+    generation_result?;
 
     // 生成图已入库，通知瀑布流刷新（finalize 已 emit analyses://changed + 自动命名）。
-    let _ = crate::core::task_queue::Task::mark_done(db.inner(), &job_id);
     let _ = app.emit("library://assets-changed", ());
     Ok(job_id)
 }
@@ -849,4 +867,73 @@ async fn get_asset_store_path(
     asset
         .store_path
         .ok_or_else(|| AppError::Media(format!("asset {asset_id} has no store_path")))
+}
+
+#[cfg(test)]
+mod generation_task_tests {
+    use chrono::Utc;
+
+    use super::settle_generation_task;
+    use crate::core::task_queue::{GenJob, Task};
+    use crate::db::Database;
+    use crate::error::AppError;
+
+    fn running_job(id: &str) -> GenJob {
+        let now = Utc::now().timestamp();
+        GenJob {
+            id: id.into(),
+            media: "image".into(),
+            provider: "bowerbird-cloud".into(),
+            status: "running".into(),
+            prompt: "test".into(),
+            references: vec![],
+            session_id: None,
+            project_id: None,
+            ratio: None,
+            submit_id: None,
+            video_options: None,
+            turns: serde_json::json!([]),
+            error: None,
+            queue_idx: None,
+            created_at: now,
+            started_at: Some(now),
+            finished_at: None,
+        }
+    }
+
+    #[test]
+    fn failed_generation_releases_persistent_parallel_slot() {
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let job = running_job("cloud-timeout");
+        Task::enqueue_gen_job(&db, &job).unwrap();
+
+        let result = Err(AppError::Cloud("等待云端响应超时".into()));
+        settle_generation_task(&db, &job.id, &result);
+
+        let task = Task::by_id(&db, &job.id).unwrap().unwrap();
+        assert_eq!(task.status, "failed");
+        assert!(task.error.unwrap().contains("等待云端响应超时"));
+        assert!(Task::list_running(&db).unwrap().is_empty());
+    }
+
+    #[test]
+    fn successful_and_cancelled_generations_reach_terminal_states() {
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let done = running_job("done");
+        let cancelled = running_job("cancelled");
+        Task::enqueue_gen_job(&db, &done).unwrap();
+        Task::enqueue_gen_job(&db, &cancelled).unwrap();
+
+        settle_generation_task(&db, &done.id, &Ok(()));
+        settle_generation_task(&db, &cancelled.id, &Err(AppError::Codex("已取消".into())));
+
+        assert_eq!(Task::by_id(&db, &done.id).unwrap().unwrap().status, "done");
+        assert_eq!(
+            Task::by_id(&db, &cancelled.id).unwrap().unwrap().status,
+            "cancelled"
+        );
+        assert!(Task::list_running(&db).unwrap().is_empty());
+    }
 }

@@ -54,6 +54,11 @@ struct PendingPkce {
     verifier: String,
 }
 
+struct TokenRequestFailure {
+    error: AppError,
+    session_rejected: bool,
+}
+
 fn auth_error_detail(body: &str) -> Option<String> {
     let value: serde_json::Value = serde_json::from_str(body).ok()?;
     ["message", "msg", "error_description"]
@@ -62,6 +67,52 @@ fn auth_error_detail(body: &str) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
+}
+
+fn auth_error_code(body: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    ["error_code", "code", "error"]
+        .into_iter()
+        .find_map(|key| value.get(key)?.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn callback_params(url: &reqwest::Url) -> std::collections::HashMap<String, String> {
+    let mut params: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
+    if let Some(fragment) = url.fragment() {
+        if let Ok(fragment_url) = reqwest::Url::parse(&format!("http://localhost/?{fragment}")) {
+            for (key, value) in fragment_url.query_pairs() {
+                params
+                    .entry(key.into_owned())
+                    .or_insert_with(|| value.into_owned());
+            }
+        }
+    }
+    params
+}
+
+fn callback_error_message(params: &std::collections::HashMap<String, String>) -> Option<String> {
+    let code = params
+        .get("error_code")
+        .or_else(|| params.get("error"))?
+        .trim();
+    let description = params
+        .get("error_description")
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty());
+    Some(match code {
+        "otp_expired" | "flow_state_expired" | "flow_state_not_found" => {
+            "登录链接已过期或已被使用；请在 Bowerbird 重新发送，并只打开最新一封邮件中的链接".into()
+        }
+        "access_denied" => description
+            .map(|value| format!("登录未完成：{value}"))
+            .unwrap_or_else(|| "登录未完成，请重新发送登录链接".into()),
+        _ => description
+            .map(|value| format!("登录验证失败：{value}"))
+            .unwrap_or_else(|| format!("登录验证失败（{code}），请重新发送登录链接")),
+    })
 }
 
 fn retry_seconds(retry_after: Option<&str>, detail: Option<&str>) -> Option<u64> {
@@ -220,25 +271,38 @@ impl AuthClient {
         {
             return Err(AppError::Cloud("拒绝非 Bowerbird 登录回调".into()));
         }
-        let params: std::collections::HashMap<_, _> = parsed.query_pairs().into_owned().collect();
+        let params = callback_params(&parsed);
+        if let Some(message) = callback_error_message(&params) {
+            return Err(AppError::Cloud(message));
+        }
         let code = params
             .get("code")
             .filter(|value| !value.is_empty())
-            .ok_or_else(|| AppError::Cloud("登录回调缺少 code".into()))?;
+            .ok_or_else(|| {
+                AppError::Cloud(
+                    "登录链接没有返回授权码；链接可能已过期、被邮件安全扫描器提前访问，或由邮箱内置浏览器截断。请重新发送并在系统浏览器打开最新链接"
+                        .into(),
+                )
+            })?;
         let callback_state = params
             .get("state")
             .filter(|value| !value.is_empty())
             .ok_or_else(|| AppError::Cloud("登录回调缺少 state".into()))?;
-        let pending = self
-            .inner
-            .pending
-            .write()
-            .unwrap()
-            .take()
-            .ok_or_else(|| AppError::Cloud("登录请求已过期，请重新发起".into()))?;
-        if pending.state != *callback_state {
-            return Err(AppError::Cloud("登录回调 state 不匹配".into()));
-        }
+        let pending = {
+            let mut pending_slot = self.inner.pending.write().unwrap();
+            let Some(pending) = pending_slot.as_ref() else {
+                // Windows 可能把同一 deep link 同时交给 single-instance 与启动参数路径；第一次已
+                // 完成登录时，重复回调应保持幂等，不能用“请求已过期”覆盖成功状态。
+                if self.snapshot().logged_in {
+                    return Ok(self.snapshot());
+                }
+                return Err(AppError::Cloud("登录请求已过期，请重新发起".into()));
+            };
+            if pending.state != *callback_state {
+                return Err(AppError::Cloud("登录回调 state 不匹配".into()));
+            }
+            pending_slot.take().unwrap()
+        };
         let token = self.exchange_code(code, &pending.verifier).await?;
         self.store_session(token)?;
         Ok(self.snapshot())
@@ -250,15 +314,18 @@ impl AuthClient {
         Ok(self.snapshot())
     }
 
-    async fn refresh_from_keyring(&self) -> AppResult<()> {
+    async fn refresh_from_keyring(&self) -> AppResult<bool> {
         let refresh_token = match Self::keyring_entry()?.get_password() {
             Ok(value) => value,
-            Err(keyring::Error::NoEntry) => return Ok(()),
+            Err(keyring::Error::NoEntry) => {
+                *self.inner.session.write().unwrap() = None;
+                return Ok(false);
+            }
             Err(error) => return Err(AppError::Cloud(format!("读取系统凭据失败: {error}"))),
         };
         let token = self.refresh_with(&refresh_token).await?;
         self.store_session(token)?;
-        Ok(())
+        Ok(true)
     }
 
     pub async fn access_token(&self) -> AppResult<String> {
@@ -355,6 +422,7 @@ impl AuthClient {
             .await
             .map_err(|error| cloud_request_error(context, error))?;
         if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            self.invalidate_session();
             return Err(AppError::Cloud("登录已失效，请重新登录".into()));
         }
         Ok(response)
@@ -375,30 +443,48 @@ impl AuthClient {
             serde_json::json!({ "auth_code": code, "code_verifier": verifier }),
         )
         .await
+        .map_err(|failure| failure.error)
     }
 
     async fn refresh_with(&self, refresh_token: &str) -> AppResult<TokenResponse> {
-        self.token_request(
-            "refresh_token",
-            serde_json::json!({ "refresh_token": refresh_token }),
-        )
-        .await
+        match self
+            .token_request(
+                "refresh_token",
+                serde_json::json!({ "refresh_token": refresh_token }),
+            )
+            .await
+        {
+            Ok(token) => Ok(token),
+            Err(failure) => {
+                if failure.session_rejected {
+                    self.invalidate_session();
+                }
+                Err(failure.error)
+            }
+        }
     }
 
     async fn token_request(
         &self,
         grant: &str,
         body: serde_json::Value,
-    ) -> AppResult<TokenResponse> {
+    ) -> Result<TokenResponse, TokenRequestFailure> {
         let config = self.inner.cloud.config();
         let base = config
             .supabase_url
             .as_deref()
-            .ok_or_else(|| AppError::Cloud("Supabase URL 未配置".into()))?;
-        let anon = config
-            .supabase_publishable_key
-            .as_deref()
-            .ok_or_else(|| AppError::Cloud("Supabase publishable key 未配置".into()))?;
+            .ok_or_else(|| TokenRequestFailure {
+                error: AppError::Cloud("Supabase URL 未配置".into()),
+                session_rejected: false,
+            })?;
+        let anon =
+            config
+                .supabase_publishable_key
+                .as_deref()
+                .ok_or_else(|| TokenRequestFailure {
+                    error: AppError::Cloud("Supabase publishable key 未配置".into()),
+                    session_rejected: false,
+                })?;
         let response = self
             .inner
             .cloud
@@ -411,14 +497,46 @@ impl AuthClient {
             .json(&body)
             .send()
             .await
-            .map_err(|error| AppError::Cloud(format!("刷新登录失败: {error}")))?;
+            .map_err(|error| TokenRequestFailure {
+                error: AppError::Cloud(format!("连接登录服务失败: {error}")),
+                session_rejected: false,
+            })?;
         if !response.status().is_success() {
-            return Err(AppError::Cloud("登录已失效，请重新登录".into()));
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            let code = auth_error_code(&body);
+            let rejected = matches!(status.as_u16(), 400 | 401 | 403 | 422);
+            let message = if grant == "refresh_token" && rejected {
+                "登录已失效，请重新登录".into()
+            } else if matches!(code.as_deref(), Some("bad_code_verifier")) {
+                "登录链接与本次登录请求不匹配；请重新发送并只打开最新一封邮件中的链接".into()
+            } else if matches!(
+                code.as_deref(),
+                Some("otp_expired" | "flow_state_expired" | "flow_state_not_found")
+            ) {
+                "登录链接已过期或已被使用，请重新发送登录链接".into()
+            } else {
+                auth_error_detail(&body)
+                    .map(|detail| format!("登录验证失败：{detail}"))
+                    .unwrap_or_else(|| format!("登录验证失败（HTTP {status}）"))
+            };
+            return Err(TokenRequestFailure {
+                error: AppError::Cloud(message),
+                session_rejected: grant == "refresh_token" && rejected,
+            });
         }
-        response
-            .json()
-            .await
-            .map_err(|error| AppError::Cloud(format!("解析登录响应失败: {error}")))
+        response.json().await.map_err(|error| TokenRequestFailure {
+            error: AppError::Cloud(format!("解析登录响应失败: {error}")),
+            session_rejected: false,
+        })
+    }
+
+    fn invalidate_session(&self) {
+        *self.inner.session.write().unwrap() = None;
+        let _ = Self::keyring_entry().and_then(|entry| match entry.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(error) => Err(AppError::Cloud(format!("清除失效凭据失败: {error}"))),
+        });
     }
 
     fn store_session(&self, token: TokenResponse) -> AppResult<()> {
@@ -478,6 +596,15 @@ mod tests {
             })
             .unwrap(),
         )
+    }
+
+    #[test]
+    #[cfg(any(windows, target_os = "macos"))]
+    fn keyring_backend_is_persistent_on_supported_desktop_platforms() {
+        let entry = AuthClient::keyring_entry().unwrap();
+        assert!(!entry
+            .get_credential()
+            .is::<keyring::mock::MockCredential>());
     }
 
     #[test]
@@ -568,5 +695,49 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.to_string().contains("state 不匹配"));
+        assert_eq!(
+            auth.inner
+                .pending
+                .read()
+                .unwrap()
+                .as_ref()
+                .map(|pending| pending.state.as_str()),
+            Some("expected")
+        );
+    }
+
+    #[tokio::test]
+    async fn callback_surfaces_expired_link_instead_of_missing_code() {
+        let auth = client();
+        let error = auth
+            .handle_callback(
+                "bowerbird://auth/callback?error=access_denied&error_code=otp_expired&error_description=Email+link+is+invalid+or+has+expired",
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("已过期或已被使用"));
+        assert!(!error.to_string().contains("缺少 code"));
+    }
+
+    #[tokio::test]
+    async fn callback_reads_error_parameters_from_fragment() {
+        let auth = client();
+        let error = auth
+            .handle_callback(
+                "bowerbird://auth/callback#error=access_denied&error_code=flow_state_expired",
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("已过期或已被使用"));
+    }
+
+    #[tokio::test]
+    async fn callback_without_parameters_explains_common_email_link_causes() {
+        let auth = client();
+        let error = auth
+            .handle_callback("bowerbird://auth/callback")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("邮件安全扫描器"));
     }
 }

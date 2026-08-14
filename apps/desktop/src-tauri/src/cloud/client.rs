@@ -21,8 +21,10 @@ impl Clone for CloudClient {
 impl CloudClient {
     pub fn new(config: CloudConfig) -> Result<Self, AppError> {
         let http = reqwest::Client::builder()
-            // Vision 主动在 110s 终止、Edge 在 120s 兜底；额外时间用于计费回滚和返回具体错误。
-            .timeout(Duration::from_secs(145))
+            // 上游最长等待 140s；请求上传、Edge 冷启动、计费预授权/回滚与响应下载都在
+            // reqwest 的总超时内。与真实 E2E 的 180s 包络对齐，避免客户端先于 Edge
+            // 返回稳定的 upstream_timeout/rollback 结果而断开。
+            .timeout(Duration::from_secs(180))
             .build()
             .map_err(|error| AppError::Other(format!("构建云 HTTP client 失败: {error}")))?;
         Ok(Self { config, http })

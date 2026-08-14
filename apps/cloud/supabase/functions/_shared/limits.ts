@@ -34,17 +34,34 @@ export function assertReferenceImages(images: unknown, maxCount = 10): void {
   if (images.length > maxCount) throw new ApiError("invalid_request", `参考图最多 ${maxCount} 张`);
 
   const maxBytes = envInt("MAX_REQUEST_BODY_MB", 20) * 1024 * 1024;
+  const maxImageBytes = 10 * 1024 * 1024;
   let approximateBytes = 0;
   for (const image of images) {
     if (!image || typeof image !== "object") throw new ApiError("invalid_request", "参考图格式错误");
     const { mime, base64 } = image as Record<string, unknown>;
-    if (typeof mime !== "string" || !["image/jpeg", "image/png", "image/webp"].includes(mime)) {
-      throw new ApiError("invalid_request", "参考图格式仅支持 JPEG/PNG/WebP");
+    if (typeof mime !== "string" || !["image/jpeg", "image/png"].includes(mime)) {
+      throw new ApiError("invalid_request", "参考图必须转换为 JPEG 或 PNG 后上传");
     }
-    if (typeof base64 !== "string" || !/^[A-Za-z0-9+/]*={0,2}$/.test(base64)) {
+    if (typeof base64 !== "string" || !base64 || !/^[A-Za-z0-9+/]*={0,2}$/.test(base64)) {
       throw new ApiError("invalid_request", "参考图 base64 无效");
     }
-    approximateBytes += Math.floor(base64.length * 0.75);
+    let bytes: Uint8Array;
+    try {
+      bytes = Uint8Array.from(atob(base64), (value) => value.charCodeAt(0));
+    } catch {
+      throw new ApiError("invalid_request", "参考图 base64 无效");
+    }
+    const isJpeg = bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+    const isPng = bytes.length >= 8 &&
+      bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47 &&
+      bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a;
+    if ((mime === "image/jpeg" && !isJpeg) || (mime === "image/png" && !isPng)) {
+      throw new ApiError("invalid_request", "参考图 MIME 与真实文件格式不一致");
+    }
+    if (bytes.length > maxImageBytes) {
+      throw new ApiError("payload_too_large", "单张参考图不能超过 10 MB");
+    }
+    approximateBytes += bytes.length;
   }
   if (approximateBytes > maxBytes) throw new ApiError("payload_too_large", "参考图总大小超限");
 }

@@ -14,6 +14,7 @@ use self::codex_cli::CodexCliProvider;
 use self::types::{Capabilities, Chunk, CodexRequest, CodexResult, GenOutcome};
 
 pub mod bowerbird_cloud;
+mod cloud_image;
 pub mod codex_cli;
 pub mod jimeng;
 pub mod openai_api;

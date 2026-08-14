@@ -256,6 +256,23 @@ function taskErrorMessage(error: unknown): string {
 }
 
 export const useStore = create<State>((set, get) => {
+  async function reconcileRejectedCloudSession(message: string) {
+    if (!message.includes("登录已失效") && !message.includes("请先登录 Bowerbird")) return;
+    try {
+      const cloudAuth = await api.cloudAuthSnapshot();
+      if (cloudAuth.logged_in) return;
+      const cloudEntitlement = await api.cloudEntitlement();
+      set({
+        cloudAuth,
+        cloudEntitlement,
+        cloudError: "登录已失效，请重新登录",
+        activeGenProvider: "bowerbird-cloud",
+      });
+    } catch {
+      // 原业务错误仍会展示；这里只做后端已清理会话后的前端快照对齐。
+    }
+  }
+
   // 反推队列的串行推进：同一时刻只跑一个 codex_describe_asset（后端单槽）。
   // runDescribe 入队后调一次；任务结束（成功/取消/失败）的 finally 再调一次推下一张。
   // 放在 create 闭包里而非 state 上，避免被组件意外调用。
@@ -274,6 +291,7 @@ export const useStore = create<State>((set, get) => {
       await api.describeAsset(next.assetId, next.instruction, next.provider);
     } catch (e) {
       const msg = taskErrorMessage(e);
+      await reconcileRejectedCloudSession(msg);
       // 「已取消」是用户主动中断，静默；其它错误留在 AI 任务清单，便于看原因和重试。
       if (!msg.includes("已取消")) {
         console.error("describe failed", e);
@@ -738,7 +756,9 @@ export const useStore = create<State>((set, get) => {
           : "bowerbird-cloud",
       }));
     } catch (e) {
-      set({ cloudError: typeof e === "string" ? e : "权益同步失败" });
+      const message = taskErrorMessage(e) || "权益同步失败";
+      set({ cloudError: message });
+      await reconcileRejectedCloudSession(message);
     } finally {
       set({ cloudBusy: false });
     }
@@ -880,7 +900,9 @@ export const useStore = create<State>((set, get) => {
         projectId: job.projectId,
       });
     } catch (e) {
-      genHandleError(jobId, typeof e === "string" ? e : JSON.stringify(e));
+      const message = taskErrorMessage(e);
+      await reconcileRejectedCloudSession(message);
+      genHandleError(jobId, message);
       updateJob(jobId, (j) => ({ ...j, running: false }));
     }
   },
@@ -916,7 +938,9 @@ export const useStore = create<State>((set, get) => {
         projectId: job.projectId,
       });
     } catch (e) {
-      genHandleError(id, typeof e === "string" ? e : JSON.stringify(e));
+      const message = taskErrorMessage(e);
+      await reconcileRejectedCloudSession(message);
+      genHandleError(id, message);
       updateJob(id, (j) => ({ ...j, running: false }));
     }
   },

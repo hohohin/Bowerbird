@@ -7,6 +7,7 @@ use tokio::sync::mpsc;
 use ulid::Ulid;
 
 use crate::cloud::{AuthClient, CloudClient};
+use crate::codex::cloud_image::read_cloud_jpeg;
 use crate::codex::types::{Capabilities, Chunk, CodexRequest, CodexResult, GenOutcome};
 use crate::codex::GenProvider;
 use crate::error::AppError;
@@ -76,13 +77,7 @@ impl GenProvider for BowerbirdCloudProvider {
 
         let mut references = Vec::with_capacity(req.reference_images.len());
         for path in &req.reference_images {
-            let bytes = tokio::fs::read(path).await.map_err(|error| {
-                AppError::Cloud(format!("读取参考图 {} 失败: {error}", path.display()))
-            })?;
-            references.push(serde_json::json!({
-                "mime": image_mime(path),
-                "base64": base64::engine::general_purpose::STANDARD.encode(bytes),
-            }));
+            references.push(read_cloud_jpeg(path, true).await?);
         }
 
         let response = self
@@ -223,18 +218,5 @@ impl BowerbirdCloudProvider {
         }
         serde_json::from_str(&body)
             .map_err(|error| AppError::Cloud(format!("解析云任务响应失败: {error}")))
-    }
-}
-
-fn image_mime(path: &std::path::Path) -> &'static str {
-    match path
-        .extension()
-        .and_then(|value| value.to_str())
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        Some("jpg") | Some("jpeg") => "image/jpeg",
-        Some("webp") => "image/webp",
-        _ => "image/png",
     }
 }

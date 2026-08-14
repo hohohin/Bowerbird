@@ -50,8 +50,8 @@ function requiredEnv(name: string): string {
 }
 
 function upstreamTimeout(): number {
-  const value = Number.parseInt(Deno.env.get("UPSTREAM_TIMEOUT_MS") ?? "140000", 10);
-  return Number.isFinite(value) && value > 0 ? value : 140_000;
+  const value = Number.parseInt(Deno.env.get("UPSTREAM_TIMEOUT_MS") ?? "120000", 10);
+  return Number.isFinite(value) && value > 0 ? value : 120_000;
 }
 
 function understandUpstreamTimeout(): number {
@@ -78,17 +78,131 @@ function imageMime(contentType: string | null): ImageInput["mime"] {
   return "image/png";
 }
 
-function upstreamError(status: number): ApiError {
+interface ArkErrorInfo {
+  code?: string;
+  requestId?: string;
+}
+
+function safeIdentifier(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return /^[A-Za-z0-9._:-]{1,128}$/.test(trimmed) ? trimmed : undefined;
+}
+
+function arkErrorInfo(body: string, headerRequestId?: string | null): ArkErrorInfo {
+  let value: Record<string, unknown> = {};
+  try {
+    value = JSON.parse(body) as Record<string, unknown>;
+  } catch {
+    // 非 JSON 上游响应不进入用户提示，避免泄漏未知正文。
+  }
+  const nested = value.error && typeof value.error === "object"
+    ? value.error as Record<string, unknown>
+    : {};
+  return {
+    code: safeIdentifier(nested.code) ?? safeIdentifier(value.code),
+    requestId: safeIdentifier(nested.request_id) ?? safeIdentifier(value.request_id) ??
+      safeIdentifier(headerRequestId),
+  };
+}
+
+function arkErrorSuffix(info: ArkErrorInfo): string {
+  const parts = [
+    info.code ? `方舟错误码：${info.code}` : undefined,
+    info.requestId ? `请求 ID：${info.requestId}` : undefined,
+  ].filter(Boolean);
+  return parts.length ? `（${parts.join("；")}）` : "";
+}
+
+export function upstreamError(
+  status: number,
+  body = "",
+  headerRequestId?: string | null,
+): ApiError {
+  const info = arkErrorInfo(body, headerRequestId);
+  const code = info.code?.toLowerCase() ?? "";
+  const suffix = arkErrorSuffix(info);
   if (status === 400 || status === 422) {
-    return new ApiError("upstream_failed", "内容未通过模型校验或请求参数无效", false, 422);
+    if (code.includes("sensitive") || code.includes("moderation")) {
+      let subject = "生成结果";
+      if (code.includes("inputtext")) subject = "提示词";
+      else if (code.includes("inputimage")) subject = "参考图";
+      return new ApiError("upstream_failed", `${subject}未通过方舟安全审核${suffix}`, false, 422);
+    }
+    if (
+      code.includes("image") &&
+      ["invalid", "decode", "format", "size", "resolution", "ratio", "unsupported"]
+        .some((marker) => code.includes(marker))
+    ) {
+      return new ApiError(
+        "upstream_failed",
+        `参考图无法被方舟读取，请检查格式、尺寸与宽高比${suffix}`,
+        false,
+        422,
+      );
+    }
+    return new ApiError("upstream_failed", `方舟拒绝了生成参数${suffix}`, false, 422);
   }
   if (status === 408 || status === 504) {
-    return new ApiError("upstream_timeout", "方舟处理超时", true, 504);
+    return new ApiError("upstream_timeout", `方舟处理超时${suffix}`, true, 504);
   }
   if (status === 429) {
-    return new ApiError("upstream_failed", "方舟请求繁忙，请稍后重试", true, 502);
+    return new ApiError("upstream_failed", `方舟请求繁忙，请稍后重试${suffix}`, true, 502);
   }
-  return new ApiError("upstream_failed", "方舟服务暂时不可用", status >= 500, 502);
+  return new ApiError("upstream_failed", `方舟服务暂时不可用${suffix}`, status >= 500, 502);
+}
+
+type ArkTransportKind =
+  | "timeout"
+  | "dns"
+  | "tls"
+  | "connection_reset"
+  | "connection_refused"
+  | "network_unreachable"
+  | "transport";
+
+function arkTransportKind(error: unknown, elapsedMs: number, timeoutMs: number): ArkTransportKind {
+  const cause = error instanceof Error && "cause" in error ? error.cause : undefined;
+  const text = [
+    error instanceof Error ? error.name : "",
+    error instanceof Error ? error.message : String(error),
+    cause instanceof Error ? cause.name : "",
+    cause instanceof Error ? cause.message : String(cause ?? ""),
+    cause && typeof cause === "object" && "code" in cause ? String(cause.code) : "",
+  ].join(" ").toLowerCase();
+  if (
+    text.includes("timeouterror") || text.includes("aborterror") ||
+    elapsedMs >= timeoutMs - 1_000
+  ) return "timeout";
+  if (/(dns|name or service not known|failed to lookup|enotfound)/.test(text)) return "dns";
+  if (/(tls|certificate|ssl)/.test(text)) return "tls";
+  if (/(connection reset|econnreset)/.test(text)) return "connection_reset";
+  if (/(connection refused|econnrefused)/.test(text)) return "connection_refused";
+  if (/(network is unreachable|enetunreach)/.test(text)) return "network_unreachable";
+  return "transport";
+}
+
+export function arkTransportError(
+  error: unknown,
+  elapsedMs: number,
+  timeoutMs: number,
+): { error: ApiError; kind: ArkTransportKind } {
+  const kind = arkTransportKind(error, elapsedMs, timeoutMs);
+  if (kind === "timeout") {
+    return { error: new ApiError("upstream_timeout", "方舟处理超时，请重试", true, 504), kind };
+  }
+  const detail: Record<Exclude<ArkTransportKind, "timeout">, string> = {
+    dns: "DNS 解析失败",
+    tls: "TLS 握手失败",
+    connection_reset: "连接被重置",
+    connection_refused: "连接被拒绝",
+    network_unreachable: "网络不可达",
+    transport: "网络传输失败",
+  };
+  return {
+    error: new ApiError("upstream_failed", `无法连接方舟服务（${detail[kind]}）`, true, 502),
+    kind,
+  };
 }
 
 async function arkFetchJson(
@@ -98,6 +212,7 @@ async function arkFetchJson(
   body: unknown,
   timeoutMs = upstreamTimeout(),
 ): Promise<Record<string, unknown>> {
+  const started = performance.now();
   let response: Response;
   try {
     response = await fetch(`${baseUrl}${path}`, {
@@ -110,14 +225,25 @@ async function arkFetchJson(
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (error) {
-    if (error instanceof DOMException && error.name === "TimeoutError") {
-      throw new ApiError("upstream_timeout", "方舟处理超时", true, 504);
-    }
-    throw new ApiError("upstream_failed", "无法连接方舟服务", true, 502);
+    const elapsedMs = performance.now() - started;
+    const mapped = arkTransportError(error, elapsedMs, timeoutMs);
+    console.warn(JSON.stringify({
+      event: "ark_transport_error",
+      kind: mapped.kind,
+      elapsed_ms: Math.round(elapsedMs),
+    }));
+    throw mapped.error;
   }
-  if (!response.ok) throw upstreamError(response.status);
+  const responseBody = await response.text();
+  if (!response.ok) {
+    throw upstreamError(
+      response.status,
+      responseBody,
+      response.headers.get("x-request-id") ?? response.headers.get("x-tt-logid"),
+    );
+  }
   try {
-    return await response.json() as Record<string, unknown>;
+    return JSON.parse(responseBody) as Record<string, unknown>;
   } catch {
     throw new ApiError("upstream_failed", "方舟返回格式无效", true, 502);
   }
