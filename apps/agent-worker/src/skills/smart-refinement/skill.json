@@ -1,0 +1,36 @@
+{
+  "$schema": "bowerbird-skill-manifest-v1",
+  "id": "smart-refinement",
+  "version": "0.1.0-m0",
+  "kernelMinVersion": "0.0.1",
+  "snapshotSchemaVersion": 1,
+  "title": "智能精修",
+  "description": "对一张已有图，结合结构化意图与参考图职责，按维度评分，必要时精修一次。M0 的可运行 eval 目标（manifest 与 ./manifest.ts 同源）。",
+  "status": "m0-runnable",
+  "input": {
+    "targetAssetId": "本 Run 内待精修的图",
+    "goal": "string ≤4000",
+    "referenceAssetIds": "0–8 张本 Run 内参考图",
+    "ratio": "可选"
+  },
+  "phaseGraph": {
+    "initial": "parse_intent",
+    "terminal": ["done"],
+    "flow": "parse_intent → assign_reference_roles → score_dimensions → decide_refine →{accept_result→finalize | submit_refine_plan→refine→score_revision→finalize} → done",
+    "approvalPoint": "refine（生图前；submit_refine_plan 触发控制面暂停，autoApprove 在 M0 模拟）"
+  },
+  "constraints": {
+    "maxGenerateAttempts": 1,
+    "maxModelTurns": 12,
+    "maxToolCalls": 12,
+    "maxRunSeconds": 600
+  },
+  "budgetTier": { "id": "sr-standard", "credits": 12 },
+  "allowedProviders": ["ark"],
+  "evalCapabilities": [
+    "结构化意图（parse_intent 产出 intent artifact）",
+    "参考图职责（assign_reference_roles 指派 main/style/…）",
+    "分维度评分（score_dimensions 按构图/光影/色调/氛围/材质）",
+    "必要时精修一次（refine_once 至多 1 次，需审批）"
+  ]
+}

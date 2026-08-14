@@ -1,0 +1,56 @@
+{
+  "$schema": "bowerbird-skill-manifest-v1",
+  "id": "series-creative-director",
+  "version": "0.1.0-m0",
+  "kernelMinVersion": "0.0.1",
+  "snapshotSchemaVersion": 1,
+  "title": "系列创作导演",
+  "description": "3–8 张参考图 → 分析 → 创作计划 → 人工审批 → 首图生成 → 看图评估 → 至多一次重试 → 本地确认入库。首个内置 Skill；M0 只冻结契约，eval 在 A3。",
+  "status": "frozen-contract-m0-eval-a3",
+  "input": {
+    "minReferences": 3,
+    "maxReferences": 8,
+    "goalMaxLength": 4000,
+    "optional": ["ratio", "usageContext", "budgetTier"],
+    "captionFromExistingAnalyses": "优先随 manifest 提供已有 caption；缺失时才调 understand_image"
+  },
+  "phaseGraph": {
+    "initial": "prepare_inputs",
+    "terminal": ["done"],
+    "nodes": [
+      { "name": "prepare_inputs", "allowed": ["read_input_manifest"], "to": "analyze_references" },
+      { "name": "analyze_references", "allowed": ["understand_image"], "to": "draft_plan" },
+      { "name": "draft_plan", "allowed": ["submit_plan_for_approval"], "to": "generate_draft" },
+      { "name": "generate_draft", "allowed": ["generate_image"], "to": "evaluate_draft", "requiresApproval": true },
+      { "name": "evaluate_draft", "allowed": ["inspect_generated_image"], "to": "decide_revise" },
+      { "name": "decide_revise", "allowed": ["accept_result", "submit_revise_plan"], "to": { "accept_result": "finalize", "submit_revise_plan": "revise_once" } },
+      { "name": "revise_once", "allowed": ["generate_image"], "to": "evaluate_revision", "requiresApproval": true },
+      { "name": "evaluate_revision", "allowed": ["inspect_generated_image"], "to": "finalize" },
+      { "name": "finalize", "allowed": ["finish_run"], "to": "done" },
+      { "name": "done", "allowed": [], "to": null }
+    ]
+  },
+  "constraints": {
+    "maxGenerateAttempts": 2,
+    "maxModelTurns": 12,
+    "maxToolCalls": 16,
+    "maxRunSeconds": 1200,
+    "approvalPoints": ["generate_draft", "revise_once"],
+    "clarifications": { "maxPerRun": 3, "intentFields": ["subject", "style", "series_scope", "goal"] }
+  },
+  "budgetTiers": [
+    { "id": "scd-standard", "credits": 24, "label": "标准（≤24 分）" }
+  ],
+  "allowedProviders": ["ark"],
+  "artifacts": {
+    "creative_brief": { "fields": ["goal", "composition", "light", "color", "material", "constraints", "rubric", "estimatedCost"] },
+    "evaluation": { "fields": ["dimensionScores", "overallScore", "decide"] },
+    "final_image": { "maxCount": 1 }
+  },
+  "evalCases": "see eval-cases.json (10–20 cases, run in A3)",
+  "notes": [
+    "M0 只冻结本 manifest；真实 Ark adapter、rubric、产物 schema 落地与 eval 执行在 A3。",
+    "revise_once 最多进入一次，不能形成模型自循环（Kernel 用 maxGenerateAttempts=2 兜底）。",
+    "审批点 = 执行生图前；取消/拒绝后不让模型游说用户继续（§7.10）。"
+  ]
+}
