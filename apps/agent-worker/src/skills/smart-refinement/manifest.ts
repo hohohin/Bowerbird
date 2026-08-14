@@ -91,7 +91,7 @@ export const SMART_REFINEMENT_MANIFEST: SkillManifest = {
   initialPhase: "parse_intent",
   terminalPhases: ["done"],
   budgetTiers: [{ id: "sr-standard", credits: 12, label: "标准（≤12 分）" }],
-  allowedProviders: ["ark"],
+  allowedProviders: ["deepseek"],
   maxRunSeconds: 600,
   maxModelTurns: 12,
   maxToolCalls: 12,

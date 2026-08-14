@@ -110,8 +110,22 @@ export type ModelTurnResult =
  */
 export type AbortSignalLike = { readonly aborted: boolean };
 
+/**
+ * 模型后端契约。文本回合（理解素材、形成计划、选下一动作、评分）由 ModelBackend 承担；
+ * 首版用 **DeepSeek**（`deepseek-chat` 支持 tool calling；`deepseek-reasoner` 不支持，禁用）。
+ * `ark` 保留（方舟豆包文本模型可选），`claude` 仅未来 eval 通过后追加，`fake` 为 M0 确定性测试。
+ *
+ * 注意 provider 分工：**ModelBackend 只管文本回合**。工具 `generate_image`（方舟 Seedream）、
+ * `understand_image`（方舟豆包 vision）的 provider 在工具实现层，**不在此契约**——且 DeepSeek
+ * 不接受 image_url（无视觉），看图必须方舟 vision（见 PROJECT 踩坑「DeepSeek 不兼容 image_url」）。
+ *
+ * 约束：
+ *  - backend 只能返回当前 phase 允许的动作集合内的「建议」，归一为 ModelTurnResult.action。
+ *  - backend 不执行工具、不签发 URL、不写 checkpoint、不结算积分。
+ *  - 供应商原始响应只在短期 snapshot 中按需保留；事件/日志只写安全摘要。
+ */
 export interface ModelBackend {
-  readonly id: "ark" | "claude" | "fake";
+  readonly id: "deepseek" | "ark" | "claude" | "fake";
   turn(request: ModelTurnRequest, signal: AbortSignalLike): Promise<ModelTurnResult>;
 }
 

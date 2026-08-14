@@ -26,7 +26,7 @@
     "maxRunSeconds": 600
   },
   "budgetTier": { "id": "sr-standard", "credits": 12 },
-  "allowedProviders": ["ark"],
+  "allowedProviders": ["deepseek"],
   "evalCapabilities": [
     "结构化意图（parse_intent 产出 intent artifact）",
     "参考图职责（assign_reference_roles 指派 main/style/…）",

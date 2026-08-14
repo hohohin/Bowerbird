@@ -54,7 +54,7 @@ export type SkillManifest = {
   terminalPhases: string[];
   budgetTiers: BudgetTier[];
   /** 允许的模型 provider；ark 首版，claude 仅未来 eval 通过后追加。 */
-  allowedProviders: ReadonlyArray<"ark" | "claude">;
+  allowedProviders: ReadonlyArray<"deepseek" | "ark" | "claude">;
   /** Run 墙钟上限（秒）。 */
   maxRunSeconds: number;
   /** 全 Run 最大模型回合数。 */

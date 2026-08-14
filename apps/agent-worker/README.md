@@ -1,7 +1,7 @@
 # @bowerbird/agent-worker — Bowerbird Agent Runtime（M0：A0 + V0）
 
 > 状态：**M0 已完成（契约冻结 + FakeModel + 离线 fixture + eval，20 测试全过）**。
-> 本包**不含** worker 运行时、Supabase 迁移/Edge Function、真实 Ark adapter、桌面 UI。
+> 本包**不含** worker 运行时、Supabase 迁移/Edge Function、真实 model/tool adapter（DeepSeek 文本 + 方舟出图/看图）、桌面 UI。
 > 依据：[dev-doc/AGENT-RUNTIME-PLAN.md](../../../dev-doc/AGENT-RUNTIME-PLAN.md) §A0 / §V0。
 
 ## M0 做了什么
@@ -28,7 +28,7 @@
 
 - ❌ Worker 运行时（poll/claim/heartbeat/checkpoint-to-cloud）—— A2
 - ❌ Supabase 迁移 / Edge Function / RPC —— A1（清单见 [A1-PREREQUISITES.md](A1-PREREQUISITES.md)）
-- ❌ 真实 Ark `ModelBackend` adapter、`understand_image`/`generate_image` 真实实现 —— A3
+- ❌ 真实 **DeepSeek 文本** `ModelBackend` adapter + 方舟 `understand_image`/`generate_image` 实现 —— A3（DeepSeek 只做文本回合；出图/看图仍方舟，因 DeepSeek 无视觉）
 - ❌ 桌面 Agent Run UI / 审批 UI / 产物下载入库 —— A4
 - ❌ 真实积分扣费 / 对账 / TTL 清理 —— A5
 - ❌ OpenClaw / Claude Code / MCP / shell / 用户 Skill / 多 Agent —— 永不做（计划 §1.2 / §7.1）
@@ -61,7 +61,7 @@ cd apps/agent-worker && node --test "src/**/*.test.ts"
 ## 仍未确认的前置项（不阻塞 M0，但阻塞 A1+ 真实联调）
 
 见 [A1-PREREQUISITES.md](A1-PREREQUISITES.md)「未确认前置项」一节：
-- Ark Agent 文本回合的 model id 与 tool calling / strict JSON 稳定性（A0-T1，**未做真实 spike**）
+- DeepSeek 文本回合（`deepseek-chat`，支持 tool calling；⚠️ `deepseek-reasoner` 不可用）稳定性 + usage 返回（A0-T1，**已选定 DeepSeek，真实 spike 待做**）
 - Vision + Seedream 从 VPS 出站的区域/时延/并发（A0-T2，**未做真实 spike**）
 - `credit_hold` 承载预算上限的最小迁移（A0-T3，**仅列清单未实现**）
 - 预算档位 / 定价 / FeaturePolicy 正式字段（A0-T5，待运营确认）

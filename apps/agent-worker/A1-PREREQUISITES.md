@@ -63,8 +63,8 @@ POC 阶段先用服务端 feature flag / 测试账号 allowlist；**正式档位
 
 ## 4. service_costs 配置（费率）
 
-- `agent_series_director`：可选预算档位与默认上限、文本/视觉 token 或调用量换算、Seedream 各规格固定积分、定价版本/生效时间/毛利保护。
-- `agent_smart_refinement`：同上（maxGenerateAttempts=1）。
+- `agent_smart_refinement`（**首个实现 Skill**）：费率按真实 token 换算——**DeepSeek 文本回合**按 prompt/completion tokens、**方舟 Seedream 出图**按张、**方舟 vision 看图**按次；定价版本/生效时间/毛利保护。`maxGenerateAttempts=1`。
+- `agent_series_director`：**暂不开发**（manifest + 18 eval case 已冻结，留待 smart-refinement 验证稳定后另立）；费率配置随之延后。
 - `visual_profile_extract`：按反推卡数 / 文本 token / 批次数 / 聚合回合计费；上传的是反推 JSON 快照不是图片。
 - 方向验证图：按一次普通 Cloud 文生图计费，与提炼分别展示/确认。
 - M0 临时费率（[src/kernel/budget.ts](src/kernel/budget.ts) `M0_FIXED_TARIFF`）：每动作固定积分降级规则；A1 起由 `service_costs` + Edge 纯函数替换。
@@ -73,12 +73,12 @@ POC 阶段先用服务端 feature flag / 测试账号 allowlist；**正式档位
 
 | # | 项 | 计划任务 | 现状 |
 |---|---|---|---|
-| U1 | **Ark Agent 文本回合 model id** + tool calling / strict structured output 稳定性 + usage 返回 + 最大上下文 | A0-T1 | **未做真实 spike**；M0 用 FakeModel 替代。需选定 doubao 文本模型并保存脱敏 fixture。 |
-| U2 | **Vision + Seedream 从 VPS 出站**：区域、时延、并发、错误恢复（不得用用户素材，用合成图） | A0-T2 | **未做真实 spike**；复用现有 `_shared/ark.ts` 真实契约（Vision/Seedream 已联调通过），但「从 VPS 出站」未验证。 |
+| U1 | **DeepSeek 文本回合**（`deepseek-chat`，支持 tool calling；⚠️ `deepseek-reasoner` 不支持、不可用）稳定性 + usage 返回 | A0-T1 | **已选定 DeepSeek**（用户决策 2026-08-14，替代原方舟文本模型）。真实 spike + tool calling 稳定性 + 脱敏 fixture 待 A0-T1 做。**DeepSeek 不接受 image_url → 看图仍方舟 vision、出图方舟 Seedream**。 |
+| U2 | **Vision + Seedream 从 VPS 出站**：区域、时延、并发、错误恢复（不得用用户素材，用合成图） | A0-T2 | **未做真实 spike**；复用现有 `_shared/ark.ts` 真实契约（Vision/Seedream 已联调通过），但「从腾讯云轻量 VPS 出站到方舟 + DeepSeek」未验证。 |
 | U3 | `credit_hold(p_estimated_amount)` 承载预算上限的最小迁移 | A0-T3 | **仅列清单（见 §1）**；未实现。现有 hold/confirm/rollback（0003/0004/0010）语义足够，A1 直接复用。 |
-| U4 | **预算档位 / 定价 / FeaturePolicy 正式字段** | A0-T5 | 待运营确认；POC 用 allowlist。M0 的 FeaturePolicy 字段为草案（§3）。 |
-| U5 | **TTL 默认值**：输入/中间 24h、最终产物 7d | A0-T5 | 待用户确认是否接受默认。 |
-| U6 | **VPS 规格 / 部署方式**（系统/CPU/RAM/磁盘/SSH；Worker 不要求域名） | A7 | 未提供。POC 建议 2vCPU/4GiB/40GiB。 |
+| U4 | **预算档位 / 定价 / FeaturePolicy** | A0-T5 | ✅ 用户已定（2026-08-14）：smart-refinement **按 token 换算**、series-director **暂不开发**、**3 档（free/pro/studio）都可用**；FeaturePolicy 字段见 §3，POC 用 allowlist（`admin@bowerbird.cn`）。 |
+| U5 | **TTL 默认值**：输入/中间 24h、最终产物 7d | A0-T5 | ✅ 用户已确认接受（2026-08-14）。 |
+| U6 | **VPS 规格 / 部署方式**（系统/CPU/RAM/磁盘/SSH；Worker 不要求域名） | A7 | ✅ 用户提供（2026-08-14）：腾讯云轻量云 Ubuntu 24.04 / 2vCPU / **2GiB** / 50GiB。⚠️ 2GiB 偏紧，建议加 2G swap + 并发上限 1–2（推理在 DeepSeek/方舟，Worker 只编排）；部署建议 **SSH + Docker**。 |
 | U7 | 真实支付 | — | 已暂停（备案/商户资质前置）；不阻塞 Agent Run MVP（A0–A5）。 |
 
 ## 6. M0 已落地的契约（供 A1+ 直接对齐）

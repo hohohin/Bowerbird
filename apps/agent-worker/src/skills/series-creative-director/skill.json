@@ -41,7 +41,7 @@
   "budgetTiers": [
     { "id": "scd-standard", "credits": 24, "label": "标准（≤24 分）" }
   ],
-  "allowedProviders": ["ark"],
+  "allowedProviders": ["deepseek"],
   "artifacts": {
     "creative_brief": { "fields": ["goal", "composition", "light", "color", "material", "constraints", "rubric", "estimatedCost"] },
     "evaluation": { "fields": ["dimensionScores", "overallScore", "decide"] },
