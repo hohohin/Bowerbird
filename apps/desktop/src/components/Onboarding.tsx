@@ -1,9 +1,5 @@
-import { useState } from "react";
 import { createPortal } from "react-dom";
 import { useStore } from "../store";
-import { understandReady } from "../lib/entitlement";
-
-const SEEN_KEY = "bowerbird.onboardingSeen";
 
 function StatusBadge({ ok }: { ok?: boolean; reason?: string }) {
   if (ok === true)
@@ -64,14 +60,12 @@ function Card({
  * 三卡片并排：codex CLI / 浏览器扩展 / 即梦 dreamina CLI。点「前往配置」跳转到对应的详细 onboarding
  * 子弹窗（CodexOnboarding / ExtensionOnboarding / DreaminaOnboarding，forceOpen 唤起，不再各自自动弹）。
  * Bowerbird 账号不在此列——它是独立的账号面板（侧栏底部账号区唤起），与「环境状态」无关。
- * 首启：codex/扩展任一未就绪 + 未 seen 自动弹这一个总览；设置「环境状态」可手动唤起。
+ * 不首启自动弹（阶段 B 起 tour 接管引导）；仅 Toolbar「环境状态」手动唤起（forceOpen）。
  */
 export function Onboarding() {
   const codexHealth = useStore((s) => s.codexHealth);
   const extensionConnected = useStore((s) => s.extensionConnected);
   const dreaminaHealth = useStore((s) => s.dreaminaHealth);
-  const cloudEntitlement = useStore((s) => s.cloudEntitlement);
-  const cloudAuth = useStore((s) => s.cloudAuth);
   const forceOpen = useStore((s) => s.onboardingForceOpen);
   const setForceOpen = useStore((s) => s.setOnboardingForceOpen);
   const codexOpen = useStore((s) => s.codexOnboardingForceOpen);
@@ -80,29 +74,15 @@ export function Onboarding() {
   const setCodexOpen = useStore((s) => s.setCodexOnboardingForceOpen);
   const setExtensionOpen = useStore((s) => s.setExtensionOnboardingForceOpen);
   const setDreaminaOpen = useStore((s) => s.setDreaminaOnboardingForceOpen);
-  const [seen, setSeen] = useState(() => localStorage.getItem(SEEN_KEY) === "1");
 
   // 任一二級打开时一级不渲染，避免自动显示场景下产生双层 Modal。
   if (codexOpen || extensionOpen || dreaminaOpen) return null;
 
-  // 一级只能由用户关闭（✕ / 「稍后再说」）：不因 codex/扩展状态变化自动收。
-  // seen 仅在用户主动 dismiss 时写入，用于「首启未配齐才自动弹一次，用户看过就不再骚扰」。
-  // 理解引擎就绪按权益路由判断（Pro→codex、免费→Cloud），不再直判 codexHealth：
-  // 否则免费档登录 Cloud 后这里仍误报「未就绪」、首启反复弹总览。
-  const hasIssue = !understandReady({ entitlement: cloudEntitlement, codexHealth, cloudAuth }) || !extensionConnected;
-  if (!forceOpen && (seen || !hasIssue)) return null;
+  // 不再首启自动弹（tour 接管引导）；仅在 forceOpen（Toolbar「环境状态」手动唤起）时渲染。
+  if (!forceOpen) return null;
 
   function dismiss() {
-    localStorage.setItem(SEEN_KEY, "1");
-    setSeen(true);
     setForceOpen(false);
-    // 阶段 B：dismiss 环境状态后，若空库且没看过 tour → 起 tour（避免与 Onboarding Modal 叠）。
-    if (
-      localStorage.getItem("bowerbird.tutorialSeen") !== "1" &&
-      useStore.getState().assets.length === 0
-    ) {
-      useStore.getState().startTour();
-    }
   }
   // 跳转到详细子 onboarding：关总览 + 弹子。
   function goCodex() {

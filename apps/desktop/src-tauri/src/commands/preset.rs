@@ -6,8 +6,9 @@ use crate::core::preset::PRESET_SPECS;
 use crate::core::samples;
 use crate::error::AppError;
 
-/// 把 resources/samples/ 下的预设图复制到 document_dir/Bowerbird/初始引导/，返回该目录路径。
-/// 幂等（文件不存在或大小不同才覆盖）；dev 图未放则跳过不崩。供新手引导 pickFolder 默认打开。
+/// 把 resources/samples/ 下的预设图复制到 document_dir/Bowerbird/初始引导/，返回其父目录
+/// （document_dir/Bowerbird/）。新手引导 pickFolder 默认打开父目录，让用户看到并点进「初始引导」，
+/// 而非直接定位到文件夹内。幂等（文件不存在或大小不同才覆盖）；dev 图未放则跳过不崩。
 #[tauri::command]
 pub async fn release_preset_pack(app: AppHandle) -> Result<String, AppError> {
     let src_dir = samples::resolve_samples_dir(&app)
@@ -16,7 +17,8 @@ pub async fn release_preset_pack(app: AppHandle) -> Result<String, AppError> {
         .path()
         .document_dir()
         .map_err(|e| AppError::Other(format!("无法解析文档目录: {e}")))?;
-    let target = doc.join("Bowerbird").join("初始引导");
+    let parent = doc.join("Bowerbird");
+    let target = parent.join("初始引导");
     std::fs::create_dir_all(&target)?;
     for spec in PRESET_SPECS {
         let from = src_dir.join(spec.filename);
@@ -32,5 +34,5 @@ pub async fn release_preset_pack(app: AppHandle) -> Result<String, AppError> {
             std::fs::copy(&from, &to)?;
         }
     }
-    Ok(target.to_string_lossy().to_string())
+    Ok(parent.to_string_lossy().to_string())
 }

@@ -9,21 +9,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | 文档 | 内容 | 何时读 |
 |---|---|---|
 | `PROJECT.md` | **活文档（项目内容唯一权威）**：项目说明 / 目前进展 / 关键约定 / 踩坑记录 | 每次开工前先读「目前进展」与「关键约定」 |
-| `Bowerbird开发计划.md` | 完整开发计划 v1.3（定位 / 技术栈 / 数据模型 / Roadmap / 风险）；同名 HTML 是其渲染版 | 任何实现工作之前必读，技术权威源 |
-| `Bowerbird定价方案v2-订阅积分制.md` | 定价方案 v2（免费 + 订阅 + 积分混合制，独立于旧 PRICING.md 的重新设计） | 商业化、定价、license 功能门控相关工作前必读 |
-| `Bowerbird市场调研-竞争格局与优势分析.md` | 竞争格局与优势分析（v2 形态下 vs 竞品） | 商业化、竞品对标时 |
+| `dev-doc/Bowerbird开发计划.md` | 完整开发计划 v1.3（定位 / 技术栈 / 数据模型 / Roadmap / 风险）；同名 HTML 是其渲染版 | 任何实现工作之前必读，技术权威源 |
+| `dev-doc/Bowerbird定价方案v2-订阅积分制.md` | 定价方案 v2（免费 + 订阅 + 积分混合制，独立于旧 PRICING.md 的重新设计） | 商业化、定价、license 功能门控相关工作前必读 |
+| `dev-doc/Bowerbird市场调研-竞争格局与优势分析.md` | 竞争格局与优势分析（v2 形态下 vs 竞品） | 商业化、竞品对标时 |
 | `Bowerbird收费链路与定价方案.md` | 收费链路实施层：用户系统 / license / 支付渠道 / 积分适用 / 分阶段落地 | 落地收费、接支付/账号系统前必读 |
-| `ARCH-ADJUST-PLAN.md` | 收费化架构调整开发计划（账号 / 积分 / 托管 provider / 支付 / 门控，P0–P9 任务与验收） | 收费化 / 账号 / 积分 / 云端实现前必读 |
-| `ARCH-ADJUST-PROGRESS.md` | 收费化架构调整跨会话进度、部署状态、测试基线与剩余阻塞 | 接续收费化任务或核对线上状态时必读 |
-| `AGENT-RUNTIME-PLAN.md` | Bowerbird 内置 Skill Agent Runtime 开发计划（VPS Worker / Supabase 控制面 / 方舟 / 桌面 Agent UI，A0–A8 任务卡） | Agent loop / 内置 Skill / VPS Worker / Agent 临时云工作区实现前必读 |
-| `研究报告-服务器化CLI与API化改造可行性.md` | 生成能力服务器化/API 化改造可行性研究 | 远程化、API 化架构调整前必读 |
-| `FRAMEWORK_ADJUST.md` | 架构调整清单（为收费服务，含账号系统等调整项） | 收费落地、架构调整前必读 |
-| `AI-PROVIDERS.md` | AI provider 可切换方案（泛化 GenerationPanel + codex/即梦首批 + 即梦接入调研 + 关键约定 1 演进；草案） | provider 切换 / 即梦接入 / 生成能力多 provider 解耦相关工作前必读 |
-| `VIDEO-GENERATION.md` | 生成系统总规划（并行生成前置 + 视频生成 / dreamina 视频 CLI 真机 spike 实证 / 多 job 模型 + 即梦并发=1 队列 + submit_id 持久化恢复 / 协议泛化 image→media / 创作板视频模式 / 分阶段 Roadmap；草案） | 生成系统（并行 / 视频）相关工作前必读 |
-| `Eagle类创意收集工具调查报告.html` | 前序竞品调研，计划的依据 | 需要背景/对标时 |
-| `draft.md`、`reference/theory.md` | 早期 UX 路径与素材分类（A–F 类）草稿，部分已被计划取代 | 仅在追溯原始意图时 |
-| `桌面端UI设计.html` | 桌面端 UI 面板与入口设计稿（三区外壳 + 创作板拟文本编辑器 + 现状对照） | 桌面端 UI 工作前必读 |
-| `analyse-panel-todo.md` | 详情页「反推」面板待优化清单（P0–P2 分级） | 反推面板 / AssetDetail 相关工作前 |
+| `dev-doc/ARCH-ADJUST-PLAN.md` | 收费化架构调整开发计划（账号 / 积分 / 托管 provider / 支付 / 门控，P0–P9 任务与验收） | 收费化 / 账号 / 积分 / 云端实现前必读 |
+| `dev-doc/ARCH-ADJUST-PROGRESS.md` | 收费化架构调整跨会话进度、部署状态、测试基线与剩余阻塞 | 接续收费化任务或核对线上状态时必读 |
+| `dev-doc/AGENT-RUNTIME-PLAN.md` | Bowerbird 内置 Skill Agent Runtime 开发计划（Agent Kernel / 有限澄清 / 项目视觉设定 / VPS Worker / Supabase / 方舟，A0–A8 + V0–V4） | Agent loop / 内置 Skill / 项目视觉设定 / VPS Worker / Agent 临时云工作区实现前必读 |
+| `dev-doc/研究报告-服务器化CLI与API化改造可行性.md` | 生成能力服务器化/API 化改造可行性研究 | 远程化、API 化架构调整前必读 |
+| `dev-doc/FRAMEWORK_ADJUST.md` | 架构调整清单（为收费服务，含账号系统等调整项） | 收费落地、架构调整前必读 |
+| `dev-doc/AI-PROVIDERS.md` | AI provider 可切换方案（泛化 GenerationPanel + codex/即梦首批 + 即梦接入调研 + 关键约定 1 演进；草案） | provider 切换 / 即梦接入 / 生成能力多 provider 解耦相关工作前必读 |
+| `dev-doc/VIDEO-GENERATION.md` | 生成系统总规划（并行生成前置 + 视频生成 / dreamina 视频 CLI 真机 spike 实证 / 多 job 模型 + 即梦并发=1 队列 + submit_id 持久化恢复 / 协议泛化 image→media / 创作板视频模式 / 分阶段 Roadmap；草案） | 生成系统（并行 / 视频）相关工作前必读 |
+| `dev-doc/Eagle类创意收集工具调查报告.html` | 前序竞品调研，计划的依据 | 需要背景/对标时 |
+| `dev-doc/draft.md`、`reference/theory.md` | 早期 UX 路径与素材分类（A–F 类）草稿，部分已被计划取代 | 仅在追溯原始意图时 |
+| `dev-doc/桌面端UI设计.html` | 桌面端 UI 面板与入口设计稿（三区外壳 + 创作板拟文本编辑器 + 现状对照） | 桌面端 UI 工作前必读 |
+| `dev-doc/analyse-panel-todo.md` | 详情页「反推」面板待优化清单（P0–P2 分级） | 反推面板 / AssetDetail 相关工作前 |
 | `Windows/README.md` | Windows x64 开发、构建 NSIS 安装包与环境要求 | Windows 运行 / 打包前 |
 | `Windows/Windows-edited.md` | Windows 适配修改清单、交付产物与升级注意事项 | 维护 Windows override / 排查平台差异时 |
 

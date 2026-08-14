@@ -262,15 +262,18 @@ function App() {
     };
   }, [setClassifyProgress]);
 
-  // 首启空库 → 起 tour（阶段 B，替代自动注入）。等 Onboarding dismiss（seen）才起，
-  // 避免 tour 高亮的元素被环境状态 Modal 盖住。
+  // 首启空库 → 起 tour（阶段 B，替代自动注入；startTour 进 step 0 入口弹窗）。
+  // Onboarding 弹着时不起（dialog 在 DOM，由 Onboarding dismiss 触发，避免高亮元素被 Modal 盖）；
+  // Onboarding 不弹（环境就绪）时直接起。
   useEffect(() => {
     if (localStorage.getItem("bowerbird.tutorialSeen") === "1") return;
     const t = setTimeout(() => {
-      const onboardingSeen = localStorage.getItem("bowerbird.onboardingSeen") === "1";
       const s = useStore.getState();
-      if (onboardingSeen && s.assets.length === 0) s.startTour();
-    }, 800);
+      const hasDialog = !!document.querySelector('[aria-label="环境状态"]');
+      if (s.assets.length !== 0) return;
+      if (hasDialog) return;
+      s.startTour();
+    }, 1500);
     return () => clearTimeout(t);
   }, []);
 

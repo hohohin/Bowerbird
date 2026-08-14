@@ -39,3 +39,6 @@ my-library/
 
 # Obsidian 笔记本地配置（工作区附带的笔记工具状态，不入库）
 .obsidian/
+
+# 开发计划，文件
+dev-doc

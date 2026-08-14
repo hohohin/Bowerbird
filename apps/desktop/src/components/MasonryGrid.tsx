@@ -178,6 +178,7 @@ function Thumb({
   return (
     <div
       id={`asset-${shown.id}`}
+      data-origin={shown.origin_path ?? undefined}
       className={`group relative mb-2 break-inside-avoid cursor-pointer overflow-hidden rounded-md ring-2 transition ${
         selected ? "ring-accent" : "ring-transparent hover:ring-edge"
       }`}

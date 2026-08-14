@@ -12,7 +12,7 @@ type Hover =
 /**
  * 创作板编辑框 chip 的交互浮层。ProseMirror 渲染的 image/keyword chip 是非 React DOM，
  * 这里通过事件委托在编辑器宿主 div 上捕获 mousemove/click：
- * - image chip：hover 2.8s 弹放大图（与瀑布流 hover 一致的延迟/边界翻转/滚动收回），
+ * - image chip：hover 2s 弹放大图（与瀑布流 hover 一致的边界翻转/滚动收回），
  *   click → store.focusAsset → 瀑布流滚动定位 + 闪烁高亮。
  * - keyword chip：hover ~0.3s 弹该维度的反推正文（读 chip 上 data-body 快照，即插入时
  *   所属素材的 CaptionSection.body）。
@@ -64,7 +64,7 @@ export function BoardChipPreview({ hostRef }: { hostRef: RefObject<HTMLDivElemen
       setVisible(false);
       setHover(next);
       if (next) {
-        const delay = next.kind === "image" ? 2800 : 300;
+        const delay = next.kind === "image" ? 2000 : 300;
         timer.current = setTimeout(() => setVisible(true), delay);
       }
     }

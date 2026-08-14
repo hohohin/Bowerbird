@@ -19,11 +19,6 @@ export function Toolbar({ onRefresh }: { onRefresh: () => Promise<void> }) {
   const setCurrentCollection = useStore((s) => s.setCurrentCollection);
   const setSmartFilter = useStore((s) => s.setSmartFilter);
   const setColorFilter = useStore((s) => s.setColorFilter);
-  const tourActive = useStore((s) => s.tourActive);
-  const tourStep = useStore((s) => s.tourStep);
-  const setTourStep = useStore((s) => s.setTourStep);
-  const enterProject = useStore((s) => s.enterProject);
-  const reloadProjects = useStore((s) => s.reloadProjects);
 
   // 扩展采集入根库；清空当前范围让用户立刻看见新素材。
   function showCollectedAsset() {
@@ -60,20 +55,8 @@ export function Toolbar({ onRefresh }: { onRefresh: () => Promise<void> }) {
         导入文件
       </button>
       <button
-        data-tour="import-folder"
         onClick={() =>
           withBusy(async () => {
-            // tour 第 1 步：真实体验导入，但走建项目流程 + 默认定位到预设图目录。
-            if (tourActive && tourStep === 1) {
-              const presetDir = await api.releasePresetPack();
-              const p = await api.pickFolder(presetDir);
-              if (!p) return;
-              const result = await api.createProject(p);
-              await reloadProjects();
-              await enterProject(result.project.id);
-              setTourStep(2);
-              return;
-            }
             const p = await api.pickFolder();
             if (p) await api.importFolder(p, currentProjectId);
           })

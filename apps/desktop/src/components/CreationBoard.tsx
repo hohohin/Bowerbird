@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useStore } from "../store";
 import { canStartAnotherJob, canUseByo } from "../lib/entitlement";
 import { api } from "../lib/api";
@@ -52,6 +52,8 @@ export function CreationBoard() {
   const activePresetId = useStore((s) => s.activePresetId);
   const setActivePreset = useStore((s) => s.setActivePreset);
   const reloadPresets = useStore((s) => s.reloadPresets);
+  const tourActive = useStore((s) => s.tourActive);
+  const tourStep = useStore((s) => s.tourStep);
 
   const {
     hostRef,
@@ -60,10 +62,19 @@ export function CreationBoard() {
     rawPrompt,
     references,
     graphSources,
+    setChipAssetId,
     chipSections,
     showKeywordHints,
     insertKeyword,
   } = useCreationEditor();
+
+  // tour 维度引导（step 6）：自动选中第一张有反推维度的参考图，让「可选维度」chips 面板有内容可高亮。
+  useEffect(() => {
+    if (tourActive && tourStep === 6 && chipSections.length === 0) {
+      const withSections = references.find((r) => r.sections && r.sections.length > 0);
+      if (withSections) setChipAssetId(withSections.id);
+    }
+  }, [tourActive, tourStep, references, chipSections.length, setChipAssetId]);
 
   // 画面比例（null=自动/不指定，发送时不注入 instruction）。记忆进 localStorage，跨会话保留。
   const [ratio, setRatio] = useState<string | null>(loadBoardRatio);
@@ -335,15 +346,25 @@ export function CreationBoard() {
             />
           </div>
 
-          {showKeywordHints && (
-            <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
+          {(showKeywordHints || (tourActive && tourStep === 6)) && (
+            <div
+              data-tour="creation-keywords"
+              className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-muted"
+            >
               {chipSections.length > 0 ? (
                 <>
                   <span>可选维度（来自该图反推）：</span>
                   {chipSections.map((section) => (
                     <button
                       key={section.title}
-                      onClick={() => insertKeyword(section.title, section.body)}
+                      data-dim={section.title}
+                      onClick={() => {
+                        insertKeyword(section.title, section.body);
+                        // tour step 9：用户点维度 chip（如「构图」）→ 引导完成。
+                        if (tourActive && tourStep === 9) {
+                          useStore.getState().setTourStep(10);
+                        }
+                      }}
                       className="rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 text-accent hover:bg-accent/20"
                     >
                       {section.title}

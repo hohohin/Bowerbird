@@ -17,8 +17,21 @@ export function ProjectSection() {
   const [message, setMessage] = useState<string | null>(null);
 
   async function create() {
-    const path = await api.pickFolder();
+    // tour 第 1 步：默认定位到预设图目录的上一级（已释放到文档目录），让用户点进「初始引导」。
+    const tourActive = useStore.getState().tourActive;
+    const tourStep = useStore.getState().tourStep;
+    let defaultPath: string | undefined;
+    if (tourActive && tourStep === 1) {
+      try {
+        defaultPath = await api.releasePresetPack();
+      } catch {
+        /* 释放失败用系统默认路径 */
+      }
+    }
+    const path = await api.pickFolder(defaultPath);
     if (!path) return;
+    // 用户已点 OS「选择文件夹」→ 进入「导入中」步骤（step 2），等导入完成后【下一步】按钮才出现。
+    if (tourActive && tourStep === 1) useStore.getState().setTourStep(2);
     setCreating(true);
     setMessage(null);
     try {
@@ -26,6 +39,10 @@ export function ProjectSection() {
       await reloadProjects();
       await enterProject(result.project.id);
       setMessage(`已导入 ${result.imported_count} 张素材`);
+      // 导入成功 → 标记完成，让「导入中」步骤的【下一步】按钮出现。
+      if (useStore.getState().tourActive && useStore.getState().tourStep === 2) {
+        useStore.getState().setTourImported(true);
+      }
     } catch (error) {
       setMessage(typeof error === "string" ? error : "创建项目失败");
     } finally {
@@ -68,6 +85,7 @@ export function ProjectSection() {
       <div className="mb-2 flex items-center justify-between text-xs uppercase tracking-wide text-muted">
         <span>项目</span>
         <button
+          data-tour="new-project"
           onClick={create}
           disabled={creating}
           className="normal-case tracking-normal text-accent hover:opacity-80 disabled:opacity-50"

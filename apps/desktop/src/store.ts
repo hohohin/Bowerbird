@@ -160,10 +160,13 @@ interface State {
   accountOnboardingForceOpen: boolean;
   setAccountOnboardingForceOpen: (v: boolean) => void;
   // 新手引导 tour（阶段 B）：spotlight 分步引导，废弃自动注入后用 tour 教导入 + 复用 + 创作。
+  // step 0=入口弹窗；1=新建项目；2=导入中；3=首图右键；4=菜单复用；5=编辑框；6=维度；7=结束。
   tourActive: boolean;
   tourStep: number;
+  tourImported: boolean; // step 2「导入中」是否完成（完成后【下一步】按钮才出现）
   setTourActive: (v: boolean) => void;
   setTourStep: (n: number) => void;
+  setTourImported: (v: boolean) => void;
   startTour: () => void;
   endTour: () => void;
   // —— 应用设置（从后端 settings.json 加载）——
@@ -647,13 +650,15 @@ export const useStore = create<State>((set, get) => {
   setAccountOnboardingForceOpen: (accountOnboardingForceOpen) =>
     set({ accountOnboardingForceOpen }),
   tourActive: false,
-  tourStep: 1,
+  tourStep: 0,
+  tourImported: false,
   setTourActive: (tourActive) => set({ tourActive }),
   setTourStep: (tourStep) => set({ tourStep }),
-  startTour: () => set({ tourActive: true, tourStep: 1 }),
+  setTourImported: (tourImported) => set({ tourImported }),
+  startTour: () => set({ tourActive: true, tourStep: 0, tourImported: false }),
   endTour: () => {
     localStorage.setItem("bowerbird.tutorialSeen", "1");
-    set({ tourActive: false, tourStep: 1 });
+    set({ tourActive: false, tourStep: 0, tourImported: false });
   },
   // —— 应用设置 ——
   settings: null,

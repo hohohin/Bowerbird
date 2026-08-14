@@ -75,9 +75,13 @@ pub fn ingest_file(paths: &LibraryPaths, db: &Database, source: &Path) -> AppRes
 
     // 去重：pHash 命中则回滚新副本。
     if let Some(ref h) = phash {
-        if let Some(existing) = db.find_asset_by_phash(h)? {
+        if let Some(mut existing) = db.find_asset_by_phash(h)? {
             let _ = fs::remove_file(&store_path);
             let _ = fs::remove_file(&thumb_path);
+            // 预设图识别也走 dedup 命中：同一张图可能先以非预设名入库（如重复文件的 hash 名
+            // 先被遍历到），此时 preset 名文件再导入会被去重拦下、走不到下方 recognize。
+            // 用现有 asset 补一次 manifest 匹配，把 caption / 生成身份写回（幂等，has_analysis 跳过已存在）。
+            preset::recognize_and_prefill(db, source, &mut existing)?;
             return Ok(existing);
         }
     }
