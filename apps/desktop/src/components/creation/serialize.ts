@@ -1,5 +1,5 @@
 import type { Node as PmNode } from "prosemirror-model";
-import type { PromptedAsset } from "../../lib/types";
+import type { AgentPromptInput, PromptedAsset } from "../../lib/types";
 
 /**
  * doc 扁平化后的内联节点表示（对应旧版 Token 类型，便于原样移植序列化逻辑）。
@@ -188,4 +188,24 @@ export function graphSourcesFromDoc(
     });
   });
   return order.map((id) => sources.get(id)!);
+}
+
+/** Agent 模式保留 image→keyword 结构，让模型按参考图已选维度理解职责。 */
+export function agentPromptReferencesFromDoc(
+  doc: PmNode,
+  assetById: Map<string, PromptedAsset>
+): AgentPromptInput["references"] {
+  return graphSourcesFromDoc(doc, assetById).map(({ asset, dimensions }) => ({
+    assetId: asset.id,
+    name: `${asset.name}${asset.ext ? `.${asset.ext}` : ""}`,
+    dimensions: dimensions.map((label) => ({
+      key: label,
+      label,
+      raw:
+        asset.sections?.find((section) => section.title === label)?.body.trim() ||
+        asset.dimensions?.[label]?.trim() ||
+        asset.caption?.trim() ||
+        "",
+    })),
+  }));
 }

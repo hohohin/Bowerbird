@@ -173,10 +173,9 @@ export function SidebarStatus({ collapsed, onExpand }: { collapsed?: boolean; on
 
   return (
     <div className="mb-4">
-      {/* 圆点行：右侧留白避开绝对定位的侧栏收起按钮 */}
-      <div className="flex items-center gap-2 pl-1 pr-12">
-        {dotButton("")}
-        <span className="text-[10px] uppercase tracking-wide text-muted">Status</span>
+      {/* 圆点行：与右上角收起按钮同一水平中心线（top 13px / 32px 高），高度对齐 */}
+      <div className="flex items-center pl-1 pr-12 -mt-[3px]">
+        {dotButton("!h-8 !w-8 !min-h-8")}
       </div>
       {expanded && (
         <div className="mt-1 max-h-64 overflow-y-auto rounded bg-panel2/40">

@@ -42,6 +42,7 @@ const ONE_PIXEL_PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 const DEFAULT_ARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3";
 const MAX_UPSTREAM_IMAGE_BYTES = 20 * 1024 * 1024;
+export const DEFAULT_IMAGE_UPSTREAM_TIMEOUT_MS = 135_000;
 
 function requiredEnv(name: string): string {
   const value = Deno.env.get(name)?.trim();
@@ -50,8 +51,11 @@ function requiredEnv(name: string): string {
 }
 
 function upstreamTimeout(): number {
-  const value = Number.parseInt(Deno.env.get("UPSTREAM_TIMEOUT_MS") ?? "120000", 10);
-  return Number.isFinite(value) && value > 0 ? value : 120_000;
+  const value = Number.parseInt(
+    Deno.env.get("ARK_IMAGE_TIMEOUT_MS") ?? String(DEFAULT_IMAGE_UPSTREAM_TIMEOUT_MS),
+    10,
+  );
+  return Number.isFinite(value) && value > 0 ? value : DEFAULT_IMAGE_UPSTREAM_TIMEOUT_MS;
 }
 
 function understandUpstreamTimeout(): number {

@@ -10,22 +10,20 @@ const NODE_SITE = "https://nodejs.org";
 type StepState = "idle" | "running" | "done" | "error";
 
 /**
- * codex 配置引导（一级「环境状态」总览的二级弹窗；约定 7 离线/无账号降级的入口）。
+ * codex 配置引导（由设置「模型设置」的 codex 卡片唤起；约定 7 离线/无账号降级的入口）。
  *
- * 不再自行判断 seen、不自动弹——只由一级总览卡片经 `codexOnboardingForceOpen` 跳转唤起；
- * 「稍后再说」与检测成功均返回一级总览，由一级负责最终关闭与写 seen。
+ * 不再自行判断 seen、不自动弹——只由设置「模型设置」经 `codexOnboardingForceOpen` 唤起；
+ * 「稍后再说」与检测成功均直接关闭。
  *
  * step1「一键安装」→ `codex_install`（spawn npm，进度经 `codex://setup-progress` 推）；
  * step2「一键登录」→ `codex_login`（spawn codex login，codex 自己开浏览器 OAuth）。
- * 成功后端 emit `codex://health-changed` → 自动重检 → ok 则回一级。
+ * 成功后端 emit `codex://health-changed` → 自动重检 → ok 则直接关闭。
  */
 export function CodexOnboarding() {
   const codexHealth = useStore((s) => s.codexHealth);
   const setCodexHealth = useStore((s) => s.setCodexHealth);
   const forceOpen = useStore((s) => s.codexOnboardingForceOpen);
   const setForceOpen = useStore((s) => s.setCodexOnboardingForceOpen);
-  // 点「稍后再说」/检测成功回一级总览（而非直接关回主界面）。
-  const setOverviewOpen = useStore((s) => s.setOnboardingForceOpen);
   const [checking, setChecking] = useState(false);
 
   const [installState, setInstallState] = useState<StepState>("idle");
@@ -49,7 +47,7 @@ export function CodexOnboarding() {
     };
   }, []);
 
-  // 安装/登录成功后端 emit `codex://health-changed` → 自动重检（ok 则回一级）。
+  // 安装/登录成功后端 emit `codex://health-changed` → 自动重检（ok 则直接关引导）。
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
     let alive = true;
@@ -64,12 +62,11 @@ export function CodexOnboarding() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 只由一级总览卡片跳转唤起（forceOpen）；不自动弹。
+  // 由设置唤起（forceOpen）；不自动弹。
   if (!forceOpen) return null;
 
   function dismiss() {
     setForceOpen(false);
-    setOverviewOpen(true);
   }
 
   async function recheck() {
@@ -77,10 +74,9 @@ export function CodexOnboarding() {
     try {
       const h = await api.codexHealth();
       setCodexHealth(h);
-      // 检测通过：关二级 + 回一级总览（一级只能由用户关闭，不在此处自动收）。
+      // 检测通过：直接关引导。
       if (h.ok) {
         setForceOpen(false);
-        setOverviewOpen(true);
       }
     } catch {
       setCodexHealth({ ok: false, reason: "codex 状态检测失败" });

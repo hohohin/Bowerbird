@@ -1,6 +1,7 @@
 import { ApiError } from "./errors.ts";
 
 const DEFAULT_ORIGINS = ["http://127.0.0.1:5173", "http://localhost:5173"];
+export const DEFAULT_PROXY_TIMEOUT_MS = 140_000;
 
 export function corsHeaders(request: Request): HeadersInit {
   const origin = request.headers.get("origin");
@@ -67,7 +68,7 @@ export function assertReferenceImages(images: unknown, maxCount = 10): void {
 }
 
 export async function withTimeout<T>(promise: Promise<T>, timeoutMs?: number): Promise<T> {
-  const timeout = timeoutMs ?? envInt("UPSTREAM_TIMEOUT_MS", 140_000);
+  const timeout = timeoutMs ?? envInt("PROXY_TIMEOUT_MS", DEFAULT_PROXY_TIMEOUT_MS);
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([

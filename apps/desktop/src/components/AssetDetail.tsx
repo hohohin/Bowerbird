@@ -517,15 +517,8 @@ export function AssetDetail() {
   const src = asset?.store_path ? convertFileSrc(asset.store_path) : undefined;
   const zoom = useImageZoom(src);
 
-  if (!asset || !id) {
-    return (
-      <div className="flex h-full items-center justify-center text-sm text-muted">
-        资产不存在
-      </div>
-    );
-  }
-  const colors = parseColors(asset.colors);
-  const captions = analyses.filter((a) => a.kind === "caption");
+  // 注意：下面两个 useMemo 必须在「资产不存在」提前 return 之前——Hook 不能落在条件
+  // 分支之后，否则资产短暂为空的一次渲染会让后续渲染 Hook 数量对不上而崩（Rules of Hooks）。
   // 生成图来源（codex_create_image 落的 generation_meta）：prompt / session_id / 参考图。
   const genMeta = useMemo(() => {
     const row = analyses.find((a) => a.kind === "generation_meta");
@@ -544,12 +537,6 @@ export function AssetDetail() {
       return null;
     }
   }, [analyses]);
-  const generationPrompt =
-    generationSource?.turns[0]?.prompt_raw?.trim() ||
-    genMeta?.prompt_raw?.trim() ||
-    generationSource?.turns[0]?.prompt?.trim() ||
-    genMeta?.prompt?.trim() ||
-    "";
   const generationReferences = useMemo(() => {
     if (generationSource?.references.length) return generationSource.references;
     if (!genMeta?.references?.length) return [];
@@ -558,6 +545,22 @@ export function AssetDetail() {
       .map((path: string) => available.find((candidate) => candidate.store_path === path))
       .filter((candidate: Asset | undefined): candidate is Asset => !!candidate);
   }, [generationSource, genMeta, group, assets]);
+
+  if (!asset || !id) {
+    return (
+      <div className="flex h-full items-center justify-center text-sm text-muted">
+        资产不存在
+      </div>
+    );
+  }
+  const colors = parseColors(asset.colors);
+  const captions = analyses.filter((a) => a.kind === "caption");
+  const generationPrompt =
+    generationSource?.turns[0]?.prompt_raw?.trim() ||
+    genMeta?.prompt_raw?.trim() ||
+    generationSource?.turns[0]?.prompt?.trim() ||
+    genMeta?.prompt?.trim() ||
+    "";
   const promptEmpty = describePrompt.trim().length === 0;
   const understandRoute = understandProvider(cloudEntitlement);
   const understandReady = understandRoute === "codex"
@@ -847,77 +850,6 @@ export function AssetDetail() {
             )}
           </div>
 
-          {/* 类别（P2 自动归类 + 手动）：codex 归的为 auto（灰），用户加的为 manual（强调）。 */}
-          <div className="asset-detail-card space-y-2">
-            <div className="text-xs font-medium uppercase tracking-wide text-muted">类别</div>
-            <div className="flex flex-wrap items-center gap-1.5">
-              {tags.length === 0 && !addingTag && (
-                <span className="text-xs text-muted">
-                  无（采集后会自动归类，也可手动加）
-                </span>
-              )}
-              {tags.map((t) => (
-                <span
-                  key={`${t.source}:${t.name}`}
-                  className={`flex items-center gap-1 rounded px-2 py-0.5 text-[11px] ${
-                    t.source === "auto" ? "bg-panel2 text-muted" : "bg-accent/15 text-accent"
-                  }`}
-                  title={t.source === "auto" ? "自动归类（codex）" : "手动添加"}
-                >
-                  <span className="opacity-50">#</span> {t.name}
-                  <button
-                    onClick={() => removeTag(t)}
-                    className="text-[10px] opacity-60 hover:opacity-100"
-                    title="移除"
-                  >
-                    ✕
-                  </button>
-                </span>
-              ))}
-            </div>
-            {addingTag ? (
-              <div className="flex items-center gap-1">
-                <input
-                  autoFocus
-                  value={tagDraft}
-                  onChange={(e) => setTagDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") addTag();
-                    if (e.key === "Escape") {
-                      setAddingTag(false);
-                      setTagDraft("");
-                    }
-                  }}
-                  placeholder="新类别名"
-                  className="w-32 rounded bg-panel2 px-2 py-1 text-xs outline-none ring-1 ring-edge focus:ring-accent"
-                />
-                <button
-                  onClick={addTag}
-                  disabled={!tagDraft.trim()}
-                  className="rounded bg-accent px-2 py-1 text-xs text-black disabled:opacity-50"
-                >
-                  加
-                </button>
-                <button
-                  onClick={() => {
-                    setAddingTag(false);
-                    setTagDraft("");
-                  }}
-                  className="text-xs text-muted hover:text-ink"
-                >
-                  取消
-                </button>
-              </div>
-            ) : (
-              <button
-                onClick={() => setAddingTag(true)}
-                className="text-xs text-accent hover:opacity-80"
-              >
-                + 加类别
-              </button>
-            )}
-          </div>
-
             </>
           )}
 
@@ -977,6 +909,11 @@ export function AssetDetail() {
             }}
           />
 
+            </>
+          )}
+
+          {detailTab === "info" && (
+            <>
           {/* 反推：免费档走 Cloud，Pro/Studio 走本机 CLI；当前路由不可用时置灰。 */}
           <div className="asset-detail-card space-y-2">
             <div className="flex items-center justify-between gap-2">
@@ -1184,6 +1121,77 @@ export function AssetDetail() {
                   </div>
                 );
               })
+            )}
+          </div>
+
+          {/* 类别（P2 自动归类 + 手动）：codex 归的为 auto（灰），用户加的为 manual（强调）。 */}
+          <div className="asset-detail-card space-y-2">
+            <div className="text-xs font-medium uppercase tracking-wide text-muted">类别</div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {tags.length === 0 && !addingTag && (
+                <span className="text-xs text-muted">
+                  无（采集后会自动归类，也可手动加）
+                </span>
+              )}
+              {tags.map((t) => (
+                <span
+                  key={`${t.source}:${t.name}`}
+                  className={`flex items-center gap-1 rounded px-2 py-0.5 text-[11px] ${
+                    t.source === "auto" ? "bg-panel2 text-muted" : "bg-accent/15 text-accent"
+                  }`}
+                  title={t.source === "auto" ? "自动归类（codex）" : "手动添加"}
+                >
+                  <span className="opacity-50">#</span> {t.name}
+                  <button
+                    onClick={() => removeTag(t)}
+                    className="text-[10px] opacity-60 hover:opacity-100"
+                    title="移除"
+                  >
+                    ✕
+                  </button>
+                </span>
+              ))}
+            </div>
+            {addingTag ? (
+              <div className="flex items-center gap-1">
+                <input
+                  autoFocus
+                  value={tagDraft}
+                  onChange={(e) => setTagDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") addTag();
+                    if (e.key === "Escape") {
+                      setAddingTag(false);
+                      setTagDraft("");
+                    }
+                  }}
+                  placeholder="新类别名"
+                  className="w-32 rounded bg-panel2 px-2 py-1 text-xs outline-none ring-1 ring-edge focus:ring-accent"
+                />
+                <button
+                  onClick={addTag}
+                  disabled={!tagDraft.trim()}
+                  className="rounded bg-accent px-2 py-1 text-xs text-black disabled:opacity-50"
+                >
+                  加
+                </button>
+                <button
+                  onClick={() => {
+                    setAddingTag(false);
+                    setTagDraft("");
+                  }}
+                  className="text-xs text-muted hover:text-ink"
+                >
+                  取消
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setAddingTag(true)}
+                className="text-xs text-accent hover:opacity-80"
+              >
+                + 加类别
+              </button>
             )}
           </div>
 

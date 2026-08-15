@@ -41,6 +41,30 @@ function saveDefaultProvider(v: string) {
   }
 }
 
+// —— 默认反推引擎（localStorage；"auto"=按账号档位自动路由，其余跳过每次的引擎选择浮层）——
+const DEFAULT_UNDERSTAND_KEY = "bowerbird.defaultUnderstandProvider";
+const UNDERSTAND_PROVIDERS = ["auto", "bowerbird-cloud", "codex"] as const;
+export type UnderstandProviderPref = (typeof UNDERSTAND_PROVIDERS)[number];
+function loadDefaultUnderstandProvider(): string {
+  try {
+    const v = localStorage.getItem(DEFAULT_UNDERSTAND_KEY);
+    return v && (UNDERSTAND_PROVIDERS as readonly string[]).includes(v) ? v : "auto";
+  } catch {
+    return "auto";
+  }
+}
+/** 反推引擎是否当下可用（与 DescribeProviderPicker 的门控一致）：Cloud 需登录+有余额；codex 需 Pro+ 且本机就绪。 */
+export function understandEngineUsable(
+  s: { cloudAuth: AuthSnapshot | null; cloudEntitlement: EntitlementSnapshot | null; codexHealth: CodexHealth | null },
+  provider: "bowerbird-cloud" | "codex",
+): boolean {
+  if (provider === "codex") return canUseByo(s.cloudEntitlement) && !!s.codexHealth?.ok;
+  const balances = s.cloudEntitlement
+    ? s.cloudEntitlement.balances.daily + s.cloudEntitlement.balances.sub + s.cloudEntitlement.balances.topup
+    : 0;
+  return !!s.cloudAuth?.cloud_available && !!s.cloudAuth.logged_in && balances > 0;
+}
+
 type Mode = "browse" | "manage";
 
 export interface DescribeFailure {
@@ -148,9 +172,7 @@ interface State {
   // 扩展连接状态（心跳/采集触发；App 挂载取 + listen collect://extension-connected/disconnected）。
   extensionConnected: boolean;
   setExtensionConnected: (v: boolean) => void;
-  // 统一「环境状态」总览；子引导只由总览卡片跳转唤起。
-  onboardingForceOpen: boolean;
-  setOnboardingForceOpen: (v: boolean) => void;
+  // 统一「环境状态」总览已并入设置面板（模型设置/系统设置直接唤起各子引导）。
   codexOnboardingForceOpen: boolean;
   setCodexOnboardingForceOpen: (v: boolean) => void;
   extensionOnboardingForceOpen: boolean;
@@ -189,6 +211,9 @@ interface State {
   setDreaminaHealth: (h: CodexHealth | null) => void;
   defaultProvider: string; // 全局默认出图 provider（"codex"/"jimeng"，localStorage 持久化）
   setDefaultProvider: (p: string) => void;
+  // —— 默认反推引擎（设置「模型设置」可选并持久化）——
+  defaultUnderstandProvider: string; // "auto" | "bowerbird-cloud" | "codex"
+  setDefaultUnderstandProvider: (p: string) => void;
   activeGenProvider: string; // 当前会话出图 provider（创作板切换条改它，初值=defaultProvider，不持久化）
   setActiveGenProvider: (p: string) => void;
   // —— dreamina 登录流程（OAuth Device Flow；dreamina://login 逐行透传 stdout）——
@@ -631,7 +656,24 @@ export const useStore = create<State>((set, get) => {
       describeFailures: s.describeFailures.filter((failure) => failure.assetId !== assetId),
     })),
   describePicker: null,
-  openDescribePicker: (task, anchor) => set({ describePicker: { task, anchor } }),
+  openDescribePicker: (task, anchor) => {
+    // 设置了默认反推引擎（非 auto）且该引擎当下可用 → 跳过选择浮层直接执行；
+    // 引擎不可用（未登录/积分不足/CLI 未装）时退回浮层让用户看着原因选。
+    const s = get();
+    const pref = s.defaultUnderstandProvider;
+    if (pref === "bowerbird-cloud" || pref === "codex") {
+      if (understandEngineUsable(s, pref)) {
+        if (task.kind === "batch") {
+          for (const id of task.ids) get().runDescribe(id, task.instruction, pref);
+          get().exitManage();
+        } else {
+          get().runDescribe(task.assetId, task.instruction, pref);
+        }
+        return;
+      }
+    }
+    set({ describePicker: { task, anchor } });
+  },
   closeDescribePicker: () => set({ describePicker: null }),
   runDescribePicker: (provider) => {
     const p = get().describePicker;
@@ -655,8 +697,6 @@ export const useStore = create<State>((set, get) => {
   setCodexHealth: (codexHealth) => set({ codexHealth }),
   extensionConnected: false,
   setExtensionConnected: (extensionConnected) => set({ extensionConnected }),
-  onboardingForceOpen: false,
-  setOnboardingForceOpen: (onboardingForceOpen) => set({ onboardingForceOpen }),
   codexOnboardingForceOpen: false,
   setCodexOnboardingForceOpen: (codexOnboardingForceOpen) =>
     set({ codexOnboardingForceOpen }),
@@ -787,6 +827,16 @@ export const useStore = create<State>((set, get) => {
     // 改默认同步切当前选择（用户期望「默认」生效立即）。
     set({ defaultProvider, activeGenProvider: defaultProvider });
   },
+  defaultUnderstandProvider: loadDefaultUnderstandProvider(),
+  setDefaultUnderstandProvider: (p) => {
+    if (!(UNDERSTAND_PROVIDERS as readonly string[]).includes(p)) return;
+    try {
+      localStorage.setItem(DEFAULT_UNDERSTAND_KEY, p);
+    } catch {
+      /* localStorage 不可用时忽略 */
+    }
+    set({ defaultUnderstandProvider: p });
+  },
   activeGenProvider: loadDefaultProvider(),
   setActiveGenProvider: (activeGenProvider) => {
     if (!canUseGenerationProvider(get().cloudEntitlement, activeGenProvider)) return;
@@ -881,7 +931,7 @@ export const useStore = create<State>((set, get) => {
     const jobId = crypto.randomUUID();
     const job: GenJob = {
       id: jobId,
-      turns: [{ id: nextGenTurnId(), prompt: sentPrompt, images: [], provider: prov }],
+      turns: [{ id: nextGenTurnId(), prompt: sentPrompt, promptRaw: rawPrompt ?? null, images: [], provider: prov }],
       sessionId: null,
       streaming: "",
       lastPrompt: sentPrompt,
@@ -1088,7 +1138,12 @@ export const useStore = create<State>((set, get) => {
       const jobId = crypto.randomUUID();
       const job: GenJob = {
         id: jobId,
-        turns: hist.turns.map((t) => ({ id: nextGenTurnId(), prompt: t.prompt, images: t.images })),
+        turns: hist.turns.map((t) => ({
+          id: nextGenTurnId(),
+          prompt: t.prompt,
+          promptRaw: t.prompt_raw ?? null,
+          images: t.images,
+        })),
         sessionId: hist.session_id,
         streaming: "",
         lastPrompt: hist.turns[0]?.prompt ?? "",

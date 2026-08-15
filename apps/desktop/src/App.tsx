@@ -9,7 +9,6 @@ import { DescribeProviderPicker } from "./components/DescribeProviderPicker";
 import { BatchBar } from "./components/BatchBar";
 import { CreationBoard } from "./components/CreationBoard";
 import { GenerationPanel } from "./components/GenerationPanel";
-import { Onboarding } from "./components/Onboarding";
 import { CodexOnboarding } from "./components/CodexOnboarding";
 import { ExtensionOnboarding } from "./components/ExtensionOnboarding";
 import { DreaminaOnboarding } from "./components/DreaminaOnboarding";
@@ -282,15 +281,12 @@ function App() {
   }, [setClassifyProgress]);
 
   // 首启空库 → 起 tour（阶段 B，替代自动注入；startTour 进 step 0 入口弹窗）。
-  // Onboarding 弹着时不起（dialog 在 DOM，由 Onboarding dismiss 触发，避免高亮元素被 Modal 盖）；
-  // Onboarding 不弹（环境就绪）时直接起。
+  // 「环境状态」总览已并入设置面板，不再有弹出的环境 dialog，直接起。
   useEffect(() => {
     if (localStorage.getItem("bowerbird.tutorialSeen") === "1") return;
     const t = setTimeout(() => {
       const s = useStore.getState();
-      const hasDialog = !!document.querySelector('[aria-label="环境状态"]');
       if (s.assets.length !== 0) return;
-      if (hasDialog) return;
       s.startTour();
     }, 1500);
     return () => clearTimeout(t);
@@ -503,9 +499,7 @@ function App() {
   return (
     <div className={`app-shell flex h-full w-full flex-col ${boardOpen ? "has-board" : ""}`}>
       <ToastViewport />
-      {/* 统一「环境状态」总览：codex/扩展任一未就绪时首启自动弹（设置可手动唤起） */}
-      <Onboarding />
-      {/* 二级引导：点总览卡片「前往配置」唤起，不再各自自动弹 */}
+      {/* 环境引导：codex/扩展/即梦由设置面板对应分区直接唤起，不再有「环境状态」总览 */}
       <CodexOnboarding />
       <ExtensionOnboarding />
       <DreaminaOnboarding />

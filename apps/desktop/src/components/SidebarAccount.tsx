@@ -1,21 +1,21 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronUp, LogIn, LogOut, RefreshCw, Settings, UserRound } from "lucide-react";
+import { ChevronDown, ChevronUp, LogIn, LogOut, Settings, Zap } from "lucide-react";
+import { open as openExternal } from "@tauri-apps/plugin-shell";
 import { useStore } from "../store";
 import { understandReady } from "../lib/entitlement";
+import { WEBSITE_URL } from "../lib/constants";
 import { SettingsDialog } from "./SettingsDialog";
 
 /**
  * 左边栏底部账号区（chatgpt 式）：头像 + 用户名 + 档位徽章，点击向上展开 inline 菜单。
- * 未登录 → 「登录 Bowerbird 账号」（弹 AccountOnboarding）；
- * 已登录 → 「刷新权益」/「管理账号」（弹 AccountOnboarding 看余额与积分流水）/「登出」。
- * 菜单底部另有「设置」入口（原工具栏齿轮迁入；codex/扩展任一未就绪挂红点）。
+ * 已登录 → 升级账号（官网）/ 设置 / 登出；未登录 → 登录 Bowerbird 账号 / 设置。
+ * 账号详情（账号名 / 积分明细 / 升级）已移入设置面板「账号管理」。
  * 菜单沿 ProviderSelect/RatioSelect 的 inline 面板范式（不发明浮层），展开在账号行上方。
  */
 export function SidebarAccount() {
   const cloudAuth = useStore((s) => s.cloudAuth);
   const cloudEntitlement = useStore((s) => s.cloudEntitlement);
   const cloudBusy = useStore((s) => s.cloudBusy);
-  const syncCloudEntitlement = useStore((s) => s.syncCloudEntitlement);
   const logoutCloud = useStore((s) => s.logoutCloud);
   const setAccountOnboardingForceOpen = useStore((s) => s.setAccountOnboardingForceOpen);
   const codexHealth = useStore((s) => s.codexHealth);
@@ -62,22 +62,31 @@ export function SidebarAccount() {
               </div>
               <button
                 type="button"
-                onClick={() => void syncCloudEntitlement()}
-                disabled={cloudBusy}
+                onClick={() => void openExternal(WEBSITE_URL)}
                 className="app-context-item px-2 py-1 text-xs"
+                title="打开官网查看订阅方案"
                 role="menuitem"
               >
-                <RefreshCw size={13} />
-                刷新权益
+                <Zap size={13} />
+                升级账号
               </button>
               <button
                 type="button"
-                onClick={openAccountDetail}
+                onClick={() => {
+                  setOpen(false);
+                  setSettingsOpen(true);
+                }}
                 className="app-context-item px-2 py-1 text-xs"
+                title="设置（系统 / 账号 / 模型 / 关于）"
                 role="menuitem"
               >
-                <UserRound size={13} />
-                管理账号
+                <Settings size={13} />
+                设置
+                {hasIssue && (
+                  <span className="ml-auto flex h-3.5 w-3.5 items-center justify-center rounded-full bg-red-500 text-[9px] font-bold leading-none text-white">
+                    !
+                  </span>
+                )}
               </button>
               <button
                 type="button"
@@ -91,34 +100,36 @@ export function SidebarAccount() {
               </button>
             </>
           ) : (
-            <button
-              type="button"
-              onClick={openAccountDetail}
-              className="app-context-item px-2 py-1.5 text-xs"
-              role="menuitem"
-            >
-              <LogIn size={13} />
-              登录 Bowerbird 账号
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={openAccountDetail}
+                className="app-context-item px-2 py-1.5 text-xs"
+                role="menuitem"
+              >
+                <LogIn size={13} />
+                登录 Bowerbird 账号
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setOpen(false);
+                  setSettingsOpen(true);
+                }}
+                className="app-context-item px-2 py-1 text-xs"
+                title="设置（系统 / 账号 / 模型 / 关于）"
+                role="menuitem"
+              >
+                <Settings size={13} />
+                设置
+                {hasIssue && (
+                  <span className="ml-auto flex h-3.5 w-3.5 items-center justify-center rounded-full bg-red-500 text-[9px] font-bold leading-none text-white">
+                    !
+                  </span>
+                )}
+              </button>
+            </>
           )}
-          <button
-            type="button"
-            onClick={() => {
-              setOpen(false);
-              setSettingsOpen(true);
-            }}
-            className="app-context-item px-2 py-1 text-xs"
-            title="设置（环境状态 / 素材库位置 / 入库自动反推）"
-            role="menuitem"
-          >
-            <Settings size={13} />
-            设置
-            {hasIssue && (
-              <span className="ml-auto flex h-3.5 w-3.5 items-center justify-center rounded-full bg-red-500 text-[9px] font-bold leading-none text-white">
-                !
-              </span>
-            )}
-          </button>
         </div>
       )}
 

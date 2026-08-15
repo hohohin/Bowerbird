@@ -63,6 +63,7 @@ export function CreationBoard() {
     rawPrompt,
     references,
     graphSources,
+    agentPromptReferences,
     setChipAssetId,
     chipSections,
     showKeywordHints,
@@ -91,10 +92,17 @@ export function CreationBoard() {
   const [editName, setEditName] = useState("");
   const [editBody, setEditBody] = useState("");
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [agentMode, setAgentMode] = useState(false);
+  const [agentAvailable, setAgentAvailable] = useState(false);
+  const [agentBusy, setAgentBusy] = useState(false);
   const activePreset = useMemo(
     () => presets.find((p) => p.id === activePresetId) ?? null,
     [presets, activePresetId]
   );
+
+  useEffect(() => {
+    api.localAgentHealth().then(setAgentAvailable).catch(() => setAgentAvailable(false));
+  }, []);
 
   // 按当前选中的 provider 判健康（云端需开关+登录+余额，其余读各自 health）。
   const cloudBalance = cloudEntitlement
@@ -113,10 +121,27 @@ export function CreationBoard() {
 
   // 把当前组稿发 provider 生成。生成期间编辑器仍可继续组下一轮稿（prompt 在此快照进 store）。
   // provider 由 store 内 activeGenProvider 兜底（send 不显式传）。
-  function send() {
+  async function send() {
     if (!targetReady || !finalPrompt) return;
     if (!canStartAnotherJob(cloudEntitlement, runningJobCount)) return;
-    void startGeneration(finalPrompt, references, ratio, undefined, rawPrompt);
+    let prompt = finalPrompt;
+    if (agentMode) {
+      setAgentBusy(true);
+      try {
+        const result = await api.localAgentCompilePrompt({
+          originalPrompt: rawPrompt || finalPrompt,
+          references: agentPromptReferences,
+          output: { kind: "图片", ...(ratio ? { ratio } : {}) },
+        });
+        prompt = result.prompt;
+      } catch (error) {
+        notifyError(error, "Agent 意图分析失败");
+        return;
+      } finally {
+        setAgentBusy(false);
+      }
+    }
+    await startGeneration(prompt, references, ratio, undefined, rawPrompt);
   }
 
   // 登记=把当前编辑框内容（finalPrompt）存为用途，只需用户给个名字。
@@ -391,27 +416,47 @@ export function CreationBoard() {
       </div>
 
       <div className="shrink-0 space-y-2 border-t border-edge bg-canvas/60 p-3">
-        <button
-          onClick={send}
-          disabled={!finalPrompt || !targetReady || !canStartAnotherJob(cloudEntitlement, runningJobCount)}
-          title={
-            !targetReady
-              ? `${targetProviderLabel} 不可用`
-              : !canStartAnotherJob(cloudEntitlement, runningJobCount)
-                ? "已达当前档位的并行生成上限"
-                : `把最终 prompt + 参考图发 ${targetProviderLabel} 生成图像（结果进「生成结果」面板）`
-          }
-          className="generation-glow-button flex min-h-11 w-full items-center justify-center rounded-full px-4 py-2 text-sm font-semibold disabled:opacity-50"
-        >
-          <span className="generation-glow-button__content">
-            <Sparkles size={15} />
-            {`发送 ${targetProviderLabel} 生成`}
-          </span>
-        </button>
+        <div className="flex items-stretch gap-2">
+          <button
+            type="button"
+            role="switch"
+            aria-checked={agentMode}
+            disabled={!agentAvailable || agentBusy}
+            onClick={() => setAgentMode((enabled) => !enabled)}
+            title={agentAvailable ? "开启后，Agent 会先综合原 prompt 与参考图维度，再调用当前生图引擎" : "本机 Agent 暂不可用"}
+            className={`flex min-h-11 shrink-0 items-center gap-2 border px-3 text-xs font-medium disabled:opacity-40 ${
+              agentMode ? "border-accent bg-accent/10 text-accent" : "border-edge bg-panel2 text-muted"
+            }`}
+          >
+            <span className={`h-2 w-2 rounded-full ${agentMode ? "bg-accent" : "bg-muted/50"}`} />
+            Agent 模式
+          </button>
+          <button
+            onClick={() => void send()}
+            disabled={agentBusy || !finalPrompt || !targetReady || !canStartAnotherJob(cloudEntitlement, runningJobCount)}
+            title={
+              !targetReady
+                ? `${targetProviderLabel} 不可用`
+                : !canStartAnotherJob(cloudEntitlement, runningJobCount)
+                  ? "已达当前档位的并行生成上限"
+                  : agentMode
+                    ? `先由 Agent 整理意图，再发 ${targetProviderLabel} 生成图像`
+                    : `把当前 prompt + 参考图发 ${targetProviderLabel} 生成图像`
+            }
+            className="generation-glow-button flex min-h-11 w-full items-center justify-center rounded-full px-4 py-2 text-sm font-semibold disabled:opacity-50"
+          >
+            <span className="generation-glow-button__content">
+              <Sparkles size={15} />
+              {agentBusy ? "Agent 正在整理意图…" : `发送 ${targetProviderLabel} 生成`}
+            </span>
+          </button>
+        </div>
         <div className="text-[10px] text-muted">
           {!targetReady
             ? "请先登录 Bowerbird 账号或在「设置 · AI 出图引擎」选择可用引擎"
-            : "发送后自动打开生成结果；创作板草稿会持续保留。"}
+            : agentMode
+              ? "Agent 只优化本次发送的 prompt；参考图和生成流程仍使用当前设置。"
+              : "关闭 Agent 模式时，按当前编辑框 prompt 直接生成。"}
         </div>
       </div>
     </aside>

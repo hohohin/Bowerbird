@@ -139,10 +139,13 @@ export interface Preset {
   updated_at?: number | null;
 }
 
-/** 生成对话一轮：用户输入（首轮=编辑器 finalPrompt，后续=修改意见）+ 本轮产出图（asset 路径）。 */
+/** 生成对话一轮：用户输入（首轮=编辑器组稿，后续=修改意见）+ 本轮产出图（asset 路径）。 */
 export interface GenTurn {
   id: number;
   prompt: string;
+  // 未铺开的编辑框原文（会话用户气泡显示它，与右键「复用生成提示词」同一数据）；
+  // prompt 则是实际发给 AI 的完整文本（用途注入等），收进「thinking」式折叠。旧数据 / 续轮为 null。
+  promptRaw?: string | null;
   images: string[];
   // 本轮用的 provider（done 事件回填，"codex-cli"/"jimeng"）；TurnView 角标「via ...」。
   provider?: string;
@@ -314,6 +317,30 @@ export interface LocalAgentRun {
   checkpoint: LocalAgentCheckpoint;
   created_at: number;
   updated_at: number;
+}
+
+export interface AgentPromptDimensionInput {
+  key: string;
+  label: string;
+  raw: string;
+}
+
+export interface AgentPromptInput {
+  originalPrompt: string;
+  references: Array<{
+    assetId: string;
+    name?: string;
+    dimensions: AgentPromptDimensionInput[];
+  }>;
+  output?: {
+    kind?: string;
+    ratio?: string;
+  };
+}
+
+export interface AgentPromptResult {
+  prompt: string;
+  attempts: number;
 }
 
 export type CodexChunk =

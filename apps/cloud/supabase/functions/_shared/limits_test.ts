@@ -1,6 +1,7 @@
-import { assertEquals, assertThrows } from "jsr:@std/assert@1";
+import { assertEquals, assertRejects, assertThrows } from "jsr:@std/assert@1";
+import { DEFAULT_IMAGE_UPSTREAM_TIMEOUT_MS } from "./ark.ts";
 import { ApiError } from "./errors.ts";
-import { assertReferenceImages } from "./limits.ts";
+import { assertReferenceImages, DEFAULT_PROXY_TIMEOUT_MS, withTimeout } from "./limits.ts";
 
 function encoded(bytes: number[]): string {
   return btoa(String.fromCharCode(...bytes));
@@ -8,6 +9,18 @@ function encoded(bytes: number[]): string {
 
 Deno.test("reference validation accepts matching JPEG bytes", () => {
   assertReferenceImages([{ mime: "image/jpeg", base64: encoded([0xff, 0xd8, 0xff, 0xd9]) }]);
+});
+
+Deno.test("proxy timeout is later than the Ark image timeout", () => {
+  assertEquals(DEFAULT_PROXY_TIMEOUT_MS - DEFAULT_IMAGE_UPSTREAM_TIMEOUT_MS, 5_000);
+});
+
+Deno.test("proxy timeout still bounds a stalled operation", async () => {
+  const error = await assertRejects(
+    () => withTimeout(new Promise<never>(() => {}), 5),
+    ApiError,
+  );
+  assertEquals(error.code, "upstream_timeout");
 });
 
 Deno.test("reference validation rejects WebP before the billing hold", () => {

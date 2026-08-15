@@ -8,6 +8,8 @@ use tokio::{io::AsyncWriteExt, process::Command, time::Duration};
 use crate::{db::Database, error::AppError};
 
 const SKILL_ID: &str = "smart-refinement";
+const SMART_REFINEMENT_ENTRYPOINT: &str = "src/local/cli.ts";
+const PROMPT_AGENT_ENTRYPOINT: &str = "src/local/prompt-agent-cli.ts";
 const MAX_CHECKPOINT_BYTES: usize = 256 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,7 +48,7 @@ fn worker_dir() -> Result<PathBuf, AppError> {
     ))
 }
 
-async fn invoke_worker(payload: Value) -> Result<Value, AppError> {
+async fn invoke_worker(entrypoint: &str, payload: Value) -> Result<Value, AppError> {
     ensure_preview_enabled()?;
     let dir = worker_dir()?;
     let env_file = dir.join("../cloud/.env");
@@ -55,9 +57,12 @@ async fn invoke_worker(payload: Value) -> Result<Value, AppError> {
             "缺少 apps/cloud/.env，无法读取本机 DeepSeek 配置".into(),
         ));
     }
+    if entrypoint != SMART_REFINEMENT_ENTRYPOINT && entrypoint != PROMPT_AGENT_ENTRYPOINT {
+        return Err(AppError::Other("未知的本机 Agent 入口".into()));
+    }
     let mut child = Command::new("node")
         .arg(format!("--env-file={}", env_file.display()))
-        .arg("src/local/cli.ts")
+        .arg(entrypoint)
         .current_dir(&dir)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -203,10 +208,38 @@ pub async fn local_agent_start(
         "generateAttemptCount": 0,
         "spentCredits": 0
     });
-    let advanced = invoke_worker(json!({ "checkpoint": checkpoint })).await?;
+    let advanced = invoke_worker(
+        SMART_REFINEMENT_ENTRYPOINT,
+        json!({ "checkpoint": checkpoint }),
+    )
+    .await?;
     let run = run_from_checkpoint(id, asset_id, advanced, now)?;
     save_run(&db, &run)?;
     Ok(run)
+}
+
+#[tauri::command]
+pub async fn local_agent_compile_prompt(input: Value) -> Result<Value, AppError> {
+    ensure_preview_enabled()?;
+    input
+        .get("originalPrompt")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && value.chars().count() <= 12_000)
+        .ok_or_else(|| AppError::Other("Agent 模式需要有效的原始 prompt".into()))?;
+    input
+        .get("references")
+        .and_then(Value::as_array)
+        .filter(|items| items.len() <= 8)
+        .ok_or_else(|| AppError::Other("Agent 模式最多处理 8 张参考图".into()))?;
+    let result = invoke_worker(PROMPT_AGENT_ENTRYPOINT, input).await?;
+    result
+        .get("prompt")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::Other("Agent 没有返回可用 prompt".into()))?;
+    Ok(result)
 }
 
 #[tauri::command]
@@ -218,6 +251,11 @@ pub async fn local_agent_resume(
 ) -> Result<LocalAgentRun, AppError> {
     ensure_preview_enabled()?;
     let existing = load_run(&db, &run_id)?;
+    if existing.skill_id != SKILL_ID {
+        return Err(AppError::Other(
+            "该旧版 Agent Run 已停止支持继续执行".into(),
+        ));
+    }
     let mut payload = json!({ "checkpoint": existing.checkpoint });
     if let Some(value) = approval {
         payload["approval"] = json!(value);
@@ -225,7 +263,7 @@ pub async fn local_agent_resume(
     if let Some(value) = tool_result {
         payload["toolResult"] = value;
     }
-    let advanced = invoke_worker(payload).await?;
+    let advanced = invoke_worker(SMART_REFINEMENT_ENTRYPOINT, payload).await?;
     let run = run_from_checkpoint(
         existing.id,
         existing.target_asset_id,
@@ -244,9 +282,9 @@ pub async fn local_agent_latest(
     ensure_preview_enabled()?;
     let conn = db.conn.lock().unwrap();
     let mut stmt = conn.prepare(
-        "SELECT id, skill_id, target_asset_id, status, phase, checkpoint_json, created_at, updated_at FROM local_agent_runs WHERE target_asset_id=?1 ORDER BY updated_at DESC LIMIT 1",
+        "SELECT id, skill_id, target_asset_id, status, phase, checkpoint_json, created_at, updated_at FROM local_agent_runs WHERE target_asset_id=?1 AND skill_id=?2 ORDER BY updated_at DESC LIMIT 1",
     )?;
-    let mut rows = stmt.query([asset_id])?;
+    let mut rows = stmt.query(rusqlite::params![asset_id, SKILL_ID])?;
     match rows.next()? {
         Some(row) => Ok(Some(row_to_run(row)?)),
         None => Ok(None),

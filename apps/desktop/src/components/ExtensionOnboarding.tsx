@@ -62,10 +62,10 @@ function ZoomImage({ src, onClose }: { src: string; onClose: () => void }) {
 }
 
 /**
- * 扩展安装引导（一级「环境状态」总览的二级弹窗；约定 13 全屏 Modal 形态）。
+ * 扩展安装引导（设置「系统设置」的扩展卡片唤起；约定 13 全屏 Modal 形态）。
  *
- * 只由一级总览卡片经 `extensionOnboardingForceOpen` 跳转唤起，不再自行判断 seen、不自动弹；
- * 「稍后再说」与「打开期间由未连接变为已连接」均返回一级总览，由一级负责最终关闭与写 seen。
+ * 由设置对应分区经 `extensionOnboardingForceOpen` 跳转唤起，不再自行判断 seen、不自动弹；
+ * 「稍后再说」与「打开期间由未连接变为已连接」均直接关闭。
  * 打开时若扩展已连接，仍保持可重看教程（不首帧自动关闭）。
  *
  * 不自动打开 chrome://extensions / 文件夹——Windows 上 Chrome 单实例丢 URL、explorer 不认
@@ -75,14 +75,12 @@ export function ExtensionOnboarding() {
   const connected = useStore((s) => s.extensionConnected);
   const forceOpen = useStore((s) => s.extensionOnboardingForceOpen);
   const setForceOpen = useStore((s) => s.setExtensionOnboardingForceOpen);
-  // 点「稍后再说」/连接成功回一级总览（而非直接关回主界面）。
-  const setOverviewOpen = useStore((s) => s.setOnboardingForceOpen);
   const [copied, setCopied] = useState<string | null>(null); // "page" | "folder"
   const [zoom, setZoom] = useState<string | null>(null); // 放大的 gif src
   const prevConnected = useRef(connected);
 
-  // 仅在二级打开期间由「未连接 → 已连接」跃迁才视为本次配置成功：关二级 + 回一级总览
-  // （一级只能由用户关闭，不在此处自动收）。打开时本就已连接则保持可重看教程。
+  // 仅在引导打开期间由「未连接 → 已连接」跃迁才视为本次配置成功：直接关引导。
+  // 打开时本就已连接则保持可重看教程。
   useEffect(() => {
     if (!forceOpen) {
       prevConnected.current = connected;
@@ -90,17 +88,15 @@ export function ExtensionOnboarding() {
     }
     if (!prevConnected.current && connected) {
       setForceOpen(false);
-      setOverviewOpen(true);
     }
     prevConnected.current = connected;
-  }, [connected, forceOpen, setForceOpen, setOverviewOpen]);
+  }, [connected, forceOpen, setForceOpen]);
 
-  // 只由一级总览卡片跳转唤起（forceOpen）；不自动弹。
+  // 由设置「系统设置」的扩展卡片唤起（forceOpen）；不自动弹。
   if (!forceOpen) return null;
 
   function dismiss() {
     setForceOpen(false);
-    setOverviewOpen(true);
   }
 
   async function copy(text: string, tag: string) {

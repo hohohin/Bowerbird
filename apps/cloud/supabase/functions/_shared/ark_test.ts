@@ -1,5 +1,9 @@
 import { assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
-import { arkTransportError, upstreamError } from "./ark.ts";
+import { arkTransportError, DEFAULT_IMAGE_UPSTREAM_TIMEOUT_MS, upstreamError } from "./ark.ts";
+
+Deno.test("Ark image timeout leaves room for proxy settlement", () => {
+  assertEquals(DEFAULT_IMAGE_UPSTREAM_TIMEOUT_MS, 135_000);
+});
 
 Deno.test("Ark text moderation has a distinct safe message", () => {
   const error = upstreamError(

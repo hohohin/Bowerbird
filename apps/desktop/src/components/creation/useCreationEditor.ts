@@ -6,7 +6,7 @@ import type { Node as PmNode, ResolvedPos } from "prosemirror-model";
 import { useStore } from "../../store";
 import type { Asset, CaptionSection, PromptedAsset } from "../../lib/types";
 import { creationSchema, imageAttrs } from "./schema";
-import { serializeDoc, graphSourcesFromDoc } from "./serialize";
+import { agentPromptReferencesFromDoc, graphSourcesFromDoc, serializeDoc } from "./serialize";
 import { parsePromptToDoc, parsePromptToInline } from "./parse";
 import { buildPlugins } from "./plugins";
 
@@ -203,6 +203,12 @@ export function useCreationEditor() {
     return graphSourcesFromDoc(doc, assetByIdRef.current);
   }, [tick, assetById]);
 
+  const agentPromptReferences = useMemo(() => {
+    const doc = viewRef.current?.state.doc;
+    if (!doc) return [];
+    return agentPromptReferencesFromDoc(doc, assetByIdRef.current);
+  }, [tick, assetById]);
+
   const insertKeyword = useCallback((title: string, body: string = "") => {
     const v = viewRef.current;
     if (!v) return;
@@ -221,6 +227,7 @@ export function useCreationEditor() {
     rawPrompt,
     references: serialized.references,
     graphSources,
+    agentPromptReferences,
     chipAssetId,
     setChipAssetId,
     chipSections,

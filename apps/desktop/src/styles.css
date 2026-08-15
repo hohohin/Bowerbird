@@ -114,7 +114,7 @@ textarea:focus-visible,
 .app-shell-hatch {
   position: relative;
   z-index: 30;
-  height: 14px;
+  height: 9px;
   flex: 0 0 auto;
   border-bottom: 1px solid #292727;
   background: var(--bb-hatch), #100e0e;
@@ -545,7 +545,7 @@ textarea:focus-visible,
 
 .library-empty-hatch {
   position: relative;
-  height: 28px;
+  height: 9px;
   border-bottom: 1px solid #292727;
   background: var(--bb-hatch);
 }
@@ -597,7 +597,7 @@ textarea:focus-visible,
 
 .hatch-divider {
   position: relative;
-  height: 12px;
+  height: 9px;
   flex: 0 0 auto;
   border-top: 0;
   border-bottom: 1px solid #292727;

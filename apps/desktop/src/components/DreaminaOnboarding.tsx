@@ -9,22 +9,21 @@ import { ModalShell } from "./ModalShell";
 type InstallState = "idle" | "running" | "done" | "error";
 
 /**
- * 即梦 dreamina CLI 配置引导（一级「环境状态」总览的二级弹窗）。
+ * 即梦 dreamina CLI 配置引导（设置「模型设置」的即梦卡片唤起）。
  *
- * 只由一级总览卡片经 `dreaminaOnboardingForceOpen` 跳转唤起；「稍后再说」与检测成功均返回一级。
+ * 由设置「模型设置」的即梦卡片经 `dreaminaOnboardingForceOpen` 唤起；「稍后再说」与检测成功均直接关闭。
  * step1「一键安装」→ `dreamina_install`（app 内 reqwest 下载二进制，绕过 curl|bash 在 Windows 的坑；
  *   进度经 `dreamina://setup-progress` 推）；
  * step2「打开终端登录」→ `open_dreamina_login`（真 TTY 必需——dreamina login 非 headless 依赖 isatty，
  *   app 内 spawn 非 TTY 不写 token，见踩坑）；
  * step3 终端授权完成后「重新检测」。
- * 成功后端 emit `dreamina://health-changed` → 自动重检 → ok 则回一级。
+ * 成功后端 emit `dreamina://health-changed` → 自动重检 → ok 则直接关闭。
  */
 export function DreaminaOnboarding() {
   const dreaminaHealth = useStore((s) => s.dreaminaHealth);
   const setDreaminaHealth = useStore((s) => s.setDreaminaHealth);
   const forceOpen = useStore((s) => s.dreaminaOnboardingForceOpen);
   const setForceOpen = useStore((s) => s.setDreaminaOnboardingForceOpen);
-  const setOverviewOpen = useStore((s) => s.setOnboardingForceOpen);
   const [checking, setChecking] = useState(false);
   const [installState, setInstallState] = useState<InstallState>("idle");
   const [installReason, setInstallReason] = useState("");
@@ -49,7 +48,7 @@ export function DreaminaOnboarding() {
     };
   }, []);
 
-  // 安装成功后端 emit `dreamina://health-changed` → 自动重检（ok 则回一级）。
+  // 安装成功后端 emit `dreamina://health-changed` → 自动重检（ok 则直接关引导）。
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
     let alive = true;
@@ -64,12 +63,11 @@ export function DreaminaOnboarding() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 只由一级总览卡片跳转唤起（forceOpen）；不自动弹。
+  // 由设置唤起（forceOpen）；不自动弹。
   if (!forceOpen) return null;
 
   function dismiss() {
     setForceOpen(false);
-    setOverviewOpen(true);
   }
 
   async function recheck() {
@@ -79,7 +77,6 @@ export function DreaminaOnboarding() {
       setDreaminaHealth(h);
       if (h.ok) {
         setForceOpen(false);
-        setOverviewOpen(true);
       }
     } catch {
       setDreaminaHealth({ ok: false, reason: "dreamina 状态检测失败" });
@@ -136,7 +133,6 @@ export function DreaminaOnboarding() {
       setDreaminaHealth(h);
       if (h.ok) {
         setForceOpen(false);
-        setOverviewOpen(true);
       } else {
         setLoginError(h.reason || "授权未完成，请确认已在浏览器完成授权后重试");
       }

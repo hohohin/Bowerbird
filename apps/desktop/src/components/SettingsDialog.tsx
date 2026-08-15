@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { useStore } from "../store";
+import { getVersion } from "@tauri-apps/api/app";
+import { open } from "@tauri-apps/plugin-shell";
+import { useStore, understandEngineUsable } from "../store";
 import { api } from "../lib/api";
-import { DEFAULT_AUTO_ANALYZE_PROMPT } from "../lib/constants";
-import { understandProvider, understandReady } from "../lib/entitlement";
+import { DEFAULT_AUTO_ANALYZE_PROMPT, WEBSITE_URL } from "../lib/constants";
 import type { MigrateProgress } from "../lib/types";
 import { ModalShell } from "./ModalShell";
 
@@ -13,29 +14,55 @@ const STAGE_LABEL: Record<string, string> = {
   db: "整理数据库",
 };
 
+type SectionKey = "system" | "account" | "models" | "personalization" | "about";
+
+const SECTIONS: { key: SectionKey; label: string }[] = [
+  { key: "system", label: "系统设置" },
+  { key: "account", label: "账号管理" },
+  { key: "models", label: "模型设置" },
+  { key: "personalization", label: "个性化与记忆" },
+  { key: "about", label: "关于我们" },
+];
+
 /**
- * 设置面板（约定 13 全屏 Modal 形态）：环境状态统一入口 + 入库自动反推配置 + 素材库位置迁移。
- * 重建色板 / 智能归类全部已直达到侧栏对应栏目旁；账号入口已下移到侧栏底部；即梦登录/检测
- * 收敛进「环境状态」的即梦 onboarding。由工具栏齿轮按钮唤起。点背景 / ✕ 关闭。
+ * 设置面板（约定 13 全屏 Modal 形态）：常见两列式——左侧分区导航，右侧具体内容。
+ *
+ * 五分区：系统设置（素材库位置 / 浏览器扩展 / 新手教程）、账号管理（账号名 / 等级与升级 / 积分明细）、
+ * 模型设置（codex CLI / 即梦 CLI / 默认反推模型 / 入库自动反推）、个性化与记忆（预留）、
+ * 关于我们（当前版本 / 前往官网）。原「环境状态」总览已删除，各引导由对应分区直接唤起。
+ * 由侧栏底部账号区「设置」唤起。点背景 / ✕ 关闭。
  */
 export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const codexHealth = useStore((s) => s.codexHealth);
   const setCodexHealth = useStore((s) => s.setCodexHealth);
   const extensionConnected = useStore((s) => s.extensionConnected);
-  const setOnboardingForceOpen = useStore((s) => s.setOnboardingForceOpen);
+  const setExtensionOnboardingForceOpen = useStore((s) => s.setExtensionOnboardingForceOpen);
+  const setCodexOnboardingForceOpen = useStore((s) => s.setCodexOnboardingForceOpen);
+  const setDreaminaOnboardingForceOpen = useStore((s) => s.setDreaminaOnboardingForceOpen);
+  const setAccountOnboardingForceOpen = useStore((s) => s.setAccountOnboardingForceOpen);
+  const startTour = useStore((s) => s.startTour);
   const settings = useStore((s) => s.settings);
   const loadSettings = useStore((s) => s.loadSettings);
   const updateSettings = useStore((s) => s.updateSettings);
+  const cloudAuth = useStore((s) => s.cloudAuth);
+  const cloudEntitlement = useStore((s) => s.cloudEntitlement);
+  const cloudBusy = useStore((s) => s.cloudBusy);
+  const syncCloudEntitlement = useStore((s) => s.syncCloudEntitlement);
+  const logoutCloud = useStore((s) => s.logoutCloud);
+  const dreaminaHealth = useStore((s) => s.dreaminaHealth);
+  const setDreaminaHealth = useStore((s) => s.setDreaminaHealth);
+  const defaultUnderstandProvider = useStore((s) => s.defaultUnderstandProvider);
+  const setDefaultUnderstandProvider = useStore((s) => s.setDefaultUnderstandProvider);
+
+  const [section, setSection] = useState<SectionKey>("system");
+  const [appVersion, setAppVersion] = useState<string | null>(null);
+  const [checkingCodex, setCheckingCodex] = useState(false);
+  const [checkingDreamina, setCheckingDreamina] = useState(false);
 
   // 本地编辑态：打开面板时从 store 快照初始化，失焦/按键时写回。
   const [autoAnalyzeOnIngest, setAutoAnalyzeOnIngest] = useState(false);
   const [promptText, setPromptText] = useState("");
-  const promptRef = useRef<HTMLTextAreaElement>(null);
   const initialized = useRef(false);
-  const cloudAuth = useStore((s) => s.cloudAuth);
-  const cloudEntitlement = useStore((s) => s.cloudEntitlement);
-  // 理解引擎路由（入库自动反推说明文案用；free 需开启云端理解）。
-  const understandRoute = understandProvider(cloudEntitlement);
 
   // —— 素材库位置 ——
   const [libRoot, setLibRoot] = useState<string | null>(null);
@@ -46,6 +73,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
 
   useEffect(() => {
     api.libraryRoot().then(setLibRoot).catch(() => {});
+    getVersion().then(setAppVersion).catch(() => {});
   }, []);
 
   // 迁移进度：后端复制大目录时逐文件推 library://migrate-progress。
@@ -96,8 +124,6 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     }
   }, [settings]);
 
-  const allReady = understandReady({ entitlement: cloudEntitlement, codexHealth, cloudAuth }) && extensionConnected;
-
   const commitSettings = (onIngest: boolean, prompt: string) => {
     // 全量覆盖：只改自动反推两项，其余设置保持不变。
     void updateSettings({
@@ -123,205 +149,499 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     }
   }
 
+  async function recheckCodex() {
+    setCheckingCodex(true);
+    try {
+      setCodexHealth(await api.codexHealth());
+    } catch {
+      setCodexHealth({ ok: false, reason: "codex 状态检测失败" });
+    } finally {
+      setCheckingCodex(false);
+    }
+  }
+
+  async function recheckDreamina() {
+    setCheckingDreamina(true);
+    try {
+      setDreaminaHealth(await api.dreaminaHealth());
+    } catch {
+      setDreaminaHealth({ ok: false, reason: "dreamina 状态检测失败" });
+    } finally {
+      setCheckingDreamina(false);
+    }
+  }
+
   const progress = migrateProgress
     ? STAGE_LABEL[migrateProgress.stage] ?? migrateProgress.stage
     : "";
+
+  // 默认反推模型：非 auto 选项仅在对应引擎当下可用时可选（门控与选择浮层一致）。
+  const cloudUsable = understandEngineUsable({ cloudAuth, cloudEntitlement, codexHealth }, "bowerbird-cloud");
+  const codexUsable = understandEngineUsable({ cloudAuth, cloudEntitlement, codexHealth }, "codex");
+  const understandOptions: { key: string; label: string; ok: boolean; reason?: string }[] = [
+    { key: "auto", label: "自动（按账号档位）", ok: true },
+    {
+      key: "bowerbird-cloud",
+      label: "Bowerbird Cloud",
+      ok: cloudUsable,
+      reason: cloudUsable ? undefined : "需已登录且有积分",
+    },
+    {
+      key: "codex",
+      label: "本机 codex",
+      ok: codexUsable,
+      reason: codexUsable ? undefined : "需 Pro+ 且本机 CLI 就绪",
+    },
+  ];
+
+  const loggedIn = cloudAuth?.logged_in === true;
+  const accountName = cloudAuth?.email || cloudAuth?.user_id || "";
+  const tier = cloudEntitlement?.tier?.toUpperCase() ?? "FREE";
+  const balances = cloudEntitlement?.balances;
+  const transactions = cloudEntitlement?.recent_transactions ?? [];
 
   return (
     <ModalShell
       title="设置"
       eyebrow="Preferences"
-      description="管理运行环境、自动分析和本地素材库位置。"
-      width="md"
+      width="lg"
       preventClose={migrating}
       onClose={onClose}
-      footer={
-        <button
-          onClick={onClose}
-          disabled={migrating}
-          className="app-modal-button is-primary"
-        >
-          {migrating && <span className="app-spinner" aria-hidden />}
-          {migrating ? "迁移进行中…" : "完成"}
-        </button>
-      }
     >
-        <div className="space-y-3 text-sm">
-          {/* 环境状态：统一引导入口（codex CLI / 浏览器扩展 / 新手教程），开 Onboarding 大面板 */}
-          <div className="settings-card px-3 py-2.5">
-            <div className="flex items-center justify-between">
-              <span className="text-ink">环境状态</span>
-              <span
-                className={`rounded px-2 py-0.5 text-xs ${
-                  allReady
-                    ? "bg-green-500/15 text-green-400"
-                    : "bg-red-500/15 text-red-300"
-                }`}
-              >
-                {allReady ? "全部就绪" : "有待完成项"}
-              </span>
-            </div>
-            <p className="mt-1 text-xs text-muted">
-              codex CLI、浏览器扩展的安装与状态，以及新手教程，集中在「环境状态」引导里。
-            </p>
+      {/* 固定高度：不随分区内容多少变化；右列内部滚动 */}
+      <div className="flex h-[480px] gap-4 text-sm">
+        {/* 左列：分区导航 */}
+        <nav className="flex w-36 shrink-0 flex-col gap-0.5 border-r border-edge pr-3" aria-label="设置分区">
+          {SECTIONS.map((s) => (
             <button
-              onClick={() => {
-                setOnboardingForceOpen(true);
-                onClose();
-              }}
-              className="mt-2 rounded-md bg-accent px-3 py-1.5 text-[12px] font-medium text-black hover:opacity-90"
+              key={s.key}
+              type="button"
+              onClick={() => setSection(s.key)}
+              aria-current={section === s.key ? "true" : undefined}
+              className={`rounded px-2.5 py-1.5 text-left text-xs ${
+                section === s.key
+                  ? "bg-accent/15 font-medium text-accent"
+                  : "text-muted hover:bg-panel2 hover:text-ink"
+              }`}
             >
-              打开环境状态
+              {s.label}
             </button>
-          </div>
+          ))}
+        </nav>
 
-          {/* 官方 Cloud 连接只读展示；URL/key 与 Mock 开关不属于用户设置。 */}
-          <div className="settings-card px-3 py-2.5">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-ink">Bowerbird Cloud</span>
-              <span className={`rounded px-2 py-0.5 text-xs ${cloudAuth?.cloud_available ? "bg-green-500/15 text-green-400" : "bg-red-500/15 text-red-300"}`}>
-                {cloudAuth?.cloud_available ? "官方服务已配置" : "当前版本不可用"}
-              </span>
-            </div>
-            <p className="mt-1 text-[11px] text-muted">连接由 Bowerbird 官方构建内置，用户无需配置；算力环境由官方云端统一管理。</p>
-          </div>
-
-          {/* 入库时自动反推 */}
-          <div className="settings-card px-3 py-2.5">
-            <label className="flex items-center gap-2 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={autoAnalyzeOnIngest}
-                onChange={(e) => {
-                  const v = e.target.checked;
-                  setAutoAnalyzeOnIngest(v);
-                  commitSettings(v, promptText);
-                }}
-                className="size-4 accent-accent"
-              />
-              <span className="text-ink">入库时自动反推</span>
-            </label>
-            <p className="mt-1 ml-6 text-xs text-muted">
-              开启后，新素材入库时自动调用当前账号可用的理解引擎进行反推描述与自动重命名。
-              {understandRoute === "bowerbird-cloud" && " 免费版还需开启下方“允许云端理解”。"}
-            </p>
-
-            {/* 二级选项：提示词文本框 */}
-            {autoAnalyzeOnIngest && (
-              <div className="mt-3 ml-6">
-                <label className="text-xs text-muted">自动反推提示词</label>
-                <textarea
-                  ref={promptRef}
-                  value={promptText}
-                  onChange={(e) => setPromptText(e.target.value)}
-                  onBlur={() => commitSettings(autoAnalyzeOnIngest, promptText)}
-                  rows={5}
-                  className="mt-1 w-full rounded border border-edge bg-panel px-2.5 py-1.5 text-[12px] text-ink
-                    placeholder:text-muted/50 resize-y font-mono leading-relaxed"
-                  placeholder={DEFAULT_AUTO_ANALYZE_PROMPT}
-                />
-                <p className="mt-1 text-[11px] text-muted">
-                  可用 <code className="text-[11px]">{`{vocab}`}</code>{" "}
-                  表示受控类别词表，运行时会自动替换。
+        {/* 右列：具体内容（内容超出时列内滚动） */}
+        <div className="min-w-0 flex-1 space-y-3 overflow-y-auto">
+          {section === "system" && (
+            <>
+              {/* 素材库位置 */}
+              <div className="settings-card px-3 py-2.5">
+                <div className="text-ink">素材库位置</div>
+                <p className="mt-1 break-all text-[11px] text-muted" title={libRoot ?? ""}>
+                  {libRoot ?? "读取中…"}
                 </p>
-              </div>
-            )}
-            {/* 云端理解：随账号移出设置后，勾选留在「入库时自动反推」里（本质是入库行为开关）。 */}
-            <label className="mt-3 flex cursor-pointer items-start gap-2 border-t border-edge pt-2 text-[11px] text-muted">
-              <input
-                type="checkbox"
-                checked={settings?.cloud_auto_understand ?? false}
-                onChange={(e) => settings && void updateSettings({ ...settings, cloud_auto_understand: e.target.checked })}
-                disabled={!cloudAuth?.cloud_available}
-                className="mt-0.5 size-3.5 accent-accent"
-              />
-              <span>允许入库自动分析时，把新图片临时发送到 Bowerbird Cloud 理解（默认关闭；请求结束不保存图片）</span>
-            </label>
-          </div>
 
-          {/* 素材库位置 */}
-          <div className="settings-card px-3 py-2.5">
-            <div className="text-ink">素材库位置</div>
-            <p className="mt-1 break-all text-[11px] text-muted" title={libRoot ?? ""}>
-              {libRoot ?? "读取中…"}
-            </p>
-
-            {!migrateTarget && !migrating && (
-              <button
-                onClick={async () => {
-                  setMigrateError(null);
-                  const picked = await api.pickFolder();
-                  if (picked) setMigrateTarget(picked);
-                }}
-                className="mt-2 rounded-md bg-panel px-3 py-1 text-[12px] text-ink hover:bg-edge"
-              >
-                更改位置并迁移…
-              </button>
-            )}
-
-            {migrateTarget && !migrating && (
-              <div className="mt-2 rounded bg-panel p-2 text-[11px]">
-                <div className="text-muted">
-                  将全部原图 / 缩略图 / 数据库复制到新位置，随后自动重启；旧位置文件在重启后清理，可释放系统盘空间。迁移期间请勿操作。
-                </div>
-                <div className="mt-1.5 break-all text-ink">
-                  → <span className="text-accent">{migrateTarget}</span>
-                </div>
-                {migrateError && (
-                  <div className="mt-1.5 text-red-300">{migrateError}</div>
-                )}
-                <div className="mt-2 flex gap-2">
+                {!migrateTarget && !migrating && (
                   <button
-                    onClick={() => void startMigrate()}
-                    className="rounded-md bg-accent px-3 py-1 text-[12px] font-medium text-black hover:opacity-90"
-                  >
-                    开始迁移
-                  </button>
-                  <button
-                    onClick={() => {
-                      setMigrateTarget(null);
+                    onClick={async () => {
                       setMigrateError(null);
+                      const picked = await api.pickFolder();
+                      if (picked) setMigrateTarget(picked);
                     }}
-                    className="rounded bg-panel2 px-3 py-1 text-[12px] text-muted hover:text-ink"
+                    className="mt-2 rounded-md bg-panel px-3 py-1 text-[12px] text-ink hover:bg-edge"
                   >
-                    取消
+                    更改位置并迁移…
                   </button>
-                </div>
-              </div>
-            )}
+                )}
 
-            {migrating && (
-              <div className="mt-2 rounded bg-panel p-2 text-[11px] text-muted">
-                <div>
-                  正在{progress}…
-                  {migrateProgress && migrateProgress.total > 0 && (
-                    <span className="text-ink">
-                      {" "}
-                      {migrateProgress.done} / {migrateProgress.total}
-                    </span>
-                  )}
-                </div>
-                {migrateProgress && migrateProgress.total > 0 && (
-                  <div className="mt-1.5 h-1 w-full overflow-hidden rounded bg-panel2">
-                    <div
-                      className="h-full bg-accent transition-[width]"
-                      style={{
-                        width: `${Math.round((migrateProgress.done / migrateProgress.total) * 100)}%`,
-                      }}
-                    />
+                {migrateTarget && !migrating && (
+                  <div className="mt-2 rounded bg-panel p-2 text-[11px]">
+                    <div className="text-muted">
+                      将全部原图 / 缩略图 / 数据库复制到新位置，随后自动重启；旧位置文件在重启后清理，可释放系统盘空间。迁移期间请勿操作。
+                    </div>
+                    <div className="mt-1.5 break-all text-ink">
+                      → <span className="text-accent">{migrateTarget}</span>
+                    </div>
+                    {migrateError && (
+                      <div className="mt-1.5 text-red-300">{migrateError}</div>
+                    )}
+                    <div className="mt-2 flex gap-2">
+                      <button
+                        onClick={() => void startMigrate()}
+                        className="rounded-md bg-accent px-3 py-1 text-[12px] font-medium text-black hover:opacity-90"
+                      >
+                        开始迁移
+                      </button>
+                      <button
+                        onClick={() => {
+                          setMigrateTarget(null);
+                          setMigrateError(null);
+                        }}
+                        className="rounded bg-panel2 px-3 py-1 text-[12px] text-muted hover:text-ink"
+                      >
+                        取消
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {migrating && (
+                  <div className="mt-2 rounded bg-panel p-2 text-[11px] text-muted">
+                    <div>
+                      正在{progress}…
+                      {migrateProgress && migrateProgress.total > 0 && (
+                        <span className="text-ink">
+                          {" "}
+                          {migrateProgress.done} / {migrateProgress.total}
+                        </span>
+                      )}
+                    </div>
+                    {migrateProgress && migrateProgress.total > 0 && (
+                      <div className="mt-1.5 h-1 w-full overflow-hidden rounded bg-panel2">
+                        <div
+                          className="h-full bg-accent transition-[width]"
+                          style={{
+                            width: `${Math.round((migrateProgress.done / migrateProgress.total) * 100)}%`,
+                          }}
+                        />
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
-            )}
-          </div>
 
-          {/* 新手教程（占位，后续替换为视频/图片） */}
-          <div className="settings-card px-3 py-2">
-            <div className="text-ink">新手教程</div>
-            <div className="mt-1.5 flex h-20 items-center justify-center rounded border border-dashed border-edge text-[11px] text-muted">
-              📷 教程视频 / 图片（待补充）
+              {/* 浏览器扩展（原「环境状态」拆出）：状态 + 安装引导 */}
+              <div className="settings-card px-3 py-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-ink">浏览器扩展</span>
+                  <span
+                    className={`rounded px-2 py-0.5 text-xs ${
+                      extensionConnected
+                        ? "bg-green-500/15 text-green-400"
+                        : "bg-red-500/15 text-red-300"
+                    }`}
+                  >
+                    {extensionConnected ? "✓ 已连接" : "✗ 未连接"}
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-muted">
+                  安装扩展后在网页拖图 / Alt + 点击即可采集素材到 Bowerbird。
+                </p>
+                <button
+                  onClick={() => {
+                    setExtensionOnboardingForceOpen(true);
+                    onClose();
+                  }}
+                  className="mt-2 rounded-md bg-panel px-3 py-1 text-[12px] text-ink hover:bg-edge"
+                >
+                  {extensionConnected ? "查看引导" : "前往配置"}
+                </button>
+              </div>
+
+              {/* 新手教程：分步引导（视频/图片教程待补充） */}
+              <div className="settings-card px-3 py-2">
+                <div className="text-ink">新手教程</div>
+                <p className="mt-1 text-xs text-muted">
+                    跟着 spotlight 分步引导走一遍导入、复用与创作的核心流程。
+                </p>
+                <button
+                  onClick={() => {
+                    startTour();
+                    onClose();
+                  }}
+                  className="mt-2 rounded-md bg-panel px-3 py-1 text-[12px] text-ink hover:bg-edge"
+                >
+                  开始分步引导
+                </button>
+              </div>
+            </>
+          )}
+
+          {section === "account" && (
+            <>
+              {/* 账号名 */}
+              <div className="settings-card px-3 py-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="min-w-0 truncate text-ink">
+                    {loggedIn ? accountName : "未登录"}
+                  </span>
+                  {loggedIn ? (
+                    <button
+                      onClick={() => void syncCloudEntitlement()}
+                      disabled={cloudBusy}
+                      className="shrink-0 text-xs text-muted hover:text-accent disabled:opacity-50"
+                    >
+                      {cloudBusy ? "同步中…" : "刷新权益"}
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => {
+                        setAccountOnboardingForceOpen(true);
+                        onClose();
+                      }}
+                      className="shrink-0 rounded-md bg-accent px-3 py-1 text-[12px] font-medium text-black hover:opacity-90"
+                    >
+                      登录 Bowerbird 账号
+                    </button>
+                  )}
+                </div>
+                {loggedIn && (
+                  <p className="mt-1 text-[11px] text-muted">
+                    账号只同步订阅和积分；素材、提示词与本地数据库不上传。
+                  </p>
+                )}
+              </div>
+
+              {/* 等级 & 升级 */}
+              {loggedIn && (
+                <div className="settings-card flex items-center justify-between px-3 py-2.5">
+                  <span className="text-ink">
+                    当前档位：
+                    <span className="ml-1 rounded bg-accent/15 px-1.5 py-0.5 text-xs font-semibold text-accent">
+                      {tier}
+                    </span>
+                  </span>
+                  <button
+                    onClick={() => void open(WEBSITE_URL)}
+                    className="rounded-md bg-accent px-3 py-1 text-[12px] font-medium text-black hover:opacity-90"
+                    title="打开官网查看订阅方案"
+                  >
+                    升级
+                  </button>
+                </div>
+              )}
+
+              {/* credits 明细 */}
+              {loggedIn && (
+                <div className="settings-card px-3 py-2.5">
+                  <div className="text-ink">积分明细</div>
+                  <div className="mt-2 grid grid-cols-3 gap-2 text-center text-[11px]">
+                    <div className="rounded-lg border border-edge bg-canvas/70 p-2">
+                      <div className="text-muted">每日</div>
+                      <div className="mt-0.5 text-sm font-semibold text-ink">{balances?.daily ?? 0}</div>
+                    </div>
+                    <div className="rounded-lg border border-edge bg-canvas/70 p-2">
+                      <div className="text-muted">订阅</div>
+                      <div className="mt-0.5 text-sm font-semibold text-ink">{balances?.sub ?? 0}</div>
+                    </div>
+                    <div className="rounded-lg border border-edge bg-canvas/70 p-2">
+                      <div className="text-muted">充值</div>
+                      <div className="mt-0.5 text-sm font-semibold text-ink">{balances?.topup ?? 0}</div>
+                    </div>
+                  </div>
+                  {transactions.length > 0 && (
+                    <div className="mt-3 border-t border-edge pt-2">
+                      <div className="text-[10px] uppercase tracking-wide text-muted">最近积分流水</div>
+                      <ul className="mt-1 max-h-40 space-y-1 overflow-y-auto text-[11px]">
+                        {transactions.slice(0, 50).map((tx, index) => (
+                          <li
+                            key={`${tx.created_at}-${index}`}
+                            className="flex items-center justify-between gap-2 text-muted"
+                          >
+                            <span className="truncate">
+                              {tx.kind}
+                              {tx.service ? ` · ${tx.service}` : ""}
+                            </span>
+                            <span className={tx.amount >= 0 ? "text-green-400" : "text-red-300"}>
+                              {tx.amount >= 0 ? `+${tx.amount}` : tx.amount}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  <button
+                    onClick={() => void logoutCloud()}
+                    disabled={cloudBusy}
+                    className="mt-3 text-xs text-muted hover:text-red-300 disabled:opacity-50"
+                  >
+                    登出账号
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+
+          {section === "models" && (
+            <>
+              {/* codex CLI（原「环境状态」拆出）：状态 + 引导 */}
+              <div className="settings-card px-3 py-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-ink">codex CLI</span>
+                  <span
+                    className={`rounded px-2 py-0.5 text-xs ${
+                      codexHealth?.ok
+                        ? "bg-green-500/15 text-green-400"
+                        : "bg-red-500/15 text-red-300"
+                    }`}
+                    title={codexHealth?.reason}
+                  >
+                    {codexHealth?.ok ? "✓ 就绪" : "✗ 未就绪"}
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-muted">
+                  用 ChatGPT 订阅反推 / 生成 / 命名；仅 Pro / Studio 可用，不配置也不影响本地素材库。
+                </p>
+                <div className="mt-2 flex gap-2">
+                  <button
+                    onClick={() => void recheckCodex()}
+                    disabled={checkingCodex}
+                    className="rounded-md bg-panel px-3 py-1 text-[12px] text-ink hover:bg-edge disabled:opacity-50"
+                  >
+                    {checkingCodex ? "检测中…" : "重新检测"}
+                  </button>
+                  <button
+                    onClick={() => {
+                      setCodexOnboardingForceOpen(true);
+                      onClose();
+                    }}
+                    className="rounded-md bg-panel px-3 py-1 text-[12px] text-ink hover:bg-edge"
+                  >
+                    {codexHealth?.ok ? "查看引导" : "前往配置"}
+                  </button>
+                </div>
+              </div>
+
+              {/* 即梦 dreamina CLI（原「环境状态」拆出）：状态 + 引导 */}
+              <div className="settings-card px-3 py-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-ink">即梦 dreamina CLI</span>
+                  <span
+                    className={`rounded px-2 py-0.5 text-xs ${
+                      dreaminaHealth?.ok
+                        ? "bg-green-500/15 text-green-400"
+                        : "bg-red-500/15 text-red-300"
+                    }`}
+                    title={dreaminaHealth?.reason}
+                  >
+                    {dreaminaHealth?.ok ? "✓ 就绪" : "✗ 未就绪"}
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-muted">
+                  备选出图引擎，使用即梦会员积分；不配置也不影响 codex 出图和本地功能。
+                </p>
+                <div className="mt-2 flex gap-2">
+                  <button
+                    onClick={() => void recheckDreamina()}
+                    disabled={checkingDreamina}
+                    className="rounded-md bg-panel px-3 py-1 text-[12px] text-ink hover:bg-edge disabled:opacity-50"
+                  >
+                    {checkingDreamina ? "检测中…" : "重新检测"}
+                  </button>
+                  <button
+                    onClick={() => {
+                      setDreaminaOnboardingForceOpen(true);
+                      onClose();
+                    }}
+                    className="rounded-md bg-panel px-3 py-1 text-[12px] text-ink hover:bg-edge"
+                  >
+                    {dreaminaHealth?.ok ? "查看引导" : "前往配置"}
+                  </button>
+                </div>
+              </div>
+
+              {/* 默认反推模型：非 auto 时跳过每次的引擎选择浮层直接执行 */}
+              <div className="settings-card px-3 py-2.5">
+                <div className="text-ink">默认反推模型</div>
+                <p className="mt-1 text-xs text-muted">
+                  选定后反推不再弹引擎选择浮层直接执行；引擎当下不可用时自动退回浮层。
+                </p>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {understandOptions.map((opt) => (
+                    <button
+                      key={opt.key}
+                      type="button"
+                      onClick={() => setDefaultUnderstandProvider(opt.key)}
+                      disabled={!opt.ok}
+                      title={opt.ok ? opt.label : opt.reason}
+                      className={`rounded px-2.5 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-40 ${
+                        defaultUnderstandProvider === opt.key
+                          ? "bg-accent font-medium text-black"
+                          : "bg-panel text-ink hover:bg-edge"
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* 入库时自动反推 */}
+              <div className="settings-card px-3 py-2.5">
+                <label className="flex cursor-pointer items-center gap-2 select-none">
+                  <input
+                    type="checkbox"
+                    checked={autoAnalyzeOnIngest}
+                    onChange={(e) => {
+                      const v = e.target.checked;
+                      setAutoAnalyzeOnIngest(v);
+                      commitSettings(v, promptText);
+                    }}
+                    className="size-4 accent-accent"
+                  />
+                  <span className="text-ink">入库时自动反推</span>
+                </label>
+                <p className="mt-1 ml-6 text-xs text-muted">
+                  开启后，新素材入库时自动调用当前账号可用的理解引擎进行反推描述与自动重命名。
+                </p>
+
+                {/* 二级选项：提示词文本框 */}
+                {autoAnalyzeOnIngest && (
+                  <div className="mt-3 ml-6">
+                    <label className="text-xs text-muted">自动反推提示词</label>
+                    <textarea
+                      value={promptText}
+                      onChange={(e) => setPromptText(e.target.value)}
+                      onBlur={() => commitSettings(autoAnalyzeOnIngest, promptText)}
+                      rows={5}
+                      className="mt-1 w-full rounded border border-edge bg-panel px-2.5 py-1.5 font-mono text-[12px] leading-relaxed text-ink
+                        placeholder:text-muted/50 resize-y"
+                      placeholder={DEFAULT_AUTO_ANALYZE_PROMPT}
+                    />
+                    <p className="mt-1 text-[11px] text-muted">
+                      可用 <code className="text-[11px]">{`{vocab}`}</code>{" "}
+                      表示受控类别词表，运行时会自动替换。
+                    </p>
+                  </div>
+                )}
+                {/* 云端理解授权勾选留在「入库时自动反推」里（本质是入库行为开关）。 */}
+                <label className="mt-3 flex cursor-pointer items-start gap-2 border-t border-edge pt-2 text-[11px] text-muted">
+                  <input
+                    type="checkbox"
+                    checked={settings?.cloud_auto_understand ?? false}
+                    onChange={(e) => settings && void updateSettings({ ...settings, cloud_auto_understand: e.target.checked })}
+                    disabled={!cloudAuth?.cloud_available}
+                    className="mt-0.5 size-3.5 accent-accent"
+                  />
+                  <span>允许入库自动分析时，把新图片临时发送到 Bowerbird Cloud 理解（默认关闭；请求结束不保存图片）</span>
+                </label>
+              </div>
+            </>
+          )}
+
+          {section === "personalization" && (
+            <div className="settings-card flex h-40 items-center justify-center text-[11px] text-muted">
+              个性化与记忆（待建设）
             </div>
-          </div>
+          )}
+
+          {section === "about" && (
+            <>
+              <div className="settings-card px-3 py-2.5">
+                <div className="text-ink">当前版本</div>
+                <p className="mt-1 text-xs text-muted">{appVersion ?? "读取中…"}</p>
+              </div>
+              <div className="settings-card flex items-center justify-between px-3 py-2.5">
+                <span className="text-ink">关于 Bowerbird</span>
+                <button
+                  onClick={() => void open(WEBSITE_URL)}
+                  className="rounded-md bg-panel px-3 py-1 text-[12px] text-ink hover:bg-edge"
+                >
+                  前往官网 ↗
+                </button>
+              </div>
+            </>
+          )}
+        </div>
       </div>
     </ModalShell>
   );

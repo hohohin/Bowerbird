@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import type {
   Analysis,
+  AgentPromptInput,
+  AgentPromptResult,
   AppSettings,
   AuthSnapshot,
   Asset,
@@ -35,6 +37,8 @@ export const api = {
   localAgentHealth: () => invoke<boolean>("local_agent_health"),
   localAgentStart: (assetId: string, goal: string) =>
     invoke<LocalAgentRun>("local_agent_start", { assetId, goal }),
+  localAgentCompilePrompt: (input: AgentPromptInput) =>
+    invoke<AgentPromptResult>("local_agent_compile_prompt", { input }),
   localAgentLatest: (assetId: string) =>
     invoke<LocalAgentRun | null>("local_agent_latest", { assetId }),
   localAgentResume: (

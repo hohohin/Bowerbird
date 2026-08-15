@@ -170,6 +170,7 @@ pub fn run() {
             commands::db_health,
             commands::agent::local_agent_health,
             commands::agent::local_agent_start,
+            commands::agent::local_agent_compile_prompt,
             commands::agent::local_agent_resume,
             commands::agent::local_agent_latest,
             commands::agent::local_agent_find_asset_id,
