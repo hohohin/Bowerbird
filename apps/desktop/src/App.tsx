@@ -56,6 +56,7 @@ function App() {
   const mode = useStore((s) => s.mode);
   const detailAssetId = useStore((s) => s.detailAssetId);
   const boardOpen = useStore((s) => s.boardOpen);
+  const genEditing = useStore((s) => s.genEditing);
   const genPanelOpen = useStore((s) => s.genPanelOpen);
   const setCodexHealth = useStore((s) => s.setCodexHealth);
   const setDreaminaHealth = useStore((s) => s.setDreaminaHealth);
@@ -103,10 +104,11 @@ function App() {
 
   async function refresh() {
     const version = ++refreshVersion;
+    // 创作板 / 会话「重新编辑」模式共用挑图语义：瀑布流显示全部资产（含未反推），
+    // 任意图点一下即可插为参考图；promptedAssets 给编辑器补 caption/sections ——
+    // 有反推的图可展开维度片段，没反推的作纯参考图。
     try {
-      if (boardOpen) {
-        // 创作板模式：瀑布流显示全部资产（含未反推），任意图点一下即可插为参考图；
-        // promptedAssets 给编辑器补 caption/sections —— 有反推的图可展开维度片段，没反推的作纯参考图。
+      if (boardOpen || genEditing) {
         const [assets, prompted, total] = await Promise.all([
           api.listAssets(undefined, currentProjectId),
           api.listPromptedAssets(currentProjectId),
@@ -158,9 +160,9 @@ function App() {
 
   useEffect(() => {
     refresh();
-    // 依赖 currentFolderId / searchQuery / boardOpen：切换文件夹、搜索或开关创作板时重拉
+    // 依赖 currentFolderId / searchQuery / boardOpen / genEditing：切换文件夹、搜索或开关创作板/进入会话编辑时重拉
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentProjectId, currentFolderId, currentCollectionId, searchQuery, smartFilter, colorFilter, boardOpen]);
+  }, [currentProjectId, currentFolderId, currentCollectionId, searchQuery, smartFilter, colorFilter, boardOpen, genEditing]);
 
   // 有反推的资产 id 集合（project 级，缩略图标 🏷️ 用）：只随项目切换重拉，切 folder/filter 不重拉。
   useEffect(() => {

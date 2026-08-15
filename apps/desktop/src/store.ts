@@ -159,6 +159,11 @@ interface State {
   openDescribePicker: (task: DescribeTask, anchor: { x: number; y: number }) => void;
   closeDescribePicker: () => void;
   runDescribePicker: (provider: string) => void;
+  // —— 生成会话「重新编辑」（jimeng/gemini 式）：会话面板收成底部编辑坞，露出瀑布流选图插 chip ——
+  // 独立于 boardOpen：编辑坞自带一个 useCreationEditor（同一对 board-load-prompt / board-asset-picked
+  // 事件），进入时必须关创作板避免双编辑器同时响应；退出编辑即恢复会话全屏视图。
+  genEditing: boolean;
+  setGenEditing: (v: boolean) => void;
   // —— 生成（创作板 codex/即梦 画图，多 job 并行）——
   // 派生量：任一 job running 即 true。状态圈在顶部工具栏最右侧（全局可见，不绑创作板生命周期）。
   generating: boolean;
@@ -851,6 +856,13 @@ export const useStore = create<State>((set, get) => {
   // —— 浏览器扩展采集 ——
   collectedNotice: null,
   setCollectedNotice: (collectedNotice) => set({ collectedNotice }),
+  genEditing: false,
+  setGenEditing: (v) =>
+    set(
+      v
+        ? { genEditing: true, boardOpen: false, detailAssetId: null }
+        : { genEditing: false },
+    ),
   // —— 生成结果面板（多 job）——
   genPanelOpen: false,
   genJobs: {},

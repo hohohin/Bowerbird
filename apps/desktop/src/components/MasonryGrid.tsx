@@ -38,7 +38,8 @@ function Thumb({
   const cardRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
   const selected = useStore((s) => s.mode === "manage" && s.selectedIds.has(asset.id));
-  const boardOpen = useStore((s) => s.boardOpen);
+  // 挑图模式（点一下插参考图 chip）：创作板打开 或 会话「重新编辑」中。
+  const pickMode = useStore((s) => s.boardOpen || s.genEditing);
   const openContextMenu = useStore((s) => s.openContextMenu);
   // 反推全局可见：本缩略图正在反推 / 在队列里。角标点击 = 取消（运行中 kill 子进程 / 排队中移出队列）。
   const describeStatus = useStore((s) =>
@@ -208,7 +209,7 @@ function Thumb({
   function activateAsset() {
     dismissPreview();
     const st = useStore.getState();
-    if (st.boardOpen) {
+    if (st.boardOpen || st.genEditing) {
       window.dispatchEvent(
         new CustomEvent("bowerbird://board-asset-picked", { detail: shown.id })
       );
@@ -242,7 +243,7 @@ function Thumb({
       className={`group relative mb-2 break-inside-avoid cursor-pointer overflow-hidden rounded-sm border bg-panel transition ${
         selected ? "border-accent shadow-[inset_0_0_0_1px_#4868ff]" : "border-edge hover:border-[#55505a]"
       }`}
-      draggable={!boardOpen}
+      draggable={!pickMode}
       onMouseEnter={onEnter}
       onMouseMove={onMove}
       onMouseLeave={onLeave}

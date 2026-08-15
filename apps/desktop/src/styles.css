@@ -872,6 +872,38 @@ textarea:focus-visible,
   background: #201d1d;
 }
 
+/* 生成会话 ↔ 「重新编辑」坞 切换过渡：会话视图淡入 + 上移，编辑坞从底部滑入。
+   只做入场动画（另一视图即时卸载），reduced-motion 由全局降级块兜底。 */
+@keyframes gen-view-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes gen-dock-in {
+  from {
+    opacity: 0;
+    transform: translateY(28px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.gen-view-in {
+  animation: gen-view-in 180ms ease-out;
+}
+
+.gen-dock-in {
+  animation: gen-dock-in 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
 .setup-card {
   border: 1px solid #292727;
   border-radius: 3px;

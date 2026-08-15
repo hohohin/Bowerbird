@@ -24,9 +24,9 @@ function initialDoc() {
 // 恢复 —— 保真保留 image/keyword chip（而非展开成纯文本，那样维度 token 会降级）。
 const BOARD_DRAFT_KEY = "bowerbird.boardDraft";
 type BoardDraft = { doc: unknown; refs: PromptedAsset[] };
-function loadDraft(): BoardDraft | null {
+function loadDraft(key: string): BoardDraft | null {
   try {
-    const raw = localStorage.getItem(BOARD_DRAFT_KEY);
+    const raw = localStorage.getItem(key);
     if (!raw) return null;
     const v = JSON.parse(raw);
     if (!v || typeof v !== "object" || !Array.isArray(v.refs)) return null;
@@ -35,9 +35,9 @@ function loadDraft(): BoardDraft | null {
     return null;
   }
 }
-function saveDraft(doc: unknown, refs: PromptedAsset[]) {
+function saveDraft(key: string, doc: unknown, refs: PromptedAsset[]) {
   try {
-    localStorage.setItem(BOARD_DRAFT_KEY, JSON.stringify({ doc, refs }));
+    localStorage.setItem(key, JSON.stringify({ doc, refs }));
   } catch {
     // ignore storage errors（quota / 无痕模式）
   }
@@ -47,8 +47,12 @@ function saveDraft(doc: unknown, refs: PromptedAsset[]) {
  * 创作板 ProseMirror 编辑器 hook：非受控 EditorView（doc 不进 React state，只持 tick 计数器
  * 触发派生数据重算）。注册 window 事件（点图插入 / 外部载入），暴露 finalPrompt / references /
  * 维度 chips 状态 / insertKeyword 供 UI 外壳消费。
+ *
+ * opts.draftKey：草稿持久化的 localStorage key。缺省 = 创作板自己的 bowerbird.boardDraft；
+ * 传 null = 不持久化（生成会话「重新编辑」坞用——会话本身即记录，且不能覆盖创作板草稿）。
  */
-export function useCreationEditor() {
+export function useCreationEditor(opts?: { draftKey?: string | null }) {
+  const draftKey = opts?.draftKey === undefined ? BOARD_DRAFT_KEY : opts.draftKey;
   const promptedAssets = useStore((s) => s.promptedAssets);
   // boardOpen 时 s.assets = 全部挑图（含未反推）；并入 assetById 让无 caption 图也能插为参考图，
   // 否则 serialize 的 references 收集不到 → 发送时不传 codex，且 chip 只能拿 assetId 兜底显示。
@@ -88,7 +92,7 @@ export function useCreationEditor() {
     if (!hostRef.current) return;
     const plugins = buildPlugins({ viewRef, assetByIdRef, chipSectionsRef });
     // 恢复上次草稿：nodeFromJSON 保真恢复 doc；refs 补进 extraAssets 供序列化匹配。
-    const saved = loadDraft();
+    const saved = draftKey ? loadDraft(draftKey) : null;
     let startDoc;
     try {
       startDoc = saved ? creationSchema.nodeFromJSON(saved.doc) : initialDoc();
@@ -99,9 +103,10 @@ export function useCreationEditor() {
     // 去抖保存：编辑频繁，400ms 静止后落盘（避免每次按键都写 localStorage）。
     let saveTimer: ReturnType<typeof setTimeout> | undefined;
     const scheduleSave = () => {
+      if (!draftKey) return;
       if (saveTimer) clearTimeout(saveTimer);
       saveTimer = setTimeout(() => {
-        saveDraft(view.state.doc.toJSON(), extraAssetsRef.current);
+        saveDraft(draftKey, view.state.doc.toJSON(), extraAssetsRef.current);
       }, 400);
     };
     const view = new EditorView(hostRef.current, {
@@ -175,7 +180,7 @@ export function useCreationEditor() {
       window.removeEventListener(PICK_EVENT, onPick);
       window.removeEventListener(LOAD_EVENT, onLoad);
       if (saveTimer) clearTimeout(saveTimer);
-      saveDraft(view.state.doc.toJSON(), extraAssetsRef.current);
+      if (draftKey) saveDraft(draftKey, view.state.doc.toJSON(), extraAssetsRef.current);
       view.destroy();
       viewRef.current = null;
     };

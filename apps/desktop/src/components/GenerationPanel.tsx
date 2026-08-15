@@ -1,11 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { useStore } from "../store";
 import { api } from "../lib/api";
-import { canUseGenerationProvider } from "../lib/entitlement";
+import { canStartAnotherJob, canUseGenerationProvider } from "../lib/entitlement";
 import type { GenJob, GenTurn } from "../lib/types";
 import { Lightbox } from "./Lightbox";
-import { Bookmark, Copy, Images, RotateCcw, Send, Sparkles, X } from "lucide-react";
+import { useCreationEditor } from "./creation/useCreationEditor";
+import { RatioSelect } from "./creation/RatioSelect";
+import { BoardChipPreview } from "./creation/BoardChipPreview";
+import { Bookmark, Copy, Images, Pencil, Send, Sparkles, X } from "lucide-react";
 
 /**
  * 生成会话面板（多 job，独立于创作板）。
@@ -26,12 +29,14 @@ export function GenerationPanel() {
   const cloudEntitlement = useStore((s) => s.cloudEntitlement);
   const cloudAvailable = cloudAuth?.cloud_available ?? false;
   const setGenPanelOpen = useStore((s) => s.setGenPanelOpen);
+  const genEditing = useStore((s) => s.genEditing);
+  const setGenEditing = useStore((s) => s.setGenEditing);
   const sendGenRevise = useStore((s) => s.sendGenRevise);
   const cancelGeneration = useStore((s) => s.cancelGeneration);
-  const startGeneration = useStore((s) => s.startGeneration);
   const retryLastGenTurn = useStore((s) => s.retryLastGenTurn);
   const reusePromptToBoard = useStore((s) => s.reusePromptToBoard);
   const reloadPresets = useStore((s) => s.reloadPresets);
+  const runningJobCount = useStore((s) => Object.values(s.genJobs).filter((j) => j.running).length);
 
   const [revise, setRevise] = useState("");
   // 把当前会话首轮 prompt 登记为用途（preset）的 inline 起名态。
@@ -69,11 +74,6 @@ export function GenerationPanel() {
           ? "积分不足"
           : "Bowerbird Cloud 不可用"
       : targetHealth?.reason || "当前 provider 不可用";
-  const targetProviderLabel = activeJob?.provider === "jimeng"
-    ? "即梦"
-    : activeJob?.provider === "bowerbird-cloud"
-      ? "Bowerbird Cloud"
-      : "codex";
 
   const imageCount = useMemo(
     () => activeJob?.turns.reduce((n, t) => n + t.images.length, 0) ?? 0,
@@ -122,9 +122,11 @@ export function GenerationPanel() {
     void sendGenRevise(revise, activeProvider).then(() => setRevise(""));
   }
 
-  function regenerate() {
-    if (!activeJob?.lastPrompt || !targetReady || running) return;
-    void startGeneration(activeJob.lastPrompt, activeJob.refAssets, activeJob.lastRatio, activeProvider);
+  // 「重新编辑」：会话收起为底部编辑坞（载入首轮编辑框原文，创作板同等编辑），
+  // 瀑布流露出并进入点图插 chip 模式；改完发送 = 用新组稿开新会话。
+  function startEdit() {
+    if (running) return;
+    setGenEditing(true);
   }
 
   // 把 activeJob 首轮 prompt 登记为用途（preset）：起名 → createPreset + 刷新下拉。
@@ -143,8 +145,92 @@ export function GenerationPanel() {
     }
   }
 
+  // 首轮气泡下方的会话级操作（icon）：重新编辑 / 复用到创作板 / 登记为用途。
+  const firstTurnActions =
+    !running && activeJob?.lastPrompt ? (
+      <div className="flex flex-col items-end gap-1.5">
+        <div className="flex items-center gap-0.5">
+          <button
+            type="button"
+            onClick={startEdit}
+            className="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-panel2 hover:text-accent"
+            title="重新编辑：会话收起为底部编辑器，点瀑布流图片可换参考图；改完发送开新会话"
+          >
+            <Pencil size={13} />
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              reusePromptToBoard(activeJob!.turns[0]?.promptRaw || activeJob!.lastPrompt)
+            }
+            className="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-panel2 hover:text-accent"
+            title="把编辑框原文 + 参考图载入创作板，可在其基础上编辑后重新生成"
+          >
+            <Copy size={13} />
+          </button>
+          <button
+            type="button"
+            onClick={() => setSavingPreset(true)}
+            disabled={savingPreset || presetSaved}
+            className="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-panel2 hover:text-accent disabled:opacity-40"
+            title="把首轮编辑框原文登记为一个用途（之后可在创作板编辑/删除）"
+          >
+            <Bookmark size={13} />
+          </button>
+        </div>
+        {savingPreset && (
+          <div className="flex gap-1.5">
+            <input
+              autoFocus
+              value={presetName}
+              onChange={(e) => setPresetName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void saveGenPreset();
+                if (e.key === "Escape") setSavingPreset(false);
+              }}
+              placeholder="用途名"
+              className="w-32 rounded bg-panel2 px-2 py-1 text-xs text-ink outline-none ring-1 ring-edge focus:ring-accent"
+            />
+            <button
+              onClick={saveGenPreset}
+              disabled={!presetName.trim()}
+              className="shrink-0 rounded bg-accent px-2 py-1 text-xs font-semibold text-black disabled:opacity-50"
+            >
+              保存
+            </button>
+            <button
+              onClick={() => {
+                setSavingPreset(false);
+                setPresetName("");
+              }}
+              className="shrink-0 rounded bg-panel2 px-2 py-1 text-xs text-ink hover:bg-edge"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+      </div>
+    ) : undefined;
+
   return (
-    <div className="absolute inset-0 z-10 flex flex-col bg-canvas">
+    <>
+      {genEditing && activeJob ? (
+        // 重新编辑：面板收起为底部浮动编辑坞（不左右通铺，上方两角圆角），上方露出瀑布流选图。
+        // 定位（-translate-x-1/2）在外层、入场动画（transform）在内层，互不覆盖。
+        <div className="absolute bottom-0 left-1/2 z-10 w-[min(896px,100%)] -translate-x-1/2">
+          <GenEditComposer
+            job={activeJob}
+            provider={activeProvider}
+            targetReady={targetReady}
+            lockedReason={lockedReason}
+            canStart={canStartAnotherJob(cloudEntitlement, runningJobCount)}
+            onExit={() => setGenEditing(false)}
+          />
+        </div>
+      ) : (
+        <div className="absolute inset-0 z-10 flex flex-col bg-canvas">
+          {/* 切换过渡：从编辑坞回到会话时淡入上移 */}
+          <div className="gen-view-in flex min-h-0 flex-1 flex-col">
       {/* 单行头部（约 38px）：图标 + 会话标题（随内容而定）+ 统计 + 关闭 */}
       <div className="flex min-h-[38px] shrink-0 items-center gap-2 border-b border-edge bg-canvas/90 px-3 py-1">
         <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-lime/10 text-lime">
@@ -200,6 +286,7 @@ export function GenerationPanel() {
                 streaming={running && i === turnsWithOffset.length - 1 ? activeJob.streaming : ""}
                 imageOffset={imageOffset}
                 refThumbs={i === 0 ? firstRefThumbs : undefined}
+                actions={i === 0 ? firstTurnActions : undefined}
                 onOpenLightbox={(g) => setLightbox({ images: allImages, index: g })}
                 onRetry={retryLastGenTurn}
                 canRetry={targetReady && !running}
@@ -210,8 +297,8 @@ export function GenerationPanel() {
         )}
       </div>
 
-      {/* 底部：聊天式输入（续轮）+ 会话级操作 */}
-      <div className="shrink-0 space-y-2 border-t border-edge bg-panel p-4">
+      {/* 底部：聊天式输入（续轮修改意见）。会话级操作（重新编辑/复用/登记）在首轮气泡下方 */}
+      <div className="shrink-0 border-t border-edge bg-panel p-4">
         {running ? (
           <button
             onClick={() => cancelGeneration()}
@@ -221,11 +308,7 @@ export function GenerationPanel() {
           </button>
         ) : activeJob?.sessionId ? (
           <div className="space-y-1">
-            <div className="text-[10px] text-muted">
-              {targetReady
-                ? `提修改意见，${targetProviderLabel} 续接同一会话编辑上一张图`
-                : lockedReason}
-            </div>
+            {!targetReady && <div className="text-[10px] text-muted">{lockedReason}</div>}
             <div className="flex gap-1.5">
               <input
                 value={revise}
@@ -248,14 +331,6 @@ export function GenerationPanel() {
                 发送
               </button>
             </div>
-            <button
-              onClick={regenerate}
-              disabled={!activeJob?.lastPrompt || !targetReady}
-              title={targetReady ? "用最近一次的 prompt + 参考图开新会话（新建一个生成任务）" : lockedReason}
-              className="w-full rounded-md bg-panel2 px-3 py-1.5 text-xs text-ink hover:bg-edge disabled:opacity-50"
-            >
-              <span className="flex items-center justify-center gap-2"><RotateCcw size={13} />新会话重新生成</span>
-            </button>
           </div>
         ) : (
           <div className="text-[10px] text-muted">
@@ -264,61 +339,10 @@ export function GenerationPanel() {
               : "🎨 在创作板点「✓ 发送」开始一个生成会话；出图后可在此提修改意见续接迭代。"}
           </div>
         )}
-        {!running && activeJob?.lastPrompt && (
-          <div className="space-y-1.5 border-t border-edge pt-2">
-            {savingPreset ? (
-              <div className="flex gap-1.5">
-                <input
-                  autoFocus
-                  value={presetName}
-                  onChange={(e) => setPresetName(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") void saveGenPreset();
-                    if (e.key === "Escape") setSavingPreset(false);
-                  }}
-                  placeholder="用途名"
-                  className="min-w-0 flex-1 rounded bg-panel2 px-2 py-1 text-xs text-ink outline-none ring-1 ring-edge focus:ring-accent"
-                />
-                <button
-                  onClick={saveGenPreset}
-                  disabled={!presetName.trim()}
-                  className="shrink-0 rounded bg-accent px-2 py-1 text-xs font-semibold text-black disabled:opacity-50"
-                >
-                  保存
-                </button>
-                <button
-                  onClick={() => {
-                    setSavingPreset(false);
-                    setPresetName("");
-                  }}
-                  className="shrink-0 rounded bg-panel2 px-2 py-1 text-xs text-ink hover:bg-edge"
-                >
-                  ✕
-                </button>
-              </div>
-            ) : (
-              <div className="flex gap-1.5">
-                <button
-                  onClick={() =>
-                    reusePromptToBoard(activeJob!.turns[0]?.promptRaw || activeJob!.lastPrompt)
-                  }
-                  className="flex-1 rounded bg-panel2 px-2 py-1.5 text-xs text-ink hover:bg-edge"
-                  title="把编辑框原文 + 参考图载入创作板，可在其基础上编辑后重新生成"
-                >
-                  <span className="flex items-center justify-center gap-2"><Copy size={13} />复用到创作板</span>
-                </button>
-                <button
-                  onClick={() => setSavingPreset(true)}
-                  className="flex-1 rounded bg-panel2 px-2 py-1.5 text-xs text-ink hover:bg-edge"
-                  title="把首轮 prompt 登记为一个用途（之后可在创作板编辑/删除）"
-                >
-                  <span className="flex items-center justify-center gap-2"><Bookmark size={13} />{presetSaved ? "已登记" : "登记为用途"}</span>
-                </button>
-              </div>
-            )}
-          </div>
-        )}
       </div>
+          </div>
+        </div>
+      )}
       {lightbox && (
         <Lightbox
           images={lightbox.images}
@@ -328,12 +352,12 @@ export function GenerationPanel() {
         />
       )}
       {/* generating 在此仅用于抑制空态下的提示文案（有 job 在跑时给一句反馈），核心状态走 activeJob.running。 */}
-      {generating && !activeJob && (
+      {generating && !activeJob && !genEditing && (
         <div className="pointer-events-none absolute bottom-20 left-1/2 -translate-x-1/2 text-[10px] text-muted">
           生成中…
         </div>
       )}
-    </div>
+    </>
   );
 }
 
@@ -348,6 +372,7 @@ function TurnView({
   streaming,
   imageOffset,
   refThumbs,
+  actions,
   onOpenLightbox,
   onRetry,
   canRetry,
@@ -359,6 +384,7 @@ function TurnView({
   streaming: string;
   imageOffset: number;
   refThumbs?: { src: string; name: string }[];
+  actions?: ReactNode;
   onOpenLightbox: (globalIdx: number) => void;
   onRetry: () => void;
   canRetry: boolean;
@@ -422,6 +448,8 @@ function TurnView({
             )}
           </div>
         )}
+        {/* 会话级操作 icon 行（重新编辑 / 复用到创作板 / 登记为用途） */}
+        {actions}
       </div>
 
       {/* 助手块：左侧头像 + 产出 */}
@@ -436,20 +464,22 @@ function TurnView({
           {turn.images.length > 0 ? (
             <div className={`grid gap-1.5 ${turn.images.length > 1 ? "grid-cols-2" : "grid-cols-1"}`}>
               {turn.images.map((p, j) => (
+                // 按钮 w-fit 贴合可见图片：避免按钮占满整格导致点到图片周围背景也触发放大。
                 <button
                   key={p}
                   type="button"
                   onClick={() => onOpenLightbox(imageOffset + j)}
-                  className="cursor-zoom-in"
+                  className="mx-auto block w-fit cursor-zoom-in"
                   title="点击放大"
                 >
                   <img
                     src={convertFileSrc(p)}
                     alt=""
+                    draggable={false}
                     className={
                       turn.images.length > 1
-                        ? "w-full max-h-[200px] rounded border border-edge object-contain"
-                        : "block mx-auto max-h-[320px] w-auto max-w-full rounded border border-edge object-contain"
+                        ? "max-h-[200px] w-auto max-w-full rounded border border-edge"
+                        : "block max-h-[320px] w-auto max-w-full rounded border border-edge"
                     }
                   />
                 </button>
@@ -482,6 +512,131 @@ function TurnView({
               )}
             </div>
           ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 会话「重新编辑」编辑坞（jimeng / gemini 式）：会话面板收起为底部条，露出的瀑布流
+ * 点一下即插参考图 chip（board-asset-picked）。编辑器与创作板同款（useCreationEditor +
+ * RatioSelect + BoardChipPreview），但不持久化草稿（draftKey:null，不覆盖创作板的
+ * bowerbird.boardDraft）；发送 = 用新组稿开一个新会话（不复用当前 sessionId），
+ * 取消 = 回到会话全屏视图。
+ */
+function GenEditComposer({
+  job,
+  provider,
+  targetReady,
+  lockedReason,
+  canStart,
+  onExit,
+}: {
+  job: GenJob;
+  provider: string;
+  targetReady: boolean;
+  lockedReason: string;
+  canStart: boolean;
+  onExit: () => void;
+}) {
+  const startGeneration = useStore((s) => s.startGeneration);
+  const { hostRef, focus, finalPrompt, rawPrompt, references } = useCreationEditor({
+    draftKey: null,
+  });
+  // 比例初值取会话首轮的值；编辑坞内改动不持久化（创作板有自己的记忆）。
+  const [ratio, setRatio] = useState<string | null>(job.lastRatio ?? null);
+  const [sending, setSending] = useState(false);
+
+  // 编辑器挂载（注册 board-load-prompt listener）后延一帧载入会话首轮原文 + 参考图
+  // （与 reusePromptToBoard 同款事件；此时创作板已关，不会双编辑器响应）。
+  useEffect(() => {
+    const raw = job.turns[0]?.promptRaw || job.lastPrompt;
+    const t = setTimeout(() => {
+      window.dispatchEvent(
+        new CustomEvent("bowerbird://board-load-prompt", {
+          detail: { prompt: raw, refs: job.refAssets },
+        }),
+      );
+    }, 0);
+    return () => clearTimeout(t);
+    // 仅进入编辑时载入一次（重新编辑只针对当前会话）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function send() {
+    if (!finalPrompt || !targetReady || !canStart || sending) return;
+    setSending(true);
+    try {
+      await startGeneration(finalPrompt, references, ratio, provider, rawPrompt);
+      onExit(); // 新 job 已自动选中并弹全屏会话面板
+    } finally {
+      setSending(false);
+    }
+  }
+
+  const sendDisabled = !finalPrompt || !targetReady || !canStart || sending;
+  const sendTitle = !targetReady
+    ? lockedReason
+    : !canStart
+      ? "已达当前档位的并行生成上限"
+      : "用编辑后的组稿开新会话生成";
+
+  return (
+    // 浮动卡片本体：高度随内容收缩、上方两角圆角、底部贴屏；滑入动画（外层容器负责水平居中定位）。
+    <div className="gen-dock-in w-full space-y-2 rounded-t-xl border border-b-0 border-edge bg-panel p-3 shadow-[0_-12px_32px_rgba(0,0,0,0.45)]">
+      <div className="flex items-center gap-2">
+        <strong className="shrink-0 text-xs font-semibold text-ink">重新编辑</strong>
+        <span className="min-w-0 flex-1 truncate text-[10px] text-muted">
+          点上方瀑布流图片插入参考图；改完发送即开新会话
+        </span>
+        <button
+          type="button"
+          onClick={onExit}
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted hover:bg-panel2 hover:text-ink"
+          title="取消编辑，回到会话"
+          aria-label="取消编辑"
+        >
+          <X size={14} />
+        </button>
+      </div>
+      <div className="border border-edge bg-canvas p-2">
+        <div
+          ref={hostRef}
+          onClick={focus}
+          className="creation-editor max-h-56 min-h-24 cursor-pointer overflow-y-auto border border-edge bg-panel2/40 p-2 text-sm leading-8 text-ink focus-within:border-accent"
+        />
+        {/* 编辑框内 chip 的交互浮层（hover 放大图/维度正文 + 点击定位瀑布流） */}
+        <BoardChipPreview hostRef={hostRef} />
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <RatioSelect value={ratio} onChange={setRatio} />
+          <span className="hidden text-[10px] text-muted md:inline">
+            点瀑布流图片插入参考图，或输入 @图名
+          </span>
+          <div className="ml-auto flex items-center gap-1.5">
+            {!targetReady && (
+              <span className="max-w-48 truncate text-[10px] text-muted" title={lockedReason}>
+                {lockedReason}
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={onExit}
+              className="rounded bg-panel2 px-3 py-1.5 text-xs text-ink hover:bg-edge"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              onClick={() => void send()}
+              disabled={sendDisabled}
+              title={sendTitle}
+              className="flex items-center gap-1.5 rounded bg-accent px-4 py-1.5 text-xs font-semibold text-black disabled:opacity-50"
+            >
+              <Send size={12} />
+              {sending ? "发送中…" : "发送"}
+            </button>
+          </div>
         </div>
       </div>
     </div>
