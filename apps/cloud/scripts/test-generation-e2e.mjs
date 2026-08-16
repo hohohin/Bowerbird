@@ -27,8 +27,8 @@ if (!baseUrl || !publishableKey || !secretKey) {
   process.exit(2);
 }
 const scenario = process.argv[2] ?? "basic";
-if (!["basic", "long", "unknown"].includes(scenario)) {
-  console.error("用法：node scripts/test-generation-e2e.mjs basic|long|unknown");
+if (!["basic", "long", "unknown", "guard", "crash-create", "crash-check"].includes(scenario)) {
+  console.error("用法：node scripts/test-generation-e2e.mjs basic|long|unknown|guard|crash-create|crash-check <job_id>");
   process.exit(2);
 }
 
@@ -149,9 +149,105 @@ let testError;
 const jobIds = [];
 
 try {
+  if (scenario === "crash-create") {
+    // Orchestration phase 1: create one job and exit, leaving the account alive.
+    // The operator then kills the VPS worker mid-generation and restarts it.
+    account = await createAccount();
+    const created = await createJob(account.headers, {
+      idempotency_key: `gen-e2e-crash-${crypto.randomUUID()}`,
+      ratio: "1:1",
+      prompt: "一张极简的静物摄影：一只素色陶瓷杯。",
+      reference_images: [],
+    });
+    console.log(`CRASH_JOB_ID=${created.job_id}`);
+    console.log(`CRASH_USER_ID=${account.userId}`);
+    process.exit(0);
+  } else if (scenario === "crash-check") {
+    // Orchestration phase 2 (admin REST, no user JWT): after lease expiry +
+    // reconcile, the job must be frozen as outcome_unknown with the hold left
+    // pending settlement — proving the crash path never re-submits to Ark.
+    const jobId = process.argv[3];
+    assert.ok(/^[0-9a-f-]{36}$/.test(jobId ?? ""), "缺少 job_id 参数");
+    const rows = await jsonRequest("读取崩溃任务", `${baseUrl}/rest/v1/generation_jobs?id=eq.${jobId}&select=*`, {
+      method: "GET",
+      headers: adminHeaders,
+    });
+    const job = rows[0];
+    assert.ok(job, "任务不存在");
+    assert.equal(job.status, "outcome_unknown", `崩溃恢复应为 outcome_unknown，实际 ${job.status}`);
+    assert.equal(job.error_code, "worker_lost_after_submit", `error_code 应为 worker_lost_after_submit，实际 ${job.error_code}`);
+    const holdRows = await jsonRequest("读取挂起 hold", `${baseUrl}/rest/v1/credit_holds?id=eq.${job.hold_id}&select=status`, {
+      method: "GET",
+      headers: adminHeaders,
+    });
+    assert.ok(holdRows[0]?.status.startsWith("pending"), `hold 应为 pending settlement，实际 ${holdRows[0]?.status}`);
+    await fetch(`${baseUrl}/storage/v1/object/generation-temp`, {
+      method: "POST",
+      headers: adminHeaders,
+      body: JSON.stringify({ prefixes: [`jobs/${jobId}/`] }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    await fetch(`${baseUrl}/rest/v1/generation_jobs?id=eq.${jobId}`, {
+      method: "DELETE",
+      headers: adminHeaders,
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (job.user_id) {
+      // generation_jobs row (restrict FK) already deleted above; billing_accounts cascades from the auth user.
+      await jsonRequest("删除临时账号", `${baseUrl}/auth/v1/admin/users/${job.user_id}`, {
+        method: "DELETE",
+        headers: adminHeaders,
+      }, [200, 204]);
+    }
+    console.log(`场景CR（Worker 提交后崩溃→租约过期→reconcile 冻结）通过：job=${jobId} hold=${holdRows[0].status}`);
+    process.exit(0);
+  }
+
   account = await createAccount();
 
-  if (scenario === "basic") {
+  if (scenario === "guard") {
+    // --- Scenario G: idempotent replay + cross-account IDOR ---
+    const idempotencyKey = `gen-e2e-g-${crypto.randomUUID()}`;
+    const payload = {
+      idempotency_key: idempotencyKey,
+      ratio: "1:1",
+      prompt: "一张极简的静物摄影：一只素色陶瓷杯。",
+      reference_images: [],
+    };
+    const created = await createJob(account.headers, payload);
+    jobIds.push(created.job_id);
+
+    // Same idempotency key + identical payload must return the SAME job, not a second one.
+    const replayed = await createJob(account.headers, payload);
+    assert.equal(replayed.job_id, created.job_id, "幂等重放应返回同一 job_id");
+    assert.equal(replayed.charge.transaction_id, created.charge.transaction_id, "幂等重放不应二次 hold");
+
+    const { job } = await pollJob(account.headers, created.job_id);
+    assert.equal(job.status, "succeeded", `guard 基线任务未成功：${job.error?.code}`);
+
+    // Cross-account access must 404 without leaking existence.
+    const stranger = await createAccount();
+    try {
+      const stolen = await jsonRequest("越权查询", functionUrl("generate-proxy"), {
+        method: "POST",
+        headers: stranger.headers,
+        body: JSON.stringify({ action: "get", job_id: created.job_id }),
+      }, [404]);
+      assert.equal(stolen?.error?.code, "invalid_request");
+      const cancelled = await jsonRequest("越权取消", functionUrl("generate-proxy"), {
+        method: "POST",
+        headers: stranger.headers,
+        body: JSON.stringify({ action: "cancel", job_id: created.job_id }),
+      }, [404]);
+      assert.equal(cancelled?.error?.code, "invalid_request");
+    } finally {
+      await jsonRequest("删除陌生账号", `${baseUrl}/auth/v1/admin/users/${stranger.userId}`, {
+        method: "DELETE",
+        headers: adminHeaders,
+      }, [200, 204]);
+    }
+    console.log(`场景G（幂等重放返回同任务 + 越权 get/cancel 均 404）通过：job=${created.job_id}`);
+  } else if (scenario === "basic") {
     // --- Scenario A: multi-reference real Ark generation on the VPS worker ---
     const before = await entitlement(account.headers);
     assert.equal(before.balances.daily, 30, "新账号应获得 30 每日积分");
