@@ -380,7 +380,14 @@ export const useStore = create<State>((set, get) => {
       if (j.turns.length === 0) return j;
       const last = j.turns[j.turns.length - 1];
       if (last.images.length === 0) {
-        return { ...j, turns: [...j.turns.slice(0, -1), { ...last, error: msg }] };
+        return {
+          ...j,
+          turns: [
+            ...j.turns.slice(0, -1),
+            // 失败也结算用时（用户关心失败前跑了多久）。
+            { ...last, error: msg, durationMs: last.startedAt ? Date.now() - last.startedAt : last.durationMs },
+          ],
+        };
       }
       return { ...j, streaming: j.streaming + `\n[error: ${msg}]` };
     });
@@ -943,7 +950,7 @@ export const useStore = create<State>((set, get) => {
     const jobId = crypto.randomUUID();
     const job: GenJob = {
       id: jobId,
-      turns: [{ id: nextGenTurnId(), prompt: sentPrompt, promptRaw: rawPrompt ?? null, images: [], provider: prov }],
+      turns: [{ id: nextGenTurnId(), prompt: sentPrompt, promptRaw: rawPrompt ?? null, images: [], provider: prov, startedAt: Date.now() }],
       sessionId: null,
       streaming: "",
       lastPrompt: sentPrompt,
@@ -999,7 +1006,7 @@ export const useStore = create<State>((set, get) => {
     // 续轮复用同 jobId（同一会话）；后端 task_queue upsert 刷新回 running。
     updateJob(id, (j) => ({
       ...j,
-      turns: [...j.turns, { id: nextGenTurnId(), prompt: text, images: [], provider: prov }],
+      turns: [...j.turns, { id: nextGenTurnId(), prompt: text, images: [], provider: prov, startedAt: Date.now() }],
       streaming: "",
       running: true,
       pendingBoardClose: false, // 续轮修改不关闭创作板
@@ -1111,7 +1118,16 @@ export const useStore = create<State>((set, get) => {
         (j) => {
           const last = j.turns[j.turns.length - 1];
           const turns = last
-            ? [...j.turns.slice(0, -1), { ...last, images: [...last.images, ...imgs], provider: c.provider }]
+            ? [
+                ...j.turns.slice(0, -1),
+                {
+                  ...last,
+                  images: [...last.images, ...imgs],
+                  provider: c.provider,
+                  // 生成用时：done 落地时按本轮 startedAt 结算（恢复的 job 无 startedAt → 不显示）。
+                  durationMs: last.startedAt ? Date.now() - last.startedAt : last.durationMs,
+                },
+              ]
             : j.turns;
           return {
             ...j,

@@ -7,7 +7,7 @@ import type { PromptedAsset } from "../../lib/types";
  *
  * 三种 inline 节点：
  * - text：普通文字
- * - image：原子 inline chip（缩略图 + 图名），attrs 存 assetId + 显示快照（name/ext/thumb）+ silent 标记
+ * - image：原子 inline chip（仅缩略图；图名只在 hover title，不进正文——采集图名多为 hash/ulid 无信息量）
  * - keyword：原子 inline chip（蓝色下划线【维度】），attrs.title
  *
  * atom + inline ⇒ Backspace 天然原子删一次一个 chip，text 默认逐字删。
@@ -36,10 +36,7 @@ export const creationSchema = new Schema({
         thumb: { default: null },
       },
       toDOM(node) {
-        const { assetId, silent, name, thumb } = node.attrs;
-        // attrs.name 是创建时的快照（持久化进草稿 localStorage），chipName 修复前载入的旧 chip
-        // 快照里可能仍带后缀；nodeFromJSON 恢复也不再过 imageAttrs。显示层兜底再剥一次图片后缀。
-        const display = (name || assetId).replace(TAIL_IMG_EXT, "");
+        const { assetId, silent, thumb } = node.attrs;
         const klass = silent
           ? "border-edge bg-panel2 text-muted"
           : "border-accent/40 bg-accent/10 text-accent";
@@ -60,16 +57,13 @@ export const creationSchema = new Schema({
                 "IMG",
               ]
         );
-        children.push(["span", { class: "max-w-28 truncate" }, display]);
+        // 只显缩略图不出图名（采集图名多为 hash/ulid 噪音）；hover 由 BoardChipPreview 弹放大图。
         return [
           "span",
           {
-            class: `mx-1 inline-flex items-center gap-1 rounded border px-1.5 py-0.5 align-middle text-xs ${klass}`,
+            class: `mx-1 inline-flex items-center gap-1 rounded border px-1 py-0.5 align-middle text-xs ${klass}`,
             "data-asset-id": assetId,
             contentEditable: "false",
-            title: silent
-              ? `参考图：${display}（已含在正文，随发送一并提交）`
-              : display,
           },
           ...children,
         ];

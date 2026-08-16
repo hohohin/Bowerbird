@@ -13,24 +13,35 @@ type Hover =
  * 创作板编辑框 chip 的交互浮层。ProseMirror 渲染的 image/keyword chip 是非 React DOM，
  * 这里通过事件委托在编辑器宿主 div 上捕获 mousemove/click：
  * - image chip：hover 2s 弹放大图（与瀑布流 hover 一致的边界翻转/滚动收回），
- *   click → store.focusAsset → 瀑布流滚动定位 + 闪烁高亮。
+ *   click → store.focusAsset → 瀑布流滚动定位 + 闪烁高亮（clickToFocus=false 时禁用，
+ *   供只读还原场景用——那里点击另有含义或不需要定位）。
  * - keyword chip：hover ~0.3s 弹该维度的反推正文（读 chip 上 data-body 快照，即插入时
  *   所属素材的 CaptionSection.body）。
  *
  * 浮层 portal 到 body，避开外层 overflow 裁剪。image 放大图 src / 尺寸取自 store 里的
- * asset.store_path + width/height（chip attrs 只存了 thumb，不够清晰且无原图比例）。
+ * asset.store_path + width/height（chip attrs 只存了 thumb，不够清晰且无原图比例）；
+ * extraAssets 补充不在 store 当前视图里的资产（只读还原的参考图常不在瀑布流过滤结果中）。
  */
-export function BoardChipPreview({ hostRef }: { hostRef: RefObject<HTMLDivElement> }) {
+export function BoardChipPreview({
+  hostRef,
+  clickToFocus = true,
+  extraAssets,
+}: {
+  hostRef: RefObject<HTMLDivElement>;
+  clickToFocus?: boolean;
+  extraAssets?: Asset[];
+}) {
   const assets = useStore((s) => s.assets);
   const promptedAssets = useStore((s) => s.promptedAssets);
   const focusAsset = useStore((s) => s.focusAsset);
 
   const assetMap = useMemo(() => {
     const m = new Map<string, Asset>();
+    for (const a of extraAssets ?? []) m.set(a.id, a);
     for (const a of promptedAssets) m.set(a.id, a);
     for (const a of assets) m.set(a.id, a);
     return m;
-  }, [assets, promptedAssets]);
+  }, [assets, promptedAssets, extraAssets]);
 
   const [hover, setHover] = useState<Hover>(null);
   const [mouse, setMouse] = useState({ x: 0, y: 0 });
@@ -76,6 +87,7 @@ export function BoardChipPreview({ hostRef }: { hostRef: RefObject<HTMLDivElemen
     }
 
     function onClick(e: MouseEvent) {
+      if (!clickToFocus) return; // 只读场景：点击不定位瀑布流（hover 放大图不受影响）
       const t = e.target as HTMLElement;
       const imgChip = t.closest("[data-asset-id]") as HTMLElement | null;
       const id = imgChip?.getAttribute("data-asset-id");

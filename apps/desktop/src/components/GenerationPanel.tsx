@@ -3,12 +3,22 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { useStore } from "../store";
 import { api } from "../lib/api";
 import { canStartAnotherJob, canUseGenerationProvider } from "../lib/entitlement";
-import type { GenJob, GenTurn } from "../lib/types";
+import type { Asset, GenJob, GenTurn } from "../lib/types";
 import { Lightbox } from "./Lightbox";
 import { useCreationEditor } from "./creation/useCreationEditor";
 import { RatioSelect } from "./creation/RatioSelect";
 import { BoardChipPreview } from "./creation/BoardChipPreview";
+import { ReadonlyPrompt } from "./creation/ReadonlyPrompt";
 import { Bookmark, Copy, Images, Pencil, Send, Sparkles, X } from "lucide-react";
+
+/** 生成用时格式：<60s 取整秒，否则 m:ss。 */
+function fmtDuration(ms: number): string {
+  if (ms < 0) ms = 0;
+  if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
+  const m = Math.floor(ms / 60_000);
+  const s = Math.floor((ms % 60_000) / 1000);
+  return `${m}m${String(s).padStart(2, "0")}s`;
+}
 
 /**
  * 生成会话面板（多 job，独立于创作板）。
@@ -91,13 +101,12 @@ export function GenerationPanel() {
     });
   }, [activeJob]);
 
-  // 首轮参考图缩略图（用户消息的「附件」）：第一轮气泡上方展示。
-  const firstRefThumbs = useMemo(
-    () =>
-      (activeJob?.refAssets ?? [])
-        .map((a) => ({ src: a.thumb_path ?? a.store_path ?? "", name: a.name }))
-        .filter((t) => t.src),
-    [activeJob]
+  // 首轮参考图完整 asset：传给 TurnView——chip 视图还原参考图节点用；纯文本回退时在气泡上方展示缩略图「附件」。
+  const firstRefAssets = useMemo(() => activeJob?.refAssets ?? [], [activeJob]);
+  // 参考图「附件」点开放大：Lightbox 用原图（store_path），与产出图各自独立成组。
+  const refLightboxImages = useMemo(
+    () => firstRefAssets.map((a) => a.store_path).filter((p): p is string => !!p),
+    [firstRefAssets]
   );
 
   // 会话标题随内容而定：首轮编辑框原文的第一个非空行（悬停看全文）；无会话时回退默认名。
@@ -285,9 +294,12 @@ export function GenerationPanel() {
                 busy={running && i === turnsWithOffset.length - 1}
                 streaming={running && i === turnsWithOffset.length - 1 ? activeJob.streaming : ""}
                 imageOffset={imageOffset}
-                refThumbs={i === 0 ? firstRefThumbs : undefined}
+                refAssets={i === 0 ? firstRefAssets : undefined}
                 actions={i === 0 ? firstTurnActions : undefined}
                 onOpenLightbox={(g) => setLightbox({ images: allImages, index: g })}
+                onOpenRefLightbox={(r) =>
+                  setLightbox({ images: refLightboxImages, index: r })
+                }
                 onRetry={retryLastGenTurn}
                 canRetry={targetReady && !running}
                 retryReason={lockedReason}
@@ -371,9 +383,10 @@ function TurnView({
   busy,
   streaming,
   imageOffset,
-  refThumbs,
+  refAssets,
   actions,
   onOpenLightbox,
+  onOpenRefLightbox,
   onRetry,
   canRetry,
   retryReason,
@@ -383,9 +396,10 @@ function TurnView({
   busy: boolean;
   streaming: string;
   imageOffset: number;
-  refThumbs?: { src: string; name: string }[];
+  refAssets?: Asset[];
   actions?: ReactNode;
   onOpenLightbox: (globalIdx: number) => void;
+  onOpenRefLightbox?: (refIdx: number) => void;
   onRetry: () => void;
   canRetry: boolean;
   retryReason: string;
@@ -394,42 +408,85 @@ function TurnView({
   // （用途注入等铺开后的 prompt）收进 thinking 式折叠，二者一致时无需折叠。
   const displayText = turn.promptRaw?.trim() ? turn.promptRaw : turn.prompt;
   const hasCompiled = !!turn.promptRaw?.trim() && turn.prompt !== turn.promptRaw;
+  // 首轮有原文 + 参考图数据（可为 0 张）→ 用创作板同款节点规则只读还原（缩略图 chip + 高亮维度词），不可编辑。
+  const chipView = index === 0 && !!turn.promptRaw?.trim() && !!refAssets;
   const [expanded, setExpanded] = useState(false);
   const [showCompiled, setShowCompiled] = useState(false);
+  // 生成中实时计时（完成/失败后改用 turn.durationMs，不再跳）。
+  const [now, setNow] = useState(0);
+  useEffect(() => {
+    if (!busy || !turn.startedAt) return;
+    setNow(Date.now());
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [busy, turn.startedAt]);
+  const elapsedLabel = busy && turn.startedAt ? fmtDuration(now - turn.startedAt) : null;
+  const durationLabel = turn.durationMs != null ? fmtDuration(turn.durationMs) : null;
   const viaLabel =
     turn.provider && turn.provider !== "codex-cli"
       ? turn.provider === "jimeng"
         ? "即梦"
         : turn.provider
       : null;
+  const refThumbs = (refAssets ?? [])
+    .map((a) => ({ src: a.thumb_path ?? a.store_path ?? "", name: a.name }))
+    .filter((t) => t.src);
 
   return (
     <div className="flex flex-col gap-2.5">
-      {/* 用户消息：右侧气泡；首轮上方展示参考图「附件」 */}
+      {/* 用户消息：右侧气泡；首轮气泡上方常驻参考图「附件」缩略图（chip 视图与纯文本回退都有，可点开放大） */}
       <div className="flex flex-col items-end gap-1.5">
-        {index === 0 && refThumbs && refThumbs.length > 0 && (
+        {index === 0 && refThumbs.length > 0 && (
           <div className="flex max-w-[85%] flex-wrap justify-end gap-1">
-            {refThumbs.map((t) => (
-              <img
+            {refThumbs.map((t, j) => (
+              <button
                 key={t.src}
-                src={convertFileSrc(t.src)}
-                alt={t.name}
+                type="button"
+                onClick={() => onOpenRefLightbox?.(j)}
+                className="cursor-zoom-in"
                 title={t.name}
-                className="h-12 w-12 rounded border border-edge object-cover"
-              />
+              >
+                <img
+                  src={convertFileSrc(t.src)}
+                  alt={t.name}
+                  draggable={false}
+                  className="h-12 w-12 rounded border border-edge object-cover hover:border-accent/60"
+                />
+              </button>
             ))}
           </div>
         )}
-        <button
-          type="button"
-          onClick={() => setExpanded((v) => !v)}
-          title={expanded ? "收起" : "展开全文"}
-          className={`max-w-[85%] rounded-lg rounded-br-sm border border-edge bg-panel2 px-3 py-2 text-left text-xs leading-relaxed text-ink ${
-            expanded ? "" : "line-clamp-5"
-          }`}
-        >
-          <span className="whitespace-pre-wrap">{displayText}</span>
-        </button>
+        {chipView ? (
+          // 只读 chip 气泡：与创作板编辑框同款节点渲染（缩略图 + 维度高亮），点击展开/收起全文。
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={() => setExpanded((v) => !v)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                setExpanded((v) => !v);
+              }
+            }}
+            title={expanded ? "收起" : "展开全文"}
+            className={`max-w-[85%] cursor-pointer overflow-hidden rounded-lg rounded-br-sm border border-edge bg-panel2 px-2.5 py-2 text-left text-ink transition-[max-height] ${
+              expanded ? "max-h-none" : "max-h-48"
+            }`}
+          >
+            <ReadonlyPrompt prompt={displayText} references={refAssets!} />
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            title={expanded ? "收起" : "展开全文"}
+            className={`max-w-[85%] rounded-lg rounded-br-sm border border-edge bg-panel2 px-3 py-2 text-left text-xs leading-relaxed text-ink ${
+              expanded ? "" : "line-clamp-5"
+            }`}
+          >
+            <span className="whitespace-pre-wrap">{displayText}</span>
+          </button>
+        )}
         {/* thinking 式折叠：实际发给生图 AI 的完整文本 */}
         {hasCompiled && (
           <div className="max-w-[85%] space-y-1.5">
@@ -458,8 +515,11 @@ function TurnView({
           <Sparkles size={13} />
         </span>
         <div className="min-w-0 flex-1 space-y-2">
-          {viaLabel && (
-            <div className="text-[10px] uppercase tracking-wide text-muted">via {viaLabel}</div>
+          {(viaLabel || durationLabel) && (
+            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-muted">
+              {viaLabel && <span>via {viaLabel}</span>}
+              {durationLabel && <span>{viaLabel ? "· " : ""}用时 {durationLabel}</span>}
+            </div>
           )}
           {turn.images.length > 0 ? (
             <div className={`grid gap-1.5 ${turn.images.length > 1 ? "grid-cols-2" : "grid-cols-1"}`}>
@@ -502,7 +562,7 @@ function TurnView({
             <div className="space-y-2">
               <div className="flex items-center gap-2 text-xs text-muted">
                 <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-lime" />
-                正在生成图像…
+                正在生成图像{elapsedLabel ? `… ${elapsedLabel}` : "…"}
               </div>
               {/* 流式过程日志（codex CLI 输出），生成期间实时滚动 */}
               {streaming && (

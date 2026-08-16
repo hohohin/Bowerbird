@@ -3,8 +3,10 @@ import { EditorState } from "prosemirror-state";
 import { EditorView } from "prosemirror-view";
 import type { Asset, PromptedAsset } from "../../lib/types";
 import { parsePromptToDoc } from "./parse";
+import { BoardChipPreview } from "./BoardChipPreview";
 
-/** 用创作板同一套节点规则展示生成时的原始输入，但不开放编辑与节点交互。 */
+/** 用创作板同一套节点规则展示生成时的原始输入，但不开放编辑与节点交互；
+ *  chip hover 走 BoardChipPreview 弹放大图（不定位瀑布流）。 */
 export function ReadonlyPrompt({
   prompt,
   references,
@@ -35,5 +37,11 @@ export function ReadonlyPrompt({
     };
   }, [prompt, references]);
 
-  return <div ref={hostRef} className="creation-editor creation-editor-readonly" />;
+  return (
+    <>
+      <div ref={hostRef} className="creation-editor creation-editor-readonly" />
+      {/* chip hover 放大图：参考图可能不在 store 当前视图，extraAssets 兜底；点击不定位瀑布流 */}
+      <BoardChipPreview hostRef={hostRef} clickToFocus={false} extraAssets={references} />
+    </>
+  );
 }
