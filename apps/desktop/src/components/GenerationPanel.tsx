@@ -4,11 +4,12 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useStore } from "../store";
 import { api } from "../lib/api";
 import { notifyError } from "../lib/notify";
-import { canStartAnotherJob, canUseGenerationProvider } from "../lib/entitlement";
+import { canStartAnotherJob, canUseByo, canUseGenerationProvider } from "../lib/entitlement";
 import type { Asset, GenJob, GenTurn } from "../lib/types";
 import { Lightbox } from "./Lightbox";
 import { useCreationEditor } from "./creation/useCreationEditor";
 import { RatioSelect } from "./creation/RatioSelect";
+import { ProviderSelect } from "./creation/ProviderSelect";
 import { BoardChipPreview } from "./creation/BoardChipPreview";
 import { ReadonlyPrompt } from "./creation/ReadonlyPrompt";
 import { Bookmark, Copy, Images, Pencil, Send, Sparkles, X } from "lucide-react";
@@ -257,9 +258,6 @@ export function GenerationPanel() {
         <div className="absolute bottom-0 left-1/2 z-10 w-[min(896px,100%)] -translate-x-1/2">
           <GenEditComposer
             job={activeJob}
-            provider={activeProvider}
-            targetReady={targetReady}
-            lockedReason={lockedReason}
             canStart={canStartAnotherJob(cloudEntitlement, runningJobCount)}
             onExit={() => setGenEditing(false)}
           />
@@ -646,41 +644,73 @@ function TurnView({
 /**
  * 会话「重新编辑」编辑坞（jimeng / gemini 式）：会话面板收起为底部条，露出的瀑布流
  * 点一下即插参考图 chip（board-asset-picked）。编辑器与创作板同款（useCreationEditor +
- * RatioSelect + BoardChipPreview），但不持久化草稿（draftKey:null，不覆盖创作板的
- * bowerbird.boardDraft）；发送 = 在**同一会话**里开新版本分支（conversationId 归组，
- * 会话面板 ←/→ 切换编辑前后），取消 = 回到会话全屏视图。
+ * RatioSelect + ProviderSelect + Agent 模式 + BoardChipPreview），但不持久化草稿
+ * （draftKey:null，不覆盖创作板的 bowerbird.boardDraft）；发送 = 在**同一会话**里开新版本
+ * 分支（conversationId 归组，会话面板 ←/→ 切换编辑前后），点发送立即回会话视图（生成后台跑），
+ * 取消 = 回到会话全屏视图。provider 在坞内自选（初值 = 该会话的 provider）。
  */
 function GenEditComposer({
   job,
-  provider,
-  targetReady,
-  lockedReason,
   canStart,
   onExit,
 }: {
   job: GenJob;
-  provider: string;
-  targetReady: boolean;
-  lockedReason: string;
   canStart: boolean;
   onExit: () => void;
 }) {
   const startGeneration = useStore((s) => s.startGeneration);
+  const activeGenProvider = useStore((s) => s.activeGenProvider);
+  const setActiveGenProvider = useStore((s) => s.setActiveGenProvider);
+  const codexHealth = useStore((s) => s.codexHealth);
+  const dreaminaHealth = useStore((s) => s.dreaminaHealth);
+  const cloudAuth = useStore((s) => s.cloudAuth);
+  const cloudEntitlement = useStore((s) => s.cloudEntitlement);
+  const cloudAvailable = cloudAuth?.cloud_available ?? false;
   const { hostRef, focus, finalPrompt, rawPrompt, references, agentPromptReferences } =
     useCreationEditor({
       draftKey: null,
     });
   // 比例初值取会话首轮的值；编辑坞内改动不持久化（创作板有自己的记忆）。
   const [ratio, setRatio] = useState<string | null>(job.lastRatio ?? null);
-  const [sending, setSending] = useState(false);
   // Agent 模式（与创作板同款）：先综合原 prompt 与参考图维度编译，再发生图。
   const [agentMode, setAgentMode] = useState(false);
   const [agentAvailable, setAgentAvailable] = useState(false);
   const [agentBusy, setAgentBusy] = useState(false);
 
+  // provider 初值 = 该会话的 provider（进入编辑时同步当前选择，坞内可再切换）。
+  useEffect(() => {
+    const initial =
+      job.provider === "jimeng" || job.provider === "bowerbird-cloud" ? job.provider : "codex";
+    setActiveGenProvider(initial);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     api.localAgentHealth().then(setAgentAvailable).catch(() => setAgentAvailable(false));
   }, []);
+
+  // 按坞内当前选中的 provider 判健康（与创作板同款门控）。
+  const cloudBalance = cloudEntitlement
+    ? cloudEntitlement.balances.daily + cloudEntitlement.balances.sub + cloudEntitlement.balances.topup
+    : 0;
+  const targetReady = activeGenProvider === "bowerbird-cloud"
+    ? cloudAvailable && !!cloudAuth?.logged_in && cloudBalance > 0
+    : activeGenProvider === "jimeng"
+      ? canUseByo(cloudEntitlement) && !!dreaminaHealth?.ok
+      : canUseByo(cloudEntitlement) && !!codexHealth?.ok;
+  const lockedReason =
+    activeGenProvider === "bowerbird-cloud"
+      ? !cloudAvailable
+        ? "当前版本未配置 Bowerbird Cloud"
+        : !cloudAuth?.logged_in
+          ? "请先登录 Bowerbird Cloud"
+          : cloudBalance <= 0
+            ? "积分不足"
+            : "Bowerbird Cloud 不可用"
+      : !canUseByo(cloudEntitlement)
+        ? "升级 Pro 解锁本机 Codex / 即梦 CLI"
+        : (activeGenProvider === "jimeng" ? dreaminaHealth?.reason : codexHealth?.reason) ||
+          "当前 provider 不可用";
 
   // 编辑坞高度 → CSS 变量：瀑布流滚动容器据此留出底部 padding，避免坞盖住最后一行素材。
   const dockRef = useRef<HTMLDivElement>(null);
@@ -715,7 +745,7 @@ function GenEditComposer({
   }, []);
 
   async function send() {
-    if (!finalPrompt || !targetReady || !canStart || sending || agentBusy) return;
+    if (!finalPrompt || !targetReady || !canStart || agentBusy) return;
     let prompt = finalPrompt;
     if (agentMode) {
       setAgentBusy(true);
@@ -733,17 +763,20 @@ function GenEditComposer({
         setAgentBusy(false);
       }
     }
-    setSending(true);
-    try {
-      // 归入同一会话：conversationId 传源会话 → 新版本分支可与会话内 ←/→ 切换。
-      await startGeneration(prompt, references, ratio, provider, rawPrompt, job.conversationId ?? job.id);
-      onExit(); // 新版本 job 已自动选中，回到会话视图用箭头切换编辑前后
-    } finally {
-      setSending(false);
-    }
+    // 点发送立即回会话视图：生成后台跑（新版本 job 自动选中并弹面板），错误由会话内失败轮展示。
+    onExit();
+    // 归入同一会话：conversationId 传源会话 → 新版本分支可与会话内 ←/→ 切换。
+    void startGeneration(
+      prompt,
+      references,
+      ratio,
+      activeGenProvider,
+      rawPrompt,
+      job.conversationId ?? job.id
+    ).catch(console.error);
   }
 
-  const sendDisabled = !finalPrompt || !targetReady || !canStart || sending || agentBusy;
+  const sendDisabled = !finalPrompt || !targetReady || !canStart || agentBusy;
   const sendTitle = !targetReady
     ? lockedReason
     : !canStart
@@ -784,6 +817,15 @@ function GenEditComposer({
         <BoardChipPreview hostRef={hostRef} />
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <RatioSelect value={ratio} onChange={setRatio} />
+          <ProviderSelect
+            value={activeGenProvider}
+            onChange={setActiveGenProvider}
+            codexHealth={codexHealth}
+            dreaminaHealth={dreaminaHealth}
+            cloudAvailable={cloudAvailable}
+            cloudAuth={cloudAuth}
+            cloudEntitlement={cloudEntitlement}
+          />
           {/* Agent 模式开关（与创作板同款行为） */}
           <button
             type="button"
@@ -823,7 +865,7 @@ function GenEditComposer({
               className="flex items-center gap-1.5 rounded bg-accent px-4 py-1.5 text-xs font-semibold text-black disabled:opacity-50"
             >
               <Send size={12} />
-              {agentBusy ? "Agent 整理中…" : sending ? "发送中…" : "发送"}
+              {agentBusy ? "Agent 整理中…" : "发送"}
             </button>
           </div>
         </div>
