@@ -40,6 +40,7 @@ export function SidebarStatus({ collapsed, onExpand }: { collapsed?: boolean; on
   const autoAnalyzing = useStore((s) => s.autoAnalyzing);
   const genJobOrder = useStore((s) => s.genJobOrder);
   const genJobs = useStore((s) => s.genJobs);
+  const activeJobId = useStore((s) => s.activeJobId);
   const genUnread = useStore((s) => s.genUnread);
   const genPanelOpen = useStore((s) => s.genPanelOpen);
   const setActiveJob = useStore((s) => s.setActiveJob);
@@ -73,13 +74,28 @@ export function SidebarStatus({ collapsed, onExpand }: { collapsed?: boolean; on
 
   const showUnreadDot = (genUnread && !genPanelOpen) || failures.length > 0;
 
-  const jobList = genJobOrder.map((id) => genJobs[id]).filter(Boolean);
-  const runningJobs = jobList.filter((j) => j.running);
+  // 生成任务按会话聚合：同 conversationId 的「重新编辑」版本分支合成一条（面板内 ←/→ 切版本）。
+  type GenGroup = { key: string; jobs: GenJob[]; latest: GenJob; running: boolean };
+  const genGroups: GenGroup[] = [];
+  const groupByKey = new Map<string, GenGroup>();
+  for (const j of genJobOrder.map((id) => genJobs[id]).filter(Boolean)) {
+    const key = j.conversationId ?? j.id;
+    let g = groupByKey.get(key);
+    if (!g) {
+      g = { key, jobs: [], latest: j, running: false };
+      groupByKey.set(key, g);
+      genGroups.push(g);
+    }
+    g.jobs.push(j);
+    g.latest = j; // genJobOrder 按创建顺序 → 组内最后一个即最新版本
+    g.running = g.running || j.running;
+  }
+  const runningGroups = genGroups.filter((g) => g.running);
   const describeRunning = describingId !== null || queue.length > 0;
-  const autoExpand = runningJobs.length > 0 || describeRunning;
+  const autoExpand = runningGroups.length > 0 || describeRunning;
   const expanded = !collapsed && (showAll || autoExpand);
-  // 展示的生成任务：完整模式全量，自动模式仅在跑。
-  const visibleJobs = showAll ? jobList : runningJobs;
+  // 展示的生成会话：完整模式全量，自动模式仅在跑。
+  const visibleGroups = showAll ? genGroups : runningGroups;
 
   function dotButton(className: string) {
     return (
@@ -131,21 +147,34 @@ export function SidebarStatus({ collapsed, onExpand }: { collapsed?: boolean; on
     : (describingId ? 1 : 0) + queue.length;
   const showDescribe = showAll ? hasDescribe : describeRunning;
 
-  function genJobRow(j: GenJob, i: number) {
-    const imgs = j.turns.reduce((n, t) => n + t.images.length, 0);
+  function genGroupRow(g: GenGroup, i: number) {
+    const j = g.latest;
+    // 图数跨版本合计（各版本是并列的备选，产出都归这条会话）。
+    const imgs = g.jobs.reduce(
+      (n, x) => n + x.turns.reduce((m, t) => m + t.images.length, 0),
+      0
+    );
     const failed = j.turns.some((t) => t.error);
+    // 点开：当前 activeJob 属于该会话则保持其版本，否则跳到最新版本。
+    const activeInGroup = !!activeJobId && g.jobs.some((x) => x.id === activeJobId);
+    const targetId = activeInGroup ? activeJobId! : j.id;
     return (
-      <div key={j.id} className="group relative">
+      <div key={g.key} className="group relative">
         <button
           type="button"
-          onClick={() => openJob(j.id)}
+          onClick={() => openJob(targetId)}
           className="block w-full rounded px-2 py-1.5 pr-6 text-left hover:bg-panel2"
         >
           <div className="flex items-center gap-1.5 text-xs text-ink">
             <span className="text-muted">{i + 1}</span>
             <span className="text-[10px] text-muted">{providerLabel(j.provider)}</span>
+            {g.jobs.length > 1 && (
+              <span className="shrink-0 rounded bg-panel px-1 text-[9px] text-muted">
+                {g.jobs.length} 版
+              </span>
+            )}
             <span className="ml-auto">
-              {j.running ? (
+              {g.running ? (
                 <span className="animate-pulse text-accent">●</span>
               ) : failed ? (
                 <span className="text-red-400">❌</span>
@@ -160,9 +189,13 @@ export function SidebarStatus({ collapsed, onExpand }: { collapsed?: boolean; on
         </button>
         <button
           type="button"
-          onClick={() => removeGenJob(j.id)}
-          title="删除任务记录（不影响已生成的图片）"
-          aria-label={`删除任务 ${i + 1}`}
+          onClick={() => g.jobs.forEach((x) => removeGenJob(x.id))}
+          title={
+            g.jobs.length > 1
+              ? `删除会话记录（含 ${g.jobs.length} 个版本，不影响已生成的图片）`
+              : "删除任务记录（不影响已生成的图片）"
+          }
+          aria-label={`删除会话 ${i + 1}`}
           className="absolute right-1 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted opacity-0 hover:bg-panel hover:text-ink focus:opacity-100 group-hover:opacity-100"
         >
           <X size={11} />
@@ -179,16 +212,16 @@ export function SidebarStatus({ collapsed, onExpand }: { collapsed?: boolean; on
       </div>
       {expanded && (
         <div className="mt-1 max-h-64 overflow-y-auto rounded bg-panel2/40">
-          {visibleJobs.length === 0 && !showDescribe ? (
+          {visibleGroups.length === 0 && !showDescribe ? (
             <div className="px-3 py-4 text-center text-xs text-muted">暂无任务</div>
           ) : (
             <>
-              {visibleJobs.length > 0 && (
+              {visibleGroups.length > 0 && (
                 <div className="border-b border-edge">
                   <div className="px-3 pb-1 pt-2 text-[10px] uppercase tracking-wide text-muted">
-                    生成任务（{jobList.length}）
+                    生成会话（{genGroups.length}）
                   </div>
-                  <div className="p-1">{visibleJobs.map((j, i) => genJobRow(j, i))}</div>
+                  <div className="p-1">{visibleGroups.map((g, i) => genGroupRow(g, i))}</div>
                 </div>
               )}
               {showDescribe && (

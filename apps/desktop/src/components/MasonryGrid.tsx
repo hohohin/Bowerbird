@@ -538,7 +538,9 @@ export function MasonryGrid() {
           </div>
         </div>
       ) : (
-        <div className="h-full overflow-y-auto">
+        // paddingBottom 跟随会话「重新编辑」坞实际高度（--gen-dock-h，坞挂载时由 ResizeObserver
+        // 写入）——否则底部浮动坞会盖住最后一行素材，滚不到底。无坞时变量为空，padding 归零。
+        <div className="h-full overflow-y-auto" style={{ paddingBottom: "var(--gen-dock-h, 0px)" }}>
           {/* 滚动容器（固定高度 + 竖向滚动）与 columns 容器必须分离：
               columns 一旦有固定高度，多余内容会横向溢出开新列 → 横向滚动。
               内层 columns 不设高度，内容平分到 N 列后纵向增长，由本层竖向滚动。 */}

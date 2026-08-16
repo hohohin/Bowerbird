@@ -164,6 +164,9 @@ export interface GenTurn {
  */
 export interface GenJob {
   id: string;
+  // 会话分组：「重新编辑」发送产生的新 job 归入源会话（= 根 job 的 id），
+  // 同组 job 在会话面板用 ←/→ 切换编辑前后的版本（agent 应用式分支）。
+  conversationId?: string;
   turns: GenTurn[];
   sessionId: string | null;
   streaming: string;

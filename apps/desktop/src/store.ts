@@ -241,7 +241,7 @@ interface State {
   // 删除生成任务记录（仅前端 genJobs 记录；不取消后端任务、不删已入库图片）。
   removeGenJob: (id: string) => void;
   setGenPanelOpen: (open: boolean) => void;
-  startGeneration: (prompt: string, references: Asset[], ratio?: string | null, provider?: string | null, rawPrompt?: string) => Promise<string>;
+  startGeneration: (prompt: string, references: Asset[], ratio?: string | null, provider?: string | null, rawPrompt?: string, conversationId?: string) => Promise<string>;
   sendGenRevise: (instruction: string, provider?: string | null) => Promise<void>;
   cancelGeneration: (jobId?: string) => void; // 默认取消 activeJob
   loadGenJobs: () => Promise<void>;
@@ -930,7 +930,7 @@ export const useStore = create<State>((set, get) => {
       console.error("loadGenJobs failed", e);
     }
   },
-  startGeneration: async (prompt, references, ratio, provider, rawPrompt) => {
+  startGeneration: async (prompt, references, ratio, provider, rawPrompt, conversationId) => {
     // 多 job：不再因 generating 阻塞（并发发起多个生成，各自独立流转）。
     // provider 兜底：调用点没传（CreationBoard send / retry）→ 当前选择 → 全局默认。
     const prov = normalizeGenerationProvider(
@@ -950,6 +950,8 @@ export const useStore = create<State>((set, get) => {
     const jobId = crypto.randomUUID();
     const job: GenJob = {
       id: jobId,
+      // 会话分组：编辑发送时传源会话 id；普通发送自成一组。
+      conversationId: conversationId ?? jobId,
       turns: [{ id: nextGenTurnId(), prompt: sentPrompt, promptRaw: rawPrompt ?? null, images: [], provider: prov, startedAt: Date.now() }],
       sessionId: null,
       streaming: "",
