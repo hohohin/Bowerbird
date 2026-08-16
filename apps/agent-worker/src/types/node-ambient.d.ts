@@ -39,6 +39,7 @@ declare module "node:fs" {
 declare const console: {
   log(...values: unknown[]): void;
   error(...values: unknown[]): void;
+  warn(...values: unknown[]): void;
 };
 
 declare const process: {

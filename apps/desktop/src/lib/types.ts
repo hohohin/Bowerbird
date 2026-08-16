@@ -149,6 +149,9 @@ export interface GenTurn {
   images: string[];
   // 本轮用的 provider（done 事件回填，"codex-cli"/"jimeng"）；TurnView 角标「via ...」。
   provider?: string;
+  // 本轮开始时间戳与完成耗时（done/error 回填 durationMs；恢复的 job 无 startedAt → 不显示用时）。
+  startedAt?: number;
+  durationMs?: number | null;
   // 失败轮的原始错误文本（codex 退出码/stderr 等）；undefined/null=非失败轮。纯 UI，不入库
   // （失败轮无 done → 无 ingest → 无 DB，error 只活在内存）。
   error?: string | null;
@@ -199,6 +202,7 @@ export interface AppSettings {
   auto_analyze_prompt: string;
   library_root: string | null;
   cloud_auto_understand: boolean;
+  board_shift_pick: boolean;
 }
 
 export interface AuthSnapshot {

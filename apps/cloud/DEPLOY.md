@@ -60,13 +60,14 @@ cd apps/cloud
 npx --yes supabase@latest --agent no db push
 ```
 
-会依次执行 `supabase/migrations/0001_*.sql` 到 `0011_ensure_daily_credits.sql`。`0010` 必须先于新版 `generate-proxy` / `understand-proxy` 部署，否则 Function 找不到用量守卫 RPC；`0011` 必须先于新版 `entitlement` / `generate-proxy` / `understand-proxy` 部署，否则 Function 找不到当日积分补发 RPC。
+会依次执行 `supabase/migrations/0001_*.sql` 到 `0015_generation_jobs.sql`。`0010` 必须先于新版 `generate-proxy` / `understand-proxy`；`0011` 必须先于新版 `entitlement` / `generate-proxy` / `understand-proxy`；`0015` 必须先于异步版 `generate-proxy`、`generation-worker` 与 VPS consumer。
 
 ### 4. 部署 Edge Functions 并注入 Secrets
 
 ```bash
 # 部署函数
 supabase functions deploy generate-proxy
+supabase functions deploy generation-worker --no-verify-jwt
 supabase functions deploy understand-proxy
 supabase functions deploy entitlement
 supabase functions deploy create-checkout
@@ -88,11 +89,40 @@ supabase secrets set ARK_IMAGE_TIMEOUT_MS=135000
 supabase secrets set PROXY_TIMEOUT_MS=140000
 supabase secrets set RATE_LIMIT_PER_USER_PER_MIN=10
 supabase secrets set BOWERBIRD_CLOUD_MOCK=false
+supabase secrets set GENERATION_WORKER_TOKEN=$GENERATION_WORKER_TOKEN
 supabase secrets set BOWERBIRD_PAYMENT_MOCK=true
 supabase secrets set SUPERUN_WEBHOOK_SECRET=$SUPERUN_WEBHOOK_SECRET
 ```
 
 > ⚠️ 目前 `.env` 里 `BOWERBIRD_CLOUD_MOCK=false` 已开启真实方舟；`BOWERBIRD_PAYMENT_MOCK=true` 保持 Mock 支付，**不要**提前改 false。
+
+`generation-worker` 必须使用 `--no-verify-jwt` 部署，因为 VPS 使用专用 Worker Token 而不是用户 JWT；Function 内部会常量时间校验 `GENERATION_WORKER_TOKEN`。VPS 只持该 Token 与方舟生图 Key，绝不能持 Supabase secret/service-role。
+
+### 4.1 部署 VPS 图片生成 Consumer
+
+把 `apps/agent-worker/{Dockerfile.generation,compose.generation.yml,src}` 部署到 `/opt/bowerbird/agent-worker`，并创建权限 `0600` 的 `.env.generation`：
+
+```dotenv
+GENERATION_CONTROL_URL=https://<project-ref>.supabase.co/functions/v1/generation-worker
+GENERATION_WORKER_TOKEN=<与 Supabase Secret 完全一致的高熵随机值>
+GENERATION_WORKER_ID=lighthouse-guangzhou-1
+ARK_API_KEY=<方舟 Key>
+ARK_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
+ARK_IMAGE_MODEL=<Seedream endpoint id>
+ARK_IMAGE_SIZE=2K
+BOWERBIRD_CLOUD_MOCK=false
+GENERATION_POLL_INTERVAL_MS=2000
+GENERATION_HEARTBEAT_INTERVAL_MS=30000
+```
+
+```bash
+cd /opt/bowerbird/agent-worker
+sudo docker compose -f compose.generation.yml up -d --build
+sudo docker compose -f compose.generation.yml ps
+sudo docker compose -f compose.generation.yml logs --tail 50
+```
+
+容器不映射入站端口、只读根文件系统、非 root、丢弃全部 capabilities。方舟同步请求不设置 120/135 秒主动终止；等待期间每 30 秒向 Bowerbird 控制面续租。
 
 ### 5. 部署 Auth 钩子（注册即发 30 分）
 
@@ -135,7 +165,7 @@ Remove-Item Env:CLOUD_E2E_FUNCTION_REGION
 
 ## 注意事项
 
-- 所有 secrets 只在 Edge Functions 运行环境持有；桌面端只持构建期内置的 URL/publishable key，用户不能编辑。
+- Supabase secret/service-role 与支付 secrets 只在 Edge Functions；方舟生图 Key 还会存在于受限 VPS Worker。桌面端只持构建期内置的 URL/publishable key，用户不能编辑。
 - `DAILY_COST_LIMIT_CNY` 是上海自然日的全站预估成本上限；单次预估成本 = 预扣积分 × `COST_CNY_PER_CREDIT`（默认 ¥0.047）。`RATE_LIMIT_PER_USER_PER_MIN` 是同账号每分钟首次上游请求数；同一幂等键重放不重复占用额度，也不会重复提交上游。
 - `BOWERBIRD_CLOUD_MOCK` 与 `BOWERBIRD_PAYMENT_MOCK` 是两个独立开关：前者控制算力，后者控制支付。
 - 部署完成后请告诉我「已部署」，我会继续真机验收（登录 → 积分 → 生成 → 流水 → 扣费/回滚）。

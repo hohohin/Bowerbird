@@ -203,7 +203,7 @@ const ASSET_COLS_A: &str = "a.id, a.name, a.ext, a.origin_path, a.store_path, a.
 
 /// 瀑布流「同流程合并」：列表已 `ORDER BY created_at DESC` → 同 generation_session_id 的首见者
 /// 即最新一张。按 session 去重保首见、丢后续过程图；无 session（非生成图）原样全留。
-/// search_assets 走 rank 序，首见=最高相关一张，可接受。泛型：Asset 与 PromptedAsset 各传
+/// search_assets 同为 created_at DESC 序，行为一致。泛型：Asset 与 PromptedAsset 各传
 /// 一个 session 提取闭包即可（commands 层应用）。
 pub fn collapse_generation_groups<T>(
     items: Vec<T>,
@@ -997,25 +997,104 @@ impl Database {
         Ok(a)
     }
 
-    /// 全文检索（FTS5，trigram）。匹配 name/tags/prompt_body/annotation/ocr。
+    /// 关键词搜索（Eagle 式多维度命中）。
+    ///
+    /// 语法：空白分词 → 多词 AND；`-词` 排除（该词命中任何维度的资产被剔除）。
+    /// 每个词按字面子串匹配以下任一维度：
+    /// - 文件名（assets.name）/ 来源网址（assets.source_url）
+    /// - 标签（tags 表 JOIN——FTS 的 tags 列从未被维护，见 0002 设计）
+    /// - prompt 正文（prompts.body，经 asset_prompts 关联）
+    /// - 反推「反推提示词」维度：analyses(kind=caption).payload 的 sections 中
+    ///   title='反推提示词' 的 body。**只认这个 section**——未反推/旧格式 payload
+    ///   没有该 section，搜不到（刻意行为，不是 bug）。
+    /// - 所在文件夹名（folders.name）
+    /// - 项目名（projects.name）：命中项目名 → 该项目**全部**素材入选。
+    ///
+    /// 全维度 LIKE 子串（% _ \ 转义为字面）。FTS5 只索引 name 且 trigram <3 字符
+    /// 无法分词，多维度下统一 LIKE 语义更简单；library_fts 表与 0002 触发器保留不动。
     pub fn search_assets(
         &self,
         query: &str,
         project_id: Option<&str>,
         limit: i64,
     ) -> AppResult<Vec<Asset>> {
+        // 分词：`-` 前缀为排除词；词内字符按字面匹配（LIKE 转义 % _ \）。
+        let like = |t: &str| {
+            format!(
+                "%{}%",
+                t.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+            )
+        };
+        let mut pos: Vec<String> = Vec::new();
+        let mut neg: Vec<String> = Vec::new();
+        for term in query.split_whitespace() {
+            if let Some(t) = term.strip_prefix('-').filter(|t| !t.is_empty()) {
+                neg.push(like(t));
+            } else {
+                pos.push(like(term));
+            }
+        }
+        if pos.is_empty() {
+            return Ok(Vec::new());
+        }
+        // 每个词一个参数位 ?N；term_cond 生成该词的多维度 OR 块（正词取原式、负词包 NOT）。
+        let term_cond = |p: usize| {
+            format!(
+                "(a.name LIKE ?{p} ESCAPE '\\' \
+                  OR a.source_url LIKE ?{p} ESCAPE '\\' \
+                  OR EXISTS(SELECT 1 FROM asset_tags at JOIN tags t ON t.id = at.tag_id \
+                    WHERE at.asset_id = a.id AND t.name LIKE ?{p} ESCAPE '\\') \
+                  OR EXISTS(SELECT 1 FROM asset_prompts ap JOIN prompts pm ON pm.id = ap.prompt_id \
+                    WHERE ap.asset_id = a.id AND pm.body LIKE ?{p} ESCAPE '\\') \
+                  OR EXISTS(SELECT 1 FROM analyses an, json_each(an.payload, '$.sections') s \
+                    WHERE an.asset_id = a.id AND an.kind = 'caption' \
+                      AND json_extract(s.value, '$.title') = '反推提示词' \
+                      AND json_extract(s.value, '$.body') LIKE ?{p} ESCAPE '\\') \
+                  OR EXISTS(SELECT 1 FROM folders f WHERE f.id = a.folder_id \
+                    AND f.name LIKE ?{p} ESCAPE '\\') \
+                  OR EXISTS(SELECT 1 FROM project_assets pa JOIN projects pr \
+                    ON pr.id = pa.project_id \
+                    WHERE pa.asset_id = a.id AND pr.name LIKE ?{p} ESCAPE '\\'))"
+            )
+        };
+        let mut patterns: Vec<String> = Vec::new();
+        let mut conds: Vec<String> = Vec::new();
+        for t in pos {
+            patterns.push(t);
+            conds.push(term_cond(patterns.len()));
+        }
+        for t in neg {
+            patterns.push(t);
+            conds.push(format!("NOT {}", term_cond(patterns.len())));
+        }
+        let n = patterns.len();
+        let sql = format!(
+            "SELECT a.id, a.name, a.ext, a.origin_path, a.store_path, a.thumb_path, \
+             a.size, a.width, a.height, a.duration, a.phash, a.colors, a.rating, a.source, \
+             a.source_url, a.folder_id, a.created_at, a.file_mtime, a.generation_session_id \
+             FROM assets a \
+             WHERE {} \
+             AND (?{} IS NULL OR EXISTS(SELECT 1 FROM project_assets pf \
+                 WHERE pf.asset_id = a.id AND pf.project_id IS ?{})) \
+             ORDER BY a.created_at DESC LIMIT ?{}",
+            conds.join(" AND "),
+            n + 1,
+            n + 1,
+            n + 2
+        );
+        let mut vals: Vec<rusqlite::types::Value> = patterns
+            .into_iter()
+            .map(rusqlite::types::Value::Text)
+            .collect();
+        vals.push(
+            project_id
+                .map(|p| rusqlite::types::Value::from(p.to_string()))
+                .unwrap_or(rusqlite::types::Value::Null),
+        );
+        vals.push(rusqlite::types::Value::from(limit));
         let conn = self.conn.lock().unwrap();
-        // JOIN 后 assets 与 library_fts 都有 name 列 → 必须用 a. 前缀消歧。
-        let sql = "SELECT a.id, a.name, a.ext, a.origin_path, a.store_path, a.thumb_path, \
-            a.size, a.width, a.height, a.duration, a.phash, a.colors, a.rating, a.source, \
-            a.source_url, a.folder_id, a.created_at, a.file_mtime, a.generation_session_id \
-            FROM assets a JOIN library_fts f ON f.asset_id = a.id \
-            WHERE library_fts MATCH ?1 \
-            AND (?2 IS NULL OR EXISTS(SELECT 1 FROM project_assets pa \
-                WHERE pa.asset_id = a.id AND pa.project_id IS ?2)) \
-            ORDER BY rank LIMIT ?3";
-        let mut stmt = conn.prepare(sql)?;
-        let rows = stmt.query_map(rusqlite::params![query, project_id, limit], asset_from_row)?;
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(vals), asset_from_row)?;
         let mut out = Vec::new();
         for r in rows {
             out.push(r?);
@@ -1679,14 +1758,151 @@ mod tests {
     }
 
     #[test]
-    fn fts5_search_by_name() {
+    fn search_by_name() {
         let db = db();
         let id = put_asset(&db, "cyberpunk-cityscape");
         put_asset(&db, "portrait-001");
-        // trigram：搜 "cyberpunk" 应只命中第一张
         let r = db.search_assets("cyberpunk", None, 10).unwrap();
-        assert!(r.iter().any(|a| a.id == id), "FTS5 应按文件名命中");
+        assert!(r.iter().any(|a| a.id == id), "应按文件名命中");
         assert_eq!(r.len(), 1);
+    }
+
+    #[test]
+    fn search_special_chars_no_syntax_error() {
+        let db = db();
+        let id = put_asset(&db, "it's a \"test\" (copy)");
+        // 含 ' " ( ) % 的输入按字面匹配，不报错、不构成通配
+        let r = db.search_assets("it's a \"test\" (copy)", None, 10).unwrap();
+        assert!(r.iter().any(|a| a.id == id), "特殊字符应按字面命中");
+        let _ = db.search_assets("'", None, 10).unwrap();
+        assert!(db.search_assets("   ", None, 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn search_short_query_and_literal_wildcards() {
+        let db = db();
+        let id = put_asset(&db, "风景参考");
+        put_asset(&db, "portrait-001");
+        // 「风景」2 字中文短词也应命中文件名
+        let r = db.search_assets("风景", None, 10).unwrap();
+        assert!(r.iter().any(|a| a.id == id), "短中文词应命中文件名");
+        assert_eq!(r.len(), 1);
+        // 含 % _ 通配符的输入按字面匹配，不构成通配
+        assert!(db.search_assets("%", None, 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn search_matches_tags() {
+        let db = db();
+        let id = put_asset(&db, "portrait-001");
+        let tid = db.get_or_create_tag("灵感", "manual").unwrap();
+        db.set_asset_tags(&id, &[tid], "manual").unwrap();
+        // 搜「灵」：文件名不含，应经标签命中
+        let r = db.search_assets("灵", None, 10).unwrap();
+        assert!(r.iter().any(|a| a.id == id), "短词应能经标签命中");
+        // 多字标签词命中不受影响
+        let r = db.search_assets("灵感", None, 10).unwrap();
+        assert!(r.iter().any(|a| a.id == id), "标签词应命中");
+    }
+
+    #[test]
+    fn search_matches_source_url() {
+        let db = db();
+        let id = put_asset(&db, "01HASHXYZ"); // hash 名本身搜不出内容词
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE assets SET source='extension', \
+                 source_url='https://dribbble.com/shots/123' WHERE id=?1",
+                rusqlite::params![id],
+            )
+            .unwrap();
+        }
+        let r = db.search_assets("dribbble", None, 10).unwrap();
+        assert!(r.iter().any(|a| a.id == id), "应按来源网址/域名命中");
+    }
+
+    #[test]
+    fn search_matches_prompt_body() {
+        let db = db();
+        let id = put_asset(&db, "generated-001");
+        db.create_prompt("pm1", None, "一只白猫坐在窗台上，赛博朋克风格", None, None)
+            .unwrap();
+        db.link_prompt(&id, "pm1", "main").unwrap();
+        let r = db.search_assets("赛博朋克", None, 10).unwrap();
+        assert!(r.iter().any(|a| a.id == id), "应按 prompt 正文命中");
+    }
+
+    #[test]
+    fn search_matches_caption_prompt_section_only() {
+        let db = db();
+        let id = put_asset(&db, "photo-001");
+        db.insert_analysis(&Analysis {
+            id: Ulid::new().to_string(),
+            asset_id: id.clone(),
+            kind: "caption".to_string(),
+            payload: serde_json::json!({
+                "sections": [
+                    { "title": "构图", "body": "竖幅近景，主体居中" },
+                    { "title": "反推提示词", "body": "一只发光的白色小羊在草地上奔跑" }
+                ]
+            })
+            .to_string(),
+            provider: None,
+            created_at: None,
+        })
+        .unwrap();
+        // 命中：词只出现在「反推提示词」section
+        let r = db.search_assets("小羊", None, 10).unwrap();
+        assert!(
+            r.iter().any(|a| a.id == id),
+            "应按反推「反推提示词」维度命中"
+        );
+        // 不命中：词只在其它 section（构图）——只认反推提示词维度
+        assert!(
+            db.search_assets("竖幅", None, 10).unwrap().is_empty(),
+            "构图等其它 section 不参与搜索"
+        );
+    }
+
+    #[test]
+    fn search_matches_folder_and_project_name() {
+        let db = db();
+        // 项目名命中 → 该项目全部素材入选（即使文件名与搜索词无关）
+        let m1 = put_asset(&db, "01AAA");
+        let m2 = put_asset(&db, "02BBB");
+        let outside = put_asset(&db, "03CCC");
+        db.create_project("pj1", "品牌视觉", "/tmp/pj1", "/tmp/pj1", "user")
+            .unwrap();
+        db.add_assets_to_project("pj1", &[m1.clone(), m2.clone()])
+            .unwrap();
+        let r = db.search_assets("品牌视觉", None, 100).unwrap();
+        let ids: Vec<&str> = r.iter().map(|a| a.id.as_str()).collect();
+        assert!(
+            ids.contains(&m1.as_str()) && ids.contains(&m2.as_str()),
+            "项目名命中应返回项目内全部素材"
+        );
+        assert!(!ids.contains(&outside.as_str()), "项目外资产不入选");
+
+        // 文件夹名命中 → 夹内资产
+        let fid = Ulid::new().to_string();
+        db.create_folder(&fid, "灵感收藏", None).unwrap();
+        db.set_assets_folder(&[outside.clone()], &fid).unwrap();
+        let r = db.search_assets("灵感", None, 100).unwrap();
+        assert!(r.iter().any(|a| a.id == outside), "应按文件夹名命中");
+    }
+
+    #[test]
+    fn search_multi_term_and_exclusion() {
+        let db = db();
+        let city = put_asset(&db, "city-night");
+        put_asset(&db, "forest-day");
+        // 多词 AND：两个词都命中才入选
+        let r = db.search_assets("city night", None, 10).unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].id, city);
+        // 排除词：night 命中 city-night，但 -city 把它剔除
+        assert!(db.search_assets("night -city", None, 10).unwrap().is_empty());
     }
 
     #[test]

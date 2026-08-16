@@ -28,7 +28,7 @@ const SECTIONS: { key: SectionKey; label: string }[] = [
  * 设置面板（约定 13 全屏 Modal 形态）：常见两列式——左侧分区导航，右侧具体内容。
  *
  * 五分区：系统设置（素材库位置 / 浏览器扩展 / 新手教程）、账号管理（账号名 / 等级与升级 / 积分明细）、
- * 模型设置（codex CLI / 即梦 CLI / 默认反推模型 / 入库自动反推）、个性化与记忆（预留）、
+ * 模型设置（codex CLI / 即梦 CLI / 默认反推模型 / 入库自动反推）、个性化与记忆（创作板 Shift 引入开关）、
  * 关于我们（当前版本 / 前往官网）。原「环境状态」总览已删除，各引导由对应分区直接唤起。
  * 由侧栏底部账号区「设置」唤起。点背景 / ✕ 关闭。
  */
@@ -131,6 +131,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
       auto_analyze_prompt: prompt || DEFAULT_AUTO_ANALYZE_PROMPT,
       library_root: settings?.library_root ?? null,
       cloud_auto_understand: settings?.cloud_auto_understand ?? false,
+      board_shift_pick: settings?.board_shift_pick ?? false,
     });
   };
 
@@ -619,8 +620,21 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
           )}
 
           {section === "personalization" && (
-            <div className="settings-card flex h-40 items-center justify-center text-[11px] text-muted">
-              个性化与记忆（待建设）
+            <div className="settings-card px-3 py-2.5">
+              <label className="flex cursor-pointer items-center gap-2 select-none">
+                <input
+                  type="checkbox"
+                  checked={settings?.board_shift_pick ?? false}
+                  onChange={(e) =>
+                    settings && void updateSettings({ ...settings, board_shift_pick: e.target.checked })
+                  }
+                  className="size-4 accent-accent"
+                />
+                <span className="text-ink">创作板打开时，Shift + 左键点击素材引入</span>
+              </label>
+              <p className="mt-1 ml-6 text-xs text-muted">
+                开启后，在创作板激活期间需按住 Shift 再点击素材，才会作为参考素材引入，避免误触；关闭则点击素材直接引入。
+              </p>
             </div>
           )}
 

@@ -14,6 +14,7 @@ export async function reserveManagedUsage(
   userId: string,
   holdId: string,
   estimatedCredits: number,
+  allowReplay = false,
 ): Promise<void> {
   const dailyLimitCny = positiveNumber("DAILY_COST_LIMIT_CNY", 500);
   const perUserPerMinute = Math.floor(positiveNumber("RATE_LIMIT_PER_USER_PER_MIN", 10));
@@ -47,7 +48,7 @@ export async function reserveManagedUsage(
 
   const row = data?.[0] as Record<string, unknown> | undefined;
   if (!row) throw new ApiError("internal_error", "云端用量校验无返回", true);
-  if (row.already_reserved === true) {
+  if (row.already_reserved === true && !allowReplay) {
     throw new ApiError("invalid_request", "该生成请求正在处理或已经处理");
   }
 }

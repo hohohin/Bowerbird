@@ -174,6 +174,13 @@ pub fn spawn_recovery(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths
                 );
                 continue;
             };
+            if job.provider == "bowerbird-cloud" {
+                let (app2, db2, paths2) = (app.clone(), db.clone(), paths.clone());
+                tokio::spawn(async move {
+                    recover_one_cloud_job(app2, db2, paths2, job, submit_id).await;
+                });
+                continue;
+            }
             // 即梦 job + submit_id → 后台续查（recover_started 自包含，不依赖前端 mount 顺序）。
             let (app2, db2, paths2) = (app.clone(), db.clone(), paths.clone());
             tokio::spawn(async move {
@@ -181,6 +188,74 @@ pub fn spawn_recovery(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths
             });
         }
     });
+}
+
+/// 续查 Bowerbird Cloud 持久任务。Cloud 任务由 VPS 独立执行，桌面重启后只需按 job_id
+/// 恢复轮询和产物下载；不会重新提交方舟请求。
+async fn recover_one_cloud_job(
+    app: AppHandle,
+    db: Arc<Database>,
+    paths: Arc<LibraryPaths>,
+    mut job: GenJob,
+    submit_id: String,
+) {
+    let _ = app.emit(
+        "codex://chunk",
+        serde_json::json!({ "kind": "recover_started", "job_id": job.id, "prompt": job.prompt, "provider": job.provider }),
+    );
+    job.status = "querying".into();
+    let _ = Task::upsert_gen_job(&db, &job);
+    let cloud = app.state::<crate::cloud::CloudClient>().inner().clone();
+    let auth = app.state::<crate::cloud::AuthClient>().inner().clone();
+    match crate::codex::bowerbird_cloud::recover_cloud_generation(&cloud, &auth, &submit_id).await {
+        Ok((src_images, temp_dir)) => {
+            match finalize_generation_assets(
+                app.clone(),
+                db.clone(),
+                paths,
+                src_images,
+                Some(temp_dir),
+                job.prompt.clone(),
+                None,
+                job.references.clone(),
+                Some(submit_id.clone()),
+                Some(submit_id.clone()),
+                "bowerbird-cloud".to_string(),
+                job.project_id.clone(),
+            )
+            .await
+            {
+                Ok(assets) => {
+                    let asset_paths: Vec<PathBuf> = assets
+                        .iter()
+                        .filter_map(|asset| asset.store_path.clone().map(PathBuf::from))
+                        .collect();
+                    let _ = Task::mark_done(&db, &job.id);
+                    let _ = app.emit(
+                        "codex://chunk",
+                        serde_json::json!({ "kind": "done", "job_id": job.id, "images": asset_paths, "provider": "bowerbird-cloud", "session_id": submit_id, "text": "", "elapsed_ms": 0 }),
+                    );
+                    let _ = app.emit("library://assets-changed", ());
+                }
+                Err(error) => {
+                    let message = error.to_string();
+                    let _ = Task::mark_failed(&db, &job.id, &message);
+                    let _ = app.emit(
+                        "codex://chunk",
+                        serde_json::json!({ "kind": "error", "job_id": job.id, "message": message }),
+                    );
+                }
+            }
+        }
+        Err(error) => {
+            let message = error.to_string();
+            let _ = Task::mark_failed(&db, &job.id, &message);
+            let _ = app.emit(
+                "codex://chunk",
+                serde_json::json!({ "kind": "error", "job_id": job.id, "message": message }),
+            );
+        }
+    }
 }
 
 /// 续查单个即梦 job：emit recover_started（前端 upsert 占位 job）→ 拿 JIMENG_FLY permit →

@@ -206,13 +206,16 @@ function Thumb({
     }
     setPreview(null);
   }
-  function activateAsset() {
+  function activateAsset(shift: boolean) {
     dismissPreview();
     const st = useStore.getState();
     if (st.boardOpen || st.genEditing) {
-      window.dispatchEvent(
-        new CustomEvent("bowerbird://board-asset-picked", { detail: shown.id })
-      );
+      // 设置开启「Shift + 左键引入」时，未按 Shift 的点击不引入（防误触，也不做其它动作）。
+      if (shift || !st.settings?.board_shift_pick) {
+        window.dispatchEvent(
+          new CustomEvent("bowerbird://board-asset-picked", { detail: shown.id })
+        );
+      }
     } else if (st.mode === "manage") st.toggleSelect(shown.id);
     else st.openDetail(shown.id);
   }
@@ -247,11 +250,11 @@ function Thumb({
       onMouseEnter={onEnter}
       onMouseMove={onMove}
       onMouseLeave={onLeave}
-      onClick={activateAsset}
+      onClick={(e) => activateAsset(e.shiftKey)}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
-          activateAsset();
+          activateAsset(e.shiftKey);
         }
       }}
       onContextMenu={(e) => {

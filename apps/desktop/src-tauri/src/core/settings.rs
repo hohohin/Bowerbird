@@ -39,6 +39,10 @@ pub struct AppSettings {
     #[serde(default)]
     pub cloud_auto_understand: bool,
 
+    /// 创作板打开时，引入参考素材是否需要 Shift+左键（防误触）。默认 false = 直接左键引入。
+    #[serde(default)]
+    pub board_shift_pick: bool,
+
     /// 首启预置示例图是否已注入完成。true = 不再重灌（配合 count_assets==0 双 gate）。
     #[serde(default)]
     pub samples_seeded: bool,
@@ -51,6 +55,7 @@ impl Default for AppSettings {
             auto_analyze_prompt: DEFAULT_AUTO_ANALYZE_PROMPT.to_string(),
             library_root: None,
             cloud_auto_understand: false,
+            board_shift_pick: false,
             samples_seeded: false,
         }
     }

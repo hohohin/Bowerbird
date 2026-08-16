@@ -21,9 +21,8 @@ impl Clone for CloudClient {
 impl CloudClient {
     pub fn new(config: CloudConfig) -> Result<Self, AppError> {
         let http = reqwest::Client::builder()
-            // 上游最长等待 140s；请求上传、Edge 冷启动、计费预授权/回滚与响应下载都在
-            // reqwest 的总超时内。与真实 E2E 的 180s 包络对齐，避免客户端先于 Edge
-            // 返回稳定的 upstream_timeout/rollback 结果而断开。
+            // 单次 Cloud create/get 与签名产物下载的总保护。图片生成本身已由 VPS
+            // 持久任务承接，不再把这个 HTTP client timeout 当作方舟生成 deadline。
             .timeout(Duration::from_secs(180))
             .build()
             .map_err(|error| AppError::Other(format!("构建云 HTTP client 失败: {error}")))?;

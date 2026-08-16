@@ -1,8 +1,10 @@
+use std::path::PathBuf;
 use std::time::Instant;
 
 use async_trait::async_trait;
 use base64::Engine;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
 use ulid::Ulid;
 
@@ -30,12 +32,27 @@ struct GenerateResponse {
     #[serde(default)]
     images: Vec<CloudImage>,
     remote_task_id: Option<String>,
+    artifact: Option<CloudArtifact>,
+    error: Option<CloudJobError>,
 }
 
 #[derive(Deserialize)]
 struct CloudImage {
     mime: String,
     base64: String,
+}
+
+#[derive(Deserialize)]
+struct CloudArtifact {
+    url: String,
+    mime: String,
+    bytes: u64,
+    sha256: String,
+}
+
+#[derive(Deserialize)]
+struct CloudJobError {
+    message: String,
 }
 
 #[async_trait]
@@ -113,7 +130,10 @@ impl GenProvider for BowerbirdCloudProvider {
         }
         let result: GenerateResponse = serde_json::from_str(&body)
             .map_err(|error| AppError::Cloud(format!("解析云生成响应失败: {error}")))?;
-        let submit_id = if result.status == "queued" {
+        if matches!(
+            result.status.as_str(),
+            "uploading" | "queued" | "leased" | "running" | "cancel_requested"
+        ) {
             let remote = result
                 .remote_task_id
                 .ok_or_else(|| AppError::Cloud("异步云任务缺少 remote_task_id".into()))?;
@@ -122,36 +142,36 @@ impl GenProvider for BowerbirdCloudProvider {
                     submit_id: remote.clone(),
                 })
                 .await;
-            // Bounded poll: Mock async tasks become "succeeded" on a later poll, keeping the existing
-            // pending_settlement hold honest (real reconciliation would confirm/rollback server-side).
-            let mut success: Option<Vec<CloudImage>> = None;
-            for _attempt in 0..30 {
-                let polled = self.poll_remote(&endpoint, &remote).await?;
-                match polled.status.as_str() {
-                    "queued" => {
-                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                    }
-                    "succeeded" => {
-                        success = Some(polled.images);
-                        break;
-                    }
-                    _ => {
-                        return Err(AppError::Cloud(format!(
-                            "云任务异常状态: {}",
-                            polled.status
-                        )))
-                    }
-                }
+            let (paths, temp_dir) =
+                wait_for_cloud_job(&self.cloud, &self.auth, &endpoint, &remote).await?;
+            return Ok(GenOutcome {
+                text: String::new(),
+                session_id: Some(remote.clone()),
+                submit_id: Some(remote),
+                elapsed_ms: started.elapsed().as_millis() as u64,
+                source_images: paths,
+                temp_dir: Some(temp_dir),
+            });
+        }
+        if result.status == "succeeded" {
+            if let Some(artifact) = result.artifact {
+                let remote = result.remote_task_id.unwrap_or_else(|| job_id.clone());
+                let (paths, temp_dir) = download_artifact(&self.cloud, &remote, artifact).await?;
+                acknowledge_artifact(&self.auth, &self.cloud, &endpoint, &remote).await;
+                return Ok(GenOutcome {
+                    text: String::new(),
+                    session_id: Some(remote.clone()),
+                    submit_id: Some(remote),
+                    elapsed_ms: started.elapsed().as_millis() as u64,
+                    source_images: paths,
+                    temp_dir: Some(temp_dir),
+                });
             }
-            let images = success.ok_or_else(|| AppError::Cloud("云任务处理超时".into()))?;
-            Some((remote, images))
-        } else {
-            None
-        };
-        let (session_id, source_images) = match submit_id {
-            Some((remote, images)) => (Some(remote), images),
-            None => (Some(req.job_id.unwrap_or_default()), result.images),
-        };
+        } else if let Some(error) = result.error {
+            return Err(AppError::Cloud(error.message));
+        }
+        let session_id = Some(job_id);
+        let source_images = result.images;
 
         let temp_dir = std::env::temp_dir().join(format!("bowerbird-cloud-{}", Ulid::new()));
         tokio::fs::create_dir_all(&temp_dir).await?;
@@ -183,40 +203,176 @@ impl GenProvider for BowerbirdCloudProvider {
     }
 }
 
-impl BowerbirdCloudProvider {
-    async fn poll_remote(
-        &self,
-        endpoint: &str,
-        remote_task_id: &str,
-    ) -> Result<GenerateResponse, AppError> {
-        let response = self
-            .auth
-            .send_authorized(
-                self.cloud
-                    .http()
-                    .post(endpoint)
-                    .json(&serde_json::json!({ "remote_task_id": remote_task_id })),
-                "轮询云任务失败",
-            )
-            .await?;
-        let status = response.status();
-        let body = response
-            .text()
-            .await
-            .map_err(|error| AppError::Cloud(format!("读取云任务响应失败: {error}")))?;
-        if !status.is_success() {
-            let message = serde_json::from_str::<serde_json::Value>(&body)
-                .ok()
-                .and_then(|value| {
-                    value
-                        .pointer("/error/message")
-                        .and_then(|v| v.as_str())
-                        .map(str::to_string)
-                })
-                .unwrap_or_else(|| format!("云任务轮询失败（HTTP {}）", status.as_u16()));
-            return Err(AppError::Cloud(message));
-        }
-        serde_json::from_str(&body)
-            .map_err(|error| AppError::Cloud(format!("解析云任务响应失败: {error}")))
+async fn poll_remote(
+    cloud: &CloudClient,
+    auth: &AuthClient,
+    endpoint: &str,
+    remote_task_id: &str,
+) -> Result<GenerateResponse, AppError> {
+    let response = auth
+        .send_authorized(
+            cloud
+                .http()
+                .post(endpoint)
+                .json(&serde_json::json!({ "action": "get", "job_id": remote_task_id })),
+            "轮询云任务失败",
+        )
+        .await?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|error| AppError::Cloud(format!("读取云任务响应失败: {error}")))?;
+    if !status.is_success() {
+        let message = serde_json::from_str::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|value| {
+                value
+                    .pointer("/error/message")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| format!("云任务轮询失败（HTTP {}）", status.as_u16()));
+        return Err(AppError::Cloud(message));
     }
+    serde_json::from_str(&body)
+        .map_err(|error| AppError::Cloud(format!("解析云任务响应失败: {error}")))
+}
+
+async fn wait_for_cloud_job(
+    cloud: &CloudClient,
+    auth: &AuthClient,
+    endpoint: &str,
+    remote_task_id: &str,
+) -> Result<(Vec<PathBuf>, PathBuf), AppError> {
+    let mut transient_failures = 0_u32;
+    loop {
+        match poll_remote(cloud, auth, endpoint, remote_task_id).await {
+            Ok(result) => {
+                transient_failures = 0;
+                match result.status.as_str() {
+                    "uploading" | "queued" | "leased" | "running" | "cancel_requested" => {
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    }
+                    "succeeded" => {
+                        let artifact = result
+                            .artifact
+                            .ok_or_else(|| AppError::Cloud("云任务成功但缺少下载产物".into()))?;
+                        let downloaded = download_artifact(cloud, remote_task_id, artifact).await?;
+                        acknowledge_artifact(auth, cloud, endpoint, remote_task_id).await;
+                        return Ok(downloaded);
+                    }
+                    "failed" | "cancelled" | "outcome_unknown" => {
+                        let message =
+                            result
+                                .error
+                                .map(|error| error.message)
+                                .unwrap_or_else(|| match result.status.as_str() {
+                                    "outcome_unknown" => {
+                                        "请求已提交方舟，但结果状态暂时无法确认".into()
+                                    }
+                                    "cancelled" => "云任务已取消".into(),
+                                    _ => "云生成失败".into(),
+                                });
+                        return Err(AppError::Cloud(message));
+                    }
+                    status => return Err(AppError::Cloud(format!("云任务异常状态: {status}"))),
+                }
+            }
+            Err(error) => {
+                let message = error.to_string();
+                if message.contains("登录") || message.contains("请先登录") {
+                    return Err(error);
+                }
+                transient_failures = transient_failures.saturating_add(1);
+                tracing::warn!(
+                    "云任务轮询暂时失败：job={} retry={}",
+                    remote_task_id,
+                    transient_failures
+                );
+                let delay = 5_u64.saturating_mul(2_u64.pow(transient_failures.min(3)));
+                tokio::time::sleep(std::time::Duration::from_secs(delay.min(40))).await;
+            }
+        }
+    }
+}
+
+async fn download_artifact(
+    cloud: &CloudClient,
+    remote_task_id: &str,
+    artifact: CloudArtifact,
+) -> Result<(Vec<PathBuf>, PathBuf), AppError> {
+    if !artifact.url.starts_with("https://") {
+        return Err(AppError::Cloud("云图片下载地址不安全".into()));
+    }
+    if artifact.bytes == 0 || artifact.bytes > 20 * 1024 * 1024 {
+        return Err(AppError::Cloud("云图片大小无效".into()));
+    }
+    if artifact.sha256.len() != 64 || !artifact.sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(AppError::Cloud("云图片校验信息无效".into()));
+    }
+    let response = cloud
+        .http()
+        .get(&artifact.url)
+        .send()
+        .await
+        .map_err(|error| AppError::Cloud(format!("下载云图片失败: {error}")))?;
+    if !response.status().is_success() {
+        return Err(AppError::Cloud(format!(
+            "下载云图片失败（HTTP {}）",
+            response.status().as_u16()
+        )));
+    }
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|error| AppError::Cloud(format!("读取云图片失败: {error}")))?;
+    if bytes.len() as u64 != artifact.bytes {
+        return Err(AppError::Cloud("云图片大小校验失败".into()));
+    }
+    let actual_hash = format!("{:x}", Sha256::digest(&bytes));
+    if !actual_hash.eq_ignore_ascii_case(&artifact.sha256) {
+        return Err(AppError::Cloud("云图片完整性校验失败".into()));
+    }
+    let extension = match artifact.mime.as_str() {
+        "image/jpeg" => "jpg",
+        "image/webp" => "webp",
+        "image/png" => "png",
+        _ => return Err(AppError::Cloud("云图片格式无效".into())),
+    };
+    let temp_dir = std::env::temp_dir().join(format!("bowerbird-cloud-{}", Ulid::new()));
+    tokio::fs::create_dir_all(&temp_dir).await?;
+    let path = temp_dir.join(format!("result-{remote_task_id}.{extension}"));
+    tokio::fs::write(&path, bytes).await?;
+    Ok((vec![path], temp_dir))
+}
+
+async fn acknowledge_artifact(
+    auth: &AuthClient,
+    cloud: &CloudClient,
+    endpoint: &str,
+    remote_task_id: &str,
+) {
+    let _ = auth
+        .send_authorized(
+            cloud.http().post(endpoint).json(&serde_json::json!({
+                "action": "artifact_received",
+                "job_id": remote_task_id,
+            })),
+            "确认云图片接收失败",
+        )
+        .await;
+}
+
+pub(crate) async fn recover_cloud_generation(
+    cloud: &CloudClient,
+    auth: &AuthClient,
+    remote_task_id: &str,
+) -> Result<(Vec<PathBuf>, PathBuf), AppError> {
+    let endpoint = cloud
+        .config()
+        .endpoint("generate-proxy")
+        .ok_or_else(|| AppError::Cloud("当前构建未配置 Bowerbird Cloud".into()))?;
+    wait_for_cloud_job(cloud, auth, &endpoint, remote_task_id).await
 }

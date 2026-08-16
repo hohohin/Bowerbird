@@ -9,7 +9,7 @@
 | # | 待填项 | 阻塞 A1? | 状态 |
 |---|---|---|---|
 | 1 | DeepSeek 文本模型 | ✅ 是 | ✅ 已定（deepseek-chat） |
-| 2 | VPS 规格 + 部署方式 | 🔶 A1 可先用 mock worker，A7 真机必需 | ✅ 已填 |
+| 2 | VPS 规格 + 部署方式 | ✅ 阻塞 G0 真实异步生图 | ✅ 广州实例基线完成 |
 | 3 | 预算档位 + 定价归属 | 🔶 POC 可用 allowlist，正式发布前定 | ✅ 已填 |
 | 4 | TTL 默认值确认 | ❌ 不阻塞，给个确认就行 | ✅ 已确认 |
 | 5 | DeepSeek key（文本）+ 方舟 key（出图/看图） | ✅ A3 联调必需 | ✅ 已就绪；DeepSeek A0-T1 真实 spike 已通过 |
@@ -23,7 +23,7 @@
 - **首个实现 Skill**：**smart-refinement（智能精修）**；series-director manifest 已冻结、暂不开发。
 - **预算**：smart-refinement 按 token 换算，**单次上限 ~15 分**；free/pro/studio **3 档都可用**；POC allowlist `admin@bowerbird.cn`。
 - **TTL**：输入/中间 24h、最终产物 7d。
-- **VPS**：腾讯云轻量云 Ubuntu 24.04 / 2vCPU / 2GiB / 50GiB；**加 2G swap + Worker 并发上限 1–2**；部署 **SSH + Docker**。
+- **VPS 状态**：腾讯云 Lighthouse 广州实例基线完成；Ubuntu 24.04 x86_64、2 vCPU / 1.9 GiB RAM / 1.9 GiB swap / 50 GiB SSD，专用 key-only SSH、UFW、自动安全更新、安全内核与 Docker/Compose 均已验收。首版 Worker 并发固定 1。
 - **DeepSeek API key 已就绪**：真实值仅在 gitignored `.env` / 后续 Supabase 与 VPS secret，未进入仓库或测试 fixture。
 
 ---
@@ -44,14 +44,14 @@
 
 ## 2. VPS 规格 + 部署方式
 
-**为什么**：Agent loop 跑在 VPS 常驻 Worker 里（不在 Edge Function，因有审批等待/长任务）。A1 用 mock worker 脚本就能验状态机，但 A7 真机必须有 VPS。
+**为什么**：Cloud 图片同步接口和未来 Agent loop 都需要在 VPS 常驻 Worker 中执行，不能受 Edge Function 150 秒空闲上限约束。当前 G0 会先用 VPS 承接直接 Cloud 图片生成，完整 Agent Runtime 后续复用同一部署。
 **填什么**：你是否已有/愿意开一台 VPS；系统/CPU/RAM/磁盘；怎么登录部署。
 
-> ✍️ 填这里 — 是否已有 VPS：有
-> ✍️ 填这里 — 系统 / CPU / RAM / 磁盘：Ubuntu 24.04 / 2vCPU / 2GiB / 50GiB
-> ✍️ 填这里 — 部署方式：看你建议，目前vps是在腾讯云的轻量云购买的
+> ✍️ 当前状态 — 腾讯云 Lighthouse 广州实例已配置完成；实际公网 SSH 用户为 `ubuntu`
+> ✍️ 实际配置 — Ubuntu 24.04 x86_64 / 2 vCPU / 1.9 GiB RAM / 1.9 GiB swap / 50 GiB SSD；Docker 29.7.2 / Compose 5.4.0
+> ✍️ 部署方式 — SSH key + Docker Engine / Compose plugin；首版单 Worker、生成并发 1
 
-**填到哪**：告诉我即可，我据此写 Worker 的 Dockerfile + 部署脚本。Worker **不需要域名/公网入站端口**，只要能出站到 Supabase + 方舟。
+**填到哪**：开通后只需告诉我云厂商、区域、公网 IP、SSH 用户名和公钥登录是否可用；**不要在聊天中发送密码、私钥或 API key**。Worker 不需要域名、备案、负载均衡或公网业务端口，只需出站访问 Supabase、Supabase Storage、方舟（未来 Agent 文本回合再加 DeepSeek）。
 
 ---
 
