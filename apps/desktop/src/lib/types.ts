@@ -206,6 +206,7 @@ export interface AppSettings {
   library_root: string | null;
   cloud_auto_understand: boolean;
   board_shift_pick: boolean;
+  hide_project_assets: boolean;
 }
 
 export interface AuthSnapshot {
@@ -233,12 +234,21 @@ export interface CreditTransaction {
   created_at: string;
 }
 
+/** 云端动态生图档位（entitlement Edge 从 service_costs 带 label 的行返回）。 */
+export interface GenerationService {
+  service: string;
+  label: string;
+  credits: number;
+}
+
 export interface EntitlementSnapshot {
   user_id: string;
   tier: "free" | "pro" | "studio";
   balances: { daily: number; sub: number; topup: number };
   policy: FeaturePolicy;
   recent_transactions: CreditTransaction[];
+  /** 缺失/为空时前端用内置兜底档位（genProviders.DEFAULT_CLOUD_PROVIDERS）。 */
+  generation_services?: GenerationService[];
   issued_at: string;
   refresh_after: string;
   grace_until: string;

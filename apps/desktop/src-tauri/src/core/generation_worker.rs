@@ -28,10 +28,14 @@ use crate::error::{AppError, AppResult};
 pub static JIMENG_FLY: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(1));
 
 fn provider_source_tag(provider: &str) -> &'static str {
-    match provider {
-        "jimeng" | "dreamina" => "jimeng",
-        "bowerbird-cloud" => "bowerbird-cloud",
-        _ => "codex",
+    if provider.starts_with("bowerbird-cloud") {
+        // Cloud 三档变体（Pro/标准/Lite）入库 source 统一，侧栏 smart query 与徽标零特判。
+        "bowerbird-cloud"
+    } else {
+        match provider {
+            "jimeng" | "dreamina" => "jimeng",
+            _ => "codex",
+        }
     }
 }
 

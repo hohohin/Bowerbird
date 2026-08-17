@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { X } from "lucide-react";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { useStore } from "../store";
+import { isCloudProvider } from "../lib/genProviders";
 import type { GenJob } from "../lib/types";
 
 /**
@@ -27,7 +29,7 @@ import type { GenJob } from "../lib/types";
  */
 function providerLabel(provider?: string | null): string {
   if (provider === "jimeng") return "即梦";
-  if (provider === "bowerbird-cloud") return "云端";
+  if (isCloudProvider(provider)) return "云端";
   return "codex";
 }
 
@@ -147,13 +149,51 @@ export function SidebarStatus({ collapsed, onExpand }: { collapsed?: boolean; on
     : (describingId ? 1 : 0) + queue.length;
   const showDescribe = showAll ? hasDescribe : describeRunning;
 
+  // 会话行的参考图「拖影」缩略图堆：至多 5 张；前 3 张全显，多出的以低透明度叠在
+  // 左后方（-space-x 重叠，像运动拖影），暗示还有更多参考图。
+  function thumbStack(images: string[]) {
+    if (images.length === 0) {
+      return (
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-sm border border-edge bg-panel text-[9px] text-muted">
+          🖼
+        </span>
+      );
+    }
+    const shown = images.slice(-5); // 最新在后（右侧），旧的往左叠
+    const ghostFrom = Math.max(0, shown.length - 3);
+    return (
+      <span className="flex shrink-0 items-center -space-x-2.5">
+        {shown.map((p, i) => (
+          <img
+            key={`${p}-${i}`}
+            src={convertFileSrc(p)}
+            alt=""
+            loading="lazy"
+            decoding="async"
+            draggable={false}
+            className={`h-8 w-8 shrink-0 rounded-sm border border-edge bg-panel object-cover ${
+              i < ghostFrom ? (i === 0 ? "opacity-45" : "opacity-70") : ""
+            }`}
+            style={{ zIndex: shown.length - i }}
+          />
+        ))}
+      </span>
+    );
+  }
+
   function genGroupRow(g: GenGroup, i: number) {
     const j = g.latest;
-    // 图数跨版本合计（各版本是并列的备选，产出都归这条会话）。
-    const imgs = g.jobs.reduce(
-      (n, x) => n + x.turns.reduce((m, t) => m + t.images.length, 0),
-      0
-    );
+    // 会话标题：首轮编辑框原文首个非空行，压缩到 5 字 + 省略号。
+    const firstLine =
+      (j.turns[0]?.promptRaw || j.lastPrompt)
+        .split("\n")
+        .find((l) => l.trim())
+        ?.trim() ?? "";
+    const label = !firstLine ? "会话" : firstLine.length > 5 ? `${firstLine.slice(0, 5)}…` : firstLine;
+    // 缩略图 = 会话建立时引用的参考图（最新版本的 refAssets，有 thumb 用 thumb）。
+    const refThumbPaths = (j.refAssets ?? [])
+      .map((a) => a.thumb_path ?? a.store_path ?? "")
+      .filter(Boolean);
     const failed = j.turns.some((t) => t.error);
     // 点开：当前 activeJob 属于该会话则保持其版本，否则跳到最新版本。
     const activeInGroup = !!activeJobId && g.jobs.some((x) => x.id === activeJobId);
@@ -163,29 +203,22 @@ export function SidebarStatus({ collapsed, onExpand }: { collapsed?: boolean; on
         <button
           type="button"
           onClick={() => openJob(targetId)}
+          title={`${providerLabel(j.provider)} · ${firstLine || "会话"}`}
           className="block w-full rounded px-2 py-1.5 pr-6 text-left hover:bg-panel2"
         >
-          <div className="flex items-center gap-1.5 text-xs text-ink">
-            <span className="text-muted">{i + 1}</span>
-            <span className="text-[10px] text-muted">{providerLabel(j.provider)}</span>
-            {g.jobs.length > 1 && (
-              <span className="shrink-0 rounded bg-panel px-1 text-[9px] text-muted">
-                {g.jobs.length} 版
-              </span>
-            )}
-            <span className="ml-auto">
+          <div className="flex items-center gap-2">
+            {thumbStack(refThumbPaths)}
+            <span className="min-w-0 flex-1 truncate text-xs text-ink">{label}</span>
+            <span className="shrink-0">
               {g.running ? (
                 <span className="animate-pulse text-accent">●</span>
               ) : failed ? (
                 <span className="text-red-400">❌</span>
-              ) : imgs > 0 ? (
-                <span className="text-muted">{imgs} 图</span>
               ) : (
                 <span className="opacity-50">·</span>
               )}
             </span>
           </div>
-          {j.lastPrompt && <div className="mt-0.5 truncate text-[10px] text-muted">{j.lastPrompt}</div>}
         </button>
         <button
           type="button"

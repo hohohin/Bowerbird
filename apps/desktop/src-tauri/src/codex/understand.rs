@@ -31,7 +31,7 @@ impl UnderstandOperation {
 
 #[async_trait]
 pub trait UnderstandProvider: Send + Sync {
-    fn name(&self) -> &'static str;
+    fn name(&self) -> &str;
     async fn understand(
         &self,
         operation: UnderstandOperation,
@@ -49,7 +49,7 @@ impl Default for CodexUnderstandProvider {
 
 #[async_trait]
 impl UnderstandProvider for CodexUnderstandProvider {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "codex"
     }
 
@@ -81,7 +81,7 @@ struct UnderstandResponse {
 
 #[async_trait]
 impl UnderstandProvider for CloudUnderstandProvider {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "bowerbird-cloud"
     }
 

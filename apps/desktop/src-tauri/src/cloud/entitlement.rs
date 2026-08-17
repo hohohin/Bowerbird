@@ -22,6 +22,15 @@ pub struct CreditTransaction {
     pub created_at: chrono::DateTime<Utc>,
 }
 
+/// 云端动态生图档位（service_costs 带 label 的 image_* 行）：桌面下拉据此渲染，
+/// 云端上新档位无需再发桌面包。空列表 = 云端未提供，前端用内置兜底。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GenerationService {
+    pub service: String,
+    pub label: String,
+    pub credits: i32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum OfflineState {
@@ -39,6 +48,8 @@ pub struct EntitlementSnapshot {
     pub policy: FeaturePolicy,
     #[serde(default)]
     pub recent_transactions: Vec<CreditTransaction>,
+    #[serde(default)]
+    pub generation_services: Vec<GenerationService>,
     pub issued_at: DateTime<Utc>,
     pub refresh_after: DateTime<Utc>,
     pub grace_until: DateTime<Utc>,
@@ -196,6 +207,7 @@ impl EntitlementService {
             balances: CreditBalance::default(),
             policy: FeaturePolicy::free(),
             recent_transactions: vec![],
+            generation_services: vec![],
             issued_at: now,
             refresh_after: now,
             grace_until: now,
@@ -221,6 +233,7 @@ mod tests {
             balances: CreditBalance::default(),
             policy: FeaturePolicy::for_tier("pro"),
             recent_transactions: vec![],
+            generation_services: vec![],
             issued_at: now,
             refresh_after: now + Duration::hours(6),
             grace_until: now + Duration::days(7),

@@ -95,7 +95,7 @@ async function createJob(userHeaders, body) {
   return await jsonRequest("创建云生成任务", functionUrl("generate-proxy"), {
     method: "POST",
     headers: userHeaders,
-    body: JSON.stringify({ media: "image", service: "image_sd", ...body }),
+    body: JSON.stringify({ media: "image", service: "image_lite", ...body }),
   }, [202]);
 }
 
@@ -247,6 +247,27 @@ try {
       }, [200, 204]);
     }
     console.log(`场景G（幂等重放返回同任务 + 越权 get/cancel 均 404）通过：job=${created.job_id}`);
+
+    // Lite 档（image_lite）：创建即按 1 分预授权，随后取消。
+    const lite = await createJob(account.headers, {
+      idempotency_key: `gen-e2e-lite-${crypto.randomUUID()}`,
+      ratio: "1:1",
+      prompt: "一张极简的静物摄影。",
+      reference_images: [],
+      service: "image_lite",
+    });
+    jobIds.push(lite.job_id);
+    assert.equal(lite.charge.estimated, 1, "image_lite 档应按 1 分预授权");
+    const cancelledLite = await jsonRequest("取消 lite 任务", functionUrl("generate-proxy"), {
+      method: "POST",
+      headers: account.headers,
+      body: JSON.stringify({ action: "cancel", job_id: lite.job_id }),
+    });
+    assert.ok(
+      ["cancelled", "cancel_requested", "failed"].includes(cancelledLite.status),
+      `lite 取消后状态异常：${cancelledLite.status}`,
+    );
+    console.log(`场景G 补充（image_lite 档创建+取消）通过：job=${lite.job_id}`);
   } else if (scenario === "basic") {
     // --- Scenario A: multi-reference real Ark generation on the VPS worker ---
     const before = await entitlement(account.headers);
@@ -269,8 +290,8 @@ try {
     const { job, elapsedMs } = await pollJob(account.headers, created.job_id, { maxWaitMs: 8 * 60_000 });
     assert.equal(job.status, "succeeded", `场景A未成功：${job.error?.code} ${job.error?.message}`);
     assert.equal(job.progress, 100);
-    assert.equal(job.charge.estimated, 5);
-    assert.equal(job.charge.actual, 5);
+    assert.equal(job.charge.estimated, 1);
+    assert.equal(job.charge.actual, 1);
     assert.ok(job.artifact?.url && job.artifact.bytes > 1_024 && /^[0-9a-f]{64}$/.test(job.artifact.sha256));
 
     const artifactResponse = await fetch(job.artifact.url, { signal: AbortSignal.timeout(60_000) });
@@ -288,7 +309,7 @@ try {
     assert.equal(received.status, "received");
 
     const after = await entitlement(account.headers);
-    assert.equal(after.balances.daily, 25, "真实出图后应从 30 分扣至 25 分");
+    assert.equal(after.balances.daily, 29, "真实出图后应从 30 分扣至 29 分");
     console.log(`场景A（多参考图真实出图）通过：job=${created.job_id} 耗时=${(elapsedMs / 1000).toFixed(1)}s ` +
       `产物=${artifactBytes.byteLength}B 心跳续租${elapsedMs > 90_000 ? "已跨过90s初始租约（>150s等待机制成立）" : "未跨过90s初始租约"}`);
 
@@ -307,8 +328,8 @@ try {
     assert.equal(failed.job.status, "failed", `损坏参考图应失败，实际 ${failed.job.status}`);
     assert.ok(failed.job.error?.code, "失败任务缺少 error_code");
     const afterB = await entitlement(account.headers);
-    assert.equal(afterB.balances.daily, 25, "失败任务应回滚积分（保持 25）");
-    console.log(`场景B（失败注入→回滚）通过：job=${failing.job_id} error=${failed.job.error.code} 积分保持 25`);
+    assert.equal(afterB.balances.daily, 29, "失败任务应回滚积分（保持 29）");
+    console.log(`场景B（失败注入→回滚）通过：job=${failing.job_id} error=${failed.job.error.code} 积分保持 29`);
   } else if (scenario === "long") {
     // --- Scenario L: upstream hangs 200s (fake Ark) -> no timeout, heartbeat renews lease, settles ---
     const before = await entitlement(account.headers);
@@ -324,11 +345,11 @@ try {
     const { job, elapsedMs } = await pollJob(account.headers, created.job_id, { maxWaitMs: 6 * 60_000 });
     assert.equal(job.status, "succeeded", `长等待任务未成功：${job.error?.code} ${job.error?.message}`);
     assert.ok(elapsedMs > 150_000, `任务耗时 ${elapsedMs}ms，未超过 150s 无法证明无超时等待`);
-    assert.equal(job.charge.actual, 5);
+    assert.equal(job.charge.actual, 1);
     assert.ok(job.artifact?.bytes > 0 && /^[0-9a-f]{64}$/.test(job.artifact.sha256));
     const after = await entitlement(account.headers);
-    assert.equal(after.balances.daily, 25, "长任务成功后应从 30 分扣至 25 分");
-    console.log(`场景L（200s挂起上游→无超时+心跳续租→成功）通过：job=${created.job_id} 耗时=${(elapsedMs / 1000).toFixed(1)}s 积分 30→25`);
+    assert.equal(after.balances.daily, 29, "长任务成功后应从 30 分扣至 29 分");
+    console.log(`场景L（200s挂起上游→无超时+心跳续租→成功）通过：job=${created.job_id} 耗时=${(elapsedMs / 1000).toFixed(1)}s 积分 30→29`);
   } else {
     // --- Scenario C: unreachable Ark -> submitted then network failure -> outcome_unknown ---
     const before = await entitlement(account.headers);
@@ -345,8 +366,8 @@ try {
     assert.equal(job.status, "outcome_unknown", `断网注入应为 outcome_unknown，实际 ${job.status}`);
     assert.equal(job.error?.code, "network_error", `error_code 应为 network_error，实际 ${job.error?.code}`);
     const after = await entitlement(account.headers);
-    assert.equal(after.balances.daily, 25, "outcome_unknown 应保持挂起扣留（30-5=25），不确认也不回滚");
-    console.log(`场景C（outcome_unknown 注入）通过：job=${created.job_id} 耗时=${(elapsedMs / 1000).toFixed(1)}s 积分挂起 25`);
+    assert.equal(after.balances.daily, 29, "outcome_unknown 应保持挂起扣留（30-1=29），不确认也不回滚");
+    console.log(`场景C（outcome_unknown 注入）通过：job=${created.job_id} 耗时=${(elapsedMs / 1000).toFixed(1)}s 积分挂起 29`);
   }
 } catch (error) {
   testError = error;

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useStore } from "../store";
 import { canStartAnotherJob, canUseByo } from "../lib/entitlement";
+import { cloudProviderLabel, isCloudProvider } from "../lib/genProviders";
 import { api } from "../lib/api";
 import { notifyError, notifySuccess } from "../lib/notify";
 import { useCreationEditor } from "./creation/useCreationEditor";
@@ -9,7 +10,7 @@ import { RatioSelect } from "./creation/RatioSelect";
 import { ProviderSelect } from "./creation/ProviderSelect";
 import { CreationGraph } from "./creation/CreationGraph";
 import { BoardChipPreview } from "./creation/BoardChipPreview";
-import { Sparkles } from "lucide-react";
+import { ChevronRight, Info, Sparkles } from "lucide-react";
 
 // 画面比例偏好记忆（照 AssetDetail 的 localStorage 范式：bowerbird.<name> 前缀、try/catch 兜底）。
 const BOARD_RATIO_KEY = "bowerbird.boardRatio";
@@ -48,6 +49,8 @@ export function CreationBoard() {
   const runningJobCount = useStore((s) => Object.values(s.genJobs).filter((j) => j.running).length);
   const activeGenProvider = useStore((s) => s.activeGenProvider);
   const setActiveGenProvider = useStore((s) => s.setActiveGenProvider);
+  const defaultProvider = useStore((s) => s.defaultProvider);
+  const setDefaultProvider = useStore((s) => s.setDefaultProvider);
   const startGeneration = useStore((s) => s.startGeneration);
   const presets = useStore((s) => s.presets);
   const activePresetId = useStore((s) => s.activePresetId);
@@ -70,9 +73,9 @@ export function CreationBoard() {
     insertKeyword,
   } = useCreationEditor();
 
-  // tour 维度引导（step 6）：自动选中第一张有反推维度的参考图，让「可选维度」chips 面板有内容可高亮。
+  // tour 维度引导（step 7）：自动选中第一张有反推维度的参考图，让「可选维度」chips 面板有内容可高亮。
   useEffect(() => {
-    if (tourActive && tourStep === 6 && chipSections.length === 0) {
+    if (tourActive && tourStep === 7 && chipSections.length === 0) {
       const withSections = references.find((r) => r.sections && r.sections.length > 0);
       if (withSections) setChipAssetId(withSections.id);
     }
@@ -108,15 +111,15 @@ export function CreationBoard() {
   const cloudBalance = cloudEntitlement
     ? cloudEntitlement.balances.daily + cloudEntitlement.balances.sub + cloudEntitlement.balances.topup
     : 0;
-  const targetReady = activeGenProvider === "bowerbird-cloud"
+  const targetReady = isCloudProvider(activeGenProvider)
     ? cloudAvailable && !!cloudAuth?.logged_in && cloudBalance > 0
     : activeGenProvider === "jimeng"
       ? canUseByo(cloudEntitlement) && !!dreaminaHealth?.ok
       : canUseByo(cloudEntitlement) && !!codexHealth?.ok;
-  const targetProviderLabel = activeGenProvider === "jimeng"
-    ? "即梦"
-    : activeGenProvider === "bowerbird-cloud"
-      ? "Bowerbird Cloud"
+  const targetProviderLabel = isCloudProvider(activeGenProvider)
+    ? (cloudProviderLabel(activeGenProvider, cloudEntitlement) ?? "Bowerbird Cloud")
+    : activeGenProvider === "jimeng"
+      ? "即梦"
       : "codex";
 
   // 把当前组稿发 provider 生成。生成期间编辑器仍可继续组下一轮稿（prompt 在此快照进 store）。
@@ -198,24 +201,29 @@ export function CreationBoard() {
 
   return (
     <aside className="creation-board-shell flex shrink-0 flex-col border-l border-edge bg-panel">
+      {/* 头部三项（创作板 / 使用说明 / 收起）沿同一水平中心线对齐：标题左对齐，图标组靠右。 */}
       <div className="creation-board-header">
-        <div className="flex min-w-0 items-baseline gap-2">
-          <strong className="shrink-0 text-sm font-semibold text-ink">创作板</strong>
-          <span className="truncate text-[10px] text-muted">组合参考图与提示词</span>
-        </div>
-        <div className="flex items-center gap-2">
+        <strong className="shrink-0 text-sm font-semibold text-ink">创作板</strong>
+        <div className="ml-auto flex items-center gap-1">
           <div className="group relative">
-            <span className="cursor-help text-[10px] text-muted hover:text-ink">使用说明</span>
+            <button
+              type="button"
+              className="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-panel2 hover:text-ink"
+              aria-label="使用说明"
+            >
+              <Info size={13} />
+            </button>
             <div className="pointer-events-none absolute right-0 top-full z-10 mt-2 hidden w-60 rounded-lg bg-panel2 p-2 text-[11px] leading-4 text-muted ring-1 ring-edge group-hover:block">
               像跟 AI 输入 prompt 一样书写；<span className="text-accent">点瀑布流图片</span> 在光标处插入参考图，或输入 <span className="text-accent">@图名</span>（空格/标点后自动识别）。
             </div>
           </div>
           <button
             onClick={toggleBoard}
-            className="rounded-md px-2 py-1 text-[10px] text-muted hover:bg-panel2 hover:text-ink"
+            className="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-panel2 hover:text-ink"
             title="收起创作板"
+            aria-label="收起创作板"
           >
-            收起
+            <ChevronRight size={14} />
           </button>
         </div>
       </div>
@@ -366,7 +374,7 @@ export function CreationBoard() {
           />
           {/* 编辑框内 image/keyword chip 的交互浮层（hover 放大图/维度正文 + 点击定位瀑布流） */}
           <BoardChipPreview hostRef={hostRef} />
-          {/* 工具条：编辑框下方的快捷参数。未来可在此加更多功能。 */}
+          {/* 工具条：编辑框下方的快捷参数。Agent 开关与发送按钮同款线框/光晕（仅圆角不同）。 */}
           <div className="mt-2 flex items-center gap-2">
             <RatioSelect value={ratio} onChange={selectRatio} />
             <ProviderSelect
@@ -377,10 +385,30 @@ export function CreationBoard() {
               cloudAvailable={cloudAvailable}
               cloudAuth={cloudAuth}
               cloudEntitlement={cloudEntitlement}
+              defaultProvider={defaultProvider}
+              onSetDefaultProvider={setDefaultProvider}
             />
+            {agentAvailable && (
+              <button
+                type="button"
+                role="switch"
+                aria-checked={agentMode}
+                disabled={agentBusy}
+                onClick={() => setAgentMode((enabled) => !enabled)}
+                title="开启后，Agent 会先综合原 prompt 与参考图维度，再调用当前生图引擎"
+                className={`generation-glow-button flex h-7 items-center rounded-[3px] px-2.5 text-xs font-medium disabled:opacity-40 ${
+                  agentMode ? "" : "is-off"
+                }`}
+              >
+                <span className="generation-glow-button__content gap-1.5">
+                  <span className={`h-2 w-2 rounded-full ${agentMode ? "bg-lime" : "bg-muted/50"}`} />
+                  Agent
+                </span>
+              </button>
+            )}
           </div>
 
-          {(showKeywordHints || (tourActive && tourStep === 6)) && (
+          {(showKeywordHints || (tourActive && tourStep === 7)) && (
             <div
               data-tour="creation-keywords"
               className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-muted"
@@ -394,9 +422,9 @@ export function CreationBoard() {
                       data-dim={section.title}
                       onClick={() => {
                         insertKeyword(section.title, section.body);
-                        // tour step 9：用户点维度 chip（如「构图」）→ 引导完成。
-                        if (tourActive && tourStep === 9) {
-                          useStore.getState().setTourStep(10);
+                        // tour step 10：用户点维度 chip（如「构图」）→ 引导完成。
+                        if (tourActive && tourStep === 10) {
+                          useStore.getState().setTourStep(11);
                         }
                       }}
                       className="rounded-[2px] border border-accent/40 bg-accent/10 px-2 py-0.5 text-accent hover:bg-accent/20"
@@ -416,41 +444,25 @@ export function CreationBoard() {
       </div>
 
       <div className="shrink-0 space-y-2 border-t border-edge bg-canvas/60 p-3">
-        <div className="flex items-stretch gap-2">
-          <button
-            type="button"
-            role="switch"
-            aria-checked={agentMode}
-            disabled={!agentAvailable || agentBusy}
-            onClick={() => setAgentMode((enabled) => !enabled)}
-            title={agentAvailable ? "开启后，Agent 会先综合原 prompt 与参考图维度，再调用当前生图引擎" : "本机 Agent 暂不可用"}
-            className={`flex min-h-11 shrink-0 items-center gap-2 border px-3 text-xs font-medium disabled:opacity-40 ${
-              agentMode ? "border-accent bg-accent/10 text-accent" : "border-edge bg-panel2 text-muted"
-            }`}
-          >
-            <span className={`h-2 w-2 rounded-full ${agentMode ? "bg-accent" : "bg-muted/50"}`} />
-            Agent 模式
-          </button>
-          <button
-            onClick={() => void send()}
-            disabled={agentBusy || !finalPrompt || !targetReady || !canStartAnotherJob(cloudEntitlement, runningJobCount)}
-            title={
-              !targetReady
-                ? `${targetProviderLabel} 不可用`
-                : !canStartAnotherJob(cloudEntitlement, runningJobCount)
-                  ? "已达当前档位的并行生成上限"
-                  : agentMode
-                    ? `先由 Agent 整理意图，再发 ${targetProviderLabel} 生成图像`
-                    : `把当前 prompt + 参考图发 ${targetProviderLabel} 生成图像`
-            }
-            className="generation-glow-button flex min-h-11 w-full items-center justify-center rounded-full px-4 py-2 text-sm font-semibold disabled:opacity-50"
-          >
-            <span className="generation-glow-button__content">
-              <Sparkles size={15} />
-              {agentBusy ? "Agent 正在整理意图…" : `发送 ${targetProviderLabel} 生成`}
-            </span>
-          </button>
-        </div>
+        <button
+          onClick={() => void send()}
+          disabled={agentBusy || !finalPrompt || !targetReady || !canStartAnotherJob(cloudEntitlement, runningJobCount)}
+          title={
+            !targetReady
+              ? `${targetProviderLabel} 不可用`
+              : !canStartAnotherJob(cloudEntitlement, runningJobCount)
+                ? "已达当前档位的并行生成上限"
+                : agentMode
+                  ? `先由 Agent 整理意图，再发 ${targetProviderLabel} 生成图像`
+                  : `把当前 prompt + 参考图发 ${targetProviderLabel} 生成图像`
+          }
+          className="generation-glow-button flex min-h-11 w-full items-center justify-center rounded-full px-4 py-2 text-sm font-semibold disabled:opacity-50"
+        >
+          <span className="generation-glow-button__content">
+            <Sparkles size={15} />
+            {agentBusy ? "Agent 正在整理意图…" : `发送 ${targetProviderLabel} 生成`}
+          </span>
+        </button>
         <div className="text-[10px] text-muted">
           {!targetReady
             ? "请先登录 Bowerbird 账号或在「设置 · AI 出图引擎」选择可用引擎"

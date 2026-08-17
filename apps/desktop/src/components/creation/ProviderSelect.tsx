@@ -1,18 +1,14 @@
-import { useEffect, useRef, useState } from "react";
-import { Check, ChevronDown } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Check, ChevronDown, Star } from "lucide-react";
 import type { AuthSnapshot, CodexHealth, EntitlementSnapshot } from "../../lib/types";
 import { canUseByo } from "../../lib/entitlement";
-
-/** 出图 provider 选项（codex / 即梦 / Bowerbird Cloud）。 */
-const PROVIDERS = [
-  { key: "codex", label: "codex" },
-  { key: "jimeng", label: "即梦" },
-  { key: "bowerbird-cloud", label: "Bowerbird Cloud" },
-] as const;
+import { genProviders, isCloudProvider } from "../../lib/genProviders";
 
 /**
  * 出图 provider 下拉选择。选项使用定宽浮层，不参与创作板正文布局；每个 provider 按各自
- * 健康状态置灰（约定 7）：未就绪 disabled + tooltip 显 reason。
+ * 健康状态置灰（约定 7）：未就绪 disabled + tooltip 显 reason。云端档位从 entitlement 的
+ * generation_services 动态渲染（云端上新档位无需发版），本地 BYO 引擎固定两项。
+ * 选项右侧星标 = 收藏为默认出图引擎（映射 store 的 defaultProvider，登录/启动自动选中）。
  */
 export function ProviderSelect({
   value,
@@ -22,6 +18,8 @@ export function ProviderSelect({
   cloudAvailable = false,
   cloudAuth = null,
   cloudEntitlement = null,
+  defaultProvider = "",
+  onSetDefaultProvider,
 }: {
   value: string;
   onChange: (p: string) => void;
@@ -30,10 +28,13 @@ export function ProviderSelect({
   cloudAvailable?: boolean;
   cloudAuth?: AuthSnapshot | null;
   cloudEntitlement?: EntitlementSnapshot | null;
+  defaultProvider?: string;
+  onSetDefaultProvider?: (p: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
-  const current = PROVIDERS.find((p) => p.key === value) ?? PROVIDERS[0];
+  const providers = useMemo(() => genProviders(cloudEntitlement), [cloudEntitlement]);
+  const current = providers.find((p) => p.key === value) ?? providers[0];
 
   useEffect(() => {
     if (!open) return;
@@ -72,8 +73,8 @@ export function ProviderSelect({
           aria-label="出图引擎"
         >
           <div className="app-popover-title">出图引擎</div>
-          {PROVIDERS.map((p) => {
-            const isCloud = p.key === "bowerbird-cloud";
+          {providers.map((p) => {
+            const isCloud = isCloudProvider(p.key);
             const isByo = !isCloud;
             const byoLocked = isByo && !canUseByo(cloudEntitlement);
             const health = p.key === "jimeng" ? dreaminaHealth : codexHealth;
@@ -93,6 +94,7 @@ export function ProviderSelect({
                 : undefined;
             const ok = isCloud ? reason === undefined : byoLocked ? false : !!health?.ok;
             const selected = value === p.key;
+            const starred = defaultProvider === p.key;
             return (
               <button
                 key={p.key}
@@ -110,8 +112,30 @@ export function ProviderSelect({
                 aria-selected={selected}
               >
                 <span className={`app-status-dot ${ok ? "is-ready" : ""}`} />
-                <span className="min-w-0 flex-1 truncate">{p.label}</span>
-                {selected && <Check size={13} className="text-accent" />}
+                <span className="min-w-0 flex-1 truncate text-left">{p.label}</span>
+                <span
+                  role="button"
+                  tabIndex={ok ? 0 : -1}
+                  aria-label={starred ? "取消默认出图引擎" : "设为默认出图引擎"}
+                  title={ok ? "设为默认出图引擎" : "解锁后可设为默认"}
+                  onClick={(event) => {
+                    if (!ok || !onSetDefaultProvider) return;
+                    event.stopPropagation();
+                    onSetDefaultProvider(p.key);
+                  }}
+                  onKeyDown={(event) => {
+                    if (!ok || !onSetDefaultProvider) return;
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      onSetDefaultProvider(p.key);
+                    }
+                  }}
+                  className={`ml-1.5 shrink-0 ${starred ? "text-accent" : "text-muted/50 hover:text-accent"} ${ok ? "cursor-pointer" : "cursor-default opacity-50"}`}
+                >
+                  <Star size={12} {...(starred ? { fill: "currentColor" } : {})} />
+                </span>
+                {selected && <Check size={13} className="ml-1 shrink-0 text-accent" />}
               </button>
             );
           })}

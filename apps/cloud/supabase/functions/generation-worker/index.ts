@@ -53,7 +53,7 @@ function requireWorker(request: Request): { workerId: string; admin: SupabaseCli
 interface JobRow {
   id: string;
   status: string;
-  service: "image_sd" | "image_hd";
+  service: "image_sd" | "image_hd" | "image_lite" | "image_fast";
   lease_id: string | null;
   request_object_key: string;
   input_manifest_hash: string;

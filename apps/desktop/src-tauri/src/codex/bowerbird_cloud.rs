@@ -14,16 +14,37 @@ use crate::codex::types::{Capabilities, Chunk, CodexRequest, CodexResult, GenOut
 use crate::codex::GenProvider;
 use crate::error::AppError;
 
+/// Cloud 生图 provider：档位由云端数据驱动（entitlement.generation_services），
+/// key/service 都是运行时字符串——云端上新档位无需桌面发版。
+///
+/// key 约定：`bowerbird-cloud-<service>`（如 `bowerbird-cloud-image_hd`）；少量遗留 key
+/// （裸 `bowerbird-cloud` / `-fast` / `-lite` / `-standard`）由 [`cloud_service_for_key`] 映射。
 #[derive(Clone)]
 pub struct BowerbirdCloudProvider {
     cloud: CloudClient,
     auth: AuthClient,
+    key: String,
+    service: String,
 }
 
 impl BowerbirdCloudProvider {
-    pub fn new(cloud: CloudClient, auth: AuthClient) -> Self {
-        Self { cloud, auth }
+    pub fn new(cloud: CloudClient, auth: AuthClient, key: String, service: String) -> Self {
+        Self { cloud, auth, key, service }
     }
+}
+
+/// cloud provider key → generate-proxy 的计费/路由 service。
+/// 新式 key 后缀即 service（`bowerbird-cloud-image_hd` → `image_hd`）；遗留 key 显式映射；
+/// 非法值兜底 `image_hd`（Edge 侧仍会按 service_costs 二次校验）。
+pub fn cloud_service_for_key(key: &str) -> String {
+    let suffix = key.strip_prefix("bowerbird-cloud").unwrap_or("").trim_start_matches('-');
+    match suffix {
+        "" => "image_hd",
+        "fast" => "image_fast",
+        "lite" | "standard" => "image_lite",
+        service => service,
+    }
+    .to_string()
 }
 
 #[derive(Deserialize)]
@@ -57,8 +78,8 @@ struct CloudJobError {
 
 #[async_trait]
 impl GenProvider for BowerbirdCloudProvider {
-    fn name(&self) -> &'static str {
-        "bowerbird-cloud"
+    fn name(&self) -> &str {
+        &self.key
     }
 
     fn capabilities(&self) -> Capabilities {
@@ -106,7 +127,7 @@ impl GenProvider for BowerbirdCloudProvider {
                     "prompt": req.instruction,
                     "reference_images": references,
                     "ratio": req.ratio,
-                    "service": "image_sd",
+                    "service": self.service,
                 })),
                 "云生成请求失败",
             )

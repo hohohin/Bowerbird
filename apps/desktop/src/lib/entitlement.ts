@@ -1,4 +1,5 @@
 import type { EntitlementSnapshot, FeaturePolicy } from "../lib/types";
+import { isCloudProvider } from "../lib/genProviders";
 
 /** 服务端派生的免费权益兜底（未同步/未登录时与 Rust FeaturePolicy::free 对齐）。 */
 export const FREE_POLICY: FeaturePolicy = {
@@ -20,13 +21,13 @@ export function canUseByo(entitlement: EntitlementSnapshot | null): boolean {
   return effectivePolicy(entitlement).can_use_byo;
 }
 
-/** 生成 provider 权限：Cloud 与本机 BYO 都只读取服务端派生 policy。 */
+/** 生成 provider 权限：Cloud（Pro/标准/Lite 变体）与本机 BYO 都只读取服务端派生 policy。 */
 export function canUseGenerationProvider(
   entitlement: EntitlementSnapshot | null,
   provider: string | null | undefined,
 ): boolean {
   const policy = effectivePolicy(entitlement);
-  return provider === "bowerbird-cloud" ? policy.can_use_cloud : policy.can_use_byo;
+  return isCloudProvider(provider) ? policy.can_use_cloud : policy.can_use_byo;
 }
 
 /** 理解类默认路由：Pro/Studio 走本机 CLI，免费档只能走 Cloud。 */

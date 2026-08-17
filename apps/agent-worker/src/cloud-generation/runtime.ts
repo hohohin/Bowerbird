@@ -28,7 +28,10 @@ export interface GenerationWorkerConfig {
   workerId: string;
   arkApiKey: string;
   arkBaseUrl: string;
+  /** 默认（Pro）模型：image_hd/image_fast 服务与未知 service 的兜底。 */
   arkImageModel: string;
+  /** Lite 模型（即官方标准版，同一模型）；image_sd 为其遗留别名，未配置时该档任务干净失败。 */
+  arkImageModelLite?: string;
   arkImageSize: string;
   mock: boolean;
   pollIntervalMs: number;
@@ -87,6 +90,7 @@ export function configFromEnv(env: Record<string, string | undefined>): Generati
     arkApiKey: required(env, "ARK_API_KEY"),
     arkBaseUrl: (env.ARK_BASE_URL?.trim() || "https://ark.cn-beijing.volces.com/api/v3").replace(/\/+$/, ""),
     arkImageModel: required(env, "ARK_IMAGE_MODEL"),
+    arkImageModelLite: env.ARK_IMAGE_MODEL_LITE?.trim() || undefined,
     arkImageSize: env.ARK_IMAGE_SIZE?.trim() || "2K",
     mock: (env.BOWERBIRD_CLOUD_MOCK ?? "false") === "true",
     pollIntervalMs: positiveInt(env.GENERATION_POLL_INTERVAL_MS, 2_000, "GENERATION_POLL_INTERVAL_MS"),
@@ -165,6 +169,28 @@ export function mapArkHttpError(status: number, body: string, requestIdHeader?: 
   return new KnownProviderError("provider_failed", `方舟服务暂时不可用${detail}`);
 }
 
+/** service 对应的方舟调用参数：模型 + 提示词优化档（仅 Pro fast 档显式下发 fast）。 */
+export interface ServiceModelChoice {
+  model: string;
+  optimizePromptMode: "standard" | "fast" | null;
+}
+
+/** service → 方舟模型：image_hd/image_fast=Pro（默认兜底）/ image_lite 与遗留 image_sd=Lite。 */
+export function modelForService(config: GenerationWorkerConfig, service: string): ServiceModelChoice {
+  if (service === "image_lite" || service === "image_sd") {
+    // Lite 即官方标准版（同一模型）；image_sd 是多模型改造前的遗留 service，旧构建仍在发。
+    if (!config.arkImageModelLite) {
+      throw new KnownProviderError("model_not_configured", "Lite 出图模型暂未配置");
+    }
+    return { model: config.arkImageModelLite, optimizePromptMode: null };
+  }
+  if (service === "image_fast") {
+    // fast 档 = Pro 模型 + optimize_prompt_options.mode=fast（低延迟，仅 5.0 Pro 支持）。
+    return { model: config.arkImageModel, optimizePromptMode: "fast" };
+  }
+  return { model: config.arkImageModel, optimizePromptMode: null };
+}
+
 class ControlClient {
   private readonly config: GenerationWorkerConfig;
   private readonly fetch: WorkerFetch;
@@ -200,7 +226,7 @@ class ArkImageClient {
     this.fetch = fetchImpl;
   }
 
-  async generate(input: GenerationInput): Promise<GeneratedImage> {
+  async generate(input: GenerationInput, choice: ServiceModelChoice): Promise<GeneratedImage> {
     if (this.config.mock) return { mime: "image/png", bytes: bytesFromBase64(ONE_PIXEL_PNG) };
     const response = await this.fetch(`${this.config.arkBaseUrl}/images/generations`, {
       method: "POST",
@@ -209,10 +235,13 @@ class ArkImageClient {
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        model: this.config.arkImageModel,
+        model: choice.model,
         prompt: input.prompt,
         ...(input.reference_images.length
           ? { image: input.reference_images.map((image) => `data:${image.mime};base64,${image.base64}`) }
+          : {}),
+        ...(choice.optimizePromptMode
+          ? { optimize_prompt_options: { mode: choice.optimizePromptMode } }
           : {}),
         size: this.config.arkImageSize,
         response_format: "b64_json",
@@ -311,16 +340,17 @@ async function executeClaim(
   claimed: ClaimedJob,
 ): Promise<void> {
   if (!claimed.job || !claimed.lease?.leaseId || !claimed.inputUrl) throw new Error("invalid_claim_response");
-  const { id: jobId, inputManifestHash } = claimed.job;
+  const { id: jobId, inputManifestHash, service } = claimed.job;
   const leaseId = claimed.lease.leaseId;
   const heartbeatState = { stopped: false };
   void heartbeatLoop(control, jobId, leaseId, config.heartbeatIntervalMs, heartbeatState);
   let submitted = false;
   try {
     const input = await fetchInput(fetchImpl, claimed.inputUrl, inputManifestHash);
+    const choice = modelForService(config, service);
     await control.post({ action: "submitted", jobId, leaseId });
     submitted = true;
-    const image = await ark.generate(input);
+    const image = await ark.generate(input, choice);
     const upload = await control.post({ action: "output_upload", jobId, leaseId, mime: image.mime });
     if (typeof upload.uploadUrl !== "string" || typeof upload.objectKey !== "string") {
       throw new Error("invalid_upload_response");
@@ -340,7 +370,13 @@ async function executeClaim(
       bytes: image.bytes.byteLength,
       sha256: sha256(image.bytes),
     });
-    console.log(JSON.stringify({ event: "generation_succeeded", job_id: jobId, bytes: image.bytes.byteLength }));
+    console.log(JSON.stringify({
+      event: "generation_succeeded",
+      job_id: jobId,
+      model: choice.model,
+      optimize_prompt_mode: choice.optimizePromptMode,
+      bytes: image.bytes.byteLength,
+    }));
   } catch (error) {
     const known = error instanceof KnownProviderError;
     const action = known || !submitted ? "fail" : "outcome_unknown";

@@ -57,9 +57,16 @@ function validate(body: unknown): GenerateRequest {
   return value as unknown as GenerateRequest;
 }
 
-function serviceFor(body: GenerateRequest): "image_sd" | "image_hd" {
+// service 校验是数据驱动的：形状必须是 image_*（防止把 video_*/caption 等高价服务当生图扣费），
+// 且必须是 service_costs 中 active 的行（0018 起新档位只加数据、不改代码）。
+async function serviceFor(admin: SupabaseClient, body: GenerateRequest): Promise<string> {
   const service = body.service ?? "image_sd";
-  if (service !== "image_sd" && service !== "image_hd") {
+  if (!/^image_[a-z0-9_]{1,40}$/.test(service)) {
+    throw new ApiError("invalid_request", "service 与生成媒体类型不匹配");
+  }
+  const { data } = await admin.from("service_costs").select("service").eq("service", service)
+    .eq("active", true).maybeSingle();
+  if (!data) {
     throw new ApiError("invalid_request", "service 与生成媒体类型不匹配");
   }
   return service;
@@ -160,7 +167,7 @@ async function createJob(
   cors: HeadersInit,
 ): Promise<Response> {
   await ensureDailyCredits(admin, userId);
-  const service = serviceFor(body);
+  const service = await serviceFor(admin, body);
   const held = await holdCredits(admin, userId, body.idempotency_key, service);
   const requestPayload = JSON.stringify({
     schema_version: 1,

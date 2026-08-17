@@ -46,7 +46,8 @@ impl FeaturePolicy {
 
     pub fn allows_generation_provider(&self, provider: Option<&str>) -> bool {
         match provider.unwrap_or("codex") {
-            "bowerbird-cloud" => self.can_use_cloud,
+            // Cloud 生图三档变体（bowerbird-cloud / -standard / -lite）同受 can_use_cloud 门控。
+            p if p.starts_with("bowerbird-cloud") => self.can_use_cloud,
             _ => self.can_use_byo,
         }
     }
@@ -93,10 +94,13 @@ mod tests {
         let free = FeaturePolicy::free();
         let pro = FeaturePolicy::for_tier("pro");
         assert!(free.allows_generation_provider(Some("bowerbird-cloud")));
+        assert!(free.allows_generation_provider(Some("bowerbird-cloud-standard")));
+        assert!(free.allows_generation_provider(Some("bowerbird-cloud-lite")));
         assert!(!free.allows_generation_provider(Some("codex")));
         assert!(!free.allows_generation_provider(Some("jimeng")));
         assert!(pro.allows_generation_provider(Some("codex")));
         assert!(pro.allows_generation_provider(Some("jimeng")));
+        assert!(pro.allows_generation_provider(Some("bowerbird-cloud-lite")));
     }
 
     #[test]

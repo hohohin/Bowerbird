@@ -21,14 +21,14 @@ import type {
   PromptedAsset,
   TagCount,
 } from "./lib/types";
+import { canonicalProviderKey, isCloudProvider, isKnownGenProvider } from "./lib/genProviders";
 
-// —— 默认出图 provider（localStorage，照 boardRatio 枚举校验）——
+// —— 默认出图 provider（localStorage，照 GEN_PROVIDERS 枚举校验；收藏星标写它）——
 const DEFAULT_PROVIDER_KEY = "bowerbird.defaultProvider";
-const PROVIDERS = ["codex", "jimeng", "bowerbird-cloud"] as const;
 function loadDefaultProvider(): string {
   try {
     const v = localStorage.getItem(DEFAULT_PROVIDER_KEY);
-    return v && (PROVIDERS as readonly string[]).includes(v) ? v : "codex";
+    return v && isKnownGenProvider(v) ? canonicalProviderKey(v) : "codex";
   } catch {
     return "codex";
   }
@@ -298,7 +298,7 @@ export const useStore = create<State>((set, get) => {
         cloudAuth,
         cloudEntitlement,
         cloudError: "登录已失效，请重新登录",
-        activeGenProvider: "bowerbird-cloud",
+        activeGenProvider: "bowerbird-cloud-image_hd",
       });
     } catch {
       // 原业务错误仍会展示；这里只做后端已清理会话后的前端快照对齐。
@@ -780,7 +780,7 @@ export const useStore = create<State>((set, get) => {
         cloudEntitlement,
         activeGenProvider: canUseGenerationProvider(cloudEntitlement, s.defaultProvider)
           ? s.defaultProvider
-          : "bowerbird-cloud",
+          : "bowerbird-cloud-image_hd",
       }));
     } catch (e) {
       set({ cloudError: typeof e === "string" ? e : "账号状态读取失败" });
@@ -807,7 +807,7 @@ export const useStore = create<State>((set, get) => {
         cloudEntitlement,
         activeGenProvider: canUseGenerationProvider(cloudEntitlement, s.defaultProvider)
           ? s.defaultProvider
-          : "bowerbird-cloud",
+          : "bowerbird-cloud-image_hd",
       }));
     } catch (e) {
       const message = taskErrorMessage(e) || "权益同步失败";
@@ -822,7 +822,7 @@ export const useStore = create<State>((set, get) => {
     try {
       const cloudAuth = await api.cloudLogout();
       const cloudEntitlement = await api.cloudEntitlement();
-      set({ cloudAuth, cloudEntitlement, activeGenProvider: "bowerbird-cloud" });
+      set({ cloudAuth, cloudEntitlement, activeGenProvider: "bowerbird-cloud-image_hd" });
     } catch (e) {
       set({ cloudError: typeof e === "string" ? e : "登出失败" });
     } finally {
@@ -1041,7 +1041,7 @@ export const useStore = create<State>((set, get) => {
     const job = s.genJobs[id];
     if (!job) return;
     const provider = normalizeGenerationProvider(job.provider);
-    const targetHealthy = provider === "bowerbird-cloud"
+    const targetHealthy = isCloudProvider(provider)
       ? !!s.cloudAuth?.cloud_available && !!s.cloudAuth.logged_in
       : provider === "jimeng"
         ? !!s.dreaminaHealth?.ok

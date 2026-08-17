@@ -44,7 +44,7 @@ impl Default for DreaminaCliProvider {
 
 #[async_trait]
 impl GenProvider for DreaminaCliProvider {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "jimeng"
     }
 

@@ -5,6 +5,7 @@ import { useStore } from "../store";
 import { api } from "../lib/api";
 import { notifyError } from "../lib/notify";
 import { canStartAnotherJob, canUseByo, canUseGenerationProvider } from "../lib/entitlement";
+import { cloudProviderLabel, canonicalProviderKey, isCloudProvider } from "../lib/genProviders";
 import type { Asset, GenJob, GenTurn } from "../lib/types";
 import { Lightbox } from "./Lightbox";
 import { useCreationEditor } from "./creation/useCreationEditor";
@@ -68,21 +69,22 @@ export function GenerationPanel() {
   const activeProvider = activeJob?.provider === "codex-cli" || !activeJob?.provider
     ? "codex"
     : activeJob.provider;
+  const activeProviderIsCloud = isCloudProvider(activeProvider);
   const targetHealth = activeProvider === "jimeng"
     ? dreaminaHealth
-    : activeProvider === "bowerbird-cloud"
+    : activeProviderIsCloud
       ? null
       : codexHealth;
   const cloudBalance = cloudEntitlement
     ? cloudEntitlement.balances.daily + cloudEntitlement.balances.sub + cloudEntitlement.balances.topup
     : 0;
   const policyAllowsProvider = canUseGenerationProvider(cloudEntitlement, activeProvider);
-  const targetReady = policyAllowsProvider && (activeProvider === "bowerbird-cloud"
+  const targetReady = policyAllowsProvider && (activeProviderIsCloud
     ? cloudAvailable && !!cloudAuth?.logged_in && cloudBalance > 0
     : !!targetHealth?.ok);
   const lockedReason = !policyAllowsProvider
     ? "升级 Pro 解锁本机 Codex / 即梦 CLI"
-    : activeProvider === "bowerbird-cloud"
+    : activeProviderIsCloud
       ? !cloudAuth?.logged_in
         ? "请先登录 Bowerbird Cloud"
         : cloudBalance <= 0
@@ -282,8 +284,8 @@ export function GenerationPanel() {
             {activeJob.turns.length} 轮 · {imageCount} 图
             {activeJob.provider === "jimeng"
               ? " · 即梦"
-              : activeJob.provider === "bowerbird-cloud"
-                ? " · Bowerbird Cloud"
+              : isCloudProvider(activeJob.provider)
+                ? ` · ${cloudProviderLabel(activeJob.provider, cloudEntitlement) ?? "Bowerbird Cloud"}`
                 : ""}
           </span>
         )}
@@ -451,11 +453,12 @@ function TurnView({
   }, [busy, turn.startedAt]);
   const elapsedLabel = busy && turn.startedAt ? fmtDuration(now - turn.startedAt) : null;
   const durationLabel = turn.durationMs != null ? fmtDuration(turn.durationMs) : null;
+  const turnEntitlement = useStore((s) => s.cloudEntitlement);
   const viaLabel =
     turn.provider && turn.provider !== "codex-cli"
       ? turn.provider === "jimeng"
         ? "即梦"
-        : turn.provider
+        : cloudProviderLabel(turn.provider, turnEntitlement) ?? turn.provider
       : null;
   const refThumbs = (refAssets ?? [])
     .map((a) => ({ src: a.thumb_path ?? a.store_path ?? "", name: a.name }))
@@ -661,6 +664,8 @@ function GenEditComposer({
   const startGeneration = useStore((s) => s.startGeneration);
   const activeGenProvider = useStore((s) => s.activeGenProvider);
   const setActiveGenProvider = useStore((s) => s.setActiveGenProvider);
+  const defaultProvider = useStore((s) => s.defaultProvider);
+  const setDefaultProvider = useStore((s) => s.setDefaultProvider);
   const codexHealth = useStore((s) => s.codexHealth);
   const dreaminaHealth = useStore((s) => s.dreaminaHealth);
   const cloudAuth = useStore((s) => s.cloudAuth);
@@ -677,10 +682,13 @@ function GenEditComposer({
   const [agentAvailable, setAgentAvailable] = useState(false);
   const [agentBusy, setAgentBusy] = useState(false);
 
-  // provider 初值 = 该会话的 provider（进入编辑时同步当前选择，坞内可再切换）。
+  // provider 初值 = 该会话的 provider（进入编辑时同步当前选择，坞内可再切换；遗留 cloud key 归一化）。
   useEffect(() => {
-    const initial =
-      job.provider === "jimeng" || job.provider === "bowerbird-cloud" ? job.provider : "codex";
+    const initial = isCloudProvider(job.provider)
+      ? canonicalProviderKey(job.provider)
+      : job.provider === "jimeng"
+        ? job.provider
+        : "codex";
     setActiveGenProvider(initial);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -693,13 +701,14 @@ function GenEditComposer({
   const cloudBalance = cloudEntitlement
     ? cloudEntitlement.balances.daily + cloudEntitlement.balances.sub + cloudEntitlement.balances.topup
     : 0;
-  const targetReady = activeGenProvider === "bowerbird-cloud"
+  const cloudSelected = isCloudProvider(activeGenProvider);
+  const targetReady = cloudSelected
     ? cloudAvailable && !!cloudAuth?.logged_in && cloudBalance > 0
     : activeGenProvider === "jimeng"
       ? canUseByo(cloudEntitlement) && !!dreaminaHealth?.ok
       : canUseByo(cloudEntitlement) && !!codexHealth?.ok;
   const lockedReason =
-    activeGenProvider === "bowerbird-cloud"
+    cloudSelected
       ? !cloudAvailable
         ? "当前版本未配置 Bowerbird Cloud"
         : !cloudAuth?.logged_in
@@ -825,22 +834,29 @@ function GenEditComposer({
             cloudAvailable={cloudAvailable}
             cloudAuth={cloudAuth}
             cloudEntitlement={cloudEntitlement}
+            defaultProvider={defaultProvider}
+            onSetDefaultProvider={setDefaultProvider}
           />
-          {/* Agent 模式开关（与创作板同款行为） */}
-          <button
-            type="button"
-            role="switch"
-            aria-checked={agentMode}
-            disabled={!agentAvailable || agentBusy}
-            onClick={() => setAgentMode((enabled) => !enabled)}
-            title={agentAvailable ? "开启后，Agent 会先综合原 prompt 与参考图维度，再调用当前生图引擎" : "本机 Agent 暂不可用"}
-            className={`flex h-7 shrink-0 items-center gap-2 rounded-[3px] border px-2.5 text-xs font-medium disabled:opacity-40 ${
-              agentMode ? "border-accent bg-accent/10 text-accent" : "border-edge bg-panel2 text-muted"
-            }`}
-          >
-            <span className={`h-2 w-2 rounded-full ${agentMode ? "bg-accent" : "bg-muted/50"}`} />
-            Agent 模式
-          </button>
+          {/* Agent 模式开关：与发送按钮同款线框/光晕（仅圆角不同），关闭态 is-off 收敛光晕。
+              仅本机 Agent 可用时渲染——release 包中 health 命令被后端门控拒绝，开关不出现。 */}
+          {agentAvailable && (
+            <button
+              type="button"
+              role="switch"
+              aria-checked={agentMode}
+              disabled={agentBusy}
+              onClick={() => setAgentMode((enabled) => !enabled)}
+              title="开启后，Agent 会先综合原 prompt 与参考图维度，再调用当前生图引擎"
+              className={`generation-glow-button flex h-7 items-center rounded-[3px] px-2.5 text-xs font-medium disabled:opacity-40 ${
+                agentMode ? "" : "is-off"
+              }`}
+            >
+              <span className="generation-glow-button__content gap-1.5">
+                <span className={`h-2 w-2 rounded-full ${agentMode ? "bg-lime" : "bg-muted/50"}`} />
+                Agent
+              </span>
+            </button>
+          )}
           <span className="hidden text-[10px] text-muted md:inline">
             点瀑布流图片插入参考图，或输入 @图名
           </span>

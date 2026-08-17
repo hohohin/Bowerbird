@@ -449,8 +449,9 @@ fn settle_generation_task(db: &Database, job_id: &str, result: &Result<(), AppEr
 }
 
 /// 创作板「生成」：把最终 prompt + 参考图交 provider 出图（`provider` 参数选实现，
-/// None/`codex` → CodexCliProvider、`jimeng` → DreaminaCliProvider、`bowerbird-cloud` →
-/// BowerbirdCloudProvider）。provider 产出的源图由 `finalize_generation_assets` 入库。
+/// None/`codex` → CodexCliProvider、`jimeng` → DreaminaCliProvider、
+/// `bowerbird-cloud`/`-standard`/`-lite` → BowerbirdCloudProvider 三档变体）。
+/// provider 产出的源图由 `finalize_generation_assets` 入库。
 ///
 /// - 流式：经 event `codex://chunk` 回前端（codex=Delta 逐字、即梦/Cloud=状态/伪进度）；
 /// - 不写 `analyses`（生成 ≠ 分析）；来源元信息落 `generation_meta`。
@@ -574,7 +575,7 @@ pub async fn codex_create_image(
 
     // 先解析 provider（可能出错 → ?）：必须在注册 GENERATE_CANCEL 之前，否则出错提前返回
     // 会留下 stale cancel sender（下次 cancel_codex_create take 到它）。None → codex（默认）。
-    let cloud_context = matches!(provider.as_deref(), Some("bowerbird-cloud"))
+    let cloud_context = crate::codex::is_cloud_generation_provider(provider.as_deref())
         .then(|| (cloud_client.inner().clone(), auth_client.inner().clone()));
     let p = resolve_gen_provider(provider.as_deref(), cloud_context)?;
     let provider_name = p.name().to_string();

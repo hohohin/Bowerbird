@@ -149,7 +149,7 @@ fn parse_answer(stdout: &str) -> String {
 
 #[async_trait]
 impl GenProvider for CodexCliProvider {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "codex-cli"
     }
 

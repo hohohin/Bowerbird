@@ -55,13 +55,19 @@ Deno.serve(async (request) => {
     const { user, admin } = await requireUser(request);
     userId = user.id;
     await ensureDailyCredits(admin, user.id);
-    const [{ data: subscription, error: subError }, { data: credits, error: creditError }, { data: transactions, error: txError }] =
-      await Promise.all([
-        admin.from("subscriptions").select("tier,status,current_period_end,entitlement_version").eq("user_id", user.id).maybeSingle(),
-        admin.from("user_credits").select("daily_balance,sub_balance,topup_balance").eq("user_id", user.id).maybeSingle(),
-        admin.from("credit_transactions").select("kind,amount,service,created_at").eq("user_id", user.id).order("created_at", { ascending: false }).limit(50),
-      ]);
-    if (subError || creditError || txError) throw new ApiError("internal_error", "权益状态读取失败", true);
+    const [
+      { data: subscription, error: subError },
+      { data: credits, error: creditError },
+      { data: transactions, error: txError },
+      { data: imageServices, error: svcError },
+    ] = await Promise.all([
+      admin.from("subscriptions").select("tier,status,current_period_end,entitlement_version").eq("user_id", user.id).maybeSingle(),
+      admin.from("user_credits").select("daily_balance,sub_balance,topup_balance").eq("user_id", user.id).maybeSingle(),
+      admin.from("credit_transactions").select("kind,amount,service,created_at").eq("user_id", user.id).order("created_at", { ascending: false }).limit(50),
+      // 桌面端动态生图档位：active 且带 label 的 image_* 服务（label/sort 由 0018 起存 parameters）。
+      admin.from("service_costs").select("service,unit_cost,parameters").eq("active", true).like("service", "image%"),
+    ]);
+    if (subError || creditError || txError || svcError) throw new ApiError("internal_error", "权益状态读取失败", true);
 
     const active = subscription?.status === "active" &&
       (!subscription.current_period_end || Date.parse(subscription.current_period_end) > Date.now());
@@ -81,6 +87,10 @@ Deno.serve(async (request) => {
         topup: credits?.topup_balance ?? 0,
       },
       policy: policyFor(tier),
+      generation_services: (imageServices ?? [])
+        .filter((row) => typeof row.parameters?.label === "string" && row.parameters.label.trim())
+        .sort((a, b) => (a.parameters?.sort ?? 999) - (b.parameters?.sort ?? 999))
+        .map((row) => ({ service: row.service, label: row.parameters.label, credits: row.unit_cost })),
       recent_transactions: (transactions ?? []).map((tx) => ({
         kind: tx.kind,
         amount: tx.amount,

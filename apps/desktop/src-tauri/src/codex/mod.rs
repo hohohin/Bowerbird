@@ -25,8 +25,9 @@ pub mod understand;
 /// 命令层经 [`resolve_gen_provider`] 按 `provider` 参数取实现（AI-PROVIDERS.md §5.2）。
 #[async_trait]
 pub trait GenProvider: Send + Sync {
-    /// provider 标识（落库 `analyses.provider` / `prompts.source_model`）。
-    fn name(&self) -> &'static str;
+    /// provider 标识（落库 `analyses.provider` / `prompts.source_model`）；Cloud 档位
+    /// 为运行时字符串（云端数据驱动），本地 CLI 引擎为固定标识。
+    fn name(&self) -> &str;
 
     /// 能力自述：理解类（chat / caption）仅 codex；generate 两者都有（AI-PROVIDERS.md §4.3）。
     #[allow(dead_code)] // Phase 3 前端 provider 切换 UI 消费；Phase 1/2 仅 provider 自述、暂无调用方
@@ -50,6 +51,8 @@ pub trait GenProvider: Send + Sync {
 ///
 /// - `None | "codex" | "default"` → [`CodexCliProvider`]（默认，当前唯一实现）；
 /// - `"jimeng"` → Phase 2 接入；
+/// - 任意 `bowerbird-cloud*` 前缀 key → [`BowerbirdCloudProvider`]（档位由云端数据驱动，
+///   service 经 [`bowerbird_cloud::cloud_service_for_key`] 解析，遗留 key 同样兼容）；
 /// - 其他 → 报错。
 ///
 /// Phase 1 `None` 直接默认 codex；Phase 3 加全局默认配置后，`None` 改读配置。
@@ -57,16 +60,27 @@ pub fn resolve_gen_provider(
     provider: Option<&str>,
     cloud: Option<(crate::cloud::CloudClient, crate::cloud::AuthClient)>,
 ) -> Result<Box<dyn GenProvider>, AppError> {
-    match provider.unwrap_or("codex") {
+    let provider = provider.unwrap_or("codex");
+    match provider {
         "codex" | "default" => Ok(Box::new(CodexCliProvider::default())),
         "jimeng" => Ok(Box::new(jimeng::DreaminaCliProvider::default())),
-        "bowerbird-cloud" => {
+        key if key.starts_with("bowerbird-cloud") => {
             let (client, auth) =
                 cloud.ok_or_else(|| AppError::Cloud("账号服务尚未初始化".into()))?;
+            let service = bowerbird_cloud::cloud_service_for_key(key);
             Ok(Box::new(bowerbird_cloud::BowerbirdCloudProvider::new(
-                client, auth,
+                client,
+                auth,
+                key.to_string(),
+                service,
             )))
         }
         other => Err(AppError::Codex(format!("未知 provider: {other}").into())),
     }
+}
+
+/// provider key 是否为 Cloud 生图变体（Pro / Lite / Fast）。
+pub fn is_cloud_generation_provider(provider: Option<&str>) -> bool {
+    provider
+        .is_some_and(|p| p.starts_with("bowerbird-cloud"))
 }
