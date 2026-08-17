@@ -16,6 +16,39 @@ const STAGE_LABEL: Record<string, string> = {
 
 type SectionKey = "system" | "account" | "models" | "personalization" | "about";
 
+/**
+ * 设置项 ON/OFF 滑块开关（设置里的布尔项统一用它，右对齐在调节项右侧；不用复选框）。
+ * button + role="switch"，键盘可切换。
+ */
+function Toggle({
+  checked,
+  onChange,
+  disabled,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={`relative h-5 w-9 shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+        checked ? "bg-accent" : "bg-panel2 hover:bg-edge"
+      }`}
+    >
+      <span
+        className={`absolute top-0.5 size-4 rounded-full bg-white shadow transition-[left] ${
+          checked ? "left-[18px]" : "left-0.5"
+        }`}
+      />
+    </button>
+  );
+}
+
 const SECTIONS: { key: SectionKey; label: string }[] = [
   { key: "system", label: "系统设置" },
   { key: "account", label: "账号管理" },
@@ -28,7 +61,8 @@ const SECTIONS: { key: SectionKey; label: string }[] = [
  * 设置面板（约定 13 全屏 Modal 形态）：常见两列式——左侧分区导航，右侧具体内容。
  *
  * 五分区：系统设置（素材库位置 / 浏览器扩展 / 新手教程）、账号管理（账号名 / 等级与升级 / 积分明细）、
- * 模型设置（codex CLI / 即梦 CLI / 默认反推模型 / 入库自动反推）、个性化与记忆（创作板 Shift 引入开关）、
+ * 模型设置（codex CLI / 即梦 CLI / 默认反推模型 / 入库自动反推）、个性化与记忆（创作板 Shift 引入
+ * / 全局素材隐藏项目素材开关），
  * 关于我们（当前版本 / 前往官网）。原「环境状态」总览已删除，各引导由对应分区直接唤起。
  * 由侧栏底部账号区「设置」唤起。点背景 / ✕ 关闭。
  */
@@ -132,6 +166,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
       library_root: settings?.library_root ?? null,
       cloud_auto_understand: settings?.cloud_auto_understand ?? false,
       board_shift_pick: settings?.board_shift_pick ?? false,
+      hide_project_assets: settings?.hide_project_assets ?? false,
     });
   };
 
@@ -568,20 +603,17 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
 
               {/* 入库时自动反推 */}
               <div className="settings-card px-3 py-2.5">
-                <label className="flex cursor-pointer items-center gap-2 select-none">
-                  <input
-                    type="checkbox"
+                <div className="flex items-center justify-between">
+                  <span className="text-ink">入库时自动反推</span>
+                  <Toggle
                     checked={autoAnalyzeOnIngest}
-                    onChange={(e) => {
-                      const v = e.target.checked;
+                    onChange={(v) => {
                       setAutoAnalyzeOnIngest(v);
                       commitSettings(v, promptText);
                     }}
-                    className="size-4 accent-accent"
                   />
-                  <span className="text-ink">入库时自动反推</span>
-                </label>
-                <p className="mt-1 ml-6 text-xs text-muted">
+                </div>
+                <p className="mt-1 text-xs text-muted">
                   开启后，新素材入库时自动调用当前账号可用的理解引擎进行反推描述与自动重命名。
                 </p>
 
@@ -605,37 +637,56 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   </div>
                 )}
                 {/* 云端理解授权勾选留在「入库时自动反推」里（本质是入库行为开关）。 */}
-                <label className="mt-3 flex cursor-pointer items-start gap-2 border-t border-edge pt-2 text-[11px] text-muted">
-                  <input
-                    type="checkbox"
+                <div className="mt-3 flex items-start justify-between gap-2 border-t border-edge pt-2 text-[11px] text-muted">
+                  <span className="min-w-0">
+                    允许入库自动分析时，把新图片临时发送到 Bowerbird Cloud
+                    理解（默认关闭；请求结束不保存图片）
+                  </span>
+                  <Toggle
                     checked={settings?.cloud_auto_understand ?? false}
-                    onChange={(e) => settings && void updateSettings({ ...settings, cloud_auto_understand: e.target.checked })}
+                    onChange={(v) =>
+                      settings && void updateSettings({ ...settings, cloud_auto_understand: v })
+                    }
                     disabled={!cloudAuth?.cloud_available}
-                    className="mt-0.5 size-3.5 accent-accent"
                   />
-                  <span>允许入库自动分析时，把新图片临时发送到 Bowerbird Cloud 理解（默认关闭；请求结束不保存图片）</span>
-                </label>
+                </div>
               </div>
             </>
           )}
 
           {section === "personalization" && (
-            <div className="settings-card px-3 py-2.5">
-              <label className="flex cursor-pointer items-center gap-2 select-none">
-                <input
-                  type="checkbox"
-                  checked={settings?.board_shift_pick ?? false}
-                  onChange={(e) =>
-                    settings && void updateSettings({ ...settings, board_shift_pick: e.target.checked })
-                  }
-                  className="size-4 accent-accent"
-                />
-                <span className="text-ink">创作板打开时，Shift + 左键点击素材引入</span>
-              </label>
-              <p className="mt-1 ml-6 text-xs text-muted">
-                开启后，在创作板激活期间需按住 Shift 再点击素材，才会作为参考素材引入，避免误触；关闭则点击素材直接引入。
-              </p>
-            </div>
+            <>
+              <div className="settings-card px-3 py-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-ink">创作板打开时，Shift + 左键点击素材引入</span>
+                  <Toggle
+                    checked={settings?.board_shift_pick ?? false}
+                    onChange={(v) =>
+                      settings && void updateSettings({ ...settings, board_shift_pick: v })
+                    }
+                  />
+                </div>
+                <p className="mt-1 text-xs text-muted">
+                  开启后，在创作板激活期间需按住 Shift
+                  再点击素材，才会作为参考素材引入，避免误触；关闭则点击素材直接引入。
+                </p>
+              </div>
+
+              <div className="settings-card px-3 py-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-ink">在全局素材中隐藏项目素材</span>
+                  <Toggle
+                    checked={settings?.hide_project_assets ?? false}
+                    onChange={(v) =>
+                      settings && void updateSettings({ ...settings, hide_project_assets: v })
+                    }
+                  />
+                </div>
+                <p className="mt-1 text-xs text-muted">
+                  开启后，全局素材视图的瀑布流只显示未加入任何项目的素材（搜索、颜色、收藏夹、智能筛选同样生效）；进入项目后仍显示该项目素材。
+                </p>
+              </div>
+            </>
           )}
 
           {section === "about" && (

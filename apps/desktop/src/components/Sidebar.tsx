@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Library, PanelLeftClose, PanelLeftOpen, Sparkles } from "lucide-react";
 import { useStore } from "../store";
 import { api } from "../lib/api";
@@ -18,12 +18,24 @@ const COLOR_LABELS: Record<string, string> = {
 };
 
 const SIDEBAR_COLLAPSED_KEY = "bowerbird.sidebarCollapsed";
+const SIDEBAR_WIDTH_KEY = "bowerbird.sidebarWidth";
+// 拖拽调宽下限：低于此宽度文件夹名/操作按钮放不下（媒体查询最窄 162px，取整 160）。
+const SIDEBAR_MIN_WIDTH = 160;
 
 function loadSidebarCollapsed() {
   try {
     return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1";
   } catch {
     return false;
+  }
+}
+
+function loadSidebarWidth() {
+  try {
+    const n = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
+    return Number.isFinite(n) && n >= SIDEBAR_MIN_WIDTH ? n : null;
+  } catch {
+    return null;
   }
 }
 
@@ -65,6 +77,10 @@ export function Sidebar() {
   const [smartKind, setSmartKind] = useState<"source" | "ext">("source");
   const [smartValue, setSmartValue] = useState("");
   const [collapsed, setCollapsed] = useState(loadSidebarCollapsed);
+  // 自定义宽度（null = 用 CSS 默认 198px/媒体查询宽度）。拖拽右缘把手调整，持久化到 localStorage。
+  const [width, setWidth] = useState<number | null>(loadSidebarWidth);
+  const [resizing, setResizing] = useState<{ startX: number; startWidth: number } | null>(null);
+  const sidebarRef = useRef<HTMLElement>(null);
 
   const palette = useStore((s) => s.palette);
   const normalFolders = folders.filter(
@@ -88,8 +104,57 @@ export function Sidebar() {
   }
 
   useEffect(() => {
-    if (tourActive && (tourStep === 1 || tourStep === 2)) setCollapsed(false);
+    if (tourActive && (tourStep === 1 || tourStep === 2 || tourStep === 3)) setCollapsed(false);
   }, [tourActive, tourStep]);
+
+  /** 宽度夹取：最小 160px，最大不超过主面板（侧栏所在 flex 行）的 1/4。 */
+  function clampSidebarWidth(w: number | null) {
+    if (w == null) return null;
+    const rowWidth = sidebarRef.current?.parentElement?.clientWidth ?? window.innerWidth;
+    const max = Math.max(SIDEBAR_MIN_WIDTH, Math.round(rowWidth / 4));
+    return Math.min(max, Math.max(SIDEBAR_MIN_WIDTH, Math.round(w)));
+  }
+
+  function startResize(e: React.PointerEvent<HTMLDivElement>) {
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setResizing({ startX: e.clientX, startWidth: sidebarRef.current?.offsetWidth ?? 198 });
+  }
+
+  function moveResize(e: React.PointerEvent<HTMLDivElement>) {
+    if (!resizing) return;
+    setWidth(clampSidebarWidth(resizing.startWidth + e.clientX - resizing.startX));
+  }
+
+  function endResize() {
+    if (!resizing) return;
+    setResizing(null);
+    if (width != null) {
+      try {
+        localStorage.setItem(SIDEBAR_WIDTH_KEY, String(width));
+      } catch {
+        // ignore storage errors
+      }
+    }
+  }
+
+  const isResizing = resizing !== null;
+
+  // 拖拽期间：全局锁定 col-resize 光标 + 禁止选中文本（把手 pointer capture 后事件仍落在页面上）。
+  useEffect(() => {
+    if (!isResizing) return;
+    document.body.classList.add("app-sidebar-resizing");
+    return () => document.body.classList.remove("app-sidebar-resizing");
+  }, [isResizing]);
+
+  // 窗口变化（含首挂载）时把已存宽度重新压回 1/4 上限内。
+  useEffect(() => {
+    const reclamp = () => setWidth((w) => clampSidebarWidth(w));
+    reclamp();
+    window.addEventListener("resize", reclamp);
+    return () => window.removeEventListener("resize", reclamp);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function resetCreate() {
     setCreating("none");
@@ -161,7 +226,11 @@ export function Sidebar() {
   }
 
   return (
-    <aside className="app-sidebar flex shrink-0 flex-col border-r border-edge text-sm">
+    <aside
+      ref={sidebarRef}
+      style={width != null ? { width } : undefined}
+      className="app-sidebar flex shrink-0 flex-col border-r border-edge text-sm"
+    >
       <button
         type="button"
         onClick={() => setSidebarCollapsed(true)}
@@ -185,20 +254,6 @@ export function Sidebar() {
             title="新建文件夹"
           >
             + 文件夹
-          </button>
-          <button
-            onClick={() => (creating === "smart" ? resetCreate() : startCreate("smart"))}
-            className="rounded text-accent hover:opacity-80"
-            title="新建智能文件夹"
-          >
-            + 智能
-          </button>
-          <button
-            onClick={() => (creating === "collection" ? resetCreate() : startCreate("collection"))}
-            className="rounded text-accent hover:opacity-80"
-            title="新建收藏夹"
-          >
-            + 收藏
           </button>
         </span>
       </div>
@@ -425,6 +480,18 @@ export function Sidebar() {
         {currentProjectId ? "Project assets" : "Library assets"} · {total}
       </div>
       <SidebarAccount />
+      {/* 右缘拖拽把手：调侧栏宽度（最小 160px，最大主面板 1/4） */}
+      <div
+        className={`app-sidebar-resizer ${isResizing ? "is-active" : ""}`}
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="调整侧栏宽度"
+        title="拖动调整侧栏宽度"
+        onPointerDown={startResize}
+        onPointerMove={moveResize}
+        onPointerUp={endResize}
+        onPointerCancel={endResize}
+      />
     </aside>
   );
 }

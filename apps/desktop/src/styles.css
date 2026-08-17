@@ -418,6 +418,42 @@ textarea:focus-visible,
   border-radius: 3px;
 }
 
+/* 侧栏右缘拖拽把手：热区跨在边线上，hover/拖动时亮出 accent 竖线 */
+.app-sidebar-resizer {
+  position: absolute;
+  z-index: 4;
+  top: 0;
+  bottom: 0;
+  right: -3px;
+  width: 7px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.app-sidebar-resizer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 1px;
+  background: transparent;
+  transition: background-color 120ms ease, box-shadow 120ms ease;
+}
+
+.app-sidebar-resizer:hover::after,
+.app-sidebar-resizer.is-active::after {
+  background: #4868ff;
+  box-shadow: 0 0 6px rgb(72 104 255 / 55%);
+}
+
+/* 拖拽期间全局锁定光标 + 禁止选中文本 */
+body.app-sidebar-resizing,
+body.app-sidebar-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
 .app-workspace {
   min-width: 0;
   background-color: #100e0e;
@@ -497,6 +533,21 @@ textarea:focus-visible,
 
 .generation-glow-button:disabled::before {
   opacity: 0.26;
+  animation: none;
+}
+
+/* 关闭态（工具栏 Agent 开关等 toggle 复用发光按钮样式时）：光晕收敛、文字降级。 */
+.generation-glow-button.is-off {
+  color: #969692;
+}
+
+.generation-glow-button.is-off::before {
+  opacity: 0.2;
+  animation: none;
+}
+
+.generation-glow-button.is-off:hover:not(:disabled)::before {
+  opacity: 0.5;
   animation: none;
 }
 

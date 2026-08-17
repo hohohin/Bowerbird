@@ -135,6 +135,7 @@ export function ProjectSection() {
           return (
             <div
               key={project.id}
+              data-tour={active ? "active-project" : undefined}
               className={`group rounded-lg px-2.5 py-2 ${
                 active ? "bg-accent/10 ring-1 ring-accent/40" : "hover:bg-panel2"
               }`}

@@ -335,12 +335,26 @@ impl Database {
         limit: i64,
         offset: i64,
     ) -> AppResult<Vec<Asset>> {
+        self.list_assets_ex(folder_id, project_id, false, limit, offset)
+    }
+
+    /// 同 [list_assets]；hide_in_projects = true 时排除已加入任一项目的素材
+    /// （设置「在全局素材中隐藏项目素材」。仅全局视图传 true——项目视图本来就只显示项目素材）。
+    pub fn list_assets_ex(
+        &self,
+        folder_id: Option<&str>,
+        project_id: Option<&str>,
+        hide_in_projects: bool,
+        limit: i64,
+        offset: i64,
+    ) -> AppResult<Vec<Asset>> {
         if let Some(fid) = folder_id {
             if let Some(folder) = self.get_folder(fid)? {
                 if folder.kind.as_deref() == Some("smart") {
-                    return self.list_assets_smart(
+                    return self.list_assets_smart_ex(
                         folder.smart_query.as_deref().unwrap_or(""),
                         project_id,
+                        hide_in_projects,
                         limit,
                         offset,
                     );
@@ -353,11 +367,13 @@ impl Database {
              WHERE (?1 IS NULL OR folder_id IS ?1) \
              AND (?2 IS NULL OR EXISTS(SELECT 1 FROM project_assets pa \
                  WHERE pa.asset_id = assets.id AND pa.project_id IS ?2)) \
-             ORDER BY created_at DESC LIMIT ?3 OFFSET ?4"
+             AND (?3 = 0 OR ?2 IS NOT NULL OR NOT EXISTS(SELECT 1 FROM project_assets pa \
+                 WHERE pa.asset_id = assets.id)) \
+             ORDER BY created_at DESC LIMIT ?4 OFFSET ?5"
         );
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(
-            rusqlite::params![folder_id, project_id, limit, offset],
+            rusqlite::params![folder_id, project_id, hide_in_projects, limit, offset],
             asset_from_row,
         )?;
         let mut out = Vec::new();
@@ -368,12 +384,23 @@ impl Database {
     }
 
     pub fn count_assets(&self, project_id: Option<&str>) -> AppResult<i64> {
+        self.count_assets_ex(project_id, false)
+    }
+
+    /// 同 [count_assets]；hide_in_projects = true 时只数未加入任一项目的素材。
+    pub fn count_assets_ex(
+        &self,
+        project_id: Option<&str>,
+        hide_in_projects: bool,
+    ) -> AppResult<i64> {
         let conn = self.conn.lock().unwrap();
         let n: i64 = conn.query_row(
             "SELECT COUNT(*) FROM assets a WHERE (?1 IS NULL OR EXISTS(\
                SELECT 1 FROM project_assets pa WHERE pa.asset_id = a.id AND pa.project_id IS ?1\
+             )) AND (?2 = 0 OR ?1 IS NOT NULL OR NOT EXISTS(\
+               SELECT 1 FROM project_assets pa WHERE pa.asset_id = a.id\
              ))",
-            rusqlite::params![project_id],
+            rusqlite::params![project_id, hide_in_projects],
             |r| r.get(0),
         )?;
         Ok(n)
@@ -730,6 +757,18 @@ impl Database {
         limit: i64,
         offset: i64,
     ) -> AppResult<Vec<Asset>> {
+        self.list_assets_by_collection_ex(collection_id, project_id, false, limit, offset)
+    }
+
+    /// 同 [list_assets_by_collection]；hide_in_projects = true 时排除已加入任一项目的素材。
+    pub fn list_assets_by_collection_ex(
+        &self,
+        collection_id: &str,
+        project_id: Option<&str>,
+        hide_in_projects: bool,
+        limit: i64,
+        offset: i64,
+    ) -> AppResult<Vec<Asset>> {
         let conn = self.conn.lock().unwrap();
         let sql = format!(
             "SELECT {ASSET_COLS_A} FROM assets a \
@@ -737,11 +776,13 @@ impl Database {
              WHERE ac.folder_id = ?1 \
              AND (?2 IS NULL OR EXISTS(SELECT 1 FROM project_assets pa \
                  WHERE pa.asset_id = a.id AND pa.project_id IS ?2)) \
+             AND (?5 = 0 OR ?2 IS NOT NULL OR NOT EXISTS(SELECT 1 FROM project_assets pa \
+                 WHERE pa.asset_id = a.id)) \
              ORDER BY a.created_at DESC LIMIT ?3 OFFSET ?4"
         );
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(
-            rusqlite::params![collection_id, project_id, limit, offset],
+            rusqlite::params![collection_id, project_id, limit, offset, hide_in_projects],
             asset_from_row,
         )?;
         let mut out = Vec::new();
@@ -808,6 +849,18 @@ impl Database {
         limit: i64,
         offset: i64,
     ) -> AppResult<Vec<Asset>> {
+        self.list_assets_smart_ex(query, project_id, false, limit, offset)
+    }
+
+    /// 同 [list_assets_smart]；hide_in_projects = true 时排除已加入任一项目的素材。
+    pub fn list_assets_smart_ex(
+        &self,
+        query: &str,
+        project_id: Option<&str>,
+        hide_in_projects: bool,
+        limit: i64,
+        offset: i64,
+    ) -> AppResult<Vec<Asset>> {
         let conn = self.conn.lock().unwrap();
         if let Some(name) = query.strip_prefix("tag:") {
             let sql = format!(
@@ -815,11 +868,13 @@ impl Database {
                    SELECT at.asset_id FROM asset_tags at JOIN tags t ON t.id = at.tag_id WHERE t.name = ?4\
                  ) AND (?3 IS NULL OR EXISTS(SELECT 1 FROM project_assets pa \
                    WHERE pa.asset_id = assets.id AND pa.project_id IS ?3)) \
+                 AND (?5 = 0 OR ?3 IS NOT NULL OR NOT EXISTS(SELECT 1 FROM project_assets pa \
+                   WHERE pa.asset_id = assets.id)) \
                  ORDER BY created_at DESC LIMIT ?1 OFFSET ?2"
             );
             let mut stmt = conn.prepare(&sql)?;
             let rows = stmt.query_map(
-                rusqlite::params![limit, offset, project_id, name],
+                rusqlite::params![limit, offset, project_id, name, hide_in_projects],
                 asset_from_row,
             )?;
             let mut out = Vec::new();
@@ -835,11 +890,15 @@ impl Database {
                 "SELECT {ASSET_COLS} FROM assets WHERE generation_session_id IS NOT NULL \
                  AND (?3 IS NULL OR EXISTS(SELECT 1 FROM project_assets pa \
                    WHERE pa.asset_id = assets.id AND pa.project_id IS ?3)) \
+                 AND (?4 = 0 OR ?3 IS NOT NULL OR NOT EXISTS(SELECT 1 FROM project_assets pa \
+                   WHERE pa.asset_id = assets.id)) \
                  ORDER BY created_at DESC LIMIT ?1 OFFSET ?2"
             );
             let mut stmt = conn.prepare(&sql)?;
-            let rows =
-                stmt.query_map(rusqlite::params![limit, offset, project_id], asset_from_row)?;
+            let rows = stmt.query_map(
+                rusqlite::params![limit, offset, project_id, hide_in_projects],
+                asset_from_row,
+            )?;
             let mut out = Vec::new();
             for r in rows {
                 out.push(r?);
@@ -857,11 +916,13 @@ impl Database {
             "SELECT {ASSET_COLS} FROM assets WHERE {cond} \
              AND (?4 IS NULL OR EXISTS(SELECT 1 FROM project_assets pa \
                WHERE pa.asset_id = assets.id AND pa.project_id IS ?4)) \
+             AND (?5 = 0 OR ?4 IS NOT NULL OR NOT EXISTS(SELECT 1 FROM project_assets pa \
+               WHERE pa.asset_id = assets.id)) \
              ORDER BY created_at DESC LIMIT ?1 OFFSET ?2"
         );
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(
-            rusqlite::params![limit, offset, val, project_id],
+            rusqlite::params![limit, offset, val, project_id, hide_in_projects],
             asset_from_row,
         )?;
         let mut out = Vec::new();
@@ -1018,6 +1079,17 @@ impl Database {
         project_id: Option<&str>,
         limit: i64,
     ) -> AppResult<Vec<Asset>> {
+        self.search_assets_ex(query, project_id, false, limit)
+    }
+
+    /// 同 [search_assets]；hide_in_projects = true 时排除已加入任一项目的素材。
+    pub fn search_assets_ex(
+        &self,
+        query: &str,
+        project_id: Option<&str>,
+        hide_in_projects: bool,
+        limit: i64,
+    ) -> AppResult<Vec<Asset>> {
         // 分词：`-` 前缀为排除词；词内字符按字面匹配（LIKE 转义 % _ \）。
         let like = |t: &str| {
             format!(
@@ -1076,11 +1148,15 @@ impl Database {
              WHERE {} \
              AND (?{} IS NULL OR EXISTS(SELECT 1 FROM project_assets pf \
                  WHERE pf.asset_id = a.id AND pf.project_id IS ?{})) \
+             AND (?{} = 0 OR ?{} IS NOT NULL OR NOT EXISTS(SELECT 1 FROM project_assets pg \
+                 WHERE pg.asset_id = a.id)) \
              ORDER BY a.created_at DESC LIMIT ?{}",
             conds.join(" AND "),
             n + 1,
             n + 1,
-            n + 2
+            n + 2,
+            n + 1,
+            n + 3
         );
         let mut vals: Vec<rusqlite::types::Value> = patterns
             .into_iter()
@@ -1091,6 +1167,7 @@ impl Database {
                 .map(|p| rusqlite::types::Value::from(p.to_string()))
                 .unwrap_or(rusqlite::types::Value::Null),
         );
+        vals.push(rusqlite::types::Value::from(hide_in_projects));
         vals.push(rusqlite::types::Value::from(limit));
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(&sql)?;
@@ -1543,6 +1620,19 @@ impl Database {
         limit: i64,
         offset: i64,
     ) -> AppResult<Vec<Asset>> {
+        self.list_assets_by_color_ex(folder_id, project_id, bucket, false, limit, offset)
+    }
+
+    /// 同 [list_assets_by_color]；hide_in_projects = true 时排除已加入任一项目的素材。
+    pub fn list_assets_by_color_ex(
+        &self,
+        folder_id: Option<&str>,
+        project_id: Option<&str>,
+        bucket: &str,
+        hide_in_projects: bool,
+        limit: i64,
+        offset: i64,
+    ) -> AppResult<Vec<Asset>> {
         let conn = self.conn.lock().unwrap();
         let sql = format!(
             "SELECT {ASSET_COLS} FROM assets \
@@ -1550,11 +1640,13 @@ impl Database {
              AND (?4 IS NULL OR EXISTS(SELECT 1 FROM project_assets pa \
                WHERE pa.asset_id = assets.id AND pa.project_id IS ?4)) \
              AND id IN (SELECT asset_id FROM asset_colors WHERE bucket = ?5) \
+             AND (?6 = 0 OR ?4 IS NOT NULL OR NOT EXISTS(SELECT 1 FROM project_assets pa \
+               WHERE pa.asset_id = assets.id)) \
              ORDER BY created_at DESC LIMIT ?1 OFFSET ?2"
         );
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(
-            rusqlite::params![limit, offset, folder_id, project_id, bucket],
+            rusqlite::params![limit, offset, folder_id, project_id, bucket, hide_in_projects],
             asset_from_row,
         )?;
         let mut out = Vec::new();
@@ -2434,6 +2526,38 @@ mod tests {
         assert_eq!(search.len(), 1);
         assert_eq!(search[0].id, in_project);
         assert_ne!(outside, in_project);
+    }
+
+    #[test]
+    fn hide_in_projects_filters_global_queries() {
+        let db = db();
+        let in_project = put_asset_at(&db, "cyberpunk-project", 2);
+        let outside = put_asset_at(&db, "cyberpunk-global", 1);
+        db.create_project("p1", "P1", "/tmp/p1", "/tmp/p1", "user").unwrap();
+        db.add_assets_to_project("p1", std::slice::from_ref(&in_project))
+            .unwrap();
+
+        // 全局视图 + hide：只剩未入项目的素材（list / count / search / smart / color）。
+        let list = db.list_assets_ex(None, None, true, 100, 0).unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].id, outside);
+        assert_eq!(db.count_assets_ex(None, true).unwrap(), 1);
+        let search = db.search_assets_ex("cyberpunk", None, true, 100).unwrap();
+        assert_eq!(search.len(), 1);
+        assert_eq!(search[0].id, outside);
+        let smart = db.list_assets_smart_ex("", None, true, 100, 0).unwrap();
+        assert_eq!(smart.len(), 1);
+        assert_eq!(smart[0].id, outside);
+
+        // 项目视图不受 hide 影响：仍显示项目素材。
+        let list = db.list_assets_ex(None, Some("p1"), true, 100, 0).unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].id, in_project);
+        assert_eq!(db.count_assets_ex(Some("p1"), true).unwrap(), 1);
+
+        // hide=false：行为与旧签名一致（全局 2 / 项目 1）。
+        assert_eq!(db.list_assets_ex(None, None, false, 100, 0).unwrap().len(), 2);
+        assert_eq!(db.count_assets_ex(None, false).unwrap(), 2);
     }
 
     #[test]

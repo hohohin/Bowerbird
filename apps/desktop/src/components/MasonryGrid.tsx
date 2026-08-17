@@ -6,7 +6,51 @@ import { useStore } from "../store";
 import { api } from "../lib/api";
 import { notifyError, notifySuccess } from "../lib/notify";
 import { setDragAssets } from "../lib/dragPayload";
-import type { Asset } from "../lib/types";
+import type { Asset, GenJob } from "../lib/types";
+
+/**
+ * 会话级分组合并：后端 listGenerationGroups 按 generation_session_id 分组，「重新编辑」
+ * 产生的每个版本是新 session → 会各占一张卡。这里把同 conversationId 的各版本产出在前端
+ * 合成一组（轮播呈现），组内按 job 创建顺序 + turn 顺序排列，末位 = 最新版本产出。
+ * 仅覆盖本会话期内 store 里已知 conversationId 映射的资产，其余沿用后端分组。
+ */
+function mergeConversationGroups(
+  base: Record<string, Asset[]>,
+  assets: Asset[],
+  genJobs: Record<string, GenJob>,
+  genJobOrder: string[]
+): Record<string, Asset[]> {
+  const hasConversation = Object.values(genJobs).some(
+    (j) => j.conversationId && j.conversationId !== j.id
+  );
+  if (!hasConversation) return base;
+  const byStorePath = new Map(assets.map((a) => [a.store_path ?? "", a]));
+  const convAssets = new Map<string, Asset[]>();
+  for (const jid of genJobOrder) {
+    const j = genJobs[jid];
+    if (!j) continue;
+    const key = j.conversationId ?? j.id;
+    for (const t of j.turns) {
+      for (const p of t.images) {
+        const a = byStorePath.get(p);
+        if (a) {
+          let list = convAssets.get(key);
+          if (!list) {
+            list = [];
+            convAssets.set(key, list);
+          }
+          list.push(a);
+        }
+      }
+    }
+  }
+  const next = { ...base };
+  for (const list of convAssets.values()) {
+    if (list.length < 2) continue;
+    for (const a of list) next[a.id] = list;
+  }
+  return next;
+}
 
 function parseColors(c: string | null | undefined): string[] {
   if (!c) return [];
@@ -389,6 +433,9 @@ export function MasonryGrid() {
   const setSmartFilter = useStore((s) => s.setSmartFilter);
   const setColorFilter = useStore((s) => s.setColorFilter);
   const [groupMap, setGroupMap] = useState<Record<string, Asset[]>>({});
+  // 会话级合并（「重新编辑」版本产物并入同会话轮播组）所需的 job 数据。
+  const genJobs = useStore((s) => s.genJobs);
+  const genJobOrder = useStore((s) => s.genJobOrder);
   // 创作板 chip 点击 focus：滚动定位到该素材并闪烁高亮。读完即清 store，便于连续 focus 同一张。
   const flashTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => {
@@ -428,7 +475,23 @@ export function MasonryGrid() {
     };
   }, [assets, currentProjectId]);
 
-  const filtered = assets;
+  // 在后端分组之上做会话级合并：同 conversationId 的「重新编辑」版本产物并入同一轮播组。
+  const mergedGroupMap = useMemo(
+    () => mergeConversationGroups(groupMap, assets, genJobs, genJobOrder),
+    [groupMap, assets, genJobs, genJobOrder]
+  );
+
+  // 渲染列表：合并组只保留末位成员（最新版本产出）一张卡，其余成员经轮播查看。
+  // 普通 session 组后端本就只列最新一张，此过滤对它们是恒等（末位即列表里那张）。
+  const filtered = useMemo(
+    () =>
+      assets.filter((a) => {
+        const g = mergedGroupMap[a.id];
+        if (!g || g.length < 2) return true;
+        return g[g.length - 1]?.id === a.id;
+      }),
+    [assets, mergedGroupMap]
+  );
 
   // 拖入外部图片文件 → dataURL → importImageBytes（source=imported，进当前 project scope）。
   // 串行导入（失败隔离）：单张失败不中断后续，错误打控制台。
@@ -546,7 +609,7 @@ export function MasonryGrid() {
               内层 columns 不设高度，内容平分到 N 列后纵向增长，由本层竖向滚动。 */}
           <div className="columns-2 gap-2 p-2 md:columns-3 lg:columns-4 xl:columns-5">
             {filtered.map((a) => (
-              <Thumb key={a.id} asset={a} group={groupMap[a.id]} />
+              <Thumb key={a.id} asset={a} group={mergedGroupMap[a.id]} />
             ))}
           </div>
         </div>

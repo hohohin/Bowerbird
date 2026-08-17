@@ -43,6 +43,10 @@ pub struct AppSettings {
     #[serde(default)]
     pub board_shift_pick: bool,
 
+    /// 全局素材视图中隐藏已加入任一项目的素材（瀑布流只显示未入项目的素材）。默认 false。
+    #[serde(default)]
+    pub hide_project_assets: bool,
+
     /// 首启预置示例图是否已注入完成。true = 不再重灌（配合 count_assets==0 双 gate）。
     #[serde(default)]
     pub samples_seeded: bool,
@@ -56,6 +60,7 @@ impl Default for AppSettings {
             library_root: None,
             cloud_auto_understand: false,
             board_shift_pick: false,
+            hide_project_assets: false,
             samples_seeded: false,
         }
     }

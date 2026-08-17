@@ -17,25 +17,29 @@ const STEP_DEFS: Record<number, StepDef> = {
       "tips：后续您也可以像这样选择您的素材文件夹，一键导入所有素材并建立为项目，建议文件夹内只存放图片素材。",
   },
   3: {
-    body: "项目建好了，预设图已就位。右键点最上面这张图，选「复用生成提示词」。",
+    side: "right",
+    body: "当前显示则为进入了项目的状态，采集、生成的图片默认归为该项目。点击按钮则退出项目，返回全局素材。",
   },
   4: {
+    body: "项目建好了，预设图已就位。右键点最上面这张图，选「复用生成提示词」。",
+  },
+  5: {
     side: "right",
     body: "点「复用生成提示词」，把它的提示词和参考图带进创作板。",
   },
-  5: {
+  6: {
     body: "你可以像这样，直接用文字和素材写出你的想法——需要素材的时候，在左侧点击想要的素材即可。",
   },
-  6: {
+  7: {
     body: "先点一下编辑框，把光标放进去。",
   },
-  7: {
+  8: {
     body: "再点左侧的这张图片，把它加进编辑框——下方就会出现它的可选维度。",
   },
-  8: {
+  9: {
     body: "经过分析的素材会具备不同的维度，你可以通过维度来更好地控制生成时的参数。对于未经分析的素材，你也可以直接文字描述想要参考/控制的内容。",
   },
-  9: {
+  10: {
     body: "点击「构图」维度，添加到编辑框中。",
   },
 };
@@ -92,13 +96,14 @@ function editorTextEndCoords(): { x: number; y: number } | null {
 /**
  * 新手引导 tour（阶段 B，替代首启自动注入）。自写 spotlight（box-shadow 挖洞 z-70 + pulse ring
  * + 气泡 z-71）+ 虚拟鼠标（z-72，移动到目标 + 脉冲点击示意），零依赖。步骤：
- * 0 入口弹窗 → 1 新建项目 → 2 导入中 → 3 首图右键 → 4 菜单复用 → 5 编辑框 →
- * 6 虚拟鼠标示意点编辑框（用户真点）→ 7 虚拟鼠标示意点 preset-05（用户真点 → 插入 chip、chips 出现）
- * → 8 高亮可选维度面板 → 9 虚拟鼠标示意点「构图」chip（用户真点）→ 10 结束语。
+ * 0 入口弹窗 → 1 新建项目 → 2 导入中 → 3 进入项目状态（侧栏激活项目）→ 4 首图右键 →
+ * 5 菜单复用 → 6 编辑框 → 7 虚拟鼠标示意点编辑框（用户真点）→ 8 虚拟鼠标示意点 preset-05
+ * （用户真点 → 插入 chip、chips 出现）→ 9 高亮可选维度面板 → 10 虚拟鼠标示意点「构图」chip
+ * （用户真点）→ 11 结束语。
  * 推进：1→2 ProjectSection.create 选完文件夹；2→3【下一步】（tourImported 后）；
- * 3→4 右键首图（contextMenu）；4→5 点复用（boardOpen）；5→6【下一步】；
- * 6→7 用户真点编辑框；7→8 用户真点瀑布流图（board-asset-picked）；8→9【下一步】；
- * 9→10 用户真点维度 chip（CreationBoard 钩子）。
+ * 3→4【下一步】；4→5 右键首图（contextMenu）；5→6 点复用（boardOpen）；6→7【下一步】；
+ * 7→8 用户真点编辑框；8→9 用户真点瀑布流图（board-asset-picked）；9→10【下一步】；
+ * 10→11 用户真点维度 chip（CreationBoard 钩子）。
  */
 export function OnboardingTour() {
   const tourActive = useStore((s) => s.tourActive);
@@ -109,20 +114,21 @@ export function OnboardingTour() {
   const boardOpen = useStore((s) => s.boardOpen);
   const assets = useStore((s) => s.assets);
   const contextMenu = useStore((s) => s.contextMenu);
-  // tour step 3 锁定「罂粟夜宴」（生成图，有可复用的 prompt_raw）；不依赖 assets[0]（排序不定）。
+  // tour step 4 锁定「罂粟夜宴」（生成图，有可复用的 prompt_raw）；不依赖 assets[0]（排序不定）。
   const yysyAsset = assets.find((a) => a.name === "罂粟夜宴");
   const [rect, setRect] = useState<DOMRect | null>(null);
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
 
   const selector: string | null = (() => {
-    if (!tourActive || tourStep <= 0 || tourStep >= 10) return null;
+    if (!tourActive || tourStep <= 0 || tourStep >= 11) return null;
     if (tourStep === 1 || tourStep === 2) return `[data-tour="new-project"]`;
-    if (tourStep === 3) return yysyAsset ? `#asset-${yysyAsset.id}` : null;
-    if (tourStep === 4) return `[data-tour="ctx-reuse-gen"]`;
-    if (tourStep === 5 || tourStep === 6) return `[data-tour="creation-editor"]`;
-    if (tourStep === 7) return `[data-origin*="preset-05"]`;
-    if (tourStep === 8) return `[data-tour="creation-keywords"]`;
-    if (tourStep === 9) return `[data-dim="构图"]`;
+    if (tourStep === 3) return `[data-tour="active-project"]`;
+    if (tourStep === 4) return yysyAsset ? `#asset-${yysyAsset.id}` : null;
+    if (tourStep === 5) return `[data-tour="ctx-reuse-gen"]`;
+    if (tourStep === 6 || tourStep === 7) return `[data-tour="creation-editor"]`;
+    if (tourStep === 8) return `[data-origin*="preset-05"]`;
+    if (tourStep === 9) return `[data-tour="creation-keywords"]`;
+    if (tourStep === 10) return `[data-dim="构图"]`;
     return null;
   })();
 
@@ -149,24 +155,24 @@ export function OnboardingTour() {
     };
   }, [selector, assets, boardOpen]);
 
-  // 虚拟鼠标坐标：step 6 指向编辑框文本末尾（光标应落处）；7/9 指向目标元素中心。
+  // 虚拟鼠标坐标：step 7 指向编辑框文本末尾（光标应落处）；8/10 指向目标元素中心。
   useLayoutEffect(() => {
-    if (tourStep !== 6 && tourStep !== 7 && tourStep !== 9) {
+    if (tourStep !== 7 && tourStep !== 8 && tourStep !== 10) {
       setCursor(null);
       return;
     }
     const measure = () => {
-      if (tourStep === 6) {
+      if (tourStep === 7) {
         setCursor(editorTextEndCoords());
         return;
       }
-      const sel = tourStep === 7 ? `[data-origin*="preset-05"]` : `[data-dim="构图"]`;
+      const sel = tourStep === 8 ? `[data-origin*="preset-05"]` : `[data-dim="构图"]`;
       const el = document.querySelector(sel) as HTMLElement | null;
       if (!el) {
         setCursor(null);
         return;
       }
-      if (tourStep === 7) {
+      if (tourStep === 8) {
         const r0 = el.getBoundingClientRect();
         if (r0.bottom < 0 || r0.top > window.innerHeight) {
           el.scrollIntoView({ block: "center", behavior: "smooth" });
@@ -192,38 +198,38 @@ export function OnboardingTour() {
     };
   }, [tourStep]);
 
-  // step 3 → 4：用户右键首图打开菜单 → 高亮菜单内「复用生成提示词」。
+  // step 4 → 5：用户右键首图打开菜单 → 高亮菜单内「复用生成提示词」。
   useEffect(() => {
     if (
       tourActive &&
-      tourStep === 3 &&
+      tourStep === 4 &&
       contextMenu &&
       yysyAsset &&
       contextMenu.assetId === yysyAsset.id
     ) {
-      setTourStep(4);
+      setTourStep(5);
     }
   }, [tourActive, tourStep, contextMenu, assets, setTourStep]);
 
-  // step 4 → 5：点「复用生成提示词」→ reusePromptToBoard 开 boardOpen。
+  // step 5 → 6：点「复用生成提示词」→ reusePromptToBoard 开 boardOpen。
   useEffect(() => {
-    if (tourActive && tourStep === 4 && boardOpen) setTourStep(5);
+    if (tourActive && tourStep === 5 && boardOpen) setTourStep(6);
   }, [tourActive, tourStep, boardOpen, setTourStep]);
 
-  // step 6 → 7：用户真实点击编辑框（onClick={focus}）。
+  // step 7 → 8：用户真实点击编辑框（onClick={focus}）。
   useEffect(() => {
-    if (tourStep !== 6) return;
+    if (tourStep !== 7) return;
     const el = document.querySelector(`[data-tour="creation-editor"]`);
     if (!el) return;
-    const onClick = () => setTourStep(7);
+    const onClick = () => setTourStep(8);
     el.addEventListener("click", onClick);
     return () => el.removeEventListener("click", onClick);
   }, [tourStep, setTourStep]);
 
-  // step 7 → 8：用户真实点瀑布流图 → board-asset-picked（MasonryGrid 插 chip）。
+  // step 8 → 9：用户真实点瀑布流图 → board-asset-picked（MasonryGrid 插 chip）。
   useEffect(() => {
-    if (tourStep !== 7) return;
-    const onPick = () => setTourStep(8);
+    if (tourStep !== 8) return;
+    const onPick = () => setTourStep(9);
     window.addEventListener("bowerbird://board-asset-picked", onPick as EventListener);
     return () => window.removeEventListener("bowerbird://board-asset-picked", onPick as EventListener);
   }, [tourStep, setTourStep]);
@@ -256,8 +262,8 @@ export function OnboardingTour() {
     );
   }
 
-  // step 10：结束语居中模态（下半部分列状容器，预留动图/链接教程）。
-  if (tourStep >= 10) {
+  // step 11：结束语居中模态（下半部分列状容器，预留动图/链接教程）。
+  if (tourStep >= 11) {
     return (
       <ModalShell
         title="第一条创作路径已完成"
@@ -299,7 +305,7 @@ export function OnboardingTour() {
   const title = def?.title;
   const side = def?.side ?? "below";
   const bubbleStyle: CSSProperties = rect ? bubblePosition(rect, side) : { top: 120, left: 120 };
-  const awaitClick = tourStep === 6 || tourStep === 7 || tourStep === 9;
+  const awaitClick = tourStep === 7 || tourStep === 8 || tourStep === 10;
 
   return createPortal(
     <>
@@ -350,16 +356,23 @@ export function OnboardingTour() {
               ) : (
                 <span className="text-[11px] text-muted">正在导入…</span>
               )
-            ) : tourStep === 5 ? (
+            ) : tourStep === 3 ? (
               <button
-                onClick={() => setTourStep(6)}
+                onClick={() => setTourStep(4)}
                 className="rounded bg-accent px-3 py-1 text-xs font-medium text-black hover:opacity-90"
               >
                 下一步
               </button>
-            ) : tourStep === 8 ? (
+            ) : tourStep === 6 ? (
               <button
-                onClick={() => setTourStep(9)}
+                onClick={() => setTourStep(7)}
+                className="rounded bg-accent px-3 py-1 text-xs font-medium text-black hover:opacity-90"
+              >
+                下一步
+              </button>
+            ) : tourStep === 9 ? (
+              <button
+                onClick={() => setTourStep(10)}
                 className="rounded bg-accent px-3 py-1 text-xs font-medium text-black hover:opacity-90"
               >
                 下一步

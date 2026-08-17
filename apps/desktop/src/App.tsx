@@ -57,6 +57,8 @@ function App() {
   const detailAssetId = useStore((s) => s.detailAssetId);
   const boardOpen = useStore((s) => s.boardOpen);
   const genEditing = useStore((s) => s.genEditing);
+  // 「隐藏项目素材」等设置在后端命令层生效；订阅 settings 让设置变化后重拉瀑布流。
+  const settings = useStore((s) => s.settings);
   const genPanelOpen = useStore((s) => s.genPanelOpen);
   const setCodexHealth = useStore((s) => s.setCodexHealth);
   const setDreaminaHealth = useStore((s) => s.setDreaminaHealth);
@@ -160,9 +162,10 @@ function App() {
 
   useEffect(() => {
     refresh();
-    // 依赖 currentFolderId / searchQuery / boardOpen / genEditing：切换文件夹、搜索或开关创作板/进入会话编辑时重拉
+    // 依赖 currentFolderId / searchQuery / boardOpen / genEditing / settings：切换文件夹、搜索、
+    // 开关创作板/进入会话编辑、或改了影响列表的设置（如隐藏项目素材）时重拉
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentProjectId, currentFolderId, currentCollectionId, searchQuery, smartFilter, colorFilter, boardOpen, genEditing]);
+  }, [currentProjectId, currentFolderId, currentCollectionId, searchQuery, smartFilter, colorFilter, boardOpen, genEditing, settings]);
 
   // 有反推的资产 id 集合（project 级，缩略图标 🏷️ 用）：只随项目切换重拉，切 folder/filter 不重拉。
   useEffect(() => {

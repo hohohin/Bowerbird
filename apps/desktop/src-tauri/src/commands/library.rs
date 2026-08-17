@@ -17,8 +17,15 @@ use crate::core::library::{
 };
 use crate::core::paths::LibraryPaths;
 use crate::core::projects::{AssetDeleteMode, AssetDeleteResult};
+use crate::core::settings::SettingsState;
 use crate::db::Database;
 use crate::error::AppError;
+
+/// 「在全局素材中隐藏项目素材」：仅全局视图（project_id = None）生效——项目视图本来就只显示项目素材。
+/// 开关来自设置面板（settings.json），命令层每次现读，改设置后无需重启即生效。
+fn hide_in_global(settings: &SettingsState, project_id: &Option<String>) -> bool {
+    settings.get().hide_project_assets && project_id.is_none()
+}
 
 #[tauri::command]
 pub async fn import_files(
@@ -141,16 +148,19 @@ pub async fn import_image_bytes(
 #[tauri::command]
 pub async fn list_assets(
     db: State<'_, Arc<Database>>,
+    settings: State<'_, SettingsState>,
     folder_id: Option<String>,
     project_id: Option<String>,
     limit: Option<i64>,
     offset: Option<i64>,
 ) -> Result<Vec<Asset>, AppError> {
     let db = db.inner().clone();
+    let hide = hide_in_global(&settings, &project_id);
     let v = tokio::task::spawn_blocking(move || {
-        db.list_assets(
+        db.list_assets_ex(
             folder_id.as_deref(),
             project_id.as_deref(),
+            hide,
             limit.unwrap_or(500),
             offset.unwrap_or(0),
         )
@@ -168,16 +178,19 @@ pub async fn list_assets(
 #[tauri::command]
 pub async fn list_assets_smart(
     db: State<'_, Arc<Database>>,
+    settings: State<'_, SettingsState>,
     query: String,
     project_id: Option<String>,
     limit: Option<i64>,
     offset: Option<i64>,
 ) -> Result<Vec<Asset>, AppError> {
     let db = db.inner().clone();
+    let hide = hide_in_global(&settings, &project_id);
     let v = tokio::task::spawn_blocking(move || {
-        db.list_assets_smart(
+        db.list_assets_smart_ex(
             &query,
             project_id.as_deref(),
+            hide,
             limit.unwrap_or(500),
             offset.unwrap_or(0),
         )
@@ -192,10 +205,12 @@ pub async fn list_assets_smart(
 #[tauri::command]
 pub async fn count_assets(
     db: State<'_, Arc<Database>>,
+    settings: State<'_, SettingsState>,
     project_id: Option<String>,
 ) -> Result<i64, AppError> {
     let db = db.inner().clone();
-    tokio::task::spawn_blocking(move || db.count_assets(project_id.as_deref()))
+    let hide = hide_in_global(&settings, &project_id);
+    tokio::task::spawn_blocking(move || db.count_assets_ex(project_id.as_deref(), hide))
         .await
         .map_err(|e| AppError::Other(e.to_string()))?
 }
@@ -295,16 +310,19 @@ pub async fn remove_asset_from_collection(
 #[tauri::command]
 pub async fn list_assets_by_collection(
     db: State<'_, Arc<Database>>,
+    settings: State<'_, SettingsState>,
     collection_id: String,
     project_id: Option<String>,
     limit: Option<i64>,
     offset: Option<i64>,
 ) -> Result<Vec<Asset>, AppError> {
     let db = db.inner().clone();
+    let hide = hide_in_global(&settings, &project_id);
     let v = tokio::task::spawn_blocking(move || {
-        db.list_assets_by_collection(
+        db.list_assets_by_collection_ex(
             &collection_id,
             project_id.as_deref(),
+            hide,
             limit.unwrap_or(500),
             offset.unwrap_or(0),
         )
@@ -471,13 +489,15 @@ pub async fn delete_folder(db: State<'_, Arc<Database>>, id: String) -> Result<(
 #[tauri::command]
 pub async fn search_assets(
     db: State<'_, Arc<Database>>,
+    settings: State<'_, SettingsState>,
     query: String,
     project_id: Option<String>,
     limit: Option<i64>,
 ) -> Result<Vec<Asset>, AppError> {
     let db = db.inner().clone();
+    let hide = hide_in_global(&settings, &project_id);
     let v = tokio::task::spawn_blocking(move || {
-        db.search_assets(&query, project_id.as_deref(), limit.unwrap_or(500))
+        db.search_assets_ex(&query, project_id.as_deref(), hide, limit.unwrap_or(500))
     })
     .await
     .map_err(|e| AppError::Other(e.to_string()))??;
@@ -758,6 +778,7 @@ pub async fn palette_overview(
 #[tauri::command]
 pub async fn list_assets_by_color(
     db: State<'_, Arc<Database>>,
+    settings: State<'_, SettingsState>,
     folder_id: Option<String>,
     project_id: Option<String>,
     bucket: String,
@@ -765,11 +786,13 @@ pub async fn list_assets_by_color(
     offset: Option<i64>,
 ) -> Result<Vec<Asset>, AppError> {
     let db = db.inner().clone();
+    let hide = hide_in_global(&settings, &project_id);
     let v = tokio::task::spawn_blocking(move || {
-        db.list_assets_by_color(
+        db.list_assets_by_color_ex(
             folder_id.as_deref(),
             project_id.as_deref(),
             &bucket,
+            hide,
             limit.unwrap_or(500),
             offset.unwrap_or(0),
         )

@@ -133,6 +133,12 @@ export function Toolbar({ onRefresh }: { onRefresh: () => Promise<void> }) {
               <FolderOpen size={14} className="text-muted" />
               导入文件夹
             </button>
+            {/* 其他导入方式提示：Ctrl+V 粘贴与拖拽随时可用，不走此菜单 */}
+            <div className="app-context-divider" />
+            <div className="pointer-events-none px-3 pb-1 pt-1.5 text-[10px] leading-4 text-muted">
+              <span className="block">支持 Ctrl+V 粘贴导入</span>
+              <span className="block">支持拖拽导入</span>
+            </div>
           </div>
         )}
       </div>
