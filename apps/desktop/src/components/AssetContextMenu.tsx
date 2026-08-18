@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { ClipboardCopy, MessageSquare, PenTool, ScanSearch } from "lucide-react";
 import { useStore } from "../store";
 import { api } from "../lib/api";
 import { loadDescribePrompt } from "../lib/describePrompt";
@@ -10,7 +11,11 @@ import { notifyError, notifySuccess } from "../lib/notify";
 import type { AssetDeleteMode, AssetDeleteResult } from "../lib/types";
 
 const MENU_WIDTH = 232;
-const MENU_HEIGHT = 420;
+// 高度按全量项（生成图 + 本地文件 + 项目内）估算，含四组标签与分隔线。
+const MENU_HEIGHT = 500;
+
+/** 可标注图片：浏览器 <img>/canvas 能解码的位图格式（tiff 浏览器不解码，排除）。 */
+const ANNOTATABLE_EXTS = ["jpg", "jpeg", "png", "webp", "gif", "bmp"];
 
 function resultMessage(mode: AssetDeleteMode, result: AssetDeleteResult): string {
   if (mode === "keep") {
@@ -25,7 +30,7 @@ function resultMessage(mode: AssetDeleteMode, result: AssetDeleteResult): string
 }
 
 /**
- * 图片右键菜单：打开所在文件夹 + 删除三选项（与「删除项目」语义对齐）。
+ * 图片右键菜单：整理 / 再创作 / 文件 / 移出与删除 四组。
  * 全局只有一个实例（store.contextMenu 状态驱动），挂在 App 最外层；
  * 瀑布流缩略图 / 详情页大图各自 onContextMenu 触发。
  */
@@ -38,6 +43,8 @@ export function AssetContextMenu() {
   const openDescribePicker = useStore((s) => s.openDescribePicker);
   const reusePromptToBoard = useStore((s) => s.reusePromptToBoard);
   const codexHealth = useStore((s) => s.codexHealth);
+  const openAnnotator = useStore((s) => s.openAnnotator);
+  const viewGenerationHistory = useStore((s) => s.viewGenerationHistory);
   const mode = useStore((s) => s.mode);
   const enterManage = useStore((s) => s.enterManage);
   const toggleSelect = useStore((s) => s.toggleSelect);
@@ -106,7 +113,7 @@ export function AssetContextMenu() {
           open={pendingDeleteId !== null}
           danger
           title="物理删除素材"
-          message="素材将从全局及所有项目物理删除，不可恢复。"
+          message={<>素材将从全局及所有项目物理删除，<strong>不可恢复</strong>。</>}
           confirmLabel="物理删除"
           onConfirm={() => {
             const id = pendingDeleteId;
@@ -133,6 +140,9 @@ export function AssetContextMenu() {
   const storePath = asset?.store_path ?? null;
   // 仅生成图显示「复用生成提示词」：generation_session_id 非 null 即任意 provider 的生成图。
   const isGenerated = !!asset?.generation_session_id;
+  // 「图片标注」可用：本地有文件且为浏览器可解码位图（视频 / SVG / TIFF 不可标注）。
+  const annotatable =
+    !!storePath && ANNOTATABLE_EXTS.includes((asset?.ext ?? "").toLowerCase());
   // 反推项置灰：该图正在反推或已排队（runDescribe 内部已去重，置灰仅为给用户明确反馈）。
   const describing =
     useStore.getState().describingId === assetId ||
@@ -221,7 +231,7 @@ export function AssetContextMenu() {
       role="menu"
       aria-label="素材操作"
     >
-      <div className="app-context-label">素材操作</div>
+      <div className="app-context-label">整理</div>
       <button
         type="button"
         role="menuitem"
@@ -239,15 +249,6 @@ export function AssetContextMenu() {
       <button
         type="button"
         role="menuitem"
-        onClick={reveal}
-        disabled={busy}
-        className="app-context-item px-2 py-1.5"
-      >
-        打开所在文件夹
-      </button>
-      <button
-        type="button"
-        role="menuitem"
         onClick={() => {
           // 先收菜单再开 dialog，避免两个浮层同时存在。
           setRenameTarget({ id: assetId, name: asset?.name ?? "" });
@@ -258,6 +259,87 @@ export function AssetContextMenu() {
         className="app-context-item px-2 py-1.5"
       >
         重命名
+      </button>
+      <div className="app-context-divider" />
+      <div className="app-context-label">再创作</div>
+      <button
+        type="button"
+        role="menuitem"
+        onClick={(e) => {
+          const r = e.currentTarget.getBoundingClientRect();
+          openDescribePicker(
+            { kind: "single", assetId, instruction: loadDescribePrompt() },
+            { x: r.left, y: r.bottom },
+          );
+          closeContextMenu();
+        }}
+        disabled={busy || describing || !understandReady}
+        title={understandReady ? "反推提示词" : understandReason}
+        className="app-context-item px-2 py-1.5"
+      >
+        <ScanSearch size={13} className="shrink-0" />
+        反推提示词
+      </button>
+      {isGenerated && (
+        <button
+          type="button"
+          role="menuitem"
+          data-tour="ctx-reuse-gen"
+          onClick={reuseGeneration}
+          disabled={busy}
+          title="打开创作板，填入该图生成时的提示词与参考素材"
+          className="app-context-item px-2 py-1.5"
+        >
+          <ClipboardCopy size={13} className="shrink-0" />
+          复用生成提示词
+        </button>
+      )}
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => {
+          openAnnotator(assetId);
+          closeContextMenu();
+        }}
+        disabled={busy || !annotatable}
+        title={
+          annotatable
+            ? "截图软件式画框 / 箭头标注；输出可保存到素材库或插入创作板（不入库）"
+            : "该素材不是可标注的图片"
+        }
+        className="app-context-item px-2 py-1.5"
+      >
+        <PenTool size={13} className="shrink-0" />
+        图片标注
+      </button>
+      {isGenerated && (
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => {
+            // 先收菜单再开生成会话面板（与详情页「回看生成对话」同一入口）。
+            closeContextMenu();
+            void viewGenerationHistory(assetId);
+          }}
+          disabled={busy}
+          title="回看这张图的生成会话：各轮 prompt 与产出图，可继续提修改意见"
+          className="app-context-item px-2 py-1.5"
+        >
+          <MessageSquare size={13} className="shrink-0" />
+          打开生成会话
+        </button>
+      )}
+
+      <div className="app-context-divider" />
+      <div className="app-context-label">文件</div>
+      <button
+        type="button"
+        role="menuitem"
+        onClick={reveal}
+        disabled={busy}
+        className="app-context-item px-2 py-1.5"
+      >
+        打开所在文件夹
       </button>
       {storePath && (
         <>
@@ -297,36 +379,6 @@ export function AssetContextMenu() {
           </button>
         </>
       )}
-      <button
-        type="button"
-        role="menuitem"
-        onClick={(e) => {
-          const r = e.currentTarget.getBoundingClientRect();
-          openDescribePicker(
-            { kind: "single", assetId, instruction: loadDescribePrompt() },
-            { x: r.left, y: r.bottom },
-          );
-          closeContextMenu();
-        }}
-        disabled={busy || describing || !understandReady}
-        title={understandReady ? "反推提示词" : understandReason}
-        className="app-context-item px-2 py-1.5"
-      >
-        反推提示词
-      </button>
-      {isGenerated && (
-        <button
-          type="button"
-          role="menuitem"
-          data-tour="ctx-reuse-gen"
-          onClick={reuseGeneration}
-          disabled={busy}
-          title="打开创作板，填入该图生成时的提示词与参考素材"
-          className="app-context-item px-2 py-1.5"
-        >
-          复用生成提示词
-        </button>
-      )}
 
       <div className="app-context-divider" />
       <div className="app-context-label">移出与删除</div>
@@ -347,10 +399,10 @@ export function AssetContextMenu() {
             role="menuitem"
             onClick={() => runDelete(assetId, "move_out")}
             disabled={busy}
-            title="把图片文件交回原始文件夹，并从素材库移除（共享素材仍保留在全局）"
+            title="不会删除文件，文件回到原始位置"
             className="app-context-item px-2 py-1.5"
           >
-            移出园丁鸟 · 文件回到原始位置
+            移出园丁鸟
           </button>
           <button
             type="button"

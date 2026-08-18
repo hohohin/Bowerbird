@@ -329,7 +329,7 @@ mod tests {
         let (tmp, paths, db) = setup();
         let img = make_photo_file(&tmp.dir, "preset-12.png", 256, 5);
         let asset = ingest_file(&paths, &db, &img).unwrap();
-        let hist = db.generation_history(&asset.id, None).unwrap();
+        let hist = db.generation_history(&asset.id, None, None).unwrap();
         assert_eq!(hist.turns.len(), 1);
     }
 

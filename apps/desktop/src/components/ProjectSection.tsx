@@ -178,7 +178,11 @@ export function ProjectSection() {
         open={confirmingId !== null}
         danger
         title="物理删除独占素材"
-        message="项目的独占素材将从全局及所有项目物理删除，不可恢复；共享素材保留。"
+        message={
+          <>
+            项目的独占素材将从全局及所有项目物理删除，<strong>不可恢复</strong>；共享素材保留。
+          </>
+        }
         confirmLabel="物理删除"
         onConfirm={() => {
           const p = projects.find((x) => x.id === confirmingId);

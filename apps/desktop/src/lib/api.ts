@@ -85,6 +85,30 @@ export const api = {
       projectId: req.projectId ?? null,
       source: req.source,
     }),
+  // 图片标注「保存到素材库」：入库 + 坐标元数据落 analyses(kind=annotation)，跳过 auto-analyze。
+  saveAnnotatedImage: (req: {
+    dataUrl: string;
+    fileName: string;
+    projectId?: string | null;
+    annotationJson: string;
+  }) =>
+    invoke<Asset>("save_annotated_image", {
+      dataUrl: req.dataUrl,
+      fileName: req.fileName,
+      projectId: req.projectId ?? null,
+      annotationJson: req.annotationJson,
+    }),
+  // 图片标注「插入创作板（不入库）」：落 <库根>/annotations/ 临时文件 + sidecar（name/ext/
+  // annotation），返回 Asset 形对象（无 DB 行）；sidecar 供 generation_history 反查兜底合成，
+  // 复用提示词时参考图与「标注」维度不丢。
+  saveAnnotationTemp: (req: { dataUrl: string; fileName: string; annotationJson?: string | null }) =>
+    invoke<Asset>("save_annotation_temp", {
+      dataUrl: req.dataUrl,
+      fileName: req.fileName,
+      annotationJson: req.annotationJson ?? null,
+    }),
+  // 读本地图片为 data URL（标注面板 canvas 导出用，规避 asset 协议跨域污染画布）。
+  readImageDataUrl: (path: string) => invoke<string>("read_image_data_url", { path }),
 
   // 浏览
   listAssets: (folderId?: string, projectId?: string | null, limit = 500, offset = 0) =>

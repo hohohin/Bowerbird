@@ -395,7 +395,7 @@ export function BatchBar() {
         open={pendingPhysicalDelete}
         danger
         title={`物理删除 ${ids.length} 张素材`}
-        message="这些素材将从全局及所有项目物理删除，不可恢复。"
+        message={<>这些素材将从全局及所有项目物理删除，<strong>不可恢复</strong>。</>}
         confirmLabel="物理删除"
         onConfirm={() => runDelete("delete")}
         onCancel={resetDelete}

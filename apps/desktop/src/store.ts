@@ -265,8 +265,16 @@ interface State {
   // 「复用到创作板」：把首轮 prompt + 参考图载入创作板编辑器。
   // 开创作板 + 关详情/生成面板/挑图态，延时一帧再 dispatch board-load-prompt，
   // 确保 CreationBoard 已挂载注册 listener（同步 dispatch 会丢）。
-  // refs 显式传入优先（右键菜单按 generation_history 复用）；缺省取 activeJob（GenerationPanel 复用）。
-  reusePromptToBoard: (prompt: string, refs?: Asset[]) => void;
+  // refs 显式传入优先（右键菜单按 generation_history 复用，含「不入库」标注图的缓存合成）；
+  // 缺省取 activeJob（GenerationPanel 复用）。
+  reusePromptToBoard: (prompt: string, refs?: PromptedAsset[]) => void;
+  // 「标注插入创作板」：注入临时素材（不入库）到当前编辑器。生成面板编辑坞打开 → 原地插入
+  // 不动面板；否则保开创作板 + 延一帧 dispatch board-asset-injected（挂载时序同上）。
+  insertAnnotatedToBoard: (asset: PromptedAsset) => void;
+  // —— 图片标注面板（右键菜单唤起，全局单实例）——
+  annotator: { assetId: string } | null;
+  openAnnotator: (assetId: string) => void;
+  closeAnnotator: () => void;
   // —— 右键菜单（瀑布流缩略图 / 详情页大图）——
   contextMenu: { x: number; y: number; assetId: string } | null;
   openContextMenu: (x: number, y: number, assetId: string) => void;
@@ -593,6 +601,11 @@ export const useStore = create<State>((set, get) => {
         boardOpen: turningOn,
         // 打开创作板时收起详情页，让瀑布流（全部图，任意图可插为参考图）可见以便挑图
         detailAssetId: turningOn ? null : s.detailAssetId,
+        // 与 setGenEditing 对称：开创作板退出会话编辑坞。否则两个 useCreationEditor
+        // （创作板 + 坞）同时挂载监听同一组 pick/peek/inject 事件，点图会双份插入、双 focus 抢焦点。
+        genEditing: turningOn ? null : s.genEditing,
+        // 会话详情中点「打开创作板」→ 收起会话详情（生成照常后台跑，圆点可回看）。
+        genPanelOpen: turningOn ? false : s.genPanelOpen,
       };
     }),
   setPromptedAssets: (promptedAssets) => set({ promptedAssets }),
@@ -925,7 +938,6 @@ export const useStore = create<State>((set, get) => {
             projectId: j.project_id ?? null,
             createdAt: j.created_at,
             running: j.running,
-            pendingBoardClose: false,
             submitId: j.submit_id ?? null,
             remoteStatus: j.running ? "querying" : null,
           };
@@ -977,7 +989,6 @@ export const useStore = create<State>((set, get) => {
       projectId: get().currentProjectId,
       createdAt: Date.now(),
       running: true,
-      pendingBoardClose: true, // 首轮：done 有图则关创作板（草稿由编辑器卸载时落盘保留）
     };
     set((s) => ({
       genJobs: { ...s.genJobs, [jobId]: job },
@@ -1043,7 +1054,6 @@ export const useStore = create<State>((set, get) => {
       ],
       streaming: "",
       running: true,
-      pendingBoardClose: false, // 续轮修改不关闭创作板
     }));
     try {
       await api.codexCreateImage({
@@ -1119,7 +1129,6 @@ export const useStore = create<State>((set, get) => {
           projectId: null,
           createdAt: Date.now(),
           running: true,
-          pendingBoardClose: false,
         };
         return {
           genJobs: { ...s.genJobs, [rid]: job },
@@ -1175,12 +1184,6 @@ export const useStore = create<State>((set, get) => {
         },
         { genUnread: imgs.length > 0 && !panelOpen ? true : get().genUnread },
       );
-      // 创作板首发（per-job 标记）且本轮有图 = 生成成功 → 关闭创作板（草稿由编辑器卸载时落盘）。
-      const job = get().genJobs[id];
-      if (imgs.length > 0 && job?.pendingBoardClose) {
-        updateJob(id, (j) => ({ ...j, pendingBoardClose: false }));
-        set({ boardOpen: false });
-      }
     } else if (c.kind === "error") {
       genHandleError(id, c.message);
       updateJob(id, (j) => ({ ...j, running: false }));
@@ -1218,7 +1221,6 @@ export const useStore = create<State>((set, get) => {
         projectId: get().currentProjectId,
         createdAt: Date.now(),
         running: false,
-        pendingBoardClose: false,
       };
       set((s) => ({
         genJobs: { ...s.genJobs, [jobId]: job },
@@ -1254,6 +1256,22 @@ export const useStore = create<State>((set, get) => {
       );
     }, 0);
   },
+  insertAnnotatedToBoard: (asset) => {
+    // 生成面板编辑坞打开 → 原地插入不动面板（编辑坞的 useCreationEditor 也监听 injected）；
+    // 否则保开创作板（延一帧 dispatch 等挂载，同 reusePromptToBoard）。
+    if (!get().genPanelOpen) {
+      set({ boardOpen: true, detailAssetId: null });
+    }
+    setTimeout(() => {
+      window.dispatchEvent(
+        new CustomEvent("bowerbird://board-asset-injected", { detail: asset }),
+      );
+    }, 0);
+  },
+  // —— 图片标注面板 ——
+  annotator: null,
+  openAnnotator: (assetId) => set({ annotator: { assetId } }),
+  closeAnnotator: () => set({ annotator: null }),
   // —— 右键菜单 ——
   contextMenu: null,
   openContextMenu: (x, y, assetId) => set({ contextMenu: { x, y, assetId } }),

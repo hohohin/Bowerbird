@@ -1,3 +1,4 @@
+import { type ReactNode } from "react";
 import { ModalShell } from "./ModalShell";
 
 /**
@@ -17,7 +18,7 @@ export function ConfirmDialog({
 }: {
   open: boolean;
   title: string;
-  message: string;
+  message: ReactNode;
   confirmLabel: string;
   cancelLabel?: string;
   danger?: boolean;
@@ -30,7 +31,6 @@ export function ConfirmDialog({
     <ModalShell
       title={title}
       eyebrow={danger ? "Danger zone" : "Confirm action"}
-      description={message}
       onClose={onCancel}
       footer={
         <>
@@ -46,8 +46,9 @@ export function ConfirmDialog({
         </>
       }
     >
-      <div className="rounded-xl border border-edge bg-panel2/60 px-3 py-2.5 text-xs leading-5 text-muted">
-        操作执行后将立即生效，请确认当前选择无误。
+      <div className="space-y-1 rounded-xl border border-edge bg-panel2/60 px-3 py-2.5 text-xs leading-5 text-muted">
+        <p>{message}</p>
+        <p>操作执行后将立即生效，请确认当前选择无误。</p>
       </div>
     </ModalShell>
   );

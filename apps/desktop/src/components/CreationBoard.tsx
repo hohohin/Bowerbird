@@ -3,6 +3,7 @@ import { useStore } from "../store";
 import { canStartAnotherJob, canUseByo } from "../lib/entitlement";
 import { cloudProviderLabel, isCloudProvider } from "../lib/genProviders";
 import { api } from "../lib/api";
+import { PRESET_FEATURE_ENABLED } from "../lib/featureFlags";
 import { notifyError, notifySuccess } from "../lib/notify";
 import { useCreationEditor } from "./creation/useCreationEditor";
 import { RATIOS } from "./creation/ratios";
@@ -10,6 +11,7 @@ import { RatioSelect } from "./creation/RatioSelect";
 import { ProviderSelect } from "./creation/ProviderSelect";
 import { CreationGraph } from "./creation/CreationGraph";
 import { BoardChipPreview } from "./creation/BoardChipPreview";
+import { CaptionRing } from "./creation/CaptionRing";
 import { ChevronRight, Info, Sparkles } from "lucide-react";
 
 // 画面比例偏好记忆（照 AssetDetail 的 localStorage 范式：bowerbird.<name> 前缀、try/catch 兜底）。
@@ -34,10 +36,11 @@ function saveBoardRatio(v: string | null) {
 /**
  * 创作板 UI 外壳。编辑器内核（ProseMirror doc / 光标 / 序列化）下沉到
  * useCreationEditor + creation/* 模块，本组件只管「组稿周边」：
- * 用途（preset）CRUD / 复制 / 发送 / 维度 chips 面板 / 预览。
+ * 用途（preset）CRUD / 复制 / 发送 / 维度环菜单（CaptionRing）/ 预览。
  *
  * 参考图入口：boardOpen 时点瀑布流任意图即在光标处插 image chip；也可手输 @图名，
- * 空格/标点后自动识别为 image chip。维度 chips 取自该图反推 sections，点击插 keyword chip。
+ * 空格/标点后自动识别为 image chip。有反推维度的图拾取后在其四周呼出维度环，
+ * 点环上维度插 keyword chip（环保持打开，可连续添加）。
  */
 export function CreationBoard() {
   const toggleBoard = useStore((s) => s.toggleBoard);
@@ -67,19 +70,12 @@ export function CreationBoard() {
     references,
     graphSources,
     agentPromptReferences,
-    setChipAssetId,
+    chipAssetId,
     chipSections,
-    showKeywordHints,
+    ringOpen,
+    closeRing,
     insertKeyword,
   } = useCreationEditor();
-
-  // tour 维度引导（step 7）：自动选中第一张有反推维度的参考图，让「可选维度」chips 面板有内容可高亮。
-  useEffect(() => {
-    if (tourActive && tourStep === 7 && chipSections.length === 0) {
-      const withSections = references.find((r) => r.sections && r.sections.length > 0);
-      if (withSections) setChipAssetId(withSections.id);
-    }
-  }, [tourActive, tourStep, references, chipSections.length, setChipAssetId]);
 
   // 画面比例（null=自动/不指定，发送时不注入 instruction）。记忆进 localStorage，跨会话保留。
   const [ratio, setRatio] = useState<string | null>(loadBoardRatio);
@@ -217,7 +213,7 @@ export function CreationBoard() {
               <Info size={13} />
             </button>
             <div className="pointer-events-none absolute right-0 top-full z-10 mt-2 hidden w-60 rounded-lg bg-panel2 p-2 text-[11px] leading-4 text-muted ring-1 ring-edge group-hover:block">
-              像跟 AI 输入 prompt 一样书写；<span className="text-accent">点瀑布流图片</span> 在光标处插入参考图，或输入 <span className="text-accent">@图名</span>（空格/标点后自动识别）。
+              像跟 AI 输入 prompt 一样书写；<span className="text-accent">点瀑布流图片</span> 在光标处插入参考图，或输入 <span className="text-accent">@图名</span>（空格/标点后自动识别）。有反推维度的图片，点击后四周会出现<span className="text-accent">维度环</span>，点环上维度即可加入编辑框；未反推的图片可在详情页先反推生成维度。
             </div>
           </div>
           <button
@@ -233,7 +229,10 @@ export function CreationBoard() {
       <div className="hatch-divider" aria-hidden="true"><span /></div>
 
       <div className="flex-1 overflow-y-auto p-3">
-        {/* 用途（preset）：发送时作为基底注入；登记=把当前编辑框内容存为用途（只需用途名） */}
+        {/* 用途（preset）：发送时作为基底注入；登记=把当前编辑框内容存为用途（只需用途名）。
+            功能未完成，PRESET_FEATURE_ENABLED 关闭整块 UI（store 注入逻辑随之不可达）。 */}
+        {PRESET_FEATURE_ENABLED && (
+        <>
         <div className="mb-2 flex flex-wrap items-center gap-1.5 text-xs">
           <span className="shrink-0 text-muted">用途</span>
           <select
@@ -368,6 +367,8 @@ export function CreationBoard() {
             </div>
           </div>
         ) : null}
+        </>
+        )}
         <div className="lineframe-panel border border-edge bg-canvas p-3 text-sm leading-8 text-ink">
           <div
             ref={hostRef}
@@ -377,6 +378,25 @@ export function CreationBoard() {
           />
           {/* 编辑框内 image/keyword chip 的交互浮层（hover 放大图/维度正文 + 点击定位瀑布流） */}
           <BoardChipPreview hostRef={hostRef} />
+          {/* 维度环形菜单：点瀑布流图片拾取 / 长按图片窥视后在其四周呼出（portal 到 body），
+              编辑框保持可交互；无维度的图呼出空环并提示右键反推 */}
+          {ringOpen && chipAssetId && (
+            <CaptionRing
+              key={chipAssetId}
+              assetId={chipAssetId}
+              sections={chipSections}
+              editorHostRef={hostRef}
+              suppressScrim={tourActive}
+              onClose={closeRing}
+              onPick={(section) => {
+                insertKeyword(section.title, section.body);
+                // tour step 10：用户点环上维度（如「构图」）→ 引导完成。
+                if (tourActive && tourStep === 10) {
+                  useStore.getState().setTourStep(11);
+                }
+              }}
+            />
+          )}
           {/* 工具条：编辑框下方的快捷参数。Agent 开关与发送按钮同款线框/光晕（仅圆角不同）。 */}
           <div className="mt-2 flex items-center gap-2">
             <RatioSelect value={ratio} onChange={selectRatio} />
@@ -428,37 +448,6 @@ export function CreationBoard() {
               </>
             )}
           </div>
-
-          {(showKeywordHints || (tourActive && tourStep === 7)) && (
-            <div
-              data-tour="creation-keywords"
-              className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-muted"
-            >
-              {chipSections.length > 0 ? (
-                <>
-                  <span>可选维度（来自该图反推）：</span>
-                  {chipSections.map((section) => (
-                    <button
-                      key={section.title}
-                      data-dim={section.title}
-                      onClick={() => {
-                        insertKeyword(section.title, section.body);
-                        // tour step 10：用户点维度 chip（如「构图」）→ 引导完成。
-                        if (tourActive && tourStep === 10) {
-                          useStore.getState().setTourStep(11);
-                        }
-                      }}
-                      className="rounded-[2px] border border-accent/40 bg-accent/10 px-2 py-0.5 text-accent hover:bg-accent/20"
-                    >
-                      {section.title}
-                    </button>
-                  ))}
-                </>
-              ) : (
-                <span>该图没有反推维度片段，可直接输入文字，或先在详情页反推生成维度。</span>
-              )}
-            </div>
-          )}
         </div>
 
         <CreationGraph sources={graphSources} />

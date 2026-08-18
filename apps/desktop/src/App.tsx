@@ -5,6 +5,7 @@ import { Sidebar } from "./components/Sidebar";
 import { MasonryGrid } from "./components/MasonryGrid";
 import { AssetDetail } from "./components/AssetDetail";
 import { AssetContextMenu } from "./components/AssetContextMenu";
+import { ImageAnnotator } from "./components/ImageAnnotator";
 import { DescribeProviderPicker } from "./components/DescribeProviderPicker";
 import { BatchBar } from "./components/BatchBar";
 import { CreationBoard } from "./components/CreationBoard";
@@ -513,6 +514,8 @@ function App() {
       <OnboardingTour />
       {/* 图片右键菜单（全局单实例，store.contextMenu 驱动） */}
       <AssetContextMenu />
+      {/* 图片标注面板（全局单实例，store.annotator 驱动，全屏遮罩） */}
+      <ImageAnnotator />
       {/* 反推引擎选择浮层（全局单实例，store.describePicker 驱动） */}
       <DescribeProviderPicker />
       <Toolbar onRefresh={refresh} />

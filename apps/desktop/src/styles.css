@@ -698,6 +698,167 @@ body.app-sidebar-resizing * {
   background: rgba(16, 14, 14, 0.72);
 }
 
+/* 维度环形菜单（CaptionRing）：点瀑布流图片拾取后在其卡片四周呼出扇形（pie sector）菜单，
+   替代编辑框下方的维度按钮行。遮罩 z-65 / 环层 z-66，占用上下文菜单(60)与 tour 聚光灯/
+   Popover(70) 之间的空档；两个洞（环圈 + 编辑框）由组件内 JS 生成的 SVG mask（feGaussianBlur
+   羽化）挖出，洞内不压暗不模糊、洞缘渐变过渡。 */
+.caption-ring-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 65;
+  background: rgb(16 14 14 / 55%);
+  backdrop-filter: blur(7px);
+  animation: caption-ring-fade-in 200ms ease-out;
+}
+
+.caption-ring-scrim.is-closing {
+  animation: caption-ring-fade-out 170ms ease-in forwards;
+}
+
+.caption-ring-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 66;
+  pointer-events: none;
+}
+
+/* 收起：整环收拢淡出（svg 走 collapse，卡片描边随层淡出），动画结束由组件卸载 */
+.caption-ring-layer.is-closing .caption-ring-sector {
+  pointer-events: none;
+}
+
+.caption-ring-layer.is-closing .caption-ring-halo {
+  animation: caption-ring-fade-out 170ms ease-in forwards;
+}
+
+/* 洞内透明点击区：盖住目标图片（圆形，半径 = 环内径），再点 = 收起（也挡住洞内误触瀑布流重复拾取） */
+.caption-ring-catcher {
+  position: absolute;
+  border: 0;
+  padding: 0;
+  border-radius: 50%;
+  background: transparent;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+/* 卡片聚焦描边（呼吸光晕感） */
+.caption-ring-halo {
+  position: absolute;
+  border: 2px solid rgb(124 156 255 / 55%);
+  border-radius: 4px;
+  box-shadow: 0 0 18px rgb(72 104 255 / 25%), inset 0 0 18px rgb(72 104 255 / 12%);
+  pointer-events: none;
+  animation: caption-ring-fade-in 220ms ease-out;
+}
+
+.caption-ring-svg {
+  position: absolute;
+  overflow: visible;
+  pointer-events: none;
+  animation: caption-ring-fade-in 180ms ease-out;
+}
+
+.caption-ring-svg.is-closing {
+  animation: caption-ring-collapse 180ms cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+
+/* 内缘细圈（hub），与扇区内弧呼应 */
+.caption-ring-hub {
+  fill: none;
+  stroke: rgb(124 156 255 / 30%);
+  stroke-width: 1;
+  pointer-events: none;
+}
+
+/* 扇区：展开 = 自环心旋出 + 按序错峰绽放（transform-box:view-box + 50% 50% = 以环心为原点） */
+.caption-ring-sector {
+  pointer-events: auto;
+  cursor: pointer;
+  outline: none;
+  transform-box: view-box;
+  transform-origin: 50% 50%;
+  animation: caption-ring-sector-in 300ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+
+.caption-ring-sector-fill {
+  fill: rgb(29 26 26 / 82%);
+  stroke: #3f3b3b;
+  stroke-width: 1;
+  transition: fill 130ms ease, stroke 130ms ease;
+}
+
+.caption-ring-sector-label {
+  fill: #fdfff0;
+  font-size: 12px;
+  font-weight: 500;
+  /* 文字描边底：压过图片边缘/遮罩渐变区仍可读 */
+  paint-order: stroke;
+  stroke: rgb(12 11 11 / 82%);
+  stroke-width: 3px;
+  /* 可点：贴边扇区的 label 会沿半径拉回到图片上方，点击要落在所属扇区而非其下的收起区 */
+  pointer-events: auto;
+  transition: fill 130ms ease;
+}
+
+/* 已选 ✓ 用 lime（产品语义：产出/就绪），区别于未选 ink */
+.caption-ring-sector-check {
+  fill: #d9ff52;
+}
+
+.caption-ring-sector:hover .caption-ring-sector-fill,
+.caption-ring-sector:focus-visible .caption-ring-sector-fill {
+  fill: rgb(72 104 255 / 24%);
+  stroke: #4868ff;
+}
+
+.caption-ring-sector:hover .caption-ring-sector-label,
+.caption-ring-sector:focus-visible .caption-ring-sector-label {
+  fill: #ffffff;
+}
+
+.caption-ring-sector.is-used .caption-ring-sector-fill {
+  fill: rgb(29 26 26 / 45%);
+  stroke: #312e2e;
+}
+
+.caption-ring-sector.is-used .caption-ring-sector-label {
+  fill: #969692;
+}
+
+/* 手势说明小字：同瀑布流悬浮胶囊材质（黑底半透明 + backdrop blur），悬于环顶部上方 */
+.caption-ring-hint {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  padding: 4px 8px;
+  border: 1px solid rgb(255 255 255 / 8%);
+  border-radius: 3px;
+  background: rgb(0 0 0 / 70%);
+  backdrop-filter: blur(8px);
+  color: #fff;
+  font-size: 10px;
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: none;
+  animation: caption-ring-fade-in 300ms ease-out;
+}
+
+@keyframes caption-ring-fade-in {
+  from { opacity: 0; }
+}
+
+@keyframes caption-ring-fade-out {
+  to { opacity: 0; }
+}
+
+@keyframes caption-ring-collapse {
+  to { opacity: 0; transform: scale(0.86); }
+}
+
+@keyframes caption-ring-sector-in {
+  from { opacity: 0; transform: scale(0.35) rotate(-8deg); }
+}
+
 .panel-kicker {
   color: #666460;
   font-size: 9px;

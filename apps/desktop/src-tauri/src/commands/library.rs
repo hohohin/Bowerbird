@@ -146,6 +146,196 @@ pub async fn import_image_bytes(
     Ok(asset)
 }
 
+/// 图片标注「保存到素材库」：标注面板输出的新图（框/箭头已烧录进像素）经 ingest 入库
+/// （source="annotation"，命名固定「原名-标注」由前端拼好传入，跳过 auto-analyze——
+/// codex 看图取名会丢溯源且多一次调用），坐标元数据（火山 Seedream 交互编辑格式：
+/// 0-999 归一化 + <bbox>/<point> token，由前端构造 JSON 原样存）写 analyses(kind=annotation)，
+/// list_prompted_assets 据此合成「标注」维度供创作板注入。
+#[tauri::command]
+pub async fn save_annotated_image(
+    app: AppHandle,
+    paths: State<'_, Arc<LibraryPaths>>,
+    db: State<'_, Arc<Database>>,
+    data_url: String,
+    file_name: String,
+    project_id: Option<String>,
+    annotation_json: String,
+) -> Result<Asset, AppError> {
+    let bytes = decode_data_url_bytes(&data_url)?;
+    let paths = paths.inner().clone();
+    let db = db.inner().clone();
+    let db_for_ingest = db.clone();
+    let annotation = annotation_json.clone();
+    let asset = tokio::task::spawn_blocking(move || {
+        let asset = ingest::ingest_from_bytes(
+            &paths,
+            &db_for_ingest,
+            &bytes,
+            "",
+            Some(&file_name),
+            None,
+            "annotation",
+        )?;
+        // pHash 去重命中时返回既有资产：annotation 行照常追加（list 只取最新一条）。
+        db_for_ingest.insert_analysis(&Analysis {
+            id: Ulid::new().to_string(),
+            asset_id: asset.id.clone(),
+            kind: "annotation".to_string(),
+            payload: annotation,
+            provider: None,
+            created_at: None,
+        })?;
+        Ok::<_, AppError>(asset)
+    })
+    .await
+    .map_err(|e| AppError::Other(e.to_string()))??;
+    if let Some(pid) = project_id.as_deref() {
+        if let Err(e) = db.add_assets_to_project(pid, std::slice::from_ref(&asset.id)) {
+            tracing::warn!("link annotated asset {} to project failed: {e}", asset.id);
+        }
+    }
+    // analyses://changed：App 刷创作板 promptedAssets（「标注」维度即时可用）。
+    let _ = app.emit("library://assets-changed", ());
+    let _ = app.emit(
+        "analyses://changed",
+        serde_json::json!({ "asset_id": asset.id, "kind": "annotation" }),
+    );
+    Ok(asset)
+}
+
+/// data URL 的 mime 决定临时文件扩展名（标注导出只有 PNG / JPEG 两种）。
+fn data_url_ext(data_url: &str) -> Result<&'static str, AppError> {
+    let mime = data_url
+        .split_once(',')
+        .and_then(|(head, _)| head.strip_prefix("data:"))
+        .and_then(|head| head.split(';').next())
+        .unwrap_or("");
+    match mime {
+        "image/png" => Ok("png"),
+        "image/jpeg" => Ok("jpg"),
+        other => Err(AppError::Media(format!("标注导出不支持的格式: {other}"))),
+    }
+}
+
+/// 图片标注「插入创作板（不入库）」：标注图落 `<库根>/annotations/<ulid>.<ext>`，不写 DB。
+/// 返回 Asset 形对象（thumb_path=store_path，chip 渲染与参考图发送直接用该文件）；前端以
+/// extraAssets 旁路注入创作板并随草稿持久化。目录在库根内，asset protocol scope 已放行
+/// （约定 19），convertFileSrc 可显。临时文件不自动清理（板草稿引用着）。
+#[tauri::command]
+pub async fn save_annotation_temp(
+    paths: State<'_, Arc<LibraryPaths>>,
+    data_url: String,
+    file_name: String,
+    annotation_json: Option<String>,
+) -> Result<Asset, AppError> {
+    let bytes = decode_data_url_bytes(&data_url)?;
+    let ext = data_url_ext(&data_url)?;
+    let paths = paths.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        let dir = paths.root.join("annotations");
+        std::fs::create_dir_all(&dir)?;
+        let id = Ulid::new().to_string();
+        let store = dir.join(format!("{id}.{ext}"));
+        std::fs::write(&store, &bytes)?;
+        // sidecar {name, ext, annotation}：generation_history 参考图反查兜底时据此合成
+        // 完整参考（原名 + 「标注」维度），复用提示词不丢不入库标注图。
+        let annotation = annotation_json
+            .as_deref()
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok());
+        let sidecar = match &annotation {
+            Some(a) => serde_json::json!({ "name": file_name, "ext": ext, "annotation": a }),
+            None => serde_json::json!({ "name": file_name, "ext": ext }),
+        };
+        std::fs::write(store.with_extension("json"), sidecar.to_string())?;
+        let meta = crate::media::probe::probe(&store)?;
+        let store_str = store.to_string_lossy().into_owned();
+        Ok(Asset {
+            name: file_name,
+            ext: Some(ext.to_string()),
+            store_path: Some(store_str.clone()),
+            thumb_path: Some(store_str),
+            size: Some(meta.size as i64),
+            width: Some(meta.width as i64),
+            height: Some(meta.height as i64),
+            source: Some("annotation".to_string()),
+            ..empty_asset(id)
+        })
+    })
+    .await
+    .map_err(|e| AppError::Other(e.to_string()))?
+}
+
+/// 读本地图片为 data URL。标注面板导出用：convertFileSrc 的 asset 协议图属跨域源，
+/// 画进 canvas 会污染画布、toDataURL 抛 SecurityError；data URL 同源不污染。
+/// 只放行库根内文件（asset 协议 scope 同款限制）——store_path 都在库内，不设防会把
+/// 任意本地图片读成 data URL 泄进 webview。
+#[tauri::command]
+pub async fn read_image_data_url(
+    paths: State<'_, Arc<LibraryPaths>>,
+    path: String,
+) -> Result<String, AppError> {
+    let root = paths.inner().root.clone();
+    tokio::task::spawn_blocking(move || {
+        let p = PathBuf::from(&path);
+        if !p.is_file() {
+            return Err(AppError::Other(format!("文件不存在: {path}")));
+        }
+        // canonicalize 统一解析符号链接 / Windows \\?\ 前缀后再做前缀比较，防 ..\ 逃逸。
+        let canonical = p
+            .canonicalize()
+            .map_err(|e| AppError::Other(format!("读取路径失败: {e}")))?;
+        let root = root
+            .canonicalize()
+            .map_err(|e| AppError::Other(format!("素材库根不可用: {e}")))?;
+        if !canonical.starts_with(&root) {
+            return Err(AppError::Other(format!("只允许读取素材库内的文件: {path}")));
+        }
+        let bytes = std::fs::read(&canonical)?;
+        let ext = canonical
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        let mime = match ext.as_str() {
+            "png" => "image/png",
+            "jpg" | "jpeg" => "image/jpeg",
+            "webp" => "image/webp",
+            "gif" => "image/gif",
+            "bmp" => "image/bmp",
+            other => return Err(AppError::Other(format!("不支持的图片格式: {other}"))),
+        };
+        use base64::Engine;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+        Ok(format!("data:{mime};base64,{b64}"))
+    })
+    .await
+    .map_err(|e| AppError::Other(e.to_string()))?
+}
+
+fn empty_asset(id: String) -> Asset {
+    Asset {
+        id,
+        name: String::new(),
+        ext: None,
+        origin_path: None,
+        store_path: None,
+        thumb_path: None,
+        size: None,
+        width: None,
+        height: None,
+        duration: None,
+        phash: None,
+        colors: None,
+        rating: None,
+        source: None,
+        source_url: None,
+        folder_id: None,
+        created_at: None,
+        file_mtime: None,
+        generation_session_id: None,
+    }
+}
+
 #[tauri::command]
 pub async fn list_assets(
     db: State<'_, Arc<Database>>,
@@ -714,14 +904,19 @@ pub async fn list_generation_groups(
 /// 非生成图（无 generation_session_id）返回空 turns。
 #[tauri::command]
 pub async fn generation_history(
+    paths: State<'_, Arc<LibraryPaths>>,
     db: State<'_, Arc<Database>>,
     asset_id: String,
     project_id: Option<String>,
 ) -> Result<GenerationHistory, AppError> {
+    // 标注缓存目录：参考图反查未命中时从中合成「不入库」标注图（复用提示词不丢参考）。
+    let annotations_dir = paths.inner().root.join("annotations");
     let db = db.inner().clone();
-    tokio::task::spawn_blocking(move || db.generation_history(&asset_id, project_id.as_deref()))
-        .await
-        .map_err(|e| AppError::Other(e.to_string()))?
+    tokio::task::spawn_blocking(move || {
+        db.generation_history(&asset_id, project_id.as_deref(), Some(&annotations_dir))
+    })
+    .await
+    .map_err(|e| AppError::Other(e.to_string()))?
 }
 
 // ============ 标签 / 自动归类（P2）============

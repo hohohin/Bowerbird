@@ -4,14 +4,18 @@ import { EditorView } from "prosemirror-view";
 import { Slice, Fragment } from "prosemirror-model";
 import type { Node as PmNode, ResolvedPos } from "prosemirror-model";
 import { useStore } from "../../store";
-import type { Asset, CaptionSection, PromptedAsset } from "../../lib/types";
+import type { CaptionSection, PromptedAsset } from "../../lib/types";
 import { creationSchema, imageAttrs } from "./schema";
 import { agentPromptReferencesFromDoc, graphSourcesFromDoc, serializeDoc } from "./serialize";
 import { parsePromptToDoc, parsePromptToInline } from "./parse";
 import { buildPlugins } from "./plugins";
 
 const PICK_EVENT = "bowerbird://board-asset-picked";
+const PEEK_EVENT = "bowerbird://board-asset-peek";
 const LOAD_EVENT = "bowerbird://board-load-prompt";
+// 图片标注「插入创作板（不入库）」：detail = 完整 PromptedAsset（临时文件 + 「标注」维度），
+// 走 extraAssets 旁路（不在 s.assets / promptedAssets 里），随草稿 refs 持久化。
+const INJECT_EVENT = "bowerbird://board-asset-injected";
 
 function initialDoc(empty = false) {
   // 空初始文档（会话底部对话框用）：不预填「请参考」，避免续轮误发送占位文字。
@@ -48,7 +52,7 @@ function saveDraft(key: string, doc: unknown, refs: PromptedAsset[]) {
 /**
  * 创作板 ProseMirror 编辑器 hook：非受控 EditorView（doc 不进 React state，只持 tick 计数器
  * 触发派生数据重算）。注册 window 事件（点图插入 / 外部载入），暴露 finalPrompt / references /
- * 维度 chips 状态 / insertKeyword 供 UI 外壳消费。
+ * 维度环状态（chipAssetId → chipSections + ringOpen）/ insertKeyword 供 UI 外壳消费。
  *
  * opts.draftKey：草稿持久化的 localStorage key。缺省 = 创作板自己的 bowerbird.boardDraft；
  * 传 null = 不持久化（生成会话编辑坞用——会话本身即记录，且不能覆盖创作板草稿）。
@@ -70,7 +74,8 @@ export function useCreationEditor(opts?: { draftKey?: string | null; initialEmpt
   const [tick, setTick] = useState(0);
 
   const [chipAssetId, setChipAssetId] = useState<string | null>(null);
-  const [showKeywordHints, setShowKeywordHints] = useState(false);
+  // 维度环形菜单（CaptionRing）：点图拾取时打开，随LOAD_EVENT复位；由 UI 外壳渲染。
+  const [ringOpen, setRingOpen] = useState(false);
 
   const assetById = useMemo(() => {
     const m = new Map<string, PromptedAsset>();
@@ -152,11 +157,42 @@ export function useCreationEditor(opts?: { draftKey?: string | null; initialEmpt
       v.dispatch(v.state.tr.replaceSelectionWith(node).scrollIntoView());
       v.focus();
       setChipAssetId(assetId);
-      setShowKeywordHints(true);
+      setRingOpen(true);
+    }
+
+    function onPeek(e: Event) {
+      // 长按窥视（MasonryGrid）：只呼出该图的维度环，不插 image chip、不抢编辑框焦点
+      const assetId = (e as CustomEvent<string>).detail;
+      setChipAssetId(assetId);
+      setRingOpen(true);
+    }
+
+    function onInject(e: Event) {
+      // 标注图注入（不入库）：upsert 进 extraAssets（同 id 覆盖，防草稿 refs 膨胀），
+      // 插 image chip 后紧跟「标注」keyword——用户无需再从维度环手动引用，
+      // serialize 自动展开为 `@图名 的【标注】：<bbox>/<point> 坐标`。
+      const asset = (e as CustomEvent<PromptedAsset>).detail;
+      if (!asset || typeof asset.id !== "string") return;
+      setExtraAssets((prev) => [...prev.filter((a) => a.id !== asset.id), { ...asset }]);
+      const v = viewRef.current;
+      if (!v) return;
+      const schema = v.state.schema;
+      let tr = v.state.tr.replaceSelectionWith(
+        schema.nodes.image.create(imageAttrs(asset.id, asset, false))
+      );
+      const anno = asset.sections?.find((s) => s.title === "标注");
+      if (anno) {
+        tr = tr.replaceSelectionWith(
+          schema.nodes.keyword.create({ title: anno.title, body: anno.body })
+        );
+      }
+      v.dispatch(tr.scrollIntoView());
+      v.focus();
+      scheduleSave();
     }
 
     function onLoad(e: Event) {
-      const detail = (e as CustomEvent<{ prompt: string; refs: Asset[] }>).detail;
+      const detail = (e as CustomEvent<{ prompt: string; refs: PromptedAsset[] }>).detail;
       if (!detail || typeof detail.prompt !== "string") return;
       const body = detail.prompt.trim();
       if (!body) return;
@@ -169,7 +205,7 @@ export function useCreationEditor(opts?: { draftKey?: string | null; initialEmpt
       if (!v) return;
       v.updateState(EditorState.create({ doc, plugins: v.state.plugins }));
       setChipAssetId(null);
-      setShowKeywordHints(false);
+      setRingOpen(false);
       setTick((t) => t + 1);
       scheduleSave();
       setTimeout(() => v.focus(), 0);
@@ -178,10 +214,14 @@ export function useCreationEditor(opts?: { draftKey?: string | null; initialEmpt
     // 生成成功关闭创作板 / 手动收起 / 切项目 → 卸载。卸载即把当前 doc 落盘
     // （比 400ms 去抖更可靠——刚编辑完就关板时去抖计时器还挂着），重开创作板恢复。
     window.addEventListener(PICK_EVENT, onPick);
+    window.addEventListener(PEEK_EVENT, onPeek);
     window.addEventListener(LOAD_EVENT, onLoad);
+    window.addEventListener(INJECT_EVENT, onInject);
     return () => {
       window.removeEventListener(PICK_EVENT, onPick);
+      window.removeEventListener(PEEK_EVENT, onPeek);
       window.removeEventListener(LOAD_EVENT, onLoad);
+      window.removeEventListener(INJECT_EVENT, onInject);
       if (saveTimer) clearTimeout(saveTimer);
       if (draftKey) saveDraft(draftKey, view.state.doc.toJSON(), extraAssetsRef.current);
       view.destroy();
@@ -228,6 +268,8 @@ export function useCreationEditor(opts?: { draftKey?: string | null; initialEmpt
 
   const focus = useCallback(() => viewRef.current?.focus(), []);
 
+  const closeRing = useCallback(() => setRingOpen(false), []);
+
   return {
     hostRef,
     focus,
@@ -237,9 +279,9 @@ export function useCreationEditor(opts?: { draftKey?: string | null; initialEmpt
     graphSources,
     agentPromptReferences,
     chipAssetId,
-    setChipAssetId,
     chipSections,
-    showKeywordHints,
+    ringOpen,
+    closeRing,
     insertKeyword,
   };
 }

@@ -3,6 +3,7 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useStore, type GenEditingMode } from "../store";
 import { api } from "../lib/api";
+import { PRESET_FEATURE_ENABLED } from "../lib/featureFlags";
 import { notifyError } from "../lib/notify";
 import { canStartAnotherJob, canUseByo, canUseGenerationProvider } from "../lib/entitlement";
 import { cloudProviderLabel, canonicalProviderKey, isCloudProvider } from "../lib/genProviders";
@@ -116,6 +117,15 @@ export function GenerationPanel() {
 
   // 首轮参考图完整 asset：传给 TurnView——chip 视图还原参考图节点用；纯文本回退时在气泡上方展示缩略图「附件」。
   const firstRefAssets = useMemo(() => activeJob?.refAssets ?? [], [activeJob]);
+  // 会话最近一次产出（最后一个有图的轮）：编辑坞左侧「上次结果」缩略图，组稿时对照参考；
+  // offset = 该轮在 allImages 拍平序列中的起始下标（点开放大后可跨全轮导航）。
+  const lastImageTurn = useMemo(() => {
+    let found: { images: string[]; offset: number } | null = null;
+    for (const { turn, imageOffset } of turnsWithOffset) {
+      if (turn.images.length > 0) found = { images: turn.images, offset: imageOffset };
+    }
+    return found;
+  }, [turnsWithOffset]);
   // 参考图「附件」点开放大：Lightbox 用原图（store_path），与产出图各自独立成组。
   const refLightboxImages = useMemo(
     () => firstRefAssets.map((a) => a.store_path).filter((p): p is string => !!p),
@@ -247,17 +257,20 @@ export function GenerationPanel() {
           >
             <Copy size={13} />
           </button>
-          <button
-            type="button"
-            onClick={() => setSavingPreset(true)}
-            disabled={savingPreset || presetSaved}
-            className="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-panel2 hover:text-accent disabled:opacity-40"
-            title="把首轮编辑框原文登记为一个用途（之后可在创作板编辑/删除）"
-          >
-            <Bookmark size={13} />
-          </button>
+          {/* 「登记为用途」（preset）：功能未完成，随 PRESET_FEATURE_ENABLED 隐藏。 */}
+          {PRESET_FEATURE_ENABLED && (
+            <button
+              type="button"
+              onClick={() => setSavingPreset(true)}
+              disabled={savingPreset || presetSaved}
+              className="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-panel2 hover:text-accent disabled:opacity-40"
+              title="把首轮编辑框原文登记为一个用途（之后可在创作板编辑/删除）"
+            >
+              <Bookmark size={13} />
+            </button>
+          )}
         </div>
-        {savingPreset && (
+        {PRESET_FEATURE_ENABLED && savingPreset && (
           <div className="flex gap-1.5">
             <input
               autoFocus
@@ -316,6 +329,10 @@ export function GenerationPanel() {
             job={activeJob}
             mode={genEditing}
             canStart={canStartAnother}
+            recentImages={lastImageTurn?.images ?? []}
+            onOpenRecent={(k) =>
+              lastImageTurn && setLightbox({ images: allImages, index: lastImageTurn.offset + k })
+            }
             onExit={() => setGenEditing(null)}
           />
         </div>
@@ -709,11 +726,16 @@ function GenEditComposer({
   job,
   mode,
   canStart,
+  recentImages,
+  onOpenRecent,
   onExit,
 }: {
   job: GenJob;
   mode: GenEditingMode;
   canStart: boolean;
+  // 会话最近一次产出（最后一个有图的轮）：左侧「上次结果」缩略图，组稿时对照参考。
+  recentImages: string[];
+  onOpenRecent: (index: number) => void;
   onExit: () => void;
 }) {
   const isRevise = mode === "revise";
@@ -881,8 +903,35 @@ function GenEditComposer({
     // dockRef 高度经 ResizeObserver 写入 --gen-dock-h，瀑布流据此留底部空隙。
     <div
       ref={dockRef}
-      className="gen-dock-in w-full space-y-2 rounded-t-xl border border-b-0 border-edge bg-panel p-3 shadow-[0_-12px_32px_rgba(0,0,0,0.45)]"
+      className="gen-dock-in w-full rounded-t-xl border border-b-0 border-edge bg-panel p-3 shadow-[0_-12px_32px_rgba(0,0,0,0.45)]"
     >
+      <div className="flex items-start gap-2.5">
+        {/* 左侧「上次结果」缩略图：露瀑布流选图的同时对照会话最近产出编辑/续写；点击放大。 */}
+        {recentImages.length > 0 && (
+          <div className="flex w-[104px] shrink-0 flex-col gap-1.5">
+            <span className="text-[10px] text-muted">上次结果</span>
+            {recentImages.slice(0, 4).map((p, k) => (
+              <button
+                key={p}
+                type="button"
+                onClick={() => onOpenRecent(k)}
+                className="block w-fit cursor-zoom-in"
+                aria-label={`放大上次结果 ${k + 1}`}
+              >
+                <img
+                  src={convertFileSrc(p)}
+                  alt=""
+                  draggable={false}
+                  className="w-full rounded border border-edge hover:border-accent/60"
+                />
+              </button>
+            ))}
+            {recentImages.length > 4 && (
+              <span className="text-[10px] text-muted">+{recentImages.length - 4} 张</span>
+            )}
+          </div>
+        )}
+        <div className="min-w-0 flex-1 space-y-2">
       <div className="flex items-center gap-2">
         <strong className="shrink-0 text-xs font-semibold text-ink">
           {isRevise ? "继续对话" : "重新编辑"}
@@ -988,6 +1037,8 @@ function GenEditComposer({
               {agentBusy ? "Agent 整理中…" : "发送"}
             </button>
           </div>
+        </div>
+      </div>
         </div>
       </div>
     </div>

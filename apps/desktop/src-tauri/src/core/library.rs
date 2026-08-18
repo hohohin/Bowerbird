@@ -1,7 +1,7 @@
 //! 资源库 CRUD：assets / folders / tags 的结构与查询。
 //! Database 的业务方法 split-impl 在本文件（连接管理仍在 db/mod.rs）。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use rusqlite::OptionalExtension;
@@ -94,11 +94,13 @@ pub struct GenerationHistoryTurn {
 /// 某生成图所在 codex 会话的完整生成时间线（「回看生成对话」用）。
 /// `references` 取首版 generation_meta 的参考图（按 store_path 反查的完整 asset，含 name/
 /// thumb_path/store_path）：前端「复用到创作板」据此还原参考图，「新会话重新生成」从 store_path 派生。
+/// 反查未命中且路径位于标注缓存目录（<库根>/annotations/）时，从临时文件 + sidecar 合成——
+/// 「不入库」的标注图在复用提示词时不丢，且「标注」维度随之还原。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenerationHistory {
     pub session_id: Option<String>,
     pub turns: Vec<GenerationHistoryTurn>,
-    pub references: Vec<Asset>,
+    pub references: Vec<PromptedAsset>,
 }
 
 /// 反推 caption 解析出的一个维度片段（动态标题 + 正文）。
@@ -119,6 +121,18 @@ pub struct PromptedAsset {
     pub sections: Option<Vec<CaptionSection>>,
     pub dimensions: Option<BTreeMap<String, String>>,
     pub parse_status: Option<String>,
+}
+
+impl From<Asset> for PromptedAsset {
+    fn from(asset: Asset) -> Self {
+        PromptedAsset {
+            asset,
+            caption: None,
+            sections: None,
+            dimensions: None,
+            parse_status: None,
+        }
+    }
 }
 
 /// 自动归类侧栏聚合用：某 source 的 tag + 资产计数（count>0）。
@@ -167,6 +181,88 @@ fn parse_caption_payload(
     let sections = parsed.sections.filter(|s| !s.is_empty());
     let dimensions = parsed.dimensions.filter(|d| !d.is_empty());
     (sections, dimensions, parsed.parse_status)
+}
+
+/// analyses(kind=annotation) payload 合成的「标注」维度：取 shapes[].token（火山 Seedream
+/// 交互编辑坐标标记，如 `<bbox>120 180 640 760</bbox>`）用"；"拼接为 body。payload 由前端
+/// 构造（schema 见桌面端 types.ts AnnotationMeta），此处只读 token、格式异常静默跳过。
+fn annotation_section(payload: &str) -> Option<CaptionSection> {
+    let value: serde_json::Value = serde_json::from_str(payload).ok()?;
+    let tokens: Vec<&str> = value
+        .get("shapes")?
+        .as_array()?
+        .iter()
+        .filter_map(|shape| shape.get("token")?.as_str())
+        .collect();
+    if tokens.is_empty() {
+        return None;
+    }
+    Some(CaptionSection {
+        title: "标注".to_string(),
+        body: tokens.join("；"),
+    })
+}
+
+/// 从标注缓存目录（<库根>/annotations/）合成「不入库」标注图（generation_history 参考
+/// 反查兜底）：store_path 必须位于目录内且文件存在；<id>.json sidecar（save_annotation_temp
+/// 写入 {name, ext, annotation}）提供原名与标注元数据（合成「标注」维度）；sidecar 缺失时
+/// 退化为仅按文件合成（chip 可还原、维度不还原）；文件已删则 None（该参考被跳过）。
+fn synth_annotation_asset(annotations_dir: &Path, store_path: &str) -> Option<PromptedAsset> {
+    let path = Path::new(store_path);
+    if !path.starts_with(annotations_dir) || !path.is_file() {
+        return None;
+    }
+    let id = path.file_stem()?.to_str()?.to_string();
+    let meta = crate::media::probe::probe(path).ok()?;
+    let mut name = id.clone();
+    let mut ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("png")
+        .to_string();
+    let mut sections: Option<Vec<CaptionSection>> = None;
+    if let Ok(sidecar) = std::fs::read_to_string(path.with_extension("json")) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&sidecar) {
+            if let Some(n) = v.get("name").and_then(|x| x.as_str()) {
+                name = n.to_string();
+            }
+            if let Some(e) = v.get("ext").and_then(|x| x.as_str()) {
+                ext = e.to_string();
+            }
+            if let Some(annotation) = v.get("annotation") {
+                sections =
+                    annotation_section(&annotation.to_string()).map(|section| vec![section]);
+            }
+        }
+    }
+    let store = path.to_string_lossy().into_owned();
+    Some(PromptedAsset {
+        asset: Asset {
+            id,
+            name,
+            ext: Some(ext),
+            origin_path: None,
+            store_path: Some(store.clone()),
+            thumb_path: Some(store),
+            size: Some(meta.size as i64),
+            width: Some(meta.width as i64),
+            height: Some(meta.height as i64),
+            duration: Some(0.0),
+            phash: None,
+            colors: None,
+            rating: None,
+            source: Some("annotation".to_string()),
+            source_url: None,
+            folder_id: None,
+            created_at: None,
+            file_mtime: None,
+            generation_session_id: None,
+        },
+        caption: None,
+        sections,
+        dimensions: None,
+        parse_status: None,
+    })
 }
 
 fn asset_from_row(r: &rusqlite::Row) -> rusqlite::Result<Asset> {
@@ -1284,6 +1380,7 @@ impl Database {
         &self,
         asset_id: &str,
         project_id: Option<&str>,
+        annotations_dir: Option<&Path>,
     ) -> AppResult<GenerationHistory> {
         let conn = self.conn.lock().unwrap();
         // 先取会话 id；asset 不存在、无 session_id 或不在项目 scope → 空 history。
@@ -1353,6 +1450,8 @@ impl Database {
             }
         }
         // 首版参考图：按 store_path 反查完整 asset（复用还原参考图用；图已删则该项缺失、被跳过）。
+        // 反查未命中的路径若位于标注缓存目录，从临时文件 + sidecar 合成「不入库」标注图，
+        // 复用提示词时参考图与「标注」维度都不丢。按 first_references 原顺序输出。
         let references = if first_references.is_empty() {
             Vec::new()
         } else {
@@ -1367,7 +1466,7 @@ impl Database {
                 .query_map(rusqlite::params_from_iter(first_references.iter()), |r| {
                     asset_from_row(r)
                 })?;
-            let mut out = Vec::new();
+            let mut by_path: HashMap<String, Asset> = HashMap::new();
             for r in rows {
                 let asset = r?;
                 if let Some(project_id) = project_id {
@@ -1381,7 +1480,21 @@ impl Database {
                         continue;
                     }
                 }
-                out.push(asset);
+                if let Some(p) = &asset.store_path {
+                    by_path.insert(p.clone(), asset);
+                }
+            }
+            let mut out = Vec::new();
+            for path in &first_references {
+                if let Some(asset) = by_path.remove(path) {
+                    out.push(PromptedAsset::from(asset));
+                    continue;
+                }
+                if let Some(dir) = annotations_dir {
+                    if let Some(synth) = synth_annotation_asset(dir, path) {
+                        out.push(synth);
+                    }
+                }
             }
             out
         };
@@ -1392,12 +1505,13 @@ impl Database {
         })
     }
 
-    /// 创作板用：有 caption（反推）的资产 + 最新 caption 正文（开发计划 §5.4）。
-    /// 创作板打开时瀑布流只显示这些；缩略图槽的 prompt 内容来自 caption / dimensions。
+    /// 创作板用：有 caption（反推）或 annotation（图片标注）的资产 + 最新 caption 正文与维度。
+    /// 缩略图槽的 prompt 内容来自 caption / dimensions；标注图（无 caption）只带「标注」维度。
     pub fn list_prompted_assets(&self, project_id: Option<&str>) -> AppResult<Vec<PromptedAsset>> {
         let conn = self.conn.lock().unwrap();
         // 无 JOIN → ASSET_COLS 不需表前缀；caption 取最新 analyses(kind=caption) 的 $.text。
         // caption_payload 用于反序列化结构化 dimensions；旧 payload 只有 text 时也兼容。
+        // EXISTS 含 annotation：标注入库跳过 auto-analyze（无 caption），靠 annotation 行进此列表。
         let sql = format!(
             "SELECT {ASSET_COLS}, (\
                SELECT json_extract(payload, '$.text') FROM analyses \
@@ -1409,7 +1523,8 @@ impl Database {
                ORDER BY created_at DESC LIMIT 1\
              ) AS caption_payload \
              FROM assets \
-             WHERE EXISTS (SELECT 1 FROM analyses WHERE asset_id = assets.id AND kind = 'caption') \
+             WHERE EXISTS (SELECT 1 FROM analyses \
+               WHERE asset_id = assets.id AND kind IN ('caption', 'annotation')) \
              AND (?1 IS NULL OR EXISTS(SELECT 1 FROM project_assets pa \
                WHERE pa.asset_id = assets.id AND pa.project_id IS ?1)) \
              ORDER BY created_at DESC"
@@ -1429,6 +1544,37 @@ impl Database {
         let mut out = Vec::new();
         for r in rows {
             out.push(r?);
+        }
+        // 「标注」维度：每资产取最新一条 annotation（insert_analysis 的 created_at 为秒级，
+        // 同秒多行时按 rowid 决胜——后插入者覆盖，与「最新一条」语义一致），
+        // 由 payload.shapes[].token（火山 <bbox>/<point> 坐标标记）合成维度追加在
+        // caption sections 之后——用户在创作板选「标注」即把坐标注入 prompt。
+        let mut annotations: HashMap<String, String> = HashMap::new();
+        {
+            let mut stmt = conn.prepare(
+                "SELECT asset_id, payload FROM analyses \
+                 WHERE kind = 'annotation' ORDER BY created_at ASC, rowid ASC",
+            )?;
+            let rows = stmt.query_map([], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })?;
+            for r in rows {
+                let (asset_id, payload) = r?;
+                annotations.insert(asset_id, payload);
+            }
+        }
+        for p in &mut out {
+            let Some(payload) = annotations.get(&p.asset.id) else {
+                continue;
+            };
+            if let Some(section) = annotation_section(payload) {
+                match p.sections.as_mut() {
+                    // 反推 sections 已含同名维度时不重复追加。
+                    Some(sections) if sections.iter().any(|s| s.title == section.title) => {}
+                    Some(sections) => sections.push(section),
+                    None => p.sections = Some(vec![section]),
+                }
+            }
         }
         Ok(out)
     }
@@ -2192,7 +2338,7 @@ mod tests {
         put_meta(&db, "02T2", "g3", "修改1", session, None);
         put_meta(&db, "02XX", "g4", "别的会话", "sess-B", None); // 排除
 
-        let h = db.generation_history("g1", None).unwrap();
+        let h = db.generation_history("g1", None, None).unwrap();
         assert_eq!(h.session_id.as_deref(), Some(session));
         assert_eq!(h.turns.len(), 2, "两轮：首版（2图合并）+ 修改1");
         assert_eq!(h.turns[0].prompt, "首版");
@@ -2201,16 +2347,92 @@ mod tests {
         assert_eq!(h.turns[1].prompt, "修改1");
         assert_eq!(h.turns[1].images.len(), 1);
         // 首版参考图按 store_path 反查为完整 asset（复用还原用）。
-        let ref_ids: Vec<String> = h.references.iter().map(|a| a.id.clone()).collect();
+        let ref_ids: Vec<String> = h.references.iter().map(|a| a.asset.id.clone()).collect();
         assert_eq!(ref_ids.len(), 2, "两参考图均命中");
         assert!(ref_ids.contains(&"ra".to_string()));
         assert!(ref_ids.contains(&"rb".to_string()));
 
         // 非生成图（无 generation_session_id）→ 空 history。
         let plain = put_asset(&db, "plain");
-        let h2 = db.generation_history(&plain, None).unwrap();
+        let h2 = db.generation_history(&plain, None, None).unwrap();
         assert!(h2.session_id.is_none());
         assert!(h2.turns.is_empty());
+    }
+
+    #[test]
+    fn generation_history_synthesizes_annotation_cache_references() {
+        // 「不入库」标注图（<annotations>/ 临时文件 + sidecar）作为 generation_meta 参考：
+        // assets 表反查未命中 → 由缓存目录合成（含「标注」维度）；文件已删的缓存路径被跳过。
+        let db = db();
+        let gid = Ulid::new().to_string();
+        db.insert_asset(&Asset {
+            id: gid.clone(),
+            name: "g".into(),
+            ext: Some("png".into()),
+            origin_path: None,
+            store_path: Some(format!("/tmp/{gid}.png")),
+            thumb_path: None,
+            size: Some(0),
+            width: Some(10),
+            height: Some(10),
+            duration: Some(0.0),
+            phash: None,
+            colors: None,
+            rating: Some(0),
+            source: Some("codex".into()),
+            source_url: None,
+            folder_id: None,
+            created_at: None,
+            file_mtime: Some(0),
+            generation_session_id: Some("sess-anno".into()),
+        })
+        .unwrap();
+
+        // 缓存目录：temp1 有文件 + sidecar；gone 只有 meta 引用、文件不存在。
+        let tmp = std::env::temp_dir().join(format!("bb-anno-{}", Ulid::new()));
+        let anno_dir = tmp.join("annotations");
+        std::fs::create_dir_all(&anno_dir).unwrap();
+        std::fs::write(anno_dir.join("temp1.png"), b"png-bytes").unwrap();
+        std::fs::write(
+            anno_dir.join("temp1.json"),
+            r#"{"name":"原稿-标注","ext":"png","annotation":{"schema_version":1,
+                "shapes":[{"type":"rect","token":"<bbox>10 20 30 40</bbox>"}]}}"#,
+        )
+        .unwrap();
+        let temp1_path = anno_dir.join("temp1.png").to_string_lossy().into_owned();
+        let gone_path = anno_dir.join("gone.png").to_string_lossy().into_owned();
+
+        db.insert_analysis(&Analysis {
+            id: Ulid::new().to_string(),
+            asset_id: gid.clone(),
+            kind: "generation_meta".to_string(),
+            payload: serde_json::json!({
+                "prompt": "改这里",
+                "session_id": "sess-anno",
+                "references": [temp1_path, gone_path],
+            })
+            .to_string(),
+            provider: None,
+            created_at: None,
+        })
+        .unwrap();
+
+        let h = db.generation_history(&gid, None, Some(&anno_dir)).unwrap();
+        assert_eq!(h.turns.len(), 1);
+        // gone.png 不存在 → 跳过；temp1 合成成功。
+        assert_eq!(h.references.len(), 1);
+        let synth = &h.references[0];
+        assert_eq!(synth.asset.id, "temp1");
+        assert_eq!(synth.asset.name, "原稿-标注");
+        assert_eq!(synth.asset.source.as_deref(), Some("annotation"));
+        assert!(synth.asset.store_path.as_deref().is_some_and(|p| p.ends_with("temp1.png")));
+        // 「标注」维度随 sidecar 还原，复用提示词时坐标 token 可完整展开。
+        let sections = synth.sections.as_ref().expect("应有标注维度");
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections[0].title, "标注");
+        assert_eq!(sections[0].body, "<bbox>10 20 30 40</bbox>");
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -2415,6 +2637,124 @@ mod tests {
         assert_eq!(r[0].caption.as_deref(), Some("legacy raw caption"));
         assert!(r[0].dimensions.is_none());
         assert!(r[0].parse_status.is_none());
+    }
+
+    #[test]
+    fn prompted_assets_include_annotation_dimension() {
+        // 标注图（无 caption）也进 list_prompted_assets，且 caption sections 之后追加
+        // 「标注」维度（body = 火山坐标 token 拼接）；多条 annotation 取最新（后插入覆盖）。
+        let db = db();
+        let a1 = put_asset(&db, "annotation-only");
+        let a2 = put_asset(&db, "caption-plus-annotation");
+        let _a3 = put_asset(&db, "plain");
+
+        for asset_id in [a1.clone(), a2.clone()] {
+            db.insert_analysis(&Analysis {
+                id: Ulid::new().to_string(),
+                asset_id: asset_id.clone(),
+                kind: "annotation".to_string(),
+                payload: serde_json::json!({
+                    "schema_version": 1,
+                    "source_asset_id": "src",
+                    "shapes": [
+                        { "type": "rect", "x1": 120, "y1": 180, "x2": 640, "y2": 760,
+                           "color": "#ff4d4d", "token": "<bbox>120 180 640 760</bbox>" },
+                        { "type": "arrow", "x1": 520, "y1": 460, "x2": 700, "y2": 300,
+                           "color": "#ffd21e", "token": "<point>520 460</point> → <point>700 300</point>" }
+                    ]
+                })
+                .to_string(),
+                provider: None,
+                created_at: None,
+            })
+            .unwrap();
+        }
+        db.insert_analysis(&Analysis {
+            id: Ulid::new().to_string(),
+            asset_id: a1.clone(),
+            kind: "caption".to_string(),
+            payload: r#"{"text":"annotated caption later"}"#.to_string(),
+            provider: Some("codex-cli".into()),
+            created_at: None,
+        })
+        .unwrap();
+        // a1 的第二条 annotation（更晚插入）：应覆盖第一条，只留 arrow token。
+        db.insert_analysis(&Analysis {
+            id: Ulid::new().to_string(),
+            asset_id: a1.clone(),
+            kind: "annotation".to_string(),
+            payload: serde_json::json!({
+                "schema_version": 1,
+                "shapes": [
+                    { "type": "arrow", "x1": 10, "y1": 20, "x2": 30, "y2": 40,
+                       "token": "<point>10 20</point> → <point>30 40</point>" }
+                ]
+            })
+            .to_string(),
+            provider: None,
+            created_at: None,
+        })
+        .unwrap();
+
+        let r = db.list_prompted_assets(None).unwrap();
+        assert_eq!(r.len(), 2, "annotation 资产应进列表，plain 不进");
+        let by_id = |id: &str| r.iter().find(|p| p.asset.id == id).unwrap();
+
+        let p1 = by_id(&a1);
+        let sections = p1.sections.as_ref().expect("a1 应有 sections");
+        assert_eq!(sections.len(), 1, "最新 annotation 覆盖旧的");
+        assert_eq!(sections[0].title, "标注");
+        assert_eq!(sections[0].body, "<point>10 20</point> → <point>30 40</point>");
+
+        let p2 = by_id(&a2);
+        assert!(p2.caption.is_none(), "a2 无 caption");
+        let sections = p2.sections.as_ref().expect("a2 应有标注维度");
+        assert_eq!(sections.len(), 1);
+        assert_eq!(
+            sections[0].body,
+            "<bbox>120 180 640 760</bbox>；<point>520 460</point> → <point>700 300</point>"
+        );
+    }
+
+    #[test]
+    fn prompted_assets_annotation_appended_after_caption_sections() {
+        // caption + annotation 并存：「标注」追加在反推维度之后，不覆盖。
+        let db = db();
+        let a1 = put_asset(&db, "both");
+        db.insert_analysis(&Analysis {
+            id: Ulid::new().to_string(),
+            asset_id: a1.clone(),
+            kind: "caption".to_string(),
+            payload: serde_json::json!({
+                "text": "caption",
+                "sections": [{ "title": "光影", "body": "rim light" }]
+            })
+            .to_string(),
+            provider: None,
+            created_at: None,
+        })
+        .unwrap();
+        db.insert_analysis(&Analysis {
+            id: Ulid::new().to_string(),
+            asset_id: a1.clone(),
+            kind: "annotation".to_string(),
+            payload: serde_json::json!({
+                "shapes": [{ "type": "rect", "token": "<bbox>0 0 999 999</bbox>" }]
+            })
+            .to_string(),
+            provider: None,
+            created_at: None,
+        })
+        .unwrap();
+
+        let r = db.list_prompted_assets(None).unwrap();
+        assert_eq!(r.len(), 1);
+        let sections = r[0].sections.as_ref().unwrap();
+        assert_eq!(
+            sections.iter().map(|s| s.title.as_str()).collect::<Vec<_>>(),
+            vec!["光影", "标注"],
+            "标注维度应追加在 caption sections 之后"
+        );
     }
 
     #[test]

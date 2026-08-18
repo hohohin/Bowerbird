@@ -98,12 +98,47 @@ export interface PromptedAsset extends Asset {
   sections?: CaptionSection[] | null;
   dimensions?: Record<string, string> | null;
   parse_status?: string | null;
+  /** 图片标注元数据（不入库插入创作板的临时素材携带；库内资产经 analyses kind=annotation 读取）。 */
+  annotation?: AnnotationMeta | null;
+}
+
+/** 图片标注单个形状：坐标为火山 Seedream 交互编辑归一化整数（0-999，左上 0,0 / 右下 999,999）。
+ *  token 即可注入 prompt 的坐标标记——rect `<bbox>x1 y1 x2 y2</bbox>`；
+ *  arrow 火山无专用标记，用起终点两个 point 表达方向。 */
+export interface AnnotationShape {
+  type: "rect" | "arrow";
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  /** 显示用样式快照（烧录像素与未来重渲染），不影响坐标语义。 */
+  color: string;
+  /** 线宽（烧录进输出图的像素，随导出图分辨率）。 */
+  width: number;
+  token: string;
+}
+
+/** 标注输出相对原图的变换序列（面板内按操作顺序记录；裁剪坐标为当时底图归一化 0-1）。
+ *  shapes 的坐标 token 一律相对最终输出图（旋转/裁剪后的图），与发给模型的参考图一致。 */
+export type AnnotationTransformOp =
+  | { kind: "rotate"; dir: 1 | -1 }
+  | { kind: "crop"; x1: number; y1: number; x2: number; y2: number };
+
+/** analyses(kind=annotation) 的 payload：标注输出图尺寸 + 相对原图的形状列表（坐标同图 1:1）。 */
+export interface AnnotationMeta {
+  schema_version: 1;
+  source_asset_id: string;
+  source_store_path: string;
+  image: { width: number; height: number };
+  /** 裁剪/旋转过程（无变换时缺省）；供追溯与未来重编辑。 */
+  transform?: AnnotationTransformOp[];
+  shapes: AnnotationShape[];
 }
 
 export interface Analysis {
   id: string;
   asset_id: string;
-  kind: string; // caption | keywords | ocr | layout | inspiration_card
+  kind: string; // caption | generation_meta | annotation（图片标注坐标）| keywords | ocr | ...
   payload: string; // JSON，如 {"text":"..."}
   provider?: string | null;
   created_at?: number | null;
@@ -179,8 +214,6 @@ export interface GenJob {
   projectId: string | null; // 首轮项目快照；续轮不随当前项目切换漂移
   createdAt: number;
   running: boolean;
-  // 创作板首发标记：本轮 done 有图则关闭创作板（编辑器卸载落盘保留草稿）。续轮置 false。
-  pendingBoardClose: boolean;
   // 即梦 submit_id（Chunk::Submit 回填，恢复续查用）；codex job 为 null。
   submitId?: string | null;
   // 远端任务状态（恢复 worker 回填，展示「远端仍在排队」等）；非恢复 job 为 null。
@@ -197,7 +230,9 @@ export interface GenerationHistoryTurn {
 export interface GenerationHistory {
   session_id: string | null;
   turns: GenerationHistoryTurn[];
-  references: Asset[]; // 首版参考图完整 asset：「复用到创作板」还原参考图 + 「新会话重新生成」派生 store_path
+  /** 首版参考图完整 asset：「复用到创作板」还原参考图 + 「新会话重新生成」派生 store_path。
+   *  不入库标注图由 <库根>/annotations/ 缓存合成（含「标注」维度 sections）。 */
+  references: PromptedAsset[];
 }
 
 /** 应用设置（后端 settings.json 持久化） */

@@ -142,7 +142,6 @@ export function AssetDetail() {
   const folders = useStore((s) => s.folders);
   const reloadFolders = useStore((s) => s.reloadFolders);
   const viewGenerationHistory = useStore((s) => s.viewGenerationHistory);
-  const generating = useStore((s) => s.generating);
   const openContextMenu = useStore((s) => s.openContextMenu);
   const cloudAuth = useStore((s) => s.cloudAuth);
   const cloudEntitlement = useStore((s) => s.cloudEntitlement);
@@ -904,7 +903,6 @@ export function AssetDetail() {
                 <div className="flex flex-wrap items-center gap-2">
                   <button
                     onClick={() => viewGenerationHistory(asset.id)}
-                    disabled={generating}
                     className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-2.5 py-1.5 text-[11px] font-semibold text-white disabled:opacity-50"
                     title="像回看对话一样，看这张图生成时的各轮 prompt 与产出图，并可继续提修改意见"
                   >

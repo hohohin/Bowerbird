@@ -55,6 +55,29 @@ function Thumb({
   });
   const cancelDescribe = useStore((s) => s.cancelDescribe);
 
+  // 长按窥视（仅创作板打开时）：按住 450ms 呼出该图维度环（board-asset-peek，不插 chip）。
+  // 触发后的松开不再当点击（否则松手又拾取一次）；移动超阈值 / 松开 / 离开 / 开始拖拽都取消。
+  const pressTimer = useRef<number | undefined>(undefined);
+  const pressStart = useRef<{ x: number; y: number } | null>(null);
+  const suppressClick = useRef(false);
+  function cancelPress() {
+    if (pressTimer.current) window.clearTimeout(pressTimer.current);
+    pressTimer.current = undefined;
+    pressStart.current = null;
+  }
+  function beginPress(e: MouseEvent<HTMLDivElement>) {
+    cancelPress();
+    if (e.button !== 0 || !useStore.getState().boardOpen) return;
+    pressStart.current = { x: e.clientX, y: e.clientY };
+    pressTimer.current = window.setTimeout(() => {
+      pressTimer.current = undefined;
+      suppressClick.current = true;
+      // 环已呼出，收回 2.8s hover 放大预览，避免它稍后弹出盖住环体验。
+      dismissPreview();
+      window.dispatchEvent(new CustomEvent("bowerbird://board-asset-peek", { detail: shown.id }));
+    }, 450);
+  }
+
   // 同流程合并：组内 >1 张才显轮播。组到达 / 变化时回到末位（最新一张 = 列表里展示的那张）。
   const groupLen = group && group.length > 1 ? group.length : 0;
   const [idx, setIdx] = useState(0);
@@ -184,11 +207,22 @@ function Thumb({
     }, 2800);
   }
   function onMove(e: MouseEvent<HTMLDivElement>) {
+    // 长按中挪动超阈值 = 不是窥视意图，取消计时
+    if (
+      pressStart.current &&
+      (Math.abs(e.clientX - pressStart.current.x) > 8 || Math.abs(e.clientY - pressStart.current.y) > 8)
+    ) {
+      cancelPress();
+    }
     mouseRef.current = { x: e.clientX, y: e.clientY };
     // hover 期间缩略图尺寸不变，只跟随鼠标更新位置。
     setPreview((p) => (p ? { ...p, x: e.clientX, y: e.clientY } : p));
   }
   function onLeave() {
+    cancelPress();
+    // 窥视已触发但松开发生在卡片外 → click 不会在本元素派发，suppressClick 若不重置
+    // 会吞掉下一次正常点击。
+    suppressClick.current = false;
     setHovering(false);
     if (hoverTimer.current) {
       clearTimeout(hoverTimer.current);
@@ -250,7 +284,15 @@ function Thumb({
       onMouseEnter={onEnter}
       onMouseMove={onMove}
       onMouseLeave={onLeave}
-      onClick={(e) => activateAsset(e.shiftKey)}
+      onMouseDown={beginPress}
+      onMouseUp={cancelPress}
+      onClick={(e) => {
+        if (suppressClick.current) {
+          suppressClick.current = false;
+          return;
+        }
+        activateAsset(e.shiftKey);
+      }}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
@@ -265,6 +307,7 @@ function Thumb({
       }}
       onDragStart={(e) => {
         dismissPreview();
+        cancelPress();
         const st = useStore.getState();
         // manage 模式拖已选中项 = 拖全部选中（与 BatchBar 一致）；否则只拖这一张。
         const ids =
