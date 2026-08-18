@@ -60,7 +60,7 @@ cd apps/cloud
 npx --yes supabase@latest --agent no db push
 ```
 
-会依次执行 `supabase/migrations/0001_*.sql` 到 `0015_generation_jobs.sql`。`0010` 必须先于新版 `generate-proxy` / `understand-proxy`；`0011` 必须先于新版 `entitlement` / `generate-proxy` / `understand-proxy`；`0015` 必须先于异步版 `generate-proxy`、`generation-worker` 与 VPS consumer。
+会依次执行 `supabase/migrations/0001_*.sql` 到 `0019_understand_jobs.sql`。`0010` 必须先于新版 `generate-proxy` / `understand-proxy`；`0011` 必须先于新版 `entitlement` / `generate-proxy` / `understand-proxy`；`0015` 必须先于异步版 `generate-proxy`、`generation-worker` 与 VPS consumer；`0019` 必须先于异步版 `understand-proxy`、`understand-worker` 与 VPS understand consumer。
 
 ### 4. 部署 Edge Functions 并注入 Secrets
 
@@ -69,6 +69,7 @@ npx --yes supabase@latest --agent no db push
 supabase functions deploy generate-proxy
 supabase functions deploy generation-worker --no-verify-jwt
 supabase functions deploy understand-proxy
+supabase functions deploy understand-worker --no-verify-jwt
 supabase functions deploy entitlement
 supabase functions deploy create-checkout
 supabase functions deploy payment-webhook
@@ -90,15 +91,18 @@ supabase secrets set PROXY_TIMEOUT_MS=140000
 supabase secrets set RATE_LIMIT_PER_USER_PER_MIN=10
 supabase secrets set BOWERBIRD_CLOUD_MOCK=false
 supabase secrets set GENERATION_WORKER_TOKEN=$GENERATION_WORKER_TOKEN
+supabase secrets set UNDERSTAND_WORKER_TOKEN=$UNDERSTAND_WORKER_TOKEN
 supabase secrets set BOWERBIRD_PAYMENT_MOCK=true
 supabase secrets set SUPERUN_WEBHOOK_SECRET=$SUPERUN_WEBHOOK_SECRET
 ```
 
 > ⚠️ 目前 `.env` 里 `BOWERBIRD_CLOUD_MOCK=false` 已开启真实方舟；`BOWERBIRD_PAYMENT_MOCK=true` 保持 Mock 支付，**不要**提前改 false。
 
-`generation-worker` 必须使用 `--no-verify-jwt` 部署，因为 VPS 使用专用 Worker Token 而不是用户 JWT；Function 内部会常量时间校验 `GENERATION_WORKER_TOKEN`。VPS 只持该 Token 与方舟生图 Key，绝不能持 Supabase secret/service-role。
+`generation-worker` / `understand-worker` 必须使用 `--no-verify-jwt` 部署，因为 VPS 使用专用 Worker Token 而不是用户 JWT；Function 内部会常量时间校验各自的 `GENERATION_WORKER_TOKEN` / `UNDERSTAND_WORKER_TOKEN`。VPS 只持这些 Token 与方舟 Key，绝不能持 Supabase secret/service-role。
 
-### 4.1 部署 VPS 图片生成 Consumer
+`understand-proxy` 由 `UNDERSTAND_ASYNC` 开关控制双模式（默认 `false` 保持旧的同步单次请求行为）。上线顺序：先部署函数（开关关）→ 更新 VPS 容器 → 发布新版桌面端（create/轮询兼容两种响应）→ 最后 `supabase secrets set UNDERSTAND_ASYNC=true` 切到异步任务模式，摆脱 Edge 墙钟上限。观察稳定后旧同步路径随生图 135/140s 回退一并移除。
+
+### 4.1 部署 VPS Worker（生图 + 理解消费循环，同一容器）
 
 把 `apps/agent-worker/{Dockerfile.generation,compose.generation.yml,src}` 部署到 `/opt/bowerbird/agent-worker`，并创建权限 `0600` 的 `.env.generation`：
 
@@ -114,6 +118,10 @@ ARK_IMAGE_SIZE=2K
 BOWERBIRD_CLOUD_MOCK=false
 GENERATION_POLL_INTERVAL_MS=2000
 GENERATION_HEARTBEAT_INTERVAL_MS=30000
+UNDERSTAND_CONTROL_URL=https://<project-ref>.supabase.co/functions/v1/understand-worker
+UNDERSTAND_WORKER_TOKEN=<与 Supabase Secret 完全一致的高熵随机值>
+UNDERSTAND_WORKER_ID=lighthouse-guangzhou-1
+ARK_VISION_MODEL=<豆包 Vision endpoint id>
 ```
 
 ```bash
@@ -123,7 +131,7 @@ sudo docker compose -f compose.generation.yml ps
 sudo docker compose -f compose.generation.yml logs --tail 50
 ```
 
-容器不映射入站端口、只读根文件系统、非 root、丢弃全部 capabilities。方舟同步请求不设置 120/135 秒主动终止；等待期间每 30 秒向 Bowerbird 控制面续租。
+容器不映射入站端口、只读根文件系统、非 root、丢弃全部 capabilities。容器入口为 `src/main.ts` 组合入口：按 `GENERATION_CONTROL_URL` / `UNDERSTAND_CONTROL_URL` 是否配置分别启动生图与理解两个消费循环，互不阻塞。方舟同步请求（生图与理解）不设置 120/135 秒主动终止；等待期间每 30 秒向 Bowerbird 控制面续租。
 
 ### 5. 部署 Auth 钩子（注册即发 30 分）
 
@@ -153,6 +161,13 @@ curl -H "Authorization: Bearer <测试用户 access token>" \
 $env:CLOUD_E2E_FUNCTION_REGION='ap-northeast-1'
 node --env-file=.env scripts/test-cloud-e2e.mjs
 Remove-Item Env:CLOUD_E2E_FUNCTION_REGION
+
+# 4. VPS 异步链路（生图/理解，需 VPS Worker 已上线；UNDERSTAND_ASYNC 翻 true 后）
+node scripts/test-generation-e2e.mjs basic     # 多参考图真实出图 + 失败回滚
+node scripts/test-understand-e2e.mjs basic     # 真实 Vision 反推 + 失败回滚与免费额度回补
+node scripts/test-understand-e2e.mjs guard     # 幂等重放 + 越权 404
+node scripts/test-understand-e2e.mjs crash-create   # 配合 VPS 上 kill -9 Worker：输出 CRASH_JOB_ID
+node scripts/test-understand-e2e.mjs crash-check <CRASH_JOB_ID>  # Worker 重启后验证 outcome_unknown 冻结
 ```
 
 ## 7. 桌面端/官网真机验收

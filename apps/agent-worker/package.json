@@ -7,7 +7,9 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "node --test \"src/**/*.test.ts\"",
+    "worker": "node src/main.ts",
     "worker:generation": "node src/cloud-generation/main.ts",
+    "worker:understand": "node src/cloud-understand/main.ts",
     "spike:deepseek": "node --env-file=../cloud/.env src/spikes/deepseek-tool-calling.ts",
     "local:agent": "node --env-file=../cloud/.env src/local/cli.ts",
     "local:prompt-agent": "node --env-file=../cloud/.env src/local/prompt-agent-cli.ts"

@@ -98,7 +98,7 @@ export function configFromEnv(env: Record<string, string | undefined>): Generati
   };
 }
 
-function isRecord(value: unknown): value is JsonRecord {
+export function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
@@ -108,7 +108,7 @@ function safeIdentifier(value: unknown): string | undefined {
     : undefined;
 }
 
-function parseJson(text: string): unknown {
+export function parseJson(text: string): unknown {
   try {
     return JSON.parse(text);
   } catch {
@@ -289,17 +289,17 @@ class ArkImageClient {
   }
 }
 
-function safeErrorKind(error: unknown): string {
+export function safeErrorKind(error: unknown): string {
   if (error instanceof KnownProviderError) return error.safeCode;
   if (error instanceof Error && /^[A-Za-z0-9._:-]{1,80}$/.test(error.message)) return error.message;
   return "network_error";
 }
 
-function sha256(bytes: Uint8Array): string {
+export function sha256(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-async function sleep(ms: number): Promise<void> {
+export async function sleep(ms: number): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 

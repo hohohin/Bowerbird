@@ -76,7 +76,106 @@ impl CloudUnderstandProvider {
 
 #[derive(Deserialize)]
 struct UnderstandResponse {
-    text: String,
+    status: String,
+    #[serde(default)]
+    text: Option<String>,
+    job_id: Option<String>,
+    error: Option<CloudJobError>,
+}
+
+#[derive(Deserialize)]
+struct CloudJobError {
+    message: String,
+}
+
+impl CloudUnderstandProvider {
+    async fn post_understand(
+        &self,
+        endpoint: &str,
+        body: serde_json::Value,
+        error_label: &str,
+    ) -> Result<UnderstandResponse, AppError> {
+        let response = self
+            .auth
+            .send_authorized(self.cloud.http().post(endpoint).json(&body), error_label)
+            .await?;
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .map_err(|error| AppError::Cloud(format!("读取云理解响应失败: {error}")))?;
+        if !status.is_success() {
+            let message = serde_json::from_str::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|value| {
+                    value
+                        .pointer("/error/message")
+                        .and_then(|value| value.as_str())
+                        .map(str::to_string)
+                })
+                .unwrap_or_else(|| format!("云理解失败（HTTP {}）", status.as_u16()));
+            return Err(AppError::Cloud(message));
+        }
+        serde_json::from_str(&body)
+            .map_err(|error| AppError::Cloud(format!("解析云理解响应失败: {error}")))
+    }
+
+    /// 轮询云理解任务直到终态；瞬时失败指数退避（对齐生图 `wait_for_cloud_job`）。
+    async fn wait_for_understand_job(
+        &self,
+        endpoint: &str,
+        job_id: &str,
+    ) -> Result<UnderstandResponse, AppError> {
+        let mut transient_failures = 0_u32;
+        loop {
+            match self
+                .post_understand(
+                    endpoint,
+                    serde_json::json!({ "action": "get", "job_id": job_id }),
+                    "轮询云理解任务失败",
+                )
+                .await
+            {
+                Ok(result) => {
+                    transient_failures = 0;
+                    match result.status.as_str() {
+                        "uploading" | "queued" | "leased" | "running" | "cancel_requested" => {
+                            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                        }
+                        "succeeded" => return Ok(result),
+                        "failed" | "cancelled" | "outcome_unknown" => {
+                            let message = result
+                                .error
+                                .map(|error| error.message)
+                                .unwrap_or_else(|| match result.status.as_str() {
+                                    "outcome_unknown" => {
+                                        "请求已提交方舟，但结果状态暂时无法确认".into()
+                                    }
+                                    "cancelled" => "云任务已取消".into(),
+                                    _ => "云理解失败".into(),
+                                });
+                            return Err(AppError::Cloud(message));
+                        }
+                        status => return Err(AppError::Cloud(format!("云理解任务异常状态: {status}"))),
+                    }
+                }
+                Err(error) => {
+                    let message = error.to_string();
+                    if message.contains("登录") || message.contains("请先登录") {
+                        return Err(error);
+                    }
+                    transient_failures = transient_failures.saturating_add(1);
+                    tracing::warn!(
+                        "云理解任务轮询暂时失败：job={} retry={}",
+                        job_id,
+                        transient_failures
+                    );
+                    let delay = 5_u64.saturating_mul(2_u64.pow(transient_failures.min(3)));
+                    tokio::time::sleep(std::time::Duration::from_secs(delay.min(40))).await;
+                }
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -101,39 +200,43 @@ impl UnderstandProvider for CloudUnderstandProvider {
             .first()
             .ok_or_else(|| AppError::Cloud("云理解需要一张图片".into()))?;
         let image = read_cloud_jpeg(image_path, false).await?;
-        let response = self
-            .auth
-            .send_authorized(
-                self.cloud.http().post(endpoint).json(&serde_json::json!({
-                    "idempotency_key": req.job_id.unwrap_or_else(|| Ulid::new().to_string()),
+        let idempotency_key = req.job_id.clone().unwrap_or_else(|| Ulid::new().to_string());
+
+        // 同步模式（UNDERSTAND_ASYNC=false，服务端忽略 action）或幂等重放已完成时，
+        // create 响应直接是终态 succeeded+text；异步模式下返回 202 进行中，转轮询。
+        let mut result = self
+            .post_understand(
+                &endpoint,
+                serde_json::json!({
+                    "action": "create",
+                    "idempotency_key": idempotency_key,
                     "operation": operation.as_str(),
                     "image": image,
                     "instruction": req.instruction,
-                })),
+                }),
                 "云理解请求失败",
             )
             .await?;
-        let status = response.status();
-        let body = response
-            .text()
-            .await
-            .map_err(|error| AppError::Cloud(format!("读取云理解响应失败: {error}")))?;
-        if !status.is_success() {
-            let message = serde_json::from_str::<serde_json::Value>(&body)
-                .ok()
-                .and_then(|value| {
-                    value
-                        .pointer("/error/message")
-                        .and_then(|value| value.as_str())
-                        .map(str::to_string)
-                })
-                .unwrap_or_else(|| format!("云理解失败（HTTP {}）", status.as_u16()));
-            return Err(AppError::Cloud(message));
+        if result.status != "succeeded" {
+            let job_id = result
+                .job_id
+                .clone()
+                .ok_or_else(|| AppError::Cloud("异步云理解任务缺少 job_id".into()))?;
+            result = self.wait_for_understand_job(&endpoint, &job_id).await?;
         }
-        let result: UnderstandResponse = serde_json::from_str(&body)
-            .map_err(|error| AppError::Cloud(format!("解析云理解响应失败: {error}")))?;
+        let text = match result.text {
+            Some(text) if !text.trim().is_empty() => text,
+            _ => {
+                return Err(AppError::Cloud(
+                    result
+                        .error
+                        .map(|error| error.message)
+                        .unwrap_or_else(|| "云理解未返回文本".into()),
+                ));
+            }
+        };
         Ok(CodexResult {
-            text: result.text,
+            text,
             provider: self.name().into(),
             elapsed_ms: started.elapsed().as_millis() as u64,
             session_id: None,

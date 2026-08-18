@@ -2,7 +2,7 @@
 
 Bowerbird Cloud 承载账号、积分和官方 API 托管算力。素材库、提示词库、`library.db`、原图与缩略图不做云同步，也不会形成云端资产库。
 
-用户只有在明确选择 **Bowerbird Cloud** 生成或理解时，所选参考图与提示词才会发送给官方模型 API。理解请求仍仅在单次 Edge 请求内处理；图片生成会把本次请求加密传输后暂存在私有 `generation-temp` Storage（默认 24 小时 TTL），供受限 VPS Worker 领取，数据库只存对象 key、哈希与状态，不存提示词或图片字节。日志不得记录内容，桌面确认下载后记录接收状态并由清理任务删除临时对象。
+用户只有在明确选择 **Bowerbird Cloud** 生成或理解时，所选参考图与提示词才会发送给官方模型 API。图片生成与理解（`UNDERSTAND_ASYNC=true` 后）都会把本次请求加密传输后暂存在私有 `generation-temp` Storage（默认 24 小时 TTL），供受限 VPS Worker 领取并在 Edge 墙钟之外等待方舟，数据库只存对象 key、哈希、状态与理解结果文本（内容过期后清空），不存提示词或图片字节。日志不得记录内容，桌面确认下载后记录接收状态并由清理任务删除临时对象。`UNDERSTAND_ASYNC=false` 时理解仍走旧的单次 Edge 同步请求（110s 上游截断），作为异步链路上线前的回退。
 
 ## 当前阶段
 
@@ -40,7 +40,7 @@ supabase functions serve --env-file .env.local
 ## 安全边界
 
 - 客户端仅持有构建期内置的 Supabase URL 与 publishable/anon key，用户不能编辑。
-- service-role 与支付密钥只存在于 Edge Functions secrets；VPS 只持专用 Worker Token 与方舟生图 Key，绝不持 service-role。
+- service-role 与支付密钥只存在于 Edge Functions secrets；VPS 只持专用 Worker Token 与方舟 Key（生图/理解共用），绝不持 service-role。
 - 客户端不能直接写余额、流水、订阅或订单；写入只经服务端事务/RPC。
 - Edge Functions 必须从已验证 JWT 推导 `user_id`，不相信请求体中的用户标识。
 - 所有请求须限制体积、参考图数量、超时和频率；日志不得记录 token、提示词、图片字节或上游密钥。
@@ -84,7 +84,8 @@ node scripts/test-payment.mjs
 |---|---|---|
 | `generate-proxy` | POST | JWT → hold → 私有输入暂存 → `202 + job_id`；提供 get/cancel/artifact_received 短请求 |
 | `generation-worker` | POST | Worker Token → claim/heartbeat/submitted/upload/finish/fail/outcome_unknown；VPS 不直连数据库 |
-| `understand-proxy` | POST | JWT → Free 日限额 → hold → 幂等认领/限流/成本熔断 → 理解 → confirm/rollback |
+| `understand-proxy` | POST | JWT → Free 日限额 → hold → 同步理解（`UNDERSTAND_ASYNC=false`）或 create/get 异步任务（`true`）→ confirm/rollback |
+| `understand-worker` | POST | Worker Token → claim/heartbeat/submitted/finish/fail/outcome_unknown；VPS 不直连数据库 |
 | `entitlement` | GET | 返回 tier、三类余额与 FeaturePolicy |
 
 统一错误：401 未登录 / 402 积分不足 / 413 体积超限 / 429 限流 / 502 上游失败 / 503 熔断或未配置 / 504 超时。`BOWERBIRD_CLOUD_MOCK=true` 时只用于开发；生产必须关闭，且未配置真实 adapter 时应返回 503，不能静默输出 Mock 结果。

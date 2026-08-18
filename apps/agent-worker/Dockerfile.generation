@@ -4,4 +4,4 @@ WORKDIR /app
 COPY src ./src
 
 USER node
-CMD ["node", "src/cloud-generation/main.ts"]
+CMD ["node", "src/main.ts"]
