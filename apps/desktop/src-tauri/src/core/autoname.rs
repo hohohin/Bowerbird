@@ -93,9 +93,14 @@ impl Drop for AutoActiveGuard {
     }
 }
 
-/// 生成图命名专用指令：只取名、不要描述（生成图不进创作板 @ 引用池，不需要 caption）。
+/// 生成图命名专用指令（内置兜底）：只取名、不要描述（生成图不进创作板 @ 引用池，不需要 caption）。
+/// 远程覆盖：Supabase prompt_configs 的 `understand_autoname` 行（随权益快照下发，见 auto_name_only）。
 const NAME_ONLY_INSTRUCTION: &str = "请给这张图片取一个不超过 8 个字的中文名字。\
   只回复名字本身，不要标点符号、不要描述、不要解释。";
+
+/// 远程 prompt 配置 key（Supabase prompt_configs 表）。远程改动须保留「只回复名字本身、
+/// 无标点」格式约定——clean_name 只解析首行，改坏格式会让命名静默降级为截断垃圾。
+const PROMPT_KEY_UNDERSTAND_AUTONAME: &str = "understand_autoname";
 
 /// 采集/导入入库后调用：后台让 codex 看图 → 产出命名 + caption，写回 DB 并 emit 刷新。
 /// 立即返回（不阻塞导入）；任一失败静默降级。
@@ -258,13 +263,6 @@ async fn auto_name_only(app: &AppHandle, db: &Arc<Database>, asset: Asset) -> Re
 
     let _permit = AUTO_SEM.acquire().await.map_err(|e| e.to_string())?;
 
-    let req = CodexRequest {
-        instruction: NAME_ONLY_INSTRUCTION.to_string(),
-        reference_images: vec![store_path.into()],
-        context_prompts: vec![],
-        ratio: None,
-        job_id: None,
-    };
     let settings = app
         .try_state::<SettingsState>()
         .map(|state| state.get())
@@ -272,6 +270,22 @@ async fn auto_name_only(app: &AppHandle, db: &Arc<Database>, asset: Asset) -> Re
     let cloud = app.state::<CloudClient>().inner().clone();
     let auth = app.state::<AuthClient>().inner().clone();
     let entitlement = app.state::<EntitlementService>();
+    // 远程 prompt 覆盖：entitlement 快照捎带 prompt_configs（本机 codex 与 Cloud 两条路都
+    // 执行桌面传的指令，改一处全生效）。快照 Fresh 时零网络；离线/缺 key 回落内置默认。
+    let instruction = entitlement
+        .current_or_sync(&auth)
+        .await
+        .prompt_config(PROMPT_KEY_UNDERSTAND_AUTONAME)
+        .map(str::to_string)
+        .unwrap_or_else(|| NAME_ONLY_INSTRUCTION.to_string());
+
+    let req = CodexRequest {
+        instruction,
+        reference_images: vec![store_path.into()],
+        context_prompts: vec![],
+        ratio: None,
+        job_id: None,
+    };
     let provider = resolve_entitled_understand_provider(
         &entitlement,
         cloud,

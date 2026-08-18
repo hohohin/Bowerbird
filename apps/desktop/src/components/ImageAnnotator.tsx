@@ -57,6 +57,14 @@ type DrawShape = {
 type BaseOp = AnnotationTransformOp;
 type Tool = "rect" | "arrow" | "crop";
 
+/** 待应用的裁剪框（0-1 相对当前底图；进入裁剪工具后常驻，应用才落为 crop op）。 */
+type CropRect = { x1: number; y1: number; x2: number; y2: number };
+/** 裁剪框拖拽会话：框内移动 / 手柄缩放 / 框外重新拉框。 */
+type CropDrag =
+  | { kind: "new"; sx: number; sy: number; prev: CropRect | null }
+  | { kind: "move"; sx: number; sy: number; rect: CropRect }
+  | { kind: "resize"; handle: string; rect: CropRect };
+
 const COLORS = ["#ff4d4d", "#ffd21e", "#3ddc84", "#4d9fff", "#ffffff"];
 
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
@@ -257,6 +265,8 @@ export function ImageAnnotator() {
   const [undoStack, setUndoStack] = useState<{ shapes: DrawShape[]; ops: BaseOp[] }[]>([]);
   const [draft, setDraft] = useState<DrawShape | null>(null);
   const [tool, setTool] = useState<Tool>("rect");
+  const [cropRect, setCropRect] = useState<CropRect | null>(null);
+  const cropDragRef = useRef<CropDrag | null>(null);
   const [color, setColor] = useState(COLORS[0]);
   const [pen, setPen] = useState(4); // 线宽（显示像素，提交时按显示宽换算 strokeRatio）
   const [busy, setBusy] = useState(false);
@@ -266,6 +276,8 @@ export function ImageAnnotator() {
     setOps([]);
     setUndoStack([]);
     setDraft(null);
+    setCropRect(null);
+    cropDragRef.current = null;
     setBusy(false);
   }, [annotator?.assetId]);
 
@@ -279,6 +291,9 @@ export function ImageAnnotator() {
       setBase(null);
       return;
     }
+    // 底图坐标系变化（换图 / 应用裁剪或旋转 / 撤销）：旧裁剪框坐标失效，清空。
+    cropDragRef.current = null;
+    setCropRect(null);
     if (ops.length === 0) {
       baseCanvasRef.current = null;
       setBase({ url: imgUrl, w: nat.w, h: nat.h });
@@ -332,13 +347,17 @@ export function ImageAnnotator() {
     setOps(last.ops);
   }
 
-  // Esc 关闭 / Ctrl+Z 撤销。
+  // Esc 关闭 / Ctrl+Z 撤销 / 裁剪模式 Enter 应用、Esc 取消（先于关面板）。
   useEffect(() => {
     if (!open) return;
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") {
         e.preventDefault();
-        closeAnnotator();
+        if (tool === "crop") cancelCropMode();
+        else closeAnnotator();
+      } else if (e.key === "Enter" && tool === "crop" && cropRect) {
+        e.preventDefault();
+        applyCrop();
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
         e.preventDefault();
         undo();
@@ -347,7 +366,7 @@ export function ImageAnnotator() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, closeAnnotator, undoStack, shapes, ops]);
+  }, [open, closeAnnotator, undoStack, shapes, ops, tool, cropRect, base]);
 
   function rotate(dir: 1 | -1) {
     if (!base) return;
@@ -371,11 +390,92 @@ export function ImageAnnotator() {
       notifyError(null, "裁剪区域过小（宽高需 ≥16 像素）");
       return;
     }
-    if (op.x2 - op.x1 > 0.999 && op.y2 - op.y1 > 0.999) return; // 全图 = 无操作
+    if (op.x2 - op.x1 > 0.999 && op.y2 - op.y1 > 0.999) {
+      // 全图 = 无操作：视为取消，退出裁剪模式（避免「应用无反馈」）。
+      setCropRect(null);
+      cropDragRef.current = null;
+      setTool("rect");
+      return;
+    }
     pushUndo();
     setOps([...ops, op]);
     setShapes(shapes.map((s) => mapShape(s, op, base.w, base.h)));
+    setCropRect(null);
+    cropDragRef.current = null;
     setTool("rect"); // 裁完回画框，继续标注（再裁可重点工具）
+  }
+
+  // —— 裁剪模式（持久裁剪框：手柄缩放 / 框内移动 / 框外重画；应用才落 op）——
+
+  function enterCropMode() {
+    setDraft(null);
+    setTool("crop");
+    if (!cropRect) setCropRect({ x1: 0.1, y1: 0.1, x2: 0.9, y2: 0.9 });
+  }
+
+  function applyCrop() {
+    if (!cropRect) return;
+    commitCrop(cropRect.x1, cropRect.y1, cropRect.x2, cropRect.y2);
+  }
+
+  function cancelCropMode() {
+    cropDragRef.current = null;
+    setCropRect(null);
+    setTool("rect");
+  }
+
+  /** 裁剪框最小归一化尺寸（输出像素 ≥16，对齐火山参考图 >14px 约束）。 */
+  function cropMin(base: { w: number; h: number }) {
+    return { mw: Math.min(0.5, 16 / base.w), mh: Math.min(0.5, 16 / base.h) };
+  }
+
+  function onCropHandleDown(e: React.PointerEvent, handle: string) {
+    if (e.button !== 0 || !cropRect) return;
+    e.preventDefault();
+    e.stopPropagation();
+    cropDragRef.current = { kind: "resize", handle, rect: { ...cropRect } };
+    (e.currentTarget as Element).setPointerCapture(e.pointerId);
+  }
+
+  function onCropMoveDown(e: React.PointerEvent) {
+    if (e.button !== 0 || !cropRect) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const p = toRel(e);
+    cropDragRef.current = { kind: "move", sx: p.x, sy: p.y, rect: { ...cropRect } };
+    (e.currentTarget as Element).setPointerCapture(e.pointerId);
+  }
+
+  function applyCropDrag(p: { x: number; y: number }) {
+    const d = cropDragRef.current;
+    if (!d) return;
+    if (d.kind === "new") {
+      // 框外重画：实时橡皮筋（显示层做 min/max 归一）。
+      setCropRect({ x1: d.sx, y1: d.sy, x2: p.x, y2: p.y });
+      return;
+    }
+    if (d.kind === "move") {
+      const w = d.rect.x2 - d.rect.x1;
+      const h = d.rect.y2 - d.rect.y1;
+      // 保持抓取点在框内的相对位置；平移不改变大小，钳制在图内。
+      const x1 = Math.min(clamp01(p.x - (d.sx - d.rect.x1)), 1 - w);
+      const y1 = Math.min(clamp01(p.y - (d.sy - d.rect.y1)), 1 - h);
+      setCropRect({ x1, y1, x2: x1 + w, y2: y1 + h });
+      return;
+    }
+    if (!base) return;
+    const { mw, mh } = cropMin(base);
+    let { x1, y1, x2, y2 } = d.rect;
+    if (d.handle.includes("w")) x1 = Math.min(p.x, x2 - mw);
+    if (d.handle.includes("e")) x2 = Math.max(p.x, x1 + mw);
+    if (d.handle.includes("n")) y1 = Math.min(p.y, y2 - mh);
+    if (d.handle.includes("s")) y2 = Math.max(p.y, y1 + mh);
+    setCropRect({
+      x1: clamp01(x1),
+      y1: clamp01(y1),
+      x2: clamp01(x2),
+      y2: clamp01(y2),
+    });
   }
 
   function toRel(e: React.PointerEvent): { x: number; y: number } {
@@ -388,8 +488,15 @@ export function ImageAnnotator() {
     if (e.button !== 0 || !displaySize) return;
     e.preventDefault();
     const p = toRel(e);
+    if (tool === "crop") {
+      // 落点未命中手柄/框内（事件已 stopPropagation）→ 框外重画新裁剪框。
+      cropDragRef.current = { kind: "new", sx: p.x, sy: p.y, prev: cropRect ? { ...cropRect } : null };
+      setCropRect({ x1: p.x, y1: p.y, x2: p.x, y2: p.y });
+      (e.currentTarget as Element).setPointerCapture(e.pointerId);
+      return;
+    }
     setDraft({
-      type: tool === "crop" ? "rect" : tool,
+      type: tool,
       x1: p.x,
       y1: p.y,
       x2: p.x,
@@ -401,20 +508,39 @@ export function ImageAnnotator() {
   }
 
   function onPointerMove(e: React.PointerEvent) {
-    if (!draft) return;
     const p = toRel(e);
+    if (cropDragRef.current) {
+      applyCropDrag(p);
+      return;
+    }
+    if (!draft) return;
     setDraft({ ...draft, x2: p.x, y2: p.y });
   }
 
   function onPointerUp() {
+    const d = cropDragRef.current;
+    if (d) {
+      cropDragRef.current = null;
+      if (d.kind === "new" && cropRect && base) {
+        // 重画太小 → 恢复上一个框（没有则清空）。
+        const r = cropRect;
+        const { mw, mh } = cropMin(base);
+        if (Math.abs(r.x2 - r.x1) < mw || Math.abs(r.y2 - r.y1) < mh) {
+          setCropRect(d.prev);
+        } else {
+          setCropRect({
+            x1: Math.min(r.x1, r.x2),
+            y1: Math.min(r.y1, r.y2),
+            x2: Math.max(r.x1, r.x2),
+            y2: Math.max(r.y1, r.y2),
+          });
+        }
+      }
+      return;
+    }
     if (!draft) return;
     const dx = Math.abs(draft.x2 - draft.x1);
     const dy = Math.abs(draft.y2 - draft.y1);
-    if (tool === "crop") {
-      if (dx > 0.01 && dy > 0.01) commitCrop(draft.x1, draft.y1, draft.x2, draft.y2);
-      setDraft(null);
-      return;
-    }
     // 误触过滤：框需两向都有跨度，箭头需最小长度（约图宽 2%）。
     const ok = draft.type === "rect" ? dx > 0.008 && dy > 0.008 : Math.hypot(dx, dy) > 0.02;
     if (ok) {
@@ -505,11 +631,13 @@ export function ImageAnnotator() {
         // sidecar 随文件落盘：generation_history 反查兜底据此合成，复用提示词不丢本图。
         annotationJson: JSON.stringify(out.meta),
       });
-      // 「标注」维度直接挂在注入对象上（不进 DB，无 list_prompted_assets 合成路径）。
+      // 「标注」维度直接挂在注入对象上（不进 DB，无 list_prompted_assets 合成路径）；
+      // 仅裁剪/旋转（无标注形状）时不带维度 —— 只是普通参考图。
+      const tokens = out.meta.shapes.map((s) => s.token).join("；");
       const prompted: PromptedAsset = {
         ...temp,
         annotation: out.meta,
-        sections: [{ title: "标注", body: out.meta.shapes.map((s) => s.token).join("；") }],
+        ...(tokens ? { sections: [{ title: "标注", body: tokens }] } : {}),
       };
       closeAnnotator();
       insertAnnotatedToBoard(prompted);
@@ -562,23 +690,110 @@ export function ImageAnnotator() {
     );
   };
 
-  /** 裁剪拖拽预览：选区外压暗 + 白色虚线框（区别于标注框）。 */
-  const renderCropDraft = (s: DrawShape) => {
-    const x = Math.min(s.x1, s.x2) * dw;
-    const y = Math.min(s.y1, s.y2) * dh;
-    const w = Math.abs(s.x2 - s.x1) * dw;
-    const h = Math.abs(s.y2 - s.y1) * dh;
+  /** 裁剪模式 UI：框外压暗 + 白边框 + 三分构图线 + 框内移动区（双击应用）+ 8 手柄缩放。 */
+  const renderCropUI = (r: CropRect) => {
+    const x1 = Math.min(r.x1, r.x2) * dw;
+    const y1 = Math.min(r.y1, r.y2) * dh;
+    const x2 = Math.max(r.x1, r.x2) * dw;
+    const y2 = Math.max(r.y1, r.y2) * dh;
+    const w = x2 - x1;
+    const h = y2 - y1;
     const dim = "rgba(0,0,0,0.45)";
+    const HS = 8; // 手柄边长（显示像素）
+    const handles: Array<{ id: string; cx: number; cy: number; cursor: string }> = [
+      { id: "nw", cx: x1, cy: y1, cursor: "nwse-resize" },
+      { id: "n", cx: x1 + w / 2, cy: y1, cursor: "ns-resize" },
+      { id: "ne", cx: x2, cy: y1, cursor: "nesw-resize" },
+      { id: "e", cx: x2, cy: y1 + h / 2, cursor: "ew-resize" },
+      { id: "se", cx: x2, cy: y2, cursor: "nwse-resize" },
+      { id: "s", cx: x1 + w / 2, cy: y2, cursor: "ns-resize" },
+      { id: "sw", cx: x1, cy: y2, cursor: "nesw-resize" },
+      { id: "w", cx: x1, cy: y1 + h / 2, cursor: "ew-resize" },
+    ];
     return (
-      <g key="crop-draft">
-        <rect x={0} y={0} width={dw} height={y} fill={dim} />
-        <rect x={0} y={y + h} width={dw} height={Math.max(0, dh - y - h)} fill={dim} />
-        <rect x={0} y={y} width={x} height={h} fill={dim} />
-        <rect x={x + w} y={y} width={Math.max(0, dw - x - w)} height={h} fill={dim} />
-        <rect x={x} y={y} width={w} height={h} fill="none" stroke="#ffffff" strokeWidth={1.5} strokeDasharray="6 4" />
+      <g key="crop-ui">
+        {/* 框外压暗（不接事件；框外拖拽走 svg 根 = 重画新框） */}
+        <rect x={0} y={0} width={dw} height={y1} fill={dim} pointerEvents="none" />
+        <rect x={0} y={y2} width={dw} height={Math.max(0, dh - y2)} fill={dim} pointerEvents="none" />
+        <rect x={0} y={y1} width={x1} height={h} fill={dim} pointerEvents="none" />
+        <rect x={x2} y={y1} width={Math.max(0, dw - x2)} height={h} fill={dim} pointerEvents="none" />
+        {/* 边框 + 三分线（截图软件惯例） */}
+        <rect x={x1} y={y1} width={w} height={h} fill="none" stroke="#ffffff" strokeWidth={1.5} pointerEvents="none" />
+        <line x1={x1 + w / 3} y1={y1} x2={x1 + w / 3} y2={y2} stroke="#ffffff" strokeOpacity={0.3} strokeWidth={1} pointerEvents="none" />
+        <line x1={x1 + (2 * w) / 3} y1={y1} x2={x1 + (2 * w) / 3} y2={y2} stroke="#ffffff" strokeOpacity={0.3} strokeWidth={1} pointerEvents="none" />
+        <line x1={x1} y1={y1 + h / 3} x2={x2} y2={y1 + h / 3} stroke="#ffffff" strokeOpacity={0.3} strokeWidth={1} pointerEvents="none" />
+        <line x1={x1} y1={y1 + (2 * h) / 3} x2={x2} y2={y1 + (2 * h) / 3} stroke="#ffffff" strokeOpacity={0.3} strokeWidth={1} pointerEvents="none" />
+        {/* 框内移动区：拖动移动裁剪框，双击应用 */}
+        <rect
+          x={x1}
+          y={y1}
+          width={w}
+          height={h}
+          fill="transparent"
+          style={{ cursor: "move" }}
+          onPointerDown={onCropMoveDown}
+          onDoubleClick={(e) => {
+            e.preventDefault();
+            applyCrop();
+          }}
+        />
+        {/* 8 缩放手柄 */}
+        {handles.map((hd) => (
+          <rect
+            key={hd.id}
+            x={hd.cx - HS / 2}
+            y={hd.cy - HS / 2}
+            width={HS}
+            height={HS}
+            fill="#ffffff"
+            stroke="rgba(0,0,0,0.55)"
+            strokeWidth={1}
+            style={{ cursor: hd.cursor }}
+            onPointerDown={(e) => onCropHandleDown(e, hd.id)}
+          />
+        ))}
       </g>
     );
   };
+
+  /** 裁剪框上方浮动操作条：✓ 应用（Enter）/ ✕ 取消（Esc）；贴顶时翻到框下方。 */
+  const cropActionBar =
+    tool === "crop" && cropRect && displaySize
+      ? (() => {
+          const bw = 132;
+          const bh = 30;
+          const rx2 = Math.max(cropRect.x1, cropRect.x2) * dw;
+          const ry1 = Math.min(cropRect.y1, cropRect.y2) * dh;
+          const ry2 = Math.max(cropRect.y1, cropRect.y2) * dh;
+          const left = Math.min(Math.max(0, rx2 - bw), Math.max(0, dw - bw));
+          const top = ry1 - bh - 8 < 0 ? ry2 + 8 : ry1 - bh - 8;
+          return (
+            <div
+              className="absolute flex items-center gap-1.5"
+              style={{ left, top, zIndex: 5 }}
+              onPointerDown={(e) => e.stopPropagation()}
+              onDoubleClick={(e) => e.stopPropagation()}
+            >
+              <button
+                type="button"
+                onClick={applyCrop}
+                title="应用裁剪（Enter / 双击框内）"
+                className="flex items-center gap-1 rounded bg-accent px-2.5 py-1.5 text-xs font-medium text-white hover:bg-accent/85"
+              >
+                <Check size={13} /> 应用裁剪
+              </button>
+              <button
+                type="button"
+                onClick={cancelCropMode}
+                title="取消裁剪（Esc）"
+                className="flex items-center rounded border border-white/30 px-2 py-1.5 text-xs text-white hover:bg-white/10"
+              >
+                <X size={13} />
+              </button>
+            </div>
+          );
+        })()
+      : null;
 
   const toolBtn = (active: boolean) =>
     `flex items-center gap-1.5 rounded px-2.5 py-1.5 transition-colors ${
@@ -586,6 +801,8 @@ export function ImageAnnotator() {
     }`;
 
   const canUndo = undoStack.length > 0;
+  // 有任一编辑（标注 / 裁剪 / 旋转）即可输出——仅裁剪也允许，只是没有「标注」维度。
+  const hasEdits = shapes.length > 0 || ops.length > 0;
 
   return createPortal(
     <div
@@ -602,7 +819,7 @@ export function ImageAnnotator() {
         <button type="button" className={toolBtn(tool === "arrow")} onClick={() => setTool("arrow")}>
           <MoveUpRight size={14} /> 箭头
         </button>
-        <button type="button" className={toolBtn(tool === "crop")} onClick={() => setTool("crop")}>
+        <button type="button" className={toolBtn(tool === "crop")} onClick={enterCropMode} title="裁剪：拖手柄调范围，框内拖动移动，Enter 应用">
           <Crop size={14} /> 裁剪
         </button>
         <div className="mx-1 h-4 w-px bg-white/15" />
@@ -675,18 +892,18 @@ export function ImageAnnotator() {
         <div className="ml-auto flex items-center gap-2">
           <button
             type="button"
-            disabled={shapes.length === 0 || busy}
+            disabled={!hasEdits || busy}
             onClick={saveToLibrary}
-            title={shapes.length === 0 ? "请先画至少一个标注" : undefined}
+            title={hasEdits ? undefined : "请先画标注或裁剪/旋转"}
             className="flex items-center gap-1.5 rounded bg-accent px-3 py-1.5 font-medium text-white transition-colors hover:bg-accent/85 disabled:opacity-40"
           >
             <Save size={14} /> 保存到素材库
           </button>
           <button
             type="button"
-            disabled={shapes.length === 0 || busy}
+            disabled={!hasEdits || busy}
             onClick={insertToBoard}
-            title={shapes.length === 0 ? "请先画至少一个标注" : "标注图不进入素材库，仅插入当前创作板编辑器"}
+            title={hasEdits ? "标注图不进入素材库，仅插入当前创作板编辑器" : "请先画标注或裁剪/旋转"}
             className="flex items-center gap-1.5 rounded border border-white/25 px-3 py-1.5 text-white transition-colors hover:bg-white/10 disabled:opacity-40"
           >
             <TextCursorInput size={14} /> 插入创作板 · 不入库
@@ -725,12 +942,17 @@ export function ImageAnnotator() {
               onPointerDown={onPointerDown}
               onPointerMove={onPointerMove}
               onPointerUp={onPointerUp}
-              onPointerCancel={() => setDraft(null)}
+              onPointerCancel={() => {
+                setDraft(null);
+                cropDragRef.current = null;
+              }}
               onContextMenu={(e) => e.preventDefault()}
             >
               {shapes.map((s, i) => renderShape(s, `s${i}`))}
-              {draft && (tool === "crop" ? renderCropDraft(draft) : renderShape(draft, "draft"))}
+              {draft && renderShape(draft, "draft")}
+              {tool === "crop" && cropRect && renderCropUI(cropRect)}
             </svg>
+            {cropActionBar}
           </div>
         )}
       </div>
@@ -738,9 +960,11 @@ export function ImageAnnotator() {
       {/* 状态条 */}
       <div className="flex items-center justify-between border-t border-white/10 px-3 py-1.5 text-[11px] text-white/50">
         <span>
-          {asset ? `${asset.name} · ${base ? `${base.w}×${base.h}` : "…"}` : ""}
-          {shapes.length > 0 && ` · 已画 ${shapes.length} 个标注`}
-          {ops.length > 0 && ` · 已裁剪/旋转`}
+          {tool === "crop"
+            ? "裁剪：拖手柄调整范围 · 框内拖动移动 · 框外拖拽重画 · Enter 应用 / Esc 取消"
+            : `${asset ? `${asset.name} · ${base ? `${base.w}×${base.h}` : "…"}` : ""}${
+                shapes.length > 0 ? ` · 已画 ${shapes.length} 个标注` : ""
+              }${ops.length > 0 ? " · 已裁剪/旋转" : ""}`}
         </span>
         <span>
           坐标按火山 Seedream 归一化（0-999）记录，相对最终输出图；创作板选「标注」维度即注入

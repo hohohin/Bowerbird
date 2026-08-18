@@ -16,7 +16,8 @@ pub struct CodexRequest {
     /// codex 不用此字段（ratio 已注入 instruction 文本，见 codex_create_image）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ratio: Option<String>,
-    /// 客户端生成 job id；云 provider 直接复用为服务端幂等键。
+    /// 客户端生成 job id；云 provider 首轮直接复用为服务端幂等键，
+    /// 续轮（resume）加 ULID 后缀区分（见 BowerbirdCloudProvider::generate_image）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub job_id: Option<String>,
 }

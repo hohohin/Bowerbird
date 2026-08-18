@@ -18,6 +18,7 @@ import {
 import { useStore } from "../store";
 import { understandProvider } from "../lib/entitlement";
 import { api } from "../lib/api";
+import { SMART_REFINE_ENABLED } from "../lib/featureFlags";
 import { useImageZoom } from "../lib/useImageZoom";
 import { notifyError, notifySuccess } from "../lib/notify";
 import { RenameDialog } from "./RenameDialog";
@@ -923,19 +924,22 @@ export function AssetDetail() {
             </div>
           )}
 
-          <LocalAgentPanel
-            asset={asset}
-            hasCaption={captions.length > 0}
-            onAnalyze={() => {
-              const instruction = describePrompt.trim();
-              if (!id || !instruction) return;
-              rememberDescribePrompt(instruction);
-              openDescribePicker(
-                { kind: "single", assetId: id, instruction },
-                { x: Math.max(12, window.innerWidth - 420), y: 260 },
-              );
-            }}
-          />
+          {/* 「智能精修」（LocalAgentPanel）：功能未完成，随 SMART_REFINE_ENABLED 隐藏。 */}
+          {SMART_REFINE_ENABLED && (
+            <LocalAgentPanel
+              asset={asset}
+              hasCaption={captions.length > 0}
+              onAnalyze={() => {
+                const instruction = describePrompt.trim();
+                if (!id || !instruction) return;
+                rememberDescribePrompt(instruction);
+                openDescribePicker(
+                  { kind: "single", assetId: id, instruction },
+                  { x: Math.max(12, window.innerWidth - 420), y: 260 },
+                );
+              }}
+            />
+          )}
 
             </>
           )}

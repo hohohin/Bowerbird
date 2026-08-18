@@ -31,6 +31,16 @@ pub struct GenerationService {
     pub credits: i32,
 }
 
+/// 远程 prompt 配置（Supabase prompt_configs 表 enabled 行，随权益快照下发）：
+/// 桌面内置 agent 指令（如生成图命名）可云端热改，无需发版。
+/// 缺 key / 离线 → 桌面用内置默认（约定：内置默认永远保留，远程只是覆盖）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PromptConfig {
+    pub key: String,
+    pub value: String,
+    pub version: i32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum OfflineState {
@@ -50,6 +60,8 @@ pub struct EntitlementSnapshot {
     pub recent_transactions: Vec<CreditTransaction>,
     #[serde(default)]
     pub generation_services: Vec<GenerationService>,
+    #[serde(default)]
+    pub prompt_configs: Vec<PromptConfig>,
     pub issued_at: DateTime<Utc>,
     pub refresh_after: DateTime<Utc>,
     pub grace_until: DateTime<Utc>,
@@ -60,6 +72,17 @@ pub struct EntitlementSnapshot {
     pub last_trusted_server_time: DateTime<Utc>,
     #[serde(skip)]
     pub offline_state: Option<OfflineState>,
+}
+
+impl EntitlementSnapshot {
+    /// 按 key 取远程 prompt；值 trim 后为空视为未配置（调用方回落内置默认）。
+    pub fn prompt_config(&self, key: &str) -> Option<&str> {
+        self.prompt_configs
+            .iter()
+            .find(|c| c.key == key)
+            .map(|c| c.value.trim())
+            .filter(|v| !v.is_empty())
+    }
 }
 
 pub struct EntitlementService {
@@ -208,6 +231,7 @@ impl EntitlementService {
             policy: FeaturePolicy::free(),
             recent_transactions: vec![],
             generation_services: vec![],
+            prompt_configs: vec![],
             issued_at: now,
             refresh_after: now,
             grace_until: now,
@@ -222,7 +246,7 @@ impl EntitlementService {
 
 #[cfg(test)]
 mod tests {
-    use super::{CreditBalance, EntitlementService, EntitlementSnapshot, OfflineState};
+    use super::{CreditBalance, EntitlementService, EntitlementSnapshot, OfflineState, PromptConfig};
     use crate::cloud::policy::FeaturePolicy;
     use chrono::{Duration, Utc};
 
@@ -234,6 +258,7 @@ mod tests {
             policy: FeaturePolicy::for_tier("pro"),
             recent_transactions: vec![],
             generation_services: vec![],
+            prompt_configs: vec![],
             issued_at: now,
             refresh_after: now + Duration::hours(6),
             grace_until: now + Duration::days(7),
@@ -294,5 +319,39 @@ mod tests {
             EntitlementService::evaluate_online(&value, now + Duration::hours(7)),
             OfflineState::Invalid
         );
+    }
+
+    #[test]
+    fn prompt_config_lookup_falls_back_on_missing_or_blank() {
+        let now = Utc::now();
+        let mut value = signed(now);
+        value.prompt_configs = vec![
+            PromptConfig {
+                key: "understand_autoname".into(),
+                value: "云端命名指令".into(),
+                version: 2,
+            },
+            PromptConfig {
+                key: "blank".into(),
+                value: "  ".into(),
+                version: 1,
+            },
+        ];
+        assert_eq!(
+            value.prompt_config("understand_autoname"),
+            Some("云端命名指令")
+        );
+        // 空 key / 空白值 → None，调用方回落内置默认。
+        assert_eq!(value.prompt_config("blank"), None);
+        assert_eq!(value.prompt_config("missing"), None);
+    }
+
+    #[test]
+    fn snapshot_deserializes_without_prompt_configs_field() {
+        // 旧缓存文件没有 prompt_configs 字段 → serde(default) 兜住，仍可用。
+        let now = Utc::now();
+        let json = serde_json::to_string(&signed(now)).unwrap();
+        let parsed: EntitlementSnapshot = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.prompt_config("understand_autoname"), None);
     }
 }

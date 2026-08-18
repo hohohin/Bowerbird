@@ -55,8 +55,9 @@ function Thumb({
   });
   const cancelDescribe = useStore((s) => s.cancelDescribe);
 
-  // 长按窥视（仅创作板打开时）：按住 450ms 呼出该图维度环（board-asset-peek，不插 chip）。
-  // 触发后的松开不再当点击（否则松手又拾取一次）；移动超阈值 / 松开 / 离开 / 开始拖拽都取消。
+  // 长按窥视（任意场景）：按住 450ms 呼出该图维度环（board-asset-peek，全局 CaptionRing 接收；
+  // 不插 chip、不抢编辑框焦点）。触发后的松开不再当点击（否则松手又拾取一次）；
+  // 移动超阈值 / 松开 / 离开 / 开始拖拽都取消。
   const pressTimer = useRef<number | undefined>(undefined);
   const pressStart = useRef<{ x: number; y: number } | null>(null);
   const suppressClick = useRef(false);
@@ -67,7 +68,7 @@ function Thumb({
   }
   function beginPress(e: MouseEvent<HTMLDivElement>) {
     cancelPress();
-    if (e.button !== 0 || !useStore.getState().boardOpen) return;
+    if (e.button !== 0) return;
     pressStart.current = { x: e.clientX, y: e.clientY };
     pressTimer.current = window.setTimeout(() => {
       pressTimer.current = undefined;
@@ -120,15 +121,15 @@ function Thumb({
   // 没有缩略图的占位（非图片格式或解码失败）。
   if (!shown.thumb_path) {
     return (
-      <div className="mb-2 flex h-32 break-inside-avoid items-center justify-center rounded-md bg-panel2 text-xs text-muted">
+      <div className="mb-2 flex h-32 items-center justify-center rounded-md bg-panel2 text-xs text-muted">
         {shown.ext?.toUpperCase() ?? "?"}
       </div>
     );
   }
 
-  // 瀑布流（CSS columns）抖动根因：缩略图加载前 <img> 高度为 0，加载完成撑高
-  // → columns 反复重新平衡列高 → 整个网格持续重排。用 DB 已有的 width/height
-  // 设 aspect-ratio，让占位高度等于最终高度，加载后高度不变，columns 不再重排。
+  // 缩略图加载前 <img> 高度为 0，加载完成才撑高 → 所在列突然变长、滚动位置跳变。
+  // 用 DB 已有的 width/height 设 aspect-ratio，占位高度等于最终高度，加载后高度
+  // 不变；MasonryGrid 的分列估高同样吃这对元数据，布局与渲染一致。
   const ratio =
     shown.width && shown.height ? `${shown.width}/${shown.height}` : undefined;
 
@@ -277,7 +278,7 @@ function Thumb({
       role="button"
       tabIndex={0}
       aria-label={`${shown.name}${selected ? "，已选中" : ""}`}
-      className={`group relative mb-2 break-inside-avoid cursor-pointer overflow-hidden rounded-sm border bg-panel transition ${
+      className={`group relative mb-2 cursor-pointer overflow-hidden rounded-sm border bg-panel transition ${
         selected ? "border-accent shadow-[inset_0_0_0_1px_#4868ff]" : "border-edge hover:border-[#55505a]"
       }`}
       draggable={!pickMode}
@@ -418,7 +419,27 @@ function Thumb({
   );
 }
 
-/** 瀑布流（CSS columns masonry + 缩略图懒加载）。颜色筛选走后端（App refresh 按 colorFilter 分流），非前端过滤。 */
+/** 瀑布流（行式 masonry：JS 按元数据分列 + 缩略图懒加载）。颜色筛选走后端（App refresh 按 colorFilter 分流），非前端过滤。 */
+
+/** 行式 masonry 列数：跟随窗口宽度断点（md/lg/xl，与旧 CSS columns 方案一致）。 */
+function readColumnCount(): number {
+  if (window.matchMedia("(min-width: 1280px)").matches) return 5;
+  if (window.matchMedia("(min-width: 1024px)").matches) return 4;
+  if (window.matchMedia("(min-width: 768px)").matches) return 3;
+  return 2;
+}
+
+function useColumnCount(): number {
+  const [count, setCount] = useState(readColumnCount);
+  useEffect(() => {
+    const mqls = [768, 1024, 1280].map((w) => window.matchMedia(`(min-width: ${w}px)`));
+    const onChange = () => setCount(readColumnCount());
+    mqls.forEach((q) => q.addEventListener("change", onChange));
+    return () => mqls.forEach((q) => q.removeEventListener("change", onChange));
+  }, []);
+  return count;
+}
+
 export function MasonryGrid() {
   const assets = useStore((s) => s.assets);
   const total = useStore((s) => s.total);
@@ -494,6 +515,23 @@ export function MasonryGrid() {
       }),
     [assets, mergedGroupMap]
   );
+
+  // 行式分列（Eagle 式）：按列表顺序（最新在前）逐张放进当前累计最矮的列，阅读
+  // 顺序近似从左到右、从上到下。高度用 DB width/height 估算（h/w 即相对高度，列宽
+  // 是公共因子；无尺寸的按方形兜底）——元数据即最终布局，无需 DOM 测量；列数变化
+  // （窗口跨断点）时重新分列。
+  const colCount = useColumnCount();
+  const columns = useMemo(() => {
+    const cols: Asset[][] = Array.from({ length: colCount }, () => []);
+    const heights = new Array<number>(colCount).fill(0);
+    for (const a of filtered) {
+      let min = 0;
+      for (let i = 1; i < colCount; i++) if (heights[i] < heights[min]) min = i;
+      cols[min].push(a);
+      heights[min] += a.width && a.height ? a.height / a.width : 1;
+    }
+    return cols;
+  }, [filtered, colCount]);
 
   // 拖入外部图片文件 → dataURL → importImageBytes（source=imported，进当前 project scope）。
   // 串行导入（失败隔离）：单张失败不中断后续，错误打控制台。
@@ -606,12 +644,15 @@ export function MasonryGrid() {
         // paddingBottom 跟随会话「重新编辑」坞实际高度（--gen-dock-h，坞挂载时由 ResizeObserver
         // 写入）——否则底部浮动坞会盖住最后一行素材，滚不到底。无坞时变量为空，padding 归零。
         <div className="h-full overflow-y-auto" style={{ paddingBottom: "var(--gen-dock-h, 0px)" }}>
-          {/* 滚动容器（固定高度 + 竖向滚动）与 columns 容器必须分离：
-              columns 一旦有固定高度，多余内容会横向溢出开新列 → 横向滚动。
-              内层 columns 不设高度，内容平分到 N 列后纵向增长，由本层竖向滚动。 */}
-          <div className="columns-2 gap-2 p-2 md:columns-3 lg:columns-4 xl:columns-5">
-            {filtered.map((a) => (
-              <Thumb key={a.id} asset={a} group={mergedGroupMap[a.id]} />
+          {/* 外层固定高度竖向滚动，内层 flex 行式 masonry（各列 flex-1 等宽、纵向
+              自然增长）——滚动容器与布局容器保持分离。 */}
+          <div className="flex w-full items-start gap-2 p-2">
+            {columns.map((col, i) => (
+              <div key={i} className="flex min-w-0 flex-1 flex-col">
+                {col.map((a) => (
+                  <Thumb key={a.id} asset={a} group={mergedGroupMap[a.id]} />
+                ))}
+              </div>
             ))}
           </div>
         </div>

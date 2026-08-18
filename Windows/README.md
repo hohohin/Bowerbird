@@ -6,6 +6,7 @@
 
 - 构建 Windows x64 桌面应用与 NSIS `.exe` 安装包。
 - 兼容 npm 全局安装生成的 `codex.cmd`，并在 GUI 的 PATH 不完整时检查 `%APPDATA%\npm`。
+- 应用内可一键直装官方独立版 codex（从 npm 镜像下载平台包 tarball 解压到应用数据目录，用户无需安装 Node.js；解析时托管副本优先）。
 - 登录检测支持 `CODEX_HOME` 和 `%USERPROFILE%\.codex\auth.json`。
 - “在 codex 中打开会话”会启动 Windows 命令提示符并运行 `codex resume`。
 - 浏览器采集服务的 `save_batch` 与 `save_blob + binary` 两条协议均位于 canonical Rust 源码；`apps/extension/` 与 `Windows/extension/` 分别使用对应协议。
@@ -17,7 +18,7 @@
 2. Node.js 22 LTS+，并启用 pnpm：`corepack enable`。
 3. Rust MSVC 工具链：`rustup default stable-x86_64-pc-windows-msvc`。
 4. Visual Studio 2022 Build Tools，勾选“使用 C++ 的桌面开发”和 Windows 10/11 SDK。
-5. AI 功能另需 `npm install -g @openai/codex` 与 `codex login`；不安装时素材库仍可用，AI 按项目约定降级置灰。
+5. AI 功能可在应用内一键安装 codex CLI（自动下载独立版，无需 Node.js）并登录 ChatGPT；不安装时素材库仍可用，AI 按项目约定降级置灰。
 6. 视频预览另需 `ffmpeg` 与 `ffprobe` 在 PATH；图片功能不依赖它们。
 
 ## 开发运行

@@ -34,7 +34,7 @@ const STEP_DEFS: Record<number, StepDef> = {
     body: "先点一下编辑框，把光标放进去。",
   },
   8: {
-    body: "再点左侧的这张图片，把它加进编辑框——图片四周就会出现它的可选维度环。",
+    body: "再长按左侧的这张图片——它四周会出现可选维度环。（单击图片则是把它加进编辑框作参考图。）",
   },
   9: {
     body: "经过分析的素材会具备不同的维度，你可以通过维度来更好地控制生成时的参数。对于未经分析的素材，你也可以直接文字描述想要参考/控制的内容。",
@@ -97,13 +97,13 @@ function editorTextEndCoords(): { x: number; y: number } | null {
  * 新手引导 tour（阶段 B，替代首启自动注入）。自写 spotlight（box-shadow 挖洞 z-70 + pulse ring
  * + 气泡 z-71）+ 虚拟鼠标（z-72，移动到目标 + 脉冲点击示意），零依赖。步骤：
  * 0 入口弹窗 → 1 新建项目 → 2 导入中 → 3 进入项目状态（侧栏激活项目）→ 4 首图右键 →
- * 5 菜单复用 → 6 编辑框 → 7 虚拟鼠标示意点编辑框（用户真点）→ 8 虚拟鼠标示意点 preset-05
- * （用户真点 → 插入 chip、四周呼出维度环 CaptionRing）→ 9 高亮维度环 → 10 虚拟鼠标示意点
- * 环上「构图」条目（用户真点）→ 11 结束语。
+ * 5 菜单复用 → 6 编辑框 → 7 虚拟鼠标示意点编辑框（用户真点）→ 8 虚拟鼠标指向 preset-05
+ * （用户真长按 → 四周呼出维度环 CaptionRing）→ 9 高亮维度环 → 10 虚拟鼠标示意点
+ * 环上「构图」扇区（用户真点）→ 11 结束语。
  * 推进：1→2 ProjectSection.create 选完文件夹；2→3【下一步】（tourImported 后）；
  * 3→4【下一步】；4→5 右键首图（contextMenu）；5→6 点复用（boardOpen）；6→7【下一步】；
- * 7→8 用户真点编辑框；8→9 用户真点瀑布流图（board-asset-picked）；9→10【下一步】；
- * 10→11 用户真点环上维度条目（CreationBoard onPick）。
+ * 7→8 用户真点编辑框；8→9 用户真长按瀑布流图（store.captionRing）；9→10【下一步】；
+ * 10→11 用户真点环上维度扇区（CaptionRing pick）。
  */
 export function OnboardingTour() {
   const tourActive = useStore((s) => s.tourActive);
@@ -114,6 +114,7 @@ export function OnboardingTour() {
   const boardOpen = useStore((s) => s.boardOpen);
   const assets = useStore((s) => s.assets);
   const contextMenu = useStore((s) => s.contextMenu);
+  const captionRing = useStore((s) => s.captionRing);
   // tour step 4 锁定「罂粟夜宴」（生成图，有可复用的 prompt_raw）；不依赖 assets[0]（排序不定）。
   const yysyAsset = assets.find((a) => a.name === "罂粟夜宴");
   const [rect, setRect] = useState<DOMRect | null>(null);
@@ -226,13 +227,10 @@ export function OnboardingTour() {
     return () => el.removeEventListener("click", onClick);
   }, [tourStep, setTourStep]);
 
-  // step 8 → 9：用户真实点瀑布流图 → board-asset-picked（MasonryGrid 插 chip）。
+  // step 8 → 9：用户真长按瀑布流图 → 维度环呼出（store.captionRing，长按是唯一调起方式）。
   useEffect(() => {
-    if (tourStep !== 8) return;
-    const onPick = () => setTourStep(9);
-    window.addEventListener("bowerbird://board-asset-picked", onPick as EventListener);
-    return () => window.removeEventListener("bowerbird://board-asset-picked", onPick as EventListener);
-  }, [tourStep, setTourStep]);
+    if (tourActive && tourStep === 8 && captionRing) setTourStep(9);
+  }, [tourActive, tourStep, captionRing, setTourStep]);
 
   if (!tourActive) return null;
 

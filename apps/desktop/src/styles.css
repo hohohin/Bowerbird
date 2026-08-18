@@ -843,6 +843,38 @@ body.app-sidebar-resizing * {
   animation: caption-ring-fade-in 300ms ease-out;
 }
 
+/* hover 扇区的维度信息浮层：popover 材质，径向外侧展示反推正文（80ms 延迟淡入防扫过闪烁） */
+.caption-ring-tip {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  width: max-content;
+  max-width: 280px;
+  padding: 6px 8px;
+  border: 1px solid #454141;
+  border-radius: 3px;
+  background: #1d1a1a;
+  box-shadow: 0 18px 55px rgb(0 0 0 / 52%);
+  pointer-events: none;
+  animation: caption-ring-tip-in 140ms ease-out 80ms backwards;
+}
+
+.caption-ring-tip-title {
+  color: #4868ff;
+  font-size: 11px;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+.caption-ring-tip-body {
+  color: #dfe5ff;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+@keyframes caption-ring-tip-in {
+  from { opacity: 0; }
+}
+
 @keyframes caption-ring-fade-in {
   from { opacity: 0; }
 }

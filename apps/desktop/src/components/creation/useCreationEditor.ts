@@ -11,7 +11,6 @@ import { parsePromptToDoc, parsePromptToInline } from "./parse";
 import { buildPlugins } from "./plugins";
 
 const PICK_EVENT = "bowerbird://board-asset-picked";
-const PEEK_EVENT = "bowerbird://board-asset-peek";
 const LOAD_EVENT = "bowerbird://board-load-prompt";
 // 图片标注「插入创作板（不入库）」：detail = 完整 PromptedAsset（临时文件 + 「标注」维度），
 // 走 extraAssets 旁路（不在 s.assets / promptedAssets 里），随草稿 refs 持久化。
@@ -51,14 +50,21 @@ function saveDraft(key: string, doc: unknown, refs: PromptedAsset[]) {
 
 /**
  * 创作板 ProseMirror 编辑器 hook：非受控 EditorView（doc 不进 React state，只持 tick 计数器
- * 触发派生数据重算）。注册 window 事件（点图插入 / 外部载入），暴露 finalPrompt / references /
- * 维度环状态（chipAssetId → chipSections + ringOpen）/ insertKeyword 供 UI 外壳消费。
+ * 触发派生数据重算）。注册 window 事件（点图插入 / 外部载入），暴露 finalPrompt / references
+ * 供 UI 外壳消费。维度环（CaptionRing）为全局组件：本 hook 只负责消费环点选的
+ * pendingKeyword（插入创作板）和给 smartPunct 供最近呼环图的 chipSections。
  *
  * opts.draftKey：草稿持久化的 localStorage key。缺省 = 创作板自己的 bowerbird.boardDraft；
  * 传 null = 不持久化（生成会话编辑坞用——会话本身即记录，且不能覆盖创作板草稿）。
  * opts.initialEmpty：true = 初始文档为空（不预填「请参考」），会话底部对话框（续轮）用。
+ * opts.consumePendingKeyword：true = 消费 store.pendingKeyword（环点扇区待插的维度）。
+ * 仅创作板实例传 true——板未开时点扇区会先开板再挂载本 hook，挂载后于此插入；编辑坞不抢。
  */
-export function useCreationEditor(opts?: { draftKey?: string | null; initialEmpty?: boolean }) {
+export function useCreationEditor(opts?: {
+  draftKey?: string | null;
+  initialEmpty?: boolean;
+  consumePendingKeyword?: boolean;
+}) {
   const draftKey = opts?.draftKey === undefined ? BOARD_DRAFT_KEY : opts.draftKey;
   const promptedAssets = useStore((s) => s.promptedAssets);
   // boardOpen 时 s.assets = 全部挑图（含未反推）；并入 assetById 让无 caption 图也能插为参考图，
@@ -73,10 +79,8 @@ export function useCreationEditor(opts?: { draftKey?: string | null; initialEmpt
   const viewRef = useRef<EditorView | null>(null);
   const [tick, setTick] = useState(0);
 
-  const [chipAssetId, setChipAssetId] = useState<string | null>(null);
-  // 维度环形菜单（CaptionRing）：点图拾取时打开，随LOAD_EVENT复位；由 UI 外壳渲染。
-  const [ringOpen, setRingOpen] = useState(false);
-
+  // 最近呼环的图（store.ringAssetId，环收起后仍保留）：驱动 smartPunct 的维度名→chip 匹配正文
+  const ringAssetId = useStore((s) => s.ringAssetId);
   const assetById = useMemo(() => {
     const m = new Map<string, PromptedAsset>();
     for (const a of allAssets) m.set(a.id, a); // boardOpen 时 = 全部挑图（含未反推，无 caption）
@@ -86,9 +90,9 @@ export function useCreationEditor(opts?: { draftKey?: string | null; initialEmpt
   }, [allAssets, promptedAssets, extraAssets]);
 
   const chipSections: CaptionSection[] = useMemo(() => {
-    const asset = chipAssetId ? assetById.get(chipAssetId) : undefined;
+    const asset = ringAssetId ? assetById.get(ringAssetId) : undefined;
     return asset?.sections && asset.sections.length > 0 ? asset.sections : [];
-  }, [chipAssetId, assetById]);
+  }, [ringAssetId, assetById]);
 
   // ref 镜像：plugin handler / window listener 在 useEffect([]) 闭包里，读 ref 拿最新值
   const assetByIdRef = useRef(assetById);
@@ -156,15 +160,6 @@ export function useCreationEditor(opts?: { draftKey?: string | null; initialEmpt
       const node = v.state.schema.nodes.image.create(imageAttrs(assetId, asset, false));
       v.dispatch(v.state.tr.replaceSelectionWith(node).scrollIntoView());
       v.focus();
-      setChipAssetId(assetId);
-      setRingOpen(true);
-    }
-
-    function onPeek(e: Event) {
-      // 长按窥视（MasonryGrid）：只呼出该图的维度环，不插 image chip、不抢编辑框焦点
-      const assetId = (e as CustomEvent<string>).detail;
-      setChipAssetId(assetId);
-      setRingOpen(true);
     }
 
     function onInject(e: Event) {
@@ -204,8 +199,6 @@ export function useCreationEditor(opts?: { draftKey?: string | null; initialEmpt
       const v = viewRef.current;
       if (!v) return;
       v.updateState(EditorState.create({ doc, plugins: v.state.plugins }));
-      setChipAssetId(null);
-      setRingOpen(false);
       setTick((t) => t + 1);
       scheduleSave();
       setTimeout(() => v.focus(), 0);
@@ -214,12 +207,10 @@ export function useCreationEditor(opts?: { draftKey?: string | null; initialEmpt
     // 生成成功关闭创作板 / 手动收起 / 切项目 → 卸载。卸载即把当前 doc 落盘
     // （比 400ms 去抖更可靠——刚编辑完就关板时去抖计时器还挂着），重开创作板恢复。
     window.addEventListener(PICK_EVENT, onPick);
-    window.addEventListener(PEEK_EVENT, onPeek);
     window.addEventListener(LOAD_EVENT, onLoad);
     window.addEventListener(INJECT_EVENT, onInject);
     return () => {
       window.removeEventListener(PICK_EVENT, onPick);
-      window.removeEventListener(PEEK_EVENT, onPeek);
       window.removeEventListener(LOAD_EVENT, onLoad);
       window.removeEventListener(INJECT_EVENT, onInject);
       if (saveTimer) clearTimeout(saveTimer);
@@ -257,18 +248,27 @@ export function useCreationEditor(opts?: { draftKey?: string | null; initialEmpt
     return agentPromptReferencesFromDoc(doc, assetByIdRef.current);
   }, [tick, assetById]);
 
-  const insertKeyword = useCallback((title: string, body: string = "") => {
+  const focus = useCallback(() => viewRef.current?.focus(), []);
+
+  // 环点扇区待插的维度：板已开 → 本 effect 即时插；板未开点扇区 → store 先开板再挂载本 hook，
+  // 挂载 commit 内本 effect 排在建 view 的 effect 之后运行，同样能消费。仅创作板实例开启。
+  const pendingKeyword = useStore((s) => s.pendingKeyword);
+  const clearPendingKeyword = useStore((s) => s.clearPendingKeyword);
+  const consumePending = opts?.consumePendingKeyword === true;
+  useEffect(() => {
+    if (!consumePending || !pendingKeyword) return;
     const v = viewRef.current;
     if (!v) return;
     v.dispatch(
-      v.state.tr.replaceSelectionWith(v.state.schema.nodes.keyword.create({ title, body })).scrollIntoView()
+      v.state.tr
+        .replaceSelectionWith(
+          v.state.schema.nodes.keyword.create({ title: pendingKeyword.title, body: pendingKeyword.body })
+        )
+        .scrollIntoView()
     );
     v.focus();
-  }, []);
-
-  const focus = useCallback(() => viewRef.current?.focus(), []);
-
-  const closeRing = useCallback(() => setRingOpen(false), []);
+    clearPendingKeyword();
+  }, [pendingKeyword, clearPendingKeyword, consumePending]);
 
   return {
     hostRef,
@@ -278,10 +278,5 @@ export function useCreationEditor(opts?: { draftKey?: string | null; initialEmpt
     references: serialized.references,
     graphSources,
     agentPromptReferences,
-    chipAssetId,
-    chipSections,
-    ringOpen,
-    closeRing,
-    insertKeyword,
   };
 }

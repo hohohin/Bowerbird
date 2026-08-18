@@ -1,11 +1,8 @@
 import { useEffect, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-shell";
 import { useStore } from "../store";
 import { api } from "../lib/api";
 import { ModalShell } from "./ModalShell";
-
-const NODE_SITE = "https://nodejs.org";
 
 type StepState = "idle" | "running" | "done" | "error";
 
@@ -15,7 +12,9 @@ type StepState = "idle" | "running" | "done" | "error";
  * 不再自行判断 seen、不自动弹——只由设置「模型设置」经 `codexOnboardingForceOpen` 唤起；
  * 「稍后再说」与检测成功均直接关闭。
  *
- * step1「一键安装」→ `codex_install`（spawn npm，进度经 `codex://setup-progress` 推）；
+ * step1「一键安装」→ `codex_install`（后端免 Node 直装独立版：下载官方平台包 tarball
+ * + sha512 校验 + 解压到应用数据目录，进度经 `codex://setup-progress` 推，含 percent；
+ * 失败且本机有 npm 时自动回退 npm 安装）；
  * step2「一键登录」→ `codex_login`（spawn codex login，codex 自己开浏览器 OAuth）。
  * 成功后端 emit `codex://health-changed` → 自动重检 → ok 则直接关闭。
  */
@@ -31,14 +30,16 @@ export function CodexOnboarding() {
   const [loginState, setLoginState] = useState<StepState>("idle");
   const [loginReason, setLoginReason] = useState("");
   const [lines, setLines] = useState<string[]>([]);
+  const [percent, setPercent] = useState<number | null>(null);
 
-  // 安装进度行（stage=install）；保留最后 50 行避免无限增长。
+  // 安装进度行（stage=install，直装下载带 percent）；保留最后 50 行避免无限增长。
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
     let alive = true;
-    listen<{ stage: string; line: string }>("codex://setup-progress", (e) => {
+    listen<{ stage: string; line: string; percent?: number | null }>("codex://setup-progress", (e) => {
       if (e.payload.stage === "install") {
         setLines((ls) => [...ls.slice(-50), e.payload.line]);
+        setPercent(typeof e.payload.percent === "number" ? e.payload.percent : null);
       }
     }).then((u) => (alive ? (unlisten = u) : u()));
     return () => {
@@ -93,6 +94,7 @@ export function CodexOnboarding() {
     setInstallState("running");
     setInstallReason("");
     setLines([]);
+    setPercent(null);
     try {
       const h = await api.codexInstall();
       if (h.ok) setInstallState("done");
@@ -135,8 +137,6 @@ export function CodexOnboarding() {
     codexHealth?.ok === true ||
     codexHealth?.reason.includes("未登录") === true;
   const loginDone = loginState === "done" || codexHealth?.ok === true;
-  const needNode =
-    installState === "error" && installReason.includes("Node");
 
   return (
     <ModalShell
@@ -189,27 +189,25 @@ export function CodexOnboarding() {
                     ? "已安装"
                     : "一键安装 codex CLI"}
               </button>
+              {installState === "running" && percent !== null && (
+                <div className="mt-1.5 h-1.5 overflow-hidden rounded bg-panel2">
+                  <div
+                    className="h-full rounded bg-accent transition-all duration-300"
+                    style={{ width: `${Math.min(100, Math.max(0, percent))}%` }}
+                  />
+                </div>
+              )}
               {installState === "running" && lines.length > 0 && (
                 <pre className="mt-1.5 max-h-28 overflow-auto rounded bg-panel2 p-2 text-[11px] text-muted">
                   {lines.join("\n")}
                 </pre>
               )}
               {installState === "error" && (
-                <div className="mt-1.5 text-xs text-red-300">
-                  {installReason}
-                  {needNode && (
-                    <button type="button"
-                      onClick={() => void open(NODE_SITE)}
-                      className="app-modal-button ml-2 min-h-7 px-2"
-                    >
-                      打开 Node 官网
-                    </button>
-                  )}
-                </div>
+                <div className="mt-1.5 text-xs text-red-300">{installReason}</div>
               )}
             </div>
             <div className="mt-1 pl-7 text-xs text-muted">
-              app 自动执行 npm install，无需打开终端。
+              自动下载官方独立版 codex（约 130MB，无需 Node.js，也不打开终端）。
             </div>
           </li>
 

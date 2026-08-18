@@ -30,6 +30,9 @@ const CMD_TIMEOUT_SECS: u64 = 180;
 pub struct DreaminaCliProvider {
     /// 可执行文件名/路径，默认 "dreamina"（经 `resolve_dreamina_binary` 解析）。
     pub binary: String,
+    /// 出图模型版本（`--model_version`）。text2image 支持 3.0~5.0Pro，image2image 仅 4.0+；
+    /// 由 settings（`dreamina_model_version`）在每次生成前注入，改设置即热生效。
+    pub model_version: String,
     pub enabled: bool,
 }
 
@@ -37,6 +40,7 @@ impl Default for DreaminaCliProvider {
     fn default() -> Self {
         Self {
             binary: resolve_dreamina_binary().unwrap_or_else(|| "dreamina".to_string()),
+            model_version: crate::core::settings::DEFAULT_DREAMINA_MODEL_VERSION.to_string(),
             enabled: true,
         }
     }
@@ -89,6 +93,7 @@ impl GenProvider for DreaminaCliProvider {
             }
         }
         submit.arg("--prompt").arg(&req.instruction);
+        submit.arg("--model_version").arg(&self.model_version);
         if let Some(r) = req.ratio.as_deref() {
             let r = r.trim();
             if !r.is_empty() {

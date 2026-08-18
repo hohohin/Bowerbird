@@ -1,21 +1,27 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { CaptionSection } from "../../lib/types";
+import { useStore } from "../../store";
+import type { CaptionSection, PromptedAsset } from "../../lib/types";
+
+const PEEK_EVENT = "bowerbird://board-asset-peek";
 
 /**
- * 维度环形菜单（radial menu）：点瀑布流图片拾取 / 长按图片窥视后，在该卡片四周呼出其反推维度环。
+ * 维度环形菜单（radial menu）——全局单例（App 根挂载，store.captionRing 驱动）。
+ * 唯一调起方式：任意场景长按左键瀑布流图片（MasonryGrid 派发 PEEK_EVENT）。
+ *
  * 扇形（pie sector）菜单 = 以卡片为圆心的 SVG：每个维度一个扇区（角缝分隔），label 水平
- * 居中于扇区质心；点扇区 → insertKeyword 插入编辑框（环保持打开，已选扇区打 ✓ 变淡）。
+ * 居中于扇区质心；hover 扇区 → 径向外侧浮层显示该维度反推正文；点扇区 → 直接插入创作板
+ * （板未开则自动开板，keyword 走 store.pendingKeyword 由创作板的 useCreationEditor 消费），
+ * 环保持打开可连续添加，已选扇区打 ✓ 变淡。无维度的图呼出空环并提示右键反推。
  * 展开动画 = 扇区自中心旋出 + 按角度错峰绽放；收起 = 整环收拢淡出后再卸载。
  *
  * 遮罩挖两个洞（环圈 + 编辑框）：mask = 外扩视口矩形 + 两洞的 evenodd 路径经 feGaussianBlur
- * 羽化——洞内（目标图片、编辑框）不压暗不模糊且边缘渐变过渡，洞外 backdrop blur + 半透明压暗。
- * 编辑框可点可输入（挪光标定位插入点）；目标图片被透明圆形点击区盖住，再点 = 收起。
+ * 羽化——洞内不压暗不模糊且边缘渐变过渡，洞外 backdrop blur + 半透明压暗。板关着呼环时
+ * 编辑框不存在，遮罩只挖环圈一个洞；点扇区开板后下一帧重测补上编辑框洞。
  *
- * 收起手势：Esc / 点遮罩 / 再点目标图片 / 右键 / 窗口缩放 / 鼠标移出环一定距离（编辑框区域
- * 除外）/ 直接输入文字。环顶部上方的小字胶囊说明这些手势。无维度的图（长按窥视）呼出空环，
- * 小字提示可右键反推。tour 激活时 suppressScrim（tour 自带聚光灯），且距离/输入收起不生效
- * （避免引导中环意外消失）。
+ * 收起手势：Esc / 点遮罩 / 再点目标图片 / 右键 / 窗口缩放 / 鼠标移出环一定距离（编辑框
+ * 区域除外）/ 直接输入文字。环顶部上方的小字胶囊说明这些手势。tour 激活时 suppressScrim
+ * （tour 自带聚光灯），且距离/输入收起不生效（避免引导中环意外消失）。
  *
  * 定位沿 AssetContextMenu / BoardChipPreview 范式：portal 到 body + fixed 坐标；
  * z-65/66 占用上下文菜单(60)与 tour/Popover(70) 之间的空档，保证 tour 聚光灯在最上层。
@@ -64,10 +70,7 @@ function roundRectPath(x: number, y: number, w: number, h: number, r: number): s
 }
 
 // remeasure 的无变化守卫用：编辑框矩形逐字段相等（null 与 null 也相等）。
-function sameRect(
-  a: Geometry["editor"],
-  b: Geometry["editor"]
-): boolean {
+function sameRect(a: Geometry["editor"], b: Geometry["editor"]): boolean {
   if (!a || !b) return a === b;
   return a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
 }
@@ -90,28 +93,56 @@ function buildMaskImage(g: Geometry): string {
   return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
 }
 
-export function CaptionRing(props: {
-  assetId: string;
-  sections: CaptionSection[];
-  editorHostRef: RefObject<HTMLDivElement | null>;
-  suppressScrim?: boolean;
-  onClose: () => void;
-  onPick: (section: CaptionSection) => void;
-}) {
-  const { assetId, sections, editorHostRef, suppressScrim, onClose, onPick } = props;
+/** 全局单例入口：监听长按窥视事件开环；会话状态（几何/已选/收起动画）都在 Session 里，
+ * 换图重开（key=assetId）即整体重置。 */
+export function CaptionRing() {
+  const openCaptionRing = useStore((s) => s.openCaptionRing);
+  const assetId = useStore((s) => s.captionRing);
+
+  useEffect(() => {
+    const onPeek = (e: Event) => openCaptionRing((e as CustomEvent<string>).detail);
+    window.addEventListener(PEEK_EVENT, onPeek as EventListener);
+    return () => window.removeEventListener(PEEK_EVENT, onPeek as EventListener);
+  }, [openCaptionRing]);
+
+  if (!assetId) return null;
+  return <CaptionRingSession key={assetId} assetId={assetId} />;
+}
+
+function CaptionRingSession({ assetId }: { assetId: string }) {
+  const closeCaptionRing = useStore((s) => s.closeCaptionRing);
+  const boardOpen = useStore((s) => s.boardOpen);
+  const tourActive = useStore((s) => s.tourActive);
+  // 维度数据：瀑布流资产 + 反推集合合并（prompted 后置覆盖补 sections），与 hook 的 assetById 同源逻辑
+  const sections = useMemo<CaptionSection[]>(() => {
+    const all = useStore.getState().assets;
+    const prompted = useStore.getState().promptedAssets;
+    const m = new Map<string, PromptedAsset>();
+    for (const a of all) m.set(a.id, a);
+    for (const a of prompted) m.set(a.id, a);
+    const asset = m.get(assetId);
+    return asset?.sections && asset.sections.length > 0 ? asset.sections : [];
+    // boardOpen 变化时 App 会重载 assets（板开=全部图），顺带重算
+  }, [assetId, boardOpen]);
+
   const [geom, setGeom] = useState<Geometry | null>(null);
   const [used, setUsed] = useState<Set<string>>(() => new Set());
+  const [hovered, setHovered] = useState<number | null>(null);
   const [closing, setClosing] = useState(false);
   const closeRef = useRef(false);
   const closeTimer = useRef<number | undefined>(undefined);
+  // 展开动画期间扇形会扫过指针下方（错峰绽放），先到的 pointerenter 是假 hover → 信息浮层
+  // 会闪出用户没指的扇区。开环 600ms 内忽略。
+  const openedAt = useRef(Date.now());
 
   // 收起走动画：先播 ~180ms 收拢淡出，再真正卸载。期间忽略重复收起与重测。
   const requestClose = useCallback(() => {
     if (closeRef.current) return;
     closeRef.current = true;
+    setHovered(null);
     setClosing(true);
-    closeTimer.current = window.setTimeout(onClose, 180);
-  }, [onClose]);
+    closeTimer.current = window.setTimeout(closeCaptionRing, 180);
+  }, [closeCaptionRing]);
 
   useEffect(
     () => () => {
@@ -123,9 +154,10 @@ export function CaptionRing(props: {
   // 挂载即测量（layout 阶段，避免首帧闪位）。卡片 DOM 由 MasonryGrid 提供（id=asset-*）。
   // 滚动时也走这里重测（环跟随图片/编辑框移动）：插入 keyword 会 scrollIntoView 滚动面板，
   // 若滚动即收起会让环在加第一个维度时就意外关闭；元素不在了才收起。
+  // 编辑框用 data-tour 选择器找（板关着时不存在 → 遮罩只挖环圈一个洞）。
   const remeasure = useCallback(() => {
     if (closeRef.current) return;
-    // 锚点：优先瀑布流卡片（点图拾取 / 长按窥视）；标注注入的临时图不在瀑布流，
+    // 锚点：优先瀑布流卡片（长按窥视）；标注注入的临时图不在瀑布流，
     // 回退到编辑框内该资产的 image chip（data-asset-id），环围绕刚插入的 chip 呼出。
     const anchor =
       document.getElementById(`asset-${assetId}`) ??
@@ -135,7 +167,7 @@ export function CaptionRing(props: {
       requestClose();
       return;
     }
-    const ed = editorHostRef.current?.getBoundingClientRect() ?? null;
+    const ed = (document.querySelector('[data-tour="creation-editor"]') as HTMLElement | null)?.getBoundingClientRect() ?? null;
     const edRect = ed ? { x: ed.left, y: ed.top, w: ed.width, h: ed.height } : null;
     const cx = card.left + card.width / 2;
     const cy = card.top + card.height / 2;
@@ -176,11 +208,18 @@ export function CaptionRing(props: {
         editor: edRect,
       };
     });
-  }, [assetId, editorHostRef, requestClose]);
+  }, [assetId, requestClose]);
 
   useLayoutEffect(() => {
     remeasure();
   }, [remeasure]);
+
+  // 板在环开着期间被打开（点扇区自动开板）→ 下一帧重测补上编辑框洞
+  useEffect(() => {
+    if (!boardOpen) return;
+    const id = requestAnimationFrame(remeasure);
+    return () => cancelAnimationFrame(id);
+  }, [boardOpen, remeasure]);
 
   // 收起：Esc / 直接输入文字（不拦截，按键落进编辑框）/ 窗口缩放（几何整体失效）/ 右键
   // （先收环再出菜单，避免菜单 z-60 压在环层 z-66 下面）。遮罩与洞内点击区的收起见各自
@@ -201,15 +240,15 @@ export function CaptionRing(props: {
         requestClose();
         return;
       }
-      if (suppressScrim) return;
+      if (tourActive) return;
       // 可打印字符 = 用户在直接输入（编辑框在拾取后已聚焦）→ 收起环让位
       if (e.key.length === 1 && e.key !== " " && !e.ctrlKey && !e.metaKey && !e.altKey) requestClose();
     }
-  }, [requestClose, remeasure, suppressScrim]);
+  }, [requestClose, remeasure, tourActive]);
 
   // 鼠标移出环一定距离即收起。编辑框区域豁免：用户常移过去挪光标/继续输入。
   useLayoutEffect(() => {
-    if (!geom || suppressScrim) return;
+    if (!geom || tourActive) return;
     const threshold = geom.outerR + 120;
     const onMove = (e: PointerEvent) => {
       if (closeRef.current) return;
@@ -230,7 +269,7 @@ export function CaptionRing(props: {
     };
     window.addEventListener("pointermove", onMove);
     return () => window.removeEventListener("pointermove", onMove);
-  }, [geom, requestClose, suppressScrim]);
+  }, [geom, requestClose, tourActive]);
 
   const maskImage = useMemo(() => (geom ? buildMaskImage(geom) : null), [geom]);
 
@@ -258,6 +297,9 @@ export function CaptionRing(props: {
       r = Math.max(Math.min(r, midR), Math.min(midR, geom.innerR * 0.5));
       return {
         section,
+        a,
+        cos,
+        sin,
         d: n === 1 ? donutPath(geom.innerR, geom.outerR) : wedgePath(geom.innerR, geom.outerR, a - half, a + half),
         evenOdd: n === 1,
         lx: r * cos,
@@ -266,22 +308,36 @@ export function CaptionRing(props: {
     });
   }, [geom, sections]);
 
+  // 点扇区 = 维度直接进创作板（板未开自动开板），环保持打开可连续添加
   function pick(section: CaptionSection) {
     if (closeRef.current) return;
     setUsed((prev) => new Set(prev).add(section.title));
-    onPick(section);
+    useStore.getState().pickCaptionSection(section);
+    // tour step 10：用户点环上维度（如「构图」）→ 引导完成
+    const st = useStore.getState();
+    if (st.tourActive && st.tourStep === 10) st.setTourStep(11);
   }
 
   if (!geom) return null;
 
   const hintText =
     sections.length > 0
-      ? "点扇区加入编辑框 · 移开鼠标或直接输入文字可关闭"
+      ? "点扇区加入创作板 · 移开鼠标或直接输入文字可关闭"
       : "该图无维度数据 · 右键图片可反推生成";
+
+  const hover = hovered != null ? sectors[hovered] : null;
+  // 信息浮层：径向外侧放置（中心点 = 环外缘外推半宽），整体钳进视口
+  const tip = hover
+    ? {
+        section: hover.section,
+        left: Math.min(Math.max(geom.cx + (geom.outerR + 140) * hover.cos, 150), geom.vw - 150),
+        top: Math.min(Math.max(geom.cy + (geom.outerR + 16) * hover.sin, 70), geom.vh - 50),
+      }
+    : null;
 
   return createPortal(
     <>
-      {!suppressScrim && (
+      {!tourActive && (
         <div
           className={`caption-ring-scrim${closing ? " is-closing" : ""}`}
           style={{ maskImage: maskImage ?? undefined, WebkitMaskImage: maskImage ?? undefined }}
@@ -349,6 +405,11 @@ export function CaptionRing(props: {
                 role="button"
                 aria-label={`添加维度 ${section.title}`}
                 onClick={() => pick(section)}
+                onPointerEnter={() => {
+                  if (Date.now() - openedAt.current < 600) return;
+                  setHovered(i);
+                }}
+                onPointerLeave={() => setHovered((h) => (h === i ? null : h))}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" || e.key === " ") {
                     e.preventDefault();
@@ -356,7 +417,6 @@ export function CaptionRing(props: {
                   }
                 }}
               >
-                <title>{section.body || section.title}</title>
                 <path className="caption-ring-sector-fill" d={d} fillRule={evenOdd ? "evenodd" : "nonzero"} />
                 <text
                   className="caption-ring-sector-label"
@@ -372,6 +432,13 @@ export function CaptionRing(props: {
             );
           })}
         </svg>
+        {/* hover 扇区的反推正文浮层（径向外侧，80ms 延迟淡入防扫过闪烁） */}
+        {tip && !closing && (
+          <div className="caption-ring-tip" style={{ left: tip.left, top: tip.top }}>
+            <div className="caption-ring-tip-title">{tip.section.title}</div>
+            {tip.section.body && <div className="caption-ring-tip-body">{tip.section.body}</div>}
+          </div>
+        )}
       </div>
     </>,
     document.body

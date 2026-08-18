@@ -16,6 +16,7 @@ use self::types::{Capabilities, Chunk, CodexRequest, CodexResult, GenOutcome};
 pub mod bowerbird_cloud;
 mod cloud_image;
 pub mod codex_cli;
+pub mod install;
 pub mod jimeng;
 pub mod openai_api;
 pub mod types;
@@ -50,7 +51,8 @@ pub trait GenProvider: Send + Sync {
 /// 按 `provider` 参数取实现（AI-PROVIDERS.md §5.2）。
 ///
 /// - `None | "codex" | "default"` → [`CodexCliProvider`]（默认，当前唯一实现）；
-/// - `"jimeng"` → Phase 2 接入；
+/// - `"jimeng"` → [`DreaminaCliProvider`]，`dreamina_model` 注入 `--model_version`
+///   （来自 settings，每次生成都重读 → 设置页热修改即生效）；
 /// - 任意 `bowerbird-cloud*` 前缀 key → [`BowerbirdCloudProvider`]（档位由云端数据驱动，
 ///   service 经 [`bowerbird_cloud::cloud_service_for_key`] 解析，遗留 key 同样兼容）；
 /// - 其他 → 报错。
@@ -59,11 +61,18 @@ pub trait GenProvider: Send + Sync {
 pub fn resolve_gen_provider(
     provider: Option<&str>,
     cloud: Option<(crate::cloud::CloudClient, crate::cloud::AuthClient)>,
+    dreamina_model: Option<&str>,
 ) -> Result<Box<dyn GenProvider>, AppError> {
     let provider = provider.unwrap_or("codex");
     match provider {
         "codex" | "default" => Ok(Box::new(CodexCliProvider::default())),
-        "jimeng" => Ok(Box::new(jimeng::DreaminaCliProvider::default())),
+        "jimeng" => {
+            let mut p = jimeng::DreaminaCliProvider::default();
+            if let Some(model) = dreamina_model.filter(|m| !m.trim().is_empty()) {
+                p.model_version = model.trim().to_string();
+            }
+            Ok(Box::new(p))
+        }
         key if key.starts_with("bowerbird-cloud") => {
             let (client, auth) =
                 cloud.ok_or_else(|| AppError::Cloud("账号服务尚未初始化".into()))?;

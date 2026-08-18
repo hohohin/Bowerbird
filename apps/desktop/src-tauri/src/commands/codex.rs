@@ -16,9 +16,7 @@ use tokio::sync::mpsc;
 use ulid::Ulid;
 
 use crate::cloud::EntitlementService;
-use crate::codex::codex_cli::{
-    codex_command, codex_home, npm_command, resolve_codex_binary, resolve_npm_binary,
-};
+use crate::codex::codex_cli::{codex_command, codex_home, resolve_codex_binary};
 use crate::codex::resolve_gen_provider;
 use crate::codex::types::{Chunk, CodexRequest, CodexResult};
 use crate::codex::understand::{
@@ -26,6 +24,7 @@ use crate::codex::understand::{
 };
 use crate::core::caption;
 use crate::core::paths::LibraryPaths;
+use crate::core::settings::SettingsState;
 use crate::db::Database;
 use crate::error::AppError;
 
@@ -71,7 +70,7 @@ pub async fn codex_health() -> Result<CodexHealth, AppError> {
     if !binary_ok {
         return Ok(CodexHealth {
             ok: false,
-            reason: "未检测到 codex CLI（需 npm install -g @openai/codex 并在 PATH）".into(),
+            reason: "未检测到 codex CLI（点「一键安装」自动下载独立版，无需 Node.js）".into(),
         });
     }
     let logged_in = codex_home()
@@ -98,104 +97,26 @@ static SETUP_CANCEL: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>> 
     std::sync::Mutex::new(None);
 
 /// 一键安装 codex CLI（`codex exec` 主线零改动，仅替代用户手敲 `npm install -g`）：
-/// 找 npm（找不到 = Node 未装，返回 reason 让前端引导装 Node）→ spawn
-/// `npm install -g @openai/codex`（Windows 经 cmd.exe + CREATE_NO_WINDOW 不弹黑窗），
-/// 逐行 stdout/stderr 经 `codex://setup-progress` 推前端。跑完复查 codex 二进制是否就位。
-/// 可取消（`kill_on_drop` + `SETUP_CANCEL`）。成功 emit `codex://health-changed` 让各处自刷新。
+/// 主体在 [`crate::codex::install`]——优先从 npm registry 直装官方独立二进制
+/// （npmmirror → npmjs，sha512 校验，**无需 Node.js**；进度经 `codex://setup-progress`
+/// 推前端，含 percent 进度）；直装失败且本机有 npm 时回退 `npm install -g`。
+/// 可取消（`SETUP_CANCEL`）。成功 emit `codex://health-changed` 让各处自刷新。
 #[tauri::command]
 pub async fn codex_install(app: AppHandle) -> Result<CodexHealth, AppError> {
-    // npm 找不到 = Node 未装（npm 随 Node 附带）。返回 reason 让前端引导装 Node。
-    let npm = match resolve_npm_binary() {
-        Some(n) => n,
-        None => {
-            return Ok(CodexHealth {
-                ok: false,
-                reason: "未检测到 Node.js / npm，请先安装 Node（npm 随 Node 附带）".into(),
-            })
-        }
-    };
-
-    let mut cmd = npm_command(&npm, &["install", "-g", "@openai/codex"]);
-    cmd.stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| AppError::Codex(format!("启动 npm 失败: {e}")))?;
-
-    // 逐行读 stdout + stderr → emit 进度（两个 task 并发读，互不阻塞）。
-    let stdout = child.stdout.take();
-    let stderr = child.stderr.take();
-    let app_out = app.clone();
-    let stdout_task = tokio::spawn(async move {
-        use tokio::io::{AsyncBufReadExt, BufReader};
-        let mut lines: Vec<String> = Vec::new();
-        if let Some(out) = stdout {
-            let mut r = BufReader::new(out).lines();
-            while let Ok(Some(line)) = r.next_line().await {
-                let _ = app_out.emit(
-                    "codex://setup-progress",
-                    serde_json::json!({ "stage": "install", "line": line }),
-                );
-                lines.push(line);
-            }
-        }
-        lines
-    });
-    let app_err = app.clone();
-    let stderr_task = tokio::spawn(async move {
-        use tokio::io::{AsyncBufReadExt, BufReader};
-        let mut lines: Vec<String> = Vec::new();
-        if let Some(e) = stderr {
-            let mut r = BufReader::new(e).lines();
-            while let Ok(Some(line)) = r.next_line().await {
-                let _ = app_err.emit(
-                    "codex://setup-progress",
-                    serde_json::json!({ "stage": "install", "line": line }),
-                );
-                lines.push(line);
-            }
-        }
-        lines
-    });
-
     let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
     SETUP_CANCEL.lock().unwrap().replace(cancel_tx);
-
-    // 等退出（180s 超时 + 可取消；任一分支 return 后 child drop → kill_on_drop 终止 npm）。
-    let status = tokio::select! {
-        r = tokio::time::timeout(Duration::from_secs(180), child.wait()) => match r {
-            Ok(s) => s.map_err(|e| AppError::Codex(format!("等待 npm 失败: {e}")))?,
-            Err(_) => return Err(AppError::Codex("npm 安装超时（180s），请重试或检查网络".into())),
-        },
-        _ = &mut cancel_rx => return Err(AppError::Codex("已取消".into())),
-    };
+    let result = crate::codex::install::install_codex(&app, &mut cancel_rx).await;
     SETUP_CANCEL.lock().unwrap().take();
-    let stdout_lines = stdout_task.await.unwrap_or_default();
-    let stderr_lines = stderr_task.await.unwrap_or_default();
-
-    if !status.success() {
-        // npm 的错误常打在 stdout（进度/错误混合），stderr 可能空；两者拼起来才看得到真因。
-        let combined = format!("{}\n{}", stdout_lines.join("\n"), stderr_lines.join("\n"));
-        let tail: String = combined.trim().chars().take(500).collect();
-        return Ok(CodexHealth {
-            ok: false,
-            reason: format!("npm 安装失败（退出 {}）| {tail}", status),
-        });
+    match result {
+        Ok(()) => {
+            let _ = app.emit("codex://health-changed", ());
+            Ok(CodexHealth { ok: true, reason: String::new() })
+        }
+        // 取消以错误抛出（前端 catch「已取消」回 idle 可重试，不显示为红色失败）。
+        Err(AppError::Codex(reason)) if reason == "已取消" => Err(AppError::Codex(reason)),
+        Err(AppError::Codex(reason)) => Ok(CodexHealth { ok: false, reason }),
+        Err(e) => Ok(CodexHealth { ok: false, reason: e.to_string() }),
     }
-    // 复查 codex 二进制是否就位（npm 装完应出现在 %APPDATA%\npm 或 PATH）。
-    if resolve_codex_binary().is_none() {
-        return Ok(CodexHealth {
-            ok: false,
-            reason: "npm 安装已完成但未找到 codex，请重启应用使其进入 PATH".into(),
-        });
-    }
-    let _ = app.emit("codex://health-changed", ());
-    Ok(CodexHealth {
-        ok: true,
-        reason: String::new(),
-    })
 }
 
 /// 一键 OAuth 登录：spawn `codex login`（codex 自己开系统浏览器走 ChatGPT 授权），
@@ -465,6 +386,7 @@ pub async fn codex_create_image(
     cloud_client: State<'_, crate::cloud::CloudClient>,
     auth_client: State<'_, crate::cloud::AuthClient>,
     entitlement: State<'_, EntitlementService>,
+    settings: State<'_, SettingsState>,
     prompt: String,
     prompt_raw: Option<String>,
     reference_images: Vec<String>,
@@ -577,9 +499,11 @@ pub async fn codex_create_image(
 
     // 先解析 provider（可能出错 → ?）：必须在注册 GENERATE_CANCEL 之前，否则出错提前返回
     // 会留下 stale cancel sender（下次 cancel_codex_create take 到它）。None → codex（默认）。
+    // 即梦模型版本每次生成都从 settings 重读 → 设置页热修改下一次生成即生效。
     let cloud_context = crate::codex::is_cloud_generation_provider(provider.as_deref())
         .then(|| (cloud_client.inner().clone(), auth_client.inner().clone()));
-    let p = resolve_gen_provider(provider.as_deref(), cloud_context)?;
+    let dreamina_model = settings.get().dreamina_model_version;
+    let p = resolve_gen_provider(provider.as_deref(), cloud_context, Some(&dreamina_model))?;
     let provider_name = p.name().to_string();
 
     // Phase A task 2：入队 task_queue（status=running），供任务中心 / 启动恢复 / 取消引用。
@@ -816,6 +740,8 @@ pub async fn openai_spike_generate_image(
 
 /// 「在 codex 中打开会话」：唤起系统终端跑 `codex resume <session_id>`，
 /// 让用户在 codex TUI 里翻看本次反推的完整对话（含图）。macOS 用 Terminal.app。
+/// 二进制用 `resolve_codex_binary` 的完整路径调起——应用内直装的托管副本不在
+/// 系统 PATH 上，裸 `codex` 会找不到。
 #[tauri::command]
 pub async fn open_codex_session(
     auth_client: State<'_, crate::cloud::AuthClient>,
@@ -827,12 +753,19 @@ pub async fn open_codex_session(
     if sid.is_empty() {
         return Err(AppError::Codex("session_id 为空".into()));
     }
+    // session_id 是 codex 输出的 UUID（我们落库的值），非用户自由输入；白名单校验
+    // 防注入（下方要与终端 / osascript 命令字符串拼接）。
+    if !sid.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return Err(AppError::Codex("session_id 格式无效".into()));
+    }
+    let binary = resolve_codex_binary()
+        .ok_or_else(|| AppError::Codex("未检测到 codex CLI，请先在设置中一键安装".into()))?;
+
     #[cfg(target_os = "macos")]
     {
-        // session_id 是 codex 输出的 UUID（我们落库的值），非用户自由输入；
-        // osascript 的 do script 把它作为单参传给 `codex resume`，无注入风险。
+        // 二进制路径可能含空格，作为 shell 命令须整体加引号（AppleScript 字符串内 \"）。
         let script = format!(
-            "tell application \"Terminal\"\nactivate\ndo script \"codex resume {sid}\"\nend tell"
+            "tell application \"Terminal\"\nactivate\ndo script \"\\\"{binary}\\\" resume {sid}\"\nend tell"
         );
         tokio::process::Command::new("osascript")
             .arg("-e")
@@ -845,26 +778,26 @@ pub async fn open_codex_session(
     {
         #[cfg(target_os = "windows")]
         {
-            // session_id 是 codex 输出的 UUID，仍按白名单校验防注入；`start "" cmd.exe /K`
-            // 经 cmd.exe 另开一个常驻命令提示符跑 `codex resume <sid>`。
-            if !sid.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
-                return Err(AppError::Codex("session_id 格式无效".into()));
-            }
-            tokio::process::Command::new("cmd.exe")
+            // `start "" cmd.exe /K` 经 cmd.exe 另开一个常驻命令提示符；含空格的二进制
+            // 路径经 raw_arg 以引号包裹（同 npm_command 约定——标准 .arg 的转义会被
+            // cmd 拆成多 token）。
+            let mut command = tokio::process::Command::new("cmd.exe");
+            command
                 .arg("/D")
                 .arg("/C")
                 .arg("start")
                 .arg("")
                 .arg("cmd.exe")
-                .arg("/K")
-                .arg(format!("codex resume {sid}"))
+                .arg("/K");
+            command.raw_arg(format!("\"{binary}\" resume {sid}"));
+            command
                 .spawn()
                 .map_err(|e| AppError::Codex(format!("启动命令提示符失败: {e}")))?;
             Ok(())
         }
         #[cfg(not(target_os = "windows"))]
         {
-            let _ = sid;
+            let _ = (&sid, &binary);
             Err(AppError::Codex("当前系统暂不支持打开 codex 会话".into()))
         }
     }

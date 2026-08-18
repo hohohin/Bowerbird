@@ -420,6 +420,51 @@ impl GenProvider for CodexCliProvider {
     }
 }
 
+/// 应用数据目录（与 setup 时 Tauri `app.path().app_data_dir()` 同值，identifier 固定
+/// `com.bowerbird.desktop`）。`resolve_codex_binary` 等无 AppHandle 的自由函数用它
+/// 定位托管安装的 codex，须与 lib.rs setup 的取法保持一致（Windows Roaming AppData /
+/// macOS Application Support / Linux XDG_DATA_HOME）。
+pub(crate) fn app_data_dir() -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    if let Some(appdata) = std::env::var_os("APPDATA") {
+        return Some(PathBuf::from(appdata).join("com.bowerbird.desktop"));
+    }
+    #[cfg(target_os = "macos")]
+    if let Some(home) = std::env::var_os("HOME") {
+        return Some(
+            PathBuf::from(home)
+                .join("Library")
+                .join("Application Support")
+                .join("com.bowerbird.desktop"),
+        );
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    if let Some(xdg) = std::env::var_os("XDG_DATA_HOME") {
+        return Some(PathBuf::from(xdg).join("com.bowerbird.desktop"));
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    if let Some(home) = std::env::var_os("HOME") {
+        return Some(PathBuf::from(home).join(".local/share").join("com.bowerbird.desktop"));
+    }
+    None
+}
+
+/// 托管安装的 codex 二进制（一键直装解压到 `{app_data}/codex-cli/vendor/<triple>/bin/`）。
+/// triple 由安装时的平台包决定，这里扫 `vendor/*/bin/` 定位，不对目录名做硬编码。
+pub(crate) fn managed_codex_binary() -> Option<PathBuf> {
+    let vendor = app_data_dir()?.join("codex-cli").join("vendor");
+    let name = if cfg!(target_os = "windows") {
+        "codex.exe"
+    } else {
+        "codex"
+    };
+    std::fs::read_dir(&vendor)
+        .ok()?
+        .flatten()
+        .map(|e| e.path().join("bin").join(name))
+        .find(|p| p.is_file())
+}
+
 /// Windows 的 npm 全局入口通常是 `codex.cmd`，不能直接交给 CreateProcess；
 /// 同时覆盖 GUI 应用常见的 PATH 不完整场景，主动检查 npm 默认目录。
 /// 非 Windows 直接在 PATH 找 `codex`。可用 `BOWERBIRD_CODEX_BINARY` 环境变量显式覆盖。
@@ -428,6 +473,11 @@ pub(crate) fn resolve_codex_binary() -> Option<String> {
         if !explicit.trim().is_empty() {
             return Some(explicit);
         }
+    }
+
+    // 应用内一键直装的独立版优先（版本由应用管理，不依赖用户装 Node / npm）。
+    if let Some(managed) = managed_codex_binary() {
+        return Some(managed.to_string_lossy().into_owned());
     }
 
     #[cfg(target_os = "windows")]

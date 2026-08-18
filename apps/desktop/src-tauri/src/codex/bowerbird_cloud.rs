@@ -100,7 +100,7 @@ impl GenProvider for BowerbirdCloudProvider {
         &self,
         req: CodexRequest,
         tx: &mpsc::Sender<Chunk>,
-        _resume_session: Option<String>,
+        resume_session: Option<String>,
     ) -> Result<GenOutcome, AppError> {
         let started = Instant::now();
         let endpoint = self
@@ -112,6 +112,14 @@ impl GenProvider for BowerbirdCloudProvider {
             .job_id
             .clone()
             .ok_or_else(|| AppError::Cloud("云生成缺少 job id".into()))?;
+        // 幂等键按轮次区分：首轮（无 resume）= job_id 原样，同键同内容可幂等重放；续轮
+        // （resume）对云端是一次全新生成（prompt/参考图都不同），沿用 job_id 会撞
+        // manifest hash 校验（409 幂等键已用于不同的生成内容），故每次续轮提交带 ULID
+        // 后缀——与即梦每次续轮全新 submit 的语义一致。
+        let idempotency_key = match resume_session.as_deref() {
+            Some(_) => format!("{job_id}-{}", Ulid::new()),
+            None => job_id.clone(),
+        };
 
         let mut references = Vec::with_capacity(req.reference_images.len());
         for path in &req.reference_images {
@@ -122,7 +130,7 @@ impl GenProvider for BowerbirdCloudProvider {
             .auth
             .send_authorized(
                 self.cloud.http().post(&endpoint).json(&serde_json::json!({
-                    "idempotency_key": job_id,
+                    "idempotency_key": idempotency_key,
                     "media": "image",
                     "prompt": req.instruction,
                     "reference_images": references,

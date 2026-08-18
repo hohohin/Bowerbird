@@ -6,6 +6,7 @@ import { MasonryGrid } from "./components/MasonryGrid";
 import { AssetDetail } from "./components/AssetDetail";
 import { AssetContextMenu } from "./components/AssetContextMenu";
 import { ImageAnnotator } from "./components/ImageAnnotator";
+import { CaptionRing } from "./components/creation/CaptionRing";
 import { DescribeProviderPicker } from "./components/DescribeProviderPicker";
 import { BatchBar } from "./components/BatchBar";
 import { CreationBoard } from "./components/CreationBoard";
@@ -518,6 +519,8 @@ function App() {
       <ImageAnnotator />
       {/* 反推引擎选择浮层（全局单实例，store.describePicker 驱动） */}
       <DescribeProviderPicker />
+      {/* 维度环形菜单（全局单实例，store.captionRing 驱动，长按图片呼出） */}
+      <CaptionRing />
       <Toolbar onRefresh={refresh} />
       <div className="app-shell-hatch" aria-hidden="true"><span /></div>
       <div className="relative flex flex-1 overflow-hidden">

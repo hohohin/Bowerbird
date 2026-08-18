@@ -20,6 +20,14 @@ fn default_auto_analyze_prompt() -> String {
     DEFAULT_AUTO_ANALYZE_PROMPT.to_string()
 }
 
+/// 即梦 dreamina CLI 默认模型版本（`--model_version`）。CLI 原生默认 5.0，
+/// Bowerbird 改用 5.0Pro 起步（AI-PROVIDERS.md 开放问题 3 的决策反转）。
+pub const DEFAULT_DREAMINA_MODEL_VERSION: &str = "5.0Pro";
+
+fn default_dreamina_model_version() -> String {
+    DEFAULT_DREAMINA_MODEL_VERSION.to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     /// 入库时自动反推 + 自动重命名
@@ -50,6 +58,11 @@ pub struct AppSettings {
     /// 首启预置示例图是否已注入完成。true = 不再重灌（配合 count_assets==0 双 gate）。
     #[serde(default)]
     pub samples_seeded: bool,
+
+    /// 即梦 dreamina CLI 出图所用模型版本（text2image: 3.0~5.0Pro；image2image 仅 4.0+）。
+    /// 每次生成前经 resolve_gen_provider 读取，改设置即热生效（无需重启）。
+    #[serde(default = "default_dreamina_model_version")]
+    pub dreamina_model_version: String,
 }
 
 impl Default for AppSettings {
@@ -62,6 +75,7 @@ impl Default for AppSettings {
             board_shift_pick: false,
             hide_project_assets: false,
             samples_seeded: false,
+            dreamina_model_version: DEFAULT_DREAMINA_MODEL_VERSION.to_string(),
         }
     }
 }
@@ -138,6 +152,13 @@ mod tests {
 
         assert!(settings.cloud_auto_understand);
         assert_eq!(settings.auto_analyze_prompt, "test");
+    }
+
+    #[test]
+    fn old_settings_without_dreamina_model_default_to_pro() {
+        let settings: AppSettings =
+            serde_json::from_str(r#"{"auto_analyze_on_ingest":true}"#).unwrap();
+        assert_eq!(settings.dreamina_model_version, "5.0Pro");
     }
 
     #[test]

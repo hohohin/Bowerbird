@@ -68,6 +68,9 @@ reqwest = { version = "0.12", default-features = false, features = [
 ] }
 # OpenAI gpt-image-1 生图返回 b64_json，解码落盘用（spike）。
 base64 = "0.22"
+# codex CLI 一键直装：npm 平台包 tarball 是 .tgz，下载后解压到应用数据目录。
+flate2 = "1"
+tar = "0.4"
 # WS Server（接收浏览器扩展采集消息）
 axum = { version = "0.7", features = ["ws"] }
 

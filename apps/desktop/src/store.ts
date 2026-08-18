@@ -10,6 +10,7 @@ import type {
   AppSettings,
   AuthSnapshot,
   Asset,
+  CaptionSection,
   CodexChunk,
   CodexHealth,
   ColorBucket,
@@ -113,6 +114,10 @@ interface State {
   promptedAssets: PromptedAsset[]; // 创作板挑图集合中带 caption（反推）的子集，供编辑器补 sections / 展开维度片段
   captionedIds: Set<string>; // 有反推（caption）的资产 id 集合（瀑布流标 🏷️，轻量，不带正文）
   focusAssetId: string | null; // 创作板 chip 点击 → 瀑布流滚动定位+高亮的目标 id（消费后清空）
+  // —— 维度环形菜单（CaptionRing，长按图片呼出，全局单例挂 App 根）——
+  captionRing: string | null; // 打开中的环会话（assetId）；null = 收起
+  ringAssetId: string | null; // 最近一次呼环的 assetId（环收起后保留，供 smartPunct 取该图 sections）
+  pendingKeyword: { title: string; body: string } | null; // 点扇区待插入创作板的维度（板未开→先开板，挂载后消费）
   // —— 创作板「用途」（preset）——
   presets: Preset[]; // 命名 prompt 预设，发送时作为基底注入（不进编辑器）
   activePresetId: string | null; // 当前选中用途；null=不注入
@@ -145,6 +150,10 @@ interface State {
   setCaptionedIds: (ids: string[]) => void;
   focusAsset: (id: string) => void;
   clearFocusAsset: () => void;
+  openCaptionRing: (assetId: string) => void;
+  closeCaptionRing: () => void;
+  pickCaptionSection: (section: CaptionSection) => void;
+  clearPendingKeyword: () => void;
   setActivePreset: (id: string | null) => void;
   // —— 反推（全局后台串行）——
   // 反推不绑 AssetDetail 生命周期：返回瀑布流后继续跑、缩略图角标可见、可取消。
@@ -248,7 +257,7 @@ interface State {
   setGenPanelOpen: (open: boolean) => void;
   startGeneration: (prompt: string, references: Asset[], ratio?: string | null, provider?: string | null, rawPrompt?: string, conversationId?: string, anchorSessionId?: string) => Promise<string>;
   // 续轮（底部对话框发送）：instruction = 铺开后实际发送的 prompt；opts 携带编辑框原文
-  // （气泡展示）、新挑参考图与比例（无新参考图时即梦回退上一轮产出图）。
+  // （气泡展示）、新挑参考图与比例（无新参考图时即梦/Cloud 回退上一轮产出图）。
   sendGenRevise: (
     instruction: string,
     provider?: string | null,
@@ -450,6 +459,9 @@ export const useStore = create<State>((set, get) => {
   promptedAssets: [],
   captionedIds: new Set<string>(),
   focusAssetId: null,
+  captionRing: null,
+  ringAssetId: null,
+  pendingKeyword: null,
   presets: [],
   activePresetId: null,
   setAssets: (assets) => set({ assets }),
@@ -612,6 +624,19 @@ export const useStore = create<State>((set, get) => {
   setCaptionedIds: (ids) => set({ captionedIds: new Set(ids) }),
   focusAsset: (id) => set({ focusAssetId: id }),
   clearFocusAsset: () => set({ focusAssetId: null }),
+  // —— 维度环 ——
+  openCaptionRing: (assetId) => set({ captionRing: assetId, ringAssetId: assetId }),
+  closeCaptionRing: () => set({ captionRing: null }),
+  // 点扇区 = 维度直接进创作板：板未开则先开板（同 toggleBoard 开启语义），keyword 挂 pending，
+  // 由创作板实例的 useCreationEditor 在挂载后/即时消费插入（板已开）。
+  pickCaptionSection: (section) =>
+    set((s) => ({
+      ...(s.boardOpen
+        ? {}
+        : { boardOpen: true, detailAssetId: null, genEditing: null, genPanelOpen: false }),
+      pendingKeyword: { title: section.title, body: section.body ?? "" },
+    })),
+  clearPendingKeyword: () => set({ pendingKeyword: null }),
   setActivePreset: (id) => set({ activePresetId: id }),
   // —— 反推（全局后台串行）——
   describingId: null,
@@ -1030,14 +1055,20 @@ export const useStore = create<State>((set, get) => {
     );
     const gateError = generationGateError(get(), prov);
     if (gateError) throw new Error(gateError);
-    // 即梦续轮：image2image 传上一轮产出图（codex resume 记得上一轮图、不需传）。
-    // 底部对话框挑了新参考图则优先传——codex resume --image / Cloud reference_images / 即梦
-    // image2image 三条续轮路径都吃显式参考图。
-    const lastImages = job.turns[job.turns.length - 1]?.images ?? [];
+    // 即梦/Cloud 续轮：image2image / reference_images 传上一轮产出图（codex resume 记得
+    // 上一轮图、不需传）。取「最后一个有图的轮」——末尾失败轮无图，不能让回退落空。
+    // 底部对话框挑了新参考图则优先传——codex resume --image / Cloud reference_images /
+    // 即梦 image2image 三条续轮路径都吃显式参考图。截前 10 张（服务端参考图上限）。
+    const lastImages =
+      [...job.turns].reverse().find((t) => t.images.length > 0)?.images.slice(0, 10) ?? [];
     const pickedRefs = (opts?.references ?? [])
       .map((r) => r.store_path)
       .filter((p): p is string => !!p);
-    const reviseRefs = pickedRefs.length > 0 ? pickedRefs : prov === "jimeng" ? lastImages : [];
+    const reviseRefs = pickedRefs.length > 0
+      ? pickedRefs
+      : prov === "jimeng" || isCloudProvider(prov)
+        ? lastImages
+        : [];
     // 续轮复用同 jobId（同一会话）；后端 task_queue upsert 刷新回 running。
     updateJob(id, (j) => ({
       ...j,

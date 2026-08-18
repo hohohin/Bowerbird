@@ -16,6 +16,11 @@ const STAGE_LABEL: Record<string, string> = {
 
 type SectionKey = "system" | "account" | "models" | "personalization" | "about";
 
+/** 即梦 CLI 模型版本选项（dreamina `--model_version`；不含 3.0/3.1——image2image 仅 4.0+，
+ *  而创作板参考图生成是核心路径；与后端 settings 默认一致取 5.0Pro）。 */
+const DREAMINA_MODEL_OPTIONS = ["4.0", "4.1", "4.5", "4.6", "4.7", "5.0", "5.0Pro"];
+const DEFAULT_DREAMINA_MODEL_VERSION = "5.0Pro";
+
 /**
  * 设置项 ON/OFF 滑块开关（设置里的布尔项统一用它，右对齐在调节项右侧；不用复选框）。
  * button + role="switch"，键盘可切换。
@@ -167,6 +172,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
       cloud_auto_understand: settings?.cloud_auto_understand ?? false,
       board_shift_pick: settings?.board_shift_pick ?? false,
       hide_project_assets: settings?.hide_project_assets ?? false,
+      dreamina_model_version: settings?.dreamina_model_version ?? DEFAULT_DREAMINA_MODEL_VERSION,
     });
   };
 
@@ -572,6 +578,32 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   >
                     {dreaminaHealth?.ok ? "查看引导" : "前往配置"}
                   </button>
+                </div>
+              </div>
+
+              {/* 即梦模型版本：每次生成前后端从 settings 重读，修改下一次生成即生效（热切换） */}
+              <div className="settings-card px-3 py-2.5">
+                <div className="text-ink">即梦模型版本</div>
+                <p className="mt-1 text-xs text-muted">
+                  即梦出图所用模型，修改后下一次生成立即生效。
+                </p>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {DREAMINA_MODEL_OPTIONS.map((v) => (
+                    <button
+                      key={v}
+                      type="button"
+                      onClick={() =>
+                        settings && void updateSettings({ ...settings, dreamina_model_version: v })
+                      }
+                      className={`rounded px-2.5 py-1 text-xs ${
+                        (settings?.dreamina_model_version ?? DEFAULT_DREAMINA_MODEL_VERSION) === v
+                          ? "bg-accent font-medium text-black"
+                          : "bg-panel text-ink hover:bg-edge"
+                      }`}
+                    >
+                      {v}
+                    </button>
+                  ))}
                 </div>
               </div>
 

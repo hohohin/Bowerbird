@@ -873,6 +873,7 @@ function GenEditComposer({
     } else {
       // 归入同一会话：conversationId 传源会话 → 新版本分支可与会话内 ←/→ 切换；
       // anchorSessionId = 源会话 session（旧版生成 / 回看历史的根 session 补映射用）。
+      // 纯新构图：不带上一轮产出（回退只留给「继续对话」续轮路径）。
       void startGeneration(
         prompt,
         references,
@@ -880,7 +881,7 @@ function GenEditComposer({
         activeGenProvider,
         rawPrompt,
         job.conversationId ?? job.id,
-        job.sessionId ?? undefined
+        job.sessionId ?? undefined,
       ).catch(console.error);
     }
   }
