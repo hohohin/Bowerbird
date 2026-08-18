@@ -66,6 +66,10 @@ pub struct GenJob {
     pub references: Vec<String>,
     #[serde(default)]
     pub session_id: Option<String>,
+    /// 会话级分组（「重新编辑 / 重试」版本分支）：归入源会话（根 job id）；普通 job = None。
+    /// done 入库时据此写 generation_conversations（session → conversation 映射）。
+    #[serde(default)]
+    pub conversation_id: Option<String>,
     /// 首轮项目快照（恢复时把资产 link 回项目；codex_create_image 入队时填）。
     #[serde(default)]
     pub project_id: Option<String>,
@@ -320,6 +324,7 @@ mod tests {
             prompt: "p".into(),
             references: vec![],
             session_id: None,
+            conversation_id: None,
             project_id: None,
             ratio: None,
             submit_id: None,

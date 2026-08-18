@@ -95,7 +95,8 @@ export function CreationBoard() {
   const [editName, setEditName] = useState("");
   const [editBody, setEditBody] = useState("");
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-  const [agentMode, setAgentMode] = useState(false);
+  // Agent 方案开关：off = 直发；a = 方案A（子句挑选）；b = 方案B（skill 审查修复）。两者互斥。
+  const [agentMode, setAgentMode] = useState<"off" | "a" | "b">("off");
   const [agentAvailable, setAgentAvailable] = useState(false);
   const [agentBusy, setAgentBusy] = useState(false);
   const activePreset = useMemo(
@@ -128,11 +129,13 @@ export function CreationBoard() {
     if (!targetReady || !finalPrompt) return;
     if (!canStartAnotherJob(cloudEntitlement, runningJobCount)) return;
     let prompt = finalPrompt;
-    if (agentMode) {
+    if (agentMode !== "off") {
       setAgentBusy(true);
       try {
         const result = await api.localAgentCompilePrompt({
           originalPrompt: rawPrompt || finalPrompt,
+          // 方案 B 需要模板展开后的完整 prompt（= 直发版），Agent 在其上做审查修复。
+          ...(agentMode === "b" ? { expandedPrompt: finalPrompt } : {}),
           references: agentPromptReferences,
           output: { kind: "图片", ...(ratio ? { ratio } : {}) },
         });
@@ -389,22 +392,40 @@ export function CreationBoard() {
               onSetDefaultProvider={setDefaultProvider}
             />
             {agentAvailable && (
-              <button
-                type="button"
-                role="switch"
-                aria-checked={agentMode}
-                disabled={agentBusy}
-                onClick={() => setAgentMode((enabled) => !enabled)}
-                title="开启后，Agent 会先综合原 prompt 与参考图维度，再调用当前生图引擎"
-                className={`generation-glow-button flex h-7 items-center rounded-[3px] px-2.5 text-xs font-medium disabled:opacity-40 ${
-                  agentMode ? "" : "is-off"
-                }`}
-              >
-                <span className="generation-glow-button__content gap-1.5">
-                  <span className={`h-2 w-2 rounded-full ${agentMode ? "bg-lime" : "bg-muted/50"}`} />
-                  Agent
-                </span>
-              </button>
+              <>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={agentMode === "a"}
+                  disabled={agentBusy}
+                  onClick={() => setAgentMode((mode) => (mode === "a" ? "off" : "a"))}
+                  title="方案A（子句挑选）：Agent 按你的意图从参考图维度原文中挑选子句，确定性拼合后再发送"
+                  className={`generation-glow-button flex h-7 items-center rounded-[3px] px-2.5 text-xs font-medium disabled:opacity-40 ${
+                    agentMode === "a" ? "" : "is-off"
+                  }`}
+                >
+                  <span className="generation-glow-button__content gap-1.5">
+                    <span className={`h-2 w-2 rounded-full ${agentMode === "a" ? "bg-lime" : "bg-muted/50"}`} />
+                    Agent A
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={agentMode === "b"}
+                  disabled={agentBusy}
+                  onClick={() => setAgentMode((mode) => (mode === "b" ? "off" : "b"))}
+                  title="方案B（skill 审查）：Agent 按官方 skill 审查并修复展开后的完整 prompt，再发送"
+                  className={`generation-glow-button flex h-7 items-center rounded-[3px] px-2.5 text-xs font-medium disabled:opacity-40 ${
+                    agentMode === "b" ? "" : "is-off"
+                  }`}
+                >
+                  <span className="generation-glow-button__content gap-1.5">
+                    <span className={`h-2 w-2 rounded-full ${agentMode === "b" ? "bg-lime" : "bg-muted/50"}`} />
+                    Agent B
+                  </span>
+                </button>
+              </>
             )}
           </div>
 
@@ -452,8 +473,8 @@ export function CreationBoard() {
               ? `${targetProviderLabel} 不可用`
               : !canStartAnotherJob(cloudEntitlement, runningJobCount)
                 ? "已达当前档位的并行生成上限"
-                : agentMode
-                  ? `先由 Agent 整理意图，再发 ${targetProviderLabel} 生成图像`
+                : agentMode !== "off"
+                  ? `先由 Agent（${agentMode === "a" ? "方案A" : "方案B"}）整理意图，再发 ${targetProviderLabel} 生成图像`
                   : `把当前 prompt + 参考图发 ${targetProviderLabel} 生成图像`
           }
           className="generation-glow-button flex min-h-11 w-full items-center justify-center rounded-full px-4 py-2 text-sm font-semibold disabled:opacity-50"
@@ -466,9 +487,9 @@ export function CreationBoard() {
         <div className="text-[10px] text-muted">
           {!targetReady
             ? "请先登录 Bowerbird 账号或在「设置 · AI 出图引擎」选择可用引擎"
-            : agentMode
-              ? "Agent 只优化本次发送的 prompt；参考图和生成流程仍使用当前设置。"
-              : "关闭 Agent 模式时，按当前编辑框 prompt 直接生成。"}
+            : agentMode !== "off"
+              ? `方案${agentMode === "a" ? "A" : "B"}只优化本次发送的 prompt；参考图和生成流程仍使用当前设置。`
+              : "未开启 Agent 时，按当前编辑框 prompt 直接生成。"}
         </div>
       </div>
     </aside>

@@ -55,6 +55,7 @@ pub async fn finalize_generation_assets(
     prompt_raw: Option<String>,
     references: Vec<String>,
     session_id: Option<String>,
+    conversation_id: Option<String>,
     submit_id: Option<String>,
     provider: String,
     project_id: Option<String>,
@@ -78,6 +79,13 @@ pub async fn finalize_generation_assets(
         // 源图已 copy 进库，删临时下载目录（即梦用；codex 为 None 不删）。
         if let Some(dir) = &temp_dir {
             let _ = std::fs::remove_dir_all(dir);
+        }
+        // 会话级分组持久化（session → conversation）：生成图入库即记，瀑布流 / 详情分组查询
+        // 据此把「重新编辑 / 重试」各版本 session 并成一组；失败仅告警不影响入库结果。
+        if let (Some(sid), Some(conv)) = (session_id.as_deref(), conversation_id.as_deref()) {
+            if let Err(e) = db_b.record_generation_conversation(sid, conv) {
+                tracing::warn!("记录会话分组失败 session={sid} conv={conv}: {e}");
+            }
         }
         if let Some(pid) = project_id.as_deref() {
             let ids: Vec<String> = out.iter().map(|a| a.id.clone()).collect();
@@ -223,6 +231,7 @@ async fn recover_one_cloud_job(
                 None,
                 job.references.clone(),
                 Some(submit_id.clone()),
+                job.conversation_id.clone(),
                 Some(submit_id.clone()),
                 "bowerbird-cloud".to_string(),
                 job.project_id.clone(),
@@ -307,6 +316,7 @@ async fn recover_one_jimeng_job(
                 None,
                 job.references.clone(),
                 Some(submit_id.clone()),
+                job.conversation_id.clone(),
                 Some(submit_id.clone()),
                 "jimeng".to_string(),
                 job.project_id.clone(),

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState, type Ref } from "react";
 import { X } from "lucide-react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { useStore } from "../store";
@@ -14,12 +14,16 @@ import type { GenJob } from "../lib/types";
  * - 生成中：六格 pulse loader（uiverse spotty-starfish-76）
  * - 导入基础分析中：旋转环
  *
- * 圆点下方是常驻内联任务区（不再悬浮）：
+ * 圆点下方是常驻内联任务区（自动浮现、自动消失，只反映在跑任务）：
  * - 无任务在跑 → 收起，仅剩圆点
- * - 有任务在跑 → 自动展开，只显示在跑任务（生成 running + 反推在跑/排队）
- * - 用户点击圆点 → 展开/收起完整列表（生成全部 + 反推含失败的重试/清除）
+ * - 有任务在跑 → 自动展开（生成 running + 反推在跑/排队）
  *
- * 生成任务行：点击 → 打开 GenerationPanel 并选中该 job；hover 出 × 删除任务记录
+ * 点击圆点 → 悬浮会话面板（status-session-panel）：像对话气泡挂在圆点右侧——
+ * 左上角与圆点相接、与侧栏同高（顶接圆点、底到窗口底），面板右上是「生成 / 反推」
+ * 切换。生成 tab 列全部会话（最新在前，点击进 GenerationPanel）；反推 tab 含在跑/
+ * 排队 + 失败重试/清除。再点圆点 / Esc / 点击面板外收回，收回播退场动画后卸载。
+ *
+ * 生成会话行：点击 → 打开 GenerationPanel 并选中该 job；hover 出 × 删除任务记录
  * （removeGenJob 仅删前端记录，不动后端任务与已入库图片）。
  *
  * 侧栏折叠态（72px 窄轨）：只渲染圆点，点击 = 展开侧栏。
@@ -51,8 +55,13 @@ export function SidebarStatus({ collapsed, onExpand }: { collapsed?: boolean; on
   const retryDescribeFailure = useStore((s) => s.retryDescribeFailure);
   const dismissDescribeFailure = useStore((s) => s.dismissDescribeFailure);
 
-  // 用户点击圆点 → 完整列表（toggle）；否则按「有在跑任务」自动展开。
-  const [showAll, setShowAll] = useState(false);
+  // 悬浮会话面板：开态 + 锚点（圆点矩形，开时测量；窗口/侧栏尺寸变化重测）。
+  const ringRef = useRef<HTMLButtonElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const [sessOpen, setSessOpen] = useState(false);
+  const [closing, setClosing] = useState(false); // 播收回动画中（播完才真正卸载）
+  const [anchor, setAnchor] = useState<{ top: number; left: number } | null>(null);
+  const [tab, setTab] = useState<"gen" | "describe">("gen");
 
   const queueLen = queue.length;
   const describing = describingId !== null || queueLen > 0;
@@ -69,10 +78,66 @@ export function SidebarStatus({ collapsed, onExpand }: { collapsed?: boolean; on
         ? `导入基础分析中（${autoAnalyzing}）`
         : "空闲";
 
+  function measureRing() {
+    const r = ringRef.current?.getBoundingClientRect();
+    if (r) setAnchor({ top: r.top, left: r.right });
+  }
+
+  // 收回：先播 status-session-out（150ms），到点再卸载；已在收回中则忽略（防重复计时）。
+  function closePanel() {
+    if (!sessOpen || closing) return;
+    setClosing(true);
+    window.setTimeout(() => {
+      setSessOpen(false);
+      setClosing(false);
+    }, 170);
+  }
+
+  function togglePanel() {
+    if (sessOpen) closePanel();
+    else {
+      measureRing();
+      setSessOpen(true);
+    }
+  }
+
   function openJob(id: string) {
     setActiveJob(id);
     setGenPanelOpen(true);
+    closePanel(); // 进会话视图，收回悬浮面板
   }
+
+  // 面板开着时：Esc / 点击面板外收回；窗口 resize / 侧栏拖宽（aside 尺寸变）→ 锚点跟随重测。
+  // closing 进依赖：收回动画期间监听器换绑新闭包，closePanel 的 closing 守卫不读过期值。
+  useEffect(() => {
+    if (!sessOpen) return;
+    const aside = ringRef.current?.closest("aside");
+    const ro = aside ? new ResizeObserver(measureRing) : null;
+    if (aside && ro) ro.observe(aside);
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "Escape") return;
+      // 焦点在输入框（侧栏改名 / ProseMirror）时让 Esc 先服务于输入框，不关面板。
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      closePanel();
+    }
+    // 点击面板外（圆点除外——它自己 toggle）收回。capture 阶段接，不怕别的组件 stopPropagation。
+    function onPointerDown(e: PointerEvent) {
+      const target = e.target as Node | null;
+      if (!target) return;
+      if (panelRef.current?.contains(target) || ringRef.current?.contains(target)) return;
+      closePanel();
+    }
+    window.addEventListener("resize", measureRing);
+    window.addEventListener("keydown", onKey);
+    document.addEventListener("pointerdown", onPointerDown, true);
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener("resize", measureRing);
+      window.removeEventListener("keydown", onKey);
+      document.removeEventListener("pointerdown", onPointerDown, true);
+    };
+  }, [sessOpen, closing]);
 
   const showUnreadDot = (genUnread && !genPanelOpen) || failures.length > 0;
 
@@ -94,19 +159,20 @@ export function SidebarStatus({ collapsed, onExpand }: { collapsed?: boolean; on
   }
   const runningGroups = genGroups.filter((g) => g.running);
   const describeRunning = describingId !== null || queue.length > 0;
-  const autoExpand = runningGroups.length > 0 || describeRunning;
-  const expanded = !collapsed && (showAll || autoExpand);
-  // 展示的生成会话：完整模式全量，自动模式仅在跑。
-  const visibleGroups = showAll ? genGroups : runningGroups;
+  // 内联任务区只随「有在跑任务」自动展开（完整列表在悬浮会话面板）。
+  const expanded = !collapsed && (runningGroups.length > 0 || describeRunning);
+  // 面板生成 tab：最新会话在前（长久使用，最近的对话最常回看）。
+  const panelGroups = [...genGroups].reverse();
 
-  function dotButton(className: string) {
+  function dotButton(className: string, ref?: Ref<HTMLButtonElement>) {
     return (
       <button
+        ref={ref}
         type="button"
-        onClick={() => (collapsed ? onExpand?.() : setShowAll((v) => !v))}
+        onClick={() => (collapsed ? onExpand?.() : togglePanel())}
         title={collapsed ? `${title} · 展开侧栏查看` : title}
         aria-label={title}
-        aria-expanded={expanded}
+        aria-expanded={collapsed ? undefined : sessOpen}
         className={`app-icon-button relative cursor-pointer p-1 outline-none ${className}`}
       >
         {generating ? (
@@ -137,17 +203,10 @@ export function SidebarStatus({ collapsed, onExpand }: { collapsed?: boolean; on
     );
   }
 
-  // 折叠窄轨：只有圆点，点击展开侧栏。
+  // 折叠窄轨：只有圆点，点击展开侧栏（悬浮面板随之卸载）。
   if (collapsed) {
     return <div className="flex w-full justify-center py-1">{dotButton("")}</div>;
   }
-
-  const hasDescribe = describingId !== null || queue.length > 0 || failures.length > 0;
-  // 自动模式只显示在跑/排队（计数/渲染均不含失败）；完整模式全量。
-  const describeCount = showAll
-    ? (describingId ? 1 : 0) + queue.length + failures.length
-    : (describingId ? 1 : 0) + queue.length;
-  const showDescribe = showAll ? hasDescribe : describeRunning;
 
   // 会话行的参考图「拖影」缩略图堆：至多 5 张；前 3 张全显，多出的以低透明度叠在
   // 左后方（-space-x 重叠，像运动拖影），暗示还有更多参考图。
@@ -181,15 +240,17 @@ export function SidebarStatus({ collapsed, onExpand }: { collapsed?: boolean; on
     );
   }
 
-  function genGroupRow(g: GenGroup, i: number) {
+  // wide（悬浮面板 300px 宽）标题放宽到 16 字；内联窄轨仍 5 字。
+  function genGroupRow(g: GenGroup, i: number, wide = false) {
     const j = g.latest;
-    // 会话标题：首轮编辑框原文首个非空行，压缩到 5 字 + 省略号。
+    // 会话标题：首轮编辑框原文首个非空行，压缩省略。
     const firstLine =
       (j.turns[0]?.promptRaw || j.lastPrompt)
         .split("\n")
         .find((l) => l.trim())
         ?.trim() ?? "";
-    const label = !firstLine ? "会话" : firstLine.length > 5 ? `${firstLine.slice(0, 5)}…` : firstLine;
+    const maxChars = wide ? 16 : 5;
+    const label = !firstLine ? "会话" : firstLine.length > maxChars ? `${firstLine.slice(0, maxChars)}…` : firstLine;
     // 缩略图 = 会话建立时引用的参考图（最新版本的 refAssets，有 thumb 用 thumb）。
     const refThumbPaths = (j.refAssets ?? [])
       .map((a) => a.thumb_path ?? a.store_path ?? "")
@@ -237,30 +298,93 @@ export function SidebarStatus({ collapsed, onExpand }: { collapsed?: boolean; on
     );
   }
 
+  // 面板「反推」tab：在跑 + 排队 + 失败（重试/清除，只在这里，内联区不放）。
+  function describePanelRows() {
+    const hasAny = describingId !== null || queue.length > 0 || failures.length > 0;
+    if (!hasAny) {
+      return <div className="px-3 py-6 text-center text-xs text-muted">暂无反推任务</div>;
+    }
+    return (
+      <>
+        {describingId && (
+          <div className="flex items-center gap-1.5 rounded px-2 py-1.5 text-xs text-ink">
+            <span className="animate-pulse text-accent">●</span>
+            <span className="truncate">{describingName ?? "未知素材"}</span>
+          </div>
+        )}
+        {queue.map((q, i) => (
+          <div
+            key={`${q.assetId}-${i}`}
+            className="flex items-center gap-1.5 rounded px-2 py-1.5 text-xs text-muted"
+          >
+            <span>·</span>
+            <span className="truncate">{q.name}</span>
+            <span className="ml-auto text-[10px]">排队</span>
+          </div>
+        ))}
+        {failures.length > 0 && (
+          <div className="mt-1 border-t border-edge pt-1">
+            {failures.map((failure) => (
+              <div key={failure.assetId} className="rounded px-2 py-1.5 text-xs text-ink">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-red-400">❌</span>
+                  <span className="min-w-0 flex-1 truncate">{failure.name}</span>
+                  <span className="text-[10px] text-red-400">失败</span>
+                </div>
+                <div className="mt-1 break-words pl-5 text-[10px] leading-4 text-red-300/90" title={failure.reason}>
+                  {failure.reason}
+                </div>
+                <div className="mt-1 flex justify-end gap-1 pl-5">
+                  <button
+                    type="button"
+                    onClick={() => retryDescribeFailure(failure.assetId)}
+                    className="rounded px-1.5 py-0.5 text-[10px] text-accent hover:bg-panel2"
+                  >
+                    重试
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => dismissDescribeFailure(failure.assetId)}
+                    className="rounded px-1.5 py-0.5 text-[10px] text-muted hover:bg-panel2 hover:text-ink"
+                  >
+                    清除
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </>
+    );
+  }
+
+  const inlineDescribeCount = (describingId ? 1 : 0) + queue.length;
+  const panelDescribeCount = inlineDescribeCount + failures.length;
+
   return (
     <div className="mb-4">
       {/* 圆点行：与右上角收起按钮同一水平中心线（top 13px / 32px 高），高度对齐 */}
       <div className="flex items-center pl-1 pr-12 -mt-[3px]">
-        {dotButton("!h-8 !w-8 !min-h-8")}
+        {dotButton(`!h-8 !w-8 !min-h-8 ${sessOpen && !closing ? "bg-ink/10" : ""}`, ringRef)}
       </div>
       {expanded && (
         <div className="mt-1 max-h-64 overflow-y-auto rounded bg-panel2/40">
-          {visibleGroups.length === 0 && !showDescribe ? (
+          {runningGroups.length === 0 && !describeRunning ? (
             <div className="px-3 py-4 text-center text-xs text-muted">暂无任务</div>
           ) : (
             <>
-              {visibleGroups.length > 0 && (
+              {runningGroups.length > 0 && (
                 <div className="border-b border-edge">
                   <div className="px-3 pb-1 pt-2 text-[10px] uppercase tracking-wide text-muted">
                     生成会话（{genGroups.length}）
                   </div>
-                  <div className="p-1">{visibleGroups.map((g, i) => genGroupRow(g, i))}</div>
+                  <div className="p-1">{runningGroups.map((g, i) => genGroupRow(g, i))}</div>
                 </div>
               )}
-              {showDescribe && (
+              {describeRunning && (
                 <div>
                   <div className="px-3 pb-1 pt-2 text-[10px] uppercase tracking-wide text-muted">
-                    反推任务（{describeCount}）
+                    反推任务（{inlineDescribeCount}）
                   </div>
                   <div className="p-1">
                     {describingId && (
@@ -279,40 +403,66 @@ export function SidebarStatus({ collapsed, onExpand }: { collapsed?: boolean; on
                         <span className="ml-auto text-[10px]">排队</span>
                       </div>
                     ))}
-                    {showAll &&
-                      failures.map((failure) => (
-                        <div key={failure.assetId} className="rounded px-2 py-1.5 text-xs text-ink">
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-red-400">❌</span>
-                            <span className="min-w-0 flex-1 truncate">{failure.name}</span>
-                            <span className="text-[10px] text-red-400">失败</span>
-                          </div>
-                          <div className="mt-1 break-words pl-5 text-[10px] leading-4 text-red-300/90" title={failure.reason}>
-                            {failure.reason}
-                          </div>
-                          <div className="mt-1 flex justify-end gap-1 pl-5">
-                            <button
-                              type="button"
-                              onClick={() => retryDescribeFailure(failure.assetId)}
-                              className="rounded px-1.5 py-0.5 text-[10px] text-accent hover:bg-panel2"
-                            >
-                              重试
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => dismissDescribeFailure(failure.assetId)}
-                              className="rounded px-1.5 py-0.5 text-[10px] text-muted hover:bg-panel2 hover:text-ink"
-                            >
-                              清除
-                            </button>
-                          </div>
-                        </div>
-                      ))}
                   </div>
                 </div>
               )}
             </>
           )}
+        </div>
+      )}
+      {sessOpen && anchor && (
+        // 悬浮会话面板：top/left 由圆点锚点注入（左上角接圆点），bottom=0 与侧栏同高。
+        <div
+          ref={panelRef}
+          className={`status-session-panel ${closing ? "is-closing" : ""}`}
+          style={{ top: anchor.top, left: anchor.left, bottom: 0 }}
+          role="dialog"
+          aria-label="任务会话面板"
+        >
+          <div className="flex h-9 shrink-0 items-center gap-2 border-b border-edge pl-3 pr-2">
+            <span className="min-w-0 truncate text-[10px] uppercase tracking-wide text-muted">
+              {tab === "gen" ? `生成会话（${genGroups.length}）` : `反推任务（${panelDescribeCount}）`}
+            </span>
+            {/* 生成 / 反推 切换（面板右上） */}
+            <div className="ml-auto flex shrink-0 rounded-full border border-edge bg-panel p-0.5 text-[11px]">
+              <button
+                type="button"
+                onClick={() => setTab("gen")}
+                className={`rounded-full px-2.5 py-0.5 ${
+                  tab === "gen" ? "bg-accent/25 text-ink" : "text-muted hover:text-ink"
+                }`}
+              >
+                生成
+              </button>
+              <button
+                type="button"
+                onClick={() => setTab("describe")}
+                className={`relative rounded-full px-2.5 py-0.5 ${
+                  tab === "describe" ? "bg-accent/25 text-ink" : "text-muted hover:text-ink"
+                }`}
+              >
+                反推
+                {failures.length > 0 && (
+                  <span className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-red-400" />
+                )}
+              </button>
+            </div>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto p-1">
+            {tab === "gen" ? (
+              panelGroups.length === 0 ? (
+                <div className="px-3 py-6 text-center text-xs leading-5 text-muted">
+                  暂无生成会话
+                  <br />
+                  在创作板发送后，会话会出现在这里
+                </div>
+              ) : (
+                panelGroups.map((g, i) => genGroupRow(g, i, true))
+              )
+            ) : (
+              describePanelRows()
+            )}
+          </div>
         </div>
       )}
     </div>

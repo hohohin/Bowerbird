@@ -169,6 +169,9 @@ export function AssetDetail() {
   const [err, setErr] = useState<string | null>(null);
   const [elapsedMs, setElapsedMs] = useState(0);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  // 正在编辑的维度（哪条反推结果的第几个 section）与编辑草稿；null = 无编辑态。
+  const [editingSection, setEditingSection] = useState<{ analysisId: string; index: number } | null>(null);
+  const [sectionDraft, setSectionDraft] = useState("");
   const [codexHealth, setCodexHealth] = useState<CodexHealth | null>(null);
   const [tags, setTags] = useState<AssetTag[]>([]);
   const [addingTag, setAddingTag] = useState(false);
@@ -183,6 +186,8 @@ export function AssetDetail() {
   const [detailTab, setDetailTab] = useState<"create" | "info">("info");
   const [generationSource, setGenerationSource] = useState<GenerationHistory | null>(null);
   const timerRef = useRef<number | null>(null);
+  // caption id 集合快照：区分「新增/删除了一条反推」（重置展开态）与「编辑维度触发的重拉」（保持展开）。
+  const captionIdsRef = useRef("");
 
   async function loadAnalyses() {
     if (!id) return;
@@ -409,8 +414,12 @@ export function AssetDetail() {
   }, []);
 
   // captions 变化（反推成功 / 删除）后，默认只展开最新一条，其余折叠为摘要。
+  // 仅在 caption 集合变化（新增/删除）时重置——编辑维度触发的重拉保持当前展开态。
   useEffect(() => {
     const caps = analyses.filter((a) => a.kind === "caption");
+    const ids = caps.map((c) => c.id).join(",");
+    if (ids === captionIdsRef.current) return;
+    captionIdsRef.current = ids;
     setExpandedIds(caps.length > 0 ? new Set([caps[0].id]) : new Set());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [analyses]);
@@ -484,6 +493,27 @@ export function AssetDetail() {
       notifySuccess("反推结果已复制");
     } catch (e) {
       notifyError(e, "复制失败");
+    }
+  }
+
+  // 编辑反推维度：保存时整体替换该条反推的 sections；后端重算 text/dimensions 落库并
+  // 广播 analyses://changed → 本页重拉展示新内容，创作板发送时也实时取到新 sections。
+  function startEditSection(analysisId: string, index: number, body: string) {
+    setEditingSection({ analysisId, index });
+    setSectionDraft(body);
+  }
+
+  async function saveSection(analysisId: string, sections: CaptionSection[], index: number) {
+    const body = sectionDraft.trim();
+    if (!body) return;
+    const next = sections.map((s, i) => (i === index ? { title: s.title, body } : s));
+    try {
+      await api.updateCaptionSections(analysisId, next);
+      setEditingSection(null);
+      notifySuccess("维度已更新，创作板发送时将使用新内容");
+    } catch (e) {
+      console.error(e);
+      notifyError(e, "保存维度失败");
     }
   }
 
@@ -1077,19 +1107,62 @@ export function AssetDetail() {
                     </div>
                     {expanded &&
                       (hasSections ? (
-                        caption.sections.map((section, sidx) => (
-                          <div
-                            key={`${a.id}-${sidx}`}
-                            className="rounded bg-panel px-2 py-1"
-                          >
-                            <div className="mb-0.5 text-[10px] font-medium text-accent">
-                              {section.title}
+                        caption.sections.map((section, sidx) => {
+                          const editing =
+                            editingSection?.analysisId === a.id && editingSection.index === sidx;
+                          return (
+                            <div
+                              key={`${a.id}-${sidx}`}
+                              className="rounded bg-panel px-2 py-1"
+                            >
+                              <div className="mb-0.5 flex items-center justify-between gap-2">
+                                <div className="text-[10px] font-medium text-accent">
+                                  {section.title}
+                                </div>
+                                {!editing && (
+                                  <button
+                                    onClick={() => startEditSection(a.id, sidx, section.body)}
+                                    disabled={describing || queued || !!editingSection}
+                                    className="shrink-0 text-muted hover:text-accent disabled:opacity-50"
+                                    title="修改这个维度的内容（创作板发送时用新内容）"
+                                    aria-label={`修改维度 ${section.title}`}
+                                  >
+                                    <Edit3 size={11} />
+                                  </button>
+                                )}
+                              </div>
+                              {editing ? (
+                                <div className="space-y-1.5">
+                                  <textarea
+                                    autoFocus
+                                    value={sectionDraft}
+                                    onChange={(e) => setSectionDraft(e.target.value)}
+                                    className="h-20 w-full resize-none rounded bg-panel2 p-1.5 text-[11px] text-ink outline-none ring-1 ring-edge focus:ring-accent"
+                                  />
+                                  <div className="flex justify-end gap-3 text-[10px]">
+                                    <button
+                                      onClick={() => setEditingSection(null)}
+                                      className="text-muted hover:text-accent"
+                                    >
+                                      取消
+                                    </button>
+                                    <button
+                                      onClick={() => void saveSection(a.id, caption.sections, sidx)}
+                                      disabled={!sectionDraft.trim()}
+                                      className="text-accent disabled:opacity-50"
+                                    >
+                                      保存
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="whitespace-pre-wrap text-[11px] text-ink">
+                                  {section.body}
+                                </div>
+                              )}
                             </div>
-                            <div className="whitespace-pre-wrap text-[11px] text-ink">
-                              {section.body}
-                            </div>
-                          </div>
-                        ))
+                          );
+                        })
                       ) : (
                         <>
                           <div className="whitespace-pre-wrap">{caption.text}</div>

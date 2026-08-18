@@ -67,6 +67,9 @@ export function understandEngineUsable(
 
 type Mode = "browse" | "manage";
 
+/** 生成会话底部编辑坞的两种入口：「重新编辑」（新版本分支）与底部对话框（会话内续轮）。 */
+export type GenEditingMode = "edit" | "revise";
+
 export interface DescribeFailure {
   assetId: string;
   instruction: string;
@@ -159,11 +162,13 @@ interface State {
   openDescribePicker: (task: DescribeTask, anchor: { x: number; y: number }) => void;
   closeDescribePicker: () => void;
   runDescribePicker: (provider: string) => void;
-  // —— 生成会话「重新编辑」（jimeng/gemini 式）：会话面板收成底部编辑坞，露出瀑布流选图插 chip ——
+  // —— 生成会话底部编辑坞（jimeng/gemini 式）：会话面板收成底部编辑坞，露出瀑布流选图插 chip ——
   // 独立于 boardOpen：编辑坞自带一个 useCreationEditor（同一对 board-load-prompt / board-asset-picked
   // 事件），进入时必须关创作板避免双编辑器同时响应；退出编辑即恢复会话全屏视图。
-  genEditing: boolean;
-  setGenEditing: (v: boolean) => void;
+  // "edit" = 首轮气泡「重新编辑」（载入首轮组稿，发送开新版本分支）；
+  // "revise" = 底部对话框（空编辑器，发送在会话下方追加一轮对话）。
+  genEditing: GenEditingMode | null;
+  setGenEditing: (v: GenEditingMode | null) => void;
   // —— 生成（创作板 codex/即梦 画图，多 job 并行）——
   // 派生量：任一 job running 即 true。状态圈在顶部工具栏最右侧（全局可见，不绑创作板生命周期）。
   generating: boolean;
@@ -241,8 +246,14 @@ interface State {
   // 删除生成任务记录（仅前端 genJobs 记录；不取消后端任务、不删已入库图片）。
   removeGenJob: (id: string) => void;
   setGenPanelOpen: (open: boolean) => void;
-  startGeneration: (prompt: string, references: Asset[], ratio?: string | null, provider?: string | null, rawPrompt?: string, conversationId?: string) => Promise<string>;
-  sendGenRevise: (instruction: string, provider?: string | null) => Promise<void>;
+  startGeneration: (prompt: string, references: Asset[], ratio?: string | null, provider?: string | null, rawPrompt?: string, conversationId?: string, anchorSessionId?: string) => Promise<string>;
+  // 续轮（底部对话框发送）：instruction = 铺开后实际发送的 prompt；opts 携带编辑框原文
+  // （气泡展示）、新挑参考图与比例（无新参考图时即梦回退上一轮产出图）。
+  sendGenRevise: (
+    instruction: string,
+    provider?: string | null,
+    opts?: { rawPrompt?: string | null; references?: Asset[]; ratio?: string | null },
+  ) => Promise<void>;
   cancelGeneration: (jobId?: string) => void; // 默认取消 activeJob
   loadGenJobs: () => Promise<void>;
   applyGenChunk: (c: CodexChunk) => void;
@@ -863,12 +874,12 @@ export const useStore = create<State>((set, get) => {
   // —— 浏览器扩展采集 ——
   collectedNotice: null,
   setCollectedNotice: (collectedNotice) => set({ collectedNotice }),
-  genEditing: false,
+  genEditing: null,
   setGenEditing: (v) =>
     set(
       v
-        ? { genEditing: true, boardOpen: false, detailAssetId: null }
-        : { genEditing: false },
+        ? { genEditing: v, boardOpen: false, detailAssetId: null }
+        : { genEditing: null },
     ),
   // —— 生成结果面板（多 job）——
   genPanelOpen: false,
@@ -904,6 +915,7 @@ export const useStore = create<State>((set, get) => {
             id: j.id,
             turns: [{ id: nextGenTurnId(), prompt: j.prompt, images: [], provider: j.provider }],
             sessionId: j.session_id ?? j.submit_id ?? null,
+            conversationId: j.conversation_id ?? undefined,
             streaming: "",
             lastPrompt: j.prompt,
             lastRefs: j.references ?? [],
@@ -930,7 +942,7 @@ export const useStore = create<State>((set, get) => {
       console.error("loadGenJobs failed", e);
     }
   },
-  startGeneration: async (prompt, references, ratio, provider, rawPrompt, conversationId) => {
+  startGeneration: async (prompt, references, ratio, provider, rawPrompt, conversationId, anchorSessionId) => {
     // 多 job：不再因 generating 阻塞（并发发起多个生成，各自独立流转）。
     // provider 兜底：调用点没传（CreationBoard send / retry）→ 当前选择 → 全局默认。
     const prov = normalizeGenerationProvider(
@@ -948,10 +960,12 @@ export const useStore = create<State>((set, get) => {
       .filter((p): p is string => !!p);
     // 前端生成 jobId：创建 GenJob 即知 id，chunk 按 id 路由无 race；后端 task_queue upsert。
     const jobId = crypto.randomUUID();
+    // 会话级分组（含普通 job：conversationId 兜底 jobId）——后端 done 入库时落
+    // generation_conversations（session → conversation），重启后瀑布流分组不丢。
+    const conv = conversationId ?? jobId;
     const job: GenJob = {
       id: jobId,
-      // 会话分组：编辑发送时传源会话 id；普通发送自成一组。
-      conversationId: conversationId ?? jobId,
+      conversationId: conv,
       turns: [{ id: nextGenTurnId(), prompt: sentPrompt, promptRaw: rawPrompt ?? null, images: [], provider: prov, startedAt: Date.now() }],
       sessionId: null,
       streaming: "",
@@ -982,6 +996,9 @@ export const useStore = create<State>((set, get) => {
         ratio,
         provider: prov,
         projectId: job.projectId,
+        conversationId: conv,
+        // 版本分支才锚定源会话（源 session 可能是旧版生成 / 回看历史，还没有 conversation 映射）。
+        anchorSessionId: conversationId ? anchorSessionId ?? null : null,
       });
     } catch (e) {
       const message = taskErrorMessage(e);
@@ -991,7 +1008,7 @@ export const useStore = create<State>((set, get) => {
     }
     return jobId;
   },
-  sendGenRevise: async (instruction, provider) => {
+  sendGenRevise: async (instruction, provider, opts) => {
     const id = get().activeJobId;
     if (!id) return;
     const job = get().genJobs[id];
@@ -1003,12 +1020,27 @@ export const useStore = create<State>((set, get) => {
     const gateError = generationGateError(get(), prov);
     if (gateError) throw new Error(gateError);
     // 即梦续轮：image2image 传上一轮产出图（codex resume 记得上一轮图、不需传）。
+    // 底部对话框挑了新参考图则优先传——codex resume --image / Cloud reference_images / 即梦
+    // image2image 三条续轮路径都吃显式参考图。
     const lastImages = job.turns[job.turns.length - 1]?.images ?? [];
-    const reviseRefs = prov === "jimeng" ? lastImages : [];
+    const pickedRefs = (opts?.references ?? [])
+      .map((r) => r.store_path)
+      .filter((p): p is string => !!p);
+    const reviseRefs = pickedRefs.length > 0 ? pickedRefs : prov === "jimeng" ? lastImages : [];
     // 续轮复用同 jobId（同一会话）；后端 task_queue upsert 刷新回 running。
     updateJob(id, (j) => ({
       ...j,
-      turns: [...j.turns, { id: nextGenTurnId(), prompt: text, images: [], provider: prov, startedAt: Date.now() }],
+      turns: [
+        ...j.turns,
+        {
+          id: nextGenTurnId(),
+          prompt: text,
+          promptRaw: opts?.rawPrompt ?? null,
+          images: [],
+          provider: prov,
+          startedAt: Date.now(),
+        },
+      ],
       streaming: "",
       running: true,
       pendingBoardClose: false, // 续轮修改不关闭创作板
@@ -1017,8 +1049,10 @@ export const useStore = create<State>((set, get) => {
       await api.codexCreateImage({
         jobId: id,
         prompt: text,
+        promptRaw: opts?.rawPrompt ?? null,
         referenceImages: reviseRefs,
         sessionId: job.sessionId,
+        ratio: opts?.ratio ?? null,
         provider: prov,
         projectId: job.projectId,
       });

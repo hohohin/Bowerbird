@@ -215,6 +215,7 @@ pub fn run() {
             commands::library::list_assets_smart,
             commands::library::list_analyses_by_asset,
             commands::library::delete_analysis,
+            commands::library::update_caption_sections,
             commands::library::list_prompted_assets,
             commands::library::list_captioned_asset_ids,
             commands::library::rename_asset,

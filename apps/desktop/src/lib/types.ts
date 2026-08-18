@@ -164,8 +164,9 @@ export interface GenTurn {
  */
 export interface GenJob {
   id: string;
-  // 会话分组：「重新编辑」发送产生的新 job 归入源会话（= 根 job 的 id），
+  // 会话分组：「重新编辑 / 重试」发送产生的新 job 归入源会话（= 根 job 的 id），
   // 同组 job 在会话面板用 ←/→ 切换编辑前后的版本（agent 应用式分支）。
+  // 普通发送 = 自身 id；随 job 落库（generation_conversations），重启后瀑布流分组不丢。
   conversationId?: string;
   turns: GenTurn[];
   sessionId: string | null;
@@ -274,6 +275,7 @@ export interface GenJobSummary {
   prompt: string;
   submit_id: string | null;
   session_id: string | null;
+  conversation_id: string | null;
   project_id: string | null;
   ratio: string | null;
   references: string[];
@@ -344,6 +346,11 @@ export interface AgentPromptDimensionInput {
 
 export interface AgentPromptInput {
   originalPrompt: string;
+  /**
+   * 方案 B（skill 审查修复）：模板展开后的完整 prompt（= 直接发送时的 finalPrompt）。
+   * 提供该字段时 CLI 走审查修复路线；缺省走方案 A（子句挑选）。
+   */
+  expandedPrompt?: string;
   references: Array<{
     assetId: string;
     name?: string;

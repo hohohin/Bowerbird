@@ -10,6 +10,7 @@ import type {
   AssetDeleteMode,
   AssetDeleteResult,
   AssetTag,
+  CaptionSection,
   ColorBucket,
   CodexHealth,
   CreationPack,
@@ -214,6 +215,9 @@ export const api = {
   openCodexSession: (sessionId: string) =>
     invoke<void>("open_codex_session", { sessionId }),
   deleteAnalysis: (id: string) => invoke<void>("delete_analysis", { id }),
+  /** 编辑反推维度内容：sections 整体替换，后端重算 text/dimensions 落库并广播 analyses://changed。 */
+  updateCaptionSections: (id: string, sections: CaptionSection[]) =>
+    invoke<void>("update_caption_sections", { id, sections }),
   cancelCodexDescribe: () => invoke<void>("cancel_codex_describe"),
   codexHealth: () => invoke<CodexHealth>("codex_health"),
   // 一键安装 codex CLI / OAuth 登录（让 CLI 对用户隐形，B 升级）。
@@ -239,6 +243,8 @@ export const api = {
   // 流式文本经 codex://chunk（Delta）回；生成图 copy 进 library/generations 后随 Done.images 回。
   // sessionId 非空 → codex exec resume 续接同一会话（多轮迭代修改，codex 记得上一张图）。
   // jobId 由前端 crypto.randomUUID 生成：多 job 路由 + per-job 取消引用；续轮复用同 id（后端 upsert）。
+  // conversationId：会话级分组（「重新编辑 / 重试」版本分支归组），后端 done 入库时落
+  // generation_conversations；anchorSessionId：源会话 session（根 session 补映射用）。
   codexCreateImage: (req: {
     prompt: string;
     referenceImages: string[];
@@ -248,6 +254,8 @@ export const api = {
     projectId?: string | null;
     jobId: string;
     promptRaw?: string | null;
+    conversationId?: string | null;
+    anchorSessionId?: string | null;
   }) =>
     invoke<string>("codex_create_image", {
       prompt: req.prompt,
@@ -258,6 +266,8 @@ export const api = {
       projectId: req.projectId ?? null,
       jobId: req.jobId,
       promptRaw: req.promptRaw ?? null,
+      conversationId: req.conversationId ?? null,
+      anchorSessionId: req.anchorSessionId ?? null,
     }),
   cancelCodexCreate: (jobId: string) => invoke<void>("cancel_codex_create", { jobId }),
   // 启动恢复（Task 5）：列出未完成生成 job，前端挂载时拉取重建 genJobs（恢复中 job 可见）。

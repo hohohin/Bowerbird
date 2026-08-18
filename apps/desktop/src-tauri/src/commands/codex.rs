@@ -473,6 +473,8 @@ pub async fn codex_create_image(
     provider: Option<String>,
     project_id: Option<String>,
     job_id: String,
+    conversation_id: Option<String>,
+    anchor_session_id: Option<String>,
 ) -> Result<String, AppError> {
     // 首轮 instruction：codex 需一句自然语言触发其 imagegen 技能（含 ratio 文本注入）；
     // 即梦 / Cloud 直接用用户原文——它们各有 ratio 参数通道（--ratio / req.ratio），
@@ -591,6 +593,7 @@ pub async fn codex_create_image(
             prompt: prompt_for_meta.clone(),
             references: refs_for_meta.clone(),
             session_id: session_id.clone(),
+            conversation_id: conversation_id.clone(),
             project_id: project_id.clone(),
             ratio: ratio.clone(),
             submit_id: None,
@@ -603,6 +606,16 @@ pub async fn codex_create_image(
             finished_at: None,
         };
         crate::core::task_queue::Task::upsert_gen_job(db.inner(), &job)?;
+        // 版本分支锚定：conversation 的根 session 可能还没有映射（旧版生成的 job / 「回看
+        // 生成对话」重建的会话）——入队时按前端传来的源会话 session 补记一笔，让根产出
+        // 也能并入 conversation 组（幂等，覆盖写入）。
+        if let (Some(conv), Some(anchor)) =
+            (conversation_id.as_deref(), anchor_session_id.as_deref())
+        {
+            if let Err(e) = db.inner().record_generation_conversation(anchor, conv) {
+                tracing::warn!("会话分组锚定失败 session={anchor} conv={conv}: {e}");
+            }
+        }
     }
 
     // 生成开始即通知前端 job_id：同步模型下命令 await 到完成才返回 job_id，生成中前端拿不到
@@ -655,6 +668,7 @@ pub async fn codex_create_image(
             prompt_raw,
             refs_for_meta.clone(),
             outcome.session_id.clone(),
+            conversation_id.clone(),
             outcome.submit_id.clone(),
             provider_name.clone(),
             project_id.clone(),
@@ -710,6 +724,7 @@ pub struct GenJobSummary {
     pub prompt: String,
     pub submit_id: Option<String>,
     pub session_id: Option<String>,
+    pub conversation_id: Option<String>,
     pub project_id: Option<String>,
     pub ratio: Option<String>,
     pub references: Vec<String>,
@@ -739,6 +754,7 @@ pub async fn list_gen_jobs(db: State<'_, Arc<Database>>) -> Result<Vec<GenJobSum
                 prompt: j.prompt,
                 submit_id: j.submit_id,
                 session_id: j.session_id,
+                conversation_id: j.conversation_id,
                 project_id: j.project_id,
                 ratio: j.ratio,
                 references: j.references,
@@ -889,6 +905,7 @@ mod generation_task_tests {
             prompt: "test".into(),
             references: vec![],
             session_id: None,
+            conversation_id: None,
             project_id: None,
             ratio: None,
             submit_id: None,

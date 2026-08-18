@@ -106,8 +106,8 @@ function App() {
 
   async function refresh() {
     const version = ++refreshVersion;
-    // 创作板 / 会话「重新编辑」模式共用挑图语义：瀑布流显示全部资产（含未反推），
-    // 任意图点一下即可插为参考图；promptedAssets 给编辑器补 caption/sections ——
+    // 创作板 / 会话底部编辑坞（重新编辑、底部对话框续轮）共用挑图语义：瀑布流显示全部资产
+    // （含未反推），任意图点一下即可插为参考图；promptedAssets 给编辑器补 caption/sections ——
     // 有反推的图可展开维度片段，没反推的作纯参考图。
     try {
       if (boardOpen || genEditing) {

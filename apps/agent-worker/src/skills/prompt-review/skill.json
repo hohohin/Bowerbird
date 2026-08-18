@@ -1,0 +1,17 @@
+{
+  "$schema": "bowerbird-skill-manifest-v1",
+  "id": "bowerbird-prompt",
+  "version": "0.1.0-ab",
+  "kernelMinVersion": "0.0.1",
+  "snapshotSchemaVersion": 1,
+  "title": "生图 prompt 偏离审查与优化",
+  "description": "Route B 评测用：审查模板展开后的完整 prompt 相对用户意图的偏离风险（内容物泄漏、主体漂移、属性冲突、拼接损伤），输出去内容物、主体锚定、块式结构化的修改版。",
+  "status": "ab-evaluation",
+  "source": {
+    "kind": "workspace-file",
+    "path": ".agents/skills/bowerbird-prompt/SKILL.md",
+    "contentHash": "075724f91d74273f448df06414bd180e8cc73206f9167f6581df29ecc931f003",
+    "hashAlgorithm": "sha256"
+  },
+  "distribution": "dev 阶段本地仓库文件源；正式分发走「登录拉取」（JWT + FeaturePolicy + 本地缓存最后版本），见 A/B 计划定案"
+}

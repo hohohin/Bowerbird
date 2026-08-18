@@ -6,51 +6,7 @@ import { useStore } from "../store";
 import { api } from "../lib/api";
 import { notifyError, notifySuccess } from "../lib/notify";
 import { setDragAssets } from "../lib/dragPayload";
-import type { Asset, GenJob } from "../lib/types";
-
-/**
- * 会话级分组合并：后端 listGenerationGroups 按 generation_session_id 分组，「重新编辑」
- * 产生的每个版本是新 session → 会各占一张卡。这里把同 conversationId 的各版本产出在前端
- * 合成一组（轮播呈现），组内按 job 创建顺序 + turn 顺序排列，末位 = 最新版本产出。
- * 仅覆盖本会话期内 store 里已知 conversationId 映射的资产，其余沿用后端分组。
- */
-function mergeConversationGroups(
-  base: Record<string, Asset[]>,
-  assets: Asset[],
-  genJobs: Record<string, GenJob>,
-  genJobOrder: string[]
-): Record<string, Asset[]> {
-  const hasConversation = Object.values(genJobs).some(
-    (j) => j.conversationId && j.conversationId !== j.id
-  );
-  if (!hasConversation) return base;
-  const byStorePath = new Map(assets.map((a) => [a.store_path ?? "", a]));
-  const convAssets = new Map<string, Asset[]>();
-  for (const jid of genJobOrder) {
-    const j = genJobs[jid];
-    if (!j) continue;
-    const key = j.conversationId ?? j.id;
-    for (const t of j.turns) {
-      for (const p of t.images) {
-        const a = byStorePath.get(p);
-        if (a) {
-          let list = convAssets.get(key);
-          if (!list) {
-            list = [];
-            convAssets.set(key, list);
-          }
-          list.push(a);
-        }
-      }
-    }
-  }
-  const next = { ...base };
-  for (const list of convAssets.values()) {
-    if (list.length < 2) continue;
-    for (const a of list) next[a.id] = list;
-  }
-  return next;
-}
+import type { Asset } from "../lib/types";
 
 function parseColors(c: string | null | undefined): string[] {
   if (!c) return [];
@@ -433,9 +389,6 @@ export function MasonryGrid() {
   const setSmartFilter = useStore((s) => s.setSmartFilter);
   const setColorFilter = useStore((s) => s.setColorFilter);
   const [groupMap, setGroupMap] = useState<Record<string, Asset[]>>({});
-  // 会话级合并（「重新编辑」版本产物并入同会话轮播组）所需的 job 数据。
-  const genJobs = useStore((s) => s.genJobs);
-  const genJobOrder = useStore((s) => s.genJobOrder);
   // 创作板 chip 点击 focus：滚动定位到该素材并闪烁高亮。读完即清 store，便于连续 focus 同一张。
   const flashTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => {
@@ -456,7 +409,8 @@ export function MasonryGrid() {
   const [dragOver, setDragOver] = useState(false);
   const [importing, setImporting] = useState(false);
 
-  // 同流程生成图：批量取可见 codex 组的过程图，供缩略图轮播。无生成图时清空。
+  // 同流程生成图（一次生成多图的过程组 + 会话级归组的版本分支）：批量取可见生成图的分组，
+  // 供缩略图轮播。会话归组由后端 generation_conversations 持久化，重启后分组不丢。无生成图时清空。
   useEffect(() => {
     const ids = assets.filter((a) => a.generation_session_id).map((a) => a.id);
     if (ids.length === 0) {
@@ -475,14 +429,19 @@ export function MasonryGrid() {
     };
   }, [assets, currentProjectId]);
 
-  // 在后端分组之上做会话级合并：同 conversationId 的「重新编辑」版本产物并入同一轮播组。
-  const mergedGroupMap = useMemo(
-    () => mergeConversationGroups(groupMap, assets, genJobs, genJobOrder),
-    [groupMap, assets, genJobs, genJobOrder]
-  );
+  // 分组成员与当前列表求交（项目 scope / 隐藏项目素材等可见性过滤后才进轮播）：保证组内
+  // 末位（最新一张）必在列表中，否则整个组会被下面的渲染过滤误丢。
+  const visibleIds = useMemo(() => new Set(assets.map((a) => a.id)), [assets]);
+  const mergedGroupMap = useMemo(() => {
+    const out: Record<string, Asset[]> = {};
+    for (const [id, group] of Object.entries(groupMap)) {
+      const visible = group.filter((a) => visibleIds.has(a.id));
+      if (visible.length > 0) out[id] = visible;
+    }
+    return out;
+  }, [groupMap, visibleIds]);
 
-  // 渲染列表：合并组只保留末位成员（最新版本产出）一张卡，其余成员经轮播查看。
-  // 普通 session 组后端本就只列最新一张，此过滤对它们是恒等（末位即列表里那张）。
+  // 渲染列表：分组只保留末位成员（最新产出）一张卡，其余成员经轮播查看。
   const filtered = useMemo(
     () =>
       assets.filter((a) => {

@@ -78,9 +78,18 @@ pub fn parse(text: &str) -> CaptionAnalysis {
             body: parts.join("\n").trim().to_string(),
             title,
         })
-        .filter(|section| !section.body.is_empty())
         .collect();
 
+    from_sections(sections)
+}
+
+/// 由 sections 计算 dimensions 映射与解析状态（空正文段落丢弃）。
+/// `parse()` 与编辑维度后的 `rebuild_payload()` 共用，保证两条路径产出一致。
+fn from_sections(sections: Vec<CaptionSection>) -> CaptionAnalysis {
+    let sections: Vec<CaptionSection> = sections
+        .into_iter()
+        .filter(|section| !section.body.is_empty())
+        .collect();
     let dimensions = map_dimensions(&sections);
     let count = dimensions.len();
     let parse_status = if count == DIMENSION_KEYS.len() {
@@ -96,6 +105,36 @@ pub fn parse(text: &str) -> CaptionAnalysis {
         dimensions,
         parse_status,
     }
+}
+
+/// 用编辑后的 sections 重建 `analyses(kind=caption).payload`：
+/// 保留 instruction/session_id/provider 等原始字段，dimensions/parse_status 按新
+/// sections 重算，text 由 sections 重新拼接——`$.text` 的消费方（复制按钮、智能精修、
+/// 自动归类）都吃整段文本，不能留编辑前的旧值。原 payload 非法或非对象时返回 None。
+pub fn rebuild_payload(payload: &str, sections: &[CaptionSection]) -> Option<String> {
+    let mut v: serde_json::Value = serde_json::from_str(payload).ok()?;
+    let obj = v.as_object_mut()?;
+    let rebuilt = from_sections(sections.to_vec());
+    obj.insert(
+        "sections".to_string(),
+        serde_json::to_value(&rebuilt.sections).ok()?,
+    );
+    obj.insert(
+        "dimensions".to_string(),
+        serde_json::to_value(&rebuilt.dimensions).ok()?,
+    );
+    obj.insert("parse_status".to_string(), serde_json::json!(rebuilt.parse_status));
+    obj.insert("text".to_string(), serde_json::json!(render_text(&rebuilt.sections)));
+    Some(v.to_string())
+}
+
+/// sections → 反推正文（`- **标题**：正文` 逐段，与默认反推指令要求的输出格式一致）。
+fn render_text(sections: &[CaptionSection]) -> String {
+    sections
+        .iter()
+        .map(|s| format!("- **{}**：{}", s.title, s.body))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn map_dimensions(sections: &[CaptionSection]) -> BTreeMap<String, String> {
@@ -452,5 +491,35 @@ mod tests {
         assert_eq!(parsed.parse_status, "raw_fallback");
         assert!(parsed.dimensions.is_empty());
         assert!(parsed.sections.is_empty());
+    }
+
+    #[test]
+    fn rebuild_payload_updates_sections_and_keeps_fields() {
+        let text = "- **构图**：竖幅近景，主体居中。\n- **光影**：柔和侧光，阴影很浅。";
+        let parsed = parse(text);
+        let payload = build_payload(text, "描述这张图", Some("sess-1"), "codex", &parsed);
+
+        // 编辑「光影」维度正文后重建 payload。
+        let mut edited = parsed.sections.clone();
+        edited[1].body = "硬质逆光，轮廓明显。\n带一圈冷色 rim light".to_string();
+        let rebuilt = rebuild_payload(&payload, &edited).unwrap();
+
+        let v: serde_json::Value = serde_json::from_str(&rebuilt).unwrap();
+        assert_eq!(v["instruction"], "描述这张图");
+        assert_eq!(v["session_id"], "sess-1");
+        assert_eq!(v["provider"], "codex");
+        assert_eq!(v["dimensions"]["light"], "硬质逆光，轮廓明显。\n带一圈冷色 rim light");
+        assert_eq!(v["parse_status"], "partial");
+
+        // 重生成的 text 再 parse 应还原编辑后的 sections（round-trip）。
+        let reparsed = parse(v["text"].as_str().unwrap());
+        assert_eq!(reparsed.sections, edited);
+        assert_eq!(reparsed.parse_status, "partial");
+    }
+
+    #[test]
+    fn rebuild_payload_rejects_invalid_original() {
+        assert!(rebuild_payload("not json", &[]).is_none());
+        assert!(rebuild_payload("\"just text\"", &[]).is_none());
     }
 }

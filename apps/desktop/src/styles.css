@@ -454,6 +454,66 @@ body.app-sidebar-resizing * {
   user-select: none !important;
 }
 
+/* ---- 侧栏 Status 悬浮会话面板 -------------------------------------------
+   由 Status 圆点唤起，像对话气泡挂在圆点右侧：左上角与圆点相接（JS 注入
+   top=圆点顶 / left=圆点右缘），bottom=0 与侧栏同高；左上角小圆角 + 左缘
+   尾巴指向圆点，其余大圆角 + 投影悬浮。z=35：盖过主区覆盖层与 hatch(z-30)，
+   低于 Modal z-50 / 右键菜单 z-60 / onboarding z-70。 */
+.status-session-panel {
+  position: fixed;
+  z-index: 35;
+  width: 300px;
+  display: flex;
+  flex-direction: column;
+  background: #1d1b1b;
+  border: 1px solid #343131;
+  border-radius: 4px 16px 16px 16px;
+  box-shadow: 0 24px 70px rgb(0 0 0 / 55%);
+  animation: status-session-in 170ms ease;
+}
+
+/* 气泡尾巴：旋转 45° 的方块叠在左缘（圆点 32px 高，中心在 16px），尖角指向圆点 */
+.status-session-panel::before {
+  content: "";
+  position: absolute;
+  left: -3px;
+  top: 16px;
+  width: 10px;
+  height: 10px;
+  background: #1d1b1b;
+  border-left: 1px solid #343131;
+  border-bottom: 1px solid #343131;
+  transform: translateY(-50%) rotate(45deg);
+}
+
+@keyframes status-session-in {
+  from {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* 收回：与入场镜像（左滑淡出，略快）；收回中不再交互，点击穿透到下层 */
+.status-session-panel.is-closing {
+  animation: status-session-out 150ms ease forwards;
+  pointer-events: none;
+}
+
+@keyframes status-session-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+}
+
 .app-workspace {
   min-width: 0;
   background-color: #100e0e;
@@ -718,6 +778,19 @@ body.app-sidebar-resizing * {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+
+  /* 豁免：会话 ↔ 底部编辑坞的视图切换（gen-view-in/out、gen-dock-in）是功能性方向提示
+     （谁离场、谁登场），180–220ms 短淡入淡出，不受系统动画关闭影响。Windows 关闭
+     「动画效果」时 WebView2 报 reduce，若一并压到 0.01ms 用户只会看到硬切。
+     类选择器 + !important 才能反超上方通配符 !important。 */
+  .gen-view-in,
+  .gen-view-out {
+    animation-duration: 180ms !important;
+  }
+
+  .gen-dock-in {
+    animation-duration: 220ms !important;
+  }
 }
 
 .toast-viewport {
@@ -923,8 +996,9 @@ body.app-sidebar-resizing * {
   background: #201d1d;
 }
 
-/* 生成会话 ↔ 「重新编辑」坞 切换过渡：会话视图淡入 + 上移，编辑坞从底部滑入。
-   只做入场动画（另一视图即时卸载），reduced-motion 由全局降级块兜底。 */
+/* 生成会话 ↔ 底部编辑坞 切换过渡：进入坞时会话先退场（gen-view-out 下沉淡出）再卸载，
+   坞同时 gen-dock-in 上滑，二者交叠成一段过渡；回到会话时视图 gen-view-in 淡入上移。
+   reduced-motion 由全局降级块兜底（动画即时完成，退场只剩 200ms 延迟卸载，无感）。 */
 @keyframes gen-view-in {
   from {
     opacity: 0;
@@ -933,6 +1007,17 @@ body.app-sidebar-resizing * {
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@keyframes gen-view-out {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(12px);
   }
 }
 
@@ -949,6 +1034,11 @@ body.app-sidebar-resizing * {
 
 .gen-view-in {
   animation: gen-view-in 180ms ease-out;
+}
+
+/* forwards：动画结束后保持透明直至组件卸载（组件内 200ms 定时卸载），避免回闪。 */
+.gen-view-out {
+  animation: gen-view-out 180ms ease-in forwards;
 }
 
 .gen-dock-in {

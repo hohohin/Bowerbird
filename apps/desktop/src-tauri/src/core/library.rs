@@ -102,7 +102,7 @@ pub struct GenerationHistory {
 }
 
 /// 反推 caption 解析出的一个维度片段（动态标题 + 正文）。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CaptionSection {
     pub title: String,
     pub body: String,
@@ -1224,9 +1224,28 @@ impl Database {
         Ok(exists)
     }
 
+    /// 会话级分组持久化：记 session → conversation（「重新编辑 / 重试」版本分支归组）。
+    /// 幂等（session 为主键，重复写覆盖）；分组查询 [`Database::list_generation_group`] 据此
+    /// 把 session 组扩成 conversation 组。
+    pub fn record_generation_conversation(
+        &self,
+        session_id: &str,
+        conversation_id: &str,
+    ) -> AppResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO generation_conversations (session_id, conversation_id) VALUES (?1, ?2) \
+             ON CONFLICT(session_id) DO UPDATE SET conversation_id=excluded.conversation_id",
+            rusqlite::params![session_id, conversation_id],
+        )?;
+        Ok(())
+    }
+
     /// 取该资产所属生成会话的全部图（含自己），按 id ASC（ULID 时序 = 过程顺序）。
-    /// 资产无 generation_session_id（非生成图）→ 子查询返回 NULL → `generation_session_id = NULL`
-    /// 恒假 → 返回空（前端据此判断「非组、无轮播」）。
+    /// 会话级归组：session 有 conversation 映射 → 返回整个 conversation（「重新编辑 / 重试」
+    /// 各版本 session）的全部图；无映射 → 退回本 session（一次生成多图的过程组）。
+    /// 资产无 generation_session_id（非生成图）→ 子查询返回 NULL → `IN (NULL)` 恒假 →
+    /// 返回空（前端据此判断「非组、无轮播」）。
     pub fn list_generation_group(
         &self,
         asset_id: &str,
@@ -1235,8 +1254,14 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         let sql = format!(
             "SELECT {ASSET_COLS} FROM assets \
-             WHERE generation_session_id = \
-               (SELECT generation_session_id FROM assets WHERE id = ?1) \
+             WHERE generation_session_id IN ( \
+               SELECT gc.session_id FROM generation_conversations gc \
+                 WHERE gc.conversation_id = ( \
+                   SELECT conversation_id FROM generation_conversations \
+                     WHERE session_id = \
+                       (SELECT generation_session_id FROM assets WHERE id = ?1)) \
+               UNION ALL \
+               SELECT generation_session_id FROM assets WHERE id = ?1) \
              AND (?2 IS NULL OR EXISTS(SELECT 1 FROM project_assets pa \
                WHERE pa.asset_id = assets.id AND pa.project_id IS ?2)) \
              ORDER BY id ASC"
@@ -1429,6 +1454,38 @@ impl Database {
     pub fn delete_analysis(&self, id: &str) -> AppResult<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute("DELETE FROM analyses WHERE id = ?1", rusqlite::params![id])?;
+        Ok(())
+    }
+
+    /// 按 id 取单条分析结果（编辑反推维度前校验 kind 用）。
+    pub fn get_analysis(&self, id: &str) -> AppResult<Option<Analysis>> {
+        let conn = self.conn.lock().unwrap();
+        let out = conn
+            .query_row(
+                "SELECT id, asset_id, kind, payload, provider, created_at FROM analyses WHERE id = ?1",
+                rusqlite::params![id],
+                |r| {
+                    Ok(Analysis {
+                        id: r.get(0)?,
+                        asset_id: r.get(1)?,
+                        kind: r.get(2)?,
+                        payload: r.get(3)?,
+                        provider: r.get(4)?,
+                        created_at: r.get(5)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(out)
+    }
+
+    /// 编辑反推维度后写回 payload（维度正文 / 重算的 text 与 dimensions）。
+    pub fn update_analysis_payload(&self, id: &str, payload: &str) -> AppResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE analyses SET payload = ?2 WHERE id = ?1",
+            rusqlite::params![id, payload],
+        )?;
         Ok(())
     }
 
@@ -2014,6 +2071,16 @@ mod tests {
         let list = db.list_analyses_by_asset(&aid).unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].kind, "caption");
+        // 单条读取：命中 / 未命中
+        assert_eq!(db.get_analysis(&an_id).unwrap().unwrap().asset_id, aid);
+        assert!(db.get_analysis("no-such-id").unwrap().is_none());
+        // 编辑维度后写回 payload
+        db.update_analysis_payload(&an_id, r#"{"text":"a night scene"}"#)
+            .unwrap();
+        assert_eq!(
+            db.get_analysis(&an_id).unwrap().unwrap().payload,
+            r#"{"text":"a night scene"}"#
+        );
         db.delete_analysis(&an_id).unwrap();
         assert_eq!(db.list_analyses_by_asset(&aid).unwrap().len(), 0);
     }
@@ -2222,6 +2289,57 @@ mod tests {
         // 非生成图（无 session）→ 子查询 NULL → 空。
         let plain = put_asset(&db, "plain");
         assert!(db.list_generation_group(&plain, None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn list_generation_group_merges_conversation_versions() {
+        // 同 conversation 的各版本 session（「重新编辑 / 重试」分支）并成一组：id ASC（末位 =
+        // 最新版本产出），组内任一成员视角同组；无映射 session 不混入；映射写入幂等。
+        let db = db();
+        fn put_codex(db: &Database, id: &str, session: &str) {
+            db.insert_asset(&Asset {
+                id: id.into(),
+                name: id.into(),
+                ext: Some("png".into()),
+                origin_path: None,
+                store_path: Some(format!("/tmp/{id}.png")),
+                thumb_path: None,
+                size: Some(0),
+                width: Some(10),
+                height: Some(10),
+                duration: Some(0.0),
+                phash: None,
+                colors: None,
+                rating: Some(0),
+                source: Some("codex".into()),
+                source_url: None,
+                folder_id: None,
+                created_at: Some(0),
+                file_mtime: Some(0),
+                generation_session_id: Some(session.into()),
+            })
+            .unwrap();
+        }
+        put_codex(&db, "01A", "sess-A");
+        put_codex(&db, "02B", "sess-B"); // 版本分支（重试 / 编辑后新版）
+        put_codex(&db, "03C", "sess-C"); // 另一会话，不归组
+        db.record_generation_conversation("sess-A", "conv-1").unwrap();
+        db.record_generation_conversation("sess-B", "conv-1").unwrap();
+
+        let group = db.list_generation_group("01A", None).unwrap();
+        let ids: Vec<&str> = group.iter().map(|a| a.id.as_str()).collect();
+        assert_eq!(ids, vec!["01A", "02B"]); // 跨 session 并组，id ASC
+        // 组内另一成员视角同组（瀑布流各成员卡片拿到同一份组）。
+        assert_eq!(db.list_generation_group("02B", None).unwrap().len(), 2);
+        // 无映射的 session 仍自成一组。
+        let g3 = db.list_generation_group("03C", None).unwrap();
+        assert_eq!(
+            g3.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(),
+            vec!["03C"]
+        );
+        // 重复写映射幂等，分组不变。
+        db.record_generation_conversation("sess-B", "conv-1").unwrap();
+        assert_eq!(db.list_generation_group("02B", None).unwrap().len(), 2);
     }
 
     #[test]

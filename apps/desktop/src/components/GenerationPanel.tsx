@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { ChevronLeft, ChevronRight } from "lucide-react";
-import { useStore } from "../store";
+import { useStore, type GenEditingMode } from "../store";
 import { api } from "../lib/api";
 import { notifyError } from "../lib/notify";
 import { canStartAnotherJob, canUseByo, canUseGenerationProvider } from "../lib/entitlement";
@@ -13,7 +13,7 @@ import { RatioSelect } from "./creation/RatioSelect";
 import { ProviderSelect } from "./creation/ProviderSelect";
 import { BoardChipPreview } from "./creation/BoardChipPreview";
 import { ReadonlyPrompt } from "./creation/ReadonlyPrompt";
-import { Bookmark, Copy, Images, Pencil, Send, Sparkles, X } from "lucide-react";
+import { Bookmark, Copy, Images, Pencil, RotateCcw, Send, Sparkles, X } from "lucide-react";
 
 /** 生成用时格式：<60s 取整秒，否则 m:ss。 */
 function fmtDuration(ms: number): string {
@@ -31,6 +31,11 @@ function fmtDuration(ms: number): string {
  * 每轮 = 用户消息（首轮 prompt + 参考图，续轮 = 修改意见气泡）→ 助手块
  * （产出图 / 流式过程日志 / 失败重试）。面板标题随会话内容而定（首轮 prompt 首行）。
  * 会话切换/管理统一在侧栏 Status 任务区（SidebarStatus）；面板为主区覆盖层，可随时开合不丢对话。
+ *
+ * 底部对话框与首轮「重新编辑」共用底部编辑坞（GenEditComposer）：点击收起会话、露出
+ * 瀑布流，创作板同款 ProseMirror + 工具栏（比例/provider/Agent）组稿。二者差异在发送
+ * 语义——「重新编辑」开新版本分支（会话内 ←/→ 切换）；底部对话框 resume 同一 session，
+ * 图片作为新一轮接在会话下方（一来一往）。
  */
 export function GenerationPanel() {
   const genJobs = useStore((s) => s.genJobs);
@@ -47,14 +52,13 @@ export function GenerationPanel() {
   const genEditing = useStore((s) => s.genEditing);
   const setGenEditing = useStore((s) => s.setGenEditing);
   const setActiveJob = useStore((s) => s.setActiveJob);
-  const sendGenRevise = useStore((s) => s.sendGenRevise);
   const cancelGeneration = useStore((s) => s.cancelGeneration);
+  const startGeneration = useStore((s) => s.startGeneration);
   const retryLastGenTurn = useStore((s) => s.retryLastGenTurn);
   const reusePromptToBoard = useStore((s) => s.reusePromptToBoard);
   const reloadPresets = useStore((s) => s.reloadPresets);
   const runningJobCount = useStore((s) => Object.values(s.genJobs).filter((j) => j.running).length);
 
-  const [revise, setRevise] = useState("");
   // 把当前会话首轮 prompt 登记为用途（preset）的 inline 起名态。
   const [savingPreset, setSavingPreset] = useState(false);
   const [presetName, setPresetName] = useState("");
@@ -91,6 +95,8 @@ export function GenerationPanel() {
           ? "积分不足"
           : "Bowerbird Cloud 不可用"
       : targetHealth?.reason || "当前 provider 不可用";
+  // 重试要新开 job（版本分支），与「重新编辑」同过并行上限门。
+  const canStartAnother = canStartAnotherJob(cloudEntitlement, runningJobCount);
 
   const imageCount = useMemo(
     () => activeJob?.turns.reduce((n, t) => n + t.images.length, 0) ?? 0,
@@ -147,26 +153,44 @@ export function GenerationPanel() {
     return line?.trim() || "生成会话";
   }, [firstUserText]);
 
-  // 新结果落地时把滚动体拉到底，让最新图进视野。用标量 imageCount 作依赖——打字/流式
-  // 刷字不触发；末轮 busy 占位（「生成中…」）不增 imageCount，不会对着 spinner 滚。
+  // 新结果落地或新轮追加时把滚动体拉到底，让最新内容进视野。用标量作依赖——打字/流式
+  // 刷字不触发；turnCount 覆盖底部对话框发送：坞内发送后回会话视图（滚动体重挂载），
+  // 新一轮用户气泡 + 生成中占位需滚到可见（imageCount 要等图落地才变）。
+  const turnCount = activeJob?.turns.length ?? 0;
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
     el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-  }, [imageCount, activeJobId]);
+  }, [imageCount, turnCount, activeJobId]);
 
   const running = !!activeJob?.running;
-  const canRevise = !running && !!activeJob?.sessionId && targetReady;
-  function doRevise() {
-    if (!canRevise || !revise.trim()) return;
-    void sendGenRevise(revise, activeProvider).then(() => setRevise(""));
-  }
 
-  // 「重新编辑」：会话收起为底部编辑坞（载入首轮编辑框原文，创作板同等编辑），
-  // 瀑布流露出并进入点图插 chip 模式；改完发送 = 用新组稿开新会话。
+  // 「重新编辑」（首轮气泡 icon）：会话收起为底部编辑坞（载入首轮编辑框原文，创作板同等编辑），
+  // 瀑布流露出并进入点图插 chip 模式；改完发送 = 用新组稿开新会话（版本分支）。
   function startEdit() {
     if (running) return;
-    setGenEditing(true);
+    setGenEditing("edit");
+  }
+
+  // 「重试」（首轮气泡 icon）：等价于「重新编辑」后不改内容直接发送——首轮组稿（完整 prompt +
+  // 参考图 + 比例 + provider）原样重发，归入同一会话开新版本分支（会话内 ←/→ 切换、瀑布流同组轮播）。
+  function retryFirstTurn() {
+    if (running || !activeJob) return;
+    const first = activeJob.turns[0];
+    const provider = isCloudProvider(activeJob.provider)
+      ? canonicalProviderKey(activeJob.provider)
+      : activeJob.provider === "jimeng"
+        ? "jimeng"
+        : "codex";
+    void startGeneration(
+      first?.prompt ?? activeJob.lastPrompt,
+      activeJob.refAssets,
+      activeJob.lastRatio,
+      provider,
+      first?.promptRaw ?? undefined,
+      activeJob.conversationId ?? activeJob.id,
+      activeJob.sessionId ?? undefined,
+    ).catch(console.error);
   }
 
   // 把 activeJob 首轮 prompt 登记为用途（preset）：起名 → createPreset + 刷新下拉。
@@ -185,7 +209,7 @@ export function GenerationPanel() {
     }
   }
 
-  // 首轮气泡下方的会话级操作（icon）：重新编辑 / 复用到创作板 / 登记为用途。
+  // 首轮气泡下方的会话级操作（icon）：重新编辑 / 重试 / 复用到创作板 / 登记为用途。
   const firstTurnActions =
     !running && activeJob?.lastPrompt ? (
       <div className="flex flex-col items-end gap-1.5">
@@ -194,9 +218,24 @@ export function GenerationPanel() {
             type="button"
             onClick={startEdit}
             className="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-panel2 hover:text-accent"
-            title="重新编辑：会话收起为底部编辑器，点瀑布流图片可换参考图；改完发送开新会话"
+            title="重新编辑：会话收起为底部编辑器，点瀑布流图片可换参考图；发送后为同一会话的新版本"
           >
             <Pencil size={13} />
+          </button>
+          <button
+            type="button"
+            onClick={retryFirstTurn}
+            disabled={!targetReady || !canStartAnother}
+            className="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-panel2 hover:text-accent disabled:opacity-40"
+            title={
+              !targetReady
+                ? lockedReason
+                : !canStartAnother
+                  ? "已达当前档位的并行生成上限"
+                  : "重试：首轮组稿原样重发，结果作为同一会话的新版本（←/→ 切换）"
+            }
+          >
+            <RotateCcw size={13} />
           </button>
           <button
             type="button"
@@ -252,21 +291,44 @@ export function GenerationPanel() {
       </div>
     ) : undefined;
 
+  // 会话 → 编辑坞过渡：进入坞时会话视图不瞬间卸载，先播 gen-view-out（180ms 下沉淡出，
+  // 与坞的 gen-dock-in 上滑交叠）再于 200ms 后卸载。状态用「已隐藏」反逻辑且初值 false——
+  // 点击进入坞的渲染帧 effect 尚未执行，凭 !sessionHidden 同帧保住会话挂载，退场动画从
+  // 第一帧开始；若用「退场中」正逻辑，首帧会话即被卸载（硬切），动画只能下一帧补播。
+  const [sessionHidden, setSessionHidden] = useState(false);
+  useEffect(() => {
+    if (!genEditing) {
+      setSessionHidden(false);
+      return;
+    }
+    const t = setTimeout(() => setSessionHidden(true), 200);
+    return () => clearTimeout(t);
+  }, [genEditing]);
+
   return (
     <>
-      {genEditing && activeJob ? (
-        // 重新编辑：面板收起为底部浮动编辑坞（不左右通铺，上方两角圆角），上方露出瀑布流选图。
+      {(genEditing && activeJob) && (
+        // 底部编辑坞（「重新编辑」/ 底部对话框共用外壳，mode 区分行为）：面板收起为底部浮动
+        // 编辑卡片（不左右通铺，上方两角圆角），上方露出瀑布流选图。
         // 定位（-translate-x-1/2）在外层、入场动画（transform）在内层，互不覆盖。
         <div className="absolute bottom-0 left-1/2 z-10 w-[min(896px,100%)] -translate-x-1/2">
           <GenEditComposer
             job={activeJob}
-            canStart={canStartAnotherJob(cloudEntitlement, runningJobCount)}
-            onExit={() => setGenEditing(false)}
+            mode={genEditing}
+            canStart={canStartAnother}
+            onExit={() => setGenEditing(null)}
           />
         </div>
-      ) : (
-        <div className="absolute inset-0 z-10 flex flex-col bg-canvas">
-          {/* 切换过渡：从编辑坞回到会话时淡入上移 */}
+      )}
+      {(!genEditing || !activeJob || !sessionHidden) && (
+        // 会话全屏视图：进入编辑坞的 200ms 内保留挂载播退场（gen-view-out 下沉淡出，
+        // pointer-events-none 让位给坞/瀑布流），从编辑坞回来时 gen-view-in 淡入上移。
+        // 无 job 时即使 genEditing 也落在此分支（坞无会话可载，退回会话空态）。
+        <div
+          className={`absolute inset-0 z-10 flex flex-col bg-canvas ${
+            genEditing && activeJob ? "gen-view-out pointer-events-none" : ""
+          }`}
+        >
           <div className="gen-view-in flex min-h-0 flex-1 flex-col">
       {/* 单行头部（约 38px）：图标 + 会话标题（随内容而定）+ 统计 + 关闭 */}
       <div className="flex min-h-[38px] shrink-0 items-center gap-2 border-b border-edge bg-canvas/90 px-3 py-1">
@@ -338,7 +400,8 @@ export function GenerationPanel() {
         )}
       </div>
 
-      {/* 底部：聊天式输入（续轮修改意见）。会话级操作（重新编辑/复用/登记）在首轮气泡下方 */}
+      {/* 底部：对话框入口（点击收起会话、露出瀑布流组稿，同「重新编辑」坞；发送 = 会话下方
+          追加一轮对话）。会话级操作（重新编辑/复用/登记）在首轮气泡下方 */}
       <div className="shrink-0 border-t border-edge bg-panel p-4">
         {running ? (
           <button
@@ -350,34 +413,20 @@ export function GenerationPanel() {
         ) : activeJob?.sessionId ? (
           <div className="space-y-1">
             {!targetReady && <div className="text-[10px] text-muted">{lockedReason}</div>}
-            <div className="flex gap-1.5">
-              <input
-                value={revise}
-                onChange={(e) => setRevise(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    doRevise();
-                  }
-                }}
-                placeholder="如：背景改成白天、去掉霓虹、猫换成狗…"
-                className="min-w-0 flex-1 rounded bg-panel2 px-2 py-1.5 text-xs text-ink outline-none ring-1 ring-edge focus:ring-accent"
-              />
-              <button
-                onClick={doRevise}
-                disabled={!canRevise || !revise.trim()}
-                className="flex shrink-0 items-center gap-1.5 rounded bg-accent px-3 py-1.5 text-xs font-semibold text-black disabled:opacity-50"
-              >
-                <Send size={12} />
-                发送
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={() => setGenEditing("revise")}
+              className="w-full rounded bg-panel2 px-2.5 py-2 text-left text-xs text-muted ring-1 ring-edge transition-colors hover:text-ink hover:ring-accent"
+              title="像创作板一样组稿：点瀑布流图片插入参考图；发送后图片接在会话下方"
+            >
+              继续对话——提修改意见（如：背景改成白天、去掉霓虹…），或点瀑布流图片加参考图
+            </button>
           </div>
         ) : (
           <div className="text-[10px] text-muted">
             {!targetReady
               ? lockedReason
-              : "🎨 在创作板点「✓ 发送」开始一个生成会话；出图后可在此提修改意见续接迭代。"}
+              : "🎨 在创作板点「✓ 发送」开始一个生成会话；出图后可在此继续对话迭代。"}
           </div>
         )}
       </div>
@@ -645,23 +694,31 @@ function TurnView({
 }
 
 /**
- * 会话「重新编辑」编辑坞（jimeng / gemini 式）：会话面板收起为底部条，露出的瀑布流
+ * 会话底部编辑坞（jimeng / gemini 式）：会话面板收起为底部条，露出的瀑布流
  * 点一下即插参考图 chip（board-asset-picked）。编辑器与创作板同款（useCreationEditor +
  * RatioSelect + ProviderSelect + Agent 模式 + BoardChipPreview），但不持久化草稿
- * （draftKey:null，不覆盖创作板的 bowerbird.boardDraft）；发送 = 在**同一会话**里开新版本
- * 分支（conversationId 归组，会话面板 ←/→ 切换编辑前后），点发送立即回会话视图（生成后台跑），
- * 取消 = 回到会话全屏视图。provider 在坞内自选（初值 = 该会话的 provider）。
+ * （draftKey:null，不覆盖创作板的 bowerbird.boardDraft）。两种入口：
+ * - mode="edit"（首轮「重新编辑」）：载入首轮编辑框原文 + 参考图；发送 = 在**同一会话**里
+ *   开新版本分支（conversationId 归组，会话面板 ←/→ 切换编辑前后）。
+ * - mode="revise"（底部对话框）：空编辑器自由组稿；发送 = resume 同一 session 在会话下方
+ *   追加一轮对话（一来一往），不产生版本分支。
+ * 两种模式点发送都立即回会话视图（生成后台跑），取消 = 回到会话全屏视图。
+ * provider 在坞内自选（初值 = 该会话的 provider）。
  */
 function GenEditComposer({
   job,
+  mode,
   canStart,
   onExit,
 }: {
   job: GenJob;
+  mode: GenEditingMode;
   canStart: boolean;
   onExit: () => void;
 }) {
+  const isRevise = mode === "revise";
   const startGeneration = useStore((s) => s.startGeneration);
+  const sendGenRevise = useStore((s) => s.sendGenRevise);
   const activeGenProvider = useStore((s) => s.activeGenProvider);
   const setActiveGenProvider = useStore((s) => s.setActiveGenProvider);
   const defaultProvider = useStore((s) => s.defaultProvider);
@@ -671,14 +728,16 @@ function GenEditComposer({
   const cloudAuth = useStore((s) => s.cloudAuth);
   const cloudEntitlement = useStore((s) => s.cloudEntitlement);
   const cloudAvailable = cloudAuth?.cloud_available ?? false;
+  // 底部对话框（续轮）空编辑器开局：不预填「请参考」，避免误发送占位文字。
   const { hostRef, focus, finalPrompt, rawPrompt, references, agentPromptReferences } =
     useCreationEditor({
       draftKey: null,
+      initialEmpty: isRevise,
     });
   // 比例初值取会话首轮的值；编辑坞内改动不持久化（创作板有自己的记忆）。
   const [ratio, setRatio] = useState<string | null>(job.lastRatio ?? null);
-  // Agent 模式（与创作板同款）：先综合原 prompt 与参考图维度编译，再发生图。
-  const [agentMode, setAgentMode] = useState(false);
+  // Agent 方案开关（与创作板同款三态）：off = 直发；a = 方案A（子句挑选）；b = 方案B（skill 审查修复）。
+  const [agentMode, setAgentMode] = useState<"off" | "a" | "b">("off");
   const [agentAvailable, setAgentAvailable] = useState(false);
   const [agentBusy, setAgentBusy] = useState(false);
 
@@ -739,7 +798,12 @@ function GenEditComposer({
 
   // 编辑器挂载（注册 board-load-prompt listener）后延一帧载入会话首轮原文 + 参考图
   // （与 reusePromptToBoard 同款事件；此时创作板已关，不会双编辑器响应）。
+  // 仅「重新编辑」载入；底部对话框（续轮）空编辑器开局，只把焦点放进编辑框。
   useEffect(() => {
+    if (isRevise) {
+      const f = setTimeout(() => focus(), 0);
+      return () => clearTimeout(f);
+    }
     const raw = job.turns[0]?.promptRaw || job.lastPrompt;
     const t = setTimeout(() => {
       window.dispatchEvent(
@@ -754,13 +818,16 @@ function GenEditComposer({
   }, []);
 
   async function send() {
-    if (!finalPrompt || !targetReady || !canStart || agentBusy) return;
+    // 续轮复用同 job（无新并行槽占用）；重新编辑开新 job 需过并行上限门。
+    if (!finalPrompt || !targetReady || agentBusy || (!isRevise && !canStart)) return;
     let prompt = finalPrompt;
-    if (agentMode) {
+    if (agentMode !== "off") {
       setAgentBusy(true);
       try {
         const result = await api.localAgentCompilePrompt({
           originalPrompt: rawPrompt || finalPrompt,
+          // 方案 B 需要模板展开后的完整 prompt（= 直发版），Agent 在其上做审查修复。
+          ...(agentMode === "b" ? { expandedPrompt: finalPrompt } : {}),
           references: agentPromptReferences,
           output: { kind: "图片", ...(ratio ? { ratio } : {}) },
         });
@@ -772,27 +839,42 @@ function GenEditComposer({
         setAgentBusy(false);
       }
     }
-    // 点发送立即回会话视图：生成后台跑（新版本 job 自动选中并弹面板），错误由会话内失败轮展示。
+    // 点发送立即回会话视图：生成后台跑，结果/错误由会话内对应轮展示。
     onExit();
-    // 归入同一会话：conversationId 传源会话 → 新版本分支可与会话内 ←/→ 切换。
-    void startGeneration(
-      prompt,
-      references,
-      ratio,
-      activeGenProvider,
-      rawPrompt,
-      job.conversationId ?? job.id
-    ).catch(console.error);
+    if (isRevise) {
+      // 会话下方追加一轮对话（resume 同一 session）；新挑参考图随 opts 传给续轮路径。
+      void sendGenRevise(prompt, activeGenProvider, {
+        rawPrompt,
+        references,
+        ratio,
+      }).catch(console.error);
+    } else {
+      // 归入同一会话：conversationId 传源会话 → 新版本分支可与会话内 ←/→ 切换；
+      // anchorSessionId = 源会话 session（旧版生成 / 回看历史的根 session 补映射用）。
+      void startGeneration(
+        prompt,
+        references,
+        ratio,
+        activeGenProvider,
+        rawPrompt,
+        job.conversationId ?? job.id,
+        job.sessionId ?? undefined
+      ).catch(console.error);
+    }
   }
 
-  const sendDisabled = !finalPrompt || !targetReady || !canStart || agentBusy;
+  const sendDisabled = !finalPrompt || !targetReady || agentBusy || (!isRevise && !canStart);
   const sendTitle = !targetReady
     ? lockedReason
-    : !canStart
+    : !isRevise && !canStart
       ? "已达当前档位的并行生成上限"
-      : agentMode
-        ? "先由 Agent 整理意图，再生成图像（新版本归入同一会话）"
-        : "发送生成（新版本归入同一会话）";
+      : isRevise
+        ? agentMode !== "off"
+          ? `先由 Agent（${agentMode === "a" ? "方案A" : "方案B"}）整理意图，再生成图像（接在会话下方）`
+          : "发送生成（图片接在会话下方，续接同一会话）"
+        : agentMode !== "off"
+          ? `先由 Agent（${agentMode === "a" ? "方案A" : "方案B"}）整理意图，再生成图像（新版本归入同一会话）`
+          : "发送生成（新版本归入同一会话）";
 
   return (
     // 浮动卡片本体：高度随内容收缩、上方两角圆角、底部贴屏；滑入动画（外层容器负责水平居中定位）。
@@ -802,9 +884,13 @@ function GenEditComposer({
       className="gen-dock-in w-full space-y-2 rounded-t-xl border border-b-0 border-edge bg-panel p-3 shadow-[0_-12px_32px_rgba(0,0,0,0.45)]"
     >
       <div className="flex items-center gap-2">
-        <strong className="shrink-0 text-xs font-semibold text-ink">重新编辑</strong>
+        <strong className="shrink-0 text-xs font-semibold text-ink">
+          {isRevise ? "继续对话" : "重新编辑"}
+        </strong>
         <span className="min-w-0 flex-1 truncate text-[10px] text-muted">
-          点上方瀑布流图片插入参考图；发送后为同一会话的新版本
+          {isRevise
+            ? "点上方瀑布流图片插入参考图；发送后图片接在会话下方"
+            : "点上方瀑布流图片插入参考图；发送后为同一会话的新版本"}
         </span>
         <button
           type="button"
@@ -837,25 +923,43 @@ function GenEditComposer({
             defaultProvider={defaultProvider}
             onSetDefaultProvider={setDefaultProvider}
           />
-          {/* Agent 模式开关：与发送按钮同款线框/光晕（仅圆角不同），关闭态 is-off 收敛光晕。
-              仅本机 Agent 可用时渲染——release 包中 health 命令被后端门控拒绝，开关不出现。 */}
+          {/* Agent 方案开关（A/B 互斥，与创作板同款）：仅本机 Agent 可用时渲染——
+              release 包中 health 命令被后端门控拒绝，开关不出现。 */}
           {agentAvailable && (
-            <button
-              type="button"
-              role="switch"
-              aria-checked={agentMode}
-              disabled={agentBusy}
-              onClick={() => setAgentMode((enabled) => !enabled)}
-              title="开启后，Agent 会先综合原 prompt 与参考图维度，再调用当前生图引擎"
-              className={`generation-glow-button flex h-7 items-center rounded-[3px] px-2.5 text-xs font-medium disabled:opacity-40 ${
-                agentMode ? "" : "is-off"
-              }`}
-            >
-              <span className="generation-glow-button__content gap-1.5">
-                <span className={`h-2 w-2 rounded-full ${agentMode ? "bg-lime" : "bg-muted/50"}`} />
-                Agent
-              </span>
-            </button>
+            <>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={agentMode === "a"}
+                disabled={agentBusy}
+                onClick={() => setAgentMode((mode) => (mode === "a" ? "off" : "a"))}
+                title="方案A（子句挑选）：Agent 按你的意图从参考图维度原文中挑选子句，确定性拼合后再发送"
+                className={`generation-glow-button flex h-7 items-center rounded-[3px] px-2.5 text-xs font-medium disabled:opacity-40 ${
+                  agentMode === "a" ? "" : "is-off"
+                }`}
+              >
+                <span className="generation-glow-button__content gap-1.5">
+                  <span className={`h-2 w-2 rounded-full ${agentMode === "a" ? "bg-lime" : "bg-muted/50"}`} />
+                  Agent A
+                </span>
+              </button>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={agentMode === "b"}
+                disabled={agentBusy}
+                onClick={() => setAgentMode((mode) => (mode === "b" ? "off" : "b"))}
+                title="方案B（skill 审查）：Agent 按官方 skill 审查并修复展开后的完整 prompt，再发送"
+                className={`generation-glow-button flex h-7 items-center rounded-[3px] px-2.5 text-xs font-medium disabled:opacity-40 ${
+                  agentMode === "b" ? "" : "is-off"
+                }`}
+              >
+                <span className="generation-glow-button__content gap-1.5">
+                  <span className={`h-2 w-2 rounded-full ${agentMode === "b" ? "bg-lime" : "bg-muted/50"}`} />
+                  Agent B
+                </span>
+              </button>
+            </>
           )}
           <span className="hidden text-[10px] text-muted md:inline">
             点瀑布流图片插入参考图，或输入 @图名

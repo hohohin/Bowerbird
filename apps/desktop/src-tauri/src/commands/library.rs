@@ -10,10 +10,11 @@ use tauri::{AppHandle, Emitter, State};
 use ulid::Ulid;
 
 use crate::core::autoname;
+use crate::core::caption;
 use crate::core::ingest;
 use crate::core::library::{
-    collapse_generation_groups, Analysis, Asset, AssetTag, ColorBucket, Folder, GenerationHistory,
-    Preset, PromptedAsset, TagCount,
+    collapse_generation_groups, Analysis, Asset, AssetTag, CaptionSection, ColorBucket, Folder,
+    GenerationHistory, Preset, PromptedAsset, TagCount,
 };
 use crate::core::paths::LibraryPaths;
 use crate::core::projects::{AssetDeleteMode, AssetDeleteResult};
@@ -524,6 +525,38 @@ pub async fn delete_analysis(db: State<'_, Arc<Database>>, id: String) -> Result
     tokio::task::spawn_blocking(move || db.delete_analysis(&id))
         .await
         .map_err(|e| AppError::Other(e.to_string()))?
+}
+
+/// 编辑反推维度内容：用新 sections 重建 caption payload（text/dimensions/parse_status 同步重算）落库。
+/// emit analyses://changed → 详情页重拉本图 analyses、App 刷创作板 promptedAssets
+/// （创作板发送时实时取最新 sections，编辑自动生效）。
+#[tauri::command]
+pub async fn update_caption_sections(
+    app: AppHandle,
+    db: State<'_, Arc<Database>>,
+    id: String,
+    sections: Vec<CaptionSection>,
+) -> Result<(), AppError> {
+    let db = db.inner().clone();
+    let asset_id = tokio::task::spawn_blocking(move || {
+        let existing = db
+            .get_analysis(&id)?
+            .ok_or_else(|| AppError::Other("反推结果不存在".into()))?;
+        if existing.kind != "caption" {
+            return Err(AppError::Other("仅反推（caption）结果支持编辑维度".into()));
+        }
+        let payload = caption::rebuild_payload(&existing.payload, &sections)
+            .ok_or_else(|| AppError::Other("原反推结果无法解析，编辑失败".into()))?;
+        db.update_analysis_payload(&id, &payload)?;
+        Ok::<_, AppError>(existing.asset_id)
+    })
+    .await
+    .map_err(|e| AppError::Other(e.to_string()))??;
+    let _ = app.emit(
+        "analyses://changed",
+        serde_json::json!({ "asset_id": asset_id, "kind": "caption" }),
+    );
+    Ok(())
 }
 
 /// 创作板用：有 caption（反推）的资产 + 最新 caption 正文（§5.4）。

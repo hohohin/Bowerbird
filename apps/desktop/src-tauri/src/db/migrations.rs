@@ -12,6 +12,8 @@
 //! - `0011_dhash_fuzzy_dedupe.sql`：采集去重升级为 dHash 阈值去重；存量近重复搬进
 //!   「已合并去重（重复）」收藏夹（保留高分在主瀑布流，见 hook）
 //! - `0013_local_agent_runs.sql`：本机 Agent 预览 checkpoint（不复用 generation task_queue）
+//! - `0014_generation_conversations.sql`：生成会话级分组（session → conversation 映射，
+//!   「重新编辑 / 重试」版本分支持久归组，瀑布流同会话轮播重启不丢）
 
 use rusqlite_migration::{Migrations, M};
 
@@ -37,6 +39,7 @@ pub fn migrations() -> Migrations<'static> {
         ),
         M::up(include_str!("../../sql/0012_projects_builtin.sql")),
         M::up(include_str!("../../sql/0013_local_agent_runs.sql")),
+        M::up(include_str!("../../sql/0014_generation_conversations.sql")),
     ])
 }
 

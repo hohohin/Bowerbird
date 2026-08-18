@@ -34,6 +34,17 @@ declare module "node:crypto" {
 
 declare module "node:fs" {
   export function readFileSync(path: number | string, encoding: "utf8"): string;
+  export function writeFileSync(path: string, data: string, encoding: "utf8"): void;
+  export function mkdirSync(path: string, options: { recursive: boolean }): string | undefined;
+}
+
+declare module "node:path" {
+  export function join(...paths: string[]): string;
+}
+
+interface ImportMeta {
+  /** Node ≥20.11 提供；本仓库 Node 24 运行时可用。 */
+  readonly dirname: string;
 }
 
 declare const console: {
@@ -45,6 +56,7 @@ declare const console: {
 declare const process: {
   env: Record<string, string | undefined>;
   exitCode?: number;
+  argv: string[];
 };
 
 declare function setTimeout(callback: () => void, delayMs: number): unknown;

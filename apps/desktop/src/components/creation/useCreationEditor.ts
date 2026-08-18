@@ -13,7 +13,9 @@ import { buildPlugins } from "./plugins";
 const PICK_EVENT = "bowerbird://board-asset-picked";
 const LOAD_EVENT = "bowerbird://board-load-prompt";
 
-function initialDoc() {
+function initialDoc(empty = false) {
+  // 空初始文档（会话底部对话框用）：不预填「请参考」，避免续轮误发送占位文字。
+  if (empty) return creationSchema.topNodeType.create(null, [creationSchema.nodes.paragraph.create()]);
   return creationSchema.topNodeType.create(null, [
     creationSchema.nodes.paragraph.create(null, [creationSchema.text("请参考")]),
   ]);
@@ -49,9 +51,10 @@ function saveDraft(key: string, doc: unknown, refs: PromptedAsset[]) {
  * 维度 chips 状态 / insertKeyword 供 UI 外壳消费。
  *
  * opts.draftKey：草稿持久化的 localStorage key。缺省 = 创作板自己的 bowerbird.boardDraft；
- * 传 null = 不持久化（生成会话「重新编辑」坞用——会话本身即记录，且不能覆盖创作板草稿）。
+ * 传 null = 不持久化（生成会话编辑坞用——会话本身即记录，且不能覆盖创作板草稿）。
+ * opts.initialEmpty：true = 初始文档为空（不预填「请参考」），会话底部对话框（续轮）用。
  */
-export function useCreationEditor(opts?: { draftKey?: string | null }) {
+export function useCreationEditor(opts?: { draftKey?: string | null; initialEmpty?: boolean }) {
   const draftKey = opts?.draftKey === undefined ? BOARD_DRAFT_KEY : opts.draftKey;
   const promptedAssets = useStore((s) => s.promptedAssets);
   // boardOpen 时 s.assets = 全部挑图（含未反推）；并入 assetById 让无 caption 图也能插为参考图，
@@ -95,9 +98,9 @@ export function useCreationEditor(opts?: { draftKey?: string | null }) {
     const saved = draftKey ? loadDraft(draftKey) : null;
     let startDoc;
     try {
-      startDoc = saved ? creationSchema.nodeFromJSON(saved.doc) : initialDoc();
+      startDoc = saved ? creationSchema.nodeFromJSON(saved.doc) : initialDoc(opts?.initialEmpty === true);
     } catch {
-      startDoc = initialDoc();
+      startDoc = initialDoc(opts?.initialEmpty === true);
     }
     if (saved && saved.refs.length) setExtraAssets(saved.refs);
     // 去抖保存：编辑频繁，400ms 静止后落盘（避免每次按键都写 localStorage）。
