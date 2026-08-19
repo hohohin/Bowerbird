@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Library, PanelLeftClose, PanelLeftOpen, Sparkles } from "lucide-react";
+import { EyeOff, FolderPlus, Library, PanelLeftClose, PanelLeftOpen, RefreshCw, Sparkles } from "lucide-react";
 import { useStore } from "../store";
 import { api } from "../lib/api";
 import { getDragAssets } from "../lib/dragPayload";
@@ -16,6 +16,11 @@ const COLOR_LABELS: Record<string, string> = {
   blue: "蓝", purple: "紫", pink: "粉", brown: "棕", gray: "灰",
   white: "白", black: "黑",
 };
+
+/** 项目圆标首字（中文名取第一个字），空名兜底 P。 */
+function projectInitial(name: string) {
+  return Array.from(name.trim())[0]?.toUpperCase() ?? "P";
+}
 
 const SIDEBAR_COLLAPSED_KEY = "bowerbird.sidebarCollapsed";
 const SIDEBAR_WIDTH_KEY = "bowerbird.sidebarWidth";
@@ -46,6 +51,9 @@ export function Sidebar() {
   const currentFolderId = useStore((s) => s.currentFolderId);
   const currentProjectId = useStore((s) => s.currentProjectId);
   const projects = useStore((s) => s.projects);
+  const enterProject = useStore((s) => s.enterProject);
+  const exitProject = useStore((s) => s.exitProject);
+  const openProjectContextMenu = useStore((s) => s.openProjectContextMenu);
   const currentCollectionId = useStore((s) => s.currentCollectionId);
   const setCurrentFolder = useStore((s) => s.setCurrentFolder);
   const colorFilter = useStore((s) => s.colorFilter);
@@ -88,11 +96,6 @@ export function Sidebar() {
   );
   const smartFolders = folders.filter((f) => f.id !== "root" && f.kind === "smart");
   const collections = folders.filter((f) => f.id !== "root" && f.kind === "collection");
-  const currentProject = projects.find((p) => p.id === currentProjectId) ?? null;
-  const currentContextName = currentProject?.name ?? "全局";
-  const currentContextInitial = currentProject
-    ? Array.from(currentProject.name.trim())[0]?.toUpperCase() ?? "P"
-    : "G";
 
   function setSidebarCollapsed(next: boolean) {
     setCollapsed(next);
@@ -156,6 +159,17 @@ export function Sidebar() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 窄轨检测：侧栏拖窄后「AI 新作」两段文字放不下 → 只留图标不换行。
+  // collapsed 变化时 ref 重新挂载，依赖它重绑 observer。
+  const [genIconsOnly, setGenIconsOnly] = useState(false);
+  useEffect(() => {
+    const el = sidebarRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setGenIconsOnly(el.offsetWidth < 195));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [collapsed]);
+
   function resetCreate() {
     setCreating("none");
     setDraftName("");
@@ -211,16 +225,40 @@ export function Sidebar() {
           <PanelLeftOpen size={17} />
         </button>
         <div className="app-sidebar-rail-divider" />
-        <SidebarStatus collapsed onExpand={() => setSidebarCollapsed(false)} />
-        <button
-          type="button"
-          onClick={() => setSidebarCollapsed(false)}
-          className={`app-sidebar-project-badge ${currentProject ? "is-project" : ""}`}
-          title={`${currentContextName} · 点击展开侧栏`}
-          aria-label={`当前项目：${currentContextName}。点击展开侧栏`}
-        >
-          {currentContextInitial}
-        </button>
+        <SidebarStatus collapsed />
+        <div className="app-sidebar-rail-divider" />
+        {/* 项目圆标轨：G=全局 + 每个项目一枚首字圆标，点击直接切换（不展开侧栏）。 */}
+        <div className="flex w-full flex-1 flex-col items-center gap-2 overflow-y-auto py-1">
+          <button
+            type="button"
+            onClick={() => currentProjectId && void exitProject()}
+            className={`app-sidebar-project-badge ${currentProjectId ? "" : "is-active"}`}
+            title="全局素材"
+            aria-label="全局素材"
+          >
+            G
+          </button>
+          {projects.map((p) => {
+            const active = p.id === currentProjectId;
+            return (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => !active && void enterProject(p.id)}
+                onContextMenu={(e) => {
+                  // 收起态圆标同样支持项目右键菜单（更新项目文件等）。
+                  e.preventDefault();
+                  openProjectContextMenu(e.clientX, e.clientY, p.id);
+                }}
+                className={`app-sidebar-project-badge ${active ? "is-active" : ""}`}
+                title={p.name}
+                aria-label={`切换到项目 ${p.name}`}
+              >
+                {projectInitial(p.name)}
+              </button>
+            );
+          })}
+        </div>
       </aside>
     );
   }
@@ -250,10 +288,10 @@ export function Sidebar() {
         <span className="flex gap-2 normal-case tracking-normal">
           <button
             onClick={() => (creating === "folder" ? resetCreate() : startCreate("folder"))}
-            className="rounded text-accent hover:opacity-80"
+            className="rounded px-1 text-cold hover:opacity-80"
             title="新建文件夹"
           >
-            + 文件夹
+            <FolderPlus size={13} />
           </button>
         </span>
       </div>
@@ -325,19 +363,6 @@ export function Sidebar() {
           <Library size={15} className="text-muted" />
           {currentProjectId ? "项目全部" : "全部素材"}
         </button>
-        <button
-          type="button"
-          className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left ${
-            smartFilter === "source:generated" ? "bg-panel2" : "hover:bg-panel2"
-          }`}
-          onClick={() =>
-            setSmartFilter(smartFilter === "source:generated" ? null : "source:generated")
-          }
-          title="只看生成图（codex / 即梦 / Bowerbird Cloud）"
-        >
-          <Sparkles size={15} className="text-muted" />
-          AI 新作
-        </button>
         {normalFolders.map((f) => (
           <FolderRow key={f.id} folder={f} />
         ))}
@@ -378,7 +403,7 @@ export function Sidebar() {
               {smartFilter?.startsWith("tag:") && (
                 <button
                   onClick={() => setSmartFilter(null)}
-                  className="text-accent hover:opacity-80"
+                  className="text-cold hover:opacity-80"
                 >
                   清除
                 </button>
@@ -393,9 +418,9 @@ export function Sidebar() {
                     ? `使用 ${understandLabel} 重新归类`
                     : "免费版需要先登录 Bowerbird Cloud；Pro 可使用本机 CLI"
                 }
-                className="text-accent hover:opacity-80 disabled:opacity-40"
+                className="rounded px-1 text-cold hover:opacity-80 disabled:opacity-40"
               >
-                ⟳ 刷新
+                <RefreshCw size={13} />
               </button>
             </span>
           </div>
@@ -434,7 +459,7 @@ export function Sidebar() {
               {colorFilter && (
                 <button
                   onClick={() => setColorFilter(null)}
-                  className="text-accent hover:opacity-80"
+                  className="text-cold hover:opacity-80"
                 >
                   清除
                 </button>
@@ -445,9 +470,9 @@ export function Sidebar() {
                 }
                 disabled={!!colorRebuild}
                 title="重建色板（后台重新量化全库主色）"
-                className="text-accent hover:opacity-80 disabled:opacity-40"
+                className="rounded px-1 text-cold hover:opacity-80 disabled:opacity-40"
               >
-                ⟳ 刷新
+                <RefreshCw size={13} />
               </button>
             </span>
           </div>
@@ -475,7 +500,40 @@ export function Sidebar() {
         </>
       )}
       </div>
-      {/* 素材数量小字 + 账号区：常驻左下角，不随内容滚动 */}
+      {/* 生成图显示模式 + 素材数量小字 + 账号区：常驻左下角，不随内容滚动 */}
+      <div className="px-3 pt-2">
+        <div className="mb-1.5 text-[10px] uppercase tracking-wide text-muted">生成图显示模式</div>
+        {/* 左右两段开关（样式同详情面板「信息/再创作」tab）——左=仅生成图，右=隐藏生成图；
+            再点当前段取消（显示全部）；窄轨只留图标不换行。 */}
+        <div className="app-sidebar-gen-toggle" role="tablist" aria-label="生成图显示模式">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={smartFilter === "source:generated"}
+            className={smartFilter === "source:generated" ? "is-active" : ""}
+            onClick={() =>
+              setSmartFilter(smartFilter === "source:generated" ? null : "source:generated")
+            }
+            title="只看生成图（codex / 即梦 / Bowerbird Cloud）；再点一次显示全部"
+          >
+            <Sparkles size={13} />
+            {!genIconsOnly && "仅生成图"}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={smartFilter === "source:!generated"}
+            className={smartFilter === "source:!generated" ? "is-active" : ""}
+            onClick={() =>
+              setSmartFilter(smartFilter === "source:!generated" ? null : "source:!generated")
+            }
+            title="隐藏所有生成图，只看导入素材；再点一次显示全部"
+          >
+            <EyeOff size={13} />
+            {!genIconsOnly && "隐藏生成图"}
+          </button>
+        </div>
+      </div>
       <div className="px-3 pb-0.5 pt-2 text-[10px] uppercase tracking-wide text-muted">
         {currentProjectId ? "Project assets" : "Library assets"} · {total}
       </div>

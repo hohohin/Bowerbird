@@ -1,4 +1,5 @@
-import type { Command } from "prosemirror-state";
+import type { Command, EditorState } from "prosemirror-state";
+import { Plugin } from "prosemirror-state";
 import { keymap } from "prosemirror-keymap";
 import { baseKeymap } from "prosemirror-commands";
 import { undo, redo, history } from "prosemirror-history";
@@ -11,6 +12,8 @@ export interface PluginDeps {
   viewRef: { current: EditorView | null };
   assetByIdRef: { current: Map<string, PromptedAsset> };
   chipSectionsRef: { current: CaptionSection[] };
+  /** chipSections 的源图（最近呼环 assetId）：手输维度 chip 绑定它，图 chip 被删后序列化仍能展开其正文 */
+  chipAssetIdRef: { current: string | null };
 }
 
 /**
@@ -55,7 +58,7 @@ function smartPunct(punct: string, deps: PluginDeps): Command {
       }
     }
 
-    // ② 维度 endsWith（body 一并存入：手输触发时取当前 chipAssetId 同名维度的反推正文）
+    // ② 维度 endsWith（body / assetId 一并存入：手输触发时绑定呼环图，同名维度取其反推正文）
     const m = deps.chipSectionsRef.current.find((s) => before.endsWith(s.title));
     if (m) {
       if (dispatch) {
@@ -63,7 +66,11 @@ function smartPunct(punct: string, deps: PluginDeps): Command {
         tr.replaceWith(
           paraStart + before.length - m.title.length,
           $head.pos,
-          state.schema.nodes.keyword.create({ title: m.title, body: m.body })
+          state.schema.nodes.keyword.create({
+            title: m.title,
+            body: m.body,
+            assetId: deps.chipAssetIdRef.current,
+          })
         );
         if (punct !== "Enter") tr.insertText(punct);
         dispatch(tr.scrollIntoView());
@@ -89,5 +96,17 @@ export function buildPlugins(deps: PluginDeps) {
     keymap({ "Mod-z": undo, "Mod-y": redo, "Mod-Shift-z": redo }),
     keymap(punctKeys),
     keymap(baseKeymap),
+    // 空编辑框占位：doc 只剩一个空段落时给 ProseMirror 根打 is-empty class（随每次
+    // state 更新重算），CSS 据此显示「描述你的意图，开始创作吧」占位提示。
+    new Plugin({
+      props: {
+        attributes: (state: EditorState): Record<string, string> =>
+          state.doc.childCount === 1 &&
+          state.doc.firstChild?.isTextblock === true &&
+          state.doc.firstChild.content.size === 0
+            ? { class: "is-empty" }
+            : {},
+      },
+    }),
   ];
 }

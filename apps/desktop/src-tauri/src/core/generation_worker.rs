@@ -59,6 +59,7 @@ pub async fn finalize_generation_assets(
     submit_id: Option<String>,
     provider: String,
     project_id: Option<String>,
+    codex_thread: Option<String>,
 ) -> AppResult<Vec<Asset>> {
     let source_tag = provider_source_tag(&provider).to_string();
 
@@ -96,6 +97,8 @@ pub async fn finalize_generation_assets(
 
         // generation_meta（详情页「✨ 生成来源」卡片；payload 增 submit_id 供事后取回）。
         // prompt = 铺开发 provider 用；prompt_raw = 未铺开的原始编辑框文本，复用时载入还原 chip。
+        // codex_thread = codex 轮的真实 thread id（与即梦 submit_id 对称的续接句柄）：非 codex
+        // 原生会话（即梦/Cloud 会话）切 codex 时靠它让连续 codex 轮共享一个 thread（下轮 resume）。
         let meta_payload = serde_json::json!({
             "prompt": prompt,
             "prompt_raw": prompt_raw,
@@ -103,6 +106,7 @@ pub async fn finalize_generation_assets(
             "references": references,
             "provider": provider,
             "submit_id": submit_id,
+            "codex_thread": codex_thread,
         })
         .to_string();
         for a in &out {
@@ -221,6 +225,8 @@ async fn recover_one_cloud_job(
     let auth = app.state::<crate::cloud::AuthClient>().inner().clone();
     match crate::codex::bowerbird_cloud::recover_cloud_generation(&cloud, &auth, &submit_id).await {
         Ok((src_images, temp_dir)) => {
+            // 会话语义（同即梦恢复）：job 死在续轮时记回会话首轮 session，不把历史撕成两段。
+            let session_for_meta = job.session_id.clone().or_else(|| Some(submit_id.clone()));
             match finalize_generation_assets(
                 app.clone(),
                 db.clone(),
@@ -230,11 +236,12 @@ async fn recover_one_cloud_job(
                 job.prompt.clone(),
                 None,
                 job.references.clone(),
-                Some(submit_id.clone()),
+                session_for_meta.clone(),
                 job.conversation_id.clone(),
                 Some(submit_id.clone()),
                 "bowerbird-cloud".to_string(),
                 job.project_id.clone(),
+                None,
             )
             .await
             {
@@ -246,7 +253,7 @@ async fn recover_one_cloud_job(
                     let _ = Task::mark_done(&db, &job.id);
                     let _ = app.emit(
                         "codex://chunk",
-                        serde_json::json!({ "kind": "done", "job_id": job.id, "images": asset_paths, "provider": "bowerbird-cloud", "session_id": submit_id, "text": "", "elapsed_ms": 0 }),
+                        serde_json::json!({ "kind": "done", "job_id": job.id, "images": asset_paths, "provider": "bowerbird-cloud", "session_id": session_for_meta, "text": "", "elapsed_ms": 0 }),
                     );
                     let _ = app.emit("library://assets-changed", ());
                 }
@@ -306,6 +313,10 @@ async fn recover_one_jimeng_job(
             let temp_dir = src_images
                 .first()
                 .and_then(|p| p.parent().map(|x| x.to_path_buf()));
+            // 会话语义：job 死在续轮时 task_queue 已有会话首轮 session（即梦首轮 submit_id），
+            // meta/done 都要记回该 session（记成本轮自己的 submit_id 会把会话历史撕裂成两段，
+            // 前端回看/重启恢复只剩半截）；死在首轮则本轮 submit_id 即会话 id。
+            let session_for_meta = job.session_id.clone().or_else(|| Some(submit_id.clone()));
             match finalize_generation_assets(
                 app.clone(),
                 db.clone(),
@@ -315,11 +326,12 @@ async fn recover_one_jimeng_job(
                 job.prompt.clone(),
                 None,
                 job.references.clone(),
-                Some(submit_id.clone()),
+                session_for_meta.clone(),
                 job.conversation_id.clone(),
                 Some(submit_id.clone()),
                 "jimeng".to_string(),
                 job.project_id.clone(),
+                None,
             )
             .await
             {
@@ -331,7 +343,7 @@ async fn recover_one_jimeng_job(
                     let _ = Task::mark_done(&db, &job.id);
                     let _ = app.emit(
                         "codex://chunk",
-                        serde_json::json!({ "kind": "done", "job_id": job.id, "images": asset_paths, "provider": "jimeng", "session_id": submit_id, "text": "", "elapsed_ms": 0 }),
+                        serde_json::json!({ "kind": "done", "job_id": job.id, "images": asset_paths, "provider": "jimeng", "session_id": session_for_meta, "text": "", "elapsed_ms": 0 }),
                     );
                     let _ = app.emit("library://assets-changed", ());
                 }

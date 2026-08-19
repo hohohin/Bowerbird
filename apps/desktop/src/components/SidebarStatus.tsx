@@ -26,7 +26,8 @@ import type { GenJob } from "../lib/types";
  * 生成会话行：点击 → 打开 GenerationPanel 并选中该 job；hover 出 × 删除任务记录
  * （removeGenJob 仅删前端记录，不动后端任务与已入库图片）。
  *
- * 侧栏折叠态（72px 窄轨）：只渲染圆点，点击 = 展开侧栏。
+ * 侧栏折叠态（72px 窄轨）：只渲染圆点 + 悬浮会话面板——点击圆点直接弹面板
+ * （左缘挂窄轨右缘），不展开侧栏。
  *
  * 状态全部来自全局 store：反推（describingId / describingName / describeQueue）、生成（generating /
  * genJobs / genJobOrder / genUnread / genPanelOpen）、导入即基础分析（autoAnalyzing）。
@@ -37,7 +38,7 @@ function providerLabel(provider?: string | null): string {
   return "codex";
 }
 
-export function SidebarStatus({ collapsed, onExpand }: { collapsed?: boolean; onExpand?: () => void }) {
+export function SidebarStatus({ collapsed }: { collapsed?: boolean }) {
   const generating = useStore((s) => s.generating);
   const describingId = useStore((s) => s.describingId);
   const describingName = useStore((s) => s.describingName);
@@ -80,7 +81,10 @@ export function SidebarStatus({ collapsed, onExpand }: { collapsed?: boolean; on
 
   function measureRing() {
     const r = ringRef.current?.getBoundingClientRect();
-    if (r) setAnchor({ top: r.top, left: r.right });
+    if (!r) return;
+    // 折叠态圆点在窄轨居中，按圆点右缘定位会压住项目圆标轨——左缘改挂窄轨右缘。
+    const rail = collapsed ? ringRef.current?.closest("aside")?.getBoundingClientRect() : null;
+    setAnchor({ top: r.top, left: rail ? rail.right : r.right });
   }
 
   // 收回：先播 status-session-out（150ms），到点再卸载；已在收回中则忽略（防重复计时）。
@@ -163,16 +167,19 @@ export function SidebarStatus({ collapsed, onExpand }: { collapsed?: boolean; on
   const expanded = !collapsed && (runningGroups.length > 0 || describeRunning);
   // 面板生成 tab：最新会话在前（长久使用，最近的对话最常回看）。
   const panelGroups = [...genGroups].reverse();
+  // 两条渲染分支（折叠提前 return 之前）都要用：sessionPanel 在折叠分支也会执行。
+  const inlineDescribeCount = (describingId ? 1 : 0) + queue.length;
+  const panelDescribeCount = inlineDescribeCount + failures.length;
 
   function dotButton(className: string, ref?: Ref<HTMLButtonElement>) {
     return (
       <button
         ref={ref}
         type="button"
-        onClick={() => (collapsed ? onExpand?.() : togglePanel())}
-        title={collapsed ? `${title} · 展开侧栏查看` : title}
+        onClick={togglePanel}
+        title={title}
         aria-label={title}
-        aria-expanded={collapsed ? undefined : sessOpen}
+        aria-expanded={sessOpen}
         className={`app-icon-button relative cursor-pointer p-1 outline-none ${className}`}
       >
         {generating ? (
@@ -203,9 +210,14 @@ export function SidebarStatus({ collapsed, onExpand }: { collapsed?: boolean; on
     );
   }
 
-  // 折叠窄轨：只有圆点，点击展开侧栏（悬浮面板随之卸载）。
+  // 折叠窄轨：圆点点击直接弹悬浮会话面板（不展开侧栏）；sessionPanel 函数声明提升，可在此调用。
   if (collapsed) {
-    return <div className="flex w-full justify-center py-1">{dotButton("")}</div>;
+    return (
+      <div className="flex w-full justify-center py-1">
+        {dotButton("", ringRef)}
+        {sessionPanel()}
+      </div>
+    );
   }
 
   // 会话行的参考图「拖影」缩略图堆：至多 5 张；前 3 张全显，多出的以低透明度叠在
@@ -358,8 +370,65 @@ export function SidebarStatus({ collapsed, onExpand }: { collapsed?: boolean; on
     );
   }
 
-  const inlineDescribeCount = (describingId ? 1 : 0) + queue.length;
-  const panelDescribeCount = inlineDescribeCount + failures.length;
+  // 悬浮会话面板本体：展开/折叠两条渲染分支共用（折叠窄轨的提前 return 也调用它）。
+  function sessionPanel() {
+    if (!sessOpen || !anchor) return null;
+    return (
+      // top/left 由圆点锚点注入（左上角接圆点；折叠态左缘接窄轨右缘），bottom=0 与侧栏同高。
+      <div
+        ref={panelRef}
+        className={`status-session-panel ${closing ? "is-closing" : ""}`}
+        style={{ top: anchor.top, left: anchor.left, bottom: 0 }}
+        role="dialog"
+        aria-label="任务会话面板"
+      >
+        <div className="flex h-9 shrink-0 items-center gap-2 border-b border-edge pl-3 pr-2">
+          <span className="min-w-0 truncate text-[10px] uppercase tracking-wide text-muted">
+            {tab === "gen" ? `生成会话（${genGroups.length}）` : `反推任务（${panelDescribeCount}）`}
+          </span>
+          {/* 生成 / 反推 切换（面板右上） */}
+          <div className="ml-auto flex shrink-0 rounded-full border border-edge bg-panel p-0.5 text-[11px]">
+            <button
+              type="button"
+              onClick={() => setTab("gen")}
+              className={`rounded-full px-2.5 py-0.5 ${
+                tab === "gen" ? "bg-accent/25 text-ink" : "text-muted hover:text-ink"
+              }`}
+            >
+              生成
+            </button>
+            <button
+              type="button"
+              onClick={() => setTab("describe")}
+              className={`relative rounded-full px-2.5 py-0.5 ${
+                tab === "describe" ? "bg-accent/25 text-ink" : "text-muted hover:text-ink"
+              }`}
+            >
+              反推
+              {failures.length > 0 && (
+                <span className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-red-400" />
+              )}
+            </button>
+          </div>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-1">
+          {tab === "gen" ? (
+            panelGroups.length === 0 ? (
+              <div className="px-3 py-6 text-center text-xs leading-5 text-muted">
+                暂无生成会话
+                <br />
+                在创作板发送后，会话会出现在这里
+              </div>
+            ) : (
+              panelGroups.map((g, i) => genGroupRow(g, i, true))
+            )
+          ) : (
+            describePanelRows()
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="mb-4">
@@ -410,61 +479,7 @@ export function SidebarStatus({ collapsed, onExpand }: { collapsed?: boolean; on
           )}
         </div>
       )}
-      {sessOpen && anchor && (
-        // 悬浮会话面板：top/left 由圆点锚点注入（左上角接圆点），bottom=0 与侧栏同高。
-        <div
-          ref={panelRef}
-          className={`status-session-panel ${closing ? "is-closing" : ""}`}
-          style={{ top: anchor.top, left: anchor.left, bottom: 0 }}
-          role="dialog"
-          aria-label="任务会话面板"
-        >
-          <div className="flex h-9 shrink-0 items-center gap-2 border-b border-edge pl-3 pr-2">
-            <span className="min-w-0 truncate text-[10px] uppercase tracking-wide text-muted">
-              {tab === "gen" ? `生成会话（${genGroups.length}）` : `反推任务（${panelDescribeCount}）`}
-            </span>
-            {/* 生成 / 反推 切换（面板右上） */}
-            <div className="ml-auto flex shrink-0 rounded-full border border-edge bg-panel p-0.5 text-[11px]">
-              <button
-                type="button"
-                onClick={() => setTab("gen")}
-                className={`rounded-full px-2.5 py-0.5 ${
-                  tab === "gen" ? "bg-accent/25 text-ink" : "text-muted hover:text-ink"
-                }`}
-              >
-                生成
-              </button>
-              <button
-                type="button"
-                onClick={() => setTab("describe")}
-                className={`relative rounded-full px-2.5 py-0.5 ${
-                  tab === "describe" ? "bg-accent/25 text-ink" : "text-muted hover:text-ink"
-                }`}
-              >
-                反推
-                {failures.length > 0 && (
-                  <span className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-red-400" />
-                )}
-              </button>
-            </div>
-          </div>
-          <div className="min-h-0 flex-1 overflow-y-auto p-1">
-            {tab === "gen" ? (
-              panelGroups.length === 0 ? (
-                <div className="px-3 py-6 text-center text-xs leading-5 text-muted">
-                  暂无生成会话
-                  <br />
-                  在创作板发送后，会话会出现在这里
-                </div>
-              ) : (
-                panelGroups.map((g, i) => genGroupRow(g, i, true))
-              )
-            ) : (
-              describePanelRows()
-            )}
-          </div>
-        </div>
-      )}
+      {sessionPanel()}
     </div>
   );
 }

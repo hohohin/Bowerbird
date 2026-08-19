@@ -2,8 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-shell";
+import { RefreshCw } from "lucide-react";
 import { useStore, understandEngineUsable } from "../store";
 import { api } from "../lib/api";
+import { CODEX_ONBOARDING_ENABLED, DREAMINA_ONBOARDING_ENABLED } from "../lib/featureFlags";
 import { DEFAULT_AUTO_ANALYZE_PROMPT, WEBSITE_URL } from "../lib/constants";
 import type { MigrateProgress } from "../lib/types";
 import { ModalShell } from "./ModalShell";
@@ -16,9 +18,9 @@ const STAGE_LABEL: Record<string, string> = {
 
 type SectionKey = "system" | "account" | "models" | "personalization" | "about";
 
-/** 即梦 CLI 模型版本选项（dreamina `--model_version`；不含 3.0/3.1——image2image 仅 4.0+，
+/** 即梦 CLI 模型版本选项（dreamina `--model_version`；仅保留 4.7+——image2image 仅 4.0+，
  *  而创作板参考图生成是核心路径；与后端 settings 默认一致取 5.0Pro）。 */
-const DREAMINA_MODEL_OPTIONS = ["4.0", "4.1", "4.5", "4.6", "4.7", "5.0", "5.0Pro"];
+const DREAMINA_MODEL_OPTIONS = ["4.7", "5.0", "5.0Pro"];
 const DEFAULT_DREAMINA_MODEL_VERSION = "5.0Pro";
 
 /**
@@ -98,6 +100,18 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [checkingCodex, setCheckingCodex] = useState(false);
   const [checkingDreamina, setCheckingDreamina] = useState(false);
 
+  // —— codex「登录授权」一键流程（检测 → 安装 → 浏览器登录）——
+  const [codexAuthBusy, setCodexAuthBusy] = useState(false);
+  const [codexAuthLine, setCodexAuthLine] = useState<string | null>(null);
+  const [codexAuthFailed, setCodexAuthFailed] = useState(false);
+  const codexAuthRunningRef = useRef(false);
+
+  // —— dreamina「登录授权」一键流程（检测 → 安装 → 浏览器授权 → checklogin 轮询）——
+  const [dreaminaAuthBusy, setDreaminaAuthBusy] = useState(false);
+  const [dreaminaAuthLine, setDreaminaAuthLine] = useState<string | null>(null);
+  const [dreaminaAuthFailed, setDreaminaAuthFailed] = useState(false);
+  const dreaminaAuthRunningRef = useRef(false);
+
   // 本地编辑态：打开面板时从 store 快照初始化，失焦/按键时写回。
   const [autoAnalyzeOnIngest, setAutoAnalyzeOnIngest] = useState(false);
   const [promptText, setPromptText] = useState("");
@@ -154,6 +168,39 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     };
   }, [setCodexHealth]);
 
+  // 「登录授权」进度：安装 / 登录经 codex://setup-progress 推 {stage, line, percent?}，
+  // 取最新一行写小字（直装下载带 percent）。仅在授权流程进行中受理（ref 防陈旧闭包）。
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    let alive = true;
+    listen<{ stage: string; line: string; percent?: number | null }>("codex://setup-progress", (e) => {
+      if (!codexAuthRunningRef.current) return;
+      const pct = typeof e.payload.percent === "number" ? `（${e.payload.percent}%）` : "";
+      setCodexAuthFailed(false);
+      setCodexAuthLine(`${e.payload.line}${pct}`);
+    }).then((u) => (alive ? (unlisten = u) : u()));
+    return () => {
+      alive = false;
+      unlisten?.();
+    };
+  }, []);
+
+  // 即梦「登录授权」进度：安装经 dreamina://setup-progress 推 {stage, line}（无 percent），
+  // 取最新一行写小字。仅在授权流程进行中受理（ref 防陈旧闭包）。
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    let alive = true;
+    listen<{ stage: string; line: string }>("dreamina://setup-progress", (e) => {
+      if (!dreaminaAuthRunningRef.current) return;
+      setDreaminaAuthFailed(false);
+      setDreaminaAuthLine(e.payload.line);
+    }).then((u) => (alive ? (unlisten = u) : u()));
+    return () => {
+      alive = false;
+      unlisten?.();
+    };
+  }, []);
+
   // store.settings 加载完毕后首充本地状态（仅首次）。
   useEffect(() => {
     if (settings && !initialized.current) return; // 首次由下面这个 effect 填充
@@ -202,14 +249,136 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     }
   }
 
+  /** 「登录授权」一键流程：检测 → 缺 CLI 则自动安装（进度接管小字）→ codex login 开浏览器
+   *  走 ChatGPT OAuth。进行中再点为取消（复用 CodexOnboarding 的交互约定）。 */
+  async function startCodexAuth() {
+    if (codexAuthBusy) {
+      void api.cancelCodexSetup();
+      return;
+    }
+    setCodexAuthBusy(true);
+    codexAuthRunningRef.current = true;
+    setCodexAuthFailed(false);
+    setCodexAuthLine("检测环境中…");
+    try {
+      let h = await api.codexHealth();
+      setCodexHealth(h);
+      // 未装 CLI（既非就绪也非「已装未登录」）→ 先自动安装。
+      if (!h.ok && !h.reason.includes("未登录")) {
+        setCodexAuthLine("准备安装 codex CLI…");
+        const installed = await api.codexInstall();
+        if (!installed.ok) {
+          setCodexHealth(installed);
+          setCodexAuthFailed(true);
+          setCodexAuthLine(installed.reason);
+          return;
+        }
+        h = await api.codexHealth();
+        setCodexHealth(h);
+      }
+      if (h.ok) {
+        setCodexAuthLine("已就绪，无需授权");
+        return;
+      }
+      // 已装未登录 → codex login（自己开系统浏览器）。
+      const r = await api.codexLogin();
+      setCodexHealth(r);
+      setCodexAuthFailed(!r.ok);
+      setCodexAuthLine(r.ok ? "✓ 授权成功" : r.reason);
+    } catch (e) {
+      const msg = String(e);
+      if (msg.includes("已取消")) setCodexAuthLine(null);
+      else {
+        setCodexAuthFailed(true);
+        setCodexAuthLine(msg);
+      }
+    } finally {
+      codexAuthRunningRef.current = false;
+      setCodexAuthBusy(false);
+    }
+  }
+
   async function recheckDreamina() {
     setCheckingDreamina(true);
     try {
-      setDreaminaHealth(await api.dreaminaHealth());
+      // force=true 跳过 120s TTL 缓存：手动「重新检测」要看真实登录态（后端 dreamina_health 约定）。
+      setDreaminaHealth(await api.dreaminaHealth(true));
     } catch {
       setDreaminaHealth({ ok: false, reason: "dreamina 状态检测失败" });
     } finally {
       setCheckingDreamina(false);
+    }
+  }
+
+  /** 即梦「登录授权」一键流程：检测 → 缺 CLI 则自动安装（进度接管小字）→ headless 拿
+   *  device flow 自动开浏览器授权 → checklogin 轮询写 token（DreaminaOnboarding 方案 B 同链路）。 */
+  async function startDreaminaAuth() {
+    if (dreaminaAuthBusy) {
+      void api.cancelDreaminaSetup();
+      return;
+    }
+    setDreaminaAuthBusy(true);
+    dreaminaAuthRunningRef.current = true;
+    setDreaminaAuthFailed(false);
+    setDreaminaAuthLine("检测环境中…");
+    try {
+      let h = await api.dreaminaHealth(true);
+      setDreaminaHealth(h);
+      // 未装 CLI → 先自动安装。
+      if (!h.ok && h.reason.includes("未检测到")) {
+        setDreaminaAuthLine("准备安装 dreamina CLI…");
+        const installed = await api.dreaminaInstall();
+        if (!installed.ok) {
+          setDreaminaHealth(installed);
+          setDreaminaAuthFailed(true);
+          setDreaminaAuthLine(installed.reason);
+          return;
+        }
+        h = await api.dreaminaHealth(true);
+        setDreaminaHealth(h);
+      }
+      if (h.ok) {
+        setDreaminaAuthLine("已就绪，无需授权");
+        return;
+      }
+      // 已装未登录 → headless 拿授权链接自动开浏览器，checklogin 轮询等授权完成（约 1 分钟）。
+      const flow = await api.dreaminaLoginHeadless();
+      try {
+        await open(flow.verification_uri);
+      } catch {
+        setDreaminaAuthLine(`浏览器打开失败，请手动访问：${flow.verification_uri}`);
+      }
+      setDreaminaAuthLine(
+        `请在浏览器完成即梦授权${flow.user_code ? `（授权码 ${flow.user_code}）` : ""}…`,
+      );
+      const r = await api.dreaminaCheckLogin(flow.device_code);
+      setDreaminaHealth(r);
+      setDreaminaAuthFailed(!r.ok);
+      setDreaminaAuthLine(r.ok ? "✓ 授权成功" : r.reason);
+    } catch (e) {
+      const msg = String(e);
+      if (msg.includes("已取消")) setDreaminaAuthLine(null);
+      else {
+        setDreaminaAuthFailed(true);
+        setDreaminaAuthLine(msg);
+      }
+    } finally {
+      dreaminaAuthRunningRef.current = false;
+      setDreaminaAuthBusy(false);
+    }
+  }
+
+  /** 登出即梦账号：登出入口原本只在 DreaminaOnboarding（入口已暂隐），收敛到卡片小字。 */
+  async function logoutDreamina() {
+    setDreaminaAuthFailed(false);
+    setDreaminaAuthLine("登出中…");
+    try {
+      await api.dreaminaLogout();
+      setDreaminaHealth(await api.dreaminaHealth(true));
+      setDreaminaAuthLine(null);
+    } catch (e) {
+      setDreaminaAuthFailed(true);
+      setDreaminaAuthLine(String(e));
     }
   }
 
@@ -390,9 +559,9 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                     startTour();
                     onClose();
                   }}
-                  className="mt-2 rounded-md bg-panel px-3 py-1 text-[12px] text-ink hover:bg-edge"
+                  className="mt-2 rounded-md bg-accent px-3 py-1 text-[12px] font-medium text-white hover:opacity-90"
                 >
-                  开始分步引导
+                  新手引导
                 </button>
               </div>
             </>
@@ -505,106 +674,161 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
 
           {section === "models" && (
             <>
-              {/* codex CLI（原「环境状态」拆出）：状态 + 引导 */}
+              {/* 使用自有 ChatGPT 订阅（codex CLI）：状态 + 一键登录授权；引导弹窗入口随 CODEX_ONBOARDING_ENABLED 暂隐 */}
               <div className="settings-card px-3 py-2.5">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-ink">codex CLI</span>
-                  <span
-                    className={`rounded px-2 py-0.5 text-xs ${
-                      codexHealth?.ok
-                        ? "bg-green-500/15 text-green-400"
-                        : "bg-red-500/15 text-red-300"
-                    }`}
-                    title={codexHealth?.reason}
-                  >
-                    {codexHealth?.ok ? "✓ 就绪" : "✗ 未就绪"}
+                  <span className="text-ink">使用自有ChatGPT订阅</span>
+                  <span className="flex items-center gap-1.5">
+                    <span
+                      className={`rounded px-2 py-0.5 text-xs ${
+                        codexHealth?.ok
+                          ? "bg-green-500/15 text-green-400"
+                          : "bg-red-500/15 text-red-300"
+                      }`}
+                      title={codexHealth?.reason}
+                    >
+                      {codexHealth?.ok ? "✓ 就绪" : "✗ 未就绪"}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => void recheckCodex()}
+                      disabled={checkingCodex}
+                      title="重新检测"
+                      aria-label="重新检测 codex 状态"
+                      className="flex size-6 shrink-0 items-center justify-center rounded text-muted hover:bg-edge hover:text-ink disabled:opacity-50"
+                    >
+                      <RefreshCw size={13} className={checkingCodex ? "animate-spin" : undefined} />
+                    </button>
                   </span>
                 </div>
                 <p className="mt-1 text-xs text-muted">
                   用 ChatGPT 订阅反推 / 生成 / 命名；仅 Pro / Studio 可用，不配置也不影响本地素材库。
                 </p>
-                <div className="mt-2 flex gap-2">
+                <div className="mt-2 flex items-center gap-2">
                   <button
-                    onClick={() => void recheckCodex()}
-                    disabled={checkingCodex}
-                    className="rounded-md bg-panel px-3 py-1 text-[12px] text-ink hover:bg-edge disabled:opacity-50"
+                    onClick={() => void startCodexAuth()}
+                    title={codexAuthBusy ? "点击取消当前授权流程" : "自动检测并安装必要配置，随后打开浏览器登录"}
+                    className="shrink-0 rounded-md bg-accent px-3 py-1 text-[12px] font-medium text-black hover:opacity-90"
                   >
-                    {checkingCodex ? "检测中…" : "重新检测"}
+                    {codexAuthBusy ? "取消" : "登录授权"}
                   </button>
+                  {codexAuthLine && (
+                    <span
+                      className={`min-w-0 truncate text-[11px] ${
+                        codexAuthFailed ? "text-red-300" : "text-muted"
+                      }`}
+                      title={codexAuthLine}
+                    >
+                      {codexAuthLine}
+                    </span>
+                  )}
+                </div>
+                {CODEX_ONBOARDING_ENABLED && (
                   <button
                     onClick={() => {
                       setCodexOnboardingForceOpen(true);
                       onClose();
                     }}
-                    className="rounded-md bg-panel px-3 py-1 text-[12px] text-ink hover:bg-edge"
+                    className="mt-2 rounded-md bg-panel px-3 py-1 text-[12px] text-ink hover:bg-edge"
                   >
                     {codexHealth?.ok ? "查看引导" : "前往配置"}
                   </button>
-                </div>
+                )}
               </div>
 
-              {/* 即梦 dreamina CLI（原「环境状态」拆出）：状态 + 引导 */}
+              {/* 使用自有即梦订阅（dreamina CLI）：状态 + 一键登录授权；引导弹窗入口随 DREAMINA_ONBOARDING_ENABLED 暂隐 */}
               <div className="settings-card px-3 py-2.5">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-ink">即梦 dreamina CLI</span>
-                  <span
-                    className={`rounded px-2 py-0.5 text-xs ${
-                      dreaminaHealth?.ok
-                        ? "bg-green-500/15 text-green-400"
-                        : "bg-red-500/15 text-red-300"
-                    }`}
-                    title={dreaminaHealth?.reason}
-                  >
-                    {dreaminaHealth?.ok ? "✓ 就绪" : "✗ 未就绪"}
+                  <span className="text-ink">使用自有即梦订阅</span>
+                  <span className="flex items-center gap-1.5">
+                    <span
+                      className={`rounded px-2 py-0.5 text-xs ${
+                        dreaminaHealth?.ok
+                          ? "bg-green-500/15 text-green-400"
+                          : "bg-red-500/15 text-red-300"
+                      }`}
+                      title={dreaminaHealth?.reason}
+                    >
+                      {dreaminaHealth?.ok ? "✓ 就绪" : "✗ 未就绪"}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => void recheckDreamina()}
+                      disabled={checkingDreamina}
+                      title="重新检测"
+                      aria-label="重新检测即梦状态"
+                      className="flex size-6 shrink-0 items-center justify-center rounded text-muted hover:bg-edge hover:text-ink disabled:opacity-50"
+                    >
+                      <RefreshCw size={13} className={checkingDreamina ? "animate-spin" : undefined} />
+                    </button>
                   </span>
                 </div>
                 <p className="mt-1 text-xs text-muted">
                   备选出图引擎，使用即梦会员积分；不配置也不影响 codex 出图和本地功能。
                 </p>
-                <div className="mt-2 flex gap-2">
+                <div className="mt-2 flex items-center gap-2">
                   <button
-                    onClick={() => void recheckDreamina()}
-                    disabled={checkingDreamina}
-                    className="rounded-md bg-panel px-3 py-1 text-[12px] text-ink hover:bg-edge disabled:opacity-50"
+                    onClick={() => void startDreaminaAuth()}
+                    title={dreaminaAuthBusy ? "点击取消当前授权流程" : "自动检测并安装必要配置，随后打开浏览器授权"}
+                    className="shrink-0 rounded-md bg-accent px-3 py-1 text-[12px] font-medium text-black hover:opacity-90"
                   >
-                    {checkingDreamina ? "检测中…" : "重新检测"}
+                    {dreaminaAuthBusy ? "取消" : "登录授权"}
                   </button>
+                  {dreaminaHealth?.ok && !dreaminaAuthBusy && (
+                    <button
+                      onClick={() => void logoutDreamina()}
+                      title="登出即梦账号（dreamina logout）"
+                      className="shrink-0 text-[11px] text-muted hover:text-red-300"
+                    >
+                      登出
+                    </button>
+                  )}
+                  {dreaminaAuthLine && (
+                    <span
+                      className={`min-w-0 truncate text-[11px] ${
+                        dreaminaAuthFailed ? "text-red-300" : "text-muted"
+                      }`}
+                      title={dreaminaAuthLine}
+                    >
+                      {dreaminaAuthLine}
+                    </span>
+                  )}
+                </div>
+                {DREAMINA_ONBOARDING_ENABLED && (
                   <button
                     onClick={() => {
                       setDreaminaOnboardingForceOpen(true);
                       onClose();
                     }}
-                    className="rounded-md bg-panel px-3 py-1 text-[12px] text-ink hover:bg-edge"
+                    className="mt-2 rounded-md bg-panel px-3 py-1 text-[12px] text-ink hover:bg-edge"
                   >
                     {dreaminaHealth?.ok ? "查看引导" : "前往配置"}
                   </button>
-                </div>
-              </div>
-
-              {/* 即梦模型版本：每次生成前后端从 settings 重读，修改下一次生成即生效（热切换） */}
-              <div className="settings-card px-3 py-2.5">
-                <div className="text-ink">即梦模型版本</div>
-                <p className="mt-1 text-xs text-muted">
-                  即梦出图所用模型，修改后下一次生成立即生效。
-                </p>
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  {DREAMINA_MODEL_OPTIONS.map((v) => (
-                    <button
-                      key={v}
-                      type="button"
-                      onClick={() =>
-                        settings && void updateSettings({ ...settings, dreamina_model_version: v })
-                      }
-                      className={`rounded px-2.5 py-1 text-xs ${
-                        (settings?.dreamina_model_version ?? DEFAULT_DREAMINA_MODEL_VERSION) === v
-                          ? "bg-accent font-medium text-black"
-                          : "bg-panel text-ink hover:bg-edge"
-                      }`}
-                    >
-                      {v}
-                    </button>
-                  ))}
-                </div>
+                )}
+                {/* 即梦模型版本：登录后才显示；每次生成前后端从 settings 重读，修改下一次生成即生效（热切换） */}
+                {dreaminaHealth?.ok && (
+                  <div className="mt-2 border-t border-edge pt-2">
+                    <div className="text-xs text-ink">模型版本</div>
+                    <div className="mt-1.5 flex flex-wrap gap-1.5">
+                      {DREAMINA_MODEL_OPTIONS.map((v) => (
+                        <button
+                          key={v}
+                          type="button"
+                          onClick={() =>
+                            settings && void updateSettings({ ...settings, dreamina_model_version: v })
+                          }
+                          className={`rounded px-2.5 py-1 text-xs ${
+                            (settings?.dreamina_model_version ?? DEFAULT_DREAMINA_MODEL_VERSION) === v
+                              ? "bg-accent font-medium text-black"
+                              : "bg-panel text-ink hover:bg-edge"
+                          }`}
+                        >
+                          {v}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* 默认反推模型：非 auto 时跳过每次的引擎选择浮层直接执行 */}
@@ -700,7 +924,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                 </div>
                 <p className="mt-1 text-xs text-muted">
                   开启后，在创作板激活期间需按住 Shift
-                  再点击素材，才会作为参考素材引入，避免误触；关闭则点击素材直接引入。
+                  再点击素材，才会作为参考素材引入，避免误触；普通左键会弹出菜单，可选择添加到编辑框或打开图片详情。关闭则点击素材直接引入。
                 </p>
               </div>
 

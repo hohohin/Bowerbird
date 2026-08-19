@@ -25,7 +25,9 @@ import type {
   ProjectCreateResult,
   ProjectDeleteMode,
   ProjectDeleteResult,
+  ProjectRefreshResult,
   PromptedAsset,
+  RecentGenSession,
   TagCount,
 } from "./types";
 
@@ -66,6 +68,9 @@ export const api = {
     invoke<number>("remove_assets_from_project", { projectId, assetIds }),
   deleteProject: (projectId: string, mode: ProjectDeleteMode) =>
     invoke<ProjectDeleteResult>("delete_project", { projectId, mode }),
+  // 「更新项目文件」：重新扫描 workspace 文件夹，新增图片入库进项目（手动同步）。
+  refreshProject: (projectId: string) =>
+    invoke<ProjectRefreshResult>("refresh_project", { projectId }),
 
   // 导入
   importFiles: (sources: string[], projectId?: string | null) =>
@@ -191,6 +196,9 @@ export const api = {
   // 创作板（统一走 codex CLI）
   listPromptedAssets: (projectId?: string | null) =>
     invoke<PromptedAsset[]>("list_prompted_assets", { projectId: projectId ?? null }),
+  // 按 id 取单个 PromptedAsset：编辑器挑图查表 miss 时补拉（瀑布流 collapse 折叠掉的同会话过程图）。
+  getPromptedAsset: (assetId: string) =>
+    invoke<PromptedAsset | null>("get_prompted_asset", { assetId }),
   // 有反推（caption）的资产 id 集合（轻量，瀑布流标 🏷️ 用，不带 caption 正文）。
   listCaptionedAssetIds: (projectId?: string | null) =>
     invoke<string[]>("list_captioned_asset_ids", { projectId: projectId ?? null }),
@@ -272,6 +280,8 @@ export const api = {
   codexCreateImage: (req: {
     prompt: string;
     referenceImages: string[];
+    /** 参考图列表已完整（轮级重试/编辑精确重放）：后端跳过续轮自动合并上一轮产出图。 */
+    exactReferences?: boolean;
     sessionId?: string | null;
     ratio?: string | null;
     provider?: string | null;
@@ -284,6 +294,7 @@ export const api = {
     invoke<string>("codex_create_image", {
       prompt: req.prompt,
       referenceImages: req.referenceImages,
+      exactReferences: req.exactReferences ?? false,
       sessionId: req.sessionId ?? null,
       ratio: req.ratio ?? null,
       provider: req.provider ?? null,
@@ -296,6 +307,10 @@ export const api = {
   cancelCodexCreate: (jobId: string) => invoke<void>("cancel_codex_create", { jobId }),
   // 启动恢复（Task 5）：列出未完成生成 job，前端挂载时拉取重建 genJobs（恢复中 job 可见）。
   listGenJobs: () => invoke<GenJobSummary[]>("list_gen_jobs"),
+  // 会话面板跨重启：最近终态（done/failed）生成会话 + meta 重建时间线，与 listGenJobs 一起重建 genJobs。
+  recentGenSessions: (limit = 30) => invoke<RecentGenSession[]>("recent_gen_sessions", { limit }),
+  // 移除已完成会话的持久记录（删 task_queue 终态行；重启恢复不再出现该会话）。
+  dismissGenJob: (jobId: string) => invoke<void>("dismiss_gen_job", { jobId }),
   // 扩展小白化：连接状态 + 扩展文件夹路径（引导「一键复制」用，不自动打开——Windows 上不稳）。
   extensionStatus: () => invoke<boolean>("extension_status"),
   extensionFolderPath: () => invoke<string>("extension_folder_path"),

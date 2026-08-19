@@ -11,8 +11,8 @@ import { notifyError, notifySuccess } from "../lib/notify";
 import type { AssetDeleteMode, AssetDeleteResult } from "../lib/types";
 
 const MENU_WIDTH = 232;
-// 高度按全量项（生成图 + 本地文件 + 项目内）估算，含四组标签与分隔线。
-const MENU_HEIGHT = 500;
+// 高度按全量项（生成图 + 本地文件 + 项目内，含「物理删除整组」）估算，含四组标签与分隔线。
+const MENU_HEIGHT = 560;
 
 /** 可标注图片：浏览器 <img>/canvas 能解码的位图格式（tiff 浏览器不解码，排除）。 */
 const ANNOTATABLE_EXTS = ["jpg", "jpeg", "png", "webp", "gif", "bmp"];
@@ -37,6 +37,9 @@ function resultMessage(mode: AssetDeleteMode, result: AssetDeleteResult): string
 export function AssetContextMenu() {
   const menu = useStore((s) => s.contextMenu);
   const closeContextMenu = useStore((s) => s.closeContextMenu);
+  const openDetail = useStore((s) => s.openDetail);
+  const detailAssetId = useStore((s) => s.detailAssetId);
+  const addAssetToBoardFromDetail = useStore((s) => s.addAssetToBoardFromDetail);
   const currentProjectId = useStore((s) => s.currentProjectId);
   const reloadProjects = useStore((s) => s.reloadProjects);
   const assets = useStore((s) => s.assets);
@@ -54,15 +57,38 @@ export function AssetContextMenu() {
 
   const [busy, setBusy] = useState(false);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  // 右键素材所在生成组的成员 id（菜单打开时取，>1 张才显示「物理删除整组」）。
+  const [groupIds, setGroupIds] = useState<string[] | null>(null);
+  const [pendingGroupDelete, setPendingGroupDelete] = useState<string[] | null>(null);
   const [renameTarget, setRenameTarget] = useState<{ id: string; name: string } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
   // 每次打开重置子状态。
-  // （pendingDeleteId / renameTarget 不在此重置——「物理删除」/「重命名」点击会先 closeContextMenu
-  //   再弹 dialog，menu=null 触发本 effect，重置会把尚需显示的 dialog 一起清掉；它们由自身回调清理。）
+  // （pendingDeleteId / pendingGroupDelete / renameTarget 不在此重置——「物理删除」/「物理删除
+  //   整组」/「重命名」点击会先 closeContextMenu 再弹 dialog，menu=null 触发本 effect，重置会把
+  //   尚需显示的 dialog 一起清掉；它们由自身回调清理。）
   useEffect(() => {
     setBusy(false);
   }, [menu]);
+
+  // 菜单打开且为生成图时取同组图（与瀑布流轮播同一查询、同 project scope）；
+  // 非生成图 / 查询失败按无组处理，不显示整组删除。
+  useEffect(() => {
+    setGroupIds(null);
+    if (!menu) return;
+    const target = useStore.getState().assets.find((a) => a.id === menu.assetId);
+    if (!target?.generation_session_id) return;
+    let alive = true;
+    api
+      .listGenerationGroup(menu.assetId, currentProjectId)
+      .then((g) => {
+        if (alive) setGroupIds(g.map((a) => a.id));
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [menu, currentProjectId]);
 
   // 菜单打开时：点击菜单外关闭、Esc 关闭。
   useEffect(() => {
@@ -104,8 +130,8 @@ export function AssetContextMenu() {
     };
   }, [menu, closeContextMenu]);
 
-  // 物理删除确认 / 重命名 dialog：独立于菜单渲染。点「物理删除」/「重命名」会先 closeContextMenu
-  // 收菜单，menu=null 走此分支单独挂载。
+  // 物理删除确认 / 重命名 dialog：独立于菜单渲染。点「物理删除」/「物理删除整组」/「重命名」
+  // 会先 closeContextMenu 收菜单，menu=null 走此分支单独挂载。
   if (!menu) {
     return (
       <>
@@ -121,6 +147,21 @@ export function AssetContextMenu() {
             if (id) void runDelete(id, "delete");
           }}
           onCancel={() => setPendingDeleteId(null)}
+        />
+        <ConfirmDialog
+          open={pendingGroupDelete !== null}
+          danger
+          title="物理删除整组素材"
+          message={
+            <>这组 {pendingGroupDelete?.length ?? 0} 张素材将从全局及所有项目物理删除，<strong>不可恢复</strong>。</>
+          }
+          confirmLabel="物理删除整组"
+          onConfirm={() => {
+            const ids = pendingGroupDelete;
+            setPendingGroupDelete(null);
+            if (ids && ids.length > 0) void runDeleteGroup(ids);
+          }}
+          onCancel={() => setPendingGroupDelete(null)}
         />
         {renameTarget && (
           <RenameDialog
@@ -175,6 +216,34 @@ export function AssetContextMenu() {
     }
   }
 
+  /** 图片位图复制到系统剪贴板（可粘贴到聊天 / 编辑等应用）。data URL 同源不污染画布，
+   *  canvas 统一转 PNG——ClipboardItem 仅稳定支持 image/png（动图取首帧）。 */
+  async function copyImage() {
+    if (!storePath) return;
+    setBusy(true);
+    try {
+      const url = await api.readImageDataUrl(storePath);
+      const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const el = new Image();
+        el.onload = () => resolve(el);
+        el.onerror = () => reject(new Error("图片解码失败"));
+        el.src = url;
+      });
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      canvas.getContext("2d")?.drawImage(img, 0, 0);
+      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+      if (!blob) throw new Error("图片转换 PNG 失败");
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+      notifySuccess("图片已复制到剪贴板");
+      closeContextMenu();
+    } catch (e) {
+      notifyError(e, "复制图片失败");
+      setBusy(false);
+    }
+  }
+
   async function reuseGeneration() {
     setBusy(true);
     try {
@@ -214,6 +283,34 @@ export function AssetContextMenu() {
     }
   }
 
+  /** 整组物理删除：循环单条 delete（无批量 API，与 BatchBar 批量删除同模式），
+   *  单条失败不中断后续；有失败 → 报失败数，全成功 → toast 总数。 */
+  async function runDeleteGroup(ids: string[]) {
+    setBusy(true);
+    let failed = 0;
+    try {
+      for (const id of ids) {
+        try {
+          await api.deleteAssetWithMode(id, "delete", currentProjectId);
+        } catch (e) {
+          failed += 1;
+          console.error("delete one failed", e);
+        }
+      }
+      await reloadProjects();
+      if (failed > 0) {
+        notifyError(null, `${failed} 张删除失败，已保留在全局`);
+        setBusy(false);
+        return;
+      }
+      notifySuccess(`已物理删除 ${ids.length} 张素材`);
+      closeContextMenu();
+    } catch (e) {
+      notifyError(e, "删除失败");
+      setBusy(false);
+    }
+  }
+
   const menuStyle: React.CSSProperties = {
     position: "fixed",
     left: x,
@@ -232,6 +329,34 @@ export function AssetContextMenu() {
       aria-label="素材操作"
     >
       <div className="app-context-label">整理</div>
+      {/* 详情页右键（编辑器对话框与详情页互斥，从此处带回主界面插 chip）：菜单第一项。 */}
+      {mode === "browse" && detailAssetId !== null && (
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => {
+            addAssetToBoardFromDetail(assetId);
+            closeContextMenu();
+          }}
+          disabled={busy}
+          className="app-context-item px-2 py-1.5"
+        >
+          添加到对话框
+        </button>
+      )}
+      {/* 浏览（未激活创作）模式下右键开详情；激活态左键是插 chip，详情也走这里。 */}
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => {
+          openDetail(assetId);
+          closeContextMenu();
+        }}
+        disabled={busy}
+        className="app-context-item px-2 py-1.5"
+      >
+        打开图片详情
+      </button>
       <button
         type="button"
         role="menuitem"
@@ -363,6 +488,16 @@ export function AssetContextMenu() {
           <button
             type="button"
             role="menuitem"
+            onClick={copyImage}
+            disabled={busy || !annotatable}
+            title={annotatable ? "复制图片位图，可粘贴到聊天 / 编辑等应用" : "该素材不是可复制的图片（支持 PNG/JPG/WebP/GIF/BMP）"}
+            className="app-context-item px-2 py-1.5"
+          >
+            复制图片
+          </button>
+          <button
+            type="button"
+            role="menuitem"
             onClick={async () => {
               try {
                 await navigator.clipboard.writeText(storePath);
@@ -417,6 +552,21 @@ export function AssetContextMenu() {
           >
             物理删除
           </button>
+          {groupIds && groupIds.length > 1 && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setPendingGroupDelete(groupIds);
+                closeContextMenu();
+              }}
+              disabled={busy}
+              title="删除这组同流程生成图的全部成员（含当前显示的这张）"
+              className="app-context-item is-danger px-2 py-1.5"
+            >
+              物理删除整组 · {groupIds.length} 张
+            </button>
+          )}
       </div>
     </div>,
     document.body

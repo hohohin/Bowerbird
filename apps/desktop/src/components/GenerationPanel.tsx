@@ -6,7 +6,7 @@ import { api } from "../lib/api";
 import { PRESET_FEATURE_ENABLED } from "../lib/featureFlags";
 import { notifyError } from "../lib/notify";
 import { canStartAnotherJob, canUseByo, canUseGenerationProvider } from "../lib/entitlement";
-import { cloudProviderLabel, canonicalProviderKey, isCloudProvider } from "../lib/genProviders";
+import { cloudProviderLabel, canonicalProviderKey, isCloudProvider, supportsAnnotationCoordinates } from "../lib/genProviders";
 import type { Asset, GenJob, GenTurn } from "../lib/types";
 import { Lightbox } from "./Lightbox";
 import { useCreationEditor } from "./creation/useCreationEditor";
@@ -14,7 +14,7 @@ import { RatioSelect } from "./creation/RatioSelect";
 import { ProviderSelect } from "./creation/ProviderSelect";
 import { BoardChipPreview } from "./creation/BoardChipPreview";
 import { ReadonlyPrompt } from "./creation/ReadonlyPrompt";
-import { Bookmark, Copy, Images, Pencil, RotateCcw, Send, Sparkles, X } from "lucide-react";
+import { Bookmark, Copy, Images, Info, Pencil, RotateCcw, Send, Sparkles, X } from "lucide-react";
 
 /** 生成用时格式：<60s 取整秒，否则 m:ss。 */
 function fmtDuration(ms: number): string {
@@ -55,6 +55,7 @@ export function GenerationPanel() {
   const setActiveJob = useStore((s) => s.setActiveJob);
   const cancelGeneration = useStore((s) => s.cancelGeneration);
   const startGeneration = useStore((s) => s.startGeneration);
+  const sendGenRevise = useStore((s) => s.sendGenRevise);
   const retryLastGenTurn = useStore((s) => s.retryLastGenTurn);
   const reusePromptToBoard = useStore((s) => s.reusePromptToBoard);
   const reloadPresets = useStore((s) => s.reloadPresets);
@@ -64,6 +65,8 @@ export function GenerationPanel() {
   const [savingPreset, setSavingPreset] = useState(false);
   const [presetName, setPresetName] = useState("");
   const [presetSaved, setPresetSaved] = useState(false);
+  // 续轮「编辑」的目标轮 id（revise 坞预载该轮组稿；null = 底部对话框空编辑器开局）。
+  const [editTurnId, setEditTurnId] = useState<number | null>(null);
   // 生成图放大查看（Lightbox）：images = activeJob 各轮图拍平，index = 全局下标。
   const [lightbox, setLightbox] = useState<{ images: string[]; index: number } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -179,7 +182,40 @@ export function GenerationPanel() {
   // 瀑布流露出并进入点图插 chip 模式；改完发送 = 用新组稿开新会话（版本分支）。
   function startEdit() {
     if (running) return;
+    setEditTurnId(null);
     setGenEditing("edit");
+  }
+
+  // 续轮气泡的「编辑」（与首轮同款交互，语义按对话映射）：载入**该轮**组稿（原文 + 组稿时挑的
+  // 参考图）进底部编辑坞；改完发送 = 在会话下方追加新一轮（resume，原轮保留可对比）。首轮编辑
+  // 的「新版本分支」形态对续轮不适用——分支 = 新会话，只有首轮组稿能开。
+  function startTurnEdit(turn: GenTurn) {
+    if (running) return;
+    setEditTurnId(turn.id);
+    setGenEditing("revise");
+  }
+
+  // 续轮气泡的「重试」（与首轮同款：原样重发该轮组稿，旧结果保留）。失败末轮走既有
+  // retryLastGenTurn（移除失败轮原位顶替）；其余轮 = 追加重发——参考图**精确重放**该轮
+  // 当时实际下发的完整列表（含当时的基图，非会话最新产出），prompt 原样。
+  function retryTurn(turn: GenTurn) {
+    if (running || !activeJob?.sessionId) return;
+    const isLast = activeJob.turns[activeJob.turns.length - 1]?.id === turn.id;
+    if (turn.error && isLast) {
+      retryLastGenTurn();
+      return;
+    }
+    const raw = turn.provider || activeJob.provider;
+    const provider = isCloudProvider(raw)
+      ? canonicalProviderKey(raw)
+      : raw === "jimeng"
+        ? "jimeng"
+        : "codex";
+    void sendGenRevise(turn.prompt, provider, {
+      rawPrompt: turn.promptRaw ?? undefined,
+      references: turn.refAssets,
+      exactReferences: turn.refs?.length ? turn.refs : undefined,
+    }).catch(console.error);
   }
 
   // 「重试」（首轮气泡 icon）：等价于「重新编辑」后不改内容直接发送——首轮组稿（完整 prompt +
@@ -304,6 +340,37 @@ export function GenerationPanel() {
       </div>
     ) : undefined;
 
+  // 续轮气泡下方的轮级操作（icon，与首轮同款样式）：编辑 / 重试。复用同 job 不占并行槽，
+  // 仅按 provider 健康门控重试。
+  function turnActions(turn: GenTurn) {
+    if (running || !activeJob?.sessionId) return undefined;
+    return (
+      <div className="flex items-center gap-0.5">
+        <button
+          type="button"
+          onClick={() => startTurnEdit(turn)}
+          className="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-panel2 hover:text-accent"
+          title="编辑这一轮：载入该轮组稿（原文 + 参考图），改后发送 = 修改意见作为新一轮接在会话下方（原轮保留）"
+        >
+          <Pencil size={13} />
+        </button>
+        <button
+          type="button"
+          onClick={() => retryTurn(turn)}
+          disabled={!targetReady}
+          className="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-panel2 hover:text-accent disabled:opacity-40"
+          title={
+            !targetReady
+              ? lockedReason
+              : "重试：这一轮的组稿原样重发（接在会话下方，原轮保留）"
+          }
+        >
+          <RotateCcw size={13} />
+        </button>
+      </div>
+    );
+  }
+
   // 会话 → 编辑坞过渡：进入坞时会话视图不瞬间卸载，先播 gen-view-out（180ms 下沉淡出，
   // 与坞的 gen-dock-in 上滑交叠）再于 200ms 后卸载。状态用「已隐藏」反逻辑且初值 false——
   // 点击进入坞的渲染帧 effect 尚未执行，凭 !sessionHidden 同帧保住会话挂载，退场动画从
@@ -333,7 +400,15 @@ export function GenerationPanel() {
             onOpenRecent={(k) =>
               lastImageTurn && setLightbox({ images: allImages, index: lastImageTurn.offset + k })
             }
-            onExit={() => setGenEditing(null)}
+            preloadTurn={
+              editTurnId != null
+                ? activeJob.turns.find((t) => t.id === editTurnId) ?? null
+                : null
+            }
+            onExit={() => {
+              setGenEditing(null);
+              setEditTurnId(null);
+            }}
           />
         </div>
       )}
@@ -402,12 +477,13 @@ export function GenerationPanel() {
                 streaming={running && i === turnsWithOffset.length - 1 ? activeJob.streaming : ""}
                 imageOffset={imageOffset}
                 refAssets={i === 0 ? firstRefAssets : undefined}
-                actions={i === 0 ? firstTurnActions : undefined}
+                actions={i === 0 ? firstTurnActions : turnActions(turn)}
                 variantNav={i === 0 ? variantNav : undefined}
                 onOpenLightbox={(g) => setLightbox({ images: allImages, index: g })}
                 onOpenRefLightbox={(r) =>
                   setLightbox({ images: refLightboxImages, index: r })
                 }
+                onOpenTurnRefs={(imgs, i) => setLightbox({ images: imgs, index: i })}
                 onRetry={retryLastGenTurn}
                 canRetry={targetReady && !running}
                 retryReason={lockedReason}
@@ -432,7 +508,10 @@ export function GenerationPanel() {
             {!targetReady && <div className="text-[10px] text-muted">{lockedReason}</div>}
             <button
               type="button"
-              onClick={() => setGenEditing("revise")}
+              onClick={() => {
+                setEditTurnId(null);
+                setGenEditing("revise");
+              }}
               className="w-full rounded bg-panel2 px-2.5 py-2 text-left text-xs text-muted ring-1 ring-edge transition-colors hover:text-ink hover:ring-accent"
               title="像创作板一样组稿：点瀑布流图片插入参考图；发送后图片接在会话下方"
             >
@@ -483,6 +562,7 @@ function TurnView({
   variantNav,
   onOpenLightbox,
   onOpenRefLightbox,
+  onOpenTurnRefs,
   onRetry,
   canRetry,
   retryReason,
@@ -497,16 +577,22 @@ function TurnView({
   variantNav?: { index: number; total: number; onPrev: () => void; onNext: () => void };
   onOpenLightbox: (globalIdx: number) => void;
   onOpenRefLightbox?: (refIdx: number) => void;
+  /** 续轮参考图点开放大（images = 本轮 refs store_path 列表）。 */
+  onOpenTurnRefs?: (images: string[], index: number) => void;
   onRetry: () => void;
   canRetry: boolean;
   retryReason: string;
 }) {
   // 用户气泡显示编辑框原文（与右键「复用生成提示词」同一数据）；实际发送的完整文本
-  // （用途注入等铺开后的 prompt）收进 thinking 式折叠，二者一致时无需折叠。
+  // （用途注入等铺开后的 prompt）收进 thinking 式折叠。只要本轮有原文 + 实际发送内容
+  // 就保留折叠入口——dreamina/codex CLI 直发无铺开时二者相同，也允许核对发送给引擎的
+  // 完整提示词（原条件要求二者不同才显示，直发会话会缺失该 toggle）。
   const displayText = turn.promptRaw?.trim() ? turn.promptRaw : turn.prompt;
-  const hasCompiled = !!turn.promptRaw?.trim() && turn.prompt !== turn.promptRaw;
-  // 首轮有原文 + 参考图数据（可为 0 张）→ 用创作板同款节点规则只读还原（缩略图 chip + 高亮维度词），不可编辑。
-  const chipView = index === 0 && !!turn.promptRaw?.trim() && !!refAssets;
+  const hasCompiled = !!turn.promptRaw?.trim() && !!turn.prompt.trim();
+  // chip 气泡（创作板同款只读渲染）各轮一致：首轮参考图来自 job.refAssets（恢复链路完整
+  // asset），续轮来自该轮组稿挑选（turn.refAssets，恢复/回看由历史 ref_assets 重建）。
+  const chipRefs = refAssets ?? turn.refAssets;
+  const chipView = !!turn.promptRaw?.trim() && !!chipRefs;
   const [expanded, setExpanded] = useState(false);
   const [showCompiled, setShowCompiled] = useState(false);
   // 生成中实时计时（完成/失败后改用 turn.durationMs，不再跳）。
@@ -529,18 +615,31 @@ function TurnView({
   const refThumbs = (refAssets ?? [])
     .map((a) => ({ src: a.thumb_path ?? a.store_path ?? "", name: a.name }))
     .filter((t) => t.src);
+  // 各轮「附件」缩略图：首轮用完整 asset（带名称）；续轮用 turn.refs（本轮实际下发的参考图，
+  // 含后端合并的上一轮产出图——发送时 started 事件回填 / 历史恢复从 meta 重建）。
+  const turnRefThumbs: { src: string; name: string }[] =
+    index === 0
+      ? refThumbs
+      : (turn.refs ?? [])
+          .map((p) => ({ src: p, name: p.split(/[\\/]/).pop() ?? p }))
+          .filter((t) => t.src);
 
   return (
     <div className="flex flex-col gap-2.5">
-      {/* 用户消息：右侧气泡；首轮气泡上方常驻参考图「附件」缩略图（chip 视图与纯文本回退都有，可点开放大） */}
+      {/* 用户消息：右侧气泡；各轮气泡上方常驻参考图「附件」缩略图（可点开放大）——
+          续轮同样展示（用户需要看到上一轮产出图被带上了） */}
       <div className="flex flex-col items-end gap-1.5">
-        {index === 0 && refThumbs.length > 0 && (
+        {turnRefThumbs.length > 0 && (
           <div className="flex max-w-[85%] flex-wrap justify-end gap-1">
-            {refThumbs.map((t, j) => (
+            {turnRefThumbs.map((t, j) => (
               <button
                 key={t.src}
                 type="button"
-                onClick={() => onOpenRefLightbox?.(j)}
+                onClick={() =>
+                  index === 0
+                    ? onOpenRefLightbox?.(j)
+                    : onOpenTurnRefs?.(turn.refs ?? [], j)
+                }
                 className="cursor-zoom-in"
                 aria-label={`放大参考图 ${j + 1}`}
               >
@@ -573,7 +672,7 @@ function TurnView({
               expanded ? "max-h-none" : "max-h-48"
             }`}
           >
-            <ReadonlyPrompt prompt={displayText} references={refAssets!} />
+            <ReadonlyPrompt prompt={displayText} references={chipRefs!} />
           </div>
         ) : (
           <button
@@ -728,6 +827,7 @@ function GenEditComposer({
   canStart,
   recentImages,
   onOpenRecent,
+  preloadTurn,
   onExit,
 }: {
   job: GenJob;
@@ -736,6 +836,9 @@ function GenEditComposer({
   // 会话最近一次产出（最后一个有图的轮）：左侧「上次结果」缩略图，组稿时对照参考。
   recentImages: string[];
   onOpenRecent: (index: number) => void;
+  // revise 坞预载的轮（续轮「编辑」入口传入）：载入该轮组稿（原文 + 参考图）替代空编辑器
+  // 开局；null = 底部对话框空编辑器。
+  preloadTurn: GenTurn | null;
   onExit: () => void;
 }) {
   const isRevise = mode === "revise";
@@ -751,10 +854,12 @@ function GenEditComposer({
   const cloudEntitlement = useStore((s) => s.cloudEntitlement);
   const cloudAvailable = cloudAuth?.cloud_available ?? false;
   // 底部对话框（续轮）空编辑器开局：不预填「请参考」，避免误发送占位文字。
-  const { hostRef, focus, finalPrompt, rawPrompt, references, agentPromptReferences } =
+  const { hostRef, focus, finalPrompt, rawPrompt, references, graphSources, agentPromptReferences } =
     useCreationEditor({
       draftKey: null,
       initialEmpty: isRevise,
+      // 维度环点扇区插进本坞（与创作板互斥挂载，任意时刻只有一个实例消费）。
+      consumePendingKeyword: true,
     });
   // 比例初值取会话首轮的值；编辑坞内改动不持久化（创作板有自己的记忆）。
   const [ratio, setRatio] = useState<string | null>(job.lastRatio ?? null);
@@ -818,19 +923,21 @@ function GenEditComposer({
     };
   }, []);
 
-  // 编辑器挂载（注册 board-load-prompt listener）后延一帧载入会话首轮原文 + 参考图
-  // （与 reusePromptToBoard 同款事件；此时创作板已关，不会双编辑器响应）。
-  // 仅「重新编辑」载入；底部对话框（续轮）空编辑器开局，只把焦点放进编辑框。
+  // 编辑器挂载（注册 board-load-prompt listener）后延一帧载入组稿（与 reusePromptToBoard 同款
+  // 事件；此时创作板已关，不会双编辑器响应）。「重新编辑」载入首轮原文 + 参考图；底部对话框
+  // （续轮）默认空编辑器开局只放焦点；续轮「编辑」入口（preloadTurn）载入该轮原文 + 组稿参考图。
   useEffect(() => {
-    if (isRevise) {
+    if (isRevise && !preloadTurn) {
       const f = setTimeout(() => focus(), 0);
       return () => clearTimeout(f);
     }
-    const raw = job.turns[0]?.promptRaw || job.lastPrompt;
+    const src = preloadTurn ?? null;
+    const raw = src ? src.promptRaw || src.prompt : job.turns[0]?.promptRaw || job.lastPrompt;
+    const refs = src ? src.refAssets ?? [] : job.refAssets;
     const t = setTimeout(() => {
       window.dispatchEvent(
         new CustomEvent("bowerbird://board-load-prompt", {
-          detail: { prompt: raw, refs: job.refAssets },
+          detail: { prompt: raw, refs },
         }),
       );
     }, 0);
@@ -865,10 +972,24 @@ function GenEditComposer({
     onExit();
     if (isRevise) {
       // 会话下方追加一轮对话（resume 同一 session）；新挑参考图随 opts 传给续轮路径。
+      // 轮级「编辑」预载的发送 = 精确重放：基图固定为该轮**当时**自动带入的参考图
+      // （turn.refs 去掉当时 chips 的部分），与编辑器当前 chips 合成完整列表——编辑第 N
+      // 轮时基图仍是第 N 轮的基图，不会漂移成会话最新产出。
+      const exactRefs = preloadTurn?.refs?.length
+        ? Array.from(
+            new Set([
+              ...preloadTurn.refs.filter(
+                (p) => !(preloadTurn.refAssets ?? []).some((a) => a.store_path === p),
+              ),
+              ...references.map((r) => r.store_path).filter((p): p is string => !!p),
+            ]),
+          ).slice(0, 10)
+        : undefined;
       void sendGenRevise(prompt, activeGenProvider, {
         rawPrompt,
         references,
         ratio,
+        exactReferences: exactRefs,
       }).catch(console.error);
     } else {
       // 归入同一会话：conversationId 传源会话 → 新版本分支可与会话内 ←/→ 切换；
@@ -887,6 +1008,11 @@ function GenEditComposer({
   }
 
   const sendDisabled = !finalPrompt || !targetReady || agentBusy || (!isRevise && !canStart);
+  const hasAnnotationDimension = graphSources.some((source) =>
+    source.dimensions.some((title) => title === "标注" || title === "标记")
+  );
+  const annotationWarning =
+    hasAnnotationDimension && !supportsAnnotationCoordinates(activeGenProvider);
   const sendTitle = !targetReady
     ? lockedReason
     : !isRevise && !canStart
@@ -899,13 +1025,16 @@ function GenEditComposer({
           ? `先由 Agent（${agentMode === "a" ? "方案A" : "方案B"}）整理意图，再生成图像（新版本归入同一会话）`
           : "发送生成（新版本归入同一会话）";
 
+  // 会话指示器标题：与面板头部同源（首轮原文第一个非空行）。
+  const firstUserText = job.turns[0]?.promptRaw || job.turns[0]?.prompt || "";
+  const sessionTitle =
+    firstUserText.split("\n").find((l) => l.trim())?.trim() || "生成会话";
+
   return (
-    // 浮动卡片本体：高度随内容收缩、上方两角圆角、底部贴屏；滑入动画（外层容器负责水平居中定位）。
-    // dockRef 高度经 ResizeObserver 写入 --gen-dock-h，瀑布流据此留底部空隙。
-    <div
-      ref={dockRef}
-      className="gen-dock-in w-full rounded-t-xl border border-b-0 border-edge bg-panel p-3 shadow-[0_-12px_32px_rgba(0,0,0,0.45)]"
-    >
+    // 浮动卡片本体：与创作板 creation-dock 同款形态（底部浮动、上方两角圆角、毛玻璃），
+    // 配色深灰蓝（.session-dock）区分会话上下文。高度随内容收缩；dockRef 高度经
+    // ResizeObserver 写入 --gen-dock-h，瀑布流据此留底部空隙。
+    <div ref={dockRef} className="gen-dock-in session-dock w-full rounded-t-2xl p-2.5 pb-2">
       <div className="flex items-start gap-2.5">
         {/* 左侧「上次结果」缩略图：露瀑布流选图的同时对照会话最近产出编辑/续写；点击放大。 */}
         {recentImages.length > 0 && (
@@ -933,34 +1062,41 @@ function GenEditComposer({
           </div>
         )}
         <div className="min-w-0 flex-1 space-y-2">
+      {/* 顶部指示器：会话名截断（悬停看全名），「…… 任务中，新的生成会纳为该任务的结果」
+          后缀固定贴在关闭按钮左侧——长会话名被截断也不会把提示字样挤掉。 */}
       <div className="flex items-center gap-2">
+        <span className="h-2 w-2 shrink-0 rounded-full bg-[#7c9cff]" aria-hidden="true" />
         <strong className="shrink-0 text-xs font-semibold text-ink">
           {isRevise ? "继续对话" : "重新编辑"}
         </strong>
-        <span className="min-w-0 flex-1 truncate text-[10px] text-muted">
-          {isRevise
-            ? "点上方瀑布流图片插入参考图；发送后图片接在会话下方"
-            : "点上方瀑布流图片插入参考图；发送后为同一会话的新版本"}
+        <span
+          className="min-w-0 flex-1 truncate text-[11px] text-muted"
+          title={`当前在「${sessionTitle}」任务中，新的生成会纳为该任务的结果`}
+        >
+          当前在「{sessionTitle}」
+        </span>
+        <span className="shrink-0 text-[11px] text-muted">
+          任务中，新的生成会纳为该任务的结果
         </span>
         <button
           type="button"
           onClick={onExit}
-          className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted hover:bg-panel2 hover:text-ink"
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted hover:bg-white/10 hover:text-ink"
           title="取消编辑，回到会话"
           aria-label="取消编辑"
         >
           <X size={14} />
         </button>
       </div>
-      <div className="border border-edge bg-canvas p-2">
-        <div
-          ref={hostRef}
-          onClick={focus}
-          className="creation-editor max-h-56 min-h-24 cursor-pointer overflow-y-auto border border-edge bg-panel2/40 p-2 text-sm leading-8 text-ink focus-within:border-accent"
-        />
-        {/* 编辑框内 chip 的交互浮层（hover 放大图/维度正文 + 点击定位瀑布流） */}
-        <BoardChipPreview hostRef={hostRef} />
-        <div className="mt-2 flex flex-wrap items-center gap-2">
+      <div
+        ref={hostRef}
+        onClick={focus}
+        data-tour="creation-editor"
+        className="creation-editor min-h-16 max-h-56 cursor-text overflow-y-auto rounded-lg bg-black/30 px-3 py-2 text-sm leading-8 text-ink focus-within:ring-1 focus-within:ring-accent/70"
+      />
+      {/* 编辑框内 chip 的交互浮层（hover 放大图/维度正文 + 点击定位瀑布流） */}
+      <BoardChipPreview hostRef={hostRef} />
+      <div className="mt-2 flex flex-wrap items-center gap-2">
           <RatioSelect value={ratio} onChange={setRatio} />
           <ProviderSelect
             value={activeGenProvider}
@@ -1020,6 +1156,11 @@ function GenEditComposer({
                 {lockedReason}
               </span>
             )}
+            {annotationWarning && (
+              <span className="flex shrink-0 items-center text-red-400" title="该模型不支持标注参数，标注图可以被发送，但控制效果可能不及预期。">
+                <Info size={14} aria-label="该模型不支持标注参数，标注图可以被发送，但控制效果可能不及预期。" />
+              </span>
+            )}
             <button
               type="button"
               onClick={onExit}
@@ -1039,7 +1180,6 @@ function GenEditComposer({
             </button>
           </div>
         </div>
-      </div>
         </div>
       </div>
     </div>

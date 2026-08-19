@@ -9,7 +9,8 @@ use ulid::Ulid;
 use crate::core::ingest;
 use crate::core::paths::LibraryPaths;
 use crate::core::projects::{
-    ActiveProjectContext, Project, ProjectCreateResult, ProjectDeleteMode, ProjectDeleteResult,
+    refresh_workspace_assets, ActiveProjectContext, Project, ProjectCreateResult, ProjectDeleteMode,
+    ProjectDeleteResult, ProjectRefreshResult,
 };
 use crate::db::Database;
 use crate::error::{AppError, AppResult};
@@ -92,6 +93,49 @@ pub async fn list_projects(db: State<'_, Arc<Database>>) -> Result<Vec<Project>,
     tokio::task::spawn_blocking(move || db.list_projects())
         .await
         .map_err(|error| AppError::Other(error.to_string()))?
+}
+
+/// 「更新项目文件」：重新扫描 workspace 文件夹，把用户新放进来的图片导入并加入项目
+/// （约定 18：项目不监听文件夹，同步由用户手动触发）。已导入过的文件跳过（见
+/// `refresh_workspace_assets`）；新素材照常触发自动分析，事件驱动前端刷新列表与计数。
+#[tauri::command]
+pub async fn refresh_project(
+    app: AppHandle,
+    paths: State<'_, Arc<LibraryPaths>>,
+    db: State<'_, Arc<Database>>,
+    project_id: String,
+) -> Result<ProjectRefreshResult, AppError> {
+    let db = db.inner().clone();
+    let project = db
+        .get_project(&project_id)?
+        .ok_or_else(|| AppError::NotFound(format!("project {project_id}")))?;
+    if project.kind != "user" {
+        return Err(AppError::Other(
+            "内置项目没有关联的本地文件夹，无法更新".into(),
+        ));
+    }
+    let workspace = std::fs::canonicalize(&project.workspace_path).map_err(|_| {
+        AppError::Other(format!(
+            "项目文件夹不存在或已被移动：{}",
+            project.workspace_path
+        ))
+    })?;
+
+    let paths = paths.inner().clone();
+    let db_for_refresh = db.clone();
+    let id_for_refresh = project_id.clone();
+    let (assets, added) = tokio::task::spawn_blocking(move || {
+        refresh_workspace_assets(&paths, &db_for_refresh, &workspace, &id_for_refresh)
+    })
+    .await
+    .map_err(|error| AppError::Other(error.to_string()))??;
+
+    for asset in &assets {
+        crate::core::autoname::spawn_auto_analyze(app.clone(), db.clone(), asset.clone());
+    }
+    let _ = app.emit("projects://changed", ());
+    let _ = app.emit("library://assets-changed", ());
+    Ok(ProjectRefreshResult { added_count: added })
 }
 
 #[tauri::command]

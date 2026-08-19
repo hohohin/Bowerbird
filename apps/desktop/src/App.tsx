@@ -5,6 +5,7 @@ import { Sidebar } from "./components/Sidebar";
 import { MasonryGrid } from "./components/MasonryGrid";
 import { AssetDetail } from "./components/AssetDetail";
 import { AssetContextMenu } from "./components/AssetContextMenu";
+import { ProjectContextMenu } from "./components/ProjectContextMenu";
 import { ImageAnnotator } from "./components/ImageAnnotator";
 import { CaptionRing } from "./components/creation/CaptionRing";
 import { DescribeProviderPicker } from "./components/DescribeProviderPicker";
@@ -108,23 +109,16 @@ function App() {
 
   async function refresh() {
     const version = ++refreshVersion;
-    // 创作板 / 会话底部编辑坞（重新编辑、底部对话框续轮）共用挑图语义：瀑布流显示全部资产
+    // 创作板 / 会话底部编辑坞（重新编辑、底部对话框续轮）共用挑图语义：默认显示全部资产
     // （含未反推），任意图点一下即可插为参考图；promptedAssets 给编辑器补 caption/sections ——
-    // 有反推的图可展开维度片段，没反推的作纯参考图。
+    // 有反推的图可展开维度片段，没反推的作纯参考图。创作板常驻后为不吞掉库的浏览能力，
+    // 用户显式筛选（搜索 / 文件夹 / 收藏 / 颜色 / 智能）仍生效，筛出的结果照样可点插 chip。
+    const pickAll = (boardOpen || genEditing) && !searchQuery && !currentFolderId && !currentCollectionId && !colorFilter && !smartFilter;
     try {
-      if (boardOpen || genEditing) {
-        const [assets, prompted, total] = await Promise.all([
-          api.listAssets(undefined, currentProjectId),
-          api.listPromptedAssets(currentProjectId),
-          api.countAssets(currentProjectId),
-        ]);
-        if (version !== refreshVersion) return;
-        setPromptedAssets(prompted);
-        setAssets(assets);
-        setTotal(total);
-      } else {
-        const [assets, total] = await Promise.all([
-          searchQuery
+      const [assets, total] = await Promise.all([
+        pickAll
+          ? api.listAssets(undefined, currentProjectId)
+          : searchQuery
             ? api.searchAssets(searchQuery, currentProjectId)
             : smartFilter
               ? api.listAssetsSmart(smartFilter, currentProjectId)
@@ -137,12 +131,16 @@ function App() {
                       currentProjectId
                     )
                   : api.listAssets(currentFolderId ?? undefined, currentProjectId),
-          api.countAssets(currentProjectId),
-        ]);
-        if (version !== refreshVersion) return;
-        setAssets(assets);
-        setTotal(total);
-      }
+        api.countAssets(currentProjectId),
+      ]);
+      if (version !== refreshVersion) return;
+      setAssets(assets);
+      setTotal(total);
+      // promptedAssets 无条件拉取：对话框常驻（未激活也可能有草稿 chip），序列化/维度环
+      // 随时要 caption/sections，不能只在创作模式激活时才有。
+      const prompted = await api.listPromptedAssets(currentProjectId);
+      if (version !== refreshVersion) return;
+      setPromptedAssets(prompted);
       await reloadFolders();
       if (version !== refreshVersion) return;
       await reloadProjects();
@@ -248,7 +246,9 @@ function App() {
         try {
           // caption（反推）变化 → 🏷️ 标记集合刷新（轻量，始终拉）。
           setCaptionedIds(await api.listCaptionedAssetIds(st.currentProjectId));
-          if (st.boardOpen) {
+          // 创作板与会话编辑坞同款对待（二者挑图/维度数据同源）：任一开着都刷新
+          // promptedAssets，编辑坞期间新反推的维度也能进编辑器 assetById 供展开。
+          if (st.boardOpen || st.genEditing) {
             setPromptedAssets(await api.listPromptedAssets(st.currentProjectId));
           }
         } catch (e) {
@@ -504,7 +504,7 @@ function App() {
   const showDetail = mode === "browse" && detailAssetId !== null;
 
   return (
-    <div className={`app-shell flex h-full w-full flex-col ${boardOpen ? "has-board" : ""}`}>
+    <div className="app-shell flex h-full w-full flex-col">
       <ToastViewport />
       {/* 环境引导：codex/扩展/即梦由设置面板对应分区直接唤起，不再有「环境状态」总览 */}
       <CodexOnboarding />
@@ -515,6 +515,8 @@ function App() {
       <OnboardingTour />
       {/* 图片右键菜单（全局单实例，store.contextMenu 驱动） */}
       <AssetContextMenu />
+      {/* 项目右键菜单（全局单实例，store.projectContextMenu 驱动） */}
+      <ProjectContextMenu />
       {/* 图片标注面板（全局单实例，store.annotator 驱动，全屏遮罩） */}
       <ImageAnnotator />
       {/* 反推引擎选择浮层（全局单实例，store.describePicker 驱动） */}
@@ -529,12 +531,31 @@ function App() {
           {mode === "manage" && <BatchBar />}
           <div className="relative flex-1 overflow-hidden">
             {initializing ? <LibraryLoadingState /> : showDetail ? <AssetDetail /> : <MasonryGrid />}
-            {/* 生成结果面板：主区覆盖层（像详情页），创作板在右槽始终可用 */}
+            {/* 生成结果面板：主区覆盖层（像详情页） */}
             {genPanelOpen && <GenerationPanel />}
+            {/* 创作板（核心枢纽）：底部浮动对话框常驻显示（激活与否都在），但与两个
+                详情界面互斥——图片详情 / 会话详情（genPanelOpen）期间不出现（详情页经
+                右键「添加到对话框」回主界面插 chip；会话界面用自带的继续对话/重新编辑坞）。
+                会话编辑坞（genEditing）期间也让位（两个 useCreationEditor 互斥）。 */}
+            {!genEditing && !showDetail && !genPanelOpen && <CreationBoard />}
+            {/* 创作模式视觉标记：瀑布流区品牌蓝线框 + 顶部居中刘海「创作模式」。
+                仅在挑图面（瀑布流）实际可见时呈现：被会话面板/详情页盖住时不显示。 */}
+            {boardOpen && !genEditing && !genPanelOpen && !showDetail && (
+              <>
+                <div
+                  aria-hidden="true"
+                  className="pointer-events-none absolute inset-0 z-20 ring-2 ring-inset ring-[#4868ff] shadow-[inset_0_0_24px_rgba(72,104,255,0.18)]"
+                />
+                <div
+                  aria-hidden="true"
+                  className="creation-mode-notch pointer-events-none absolute left-1/2 top-0 z-20"
+                >
+                  创作模式
+                </div>
+              </>
+            )}
           </div>
         </main>
-        {/* 创作板（核心枢纽）：Toolbar「🎬 创作板」按钮唤起，右侧常驻 */}
-        {boardOpen && <CreationBoard />}
       </div>
     </div>
   );

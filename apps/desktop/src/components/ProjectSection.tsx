@@ -1,20 +1,19 @@
 import { useState } from "react";
+import { Loader2, LogOut, Plus } from "lucide-react";
 import { api } from "../lib/api";
 import { useStore } from "../store";
-import type { Project, ProjectDeleteMode } from "../lib/types";
-import { ConfirmDialog } from "./ConfirmDialog";
 import { notifyError, notifySuccess } from "../lib/notify";
 
+/** 侧栏「项目」区：新建（选文件夹导入）+ 项目行。
+ *  行内只保留 进入（点击）/ 退出（激活行右侧 icon）；删除与「更新项目文件」都在右键菜单。 */
 export function ProjectSection() {
   const projects = useStore((s) => s.projects);
   const currentProjectId = useStore((s) => s.currentProjectId);
   const reloadProjects = useStore((s) => s.reloadProjects);
   const enterProject = useStore((s) => s.enterProject);
   const exitProject = useStore((s) => s.exitProject);
+  const openProjectContextMenu = useStore((s) => s.openProjectContextMenu);
   const [creating, setCreating] = useState(false);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [confirmingId, setConfirmingId] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
 
   async function create() {
     // tour 第 1 步：默认定位到预设图目录的上一级（已释放到文档目录），让用户点进「初始引导」。
@@ -49,35 +48,6 @@ export function ProjectSection() {
     }
   }
 
-  function resetDelete() {
-    setDeletingId(null);
-    setConfirmingId(null);
-  }
-
-  async function remove(project: Project, mode: ProjectDeleteMode) {
-    setBusy(true);
-    try {
-      const result = await api.deleteProject(project.id, mode);
-      if (currentProjectId === project.id) await exitProject();
-      await reloadProjects();
-      resetDelete();
-      notifySuccess(
-        mode === "keep"
-          ? "项目已删除，素材仍保留在全局"
-          : mode === "move_out"
-            ? `已移出 ${result.moved_assets} 张素材回 workspace，保留 ${result.preserved_shared} 张共享素材` +
-              (result.failed_moves.length > 0
-                ? `；${result.failed_moves.length} 张移出失败已保留在全局`
-                : "")
-            : `已物理删除 ${result.deleted_assets} 张独占素材，保留 ${result.preserved_shared} 张共享素材`
-      );
-    } catch (error) {
-      notifyError(error, "删除项目失败");
-    } finally {
-      setBusy(false);
-    }
-  }
-
   return (
     <section className="mb-5 border-b border-edge pb-5">
       <div className="panel-kicker mb-2 flex items-center justify-between">
@@ -86,52 +56,17 @@ export function ProjectSection() {
           data-tour="new-project"
           onClick={create}
           disabled={creating}
-          className="normal-case tracking-normal text-accent hover:opacity-80 disabled:opacity-50"
+          className="rounded px-1 text-cold hover:opacity-80 disabled:opacity-50"
+          title={creating ? "导入中…" : "新建项目"}
+          aria-label="新建项目"
         >
-          {creating ? "导入中…" : "+ 新建项目"}
+          {creating ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />}
         </button>
       </div>
 
       <div className="space-y-1">
         {projects.map((project) => {
           const active = project.id === currentProjectId;
-          if (deletingId === project.id) {
-            if (busy) {
-              return (
-                <div key={project.id} className="rounded bg-panel2 p-2 text-[10px] text-muted">
-                  处理中…
-                </div>
-              );
-            }
-            return (
-              <div key={project.id} className="settings-card p-2 text-[10px]">
-                <div className="mb-1.5 text-muted">共享素材始终保留在全局</div>
-                <div className="flex flex-col gap-1">
-                  <button
-                    onClick={() => remove(project, "keep")}
-                    className="app-context-item px-2 py-1"
-                  >
-                    仅删除项目 · 素材留在全局
-                  </button>
-                  <button
-                    onClick={() => remove(project, "move_out")}
-                    className="app-context-item px-2 py-1"
-                  >
-                    删除项目并将文件移出园丁鸟 · 独占素材移回 workspace
-                  </button>
-                  <button
-                    onClick={() => setConfirmingId(project.id)}
-                    className="app-context-item is-danger px-2 py-1"
-                  >
-                    物理删除独占素材
-                  </button>
-                  <button onClick={resetDelete} className="text-muted hover:text-ink">
-                    取消
-                  </button>
-                </div>
-              </div>
-            );
-          }
           return (
             <div
               key={project.id}
@@ -139,6 +74,11 @@ export function ProjectSection() {
               className={`group rounded-lg px-2.5 py-2 ${
                 active ? "bg-accent/10 ring-1 ring-accent/40" : "hover:bg-panel2"
               }`}
+              onContextMenu={(e) => {
+                // 项目右键菜单（更新项目文件 / 删除项目）：阻止浏览器原生菜单，store 单实例渲染。
+                e.preventDefault();
+                openProjectContextMenu(e.clientX, e.clientY, project.id);
+              }}
             >
               <div className="flex items-center gap-1">
                 <button
@@ -153,44 +93,24 @@ export function ProjectSection() {
                     </span>
                   </span>
                 </button>
-                <button
-                  onClick={() => setDeletingId(project.id)}
-                  className="px-1 text-xs text-muted opacity-0 hover:text-red-400 focus:opacity-100 group-hover:opacity-100"
-                  title="删除项目"
-                  aria-label={`删除项目 ${project.name}`}
-                >
-                  ✕
-                </button>
+                {active && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void exitProject();
+                    }}
+                    className="rounded px-1 text-muted hover:text-accent focus-visible:opacity-100"
+                    title="退出项目 · 返回全局素材"
+                    aria-label={`退出项目 ${project.name}`}
+                  >
+                    <LogOut size={13} />
+                  </button>
+                )}
               </div>
-              {active && (
-                <button
-                  onClick={exitProject}
-                  className="mt-1 w-full rounded bg-panel px-2 py-1 text-[10px] text-accent hover:bg-edge"
-                >
-                  退出项目 · 返回全局素材
-                </button>
-              )}
             </div>
           );
         })}
       </div>
-      <ConfirmDialog
-        open={confirmingId !== null}
-        danger
-        title="物理删除独占素材"
-        message={
-          <>
-            项目的独占素材将从全局及所有项目物理删除，<strong>不可恢复</strong>；共享素材保留。
-          </>
-        }
-        confirmLabel="物理删除"
-        onConfirm={() => {
-          const p = projects.find((x) => x.id === confirmingId);
-          resetDelete();
-          if (p) void remove(p, "delete_exclusive");
-        }}
-        onCancel={resetDelete}
-      />
     </section>
   );
 }

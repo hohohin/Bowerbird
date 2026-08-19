@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
-use rusqlite::OptionalExtension;
+use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use ulid::Ulid;
 
@@ -84,11 +84,18 @@ pub struct Analysis {
 }
 
 /// 生成对话一轮（回看用）：用户输入的 prompt + 本轮产出的图（store_path）。
+/// `references` = 本轮实际下发的参考图（续轮含上一轮产出图）：前端各轮气泡上方画
+/// 「附件」缩略图用；`ref_assets` = 同一批路径反查的完整 asset（各轮 chip 气泡
+/// ReadonlyPrompt 用，与首轮对齐）。旧 meta 无此语义（早期只记首版），缺省为空。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenerationHistoryTurn {
     pub prompt: String,
     pub prompt_raw: Option<String>,
     pub images: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub references: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ref_assets: Vec<PromptedAsset>,
 }
 
 /// 某生成图所在 codex 会话的完整生成时间线（「回看生成对话」用）。
@@ -101,6 +108,10 @@ pub struct GenerationHistory {
     pub session_id: Option<String>,
     pub turns: Vec<GenerationHistoryTurn>,
     pub references: Vec<PromptedAsset>,
+    /// 首版 generation_meta 的 provider（codex / jimeng / cloud key）：「回看生成对话」重建的
+    /// 前端 job 用它定续轮坞 provider 初值，避免即梦会话默认落到 codex。
+    #[serde(default)]
+    pub provider: Option<String>,
 }
 
 /// 反推 caption 解析出的一个维度片段（动态标题 + 正文）。
@@ -650,6 +661,19 @@ impl Database {
         Ok(best)
     }
 
+    /// 库内全部素材的 origin_path 集合（项目刷新用：workspace 里已导入过的文件直接跳过，
+    /// 避免对不可去重文件——低熵纯色图等——重复入库）。
+    pub fn list_origin_paths(&self) -> AppResult<std::collections::HashSet<String>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT origin_path FROM assets WHERE origin_path IS NOT NULL")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        let mut out = std::collections::HashSet::new();
+        for row in rows {
+            out.insert(row?);
+        }
+        Ok(out)
+    }
+
     pub fn delete_asset(&self, id: &str) -> AppResult<()> {
         // 先取出磁盘路径（删 DB 后查不到）。asset_prompts/asset_tags/analyses
         // 由外键 ON DELETE CASCADE 自动清理（foreign_keys 在连接打开时已启用）。
@@ -936,7 +960,8 @@ impl Database {
         Ok(())
     }
 
-    /// 按 smart_query 过滤资产。前缀：`source:xxx` / `ext:xxx` / `tag:<name>`（未知前缀返回全部）。
+    /// 按 smart_query 过滤资产。前缀：`source:xxx` / `ext:xxx` / `tag:<name>`（未知前缀返回全部）；
+    /// `source:generated` / `source:!generated` 特判走 generation_session_id 非空/为空。
     /// `tag:` 走 asset_tags JOIN——不进 FTS（0002 触发器不维护 tags 列，见 P2 设计）。
     pub fn list_assets_smart(
         &self,
@@ -981,9 +1006,15 @@ impl Database {
         }
         // 「生成图」视图：任一 provider（codex / 即梦 / Bowerbird Cloud）出图入库时都写
         // generation_session_id，按它过滤比枚举 source 值更面向未来（新 provider 自动覆盖）。
-        if query == "source:generated" {
+        // source:!generated 是取反（侧栏「隐藏生成图」段）：只看导入/外部素材。
+        if query == "source:generated" || query == "source:!generated" {
+            let cond = if query == "source:generated" {
+                "generation_session_id IS NOT NULL"
+            } else {
+                "generation_session_id IS NULL"
+            };
             let sql = format!(
-                "SELECT {ASSET_COLS} FROM assets WHERE generation_session_id IS NOT NULL \
+                "SELECT {ASSET_COLS} FROM assets WHERE {cond} \
                  AND (?3 IS NULL OR EXISTS(SELECT 1 FROM project_assets pa \
                    WHERE pa.asset_id = assets.id AND pa.project_id IS ?3)) \
                  AND (?4 = 0 OR ?3 IS NOT NULL OR NOT EXISTS(SELECT 1 FROM project_assets pa \
@@ -1399,8 +1430,33 @@ impl Database {
                 session_id: None,
                 turns: vec![],
                 references: vec![],
+                provider: None,
             });
         };
+        Self::history_for_session(&conn, &session_id, project_id, annotations_dir)
+    }
+
+    /// 按 session_id 直取完整生成时间线（会话面板历史恢复用，全局不过滤项目）。
+    /// 重建逻辑与 [`Database::generation_history`] 同源（helper 复用）。
+    pub fn generation_history_by_session(
+        &self,
+        session_id: &str,
+        annotations_dir: Option<&Path>,
+    ) -> AppResult<GenerationHistory> {
+        let conn = self.conn.lock().unwrap();
+        Self::history_for_session(&conn, session_id, None, annotations_dir)
+    }
+
+    /// 从 generation_meta 重建某 session 的各轮 prompt + 产出图（「回看生成对话」与
+    /// 会话面板历史恢复共用）：按 created_at ASC, id ASC 排序，相邻相同 prompt 合并为
+    /// 同一轮（一次 codex_create_image 产多张图 → 多行同 prompt、时序相邻）。
+    /// `first_references` 取首版 generation_meta 的参考图，供前端「新会话重新生成」复用。
+    fn history_for_session(
+        conn: &Connection,
+        session_id: &str,
+        project_id: Option<&str>,
+        annotations_dir: Option<&Path>,
+    ) -> AppResult<GenerationHistory> {
         let mut stmt = conn.prepare(
             "SELECT json_extract(an.payload, '$.prompt'), json_extract(an.payload, '$.prompt_raw'), a.store_path, an.payload \
              FROM analyses an JOIN assets a ON a.id = an.asset_id \
@@ -1412,6 +1468,7 @@ impl Database {
         )?;
         let mut turns: Vec<GenerationHistoryTurn> = Vec::new();
         let mut first_references: Vec<String> = Vec::new();
+        let mut first_provider: Option<String> = None;
         let mut refs_done = false;
         let rows = stmt.query_map(rusqlite::params![session_id, project_id], |r| {
             Ok((
@@ -1423,7 +1480,7 @@ impl Database {
         })?;
         for row in rows {
             let (prompt, prompt_raw, store_path, payload) = row?;
-            // 首版 generation_meta 的参考图（供「新会话重新生成」复用）。
+            // 首版 generation_meta 的参考图与 provider（供「新会话重新生成」复用 / 续轮坞初值）。
             if !refs_done {
                 refs_done = true;
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&payload) {
@@ -1433,11 +1490,25 @@ impl Database {
                             .filter_map(|x| x.as_str().map(String::from))
                             .collect();
                     }
+                    if let Some(p) = v.get("provider").and_then(|x| x.as_str()) {
+                        first_provider = Some(p.to_string());
+                    }
                 }
             }
             let (Some(prompt), Some(path)) = (prompt, store_path) else {
                 continue;
             };
+            // 本轮实际下发的参考图（同轮多行的 payload 相同；相邻同 prompt 跨轮合并时保留首行）。
+            let row_refs: Vec<String> = serde_json::from_str::<serde_json::Value>(&payload)
+                .ok()
+                .and_then(|v| {
+                    v.get("references").and_then(|x| x.as_array()).map(|arr| {
+                        arr.iter()
+                            .filter_map(|x| x.as_str().map(String::from))
+                            .collect()
+                    })
+                })
+                .unwrap_or_default();
             // 相邻同 prompt = 同一轮多图，合并；否则开新轮（首轮的 prompt_raw 随新轮记一次）。
             if turns.last().map(|t| t.prompt.as_str()) == Some(prompt.as_str()) {
                 turns.last_mut().unwrap().images.push(path);
@@ -1446,6 +1517,8 @@ impl Database {
                     prompt,
                     prompt_raw,
                     images: vec![path],
+                    references: row_refs,
+                    ref_assets: Vec::new(),
                 });
             }
         }
@@ -1455,54 +1528,150 @@ impl Database {
         let references = if first_references.is_empty() {
             Vec::new()
         } else {
-            let placeholders = (0..first_references.len())
-                .map(|i| format!("?{}", i + 1))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let sql =
-                format!("SELECT {ASSET_COLS} FROM assets WHERE store_path IN ({placeholders})");
-            let mut stmt = conn.prepare(&sql)?;
-            let rows = stmt
-                .query_map(rusqlite::params_from_iter(first_references.iter()), |r| {
-                    asset_from_row(r)
-                })?;
-            let mut by_path: HashMap<String, Asset> = HashMap::new();
-            for r in rows {
-                let asset = r?;
-                if let Some(project_id) = project_id {
-                    let visible: bool = conn.query_row(
-                        "SELECT EXISTS(SELECT 1 FROM project_assets \
-                         WHERE project_id = ?1 AND asset_id = ?2)",
-                        rusqlite::params![project_id, &asset.id],
-                        |row| row.get(0),
-                    )?;
-                    if !visible {
-                        continue;
-                    }
-                }
-                if let Some(p) = &asset.store_path {
-                    by_path.insert(p.clone(), asset);
-                }
-            }
-            let mut out = Vec::new();
-            for path in &first_references {
-                if let Some(asset) = by_path.remove(path) {
-                    out.push(PromptedAsset::from(asset));
+            let by_path =
+                Self::lookup_ref_assets_by_path(conn, &first_references, project_id, annotations_dir)?;
+            let mut seen = std::collections::HashSet::new();
+            first_references
+                .iter()
+                .filter(|p| seen.insert((*p).clone()))
+                .filter_map(|p| by_path.get(p).cloned())
+                .collect()
+        };
+        // 各轮参考图反查（每轮 chip 气泡 / 附件缩略图，与首轮展示对齐）：全部轮的 references
+        // 一次反查（同首版同一来源），同图跨轮复用。
+        let mut all_ref_paths: Vec<String> = turns
+            .iter()
+            .flat_map(|t| t.references.iter().cloned())
+            .collect();
+        all_ref_paths.sort();
+        all_ref_paths.dedup();
+        if !all_ref_paths.is_empty() {
+            let by_path =
+                Self::lookup_ref_assets_by_path(conn, &all_ref_paths, project_id, annotations_dir)?;
+            for t in turns.iter_mut() {
+                if t.references.is_empty() {
                     continue;
                 }
-                if let Some(dir) = annotations_dir {
+                t.ref_assets = t
+                    .references
+                    .iter()
+                    .filter_map(|p| by_path.get(p).cloned())
+                    .collect();
+            }
+        }
+        Ok(GenerationHistory {
+            session_id: Some(session_id.to_string()),
+            turns,
+            references,
+            provider: first_provider,
+        })
+    }
+
+    /// 按 store_path 反查完整 asset → PromptedAsset 映射（generation_meta 参考图共用）：
+    /// 项目 scope 过滤不可见资产；未命中且位于标注缓存目录（<库根>/annotations/）时从
+    /// 临时文件 + sidecar 合成「不入库」标注图。
+    fn lookup_ref_assets_by_path(
+        conn: &Connection,
+        paths: &[String],
+        project_id: Option<&str>,
+        annotations_dir: Option<&Path>,
+    ) -> AppResult<HashMap<String, PromptedAsset>> {
+        let mut out: HashMap<String, PromptedAsset> = HashMap::new();
+        if paths.is_empty() {
+            return Ok(out);
+        }
+        let placeholders = (1..=paths.len())
+            .map(|i| format!("?{i}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!("SELECT {ASSET_COLS} FROM assets WHERE store_path IN ({placeholders})");
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(paths.iter()), |r| {
+            asset_from_row(r)
+        })?;
+        for r in rows {
+            let asset = r?;
+            if let Some(project_id) = project_id {
+                let visible: bool = conn.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM project_assets \
+                     WHERE project_id = ?1 AND asset_id = ?2)",
+                    rusqlite::params![project_id, &asset.id],
+                    |row| row.get(0),
+                )?;
+                if !visible {
+                    continue;
+                }
+            }
+            if let Some(p) = &asset.store_path {
+                out.insert(p.clone(), PromptedAsset::from(asset));
+            }
+        }
+        if let Some(dir) = annotations_dir {
+            for path in paths {
+                if !out.contains_key(path) {
                     if let Some(synth) = synth_annotation_asset(dir, path) {
-                        out.push(synth);
+                        out.insert(path.clone(), synth);
                     }
                 }
             }
-            out
+        }
+        Ok(out)
+    }
+
+    /// 取某会话「最后一个有图轮」的产出图（截前 10 张，服务端参考图上限）——即梦/Cloud 续轮
+    /// 的服务端权威回退：前端 job.turns 是易失内存（重启恢复/回看重建可能缺历史轮），续轮未显式
+    /// 携带参考图时从这里取上一轮产出图，避免即梦 text2image 丢上一轮图。无图返回空 Vec。
+    pub fn last_generated_images_for_session(&self, session_id: &str) -> Vec<String> {
+        let Ok(conn) = self.conn.lock() else {
+            return Vec::new();
         };
-        Ok(GenerationHistory {
-            session_id: Some(session_id),
-            turns,
-            references,
+        Self::history_for_session(&conn, session_id, None, None)
+            .map(|h| {
+                h.turns
+                    .into_iter()
+                    .rev()
+                    .find(|t| !t.images.is_empty())
+                    .map(|t| t.images.into_iter().take(10).collect())
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default()
+    }
+
+    /// 会话某端（首/末）generation_meta 轮的 provider。首端判断会话「原生引擎」（codex thread
+    /// 是否可 resume——非 codex 原生的会话切 codex 不能拿 submit_id 去 resume）；末端判断上一
+    /// 轮产出引擎（codex resume 后看不到其他引擎的轮，需显式附最新产出图交接）。无 meta 返回 None。
+    pub fn session_generation_provider(&self, session_id: &str, last: bool) -> Option<String> {
+        let conn = self.conn.lock().ok()?;
+        let order = if last { "DESC" } else { "ASC" };
+        let sql = format!(
+            "SELECT json_extract(payload, '$.provider') FROM analyses \
+             WHERE kind = 'generation_meta' \
+               AND json_extract(payload, '$.session_id') = ?1 \
+             ORDER BY created_at {order}, id {order} LIMIT 1"
+        );
+        conn.query_row(&sql, rusqlite::params![session_id], |r| {
+            r.get::<_, Option<String>>(0)
         })
+        .ok()
+        .flatten()
+    }
+
+    /// 会话最近一次记录的 codex thread 句柄（最新一条 codex_thread 非空的 meta）——非 codex
+    /// 原生会话（即梦/Cloud 会话）切 codex 后，连续 codex 轮共享 thread 的续接依据；首轮
+    /// （还没有任何 codex 轮）返回 None → 开新 thread，完成时由 finalize 落句柄。
+    pub fn session_codex_thread(&self, session_id: &str) -> Option<String> {
+        let conn = self.conn.lock().ok()?;
+        conn.query_row(
+            "SELECT json_extract(payload, '$.codex_thread') FROM analyses \
+             WHERE kind = 'generation_meta' \
+               AND json_extract(payload, '$.session_id') = ?1 \
+               AND json_extract(payload, '$.codex_thread') IS NOT NULL \
+             ORDER BY created_at DESC, id DESC LIMIT 1",
+            rusqlite::params![session_id],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .ok()
+        .flatten()
     }
 
     /// 创作板用：有 caption（反推）或 annotation（图片标注）的资产 + 最新 caption 正文与维度。
@@ -1577,6 +1746,61 @@ impl Database {
             }
         }
         Ok(out)
+    }
+
+    /// 按 id 取单个 PromptedAsset（创作板编辑器挑图补拉用）：caption / sections /「标注」
+    /// 维度合成与 `list_prompted_assets` 同源（不 collapse、不过滤 project——id 已由前端
+    /// 持有，补拉只为拿到完整字段）。背景：瀑布流列表经 collapse_generation_groups 折叠，
+    /// 同会话过程图不在前端已加载资产集合里，轮播 / 右键「插入创作板」点到它们时编辑器
+    /// 查表 miss——不补拉会插出 IMG 占位 chip 且发送时不带该图。资产不存在返回 None。
+    pub fn get_prompted_asset(&self, asset_id: &str) -> AppResult<Option<PromptedAsset>> {
+        let conn = self.conn.lock().unwrap();
+        let sql = format!(
+            "SELECT {ASSET_COLS}, (\
+               SELECT json_extract(payload, '$.text') FROM analyses \
+               WHERE asset_id = assets.id AND kind = 'caption' \
+               ORDER BY created_at DESC LIMIT 1\
+             ) AS caption, (\
+               SELECT payload FROM analyses \
+               WHERE asset_id = assets.id AND kind = 'caption' \
+               ORDER BY created_at DESC LIMIT 1\
+             ) AS caption_payload \
+             FROM assets WHERE id = ?1"
+        );
+        let Some(mut p) = conn
+            .query_row(&sql, rusqlite::params![asset_id], |r| {
+                let (sections, dimensions, parse_status) =
+                    parse_caption_payload(r.get::<_, Option<String>>("caption_payload")?);
+                Ok(PromptedAsset {
+                    asset: asset_from_row(r)?,
+                    caption: r.get::<_, Option<String>>("caption")?,
+                    sections,
+                    dimensions,
+                    parse_status,
+                })
+            })
+            .optional()?
+        else {
+            return Ok(None);
+        };
+        // 「标注」维度：最新一条 annotation（list_prompted_assets 的单资产等价实现）。
+        let annotation = conn
+            .query_row(
+                "SELECT payload FROM analyses WHERE asset_id = ?1 AND kind = 'annotation' \
+                 ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                rusqlite::params![asset_id],
+                |r| r.get::<_, String>(0),
+            )
+            .ok()
+            .and_then(|payload| annotation_section(&payload));
+        if let Some(section) = annotation {
+            match p.sections.as_mut() {
+                Some(sections) if sections.iter().any(|s| s.title == section.title) => {}
+                Some(sections) => sections.push(section),
+                None => p.sections = Some(vec![section]),
+            }
+        }
+        Ok(Some(p))
     }
 
     /// 有 caption（反推数据）的资产 id 集合（轻量，供瀑布流标 🏷️，不拉 caption 正文）。
@@ -2346,6 +2570,12 @@ mod tests {
         assert_eq!(h.turns[0].images.len(), 2);
         assert_eq!(h.turns[1].prompt, "修改1");
         assert_eq!(h.turns[1].images.len(), 1);
+        // 按轮重建的本轮参考图（气泡「附件」缩略图用）：首轮取该轮 meta 的 references，
+        // 未记参考的轮为空；ref_assets 为同路径反查的完整 asset（chip 气泡用）。
+        assert_eq!(h.turns[0].references.len(), 2);
+        assert!(h.turns[1].references.is_empty());
+        assert_eq!(h.turns[0].ref_assets.len(), 2);
+        assert!(h.turns[1].ref_assets.is_empty());
         // 首版参考图按 store_path 反查为完整 asset（复用还原用）。
         let ref_ids: Vec<String> = h.references.iter().map(|a| a.asset.id.clone()).collect();
         assert_eq!(ref_ids.len(), 2, "两参考图均命中");
@@ -2357,6 +2587,264 @@ mod tests {
         let h2 = db.generation_history(&plain, None, None).unwrap();
         assert!(h2.session_id.is_none());
         assert!(h2.turns.is_empty());
+    }
+
+    #[test]
+    fn generation_history_by_session_scopes_to_requested_session() {
+        // 会话面板历史恢复：按 session_id 直取时间线（不经资产反查），只含该 session 的轮，
+        // 与 generation_history 同一重建逻辑；未知 session 返回空 turns。
+        let db = db();
+        fn put_gen(db: &Database, id: &str, session: &str) {
+            db.insert_asset(&Asset {
+                id: id.into(),
+                name: id.into(),
+                ext: Some("png".into()),
+                origin_path: None,
+                store_path: Some(format!("/tmp/{id}.png")),
+                thumb_path: None,
+                size: Some(0),
+                width: Some(10),
+                height: Some(10),
+                duration: Some(0.0),
+                phash: None,
+                colors: None,
+                rating: Some(0),
+                source: Some("codex".into()),
+                source_url: None,
+                folder_id: None,
+                created_at: None,
+                file_mtime: Some(0),
+                generation_session_id: Some(session.into()),
+            })
+            .unwrap();
+        }
+        put_gen(&db, "s1", "sess-R");
+        put_gen(&db, "s2", "sess-R");
+        put_gen(&db, "o1", "sess-OTHER");
+        for (id, aid, prompt, sid) in [
+            ("02A1", "s1", "轮1", "sess-R"),
+            ("02A2", "s2", "轮2", "sess-R"),
+            ("02B1", "o1", "别会话", "sess-OTHER"),
+        ] {
+            db.insert_analysis(&Analysis {
+                id: id.into(),
+                asset_id: aid.into(),
+                kind: "generation_meta".into(),
+                payload: serde_json::json!({ "prompt": prompt, "session_id": sid }).to_string(),
+                provider: Some("codex-cli".into()),
+                created_at: None,
+            })
+            .unwrap();
+        }
+
+        let h = db.generation_history_by_session("sess-R", None).unwrap();
+        assert_eq!(h.session_id.as_deref(), Some("sess-R"));
+        assert_eq!(
+            h.turns.iter().map(|t| t.prompt.as_str()).collect::<Vec<_>>(),
+            vec!["轮1", "轮2"],
+            "只含请求 session 的轮"
+        );
+
+        let none = db.generation_history_by_session("sess-NOPE", None).unwrap();
+        assert_eq!(none.session_id.as_deref(), Some("sess-NOPE"));
+        assert!(none.turns.is_empty());
+    }
+
+    #[test]
+    fn last_generated_images_takes_last_imaged_turn_capped() {
+        // 续轮服务端回退：取「最后一个有图的轮」（末尾失败轮无 meta 不影响）、单轮超 10 张截前
+        // 10（服务端参考图上限）、无图会话 / 未知 session 返回空。
+        let db = db();
+        fn put_gen(db: &Database, id: &str, session: &str) {
+            db.insert_asset(&Asset {
+                id: id.into(),
+                name: id.into(),
+                ext: Some("png".into()),
+                origin_path: None,
+                store_path: Some(format!("/tmp/{id}.png")),
+                thumb_path: None,
+                size: Some(0),
+                width: Some(10),
+                height: Some(10),
+                duration: Some(0.0),
+                phash: None,
+                colors: None,
+                rating: Some(0),
+                source: Some("jimeng".into()),
+                source_url: None,
+                folder_id: None,
+                created_at: None,
+                file_mtime: Some(0),
+                generation_session_id: Some(session.into()),
+            })
+            .unwrap();
+        }
+        fn put_meta(db: &Database, id: &str, aid: &str, prompt: &str, sid: &str) {
+            db.insert_analysis(&Analysis {
+                id: id.into(),
+                asset_id: aid.into(),
+                kind: "generation_meta".into(),
+                payload: serde_json::json!({
+                    "prompt": prompt, "session_id": sid, "provider": "jimeng"
+                })
+                .to_string(),
+                provider: Some("jimeng".into()),
+                created_at: None,
+            })
+            .unwrap();
+        }
+        // created_at 秒级同值 → 行序由 id 决定，用有序 id 固定插入顺序。
+        // sess-L：轮1 1 图、轮2 2 图（末轮）→ 取轮2 的两张。
+        put_gen(&db, "l1", "sess-L");
+        put_gen(&db, "l2", "sess-L");
+        put_gen(&db, "l3", "sess-L");
+        put_meta(&db, "03A1", "l1", "首版", "sess-L");
+        put_meta(&db, "03A2", "l2", "修改1", "sess-L");
+        put_meta(&db, "03A3", "l3", "修改1", "sess-L"); // 同轮第二图（相邻同 prompt 合并）
+        let imgs = db.last_generated_images_for_session("sess-L");
+        assert_eq!(imgs, vec!["/tmp/l2.png".to_string(), "/tmp/l3.png".to_string()]);
+
+        // sess-C：单轮 12 图（同 prompt 相邻合并）→ 截前 10。
+        for i in 0..12 {
+            let id = format!("c{i}");
+            put_gen(&db, &id, "sess-C");
+            put_meta(&db, &format!("03B{i:02}"), &id, "大批量", "sess-C");
+        }
+        let capped = db.last_generated_images_for_session("sess-C");
+        assert_eq!(capped.len(), 10);
+        assert_eq!(capped[0], "/tmp/c0.png");
+
+        // 未知 session / 无图会话 → 空。
+        assert!(db.last_generated_images_for_session("sess-NOPE").is_empty());
+    }
+
+    #[test]
+    fn session_generation_provider_first_and_last() {
+        // 跨引擎会话判定：首端 = 原生引擎（codex thread 可否 resume），末端 = 上一轮产出
+        // 引擎（codex resume 后看不到别家轮，需附最新产出图）。混合会话两端不同。
+        let db = db();
+        fn put_gen(db: &Database, id: &str, session: &str) {
+            db.insert_asset(&Asset {
+                id: id.into(),
+                name: id.into(),
+                ext: Some("png".into()),
+                origin_path: None,
+                store_path: Some(format!("/tmp/{id}.png")),
+                thumb_path: None,
+                size: Some(0),
+                width: Some(10),
+                height: Some(10),
+                duration: Some(0.0),
+                phash: None,
+                colors: None,
+                rating: Some(0),
+                source: Some("codex".into()),
+                source_url: None,
+                folder_id: None,
+                created_at: None,
+                file_mtime: Some(0),
+                generation_session_id: Some(session.into()),
+            })
+            .unwrap();
+        }
+        fn put_meta(db: &Database, id: &str, aid: &str, prompt: &str, sid: &str, provider: &str) {
+            db.insert_analysis(&Analysis {
+                id: id.into(),
+                asset_id: aid.into(),
+                kind: "generation_meta".into(),
+                payload: serde_json::json!({
+                    "prompt": prompt, "session_id": sid, "provider": provider
+                })
+                .to_string(),
+                provider: Some(provider.into()),
+                created_at: None,
+            })
+            .unwrap();
+        }
+        // sess-MIX：轮1 codex → 轮2 jimeng（codex-即梦-codex 场景的中间态）。
+        put_gen(&db, "m1", "sess-MIX");
+        put_gen(&db, "m2", "sess-MIX");
+        put_meta(&db, "04A1", "m1", "首版", "sess-MIX", "codex-cli");
+        put_meta(&db, "04A2", "m2", "修改1", "sess-MIX", "jimeng");
+        assert_eq!(
+            db.session_generation_provider("sess-MIX", false).as_deref(),
+            Some("codex-cli"),
+            "首端 = 原生引擎"
+        );
+        assert_eq!(
+            db.session_generation_provider("sess-MIX", true).as_deref(),
+            Some("jimeng"),
+            "末端 = 上一轮产出引擎"
+        );
+        // 无 meta 的会话两端都为 None。
+        assert!(db.session_generation_provider("sess-EMPTY", false).is_none());
+        assert!(db.session_generation_provider("sess-EMPTY", true).is_none());
+    }
+
+    #[test]
+    fn session_codex_thread_returns_latest_recorded_handle() {
+        // 非 codex 原生会话的 codex thread 句柄：取**最新**一条记录了 codex_thread 的 meta
+        // （连续 codex 轮共享 thread；中间夹的即梦轮不带句柄不影响）；未记录返回 None。
+        let db = db();
+        fn put_gen(db: &Database, id: &str, session: &str) {
+            db.insert_asset(&Asset {
+                id: id.into(),
+                name: id.into(),
+                ext: Some("png".into()),
+                origin_path: None,
+                store_path: Some(format!("/tmp/{id}.png")),
+                thumb_path: None,
+                size: Some(0),
+                width: Some(10),
+                height: Some(10),
+                duration: Some(0.0),
+                phash: None,
+                colors: None,
+                rating: Some(0),
+                source: Some("jimeng".into()),
+                source_url: None,
+                folder_id: None,
+                created_at: None,
+                file_mtime: Some(0),
+                generation_session_id: Some(session.into()),
+            })
+            .unwrap();
+        }
+        fn put_meta(
+            db: &Database,
+            id: &str,
+            aid: &str,
+            prompt: &str,
+            sid: &str,
+            provider: &str,
+            thread: Option<&str>,
+        ) {
+            db.insert_analysis(&Analysis {
+                id: id.into(),
+                asset_id: aid.into(),
+                kind: "generation_meta".into(),
+                payload: serde_json::json!({
+                    "prompt": prompt, "session_id": sid, "provider": provider,
+                    "codex_thread": thread,
+                })
+                .to_string(),
+                provider: Some(provider.into()),
+                created_at: None,
+            })
+            .unwrap();
+        }
+        // sess-X：轮1 jimeng → 轮2 codex（新 thread T2）→ 轮3 jimeng → 轮4 codex（resume T2）。
+        put_gen(&db, "x1", "sess-X");
+        put_gen(&db, "x2", "sess-X");
+        put_gen(&db, "x3", "sess-X");
+        put_gen(&db, "x4", "sess-X");
+        put_meta(&db, "05A1", "x1", "首版", "sess-X", "jimeng", None);
+        put_meta(&db, "05A2", "x2", "修改1", "sess-X", "codex-cli", Some("T2"));
+        put_meta(&db, "05A3", "x3", "修改2", "sess-X", "jimeng", None);
+        put_meta(&db, "05A4", "x4", "修改3", "sess-X", "codex-cli", Some("T2"));
+        assert_eq!(db.session_codex_thread("sess-X").as_deref(), Some("T2"));
+        // 未记录句柄的会话 → None（首轮 codex 前的状态）。
+        assert!(db.session_codex_thread("sess-EMPTY").is_none());
     }
 
     #[test]
@@ -2637,6 +3125,71 @@ mod tests {
         assert_eq!(r[0].caption.as_deref(), Some("legacy raw caption"));
         assert!(r[0].dimensions.is_none());
         assert!(r[0].parse_status.is_none());
+    }
+
+    #[test]
+    fn get_prompted_asset_by_id() {
+        // 按 id 补拉（创作板挑图查表 miss 用）：caption/标注 维度合成与 list 版同源；
+        // 无 caption 的普通资产也返回（纯参考图），id 不存在返回 None。
+        let db = db();
+        let a1 = put_asset(&db, "captioned");
+        let a2 = put_asset(&db, "caption-plus-annotation");
+        let a3 = put_asset(&db, "plain");
+
+        let caption_payload = serde_json::json!({
+            "schema_version": 1,
+            "text": "a neon-lit city street",
+            "sections": [{ "title": "光影", "body": "neon rim light" }]
+        })
+        .to_string();
+        for asset_id in [a1.clone(), a2.clone()] {
+            db.insert_analysis(&Analysis {
+                id: Ulid::new().to_string(),
+                asset_id: asset_id.clone(),
+                kind: "caption".to_string(),
+                payload: caption_payload.clone(),
+                provider: Some("codex-cli".into()),
+                created_at: None,
+            })
+            .unwrap();
+        }
+        db.insert_analysis(&Analysis {
+            id: Ulid::new().to_string(),
+            asset_id: a2.clone(),
+            kind: "annotation".to_string(),
+            payload: serde_json::json!({
+                "schema_version": 1,
+                "source_asset_id": "src",
+                "shapes": [
+                    { "type": "rect", "x1": 120, "y1": 180, "x2": 640, "y2": 760,
+                       "color": "#ff4d4d", "token": "<bbox>120 180 640 760</bbox>" }
+                ]
+            })
+            .to_string(),
+            provider: None,
+            created_at: None,
+        })
+        .unwrap();
+
+        let p1 = db.get_prompted_asset(&a1).unwrap().expect("有 caption 应返回");
+        assert_eq!(p1.caption.as_deref(), Some("a neon-lit city street"));
+        assert_eq!(
+            p1.sections.as_ref().unwrap()[0].body,
+            "neon rim light",
+            "sections 合成应与 list_prompted_assets 同源"
+        );
+
+        let p2 = db.get_prompted_asset(&a2).unwrap().expect("应返回");
+        let sections = p2.sections.as_ref().expect("应有 sections");
+        assert_eq!(sections.len(), 2, "caption 光影 + 追加标注");
+        assert_eq!(sections[1].title, "标注");
+        assert_eq!(sections[1].body, "<bbox>120 180 640 760</bbox>");
+
+        let p3 = db.get_prompted_asset(&a3).unwrap().expect("无 caption 普通资产也应返回");
+        assert!(p3.caption.is_none());
+        assert!(p3.sections.is_none());
+
+        assert!(db.get_prompted_asset("no-such-id").unwrap().is_none());
     }
 
     #[test]

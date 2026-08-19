@@ -35,6 +35,11 @@ export interface ProjectCreateResult {
   member_count: number;
 }
 
+/** 「更新项目文件」结果：本次新加入项目的素材数（0 = 文件夹没有新素材）。 */
+export interface ProjectRefreshResult {
+  added_count: number;
+}
+
 /** 删除项目时对独占素材的处理方式；共享素材永远保留在全局。 */
 export type ProjectDeleteMode = "keep" | "move_out" | "delete_exclusive";
 
@@ -182,6 +187,12 @@ export interface GenTurn {
   // prompt 则是实际发给 AI 的完整文本（用途注入等），收进「thinking」式折叠。旧数据 / 续轮为 null。
   promptRaw?: string | null;
   images: string[];
+  // 本轮实际下发的参考图 store_path（started 事件回填；续轮含后端合并的上一轮产出图）。
+  // 气泡上方「附件」缩略图用；首轮展示走 refAssets（完整 asset 带名称），不依赖它。
+  refs?: string[];
+  // 本轮组稿时挑选的参考图完整 asset（内存态，不入库；chip 气泡 ReadonlyPrompt 用——
+  // 与首轮对齐；恢复/回看的会话由历史重建的 GenerationHistoryTurn.ref_assets 填充）。
+  refAssets?: Asset[];
   // 本轮用的 provider（done 事件回填，"codex-cli"/"jimeng"）；TurnView 角标「via ...」。
   provider?: string;
   // 本轮开始时间戳与完成耗时（done/error 回填 durationMs；恢复的 job 无 startedAt → 不显示用时）。
@@ -225,6 +236,10 @@ export interface GenerationHistoryTurn {
   prompt: string;
   prompt_raw?: string | null; // 未铺开的原始编辑框文本（复用优先用它还原 chip）；旧 meta 为 null → 回退 prompt
   images: string[]; // store_path
+  /** 本轮实际下发的参考图（续轮含上一轮产出图）；旧 meta / 空参考为空。 */
+  references?: string[];
+  /** 同一批参考图反查的完整 asset（各轮 chip 气泡 ReadonlyPrompt 用）。 */
+  ref_assets?: PromptedAsset[];
 }
 
 export interface GenerationHistory {
@@ -233,6 +248,9 @@ export interface GenerationHistory {
   /** 首版参考图完整 asset：「复用到创作板」还原参考图 + 「新会话重新生成」派生 store_path。
    *  不入库标注图由 <库根>/annotations/ 缓存合成（含「标注」维度 sections）。 */
   references: PromptedAsset[];
+  /** 首版 generation_meta 的 provider：回看重建的 job 用它定续轮坞 provider 初值（即梦会话
+   *  不再默认落到 codex）；旧 meta 无此字段为 null。 */
+  provider?: string | null;
 }
 
 /** 应用设置（后端 settings.json 持久化） */
@@ -320,6 +338,25 @@ export interface GenJobSummary {
   running: boolean;
 }
 
+/** 会话面板历史恢复项（recent_gen_sessions 命令返回）：终态（done/failed）生成 job +
+ * 从 generation_meta 重建的各轮时间线（含产出图）。status 取 task_queue 列（权威终态）。 */
+export interface RecentGenSession {
+  id: string;
+  provider: string;
+  status: string; // "done" | "failed"
+  prompt: string;
+  error: string | null;
+  session_id: string | null;
+  conversation_id: string | null;
+  project_id: string | null;
+  ratio: string | null;
+  references: string[];
+  created_at: number;
+  turns: GenerationHistoryTurn[];
+  /** 首版参考图完整 asset（面板缩略图 / 复用还原；不入库标注图由缓存合成）。 */
+  ref_assets: PromptedAsset[];
+}
+
 export interface LocalAgentPendingApproval {
   kind: "refine_plan";
   action: "submit_refine_plan";
@@ -405,7 +442,7 @@ export interface AgentPromptResult {
 }
 
 export type CodexChunk =
-  | { kind: "started"; job_id: string }
+  | { kind: "started"; job_id: string; references?: string[]; ratio?: string | null }
   | { kind: "delta"; text: string; job_id?: string }
   | { kind: "submit"; submit_id: string; job_id?: string }
   | {

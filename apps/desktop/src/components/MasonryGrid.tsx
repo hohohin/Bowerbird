@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent } from "react";
 import { createPortal } from "react-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { ImagePlus, SearchX } from "lucide-react";
+import { Check, ImagePlus, SearchX } from "lucide-react";
 import { useStore } from "../store";
 import { api } from "../lib/api";
 import { notifyError, notifySuccess } from "../lib/notify";
@@ -28,18 +28,25 @@ function readFileAsDataURL(file: File): Promise<string> {
   });
 }
 
+// 引入二选一菜单（「Shift + 左键引入」开启时的左键行为）尺寸估算，用于视口钳制。
+const PICK_MENU_W = 172;
+const PICK_MENU_H = 78;
+
 function Thumb({
   asset,
   group,
+  orderedIds,
 }: {
   asset: Asset;
   group?: Asset[];
+  orderedIds: string[]; // 瀑布流可见卡片顺序（Shift 范围多选用）
 }) {
   const cardRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
   const selected = useStore((s) => s.mode === "manage" && s.selectedIds.has(asset.id));
-  // 挑图模式（点一下插参考图 chip）：创作板打开 或 会话「重新编辑」中。
-  const pickMode = useStore((s) => s.boardOpen || s.genEditing);
+  // 挑图模式（点一下插参考图 chip）：创作板对话框常驻 / 会话「重新编辑」中。批量管理
+  // （manage）模式优先于挑图——点击仍是选择/框选、可拖拽进文件夹，不受常驻对话框影响。
+  const pickMode = useStore((s) => (s.boardOpen || s.genEditing) && s.mode !== "manage");
   const openContextMenu = useStore((s) => s.openContextMenu);
   // 反推全局可见：本缩略图正在反推 / 在队列里。角标点击 = 取消（运行中 kill 子进程 / 排队中移出队列）。
   const describeStatus = useStore((s) =>
@@ -78,6 +85,26 @@ function Thumb({
       window.dispatchEvent(new CustomEvent("bowerbird://board-asset-peek", { detail: shown.id }));
     }, 450);
   }
+
+  // 「Shift + 左键引入」开启时，板开着期间的左键不是静默无动作，而是弹出二选一菜单
+  // （添加到编辑框 / 打开图片详情）。点菜单外 / Esc 关闭。
+  const [pickMenu, setPickMenu] = useState<{ x: number; y: number } | null>(null);
+  const pickMenuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!pickMenu) return;
+    function onDown(e: globalThis.MouseEvent) {
+      if (!pickMenuRef.current?.contains(e.target as Node)) setPickMenu(null);
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setPickMenu(null);
+    }
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [pickMenu]);
 
   // 同流程合并：组内 >1 张才显轮播。组到达 / 变化时回到末位（最新一张 = 列表里展示的那张）。
   const groupLen = group && group.length > 1 ? group.length : 0;
@@ -241,18 +268,38 @@ function Thumb({
     }
     setPreview(null);
   }
-  function activateAsset(shift: boolean) {
+  function activateAsset(shift: boolean, at?: { x: number; y: number }) {
     dismissPreview();
     const st = useStore.getState();
-    if (st.boardOpen || st.genEditing) {
-      // 设置开启「Shift + 左键引入」时，未按 Shift 的点击不引入（防误触，也不做其它动作）。
+    // manage 优先于挑图（创作模式激活时批量管理不能被挑图吞掉点击）。
+    if (st.mode === "manage") {
+      // Shift+点击 = 从上次点击的卡片框选到本卡（范围多选）；普通点击 = 单张增减选中。
+      if (shift) st.selectRange(asset.id, orderedIds);
+      else st.toggleSelect(shown.id);
+    } else if (st.boardOpen || st.genEditing) {
       if (shift || !st.settings?.board_shift_pick) {
         window.dispatchEvent(
           new CustomEvent("bowerbird://board-asset-picked", { detail: shown.id })
         );
+        // 创作模式左键：有维度数据（反推/标注 sections）的图同步展开维度环，插完参考图
+        // 直接挑维度；无维度不呼环（纯参考图）。长按窥视不受影响——长按触发的松开被
+        // suppressClick 吞掉不会走到这里，两条路径不重复呼环。会话编辑坞同样呼环：
+        // 点扇区插进当前编辑器（pickCaptionSection 不再退出坞）。
+        if (
+          (st.boardOpen || st.genEditing) &&
+          st.promptedAssets.some(
+            (a) => a.id === shown.id && a.sections && a.sections.length > 0,
+          )
+        ) {
+          st.openCaptionRing(shown.id);
+        }
+      } else {
+        // 设置开启「Shift + 左键引入」时，未按 Shift 的点击不直接引入（防误触），
+        // 但也不再静默无动作——弹出二选一菜单给用户明确反馈。键盘触发无坐标，锚到卡片下方。
+        const rect = cardRef.current?.getBoundingClientRect();
+        setPickMenu(at ?? (rect ? { x: rect.left, y: rect.bottom + 4 } : { x: 8, y: 8 }));
       }
-    } else if (st.mode === "manage") st.toggleSelect(shown.id);
-    else st.openDetail(shown.id);
+    } else st.openDetail(shown.id);
   }
   // 浮层定位：默认鼠标右下偏移，靠右/下边时翻转到左/上，留 pad 不贴边。尺寸跟随缩略图×2。
   let previewLeft = 0;
@@ -270,6 +317,14 @@ function Thumb({
     previewTop = Math.max(pad, previewTop);
   }
 
+  // 引入菜单定位：跟随点击点，超右/下边缘时收进来（两项菜单，尺寸估算即可）。
+  let pickMenuLeft = 0;
+  let pickMenuTop = 0;
+  if (pickMenu) {
+    pickMenuLeft = Math.max(4, Math.min(pickMenu.x, window.innerWidth - PICK_MENU_W - 8));
+    pickMenuTop = Math.max(4, Math.min(pickMenu.y, window.innerHeight - PICK_MENU_H - 8));
+  }
+
   return (
     <div
       ref={cardRef}
@@ -278,8 +333,10 @@ function Thumb({
       role="button"
       tabIndex={0}
       aria-label={`${shown.name}${selected ? "，已选中" : ""}`}
-      className={`group relative mb-2 cursor-pointer overflow-hidden rounded-sm border bg-panel transition ${
-        selected ? "border-accent shadow-[inset_0_0_0_1px_#4868ff]" : "border-edge hover:border-[#55505a]"
+      className={`group relative mb-2 cursor-pointer overflow-hidden rounded-sm bg-panel transition ${
+        selected
+          ? "border-2 border-accent shadow-[inset_0_0_0_1px_#4868ff]"
+          : "border border-edge hover:border-[#55505a]"
       }`}
       draggable={!pickMode}
       onMouseEnter={onEnter}
@@ -292,7 +349,7 @@ function Thumb({
           suppressClick.current = false;
           return;
         }
-        activateAsset(e.shiftKey);
+        activateAsset(e.shiftKey, { x: e.clientX, y: e.clientY });
       }}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
@@ -361,6 +418,15 @@ function Thumb({
           )}
         </div>
       )}
+      {/* 选中角标：左下角与选中框同色融合的圆角矩形（左/底边贴内框缘连续，右上圆滑）+ 勾 icon。 */}
+      {selected && (
+        <span
+          className="absolute bottom-0 left-0 z-10 rounded-tr-lg bg-accent px-1.5 py-1 text-white"
+          title="已选中"
+        >
+          <Check size={14} strokeWidth={3} />
+        </span>
+      )}
       {/* 过程图轮播箭头（同流程 >1 张时悬浮显示） */}
       {groupLen > 1 && (
         <>
@@ -413,6 +479,43 @@ function Thumb({
             className="pointer-events-none fixed z-30 rounded-md border border-edge bg-panel object-contain shadow-xl"
             style={{ left: previewLeft, top: previewTop, width: preview.w, height: preview.h }}
           />,
+          document.body
+        )}
+      {pickMenu &&
+        createPortal(
+          <div
+            ref={pickMenuRef}
+            style={{ position: "fixed", left: pickMenuLeft, top: pickMenuTop, width: PICK_MENU_W, zIndex: 60 }}
+            onContextMenu={(e) => e.preventDefault()}
+            className="app-context-menu p-1.5 text-xs"
+            role="menu"
+            aria-label="引入素材方式"
+          >
+            <button
+              type="button"
+              role="menuitem"
+              className="app-context-item px-2 py-1.5"
+              onClick={() => {
+                setPickMenu(null);
+                window.dispatchEvent(
+                  new CustomEvent("bowerbird://board-asset-picked", { detail: shown.id })
+                );
+              }}
+            >
+              添加到编辑框
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="app-context-item px-2 py-1.5"
+              onClick={() => {
+                setPickMenu(null);
+                useStore.getState().openDetail(shown.id);
+              }}
+            >
+              打开图片详情
+            </button>
+          </div>,
           document.body
         )}
     </div>
@@ -493,28 +596,24 @@ export function MasonryGrid() {
     };
   }, [assets, currentProjectId]);
 
-  // 分组成员与当前列表求交（项目 scope / 隐藏项目素材等可见性过滤后才进轮播）：保证组内
-  // 末位（最新一张）必在列表中，否则整个组会被下面的渲染过滤误丢。
-  const visibleIds = useMemo(() => new Set(assets.map((a) => a.id)), [assets]);
-  const mergedGroupMap = useMemo(() => {
-    const out: Record<string, Asset[]> = {};
-    for (const [id, group] of Object.entries(groupMap)) {
-      const visible = group.filter((a) => visibleIds.has(a.id));
-      if (visible.length > 0) out[id] = visible;
-    }
-    return out;
-  }, [groupMap, visibleIds]);
+  // 渲染列表：每组只留一张卡——列表已 created_at DESC，同组首见即组内可见的最新成员，
+  // 其余成员经轮播查看（组键取组末位 id，同组成员共享同一数组）。轮播组用后端原始组
+  // （含已被折叠隐藏的过程图，与详情页一致），不与当前列表求交：列表本身已按 session
+  // 折叠，求交会把单 session 多图组裁到只剩 1 张，箭头与 N/M 计数随之消失。
+  const filtered = useMemo(() => {
+    const seenGroups = new Set<string>();
+    return assets.filter((a) => {
+      const g = groupMap[a.id];
+      if (!g || g.length < 2) return true;
+      const key = g[g.length - 1]?.id;
+      if (!key || seenGroups.has(key)) return false;
+      seenGroups.add(key);
+      return true;
+    });
+  }, [assets, groupMap]);
 
-  // 渲染列表：分组只保留末位成员（最新产出）一张卡，其余成员经轮播查看。
-  const filtered = useMemo(
-    () =>
-      assets.filter((a) => {
-        const g = mergedGroupMap[a.id];
-        if (!g || g.length < 2) return true;
-        return g[g.length - 1]?.id === a.id;
-      }),
-    [assets, mergedGroupMap]
-  );
+  // Shift 范围多选的有序依据：与渲染一致的可见卡片顺序（分组只算末位那张卡）。
+  const orderedIds = useMemo(() => filtered.map((a) => a.id), [filtered]);
 
   // 行式分列（Eagle 式）：按列表顺序（最新在前）逐张放进当前累计最矮的列，阅读
   // 顺序近似从左到右、从上到下。高度用 DB width/height 估算（h/w 即相对高度，列宽
@@ -641,16 +740,17 @@ export function MasonryGrid() {
           </div>
         </div>
       ) : (
-        // paddingBottom 跟随会话「重新编辑」坞实际高度（--gen-dock-h，坞挂载时由 ResizeObserver
-        // 写入）——否则底部浮动坞会盖住最后一行素材，滚不到底。无坞时变量为空，padding 归零。
-        <div className="h-full overflow-y-auto" style={{ paddingBottom: "var(--gen-dock-h, 0px)" }}>
+        // paddingBottom 跟随底部浮动坞实际高度（会话「重新编辑」坞 --gen-dock-h、创作板
+        // 对话框 --board-dock-h，坞/板挂载时由各自 ResizeObserver 写入）——否则底部浮动
+        // 坞会盖住最后一行素材，滚不到底。二者互斥，max() 只是兜底；无坞时变量为空归零。
+        <div className="library-scroller h-full overflow-y-auto" style={{ paddingBottom: "max(var(--gen-dock-h, 0px), var(--board-dock-h, 0px))" }}>
           {/* 外层固定高度竖向滚动，内层 flex 行式 masonry（各列 flex-1 等宽、纵向
               自然增长）——滚动容器与布局容器保持分离。 */}
-          <div className="flex w-full items-start gap-2 p-2">
+          <div className="flex w-full items-start gap-2 p-2" data-tour="masonry">
             {columns.map((col, i) => (
               <div key={i} className="flex min-w-0 flex-1 flex-col">
                 {col.map((a) => (
-                  <Thumb key={a.id} asset={a} group={mergedGroupMap[a.id]} />
+                  <Thumb key={a.id} asset={a} group={groupMap[a.id]} orderedIds={orderedIds} />
                 ))}
               </div>
             ))}

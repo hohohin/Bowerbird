@@ -4,6 +4,7 @@ import { EditorView } from "prosemirror-view";
 import { Slice, Fragment } from "prosemirror-model";
 import type { Node as PmNode, ResolvedPos } from "prosemirror-model";
 import { useStore } from "../../store";
+import { api } from "../../lib/api";
 import type { CaptionSection, PromptedAsset } from "../../lib/types";
 import { creationSchema, imageAttrs } from "./schema";
 import { agentPromptReferencesFromDoc, graphSourcesFromDoc, serializeDoc } from "./serialize";
@@ -58,7 +59,9 @@ function saveDraft(key: string, doc: unknown, refs: PromptedAsset[]) {
  * 传 null = 不持久化（生成会话编辑坞用——会话本身即记录，且不能覆盖创作板草稿）。
  * opts.initialEmpty：true = 初始文档为空（不预填「请参考」），会话底部对话框（续轮）用。
  * opts.consumePendingKeyword：true = 消费 store.pendingKeyword（环点扇区待插的维度）。
- * 仅创作板实例传 true——板未开时点扇区会先开板再挂载本 hook，挂载后于此插入；编辑坞不抢。
+ * 创作板与会话编辑坞实例都传 true——二者由 App 派生互斥挂载（genEditing 期间板卸载），
+ * 任意时刻只有一个实例在消费：板未开时点扇区先开板、板实例挂载后插入；编辑坞开着时
+ * 坞实例就地插入（不退出坞）。
  */
 export function useCreationEditor(opts?: {
   draftKey?: string | null;
@@ -99,10 +102,17 @@ export function useCreationEditor(opts?: {
   assetByIdRef.current = assetById;
   const chipSectionsRef = useRef(chipSections);
   chipSectionsRef.current = chipSections;
+  const ringAssetIdRef = useRef<string | null>(ringAssetId);
+  ringAssetIdRef.current = ringAssetId;
 
   useEffect(() => {
     if (!hostRef.current) return;
-    const plugins = buildPlugins({ viewRef, assetByIdRef, chipSectionsRef });
+    const plugins = buildPlugins({
+      viewRef,
+      assetByIdRef,
+      chipSectionsRef,
+      chipAssetIdRef: ringAssetIdRef,
+    });
     // 恢复上次草稿：nodeFromJSON 保真恢复 doc；refs 补进 extraAssets 供序列化匹配。
     const saved = draftKey ? loadDraft(draftKey) : null;
     let startDoc;
@@ -157,6 +167,29 @@ export function useCreationEditor(opts?: {
       const asset = assetByIdRef.current.get(assetId);
       const v = viewRef.current;
       if (!v) return;
+      // 查表 miss：瀑布流列表经 collapse 折叠，同会话过程图只在轮播组里（不在 s.assets），
+      // 轮播 / 右键「插入创作板」点到它们时 assetById 没有——按 id 补拉一次并 upsert 进
+      // extraAssets（随草稿持久化），否则 chip 是 IMG 占位、序列化时该图不进 references
+      // （发送即丢参考图，即梦续轮 text2image 无图）。资产已删（拉不到）保持旧行为兜底。
+      if (!asset) {
+        void api
+          .getPromptedAsset(assetId)
+          .then((fetched) => {
+            const view = viewRef.current;
+            if (!fetched || !view) return;
+            setExtraAssets((prev) => [...prev.filter((a) => a.id !== assetId), { ...fetched }]);
+            view.dispatch(
+              view.state.tr
+                .replaceSelectionWith(
+                  view.state.schema.nodes.image.create(imageAttrs(assetId, fetched, false))
+                )
+                .scrollIntoView()
+            );
+            view.focus();
+          })
+          .catch(console.error);
+        return;
+      }
       const node = v.state.schema.nodes.image.create(imageAttrs(assetId, asset, false));
       v.dispatch(v.state.tr.replaceSelectionWith(node).scrollIntoView());
       v.focus();
@@ -178,7 +211,7 @@ export function useCreationEditor(opts?: {
       const anno = asset.sections?.find((s) => s.title === "标注");
       if (anno) {
         tr = tr.replaceSelectionWith(
-          schema.nodes.keyword.create({ title: anno.title, body: anno.body })
+          schema.nodes.keyword.create({ title: anno.title, body: anno.body, assetId: asset.id })
         );
       }
       v.dispatch(tr.scrollIntoView());
@@ -251,23 +284,52 @@ export function useCreationEditor(opts?: {
   const focus = useCallback(() => viewRef.current?.focus(), []);
 
   // 环点扇区待插的维度：板已开 → 本 effect 即时插；板未开点扇区 → store 先开板再挂载本 hook，
-  // 挂载 commit 内本 effect 排在建 view 的 effect 之后运行，同样能消费。仅创作板实例开启。
+  // 挂载 commit 内本 effect 排在建 view 的 effect 之后运行，同样能消费。
+  // 延迟一拍（setTimeout 0 + cleanup 取消）再消费：dev StrictMode 挂载期 setup→cleanup→setup
+  // 重放本 effect，同步消费会插两次（首次插进随即被销毁的重放 view，板实例还会经草稿
+  // 落盘留下双份【维度】）；取消重放拍的定时器，只在最终稳定的那次插入一生效。
   const pendingKeyword = useStore((s) => s.pendingKeyword);
   const clearPendingKeyword = useStore((s) => s.clearPendingKeyword);
   const consumePending = opts?.consumePendingKeyword === true;
   useEffect(() => {
     if (!consumePending || !pendingKeyword) return;
-    const v = viewRef.current;
-    if (!v) return;
-    v.dispatch(
-      v.state.tr
+    const t = window.setTimeout(() => {
+      const v = viewRef.current;
+      if (!v) return;
+      const schema = v.state.schema;
+      let tr = v.state.tr;
+      // 呼环图的 chip 缺席（长按窥视不插 chip）→ 先补插，保证插入形状是「@图片【维度】」；
+      // 已有（左键点图路径刚插过）只追加 keyword。
+      if (pendingKeyword.assetId) {
+        const assetId = pendingKeyword.assetId;
+        let hasChip = false;
+        v.state.doc.descendants((n) => {
+          if (n.type.name === "image" && n.attrs.assetId === assetId) {
+            hasChip = true;
+            return false;
+          }
+          return true;
+        });
+        if (!hasChip) {
+          tr = tr.replaceSelectionWith(
+            schema.nodes.image.create(imageAttrs(assetId, assetByIdRef.current.get(assetId), false))
+          );
+        }
+      }
+      tr = tr
         .replaceSelectionWith(
-          v.state.schema.nodes.keyword.create({ title: pendingKeyword.title, body: pendingKeyword.body })
+          schema.nodes.keyword.create({
+            title: pendingKeyword.title,
+            body: pendingKeyword.body,
+            assetId: pendingKeyword.assetId ?? null,
+          })
         )
-        .scrollIntoView()
-    );
-    v.focus();
-    clearPendingKeyword();
+        .scrollIntoView();
+      v.dispatch(tr);
+      v.focus();
+      clearPendingKeyword();
+    });
+    return () => window.clearTimeout(t);
   }, [pendingKeyword, clearPendingKeyword, consumePending]);
 
   return {

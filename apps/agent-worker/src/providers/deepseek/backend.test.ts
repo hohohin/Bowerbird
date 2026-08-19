@@ -100,6 +100,39 @@ test("DeepSeekBackend fails closed for invalid or parallel tool calls", async ()
   }
 });
 
+test("DeepSeekBackend recovers from DeepSeek arguments with unescaped inner quotes", async () => {
+  const backend = new DeepSeekBackend(
+    { apiKey: "test-key", baseUrl: "https://api.deepseek.test", model: "deepseek-chat" },
+    async () =>
+      response({
+        id: "chatcmpl-safe-id",
+        choices: [{
+          finish_reason: "tool_calls",
+          message: {
+            content: null,
+            tool_calls: [{
+              id: "call-safe-id",
+              type: "function",
+              function: {
+                name: "write_artifact",
+                arguments: '{"summary":"ok","tags":["a"b","c"],"nested":{"note":"raw"quoted"text"}}',
+              },
+            }],
+          },
+        }],
+        usage: { prompt_tokens: 19, completion_tokens: 7, total_tokens: 26 },
+      }),
+  );
+  const result = await backend.turn(REQUEST, { aborted: false });
+  equal(result.kind, "action");
+  if (result.kind !== "action") throw new Error("expected action");
+  deepEqual(result.arguments, {
+    summary: "ok",
+    tags: ['a"b', "c"],
+    nested: { note: 'raw"quoted"text' },
+  });
+});
+
 test("DeepSeekBackend exposes only stable HTTP error metadata", async () => {
   const backend = new DeepSeekBackend(
     { apiKey: "test-key", baseUrl: "https://api.deepseek.test", model: "deepseek-chat" },

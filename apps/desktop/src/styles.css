@@ -378,7 +378,7 @@ textarea:focus-visible,
 }
 
 .app-sidebar-project-badge {
-  position: relative;
+  flex: 0 0 auto;
   display: grid;
   place-items: center;
   width: 46px;
@@ -392,23 +392,14 @@ textarea:focus-visible,
   transition: border-radius 160ms ease, background-color 160ms ease, color 160ms ease;
 }
 
-.app-sidebar-project-badge::before {
-  content: "";
-  position: absolute;
-  left: -14px;
-  width: 4px;
-  height: 24px;
-  border-radius: 0 4px 4px 0;
-  background: #fdfff0;
-}
-
 .app-sidebar-project-badge:hover {
   border-radius: 15px;
   background: #302c2c;
   color: #fdfff0;
 }
 
-.app-sidebar-project-badge.is-project {
+/* 当前上下文（全局或某项目）高亮蓝底 */
+.app-sidebar-project-badge.is-active {
   border-color: rgba(72, 104, 255, 0.55);
   background: #4868ff;
   color: #fff;
@@ -417,6 +408,40 @@ textarea:focus-visible,
 .app-sidebar button:not(.app-sidebar-project-badge):not(.app-sidebar-expanded-toggle):not(.app-sidebar-rail-toggle) {
   border-radius: 3px;
 }
+
+/* 「AI 新作」两段开关：视觉沿用详情面板 asset-detail-tabs（grid 两段 + active 内嵌描边）。 */
+.app-sidebar-gen-toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--bb-line);
+  border-radius: 3px;
+  background: var(--bb-bg);
+}
+
+.app-sidebar-gen-toggle button {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 26px;
+  white-space: nowrap;
+  color: var(--bb-muted);
+  font-size: 11px;
+}
+
+.app-sidebar-gen-toggle button:hover { color: var(--bb-ink); }
+.app-sidebar-gen-toggle button.is-active {
+  background: var(--bb-surface-2);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 4%);
+  color: var(--bb-ink);
+}
+
+/* 激活段图标亮色：Sparkles（仅生成图）→ lime；EyeOff（隐藏生成图）→ blue */
+.app-sidebar-gen-toggle button.is-active:first-child svg { color: var(--bb-lime); }
+.app-sidebar-gen-toggle button.is-active:last-child svg { color: var(--bb-blue); }
 
 /* 侧栏右缘拖拽把手：热区跨在边线上，hover/拖动时亮出 accent 竖线 */
 .app-sidebar-resizer {
@@ -680,22 +705,131 @@ body.app-sidebar-resizing * {
 .library-loading-grid span:nth-child(3n + 1) { height: 215px; }
 .library-loading-grid span:nth-child(4n + 2) { height: 118px; }
 
-.creation-board-shell {
-  width: clamp(390px, 34vw, 520px);
-  border-left-color: #343131;
-  box-shadow: -12px 0 30px rgb(0 0 0 / 14%);
+/*
+ * 创作板 jimeng 式底部浮动对话框（creation-dock）：黑色半透明毛玻璃，宽而矮，
+ * 浮在瀑布流下方居中、底边贴应用底边（App 内挂在主区容器 bottom-0）。
+ * 主区滚动时组件加 .is-collapsed——整体下沉 translateY，只露编辑框第一行
+ * （--bb-dock-peek），其余被应用底边截断；停滚后 transform 归位浮回。
+ */
+.creation-dock {
+  --bb-dock-peek: 50px; /* 对话框 padding-top(10) + 编辑框 padding-top(8) + 一行行高(32) */
+  color: var(--bb-ink);
+  background: rgba(14, 13, 14, 0.62);
+  backdrop-filter: blur(20px) saturate(1.25);
+  -webkit-backdrop-filter: blur(20px) saturate(1.25);
+  border: 1px solid rgb(255 255 255 / 10%);
+  border-bottom: 0;
+  box-shadow:
+    0 -16px 44px rgb(0 0 0 / 45%),
+    inset 0 1px 0 rgb(255 255 255 / 6%);
+  transition: transform 260ms cubic-bezier(0.22, 1, 0.36, 1);
+  animation: creation-dock-in 220ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-.creation-board-header {
-  min-height: 42px;
-  flex: 0 0 auto;
-  display: flex;
+.creation-dock.is-collapsed {
+  transform: translateY(calc(100% - var(--bb-dock-peek)));
+}
+
+/* 对话框内编辑框比大面板矮：默认两行（全局 .creation-editor .ProseMirror 的 7rem 是侧板时代高度） */
+.creation-dock .creation-editor .ProseMirror {
+  min-height: 4rem;
+}
+
+@keyframes creation-dock-in {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/*
+ * 会话编辑坞（重新编辑 / 继续对话，GenerationPanel GenEditComposer）：与创作板
+ * creation-dock 同款形态（底部浮动、上方圆角、毛玻璃、内容收缩），配色改深灰蓝——
+ * 黑玻璃 = 自由创作，灰蓝玻璃 = 归属某个会话任务。入场动画沿用 gen-dock-in。
+ */
+.session-dock {
+  color: var(--bb-ink);
+  background: rgba(28, 33, 44, 0.62);
+  backdrop-filter: blur(20px) saturate(1.25);
+  -webkit-backdrop-filter: blur(20px) saturate(1.25);
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-bottom: 0;
+  box-shadow:
+    0 -16px 44px rgb(0 0 0 / 45%),
+    inset 0 1px 0 rgb(255 255 255 / 7%);
+}
+
+/* 坞内编辑框同创作板紧凑高度（全局 .creation-editor .ProseMirror 的 7rem 是侧板时代高度） */
+.session-dock .creation-editor .ProseMirror {
+  min-height: 4rem;
+}
+
+/* 创作模式顶部刘海（瀑布流顶部居中，App 挂载）：品牌蓝小胶囊自顶边垂下、只圆下方两角，
+   与 iOS 灵动岛同构。translate 独立属性定位居中，避免与入场动画的 transform 打架。 */
+.creation-mode-notch {
+  translate: -50% 0;
+  padding: 4px 16px 6px;
+  border-radius: 0 0 12px 12px;
+  background: #4868ff;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 3px;
+  text-indent: 3px; /* 抵消 letter-spacing 尾隙，视觉居中 */
+  box-shadow: 0 6px 20px rgb(72 104 255 / 35%);
+  animation: creation-notch-in 240ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes creation-notch-in {
+  from {
+    transform: translateY(-100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+/* 退出创作模式页签（CreationBoard 激活态）：对话框右上角向上突出的档案标签——
+   贴对话框顶边、只圆上方两角、底边融入对话框，品牌蓝呼应线框与刘海。 */
+.creation-exit-tab {
+  position: absolute;
+  right: 18px;
+  bottom: 100%;
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 6px 12px;
-  border-bottom: 1px solid #292727;
-  background: rgba(16, 14, 14, 0.72);
+  gap: 5px;
+  height: 26px;
+  padding: 0 12px 0 10px;
+  border: 1px solid rgb(72 104 255 / 70%);
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
+  background: #4868ff;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  box-shadow: 0 -6px 18px rgb(72 104 255 / 30%);
+  transition: filter 160ms ease, box-shadow 160ms ease;
+  animation: creation-tab-in 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.creation-exit-tab:hover {
+  filter: brightness(1.12);
+  box-shadow: 0 -8px 22px rgb(72 104 255 / 42%);
+}
+
+@keyframes creation-tab-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 /* 维度环形菜单（CaptionRing）：点瀑布流图片拾取后在其卡片四周呼出扇形（pie sector）菜单，
@@ -728,6 +862,10 @@ body.app-sidebar-resizing * {
 }
 
 .caption-ring-layer.is-closing .caption-ring-halo {
+  animation: caption-ring-fade-out 170ms ease-in forwards;
+}
+
+.caption-ring-layer.is-closing .caption-ring-hub-hint {
   animation: caption-ring-fade-out 170ms ease-in forwards;
 }
 
@@ -826,21 +964,33 @@ body.app-sidebar-resizing * {
   fill: #969692;
 }
 
-/* 手势说明小字：同瀑布流悬浮胶囊材质（黑底半透明 + backdrop blur），悬于环顶部上方 */
-.caption-ring-hint {
+/* 环心说明胶囊：主行「挑选你需要的维度」+ 小字关闭手势（原顶部悬浮胶囊移入环心）。
+   压在图片上，沿用胶囊材质（黑底半透明 + backdrop blur）保证可读。 */
+.caption-ring-hub-hint {
   position: absolute;
   transform: translate(-50%, -50%);
-  padding: 4px 8px;
+  padding: 5px 10px;
   border: 1px solid rgb(255 255 255 / 8%);
-  border-radius: 3px;
+  border-radius: 4px;
   background: rgb(0 0 0 / 70%);
   backdrop-filter: blur(8px);
-  color: #fff;
-  font-size: 10px;
-  line-height: 1;
+  text-align: center;
   white-space: nowrap;
   pointer-events: none;
   animation: caption-ring-fade-in 300ms ease-out;
+}
+
+.caption-ring-hub-title {
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.6;
+}
+
+.caption-ring-hub-sub {
+  color: #b9b9b4;
+  font-size: 10px;
+  line-height: 1.6;
 }
 
 /* hover 扇区的维度信息浮层：popover 材质，径向外侧展示反推正文（80ms 延迟淡入防扫过闪烁） */
@@ -899,6 +1049,12 @@ body.app-sidebar-resizing * {
   text-transform: uppercase;
 }
 
+/* 左侧栏栏目名：放大两号（9→11px）+ 冷蓝 #6199d6；仅侧栏内生效，详情面板的 panel-kicker 维持原样。 */
+.app-sidebar .panel-kicker {
+  color: #6199d6;
+  font-size: 11px;
+}
+
 .hatch-divider {
   position: relative;
   height: 9px;
@@ -922,19 +1078,6 @@ body.app-sidebar-resizing * {
     width: 176px;
   }
 
-  .creation-board-shell {
-    position: absolute;
-    z-index: 25;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    width: min(460px, calc(100vw - 176px));
-  }
-
-  .app-sidebar.is-collapsed ~ .creation-board-shell {
-    width: min(460px, calc(100vw - 72px));
-  }
-
   .topbar-action-label {
     display: none;
   }
@@ -950,14 +1093,6 @@ body.app-sidebar-resizing * {
 
   .app-sidebar {
     width: 162px;
-  }
-
-  .creation-board-shell {
-    width: calc(100vw - 162px);
-  }
-
-  .app-sidebar.is-collapsed ~ .creation-board-shell {
-    width: min(460px, calc(100vw - 72px));
   }
 
 }
@@ -996,16 +1131,6 @@ body.app-sidebar-resizing * {
   flex-direction: column;
   gap: 8px;
   pointer-events: none;
-}
-
-.app-shell.has-board .toast-viewport {
-  right: calc(min(520px, 34vw) + 18px);
-}
-
-@media (max-width: 1120px) {
-  .app-shell.has-board .toast-viewport {
-    right: calc(min(460px, 100vw - 176px) + 18px);
-  }
 }
 
 .app-toast {
@@ -1535,6 +1660,17 @@ body.app-sidebar-resizing * {
 }
 .creation-editor .ProseMirror p {
   margin: 0;
+}
+
+/* 创作板空编辑框占位提示（plugins.ts 给 ProseMirror 根打 is-empty；仅创作板对话框内
+   生效，会话坞编辑器空态不显示）。float + height:0 让占位不占布局，光标可正常落在行首。 */
+.creation-dock .creation-editor .ProseMirror.is-empty::before {
+  content: "描述你的意图，开始创作吧";
+  color: var(--bb-muted);
+  opacity: 0.7;
+  float: left;
+  height: 0;
+  pointer-events: none;
 }
 
 .creation-editor-readonly .ProseMirror {

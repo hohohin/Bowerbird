@@ -12,6 +12,7 @@ export default {
         ink: "#fdfff0",
         muted: "#969692",
         faint: "#666460",
+        cold: "#94a3b8",
         accent: "#4868ff",
         "accent-soft": "#dfe5ff",
         lime: "#d9ff52",

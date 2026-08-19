@@ -242,6 +242,19 @@ impl Task {
         Ok(())
     }
 
+    /// 删除一个终态（done/failed/cancelled）任务行：会话面板「移除会话记录」持久化用，
+    /// 让 `recent_gen_sessions` 重启恢复不再出现该会话。仅终态可删（queued/running 行是
+    /// 启动恢复的数据源，正在跑的会话移除只动前端内存）；行不存在为空操作。
+    /// 生成图资产与 generation_meta 不受影响（按图「回看生成对话」仍可用）。
+    pub fn delete_terminal(db: &Database, id: &str) -> AppResult<()> {
+        let conn = db.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM task_queue WHERE id=?1 AND status IN ('done','failed','cancelled')",
+            rusqlite::params![id],
+        )?;
+        Ok(())
+    }
+
     /// 按 id 查单个任务。
     pub fn by_id(db: &Database, id: &str) -> AppResult<Option<Task>> {
         let conn = db.conn.lock().unwrap();
@@ -404,6 +417,28 @@ mod tests {
         let recent = Task::list_recent(&db, 3).unwrap();
         assert_eq!(recent.len(), 3);
         assert!(recent[0].created_at >= recent[1].created_at);
+    }
+
+    #[test]
+    fn delete_terminal_only_removes_terminal_rows() {
+        // 会话面板移除已完成会话的持久化：终态行（done/failed/cancelled）可删，
+        // 在跑行（启动恢复数据源）与不存在的 id 不受影响。
+        let db = db();
+        let done = job("jimeng", "done");
+        let failed = job("codex", "failed");
+        let running = job("codex", "running");
+        Task::enqueue_gen_job(&db, &done).unwrap();
+        Task::enqueue_gen_job(&db, &failed).unwrap();
+        Task::enqueue_gen_job(&db, &running).unwrap();
+
+        Task::delete_terminal(&db, &done.id).unwrap();
+        assert!(Task::by_id(&db, &done.id).unwrap().is_none());
+
+        Task::delete_terminal(&db, &running.id).unwrap();
+        assert!(Task::by_id(&db, &running.id).unwrap().is_some(), "在跑行不可删");
+
+        Task::delete_terminal(&db, "no-such-row").unwrap(); // 空操作不报错
+        assert!(Task::by_id(&db, &failed.id).unwrap().is_some());
     }
 
     #[test]

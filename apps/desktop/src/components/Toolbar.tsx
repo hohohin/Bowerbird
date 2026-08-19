@@ -1,15 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, FolderOpen, LoaderCircle, Search, Sparkles, Upload, X } from "lucide-react";
+import { ChevronDown, FolderOpen, LoaderCircle, Search, Upload, X } from "lucide-react";
 import { useStore } from "../store";
 import { api } from "../lib/api";
 import { notifyError, notifySuccess } from "../lib/notify";
 
-/** 顶部工具栏：导入 + 搜索 + 创作板入口 + 运行状态。 */
+/** 顶部工具栏：导入 + 搜索 + 运行状态。（创作板对话框已常驻，原「创作板」入口按钮移除。） */
 export function Toolbar({ onRefresh }: { onRefresh: () => Promise<void> }) {
   const setLoading = useStore((s) => s.setLoading);
   const busy = useStore((s) => s.loading);
-  const boardOpen = useStore((s) => s.boardOpen);
-  const toggleBoard = useStore((s) => s.toggleBoard);
   const searchQuery = useStore((s) => s.searchQuery);
   const currentProjectId = useStore((s) => s.currentProjectId);
   const projects = useStore((s) => s.projects);
@@ -167,17 +165,7 @@ export function Toolbar({ onRefresh }: { onRefresh: () => Promise<void> }) {
         )}
       </div>
 
-      <div className="app-topbar-actions">
-        <button
-          type="button"
-          onClick={toggleBoard}
-          className={`app-button-light ${boardOpen ? "is-active" : ""}`}
-          title="打开创作板"
-        >
-          <Sparkles size={15} />
-          <span className="topbar-action-label">创作板</span>
-        </button>
-      </div>
+      <div className="app-topbar-actions" />
       {collectedNotice && (
         <button
           onClick={showCollectedAsset}

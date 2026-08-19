@@ -67,6 +67,191 @@ function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function whitespaceLength(input: string, start: number): number {
+  let cursor = start;
+  while (cursor < input.length) {
+    const code = input.charCodeAt(cursor);
+    if (code === 0x20 || code === 0x09 || code === 0x0a || code === 0x0d) {
+      cursor++;
+      continue;
+    }
+    break;
+  }
+  return cursor - start;
+}
+
+/**
+ * DeepSeek 的 tool-call arguments 偶发不是严格 JSON：字符串值里会出现未转义的中文引号
+ * 或英文双引号。这里按已知 schema 的形态做一个保守的宽松解析器：仍要求完整对象结构，
+ * 只放宽「字符串值中的双引号不必全部转义」这一点；键名与 JSON 结构仍按标准解析。
+ */
+class LooseJsonParser {
+  private readonly input: string;
+  private index = 0;
+
+  constructor(input: string) {
+    this.input = input;
+  }
+
+  parse(): unknown {
+    const value = this.parseValue();
+    this.skipWhitespace();
+    if (this.index !== this.input.length) {
+      throw new SyntaxError(`unexpected trailing content at ${this.index}`);
+    }
+    return value;
+  }
+
+  private skipWhitespace(): void {
+    this.index += whitespaceLength(this.input, this.index);
+  }
+
+  private parseValue(): unknown {
+    this.skipWhitespace();
+    const char = this.input[this.index];
+    if (char === "{") return this.parseObject();
+    if (char === "[") return this.parseArray();
+    if (char === '"') return this.parseString(false);
+    if (char === "t") return this.parseLiteral("true", true);
+    if (char === "f") return this.parseLiteral("false", false);
+    if (char === "n") return this.parseLiteral("null", null);
+    return this.parseNumber();
+  }
+
+  private parseObject(): JsonRecord {
+    this.expect("{");
+    this.skipWhitespace();
+    const result: JsonRecord = {};
+    if (this.peek() === "}") {
+      this.index++;
+      return result;
+    }
+    while (this.index < this.input.length) {
+      this.skipWhitespace();
+      const key = this.parseString(true);
+      this.skipWhitespace();
+      this.expect(":");
+      const value = this.parseValue();
+      result[key] = value;
+      this.skipWhitespace();
+      const char = this.peek();
+      if (char === "}") {
+        this.index++;
+        return result;
+      }
+      this.expect(",");
+    }
+    throw new SyntaxError(`unterminated object at ${this.index}`);
+  }
+
+  private parseArray(): unknown[] {
+    this.expect("[");
+    this.skipWhitespace();
+    const result: unknown[] = [];
+    if (this.peek() === "]") {
+      this.index++;
+      return result;
+    }
+    while (this.index < this.input.length) {
+      result.push(this.parseValue());
+      this.skipWhitespace();
+      const char = this.peek();
+      if (char === "]") {
+        this.index++;
+        return result;
+      }
+      this.expect(",");
+    }
+    throw new SyntaxError(`unterminated array at ${this.index}`);
+  }
+
+  private parseString(isKey: boolean): string {
+    this.expect('"');
+    let output = "";
+    while (this.index < this.input.length) {
+      const char = this.input[this.index];
+      if (char === "\\") {
+        const escaped = this.input[this.index + 1];
+        if (escaped === undefined) {
+          throw new SyntaxError(`unterminated escape at ${this.index}`);
+        }
+        output += decodeEscape(escaped);
+        this.index += 2;
+        continue;
+      }
+      if (char === '"') {
+        if (isKey) {
+          this.index++;
+          return output;
+        }
+        const after = this.index + 1 + whitespaceLength(this.input, this.index + 1);
+        const next = this.input[after];
+        if (next === undefined || next === "," || next === "]" || next === "}") {
+          this.index++;
+          return output;
+        }
+      }
+      output += char;
+      this.index++;
+    }
+    throw new SyntaxError(`unterminated string at ${this.index}`);
+  }
+
+  private parseLiteral(literal: string, value: unknown): unknown {
+    const token = this.input.slice(this.index, this.index + literal.length);
+    if (token !== literal) {
+      throw new SyntaxError(`invalid literal at ${this.index}`);
+    }
+    this.index += literal.length;
+    return value;
+  }
+
+  private parseNumber(): number {
+    const match = this.input
+      .slice(this.index)
+      .match(/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/);
+    if (!match) throw new SyntaxError(`invalid number at ${this.index}`);
+    const token = match[0];
+    const value = Number(token);
+    if (!Number.isFinite(value)) throw new SyntaxError(`invalid number at ${this.index}`);
+    this.index += token.length;
+    return value;
+  }
+
+  private expect(char: string): void {
+    if (this.input[this.index] !== char) {
+      throw new SyntaxError(`expected ${char} at ${this.index}`);
+    }
+    this.index++;
+  }
+
+  private peek(): string | undefined {
+    return this.input[this.index];
+  }
+}
+
+function decodeEscape(char: string): string {
+  switch (char) {
+    case '"': return '"';
+    case "\\": return "\\";
+    case "/": return "/";
+    case "b": return "\b";
+    case "f": return "\f";
+    case "n": return "\n";
+    case "r": return "\r";
+    case "t": return "\t";
+    default: return char;
+  }
+}
+
+function parseToolArguments(encoded: string): unknown {
+  try {
+    return JSON.parse(encoded);
+  } catch {
+    return new LooseJsonParser(encoded.trim()).parse();
+  }
+}
+
 function requiredString(value: string | undefined, name: string): string {
   const normalized = value?.trim();
   if (!normalized) throw new DeepSeekBackendError(`deepseek_config_${name}_missing`);
@@ -185,7 +370,7 @@ function parseResponse(body: unknown): ModelTurnResult {
       return {
         kind: "action",
         action,
-        arguments: JSON.parse(encodedArguments) as unknown,
+        arguments: parseToolArguments(encodedArguments),
         providerUsage: usage,
       };
     } catch {

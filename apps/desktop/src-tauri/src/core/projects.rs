@@ -6,7 +6,9 @@ use std::sync::{Arc, Mutex};
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
-use crate::core::library::delete_asset_files;
+use crate::core::ingest;
+use crate::core::library::{delete_asset_files, Asset};
+use crate::core::paths::LibraryPaths;
 use crate::db::Database;
 use crate::error::{AppError, AppResult};
 
@@ -34,6 +36,12 @@ pub struct ProjectDeleteResult {
     pub preserved_shared: usize,
     pub moved_assets: usize,
     pub failed_moves: Vec<String>,
+}
+
+/// 「更新项目文件」结果：本次新加入项目的素材数（0 = 文件夹没有新素材）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectRefreshResult {
+    pub added_count: usize,
 }
 
 /// 删除项目时对独占素材（不被其他项目引用）的处理方式；共享素材永远保留。
@@ -543,6 +551,43 @@ impl Database {
     }
 }
 
+/// 「更新项目文件」：重新扫描项目 workspace 文件夹，把新增图片导入中央库并加入项目。
+/// 约定 18 项目不监听文件夹，本函数只做**单向增量**——已导入过的文件（origin_path 命中）
+/// 直接跳过：既省去全量重拷贝/重算 pHash，也避免低熵纯色图等不可去重文件被重复入库；
+/// 文件夹里删掉的文件不动（刷新不删素材）。新文件走 [`ingest::ingest_file`]，视觉去重
+/// 命中已有资产时只新增项目关系。返回（本次涉及的资产, 新增成员数），命令层据此触发
+/// 自动分析（已有 caption 的资产内部会跳过）与结果提示。
+pub fn refresh_workspace_assets(
+    paths: &LibraryPaths,
+    db: &Database,
+    workspace: &Path,
+    project_id: &str,
+) -> AppResult<(Vec<Asset>, usize)> {
+    let existing = db.list_origin_paths()?;
+    let mut assets = Vec::new();
+    for p in ingest::walk_images(workspace) {
+        if existing.contains(p.to_string_lossy().as_ref()) {
+            continue;
+        }
+        match ingest::ingest_file(paths, db, &p) {
+            Ok(a) => assets.push(a),
+            Err(e) => tracing::warn!("refresh ingest failed for {}: {e}", p.display()),
+        }
+    }
+    // 文件夹里多个新文件视觉去重命中同一已有资产时按 id 归并。
+    let mut unique = std::collections::HashMap::new();
+    for asset in assets {
+        unique.entry(asset.id.clone()).or_insert(asset);
+    }
+    let assets: Vec<_> = unique.into_values().collect();
+    if assets.is_empty() {
+        return Ok((assets, 0));
+    }
+    let ids: Vec<String> = assets.iter().map(|a| a.id.clone()).collect();
+    let added = db.add_assets_to_project(project_id, &ids)?;
+    Ok((assets, added))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -901,5 +946,59 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&origin_dir);
         let _ = std::fs::remove_dir_all(&store_dir);
+    }
+
+    #[test]
+    fn refresh_workspace_assets_imports_only_new_files() {
+        use image::{ImageBuffer, Rgb};
+
+        let stamp = ulid::Ulid::new().to_string();
+        let base = std::env::temp_dir().join(format!("bowerbird-refresh-{stamp}"));
+        let workspace = base.join("ws");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let paths = LibraryPaths::init(base.join("lib")).unwrap();
+        let db = db();
+        put_project_at(&db, "p1", &workspace.to_string_lossy());
+
+        let gradient = |path: &Path, seed: u8| {
+            let img: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_fn(64, 64, |x, y| {
+                Rgb([
+                    ((x * 4 + seed as u32) % 256) as u8,
+                    ((y * 4 + seed as u32) % 256) as u8,
+                    seed,
+                ])
+            });
+            img.save(path).unwrap();
+        };
+        // 低熵纯色图：dHash 退化不做视觉去重，防重复入库只能靠 origin_path 跳过。
+        let solid = |path: &Path| {
+            let img: ImageBuffer<Rgb<u8>, Vec<u8>> =
+                ImageBuffer::from_pixel(64, 64, Rgb([200, 30, 30]));
+            img.save(path).unwrap();
+        };
+        gradient(&workspace.join("a.png"), 11);
+        gradient(&workspace.join("b.png"), 77);
+        solid(&workspace.join("solid.png"));
+
+        // 首次刷新 = 建项式全量导入。
+        let (_, added) = refresh_workspace_assets(&paths, &db, &workspace, "p1").unwrap();
+        assert_eq!(added, 3);
+        assert_eq!(db.count_assets(None).unwrap(), 3);
+        assert_eq!(db.get_project("p1").unwrap().unwrap().asset_count, 3);
+
+        // 无变化再刷：零新增，纯色图不被重复入库。
+        let (_, added) = refresh_workspace_assets(&paths, &db, &workspace, "p1").unwrap();
+        assert_eq!(added, 0);
+        assert_eq!(db.count_assets(None).unwrap(), 3);
+
+        // 文件夹新增文件 → 只补新文件；被删掉的文件不回收素材（单向增量）。
+        gradient(&workspace.join("c.png"), 33);
+        let _ = std::fs::remove_file(workspace.join("a.png"));
+        let (_, added) = refresh_workspace_assets(&paths, &db, &workspace, "p1").unwrap();
+        assert_eq!(added, 1);
+        assert_eq!(db.count_assets(None).unwrap(), 4);
+        assert_eq!(db.get_project("p1").unwrap().unwrap().asset_count, 4);
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

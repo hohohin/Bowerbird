@@ -74,9 +74,12 @@ export const creationSchema = new Schema({
       atom: true,
       group: "inline",
       draggable: false,
-      // body = 该维度被插入时所属素材的反推正文（CaptionSection.body 快照），仅供编辑框 hover 浮层展示。
-      // 序列化发送 prompt 时不读它（仍查 assetById 取最新 body，见 serializeKeyword）。
-      attrs: { title: { default: "" }, body: { default: "" } },
+      // body = 该维度被插入时所属素材的反推正文（CaptionSection.body 快照），仅供编辑框 hover
+      // 浮层展示与序列化兜底（源图已删 / 维度被改删时）。发送时仍优先查 assetById 取最新 body。
+      // assetId = 插入时所属素材（维度环图 / 前导 @图 / 标注注入对象）：图 chip 被删后
+      // （只借维度、不带参考图）序列化仍按它展开正文；null（旧草稿 / 无主手输）回退
+      // 「最近一张 image」的位置关联（serializeKeyword）。
+      attrs: { title: { default: "" }, body: { default: "" }, assetId: { default: null } },
       toDOM(node) {
         return [
           "span",

@@ -20,8 +20,9 @@ const PEEK_EVENT = "bowerbird://board-asset-peek";
  * 编辑框不存在，遮罩只挖环圈一个洞；点扇区开板后下一帧重测补上编辑框洞。
  *
  * 收起手势：Esc / 点遮罩 / 再点目标图片 / 右键 / 窗口缩放 / 鼠标移出环一定距离（编辑框
- * 区域除外）/ 直接输入文字。环顶部上方的小字胶囊说明这些手势。tour 激活时 suppressScrim
- * （tour 自带聚光灯），且距离/输入收起不生效（避免引导中环意外消失）。
+ * 区域除外）/ 直接输入文字。环心胶囊文字（主行「挑选你需要的维度」+ 小字关闭手势）说明
+ * 这些。tour 激活时 suppressScrim（tour 自带聚光灯），且距离/输入收起不生效（避免引导中
+ * 环意外消失）——但 tourStep ≥ 11（引导教「移开鼠标/直接输入关环」那步）起恢复这两种收起。
  *
  * 定位沿 AssetContextMenu / BoardChipPreview 范式：portal 到 body + fixed 坐标；
  * z-65/66 占用上下文菜单(60)与 tour/Popover(70) 之间的空档，保证 tour 聚光灯在最上层。
@@ -30,8 +31,10 @@ const PEEK_EVENT = "bowerbird://board-asset-peek";
 type Geometry = {
   cx: number;
   cy: number;
-  innerR: number; // 环内半径（卡片外一圈）
-  outerR: number; // 环外半径（扇区外缘）
+  innerR: number; // 环内半径（固定 104）
+  outerR: number; // 环外半径（扇区外缘，固定 104+38）
+  hubR: number; // 内缘细圈半径（贴扇区内缘）
+  catcherR: number; // 收起点击区半径（盖住整张图，至少到环内径）
   vw: number;
   vh: number;
   card: { x: number; y: number; w: number; h: number };
@@ -78,14 +81,16 @@ function sameRect(a: Geometry["editor"], b: Geometry["editor"]): boolean {
 // 遮罩 = 「外扩视口矩形 + 环圈圆 + 编辑框圆角矩形」的 evenodd 路径整体高斯模糊：
 // 形状外 alpha≈1（显示遮罩 = 压暗模糊），两洞内 0（挖洞），洞缘按 σ 羽化。外框外扩 40px，
 // 让它的羽化边落在视口外，屏幕四边不会出现渐隐。mask 同时作用于背景色与 backdrop-filter 输出。
+// 环洞取 max(外径, 收起区)：小环压大图时图片露出环外的部分也不能被自己的遮罩压暗。
 function buildMaskImage(g: Geometry): string {
   const pad = 40;
+  const holeR = Math.max(g.outerR, g.catcherR) + 14;
   const ed = g.editor
     ? roundRectPath(g.editor.x - 12, g.editor.y - 12, g.editor.w + 24, g.editor.h + 24, 8)
     : "";
   const d =
     `M ${-pad} ${-pad} H ${g.vw + pad} V ${g.vh + pad} H ${-pad} Z ` +
-    `${circlePath(g.cx, g.cy, g.outerR + 14)} ${ed}`;
+    `${circlePath(g.cx, g.cy, holeR)} ${ed}`;
   const svg =
     `<svg xmlns="http://www.w3.org/2000/svg" width="${g.vw}" height="${g.vh}">` +
     `<defs><filter id="f" x="-10%" y="-10%" width="120%" height="120%"><feGaussianBlur stdDeviation="9"/></filter></defs>` +
@@ -113,17 +118,20 @@ function CaptionRingSession({ assetId }: { assetId: string }) {
   const closeCaptionRing = useStore((s) => s.closeCaptionRing);
   const boardOpen = useStore((s) => s.boardOpen);
   const tourActive = useStore((s) => s.tourActive);
-  // 维度数据：瀑布流资产 + 反推集合合并（prompted 后置覆盖补 sections），与 hook 的 assetById 同源逻辑
+  const tourStep = useStore((s) => s.tourStep);
+  // 维度数据：瀑布流资产 + 反推集合合并（prompted 后置覆盖补 sections），与 hook 的 assetById
+  // 同源逻辑。响应式订阅——板外呼环时 openCaptionRing 补拉、开板瞬间 App.refresh 未返回时，
+  // 数据到位即重算补扇区（非响应式 getState 会卡在挂载那一刻的空态）。
+  const allAssets = useStore((s) => s.assets);
+  const promptedAssets = useStore((s) => s.promptedAssets);
+  const promptedAssetsLoaded = useStore((s) => s.promptedAssetsLoaded);
   const sections = useMemo<CaptionSection[]>(() => {
-    const all = useStore.getState().assets;
-    const prompted = useStore.getState().promptedAssets;
     const m = new Map<string, PromptedAsset>();
-    for (const a of all) m.set(a.id, a);
-    for (const a of prompted) m.set(a.id, a);
+    for (const a of allAssets) m.set(a.id, a);
+    for (const a of promptedAssets) m.set(a.id, a);
     const asset = m.get(assetId);
     return asset?.sections && asset.sections.length > 0 ? asset.sections : [];
-    // boardOpen 变化时 App 会重载 assets（板开=全部图），顺带重算
-  }, [assetId, boardOpen]);
+  }, [assetId, allAssets, promptedAssets]);
 
   const [geom, setGeom] = useState<Geometry | null>(null);
   const [used, setUsed] = useState<Set<string>>(() => new Set());
@@ -173,11 +181,16 @@ function CaptionRingSession({ assetId }: { assetId: string }) {
     const cy = card.top + card.height / 2;
     const vw = window.innerWidth;
     const vh = window.innerHeight;
-    const innerR = Math.max(card.width, card.height) / 2 + 16;
-    const desired = innerR + 68;
-    // 尽量让整环落进视口（圆心到四边留 14px）；实在放不下（图太大/太贴边）保底环厚 48，允许溢出裁切。
+    // 固定小尺寸环：外径 142（上一版 177 再缩 20%）、环厚 38（扇区增大 40%）、内径 104，
+    // 与卡片尺寸完全解耦，扇区允许压在图上（环浮于图片中部）。hub 细圈贴扇区内缘；
+    // 收起点击区盖整张图（图片露出环外的部分点击也收起）。贴近视口边时仍按 fit 收缩环厚。
+    const cardHalf = Math.max(card.width, card.height) / 2;
+    const innerR = 104;
+    const hubR = innerR - 7;
+    const desired = innerR + 38;
     const fit = Math.min(cx, cy, vw - cx, vh - cy) - 14;
-    const outerR = Math.max(Math.min(desired, fit), innerR + 48);
+    const outerR = Math.max(Math.min(desired, fit), innerR + 28);
+    const catcherR = Math.max(innerR, cardHalf + 12);
     setGeom((prev) => {
       // scroll 监听是捕获模式，任何容器滚动都触发重测；值没变时返回 prev，
       // 避免 mask SVG 重建 / pointermove 监听重挂 / 整组件重渲。
@@ -187,6 +200,8 @@ function CaptionRingSession({ assetId }: { assetId: string }) {
         prev.cy === cy &&
         prev.innerR === innerR &&
         prev.outerR === outerR &&
+        prev.hubR === hubR &&
+        prev.catcherR === catcherR &&
         prev.vw === vw &&
         prev.vh === vh &&
         prev.card.x === card.left &&
@@ -202,6 +217,8 @@ function CaptionRingSession({ assetId }: { assetId: string }) {
         cy,
         innerR,
         outerR,
+        hubR,
+        catcherR,
         vw,
         vh,
         card: { x: card.left, y: card.top, w: card.width, h: card.height },
@@ -223,32 +240,47 @@ function CaptionRingSession({ assetId }: { assetId: string }) {
 
   // 收起：Esc / 直接输入文字（不拦截，按键落进编辑框）/ 窗口缩放（几何整体失效）/ 右键
   // （先收环再出菜单，避免菜单 z-60 压在环层 z-66 下面）。遮罩与洞内点击区的收起见各自
-  // onClick；滚动不收起、只重测跟随。tour 期间只有 Esc 生效（防环在引导中意外消失）。
+  // onClick；滚动不收起、只重测跟随。tour 期间只有 Esc 生效（防环在引导中意外消失）——
+  // tourStep ≥ 11 起输入收起也生效（引导开始教关环手势）。
   useLayoutEffect(() => {
     window.addEventListener("keydown", onKey, true);
+    // IME 组合开始 = 用户在输入文字（中文输入法 keydown 的 key 是 "Process"，字符判定兜不住）
+    window.addEventListener("compositionstart", onCompositionStart, true);
     window.addEventListener("scroll", remeasure, true);
     window.addEventListener("resize", requestClose);
     window.addEventListener("contextmenu", requestClose, true);
     return () => {
       window.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("compositionstart", onCompositionStart, true);
       window.removeEventListener("scroll", remeasure, true);
       window.removeEventListener("resize", requestClose);
       window.removeEventListener("contextmenu", requestClose, true);
     };
+    function onCompositionStart() {
+      if (tourActive && tourStep < 11) return;
+      requestClose();
+    }
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") {
         requestClose();
         return;
       }
-      if (tourActive) return;
-      // 可打印字符 = 用户在直接输入（编辑框在拾取后已聚焦）→ 收起环让位
-      if (e.key.length === 1 && e.key !== " " && !e.ctrlKey && !e.metaKey && !e.altKey) requestClose();
+      if (tourActive && tourStep < 11) return;
+      // 直接输入文字 → 收起环让位。"Process" = IME 处理中的键（中文输入法下可打印字符
+      // 判定拿不到）；Backspace/Delete 属编辑输入，一并算；空格不算（扇区键盘激活用）。
+      const typing =
+        e.key === "Process" ||
+        e.key === "Backspace" ||
+        e.key === "Delete" ||
+        (e.key.length === 1 && e.key !== " " && !e.ctrlKey && !e.metaKey && !e.altKey);
+      if (typing) requestClose();
     }
-  }, [requestClose, remeasure, tourActive]);
+  }, [requestClose, remeasure, tourActive, tourStep]);
 
   // 鼠标移出环一定距离即收起。编辑框区域豁免：用户常移过去挪光标/继续输入。
+  // tour 期间不生效（防环在引导中意外消失），tourStep ≥ 11 起恢复（引导教关环手势）。
   useLayoutEffect(() => {
-    if (!geom || tourActive) return;
+    if (!geom || (tourActive && tourStep < 11)) return;
     const threshold = geom.outerR + 120;
     const onMove = (e: PointerEvent) => {
       if (closeRef.current) return;
@@ -269,7 +301,7 @@ function CaptionRingSession({ assetId }: { assetId: string }) {
     };
     window.addEventListener("pointermove", onMove);
     return () => window.removeEventListener("pointermove", onMove);
-  }, [geom, requestClose, tourActive]);
+  }, [geom, requestClose, tourActive, tourStep]);
 
   const maskImage = useMemo(() => (geom ? buildMaskImage(geom) : null), [geom]);
 
@@ -308,11 +340,13 @@ function CaptionRingSession({ assetId }: { assetId: string }) {
     });
   }, [geom, sections]);
 
-  // 点扇区 = 维度直接进创作板（板未开自动开板），环保持打开可连续添加
+  // 点扇区 = 维度插进当前编辑器（板 / 会话编辑坞，环保持打开可连续添加）。
+  // assetId 一并传出：目标编辑器缺该图 chip 时（长按窥视不插 chip）先补插，
+  // 保证插入形状是「@图片【维度】」而非孤立【维度】。
   function pick(section: CaptionSection) {
     if (closeRef.current) return;
     setUsed((prev) => new Set(prev).add(section.title));
-    useStore.getState().pickCaptionSection(section);
+    useStore.getState().pickCaptionSection(section, assetId);
     // tour step 10：用户点环上维度（如「构图」）→ 引导完成
     const st = useStore.getState();
     if (st.tourActive && st.tourStep === 10) st.setTourStep(11);
@@ -320,10 +354,23 @@ function CaptionRingSession({ assetId }: { assetId: string }) {
 
   if (!geom) return null;
 
-  const hintText =
-    sections.length > 0
-      ? "点扇区加入创作板 · 移开鼠标或直接输入文字可关闭"
-      : "该图无维度数据 · 右键图片可反推生成";
+  // 环心说明：有维度 = 主行「挑选你需要的维度」+ 小字关闭手势；无维度/读取中给出对应提示。
+  const hubHint =
+    sections.length > 0 ? (
+      <>
+        <div className="caption-ring-hub-title">挑选你需要的维度</div>
+        <div className="caption-ring-hub-sub">——或——</div>
+        <div className="caption-ring-hub-sub">移开鼠标 / 直接输入</div>
+        <div className="caption-ring-hub-sub">来关闭维度环</div>
+      </>
+    ) : promptedAssetsLoaded ? (
+      <>
+        <div className="caption-ring-hub-title">该图无维度数据</div>
+        <div className="caption-ring-hub-sub">右键图片可反推生成</div>
+      </>
+    ) : (
+      <div className="caption-ring-hub-title">正在读取维度数据…</div>
+    );
 
   const hover = hovered != null ? sectors[hovered] : null;
   // 信息浮层：径向外侧放置（中心点 = 环外缘外推半宽），整体钳进视口
@@ -345,15 +392,16 @@ function CaptionRingSession({ assetId }: { assetId: string }) {
         />
       )}
       <div className={`caption-ring-layer${closing ? " is-closing" : ""}`}>
-        {/* 洞内透明点击区：盖住目标图片（半径 = 环内径），再点 = 收起，也挡住误触重复拾取 */}
+        {/* 洞内透明点击区：盖住目标图片（整张图 + 环内径取大），再点 = 收起，
+            也挡住误触重复拾取；环带上的点击由扇区（更上层）优先接管 */}
         <button
           type="button"
           className="caption-ring-catcher"
           style={{
-            left: geom.cx - geom.innerR,
-            top: geom.cy - geom.innerR,
-            width: geom.innerR * 2,
-            height: geom.innerR * 2,
+            left: geom.cx - geom.catcherR,
+            top: geom.cy - geom.catcherR,
+            width: geom.catcherR * 2,
+            height: geom.catcherR * 2,
           }}
           onClick={requestClose}
           title="收起维度环"
@@ -369,15 +417,12 @@ function CaptionRingSession({ assetId }: { assetId: string }) {
             height: geom.card.h + 10,
           }}
         />
-        {/* 手势说明小字：悬于整个环顶部上方（同瀑布流悬浮胶囊的材质）；环贴近视口顶/左右边时钳在屏幕内 */}
+        {/* 环心说明胶囊：主行 + 小字（原顶部悬浮胶囊移入环心），压在图上故用胶囊材质保可读 */}
         <div
-          className="caption-ring-hint"
-          style={{
-            left: Math.min(Math.max(geom.cx, 140), geom.vw - 140),
-            top: Math.max(geom.cy - geom.outerR - 18, 16),
-          }}
+          className="caption-ring-hub-hint"
+          style={{ left: geom.cx, top: geom.cy }}
         >
-          {hintText}
+          {hubHint}
         </div>
         <svg
           className={`caption-ring-svg${closing ? " is-closing" : ""}`}
@@ -392,7 +437,7 @@ function CaptionRingSession({ assetId }: { assetId: string }) {
           role="group"
           aria-label="可选维度环"
         >
-          <circle className="caption-ring-hub" r={geom.innerR - 7} />
+          <circle className="caption-ring-hub" r={geom.hubR} />
           {sectors.map(({ section, d, evenOdd, lx, ly }, i) => {
             const isUsed = used.has(section.title);
             return (

@@ -764,6 +764,20 @@ pub async fn list_prompted_assets(
     }))
 }
 
+/// 按 id 取单个 PromptedAsset：创作板编辑器挑图查表 miss 时补拉——瀑布流列表经
+/// collapse 折叠后，同会话过程图不在前端已加载集合里，轮播 / 右键「插入创作板」
+/// 点到它们时若不补拉，chip 退化为 IMG 占位且发送时不带该图（即梦续轮丢参考图）。
+#[tauri::command]
+pub async fn get_prompted_asset(
+    db: State<'_, Arc<Database>>,
+    asset_id: String,
+) -> Result<Option<PromptedAsset>, AppError> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || db.get_prompted_asset(&asset_id))
+        .await
+        .map_err(|e| AppError::Other(e.to_string()))?
+}
+
 /// 有反推（caption）的资产 id 集合——瀑布流缩略图标 🏷️ 用，比 list_prompted_assets 轻（不带正文）。
 /// project 过滤 + emit 由前端 refresh 驱动；反推入库后 analyses://changed → 前端重拉。
 #[tauri::command]

@@ -17,12 +17,16 @@ import type {
   EntitlementSnapshot,
   Folder,
   GenJob,
+  GenTurn,
   Preset,
   Project,
   PromptedAsset,
+  RecentGenSession,
   TagCount,
 } from "./lib/types";
 import { canonicalProviderKey, isCloudProvider, isKnownGenProvider } from "./lib/genProviders";
+import { normalizeAnnotationPrompt } from "./lib/annotationPrompt";
+import { autoRatioFromReferences } from "./components/creation/ratios";
 
 // —— 默认出图 provider（localStorage，照 GEN_PROVIDERS 枚举校验；收藏星标写它）——
 const DEFAULT_PROVIDER_KEY = "bowerbird.defaultProvider";
@@ -89,6 +93,7 @@ interface State {
   assets: Asset[];
   total: number;
   selectedIds: Set<string>;
+  rangeAnchorId: string | null; // Shift 范围多选锚点（最近一次点击选中的卡片）
   loading: boolean;
   currentFolderId: string | null;
   currentCollectionId: string | null;
@@ -110,20 +115,30 @@ interface State {
   classifyProgress: { done: number; total: number } | null; // 批量重归类进度
   colorRebuild: { done: number; total: number } | null; // 重建色板进度（P3）
   // —— 创作板（核心枢纽）——
+  // 创作模式激活态（对话框本身常驻显示，boardOpen 只表示「已进入创作模式」）：
+  // 编辑框获得焦点时激活（等同旧「创作板」按钮），编辑框右上角 X 退出。激活时
+  // 点图插 chip / 瀑布流默认全量挑图 + 蓝线框 + 顶部「创作模式」刘海；未激活则是
+  // 普通浏览（点图开详情、筛选生效）。会话「重新编辑」坞（genEditing）期间对话框
+  // 由 App 派生隐藏（两个 useCreationEditor 互斥）。
   boardOpen: boolean;
+  setBoardActive: (active: boolean) => void;
   promptedAssets: PromptedAsset[]; // 创作板挑图集合中带 caption（反推）的子集，供编辑器补 sections / 展开维度片段
+  promptedAssetsLoaded: boolean; // promptedAssets 是否与库同步（false=补拉中，维度环加载态提示用）
   captionedIds: Set<string>; // 有反推（caption）的资产 id 集合（瀑布流标 🏷️，轻量，不带正文）
   focusAssetId: string | null; // 创作板 chip 点击 → 瀑布流滚动定位+高亮的目标 id（消费后清空）
   // —— 维度环形菜单（CaptionRing，长按图片呼出，全局单例挂 App 根）——
   captionRing: string | null; // 打开中的环会话（assetId）；null = 收起
   ringAssetId: string | null; // 最近一次呼环的 assetId（环收起后保留，供 smartPunct 取该图 sections）
-  pendingKeyword: { title: string; body: string } | null; // 点扇区待插入创作板的维度（板未开→先开板，挂载后消费）
+  // 点扇区待插入当前编辑器的维度（assetId = 呼环图：目标编辑器缺该图 chip 时先补插，
+  // 保证插入形状是「@图片【维度】」；板未开→先开板，挂载后消费）
+  pendingKeyword: { title: string; body: string; assetId?: string } | null;
   // —— 创作板「用途」（preset）——
   presets: Preset[]; // 命名 prompt 预设，发送时作为基底注入（不进编辑器）
   activePresetId: string | null; // 当前选中用途；null=不注入
   setAssets: (a: Asset[]) => void;
   setTotal: (n: number) => void;
   toggleSelect: (id: string) => void;
+  selectRange: (toId: string, orderedIds: string[]) => void;
   selectAll: () => void;
   clearSelect: () => void;
   setLoading: (b: boolean) => void;
@@ -145,14 +160,13 @@ interface State {
   reloadPalette: () => Promise<void>;
   setClassifyProgress: (p: { done: number; total: number } | null) => void;
   setColorRebuild: (p: { done: number; total: number } | null) => void;
-  toggleBoard: () => void;
   setPromptedAssets: (a: PromptedAsset[]) => void;
   setCaptionedIds: (ids: string[]) => void;
   focusAsset: (id: string) => void;
   clearFocusAsset: () => void;
   openCaptionRing: (assetId: string) => void;
   closeCaptionRing: () => void;
-  pickCaptionSection: (section: CaptionSection) => void;
+  pickCaptionSection: (section: CaptionSection, assetId?: string) => void;
   clearPendingKeyword: () => void;
   setActivePreset: (id: string | null) => void;
   // —— 反推（全局后台串行）——
@@ -257,11 +271,17 @@ interface State {
   setGenPanelOpen: (open: boolean) => void;
   startGeneration: (prompt: string, references: Asset[], ratio?: string | null, provider?: string | null, rawPrompt?: string, conversationId?: string, anchorSessionId?: string) => Promise<string>;
   // 续轮（底部对话框发送）：instruction = 铺开后实际发送的 prompt；opts 携带编辑框原文
-  // （气泡展示）、新挑参考图与比例（无新参考图时即梦/Cloud 回退上一轮产出图）。
+  // （气泡展示）、新挑参考图与比例（jimeng/Cloud 的上一轮产出图由后端权威合并下发）；
+  // exactReferences = 轮级重试/编辑的精确重放（该轮当时实际下发的完整参考图，后端跳过合并）。
   sendGenRevise: (
     instruction: string,
     provider?: string | null,
-    opts?: { rawPrompt?: string | null; references?: Asset[]; ratio?: string | null },
+    opts?: {
+      rawPrompt?: string | null;
+      references?: Asset[];
+      ratio?: string | null;
+      exactReferences?: string[];
+    },
   ) => Promise<void>;
   cancelGeneration: (jobId?: string) => void; // 默认取消 activeJob
   loadGenJobs: () => Promise<void>;
@@ -280,6 +300,10 @@ interface State {
   // 「标注插入创作板」：注入临时素材（不入库）到当前编辑器。生成面板编辑坞打开 → 原地插入
   // 不动面板；否则保开创作板 + 延一帧 dispatch board-asset-injected（挂载时序同上）。
   insertAnnotatedToBoard: (asset: PromptedAsset) => void;
+  // 「详情页 → 添加到对话框」：关详情回主界面，滚动定位 + 蓝框闪烁（focusAsset 既有机制），
+  // 延一帧插参考图 chip（对话框随详情关闭才挂载，同 reusePromptToBoard 的帧等待）；
+  // 该图有维度数据则同时呼出维度环（环点扇区继续挑维度）。
+  addAssetToBoardFromDetail: (assetId: string) => void;
   // —— 图片标注面板（右键菜单唤起，全局单实例）——
   annotator: { assetId: string } | null;
   openAnnotator: (assetId: string) => void;
@@ -288,6 +312,10 @@ interface State {
   contextMenu: { x: number; y: number; assetId: string } | null;
   openContextMenu: (x: number, y: number, assetId: string) => void;
   closeContextMenu: () => void;
+  // —— 项目右键菜单（侧栏项目行 / 收起态圆标）——
+  projectContextMenu: { x: number; y: number; projectId: string } | null;
+  openProjectContextMenu: (x: number, y: number, projectId: string) => void;
+  closeProjectContextMenu: () => void;
 }
 
 function normalizeGenerationProvider(provider: string): string {
@@ -440,6 +468,7 @@ export const useStore = create<State>((set, get) => {
   assets: [],
   total: 0,
   selectedIds: new Set(),
+  rangeAnchorId: null,
   loading: false,
   currentFolderId: null,
   currentCollectionId: null,
@@ -455,8 +484,9 @@ export const useStore = create<State>((set, get) => {
   classifyProgress: null,
   colorRebuild: null,
   palette: [],
-  boardOpen: false,
+  boardOpen: false, // 创作模式未激活（对话框仍常驻显示；focus 编辑框激活）
   promptedAssets: [],
+  promptedAssetsLoaded: false,
   captionedIds: new Set<string>(),
   focusAssetId: null,
   captionRing: null,
@@ -471,9 +501,24 @@ export const useStore = create<State>((set, get) => {
       const next = new Set(s.selectedIds);
       if (next.has(id)) next.delete(id);
       else next.add(id);
+      return { selectedIds: next, rangeAnchorId: id };
+    }),
+  // Shift 范围多选：以锚点为起点，在 orderedIds（瀑布流可见顺序）里框出 [锚, 目标] 闭区间
+  // 并入选中集——可反复 Shift 叠加不同范围；锚不在当前列表（换夹/列表变化）时退化为单选并改锚。
+  selectRange: (toId, orderedIds) =>
+    set((s) => {
+      const next = new Set(s.selectedIds);
+      const ai = s.rangeAnchorId ? orderedIds.indexOf(s.rangeAnchorId) : -1;
+      const ti = orderedIds.indexOf(toId);
+      if (ai < 0 || ti < 0) {
+        next.add(toId);
+        return { selectedIds: next, rangeAnchorId: toId };
+      }
+      const [lo, hi] = ai <= ti ? [ai, ti] : [ti, ai];
+      for (let i = lo; i <= hi; i++) next.add(orderedIds[i]);
       return { selectedIds: next };
     }),
-  clearSelect: () => set({ selectedIds: new Set() }),
+  clearSelect: () => set({ selectedIds: new Set(), rangeAnchorId: null }),
   selectAll: () => set((s) => ({ selectedIds: new Set(s.assets.map((a) => a.id)) })),
   setLoading: (loading) => set({ loading }),
   // 切文件夹保留颜色筛选（P3：folder + color 叠加）；清详情 + smartFilter/收藏夹（互斥）。
@@ -510,7 +555,7 @@ export const useStore = create<State>((set, get) => {
       detailAssetId: null,
     }),
   enterManage: () => set({ mode: "manage", detailAssetId: null }),
-  exitManage: () => set({ mode: "browse", selectedIds: new Set() }),
+  exitManage: () => set({ mode: "browse", selectedIds: new Set(), rangeAnchorId: null }),
   openDetail: (detailAssetId) => set({ detailAssetId }),
   closeDetail: () => set({ detailAssetId: null }),
   setFolders: (folders) => set({ folders }),
@@ -538,7 +583,6 @@ export const useStore = create<State>((set, get) => {
           detailAssetId: null,
           selectedIds: new Set(),
           mode: "browse",
-          boardOpen: false,
           activePresetId: null,
         });
       } else {
@@ -560,7 +604,6 @@ export const useStore = create<State>((set, get) => {
       detailAssetId: null,
       selectedIds: new Set(),
       mode: "browse",
-      boardOpen: false,
       activePresetId: null,
     });
   },
@@ -576,7 +619,6 @@ export const useStore = create<State>((set, get) => {
       detailAssetId: null,
       selectedIds: new Set(),
       mode: "browse",
-      boardOpen: false,
       activePresetId: null,
     });
   },
@@ -606,35 +648,52 @@ export const useStore = create<State>((set, get) => {
   setClassifyProgress: (classifyProgress) => set({ classifyProgress }),
   setColorRebuild: (colorRebuild) => set({ colorRebuild }),
   // —— 创作板 ——
-  toggleBoard: () =>
-    set((s) => {
-      const turningOn = !s.boardOpen;
-      return {
-        boardOpen: turningOn,
-        // 打开创作板时收起详情页，让瀑布流（全部图，任意图可插为参考图）可见以便挑图
-        detailAssetId: turningOn ? null : s.detailAssetId,
-        // 与 setGenEditing 对称：开创作板退出会话编辑坞。否则两个 useCreationEditor
-        // （创作板 + 坞）同时挂载监听同一组 pick/peek/inject 事件，点图会双份插入、双 focus 抢焦点。
-        genEditing: turningOn ? null : s.genEditing,
-        // 会话详情中点「打开创作板」→ 收起会话详情（生成照常后台跑，圆点可回看）。
-        genPanelOpen: turningOn ? false : s.genPanelOpen,
-      };
-    }),
-  setPromptedAssets: (promptedAssets) => set({ promptedAssets }),
+  // 创作模式开关：激活 = 编辑框获得焦点（CreationBoard onFocus → setBoardActive(true)，
+  // 等同旧 toggleBoard 开启语义：收详情页/会话面板让瀑布流可挑图）；退出 = 编辑框右上角 X。
+  setBoardActive: (active) =>
+    set({
+      boardOpen: active,
+      ...(active
+        ? {
+            detailAssetId: null,
+            // 两个 useCreationEditor（创作板 + 编辑坞）互斥，激活即退出编辑坞
+            // （正常情况对话框在编辑坞期间不可见，此处是防御）。
+            genEditing: null,
+            // 会话面板盖住瀑布流，激活创作模式先收起（生成照常后台跑，圆点可回看）。
+            genPanelOpen: false,
+          }
+        : {}),
+    }),  setPromptedAssets: (promptedAssets) => set({ promptedAssets, promptedAssetsLoaded: true }),
   setCaptionedIds: (ids) => set({ captionedIds: new Set(ids) }),
   focusAsset: (id) => set({ focusAssetId: id }),
   clearFocusAsset: () => set({ focusAssetId: null }),
   // —— 维度环 ——
-  openCaptionRing: (assetId) => set({ captionRing: assetId, ringAssetId: assetId }),
+  openCaptionRing: (assetId) => {
+    set({ captionRing: assetId, ringAssetId: assetId });
+    // 环是全局单例（任意模式长按呼出），但 promptedAssets 只在板开/编辑坞时由 App.refresh
+    // 拉取——板外呼环时这里是空的，有反推的图也会显示「无维度」。目标图不在集合里
+    // （未加载过 / 数据过期）就按需补拉一次，CaptionRing 响应式订阅到数据后自动补扇区。
+    const s = get();
+    if (s.promptedAssets.some((a) => a.id === assetId)) return;
+    set({ promptedAssetsLoaded: false });
+    api
+      .listPromptedAssets(s.currentProjectId)
+      .then((prompted) => set({ promptedAssets: prompted, promptedAssetsLoaded: true }))
+      .catch((e) => {
+        console.error("load promptedAssets for ring failed", e);
+        set({ promptedAssetsLoaded: true }); // 失败也解除加载态，退回「无维度」空环提示
+      });
+  },
   closeCaptionRing: () => set({ captionRing: null }),
-  // 点扇区 = 维度直接进创作板：板未开则先开板（同 toggleBoard 开启语义），keyword 挂 pending，
-  // 由创作板实例的 useCreationEditor 在挂载后/即时消费插入（板已开）。
-  pickCaptionSection: (section) =>
+  // 点扇区 = 维度插进当前编辑器：板已激活或会话编辑坞开着（genEditing）时不动模式——
+  // 当前挂载的编辑器实例（板 / 坞，App 派生互斥挂载）直接消费 pendingKeyword，编辑坞
+  // 期间不再退出坞打断续轮编辑；两者都没开才激活创作板（板实例挂载后消费）。
+  pickCaptionSection: (section, assetId) =>
     set((s) => ({
-      ...(s.boardOpen
+      ...(s.boardOpen || s.genEditing
         ? {}
         : { boardOpen: true, detailAssetId: null, genEditing: null, genPanelOpen: false }),
-      pendingKeyword: { title: section.title, body: section.body ?? "" },
+      pendingKeyword: { title: section.title, body: section.body ?? "", assetId },
     })),
   clearPendingKeyword: () => set({ pendingKeyword: null }),
   setActivePreset: (id) => set({ activePresetId: id }),
@@ -913,10 +972,12 @@ export const useStore = create<State>((set, get) => {
   collectedNotice: null,
   setCollectedNotice: (collectedNotice) => set({ collectedNotice }),
   genEditing: null,
+  // 进入编辑坞不动 boardOpen（常驻 true）：App 按 boardOpen && !genEditing 派生隐藏
+  // 创作板对话框（两个 useCreationEditor 互斥）；退出坞（v=null）对话框自动回来。
   setGenEditing: (v) =>
     set(
       v
-        ? { genEditing: v, boardOpen: false, detailAssetId: null }
+        ? { genEditing: v, detailAssetId: null }
         : { genEditing: null },
     ),
   // —— 生成结果面板（多 job）——
@@ -928,7 +989,11 @@ export const useStore = create<State>((set, get) => {
   setGenPanelOpen: (open) =>
     set((s) => ({ genPanelOpen: open, genUnread: open ? false : s.genUnread })),
   setActiveJob: (id) => set({ activeJobId: id }),
-  removeGenJob: (id) =>
+  removeGenJob: (id) => {
+    // 已完成（非在跑）会话的移除同步删 task_queue 终态行——重启恢复不再出现该会话；
+    // 在跑 job 的行留给恢复链路（前端移除仍只动内存），「回看生成对话」的临时 job 无行、删除为空操作。
+    const j = get().genJobs[id];
+    if (j && !j.running) void api.dismissGenJob(id).catch(console.error);
     set((s) => {
       if (!s.genJobs[id]) return s;
       const genJobs = { ...s.genJobs };
@@ -938,17 +1003,67 @@ export const useStore = create<State>((set, get) => {
         s.activeJobId === id ? (genJobOrder.length > 0 ? genJobOrder[genJobOrder.length - 1] : null) : s.activeJobId;
       const generating = Object.values(genJobs).some((x) => x.running);
       return { genJobs, genJobOrder, activeJobId, generating };
-    }),
+    });
+  },
   loadGenJobs: async () => {
-    // 启动恢复：拉本地未完成生成 job 重建 genJobs（恢复中 job 在面板可见）。
+    // 启动恢复：① 未完成 job（queued/running）重建 genJobs（恢复中 job 在面板可见）；
+    // ② 最近终态会话（done/failed）从 generation_meta 重建时间线 —— 会话面板跨重启保留
+    // （done 会话可回看续轮，failed 会话可重试；cancelled 用户显式取消过、不恢复）。
     try {
-      const jobs = await api.listGenJobs();
+      const [jobs, recent] = await Promise.all([
+        api.listGenJobs(),
+        api.recentGenSessions().catch((): RecentGenSession[] => []), // 历史恢复失败不阻断在跑恢复
+      ]);
       set((s) => {
         const genJobs = { ...s.genJobs };
         const genJobOrder = [...s.genJobOrder];
+        const seenSessions = new Set(
+          Object.values(s.genJobs)
+            .map((x) => x.sessionId)
+            .filter((x): x is string => !!x),
+        );
+        // 终态会话旧→新追加（genJobOrder 顺序即面板顺序，reverse 后最新在前）。
+        for (const r of [...recent].reverse()) {
+          if (genJobs[r.id]) continue; // 已存在（本轮新发）不覆盖
+          const failed = r.status === "failed";
+          const turns: GenTurn[] = r.turns.map((t) => ({
+            id: nextGenTurnId(),
+            prompt: t.prompt,
+            promptRaw: t.prompt_raw ?? null,
+            images: t.images,
+            refs: t.references ?? undefined,
+            refAssets: t.ref_assets,
+          }));
+          if (failed) {
+            // 失败态标记在最后一轮：面板 ❌ + 生成面板重试入口（错误文本只活在内存，不入库）。
+            const err = r.error ?? "生成失败";
+            if (turns.length > 0) turns[turns.length - 1] = { ...turns[turns.length - 1], error: err };
+            else turns.push({ id: nextGenTurnId(), prompt: r.prompt, promptRaw: null, images: [], error: err });
+          }
+          genJobs[r.id] = {
+            id: r.id,
+            conversationId: r.conversation_id ?? undefined,
+            turns,
+            sessionId: r.session_id,
+            streaming: "",
+            lastPrompt: turns[0]?.prompt ?? r.prompt,
+            lastRefs: r.references,
+            refAssets: r.ref_assets,
+            lastRatio: r.ratio ?? null,
+            provider: r.provider,
+            projectId: r.project_id ?? null,
+            createdAt: r.created_at,
+            running: false,
+            submitId: null,
+            remoteStatus: null,
+          };
+          genJobOrder.push(r.id);
+          if (r.session_id) seenSessions.add(r.session_id);
+        }
         let firstRecoveredId: string | null = null;
         for (const j of jobs) {
           if (genJobs[j.id]) continue; // 已存在（用户本轮新发）不覆盖
+          if (j.session_id && seenSessions.has(j.session_id)) continue; // 同 session 已有终态行，避免双份
           genJobs[j.id] = {
             id: j.id,
             turns: [{ id: nextGenTurnId(), prompt: j.prompt, images: [], provider: j.provider }],
@@ -970,7 +1085,7 @@ export const useStore = create<State>((set, get) => {
           if (firstRecoveredId === null) firstRecoveredId = j.id;
         }
         const generating = Object.values(genJobs).some((x) => x.running);
-        // 有恢复中 job → 自动弹面板 + 选中首个（用户看得见恢复进度，与 startGeneration 自动弹一致）。
+        // 有恢复中 job → 自动弹面板 + 选中首个（历史会话恢复不弹，与 startGeneration 自动弹一致）。
         return firstRecoveredId
           ? { genJobs, genJobOrder, generating, genPanelOpen: true, activeJobId: s.activeJobId ?? firstRecoveredId }
           : { genJobs, genJobOrder, generating };
@@ -991,10 +1106,16 @@ export const useStore = create<State>((set, get) => {
     // 不进编辑器）。续轮 sendGenRevise 不注入——用途是首轮基底，续轮是修改意见。
     const pid = get().activePresetId;
     const preset = pid ? get().presets.find((p) => p.id === pid) : null;
-    const sentPrompt = preset ? `${preset.body}\n\n${prompt}` : prompt;
+    const combinedPrompt = preset ? `${preset.body}\n\n${prompt}` : prompt;
+    // 标注参数按 provider 能力改写；仅改写实际发送文本，编辑器原文不变。
+    const sentPrompt = normalizeAnnotationPrompt(combinedPrompt, prov);
     const refPaths = references
       .map((r) => r.store_path)
       .filter((p): p is string => !!p);
+    // 「自动」比例（null/空）：有参考图时跟随首张参考图的宽高比吸附到档位、显式下发——
+    // 即梦 omit --ratio 会固定回退 16:9（竖屏参考图也被横切）；解析不了（无参考图/无尺寸）
+    // 维持「自动」交引擎默认。落 lastRatio 供续轮坞与重试继承。
+    const sentRatio = ratio?.trim() ? ratio : autoRatioFromReferences(references);
     // 前端生成 jobId：创建 GenJob 即知 id，chunk 按 id 路由无 race；后端 task_queue upsert。
     const jobId = crypto.randomUUID();
     // 会话级分组（含普通 job：conversationId 兜底 jobId）——后端 done 入库时落
@@ -1003,13 +1124,13 @@ export const useStore = create<State>((set, get) => {
     const job: GenJob = {
       id: jobId,
       conversationId: conv,
-      turns: [{ id: nextGenTurnId(), prompt: sentPrompt, promptRaw: rawPrompt ?? null, images: [], provider: prov, startedAt: Date.now() }],
+      turns: [{ id: nextGenTurnId(), prompt: sentPrompt, promptRaw: rawPrompt ?? null, images: [], refAssets: references, provider: prov, startedAt: Date.now() }],
       sessionId: null,
       streaming: "",
       lastPrompt: sentPrompt,
       lastRefs: refPaths,
       refAssets: references,
-      lastRatio: ratio ?? null,
+      lastRatio: sentRatio,
       provider: prov,
       projectId: get().currentProjectId,
       createdAt: Date.now(),
@@ -1029,7 +1150,7 @@ export const useStore = create<State>((set, get) => {
         prompt: sentPrompt,
         promptRaw: rawPrompt,
         referenceImages: refPaths,
-        ratio,
+        ratio: sentRatio,
         provider: prov,
         projectId: job.projectId,
         conversationId: conv,
@@ -1055,20 +1176,18 @@ export const useStore = create<State>((set, get) => {
     );
     const gateError = generationGateError(get(), prov);
     if (gateError) throw new Error(gateError);
-    // 即梦/Cloud 续轮：image2image / reference_images 传上一轮产出图（codex resume 记得
-    // 上一轮图、不需传）。取「最后一个有图的轮」——末尾失败轮无图，不能让回退落空。
-    // 底部对话框挑了新参考图则优先传——codex resume --image / Cloud reference_images /
-    // 即梦 image2image 三条续轮路径都吃显式参考图。截前 10 张（服务端参考图上限）。
-    const lastImages =
-      [...job.turns].reverse().find((t) => t.images.length > 0)?.images.slice(0, 10) ?? [];
-    const pickedRefs = (opts?.references ?? [])
+    const sentText = normalizeAnnotationPrompt(text, prov);
+    // 续轮参考图：只传坞内显式挑选的图。jimeng/Cloud 的「上一轮产出图」由后端权威合并
+    // （codex_create_image 从 generation_meta 取会话最后有图轮，与这里挑的图合并去重、
+    // 上一轮产出在前、截前 10）——前端 job.turns 是易失内存（重启恢复/回看重建可能缺历史轮），
+    // 且旧逻辑「挑了图就完全替代」会把上一轮生成图挤掉（修改意见里 @ 素材图即复现）。
+    // codex resume 自带会话上下文，同样只吃显式挑选的参考图。
+    // exactReferences（轮级重试/编辑）：列表即该轮当时实际下发的完整参考图，直发、后端
+    // 跳过合并——重试第 N 轮用当时的基图，而不是该轮自己产出的图。
+    const reviseRefs = (opts?.references ?? [])
       .map((r) => r.store_path)
       .filter((p): p is string => !!p);
-    const reviseRefs = pickedRefs.length > 0
-      ? pickedRefs
-      : prov === "jimeng" || isCloudProvider(prov)
-        ? lastImages
-        : [];
+    const exactRefs = opts?.exactReferences?.length ? opts.exactReferences : undefined;
     // 续轮复用同 jobId（同一会话）；后端 task_queue upsert 刷新回 running。
     updateJob(id, (j) => ({
       ...j,
@@ -1076,9 +1195,11 @@ export const useStore = create<State>((set, get) => {
         ...j.turns,
         {
           id: nextGenTurnId(),
-          prompt: text,
+          prompt: sentText,
           promptRaw: opts?.rawPrompt ?? null,
           images: [],
+          // 坞内组稿挑选的参考图（chip 气泡渲染用）；合并的上一轮产出图走 refs（started 回填）。
+          refAssets: opts?.references ?? [],
           provider: prov,
           startedAt: Date.now(),
         },
@@ -1089,11 +1210,17 @@ export const useStore = create<State>((set, get) => {
     try {
       await api.codexCreateImage({
         jobId: id,
-        prompt: text,
+        prompt: sentText,
         promptRaw: opts?.rawPrompt ?? null,
-        referenceImages: reviseRefs,
+        referenceImages: exactRefs ?? reviseRefs,
+        exactReferences: !!exactRefs,
         sessionId: job.sessionId,
-        ratio: opts?.ratio ?? null,
+        // 会话分组透传：续轮 upsert 整包覆盖 task_queue payload，不传会把持久化的
+        // conversation_id 抹成 null——重启后该会话在会话面板脱离它的版本分组。
+        conversationId: job.conversationId ?? null,
+        // 比例只传坞内显式选档；「自动」由后端按第一参考图（续轮=上一轮产出图）吸附档位——
+        // 即梦 omit --ratio 固定回退 16:9，此前续轮 auto 落 16:9 横切竖图。
+        ratio: opts?.ratio?.trim() ? opts.ratio : null,
         provider: prov,
         projectId: job.projectId,
       });
@@ -1126,15 +1253,45 @@ export const useStore = create<State>((set, get) => {
     if (!last?.error) return; // 没有失败轮可重试
     if (job.sessionId) {
       // 续轮失败：先移除失败轮再 resume，重试轮顶替原位（避免同 prompt 编号递增的重复轮）。
+      // 参考图精确重放该轮当时实际下发的完整列表（started 事件已记录，含当时的基图）；
+      // 恢复重建的失败轮无 refs 时退回正常合并路径。
       updateJob(id, (j) => ({ ...j, turns: j.turns.slice(0, -1) }));
-      void s.sendGenRevise(last.prompt, provider);
+      void s.sendGenRevise(last.prompt, provider, {
+        rawPrompt: last.promptRaw ?? undefined,
+        references: last.refAssets,
+        exactReferences: last.refs?.length ? last.refs : undefined,
+      });
     } else {
       // 首轮失败：startGeneration 新建 job 重发（旧失败 job 保留可切回查看）。
-      void s.startGeneration(job.lastPrompt, job.refAssets, job.lastRatio, provider);
+      void s.startGeneration(
+        job.lastPrompt,
+        job.refAssets,
+        job.lastRatio,
+        provider,
+        job.turns[0]?.promptRaw ?? undefined,
+      );
     }
   },
   applyGenChunk: (c) => {
-    if (c.kind === "started") return; // 前端已自生成 jobId 创建 job；started 无需处理
+    if (c.kind === "started") {
+      // started = 后端已定本轮最终参考图与比例（续轮含合并的上一轮产出图 / 自动档已按
+      // 第一参考图吸附）→ refs 落到该轮（气泡上方「附件」缩略图）、lastRatio 同步实际值
+      // （续轮坞比例初值不再滞留首轮）。首轮展示走 refAssets（完整 asset），refs 仅兜底。
+      const sid = c.job_id;
+      if (sid && (c.references || c.ratio)) {
+        updateJob(sid, (j) => {
+          const last = j.turns[j.turns.length - 1];
+          const turns = last
+            ? [
+                ...j.turns.slice(0, -1),
+                { ...last, refs: c.references ?? last.refs },
+              ]
+            : j.turns;
+          return { ...j, turns, lastRatio: c.ratio ?? j.lastRatio };
+        });
+      }
+      return;
+    }
     if (c.kind === "submit") {
       // 即梦 submit_id 到（Chunk::Submit 回填）：记录到 job，纯展示（恢复续查用）。
       const sid = c.job_id;
@@ -1241,6 +1398,8 @@ export const useStore = create<State>((set, get) => {
           prompt: t.prompt,
           promptRaw: t.prompt_raw ?? null,
           images: t.images,
+          refs: t.references ?? undefined,
+          refAssets: t.ref_assets,
         })),
         sessionId: hist.session_id,
         streaming: "",
@@ -1248,7 +1407,10 @@ export const useStore = create<State>((set, get) => {
         lastRefs: hist.references.map((r) => r.store_path).filter((p): p is string => !!p),
         refAssets: hist.references,
         lastRatio: null,
-        provider: "",
+        // 首版 meta 的 provider（即梦/cloud key）：续轮坞 provider 初值据此还原，即梦会话
+        // 不再默认落到 codex（codex resume 拿即梦 submit_id 会直接报错）。遗留 "dreamina"
+        // key 归一为 jimeng；旧 meta 无 provider 维持空串（面板按 codex 展示，可手选）。
+        provider: hist.provider === "dreamina" ? "jimeng" : hist.provider ?? "",
         projectId: get().currentProjectId,
         createdAt: Date.now(),
         running: false,
@@ -1268,7 +1430,9 @@ export const useStore = create<State>((set, get) => {
     const body = prompt.trim();
     if (!body) return;
     set({
-      boardOpen: true,
+      // 常驻化后 boardOpen 恒 true；编辑坞开着则退出坞让创作板接管（否则 load 事件
+      // 会被坞内编辑器抢先消费，且两编辑器同挂载双份插入）。
+      genEditing: null,
       detailAssetId: null,
       genPanelOpen: false, // 聚焦创作板编辑
       // 载入的 prompt 已含完整内容（含原 preset body），清选中避免发送时 startGeneration 重复拼 body
@@ -1278,7 +1442,7 @@ export const useStore = create<State>((set, get) => {
     // 否则取 activeJob（复用入口在 GenerationPanel 基于选中 job）。
     const id = get().activeJobId;
     const refAssets = refs ?? (id ? get().genJobs[id]?.refAssets ?? [] : []);
-    // 延一帧：set(boardOpen) 后 CreationBoard 才挂载注册 listener，同步 dispatch 会丢失。
+    // 延一帧 dispatch：从编辑坞退出的场景 CreationBoard 需先挂载注册 listener，同步派发会丢失。
     setTimeout(() => {
       window.dispatchEvent(
         new CustomEvent("bowerbird://board-load-prompt", {
@@ -1289,15 +1453,33 @@ export const useStore = create<State>((set, get) => {
   },
   insertAnnotatedToBoard: (asset) => {
     // 生成面板编辑坞打开 → 原地插入不动面板（编辑坞的 useCreationEditor 也监听 injected）；
-    // 否则保开创作板（延一帧 dispatch 等挂载，同 reusePromptToBoard）。
+    // 否则收起详情页让瀑布流+对话框可见（对话框与详情页互斥，见 App 挂载条件）。
     if (!get().genPanelOpen) {
-      set({ boardOpen: true, detailAssetId: null });
+      set({ detailAssetId: null });
     }
     setTimeout(() => {
       window.dispatchEvent(
         new CustomEvent("bowerbird://board-asset-injected", { detail: asset }),
       );
     }, 0);
+  },
+  addAssetToBoardFromDetail: (assetId) => {
+    // 关详情回主界面：瀑布流 + 对话框（互斥）随 detailAssetId 清空而挂载。
+    set({ detailAssetId: null });
+    // 滚动定位到该图 + 蓝框闪烁（MasonryGrid 既有 focusAsset 消费）。
+    get().focusAsset(assetId);
+    // 延一帧插 chip：对话框刚挂载，需等其 useCreationEditor 注册 pick listener；
+    // 插入后编辑器聚焦 → onFocus 激活创作模式（同点编辑框）。
+    setTimeout(() => {
+      window.dispatchEvent(
+        new CustomEvent("bowerbird://board-asset-picked", { detail: assetId }),
+      );
+    }, 0);
+    // 有维度数据（反推 sections）则呼出维度环；环锚点回退链：瀑布流卡片 → 编辑框 chip。
+    const hasSections = get().promptedAssets.some(
+      (a) => a.id === assetId && a.sections && a.sections.length > 0,
+    );
+    if (hasSections) get().openCaptionRing(assetId);
   },
   // —— 图片标注面板 ——
   annotator: null,
@@ -1307,5 +1489,9 @@ export const useStore = create<State>((set, get) => {
   contextMenu: null,
   openContextMenu: (x, y, assetId) => set({ contextMenu: { x, y, assetId } }),
   closeContextMenu: () => set({ contextMenu: null }),
+  // —— 项目右键菜单 ——
+  projectContextMenu: null,
+  openProjectContextMenu: (x, y, projectId) => set({ projectContextMenu: { x, y, projectId } }),
+  closeProjectContextMenu: () => set({ projectContextMenu: null }),
   };
 });

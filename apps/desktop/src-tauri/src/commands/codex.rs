@@ -23,6 +23,7 @@ use crate::codex::understand::{
     resolve_entitled_understand_provider, resolve_understand_provider_with_choice, UnderstandOperation,
 };
 use crate::core::caption;
+use crate::core::library::{GenerationHistoryTurn, PromptedAsset};
 use crate::core::paths::LibraryPaths;
 use crate::core::settings::SettingsState;
 use crate::db::Database;
@@ -376,8 +377,58 @@ fn settle_generation_task(db: &Database, job_id: &str, result: &Result<(), AppEr
 ///
 /// - 流式：经 event `codex://chunk` 回前端（codex=Delta 逐字、即梦/Cloud=状态/伪进度）；
 /// - 不写 `analyses`（生成 ≠ 分析）；来源元信息落 `generation_meta`。
+/// 即梦/Cloud 画面比例档位（与前端创作板 RATIOS 同一套，creation/ratios.ts）。
+const GEN_RATIO_PRESETS: [(&str, u32, u32); 7] = [
+    ("1:1", 1, 1),
+    ("3:4", 3, 4),
+    ("4:3", 4, 3),
+    ("2:3", 2, 3),
+    ("3:2", 3, 2),
+    ("16:9", 16, 9),
+    ("9:16", 9, 16),
+];
+
+/// generation_meta 的 provider 是否 codex 系（含历史 key "codex-cli" 与前端裸 "codex"/"default"）。
+fn generation_provider_is_codex(provider: Option<&str>) -> bool {
+    matches!(provider, Some("codex" | "codex-cli" | "default"))
+}
+
+/// 宽高比按**对数距离**吸附到最近档位（对数尺度衡量比例差异，1:0.9 与 0.9:1 对称）。
+fn nearest_ratio_key(width: u32, height: u32) -> Option<String> {
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let target = (width as f64 / height as f64).ln();
+    GEN_RATIO_PRESETS
+        .iter()
+        .map(|(key, w, h)| {
+            let dist = ((*w as f64 / *h as f64).ln() - target).abs();
+            (*key, dist)
+        })
+        .min_by(|a, b| a.1.partial_cmp(&b.1).expect("finite dist"))
+        .map(|(key, _)| key.to_string())
+}
+
+/// 读首张参考图尺寸 → 吸附档位；读不出（缺文件/SVG 解码 0×0）→ None 维持「自动」。
+fn snap_ratio_from_reference(path: &std::path::Path) -> Option<String> {
+    let meta = crate::media::probe::probe(path).ok()?;
+    nearest_ratio_key(meta.width, meta.height)
+}
+
 /// 可取消：前端调 `cancel_codex_create`，select 命中后 future 被 drop，本机 CLI 子进程靠
 /// `kill_on_drop` 自动终止（Cloud/远端任务可能仍在运行，submit_id 保留可事后取回）。
+///
+/// 即梦/Cloud 续轮参考图合并：上一轮产出图在前（修改主体），显式挑选的参考图去重追加，
+/// 截前 10（服务端参考图上限）。
+fn merge_continuation_references(last: Vec<String>, picked: Vec<String>) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    last.into_iter()
+        .chain(picked)
+        .filter(|p| seen.insert(p.clone()))
+        .take(10)
+        .collect()
+}
+
 #[tauri::command]
 pub async fn codex_create_image(
     app: AppHandle,
@@ -390,6 +441,9 @@ pub async fn codex_create_image(
     prompt: String,
     prompt_raw: Option<String>,
     reference_images: Vec<String>,
+    // 参考图列表已完整（轮级重试/编辑的精确重放）：跳过续轮自动合并上一轮产出图。
+    // None/false = 正常续轮（自动合并会话最新产出作基图）。
+    exact_references: Option<bool>,
     session_id: Option<String>,
     ratio: Option<String>,
     provider: Option<String>,
@@ -404,7 +458,95 @@ pub async fn codex_create_image(
     // 续轮（有 session_id）：codex resume / 即梦 image2image / Cloud 重发，统一用用户修改意见原文。
     // prompt / reference_images 留一份给 generation_meta（req 会 move 走原值）。
     let prompt_for_meta = prompt.clone();
+    // ── 续轮参考图与 resume 判定（provider 感知）──
+    // 即梦/Cloud 续轮（有 session_id）始终带上会话「最后一个有图轮」的产出图（修改主体），
+    // 与显式携带的参考图合并去重（产出在前）、截前 10（服务端参考图上限）。背景：前端曾是
+    // 「挑了新参考图就完全替代上一轮产出」——修改意见里 @ 素材图（创作板式组稿的习惯）就会
+    // 挤掉上一轮生成图，即梦只收到素材图、丢掉被修改主体（用户实测复现）；且前端 job.turns
+    // 是易失内存（重启恢复/回看重建可能缺历史轮），DB 才是会话产出权威。
+    //
+    // codex 续轮：会话**原生** codex（首轮 provider 是 codex，session id 即 thread id）→
+    // resume 沿用 thread；但 codex 的 thread 看不到中途切去即梦/Cloud 的轮——上一产出轮非
+    // codex 时，把最新产出图显式附上（--image），画面状态不断。会话非 codex 原生（即梦/
+    // Cloud 会话切 codex）→ session id 是别家的 submit_id，codex resume 必失败 → **开新
+    // thread**（首轮形态：instruction 触发 imagegen 的包装 + 附最新产出图交接）；簿记
+    // session 不变（meta/done 仍记原会话 id，时间线/分组不裂）。
+    //
+    // exact_references=true（轮级重试/编辑）时跳过合并/附加：调用方已给该轮**当时实际下发**
+    // 的完整参考图列表，精确重放（重试第 N 轮用当时的基图，而不是该轮自己产出的最新图）。
+    let mut reference_images = reference_images;
+    // provider 侧的 resume 句柄（codex = thread id；即梦/Cloud 沿用 session id 记账）。
+    let mut provider_resume = session_id.clone();
+    let exact = exact_references.unwrap_or(false);
+    if let Some(sid) = session_id.as_deref() {
+        let is_codex_provider =
+            matches!(provider.as_deref(), None | Some("codex" | "default" | "codex-cli"));
+        let jimeng_or_cloud = matches!(provider.as_deref(), Some("jimeng" | "dreamina"))
+            || crate::codex::is_cloud_generation_provider(provider.as_deref());
+        if jimeng_or_cloud || is_codex_provider {
+            let db_fb = db.inner().clone();
+            let sid_fb = sid.to_string();
+            let (native_provider, last_provider, last_images, codex_thread) =
+                tokio::task::spawn_blocking(move || {
+                    let native = db_fb.session_generation_provider(&sid_fb, false);
+                    let last = db_fb.session_generation_provider(&sid_fb, true);
+                    let imgs = db_fb.last_generated_images_for_session(&sid_fb);
+                    let thread = db_fb.session_codex_thread(&sid_fb);
+                    (native, last, imgs, thread)
+                })
+                .await
+                .map_err(|e| AppError::Other(e.to_string()))?;
+            if jimeng_or_cloud {
+                if !exact && !last_images.is_empty() {
+                    tracing::info!(
+                        "gen: 续轮合并上一轮产出图 job={} session={} last={} picked={}",
+                        job_id,
+                        sid,
+                        last_images.len(),
+                        reference_images.len()
+                    );
+                    reference_images =
+                        merge_continuation_references(last_images, reference_images);
+                }
+            } else {
+                // codex resume 句柄：codex 原生会话 = session id（thread id）；非 codex 原生
+                // （即梦/Cloud 会话切入）= meta 里最近记录的 codex thread——连续 codex 轮共享
+                // 一个 thread；都没有 → None 开新 thread（完成时 finalize 落 codex_thread 句柄，
+                // 下轮 resume）。句柄解析不受 exact 影响（重试也要接上下文）。
+                provider_resume = if generation_provider_is_codex(native_provider.as_deref()) {
+                    Some(sid.to_string())
+                } else {
+                    codex_thread
+                };
+                // codex thread 看不到别家引擎的轮：上一产出轮非 codex 时显式附最新产出图
+                // （resume 交接画面状态 / 新 thread 首轮带入当前画面）。精确重放跳过。
+                if !exact
+                    && !generation_provider_is_codex(last_provider.as_deref())
+                    && !last_images.is_empty()
+                {
+                    tracing::info!(
+                        "gen: codex 续轮交接最新产出图 job={} session={} last_provider={:?}",
+                        job_id,
+                        sid,
+                        last_provider
+                    );
+                    reference_images =
+                        merge_continuation_references(last_images, reference_images);
+                }
+            }
+        }
+    }
     let refs_for_meta = reference_images.clone();
+    // 「自动」比例解析（后端权威）：显式选档照传；自动（空）且有参考图时，跟随**第一张参考图**
+    // （续轮 = 参考图合并后的首位 = 上一轮产出图）的宽高比吸附到最近档位、显式下发——即梦
+    // omit --ratio 固定回退 16:9（竖图被横切）；解析不了（无参考图/读不出尺寸）维持自动。
+    // 档位与前端创作板 RATIOS 同一套 7 档（creation/ratios.ts）。
+    let ratio = match ratio.as_deref().map(str::trim).filter(|r| !r.is_empty()) {
+        Some(r) => Some(r.to_string()),
+        None => reference_images
+            .first()
+            .and_then(|p| snap_ratio_from_reference(std::path::Path::new(p))),
+    };
     // job_id 由前端生成（crypto.randomUUID）传入：前端创建 GenJob 时即知 id，chunk 事件按 job_id
     // 路由无 race；续轮（resume 同一 session）复用同一 job_id，task_queue 行 upsert 刷新回 running。
     let is_codex = matches!(provider.as_deref(), None | Some("codex" | "default"));
@@ -412,12 +554,14 @@ pub async fn codex_create_image(
         Some(r) => format!("；画面比例为 {r}"),
         None => String::new(),
     };
-    let instruction = match (&session_id, is_codex) {
-        (Some(_), _) => prompt,
-        (None, true) => format!(
+    // instruction：codex **新 thread**（首轮 / 非 codex 原生会话切入）需要触发 imagegen 的
+    // 包装语；resume 续轮与即梦/Cloud 一律用户原文。
+    let instruction = if is_codex && provider_resume.is_none() {
+        format!(
             "请使用图像生成工具，根据以下提示词和参考图生成图片（张数完全以提示词要求为准；提示词未指定张数时生成一张{ratio_clause}）。\n\n{prompt}"
-        ),
-        (None, false) => prompt,
+        )
+    } else {
+        prompt
     };
     let req = CodexRequest {
         instruction,
@@ -544,9 +688,18 @@ pub async fn codex_create_image(
 
     // 生成开始即通知前端 job_id：同步模型下命令 await 到完成才返回 job_id，生成中前端拿不到
     // → currentGenJobId 为 null → 取消失效。started 事件让前端早 set currentGenJobId，取消可生效。
+    // references = 本轮最终下发的参考图（续轮含后端合并的上一轮产出图）——前端落到该轮
+    // GenTurn.refs，气泡上方画「附件」缩略图（续轮看不到合并结果曾是用户投诉点）。
+    // ratio = 本轮最终比例（自动档已按第一参考图吸附）——前端更新 job.lastRatio，
+    // 续轮坞比例初值与实际下发保持一致。
     let _ = app.emit(
         "codex://chunk",
-        serde_json::json!({ "kind": "started", "job_id": &job_id }),
+        serde_json::json!({
+            "kind": "started",
+            "job_id": &job_id,
+            "references": refs_for_meta.clone(),
+            "ratio": ratio.clone(),
+        }),
     );
 
     let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
@@ -571,14 +724,19 @@ pub async fn codex_create_image(
 
     let generation_result: Result<(), AppError> = async {
         // generate_image 借用 tx 推 Delta；用 block 限定借期，结束后 command 才能 reuse tx 发 Done。
+        // resume 句柄用 provider_resume（非 codex 原生会话切 codex = None 开新 thread）。
         let outcome = {
-            let gen_fut = p.generate_image(req, &tx, session_id);
+            let gen_fut = p.generate_image(req, &tx, provider_resume);
             tokio::pin!(gen_fut);
             tokio::select! {
                 res = &mut gen_fut => res,
                 _ = &mut cancel_rx => Err(AppError::Codex("已取消".into())),
             }?
         };
+
+        // 簿记 session：优先请求时的会话 id（新 thread 轮也归原会话——meta/前端 sessionId/
+        // 重启时间线都不裂），首轮（请求无 session）才用 provider 产出的新 id。
+        let bookkeeping_session = session_id.clone().or(outcome.session_id.clone());
 
         // 源图收尾入库（ingest + project link + generation_meta + caption + 自动命名）—— 抽到
         // generation_worker::finalize_generation_assets，与启动恢复 worker 共用、元数据一致。
@@ -591,11 +749,17 @@ pub async fn codex_create_image(
             prompt_for_meta.clone(),
             prompt_raw,
             refs_for_meta.clone(),
-            outcome.session_id.clone(),
+            bookkeeping_session.clone(),
             conversation_id.clone(),
             outcome.submit_id.clone(),
             provider_name.clone(),
             project_id.clone(),
+            // codex 轮记录真实 thread id（非 codex 原生会话里连续 codex 轮共享 thread 的句柄）。
+            if provider_name == "codex-cli" {
+                outcome.session_id.clone()
+            } else {
+                None
+            },
         )
         .await?;
 
@@ -608,7 +772,7 @@ pub async fn codex_create_image(
                 text: outcome.text,
                 provider: provider_name.clone(),
                 elapsed_ms: outcome.elapsed_ms,
-                session_id: outcome.session_id,
+                session_id: bookkeeping_session,
                 images: asset_paths,
             }))
             .await;
@@ -690,6 +854,101 @@ pub async fn list_gen_jobs(db: State<'_, Arc<Database>>) -> Result<Vec<GenJobSum
     .map_err(|e| AppError::Other(e.to_string()))?
 }
 
+/// 会话面板历史恢复项：终态生成 job 摘要 + 从 generation_meta 重建的各轮时间线。
+/// `status` 取 `task_queue.status` 列（mark_done/mark_failed 只更新列不回写 payload，
+/// payload 里的细粒度 status 可能停在 running）；`ref_assets` 为首版参考图完整 asset
+/// （面板缩略图 / 复用还原用）。
+#[derive(Debug, Clone, Serialize)]
+pub struct RecentGenSession {
+    pub id: String,
+    pub provider: String,
+    pub status: String, // done | failed
+    pub prompt: String,
+    pub error: Option<String>,
+    pub session_id: Option<String>,
+    pub conversation_id: Option<String>,
+    pub project_id: Option<String>,
+    pub ratio: Option<String>,
+    pub references: Vec<String>,
+    pub created_at: i64,
+    pub turns: Vec<GenerationHistoryTurn>,
+    pub ref_assets: Vec<PromptedAsset>,
+}
+
+/// 列出最近的已完成（done/failed）生成会话，供前端启动时重建 genJobs——会话面板跨
+/// 重启保留（done 会话可回看续轮，failed 会话可重试）。cancelled 不恢复（用户显式
+/// 取消过）；queued/running 走 [`list_gen_jobs`] 的启动恢复链路，不在此重复。
+#[tauri::command]
+pub async fn recent_gen_sessions(
+    paths: State<'_, Arc<LibraryPaths>>,
+    db: State<'_, Arc<Database>>,
+    limit: Option<i64>,
+) -> Result<Vec<RecentGenSession>, AppError> {
+    let annotations_dir = paths.inner().root.join("annotations");
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || -> Result<Vec<RecentGenSession>, AppError> {
+        let limit = limit.unwrap_or(30).clamp(1, 100);
+        // list_recent 是全 kind 查询（当前 task_queue 只有 generation kind），多取一批
+        // 再按终态过滤、截 limit。
+        let tasks = crate::core::task_queue::Task::list_recent(&db, 200)?;
+        let mut out = Vec::new();
+        for t in tasks {
+            if out.len() >= limit as usize {
+                break;
+            }
+            if !matches!(t.status.as_str(), "done" | "failed") {
+                continue;
+            }
+            let Some(j) = t.gen_job() else {
+                continue;
+            };
+            // 时间线从 generation_meta 按 session 重建（无 session 的失败 job → 空时间线，
+            // 前端仍有 prompt 可重试）；重建失败不阻断其余会话恢复。
+            let (turns, ref_assets) = match &j.session_id {
+                Some(sid) => match db.generation_history_by_session(sid, Some(&annotations_dir)) {
+                    Ok(h) => (h.turns, h.references),
+                    Err(e) => {
+                        tracing::warn!("recent_gen_sessions: history for {sid} failed: {e}");
+                        (Vec::new(), Vec::new())
+                    }
+                },
+                None => (Vec::new(), Vec::new()),
+            };
+            out.push(RecentGenSession {
+                id: j.id,
+                provider: j.provider,
+                status: t.status,
+                prompt: j.prompt,
+                error: t.error,
+                session_id: j.session_id,
+                conversation_id: j.conversation_id,
+                project_id: j.project_id,
+                ratio: j.ratio,
+                references: j.references,
+                created_at: j.created_at,
+                turns,
+                ref_assets,
+            });
+        }
+        Ok(out)
+    })
+    .await
+    .map_err(|e| AppError::Other(e.to_string()))?
+}
+
+/// 从会话面板移除已完成会话的持久记录：删除 task_queue 终态行，重启恢复不再出现。
+/// 仅终态可删（在跑行是启动恢复数据源）；行不存在（「回看生成对话」的前端临时 job）
+/// 为空操作。生成图与 generation_meta 不受影响。
+#[tauri::command]
+pub async fn dismiss_gen_job(
+    db: State<'_, Arc<Database>>,
+    job_id: String,
+) -> Result<(), AppError> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || crate::core::task_queue::Task::delete_terminal(&db, &job_id))
+        .await
+        .map_err(|e| AppError::Other(e.to_string()))?
+}
 /// `[spike]` OpenAI API 生图（非 codex CLI）：调 OpenAI Images API（`gpt-image-1`），
 /// `b64_json` 落盘后 `ingest_generated` 进库为正式资产、进瀑布流。
 ///
@@ -823,7 +1082,10 @@ async fn get_asset_store_path(
 mod generation_task_tests {
     use chrono::Utc;
 
-    use super::settle_generation_task;
+    use super::{
+        generation_provider_is_codex, merge_continuation_references, nearest_ratio_key,
+        settle_generation_task,
+    };
     use crate::core::task_queue::{GenJob, Task};
     use crate::db::Database;
     use crate::error::AppError;
@@ -866,6 +1128,61 @@ mod generation_task_tests {
         assert_eq!(task.status, "failed");
         assert!(task.error.unwrap().contains("等待云端响应超时"));
         assert!(Task::list_running(&db).unwrap().is_empty());
+    }
+
+    #[test]
+    fn merge_continuation_references_puts_last_output_first_dedup_cap() {
+        // 续轮合并契约：上一轮产出在前（修改主体）、显式挑选去重追加、截前 10、挑的图含
+        // 上一轮产出（用户点了生成图）不重复。
+        let last = vec!["out1.png".into(), "out2.png".into()];
+        let picked = vec!["material.png".into(), "out1.png".into()];
+        assert_eq!(
+            merge_continuation_references(last, picked),
+            vec!["out1.png".to_string(), "out2.png".to_string(), "material.png".to_string()]
+        );
+        // 超 10 张截断（上一轮产出保位，挑的图被截掉尾部）。
+        let many: Vec<String> = (0..12).map(|i| format!("p{i}.png")).collect();
+        assert_eq!(
+            merge_continuation_references(vec!["out.png".into()], many.clone()).len(),
+            10
+        );
+        assert_eq!(
+            merge_continuation_references(vec!["out.png".into()], many)[0],
+            "out.png"
+        );
+        assert!(merge_continuation_references(vec![], vec![]).is_empty());
+    }
+
+    #[test]
+    fn nearest_ratio_key_snaps_to_closest_preset() {
+        // 「自动」比例吸附契约（与前端 autoRatioFromReferences 同一套 7 档）：精确档位直落、
+        // 偏离档位按对数距离取最近、零尺寸返回 None（维持自动）。
+        assert_eq!(nearest_ratio_key(1000, 1000).as_deref(), Some("1:1"));
+        assert_eq!(nearest_ratio_key(864, 1152).as_deref(), Some("3:4"));
+        assert_eq!(nearest_ratio_key(1152, 864).as_deref(), Some("4:3"));
+        assert_eq!(nearest_ratio_key(1920, 1080).as_deref(), Some("16:9"));
+        assert_eq!(nearest_ratio_key(1080, 1920).as_deref(), Some("9:16"));
+        assert_eq!(nearest_ratio_key(1000, 1500).as_deref(), Some("2:3"));
+        // 偏离档位的实际产出尺寸（如 2k 竖图 896×1600 ≈ 9:16）吸附到最近档。
+        assert_eq!(nearest_ratio_key(896, 1600).as_deref(), Some("9:16"));
+        // 0.69:1 介于 2:3(0.67) 与 3:4(0.75) 之间，对数距离更近 2:3。
+        assert_eq!(nearest_ratio_key(690, 1000).as_deref(), Some("2:3"));
+        assert!(nearest_ratio_key(0, 100).is_none());
+        assert!(nearest_ratio_key(100, 0).is_none());
+    }
+
+    #[test]
+    fn generation_provider_is_codex_matches_codex_family_keys() {
+        // 原生引擎判定：codex 家族 key（provider.name()=codex-cli / 前端裸 codex、default）
+        // 为真；即梦（含 dreamina 别名）与 Cloud 档位 key、None（无 meta）为假。
+        assert!(generation_provider_is_codex(Some("codex")));
+        assert!(generation_provider_is_codex(Some("codex-cli")));
+        assert!(generation_provider_is_codex(Some("default")));
+        assert!(!generation_provider_is_codex(Some("jimeng")));
+        assert!(!generation_provider_is_codex(Some("dreamina")));
+        assert!(!generation_provider_is_codex(Some("bowerbird-cloud")));
+        assert!(!generation_provider_is_codex(Some("bowerbird-cloud-image_hd")));
+        assert!(!generation_provider_is_codex(None));
     }
 
     #[test]

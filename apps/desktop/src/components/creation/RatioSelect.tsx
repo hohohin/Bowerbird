@@ -33,8 +33,8 @@ function RatioIcon({
 /**
  * 创作板编辑框工具条上的「画面比例」选择器。形态与 ProviderSelect 一致：
  * 定宽 popover 下拉（absolute 浮层 + 点外部 / Esc 关闭），选项三列网格
- * （自动 + 各比例 icon），选中项打勾；value=null 表示「自动」——不指定比例，
- * 发送时不注入 instruction，与改动前行为一致。
+ * （自动 + 各比例 icon），选中项打勾；value=null 表示「自动」——发送时若有
+ * 参考图则跟随首张参考图的宽高比选档（store.startGeneration 解析），否则交引擎默认。
  */
 export function RatioSelect({
   value,
@@ -105,7 +105,7 @@ export function RatioSelect({
               onClick={() => pick(null)}
               role="option"
               aria-selected={value === null}
-              title="不指定比例，由引擎自动决定"
+              title="有参考图时跟随首张参考图的比例，否则由引擎决定"
               className={`flex items-center gap-1.5 rounded px-1.5 py-1.5 text-xs ${
                 value === null
                   ? "bg-panel2 font-medium text-ink"
