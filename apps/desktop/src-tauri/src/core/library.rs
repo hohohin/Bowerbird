@@ -108,6 +108,11 @@ pub struct GenerationHistory {
     pub session_id: Option<String>,
     pub turns: Vec<GenerationHistoryTurn>,
     pub references: Vec<PromptedAsset>,
+    /// 首版 generation_meta 的 dimension_sources（图 chip 被删的借用维度源图）按 asset id
+    /// 反查的完整 PromptedAsset（含带车牌的 sections）：「复用生成提示词」回绑车牌取最新
+    /// 反推内容用；旧 meta 无此字段为空，前端退化为 prompt_raw 内联正文回绑。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dimension_assets: Vec<PromptedAsset>,
     /// 首版 generation_meta 的 provider（codex / jimeng / cloud key）：「回看生成对话」重建的
     /// 前端 job 用它定续轮坞 provider 初值，避免即梦会话默认落到 codex。
     #[serde(default)]
@@ -115,10 +120,15 @@ pub struct GenerationHistory {
 }
 
 /// 反推 caption 解析出的一个维度片段（动态标题 + 正文）。
+/// `id` = 车牌：维度的稳定身份（反推 parse 签发、编辑按 id/标题保号）——创作板维度 chip
+/// 与复用 sidecar 按它取「当下」title/body（改名/改正文都跟随），与存放它的图解耦。
+/// 旧 payload 无 id = None，消费方回退「图 + 标题」寻址。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CaptionSection {
     pub title: String,
     pub body: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
 }
 
 /// 创作板用：带反推 caption 的资产。`asset` flatten 后直接作 Asset 序列化，
@@ -197,7 +207,8 @@ fn parse_caption_payload(
 /// analyses(kind=annotation) payload 合成的「标注」维度：取 shapes[].token（火山 Seedream
 /// 交互编辑坐标标记，如 `<bbox>120 180 640 760</bbox>`）用"；"拼接为 body。payload 由前端
 /// 构造（schema 见桌面端 types.ts AnnotationMeta），此处只读 token、格式异常静默跳过。
-fn annotation_section(payload: &str) -> Option<CaptionSection> {
+/// `id` = 车牌（anno:{analysis 行 id}，随行稳定；不入库临时图用文件名 ulid 同规则）。
+fn annotation_section(payload: &str, id: String) -> Option<CaptionSection> {
     let value: serde_json::Value = serde_json::from_str(payload).ok()?;
     let tokens: Vec<&str> = value
         .get("shapes")?
@@ -211,6 +222,7 @@ fn annotation_section(payload: &str) -> Option<CaptionSection> {
     Some(CaptionSection {
         title: "标注".to_string(),
         body: tokens.join("；"),
+        id: Some(id),
     })
 }
 
@@ -241,8 +253,12 @@ fn synth_annotation_asset(annotations_dir: &Path, store_path: &str) -> Option<Pr
                 ext = e.to_string();
             }
             if let Some(annotation) = v.get("annotation") {
-                sections =
-                    annotation_section(&annotation.to_string()).map(|section| vec![section]);
+                // 车牌与「不入库插入创作板」前端同规则（anno:{文件名 ulid}），两条路径同牌。
+                sections = annotation_section(
+                    &annotation.to_string(),
+                    format!("anno:{}", path.file_stem().unwrap_or_default().to_string_lossy()),
+                )
+                .map(|section| vec![section]);
             }
         }
     }
@@ -1430,6 +1446,7 @@ impl Database {
                 session_id: None,
                 turns: vec![],
                 references: vec![],
+                dimension_assets: vec![],
                 provider: None,
             });
         };
@@ -1468,6 +1485,7 @@ impl Database {
         )?;
         let mut turns: Vec<GenerationHistoryTurn> = Vec::new();
         let mut first_references: Vec<String> = Vec::new();
+        let mut first_dimension_sources: Vec<String> = Vec::new();
         let mut first_provider: Option<String> = None;
         let mut refs_done = false;
         let rows = stmt.query_map(rusqlite::params![session_id, project_id], |r| {
@@ -1480,12 +1498,19 @@ impl Database {
         })?;
         for row in rows {
             let (prompt, prompt_raw, store_path, payload) = row?;
-            // 首版 generation_meta 的参考图与 provider（供「新会话重新生成」复用 / 续轮坞初值）。
+            // 首版 generation_meta 的参考图 / 借用维度源图与 provider（供「新会话重新生成」
+            // 复用、复用回绑车牌、续轮坞初值）。
             if !refs_done {
                 refs_done = true;
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&payload) {
                     if let Some(arr) = v.get("references").and_then(|x| x.as_array()) {
                         first_references = arr
+                            .iter()
+                            .filter_map(|x| x.as_str().map(String::from))
+                            .collect();
+                    }
+                    if let Some(arr) = v.get("dimension_sources").and_then(|x| x.as_array()) {
+                        first_dimension_sources = arr
                             .iter()
                             .filter_map(|x| x.as_str().map(String::from))
                             .collect();
@@ -1559,10 +1584,22 @@ impl Database {
                     .collect();
             }
         }
+        // 借用维度源图（图 chip 被删、只借维度的资产）按 id 反查完整 PromptedAsset：id 已知
+        // （来自用户自己的稿子），不过滤 project；未命中（资产已删 / 标注临时文件）跳过，
+        // 前端退化为 prompt_raw 内联正文回绑。
+        let dimension_assets = {
+            let mut seen = std::collections::HashSet::new();
+            first_dimension_sources
+                .iter()
+                .filter(|id| seen.insert((*id).clone()))
+                .filter_map(|id| Self::prompted_asset_by_id(conn, id).ok().flatten())
+                .collect()
+        };
         Ok(GenerationHistory {
             session_id: Some(session_id.to_string()),
             turns,
             references,
+            dimension_assets,
             provider: first_provider,
         })
     }
@@ -1718,25 +1755,29 @@ impl Database {
         // 同秒多行时按 rowid 决胜——后插入者覆盖，与「最新一条」语义一致），
         // 由 payload.shapes[].token（火山 <bbox>/<point> 坐标标记）合成维度追加在
         // caption sections 之后——用户在创作板选「标注」即把坐标注入 prompt。
-        let mut annotations: HashMap<String, String> = HashMap::new();
+        let mut annotations: HashMap<String, (String, String)> = HashMap::new();
         {
             let mut stmt = conn.prepare(
-                "SELECT asset_id, payload FROM analyses \
+                "SELECT asset_id, id, payload FROM analyses \
                  WHERE kind = 'annotation' ORDER BY created_at ASC, rowid ASC",
             )?;
             let rows = stmt.query_map([], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
             })?;
             for r in rows {
-                let (asset_id, payload) = r?;
-                annotations.insert(asset_id, payload);
+                let (asset_id, id, payload) = r?;
+                annotations.insert(asset_id, (id, payload));
             }
         }
         for p in &mut out {
-            let Some(payload) = annotations.get(&p.asset.id) else {
+            let Some((id, payload)) = annotations.get(&p.asset.id) else {
                 continue;
             };
-            if let Some(section) = annotation_section(payload) {
+            if let Some(section) = annotation_section(payload, format!("anno:{id}")) {
                 match p.sections.as_mut() {
                     // 反推 sections 已含同名维度时不重复追加。
                     Some(sections) if sections.iter().any(|s| s.title == section.title) => {}
@@ -1755,6 +1796,15 @@ impl Database {
     /// 查表 miss——不补拉会插出 IMG 占位 chip 且发送时不带该图。资产不存在返回 None。
     pub fn get_prompted_asset(&self, asset_id: &str) -> AppResult<Option<PromptedAsset>> {
         let conn = self.conn.lock().unwrap();
+        Self::prompted_asset_by_id(&conn, asset_id)
+    }
+
+    /// [`Database::get_prompted_asset`] 的连接级实现：generation_history 的 dimension_sources
+    /// 反查共用（已持有 conn 锁，不能再走 &self 方法）。
+    fn prompted_asset_by_id(
+        conn: &Connection,
+        asset_id: &str,
+    ) -> AppResult<Option<PromptedAsset>> {
         let sql = format!(
             "SELECT {ASSET_COLS}, (\
                SELECT json_extract(payload, '$.text') FROM analyses \
@@ -1786,13 +1836,13 @@ impl Database {
         // 「标注」维度：最新一条 annotation（list_prompted_assets 的单资产等价实现）。
         let annotation = conn
             .query_row(
-                "SELECT payload FROM analyses WHERE asset_id = ?1 AND kind = 'annotation' \
+                "SELECT id, payload FROM analyses WHERE asset_id = ?1 AND kind = 'annotation' \
                  ORDER BY created_at DESC, rowid DESC LIMIT 1",
                 rusqlite::params![asset_id],
-                |r| r.get::<_, String>(0),
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
             )
             .ok()
-            .and_then(|payload| annotation_section(&payload));
+            .and_then(|(id, payload)| annotation_section(&payload, format!("anno:{id}")));
         if let Some(section) = annotation {
             match p.sections.as_mut() {
                 Some(sections) if sections.iter().any(|s| s.title == section.title) => {}

@@ -45,3 +45,6 @@ my-library/
 
 # 开发计划，文件
 dev-doc
+
+# Agent Z（dev-only）：MCP 桥 + inbox 回传事件（Bowerbird × Claude Code TUI）
+.agent-z/

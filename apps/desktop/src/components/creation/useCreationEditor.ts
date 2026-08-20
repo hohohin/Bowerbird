@@ -16,6 +16,9 @@ const LOAD_EVENT = "bowerbird://board-load-prompt";
 // 图片标注「插入创作板（不入库）」：detail = 完整 PromptedAsset（临时文件 + 「标注」维度），
 // 走 extraAssets 旁路（不在 s.assets / promptedAssets 里），随草稿 refs 持久化。
 const INJECT_EVENT = "bowerbird://board-asset-injected";
+// Agent Z（dev-only）回传：detail = string，追加到编辑器末尾（每行一段，不覆盖既有草稿）。
+// 由 App.tsx 监听 Tauri 事件 agent-z://output 后派发。
+export const APPEND_TEXT_EVENT = "bowerbird://board-append-text";
 
 function initialDoc(empty = false) {
   // 空初始文档（会话底部对话框用）：不预填「请参考」，避免续轮误发送占位文字。
@@ -211,7 +214,12 @@ export function useCreationEditor(opts?: {
       const anno = asset.sections?.find((s) => s.title === "标注");
       if (anno) {
         tr = tr.replaceSelectionWith(
-          schema.nodes.keyword.create({ title: anno.title, body: anno.body, assetId: asset.id })
+          schema.nodes.keyword.create({
+            title: anno.title,
+            body: anno.body,
+            assetId: asset.id,
+            sectionId: anno.id ?? null,
+          })
         );
       }
       v.dispatch(tr.scrollIntoView());
@@ -220,15 +228,22 @@ export function useCreationEditor(opts?: {
     }
 
     function onLoad(e: Event) {
-      const detail = (e as CustomEvent<{ prompt: string; refs: PromptedAsset[] }>).detail;
+      const detail = (e as CustomEvent<{
+        prompt: string;
+        refs: PromptedAsset[];
+        dimRefs?: PromptedAsset[];
+      }>).detail;
       if (!detail || typeof detail.prompt !== "string") return;
       const body = detail.prompt.trim();
       if (!body) return;
       const refAssets: PromptedAsset[] = (detail.refs ?? []).map((a) => ({ ...a }));
-      setExtraAssets(refAssets);
+      // 借用维度源图（复用 sidecar）：随草稿 refs 一起进 extraAssets（车牌寻址要能查到资产），
+      // 但不进 parse 的 refs（不作为 silent 参考图还原）——图本来就没被发送。
+      const dimRefs: PromptedAsset[] = (detail.dimRefs ?? []).map((a) => ({ ...a }));
+      setExtraAssets([...refAssets, ...dimRefs]);
       // 传 assetByIdRef.current（含已反推图的 sections）；parsePromptToDoc 内部按「只补充」并入 refs，
       // 不让 refs（无 sections）覆盖已反推图，以保证【维度】能按 sections 精确匹配 fragment。
-      const doc = parsePromptToDoc(body, refAssets, assetByIdRef.current);
+      const doc = parsePromptToDoc(body, refAssets, assetByIdRef.current, undefined, dimRefs);
       const v = viewRef.current;
       if (!v) return;
       v.updateState(EditorState.create({ doc, plugins: v.state.plugins }));
@@ -237,15 +252,40 @@ export function useCreationEditor(opts?: {
       setTimeout(() => v.focus(), 0);
     }
 
+    function onAppendText(e: Event) {
+      const text = (e as CustomEvent<string>).detail;
+      if (typeof text !== "string" || !text.trim()) return;
+      const v = viewRef.current;
+      if (!v) return;
+      const lines = text.replace(/\r\n?/g, "\n").split("\n");
+      let tr = v.state.tr;
+      let pos = tr.doc.content.size;
+      lines.forEach((line, index) => {
+        // 追加语义：编辑器已有内容时首行也另起一段，不与既有文字粘连。
+        if (index > 0 || pos > 0) {
+          tr = tr.split(pos);
+          pos = tr.doc.content.size;
+        }
+        if (line) {
+          tr = tr.insertText(line, pos);
+          pos = tr.doc.content.size;
+        }
+      });
+      v.dispatch(tr.scrollIntoView());
+      v.focus();
+    }
+
     // 生成成功关闭创作板 / 手动收起 / 切项目 → 卸载。卸载即把当前 doc 落盘
     // （比 400ms 去抖更可靠——刚编辑完就关板时去抖计时器还挂着），重开创作板恢复。
     window.addEventListener(PICK_EVENT, onPick);
     window.addEventListener(LOAD_EVENT, onLoad);
     window.addEventListener(INJECT_EVENT, onInject);
+    window.addEventListener(APPEND_TEXT_EVENT, onAppendText);
     return () => {
       window.removeEventListener(PICK_EVENT, onPick);
       window.removeEventListener(LOAD_EVENT, onLoad);
       window.removeEventListener(INJECT_EVENT, onInject);
+      window.removeEventListener(APPEND_TEXT_EVENT, onAppendText);
       if (saveTimer) clearTimeout(saveTimer);
       if (draftKey) saveDraft(draftKey, view.state.doc.toJSON(), extraAssetsRef.current);
       view.destroy();
@@ -256,7 +296,12 @@ export function useCreationEditor(opts?: {
 
   const serialized = useMemo(() => {
     const doc = viewRef.current?.state.doc;
-    if (!doc) return { finalPrompt: "", references: [] as PromptedAsset[] };
+    if (!doc)
+      return {
+        finalPrompt: "",
+        references: [] as PromptedAsset[],
+        dimensionSources: [] as PromptedAsset[],
+      };
     return serializeDoc(doc, assetByIdRef.current);
   }, [tick, assetById]);
 
@@ -322,6 +367,7 @@ export function useCreationEditor(opts?: {
             title: pendingKeyword.title,
             body: pendingKeyword.body,
             assetId: pendingKeyword.assetId ?? null,
+            sectionId: pendingKeyword.sectionId ?? null,
           })
         )
         .scrollIntoView();
@@ -338,6 +384,7 @@ export function useCreationEditor(opts?: {
     finalPrompt: serialized.finalPrompt,
     rawPrompt,
     references: serialized.references,
+    dimensionSources: serialized.dimensionSources,
     graphSources,
     agentPromptReferences,
   };

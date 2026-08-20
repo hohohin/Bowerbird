@@ -633,11 +633,14 @@ export function ImageAnnotator() {
       });
       // 「标注」维度直接挂在注入对象上（不进 DB，无 list_prompted_assets 合成路径）；
       // 仅裁剪/旋转（无标注形状）时不带维度 —— 只是普通参考图。
+      // 车牌 anno:{文件名 ulid}：与 generation_history 从临时文件合成的同规则，两条路径同牌。
       const tokens = out.meta.shapes.map((s) => s.token).join("；");
       const prompted: PromptedAsset = {
         ...temp,
         annotation: out.meta,
-        ...(tokens ? { sections: [{ title: "标注", body: tokens }] } : {}),
+        ...(tokens
+          ? { sections: [{ title: "标注", body: tokens, id: `anno:${temp.id}` }] }
+          : {}),
       };
       closeAnnotator();
       insertAnnotatedToBoard(prompted);

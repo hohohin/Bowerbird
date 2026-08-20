@@ -506,7 +506,8 @@ export function AssetDetail() {
   async function saveSection(analysisId: string, sections: CaptionSection[], index: number) {
     const body = sectionDraft.trim();
     if (!body) return;
-    const next = sections.map((s, i) => (i === index ? { title: s.title, body } : s));
+    // 展开保留 s 全字段（含车牌 id）——后端按 id 保号，编辑不换牌、chip 引用不断链。
+    const next = sections.map((s, i) => (i === index ? { ...s, body } : s));
     try {
       await api.updateCaptionSections(analysisId, next);
       setEditingSection(null);

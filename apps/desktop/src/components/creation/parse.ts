@@ -17,13 +17,15 @@ function findSectionOwner(
   title: string,
   textAfter: string,
   assetByName: Map<string, PromptedAsset>
-): { asset: PromptedAsset; body: string } | null {
+): { asset: PromptedAsset; section: { title: string; body: string; id?: string | null } } | null {
   const seen = new Set<PromptedAsset>();
   for (const a of assetByName.values()) {
     if (seen.has(a)) continue;
     seen.add(a);
-    const body = a.sections?.find((s) => s.title === title)?.body?.trim();
-    if (body && textAfter.startsWith(body)) return { asset: a, body };
+    const section = a.sections?.find((s) => s.title === title);
+    if (section && section.body?.trim() && textAfter.startsWith(section.body.trim())) {
+      return { asset: a, section };
+    }
   }
   return null;
 }
@@ -89,11 +91,14 @@ export function assignUniqueLabels(assets: PromptedAsset[]): {
 /**
  * 把单行文本解析成内联节点序列：遇 @<asset名>（贪心最长 + 边界检查）转 image node，
  * 匹配失败的 @文本 保持纯文本。不含换行（多行由 parsePromptToDoc 分段）。
+ * dimSources = 复用 sidecar 的借用维度源图（图 chip 被删、只借维度的资产）：正文中
+ * 「【title】」按 title 在这个小集合内回绑（车牌优先，正文取当下值，免疫编辑漂移）。
  */
 export function parsePromptToInline(
   text: string,
   assetByName: Map<string, PromptedAsset>,
-  schema: Schema = creationSchema
+  schema: Schema = creationSchema,
+  dimSources: PromptedAsset[] = []
 ): PmNode[] {
   const names = [...assetByName.keys()].sort((a, b) => b.length - a.length); // 长→短贪心
   const out: PmNode[] = [];
@@ -137,24 +142,50 @@ export function parsePromptToInline(
         const title = text.slice(i + 1, end).trim();
         if (title) {
           flush();
-          // 源图：前导 @图（currentAsset）优先；assetId 随 chip 持久绑定
+          // 源图：前导 @图（currentAsset）优先，assetId/sectionId（车牌）随 chip 持久绑定
           let owner = currentAsset;
-          let sectionBody =
-            owner?.sections?.find((s) => s.title === title)?.body?.trim() ?? "";
+          let section =
+            owner?.sections?.find((s) => s.title === title) ?? null;
+          let sectionBody = section?.body?.trim() ?? "";
           let consumed = end + 1;
           // 序列化输出「【title】：fragment」（fragment = sectionBody）；文本与之精确匹配则吃掉，
           // chip 后不残留正文；不匹配（sections 与文本不同步 / 图 chip 被删的借用维度 round-trip）
-          // 时按「title+正文」前缀全等回绑其他源图，仍不中才只吃「：」（正文留纯文本，内容不丢）。
+          // 时依次尝试：复用 sidecar 的源图按 title 回绑（车牌权威，正文取当下值）→ 全库按
+          // 「title+正文」前缀全等回绑；仍不中才只吃「：」（正文留纯文本，内容不丢）。
           if (text[consumed] === "：" || text[consumed] === ":") {
             const after = consumed + 1;
+            const sidecarByTitle = dimSources.length
+              ? dimSources
+                  .map((a) => ({
+                    asset: a,
+                    section: a.sections?.find((s) => s.title === title),
+                  }))
+                  .find((x) => x.section)
+              : undefined;
+            const sidecarBody = sidecarByTitle?.section?.body?.trim() ?? "";
             if (sectionBody && text.startsWith(sectionBody, after)) {
+              // 前导图的维度正文精确匹配：吃掉。
               consumed = after + sectionBody.length;
+            } else if (sidecarByTitle && sidecarBody && text.startsWith(sidecarBody, after)) {
+              // sidecar 源图正文全等：回绑 + 吃掉（复用 round-trip 的常态）。
+              owner = sidecarByTitle.asset;
+              section = sidecarByTitle.section ?? null;
+              sectionBody = sidecarBody;
+              consumed = after + sidecarBody.length;
             } else {
               const hit = findSectionOwner(title, text.slice(after), assetByName);
               if (hit) {
                 owner = hit.asset;
-                sectionBody = hit.body;
-                consumed = after + hit.body.length;
+                section = hit.section ?? null;
+                sectionBody = section?.body?.trim() ?? "";
+                consumed = after + sectionBody.length;
+              } else if (sidecarByTitle) {
+                // sidecar title 命中但正文不符（发送后反推又被编辑）：按车牌回绑、取新正文，
+                // 只吃「：」——旧正文留纯文本（用户可删），不按新正文长度误吃任意文本。
+                owner = sidecarByTitle.asset;
+                section = sidecarByTitle.section ?? null;
+                sectionBody = sidecarBody;
+                consumed = after;
               } else {
                 consumed = after;
               }
@@ -165,6 +196,7 @@ export function parsePromptToInline(
               title,
               body: sectionBody,
               assetId: owner?.id ?? null,
+              sectionId: section?.id ?? null,
             })
           );
           i = consumed;
@@ -182,12 +214,15 @@ export function parsePromptToInline(
  * 载入（board-load-prompt）专用：把整段 prompt 文本解析成 doc。
  * - 按换行分段，每段一个 paragraph；段内 @图名 转 image chip。
  * - refs 中未被文本引用的 asset → silent image node 追加到最后一段尾（附件区，序列化时跳过 @图名、references 仍收集）。
+ * - dimSources = 借用维度源图（复用 sidecar）：不进 refs（不作为参考图还原）、只作
+ *   「【维度】」回绑候选（按车牌取最新正文），并随 extraAssets 供序列化寻址（见 onLoad）。
  */
 export function parsePromptToDoc(
   text: string,
   refs: PromptedAsset[],
   assetById: Map<string, PromptedAsset>,
-  schema: Schema = creationSchema
+  schema: Schema = creationSchema,
+  dimSources: PromptedAsset[] = []
 ): PmNode {
   // 对象取最新：同 id 时 assetById 的对象优先（含最新反推 sections，【维度】按 sections
   // 精确匹配 fragment）；键注册顺序按 refs——文本里的 @标签由 serialize 按 references 序
@@ -211,7 +246,7 @@ export function parsePromptToDoc(
   const lines = text.replace(/\r\n/g, "\n").split("\n");
   // 先把每行解析成内联节点数组（暂不建 paragraph），方便最后一段合并 silent 参考图
   const paraInline: PmNode[][] = lines.map((line) =>
-    parsePromptToInline(line, assetByName, schema)
+    parsePromptToInline(line, assetByName, schema, dimSources)
   );
   if (paraInline.length === 0) paraInline.push([]);
   const referencedIds = new Set<string>();

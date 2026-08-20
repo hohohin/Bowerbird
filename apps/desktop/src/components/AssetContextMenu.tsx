@@ -255,8 +255,9 @@ export function AssetContextMenu() {
         setBusy(false);
         return;
       }
-      // 复用首轮 prompt + 首版参考图（与 GenerationPanel「📋 复用」语义一致）→ 打开创作板载入。
-      reusePromptToBoard(prompt, hist.references);
+      // 复用首轮 prompt + 首版参考图 + 借用维度源图（车牌 sidecar，与 GenerationPanel 一致）
+      // → 打开创作板载入。
+      reusePromptToBoard(prompt, hist.references, hist.dimension_assets);
       notifySuccess("生成提示词已载入创作板");
       closeContextMenu();
     } catch (e) {

@@ -9,7 +9,13 @@ import { assignUniqueLabels } from "./parse";
 type Inline =
   | { kind: "text"; text: string }
   | { kind: "image"; assetId: string; silent?: boolean; name: string }
-  | { kind: "keyword"; title: string; assetId: string | null; body: string };
+  | {
+      kind: "keyword";
+      title: string;
+      assetId: string | null;
+      sectionId: string | null;
+      body: string;
+    };
 
 /** 把 doc 扁平化成内联序列：段间插换行（多段编辑，\n 对后端 extract_dim_sections 安全）。 */
 function docToInline(doc: PmNode): Inline[] {
@@ -31,6 +37,7 @@ function docToInline(doc: PmNode): Inline[] {
           kind: "keyword",
           title: node.attrs.title,
           assetId: node.attrs.assetId ?? null,
+          sectionId: node.attrs.sectionId ?? null,
           body: node.attrs.body ?? "",
         });
       }
@@ -42,6 +49,9 @@ function docToInline(doc: PmNode): Inline[] {
 export interface Serialized {
   finalPrompt: string;
   references: PromptedAsset[];
+  /** 借用维度源图（图 chip 被删、只借维度的资产，doc 序去重）：随 GenJob → generation_meta
+   *  落库（dimension_sources），复用生成提示词时据此回绑车牌取最新反推内容。 */
+  dimensionSources: PromptedAsset[];
 }
 
 /**
@@ -91,7 +101,7 @@ export function serializeDoc(
       // 紧随维度属本图（未绑定 = 旧草稿，或绑定即本图）才吞并成「@图 的【维度】」；
       // 绑定他图的维度是借用——图按纯参考输出，维度走独立分支按其源图展开，不绑错图。
       if (section && (section.assetId === null || section.assetId === n.assetId)) {
-        out += serializeImageToken(n.assetId, label, section.title, assetById, unfold);
+        out += serializeImageToken(n.assetId, label, section, assetById, unfold);
         i += section.consumed; // 跳过被图片吞掉的 keyword（及中间的「的」），避免再被 serializeKeyword 重复输出
       } else {
         out += serializeImageToken(n.assetId, label, null, assetById, unfold);
@@ -105,33 +115,62 @@ export function serializeDoc(
     out += serializeKeyword(
       n.title,
       n.body,
+      n.sectionId,
       owner,
       owner ? chipAssetIds.has(owner) : false,
       assetById,
       unfold
     );
   }
-  return { finalPrompt: out.trim(), references };
+  // 借用维度源图（绑定资产无正文 chip）：随发送落 generation_meta.dimension_sources，
+  // 复用时回绑车牌取最新反推（见 Serialized.dimensionSources）。
+  const dimSeen = new Set<string>();
+  const dimensionSources: PromptedAsset[] = [];
+  for (const n of flat) {
+    if (n.kind !== "keyword" || !n.assetId) continue;
+    if (chipAssetIds.has(n.assetId) || dimSeen.has(n.assetId)) continue;
+    const a = assetById.get(n.assetId);
+    if (a) {
+      dimSeen.add(n.assetId);
+      dimensionSources.push(a);
+    }
+  }
+  return { finalPrompt: out.trim(), references, dimensionSources };
 }
 
-// 维度正文取值：源图最新 sections 优先（走 assetById，而非 keyword attrs.body 快照——后者只是
-// 插入时的展示快照，反推更新后不会回写到已插入的 chip，保证生成用的始终是最新反推内容）；
-// 源图已删 / 维度被改删时用插入时快照兜底（有内容总好过只剩【维度名】）。
-function keywordBody(
+/** 车牌优先寻址：sectionId 直接定位 section（title/body 都取当下值，改名/改正文跟随；
+ *  owner 资产里找不到时全库扫牌——车牌全局唯一）。无牌 / 未命中回退「源图 + 标题」寻址。 */
+function resolveSection(
+  owner: string | null,
+  sectionId: string | null,
   title: string,
-  snapshot: string,
-  owner: string,
   assetById: Map<string, PromptedAsset>
-): string {
-  const a = assetById.get(owner);
-  if (!a) return snapshot.trim();
-  return a.sections?.find((s) => s.title === title)?.body.trim() || snapshot.trim();
+): { title: string; body: string } | null {
+  if (sectionId) {
+    const byOwner = owner
+      ? assetById.get(owner)?.sections?.find((s) => s.id === sectionId)
+      : undefined;
+    const hit =
+      byOwner ??
+      (() => {
+        for (const a of assetById.values()) {
+          const s = a.sections?.find((x) => x.id === sectionId);
+          if (s) return s;
+        }
+        return undefined;
+      })();
+    if (hit) return { title: hit.title, body: hit.body.trim() };
+  }
+  if (!owner) return null;
+  const s = assetById.get(owner)?.sections?.find((x) => x.title === title);
+  return s ? { title: s.title, body: s.body.trim() } : null;
 }
 
 /** 独立维度 chip 的序列化。owner = 源图；chipInDoc = 源图的 image chip 是否还在正文里。 */
 function serializeKeyword(
   title: string,
   snapshot: string,
+  sectionId: string | null,
   owner: string | null,
   chipInDoc: boolean,
   assetById: Map<string, PromptedAsset>,
@@ -142,23 +181,31 @@ function serializeKeyword(
   // raw 模式且源图 chip 还在文中：只出【title】，重载时靠 @图 的位置关联回绑；
   // 源图 chip 已被删（借用维度）：无 @ 可依，正文直接内联，复用 round-trip 不丢内容。
   if (!unfold && chipInDoc) return bare;
-  const body = keywordBody(title, snapshot, owner, assetById);
-  return body ? `${bare}：${body}` : bare;
+  // 车牌 → 源图+标题 → 插入时快照；标题/正文都取解析出的当下值（改名跟随）。
+  const hit = resolveSection(owner, sectionId, title, assetById);
+  const body = hit?.body || snapshot.trim();
+  const outTitle = hit?.title ?? title;
+  return body ? `【${outTitle}】：${body}` : `【${title}】`;
 }
 
-/** 紧随图片的维度关键词（可能中间隔一个「的」），返回其标题 / 源图绑定与吞掉的元素数。 */
+/** 紧随图片的维度关键词（可能中间隔一个「的」），返回其标题 / 车牌 / 源图绑定与吞掉的元素数。 */
 function nextSectionTitle(
   flat: Inline[],
   imageIndex: number
-): { title: string; assetId: string | null; consumed: number } | null {
+): { title: string; assetId: string | null; sectionId: string | null; consumed: number } | null {
   const next = flat[imageIndex + 1];
   if (next?.kind === "keyword") {
-    return { title: next.title, assetId: next.assetId, consumed: 1 };
+    return { title: next.title, assetId: next.assetId, sectionId: next.sectionId, consumed: 1 };
   }
   if (next?.kind === "text" && next.text.trim() === "的") {
     const after = flat[imageIndex + 2];
     if (after?.kind === "keyword") {
-      return { title: after.title, assetId: after.assetId, consumed: 2 };
+      return {
+        title: after.title,
+        assetId: after.assetId,
+        sectionId: after.sectionId,
+        consumed: 2,
+      };
     }
   }
   return null;
@@ -167,21 +214,26 @@ function nextSectionTitle(
 function serializeImageToken(
   assetId: string,
   label: string,
-  sectionTitle: string | null,
+  section: { title: string; sectionId: string | null } | null,
   assetById: Map<string, PromptedAsset>,
   unfold: boolean = true
 ) {
   const a = assetById.get(assetId);
 
-  if (sectionTitle) {
+  if (section) {
     // unfold=false（原始编辑框文本）：维度不铺开 body，只出 @图名 的【维度】
-    if (!unfold) return `@${label} 的【${sectionTitle}】`;
+    if (!unfold) return `@${label} 的【${section.title}】`;
+    // 车牌优先定位 section（标题改名跟随），未命中回退标题寻址；再缺整段 caption 兜底（约定 10）。
+    const hit =
+      (section.sectionId
+        ? a?.sections?.find((s) => s.id === section.sectionId)
+        : undefined) ?? a?.sections?.find((s) => s.title === section.title);
     const caption = a?.caption?.trim();
-    const fragment =
-      a?.sections?.find((s) => s.title === sectionTitle)?.body.trim() || caption;
+    const fragment = hit?.body.trim() || caption;
+    const title = hit?.title ?? section.title;
     return fragment
-      ? `@${label} 的【${sectionTitle}】：${fragment}`
-      : `@${label} 的【${sectionTitle}】`;
+      ? `@${label} 的【${title}】：${fragment}`
+      : `@${label} 的【${section.title}】`;
   }
   // 不选维度 = 纯参考引用：只输出 @图名（图本身已通过 reference_images 传给 codex）
   return `@${label}`;

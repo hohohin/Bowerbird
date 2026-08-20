@@ -58,7 +58,7 @@ function smartPunct(punct: string, deps: PluginDeps): Command {
       }
     }
 
-    // ② 维度 endsWith（body / assetId 一并存入：手输触发时绑定呼环图，同名维度取其反推正文）
+    // ② 维度 endsWith（body / assetId / sectionId（车牌）一并存入：手输触发时绑定呼环图）
     const m = deps.chipSectionsRef.current.find((s) => before.endsWith(s.title));
     if (m) {
       if (dispatch) {
@@ -70,6 +70,7 @@ function smartPunct(punct: string, deps: PluginDeps): Command {
             title: m.title,
             body: m.body,
             assetId: deps.chipAssetIdRef.current,
+            sectionId: m.id ?? null,
           })
         );
         if (punct !== "Enter") tr.insertText(punct);

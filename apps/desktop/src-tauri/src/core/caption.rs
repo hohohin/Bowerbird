@@ -6,6 +6,7 @@
 use std::collections::BTreeMap;
 
 use serde::Serialize;
+use ulid::Ulid;
 
 use crate::core::library::CaptionSection;
 
@@ -75,6 +76,8 @@ pub fn parse(text: &str) -> CaptionAnalysis {
     let sections: Vec<CaptionSection> = sections
         .into_iter()
         .map(|(title, parts)| CaptionSection {
+            // 车牌随解析签发：一次反推 = 一批新车（全新 id），chip / 复用 sidecar 引用它。
+            id: Some(Ulid::new().to_string()),
             body: parts.join("\n").trim().to_string(),
             title,
         })
@@ -111,10 +114,33 @@ fn from_sections(sections: Vec<CaptionSection>) -> CaptionAnalysis {
 /// 保留 instruction/session_id/provider 等原始字段，dimensions/parse_status 按新
 /// sections 重算，text 由 sections 重新拼接——`$.text` 的消费方（复制按钮、智能精修、
 /// 自动归类）都吃整段文本，不能留编辑前的旧值。原 payload 非法或非对象时返回 None。
+///
+/// 车牌保号：编辑不换牌——传入 sections 带 id 的照用；缺 id（旧前端 title/body 裸发）按
+/// 标题匹配继承旧 id；全新维度签发新牌。chip / 复用 sidecar 引用的车牌跨编辑不断链。
 pub fn rebuild_payload(payload: &str, sections: &[CaptionSection]) -> Option<String> {
     let mut v: serde_json::Value = serde_json::from_str(payload).ok()?;
     let obj = v.as_object_mut()?;
-    let rebuilt = from_sections(sections.to_vec());
+    let old: Vec<CaptionSection> = obj
+        .get("sections")
+        .and_then(|s| serde_json::from_value(s.clone()).ok())
+        .unwrap_or_default();
+    let sections: Vec<CaptionSection> = sections
+        .iter()
+        .map(|s| {
+            let id = s.id.clone().or_else(|| {
+                old.iter()
+                    .find(|o| o.title == s.title && o.id.is_some())
+                    .and_then(|o| o.id.clone())
+                    .or_else(|| Some(Ulid::new().to_string()))
+            });
+            CaptionSection {
+                id,
+                title: s.title.clone(),
+                body: s.body.clone(),
+            }
+        })
+        .collect();
+    let rebuilt = from_sections(sections);
     obj.insert(
         "sections".to_string(),
         serde_json::to_value(&rebuilt.sections).ok()?,
@@ -511,10 +537,63 @@ mod tests {
         assert_eq!(v["dimensions"]["light"], "硬质逆光，轮廓明显。\n带一圈冷色 rim light");
         assert_eq!(v["parse_status"], "partial");
 
-        // 重生成的 text 再 parse 应还原编辑后的 sections（round-trip）。
+        // 重生成的 text 再 parse 应还原编辑后的 sections（round-trip）；text 不携带车牌，
+        // reparsed 签发的是新牌——按 (title, body) 比较，id 的跨编辑稳定性另行断言。
         let reparsed = parse(v["text"].as_str().unwrap());
-        assert_eq!(reparsed.sections, edited);
+        let strip = |ss: &[CaptionSection]| -> Vec<(String, String)> {
+            ss.iter()
+                .map(|s| (s.title.clone(), s.body.clone()))
+                .collect()
+        };
+        assert_eq!(strip(&reparsed.sections), strip(&edited));
         assert_eq!(reparsed.parse_status, "partial");
+
+        // 编辑保号：改 body 不换牌；编辑后的 sections 保留原 id。
+        let v_sections: Vec<CaptionSection> =
+            serde_json::from_value(v["sections"].clone()).unwrap();
+        assert_eq!(v_sections[1].id, edited[1].id);
+        assert!(v_sections[1].id.is_some());
+    }
+
+    #[test]
+    fn parse_issues_unique_section_ids() {
+        let parsed = parse("- **光影**：柔和侧光。\n- **色调**：低饱和。");
+        assert_eq!(parsed.sections.len(), 2);
+        let ids: Vec<&str> = parsed
+            .sections
+            .iter()
+            .map(|s| s.id.as_deref().unwrap())
+            .collect();
+        assert_eq!(ids.len(), 2);
+        assert_ne!(ids[0], ids[1]);
+    }
+
+    #[test]
+    fn rebuild_payload_keeps_plates_across_edits() {
+        let text = "- **光影**：柔和侧光，阴影很浅。\n- **色调**：低饱和蓝灰。";
+        let parsed = parse(text);
+        let payload = build_payload(text, "描述这张图", None, "codex", &parsed);
+        let light_before = parsed.sections[0].id.clone().unwrap();
+
+        // 旧前端形态：title/body 裸发（无 id）——按标题继承旧牌；新增维度签发新牌。
+        let incoming = vec![
+            CaptionSection {
+                id: None,
+                title: "光影".to_string(),
+                body: "硬质逆光。".to_string(),
+            },
+            CaptionSection {
+                id: None,
+                title: "构图".to_string(),
+                body: "中心对称。".to_string(),
+            },
+        ];
+        let rebuilt = rebuild_payload(&payload, &incoming).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&rebuilt).unwrap();
+        let sections: Vec<CaptionSection> =
+            serde_json::from_value(v["sections"].clone()).unwrap();
+        assert_eq!(sections[0].id.as_deref(), Some(light_before.as_str())); // 标题匹配保号
+        assert!(sections[1].id.is_some()); // 新维度新牌
     }
 
     #[test]

@@ -56,6 +56,12 @@ export const api = {
   localAgentFindAssetId: (storePath: string) =>
     invoke<string | null>("local_agent_find_asset_id", { storePath }),
 
+  // Agent Z（dev-only）：创作板消息投递到 Claude Code TUI 终端
+  agentZHealth: () =>
+    invoke<{ ok: boolean; needsLogin: boolean }>("agent_z_health"),
+  agentZSend: (text: string, images: string[]) =>
+    invoke<void>("agent_z_send", { text, images }),
+
   // 项目 workspace
   createProject: (workspacePath: string) =>
     invoke<ProjectCreateResult>("create_project", { workspacePath }),
@@ -288,6 +294,8 @@ export const api = {
     projectId?: string | null;
     jobId: string;
     promptRaw?: string | null;
+    /** 借用维度源图 id（图 chip 被删、只借维度）：随 generation_meta 落库，复用时回绑车牌。 */
+    dimensionSources?: string[];
     conversationId?: string | null;
     anchorSessionId?: string | null;
   }) =>
@@ -301,6 +309,7 @@ export const api = {
       projectId: req.projectId ?? null,
       jobId: req.jobId,
       promptRaw: req.promptRaw ?? null,
+      dimensionSources: req.dimensionSources ?? [],
       conversationId: req.conversationId ?? null,
       anchorSessionId: req.anchorSessionId ?? null,
     }),

@@ -53,6 +53,9 @@ pub async fn finalize_generation_assets(
     temp_dir: Option<PathBuf>,
     prompt: String,
     prompt_raw: Option<String>,
+    // 借用维度源图（图 chip 被删、只借维度的资产 id）：随 meta 落库，复用生成提示词时
+    // 据此回绑车牌取最新反推内容（generation_history → dimension_assets）。恢复路径无 → None。
+    dimension_sources: Option<Vec<String>>,
     references: Vec<String>,
     session_id: Option<String>,
     conversation_id: Option<String>,
@@ -104,6 +107,7 @@ pub async fn finalize_generation_assets(
             "prompt_raw": prompt_raw,
             "session_id": session_id,
             "references": references,
+            "dimension_sources": dimension_sources,
             "provider": provider,
             "submit_id": submit_id,
             "codex_thread": codex_thread,
@@ -235,6 +239,8 @@ async fn recover_one_cloud_job(
                 Some(temp_dir),
                 job.prompt.clone(),
                 None,
+                // 恢复路径无借用维度 sidecar（GenJob 不携带），meta 缺省前端走 raw 正文回绑。
+                None,
                 job.references.clone(),
                 session_for_meta.clone(),
                 job.conversation_id.clone(),
@@ -324,6 +330,8 @@ async fn recover_one_jimeng_job(
                 src_images,
                 temp_dir,
                 job.prompt.clone(),
+                None,
+                // 恢复路径无借用维度 sidecar（GenJob 不携带），meta 缺省前端走 raw 正文回绑。
                 None,
                 job.references.clone(),
                 session_for_meta.clone(),

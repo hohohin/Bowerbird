@@ -286,7 +286,11 @@ export function GenerationPanel() {
           <button
             type="button"
             onClick={() =>
-              reusePromptToBoard(activeJob!.turns[0]?.promptRaw || activeJob!.lastPrompt)
+              reusePromptToBoard(
+                activeJob!.turns[0]?.promptRaw || activeJob!.lastPrompt,
+                undefined,
+                activeJob!.dimAssets,
+              )
             }
             className="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-panel2 hover:text-accent"
             title="把编辑框原文 + 参考图载入创作板，可在其基础上编辑后重新生成"
@@ -854,13 +858,21 @@ function GenEditComposer({
   const cloudEntitlement = useStore((s) => s.cloudEntitlement);
   const cloudAvailable = cloudAuth?.cloud_available ?? false;
   // 底部对话框（续轮）空编辑器开局：不预填「请参考」，避免误发送占位文字。
-  const { hostRef, focus, finalPrompt, rawPrompt, references, graphSources, agentPromptReferences } =
-    useCreationEditor({
-      draftKey: null,
-      initialEmpty: isRevise,
-      // 维度环点扇区插进本坞（与创作板互斥挂载，任意时刻只有一个实例消费）。
-      consumePendingKeyword: true,
-    });
+  const {
+    hostRef,
+    focus,
+    finalPrompt,
+    rawPrompt,
+    references,
+    dimensionSources,
+    graphSources,
+    agentPromptReferences,
+  } = useCreationEditor({
+    draftKey: null,
+    initialEmpty: isRevise,
+    // 维度环点扇区插进本坞（与创作板互斥挂载，任意时刻只有一个实例消费）。
+    consumePendingKeyword: true,
+  });
   // 比例初值取会话首轮的值；编辑坞内改动不持久化（创作板有自己的记忆）。
   const [ratio, setRatio] = useState<string | null>(job.lastRatio ?? null);
   // Agent 方案开关（与创作板同款三态）：off = 直发；a = 方案A（子句挑选）；b = 方案B（skill 审查修复）。
@@ -1003,6 +1015,7 @@ function GenEditComposer({
         rawPrompt,
         job.conversationId ?? job.id,
         job.sessionId ?? undefined,
+        dimensionSources,
       ).catch(console.error);
     }
   }

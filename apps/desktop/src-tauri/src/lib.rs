@@ -156,6 +156,11 @@ pub fn run() {
                 recovery_paths,
             );
 
+            // Agent Z（dev-only）回传：轮询 .agent-z/inbox，模型经 MCP 工具送回的文本
+            // 转发 agent-z://output → 前端追加进创作板。函数内部仅 Windows + debug 生效。
+            #[cfg(all(windows, debug_assertions))]
+            commands::agent_z::spawn_inbox_watcher(app.handle().clone());
+
             // 阶段 B：首启自动注入已废弃，改用 preset 模块（ingest 识别）+ 新手引导 tour
             // （用户主动「导入文件夹」选预设图目录建项目）。samples.rs 保留供 release_preset_pack 复用。
             // core::samples::seed_if_first_launch(app.handle().clone(), samples_db, samples_paths);
@@ -174,6 +179,8 @@ pub fn run() {
             commands::agent::local_agent_resume,
             commands::agent::local_agent_latest,
             commands::agent::local_agent_find_asset_id,
+            commands::agent_z::agent_z_health,
+            commands::agent_z::agent_z_send,
             commands::cloud::cloud_auth_snapshot,
             commands::cloud::cloud_start_email_login,
             commands::cloud::cloud_restore_session,

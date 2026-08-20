@@ -75,11 +75,18 @@ export const creationSchema = new Schema({
       group: "inline",
       draggable: false,
       // body = 该维度被插入时所属素材的反推正文（CaptionSection.body 快照），仅供编辑框 hover
-      // 浮层展示与序列化兜底（源图已删 / 维度被改删时）。发送时仍优先查 assetById 取最新 body。
+      // 浮层展示与序列化兜底（源图已删 / 维度被改删时）。发送时仍优先按车牌取最新 body。
       // assetId = 插入时所属素材（维度环图 / 前导 @图 / 标注注入对象）：图 chip 被删后
       // （只借维度、不带参考图）序列化仍按它展开正文；null（旧草稿 / 无主手输）回退
       // 「最近一张 image」的位置关联（serializeKeyword）。
-      attrs: { title: { default: "" }, body: { default: "" }, assetId: { default: null } },
+      // sectionId = 车牌（源图 CaptionSection.id）：序列化优先按它定位 section——改名/改正文
+      // 都跟随当下值；无牌（旧数据）回退 assetId+title 寻址。
+      attrs: {
+        title: { default: "" },
+        body: { default: "" },
+        assetId: { default: null },
+        sectionId: { default: null },
+      },
       toDOM(node) {
         return [
           "span",

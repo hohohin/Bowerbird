@@ -131,7 +131,7 @@ interface State {
   ringAssetId: string | null; // 最近一次呼环的 assetId（环收起后保留，供 smartPunct 取该图 sections）
   // 点扇区待插入当前编辑器的维度（assetId = 呼环图：目标编辑器缺该图 chip 时先补插，
   // 保证插入形状是「@图片【维度】」；板未开→先开板，挂载后消费）
-  pendingKeyword: { title: string; body: string; assetId?: string } | null;
+  pendingKeyword: { title: string; body: string; assetId?: string; sectionId?: string | null } | null;
   // —— 创作板「用途」（preset）——
   presets: Preset[]; // 命名 prompt 预设，发送时作为基底注入（不进编辑器）
   activePresetId: string | null; // 当前选中用途；null=不注入
@@ -269,7 +269,7 @@ interface State {
   // 删除生成任务记录（仅前端 genJobs 记录；不取消后端任务、不删已入库图片）。
   removeGenJob: (id: string) => void;
   setGenPanelOpen: (open: boolean) => void;
-  startGeneration: (prompt: string, references: Asset[], ratio?: string | null, provider?: string | null, rawPrompt?: string, conversationId?: string, anchorSessionId?: string) => Promise<string>;
+  startGeneration: (prompt: string, references: Asset[], ratio?: string | null, provider?: string | null, rawPrompt?: string, conversationId?: string, anchorSessionId?: string, dimensionSources?: PromptedAsset[]) => Promise<string>;
   // 续轮（底部对话框发送）：instruction = 铺开后实际发送的 prompt；opts 携带编辑框原文
   // （气泡展示）、新挑参考图与比例（jimeng/Cloud 的上一轮产出图由后端权威合并下发）；
   // exactReferences = 轮级重试/编辑的精确重放（该轮当时实际下发的完整参考图，后端跳过合并）。
@@ -296,7 +296,7 @@ interface State {
   // 确保 CreationBoard 已挂载注册 listener（同步 dispatch 会丢）。
   // refs 显式传入优先（右键菜单按 generation_history 复用，含「不入库」标注图的缓存合成）；
   // 缺省取 activeJob（GenerationPanel 复用）。
-  reusePromptToBoard: (prompt: string, refs?: PromptedAsset[]) => void;
+  reusePromptToBoard: (prompt: string, refs?: PromptedAsset[], dimRefs?: PromptedAsset[]) => void;
   // 「标注插入创作板」：注入临时素材（不入库）到当前编辑器。生成面板编辑坞打开 → 原地插入
   // 不动面板；否则保开创作板 + 延一帧 dispatch board-asset-injected（挂载时序同上）。
   insertAnnotatedToBoard: (asset: PromptedAsset) => void;
@@ -693,7 +693,12 @@ export const useStore = create<State>((set, get) => {
       ...(s.boardOpen || s.genEditing
         ? {}
         : { boardOpen: true, detailAssetId: null, genEditing: null, genPanelOpen: false }),
-      pendingKeyword: { title: section.title, body: section.body ?? "", assetId },
+      pendingKeyword: {
+        title: section.title,
+        body: section.body ?? "",
+        assetId,
+        sectionId: section.id ?? null,
+      },
     })),
   clearPendingKeyword: () => set({ pendingKeyword: null }),
   setActivePreset: (id) => set({ activePresetId: id }),
@@ -1094,7 +1099,7 @@ export const useStore = create<State>((set, get) => {
       console.error("loadGenJobs failed", e);
     }
   },
-  startGeneration: async (prompt, references, ratio, provider, rawPrompt, conversationId, anchorSessionId) => {
+  startGeneration: async (prompt, references, ratio, provider, rawPrompt, conversationId, anchorSessionId, dimensionSources) => {
     // 多 job：不再因 generating 阻塞（并发发起多个生成，各自独立流转）。
     // provider 兜底：调用点没传（CreationBoard send / retry）→ 当前选择 → 全局默认。
     const prov = normalizeGenerationProvider(
@@ -1130,6 +1135,7 @@ export const useStore = create<State>((set, get) => {
       lastPrompt: sentPrompt,
       lastRefs: refPaths,
       refAssets: references,
+      dimAssets: dimensionSources ?? [],
       lastRatio: sentRatio,
       provider: prov,
       projectId: get().currentProjectId,
@@ -1149,6 +1155,8 @@ export const useStore = create<State>((set, get) => {
         jobId,
         prompt: sentPrompt,
         promptRaw: rawPrompt,
+        // 借用维度源图 id（图 chip 被删、只借维度）：随 generation_meta 落库，复用时回绑车牌。
+        dimensionSources: dimensionSources?.map((a) => a.id) ?? [],
         referenceImages: refPaths,
         ratio: sentRatio,
         provider: prov,
@@ -1406,6 +1414,7 @@ export const useStore = create<State>((set, get) => {
         lastPrompt: hist.turns[0]?.prompt ?? "",
         lastRefs: hist.references.map((r) => r.store_path).filter((p): p is string => !!p),
         refAssets: hist.references,
+        dimAssets: hist.dimension_assets ?? [],
         lastRatio: null,
         // 首版 meta 的 provider（即梦/cloud key）：续轮坞 provider 初值据此还原，即梦会话
         // 不再默认落到 codex（codex resume 拿即梦 submit_id 会直接报错）。遗留 "dreamina"
@@ -1426,7 +1435,7 @@ export const useStore = create<State>((set, get) => {
       console.error("viewGenerationHistory failed", e);
     }
   },
-  reusePromptToBoard: (prompt, refs) => {
+  reusePromptToBoard: (prompt, refs, dimRefs) => {
     const body = prompt.trim();
     if (!body) return;
     set({
@@ -1441,12 +1450,15 @@ export const useStore = create<State>((set, get) => {
     // 参考图：显式传入优先（右键菜单按 generation_history 复用）；
     // 否则取 activeJob（复用入口在 GenerationPanel 基于选中 job）。
     const id = get().activeJobId;
-    const refAssets = refs ?? (id ? get().genJobs[id]?.refAssets ?? [] : []);
+    const activeJob = id ? get().genJobs[id] : undefined;
+    const refAssets = refs ?? activeJob?.refAssets ?? [];
+    // 借用维度源图（复用 sidecar，回绑车牌取最新反推）：显式传入优先，否则取 activeJob。
+    const dimAssets = dimRefs ?? activeJob?.dimAssets ?? [];
     // 延一帧 dispatch：从编辑坞退出的场景 CreationBoard 需先挂载注册 listener，同步派发会丢失。
     setTimeout(() => {
       window.dispatchEvent(
         new CustomEvent("bowerbird://board-load-prompt", {
-          detail: { prompt: body, refs: refAssets },
+          detail: { prompt: body, refs: refAssets, dimRefs: dimAssets },
         }),
       );
     }, 0);

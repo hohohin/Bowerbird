@@ -11,6 +11,7 @@ import { CaptionRing } from "./components/creation/CaptionRing";
 import { DescribeProviderPicker } from "./components/DescribeProviderPicker";
 import { BatchBar } from "./components/BatchBar";
 import { CreationBoard } from "./components/CreationBoard";
+import { APPEND_TEXT_EVENT } from "./components/creation/useCreationEditor";
 import { GenerationPanel } from "./components/GenerationPanel";
 import { CodexOnboarding } from "./components/CodexOnboarding";
 import { ExtensionOnboarding } from "./components/ExtensionOnboarding";
@@ -359,6 +360,24 @@ function App() {
         else u();
       }
     );
+    return () => {
+      alive = false;
+      unlisten?.();
+    };
+  }, []);
+
+  // Agent Z（dev-only）回传：Claude Code TUI 内模型调用 MCP 工具 send_to_creation_board →
+  // 事件文件 → 后端 watcher 转发此事件 → 追加进创作板编辑器（创作板常驻挂载，直接派发即可）。
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    let alive = true;
+    listen<{ text: string }>("agent-z://output", (e) => {
+      window.dispatchEvent(new CustomEvent(APPEND_TEXT_EVENT, { detail: e.payload.text }));
+      notifySuccess("Agent Z 输出已追加到创作板");
+    }).then((u) => {
+      if (alive) unlisten = u;
+      else u();
+    });
     return () => {
       alive = false;
       unlisten?.();

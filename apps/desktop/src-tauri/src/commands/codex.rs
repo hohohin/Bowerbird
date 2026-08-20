@@ -440,6 +440,9 @@ pub async fn codex_create_image(
     settings: State<'_, SettingsState>,
     prompt: String,
     prompt_raw: Option<String>,
+    // 借用维度源图 id（图 chip 被删、只借维度的资产）：随 generation_meta 落库，
+    // 复用生成提示词时据此回绑车牌（generation_history → dimension_assets）。
+    dimension_sources: Option<Vec<String>>,
     reference_images: Vec<String>,
     // 参考图列表已完整（轮级重试/编辑的精确重放）：跳过续轮自动合并上一轮产出图。
     // None/false = 正常续轮（自动合并会话最新产出作基图）。
@@ -748,6 +751,7 @@ pub async fn codex_create_image(
             outcome.temp_dir.clone(),
             prompt_for_meta.clone(),
             prompt_raw,
+            dimension_sources,
             refs_for_meta.clone(),
             bookkeeping_session.clone(),
             conversation_id.clone(),

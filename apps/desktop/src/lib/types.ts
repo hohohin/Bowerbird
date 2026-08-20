@@ -95,6 +95,9 @@ export interface ColorBucket {
 export interface CaptionSection {
   title: string;
   body: string;
+  /** 车牌：维度稳定身份（后端反推签发 / 编辑保号）。维度 chip 与复用 sidecar 按它取「当下」
+   *  title/body（改名/改正文跟随）；旧数据无 id，回退「图 + 标题」寻址。 */
+  id?: string | null;
 }
 
 /** 创作板用：有 caption（反推）的资产 + 最新 caption 正文与结构化维度。 */
@@ -220,6 +223,9 @@ export interface GenJob {
   lastPrompt: string; // 首轮发送 prompt（新会话重生成 + 复用到创作板 + 登记用途）
   lastRefs: string[]; // 首轮发送参考图 store_path
   refAssets: Asset[]; // 首轮参考图完整 asset（复用还原）
+  // 首轮借用维度源图（图 chip 被删、只借维度的资产，含带车牌的 sections）：
+  // 复用生成提示词时随 refs 一起还原，维度 chip 据此回绑车牌取最新反推内容。
+  dimAssets?: PromptedAsset[];
   lastRatio: string | null;
   provider: string;
   projectId: string | null; // 首轮项目快照；续轮不随当前项目切换漂移
@@ -248,6 +254,9 @@ export interface GenerationHistory {
   /** 首版参考图完整 asset：「复用到创作板」还原参考图 + 「新会话重新生成」派生 store_path。
    *  不入库标注图由 <库根>/annotations/ 缓存合成（含「标注」维度 sections）。 */
   references: PromptedAsset[];
+  /** 首版借用维度源图（图 chip 被删、只借维度的资产，含带车牌的 sections）：复用时回绑
+   *  车牌取最新反推内容；旧 meta 无此字段为空，前端退化为 prompt_raw 内联正文回绑。 */
+  dimension_assets?: PromptedAsset[];
   /** 首版 generation_meta 的 provider：回看重建的 job 用它定续轮坞 provider 初值（即梦会话
    *  不再默认落到 codex）；旧 meta 无此字段为 null。 */
   provider?: string | null;
