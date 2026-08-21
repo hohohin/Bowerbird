@@ -16,7 +16,7 @@ use std::time::{Duration, Instant, SystemTime};
 use async_trait::async_trait;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Semaphore};
 
 use crate::codex::types::{Capabilities, Chunk, CodexRequest, CodexResult, GenOutcome};
 use crate::codex::GenProvider;
@@ -43,6 +43,11 @@ impl Default for CodexCliProvider {
 // generate_image 见下方 `impl GenProvider for CodexCliProvider`（Phase 1 从 inherent 提升为 trait 方法）。
 
 const GEN_IMAGE_EXTS: [&str; 4] = ["png", "webp", "jpg", "jpeg"];
+
+// Codex image outputs are discovered by taking a before/after snapshot of the
+// process-global ~/.codex/generated_images directory. Serialize image runs so
+// one request can never claim another concurrent request's files.
+static CODEX_IMAGE_FLY: Semaphore = Semaphore::const_new(1);
 
 fn is_gen_image(p: &std::path::Path) -> bool {
     p.extension()
@@ -242,6 +247,7 @@ impl GenProvider for CodexCliProvider {
         if !self.enabled {
             return Err(AppError::Codex("CodexCliProvider 未启用".into()));
         }
+        let _codex_image_permit = CODEX_IMAGE_FLY.acquire().await.unwrap();
         let start = SystemTime::now();
 
         // codex 内置 imagegen 把产物固定写进 ~/.codex/generated_images/（见踩坑）。

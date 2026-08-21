@@ -90,6 +90,7 @@ function eventTitle(type: string): string {
     "step.started": "正在执行步骤",
     "step.completed": "已完成步骤",
     "result.ready": "结果已准备好",
+    "feedback.diagnosis.started": "收到修改意见，正在定向诊断",
     "feedback.diagnosis.completed": "已完成反馈诊断",
     "result.accepted": "已接受结果",
     "run.succeeded": "Agent 会话已完成",
@@ -187,7 +188,34 @@ export function CloudAgentSession() {
     setError(null);
     setIngestRetry(0);
     setLightbox(null);
+    localTaskBusy.current = null;
   }, [run?.runId]);
+
+  // 本地 CLI Run 停车等待生图：发现 pendingLocalTask 即驱动本机执行。命令内部完成
+  // 「解析输入 → 调用任务指定 provider → 直传 → 回报 → 重取」；
+  // 失败时云端已原子结算为 failed。网络类瞬断允许下一轮轮询自然重试。
+  const pendingLocalTask = run?.snapshot.pendingLocalTask ?? null;
+  const localTaskProviderLabel = pendingLocalTask?.provider === "codex" ? "Codex" : "即梦";
+  const localTaskBusy = useRef<string | null>(null);
+  const [localTaskRunning, setLocalTaskRunning] = useState(false);
+  useEffect(() => {
+    if (!genPanelOpen || activeSessionKind !== "agent" || !run || !pendingLocalTask) return;
+    if (localTaskBusy.current) return;
+    localTaskBusy.current = pendingLocalTask.callId;
+    setLocalTaskRunning(true);
+    api.cloudAgentExecuteLocalTask(run.runId)
+      .then((next) => {
+        updateRun(next);
+        setError(null);
+      })
+      .catch((cause) => {
+        setError(cause instanceof Error ? cause.message : String(cause));
+      })
+      .finally(() => {
+        localTaskBusy.current = null;
+        setLocalTaskRunning(false);
+      });
+  }, [genPanelOpen, activeSessionKind, run, pendingLocalTask, updateRun]);
 
   useEffect(() => {
     if (!genPanelOpen || activeSessionKind !== "agent" || !run || TERMINAL.has(run.status)) return;
@@ -423,9 +451,17 @@ export function CloudAgentSession() {
                   <p className="mt-1 text-[10px] leading-4 text-muted">
                     {run.status === "failed"
                       ? "Agent 已安全停止，未调用后续生图工具。"
-                      : run.snapshot.run.current_step
-                        ? `当前步骤：${run.snapshot.run.current_step}`
-                        : "Agent 会在需要你决定时暂停。"}
+                      : run.status === "awaiting_local_task"
+                        ? localTaskRunning
+                          ? `正在使用本机 ${localTaskProviderLabel} 生成这一步的图片，完成后会自动继续执行计划。`
+                          : `等待本机 ${localTaskProviderLabel} 执行生图步骤，即将自动开始。`
+                        : run.snapshot.run.current_step === "diagnose_feedback"
+                          ? "正在根据你的修改意见定向诊断上一结果，可能需要一分钟左右。"
+                          : run.snapshot.run.current_step === "compose_revision_plan"
+                            ? "诊断完成，正在制定修订计划；新计划会再次提交给你批准。"
+                            : run.snapshot.run.current_step
+                              ? `当前步骤：${run.snapshot.run.current_step}`
+                              : "Agent 会在需要你决定时暂停。"}
                   </p>
                 </div>
 

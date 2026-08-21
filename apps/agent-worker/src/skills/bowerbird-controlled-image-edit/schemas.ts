@@ -133,6 +133,13 @@ export function validateControlledPlan(
   if (plan.strategy === "staged_controlled" && plan.steps.length < 2) {
     throw new ControlledPlanValidationError("controlled_plan_staged_requires_multiple_steps");
   }
+  // 多来源属性迁移（换装+配饰等多参考串扰类意图）不允许单步直发：一次生成无法隔离
+  // 各参考的属性来源，会退化为「多图一次性直发」的已知失败模式。基准方法要求先生成
+  // 职责单一的控制参考再分阶段编辑；确定性拒绝驱动模型重规划（与 base 绑定错误同通道）。
+  const transferSources = new Set(analysis.mustTransfer.map((transfer) => transfer.fromReferenceId));
+  if (transferSources.size >= 2 && plan.steps.length === 1 && plan.steps[0].kind === "direct_generate") {
+    throw new ControlledPlanValidationError("controlled_plan_multi_transfer_requires_staging");
+  }
 
   const referenceIds = new Set(input.references.map((reference) => reference.referenceId));
   const roleIds = plan.referenceRoles.map((role) => role.referenceId);

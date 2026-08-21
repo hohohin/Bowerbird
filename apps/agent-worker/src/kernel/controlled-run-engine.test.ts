@@ -61,6 +61,8 @@ class MemoryRunControl implements ControlledRunControl {
 
   async requestApproval(): Promise<void> { this.approvals++; }
   async awaitResultFeedback(): Promise<void> { this.feedbackPauses++; }
+  localTaskPauses = 0;
+  async awaitLocalTask(): Promise<{ parked: boolean }> { this.localTaskPauses++; return { parked: true }; }
   async finish(): Promise<void> { this.finishes++; }
 }
 

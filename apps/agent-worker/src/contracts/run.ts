@@ -14,6 +14,7 @@ export type RunStatus =
   | "awaiting_clarification"
   | "awaiting_approval"
   | "awaiting_result_feedback"
+  | "awaiting_local_task"
   | "exporting"
   | "succeeded"
   | "failed"

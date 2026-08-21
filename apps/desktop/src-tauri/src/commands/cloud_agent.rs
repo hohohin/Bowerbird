@@ -1,11 +1,11 @@
 use std::{path::PathBuf, sync::Arc};
 
+use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter, State};
 use ulid::Ulid;
-use rusqlite::OptionalExtension;
 
 use crate::cloud::{AuthClient, CloudClient};
 use crate::core::{library::Asset, paths::LibraryPaths};
@@ -339,10 +339,37 @@ pub async fn cloud_agent_start(
     references: Vec<CloudAgentReferenceRequest>,
     ratio: Option<String>,
     project_id: Option<String>,
+    image_provider: Option<String>,
 ) -> Result<CloudAgentRunRecord, AppError> {
     if references.len() > MAX_REFERENCES {
         return Err(AppError::Other("Agent 最多处理 8 张参考图".into()));
     }
+    // 生图引擎：cloud = VPS 方舟 Seedream（默认）；jimeng / codex = 桌面本地 CLI。
+    // 文本、审批与编排始终在云端，仅已批准的生图步骤委托本机执行。
+    let image_provider = match image_provider.as_deref() {
+        None | Some("cloud") => "cloud".to_string(),
+        Some("jimeng") => {
+            if crate::codex::jimeng::resolve_dreamina_binary().is_none() {
+                return Err(AppError::Other(
+                    "未找到可用的即梦 CLI，无法使用本机生图引擎".into(),
+                ));
+            }
+            "jimeng".to_string()
+        }
+        Some("codex") => {
+            let health = crate::commands::codex::codex_health().await?;
+            if !health.ok {
+                return Err(AppError::Other(format!(
+                    "Codex CLI 不可用，无法使用本机生图引擎：{}",
+                    health.reason
+                )));
+            }
+            "codex".to_string()
+        }
+        Some(other) => {
+            return Err(AppError::Other(format!("Agent 生图引擎无效：{other}")));
+        }
+    };
     let resolved_ratio = normalize_requested_ratio(ratio)?;
     if let Some(project) = project_id.as_deref() {
         if db.get_project(project)?.is_none() {
@@ -365,7 +392,10 @@ pub async fn cloud_agent_start(
             .filter(|path| path.is_file())
             .ok_or_else(|| AppError::Other(format!("参考图 {} 的本地文件不存在", asset.name)))?;
         reference_ratios.push(
-            asset.width.zip(asset.height).and_then(|(width, height)| nearest_ratio(width, height)),
+            asset
+                .width
+                .zip(asset.height)
+                .and_then(|(width, height)| nearest_ratio(width, height)),
         );
         image_bytes.push(crate::codex::cloud_image::read_agent_reference_jpeg(&path).await?);
         reference_ids.push(reference.asset_id.clone());
@@ -407,6 +437,7 @@ pub async fn cloud_agent_start(
         "inputCount": image_bytes.len(),
         "inputManifestHash": sha256_hex(&manifest),
         "idempotencyKey": format!("desktop-agent-{}", Ulid::new()),
+        "imageProvider": image_provider,
     });
     // None 必须省略而不是序列化为 null；控制面契约只接受缺省或合法比例字符串。
     if let Some(value) = resolved_ratio.as_deref() {
@@ -638,9 +669,14 @@ fn artifact_meta<'a>(snapshot: &'a Value, artifact_id: &str) -> Result<&'a Value
                 .find(|item| item.get("id").and_then(Value::as_str) == Some(artifact_id))
         })
         .filter(|item| {
-            matches!(item.get("role").and_then(Value::as_str), Some("control_reference" | "stage_result" | "final_result"))
-                && item.get("user_visible").and_then(Value::as_bool) != Some(false)
-                && item.get("mime").and_then(Value::as_str).is_some_and(|mime| mime.starts_with("image/"))
+            matches!(
+                item.get("role").and_then(Value::as_str),
+                Some("control_reference" | "stage_result" | "final_result")
+            ) && item.get("user_visible").and_then(Value::as_bool) != Some(false)
+                && item
+                    .get("mime")
+                    .and_then(Value::as_str)
+                    .is_some_and(|mime| mime.starts_with("image/"))
         })
         .ok_or_else(|| AppError::Cloud("图片产物不存在、不可见或已被替换".into()))
 }
@@ -815,7 +851,10 @@ pub async fn cloud_agent_ingest_final(
     Ok(asset)
 }
 
-fn existing_agent_asset(db: &Database, source: &std::path::Path) -> Result<Option<Asset>, AppError> {
+fn existing_agent_asset(
+    db: &Database,
+    source: &std::path::Path,
+) -> Result<Option<Asset>, AppError> {
     let origin = source.to_string_lossy().into_owned();
     let id = {
         let conn = db.conn.lock().unwrap();
@@ -825,7 +864,10 @@ fn existing_agent_asset(db: &Database, source: &std::path::Path) -> Result<Optio
             |row| row.get::<_, String>(0),
         ).optional()?
     };
-    id.map(|asset_id| db.get_asset(&asset_id)).transpose().map(|value| value.flatten()).map_err(AppError::from)
+    id.map(|asset_id| db.get_asset(&asset_id))
+        .transpose()
+        .map(|value| value.flatten())
+        .map_err(AppError::from)
 }
 
 #[tauri::command]
@@ -839,9 +881,12 @@ pub async fn cloud_agent_ingest_artifacts(
 ) -> Result<Vec<Asset>, AppError> {
     let mut record = refresh_record(&db, &cloud, &auth, &run_id).await?;
     if record.status != "succeeded" || record.feedback_action.as_deref() != Some("accept") {
-        return Err(AppError::Other("只有已接受且完成结算的 Agent 会话可以入库".into()));
+        return Err(AppError::Other(
+            "只有已接受且完成结算的 Agent 会话可以入库".into(),
+        ));
     }
-    let generated: Vec<(String, String)> = record.snapshot
+    let generated: Vec<(String, String)> = record
+        .snapshot
         .get("artifacts")
         .and_then(Value::as_array)
         .into_iter()
@@ -851,8 +896,11 @@ pub async fn cloud_agent_ingest_artifacts(
             let id = item.get("id")?.as_str()?;
             (matches!(role, "control_reference" | "stage_result" | "final_result")
                 && item.get("user_visible").and_then(Value::as_bool) != Some(false)
-                && item.get("mime").and_then(Value::as_str).is_some_and(|mime| mime.starts_with("image/")))
-                .then(|| (id.to_string(), role.to_string()))
+                && item
+                    .get("mime")
+                    .and_then(Value::as_str)
+                    .is_some_and(|mime| mime.starts_with("image/")))
+            .then(|| (id.to_string(), role.to_string()))
         })
         .collect();
     if generated.is_empty() {
@@ -903,14 +951,400 @@ pub async fn cloud_agent_ingest_artifacts(
     Ok(assets)
 }
 
+fn detect_image_mime(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        Some("image/jpeg")
+    } else if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]) {
+        Some("image/png")
+    } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else {
+        None
+    }
+}
+
+fn local_generation_instruction(provider: &str, prompt: &str, ratio: Option<&str>) -> String {
+    if provider != "codex" {
+        return prompt.to_string();
+    }
+    let ratio_line = ratio
+        .map(|value| format!("输出画幅比例必须为 {value}。\n"))
+        .unwrap_or_default();
+    format!(
+        "$imagegen\n请使用图像生成能力严格执行下面的已批准图像编辑步骤。只生成并返回一张图片。\n\
+         参考图片按本次命令的附图顺序对应步骤输入；不要带入指令未要求的参考图内容。\n\
+         {ratio_line}\n已批准的步骤指令：\n{prompt}"
+    )
+}
+
+fn local_task_error_code(provider: &str, error: &AppError) -> String {
+    // 服务端 safe_error_code 仅接受 [A-Za-z0-9._:-]{1,80}；中文错误归入固定码。
+    let prefix = if provider == "codex" {
+        "codex"
+    } else {
+        "dreamina"
+    };
+    let suffix = match error {
+        AppError::Other(message) if message.contains("超时") => "timeout",
+        _ => "failed",
+    };
+    format!("{prefix}_local_{suffix}")
+}
+
+fn local_result_cache_path(paths: &LibraryPaths, call_id: &str, mime: &str) -> Option<PathBuf> {
+    let extension = match mime {
+        "image/png" => "png",
+        "image/jpeg" => "jpg",
+        "image/webp" => "webp",
+        _ => return None,
+    };
+    Some(
+        paths
+            .root
+            .join("agent-local-results")
+            .join(format!("{call_id}.{extension}")),
+    )
+}
+
+async fn load_cached_local_result(
+    paths: &LibraryPaths,
+    call_id: &str,
+) -> Result<Option<(Vec<u8>, String)>, AppError> {
+    for mime in ["image/png", "image/jpeg", "image/webp"] {
+        let Some(path) = local_result_cache_path(paths, call_id, mime) else {
+            continue;
+        };
+        let bytes = match tokio::fs::read(&path).await {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(AppError::Other(format!(
+                    "读取本机 Agent 结果缓存失败: {error}"
+                )))
+            }
+        };
+        if bytes.len() as u64 <= MAX_ARTIFACT_BYTES && detect_image_mime(&bytes) == Some(mime) {
+            return Ok(Some((bytes, mime.to_string())));
+        }
+        let _ = tokio::fs::remove_file(path).await;
+    }
+    Ok(None)
+}
+
+async fn cache_local_result(
+    paths: &LibraryPaths,
+    call_id: &str,
+    bytes: &[u8],
+    mime: &str,
+) -> Result<(), AppError> {
+    let path = local_result_cache_path(paths, call_id, mime)
+        .ok_or_else(|| AppError::Other("本机 Agent 结果格式无效".into()))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| AppError::Other("本机 Agent 结果缓存路径无效".into()))?;
+    tokio::fs::create_dir_all(parent)
+        .await
+        .map_err(|error| AppError::Other(format!("创建本机 Agent 结果缓存失败: {error}")))?;
+    tokio::fs::write(path, bytes)
+        .await
+        .map_err(|error| AppError::Other(format!("写入本机 Agent 结果缓存失败: {error}")))
+}
+
+async fn remove_cached_local_result(paths: &LibraryPaths, call_id: &str) {
+    for mime in ["image/png", "image/jpeg", "image/webp"] {
+        if let Some(path) = local_result_cache_path(paths, call_id, mime) {
+            let _ = tokio::fs::remove_file(path).await;
+        }
+    }
+}
+
+/// 本地 CLI Run 的执行步骤：云端停车 awaiting_local_task 后，由前端轮询发现
+/// pendingLocalTask 并调用本命令。解析输入（参考图直接取本地库、上一步产物经签名
+/// 下载）、运行任务指定的即梦 / Codex provider、把结果直传确定性 artifact key 并回报，
+/// 云端校验后 Run 重新入队。失败时尽力回报 local_task_fail 让云端原子结算。
+#[tauri::command]
+pub async fn cloud_agent_execute_local_task(
+    db: State<'_, Arc<Database>>,
+    settings: State<'_, crate::core::settings::SettingsState>,
+    paths: State<'_, Arc<LibraryPaths>>,
+    cloud: State<'_, CloudClient>,
+    auth: State<'_, AuthClient>,
+    run_id: String,
+) -> Result<CloudAgentRunRecord, AppError> {
+    let record = refresh_record(&db, &cloud, &auth, &run_id).await?;
+    if record.status != "awaiting_local_task" {
+        return Ok(record);
+    }
+    let Some(task) = record.snapshot.get("pendingLocalTask") else {
+        return Ok(record);
+    };
+    let call_id = task
+        .get("callId")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::Cloud("本地任务缺少 callId".into()))?
+        .to_string();
+    let provider_key = task
+        .get("provider")
+        .and_then(Value::as_str)
+        .filter(|value| matches!(*value, "jimeng" | "codex"))
+        .ok_or_else(|| AppError::Cloud("本地任务 provider 无效".into()))?
+        .to_string();
+    let prompt = task
+        .get("prompt")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let ratio = task
+        .get("ratio")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    if prompt.trim().is_empty() {
+        return Err(AppError::Cloud("本地任务缺少生图指令".into()));
+    }
+    if let Some(expires_at) = task.get("expiresAt").and_then(Value::as_str) {
+        if let Ok(deadline) = chrono::DateTime::parse_from_rfc3339(expires_at) {
+            if chrono::Utc::now() > deadline {
+                remove_cached_local_result(&paths, &call_id).await;
+                return Err(AppError::Cloud("本地生图任务已超时".into()));
+            }
+        }
+    }
+
+    // 输入解析：role=input 直接取本地参考图（桌面本就有原图，无需回云下载）；
+    // 其余为上一步生成产物，走既有可见产物签名下载（本地缓存命中免下载）。
+    let mut reference_images: Vec<PathBuf> = Vec::new();
+    let inputs = task
+        .get("inputs")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    for input in &inputs {
+        let role = input.get("role").and_then(Value::as_str).unwrap_or("input");
+        let path = if role == "input" {
+            let reference_id = input
+                .get("stepId")
+                .and_then(Value::as_str)
+                .and_then(|step| step.strip_prefix("ref-"))
+                .and_then(|ordinal| ordinal.parse::<usize>().ok())
+                .filter(|ordinal| *ordinal >= 1);
+            let asset_id = reference_id
+                .and_then(|ordinal| record.reference_asset_ids.get(ordinal - 1))
+                .ok_or_else(|| AppError::Cloud("本地任务参考图序号无效".into()))?;
+            let asset = db
+                .get_asset(asset_id)?
+                .ok_or_else(|| AppError::Other("参考图不在素材库中".into()))?;
+            asset
+                .store_path
+                .map(PathBuf::from)
+                .filter(|path| path.is_file())
+                .ok_or_else(|| AppError::Other(format!("参考图 {} 的本地文件不存在", asset.name)))?
+        } else {
+            let artifact_id = input
+                .get("artifactId")
+                .and_then(Value::as_str)
+                .ok_or_else(|| AppError::Cloud("本地任务输入缺少产物 id".into()))?;
+            PathBuf::from(
+                download_artifact(&paths, &cloud, &auth, &record, artifact_id)
+                    .await?
+                    .path,
+            )
+        };
+        reference_images.push(path);
+    }
+
+    let outcome = async {
+        if let Some(cached) = load_cached_local_result(&paths, &call_id).await? {
+            return Ok::<(Vec<u8>, String), AppError>(cached);
+        }
+
+        // 即梦与主生成队列共用账号级串行锁；Codex provider 自己持有全局图片目录锁。
+        let _jimeng_permit = if provider_key == "jimeng" {
+            Some(
+                crate::core::generation_worker::JIMENG_FLY
+                    .acquire()
+                    .await
+                    .unwrap(),
+            )
+        } else {
+            None
+        };
+        let dreamina_model =
+            (provider_key == "jimeng").then(|| settings.get().dreamina_model_version);
+        let provider = crate::codex::resolve_gen_provider(
+            Some(&provider_key),
+            None,
+            dreamina_model.as_deref(),
+        )?;
+        let instruction = local_generation_instruction(&provider_key, &prompt, ratio.as_deref());
+        let request = crate::codex::types::CodexRequest {
+            instruction,
+            reference_images: reference_images.clone(),
+            context_prompts: vec![],
+            ratio: ratio.clone(),
+            job_id: None,
+        };
+        // 进度不需要回流（云端时间线由 Worker 补事件）：开通道丢弃 chunk 即可。
+        let (chunk_tx, mut chunk_rx) = tokio::sync::mpsc::channel(64);
+        tokio::spawn(async move { while chunk_rx.recv().await.is_some() {} });
+        let timeout_secs = if provider_key == "codex" { 1_200 } else { 600 };
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(timeout_secs),
+            provider.generate_image(request, &chunk_tx, None),
+        )
+        .await
+        .map_err(|_| AppError::Other(format!("{provider_key} 生成超时")))??;
+        if outcome.source_images.len() != 1 {
+            if let Some(temp_dir) = &outcome.temp_dir {
+                let _ = tokio::fs::remove_dir_all(temp_dir).await;
+            }
+            return Err(AppError::Other(format!(
+                "{provider_key} 必须返回且只能返回一张图片，实际为 {} 张",
+                outcome.source_images.len()
+            )));
+        }
+        let image = outcome.source_images[0].clone();
+        let bytes = tokio::fs::read(&image)
+            .await
+            .map_err(|error| AppError::Other(format!("读取 {provider_key} 结果失败: {error}")))?;
+        let mime = detect_image_mime(&bytes)
+            .ok_or_else(|| AppError::Other(format!("{provider_key} 结果不是有效的图片文件")))?
+            .to_string();
+        if bytes.len() as u64 > MAX_ARTIFACT_BYTES {
+            return Err(AppError::Other(format!(
+                "{provider_key} 结果超出产物大小上限"
+            )));
+        }
+        cache_local_result(&paths, &call_id, &bytes, &mime).await?;
+        if let Some(temp_dir) = &outcome.temp_dir {
+            let _ = tokio::fs::remove_dir_all(temp_dir).await;
+        }
+        Ok::<(Vec<u8>, String), AppError>((bytes, mime))
+    }
+    .await;
+
+    let (bytes, mime) = match outcome {
+        Ok(value) => value,
+        Err(error) => {
+            let _ = agent_action(
+                &cloud,
+                &auth,
+                json!({
+                    "action": "local_task_fail",
+                    "runId": run_id,
+                    "callId": call_id,
+                    "errorCode": local_task_error_code(&provider_key, &error),
+                    "safeMessage": error.to_string().chars().take(500).collect::<String>(),
+                }),
+                "回报本地任务失败",
+            )
+            .await;
+            let _ = refresh_record(&db, &cloud, &auth, &run_id).await;
+            return Err(error);
+        }
+    };
+    let sha256 = sha256_hex(&bytes);
+    let byte_len = bytes.len();
+
+    let transfer = async {
+        let prepared = agent_action(
+            &cloud,
+            &auth,
+            json!({
+                "action": "local_task_prepare",
+                "runId": run_id,
+                "callId": call_id,
+                "mime": mime,
+            }),
+            "签发本地任务上传地址失败",
+        )
+        .await?;
+        let url = prepared
+            .get("uploadUrl")
+            .and_then(Value::as_str)
+            .ok_or_else(|| AppError::Cloud("本地任务上传地址缺失".into()))?;
+        upload_signed(&cloud, url, &mime, bytes, "本机 CLI 生图结果").await?;
+        agent_action(
+            &cloud,
+            &auth,
+            json!({
+                "action": "local_task_complete",
+                "runId": run_id,
+                "callId": call_id,
+                "mime": mime,
+                "sha256": sha256,
+                "bytes": byte_len,
+            }),
+            "回报本地任务结果失败",
+        )
+        .await?;
+        Ok::<(), AppError>(())
+    }
+    .await;
+    if let Err(error) = transfer {
+        // CLI 副作用已经发生；保留 call_id 缓存并让轮询重试上传/complete，绝不再次生图。
+        // 服务端 expires_at 负责最终超时结算，瞬时网络错误不应把结果误判成 provider 失败。
+        return Err(error);
+    }
+    remove_cached_local_result(&paths, &call_id).await;
+
+    refresh_record(&db, &cloud, &auth, &run_id).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        list_records, nearest_ratio, normalize_intent_prompt, normalize_requested_ratio,
-        record_from_row, save_record, CloudAgentReferenceRequest, CloudAgentRunRecord,
+        cache_local_result, list_records, load_cached_local_result, local_generation_instruction,
+        nearest_ratio, normalize_intent_prompt, normalize_requested_ratio, record_from_row,
+        remove_cached_local_result, save_record, CloudAgentReferenceRequest, CloudAgentRunRecord,
     };
+    use crate::core::paths::LibraryPaths;
     use crate::db::Database;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn local_result_cache_reuses_one_call_and_cleans_up_after_completion() {
+        let root =
+            std::env::temp_dir().join(format!("bowerbird-agent-cache-{}", ulid::Ulid::new()));
+        let paths = LibraryPaths::init(root.clone()).unwrap();
+        let call_id = "a".repeat(64);
+        let png = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+
+        cache_local_result(&paths, &call_id, &png, "image/png")
+            .await
+            .unwrap();
+        let cached = load_cached_local_result(&paths, &call_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(cached.0, png);
+        assert_eq!(cached.1, "image/png");
+
+        remove_cached_local_result(&paths, &call_id).await;
+        assert!(load_cached_local_result(&paths, &call_id)
+            .await
+            .unwrap()
+            .is_none());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn codex_local_instruction_explicitly_triggers_single_image_generation() {
+        let instruction =
+            local_generation_instruction("codex", "保留主体，只把背景改成雪山", Some("16:9"));
+        assert!(instruction.starts_with("$imagegen\n"));
+        assert!(instruction.contains("只生成并返回一张图片"));
+        assert!(instruction.contains("输出画幅比例必须为 16:9"));
+        assert!(instruction.contains("保留主体，只把背景改成雪山"));
+    }
+
+    #[test]
+    fn jimeng_local_instruction_is_not_wrapped() {
+        assert_eq!(
+            local_generation_instruction("jimeng", "原始步骤", Some("1:1")),
+            "原始步骤"
+        );
+    }
 
     #[test]
     fn intent_tokens_are_bound_to_reference_ordinals() {

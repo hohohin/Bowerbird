@@ -10,6 +10,7 @@ import {
   arkFeedbackVisionConfigFromEnv,
   createArkFeedbackDiagnoser,
 } from "../providers/ark/feedback-diagnoser.ts";
+import { createLocalApprovedStepExecutor } from "../providers/local/local-approved-step-executor.ts";
 
 export function runControlledAgentWorker(env: Record<string, string | undefined>): Promise<void> {
   const worker = agentConfigFromEnv(env);
@@ -26,15 +27,33 @@ export function runControlledAgentWorker(env: Record<string, string | undefined>
         control: context.control,
         artifacts: context.claimed.artifactUrls,
       });
+      // BYO Run：文本/审批/编排仍在 VPS，生图步骤委托桌面本地执行（VPS 不共享用户账号）。
+      const localProvider = context.claimed.run.imageProvider === "jimeng" ||
+          context.claimed.run.imageProvider === "codex"
+        ? context.claimed.run.imageProvider
+        : null;
+      const executor = localProvider
+        ? createLocalApprovedStepExecutor({
+            runId: context.claimed.run.id,
+            leaseId: context.claimed.lease.leaseId,
+            control: context.control,
+            signal: context.signal,
+            provider: localProvider,
+            artifactRole: (artifactId) => {
+              const artifact = (context.claimed.artifactUrls ?? []).find((item) => item.artifactId === artifactId);
+              return artifact ? { role: artifact.role, stepId: artifact.stepId ?? null } : undefined;
+            },
+          })
+        : createArkApprovedStepExecutor({
+            runId: context.claimed.run.id,
+            leaseId: context.claimed.lease.leaseId,
+            control: context.control,
+            workspace,
+            config: ark,
+            signal: context.signal,
+          });
       return {
-        executor: createArkApprovedStepExecutor({
-          runId: context.claimed.run.id,
-          leaseId: context.claimed.lease.leaseId,
-          control: context.control,
-          workspace,
-          config: ark,
-          signal: context.signal,
-        }),
+        executor,
         diagnoser: createArkFeedbackDiagnoser({
           runId: context.claimed.run.id,
           leaseId: context.claimed.lease.leaseId,

@@ -533,6 +533,16 @@ export interface CloudAgentSnapshot {
   }>;
   approvals: CloudAgentApproval[];
   artifacts: CloudAgentArtifact[];
+  /** 本地 CLI Run 停车 awaiting_local_task 时云端下发的待执行生图任务（其他时刻缺省）。 */
+  pendingLocalTask?: {
+    callId: string;
+    provider: "jimeng" | "codex";
+    stepId: string;
+    prompt: string;
+    ratio?: string | null;
+    inputs: Array<{ artifactId: string; role: string; stepId?: string | null; ordinal: number }>;
+    expiresAt: string;
+  };
 }
 
 export interface CloudAgentRunRecord {

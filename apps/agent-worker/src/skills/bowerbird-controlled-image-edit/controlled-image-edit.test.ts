@@ -524,3 +524,76 @@ test("plan hashes are stable and bind approval to the full ordered plan", () => 
   [reordered.steps[0], reordered.steps[1]] = [reordered.steps[1], reordered.steps[0]];
   ok(hashControlledPlan(reordered) !== hashControlledPlan(plan));
 });
+
+test("multi-source transfers forbid a single direct step and the planner says so upfront", async () => {
+  // 基准案例形态：动作/服装来自 reference-1、耳环来自 reference-3（两个迁移来源）。
+  const intent = analysis();
+  const collapsed = directPlan(intent);
+  throws(
+    () => validateControlledPlan(input(), intent, hashIntentAnalysis(intent), collapsed),
+    (error: unknown) =>
+      error instanceof ControlledPlanValidationError &&
+      error.safeCode === "controlled_plan_multi_transfer_requires_staging",
+  );
+
+  // 单一来源迁移不受影响：direct 计划仍合法。
+  const singleInput: ControlledImageEditInput = { ...input(), references: input().references.slice(0, 1) };
+  const singleIntent = clone(analysis());
+  singleIntent.finalSubjectReferenceId = "reference-1";
+  singleIntent.mustTransfer = [{ fromReferenceId: "reference-1", attributes: ["动作"] }];
+  const singleDirect = directPlan(singleIntent);
+  singleDirect.referenceRoles = [{
+    referenceId: "reference-1",
+    role: "base",
+    mustPreserve: ["人物身份"],
+    mustTransfer: [],
+    mustExclude: [],
+  }];
+  validateControlledPlan(singleInput, singleIntent, hashIntentAnalysis(singleIntent), singleDirect);
+
+  // 规划回合把确定性分阶段要求写进 systemPolicy，避免浪费一次重规划。
+  const requests: ModelTurnRequest[] = [];
+  const model: ModelBackend = {
+    id: "fake",
+    async turn(request) {
+      requests.push(request);
+      return { kind: "action", action: "submit_plan_for_approval", arguments: { plan: stagedPlan(intent) }, providerUsage: {} };
+    },
+  };
+  await composeControlledPlan({
+    runId: "run-staging-rule",
+    input: input(),
+    analysis: intent,
+    expectedSkillHash: loadControlledImageEditSkill().instructionHash,
+    model,
+  });
+  ok(requests[0].systemPolicy.includes("single direct_generate step is forbidden"));
+});
+
+test("model turns without the required action get one corrective retry", async () => {
+  const intent = analysis();
+  const outputs: ModelTurnResult[] = [
+    { kind: "message", text: "我可以帮你修改，请提供更多细节。", providerUsage: {} },
+    { kind: "action", action: "submit_plan_for_approval", arguments: { plan: stagedPlan(intent) }, providerUsage: {} },
+  ];
+  const requests: ModelTurnRequest[] = [];
+  const model: ModelBackend = {
+    id: "fake",
+    async turn(request) {
+      requests.push(request);
+      const output = outputs.shift();
+      if (!output) throw new Error("unexpected model turn");
+      return output;
+    },
+  };
+  const planned = await composeControlledPlan({
+    runId: "run-action-miss",
+    input: input(),
+    analysis: intent,
+    expectedSkillHash: loadControlledImageEditSkill().instructionHash,
+    model,
+  });
+  ok(planned.plan.steps.length >= 2);
+  equal(requests.length, 2);
+  ok(JSON.stringify(requests[1].context).includes("model-action-miss"));
+});

@@ -8,6 +8,7 @@ export type ErrorCode =
   | "upstream_timeout"
   | "invalid_request"
   | "not_configured"
+  | "upgrade_required"
   | "internal_error";
 
 const STATUS: Record<ErrorCode, number> = {
@@ -20,6 +21,7 @@ const STATUS: Record<ErrorCode, number> = {
   upstream_timeout: 504,
   invalid_request: 400,
   not_configured: 503,
+  upgrade_required: 403,
   internal_error: 500,
 };
 

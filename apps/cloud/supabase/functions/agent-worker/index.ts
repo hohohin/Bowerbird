@@ -83,6 +83,7 @@ interface RunRow {
   hold_id: string;
   pricing_version: number;
   user_id: string;
+  image_provider: string;
 }
 
 async function signOrNull(admin: SupabaseClient, objectKey: string): Promise<string | null> {
@@ -144,6 +145,7 @@ async function actionClaim(admin: SupabaseClient, workerId: string): Promise<Res
       pricingVersion: claimed.pricing_version,
       checkpointHash: claimed.checkpoint_hash,
       snapshotSchemaVersion: claimed.snapshot_schema_version,
+      imageProvider: claimed.image_provider ?? "cloud",
     },
     lease: { leaseId: claimed.lease_id, expiresAt: null, leaseSeconds: 60 },
     inputUrl,
@@ -221,7 +223,7 @@ async function assertLease(admin: SupabaseClient, runId: string, leaseId: string
 interface UsageItem {
   callId: string;
   kind: "model_tokens" | "vision_call" | "image_generation";
-  provider: "deepseek" | "ark";
+  provider: "deepseek" | "ark" | "jimeng" | "codex";
   model: string;
   inputUnits: number;
   outputUnits: number;
@@ -238,6 +240,9 @@ function creditsFor(item: UsageItem): number {
     return Math.max(1, Math.ceil(approx));
   }
   if (item.kind === "vision_call") return 1;
+  // Desktop-local CLI generation runs on the user's own provider account and
+  // consumes no Bowerbird credits; the ledger row stays for auditability.
+  if (item.provider === "jimeng" || item.provider === "codex") return 0;
   return 5; // image_generation
 }
 
@@ -267,7 +272,7 @@ async function actionUsage(admin: SupabaseClient, body: Record<string, unknown>)
     if (!["model_tokens", "vision_call", "image_generation"].includes(item.kind)) {
       throw new ApiError("invalid_request", "usage kind 无效");
     }
-    if (!["deepseek", "ark"].includes(item.provider)) throw new ApiError("invalid_request", "usage provider 无效");
+    if (!["deepseek", "ark", "jimeng", "codex"].includes(item.provider)) throw new ApiError("invalid_request", "usage provider 无效");
     const credits = creditsFor(item);
     return {
       run_id: runId,
@@ -440,7 +445,10 @@ function checkpointFields(body: Record<string, unknown>): {
 
 async function actionCheckpointPrepare(admin: SupabaseClient, body: Record<string, unknown>): Promise<Response> {
   const fields = checkpointFields(body);
-  await assertLease(admin, fields.runId, fields.leaseId);
+  const run = await assertLease(admin, fields.runId, fields.leaseId);
+  if (run.image_provider !== fields.provider) {
+    throw new ApiError("invalid_request", "local task provider 与 Run 不一致", false, 409);
+  }
   const { data, error } = await admin.storage.from(BUCKET).createSignedUploadUrl(fields.objectKey);
   if (error || !data) throw new ApiError("internal_error", "checkpoint 上传地址签发失败", true);
   return jsonResponse({ objectKey: fields.objectKey, uploadUrl: data.signedUrl, uploadToken: data.token });
@@ -748,6 +756,156 @@ async function actionArtifactGet(admin: SupabaseClient, body: Record<string, unk
   });
 }
 
+/** 本机 CLI provider 的执行委托：Worker 登记任务参数并停车，桌面拉取执行。
+ *  与审批暂停同款模式——任务行先落库（幂等 by run_id+call_id），转换由 local_task_await
+ *  单独执行，保证「saveCheckpoint → await」顺序下租约仍有效。 */
+type LocalTaskParamsInput = { artifactId: string; role: string; stepId: string | null };
+
+function localTaskFields(body: Record<string, unknown>): {
+  runId: string;
+  leaseId: string;
+  callId: string;
+  provider: string;
+  stepId: string;
+  expiresInSeconds: number;
+} {
+  const runId = typeof body.runId === "string" ? body.runId : "";
+  const leaseId = typeof body.leaseId === "string" ? body.leaseId : "";
+  const callId = typeof body.callId === "string" ? body.callId : "";
+  const provider = body.provider === "jimeng" || body.provider === "codex" ? body.provider : "";
+  const stepId = typeof body.stepId === "string" ? body.stepId.slice(0, 120) : "";
+  const expiresInSeconds = Number(body.expiresInSeconds ?? 1800);
+  if (!runId || !leaseId || !/^[0-9a-f]{64}$/.test(callId)) throw new ApiError("invalid_request", "local task 标识无效");
+  if (!provider) throw new ApiError("invalid_request", "local task provider 无效");
+  if (!stepId) throw new ApiError("invalid_request", "local task stepId 无效");
+  if (!Number.isInteger(expiresInSeconds) || expiresInSeconds < 300 || expiresInSeconds > 7200) {
+    throw new ApiError("invalid_request", "local task 有效期无效");
+  }
+  return { runId, leaseId, callId, provider, stepId, expiresInSeconds };
+}
+
+function parseLocalTaskParams(value: unknown): { prompt: string; ratio: string | null; inputs: LocalTaskParamsInput[] } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new ApiError("invalid_request", "local task 参数无效");
+  }
+  const params = value as Record<string, unknown>;
+  const prompt = typeof params.prompt === "string" ? params.prompt : "";
+  if (!prompt.trim() || prompt.length > 8000) throw new ApiError("invalid_request", "local task prompt 无效");
+  const ratio = typeof params.ratio === "string" && params.ratio ? params.ratio.slice(0, 16) : null;
+  const rawInputs = Array.isArray(params.inputs) ? params.inputs : [];
+  if (rawInputs.length > 8) throw new ApiError("invalid_request", "local task 输入数量无效");
+  const inputs = rawInputs.map((raw) => {
+    const item = (raw ?? {}) as Record<string, unknown>;
+    const artifactId = typeof item.artifactId === "string" ? item.artifactId : "";
+    const role = typeof item.role === "string" ? item.role : "";
+    if (!/^[0-9a-zA-Z-]{1,80}$/.test(artifactId) ||
+        !["input", "control_reference", "stage_result", "final_result"].includes(role)) {
+      throw new ApiError("invalid_request", "local task 输入无效");
+    }
+    return { artifactId, role, stepId: typeof item.stepId === "string" ? item.stepId.slice(0, 120) : null };
+  });
+  return { prompt, ratio, inputs };
+}
+
+async function actionLocalTaskRequest(admin: SupabaseClient, body: Record<string, unknown>): Promise<Response> {
+  const fields = localTaskFields(body);
+  const params = parseLocalTaskParams(body.params);
+  await assertLease(admin, fields.runId, fields.leaseId);
+  const objectKey = `runs/${fields.runId}/local/${fields.callId}.json`;
+  const encoded = new TextEncoder().encode(JSON.stringify(params));
+  if (encoded.byteLength > 64 * 1024) throw new ApiError("invalid_request", "local task 参数过大");
+  const { error: uploadError } = await admin.storage.from(BUCKET).upload(objectKey, encoded, {
+    contentType: "application/json",
+    upsert: true,
+  });
+  if (uploadError) throw new ApiError("internal_error", "local task 参数保存失败", true);
+
+  const { data: existing, error: existingError } = await admin.from("agent_local_tasks")
+    .select("id,call_id,provider,step_id,params_object_key,status,expires_at")
+    .eq("run_id", fields.runId).eq("call_id", fields.callId).maybeSingle();
+  if (existingError) throw new ApiError("internal_error", "local task 读取失败", true);
+  if (existing && (existing.provider !== fields.provider || existing.step_id !== fields.stepId ||
+      existing.params_object_key !== objectKey)) {
+    throw new ApiError("invalid_request", "local task 与已登记任务冲突", false, 409);
+  }
+  let task = existing as { id: string; status: string; expires_at: string } | null;
+  if (!task) {
+    const inserted = await admin.from("agent_local_tasks").insert({
+      run_id: fields.runId,
+      call_id: fields.callId,
+      provider: fields.provider,
+      step_id: fields.stepId,
+      params_object_key: objectKey,
+      status: "pending",
+      expires_at: new Date(Date.now() + fields.expiresInSeconds * 1000).toISOString(),
+    }).select("id,status,expires_at").single();
+    if (inserted.error || !inserted.data) throw new ApiError("internal_error", "local task 登记失败", true);
+    task = inserted.data as { id: string; status: string; expires_at: string };
+  }
+  return jsonResponse({
+    runId: fields.runId,
+    callId: fields.callId,
+    taskId: task.id,
+    status: task.status,
+    expiresAt: task.expires_at,
+  });
+}
+
+async function actionLocalTaskStatus(admin: SupabaseClient, body: Record<string, unknown>): Promise<Response> {
+  const runId = typeof body.runId === "string" ? body.runId : "";
+  const leaseId = typeof body.leaseId === "string" ? body.leaseId : "";
+  const callId = typeof body.callId === "string" ? body.callId : "";
+  if (!runId || !leaseId || !/^[0-9a-f]{64}$/.test(callId)) throw new ApiError("invalid_request", "local task 查询字段无效");
+  await assertLease(admin, runId, leaseId);
+  const { data: task, error } = await admin.from("agent_local_tasks")
+    .select("id,call_id,status,result_object_key,result_sha256,result_mime,result_bytes,error_code,safe_message,expires_at")
+    .eq("run_id", runId).eq("call_id", callId).maybeSingle();
+  if (error) throw new ApiError("internal_error", "local task 查询失败", true);
+  if (!task) throw new ApiError("invalid_request", "local task 尚未登记", false, 404);
+  return jsonResponse({
+    runId,
+    callId,
+    status: task.status,
+    resultObjectKey: task.result_object_key,
+    resultSha256: task.result_sha256,
+    resultMime: task.result_mime,
+    resultBytes: task.result_bytes === null ? null : Number(task.result_bytes),
+    errorCode: task.error_code,
+    safeMessage: task.safe_message,
+    expiresAt: task.expires_at,
+  });
+}
+
+async function actionLocalTaskAwait(admin: SupabaseClient, body: Record<string, unknown>): Promise<Response> {
+  const runId = typeof body.runId === "string" ? body.runId : "";
+  const leaseId = typeof body.leaseId === "string" ? body.leaseId : "";
+  const callId = typeof body.callId === "string" ? body.callId : "";
+  if (!runId || !leaseId || !/^[0-9a-f]{64}$/.test(callId)) throw new ApiError("invalid_request", "local task 标识无效");
+  const run = await assertLease(admin, runId, leaseId);
+  const { data: task, error } = await admin.from("agent_local_tasks")
+    .select("id,call_id,status,step_id")
+    .eq("run_id", runId).eq("call_id", callId).maybeSingle();
+  if (error) throw new ApiError("internal_error", "local task 读取失败", true);
+  if (!task) throw new ApiError("invalid_request", "local task 尚未登记", false, 409);
+  // 桌面可能在状态检查与停车之间已回报结果；此时不再停车，引擎继续消费。
+  if (task.status !== "pending") {
+    return jsonResponse({ runId, callId, status: task.status, parked: false });
+  }
+  if (run.image_provider === "cloud") throw new ApiError("invalid_request", "Run 未启用本地生图", false, 409);
+  const transitioned = await transitionRun(admin, {
+    p_run_id: runId,
+    p_lease_id: leaseId,
+    p_to_status: "awaiting_local_task",
+    p_current_step: task.step_id,
+  });
+  return jsonResponse({
+    runId,
+    callId,
+    status: transitioned.status,
+    parked: true,
+  });
+}
+
 async function actionAwaitResultFeedback(admin: SupabaseClient, body: Record<string, unknown>): Promise<Response> {
   const runId = typeof body.runId === "string" ? body.runId : "";
   const leaseId = typeof body.leaseId === "string" ? body.leaseId : "";
@@ -867,6 +1025,12 @@ Deno.serve(async (request) => {
         return await actionArtifact(admin, body);
       case "artifact_get":
         return await actionArtifactGet(admin, body);
+      case "local_task_request":
+        return await actionLocalTaskRequest(admin, body);
+      case "local_task_status":
+        return await actionLocalTaskStatus(admin, body);
+      case "local_task_await":
+        return await actionLocalTaskAwait(admin, body);
       case "await_result_feedback":
         return await actionAwaitResultFeedback(admin, body);
       case "finish":

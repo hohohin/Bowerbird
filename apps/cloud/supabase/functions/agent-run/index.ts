@@ -20,6 +20,7 @@ interface CreateInput {
   inputCount: number;
   inputManifestHash: string;
   ratio?: string;
+  imageProvider?: string;
 }
 
 interface OwnRun {
@@ -111,10 +112,21 @@ async function loadOwnRun(admin: Parameters<typeof billingAccountId>[0], runId: 
   return { id: row.id, conversation_id: row.conversation_id, status: row.status, skill_id: row.skill_id };
 }
 
-function serviceBudget(service: string): { budget: number; pricingVersion: number } {
-  if (service === "smart-refinement") return { budget: 15, pricingVersion: 1 };
-  if (service === "bowerbird-controlled-image-edit") return { budget: 48, pricingVersion: 1 };
+function serviceBudget(service: string): { budget: number; pricingVersion: number; billingService: string } {
+  if (service === "smart-refinement") return { budget: 15, pricingVersion: 1, billingService: "agent_smart_refinement" };
+  if (service === "bowerbird-controlled-image-edit") {
+    return { budget: 48, pricingVersion: 1, billingService: "agent_controlled_image_edit" };
+  }
   throw new ApiError("invalid_request", "不支持的 Skill", false);
+}
+
+/** 暂时放宽 48 积分门控（0029）：余额不足全档时回落到 5 积分低档，而不是直接拒绝。
+ *  credit_hold 金额必须等于 service_costs.unit_cost，因此低档是独立 service 行；
+ *  budget_credits 与预授权同额，保持「actual ≤ hold」的结算不变量。 */
+function relaxedBudget(service: string, available: number): { budget: number; pricingVersion: number; billingService: string } {
+  const full = serviceBudget(service);
+  if (service !== "bowerbird-controlled-image-edit" || available >= full.budget) return full;
+  return { budget: 5, pricingVersion: full.pricingVersion, billingService: `${full.billingService}_min` };
 }
 
 async function actionCreate(admin: Parameters<typeof billingAccountId>[0], user: { id: string }, body: Record<string, unknown>, requestIdValue: string): Promise<Response> {
@@ -131,17 +143,37 @@ async function actionCreate(admin: Parameters<typeof billingAccountId>[0], user:
   if (body.ratio !== undefined && (typeof body.ratio !== "string" || body.ratio.length > 16)) {
     throw new ApiError("invalid_request", "ratio 无效");
   }
+  const requestedImageProvider = body.imageProvider ?? "cloud";
+  if (!["cloud", "jimeng", "codex"].includes(String(requestedImageProvider))) {
+    throw new ApiError("invalid_request", "生图引擎无效");
+  }
+  const imageProvider = requestedImageProvider as "cloud" | "jimeng" | "codex";
+  if (imageProvider !== "cloud" && skillId !== "bowerbird-controlled-image-edit") {
+    throw new ApiError("invalid_request", "该 Skill 不支持本机生图引擎");
+  }
 
-  const { budget, pricingVersion } = serviceBudget(skillId);
   const accountId = await billingAccountId(admin, user.id);
-  await ensureDailyCredits(admin, accountId);
+  const balances = await ensureDailyCredits(admin, accountId);
+  const available = balances.daily + balances.sub + balances.topup;
+
+  // 服务端 BYO 门控（约定 24）：本机 CLI 引擎仅 Pro/Studio 可用，客户端镜像不得作为唯一防线。
+  if (imageProvider !== "cloud") {
+    const { data: subscription, error: subError } = await admin.from("subscriptions")
+      .select("tier,status,current_period_end")
+      .eq("user_id", accountId)
+      .maybeSingle();
+    if (subError) throw new ApiError("internal_error", "订阅状态读取失败", true);
+    const active = subscription?.status === "active" &&
+      (!subscription.current_period_end || Date.parse(subscription.current_period_end) > Date.now());
+    if (!active || !["pro", "studio"].includes(subscription?.tier ?? "free")) {
+      throw new ApiError("upgrade_required", "Agent 本机生图引擎需要 Pro 或 Studio 订阅", false, 403);
+    }
+  }
 
   const idempotencyKey = typeof body.idempotencyKey === "string" && body.idempotencyKey.length >= 8
     ? body.idempotencyKey.slice(0, 128)
     : `agent-run-${user.id.slice(0, 8)}-${requestIdValue}`;
-  const billingService = skillId === "smart-refinement"
-    ? "agent_smart_refinement"
-    : "agent_controlled_image_edit";
+  const { budget, pricingVersion, billingService } = relaxedBudget(skillId, available);
   const hold = await holdCredits(admin, accountId, idempotencyKey, billingService);
 
   // Idempotent create: if a run row already references this hold, return it.
@@ -196,6 +228,7 @@ async function actionCreate(admin: Parameters<typeof billingAccountId>[0], user:
     input_count: inputCount,
     input_manifest_hash: body.inputManifestHash as string,
     request_object_key: requestKey,
+    image_provider: imageProvider,
     budget_credits: budget,
     hold_id: hold.holdId,
     pricing_version: pricingVersion,
@@ -334,12 +367,66 @@ async function actionGet(admin: Parameters<typeof billingAccountId>[0], user: { 
     catch { throw new ApiError("internal_error", "审批计划对象无效", true); }
     return { ...safeApproval, proposal };
   }));
+
+  // 本机生图停车态：内联待执行任务参数，桌面据此驱动对应 CLI。
+  let pendingLocalTask: Record<string, unknown> | null = null;
+  const runRow = run as { status?: string } | null;
+  if (runRow?.status === "awaiting_local_task") {
+    const { data: task, error: taskError } = await admin.from("agent_local_tasks")
+      .select("call_id,provider,step_id,params_object_key,expires_at")
+      .eq("run_id", runId).eq("status", "pending")
+      .order("created_at", { ascending: false }).limit(1).maybeSingle();
+    if (taskError) throw new ApiError("internal_error", "本地任务读取失败", true);
+    if (task) {
+      const object = await admin.storage.from(BUCKET).download(task.params_object_key as string);
+      if (object.error || !object.data) throw new ApiError("internal_error", "本地任务参数读取失败", true);
+      const bytes = new Uint8Array(await object.data.arrayBuffer());
+      if (!bytes.byteLength || bytes.byteLength > 64 * 1024) {
+        throw new ApiError("internal_error", "本地任务参数无效", true);
+      }
+      let params: { prompt?: unknown; ratio?: unknown; inputs?: unknown };
+      try { params = JSON.parse(new TextDecoder().decode(bytes)); }
+      catch { throw new ApiError("internal_error", "本地任务参数无效", true); }
+      const rawInputs = Array.isArray(params.inputs) ? params.inputs : [];
+      const artifactIds = rawInputs.map((raw) => String((raw as Record<string, unknown>)?.artifactId ?? "")).filter(Boolean);
+      const inputIndex = new Map<string, { role: string; stepId: string | null }>();
+      if (artifactIds.length) {
+        const { data: artifactRows, error: artifactError } = await admin.from("agent_artifacts")
+          .select("id,role,step_id")
+          .eq("run_id", runId).in("id", artifactIds);
+        if (artifactError) throw new ApiError("internal_error", "本地任务输入读取失败", true);
+        for (const row of artifactRows ?? []) {
+          inputIndex.set(row.id as string, { role: row.role as string, stepId: row.step_id as string | null });
+        }
+      }
+      pendingLocalTask = {
+        callId: task.call_id,
+        provider: task.provider,
+        stepId: task.step_id,
+        prompt: typeof params.prompt === "string" ? params.prompt : "",
+        ratio: typeof params.ratio === "string" ? params.ratio : null,
+        inputs: rawInputs.map((raw, index) => {
+          const item = (raw ?? {}) as Record<string, unknown>;
+          const artifactId = String(item.artifactId ?? "");
+          const known = inputIndex.get(artifactId);
+          return {
+            artifactId,
+            role: known?.role ?? String(item.role ?? ""),
+            stepId: known?.stepId ?? (typeof item.stepId === "string" ? item.stepId : null),
+            ordinal: index + 1,
+          };
+        }),
+        expiresAt: task.expires_at,
+      };
+    }
+  }
   return jsonResponse({
     conversationId: (run as { conversation_id?: string } | null)?.conversation_id ?? null,
     run,
     events: events ?? [],
     approvals: approvalsWithProposal,
     artifacts: artifacts ?? [],
+    ...(pendingLocalTask ? { pendingLocalTask } : {}),
   });
 }
 
@@ -398,7 +485,7 @@ async function actionCancel(admin: Parameters<typeof billingAccountId>[0], user:
   if (["succeeded", "failed", "cancelled"].includes(own.status)) {
     return jsonResponse({ runId, status: own.status, alreadyFinal: true });
   }
-  if (["uploading", "queued", "awaiting_approval", "awaiting_result_feedback"].includes(own.status)) {
+  if (["uploading", "queued", "awaiting_approval", "awaiting_result_feedback", "awaiting_local_task"].includes(own.status)) {
     const { data, error } = await admin.rpc("cancel_unleased_agent_run", { p_run_id: runId });
     if (error) throw new ApiError("internal_error", "取消结算失败", true);
     const settled = Array.isArray(data) ? data[0] : data;
@@ -490,6 +577,116 @@ async function actionResultFeedback(admin: Parameters<typeof billingAccountId>[0
   return jsonResponse({ conversationId: own.conversation_id, runId, feedbackAction: action, status: "queued" });
 }
 
+/** 本机 CLI 执行结果的确定性对象 key：与 agent-worker `artifact` commit 的
+ *  artifactFields 同规（runs/<runId>/artifacts/<callId>.<suffix>），桌面直传后
+ *  Worker 复用既有校验/幂等登记路径，无需第二套产物协议。 */
+function localResultObjectKey(runId: string, callId: string, mime: string): string | null {
+  const suffix = mime === "image/jpeg" ? "jpg" : mime === "image/webp" ? "webp" : mime === "image/png" ? "png" : null;
+  if (!suffix) return null;
+  return `runs/${runId}/artifacts/${callId}.${suffix}`;
+}
+
+async function actionLocalTaskPrepare(admin: Parameters<typeof billingAccountId>[0], user: { id: string }, body: Record<string, unknown>): Promise<Response> {
+  const runId = typeof body.runId === "string" ? body.runId : "";
+  const callId = typeof body.callId === "string" ? body.callId : "";
+  const mime = typeof body.mime === "string" ? body.mime : "";
+  if (!runId || !/^[0-9a-f]{64}$/.test(callId)) throw new ApiError("invalid_request", "本地任务标识无效");
+  if (!["image/png", "image/jpeg", "image/webp"].includes(mime)) throw new ApiError("invalid_request", "本地任务结果格式无效");
+  const own = await loadOwnRun(admin, runId, user.id);
+  if (own.status !== "awaiting_local_task") throw new ApiError("invalid_request", "Run 当前不等待本地执行", false, 409);
+  const objectKey = localResultObjectKey(runId, callId, mime);
+  if (!objectKey) throw new ApiError("invalid_request", "本地任务结果格式无效");
+  // call_id 结果允许同字节重传：桌面可能已上传成功、但 complete 回报在网络中断时丢失。
+  const { data, error } = await admin.storage.from(BUCKET).createSignedUploadUrl(objectKey, { upsert: true });
+  if (error || !data) throw new ApiError("internal_error", "本地任务上传地址签发失败", true);
+  return jsonResponse({ runId, callId, objectKey, uploadUrl: data.signedUrl, uploadToken: data.token });
+}
+
+async function actionLocalTaskComplete(admin: Parameters<typeof billingAccountId>[0], user: { id: string }, body: Record<string, unknown>): Promise<Response> {
+  const runId = typeof body.runId === "string" ? body.runId : "";
+  const callId = typeof body.callId === "string" ? body.callId : "";
+  const mime = typeof body.mime === "string" ? body.mime : "";
+  const sha256 = typeof body.sha256 === "string" ? body.sha256 : "";
+  const bytes = Number(body.bytes);
+  if (!runId || !/^[0-9a-f]{64}$/.test(callId) || !/^[0-9a-f]{64}$/.test(sha256) ||
+      !["image/png", "image/jpeg", "image/webp"].includes(mime) ||
+      !Number.isInteger(bytes) || bytes <= 0 || bytes > 20 * 1024 * 1024) {
+    throw new ApiError("invalid_request", "本地任务结果元数据无效");
+  }
+  const own = await loadOwnRun(admin, runId, user.id);
+  if (own.status !== "awaiting_local_task") throw new ApiError("invalid_request", "Run 当前不等待本地执行", false, 409);
+  const objectKey = localResultObjectKey(runId, callId, mime);
+  if (!objectKey) throw new ApiError("invalid_request", "本地任务结果格式无效");
+  const { data: task, error: taskError } = await admin.from("agent_local_tasks")
+    .select("id,status,expires_at")
+    .eq("run_id", runId).eq("call_id", callId).maybeSingle();
+  if (taskError) throw new ApiError("internal_error", "本地任务读取失败", true);
+  if (!task) throw new ApiError("invalid_request", "本地任务不存在", false, 404);
+  if (task.status !== "pending") throw new ApiError("invalid_request", "本地任务已处理", false, 409);
+  if (Date.parse(task.expires_at as string) <= Date.now()) {
+    throw new ApiError("invalid_request", "本地任务已超时", false, 410);
+  }
+  const object = await admin.storage.from(BUCKET).download(objectKey);
+  if (object.error || !object.data) throw new ApiError("invalid_request", "本地任务结果尚未上传", false, 409);
+  const objectBytes = new Uint8Array(await object.data.arrayBuffer());
+  if (objectBytes.byteLength !== bytes || await sha256Hex(objectBytes) !== sha256 || actualImageMime(objectBytes) !== mime) {
+    throw new ApiError("invalid_request", "本地任务结果校验失败", false, 409);
+  }
+  const { error: completeError } = await admin.from("agent_local_tasks")
+    .update({
+      status: "completed",
+      result_object_key: objectKey,
+      result_sha256: sha256,
+      result_mime: mime,
+      result_bytes: bytes,
+      completed_at: new Date().toISOString(),
+    })
+    .eq("id", task.id as string)
+    .eq("status", "pending");
+  if (completeError) throw new ApiError("internal_error", "本地任务完成失败", true);
+  const { error: queueError } = await admin.from("agent_runs")
+    .update({ status: "queued", queued_at: new Date().toISOString() })
+    .eq("id", runId)
+    .eq("status", "awaiting_local_task");
+  if (queueError) throw new ApiError("internal_error", "Run 重新入队失败", true);
+  return jsonResponse({ runId, callId, status: "queued" });
+}
+
+async function actionLocalTaskFail(admin: Parameters<typeof billingAccountId>[0], user: { id: string }, body: Record<string, unknown>): Promise<Response> {
+  const runId = typeof body.runId === "string" ? body.runId : "";
+  const callId = typeof body.callId === "string" ? body.callId : "";
+  const errorCode = typeof body.errorCode === "string" && /^[A-Za-z0-9._:-]{1,80}$/.test(body.errorCode)
+    ? body.errorCode
+    : "local_task_failed";
+  const safeMessage = typeof body.safeMessage === "string" && body.safeMessage.trim()
+    ? body.safeMessage.trim().slice(0, 500)
+    : "本地生图失败";
+  if (!runId || !/^[0-9a-f]{64}$/.test(callId)) throw new ApiError("invalid_request", "本地任务标识无效");
+  const own = await loadOwnRun(admin, runId, user.id);
+  if (own.status !== "awaiting_local_task") throw new ApiError("invalid_request", "Run 当前不等待本地执行", false, 409);
+  const { error: taskError } = await admin.from("agent_local_tasks")
+    .update({
+      status: "failed",
+      error_code: errorCode,
+      safe_message: safeMessage,
+      completed_at: new Date().toISOString(),
+    })
+    .eq("run_id", runId).eq("call_id", callId).eq("status", "pending");
+  if (taskError) throw new ApiError("internal_error", "本地任务失败登记失败", true);
+  const { data, error } = await admin.rpc("fail_unleased_agent_run", {
+    p_run_id: runId,
+    p_error_code: errorCode,
+    p_safe_message: safeMessage,
+  });
+  if (error) throw new ApiError("internal_error", "本地任务失败结算失败", true);
+  const settled = Array.isArray(data) ? data[0] : data;
+  return jsonResponse({
+    runId,
+    status: "failed",
+    actualCredits: Number((settled as { actual_credits?: number } | null)?.actual_credits ?? 0),
+  });
+}
+
 Deno.serve(async (request) => {
   const id = requestId(request);
   let cors: HeadersInit = {};
@@ -524,6 +721,12 @@ Deno.serve(async (request) => {
         return await actionArtifactReceived(admin, user, body);
       case "result_feedback":
         return await actionResultFeedback(admin, user, body);
+      case "local_task_prepare":
+        return await actionLocalTaskPrepare(admin, user, body);
+      case "local_task_complete":
+        return await actionLocalTaskComplete(admin, user, body);
+      case "local_task_fail":
+        return await actionLocalTaskFail(admin, user, body);
       default:
         throw new ApiError("invalid_request", "未知 action");
     }

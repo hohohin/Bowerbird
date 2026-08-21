@@ -7,6 +7,7 @@ import {
   composeControlledRevisionPlan,
 } from "../skills/bowerbird-controlled-image-edit/model-planner.ts";
 import type { AgentLeaseSignal } from "../cloud-agent/runtime.ts";
+import { LocalTaskPendingError } from "../providers/local/local-approved-step-executor.ts";
 import {
   completeControlledExport,
   createControlledRunnerCheckpoint,
@@ -35,6 +36,7 @@ export type ControlledRunEngineOutcome =
   | "awaiting_approval"
   | "awaiting_result_feedback"
   | "awaiting_revision"
+  | "awaiting_local_task"
   | "stopped"
   | "succeeded"
   | "cancelled";
@@ -47,6 +49,8 @@ export interface ControlledRunControl {
     estimatedAdditionalCredits: number;
   }): Promise<void>;
   awaitResultFeedback(checkpoint: ControlledRunnerCheckpoint): Promise<void>;
+  /** 本机生图停车：登记任务后释放租约；parked=false 表示桌面恰好已回报，继续循环。 */
+  awaitLocalTask(callId: string): Promise<{ parked: boolean }>;
   finish(checkpoint: ControlledRunnerCheckpoint): Promise<void>;
 }
 
@@ -185,7 +189,19 @@ export async function advanceControlledRun(request: AdvanceControlledRunRequest)
         break;
       }
       case "execute_approved_plan": {
-        checkpoint = await executeNextControlledStep(checkpoint, request.executor);
+        try {
+          checkpoint = await executeNextControlledStep(checkpoint, request.executor);
+        } catch (error) {
+          if (error instanceof LocalTaskPendingError) {
+            // 本机生图停车：checkpoint 先行（游标不动），再释放租约等桌面回报；
+            // 恢复重放与审批同款幂等（任务按 run_id+call_id 去重）。
+            await request.control.saveCheckpoint(checkpoint, progress(checkpoint));
+            const awaited = await request.control.awaitLocalTask(error.callId);
+            if (awaited.parked) return { checkpoint, outcome: "awaiting_local_task" };
+            break;
+          }
+          throw error;
+        }
         await request.control.saveCheckpoint(checkpoint, progress(checkpoint));
         if (checkpoint.phase === "awaiting_result_feedback") {
           await request.control.awaitResultFeedback(checkpoint);

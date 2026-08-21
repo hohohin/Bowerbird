@@ -38,6 +38,7 @@ export type ClaimedAgentRun = {
     pricingVersion: number;
     checkpointHash: string | null;
     snapshotSchemaVersion: number | null;
+    imageProvider?: "cloud" | "jimeng" | "codex";
   };
   lease?: { leaseId: string; leaseSeconds: number };
   inputUrl?: string | null;
@@ -77,6 +78,18 @@ export type PreparedToolCall = {
   resultObjectKey?: string | null;
   resultHash?: string | null;
   reused: boolean;
+};
+
+export type LocalTaskRecord = {
+  callId: string;
+  status: "pending" | "completed" | "failed" | "expired";
+  resultObjectKey?: string | null;
+  resultSha256?: string | null;
+  resultMime?: string | null;
+  resultBytes?: number | null;
+  errorCode?: string | null;
+  safeMessage?: string | null;
+  expiresAt?: string | null;
 };
 
 export type AgentDisplayEvent = {
@@ -337,12 +350,79 @@ export class AgentControlClient {
     return await this.post({ action: "artifact_get", runId, leaseId, callId }) as unknown as RegisteredAgentArtifact;
   }
 
+  async requestLocalTask(args: {
+    runId: string;
+    leaseId: string;
+    callId: string;
+    provider: "jimeng" | "codex";
+    stepId: string;
+    params: {
+      prompt: string;
+      ratio?: string | null;
+      inputs: Array<{ artifactId: string; role: string; stepId: string | null }>;
+    };
+  }): Promise<LocalTaskRecord> {
+    return await this.post({
+      action: "local_task_request",
+      runId: args.runId,
+      leaseId: args.leaseId,
+      callId: args.callId,
+      provider: args.provider,
+      stepId: args.stepId,
+      expiresInSeconds: 1800,
+      params: {
+        prompt: args.params.prompt,
+        ratio: args.params.ratio ?? null,
+        inputs: args.params.inputs,
+      },
+    }) as unknown as LocalTaskRecord;
+  }
+
+  async getLocalTaskStatus(runId: string, leaseId: string, callId: string): Promise<LocalTaskRecord> {
+    return await this.post({ action: "local_task_status", runId, leaseId, callId }) as unknown as LocalTaskRecord;
+  }
+
+  async awaitLocalTask(runId: string, leaseId: string, callId: string): Promise<{ parked: boolean; status: string }> {
+    const result = await this.post({ action: "local_task_await", runId, leaseId, callId });
+    return {
+      parked: result.parked === true,
+      status: typeof result.status === "string" ? result.status : "unknown",
+    };
+  }
+
+  /** 桌面已直传到确定性 artifact key 的本地生图结果：只走 commit 校验登记，不再 PUT。 */
+  async registerLocalArtifact(args: {
+    runId: string;
+    leaseId: string;
+    sourceCallId: string;
+    role: "control_reference" | "stage_result" | "final_result";
+    stepId: string;
+    parentArtifactId?: string;
+    mime: "image/png" | "image/jpeg" | "image/webp";
+    bytes: number;
+    sha256: string;
+  }): Promise<RegisteredAgentArtifact> {
+    return await this.post({
+      action: "artifact",
+      runId: args.runId,
+      leaseId: args.leaseId,
+      sourceCallId: args.sourceCallId,
+      role: args.role,
+      stepId: args.stepId,
+      parentArtifactId: args.parentArtifactId,
+      mime: args.mime,
+      bytes: args.bytes,
+      sha256: args.sha256,
+      userVisible: true,
+    }) as unknown as RegisteredAgentArtifact;
+  }
+
   async recordUsage(args: {
     runId: string;
     leaseId: string;
     callId: string;
     kind: "model_tokens" | "vision_call" | "image_generation";
-    provider: "deepseek" | "ark";
+    provider: "deepseek" | "ark" | "jimeng" | "codex";
     model: string;
     inputUnits?: number;
     outputUnits?: number;

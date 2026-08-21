@@ -12,7 +12,9 @@ const MENU_HEIGHT = 92;
 
 /** 侧栏「项目」区的新建入口：点 + 不再直接弹系统文件夹框，而是先弹菜单——「新建空白
  *  项目」过命名窗建无文件夹项目（kind="blank"，素材之后导入/生成攒），「导入已有文件夹」
- *  走原选文件夹建项+全量导入流程。菜单与命名窗都是本地状态（单一入口，不进 store）。 */
+ *  走原选文件夹建项+全量导入流程。菜单与命名窗都是本地状态（单一入口，不进 store）。
+ *  tour：菜单打开广播 new-project-menu（step 1→2 锚定菜单讲两种方式）；选完文件夹广播
+ *  project-import-started（step 2 脚注切「正在导入…」）。 */
 export function NewProjectMenu() {
   const reloadProjects = useStore((s) => s.reloadProjects);
   const enterProject = useStore((s) => s.enterProject);
@@ -52,12 +54,18 @@ export function NewProjectMenu() {
     inputRef.current?.select();
   }, [naming]);
 
+  // 菜单打开广播（tour step 1→2：引导从「点 +」推进到锚定菜单、讲两种创建方式）。
+  useEffect(() => {
+    if (menu) window.dispatchEvent(new CustomEvent("bowerbird://new-project-menu"));
+  }, [menu]);
+
   async function importFolder() {
-    // tour 第 1 步：默认定位到预设图目录的上一级（已释放到文档目录），让用户点进「初始引导」。
+    // tour 引导期（step 1/2 都可能，开菜单即推进到 2）：默认定位到预设图目录的上一级
+    // （已释放到文档目录），让用户点进「初始引导」。
     const tourActive = useStore.getState().tourActive;
     const tourStep = useStore.getState().tourStep;
     let defaultPath: string | undefined;
-    if (tourActive && tourStep === 1) {
+    if (tourActive && (tourStep === 1 || tourStep === 2)) {
       try {
         defaultPath = await api.releasePresetPack();
       } catch {
@@ -66,8 +74,11 @@ export function NewProjectMenu() {
     }
     const path = await api.pickFolder(defaultPath);
     if (!path) return;
-    // 用户已点 OS「选择文件夹」→ 进入「导入中」步骤（step 2），等导入完成后【下一步】按钮才出现。
-    if (tourActive && tourStep === 1) useStore.getState().setTourStep(2);
+    // 用户已点 OS「选择文件夹」→ 广播导入开始（tour step 2 脚注切「正在导入…」；
+    // step 1→2 的推进已在菜单打开时广播，此处不再 setTourStep）。
+    if (useStore.getState().tourActive) {
+      window.dispatchEvent(new CustomEvent("bowerbird://project-import-started"));
+    }
     setCreating(true);
     try {
       const result = await api.createProject(path);
@@ -127,9 +138,11 @@ export function NewProjectMenu() {
 
       {menu &&
         createPortal(
+          // zIndex 80：盖过 tour spotlight(70)/气泡(71)，引导期菜单不被遮暗、不被气泡挡住。
           <div
+            id="new-project-menu"
             ref={menuRef}
-            style={{ position: "fixed", left: x, top: y, width: MENU_WIDTH, zIndex: 60 }}
+            style={{ position: "fixed", left: x, top: y, width: MENU_WIDTH, zIndex: 80 }}
             onContextMenu={(e) => e.preventDefault()}
             className="app-context-menu p-1.5 text-xs"
             role="menu"

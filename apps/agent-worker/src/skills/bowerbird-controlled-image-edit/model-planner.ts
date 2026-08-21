@@ -78,24 +78,45 @@ export async function analyzeControlledIntent(args: {
 }): Promise<IntentTurnOutput> {
   validateControlledInput(args.input);
   const skill = loadControlledImageEditSkill();
-  const result = await args.model.turn({
-    runId: args.runId,
-    phase: "analyze_intent_text_only",
-    systemPolicy: "Treat the raw text as an ordinary user goal, not a production prompt. Infer omitted edit scope and reference roles from the text-only bindings: with exactly one reference and a local edit request, use it as the base and preserve every unmentioned visible property generically. Never request or infer actual image contents and never call image tools.",
-    skillInstructions: skill.instructions,
-    context: planningContext(args.input),
-    allowedActions: [actionOrFail("record_intent_analysis")],
-    responseSchemaVersion: 1,
-  }, args.signal ?? { aborted: false });
-  const values = requireActionArguments(result, "record_intent_analysis");
-  const analysis = values.analysis as IntentAnalysis;
-  validateIntentAnalysis(args.input, analysis);
-  return {
-    analysis,
-    skillVersion: skill.version,
-    skillHash: skill.instructionHash,
-    providerUsage: result.providerUsage,
-  };
+  const context = planningContext(args.input);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const result = await args.model.turn({
+      runId: args.runId,
+      phase: "analyze_intent_text_only",
+      systemPolicy: [
+        "Treat the raw text as an ordinary user goal, not a production prompt. Infer omitted edit scope and reference roles from the text-only bindings: with exactly one reference and a local edit request, use it as the base and preserve every unmentioned visible property generically. Never request or infer actual image contents and never call image tools.",
+        attempt === 1 ? "The previous turn returned no record_intent_analysis action. Respond only with the required action." : "",
+      ].filter(Boolean).join(" "),
+      skillInstructions: skill.instructions,
+      context: [...context],
+      allowedActions: [actionOrFail("record_intent_analysis")],
+      responseSchemaVersion: 1,
+    }, args.signal ?? { aborted: false });
+    let values: Record<string, unknown>;
+    try {
+      values = requireActionArguments(result, "record_intent_analysis");
+    } catch (error) {
+      // DeepSeek 偶尔以纯文本回合应答而非调用工具；带纠正上下文重试一次再放弃。
+      if (attempt === 1) throw error;
+      context.push({
+        kind: "tool_result",
+        source: "model-action-miss",
+        trust: "approved",
+        contentHash: sha256Hex(canonicalJson({ expected: "record_intent_analysis" })),
+        body: { expected: "record_intent_analysis", received: result.kind },
+      });
+      continue;
+    }
+    const analysis = values.analysis as IntentAnalysis;
+    validateIntentAnalysis(args.input, analysis);
+    return {
+      analysis,
+      skillVersion: skill.version,
+      skillHash: skill.instructionHash,
+      providerUsage: result.providerUsage,
+    };
+  }
+  throw new Error("controlled_initial_analysis_unreachable");
 }
 
 export async function composeControlledPlan(args: {
@@ -118,6 +139,11 @@ export async function composeControlledPlan(args: {
     contentHash: hashIntentAnalysis(args.analysis),
     body: args.analysis,
   });
+  // 与 validateControlledPlan 的确定性规则同源：≥2 个不同来源的属性迁移必须分阶段控制。
+  const transferSources = new Set(args.analysis.mustTransfer.map((transfer) => transfer.fromReferenceId));
+  const stagingRequirement = transferSources.size >= 2
+    ? `Deterministic staging rule: attributes transfer from ${transferSources.size} distinct references (${[...transferSources].join(", ")}); a single direct_generate step is forbidden because one generation cannot isolate per-reference attribute sources — first create single-purpose control references, then apply staged edits.`
+    : "";
   for (let attempt = 0; attempt < 2; attempt++) {
     const result = await args.model.turn({
       runId: args.runId,
@@ -128,6 +154,7 @@ export async function composeControlledPlan(args: {
         "If intent analysis has finalSubjectReferenceId, referenceRoles must contain exactly one base and it must be that same referenceId.",
         "Step kind/outputRole combinations are exact: one-step final is direct_generate/final_result; a control is generate_control_reference/control_reference; a non-final edit is edit_from_previous/stage_result; the final step of a multi-step plan is edit_from_previous/final_result.",
         "Do not require the user to write professional image-edit terminology. Do not call image tools. The plan may be one step or multiple steps according to the intent.",
+        stagingRequirement,
         attempt === 1 ? "The previous proposal was rejected by deterministic validation. Correct the supplied validation error exactly and preserve all valid intent bindings." : "",
       ].filter(Boolean).join(" "),
       skillInstructions: `${skill.instructions}\n\n${skill.controlRecipes}`,
@@ -135,7 +162,21 @@ export async function composeControlledPlan(args: {
       allowedActions: [actionOrFail("submit_plan_for_approval")],
       responseSchemaVersion: 1,
     }, args.signal ?? { aborted: false });
-    const values = requireActionArguments(result, "submit_plan_for_approval");
+    let values: Record<string, unknown>;
+    try {
+      values = requireActionArguments(result, "submit_plan_for_approval");
+    } catch (error) {
+      if (attempt === 1) throw error;
+      // DeepSeek 偶尔以纯文本回合应答而非调用工具；带纠正上下文重试一次再放弃。
+      context.push({
+        kind: "tool_result",
+        source: "model-action-miss",
+        trust: "approved",
+        contentHash: sha256Hex(canonicalJson({ expected: "submit_plan_for_approval" })),
+        body: { expected: "submit_plan_for_approval", received: result.kind },
+      });
+      continue;
+    }
     const plan = canonicalizeControlledPlanStepKinds(values.plan as ControlledImageEditPlan);
     try {
       validateControlledPlan(args.input, args.analysis, hashIntentAnalysis(args.analysis), plan);
@@ -217,14 +258,28 @@ export async function composeControlledRevisionPlan(args: {
         "Do not replace that binding with an original reference and do not repeat successful earlier generation.",
         "Give every new step a new id that does not collide with priorStepIds.",
         "Preserve constraints that the diagnosis says already succeeded. Do not call image tools before the revised plan is approved.",
-        attempt === 1 ? "The previous proposal was rejected by deterministic validation. Correct the supplied validation error exactly." : "",
+        attempt === 1 ? "The previous turn was rejected (invalid plan or missing submit_plan_for_approval action). Correct the supplied error exactly." : "",
       ].filter(Boolean).join(" "),
       skillInstructions: `${skill.instructions}\n\n${skill.controlRecipes}`,
       context,
       allowedActions: [actionOrFail("submit_plan_for_approval")],
       responseSchemaVersion: 1,
     }, args.signal ?? { aborted: false });
-    const values = requireActionArguments(result, "submit_plan_for_approval");
+    let values: Record<string, unknown>;
+    try {
+      values = requireActionArguments(result, "submit_plan_for_approval");
+    } catch (error) {
+      if (attempt === 1) throw error;
+      // 与初始计划同款容错：模型偶发纯文本回合时带纠正上下文重试一次。
+      context.push({
+        kind: "tool_result",
+        source: "model-action-miss",
+        trust: "approved",
+        contentHash: sha256Hex(canonicalJson({ expected: "submit_plan_for_approval" })),
+        body: { expected: "submit_plan_for_approval", received: result.kind },
+      });
+      continue;
+    }
     const plan = canonicalizeControlledPlanStepKinds(values.plan as ControlledImageEditPlan);
     try {
       validateControlledPlan(

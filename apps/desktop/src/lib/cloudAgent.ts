@@ -5,6 +5,7 @@ export function cloudAgentStatusLabel(status: string): string {
     leased: "Agent 已领取任务",
     running: "Agent 正在规划或执行",
     awaiting_approval: "等待你批准计划",
+    awaiting_local_task: "等待本机生成",
     awaiting_result_feedback: "等待你验收结果",
     exporting: "正在完成结算",
     cancel_requested: "正在安全取消",
@@ -20,6 +21,7 @@ export function cloudAgentFailureMessage(message?: string | null): string {
   const labels: Record<string, string> = {
     controlled_plan_base_reference_mismatch: "Agent 发现计划中的人物底图与意图分析不一致，已安全停止且未继续生图。请重新发起该任务。",
     controlled_plan_reference_roles_incomplete: "Agent 未能可靠绑定全部参考图职责，已安全停止且未继续生图。请重新发起该任务。",
+    controlled_plan_multi_transfer_requires_staging: "该意图需要从多个参考图迁移不同属性，单次生成无法隔离它们。请重新发起，Agent 会生成分阶段控制计划。",
   };
   if (labels[message]) return labels[message];
   if (/^[a-z0-9_:-]+$/i.test(message)) {

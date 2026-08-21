@@ -87,6 +87,16 @@ function checkpointEvents(checkpoint: ControlledRunnerCheckpoint, progress: numb
       { seq: base + 80, type: "result.ready", progress, displayPayload: { artifactId: artifact?.artifactId } },
     ];
   }
+  if (checkpoint.phase === "diagnose_feedback" && checkpoint.feedback) {
+    // 反馈驱动的重诊断往往耗时数十秒（Vision + 文本回合）；进入该阶段即发事件，
+    // 让桌面时间线立刻可见「正在按你的意见重新诊断」，而不是等到诊断完成才有动静。
+    return [{
+      seq: base + 85,
+      type: "feedback.diagnosis.started",
+      progress,
+      displayPayload: { summary: checkpoint.feedback.slice(0, 500) },
+    }];
+  }
   if (checkpoint.phase === "compose_revision_plan" && checkpoint.feedbackDiagnosis) {
     return [{
       seq: base + 90,
@@ -249,6 +259,9 @@ export class ControlledImageEditRunProcessor implements AgentRunProcessor {
       },
       awaitResultFeedback: async (_checkpoint: ControlledRunnerCheckpoint) => {
         await context.control.awaitResultFeedback(runId, leaseId);
+      },
+      awaitLocalTask: async (callId: string) => {
+        return await context.control.awaitLocalTask(runId, leaseId, callId);
       },
       finish: async (_checkpoint: ControlledRunnerCheckpoint) => {
         await context.control.finish(runId, leaseId);

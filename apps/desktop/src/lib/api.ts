@@ -62,6 +62,7 @@ export const api = {
     references: Array<{ assetId: string; promptToken?: string | null }>;
     ratio?: string | null;
     projectId?: string | null;
+    imageProvider?: "cloud" | "jimeng" | "codex" | null;
   }) => invoke<CloudAgentRunRecord>("cloud_agent_start", input),
   cloudAgentLatest: () => invoke<CloudAgentRunRecord | null>("cloud_agent_latest"),
   cloudAgentList: () => invoke<CloudAgentRunRecord[]>("cloud_agent_list"),
@@ -80,6 +81,8 @@ export const api = {
     invoke<Asset>("cloud_agent_ingest_final", { runId, artifactId }),
   cloudAgentIngestArtifacts: (runId: string) =>
     invoke<Asset[]>("cloud_agent_ingest_artifacts", { runId }),
+  cloudAgentExecuteLocalTask: (runId: string) =>
+    invoke<CloudAgentRunRecord>("cloud_agent_execute_local_task", { runId }),
 
   // Agent Z/G（dev-only）：创作板消息投递到 Claude Code（z）/ codex（g）TUI 终端
   agentZHealth: () =>

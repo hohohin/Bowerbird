@@ -118,7 +118,8 @@ export function CreationBoard() {
   const [agentZAvailable, setAgentZAvailable] = useState(false);
   const [agentZBusy, setAgentZBusy] = useState(false);
   // Agent G（dev-only）：同机制投递到 codex TUI 终端（独立窗口会话）；与 A/B/Z/DS 互斥。
-  // busy 与 Z 共用（同一后端命令通路）。可用性跟 codexHealth（codex CLI 安装 + 登录态）。
+  // busy 与 Z 共用（同一后端命令通路）。可用性 = Z 通道探活（release 构建后端拒绝 → 不渲染，
+  // 约定 30/36 同款门控）+ codexHealth（codex CLI 安装 + 登录态）。
   const [agentGMode, setAgentGMode] = useState(false);
   // Agent DS（dev-only）：DeepSeek 对话 harness，对话发生在创作板内（回复追加进编辑器）；
   // 与 A/B/Z 互斥。可用性与 Agent A/B 同源（agent-worker + cloud/.env）。
@@ -228,7 +229,28 @@ export function CreationBoard() {
     : activeGenProvider === "jimeng"
       ? canUseByo(cloudEntitlement) && !!dreaminaHealth?.ok
       : canUseByo(cloudEntitlement) && !!codexHealth?.ok;
-  const cloudAgentReady = cloudAvailable && !!cloudAuth?.logged_in && cloudBalance >= 48;
+  // 正式 Agent 的生图引擎跟随当前选择：Cloud 各档 → 云端方舟 Seedream；即梦 / Codex →
+  // 桌面本地 CLI（文本、审批与编排仍在云端，生图步骤经 awaiting_local_task 委托本机）。
+  const agentImageProvider = activeGenProvider === "jimeng"
+    ? "jimeng"
+    : activeGenProvider === "codex"
+      ? "codex"
+      : isCloudProvider(activeGenProvider)
+        ? "cloud"
+        : null;
+  const localAgentProviderReady = agentImageProvider === "jimeng"
+    ? canUseByo(cloudEntitlement) && !!dreaminaHealth?.ok
+    : agentImageProvider === "codex"
+      ? canUseByo(cloudEntitlement) && !!codexHealth?.ok
+      : true;
+  // 预授权门控暂缓（0029）：不再要求余额 ≥48，云端按可用余额回落低档（≥5 即可启动）；
+  // 真正的余额校验由服务端 credit_hold 权威执行。
+  const cloudAgentReady =
+    !!agentImageProvider &&
+    cloudAvailable &&
+    !!cloudAuth?.logged_in &&
+    cloudBalance >= 5 &&
+    localAgentProviderReady;
   const targetProviderLabel = isCloudProvider(activeGenProvider)
     ? (cloudProviderLabel(activeGenProvider, cloudEntitlement) ?? "Bowerbird Cloud")
     : activeGenProvider === "jimeng"
@@ -258,6 +280,7 @@ export function CreationBoard() {
           })),
           ratio,
           projectId: useStore.getState().currentProjectId,
+          imageProvider: agentImageProvider,
         });
         openCloudAgentRun(run);
         notifySuccess("Agent 会话已创建，正在进行纯文本意图分析");
@@ -613,7 +636,7 @@ export function CreationBoard() {
           <div className={`${agentZMode || agentGMode || agentDsMode ? "pointer-events-none opacity-40" : ""}`}>
             <RatioSelect value={ratio} onChange={selectRatio} />
           </div>
-          <div className={`${cloudAgentMode || agentZMode || agentGMode || agentDsMode ? "pointer-events-none opacity-40" : ""}`}>
+          <div className={`${agentZMode || agentGMode || agentDsMode ? "pointer-events-none opacity-40" : ""}`}>
             <ProviderSelect
               value={activeGenProvider}
               onChange={setActiveGenProvider}
@@ -640,9 +663,21 @@ export function CreationBoard() {
             }}
             title={!cloudAuth?.logged_in
               ? "请先登录 Bowerbird 账号"
-              : cloudBalance < 48
-                ? "Agent Run 启动时需预留 48 积分；结束后按实际工具调用结算并释放余量"
-                : "先只从文字分析真实意图，给出可审批计划；批准后才调用方舟工具，结果反馈会形成新的修订计划"}
+              : !agentImageProvider
+                ? "当前生图引擎不支持 Agent"
+                : agentImageProvider !== "cloud" && !canUseByo(cloudEntitlement)
+                  ? "升级 Pro 解锁本机 Codex / 即梦 CLI Agent 生图"
+                  : agentImageProvider === "jimeng" && !dreaminaHealth?.ok
+                    ? "即梦 CLI 不可用：请先在「设置 · 模型设置」完成安装与登录"
+                    : agentImageProvider === "codex" && !codexHealth?.ok
+                      ? "Codex CLI 不可用：请先在「设置 · 模型设置」完成安装与登录"
+                      : cloudBalance < 5
+                        ? "积分不足：Agent Run 启动时会预授权积分，结束后按实际工具调用结算"
+                        : agentImageProvider === "jimeng"
+                          ? "先只从文字分析真实意图，给出可审批计划；批准后生图步骤用本机即梦执行（不消耗 Bowerbird 积分）"
+                          : agentImageProvider === "codex"
+                            ? "先只从文字分析真实意图，给出可审批计划；批准后生图步骤用本机 Codex 执行（消耗 Codex 订阅额度，不消耗 Bowerbird 生图积分）"
+                            : "先只从文字分析真实意图，给出可审批计划；批准后才调用方舟工具，结果反馈会形成新的修订计划"}
             className={`generation-glow-button flex h-7 items-center rounded-[3px] px-2.5 text-xs font-medium disabled:opacity-40 ${
               cloudAgentMode ? "" : "is-off"
             }`}
@@ -712,7 +747,7 @@ export function CreationBoard() {
               </span>
             </button>
           )}
-          {codexHealth?.ok && (
+          {agentZAvailable && codexHealth?.ok && (
             <button
               type="button"
               role="switch"
@@ -789,8 +824,8 @@ export function CreationBoard() {
               cloudAgentMode
                 ? !cloudAuth?.logged_in
                   ? "请先登录 Bowerbird 账号"
-                  : cloudBalance < 48
-                    ? "Agent Run 启动时需预留 48 积分；结束后按实际工具调用结算"
+                  : cloudBalance < 5
+                    ? "积分不足：Agent Run 启动时会预授权积分，结束后按实际工具调用结算"
                     : "创建 Bowerbird Agent 会话：先分析文字并提交计划，批准后才执行"
                 : agentZMode
                 ? "发送到 Agent Z 终端（Claude Code TUI）：对话为主；涉及生图由 Claude Code 理解后自行调用 dreamina CLI"

@@ -199,6 +199,7 @@ pub fn run() {
             commands::cloud_agent::cloud_agent_preview_artifact,
             commands::cloud_agent::cloud_agent_ingest_final,
             commands::cloud_agent::cloud_agent_ingest_artifacts,
+            commands::cloud_agent::cloud_agent_execute_local_task,
             commands::projects::create_project,
             commands::projects::create_blank_project,
             commands::preset::release_preset_pack,

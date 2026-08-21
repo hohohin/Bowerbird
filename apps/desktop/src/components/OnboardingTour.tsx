@@ -14,13 +14,17 @@ const TOUR_SKIP_STEP_ENABLED = true;
 const STEP_DEFS: Record<number, StepDef> = {
   1: {
     title: "先来创建一个项目吧",
-    body: "点击后，在菜单中选择「导入已有文件夹」，然后选择「初始引导」文件夹，点击右下角「选择文件夹」按钮，创建项目。",
+    side: "right",
+    body: "点击这个 + 号，看看创建项目的两种方式。",
   },
   2: {
+    side: "right",
     body:
-      "稍等片刻，正在导入文件夹内的图片。\n\n" +
-      "tips：后续您也可以像这样选择您的素材文件夹，一键导入所有素材并建立为项目，建议文件夹内只存放图片素材。\n" +
-      "项目建好后，若通过外部应用添加了图片，可右键选「更新项目文件」同步进Bowerbird项目。",
+      "两种创建方式：\n" +
+      "「新建空白项目」——先建一个空项目，不关联任何文件夹，素材之后再导入或生成；\n" +
+      "「导入已有文件夹」——选一个装着图片的文件夹，一键导入全部素材并建立项目。\n\n" +
+      "本引导走第二种：点击「导入已有文件夹」，选择「初始引导」文件夹，然后点右下角「选择文件夹」。\n\n" +
+      "tips：建议文件夹内只存放图片素材；项目建好后若通过外部应用添加了图片，可右键「更新项目文件」同步。",
   },
   3: {
     side: "right",
@@ -122,13 +126,15 @@ function editorTextEndCoords(): { x: number; y: number } | null {
 /**
  * 新手引导 tour（阶段 B，替代首启自动注入）。自写 spotlight（box-shadow 挖洞 z-70 + pulse ring
  * + 气泡 z-71）+ 虚拟鼠标（z-72，移动到目标 + 脉冲点击示意），零依赖。步骤：
- * 0 入口弹窗 → 1 新建项目 → 2 导入中 → 3 进入项目状态（侧栏激活项目）→ 4 首图右键 →
+ * 0 入口弹窗 → 1 点 + 开新建菜单 → 2 两种创建方式（锚菜单本体，选完文件夹转「导入中」）→
+ * 3 进入项目状态（侧栏激活项目）→ 4 首图右键 →
  * 5 菜单复用 → 6 编辑框 → 7 虚拟鼠标示意点编辑框（用户真点）→ 8 虚拟鼠标指向 preset-05
  * （用户真长按 → 四周呼出维度环 CaptionRing）→ 9 高亮维度环 → 10 虚拟鼠标示意点
  * 环上「构图」扇区（用户真点）→ 11 高亮编辑框教关环手势（用户真关环）→ 12 高亮瀑布流
  * 讲创作模式左键行为【下一步】→ 13 虚拟鼠标指向「退出创作模式」页签（用户真点退出）→
  * 14 结束语。
- * 推进：1→2 ProjectSection.create 选完文件夹；2→3【下一步】（tourImported 后）；
+ * 推进：1→2 + 按钮菜单打开（new-project-menu 事件，NewProjectMenu 广播）；
+ * 2→3【下一步】（tourImported 后；step 2 期间收到 project-import-started 事件起脚注显「正在导入…」）；
  * 3→4【下一步】；4→5 右键首图（contextMenu）；5→6 点复用（board-load-prompt）；6→7【下一步】；
  * 7→8 用户真点编辑框；8→9 用户真长按瀑布流图（store.captionRing）；9→10【下一步】；
  * 10→11 用户真点环上维度扇区（CaptionRing pick）；11→12 用户真关环（captionRing 收起，
@@ -149,6 +155,8 @@ export function OnboardingTour() {
   const yysyAsset = assets.find((a) => a.name === "罂粟夜宴");
   const [rect, setRect] = useState<DOMRect | null>(null);
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
+  // step 2 是否已选完文件夹（导入即将/正在跑）：脚注在「按提示操作」与「正在导入…」间切换。
+  const [importStarted, setImportStarted] = useState(false);
 
   const selector: string | null = (() => {
     if (!tourActive || tourStep <= 0 || tourStep >= 14) return null;
@@ -172,7 +180,13 @@ export function OnboardingTour() {
       return;
     }
     const measure = () => {
-      const el = document.querySelector(selector) as HTMLElement | null;
+      // step 1/2：菜单打开时锚菜单本体（讲两种创建方式；新建菜单 z-80 在 spotlight 之上）；
+      // 菜单已关（选完文件夹导入中 / 被收起）退回 + 按钮。
+      const el =
+        tourStep === 1 || tourStep === 2
+          ? ((document.querySelector("#new-project-menu") as HTMLElement | null) ??
+            (document.querySelector(selector) as HTMLElement | null))
+          : (document.querySelector(selector) as HTMLElement | null);
       setRect(el ? el.getBoundingClientRect() : null);
     };
     measure();
@@ -186,7 +200,7 @@ export function OnboardingTour() {
       window.removeEventListener("scroll", measure, true);
       clearInterval(t);
     };
-  }, [selector, assets]);
+  }, [selector, assets, tourStep]);
 
   // 虚拟鼠标坐标：step 7 指向编辑框文本末尾（光标应落处）；8/10 指向目标元素中心；13 指向退出按钮。
   useLayoutEffect(() => {
@@ -284,6 +298,25 @@ export function OnboardingTour() {
   useEffect(() => {
     if (tourActive && tourStep === 13 && !boardOpen) setTourStep(14);
   }, [tourActive, tourStep, boardOpen, setTourStep]);
+
+  // step 1 → 2：用户点 + 打开新建菜单（NewProjectMenu 广播）→ 锚定菜单讲两种创建方式。
+  useEffect(() => {
+    if (!tourActive || tourStep !== 1) return;
+    const onMenuOpen = () => setTourStep(2);
+    window.addEventListener("bowerbird://new-project-menu", onMenuOpen);
+    return () => window.removeEventListener("bowerbird://new-project-menu", onMenuOpen);
+  }, [tourActive, tourStep, setTourStep]);
+
+  // step 2 脚注：收到「开始导入」广播起显示「正在导入…」；离开该步重置。
+  useEffect(() => {
+    if (tourStep !== 2) setImportStarted(false);
+  }, [tourStep]);
+  useEffect(() => {
+    if (!tourActive || tourStep !== 2) return;
+    const onStart = () => setImportStarted(true);
+    window.addEventListener("bowerbird://project-import-started", onStart);
+    return () => window.removeEventListener("bowerbird://project-import-started", onStart);
+  }, [tourActive, tourStep]);
 
   if (!tourActive) return null;
 
@@ -418,7 +451,9 @@ export function OnboardingTour() {
                   下一步
                 </button>
               ) : (
-                <span className="text-[11px] text-muted">正在导入…</span>
+                <span className="text-[11px] text-muted">
+                  {importStarted ? "正在导入…" : "按提示操作自动继续"}
+                </span>
               )
             ) : tourStep === 3 ? (
               <button

@@ -1,6 +1,6 @@
 [package]
 name = "bowerbird-desktop"
-version = "26.8.20"
+version = "26.8.21"
 description = "Bowerbird desktop app"
 authors = ["Bowerbird"]
 edition = "2021"
