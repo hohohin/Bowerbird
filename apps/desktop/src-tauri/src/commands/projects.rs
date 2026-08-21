@@ -9,8 +9,8 @@ use ulid::Ulid;
 use crate::core::ingest;
 use crate::core::paths::LibraryPaths;
 use crate::core::projects::{
-    refresh_workspace_assets, ActiveProjectContext, Project, ProjectCreateResult, ProjectDeleteMode,
-    ProjectDeleteResult, ProjectRefreshResult,
+    refresh_workspace_assets, ActiveProjectContext, Project, ProjectCreateResult,
+    ProjectDeleteMode, ProjectDeleteResult, ProjectRefreshResult,
 };
 use crate::db::Database;
 use crate::error::{AppError, AppResult};
@@ -87,6 +87,46 @@ pub async fn create_project(
     })
 }
 
+/// 新建空白项目：不绑定本地文件夹（workspace_path 留空、kind="blank"），素材之后靠
+/// 导入/生成/右键加入项目慢慢攒。名字由前端命名弹窗提供，空名回退「未命名项目」。
+#[tauri::command]
+pub async fn create_blank_project(
+    app: AppHandle,
+    db: State<'_, Arc<Database>>,
+    active: State<'_, ActiveProjectContext>,
+    name: String,
+) -> Result<ProjectCreateResult, AppError> {
+    let name = name.trim();
+    let name = if name.is_empty() {
+        "未命名项目"
+    } else {
+        name
+    }
+    .to_owned();
+    let project_id = Ulid::new().to_string();
+    // workspace_path/key：表有 UNIQUE 约束，blank 项目用 id 派生 key 保证互不冲突。
+    let workspace_key = format!("blank:{project_id}");
+    let db = db.inner().clone();
+    let db_for_insert = db.clone();
+    let id_for_insert = project_id.clone();
+    tokio::task::spawn_blocking(move || {
+        db_for_insert.create_project(&id_for_insert, &name, "", &workspace_key, "blank")
+    })
+    .await
+    .map_err(|error| AppError::Other(error.to_string()))??;
+
+    active.set(Some(project_id.clone()));
+    let project = db
+        .get_project(&project_id)?
+        .ok_or_else(|| AppError::NotFound(format!("project {project_id}")))?;
+    let _ = app.emit("projects://changed", ());
+    Ok(ProjectCreateResult {
+        project,
+        imported_count: 0,
+        member_count: 0,
+    })
+}
+
 #[tauri::command]
 pub async fn list_projects(db: State<'_, Arc<Database>>) -> Result<Vec<Project>, AppError> {
     let db = db.inner().clone();
@@ -111,7 +151,7 @@ pub async fn refresh_project(
         .ok_or_else(|| AppError::NotFound(format!("project {project_id}")))?;
     if project.kind != "user" {
         return Err(AppError::Other(
-            "内置项目没有关联的本地文件夹，无法更新".into(),
+            "该项目没有关联的本地文件夹，无法更新".into(),
         ));
     }
     let workspace = std::fs::canonicalize(&project.workspace_path).map_err(|_| {

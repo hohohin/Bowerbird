@@ -1,8 +1,10 @@
 //! Tauri commands（前端 invoke 入口）。
 
 pub mod agent;
+pub mod agent_ds;
 pub mod agent_z;
 pub mod cloud;
+pub mod cloud_agent;
 pub mod codex;
 pub mod collect;
 pub mod jimeng;

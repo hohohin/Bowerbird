@@ -1,9 +1,16 @@
 import { useEffect, useRef, useState, type Ref } from "react";
-import { X } from "lucide-react";
+import { Sparkles, X } from "lucide-react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { useStore } from "../store";
+import { cloudAgentStatusLabel } from "../lib/cloudAgent";
 import { isCloudProvider } from "../lib/genProviders";
 import type { GenJob } from "../lib/types";
+
+const TERMINAL_AGENT_STATUSES = new Set(["succeeded", "failed", "cancelled"]);
+
+function isAgentRunRunning(status: string): boolean {
+  return !TERMINAL_AGENT_STATUSES.has(status);
+}
 
 /**
  * 侧栏状态区（原 Toolbar 右侧的 CodexStatus 圆点 + 悬浮 popover 迁移而来）。
@@ -50,6 +57,9 @@ export function SidebarStatus({ collapsed }: { collapsed?: boolean }) {
   const activeJobId = useStore((s) => s.activeJobId);
   const genUnread = useStore((s) => s.genUnread);
   const genPanelOpen = useStore((s) => s.genPanelOpen);
+  const cloudAgentRuns = useStore((s) => s.cloudAgentRuns);
+  const cloudAgentRunOrder = useStore((s) => s.cloudAgentRunOrder);
+  const openCloudAgentRun = useStore((s) => s.openCloudAgentRun);
   const setActiveJob = useStore((s) => s.setActiveJob);
   const setGenPanelOpen = useStore((s) => s.setGenPanelOpen);
   const removeGenJob = useStore((s) => s.removeGenJob);
@@ -69,7 +79,11 @@ export function SidebarStatus({ collapsed }: { collapsed?: boolean }) {
   // 反推或导入分析任一在跑 → 圆环旋转；队列数 badge 只反映反推队列（用户语义）。
   const analyzing = describing || autoAnalyzing > 0;
 
-  const title = generating
+  const agentSessions = cloudAgentRunOrder.flatMap((runId) => cloudAgentRuns[runId] ? [cloudAgentRuns[runId]] : []);
+  const runningAgentSessions = agentSessions.filter((run) => isAgentRunRunning(run.status));
+  const agentRunning = runningAgentSessions.length > 0;
+  const sessionRunning = generating || agentRunning;
+  const title = sessionRunning
     ? "生成图像中…"
     : describing
       ? queueLen > 0
@@ -164,9 +178,10 @@ export function SidebarStatus({ collapsed }: { collapsed?: boolean }) {
   const runningGroups = genGroups.filter((g) => g.running);
   const describeRunning = describingId !== null || queue.length > 0;
   // 内联任务区只随「有在跑任务」自动展开（完整列表在悬浮会话面板）。
-  const expanded = !collapsed && (runningGroups.length > 0 || describeRunning);
+  const expanded = !collapsed && (runningGroups.length > 0 || agentRunning || describeRunning);
   // 面板生成 tab：最新会话在前（长久使用，最近的对话最常回看）。
   const panelGroups = [...genGroups].reverse();
+  const generationSessionCount = genGroups.length + agentSessions.length;
   // 两条渲染分支（折叠提前 return 之前）都要用：sessionPanel 在折叠分支也会执行。
   const inlineDescribeCount = (describingId ? 1 : 0) + queue.length;
   const panelDescribeCount = inlineDescribeCount + failures.length;
@@ -182,7 +197,7 @@ export function SidebarStatus({ collapsed }: { collapsed?: boolean }) {
         aria-expanded={sessOpen}
         className={`app-icon-button relative cursor-pointer p-1 outline-none ${className}`}
       >
-        {generating ? (
+        {sessionRunning ? (
           <div className="codex-loader" aria-hidden>
             <span />
             <span />
@@ -310,6 +325,40 @@ export function SidebarStatus({ collapsed }: { collapsed?: boolean }) {
     );
   }
 
+  function cloudAgentRow(run: (typeof agentSessions)[number], wide = false) {
+    const firstLine = run.intentPrompt.split("\n").find((line) => line.trim())?.trim() || "Agent 会话";
+    const maxChars = wide ? 16 : 5;
+    const label = firstLine.length > maxChars ? `${firstLine.slice(0, maxChars)}…` : firstLine;
+    return (
+      <button
+        key={run.runId}
+        type="button"
+        onClick={() => {
+          openCloudAgentRun(run);
+          closePanel();
+        }}
+        title={`Bowerbird Agent · ${cloudAgentStatusLabel(run.status)} · ${firstLine}`}
+        className="block w-full rounded px-2 py-1.5 text-left hover:bg-panel2"
+      >
+        <div className="flex items-center gap-2">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-sm border border-edge bg-lime/10 text-lime">
+            <Sparkles size={14} />
+          </span>
+          <span className="min-w-0 flex-1 truncate text-xs text-ink">{label}</span>
+          <span className="shrink-0">
+            {isAgentRunRunning(run.status) ? (
+              <span className="animate-pulse text-accent">●</span>
+            ) : run.status === "failed" ? (
+              <span className="text-red-400">❌</span>
+            ) : (
+              <span className="opacity-50">·</span>
+            )}
+          </span>
+        </div>
+      </button>
+    );
+  }
+
   // 面板「反推」tab：在跑 + 排队 + 失败（重试/清除，只在这里，内联区不放）。
   function describePanelRows() {
     const hasAny = describingId !== null || queue.length > 0 || failures.length > 0;
@@ -384,7 +433,7 @@ export function SidebarStatus({ collapsed }: { collapsed?: boolean }) {
       >
         <div className="flex h-9 shrink-0 items-center gap-2 border-b border-edge pl-3 pr-2">
           <span className="min-w-0 truncate text-[10px] uppercase tracking-wide text-muted">
-            {tab === "gen" ? `生成会话（${genGroups.length}）` : `反推任务（${panelDescribeCount}）`}
+            {tab === "gen" ? `生成会话（${generationSessionCount}）` : `反推任务（${panelDescribeCount}）`}
           </span>
           {/* 生成 / 反推 切换（面板右上） */}
           <div className="ml-auto flex shrink-0 rounded-full border border-edge bg-panel p-0.5 text-[11px]">
@@ -413,14 +462,17 @@ export function SidebarStatus({ collapsed }: { collapsed?: boolean }) {
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-1">
           {tab === "gen" ? (
-            panelGroups.length === 0 ? (
+            panelGroups.length === 0 && agentSessions.length === 0 ? (
               <div className="px-3 py-6 text-center text-xs leading-5 text-muted">
                 暂无生成会话
                 <br />
                 在创作板发送后，会话会出现在这里
               </div>
             ) : (
-              panelGroups.map((g, i) => genGroupRow(g, i, true))
+              <>
+                {agentSessions.map((run) => cloudAgentRow(run, true))}
+                {panelGroups.map((g, i) => genGroupRow(g, i, true))}
+              </>
             )
           ) : (
             describePanelRows()
@@ -438,16 +490,19 @@ export function SidebarStatus({ collapsed }: { collapsed?: boolean }) {
       </div>
       {expanded && (
         <div className="mt-1 max-h-64 overflow-y-auto rounded bg-panel2/40">
-          {runningGroups.length === 0 && !describeRunning ? (
+          {runningGroups.length === 0 && !agentRunning && !describeRunning ? (
             <div className="px-3 py-4 text-center text-xs text-muted">暂无任务</div>
           ) : (
             <>
-              {runningGroups.length > 0 && (
+              {(runningGroups.length > 0 || agentRunning) && (
                 <div className="border-b border-edge">
                   <div className="px-3 pb-1 pt-2 text-[10px] uppercase tracking-wide text-muted">
-                    生成会话（{genGroups.length}）
+                    生成会话（{generationSessionCount}）
                   </div>
-                  <div className="p-1">{runningGroups.map((g, i) => genGroupRow(g, i))}</div>
+                  <div className="p-1">
+                    {runningAgentSessions.map((run) => cloudAgentRow(run))}
+                    {runningGroups.map((g, i) => genGroupRow(g, i))}
+                  </div>
                 </div>
               )}
               {describeRunning && (

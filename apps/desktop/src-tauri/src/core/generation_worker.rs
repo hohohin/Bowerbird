@@ -129,7 +129,8 @@ pub async fn finalize_generation_assets(
     .await
     .map_err(|e| AppError::Other(e.to_string()))??;
 
-    // 后台自动命名（每张生成图各跑一次 codex 看图取名，替代 codex 默认 ig_<hash>）。
+    // 后台自动命名（每张生成图各跑一次，用生成 prompt 维度数据纯文本取名——codex 与
+    // cloud 共用一条通路，不看图；替代 codex 默认 ig_<hash>，见 autoname）。
     for a in gen_assets.clone() {
         crate::core::autoname::spawn_auto_name_only(app.clone(), db.clone(), a);
     }

@@ -10,9 +10,10 @@ import { ImageAnnotator } from "./components/ImageAnnotator";
 import { CaptionRing } from "./components/creation/CaptionRing";
 import { DescribeProviderPicker } from "./components/DescribeProviderPicker";
 import { BatchBar } from "./components/BatchBar";
-import { CreationBoard } from "./components/CreationBoard";
+import { CreationBoard, AGENT_DS_DONE_EVENT } from "./components/CreationBoard";
 import { APPEND_TEXT_EVENT } from "./components/creation/useCreationEditor";
 import { GenerationPanel } from "./components/GenerationPanel";
+import { CloudAgentSession } from "./components/CloudAgentPanel";
 import { CodexOnboarding } from "./components/CodexOnboarding";
 import { ExtensionOnboarding } from "./components/ExtensionOnboarding";
 import { DreaminaOnboarding } from "./components/DreaminaOnboarding";
@@ -21,7 +22,7 @@ import { OnboardingTour } from "./components/OnboardingTour";
 import { ToastViewport } from "./components/ToastViewport";
 import { useStore } from "./store";
 import { api } from "./lib/api";
-import { notifyError, notifySuccess } from "./lib/notify";
+import { notify, notifyError, notifySuccess } from "./lib/notify";
 import type { AuthSnapshot, CodexChunk } from "./lib/types";
 
 let refreshVersion = 0;
@@ -64,6 +65,7 @@ function App() {
   // 「隐藏项目素材」等设置在后端命令层生效；订阅 settings 让设置变化后重拉瀑布流。
   const settings = useStore((s) => s.settings);
   const genPanelOpen = useStore((s) => s.genPanelOpen);
+  const activeSessionKind = useStore((s) => s.activeSessionKind);
   const setCodexHealth = useStore((s) => s.setCodexHealth);
   const setDreaminaHealth = useStore((s) => s.setDreaminaHealth);
   const setExtensionConnected = useStore((s) => s.setExtensionConnected);
@@ -366,14 +368,25 @@ function App() {
     };
   }, []);
 
-  // Agent Z（dev-only）回传：Claude Code TUI 内模型调用 MCP 工具 send_to_creation_board →
-  // 事件文件 → 后端 watcher 转发此事件 → 追加进创作板编辑器（创作板常驻挂载，直接派发即可）。
+  // Agent Z / Agent DS（dev-only）回传：后端 watcher 转发 .agent-z/inbox 事件。无 kind =
+  // Claude Code TUI 桥的纯文本回传 → 追加进创作板（原行为）；ds_reply = Agent DS 终答
+  // （同追加）；ds_status = Agent DS 阶段通知（tool 进行中提示 / done、error 解除 busy）。
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
     let alive = true;
-    listen<{ text: string }>("agent-z://output", (e) => {
-      window.dispatchEvent(new CustomEvent(APPEND_TEXT_EVENT, { detail: e.payload.text }));
-      notifySuccess("Agent Z 输出已追加到创作板");
+    listen<{ text: string; kind?: string | null; phase?: string | null }>("agent-z://output", (e) => {
+      const { text, kind, phase } = e.payload;
+      if (kind === "ds_status") {
+        if (phase === "done" || phase === "error") {
+          if (phase === "error") notifyError(text, "Agent DS 本轮处理失败");
+          window.dispatchEvent(new CustomEvent(AGENT_DS_DONE_EVENT));
+        } else if (text) {
+          notify(text, "info");
+        }
+        return;
+      }
+      window.dispatchEvent(new CustomEvent(APPEND_TEXT_EVENT, { detail: text }));
+      notifySuccess(kind === "ds_reply" ? "Agent DS 回复已追加到创作板" : "Agent Z 输出已追加到创作板");
     }).then((u) => {
       if (alive) unlisten = u;
       else u();
@@ -384,10 +397,13 @@ function App() {
     };
   }, []);
 
-  // 启动恢复（Task 5）：挂载拉本地未完成生成 job 重建 genJobs（恢复中 job 在面板可见）。
-  // 必须在 codex://chunk listener 注册之后（listener 先就绪，后端 recover_started 早到也不丢）。
+  // 启动恢复：先恢复普通生成 job，再恢复独立持久化的 Cloud Agent Run；若 Agent 正在
+  // 等待用户或执行中，则复用同一会话详情主区并优先显示它。两者仍保持独立数据源。
   useEffect(() => {
-    void useStore.getState().loadGenJobs();
+    void (async () => {
+      await useStore.getState().loadGenJobs();
+      await useStore.getState().loadCloudAgentRuns();
+    })();
   }, []);
 
   // 全局粘贴入库（Ctrl+V）：截图后直接粘贴图片进当前项目 scope（source=clipboard）。
@@ -551,7 +567,8 @@ function App() {
           <div className="relative flex-1 overflow-hidden">
             {initializing ? <LibraryLoadingState /> : showDetail ? <AssetDetail /> : <MasonryGrid />}
             {/* 生成结果面板：主区覆盖层（像详情页） */}
-            {genPanelOpen && <GenerationPanel />}
+            {genPanelOpen && activeSessionKind === "generation" && <GenerationPanel />}
+            {genPanelOpen && activeSessionKind === "agent" && <CloudAgentSession />}
             {/* 创作板（核心枢纽）：底部浮动对话框常驻显示（激活与否都在），但与两个
                 详情界面互斥——图片详情 / 会话详情（genPanelOpen）期间不出现（详情页经
                 右键「添加到对话框」回主界面插 chip；会话界面用自带的继续对话/重新编辑坞）。

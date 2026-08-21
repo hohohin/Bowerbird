@@ -19,11 +19,16 @@ use tauri::{AppHandle, Emitter};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::oneshot;
 
-use super::codex_cli::{app_data_dir, codex_command, npm_command, resolve_codex_binary, resolve_npm_binary};
+use super::codex_cli::{
+    app_data_dir, codex_command, npm_command, resolve_codex_binary, resolve_npm_binary,
+};
 use crate::error::AppError;
 
 /// npmmirror（国内快）在前，npmjs 官方源兜底。
-const REGISTRIES: [&str; 2] = ["https://registry.npmmirror.com", "https://registry.npmjs.org"];
+const REGISTRIES: [&str; 2] = [
+    "https://registry.npmmirror.com",
+    "https://registry.npmjs.org",
+];
 
 /// npm dist 平台后缀（平台子包版本形如 `0.147.0-win32-x64`）。`env::consts` 是编译期
 /// 常量，match 会被整体折叠，不支持的架构返回 None。
@@ -80,8 +85,9 @@ async fn install_codex_standalone(
     app: &AppHandle,
     cancel: &mut oneshot::Receiver<()>,
 ) -> Result<(), AppError> {
-    let tag = platform_tag()
-        .ok_or_else(|| AppError::Codex("当前系统/架构暂不支持一键直装，请手动安装 codex CLI".into()))?;
+    let tag = platform_tag().ok_or_else(|| {
+        AppError::Codex("当前系统/架构暂不支持一键直装，请手动安装 codex CLI".into())
+    })?;
     let client = reqwest::Client::builder()
         // 单请求超时（含 tarball 下载；元数据请求共用长超时，慢点无妨）。
         .timeout(Duration::from_secs(600))
@@ -137,8 +143,7 @@ async fn install_from_registry(
         .to_string();
     let integrity = meta["dist"]["integrity"].as_str().map(str::to_string);
 
-    let data =
-        app_data_dir().ok_or_else(|| AppError::Codex("无法定位应用数据目录".into()))?;
+    let data = app_data_dir().ok_or_else(|| AppError::Codex("无法定位应用数据目录".into()))?;
     std::fs::create_dir_all(data.join("codex-cli.download"))?;
     let tgz_path = data.join("codex-cli.download").join("codex.tgz");
 
@@ -165,7 +170,9 @@ async fn install_from_registry(
         .map(|o| o.status.success())
         .unwrap_or(false);
     if !version_ok {
-        return Err(AppError::Codex("安装的 codex 无法执行（--version 失败）".into()));
+        return Err(AppError::Codex(
+            "安装的 codex 无法执行（--version 失败）".into(),
+        ));
     }
     emit_progress(app, &format!("codex {version} 安装完成"), Some(100));
     Ok(())
@@ -247,7 +254,9 @@ fn verify_sha512(path: &Path, integrity: &str) -> Result<(), AppError> {
     }
     let got = base64::engine::general_purpose::STANDARD.encode(hasher.finalize());
     if got != expected {
-        return Err(AppError::Codex("sha512 校验失败，下载可能不完整，请重试".into()));
+        return Err(AppError::Codex(
+            "sha512 校验失败，下载可能不完整，请重试".into(),
+        ));
     }
     Ok(())
 }
@@ -270,7 +279,9 @@ fn extract_and_swap(data: &Path) -> Result<(), AppError> {
     tar::Archive::new(gz).unpack(&tmp)?;
     let vendor = tmp.join("package").join("vendor");
     if !vendor.is_dir() {
-        return Err(AppError::Codex("tarball 结构异常（缺 package/vendor）".into()));
+        return Err(AppError::Codex(
+            "tarball 结构异常（缺 package/vendor）".into(),
+        ));
     }
 
     if final_dir.exists() {
@@ -369,7 +380,9 @@ async fn npm_install(
         // npm 的错误常打在 stdout（进度/错误混合），stderr 可能空；两者拼起来才看得到真因。
         let combined = format!("{}\n{}", stdout_lines.join("\n"), stderr_lines.join("\n"));
         let tail: String = combined.trim().chars().take(500).collect();
-        return Err(AppError::Codex(format!("npm 安装失败（退出 {status}）| {tail}")));
+        return Err(AppError::Codex(format!(
+            "npm 安装失败（退出 {status}）| {tail}"
+        )));
     }
     // 复查 codex 二进制是否就位（npm 装完应出现在 %APPDATA%\npm 或 PATH）。
     if resolve_codex_binary().is_none() {
@@ -412,7 +425,8 @@ mod tests {
     /// 扫描的位置），且重复安装（旧版让位）也能成功。
     #[test]
     fn extract_and_swap_installs_vendor_layout() {
-        let data = std::env::temp_dir().join(format!("bowerbird-codex-install-test-{}", Ulid::new()));
+        let data =
+            std::env::temp_dir().join(format!("bowerbird-codex-install-test-{}", Ulid::new()));
         let (tgz, final_dir) = install_dirs_for_test(&data);
         fs::create_dir_all(tgz.parent().unwrap()).unwrap();
 
@@ -432,13 +446,17 @@ mod tests {
         }
 
         extract_and_swap(&data).unwrap();
-        assert!(final_dir.join("vendor/x86_64-pc-windows-msvc/bin/codex.exe").is_file());
+        assert!(final_dir
+            .join("vendor/x86_64-pc-windows-msvc/bin/codex.exe")
+            .is_file());
         // 不相关的 package/package.json 不应进入最终目录。
         assert!(!final_dir.join("package.json").is_file());
 
         // 二次安装：旧版挪 .old 让位后仍成功。
         extract_and_swap(&data).unwrap();
-        assert!(final_dir.join("vendor/x86_64-pc-windows-msvc/bin/codex.exe").is_file());
+        assert!(final_dir
+            .join("vendor/x86_64-pc-windows-msvc/bin/codex.exe")
+            .is_file());
         assert!(!data.join("codex-cli.old").exists());
 
         fs::remove_dir_all(&data).ok();

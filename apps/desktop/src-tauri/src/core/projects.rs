@@ -271,10 +271,12 @@ impl Database {
             .ok_or_else(|| AppError::NotFound(format!("project {project_id}")))?;
         // 预置项目（如「欢迎来到园丁鸟」）：workspace_path 是虚拟值，无真实目录可移出，
         // 成员素材（source='sample'）应留全局供未来按 source 清理。强制 Keep 语义，忽略传入 mode。
-        let mode = if kind == "builtin" {
-            ProjectDeleteMode::Keep
-        } else {
-            mode
+        // 空白项目（kind="blank"）没有 workspace，「移出」无处可移（MoveOut 会把文件移到相对
+        // 路径），同样降级 Keep；Keep / DeleteExclusive 语义不变。
+        let mode = match (kind.as_str(), mode) {
+            ("builtin", _) => ProjectDeleteMode::Keep,
+            ("blank", ProjectDeleteMode::MoveOut) => ProjectDeleteMode::Keep,
+            (_, mode) => mode,
         };
 
         let members: Vec<(String, String, Option<String>, Option<String>, bool)> = {
@@ -633,7 +635,8 @@ mod tests {
     }
 
     fn put_project_at(db: &Database, id: &str, workspace: &str) {
-        db.create_project(id, id, workspace, workspace, "user").unwrap();
+        db.create_project(id, id, workspace, workspace, "user")
+            .unwrap();
     }
 
     #[test]
@@ -689,6 +692,23 @@ mod tests {
         assert_eq!(result.deleted_assets, 0);
         assert_eq!(result.preserved_shared, 1);
         assert!(db.get_asset("a1").unwrap().is_some());
+    }
+
+    #[test]
+    fn deleting_blank_project_degrades_move_out_to_keep() {
+        let db = db();
+        put_asset(&db, "a1");
+        // 空白项目：无 workspace（空路径），kind="blank"，key 用 id 派生避免 UNIQUE 冲突。
+        db.create_project("p1", "空白", "", "blank:p1", "blank")
+            .unwrap();
+        db.add_assets_to_project("p1", &["a1".into()]).unwrap();
+
+        // 「移出」无 workspace 可回，降级 Keep：项目删除、素材留在全局、不产生任何移动。
+        let result = db.delete_project("p1", ProjectDeleteMode::MoveOut).unwrap();
+        assert_eq!(result.moved_assets, 0);
+        assert_eq!(result.deleted_assets, 0);
+        assert!(db.get_asset("a1").unwrap().is_some());
+        assert!(db.get_project("p1").unwrap().is_none());
     }
 
     #[test]

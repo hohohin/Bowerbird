@@ -325,10 +325,23 @@ try {
   });
   assert.equal(progress.run.status, "leased", "Run 应处于 leased/running");
 
-  await jsonRequest("checkpoint", functionUrl("agent-worker"), {
+  const checkpointBody = JSON.stringify({ schemaVersion: 1, runId, phase: "score_dimensions" });
+  const checkpointHash = sha(checkpointBody);
+  const checkpointUpload = await jsonRequest("checkpoint prepare", functionUrl("agent-worker"), {
     method: "POST",
     headers: workerHeaders,
-    body: JSON.stringify({ action: "checkpoint", runId, leaseId, checkpointHash: sha("snap-1"), step: "score_dimensions", progress: 60 }),
+    body: JSON.stringify({ action: "checkpoint_prepare", runId, leaseId, checkpointHash, snapshotSchemaVersion: 1 }),
+  });
+  const checkpointPut = await fetch(checkpointUpload.uploadUrl, {
+    method: "PUT",
+    headers: { "content-type": "application/json", "x-upsert": "true" },
+    body: checkpointBody,
+  });
+  assert.equal(checkpointPut.ok, true, `checkpoint upload failed: ${checkpointPut.status}`);
+  await jsonRequest("checkpoint commit", functionUrl("agent-worker"), {
+    method: "POST",
+    headers: workerHeaders,
+    body: JSON.stringify({ action: "checkpoint_commit", runId, leaseId, checkpointHash, snapshotSchemaVersion: 1, step: "score_dimensions", progress: 60 }),
   });
 
   // ── finish → settlement ───────────────────────────────────────────────────

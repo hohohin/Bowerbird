@@ -602,9 +602,7 @@ mod tests {
     #[cfg(any(windows, target_os = "macos"))]
     fn keyring_backend_is_persistent_on_supported_desktop_platforms() {
         let entry = AuthClient::keyring_entry().unwrap();
-        assert!(!entry
-            .get_credential()
-            .is::<keyring::mock::MockCredential>());
+        assert!(!entry.get_credential().is::<keyring::mock::MockCredential>());
     }
 
     #[test]

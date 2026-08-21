@@ -149,8 +149,14 @@ pub fn rebuild_payload(payload: &str, sections: &[CaptionSection]) -> Option<Str
         "dimensions".to_string(),
         serde_json::to_value(&rebuilt.dimensions).ok()?,
     );
-    obj.insert("parse_status".to_string(), serde_json::json!(rebuilt.parse_status));
-    obj.insert("text".to_string(), serde_json::json!(render_text(&rebuilt.sections)));
+    obj.insert(
+        "parse_status".to_string(),
+        serde_json::json!(rebuilt.parse_status),
+    );
+    obj.insert(
+        "text".to_string(),
+        serde_json::json!(render_text(&rebuilt.sections)),
+    );
     Some(v.to_string())
 }
 
@@ -534,7 +540,10 @@ mod tests {
         assert_eq!(v["instruction"], "描述这张图");
         assert_eq!(v["session_id"], "sess-1");
         assert_eq!(v["provider"], "codex");
-        assert_eq!(v["dimensions"]["light"], "硬质逆光，轮廓明显。\n带一圈冷色 rim light");
+        assert_eq!(
+            v["dimensions"]["light"],
+            "硬质逆光，轮廓明显。\n带一圈冷色 rim light"
+        );
         assert_eq!(v["parse_status"], "partial");
 
         // 重生成的 text 再 parse 应还原编辑后的 sections（round-trip）；text 不携带车牌，
@@ -590,8 +599,7 @@ mod tests {
         ];
         let rebuilt = rebuild_payload(&payload, &incoming).unwrap();
         let v: serde_json::Value = serde_json::from_str(&rebuilt).unwrap();
-        let sections: Vec<CaptionSection> =
-            serde_json::from_value(v["sections"].clone()).unwrap();
+        let sections: Vec<CaptionSection> = serde_json::from_value(v["sections"].clone()).unwrap();
         assert_eq!(sections[0].id.as_deref(), Some(light_before.as_str())); // 标题匹配保号
         assert!(sections[1].id.is_some()); // 新维度新牌
     }

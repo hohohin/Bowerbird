@@ -14,7 +14,7 @@ use self::codex_cli::CodexCliProvider;
 use self::types::{Capabilities, Chunk, CodexRequest, CodexResult, GenOutcome};
 
 pub mod bowerbird_cloud;
-mod cloud_image;
+pub(crate) mod cloud_image;
 pub mod codex_cli;
 pub mod install;
 pub mod jimeng;
@@ -90,6 +90,5 @@ pub fn resolve_gen_provider(
 
 /// provider key 是否为 Cloud 生图变体（Pro / Lite / Fast）。
 pub fn is_cloud_generation_provider(provider: Option<&str>) -> bool {
-    provider
-        .is_some_and(|p| p.starts_with("bowerbird-cloud"))
+    provider.is_some_and(|p| p.starts_with("bowerbird-cloud"))
 }

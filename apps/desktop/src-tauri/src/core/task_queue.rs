@@ -435,7 +435,10 @@ mod tests {
         assert!(Task::by_id(&db, &done.id).unwrap().is_none());
 
         Task::delete_terminal(&db, &running.id).unwrap();
-        assert!(Task::by_id(&db, &running.id).unwrap().is_some(), "在跑行不可删");
+        assert!(
+            Task::by_id(&db, &running.id).unwrap().is_some(),
+            "在跑行不可删"
+        );
 
         Task::delete_terminal(&db, "no-such-row").unwrap(); // 空操作不报错
         assert!(Task::by_id(&db, &failed.id).unwrap().is_some());

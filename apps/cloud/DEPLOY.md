@@ -73,6 +73,8 @@ supabase functions deploy understand-worker --no-verify-jwt
 supabase functions deploy entitlement
 supabase functions deploy create-checkout
 supabase functions deploy payment-webhook
+supabase functions deploy agent-run
+supabase functions deploy agent-worker --no-verify-jwt
 
 # 注入 secrets（从 .env 读取；只上传一次，函数运行环境持有）
 supabase secrets set SUPABASE_URL=$SUPABASE_URL
@@ -92,6 +94,7 @@ supabase secrets set RATE_LIMIT_PER_USER_PER_MIN=10
 supabase secrets set BOWERBIRD_CLOUD_MOCK=false
 supabase secrets set GENERATION_WORKER_TOKEN=$GENERATION_WORKER_TOKEN
 supabase secrets set UNDERSTAND_WORKER_TOKEN=$UNDERSTAND_WORKER_TOKEN
+supabase secrets set AGENT_WORKER_TOKEN=$AGENT_WORKER_TOKEN
 supabase secrets set BOWERBIRD_PAYMENT_MOCK=true
 supabase secrets set SUPERUN_WEBHOOK_SECRET=$SUPERUN_WEBHOOK_SECRET
 ```

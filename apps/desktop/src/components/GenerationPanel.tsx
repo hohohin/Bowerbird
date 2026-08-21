@@ -129,6 +129,21 @@ export function GenerationPanel() {
     }
     return found;
   }, [turnsWithOffset]);
+  // 轮级「编辑」时「上次结果」= 所编辑轮**当时**的基图（其之前最后一个有图轮的产出），而非
+  // 会话最新产出——与发送侧精确重放一致：编辑第 N 轮，左侧对照的就是当时的「上次结果」。
+  const turnBaseImages = useMemo(() => {
+    if (editTurnId == null) return null;
+    const idx = activeJob?.turns.findIndex((t) => t.id === editTurnId) ?? -1;
+    let found: { images: string[]; offset: number } | null = null;
+    for (let i = 0; i < idx; i++) {
+      const { turn, imageOffset } = turnsWithOffset[i];
+      if (turn.images.length > 0) found = { images: turn.images, offset: imageOffset };
+    }
+    return found;
+  }, [editTurnId, activeJob, turnsWithOffset]);
+  // 编辑坞左侧「上次结果」：轮级编辑用该轮当时的基图；其余入口（重新编辑 / 空白续轮）
+  // 用会话最新产出（新续轮自动带的就是它）。
+  const dockBaseImages = editTurnId != null ? turnBaseImages : lastImageTurn;
   // 参考图「附件」点开放大：Lightbox 用原图（store_path），与产出图各自独立成组。
   const refLightboxImages = useMemo(
     () => firstRefAssets.map((a) => a.store_path).filter((p): p is string => !!p),
@@ -400,9 +415,9 @@ export function GenerationPanel() {
             job={activeJob}
             mode={genEditing}
             canStart={canStartAnother}
-            recentImages={lastImageTurn?.images ?? []}
+            recentImages={dockBaseImages?.images ?? []}
             onOpenRecent={(k) =>
-              lastImageTurn && setLightbox({ images: allImages, index: lastImageTurn.offset + k })
+              dockBaseImages && setLightbox({ images: allImages, index: dockBaseImages.offset + k })
             }
             preloadTurn={
               editTurnId != null
@@ -837,7 +852,8 @@ function GenEditComposer({
   job: GenJob;
   mode: GenEditingMode;
   canStart: boolean;
-  // 会话最近一次产出（最后一个有图的轮）：左侧「上次结果」缩略图，组稿时对照参考。
+  // 左侧「上次结果」缩略图，组稿时对照参考：轮级编辑 = 该轮当时的基图（前一轮产出）；
+  // 重新编辑 / 空白续轮 = 会话最近一次产出（最后一个有图的轮，新续轮自动带的就是它）。
   recentImages: string[];
   onOpenRecent: (index: number) => void;
   // revise 坞预载的轮（续轮「编辑」入口传入）：载入该轮组稿（原文 + 参考图）替代空编辑器
@@ -848,6 +864,7 @@ function GenEditComposer({
   const isRevise = mode === "revise";
   const startGeneration = useStore((s) => s.startGeneration);
   const sendGenRevise = useStore((s) => s.sendGenRevise);
+  const setBoardActive = useStore((s) => s.setBoardActive);
   const activeGenProvider = useStore((s) => s.activeGenProvider);
   const setActiveGenProvider = useStore((s) => s.setActiveGenProvider);
   const defaultProvider = useStore((s) => s.defaultProvider);
@@ -981,6 +998,9 @@ function GenEditComposer({
       }
     }
     // 点发送立即回会话视图：生成后台跑，结果/错误由会话内对应轮展示。
+    // 发送即退出创作模式（boardOpen 置 false）：关面板回瀑布流后左键恢复开详情；
+    // 取消编辑不退（onExit 另有取消入口共用，创作模式保留可继续挑图）。
+    setBoardActive(false);
     onExit();
     if (isRevise) {
       // 会话下方追加一轮对话（resume 同一 session）；新挑参考图随 opts 传给续轮路径。

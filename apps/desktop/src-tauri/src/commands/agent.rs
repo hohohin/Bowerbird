@@ -32,7 +32,7 @@ fn ensure_preview_enabled() -> Result<(), AppError> {
     }
 }
 
-fn worker_dir() -> Result<PathBuf, AppError> {
+pub(crate) fn worker_dir() -> Result<PathBuf, AppError> {
     if let Some(path) = std::env::var_os("BOWERBIRD_AGENT_WORKER_DIR") {
         let candidate = PathBuf::from(path);
         if candidate.join("src/local/cli.ts").is_file() {

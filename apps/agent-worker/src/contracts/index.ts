@@ -59,6 +59,20 @@ export type { RunSnapshot, SnapshotToolCallRef } from "./snapshot.ts";
 export { SNAPSHOT_SCHEMA_VERSION } from "./snapshot.ts";
 
 export type {
+  ControlledArtifactRole,
+  ControlledImageEditInput,
+  ControlledImageEditPlan,
+  ControlledPlanStep,
+  ControlledReferenceInput,
+  ControlledRunArtifact,
+  HighConsistencySignal,
+  IntentAnalysis,
+  PlanInputBinding,
+  ReferenceRole,
+} from "./controlled-image-edit.ts";
+export { CONTROLLED_IMAGE_EDIT_SCHEMA_VERSION } from "./controlled-image-edit.ts";
+
+export type {
   CandidateDirection,
   EvidenceConflict,
   EvidenceFact,

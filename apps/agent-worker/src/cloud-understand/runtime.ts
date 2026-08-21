@@ -35,7 +35,8 @@ interface ClaimedJob {
 interface UnderstandInput {
   schema_version: number;
   operation: "caption" | "autoname" | "classify";
-  image: { mime: "image/jpeg" | "image/png" | "image/webp"; base64: string };
+  /** null = 纯文本调用（生成图维度数据命名），图片不上云；caption/classify 必带一张图。 */
+  image: { mime: "image/jpeg" | "image/png" | "image/webp"; base64: string } | null;
   instruction: string | null;
   mock_scenario: string | null;
 }
@@ -137,7 +138,13 @@ class ArkVisionClient {
         messages: [{
           role: "user",
           content: [
-            { type: "image_url", image_url: { url: `data:${input.image.mime};base64,${input.image.base64}` } },
+            // 纯文本调用（image=null）只发 text 部分——vision 模型同样接受无图消息。
+            ...(input.image
+              ? [{
+                type: "image_url",
+                image_url: { url: `data:${input.image.mime};base64,${input.image.base64}` },
+              }]
+              : []),
             { type: "text", text: visionPrompt(input) },
           ],
         }],
@@ -179,11 +186,14 @@ async function mockUnderstand(input: UnderstandInput): Promise<string> {
 
 function parseInput(value: unknown): UnderstandInput {
   if (!isRecord(value) || value.schema_version !== 1 ||
-      !["caption", "autoname", "classify"].includes(String(value.operation)) ||
-      !isRecord(value.image) || typeof value.image.base64 !== "string" || !value.image.base64 ||
-      !["image/jpeg", "image/png", "image/webp"].includes(String(value.image.mime))) {
+      !["caption", "autoname", "classify"].includes(String(value.operation))) {
     throw new Error("invalid_understand_input");
   }
+  // image=null 合法（纯文本命名）；带图时校验结构与编码。
+  const imageOk = value.image == null ||
+    (isRecord(value.image) && typeof value.image.base64 === "string" && !!value.image.base64 &&
+      ["image/jpeg", "image/png", "image/webp"].includes(String(value.image.mime)));
+  if (!imageOk) throw new Error("invalid_understand_input");
   return value as unknown as UnderstandInput;
 }
 

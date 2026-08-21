@@ -3,14 +3,16 @@
   "private": true,
   "version": "0.0.0-m0",
   "type": "module",
-  "description": "Bowerbird Agent Runtime — M0（A0+V0）：契约冻结 + FakeModel + 离线 fixture + eval。不含 worker 运行时 / DB 迁移 / Edge Function / UI。",
+  "description": "Bowerbird Agent Runtime — controlled-image-edit 动态规划、可恢复 RunEngine、VPS consumer 与 durable tool ledger；真实图片 provider / 桌面 UI 仍按阶段接入。",
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "node --test \"src/**/*.test.ts\"",
     "worker": "node src/main.ts",
     "worker:generation": "node src/cloud-generation/main.ts",
     "worker:understand": "node src/cloud-understand/main.ts",
+    "worker:agent": "node src/cloud-agent/entry.ts",
     "spike:deepseek": "node --env-file=../cloud/.env src/spikes/deepseek-tool-calling.ts",
+    "spike:deepseek-multiturn": "node --env-file=../cloud/.env src/spikes/deepseek-multiturn.ts",
     "local:agent": "node --env-file=../cloud/.env src/local/cli.ts",
     "local:prompt-agent": "node --env-file=../cloud/.env src/local/prompt-agent-cli.ts",
     "ab:prompt": "node --env-file=../cloud/.env src/local/assembly/run-ab.ts"

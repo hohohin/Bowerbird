@@ -28,6 +28,15 @@ pub(super) async fn read_cloud_jpeg(
     }))
 }
 
+/// Agent Run 上传沿用 Cloud 生图的隐私与兼容处理：解码后缩边、扁平透明通道、
+/// 重新编码 JPEG，从而不上传原文件容器元数据或 EXIF。
+pub(crate) async fn read_agent_reference_jpeg(path: &Path) -> Result<Vec<u8>, AppError> {
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || prepare_cloud_jpeg(&path, true))
+        .await
+        .map_err(|error| AppError::Cloud(format!("图片预处理任务失败: {error}")))?
+}
+
 fn prepare_cloud_jpeg(path: &Path, generation_reference: bool) -> Result<Vec<u8>, AppError> {
     let decoded = ImageReader::open(path)
         .and_then(|reader| reader.with_guessed_format())

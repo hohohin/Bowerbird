@@ -532,15 +532,11 @@ const WELCOME_PROJECT_ID: &str = "builtin:welcome";
 /// 建「欢迎来到园丁鸟」预置项目（固定 id，幂等）+ 关联全部 source='sample' 资产。
 /// workspace_path 用虚拟值（无真实目录；delete_project 对 kind='builtin' 强制 Keep，不会 MoveOut）。
 fn seed_welcome_project(db: &Database) -> AppResult<()> {
-    let exists: bool = db
-        .conn
-        .lock()
-        .unwrap()
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM projects WHERE id = ?1)",
-            rusqlite::params![WELCOME_PROJECT_ID],
-            |r| r.get(0),
-        )?;
+    let exists: bool = db.conn.lock().unwrap().query_row(
+        "SELECT EXISTS(SELECT 1 FROM projects WHERE id = ?1)",
+        rusqlite::params![WELCOME_PROJECT_ID],
+        |r| r.get(0),
+    )?;
     if !exists {
         db.create_project(
             WELCOME_PROJECT_ID,
@@ -600,12 +596,17 @@ mod tests {
         // （即 5 个标准维度 composition/light/palette/action/mood 全部映射成功）。
         for spec in SAMPLES {
             let a = caption::parse(spec.caption);
-            assert_eq!(a.parse_status, "structured",
+            assert_eq!(
+                a.parse_status, "structured",
                 "caption for {} did not parse as structured: dims = {:?}",
-                spec.filename, a.dimensions);
+                spec.filename, a.dimensions
+            );
             for key in caption::DIMENSION_KEYS {
-                assert!(a.dimensions.contains_key(key),
-                    "{} missing dimension {key}", spec.filename);
+                assert!(
+                    a.dimensions.contains_key(key),
+                    "{} missing dimension {key}",
+                    spec.filename
+                );
             }
         }
     }
@@ -638,7 +639,9 @@ mod tests {
             .conn
             .lock()
             .unwrap()
-            .query_row("SELECT id FROM assets WHERE source='sample'", [], |r| r.get(0))
+            .query_row("SELECT id FROM assets WHERE source='sample'", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert!(db.has_analysis(&id, "caption").unwrap());
         assert!(db.has_auto_tag(&id).unwrap());

@@ -144,19 +144,21 @@ impl CloudUnderstandProvider {
                         }
                         "succeeded" => return Ok(result),
                         "failed" | "cancelled" | "outcome_unknown" => {
-                            let message = result
-                                .error
-                                .map(|error| error.message)
-                                .unwrap_or_else(|| match result.status.as_str() {
-                                    "outcome_unknown" => {
-                                        "请求已提交方舟，但结果状态暂时无法确认".into()
+                            let message =
+                                result.error.map(|error| error.message).unwrap_or_else(|| {
+                                    match result.status.as_str() {
+                                        "outcome_unknown" => {
+                                            "请求已提交方舟，但结果状态暂时无法确认".into()
+                                        }
+                                        "cancelled" => "云任务已取消".into(),
+                                        _ => "云理解失败".into(),
                                     }
-                                    "cancelled" => "云任务已取消".into(),
-                                    _ => "云理解失败".into(),
                                 });
                             return Err(AppError::Cloud(message));
                         }
-                        status => return Err(AppError::Cloud(format!("云理解任务异常状态: {status}"))),
+                        status => {
+                            return Err(AppError::Cloud(format!("云理解任务异常状态: {status}")))
+                        }
                     }
                 }
                 Err(error) => {
@@ -195,12 +197,16 @@ impl UnderstandProvider for CloudUnderstandProvider {
             .config()
             .endpoint("understand-proxy")
             .ok_or_else(|| AppError::Cloud("当前构建未配置 Bowerbird Cloud".into()))?;
-        let image_path = req
-            .reference_images
-            .first()
-            .ok_or_else(|| AppError::Cloud("云理解需要一张图片".into()))?;
-        let image = read_cloud_jpeg(image_path, false).await?;
-        let idempotency_key = req.job_id.clone().unwrap_or_else(|| Ulid::new().to_string());
+        // 无 reference_images = 纯文本调用（生成图维度数据命名）：image 传 null，图片不出本机；
+        // 反推 / 归类仍必带一张图（由调用方保证）。
+        let image = match req.reference_images.first() {
+            Some(path) => Some(read_cloud_jpeg(path, false).await?),
+            None => None,
+        };
+        let idempotency_key = req
+            .job_id
+            .clone()
+            .unwrap_or_else(|| Ulid::new().to_string());
 
         // 同步模式（UNDERSTAND_ASYNC=false，服务端忽略 action）或幂等重放已完成时，
         // create 响应直接是终态 succeeded+text；异步模式下返回 202 进行中，转轮询。

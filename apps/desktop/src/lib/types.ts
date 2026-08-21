@@ -26,7 +26,7 @@ export interface Project {
   workspace_path: string;
   created_at: number;
   asset_count: number;
-  kind: "user" | "builtin";
+  kind: "user" | "builtin" | "blank";
 }
 
 export interface ProjectCreateResult {
@@ -448,6 +448,114 @@ export interface AgentPromptInput {
 export interface AgentPromptResult {
   prompt: string;
   attempts: number;
+}
+
+export interface CloudAgentPlanStep {
+  id: string;
+  kind: "direct_generate" | "generate_control_reference" | "edit_from_previous";
+  goal: string;
+  inputs: Array<{ type: "reference"; referenceId: string } | { type: "step"; stepId: string }>;
+  modifies: string[];
+  preserves: string[];
+  excludes: string[];
+  outputRole: "control_reference" | "stage_result" | "final_result";
+  rationale: string;
+  estimatedUsage: { generateCalls: number; understandCalls: number };
+}
+
+export interface CloudAgentPlan {
+  schemaVersion: 1;
+  intentAnalysisHash: string;
+  intentSummary: string;
+  strategy: "direct" | "controlled" | "staged_controlled";
+  referenceRoles: Array<{
+    referenceId: string;
+    role: string;
+    mustPreserve: string[];
+    mustTransfer: string[];
+    mustExclude: string[];
+  }>;
+  assumptions: string[];
+  steps: CloudAgentPlanStep[];
+}
+
+export interface CloudAgentApproval {
+  id: string;
+  kind: "controlled_image_edit_plan" | "controlled_image_edit_revision";
+  status: "pending" | "approved" | "rejected" | "expired";
+  proposal_hash: string;
+  planned_tool_count: number;
+  requested_at: string;
+  expires_at: string;
+  estimated_additional_credits: number;
+  proposal?: CloudAgentPlan;
+}
+
+export interface CloudAgentArtifact {
+  id: string;
+  conversation_id: string;
+  kind: string;
+  role: "input" | "control_reference" | "stage_result" | "final_result" | "plan";
+  step_id?: string | null;
+  parent_artifact_id?: string | null;
+  mime: string;
+  bytes: number;
+  sha256: string;
+  user_visible: boolean;
+  expires_at: string;
+  downloaded_at?: string | null;
+}
+
+export interface CloudAgentSnapshot {
+  conversationId: string;
+  run: {
+    id: string;
+    conversation_id: string;
+    status: string;
+    current_step?: string | null;
+    progress?: number | null;
+    skill_id: string;
+    skill_version: string;
+    planned_tool_count?: number | null;
+    budget_credits: number;
+    actual_credits?: number | null;
+    result_feedback_action?: "accept" | "retry" | null;
+    error_code?: string | null;
+    safe_message?: string | null;
+  };
+  events: Array<{
+    seq: number;
+    type: string;
+    step?: string | null;
+    progress?: number | null;
+    display_payload?: Record<string, unknown>;
+    created_at: string;
+  }>;
+  approvals: CloudAgentApproval[];
+  artifacts: CloudAgentArtifact[];
+}
+
+export interface CloudAgentRunRecord {
+  runId: string;
+  conversationId: string;
+  skillId: string;
+  status: string;
+  intentPrompt: string;
+  referenceAssetIds: string[];
+  projectId?: string | null;
+  snapshot: CloudAgentSnapshot;
+  feedbackAction?: "accept" | "retry" | null;
+  finalAssetId?: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface CloudAgentPreview {
+  runId: string;
+  artifactId: string;
+  path: string;
+  mime: string;
+  sha256: string;
 }
 
 export type CodexChunk =

@@ -246,7 +246,9 @@ impl EntitlementService {
 
 #[cfg(test)]
 mod tests {
-    use super::{CreditBalance, EntitlementService, EntitlementSnapshot, OfflineState, PromptConfig};
+    use super::{
+        CreditBalance, EntitlementService, EntitlementSnapshot, OfflineState, PromptConfig,
+    };
     use crate::cloud::policy::FeaturePolicy;
     use chrono::{Duration, Utc};
 

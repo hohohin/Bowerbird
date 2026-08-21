@@ -256,7 +256,10 @@ fn synth_annotation_asset(annotations_dir: &Path, store_path: &str) -> Option<Pr
                 // 车牌与「不入库插入创作板」前端同规则（anno:{文件名 ulid}），两条路径同牌。
                 sections = annotation_section(
                     &annotation.to_string(),
-                    format!("anno:{}", path.file_stem().unwrap_or_default().to_string_lossy()),
+                    format!(
+                        "anno:{}",
+                        path.file_stem().unwrap_or_default().to_string_lossy()
+                    ),
                 )
                 .map(|section| vec![section]);
             }
@@ -362,9 +365,18 @@ pub fn delete_asset_files(store_path: Option<&Path>, thumb_path: Option<&Path>) 
 fn sanitize_file_stem(raw: &str, id: &str) -> String {
     let mut s: String = raw
         .chars()
-        .map(|c| if "/\\:*?\"<>|".contains(c) || c.is_control() { '_' } else { c })
+        .map(|c| {
+            if "/\\:*?\"<>|".contains(c) || c.is_control() {
+                '_'
+            } else {
+                c
+            }
+        })
         .collect();
-    s = s.trim().trim_end_matches(|c| c == '.' || c == ' ').to_string();
+    s = s
+        .trim()
+        .trim_end_matches(|c| c == '.' || c == ' ')
+        .to_string();
     if s.is_empty() {
         return id.to_string();
     }
@@ -374,9 +386,8 @@ fn sanitize_file_stem(raw: &str, id: &str) -> String {
     // Windows 保留名：带扩展名也算（CON.txt 同样保留）。
     let base = s.split('.').next().unwrap_or("").to_ascii_uppercase();
     const RESERVED: [&str; 22] = [
-        "CON", "PRN", "AUX", "NUL",
-        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
     ];
     if RESERVED.contains(&base.as_str()) {
         let suffix: String = id.chars().take(6).collect();
@@ -529,15 +540,30 @@ impl Database {
         Ok(n)
     }
 
-    /// 改资产名。命中 0002_fts.sql 的 `AFTER UPDATE OF name` 触发器，
-    /// FTS5 搜索索引自动重建（DELETE+INSERT），无需额外同步。
-    pub fn update_asset_name(&self, id: &str, name: &str) -> AppResult<()> {
+    /// autoname 专用改名：仅当名字非用户手改（name_manual=0）时更新，返回是否实际写入。
+    /// 命中 0002_fts.sql 的 `AFTER UPDATE OF name` 触发器，FTS5 索引自动同步。
+    /// 手改名保护：生成图命名 / 反推后重命名 / 采集入库命名一律走这里，不覆盖手改的名字。
+    pub fn update_asset_name_if_auto(&self, id: &str, name: &str) -> AppResult<bool> {
         let conn = self.conn.lock().unwrap();
-        conn.execute(
-            "UPDATE assets SET name = ?1 WHERE id = ?2",
+        let n = conn.execute(
+            "UPDATE assets SET name = ?1 WHERE id = ?2 AND name_manual = 0",
             rusqlite::params![name, id],
         )?;
-        Ok(())
+        Ok(n > 0)
+    }
+
+    /// 名字是否由用户手动设定（手改名保护标记；查询失败按未手改处理，宁多跑一次命名）。
+    pub fn name_is_manual(&self, id: &str) -> AppResult<bool> {
+        let conn = self.conn.lock().unwrap();
+        let v: i64 = conn
+            .query_row(
+                "SELECT name_manual FROM assets WHERE id = ?1",
+                rusqlite::params![id],
+                |r| r.get(0),
+            )
+            .optional()?
+            .unwrap_or(0);
+        Ok(v != 0)
     }
 
     /// 手动重命名素材：同步改磁盘文件名（store/thumb 同目录换名）+ DB name/store_path/thumb_path。
@@ -545,7 +571,8 @@ impl Database {
     /// 同目录重名时追加 `_<id 前6>`（不覆盖）；扩展名保留旧值。svg（thumb==store）的 thumb 跟随 store。
     /// 先 rename 文件、后改 DB（FTS 由 0002 的 `AFTER UPDATE OF name` 触发器自动同步）；
     /// DB 失败时回滚已移动的文件（best-effort），避免 DB 指向已改名文件造成破图。
-    /// 仅供用户手动改名调用——autoname 仍走 `update_asset_name`（只改 DB，不跟随）。
+    /// 仅供用户手动改名调用——autoname 仍走 `update_asset_name_if_auto`（只改 DB，不跟随；
+    /// 且写回置 name_manual=1，此后 autoname 条件写不再覆盖，手改名保护）。
     pub fn rename_asset_files(&self, id: &str, new_name: &str) -> AppResult<()> {
         // 先取路径，drop conn 后再做文件 IO（delete_asset 同模式）。
         let (store_path, thumb_path) = {
@@ -588,9 +615,7 @@ impl Database {
         let thumb_moved = if thumb_follows_store {
             // thumb==store（svg）：旧 thumb 已随 store 的 rename 移走，无需单独移动。
             false
-        } else if let (Some(old_tp), Some(new_tp)) =
-            (thumb_path.as_deref(), new_thumb.as_deref())
-        {
+        } else if let (Some(old_tp), Some(new_tp)) = (thumb_path.as_deref(), new_thumb.as_deref()) {
             if old_tp != new_tp {
                 rename_file(Path::new(old_tp), Path::new(new_tp))?;
                 true
@@ -608,8 +633,7 @@ impl Database {
                 let _ = std::fs::rename(&new_store, old_store);
             }
             if thumb_moved {
-                if let (Some(old_tp), Some(new_tp)) =
-                    (thumb_path.as_deref(), new_thumb.as_deref())
+                if let (Some(old_tp), Some(new_tp)) = (thumb_path.as_deref(), new_thumb.as_deref())
                 {
                     let _ = std::fs::rename(new_tp, old_tp);
                 }
@@ -619,7 +643,7 @@ impl Database {
         Ok(())
     }
 
-    /// `rename_asset_files` 的 DB 写回（name + store/thumb 路径）。
+    /// `rename_asset_files` 的 DB 写回（name + store/thumb 路径 + 置手改名保护标记）。
     fn update_asset_paths(
         &self,
         id: &str,
@@ -629,7 +653,7 @@ impl Database {
     ) -> AppResult<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "UPDATE assets SET name = ?1, store_path = ?2, thumb_path = ?3 WHERE id = ?4",
+            "UPDATE assets SET name = ?1, store_path = ?2, thumb_path = ?3, name_manual = 1 WHERE id = ?4",
             rusqlite::params![name, store_path, thumb_path, id],
         )?;
         Ok(())
@@ -681,7 +705,8 @@ impl Database {
     /// 避免对不可去重文件——低熵纯色图等——重复入库）。
     pub fn list_origin_paths(&self) -> AppResult<std::collections::HashSet<String>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT origin_path FROM assets WHERE origin_path IS NOT NULL")?;
+        let mut stmt =
+            conn.prepare("SELECT origin_path FROM assets WHERE origin_path IS NOT NULL")?;
         let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
         let mut out = std::collections::HashSet::new();
         for row in rows {
@@ -1237,7 +1262,9 @@ impl Database {
         let like = |t: &str| {
             format!(
                 "%{}%",
-                t.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+                t.replace('\\', "\\\\")
+                    .replace('%', "\\%")
+                    .replace('_', "\\_")
             )
         };
         let mut pos: Vec<String> = Vec::new();
@@ -1553,8 +1580,12 @@ impl Database {
         let references = if first_references.is_empty() {
             Vec::new()
         } else {
-            let by_path =
-                Self::lookup_ref_assets_by_path(conn, &first_references, project_id, annotations_dir)?;
+            let by_path = Self::lookup_ref_assets_by_path(
+                conn,
+                &first_references,
+                project_id,
+                annotations_dir,
+            )?;
             let mut seen = std::collections::HashSet::new();
             first_references
                 .iter()
@@ -1801,10 +1832,7 @@ impl Database {
 
     /// [`Database::get_prompted_asset`] 的连接级实现：generation_history 的 dimension_sources
     /// 反查共用（已持有 conn 锁，不能再走 &self 方法）。
-    fn prompted_asset_by_id(
-        conn: &Connection,
-        asset_id: &str,
-    ) -> AppResult<Option<PromptedAsset>> {
+    fn prompted_asset_by_id(conn: &Connection, asset_id: &str) -> AppResult<Option<PromptedAsset>> {
         let sql = format!(
             "SELECT {ASSET_COLS}, (\
                SELECT json_extract(payload, '$.text') FROM analyses \
@@ -2049,6 +2077,22 @@ impl Database {
         Ok(text)
     }
 
+    /// 取某资产最新 generation_meta 的 $.prompt（铺开发 provider 用的完整 prompt，含
+    /// 【维度】：正文 与 @图 的【维度】引用）；cloud 纯文本命名喂维度数据用；无则 None。
+    pub fn latest_generation_prompt(&self, asset_id: &str) -> AppResult<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        let text: Option<String> = conn
+            .query_row(
+                "SELECT json_extract(payload, '$.prompt') FROM analyses \
+                 WHERE asset_id = ?1 AND kind = 'generation_meta' ORDER BY created_at DESC LIMIT 1",
+                rusqlite::params![asset_id],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten();
+        Ok(text)
+    }
+
     /// 列出所有「无 auto tag 且有 caption」的资产 id（批量重归类目标）。
     pub fn list_assets_to_classify(&self) -> AppResult<Vec<String>> {
         let conn = self.conn.lock().unwrap();
@@ -2123,7 +2167,14 @@ impl Database {
         );
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(
-            rusqlite::params![limit, offset, folder_id, project_id, bucket, hide_in_projects],
+            rusqlite::params![
+                limit,
+                offset,
+                folder_id,
+                project_id,
+                bucket,
+                hide_in_projects
+            ],
             asset_from_row,
         )?;
         let mut out = Vec::new();
@@ -2175,6 +2226,26 @@ impl Database {
 mod tests {
     use super::*;
     use ulid::Ulid;
+
+    /// 手改名保护：手动改名（rename_asset_files 的 DB 写回）置 name_manual=1，
+    /// 此后 autoname 条件写 update_asset_name_if_auto 不再覆盖。
+    #[test]
+    fn manual_name_guard_blocks_auto_rename() {
+        let db = db();
+        let id = put_asset(&db, "ig_hash");
+        // 未手改：autoname 可写。
+        assert!(db.update_asset_name_if_auto(&id, "自动名").unwrap());
+        assert_eq!(db.get_asset(&id).unwrap().unwrap().name, "自动名");
+        assert!(!db.name_is_manual(&id).unwrap());
+        // 手动改名的 DB 写回（update_asset_paths 为私有，同模块测试直接驱动）。
+        db.update_asset_paths(&id, "我的名字", &format!("/tmp/{id}.png"), None)
+            .unwrap();
+        assert!(db.name_is_manual(&id).unwrap());
+        assert_eq!(db.get_asset(&id).unwrap().unwrap().name, "我的名字");
+        // 手改后：autoname 条件写不生效，名字保持手改值。
+        assert!(!db.update_asset_name_if_auto(&id, "又一个自动名").unwrap());
+        assert_eq!(db.get_asset(&id).unwrap().unwrap().name, "我的名字");
+    }
 
     fn db() -> Database {
         let db = Database::open_in_memory().unwrap();
@@ -2297,10 +2368,7 @@ mod tests {
         let a = db.get_asset(&stamp).unwrap().unwrap();
         let new_store = a.store_path.unwrap();
         assert!(new_store.contains("冲突名_"), "got {new_store}");
-        let file_name = Path::new(&new_store)
-            .file_name()
-            .unwrap()
-            .to_string_lossy();
+        let file_name = Path::new(&new_store).file_name().unwrap().to_string_lossy();
         assert!(
             !file_name.chars().any(|c| "\\/:*?\"<>|".contains(c)),
             "非法字符应被净化，got {file_name}"
@@ -2341,7 +2409,9 @@ mod tests {
         let db = db();
         let id = put_asset(&db, "it's a \"test\" (copy)");
         // 含 ' " ( ) % 的输入按字面匹配，不报错、不构成通配
-        let r = db.search_assets("it's a \"test\" (copy)", None, 10).unwrap();
+        let r = db
+            .search_assets("it's a \"test\" (copy)", None, 10)
+            .unwrap();
         assert!(r.iter().any(|a| a.id == id), "特殊字符应按字面命中");
         let _ = db.search_assets("'", None, 10).unwrap();
         assert!(db.search_assets("   ", None, 10).unwrap().is_empty());
@@ -2471,7 +2541,10 @@ mod tests {
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].id, city);
         // 排除词：night 命中 city-night，但 -city 把它剔除
-        assert!(db.search_assets("night -city", None, 10).unwrap().is_empty());
+        assert!(db
+            .search_assets("night -city", None, 10)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -2690,7 +2763,10 @@ mod tests {
         let h = db.generation_history_by_session("sess-R", None).unwrap();
         assert_eq!(h.session_id.as_deref(), Some("sess-R"));
         assert_eq!(
-            h.turns.iter().map(|t| t.prompt.as_str()).collect::<Vec<_>>(),
+            h.turns
+                .iter()
+                .map(|t| t.prompt.as_str())
+                .collect::<Vec<_>>(),
             vec!["轮1", "轮2"],
             "只含请求 session 的轮"
         );
@@ -2752,7 +2828,10 @@ mod tests {
         put_meta(&db, "03A2", "l2", "修改1", "sess-L");
         put_meta(&db, "03A3", "l3", "修改1", "sess-L"); // 同轮第二图（相邻同 prompt 合并）
         let imgs = db.last_generated_images_for_session("sess-L");
-        assert_eq!(imgs, vec!["/tmp/l2.png".to_string(), "/tmp/l3.png".to_string()]);
+        assert_eq!(
+            imgs,
+            vec!["/tmp/l2.png".to_string(), "/tmp/l3.png".to_string()]
+        );
 
         // sess-C：单轮 12 图（同 prompt 相邻合并）→ 截前 10。
         for i in 0..12 {
@@ -2827,7 +2906,9 @@ mod tests {
             "末端 = 上一轮产出引擎"
         );
         // 无 meta 的会话两端都为 None。
-        assert!(db.session_generation_provider("sess-EMPTY", false).is_none());
+        assert!(db
+            .session_generation_provider("sess-EMPTY", false)
+            .is_none());
         assert!(db.session_generation_provider("sess-EMPTY", true).is_none());
     }
 
@@ -2889,9 +2970,25 @@ mod tests {
         put_gen(&db, "x3", "sess-X");
         put_gen(&db, "x4", "sess-X");
         put_meta(&db, "05A1", "x1", "首版", "sess-X", "jimeng", None);
-        put_meta(&db, "05A2", "x2", "修改1", "sess-X", "codex-cli", Some("T2"));
+        put_meta(
+            &db,
+            "05A2",
+            "x2",
+            "修改1",
+            "sess-X",
+            "codex-cli",
+            Some("T2"),
+        );
         put_meta(&db, "05A3", "x3", "修改2", "sess-X", "jimeng", None);
-        put_meta(&db, "05A4", "x4", "修改3", "sess-X", "codex-cli", Some("T2"));
+        put_meta(
+            &db,
+            "05A4",
+            "x4",
+            "修改3",
+            "sess-X",
+            "codex-cli",
+            Some("T2"),
+        );
         assert_eq!(db.session_codex_thread("sess-X").as_deref(), Some("T2"));
         // 未记录句柄的会话 → None（首轮 codex 前的状态）。
         assert!(db.session_codex_thread("sess-EMPTY").is_none());
@@ -2963,7 +3060,11 @@ mod tests {
         assert_eq!(synth.asset.id, "temp1");
         assert_eq!(synth.asset.name, "原稿-标注");
         assert_eq!(synth.asset.source.as_deref(), Some("annotation"));
-        assert!(synth.asset.store_path.as_deref().is_some_and(|p| p.ends_with("temp1.png")));
+        assert!(synth
+            .asset
+            .store_path
+            .as_deref()
+            .is_some_and(|p| p.ends_with("temp1.png")));
         // 「标注」维度随 sidecar 还原，复用提示词时坐标 token 可完整展开。
         let sections = synth.sections.as_ref().expect("应有标注维度");
         assert_eq!(sections.len(), 1);
@@ -3083,13 +3184,15 @@ mod tests {
         put_codex(&db, "01A", "sess-A");
         put_codex(&db, "02B", "sess-B"); // 版本分支（重试 / 编辑后新版）
         put_codex(&db, "03C", "sess-C"); // 另一会话，不归组
-        db.record_generation_conversation("sess-A", "conv-1").unwrap();
-        db.record_generation_conversation("sess-B", "conv-1").unwrap();
+        db.record_generation_conversation("sess-A", "conv-1")
+            .unwrap();
+        db.record_generation_conversation("sess-B", "conv-1")
+            .unwrap();
 
         let group = db.list_generation_group("01A", None).unwrap();
         let ids: Vec<&str> = group.iter().map(|a| a.id.as_str()).collect();
         assert_eq!(ids, vec!["01A", "02B"]); // 跨 session 并组，id ASC
-        // 组内另一成员视角同组（瀑布流各成员卡片拿到同一份组）。
+                                             // 组内另一成员视角同组（瀑布流各成员卡片拿到同一份组）。
         assert_eq!(db.list_generation_group("02B", None).unwrap().len(), 2);
         // 无映射的 session 仍自成一组。
         let g3 = db.list_generation_group("03C", None).unwrap();
@@ -3098,7 +3201,8 @@ mod tests {
             vec!["03C"]
         );
         // 重复写映射幂等，分组不变。
-        db.record_generation_conversation("sess-B", "conv-1").unwrap();
+        db.record_generation_conversation("sess-B", "conv-1")
+            .unwrap();
         assert_eq!(db.list_generation_group("02B", None).unwrap().len(), 2);
     }
 
@@ -3221,7 +3325,10 @@ mod tests {
         })
         .unwrap();
 
-        let p1 = db.get_prompted_asset(&a1).unwrap().expect("有 caption 应返回");
+        let p1 = db
+            .get_prompted_asset(&a1)
+            .unwrap()
+            .expect("有 caption 应返回");
         assert_eq!(p1.caption.as_deref(), Some("a neon-lit city street"));
         assert_eq!(
             p1.sections.as_ref().unwrap()[0].body,
@@ -3235,7 +3342,10 @@ mod tests {
         assert_eq!(sections[1].title, "标注");
         assert_eq!(sections[1].body, "<bbox>120 180 640 760</bbox>");
 
-        let p3 = db.get_prompted_asset(&a3).unwrap().expect("无 caption 普通资产也应返回");
+        let p3 = db
+            .get_prompted_asset(&a3)
+            .unwrap()
+            .expect("无 caption 普通资产也应返回");
         assert!(p3.caption.is_none());
         assert!(p3.sections.is_none());
 
@@ -3307,7 +3417,10 @@ mod tests {
         let sections = p1.sections.as_ref().expect("a1 应有 sections");
         assert_eq!(sections.len(), 1, "最新 annotation 覆盖旧的");
         assert_eq!(sections[0].title, "标注");
-        assert_eq!(sections[0].body, "<point>10 20</point> → <point>30 40</point>");
+        assert_eq!(
+            sections[0].body,
+            "<point>10 20</point> → <point>30 40</point>"
+        );
 
         let p2 = by_id(&a2);
         assert!(p2.caption.is_none(), "a2 无 caption");
@@ -3354,7 +3467,10 @@ mod tests {
         assert_eq!(r.len(), 1);
         let sections = r[0].sections.as_ref().unwrap();
         assert_eq!(
-            sections.iter().map(|s| s.title.as_str()).collect::<Vec<_>>(),
+            sections
+                .iter()
+                .map(|s| s.title.as_str())
+                .collect::<Vec<_>>(),
             vec!["光影", "标注"],
             "标注维度应追加在 caption sections 之后"
         );
@@ -3573,7 +3689,8 @@ mod tests {
         let db = db();
         let in_project = put_asset_at(&db, "cyberpunk-project", 2);
         let outside = put_asset_at(&db, "cyberpunk-global", 1);
-        db.create_project("p1", "P1", "/tmp/p1", "/tmp/p1", "user").unwrap();
+        db.create_project("p1", "P1", "/tmp/p1", "/tmp/p1", "user")
+            .unwrap();
         db.add_assets_to_project("p1", std::slice::from_ref(&in_project))
             .unwrap();
 
@@ -3594,7 +3711,8 @@ mod tests {
         let db = db();
         let in_project = put_asset_at(&db, "cyberpunk-project", 2);
         let outside = put_asset_at(&db, "cyberpunk-global", 1);
-        db.create_project("p1", "P1", "/tmp/p1", "/tmp/p1", "user").unwrap();
+        db.create_project("p1", "P1", "/tmp/p1", "/tmp/p1", "user")
+            .unwrap();
         db.add_assets_to_project("p1", std::slice::from_ref(&in_project))
             .unwrap();
 
@@ -3617,7 +3735,10 @@ mod tests {
         assert_eq!(db.count_assets_ex(Some("p1"), true).unwrap(), 1);
 
         // hide=false：行为与旧签名一致（全局 2 / 项目 1）。
-        assert_eq!(db.list_assets_ex(None, None, false, 100, 0).unwrap().len(), 2);
+        assert_eq!(
+            db.list_assets_ex(None, None, false, 100, 0).unwrap().len(),
+            2
+        );
         assert_eq!(db.count_assets_ex(None, false).unwrap(), 2);
     }
 

@@ -1,0 +1,117 @@
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+
+import {
+  AgentControlClient,
+  type ClaimedArtifact,
+  type RegisteredAgentArtifact,
+} from "../control-plane/agent-control-client.ts";
+
+export type WorkspaceImage = {
+  mime: "image/png" | "image/jpeg" | "image/webp";
+  bytes: Uint8Array;
+  sha256: string;
+};
+
+const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+
+function imageMime(bytes: Uint8Array): WorkspaceImage["mime"] | null {
+  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47 &&
+      bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a) return "image/png";
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+  if (bytes.length >= 12 && new TextDecoder().decode(bytes.slice(0, 4)) === "RIFF" &&
+      new TextDecoder().decode(bytes.slice(8, 12)) === "WEBP") return "image/webp";
+  return null;
+}
+
+function extension(mime: WorkspaceImage["mime"]): string {
+  return mime === "image/jpeg" ? "jpg" : mime === "image/webp" ? "webp" : "png";
+}
+
+function checkedImage(bytes: Uint8Array, expected?: Pick<ClaimedArtifact, "mime" | "bytes" | "sha256">): WorkspaceImage {
+  if (!bytes.byteLength || bytes.byteLength > MAX_IMAGE_BYTES) throw new Error("agent_workspace_image_size_invalid");
+  const mime = imageMime(bytes);
+  const sha256 = createHash("sha256").update(bytes).digest("hex");
+  if (!mime || (expected && (mime !== expected.mime || bytes.byteLength !== expected.bytes || sha256 !== expected.sha256))) {
+    throw new Error("agent_workspace_image_validation_failed");
+  }
+  return { mime, bytes, sha256 };
+}
+
+/** Per-Run filesystem boundary. Images are downloaded only on approved execution. */
+export class RunWorkspace {
+  readonly path: string;
+  private readonly control: AgentControlClient;
+  private readonly remote = new Map<string, ClaimedArtifact>();
+  private readonly local = new Map<string, { path: string; image: WorkspaceImage }>();
+
+  constructor(args: {
+    root: string;
+    runId: string;
+    control: AgentControlClient;
+    artifacts?: ClaimedArtifact[];
+  }) {
+    if (!/^[A-Za-z0-9-]{1,80}$/.test(args.runId)) throw new Error("agent_workspace_run_id_invalid");
+    const root = resolve(args.root);
+    const path = resolve(root, args.runId);
+    if (path === root || !path.startsWith(`${root}\\`) && !path.startsWith(`${root}/`)) {
+      throw new Error("agent_workspace_path_escape");
+    }
+    mkdirSync(join(path, "inputs"), { recursive: true });
+    mkdirSync(join(path, "outputs"), { recursive: true });
+    this.path = path;
+    this.control = args.control;
+    for (const artifact of args.artifacts ?? []) this.remote.set(artifact.artifactId, artifact);
+  }
+
+  async readArtifact(artifactId: string): Promise<WorkspaceImage> {
+    const existing = this.local.get(artifactId);
+    if (existing && existsSync(existing.path)) return checkedImage(new Uint8Array(readFileSync(existing.path)));
+    const artifact = this.remote.get(artifactId);
+    if (!artifact?.url) throw new Error("agent_workspace_artifact_url_missing");
+    const bytes = await this.control.downloadVerifiedBytes(artifact.url, artifact);
+    const image = checkedImage(bytes, artifact);
+    const path = join(this.path, artifact.role === "input" ? "inputs" : "outputs", `${artifact.artifactId}.${extension(image.mime)}`);
+    writeFileSync(path, image.bytes);
+    this.local.set(artifactId, { path, image });
+    return image;
+  }
+
+  writeProviderResult(callId: string, bytes: Uint8Array): WorkspaceImage {
+    if (!/^[0-9a-f]{64}$/.test(callId)) throw new Error("agent_workspace_call_id_invalid");
+    const image = checkedImage(bytes);
+    const path = join(this.path, "outputs", `${callId}.${extension(image.mime)}`);
+    writeFileSync(path, image.bytes);
+    this.local.set(`call:${callId}`, { path, image });
+    return image;
+  }
+
+  providerResult(callId: string): WorkspaceImage | null {
+    const existing = this.local.get(`call:${callId}`);
+    if (!existing || !existsSync(existing.path)) return null;
+    return checkedImage(new Uint8Array(readFileSync(existing.path)));
+  }
+
+  rememberArtifact(callId: string, artifact: RegisteredAgentArtifact, image: WorkspaceImage): void {
+    const pending = this.local.get(`call:${callId}`);
+    if (pending) this.local.set(artifact.artifactId, pending);
+    this.remote.set(artifact.artifactId, artifact);
+    if (!this.local.has(artifact.artifactId)) {
+      const path = join(this.path, "outputs", `${artifact.artifactId}.${extension(image.mime)}`);
+      writeFileSync(path, image.bytes);
+      this.local.set(artifact.artifactId, { path, image });
+    }
+  }
+
+  rememberRemoteArtifact(artifact: RegisteredAgentArtifact): void {
+    this.remote.set(artifact.artifactId, artifact);
+  }
+
+  cleanup(): void {
+    const resolvedPath = resolve(this.path);
+    if (!resolvedPath || resolvedPath.length < 8) throw new Error("agent_workspace_cleanup_path_invalid");
+    rmSync(resolvedPath, { recursive: true, force: true });
+    this.local.clear();
+  }
+}

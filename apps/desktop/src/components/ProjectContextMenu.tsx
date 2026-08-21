@@ -127,6 +127,9 @@ export function ProjectContextMenu() {
   const projectId = menu.projectId;
   const project = projects.find((p) => p.id === projectId);
   const isBuiltin = project?.kind === "builtin";
+  // 空白项目（菜单「新建空白项目」）：无关联文件夹，「更新文件」无意义、「移出」没有
+  // workspace 可回（后端也降级 Keep），但「物理删除独占素材」照常可用。
+  const isBlank = project?.kind === "blank";
 
   // 菜单定位：固定到鼠标位置，超右/下边缘时收进来。
   const x = Math.max(4, Math.min(menu.x, window.innerWidth - MENU_WIDTH - 8));
@@ -145,8 +148,12 @@ export function ProjectContextMenu() {
         type="button"
         role="menuitem"
         onClick={() => void refresh(projectId)}
-        disabled={busy || isBuiltin}
-        title={isBuiltin ? "内置项目没有关联的本地文件夹" : "更新文件夹中的图片素材"}
+        disabled={busy || isBuiltin || isBlank}
+        title={
+          isBuiltin || isBlank
+            ? "该项目没有关联的本地文件夹"
+            : "更新文件夹中的图片素材"
+        }
         className="app-context-item px-2 py-1.5"
       >
         <FolderSync size={13} className="shrink-0" />
@@ -165,19 +172,22 @@ export function ProjectContextMenu() {
       >
         仅删除项目 · 素材留在全局
       </button>
-      {/* 内置项目（如欢迎项目）后端强制 Keep 语义：移出/物理删除对它无意义，不显示。 */}
+      {/* 内置项目（如欢迎项目）后端强制 Keep 语义：移出/物理删除对它无意义，不显示；
+          空白项目无 workspace 可移回，「移出」不显示（「物理删除独占素材」保留）。 */}
       {!isBuiltin && (
         <>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => void remove(projectId, "move_out")}
-            disabled={busy}
-            title="删除项目并将独占素材文件移回 workspace 文件夹；共享素材保留在全局"
-            className="app-context-item px-2 py-1.5"
-          >
-            移出园丁鸟 · 独占素材回 workspace
-          </button>
+          {!isBlank && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => void remove(projectId, "move_out")}
+              disabled={busy}
+              title="删除项目并将独占素材文件移回 workspace 文件夹；共享素材保留在全局"
+              className="app-context-item px-2 py-1.5"
+            >
+              移出园丁鸟 · 独占素材回 workspace
+            </button>
+          )}
           <button
             type="button"
             role="menuitem"

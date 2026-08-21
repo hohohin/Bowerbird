@@ -14,6 +14,8 @@
 //! - `0013_local_agent_runs.sql`：本机 Agent 预览 checkpoint（不复用 generation task_queue）
 //! - `0014_generation_conversations.sql`：生成会话级分组（session → conversation 映射，
 //!   「重新编辑 / 重试」版本分支持久归组，瀑布流同会话轮播重启不丢）
+//! - `0015_manual_name_guard.sql`：assets.name_manual 手改名保护标记（autoname 条件写不覆盖）
+//! - `0016_cloud_agent_runs.sql`：Cloud Agent 会话最小本地快照与最终资产关联
 
 use rusqlite_migration::{Migrations, M};
 
@@ -40,6 +42,8 @@ pub fn migrations() -> Migrations<'static> {
         M::up(include_str!("../../sql/0012_projects_builtin.sql")),
         M::up(include_str!("../../sql/0013_local_agent_runs.sql")),
         M::up(include_str!("../../sql/0014_generation_conversations.sql")),
+        M::up(include_str!("../../sql/0015_manual_name_guard.sql")),
+        M::up(include_str!("../../sql/0016_cloud_agent_runs.sql")),
     ])
 }
 

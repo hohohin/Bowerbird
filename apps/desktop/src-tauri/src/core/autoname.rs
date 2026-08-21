@@ -93,14 +93,22 @@ impl Drop for AutoActiveGuard {
     }
 }
 
-/// 生成图命名专用指令（内置兜底）：只取名、不要描述（生成图不进创作板 @ 引用池，不需要 caption）。
-/// 远程覆盖：Supabase prompt_configs 的 `understand_autoname` 行（随权益快照下发，见 auto_name_only）。
-const NAME_ONLY_INSTRUCTION: &str = "请给这张图片取一个不超过 8 个字的中文名字。\
+/// 文本命名共用指令（内置兜底）：**命名只有看文本一条通路**——codex / cloud / 未来新
+/// provider 一律不看图，共用此指令。来源文本由代码追加在指令后（生成图 = 生成 prompt 的
+/// 维度数据；反推后 = caption 反推数据）。远程覆盖：Supabase prompt_configs 的
+/// `understand_autoname` 行（随权益快照下发）。
+const NAME_FROM_TEXT_INSTRUCTION: &str =
+    "下面是这张图片的相关文本（生成参数或反推描述，含【维度】信息）。\
+  请据此给图片取一个不超过 8 个字的中文名字。\
   只回复名字本身，不要标点符号、不要描述、不要解释。";
 
 /// 远程 prompt 配置 key（Supabase prompt_configs 表）。远程改动须保留「只回复名字本身、
 /// 无标点」格式约定——clean_name 只解析首行，改坏格式会让命名静默降级为截断垃圾。
 const PROMPT_KEY_UNDERSTAND_AUTONAME: &str = "understand_autoname";
+
+/// 喂给命名的来源文本上限（字符）：长文本（生成 prompt 含参考图标注坐标 / 长反推）截断；
+/// 指令整体受 understand-proxy 的 20000 字符上限约束。
+const NAME_SOURCE_TEXT_MAX_CHARS: usize = 2000;
 
 /// 采集/导入入库后调用：后台让 codex 看图 → 产出命名 + caption，写回 DB 并 emit 刷新。
 /// 立即返回（不阻塞导入）；任一失败静默降级。
@@ -176,15 +184,16 @@ async fn auto_analyze(app: &AppHandle, db: &Arc<Database>, asset: Asset) -> Resu
     let (name, desc) = split_name_and_desc(&clean_text);
     let mut changed = false;
 
-    // 1) 命名写回（best-effort，失败不阻断 caption）
+    // 1) 命名写回（best-effort，失败不阻断 caption；手改名保护：条件写不覆盖）
     if let Some(n) = name {
         let (id_for_name, n_for_name) = (asset_id.clone(), n);
         match db_call(db, move |db| {
-            db.update_asset_name(&id_for_name, &n_for_name)
+            db.update_asset_name_if_auto(&id_for_name, &n_for_name)
         })
         .await
         {
-            Ok(()) => changed = true,
+            Ok(true) => changed = true,
+            Ok(false) => {}
             Err(e) => tracing::warn!("auto-name update_asset_name {asset_id}: {e}"),
         }
     }
@@ -242,59 +251,100 @@ where
         .map_err(|e| e.to_string())
 }
 
-/// 生成图入库后调用：后台让 codex 看图 → **只取名**（≤8 字），写回 DB + emit 刷新。
-///
-/// 与 `spawn_auto_analyze` 的区别：**不写 caption**——生成图不需要进创作板 `@` 引用池
-/// （`list_prompted_assets` 按 caption 过滤），只想要个人能读的名字（替代 codex 默认的
-/// `ig_<hash>`）。立即返回（不阻塞）；任一失败静默降级（保留原文件名，约定 7）。
+/// 生成图入库后调用：后台用生成 prompt 的维度数据**纯文本**命名（≤8 字），写回 DB + emit
+/// 刷新。不看图（codex / cloud / 未来 provider 共用 `name_from_text` 一条通路、同一个
+/// prompt）。无生成 prompt 则保留原文件名。立即返回（不阻塞）；任一失败静默降级
+/// （保留原文件名，约定 7）。
 pub fn spawn_auto_name_only(app: AppHandle, db: Arc<Database>, asset: Asset) {
     tokio::spawn(async move {
-        if let Err(e) = auto_name_only(&app, &db, asset).await {
+        let asset_id = asset.id.clone();
+        let id_for_prompt = asset_id.clone();
+        let source = match db_call(&db, move |db| db.latest_generation_prompt(&id_for_prompt)).await
+        {
+            Ok(Some(p)) => p,
+            Ok(None) => return, // 无维度数据无从命名，保留原文件名
+            Err(e) => {
+                tracing::warn!("auto-name-only generation prompt {asset_id}: {e}");
+                return;
+            }
+        };
+        if let Err(e) = name_from_text(&app, &db, &asset_id, source).await {
             tracing::warn!("auto-name-only: {e}");
         }
     });
 }
 
-async fn auto_name_only(app: &AppHandle, db: &Arc<Database>, asset: Asset) -> Result<(), String> {
-    let asset_id = asset.id.clone();
-    let Some(store_path) = asset.store_path.clone() else {
-        return Ok(()); // 无 store_path 无法看图
-    };
+/// 生成图被手动反推后调用：改用反推数据（caption 正文）重命名，仍是 `name_from_text`
+/// 纯文本通路。由 `codex_describe_asset` 在 caption 落库后触发（仅对有 generation_meta
+/// 的资产；采集图的名字本就来自入库时的 caption，不走这里）。
+pub fn spawn_rename_from_caption(app: AppHandle, db: Arc<Database>, asset_id: String) {
+    tokio::spawn(async move {
+        let id_for_caption = asset_id.clone();
+        let source = match db_call(&db, move |db| db.latest_caption_text(&id_for_caption)).await {
+            Ok(Some(p)) => p,
+            Ok(None) => return, // 无反推正文无从命名
+            Err(e) => {
+                tracing::warn!("rename-from-caption {asset_id}: {e}");
+                return;
+            }
+        };
+        if let Err(e) = name_from_text(&app, &db, &asset_id, source).await {
+            tracing::warn!("rename-from-caption: {e}");
+        }
+    });
+}
 
+/// 纯文本命名共用通路：共用指令（远程可改，内置兜底）+ 来源文本 → 按权益路由的 provider
+/// （codex 无附件 / cloud image=null，新 provider 自动同路）→ 首行清洗 ≤8 字写回 DB。
+/// 不看图、无 store_path 依赖；provider 不可用/超时静默降级（保留原文件名）。
+async fn name_from_text(
+    app: &AppHandle,
+    db: &Arc<Database>,
+    asset_id: &str,
+    source: String,
+) -> Result<(), String> {
+    let source_trimmed = source.trim();
+    if source_trimmed.is_empty() {
+        return Ok(()); // 空文本无从命名
+    }
+    // 手改名保护：用户手动改过名的资产直接跳过（省一次 provider 调用）；查失败按未
+    // 手改继续（写回侧 update_asset_name_if_auto 还有原子条件写兜底，双保险）。
+    let id_for_flag = asset_id.to_string();
+    if db_call(db, move |db| db.name_is_manual(&id_for_flag))
+        .await
+        .unwrap_or(false)
+    {
+        return Ok(());
+    }
     let _permit = AUTO_SEM.acquire().await.map_err(|e| e.to_string())?;
 
-    let settings = app
-        .try_state::<SettingsState>()
-        .map(|state| state.get())
-        .unwrap_or_default();
     let cloud = app.state::<CloudClient>().inner().clone();
     let auth = app.state::<AuthClient>().inner().clone();
     let entitlement = app.state::<EntitlementService>();
-    // 远程 prompt 覆盖：entitlement 快照捎带 prompt_configs（本机 codex 与 Cloud 两条路都
-    // 执行桌面传的指令，改一处全生效）。快照 Fresh 时零网络；离线/缺 key 回落内置默认。
-    let instruction = entitlement
-        .current_or_sync(&auth)
+    let snapshot = entitlement.current_or_sync(&auth).await;
+    // allow_cloud 恒 true：命名只上传文本、不上传图片，无需「云端理解」隐私开关
+    // （cloud_auto_understand 只管图片上云）；codex 路由不受此参数影响。
+    let provider = resolve_entitled_understand_provider(&entitlement, cloud, auth, true)
         .await
+        .map_err(|e| e.to_string())?;
+    // 远程 prompt 覆盖：entitlement 快照捎带 prompt_configs；快照 Fresh 时零网络；
+    // 离线/缺 key 回落内置默认。
+    let instruction = snapshot
         .prompt_config(PROMPT_KEY_UNDERSTAND_AUTONAME)
         .map(str::to_string)
-        .unwrap_or_else(|| NAME_ONLY_INSTRUCTION.to_string());
+        .unwrap_or_else(|| NAME_FROM_TEXT_INSTRUCTION.to_string());
+    let source: String = source_trimmed
+        .chars()
+        .take(NAME_SOURCE_TEXT_MAX_CHARS)
+        .collect();
 
     let req = CodexRequest {
-        instruction,
-        reference_images: vec![store_path.into()],
+        instruction: format!("{instruction}\n\n{source}"),
+        reference_images: vec![], // 只看文本，不看图
         context_prompts: vec![],
         ratio: None,
         job_id: None,
     };
-    let provider = resolve_entitled_understand_provider(
-        &entitlement,
-        cloud,
-        auth,
-        settings.cloud_auto_understand,
-    )
-    .await
-    .map_err(|e| e.to_string())?;
-    // codex 不可用/超时 → 静默降级（保留原文件名）。
     let result = provider
         .understand(UnderstandOperation::Autoname, req)
         .await
@@ -303,12 +353,13 @@ async fn auto_name_only(app: &AppHandle, db: &Arc<Database>, asset: Asset) -> Re
     // 指令要求单行；用 split_name_and_desc 取首行经 clean_name，防模型偶尔多嘴。
     let name = split_name_and_desc(&result.text).0;
     if let Some(n) = name {
-        let (idn, nn) = (asset_id.clone(), n);
-        match db_call(db, move |db| db.update_asset_name(&idn, &nn)).await {
-            Ok(()) => {
+        let (idn, nn) = (asset_id.to_string(), n);
+        match db_call(db, move |db| db.update_asset_name_if_auto(&idn, &nn)).await {
+            Ok(true) => {
                 let _ = app.emit("library://assets-changed", ());
             }
-            Err(e) => tracing::warn!("auto-name-only update_asset_name {asset_id}: {e}"),
+            Ok(false) => {} // 手改名保护：用户改过名（调用途中置位），不覆盖不 emit
+            Err(e) => tracing::warn!("auto-name update_asset_name {asset_id}: {e}"),
         }
     }
     Ok(())

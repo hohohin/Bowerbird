@@ -1,0 +1,52 @@
+{
+  "$schema": "bowerbird-skill-manifest-v1",
+  "id": "bowerbird-controlled-image-edit",
+  "version": "0.1.1",
+  "instructionHash": "2378180651c4a42cf98d20b8c428acb70807732d4e4acb8dd48626777be38a3e",
+  "kernelMinVersion": "0.1.0",
+  "snapshotSchemaVersion": 1,
+  "title": "Bowerbird 受控图片编辑",
+  "description": "纯文本意图分析与动态受控图片计划；批准后按计划执行，反馈后才允许视觉诊断。",
+  "input": {
+    "minReferences": 0,
+    "maxReferences": 8,
+    "intentPromptMaxLength": 4000,
+    "planningImageAccess": false
+  },
+  "strategies": ["direct", "controlled", "staged_controlled"],
+  "planStepKinds": ["direct_generate", "generate_control_reference", "edit_from_previous"],
+  "artifactRoles": ["input", "control_reference", "stage_result", "final_result", "plan", "diagnostic"],
+  "phaseGraph": {
+    "initial": "analyze_intent_text_only",
+    "terminal": ["succeeded", "failed", "cancelled"],
+    "nodes": [
+      "analyze_intent_text_only",
+      "compose_plan_with_skill",
+      "awaiting_plan_approval",
+      "execute_approved_plan",
+      "finalize_without_inspection",
+      "awaiting_result_feedback",
+      "diagnose_feedback",
+      "compose_revision_plan",
+      "awaiting_revision_approval",
+      "exporting",
+      "succeeded",
+      "failed",
+      "cancelled"
+    ]
+  },
+  "constraints": {
+    "maxPlanSteps": 8,
+    "maxGenerateCalls": 8,
+    "maxUnderstandCallsBeforeFeedback": 0,
+    "maxClarifications": 3,
+    "finalResultCount": 1,
+    "requiresPlanApproval": true
+  },
+  "budgetTiers": [
+    { "id": "controlled-standard", "credits": 48, "label": "标准（最多 8 个生成步骤）" }
+  ],
+  "allowedProviders": ["deepseek", "ark"],
+  "evalCases": "eval-cases.json",
+  "goldenTrace": "golden-trace.json"
+}

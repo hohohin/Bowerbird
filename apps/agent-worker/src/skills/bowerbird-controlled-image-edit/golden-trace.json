@@ -1,0 +1,26 @@
+{
+  "$schema": "bowerbird-controlled-image-edit-golden-trace-v1",
+  "sourceThread": "01a01dbf-72da-7cc1-b213-e69e44788b6b",
+  "containsPrivateContent": false,
+  "intentMapping": {
+    "base": "reference-2",
+    "transfers": [
+      { "from": "reference-1", "attributes": ["pose", "garment"] },
+      { "from": "reference-3", "attributes": ["accessory"] }
+    ],
+    "preserves": ["person identity", "background"],
+    "strategy": "staged_controlled"
+  },
+  "approvedPlanShape": {
+    "controlReferences": 2,
+    "editStages": 3,
+    "finalResults": 1
+  },
+  "invariants": [
+    "The five image calls are evidence for this intent, not a universal template.",
+    "Planning reads text and reference bindings only.",
+    "Each edit stage uses the previous result and the one currently necessary reference.",
+    "The first result is not proactively inspected or retried.",
+    "All process artifacts belong to one Bowerbird conversation."
+  ]
+}

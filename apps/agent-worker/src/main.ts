@@ -2,6 +2,7 @@
 // 各循环按其 CONTROL_URL 是否配置启用，互不阻塞；任一循环 fatal 不拖垮其它循环。
 import { configFromEnv as generationConfigFromEnv, runGenerationWorker } from "./cloud-generation/runtime.ts";
 import { configFromEnv as understandConfigFromEnv, runUnderstandWorker } from "./cloud-understand/runtime.ts";
+import { runControlledAgentWorker } from "./cloud-agent/main.ts";
 
 let loops = 0;
 
@@ -23,7 +24,12 @@ if (process.env.UNDERSTAND_CONTROL_URL?.trim()) {
   runUnderstandWorker(understandConfigFromEnv(process.env)).catch(fatal("understand_worker_fatal"));
 }
 
+if (process.env.AGENT_CONTROL_URL?.trim()) {
+  loops += 1;
+  runControlledAgentWorker(process.env).catch(fatal("agent_worker_fatal"));
+}
+
 if (!loops) {
-  console.error(JSON.stringify({ event: "worker_noop", error: "GENERATION_CONTROL_URL/UNDERSTAND_CONTROL_URL_missing" }));
+  console.error(JSON.stringify({ event: "worker_noop", error: "GENERATION_CONTROL_URL/UNDERSTAND_CONTROL_URL/AGENT_CONTROL_URL_missing" }));
   process.exitCode = 1;
 }

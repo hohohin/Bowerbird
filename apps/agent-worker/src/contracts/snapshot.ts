@@ -33,6 +33,8 @@ export type RunSnapshot = {
 
   status: RunStatus;
   phase: string;
+  /** 首版一次 Agent 发送对应的 Bowerbird 会话；全部过程 artifact 共用。 */
+  conversationId?: string;
   revisionIndex: number;
   modelTurnCount: number;
   toolCallCount: number;
@@ -44,8 +46,20 @@ export type RunSnapshot = {
   pendingOutcomeCallIds: string[];
 
   approvedPlanHash?: string;
+  /** 已批准计划声明的付费工具总数与当前执行游标。 */
+  plannedToolCount?: number;
+  stepCursor?: number;
   approvalId?: string;
   contextCapsuleHash?: string;
+
+  /** 仅存恢复所需的 artifact 引用与职责，不把图片内容写进 snapshot。 */
+  artifacts?: Array<{
+    artifactId: string;
+    role: "input" | "control_reference" | "stage_result" | "final_result" | "plan" | "diagnostic";
+    stepId?: string;
+    parentArtifactId?: string;
+    contentHash: string;
+  }>;
 
   /** compaction summary 保留的被采纳事实（带来源 hash）。 */
   compactedFacts: Array<{ fact: string; sourceHash: string }>;

@@ -807,7 +807,10 @@ pub async fn rename_asset(
     tokio::task::spawn_blocking(move || db.rename_asset_files(&id, &new_name))
         .await
         .map_err(|e| AppError::Other(e.to_string()))??;
-    let _ = app.emit("library://assets-changed", serde_json::json!({ "id": id_for_emit }));
+    let _ = app.emit(
+        "library://assets-changed",
+        serde_json::json!({ "id": id_for_emit }),
+    );
     Ok(())
 }
 

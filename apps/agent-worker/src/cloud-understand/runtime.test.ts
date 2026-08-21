@@ -131,8 +131,12 @@ const INPUT = JSON.stringify({
   mock_scenario: null,
 });
 
-async function runOnce(arkBehavior: Parameters<typeof makeFetch>[1], config = baseConfig()) {
-  const { fetch, recorded } = makeFetch(INPUT, arkBehavior);
+async function runOnce(
+  arkBehavior: Parameters<typeof makeFetch>[1],
+  config = baseConfig(),
+  inputPayload: string = INPUT,
+) {
+  const { fetch, recorded } = makeFetch(inputPayload, arkBehavior);
   const stop = { requested: false };
   const worker = runUnderstandWorker(config, fetch, stop);
   // 第一次 claim 领到任务并结算后，第二次 claim 返回空，随即请求停止。
@@ -165,6 +169,30 @@ test("known Ark moderation failure settles as fail with a safe code", async () =
   }));
   deepEqual(recorded.controlActions, ["claim", "submitted", "fail", "claim"]);
   equal(recorded.settleBody?.safeErrorCode, "content_moderation");
+});
+
+test("text-only autoname input sends a single text part to ark", async () => {
+  // image=null（维度数据命名）：输入校验放行，方舟消息只含 text 部分（无 image_url）。
+  const input = JSON.stringify({
+    schema_version: 1,
+    operation: "autoname",
+    image: null,
+    instruction: "下面是这张图片的生成参数（按【维度】标注）。请取名。",
+    mock_scenario: null,
+  });
+  const recorded = await runOnce(async () => ({
+    ok: true,
+    status: 200,
+    body: JSON.stringify({ choices: [{ message: { content: "雨夜霓虹" } }] }),
+  }), baseConfig(), input);
+  deepEqual(recorded.controlActions, ["claim", "submitted", "finish", "claim"]);
+  equal(recorded.finishBody?.resultText, "雨夜霓虹");
+  const arkBody = recorded.arkRequestBody as {
+    messages: Array<{ content: Array<{ type: string; text?: string }> }>;
+  };
+  const parts = arkBody.messages[0].content;
+  deepEqual(parts.map((part) => part.type), ["text"]);
+  ok(parts[0].text?.includes("【维度】"));
 });
 
 test("transport error after submission settles as outcome_unknown", async () => {

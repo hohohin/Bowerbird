@@ -11,6 +11,7 @@ import type {
   AuthSnapshot,
   Asset,
   CaptionSection,
+  CloudAgentRunRecord,
   CodexChunk,
   CodexHealth,
   ColorBucket,
@@ -261,11 +262,18 @@ interface State {
   setCollectedNotice: (name: string | null) => void;
   // —— 生成结果面板（多 job；主区覆盖层，可随时开合，状态在 store 不丢）——
   genPanelOpen: boolean;
+  activeSessionKind: "generation" | "agent";
+  cloudAgentRuns: Record<string, CloudAgentRunRecord>;
+  cloudAgentRunOrder: string[];
+  activeCloudAgentRunId: string | null;
   genJobs: Record<string, GenJob>; // 所有生成会话（首轮创建，续轮追加 turn）
   genJobOrder: string[]; // job 创建顺序（侧栏 Status 任务列表稳定排序）
   activeJobId: string | null; // 当前查看/操作的 job（续轮/复用/取消/重试基于它）
   genUnread: boolean; // 面板关时落地新图 → 顶栏按钮红点
   setActiveJob: (id: string) => void;
+  openCloudAgentRun: (run: CloudAgentRunRecord) => void;
+  updateCloudAgentRun: (run: CloudAgentRunRecord) => void;
+  loadCloudAgentRuns: () => Promise<void>;
   // 删除生成任务记录（仅前端 genJobs 记录；不取消后端任务、不删已入库图片）。
   removeGenJob: (id: string) => void;
   setGenPanelOpen: (open: boolean) => void;
@@ -987,13 +995,55 @@ export const useStore = create<State>((set, get) => {
     ),
   // —— 生成结果面板（多 job）——
   genPanelOpen: false,
+  activeSessionKind: "generation",
+  cloudAgentRuns: {},
+  cloudAgentRunOrder: [],
+  activeCloudAgentRunId: null,
   genJobs: {},
   genJobOrder: [],
   activeJobId: null,
   genUnread: false,
   setGenPanelOpen: (open) =>
     set((s) => ({ genPanelOpen: open, genUnread: open ? false : s.genUnread })),
-  setActiveJob: (id) => set({ activeJobId: id }),
+  setActiveJob: (id) => set({ activeJobId: id, activeSessionKind: "generation" }),
+  openCloudAgentRun: (run) => set((s) => ({
+    cloudAgentRuns: { ...s.cloudAgentRuns, [run.runId]: run },
+    cloudAgentRunOrder: s.cloudAgentRuns[run.runId]
+      ? s.cloudAgentRunOrder
+      : [run.runId, ...s.cloudAgentRunOrder],
+    activeCloudAgentRunId: run.runId,
+    activeSessionKind: "agent",
+    genPanelOpen: true,
+    genEditing: null,
+    detailAssetId: null,
+    genUnread: false,
+  })),
+  updateCloudAgentRun: (run) => set((s) => ({
+    cloudAgentRuns: { ...s.cloudAgentRuns, [run.runId]: run },
+    cloudAgentRunOrder: s.cloudAgentRuns[run.runId]
+      ? s.cloudAgentRunOrder
+      : [run.runId, ...s.cloudAgentRunOrder],
+  })),
+  loadCloudAgentRuns: async () => {
+    try {
+      const runs = await api.cloudAgentList();
+      if (runs.length === 0) return;
+      const cloudAgentRuns = Object.fromEntries(runs.map((run) => [run.runId, run]));
+      const needsAttention = runs.find((run) =>
+        !["succeeded", "failed", "cancelled"].includes(run.status)
+        || (run.status === "succeeded" && !run.finalAssetId));
+      set({
+        cloudAgentRuns,
+        cloudAgentRunOrder: runs.map((run) => run.runId),
+        activeCloudAgentRunId: needsAttention?.runId ?? null,
+        ...(needsAttention
+          ? { activeSessionKind: "agent" as const, genPanelOpen: true, genEditing: null }
+          : {}),
+      });
+    } catch (error) {
+      console.error("loadCloudAgentRuns failed", error);
+    }
+  },
   removeGenJob: (id) => {
     // 已完成（非在跑）会话的移除同步删 task_queue 终态行——重启恢复不再出现该会话；
     // 在跑 job 的行留给恢复链路（前端移除仍只动内存），「回看生成对话」的临时 job 无行、删除为空操作。
@@ -1092,7 +1142,7 @@ export const useStore = create<State>((set, get) => {
         const generating = Object.values(genJobs).some((x) => x.running);
         // 有恢复中 job → 自动弹面板 + 选中首个（历史会话恢复不弹，与 startGeneration 自动弹一致）。
         return firstRecoveredId
-          ? { genJobs, genJobOrder, generating, genPanelOpen: true, activeJobId: s.activeJobId ?? firstRecoveredId }
+          ? { genJobs, genJobOrder, generating, genPanelOpen: true, activeSessionKind: "generation" as const, activeJobId: s.activeJobId ?? firstRecoveredId }
           : { genJobs, genJobOrder, generating };
       });
     } catch (e) {
@@ -1146,6 +1196,7 @@ export const useStore = create<State>((set, get) => {
       genJobs: { ...s.genJobs, [jobId]: job },
       genJobOrder: [...s.genJobOrder, jobId],
       activeJobId: jobId, // 新发 job 自动选中（续轮/复用/取消聚焦它）
+      activeSessionKind: "generation",
       genPanelOpen: true, // 自动弹面板给即时反馈（创作板在右槽仍可编辑）
       genUnread: false,
       generating: true, // 新 job running → 至少此 job 在跑
@@ -1330,6 +1381,7 @@ export const useStore = create<State>((set, get) => {
           genJobs: { ...s.genJobs, [rid]: job },
           genJobOrder: [...s.genJobOrder, rid],
           activeJobId: s.activeJobId ?? rid,
+          activeSessionKind: "generation" as const,
           generating: true,
           genPanelOpen: true, // 恢复中弹面板（用户看得见恢复进度）
         };
@@ -1395,7 +1447,7 @@ export const useStore = create<State>((set, get) => {
         ? Object.values(get().genJobs).find((j) => j.sessionId === hist.session_id)
         : undefined;
       if (existing) {
-        set({ activeJobId: existing.id, genPanelOpen: true, genUnread: false });
+        set({ activeJobId: existing.id, activeSessionKind: "generation", genPanelOpen: true, genUnread: false });
         return;
       }
       const jobId = crypto.randomUUID();
@@ -1428,6 +1480,7 @@ export const useStore = create<State>((set, get) => {
         genJobs: { ...s.genJobs, [jobId]: job },
         genJobOrder: [...s.genJobOrder, jobId],
         activeJobId: jobId,
+        activeSessionKind: "generation",
         genPanelOpen: true, // 弹生成面板（盖住详情页，关面板回详情页）
         genUnread: false,
       }));

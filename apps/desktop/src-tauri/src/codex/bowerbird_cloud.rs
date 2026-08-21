@@ -29,7 +29,12 @@ pub struct BowerbirdCloudProvider {
 
 impl BowerbirdCloudProvider {
     pub fn new(cloud: CloudClient, auth: AuthClient, key: String, service: String) -> Self {
-        Self { cloud, auth, key, service }
+        Self {
+            cloud,
+            auth,
+            key,
+            service,
+        }
     }
 }
 
@@ -37,7 +42,10 @@ impl BowerbirdCloudProvider {
 /// 新式 key 后缀即 service（`bowerbird-cloud-image_hd` → `image_hd`）；遗留 key 显式映射；
 /// 非法值兜底 `image_hd`（Edge 侧仍会按 service_costs 二次校验）。
 pub fn cloud_service_for_key(key: &str) -> String {
-    let suffix = key.strip_prefix("bowerbird-cloud").unwrap_or("").trim_start_matches('-');
+    let suffix = key
+        .strip_prefix("bowerbird-cloud")
+        .unwrap_or("")
+        .trim_start_matches('-');
     match suffix {
         "" => "image_hd",
         "fast" => "image_fast",

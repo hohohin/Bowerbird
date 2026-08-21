@@ -21,7 +21,8 @@ const asyncMode = (Deno.env.get("UNDERSTAND_ASYNC") ?? "false") === "true";
 interface UnderstandRequest {
   idempotency_key: string;
   operation: "caption" | "autoname" | "classify";
-  image: ImageInput;
+  /** null = 纯文本调用（生成图维度数据命名），图片不上云；caption/classify 必带一张图。 */
+  image: ImageInput | null;
   instruction?: string;
   mock_scenario?: MockScenario;
 }
@@ -50,7 +51,14 @@ function validate(body: unknown): UnderstandRequest {
   if (!["caption", "autoname", "classify"].includes(String(value.operation))) {
     throw new ApiError("invalid_request", "未知理解操作");
   }
-  assertReferenceImages([value.image], 1);
+  if (value.image == null) {
+    // 纯文本调用：无图时必须带非空 instruction（桌面维度数据命名恒满足）。
+    if (typeof value.instruction !== "string" || !value.instruction.trim()) {
+      throw new ApiError("invalid_request", "缺少图片或指令");
+    }
+  } else {
+    assertReferenceImages([value.image], 1);
+  }
   if (value.instruction !== undefined &&
     (typeof value.instruction !== "string" || value.instruction.length > 20_000)) {
     throw new ApiError("invalid_request", "instruction 最多 20000 字符");

@@ -1,0 +1,71 @@
+import { createHash, randomUUID } from "node:crypto";
+import { equal, ok, rejects } from "node:assert/strict";
+import { existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { test } from "node:test";
+
+import { AgentControlClient, type AgentWorkerFetch, type HttpResponse } from "../control-plane/agent-control-client.ts";
+import { RunWorkspace } from "./run-workspace.ts";
+
+function response(status: number, bytes: Uint8Array): HttpResponse {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    headers: { get: () => "image/png" },
+    text: async () => new TextDecoder().decode(bytes),
+    arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer,
+  };
+}
+
+function png(): Uint8Array {
+  const decode = (globalThis as unknown as { atob(input: string): string }).atob;
+  const binary = decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
+  return Uint8Array.from(binary, (char: string) => char.charCodeAt(0));
+}
+
+test("Run workspace downloads approved artifacts lazily, verifies them, and cleans only its run directory", async () => {
+  const image = png();
+  let downloads = 0;
+  const fetch: AgentWorkerFetch = async (url) => {
+    if (url === "https://storage/input") downloads++;
+    return response(200, image);
+  };
+  const control = new AgentControlClient({ controlUrl: "https://control", workerToken: "secret", workerId: "worker" }, fetch);
+  const root = join(tmpdir(), `bowerbird-workspace-test-${randomUUID()}`);
+  const workspace = new RunWorkspace({
+    root,
+    runId: "run-1",
+    control,
+    artifacts: [{
+      artifactId: "input-1", conversationId: "conversation-1", runId: "run-1", role: "input",
+      stepId: "ref-1", mime: "image/png", bytes: image.byteLength,
+      sha256: createHash("sha256").update(image).digest("hex"), userVisible: true, url: "https://storage/input",
+    }],
+  });
+  equal(downloads, 0, "creating the workspace must not inspect image bytes");
+  equal((await workspace.readArtifact("input-1")).sha256, createHash("sha256").update(image).digest("hex"));
+  equal(downloads, 1);
+  ok(existsSync(workspace.path));
+  workspace.cleanup();
+  equal(existsSync(workspace.path), false);
+});
+
+test("Run workspace rejects declared image metadata that does not match bytes", async () => {
+  const image = png();
+  const control = new AgentControlClient(
+    { controlUrl: "https://control", workerToken: "secret", workerId: "worker" },
+    async () => response(200, image),
+  );
+  const workspace = new RunWorkspace({
+    root: join(tmpdir(), `bowerbird-workspace-test-${randomUUID()}`),
+    runId: "run-2",
+    control,
+    artifacts: [{
+      artifactId: "input-2", conversationId: "conversation-2", runId: "run-2", role: "input",
+      mime: "image/png", bytes: image.byteLength, sha256: "a".repeat(64), userVisible: true, url: "https://storage/input",
+    }],
+  });
+  await rejects(async () => await workspace.readArtifact("input-2"), /agent_object_hash_mismatch/);
+  workspace.cleanup();
+});

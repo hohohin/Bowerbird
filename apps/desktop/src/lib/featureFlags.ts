@@ -9,3 +9,6 @@ export const CODEX_ONBOARDING_ENABLED = false;
 export const DREAMINA_ONBOARDING_ENABLED = false;
 // Agent Z（创作板 × Claude Code TUI 互通，dev 测试）：仅 debug 构建且本机能找到 claude CLI 时生效。
 export const AGENT_Z_ENABLED = true;
+// Agent DS（创作板 × DeepSeek 对话 harness，dev 测试）：对话发生在创作板内（回复追加进编辑器），
+// 生图/反推经 .agent-z/rpc 文件契约回桌面端执行；依赖 agent-worker + apps/cloud/.env（与 Agent A/B 同源）。
+export const AGENT_DS_ENABLED = true;

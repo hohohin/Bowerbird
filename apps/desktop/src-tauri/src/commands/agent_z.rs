@@ -33,6 +33,7 @@ fn ensure_preview_enabled() -> Result<(), AppError> {
 mod imp {
     use super::AgentZStatus;
     use crate::error::AppError;
+    use serde::Serialize;
     use std::{
         collections::HashSet,
         path::{Path, PathBuf},
@@ -48,8 +49,8 @@ mod imp {
         CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
     };
     use windows::Win32::System::Console::{
-        AttachConsole, FreeConsole, GetConsoleWindow, INPUT_RECORD, INPUT_RECORD_0,
-        KEY_EVENT_RECORD, KEY_EVENT_RECORD_0, KEY_EVENT, WriteConsoleInputW,
+        AttachConsole, FreeConsole, GetConsoleWindow, WriteConsoleInputW, INPUT_RECORD,
+        INPUT_RECORD_0, KEY_EVENT, KEY_EVENT_RECORD, KEY_EVENT_RECORD_0,
     };
     use windows::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
@@ -63,14 +64,35 @@ mod imp {
         IsWindowVisible, SetForegroundWindow,
     };
 
-    pub const WINDOW_TITLE: &str = "Bowerbird Agent Z";
+    pub const WINDOW_TITLE_Z: &str = "Bowerbird Agent Z";
+    pub const WINDOW_TITLE_G: &str = "Bowerbird Agent G";
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     const VK_RETURN: u16 = 0x0D;
 
-    /// 已唤起终端的内层 cmd.exe pid（窗口关闭即失联，下次发送重开新会话）
-    static CONSOLE_PID: LazyLock<Mutex<Option<u32>>> = LazyLock::new(|| Mutex::new(None));
+    pub fn window_title(engine: &str) -> &'static str {
+        match engine {
+            "g" => WINDOW_TITLE_G,
+            _ => WINDOW_TITLE_Z,
+        }
+    }
+
+    /// 各引擎已唤起终端的内层 cmd.exe pid（窗口关闭即失联，下次发送重开新会话）
+    static CONSOLE_PIDS: LazyLock<Mutex<std::collections::HashMap<String, u32>>> =
+        LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
 
     // —— 解析 ——
+
+    /// 引擎 CLI：z = Claude Code，g = codex。env BOWERBIRD_AGENT_Z_CLI 仅覆盖 z 引擎。
+    pub fn resolve_engine_cli(engine: &str) -> Result<String, AppError> {
+        match engine {
+            "g" => crate::codex::codex_cli::resolve_codex_binary().ok_or_else(|| {
+                AppError::Other(
+                    "未找到 codex CLI；请在「设置 · AI 出图引擎」安装或检查 PATH".into(),
+                )
+            }),
+            _ => resolve_claude_cli(),
+        }
+    }
 
     /// Claude Code CLI：env 覆盖 → 原生安装位 → npm 全局。都不在则返回 "claude" 交由
     /// cmd 按 PATH 解析（此时 health 的 --version 探测兜底失败并给出指引）。
@@ -88,7 +110,12 @@ mod imp {
         let mut candidates: Vec<PathBuf> = Vec::new();
         if let Some(home) = std::env::var_os("USERPROFILE") {
             // 官方原生安装位（claude.exe）
-            candidates.push(PathBuf::from(home).join(".local").join("bin").join("claude.exe"));
+            candidates.push(
+                PathBuf::from(home)
+                    .join(".local")
+                    .join("bin")
+                    .join("claude.exe"),
+            );
         }
         if let Some(appdata) = std::env::var_os("APPDATA") {
             // npm 全局安装（claude.cmd）
@@ -102,20 +129,23 @@ mod imp {
         Ok("claude".into())
     }
 
-    /// TUI 的对话工作区：仓库内中立目录（与代码隔离——不给模型读源码/受 AGENTS.md 引导的
-    /// 机会，配合系统提示词与工具禁用实现「只思考生图、只调工具」）。参考图走绝对路径
-    /// 不受影响。env BOWERBIRD_AGENT_Z_CWD 可覆盖。
+    /// TUI 的对话工作区：仓库外的中立目录（应用数据区）。必须离开 git 仓库——
+    /// codex/claude 会沿 cwd 向上读到仓库根的 AGENTS.md（编码助手人设污染）；这里的
+    /// AGENTS.md 是唯一的角色约束。参考图走绝对路径不受影响。env BOWERBIRD_AGENT_Z_CWD 可覆盖。
     fn tui_workspace() -> PathBuf {
         if let Some(path) = std::env::var_os("BOWERBIRD_AGENT_Z_CWD") {
             return PathBuf::from(path);
         }
-        agent_z_root().join("workspace")
+        crate::codex::codex_cli::app_data_dir()
+            .unwrap_or_else(|| agent_z_root())
+            .join("agent-z")
+            .join("workspace")
     }
 
-    /// 供 Claude Code / codex 共同读取的角色约束（两者都会读工作区 AGENTS.md）。
-    const WORKSPACE_AGENTS_MD: &str = r#"# Agent Z 工作区
+    /// 供 Claude Code（Agent Z）/ codex（Agent G）共同读取的角色约束（都读工作区 AGENTS.md）。
+    const WORKSPACE_AGENTS_MD: &str = r#"# Bowerbird Agent 工作区
 
-你是 Bowerbird 桌面应用的「Agent Z」——内嵌的生图对话助手，不是编码助手。
+你是 Bowerbird 桌面应用内嵌的生图对话助手（Agent Z / Agent G），不是编码助手。
 
 - 只做与图片创作相关的思考、追问与方案讨论。
 - 生图用 dreamina_generate；反推用 understand_asset；把结果送回 Bowerbird 创作板用 send_to_creation_board。
@@ -127,12 +157,16 @@ mod imp {
     const SYSTEM_PROMPT: &str = "你是 Bowerbird 桌面应用内嵌的「Agent Z」生图对话助手，不是编码助手。只围绕用户的图片创作诉求思考与追问，并用提供的工具行动：dreamina_generate 生图、understand_asset 反推、send_to_creation_board 回传创作板。禁止阅读或修改任何代码，禁止对 Bowerbird 项目本身提出建议或分析其实现。参考图（绝对路径）用 Read 工具查看。";
 
     /// 编码/探索类工具全禁（Read 保留用于看图）。逗号分隔，`--disallowedTools=` 等号形式传参。
-    const DISALLOWED_TOOLS: &str = "Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch,TodoWrite,Task,Agent,Glob,Grep";
+    const DISALLOWED_TOOLS: &str =
+        "Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch,TodoWrite,Task,Agent,Glob,Grep";
 
     // —— MCP 回传通道 ——
     // Claude Code TUI 以 --mcp-config 挂载本地桥（.agent-z/mcp-bridge.mjs），模型获得
-    // send_to_creation_board 工具；调用落 .agent-z/inbox/<ts>.json 事件文件，桌面端
-    // watcher 轮询消费并 emit agent-z://output → 前端追加进创作板编辑器。
+    // send_to_creation_board 工具；调用落 .agent-z/inbox/<ts>.json 事件文件（{text}，无
+    // kind）。Agent DS harness（commands/agent_ds.rs）写同一 inbox，事件带
+    // {kind:"ds_reply"|"ds_status", text, phase}；桌面端 watcher 轮询消费并 emit
+    // agent-z://output（payload 含 text/kind/phase）→ 前端按 kind 分流（追加创作板 /
+    // 状态通知 / busy 解除）。
 
     fn assets_dir() -> PathBuf {
         agent_z_root()
@@ -207,7 +241,7 @@ const TOOLS = [
   {
     name: "dreamina_generate",
     description:
-      "用即梦（Dreamina，火山引擎）生成图片并自动存入 Bowerbird 素材库（瀑布流可见）。" +
+      "用即梦（Dreamina，火山引擎云端 API）生成图片并自动存入 Bowerbird 素材库（瀑布流可见）。" +
       "涉及生图时优先用本工具，不要自己去调 dreamina CLI。需要 Bowerbird 桌面端运行中。",
     inputSchema: {
       type: "object",
@@ -222,11 +256,18 @@ const TOOLS = [
   {
     name: "understand_asset",
     description:
-      "对 Bowerbird 素材库中的一张图执行反推（图像理解，走 Bowerbird 反推链路输出详细描述，" +
-      "并写入该素材的反推记录）。需要 Bowerbird 桌面端运行中。",
+      "对 Bowerbird 素材库中的一张图执行反推（图像理解，经 Bowerbird Cloud 方舟链路）。" +
+      "可用自定义反推指令聚焦画面某部分；结果无论是否结构化，都会以 agentz-<时间> 新维度追加到该图已有维度数据之后（不覆盖现有维度）。" +
+      "需要 Bowerbird 桌面端运行中且已登录 Bowerbird 账号。",
     inputSchema: {
       type: "object",
-      properties: { image_path: { type: "string", description: "素材库内图片的绝对路径（store_path）" } },
+      properties: {
+        image_path: { type: "string", description: "素材库内图片的绝对路径（store_path）" },
+        prompt: {
+          type: "string",
+          description: "自定义反推指令（可选，≤4000 字符）。例：『着重描述画面右侧人物的动作与穿着，忽略背景』；不传则用应用默认指令",
+        },
+      },
       required: ["image_path"],
     },
   },
@@ -248,7 +289,7 @@ async function handleLine(line) {
     reply(id, {
       protocolVersion: "2024-11-05",
       capabilities: { tools: {} },
-      serverInfo: { name: "bowerbird-agent-z", version: "0.2.0" },
+      serverInfo: { name: "bowerbird-agent-z", version: "0.3.0" },
     });
   } else if (method === "tools/list") {
     reply(id, { tools: TOOLS });
@@ -302,11 +343,11 @@ rl.on("line", (line) => { void handleLine(line); });
             std::fs::write(&agents_md, WORKSPACE_AGENTS_MD)
                 .map_err(|error| AppError::Other(format!("写出工作区约束失败: {error}")))?;
         }
+        // 桥脚本是无状态产物：每次都重写，保证与常量（工具描述等）不漂移；
+        // 运行中的 node 桥实例已把脚本读进内存，重写不影响在途会话。
         let bridge = assets.join("mcp-bridge.mjs");
-        if !bridge.is_file() {
-            std::fs::write(&bridge, MCP_BRIDGE_SCRIPT)
-                .map_err(|error| AppError::Other(format!("写出 MCP 桥脚本失败: {error}")))?;
-        }
+        std::fs::write(&bridge, MCP_BRIDGE_SCRIPT)
+            .map_err(|error| AppError::Other(format!("写出 MCP 桥脚本失败: {error}")))?;
         let config = serde_json::json!({
             "mcpServers": {
                 "bowerbird": {
@@ -326,27 +367,51 @@ rl.on("line", (line) => { void handleLine(line); });
         Ok(assets)
     }
 
-    /// 消费 inbox 事件文件（按时间戳名排序）：读 {text} → 删文件 → 返回文本列表。
-    /// 坏文件也删除，防堆积。
-    pub fn drain_inbox(dir: &Path) -> Vec<String> {
-        let mut texts = Vec::new();
+    /// inbox 事件：Agent Z TUI 桥写 {text}（kind 空）；Agent DS harness 写
+    /// {kind:"ds_reply"|"ds_status", text, phase}（ds_status 的 phase = tool/done/error）。
+    #[derive(Debug, Clone, Serialize)]
+    pub struct InboxEvent {
+        pub text: String,
+        pub kind: Option<String>,
+        pub phase: Option<String>,
+    }
+
+    /// 消费 inbox 事件文件（按时间戳名排序）：读 {text[,kind,phase]} → 删文件 → 返回事件列表。
+    /// 坏文件也删除，防堆积；无 kind 且 text 为空的事件跳过（ds_status 的 done 允许空文本）。
+    pub fn drain_inbox(dir: &Path) -> Vec<InboxEvent> {
+        let mut events = Vec::new();
         let Ok(entries) = std::fs::read_dir(dir) else {
-            return texts;
+            return events;
         };
-        let mut files: Vec<PathBuf> = entries.filter_map(Result::ok).map(|entry| entry.path()).collect();
+        let mut files: Vec<PathBuf> = entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .collect();
         files.sort();
         for path in files {
             let raw = std::fs::read_to_string(&path).unwrap_or_default();
             let _ = std::fs::remove_file(&path);
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) {
-                if let Some(text) = value.get("text").and_then(|value| value.as_str()) {
-                    if !text.trim().is_empty() {
-                        texts.push(text.to_string());
-                    }
+                let text = value
+                    .get("text")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let kind = value
+                    .get("kind")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string);
+                let phase = value
+                    .get("phase")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string);
+                if kind.is_none() && text.trim().is_empty() {
+                    continue;
                 }
+                events.push(InboxEvent { text, kind, phase });
             }
         }
-        texts
+        events
     }
 
     // —— 能力 RPC（dreamina 生图 / 方舟反推）——
@@ -368,7 +433,10 @@ rl.on("line", (line) => { void handleLine(line); });
         let mut files: Vec<PathBuf> = entries
             .filter_map(Result::ok)
             .map(|entry| entry.path())
-            .filter(|path| path.file_name().is_some_and(|name| name.to_string_lossy().ends_with(".req.json")))
+            .filter(|path| {
+                path.file_name()
+                    .is_some_and(|name| name.to_string_lossy().ends_with(".req.json"))
+            })
             .collect();
         files.sort();
         for path in files {
@@ -395,7 +463,9 @@ rl.on("line", (line) => { void handleLine(line); });
     }
 
     fn write_rpc_response_at(dir: &Path, id: &str, response: &serde_json::Value) {
-        if let Err(error) = std::fs::write(dir.join(format!("{id}.resp.json")), response.to_string()) {
+        if let Err(error) =
+            std::fs::write(dir.join(format!("{id}.resp.json")), response.to_string())
+        {
             tracing::warn!("写出 Agent Z RPC 响应失败: {error}");
         }
     }
@@ -447,7 +517,10 @@ rl.on("line", (line) => { void handleLine(line); });
             .map(str::to_string);
         let settings = app.state::<crate::core::settings::SettingsState>();
         let dreamina_model = settings.get().dreamina_model_version;
-        let provider = crate::codex::resolve_gen_provider(Some("jimeng"), None, Some(&dreamina_model))?;
+        // MCP 生图固定即梦（火山云端 API）：resolve_gen_provider("jimeng") 严格锁定
+        // DreaminaCliProvider，不存在落到本机 codex CLI 的分支。
+        let provider =
+            crate::codex::resolve_gen_provider(Some("jimeng"), None, Some(&dreamina_model))?;
         let request = crate::codex::types::CodexRequest {
             instruction: prompt,
             reference_images: images,
@@ -458,9 +531,7 @@ rl.on("line", (line) => { void handleLine(line); });
         // 桥不需要流式进度：开一个通道丢弃 chunk 即可（Chunk::Submit 的 task_queue 落库只在
         // codex_create_image 命令层做，这里不建 job）。
         let (chunk_tx, mut chunk_rx) = tokio::sync::mpsc::channel(64);
-        tokio::spawn(async move {
-            while chunk_rx.recv().await.is_some() {}
-        });
+        tokio::spawn(async move { while chunk_rx.recv().await.is_some() {} });
         let outcome = tokio::time::timeout(
             Duration::from_secs(600),
             provider.generate_image(request, &chunk_tx, None),
@@ -482,7 +553,13 @@ rl.on("line", (line) => { void handleLine(line); });
             let db = db.clone();
             let session = session.clone();
             let asset = tokio::task::spawn_blocking(move || {
-                crate::core::ingest::ingest_generated(&paths, &db, &image, Some(&session), "agent-z")
+                crate::core::ingest::ingest_generated(
+                    &paths,
+                    &db,
+                    &image,
+                    Some(&session),
+                    "agent-z",
+                )
             })
             .await
             .map_err(|error| AppError::Other(error.to_string()))??;
@@ -503,25 +580,96 @@ rl.on("line", (line) => { void handleLine(line); });
         }))
     }
 
-    /// 反推：按 Bowerbird 反推链路（entitlement 路由云端方舟 / 本地 codex）执行并落
-    /// caption 记录，返回反推文本。整体复用 codex_describe_asset（含取消槽与事件发射）。
+    /// agentz 反推结果的落库核心（纯 db 操作，可单测）：
+    /// - 有最新 caption：原地 update，sections = 既有全量 + [agentz-<时间>]，原有维度不丢
+    /// - 无 caption：新建记录，sections 只含 agentz 一条（不混入解析段，避免同内容双份）
+    fn append_agentz_section(
+        db: &crate::db::Database,
+        asset_id: &str,
+        raw_text: &str,
+        section_title: &str,
+        instruction: &str,
+        session_id: Option<&str>,
+        provider_name: &str,
+    ) -> Result<String, AppError> {
+        let latest = db
+            .list_analyses_by_asset(asset_id)?
+            .into_iter()
+            .filter(|analysis| analysis.kind == "caption")
+            .max_by_key(|analysis| analysis.created_at.unwrap_or(0));
+        let agentz_section = crate::core::library::CaptionSection {
+            title: section_title.to_string(),
+            body: raw_text.to_string(),
+            id: None,
+        };
+        match latest {
+            Some(existing) => {
+                let sections: Vec<crate::core::library::CaptionSection> =
+                    serde_json::from_str::<serde_json::Value>(&existing.payload)
+                        .ok()
+                        .and_then(|value| value.get("sections").cloned())
+                        .and_then(|value| serde_json::from_value(value).ok())
+                        .unwrap_or_default();
+                let mut merged = sections;
+                merged.push(agentz_section);
+                let payload = crate::core::caption::rebuild_payload(&existing.payload, &merged)
+                    .ok_or_else(|| AppError::Other("重建反推 payload 失败".into()))?;
+                db.update_analysis_payload(&existing.id, &payload)?;
+                Ok(existing.id)
+            }
+            None => {
+                let seed = crate::core::caption::build_payload(
+                    raw_text,
+                    instruction,
+                    session_id,
+                    provider_name,
+                    &crate::core::caption::parse(raw_text),
+                );
+                let payload = crate::core::caption::rebuild_payload(&seed, &[agentz_section])
+                    .ok_or_else(|| AppError::Other("构建反推 payload 失败".into()))?;
+                let id = ulid::Ulid::new().to_string();
+                let analysis = crate::core::library::Analysis {
+                    id: id.clone(),
+                    asset_id: asset_id.to_string(),
+                    kind: "caption".to_string(),
+                    payload,
+                    provider: Some(provider_name.to_string()),
+                    created_at: None,
+                };
+                db.insert_analysis(&analysis)?;
+                Ok(id)
+            }
+        }
+    }
+
+    /// 反推（agent 专用形态）：支持自定义反推指令；结果无论是否结构化，一律包装为
+    /// `agentz-<时间>` 新维度 section 追加到该图现有反推 sections 之后（无反推记录则新建），
+    /// 原有维度不受影响——避开「最新 caption 顶掉展示」导致的维度倒退。
     async fn understand_asset(
         app: &tauri::AppHandle,
         args: &serde_json::Value,
     ) -> Result<serde_json::Value, AppError> {
-        use tauri::Manager;
+        use tauri::{Emitter, Manager};
         let image_path = args
             .get("image_path")
             .and_then(|value| value.as_str())
             .map(str::trim)
             .filter(|path| !path.is_empty())
-            .ok_or_else(|| AppError::Other("image_path 不能为空".into()))?;
+            .ok_or_else(|| AppError::Other("image_path 不能为空".into()))?
+            .to_string();
+        let instruction = args
+            .get("prompt")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|prompt| !prompt.is_empty() && prompt.chars().count() <= 4_000)
+            .map(str::to_string)
+            .unwrap_or_else(|| crate::commands::codex::DEFAULT_DESCRIBE_INSTRUCTION.to_string());
         let db = app.state::<std::sync::Arc<crate::db::Database>>();
         let asset_id: String = {
             let conn = db.conn.lock().unwrap();
             conn.query_row(
                 "SELECT id FROM assets WHERE store_path=?1",
-                [image_path],
+                [&image_path],
                 |row| row.get(0),
             )
             .map_err(|_| {
@@ -530,22 +678,74 @@ rl.on("line", (line) => { void handleLine(line); });
                 )
             })?
         };
+        // 反推执行：entitlement 路由（云端方舟 / 本地 codex），与详情页反推同链路（免取消槽）
+        let request = crate::codex::types::CodexRequest {
+            instruction: instruction.clone(),
+            reference_images: vec![PathBuf::from(&image_path)],
+            context_prompts: vec![],
+            ratio: None,
+            job_id: None,
+        };
+        // MCP 反推固定走 Bowerbird Cloud（方舟），不按权益路由到本机 codex CLI：
+        // 宿主 TUI 内再拉 codex exec 子进程一次要 2–3 分钟，且与宿主抢同一账号额度。
+        // 未登录直接返回可读错误（云端链路的额度/次数限制由服务端裁决）。
         let cloud_client = app.state::<crate::cloud::CloudClient>();
         let auth_client = app.state::<crate::cloud::AuthClient>();
-        let entitlement = app.state::<crate::cloud::EntitlementService>();
-        let analysis_id = crate::commands::codex::codex_describe_asset(
-            app.clone(),
-            db.clone(),
-            cloud_client,
-            auth_client,
-            entitlement,
-            asset_id.clone(),
-            None,
-            None,
+        if !auth_client.snapshot().logged_in {
+            return Err(AppError::Cloud(
+                "MCP 反推需要先登录 Bowerbird 账号（云端方舟链路）".into(),
+            ));
+        }
+        let provider = crate::codex::understand::resolve_understand_provider(
+            Some("bowerbird-cloud"),
+            Some((cloud_client.inner().clone(), auth_client.inner().clone())),
+        )?;
+        let provider_name = provider.name().to_string();
+        let result = tokio::time::timeout(
+            Duration::from_secs(300),
+            provider.understand(
+                crate::codex::understand::UnderstandOperation::Caption,
+                request,
+            ),
         )
-        .await?;
-        let text = db.latest_caption_text(&asset_id)?.unwrap_or_default();
-        Ok(serde_json::json!({ "text": text, "analysis_id": analysis_id }))
+        .await
+        .map_err(|_| AppError::Other("反推超时（5 分钟）".into()))??;
+        let raw_text = result.text.trim().to_string();
+        if raw_text.is_empty() {
+            return Err(AppError::Other("反推返回了空文本".into()));
+        }
+        // 追加落库：现有最新 caption 原地重建（sections 全量保留 + agentz 新增）；
+        // 无记录则以本次结果为种子新建（sections 只含 agentz 一条，不混入解析段避免重复）。
+        let section_title = format!("agentz-{}", chrono::Local::now().format("%m%d-%H%M%S"));
+        let db_arc = db.inner().clone();
+        let raw_for_task = raw_text.clone();
+        let title_for_task = section_title.clone();
+        let instruction_for_task = instruction.clone();
+        let session_id = result.session_id.clone();
+        let provider_for_task = provider_name.clone();
+        let asset_for_task = asset_id.clone();
+        let analysis_id = tokio::task::spawn_blocking(move || {
+            append_agentz_section(
+                &db_arc,
+                &asset_for_task,
+                &raw_for_task,
+                &title_for_task,
+                &instruction_for_task,
+                session_id.as_deref(),
+                &provider_for_task,
+            )
+        })
+        .await
+        .map_err(|error| AppError::Other(error.to_string()))??;
+        let _ = app.emit(
+            "analyses://changed",
+            serde_json::json!({ "asset_id": asset_id, "kind": "caption" }),
+        );
+        Ok(serde_json::json!({
+            "text": raw_text,
+            "section": section_title,
+            "analysis_id": analysis_id,
+        }))
     }
 
     pub fn health() -> Result<AgentZStatus, AppError> {
@@ -601,7 +801,9 @@ rl.on("line", (line) => { void handleLine(line); });
                 wRepeatCount: 1,
                 wVirtualKeyCode: vk,
                 wVirtualScanCode: 0,
-                uChar: KEY_EVENT_RECORD_0 { UnicodeChar: ch as u16 },
+                uChar: KEY_EVENT_RECORD_0 {
+                    UnicodeChar: ch as u16,
+                },
                 dwControlKeyState: 0,
             };
             records.push(INPUT_RECORD {
@@ -677,9 +879,7 @@ rl.on("line", (line) => { void handleLine(line); });
                 .stderr(Stdio::null())
                 .spawn()
         };
-        spawn_result.map_err(|error| {
-            AppError::Other(format!("启动 Agent Z 终端失败: {error}"))
-        })?;
+        spawn_result.map_err(|error| AppError::Other(format!("启动 Agent Z 终端失败: {error}")))?;
         // 轮询进程快照差分找新 cmd.exe（start 拉起 + cmd 初始化需要一点时间）
         for _ in 0..50 {
             std::thread::sleep(Duration::from_millis(100));
@@ -712,11 +912,11 @@ rl.on("line", (line) => { void handleLine(line); });
         true.into()
     }
 
-    /// 聚焦 Agent Z 终端窗口（尽力而为；Windows Terminal 下窗口标题会带 tab 标题前缀）
-    fn focus_terminal() {
+    /// 聚焦 Agent 终端窗口（尽力而为；Windows Terminal 下窗口标题会带 tab 标题前缀）
+    fn focus_terminal(title: &str) {
         unsafe {
             let mut ctx = EnumCtx {
-                title: WINDOW_TITLE.to_string(),
+                title: title.to_string(),
                 hits: Vec::new(),
             };
             let _ = EnumWindows(
@@ -765,12 +965,9 @@ rl.on("line", (line) => { void handleLine(line); });
                 )
                 .map_err(|error| AppError::Other(format!("打开终端输入通道失败: {error}")))?;
                 let mut written: u32 = 0;
-                let write_result =
-                    WriteConsoleInputW(handle, records, &mut written).map(|_| ());
+                let write_result = WriteConsoleInputW(handle, records, &mut written).map(|_| ());
                 let _ = CloseHandle(handle);
-                write_result.map_err(|error| {
-                    AppError::Other(format!("写入终端输入失败: {error}"))
-                })
+                write_result.map_err(|error| AppError::Other(format!("写入终端输入失败: {error}")))
             })();
             let _ = FreeConsole();
             restore_own(own_pid);
@@ -778,48 +975,65 @@ rl.on("line", (line) => { void handleLine(line); });
         }
     }
 
-    fn inner_command(cli: &str, assets: &Path) -> String {
-        let quote = |value: &str| {
-            if value.contains(' ') {
-                format!("\"{value}\"")
-            } else {
-                value.to_string()
-            }
-        };
+    fn quoted(value: &str) -> String {
+        if value.contains(' ') {
+            format!("\"{value}\"")
+        } else {
+            value.to_string()
+        }
+    }
+
+    /// z 引擎（Claude Code）：MCP 挂载 + 工具预授权/禁用 + 角色系统提示词
+    fn inner_command_z(cli: &str, assets: &Path) -> String {
         format!(
             "{} --mcp-config {} --allowedTools mcp__bowerbird__send_to_creation_board,mcp__bowerbird__dreamina_generate,mcp__bowerbird__understand_asset --disallowedTools={} --append-system-prompt {}",
-            quote(cli),
-            quote(&assets.join("mcp.json").to_string_lossy()),
+            quoted(cli),
+            quoted(&assets.join("mcp.json").to_string_lossy()),
             DISALLOWED_TOOLS,
-            quote(SYSTEM_PROMPT)
+            quoted(SYSTEM_PROMPT)
         )
+    }
+
+    /// g 引擎（codex）：无系统提示词/工具禁用类旗标——角色约束靠中立工作区的 AGENTS.md，
+    /// bowerbird MCP server 已由 `codex mcp add` 全局注册，工具审批在 TUI 内交互完成。
+    fn inner_command_for(engine: &str, cli: &str, assets: &Path) -> String {
+        match engine {
+            "g" => quoted(cli),
+            _ => inner_command_z(cli, assets),
+        }
     }
 
     // —— 发送主流程 ——
 
-    pub fn send(text: String, images: Vec<String>) -> Result<(), AppError> {
+    pub fn send(text: String, images: Vec<String>, engine: &str) -> Result<(), AppError> {
         super::ensure_preview_enabled()?;
+        let engine = match engine {
+            "g" => "g",
+            _ => "z",
+        };
         let text = text.trim();
         if text.is_empty() || text.chars().count() > 12_000 {
             return Err(AppError::Other("消息须为 1–12000 个字符".into()));
         }
         if images.len() > 10 {
-            return Err(AppError::Other("Agent Z 最多附带 10 张参考图".into()));
+            return Err(AppError::Other("Agent 最多附带 10 张参考图".into()));
         }
-        let cli = resolve_claude_cli()?;
+        let cli = resolve_engine_cli(engine)?;
         let assets = ensure_agent_z_assets()?;
         let message = compose_message(text, &images);
-        let mut stored = CONSOLE_PID.lock().unwrap();
-        match *stored {
-            Some(pid) if pid_alive(pid) => {
-                focus_terminal();
+        let title = window_title(engine);
+        let mut stored = CONSOLE_PIDS.lock().unwrap();
+        let alive_pid = stored.get(engine).copied().filter(|pid| pid_alive(*pid));
+        match alive_pid {
+            Some(pid) => {
+                focus_terminal(title);
                 inject_console_input(pid, &key_records(&format!("{message}\r")))?;
             }
-            _ => {
+            None => {
                 // 新窗口首发两段式：先注入一个回车默认确认 folder trust 对话框（若未弹出，
-                // 该回车提交空输入，Claude Code 忽略空提交，无害），再注入消息。
-                let pid = spawn_console_window(WINDOW_TITLE, &inner_command(&cli, &assets))?;
-                *stored = Some(pid);
+                // 该回车提交空输入，TUI 忽略空提交，无害），再注入消息。
+                let pid = spawn_console_window(title, &inner_command_for(engine, &cli, &assets))?;
+                stored.insert(engine.to_string(), pid);
                 std::thread::sleep(Duration::from_millis(3000));
                 inject_console_input(pid, &key_records("\r"))?;
                 std::thread::sleep(Duration::from_millis(1200));
@@ -839,10 +1053,8 @@ rl.on("line", (line) => { void handleLine(line); });
         fn compose_collapses_lines_and_appends_images() {
             let message = compose_message("一只猫\n\n在月光下", &[]);
             assert_eq!(message, "一只猫 在月光下");
-            let message = compose_message(
-                "改造这张图",
-                &["D:/a b/1.png".into(), "D:/c/2.png".into()],
-            );
+            let message =
+                compose_message("改造这张图", &["D:/a b/1.png".into(), "D:/c/2.png".into()]);
             assert_eq!(message, "改造这张图　参考图：D:/a b/1.png | D:/c/2.png");
         }
 
@@ -850,7 +1062,9 @@ rl.on("line", (line) => { void handleLine(line); });
         fn key_records_map_cjk_and_return() {
             let records = key_records("你\r");
             assert_eq!(records.len(), 2);
-            assert!(records.iter().all(|record| record.EventType == KEY_EVENT as u16));
+            assert!(records
+                .iter()
+                .all(|record| record.EventType == KEY_EVENT as u16));
             // 回车记录携带 VK_RETURN
             let last = records.last().unwrap();
             let event = unsafe { record_event(last) };
@@ -868,12 +1082,114 @@ rl.on("line", (line) => { void handleLine(line); });
         #[test]
         fn inner_command_quotes_paths_and_carries_mcp_flags() {
             let assets = Path::new(r"D:\repo\.agent-z");
-            let command = inner_command("claude", assets);
+            let command = inner_command_z("claude", assets);
             assert!(command.starts_with(
                 "claude --mcp-config D:\\repo\\.agent-z\\mcp.json --allowedTools mcp__bowerbird__send_to_creation_board,mcp__bowerbird__dreamina_generate,mcp__bowerbird__understand_asset --disallowedTools="
             ));
             assert!(command.contains("--append-system-prompt \""));
             assert!(command.contains("生图对话助手"));
+        }
+
+        #[test]
+        fn inner_command_for_g_is_bare_codex() {
+            let assets = Path::new(r"D:\repo\.agent-z");
+            assert_eq!(inner_command_for("g", "codex", assets), "codex");
+            assert_eq!(
+                inner_command_for("g", r"C:\Program Files\codex\codex.exe", assets),
+                r#""C:\Program Files\codex\codex.exe""#
+            );
+        }
+
+        #[test]
+        fn append_agentz_section_preserves_and_appends() {
+            let db = crate::db::Database::open_in_memory().unwrap();
+            db.migrate().unwrap();
+            {
+                let conn = db.conn.lock().unwrap();
+                conn.execute("INSERT INTO assets (id, name) VALUES ('asset-1','a')", [])
+                    .unwrap();
+            }
+            // 场景一：无反推记录 → 新建 caption，sections 只含 agentz 一条
+            let first_id = append_agentz_section(
+                &db,
+                "asset-1",
+                "图里有一只猫",
+                "agentz-0820-100000",
+                "指令",
+                None,
+                "codex",
+            )
+            .unwrap();
+            let payload = |id: &str| {
+                serde_json::from_str::<serde_json::Value>(
+                    &db.get_analysis(id).unwrap().unwrap().payload,
+                )
+                .unwrap()
+            };
+            let titles = |value: &serde_json::Value| -> Vec<String> {
+                value["sections"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|section| section["title"].as_str().unwrap().to_string())
+                    .collect()
+            };
+            assert_eq!(
+                titles(&payload(&first_id)),
+                vec!["agentz-0820-100000".to_string()]
+            );
+            // 场景二：已有带维度的反推 → 原地更新（同 id），sections = 既有 + agentz，正文同步重渲染
+            let markdown = "- **主体**：一只猫\n- **场景**：月光下的屋顶";
+            let manual_payload = crate::core::caption::build_payload(
+                markdown,
+                "请描述这张图片",
+                None,
+                "codex",
+                &crate::core::caption::parse(markdown),
+            );
+            let manual_id = ulid::Ulid::new().to_string();
+            db.insert_analysis(&crate::core::library::Analysis {
+                id: manual_id.clone(),
+                asset_id: "asset-1".into(),
+                kind: "caption".into(),
+                payload: manual_payload,
+                provider: Some("codex".into()),
+                created_at: None,
+            })
+            .unwrap();
+            {
+                // 拉开时间差，避免同秒 created_at 让「最新」判定不稳定
+                let conn = db.conn.lock().unwrap();
+                conn.execute(
+                    "UPDATE analyses SET created_at=1000 WHERE id=?1",
+                    [&first_id],
+                )
+                .unwrap();
+            }
+            let updated_id = append_agentz_section(
+                &db,
+                "asset-1",
+                "主体是橘猫，短毛，暖色调",
+                "agentz-0820-110000",
+                "着重描述主体",
+                None,
+                "codex",
+            )
+            .unwrap();
+            assert_eq!(updated_id, manual_id, "应原地更新最新 caption 而非新建");
+            let merged = payload(&manual_id);
+            assert_eq!(
+                titles(&merged),
+                vec![
+                    "主体".to_string(),
+                    "场景".to_string(),
+                    "agentz-0820-110000".to_string()
+                ]
+            );
+            assert!(merged["text"]
+                .as_str()
+                .unwrap()
+                .contains("agentz-0820-110000"));
         }
 
         #[test]
@@ -888,10 +1204,44 @@ rl.on("line", (line) => { void handleLine(line); });
             ));
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(dir.join("1000-aaa.json"), r#"{"text":"第一段"}"#).unwrap();
+            std::fs::write(
+                dir.join("1500-mid.json"),
+                r#"{"kind":"ds_status","phase":"tool","text":"生成中"}"#,
+            )
+            .unwrap();
             std::fs::write(dir.join("2000-bbb.json"), "not-json").unwrap();
-            std::fs::write(dir.join("3000-ccc.json"), r#"{"text":"第二段"}"#).unwrap();
-            let texts = drain_inbox(&dir);
-            assert_eq!(texts, vec!["第一段".to_string(), "第二段".to_string()]);
+            std::fs::write(
+                dir.join("3000-ccc.json"),
+                r#"{"kind":"ds_reply","text":"第二段"}"#,
+            )
+            .unwrap();
+            let events = drain_inbox(&dir);
+            assert_eq!(events.len(), 3);
+            // TUI 桥事件无 kind；DS harness 事件带 kind/phase（done 允许空文本）
+            assert_eq!(
+                (
+                    events[0].text.as_str(),
+                    events[0].kind.as_deref(),
+                    events[0].phase.as_deref()
+                ),
+                ("第一段", None, None)
+            );
+            assert_eq!(
+                (
+                    events[1].text.as_str(),
+                    events[1].kind.as_deref(),
+                    events[1].phase.as_deref()
+                ),
+                ("生成中", Some("ds_status"), Some("tool"))
+            );
+            assert_eq!(
+                (
+                    events[2].text.as_str(),
+                    events[2].kind.as_deref(),
+                    events[2].phase.as_deref()
+                ),
+                ("第二段", Some("ds_reply"), None)
+            );
             // 消费即删（坏文件也删），再次 drain 为空
             assert!(drain_inbox(&dir).is_empty());
             assert!(std::fs::read_dir(&dir).unwrap().next().is_none());
@@ -908,7 +1258,9 @@ rl.on("line", (line) => { void handleLine(line); });
                 serde_json::from_str(&std::fs::read_to_string(assets.join("mcp.json")).unwrap())
                     .unwrap();
             assert_eq!(
-                config.pointer("/mcpServers/bowerbird/command").and_then(|v| v.as_str()),
+                config
+                    .pointer("/mcpServers/bowerbird/command")
+                    .and_then(|v| v.as_str()),
                 Some("node")
             );
             let args = config
@@ -943,7 +1295,11 @@ rl.on("line", (line) => { void handleLine(line); });
             let response = serde_json::json!({ "ok": true, "result": { "images": [] } });
             write_rpc_response_at(&dir, &requests[0].id, &response);
             let raw = std::fs::read_to_string(dir.join("100-a.resp.json")).unwrap();
-            assert!(serde_json::from_str::<serde_json::Value>(&raw).unwrap()["ok"].as_bool().unwrap());
+            assert!(
+                serde_json::from_str::<serde_json::Value>(&raw).unwrap()["ok"]
+                    .as_bool()
+                    .unwrap()
+            );
             let _ = std::fs::remove_dir_all(&dir);
         }
 
@@ -985,7 +1341,9 @@ rl.on("line", (line) => { void handleLine(line); });
                                     .map(|files| {
                                         files
                                             .filter_map(|file| file.ok())
-                                            .map(|file| file.file_name().to_string_lossy().into_owned())
+                                            .map(|file| {
+                                                file.file_name().to_string_lossy().into_owned()
+                                            })
                                             .collect::<Vec<_>>()
                                     })
                                     .unwrap_or_default()
@@ -995,7 +1353,7 @@ rl.on("line", (line) => { void handleLine(line); });
                     .unwrap_or_default()
             };
             let before = snapshot(&projects_dir);
-            send("请只回复两个字：已通".into(), vec![]).unwrap();
+            send("请只回复两个字：已通".into(), vec![], "z").unwrap();
             let mut appeared = false;
             for _ in 0..60 {
                 std::thread::sleep(Duration::from_millis(1000));
@@ -1005,7 +1363,10 @@ rl.on("line", (line) => { void handleLine(line); });
                     break;
                 }
             }
-            assert!(appeared, "一分钟内未见新的 Claude Code 会话文件（消息可能未进入 TUI）");
+            assert!(
+                appeared,
+                "一分钟内未见新的 Claude Code 会话文件（消息可能未进入 TUI）"
+            );
             eprintln!("[claude-e2e] 消息已进入 TUI 并开启会话");
         }
 
@@ -1014,8 +1375,14 @@ rl.on("line", (line) => { void handleLine(line); });
         #[test]
         #[ignore = "需要交互式桌面会话（会弹一个 cmd 窗口）"]
         fn console_injection_probe() {
-            let unique = format!("{}-{}", std::process::id(), std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
+            let unique = format!(
+                "{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis()
+            );
             let title = format!("AgentZ Probe {unique}");
             let marker = std::env::temp_dir().join(format!("agentz_probe_{unique}.txt"));
             let _ = std::fs::remove_file(&marker);
@@ -1045,8 +1412,8 @@ pub fn spawn_inbox_watcher(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
-            for text in imp::drain_inbox(&imp::inbox_dir()) {
-                let _ = app.emit("agent-z://output", serde_json::json!({ "text": text }));
+            for event in imp::drain_inbox(&imp::inbox_dir()) {
+                let _ = app.emit("agent-z://output", event);
             }
             // 能力 RPC：逐请求起独立任务（生成类耗时数分钟，不阻塞轮询循环）
             for request in imp::drain_rpc_requests() {
@@ -1073,15 +1440,19 @@ pub fn agent_z_health() -> Result<AgentZStatus, AppError> {
 }
 
 #[tauri::command]
-pub fn agent_z_send(text: String, images: Vec<String>) -> Result<(), AppError> {
+pub fn agent_z_send(
+    text: String,
+    images: Vec<String>,
+    engine: Option<String>,
+) -> Result<(), AppError> {
     #[cfg(windows)]
     {
-        imp::send(text, images)
+        imp::send(text, images, engine.as_deref().unwrap_or("z"))
     }
     #[cfg(not(windows))]
     {
-        let _ = (text, images);
+        let _ = (text, images, engine);
         ensure_preview_enabled()?;
-        Err(AppError::Other("Agent Z 仅支持 Windows".into()))
+        Err(AppError::Other("Agent 仅支持 Windows".into()))
     }
 }

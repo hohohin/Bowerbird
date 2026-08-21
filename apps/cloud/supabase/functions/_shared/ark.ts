@@ -21,7 +21,8 @@ export type GenerateResult =
 
 export interface UnderstandInput {
   operation: "caption" | "autoname" | "classify";
-  image: ImageInput;
+  /** null = 纯文本调用（生成图维度数据命名），不带图；caption/classify 必带一张图。 */
+  image: ImageInput | null;
   instruction?: string;
   scenario?: MockScenario;
 }
@@ -403,7 +404,10 @@ export class VolcArkAdapter implements ArkAdapter {
       messages: [{
         role: "user",
         content: [
-          { type: "image_url", image_url: { url: dataUri(input.image) } },
+          // 纯文本调用（image=null）只发 text 部分——vision 模型同样接受无图消息。
+          ...(input.image
+            ? [{ type: "image_url", image_url: { url: dataUri(input.image) } }]
+            : []),
           { type: "text", text: visionPrompt(input) },
         ],
       }],

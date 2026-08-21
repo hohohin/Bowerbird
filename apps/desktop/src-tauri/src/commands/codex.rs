@@ -20,7 +20,8 @@ use crate::codex::codex_cli::{codex_command, codex_home, resolve_codex_binary};
 use crate::codex::resolve_gen_provider;
 use crate::codex::types::{Chunk, CodexRequest, CodexResult};
 use crate::codex::understand::{
-    resolve_entitled_understand_provider, resolve_understand_provider_with_choice, UnderstandOperation,
+    resolve_entitled_understand_provider, resolve_understand_provider_with_choice,
+    UnderstandOperation,
 };
 use crate::core::caption;
 use crate::core::library::{GenerationHistoryTurn, PromptedAsset};
@@ -29,7 +30,7 @@ use crate::core::settings::SettingsState;
 use crate::db::Database;
 use crate::error::AppError;
 
-const DEFAULT_DESCRIBE_INSTRUCTION: &str = "请描述这张图片";
+pub(crate) const DEFAULT_DESCRIBE_INSTRUCTION: &str = "请描述这张图片";
 
 async fn require_byo(
     entitlement: &EntitlementService,
@@ -111,12 +112,18 @@ pub async fn codex_install(app: AppHandle) -> Result<CodexHealth, AppError> {
     match result {
         Ok(()) => {
             let _ = app.emit("codex://health-changed", ());
-            Ok(CodexHealth { ok: true, reason: String::new() })
+            Ok(CodexHealth {
+                ok: true,
+                reason: String::new(),
+            })
         }
         // 取消以错误抛出（前端 catch「已取消」回 idle 可重试，不显示为红色失败）。
         Err(AppError::Codex(reason)) if reason == "已取消" => Err(AppError::Codex(reason)),
         Err(AppError::Codex(reason)) => Ok(CodexHealth { ok: false, reason }),
-        Err(e) => Ok(CodexHealth { ok: false, reason: e.to_string() }),
+        Err(e) => Ok(CodexHealth {
+            ok: false,
+            reason: e.to_string(),
+        }),
     }
 }
 
@@ -336,6 +343,24 @@ pub async fn codex_describe_asset(
         "analyses://changed",
         serde_json::json!({ "asset_id": asset_id, "kind": "caption" }),
     );
+    // 生成图有了反推数据后按反推文本重命名（命名只看文本的统一通路，见 autoname）。
+    // 只对有 generation_meta 的资产生效；采集图的名字本就来自入库时的 caption，不重跑。
+    let id_for_check = asset_id.clone();
+    let db_for_check = db.inner().clone();
+    let is_generated = tokio::task::spawn_blocking(move || {
+        db_for_check
+            .has_analysis(&id_for_check, "generation_meta")
+            .unwrap_or(false)
+    })
+    .await
+    .map_err(|e| AppError::Other(e.to_string()))?;
+    if is_generated {
+        crate::core::autoname::spawn_rename_from_caption(
+            app.clone(),
+            db.inner().clone(),
+            asset_id.clone(),
+        );
+    }
     Ok(id)
 }
 
@@ -482,8 +507,10 @@ pub async fn codex_create_image(
     let mut provider_resume = session_id.clone();
     let exact = exact_references.unwrap_or(false);
     if let Some(sid) = session_id.as_deref() {
-        let is_codex_provider =
-            matches!(provider.as_deref(), None | Some("codex" | "default" | "codex-cli"));
+        let is_codex_provider = matches!(
+            provider.as_deref(),
+            None | Some("codex" | "default" | "codex-cli")
+        );
         let jimeng_or_cloud = matches!(provider.as_deref(), Some("jimeng" | "dreamina"))
             || crate::codex::is_cloud_generation_provider(provider.as_deref());
         if jimeng_or_cloud || is_codex_provider {
@@ -508,8 +535,7 @@ pub async fn codex_create_image(
                         last_images.len(),
                         reference_images.len()
                     );
-                    reference_images =
-                        merge_continuation_references(last_images, reference_images);
+                    reference_images = merge_continuation_references(last_images, reference_images);
                 }
             } else {
                 // codex resume 句柄：codex 原生会话 = session id（thread id）；非 codex 原生
@@ -533,8 +559,7 @@ pub async fn codex_create_image(
                         sid,
                         last_provider
                     );
-                    reference_images =
-                        merge_continuation_references(last_images, reference_images);
+                    reference_images = merge_continuation_references(last_images, reference_images);
                 }
             }
         }
@@ -944,14 +969,13 @@ pub async fn recent_gen_sessions(
 /// 仅终态可删（在跑行是启动恢复数据源）；行不存在（「回看生成对话」的前端临时 job）
 /// 为空操作。生成图与 generation_meta 不受影响。
 #[tauri::command]
-pub async fn dismiss_gen_job(
-    db: State<'_, Arc<Database>>,
-    job_id: String,
-) -> Result<(), AppError> {
+pub async fn dismiss_gen_job(db: State<'_, Arc<Database>>, job_id: String) -> Result<(), AppError> {
     let db = db.inner().clone();
-    tokio::task::spawn_blocking(move || crate::core::task_queue::Task::delete_terminal(&db, &job_id))
-        .await
-        .map_err(|e| AppError::Other(e.to_string()))?
+    tokio::task::spawn_blocking(move || {
+        crate::core::task_queue::Task::delete_terminal(&db, &job_id)
+    })
+    .await
+    .map_err(|e| AppError::Other(e.to_string()))?
 }
 /// `[spike]` OpenAI API 生图（非 codex CLI）：调 OpenAI Images API（`gpt-image-1`），
 /// `b64_json` 落盘后 `ingest_generated` 进库为正式资产、进瀑布流。
@@ -1142,7 +1166,11 @@ mod generation_task_tests {
         let picked = vec!["material.png".into(), "out1.png".into()];
         assert_eq!(
             merge_continuation_references(last, picked),
-            vec!["out1.png".to_string(), "out2.png".to_string(), "material.png".to_string()]
+            vec![
+                "out1.png".to_string(),
+                "out2.png".to_string(),
+                "material.png".to_string()
+            ]
         );
         // 超 10 张截断（上一轮产出保位，挑的图被截掉尾部）。
         let many: Vec<String> = (0..12).map(|i| format!("p{i}.png")).collect();
@@ -1185,7 +1213,9 @@ mod generation_task_tests {
         assert!(!generation_provider_is_codex(Some("jimeng")));
         assert!(!generation_provider_is_codex(Some("dreamina")));
         assert!(!generation_provider_is_codex(Some("bowerbird-cloud")));
-        assert!(!generation_provider_is_codex(Some("bowerbird-cloud-image_hd")));
+        assert!(!generation_provider_is_codex(Some(
+            "bowerbird-cloud-image_hd"
+        )));
         assert!(!generation_provider_is_codex(None));
     }
 

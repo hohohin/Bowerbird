@@ -3,7 +3,7 @@ import { useStore } from "../store";
 import { canStartAnotherJob, canUseByo } from "../lib/entitlement";
 import { cloudProviderLabel, isCloudProvider, supportsAnnotationCoordinates } from "../lib/genProviders";
 import { api } from "../lib/api";
-import { AGENT_Z_ENABLED, PRESET_FEATURE_ENABLED } from "../lib/featureFlags";
+import { AGENT_DS_ENABLED, AGENT_Z_ENABLED, PRESET_FEATURE_ENABLED } from "../lib/featureFlags";
 import { notifyError, notifySuccess } from "../lib/notify";
 import { useCreationEditor } from "./creation/useCreationEditor";
 import { RATIOS } from "./creation/ratios";
@@ -30,6 +30,10 @@ function saveBoardRatio(v: string | null) {
     // ignore storage errors
   }
 }
+
+// Agent DS 一轮对话结束（done/error）的窗口事件：App 监听后端 agent-z://output 分流派发，
+// CreationBoard 在此解除 agentDsBusy（一轮可长达数分钟，发送 invoke 本身立即返回）。
+export const AGENT_DS_DONE_EVENT = "bowerbird://agent-ds-done";
 
 /**
  * 创作板 UI 外壳（jimeng 网页端式底部浮动对话框，常驻显示）：宽而矮的黑色半透明
@@ -71,6 +75,7 @@ export function CreationBoard() {
   const activePresetId = useStore((s) => s.activePresetId);
   const setActivePreset = useStore((s) => s.setActivePreset);
   const reloadPresets = useStore((s) => s.reloadPresets);
+  const openCloudAgentRun = useStore((s) => s.openCloudAgentRun);
 
   // consumePendingKeyword：本板是维度环点选（pendingKeyword）的唯一消费方（编辑坞不抢）。
   // initialEmpty：空文档开局（配 is-empty 占位「描述你的意图，开始创作吧」；有草稿仍恢复），
@@ -104,10 +109,22 @@ export function CreationBoard() {
   const [agentMode, setAgentMode] = useState<"off" | "a" | "b">("off");
   const [agentAvailable, setAgentAvailable] = useState(false);
   const [agentBusy, setAgentBusy] = useState(false);
+  // 正式用户侧 Agent：固定运行 bowerbird-controlled-image-edit 云端 Run。
+  // A/B/Z/G/DS 继续保留为 dev 基线，但与正式模式互斥。
+  const [cloudAgentMode, setCloudAgentMode] = useState(false);
+  const [cloudAgentBusy, setCloudAgentBusy] = useState(false);
   // Agent Z（dev-only）：创作板消息投递到 Claude Code TUI 终端，Bowerbird 侧不走生图链路；与 A/B 互斥。
   const [agentZMode, setAgentZMode] = useState(false);
   const [agentZAvailable, setAgentZAvailable] = useState(false);
   const [agentZBusy, setAgentZBusy] = useState(false);
+  // Agent G（dev-only）：同机制投递到 codex TUI 终端（独立窗口会话）；与 A/B/Z/DS 互斥。
+  // busy 与 Z 共用（同一后端命令通路）。可用性跟 codexHealth（codex CLI 安装 + 登录态）。
+  const [agentGMode, setAgentGMode] = useState(false);
+  // Agent DS（dev-only）：DeepSeek 对话 harness，对话发生在创作板内（回复追加进编辑器）；
+  // 与 A/B/Z 互斥。可用性与 Agent A/B 同源（agent-worker + cloud/.env）。
+  const agentDsAvailable = agentAvailable && AGENT_DS_ENABLED;
+  const [agentDsMode, setAgentDsMode] = useState(false);
+  const [agentDsBusy, setAgentDsBusy] = useState(false);
   const activePreset = useMemo(
     () => presets.find((p) => p.id === activePresetId) ?? null,
     [presets, activePresetId]
@@ -118,6 +135,13 @@ export function CreationBoard() {
     if (AGENT_Z_ENABLED) {
       api.agentZHealth().then((status) => setAgentZAvailable(status.ok)).catch(() => setAgentZAvailable(false));
     }
+  }, []);
+
+  // Agent DS 一轮结束（harness 落 done/error 状态事件 → App 派发）即解除 busy
+  useEffect(() => {
+    const onDone = () => setAgentDsBusy(false);
+    window.addEventListener(AGENT_DS_DONE_EVENT, onDone);
+    return () => window.removeEventListener(AGENT_DS_DONE_EVENT, onDone);
   }, []);
 
   // —— 底部浮动对话框形态（收起/展开规则，优先级从高到低；改这里先核对不打架）——
@@ -204,6 +228,7 @@ export function CreationBoard() {
     : activeGenProvider === "jimeng"
       ? canUseByo(cloudEntitlement) && !!dreaminaHealth?.ok
       : canUseByo(cloudEntitlement) && !!codexHealth?.ok;
+  const cloudAgentReady = cloudAvailable && !!cloudAuth?.logged_in && cloudBalance >= 48;
   const targetProviderLabel = isCloudProvider(activeGenProvider)
     ? (cloudProviderLabel(activeGenProvider, cloudEntitlement) ?? "Bowerbird Cloud")
     : activeGenProvider === "jimeng"
@@ -213,11 +238,37 @@ export function CreationBoard() {
     source.dimensions.some((title) => title === "标注" || title === "标记")
   );
   const annotationWarning =
-    !agentZMode && hasAnnotationDimension && !supportsAnnotationCoordinates(activeGenProvider);
+    !cloudAgentMode && !agentZMode && !agentGMode && !agentDsMode && hasAnnotationDimension && !supportsAnnotationCoordinates(activeGenProvider);
 
   // 把当前组稿发 provider 生成。生成期间编辑器仍可继续组下一轮稿（prompt 在此快照进 store）。
   // provider 由 store 内 activeGenProvider 兜底（send 不显式传）。
+  // 发送成功即退出创作模式（同「退出创作模式」页签：回普通浏览，左键恢复开详情；
+  // 校验不过/发送失败则保持创作模式继续组稿）。
   async function send() {
+    if (cloudAgentMode) {
+      const body = (rawPrompt || finalPrompt).trim();
+      if (!body || cloudAgentBusy || !cloudAgentReady) return;
+      setCloudAgentBusy(true);
+      try {
+        const run = await api.cloudAgentStart({
+          intentPrompt: body,
+          references: references.map((reference) => ({
+            assetId: reference.id,
+            promptToken: agentPromptReferences.find((item) => item.assetId === reference.id)?.name ?? reference.name,
+          })),
+          ratio,
+          projectId: useStore.getState().currentProjectId,
+        });
+        openCloudAgentRun(run);
+        notifySuccess("Agent 会话已创建，正在进行纯文本意图分析");
+        exitCreationMode();
+      } catch (error) {
+        notifyError(error, "启动 Bowerbird Agent 失败");
+      } finally {
+        setCloudAgentBusy(false);
+      }
+      return;
+    }
     // Agent Z：不走生图链路（无 job/ratio/provider，不受引擎可用性与并行配额限制），
     // 把编辑器原文 + 参考图路径投递到 Claude Code TUI 终端。
     if (agentZMode) {
@@ -228,10 +279,45 @@ export function CreationBoard() {
         const refPaths = references.map((r) => r.store_path).filter((p): p is string => !!p);
         await api.agentZSend(body, refPaths);
         notifySuccess("已发送到 Agent Z 终端");
+        exitCreationMode();
       } catch (error) {
         notifyError(error, "发送到 Agent Z 失败");
       } finally {
         setAgentZBusy(false);
+      }
+      return;
+    }
+    // Agent G：同 Z 的投递机制，终端会话为 codex TUI（engine 参数区分，独立窗口）。
+    if (agentGMode) {
+      const body = (rawPrompt || finalPrompt).trim();
+      if (!body || agentZBusy) return;
+      setAgentZBusy(true);
+      try {
+        const refPaths = references.map((r) => r.store_path).filter((p): p is string => !!p);
+        await api.agentZSend(body, refPaths, "g");
+        notifySuccess("已发送到 Agent G 终端");
+        exitCreationMode();
+      } catch (error) {
+        notifyError(error, "发送到 Agent G 失败");
+      } finally {
+        setAgentZBusy(false);
+      }
+      return;
+    }
+    // Agent DS：DeepSeek harness 对话（不走生图链路）。invoke 只负责拉起 detached 子进程
+    // 即返回；busy 保持到本轮 done/error 状态事件回来（工具轮里含即梦生图可长达数分钟）。
+    if (agentDsMode) {
+      const body = (rawPrompt || finalPrompt).trim();
+      if (!body || agentDsBusy) return;
+      setAgentDsBusy(true);
+      try {
+        const refPaths = references.map((r) => r.store_path).filter((p): p is string => !!p);
+        await api.agentDsChat(body, refPaths);
+        notifySuccess("Agent DS 正在思考，回复将追加到创作板");
+        exitCreationMode();
+      } catch (error) {
+        notifyError(error, "发送到 Agent DS 失败");
+        setAgentDsBusy(false);
       }
       return;
     }
@@ -266,6 +352,7 @@ export function CreationBoard() {
       undefined,
       dimensionSources,
     );
+    exitCreationMode();
   }
 
   // 登记=把当前编辑框内容（finalPrompt）存为用途，只需用户给个名字。
@@ -522,9 +609,11 @@ export function CreationBoard() {
               像跟 AI 输入 prompt 一样书写；<span className="text-accent">点瀑布流图片</span> 在光标处插入参考图，或输入 <span className="text-accent">@图名</span>（空格/标点后自动识别）。<span className="text-accent">长按任意图片</span>四周会出现<span className="text-accent">维度环</span>，点环上扇区即可把该维度加入创作板（创作板未打开会自动打开）；无维度数据的图会提示先右键反推。
             </div>
           </div>
-          {/* Agent Z 模式下不走生图链路：比例/引擎选择器置灰示意 */}
-          <div className={`flex items-center gap-2 ${agentZMode ? "pointer-events-none opacity-40" : ""}`}>
+          {/* Cloud Agent 仍接受显式比例；仅终端型 Agent 不走 Bowerbird 生图参数。 */}
+          <div className={`${agentZMode || agentGMode || agentDsMode ? "pointer-events-none opacity-40" : ""}`}>
             <RatioSelect value={ratio} onChange={selectRatio} />
+          </div>
+          <div className={`${cloudAgentMode || agentZMode || agentGMode || agentDsMode ? "pointer-events-none opacity-40" : ""}`}>
             <ProviderSelect
               value={activeGenProvider}
               onChange={setActiveGenProvider}
@@ -537,6 +626,32 @@ export function CreationBoard() {
               onSetDefaultProvider={setDefaultProvider}
             />
           </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={cloudAgentMode}
+            disabled={cloudAgentBusy || !cloudAgentReady}
+            onClick={() => {
+              setCloudAgentMode((on) => !on);
+              setAgentMode("off");
+              setAgentZMode(false);
+              setAgentGMode(false);
+              setAgentDsMode(false);
+            }}
+            title={!cloudAuth?.logged_in
+              ? "请先登录 Bowerbird 账号"
+              : cloudBalance < 48
+                ? "Agent Run 启动时需预留 48 积分；结束后按实际工具调用结算并释放余量"
+                : "先只从文字分析真实意图，给出可审批计划；批准后才调用方舟工具，结果反馈会形成新的修订计划"}
+            className={`generation-glow-button flex h-7 items-center rounded-[3px] px-2.5 text-xs font-medium disabled:opacity-40 ${
+              cloudAgentMode ? "" : "is-off"
+            }`}
+          >
+            <span className="generation-glow-button__content gap-1.5">
+              <span className={`h-2 w-2 rounded-full ${cloudAgentMode ? "bg-lime" : "bg-muted/50"}`} />
+              Agent
+            </span>
+          </button>
           {agentAvailable && (
             <>
               <button
@@ -544,7 +659,7 @@ export function CreationBoard() {
                 role="switch"
                 aria-checked={agentMode === "a"}
                 disabled={agentBusy}
-                onClick={() => { setAgentMode((mode) => (mode === "a" ? "off" : "a")); setAgentZMode(false); }}
+                onClick={() => { setAgentMode((mode) => (mode === "a" ? "off" : "a")); setCloudAgentMode(false); setAgentZMode(false); setAgentGMode(false); setAgentDsMode(false); }}
                 title="方案A（子句挑选）：Agent 按你的意图从参考图维度原文中挑选子句，确定性拼合后再发送"
                 className={`generation-glow-button flex h-7 items-center rounded-[3px] px-2.5 text-xs font-medium disabled:opacity-40 ${
                   agentMode === "a" ? "" : "is-off"
@@ -560,7 +675,7 @@ export function CreationBoard() {
                 role="switch"
                 aria-checked={agentMode === "b"}
                 disabled={agentBusy}
-                onClick={() => { setAgentMode((mode) => (mode === "b" ? "off" : "b")); setAgentZMode(false); }}
+                onClick={() => { setAgentMode((mode) => (mode === "b" ? "off" : "b")); setCloudAgentMode(false); setAgentZMode(false); setAgentGMode(false); setAgentDsMode(false); }}
                 title="方案B（skill 审查）：Agent 按官方 skill 审查并修复展开后的完整 prompt，再发送"
                 className={`generation-glow-button flex h-7 items-center rounded-[3px] px-2.5 text-xs font-medium disabled:opacity-40 ${
                   agentMode === "b" ? "" : "is-off"
@@ -581,7 +696,10 @@ export function CreationBoard() {
               disabled={agentZBusy}
               onClick={() => {
                 setAgentZMode((on) => !on);
+                setCloudAgentMode(false);
                 setAgentMode("off");
+                setAgentGMode(false);
+                setAgentDsMode(false);
               }}
               title="Agent Z（dev）：把编辑器内容 + 参考图发到 Claude Code 终端（TUI）对话；涉及生图由 Claude Code 理解后自行调用 dreamina CLI，不占 Bowerbird 生成会话"
               className={`generation-glow-button flex h-7 items-center rounded-[3px] px-2.5 text-xs font-medium disabled:opacity-40 ${
@@ -594,7 +712,55 @@ export function CreationBoard() {
               </span>
             </button>
           )}
-          {!targetReady && !agentZMode && (
+          {codexHealth?.ok && (
+            <button
+              type="button"
+              role="switch"
+              aria-checked={agentGMode}
+              disabled={agentZBusy}
+              onClick={() => {
+                setAgentGMode((on) => !on);
+                setCloudAgentMode(false);
+                setAgentMode("off");
+                setAgentZMode(false);
+                setAgentDsMode(false);
+              }}
+              title="Agent G（dev）：把编辑器内容 + 参考图发到 codex 终端（TUI）对话；涉及生图/反推由 codex 调用 Bowerbird 的 MCP 工具（即梦/反推链路），不占 Bowerbird 生成会话"
+              className={`generation-glow-button flex h-7 items-center rounded-[3px] px-2.5 text-xs font-medium disabled:opacity-40 ${
+                agentGMode ? "" : "is-off"
+              }`}
+            >
+              <span className="generation-glow-button__content gap-1.5">
+                <span className={`h-2 w-2 rounded-full ${agentGMode ? "bg-lime" : "bg-muted/50"}`} />
+                Agent G
+              </span>
+            </button>
+          )}
+          {agentDsAvailable && (
+            <button
+              type="button"
+              role="switch"
+              aria-checked={agentDsMode}
+              disabled={agentDsBusy}
+              onClick={() => {
+                setAgentDsMode((on) => !on);
+                setCloudAgentMode(false);
+                setAgentMode("off");
+                setAgentZMode(false);
+                setAgentGMode(false);
+              }}
+              title="Agent DS（dev）：编辑器内容 + 参考图发给 DeepSeek 对话助手，回复追加到创作板；生图/反推由它调用 Bowerbird 即梦/反推链路，不占生成会话"
+              className={`generation-glow-button flex h-7 items-center rounded-[3px] px-2.5 text-xs font-medium disabled:opacity-40 ${
+                agentDsMode ? "" : "is-off"
+              }`}
+            >
+              <span className="generation-glow-button__content gap-1.5">
+                <span className={`h-2 w-2 rounded-full ${agentDsMode ? "bg-lime" : "bg-muted/50"}`} />
+                Agent DS
+              </span>
+            </button>
+          )}
+          {!targetReady && !cloudAgentMode && !agentZMode && !agentGMode && !agentDsMode && (
             <span
               className="max-w-56 truncate text-[10px] text-muted"
               title="请先登录 Bowerbird 账号或在「设置 · AI 出图引擎」选择可用引擎"
@@ -611,32 +777,56 @@ export function CreationBoard() {
             onClick={() => void send()}
             disabled={
               agentZBusy ||
-              (agentZMode
+              agentDsBusy ||
+              cloudAgentBusy ||
+              (cloudAgentMode
+                ? !(rawPrompt || finalPrompt).trim() || !cloudAgentReady
+                : agentZMode || agentGMode || agentDsMode
                 ? !(rawPrompt || finalPrompt).trim()
                 : agentBusy || !finalPrompt || !targetReady || !canStartAnotherJob(cloudEntitlement, runningJobCount))
             }
             title={
-              agentZMode
+              cloudAgentMode
+                ? !cloudAuth?.logged_in
+                  ? "请先登录 Bowerbird 账号"
+                  : cloudBalance < 48
+                    ? "Agent Run 启动时需预留 48 积分；结束后按实际工具调用结算"
+                    : "创建 Bowerbird Agent 会话：先分析文字并提交计划，批准后才执行"
+                : agentZMode
                 ? "发送到 Agent Z 终端（Claude Code TUI）：对话为主；涉及生图由 Claude Code 理解后自行调用 dreamina CLI"
-                : !targetReady
-                  ? `${targetProviderLabel} 不可用`
-                  : !canStartAnotherJob(cloudEntitlement, runningJobCount)
-                    ? "已达当前档位的并行生成上限"
-                    : agentMode !== "off"
-                      ? `先由 Agent（${agentMode === "a" ? "方案A" : "方案B"}）整理意图，再发 ${targetProviderLabel} 生成图像`
-                      : `把当前 prompt + 参考图发 ${targetProviderLabel} 生成图像`
+                : agentGMode
+                  ? "发送到 Agent G 终端（codex TUI）：对话为主；涉及生图/反推由 codex 调用 Bowerbird MCP 工具"
+                  : agentDsMode
+                    ? "发送给 Agent DS（DeepSeek 对话助手）：回复追加到创作板；生图/反推经 Bowerbird 链路执行"
+                    : !targetReady
+                      ? `${targetProviderLabel} 不可用`
+                      : !canStartAnotherJob(cloudEntitlement, runningJobCount)
+                        ? "已达当前档位的并行生成上限"
+                        : agentMode !== "off"
+                          ? `先由 Agent（${agentMode === "a" ? "方案A" : "方案B"}）整理意图，再发 ${targetProviderLabel} 生成图像`
+                          : `把当前 prompt + 参考图发 ${targetProviderLabel} 生成图像`
             }
             className="generation-glow-button ml-auto flex h-8 shrink-0 items-center rounded-full px-4 text-xs font-semibold disabled:opacity-50"
           >
             <span className="generation-glow-button__content gap-1.5">
               <Sparkles size={13} />
-              {agentZBusy
-                ? "正在投递到 Agent Z…"
+              {cloudAgentBusy
+                ? "正在创建 Agent 会话…"
+                : cloudAgentMode
+                  ? "交给 Agent 规划"
+                  : agentZBusy
+                ? "正在投递到 Agent…"
                 : agentZMode
                   ? "发送到 Agent Z"
-                  : agentBusy
-                    ? "Agent 正在整理意图…"
-                    : `发送 ${targetProviderLabel} 生成`}
+                  : agentGMode
+                    ? "发送到 Agent G"
+                    : agentDsBusy
+                      ? "Agent DS 处理中…"
+                      : agentDsMode
+                        ? "发送给 Agent DS"
+                        : agentBusy
+                          ? "Agent 正在整理意图…"
+                          : `发送 ${targetProviderLabel} 生成`}
             </span>
           </button>
         </div>

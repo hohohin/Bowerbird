@@ -33,3 +33,48 @@ export {
   isIdempotentReuse,
   sha256Hex,
 } from "./tool-ledger.ts";
+
+export type {
+  ApprovedStepExecutor,
+  ControlledRunnerCheckpoint,
+  GenerateApprovedStepRequest,
+  GeneratedApprovedStep,
+} from "./controlled-image-edit-runner.ts";
+export {
+  completeControlledExport,
+  controlledRunnerAllowsVision,
+  createControlledRunnerCheckpoint,
+  decideControlledPlan,
+  executeNextControlledStep,
+  proposeControlledPlan,
+  recordControlledIntentAnalysis,
+  submitControlledResultFeedback,
+} from "./controlled-image-edit-runner.ts";
+
+export type { EncodedControlledCheckpoint } from "./controlled-checkpoint.ts";
+export {
+  CONTROLLED_CHECKPOINT_SCHEMA_VERSION,
+  MAX_CONTROLLED_CHECKPOINT_BYTES,
+  decodeControlledCheckpoint,
+  encodeControlledCheckpoint,
+} from "./controlled-checkpoint.ts";
+
+export type {
+  DurableToolAdapter,
+  DurableToolControl,
+  DurableToolIdentity,
+  PersistedToolResult,
+} from "./durable-tool-dispatcher.ts";
+export {
+  DurableProviderError,
+  DurableToolDispatcher,
+  SimulatedProcessCrash,
+} from "./durable-tool-dispatcher.ts";
+
+export type {
+  AdvanceControlledRunRequest,
+  ControlledRunClaimState,
+  ControlledRunControl,
+  ControlledRunEngineOutcome,
+} from "./controlled-run-engine.ts";
+export { advanceControlledRun } from "./controlled-run-engine.ts";

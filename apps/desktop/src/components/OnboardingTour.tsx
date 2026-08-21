@@ -14,7 +14,7 @@ const TOUR_SKIP_STEP_ENABLED = true;
 const STEP_DEFS: Record<number, StepDef> = {
   1: {
     title: "先来创建一个项目吧",
-    body: "点击后，请选择「初始引导」文件夹，然后点击右下角「选择文件夹」按钮，创建项目。",
+    body: "点击后，在菜单中选择「导入已有文件夹」，然后选择「初始引导」文件夹，点击右下角「选择文件夹」按钮，创建项目。",
   },
   2: {
     body:

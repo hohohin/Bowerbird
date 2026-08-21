@@ -20,6 +20,7 @@ declare module "node:assert/strict" {
   export function deepEqual(a: unknown, b: unknown, message?: string): void;
   export function deepStrictEqual(a: unknown, b: unknown, message?: string): void;
   export function throws(fn: () => unknown, matcher?: unknown, message?: string): void;
+  export function rejects(fn: () => Promise<unknown>, matcher?: unknown, message?: string): Promise<void>;
   export function fail(message?: string): never;
 }
 
@@ -34,12 +35,22 @@ declare module "node:crypto" {
 
 declare module "node:fs" {
   export function readFileSync(path: number | string, encoding: "utf8"): string;
+  export function readFileSync(path: number | string): Uint8Array;
   export function writeFileSync(path: string, data: string, encoding: "utf8"): void;
+  export function writeFileSync(path: string, data: Uint8Array): void;
   export function mkdirSync(path: string, options: { recursive: boolean }): string | undefined;
+  export function unlinkSync(path: string): void;
+  export function existsSync(path: string): boolean;
+  export function rmSync(path: string, options: { recursive: boolean; force: boolean }): void;
 }
 
 declare module "node:path" {
   export function join(...paths: string[]): string;
+  export function resolve(...paths: string[]): string;
+}
+
+declare module "node:os" {
+  export function tmpdir(): string;
 }
 
 interface ImportMeta {
@@ -61,3 +72,11 @@ declare const process: {
 
 declare function setTimeout(callback: () => void, delayMs: number): unknown;
 declare function clearTimeout(handle: unknown): void;
+
+declare class TextEncoder {
+  encode(input?: string): Uint8Array;
+}
+
+declare class TextDecoder {
+  decode(input?: Uint8Array): string;
+}

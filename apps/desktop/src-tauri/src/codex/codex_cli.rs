@@ -444,7 +444,11 @@ pub(crate) fn app_data_dir() -> Option<PathBuf> {
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     if let Some(home) = std::env::var_os("HOME") {
-        return Some(PathBuf::from(home).join(".local/share").join("com.bowerbird.desktop"));
+        return Some(
+            PathBuf::from(home)
+                .join(".local/share")
+                .join("com.bowerbird.desktop"),
+        );
     }
     None
 }

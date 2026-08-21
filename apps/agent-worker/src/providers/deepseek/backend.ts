@@ -34,6 +34,26 @@ export type DeepSeekFetch = (
   request: DeepSeekHttpRequest,
 ) => Promise<DeepSeekHttpResponse>;
 
+/** OpenAI 兼容 chat message（role/content/tool_calls/tool_call_id 等，原样透传 DeepSeek）。 */
+export type ChatMessage = JsonRecord;
+/** OpenAI 兼容工具定义（{type:"function", function:{name,description,parameters}}）。 */
+export type ChatTool = JsonRecord;
+/** 归一化后的单个 tool call（arguments 已过宽松解析）。 */
+export type ChatToolCall = {
+  id: string;
+  name: string;
+  arguments: unknown;
+};
+/** chat() 结果：message 保留 API 原始形态（tool_calls.arguments 仍是字符串），
+ *  可直接 append 回 messages 续轮；toolCalls 是供宿主执行的归一化视图。 */
+export type ChatTurnResult = {
+  message: ChatMessage;
+  content: string;
+  toolCalls: ChatToolCall[];
+  finishReason: string;
+  usage: ProviderUsage;
+};
+
 export class DeepSeekBackendError extends Error {
   readonly safeCode: string;
   readonly status?: number;
@@ -419,6 +439,66 @@ export class DeepSeekBackend implements ModelBackend {
     if (signal.aborted) {
       return { kind: "refusal", reason: "aborted", providerUsage: {} };
     }
+    const body = await this.post(buildRequestBody(this.config, request));
+    return parseResponse(body);
+  }
+
+  /** 原生多轮对话形态：messages 直通 + tool_choice=auto（无工具时 none）。
+ *  与 turn() 的 kernel 单回合（context 序列化进单条 user + tool_choice=required）相对，
+ *  供对话式 harness（Agent DS）使用；HTTP/超时/错误归一化与 turn() 共用。 */
+  async chat(
+    messages: ChatMessage[],
+    tools: ChatTool[],
+    signal: AbortSignalLike,
+  ): Promise<ChatTurnResult> {
+    if (signal.aborted) {
+      throw new DeepSeekBackendError("deepseek_aborted");
+    }
+    const body = await this.post({
+      model: this.config.model,
+      messages,
+      tools,
+      tool_choice: tools.length > 0 ? "auto" : "none",
+      stream: false,
+    });
+    if (!isRecord(body)) throw new DeepSeekBackendError("deepseek_invalid_response");
+    const usage = usageFromResponse(body);
+    const choices = Array.isArray(body.choices) ? body.choices : [];
+    const first = choices[0];
+    if (!isRecord(first) || !isRecord(first.message)) {
+      throw new DeepSeekBackendError("deepseek_invalid_response");
+    }
+    const message = first.message;
+    const finishReason = typeof first.finish_reason === "string" ? first.finish_reason : "unknown";
+    const content = typeof message.content === "string" ? message.content : "";
+    const rawCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+    const toolCalls: ChatToolCall[] = [];
+    for (let index = 0; index < rawCalls.length; index++) {
+      const call = rawCalls[index];
+      if (!isRecord(call) || !isRecord(call.function)) {
+        throw new DeepSeekBackendError("deepseek_invalid_response");
+      }
+      const name = call.function.name;
+      const encodedArguments = call.function.arguments;
+      if (typeof name !== "string" || typeof encodedArguments !== "string") {
+        throw new DeepSeekBackendError("deepseek_invalid_response");
+      }
+      let argumentsValue: unknown;
+      try {
+        argumentsValue = parseToolArguments(encodedArguments);
+      } catch {
+        throw new DeepSeekBackendError("deepseek_invalid_tool_arguments");
+      }
+      toolCalls.push({
+        id: typeof call.id === "string" && call.id ? call.id : `call_${index}`,
+        name,
+        arguments: argumentsValue,
+      });
+    }
+    return { message, content, toolCalls, finishReason, usage };
+  }
+
+  private async post(body: JsonRecord): Promise<unknown> {
     let response: DeepSeekHttpResponse;
     try {
       response = await withTimeout(
@@ -428,7 +508,7 @@ export class DeepSeekBackend implements ModelBackend {
             authorization: `Bearer ${this.config.apiKey}`,
             "content-type": "application/json",
           },
-          body: JSON.stringify(buildRequestBody(this.config, request)),
+          body: JSON.stringify(body),
         }),
         this.config.timeoutMs,
       );
@@ -436,14 +516,14 @@ export class DeepSeekBackend implements ModelBackend {
       if (error instanceof DeepSeekBackendError) throw error;
       throw new DeepSeekBackendError("deepseek_network_error", { retryable: true });
     }
-    const body = await response.json();
+    const responseBody = await response.json();
     if (!response.ok) {
       throw new DeepSeekBackendError("deepseek_http_error", {
         status: response.status,
-        providerCode: safeProviderCode(body),
+        providerCode: safeProviderCode(responseBody),
         retryable: response.status === 408 || response.status === 429 || response.status >= 500,
       });
     }
-    return parseResponse(body);
+    return responseBody;
   }
 }

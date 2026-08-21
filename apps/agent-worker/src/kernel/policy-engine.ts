@@ -26,6 +26,132 @@ const COMMON = {
   assetId: { type: "string", description: "本 Run manifest 内的 asset id" },
 } as const;
 
+const NON_EMPTY_STRING = { type: "string", minLength: 1 } as const;
+const STRING_ARRAY = { type: "array", items: NON_EMPTY_STRING } as const;
+const HIGH_CONSISTENCY_SIGNAL = {
+  type: "string",
+  enum: ["identity", "product", "pose", "garment", "accessory", "composition", "text_layout"],
+} as const;
+const REFERENCE_ROLE = {
+  type: "string",
+  enum: ["base", "pose", "identity", "product", "garment", "accessory", "composition", "other"],
+} as const;
+
+const INTENT_ANALYSIS_SCHEMA = {
+  type: "object",
+  properties: {
+    schemaVersion: { type: "integer", enum: [1] },
+    intentSummary: NON_EMPTY_STRING,
+    finalSubjectReferenceId: NON_EMPTY_STRING,
+    mustPreserve: STRING_ARRAY,
+    mustTransfer: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          fromReferenceId: NON_EMPTY_STRING,
+          attributes: { type: "array", minItems: 1, items: NON_EMPTY_STRING },
+        },
+        required: ["fromReferenceId", "attributes"],
+        additionalProperties: false,
+      },
+    },
+    mustExclude: STRING_ARRAY,
+    mayChange: STRING_ARRAY,
+    highConsistencySignals: { type: "array", items: HIGH_CONSISTENCY_SIGNAL },
+    assumptions: STRING_ARRAY,
+  },
+  required: [
+    "schemaVersion", "intentSummary", "mustPreserve", "mustTransfer", "mustExclude",
+    "mayChange", "highConsistencySignals", "assumptions",
+  ],
+  additionalProperties: false,
+} as const;
+
+const CONTROLLED_PLAN_SCHEMA = {
+  type: "object",
+  properties: {
+    schemaVersion: { type: "integer", enum: [1] },
+    intentAnalysisHash: { type: "string", pattern: "^[0-9a-f]{64}$" },
+    intentSummary: NON_EMPTY_STRING,
+    strategy: { type: "string", enum: ["direct", "controlled", "staged_controlled"] },
+    referenceRoles: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          referenceId: NON_EMPTY_STRING,
+          role: REFERENCE_ROLE,
+          mustPreserve: STRING_ARRAY,
+          mustTransfer: STRING_ARRAY,
+          mustExclude: STRING_ARRAY,
+        },
+        required: ["referenceId", "role", "mustPreserve", "mustTransfer", "mustExclude"],
+        additionalProperties: false,
+      },
+    },
+    assumptions: STRING_ARRAY,
+    steps: {
+      type: "array",
+      minItems: 1,
+      maxItems: 8,
+      items: {
+        type: "object",
+        properties: {
+          id: NON_EMPTY_STRING,
+          kind: {
+            type: "string",
+            enum: ["direct_generate", "generate_control_reference", "edit_from_previous"],
+            description: "Execution type. Use direct_generate only for a one-step final_result; generate_control_reference only for control_reference; edit_from_previous for stage_result or the final step of a multi-step plan.",
+          },
+          goal: NON_EMPTY_STRING,
+          inputs: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                type: { type: "string", enum: ["reference", "step"] },
+                referenceId: NON_EMPTY_STRING,
+                stepId: NON_EMPTY_STRING,
+              },
+              required: ["type"],
+              additionalProperties: false,
+            },
+          },
+          modifies: STRING_ARRAY,
+          preserves: STRING_ARRAY,
+          excludes: STRING_ARRAY,
+          outputRole: {
+            type: "string",
+            enum: ["control_reference", "stage_result", "final_result"],
+            description: "Use control_reference for an intermediate isolated control, stage_result for a non-final edit, and final_result exactly once on the last step.",
+          },
+          rationale: NON_EMPTY_STRING,
+          estimatedUsage: {
+            type: "object",
+            properties: {
+              generateCalls: { type: "integer", enum: [1] },
+              understandCalls: { type: "integer", enum: [0] },
+            },
+            required: ["generateCalls", "understandCalls"],
+            additionalProperties: false,
+          },
+        },
+        required: [
+          "id", "kind", "goal", "inputs", "modifies", "preserves", "excludes",
+          "outputRole", "rationale", "estimatedUsage",
+        ],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: [
+    "schemaVersion", "intentAnalysisHash", "intentSummary", "strategy",
+    "referenceRoles", "assumptions", "steps",
+  ],
+  additionalProperties: false,
+} as const;
+
 export const GLOBAL_TOOL_REGISTRY: ReadonlyArray<ToolSpec> = [
   {
     name: "read_input_manifest",
@@ -61,6 +187,17 @@ export const GLOBAL_TOOL_REGISTRY: ReadonlyArray<ToolSpec> = [
     },
   },
   {
+    name: "record_intent_analysis",
+    kind: "workspace",
+    description: "记录纯文本意图分析。必须严格使用 schemaVersion/intentSummary/finalSubjectReferenceId/mustPreserve/mustTransfer/mustExclude/mayChange/highConsistencySignals/assumptions 这些 camelCase 字段；不得包含图片内容、caption、OCR 或路径。",
+    argumentSchema: {
+      type: "object",
+      properties: { analysis: INTENT_ANALYSIS_SCHEMA },
+      required: ["analysis"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "score_dimensions",
     kind: "workspace",
     description: "按 rubric 对当前图在构图/光影/色调/氛围/材质等维度打分。",
@@ -79,11 +216,12 @@ export const GLOBAL_TOOL_REGISTRY: ReadonlyArray<ToolSpec> = [
   {
     name: "submit_plan_for_approval",
     kind: "kernel",
-    description: "提交创作计划并暂停，等待用户审批（生图前唯一审批点）。",
+    description: "提交完整受控图片计划并暂停，等待用户审批。必须严格使用参数 schema 的 camelCase 字段；生图前只有此审批点。",
     argumentSchema: {
       type: "object",
-      properties: { plan: { type: "object" }, rubric: { type: "object" }, estimatedAdditionalCredits: { type: "number" } },
+      properties: { plan: CONTROLLED_PLAN_SCHEMA },
       required: ["plan"],
+      additionalProperties: false,
     },
   },
   {
@@ -219,6 +357,18 @@ export function evaluatePolicy(
   }
 
   const argsObj = (args ?? {}) as Record<string, unknown>;
+
+  if (ctx.manifest.id === "bowerbird-controlled-image-edit") {
+    if (actionName === "inspect_generated_image") {
+      return { verdict: "deny", errorClass: "policy_denied", reason: "controlled_proactive_inspection_denied" };
+    }
+    if (actionName === "understand_image" && ctx.phase !== "diagnose_feedback") {
+      return { verdict: "deny", errorClass: "policy_denied", reason: "controlled_vision_before_feedback_denied" };
+    }
+    if (isGenerate(tool) && ctx.phase !== "execute_approved_plan") {
+      return { verdict: "deny", errorClass: "policy_denied", reason: "controlled_generation_phase_denied" };
+    }
+  }
 
   // 2) 跨 Run 守卫：任何工具的 args 若携带与本 Run 不符的 runId/ownerRun → 拒绝。
   const foreignRun = argsObj["runId"] ?? argsObj["ownerRun"] ?? argsObj["targetRunId"];
