@@ -18,6 +18,7 @@ services:
       - ALL
     mem_limit: 1536m
     cpus: 1.75
+    pids_limit: 256
     logging:
       driver: json-file
       options:

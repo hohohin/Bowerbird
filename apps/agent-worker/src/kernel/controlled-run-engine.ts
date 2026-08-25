@@ -1,4 +1,5 @@
 import type { ControlledImageEditInput, ControlledRunArtifact } from "../contracts/controlled-image-edit.ts";
+import type { ClarificationProposal, IntentPatch } from "../contracts/clarification.ts";
 import type { ModelBackend } from "../contracts/model.ts";
 import { loadControlledImageEditSkill } from "../skills/bowerbird-controlled-image-edit/loader.ts";
 import {
@@ -10,10 +11,13 @@ import type { AgentLeaseSignal } from "../cloud-agent/runtime.ts";
 import { LocalTaskPendingError } from "../providers/local/local-approved-step-executor.ts";
 import {
   completeControlledExport,
+  applyControlledIntentPatch,
+  controlledClarificationContextHash,
   createControlledRunnerCheckpoint,
   decideControlledPlan,
   executeNextControlledStep,
   proposeControlledPlan,
+  proposeControlledClarification,
   proposeControlledRevisionPlan,
   recordControlledFeedbackDiagnosis,
   recordControlledIntentAnalysis,
@@ -33,6 +37,7 @@ export type ControlledRunClaimState = {
 };
 
 export type ControlledRunEngineOutcome =
+  | "awaiting_clarification"
   | "awaiting_approval"
   | "awaiting_result_feedback"
   | "awaiting_revision"
@@ -48,6 +53,10 @@ export interface ControlledRunControl {
     kind: "controlled_image_edit_plan" | "controlled_image_edit_revision";
     estimatedAdditionalCredits: number;
   }): Promise<void>;
+  requestClarification(args: {
+    checkpoint: ControlledRunnerCheckpoint;
+    proposal: ClarificationProposal;
+  }): Promise<void>;
   awaitResultFeedback(checkpoint: ControlledRunnerCheckpoint): Promise<void>;
   /** 本机生图停车：登记任务后释放租约；parked=false 表示桌面恰好已回报，继续循环。 */
   awaitLocalTask(callId: string): Promise<{ parked: boolean }>;
@@ -57,6 +66,7 @@ export interface ControlledRunControl {
 export type AdvanceControlledRunRequest = {
   claim: ControlledRunClaimState;
   checkpoint?: ControlledRunnerCheckpoint;
+  clarificationPatch?: IntentPatch;
   input?: ControlledImageEditInput;
   inputArtifacts?: ControlledRunArtifact[];
   model: ModelBackend;
@@ -130,16 +140,37 @@ export async function advanceControlledRun(request: AdvanceControlledRunRequest)
       outcome: request.signal?.cancelRequested ? "cancelled" : "stopped",
     };
 
+    if (checkpoint.status === "awaiting_clarification") {
+      if (!checkpoint.pendingClarification) throw new Error("controlled_engine_clarification_missing");
+      if (!request.clarificationPatch) {
+        await request.control.saveCheckpoint(checkpoint, progress(checkpoint));
+        await request.control.requestClarification({ checkpoint, proposal: checkpoint.pendingClarification });
+        return { checkpoint, outcome: "awaiting_clarification" };
+      }
+      checkpoint = applyControlledIntentPatch(checkpoint, request.clarificationPatch);
+      await request.control.saveCheckpoint(checkpoint, progress(checkpoint));
+    }
+
     switch (checkpoint.phase) {
       case "analyze_intent_text_only": {
         const turn = await analyzeControlledIntent({
           runId: checkpoint.runId,
           input: checkpoint.input,
+          clarificationContextHash: controlledClarificationContextHash(checkpoint),
+          clarificationCount: checkpoint.clarificationHistory?.length ?? 0,
+          clarificationHistory: checkpoint.clarificationHistory,
+          intentOverrides: checkpoint.intentOverrides,
           model: request.model,
           signal: request.signal,
         });
         if (turn.skillHash !== checkpoint.skillHash || turn.skillVersion !== checkpoint.skillVersion) {
           throw new Error("controlled_engine_analysis_skill_drift");
+        }
+        if (turn.kind === "clarification") {
+          checkpoint = proposeControlledClarification(checkpoint, turn.proposal);
+          await request.control.saveCheckpoint(checkpoint, progress(checkpoint));
+          await request.control.requestClarification({ checkpoint, proposal: turn.proposal });
+          return { checkpoint, outcome: "awaiting_clarification" };
         }
         checkpoint = recordControlledIntentAnalysis(checkpoint, turn.analysis);
         await request.control.saveCheckpoint(checkpoint, progress(checkpoint));

@@ -4,15 +4,30 @@
 
 import { requireUser } from "../_shared/auth.ts";
 import type { AuthContext } from "../_shared/auth.ts";
-import { ensureDailyCredits, holdCredits } from "../_shared/billing.ts";
+import { ensureDailyCredits, holdCredits, rollbackCredits } from "../_shared/billing.ts";
 import { ApiError, errorResponse, jsonResponse, requestId, safeLog } from "../_shared/errors.ts";
+import { activeTier, policyFor } from "../_shared/feature-policy.ts";
 import { corsHeaders } from "../_shared/limits.ts";
+import { reserveManagedUsage } from "../_shared/usage.ts";
 
 const BUCKET = "agent-temp";
 const ALLOWED_SKILLS = new Set(["smart-refinement", "bowerbird-controlled-image-edit"]);
 const MAX_INPUTS = 8;
 const MAX_GOAL_CHARS = 4000;
 const SIGNED_URL_SECONDS = 300;
+const ACTIVE_AGENT_STATUSES = [
+  "uploading", "queued", "leased", "running", "awaiting_clarification",
+  "awaiting_approval", "awaiting_result_feedback", "awaiting_local_task",
+  "exporting", "cancel_requested",
+];
+
+function globalAgentCapacity(): number {
+  const value = Number.parseInt(Deno.env.get("AGENT_GLOBAL_ACTIVE_LIMIT") ?? "100", 10);
+  if (!Number.isSafeInteger(value) || value < 1 || value > 10000) {
+    throw new ApiError("not_configured", "Agent 全站容量配置无效", false, 503);
+  }
+  return value;
+}
 
 interface CreateInput {
   skillId: string;
@@ -44,6 +59,14 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
   return [...digest].map((value) => value.toString(16).padStart(2, "0")).join("");
 }
 
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record).sort().filter((key) => record[key] !== undefined)
+    .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(",")}}`;
+}
+
 function actualImageMime(bytes: Uint8Array): "image/png" | "image/jpeg" | "image/webp" | null {
   if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47 &&
       bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a) return "image/png";
@@ -61,6 +84,48 @@ type ControlledReference = {
   sha256: string;
 };
 
+function validatePreferenceCapsule(value: unknown): void {
+  if (value === undefined) return;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new ApiError("invalid_request", "偏好胶囊无效");
+  }
+  const capsule = value as Record<string, unknown>;
+  const scope = capsule.scope;
+  const generatedAt = typeof capsule.generatedAt === "string" ? Date.parse(capsule.generatedAt) : Number.NaN;
+  const expiresAt = typeof capsule.expiresAt === "string" ? Date.parse(capsule.expiresAt) : Number.NaN;
+  const now = Date.now();
+  if (capsule.schemaVersion !== 1 || !scope || typeof scope !== "object" || Array.isArray(scope) ||
+      !Number.isFinite(generatedAt) || !Number.isFinite(expiresAt) || expiresAt <= generatedAt ||
+      generatedAt > now + 5 * 60 * 1000 || expiresAt <= now ||
+      expiresAt - generatedAt > 30 * 24 * 60 * 60 * 1000 || expiresAt > now + 30 * 24 * 60 * 60 * 1000) {
+    throw new ApiError("invalid_request", "偏好胶囊无效");
+  }
+  const projectId = (scope as Record<string, unknown>).projectId;
+  if (projectId !== undefined && (typeof projectId !== "string" || !projectId.trim() || projectId.length > 120)) {
+    throw new ApiError("invalid_request", "偏好胶囊范围无效");
+  }
+  const groups = [capsule.preferred, capsule.avoid, capsule.workflow];
+  if (groups.some((group) => !Array.isArray(group))) throw new ApiError("invalid_request", "偏好事实无效");
+  const facts = (groups as unknown[][]).flat();
+  if (facts.length > 24) throw new ApiError("invalid_request", "偏好事实过多");
+  const categories = new Set(["style", "subject", "palette", "composition", "medium", "workflow", "avoid"]);
+  const keys = new Set<string>();
+  for (const raw of facts) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new ApiError("invalid_request", "偏好事实无效");
+    const fact = raw as Record<string, unknown>;
+    const value = typeof fact.value === "string" ? fact.value.trim() : "";
+    const confidence = Number(fact.confidence);
+    const evidenceCount = Number(fact.evidenceCount);
+    const key = `${fact.category}\u0000${value.toLocaleLowerCase()}`;
+    if (!categories.has(String(fact.category)) || !value || value.length > 240 ||
+        !Number.isFinite(confidence) || confidence < 0 || confidence > 1 ||
+        !Number.isInteger(evidenceCount) || evidenceCount < 1 || fact.explicit !== true || keys.has(key)) {
+      throw new ApiError("invalid_request", "偏好事实无效");
+    }
+    keys.add(key);
+  }
+}
+
 function parseControlledManifest(value: unknown, expectedCount: number): ControlledReference[] {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new ApiError("invalid_request", "受控编辑输入清单无效");
@@ -70,6 +135,7 @@ function parseControlledManifest(value: unknown, expectedCount: number): Control
       !manifest.intentPrompt.trim() || manifest.intentPrompt.length > MAX_GOAL_CHARS || !Array.isArray(manifest.references)) {
     throw new ApiError("invalid_request", "受控编辑输入清单无效");
   }
+  validatePreferenceCapsule(manifest.preferenceCapsule);
   if (manifest.references.length !== expectedCount) throw new ApiError("invalid_request", "参考图数量与 Run 不一致");
   const ordinals = new Set<number>();
   const ids = new Set<string>();
@@ -120,13 +186,13 @@ function serviceBudget(service: string): { budget: number; pricingVersion: numbe
   throw new ApiError("invalid_request", "不支持的 Skill", false);
 }
 
-/** 暂时放宽 48 积分门控（0029）：余额不足全档时回落到 5 积分低档，而不是直接拒绝。
+/** 暂时放宽 48 积分门控（0029/0031）：余额不足全档时回落到 9 积分低档，而不是直接拒绝。
  *  credit_hold 金额必须等于 service_costs.unit_cost，因此低档是独立 service 行；
  *  budget_credits 与预授权同额，保持「actual ≤ hold」的结算不变量。 */
 function relaxedBudget(service: string, available: number): { budget: number; pricingVersion: number; billingService: string } {
   const full = serviceBudget(service);
   if (service !== "bowerbird-controlled-image-edit" || available >= full.budget) return full;
-  return { budget: 5, pricingVersion: full.pricingVersion, billingService: `${full.billingService}_min` };
+  return { budget: 9, pricingVersion: full.pricingVersion, billingService: `${full.billingService}_min` };
 }
 
 async function actionCreate(admin: Parameters<typeof billingAccountId>[0], user: { id: string }, body: Record<string, unknown>, requestIdValue: string): Promise<Response> {
@@ -148,42 +214,115 @@ async function actionCreate(admin: Parameters<typeof billingAccountId>[0], user:
     throw new ApiError("invalid_request", "生图引擎无效");
   }
   const imageProvider = requestedImageProvider as "cloud" | "jimeng" | "codex";
+  // Codex already performs its own reasoning/conversation loop. Combining it
+  // with the Bowerbird Agent duplicates planning and is currently too slow,
+  // so reject only new Runs while preserving existing Run/task recovery.
+  if (imageProvider === "codex") {
+    throw new ApiError(
+      "invalid_request",
+      "Codex 与 Bowerbird Agent 暂时互斥，请直接使用 Codex 或为 Agent 选择 Cloud / 即梦",
+      false,
+      409,
+    );
+  }
   if (imageProvider !== "cloud" && skillId !== "bowerbird-controlled-image-edit") {
     throw new ApiError("invalid_request", "该 Skill 不支持本机生图引擎");
   }
 
   const accountId = await billingAccountId(admin, user.id);
-  const balances = await ensureDailyCredits(admin, accountId);
-  const available = balances.daily + balances.sub + balances.topup;
-
-  // 服务端 BYO 门控（约定 24）：本机 CLI 引擎仅 Pro/Studio 可用，客户端镜像不得作为唯一防线。
-  if (imageProvider !== "cloud") {
-    const { data: subscription, error: subError } = await admin.from("subscriptions")
-      .select("tier,status,current_period_end")
-      .eq("user_id", accountId)
-      .maybeSingle();
-    if (subError) throw new ApiError("internal_error", "订阅状态读取失败", true);
-    const active = subscription?.status === "active" &&
-      (!subscription.current_period_end || Date.parse(subscription.current_period_end) > Date.now());
-    if (!active || !["pro", "studio"].includes(subscription?.tier ?? "free")) {
-      throw new ApiError("upgrade_required", "Agent 本机生图引擎需要 Pro 或 Studio 订阅", false, 403);
-    }
+  const { data: subscription, error: subError } = await admin.from("subscriptions")
+    .select("tier,status,current_period_end")
+    .eq("user_id", accountId)
+    .maybeSingle();
+  if (subError) throw new ApiError("internal_error", "订阅状态读取失败", true);
+  const policy = policyFor(activeTier(subscription));
+  if (!policy.can_use_agent_runs || !policy.allowed_agent_skills.includes(skillId)) {
+    throw new ApiError("upgrade_required", "当前权益不支持该 Agent 能力", false, 403);
+  }
+  // 服务端 BYO 门控读取与 entitlement 相同的 FeaturePolicy；客户端镜像不得作为唯一防线。
+  if (imageProvider !== "cloud" && !policy.can_use_byo) {
+    throw new ApiError("upgrade_required", "Agent 本机生图引擎需要 Pro 或 Studio 订阅", false, 403);
   }
 
   const idempotencyKey = typeof body.idempotencyKey === "string" && body.idempotencyKey.length >= 8
     ? body.idempotencyKey.slice(0, 128)
     : `agent-run-${user.id.slice(0, 8)}-${requestIdValue}`;
-  const { budget, pricingVersion, billingService } = relaxedBudget(skillId, available);
+  // 并发检查发生在 hold 前，避免被拒请求留下需要回滚、且不可安全复用的 idempotency key。
+  // 已有同 key Run 必须绕过计数（它本身就在活动数内），后面的 hold/create 分支会幂等返回。
+  const { data: priorHold, error: priorHoldError } = await admin.from("credit_holds")
+    .select("id,service,estimated_amount,pricing_version,status")
+    .eq("user_id", accountId)
+    .eq("idempotency_key", idempotencyKey)
+    .maybeSingle();
+  if (priorHoldError) throw new ApiError("internal_error", "Agent 幂等状态读取失败", true);
+  let idempotentRunExists = false;
+  if (priorHold?.id) {
+    const { data: priorRun, error: priorRunError } = await admin.from("agent_runs")
+      .select("id")
+      .eq("hold_id", priorHold.id)
+      .maybeSingle();
+    if (priorRunError) throw new ApiError("internal_error", "Agent 幂等状态读取失败", true);
+    idempotentRunExists = !!priorRun;
+    if (!idempotentRunExists && priorHold.status !== "held") {
+      throw new ApiError("invalid_request", "该 Agent 幂等请求已终结，请重新发起", false, 409);
+    }
+  }
+  if (!idempotentRunExists) {
+    const { count: activeAgentRuns, error: activeAgentError } = await admin.from("agent_runs")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", accountId)
+      .in("status", ACTIVE_AGENT_STATUSES);
+    if (activeAgentError) throw new ApiError("internal_error", "Agent 并发状态读取失败", true);
+    if ((activeAgentRuns ?? 0) >= policy.max_parallel_agent_runs) {
+      throw new ApiError("rate_limited", "当前 Agent 并发任务已达上限，请等待已有任务完成", true, 429);
+    }
+  }
+
+  const balances = await ensureDailyCredits(admin, accountId);
+  const available = balances.daily + balances.sub + balances.topup;
+  const selectedBudget = relaxedBudget(skillId, available);
+  const allowedBillingServices = new Set([
+    serviceBudget(skillId).billingService,
+    ...(skillId === "bowerbird-controlled-image-edit" ? [`${serviceBudget(skillId).billingService}_min`] : []),
+  ]);
+  if (priorHold && !allowedBillingServices.has(priorHold.service as string)) {
+    throw new ApiError("invalid_request", "Agent 幂等请求与 Skill 不匹配", false, 409);
+  }
+  const budget = priorHold ? Number(priorHold.estimated_amount) : selectedBudget.budget;
+  const pricingVersion = priorHold ? Number(priorHold.pricing_version) : selectedBudget.pricingVersion;
+  const billingService = priorHold ? String(priorHold.service) : selectedBudget.billingService;
   const hold = await holdCredits(admin, accountId, idempotencyKey, billingService);
 
   // Idempotent create: if a run row already references this hold, return it.
   const { data: existing } = await admin.from("agent_runs")
-    .select("id,conversation_id,status,skill_id,input_count,request_object_key,budget_credits,pricing_version")
+    .select("id,conversation_id,status,skill_id,input_count,input_manifest_hash,request_object_key,image_provider,budget_credits,pricing_version")
     .eq("hold_id", hold.holdId).maybeSingle();
   if (existing) {
     const row = existing as OwnRun & {
-      skill_id: string; input_count: number; request_object_key: string; budget_credits: number; pricing_version: number;
+      skill_id: string; input_count: number; input_manifest_hash: string; request_object_key: string;
+      image_provider: string; budget_credits: number; pricing_version: number;
     };
+    if (row.skill_id !== skillId || row.input_count !== inputCount ||
+        row.input_manifest_hash !== body.inputManifestHash || row.image_provider !== imageProvider) {
+      throw new ApiError("invalid_request", "Agent 幂等请求参数不一致", false, 409);
+    }
+    if (row.status === "uploading") {
+      try {
+        await reserveManagedUsage(admin, accountId, hold.holdId, row.budget_credits, true);
+      } catch (error) {
+        try {
+          await rollbackCredits(admin, hold.holdId, error instanceof ApiError ? error.code : "agent_capacity_failed");
+          await admin.from("agent_runs").update({
+            status: "failed",
+            actual_credits: 0,
+            error_code: "agent_capacity_failed",
+            safe_message: "Agent 云端容量暂不可用，请稍后重试",
+            finished_at: new Date().toISOString(),
+          }).eq("id", row.id).eq("status", "uploading");
+        } catch { /* stale-hold reconciliation remains the safety net */ }
+        throw error;
+      }
+    }
     const requestUpload = row.status === "uploading"
       ? await admin.storage.from(BUCKET).createSignedUploadUrl(row.request_object_key)
       : null;
@@ -212,29 +351,78 @@ async function actionCreate(admin: Parameters<typeof billingAccountId>[0], user:
     });
   }
 
-  const runId = crypto.randomUUID();
-  const conversationId = crypto.randomUUID();
-  const requestKey = skillId === "bowerbird-controlled-image-edit"
+  let runId: string = crypto.randomUUID();
+  let conversationId: string = crypto.randomUUID();
+  let requestKey = skillId === "bowerbird-controlled-image-edit"
     ? `runs/${runId}/inputs/request.json`
     : `${runId}/inputs/request.json`;
-  const { error: insertError } = await admin.from("agent_runs").insert({
-    id: runId,
-    conversation_id: conversationId,
-    user_id: accountId,
-    skill_id: skillId,
-    skill_version: skillId === "bowerbird-controlled-image-edit" ? "0.1.1" : "0.1.0-m0",
-    kernel_version: "0.1.0",
-    status: "uploading",
-    input_count: inputCount,
-    input_manifest_hash: body.inputManifestHash as string,
-    request_object_key: requestKey,
-    image_provider: imageProvider,
-    budget_credits: budget,
-    hold_id: hold.holdId,
-    pricing_version: pricingVersion,
-    content_expires_at: new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
+  const guarded = await admin.rpc("create_agent_run_guarded", {
+    p_run_id: runId,
+    p_conversation_id: conversationId,
+    p_user_id: accountId,
+    p_skill_id: skillId,
+    p_skill_version: skillId === "bowerbird-controlled-image-edit" ? "0.1.1" : "0.1.0-m0",
+    p_kernel_version: "0.1.0",
+    p_input_count: inputCount,
+    p_input_manifest_hash: body.inputManifestHash as string,
+    p_request_object_key: requestKey,
+    p_image_provider: imageProvider,
+    p_budget_credits: budget,
+    p_hold_id: hold.holdId,
+    p_pricing_version: pricingVersion,
+    p_content_expires_at: new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
+    p_max_user_parallel: policy.max_parallel_agent_runs,
+    p_global_active_limit: globalAgentCapacity(),
   });
-  if (insertError) throw new ApiError("internal_error", "Run 创建失败", true);
+  if (guarded.error?.details === "agent_user_parallel_limit") {
+    await rollbackCredits(admin, hold.holdId, "agent_user_parallel_limit");
+    throw new ApiError("rate_limited", "当前 Agent 并发任务已达上限，请等待已有任务完成", true, 429);
+  }
+  if (guarded.error?.details === "agent_global_capacity") {
+    await rollbackCredits(admin, hold.holdId, "agent_global_capacity");
+    throw new ApiError("capacity_reached", "Agent 队列暂时已满，请稍后重试", true, 503);
+  }
+  if (guarded.error?.details === "agent_idempotency_mismatch") {
+    throw new ApiError("invalid_request", "Agent 幂等请求参数不一致", false, 409);
+  }
+  if (guarded.error) {
+    // A guarded replay mismatch may refer to an already valid Run. Only release
+    // the hold when the failed transaction did not leave (or find) a Run row.
+    const { data: runForHold } = await admin.from("agent_runs")
+      .select("id")
+      .eq("hold_id", hold.holdId)
+      .maybeSingle();
+    if (!runForHold) {
+      try { await rollbackCredits(admin, hold.holdId, "agent_create_failed"); }
+      catch { /* stale-hold reconciliation remains the safety net */ }
+    }
+    throw new ApiError("internal_error", "Run 创建失败", true);
+  }
+  const rawGuarded = Array.isArray(guarded.data) ? guarded.data[0] : guarded.data;
+  if (!rawGuarded?.id) throw new ApiError("internal_error", "Run 创建返回无效", true);
+  // A concurrent request with the same hold may have won the insert. From this
+  // point all storage keys and response IDs must use the database winner.
+  runId = String(rawGuarded.id);
+  conversationId = String(rawGuarded.conversation_id);
+  requestKey = String(rawGuarded.request_object_key);
+
+  try {
+    // Reserve the project-wide managed cost ceiling before any user content is uploaded.
+    // The full Run budget is conservative; actual billing still comes only from trusted usage.
+    await reserveManagedUsage(admin, accountId, hold.holdId, budget, true);
+  } catch (error) {
+    try {
+      await rollbackCredits(admin, hold.holdId, error instanceof ApiError ? error.code : "agent_capacity_failed");
+      await admin.from("agent_runs").update({
+        status: "failed",
+        actual_credits: 0,
+        error_code: "agent_capacity_failed",
+        safe_message: "Agent 云端容量暂不可用，请稍后重试",
+        finished_at: new Date().toISOString(),
+      }).eq("id", runId).eq("status", "uploading");
+    } catch { /* stale-hold reconciliation remains the safety net */ }
+    throw error;
+  }
 
   const upload = await admin.storage.from(BUCKET).createSignedUploadUrl(requestKey);
   if (upload.error) throw new ApiError("internal_error", "上传地址签发失败", true);
@@ -343,21 +531,23 @@ async function actionGet(admin: Parameters<typeof billingAccountId>[0], user: { 
   const runId = typeof body.runId === "string" ? body.runId : "";
   if (!runId) throw new ApiError("invalid_request", "缺少 runId");
   await loadOwnRun(admin, runId, user.id);
-  const [{ data: run }, { data: events }, { data: approvals }] = await Promise.all([
+  const [{ data: run }, { data: events }, { data: approvals }, { data: clarifications }] = await Promise.all([
     admin.from("agent_runs").select(
-      "id,conversation_id,status,current_step,progress,skill_id,skill_version,approved_plan_hash,planned_tool_count,budget_credits,actual_credits,result_feedback_action,created_at,queued_at,started_at,finished_at,content_expires_at,error_code,safe_message",
+      "id,conversation_id,status,current_step,progress,skill_id,skill_version,approved_plan_hash,planned_tool_count,budget_credits,actual_credits,result_feedback_action,created_at,queued_at,started_at,finished_at,content_expires_at,content_deleted_at,error_code,safe_message",
     ).eq("id", runId).maybeSingle(),
     admin.from("agent_events").select("seq,type,step,progress,display_payload,created_at").eq("run_id", runId).order("seq", { ascending: true }).limit(100),
-    admin.from("agent_approvals").select("id,kind,status,proposal_object_key,proposal_hash,planned_tool_count,requested_at,expires_at,estimated_additional_credits").eq("run_id", runId).order("requested_at", { ascending: false }).limit(10),
+    admin.from("agent_approvals").select("id,kind,status,proposal_object_key,proposal_hash,planned_tool_count,requested_at,expires_at,content_deleted_at,estimated_additional_credits").eq("run_id", runId).order("requested_at", { ascending: false }).limit(10),
+    admin.from("agent_clarifications").select("id,question_key,context_hash,status,question_object_key,asked_at,answered_at,expires_at,content_deleted_at").eq("run_id", runId).order("asked_at", { ascending: false }).limit(3),
   ]);
   const { data: artifacts } = await admin.from("agent_artifacts")
     .select("id,conversation_id,kind,role,step_id,parent_artifact_id,mime,bytes,sha256,user_visible,expires_at,downloaded_at")
     .eq("run_id", runId)
     .eq("user_visible", true)
+    .is("deleted_at", null)
     .order("expires_at", { ascending: true });
   const approvalsWithProposal = await Promise.all((approvals ?? []).map(async (approval) => {
-    const { proposal_object_key: proposalObjectKey, ...safeApproval } = approval;
-    if (!proposalObjectKey) return safeApproval;
+    const { proposal_object_key: proposalObjectKey, content_deleted_at: contentDeletedAt, ...safeApproval } = approval;
+    if (!proposalObjectKey || contentDeletedAt) return { ...safeApproval, contentExpired: Boolean(contentDeletedAt) };
     const object = await admin.storage.from(BUCKET).download(proposalObjectKey as string);
     if (object.error || !object.data) throw new ApiError("internal_error", "审批计划读取失败", true);
     const bytes = new Uint8Array(await object.data.arrayBuffer());
@@ -366,6 +556,20 @@ async function actionGet(admin: Parameters<typeof billingAccountId>[0], user: { 
     try { proposal = JSON.parse(new TextDecoder().decode(bytes)); }
     catch { throw new ApiError("internal_error", "审批计划对象无效", true); }
     return { ...safeApproval, proposal };
+  }));
+  const clarificationsWithQuestion = await Promise.all((clarifications ?? []).map(async (clarification) => {
+    const { question_object_key: questionObjectKey, content_deleted_at: contentDeletedAt, ...safeClarification } = clarification;
+    if (!questionObjectKey || contentDeletedAt) {
+      return { ...safeClarification, contentExpired: Boolean(contentDeletedAt) };
+    }
+    const object = await admin.storage.from(BUCKET).download(questionObjectKey as string);
+    if (object.error || !object.data) throw new ApiError("internal_error", "澄清问题读取失败", true);
+    const bytes = new Uint8Array(await object.data.arrayBuffer());
+    if (!bytes.byteLength || bytes.byteLength > 16 * 1024) throw new ApiError("internal_error", "澄清问题对象无效", true);
+    let question: unknown;
+    try { question = JSON.parse(new TextDecoder().decode(bytes)); }
+    catch { throw new ApiError("internal_error", "澄清问题对象无效", true); }
+    return { ...safeClarification, question };
   }));
 
   // 本机生图停车态：内联待执行任务参数，桌面据此驱动对应 CLI。
@@ -425,8 +629,88 @@ async function actionGet(admin: Parameters<typeof billingAccountId>[0], user: { 
     run,
     events: events ?? [],
     approvals: approvalsWithProposal,
+    clarifications: clarificationsWithQuestion,
     artifacts: artifacts ?? [],
     ...(pendingLocalTask ? { pendingLocalTask } : {}),
+  });
+}
+
+async function actionAnswerClarification(
+  admin: Parameters<typeof billingAccountId>[0],
+  user: { id: string },
+  body: Record<string, unknown>,
+): Promise<Response> {
+  const clarificationId = typeof body.clarificationId === "string" ? body.clarificationId : "";
+  const contextHash = typeof body.contextHash === "string" ? body.contextHash : "";
+  const answer = typeof body.answer === "string" ? body.answer.trim() : "";
+  if (!clarificationId || !/^[0-9a-f]{64}$/.test(contextHash) || !answer || answer.length > 240) {
+    throw new ApiError("invalid_request", "澄清回答字段无效");
+  }
+  const { data: clarification, error } = await admin.from("agent_clarifications")
+    .select("id,run_id,question_key,context_hash,status,question_object_key,expires_at,run:agent_runs!agent_clarifications_run_id_fkey(id,status,billing:billing_accounts!agent_runs_user_id_fkey(auth_user_id))")
+    .eq("id", clarificationId).maybeSingle();
+  if (error || !clarification) throw new ApiError("invalid_request", "澄清问题不存在", false, 404);
+  const row = clarification as unknown as {
+    id: string;
+    run_id: string;
+    question_key: string;
+    context_hash: string;
+    status: string;
+    question_object_key: string;
+    expires_at: string;
+    run: { id: string; status: string; billing: { auth_user_id: string } | null } | null;
+  };
+  if (!row.run?.billing || row.run.billing.auth_user_id !== user.id) {
+    throw new ApiError("invalid_request", "澄清问题不存在", false, 404);
+  }
+  if (row.status !== "pending" || row.run.status !== "awaiting_clarification") {
+    throw new ApiError("invalid_request", "澄清问题当前不可回答", false, 409);
+  }
+  if (row.context_hash !== contextHash) throw new ApiError("invalid_request", "澄清上下文已失效", false, 409);
+  if (Date.parse(row.expires_at) <= Date.now()) throw new ApiError("invalid_request", "澄清问题已过期", false, 410);
+
+  const object = await admin.storage.from(BUCKET).download(row.question_object_key);
+  if (object.error || !object.data) throw new ApiError("internal_error", "澄清问题读取失败", true);
+  let proposal: Record<string, unknown>;
+  try { proposal = JSON.parse(await object.data.text()) as Record<string, unknown>; }
+  catch { throw new ApiError("internal_error", "澄清问题对象无效", true); }
+  const optionPatches = Array.isArray(proposal.optionPatches) ? proposal.optionPatches : [];
+  const mapping = optionPatches.find((raw) => raw && typeof raw === "object" &&
+    (raw as Record<string, unknown>).answer === answer) as Record<string, unknown> | undefined;
+  if (!mapping || !Array.isArray(mapping.patches) || !mapping.patches.length) {
+    throw new ApiError("invalid_request", "回答不在当前选项中");
+  }
+  const intentPatch = {
+    sourceQuestionKey: row.question_key,
+    contextHash,
+    patches: mapping.patches,
+  };
+  const intentPatchHash = await sha256Hex(new TextEncoder().encode(canonicalJson(intentPatch)));
+  const answerObjectKey = `runs/${row.run_id}/clarifications/${clarificationId}-answer.json`;
+  const encoded = new TextEncoder().encode(JSON.stringify({ answer, intentPatch }));
+  const upload = await admin.storage.from(BUCKET).upload(answerObjectKey, encoded, {
+    contentType: "application/json",
+    upsert: false,
+  });
+  if (upload.error && !String(upload.error.message ?? "").toLowerCase().includes("already")) {
+    throw new ApiError("internal_error", "澄清回答保存失败", true);
+  }
+  const settled = await admin.rpc("answer_agent_clarification", {
+    p_clarification_id: clarificationId,
+    p_run_id: row.run_id,
+    p_context_hash: contextHash,
+    p_answer_object_key: answerObjectKey,
+    p_intent_patch_hash: intentPatchHash,
+  });
+  if (settled.error) {
+    if (settled.error.code === "55000") throw new ApiError("invalid_request", "澄清上下文已失效", false, 409);
+    throw new ApiError("internal_error", "澄清回答提交失败", true);
+  }
+  return jsonResponse({
+    runId: row.run_id,
+    clarificationId,
+    questionKey: row.question_key,
+    status: "queued",
   });
 }
 
@@ -485,7 +769,7 @@ async function actionCancel(admin: Parameters<typeof billingAccountId>[0], user:
   if (["succeeded", "failed", "cancelled"].includes(own.status)) {
     return jsonResponse({ runId, status: own.status, alreadyFinal: true });
   }
-  if (["uploading", "queued", "awaiting_approval", "awaiting_result_feedback", "awaiting_local_task"].includes(own.status)) {
+  if (["uploading", "queued", "awaiting_clarification", "awaiting_approval", "awaiting_result_feedback", "awaiting_local_task"].includes(own.status)) {
     const { data, error } = await admin.rpc("cancel_unleased_agent_run", { p_run_id: runId });
     if (error) throw new ApiError("internal_error", "取消结算失败", true);
     const settled = Array.isArray(data) ? data[0] : data;
@@ -713,6 +997,8 @@ Deno.serve(async (request) => {
         return await actionDecideApproval(admin, user, body, true);
       case "reject":
         return await actionDecideApproval(admin, user, body, false);
+      case "answer_clarification":
+        return await actionAnswerClarification(admin, user, body);
       case "cancel":
         return await actionCancel(admin, user, body);
       case "artifact_url":

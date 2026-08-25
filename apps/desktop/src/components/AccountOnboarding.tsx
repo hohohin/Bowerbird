@@ -24,7 +24,7 @@ export function AccountOnboarding() {
     <ModalShell
       title="Bowerbird 账号"
       eyebrow="Account"
-      description="账号只同步订阅和积分；素材、提示词与本地数据库不上传。"
+      description="账号只同步订阅和积分；素材库与本地数据库默认不上传。使用 Cloud / Agent 时，仅本次明确提交的文字和参考图会临时上传。"
       width="md"
       preventClose={busy}
       onClose={() => setOpen(false)}
@@ -49,7 +49,7 @@ export function AccountOnboarding() {
                 <ul className="mt-1 max-h-40 space-y-1 overflow-y-auto text-[11px]">
                   {entitlement!.recent_transactions.slice(0, 50).map((tx, index) => (
                     <li key={`${tx.created_at}-${index}`} className="flex items-center justify-between gap-2 text-muted">
-                      <span className="truncate">{tx.kind}{tx.service ? ` · ${tx.service}` : ""}</span>
+                      <span className="truncate">{tx.meta?.entity_type === "agent_run" ? `Agent Run · ${tx.meta.final_status}` : tx.kind}{tx.service ? ` · ${tx.service}` : ""}</span>
                       <span className={tx.amount >= 0 ? "text-green-400" : "text-red-300"}>{tx.amount >= 0 ? `+${tx.amount}` : tx.amount}</span>
                     </li>
                   ))}

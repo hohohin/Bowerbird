@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter, State};
 use ulid::Ulid;
 
-use crate::cloud::{AuthClient, CloudClient};
+use crate::cloud::{AuthClient, CloudClient, EntitlementService};
 use crate::core::{library::Asset, paths::LibraryPaths};
 use crate::db::Database;
 use crate::error::AppError;
@@ -17,6 +17,8 @@ const MAX_REFERENCES: usize = 8;
 const MAX_PROMPT_CHARS: usize = 4_000;
 const MAX_FEEDBACK_CHARS: usize = 2_000;
 const MAX_ARTIFACT_BYTES: u64 = 20 * 1024 * 1024;
+const CODEX_AGENT_INCOMPATIBLE_MESSAGE: &str =
+    "Codex 与 Bowerbird Agent 暂时互斥，请直接使用 Codex 或为 Agent 选择 Cloud / 即梦";
 const ALLOWED_RATIOS: [(&str, f64); 7] = [
     ("1:1", 1.0),
     ("3:4", 3.0 / 4.0),
@@ -32,6 +34,34 @@ const ALLOWED_RATIOS: [(&str, f64); 7] = [
 pub struct CloudAgentReferenceRequest {
     pub asset_id: String,
     pub prompt_token: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreferenceFact {
+    pub category: String,
+    pub value: String,
+    pub confidence: f64,
+    pub evidence_count: u32,
+    pub explicit: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreferenceScope {
+    pub project_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreferenceCapsule {
+    pub schema_version: u8,
+    pub scope: PreferenceScope,
+    pub preferred: Vec<PreferenceFact>,
+    pub avoid: Vec<PreferenceFact>,
+    pub workflow: Vec<PreferenceFact>,
+    pub generated_at: String,
+    pub expires_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,6 +112,73 @@ struct ControlledManifest<'a> {
     references: &'a [ControlledReference<'a>],
     #[serde(skip_serializing_if = "Option::is_none")]
     ratio: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preference_capsule: Option<&'a PreferenceCapsule>,
+}
+
+fn validate_preference_capsule(
+    capsule: &PreferenceCapsule,
+    project_id: Option<&str>,
+) -> Result<(), AppError> {
+    const CATEGORIES: [&str; 7] = [
+        "style",
+        "subject",
+        "palette",
+        "composition",
+        "medium",
+        "workflow",
+        "avoid",
+    ];
+    if capsule.schema_version != 1
+        || capsule
+            .scope
+            .project_id
+            .as_deref()
+            .is_some_and(|scope_project| Some(scope_project) != project_id)
+    {
+        return Err(AppError::Other("Agent 偏好范围与当前项目不一致".into()));
+    }
+    let generated_at = chrono::DateTime::parse_from_rfc3339(&capsule.generated_at)
+        .map_err(|_| AppError::Other("Agent 偏好胶囊时间无效".into()))?;
+    let expires_at = chrono::DateTime::parse_from_rfc3339(&capsule.expires_at)
+        .map_err(|_| AppError::Other("Agent 偏好胶囊时间无效".into()))?;
+    let now = chrono::Utc::now();
+    if expires_at <= generated_at
+        || generated_at > now + chrono::Duration::minutes(5)
+        || expires_at <= now
+        || expires_at - generated_at > chrono::Duration::days(30)
+        || expires_at > now + chrono::Duration::days(30)
+    {
+        return Err(AppError::Other("Agent 偏好胶囊已过期或有效期过长".into()));
+    }
+    let facts = capsule
+        .preferred
+        .iter()
+        .chain(&capsule.avoid)
+        .chain(&capsule.workflow)
+        .collect::<Vec<_>>();
+    if facts.len() > 24 {
+        return Err(AppError::Other("Agent 偏好事实最多 24 条".into()));
+    }
+    let mut seen = std::collections::HashSet::new();
+    for fact in facts {
+        let value = fact.value.trim();
+        let key = format!("{}\0{}", fact.category, value.to_lowercase());
+        if !CATEGORIES.contains(&fact.category.as_str())
+            || value.is_empty()
+            || value.chars().count() > 240
+            || !fact.confidence.is_finite()
+            || !(0.0..=1.0).contains(&fact.confidence)
+            || fact.evidence_count == 0
+            || !fact.explicit
+            || !seen.insert(key)
+        {
+            return Err(AppError::Other(
+                "Agent 偏好胶囊只接受去重后的显式事实".into(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -109,6 +206,13 @@ fn normalize_requested_ratio(ratio: Option<String>) -> Result<Option<String>, Ap
     } else {
         Err(AppError::Other("Agent 画面比例无效".into()))
     }
+}
+
+fn ensure_agent_provider_compatible(image_provider: Option<&str>) -> Result<(), AppError> {
+    if image_provider == Some("codex") {
+        return Err(AppError::Other(CODEX_AGENT_INCOMPATIBLE_MESSAGE.into()));
+    }
+    Ok(())
 }
 
 fn nearest_ratio(width: i64, height: i64) -> Option<String> {
@@ -335,17 +439,30 @@ pub async fn cloud_agent_start(
     db: State<'_, Arc<Database>>,
     cloud: State<'_, CloudClient>,
     auth: State<'_, AuthClient>,
+    entitlement: State<'_, EntitlementService>,
     intent_prompt: String,
     references: Vec<CloudAgentReferenceRequest>,
     ratio: Option<String>,
     project_id: Option<String>,
     image_provider: Option<String>,
+    preference_capsule: Option<PreferenceCapsule>,
 ) -> Result<CloudAgentRunRecord, AppError> {
     if references.len() > MAX_REFERENCES {
         return Err(AppError::Other("Agent 最多处理 8 张参考图".into()));
     }
-    // 生图引擎：cloud = VPS 方舟 Seedream（默认）；jimeng / codex = 桌面本地 CLI。
-    // 文本、审批与编排始终在云端，仅已批准的生图步骤委托本机执行。
+    // 只阻止新建 Codex Agent Run；历史 Run 与已经停车的本机任务仍可查看/收尾。
+    ensure_agent_provider_compatible(image_provider.as_deref())?;
+    let policy = entitlement.current_or_sync(&auth).await.policy;
+    if !policy.allows_agent_run(SKILL_ID) {
+        return Err(AppError::Other("当前权益不支持 Bowerbird Agent".into()));
+    }
+    if image_provider.as_deref() == Some("jimeng") && !policy.can_use_byo {
+        return Err(AppError::Other(
+            "Agent 本机生图引擎需要 Pro 或 Studio 订阅".into(),
+        ));
+    }
+    // 新 Run 生图引擎：cloud = VPS 方舟 Seedream（默认）；jimeng = 桌面本地 CLI。
+    // Codex Agent 暂停组合使用，但历史任务执行器仍保留 Codex 恢复能力。
     let image_provider = match image_provider.as_deref() {
         None | Some("cloud") => "cloud".to_string(),
         Some("jimeng") => {
@@ -356,16 +473,6 @@ pub async fn cloud_agent_start(
             }
             "jimeng".to_string()
         }
-        Some("codex") => {
-            let health = crate::commands::codex::codex_health().await?;
-            if !health.ok {
-                return Err(AppError::Other(format!(
-                    "Codex CLI 不可用，无法使用本机生图引擎：{}",
-                    health.reason
-                )));
-            }
-            "codex".to_string()
-        }
         Some(other) => {
             return Err(AppError::Other(format!("Agent 生图引擎无效：{other}")));
         }
@@ -375,6 +482,9 @@ pub async fn cloud_agent_start(
         if db.get_project(project)?.is_none() {
             return Err(AppError::Other("当前项目不存在".into()));
         }
+    }
+    if let Some(capsule) = preference_capsule.as_ref() {
+        validate_preference_capsule(capsule, project_id.as_deref())?;
     }
 
     let normalized_prompt = normalize_intent_prompt(&intent_prompt, &references)?;
@@ -425,6 +535,7 @@ pub async fn cloud_agent_start(
         intent_prompt: &normalized_prompt,
         references: &manifest_references,
         ratio: resolved_ratio.as_deref(),
+        preference_capsule: preference_capsule.as_ref(),
     })?;
     if manifest.len() > 64 * 1024 {
         return Err(AppError::Other("Agent 输入清单过大".into()));
@@ -532,6 +643,7 @@ pub async fn cloud_agent_start(
         },
         "events": [],
         "approvals": [],
+        "clarifications": [],
         "artifacts": [],
     });
     let mut record = CloudAgentRunRecord {
@@ -607,6 +719,35 @@ pub async fn cloud_agent_decide_approval(
         } else {
             "拒绝 Agent 计划失败"
         },
+    )
+    .await?;
+    refresh_record(&db, &cloud, &auth, &run_id).await
+}
+
+#[tauri::command]
+pub async fn cloud_agent_answer_clarification(
+    db: State<'_, Arc<Database>>,
+    cloud: State<'_, CloudClient>,
+    auth: State<'_, AuthClient>,
+    run_id: String,
+    clarification_id: String,
+    context_hash: String,
+    answer: String,
+) -> Result<CloudAgentRunRecord, AppError> {
+    let answer = answer.trim().to_string();
+    if answer.is_empty() || answer.chars().count() > 240 {
+        return Err(AppError::Other("Agent 澄清答案无效".into()));
+    }
+    agent_action(
+        &cloud,
+        &auth,
+        json!({
+            "action": "answer_clarification",
+            "clarificationId": clarification_id,
+            "contextHash": context_hash,
+            "answer": answer,
+        }),
+        "提交 Agent 澄清答案失败",
     )
     .await?;
     refresh_record(&db, &cloud, &auth, &run_id).await
@@ -1294,9 +1435,12 @@ pub async fn cloud_agent_execute_local_task(
 #[cfg(test)]
 mod tests {
     use super::{
-        cache_local_result, list_records, load_cached_local_result, local_generation_instruction,
-        nearest_ratio, normalize_intent_prompt, normalize_requested_ratio, record_from_row,
-        remove_cached_local_result, save_record, CloudAgentReferenceRequest, CloudAgentRunRecord,
+        cache_local_result, ensure_agent_provider_compatible, list_records,
+        load_cached_local_result, local_generation_instruction, nearest_ratio,
+        normalize_intent_prompt, normalize_requested_ratio, record_from_row,
+        remove_cached_local_result, save_record, validate_preference_capsule,
+        CloudAgentReferenceRequest, CloudAgentRunRecord, PreferenceCapsule, PreferenceFact,
+        PreferenceScope,
     };
     use crate::core::paths::LibraryPaths;
     use crate::db::Database;
@@ -1347,6 +1491,14 @@ mod tests {
     }
 
     #[test]
+    fn codex_and_bowerbird_agent_are_temporarily_mutually_exclusive() {
+        assert!(ensure_agent_provider_compatible(None).is_ok());
+        assert!(ensure_agent_provider_compatible(Some("cloud")).is_ok());
+        assert!(ensure_agent_provider_compatible(Some("jimeng")).is_ok());
+        assert!(ensure_agent_provider_compatible(Some("codex")).is_err());
+    }
+
+    #[test]
     fn intent_tokens_are_bound_to_reference_ordinals() {
         let prompt = normalize_intent_prompt(
             "让 @海报#2.jpg 保持主体，参考 @海报.jpg 的构图",
@@ -1378,6 +1530,37 @@ mod tests {
             Some("9:16")
         );
         assert!(normalize_requested_ratio(Some("auto".into())).is_err());
+    }
+
+    #[test]
+    fn preference_capsule_accepts_only_explicit_project_scoped_facts() {
+        let capsule = PreferenceCapsule {
+            schema_version: 1,
+            scope: PreferenceScope {
+                project_id: Some("project-1".into()),
+            },
+            preferred: vec![PreferenceFact {
+                category: "palette".into(),
+                value: "低饱和蓝绿色".into(),
+                confidence: 1.0,
+                evidence_count: 1,
+                explicit: true,
+            }],
+            avoid: vec![],
+            workflow: vec![],
+            generated_at: chrono::Utc::now().to_rfc3339(),
+            expires_at: (chrono::Utc::now() + chrono::Duration::days(1)).to_rfc3339(),
+        };
+        validate_preference_capsule(&capsule, Some("project-1")).unwrap();
+        assert!(validate_preference_capsule(&capsule, Some("project-2")).is_err());
+
+        let mut global = capsule.clone();
+        global.scope.project_id = None;
+        validate_preference_capsule(&global, Some("project-1")).unwrap();
+
+        let mut implicit = capsule;
+        implicit.preferred[0].explicit = false;
+        assert!(validate_preference_capsule(&implicit, Some("project-1")).is_err());
     }
 
     #[test]

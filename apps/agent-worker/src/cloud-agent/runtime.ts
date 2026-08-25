@@ -11,6 +11,7 @@ export type AgentWorkerConfig = {
   workerId: string;
   pollIntervalMs: number;
   heartbeatIntervalMs: number;
+  maintenanceIntervalMs: number;
 };
 
 export type AgentStopSignal = { requested: boolean };
@@ -55,6 +56,7 @@ export function agentConfigFromEnv(env: Record<string, string | undefined>): Age
     workerId,
     pollIntervalMs: positiveInt(env.AGENT_POLL_INTERVAL_MS, 2_000, "AGENT_POLL_INTERVAL_MS"),
     heartbeatIntervalMs: positiveInt(env.AGENT_HEARTBEAT_INTERVAL_MS, 20_000, "AGENT_HEARTBEAT_INTERVAL_MS"),
+    maintenanceIntervalMs: positiveInt(env.AGENT_MAINTENANCE_INTERVAL_MS, 600_000, "AGENT_MAINTENANCE_INTERVAL_MS"),
   };
 }
 
@@ -134,13 +136,29 @@ export async function executeClaimedAgentRun(
 export async function runAgentWorker(
   config: AgentWorkerConfig,
   processor: AgentRunProcessor,
-  options: { control?: AgentControlClient; stop?: AgentStopSignal; sleep?: Sleep } = {},
+  options: {
+    control?: AgentControlClient;
+    stop?: AgentStopSignal;
+    sleep?: Sleep;
+    now?: () => number;
+    maintenance?: (control: AgentControlClient) => Promise<void> | void;
+  } = {},
 ): Promise<void> {
   const control = options.control ?? new AgentControlClient(config);
   const stop = options.stop ?? { requested: false };
   const sleep = options.sleep ?? defaultSleep;
+  const now = options.now ?? Date.now;
+  let lastMaintenanceAt = Number.NEGATIVE_INFINITY;
   console.log(JSON.stringify({ event: "agent_worker_started", worker_id: config.workerId }));
   while (!stop.requested) {
+    if (options.maintenance && now() - lastMaintenanceAt >= config.maintenanceIntervalMs) {
+      lastMaintenanceAt = now();
+      try {
+        await options.maintenance(control);
+      } catch (error) {
+        console.error(JSON.stringify({ event: "agent_maintenance_failed", error: safeErrorCode(error) }));
+      }
+    }
     try {
       const claimed = await control.claim();
       if (claimed.run) {

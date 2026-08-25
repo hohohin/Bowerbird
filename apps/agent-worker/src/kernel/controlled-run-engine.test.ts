@@ -6,7 +6,14 @@ import type { PreparedToolCall } from "../control-plane/agent-control-client.ts"
 import { FakeModel } from "../fakes/fake-model.ts";
 import { hashIntentAnalysis } from "../skills/bowerbird-controlled-image-edit/planner.ts";
 import { encodeControlledCheckpoint } from "./controlled-checkpoint.ts";
-import type { ApprovedStepExecutor, GenerateApprovedStepRequest, GeneratedApprovedStep } from "./controlled-image-edit-runner.ts";
+import {
+  controlledClarificationContextHash,
+  createControlledRunnerCheckpoint,
+  type ApprovedStepExecutor,
+  type GenerateApprovedStepRequest,
+  type GeneratedApprovedStep,
+} from "./controlled-image-edit-runner.ts";
+import { loadControlledImageEditSkill } from "../skills/bowerbird-controlled-image-edit/loader.ts";
 import { advanceControlledRun, type ControlledRunControl } from "./controlled-run-engine.ts";
 import {
   DurableToolDispatcher,
@@ -54,12 +61,14 @@ class MemoryRunControl implements ControlledRunControl {
   approvals = 0;
   feedbackPauses = 0;
   finishes = 0;
+  clarificationPauses = 0;
 
   async saveCheckpoint(checkpoint: Parameters<ControlledRunControl["saveCheckpoint"]>[0]): Promise<void> {
     this.checkpoint = JSON.parse(JSON.stringify(checkpoint));
   }
 
   async requestApproval(): Promise<void> { this.approvals++; }
+  async requestClarification(): Promise<void> { this.clarificationPauses++; }
   async awaitResultFeedback(): Promise<void> { this.feedbackPauses++; }
   localTaskPauses = 0;
   async awaitLocalTask(): Promise<{ parked: boolean }> { this.localTaskPauses++; return { parked: true }; }
@@ -356,4 +365,124 @@ test("user retry triggers one vision diagnosis, a new approval, and only then on
   equal(image.executeCount, 2);
   equal(revisedResult.checkpoint.artifacts.filter((item) => item.role === "final_result").length, 1);
   equal(revisedResult.checkpoint.artifacts.filter((item) => item.role === "stage_result").length, 1);
+});
+
+test("RunEngine parks for one clarification, applies IntentPatch, then requires a fresh plan approval", async () => {
+  const skill = loadControlledImageEditSkill();
+  const input = { schemaVersion: 1 as const, intentPrompt: intent.intentSummary, references: [] };
+  const initial = createControlledRunnerCheckpoint({
+    runId: "run-clarify",
+    conversationId: "conversation-clarify",
+    skillVersion: skill.version,
+    skillHash: skill.instructionHash,
+    input,
+  });
+  const contextHash = controlledClarificationContextHash(initial);
+  const control = new MemoryRunControl();
+  const claim = {
+    runId: initial.runId,
+    conversationId: initial.conversationId,
+    skillVersion: skill.version,
+    approvedPlanHash: null,
+    resultFeedbackAction: null,
+  } as const;
+  const first = await advanceControlledRun({
+    claim,
+    checkpoint: initial,
+    model: new FakeModel([{
+      kind: "action",
+      action: "request_clarification",
+      arguments: { proposal: {
+        questionKey: "choose.strategy",
+        contextHash,
+        question: "输出应采用直接生成还是受控多步？",
+        recommendedAnswer: "直接生成",
+        options: ["直接生成", "受控多步"],
+        optionPatches: [
+          { answer: "直接生成", patches: [{ field: "strategy", op: "set", value: "direct" }] },
+          { answer: "受控多步", patches: [{ field: "strategy", op: "set", value: "controlled" }] },
+        ],
+        affectedIntentFields: ["strategy"],
+        rationale: "路线会改变步骤数量和成本。",
+      } },
+      providerUsage: {},
+    }]),
+    executor: { generate: async () => { throw new Error("unexpected_generate"); } },
+    control,
+  });
+  equal(first.outcome, "awaiting_clarification");
+  equal(control.clarificationPauses, 1);
+  equal(control.approvals, 0);
+
+  const resumed = await advanceControlledRun({
+    claim,
+    checkpoint: first.checkpoint,
+    clarificationPatch: {
+      sourceQuestionKey: "choose.strategy",
+      contextHash,
+      patches: [{ field: "strategy", op: "set", value: "direct" }],
+    },
+    model: new FakeModel([
+      { kind: "action", action: "record_intent_analysis", arguments: { analysis: intent }, providerUsage: {} },
+      { kind: "action", action: "submit_plan_for_approval", arguments: { plan }, providerUsage: {} },
+    ]),
+    executor: { generate: async () => { throw new Error("unexpected_generate"); } },
+    control,
+  });
+  equal(resumed.outcome, "awaiting_approval");
+  equal(control.approvals, 1);
+  equal(resumed.checkpoint.intentOverrides?.strategy, "direct");
+  equal(resumed.checkpoint.clarificationHistory?.[0].status, "answered");
+  equal(resumed.checkpoint.approvedPlanHash, undefined);
+});
+
+test("malformed clarification gets one corrective model retry and never parks", async () => {
+  const skill = loadControlledImageEditSkill();
+  const input = { schemaVersion: 1 as const, intentPrompt: intent.intentSummary, references: [] };
+  const initial = createControlledRunnerCheckpoint({
+    runId: "run-malformed-clarify",
+    conversationId: "conversation-malformed-clarify",
+    skillVersion: skill.version,
+    skillHash: skill.instructionHash,
+    input,
+  });
+  const contextHash = controlledClarificationContextHash(initial);
+  const control = new MemoryRunControl();
+  const result = await advanceControlledRun({
+    claim: {
+      runId: initial.runId,
+      conversationId: initial.conversationId,
+      skillVersion: skill.version,
+      approvedPlanHash: null,
+      resultFeedbackAction: null,
+    },
+    checkpoint: initial,
+    model: new FakeModel([
+      {
+        kind: "action",
+        action: "request_clarification",
+        arguments: { proposal: {
+          questionKey: "bad.options",
+          contextHash,
+          question: "选择路线？",
+          recommendedAnswer: "不存在的选项",
+          options: ["直接", "受控"],
+          optionPatches: [
+            { answer: "直接", patches: [{ field: "strategy", op: "set", value: "direct" }] },
+            { answer: "受控", patches: [{ field: "strategy", op: "set", value: "controlled" }] },
+          ],
+          affectedIntentFields: ["strategy"],
+          rationale: "路线不同。",
+        } },
+        providerUsage: {},
+      },
+      { kind: "action", action: "record_intent_analysis", arguments: { analysis: intent }, providerUsage: {} },
+      { kind: "action", action: "submit_plan_for_approval", arguments: { plan }, providerUsage: {} },
+    ]),
+    executor: { generate: async () => { throw new Error("unexpected_generate"); } },
+    control,
+  });
+  equal(result.outcome, "awaiting_approval");
+  equal(control.clarificationPauses, 0);
+  equal(control.approvals, 1);
 });

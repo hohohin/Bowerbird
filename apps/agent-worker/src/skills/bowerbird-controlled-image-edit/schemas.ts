@@ -6,6 +6,7 @@ import type {
   ControlledRunArtifact,
   IntentAnalysis,
 } from "../../contracts/controlled-image-edit.ts";
+import { validatePreferenceCapsule } from "../../contracts/preference.ts";
 
 export const MAX_CONTROLLED_REFERENCES = 8;
 export const MAX_CONTROLLED_PLAN_STEPS = 8;
@@ -21,8 +22,8 @@ export class ControlledPlanValidationError extends Error {
   }
 }
 
-function requireText(value: string, safeCode: string): void {
-  if (!value.trim()) throw new ControlledPlanValidationError(safeCode);
+function requireText(value: unknown, safeCode: string): asserts value is string {
+  if (typeof value !== "string" || !value.trim()) throw new ControlledPlanValidationError(safeCode);
 }
 
 function assertUnique(values: string[], safeCode: string): void {
@@ -61,20 +62,50 @@ export function validateControlledInput(input: ControlledImageEditInput): void {
   if (input.ratio && !CONTROLLED_RATIOS.has(input.ratio)) {
     throw new ControlledPlanValidationError("controlled_output_ratio_invalid");
   }
+  if (input.preferenceCapsule) {
+    try {
+      validatePreferenceCapsule(input.preferenceCapsule);
+    } catch {
+      throw new ControlledPlanValidationError("controlled_preference_capsule_invalid");
+    }
+  }
 }
 
 export function validateIntentAnalysis(input: ControlledImageEditInput, analysis: IntentAnalysis): void {
+  if (!analysis || typeof analysis !== "object" || Array.isArray(analysis)) {
+    throw new ControlledPlanValidationError("controlled_analysis_shape_invalid");
+  }
   if (analysis.schemaVersion !== 1) throw new ControlledPlanValidationError("controlled_analysis_schema_unsupported");
   requireText(analysis.intentSummary, "controlled_intent_summary_required");
+  const textLists = [
+    analysis.mustPreserve,
+    analysis.mustExclude,
+    analysis.mayChange,
+    analysis.highConsistencySignals,
+    analysis.assumptions,
+  ];
+  if (textLists.some((items) => !Array.isArray(items) || items.some((item) => typeof item !== "string" || !item.trim())) ||
+      !Array.isArray(analysis.mustTransfer)) {
+    throw new ControlledPlanValidationError("controlled_analysis_shape_invalid");
+  }
+  if (analysis.finalSubjectReferenceId !== undefined &&
+      (typeof analysis.finalSubjectReferenceId !== "string" || !analysis.finalSubjectReferenceId.trim())) {
+    throw new ControlledPlanValidationError("controlled_analysis_shape_invalid");
+  }
   const referenceIds = new Set(input.references.map((reference) => reference.referenceId));
   if (analysis.finalSubjectReferenceId && !referenceIds.has(analysis.finalSubjectReferenceId)) {
     throw new ControlledPlanValidationError("controlled_analysis_unknown_subject_reference");
   }
   for (const transfer of analysis.mustTransfer) {
+    if (!transfer || typeof transfer !== "object" || typeof transfer.fromReferenceId !== "string" ||
+        !Array.isArray(transfer.attributes)) {
+      throw new ControlledPlanValidationError("controlled_analysis_shape_invalid");
+    }
     if (!referenceIds.has(transfer.fromReferenceId)) {
       throw new ControlledPlanValidationError("controlled_analysis_unknown_transfer_reference");
     }
-    if (transfer.attributes.length === 0 || transfer.attributes.some((attribute) => !attribute.trim())) {
+    if (transfer.attributes.length === 0 ||
+        transfer.attributes.some((attribute) => typeof attribute !== "string" || !attribute.trim())) {
       throw new ControlledPlanValidationError("controlled_analysis_transfer_attributes_required");
     }
   }

@@ -597,7 +597,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                 </div>
                 {loggedIn && (
                   <p className="mt-1 text-[11px] text-muted">
-                    账号只同步订阅和积分；素材、提示词与本地数据库不上传。
+                    账号只同步订阅和积分；素材库与本地数据库默认不上传。使用 Cloud / Agent 时，仅本次明确提交的文字和参考图会临时上传。
                   </p>
                 )}
               </div>
@@ -649,7 +649,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                             className="flex items-center justify-between gap-2 text-muted"
                           >
                             <span className="truncate">
-                              {tx.kind}
+                              {tx.meta?.entity_type === "agent_run" ? `Agent Run · ${tx.meta.final_status}` : tx.kind}
                               {tx.service ? ` · ${tx.service}` : ""}
                             </span>
                             <span className={tx.amount >= 0 ? "text-green-400" : "text-red-300"}>

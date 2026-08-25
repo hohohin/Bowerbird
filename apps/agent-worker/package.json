@@ -15,6 +15,7 @@
     "spike:deepseek-multiturn": "node --env-file=../cloud/.env src/spikes/deepseek-multiturn.ts",
     "local:agent": "node --env-file=../cloud/.env src/local/cli.ts",
     "local:prompt-agent": "node --env-file=../cloud/.env src/local/prompt-agent-cli.ts",
-    "ab:prompt": "node --env-file=../cloud/.env src/local/assembly/run-ab.ts"
+    "ab:prompt": "node --env-file=../cloud/.env src/local/assembly/run-ab.ts",
+    "eval:controlled-image-edit": "node --env-file=../cloud/.env src/eval/run-controlled-image-edit-eval.ts"
   }
 }

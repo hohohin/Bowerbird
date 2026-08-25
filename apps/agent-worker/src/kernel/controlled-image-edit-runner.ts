@@ -5,7 +5,14 @@ import type {
   ControlledRunArtifact,
   IntentAnalysis,
 } from "../contracts/controlled-image-edit.ts";
+import type { ClarificationProposal, IntentPatch } from "../contracts/clarification.ts";
 import type { RunStatus } from "../contracts/run.ts";
+import {
+  applyIntentPatch,
+  clarificationContextHash,
+  validateClarificationProposal,
+  type ClarificationHistoryEntry,
+} from "./clarification-policy.ts";
 import { deriveCallId } from "./tool-ledger.ts";
 import {
   canUseVisionInControlledPhase,
@@ -13,11 +20,13 @@ import {
   type ControlledImageEditPhase,
 } from "../skills/bowerbird-controlled-image-edit/phase-graph.ts";
 import {
+  buildTextOnlyPlanningContext,
   compileApprovedStepPrompt,
   hashControlledPlan,
   hashIntentAnalysis,
   plannedGenerateCalls,
 } from "../skills/bowerbird-controlled-image-edit/planner.ts";
+import { CONTROLLED_IMAGE_EDIT_MANIFEST } from "../skills/bowerbird-controlled-image-edit/manifest.ts";
 import {
   validateControlledInput,
   validateControlledFeedbackDiagnosis,
@@ -37,6 +46,9 @@ export type ControlledRunnerCheckpoint = {
   revisionIndex: number;
   revisionBaseStepIds?: string[];
   input: ControlledImageEditInput;
+  intentOverrides?: Record<string, unknown>;
+  clarificationHistory?: ClarificationHistoryEntry[];
+  pendingClarification?: ClarificationProposal;
   intentAnalysis?: IntentAnalysis;
   intentAnalysisHash?: string;
   proposedPlan?: ControlledImageEditPlan;
@@ -49,6 +61,19 @@ export type ControlledRunnerCheckpoint = {
   feedbackDiagnosis?: ControlledFeedbackDiagnosis;
   understandCallCount: number;
 };
+
+const CONTROLLED_CLARIFICATION_POLICY = CONTROLLED_IMAGE_EDIT_MANIFEST.clarifications;
+
+function controlledClarificationContext(checkpoint: ControlledRunnerCheckpoint): Record<string, unknown> {
+  return {
+    input: buildTextOnlyPlanningContext(checkpoint.input),
+    intentOverrides: checkpoint.intentOverrides ?? {},
+  };
+}
+
+export function controlledClarificationContextHash(checkpoint: ControlledRunnerCheckpoint): string {
+  return clarificationContextHash(controlledClarificationContext(checkpoint));
+}
 
 export type GenerateApprovedStepRequest = {
   runId: string;
@@ -153,6 +178,78 @@ export function recordControlledIntentAnalysis(
     phase: nextControlledPhase(checkpoint.phase, "intent_recorded"),
     intentAnalysis: analysis,
     intentAnalysisHash: hashIntentAnalysis(analysis),
+  };
+}
+
+/** Records one model proposal without changing the semantic phase, then parks the Run. */
+export function proposeControlledClarification(
+  checkpoint: ControlledRunnerCheckpoint,
+  proposal: ClarificationProposal,
+): ControlledRunnerCheckpoint {
+  if (checkpoint.phase !== "analyze_intent_text_only" && checkpoint.phase !== "compose_plan_with_skill") {
+    fail("controlled_runner_wrong_clarification_phase");
+  }
+  if (checkpoint.status !== "running") fail("controlled_runner_clarification_status_invalid");
+  const history = checkpoint.clarificationHistory ?? [];
+  const validation = validateClarificationProposal({
+    proposal,
+    expectedContextHash: controlledClarificationContextHash(checkpoint),
+    history,
+    policy: CONTROLLED_CLARIFICATION_POLICY,
+  });
+  if (validation.kind === "existing") {
+    if (validation.entry.status !== "pending") fail("controlled_runner_clarification_already_answered");
+    return { ...checkpoint, status: "awaiting_clarification", pendingClarification: validation.entry.proposal };
+  }
+  return {
+    ...checkpoint,
+    status: "awaiting_clarification",
+    pendingClarification: proposal,
+    clarificationHistory: [
+      ...history,
+      { proposal, proposalHash: validation.proposalHash, status: "pending" },
+    ],
+  };
+}
+
+/** Applies a structured answer and deliberately invalidates every prior plan/approval binding. */
+export function applyControlledIntentPatch(
+  checkpoint: ControlledRunnerCheckpoint,
+  patch: IntentPatch,
+): ControlledRunnerCheckpoint {
+  if (checkpoint.status !== "awaiting_clarification" || !checkpoint.pendingClarification) {
+    fail("controlled_runner_clarification_not_pending");
+  }
+  const history = checkpoint.clarificationHistory ?? [];
+  const activeIndex = history.findIndex((entry) =>
+    entry.status === "pending" && entry.proposal.questionKey === checkpoint.pendingClarification?.questionKey
+  );
+  if (activeIndex < 0) fail("controlled_runner_clarification_history_missing");
+  const applied = applyIntentPatch({
+    intent: checkpoint.intentOverrides ?? {},
+    proposal: checkpoint.pendingClarification,
+    patch,
+    policy: CONTROLLED_CLARIFICATION_POLICY,
+  });
+  const clarificationHistory = history.map((entry, index): ClarificationHistoryEntry =>
+    index === activeIndex
+      ? { ...entry, status: "answered", intentPatchHash: applied.intentPatchHash }
+      : entry
+  );
+  return {
+    ...checkpoint,
+    status: "running",
+    phase: "analyze_intent_text_only",
+    intentOverrides: applied.intent,
+    clarificationHistory,
+    pendingClarification: undefined,
+    intentAnalysis: undefined,
+    intentAnalysisHash: undefined,
+    proposedPlan: undefined,
+    proposedPlanHash: undefined,
+    approvedPlanHash: undefined,
+    plannedToolCount: 0,
+    stepCursor: 0,
   };
 }
 

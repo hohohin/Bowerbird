@@ -45,3 +45,42 @@ export type PreferenceCandidate = {
   /** 探索性建议须与「依据既有偏好」区分，避免偏好锁死创意空间。 */
   exploratory: boolean;
 };
+
+const CATEGORIES = new Set<PreferenceFactCategory>([
+  "style", "subject", "palette", "composition", "medium", "workflow", "avoid",
+]);
+const MAX_FACTS = 24;
+const MAX_VALUE_LENGTH = 240;
+const MAX_LIFETIME_MS = 30 * 24 * 60 * 60 * 1_000;
+
+/** MVP 只接受桌面明确发送的显式事实；隐式候选仍留在本地待确认队列。 */
+export function validatePreferenceCapsule(capsule: PreferenceCapsule): void {
+  if (capsule.schemaVersion !== 1) throw new Error("preference_capsule_schema_unsupported");
+  const projectId = capsule.scope?.projectId;
+  if (projectId !== undefined && (!projectId.trim() || projectId.length > 120)) {
+    throw new Error("preference_capsule_scope_invalid");
+  }
+  const generatedAt = Date.parse(capsule.generatedAt);
+  const expiresAt = Date.parse(capsule.expiresAt);
+  const now = Date.now();
+  if (!Number.isFinite(generatedAt) || !Number.isFinite(expiresAt) || expiresAt <= generatedAt ||
+      generatedAt > now + 5 * 60 * 1_000 || expiresAt - generatedAt > MAX_LIFETIME_MS ||
+      expiresAt <= now || expiresAt > now + MAX_LIFETIME_MS) {
+    throw new Error("preference_capsule_expiry_invalid");
+  }
+  const groups = [capsule.preferred, capsule.avoid, capsule.workflow];
+  if (groups.some((group) => !Array.isArray(group)) || groups.reduce((sum, group) => sum + group.length, 0) > MAX_FACTS) {
+    throw new Error("preference_capsule_fact_limit_exceeded");
+  }
+  const keys = new Set<string>();
+  for (const fact of groups.flat()) {
+    if (!CATEGORIES.has(fact.category) || !fact.value.trim() || fact.value.length > MAX_VALUE_LENGTH ||
+        !Number.isFinite(fact.confidence) || fact.confidence < 0 || fact.confidence > 1 ||
+        !Number.isInteger(fact.evidenceCount) || fact.evidenceCount < 1 || !fact.explicit) {
+      throw new Error("preference_capsule_fact_invalid");
+    }
+    const key = `${fact.category}\u0000${fact.value.trim().toLocaleLowerCase()}`;
+    if (keys.has(key)) throw new Error("preference_capsule_fact_duplicate");
+    keys.add(key);
+  }
+}

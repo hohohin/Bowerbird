@@ -9,11 +9,36 @@ export const FREE_POLICY: FeaturePolicy = {
   understand_daily_limit: 10,
   can_use_priority_queue: false,
   can_hd_export: false,
+  can_use_agent_runs: true,
+  max_parallel_agent_runs: 1,
+  allowed_agent_skills: ["bowerbird-controlled-image-edit"],
+  agent_budget_options: ["controlled-min", "controlled-standard"],
 };
 
 /** 唯一门控事实源：从 entitlement 快照取 policy；缺失时用免费兜底。 */
 export function effectivePolicy(entitlement: EntitlementSnapshot | null): FeaturePolicy {
-  return entitlement?.policy ?? FREE_POLICY;
+  return entitlement?.policy ? { ...FREE_POLICY, ...entitlement.policy } : FREE_POLICY;
+}
+
+/** 正式 Agent 入口只读取服务端下发的 skill allowlist 与并发策略。 */
+export function canUseAgentRun(
+  entitlement: EntitlementSnapshot | null,
+  skillId = "bowerbird-controlled-image-edit",
+): boolean {
+  const policy = effectivePolicy(entitlement);
+  return policy.can_use_agent_runs &&
+    policy.max_parallel_agent_runs > 0 &&
+    policy.allowed_agent_skills.includes(skillId) &&
+    policy.agent_budget_options.length > 0;
+}
+
+export function canStartAnotherAgentRun(
+  entitlement: EntitlementSnapshot | null,
+  runningCount: number,
+  skillId = "bowerbird-controlled-image-edit",
+): boolean {
+  const policy = effectivePolicy(entitlement);
+  return canUseAgentRun(entitlement, skillId) && runningCount < policy.max_parallel_agent_runs;
 }
 
 /** BYO（codex/即梦）可用性：服务端 policy 判定。 */

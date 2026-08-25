@@ -193,6 +193,7 @@ pub fn run() {
             commands::cloud_agent::cloud_agent_list,
             commands::cloud_agent::cloud_agent_get,
             commands::cloud_agent::cloud_agent_decide_approval,
+            commands::cloud_agent::cloud_agent_answer_clarification,
             commands::cloud_agent::cloud_agent_cancel,
             commands::cloud_agent::cloud_agent_feedback,
             commands::cloud_agent::cloud_agent_preview_final,

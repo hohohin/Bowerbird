@@ -64,6 +64,7 @@ test("DeepSeekBackend maps one tool call and usage to ModelTurnResult.action", a
   const result = await backend.turn(REQUEST, { aborted: false });
   equal(capturedUrl, "https://api.deepseek.test/v1/chat/completions");
   equal(capturedBody.tool_choice, "required");
+  deepEqual(capturedBody.thinking, { type: "disabled" });
   equal((capturedBody.tools as unknown[]).length, 1);
   deepEqual(result, {
     kind: "action",
@@ -243,6 +244,7 @@ test("DeepSeekBackend.chat passes messages through with tool_choice=auto and par
   ];
   const result = await backend.chat(messages, [{ type: "function", function: { name: "dreamina_generate" } }], { aborted: false });
   equal(capturedBody.tool_choice, "auto");
+  deepEqual(capturedBody.thinking, { type: "disabled" });
   equal(capturedBody.stream, false);
   deepEqual(capturedBody.messages, messages);
   deepEqual(result.toolCalls, [{

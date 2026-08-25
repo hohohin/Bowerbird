@@ -4,7 +4,7 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useStore, type GenEditingMode } from "../store";
 import { api } from "../lib/api";
 import { PRESET_FEATURE_ENABLED } from "../lib/featureFlags";
-import { notifyError } from "../lib/notify";
+import { notifyError, notifySuccess } from "../lib/notify";
 import { canStartAnotherJob, canUseByo, canUseGenerationProvider } from "../lib/entitlement";
 import { cloudProviderLabel, canonicalProviderKey, isCloudProvider, supportsAnnotationCoordinates } from "../lib/genProviders";
 import type { Asset, GenJob, GenTurn } from "../lib/types";
@@ -58,6 +58,7 @@ export function GenerationPanel() {
   const sendGenRevise = useStore((s) => s.sendGenRevise);
   const retryLastGenTurn = useStore((s) => s.retryLastGenTurn);
   const reusePromptToBoard = useStore((s) => s.reusePromptToBoard);
+  const armBoardAgent = useStore((s) => s.armBoardAgent);
   const reloadPresets = useStore((s) => s.reloadPresets);
   const runningJobCount = useStore((s) => Object.values(s.genJobs).filter((j) => j.running).length);
 
@@ -252,6 +253,15 @@ export function GenerationPanel() {
       activeJob.conversationId ?? activeJob.id,
       activeJob.sessionId ?? undefined,
     ).catch(console.error);
+  }
+
+  // 出图气泡底部「开启 Agent 模式再试一次」链接：回主界面（关会话面板/编辑坞/详情页），
+  // 首轮组稿（编辑框原文 + 参考图）载入创作板，激活正式 Agent 开关并右上角 toast 提示。
+  function retryWithAgent() {
+    if (!activeJob) return;
+    reusePromptToBoard(activeJob.turns[0]?.promptRaw || activeJob.lastPrompt);
+    armBoardAgent();
+    notifySuccess("Agent 模式已开启");
   }
 
   // 把 activeJob 首轮 prompt 登记为用途（preset）：起名 → createPreset + 刷新下拉。
@@ -503,6 +513,7 @@ export function GenerationPanel() {
                   setLightbox({ images: refLightboxImages, index: r })
                 }
                 onOpenTurnRefs={(imgs, i) => setLightbox({ images: imgs, index: i })}
+                onAgentRetry={retryWithAgent}
                 onRetry={retryLastGenTurn}
                 canRetry={targetReady && !running}
                 retryReason={lockedReason}
@@ -582,6 +593,7 @@ function TurnView({
   onOpenLightbox,
   onOpenRefLightbox,
   onOpenTurnRefs,
+  onAgentRetry,
   onRetry,
   canRetry,
   retryReason,
@@ -598,6 +610,8 @@ function TurnView({
   onOpenRefLightbox?: (refIdx: number) => void;
   /** 续轮参考图点开放大（images = 本轮 refs store_path 列表）。 */
   onOpenTurnRefs?: (images: string[], index: number) => void;
+  /** 出图气泡底部「开启 Agent 模式再试」链接点击（载入首轮组稿 + 激活 Agent 开关）。 */
+  onAgentRetry?: () => void;
   onRetry: () => void;
   canRetry: boolean;
   retryReason: string;
@@ -772,29 +786,46 @@ function TurnView({
             </div>
           )}
           {turn.images.length > 0 ? (
-            <div className={`grid gap-1.5 ${turn.images.length > 1 ? "grid-cols-2" : "grid-cols-1"}`}>
-              {turn.images.map((p, j) => (
-                // 按钮 w-fit 贴合可见图片：避免按钮占满整格导致点到图片周围背景也触发放大。
-                <button
-                  key={p}
-                  type="button"
-                  onClick={() => onOpenLightbox(imageOffset + j)}
-                  className="mx-auto block w-fit cursor-zoom-in"
-                  title="点击放大"
-                >
-                  <img
-                    src={convertFileSrc(p)}
-                    alt=""
-                    draggable={false}
-                    className={
-                      turn.images.length > 1
-                        ? "max-h-[200px] w-auto max-w-full rounded border border-edge"
-                        : "block max-h-[320px] w-auto max-w-full rounded border border-edge"
-                    }
-                  />
-                </button>
-              ))}
-            </div>
+            <>
+              <div className={`grid gap-1.5 ${turn.images.length > 1 ? "grid-cols-2" : "grid-cols-1"}`}>
+                {turn.images.map((p, j) => (
+                  // 按钮 w-fit 贴合可见图片：避免按钮占满整格导致点到图片周围背景也触发放大。
+                  <button
+                    key={p}
+                    type="button"
+                    onClick={() => onOpenLightbox(imageOffset + j)}
+                    className="mx-auto block w-fit cursor-zoom-in"
+                    title="点击放大"
+                  >
+                    <img
+                      src={convertFileSrc(p)}
+                      alt=""
+                      draggable={false}
+                      className={
+                        turn.images.length > 1
+                          ? "max-h-[200px] w-auto max-w-full rounded border border-edge"
+                          : "block max-h-[320px] w-auto max-w-full rounded border border-edge"
+                      }
+                    />
+                  </button>
+                ))}
+              </div>
+              {/* 生成结束（出图后）气泡底部提示：效果不满意可一键带着首轮组稿转 Agent 模式重试。 */}
+              {onAgentRetry && (
+                <p className="text-[10px] leading-4 text-muted">
+                  如觉得效果不达预期，可
+                  <button
+                    type="button"
+                    onClick={onAgentRetry}
+                    title="回到创作板并开启 Agent 模式，本次会话的首轮组稿原样保留，可直接再试"
+                    className="mx-0.5 text-accent hover:underline"
+                  >
+                    开启 Agent 模式
+                  </button>
+                  再试一次。
+                </p>
+              )}
+            </>
           ) : turn.error ? (
             <div className="space-y-1.5 rounded border border-red-500/40 bg-red-500/10 p-2">
               <div className="text-[11px] font-semibold text-red-300">❌ 生成失败</div>

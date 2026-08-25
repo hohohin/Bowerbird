@@ -35,17 +35,43 @@ export {
 } from "./tool-ledger.ts";
 
 export type {
+  CompactedContextFact,
+  ContextBuildOptions,
+  ContextBuildResult,
+} from "./context-builder.ts";
+export {
+  buildModelContext,
+  estimateContextTokens,
+} from "./context-builder.ts";
+
+export type {
+  AppliedIntentPatch,
+  ClarificationHistoryEntry,
+  ClarificationPolicy,
+  ClarificationValidation,
+} from "./clarification-policy.ts";
+export {
+  applyIntentPatch,
+  clarificationContextHash,
+  clarificationProposalHash,
+  validateClarificationProposal,
+} from "./clarification-policy.ts";
+
+export type {
   ApprovedStepExecutor,
   ControlledRunnerCheckpoint,
   GenerateApprovedStepRequest,
   GeneratedApprovedStep,
 } from "./controlled-image-edit-runner.ts";
 export {
+  applyControlledIntentPatch,
   completeControlledExport,
+  controlledClarificationContextHash,
   controlledRunnerAllowsVision,
   createControlledRunnerCheckpoint,
   decideControlledPlan,
   executeNextControlledStep,
+  proposeControlledClarification,
   proposeControlledPlan,
   recordControlledIntentAnalysis,
   submitControlledResultFeedback,

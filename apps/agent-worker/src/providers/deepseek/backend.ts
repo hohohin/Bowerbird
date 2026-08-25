@@ -345,6 +345,9 @@ function buildRequestBody(config: Required<DeepSeekConfig>, request: ModelTurnRe
     ],
     tools: request.allowedActions.map(toProviderTool),
     tool_choice: request.allowedActions.length > 0 ? "required" : "none",
+    // DeepSeek V4 defaults to thinking mode, which rejects tool_choice=required.
+    // Kernel already owns phase planning; keep this adapter on deterministic tool calls.
+    thinking: { type: "disabled" },
     stream: false,
   };
 }
@@ -459,6 +462,9 @@ export class DeepSeekBackend implements ModelBackend {
       messages,
       tools,
       tool_choice: tools.length > 0 ? "auto" : "none",
+      // chat() does not persist provider reasoning_content between tool rounds.
+      // Disabling thinking keeps the multi-turn tool protocol complete and replayable.
+      thinking: { type: "disabled" },
       stream: false,
     });
     if (!isRecord(body)) throw new DeepSeekBackendError("deepseek_invalid_response");

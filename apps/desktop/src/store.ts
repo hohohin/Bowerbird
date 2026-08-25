@@ -133,6 +133,11 @@ interface State {
   // 点扇区待插入当前编辑器的维度（assetId = 呼环图：目标编辑器缺该图 chip 时先补插，
   // 保证插入形状是「@图片【维度】」；板未开→先开板，挂载后消费）
   pendingKeyword: { title: string; body: string; assetId?: string; sectionId?: string | null } | null;
+  // 「开启 Agent 模式再试」待激活信号（会话详情出图气泡底部链接置位）：CreationBoard
+  // 挂载后消费——打开正式 Agent 开关并复位其余 Agent 开关（互斥同按钮点击）。
+  pendingAgentArm: boolean;
+  armBoardAgent: () => void;
+  clearPendingAgentArm: () => void;
   // —— 创作板「用途」（preset）——
   presets: Preset[]; // 命名 prompt 预设，发送时作为基底注入（不进编辑器）
   activePresetId: string | null; // 当前选中用途；null=不注入
@@ -500,6 +505,7 @@ export const useStore = create<State>((set, get) => {
   captionRing: null,
   ringAssetId: null,
   pendingKeyword: null,
+  pendingAgentArm: false,
   presets: [],
   activePresetId: null,
   setAssets: (assets) => set({ assets }),
@@ -709,6 +715,8 @@ export const useStore = create<State>((set, get) => {
       },
     })),
   clearPendingKeyword: () => set({ pendingKeyword: null }),
+  armBoardAgent: () => set({ pendingAgentArm: true }),
+  clearPendingAgentArm: () => set({ pendingAgentArm: false }),
   setActivePreset: (id) => set({ activePresetId: id }),
   // —— 反推（全局后台串行）——
   describingId: null,

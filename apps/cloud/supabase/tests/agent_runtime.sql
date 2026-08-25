@@ -263,6 +263,7 @@ declare
   cancelled record;
   hold_status text;
   hold_actual integer;
+  clarification_pricing integer;
 begin
   insert into auth.users (
     id, instance_id, aud, role, email, encrypted_password,
@@ -311,6 +312,177 @@ begin
       and hold_status = 'confirmed'
       and hold_actual = 1
   );
+
+  select result.hold_id, result.pricing_version into hold, clarification_pricing
+  from public.credit_hold(
+    test_user, 'agent-runtime-clarification-cancel-hold', 'agent_controlled_image_edit_min', 9
+  ) as result;
+  insert into public.agent_runs (
+    user_id, skill_id, skill_version, kernel_version, status,
+    input_count, input_manifest_hash, request_object_key,
+    budget_credits, hold_id, pricing_version, content_expires_at
+  ) values (
+    test_user, 'bowerbird-controlled-image-edit', '0.1.1', '0.1.0',
+    'awaiting_clarification', 0, repeat('7', 64), 'runs/clarification-cancel/request.json',
+    9, hold, clarification_pricing, now() - interval '1 second'
+  ) returning id into run_id;
+  select * into cancelled from public.cancel_unleased_agent_run(run_id);
+  insert into agent_runtime_test_results values (
+    'expired clarification can be cancelled without a lease',
+    cancelled.status = 'cancelled' and cancelled.actual_credits = 0
+  );
+end;
+$$;
+
+do $$
+declare
+  user_a uuid := extensions.gen_random_uuid();
+  user_b uuid := extensions.gen_random_uuid();
+  hold_a uuid;
+  hold_a_rejected uuid;
+  hold_b uuid;
+  pricing_a integer;
+  pricing_a_rejected integer;
+  pricing_b integer;
+  run_a uuid := extensions.gen_random_uuid();
+  conversation_a uuid := extensions.gen_random_uuid();
+  created public.agent_runs;
+  replayed public.agent_runs;
+  rejected_detail text;
+  marker_count integer;
+  marker_keys integer;
+begin
+  insert into auth.users (
+    id, instance_id, aud, role, email, encrypted_password,
+    email_confirmed_at, created_at, updated_at
+  ) values
+    (user_a, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated',
+      'agent-capacity-a@example.test', '', now(), now(), now()),
+    (user_b, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated',
+      'agent-capacity-b@example.test', '', now(), now(), now());
+
+  perform * from public.grant_topup_credits(user_a, 'agent-capacity-topup-a', 48);
+  perform * from public.grant_topup_credits(user_b, 'agent-capacity-topup-b', 48);
+  select result.hold_id, result.pricing_version into hold_a, pricing_a
+  from public.credit_hold(user_a, 'agent-capacity-hold-a', 'agent_controlled_image_edit_min', 9) as result;
+  select result.hold_id, result.pricing_version into hold_a_rejected, pricing_a_rejected
+  from public.credit_hold(user_a, 'agent-capacity-hold-a-rejected', 'agent_controlled_image_edit_min', 9) as result;
+  select result.hold_id, result.pricing_version into hold_b, pricing_b
+  from public.credit_hold(user_b, 'agent-capacity-hold-b', 'agent_controlled_image_edit_min', 9) as result;
+
+  created := public.create_agent_run_guarded(
+    run_a, conversation_a, user_a, 'bowerbird-controlled-image-edit', '0.1.1', '0.1.0',
+    0, repeat('a', 64), 'runs/capacity-a/inputs/request.json', 'codex', 9,
+    hold_a, pricing_a, now() + interval '24 hours', 1, 10
+  );
+  replayed := public.create_agent_run_guarded(
+    extensions.gen_random_uuid(), extensions.gen_random_uuid(), user_a,
+    'bowerbird-controlled-image-edit', '0.1.1', '0.1.0', 0, repeat('a', 64),
+    'runs/ignored/inputs/request.json', 'codex', 9, hold_a, pricing_a,
+    now() + interval '24 hours', 1, 10
+  );
+  insert into agent_runtime_test_results values (
+    'guarded create replays the database winner by hold',
+    created.id = run_a and replayed.id = run_a
+      and replayed.request_object_key = created.request_object_key
+      and created.image_provider = 'codex'
+  );
+
+  insert into public.agent_tool_calls (
+    run_id, call_id, phase, tool_name, args_hash, status, finished_at
+  ) values (
+    run_a, repeat('d', 64), 'execute_approved_plan', 'generate_image',
+    repeat('e', 64), 'succeeded', now()
+  );
+  insert into public.agent_local_tasks (
+    run_id, call_id, provider, step_id, params_object_key, status, expires_at
+  ) values (
+    run_a, repeat('d', 64), 'codex', 'step-1',
+    'runs/capacity-a/local/codex.json', 'completed', now() + interval '30 minutes'
+  );
+  insert into public.agent_usage_items (
+    run_id, call_id, kind, provider, model, image_count, credits, pricing_version
+  ) values (
+    run_a, repeat('d', 64), 'image_generation', 'codex', 'codex-cli', 1, 0, pricing_a
+  );
+  insert into agent_runtime_test_results
+  select 'Codex local task and zero-credit usage constraints accept the provider',
+    exists (
+      select 1 from public.agent_local_tasks
+      where run_id = run_a and call_id = repeat('d', 64) and provider = 'codex'
+    ) and exists (
+      select 1 from public.agent_usage_items
+      where run_id = run_a and call_id = repeat('d', 64) and provider = 'codex' and credits = 0
+    );
+
+  rejected_detail := null;
+  begin
+    perform public.create_agent_run_guarded(
+      extensions.gen_random_uuid(), extensions.gen_random_uuid(), user_a,
+      'bowerbird-controlled-image-edit', '0.1.1', '0.1.0', 0, repeat('f', 64),
+      'runs/ignored/inputs/request.json', 'cloud', 9, hold_a, pricing_a,
+      now() + interval '24 hours', 1, 10
+    );
+  exception when sqlstate '55000' then
+    get stacked diagnostics rejected_detail = PG_EXCEPTION_DETAIL;
+  end;
+  insert into agent_runtime_test_results values (
+    'guarded create rejects mismatched idempotent replay',
+    rejected_detail = 'agent_idempotency_mismatch'
+  );
+
+  rejected_detail := null;
+  begin
+    perform public.create_agent_run_guarded(
+      extensions.gen_random_uuid(), extensions.gen_random_uuid(), user_a,
+      'bowerbird-controlled-image-edit', '0.1.1', '0.1.0', 0, repeat('b', 64),
+      'runs/capacity-a-rejected/inputs/request.json', 'cloud', 9,
+      hold_a_rejected, pricing_a_rejected, now() + interval '24 hours', 1, 10
+    );
+  exception when raise_exception then
+    get stacked diagnostics rejected_detail = PG_EXCEPTION_DETAIL;
+  end;
+  insert into agent_runtime_test_results values (
+    'guarded create enforces per-user parallel capacity',
+    rejected_detail = 'agent_user_parallel_limit'
+  );
+
+  rejected_detail := null;
+  begin
+    perform public.create_agent_run_guarded(
+      extensions.gen_random_uuid(), extensions.gen_random_uuid(), user_b,
+      'bowerbird-controlled-image-edit', '0.1.1', '0.1.0', 0, repeat('c', 64),
+      'runs/capacity-b/inputs/request.json', 'cloud', 9,
+      hold_b, pricing_b, now() + interval '24 hours', 1, 1
+    );
+  exception when raise_exception then
+    get stacked diagnostics rejected_detail = PG_EXCEPTION_DETAIL;
+  end;
+  insert into agent_runtime_test_results values (
+    'guarded create enforces project-wide active capacity',
+    rejected_detail = 'agent_global_capacity'
+  );
+
+  perform public.cancel_unleased_agent_run(run_a);
+  select count(*)::integer into marker_count
+  from public.credit_transactions
+  where hold_id = hold_a and kind = 'adjust' and meta ->> 'entity_type' = 'agent_run';
+  select count(*)::integer into marker_keys
+  from public.credit_transactions as tx,
+       lateral jsonb_object_keys(tx.meta) as key
+  where tx.hold_id = hold_a and tx.kind = 'adjust' and tx.meta ->> 'entity_type' = 'agent_run';
+  insert into agent_runtime_test_results values (
+    'terminal run writes one content-free billing marker',
+    marker_count = 1 and marker_keys = 8
+  );
+
+  insert into agent_runtime_test_results
+  select 'authenticated cannot execute guarded Agent creation',
+    not has_function_privilege(
+      'authenticated',
+      'public.create_agent_run_guarded(uuid,uuid,uuid,text,text,text,integer,text,text,text,integer,uuid,integer,timestamptz,integer,integer)',
+      'EXECUTE'
+    );
 end;
 $$;
 

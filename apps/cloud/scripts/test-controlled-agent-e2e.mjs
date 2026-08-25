@@ -83,7 +83,8 @@ async function createAccount() {
   const email = `controlled-agent-e2e-${Date.now()}-${randomBytes(4).toString("hex")}@example.test`;
   const password = `${randomBytes(16).toString("hex")}Aa1!`;
   const created = await jsonRequest("创建临时账号", `${baseUrl}/auth/v1/admin/users`, {
-    method: "POST", headers: adminHeaders, body: JSON.stringify({ email, password, email_confirm: true }),
+    method: "POST", headers: adminHeaders,
+    body: JSON.stringify({ email, password, email_confirm: true, app_metadata: { bowerbird_test: true } }),
   }, [200, 201]);
   const session = await jsonRequest("临时账号登录", `${baseUrl}/auth/v1/token?grant_type=password`, {
     method: "POST", headers: { apikey: publishableKey, "content-type": "application/json" },
@@ -113,6 +114,12 @@ async function grantTestCredits(authUserId) {
 async function getRun(headers, runId) {
   return await jsonRequest("查询 Agent Run", functionUrl("agent-run"), {
     method: "POST", headers, body: JSON.stringify({ action: "get", runId }),
+  });
+}
+
+async function usageForRun(runId) {
+  return await jsonRequest("读取 Agent usage", `${baseUrl}/rest/v1/agent_usage_items?run_id=eq.${encodeURIComponent(runId)}&select=call_id,kind,provider,credits`, {
+    method: "GET", headers: adminHeaders,
   });
 }
 
@@ -176,7 +183,17 @@ try {
   const intentPrompt = customIntent ?? (referencePath
     ? "以 @图1 为唯一主体与底图，严格保持主体结构和身份，只把背景改为干净的浅蓝摄影棚背景；不要加入文字、logo 或其他物体。"
     : "生成一张干净的浅蓝极简摄影棚背景图，不要文字、logo、人物或产品，横向构图。");
-  const manifest = JSON.stringify({ schemaVersion: 1, intentPrompt, references, ratio: "16:9" });
+  const generatedAt = new Date();
+  const preferenceCapsule = {
+    schemaVersion: 1,
+    scope: {},
+    preferred: [{ category: "palette", value: "偏好干净、低饱和的浅色背景", confidence: 1, evidenceCount: 1, explicit: true }],
+    avoid: [{ category: "avoid", value: "避免文字和 logo", confidence: 1, evidenceCount: 1, explicit: true }],
+    workflow: [],
+    generatedAt: generatedAt.toISOString(),
+    expiresAt: new Date(generatedAt.getTime() + 24 * 60 * 60 * 1_000).toISOString(),
+  };
+  const manifest = JSON.stringify({ schemaVersion: 1, intentPrompt, references, ratio: "16:9", preferenceCapsule });
   const created = await jsonRequest("创建受控 Agent Run", functionUrl("agent-run"), {
     method: "POST", headers: account.headers,
     body: JSON.stringify({
@@ -213,7 +230,11 @@ try {
     });
     const cancelled = await getRun(account.headers, runId);
     assert.equal(cancelled.run.status, "cancelled", "拒绝计划后 Run 必须终止");
-    assert.equal(cancelled.run.actual_credits, 0, "首次计划阶段没有可计费工具，拒绝后实际积分应为 0");
+    const usage = await usageForRun(runId);
+    const usageCredits = usage.reduce((sum, item) => sum + Number(item.credits), 0);
+    const modelTurns = usage.filter((item) => item.kind === "model_tokens" && item.provider === "deepseek");
+    assert.ok(modelTurns.length >= 2 && modelTurns.length <= 4, "首次分析/规划应登记 2–4 个 DeepSeek 文本回合");
+    assert.equal(cancelled.run.actual_credits, usageCredits, "拒绝后实际积分必须等于服务端 usage 汇总");
     console.log("CONTROLLED_AGENT_REJECT_E2E_OK");
     console.log(`run=${runId} conversation=${cancelled.conversationId} credits=${cancelled.run.actual_credits}`);
   }
@@ -230,7 +251,6 @@ try {
 
   let resultSnapshot = await waitFor(account.headers, runId, "awaiting_result_feedback");
   let finalArtifact = await downloadFinal(account.headers, runId, resultSnapshot, "initial");
-  let expectedActualCredits = approval.estimated_additional_credits;
   if (retryText) {
     await jsonRequest("提交结果重试反馈", functionUrl("agent-run"), {
       method: "POST", headers: account.headers,
@@ -253,7 +273,6 @@ try {
     });
     resultSnapshot = await waitFor(account.headers, runId, "awaiting_result_feedback");
     finalArtifact = await downloadFinal(account.headers, runId, resultSnapshot, "revision-1");
-    expectedActualCredits += 1 + revision.estimated_additional_credits;
   }
   await jsonRequest("确认最终图已接收", functionUrl("agent-run"), {
     method: "POST", headers: account.headers, body: JSON.stringify({ action: "artifact_received", artifactId: finalArtifact.id }),
@@ -263,10 +282,12 @@ try {
     body: JSON.stringify({ action: "result_feedback", runId, feedbackAction: "accept" }),
   });
   const finished = await waitFor(account.headers, runId, "succeeded");
+  const usage = await usageForRun(runId);
+  const usageCredits = usage.reduce((sum, item) => sum + Number(item.credits), 0);
   assert.equal(
     finished.run.actual_credits,
-    expectedActualCredits,
-    "Run 终态必须与审批计划的实际图片用量完成积分对账",
+    usageCredits,
+    "Run 终态必须与服务端 usage ledger 完成积分对账",
   );
   console.log("CONTROLLED_AGENT_E2E_OK");
   console.log(`run=${runId} conversation=${finished.conversationId} artifacts=${finished.artifacts.length} credits=${finished.run.actual_credits}`);

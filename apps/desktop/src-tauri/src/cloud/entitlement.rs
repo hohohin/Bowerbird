@@ -19,7 +19,18 @@ pub struct CreditTransaction {
     pub kind: String,
     pub amount: i32,
     pub service: Option<String>,
+    #[serde(default)]
+    pub meta: Option<CreditTransactionMeta>,
     pub created_at: chrono::DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CreditTransactionMeta {
+    pub entity_type: String,
+    pub run_id: String,
+    pub skill_id: String,
+    pub final_status: String,
+    pub actual_credits: i32,
 }
 
 /// 云端动态生图档位（service_costs 带 label 的 image_* 行）：桌面下拉据此渲染，

@@ -25,6 +25,7 @@ import {
 import {
   canonicalizeControlledPlanStepKinds,
   ControlledPlanValidationError,
+  validateControlledInput,
   validateControlledPlan,
 } from "./schemas.ts";
 import { loadControlledImageEditSkill } from "./loader.ts";
@@ -228,6 +229,11 @@ test("analysis and planning model turns load one skill hash and receive text-onl
   equal(analyzed.skillHash, planned.skillHash);
   equal(requests[0].allowedActions[0].name, "record_intent_analysis");
   equal(requests[1].allowedActions[0].name, "submit_plan_for_approval");
+  ok(requests[0].systemPolicy.includes("regardless of mention order"));
+  ok(requests[0].systemPolicy.includes("keep/保持 图N person/product identical"));
+  ok(requests[0].systemPolicy.includes("must never become finalSubjectReferenceId"));
+  ok(requests[1].systemPolicy.includes("assign that reference role=style"));
+  ok(requests[1].systemPolicy.includes("scene/background source must use role=composition"));
   const encoded = JSON.stringify(requests.map((request) => request.context)).toLowerCase();
   for (const forbidden of ["caption", "ocr", "thumbnail", "dataurl", "objectkey", "localpath"]) {
     equal(encoded.includes(forbidden), false, `model context must not contain ${forbidden}`);
@@ -312,6 +318,8 @@ test("initial plan repairs a base-role mismatch for an ordinary three-reference 
   equal(requests.length, 2);
   ok(JSON.stringify(requests[1].context).includes("controlled_plan_base_reference_mismatch"));
   ok(requests[1].systemPolicy.includes("exactly one base"));
+  ok(requests[1].systemPolicy.includes("Base is the execution anchor"));
+  ok(requests[1].systemPolicy.includes("every input reference exactly once"));
 });
 
 test("kernel canonicalizes redundant plan step kinds without changing semantic fields", () => {
@@ -596,4 +604,107 @@ test("model turns without the required action get one corrective retry", async (
   ok(planned.plan.steps.length >= 2);
   equal(requests.length, 2);
   ok(JSON.stringify(requests[1].context).includes("model-action-miss"));
+});
+
+test("invalid intent reference gets one deterministic corrective retry", async () => {
+  const invalid = { ...directAnalysis(), finalSubjectReferenceId: "hallucinated-reference" };
+  const outputs: ModelTurnResult[] = [
+    { kind: "action", action: "record_intent_analysis", arguments: { analysis: invalid }, providerUsage: {} },
+    { kind: "action", action: "record_intent_analysis", arguments: { analysis: directAnalysis() }, providerUsage: {} },
+  ];
+  const requests: ModelTurnRequest[] = [];
+  const model: ModelBackend = {
+    id: "fake",
+    async turn(request) {
+      requests.push(request);
+      const output = outputs.shift();
+      if (!output) throw new Error("unexpected model turn");
+      return output;
+    },
+  };
+  const analyzed = await analyzeControlledIntent({
+    runId: "run-invalid-analysis-reference",
+    input: directInput(),
+    model,
+  });
+  equal(analyzed.analysis.finalSubjectReferenceId, undefined);
+  equal(requests.length, 2);
+  const correction = JSON.stringify(requests[1].context);
+  ok(correction.includes("intent-analysis-validation"));
+  ok(correction.includes("controlled_analysis_unknown_subject_reference"));
+  ok(correction.includes('"allowedReferenceIds":[]'));
+});
+
+test("malformed intent arrays get one deterministic corrective retry", async () => {
+  const malformed = { schemaVersion: 1, intentSummary: "生成一张极简蓝色海报" } as IntentAnalysis;
+  const outputs: ModelTurnResult[] = [
+    { kind: "action", action: "record_intent_analysis", arguments: { analysis: malformed }, providerUsage: {} },
+    { kind: "action", action: "record_intent_analysis", arguments: { analysis: directAnalysis() }, providerUsage: {} },
+  ];
+  const requests: ModelTurnRequest[] = [];
+  const model: ModelBackend = {
+    id: "fake",
+    async turn(request) {
+      requests.push(request);
+      const output = outputs.shift();
+      if (!output) throw new Error("unexpected model turn");
+      return output;
+    },
+  };
+  const analyzed = await analyzeControlledIntent({
+    runId: "run-malformed-analysis-arrays",
+    input: directInput(),
+    model,
+  });
+  equal(analyzed.analysis.intentSummary, directAnalysis().intentSummary);
+  equal(requests.length, 2);
+  ok(JSON.stringify(requests[1].context).includes("controlled_analysis_shape_invalid"));
+});
+
+test("explicit preference capsule is read-only untrusted planning context", async () => {
+  const generatedAt = new Date();
+  const expiresAt = new Date(generatedAt.getTime() + 24 * 60 * 60 * 1_000);
+  const runInput: ControlledImageEditInput = {
+    ...input(),
+    preferenceCapsule: {
+      schemaVersion: 1,
+      scope: { projectId: "project-1" },
+      preferred: [{
+        category: "palette",
+        value: "低饱和蓝绿色",
+        confidence: 1,
+        evidenceCount: 1,
+        explicit: true,
+      }],
+      avoid: [],
+      workflow: [],
+      generatedAt: generatedAt.toISOString(),
+      expiresAt: expiresAt.toISOString(),
+    },
+  };
+  const requests: ModelTurnRequest[] = [];
+  const model: ModelBackend = {
+    id: "fake",
+    async turn(request) {
+      requests.push(request);
+      return {
+        kind: "action",
+        action: "record_intent_analysis",
+        arguments: { analysis: analysis() },
+        providerUsage: {},
+      };
+    },
+  };
+  await analyzeControlledIntent({ runId: "run-preference", input: runInput, model });
+  const block = requests[0].context.find((item) => item.kind === "preference_capsule");
+  equal(block?.trust, "untrusted");
+  equal((block?.body as { preferred: unknown[] }).preferred.length, 1);
+  ok(requests[0].systemPolicy.includes("read-only"));
+
+  runInput.preferenceCapsule!.preferred[0].explicit = false;
+  throws(
+    () => validateControlledInput(runInput),
+    (error: unknown) => error instanceof ControlledPlanValidationError &&
+      error.safeCode === "controlled_preference_capsule_invalid",
+  );
 });

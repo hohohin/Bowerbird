@@ -1,7 +1,11 @@
 import { equal, throws } from "node:assert/strict";
 import { test } from "node:test";
 
-import { createControlledRunnerCheckpoint } from "./controlled-image-edit-runner.ts";
+import {
+  controlledClarificationContextHash,
+  createControlledRunnerCheckpoint,
+  proposeControlledClarification,
+} from "./controlled-image-edit-runner.ts";
 import { decodeControlledCheckpoint, encodeControlledCheckpoint } from "./controlled-checkpoint.ts";
 import { loadControlledImageEditSkill } from "../skills/bowerbird-controlled-image-edit/loader.ts";
 
@@ -67,4 +71,34 @@ test("controlled checkpoint fails closed across Skill versions", () => {
     }),
     /controlled_checkpoint_skill_mismatch/,
   );
+});
+
+test("controlled checkpoint preserves a pending clarification and rejects tampering", () => {
+  const fixture = checkpoint();
+  const pending = proposeControlledClarification(fixture.value, {
+    questionKey: "choose.output",
+    contextHash: controlledClarificationContextHash(fixture.value),
+    question: "输出更偏海报还是插画？",
+    recommendedAnswer: "海报",
+    options: ["海报", "插画"],
+    optionPatches: [
+      { answer: "海报", patches: [{ field: "strategy", op: "set", value: "direct" }] },
+      { answer: "插画", patches: [{ field: "strategy", op: "set", value: "controlled" }] },
+    ],
+    affectedIntentFields: ["strategy"],
+    rationale: "路线会改变计划结构。",
+  });
+  const encoded = encodeControlledCheckpoint(pending);
+  const decoded = decodeControlledCheckpoint(encoded.bytes, {
+    runId: "run-1",
+    conversationId: "conversation-1",
+    skillVersion: fixture.skill.version,
+    skillHash: fixture.skill.instructionHash,
+    sha256: encoded.sha256,
+  });
+  equal(decoded.pendingClarification?.questionKey, "choose.output");
+  throws(() => encodeControlledCheckpoint({
+    ...pending,
+    pendingClarification: { ...pending.pendingClarification!, question: "已被篡改" },
+  }), /controlled_checkpoint_pending_clarification_invalid/);
 });

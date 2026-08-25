@@ -874,6 +874,22 @@ const revealObserver = new IntersectionObserver(
 );
 document.querySelectorAll(".reveal").forEach((element) => revealObserver.observe(element));
 
+const lazyVideoObserver = new IntersectionObserver(
+  (entries) => {
+    entries.forEach((entry) => {
+      if (!entry.isIntersecting) return;
+      const video = entry.target;
+      video.src = video.dataset.src;
+      video.removeAttribute("data-src");
+      video.load();
+      if (video.autoplay) video.play().catch(() => {});
+      lazyVideoObserver.unobserve(video);
+    });
+  },
+  { rootMargin: "600px 0px", threshold: 0.01 },
+);
+document.querySelectorAll("video[data-src]").forEach((video) => lazyVideoObserver.observe(video));
+
 window.addEventListener("resize", scheduleGraphConnections);
 
 updateDerivedUI();

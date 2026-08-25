@@ -36,6 +36,50 @@ const REFERENCE_ROLE = {
   type: "string",
   enum: ["base", "pose", "identity", "product", "garment", "accessory", "composition", "other"],
 } as const;
+const CLARIFICATION_PROPOSAL_SCHEMA = {
+  type: "object",
+  properties: {
+    questionKey: { type: "string", pattern: "^[A-Za-z0-9._:-]{1,120}$" },
+    contextHash: { type: "string", pattern: "^[0-9a-f]{64}$" },
+    question: { type: "string", minLength: 1, maxLength: 500 },
+    recommendedAnswer: { type: "string", minLength: 1, maxLength: 240 },
+    options: { type: "array", minItems: 2, maxItems: 4, items: { type: "string", minLength: 1, maxLength: 240 } },
+    optionPatches: {
+      type: "array",
+      minItems: 2,
+      maxItems: 4,
+      items: {
+        type: "object",
+        properties: {
+          answer: { type: "string", minLength: 1, maxLength: 240 },
+          patches: {
+            type: "array",
+            minItems: 1,
+            items: {
+              type: "object",
+              properties: {
+                field: { type: "string" },
+                op: { type: "string", enum: ["set", "clear"] },
+                value: {},
+              },
+              required: ["field", "op"],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ["answer", "patches"],
+        additionalProperties: false,
+      },
+    },
+    affectedIntentFields: { type: "array", minItems: 1, items: { type: "string" } },
+    rationale: { type: "string", minLength: 1, maxLength: 1_000 },
+  },
+  required: [
+    "questionKey", "contextHash", "question", "recommendedAnswer", "options", "optionPatches",
+    "affectedIntentFields", "rationale",
+  ],
+  additionalProperties: false,
+} as const;
 
 const INTENT_ANALYSIS_SCHEMA = {
   type: "object",
@@ -194,6 +238,17 @@ export const GLOBAL_TOOL_REGISTRY: ReadonlyArray<ToolSpec> = [
       type: "object",
       properties: { analysis: INTENT_ANALYSIS_SCHEMA },
       required: ["analysis"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "request_clarification",
+    kind: "kernel",
+    description: "仅当文本歧义会改变底图职责、计划路线或预算时，提交一个带推荐答案的有限澄清问题。不得询问可由默认假设或计划审批解决的偏好。",
+    argumentSchema: {
+      type: "object",
+      properties: { proposal: CLARIFICATION_PROPOSAL_SCHEMA },
+      required: ["proposal"],
       additionalProperties: false,
     },
   },

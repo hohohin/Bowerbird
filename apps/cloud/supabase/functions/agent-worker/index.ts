@@ -4,6 +4,19 @@
 // versioned service_costs — worker-reported totals are never authoritative.
 
 import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
+import {
+  agentUsageService,
+  creditsForAgentUsage,
+  normalizeAgentUsageItem,
+  parseAgentUsagePricing,
+  type AgentUsageItem,
+  type AgentUsagePricing,
+} from "../_shared/agent-usage-pricing.ts";
+import {
+  agentRunObjectDirectories,
+  checkedAgentObjectKey,
+  storageListObjectKey,
+} from "../_shared/agent-content-ttl.ts";
 import { ApiError, errorResponse, jsonResponse, requestId, safeLog } from "../_shared/errors.ts";
 import { corsHeaders } from "../_shared/limits.ts";
 
@@ -12,6 +25,17 @@ const MAX_EVENTS_PER_BATCH = 100;
 const MAX_USAGE_PER_BATCH = 100;
 const CHECKPOINT_URL_SECONDS = 300;
 const MAX_ARTIFACT_BYTES = 20 * 1024 * 1024;
+const CLEANUP_ROW_LIMIT = 100;
+const CLEANUP_RUN_LIMIT = 25;
+const STORAGE_LIST_LIMIT = 100;
+const CONTENT_EXPIRABLE_RUN_STATUSES = [
+  "uploading", "queued", "awaiting_clarification", "awaiting_approval",
+  "awaiting_result_feedback", "awaiting_local_task", "succeeded", "failed", "cancelled",
+];
+const UNLEASED_PARKED_RUN_STATUSES = [
+  "uploading", "queued", "awaiting_clarification", "awaiting_approval",
+  "awaiting_result_feedback", "awaiting_local_task",
+];
 
 function requiredEnv(name: string): string {
   const value = Deno.env.get(name)?.trim();
@@ -95,6 +119,228 @@ async function signOrNull(admin: SupabaseClient, objectKey: string): Promise<str
   }
 }
 
+async function listExpiredRunObjects(admin: SupabaseClient, runId: string): Promise<string[]> {
+  const keys: string[] = [];
+  for (const directory of agentRunObjectDirectories(runId)) {
+    for (let offset = 0; ; offset += STORAGE_LIST_LIMIT) {
+      const listed = await admin.storage.from(BUCKET).list(directory, {
+        limit: STORAGE_LIST_LIMIT,
+        offset,
+        sortBy: { column: "name", order: "asc" },
+      });
+      if (listed.error) throw new ApiError("internal_error", "过期对象枚举失败", true);
+      for (const object of listed.data ?? []) {
+        const key = storageListObjectKey(directory, object.name);
+        if (key) keys.push(key);
+      }
+      if ((listed.data?.length ?? 0) < STORAGE_LIST_LIMIT) break;
+    }
+  }
+  return keys;
+}
+
+function addOwnedKey(keys: Set<string>, runId: string, objectKey: unknown): void {
+  const checked = checkedAgentObjectKey(runId, objectKey);
+  if (checked) keys.add(checked);
+}
+
+async function removeStorageObjects(admin: SupabaseClient, keys: string[]): Promise<void> {
+  for (let index = 0; index < keys.length; index += CLEANUP_ROW_LIMIT) {
+    const removed = await admin.storage.from(BUCKET).remove(keys.slice(index, index + CLEANUP_ROW_LIMIT));
+    if (removed.error) throw new ApiError("internal_error", "过期对象删除失败", true);
+  }
+}
+
+async function actionCleanupExpired(admin: SupabaseClient): Promise<Response> {
+  const now = new Date().toISOString();
+  const [expiredParked, runs, artifacts, approvals, clarifications, localTasks] = await Promise.all([
+    // Deliberately independent of content_deleted_at: migration 0032 may have
+    // tombstoned old content before lifecycle expiry was introduced.
+    admin.from("agent_runs")
+      .select("id,status,lease_id")
+      .lte("content_expires_at", now)
+      .in("status", UNLEASED_PARKED_RUN_STATUSES)
+      .is("lease_id", null)
+      .order("content_expires_at", { ascending: true })
+      .limit(CLEANUP_ROW_LIMIT),
+    admin.from("agent_runs")
+      .select("id,status,lease_id")
+      .lte("content_expires_at", now)
+      .is("content_deleted_at", null)
+      .in("status", CONTENT_EXPIRABLE_RUN_STATUSES)
+      .order("content_expires_at", { ascending: true })
+      .limit(CLEANUP_RUN_LIMIT),
+    admin.from("agent_artifacts")
+      .select("id,run_id,object_key")
+      .lte("expires_at", now)
+      .is("deleted_at", null)
+      .order("expires_at", { ascending: true })
+      .limit(CLEANUP_ROW_LIMIT),
+    admin.from("agent_approvals")
+      .select("id,run_id,proposal_object_key")
+      .lte("expires_at", now)
+      .is("content_deleted_at", null)
+      .order("expires_at", { ascending: true })
+      .limit(CLEANUP_ROW_LIMIT),
+    admin.from("agent_clarifications")
+      .select("id,run_id,question_object_key,answer_object_key")
+      .lte("expires_at", now)
+      .is("content_deleted_at", null)
+      .order("expires_at", { ascending: true })
+      .limit(CLEANUP_ROW_LIMIT),
+    admin.from("agent_local_tasks")
+      .select("id,run_id,params_object_key,result_object_key")
+      .lte("expires_at", now)
+      .is("content_deleted_at", null)
+      .order("expires_at", { ascending: true })
+      .limit(CLEANUP_ROW_LIMIT),
+  ]);
+  for (const result of [expiredParked, runs, artifacts, approvals, clarifications, localTasks]) {
+    if (result.error) throw new ApiError("internal_error", "过期内容查询失败", true);
+  }
+
+  const runRows = runs.data ?? [];
+  const artifactRows = artifacts.data ?? [];
+  const approvalRows = approvals.data ?? [];
+  const clarificationRows = clarifications.data ?? [];
+  const localTaskRows = localTasks.data ?? [];
+  const parkedRows = expiredParked.data ?? [];
+  for (const run of parkedRows) {
+    const settled = await admin.rpc("cancel_unleased_agent_run", { p_run_id: run.id });
+    if (settled.error) throw new ApiError("internal_error", "过期停车 Run 结算失败", true);
+  }
+  const keys = new Set<string>();
+  for (const run of runRows) {
+    for (const key of await listExpiredRunObjects(admin, String(run.id))) keys.add(key);
+  }
+  for (const row of artifactRows) addOwnedKey(keys, String(row.run_id), row.object_key);
+  for (const row of approvalRows) addOwnedKey(keys, String(row.run_id), row.proposal_object_key);
+  for (const row of clarificationRows) {
+    addOwnedKey(keys, String(row.run_id), row.question_object_key);
+    addOwnedKey(keys, String(row.run_id), row.answer_object_key);
+  }
+  for (const row of localTaskRows) {
+    addOwnedKey(keys, String(row.run_id), row.params_object_key);
+    addOwnedKey(keys, String(row.run_id), row.result_object_key);
+  }
+  await removeStorageObjects(admin, [...keys]);
+
+  const runIds = runRows.map((row) => String(row.id));
+  const artifactIds = artifactRows.map((row) => String(row.id));
+  const approvalIds = approvalRows.map((row) => String(row.id));
+  const clarificationIds = clarificationRows.map((row) => String(row.id));
+  const localTaskIds = localTaskRows.map((row) => String(row.id));
+  const updates: Array<PromiseLike<{ error: unknown }>> = [];
+  if (runIds.length) {
+    updates.push(admin.from("agent_runs").update({
+      content_deleted_at: now,
+      checkpoint_object_key: null,
+      feedback_object_key: null,
+    }).in("id", runIds));
+    updates.push(admin.from("agent_artifacts").update({ deleted_at: now }).in("run_id", runIds).is("deleted_at", null));
+  }
+  if (artifactIds.length) updates.push(admin.from("agent_artifacts").update({ deleted_at: now }).in("id", artifactIds));
+  if (approvalIds.length) updates.push(admin.from("agent_approvals").update({ content_deleted_at: now }).in("id", approvalIds));
+  if (clarificationIds.length) updates.push(admin.from("agent_clarifications").update({ content_deleted_at: now }).in("id", clarificationIds));
+  if (localTaskIds.length) updates.push(admin.from("agent_local_tasks").update({ content_deleted_at: now }).in("id", localTaskIds));
+  const results = await Promise.all(updates);
+  if (results.some((result) => result.error)) throw new ApiError("internal_error", "过期内容标记失败", true);
+
+  const deletedEvents = await admin.from("agent_events")
+    .delete({ count: "exact" })
+    .lte("content_expires_at", now);
+  if (deletedEvents.error) throw new ApiError("internal_error", "过期事件删除失败", true);
+  return jsonResponse({
+    removedObjects: keys.size,
+    deletedEvents: deletedEvents.count ?? 0,
+    expiredRuns: runIds.length,
+    expiredParkedRuns: parkedRows.length,
+  });
+}
+
+async function actionMetrics(admin: SupabaseClient): Promise<Response> {
+  const nowMs = Date.now();
+  const now = new Date(nowMs).toISOString();
+  const since = new Date(nowMs - 24 * 3600 * 1000).toISOString();
+  const activeStatuses = [
+    "uploading", "queued", "leased", "running", "awaiting_clarification",
+    "awaiting_approval", "awaiting_result_feedback", "awaiting_local_task",
+    "exporting", "cancel_requested",
+  ];
+  const leasedStatuses = ["leased", "running", "exporting", "cancel_requested"];
+  const [queue, oldest, active, expiredLeases, terminal, testTerminal, expiredRuns, expiredArtifacts] = await Promise.all([
+    admin.from("agent_runs").select("id", { count: "exact", head: true }).eq("status", "queued"),
+    admin.from("agent_runs").select("queued_at").eq("status", "queued")
+      .order("queued_at", { ascending: true }).limit(1).maybeSingle(),
+    admin.from("agent_runs").select("id", { count: "exact", head: true }).in("status", activeStatuses),
+    admin.from("agent_runs").select("id", { count: "exact", head: true })
+      .in("status", leasedStatuses).lt("lease_expires_at", now),
+    admin.from("agent_runs").select("status,actual_credits,error_code")
+      .in("status", ["succeeded", "failed", "cancelled"])
+      .eq("is_test", false).gte("finished_at", since)
+      .order("finished_at", { ascending: false }).limit(1000),
+    admin.from("agent_runs").select("status")
+      .in("status", ["succeeded", "failed", "cancelled"])
+      .eq("is_test", true).gte("finished_at", since)
+      .order("finished_at", { ascending: false }).limit(1000),
+    admin.from("agent_runs").select("id", { count: "exact", head: true })
+      .lte("content_expires_at", now).is("content_deleted_at", null),
+    admin.from("agent_artifacts").select("id", { count: "exact", head: true })
+      .lte("expires_at", now).is("deleted_at", null),
+  ]);
+  for (const result of [queue, oldest, active, expiredLeases, terminal, testTerminal, expiredRuns, expiredArtifacts]) {
+    if (result.error) throw new ApiError("internal_error", "Agent 指标读取失败", true);
+  }
+
+  const terminalRows = terminal.data ?? [];
+  const testTerminalRows = testTerminal.data ?? [];
+  const succeeded = terminalRows.filter((row) => row.status === "succeeded").length;
+  const failed = terminalRows.filter((row) => row.status === "failed").length;
+  const cancelled = terminalRows.filter((row) => row.status === "cancelled").length;
+  const completed = succeeded + failed;
+  const credits = terminalRows
+    .map((row) => Number(row.actual_credits))
+    .filter((value) => Number.isFinite(value) && value >= 0);
+  const failuresByCode: Record<string, number> = {};
+  for (const row of terminalRows) {
+    if (row.status !== "failed") continue;
+    const code = typeof row.error_code === "string" && /^[A-Za-z0-9._:-]{1,80}$/.test(row.error_code)
+      ? row.error_code
+      : "unknown";
+    failuresByCode[code] = (failuresByCode[code] ?? 0) + 1;
+  }
+  const queuedAt = typeof oldest.data?.queued_at === "string" ? Date.parse(oldest.data.queued_at) : Number.NaN;
+  return jsonResponse({
+    measuredAt: now,
+    queueDepth: queue.count ?? 0,
+    oldestQueuedAgeSeconds: Number.isFinite(queuedAt) ? Math.max(0, Math.floor((nowMs - queuedAt) / 1000)) : 0,
+    activeRuns: active.count ?? 0,
+    expiredLeases: expiredLeases.count ?? 0,
+    last24h: {
+      succeeded,
+      failed,
+      cancelled,
+      successRate: completed ? succeeded / completed : null,
+      averageCredits: credits.length ? credits.reduce((sum, value) => sum + value, 0) / credits.length : null,
+      maxCredits: credits.length ? Math.max(...credits) : null,
+      failuresByCode,
+      sampleSize: terminalRows.length,
+      truncated: terminalRows.length === 1000,
+    },
+    testLast24h: {
+      succeeded: testTerminalRows.filter((row) => row.status === "succeeded").length,
+      failed: testTerminalRows.filter((row) => row.status === "failed").length,
+      cancelled: testTerminalRows.filter((row) => row.status === "cancelled").length,
+      sampleSize: testTerminalRows.length,
+      truncated: testTerminalRows.length === 1000,
+    },
+    ttlBacklog: {
+      runs: expiredRuns.count ?? 0,
+      artifacts: expiredArtifacts.count ?? 0,
+    },
+  });
+}
+
 async function actionClaim(admin: SupabaseClient, workerId: string): Promise<Response> {
   const claimResult = await admin.rpc("claim_agent_run", { p_worker_id: workerId, p_lease_seconds: 60 });
   if (claimResult.error) throw new ApiError("internal_error", "claim RPC 失败", true);
@@ -108,7 +354,7 @@ async function actionClaim(admin: SupabaseClient, workerId: string): Promise<Res
   const feedbackKey = claimed.feedback_object_key;
   // Signed URLs are best-effort here: a not-yet-uploaded input or a pruned
   // checkpoint must not break claiming; the worker re-requests when needed.
-  const [inputUrl, checkpointUrl, feedbackUrl, artifactRows] = await Promise.all([
+  const [inputUrl, checkpointUrl, feedbackUrl, artifactRows, clarificationResult] = await Promise.all([
     signOrNull(admin, inputKey),
     checkpointKey ? signOrNull(admin, checkpointKey) : Promise.resolve(null),
     feedbackKey ? signOrNull(admin, feedbackKey) : Promise.resolve(null),
@@ -116,8 +362,13 @@ async function actionClaim(admin: SupabaseClient, workerId: string): Promise<Res
       .select("id,conversation_id,role,step_id,parent_artifact_id,object_key,mime,bytes,sha256,user_visible")
       .eq("run_id", claimed.id)
       .is("deleted_at", null),
+    admin.from("agent_clarifications")
+      .select("question_key,context_hash,answer_object_key,intent_patch_hash")
+      .eq("run_id", claimed.id).eq("status", "answered")
+      .order("answered_at", { ascending: false }).limit(1).maybeSingle(),
   ]);
   if (artifactRows.error) throw new ApiError("internal_error", "Run 产物读取失败", true);
+  if (clarificationResult.error) throw new ApiError("internal_error", "澄清回答读取失败", true);
   const artifactUrls = await Promise.all((artifactRows.data ?? []).map(async (artifact) => ({
     artifactId: artifact.id as string,
     conversationId: artifact.conversation_id as string,
@@ -131,6 +382,15 @@ async function actionClaim(admin: SupabaseClient, workerId: string): Promise<Res
     userVisible: artifact.user_visible !== false,
     url: await signOrNull(admin, artifact.object_key as string),
   })));
+  const clarification = clarificationResult.data as {
+    question_key: string;
+    context_hash: string;
+    answer_object_key: string;
+    intent_patch_hash: string;
+  } | null;
+  const clarificationAnswerUrl = clarification?.answer_object_key
+    ? await signOrNull(admin, clarification.answer_object_key)
+    : null;
   return jsonResponse({
     run: {
       id: claimed.id,
@@ -151,6 +411,12 @@ async function actionClaim(admin: SupabaseClient, workerId: string): Promise<Res
     inputUrl,
     checkpointUrl,
     feedbackUrl,
+    clarificationAnswer: clarification && clarificationAnswerUrl ? {
+      questionKey: clarification.question_key,
+      contextHash: clarification.context_hash,
+      intentPatchHash: clarification.intent_patch_hash,
+      url: clarificationAnswerUrl,
+    } : null,
     artifactUrls,
   });
 }
@@ -220,30 +486,36 @@ async function assertLease(admin: SupabaseClient, runId: string, leaseId: string
   return run;
 }
 
-interface UsageItem {
-  callId: string;
-  kind: "model_tokens" | "vision_call" | "image_generation";
-  provider: "deepseek" | "ark" | "jimeng" | "codex";
-  model: string;
-  inputUnits: number;
-  outputUnits: number;
-  imageCount: number;
-  resolution?: string;
-  providerCostMicros?: number;
+async function loadUsagePricing(admin: SupabaseClient, pricingVersion: number): Promise<AgentUsagePricing> {
+  const service = agentUsageService(pricingVersion);
+  const { data, error } = await admin.from("service_costs")
+    .select("pricing_version,parameters")
+    .eq("service", service)
+    .eq("active", true)
+    .maybeSingle();
+  if (error || !data || Number(data.pricing_version) !== pricingVersion) {
+    throw new ApiError("internal_error", "Agent usage 费率未配置", true);
+  }
+  try {
+    return parseAgentUsagePricing(data.parameters, pricingVersion);
+  } catch {
+    throw new ApiError("internal_error", "Agent usage 费率无效", true);
+  }
 }
 
-/** Server-side credit calculation. v1: text tokens per M, vision per call, image per piece. */
-function creditsFor(item: UsageItem): number {
-  if (item.kind === "model_tokens") {
-    // DeepSeek-chat list-price derived ceiling: round up, min 1 credit.
-    const approx = item.inputUnits / 500_000 + item.outputUnits / 100_000;
-    return Math.max(1, Math.ceil(approx));
-  }
-  if (item.kind === "vision_call") return 1;
-  // Desktop-local CLI generation runs on the user's own provider account and
-  // consumes no Bowerbird credits; the ledger row stays for auditability.
-  if (item.provider === "jimeng" || item.provider === "codex") return 0;
-  return 5; // image_generation
+function expectedImageProvider(run: RunRow): "ark" | "jimeng" | "codex" {
+  if (run.image_provider === "cloud") return "ark";
+  if (run.image_provider === "jimeng" || run.image_provider === "codex") return run.image_provider;
+  throw new ApiError("internal_error", "Run 生图引擎无效", false);
+}
+
+function assertUsageBinding(item: AgentUsageItem, toolName: string, run: RunRow): void {
+  const valid = item.kind === "model_tokens"
+    ? toolName === "model_turn" && item.provider === "deepseek"
+    : item.kind === "vision_call"
+      ? toolName === "understand_image" && item.provider === "ark"
+      : toolName === "generate_image" && item.provider === expectedImageProvider(run);
+  if (!valid) throw new ApiError("invalid_request", "usage 与已登记工具调用不一致", false, 400);
 }
 
 /** Read aggregated usage credits for a run, tolerating scalar or array shapes. */
@@ -263,17 +535,32 @@ async function actionUsage(admin: SupabaseClient, body: Record<string, unknown>)
     throw new ApiError("invalid_request", `usage 数量需在 1–${MAX_USAGE_PER_BATCH} 之间`);
   }
   const run = await assertLease(admin, runId, leaseId);
+  const pricing = await loadUsagePricing(admin, run.pricing_version);
+  const normalized = items.map((raw) => {
+    try {
+      return normalizeAgentUsageItem(raw);
+    } catch {
+      throw new ApiError("invalid_request", "usage 字段无效", false, 400);
+    }
+  });
+  const callIds = new Set(normalized.map((item) => item.callId));
+  if (callIds.size !== normalized.length) throw new ApiError("invalid_request", "usage callId 重复", false, 400);
+  const { data: calls, error: callsError } = await admin.from("agent_tool_calls")
+    .select("call_id,tool_name")
+    .eq("run_id", runId)
+    .in("call_id", [...callIds]);
+  if (callsError) throw new ApiError("internal_error", "usage 工具调用读取失败", true);
+  const callById = new Map((calls ?? []).map((call) => [String(call.call_id), String(call.tool_name)]));
+  if (callById.size !== callIds.size) throw new ApiError("invalid_request", "usage 引用了未登记的工具调用", false, 400);
 
-  const rows = items.map((raw) => {
-    const item = raw as UsageItem;
-    if (typeof item.callId !== "string" || !item.callId || item.callId.length > 160) {
-      throw new ApiError("invalid_request", "callId 无效");
+  const rows = normalized.map((item) => {
+    assertUsageBinding(item, callById.get(item.callId) ?? "", run);
+    let credits: number;
+    try {
+      credits = creditsForAgentUsage(item, pricing);
+    } catch {
+      throw new ApiError("invalid_request", "usage 计量组合无效", false, 400);
     }
-    if (!["model_tokens", "vision_call", "image_generation"].includes(item.kind)) {
-      throw new ApiError("invalid_request", "usage kind 无效");
-    }
-    if (!["deepseek", "ark", "jimeng", "codex"].includes(item.provider)) throw new ApiError("invalid_request", "usage provider 无效");
-    const credits = creditsFor(item);
     return {
       run_id: runId,
       call_id: item.callId,
@@ -283,32 +570,39 @@ async function actionUsage(admin: SupabaseClient, body: Record<string, unknown>)
       input_units: Math.max(0, Number(item.inputUnits) || 0),
       output_units: Math.max(0, Number(item.outputUnits) || 0),
       image_count: Math.max(0, Number(item.imageCount) || 0),
-      resolution: item.resolution ? String(item.resolution).slice(0, 40) : null,
-      provider_cost_micros: item.providerCostMicros === undefined ? null : Math.max(0, Number(item.providerCostMicros) || 0),
+      resolution: item.resolution ?? null,
+      provider_cost_micros: item.providerCostMicros ?? null,
       credits,
       pricing_version: run.pricing_version,
     };
   });
-
-  const total = rows.reduce((sum, r) => sum + r.credits, 0);
+  const { data: existing, error: existingError } = await admin.from("agent_usage_items")
+    .select("call_id,kind,provider,model,input_units,output_units,image_count,resolution,provider_cost_micros,credits,pricing_version")
+    .eq("run_id", runId)
+    .in("call_id", [...callIds]);
+  if (existingError) throw new ApiError("internal_error", "usage 幂等状态读取失败", true);
+  const existingById = new Map((existing ?? []).map((row) => [String(row.call_id), row]));
+  for (const row of rows) {
+    const prior = existingById.get(row.call_id);
+    if (prior && (prior.kind !== row.kind || prior.provider !== row.provider || prior.model !== row.model ||
+        Number(prior.input_units) !== row.input_units || Number(prior.output_units) !== row.output_units ||
+        Number(prior.image_count) !== row.image_count || (prior.resolution ?? null) !== row.resolution ||
+        (prior.provider_cost_micros === null ? null : Number(prior.provider_cost_micros)) !== row.provider_cost_micros ||
+        Number(prior.credits) !== row.credits || Number(prior.pricing_version) !== row.pricing_version)) {
+      throw new ApiError("invalid_request", "usage 幂等重放冲突", false, 409);
+    }
+  }
+  const newRows = rows.filter((row) => !existingById.has(row.call_id));
+  const total = newRows.reduce((sum, row) => sum + row.credits, 0);
   const spentSoFar = await spentCredits(admin, runId);
   if (spentSoFar + total > run.budget_credits) {
     throw new ApiError("insufficient_credits", "超出 Run 预算上限", false, 402);
   }
-
-  const toolCallIds = new Set(rows.map((r) => r.call_id));
-  const { data: calls } = await admin.from("agent_tool_calls").select("call_id").eq("run_id", runId).in("call_id", [...toolCallIds]);
-  if ((calls ?? []).length !== toolCallIds.size) {
-    throw new ApiError("invalid_request", "usage 引用了未登记的 tool call", false, 400);
+  if (newRows.length) {
+    const { error } = await admin.from("agent_usage_items").insert(newRows);
+    if (error) throw new ApiError("internal_error", "usage 写入失败", true);
   }
-
-  const { error } = await admin.from("agent_usage_items").upsert(rows, { onConflict: "run_id,call_id", ignoreDuplicates: true });
-  if (error) throw new ApiError("internal_error", "usage 写入失败", true);
-
-  // Charge only rows that actually landed: replays of the same call_id add nothing.
-  const { data: landed } = await admin.from("agent_usage_items").select("credits").eq("run_id", runId).in("call_id", rows.map((r) => r.call_id));
-  const newCredits = Math.max(0, (landed ?? []).reduce((sum, r) => sum + r.credits, 0) - spentSoFar);
-  return jsonResponse({ runId, accepted: rows.length, creditsCharged: newCredits, spentCredits: spentSoFar + newCredits });
+  return jsonResponse({ runId, accepted: rows.length, creditsCharged: total, spentCredits: spentSoFar + total });
 }
 
 async function actionToolCall(admin: SupabaseClient, body: Record<string, unknown>, phase: "prepare" | "submitted" | "complete"): Promise<Response> {
@@ -363,9 +657,25 @@ async function actionToolCall(admin: SupabaseClient, body: Record<string, unknow
 
   if (phase === "submitted") {
     if (!existing) throw new ApiError("invalid_request", "tool call 尚未 prepare", false, 409);
+    const providerRequestId = body.providerRequestId ? String(body.providerRequestId).slice(0, 200) : null;
+    if (existing.status === "submitted") {
+      if (providerRequestId && existing.provider_request_id && providerRequestId !== existing.provider_request_id) {
+        throw new ApiError("invalid_request", "provider request id 冲突", false, 409);
+      }
+      if (providerRequestId && !existing.provider_request_id) {
+        const attached = await admin.from("agent_tool_calls")
+          .update({ provider_request_id: providerRequestId })
+          .eq("run_id", runId).eq("call_id", callId).eq("status", "submitted").is("provider_request_id", null)
+          .select("call_id,phase,tool_name,args_hash,status,provider_request_id,result_object_key,result_hash,safe_error_code")
+          .maybeSingle();
+        if (attached.error || !attached.data) throw new ApiError("invalid_request", "provider request id 状态已变化", false, 409);
+        return responseFor(attached.data as NonNullable<typeof existing>, true);
+      }
+      return responseFor(existing, true);
+    }
     if (existing.status !== "prepared") return responseFor(existing, true);
     const { data, error } = await admin.from("agent_tool_calls")
-      .update({ status: "submitted", submitted_at: new Date().toISOString(), provider_request_id: body.providerRequestId ? String(body.providerRequestId).slice(0, 200) : null })
+      .update({ status: "submitted", submitted_at: new Date().toISOString(), provider_request_id: providerRequestId })
       .eq("run_id", runId).eq("call_id", callId).eq("status", "prepared")
       .select("call_id,phase,tool_name,args_hash,status,provider_request_id,result_object_key,result_hash,safe_error_code")
       .maybeSingle();
@@ -445,11 +755,8 @@ function checkpointFields(body: Record<string, unknown>): {
 
 async function actionCheckpointPrepare(admin: SupabaseClient, body: Record<string, unknown>): Promise<Response> {
   const fields = checkpointFields(body);
-  const run = await assertLease(admin, fields.runId, fields.leaseId);
-  if (run.image_provider !== fields.provider) {
-    throw new ApiError("invalid_request", "local task provider 与 Run 不一致", false, 409);
-  }
-  const { data, error } = await admin.storage.from(BUCKET).createSignedUploadUrl(fields.objectKey);
+  await assertLease(admin, fields.runId, fields.leaseId);
+  const { data, error } = await admin.storage.from(BUCKET).createSignedUploadUrl(fields.objectKey, { upsert: true });
   if (error || !data) throw new ApiError("internal_error", "checkpoint 上传地址签发失败", true);
   return jsonResponse({ objectKey: fields.objectKey, uploadUrl: data.signedUrl, uploadToken: data.token });
 }
@@ -458,6 +765,14 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
   const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", buffer));
   return [...digest].map((value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record).sort().filter((key) => record[key] !== undefined)
+    .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(",")}}`;
 }
 
 async function actionCheckpointCommit(admin: SupabaseClient, body: Record<string, unknown>): Promise<Response> {
@@ -509,19 +824,55 @@ async function actionApprovalRequest(admin: SupabaseClient, body: Record<string,
   const proposalHash = typeof body.proposalHash === "string" ? body.proposalHash : "";
   const proposal = body.proposal;
   const plannedToolCount = Number(body.plannedToolCount);
-  const estimatedCredits = Number(body.estimatedAdditionalCredits ?? 0);
+  const workerEstimatedCredits = Number(body.estimatedAdditionalCredits ?? 0);
   if (!runId || !leaseId || !kind) throw new ApiError("invalid_request", "审批请求字段不完整");
   if (!/^[0-9a-f]{64}$/.test(proposalHash)) throw new ApiError("invalid_request", "proposal hash 无效");
   if (!Number.isInteger(plannedToolCount) || plannedToolCount < 1 || plannedToolCount > 8) {
     throw new ApiError("invalid_request", "计划工具数无效");
   }
-  if (!Number.isInteger(estimatedCredits) || estimatedCredits < 0) {
+  if (!Number.isInteger(workerEstimatedCredits) || workerEstimatedCredits < 0) {
     throw new ApiError("invalid_request", "计划积分无效");
   }
   if (!proposal || typeof proposal !== "object" || Array.isArray(proposal)) {
     throw new ApiError("invalid_request", "proposal 无效");
   }
+  const proposalSteps = (proposal as Record<string, unknown>).steps;
+  if (!Array.isArray(proposalSteps) || proposalSteps.length < 1 || proposalSteps.length > 8) {
+    throw new ApiError("invalid_request", "proposal steps 无效");
+  }
+  let proposalGenerateCalls = 0;
+  for (const rawStep of proposalSteps) {
+    const usage = rawStep && typeof rawStep === "object" && !Array.isArray(rawStep)
+      ? (rawStep as Record<string, unknown>).estimatedUsage
+      : null;
+    const row = usage && typeof usage === "object" && !Array.isArray(usage)
+      ? usage as Record<string, unknown>
+      : null;
+    if (!row || row.generateCalls !== 1 || row.understandCalls !== 0) {
+      throw new ApiError("invalid_request", "proposal usage 无效");
+    }
+    proposalGenerateCalls += 1;
+  }
+  if (proposalGenerateCalls !== plannedToolCount) {
+    throw new ApiError("invalid_request", "proposal 工具数与计划不一致", false, 409);
+  }
   const run = await assertLease(admin, runId, leaseId);
+  const pricing = await loadUsagePricing(admin, run.pricing_version);
+  const imageProvider = expectedImageProvider(run);
+  const imageCredits = creditsForAgentUsage({
+    callId: "planned",
+    kind: "image_generation",
+    provider: imageProvider,
+    model: "planned-image-generation",
+    inputUnits: 0,
+    outputUnits: 0,
+    imageCount: 1,
+  }, pricing);
+  const estimatedCredits = plannedToolCount * imageCredits;
+  const spent = await spentCredits(admin, runId);
+  if (spent + estimatedCredits > run.budget_credits) {
+    throw new ApiError("insufficient_credits", "计划超过 Run 剩余预算", false, 402);
+  }
   const encoded = new TextEncoder().encode(JSON.stringify(proposal));
   if (encoded.byteLength > 64 * 1024) throw new ApiError("invalid_request", "proposal 过大");
   const objectKey = `runs/${runId}/plans/${proposalHash}.json`;
@@ -567,6 +918,101 @@ async function actionApprovalRequest(admin: SupabaseClient, body: Record<string,
     approvalId: approval.id,
     proposalHash,
     status: "awaiting_approval",
+  });
+}
+
+async function actionClarificationRequest(admin: SupabaseClient, body: Record<string, unknown>): Promise<Response> {
+  const runId = typeof body.runId === "string" ? body.runId : "";
+  const leaseId = typeof body.leaseId === "string" ? body.leaseId : "";
+  const proposalHash = typeof body.proposalHash === "string" ? body.proposalHash : "";
+  const proposal = body.proposal;
+  if (!runId || !leaseId || !/^[0-9a-f]{64}$/.test(proposalHash) ||
+      !proposal || typeof proposal !== "object" || Array.isArray(proposal)) {
+    throw new ApiError("invalid_request", "澄清请求字段不完整");
+  }
+  const value = proposal as Record<string, unknown>;
+  const questionKey = typeof value.questionKey === "string" ? value.questionKey : "";
+  const contextHash = typeof value.contextHash === "string" ? value.contextHash : "";
+  const question = typeof value.question === "string" ? value.question.trim() : "";
+  const recommendedAnswer = typeof value.recommendedAnswer === "string" ? value.recommendedAnswer.trim() : "";
+  const rationale = typeof value.rationale === "string" ? value.rationale.trim() : "";
+  const options = Array.isArray(value.options) ? value.options : [];
+  const optionPatches = Array.isArray(value.optionPatches) ? value.optionPatches : [];
+  const affectedFields = Array.isArray(value.affectedIntentFields) ? value.affectedIntentFields : [];
+  const allowedFields = new Set(["finalSubjectReferenceId", "mustTransfer", "highConsistencySignals", "strategy", "budget"]);
+  if (!/^[A-Za-z0-9._:-]{1,120}$/.test(questionKey) || !/^[0-9a-f]{64}$/.test(contextHash) ||
+      !question || question.length > 500 || !recommendedAnswer || recommendedAnswer.length > 240 ||
+      !rationale || rationale.length > 1_000 || options.length < 2 || options.length > 4 ||
+      options.some((option) => typeof option !== "string" || !option.trim() || option.length > 240) ||
+      new Set(options).size !== options.length || !options.includes(recommendedAnswer) ||
+      !affectedFields.length || new Set(affectedFields).size !== affectedFields.length ||
+      affectedFields.some((field) => typeof field !== "string" || !allowedFields.has(field)) ||
+      optionPatches.length !== options.length ||
+      optionPatches.some((raw) => {
+        if (!raw || typeof raw !== "object" || Array.isArray(raw)) return true;
+        const mapping = raw as Record<string, unknown>;
+        if (typeof mapping.answer !== "string" || !options.includes(mapping.answer) || !Array.isArray(mapping.patches) ||
+            !mapping.patches.length || mapping.patches.length > affectedFields.length) return true;
+        const patchFields = new Set<string>();
+        return mapping.patches.some((rawPatch) => {
+          if (!rawPatch || typeof rawPatch !== "object" || Array.isArray(rawPatch)) return true;
+          const patch = rawPatch as Record<string, unknown>;
+          const field = typeof patch.field === "string" ? patch.field : "";
+          if (!affectedFields.includes(field) || patchFields.has(field) || (patch.op !== "set" && patch.op !== "clear") ||
+              (patch.op === "set" && patch.value === undefined) || (patch.op === "clear" && "value" in patch)) return true;
+          patchFields.add(field);
+          return false;
+        });
+      }) || new Set(optionPatches.map((raw) => (raw as Record<string, unknown>)?.answer)).size !== options.length) {
+    throw new ApiError("invalid_request", "澄清 proposal 无效");
+  }
+  const canonicalBytes = new TextEncoder().encode(canonicalJson(proposal));
+  if (await sha256Hex(canonicalBytes) !== proposalHash) {
+    throw new ApiError("invalid_request", "澄清 proposal hash 不匹配", false, 409);
+  }
+  const run = await assertLease(admin, runId, leaseId);
+  const { data: rows, error: rowsError } = await admin.from("agent_clarifications")
+    .select("id,question_key,context_hash,status,question_object_key")
+    .eq("run_id", runId).order("asked_at", { ascending: true });
+  if (rowsError) throw new ApiError("internal_error", "澄清记录读取失败", true);
+  const existing = (rows ?? []).find((row) => row.question_key === questionKey);
+  const objectKey = `runs/${runId}/clarifications/${proposalHash}.json`;
+  if (existing) {
+    if (existing.context_hash !== contextHash || existing.question_object_key !== objectKey || existing.status !== "pending") {
+      throw new ApiError("invalid_request", "澄清 question_key 冲突", false, 409);
+    }
+  } else {
+    if ((rows ?? []).length >= 3) throw new ApiError("invalid_request", "澄清次数已达上限", false, 409);
+    const encoded = new TextEncoder().encode(JSON.stringify(proposal));
+    const upload = await admin.storage.from(BUCKET).upload(objectKey, encoded, {
+      contentType: "application/json",
+      upsert: false,
+    });
+    if (upload.error && !String(upload.error.message ?? "").toLowerCase().includes("already")) {
+      throw new ApiError("internal_error", "澄清问题保存失败", true);
+    }
+    const inserted = await admin.from("agent_clarifications").insert({
+      run_id: runId,
+      question_key: questionKey,
+      context_hash: contextHash,
+      status: "pending",
+      question_object_key: objectKey,
+      expires_at: new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
+    });
+    if (inserted.error) throw new ApiError("internal_error", "澄清记录建立失败", true);
+  }
+  await transitionRun(admin, {
+    p_run_id: runId,
+    p_lease_id: leaseId,
+    p_to_status: "awaiting_clarification",
+    p_current_step: questionKey,
+  });
+  return jsonResponse({
+    conversationId: run.conversation_id,
+    runId,
+    questionKey,
+    contextHash,
+    status: "awaiting_clarification",
   });
 }
 
@@ -810,7 +1256,10 @@ function parseLocalTaskParams(value: unknown): { prompt: string; ratio: string |
 async function actionLocalTaskRequest(admin: SupabaseClient, body: Record<string, unknown>): Promise<Response> {
   const fields = localTaskFields(body);
   const params = parseLocalTaskParams(body.params);
-  await assertLease(admin, fields.runId, fields.leaseId);
+  const run = await assertLease(admin, fields.runId, fields.leaseId);
+  if (run.image_provider !== fields.provider) {
+    throw new ApiError("invalid_request", "local task provider 与 Run 不一致", false, 409);
+  }
   const objectKey = `runs/${fields.runId}/local/${fields.callId}.json`;
   const encoded = new TextEncoder().encode(JSON.stringify(params));
   if (encoded.byteLength > 64 * 1024) throw new ApiError("invalid_request", "local task 参数过大");
@@ -999,6 +1448,10 @@ Deno.serve(async (request) => {
     const action = typeof body.action === "string" ? body.action : "";
 
     switch (action) {
+      case "metrics":
+        return await actionMetrics(admin);
+      case "cleanup_expired":
+        return await actionCleanupExpired(admin);
       case "claim":
         return await actionClaim(admin, workerId);
       case "heartbeat":
@@ -1019,6 +1472,8 @@ Deno.serve(async (request) => {
         return await actionCheckpointCommit(admin, body);
       case "approval_request":
         return await actionApprovalRequest(admin, body);
+      case "clarification_request":
+        return await actionClarificationRequest(admin, body);
       case "artifact_prepare":
         return await actionArtifactPrepare(admin, body);
       case "artifact":

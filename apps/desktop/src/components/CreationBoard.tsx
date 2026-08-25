@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "../store";
-import { canStartAnotherJob, canUseByo } from "../lib/entitlement";
+import { canStartAnotherAgentRun, canStartAnotherJob, canUseAgentRun, canUseByo } from "../lib/entitlement";
 import { cloudProviderLabel, isCloudProvider, supportsAnnotationCoordinates } from "../lib/genProviders";
 import { api } from "../lib/api";
 import { AGENT_DS_ENABLED, AGENT_Z_ENABLED, PRESET_FEATURE_ENABLED } from "../lib/featureFlags";
-import { notifyError, notifySuccess } from "../lib/notify";
+import { notify, notifyError, notifySuccess } from "../lib/notify";
 import { useCreationEditor } from "./creation/useCreationEditor";
 import { RATIOS } from "./creation/ratios";
 import { RatioSelect } from "./creation/RatioSelect";
@@ -76,6 +76,9 @@ export function CreationBoard() {
   const setActivePreset = useStore((s) => s.setActivePreset);
   const reloadPresets = useStore((s) => s.reloadPresets);
   const openCloudAgentRun = useStore((s) => s.openCloudAgentRun);
+  const cloudAgentRuns = useStore((s) => s.cloudAgentRuns);
+  const pendingAgentArm = useStore((s) => s.pendingAgentArm);
+  const clearPendingAgentArm = useStore((s) => s.clearPendingAgentArm);
 
   // consumePendingKeyword：本板是维度环点选（pendingKeyword）的唯一消费方（编辑坞不抢）。
   // initialEmpty：空文档开局（配 is-empty 占位「描述你的意图，开始创作吧」；有草稿仍恢复），
@@ -144,6 +147,19 @@ export function CreationBoard() {
     window.addEventListener(AGENT_DS_DONE_EVENT, onDone);
     return () => window.removeEventListener(AGENT_DS_DONE_EVENT, onDone);
   }, []);
+
+  // 会话详情「开启 Agent 模式再试」：链接点击置位 pendingAgentArm 并关面板回主界面，
+  // 本板随 genPanelOpen=false 才挂载 → 在挂载/更新时消费信号，打开正式 Agent 开关并
+  // 复位其余 Agent 开关（与 Agent 按钮点击同款互斥复位）；消费即清，防止重挂载误触发。
+  useEffect(() => {
+    if (!pendingAgentArm) return;
+    setCloudAgentMode(true);
+    setAgentMode("off");
+    setAgentZMode(false);
+    setAgentGMode(false);
+    setAgentDsMode(false);
+    clearPendingAgentArm();
+  }, [pendingAgentArm, clearPendingAgentArm]);
 
   // —— 底部浮动对话框形态（收起/展开规则，优先级从高到低；改这里先核对不打架）——
   // ① 退出创作模式（exitCreationMode）：取消在途自动浮回；非首屏立即收起、首屏保持展开；
@@ -245,8 +261,18 @@ export function CreationBoard() {
       : true;
   // 预授权门控暂缓（0029）：不再要求余额 ≥48，云端按可用余额回落低档（≥5 即可启动）；
   // 真正的余额校验由服务端 credit_hold 权威执行。
+  const activeCloudAgentRunCount = Object.values(cloudAgentRuns).filter((run) =>
+    !["succeeded", "failed", "cancelled"].includes(run.status)
+  ).length;
+  const cloudAgentEntitled = canUseAgentRun(cloudEntitlement);
+  const cloudAgentHasCapacity = canStartAnotherAgentRun(cloudEntitlement, activeCloudAgentRunCount);
+  // Codex 自身已有思考/对话编排，叠加 Bowerbird Agent 会形成重复规划且耗时过长。
+  // 暂时禁止新建 Codex + Agent 组合；即梦与 Cloud 路径保持不变。
+  const cloudAgentProviderCompatible = activeGenProvider !== "codex";
   const cloudAgentReady =
+    cloudAgentProviderCompatible &&
     !!agentImageProvider &&
+    cloudAgentHasCapacity &&
     cloudAvailable &&
     !!cloudAuth?.logged_in &&
     cloudBalance >= 5 &&
@@ -261,6 +287,12 @@ export function CreationBoard() {
   );
   const annotationWarning =
     !cloudAgentMode && !agentZMode && !agentGMode && !agentDsMode && hasAnnotationDimension && !supportsAnnotationCoordinates(activeGenProvider);
+
+  useEffect(() => {
+    if (!cloudAgentMode || cloudAgentProviderCompatible) return;
+    setCloudAgentMode(false);
+    notify("已关闭 Agent：Codex 与 Bowerbird Agent 暂时互斥，请改用 Codex 直接生成或选择 Cloud / 即梦 Agent。", "info");
+  }, [activeGenProvider, cloudAgentMode, cloudAgentProviderCompatible]);
 
   // 把当前组稿发 provider 生成。生成期间编辑器仍可继续组下一轮稿（prompt 在此快照进 store）。
   // provider 由 store 内 activeGenProvider 兜底（send 不显式传）。
@@ -661,23 +693,25 @@ export function CreationBoard() {
               setAgentGMode(false);
               setAgentDsMode(false);
             }}
-            title={!cloudAuth?.logged_in
-              ? "请先登录 Bowerbird 账号"
-              : !agentImageProvider
-                ? "当前生图引擎不支持 Agent"
-                : agentImageProvider !== "cloud" && !canUseByo(cloudEntitlement)
-                  ? "升级 Pro 解锁本机 Codex / 即梦 CLI Agent 生图"
-                  : agentImageProvider === "jimeng" && !dreaminaHealth?.ok
-                    ? "即梦 CLI 不可用：请先在「设置 · 模型设置」完成安装与登录"
-                    : agentImageProvider === "codex" && !codexHealth?.ok
-                      ? "Codex CLI 不可用：请先在「设置 · 模型设置」完成安装与登录"
-                      : cloudBalance < 5
+            title={!cloudAgentProviderCompatible
+              ? "Codex 与 Bowerbird Agent 暂时互斥：Codex 已有思考与对话能力，请直接使用 Codex，或为 Agent 选择 Cloud / 即梦"
+              : !cloudAuth?.logged_in
+                ? "请先登录 Bowerbird 账号"
+                : !cloudAgentEntitled
+                  ? "当前账号未开放 Bowerbird Agent"
+                  : !cloudAgentHasCapacity
+                    ? "当前 Agent 并发任务已达上限，请等待已有任务完成"
+                    : !agentImageProvider
+                      ? "当前生图引擎不支持 Agent"
+                      : agentImageProvider !== "cloud" && !canUseByo(cloudEntitlement)
+                        ? "升级 Pro 解锁本机 Codex / 即梦 CLI Agent 生图"
+                        : agentImageProvider === "jimeng" && !dreaminaHealth?.ok
+                          ? "即梦 CLI 不可用：请先在「设置 · 模型设置」完成安装与登录"
+                          : cloudBalance < 5
                         ? "积分不足：Agent Run 启动时会预授权积分，结束后按实际工具调用结算"
                         : agentImageProvider === "jimeng"
                           ? "先只从文字分析真实意图，给出可审批计划；批准后生图步骤用本机即梦执行（不消耗 Bowerbird 积分）"
-                          : agentImageProvider === "codex"
-                            ? "先只从文字分析真实意图，给出可审批计划；批准后生图步骤用本机 Codex 执行（消耗 Codex 订阅额度，不消耗 Bowerbird 生图积分）"
-                            : "先只从文字分析真实意图，给出可审批计划；批准后才调用方舟工具，结果反馈会形成新的修订计划"}
+                          : "先只从文字分析真实意图，给出可审批计划；批准后才调用方舟工具，结果反馈会形成新的修订计划"}
             className={`generation-glow-button flex h-7 items-center rounded-[3px] px-2.5 text-xs font-medium disabled:opacity-40 ${
               cloudAgentMode ? "" : "is-off"
             }`}
@@ -824,9 +858,13 @@ export function CreationBoard() {
               cloudAgentMode
                 ? !cloudAuth?.logged_in
                   ? "请先登录 Bowerbird 账号"
-                  : cloudBalance < 5
-                    ? "积分不足：Agent Run 启动时会预授权积分，结束后按实际工具调用结算"
-                    : "创建 Bowerbird Agent 会话：先分析文字并提交计划，批准后才执行"
+                  : !cloudAgentEntitled
+                    ? "当前账号未开放 Bowerbird Agent"
+                    : !cloudAgentHasCapacity
+                      ? "当前 Agent 并发任务已达上限，请等待已有任务完成"
+                      : cloudBalance < 5
+                        ? "积分不足：Agent Run 启动时会预授权积分，结束后按实际工具调用结算"
+                        : "创建 Bowerbird Agent 会话：先分析文字并提交计划，批准后才执行"
                 : agentZMode
                 ? "发送到 Agent Z 终端（Claude Code TUI）：对话为主；涉及生图由 Claude Code 理解后自行调用 dreamina CLI"
                 : agentGMode
@@ -865,6 +903,11 @@ export function CreationBoard() {
             </span>
           </button>
         </div>
+        {cloudAgentMode && (
+          <p className="mt-1.5 text-[10px] leading-4 text-muted">
+            隐私说明：本次文字和所选参考图会加密上传至 Bowerbird Cloud，仅用于规划与执行。输入和过程内容通常最长保留 24 小时，最终结果最长保留 7 天；取消会停止后续调用，已上传副本仍按上述期限清理。接受后的图片保存到本地素材库，其余素材和本地数据库不会上传。
+          </p>
+        )}
       </section>
     </div>
   );

@@ -164,6 +164,7 @@ export function NewProjectMenu() {
             <button
               type="button"
               role="menuitem"
+              data-tour="new-project-import"
               onClick={() => {
                 setMenu(null);
                 void importFolder();

@@ -49,6 +49,19 @@ try {
   if (!Array.isArray(body.generation_services) || body.generation_services.length < 3) {
     throw new Error("generation_services 缺失或少于 3 档");
   }
+  const policy = body.policy;
+  if (policy?.can_use_agent_runs !== true || policy?.max_parallel_agent_runs !== 1 ||
+      !policy?.allowed_agent_skills?.includes("bowerbird-controlled-image-edit") ||
+      !policy?.agent_budget_options?.includes("controlled-min") ||
+      !policy?.agent_budget_options?.includes("controlled-standard")) {
+    throw new Error("免费档 Agent FeaturePolicy 缺失或不一致");
+  }
+  console.log("agent_feature_policy =", JSON.stringify({
+    can_use_agent_runs: policy.can_use_agent_runs,
+    max_parallel_agent_runs: policy.max_parallel_agent_runs,
+    allowed_agent_skills: policy.allowed_agent_skills,
+    agent_budget_options: policy.agent_budget_options,
+  }, null, 2));
   console.log("ENTITLEMENT_SERVICES_OK");
 } finally {
   await fetch(`${baseUrl}/auth/v1/admin/users/${userId}`, { method: "DELETE", headers: adminHeaders });

@@ -14,6 +14,7 @@ export const CONTROLLED_IMAGE_EDIT_MANIFEST: SkillManifest = {
       schemaVersion: { const: 1 },
       intentPrompt: { type: "string", minLength: 1, maxLength: 4_000 },
       references: { type: "array", minItems: 0, maxItems: 8 },
+      preferenceCapsule: { type: "object" },
     },
   },
   artifactSchema: {
@@ -26,9 +27,12 @@ export const CONTROLLED_IMAGE_EDIT_MANIFEST: SkillManifest = {
   phases: [
     {
       name: "analyze_intent_text_only",
-      allowedActions: ["record_intent_analysis"],
+      allowedActions: ["record_intent_analysis", "request_clarification"],
       maxTurns: 2,
-      transitions: [{ action: "record_intent_analysis", to: "compose_plan_with_skill" }],
+      transitions: [
+        { action: "record_intent_analysis", to: "compose_plan_with_skill" },
+        { action: "request_clarification", to: "analyze_intent_text_only" },
+      ],
     },
     {
       name: "compose_plan_with_skill",

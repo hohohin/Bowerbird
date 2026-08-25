@@ -29,6 +29,7 @@ import type {
   ProjectDeleteResult,
   ProjectRefreshResult,
   PromptedAsset,
+  PreferenceCapsule,
   RecentGenSession,
   TagCount,
 } from "./types";
@@ -63,12 +64,15 @@ export const api = {
     ratio?: string | null;
     projectId?: string | null;
     imageProvider?: "cloud" | "jimeng" | "codex" | null;
+    preferenceCapsule?: PreferenceCapsule | null;
   }) => invoke<CloudAgentRunRecord>("cloud_agent_start", input),
   cloudAgentLatest: () => invoke<CloudAgentRunRecord | null>("cloud_agent_latest"),
   cloudAgentList: () => invoke<CloudAgentRunRecord[]>("cloud_agent_list"),
   cloudAgentGet: (runId: string) => invoke<CloudAgentRunRecord>("cloud_agent_get", { runId }),
   cloudAgentDecideApproval: (runId: string, approvalId: string, approve: boolean) =>
     invoke<CloudAgentRunRecord>("cloud_agent_decide_approval", { runId, approvalId, approve }),
+  cloudAgentAnswerClarification: (runId: string, clarificationId: string, contextHash: string, answer: string) =>
+    invoke<CloudAgentRunRecord>("cloud_agent_answer_clarification", { runId, clarificationId, contextHash, answer }),
   cloudAgentCancel: (runId: string) =>
     invoke<CloudAgentRunRecord>("cloud_agent_cancel", { runId }),
   cloudAgentFeedback: (runId: string, feedbackAction: "accept" | "retry", text?: string) =>

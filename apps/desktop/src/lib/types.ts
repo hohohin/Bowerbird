@@ -290,12 +290,51 @@ export interface FeaturePolicy {
   understand_daily_limit: number | null;
   can_use_priority_queue: boolean;
   can_hd_export: boolean;
+  can_use_agent_runs: boolean;
+  max_parallel_agent_runs: number;
+  allowed_agent_skills: string[];
+  agent_budget_options: string[];
+}
+
+export type PreferenceFactCategory =
+  | "style"
+  | "subject"
+  | "palette"
+  | "composition"
+  | "medium"
+  | "workflow"
+  | "avoid";
+
+export interface PreferenceFact {
+  category: PreferenceFactCategory;
+  value: string;
+  confidence: number;
+  evidenceCount: number;
+  explicit: boolean;
+}
+
+/** Agent 只读偏好胶囊：桌面只发送与本次任务相关的显式/项目级少量事实。 */
+export interface PreferenceCapsule {
+  schemaVersion: 1;
+  scope: { projectId?: string };
+  preferred: PreferenceFact[];
+  avoid: PreferenceFact[];
+  workflow: PreferenceFact[];
+  generatedAt: string;
+  expiresAt: string;
 }
 
 export interface CreditTransaction {
   kind: string;
   amount: number;
   service: string | null;
+  meta?: {
+    entity_type: "agent_run";
+    run_id: string;
+    skill_id: string;
+    final_status: string;
+    actual_credits: number;
+  };
   created_at: string;
 }
 
@@ -491,6 +530,26 @@ export interface CloudAgentApproval {
   proposal?: CloudAgentPlan;
 }
 
+export interface CloudAgentClarification {
+  id: string;
+  question_key: string;
+  context_hash: string;
+  status: "pending" | "answered" | "expired" | "cancelled";
+  asked_at: string;
+  answered_at?: string | null;
+  expires_at: string;
+  contentExpired?: boolean;
+  question?: {
+    questionKey: string;
+    contextHash: string;
+    question: string;
+    recommendedAnswer: string;
+    options: string[];
+    affectedIntentFields: string[];
+    rationale: string;
+  };
+}
+
 export interface CloudAgentArtifact {
   id: string;
   conversation_id: string;
@@ -532,6 +591,7 @@ export interface CloudAgentSnapshot {
     created_at: string;
   }>;
   approvals: CloudAgentApproval[];
+  clarifications?: CloudAgentClarification[];
   artifacts: CloudAgentArtifact[];
   /** 本地 CLI Run 停车 awaiting_local_task 时云端下发的待执行生图任务（其他时刻缺省）。 */
   pendingLocalTask?: {

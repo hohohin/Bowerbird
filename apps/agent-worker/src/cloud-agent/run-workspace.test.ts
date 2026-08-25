@@ -1,12 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
 import { equal, ok, rejects } from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
 import { AgentControlClient, type AgentWorkerFetch, type HttpResponse } from "../control-plane/agent-control-client.ts";
-import { RunWorkspace } from "./run-workspace.ts";
+import { cleanupOrphanWorkspaces, RunWorkspace } from "./run-workspace.ts";
 
 function response(status: number, bytes: Uint8Array): HttpResponse {
   return {
@@ -68,4 +68,26 @@ test("Run workspace rejects declared image metadata that does not match bytes", 
   });
   await rejects(async () => await workspace.readArtifact("input-2"), /agent_object_hash_mismatch/);
   workspace.cleanup();
+});
+
+test("orphan cleanup removes only old valid Run directories and is idempotent", () => {
+  const root = join(tmpdir(), `bowerbird-workspace-cleanup-${randomUUID()}`);
+  const oldRun = join(root, "old-run");
+  const activeRun = join(root, "active-run");
+  const unrelated = join(root, "not_a_run");
+  mkdirSync(oldRun, { recursive: true });
+  mkdirSync(activeRun, { recursive: true });
+  mkdirSync(unrelated, { recursive: true });
+  const nowMs = Date.now();
+  const oldSeconds = (nowMs - 25 * 60 * 60 * 1_000) / 1_000;
+  utimesSync(oldRun, oldSeconds, oldSeconds);
+  utimesSync(unrelated, oldSeconds, oldSeconds);
+
+  equal(cleanupOrphanWorkspaces(root, 24 * 60 * 60 * 1_000, nowMs), 1);
+  equal(existsSync(oldRun), false);
+  equal(existsSync(activeRun), true);
+  equal(existsSync(unrelated), true);
+  equal(cleanupOrphanWorkspaces(root, 24 * 60 * 60 * 1_000, nowMs), 0);
+
+  rmSync(root, { recursive: true, force: true });
 });

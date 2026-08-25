@@ -1,47 +1,8 @@
 import { requireUser } from "../_shared/auth.ts";
 import { ensureDailyCredits } from "../_shared/billing.ts";
 import { ApiError, errorResponse, jsonResponse, requestId, safeLog } from "../_shared/errors.ts";
+import { activeTier, policyFor } from "../_shared/feature-policy.ts";
 import { corsHeaders } from "../_shared/limits.ts";
-
-interface Policy {
-  can_use_byo: boolean;
-  can_use_cloud: boolean;
-  max_parallel_jobs: number;
-  understand_daily_limit: number | null;
-  can_use_priority_queue: boolean;
-  can_hd_export: boolean;
-}
-
-function policyFor(tier: string): Policy {
-  if (tier === "studio") {
-    return {
-      can_use_byo: true,
-      can_use_cloud: true,
-      max_parallel_jobs: 8,
-      understand_daily_limit: null,
-      can_use_priority_queue: true,
-      can_hd_export: false,
-    };
-  }
-  if (tier === "pro") {
-    return {
-      can_use_byo: true,
-      can_use_cloud: true,
-      max_parallel_jobs: 4,
-      understand_daily_limit: null,
-      can_use_priority_queue: false,
-      can_hd_export: false,
-    };
-  }
-  return {
-    can_use_byo: false,
-    can_use_cloud: true,
-    max_parallel_jobs: 1,
-    understand_daily_limit: 10,
-    can_use_priority_queue: false,
-    can_hd_export: false,
-  };
-}
 
 Deno.serve(async (request) => {
   const id = requestId(request);
@@ -64,7 +25,7 @@ Deno.serve(async (request) => {
     ] = await Promise.all([
       admin.from("subscriptions").select("tier,status,current_period_end,entitlement_version").eq("user_id", user.id).maybeSingle(),
       admin.from("user_credits").select("daily_balance,sub_balance,topup_balance").eq("user_id", user.id).maybeSingle(),
-      admin.from("credit_transactions").select("kind,amount,service,created_at").eq("user_id", user.id).order("created_at", { ascending: false }).limit(50),
+      admin.from("credit_transactions").select("kind,amount,service,meta,created_at").eq("user_id", user.id).order("created_at", { ascending: false }).limit(50),
       // 桌面端动态生图档位：active 且带 label 的 image_* 服务（label/sort 由 0018 起存 parameters）。
       admin.from("service_costs").select("service,unit_cost,parameters").eq("active", true).like("service", "image%"),
       // 远程 prompt 配置（0020）：enabled 行随权益快照下发，桌面 agent 指令云端热改无需发版。
@@ -74,9 +35,7 @@ Deno.serve(async (request) => {
       throw new ApiError("internal_error", "权益状态读取失败", true);
     }
 
-    const active = subscription?.status === "active" &&
-      (!subscription.current_period_end || Date.parse(subscription.current_period_end) > Date.now());
-    const tier = active ? subscription?.tier ?? "free" : "free";
+    const tier = activeTier(subscription);
     const issuedAt = new Date();
     const refreshAfter = new Date(issuedAt.getTime() + 6 * 60 * 60 * 1000);
     const graceUntil = new Date(issuedAt.getTime() + 7 * 24 * 60 * 60 * 1000);
@@ -97,12 +56,24 @@ Deno.serve(async (request) => {
         .sort((a, b) => (a.parameters?.sort ?? 999) - (b.parameters?.sort ?? 999))
         .map((row) => ({ service: row.service, label: row.parameters.label, credits: row.unit_cost })),
       prompt_configs: (promptConfigs ?? []).map((row) => ({ key: row.key, value: row.value, version: row.version })),
-      recent_transactions: (transactions ?? []).map((tx) => ({
-        kind: tx.kind,
-        amount: tx.amount,
-        service: tx.service,
-        created_at: tx.created_at,
-      })),
+      recent_transactions: (transactions ?? []).map((tx) => {
+        const meta = tx.meta?.entity_type === "agent_run"
+          ? {
+              entity_type: "agent_run",
+              run_id: String(tx.meta.run_id ?? ""),
+              skill_id: String(tx.meta.skill_id ?? ""),
+              final_status: String(tx.meta.final_status ?? ""),
+              actual_credits: Number(tx.meta.actual_credits ?? 0),
+            }
+          : undefined;
+        return {
+          kind: tx.kind,
+          amount: tx.amount,
+          service: tx.service,
+          meta,
+          created_at: tx.created_at,
+        };
+      }),
       issued_at: issuedAt.toISOString(),
       refresh_after: refreshAfter.toISOString(),
       grace_until: graceUntil.toISOString(),

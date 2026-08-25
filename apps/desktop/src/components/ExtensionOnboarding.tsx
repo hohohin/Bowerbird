@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { CheckCircle2 } from "lucide-react";
 import { useStore } from "../store";
 import { api } from "../lib/api";
 import guide1 from "../assets/bowerbird-extension-guide-1.gif";
@@ -65,7 +66,7 @@ function ZoomImage({ src, onClose }: { src: string; onClose: () => void }) {
  * 扩展安装引导（设置「系统设置」的扩展卡片唤起；约定 13 全屏 Modal 形态）。
  *
  * 由设置对应分区经 `extensionOnboardingForceOpen` 跳转唤起，不再自行判断 seen、不自动弹；
- * 「稍后再说」与「打开期间由未连接变为已连接」均直接关闭。
+ * 「稍后再说」直接关闭；「打开期间由未连接变为已连接」先展示配置完成确认，不直接关闭。
  * 打开时若扩展已连接，仍保持可重看教程（不首帧自动关闭）。
  *
  * 不自动打开 chrome://extensions / 文件夹——Windows 上 Chrome 单实例丢 URL、explorer 不认
@@ -77,23 +78,30 @@ export function ExtensionOnboarding() {
   const setForceOpen = useStore((s) => s.setExtensionOnboardingForceOpen);
   const [copied, setCopied] = useState<string | null>(null); // "page" | "folder"
   const [zoom, setZoom] = useState<string | null>(null); // 放大的 gif src
+  const [configured, setConfigured] = useState(false); // 本次打开期间从未连接变为已连接
   const prevConnected = useRef(connected);
 
-  // 仅在引导打开期间由「未连接 → 已连接」跃迁才视为本次配置成功：直接关引导。
+  // 仅在引导打开期间由「未连接 → 已连接」跃迁才视为本次配置成功：展示完成确认。
   // 打开时本就已连接则保持可重看教程。
   useEffect(() => {
     if (!forceOpen) {
       prevConnected.current = connected;
+      setConfigured(false);
       return;
     }
     if (!prevConnected.current && connected) {
-      setForceOpen(false);
+      setConfigured(true);
     }
     prevConnected.current = connected;
-  }, [connected, forceOpen, setForceOpen]);
+  }, [connected, forceOpen]);
 
   // 由设置「系统设置」的扩展卡片唤起（forceOpen）；不自动弹。
   if (!forceOpen) return null;
+
+  function finish() {
+    setConfigured(false);
+    setForceOpen(false);
+  }
 
   function dismiss() {
     setForceOpen(false);
@@ -116,6 +124,29 @@ export function ExtensionOnboarding() {
     } catch {
       // 路径获取失败：静默（release resource 解析失败时用户可手动找）
     }
+  }
+
+  if (configured) {
+    return (
+      <ModalShell
+        title="浏览器扩展已连接"
+        eyebrow="Browser collection"
+        description="插件配置已完成，网页里的灵感现在可以直接采集进 Bowerbird。"
+        width="md"
+        onClose={finish}
+        footer={<button type="button" onClick={finish} className="app-modal-button is-primary">完成</button>}
+      >
+        <div className="setup-card flex items-start gap-3 p-4">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-lime/15 text-lime">
+            <CheckCircle2 size={20} />
+          </span>
+          <div className="text-xs leading-5 text-muted">
+            <div className="font-medium text-ink">采集通道已就绪</div>
+            <div className="mt-1">返回设置后，可随时在「系统设置」中重新查看本教程。</div>
+          </div>
+        </div>
+      </ModalShell>
+    );
   }
 
   return (

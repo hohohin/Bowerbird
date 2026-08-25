@@ -34,6 +34,10 @@ declare module "node:crypto" {
 }
 
 declare module "node:fs" {
+  export interface Dirent {
+    name: string;
+    isDirectory(): boolean;
+  }
   export function readFileSync(path: number | string, encoding: "utf8"): string;
   export function readFileSync(path: number | string): Uint8Array;
   export function writeFileSync(path: string, data: string, encoding: "utf8"): void;
@@ -42,6 +46,10 @@ declare module "node:fs" {
   export function unlinkSync(path: string): void;
   export function existsSync(path: string): boolean;
   export function rmSync(path: string, options: { recursive: boolean; force: boolean }): void;
+  export function readdirSync(path: string, options: { withFileTypes: true }): Dirent[];
+  export function statSync(path: string): { mtimeMs: number };
+  export function statfsSync(path: string): { blocks: number; bsize: number; bavail: number };
+  export function utimesSync(path: string, atime: number, mtime: number): void;
 }
 
 declare module "node:path" {

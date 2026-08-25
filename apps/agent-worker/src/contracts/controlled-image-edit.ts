@@ -1,5 +1,7 @@
 /** 首版 bowerbird-controlled-image-edit 的版本化业务契约。 */
 
+import type { PreferenceCapsule } from "./preference.ts";
+
 export const CONTROLLED_IMAGE_EDIT_SCHEMA_VERSION = 1 as const;
 
 export type HighConsistencySignal =
@@ -41,6 +43,8 @@ export type ControlledImageEditInput = {
   budgetTier?: string;
   explicitPreserve?: string[];
   explicitExclude?: string[];
+  /** 桌面本地生成的只读显式偏好；随 Run 临时数据过期，Kernel 不可修改。 */
+  preferenceCapsule?: PreferenceCapsule;
 };
 
 export type IntentAnalysis = {

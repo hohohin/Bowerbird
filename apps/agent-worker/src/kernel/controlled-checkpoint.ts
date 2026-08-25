@@ -1,5 +1,11 @@
 import type { ControlledRunnerCheckpoint } from "./controlled-image-edit-runner.ts";
 import { canonicalJson, sha256Hex } from "./tool-ledger.ts";
+import {
+  clarificationProposalHash,
+  validateClarificationProposal,
+  type ClarificationHistoryEntry,
+} from "./clarification-policy.ts";
+import { CONTROLLED_IMAGE_EDIT_MANIFEST } from "../skills/bowerbird-controlled-image-edit/manifest.ts";
 import { hashControlledPlan, hashIntentAnalysis } from "../skills/bowerbird-controlled-image-edit/planner.ts";
 import {
   validateControlledInput,
@@ -39,6 +45,39 @@ function validateCheckpoint(checkpoint: ControlledRunnerCheckpoint): void {
     fail("controlled_checkpoint_counter_invalid");
   }
   validateControlledInput(checkpoint.input);
+  const clarificationPolicy = CONTROLLED_IMAGE_EDIT_MANIFEST.clarifications;
+  const overrides = checkpoint.intentOverrides ?? {};
+  if (!isRecord(overrides) || Object.keys(overrides).some((field) => !clarificationPolicy.intentFields.includes(field))) {
+    fail("controlled_checkpoint_intent_overrides_invalid");
+  }
+  const clarificationHistory = checkpoint.clarificationHistory ?? [];
+  if (!Array.isArray(clarificationHistory) || clarificationHistory.length > clarificationPolicy.maxPerRun) {
+    fail("controlled_checkpoint_clarification_history_invalid");
+  }
+  const validatedHistory: ClarificationHistoryEntry[] = [];
+  for (const entry of clarificationHistory) {
+    if (!entry || (entry.status !== "pending" && entry.status !== "answered") ||
+        clarificationProposalHash(entry.proposal) !== entry.proposalHash ||
+        (entry.status === "answered" ? !/^[0-9a-f]{64}$/.test(entry.intentPatchHash ?? "") : entry.intentPatchHash !== undefined)) {
+      fail("controlled_checkpoint_clarification_history_invalid");
+    }
+    validateClarificationProposal({
+      proposal: entry.proposal,
+      expectedContextHash: entry.proposal.contextHash,
+      history: validatedHistory,
+      policy: clarificationPolicy,
+    });
+    validatedHistory.push(entry);
+  }
+  const pending = clarificationHistory.filter((entry) => entry.status === "pending");
+  if (checkpoint.status === "awaiting_clarification") {
+    if (pending.length !== 1 || !checkpoint.pendingClarification ||
+        clarificationProposalHash(checkpoint.pendingClarification) !== pending[0].proposalHash) {
+      fail("controlled_checkpoint_pending_clarification_invalid");
+    }
+  } else if (pending.length || checkpoint.pendingClarification) {
+    fail("controlled_checkpoint_pending_clarification_invalid");
+  }
   if (checkpoint.intentAnalysis) {
     validateIntentAnalysis(checkpoint.input, checkpoint.intentAnalysis);
     if (hashIntentAnalysis(checkpoint.intentAnalysis) !== checkpoint.intentAnalysisHash) {

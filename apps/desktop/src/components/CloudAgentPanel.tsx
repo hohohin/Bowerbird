@@ -252,6 +252,10 @@ export function CloudAgentSession() {
     () => run?.snapshot.approvals.find((approval) => approval.status === "pending") ?? null,
     [run?.snapshot.approvals],
   );
+  const pendingClarification = useMemo(
+    () => run?.snapshot.clarifications?.find((item) => item.status === "pending" && item.question) ?? null,
+    [run?.snapshot.clarifications],
+  );
   const referenceAssets = useMemo(
     () => run?.referenceAssetIds.map((id) => assets.find((asset) => asset.id === id)).filter(Boolean) ?? [],
     [run?.referenceAssetIds, assets],
@@ -329,6 +333,26 @@ export function CloudAgentSession() {
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
       notifyError(cause, approve ? "批准计划失败" : "拒绝计划失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function answerClarification(answer: string) {
+    if (!run || !pendingClarification || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      updateRun(await api.cloudAgentAnswerClarification(
+        run.runId,
+        pendingClarification.id,
+        pendingClarification.context_hash,
+        answer,
+      ));
+      notifySuccess("答案已提交，Agent 将按新意图重新规划");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+      notifyError(cause, "提交 Agent 澄清答案失败");
     } finally {
       setBusy(false);
     }
@@ -464,6 +488,33 @@ export function CloudAgentSession() {
                               : "Agent 会在需要你决定时暂停。"}
                   </p>
                 </div>
+
+                {pendingClarification?.question && (
+                  <div className="rounded-lg border border-amber-400/30 bg-amber-400/8 p-4">
+                    <div className="mb-1 text-xs font-semibold text-amber-100">Agent 需要你确认一个关键点</div>
+                    <p className="text-xs leading-5 text-ink">{pendingClarification.question.question}</p>
+                    <p className="mt-1 text-[10px] leading-4 text-muted">{pendingClarification.question.rationale}</p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {pendingClarification.question.options.map((option) => {
+                        const recommended = option === pendingClarification.question?.recommendedAnswer;
+                        return (
+                          <button
+                            key={option}
+                            type="button"
+                            disabled={busy}
+                            onClick={() => void answerClarification(option)}
+                            className={recommended
+                              ? "rounded-md bg-accent px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
+                              : "rounded-md border border-edge bg-panel px-3 py-2 text-xs text-ink disabled:opacity-50"}
+                          >
+                            {option}{recommended ? "（推荐）" : ""}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <p className="mt-2 text-[10px] text-muted">一次只回答这一项；答案会编译为结构化意图，旧计划不会继续执行。</p>
+                  </div>
+                )}
 
                 {approvalsWithPlans.map((approval, index) => {
                   const isPending = approval.status === "pending";

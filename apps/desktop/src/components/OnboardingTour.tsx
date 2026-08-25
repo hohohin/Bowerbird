@@ -1,10 +1,10 @@
-import { useEffect, useLayoutEffect, useState, type CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { ArrowRight, Sparkles } from "lucide-react";
 import { useStore } from "../store";
 import { ModalShell } from "./ModalShell";
 
-type StepDef = { title?: string; body: string; side?: "below" | "right" };
+type StepDef = { title?: string; body: string | ReactNode; side?: "below" | "right" };
 
 /** 测试辅助：step 气泡右上角「跳过此步」按钮（tourStep+1，不补做前置动作——被跳过的
  *  真实交互缺失时下一步锚点可能不在，气泡回退默认位置）。仅方便测试走查，
@@ -20,15 +20,15 @@ const STEP_DEFS: Record<number, StepDef> = {
   2: {
     side: "right",
     body:
-      "两种创建方式：\n" +
+      "创作项目有两种方式：\n" +
       "「新建空白项目」——先建一个空项目，不关联任何文件夹，素材之后再导入或生成；\n" +
-      "「导入已有文件夹」——选一个装着图片的文件夹，一键导入全部素材并建立项目。\n\n" +
-      "本引导走第二种：点击「导入已有文件夹」，选择「初始引导」文件夹，然后点右下角「选择文件夹」。\n\n" +
-      "tips：建议文件夹内只存放图片素材；项目建好后若通过外部应用添加了图片，可右键「更新项目文件」同步。",
+      "「导入已有文件夹」——选一个装着图片的文件夹，一键导入全部素材并建立项目。",
   },
   3: {
     side: "right",
     body:
+      "本引导走第二种：点击「导入已有文件夹」，选择「初始引导」文件夹，然后点右下角「选择文件夹」。\n\n" +
+      "tips：建议文件夹内只存放图片素材；项目建好后若通过外部应用添加了图片，可右键「更新项目文件」同步。\n\n" +
       "当前显示则为进入了项目的状态，采集、生成的图片默认归为该项目。\n" +
       "点击右侧的图标则退出项目，返回全局；\n" +
       "可通过右键菜单删除项目。",
@@ -46,16 +46,21 @@ const STEP_DEFS: Record<number, StepDef> = {
   7: {
     body: "先点一下这里，开始编辑。",
   },
-  8: {
+ 8: {
     body:
-      "再长按这张素材——它四周会出现维度环。（单击图片则是把它加进编辑框作参考图。）\n" +
-      "松开左键，环不会消失",
+      "再点击这张素材——它四周会出现维度环。（单击图片则是把它加进编辑框作参考图。）\n" +
+      "点击后环不会消失",
   },
   9: {
     body:
-      "环上每个扇区是这张图反推出的一个维度，用来精准控制生成的走向\n" +
-      "悬停扇区可预览该维度的反推内容，点击扇区即加入创作板，可连续添加多个。\n" +
-      "未经反推的素材没有维度，可通过右键菜单进行反推。",
+      <>
+        环上每个扇区是这张图反推出的一个维度，用来
+        <span className="text-accent underline">精准控制</span>
+        生成的走向{"\n"}
+        悬停扇区可预览该维度的反推内容，点击扇区即加入创作板，可连续添加多个。{"\n"}
+        未经反推的素材没有维度，可通过右键菜单进行反推。{"\n"}
+        也可以在设置中打开入库即自动反推的选项
+      </>,
   },
   10: {
     body: "点击环上的「构图」扇区，把它加入创作板（已选扇区会打 ✓ 变淡）。",
@@ -126,17 +131,17 @@ function editorTextEndCoords(): { x: number; y: number } | null {
 /**
  * 新手引导 tour（阶段 B，替代首启自动注入）。自写 spotlight（box-shadow 挖洞 z-70 + pulse ring
  * + 气泡 z-71）+ 虚拟鼠标（z-72，移动到目标 + 脉冲点击示意），零依赖。步骤：
- * 0 入口弹窗 → 1 点 + 开新建菜单 → 2 两种创建方式（锚菜单本体，选完文件夹转「导入中」）→
- * 3 进入项目状态（侧栏激活项目）→ 4 首图右键 →
+ * 0 入口弹窗 → 1 点 + 开新建菜单 → 2 两种创建方式（锚菜单本体并框选「导入已有文件夹」，
+ * 选完文件夹转「导入中」）→ 3 导入操作提示 + 进入项目状态（侧栏激活项目）→ 4 首图右键 →
  * 5 菜单复用 → 6 编辑框 → 7 虚拟鼠标示意点编辑框（用户真点）→ 8 虚拟鼠标指向 preset-05
- * （用户真长按 → 四周呼出维度环 CaptionRing）→ 9 高亮维度环 → 10 虚拟鼠标示意点
+ * （用户真点击 → 四周呼出维度环 CaptionRing）→ 9 高亮维度环 → 10 虚拟鼠标示意点
  * 环上「构图」扇区（用户真点）→ 11 高亮编辑框教关环手势（用户真关环）→ 12 高亮瀑布流
  * 讲创作模式左键行为【下一步】→ 13 虚拟鼠标指向「退出创作模式」页签（用户真点退出）→
  * 14 结束语。
  * 推进：1→2 + 按钮菜单打开（new-project-menu 事件，NewProjectMenu 广播）；
  * 2→3【下一步】（tourImported 后；step 2 期间收到 project-import-started 事件起脚注显「正在导入…」）；
  * 3→4【下一步】；4→5 右键首图（contextMenu）；5→6 点复用（board-load-prompt）；6→7【下一步】；
- * 7→8 用户真点编辑框；8→9 用户真长按瀑布流图（store.captionRing）；9→10【下一步】；
+ * 7→8 用户真点编辑框；8→9 用户真点击瀑布流图（store.captionRing）；9→10【下一步】；
  * 10→11 用户真点环上维度扇区（CaptionRing pick）；11→12 用户真关环（captionRing 收起，
  * CaptionRing 在 tourStep ≥ 11 起恢复移出/输入收起）；12→13【下一步】；13→14 用户真点
  * 「退出创作模式」（boardOpen 置 false）。
@@ -154,6 +159,7 @@ export function OnboardingTour() {
   // tour step 4 锁定「罂粟夜宴」（生成图，有可复用的 prompt_raw）；不依赖 assets[0]（排序不定）。
   const yysyAsset = assets.find((a) => a.name === "罂粟夜宴");
   const [rect, setRect] = useState<DOMRect | null>(null);
+  const [optionRect, setOptionRect] = useState<DOMRect | null>(null);
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
   // step 2 是否已选完文件夹（导入即将/正在跑）：脚注在「按提示操作」与「正在导入…」间切换。
   const [importStarted, setImportStarted] = useState(false);
@@ -188,6 +194,11 @@ export function OnboardingTour() {
             (document.querySelector(selector) as HTMLElement | null))
           : (document.querySelector(selector) as HTMLElement | null);
       setRect(el ? el.getBoundingClientRect() : null);
+      setOptionRect(
+        tourStep === 2
+          ? ((document.querySelector('[data-tour="new-project-import"]') as HTMLElement | null)?.getBoundingClientRect() ?? null)
+          : null
+      );
     };
     measure();
     const raf = requestAnimationFrame(measure);
@@ -283,7 +294,7 @@ export function OnboardingTour() {
     return () => el.removeEventListener("click", onClick);
   }, [tourStep, setTourStep]);
 
-  // step 8 → 9：用户真长按瀑布流图 → 维度环呼出（store.captionRing，长按是唯一调起方式）。
+  // step 8 → 9：用户真点击瀑布流图 → 创作模式内加参考图并呼出维度环（store.captionRing）。
   useEffect(() => {
     if (tourActive && tourStep === 8 && captionRing) setTourStep(9);
   }, [tourActive, tourStep, captionRing, setTourStep]);
@@ -414,6 +425,17 @@ export function OnboardingTour() {
             }}
           />
         </>
+      )}
+      {optionRect && (
+        <div
+          className="tour-option-frame"
+          style={{
+            left: optionRect.left - 3,
+            top: optionRect.top - 3,
+            width: optionRect.width + 6,
+            height: optionRect.height + 6,
+          }}
+        />
       )}
       {cursor && (
         <div className="tour-cursor" style={{ transform: `translate(${cursor.x}px, ${cursor.y}px)` }}>

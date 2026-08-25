@@ -65,13 +65,21 @@ async function jsonRequest(label, url, init, expectedStatuses = [200]) {
   return body;
 }
 
+async function requestWithStatus(url, init) {
+  const response = await fetch(url, { ...init, signal: AbortSignal.timeout(120_000) });
+  const text = await response.text();
+  let body;
+  try { body = text ? JSON.parse(text) : null; } catch { body = null; }
+  return { status: response.status, body };
+}
+
 async function createTempAccount(label) {
   const email = `agent-e2e-${Date.now()}-${randomBytes(4).toString("hex")}-${label}@example.test`;
   const password = `${randomBytes(16).toString("hex")}Aa1!`;
   const created = await jsonRequest(`创建临时账号(${label})`, `${baseUrl}/auth/v1/admin/users`, {
     method: "POST",
     headers: adminHeaders,
-    body: JSON.stringify({ email, password, email_confirm: true }),
+    body: JSON.stringify({ email, password, email_confirm: true, app_metadata: { bowerbird_test: true } }),
   });
   const session = await jsonRequest(`临时账号登录(${label})`, `${baseUrl}/auth/v1/token?grant_type=password`, {
     method: "POST",
@@ -117,24 +125,80 @@ try {
     [401],
   );
 
+  // ── concurrent create capacity: Free policy permits exactly one active Run
+  const capacityManifest = JSON.stringify({
+    schemaVersion: 1,
+    intentPrompt: "并发容量测试",
+    references: [],
+    ratio: "1:1",
+  });
+  const capacityKeys = [
+    `agent-capacity-${randomBytes(8).toString("hex")}`,
+    `agent-capacity-${randomBytes(8).toString("hex")}`,
+  ];
+  const capacityResults = await Promise.all(capacityKeys.map((idempotencyKey) => requestWithStatus(
+    functionUrl("agent-run"),
+    {
+      method: "POST",
+      headers: owner.headers,
+      body: JSON.stringify({
+        action: "create",
+        skillId: "bowerbird-controlled-image-edit",
+        goal: "并发容量测试",
+        inputCount: 0,
+        inputManifestHash: sha(capacityManifest),
+        idempotencyKey,
+      }),
+    },
+  )));
+  assert.deepEqual(
+    capacityResults.map((item) => item.status).sort((a, b) => a - b),
+    [200, 429],
+    `并发创建应恰有一个成功、一个被用户并发上限拒绝：${JSON.stringify(capacityResults)}`,
+  );
+  const capacityWinner = capacityResults.find((item) => item.status === 200)?.body;
+  const capacityLoser = capacityResults.find((item) => item.status === 429)?.body;
+  assert.ok(capacityWinner?.runId, "并发创建胜者缺少 runId");
+  assert.equal(capacityLoser?.error?.code, "rate_limited", "并发创建败者应返回 rate_limited");
+  await jsonRequest("取消并发容量测试 Run", functionUrl("agent-run"), {
+    method: "POST",
+    headers: owner.headers,
+    body: JSON.stringify({ action: "cancel", runId: capacityWinner.runId }),
+  });
+  for (const idempotencyKey of capacityKeys) {
+    const holds = await jsonRequest(
+      "读取并发容量测试 hold",
+      `${baseUrl}/rest/v1/credit_holds?idempotency_key=eq.${encodeURIComponent(idempotencyKey)}&select=id,status`,
+      { method: "GET", headers: adminHeaders },
+    );
+    assert.equal(holds.length, 1, "每个并发创建请求都应只有一个幂等 hold");
+    assert.equal(holds[0].status, "rolled_back", "胜者取消、败者拒绝后 hold 均应释放");
+  }
+
   // ── create → enqueue ──────────────────────────────────────────────────────
-  const manifestHash = sha(JSON.stringify({ inputs: ["a.png", "b.png"], goal: "测试精修" }));
+  const requestManifest = JSON.stringify({
+    schemaVersion: 1,
+    intentPrompt: "生成一张清爽极简风格的测试图",
+    references: [],
+    ratio: "1:1",
+  });
+  const manifestHash = sha(requestManifest);
   const idemKey = `agent-e2e-${randomBytes(8).toString("hex")}`;
   const created = await jsonRequest("创建 Run", functionUrl("agent-run"), {
     method: "POST",
     headers: owner.headers,
     body: JSON.stringify({
       action: "create",
-      skillId: "smart-refinement",
-      goal: "把这张图调整为清爽极简风格",
-      inputCount: 2,
+      skillId: "bowerbird-controlled-image-edit",
+      goal: "生成一张清爽极简风格的测试图",
+      inputCount: 0,
       inputManifestHash: manifestHash,
       idempotencyKey: idemKey,
     }),
   });
   assert.ok(created.runId, "create 未返回 runId");
   assert.ok(created.uploadUrl, "create 未返回上传地址");
-  assert.equal(created.budgetCredits, 15, "smart-refinement 预算应为 15 分");
+  assert.equal(created.budgetCredits, 9, "Free 受控编辑低档预算应为 9 分");
   const runId = created.runId;
 
   // create replay with same idempotency key must not double-hold
@@ -143,9 +207,9 @@ try {
     headers: owner.headers,
     body: JSON.stringify({
       action: "create",
-      skillId: "smart-refinement",
-      goal: "把这张图调整为清爽极简风格",
-      inputCount: 2,
+      skillId: "bowerbird-controlled-image-edit",
+      goal: "生成一张清爽极简风格的测试图",
+      inputCount: 0,
       inputManifestHash: manifestHash,
       idempotencyKey: idemKey,
     }),
@@ -156,7 +220,7 @@ try {
   const uploadResponse = await fetch(created.uploadUrl, {
     method: "PUT",
     headers: { ...created.uploadToken ? { authorization: `Bearer ${created.uploadToken}` } : {}, "content-type": "application/json", "x-upsert": "true" },
-    body: JSON.stringify({ goal: "把这张图调整为清爽极简风格", inputs: ["a.png", "b.png"] }),
+    body: requestManifest,
     signal: AbortSignal.timeout(60_000),
   });
   if (!uploadResponse.ok) throw new Error(`上传 request.json 失败（HTTP ${uploadResponse.status}）`);
@@ -172,6 +236,20 @@ try {
       inputManifestHash: manifestHash,
     }),
   }, [400]);
+
+  await jsonRequest("Codex 与 Agent 互斥", functionUrl("agent-run"), {
+    method: "POST",
+    headers: owner.headers,
+    body: JSON.stringify({
+      action: "create",
+      skillId: "bowerbird-controlled-image-edit",
+      goal: "不应建立 Codex Agent Run",
+      inputCount: 0,
+      inputManifestHash: manifestHash,
+      imageProvider: "codex",
+      idempotencyKey: `agent-codex-blocked-${randomBytes(8).toString("hex")}`,
+    }),
+  }, [409]);
 
   await jsonRequest("入队", functionUrl("agent-run"), {
     method: "POST",
@@ -240,7 +318,7 @@ try {
   await jsonRequest("tool_prepare", functionUrl("agent-worker"), {
     method: "POST",
     headers: workerHeaders,
-    body: JSON.stringify({ action: "tool_prepare", runId, leaseId, callId: "call-refine-1", phase: "refine", toolName: "refine_once", argsHash }),
+    body: JSON.stringify({ action: "tool_prepare", runId, leaseId, callId: "call-refine-1", phase: "refine", toolName: "model_turn", argsHash }),
   });
   await jsonRequest("tool_submitted", functionUrl("agent-worker"), {
     method: "POST",
@@ -344,6 +422,26 @@ try {
     body: JSON.stringify({ action: "checkpoint_commit", runId, leaseId, checkpointHash, snapshotSchemaVersion: 1, step: "score_dimensions", progress: 60 }),
   });
 
+  // A content-addressed checkpoint may be committed again when the worker
+  // parks immediately after registering a local task. The signed upload must
+  // therefore allow an idempotent overwrite of the same object key.
+  const replayUpload = await jsonRequest("checkpoint prepare 幂等重放", functionUrl("agent-worker"), {
+    method: "POST",
+    headers: workerHeaders,
+    body: JSON.stringify({ action: "checkpoint_prepare", runId, leaseId, checkpointHash, snapshotSchemaVersion: 1 }),
+  });
+  const replayPut = await fetch(replayUpload.uploadUrl, {
+    method: "PUT",
+    headers: { "content-type": "application/json", "x-upsert": "true" },
+    body: checkpointBody,
+  });
+  assert.equal(replayPut.ok, true, `checkpoint replay upload failed: ${replayPut.status}`);
+  await jsonRequest("checkpoint commit 幂等重放", functionUrl("agent-worker"), {
+    method: "POST",
+    headers: workerHeaders,
+    body: JSON.stringify({ action: "checkpoint_commit", runId, leaseId, checkpointHash, snapshotSchemaVersion: 1, step: "score_dimensions", progress: 60 }),
+  });
+
   // ── finish → settlement ───────────────────────────────────────────────────
   const finished = await jsonRequest("finish", functionUrl("agent-worker"), {
     method: "POST",
@@ -361,8 +459,33 @@ try {
   assert.equal(final.run.status, "succeeded");
   assert.equal(final.run.actual_credits, 1);
 
+  // A5-T5: one zero-amount business marker links this terminal Run to the
+  // append-only credit ledger without prompt/image/object-key content.
+  const runRows = await jsonRequest(
+    "读取终态 Run hold",
+    `${baseUrl}/rest/v1/agent_runs?id=eq.${encodeURIComponent(runId)}&select=hold_id`,
+    { method: "GET", headers: adminHeaders },
+  );
+  assert.equal(runRows.length, 1);
+  const markers = await jsonRequest(
+    "读取 Agent 账单标记",
+    `${baseUrl}/rest/v1/credit_transactions?hold_id=eq.${encodeURIComponent(runRows[0].hold_id)}&kind=eq.adjust&select=amount,meta`,
+    { method: "GET", headers: adminHeaders },
+  );
+  assert.equal(markers.length, 1, "每个终态 Agent Run 应恰有一个账单标记");
+  assert.equal(markers[0].amount, 0, "账单标记不得重复改变余额");
+  assert.deepEqual(
+    Object.keys(markers[0].meta).sort(),
+    ["actual_credits", "entity_type", "final_status", "image_provider", "pricing_version", "run_id", "skill_id", "skill_version"].sort(),
+    "账单标记只允许非内容技术字段",
+  );
+  assert.equal(markers[0].meta.entity_type, "agent_run");
+  assert.equal(markers[0].meta.run_id, runId);
+  assert.equal(markers[0].meta.final_status, "succeeded");
+  assert.equal(markers[0].meta.actual_credits, 1);
+
   console.log("AGENT_CONTROL_PLANE_OK");
-  console.log(`run=${runId} claimed=1 events=2 usage_credits=${finished.actualCredits}`);
+  console.log(`run=${runId} claimed=1 events=2 usage_credits=${finished.actualCredits} capacity=1/1 billing_marker=1`);
 } catch (error) {
   testError = error;
   console.error(error instanceof Error ? (error.stack ?? error.message) : error);

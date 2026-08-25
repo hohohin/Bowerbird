@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { ControlledRunnerCheckpoint } from "../kernel/controlled-image-edit-runner.ts";
 import { decodeControlledCheckpoint, encodeControlledCheckpoint } from "../kernel/controlled-checkpoint.ts";
+import type { ClarificationProposal } from "../contracts/clarification.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -44,6 +45,12 @@ export type ClaimedAgentRun = {
   inputUrl?: string | null;
   checkpointUrl?: string | null;
   feedbackUrl?: string | null;
+  clarificationAnswer?: null | {
+    questionKey: string;
+    contextHash: string;
+    intentPatchHash: string;
+    url: string;
+  };
   artifactUrls?: ClaimedArtifact[];
 };
 
@@ -98,6 +105,33 @@ export type AgentDisplayEvent = {
   step?: string;
   progress?: number;
   displayPayload?: Record<string, unknown>;
+};
+
+export type AgentRuntimeMetrics = {
+  measuredAt: string;
+  queueDepth: number;
+  oldestQueuedAgeSeconds: number;
+  activeRuns: number;
+  expiredLeases: number;
+  last24h: {
+    succeeded: number;
+    failed: number;
+    cancelled: number;
+    successRate: number | null;
+    averageCredits: number | null;
+    maxCredits: number | null;
+    failuresByCode: Record<string, number>;
+    sampleSize: number;
+    truncated: boolean;
+  };
+  testLast24h: {
+    succeeded: number;
+    failed: number;
+    cancelled: number;
+    sampleSize: number;
+    truncated: boolean;
+  };
+  ttlBacklog: { runs: number; artifacts: number };
 };
 
 export class AgentControlError extends Error {
@@ -160,6 +194,20 @@ export class AgentControlClient {
 
   async claim(): Promise<ClaimedAgentRun> {
     return await this.post({ action: "claim" }) as unknown as ClaimedAgentRun;
+  }
+
+  async cleanupExpired(): Promise<{ removedObjects: number; deletedEvents: number; expiredRuns: number; expiredParkedRuns: number }> {
+    const result = await this.post({ action: "cleanup_expired" });
+    return {
+      removedObjects: Number(result.removedObjects ?? 0),
+      deletedEvents: Number(result.deletedEvents ?? 0),
+      expiredRuns: Number(result.expiredRuns ?? 0),
+      expiredParkedRuns: Number(result.expiredParkedRuns ?? 0),
+    };
+  }
+
+  async metrics(): Promise<AgentRuntimeMetrics> {
+    return await this.post({ action: "metrics" }) as unknown as AgentRuntimeMetrics;
   }
 
   async heartbeat(runId: string, leaseId: string): Promise<AgentHeartbeat> {
@@ -456,6 +504,15 @@ export class AgentControlClient {
     estimatedAdditionalCredits: number;
   }): Promise<void> {
     await this.post({ action: "approval_request", ...args });
+  }
+
+  async requestClarification(args: {
+    runId: string;
+    leaseId: string;
+    proposal: ClarificationProposal;
+    proposalHash: string;
+  }): Promise<void> {
+    await this.post({ action: "clarification_request", ...args });
   }
 
   async awaitResultFeedback(runId: string, leaseId: string): Promise<void> {

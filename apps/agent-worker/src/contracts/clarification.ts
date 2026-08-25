@@ -18,6 +18,8 @@ export type ClarificationProposal = {
   question: string;
   recommendedAnswer: string;
   options: string[];
+  /** 每个展示答案对应的结构化补丁；用户只选答案，控制面据此编译 IntentPatch。 */
+  optionPatches: Array<{ answer: string; patches: IntentPatchOp[] }>;
   /** 声明会影响哪些 intent 字段；问题不涉 manifest 声明的字段则 Kernel 拒绝询问。 */
   affectedIntentFields: string[];
   rationale: string;

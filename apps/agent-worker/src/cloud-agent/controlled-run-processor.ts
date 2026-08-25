@@ -1,6 +1,10 @@
 import type { ControlledImageEditInput, ControlledRunArtifact } from "../contracts/controlled-image-edit.ts";
 import type { ModelBackend } from "../contracts/model.ts";
+import { MeteredModelBackend } from "../providers/deepseek/metered-model-backend.ts";
 import { advanceControlledRun, type ControlledRunControl } from "../kernel/controlled-run-engine.ts";
+import { clarificationProposalHash } from "../kernel/clarification-policy.ts";
+import type { IntentPatch } from "../contracts/clarification.ts";
+import { canonicalJson, sha256Hex } from "../kernel/tool-ledger.ts";
 import type {
   ApprovedStepExecutor,
   ControlledFeedbackDiagnoser,
@@ -133,6 +137,7 @@ function asControlledInput(value: unknown): ControlledImageEditInput {
 
 export class ControlledImageEditRunProcessor implements AgentRunProcessor {
   private readonly model: ModelBackend;
+  private readonly meteredModelName?: string;
   private readonly executorFactory: (context: AgentRunContext) => ApprovedStepExecutor | {
     executor: ApprovedStepExecutor;
     diagnoser?: ControlledFeedbackDiagnoser;
@@ -143,9 +148,10 @@ export class ControlledImageEditRunProcessor implements AgentRunProcessor {
     executor: ApprovedStepExecutor;
     diagnoser?: ControlledFeedbackDiagnoser;
     cleanup(): void;
-  }) {
+  }, options: { meteredModelName?: string } = {}) {
     this.model = model;
     this.executorFactory = executorFactory;
+    this.meteredModelName = options.meteredModelName;
   }
 
   async process(context: AgentRunContext): Promise<void> {
@@ -168,7 +174,17 @@ export class ControlledImageEditRunProcessor implements AgentRunProcessor {
     const executor = "executor" in scope ? scope.executor : scope;
     const diagnoser = "executor" in scope ? scope.diagnoser : undefined;
     const feedbackText = await this.feedbackText(context);
+    const clarificationPatch = await this.clarificationPatch(context, checkpoint ?? undefined);
     const control = this.control(context);
+    const model = this.meteredModelName
+      ? new MeteredModelBackend({
+          base: this.model,
+          control: context.control,
+          runId: run.id,
+          leaseId: context.claimed.lease.leaseId,
+          model: this.meteredModelName,
+        })
+      : this.model;
     const result = await advanceControlledRun({
       claim: {
         runId: run.id,
@@ -179,9 +195,10 @@ export class ControlledImageEditRunProcessor implements AgentRunProcessor {
         feedbackText,
       },
       checkpoint: checkpoint ?? undefined,
+      clarificationPatch,
       input,
       inputArtifacts,
-      model: this.model,
+      model,
       executor,
       diagnoser,
       control,
@@ -204,6 +221,33 @@ export class ControlledImageEditRunProcessor implements AgentRunProcessor {
       throw new Error("agent_feedback_payload_invalid");
     }
     return payload.text.trim() || undefined;
+  }
+
+  private async clarificationPatch(
+    context: AgentRunContext,
+    checkpoint?: ControlledRunnerCheckpoint,
+  ): Promise<IntentPatch | undefined> {
+    if (checkpoint?.status !== "awaiting_clarification" || !checkpoint.pendingClarification) return undefined;
+    const answer = context.claimed.clarificationAnswer;
+    if (!answer) return undefined;
+    if (answer.questionKey !== checkpoint.pendingClarification.questionKey ||
+        answer.contextHash !== checkpoint.pendingClarification.contextHash ||
+        !/^[0-9a-f]{64}$/.test(answer.intentPatchHash)) {
+      throw new Error("agent_clarification_claim_mismatch");
+    }
+    const bytes = await context.control.download(answer.url);
+    if (!bytes.byteLength || bytes.byteLength > 16 * 1024) throw new Error("agent_clarification_answer_size_invalid");
+    let wrapper: unknown;
+    try { wrapper = JSON.parse(new TextDecoder().decode(bytes)); }
+    catch { throw new Error("agent_clarification_answer_json_invalid"); }
+    if (!wrapper || typeof wrapper !== "object" || Array.isArray(wrapper)) {
+      throw new Error("agent_clarification_answer_json_invalid");
+    }
+    const patch = (wrapper as Record<string, unknown>).intentPatch as IntentPatch;
+    if (!patch || typeof patch !== "object" || sha256Hex(canonicalJson(patch)) !== answer.intentPatchHash) {
+      throw new Error("agent_clarification_patch_hash_mismatch");
+    }
+    return patch;
   }
 
   private inputArtifacts(context: AgentRunContext, input: ControlledImageEditInput): ControlledRunArtifact[] {
@@ -255,6 +299,14 @@ export class ControlledImageEditRunProcessor implements AgentRunProcessor {
           proposal: checkpoint.proposedPlan as unknown as Record<string, unknown>,
           plannedToolCount: checkpoint.plannedToolCount,
           estimatedAdditionalCredits,
+        });
+      },
+      requestClarification: async ({ proposal }) => {
+        await context.control.requestClarification({
+          runId,
+          leaseId,
+          proposal,
+          proposalHash: clarificationProposalHash(proposal),
         });
       },
       awaitResultFeedback: async (_checkpoint: ControlledRunnerCheckpoint) => {

@@ -322,7 +322,9 @@ kbd { padding: 1px 5px; border: 1px solid var(--line); border-radius: 4px; backg
 .footer-links strong { margin-bottom: 7px; font-size: 11px; }
 .footer-links a { color: var(--muted); font-size: 10px; }
 .footer-links a:hover { color: var(--ink); }
-.footer-bottom { padding-top: 20px; border-top: 1px solid var(--line); display: flex; justify-content: space-between; color: var(--faint); font-size: 9px; }
+.footer-bottom { padding-top: 20px; border-top: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 16px; color: var(--faint); font-size: 9px; }
+.footer-record-link { color: inherit; text-align: center; white-space: nowrap; }
+.footer-record-link:hover { color: var(--ink); }
 
 .reveal { opacity: 1; transform: none; }
 .js .reveal { opacity: 0; transform: translateY(22px); transition: opacity .65s ease, transform .65s ease; }
@@ -404,4 +406,5 @@ kbd { padding: 1px 5px; border: 1px solid var(--line); border-radius: 4px; backg
   .site-footer { padding-inline: 24px; }
   .footer-main { grid-template-columns: 1fr; gap: 50px; }
   .footer-bottom { flex-direction: column; gap: 8px; }
+  .footer-record-link { white-space: normal; }
 }

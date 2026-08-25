@@ -4,6 +4,7 @@ export function cloudAgentStatusLabel(status: string): string {
     queued: "已进入队列",
     leased: "Agent 已领取任务",
     running: "Agent 正在规划或执行",
+    awaiting_clarification: "等待你回答一个关键问题",
     awaiting_approval: "等待你批准计划",
     awaiting_local_task: "等待本机生成",
     awaiting_result_feedback: "等待你验收结果",

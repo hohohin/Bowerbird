@@ -60,7 +60,7 @@ cd apps/cloud
 npx --yes supabase@latest --agent no db push
 ```
 
-会依次执行 `supabase/migrations/0001_*.sql` 到 `0019_understand_jobs.sql`。`0010` 必须先于新版 `generate-proxy` / `understand-proxy`；`0011` 必须先于新版 `entitlement` / `generate-proxy` / `understand-proxy`；`0015` 必须先于异步版 `generate-proxy`、`generation-worker` 与 VPS consumer；`0019` 必须先于异步版 `understand-proxy`、`understand-worker` 与 VPS understand consumer。
+会按文件名顺序执行全部本地迁移；当前 Agent Runtime 要求至少到 `0039_agent_clarification_answer.sql`。`0010` 必须先于新版 `generate-proxy` / `understand-proxy`；`0011` 必须先于新版 `entitlement` / `generate-proxy` / `understand-proxy`；`0015` 必须先于异步版 `generate-proxy`、`generation-worker` 与 VPS consumer；`0019` 必须先于异步版 `understand-proxy`、`understand-worker` 与 VPS understand consumer；`0028`–`0030` 必须先于支持 Codex/即梦本机生图停车交接的链路；`0031`/`0032` 必须先于文本 usage 可信计量和定时 TTL 清理版 `agent-worker`；`0033`/`0034` 必须先于 Agent 账单 marker 与原子容量闸版 `entitlement` / `agent-run`；`0035` 负责过期未租约 parked Run 的原子取消，`0036` 负责生产/测试监控样本隔离，`0037`/`0038` 修复已部署早期迁移遗留的 Codex Run、本机任务与 usage provider 数据库约束，`0039` 原子应用有限澄清答案并使旧计划审批失效。
 
 ### 4. 部署 Edge Functions 并注入 Secrets
 
@@ -91,6 +91,7 @@ supabase secrets set COST_CNY_PER_CREDIT=0.047
 supabase secrets set ARK_IMAGE_TIMEOUT_MS=135000
 supabase secrets set PROXY_TIMEOUT_MS=140000
 supabase secrets set RATE_LIMIT_PER_USER_PER_MIN=10
+supabase secrets set AGENT_GLOBAL_ACTIVE_LIMIT=100
 supabase secrets set BOWERBIRD_CLOUD_MOCK=false
 supabase secrets set GENERATION_WORKER_TOKEN=$GENERATION_WORKER_TOKEN
 supabase secrets set UNDERSTAND_WORKER_TOKEN=$UNDERSTAND_WORKER_TOKEN
@@ -101,7 +102,7 @@ supabase secrets set SUPERUN_WEBHOOK_SECRET=$SUPERUN_WEBHOOK_SECRET
 
 > ⚠️ 目前 `.env` 里 `BOWERBIRD_CLOUD_MOCK=false` 已开启真实方舟；`BOWERBIRD_PAYMENT_MOCK=true` 保持 Mock 支付，**不要**提前改 false。
 
-`generation-worker` / `understand-worker` 必须使用 `--no-verify-jwt` 部署，因为 VPS 使用专用 Worker Token 而不是用户 JWT；Function 内部会常量时间校验各自的 `GENERATION_WORKER_TOKEN` / `UNDERSTAND_WORKER_TOKEN`。VPS 只持这些 Token 与方舟 Key，绝不能持 Supabase secret/service-role。
+`generation-worker` / `understand-worker` / `agent-worker` 必须使用 `--no-verify-jwt` 部署，因为 VPS 使用专用 Worker Token 而不是用户 JWT；Function 内部会常量时间校验各自的 `GENERATION_WORKER_TOKEN` / `UNDERSTAND_WORKER_TOKEN` / `AGENT_WORKER_TOKEN`。VPS 只持这些 Token、DeepSeek 与方舟 Key，绝不能持 Supabase secret/service-role。
 
 `understand-proxy` 由 `UNDERSTAND_ASYNC` 开关控制双模式（默认 `false` 保持旧的同步单次请求行为）。上线顺序：先部署函数（开关关）→ 更新 VPS 容器 → 发布新版桌面端（create/轮询兼容两种响应）→ 最后 `supabase secrets set UNDERSTAND_ASYNC=true` 切到异步任务模式，摆脱 Edge 墙钟上限。观察稳定后旧同步路径随生图 135/140s 回退一并移除。
 
@@ -134,7 +135,7 @@ sudo docker compose -f compose.generation.yml ps
 sudo docker compose -f compose.generation.yml logs --tail 50
 ```
 
-容器不映射入站端口、只读根文件系统、非 root、丢弃全部 capabilities。容器入口为 `src/main.ts` 组合入口：按 `GENERATION_CONTROL_URL` / `UNDERSTAND_CONTROL_URL` 是否配置分别启动生图与理解两个消费循环，互不阻塞。方舟同步请求（生图与理解）不设置 120/135 秒主动终止；等待期间每 30 秒向 Bowerbird 控制面续租。
+容器不映射入站端口、只读根文件系统、非 root、丢弃全部 capabilities，并限制 1536 MiB 内存、1.75 CPU、256 PID、256 MiB workspace tmpfs 与 10 MiB × 3 JSON 日志。容器入口为 `src/main.ts` 组合入口：按 `GENERATION_CONTROL_URL` / `UNDERSTAND_CONTROL_URL` / `AGENT_CONTROL_URL` 是否配置分别启动生图、理解与 Agent 三个消费循环，互不阻塞。方舟同步请求（生图与理解）不设置 120/135 秒主动终止；等待期间每 30 秒向 Bowerbird 控制面续租。Agent 循环每 10 分钟运行 TTL/orphan 清理并输出不含用户内容的控制面与磁盘健康指标；可在运维端运行 `node apps/cloud/scripts/check-agent-runtime-health.mjs` 做阈值探测。
 
 ### 5. 部署 Auth 钩子（注册即发 30 分）
 
@@ -171,6 +172,11 @@ node scripts/test-understand-e2e.mjs basic     # 真实 Vision 反推 + 失败�
 node scripts/test-understand-e2e.mjs guard     # 幂等重放 + 越权 404
 node scripts/test-understand-e2e.mjs crash-create   # 配合 VPS 上 kill -9 Worker：输出 CRASH_JOB_ID
 node scripts/test-understand-e2e.mjs crash-check <CRASH_JOB_ID>  # Worker 重启后验证 outcome_unknown 冻结
+
+# 5. Agent 控制面（不调用模型、Vision 或生图；并发脚本只在 claimable Agent 队列为空时运行）
+node --env-file=.env scripts/test-agent-clarification.mjs
+node --env-file=.env scripts/test-agent-concurrent-claim.mjs
+node --env-file=.env scripts/check-agent-runtime-health.mjs
 ```
 
 ## 7. 桌面端/官网真机验收

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import {
@@ -15,6 +15,29 @@ export type WorkspaceImage = {
 };
 
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+export const ORPHAN_WORKSPACE_MAX_AGE_MS = 24 * 60 * 60 * 1_000;
+
+/** Remove only old, per-Run directories created beneath the configured workspace root. */
+export function cleanupOrphanWorkspaces(
+  rootPath: string,
+  maxAgeMs = ORPHAN_WORKSPACE_MAX_AGE_MS,
+  nowMs = Date.now(),
+): number {
+  if (!Number.isSafeInteger(maxAgeMs) || maxAgeMs <= 0) throw new Error("agent_workspace_cleanup_age_invalid");
+  const root = resolve(rootPath);
+  if (!existsSync(root)) return 0;
+  let removed = 0;
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !/^[A-Za-z0-9-]{1,80}$/.test(entry.name)) continue;
+    const path = resolve(root, entry.name);
+    if (path === root || !path.startsWith(`${root}\\`) && !path.startsWith(`${root}/`)) continue;
+    const ageMs = nowMs - statSync(path).mtimeMs;
+    if (ageMs < maxAgeMs) continue;
+    rmSync(path, { recursive: true, force: true });
+    removed++;
+  }
+  return removed;
+}
 
 function imageMime(bytes: Uint8Array): WorkspaceImage["mime"] | null {
   if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47 &&

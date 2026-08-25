@@ -5,6 +5,7 @@ export type ErrorCode =
   | "rate_limited"
   | "upstream_failed"
   | "cost_limit_reached"
+  | "capacity_reached"
   | "upstream_timeout"
   | "invalid_request"
   | "not_configured"
@@ -18,6 +19,7 @@ const STATUS: Record<ErrorCode, number> = {
   rate_limited: 429,
   upstream_failed: 502,
   cost_limit_reached: 503,
+  capacity_reached: 503,
   upstream_timeout: 504,
   invalid_request: 400,
   not_configured: 503,

@@ -1966,6 +1966,21 @@ body.app-sidebar-resizing * {
   animation: tour-pulse 1.6s ease-in-out infinite;
   z-index: 70;
 }
+/* 新建菜单里「导入已有文件夹」的框选：盖在菜单（z-80）之上，仅视觉提示，不挡点击。 */
+.tour-option-frame {
+  position: fixed;
+  border: 2px solid rgba(124, 156, 255, 0.95);
+  border-radius: 8px;
+  background: rgba(124, 156, 255, 0.08);
+  box-shadow: 0 0 0 4px rgba(124, 156, 255, 0.16);
+  pointer-events: none;
+  animation: tour-option-pulse 1.6s ease-in-out infinite;
+  z-index: 81;
+}
+@keyframes tour-option-pulse {
+  0%, 100% { box-shadow: 0 0 0 4px rgba(124, 156, 255, 0.16); }
+  50% { box-shadow: 0 0 0 7px rgba(124, 156, 255, 0.32); }
+}
 @keyframes tour-pulse {
   0%, 100% { box-shadow: 0 0 0 2px rgba(124, 156, 255, 0.9); }
   50% { box-shadow: 0 0 0 5px rgba(124, 156, 255, 0.35); }
