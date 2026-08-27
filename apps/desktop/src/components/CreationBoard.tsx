@@ -9,6 +9,7 @@ import { useCreationEditor } from "./creation/useCreationEditor";
 import { RATIOS } from "./creation/ratios";
 import { RatioSelect } from "./creation/RatioSelect";
 import { ProviderSelect } from "./creation/ProviderSelect";
+import { VisualProfileSelect } from "./creation/VisualProfileSelect";
 import { BoardChipPreview } from "./creation/BoardChipPreview";
 import { ChevronDown, Info, Sparkles } from "lucide-react";
 
@@ -79,6 +80,9 @@ export function CreationBoard() {
   const cloudAgentRuns = useStore((s) => s.cloudAgentRuns);
   const pendingAgentArm = useStore((s) => s.pendingAgentArm);
   const clearPendingAgentArm = useStore((s) => s.clearPendingAgentArm);
+  const settings = useStore((s) => s.settings);
+  const activeVisualProfileId = useStore((s) => s.activeVisualProfileId);
+  const setActiveVisualProfile = useStore((s) => s.setActiveVisualProfile);
 
   // consumePendingKeyword：本板是维度环点选（pendingKeyword）的唯一消费方（编辑坞不抢）。
   // initialEmpty：空文档开局（配 is-empty 占位「描述你的意图，开始创作吧」；有草稿仍恢复），
@@ -129,6 +133,14 @@ export function CreationBoard() {
   const agentDsAvailable = agentAvailable && AGENT_DS_ENABLED;
   const [agentDsMode, setAgentDsMode] = useState(false);
   const [agentDsBusy, setAgentDsBusy] = useState(false);
+  // 设置「开发者选项」的对话框模式开关（settings 未加载 = 默认：仅正式 Agent 开）。
+  // 关闭的模式按钮不渲染；可用性健康检查（agentAvailable / agentZAvailable / codexHealth）照常叠加。
+  const agentModeOn = settings?.agent_mode_enabled ?? true;
+  const agentAOn = settings?.agent_a_mode_enabled ?? false;
+  const agentBOn = settings?.agent_b_mode_enabled ?? false;
+  const agentZOn = settings?.agent_z_mode_enabled ?? false;
+  const agentGOn = settings?.agent_g_mode_enabled ?? false;
+  const agentDsOn = settings?.agent_ds_mode_enabled ?? false;
   const activePreset = useMemo(
     () => presets.find((p) => p.id === activePresetId) ?? null,
     [presets, activePresetId]
@@ -160,6 +172,19 @@ export function CreationBoard() {
     setAgentDsMode(false);
     clearPendingAgentArm();
   }, [pendingAgentArm, clearPendingAgentArm]);
+
+  // 设置里关闭的模式：隐藏按钮同时复位其激活态（含「开启 Agent 模式再试」等异步置位路径）。
+  useEffect(() => {
+    if (!agentModeOn && cloudAgentMode) setCloudAgentMode(false);
+    if (!agentAOn && agentMode === "a") setAgentMode("off");
+    if (!agentBOn && agentMode === "b") setAgentMode("off");
+    if (!agentZOn && agentZMode) setAgentZMode(false);
+    if (!agentGOn && agentGMode) setAgentGMode(false);
+    if (!agentDsOn && agentDsMode) setAgentDsMode(false);
+  }, [
+    agentModeOn, agentAOn, agentBOn, agentZOn, agentGOn, agentDsOn,
+    cloudAgentMode, agentMode, agentZMode, agentGMode, agentDsMode,
+  ]);
 
   // —— 底部浮动对话框形态（收起/展开规则，优先级从高到低；改这里先核对不打架）——
   // ① 退出创作模式（exitCreationMode）：取消在途自动浮回；非首屏立即收起、首屏保持展开；
@@ -313,6 +338,7 @@ export function CreationBoard() {
           ratio,
           projectId: useStore.getState().currentProjectId,
           imageProvider: agentImageProvider,
+          visualProfileId: activeVisualProfileId,
         });
         openCloudAgentRun(run);
         notifySuccess("Agent 会话已创建，正在进行纯文本意图分析");
@@ -668,6 +694,11 @@ export function CreationBoard() {
           <div className={`${agentZMode || agentGMode || agentDsMode ? "pointer-events-none opacity-40" : ""}`}>
             <RatioSelect value={ratio} onChange={selectRatio} />
           </div>
+          <VisualProfileSelect
+            value={activeVisualProfileId}
+            onChange={setActiveVisualProfile}
+            disabled={agentZMode || agentGMode || agentDsMode}
+          />
           <div className={`${agentZMode || agentGMode || agentDsMode ? "pointer-events-none opacity-40" : ""}`}>
             <ProviderSelect
               value={activeGenProvider}
@@ -681,6 +712,7 @@ export function CreationBoard() {
               onSetDefaultProvider={setDefaultProvider}
             />
           </div>
+          {agentModeOn && (
           <button
             type="button"
             role="switch"
@@ -721,8 +753,10 @@ export function CreationBoard() {
               Agent
             </span>
           </button>
-          {agentAvailable && (
+          )}
+          {agentAvailable && (agentAOn || agentBOn) && (
             <>
+              {agentAOn && (
               <button
                 type="button"
                 role="switch"
@@ -739,6 +773,8 @@ export function CreationBoard() {
                   Agent A
                 </span>
               </button>
+              )}
+              {agentBOn && (
               <button
                 type="button"
                 role="switch"
@@ -755,9 +791,10 @@ export function CreationBoard() {
                   Agent B
                 </span>
               </button>
+              )}
             </>
           )}
-          {agentZAvailable && (
+          {agentZAvailable && agentZOn && (
             <button
               type="button"
               role="switch"
@@ -781,7 +818,7 @@ export function CreationBoard() {
               </span>
             </button>
           )}
-          {agentZAvailable && codexHealth?.ok && (
+          {agentZAvailable && codexHealth?.ok && agentGOn && (
             <button
               type="button"
               role="switch"
@@ -805,7 +842,7 @@ export function CreationBoard() {
               </span>
             </button>
           )}
-          {agentDsAvailable && (
+          {agentDsAvailable && agentDsOn && (
             <button
               type="button"
               role="switch"

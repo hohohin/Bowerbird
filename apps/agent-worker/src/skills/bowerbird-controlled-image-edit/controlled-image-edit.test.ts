@@ -32,7 +32,7 @@ import { loadControlledImageEditSkill } from "./loader.ts";
 import { analyzeControlledIntent, composeControlledPlan } from "./model-planner.ts";
 import { CONTROLLED_IMAGE_EDIT_MANIFEST } from "./manifest.ts";
 import { evaluatePolicy } from "../../kernel/policy-engine.ts";
-import { ToolLedger } from "../../kernel/tool-ledger.ts";
+import { canonicalJson, sha256Hex, ToolLedger } from "../../kernel/tool-ledger.ts";
 
 const H1 = "1".repeat(64);
 const H2 = "2".repeat(64);
@@ -173,7 +173,7 @@ test("Kernel resolves automatic output ratio from the text-bound final subject",
   const checkpoint = createControlledRunnerCheckpoint({
     runId: "run-subject-ratio",
     conversationId: "conversation-subject-ratio",
-    skillVersion: "0.1.1",
+    skillVersion: "0.1.2",
     skillHash: "a".repeat(64),
     input: runInput,
   });
@@ -184,7 +184,7 @@ test("Kernel resolves automatic output ratio from the text-bound final subject",
   const explicit = recordControlledIntentAnalysis(createControlledRunnerCheckpoint({
     runId: "run-explicit-ratio",
     conversationId: "conversation-explicit-ratio",
-    skillVersion: "0.1.1",
+    skillVersion: "0.1.2",
     skillHash: "a".repeat(64),
     input: runInput,
   }), analysis());
@@ -194,7 +194,7 @@ test("Kernel resolves automatic output ratio from the text-bound final subject",
 test("built-in skill loader pins one instruction hash for analysis and planning", () => {
   const analysisTurn = loadControlledImageEditSkill();
   const planningTurn = loadControlledImageEditSkill();
-  equal(analysisTurn.version, "0.1.1");
+  equal(analysisTurn.version, "0.1.2");
   equal(analysisTurn.instructionHash, planningTurn.instructionHash);
   ok(analysisTurn.instructions.includes("计划可以是单步"));
   ok(analysisTurn.instructions.includes("用户不必写引用 token、底图、保持项或专业控制术语"));
@@ -399,7 +399,7 @@ test("runner executes exactly the approved dynamic steps and groups every artifa
   let checkpoint = createControlledRunnerCheckpoint({
     runId: "run-controlled-1",
     conversationId: "conversation-1",
-    skillVersion: "0.1.1",
+    skillVersion: "0.1.2",
     skillHash: "a".repeat(64),
     input: input(),
   });
@@ -441,7 +441,7 @@ test("runner resolves a control-plane input artifact by reference stepId, not a 
   let checkpoint = createControlledRunnerCheckpoint({
     runId: "run-remote-input",
     conversationId: "conversation-remote-input",
-    skillVersion: "0.1.1",
+    skillVersion: "0.1.2",
     skillHash: "a".repeat(64),
     input: runInput,
     inputArtifacts: runInput.references.map((reference) => ({
@@ -474,7 +474,7 @@ test("rejected approval produces no generation and approved plan mutation is den
   let rejected = createControlledRunnerCheckpoint({
     runId: "run-rejected",
     conversationId: "conversation-rejected",
-    skillVersion: "0.1.1",
+    skillVersion: "0.1.2",
     skillHash: "a".repeat(64),
     input: directInput(),
   });
@@ -485,7 +485,7 @@ test("rejected approval produces no generation and approved plan mutation is den
   let approved = createControlledRunnerCheckpoint({
     runId: "run-mutated",
     conversationId: "conversation-mutated",
-    skillVersion: "0.1.1",
+    skillVersion: "0.1.2",
     skillHash: "a".repeat(64),
     input: directInput(),
   });
@@ -508,7 +508,7 @@ test("vision remains forbidden through first result and opens only after user re
   let checkpoint = createControlledRunnerCheckpoint({
     runId: "run-feedback",
     conversationId: "conversation-feedback",
-    skillVersion: "0.1.1",
+    skillVersion: "0.1.2",
     skillHash: "a".repeat(64),
     input: directInput(),
   });
@@ -706,5 +706,45 @@ test("explicit preference capsule is read-only untrusted planning context", asyn
     () => validateControlledInput(runInput),
     (error: unknown) => error instanceof ControlledPlanValidationError &&
       error.safeCode === "controlled_preference_capsule_invalid",
+  );
+});
+
+test("confirmed visual profile is hash-bound untrusted context and explicit task stays higher priority", async () => {
+  const payload = {
+    schemaVersion: 1 as const,
+    profileId: "profile-1",
+    version: 2,
+    sourceScopeHash: "scope-1",
+    summary: "项目视觉",
+    must: [{ category: "palette" as const, value: "低饱和", polarity: "must" as const }],
+    prefer: [{ category: "composition" as const, value: "留白", polarity: "prefer" as const }],
+    avoid: [{ category: "light" as const, value: "硬闪", polarity: "avoid" as const }],
+    contentThemes: ["茶具"],
+  };
+  const runInput: ControlledImageEditInput = {
+    ...input(),
+    intentPrompt: "明确改成高饱和红色，其他未说明部分沿用项目视觉",
+    visualProfileCapsule: { ...payload, hash: sha256Hex(canonicalJson(payload)) },
+  };
+  const requests: ModelTurnRequest[] = [];
+  const model: ModelBackend = {
+    id: "fake",
+    async turn(request) {
+      requests.push(request);
+      return { kind: "action", action: "record_intent_analysis", arguments: { analysis: analysis() }, providerUsage: {} };
+    },
+  };
+  await analyzeControlledIntent({ runId: "run-profile", input: runInput, model });
+  const block = requests[0].context.find((item) => item.kind === "visual_profile_capsule");
+  equal(block?.trust, "untrusted");
+  equal(block?.contentHash, runInput.visualProfileCapsule?.hash);
+  ok(requests[0].systemPolicy.includes("explicit user task overrides"));
+  ok(JSON.stringify(block?.body).includes("contentThemes are background only"));
+
+  runInput.visualProfileCapsule!.summary = "tampered";
+  throws(
+    () => validateControlledInput(runInput),
+    (error: unknown) => error instanceof ControlledPlanValidationError &&
+      error.safeCode === "controlled_visual_profile_capsule_invalid",
   );
 });

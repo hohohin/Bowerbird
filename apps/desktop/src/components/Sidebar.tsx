@@ -562,6 +562,8 @@ function FolderRow({ folder }: { folder: Folder }) {
   const setCurrentFolder = useStore((s) => s.setCurrentFolder);
   const setCurrentCollection = useStore((s) => s.setCurrentCollection);
   const reloadFolders = useStore((s) => s.reloadFolders);
+  const currentProjectId = useStore((s) => s.currentProjectId);
+  const openVisualProfile = useStore((s) => s.openVisualProfile);
   const isSmart = folder.kind === "smart";
   const isCollection = folder.kind === "collection";
   const active = isCollection ? currentCollectionId === folder.id : currentFolderId === folder.id;
@@ -703,6 +705,18 @@ function FolderRow({ folder }: { folder: Folder }) {
         {isSmart ? "🔍" : isCollection ? "★" : "📁"} {folder.name}
       </span>
       <span className={`flex items-center gap-0.5 ${actionCls}`}>
+        {!isSmart && !isCollection && currentProjectId && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              openVisualProfile({ id: folder.id, name: folder.name });
+            }}
+            className="rounded px-1 text-xs text-muted hover:text-accent"
+            title="提炼视觉设定（只读已有反推文字，不上传图片）"
+          >
+            ✦
+          </button>
+        )}
         <button
           onClick={(e) => {
             e.stopPropagation();

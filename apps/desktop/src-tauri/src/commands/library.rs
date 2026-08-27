@@ -333,6 +333,7 @@ fn empty_asset(id: String) -> Asset {
         created_at: None,
         file_mtime: None,
         generation_session_id: None,
+        reference_count: 0,
     }
 }
 

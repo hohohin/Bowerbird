@@ -2,7 +2,7 @@ import type { SkillManifest } from "../../contracts/skill.ts";
 
 export const CONTROLLED_IMAGE_EDIT_MANIFEST: SkillManifest = {
   id: "bowerbird-controlled-image-edit",
-  version: "0.1.1",
+  version: "0.1.2",
   kernelMinVersion: "0.1.0",
   snapshotSchemaVersion: 1,
   title: "Bowerbird 受控图片编辑",
@@ -15,6 +15,7 @@ export const CONTROLLED_IMAGE_EDIT_MANIFEST: SkillManifest = {
       intentPrompt: { type: "string", minLength: 1, maxLength: 4_000 },
       references: { type: "array", minItems: 0, maxItems: 8 },
       preferenceCapsule: { type: "object" },
+      visualProfileCapsule: { type: "object" },
     },
   },
   artifactSchema: {
@@ -75,6 +76,6 @@ export const CONTROLLED_IMAGE_EDIT_MANIFEST: SkillManifest = {
   maxGenerateAttempts: 8,
   clarifications: {
     maxPerRun: 3,
-    intentFields: ["finalSubjectReferenceId", "mustTransfer", "highConsistencySignals", "strategy", "budget"],
+    intentFields: ["finalSubjectReferenceId", "mustTransfer", "highConsistencySignals", "strategy", "budget", "visualProfilePriority"],
   },
 };

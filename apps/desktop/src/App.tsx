@@ -6,6 +6,7 @@ import { MasonryGrid } from "./components/MasonryGrid";
 import { AssetDetail } from "./components/AssetDetail";
 import { AssetContextMenu } from "./components/AssetContextMenu";
 import { ProjectContextMenu } from "./components/ProjectContextMenu";
+import { VisualProfileDialog } from "./components/VisualProfileDialog";
 import { ImageAnnotator } from "./components/ImageAnnotator";
 import { CaptionRing } from "./components/creation/CaptionRing";
 import { DescribeProviderPicker } from "./components/DescribeProviderPicker";
@@ -23,7 +24,7 @@ import { ToastViewport } from "./components/ToastViewport";
 import { useStore } from "./store";
 import { api } from "./lib/api";
 import { notify, notifyError, notifySuccess } from "./lib/notify";
-import type { AuthSnapshot, CodexChunk } from "./lib/types";
+import type { AuthSnapshot, CodexChunk, JimengOrphanTask } from "./lib/types";
 
 let refreshVersion = 0;
 
@@ -87,6 +88,15 @@ function App() {
       const state = useStore.getState();
       if (state.cloudAuth?.logged_in) void state.syncCloudEntitlement();
     }, 6 * 60 * 60 * 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  // 每分钟静默对账：Fresh 时只是本地读（无网络）；降级态由 Rust 在线自愈并回写 store。
+  // 修复：Pro 账号在重启/网络瞬断/超 6h 窗口后被显示成 free，需要手动刷新才恢复。
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void useStore.getState().reconcileCloudEntitlement();
+    }, 60 * 1000);
     return () => window.clearInterval(timer);
   }, []);
 
@@ -368,6 +378,23 @@ function App() {
     };
   }, []);
 
+  // 即梦孤儿任务（约定 23 阶段 3）：启动 list_task 比对发现的远端在跑/未取回任务，
+  // 进会话面板「生成」tab 顶部的取回入口。
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    let alive = true;
+    listen<JimengOrphanTask[]>("codex://jimeng-orphans", (e) => {
+      useStore.getState().setJimengOrphans(e.payload);
+    }).then((u) => {
+      if (alive) unlisten = u;
+      else u();
+    });
+    return () => {
+      alive = false;
+      unlisten?.();
+    };
+  }, []);
+
   // Agent Z / Agent DS（dev-only）回传：后端 watcher 转发 .agent-z/inbox 事件。无 kind =
   // Claude Code TUI 桥的纯文本回传 → 追加进创作板（原行为）；ds_reply = Agent DS 终答
   // （同追加）；ds_status = Agent DS 阶段通知（tool 进行中提示 / done、error 解除 busy）。
@@ -552,6 +579,7 @@ function App() {
       <AssetContextMenu />
       {/* 项目右键菜单（全局单实例，store.projectContextMenu 驱动） */}
       <ProjectContextMenu />
+      <VisualProfileDialog />
       {/* 图片标注面板（全局单实例，store.annotator 驱动，全屏遮罩） */}
       <ImageAnnotator />
       {/* 反推引擎选择浮层（全局单实例，store.describePicker 驱动） */}

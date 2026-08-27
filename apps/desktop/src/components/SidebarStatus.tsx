@@ -65,6 +65,9 @@ export function SidebarStatus({ collapsed }: { collapsed?: boolean }) {
   const removeGenJob = useStore((s) => s.removeGenJob);
   const retryDescribeFailure = useStore((s) => s.retryDescribeFailure);
   const dismissDescribeFailure = useStore((s) => s.dismissDescribeFailure);
+  const jimengOrphans = useStore((s) => s.jimengOrphans);
+  const retrieveJimengOrphan = useStore((s) => s.retrieveJimengOrphan);
+  const dismissJimengOrphan = useStore((s) => s.dismissJimengOrphan);
 
   // 悬浮会话面板：开态 + 锚点（圆点矩形，开时测量；窗口/侧栏尺寸变化重测）。
   const ringRef = useRef<HTMLButtonElement | null>(null);
@@ -157,7 +160,8 @@ export function SidebarStatus({ collapsed }: { collapsed?: boolean }) {
     };
   }, [sessOpen, closing]);
 
-  const showUnreadDot = (genUnread && !genPanelOpen) || failures.length > 0;
+  const showUnreadDot =
+    (genUnread && !genPanelOpen) || failures.length > 0 || jimengOrphans.length > 0;
 
   // 生成任务按会话聚合：同 conversationId 的「重新编辑」版本分支合成一条（面板内 ←/→ 切版本）。
   type GenGroup = { key: string; jobs: GenJob[]; latest: GenJob; running: boolean };
@@ -359,6 +363,52 @@ export function SidebarStatus({ collapsed }: { collapsed?: boolean }) {
     );
   }
 
+  // 面板「生成」tab 顶部：即梦孤儿任务（启动 list_task 比对发现，本地无记录）——
+  // 每条给「取回」（合成 job 走恢复链路续查下载入库）与「忽略」（本次启动不再提示）。
+  function orphanRows() {
+    if (jimengOrphans.length === 0) return null;
+    return (
+      <div className="border-b border-edge">
+        <div className="px-3 pb-1 pt-2 text-[10px] uppercase tracking-wide text-muted">
+          即梦孤儿任务（{jimengOrphans.length}）
+        </div>
+        {jimengOrphans.map((t) => {
+          const firstLine = t.prompt.split("\n").find((l) => l.trim())?.trim() || "未知任务";
+          const label = firstLine.length > 14 ? `${firstLine.slice(0, 14)}…` : firstLine;
+          return (
+            <div key={t.submit_id} className="rounded px-2 py-1.5 text-xs text-ink">
+              <div className="flex items-center gap-1.5" title={t.prompt || t.submit_id}>
+                <span className={t.gen_status === "querying" ? "animate-pulse text-accent" : "text-lime"}>
+                  ●
+                </span>
+                <span className="min-w-0 flex-1 truncate">{label}</span>
+                <span className="shrink-0 text-[10px] text-muted">
+                  {t.gen_status === "querying" ? "远端进行中" : "已完成未取回"}
+                </span>
+              </div>
+              <div className="mt-1 flex justify-end gap-1 pl-5">
+                <button
+                  type="button"
+                  onClick={() => void retrieveJimengOrphan(t.submit_id)}
+                  className="rounded px-1.5 py-0.5 text-[10px] text-accent hover:bg-panel2"
+                >
+                  取回
+                </button>
+                <button
+                  type="button"
+                  onClick={() => dismissJimengOrphan(t.submit_id)}
+                  className="rounded px-1.5 py-0.5 text-[10px] text-muted hover:bg-panel2 hover:text-ink"
+                >
+                  忽略
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
   // 面板「反推」tab：在跑 + 排队 + 失败（重试/清除，只在这里，内联区不放）。
   function describePanelRows() {
     const hasAny = describingId !== null || queue.length > 0 || failures.length > 0;
@@ -462,18 +512,21 @@ export function SidebarStatus({ collapsed }: { collapsed?: boolean }) {
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-1">
           {tab === "gen" ? (
-            panelGroups.length === 0 && agentSessions.length === 0 ? (
-              <div className="px-3 py-6 text-center text-xs leading-5 text-muted">
-                暂无生成会话
-                <br />
-                在创作板发送后，会话会出现在这里
-              </div>
-            ) : (
-              <>
-                {agentSessions.map((run) => cloudAgentRow(run, true))}
-                {panelGroups.map((g, i) => genGroupRow(g, i, true))}
-              </>
-            )
+            <>
+              {orphanRows()}
+              {panelGroups.length === 0 && agentSessions.length === 0 && jimengOrphans.length === 0 ? (
+                <div className="px-3 py-6 text-center text-xs leading-5 text-muted">
+                  暂无生成会话
+                  <br />
+                  在创作板发送后，会话会出现在这里
+                </div>
+              ) : (
+                <>
+                  {agentSessions.map((run) => cloudAgentRow(run, true))}
+                  {panelGroups.map((g, i) => genGroupRow(g, i, true))}
+                </>
+              )}
+            </>
           ) : (
             describePanelRows()
           )}

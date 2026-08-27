@@ -16,7 +16,7 @@ const STAGE_LABEL: Record<string, string> = {
   db: "整理数据库",
 };
 
-type SectionKey = "system" | "account" | "models" | "personalization" | "about";
+type SectionKey = "system" | "account" | "models" | "personalization" | "about" | "developer";
 
 /** 即梦 CLI 模型版本选项（dreamina `--model_version`；仅保留 4.7+——image2image 仅 4.0+，
  *  而创作板参考图生成是核心路径；与后端 settings 默认一致取 5.0Pro）。 */
@@ -56,6 +56,29 @@ function Toggle({
   );
 }
 
+/** 开发者选项里的单个 Agent 模式开关卡片（与个性化分区卡片同款形态）。 */
+function AgentModeCard({
+  label,
+  description,
+  checked,
+  onChange,
+}: {
+  label: string;
+  description: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <div className="settings-card px-3 py-2.5">
+      <div className="flex items-center justify-between">
+        <span className="text-ink">{label}</span>
+        <Toggle checked={checked} onChange={onChange} />
+      </div>
+      <p className="mt-1 text-xs text-muted">{description}</p>
+    </div>
+  );
+}
+
 const SECTIONS: { key: SectionKey; label: string }[] = [
   { key: "system", label: "系统设置" },
   { key: "account", label: "账号管理" },
@@ -64,6 +87,9 @@ const SECTIONS: { key: SectionKey; label: string }[] = [
   { key: "about", label: "关于我们" },
 ];
 
+/** 开发者选项分区：仅测试账号（entitlement.is_test_account）追加在导航末尾。 */
+const DEVELOPER_SECTION = { key: "developer", label: "开发者选项" } as const;
+
 /**
  * 设置面板（约定 13 全屏 Modal 形态）：常见两列式——左侧分区导航，右侧具体内容。
  *
@@ -71,6 +97,8 @@ const SECTIONS: { key: SectionKey; label: string }[] = [
  * 模型设置（codex CLI / 即梦 CLI / 默认反推模型 / 入库自动反推）、个性化与记忆（创作板 Shift 引入
  * / 全局素材隐藏项目素材开关），
  * 关于我们（当前版本 / 前往官网）。原「环境状态」总览已删除，各引导由对应分区直接唤起。
+ * 另有「开发者选项」分区仅测试账号可见：对话框 Agent 模式开关集中在此，关闭的模式不在
+ * 创作板 / 会话编辑坞渲染（默认只开正式 Agent）。
  * 由侧栏底部账号区「设置」唤起。点背景 / ✕ 关闭。
  */
 export function SettingsDialog({ onClose }: { onClose: () => void }) {
@@ -220,6 +248,12 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
       board_shift_pick: settings?.board_shift_pick ?? false,
       hide_project_assets: settings?.hide_project_assets ?? false,
       dreamina_model_version: settings?.dreamina_model_version ?? DEFAULT_DREAMINA_MODEL_VERSION,
+      agent_mode_enabled: settings?.agent_mode_enabled ?? true,
+      agent_a_mode_enabled: settings?.agent_a_mode_enabled ?? false,
+      agent_b_mode_enabled: settings?.agent_b_mode_enabled ?? false,
+      agent_z_mode_enabled: settings?.agent_z_mode_enabled ?? false,
+      agent_g_mode_enabled: settings?.agent_g_mode_enabled ?? false,
+      agent_ds_mode_enabled: settings?.agent_ds_mode_enabled ?? false,
     });
   };
 
@@ -410,6 +444,9 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const tier = cloudEntitlement?.tier?.toUpperCase() ?? "FREE";
   const balances = cloudEntitlement?.balances;
   const transactions = cloudEntitlement?.recent_transactions ?? [];
+  // 测试账号（bowerbird_test 标记，云端随权益快照下发）才追加「开发者选项」分区。
+  const isTestAccount = cloudEntitlement?.is_test_account === true;
+  const sections = isTestAccount ? [...SECTIONS, DEVELOPER_SECTION] : SECTIONS;
 
   return (
     <ModalShell
@@ -423,7 +460,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
       <div className="flex h-[480px] gap-4 text-sm">
         {/* 左列：分区导航 */}
         <nav className="flex w-36 shrink-0 flex-col gap-0.5 border-r border-edge pr-3" aria-label="设置分区">
-          {SECTIONS.map((s) => (
+          {sections.map((s) => (
             <button
               key={s.key}
               type="button"
@@ -960,6 +997,67 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   前往官网 ↗
                 </button>
               </div>
+            </>
+          )}
+
+          {section === "developer" && isTestAccount && (
+            <>
+              <div className="settings-card px-3 py-2.5">
+                <div className="text-ink">开发者选项</div>
+                <p className="mt-1 text-xs text-muted">
+                  仅测试账号可见。集中控制对话框里的 Agent
+                  模式开关：默认只开启「Agent」，关闭的模式不会出现在创作板与会话编辑坞
+                  （各模式自身的本机 / 云端可用性检查仍照常生效）。
+                </p>
+              </div>
+              <AgentModeCard
+                label="Agent"
+                description="正式 Bowerbird Agent（云端 Run）：先只做文字意图分析并给出可审批计划，批准后再执行。默认开启。"
+                checked={settings?.agent_mode_enabled ?? true}
+                onChange={(v) =>
+                  settings && void updateSettings({ ...settings, agent_mode_enabled: v })
+                }
+              />
+              <AgentModeCard
+                label="Agent A"
+                description="dev 方案A（子句挑选）：Agent 按意图从参考图维度原文中挑选子句，确定性拼合后再发送。默认关闭。"
+                checked={settings?.agent_a_mode_enabled ?? false}
+                onChange={(v) =>
+                  settings && void updateSettings({ ...settings, agent_a_mode_enabled: v })
+                }
+              />
+              <AgentModeCard
+                label="Agent B"
+                description="dev 方案B（skill 审查）：Agent 按官方 skill 审查并修复展开后的完整 prompt，再发送。默认关闭。"
+                checked={settings?.agent_b_mode_enabled ?? false}
+                onChange={(v) =>
+                  settings && void updateSettings({ ...settings, agent_b_mode_enabled: v })
+                }
+              />
+              <AgentModeCard
+                label="Agent Z"
+                description="dev：把编辑器内容 + 参考图发到 Claude Code 终端（TUI）对话。默认关闭。"
+                checked={settings?.agent_z_mode_enabled ?? false}
+                onChange={(v) =>
+                  settings && void updateSettings({ ...settings, agent_z_mode_enabled: v })
+                }
+              />
+              <AgentModeCard
+                label="Agent G"
+                description="dev：把编辑器内容 + 参考图发到 codex 终端（TUI）对话。默认关闭。"
+                checked={settings?.agent_g_mode_enabled ?? false}
+                onChange={(v) =>
+                  settings && void updateSettings({ ...settings, agent_g_mode_enabled: v })
+                }
+              />
+              <AgentModeCard
+                label="Agent DS"
+                description="dev：DeepSeek 对话 harness，回复追加到创作板编辑器。默认关闭。"
+                checked={settings?.agent_ds_mode_enabled ?? false}
+                onChange={(v) =>
+                  settings && void updateSettings({ ...settings, agent_ds_mode_enabled: v })
+                }
+              />
             </>
           )}
         </div>

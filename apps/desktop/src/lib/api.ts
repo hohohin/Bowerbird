@@ -18,6 +18,10 @@ import type {
   CreationPack,
   DreaminaDeviceFlow,
   EntitlementSnapshot,
+  VisualProfileDetail,
+  VisualProfileRuleEdit,
+  VisualProfileScopePreview,
+  VisualProfileSummary,
   Folder,
   GenerationHistory,
   GenJobSummary,
@@ -41,8 +45,8 @@ export const api = {
   ping: (name: string) => invoke<string>("ping", { name }),
   dbHealth: () => invoke<string>("db_health"),
   localAgentHealth: () => invoke<boolean>("local_agent_health"),
-  localAgentStart: (assetId: string, goal: string) =>
-    invoke<LocalAgentRun>("local_agent_start", { assetId, goal }),
+  localAgentStart: (assetId: string, goal: string, projectId?: string | null, visualProfileId?: string | null) =>
+    invoke<LocalAgentRun>("local_agent_start", { assetId, goal, projectId: projectId ?? null, visualProfileId: visualProfileId ?? null }),
   localAgentCompilePrompt: (input: AgentPromptInput) =>
     invoke<AgentPromptResult>("local_agent_compile_prompt", { input }),
   localAgentLatest: (assetId: string) =>
@@ -65,6 +69,7 @@ export const api = {
     projectId?: string | null;
     imageProvider?: "cloud" | "jimeng" | "codex" | null;
     preferenceCapsule?: PreferenceCapsule | null;
+    visualProfileId?: string | null;
   }) => invoke<CloudAgentRunRecord>("cloud_agent_start", input),
   cloudAgentLatest: () => invoke<CloudAgentRunRecord | null>("cloud_agent_latest"),
   cloudAgentList: () => invoke<CloudAgentRunRecord[]>("cloud_agent_list"),
@@ -292,6 +297,11 @@ export const api = {
   openCodexSession: (sessionId: string) =>
     invoke<void>("open_codex_session", { sessionId }),
   deleteAnalysis: (id: string) => invoke<void>("delete_analysis", { id }),
+  /** 反推面板 P2：把 caption 正文登记为这张图的提示词（desc 角色，asset_prompts 遗留链路）。 */
+  createPrompt: (body: string, title?: string, kind?: string) =>
+    invoke<string>("create_prompt", { title: title ?? null, body, kind: kind ?? null }),
+  linkPrompt: (assetId: string, promptId: string, role: string) =>
+    invoke<void>("link_prompt", { assetId, promptId, role }),
   /** 编辑反推维度内容：sections 整体替换，后端重算 text/dimensions 落库并广播 analyses://changed。 */
   updateCaptionSections: (id: string, sections: CaptionSection[]) =>
     invoke<void>("update_caption_sections", { id, sections }),
@@ -331,6 +341,7 @@ export const api = {
     ratio?: string | null;
     provider?: string | null;
     projectId?: string | null;
+    visualProfileId?: string | null;
     jobId: string;
     promptRaw?: string | null;
     /** 借用维度源图 id（图 chip 被删、只借维度）：随 generation_meta 落库，复用时回绑车牌。 */
@@ -346,6 +357,7 @@ export const api = {
       ratio: req.ratio ?? null,
       provider: req.provider ?? null,
       projectId: req.projectId ?? null,
+      visualProfileId: req.visualProfileId ?? null,
       jobId: req.jobId,
       promptRaw: req.promptRaw ?? null,
       dimensionSources: req.dimensionSources ?? [],
@@ -359,6 +371,9 @@ export const api = {
   recentGenSessions: (limit = 30) => invoke<RecentGenSession[]>("recent_gen_sessions", { limit }),
   // 移除已完成会话的持久记录（删 task_queue 终态行；重启恢复不再出现该会话）。
   dismissGenJob: (jobId: string) => invoke<void>("dismiss_gen_job", { jobId }),
+  // 即梦孤儿任务取回（约定 23 阶段 3）：远端在跑/已完成但本地无记录的任务，用户显式取回。
+  jimengRetrieveOrphan: (submitId: string, prompt: string) =>
+    invoke<void>("jimeng_retrieve_orphan", { submitId, prompt }),
   // 扩展小白化：连接状态 + 扩展文件夹路径（引导「一键复制」用，不自动打开——Windows 上不稳）。
   extensionStatus: () => invoke<boolean>("extension_status"),
   extensionFolderPath: () => invoke<string>("extension_folder_path"),
@@ -379,4 +394,23 @@ export const api = {
   cloudEntitlement: () => invoke<EntitlementSnapshot>("cloud_entitlement"),
   cloudSyncEntitlement: () =>
     invoke<EntitlementSnapshot>("cloud_sync_entitlement"),
+  visualProfilePreview: (projectId: string, folderId: string) =>
+    invoke<VisualProfileScopePreview>("visual_profile_preview", { projectId, folderId }),
+  visualProfileExtract: (projectId: string, folderId: string) =>
+    invoke<VisualProfileDetail>("visual_profile_extract", { projectId, folderId }),
+  visualProfileConfirm: (profileId: string) =>
+    invoke<VisualProfileDetail>("visual_profile_confirm", { profileId }),
+  visualProfileList: (projectId: string, folderId: string | null) =>
+    invoke<VisualProfileSummary[]>("visual_profile_list", { projectId, folderId: folderId ?? null }),
+  visualProfileCloudExtract: (projectId: string, folderId: string) =>
+    invoke<VisualProfileDetail>("visual_profile_cloud_extract", { projectId, folderId }),
+  visualProfileUpdateDraft: (profileId: string, rules: VisualProfileRuleEdit[]) =>
+    invoke<VisualProfileDetail>("visual_profile_update_draft", { profileId, rules }),
+  visualProfileGenerateValidation: (profileId: string, theme: string) =>
+    invoke<{ imagePath: string; prompt: string; service: string; credits: number }>(
+      "visual_profile_generate_validation", { profileId, theme }),
+  visualProfileConfirmValidation: (profileId: string, imagePath: string) =>
+    invoke<{ assetId: string; name: string }>("visual_profile_confirm_validation", { profileId, imagePath }),
+  visualProfileDiscardValidation: (imagePath: string) =>
+    invoke<void>("visual_profile_discard_validation", { imagePath }),
 };

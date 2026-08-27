@@ -226,6 +226,7 @@ mod tests {
             created_at: Some(0),
             file_mtime: Some(0),
             generation_session_id: None,
+            reference_count: 0,
         })
         .unwrap();
 

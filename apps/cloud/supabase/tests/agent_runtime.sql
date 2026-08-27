@@ -300,6 +300,14 @@ begin
   ) values (
     run_id, 'cancel-vision-call', 'vision_call', 'ark', 'test-vision-model', 1, 1
   );
+  -- 0040/0043 回归：取消时 pending 审批必须一并置 expired（该 UPDATE 的裸
+  -- status 曾与 RETURNS TABLE(status) 输出变量歧义，解析期 42702）。
+  insert into public.agent_approvals (
+    run_id, kind, proposal_object_key, proposal_hash, expires_at
+  ) values (
+    run_id, 'refine_plan', 'runs/cancel/approval.json', repeat('a', 64),
+    now() + interval '24 hours'
+  );
 
   select * into cancelled from public.cancel_unleased_agent_run(run_id);
   select status, actual_amount into hold_status, hold_actual
@@ -312,6 +320,11 @@ begin
       and hold_status = 'confirmed'
       and hold_actual = 1
   );
+
+  insert into agent_runtime_test_results
+  select 'unleased cancellation expires the pending approval',
+    status = 'expired' and decided_at is not null
+  from public.agent_approvals where agent_approvals.run_id = run_id;
 
   select result.hold_id, result.pricing_version into hold, clarification_pricing
   from public.credit_hold(

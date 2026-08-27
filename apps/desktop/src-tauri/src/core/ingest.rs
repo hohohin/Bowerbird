@@ -114,6 +114,7 @@ pub fn ingest_file(paths: &LibraryPaths, db: &Database, source: &Path) -> AppRes
         created_at: Some(now),
         file_mtime: Some(file_mtime),
         generation_session_id: None,
+        reference_count: 0,
     };
     db.insert_asset(&asset)?;
     link_colors(db, &asset.id, asset.colors.as_deref());
@@ -195,6 +196,7 @@ pub fn ingest_generated(
         created_at: Some(now),
         file_mtime: Some(now),
         generation_session_id: session_id.map(|s| s.to_string()),
+        reference_count: 0,
     };
     db.insert_asset(&asset)?;
     link_colors(db, &asset.id, asset.colors.as_deref());

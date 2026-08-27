@@ -7,6 +7,7 @@ import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import {
   agentUsageService,
   creditsForAgentUsage,
+  estimateProviderCostMicros,
   normalizeAgentUsageItem,
   parseAgentUsagePricing,
   type AgentUsageItem,
@@ -341,6 +342,219 @@ async function actionMetrics(admin: SupabaseClient): Promise<Response> {
   });
 }
 
+function percentileOf(sortedValues: number[], fraction: number): number | null {
+  if (!sortedValues.length) return null;
+  const index = Math.min(sortedValues.length - 1, Math.max(0, Math.ceil(fraction * sortedValues.length) - 1));
+  return sortedValues[index];
+}
+
+function averageOf(values: number[]): number | null {
+  if (!values.length) return null;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+/** A8-T2 观察期聚合：跨天窗口的成功率、审批漏斗/放弃率、耗时、重试率、积分与上游成本、
+ *  当前 TTL 积压。与 metrics 的 24h 滚动窗口互补；不含任何用户内容。
+ *  「审批后放弃」= pending 审批随 Run 取消/过期被置为 expired（0040 起统一生效）。 */
+async function actionObservation(admin: SupabaseClient, body: Record<string, unknown>): Promise<Response> {
+  const nowMs = Date.now();
+  const sinceInput = typeof body.since === "string" ? Date.parse(body.since) : Number.NaN;
+  const untilInput = typeof body.until === "string" ? Date.parse(body.until) : Number.NaN;
+  const until = Number.isFinite(untilInput) ? untilInput : nowMs;
+  const since = Number.isFinite(sinceInput) ? sinceInput : until - 14 * 24 * 3600 * 1000;
+  if (!Number.isFinite(since) || since >= until) throw new ApiError("invalid_request", "观察窗口无效");
+  if (until - since > 92 * 24 * 3600 * 1000) throw new ApiError("invalid_request", "观察窗口最长 92 天", false, 400);
+  const sinceIso = new Date(since).toISOString();
+  const untilIso = new Date(until).toISOString();
+
+  const [runs, testRuns, approvals, clarifications, usage, ttlRuns, ttlArtifacts] = await Promise.all([
+    admin.from("agent_runs")
+      .select("status,actual_credits,created_at,queued_at,started_at,finished_at,result_feedback_action,error_code")
+      .eq("is_test", false).gte("created_at", sinceIso).lt("created_at", untilIso)
+      .order("created_at", { ascending: false }).limit(5000),
+    admin.from("agent_runs").select("status")
+      .eq("is_test", true).gte("created_at", sinceIso).lt("created_at", untilIso)
+      .order("created_at", { ascending: false }).limit(5000),
+    admin.from("agent_approvals")
+      .select("kind,status,requested_at,decided_at,run:agent_runs!agent_approvals_run_id_fkey(is_test)")
+      .gte("requested_at", sinceIso).lt("requested_at", untilIso)
+      .order("requested_at", { ascending: false }).limit(5000),
+    admin.from("agent_clarifications")
+      .select("status,run:agent_runs!agent_clarifications_run_id_fkey(is_test)")
+      .gte("asked_at", sinceIso).lt("asked_at", untilIso)
+      .order("asked_at", { ascending: false }).limit(1000),
+    admin.from("agent_usage_items")
+      .select("kind,provider,credits,provider_cost_micros,run:agent_runs!agent_usage_items_run_id_fkey(is_test)")
+      .gte("created_at", sinceIso).lt("created_at", untilIso)
+      .order("created_at", { ascending: false }).limit(20000),
+    admin.from("agent_runs").select("id", { count: "exact", head: true })
+      .lte("content_expires_at", untilIso).is("content_deleted_at", null),
+    admin.from("agent_artifacts").select("id", { count: "exact", head: true })
+      .lte("expires_at", untilIso).is("deleted_at", null),
+  ]);
+  for (const result of [runs, testRuns, approvals, clarifications, usage, ttlRuns, ttlArtifacts]) {
+    if (result.error) throw new ApiError("internal_error", "观察数据读取失败", true);
+  }
+
+  const runRows = (runs.data ?? []) as Array<{
+    status: string;
+    actual_credits: number | null;
+    created_at: string;
+    queued_at: string | null;
+    started_at: string | null;
+    finished_at: string | null;
+    result_feedback_action: string | null;
+    error_code: string | null;
+  }>;
+  const testRunRows = (testRuns.data ?? []) as Array<{ status: string }>;
+  // 嵌入列在 postgrest-js 类型里推断为数组形状，运行时为单对象；与 agent-run 的
+  // `as unknown as` 同款处理。
+  const approvalRows = (approvals.data ?? []) as unknown as Array<{
+    kind: string;
+    status: string;
+    requested_at: string;
+    decided_at: string | null;
+    run: { is_test: boolean | null } | null;
+  }>;
+  const clarificationRows = (clarifications.data ?? []) as unknown as Array<{ status: string; run: { is_test: boolean | null } | null }>;
+  const usageRows = (usage.data ?? []) as unknown as Array<{
+    kind: string;
+    provider: string;
+    credits: number;
+    provider_cost_micros: number | null;
+    run: { is_test: boolean | null } | null;
+  }>;
+
+  const succeeded = runRows.filter((row) => row.status === "succeeded").length;
+  const failed = runRows.filter((row) => row.status === "failed").length;
+  const cancelled = runRows.filter((row) => row.status === "cancelled").length;
+  const completed = succeeded + failed;
+  const durations: number[] = [];
+  const queueWaits: number[] = [];
+  const creditsList: number[] = [];
+  const failuresByCode: Record<string, number> = {};
+  let feedbackAccept = 0;
+  let feedbackRetry = 0;
+  for (const row of runRows) {
+    if (row.finished_at && row.created_at) {
+      const duration = Date.parse(row.finished_at) - Date.parse(row.created_at);
+      if (Number.isFinite(duration) && duration >= 0) durations.push(duration);
+    }
+    if (row.started_at && row.queued_at) {
+      const wait = Date.parse(row.started_at) - Date.parse(row.queued_at);
+      if (Number.isFinite(wait) && wait >= 0) queueWaits.push(wait);
+    }
+    if (["succeeded", "failed", "cancelled"].includes(row.status)) {
+      const value = Number(row.actual_credits);
+      if (Number.isFinite(value) && value >= 0) creditsList.push(value);
+    }
+    if (row.status === "failed") {
+      const code = typeof row.error_code === "string" && /^[A-Za-z0-9._:-]{1,80}$/.test(row.error_code)
+        ? row.error_code
+        : "unknown";
+      failuresByCode[code] = (failuresByCode[code] ?? 0) + 1;
+    }
+    if (row.result_feedback_action === "accept") feedbackAccept += 1;
+    if (row.result_feedback_action === "retry") feedbackRetry += 1;
+  }
+  durations.sort((a, b) => a - b);
+  queueWaits.sort((a, b) => a - b);
+
+  const funnel = { proposed: 0, approved: 0, rejected: 0, expired: 0, pending: 0 };
+  const approvalsByKind: Record<string, typeof funnel> = {};
+  const decisionLatencies: number[] = [];
+  let revisionProposals = 0;
+  for (const row of approvalRows) {
+    if (row.run?.is_test === true) continue;
+    funnel.proposed += 1;
+    funnel[row.status as keyof typeof funnel] = (funnel[row.status as keyof typeof funnel] ?? 0) + 1;
+    const kindBucket = approvalsByKind[row.kind] ??= { proposed: 0, approved: 0, rejected: 0, expired: 0, pending: 0 };
+    kindBucket.proposed += 1;
+    kindBucket[row.status as keyof typeof funnel] += 1;
+    if (row.kind === "controlled_image_edit_revision") revisionProposals += 1;
+    if (row.decided_at) {
+      const latency = Date.parse(row.decided_at) - Date.parse(row.requested_at);
+      if (Number.isFinite(latency) && latency >= 0) decisionLatencies.push(latency);
+    }
+  }
+  const decidedOrExpired = funnel.approved + funnel.rejected + funnel.expired;
+
+  let clarificationsAsked = 0;
+  let clarificationsAnswered = 0;
+  for (const row of clarificationRows) {
+    if (row.run?.is_test === true) continue;
+    clarificationsAsked += 1;
+    if (row.status === "answered") clarificationsAnswered += 1;
+  }
+
+  const usageTotals = { items: 0, credits: 0, costMicros: 0, costKnownItems: 0 };
+  const usageByKind: Record<string, { items: number; credits: number; costMicros: number }> = {};
+  for (const row of usageRows) {
+    if (row.run?.is_test === true) continue;
+    usageTotals.items += 1;
+    usageTotals.credits += Number(row.credits) || 0;
+    const bucket = usageByKind[row.kind] ??= { items: 0, credits: 0, costMicros: 0 };
+    bucket.items += 1;
+    bucket.credits += Number(row.credits) || 0;
+    if (row.provider_cost_micros !== null && row.provider_cost_micros !== undefined) {
+      const micros = Number(row.provider_cost_micros) || 0;
+      usageTotals.costMicros += micros;
+      usageTotals.costKnownItems += 1;
+      bucket.costMicros += micros;
+    }
+  }
+
+  return jsonResponse({
+    window: { since: sinceIso, until: untilIso },
+    runs: {
+      total: runRows.length,
+      succeeded,
+      failed,
+      cancelled,
+      activeUnfinished: runRows.length - completed - cancelled,
+      successRate: completed ? succeeded / completed : null,
+      avgDurationMs: averageOf(durations),
+      p50DurationMs: percentileOf(durations, 0.5),
+      p95DurationMs: percentileOf(durations, 0.95),
+      avgQueueWaitMs: averageOf(queueWaits),
+      avgCredits: averageOf(creditsList),
+      maxCredits: creditsList.length ? Math.max(...creditsList) : null,
+      failuresByCode,
+      truncated: runRows.length === 5000,
+    },
+    testRuns: {
+      total: testRunRows.length,
+      succeeded: testRunRows.filter((row) => row.status === "succeeded").length,
+      failed: testRunRows.filter((row) => row.status === "failed").length,
+      cancelled: testRunRows.filter((row) => row.status === "cancelled").length,
+      truncated: testRunRows.length === 5000,
+    },
+    approvals: {
+      ...funnel,
+      byKind: approvalsByKind,
+      revisionProposals,
+      approvalRate: decidedOrExpired ? funnel.approved / decidedOrExpired : null,
+      abandonmentRate: decidedOrExpired ? funnel.expired / decidedOrExpired : null,
+      avgDecisionMs: averageOf(decisionLatencies),
+    },
+    feedback: {
+      accept: feedbackAccept,
+      retry: feedbackRetry,
+      retryRate: feedbackAccept + feedbackRetry ? feedbackRetry / (feedbackAccept + feedbackRetry) : null,
+    },
+    clarifications: { asked: clarificationsAsked, answered: clarificationsAnswered },
+    usage: {
+      items: usageTotals.items,
+      creditsTotal: usageTotals.credits,
+      providerCostMicrosTotal: usageTotals.costMicros,
+      costCoverage: usageTotals.items ? usageTotals.costKnownItems / usageTotals.items : null,
+      byKind: usageByKind,
+      truncated: usageRows.length === 20000,
+    },
+    ttlBacklogNow: { runs: ttlRuns.count ?? 0, artifacts: ttlArtifacts.count ?? 0 },
+  });
+}
+
 async function actionClaim(admin: SupabaseClient, workerId: string): Promise<Response> {
   const claimResult = await admin.rpc("claim_agent_run", { p_worker_id: workerId, p_lease_seconds: 60 });
   if (claimResult.error) throw new ApiError("internal_error", "claim RPC 失败", true);
@@ -571,7 +785,9 @@ async function actionUsage(admin: SupabaseClient, body: Record<string, unknown>)
       output_units: Math.max(0, Number(item.outputUnits) || 0),
       image_count: Math.max(0, Number(item.imageCount) || 0),
       resolution: item.resolution ?? null,
-      provider_cost_micros: item.providerCostMicros ?? null,
+      // A8-T2 毛利数据链：worker 未显式上报成本时按版本化费率估算（micro CNY）。
+      provider_cost_micros: item.providerCostMicros ??
+        (pricing.providerCost ? estimateProviderCostMicros(item, pricing.providerCost) : null),
       credits,
       pricing_version: run.pricing_version,
     };
@@ -1450,6 +1666,8 @@ Deno.serve(async (request) => {
     switch (action) {
       case "metrics":
         return await actionMetrics(admin);
+      case "observation":
+        return await actionObservation(admin, body);
       case "cleanup_expired":
         return await actionCleanupExpired(admin);
       case "claim":

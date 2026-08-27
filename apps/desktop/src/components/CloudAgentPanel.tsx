@@ -9,7 +9,7 @@ import { useStore } from "../store";
 import { Lightbox } from "./Lightbox";
 
 const TERMINAL = new Set(["succeeded", "failed", "cancelled"]);
-const CURRENT_CONTROLLED_SKILL_VERSION = "0.1.1";
+const CURRENT_CONTROLLED_SKILL_VERSION = "0.1.2";
 
 function strategyLabel(strategy?: string): string {
   if (strategy === "direct") return "直接单步";

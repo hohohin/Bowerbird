@@ -7,6 +7,8 @@ import type {
   IntentAnalysis,
 } from "../../contracts/controlled-image-edit.ts";
 import { validatePreferenceCapsule } from "../../contracts/preference.ts";
+import { assertVisualProfileCapsule, visualProfileHashPayload } from "../../contracts/visual-profile.ts";
+import { canonicalJson, sha256Hex } from "../../kernel/tool-ledger.ts";
 
 export const MAX_CONTROLLED_REFERENCES = 8;
 export const MAX_CONTROLLED_PLAN_STEPS = 8;
@@ -67,6 +69,16 @@ export function validateControlledInput(input: ControlledImageEditInput): void {
       validatePreferenceCapsule(input.preferenceCapsule);
     } catch {
       throw new ControlledPlanValidationError("controlled_preference_capsule_invalid");
+    }
+  }
+  if (input.visualProfileCapsule) {
+    try {
+      assertVisualProfileCapsule(input.visualProfileCapsule);
+      if (sha256Hex(canonicalJson(visualProfileHashPayload(input.visualProfileCapsule))) !== input.visualProfileCapsule.hash) {
+        throw new Error("hash_mismatch");
+      }
+    } catch {
+      throw new ControlledPlanValidationError("controlled_visual_profile_capsule_invalid");
     }
   }
 }

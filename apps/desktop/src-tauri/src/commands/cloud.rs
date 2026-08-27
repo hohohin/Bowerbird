@@ -1,4 +1,3 @@
-use chrono::Utc;
 use tauri::State;
 
 use crate::cloud::auth::AuthSnapshot;
@@ -35,9 +34,12 @@ pub async fn cloud_logout(
 
 #[tauri::command]
 pub async fn cloud_entitlement(
+    auth: State<'_, AuthClient>,
     entitlement: State<'_, EntitlementService>,
 ) -> Result<EntitlementSnapshot, AppError> {
-    Ok(entitlement.current(Utc::now()))
+    // 缓存 Fresh 时是纯本地读；未签名缓存在重启/超 6h 后判 Invalid，已登录则在此在线
+    // 自愈一次，避免 UI 把 Pro 显示成 free 直到用户手动刷新（门控路径早已走 current_or_sync）。
+    Ok(entitlement.current_or_sync(&auth).await)
 }
 
 #[tauri::command]

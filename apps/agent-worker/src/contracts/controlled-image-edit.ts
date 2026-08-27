@@ -1,6 +1,7 @@
 /** 首版 bowerbird-controlled-image-edit 的版本化业务契约。 */
 
 import type { PreferenceCapsule } from "./preference.ts";
+import type { VisualProfileCapsule } from "./visual-profile.ts";
 
 export const CONTROLLED_IMAGE_EDIT_SCHEMA_VERSION = 1 as const;
 
@@ -45,6 +46,8 @@ export type ControlledImageEditInput = {
   explicitExclude?: string[];
   /** 桌面本地生成的只读显式偏好；随 Run 临时数据过期，Kernel 不可修改。 */
   preferenceCapsule?: PreferenceCapsule;
+  /** 项目内已确认并在 Run 启动时冻结的只读视觉设定。 */
+  visualProfileCapsule?: VisualProfileCapsule;
 };
 
 export type IntentAnalysis = {

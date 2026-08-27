@@ -176,7 +176,7 @@ test("RunEngine pauses for approval, survives kill after submit, and resumes exa
   const claim = {
     runId: "run-1",
     conversationId: "conversation-1",
-    skillVersion: "0.1.1",
+    skillVersion: "0.1.2",
     approvedPlanHash: null,
     resultFeedbackAction: null,
   } as const;
@@ -268,7 +268,7 @@ test("user retry triggers one vision diagnosis, a new approval, and only then on
   const claim = {
     runId: "run-1",
     conversationId: "conversation-1",
-    skillVersion: "0.1.1",
+    skillVersion: "0.1.2",
     approvedPlanHash: null,
     resultFeedbackAction: null,
   } as const;

@@ -139,6 +139,7 @@ pub fn run() {
 
             let recovery_db = db.clone();
             let recovery_paths = paths.clone();
+            let orphan_scan_db = db.clone();
 
             app.manage(extension_status);
             app.manage(active_project);
@@ -154,6 +155,12 @@ pub fn run() {
                 app.handle().clone(),
                 recovery_db,
                 recovery_paths,
+            );
+
+            // 即梦远端孤儿扫描（约定 23 阶段 3）：内部延迟 15s，不与启动恢复抢 IO。
+            core::generation_worker::spawn_orphan_scan(
+                app.handle().clone(),
+                orphan_scan_db,
             );
 
             // Agent Z（dev-only）回传：轮询 .agent-z/inbox，模型经 MCP 工具送回的文本
@@ -210,6 +217,15 @@ pub fn run() {
             commands::projects::add_assets_to_project,
             commands::projects::remove_assets_from_project,
             commands::projects::delete_project,
+            commands::visual_profile::visual_profile_preview,
+            commands::visual_profile::visual_profile_extract,
+            commands::visual_profile::visual_profile_confirm,
+            commands::visual_profile::visual_profile_list,
+            commands::visual_profile::visual_profile_cloud_extract,
+            commands::visual_profile::visual_profile_update_draft,
+            commands::visual_profile::visual_profile_generate_validation,
+            commands::visual_profile::visual_profile_confirm_validation,
+            commands::visual_profile::visual_profile_discard_validation,
             commands::library::import_files,
             commands::library::import_folder,
             commands::library::import_image_bytes,
@@ -272,6 +288,7 @@ pub fn run() {
             commands::codex::codex_create_image,
             commands::codex::cancel_codex_create,
             commands::codex::list_gen_jobs,
+            commands::codex::jimeng_retrieve_orphan,
             commands::codex::recent_gen_sessions,
             commands::codex::dismiss_gen_job,
             commands::codex::open_codex_session,

@@ -62,6 +62,10 @@ pub struct GenJob {
     pub provider: String, // "codex" | "jimeng"
     pub status: String, // queued|submitting|running|querying|downloading|ingesting|done|failed|cancelled_local
     pub prompt: String,
+    /// 本轮真正提交给 provider 的最终指令（含视觉设定注入与 provider 包装）。
+    /// 单独持久化，避免以后 PromptCompiler 变化导致历史回看失真。
+    #[serde(default)]
+    pub applied_prompt: Option<String>,
     #[serde(default)]
     pub references: Vec<String>,
     #[serde(default)]
@@ -75,6 +79,9 @@ pub struct GenJob {
     pub project_id: Option<String>,
     #[serde(default)]
     pub ratio: Option<String>,
+    /// V4：首轮冻结的已确认项目视觉设定。续轮/恢复始终复用该版本，不能跟随当前项目新版本漂移。
+    #[serde(default)]
+    pub visual_profile: Option<crate::core::visual_profile::VisualProfileCapsule>,
     #[serde(default)]
     pub submit_id: Option<String>,
     #[serde(default)]
@@ -335,11 +342,13 @@ mod tests {
             provider: provider.into(),
             status: status.into(),
             prompt: "p".into(),
+            applied_prompt: None,
             references: vec![],
             session_id: None,
             conversation_id: None,
             project_id: None,
             ratio: None,
+            visual_profile: None,
             submit_id: None,
             video_options: None,
             turns: serde_json::json!([]),
@@ -367,7 +376,8 @@ mod tests {
     #[test]
     fn enqueue_gen_job_and_by_id() {
         let db = db();
-        let j = job("jimeng", "queued");
+        let mut j = job("jimeng", "queued");
+        j.applied_prompt = Some("p\n\n必须保持：色彩=低饱和".into());
         let id = Task::enqueue_gen_job(&db, &j).unwrap();
         assert_eq!(id, j.id);
         let t = Task::by_id(&db, &id).unwrap().unwrap();
@@ -377,6 +387,10 @@ mod tests {
         let g = t.gen_job().unwrap();
         assert_eq!(g.media, "image");
         assert_eq!(g.prompt, "p");
+        assert_eq!(
+            g.applied_prompt.as_deref(),
+            Some("p\n\n必须保持：色彩=低饱和")
+        );
     }
 
     #[test]

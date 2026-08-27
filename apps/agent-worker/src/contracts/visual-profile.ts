@@ -117,3 +117,37 @@ export type VisualProfileCapsule = {
   contentThemes: string[];
   hash: string;
 };
+
+function isRuleValue(value: unknown, polarity: RulePolarity): value is VisualRuleValue {
+  if (!value || typeof value !== "object") return false;
+  const rule = value as Record<string, unknown>;
+  return VISUAL_LANGUAGE_CATEGORIES.includes(rule.category as VisualLanguageCategory) &&
+    typeof rule.value === "string" && rule.value.trim().length > 0 &&
+    rule.polarity === polarity;
+}
+
+/** 跨进程边界的 capsule 结构校验；hash 完整性由各运行时使用同一规范 JSON 复核。 */
+export function assertVisualProfileCapsule(value: unknown): asserts value is VisualProfileCapsule {
+  if (!value || typeof value !== "object") throw new Error("visual_profile_capsule_invalid");
+  const capsule = value as Record<string, unknown>;
+  if (capsule.schemaVersion !== 1 || typeof capsule.profileId !== "string" || !capsule.profileId.trim() ||
+    !Number.isInteger(capsule.version) || Number(capsule.version) < 1 ||
+    typeof capsule.sourceScopeHash !== "string" || !capsule.sourceScopeHash.trim() ||
+    typeof capsule.summary !== "string" || typeof capsule.hash !== "string" || !/^[a-f0-9]{64}$/.test(capsule.hash)) {
+    throw new Error("visual_profile_capsule_invalid");
+  }
+  for (const polarity of ["must", "prefer", "avoid"] as const) {
+    const rules = capsule[polarity];
+    if (!Array.isArray(rules) || !rules.every((rule) => isRuleValue(rule, polarity))) {
+      throw new Error("visual_profile_capsule_rules_invalid");
+    }
+  }
+  if (!Array.isArray(capsule.contentThemes) || !capsule.contentThemes.every((item) => typeof item === "string")) {
+    throw new Error("visual_profile_capsule_themes_invalid");
+  }
+}
+
+export function visualProfileHashPayload(capsule: VisualProfileCapsule): Omit<VisualProfileCapsule, "hash"> {
+  const { hash: _hash, ...payload } = capsule;
+  return payload;
+}

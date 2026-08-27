@@ -114,6 +114,8 @@ struct ControlledManifest<'a> {
     ratio: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     preference_capsule: Option<&'a PreferenceCapsule>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    visual_profile_capsule: Option<&'a crate::core::visual_profile::VisualProfileCapsule>,
 }
 
 fn validate_preference_capsule(
@@ -446,6 +448,7 @@ pub async fn cloud_agent_start(
     project_id: Option<String>,
     image_provider: Option<String>,
     preference_capsule: Option<PreferenceCapsule>,
+    visual_profile_id: Option<String>,
 ) -> Result<CloudAgentRunRecord, AppError> {
     if references.len() > MAX_REFERENCES {
         return Err(AppError::Other("Agent 最多处理 8 张参考图".into()));
@@ -460,6 +463,9 @@ pub async fn cloud_agent_start(
         return Err(AppError::Other(
             "Agent 本机生图引擎需要 Pro 或 Studio 订阅".into(),
         ));
+    }
+    if visual_profile_id.is_some() && !policy.can_use_visual_profiles {
+        return Err(AppError::Other("当前权益不支持项目视觉设定".into()));
     }
     // 新 Run 生图引擎：cloud = VPS 方舟 Seedream（默认）；jimeng = 桌面本地 CLI。
     // Codex Agent 暂停组合使用，但历史任务执行器仍保留 Codex 恢复能力。
@@ -486,6 +492,15 @@ pub async fn cloud_agent_start(
     if let Some(capsule) = preference_capsule.as_ref() {
         validate_preference_capsule(capsule, project_id.as_deref())?;
     }
+    let visual_profile_capsule = match visual_profile_id.as_deref() {
+        Some(profile_id) => {
+            let project_id = project_id
+                .as_deref()
+                .ok_or_else(|| AppError::Other("视觉设定只能在当前项目内使用".into()))?;
+            Some(db.visual_profile_capsule(profile_id, project_id)?)
+        }
+        None => None,
+    };
 
     let normalized_prompt = normalize_intent_prompt(&intent_prompt, &references)?;
     let mut image_bytes = Vec::with_capacity(references.len());
@@ -536,6 +551,7 @@ pub async fn cloud_agent_start(
         references: &manifest_references,
         ratio: resolved_ratio.as_deref(),
         preference_capsule: preference_capsule.as_ref(),
+        visual_profile_capsule: visual_profile_capsule.as_ref(),
     })?;
     if manifest.len() > 64 * 1024 {
         return Err(AppError::Other("Agent 输入清单过大".into()));
@@ -550,6 +566,13 @@ pub async fn cloud_agent_start(
         "idempotencyKey": format!("desktop-agent-{}", Ulid::new()),
         "imageProvider": image_provider,
     });
+    if let Some(capsule) = visual_profile_capsule.as_ref() {
+        create_body["visualProfile"] = json!({
+            "profileId": &capsule.profile_id,
+            "version": capsule.version,
+            "hash": &capsule.hash,
+        });
+    }
     // None 必须省略而不是序列化为 null；控制面契约只接受缺省或合法比例字符串。
     if let Some(value) = resolved_ratio.as_deref() {
         create_body["ratio"] = json!(value);
@@ -636,10 +659,13 @@ pub async fn cloud_agent_start(
             "id": run_id,
             "conversation_id": conversation_id,
             "skill_id": SKILL_ID,
-            "skill_version": "0.1.1",
+            "skill_version": "0.1.2",
             "status": "queued",
             "progress": 0,
             "budget_credits": created.get("budgetCredits").cloned().unwrap_or(json!(48)),
+            "visual_profile_id": visual_profile_capsule.as_ref().map(|capsule| &capsule.profile_id),
+            "visual_profile_version": visual_profile_capsule.as_ref().map(|capsule| capsule.version),
+            "visual_profile_hash": visual_profile_capsule.as_ref().map(|capsule| &capsule.hash),
         },
         "events": [],
         "approvals": [],

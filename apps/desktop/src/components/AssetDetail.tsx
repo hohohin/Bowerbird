@@ -146,6 +146,7 @@ export function AssetDetail() {
   const openContextMenu = useStore((s) => s.openContextMenu);
   const cloudAuth = useStore((s) => s.cloudAuth);
   const cloudEntitlement = useStore((s) => s.cloudEntitlement);
+  const reusePromptToBoard = useStore((s) => s.reusePromptToBoard);
   const cloudAvailable = cloudAuth?.cloud_available ?? false;
   // 本图反推状态：正在跑 / 在队列里（位置从 1 起）/ 空闲。
   const describing = useStore((s) => s.describingId === id);
@@ -494,6 +495,23 @@ export function AssetDetail() {
     } catch (e) {
       notifyError(e, "复制失败");
     }
+  }
+
+  // 反推面板 P2：把这条反推正文登记为这张图的提示词（desc 角色，搜提示词正文可命中）。
+  async function saveCaptionAsPrompt(assetId: string, assetName: string, text: string) {
+    try {
+      const promptId = await api.createPrompt(text, `${assetName} · 反推`, "desc");
+      await api.linkPrompt(assetId, promptId, "desc");
+      notifySuccess("已存为这张图的提示词");
+    } catch (e) {
+      notifyError(e, "存为提示词失败");
+    }
+  }
+
+  // 反推面板 P2：送到创作板——正文进编辑器（用户可继续编辑后生成）。
+  function sendCaptionToBoard(text: string) {
+    if (!text.trim()) return;
+    reusePromptToBoard(text);
   }
 
   // 编辑反推维度：保存时整体替换该条反推的 sections；后端重算 text/dimensions 落库并
@@ -872,6 +890,9 @@ export function AssetDetail() {
             <Meta label="大小" value={fmtSize(asset.size)} />
             <Meta label="导入时间" value={fmtTime(asset.created_at)} />
             <Meta label="文件修改" value={fmtTime(asset.file_mtime)} />
+            {(asset.reference_count ?? 0) > 0 && (
+              <Meta label="创作板引用" value={`${asset.reference_count} 次`} />
+            )}
             {colors.length > 0 && (
               <div className="flex h-3 w-full overflow-hidden rounded">
                 {colors.map((c, i) => (
@@ -1176,6 +1197,27 @@ export function AssetDetail() {
                           </div>
                         </>
                       ))}
+                    {expanded && (
+                      <div className="flex items-center justify-end gap-3 pt-1 text-[10px]">
+                        <button
+                          onClick={() =>
+                            void saveCaptionAsPrompt(a.id, asset?.name ?? "素材", caption.text)
+                          }
+                          disabled={describing || queued}
+                          className="text-accent hover:underline disabled:opacity-50"
+                          title="把这条反推正文登记为这张图的提示词（desc 角色）"
+                        >
+                          存为提示词
+                        </button>
+                        <button
+                          onClick={() => sendCaptionToBoard(caption.text)}
+                          className="text-accent hover:underline"
+                          title="把这条反推正文送进创作板编辑器"
+                        >
+                          送到创作板
+                        </button>
+                      </div>
+                    )}
                     {expanded && (a.provider || caption.sessionId) && (
                       <div className="flex items-center justify-between gap-2 pt-1">
                         {a.provider && (

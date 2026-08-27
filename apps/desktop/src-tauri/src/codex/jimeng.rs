@@ -362,3 +362,150 @@ pub(crate) fn dreamina_command(binary: &str) -> Command {
         Command::new(binary)
     }
 }
+
+/// 即梦远端任务（`dreamina list_task` 单项，spike 实测字段）。孤儿比对/取回用（约定 23 阶段 3）。
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct RemoteJimengTask {
+    pub submit_id: String,
+    #[serde(default)]
+    pub prompt: String,
+    #[serde(default)]
+    pub gen_task_type: String,
+    pub gen_status: String,
+}
+
+/// `dreamina list_task --limit N` → 远端任务列表。stdout 顶层包裹格式 spike 未实证
+/// （数组 / `{tasks:[...]}` / 单对象皆可能）：递归收集所有含 submit_id 的 JSON 对象，
+/// 对包裹形状免疫；解析整体失败返回 Err（调用方静默跳过扫描）。
+pub(crate) async fn list_remote_tasks(
+    binary: &str,
+    limit: u32,
+) -> Result<Vec<RemoteJimengTask>, AppError> {
+    let mut command = dreamina_command(binary);
+    command
+        .arg("list_task")
+        .arg("--limit")
+        .arg(limit.to_string());
+    command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    let out = tokio::time::timeout(Duration::from_secs(CMD_TIMEOUT_SECS), command.output())
+        .await
+        .map_err(|_| AppError::Jimeng(format!("dreamina list_task 超时（{CMD_TIMEOUT_SECS}s）")))?
+        .map_err(|e| AppError::Jimeng(format!("启动 dreamina list_task 失败: {e}")))?;
+    if !out.status.success() {
+        let stderr_head: String = String::from_utf8_lossy(&out.stderr)
+            .trim()
+            .chars()
+            .take(300)
+            .collect();
+        return Err(AppError::Jimeng(format!(
+            "dreamina list_task 退出 {} | stderr: {stderr_head}",
+            out.status
+        )));
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if stdout.is_empty() {
+        return Ok(Vec::new());
+    }
+    let parsed = serde_json::from_str::<serde_json::Value>(&stdout).or_else(|_| {
+        // NDJSON 兜底：逐行解析聚合成数组（CLI 未来若按行输出也能吃到）。
+        let items: Vec<serde_json::Value> = stdout
+            .lines()
+            .filter_map(|line| serde_json::from_str(line.trim()).ok())
+            .collect();
+        serde_json::to_value(items)
+    });
+    let value =
+        parsed.map_err(|e| AppError::Jimeng(format!("dreamina list_task 输出解析失败: {e}")))?;
+    let mut tasks = Vec::new();
+    collect_task_objects(&value, &mut tasks);
+    Ok(tasks)
+}
+
+/// 递归收集含 `submit_id` + `gen_status` 的对象为任务项；已命中的对象不再深入
+/// （result_json/commerce_info 子树里不会有任务对象）。
+fn collect_task_objects(value: &serde_json::Value, out: &mut Vec<RemoteJimengTask>) {
+    match value {
+        serde_json::Value::Object(map) => {
+            let submit_id = map.get("submit_id").and_then(|v| v.as_str());
+            let gen_status = map.get("gen_status").and_then(|v| v.as_str());
+            if let (Some(submit_id), Some(gen_status)) = (submit_id, gen_status) {
+                out.push(RemoteJimengTask {
+                    submit_id: submit_id.to_string(),
+                    prompt: map
+                        .get("prompt")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    gen_task_type: map
+                        .get("gen_task_type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    gen_status: gen_status.to_string(),
+                });
+                return;
+            }
+            for child in map.values() {
+                collect_task_objects(child, out);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for child in items {
+                collect_task_objects(child, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::collect_task_objects;
+
+    #[test]
+    fn collects_tasks_from_array_wrapper_and_single_object() {
+        let mut out = Vec::new();
+        collect_task_objects(
+            &serde_json::json!([
+                { "submit_id": "a", "prompt": "一只猫", "gen_task_type": "text2image", "gen_status": "querying" },
+                { "submit_id": "b", "gen_status": "success", "result_json": { "images": [] } }
+            ]),
+            &mut out,
+        );
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].prompt, "一只猫");
+        assert_eq!(out[1].gen_task_type, "");
+
+        // {tasks:[...]} 包裹：递归命中内层数组
+        let mut out = Vec::new();
+        collect_task_objects(
+            &serde_json::json!({ "tasks": [ { "submit_id": "c", "gen_status": "fail", "fail_reason": "x" } ] }),
+            &mut out,
+        );
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].submit_id, "c");
+        assert_eq!(out[0].gen_status, "fail");
+
+        // 单对象（无包裹）
+        let mut out = Vec::new();
+        collect_task_objects(
+            &serde_json::json!({ "submit_id": "d", "gen_status": "querying" }),
+            &mut out,
+        );
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].submit_id, "d");
+    }
+
+    #[test]
+    fn ignores_objects_without_task_fields() {
+        let mut out = Vec::new();
+        collect_task_objects(
+            &serde_json::json!({ "data": { "logid": "x", "credit_count": 10 } }),
+            &mut out,
+        );
+        assert!(out.is_empty());
+    }
+}

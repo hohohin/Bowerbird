@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 use std::sync::RwLock;
 
+use base64::Engine as _;
 use chrono::{DateTime, Duration, Utc};
+use ed25519_dalek::Verifier as _;
 use serde::{Deserialize, Serialize};
 
 use crate::cloud::{policy::FeaturePolicy, AuthClient, CloudClient};
@@ -79,10 +81,18 @@ pub struct EntitlementSnapshot {
     pub entitlement_version: i32,
     pub signature_version: i32,
     pub signature: Option<String>,
+    /// 测试账号标记（raw_app_meta_data.bowerbird_test，与 A8-T1 小流量门控同源）：
+    /// 只决定桌面「设置 · 开发者选项」可见性，不参与付费门控，也不进签名载荷。
+    #[serde(default)]
+    pub is_test_account: bool,
     #[serde(default = "Utc::now")]
     pub last_trusted_server_time: DateTime<Utc>,
     #[serde(skip)]
     pub offline_state: Option<OfflineState>,
+    /// 签名是否已通过内置公钥的 Ed25519 验签（加载/同步时计算，不持久化；
+    /// 离线宽限只信任 signature_version>=1 且此标记为真的快照）。
+    #[serde(skip)]
+    pub signature_valid: bool,
 }
 
 impl EntitlementSnapshot {
@@ -105,9 +115,19 @@ pub struct EntitlementService {
 
 impl EntitlementService {
     pub fn new(cloud: CloudClient, cache_path: PathBuf) -> Self {
+        // 缓存可能在两次启动之间被篡改：v1 快照加载时必须重新验签。
         let snapshot = std::fs::read_to_string(&cache_path)
             .ok()
-            .and_then(|json| serde_json::from_str(&json).ok());
+            .and_then(|json| serde_json::from_str::<EntitlementSnapshot>(&json).ok())
+            .map(|mut value| {
+                value.signature_valid = Self::verify_signature(&value);
+                if value.signature_version >= 1 && !value.signature_valid {
+                    tracing::warn!(
+                        "cached entitlement signature failed verification; offline paid rights disabled"
+                    );
+                }
+                value
+            });
         Self {
             cloud,
             cache_path,
@@ -156,8 +176,16 @@ impl EntitlementService {
             .json()
             .await
             .map_err(|error| AppError::Cloud(format!("解析权益响应失败: {error}")))?;
-        // signature_version=0 intentionally cannot grant offline paid rights. It remains useful for
-        // online UI while P3 signing is not configured.
+        // v1 响应必须通过内置公钥验签才可作为离线可信凭证；验签失败（或本构建未
+        // 内置公钥）时降级为 v0 在线可信，与历史 unsigned 行为一致，不中断在线使用。
+        snapshot.signature_valid = Self::verify_signature(&snapshot);
+        if snapshot.signature_version >= 1 && !snapshot.signature_valid {
+            tracing::warn!(
+                "entitlement signature verification failed; snapshot stays online-trusted only"
+            );
+            snapshot.signature_version = 0;
+            snapshot.signature = None;
+        }
         snapshot.last_trusted_server_time = snapshot.issued_at;
         snapshot.offline_state = Some(if snapshot.signature_version <= 0 {
             Self::evaluate_online(&snapshot, Utc::now())
@@ -196,10 +224,9 @@ impl EntitlementService {
     }
 
     fn evaluate(snapshot: &EntitlementSnapshot, now: DateTime<Utc>) -> OfflineState {
-        // A server response without a verifiable signature is online-only and may never unlock
-        // cached Pro/Studio rights after restart.
-        if snapshot.signature_version <= 0 || snapshot.signature.as_deref().unwrap_or("").is_empty()
-        {
+        // Offline paid rights require a snapshot whose signature passed Ed25519 verification
+        // against the built-in public key; mere presence of a signature string is not trust.
+        if snapshot.signature_version <= 0 || !snapshot.signature_valid {
             return OfflineState::Invalid;
         }
         if now + Duration::minutes(5) < snapshot.last_trusted_server_time {
@@ -234,6 +261,83 @@ impl EntitlementService {
         Ok(())
     }
 
+    /// 内置 Ed25519 验签公钥（base64 原始 32 字节，构建期由 build.rs 注入）。
+    /// 未注入的构建不启用离线宽限验签；在线权益不受影响。
+    fn builtin_verifying_key() -> Option<ed25519_dalek::VerifyingKey> {
+        let encoded = option_env!("BOWERBIRD_ENTITLEMENT_PUBKEY")?.trim();
+        if encoded.is_empty() {
+            return None;
+        }
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .ok()?;
+        let bytes: [u8; 32] = decoded.try_into().ok()?;
+        ed25519_dalek::VerifyingKey::from_bytes(&bytes).ok()
+    }
+
+    fn verify_signature(snapshot: &EntitlementSnapshot) -> bool {
+        match Self::builtin_verifying_key() {
+            Some(key) => Self::verify_signature_with(&key, snapshot),
+            None => false,
+        }
+    }
+
+    fn verify_signature_with(
+        key: &ed25519_dalek::VerifyingKey,
+        snapshot: &EntitlementSnapshot,
+    ) -> bool {
+        let Some(encoded) = snapshot.signature.as_deref() else {
+            return false;
+        };
+        let Ok(raw) = base64::engine::general_purpose::STANDARD.decode(encoded) else {
+            return false;
+        };
+        let Ok(signature) = ed25519_dalek::Signature::from_slice(&raw) else {
+            return false;
+        };
+        key.verify(Self::signing_payload(snapshot).as_bytes(), &signature)
+            .is_ok()
+    }
+
+    /// 与 Edge `_shared/entitlement-signing.ts` 逐字节一致的规范化签名载荷：
+    /// 键排序 + 无空白 JSON；时间字段按 toISOString 的毫秒精度格式化。
+    fn signing_payload(snapshot: &EntitlementSnapshot) -> String {
+        let value = serde_json::json!({
+            "v": 1,
+            "user_id": snapshot.user_id,
+            "tier": snapshot.tier,
+            "balances": {
+                "daily": snapshot.balances.daily,
+                "sub": snapshot.balances.sub,
+                "topup": snapshot.balances.topup,
+            },
+            "policy": serde_json::to_value(&snapshot.policy).unwrap_or(serde_json::Value::Null),
+            "generation_services": snapshot
+                .generation_services
+                .iter()
+                .map(|service| serde_json::json!({
+                    "service": service.service,
+                    "label": service.label,
+                    "credits": service.credits,
+                }))
+                .collect::<Vec<_>>(),
+            "prompt_configs": snapshot
+                .prompt_configs
+                .iter()
+                .map(|config| serde_json::json!({
+                    "key": config.key,
+                    "value": config.value,
+                    "version": config.version,
+                }))
+                .collect::<Vec<_>>(),
+            "issued_at": format_iso_ms(snapshot.issued_at),
+            "refresh_after": format_iso_ms(snapshot.refresh_after),
+            "grace_until": format_iso_ms(snapshot.grace_until),
+            "entitlement_version": snapshot.entitlement_version,
+        });
+        canonical_json(&value)
+    }
+
     fn free_snapshot(now: DateTime<Utc>, state: OfflineState) -> EntitlementSnapshot {
         EntitlementSnapshot {
             user_id: String::new(),
@@ -249,19 +353,54 @@ impl EntitlementService {
             entitlement_version: 0,
             signature_version: 0,
             signature: None,
+            is_test_account: false,
             last_trusted_server_time: now,
             offline_state: Some(state),
+            signature_valid: false,
         }
     }
+}
+
+/// 键递归排序、无空白的规范化 JSON 序列化（与 Edge canonicalJson 逐字节一致）。
+fn canonical_json(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            let body: Vec<String> = keys
+                .iter()
+                .map(|key| {
+                    format!(
+                        "{}:{}",
+                        serde_json::to_string(*key).unwrap_or_default(),
+                        canonical_json(&map[*key])
+                    )
+                })
+                .collect();
+            format!("{{{}}}", body.join(","))
+        }
+        serde_json::Value::Array(items) => {
+            let body: Vec<String> = items.iter().map(canonical_json).collect();
+            format!("[{}]", body.join(","))
+        }
+        other => serde_json::to_string(other).unwrap_or_default(),
+    }
+}
+
+/// toISOString 等价的毫秒精度 RFC3339（Z 后缀），保证两侧时间字段字节一致。
+fn format_iso_ms(value: DateTime<Utc>) -> String {
+    value.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        CreditBalance, EntitlementService, EntitlementSnapshot, OfflineState, PromptConfig,
+        canonical_json, CreditBalance, EntitlementService, EntitlementSnapshot, GenerationService,
+        OfflineState, PromptConfig,
     };
     use crate::cloud::policy::FeaturePolicy;
-    use chrono::{Duration, Utc};
+    use base64::Engine as _;
+    use chrono::{Duration, TimeZone, Utc};
 
     fn signed(now: chrono::DateTime<Utc>) -> EntitlementSnapshot {
         EntitlementSnapshot {
@@ -278,8 +417,10 @@ mod tests {
             entitlement_version: 1,
             signature_version: 1,
             signature: Some("test-signature".into()),
+            is_test_account: false,
             last_trusted_server_time: now,
             offline_state: None,
+            signature_valid: true,
         }
     }
 
@@ -307,6 +448,7 @@ mod tests {
         let mut value = signed(now);
         value.signature_version = 0;
         value.signature = None;
+        value.signature_valid = false;
         assert_eq!(
             EntitlementService::evaluate(&value, now),
             OfflineState::Invalid
@@ -319,11 +461,25 @@ mod tests {
     }
 
     #[test]
+    fn signature_presence_without_verification_is_not_trusted() {
+        // 防回归：仅存在签名字符串（旧 evaluate 行为）不再授予离线权益，
+        // 必须经过内置公钥验签（signature_valid）。
+        let now = Utc::now();
+        let mut value = signed(now);
+        value.signature_valid = false;
+        assert_eq!(
+            EntitlementService::evaluate(&value, now),
+            OfflineState::Invalid
+        );
+    }
+
+    #[test]
     fn unsigned_snapshot_is_online_only_until_refresh() {
         let now = Utc::now();
         let mut value = signed(now);
         value.signature_version = 0;
         value.signature = None;
+        value.signature_valid = false;
         assert_eq!(
             EntitlementService::evaluate_online(&value, now),
             OfflineState::Fresh
@@ -366,5 +522,124 @@ mod tests {
         let json = serde_json::to_string(&signed(now)).unwrap();
         let parsed: EntitlementSnapshot = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.prompt_config("understand_autoname"), None);
+    }
+
+    #[test]
+    fn snapshot_deserializes_test_account_marker() {
+        let now = Utc::now();
+        let mut marked = signed(now);
+        marked.is_test_account = true;
+        let parsed: EntitlementSnapshot =
+            serde_json::from_str(&serde_json::to_string(&marked).unwrap()).unwrap();
+        assert!(parsed.is_test_account);
+        // 旧快照无该字段 → false；且不进签名载荷（vector 载荷已锁定无此键）。
+        let legacy = signed(now);
+        let parsed: EntitlementSnapshot =
+            serde_json::from_str(&serde_json::to_string(&legacy).unwrap()).unwrap();
+        assert!(!parsed.is_test_account);
+        assert!(!EntitlementService::signing_payload(&marked).contains("is_test_account"));
+    }
+
+    // ===== 跨语言签名向量（与 _shared/entitlement-signing_test.ts 同源同值）=====
+
+    const VECTOR_PUBKEY: &str = "B2OHhR/upisHvHFZtRtUlsshBWdgPrZlE+f834lf7Yg=";
+    const VECTOR_SIGNATURE: &str =
+        "FpKmT6I4a1UC6VVXMzgKiWUVjP99FEva91aq+O7iFUQOD4RSWeSECP8Rx+vNdaUgD3WwxkA7NuHocrGReTenBg==";
+    const VECTOR_PAYLOAD: &str = r#"{"balances":{"daily":12,"sub":340,"topup":0},"entitlement_version":2,"generation_services":[{"credits":5,"label":"Pro 高质量","service":"image_pro"},{"credits":1,"label":"Lite 极速","service":"image_lite"}],"grace_until":"2026-09-03T08:00:00.000Z","issued_at":"2026-08-27T08:00:00.000Z","policy":{"agent_budget_options":["controlled-min","controlled-standard"],"allowed_agent_skills":["bowerbird-controlled-image-edit"],"can_hd_export":false,"can_use_agent_runs":true,"can_use_byo":true,"can_use_cloud":true,"can_use_priority_queue":false,"can_use_visual_profiles":true,"max_parallel_agent_runs":2,"max_parallel_jobs":4,"understand_daily_limit":null},"prompt_configs":[{"key":"understand_autoname","value":"给这张图取名\n第二行描述","version":3}],"refresh_after":"2026-08-27T14:00:00.000Z","tier":"pro","user_id":"11111111-2222-3333-4444-555555555555","v":1}"#;
+
+    fn vector_snapshot() -> EntitlementSnapshot {
+        let time = |s: &str| {
+            chrono::DateTime::parse_from_rfc3339(s)
+                .unwrap()
+                .with_timezone(&Utc)
+        };
+        EntitlementSnapshot {
+            user_id: "11111111-2222-3333-4444-555555555555".into(),
+            tier: "pro".into(),
+            balances: CreditBalance {
+                daily: 12,
+                sub: 340,
+                topup: 0,
+            },
+            policy: FeaturePolicy::for_tier("pro"),
+            recent_transactions: vec![],
+            generation_services: vec![
+                GenerationService {
+                    service: "image_pro".into(),
+                    label: "Pro 高质量".into(),
+                    credits: 5,
+                },
+                GenerationService {
+                    service: "image_lite".into(),
+                    label: "Lite 极速".into(),
+                    credits: 1,
+                },
+            ],
+            prompt_configs: vec![PromptConfig {
+                key: "understand_autoname".into(),
+                value: "给这张图取名\n第二行描述".into(),
+                version: 3,
+            }],
+            issued_at: time("2026-08-27T08:00:00.000Z"),
+            refresh_after: time("2026-08-27T14:00:00.000Z"),
+            grace_until: time("2026-09-03T08:00:00.000Z"),
+            entitlement_version: 2,
+            signature_version: 1,
+            signature: Some(VECTOR_SIGNATURE.into()),
+            is_test_account: false,
+            last_trusted_server_time: time("2026-08-27T08:00:00.000Z"),
+            offline_state: None,
+            signature_valid: false,
+        }
+    }
+
+    fn vector_key() -> ed25519_dalek::VerifyingKey {
+        let raw = base64::engine::general_purpose::STANDARD
+            .decode(VECTOR_PUBKEY)
+            .unwrap();
+        ed25519_dalek::VerifyingKey::from_bytes(&raw.try_into().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn signing_payload_matches_edge_canonical_vector() {
+        assert_eq!(
+            EntitlementService::signing_payload(&vector_snapshot()),
+            VECTOR_PAYLOAD
+        );
+    }
+
+    #[test]
+    fn vector_signature_verifies_and_tampering_fails() {
+        let key = vector_key();
+        let mut snapshot = vector_snapshot();
+        assert!(EntitlementService::verify_signature_with(&key, &snapshot));
+        // 篡改任一门控字段（tier）→ 验签失败。
+        snapshot.tier = "studio".into();
+        assert!(!EntitlementService::verify_signature_with(&key, &snapshot));
+        // 篡改时间字段同样失效。
+        let mut tampered = vector_snapshot();
+        tampered.grace_until = tampered.grace_until + Duration::days(30);
+        assert!(!EntitlementService::verify_signature_with(&key, &tampered));
+        // 无签名 / 非法 base64 / 非法签名长度均安全失败。
+        let mut none = vector_snapshot();
+        none.signature = None;
+        assert!(!EntitlementService::verify_signature_with(&key, &none));
+        let mut garbage = vector_snapshot();
+        garbage.signature = Some("not-base64!!".into());
+        assert!(!EntitlementService::verify_signature_with(&key, &garbage));
+    }
+
+    #[test]
+    fn canonical_json_sorts_keys_and_matches_scalar_forms() {
+        let value = serde_json::json!({"b": {"d": 1, "a": null}, "a": [true, "x"]});
+        assert_eq!(
+            canonical_json(&value),
+            r#"{"a":[true,"x"],"b":{"a":null,"d":1}}"#
+        );
+        // 中文不转义（与 JS JSON.stringify 一致）。
+        assert_eq!(
+            canonical_json(&serde_json::json!({"中": "文"})),
+            "{\"中\":\"文\"}"
+        );
     }
 }

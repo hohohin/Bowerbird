@@ -6,6 +6,7 @@ import { isTerminal, nextPhase, validateAction } from "../kernel/phase-machine.t
 import { evaluatePolicy, lookupTool } from "../kernel/policy-engine.ts";
 import { ToolLedger, canonicalJson, sha256Hex } from "../kernel/tool-ledger.ts";
 import { SMART_REFINEMENT_MANIFEST } from "../skills/smart-refinement/manifest.ts";
+import { assertVisualProfileCapsule, type VisualProfileCapsule, visualProfileHashPayload } from "../contracts/visual-profile.ts";
 
 export type LocalAgentInput = {
   targetAssetId: string;
@@ -13,6 +14,7 @@ export type LocalAgentInput = {
   caption?: string | null;
   referenceAssetIds?: string[];
   ratio?: string | null;
+  visualProfileCapsule?: VisualProfileCapsule | null;
 };
 
 export type LocalAgentToolResult = { callId: string; result: unknown };
@@ -77,6 +79,12 @@ export function createLocalAgentCheckpoint(
   if (!input.targetAssetId.trim()) throw new Error("local_agent_target_required");
   if (!goal) throw new Error("local_agent_goal_required");
   if (goal.length > 4_000) throw new Error("local_agent_goal_too_long");
+  if (input.visualProfileCapsule) {
+    assertVisualProfileCapsule(input.visualProfileCapsule);
+    if (sha256Hex(canonicalJson(visualProfileHashPayload(input.visualProfileCapsule))) !== input.visualProfileCapsule.hash) {
+      throw new Error("visual_profile_capsule_hash_mismatch");
+    }
+  }
   return {
     schemaVersion: 1,
     runId,
@@ -121,9 +129,19 @@ function buildContext(checkpoint: LocalAgentCheckpoint): ContextBlock[] {
       body: {
         phase: checkpoint.phase,
         skillId: SMART_REFINEMENT_MANIFEST.id,
-        requirement: "只依据目标、素材摘要和既有工具结果选择当前阶段唯一允许的动作。精修 prompt 必须完整可直接用于图生图。",
+        requirement: "只依据目标、素材摘要、项目视觉设定和既有工具结果选择当前阶段唯一允许的动作。精修 prompt 必须完整可直接用于图生图；本次明确目标优先于项目视觉设定。",
       },
     },
+    ...(checkpoint.input.visualProfileCapsule ? [{
+      kind: "visual_profile_capsule" as const,
+      source: checkpoint.input.visualProfileCapsule.profileId,
+      trust: "untrusted" as const,
+      contentHash: checkpoint.input.visualProfileCapsule.hash,
+      body: {
+        ...checkpoint.input.visualProfileCapsule,
+        instruction: "将 must/prefer 转成精修 rubric，将 avoid 转成排除项；仅补充目标未明确的视觉选择，冲突时以本次目标为准；contentThemes 不得自动加入画面；不得修改或回写视觉设定。",
+      },
+    }] : []),
     {
       kind: "user_goal",
       source: "desktop-user",

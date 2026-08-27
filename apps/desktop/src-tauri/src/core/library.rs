@@ -32,6 +32,9 @@ pub struct Asset {
     pub created_at: Option<i64>,
     pub file_mtime: Option<i64>,
     pub generation_session_id: Option<String>,
+    /// 被创作板当参考图调用的次数（generation_meta 回填 + 每次实际下发 +1）。
+    #[serde(default)]
+    pub reference_count: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,6 +93,9 @@ pub struct Analysis {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenerationHistoryTurn {
     pub prompt: String,
+    /// 当时真正提交给 provider 的最终指令；旧 generation_meta 为 None。
+    #[serde(default)]
+    pub applied_prompt: Option<String>,
     pub prompt_raw: Option<String>,
     pub images: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -117,6 +123,9 @@ pub struct GenerationHistory {
     /// 前端 job 用它定续轮坞 provider 初值，避免即梦会话默认落到 codex。
     #[serde(default)]
     pub provider: Option<String>,
+    /// 会话首轮冻结的视觉设定胶囊；只读追踪，旧 generation_meta 为 None。
+    #[serde(default)]
+    pub visual_profile: Option<crate::core::visual_profile::VisualProfileCapsule>,
 }
 
 /// 反推 caption 解析出的一个维度片段（动态标题 + 正文）。
@@ -287,6 +296,7 @@ fn synth_annotation_asset(annotations_dir: &Path, store_path: &str) -> Option<Pr
             created_at: None,
             file_mtime: None,
             generation_session_id: None,
+            reference_count: 0,
         },
         caption: None,
         sections,
@@ -316,16 +326,18 @@ fn asset_from_row(r: &rusqlite::Row) -> rusqlite::Result<Asset> {
         created_at: r.get("created_at")?,
         file_mtime: r.get("file_mtime")?,
         generation_session_id: r.get("generation_session_id")?,
+        reference_count: r.get("reference_count")?,
     })
 }
 
 const ASSET_COLS: &str =
     "id, name, ext, origin_path, store_path, thumb_path, size, width, height, \
     duration, phash, colors, rating, source, source_url, folder_id, created_at, file_mtime, \
-    generation_session_id";
+    generation_session_id, reference_count";
 const ASSET_COLS_A: &str = "a.id, a.name, a.ext, a.origin_path, a.store_path, a.thumb_path, \
     a.size, a.width, a.height, a.duration, a.phash, a.colors, a.rating, a.source, \
-    a.source_url, a.folder_id, a.created_at, a.file_mtime, a.generation_session_id";
+    a.source_url, a.folder_id, a.created_at, a.file_mtime, a.generation_session_id, \
+    a.reference_count";
 
 /// 瀑布流「同流程合并」：列表已 `ORDER BY created_at DESC` → 同 generation_session_id 的首见者
 /// 即最新一张。按 session 去重保首见、丢后续过程图；无 session（非生成图）原样全留。
@@ -1226,6 +1238,28 @@ impl Database {
         Ok(a)
     }
 
+    /// 素材被创作板调用（参考）计数：本次生成实际下发的参考图（store_path）各 +1。
+    /// 单次调用内去重；库外 / 临时标注文件不命中（UPDATE 0 行，无副作用）。
+    pub fn bump_asset_reference_counts(&self, store_paths: &[String]) -> AppResult<()> {
+        let mut unique: Vec<&String> = {
+            let mut seen = std::collections::HashSet::new();
+            store_paths
+                .iter()
+                .filter(|p| !p.trim().is_empty())
+                .filter(|p| seen.insert(p.as_str()))
+                .collect()
+        };
+        unique.sort_unstable(); // 顺序稳定，便于测试断言与日志对账
+        let conn = self.conn.lock().unwrap();
+        for path in unique {
+            conn.execute(
+                "UPDATE assets SET reference_count = reference_count + 1 WHERE store_path = ?1",
+                rusqlite::params![path],
+            )?;
+        }
+        Ok(())
+    }
+
     /// 关键词搜索（Eagle 式多维度命中）。
     ///
     /// 语法：空白分词 → 多词 AND；`-词` 排除（该词命中任何维度的资产被剔除）。
@@ -1233,14 +1267,16 @@ impl Database {
     /// - 文件名（assets.name）/ 来源网址（assets.source_url）
     /// - 标签（tags 表 JOIN——FTS 的 tags 列从未被维护，见 0002 设计）
     /// - prompt 正文（prompts.body，经 asset_prompts 关联）
-    /// - 反推「反推提示词」维度：analyses(kind=caption).payload 的 sections 中
-    ///   title='反推提示词' 的 body。**只认这个 section**——未反推/旧格式 payload
-    ///   没有该 section，搜不到（刻意行为，不是 bug）。
+    /// - 反推提示词正文（0019 扩列）：analyses(kind=caption) 任意 section 的 body
+    ///   （光影/构图/背景… 全维度可搜）。**仍只认带 sections 的正式反推**——未反推/
+    ///   旧格式 payload 没有结构化维度，搜不到（刻意行为，不是 bug），与 library_fts
+    ///   prompt_body 列的入索引口径一致。
     /// - 所在文件夹名（folders.name）
     /// - 项目名（projects.name）：命中项目名 → 该项目**全部**素材入选。
     ///
     /// 全维度 LIKE 子串（% _ \ 转义为字面）。FTS5 只索引 name 且 trigram <3 字符
-    /// 无法分词，多维度下统一 LIKE 语义更简单；library_fts 表与 0002 触发器保留不动。
+    /// 无法分词，多维度下统一 LIKE 语义更简单；library_fts 其余列由 0019 触发器
+    /// 保持同步（prompt_body/annotation），为后续索引化预留一致数据。
     pub fn search_assets(
         &self,
         query: &str,
@@ -1290,7 +1326,6 @@ impl Database {
                     WHERE ap.asset_id = a.id AND pm.body LIKE ?{p} ESCAPE '\\') \
                   OR EXISTS(SELECT 1 FROM analyses an, json_each(an.payload, '$.sections') s \
                     WHERE an.asset_id = a.id AND an.kind = 'caption' \
-                      AND json_extract(s.value, '$.title') = '反推提示词' \
                       AND json_extract(s.value, '$.body') LIKE ?{p} ESCAPE '\\') \
                   OR EXISTS(SELECT 1 FROM folders f WHERE f.id = a.folder_id \
                     AND f.name LIKE ?{p} ESCAPE '\\') \
@@ -1313,7 +1348,8 @@ impl Database {
         let sql = format!(
             "SELECT a.id, a.name, a.ext, a.origin_path, a.store_path, a.thumb_path, \
              a.size, a.width, a.height, a.duration, a.phash, a.colors, a.rating, a.source, \
-             a.source_url, a.folder_id, a.created_at, a.file_mtime, a.generation_session_id \
+             a.source_url, a.folder_id, a.created_at, a.file_mtime, a.generation_session_id, \
+             a.reference_count \
              FROM assets a \
              WHERE {} \
              AND (?{} IS NULL OR EXISTS(SELECT 1 FROM project_assets pf \
@@ -1475,6 +1511,7 @@ impl Database {
                 references: vec![],
                 dimension_assets: vec![],
                 provider: None,
+                visual_profile: None,
             });
         };
         Self::history_for_session(&conn, &session_id, project_id, annotations_dir)
@@ -1514,6 +1551,7 @@ impl Database {
         let mut first_references: Vec<String> = Vec::new();
         let mut first_dimension_sources: Vec<String> = Vec::new();
         let mut first_provider: Option<String> = None;
+        let mut first_visual_profile = None;
         let mut refs_done = false;
         let rows = stmt.query_map(rusqlite::params![session_id, project_id], |r| {
             Ok((
@@ -1525,11 +1563,12 @@ impl Database {
         })?;
         for row in rows {
             let (prompt, prompt_raw, store_path, payload) = row?;
+            let payload_value = serde_json::from_str::<serde_json::Value>(&payload).ok();
             // 首版 generation_meta 的参考图 / 借用维度源图与 provider（供「新会话重新生成」
             // 复用、复用回绑车牌、续轮坞初值）。
             if !refs_done {
                 refs_done = true;
-                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&payload) {
+                if let Some(v) = payload_value.as_ref() {
                     if let Some(arr) = v.get("references").and_then(|x| x.as_array()) {
                         first_references = arr
                             .iter()
@@ -1545,14 +1584,23 @@ impl Database {
                     if let Some(p) = v.get("provider").and_then(|x| x.as_str()) {
                         first_provider = Some(p.to_string());
                     }
+                    first_visual_profile = v
+                        .get("visual_profile_capsule")
+                        .cloned()
+                        .and_then(|value| serde_json::from_value(value).ok());
                 }
             }
             let (Some(prompt), Some(path)) = (prompt, store_path) else {
                 continue;
             };
+            let row_applied_prompt = payload_value
+                .as_ref()
+                .and_then(|v| v.get("applied_prompt"))
+                .and_then(|x| x.as_str())
+                .map(String::from);
             // 本轮实际下发的参考图（同轮多行的 payload 相同；相邻同 prompt 跨轮合并时保留首行）。
-            let row_refs: Vec<String> = serde_json::from_str::<serde_json::Value>(&payload)
-                .ok()
+            let row_refs: Vec<String> = payload_value
+                .as_ref()
                 .and_then(|v| {
                     v.get("references").and_then(|x| x.as_array()).map(|arr| {
                         arr.iter()
@@ -1562,11 +1610,14 @@ impl Database {
                 })
                 .unwrap_or_default();
             // 相邻同 prompt = 同一轮多图，合并；否则开新轮（首轮的 prompt_raw 随新轮记一次）。
-            if turns.last().map(|t| t.prompt.as_str()) == Some(prompt.as_str()) {
+            if turns.last().is_some_and(|turn| {
+                turn.prompt == prompt && turn.applied_prompt == row_applied_prompt
+            }) {
                 turns.last_mut().unwrap().images.push(path);
             } else {
                 turns.push(GenerationHistoryTurn {
                     prompt,
+                    applied_prompt: row_applied_prompt,
                     prompt_raw,
                     images: vec![path],
                     references: row_refs,
@@ -1632,6 +1683,7 @@ impl Database {
             references,
             dimension_assets,
             provider: first_provider,
+            visual_profile: first_visual_profile,
         })
     }
 
@@ -2279,6 +2331,7 @@ mod tests {
             created_at: Some(created_at),
             file_mtime: Some(0),
             generation_session_id: None,
+            reference_count: 0,
         })
         .unwrap();
         id
@@ -2325,6 +2378,7 @@ mod tests {
             created_at: None,
             file_mtime: None,
             generation_session_id: None,
+            reference_count: 0,
         })
         .unwrap();
         (store, thumb)
@@ -2473,7 +2527,7 @@ mod tests {
     }
 
     #[test]
-    fn search_matches_caption_prompt_section_only() {
+    fn search_matches_caption_sections() {
         let db = db();
         let id = put_asset(&db, "photo-001");
         db.insert_analysis(&Analysis {
@@ -2491,17 +2545,165 @@ mod tests {
             created_at: None,
         })
         .unwrap();
-        // 命中：词只出现在「反推提示词」section
+        // 0019 扩列：任意 section 正文都可搜（不只「反推提示词」）
         let r = db.search_assets("小羊", None, 10).unwrap();
         assert!(
             r.iter().any(|a| a.id == id),
             "应按反推「反推提示词」维度命中"
         );
-        // 不命中：词只在其它 section（构图）——只认反推提示词维度
+        let r = db.search_assets("竖幅", None, 10).unwrap();
         assert!(
-            db.search_assets("竖幅", None, 10).unwrap().is_empty(),
-            "构图等其它 section 不参与搜索"
+            r.iter().any(|a| a.id == id),
+            "0019 扩列后构图等其它 section 正文也应可搜"
         );
+        // 刻意行为保留：未反推（无 sections）的图搜不到
+        let raw = put_asset(&db, "photo-002");
+        db.insert_analysis(&Analysis {
+            id: Ulid::new().to_string(),
+            asset_id: raw.clone(),
+            kind: "caption".to_string(),
+            payload: serde_json::json!({ "text": "命名\n一张逆光的城市风景照片" }).to_string(),
+            provider: None,
+            created_at: None,
+        })
+        .unwrap();
+        assert!(
+            db.search_assets("逆光", None, 10).unwrap().is_empty(),
+            "基础分析（无 sections）不入搜索维度"
+        );
+    }
+
+    #[test]
+    fn bump_asset_reference_counts_dedupes_and_ignores_unknown_paths() {
+        let db = db();
+        let a = put_asset(&db, "ref-a");
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE assets SET store_path = '/lib/a.png' WHERE id = ?1",
+                rusqlite::params![a],
+            )
+            .unwrap();
+        }
+        // 同一次调用内 a.png 出现两次 → 只 +1；库外/空白路径无副作用。
+        db.bump_asset_reference_counts(&[
+            "/lib/a.png".into(),
+            "/lib/a.png".into(),
+            "/tmp/annotation.png".into(),
+            "  ".into(),
+        ])
+        .unwrap();
+        db.bump_asset_reference_counts(&["/lib/a.png".into()])
+            .unwrap();
+        let count: i64 = {
+            let conn = db.conn.lock().unwrap();
+            conn.query_row(
+                "SELECT reference_count FROM assets WHERE id = ?1",
+                rusqlite::params![a],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn fts_syncs_prompt_body_and_annotation_columns() {
+        let db = db();
+        let id = put_asset(&db, "fts-001");
+        let caption_id = Ulid::new().to_string();
+        db.insert_analysis(&Analysis {
+            id: caption_id.clone(),
+            asset_id: id.clone(),
+            kind: "caption".to_string(),
+            payload: serde_json::json!({
+                "text": "- **光影**：逆光轮廓光",
+                "sections": [ { "title": "光影", "body": "逆光轮廓光" } ]
+            })
+            .to_string(),
+            provider: None,
+            created_at: None,
+        })
+        .unwrap();
+        let fts_row = |aid: &str| -> (String, String) {
+            let conn = db.conn.lock().unwrap();
+            conn.query_row(
+                "SELECT prompt_body, annotation FROM library_fts WHERE asset_id = ?1",
+                rusqlite::params![aid],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+            )
+            .unwrap()
+        };
+        let (body, _) = fts_row(&id);
+        assert_eq!(
+            body, "- **光影**：逆光轮廓光",
+            "反推正文应进 prompt_body 列"
+        );
+
+        // 标注 token 进 annotation 列
+        db.insert_analysis(&Analysis {
+            id: Ulid::new().to_string(),
+            asset_id: id.clone(),
+            kind: "annotation".to_string(),
+            payload: serde_json::json!({
+                "shapes": [ { "token": "<bbox>100 100 200 200</bbox>" } ]
+            })
+            .to_string(),
+            provider: None,
+            created_at: None,
+        })
+        .unwrap();
+        let (body, anno) = fts_row(&id);
+        assert_eq!(body, "- **光影**：逆光轮廓光");
+        assert_eq!(
+            anno, "<bbox>100 100 200 200</bbox>",
+            "标注 token 应进 annotation 列"
+        );
+
+        // 改名不清空两列（0002 的 fts_au 会清空；0019 重建后保留）
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE assets SET name='改过的名字' WHERE id=?1",
+                rusqlite::params![id],
+            )
+            .unwrap();
+        }
+        let (body, anno) = fts_row(&id);
+        assert_eq!(body, "- **光影**：逆光轮廓光", "改名后 prompt_body 应保留");
+        assert_eq!(
+            anno, "<bbox>100 100 200 200</bbox>",
+            "改名后 annotation 应保留"
+        );
+
+        // 删除 caption → 该列回空（行仍在，name 完整）
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "DELETE FROM analyses WHERE id = ?1",
+                rusqlite::params![caption_id],
+            )
+            .unwrap();
+        }
+        let (body, anno) = fts_row(&id);
+        assert_eq!(body, "", "删 caption 后 prompt_body 应回空");
+        assert_eq!(
+            anno, "<bbox>100 100 200 200</bbox>",
+            "annotation 不受 caption 删除影响"
+        );
+
+        // 坏 JSON 的 caption 行不炸触发器，安全降级为空
+        db.insert_analysis(&Analysis {
+            id: Ulid::new().to_string(),
+            asset_id: id.clone(),
+            kind: "caption".to_string(),
+            payload: "不是 JSON 的原始文本".to_string(),
+            provider: None,
+            created_at: None,
+        })
+        .unwrap();
+        let (body, _) = fts_row(&id);
+        assert_eq!(body, "", "非法 payload 应安全降级为空串");
     }
 
     #[test]
@@ -2605,6 +2807,7 @@ mod tests {
                 created_at: None,
                 file_mtime: Some(0),
                 generation_session_id: Some(session.into()),
+                reference_count: 0,
             })
             .unwrap();
         }
@@ -2624,12 +2827,14 @@ mod tests {
             let payload = match refs {
                 Some(rs) => serde_json::json!({
                     "prompt": prompt,
+                    "applied_prompt": format!("{prompt}\n\n【项目视觉设定 v2】\n必须保持：色彩=低饱和"),
                     "prompt_raw": format!("{prompt}（未铺开）"),
                     "session_id": sid,
                     "references": rs,
                 }),
                 None => serde_json::json!({
                     "prompt": prompt,
+                    "applied_prompt": format!("{prompt}\n\n【项目视觉设定 v2】\n必须保持：色彩=低饱和"),
                     "prompt_raw": format!("{prompt}（未铺开）"),
                     "session_id": sid,
                 }),
@@ -2668,6 +2873,7 @@ mod tests {
                 created_at: None,
                 file_mtime: Some(0),
                 generation_session_id: None,
+                reference_count: 0,
             })
             .unwrap();
         }
@@ -2689,6 +2895,10 @@ mod tests {
         assert_eq!(h.session_id.as_deref(), Some(session));
         assert_eq!(h.turns.len(), 2, "两轮：首版（2图合并）+ 修改1");
         assert_eq!(h.turns[0].prompt, "首版");
+        assert!(h.turns[0]
+            .applied_prompt
+            .as_deref()
+            .is_some_and(|prompt| prompt.contains("必须保持：色彩=低饱和")));
         assert_eq!(h.turns[0].prompt_raw.as_deref(), Some("首版（未铺开）"));
         assert_eq!(h.turns[0].images.len(), 2);
         assert_eq!(h.turns[1].prompt, "修改1");
@@ -2738,6 +2948,7 @@ mod tests {
                 created_at: None,
                 file_mtime: Some(0),
                 generation_session_id: Some(session.into()),
+                reference_count: 0,
             })
             .unwrap();
         }
@@ -2802,6 +3013,7 @@ mod tests {
                 created_at: None,
                 file_mtime: Some(0),
                 generation_session_id: Some(session.into()),
+                reference_count: 0,
             })
             .unwrap();
         }
@@ -2873,6 +3085,7 @@ mod tests {
                 created_at: None,
                 file_mtime: Some(0),
                 generation_session_id: Some(session.into()),
+                reference_count: 0,
             })
             .unwrap();
         }
@@ -2938,6 +3151,7 @@ mod tests {
                 created_at: None,
                 file_mtime: Some(0),
                 generation_session_id: Some(session.into()),
+                reference_count: 0,
             })
             .unwrap();
         }
@@ -3020,6 +3234,7 @@ mod tests {
             created_at: None,
             file_mtime: Some(0),
             generation_session_id: Some("sess-anno".into()),
+            reference_count: 0,
         })
         .unwrap();
 
@@ -3097,6 +3312,7 @@ mod tests {
             created_at: None,
             file_mtime: None,
             generation_session_id: session.map(String::from),
+            reference_count: 0,
         };
         let items = vec![
             mk("a1", Some("s1")), // s1 最新
@@ -3134,6 +3350,7 @@ mod tests {
                 created_at: Some(0),
                 file_mtime: Some(0),
                 generation_session_id: Some(session.into()),
+                reference_count: 0,
             })
             .unwrap();
         }
@@ -3178,6 +3395,7 @@ mod tests {
                 created_at: Some(0),
                 file_mtime: Some(0),
                 generation_session_id: Some(session.into()),
+                reference_count: 0,
             })
             .unwrap();
         }
@@ -3503,6 +3721,7 @@ mod tests {
             created_at: Some(0),
             file_mtime: Some(0),
             generation_session_id: None,
+            reference_count: 0,
         })
         .unwrap();
 

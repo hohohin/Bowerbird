@@ -16,6 +16,14 @@
 //!   「重新编辑 / 重试」版本分支持久归组，瀑布流同会话轮播重启不丢）
 //! - `0015_manual_name_guard.sql`：assets.name_manual 手改名保护标记（autoname 条件写不覆盖）
 //! - `0016_cloud_agent_runs.sql`：Cloud Agent 会话最小本地快照与最终资产关联
+//! - `0017_visual_profiles.sql`：项目视觉设定本地三表（draft/confirmed 版本语义，
+//!   冻结脱敏证据卡快照；AGENT-RUNTIME-PLAN §8/V1）
+//! - `0018_visual_profile_extractor.sql`：视觉设定 extractor 来源列（local_baseline/cloud_model，V2）
+//! - `0019_fts_prompt_body_annotation.sql`：FTS5 扩列（Phase 4 收尾）——analyses 触发器
+//!   同步 prompt_body（有 sections 的反推 caption 正文）/ annotation（标注 token），
+//!   0002 改名触发器不再清空新列，存量整表回填
+//! - `0020_asset_reference_count.sql`：素材被创作板调用（参考）计数（assets.reference_count，
+//!   hook 解析 generation_meta.payload.references 回填历史）
 
 use rusqlite_migration::{Migrations, M};
 
@@ -44,6 +52,15 @@ pub fn migrations() -> Migrations<'static> {
         M::up(include_str!("../../sql/0014_generation_conversations.sql")),
         M::up(include_str!("../../sql/0015_manual_name_guard.sql")),
         M::up(include_str!("../../sql/0016_cloud_agent_runs.sql")),
+        M::up(include_str!("../../sql/0017_visual_profiles.sql")),
+        M::up(include_str!("../../sql/0018_visual_profile_extractor.sql")),
+        M::up(include_str!(
+            "../../sql/0019_fts_prompt_body_annotation.sql"
+        )),
+        M::up_with_hook(
+            include_str!("../../sql/0020_asset_reference_count.sql"),
+            |tx: &rusqlite::Transaction| backfill_asset_reference_counts(tx),
+        ),
     ])
 }
 
@@ -143,6 +160,46 @@ fn merge_existing_duplicates(tx: &rusqlite::Transaction) -> rusqlite_migration::
     Ok(())
 }
 
+/// 0020 历史回填：每条 generation_meta 的 payload.references 是「该次生成实际下发的参考图
+/// store_path 列表」——按条去重后给命中的资产各 +N（N = 出现在多少次生成调用中）。
+/// 坏 payload / 库外路径安全跳过。
+fn backfill_asset_reference_counts(tx: &rusqlite::Transaction) -> rusqlite_migration::HookResult {
+    let mut stmt = tx
+        .prepare("SELECT payload FROM analyses WHERE kind = 'generation_meta'")
+        .map_err(rusqlite_migration::HookError::from)?;
+    let rows = stmt
+        .query_map([], |r| r.get::<_, String>(0))
+        .map_err(rusqlite_migration::HookError::from)?;
+    let mut counts: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+    for row in rows {
+        let payload = row.map_err(rusqlite_migration::HookError::from)?;
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&payload) else {
+            continue;
+        };
+        let Some(list) = value.get("references").and_then(|v| v.as_array()) else {
+            continue;
+        };
+        // 一条 meta = 一次生成调用：同一资产在同一次里只计 1。
+        let mut seen = std::collections::HashSet::new();
+        for item in list {
+            if let Some(path) = item.as_str() {
+                if !path.is_empty() && seen.insert(path.to_string()) {
+                    *counts.entry(path.to_string()).or_insert(0) += 1;
+                }
+            }
+        }
+    }
+    drop(stmt);
+    for (path, times) in counts {
+        tx.execute(
+            "UPDATE assets SET reference_count = reference_count + ?1 WHERE store_path = ?2",
+            rusqlite::params![times, path],
+        )
+        .map_err(rusqlite_migration::HookError::from)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,6 +207,50 @@ mod tests {
     use image::RgbImage;
 
     use crate::media::phash::testutil::make_photo;
+
+    /// 0020 回填：v19 旧库（无 reference_count）插入资产生成 meta 后升到最新，
+    /// generation_meta.payload.references 命中的资产按次数累加；同条 meta 内重复去重；
+    /// 库外路径无副作用。
+    #[test]
+    fn migration_0020_backfills_reference_counts_from_generation_meta() {
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        let ms = migrations();
+        ms.to_version(&mut conn, 19).unwrap();
+
+        conn.execute(
+            "INSERT INTO assets (id, name, store_path, created_at) VALUES \
+             ('ref-1', 'a', '/lib/a.png', 1), ('ref-2', 'b', '/lib/b.png', 1)",
+            [],
+        )
+        .unwrap();
+        // 两次生成调用都用了 a.png（第二次还重复列了一次，应去重）；b.png 一次；c.png 库外。
+        for refs in [
+            r#"{ "prompt": "p", "references": ["/lib/a.png"] }"#,
+            r#"{ "prompt": "p", "references": ["/lib/a.png", "/lib/a.png", "/lib/b.png"] }"#,
+            r#"{ "prompt": "p", "references": ["/lib/c.png"] }"#,
+        ] {
+            conn.execute(
+                "INSERT INTO analyses (id, asset_id, kind, payload) \
+                 VALUES (lower(hex(randomblob(16))), 'ref-1', 'generation_meta', ?1)",
+                rusqlite::params![refs],
+            )
+            .unwrap();
+        }
+
+        ms.to_latest(&mut conn).unwrap();
+
+        let count = |id: &str| -> i64 {
+            conn.query_row(
+                "SELECT reference_count FROM assets WHERE id = ?1",
+                rusqlite::params![id],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(count("ref-1"), 2, "a.png 被两次生成调用引用");
+        assert_eq!(count("ref-2"), 1, "b.png 被一次生成调用引用");
+    }
 
     /// 升级到 v10（旧库状态）后插入近重复资产，再升级到最新（0011 hook 应把低清变体
     /// 搬进「已合并去重」收藏夹，保留高清在主瀑布流）。

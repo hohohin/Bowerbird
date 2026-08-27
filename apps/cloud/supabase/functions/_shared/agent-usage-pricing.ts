@@ -13,6 +13,17 @@ export type AgentUsageItem = {
   providerCostMicros?: number;
 };
 
+/** 上游成本的版本化估算费率（micro CNY）。块缺失时为 null：usage 落库不估算成本，
+ *  只保留 worker 显式上报值。费率由 service_costs.parameters.provider_cost 提供，
+ *  运营核对刊例价后可直接 UPDATE，无需改代码。 */
+export type AgentProviderCostRates = {
+  currency: "CNY";
+  deepseekInputMicrosPerMillionTokens: number;
+  deepseekOutputMicrosPerMillionTokens: number;
+  arkVisionMicrosPerCall: number;
+  imageMicrosPerImage: Record<"ark" | "jimeng" | "codex", number>;
+};
+
 export type AgentUsagePricing = {
   version: number;
   modelTokens: {
@@ -23,6 +34,7 @@ export type AgentUsagePricing = {
   };
   visionCall: { provider: "ark"; creditsPerCall: number };
   imageGeneration: Record<"ark" | "jimeng" | "codex", number>;
+  providerCost: AgentProviderCostRates | null;
 };
 
 type JsonRecord = Record<string, unknown>;
@@ -42,6 +54,25 @@ function nonnegativeInt(value: unknown): number {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed < 0) throw new Error("agent_usage_pricing_invalid");
   return parsed;
+}
+
+function parseProviderCost(value: unknown): AgentProviderCostRates | null {
+  // Optional block: absent/null keeps cost estimation off (backward compatible).
+  if (value === undefined || value === null) return null;
+  const root = record(value);
+  if (root.currency !== "CNY") throw new Error("agent_usage_pricing_invalid");
+  const image = record(root.image_micros_per_image);
+  return {
+    currency: "CNY",
+    deepseekInputMicrosPerMillionTokens: nonnegativeInt(root.deepseek_input_micros_per_million_tokens),
+    deepseekOutputMicrosPerMillionTokens: nonnegativeInt(root.deepseek_output_micros_per_million_tokens),
+    arkVisionMicrosPerCall: nonnegativeInt(root.ark_vision_micros_per_call),
+    imageMicrosPerImage: {
+      ark: nonnegativeInt(image.ark),
+      jimeng: nonnegativeInt(image.jimeng),
+      codex: nonnegativeInt(image.codex),
+    },
+  };
 }
 
 export function agentUsageService(pricingVersion: number): string {
@@ -71,6 +102,7 @@ export function parseAgentUsagePricing(parameters: unknown, pricingVersion: numb
       jimeng: nonnegativeInt(image.jimeng),
       codex: nonnegativeInt(image.codex),
     },
+    providerCost: parseProviderCost(root.provider_cost),
   };
 }
 
@@ -125,4 +157,19 @@ export function creditsForAgentUsage(item: AgentUsageItem, pricing: AgentUsagePr
   }
   if (item.provider === "deepseek" || item.imageCount !== 1) throw new Error("agent_usage_binding_invalid");
   return pricing.imageGeneration[item.provider];
+}
+
+/** A8-T2 毛利数据链：provider 不返回成本时，由版本化费率估算 micro CNY 上游成本。 */
+export function estimateProviderCostMicros(item: AgentUsageItem, rates: AgentProviderCostRates): number {
+  if (item.kind === "model_tokens") {
+    // 整数优先相乘、最后除 1M，避免浮点误差把整数值抬高到下一个 ceil 档。
+    return Math.ceil(
+      (item.inputUnits * rates.deepseekInputMicrosPerMillionTokens +
+        item.outputUnits * rates.deepseekOutputMicrosPerMillionTokens) / 1_000_000,
+    );
+  }
+  if (item.kind === "vision_call") return rates.arkVisionMicrosPerCall;
+  // deepseek 生图组合在 creditsForAgentUsage 已 fail closed，这里不会被触达。
+  if (item.provider === "deepseek") return 0;
+  return rates.imageMicrosPerImage[item.provider] ?? 0;
 }

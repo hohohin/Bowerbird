@@ -175,6 +175,8 @@ pub async fn local_agent_start(
     db: State<'_, Arc<Database>>,
     asset_id: String,
     goal: String,
+    project_id: Option<String>,
+    visual_profile_id: Option<String>,
 ) -> Result<LocalAgentRun, AppError> {
     ensure_preview_enabled()?;
     let goal = goal.trim();
@@ -190,6 +192,15 @@ pub async fn local_agent_start(
             "请先对这张图执行一次反推，再启动智能精修".into(),
         ));
     }
+    let visual_profile_capsule = match visual_profile_id.as_deref() {
+        Some(profile_id) => {
+            let project_id = project_id
+                .as_deref()
+                .ok_or_else(|| AppError::Other("视觉设定只能在当前项目内使用".into()))?;
+            Some(db.visual_profile_capsule(profile_id, project_id)?)
+        }
+        None => None,
+    };
     let id = format!("local_{}", ulid::Ulid::new());
     let now = chrono::Utc::now().timestamp();
     let checkpoint = json!({
@@ -199,7 +210,8 @@ pub async fn local_agent_start(
             "targetAssetId": asset_id,
             "goal": goal,
             "caption": caption,
-            "referenceAssetIds": []
+            "referenceAssetIds": [],
+            "visualProfileCapsule": visual_profile_capsule
         },
         "phase": "parse_intent",
         "status": "running",

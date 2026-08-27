@@ -13,7 +13,9 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Semaphore;
 use ulid::Ulid;
 
-use crate::codex::jimeng::{poll_query_and_download, resolve_dreamina_binary};
+use crate::codex::jimeng::{
+    list_remote_tasks, poll_query_and_download, resolve_dreamina_binary, RemoteJimengTask,
+};
 use crate::core::ingest;
 use crate::core::library::{Analysis, Asset};
 use crate::core::paths::LibraryPaths;
@@ -52,6 +54,7 @@ pub async fn finalize_generation_assets(
     src_images: Vec<PathBuf>,
     temp_dir: Option<PathBuf>,
     prompt: String,
+    applied_prompt: Option<String>,
     prompt_raw: Option<String>,
     // 借用维度源图（图 chip 被删、只借维度的资产 id）：随 meta 落库，复用生成提示词时
     // 据此回绑车牌取最新反推内容（generation_history → dimension_assets）。恢复路径无 → None。
@@ -62,6 +65,7 @@ pub async fn finalize_generation_assets(
     submit_id: Option<String>,
     provider: String,
     project_id: Option<String>,
+    visual_profile: Option<crate::core::visual_profile::VisualProfileCapsule>,
     codex_thread: Option<String>,
 ) -> AppResult<Vec<Asset>> {
     let source_tag = provider_source_tag(&provider).to_string();
@@ -102,13 +106,23 @@ pub async fn finalize_generation_assets(
         // prompt = 铺开发 provider 用；prompt_raw = 未铺开的原始编辑框文本，复用时载入还原 chip。
         // codex_thread = codex 轮的真实 thread id（与即梦 submit_id 对称的续接句柄）：非 codex
         // 原生会话（即梦/Cloud 会话）切 codex 时靠它让连续 codex 轮共享一个 thread（下轮 resume）。
+        let visual_profile_meta = visual_profile.as_ref().map(|capsule| {
+            serde_json::json!({
+                "profile_id": &capsule.profile_id,
+                "version": capsule.version,
+                "hash": &capsule.hash,
+            })
+        });
         let meta_payload = serde_json::json!({
             "prompt": prompt,
+            "applied_prompt": applied_prompt,
             "prompt_raw": prompt_raw,
             "session_id": session_id,
             "references": references,
             "dimension_sources": dimension_sources,
             "provider": provider,
+            "visual_profile": visual_profile_meta,
+            "visual_profile_capsule": visual_profile,
             "submit_id": submit_id,
             "codex_thread": codex_thread,
         })
@@ -239,6 +253,7 @@ async fn recover_one_cloud_job(
                 src_images,
                 Some(temp_dir),
                 job.prompt.clone(),
+                job.applied_prompt.clone(),
                 None,
                 // 恢复路径无借用维度 sidecar（GenJob 不携带），meta 缺省前端走 raw 正文回绑。
                 None,
@@ -248,6 +263,7 @@ async fn recover_one_cloud_job(
                 Some(submit_id.clone()),
                 "bowerbird-cloud".to_string(),
                 job.project_id.clone(),
+                job.visual_profile.clone(),
                 None,
             )
             .await
@@ -288,7 +304,8 @@ async fn recover_one_cloud_job(
 /// 续查单个即梦 job：emit recover_started（前端 upsert 占位 job）→ 拿 JIMENG_FLY permit →
 /// status=querying 落库 → poll_query_and_download 续查下载 → finalize_generation_assets 入库 →
 /// emit done。远端仍排队则保持 running + emit recover_polling（下次启动再试）；真失败 mark_failed。
-async fn recover_one_jimeng_job(
+/// 启动恢复与孤儿取回（`jimeng_retrieve_orphan`）共用。
+pub(crate) async fn recover_one_jimeng_job(
     app: AppHandle,
     db: Arc<Database>,
     paths: Arc<LibraryPaths>,
@@ -331,6 +348,7 @@ async fn recover_one_jimeng_job(
                 src_images,
                 temp_dir,
                 job.prompt.clone(),
+                job.applied_prompt.clone(),
                 None,
                 // 恢复路径无借用维度 sidecar（GenJob 不携带），meta 缺省前端走 raw 正文回绑。
                 None,
@@ -340,6 +358,7 @@ async fn recover_one_jimeng_job(
                 Some(submit_id.clone()),
                 "jimeng".to_string(),
                 job.project_id.clone(),
+                job.visual_profile.clone(),
                 None,
             )
             .await
@@ -387,7 +406,93 @@ async fn recover_one_jimeng_job(
     }
 }
 
-/// 把生成会话的 prompt 链转成 caption 正文：从中识别 `【维度】：正文` 片段（创作板序列化时由
+/// 启动孤儿扫描（约定 23 阶段 3）：`dreamina list_task` 比对本地已知 submit_id，远端仍在
+/// `querying`（或已完成但从未下载的 `success`）且本地无记录的图片任务 → emit
+/// `codex://jimeng-orphans`，前端会话面板提供「取回」入口。孤儿取回经
+/// `jimeng_retrieve_orphan` command 合成 GenJob 后复用 [`recover_one_jimeng_job`]。
+///
+/// 与恢复同口径的前置：即梦是 BYO provider，免费档不扫；CLI 未装/未登录静默跳过
+/// （扫描失败绝不打扰用户——孤儿只影响「可选取回」，不影响正常功能）。
+pub fn spawn_orphan_scan(app: AppHandle, db: Arc<Database>) {
+    tauri::async_runtime::spawn(async move {
+        let auth = app.state::<crate::cloud::AuthClient>().inner().clone();
+        let entitlement = app.state::<crate::cloud::EntitlementService>();
+        let snapshot = entitlement.current_or_sync(&auth).await;
+        if !snapshot.policy.can_use_byo {
+            return;
+        }
+        let Some(binary) = resolve_dreamina_binary() else {
+            tracing::debug!("孤儿扫描：未找到 dreamina CLI，跳过");
+            return;
+        };
+        // 延后 15s：启动即有登录态/磁盘 IO 高峰，孤儿不急（spike 实证卡几小时也不丢）。
+        tokio::time::sleep(Duration::from_secs(15)).await;
+        let remote = match list_remote_tasks(&binary, 20).await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::debug!("孤儿扫描：list_task 失败（忽略）: {e}");
+                return;
+            }
+        };
+        let known = match known_submit_ids(&db) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("孤儿扫描：读本地 submit_id 失败: {e}");
+                return;
+            }
+        };
+        // 只取图片任务（gen_task_type 含 image）：视频产物 walk_images 扫不到，取回必失败；
+        // 视频链路（Phase B）落地后再放开。
+        let orphans: Vec<RemoteJimengTask> = remote
+            .into_iter()
+            .filter(|t| {
+                t.gen_task_type.contains("image")
+                    && matches!(t.gen_status.as_str(), "querying" | "success")
+                    && !known.contains(&t.submit_id)
+            })
+            .collect();
+        if orphans.is_empty() {
+            tracing::debug!("孤儿扫描：无孤儿任务");
+            return;
+        }
+        tracing::info!("孤儿扫描：发现 {} 条孤儿任务", orphans.len());
+        let _ = app.emit("codex://jimeng-orphans", &orphans);
+    });
+}
+
+/// 本地已知的即梦 submit_id 集合：task_queue 全状态 GenJob（done/failed/cancelled 也算
+/// 已知——它们有本地记录，不是孤儿）+ generation_meta 来源卡片（task_queue 记录被清理后
+/// 仍能识别，防止把已入库任务再当孤儿）。
+fn known_submit_ids(db: &Arc<Database>) -> AppResult<std::collections::HashSet<String>> {
+    let conn = db.conn.lock().unwrap();
+    let mut out = std::collections::HashSet::new();
+    {
+        let mut stmt = conn.prepare("SELECT payload FROM task_queue WHERE kind = 'generation'")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        for row in rows {
+            let Ok(payload) = row else { continue };
+            if let Ok(job) = serde_json::from_str::<GenJob>(&payload) {
+                if let Some(submit_id) = job.submit_id {
+                    out.insert(submit_id);
+                }
+            }
+        }
+    }
+    {
+        let mut stmt = conn.prepare(
+            "SELECT json_extract(payload, '$.submit_id') FROM analyses \
+             WHERE kind = 'generation_meta' AND json_valid(payload)",
+        )?;
+        let rows = stmt.query_map([], |r| r.get::<_, Option<String>>(0))?;
+        for row in rows {
+            if let Ok(Some(submit_id)) = row {
+                out.insert(submit_id);
+            }
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -397,5 +502,62 @@ mod tests {
         assert_eq!(provider_source_tag("bowerbird-cloud"), "bowerbird-cloud");
         assert_eq!(provider_source_tag("jimeng"), "jimeng");
         assert_eq!(provider_source_tag("codex"), "codex");
+    }
+
+    #[test]
+    fn known_submit_ids_covers_gen_jobs_and_generation_meta() {
+        let db = crate::db::Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        // task_queue：全状态 GenJob 的 submit_id 都算已知（含 failed）。
+        let failed_job = GenJob {
+            id: "job-1".into(),
+            media: "image".into(),
+            provider: "jimeng".into(),
+            status: "failed".into(),
+            prompt: String::new(),
+            applied_prompt: None,
+            references: vec![],
+            session_id: None,
+            conversation_id: None,
+            project_id: None,
+            ratio: None,
+            visual_profile: None,
+            submit_id: Some("sub-task-queue".into()),
+            video_options: None,
+            turns: serde_json::Value::Null,
+            error: None,
+            queue_idx: None,
+            created_at: 1,
+            started_at: None,
+            finished_at: None,
+        };
+        Task::upsert_gen_job(&db, &failed_job).unwrap();
+
+        // generation_meta：task_queue 记录被清理后，meta 里的 submit_id 仍识别为已知。
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "INSERT INTO assets (id, name, created_at) VALUES ('a-1', 'x', 1)",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO analyses (id, asset_id, kind, payload) \
+                 VALUES ('an-1', 'a-1', 'generation_meta', ?1)",
+                rusqlite::params![serde_json::json!({ "submit_id": "sub-meta-only" }).to_string()],
+            )
+            .unwrap();
+        }
+
+        let known = known_submit_ids(&std::sync::Arc::new(db)).unwrap();
+        assert!(
+            known.contains("sub-task-queue"),
+            "GenJob submit_id 应算已知"
+        );
+        assert!(
+            known.contains("sub-meta-only"),
+            "generation_meta submit_id 应算已知"
+        );
+        assert!(!known.contains("sub-unknown"), "未知 submit_id 不在集合中");
     }
 }

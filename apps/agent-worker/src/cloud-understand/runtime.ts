@@ -24,6 +24,10 @@ export interface UnderstandWorkerConfig {
   mock: boolean;
   pollIntervalMs: number;
   heartbeatIntervalMs: number;
+  /** RequestBurstTooFast 自动重试上限（0 = 关闭；退避带随机抖动）。 */
+  burstRetryMax: number;
+  /** 退避基值毫秒（默认 1.5s；测试注入 1 加速）。 */
+  burstRetryBaseMs: number;
 }
 
 interface ClaimedJob {
@@ -62,6 +66,24 @@ function positiveInt(value: string | undefined, fallback: number, name: string):
   return parsed;
 }
 
+/** 允许 0（关闭重试）的非负整数。 */
+function nonNegativeInt(value: string | undefined, fallback: number, name: string): number {
+  const parsed = Number.parseInt(value ?? String(fallback), 10);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) throw new Error(`${name}_invalid`);
+  return parsed;
+}
+
+/** RequestBurstTooFast 退避：base * 2^attempt + [0, 0.5倍) 随机抖动。
+ * 默认 1.5s 基值、3 次重试最坏约 15s，远短于租约心跳周期，等待期间租约持续续期。 */
+export function burstBackoffMs(
+  attempt: number,
+  baseMs = 1_500,
+  random: () => number = Math.random,
+): number {
+  const base = baseMs * 2 ** attempt;
+  return Math.round(base + base * 0.5 * random());
+}
+
 export function configFromEnv(env: Record<string, string | undefined>): UnderstandWorkerConfig {
   const workerId = env.UNDERSTAND_WORKER_ID?.trim() || `understand-${env.HOSTNAME?.trim() || randomUUID()}`;
   if (workerId.length > 120) throw new Error("UNDERSTAND_WORKER_ID_invalid");
@@ -75,6 +97,8 @@ export function configFromEnv(env: Record<string, string | undefined>): Understa
     mock: (env.BOWERBIRD_CLOUD_MOCK ?? "false") === "true",
     pollIntervalMs: positiveInt(env.UNDERSTAND_POLL_INTERVAL_MS, 2_000, "UNDERSTAND_POLL_INTERVAL_MS"),
     heartbeatIntervalMs: positiveInt(env.UNDERSTAND_HEARTBEAT_INTERVAL_MS, 30_000, "UNDERSTAND_HEARTBEAT_INTERVAL_MS"),
+    burstRetryMax: nonNegativeInt(env.UNDERSTAND_BURST_RETRY_MAX, 3, "UNDERSTAND_BURST_RETRY_MAX"),
+    burstRetryBaseMs: positiveInt(env.UNDERSTAND_BURST_RETRY_BASE_MS, 1_500, "UNDERSTAND_BURST_RETRY_BASE_MS"),
   };
 }
 
@@ -127,6 +151,32 @@ class ArkVisionClient {
 
   async understand(input: UnderstandInput): Promise<string> {
     if (this.config.mock) return mockUnderstand(input);
+    // RequestBurstTooFast（provider_burst）带抖动退避自动重试：瞬时限流重发即可能成功，
+    // 请求被方舟拒绝、未产生费用，重试不构成重复计费。其余错误（含其他 429）立即抛出。
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.requestOnce(input);
+      } catch (error) {
+        if (
+          error instanceof KnownProviderError && error.safeCode === "provider_burst" &&
+          attempt < this.config.burstRetryMax
+        ) {
+          const delayMs = burstBackoffMs(attempt, this.config.burstRetryBaseMs);
+          console.warn(JSON.stringify({
+            event: "understand_burst_retry",
+            attempt: attempt + 1,
+            max: this.config.burstRetryMax,
+            delay_ms: delayMs,
+          }));
+          await sleep(delayMs);
+          continue;
+        }
+        throw error;
+      }
+    }
+  }
+
+  private async requestOnce(input: UnderstandInput): Promise<string> {
     const response = await this.fetch(`${this.config.arkBaseUrl}/chat/completions`, {
       method: "POST",
       headers: {

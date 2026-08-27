@@ -11,6 +11,7 @@ export interface FeaturePolicy {
   max_parallel_agent_runs: number;
   allowed_agent_skills: string[];
   agent_budget_options: string[];
+  can_use_visual_profiles: boolean;
 }
 
 const AGENT_BUDGET_OPTIONS = ["controlled-min", "controlled-standard"];
@@ -20,6 +21,7 @@ export function policyFor(tier: string): FeaturePolicy {
     can_use_agent_runs: true,
     allowed_agent_skills: [CONTROLLED_IMAGE_EDIT_SKILL],
     agent_budget_options: [...AGENT_BUDGET_OPTIONS],
+    can_use_visual_profiles: true,
   };
   if (tier === "studio") {
     return {
@@ -54,6 +56,37 @@ export function policyFor(tier: string): FeaturePolicy {
     can_hd_export: false,
     max_parallel_agent_runs: 1,
     ...agent,
+  };
+}
+
+/** A8-T1 小流量门控：AGENT_ACCESS_MODE=test_only 时仅 `raw_app_meta_data.bowerbird_test`
+ *  标记的账号可用 Agent（复用 0036 遥测标记通道，不新增名单表）。未配置/其他值 = 全量。 */
+export function agentAccessTestOnly(mode?: string): boolean {
+  return (mode ?? Deno.env.get("AGENT_ACCESS_MODE") ?? "").trim().toLowerCase() === "test_only";
+}
+
+export function accountTestMarker(appMetadata: unknown): boolean {
+  return !!appMetadata && typeof appMetadata === "object" && !Array.isArray(appMetadata) &&
+    (appMetadata as Record<string, unknown>).bowerbird_test === true;
+}
+
+/** 与 policyFor 同源的用户级策略：小名单模式下未标记账号的权益快照隐藏 Agent 能力，
+ *  桌面 UI / Rust command / agent-run create 三层随之收敛。 */
+export function policyForUser(
+  tier: string,
+  user: { app_metadata?: unknown },
+  options: { agentTestOnly?: boolean } = {},
+): FeaturePolicy {
+  const policy = policyFor(tier);
+  const restricted = options.agentTestOnly ?? agentAccessTestOnly();
+  if (!restricted || accountTestMarker(user?.app_metadata)) return policy;
+  return {
+    ...policy,
+    can_use_agent_runs: false,
+    allowed_agent_skills: [],
+    agent_budget_options: [],
+    // 小名单模式同时收紧视觉设定云端提炼（同为云端付费能力）。
+    can_use_visual_profiles: false,
   };
 }
 

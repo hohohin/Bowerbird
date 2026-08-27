@@ -21,7 +21,7 @@ function claim(): ClaimedAgentRun {
       id: "run-1",
       conversationId: "conversation-1",
       skillId: "bowerbird-controlled-image-edit",
-      skillVersion: "0.1.1",
+      skillVersion: "0.1.2",
       inputManifestHash: "a".repeat(64),
       approvedPlanHash: null,
       plannedToolCount: null,

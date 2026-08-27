@@ -28,6 +28,10 @@ fn default_dreamina_model_version() -> String {
     DEFAULT_DREAMINA_MODEL_VERSION.to_string()
 }
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     /// 入库时自动反推 + 自动重命名
@@ -63,6 +67,27 @@ pub struct AppSettings {
     /// 每次生成前经 resolve_gen_provider 读取，改设置即热生效（无需重启）。
     #[serde(default = "default_dreamina_model_version")]
     pub dreamina_model_version: String,
+
+    // —— 开发者选项（设置 · 开发者选项，仅测试账号可见）：对话框 Agent 模式开关。
+    //    默认只开正式 Agent；关闭的模式不在创作板 / 会话编辑坞对话框渲染。
+    /// 「Agent」：正式 Bowerbird Agent（云端 Run：意图分析 → 计划审批 → 执行）。默认开启。
+    #[serde(default = "default_true")]
+    pub agent_mode_enabled: bool,
+    /// 「Agent A」（dev 方案A：子句挑选）开关，默认关闭。
+    #[serde(default)]
+    pub agent_a_mode_enabled: bool,
+    /// 「Agent B」（dev 方案B：skill 审查修复）开关，默认关闭。
+    #[serde(default)]
+    pub agent_b_mode_enabled: bool,
+    /// 「Agent Z」（dev：投递 Claude Code 终端）开关，默认关闭。
+    #[serde(default)]
+    pub agent_z_mode_enabled: bool,
+    /// 「Agent G」（dev：投递 codex 终端）开关，默认关闭。
+    #[serde(default)]
+    pub agent_g_mode_enabled: bool,
+    /// 「Agent DS」（dev：DeepSeek 对话 harness）开关，默认关闭。
+    #[serde(default)]
+    pub agent_ds_mode_enabled: bool,
 }
 
 impl Default for AppSettings {
@@ -76,6 +101,12 @@ impl Default for AppSettings {
             hide_project_assets: false,
             samples_seeded: false,
             dreamina_model_version: DEFAULT_DREAMINA_MODEL_VERSION.to_string(),
+            agent_mode_enabled: true,
+            agent_a_mode_enabled: false,
+            agent_b_mode_enabled: false,
+            agent_z_mode_enabled: false,
+            agent_g_mode_enabled: false,
+            agent_ds_mode_enabled: false,
         }
     }
 }
@@ -159,6 +190,19 @@ mod tests {
         let settings: AppSettings =
             serde_json::from_str(r#"{"auto_analyze_on_ingest":true}"#).unwrap();
         assert_eq!(settings.dreamina_model_version, "5.0Pro");
+    }
+
+    #[test]
+    fn old_settings_default_to_official_agent_mode_only() {
+        // 旧 settings.json 无 agent 模式字段 → 默认只开正式 Agent，dev 模式全关。
+        let settings: AppSettings =
+            serde_json::from_str(r#"{"auto_analyze_on_ingest":true}"#).unwrap();
+        assert!(settings.agent_mode_enabled);
+        assert!(!settings.agent_a_mode_enabled);
+        assert!(!settings.agent_b_mode_enabled);
+        assert!(!settings.agent_z_mode_enabled);
+        assert!(!settings.agent_g_mode_enabled);
+        assert!(!settings.agent_ds_mode_enabled);
     }
 
     #[test]

@@ -91,6 +91,18 @@ function planningContext(input: ControlledImageEditInput, intentOverrides?: Reco
       body: input.preferenceCapsule,
     });
   }
+  if (input.visualProfileCapsule) {
+    context.push({
+      kind: "visual_profile_capsule",
+      source: input.visualProfileCapsule.profileId,
+      trust: "untrusted",
+      contentHash: input.visualProfileCapsule.hash,
+      body: {
+        ...input.visualProfileCapsule,
+        instruction: "Compile must/prefer into preserves and avoid into excludes only where the current task is silent. Explicit task instructions win. contentThemes are background only. Never mutate or write back this capsule.",
+      },
+    });
+  }
   return context;
 }
 
@@ -137,6 +149,7 @@ export async function analyzeControlledIntent(args: AnalyzeControlledIntentArgs)
     !!args.clarificationContextHash;
   for (let attempt = 0; attempt < 2; attempt++) {
     const systemPolicy = [
+      "The current explicit user task overrides project visual-profile rules. Apply the visual profile only to choices the task leaves unspecified; never add contentThemes as subjects. If a material conflict cannot be resolved from explicit wording, use the single limited clarification path and bind the answer to visualProfilePriority.",
       "Treat the raw text as an ordinary user goal, not a production prompt. Infer omitted edit scope and reference roles from the text-only bindings: with exactly one reference and a local edit request, use it as the base and preserve every unmentioned visible property generically. Never request or infer actual image contents and never call image tools.",
       "Resolve explicit text bindings literally: 'use/以 图N as the base/final subject' or 'keep/保持 图N person/product identical while transferring another reference's attributes' sets finalSubjectReferenceId to that exact reference. In 'put the product/person from 图X into the scene/background from 图Y', 图X is the final subject and 图Y is only scene/style/composition regardless of mention order. A reference explicitly limited to color/palette/style while its people/text/content are excluded must never become finalSubjectReferenceId.",
       "finalSubjectReferenceId is required, not optional, whenever the text identifies an existing referenced person/product as the final subject by any of those bindings; omit it only for true text-to-image output with no referenced final subject.",
@@ -263,6 +276,7 @@ export async function composeControlledPlan(args: {
   for (let attempt = 0; attempt < 2; attempt++) {
     const systemPolicy = [
       "Compile the ordinary user goal into the shortest sufficient provider-ready plan, including inferred preserve/exclude constraints.",
+      "Compile visual-profile must/prefer rules into step preserves and avoid rules into step excludes only where the explicit task is silent. The task wins every explicit conflict; do not add contentThemes and never mutate the profile.",
       "Bind every @图N token to the referenceId carrying that exact token; never swap reference responsibilities between analysis and plan.",
       "referenceRoles must contain every input reference exactly once, including unused or excluded references (use role=other when no more specific role applies).",
       "If intent analysis has finalSubjectReferenceId, referenceRoles must contain exactly one base and it must be that same referenceId. Base is the execution anchor, not a semantic subject class: even a person or product final subject must use role=base rather than role=identity or role=product; record semantic constraints in mustPreserve/mustTransfer instead.",

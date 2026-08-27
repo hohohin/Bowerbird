@@ -1,7 +1,11 @@
 import { requireUser } from "../_shared/auth.ts";
 import { ensureDailyCredits } from "../_shared/billing.ts";
 import { ApiError, errorResponse, jsonResponse, requestId, safeLog } from "../_shared/errors.ts";
-import { activeTier, policyFor } from "../_shared/feature-policy.ts";
+import { accountTestMarker, activeTier, policyForUser } from "../_shared/feature-policy.ts";
+import {
+  ENTITLEMENT_SIGNATURE_VERSION,
+  signEntitlement,
+} from "../_shared/entitlement-signing.ts";
 import { corsHeaders } from "../_shared/limits.ts";
 
 Deno.serve(async (request) => {
@@ -40,9 +44,20 @@ Deno.serve(async (request) => {
     const refreshAfter = new Date(issuedAt.getTime() + 6 * 60 * 60 * 1000);
     const graceUntil = new Date(issuedAt.getTime() + 7 * 24 * 60 * 60 * 1000);
 
-    // Transport authenticity comes from HTTPS + verified JWT. P3 adds the client cache signature;
-    // until then signature_version=0 explicitly means "do not trust offline".
-    const body = {
+    const generationServices = (imageServices ?? [])
+      .filter((row) => typeof row.parameters?.label === "string" && row.parameters.label.trim())
+      .sort((a, b) => (a.parameters?.sort ?? 999) - (b.parameters?.sort ?? 999))
+      .map((row) => ({ service: row.service, label: row.parameters.label, credits: row.unit_cost }));
+    const promptConfigRows = (promptConfigs ?? []).map((row) => ({
+      key: row.key,
+      value: row.value,
+      version: row.version,
+    }));
+
+    // 参与门控的字段做 Ed25519 规范化签名；桌面验签通过才允许 7 天离线宽限（P9）。
+    // Secret 未配置时签名为 null、signature_version=0，桌面保持在线可信的旧行为。
+    const signature = await signEntitlement({
+      v: ENTITLEMENT_SIGNATURE_VERSION,
       user_id: user.id,
       tier,
       balances: {
@@ -50,12 +65,29 @@ Deno.serve(async (request) => {
         sub: credits?.sub_balance ?? 0,
         topup: credits?.topup_balance ?? 0,
       },
-      policy: policyFor(tier),
-      generation_services: (imageServices ?? [])
-        .filter((row) => typeof row.parameters?.label === "string" && row.parameters.label.trim())
-        .sort((a, b) => (a.parameters?.sort ?? 999) - (b.parameters?.sort ?? 999))
-        .map((row) => ({ service: row.service, label: row.parameters.label, credits: row.unit_cost })),
-      prompt_configs: (promptConfigs ?? []).map((row) => ({ key: row.key, value: row.value, version: row.version })),
+      policy: policyForUser(tier, user),
+      generation_services: generationServices,
+      prompt_configs: promptConfigRows,
+      issued_at: issuedAt.toISOString(),
+      refresh_after: refreshAfter.toISOString(),
+      grace_until: graceUntil.toISOString(),
+      entitlement_version: subscription?.entitlement_version ?? 1,
+    });
+
+    const body = {
+      user_id: user.id,
+      tier,
+      // 测试账号标记（raw_app_meta_data.bowerbird_test，与 A8-T1 小流量门控同源）：
+      // 只决定桌面「设置 · 开发者选项」可见性，不参与付费门控，故不进签名载荷。
+      is_test_account: accountTestMarker(user.app_metadata),
+      balances: {
+        daily: credits?.daily_balance ?? 0,
+        sub: credits?.sub_balance ?? 0,
+        topup: credits?.topup_balance ?? 0,
+      },
+      policy: policyForUser(tier, user),
+      generation_services: generationServices,
+      prompt_configs: promptConfigRows,
       recent_transactions: (transactions ?? []).map((tx) => {
         const meta = tx.meta?.entity_type === "agent_run"
           ? {
@@ -78,8 +110,8 @@ Deno.serve(async (request) => {
       refresh_after: refreshAfter.toISOString(),
       grace_until: graceUntil.toISOString(),
       entitlement_version: subscription?.entitlement_version ?? 1,
-      signature_version: 0,
-      signature: null,
+      signature_version: signature ? ENTITLEMENT_SIGNATURE_VERSION : 0,
+      signature,
     };
     safeLog({ requestId: id, userId, status: "succeeded" });
     return jsonResponse(body, 200, cors);

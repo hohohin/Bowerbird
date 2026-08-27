@@ -83,6 +83,8 @@ keyring = { version = "3", features = [
   "apple-native",
   "windows-native",
 ] }
+# Entitlement 权益快照 Ed25519 验签（P9：7 天离线 Pro 宽限；公钥构建期内置）
+ed25519-dalek = "2"
 
 # Agent Z（dev-only）：向唤起的 zcode TUI 终端注入按键（AttachConsole + WriteConsoleInput）
 [target.'cfg(windows)'.dependencies]

@@ -85,7 +85,7 @@ test("remote processor downloads verified text input, checkpoints, then releases
         id: "run-1",
         conversationId: "conversation-1",
         skillId: "bowerbird-controlled-image-edit",
-        skillVersion: "0.1.1",
+        skillVersion: "0.1.2",
         inputManifestHash: createHash("sha256").update(input).digest("hex"),
         approvedPlanHash: null,
         plannedToolCount: null,
@@ -163,7 +163,7 @@ test("processor binds input artifact metadata but never downloads image bytes be
   await processor.process({
     claimed: {
       run: {
-        id: "run-2", conversationId: "conversation-2", skillId: "bowerbird-controlled-image-edit", skillVersion: "0.1.1",
+        id: "run-2", conversationId: "conversation-2", skillId: "bowerbird-controlled-image-edit", skillVersion: "0.1.2",
         inputManifestHash: createHash("sha256").update(input).digest("hex"), approvedPlanHash: null,
         plannedToolCount: null, resultFeedbackAction: null, budgetCredits: 48, pricingVersion: 1,
         checkpointHash: null, snapshotSchemaVersion: null,

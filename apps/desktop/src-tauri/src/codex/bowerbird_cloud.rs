@@ -56,13 +56,13 @@ pub fn cloud_service_for_key(key: &str) -> String {
 }
 
 #[derive(Deserialize)]
-struct GenerateResponse {
-    status: String,
+pub(crate) struct GenerateResponse {
+    pub(crate) status: String,
     #[serde(default)]
     images: Vec<CloudImage>,
-    remote_task_id: Option<String>,
+    pub(crate) remote_task_id: Option<String>,
     artifact: Option<CloudArtifact>,
-    error: Option<CloudJobError>,
+    pub(crate) error: Option<CloudJobError>,
 }
 
 #[derive(Deserialize)]
@@ -80,8 +80,8 @@ struct CloudArtifact {
 }
 
 #[derive(Deserialize)]
-struct CloudJobError {
-    message: String,
+pub(crate) struct CloudJobError {
+    pub(crate) message: String,
 }
 
 #[async_trait]
@@ -276,7 +276,7 @@ async fn poll_remote(
         .map_err(|error| AppError::Cloud(format!("解析云任务响应失败: {error}")))
 }
 
-async fn wait_for_cloud_job(
+pub(crate) async fn wait_for_cloud_job(
     cloud: &CloudClient,
     auth: &AuthClient,
     endpoint: &str,

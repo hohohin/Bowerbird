@@ -7,7 +7,7 @@ import { PRESET_FEATURE_ENABLED } from "../lib/featureFlags";
 import { notifyError, notifySuccess } from "../lib/notify";
 import { canStartAnotherJob, canUseByo, canUseGenerationProvider } from "../lib/entitlement";
 import { cloudProviderLabel, canonicalProviderKey, isCloudProvider, supportsAnnotationCoordinates } from "../lib/genProviders";
-import type { Asset, GenJob, GenTurn } from "../lib/types";
+import type { Asset, GenJob, GenTurn, VisualProfileCapsule, VisualProfileRuleValue } from "../lib/types";
 import { Lightbox } from "./Lightbox";
 import { useCreationEditor } from "./creation/useCreationEditor";
 import { RatioSelect } from "./creation/RatioSelect";
@@ -252,6 +252,8 @@ export function GenerationPanel() {
       first?.promptRaw ?? undefined,
       activeJob.conversationId ?? activeJob.id,
       activeJob.sessionId ?? undefined,
+      undefined,
+      activeJob.visualProfileId ?? activeJob.visualProfile?.profileId ?? null,
     ).catch(console.error);
   }
 
@@ -505,6 +507,7 @@ export function GenerationPanel() {
                 busy={running && i === turnsWithOffset.length - 1}
                 streaming={running && i === turnsWithOffset.length - 1 ? activeJob.streaming : ""}
                 imageOffset={imageOffset}
+                visualProfile={activeJob.visualProfile}
                 refAssets={i === 0 ? firstRefAssets : undefined}
                 actions={i === 0 ? firstTurnActions : turnActions(turn)}
                 variantNav={i === 0 ? variantNav : undefined}
@@ -587,6 +590,7 @@ function TurnView({
   busy,
   streaming,
   imageOffset,
+  visualProfile,
   refAssets,
   actions,
   variantNav,
@@ -603,6 +607,7 @@ function TurnView({
   busy: boolean;
   streaming: string;
   imageOffset: number;
+  visualProfile?: VisualProfileCapsule | null;
   refAssets?: Asset[];
   actions?: ReactNode;
   variantNav?: { index: number; total: number; onPrev: () => void; onNext: () => void };
@@ -810,6 +815,12 @@ function TurnView({
                   </button>
                 ))}
               </div>
+              {visualProfile && (
+                <GenerationControlDetails
+                  profile={visualProfile}
+                  appliedPrompt={turn.appliedPrompt}
+                />
+              )}
               {/* 生成结束（出图后）气泡底部提示：效果不满意可一键带着首轮组稿转 Agent 模式重试。 */}
               {onAgentRetry && (
                 <p className="text-[10px] leading-4 text-muted">
@@ -859,6 +870,98 @@ function TurnView({
   );
 }
 
+function GenerationControlDetails({
+  profile,
+  appliedPrompt,
+}: {
+  profile: VisualProfileCapsule;
+  appliedPrompt?: string | null;
+}) {
+  const [open, setOpen] = useState(false);
+  const [showPrompt, setShowPrompt] = useState(false);
+  const sections: Array<{
+    label: string;
+    values: VisualProfileRuleValue[];
+    tone: string;
+  }> = [
+    { label: "必须", values: profile.must, tone: "text-lime" },
+    { label: "倾向", values: profile.prefer, tone: "text-accent" },
+    { label: "避免", values: profile.avoid, tone: "text-red-300" },
+  ];
+
+  return (
+    <div className="rounded border border-edge bg-panel/70 text-[11px]">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className="flex w-full items-center justify-between gap-3 px-2.5 py-2 text-left text-muted hover:text-ink"
+        aria-expanded={open}
+      >
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className={`shrink-0 transition-transform ${open ? "rotate-90" : ""}`}>▸</span>
+          <span className="truncate font-medium text-ink">本次生成控制</span>
+          <span className="shrink-0">视觉设定 v{profile.version}</span>
+        </span>
+        <span className="shrink-0 font-mono text-[9px]" title={profile.hash}>
+          {profile.hash.slice(0, 8)}
+        </span>
+      </button>
+      {open && (
+        <div className="space-y-3 border-t border-edge px-3 py-2.5">
+          {profile.summary.trim() && (
+            <p className="whitespace-pre-wrap leading-4 text-muted">{profile.summary}</p>
+          )}
+          <p className="rounded bg-panel2 px-2 py-1.5 text-[10px] leading-4 text-muted">
+            这些规则只控制任务未明确指定的部分；发生冲突时，以本次任务描述为准。内容主题未作为画面元素注入。
+          </p>
+          <div className="grid gap-2 sm:grid-cols-3">
+            {sections.map((section) => (
+              <div key={section.label} className="rounded border border-edge/80 bg-panel2/60 p-2">
+                <div className={`mb-1.5 text-[10px] font-semibold ${section.tone}`}>
+                  {section.label} · {section.values.length}
+                </div>
+                {section.values.length > 0 ? (
+                  <ul className="space-y-1.5">
+                    {section.values.map((rule, index) => (
+                      <li key={`${rule.category}-${rule.value}-${index}`} className="leading-4 text-ink">
+                        <span className="text-muted">{rule.category}：</span>
+                        {rule.value}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <span className="text-[10px] text-faint">无</span>
+                )}
+              </div>
+            ))}
+          </div>
+          <div>
+            <button
+              type="button"
+              onClick={() => setShowPrompt((value) => !value)}
+              className="flex items-center gap-1 text-[10px] text-muted hover:text-accent"
+            >
+              <span className={`transition-transform ${showPrompt ? "rotate-90" : ""}`}>▸</span>
+              {showPrompt ? "收起最终提示词" : "查看实际提交给生成引擎的最终提示词"}
+            </button>
+            {showPrompt && (
+              appliedPrompt ? (
+                <pre className="mt-1.5 max-h-72 overflow-y-auto whitespace-pre-wrap rounded border border-edge bg-panel px-2.5 py-2 font-mono text-[10px] leading-4 text-muted">
+                  {appliedPrompt}
+                </pre>
+              ) : (
+                <p className="mt-1.5 rounded border border-edge bg-panel px-2.5 py-2 text-[10px] leading-4 text-faint">
+                  这是一条旧生成记录，当时没有单独保存最终提示词；上方冻结规则仍可准确回看。
+                </p>
+              )
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /**
  * 会话底部编辑坞（jimeng / gemini 式）：会话面板收起为底部条，露出的瀑布流
  * 点一下即插参考图 chip（board-asset-picked）。编辑器与创作板同款（useCreationEditor +
@@ -904,6 +1007,7 @@ function GenEditComposer({
   const dreaminaHealth = useStore((s) => s.dreaminaHealth);
   const cloudAuth = useStore((s) => s.cloudAuth);
   const cloudEntitlement = useStore((s) => s.cloudEntitlement);
+  const settings = useStore((s) => s.settings);
   const cloudAvailable = cloudAuth?.cloud_available ?? false;
   // 底部对话框（续轮）空编辑器开局：不预填「请参考」，避免误发送占位文字。
   const {
@@ -927,6 +1031,15 @@ function GenEditComposer({
   const [agentMode, setAgentMode] = useState<"off" | "a" | "b">("off");
   const [agentAvailable, setAgentAvailable] = useState(false);
   const [agentBusy, setAgentBusy] = useState(false);
+  // 设置「开发者选项」的对话框模式开关（与创作板同款默认：A/B 关闭即不渲染）。
+  const agentAOn = settings?.agent_a_mode_enabled ?? false;
+  const agentBOn = settings?.agent_b_mode_enabled ?? false;
+
+  // 设置里关闭的模式：按钮隐藏同时复位其激活态（与创作板同款）。
+  useEffect(() => {
+    if (!agentAOn && agentMode === "a") setAgentMode("off");
+    if (!agentBOn && agentMode === "b") setAgentMode("off");
+  }, [agentAOn, agentBOn, agentMode]);
 
   // provider 初值 = 该会话的 provider（进入编辑时同步当前选择，坞内可再切换；遗留 cloud key 归一化）。
   useEffect(() => {
@@ -1067,6 +1180,7 @@ function GenEditComposer({
         job.conversationId ?? job.id,
         job.sessionId ?? undefined,
         dimensionSources,
+        job.visualProfileId ?? job.visualProfile?.profileId ?? null,
       ).catch(console.error);
     }
   }
@@ -1173,42 +1287,46 @@ function GenEditComposer({
             defaultProvider={defaultProvider}
             onSetDefaultProvider={setDefaultProvider}
           />
-          {/* Agent 方案开关（A/B 互斥，与创作板同款）：仅本机 Agent 可用时渲染——
-              release 包中 health 命令被后端门控拒绝，开关不出现。 */}
-          {agentAvailable && (
+          {/* Agent 方案开关（A/B 互斥，与创作板同款）：本机 Agent 可用且「开发者选项」
+              未关闭时渲染——release 包中 health 命令被后端门控拒绝，开关不出现。 */}
+          {agentAvailable && (agentAOn || agentBOn) && (
             <>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={agentMode === "a"}
-                disabled={agentBusy}
-                onClick={() => setAgentMode((mode) => (mode === "a" ? "off" : "a"))}
-                title="方案A（子句挑选）：Agent 按你的意图从参考图维度原文中挑选子句，确定性拼合后再发送"
-                className={`generation-glow-button flex h-7 items-center rounded-[3px] px-2.5 text-xs font-medium disabled:opacity-40 ${
-                  agentMode === "a" ? "" : "is-off"
-                }`}
-              >
-                <span className="generation-glow-button__content gap-1.5">
-                  <span className={`h-2 w-2 rounded-full ${agentMode === "a" ? "bg-lime" : "bg-muted/50"}`} />
-                  Agent A
-                </span>
-              </button>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={agentMode === "b"}
-                disabled={agentBusy}
-                onClick={() => setAgentMode((mode) => (mode === "b" ? "off" : "b"))}
-                title="方案B（skill 审查）：Agent 按官方 skill 审查并修复展开后的完整 prompt，再发送"
-                className={`generation-glow-button flex h-7 items-center rounded-[3px] px-2.5 text-xs font-medium disabled:opacity-40 ${
-                  agentMode === "b" ? "" : "is-off"
-                }`}
-              >
-                <span className="generation-glow-button__content gap-1.5">
-                  <span className={`h-2 w-2 rounded-full ${agentMode === "b" ? "bg-lime" : "bg-muted/50"}`} />
-                  Agent B
-                </span>
-              </button>
+              {agentAOn && (
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={agentMode === "a"}
+                  disabled={agentBusy}
+                  onClick={() => setAgentMode((mode) => (mode === "a" ? "off" : "a"))}
+                  title="方案A（子句挑选）：Agent 按你的意图从参考图维度原文中挑选子句，确定性拼合后再发送"
+                  className={`generation-glow-button flex h-7 items-center rounded-[3px] px-2.5 text-xs font-medium disabled:opacity-40 ${
+                    agentMode === "a" ? "" : "is-off"
+                  }`}
+                >
+                  <span className="generation-glow-button__content gap-1.5">
+                    <span className={`h-2 w-2 rounded-full ${agentMode === "a" ? "bg-lime" : "bg-muted/50"}`} />
+                    Agent A
+                  </span>
+                </button>
+              )}
+              {agentBOn && (
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={agentMode === "b"}
+                  disabled={agentBusy}
+                  onClick={() => setAgentMode((mode) => (mode === "b" ? "off" : "b"))}
+                  title="方案B（skill 审查）：Agent 按官方 skill 审查并修复展开后的完整 prompt，再发送"
+                  className={`generation-glow-button flex h-7 items-center rounded-[3px] px-2.5 text-xs font-medium disabled:opacity-40 ${
+                    agentMode === "b" ? "" : "is-off"
+                  }`}
+                >
+                  <span className="generation-glow-button__content gap-1.5">
+                    <span className={`h-2 w-2 rounded-full ${agentMode === "b" ? "bg-lime" : "bg-muted/50"}`} />
+                    Agent B
+                  </span>
+                </button>
+              )}
             </>
           )}
           <span className="hidden text-[10px] text-muted md:inline">

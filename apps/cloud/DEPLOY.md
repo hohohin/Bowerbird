@@ -102,6 +102,24 @@ supabase secrets set SUPERUN_WEBHOOK_SECRET=$SUPERUN_WEBHOOK_SECRET
 
 > ⚠️ 目前 `.env` 里 `BOWERBIRD_CLOUD_MOCK=false` 已开启真实方舟；`BOWERBIRD_PAYMENT_MOCK=true` 保持 Mock 支付，**不要**提前改 false。
 
+### 4.0 Entitlement 非对称签名（P9：7 天离线 Pro 宽限）
+
+```bash
+# 1) 生成密钥对（脚本会输出 secrets set 命令与桌面构建公钥）
+node apps/cloud/scripts/gen-entitlement-keypair.mjs
+
+# 2) 私钥进 Edge Secret（值即脚本输出的 ENTITLEMENT_SIGNING_KEY=...）
+supabase secrets set ENTITLEMENT_SIGNING_KEY=<base64 PKCS#8 DER>
+
+# 3) 公钥进桌面构建：追加到 apps/cloud/.env(.local)（本地构建 build.rs 自动读取）
+#    BOWERBIRD_ENTITLEMENT_PUBKEY=<base64 原始 32 字节>，官方构建则注入构建环境同名变量
+
+# 4) 重新部署 entitlement（此后响应 signature_version=1 + Ed25519 签名）
+supabase functions deploy entitlement
+```
+
+验收：桌面登录后 `entitlement.json` 缓存含非空 `signature`；断网重启 app，权益面板仍显示 Pro/Studio（Fresh/Grace），7 天后降级 free。未配置 Secret 时函数自动回落 `signature_version=0`（在线可信、无离线宽限），不会报错。轮换 = 换密钥对 + 同步换桌面内置公钥发版；旧签名验签失败自动降级，用户在线重同步即可。
+
 `generation-worker` / `understand-worker` / `agent-worker` 必须使用 `--no-verify-jwt` 部署，因为 VPS 使用专用 Worker Token 而不是用户 JWT；Function 内部会常量时间校验各自的 `GENERATION_WORKER_TOKEN` / `UNDERSTAND_WORKER_TOKEN` / `AGENT_WORKER_TOKEN`。VPS 只持这些 Token、DeepSeek 与方舟 Key，绝不能持 Supabase secret/service-role。
 
 `understand-proxy` 由 `UNDERSTAND_ASYNC` 开关控制双模式（默认 `false` 保持旧的同步单次请求行为）。上线顺序：先部署函数（开关关）→ 更新 VPS 容器 → 发布新版桌面端（create/轮询兼容两种响应）→ 最后 `supabase secrets set UNDERSTAND_ASYNC=true` 切到异步任务模式，摆脱 Edge 墙钟上限。观察稳定后旧同步路径随生图 135/140s 回退一并移除。

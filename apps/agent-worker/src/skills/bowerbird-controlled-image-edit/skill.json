@@ -1,8 +1,8 @@
 {
   "$schema": "bowerbird-skill-manifest-v1",
   "id": "bowerbird-controlled-image-edit",
-  "version": "0.1.1",
-  "instructionHash": "2378180651c4a42cf98d20b8c428acb70807732d4e4acb8dd48626777be38a3e",
+  "version": "0.1.2",
+  "instructionHash": "f1dddf9642cc8598710b0293e95a31ae3a1740dccec8fd63c6a9afecf4f80d5e",
   "kernelMinVersion": "0.1.0",
   "snapshotSchemaVersion": 1,
   "title": "Bowerbird 受控图片编辑",

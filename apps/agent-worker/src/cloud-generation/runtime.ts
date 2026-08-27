@@ -165,7 +165,14 @@ export function mapArkHttpError(status: number, body: string, requestIdHeader?: 
     return new KnownProviderError("invalid_provider_request", `方舟拒绝了生成参数${detail}`);
   }
   if (status === 408 || status === 504) return new KnownProviderError("provider_timeout", `方舟服务返回处理超时${detail}`);
-  if (status === 429) return new KnownProviderError("provider_busy", `方舟请求繁忙，请稍后重试${detail}`);
+  // RequestBurstTooFast 单独成 provider_burst：瞬时限流，Worker 侧带抖动退避自动重试
+  //（理解链路已接；其余 429 仍是 provider_busy，不自动重试、直接回滚给用户）。
+  if (status === 429) {
+    if (lowered.includes("requestbursttoofast")) {
+      return new KnownProviderError("provider_burst", `方舟请求过快${detail}`);
+    }
+    return new KnownProviderError("provider_busy", `方舟请求受限，请稍后重试${detail}`);
+  }
   return new KnownProviderError("provider_failed", `方舟服务暂时不可用${detail}`);
 }
 

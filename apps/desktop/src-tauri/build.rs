@@ -12,6 +12,9 @@ const KEY_NAMES: [&str; 4] = [
     "VITE_SUPABASE_PUBLISHABLE_KEY",
     "SUPABASE_ANON_KEY",
 ];
+// Entitlement 验签公钥（Ed25519 原始 32 字节 base64）：可选，缺省 = 该构建不启用
+// 离线宽限验签（在线权益不受影响）。与 Edge Secret ENTITLEMENT_SIGNING_KEY 成对轮换。
+const PUBKEY_NAMES: [&str; 1] = ["BOWERBIRD_ENTITLEMENT_PUBKEY"];
 
 fn parse_env_file(path: &Path) -> HashMap<String, String> {
     let Ok(content) = std::fs::read_to_string(path) else {
@@ -54,7 +57,7 @@ fn public_value(names: &[&str], files: &[HashMap<String, String>]) -> Option<Str
 }
 
 fn main() {
-    for name in URL_NAMES.into_iter().chain(KEY_NAMES) {
+    for name in URL_NAMES.into_iter().chain(KEY_NAMES).chain(PUBKEY_NAMES) {
         println!("cargo:rerun-if-env-changed={name}");
     }
 
@@ -77,6 +80,11 @@ fn main() {
             "cargo:warning=Bowerbird Cloud public config is missing; this build will report Cloud unavailable"
         ),
         _ => panic!("Bowerbird Cloud public URL and publishable key must be configured together"),
+    }
+
+    // Entitlement 验签公钥：可选注入。缺失只影响离线宽限验签（回落在线可信）。
+    if let Some(pubkey) = public_value(&PUBKEY_NAMES, &files) {
+        println!("cargo:rustc-env=BOWERBIRD_ENTITLEMENT_PUBKEY={pubkey}");
     }
 
     tauri_build::build()

@@ -3,6 +3,7 @@ import { deepEqual, equal, ok } from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  burstBackoffMs,
   configFromEnv,
   runUnderstandWorker,
   visionPrompt,
@@ -24,6 +25,8 @@ function baseConfig(overrides: Partial<UnderstandWorkerConfig> = {}): Understand
     mock: false,
     pollIntervalMs: 1,
     heartbeatIntervalMs: 1_000,
+    burstRetryMax: 3,
+    burstRetryBaseMs: 1,
     ...overrides,
   };
 }
@@ -212,4 +215,76 @@ test("mock mode returns canned text without contacting Ark", async () => {
   ok(!arkCalled);
   ok(typeof recorded.finishBody?.resultText === "string");
   equal(recorded.controlActions[2], "finish");
+});
+
+test("burstBackoffMs grows exponentially within a jitter band", () => {
+  equal(burstBackoffMs(0, 1_000, () => 0), 1_000);
+  equal(burstBackoffMs(0, 1_000, () => 0.99), 1_495);
+  equal(burstBackoffMs(2, 1_000, () => 0.5), 5_000);
+});
+
+test("RequestBurstTooFast is retried with backoff and then succeeds", async () => {
+  let arkCalls = 0;
+  const recorded = await runOnce(async () => {
+    arkCalls += 1;
+    if (arkCalls <= 2) {
+      return {
+        ok: false,
+        status: 429,
+        body: JSON.stringify({ error: { code: "RequestBurstTooFast" } }),
+      };
+    }
+    return {
+      ok: true,
+      status: 200,
+      body: JSON.stringify({ choices: [{ message: { content: "重试后的描述" } }] }),
+    };
+  });
+  equal(arkCalls, 3, "两次 429 后第三次成功");
+  deepEqual(recorded.controlActions, ["claim", "submitted", "finish", "claim"]);
+  equal(recorded.finishBody?.resultText, "重试后的描述");
+});
+
+test("burst retries exhausted settle as fail with provider_burst", async () => {
+  let arkCalls = 0;
+  const recorded = await runOnce(async () => {
+    arkCalls += 1;
+    return {
+      ok: false,
+      status: 429,
+      body: JSON.stringify({ error: { code: "RequestBurstTooFast" } }),
+    };
+  }, baseConfig({ burstRetryMax: 1 }));
+  equal(arkCalls, 2, "1 次重试用尽后停止");
+  deepEqual(recorded.controlActions, ["claim", "submitted", "fail", "claim"]);
+  equal(recorded.settleBody?.safeErrorCode, "provider_burst");
+});
+
+test("other 429 errors are not retried", async () => {
+  let arkCalls = 0;
+  const recorded = await runOnce(async () => {
+    arkCalls += 1;
+    return {
+      ok: false,
+      status: 429,
+      body: JSON.stringify({ error: { code: "QuotaExceeded" } }),
+    };
+  });
+  equal(arkCalls, 1, "非 RequestBurstTooFast 的 429 不重试");
+  deepEqual(recorded.controlActions, ["claim", "submitted", "fail", "claim"]);
+  equal(recorded.settleBody?.safeErrorCode, "provider_busy");
+});
+
+test("burst retry can be disabled via config", async () => {
+  let arkCalls = 0;
+  const recorded = await runOnce(async () => {
+    arkCalls += 1;
+    return {
+      ok: false,
+      status: 429,
+      body: JSON.stringify({ error: { code: "RequestBurstTooFast" } }),
+    };
+  }, baseConfig({ burstRetryMax: 0 }));
+  equal(arkCalls, 1);
+  equal(recorded.settleBody?.safeErrorCode, "provider_burst");
 });

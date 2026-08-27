@@ -19,11 +19,13 @@ import type {
   Folder,
   GenJob,
   GenTurn,
+  JimengOrphanTask,
   Preset,
   Project,
   PromptedAsset,
   RecentGenSession,
   TagCount,
+  VisualProfileSummary,
 } from "./lib/types";
 import { canonicalProviderKey, isCloudProvider, isKnownGenProvider } from "./lib/genProviders";
 import { normalizeAnnotationPrompt } from "./lib/annotationPrompt";
@@ -31,6 +33,7 @@ import { autoRatioFromReferences } from "./components/creation/ratios";
 
 // —— 默认出图 provider（localStorage，照 GEN_PROVIDERS 枚举校验；收藏星标写它）——
 const DEFAULT_PROVIDER_KEY = "bowerbird.defaultProvider";
+const VISUAL_PROFILE_KEY_PREFIX = "bowerbird.visualProfile.";
 function loadDefaultProvider(): string {
   try {
     const v = localStorage.getItem(DEFAULT_PROVIDER_KEY);
@@ -111,6 +114,10 @@ interface State {
   reloadProjects: () => Promise<void>;
   enterProject: (id: string) => Promise<void>;
   exitProject: () => Promise<void>;
+  visualProfiles: VisualProfileSummary[];
+  activeVisualProfileId: string | null;
+  reloadVisualProfiles: () => Promise<void>;
+  setActiveVisualProfile: (id: string | null) => void;
   // —— 自动归类（P2）——
   autoTags: TagCount[]; // 侧栏「自动归类」分区（source='auto' tag + 计数）
   classifyProgress: { done: number; total: number } | null; // 批量重归类进度
@@ -242,6 +249,7 @@ interface State {
   loadCloudAccount: () => Promise<void>;
   startCloudEmailLogin: (email: string) => Promise<void>;
   syncCloudEntitlement: () => Promise<void>;
+  reconcileCloudEntitlement: () => Promise<void>;
   logoutCloud: () => Promise<void>;
   setCloudAuth: (snapshot: AuthSnapshot) => void;
   setCloudError: (error: string | null) => void;
@@ -275,6 +283,11 @@ interface State {
   genJobOrder: string[]; // job 创建顺序（侧栏 Status 任务列表稳定排序）
   activeJobId: string | null; // 当前查看/操作的 job（续轮/复用/取消/重试基于它）
   genUnread: boolean; // 面板关时落地新图 → 顶栏按钮红点
+  // 即梦远端孤儿任务（启动 list_task 比对发现；会话面板生成 tab 顶部「取回」入口）。
+  jimengOrphans: JimengOrphanTask[];
+  setJimengOrphans: (tasks: JimengOrphanTask[]) => void;
+  retrieveJimengOrphan: (submitId: string) => Promise<void>;
+  dismissJimengOrphan: (submitId: string) => void;
   setActiveJob: (id: string) => void;
   openCloudAgentRun: (run: CloudAgentRunRecord) => void;
   updateCloudAgentRun: (run: CloudAgentRunRecord) => void;
@@ -282,7 +295,7 @@ interface State {
   // 删除生成任务记录（仅前端 genJobs 记录；不取消后端任务、不删已入库图片）。
   removeGenJob: (id: string) => void;
   setGenPanelOpen: (open: boolean) => void;
-  startGeneration: (prompt: string, references: Asset[], ratio?: string | null, provider?: string | null, rawPrompt?: string, conversationId?: string, anchorSessionId?: string, dimensionSources?: PromptedAsset[]) => Promise<string>;
+  startGeneration: (prompt: string, references: Asset[], ratio?: string | null, provider?: string | null, rawPrompt?: string, conversationId?: string, anchorSessionId?: string, dimensionSources?: PromptedAsset[], visualProfileId?: string | null) => Promise<string>;
   // 续轮（底部对话框发送）：instruction = 铺开后实际发送的 prompt；opts 携带编辑框原文
   // （气泡展示）、新挑参考图与比例（jimeng/Cloud 的上一轮产出图由后端权威合并下发）；
   // exactReferences = 轮级重试/编辑的精确重放（该轮当时实际下发的完整参考图，后端跳过合并）。
@@ -329,6 +342,10 @@ interface State {
   projectContextMenu: { x: number; y: number; projectId: string } | null;
   openProjectContextMenu: (x: number, y: number, projectId: string) => void;
   closeProjectContextMenu: () => void;
+  // —— 项目视觉设定（V1：项目内普通文件夹「提炼视觉设定」弹窗）——
+  visualProfileFolder: { id: string; name: string } | null;
+  openVisualProfile: (folder: { id: string; name: string }) => void;
+  closeVisualProfile: () => void;
 }
 
 function normalizeGenerationProvider(provider: string): string {
@@ -598,6 +615,8 @@ export const useStore = create<State>((set, get) => {
           selectedIds: new Set(),
           mode: "browse",
           activePresetId: null,
+          visualProfiles: [],
+          activeVisualProfileId: null,
         });
       } else {
         set({ projects });
@@ -620,6 +639,7 @@ export const useStore = create<State>((set, get) => {
       mode: "browse",
       activePresetId: null,
     });
+    await get().reloadVisualProfiles();
   },
   exitProject: async () => {
     await api.setActiveProject(null);
@@ -634,7 +654,51 @@ export const useStore = create<State>((set, get) => {
       selectedIds: new Set(),
       mode: "browse",
       activePresetId: null,
+      visualProfiles: [],
+      activeVisualProfileId: null,
     });
+  },
+  visualProfiles: [],
+  activeVisualProfileId: null,
+  reloadVisualProfiles: async () => {
+    const projectId = get().currentProjectId;
+    if (!projectId) {
+      set({ visualProfiles: [], activeVisualProfileId: null });
+      return;
+    }
+    try {
+      const visualProfiles = await api.visualProfileList(projectId, null);
+      const confirmed = visualProfiles.filter((profile) => profile.status === "confirmed");
+      const current = get().activeVisualProfileId;
+      let activeVisualProfileId = current && confirmed.some((profile) => profile.id === current)
+        ? current
+        : null;
+      if (!activeVisualProfileId) {
+        try {
+          const saved = localStorage.getItem(`${VISUAL_PROFILE_KEY_PREFIX}${projectId}`);
+          activeVisualProfileId = saved && confirmed.some((profile) => profile.id === saved) ? saved : null;
+        } catch {
+          activeVisualProfileId = null;
+        }
+      }
+      set({ visualProfiles, activeVisualProfileId });
+    } catch (error) {
+      console.error("reloadVisualProfiles failed", error);
+    }
+  },
+  setActiveVisualProfile: (activeVisualProfileId) => {
+    const projectId = get().currentProjectId;
+    if (!projectId) return;
+    if (activeVisualProfileId && !get().visualProfiles.some(
+      (profile) => profile.id === activeVisualProfileId && profile.status === "confirmed",
+    )) return;
+    try {
+      if (activeVisualProfileId) localStorage.setItem(`${VISUAL_PROFILE_KEY_PREFIX}${projectId}`, activeVisualProfileId);
+      else localStorage.removeItem(`${VISUAL_PROFILE_KEY_PREFIX}${projectId}`);
+    } catch {
+      // localStorage unavailable: keep the current-process selection.
+    }
+    set({ activeVisualProfileId });
   },
   reloadPresets: async () => {
     try {
@@ -946,6 +1010,23 @@ export const useStore = create<State>((set, get) => {
       set({ cloudBusy: false });
     }
   },
+  // 静默对账：缓存 Fresh 时只是本地读；降级（重启/超 6h/同步失败）时 Rust 会在线自愈，
+  // 顺带把 Rust 侧因门控操作恢复的权益带回 store——修复 Pro 被显示成 free 直到手动刷新。
+  reconcileCloudEntitlement: async () => {
+    const state = get();
+    if (!state.cloudAuth?.logged_in) return;
+    try {
+      const cloudEntitlement = await api.cloudEntitlement();
+      set((s) => ({
+        cloudEntitlement,
+        activeGenProvider: canUseGenerationProvider(cloudEntitlement, s.defaultProvider)
+          ? s.defaultProvider
+          : "bowerbird-cloud-image_hd",
+      }));
+    } catch {
+      // 静默失败：下一次轮询或手动刷新再试。
+    }
+  },
   logoutCloud: async () => {
     set({ cloudBusy: true, cloudError: null });
     try {
@@ -1011,6 +1092,23 @@ export const useStore = create<State>((set, get) => {
   genJobOrder: [],
   activeJobId: null,
   genUnread: false,
+  jimengOrphans: [],
+  setJimengOrphans: (tasks) => set({ jimengOrphans: tasks }),
+  retrieveJimengOrphan: async (submitId) => {
+    const orphan = get().jimengOrphans.find((t) => t.submit_id === submitId);
+    if (!orphan) return;
+    // 先从列表移除（防重复点击）；后端 job id 固定 orphan-{submit_id} 亦幂等。
+    set((s) => ({ jimengOrphans: s.jimengOrphans.filter((t) => t.submit_id !== submitId) }));
+    try {
+      await api.jimengRetrieveOrphan(submitId, orphan.prompt);
+    } catch (error) {
+      console.error("jimengRetrieveOrphan failed", error);
+      // 失败放回列表，用户可再试。
+      set((s) => ({ jimengOrphans: [...s.jimengOrphans, orphan] }));
+    }
+  },
+  dismissJimengOrphan: (submitId) =>
+    set((s) => ({ jimengOrphans: s.jimengOrphans.filter((t) => t.submit_id !== submitId) })),
   setGenPanelOpen: (open) =>
     set((s) => ({ genPanelOpen: open, genUnread: open ? false : s.genUnread })),
   setActiveJob: (id) => set({ activeJobId: id, activeSessionKind: "generation" }),
@@ -1092,6 +1190,7 @@ export const useStore = create<State>((set, get) => {
           const turns: GenTurn[] = r.turns.map((t) => ({
             id: nextGenTurnId(),
             prompt: t.prompt,
+            appliedPrompt: t.applied_prompt ?? null,
             promptRaw: t.prompt_raw ?? null,
             images: t.images,
             refs: t.references ?? undefined,
@@ -1115,6 +1214,8 @@ export const useStore = create<State>((set, get) => {
             lastRatio: r.ratio ?? null,
             provider: r.provider,
             projectId: r.project_id ?? null,
+            visualProfile: r.visual_profile,
+            visualProfileId: r.visual_profile?.profileId ?? null,
             createdAt: r.created_at,
             running: false,
             submitId: null,
@@ -1129,7 +1230,13 @@ export const useStore = create<State>((set, get) => {
           if (j.session_id && seenSessions.has(j.session_id)) continue; // 同 session 已有终态行，避免双份
           genJobs[j.id] = {
             id: j.id,
-            turns: [{ id: nextGenTurnId(), prompt: j.prompt, images: [], provider: j.provider }],
+            turns: [{
+              id: nextGenTurnId(),
+              prompt: j.prompt,
+              appliedPrompt: j.applied_prompt ?? null,
+              images: [],
+              provider: j.provider,
+            }],
             sessionId: j.session_id ?? j.submit_id ?? null,
             conversationId: j.conversation_id ?? undefined,
             streaming: "",
@@ -1139,6 +1246,8 @@ export const useStore = create<State>((set, get) => {
             lastRatio: j.ratio ?? null,
             provider: j.provider,
             projectId: j.project_id ?? null,
+            visualProfile: j.visual_profile,
+            visualProfileId: j.visual_profile?.profileId ?? null,
             createdAt: j.created_at,
             running: j.running,
             submitId: j.submit_id ?? null,
@@ -1157,7 +1266,7 @@ export const useStore = create<State>((set, get) => {
       console.error("loadGenJobs failed", e);
     }
   },
-  startGeneration: async (prompt, references, ratio, provider, rawPrompt, conversationId, anchorSessionId, dimensionSources) => {
+  startGeneration: async (prompt, references, ratio, provider, rawPrompt, conversationId, anchorSessionId, dimensionSources, visualProfileId) => {
     // 多 job：不再因 generating 阻塞（并发发起多个生成，各自独立流转）。
     // provider 兜底：调用点没传（CreationBoard send / retry）→ 当前选择 → 全局默认。
     const prov = normalizeGenerationProvider(
@@ -1179,6 +1288,9 @@ export const useStore = create<State>((set, get) => {
     // 即梦 omit --ratio 会固定回退 16:9（竖屏参考图也被横切）；解析不了（无参考图/无尺寸）
     // 维持「自动」交引擎默认。落 lastRatio 供续轮坞与重试继承。
     const sentRatio = ratio?.trim() ? ratio : autoRatioFromReferences(references);
+    const selectedVisualProfileId = visualProfileId === undefined
+      ? get().activeVisualProfileId
+      : visualProfileId;
     // 前端生成 jobId：创建 GenJob 即知 id，chunk 按 id 路由无 race；后端 task_queue upsert。
     const jobId = crypto.randomUUID();
     // 会话级分组（含普通 job：conversationId 兜底 jobId）——后端 done 入库时落
@@ -1197,6 +1309,7 @@ export const useStore = create<State>((set, get) => {
       lastRatio: sentRatio,
       provider: prov,
       projectId: get().currentProjectId,
+      visualProfileId: selectedVisualProfileId,
       createdAt: Date.now(),
       running: true,
     };
@@ -1220,6 +1333,7 @@ export const useStore = create<State>((set, get) => {
         ratio: sentRatio,
         provider: prov,
         projectId: job.projectId,
+        visualProfileId: selectedVisualProfileId,
         conversationId: conv,
         // 版本分支才锚定源会话（源 session 可能是旧版生成 / 回看历史，还没有 conversation 映射）。
         anchorSessionId: conversationId ? anchorSessionId ?? null : null,
@@ -1290,6 +1404,7 @@ export const useStore = create<State>((set, get) => {
         ratio: opts?.ratio?.trim() ? opts.ratio : null,
         provider: prov,
         projectId: job.projectId,
+        visualProfileId: job.visualProfileId ?? job.visualProfile?.profileId ?? null,
       });
     } catch (e) {
       const message = taskErrorMessage(e);
@@ -1336,6 +1451,10 @@ export const useStore = create<State>((set, get) => {
         job.lastRatio,
         provider,
         job.turns[0]?.promptRaw ?? undefined,
+        undefined,
+        undefined,
+        undefined,
+        job.visualProfileId ?? job.visualProfile?.profileId ?? null,
       );
     }
   },
@@ -1345,16 +1464,26 @@ export const useStore = create<State>((set, get) => {
       // 第一参考图吸附）→ refs 落到该轮（气泡上方「附件」缩略图）、lastRatio 同步实际值
       // （续轮坞比例初值不再滞留首轮）。首轮展示走 refAssets（完整 asset），refs 仅兜底。
       const sid = c.job_id;
-      if (sid && (c.references || c.ratio)) {
+      if (sid && (c.references || c.ratio || c.applied_prompt || c.visual_profile)) {
         updateJob(sid, (j) => {
           const last = j.turns[j.turns.length - 1];
           const turns = last
             ? [
                 ...j.turns.slice(0, -1),
-                { ...last, refs: c.references ?? last.refs },
+                {
+                  ...last,
+                  refs: c.references ?? last.refs,
+                  appliedPrompt: c.applied_prompt ?? last.appliedPrompt,
+                },
               ]
             : j.turns;
-          return { ...j, turns, lastRatio: c.ratio ?? j.lastRatio };
+          return {
+            ...j,
+            turns,
+            lastRatio: c.ratio ?? j.lastRatio,
+            visualProfile: c.visual_profile ?? j.visualProfile,
+            visualProfileId: c.visual_profile?.profileId ?? j.visualProfileId,
+          };
         });
       }
       return;
@@ -1464,6 +1593,7 @@ export const useStore = create<State>((set, get) => {
         turns: hist.turns.map((t) => ({
           id: nextGenTurnId(),
           prompt: t.prompt,
+          appliedPrompt: t.applied_prompt ?? null,
           promptRaw: t.prompt_raw ?? null,
           images: t.images,
           refs: t.references ?? undefined,
@@ -1481,6 +1611,8 @@ export const useStore = create<State>((set, get) => {
         // key 归一为 jimeng；旧 meta 无 provider 维持空串（面板按 codex 展示，可手选）。
         provider: hist.provider === "dreamina" ? "jimeng" : hist.provider ?? "",
         projectId: get().currentProjectId,
+        visualProfile: hist.visual_profile ?? null,
+        visualProfileId: hist.visual_profile?.profileId ?? null,
         createdAt: Date.now(),
         running: false,
       };
@@ -1566,5 +1698,8 @@ export const useStore = create<State>((set, get) => {
   projectContextMenu: null,
   openProjectContextMenu: (x, y, projectId) => set({ projectContextMenu: { x, y, projectId } }),
   closeProjectContextMenu: () => set({ projectContextMenu: null }),
+  visualProfileFolder: null,
+  openVisualProfile: (visualProfileFolder) => set({ visualProfileFolder }),
+  closeVisualProfile: () => set({ visualProfileFolder: null }),
   };
 });

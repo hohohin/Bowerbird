@@ -8,6 +8,7 @@ pub mod client;
 pub mod config;
 pub mod entitlement;
 pub mod policy;
+pub mod visual_profile;
 
 pub use auth::AuthClient;
 pub use client::CloudClient;

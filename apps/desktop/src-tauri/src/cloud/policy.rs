@@ -16,6 +16,8 @@ pub struct FeaturePolicy {
     pub allowed_agent_skills: Vec<String>,
     #[serde(default = "default_agent_budget_options")]
     pub agent_budget_options: Vec<String>,
+    #[serde(default = "default_can_use_visual_profiles")]
+    pub can_use_visual_profiles: bool,
 }
 
 fn default_can_use_agent_runs() -> bool {
@@ -34,6 +36,10 @@ fn default_agent_budget_options() -> Vec<String> {
     vec!["controlled-min".into(), "controlled-standard".into()]
 }
 
+fn default_can_use_visual_profiles() -> bool {
+    true
+}
+
 impl FeaturePolicy {
     pub fn for_tier(tier: &str) -> Self {
         match tier {
@@ -48,6 +54,7 @@ impl FeaturePolicy {
                 max_parallel_agent_runs: 4,
                 allowed_agent_skills: default_allowed_agent_skills(),
                 agent_budget_options: default_agent_budget_options(),
+                can_use_visual_profiles: true,
             },
             "pro" => Self {
                 can_use_byo: true,
@@ -60,6 +67,7 @@ impl FeaturePolicy {
                 max_parallel_agent_runs: 2,
                 allowed_agent_skills: default_allowed_agent_skills(),
                 agent_budget_options: default_agent_budget_options(),
+                can_use_visual_profiles: true,
             },
             _ => Self::free(),
         }
@@ -77,6 +85,7 @@ impl FeaturePolicy {
             max_parallel_agent_runs: 1,
             allowed_agent_skills: default_allowed_agent_skills(),
             agent_budget_options: default_agent_budget_options(),
+            can_use_visual_profiles: true,
         }
     }
 

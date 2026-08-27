@@ -6,7 +6,7 @@ import { requireUser } from "../_shared/auth.ts";
 import type { AuthContext } from "../_shared/auth.ts";
 import { ensureDailyCredits, holdCredits, rollbackCredits } from "../_shared/billing.ts";
 import { ApiError, errorResponse, jsonResponse, requestId, safeLog } from "../_shared/errors.ts";
-import { activeTier, policyFor } from "../_shared/feature-policy.ts";
+import { activeTier, policyForUser } from "../_shared/feature-policy.ts";
 import { corsHeaders } from "../_shared/limits.ts";
 import { reserveManagedUsage } from "../_shared/usage.ts";
 
@@ -84,6 +84,45 @@ type ControlledReference = {
   sha256: string;
 };
 
+type VisualProfileTrace = { profileId: string; version: number; hash: string };
+const VISUAL_PROFILE_CATEGORIES = new Set(["composition", "light", "palette", "mood", "material", "medium", "layout"]);
+
+function parseVisualProfileTrace(value: unknown): VisualProfileTrace | null {
+  if (value === undefined || value === null) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new ApiError("invalid_request", "视觉设定追踪信息无效");
+  const trace = value as Record<string, unknown>;
+  if (typeof trace.profileId !== "string" || !trace.profileId.trim() || trace.profileId.length > 120 ||
+      !Number.isInteger(trace.version) || Number(trace.version) < 1 || !sha256Pattern(trace.hash)) {
+    throw new ApiError("invalid_request", "视觉设定追踪信息无效");
+  }
+  return { profileId: trace.profileId, version: Number(trace.version), hash: trace.hash as string };
+}
+
+async function validateVisualProfileCapsule(value: unknown): Promise<VisualProfileTrace | null> {
+  if (value === undefined) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new ApiError("invalid_request", "视觉设定胶囊无效");
+  const capsule = value as Record<string, unknown>;
+  const trace = parseVisualProfileTrace(capsule);
+  if (capsule.schemaVersion !== 1 || typeof capsule.sourceScopeHash !== "string" || !capsule.sourceScopeHash.trim() ||
+      typeof capsule.summary !== "string" || !Array.isArray(capsule.contentThemes) ||
+      !(capsule.contentThemes as unknown[]).every((item) => typeof item === "string")) {
+    throw new ApiError("invalid_request", "视觉设定胶囊无效");
+  }
+  for (const polarity of ["must", "prefer", "avoid"] as const) {
+    const rules = capsule[polarity];
+    if (!Array.isArray(rules) || !(rules as unknown[]).every((raw) => {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false;
+      const rule = raw as Record<string, unknown>;
+      return VISUAL_PROFILE_CATEGORIES.has(String(rule.category)) && rule.polarity === polarity &&
+        typeof rule.value === "string" && !!rule.value.trim() && rule.value.length <= 500;
+    })) throw new ApiError("invalid_request", "视觉设定规则无效");
+  }
+  const { hash: _hash, ...payload } = capsule;
+  const computed = await sha256Hex(new TextEncoder().encode(canonicalJson(payload)));
+  if (computed !== trace!.hash) throw new ApiError("invalid_request", "视觉设定胶囊哈希不匹配");
+  return trace;
+}
+
 function validatePreferenceCapsule(value: unknown): void {
   if (value === undefined) return;
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -126,7 +165,10 @@ function validatePreferenceCapsule(value: unknown): void {
   }
 }
 
-function parseControlledManifest(value: unknown, expectedCount: number): ControlledReference[] {
+async function parseControlledManifest(
+  value: unknown,
+  expectedCount: number,
+): Promise<{ references: ControlledReference[]; visualProfile: VisualProfileTrace | null }> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new ApiError("invalid_request", "受控编辑输入清单无效");
   }
@@ -136,10 +178,11 @@ function parseControlledManifest(value: unknown, expectedCount: number): Control
     throw new ApiError("invalid_request", "受控编辑输入清单无效");
   }
   validatePreferenceCapsule(manifest.preferenceCapsule);
+  const visualProfile = await validateVisualProfileCapsule(manifest.visualProfileCapsule);
   if (manifest.references.length !== expectedCount) throw new ApiError("invalid_request", "参考图数量与 Run 不一致");
   const ordinals = new Set<number>();
   const ids = new Set<string>();
-  return manifest.references.map((raw) => {
+  const references = manifest.references.map((raw) => {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new ApiError("invalid_request", "参考图元数据无效");
     const item = raw as Record<string, unknown>;
     const referenceId = typeof item.referenceId === "string" ? item.referenceId : "";
@@ -156,6 +199,7 @@ function parseControlledManifest(value: unknown, expectedCount: number): Control
     ordinals.add(ordinal);
     return { referenceId, ordinal, mime, bytes, sha256: item.sha256 } as ControlledReference;
   }).sort((a, b) => a.ordinal - b.ordinal);
+  return { references, visualProfile };
 }
 
 async function billingAccountId(admin: AuthContext["admin"], authUserId: string): Promise<string> {
@@ -195,7 +239,7 @@ function relaxedBudget(service: string, available: number): { budget: number; pr
   return { budget: 9, pricingVersion: full.pricingVersion, billingService: `${full.billingService}_min` };
 }
 
-async function actionCreate(admin: Parameters<typeof billingAccountId>[0], user: { id: string }, body: Record<string, unknown>, requestIdValue: string): Promise<Response> {
+async function actionCreate(admin: Parameters<typeof billingAccountId>[0], user: { id: string; app_metadata?: unknown }, body: Record<string, unknown>, requestIdValue: string): Promise<Response> {
   const skillId = typeof body.skillId === "string" ? body.skillId : "";
   if (!ALLOWED_SKILLS.has(skillId)) throw new ApiError("invalid_request", "不支持的 Skill");
   const goal = typeof body.goal === "string" ? body.goal.trim() : "";
@@ -214,6 +258,10 @@ async function actionCreate(admin: Parameters<typeof billingAccountId>[0], user:
     throw new ApiError("invalid_request", "生图引擎无效");
   }
   const imageProvider = requestedImageProvider as "cloud" | "jimeng" | "codex";
+  const visualProfile = parseVisualProfileTrace(body.visualProfile);
+  if (visualProfile && skillId !== "bowerbird-controlled-image-edit") {
+    throw new ApiError("invalid_request", "该 Skill 不支持项目视觉设定");
+  }
   // Codex already performs its own reasoning/conversation loop. Combining it
   // with the Bowerbird Agent duplicates planning and is currently too slow,
   // so reject only new Runs while preserving existing Run/task recovery.
@@ -235,9 +283,12 @@ async function actionCreate(admin: Parameters<typeof billingAccountId>[0], user:
     .eq("user_id", accountId)
     .maybeSingle();
   if (subError) throw new ApiError("internal_error", "订阅状态读取失败", true);
-  const policy = policyFor(activeTier(subscription));
+  const policy = policyForUser(activeTier(subscription), user);
   if (!policy.can_use_agent_runs || !policy.allowed_agent_skills.includes(skillId)) {
     throw new ApiError("upgrade_required", "当前权益不支持该 Agent 能力", false, 403);
+  }
+  if (visualProfile && !policy.can_use_visual_profiles) {
+    throw new ApiError("upgrade_required", "当前权益不支持项目视觉设定", false, 403);
   }
   // 服务端 BYO 门控读取与 entitlement 相同的 FeaturePolicy；客户端镜像不得作为唯一防线。
   if (imageProvider !== "cloud" && !policy.can_use_byo) {
@@ -295,15 +346,18 @@ async function actionCreate(admin: Parameters<typeof billingAccountId>[0], user:
 
   // Idempotent create: if a run row already references this hold, return it.
   const { data: existing } = await admin.from("agent_runs")
-    .select("id,conversation_id,status,skill_id,input_count,input_manifest_hash,request_object_key,image_provider,budget_credits,pricing_version")
+    .select("id,conversation_id,status,skill_id,input_count,input_manifest_hash,request_object_key,image_provider,budget_credits,pricing_version,visual_profile_id,visual_profile_version,visual_profile_hash")
     .eq("hold_id", hold.holdId).maybeSingle();
   if (existing) {
     const row = existing as OwnRun & {
       skill_id: string; input_count: number; input_manifest_hash: string; request_object_key: string;
       image_provider: string; budget_credits: number; pricing_version: number;
+      visual_profile_id: string | null; visual_profile_version: number | null; visual_profile_hash: string | null;
     };
     if (row.skill_id !== skillId || row.input_count !== inputCount ||
-        row.input_manifest_hash !== body.inputManifestHash || row.image_provider !== imageProvider) {
+        row.input_manifest_hash !== body.inputManifestHash || row.image_provider !== imageProvider ||
+        row.visual_profile_id !== (visualProfile?.profileId ?? null) || row.visual_profile_version !== (visualProfile?.version ?? null) ||
+        row.visual_profile_hash !== (visualProfile?.hash ?? null)) {
       throw new ApiError("invalid_request", "Agent 幂等请求参数不一致", false, 409);
     }
     if (row.status === "uploading") {
@@ -361,7 +415,7 @@ async function actionCreate(admin: Parameters<typeof billingAccountId>[0], user:
     p_conversation_id: conversationId,
     p_user_id: accountId,
     p_skill_id: skillId,
-    p_skill_version: skillId === "bowerbird-controlled-image-edit" ? "0.1.1" : "0.1.0-m0",
+    p_skill_version: skillId === "bowerbird-controlled-image-edit" ? "0.1.2" : "0.1.0-m0",
     p_kernel_version: "0.1.0",
     p_input_count: inputCount,
     p_input_manifest_hash: body.inputManifestHash as string,
@@ -405,6 +459,12 @@ async function actionCreate(admin: Parameters<typeof billingAccountId>[0], user:
   runId = String(rawGuarded.id);
   conversationId = String(rawGuarded.conversation_id);
   requestKey = String(rawGuarded.request_object_key);
+  const traceUpdate = await admin.from("agent_runs").update({
+    visual_profile_id: visualProfile?.profileId ?? null,
+    visual_profile_version: visualProfile?.version ?? null,
+    visual_profile_hash: visualProfile?.hash ?? null,
+  }).eq("id", runId);
+  if (traceUpdate.error) throw new ApiError("internal_error", "视觉设定追踪写入失败", true);
 
   try {
     // Reserve the project-wide managed cost ceiling before any user content is uploaded.
@@ -461,13 +521,14 @@ async function actionEnqueue(admin: Parameters<typeof billingAccountId>[0], user
   if (!runId) throw new ApiError("invalid_request", "缺少 runId");
   await loadOwnRun(admin, runId, user.id);
   const { data: run, error } = await admin.from("agent_runs")
-    .select("id,conversation_id,status,skill_id,input_count,input_manifest_hash,request_object_key,content_expires_at")
+    .select("id,conversation_id,status,skill_id,input_count,input_manifest_hash,request_object_key,content_expires_at,visual_profile_id,visual_profile_version,visual_profile_hash")
     .eq("id", runId)
     .maybeSingle();
   if (error || !run) throw new ApiError("invalid_request", "Run 不存在", false, 404);
   const row = run as {
     id: string; conversation_id: string; status: string; skill_id: string; input_count: number;
     input_manifest_hash: string; request_object_key: string; content_expires_at: string;
+    visual_profile_id: string | null; visual_profile_version: number | null; visual_profile_hash: string | null;
   };
   if (row.status !== "uploading") throw new ApiError("invalid_request", "Run 状态不允许入队");
 
@@ -485,7 +546,13 @@ async function actionEnqueue(admin: Parameters<typeof billingAccountId>[0], user
     } catch {
       throw new ApiError("invalid_request", "输入清单不是有效 JSON");
     }
-    const references = parseControlledManifest(manifest, row.input_count);
+    const parsed = await parseControlledManifest(manifest, row.input_count);
+    if (row.visual_profile_id !== (parsed.visualProfile?.profileId ?? null) ||
+        row.visual_profile_version !== (parsed.visualProfile?.version ?? null) ||
+        row.visual_profile_hash !== (parsed.visualProfile?.hash ?? null)) {
+      throw new ApiError("invalid_request", "视觉设定追踪与输入清单不一致", false, 409);
+    }
+    const references = parsed.references;
     const artifacts = [];
     for (const reference of references) {
       const objectKey = controlledInputObjectKey(runId, reference.ordinal);
@@ -533,7 +600,7 @@ async function actionGet(admin: Parameters<typeof billingAccountId>[0], user: { 
   await loadOwnRun(admin, runId, user.id);
   const [{ data: run }, { data: events }, { data: approvals }, { data: clarifications }] = await Promise.all([
     admin.from("agent_runs").select(
-      "id,conversation_id,status,current_step,progress,skill_id,skill_version,approved_plan_hash,planned_tool_count,budget_credits,actual_credits,result_feedback_action,created_at,queued_at,started_at,finished_at,content_expires_at,content_deleted_at,error_code,safe_message",
+      "id,conversation_id,status,current_step,progress,skill_id,skill_version,approved_plan_hash,planned_tool_count,budget_credits,actual_credits,result_feedback_action,visual_profile_id,visual_profile_version,visual_profile_hash,created_at,queued_at,started_at,finished_at,content_expires_at,content_deleted_at,error_code,safe_message",
     ).eq("id", runId).maybeSingle(),
     admin.from("agent_events").select("seq,type,step,progress,display_payload,created_at").eq("run_id", runId).order("seq", { ascending: true }).limit(100),
     admin.from("agent_approvals").select("id,kind,status,proposal_object_key,proposal_hash,planned_tool_count,requested_at,expires_at,content_deleted_at,estimated_additional_credits").eq("run_id", runId).order("requested_at", { ascending: false }).limit(10),

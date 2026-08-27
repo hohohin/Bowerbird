@@ -2,6 +2,7 @@ import { test } from "node:test";
 import { equal, ok } from "node:assert/strict";
 import { FakeModel, scriptedActions } from "../fakes/fake-model.ts";
 import { advanceLocalAgent, createLocalAgentCheckpoint } from "./runtime.ts";
+import { canonicalJson, sha256Hex } from "../kernel/tool-ledger.ts";
 
 test("local runtime pauses for approval and resumes through both provider tools", async () => {
   const model = new FakeModel(scriptedActions([
@@ -45,4 +46,35 @@ test("local runtime rejects approval without silently generating", async () => {
   checkpoint = await advanceLocalAgent({ checkpoint, approval: false }, model);
   equal(checkpoint.status, "cancelled");
   equal(checkpoint.generateAttemptCount, 0);
+});
+
+test("local smart refinement receives the frozen visual profile as a hash-bound rubric", async () => {
+  const payload = {
+    schemaVersion: 1 as const,
+    profileId: "profile-1",
+    version: 3,
+    sourceScopeHash: "scope-hash",
+    summary: "低饱和编辑视觉",
+    must: [{ category: "palette" as const, value: "低饱和蓝绿", polarity: "must" as const }],
+    prefer: [],
+    avoid: [{ category: "light" as const, value: "硬直闪光", polarity: "avoid" as const }],
+    contentThemes: ["茶具"],
+  };
+  const model = new FakeModel(scriptedActions([
+    { action: "parse_intent", arguments: { intent: { goal: "改成明确的高饱和红色" } } },
+    { action: "assign_reference_roles", arguments: { assignments: [] } },
+    { action: "score_dimensions", arguments: { scores: [] } },
+    { action: "submit_refine_plan", arguments: { changes: "以本次高饱和红色目标为准" } },
+  ]));
+  const checkpoint = createLocalAgentCheckpoint("local-profile", {
+    targetAssetId: "asset-1",
+    goal: "改成明确的高饱和红色",
+    visualProfileCapsule: { ...payload, hash: sha256Hex(canonicalJson(payload)) },
+  });
+  await advanceLocalAgent({ checkpoint }, model);
+  const block = model.requests[0].context.find((item) => item.kind === "visual_profile_capsule");
+  equal(block?.trust, "untrusted");
+  equal(block?.contentHash, checkpoint.input.visualProfileCapsule?.hash);
+  ok(JSON.stringify(block?.body).includes("contentThemes 不得自动加入画面"));
+  ok(model.requests[0].context[0].body && JSON.stringify(model.requests[0].context[0].body).includes("本次明确目标优先"));
 });

@@ -18,6 +18,8 @@ export interface Asset {
   created_at?: number | null;
   file_mtime?: number | null;
   generation_session_id?: string | null;
+  /** 被创作板当参考图调用的次数（详情页信息区展示；0 不显示）。 */
+  reference_count?: number;
 }
 
 export interface Project {
@@ -186,6 +188,8 @@ export interface Preset {
 export interface GenTurn {
   id: number;
   prompt: string;
+  /** 当时真正提交给 provider 的最终指令（含视觉设定注入与 provider 包装）。 */
+  appliedPrompt?: string | null;
   // 未铺开的编辑框原文（会话用户气泡显示它，与右键「复用生成提示词」同一数据）；
   // prompt 则是实际发给 AI 的完整文本（用途注入等），收进「thinking」式折叠。旧数据 / 续轮为 null。
   promptRaw?: string | null;
@@ -229,6 +233,10 @@ export interface GenJob {
   lastRatio: string | null;
   provider: string;
   projectId: string | null; // 首轮项目快照；续轮不随当前项目切换漂移
+  /** 首轮冻结的已确认视觉设定；续轮/恢复始终使用同一 profile id/version/hash。 */
+  visualProfile?: VisualProfileCapsule | null;
+  /** 新任务在后端返回完整胶囊前保存选择；恢复后与 visualProfile.profileId 一致。 */
+  visualProfileId?: string | null;
   createdAt: number;
   running: boolean;
   // 即梦 submit_id（Chunk::Submit 回填，恢复续查用）；codex job 为 null。
@@ -237,9 +245,18 @@ export interface GenJob {
   remoteStatus?: "querying" | "success" | "fail" | null;
 }
 
+/** 即梦远端孤儿任务（启动 `list_task` 比对本地 job 表后，本地无记录的在跑/未取回任务）。 */
+export interface JimengOrphanTask {
+  submit_id: string;
+  prompt: string;
+  gen_task_type: string;
+  gen_status: string; // querying | success
+}
+
 /** 「回看生成对话」：某生成图所在 codex 会话的完整时间线（后端 generation_history 返回）。 */
 export interface GenerationHistoryTurn {
   prompt: string;
+  applied_prompt?: string | null;
   prompt_raw?: string | null; // 未铺开的原始编辑框文本（复用优先用它还原 chip）；旧 meta 为 null → 回退 prompt
   images: string[]; // store_path
   /** 本轮实际下发的参考图（续轮含上一轮产出图）；旧 meta / 空参考为空。 */
@@ -260,6 +277,8 @@ export interface GenerationHistory {
   /** 首版 generation_meta 的 provider：回看重建的 job 用它定续轮坞 provider 初值（即梦会话
    *  不再默认落到 codex）；旧 meta 无此字段为 null。 */
   provider?: string | null;
+  /** 该会话启动时冻结的视觉设定；旧记录为 null。 */
+  visual_profile?: VisualProfileCapsule | null;
 }
 
 /** 应用设置（后端 settings.json 持久化） */
@@ -272,6 +291,14 @@ export interface AppSettings {
   hide_project_assets: boolean;
   /** 即梦 dreamina CLI 出图模型版本（text2image: 3.0~5.0Pro；image2image 仅 4.0+） */
   dreamina_model_version: string;
+  // —— 开发者选项（仅测试账号可见）：对话框 Agent 模式开关，默认只开正式 Agent，
+  //    关闭的模式不在创作板 / 会话编辑坞对话框渲染。
+  agent_mode_enabled: boolean;
+  agent_a_mode_enabled: boolean;
+  agent_b_mode_enabled: boolean;
+  agent_z_mode_enabled: boolean;
+  agent_g_mode_enabled: boolean;
+  agent_ds_mode_enabled: boolean;
 }
 
 export interface AuthSnapshot {
@@ -294,6 +321,7 @@ export interface FeaturePolicy {
   max_parallel_agent_runs: number;
   allowed_agent_skills: string[];
   agent_budget_options: string[];
+  can_use_visual_profiles: boolean;
 }
 
 export type PreferenceFactCategory =
@@ -359,6 +387,8 @@ export interface EntitlementSnapshot {
   entitlement_version: number;
   signature_version: number;
   signature: string | null;
+  /** 测试账号标记（bowerbird_test）：只决定「设置 · 开发者选项」可见性，不参与付费门控。 */
+  is_test_account?: boolean;
   offline_state: "fresh" | "grace" | "expired" | "invalid" | null;
 }
 
@@ -376,11 +406,13 @@ export interface GenJobSummary {
   provider: string;
   status: string;
   prompt: string;
+  applied_prompt: string | null;
   submit_id: string | null;
   session_id: string | null;
   conversation_id: string | null;
   project_id: string | null;
   ratio: string | null;
+  visual_profile: VisualProfileCapsule | null;
   references: string[];
   created_at: number;
   running: boolean;
@@ -398,6 +430,7 @@ export interface RecentGenSession {
   conversation_id: string | null;
   project_id: string | null;
   ratio: string | null;
+  visual_profile: VisualProfileCapsule | null;
   references: string[];
   created_at: number;
   turns: GenerationHistoryTurn[];
@@ -437,7 +470,7 @@ export interface LocalAgentRecord {
 export interface LocalAgentCheckpoint {
   schemaVersion: 1;
   runId: string;
-  input: { targetAssetId: string; goal: string; caption?: string | null };
+  input: { targetAssetId: string; goal: string; caption?: string | null; visualProfileCapsule?: VisualProfileCapsule | null };
   phase: string;
   status: string;
   records: LocalAgentRecord[];
@@ -579,6 +612,9 @@ export interface CloudAgentSnapshot {
     budget_credits: number;
     actual_credits?: number | null;
     result_feedback_action?: "accept" | "retry" | null;
+    visual_profile_id?: string | null;
+    visual_profile_version?: number | null;
+    visual_profile_hash?: string | null;
     error_code?: string | null;
     safe_message?: string | null;
   };
@@ -629,7 +665,14 @@ export interface CloudAgentPreview {
 }
 
 export type CodexChunk =
-  | { kind: "started"; job_id: string; references?: string[]; ratio?: string | null }
+  | {
+      kind: "started";
+      job_id: string;
+      references?: string[];
+      ratio?: string | null;
+      applied_prompt?: string | null;
+      visual_profile?: VisualProfileCapsule | null;
+    }
   | { kind: "delta"; text: string; job_id?: string }
   | { kind: "submit"; submit_id: string; job_id?: string }
   | {
@@ -644,3 +687,105 @@ export type CodexChunk =
   | { kind: "recover_started"; job_id: string; prompt: string; provider: string }
   | { kind: "recover_polling"; job_id: string; message: string }
   | { kind: "error"; message: string; job_id?: string };
+
+// —— 项目视觉设定 V1（AGENT-RUNTIME-PLAN §8/V1；Rust core/visual_profile.rs 为权威）——
+
+export interface VisualProfileMissingAsset {
+  assetId: string;
+  name: string;
+  /** no_caption | not_parseable */
+  reason: string;
+}
+
+export interface VisualProfileScopePreview {
+  folderId: string;
+  folderName: string;
+  inFolder: number;
+  effective: number;
+  missing: VisualProfileMissingAsset[];
+  minRequired: number;
+}
+
+export interface VisualProfileDraftRule {
+  category: string;
+  value: string;
+  polarity: "must" | "prefer" | "avoid";
+  confidence: number;
+  supportingAssetIds: string[];
+  opposingAssetIds: string[];
+  confirmedByUser: boolean;
+}
+
+export interface VisualProfileContentTheme {
+  value: string;
+  supportingAssetIds: string[];
+  coverage: number;
+  confidence: number;
+}
+
+export interface VisualProfileConflict {
+  description: string;
+  sideA: { value: string; assetIds: string[] };
+  sideB: { value: string; assetIds: string[] };
+}
+
+export interface VisualProfileCandidateDirection {
+  label: string;
+  summary: string;
+  supportingAssetIds: string[];
+  opposingAssetIds: string[];
+}
+
+export interface VisualProfileSummary {
+  id: string;
+  projectId: string;
+  folderId: string;
+  name: string;
+  version: number;
+  status: "draft" | "confirmed" | "archived";
+  /** local_baseline | cloud_model */
+  extractor: string;
+  summary: string;
+  sourceCount: number;
+  ruleCount: number;
+  createdAt: number;
+  confirmedAt: number | null;
+}
+
+export interface VisualProfileDetail extends VisualProfileSummary {
+  sourceScopeHash: string;
+  rules: VisualProfileDraftRule[];
+  contentThemes: VisualProfileContentTheme[];
+  conflicts: VisualProfileConflict[];
+  candidateDirections: VisualProfileCandidateDirection[];
+}
+
+export interface VisualProfileRuleEdit {
+  category: string;
+  value: string;
+  polarity: "must" | "prefer" | "avoid";
+  confidence: number;
+  supportingAssetIds: string[];
+  opposingAssetIds: string[];
+  confirmedByUser: boolean;
+}
+
+export interface VisualProfileRuleValue {
+  category: string;
+  value: string;
+  polarity: "must" | "prefer" | "avoid";
+}
+
+/** 已确认项目视觉设定的只读、版本化快照；生成/Agent 只能读取，不能回写。 */
+export interface VisualProfileCapsule {
+  schemaVersion: 1;
+  profileId: string;
+  version: number;
+  sourceScopeHash: string;
+  summary: string;
+  must: VisualProfileRuleValue[];
+  prefer: VisualProfileRuleValue[];
+  avoid: VisualProfileRuleValue[];
+  contentThemes: string[];
+  hash: string;
+}

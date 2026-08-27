@@ -13,6 +13,7 @@ pub mod preset;
 pub mod projects;
 pub mod prompt;
 pub mod settings;
+pub mod visual_profile;
 
 use std::sync::Arc;
 

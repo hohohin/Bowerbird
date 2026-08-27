@@ -13,6 +13,7 @@ export const FREE_POLICY: FeaturePolicy = {
   max_parallel_agent_runs: 1,
   allowed_agent_skills: ["bowerbird-controlled-image-edit"],
   agent_budget_options: ["controlled-min", "controlled-standard"],
+  can_use_visual_profiles: true,
 };
 
 /** 唯一门控事实源：从 entitlement 快照取 policy；缺失时用免费兜底。 */

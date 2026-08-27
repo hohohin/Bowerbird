@@ -476,16 +476,44 @@ pub async fn codex_create_image(
     ratio: Option<String>,
     provider: Option<String>,
     project_id: Option<String>,
+    visual_profile_id: Option<String>,
     job_id: String,
     conversation_id: Option<String>,
     anchor_session_id: Option<String>,
 ) -> Result<String, AppError> {
+    // V4：同一 job 的首轮 capsule 是不可变权威。续轮即使当前 UI 改选了其他 profile，
+    // 也必须继续使用启动时版本；新 job 才能选择另一个 confirmed profile。
+    let persisted_profile = crate::core::task_queue::Task::by_id(db.inner(), &job_id)?
+        .and_then(|task| task.gen_job())
+        .and_then(|job| job.visual_profile);
+    let requested_profile = match visual_profile_id.as_deref() {
+        Some(profile_id) => {
+            let project_id = project_id
+                .as_deref()
+                .ok_or_else(|| AppError::Other("视觉设定只能在当前项目内使用".into()))?;
+            Some(db.visual_profile_capsule(profile_id, project_id)?)
+        }
+        None => None,
+    };
+    let visual_profile = match (persisted_profile, requested_profile) {
+        (Some(persisted), Some(requested)) if persisted.hash != requested.hash => {
+            return Err(AppError::Other(
+                "进行中的生成会话不能切换视觉设定版本；请新建会话".into(),
+            ));
+        }
+        (Some(persisted), _) => Some(persisted),
+        (None, requested) => requested,
+    };
     // 首轮 instruction：codex 需一句自然语言触发其 imagegen 技能（含 ratio 文本注入）；
     // 即梦 / Cloud 直接用用户原文——它们各有 ratio 参数通道（--ratio / req.ratio），
     // 加这层前缀话反而会被当成画面描述污染出图。
     // 续轮（有 session_id）：codex resume / 即梦 image2image / Cloud 重发，统一用用户修改意见原文。
     // prompt / reference_images 留一份给 generation_meta（req 会 move 走原值）。
     let prompt_for_meta = prompt.clone();
+    let prompt_for_provider = visual_profile
+        .as_ref()
+        .map(|capsule| crate::core::visual_profile::inject_visual_profile_prompt(&prompt, capsule))
+        .unwrap_or_else(|| prompt.clone());
     // ── 续轮参考图与 resume 判定（provider 感知）──
     // 即梦/Cloud 续轮（有 session_id）始终带上会话「最后一个有图轮」的产出图（修改主体），
     // 与显式携带的参考图合并去重（产出在前）、截前 10（服务端参考图上限）。背景：前端曾是
@@ -586,11 +614,12 @@ pub async fn codex_create_image(
     // 包装语；resume 续轮与即梦/Cloud 一律用户原文。
     let instruction = if is_codex && provider_resume.is_none() {
         format!(
-            "请使用图像生成工具，根据以下提示词和参考图生成图片（张数完全以提示词要求为准；提示词未指定张数时生成一张{ratio_clause}）。\n\n{prompt}"
+            "请使用图像生成工具，根据以下提示词和参考图生成图片（张数完全以提示词要求为准；提示词未指定张数时生成一张{ratio_clause}）。\n\n{prompt_for_provider}"
         )
     } else {
-        prompt
+        prompt_for_provider
     };
+    let applied_prompt = instruction.clone();
     let req = CodexRequest {
         instruction,
         reference_images: reference_images.into_iter().map(PathBuf::from).collect(),
@@ -600,6 +629,9 @@ pub async fn codex_create_image(
     };
 
     let entitlement_snapshot = entitlement.current_or_sync(&auth_client).await;
+    if visual_profile.is_some() && !entitlement_snapshot.policy.can_use_visual_profiles {
+        return Err(AppError::Other("当前权益不支持项目视觉设定".into()));
+    }
     if !entitlement_snapshot
         .policy
         .allows_generation_provider(provider.as_deref())
@@ -621,6 +653,18 @@ pub async fn codex_create_image(
     .map_err(|error| AppError::Other(error.to_string()))??;
     if !entitlement_snapshot.policy.can_start_job(running_count) {
         return Err(AppError::Other("已达当前账号档位的并行生成上限".into()));
+    }
+
+    // 素材被创作板调用（参考）计数：本次实际下发（合并续轮产出图后）的参考图命中资产
+    // 各 +1（同次去重；库外/临时标注文件不命中）。失败仅告警，绝不挡生成。
+    {
+        let db_refs = db.inner().clone();
+        let refs_for_count = refs_for_meta.clone();
+        tokio::task::spawn_blocking(move || {
+            if let Err(e) = db_refs.bump_asset_reference_counts(&refs_for_count) {
+                tracing::warn!("素材参考计数失败（忽略）: {e}");
+            }
+        });
     }
 
     let (tx, mut rx) = mpsc::channel::<Chunk>(64);
@@ -687,11 +731,13 @@ pub async fn codex_create_image(
             provider: provider_name.clone(),
             status: "running".to_string(),
             prompt: prompt_for_meta.clone(),
+            applied_prompt: Some(applied_prompt.clone()),
             references: refs_for_meta.clone(),
             session_id: session_id.clone(),
             conversation_id: conversation_id.clone(),
             project_id: project_id.clone(),
             ratio: ratio.clone(),
+            visual_profile: visual_profile.clone(),
             submit_id: None,
             video_options: None,
             turns: serde_json::json!([]),
@@ -727,6 +773,8 @@ pub async fn codex_create_image(
             "job_id": &job_id,
             "references": refs_for_meta.clone(),
             "ratio": ratio.clone(),
+            "applied_prompt": &applied_prompt,
+            "visual_profile": &visual_profile,
         }),
     );
 
@@ -775,6 +823,7 @@ pub async fn codex_create_image(
             outcome.source_images.clone(),
             outcome.temp_dir.clone(),
             prompt_for_meta.clone(),
+            Some(applied_prompt.clone()),
             prompt_raw,
             dimension_sources,
             refs_for_meta.clone(),
@@ -783,6 +832,7 @@ pub async fn codex_create_image(
             outcome.submit_id.clone(),
             provider_name.clone(),
             project_id.clone(),
+            visual_profile.clone(),
             // codex 轮记录真实 thread id（非 codex 原生会话里连续 codex 轮共享 thread 的句柄）。
             if provider_name == "codex-cli" {
                 outcome.session_id.clone()
@@ -839,11 +889,13 @@ pub struct GenJobSummary {
     pub provider: String,
     pub status: String,
     pub prompt: String,
+    pub applied_prompt: Option<String>,
     pub submit_id: Option<String>,
     pub session_id: Option<String>,
     pub conversation_id: Option<String>,
     pub project_id: Option<String>,
     pub ratio: Option<String>,
+    pub visual_profile: Option<crate::core::visual_profile::VisualProfileCapsule>,
     pub references: Vec<String>,
     pub created_at: i64,
     pub running: bool,
@@ -869,11 +921,13 @@ pub async fn list_gen_jobs(db: State<'_, Arc<Database>>) -> Result<Vec<GenJobSum
                 provider: j.provider,
                 status: j.status,
                 prompt: j.prompt,
+                applied_prompt: j.applied_prompt,
                 submit_id: j.submit_id,
                 session_id: j.session_id,
                 conversation_id: j.conversation_id,
                 project_id: j.project_id,
                 ratio: j.ratio,
+                visual_profile: j.visual_profile,
                 references: j.references,
                 created_at: j.created_at,
             })
@@ -898,6 +952,7 @@ pub struct RecentGenSession {
     pub conversation_id: Option<String>,
     pub project_id: Option<String>,
     pub ratio: Option<String>,
+    pub visual_profile: Option<crate::core::visual_profile::VisualProfileCapsule>,
     pub references: Vec<String>,
     pub created_at: i64,
     pub turns: Vec<GenerationHistoryTurn>,
@@ -953,6 +1008,7 @@ pub async fn recent_gen_sessions(
                 conversation_id: j.conversation_id,
                 project_id: j.project_id,
                 ratio: j.ratio,
+                visual_profile: j.visual_profile,
                 references: j.references,
                 created_at: j.created_at,
                 turns,
@@ -977,6 +1033,51 @@ pub async fn dismiss_gen_job(db: State<'_, Arc<Database>>, job_id: String) -> Re
     .await
     .map_err(|e| AppError::Other(e.to_string()))?
 }
+
+/// 取回即梦孤儿任务（约定 23 阶段 3）：启动 `list_task` 比对发现的、本地无记录的即梦
+/// 任务由用户显式点击「取回」。合成 GenJob（job id 固定 `orphan-{submit_id}`，天然幂等
+/// ——重复取回 upsert 同一行）后复用启动恢复链路续查：下载 → 入库 → generation_meta
+/// （含 submit_id，之后不再被当孤儿）→ 会话面板时间线自动出现。
+#[tauri::command]
+pub async fn jimeng_retrieve_orphan(
+    app: AppHandle,
+    db: State<'_, Arc<Database>>,
+    paths: State<'_, Arc<LibraryPaths>>,
+    submit_id: String,
+    prompt: String,
+) -> Result<(), AppError> {
+    let db = db.inner().clone();
+    let paths = paths.inner().clone();
+    let now = chrono::Utc::now().timestamp();
+    let job = crate::core::task_queue::GenJob {
+        id: format!("orphan-{submit_id}"),
+        media: "image".into(),
+        provider: "jimeng".into(),
+        status: "querying".into(),
+        prompt,
+        applied_prompt: None,
+        references: vec![],
+        session_id: None,
+        conversation_id: None,
+        project_id: None,
+        ratio: None,
+        visual_profile: None,
+        submit_id: Some(submit_id.clone()),
+        video_options: None,
+        turns: serde_json::Value::Null,
+        error: None,
+        queue_idx: None,
+        created_at: now,
+        started_at: Some(now),
+        finished_at: None,
+    };
+    tokio::spawn(async move {
+        crate::core::generation_worker::recover_one_jimeng_job(app, db, paths, job, submit_id)
+            .await;
+    });
+    Ok(())
+}
+
 /// `[spike]` OpenAI API 生图（非 codex CLI）：调 OpenAI Images API（`gpt-image-1`），
 /// `b64_json` 落盘后 `ingest_generated` 进库为正式资产、进瀑布流。
 ///
@@ -1126,11 +1227,13 @@ mod generation_task_tests {
             provider: "bowerbird-cloud".into(),
             status: "running".into(),
             prompt: "test".into(),
+            applied_prompt: None,
             references: vec![],
             session_id: None,
             conversation_id: None,
             project_id: None,
             ratio: None,
+            visual_profile: None,
             submit_id: None,
             video_options: None,
             turns: serde_json::json!([]),
