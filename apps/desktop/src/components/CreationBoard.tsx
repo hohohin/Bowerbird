@@ -357,8 +357,14 @@ export function CreationBoard() {
       if (!body || agentZBusy) return;
       setAgentZBusy(true);
       try {
-        const refPaths = references.map((r) => r.store_path).filter((p): p is string => !!p);
-        await api.agentZSend(body, refPaths);
+        const refPairs = references
+          .map((r) => ({ path: r.store_path, name: r.name }))
+          .filter((p): p is { path: string; name: string } => !!p.path);
+        await api.agentZSend(
+          body,
+          refPairs.map((p) => p.path),
+          refPairs.map((p) => p.name),
+        );
         notifySuccess("已发送到 Agent Z 终端");
         exitCreationMode();
       } catch (error) {
@@ -374,8 +380,15 @@ export function CreationBoard() {
       if (!body || agentZBusy) return;
       setAgentZBusy(true);
       try {
-        const refPaths = references.map((r) => r.store_path).filter((p): p is string => !!p);
-        await api.agentZSend(body, refPaths, "g");
+        const refPairs = references
+          .map((r) => ({ path: r.store_path, name: r.name }))
+          .filter((p): p is { path: string; name: string } => !!p.path);
+        await api.agentZSend(
+          body,
+          refPairs.map((p) => p.path),
+          refPairs.map((p) => p.name),
+          "g",
+        );
         notifySuccess("已发送到 Agent G 终端");
         exitCreationMode();
       } catch (error) {

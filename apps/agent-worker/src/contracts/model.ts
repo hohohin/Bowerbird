@@ -54,8 +54,9 @@ export type ContextBlock = {
   body: unknown;
 };
 
-/** 动作/工具的能力类别。决定 PolicyEngine 的越权判定与 ledger 记录。 */
-export type ToolKind = "read_only" | "provider" | "kernel" | "workspace";
+/** 动作/工具的能力类别。决定 PolicyEngine 的越权判定与 ledger 记录。
+ * `renderer`：有 artifact 副作用但无外部 provider 计费的受限确定性工具（render_html）。 */
+export type ToolKind = "read_only" | "provider" | "kernel" | "workspace" | "renderer";
 
 /** Skill allowlist 中声明的、当前 phase 允许模型调用的动作。 */
 export type ActionDefinition = {

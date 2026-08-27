@@ -1,0 +1,49 @@
+# html-renderer 容器 —— HTML-RENDER-PLAN.md §3.2/§3.3
+# 部署边界：只连接 Docker internal 网络、无宿主端口映射、read-only rootfs、
+# drop 全部 capabilities、无业务 secret（仅容器间共享的 RENDER_INTERNAL_TOKEN）。
+# Agent Worker 侧接入（H2）需把 worker 服务加入同一 bowerbird-internal 网络并配置
+# RENDERER_URL=http://html-renderer:3917；部署时以 override 或合并 compose 完成。
+networks:
+  bowerbird-internal:
+    name: bowerbird-internal
+    internal: true
+
+services:
+  html-renderer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: bowerbird/html-renderer:local
+    restart: unless-stopped
+    init: true
+    env_file:
+      - .env.renderer
+    environment:
+      HOME: /tmp
+    networks:
+      - bowerbird-internal
+    read_only: true
+    tmpfs:
+      - /tmp:size=384m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 1536m
+    cpus: 1.0
+    pids_limit: 256
+    ulimits:
+      nofile:
+        soft: 1024
+        hard: 4096
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3917/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"

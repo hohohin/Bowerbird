@@ -1260,6 +1260,28 @@ impl Database {
         Ok(())
     }
 
+    /// 按下发顺序反查参考图的素材名（store_path → assets.name），供生成 instruction
+    /// 注入「第 N 张 = 名字」对应清单（prompt 里 @名 与 ULID 存储名不一致，靠清单对号）。
+    /// 库外 / 临时标注文件不命中 → None。
+    pub fn asset_names_by_store_paths(
+        &self,
+        store_paths: &[String],
+    ) -> AppResult<Vec<Option<String>>> {
+        let conn = self.conn.lock().unwrap();
+        store_paths
+            .iter()
+            .map(|path| {
+                conn.query_row(
+                    "SELECT name FROM assets WHERE store_path = ?1",
+                    rusqlite::params![path],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()
+                .map_err(AppError::from)
+            })
+            .collect()
+    }
+
     /// 关键词搜索（Eagle 式多维度命中）。
     ///
     /// 语法：空白分词 → 多词 AND；`-词` 排除（该词命中任何维度的资产被剔除）。
@@ -2605,6 +2627,42 @@ mod tests {
             .unwrap()
         };
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn asset_names_by_store_paths_keeps_order_and_none_for_unknown() {
+        let db = db();
+        let a = put_asset(&db, "ref-a");
+        let b = put_asset(&db, "ref-b");
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE assets SET store_path = '/lib/a.png', name = 'wai.png' WHERE id = ?1",
+                rusqlite::params![a],
+            )
+            .unwrap();
+            conn.execute(
+                "UPDATE assets SET store_path = '/lib/b.jpg', name = '黑骨螺_05.jpg' WHERE id = ?1",
+                rusqlite::params![b],
+            )
+            .unwrap();
+        }
+        // 与下发顺序一一对应；库外/临时标注文件 → None。
+        let names = db
+            .asset_names_by_store_paths(&[
+                "/lib/b.jpg".into(),
+                "/tmp/annotation.png".into(),
+                "/lib/a.png".into(),
+            ])
+            .unwrap();
+        assert_eq!(
+            names,
+            vec![
+                Some("黑骨螺_05.jpg".to_string()),
+                None,
+                Some("wai.png".to_string())
+            ]
+        );
     }
 
     #[test]

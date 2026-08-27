@@ -20,6 +20,8 @@ export const M0_FIXED_TARIFF: Readonly<Record<string, number>> = Object.freeze({
   propose_preference: 0,
   submit_plan_for_approval: 0,
   finish_run: 0,
+  // HTML 离线渲染首版 0 积分（HTML-RENDER-PLAN §7.3：计费策略归定价文档；仍写 ledger/技术 usage）。
+  render_html: 0,
   // smart-refinement 专用动作
   parse_intent: 0,
   assign_reference_roles: 0,

@@ -15,6 +15,8 @@ export type WorkspaceImage = {
 };
 
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+/** HTML 文档 artifact 上限（与 html-renderer maxHtmlBytes 一致）。 */
+const MAX_HTML_DOCUMENT_BYTES = 2 * 1024 * 1024;
 export const ORPHAN_WORKSPACE_MAX_AGE_MS = 24 * 60 * 60 * 1_000;
 
 /** Remove only old, per-Run directories created beneath the configured workspace root. */
@@ -68,6 +70,7 @@ export class RunWorkspace {
   private readonly control: AgentControlClient;
   private readonly remote = new Map<string, ClaimedArtifact>();
   private readonly local = new Map<string, { path: string; image: WorkspaceImage }>();
+  private readonly localHtml = new Map<string, { path: string; html: string; sha256: string }>();
 
   constructor(args: {
     root: string;
@@ -99,6 +102,32 @@ export class RunWorkspace {
     writeFileSync(path, image.bytes);
     this.local.set(artifactId, { path, image });
     return image;
+  }
+
+  /** 读取 role=html_document 的 artifact 为受验文本（≤2MiB、严格 UTF-8、sha 复核）。 */
+  async readHtmlDocumentArtifact(artifactId: string): Promise<string> {
+    const cached = this.localHtml.get(artifactId);
+    if (cached && existsSync(cached.path)) {
+      const bytes = new Uint8Array(readFileSync(cached.path));
+      if (createHash("sha256").update(bytes).digest("hex") !== cached.sha256) throw new Error("agent_workspace_html_hash_mismatch");
+      return cached.html;
+    }
+    const artifact = this.remote.get(artifactId);
+    if (!artifact?.url) throw new Error("agent_workspace_artifact_url_missing");
+    if (artifact.role !== "html_document") throw new Error("agent_workspace_html_role_invalid");
+    if (artifact.mime !== "text/html") throw new Error("agent_workspace_html_mime_invalid");
+    const bytes = await this.control.downloadVerifiedBytes(artifact.url, artifact, MAX_HTML_DOCUMENT_BYTES + 1);
+    if (!bytes.byteLength || bytes.byteLength > MAX_HTML_DOCUMENT_BYTES) throw new Error("agent_workspace_html_size_invalid");
+    let html: string;
+    try {
+      html = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch {
+      throw new Error("agent_workspace_html_utf8_invalid");
+    }
+    const path = join(this.path, "inputs", `${artifactId}.html`);
+    writeFileSync(path, bytes);
+    this.localHtml.set(artifactId, { path, html, sha256: artifact.sha256 });
+    return html;
   }
 
   writeProviderResult(callId: string, bytes: Uint8Array): WorkspaceImage {
@@ -136,5 +165,6 @@ export class RunWorkspace {
     if (!resolvedPath || resolvedPath.length < 8) throw new Error("agent_workspace_cleanup_path_invalid");
     rmSync(resolvedPath, { recursive: true, force: true });
     this.local.clear();
+    this.localHtml.clear();
   }
 }

@@ -41,8 +41,10 @@ fn is_content_theme_title(title: &str) -> bool {
 }
 
 fn is_generated_source(source: &str) -> bool {
-    matches!(source, "codex" | "openai" | "jimeng" | "annotation" | "bowerbird-agent")
-        || source.starts_with("bowerbird-cloud")
+    matches!(
+        source,
+        "codex" | "openai" | "jimeng" | "annotation" | "bowerbird-agent"
+    ) || source.starts_with("bowerbird-cloud")
 }
 
 // ---------------------------------------------------------------------------
@@ -155,7 +157,11 @@ fn caption_hash(
         "d": dimensions,
         "t": text.unwrap_or(""),
     });
-    hex_digest(serde_json::to_string(&payload).unwrap_or_default().as_bytes())
+    hex_digest(
+        serde_json::to_string(&payload)
+            .unwrap_or_default()
+            .as_bytes(),
+    )
 }
 
 /// 解析 caption payload 为证据卡；旧 `{text}` / 无结构 payload → sections/dimensions 为空，
@@ -166,14 +172,17 @@ fn to_evidence_card(
     payload_json: &str,
     source: &str,
 ) -> VisualEvidenceCard {
-    let parsed: CaptionPayload =
-        serde_json::from_str(payload_json).unwrap_or_default();
+    let parsed: CaptionPayload = serde_json::from_str(payload_json).unwrap_or_default();
     let effective = !parsed.sections.is_empty() || !parsed.dimensions.is_empty();
     let parse_status = parsed
         .parse_status
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| {
-            if effective { "ok".into() } else { "raw_fallback".into() }
+            if effective {
+                "ok".into()
+            } else {
+                "raw_fallback".into()
+            }
         });
     VisualEvidenceCard {
         asset_id: asset_id.to_string(),
@@ -199,7 +208,11 @@ fn card_is_effective(card: &VisualEvidenceCard) -> bool {
 // scope hash（§8.3：冻结点击瞬间快照，不用于持续监听）
 // ---------------------------------------------------------------------------
 
-pub fn source_scope_hash(project_id: &str, folder_id: &str, cards: &[VisualEvidenceCard]) -> String {
+pub fn source_scope_hash(
+    project_id: &str,
+    folder_id: &str,
+    cards: &[VisualEvidenceCard],
+) -> String {
     let mut entries: Vec<String> = cards
         .iter()
         .map(|c| format!("{}:{}:{}", c.asset_id, c.caption_id, c.caption_hash))
@@ -248,14 +261,26 @@ fn visual_values(card: &VisualEvidenceCard) -> Vec<(&'static str, CardValue)> {
     for key in VISUAL_DIMENSIONS {
         if let Some(v) = card.dimensions.get(key) {
             if !v.trim().is_empty() {
-                out.push((key, CardValue { value: v.trim().to_string(), asset_id: card.asset_id.clone() }));
+                out.push((
+                    key,
+                    CardValue {
+                        value: v.trim().to_string(),
+                        asset_id: card.asset_id.clone(),
+                    },
+                ));
             }
         }
     }
     for section in &card.sections {
         if let Some(category) = section_category(&section.title) {
             if !section.body.trim().is_empty() {
-                out.push((category, CardValue { value: section.body.trim().to_string(), asset_id: card.asset_id.clone() }));
+                out.push((
+                    category,
+                    CardValue {
+                        value: section.body.trim().to_string(),
+                        asset_id: card.asset_id.clone(),
+                    },
+                ));
             }
         }
     }
@@ -269,7 +294,10 @@ fn content_values(card: &VisualEvidenceCard) -> Vec<CardValue> {
             for token in section.body.split(['、', ',', '，', '；', ';']) {
                 let token = token.trim();
                 if !token.is_empty() {
-                    out.push(CardValue { value: token.to_string(), asset_id: card.asset_id.clone() });
+                    out.push(CardValue {
+                        value: token.to_string(),
+                        asset_id: card.asset_id.clone(),
+                    });
                 }
             }
         }
@@ -288,8 +316,13 @@ fn aggregate(values: Vec<CardValue>) -> Vec<(String, Vec<String>)> {
     groups
 }
 
-pub fn extract_draft(project_id: &str, folder_id: &str, cards: &[VisualEvidenceCard]) -> ExtractOutcome {
-    let effective: Vec<&VisualEvidenceCard> = cards.iter().filter(|c| card_is_effective(c)).collect();
+pub fn extract_draft(
+    project_id: &str,
+    folder_id: &str,
+    cards: &[VisualEvidenceCard],
+) -> ExtractOutcome {
+    let effective: Vec<&VisualEvidenceCard> =
+        cards.iter().filter(|c| card_is_effective(c)).collect();
     if effective.len() < MIN_EFFECTIVE_CARDS {
         return ExtractOutcome::Insufficient {
             effective_count: effective.len(),
@@ -309,10 +342,15 @@ pub fn extract_draft(project_id: &str, folder_id: &str, cards: &[VisualEvidenceC
     for (category, values) in by_category {
         let total = values.len().max(1) as f64;
         let agg = aggregate(values);
-        let Some((top_value, top_ids)) = agg.first() else { continue };
+        let Some((top_value, top_ids)) = agg.first() else {
+            continue;
+        };
         let top_coverage = top_ids.len() as f64 / total;
         if top_coverage >= DOMINANT_COVERAGE {
-            let opposing = agg[1..].iter().flat_map(|(_, ids)| ids.clone()).collect::<Vec<_>>();
+            let opposing = agg[1..]
+                .iter()
+                .flat_map(|(_, ids)| ids.clone())
+                .collect::<Vec<_>>();
             visual_rules.push(DraftRule {
                 id: Ulid::new().to_string(),
                 category: category.to_string(),
@@ -328,8 +366,14 @@ pub fn extract_draft(project_id: &str, folder_id: &str, cards: &[VisualEvidenceC
             let (b_value, b_ids) = &agg[1];
             conflicts.push(EvidenceConflict {
                 description: format!("{category}: {a_value} vs {b_value}"),
-                side_a: ConflictSide { value: a_value.clone(), asset_ids: a_ids.clone() },
-                side_b: ConflictSide { value: b_value.clone(), asset_ids: b_ids.clone() },
+                side_a: ConflictSide {
+                    value: a_value.clone(),
+                    asset_ids: a_ids.clone(),
+                },
+                side_b: ConflictSide {
+                    value: b_value.clone(),
+                    asset_ids: b_ids.clone(),
+                },
             });
         }
     }
@@ -341,7 +385,12 @@ pub fn extract_draft(project_id: &str, folder_id: &str, cards: &[VisualEvidenceC
         .into_iter()
         .map(|(value, ids)| {
             let coverage = ids.len() as f64 / content_total;
-            ContentTheme { value, supporting_asset_ids: ids, coverage, confidence: coverage }
+            ContentTheme {
+                value,
+                supporting_asset_ids: ids,
+                coverage,
+                confidence: coverage,
+            }
         })
         .collect();
 
@@ -350,10 +399,19 @@ pub fn extract_draft(project_id: &str, folder_id: &str, cards: &[VisualEvidenceC
     for card in &effective {
         let signature = format!(
             "{}|{}",
-            card.dimensions.get("palette").map(String::as_str).unwrap_or(""),
-            card.dimensions.get("mood").map(String::as_str).unwrap_or("")
+            card.dimensions
+                .get("palette")
+                .map(String::as_str)
+                .unwrap_or(""),
+            card.dimensions
+                .get("mood")
+                .map(String::as_str)
+                .unwrap_or("")
         );
-        clusters.entry(signature).or_default().push(card.asset_id.clone());
+        clusters
+            .entry(signature)
+            .or_default()
+            .push(card.asset_id.clone());
     }
     let mut sorted_clusters: Vec<(String, Vec<String>)> = clusters.into_iter().collect();
     sorted_clusters.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then_with(|| a.0.cmp(&b.0)));
@@ -373,7 +431,11 @@ pub fn extract_draft(project_id: &str, folder_id: &str, cards: &[VisualEvidenceC
                 .flat_map(|(_, ids)| ids.clone())
                 .collect::<Vec<_>>();
             candidate_directions.push(CandidateDirection {
-                label: if signature.is_empty() { "default".into() } else { signature.clone() },
+                label: if signature.is_empty() {
+                    "default".into()
+                } else {
+                    signature.clone()
+                },
                 summary: format!("{} 张素材支持此方向", ids.len()),
                 supporting_asset_ids: ids.clone(),
                 opposing_asset_ids: opposing,
@@ -396,7 +458,10 @@ pub fn extract_draft(project_id: &str, folder_id: &str, cards: &[VisualEvidenceC
         conflicts,
         candidate_directions,
     };
-    ExtractOutcome::Draft { draft, effective_count: effective.len() }
+    ExtractOutcome::Draft {
+        draft,
+        effective_count: effective.len(),
+    }
 }
 
 /// V3-T1：从 draft 规则编译纯文生验证 prompt。**只含文字规则 + 中性主题**：
@@ -534,10 +599,16 @@ fn canonical_json(value: &serde_json::Value) -> String {
         serde_json::Value::Null => "null".into(),
         serde_json::Value::Bool(value) => value.to_string(),
         serde_json::Value::Number(value) => value.to_string(),
-        serde_json::Value::String(value) => serde_json::to_string(value).unwrap_or_else(|_| "\"\"".into()),
+        serde_json::Value::String(value) => {
+            serde_json::to_string(value).unwrap_or_else(|_| "\"\"".into())
+        }
         serde_json::Value::Array(values) => format!(
             "[{}]",
-            values.iter().map(canonical_json).collect::<Vec<_>>().join(",")
+            values
+                .iter()
+                .map(canonical_json)
+                .collect::<Vec<_>>()
+                .join(",")
         ),
         serde_json::Value::Object(values) => {
             let mut keys: Vec<&String> = values.keys().collect();
@@ -697,7 +768,9 @@ fn load_folder_assets(
 
 fn assert_source_folder(conn: &Connection, project_id: &str, folder_id: &str) -> AppResult<String> {
     if folder_id == "root" {
-        return Err(AppError::Other("「全部素材」不能作为视觉设定来源，请选择项目内普通文件夹".into()));
+        return Err(AppError::Other(
+            "「全部素材」不能作为视觉设定来源，请选择项目内普通文件夹".into(),
+        ));
     }
     let folder: Option<(String, String)> = conn
         .query_row(
@@ -714,12 +787,16 @@ fn assert_source_folder(conn: &Connection, project_id: &str, folder_id: &str) ->
         return Err(AppError::Other("文件夹不存在".into()));
     };
     if kind != "folder" {
-        return Err(AppError::Other("只有普通文件夹能提炼视觉设定（收藏夹/智能文件夹不支持）".into()));
+        return Err(AppError::Other(
+            "只有普通文件夹能提炼视觉设定（收藏夹/智能文件夹不支持）".into(),
+        ));
     }
     let project_exists: bool = conn
-        .query_row("SELECT COUNT(*) FROM projects WHERE id = ?1", rusqlite::params![project_id], |row| {
-            row.get::<_, i64>(0)
-        })
+        .query_row(
+            "SELECT COUNT(*) FROM projects WHERE id = ?1",
+            rusqlite::params![project_id],
+            |row| row.get::<_, i64>(0),
+        )
         .map(|n| n > 0)?;
     if !project_exists {
         return Err(AppError::Other("项目不存在".into()));
@@ -774,7 +851,15 @@ pub struct RuleEdit {
 }
 
 fn validate_rule_shape(category: &str, value: &str, polarity: &str) -> AppResult<()> {
-    const CATEGORIES: [&str; 7] = ["composition", "light", "palette", "mood", "material", "medium", "layout"];
+    const CATEGORIES: [&str; 7] = [
+        "composition",
+        "light",
+        "palette",
+        "mood",
+        "material",
+        "medium",
+        "layout",
+    ];
     if !CATEGORIES.contains(&category) {
         return Err(AppError::Other(format!("未知视觉类别：{category}")));
     }
@@ -870,11 +955,18 @@ fn parse_cloud_draft(
     let parsed: CloudDraft = serde_json::from_str(cloud_draft_json)
         .map_err(|error| AppError::Other(format!("云端提炼结果无法解析: {error}")))?;
     if parsed.schema_version != 1 {
-        return Err(AppError::Other(format!("云端提炼结果版本不支持: {}", parsed.schema_version)));
+        return Err(AppError::Other(format!(
+            "云端提炼结果版本不支持: {}",
+            parsed.schema_version
+        )));
     }
-    let known: std::collections::HashSet<&str> = cards.iter().map(|c| c.asset_id.as_str()).collect();
+    let known: std::collections::HashSet<&str> =
+        cards.iter().map(|c| c.asset_id.as_str()).collect();
     let filter_ids = |ids: &[String]| -> Vec<String> {
-        ids.iter().filter(|id| known.contains(id.as_str())).cloned().collect()
+        ids.iter()
+            .filter(|id| known.contains(id.as_str()))
+            .cloned()
+            .collect()
     };
     let mut visual_rules = Vec::new();
     for rule in parsed.visual_rules.into_iter().take(64) {
@@ -917,8 +1009,14 @@ fn parse_cloud_draft(
         .into_iter()
         .map(|conflict| EvidenceConflict {
             description: conflict.description.trim().chars().take(300).collect(),
-            side_a: ConflictSide { value: conflict.side_a.value, asset_ids: filter_ids(&conflict.side_a.asset_ids) },
-            side_b: ConflictSide { value: conflict.side_b.value, asset_ids: filter_ids(&conflict.side_b.asset_ids) },
+            side_a: ConflictSide {
+                value: conflict.side_a.value,
+                asset_ids: filter_ids(&conflict.side_a.asset_ids),
+            },
+            side_b: ConflictSide {
+                value: conflict.side_b.value,
+                asset_ids: filter_ids(&conflict.side_b.asset_ids),
+            },
         })
         .take(32)
         .collect();
@@ -954,7 +1052,11 @@ fn parse_cloud_draft(
 
 impl crate::db::Database {
     /// 覆盖率预览（只读，不产生任何副作用；§8.3「启动前本地检查」）。
-    pub fn visual_profile_preview(&self, project_id: &str, folder_id: &str) -> AppResult<ScopePreview> {
+    pub fn visual_profile_preview(
+        &self,
+        project_id: &str,
+        folder_id: &str,
+    ) -> AppResult<ScopePreview> {
         let conn = self.conn.lock().unwrap();
         let folder_name = assert_source_folder(&conn, project_id, folder_id)?;
         let rows = load_folder_assets(&conn, project_id, folder_id)?;
@@ -970,7 +1072,11 @@ impl crate::db::Database {
             if effective_row {
                 effective += 1;
             } else {
-                let reason = if row.caption_id.is_none() { "no_caption" } else { "not_parseable" };
+                let reason = if row.caption_id.is_none() {
+                    "no_caption"
+                } else {
+                    "not_parseable"
+                };
                 missing.push(MissingAsset {
                     asset_id: row.asset_id.clone(),
                     name: row.name.clone(),
@@ -989,7 +1095,11 @@ impl crate::db::Database {
     }
 
     /// 提炼并落库为新 draft 版本（每次调用创建新版本，不覆盖旧行；§8.5）。
-    pub fn extract_visual_profile(&self, project_id: &str, folder_id: &str) -> AppResult<VisualProfileDetail> {
+    pub fn extract_visual_profile(
+        &self,
+        project_id: &str,
+        folder_id: &str,
+    ) -> AppResult<VisualProfileDetail> {
         let mut conn = self.conn.lock().unwrap();
         let folder_name = assert_source_folder(&conn, project_id, folder_id)?;
         let rows = load_folder_assets(&conn, project_id, folder_id)?;
@@ -1006,8 +1116,14 @@ impl crate::db::Database {
             .collect();
         let outcome = extract_draft(project_id, folder_id, &cards);
         let (draft, effective_count) = match outcome {
-            ExtractOutcome::Draft { draft, effective_count } => (draft, effective_count),
-            ExtractOutcome::Insufficient { effective_count, min_required } => {
+            ExtractOutcome::Draft {
+                draft,
+                effective_count,
+            } => (draft, effective_count),
+            ExtractOutcome::Insufficient {
+                effective_count,
+                min_required,
+            } => {
                 return Err(AppError::Other(format!(
                     "有效反推素材不足（{effective_count}/{min_required}）。请先在该文件夹整理并反推素材；不会自动补反推，也不会上传图片。"
                 )));
@@ -1016,7 +1132,16 @@ impl crate::db::Database {
         assert_payload_clean(&cards, &rows)?;
         let effective_count = effective_count as i64;
         let cards_json = serde_json::to_string(&cards).unwrap_or_else(|_| "[]".into());
-        let profile_id = Self::insert_draft_row(&mut conn, project_id, folder_id, &folder_name, &draft, &cards_json, effective_count, "local_baseline")?;
+        let profile_id = Self::insert_draft_row(
+            &mut conn,
+            project_id,
+            folder_id,
+            &folder_name,
+            &draft,
+            &cards_json,
+            effective_count,
+            "local_baseline",
+        )?;
         Ok(Self::visual_profile_detail(&conn, &profile_id)?)
     }
 
@@ -1075,7 +1200,8 @@ impl crate::db::Database {
                     rule.value,
                     rule.polarity,
                     rule.confidence,
-                    serde_json::to_string(&rule.supporting_asset_ids).unwrap_or_else(|_| "[]".into()),
+                    serde_json::to_string(&rule.supporting_asset_ids)
+                        .unwrap_or_else(|_| "[]".into()),
                     serde_json::to_string(&rule.opposing_asset_ids).unwrap_or_else(|_| "[]".into()),
                     rule.confirmed_by_user as i64,
                 ],
@@ -1097,7 +1223,11 @@ impl crate::db::Database {
 
     /// V2 云端提炼第 1 步：冻结证据卡快照（与本地提取同一套校验/脱敏断言），
     /// 供命令层提交云端后原样用于落库——中途移动素材不影响本次提炼。
-    pub fn visual_profile_freeze_cards(&self, project_id: &str, folder_id: &str) -> AppResult<(String, Vec<VisualEvidenceCard>)> {
+    pub fn visual_profile_freeze_cards(
+        &self,
+        project_id: &str,
+        folder_id: &str,
+    ) -> AppResult<(String, Vec<VisualEvidenceCard>)> {
         let conn = self.conn.lock().unwrap();
         let folder_name = assert_source_folder(&conn, project_id, folder_id)?;
         let rows = load_folder_assets(&conn, project_id, folder_id)?;
@@ -1137,13 +1267,24 @@ impl crate::db::Database {
         let effective_count = cards.iter().filter(|c| card_is_effective(c)).count() as i64;
         let cards_json = serde_json::to_string(cards).unwrap_or_else(|_| "[]".into());
         let profile_id = Self::insert_draft_row(
-            &mut conn, project_id, folder_id, &folder_name, &draft, &cards_json, effective_count, "cloud_model",
+            &mut conn,
+            project_id,
+            folder_id,
+            &folder_name,
+            &draft,
+            &cards_json,
+            effective_count,
+            "cloud_model",
         )?;
         Ok(Self::visual_profile_detail(&conn, &profile_id)?)
     }
 
     /// V2-T3 草稿编辑：整组替换 draft 的规则（仅 draft 状态可改；confirmed 只读）。
-    pub fn update_visual_profile_rules(&self, profile_id: &str, rules: &[RuleEdit]) -> AppResult<VisualProfileDetail> {
+    pub fn update_visual_profile_rules(
+        &self,
+        profile_id: &str,
+        rules: &[RuleEdit],
+    ) -> AppResult<VisualProfileDetail> {
         let conn = self.conn.lock().unwrap();
         let status: Option<String> = conn
             .query_row(
@@ -1167,7 +1308,10 @@ impl crate::db::Database {
         for rule in rules {
             validate_rule_shape(&rule.category, &rule.value, &rule.polarity)?;
         }
-        conn.execute("DELETE FROM visual_profile_rules WHERE profile_id = ?1", rusqlite::params![profile_id])?;
+        conn.execute(
+            "DELETE FROM visual_profile_rules WHERE profile_id = ?1",
+            rusqlite::params![profile_id],
+        )?;
         for rule in rules {
             conn.execute(
                 r#"INSERT INTO visual_profile_rules
@@ -1181,7 +1325,8 @@ impl crate::db::Database {
                     rule.value,
                     rule.polarity,
                     rule.confidence,
-                    serde_json::to_string(&rule.supporting_asset_ids).unwrap_or_else(|_| "[]".into()),
+                    serde_json::to_string(&rule.supporting_asset_ids)
+                        .unwrap_or_else(|_| "[]".into()),
                     serde_json::to_string(&rule.opposing_asset_ids).unwrap_or_else(|_| "[]".into()),
                     rule.confirmed_by_user as i64,
                 ],
@@ -1258,7 +1403,11 @@ impl crate::db::Database {
         Self::visual_profile_detail(&conn, profile_id)
     }
 
-    pub fn list_visual_profiles(&self, project_id: &str, folder_id: Option<&str>) -> AppResult<Vec<VisualProfileSummary>> {
+    pub fn list_visual_profiles(
+        &self,
+        project_id: &str,
+        folder_id: Option<&str>,
+    ) -> AppResult<Vec<VisualProfileSummary>> {
         let conn = self.conn.lock().unwrap();
         let sql = r#"
             SELECT p.id, p.project_id, p.source_folder_id, p.name, p.version, p.status,
@@ -1291,7 +1440,10 @@ impl crate::db::Database {
         Ok(out)
     }
 
-    fn visual_profile_detail(conn: &Connection, profile_id: &str) -> AppResult<VisualProfileDetail> {
+    fn visual_profile_detail(
+        conn: &Connection,
+        profile_id: &str,
+    ) -> AppResult<VisualProfileDetail> {
         let summary = conn
             .query_row(
                 r#"SELECT p.id, p.project_id, p.source_folder_id, p.name, p.version, p.status,
@@ -1348,15 +1500,19 @@ impl crate::db::Database {
         let parse_json_column = |sql: &str| -> AppResult<String> {
             Ok(conn.query_row(sql, rusqlite::params![profile_id], |row| row.get(0))?)
         };
-        let content_themes: Vec<ContentTheme> =
-            serde_json::from_str(&parse_json_column("SELECT content_themes FROM project_visual_profiles WHERE id = ?1")?)
-                .unwrap_or_default();
-        let conflicts: Vec<EvidenceConflict> =
-            serde_json::from_str(&parse_json_column("SELECT conflicts FROM project_visual_profiles WHERE id = ?1")?)
-                .unwrap_or_default();
+        let content_themes: Vec<ContentTheme> = serde_json::from_str(&parse_json_column(
+            "SELECT content_themes FROM project_visual_profiles WHERE id = ?1",
+        )?)
+        .unwrap_or_default();
+        let conflicts: Vec<EvidenceConflict> = serde_json::from_str(&parse_json_column(
+            "SELECT conflicts FROM project_visual_profiles WHERE id = ?1",
+        )?)
+        .unwrap_or_default();
         let candidate_directions: Vec<CandidateDirection> =
-            serde_json::from_str(&parse_json_column("SELECT candidate_directions FROM project_visual_profiles WHERE id = ?1")?)
-                .unwrap_or_default();
+            serde_json::from_str(&parse_json_column(
+                "SELECT candidate_directions FROM project_visual_profiles WHERE id = ?1",
+            )?)
+            .unwrap_or_default();
         Ok(VisualProfileDetail {
             summary,
             source_scope_hash: scope_hash,
@@ -1385,7 +1541,10 @@ mod tests {
             caption_hash: format!("hash-{asset}"),
             sections: sections
                 .iter()
-                .map(|(title, body)| EvidenceSection { title: title.to_string(), body: body.to_string() })
+                .map(|(title, body)| EvidenceSection {
+                    title: title.to_string(),
+                    body: body.to_string(),
+                })
                 .collect(),
             dimensions,
             text_fallback: None,
@@ -1414,9 +1573,17 @@ mod tests {
 
     #[test]
     fn normalize_handles_structured_legacy_and_broken_payloads() {
-        let structured = to_evidence_card("a1", "c1", &caption_json(&[("palette", "低饱和暖调")], &[("材质", "哑光")]), "imported");
+        let structured = to_evidence_card(
+            "a1",
+            "c1",
+            &caption_json(&[("palette", "低饱和暖调")], &[("材质", "哑光")]),
+            "imported",
+        );
         assert_eq!(structured.parse_status, "structured");
-        assert_eq!(structured.dimensions.get("palette").map(String::as_str), Some("低饱和暖调"));
+        assert_eq!(
+            structured.dimensions.get("palette").map(String::as_str),
+            Some("低饱和暖调")
+        );
         assert_eq!(structured.sections.len(), 1);
         assert_eq!(structured.source_class, "imported");
 
@@ -1453,10 +1620,15 @@ mod tests {
 
     #[test]
     fn extract_requires_minimum_effective_cards() {
-        let cards: Vec<_> = (0..4).map(|i| card(&format!("a{i}"), &[("palette", "暖调")], &[])).collect();
+        let cards: Vec<_> = (0..4)
+            .map(|i| card(&format!("a{i}"), &[("palette", "暖调")], &[]))
+            .collect();
         assert_eq!(
             extract_draft("p", "f", &cards),
-            ExtractOutcome::Insufficient { effective_count: 4, min_required: 5 }
+            ExtractOutcome::Insufficient {
+                effective_count: 4,
+                min_required: 5
+            }
         );
     }
 
@@ -1471,7 +1643,11 @@ mod tests {
                 )
             })
             .collect();
-        let ExtractOutcome::Draft { draft, effective_count } = extract_draft("p", "f", &cards) else {
+        let ExtractOutcome::Draft {
+            draft,
+            effective_count,
+        } = extract_draft("p", "f", &cards)
+        else {
             panic!("expected draft");
         };
         assert_eq!(effective_count, 6);
@@ -1583,9 +1759,17 @@ mod tests {
         assert_eq!(preview.folder_name, "风格参考");
         assert_eq!(preview.in_folder, 8); // 6 有效 + asset-none + asset-raw（asset-out 不在项目内）
         assert_eq!(preview.effective, 6);
-        let no_caption = preview.missing.iter().find(|m| m.asset_id == "asset-none").unwrap();
+        let no_caption = preview
+            .missing
+            .iter()
+            .find(|m| m.asset_id == "asset-none")
+            .unwrap();
         assert_eq!(no_caption.reason, "no_caption");
-        let raw = preview.missing.iter().find(|m| m.asset_id == "asset-raw").unwrap();
+        let raw = preview
+            .missing
+            .iter()
+            .find(|m| m.asset_id == "asset-raw")
+            .unwrap();
         assert_eq!(raw.reason, "not_parseable");
 
         // root / 收藏夹 / 不存在文件夹 均拒绝
@@ -1615,7 +1799,10 @@ mod tests {
         let confirmed = db.confirm_visual_profile(&detail2.summary.id).unwrap();
         assert_eq!(confirmed.summary.status, "confirmed");
         assert!(confirmed.summary.confirmed_at.is_some());
-        assert!(db.confirm_visual_profile(&detail2.summary.id).is_err(), "重复确认被拒绝");
+        assert!(
+            db.confirm_visual_profile(&detail2.summary.id).is_err(),
+            "重复确认被拒绝"
+        );
 
         let list = db.list_visual_profiles("p1", Some("f1")).unwrap();
         assert_eq!(list.len(), 2);
@@ -1625,7 +1812,11 @@ mod tests {
         // 库变化后旧行不动：移动素材/加反推不影响已落盘 draft（验收：不自动触发/不随文件夹变化）
         {
             let conn = db.conn.lock().unwrap();
-            conn.execute("UPDATE assets SET folder_id = NULL WHERE id = 'asset-0'", []).unwrap();
+            conn.execute(
+                "UPDATE assets SET folder_id = NULL WHERE id = 'asset-0'",
+                [],
+            )
+            .unwrap();
         }
         let detail_again = db.list_visual_profiles("p1", None).unwrap();
         assert_eq!(detail_again[0].source_count, 6);
@@ -1643,7 +1834,11 @@ mod tests {
         {
             let conn = db.conn.lock().unwrap();
             for i in 0..4 {
-                conn.execute("DELETE FROM analyses WHERE asset_id = ?1", params![format!("asset-{i}")]).unwrap();
+                conn.execute(
+                    "DELETE FROM analyses WHERE asset_id = ?1",
+                    params![format!("asset-{i}")],
+                )
+                .unwrap();
             }
         }
         let error = db.extract_visual_profile("p1", "f1").unwrap_err();
@@ -1671,17 +1866,26 @@ mod tests {
             "candidateDirections": []
         })
         .to_string();
-        let detail = db.persist_cloud_visual_profile("p1", "f1", &cards, &cloud_draft).unwrap();
+        let detail = db
+            .persist_cloud_visual_profile("p1", "f1", &cards, &cloud_draft)
+            .unwrap();
         assert_eq!(detail.summary.version, 1);
         // ghost 素材的规则被 provenance 白名单整条丢弃；好规则的 ghost 引用也被剔除
         assert_eq!(detail.rules.len(), 1);
-        assert_eq!(detail.rules[0].supporting_asset_ids, vec!["asset-0".to_string(), "asset-1".to_string()]);
+        assert_eq!(
+            detail.rules[0].supporting_asset_ids,
+            vec!["asset-0".to_string(), "asset-1".to_string()]
+        );
         assert_eq!(detail.content_themes.len(), 1);
         // extractor = cloud_model
         {
             let conn = db.conn.lock().unwrap();
             let extractor: String = conn
-                .query_row("SELECT extractor FROM project_visual_profiles WHERE id = ?1", params![detail.summary.id], |r| r.get(0))
+                .query_row(
+                    "SELECT extractor FROM project_visual_profiles WHERE id = ?1",
+                    params![detail.summary.id],
+                    |r| r.get(0),
+                )
                 .unwrap();
             assert_eq!(extractor, "cloud_model");
         }
@@ -1691,7 +1895,11 @@ mod tests {
         {
             let conn = db.conn.lock().unwrap();
             let extractor: String = conn
-                .query_row("SELECT extractor FROM project_visual_profiles WHERE id = ?1", params![local.summary.id], |r| r.get(0))
+                .query_row(
+                    "SELECT extractor FROM project_visual_profiles WHERE id = ?1",
+                    params![local.summary.id],
+                    |r| r.get(0),
+                )
                 .unwrap();
             assert_eq!(extractor, "local_baseline");
         }
@@ -1701,36 +1909,50 @@ mod tests {
             "schemaVersion": 1,
             "visualRules": [{ "category": "vibe", "value": "越权", "polarity": "prefer", "supportingAssetIds": ["asset-0"] }]
         }).to_string();
-        assert!(db.persist_cloud_visual_profile("p1", "f1", &cards, &bad).is_err());
+        assert!(db
+            .persist_cloud_visual_profile("p1", "f1", &cards, &bad)
+            .is_err());
     }
 
     #[test]
     fn update_draft_rules_replaces_set_and_guards_confirmed() {
         let db = seeded_db();
         let detail = db.extract_visual_profile("p1", "f1").unwrap();
-        let rules = vec![
-            super::RuleEdit {
-                category: "palette".into(),
-                value: "编辑后的暖调".into(),
-                polarity: "must".into(),
-                confidence: 0.8,
-                supporting_asset_ids: detail.rules[0].supporting_asset_ids.clone(),
-                opposing_asset_ids: vec![],
-                confirmed_by_user: true,
-            },
-        ];
-        let updated = db.update_visual_profile_rules(&detail.summary.id, &rules).unwrap();
+        let rules = vec![super::RuleEdit {
+            category: "palette".into(),
+            value: "编辑后的暖调".into(),
+            polarity: "must".into(),
+            confidence: 0.8,
+            supporting_asset_ids: detail.rules[0].supporting_asset_ids.clone(),
+            opposing_asset_ids: vec![],
+            confirmed_by_user: true,
+        }];
+        let updated = db
+            .update_visual_profile_rules(&detail.summary.id, &rules)
+            .unwrap();
         assert_eq!(updated.rules.len(), 1);
         assert_eq!(updated.rules[0].value, "编辑后的暖调");
         assert_eq!(updated.rules[0].polarity, "must");
 
         // confirmed 后不可再编辑
         db.confirm_visual_profile(&detail.summary.id).unwrap();
-        assert!(db.update_visual_profile_rules(&detail.summary.id, &rules).is_err());
+        assert!(db
+            .update_visual_profile_rules(&detail.summary.id, &rules)
+            .is_err());
         // 非法极性 / 空值拒绝
-        let bad_polarity = vec![super::RuleEdit { category: "palette".into(), value: "x".into(), polarity: "maybe".into(), confidence: 0.0, supporting_asset_ids: vec![], opposing_asset_ids: vec![], confirmed_by_user: false }];
+        let bad_polarity = vec![super::RuleEdit {
+            category: "palette".into(),
+            value: "x".into(),
+            polarity: "maybe".into(),
+            confidence: 0.0,
+            supporting_asset_ids: vec![],
+            opposing_asset_ids: vec![],
+            confirmed_by_user: false,
+        }];
         let draft2 = db.extract_visual_profile("p1", "f1").unwrap();
-        assert!(db.update_visual_profile_rules(&draft2.summary.id, &bad_polarity).is_err());
+        assert!(db
+            .update_visual_profile_rules(&draft2.summary.id, &bad_polarity)
+            .is_err());
     }
 
     #[test]
@@ -1757,7 +1979,8 @@ mod tests {
                 confirmed_by_user: true,
             },
         ];
-        db.update_visual_profile_rules(&detail.summary.id, &rules).unwrap();
+        db.update_visual_profile_rules(&detail.summary.id, &rules)
+            .unwrap();
         db.confirm_visual_profile(&detail.summary.id).unwrap();
 
         let capsule = db.visual_profile_capsule(&detail.summary.id, "p1").unwrap();
@@ -1766,7 +1989,9 @@ mod tests {
         assert_eq!(capsule.must.len(), 1);
         assert_eq!(capsule.avoid.len(), 1);
         assert_eq!(capsule.hash.len(), 64);
-        assert!(db.visual_profile_capsule(&capsule.profile_id, "other-project").is_err());
+        assert!(db
+            .visual_profile_capsule(&capsule.profile_id, "other-project")
+            .is_err());
 
         let prompt = inject_visual_profile_prompt("本次明确改成高饱和红色海报", &capsule);
         assert!(prompt.starts_with("本次明确改成高饱和红色海报"));
@@ -1782,7 +2007,11 @@ mod tests {
         {
             let conn = db.conn.lock().unwrap();
             for i in 0..4 {
-                conn.execute("DELETE FROM analyses WHERE asset_id = ?1", params![format!("asset-{i}")]).unwrap();
+                conn.execute(
+                    "DELETE FROM analyses WHERE asset_id = ?1",
+                    params![format!("asset-{i}")],
+                )
+                .unwrap();
             }
         }
         assert!(db.visual_profile_freeze_cards("p1", "f1").is_err());
@@ -1837,9 +2066,15 @@ mod tests {
     fn link_validation_asset_is_idempotent_and_guarded() {
         let db = seeded_db();
         let detail = db.extract_visual_profile("p1", "f1").unwrap();
-        assert!(db.link_validation_asset(&detail.summary.id, "asset-0").is_ok());
-        assert!(db.link_validation_asset(&detail.summary.id, "asset-0").is_ok());
-        assert!(db.link_validation_asset("missing-profile", "asset-0").is_err());
+        assert!(db
+            .link_validation_asset(&detail.summary.id, "asset-0")
+            .is_ok());
+        assert!(db
+            .link_validation_asset(&detail.summary.id, "asset-0")
+            .is_ok());
+        assert!(db
+            .link_validation_asset("missing-profile", "asset-0")
+            .is_err());
         let conn = db.conn.lock().unwrap();
         let count: i64 = conn
             .query_row(
@@ -1865,7 +2100,10 @@ mod tests {
             )
             .unwrap()
         };
-        assert!(!payload.contains(".png"), "payload 不应包含文件名后缀: {payload}");
+        assert!(
+            !payload.contains(".png"),
+            "payload 不应包含文件名后缀: {payload}"
+        );
         assert!(!payload.contains("本机文件名"));
         assert!(!payload.contains("store_path"));
         assert!(payload.contains("低饱和暖调"), "caption 文字应保留");

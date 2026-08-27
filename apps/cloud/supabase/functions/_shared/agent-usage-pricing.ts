@@ -1,5 +1,5 @@
-export type AgentUsageKind = "model_tokens" | "vision_call" | "image_generation";
-export type AgentUsageProvider = "deepseek" | "ark" | "jimeng" | "codex";
+export type AgentUsageKind = "model_tokens" | "vision_call" | "image_generation" | "html_render";
+export type AgentUsageProvider = "deepseek" | "ark" | "jimeng" | "codex" | "renderer";
 
 export type AgentUsageItem = {
   callId: string;
@@ -34,6 +34,8 @@ export type AgentUsagePricing = {
   };
   visionCall: { provider: "ark"; creditsPerCall: number };
   imageGeneration: Record<"ark" | "jimeng" | "codex", number>;
+  /** 可选块：HTML 离线渲染计价（HTML-RENDER-PLAN §7.3 首版 0 积分；缺省视为 0，向后兼容旧费率行）。 */
+  htmlRender?: { creditsPerCall: number };
   providerCost: AgentProviderCostRates | null;
 };
 
@@ -88,6 +90,10 @@ export function parseAgentUsagePricing(parameters: unknown, pricingVersion: numb
   if (root.billing !== "agent_usage" || model.provider !== "deepseek" || vision.provider !== "ark") {
     throw new Error("agent_usage_pricing_invalid");
   }
+  let htmlRender: AgentUsagePricing["htmlRender"];
+  if (root.html_render !== undefined && root.html_render !== null) {
+    htmlRender = { creditsPerCall: nonnegativeInt(record(root.html_render).credits_per_call) };
+  }
   return {
     version: positiveInt(pricingVersion),
     modelTokens: {
@@ -102,6 +108,7 @@ export function parseAgentUsagePricing(parameters: unknown, pricingVersion: numb
       jimeng: nonnegativeInt(image.jimeng),
       codex: nonnegativeInt(image.codex),
     },
+    ...(htmlRender ? { htmlRender } : {}),
     providerCost: parseProviderCost(root.provider_cost),
   };
 }
@@ -115,8 +122,9 @@ export function normalizeAgentUsageItem(raw: unknown): AgentUsageItem {
   const inputUnits = Number(item.inputUnits ?? 0);
   const outputUnits = Number(item.outputUnits ?? 0);
   const imageCount = Number(item.imageCount ?? 0);
-  if (!callId || callId.length > 160 || !["model_tokens", "vision_call", "image_generation"].includes(String(kind)) ||
-      !["deepseek", "ark", "jimeng", "codex"].includes(String(provider)) || !model || model.length > 120 ||
+  if (!callId || callId.length > 160 ||
+      !["model_tokens", "vision_call", "image_generation", "html_render"].includes(String(kind)) ||
+      !["deepseek", "ark", "jimeng", "codex", "renderer"].includes(String(provider)) || !model || model.length > 120 ||
       !Number.isSafeInteger(inputUnits) || inputUnits < 0 || inputUnits > 10_000_000 ||
       !Number.isSafeInteger(outputUnits) || outputUnits < 0 || outputUnits > 10_000_000 ||
       !Number.isSafeInteger(imageCount) || imageCount < 0 || imageCount > 8) {
@@ -155,6 +163,10 @@ export function creditsForAgentUsage(item: AgentUsageItem, pricing: AgentUsagePr
     if (item.provider !== pricing.visionCall.provider || item.imageCount !== 0) throw new Error("agent_usage_binding_invalid");
     return pricing.visionCall.creditsPerCall;
   }
+  if (item.kind === "html_render") {
+    if (item.provider !== "renderer" || item.imageCount !== 0) throw new Error("agent_usage_binding_invalid");
+    return pricing.htmlRender?.creditsPerCall ?? 0;
+  }
   if (item.provider === "deepseek" || item.imageCount !== 1) throw new Error("agent_usage_binding_invalid");
   return pricing.imageGeneration[item.provider];
 }
@@ -169,6 +181,8 @@ export function estimateProviderCostMicros(item: AgentUsageItem, rates: AgentPro
     );
   }
   if (item.kind === "vision_call") return rates.arkVisionMicrosPerCall;
+  // html_render：容器内自有算力，无上游 provider 成本。
+  if (item.kind === "html_render") return 0;
   // deepseek 生图组合在 creditsForAgentUsage 已 fail closed，这里不会被触达。
   if (item.provider === "deepseek") return 0;
   return rates.imageMicrosPerImage[item.provider] ?? 0;

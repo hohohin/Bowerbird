@@ -8,11 +8,11 @@ import { test } from "node:test";
 import { AgentControlClient, type AgentWorkerFetch, type HttpResponse } from "../control-plane/agent-control-client.ts";
 import { cleanupOrphanWorkspaces, RunWorkspace } from "./run-workspace.ts";
 
-function response(status: number, bytes: Uint8Array): HttpResponse {
+function response(status: number, bytes: Uint8Array, contentType = "image/png"): HttpResponse {
   return {
     ok: status >= 200 && status < 300,
     status,
-    headers: { get: () => "image/png" },
+    headers: { get: () => contentType },
     text: async () => new TextDecoder().decode(bytes),
     arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer,
   };
@@ -67,6 +67,38 @@ test("Run workspace rejects declared image metadata that does not match bytes", 
     }],
   });
   await rejects(async () => await workspace.readArtifact("input-2"), /agent_object_hash_mismatch/);
+  workspace.cleanup();
+});
+
+test("Run workspace reads only role=html_document artifacts as verified UTF-8 HTML", async () => {
+  const htmlBytes = new TextEncoder().encode("<!doctype html><html><body>版式</body></html>");
+  const sha256 = createHash("sha256").update(htmlBytes).digest("hex");
+  const control = new AgentControlClient(
+    { controlUrl: "https://control", workerToken: "secret", workerId: "worker" },
+    async () => response(200, htmlBytes, "text/html"),
+  );
+  const baseArtifact = {
+    conversationId: "conversation-html",
+    runId: "run-html",
+    stepId: "render",
+    mime: "text/html",
+    bytes: htmlBytes.byteLength,
+    sha256,
+    userVisible: false,
+    url: "https://storage/document",
+  } as const;
+  const workspace = new RunWorkspace({
+    root: join(tmpdir(), `bowerbird-workspace-test-${randomUUID()}`),
+    runId: "run-html",
+    control,
+    artifacts: [
+      { ...baseArtifact, artifactId: "html-document", role: "html_document" },
+      { ...baseArtifact, artifactId: "wrong-role", role: "diagnostic" },
+    ],
+  });
+
+  equal(await workspace.readHtmlDocumentArtifact("html-document"), "<!doctype html><html><body>版式</body></html>");
+  await rejects(async () => await workspace.readHtmlDocumentArtifact("wrong-role"), /agent_workspace_html_role_invalid/);
   workspace.cleanup();
 });
 

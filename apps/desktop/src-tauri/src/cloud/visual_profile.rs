@@ -104,7 +104,11 @@ impl VisualProfileCloudClient {
 
     /// V3 方向验证图：纯文生图（reference_assets 恒为空——不携带任何来源素材），
     /// 走普通 Cloud 生成计费链路（generate-proxy G0 异步队列）。返回落地的本地图片路径。
-    pub async fn generate_validation_image(&self, prompt: &str, service: &str) -> AppResult<std::path::PathBuf> {
+    pub async fn generate_validation_image(
+        &self,
+        prompt: &str,
+        service: &str,
+    ) -> AppResult<std::path::PathBuf> {
         let endpoint = self
             .cloud
             .config()
@@ -133,13 +137,17 @@ impl VisualProfileCloudClient {
             let message = serde_json::from_str::<serde_json::Value>(&body)
                 .ok()
                 .and_then(|value| {
-                    value.pointer("/error/message").and_then(|v| v.as_str()).map(str::to_string)
+                    value
+                        .pointer("/error/message")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string)
                 })
                 .unwrap_or_else(|| format!("验证图生成失败（HTTP {}）", status.as_u16()));
             return Err(AppError::Cloud(message));
         }
-        let result: crate::codex::bowerbird_cloud::GenerateResponse = serde_json::from_str(&body)
-            .map_err(|error| AppError::Cloud(format!("解析验证图响应失败: {error}")))?;
+        let result: crate::codex::bowerbird_cloud::GenerateResponse =
+            serde_json::from_str(&body)
+                .map_err(|error| AppError::Cloud(format!("解析验证图响应失败: {error}")))?;
         if result.status == "succeeded" {
             return Err(AppError::Cloud("验证图不应同步返回，请重试".into()));
         }
@@ -151,7 +159,10 @@ impl VisualProfileCloudClient {
             "uploading" | "queued" | "leased" | "running" | "cancel_requested"
         ) {
             return Err(AppError::Cloud(
-                result.error.map(|error| error.message).unwrap_or_else(|| "验证图任务未入队".into()),
+                result
+                    .error
+                    .map(|error| error.message)
+                    .unwrap_or_else(|| "验证图任务未入队".into()),
             ));
         }
         let (paths, _temp_dir) = crate::codex::bowerbird_cloud::wait_for_cloud_job(
@@ -167,7 +178,11 @@ impl VisualProfileCloudClient {
             .ok_or_else(|| AppError::Cloud("验证图任务未返回图片".into()))
     }
 
-    async fn wait_for_job(&self, endpoint: &str, job_id: &str) -> Result<VisualProfileJobResponse, AppError> {
+    async fn wait_for_job(
+        &self,
+        endpoint: &str,
+        job_id: &str,
+    ) -> Result<VisualProfileJobResponse, AppError> {
         let mut transient_failures = 0_u32;
         loop {
             match self
@@ -186,13 +201,16 @@ impl VisualProfileCloudClient {
                         }
                         "succeeded" => return Ok(result),
                         "failed" | "cancelled" | "outcome_unknown" => {
-                            let message = result.error.map(|error| error.message).unwrap_or_else(|| {
-                                match result.status.as_str() {
-                                    "outcome_unknown" => "请求已提交模型，但结果状态暂时无法确认".into(),
-                                    "cancelled" => "提炼任务已取消".into(),
-                                    _ => "云端提炼失败".into(),
-                                }
-                            });
+                            let message =
+                                result.error.map(|error| error.message).unwrap_or_else(|| {
+                                    match result.status.as_str() {
+                                        "outcome_unknown" => {
+                                            "请求已提交模型，但结果状态暂时无法确认".into()
+                                        }
+                                        "cancelled" => "提炼任务已取消".into(),
+                                        _ => "云端提炼失败".into(),
+                                    }
+                                });
                             return Err(AppError::Cloud(message));
                         }
                         status => {

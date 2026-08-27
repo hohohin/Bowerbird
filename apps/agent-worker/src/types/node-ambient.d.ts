@@ -11,6 +11,7 @@ declare module "node:test" {
     options: { only?: boolean; todo?: boolean; skip?: boolean | string; concurrency?: number },
     fn: () => void | Promise<void>,
   ): void;
+  export function after(fn: () => void | Promise<void>): void;
 }
 
 declare module "node:assert/strict" {
@@ -61,6 +62,28 @@ declare module "node:os" {
   export function tmpdir(): string;
 }
 
+/** html-renderer 执行器测试用的最小 node:http 形状（环回假 renderer 服务）。 */
+declare module "node:http" {
+  export interface ServerResponse {
+    writeHead(status: number, headers?: Record<string, string>): ServerResponse;
+    end(body?: string): void;
+    destroy(): void;
+  }
+  export interface IncomingMessage {
+    on(event: "data", listener: (chunk: Uint8Array) => void): IncomingMessage;
+    on(event: "end", listener: () => void): IncomingMessage;
+    on(event: string, listener: (...args: never[]) => void): IncomingMessage;
+  }
+  export interface Server {
+    listen(port: number, host: string, callback: () => void): Server;
+    close(callback: () => void): Server;
+    address(): { port: number } | null;
+  }
+  export function createServer(
+    handler: (req: IncomingMessage, res: ServerResponse) => void,
+  ): Server;
+}
+
 interface ImportMeta {
   /** Node ≥20.11 提供；本仓库 Node 24 运行时可用。 */
   readonly dirname: string;
@@ -86,5 +109,6 @@ declare class TextEncoder {
 }
 
 declare class TextDecoder {
+  constructor(encoding?: string, options?: { fatal?: boolean; ignoreBOM?: boolean });
   decode(input?: Uint8Array): string;
 }

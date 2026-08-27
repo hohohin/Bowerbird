@@ -728,6 +728,8 @@ function assertUsageBinding(item: AgentUsageItem, toolName: string, run: RunRow)
     ? toolName === "model_turn" && item.provider === "deepseek"
     : item.kind === "vision_call"
       ? toolName === "understand_image" && item.provider === "ark"
+      : item.kind === "html_render"
+      ? toolName === "render_html" && item.provider === "renderer"
       : toolName === "generate_image" && item.provider === expectedImageProvider(run);
   if (!valid) throw new ApiError("invalid_request", "usage 与已登记工具调用不一致", false, 400);
 }
@@ -1236,15 +1238,22 @@ type ArtifactFields = {
   runId: string;
   leaseId: string;
   callId: string;
+  /** 同一 call 多输出的判别子（render_html 的 manifest/full/slice-XXXX）；空 = legacy 单输出。 */
+  outputName: string | null;
   objectKey: string;
   role: string;
   sha256: string;
-  mime: "image/png" | "image/jpeg" | "image/webp" | "application/json";
+  mime: "image/png" | "image/jpeg" | "image/webp" | "application/json" | "text/html";
   bytes: number;
   stepId: string | null;
   parentArtifactId: string | null;
   userVisible: boolean;
 };
+
+/** HTML 渲染新增 artifact 角色（HTML-RENDER-PLAN §4.4；migration 0044 同步扩 DB check）。 */
+const RENDER_OUTPUT_ARTIFACT_ROLES = new Set(["render_manifest", "viewport_screenshot", "full_page_screenshot", "slice_screenshot"]);
+const RENDER_ARTIFACT_ROLES = new Set(["html_document", ...RENDER_OUTPUT_ARTIFACT_ROLES]);
+const USER_VISIBLE_RENDER_ARTIFACT_ROLES = new Set(["viewport_screenshot", "full_page_screenshot", "slice_screenshot"]);
 
 function actualImageMime(bytes: Uint8Array): ArtifactFields["mime"] | null {
   if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47 &&
@@ -1260,43 +1269,56 @@ function artifactFields(body: Record<string, unknown>): ArtifactFields {
   const leaseId = typeof body.leaseId === "string" ? body.leaseId : "";
   const callId = typeof body.sourceCallId === "string" ? body.sourceCallId : "";
   const role = typeof body.role === "string" ? body.role : "";
-  const allowedRoles = new Set(["input", "control_reference", "stage_result", "final_result", "plan", "diagnostic"]);
+  const allowedRoles = new Set(["input", "control_reference", "stage_result", "final_result", "plan", "diagnostic", ...RENDER_ARTIFACT_ROLES]);
   const sha256 = typeof body.sha256 === "string" ? body.sha256 : "";
   const mime = typeof body.mime === "string" ? body.mime : "";
   const bytes = Number(body.bytes);
+  const outputName = typeof body.outputName === "string" ? body.outputName : null;
+  if (outputName !== null && !/^[a-z0-9-]{1,40}$/.test(outputName)) throw new ApiError("invalid_request", "artifact 输出名无效");
   if (!runId || !leaseId || !/^[0-9a-f]{64}$/.test(callId)) throw new ApiError("invalid_request", "artifact 标识无效");
   if (!allowedRoles.has(role)) throw new ApiError("invalid_request", "artifact role 无效");
-  const allowedMime = role === "diagnostic"
-    ? mime === "application/json"
-    : ["image/png", "image/jpeg", "image/webp"].includes(mime);
-  const maxBytes = mime === "application/json" ? 64 * 1024 : MAX_ARTIFACT_BYTES;
+  if (role === "render_manifest" && outputName !== "manifest") throw new ApiError("invalid_request", "render manifest 输出名无效");
+  if (role === "viewport_screenshot" && outputName !== "viewport") throw new ApiError("invalid_request", "viewport 截图输出名无效");
+  if (role === "full_page_screenshot" && outputName !== "full") throw new ApiError("invalid_request", "整页截图输出名无效");
+  if (role === "slice_screenshot" && !/^slice-\d{4}$/.test(outputName ?? "")) throw new ApiError("invalid_request", "切片截图输出名无效");
+  if (!RENDER_OUTPUT_ARTIFACT_ROLES.has(role) && outputName !== null) throw new ApiError("invalid_request", "该 artifact 不允许多输出名");
+  let allowedMime: boolean;
+  if (role === "diagnostic" || role === "render_manifest") allowedMime = mime === "application/json";
+  else if (role === "html_document") allowedMime = mime === "text/html";
+  else if (RENDER_ARTIFACT_ROLES.has(role)) allowedMime = mime === "image/png";
+  else allowedMime = ["image/png", "image/jpeg", "image/webp"].includes(mime);
+  const maxBytes = role === "html_document" ? 2 * 1024 * 1024 : mime === "application/json" ? 64 * 1024 : MAX_ARTIFACT_BYTES;
   if (!/^[0-9a-f]{64}$/.test(sha256) || !allowedMime ||
       !Number.isInteger(bytes) || bytes <= 0 || bytes > maxBytes) {
     throw new ApiError("invalid_request", "artifact 元数据无效");
   }
-  const suffix = mime === "application/json" ? "json" : mime === "image/jpeg" ? "jpg" : mime === "image/webp" ? "webp" : "png";
+  const suffix = mime === "application/json" ? "json" : mime === "image/jpeg" ? "jpg" : mime === "image/webp" ? "webp" : mime === "text/html" ? "html" : "png";
   return {
     runId,
     leaseId,
     callId,
-    objectKey: `runs/${runId}/artifacts/${callId}.${suffix}`,
+    outputName,
+    objectKey: `runs/${runId}/artifacts/${callId}${outputName ? `-${outputName}` : ""}.${suffix}`,
     role,
     sha256,
     mime: mime as ArtifactFields["mime"],
     bytes,
     stepId: typeof body.stepId === "string" ? body.stepId.slice(0, 120) : null,
     parentArtifactId: typeof body.parentArtifactId === "string" ? body.parentArtifactId : null,
-    userVisible: mime === "application/json" ? false : body.userVisible !== false,
+    userVisible: mime === "application/json" || mime === "text/html" ? false : body.userVisible !== false,
   };
 }
 
 async function actionArtifactPrepare(admin: SupabaseClient, body: Record<string, unknown>): Promise<Response> {
   const fields = artifactFields(body);
   await assertLease(admin, fields.runId, fields.leaseId);
-  const { data: call } = await admin.from("agent_tool_calls").select("call_id,status")
+  const { data: call } = await admin.from("agent_tool_calls").select("call_id,status,tool_name")
     .eq("run_id", fields.runId).eq("call_id", fields.callId).maybeSingle();
   if (!call || !["submitted", "outcome_unknown", "succeeded"].includes(call.status as string)) {
     throw new ApiError("invalid_request", "artifact 未关联已提交的工具调用", false, 409);
+  }
+  if (RENDER_OUTPUT_ARTIFACT_ROLES.has(fields.role) && call.tool_name !== "render_html") {
+    throw new ApiError("invalid_request", "渲染多输出只能关联 render_html", false, 409);
   }
   const { data, error } = await admin.storage.from(BUCKET).createSignedUploadUrl(fields.objectKey);
   if (error || !data) throw new ApiError("internal_error", "artifact 上传地址签发失败", true);
@@ -1307,10 +1329,13 @@ async function actionArtifact(admin: SupabaseClient, body: Record<string, unknow
   const fields = artifactFields(body);
   const { runId, leaseId, objectKey, role, sha256, mime, bytes } = fields;
   const run = await assertLease(admin, runId, leaseId);
-  const { data: sourceCall } = await admin.from("agent_tool_calls").select("call_id,status")
+  const { data: sourceCall } = await admin.from("agent_tool_calls").select("call_id,status,tool_name")
     .eq("run_id", runId).eq("call_id", fields.callId).maybeSingle();
   if (!sourceCall || !["submitted", "outcome_unknown", "succeeded"].includes(sourceCall.status as string)) {
     throw new ApiError("invalid_request", "artifact 未关联已提交的工具调用", false, 409);
+  }
+  if (RENDER_OUTPUT_ARTIFACT_ROLES.has(role) && sourceCall.tool_name !== "render_html") {
+    throw new ApiError("invalid_request", "渲染多输出只能关联 render_html", false, 409);
   }
   const object = await admin.storage.from(BUCKET).download(objectKey);
   if (object.error || !object.data) throw new ApiError("invalid_request", "artifact 对象不存在", false, 409);
@@ -1320,6 +1345,14 @@ async function actionArtifact(admin: SupabaseClient, body: Record<string, unknow
     try {
       const parsed = JSON.parse(new TextDecoder().decode(objectBytes));
       contentValid = !!parsed && typeof parsed === "object" && !Array.isArray(parsed);
+    } catch {
+      contentValid = false;
+    }
+  } else if (mime === "text/html") {
+    // html_document：严格 UTF-8 可解码即可；内容由 Worker/renderer sanitizer 管控，容器内永不执行。
+    try {
+      new TextDecoder("utf-8", { fatal: true }).decode(objectBytes);
+      contentValid = true;
     } catch {
       contentValid = false;
     }
@@ -1334,7 +1367,7 @@ async function actionArtifact(admin: SupabaseClient, body: Record<string, unknow
   }
   const { data: existing, error: existingError } = await admin.from("agent_artifacts")
     .select("id,conversation_id,role,step_id,parent_artifact_id,object_key,mime,bytes,sha256,user_visible")
-    .eq("run_id", runId).eq("source_call_id", fields.callId).maybeSingle();
+    .eq("run_id", runId).eq("source_call_id", fields.callId).eq("object_key", objectKey).maybeSingle();
   if (existingError) throw new ApiError("internal_error", "artifact 幂等读取失败", true);
   if (existing) {
     if (existing.object_key !== objectKey || existing.role !== role || existing.step_id !== fields.stepId ||
@@ -1379,7 +1412,7 @@ async function actionArtifact(admin: SupabaseClient, body: Record<string, unknow
     source_call_id: fields.callId,
     parent_artifact_id: parentArtifactId,
     user_visible: fields.userVisible,
-    expires_at: new Date(Date.now() + (role === "final_result" ? 7 : 1) * 24 * 3600 * 1000).toISOString(),
+    expires_at: new Date(Date.now() + (role === "final_result" || USER_VISIBLE_RENDER_ARTIFACT_ROLES.has(role) ? 7 : 1) * 24 * 3600 * 1000).toISOString(),
   }).select("id").single();
   if (error || !artifact) throw new ApiError("internal_error", "artifact 登记失败", true);
   return jsonResponse({
@@ -1393,11 +1426,16 @@ async function actionArtifactGet(admin: SupabaseClient, body: Record<string, unk
   const runId = typeof body.runId === "string" ? body.runId : "";
   const leaseId = typeof body.leaseId === "string" ? body.leaseId : "";
   const callId = typeof body.callId === "string" ? body.callId : "";
+  const outputName = typeof body.outputName === "string" ? body.outputName : null;
   if (!runId || !leaseId || !/^[0-9a-f]{64}$/.test(callId)) throw new ApiError("invalid_request", "artifact 查询字段无效");
+  if (outputName !== null && !/^[a-z0-9-]{1,40}$/.test(outputName)) throw new ApiError("invalid_request", "artifact 输出名无效");
   await assertLease(admin, runId, leaseId);
-  const { data: artifact, error } = await admin.from("agent_artifacts")
+  let query = admin.from("agent_artifacts")
     .select("id,conversation_id,role,step_id,parent_artifact_id,object_key,mime,bytes,sha256,user_visible")
-    .eq("run_id", runId).eq("source_call_id", callId).maybeSingle();
+    .eq("run_id", runId).eq("source_call_id", callId);
+  // render_html 一次 call 产出 manifest/full/slice-XXXX 多输出：outputName 判别后仍保证单行。
+  if (outputName) query = query.like("object_key", `%-${outputName}.%`);
+  const { data: artifact, error } = await query.maybeSingle();
   if (error) throw new ApiError("internal_error", "artifact 查询失败", true);
   if (!artifact) throw new ApiError("invalid_request", "artifact 尚未登记", false, 409);
   const url = await signOrNull(admin, artifact.object_key as string);

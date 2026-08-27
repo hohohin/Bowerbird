@@ -158,10 +158,7 @@ pub fn run() {
             );
 
             // 即梦远端孤儿扫描（约定 23 阶段 3）：内部延迟 15s，不与启动恢复抢 IO。
-            core::generation_worker::spawn_orphan_scan(
-                app.handle().clone(),
-                orphan_scan_db,
-            );
+            core::generation_worker::spawn_orphan_scan(app.handle().clone(), orphan_scan_db);
 
             // Agent Z（dev-only）回传：轮询 .agent-z/inbox，模型经 MCP 工具送回的文本
             // 转发 agent-z://output → 前端追加进创作板。函数内部仅 Windows + debug 生效。

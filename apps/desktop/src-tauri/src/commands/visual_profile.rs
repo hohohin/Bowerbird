@@ -23,7 +23,8 @@ fn validation_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, AppError
         .app_data_dir()
         .map_err(|error| AppError::Other(format!("读取应用数据目录失败: {error}")))?
         .join("visual-validation");
-    std::fs::create_dir_all(&dir).map_err(|error| AppError::Other(format!("创建验证图目录失败: {error}")))?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|error| AppError::Other(format!("创建验证图目录失败: {error}")))?;
     Ok(dir)
 }
 
@@ -37,7 +38,10 @@ fn path_within(child: &std::path::Path, dir: &std::path::Path) -> bool {
     child_canonical.starts_with(&dir_canonical)
 }
 
-fn guard_validation_path(app: &tauri::AppHandle, image_path: &str) -> Result<std::path::PathBuf, AppError> {
+fn guard_validation_path(
+    app: &tauri::AppHandle,
+    image_path: &str,
+) -> Result<std::path::PathBuf, AppError> {
     let dir = validation_dir(app)?;
     let candidate = std::path::Path::new(image_path);
     if !candidate.is_file() || !path_within(candidate, &dir) {
@@ -231,7 +235,13 @@ pub async fn visual_profile_confirm_validation(
     let source = canonical.clone();
     let paths_owned = paths.inner().clone();
     let asset = tokio::task::spawn_blocking(move || {
-        crate::core::ingest::ingest_generated(&paths_owned, &db_ingest, &source, None, "visual-validation")
+        crate::core::ingest::ingest_generated(
+            &paths_owned,
+            &db_ingest,
+            &source,
+            None,
+            "visual-validation",
+        )
     })
     .await
     .map_err(|error| AppError::Other(format!("验证图入库失败: {error}")))??;

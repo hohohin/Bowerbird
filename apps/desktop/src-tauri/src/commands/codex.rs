@@ -454,6 +454,30 @@ fn merge_continuation_references(last: Vec<String>, picked: Vec<String>) -> Vec<
         .collect()
 }
 
+/// 参考图顺序清单（instruction 内注入，≥2 张才生成）：把 prompt 里的 @名 与参考图顺序
+/// 显式对上——库内存储文件名是 ULID，附件（codex --image / 即梦 --images / Cloud URL）
+/// 与 @名之间无文本映射，多图角色分配靠模型猜会错配。名字缺项（库外临时文件）显示「未命名」。
+fn reference_legend(names: &[Option<String>]) -> Option<String> {
+    if names.len() < 2 {
+        return None;
+    }
+    let items: Vec<String> = names
+        .iter()
+        .enumerate()
+        .map(|(index, name)| {
+            format!(
+                "第 {} 张 = {}",
+                index + 1,
+                name.as_deref().unwrap_or("未命名")
+            )
+        })
+        .collect();
+    Some(format!(
+        "参考图按顺序：{}（提示词中的 @名字 按此对应）",
+        items.join("、")
+    ))
+}
+
 #[tauri::command]
 pub async fn codex_create_image(
     app: AppHandle,
@@ -610,14 +634,27 @@ pub async fn codex_create_image(
         Some(r) => format!("；画面比例为 {r}"),
         None => String::new(),
     };
-    // instruction：codex **新 thread**（首轮 / 非 codex 原生会话切入）需要触发 imagegen 的
-    // 包装语；resume 续轮与即梦/Cloud 一律用户原文。
-    let instruction = if is_codex && provider_resume.is_none() {
-        format!(
-            "请使用图像生成工具，根据以下提示词和参考图生成图片（张数完全以提示词要求为准；提示词未指定张数时生成一张{ratio_clause}）。\n\n{prompt_for_provider}"
-        )
+    // 参考图顺序清单：≥2 张时注入「第 N 张 = 素材名」，把 prompt 里的 @名 与附件顺序显式
+    // 对上（库内存储文件名是 ULID，@wai.png 与附件无任何文本映射，多图角色分配只能靠
+    // 模型猜，错配即整图方向偏掉；单图无歧义不注入，减少文本污染）。反查失败不挡生成。
+    let reference_legend = if refs_for_meta.len() >= 2 {
+        db.asset_names_by_store_paths(&refs_for_meta)
+            .ok()
+            .and_then(|names| reference_legend(&names))
     } else {
-        prompt_for_provider
+        None
+    };
+    // instruction：codex **新 thread**（首轮 / 非 codex 原生会话切入）需要触发 imagegen 的
+    // 包装语（清单内嵌进包装句）；resume 续轮与即梦/Cloud 用用户原文 + 文末括号清单。
+    let instruction = match (is_codex && provider_resume.is_none(), reference_legend) {
+        (true, Some(legend)) => format!(
+            "请使用图像生成工具，根据以下提示词和参考图生成图片（张数完全以提示词要求为准；提示词未指定张数时生成一张{ratio_clause}）。{legend}。\n\n{prompt_for_provider}"
+        ),
+        (true, None) => format!(
+            "请使用图像生成工具，根据以下提示词和参考图生成图片（张数完全以提示词要求为准；提示词未指定张数时生成一张{ratio_clause}）。\n\n{prompt_for_provider}"
+        ),
+        (false, Some(legend)) => format!("{prompt_for_provider}\n\n（{legend}。）"),
+        (false, None) => prompt_for_provider,
     };
     let applied_prompt = instruction.clone();
     let req = CodexRequest {
@@ -1213,7 +1250,7 @@ mod generation_task_tests {
 
     use super::{
         generation_provider_is_codex, merge_continuation_references, nearest_ratio_key,
-        settle_generation_task,
+        reference_legend, settle_generation_task,
     };
     use crate::core::task_queue::{GenJob, Task};
     use crate::db::Database;
@@ -1274,8 +1311,7 @@ mod generation_task_tests {
                 "out2.png".to_string(),
                 "material.png".to_string()
             ]
-        );
-        // 超 10 张截断（上一轮产出保位，挑的图被截掉尾部）。
+        ); // 超 10 张截断（上一轮产出保位，挑的图被截掉尾部）。
         let many: Vec<String> = (0..12).map(|i| format!("p{i}.png")).collect();
         assert_eq!(
             merge_continuation_references(vec!["out.png".into()], many.clone()).len(),
@@ -1286,6 +1322,23 @@ mod generation_task_tests {
             "out.png"
         );
         assert!(merge_continuation_references(vec![], vec![]).is_empty());
+    }
+
+    #[test]
+    fn reference_legend_maps_names_in_order_and_skips_single() {
+        // 清单契约：≥2 张才生成（单图无歧义）；名字按参考图顺序对号，缺名（库外临时文件）
+        // 显示「未命名」。
+        assert!(reference_legend(&[]).is_none());
+        assert!(reference_legend(&[Some("wai.png".into())]).is_none());
+        assert_eq!(
+            reference_legend(&[
+                Some("wai.png".into()),
+                None,
+                Some("黑骨螺_05.jpg".into())
+            ])
+            .as_deref(),
+            Some("参考图按顺序：第 1 张 = wai.png、第 2 张 = 未命名、第 3 张 = 黑骨螺_05.jpg（提示词中的 @名字 按此对应）")
+        );
     }
 
     #[test]

@@ -13,6 +13,7 @@ import type { ActionDefinition, ToolKind } from "../contracts/model.ts";
 import type { ToolErrorClass } from "../contracts/tools.ts";
 import type { BudgetSnapshot } from "../contracts/run.ts";
 import type { SkillManifest } from "../contracts/skill.ts";
+import { RENDER_HTML_INPUT_SCHEMA } from "../contracts/render-html.ts";
 import { canAfford, estimateToolCost } from "./budget.ts";
 import { computeArgsHash, deriveCallId, type ToolLedger } from "./tool-ledger.ts";
 
@@ -354,6 +355,13 @@ export const GLOBAL_TOOL_REGISTRY: ReadonlyArray<ToolSpec> = [
       required: ["artifactCallIds"],
     },
   },
+  {
+    name: "render_html",
+    kind: "renderer",
+    description:
+      "把本 Run 已登记的受限 HTML/CSS 文档在离线 Chromium 中渲染为视口/整页/纵向切片 PNG。不接受 URL、路径或浏览器参数；资源只能引用本 Run 显式登记的图片 artifact；切片从同一整页像素结果裁出。截图完成后不触发任何 Vision 检查或自动修订。",
+    argumentSchema: RENDER_HTML_INPUT_SCHEMA,
+  },
 ];
 
 const REGISTRY_BY_NAME: ReadonlyMap<string, ToolSpec> = new Map(
@@ -422,6 +430,16 @@ export function evaluatePolicy(
     }
     if (isGenerate(tool) && ctx.phase !== "execute_approved_plan") {
       return { verdict: "deny", errorClass: "policy_denied", reason: "controlled_generation_phase_denied" };
+    }
+  }
+
+  // 1b) render_html 的 phase 门控（HTML-RENDER-PLAN §6.1）：只能由 Skill manifest 在
+  //     特定 phase 的 allowedActions 中显式加入；Skill 指令不能动态开启。
+  //     （现役 controlled-image-edit 的任何 phase 都未声明 → 恒拒绝，fail closed。）
+  if (actionName === "render_html") {
+    const phaseDef = ctx.manifest.phases.find((phase) => phase.name === ctx.phase);
+    if (!phaseDef || !phaseDef.allowedActions.includes("render_html")) {
+      return { verdict: "deny", errorClass: "policy_denied", reason: "render_phase_not_allowed" };
     }
   }
 

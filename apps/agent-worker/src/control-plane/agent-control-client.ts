@@ -58,7 +58,18 @@ export type ClaimedArtifact = {
   artifactId: string;
   conversationId: string;
   runId: string;
-  role: "input" | "control_reference" | "stage_result" | "final_result" | "plan" | "diagnostic";
+  role:
+    | "input"
+    | "control_reference"
+    | "stage_result"
+    | "final_result"
+    | "plan"
+    | "diagnostic"
+    | "html_document"
+    | "render_manifest"
+    | "viewport_screenshot"
+    | "full_page_screenshot"
+    | "slice_screenshot";
   stepId?: string | null;
   parentArtifactId?: string | null;
   mime: string;
@@ -328,13 +339,24 @@ export class AgentControlClient {
     runId: string;
     leaseId: string;
     sourceCallId: string;
-    role: "control_reference" | "stage_result" | "final_result" | "diagnostic";
+    role:
+      | "control_reference"
+      | "stage_result"
+      | "final_result"
+      | "diagnostic"
+      | "html_document"
+      | "render_manifest"
+      | "viewport_screenshot"
+      | "full_page_screenshot"
+      | "slice_screenshot";
     stepId: string;
     parentArtifactId?: string;
-    mime: "image/png" | "image/jpeg" | "image/webp";
+    mime: "image/png" | "image/jpeg" | "image/webp" | "text/html" | "application/json";
     bytes: Uint8Array;
     sha256: string;
     userVisible?: boolean;
+    /** 同一 call 的多输出判别子（如 "manifest" / "full" / "slice-0001"）；空 = 单输出 legacy 形态。 */
+    outputName?: string;
   }): Promise<RegisteredAgentArtifact> {
     const metadata = {
       runId: args.runId,
@@ -347,6 +369,7 @@ export class AgentControlClient {
       bytes: args.bytes.byteLength,
       sha256: args.sha256,
       userVisible: args.userVisible ?? true,
+      ...(args.outputName ? { outputName: args.outputName } : {}),
     };
     const prepared = await this.post({ action: "artifact_prepare", ...metadata });
     if (typeof prepared.uploadUrl !== "string" || typeof prepared.objectKey !== "string") {
@@ -394,8 +417,14 @@ export class AgentControlClient {
     return await this.post({ action: "artifact", ...metadata }) as unknown as RegisteredAgentArtifact;
   }
 
-  async getArtifactByCall(runId: string, leaseId: string, callId: string): Promise<RegisteredAgentArtifact> {
-    return await this.post({ action: "artifact_get", runId, leaseId, callId }) as unknown as RegisteredAgentArtifact;
+  async getArtifactByCall(runId: string, leaseId: string, callId: string, outputName?: string): Promise<RegisteredAgentArtifact> {
+    return await this.post({
+      action: "artifact_get",
+      runId,
+      leaseId,
+      callId,
+      ...(outputName ? { outputName } : {}),
+    }) as unknown as RegisteredAgentArtifact;
   }
 
   async requestLocalTask(args: {
@@ -469,8 +498,8 @@ export class AgentControlClient {
     runId: string;
     leaseId: string;
     callId: string;
-    kind: "model_tokens" | "vision_call" | "image_generation";
-    provider: "deepseek" | "ark" | "jimeng" | "codex";
+    kind: "model_tokens" | "vision_call" | "image_generation" | "html_render";
+    provider: "deepseek" | "ark" | "jimeng" | "codex" | "renderer";
     model: string;
     inputUnits?: number;
     outputUnits?: number;

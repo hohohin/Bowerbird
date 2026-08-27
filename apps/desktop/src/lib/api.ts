@@ -96,8 +96,8 @@ export const api = {
   // Agent Z/G（dev-only）：创作板消息投递到 Claude Code（z）/ codex（g）TUI 终端
   agentZHealth: () =>
     invoke<{ ok: boolean; needsLogin: boolean }>("agent_z_health"),
-  agentZSend: (text: string, images: string[], engine?: "z" | "g") =>
-    invoke<void>("agent_z_send", { text, images, engine }),
+  agentZSend: (text: string, images: string[], imageNames?: string[], engine?: "z" | "g") =>
+    invoke<void>("agent_z_send", { text, images, imageNames, engine }),
 
   // Agent DS（dev-only）：创作板消息发给 DeepSeek 对话 harness（detached Node 子进程），
   // 回复经事件链路追加进创作板；可用性与 Agent A/B 同源（localAgentHealth）。

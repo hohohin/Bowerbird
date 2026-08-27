@@ -47,6 +47,32 @@ Deno.test("invalid units and provider-kind substitutions fail closed", () => {
   }), pricing), Error, "agent_usage_binding_invalid");
 });
 
+Deno.test("html_render usage: renderer provider, zero credits by default, optional pricing block", () => {
+  // 缺省（旧费率行无 html_render 块）：0 积分，向后兼容。
+  assertEquals(creditsForAgentUsage(normalizeAgentUsageItem({
+    callId: "r", kind: "html_render", provider: "renderer", model: "bwr1-test", imageCount: 0, outputUnits: 3,
+  }), pricing), 0);
+  // 显式计价块生效。
+  const priced = parseAgentUsagePricing({
+    billing: "agent_usage",
+    model_tokens: { provider: "deepseek", input_tokens_per_credit: 500_000, output_tokens_per_credit: 100_000, minimum_credits: 1 },
+    vision_call: { provider: "ark", credits_per_call: 1 },
+    image_generation: { ark: 5, jimeng: 0, codex: 0 },
+    html_render: { credits_per_call: 2 },
+  }, 2);
+  assertEquals(priced.htmlRender?.creditsPerCall, 2);
+  assertEquals(creditsForAgentUsage(normalizeAgentUsageItem({
+    callId: "r2", kind: "html_render", provider: "renderer", model: "bwr1-test", imageCount: 0,
+  }), priced), 2);
+  // 绑定违规 fail closed：renderer 不能报别的 kind，html_render 不能用别的 provider。
+  assertThrows(() => creditsForAgentUsage(normalizeAgentUsageItem({
+    callId: "x", kind: "html_render", provider: "ark", model: "vision", imageCount: 0,
+  }), pricing), Error, "agent_usage_binding_invalid");
+  assertThrows(() => normalizeAgentUsageItem({
+    callId: "y", kind: "html_render", provider: "internal-bad", model: "x", imageCount: 0,
+  }), Error, "agent_usage_item_invalid");
+});
+
 Deno.test("provider cost rates are optional but validated when present", () => {
   // 旧参数（无 provider_cost）仍可解析，成本估算关闭。
   assertEquals(pricing.providerCost, null);

@@ -1,0 +1,18 @@
+{
+  "name": "@bowerbird/html-renderer",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Bowerbird 受限 HTML 离线 renderer —— 断网、禁脚本、资源闭集的确定性 Chromium 渲染服务（dev-doc/HTML-RENDER-PLAN.md H0-T1/H1）。",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test \"src/**/*.test.ts\"",
+    "start": "node src/main.ts"
+  },
+  "dependencies": {
+    "playwright": "1.62.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0"
+  }
+}

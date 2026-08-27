@@ -26,6 +26,7 @@ apps/desktop/src-tauri/gen/
 .env.*
 !website/.env.example
 !apps/cloud/.env.example
+!apps/html-renderer/.env.renderer.example
 
 # library data (created at runtime when user opens a library)
 *.db
@@ -45,7 +46,8 @@ my-library/
 .obsidian/
 
 # 开发计划，文件
-dev-doc
+dev-doc/*
+!dev-doc/HTML-RENDER-PLAN.md
 
 # Agent Z（dev-only）：MCP 桥 + inbox 回传事件（Bowerbird × Claude Code TUI）
 .agent-z/

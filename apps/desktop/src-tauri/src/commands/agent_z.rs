@@ -773,8 +773,9 @@ rl.on("line", (line) => { void handleLine(line); });
 
     // —— 消息组装（纯函数，单测覆盖） ——
 
-    /// TUI 回车即提交，多行折叠为单行；参考图以绝对路径附加，Claude Code 用 Read 工具读图。
-    pub fn compose_message(text: &str, images: &[String]) -> String {
+    /// TUI 回车即提交，多行折叠为单行；参考图以绝对路径附加（Claude Code 用 Read 工具读图）。
+    /// 每张带序号与素材名——正文 @名 与 ULID 存储文件名靠它对号（名字缺失退化为纯路径）。
+    pub fn compose_message(text: &str, images: &[String], names: &[String]) -> String {
         let mut line: String = text
             .lines()
             .map(str::trim)
@@ -782,8 +783,19 @@ rl.on("line", (line) => { void handleLine(line); });
             .collect::<Vec<_>>()
             .join(" ");
         if !images.is_empty() {
-            line.push_str("　参考图：");
-            line.push_str(&images.join(" | "));
+            let parts: Vec<String> = images
+                .iter()
+                .enumerate()
+                .map(|(index, path)| {
+                    let name = names.get(index).map(|n| n.trim()).filter(|n| !n.is_empty());
+                    match name {
+                        Some(name) => format!("参考图{}（{}）：{}", index + 1, name, path),
+                        None => format!("参考图{}：{}", index + 1, path),
+                    }
+                })
+                .collect();
+            line.push_str("　");
+            line.push_str(&parts.join(" | "));
         }
         line
     }
@@ -1005,7 +1017,12 @@ rl.on("line", (line) => { void handleLine(line); });
 
     // —— 发送主流程 ——
 
-    pub fn send(text: String, images: Vec<String>, engine: &str) -> Result<(), AppError> {
+    pub fn send(
+        text: String,
+        images: Vec<String>,
+        names: Vec<String>,
+        engine: &str,
+    ) -> Result<(), AppError> {
         super::ensure_preview_enabled()?;
         let engine = match engine {
             "g" => "g",
@@ -1020,7 +1037,7 @@ rl.on("line", (line) => { void handleLine(line); });
         }
         let cli = resolve_engine_cli(engine)?;
         let assets = ensure_agent_z_assets()?;
-        let message = compose_message(text, &images);
+        let message = compose_message(text, &images, &names);
         let title = window_title(engine);
         let mut stored = CONSOLE_PIDS.lock().unwrap();
         let alive_pid = stored.get(engine).copied().filter(|pid| pid_alive(*pid));
@@ -1051,11 +1068,17 @@ rl.on("line", (line) => { void handleLine(line); });
 
         #[test]
         fn compose_collapses_lines_and_appends_images() {
-            let message = compose_message("一只猫\n\n在月光下", &[]);
+            let message = compose_message("一只猫\n\n在月光下", &[], &[]);
             assert_eq!(message, "一只猫 在月光下");
-            let message =
-                compose_message("改造这张图", &["D:/a b/1.png".into(), "D:/c/2.png".into()]);
-            assert_eq!(message, "改造这张图　参考图：D:/a b/1.png | D:/c/2.png");
+            let message = compose_message(
+                "改造这张图",
+                &["D:/a b/1.png".into(), "D:/c/2.png".into()],
+                &["海报.jpg".into()],
+            );
+            assert_eq!(
+                message,
+                "改造这张图　参考图1（海报.jpg）：D:/a b/1.png | 参考图2：D:/c/2.png"
+            );
         }
 
         #[test]
@@ -1353,7 +1376,7 @@ rl.on("line", (line) => { void handleLine(line); });
                     .unwrap_or_default()
             };
             let before = snapshot(&projects_dir);
-            send("请只回复两个字：已通".into(), vec![], "z").unwrap();
+            send("请只回复两个字：已通".into(), vec![], vec![], "z").unwrap();
             let mut appeared = false;
             for _ in 0..60 {
                 std::thread::sleep(Duration::from_millis(1000));
@@ -1443,15 +1466,18 @@ pub fn agent_z_health() -> Result<AgentZStatus, AppError> {
 pub fn agent_z_send(
     text: String,
     images: Vec<String>,
+    // 与 images 同序的素材名（正文 @名 与路径对号）；缺省 / 长度不齐退化为纯路径。
+    image_names: Option<Vec<String>>,
     engine: Option<String>,
 ) -> Result<(), AppError> {
     #[cfg(windows)]
     {
-        imp::send(text, images, engine.as_deref().unwrap_or("z"))
+        let names = image_names.unwrap_or_default();
+        imp::send(text, images, names, engine.as_deref().unwrap_or("z"))
     }
     #[cfg(not(windows))]
     {
-        let _ = (text, images, engine);
+        let _ = (text, images, image_names, engine);
         ensure_preview_enabled()?;
         Err(AppError::Other("Agent 仅支持 Windows".into()))
     }

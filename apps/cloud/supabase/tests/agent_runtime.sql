@@ -500,6 +500,104 @@ end;
 $$;
 
 do $$
+declare
+  test_user uuid := extensions.gen_random_uuid();
+  hold uuid;
+  test_run_id uuid;
+  conv_id uuid;
+  test_call_id text := repeat('b', 64);
+  rendered_count integer;
+  duplicate_rejected boolean := false;
+begin
+  insert into auth.users (
+    id, instance_id, aud, role, email, encrypted_password,
+    email_confirmed_at, created_at, updated_at
+  ) values (
+    test_user, '00000000-0000-0000-0000-000000000000',
+    'authenticated', 'authenticated', 'agent-runtime-html-render@example.test', '', now(), now(), now()
+  );
+
+  select result.hold_id into hold
+  from public.credit_hold(test_user, 'agent-runtime-html-hold', 'agent_smart_refinement', 15) as result;
+
+  insert into public.agent_runs (
+    user_id, skill_id, skill_version, kernel_version, status,
+    input_count, input_manifest_hash, request_object_key,
+    budget_credits, hold_id, pricing_version, queued_at, content_expires_at
+  ) values (
+    test_user, 'bowerbird-html-layout-render', '0.0.1', '0.1.0', 'queued',
+    1, repeat('c', 64), 'runs/html-render/request.json',
+    15, hold, 1, now(), now() + interval '24 hours'
+  ) returning id, conversation_id into test_run_id, conv_id;
+
+  insert into public.agent_tool_calls (
+    run_id, call_id, phase, tool_name, args_hash, status, submitted_at
+  ) values (
+    test_run_id, test_call_id, 'render_once', 'render_html', repeat('d', 64), 'submitted', now()
+  );
+
+  insert into public.agent_usage_items (
+    run_id, call_id, kind, provider, model, credits, pricing_version
+  ) values (
+    test_run_id, test_call_id, 'html_render', 'renderer', 'offline-chromium', 0, 1
+  );
+
+  insert into agent_runtime_test_results values (
+    'html render zero-credit usage kind and provider accepted',
+    exists (
+      select 1 from public.agent_usage_items as usage
+      where usage.run_id = test_run_id and usage.call_id = test_call_id
+        and usage.kind = 'html_render' and usage.provider = 'renderer' and usage.credits = 0
+    )
+  );
+
+  -- 一次 render_html 调用产出 manifest + 整页 + 切片（新角色全部通过 CHECK）。
+  insert into public.agent_artifacts (
+    run_id, conversation_id, kind, role, step_id, object_key,
+    mime, bytes, sha256, source_call_id, user_visible, expires_at
+  )
+  values
+    (test_run_id, conv_id, 'render_manifest', 'render_manifest', 'render',
+     'runs/' || test_run_id || '/artifacts/' || test_call_id || '-manifest.json',
+     'application/json', 24, repeat('1', 64), test_call_id, false, now() + interval '7 days'),
+    (test_run_id, conv_id, 'full_page_screenshot', 'full_page_screenshot', 'render',
+     'runs/' || test_run_id || '/artifacts/' || test_call_id || '-full.png',
+     'image/png', 10, repeat('2', 64), test_call_id, true, now() + interval '7 days'),
+    (test_run_id, conv_id, 'slice_screenshot', 'slice_screenshot', 'render',
+     'runs/' || test_run_id || '/artifacts/' || test_call_id || '-slice-0001.png',
+     'image/png', 4, repeat('3', 64), test_call_id, true, now() + interval '7 days');
+
+  select count(*) into rendered_count
+  from public.agent_artifacts as artifact
+  where artifact.run_id = test_run_id and artifact.source_call_id = test_call_id;
+
+  insert into agent_runtime_test_results values (
+    'html render roles accepted with multiple outputs per call',
+    rendered_count = 3
+  );
+
+  -- 同 object_key 重放：唯一索引拒绝（幂等语义 = 同 key 冲突即失败，由 Edge 先查再写）。
+  begin
+    insert into public.agent_artifacts (
+      run_id, conversation_id, kind, role, step_id, object_key,
+      mime, bytes, sha256, source_call_id, user_visible, expires_at
+    ) values (
+      test_run_id, conv_id, 'full_page_screenshot', 'full_page_screenshot', 'render',
+      'runs/' || test_run_id || '/artifacts/' || test_call_id || '-full.png',
+      'image/png', 10, repeat('9', 64), test_call_id, true, now() + interval '7 days'
+    );
+  exception when unique_violation then
+    duplicate_rejected := true;
+  end;
+
+  insert into agent_runtime_test_results values (
+    'render artifact replay rejected by object key uniqueness',
+    duplicate_rejected
+  );
+end;
+$$;
+
+do $$
 declare failed text;
 begin
   select string_agg(name, ', ' order by name) into failed

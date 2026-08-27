@@ -11,5 +11,5 @@ pub mod preset;
 pub mod projects;
 pub mod samples;
 pub mod settings;
-pub mod visual_profile;
 pub mod task_queue;
+pub mod visual_profile;
