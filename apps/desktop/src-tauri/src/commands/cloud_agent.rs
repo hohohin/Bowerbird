@@ -13,6 +13,7 @@ use crate::db::Database;
 use crate::error::AppError;
 
 const SKILL_ID: &str = "bowerbird-controlled-image-edit";
+const HTML_SKILL_ID: &str = "bowerbird-html-layout-render";
 const MAX_REFERENCES: usize = 8;
 const MAX_PROMPT_CHARS: usize = 4_000;
 const MAX_FEEDBACK_CHARS: usize = 2_000;
@@ -34,6 +35,58 @@ const ALLOWED_RATIOS: [(&str, f64); 7] = [
 pub struct CloudAgentReferenceRequest {
     pub asset_id: String,
     pub prompt_token: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HtmlLayoutOptions {
+    pub viewport_width: u32,
+    pub viewport_height: u32,
+    pub device_scale_factor: u8,
+    pub capture_mode: String,
+    pub slice_height: Option<u32>,
+    pub overlap: Option<u32>,
+    pub background: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HtmlLayoutReference {
+    artifact_id: String,
+    token: String,
+    ordinal: usize,
+    mime: &'static str,
+    bytes: usize,
+    sha256: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HtmlLayoutManifest<'a> {
+    schema_version: u8,
+    layout_prompt: &'a str,
+    references: &'a [HtmlLayoutReference],
+    viewport: HtmlLayoutViewport,
+    capture: HtmlLayoutCapture,
+    background: &'a str,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HtmlLayoutViewport {
+    width_css_px: u32,
+    height_css_px: u32,
+    device_scale_factor: u8,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HtmlLayoutCapture {
+    mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    slice_height_css_px: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    overlap_css_px: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,6 +142,10 @@ pub struct CloudAgentPreview {
     pub path: String,
     pub mime: String,
     pub sha256: String,
+    pub role: String,
+    pub index: Option<u32>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -436,6 +493,232 @@ async fn upload_signed(
     Ok(())
 }
 
+fn validate_html_layout_options(options: HtmlLayoutOptions) -> Result<HtmlLayoutOptions, AppError> {
+    if !(320..=2400).contains(&options.viewport_width)
+        || !(240..=4000).contains(&options.viewport_height)
+        || !matches!(options.device_scale_factor, 1 | 2)
+        || !matches!(options.background.as_str(), "opaque" | "transparent")
+    {
+        return Err(AppError::Other("HTML 排版视口或背景参数无效".into()));
+    }
+    match options.capture_mode.as_str() {
+        "viewport" | "full_page" => {
+            if options.slice_height.is_some() || options.overlap.is_some() {
+                return Err(AppError::Other("非切片模式不能设置切片参数".into()));
+            }
+        }
+        "full_page_and_slices" => {
+            let height = options
+                .slice_height
+                .ok_or_else(|| AppError::Other("切片模式必须设置切片高度".into()))?;
+            let overlap = options.overlap.unwrap_or(0);
+            if !(200..=4000).contains(&height) || overlap > 200 || overlap >= height {
+                return Err(AppError::Other("HTML 排版切片参数无效".into()));
+            }
+        }
+        _ => return Err(AppError::Other("HTML 排版截图模式无效".into())),
+    }
+    Ok(options)
+}
+
+async fn start_html_layout_run(
+    db: &Database,
+    cloud: &CloudClient,
+    auth: &AuthClient,
+    entitlement: &EntitlementService,
+    intent_prompt: String,
+    references: Vec<CloudAgentReferenceRequest>,
+    project_id: Option<String>,
+    options: HtmlLayoutOptions,
+) -> Result<CloudAgentRunRecord, AppError> {
+    let options = validate_html_layout_options(options)?;
+    let policy = entitlement.current_or_sync(auth).await.policy;
+    if !policy.allows_agent_run(HTML_SKILL_ID) {
+        return Err(AppError::Other("当前权益未开放 HTML 排版 Agent".into()));
+    }
+    if let Some(project) = project_id.as_deref() {
+        if db.get_project(project)?.is_none() {
+            return Err(AppError::Other("当前项目不存在".into()));
+        }
+    }
+    let normalized_prompt = normalize_intent_prompt(&intent_prompt, &references)?;
+    let mut image_bytes = Vec::with_capacity(references.len());
+    let mut reference_ids = Vec::with_capacity(references.len());
+    for reference in &references {
+        let asset = db
+            .get_asset(&reference.asset_id)?
+            .ok_or_else(|| AppError::Other("参考图不在素材库中，请先入库再启动 Agent".into()))?;
+        let path = asset
+            .store_path
+            .as_deref()
+            .map(PathBuf::from)
+            .filter(|path| path.is_file())
+            .ok_or_else(|| AppError::Other(format!("参考图 {} 的本地文件不存在", asset.name)))?;
+        image_bytes.push(crate::codex::cloud_image::read_agent_reference_jpeg(&path).await?);
+        reference_ids.push(reference.asset_id.clone());
+    }
+    let manifest_references = image_bytes
+        .iter()
+        .enumerate()
+        .map(|(index, bytes)| HtmlLayoutReference {
+            artifact_id: uuid::Uuid::new_v4().to_string(),
+            token: format!("@图{}", index + 1),
+            ordinal: index + 1,
+            mime: "image/jpeg",
+            bytes: bytes.len(),
+            sha256: sha256_hex(bytes),
+        })
+        .collect::<Vec<_>>();
+    let capture = HtmlLayoutCapture {
+        mode: options.capture_mode.clone(),
+        slice_height_css_px: options.slice_height,
+        overlap_css_px: options.overlap,
+    };
+    let manifest = serde_json::to_vec(&HtmlLayoutManifest {
+        schema_version: 1,
+        layout_prompt: &normalized_prompt,
+        references: &manifest_references,
+        viewport: HtmlLayoutViewport {
+            width_css_px: options.viewport_width,
+            height_css_px: options.viewport_height,
+            device_scale_factor: options.device_scale_factor,
+        },
+        capture,
+        background: &options.background,
+    })?;
+    if manifest.len() > 64 * 1024 {
+        return Err(AppError::Other("HTML 排版输入清单过大".into()));
+    }
+    let created = agent_action(
+        cloud,
+        auth,
+        json!({
+            "action": "create",
+            "skillId": HTML_SKILL_ID,
+            "goal": normalized_prompt,
+            "inputCount": image_bytes.len(),
+            "inputManifestHash": sha256_hex(&manifest),
+            "idempotencyKey": format!("desktop-html-agent-{}", Ulid::new()),
+            "imageProvider": "cloud",
+        }),
+        "创建 HTML 排版 Run 失败",
+    )
+    .await?;
+    let run_id = created
+        .get("runId")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::Cloud("创建 HTML 排版 Run 未返回 runId".into()))?
+        .to_string();
+    let conversation_id = created
+        .get("conversationId")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::Cloud("创建 HTML 排版 Run 未返回 conversationId".into()))?
+        .to_string();
+    let transfer_result: Result<(), AppError> = async {
+        let request_url = created
+            .get("uploadUrl")
+            .and_then(Value::as_str)
+            .ok_or_else(|| AppError::Cloud("创建 HTML 排版 Run 未返回输入上传地址".into()))?;
+        upload_signed(
+            cloud,
+            request_url,
+            "application/json",
+            manifest,
+            "HTML 排版输入",
+        )
+        .await?;
+        let uploads = created
+            .get("inputUploads")
+            .and_then(Value::as_array)
+            .ok_or_else(|| AppError::Cloud("创建 HTML 排版 Run 未返回参考图上传清单".into()))?;
+        if uploads.len() != image_bytes.len() {
+            return Err(AppError::Cloud("HTML 排版参考图上传清单数量不一致".into()));
+        }
+        for (index, bytes) in image_bytes.into_iter().enumerate() {
+            let upload = uploads
+                .iter()
+                .find(|item| {
+                    item.get("ordinal").and_then(Value::as_u64) == Some((index + 1) as u64)
+                })
+                .and_then(|item| item.get("uploadUrl"))
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    AppError::Cloud(format!("第 {} 张 HTML 参考图缺少上传地址", index + 1))
+                })?;
+            upload_signed(
+                cloud,
+                upload,
+                "image/jpeg",
+                bytes,
+                &format!("第 {} 张 HTML 参考图", index + 1),
+            )
+            .await?;
+        }
+        agent_action(
+            cloud,
+            auth,
+            json!({ "action": "enqueue", "runId": run_id }),
+            "HTML 排版 Run 入队失败",
+        )
+        .await?;
+        Ok(())
+    }
+    .await;
+    if let Err(error) = transfer_result {
+        let _ = agent_action(
+            cloud,
+            auth,
+            json!({ "action": "cancel", "runId": run_id }),
+            "清理未完成的 HTML 排版 Run 失败",
+        )
+        .await;
+        return Err(error);
+    }
+    let now = chrono::Utc::now().timestamp();
+    let fallback_snapshot = json!({
+        "conversationId": conversation_id,
+        "run": {
+            "id": run_id,
+            "conversation_id": conversation_id,
+            "skill_id": HTML_SKILL_ID,
+            "skill_version": "0.1.0",
+            "status": "queued",
+            "progress": 0,
+            "budget_credits": created.get("budgetCredits").cloned().unwrap_or(json!(15)),
+        },
+        "events": [], "approvals": [], "clarifications": [], "artifacts": [],
+    });
+    let mut record = CloudAgentRunRecord {
+        run_id,
+        conversation_id,
+        skill_id: HTML_SKILL_ID.into(),
+        status: "queued".into(),
+        intent_prompt: normalized_prompt,
+        reference_asset_ids: reference_ids,
+        project_id,
+        snapshot: fallback_snapshot,
+        feedback_action: None,
+        final_asset_id: None,
+        created_at: now,
+        updated_at: now,
+    };
+    save_record(db, &record)?;
+    if let Ok(snapshot) = agent_action(
+        cloud,
+        auth,
+        json!({ "action": "get", "runId": record.run_id }),
+        "读取 HTML 排版 Run 失败",
+    )
+    .await
+    {
+        record.status = run_status(&snapshot)?;
+        record.snapshot = snapshot;
+        record.updated_at = chrono::Utc::now().timestamp();
+        save_record(db, &record)?;
+    }
+    Ok(record)
+}
+
 #[tauri::command]
 pub async fn cloud_agent_start(
     db: State<'_, Arc<Database>>,
@@ -449,9 +732,28 @@ pub async fn cloud_agent_start(
     image_provider: Option<String>,
     preference_capsule: Option<PreferenceCapsule>,
     visual_profile_id: Option<String>,
+    skill_id: Option<String>,
+    html_options: Option<HtmlLayoutOptions>,
 ) -> Result<CloudAgentRunRecord, AppError> {
     if references.len() > MAX_REFERENCES {
         return Err(AppError::Other("Agent 最多处理 8 张参考图".into()));
+    }
+    if skill_id.as_deref() == Some(HTML_SKILL_ID) {
+        let options = html_options.ok_or_else(|| AppError::Other("HTML 排版参数缺失".into()))?;
+        return start_html_layout_run(
+            &db,
+            &cloud,
+            &auth,
+            &entitlement,
+            intent_prompt,
+            references,
+            project_id,
+            options,
+        )
+        .await;
+    }
+    if skill_id.as_deref().is_some_and(|value| value != SKILL_ID) {
+        return Err(AppError::Other("不支持的 Agent Skill".into()));
     }
     // 只阻止新建 Codex Agent Run；历史 Run 与已经停车的本机任务仍可查看/收尾。
     ensure_agent_provider_compatible(image_provider.as_deref())?;
@@ -838,7 +1140,14 @@ fn artifact_meta<'a>(snapshot: &'a Value, artifact_id: &str) -> Result<&'a Value
         .filter(|item| {
             matches!(
                 item.get("role").and_then(Value::as_str),
-                Some("control_reference" | "stage_result" | "final_result")
+                Some(
+                    "control_reference"
+                        | "stage_result"
+                        | "final_result"
+                        | "viewport_screenshot"
+                        | "full_page_screenshot"
+                        | "slice_screenshot"
+                )
             ) && item.get("user_visible").and_then(Value::as_bool) != Some(false)
                 && item
                     .get("mime")
@@ -846,6 +1155,42 @@ fn artifact_meta<'a>(snapshot: &'a Value, artifact_id: &str) -> Result<&'a Value
                     .is_some_and(|mime| mime.starts_with("image/"))
         })
         .ok_or_else(|| AppError::Cloud("图片产物不存在、不可见或已被替换".into()))
+}
+
+fn render_output_meta(
+    snapshot: &Value,
+    artifact_id: &str,
+) -> Option<(String, Option<u32>, u32, u32)> {
+    let output = snapshot
+        .pointer("/renderManifest/outputs")?
+        .as_array()?
+        .iter()
+        .find(|item| item.get("artifactId").and_then(Value::as_str) == Some(artifact_id))?;
+    let role = output.get("role")?.as_str()?.to_string();
+    let clip = output.get("clipDevicePx")?;
+    let width = u32::try_from(clip.get("width")?.as_u64()?).ok()?;
+    let height = u32::try_from(clip.get("height")?.as_u64()?).ok()?;
+    let index = output
+        .get("index")
+        .and_then(Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok());
+    Some((role, index, width, height))
+}
+
+fn validate_artifact_image(
+    mime: &str,
+    bytes: &[u8],
+    expected_dimensions: Option<(u32, u32)>,
+) -> bool {
+    if !artifact_magic_matches(mime, bytes) {
+        return false;
+    }
+    match expected_dimensions {
+        Some(expected) => image::load_from_memory(bytes)
+            .map(|image| (image.width(), image.height()) == expected)
+            .unwrap_or(false),
+        None => true,
+    }
 }
 
 async fn download_artifact(
@@ -873,6 +1218,18 @@ async fn download_artifact(
     };
     let expected_bytes = artifact.get("bytes").and_then(Value::as_u64).unwrap_or(0);
     let expected_hash = artifact.get("sha256").and_then(Value::as_str).unwrap_or("");
+    let role = artifact
+        .get("role")
+        .and_then(Value::as_str)
+        .unwrap_or("stage_result")
+        .to_string();
+    let render_meta = render_output_meta(&record.snapshot, artifact_id);
+    if record.skill_id == HTML_SKILL_ID && render_meta.is_none() {
+        return Err(AppError::Cloud("HTML 截图缺少可验证的渲染清单".into()));
+    }
+    let expected_dimensions = render_meta
+        .as_ref()
+        .map(|(_, _, width, height)| (*width, *height));
     if expected_bytes == 0 || expected_bytes > MAX_ARTIFACT_BYTES || expected_hash.len() != 64 {
         return Err(AppError::Cloud("Agent 图片产物校验信息无效".into()));
     }
@@ -881,7 +1238,7 @@ async fn download_artifact(
     if let Ok(cached) = tokio::fs::read(&path).await {
         if cached.len() as u64 == expected_bytes
             && sha256_hex(&cached).eq_ignore_ascii_case(expected_hash)
-            && artifact_magic_matches(mime, &cached)
+            && validate_artifact_image(mime, &cached, expected_dimensions)
         {
             return Ok(CloudAgentPreview {
                 run_id: record.run_id.clone(),
@@ -889,6 +1246,13 @@ async fn download_artifact(
                 path: path.to_string_lossy().into_owned(),
                 mime: mime.into(),
                 sha256: expected_hash.into(),
+                role: render_meta
+                    .as_ref()
+                    .map(|value| value.0.clone())
+                    .unwrap_or_else(|| role.clone()),
+                index: render_meta.as_ref().and_then(|value| value.1),
+                width: render_meta.as_ref().map(|value| value.2),
+                height: render_meta.as_ref().map(|value| value.3),
             });
         }
     }
@@ -924,7 +1288,7 @@ async fn download_artifact(
     {
         return Err(AppError::Cloud("Agent 图片完整性校验失败".into()));
     }
-    if !artifact_magic_matches(mime, &bytes) {
+    if !validate_artifact_image(mime, &bytes, expected_dimensions) {
         return Err(AppError::Cloud("Agent 图片实际格式不匹配".into()));
     }
     tokio::fs::create_dir_all(&dir).await?;
@@ -935,6 +1299,13 @@ async fn download_artifact(
         path: path.to_string_lossy().into_owned(),
         mime: mime.into(),
         sha256: expected_hash.into(),
+        role: render_meta
+            .as_ref()
+            .map(|value| value.0.clone())
+            .unwrap_or(role),
+        index: render_meta.as_ref().and_then(|value| value.1),
+        width: render_meta.as_ref().map(|value| value.2),
+        height: render_meta.as_ref().map(|value| value.3),
     })
 }
 
@@ -1037,6 +1408,57 @@ fn existing_agent_asset(
         .map_err(AppError::from)
 }
 
+fn ingestible_artifacts(record: &CloudAgentRunRecord) -> Vec<(String, String)> {
+    let artifacts = record
+        .snapshot
+        .get("artifacts")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten();
+    if record.skill_id != HTML_SKILL_ID {
+        return artifacts
+            .filter_map(|item| {
+                let id = item.get("id")?.as_str()?;
+                let role = item.get("role")?.as_str()?;
+                (matches!(role, "control_reference" | "stage_result" | "final_result")
+                    && item.get("user_visible").and_then(Value::as_bool) != Some(false)
+                    && item
+                        .get("mime")
+                        .and_then(Value::as_str)
+                        .is_some_and(|mime| mime.starts_with("image/")))
+                .then(|| (id.to_string(), role.to_string()))
+            })
+            .collect();
+    }
+    let visible = artifacts
+        .filter_map(|item| {
+            let id = item.get("id")?.as_str()?;
+            let role = item.get("role")?.as_str()?;
+            (item.get("user_visible").and_then(Value::as_bool) != Some(false)
+                && item
+                    .get("mime")
+                    .and_then(Value::as_str)
+                    .is_some_and(|mime| mime.starts_with("image/")))
+            .then(|| (id.to_string(), role.to_string()))
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    record
+        .snapshot
+        .pointer("/renderManifest/outputs")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|output| {
+            let id = output.get("artifactId")?.as_str()?;
+            let role = output.get("role")?.as_str()?;
+            visible
+                .get(id)
+                .filter(|visible_role| visible_role.as_str() == role)
+                .map(|_| (id.to_string(), role.to_string()))
+        })
+        .collect()
+}
+
 #[tauri::command]
 pub async fn cloud_agent_ingest_artifacts(
     app: AppHandle,
@@ -1052,30 +1474,30 @@ pub async fn cloud_agent_ingest_artifacts(
             "只有已接受且完成结算的 Agent 会话可以入库".into(),
         ));
     }
-    let generated: Vec<(String, String)> = record
-        .snapshot
-        .get("artifacts")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|item| {
-            let role = item.get("role")?.as_str()?;
-            let id = item.get("id")?.as_str()?;
-            (matches!(role, "control_reference" | "stage_result" | "final_result")
-                && item.get("user_visible").and_then(Value::as_bool) != Some(false)
-                && item
-                    .get("mime")
-                    .and_then(Value::as_str)
-                    .is_some_and(|mime| mime.starts_with("image/")))
-            .then(|| (id.to_string(), role.to_string()))
-        })
-        .collect();
+    let generated = ingestible_artifacts(&record);
     if generated.is_empty() {
         return Err(AppError::Other("Agent 会话没有可入库的图片产物".into()));
     }
 
+    let primary_artifact_id = if record.skill_id == HTML_SKILL_ID {
+        generated
+            .iter()
+            .find(|(_, role)| role == "full_page_screenshot")
+            .or_else(|| {
+                generated
+                    .iter()
+                    .find(|(_, role)| role == "viewport_screenshot")
+            })
+            .or_else(|| generated.first())
+            .map(|(id, _)| id.clone())
+    } else {
+        generated
+            .iter()
+            .find(|(_, role)| role == "final_result")
+            .map(|(id, _)| id.clone())
+    };
     let mut assets = Vec::with_capacity(generated.len());
-    for (artifact_id, role) in generated {
+    for (artifact_id, _role) in generated {
         let preview = download_artifact(&paths, &cloud, &auth, &record, &artifact_id).await?;
         let source = PathBuf::from(&preview.path);
         let asset = if let Some(existing) = existing_agent_asset(&db, &source)? {
@@ -1100,7 +1522,7 @@ pub async fn cloud_agent_ingest_artifacts(
         if let Some(project_id) = record.project_id.as_deref() {
             db.add_assets_to_project(project_id, std::slice::from_ref(&asset.id))?;
         }
-        if role == "final_result" {
+        if primary_artifact_id.as_deref() == Some(artifact_id.as_str()) {
             record.final_asset_id = Some(asset.id.clone());
         }
         save_record(&db, &record)?;
@@ -1461,12 +1883,12 @@ pub async fn cloud_agent_execute_local_task(
 #[cfg(test)]
 mod tests {
     use super::{
-        cache_local_result, ensure_agent_provider_compatible, list_records,
-        load_cached_local_result, local_generation_instruction, nearest_ratio,
-        normalize_intent_prompt, normalize_requested_ratio, record_from_row,
-        remove_cached_local_result, save_record, validate_preference_capsule,
-        CloudAgentReferenceRequest, CloudAgentRunRecord, PreferenceCapsule, PreferenceFact,
-        PreferenceScope,
+        cache_local_result, ensure_agent_provider_compatible, existing_agent_asset,
+        ingestible_artifacts, list_records, load_cached_local_result, local_generation_instruction,
+        nearest_ratio, normalize_intent_prompt, normalize_requested_ratio, record_from_row,
+        remove_cached_local_result, save_record, validate_html_layout_options,
+        validate_preference_capsule, CloudAgentReferenceRequest, CloudAgentRunRecord,
+        HtmlLayoutOptions, PreferenceCapsule, PreferenceFact, PreferenceScope,
     };
     use crate::core::paths::LibraryPaths;
     use crate::db::Database;
@@ -1556,6 +1978,113 @@ mod tests {
             Some("9:16")
         );
         assert!(normalize_requested_ratio(Some("auto".into())).is_err());
+    }
+
+    #[test]
+    fn html_layout_options_enforce_closed_viewport_and_slice_ranges() {
+        let valid = HtmlLayoutOptions {
+            viewport_width: 900,
+            viewport_height: 700,
+            device_scale_factor: 2,
+            capture_mode: "full_page_and_slices".into(),
+            slice_height: Some(900),
+            overlap: Some(80),
+            background: "opaque".into(),
+        };
+        assert!(validate_html_layout_options(valid.clone()).is_ok());
+        assert!(validate_html_layout_options(HtmlLayoutOptions {
+            overlap: Some(900),
+            ..valid.clone()
+        })
+        .is_err());
+        assert!(validate_html_layout_options(HtmlLayoutOptions {
+            capture_mode: "full_page".into(),
+            ..valid
+        })
+        .is_err());
+    }
+
+    #[test]
+    fn html_artifacts_follow_signed_render_manifest_slice_order() {
+        let record = CloudAgentRunRecord {
+            run_id: "run-html".into(),
+            conversation_id: "conv-html".into(),
+            skill_id: "bowerbird-html-layout-render".into(),
+            status: "succeeded".into(),
+            intent_prompt: "排版".into(),
+            reference_asset_ids: vec![],
+            project_id: None,
+            snapshot: json!({
+                "artifacts": [
+                    {"id":"slice-2","role":"slice_screenshot","mime":"image/png","user_visible":true},
+                    {"id":"full","role":"full_page_screenshot","mime":"image/png","user_visible":true},
+                    {"id":"slice-1","role":"slice_screenshot","mime":"image/png","user_visible":true}
+                ],
+                "renderManifest": {"outputs": [
+                    {"artifactId":"full","role":"full_page_screenshot"},
+                    {"artifactId":"slice-1","role":"slice_screenshot","index":0},
+                    {"artifactId":"slice-2","role":"slice_screenshot","index":1}
+                ]}
+            }),
+            feedback_action: Some("accept".into()),
+            final_asset_id: None,
+            created_at: 1,
+            updated_at: 1,
+        };
+        assert_eq!(
+            ingestible_artifacts(&record),
+            vec![
+                ("full".into(), "full_page_screenshot".into()),
+                ("slice-1".into(), "slice_screenshot".into()),
+                ("slice-2".into(), "slice_screenshot".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn html_expiry_without_visible_artifacts_does_not_offer_remote_ingest() {
+        let record = CloudAgentRunRecord {
+            run_id: "run-expired".into(),
+            conversation_id: "conv-expired".into(),
+            skill_id: "bowerbird-html-layout-render".into(),
+            status: "succeeded".into(),
+            intent_prompt: "排版".into(),
+            reference_asset_ids: vec![],
+            project_id: None,
+            snapshot: json!({
+                "artifacts": [],
+                "renderManifest": {"outputs": [{"artifactId":"gone","role":"full_page_screenshot"}]}
+            }),
+            feedback_action: Some("accept".into()),
+            final_asset_id: None,
+            created_at: 1,
+            updated_at: 1,
+        };
+        assert!(ingestible_artifacts(&record).is_empty());
+    }
+
+    #[test]
+    fn repeated_group_ingest_reuses_the_asset_with_the_same_origin_path() {
+        let root =
+            std::env::temp_dir().join(format!("bowerbird-agent-ingest-{}", ulid::Ulid::new()));
+        let paths = LibraryPaths::init(root.clone()).unwrap();
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let source = root.join("downloaded.png");
+        image::RgbImage::from_pixel(2, 3, image::Rgb([10, 20, 30]))
+            .save(&source)
+            .unwrap();
+        let first = crate::core::ingest::ingest_generated(
+            &paths,
+            &db,
+            &source,
+            Some("conv-idempotent"),
+            "bowerbird-agent",
+        )
+        .unwrap();
+        let repeated = existing_agent_asset(&db, &source).unwrap().unwrap();
+        assert_eq!(repeated.id, first.id);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

@@ -1,0 +1,20 @@
+{
+  "$schema": "bowerbird-skill-manifest-v1",
+  "id": "bowerbird-html-layout-render",
+  "version": "0.1.0",
+  "instructionHash": "6a8065dc253ad1896da3a122a215ec2eafd8bf265d1e829f234032f0b8e86106",
+  "kernelMinVersion": "0.1.0",
+  "snapshotSchemaVersion": 1,
+  "artifactRoles": ["html_document", "render_manifest", "viewport_screenshot", "full_page_screenshot", "slice_screenshot"],
+  "constraints": {
+    "maxRenderCalls": 1,
+    "maxVisionCalls": 0,
+    "maxRevisionCalls": 0,
+    "planningImageAccess": false
+  },
+  "phaseGraph": {
+    "initial": "prepare_inputs",
+    "terminal": ["succeeded", "failed", "cancelled"]
+  },
+  "evalCases": "eval-cases.json"
+}

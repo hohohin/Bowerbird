@@ -1,10 +1,11 @@
 import { useState } from "react";
+import { open as openExternal } from "@tauri-apps/plugin-shell";
 import { useStore } from "../store";
 import { ModalShell } from "./ModalShell";
 
 /**
  * Bowerbird 账号面板（独立于「环境状态」总览）：侧栏底部账号区「登录 / 管理账号」唤起，
- * 关掉即关掉，不回到环境状态。
+ * 关掉即关掉，不回到环境状态。登录方式：微信扫码（主）+ 邮箱魔法链接（次）。
  */
 export function AccountOnboarding() {
   const open = useStore((s) => s.accountOnboardingForceOpen);
@@ -14,9 +15,11 @@ export function AccountOnboarding() {
   const busy = useStore((s) => s.cloudBusy);
   const error = useStore((s) => s.cloudError);
   const startLogin = useStore((s) => s.startCloudEmailLogin);
+  const startWechatLogin = useStore((s) => s.startCloudWechatLogin);
   const logout = useStore((s) => s.logoutCloud);
   const [email, setEmail] = useState("");
   const [sent, setSent] = useState(false);
+  const [wechatStarted, setWechatStarted] = useState(false);
 
   if (!open) return null;
 
@@ -36,8 +39,15 @@ export function AccountOnboarding() {
     >
         {auth?.logged_in ? (
           <div className="settings-card p-4">
-            <div className="text-sm text-ink">{auth.email || auth.user_id}</div>
-            <div className="mt-1 text-xs text-muted">当前档位：{entitlement?.tier?.toUpperCase() || "FREE"}</div>
+            <div className="flex items-center gap-2">
+              {auth.avatar_url && (
+                <img src={auth.avatar_url} alt="" className="h-8 w-8 shrink-0 rounded-full object-cover" />
+              )}
+              <div className="min-w-0">
+                <div className="truncate text-sm text-ink">{auth.display_name || auth.email || auth.user_id}</div>
+                <div className="mt-0.5 text-xs text-muted">当前档位：{entitlement?.tier?.toUpperCase() || "FREE"}</div>
+              </div>
+            </div>
             <div className="mt-3 grid grid-cols-3 gap-2 text-center text-[11px]">
               <div className="rounded-lg border border-edge bg-canvas/70 p-2"><div className="text-muted">每日</div><div className="mt-0.5 text-sm font-semibold text-ink">{entitlement?.balances.daily ?? 0}</div></div>
               <div className="rounded-lg border border-edge bg-canvas/70 p-2"><div className="text-muted">订阅</div><div className="mt-0.5 text-sm font-semibold text-ink">{entitlement?.balances.sub ?? 0}</div></div>
@@ -64,6 +74,31 @@ export function AccountOnboarding() {
         ) : (
           <div className="space-y-3">
             <div className="settings-card p-4 text-xs text-muted">
+              <div className="font-medium text-ink">微信扫码登录</div>
+              <div className="mt-1">在系统浏览器弹出微信二维码，手机确认后会自动返回 Bowerbird；账号积分与桌面/官网通用。</div>
+            </div>
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  const qrconnectUrl = await startWechatLogin();
+                  await openExternal(qrconnectUrl);
+                  setWechatStarted(true);
+                } catch { /* store 显示错误 */ }
+              }}
+              disabled={busy || !auth?.cloud_available}
+              className="app-modal-button is-primary w-full"
+            >
+              {busy && <span className="app-spinner" aria-hidden="true" />}
+              使用微信扫码登录
+            </button>
+            {wechatStarted && <p className="app-inline-status is-success">已打开系统浏览器，请用微信扫码确认；完成后会自动返回 Bowerbird。</p>}
+            <div className="flex items-center gap-2 pt-1 text-[11px] text-muted">
+              <span className="h-px flex-1 bg-edge" />
+              或使用邮箱
+              <span className="h-px flex-1 bg-edge" />
+            </div>
+            <div className="settings-card p-4 text-xs text-muted">
               <div className="font-medium text-ink">邮箱魔法链接</div>
               <div className="mt-1">输入邮箱后，在本机浏览器打开邮件里的链接；完成验证会自动回到 Bowerbird。</div>
             </div>
@@ -75,7 +110,7 @@ export function AccountOnboarding() {
                   try { await startLogin(email); setSent(true); } catch { /* store 显示错误 */ }
                 }}
                 disabled={busy || !auth?.cloud_available || !email}
-                className="app-modal-button is-primary"
+                className="app-modal-button"
               >
                 {busy && <span className="app-spinner" aria-hidden="true" />}
                 发送链接

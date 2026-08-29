@@ -8,7 +8,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test:agent-selection": "node --test scripts/cloud-agent-selection.test.mjs"
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.10.7",

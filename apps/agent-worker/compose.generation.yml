@@ -16,6 +16,9 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    networks:
+      - default
+      - bowerbird-internal
     mem_limit: 1536m
     cpus: 1.75
     pids_limit: 256
@@ -24,3 +27,8 @@ services:
       options:
         max-size: 10m
         max-file: "3"
+
+networks:
+  bowerbird-internal:
+    name: bowerbird-internal
+    external: true

@@ -14,6 +14,7 @@ import type { ToolErrorClass } from "../contracts/tools.ts";
 import type { BudgetSnapshot } from "../contracts/run.ts";
 import type { SkillManifest } from "../contracts/skill.ts";
 import { RENDER_HTML_INPUT_SCHEMA } from "../contracts/render-html.ts";
+import { COMPOSE_HTML_DOCUMENT_SCHEMA } from "../skills/bowerbird-html-layout-render/schemas.ts";
 import { canAfford, estimateToolCost } from "./budget.ts";
 import { computeArgsHash, deriveCallId, type ToolLedger } from "./tool-ledger.ts";
 
@@ -356,6 +357,13 @@ export const GLOBAL_TOOL_REGISTRY: ReadonlyArray<ToolSpec> = [
     },
   },
   {
+    name: "compose_html_document",
+    kind: "workspace",
+    description:
+      "提交一份受限 HTML/CSS 文档。资源 artifact id 必须与当前 Run 显式 manifest 完全同序；HTML 图片只使用 asset:reference-N，不接受 URL、路径、JavaScript 或浏览器参数。",
+    argumentSchema: COMPOSE_HTML_DOCUMENT_SCHEMA,
+  },
+  {
     name: "render_html",
     kind: "renderer",
     description:
@@ -433,13 +441,14 @@ export function evaluatePolicy(
     }
   }
 
-  // 1b) render_html 的 phase 门控（HTML-RENDER-PLAN §6.1）：只能由 Skill manifest 在
-  //     特定 phase 的 allowedActions 中显式加入；Skill 指令不能动态开启。
-  //     （现役 controlled-image-edit 的任何 phase 都未声明 → 恒拒绝，fail closed。）
-  if (actionName === "render_html") {
+  // 1b) 高危工具的通用 phase 门控：understand_image（Vision）/ generate_image / render_html
+  //     只能由 Skill manifest 在特定 phase 的 allowedActions 中显式加入（§6.1/§7.2）。
+  //     Skill 指令不能动态开启；未声明的 Skill 一律 fail closed。
+  if (actionName === "understand_image" || actionName === "generate_image" ||
+      actionName === "inspect_generated_image" || actionName === "render_html") {
     const phaseDef = ctx.manifest.phases.find((phase) => phase.name === ctx.phase);
-    if (!phaseDef || !phaseDef.allowedActions.includes("render_html")) {
-      return { verdict: "deny", errorClass: "policy_denied", reason: "render_phase_not_allowed" };
+    if (!phaseDef || !phaseDef.allowedActions.includes(actionName)) {
+      return { verdict: "deny", errorClass: "policy_denied", reason: `${actionName}_phase_not_allowed` };
     }
   }
 

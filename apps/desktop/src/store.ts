@@ -248,6 +248,7 @@ interface State {
   cloudError: string | null;
   loadCloudAccount: () => Promise<void>;
   startCloudEmailLogin: (email: string) => Promise<void>;
+  startCloudWechatLogin: () => Promise<string>;
   syncCloudEntitlement: () => Promise<void>;
   reconcileCloudEntitlement: () => Promise<void>;
   logoutCloud: () => Promise<void>;
@@ -987,6 +988,18 @@ export const useStore = create<State>((set, get) => {
       await api.cloudStartEmailLogin(email);
     } catch (e) {
       set({ cloudError: typeof e === "string" ? e : "登录邮件发送失败" });
+      throw e;
+    } finally {
+      set({ cloudBusy: false });
+    }
+  },
+  startCloudWechatLogin: async () => {
+    set({ cloudBusy: true, cloudError: null });
+    try {
+      // 返回系统浏览器要打开的二维码页；扫码后经 bowerbird://wechat/callback 回流。
+      return await api.cloudStartWechatLogin();
+    } catch (e) {
+      set({ cloudError: typeof e === "string" ? e : "微信登录发起失败" });
       throw e;
     } finally {
       set({ cloudBusy: false });

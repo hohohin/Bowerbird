@@ -1,0 +1,37 @@
+{
+  "name": "@bowerbird/unified-agent-harness-u1-spike",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Isolated U1 compatibility spike for DeepSeek Harness; never a production runtime.",
+  "scripts": {
+    "acp:probe": "node scripts/acp-probe.mjs",
+    "smoke:network": "node scripts/network-smoke.mjs",
+    "smoke:vision": "node scripts/vision-smoke.mjs",
+    "smoke:adapter": "node scripts/adapter-smoke.mjs",
+    "release:check": "node scripts/check-release.mjs",
+    "dump-config": "node scripts/dump-config.mjs",
+    "audit": "node scripts/audit-config.mjs",
+    "test": "node --test"
+  },
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@deepseek-ai/dsh-base"
+      ]
+    }
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "0.25.1",
+    "@deepseek-ai/dsh": "0.1.1-rc.2",
+    "@deepseek-ai/dsh-acp": "0.1.1-rc.2",
+    "@deepseek-ai/dsh-base": "0.1.1-rc.2",
+    "@deepseek-ai/dsh-llm-deepseek": "0.1.1-rc.2",
+    "@deepseek-ai/dsh-tools": "0.1.1-rc.2",
+    "js-yaml": "4.2.0"
+  },
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "packageManager": "pnpm@11.10.0"
+}

@@ -406,6 +406,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "ulid",
+ "uuid",
  "windows",
 ]
 

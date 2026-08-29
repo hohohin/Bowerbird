@@ -1,7 +1,7 @@
 # @bowerbird/html-renderer — Bowerbird 受限 HTML 离线 Renderer
 
 > 依据 [dev-doc/HTML-RENDER-PLAN.md](../../dev-doc/HTML-RENDER-PLAN.md)（H0-T1 镜像契约 + H1 独立 renderer）。
-> 状态：**H1 代码与本地测试完成；容器实机断网/沙箱/容量验证（H0-T2~T5）待 VPS 执行。**
+> 状态：**H0–H5 完成并通过生产 VPS/控制面 E2E；H6 test-only 观察进行中。** 当前生产 renderer `0.1.1`，指纹 `bwr1-c0ee5722787c038aa560e4a5cbb54df2`。
 
 一个**封闭、确定性的渲染工具**，不是浏览器 Agent：
 
@@ -43,11 +43,11 @@ RENDER_INTERNAL_TOKEN=<≥32 字符随机值> RENDER_PORT=3917 node src/main.ts
 ```
 
 - `POST /render`（Bearer token）：内部请求/响应契约见 `src/contracts.ts`；错误只回稳定错误码（计划 §11）。
-- `GET /healthz`：fingerprint、Chromium/Playwright 版本、队列状态；不含任何用户内容。
+- `GET /healthz`：fingerprint、Chromium/Playwright 版本、队列/时延指标与 cgroup 内存/PID 当前值和峰值；不含任何用户内容。cgroup 统计覆盖 Chromium 子进程，本地不可用时降级为 Node RSS/heap。
 - 并发 1 + 等待队列 1；超出立即 `render_capacity_busy`。
 - 日志为 JSON lines，只含 requestId/时长/字节/稳定错误码，**不含 HTML/CSS 正文与图片内容**。
 
-## 部署（VPS，待 H0 验证）
+## 部署（VPS）
 
 ```bash
 cd apps/html-renderer
@@ -59,10 +59,40 @@ docker compose -f compose.renderer.yml up -d --build
 - 镜像内烙印 `build-info.json`（基础镜像 tag、字体包版本、playwright 版本）；`rendererFingerprint = bwr1-<hash>` 绑定代码版本/Chromium/Playwright/字体/默认样式/PNG 编码参数（`src/fingerprint.ts`）。
 - Chromium sandbox 保持开启，绝不默认 `--no-sandbox`（计划 H0-T5：如只能靠关 sandbox 运行则停止并重新评估）。
 
-## H0 剩余（本机无 Docker，待 VPS）
+## H5 验收脚本（2026-08-28）
 
-- H0-T2/T5：非 root、只读 rootfs、cap_drop ALL、无公网出口下实跑 100 次合成渲染 + sandbox 验证；
-- H0-T3/T4：20 fixture 容量测量与上限冻结复核（当前 `src/limits.ts` 为计划初始值）。
+```bash
+# 容器安全自检（VPS 部署后 exec 进容器运行；任一断言失败退出码 1）
+docker compose -f compose.renderer.yml exec -T html-renderer node /app/scripts/verify-container.mjs
+
+# renderer 侧 E2E（合成中文长页 → 整页+切片 → 逐像素连续性校验；输出无内容摘要）
+node scripts/e2e-render-check.mjs --local        # 开发机（可用 BOWERBIRD_E2E_EXECUTABLE 指定 Chromium）
+node scripts/e2e-render-check.mjs --url http://127.0.0.1:3917   # 容器内/隧道（需 RENDER_INTERNAL_TOKEN）
+```
+
+- `/healthz` 现含无内容 metrics（渲染计数、错误码分布、p50/p95/max 时延、超时预算外计数）与 resources（容器 current/peak memory、current/peak PIDs）。
+- 资源图片在进入浏览器前做**尺寸声明防护**（PNG IHDR / JPEG SOF / WebP 头；单边 ≤32768、≤64MP），小文件大尺寸的解压炸弹直接 `render_resource_invalid`。
+
+## 镜像扫描与 Chromium 安全更新流程（H5-T2）
+
+- **扫描**（VPS 实测命令；GitHub/ghcr 在腾讯云线路不可达，漏洞库走 ECR 公共镜像）：
+  ```bash
+  sudo docker run --rm -e TRIVY_DB_REPOSITORY=public.ecr.aws/aquasecurity/trivy-db:2 \
+    -v /var/run/docker.sock:/var/run/docker.sock -v /tmp:/out aquasec/trivy:latest \
+    image --scanners vuln --severity HIGH,CRITICAL --output /out/trivy.html bowerbird/html-renderer:local
+  ```
+  高危 CVE 未处理不得扩大开放；扫描结果与处理记录随部署归档（首扫台账见 PROJECT.md 2026-08-28 H5 条目）。
+- **Chromium 安全更新**：唯一路径是升级 `package.json` 的 `playwright` 精确钉版 → 重建镜像 → `rendererFingerprint` 随之变化（记录进 PROJECT.md/部署记录）→ `verify-container.mjs` + `e2e-render-check.mjs --url` 复跑通过后才可对外。禁止在容器内手工替换 Chromium 二进制或临时加 flag。
+- **回滚**：重建前保留旧镜像 tag（`docker tag bowerbird/html-renderer:local bowerbird/html-renderer:rollback-<日期>`）；回滚 = compose 指回旧 tag 重建，fingerprint 应回到记录值。
+
+## H6 观察报告
+
+```bash
+cd apps/cloud
+node scripts/report-html-render-observations.mjs --since=2026-08-28T05:15:00Z
+```
+
+报告只读 test-only HTML Run 元数据及未过期 render manifest 的尺寸/角色，不输出用户内容。H6 正式观察起点为 renderer `0.1.1` 部署时间；H5 联调和故障注入历史不能作为发布成功率。
 
 ## 文件结构
 
@@ -79,6 +109,7 @@ src/
   render-service.ts  一次请求的编排（资源复核/临时目录/超时/输出复核）
   server.ts          内部 HTTP（鉴权/并发1/健康检查/无内容日志）
   main.ts            入口（orphan cleanup/优雅退出）
+  runtime-resources.ts  无内容 cgroup/Node 运行资源快照
   *.test.ts          单测；renderer.e2e.test.ts 需本机 Chromium，未装自动 skip
 scripts/
   build-fingerprint.mjs  构建期烙印 build-info.json

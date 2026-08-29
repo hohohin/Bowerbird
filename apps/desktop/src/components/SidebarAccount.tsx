@@ -25,7 +25,8 @@ export function SidebarAccount() {
   const rootRef = useRef<HTMLDivElement>(null);
 
   const loggedIn = cloudAuth?.logged_in === true;
-  const name = cloudAuth?.email || cloudAuth?.user_id || "";
+  const name = cloudAuth?.display_name || cloudAuth?.email || cloudAuth?.user_id || "";
+  const avatarUrl = cloudAuth?.avatar_url ?? null;
   const tier = cloudEntitlement?.tier?.toUpperCase() ?? "";
   const hasIssue = !understandReady({ entitlement: cloudEntitlement, codexHealth, cloudAuth }) || !extensionConnected;
 
@@ -141,9 +142,13 @@ export function SidebarAccount() {
         aria-haspopup="menu"
         aria-expanded={open}
       >
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-xs font-semibold text-white">
-          {loggedIn ? (name[0] ?? "?").toUpperCase() : "?"}
-        </span>
+        {loggedIn && avatarUrl ? (
+          <img src={avatarUrl} alt="" className="h-8 w-8 shrink-0 rounded-full object-cover" />
+        ) : (
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-xs font-semibold text-white">
+            {loggedIn ? (name[0] ?? "?").toUpperCase() : "?"}
+          </span>
+        )}
         <span className="min-w-0 flex-1 truncate text-left text-xs text-ink">
           {loggedIn ? name : "未登录"}
         </span>

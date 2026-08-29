@@ -7,11 +7,12 @@ import type { AuthContext } from "../_shared/auth.ts";
 import { ensureDailyCredits, holdCredits, rollbackCredits } from "../_shared/billing.ts";
 import { ApiError, errorResponse, jsonResponse, requestId, safeLog } from "../_shared/errors.ts";
 import { activeTier, policyForUser } from "../_shared/feature-policy.ts";
+import { imageMetadata } from "../_shared/image-metadata.ts";
 import { corsHeaders } from "../_shared/limits.ts";
 import { reserveManagedUsage } from "../_shared/usage.ts";
 
 const BUCKET = "agent-temp";
-const ALLOWED_SKILLS = new Set(["smart-refinement", "bowerbird-controlled-image-edit"]);
+const ALLOWED_SKILLS = new Set(["smart-refinement", "bowerbird-controlled-image-edit", "bowerbird-html-layout-render"]);
 const MAX_INPUTS = 8;
 const MAX_GOAL_CHARS = 4000;
 const SIGNED_URL_SECONDS = 300;
@@ -67,17 +68,17 @@ function canonicalJson(value: unknown): string {
     .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(",")}}`;
 }
 
-function actualImageMime(bytes: Uint8Array): "image/png" | "image/jpeg" | "image/webp" | null {
-  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47 &&
-      bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a) return "image/png";
-  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
-  if (bytes.length >= 12 && new TextDecoder().decode(bytes.slice(0, 4)) === "RIFF" &&
-      new TextDecoder().decode(bytes.slice(8, 12)) === "WEBP") return "image/webp";
-  return null;
-}
-
 type ControlledReference = {
   referenceId: string;
+  ordinal: number;
+  mime: "image/png" | "image/jpeg" | "image/webp";
+  bytes: number;
+  sha256: string;
+};
+
+type HtmlLayoutReference = {
+  artifactId: string;
+  token: string;
   ordinal: number;
   mime: "image/png" | "image/jpeg" | "image/webp";
   bytes: number;
@@ -202,6 +203,55 @@ async function parseControlledManifest(
   return { references, visualProfile };
 }
 
+function parseHtmlLayoutManifest(value: unknown, expectedCount: number): { references: HtmlLayoutReference[] } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new ApiError("invalid_request", "HTML 排版输入清单无效");
+  }
+  const manifest = value as Record<string, unknown>;
+  const viewport = manifest.viewport as Record<string, unknown> | undefined;
+  const capture = manifest.capture as Record<string, unknown> | undefined;
+  if (manifest.schemaVersion !== 1 || typeof manifest.layoutPrompt !== "string" ||
+      !manifest.layoutPrompt.trim() || manifest.layoutPrompt.length > MAX_GOAL_CHARS ||
+      !Array.isArray(manifest.references) || !viewport || !capture ||
+      !Number.isInteger(viewport.widthCssPx) || Number(viewport.widthCssPx) < 320 || Number(viewport.widthCssPx) > 2400 ||
+      !Number.isInteger(viewport.heightCssPx) || Number(viewport.heightCssPx) < 240 || Number(viewport.heightCssPx) > 4000 ||
+      (viewport.deviceScaleFactor !== 1 && viewport.deviceScaleFactor !== 2) ||
+      !["viewport", "full_page", "full_page_and_slices"].includes(String(capture.mode)) ||
+      (manifest.background !== "opaque" && manifest.background !== "transparent")) {
+    throw new ApiError("invalid_request", "HTML 排版输入清单无效");
+  }
+  if (capture.mode === "full_page_and_slices") {
+    const sliceHeight = Number(capture.sliceHeightCssPx);
+    const overlap = capture.overlapCssPx === undefined ? 0 : Number(capture.overlapCssPx);
+    if (!Number.isInteger(sliceHeight) || sliceHeight < 200 || sliceHeight > 4000 ||
+        !Number.isInteger(overlap) || overlap < 0 || overlap > 200 || overlap >= sliceHeight) {
+      throw new ApiError("invalid_request", "HTML 排版切片参数无效");
+    }
+  } else if (capture.sliceHeightCssPx !== undefined || capture.overlapCssPx !== undefined) {
+    throw new ApiError("invalid_request", "非切片模式不能携带切片参数");
+  }
+  if (manifest.references.length !== expectedCount) throw new ApiError("invalid_request", "参考图数量与 Run 不一致");
+  const ids = new Set<string>();
+  const references = manifest.references.map((raw, index) => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new ApiError("invalid_request", "HTML 参考图元数据无效");
+    const item = raw as Record<string, unknown>;
+    const artifactId = typeof item.artifactId === "string" ? item.artifactId : "";
+    const token = typeof item.token === "string" ? item.token.trim() : "";
+    const ordinal = Number(item.ordinal);
+    const bytes = Number(item.bytes);
+    const mime = item.mime;
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(artifactId) ||
+        ids.has(artifactId) || !token || token.length > 160 || ordinal !== index + 1 ||
+        !["image/png", "image/jpeg", "image/webp"].includes(String(mime)) ||
+        !Number.isInteger(bytes) || bytes <= 0 || bytes > 10 * 1024 * 1024 || !sha256Pattern(item.sha256)) {
+      throw new ApiError("invalid_request", `第 ${index + 1} 张 HTML 参考图元数据无效`);
+    }
+    ids.add(artifactId);
+    return { artifactId, token, ordinal, mime, bytes, sha256: item.sha256 } as HtmlLayoutReference;
+  });
+  return { references };
+}
+
 async function billingAccountId(admin: AuthContext["admin"], authUserId: string): Promise<string> {
   const { data, error } = await admin.from("billing_accounts").select("id").eq("auth_user_id", authUserId).maybeSingle();
   if (error || !data) throw new ApiError("internal_error", "账号计费身份读取失败", true);
@@ -227,6 +277,10 @@ function serviceBudget(service: string): { budget: number; pricingVersion: numbe
   if (service === "bowerbird-controlled-image-edit") {
     return { budget: 48, pricingVersion: 1, billingService: "agent_controlled_image_edit" };
   }
+  if (service === "bowerbird-html-layout-render") {
+    // HTML 排版 POC 档（0045 service_costs 行；渲染 0 积分，仅 DeepSeek 文本回合计费）。
+    return { budget: 15, pricingVersion: 1, billingService: "agent_html_layout_render" };
+  }
   throw new ApiError("invalid_request", "不支持的 Skill", false);
 }
 
@@ -245,7 +299,7 @@ async function actionCreate(admin: Parameters<typeof billingAccountId>[0], user:
   const goal = typeof body.goal === "string" ? body.goal.trim() : "";
   if (!goal || goal.length > MAX_GOAL_CHARS) throw new ApiError("invalid_request", "目标文本长度需在 1–4000 字之间");
   const inputCount = Number(body.inputCount);
-  const minInputs = skillId === "bowerbird-controlled-image-edit" ? 0 : 1;
+  const minInputs = skillId === "bowerbird-controlled-image-edit" || skillId === "bowerbird-html-layout-render" ? 0 : 1;
   if (!Number.isInteger(inputCount) || inputCount < minInputs || inputCount > MAX_INPUTS) {
     throw new ApiError("invalid_request", `输入图数量需在 ${minInputs}–${MAX_INPUTS} 张之间`);
   }
@@ -383,7 +437,8 @@ async function actionCreate(admin: Parameters<typeof billingAccountId>[0], user:
     if (requestUpload?.error || row.status === "uploading" && !requestUpload?.data) {
       throw new ApiError("internal_error", "上传地址重新签发失败", true);
     }
-    const inputUploads = row.status === "uploading" && row.skill_id === "bowerbird-controlled-image-edit"
+    const inputUploads = row.status === "uploading" &&
+        (row.skill_id === "bowerbird-controlled-image-edit" || row.skill_id === "bowerbird-html-layout-render")
       ? await Promise.all(Array.from({ length: row.input_count }, async (_, index) => {
         const ordinal = index + 1;
         const objectKey = controlledInputObjectKey(row.id, ordinal);
@@ -415,7 +470,11 @@ async function actionCreate(admin: Parameters<typeof billingAccountId>[0], user:
     p_conversation_id: conversationId,
     p_user_id: accountId,
     p_skill_id: skillId,
-    p_skill_version: skillId === "bowerbird-controlled-image-edit" ? "0.1.2" : "0.1.0-m0",
+    p_skill_version: skillId === "bowerbird-controlled-image-edit"
+      ? "0.1.2"
+      : skillId === "bowerbird-html-layout-render"
+      ? "0.1.0"
+      : "0.1.0-m0",
     p_kernel_version: "0.1.0",
     p_input_count: inputCount,
     p_input_manifest_hash: body.inputManifestHash as string,
@@ -487,7 +546,7 @@ async function actionCreate(admin: Parameters<typeof billingAccountId>[0], user:
   const upload = await admin.storage.from(BUCKET).createSignedUploadUrl(requestKey);
   if (upload.error) throw new ApiError("internal_error", "上传地址签发失败", true);
 
-  const inputUploads = skillId === "bowerbird-controlled-image-edit"
+  const inputUploads = skillId === "bowerbird-controlled-image-edit" || skillId === "bowerbird-html-layout-render"
     ? await Promise.all(Array.from({ length: inputCount }, async (_, index) => {
       const ordinal = index + 1;
       const objectKey = controlledInputObjectKey(runId, ordinal);
@@ -532,7 +591,7 @@ async function actionEnqueue(admin: Parameters<typeof billingAccountId>[0], user
   };
   if (row.status !== "uploading") throw new ApiError("invalid_request", "Run 状态不允许入队");
 
-  if (row.skill_id === "bowerbird-controlled-image-edit") {
+  if (row.skill_id === "bowerbird-controlled-image-edit" || row.skill_id === "bowerbird-html-layout-render") {
     const downloaded = await admin.storage.from(BUCKET).download(row.request_object_key);
     if (downloaded.error || !downloaded.data) throw new ApiError("invalid_request", "输入清单尚未上传");
     const requestBytes = new Uint8Array(await downloaded.data.arrayBuffer());
@@ -546,11 +605,16 @@ async function actionEnqueue(admin: Parameters<typeof billingAccountId>[0], user
     } catch {
       throw new ApiError("invalid_request", "输入清单不是有效 JSON");
     }
-    const parsed = await parseControlledManifest(manifest, row.input_count);
-    if (row.visual_profile_id !== (parsed.visualProfile?.profileId ?? null) ||
-        row.visual_profile_version !== (parsed.visualProfile?.version ?? null) ||
-        row.visual_profile_hash !== (parsed.visualProfile?.hash ?? null)) {
-      throw new ApiError("invalid_request", "视觉设定追踪与输入清单不一致", false, 409);
+    const parsed = row.skill_id === "bowerbird-controlled-image-edit"
+      ? await parseControlledManifest(manifest, row.input_count)
+      : parseHtmlLayoutManifest(manifest, row.input_count);
+    if (row.skill_id === "bowerbird-controlled-image-edit") {
+      const controlled = parsed as Awaited<ReturnType<typeof parseControlledManifest>>;
+      if (row.visual_profile_id !== (controlled.visualProfile?.profileId ?? null) ||
+          row.visual_profile_version !== (controlled.visualProfile?.version ?? null) ||
+          row.visual_profile_hash !== (controlled.visualProfile?.hash ?? null)) {
+        throw new ApiError("invalid_request", "视觉设定追踪与输入清单不一致", false, 409);
+      }
     }
     const references = parsed.references;
     const artifacts = [];
@@ -559,29 +623,35 @@ async function actionEnqueue(admin: Parameters<typeof billingAccountId>[0], user
       const object = await admin.storage.from(BUCKET).download(objectKey);
       if (object.error || !object.data) throw new ApiError("invalid_request", `第 ${reference.ordinal} 张参考图尚未上传`);
       const bytes = new Uint8Array(await object.data.arrayBuffer());
+      const metadata = imageMetadata(bytes);
       if (bytes.byteLength !== reference.bytes || await sha256Hex(bytes) !== reference.sha256 ||
-          actualImageMime(bytes) !== reference.mime) {
+          metadata?.mime !== reference.mime) {
         throw new ApiError("invalid_request", `第 ${reference.ordinal} 张参考图校验失败`);
       }
       artifacts.push({
+        ...(row.skill_id === "bowerbird-html-layout-render" ? { id: (reference as HtmlLayoutReference).artifactId } : {}),
         run_id: runId,
         conversation_id: row.conversation_id,
         kind: "input",
         role: "input",
-        step_id: reference.referenceId,
+        step_id: "referenceId" in reference ? reference.referenceId : `ref-${reference.ordinal}`,
         object_key: objectKey,
         mime: reference.mime,
         bytes: reference.bytes,
         sha256: reference.sha256,
+        width: metadata.width,
+        height: metadata.height,
         user_visible: true,
         expires_at: row.content_expires_at,
       });
     }
     if (artifacts.length) {
-      const inserted = await admin.from("agent_artifacts").upsert(artifacts, {
-        onConflict: "run_id,object_key",
-        ignoreDuplicates: true,
-      });
+      const inserted = await admin.from("agent_artifacts").upsert(
+        artifacts,
+        row.skill_id === "bowerbird-html-layout-render"
+          ? { onConflict: "id", ignoreDuplicates: true }
+          : { onConflict: "run_id,object_key", ignoreDuplicates: true },
+      );
       if (inserted.error) throw new ApiError("internal_error", "输入产物登记失败", true);
     }
   }
@@ -607,11 +677,30 @@ async function actionGet(admin: Parameters<typeof billingAccountId>[0], user: { 
     admin.from("agent_clarifications").select("id,question_key,context_hash,status,question_object_key,asked_at,answered_at,expires_at,content_deleted_at").eq("run_id", runId).order("asked_at", { ascending: false }).limit(3),
   ]);
   const { data: artifacts } = await admin.from("agent_artifacts")
-    .select("id,conversation_id,kind,role,step_id,parent_artifact_id,mime,bytes,sha256,user_visible,expires_at,downloaded_at")
+    .select("id,conversation_id,kind,role,step_id,parent_artifact_id,mime,bytes,sha256,width,height,user_visible,expires_at,downloaded_at")
     .eq("run_id", runId)
     .eq("user_visible", true)
     .is("deleted_at", null)
     .order("expires_at", { ascending: true });
+  let renderManifest: unknown = null;
+  if ((run as { skill_id?: string } | null)?.skill_id === "bowerbird-html-layout-render") {
+    const { data: manifestRow, error: manifestError } = await admin.from("agent_artifacts")
+      .select("object_key,bytes,sha256,expires_at,deleted_at")
+      .eq("run_id", runId).eq("role", "render_manifest")
+      .is("deleted_at", null).maybeSingle();
+    if (manifestError) throw new ApiError("internal_error", "渲染清单读取失败", true);
+    if (manifestRow && Date.parse(manifestRow.expires_at as string) > Date.now()) {
+      const object = await admin.storage.from(BUCKET).download(manifestRow.object_key as string);
+      if (object.error || !object.data) throw new ApiError("internal_error", "渲染清单读取失败", true);
+      const bytes = new Uint8Array(await object.data.arrayBuffer());
+      if (!bytes.byteLength || bytes.byteLength > 64 * 1024 ||
+          bytes.byteLength !== Number(manifestRow.bytes) || await sha256Hex(bytes) !== manifestRow.sha256) {
+        throw new ApiError("internal_error", "渲染清单校验失败", true);
+      }
+      try { renderManifest = JSON.parse(new TextDecoder().decode(bytes)); }
+      catch { throw new ApiError("internal_error", "渲染清单格式无效", true); }
+    }
+  }
   const approvalsWithProposal = await Promise.all((approvals ?? []).map(async (approval) => {
     const { proposal_object_key: proposalObjectKey, content_deleted_at: contentDeletedAt, ...safeApproval } = approval;
     if (!proposalObjectKey || contentDeletedAt) return { ...safeApproval, contentExpired: Boolean(contentDeletedAt) };
@@ -698,6 +787,7 @@ async function actionGet(admin: Parameters<typeof billingAccountId>[0], user: { 
     approvals: approvalsWithProposal,
     clarifications: clarificationsWithQuestion,
     artifacts: artifacts ?? [],
+    ...(renderManifest ? { renderManifest } : {}),
     ...(pendingLocalTask ? { pendingLocalTask } : {}),
   });
 }
@@ -868,7 +958,10 @@ async function actionArtifactUrl(admin: Parameters<typeof billingAccountId>[0], 
   if (row.deleted_at || Date.parse(row.expires_at) <= Date.now()) {
     throw new ApiError("invalid_request", "产物已过期", false, 410);
   }
-  if (!row.user_visible || !row.mime.startsWith("image/") || !["control_reference", "stage_result", "final_result"].includes(row.role)) {
+  if (!row.user_visible || !row.mime.startsWith("image/") || ![
+    "control_reference", "stage_result", "final_result",
+    "viewport_screenshot", "full_page_screenshot", "slice_screenshot",
+  ].includes(row.role)) {
     throw new ApiError("invalid_request", "该产物不可下载", false, 403);
   }
   const { data: signed, error: signError } = await admin.storage.from(BUCKET)
@@ -889,7 +982,10 @@ async function actionArtifactReceived(admin: Parameters<typeof billingAccountId>
   if (!row.run?.billing || row.run.billing.auth_user_id !== user.id) {
     throw new ApiError("invalid_request", "产物不存在", false, 404);
   }
-  if (!row.user_visible || !row.mime.startsWith("image/") || !["control_reference", "stage_result", "final_result"].includes(row.role)) {
+  if (!row.user_visible || !row.mime.startsWith("image/") || ![
+    "control_reference", "stage_result", "final_result",
+    "viewport_screenshot", "full_page_screenshot", "slice_screenshot",
+  ].includes(row.role)) {
     throw new ApiError("invalid_request", "只能确认用户可见图片产物", false, 403);
   }
   const { error: updateError } = await admin.from("agent_artifacts")
@@ -908,6 +1004,9 @@ async function actionResultFeedback(admin: Parameters<typeof billingAccountId>[0
   const own = await loadOwnRun(admin, runId, user.id);
   if (own.status !== "awaiting_result_feedback") {
     throw new ApiError("invalid_request", "Run 当前不等待结果反馈", false, 409);
+  }
+  if (own.skill_id === "bowerbird-html-layout-render" && action === "retry") {
+    throw new ApiError("invalid_request", "HTML 排版 Run 只支持接受或放弃结果", false, 409);
   }
   const feedbackId = crypto.randomUUID();
   const feedbackKey = `runs/${runId}/feedback/${feedbackId}.json`;
@@ -980,7 +1079,7 @@ async function actionLocalTaskComplete(admin: Parameters<typeof billingAccountId
   const object = await admin.storage.from(BUCKET).download(objectKey);
   if (object.error || !object.data) throw new ApiError("invalid_request", "本地任务结果尚未上传", false, 409);
   const objectBytes = new Uint8Array(await object.data.arrayBuffer());
-  if (objectBytes.byteLength !== bytes || await sha256Hex(objectBytes) !== sha256 || actualImageMime(objectBytes) !== mime) {
+  if (objectBytes.byteLength !== bytes || await sha256Hex(objectBytes) !== sha256 || imageMetadata(objectBytes)?.mime !== mime) {
     throw new ApiError("invalid_request", "本地任务结果校验失败", false, 409);
   }
   const { error: completeError } = await admin.from("agent_local_tasks")

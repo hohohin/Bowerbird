@@ -57,6 +57,38 @@ test("tool ledger client preserves lifecycle and stable call id", async () => {
   deepEqual(actions, ["tool_prepare:call-1", "tool_submitted:call-1", "tool_complete:call-1"]);
 });
 
+test("unified plan approval sends no worker estimate and verifies the authoritative response", async () => {
+  let posted: Record<string, unknown> | undefined;
+  const fetch: AgentWorkerFetch = async (_url, request) => {
+    posted = JSON.parse(String(request?.body ?? "{}")) as Record<string, unknown>;
+    return response(200, JSON.stringify({
+      status: "awaiting_approval",
+      proposalHash: "b".repeat(64),
+      estimatedAdditionalCredits: 19,
+      reused: false,
+    }));
+  };
+  const client = new AgentControlClient({ controlUrl: "https://control", workerToken: "secret", workerId: "worker-1" }, fetch);
+  const result = await client.requestUnifiedPlanApproval({
+    runId: "run-1",
+    leaseId: "lease-1",
+    callId: "a".repeat(64),
+    argsHash: "c".repeat(64),
+    proposalHash: "b".repeat(64),
+    proposal: { schemaVersion: 1, title: "计划", summary: "摘要", steps: [] },
+  });
+  equal(posted?.action, "approval_request");
+  equal(posted?.kind, "unified_agent_plan");
+  equal("estimatedAdditionalCredits" in (posted ?? {}), false);
+  equal("plannedToolCount" in (posted ?? {}), false);
+  deepEqual(result, {
+    status: "awaiting_approval",
+    proposalHash: "b".repeat(64),
+    estimatedAdditionalCredits: 19,
+    reused: false,
+  });
+});
+
 test("remote checkpoint is verified and restored against claim identity", async () => {
   const skill = loadControlledImageEditSkill();
   const checkpoint = createControlledRunnerCheckpoint({

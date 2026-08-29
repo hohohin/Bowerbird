@@ -167,7 +167,9 @@ export function creditsForAgentUsage(item: AgentUsageItem, pricing: AgentUsagePr
     if (item.provider !== "renderer" || item.imageCount !== 0) throw new Error("agent_usage_binding_invalid");
     return pricing.htmlRender?.creditsPerCall ?? 0;
   }
-  if (item.provider === "deepseek" || item.imageCount !== 1) throw new Error("agent_usage_binding_invalid");
+  if (item.provider === "deepseek" || item.provider === "renderer" || item.imageCount !== 1) {
+    throw new Error("agent_usage_binding_invalid");
+  }
   return pricing.imageGeneration[item.provider];
 }
 
@@ -183,7 +185,7 @@ export function estimateProviderCostMicros(item: AgentUsageItem, rates: AgentPro
   if (item.kind === "vision_call") return rates.arkVisionMicrosPerCall;
   // html_render：容器内自有算力，无上游 provider 成本。
   if (item.kind === "html_render") return 0;
-  // deepseek 生图组合在 creditsForAgentUsage 已 fail closed，这里不会被触达。
-  if (item.provider === "deepseek") return 0;
-  return rates.imageMicrosPerImage[item.provider] ?? 0;
+  // deepseek/renderer 生图组合在 creditsForAgentUsage 已 fail closed，这里不会被触达。
+  if (item.provider === "deepseek" || item.provider === "renderer") return 0;
+  return rates.imageMicrosPerImage[item.provider];
 }

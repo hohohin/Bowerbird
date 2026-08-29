@@ -282,7 +282,8 @@ class HtmlRenderAdapter implements DurableToolAdapter<HtmlRenderDispatchRequest,
       } catch (error) {
         if (error instanceof DurableProviderError) throw error;
         if (error instanceof RendererTransportError) {
-          lastTransport = error;
+          // 保留首个可重试错误码（根因诊断），后续重试错误不覆盖。
+          lastTransport = lastTransport ?? error;
           if (attempt === 0) await new Promise<void>((resolve) => { setTimeout(() => resolve(), RETRY_DELAY_MS); });
           continue;
         }

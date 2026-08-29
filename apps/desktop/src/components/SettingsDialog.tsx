@@ -440,7 +440,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   ];
 
   const loggedIn = cloudAuth?.logged_in === true;
-  const accountName = cloudAuth?.email || cloudAuth?.user_id || "";
+  const accountName = cloudAuth?.display_name || cloudAuth?.email || cloudAuth?.user_id || "";
   const tier = cloudEntitlement?.tier?.toUpperCase() ?? "FREE";
   const balances = cloudEntitlement?.balances;
   const transactions = cloudEntitlement?.recent_transactions ?? [];

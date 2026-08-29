@@ -10,7 +10,7 @@ import type {
   ControlledFeedbackDiagnoser,
   ControlledRunnerCheckpoint,
 } from "../kernel/controlled-image-edit-runner.ts";
-import { loadControlledImageEditSkill } from "../skills/bowerbird-controlled-image-edit/loader.ts";
+import { BUILTIN_SKILL_REGISTRY } from "../skills/builtin-skill-registry.ts";
 import { validateControlledInput } from "../skills/bowerbird-controlled-image-edit/schemas.ts";
 import type { AgentRunContext, AgentRunProcessor } from "./runtime.ts";
 
@@ -156,11 +156,12 @@ export class ControlledImageEditRunProcessor implements AgentRunProcessor {
 
   async process(context: AgentRunContext): Promise<void> {
     const { run } = context.claimed;
-    if (run.skillId !== "bowerbird-controlled-image-edit") throw new Error("agent_skill_not_supported");
-    const skill = loadControlledImageEditSkill();
-    if (run.skillVersion !== skill.version) throw new Error("agent_skill_version_unavailable");
+    const registeredSkill = BUILTIN_SKILL_REGISTRY.resolve(run.skillId, run.skillVersion);
+    if (registeredSkill.runner !== "controlled-image-edit") throw new Error("agent_skill_runner_mismatch");
+    const skill = registeredSkill.bundle;
 
     const checkpoint = await context.control.loadControlledCheckpoint(context.claimed, skill.instructionHash);
+    if (checkpoint) BUILTIN_SKILL_REGISTRY.assertSnapshotCompatible(registeredSkill, checkpoint.schemaVersion);
     let input: ControlledImageEditInput | undefined;
     if (!checkpoint) {
       if (!context.claimed.inputUrl) throw new Error("agent_input_url_missing");

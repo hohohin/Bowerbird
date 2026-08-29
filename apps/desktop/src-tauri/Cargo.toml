@@ -76,6 +76,7 @@ axum = { version = "0.7", features = ["ws"] }
 
 # ID / 时间
 ulid = { version = "1", features = ["serde"] }
+uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 # Supabase PKCE + OS 原生凭据库（refresh token 不落 settings.json）
 sha2 = "0.10"

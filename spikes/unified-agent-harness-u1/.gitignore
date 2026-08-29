@@ -1,0 +1,8 @@
+sessions/
+attachments/
+spill/
+.anonymous-user-id
+.credentials.yaml
+settings.yaml
+profiles/bowerbird-u1/node_modules/
+profiles/bowerbird-u1/artifacts/

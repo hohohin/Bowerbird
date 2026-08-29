@@ -14,6 +14,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 | `dev-doc/ARCH-ADJUST-PLAN.md` | 收费化架构调整开发计划（账号 / 积分 / 托管 provider / 支付 / 门控，P0–P9 阶段任务卡 + 验收标准；agent 执行用） | 收费化 / 账号 / 积分 / 云端任何实现工作前必读 |
 | `dev-doc/ARCH-ADJUST-PROGRESS.md` | 收费化架构调整跨会话进度、部署状态、测试基线与剩余阻塞 | 接续收费化任务或核对线上状态时必读 |
 | `dev-doc/AGENT-RUNTIME-PLAN.md` | Bowerbird 内置 Skill Agent Runtime 开发计划（Agent Kernel / 有限澄清 / 项目视觉设定 / VPS Worker / Supabase / 方舟，A0–A8 + V0–V4） | Agent loop / 内置 Skill / 项目视觉设定 / VPS Worker / Agent 临时云工作区实现前必读 |
+| `dev-doc/UNIFIED-AGENT-HARNESS-PLAN.md` | **通用云端 Agent Harness 新专项**（一个 Agent + 多种受控工具；DSH + DeepSeek API Spike；Tool Gateway；HTML/小红书复用边界，U0–U6） | 新 Agent 能力、DSH/ACP、通用 Tool Gateway、HTML 智能编排、小红书或任何可能新增 Agent Runner 的工作前必读 |
 | `dev-doc/HTML-RENDER-PLAN.md` | 受限 HTML 离线排版、整页/切片截图、独立 renderer 容器与内置 Skill 接入开发计划（H0–H6） | HTML 排版/截图、Chromium/Playwright renderer、`render_html` 工具或第二个官方 Skill 实现前必读 |
 | `dev-doc/进展归档.md` | PROJECT.md「目前进展」历史里程碑全量归档（append-only 只进不改；PROJECT.md 只留最近 3 条） | 追溯旧里程碑 / 查历史实现细节时 |
 | `dev-doc/FRAMEWORK_ADJUST.md` | 为收费的架构调整清单（7 项，ARCH-ADJUST-PLAN.md 的依据） | 收费化架构溯源时 |

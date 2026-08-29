@@ -4,6 +4,7 @@ import {
   activeTier,
   agentAccessTestOnly,
   CONTROLLED_IMAGE_EDIT_SKILL,
+  HTML_LAYOUT_RENDER_SKILL,
   policyFor,
   policyForUser,
 } from "./feature-policy.ts";
@@ -48,9 +49,21 @@ Deno.test("A8 test-only access mode hides agent capability for unmarked accounts
   assertEquals(unmarked.can_use_byo, policyFor("pro").can_use_byo);
 
   const marked = policyForUser("free", { app_metadata: { bowerbird_test: true } }, { agentTestOnly: true });
-  assertEquals(marked, policyFor("free"));
+  assertEquals(marked.can_use_agent_runs, true);
+  assertEquals(marked.allowed_agent_skills, [CONTROLLED_IMAGE_EDIT_SKILL, HTML_LAYOUT_RENDER_SKILL]);
 
   const openMode = policyForUser("free", { app_metadata: {} }, { agentTestOnly: false });
   assertEquals(openMode.can_use_agent_runs, true);
   assertEquals(openMode.allowed_agent_skills, [CONTROLLED_IMAGE_EDIT_SKILL]);
+});
+
+Deno.test("H3 HTML layout skill is visible only to bowerbird_test accounts (POC test-only)", () => {
+  // 未标记账号：无论小名单模式与否，都看不到 HTML 排版 Skill。
+  const unmarkedOpen = policyForUser("pro", { app_metadata: {} }, { agentTestOnly: false });
+  assertEquals(unmarkedOpen.allowed_agent_skills.includes(HTML_LAYOUT_RENDER_SKILL), false);
+  // 标记账号：全量与小名单模式都追加 HTML 排版 Skill。
+  const markedOpen = policyForUser("pro", { app_metadata: { bowerbird_test: true } }, { agentTestOnly: false });
+  assertEquals(markedOpen.allowed_agent_skills.includes(HTML_LAYOUT_RENDER_SKILL), true);
+  // 档位本身（policyFor）不包含 HTML Skill——只有用户级策略按标记追加。
+  assertEquals(policyFor("pro").allowed_agent_skills.includes(HTML_LAYOUT_RENDER_SKILL), false);
 });

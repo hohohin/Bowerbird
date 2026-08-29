@@ -13,6 +13,9 @@ export const RENDER_LIMITS = {
   maxResourceBytes: 10 * 1024 * 1024,
   /** 全部资源总字节上限。 */
   maxResourcesTotalBytes: 20 * 1024 * 1024,
+  /** 单个资源图片的尺寸声明上限（解压炸弹防护，H5-T1）。 */
+  maxResourceImageSidePx: 32_768,
+  maxResourceImagePixels: 64 * 1024 * 1024,
   /** 视口 CSS 像素闭集范围。 */
   minViewportWidthCssPx: 320,
   maxViewportWidthCssPx: 2400,

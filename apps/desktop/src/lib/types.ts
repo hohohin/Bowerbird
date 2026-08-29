@@ -306,6 +306,9 @@ export interface AuthSnapshot {
   logged_in: boolean;
   user_id: string | null;
   email: string | null;
+  /** 微信登录的昵称/头像（user_metadata）；邮箱登录为 null。 */
+  display_name: string | null;
+  avatar_url: string | null;
   access_expires_at: string | null;
   reason: string | null;
 }
@@ -587,7 +590,8 @@ export interface CloudAgentArtifact {
   id: string;
   conversation_id: string;
   kind: string;
-  role: "input" | "control_reference" | "stage_result" | "final_result" | "plan";
+  role: "input" | "control_reference" | "stage_result" | "final_result" | "plan" |
+    "viewport_screenshot" | "full_page_screenshot" | "slice_screenshot";
   step_id?: string | null;
   parent_artifact_id?: string | null;
   mime: string;
@@ -629,6 +633,21 @@ export interface CloudAgentSnapshot {
   approvals: CloudAgentApproval[];
   clarifications?: CloudAgentClarification[];
   artifacts: CloudAgentArtifact[];
+  renderManifest?: {
+    schemaVersion: 1;
+    rendererFingerprint: string;
+    document: { widthCssPx: number; heightCssPx: number; widthDevicePx: number; heightDevicePx: number };
+    renderMs: number;
+    outputs: Array<{
+      artifactId: string;
+      role: "viewport_screenshot" | "full_page_screenshot" | "slice_screenshot";
+      index?: number;
+      clipDevicePx: { x: number; y: number; width: number; height: number };
+      mime: "image/png";
+      bytes: number;
+      sha256: string;
+    }>;
+  };
   /** 本地 CLI Run 停车 awaiting_local_task 时云端下发的待执行生图任务（其他时刻缺省）。 */
   pendingLocalTask?: {
     callId: string;
@@ -662,6 +681,20 @@ export interface CloudAgentPreview {
   path: string;
   mime: string;
   sha256: string;
+  role?: string;
+  index?: number;
+  width?: number;
+  height?: number;
+}
+
+export interface HtmlLayoutOptions {
+  viewportWidth: number;
+  viewportHeight: number;
+  deviceScaleFactor: 1 | 2;
+  captureMode: "viewport" | "full_page" | "full_page_and_slices";
+  sliceHeight?: number | null;
+  overlap?: number | null;
+  background: "opaque" | "transparent";
 }
 
 export type CodexChunk =

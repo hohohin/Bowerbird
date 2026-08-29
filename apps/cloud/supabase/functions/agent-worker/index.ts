@@ -18,7 +18,17 @@ import {
   checkedAgentObjectKey,
   storageListObjectKey,
 } from "../_shared/agent-content-ttl.ts";
+import {
+  canonicalUnifiedAgentPlanJson,
+  estimateUnifiedAgentPlanCredits,
+  hashUnifiedAgentPlan,
+  hashUnifiedAgentPlanArguments,
+  parseUnifiedAgentPlan,
+  type UnifiedAgentPlan,
+  type UnifiedAgentPlanEstimate,
+} from "../_shared/unified-agent-plan.ts";
 import { ApiError, errorResponse, jsonResponse, requestId, safeLog } from "../_shared/errors.ts";
+import { imageMetadata } from "../_shared/image-metadata.ts";
 import { corsHeaders } from "../_shared/limits.ts";
 
 const BUCKET = "agent-temp";
@@ -573,7 +583,7 @@ async function actionClaim(admin: SupabaseClient, workerId: string): Promise<Res
     checkpointKey ? signOrNull(admin, checkpointKey) : Promise.resolve(null),
     feedbackKey ? signOrNull(admin, feedbackKey) : Promise.resolve(null),
     admin.from("agent_artifacts")
-      .select("id,conversation_id,role,step_id,parent_artifact_id,object_key,mime,bytes,sha256,user_visible")
+      .select("id,conversation_id,role,step_id,parent_artifact_id,object_key,mime,bytes,sha256,width,height,user_visible")
       .eq("run_id", claimed.id)
       .is("deleted_at", null),
     admin.from("agent_clarifications")
@@ -593,6 +603,8 @@ async function actionClaim(admin: SupabaseClient, workerId: string): Promise<Res
     mime: artifact.mime as string,
     bytes: Number(artifact.bytes),
     sha256: artifact.sha256 as string,
+    width: artifact.width === null ? null : Number(artifact.width),
+    height: artifact.height === null ? null : Number(artifact.height),
     userVisible: artifact.user_visible !== false,
     url: await signOrNull(admin, artifact.object_key as string),
   })));
@@ -1038,62 +1050,169 @@ async function actionApprovalRequest(admin: SupabaseClient, body: Record<string,
     ? "controlled_image_edit_revision"
     : body.kind === "controlled_image_edit_plan"
       ? "controlled_image_edit_plan"
-      : "";
+      : body.kind === "unified_agent_plan"
+        ? "unified_agent_plan"
+        : "";
   const proposalHash = typeof body.proposalHash === "string" ? body.proposalHash : "";
-  const proposal = body.proposal;
-  const plannedToolCount = Number(body.plannedToolCount);
+  let proposal = body.proposal;
+  let plannedToolCount = Number(body.plannedToolCount);
   const workerEstimatedCredits = Number(body.estimatedAdditionalCredits ?? 0);
   if (!runId || !leaseId || !kind) throw new ApiError("invalid_request", "审批请求字段不完整");
   if (!/^[0-9a-f]{64}$/.test(proposalHash)) throw new ApiError("invalid_request", "proposal hash 无效");
-  if (!Number.isInteger(plannedToolCount) || plannedToolCount < 1 || plannedToolCount > 8) {
-    throw new ApiError("invalid_request", "计划工具数无效");
-  }
-  if (!Number.isInteger(workerEstimatedCredits) || workerEstimatedCredits < 0) {
-    throw new ApiError("invalid_request", "计划积分无效");
-  }
   if (!proposal || typeof proposal !== "object" || Array.isArray(proposal)) {
     throw new ApiError("invalid_request", "proposal 无效");
   }
-  const proposalSteps = (proposal as Record<string, unknown>).steps;
-  if (!Array.isArray(proposalSteps) || proposalSteps.length < 1 || proposalSteps.length > 8) {
-    throw new ApiError("invalid_request", "proposal steps 无效");
-  }
-  let proposalGenerateCalls = 0;
-  for (const rawStep of proposalSteps) {
-    const usage = rawStep && typeof rawStep === "object" && !Array.isArray(rawStep)
-      ? (rawStep as Record<string, unknown>).estimatedUsage
-      : null;
-    const row = usage && typeof usage === "object" && !Array.isArray(usage)
-      ? usage as Record<string, unknown>
-      : null;
-    if (!row || row.generateCalls !== 1 || row.understandCalls !== 0) {
-      throw new ApiError("invalid_request", "proposal usage 无效");
+
+  const unified = kind === "unified_agent_plan";
+  let unifiedPlan: UnifiedAgentPlan | null = null;
+  let sourceCallId: string | null = null;
+  let argsHash: string | null = null;
+  type ExistingUnifiedCall = {
+    id: string;
+    status: string;
+    kind: string;
+    proposal_hash: string;
+    planned_tool_count: number;
+    estimated_additional_credits: number;
+    args_hash: string;
+    cost_policy_version: number | null;
+  };
+  let existingUnifiedCall: ExistingUnifiedCall | null = null;
+  if (unified) {
+    if (Object.prototype.hasOwnProperty.call(body, "estimatedAdditionalCredits")) {
+      throw new ApiError("invalid_request", "通用计划积分只能由服务端计算");
     }
-    proposalGenerateCalls += 1;
+    try {
+      unifiedPlan = parseUnifiedAgentPlan(proposal);
+    } catch {
+      throw new ApiError("invalid_request", "通用计划 schema 无效");
+    }
+    proposal = unifiedPlan as unknown as Record<string, unknown>;
+    plannedToolCount = unifiedPlan.steps.length;
+    sourceCallId = typeof body.callId === "string" ? body.callId : "";
+    argsHash = typeof body.argsHash === "string" ? body.argsHash : "";
+    if (!/^[0-9a-f]{64}$/.test(sourceCallId) || !/^[0-9a-f]{64}$/.test(argsHash)) {
+      throw new ApiError("invalid_request", "通用计划调用身份无效");
+    }
+    const [expectedProposalHash, expectedArgsHash] = await Promise.all([
+      hashUnifiedAgentPlan(unifiedPlan),
+      hashUnifiedAgentPlanArguments(unifiedPlan),
+    ]);
+    if (proposalHash !== expectedProposalHash || argsHash !== expectedArgsHash) {
+      throw new ApiError("invalid_request", "通用计划 hash 不匹配", false, 409);
+    }
+    const existingResult = await admin.from("agent_approvals")
+      .select("id,status,kind,proposal_hash,planned_tool_count,estimated_additional_credits,args_hash,cost_policy_version")
+      .eq("run_id", runId).eq("source_call_id", sourceCallId).maybeSingle();
+    if (existingResult.error) throw new ApiError("internal_error", "审批调用身份读取失败", true);
+    existingUnifiedCall = existingResult.data as ExistingUnifiedCall | null;
+    if (existingUnifiedCall && (existingUnifiedCall.kind !== kind ||
+        existingUnifiedCall.proposal_hash !== proposalHash ||
+        existingUnifiedCall.planned_tool_count !== plannedToolCount ||
+        existingUnifiedCall.args_hash !== argsHash)) {
+      throw new ApiError("invalid_request", "审批调用参数发生漂移", false, 409);
+    }
+    if (existingUnifiedCall && existingUnifiedCall.status !== "pending") {
+      throw new ApiError("invalid_request", "审批调用已经结束", false, 409);
+    }
+    if (existingUnifiedCall) {
+      const parkedResult = await admin.from("agent_runs").select("*").eq("id", runId).maybeSingle();
+      if (parkedResult.error || !parkedResult.data) {
+        throw new ApiError("internal_error", "审批 Run 读取失败", true);
+      }
+      const parkedRun = parkedResult.data as unknown as RunRow;
+      if (parkedRun.status === "awaiting_approval" && parkedRun.lease_id === null) {
+        if (existingUnifiedCall.cost_policy_version !== 1 ||
+            !Number.isSafeInteger(existingUnifiedCall.estimated_additional_credits) ||
+            existingUnifiedCall.estimated_additional_credits < 0) {
+          throw new ApiError("internal_error", "审批权威估算无效", true);
+        }
+        return jsonResponse({
+          conversationId: parkedRun.conversation_id,
+          runId,
+          approvalId: existingUnifiedCall.id,
+          proposalHash,
+          status: "awaiting_approval",
+          estimatedAdditionalCredits: existingUnifiedCall.estimated_additional_credits,
+          estimateBreakdown: null,
+          reused: true,
+        });
+      }
+    }
+  } else {
+    if (!Number.isInteger(plannedToolCount) || plannedToolCount < 1 || plannedToolCount > 8) {
+      throw new ApiError("invalid_request", "计划工具数无效");
+    }
+    if (!Number.isInteger(workerEstimatedCredits) || workerEstimatedCredits < 0) {
+      throw new ApiError("invalid_request", "计划积分无效");
+    }
+    const proposalSteps = (proposal as Record<string, unknown>).steps;
+    if (!Array.isArray(proposalSteps) || proposalSteps.length < 1 || proposalSteps.length > 8) {
+      throw new ApiError("invalid_request", "proposal steps 无效");
+    }
+    let proposalGenerateCalls = 0;
+    for (const rawStep of proposalSteps) {
+      const usage = rawStep && typeof rawStep === "object" && !Array.isArray(rawStep)
+        ? (rawStep as Record<string, unknown>).estimatedUsage
+        : null;
+      const row = usage && typeof usage === "object" && !Array.isArray(usage)
+        ? usage as Record<string, unknown>
+        : null;
+      if (!row || row.generateCalls !== 1 || row.understandCalls !== 0) {
+        throw new ApiError("invalid_request", "proposal usage 无效");
+      }
+      proposalGenerateCalls += 1;
+    }
+    if (proposalGenerateCalls !== plannedToolCount) {
+      throw new ApiError("invalid_request", "proposal 工具数与计划不一致", false, 409);
+    }
   }
-  if (proposalGenerateCalls !== plannedToolCount) {
-    throw new ApiError("invalid_request", "proposal 工具数与计划不一致", false, 409);
-  }
+
   const run = await assertLease(admin, runId, leaseId);
   const pricing = await loadUsagePricing(admin, run.pricing_version);
   const imageProvider = expectedImageProvider(run);
-  const imageCredits = creditsForAgentUsage({
-    callId: "planned",
-    kind: "image_generation",
-    provider: imageProvider,
-    model: "planned-image-generation",
-    inputUnits: 0,
-    outputUnits: 0,
-    imageCount: 1,
-  }, pricing);
-  const estimatedCredits = plannedToolCount * imageCredits;
+  let estimateBreakdown: UnifiedAgentPlanEstimate | null = null;
+  let estimatedCredits: number;
+  if (unifiedPlan) {
+    const assetIds = [...new Set(unifiedPlan.steps.flatMap((step) => step.inputAssetIds))];
+    if (assetIds.length) {
+      const { data: assets, error: assetsError } = await admin.from("agent_artifacts")
+        .select("id").eq("run_id", runId).in("id", assetIds).is("deleted_at", null);
+      if (assetsError) throw new ApiError("internal_error", "计划素材归属校验失败", true);
+      if ((assets ?? []).length !== assetIds.length) {
+        throw new ApiError("invalid_request", "计划引用了非本 Run 素材", false, 409);
+      }
+    }
+    try {
+      estimateBreakdown = estimateUnifiedAgentPlanCredits(unifiedPlan, pricing, imageProvider);
+    } catch {
+      throw new ApiError("internal_error", "通用计划成本估算失败", true);
+    }
+    estimatedCredits = estimateBreakdown.totalCredits;
+  } else {
+    const imageCredits = creditsForAgentUsage({
+      callId: "planned",
+      kind: "image_generation",
+      provider: imageProvider,
+      model: "planned-image-generation",
+      inputUnits: 0,
+      outputUnits: 0,
+      imageCount: 1,
+    }, pricing);
+    estimatedCredits = plannedToolCount * imageCredits;
+  }
   const spent = await spentCredits(admin, runId);
   if (spent + estimatedCredits > run.budget_credits) {
     throw new ApiError("insufficient_credits", "计划超过 Run 剩余预算", false, 402);
   }
-  const encoded = new TextEncoder().encode(JSON.stringify(proposal));
+  const encoded = new TextEncoder().encode(unifiedPlan
+    ? canonicalUnifiedAgentPlanJson(unifiedPlan)
+    : JSON.stringify(proposal));
   if (encoded.byteLength > 64 * 1024) throw new ApiError("invalid_request", "proposal 过大");
   const objectKey = `runs/${runId}/plans/${proposalHash}.json`;
+  if (existingUnifiedCall && existingUnifiedCall.estimated_additional_credits !== estimatedCredits) {
+    throw new ApiError("invalid_request", "审批调用参数发生漂移", false, 409);
+  }
   const { error: uploadError } = await admin.storage.from(BUCKET).upload(objectKey, encoded, {
     contentType: "application/json",
     upsert: false,
@@ -1102,14 +1221,16 @@ async function actionApprovalRequest(admin: SupabaseClient, body: Record<string,
     throw new ApiError("internal_error", "计划保存失败", true);
   }
   const { data: pending, error: pendingError } = await admin.from("agent_approvals")
-    .select("id,kind,proposal_hash,planned_tool_count,estimated_additional_credits")
+    .select("id,kind,proposal_hash,planned_tool_count,estimated_additional_credits,source_call_id,args_hash")
     .eq("run_id", runId).eq("status", "pending").maybeSingle();
   if (pendingError) throw new ApiError("internal_error", "审批读取失败", true);
   if (pending && (pending.kind !== kind || pending.proposal_hash !== proposalHash ||
-      pending.planned_tool_count !== plannedToolCount || pending.estimated_additional_credits !== estimatedCredits)) {
+      pending.planned_tool_count !== plannedToolCount || pending.estimated_additional_credits !== estimatedCredits ||
+      pending.source_call_id !== sourceCallId || pending.args_hash !== argsHash)) {
     throw new ApiError("invalid_request", "当前已有不同的待审批计划", false, 409);
   }
   let approval = pending as { id: string } | null;
+  const reused = Boolean(approval);
   if (!approval) {
     const inserted = await admin.from("agent_approvals").insert({
       run_id: runId,
@@ -1118,6 +1239,9 @@ async function actionApprovalRequest(admin: SupabaseClient, body: Record<string,
       proposal_hash: proposalHash,
       planned_tool_count: plannedToolCount,
       estimated_additional_credits: estimatedCredits,
+      source_call_id: sourceCallId,
+      args_hash: argsHash,
+      cost_policy_version: estimateBreakdown?.policyVersion ?? null,
       status: "pending",
       expires_at: new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
     }).select("id").single();
@@ -1136,6 +1260,9 @@ async function actionApprovalRequest(admin: SupabaseClient, body: Record<string,
     approvalId: approval.id,
     proposalHash,
     status: "awaiting_approval",
+    estimatedAdditionalCredits: estimatedCredits,
+    estimateBreakdown,
+    reused,
   });
 }
 
@@ -1255,15 +1382,6 @@ const RENDER_OUTPUT_ARTIFACT_ROLES = new Set(["render_manifest", "viewport_scree
 const RENDER_ARTIFACT_ROLES = new Set(["html_document", ...RENDER_OUTPUT_ARTIFACT_ROLES]);
 const USER_VISIBLE_RENDER_ARTIFACT_ROLES = new Set(["viewport_screenshot", "full_page_screenshot", "slice_screenshot"]);
 
-function actualImageMime(bytes: Uint8Array): ArtifactFields["mime"] | null {
-  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47 &&
-      bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a) return "image/png";
-  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
-  if (bytes.length >= 12 && new TextDecoder().decode(bytes.slice(0, 4)) === "RIFF" &&
-      new TextDecoder().decode(bytes.slice(8, 12)) === "WEBP") return "image/webp";
-  return null;
-}
-
 function artifactFields(body: Record<string, unknown>): ArtifactFields {
   const runId = typeof body.runId === "string" ? body.runId : "";
   const leaseId = typeof body.leaseId === "string" ? body.leaseId : "";
@@ -1340,7 +1458,8 @@ async function actionArtifact(admin: SupabaseClient, body: Record<string, unknow
   const object = await admin.storage.from(BUCKET).download(objectKey);
   if (object.error || !object.data) throw new ApiError("invalid_request", "artifact 对象不存在", false, 409);
   const objectBytes = new Uint8Array(await object.data.arrayBuffer());
-  let contentValid = actualImageMime(objectBytes) === mime;
+  const metadata = imageMetadata(objectBytes);
+  let contentValid = metadata?.mime === mime;
   if (mime === "application/json") {
     try {
       const parsed = JSON.parse(new TextDecoder().decode(objectBytes));
@@ -1366,7 +1485,7 @@ async function actionArtifact(admin: SupabaseClient, body: Record<string, unknow
     if (!parent) throw new ApiError("invalid_request", "artifact parent 不属于当前 Run");
   }
   const { data: existing, error: existingError } = await admin.from("agent_artifacts")
-    .select("id,conversation_id,role,step_id,parent_artifact_id,object_key,mime,bytes,sha256,user_visible")
+    .select("id,conversation_id,role,step_id,parent_artifact_id,object_key,mime,bytes,sha256,width,height,user_visible")
     .eq("run_id", runId).eq("source_call_id", fields.callId).eq("object_key", objectKey).maybeSingle();
   if (existingError) throw new ApiError("internal_error", "artifact 幂等读取失败", true);
   if (existing) {
@@ -1379,6 +1498,8 @@ async function actionArtifact(admin: SupabaseClient, body: Record<string, unknow
       conversationId: run.conversation_id, runId, artifactId: existing.id, role,
       stepId: existing.step_id, parentArtifactId: existing.parent_artifact_id,
       mime: existing.mime, bytes: Number(existing.bytes), sha256: existing.sha256,
+      width: existing.width === null ? null : Number(existing.width),
+      height: existing.height === null ? null : Number(existing.height),
       userVisible: existing.user_visible !== false, objectKey, reused: true,
     });
   }
@@ -1409,6 +1530,8 @@ async function actionArtifact(admin: SupabaseClient, body: Record<string, unknow
     mime: mime.slice(0, 120),
     bytes,
     sha256,
+    width: metadata?.width ?? null,
+    height: metadata?.height ?? null,
     source_call_id: fields.callId,
     parent_artifact_id: parentArtifactId,
     user_visible: fields.userVisible,
@@ -1418,6 +1541,7 @@ async function actionArtifact(admin: SupabaseClient, body: Record<string, unknow
   return jsonResponse({
     conversationId: run.conversation_id, runId, artifactId: artifact.id, role,
     stepId: fields.stepId, parentArtifactId, mime, bytes, sha256,
+    width: metadata?.width ?? null, height: metadata?.height ?? null,
     userVisible: fields.userVisible, objectKey, reused: false,
   });
 }
@@ -1431,7 +1555,7 @@ async function actionArtifactGet(admin: SupabaseClient, body: Record<string, unk
   if (outputName !== null && !/^[a-z0-9-]{1,40}$/.test(outputName)) throw new ApiError("invalid_request", "artifact 输出名无效");
   await assertLease(admin, runId, leaseId);
   let query = admin.from("agent_artifacts")
-    .select("id,conversation_id,role,step_id,parent_artifact_id,object_key,mime,bytes,sha256,user_visible")
+    .select("id,conversation_id,role,step_id,parent_artifact_id,object_key,mime,bytes,sha256,width,height,user_visible")
     .eq("run_id", runId).eq("source_call_id", callId);
   // render_html 一次 call 产出 manifest/full/slice-XXXX 多输出：outputName 判别后仍保证单行。
   if (outputName) query = query.like("object_key", `%-${outputName}.%`);
@@ -1450,6 +1574,8 @@ async function actionArtifactGet(admin: SupabaseClient, body: Record<string, unk
     mime: artifact.mime,
     bytes: Number(artifact.bytes),
     sha256: artifact.sha256,
+    width: artifact.width === null ? null : Number(artifact.width),
+    height: artifact.height === null ? null : Number(artifact.height),
     userVisible: artifact.user_visible !== false,
     objectKey: artifact.object_key,
     url,
@@ -1613,13 +1739,16 @@ async function actionAwaitResultFeedback(admin: SupabaseClient, body: Record<str
   const runId = typeof body.runId === "string" ? body.runId : "";
   const leaseId = typeof body.leaseId === "string" ? body.leaseId : "";
   if (!runId || !leaseId) throw new ApiError("invalid_request", "缺少 runId/leaseId");
-  await assertLease(admin, runId, leaseId);
+  const run = await assertLease(admin, runId, leaseId);
+  const resultRoles = run.skill_id === "bowerbird-html-layout-render"
+    ? ["viewport_screenshot", "full_page_screenshot"]
+    : ["final_result"];
   const { count, error } = await admin.from("agent_artifacts")
     .select("id", { count: "exact", head: true })
     .eq("run_id", runId)
-    .eq("role", "final_result");
+    .in("role", resultRoles);
   if (error) throw new ApiError("internal_error", "最终产物校验失败", true);
-  if (count !== 1) throw new ApiError("invalid_request", "等待反馈前必须恰有一个最终产物", false, 409);
+  if (count !== 1) throw new ApiError("invalid_request", "等待反馈前必须恰有一个主产物", false, 409);
   const transitioned = await transitionRun(admin, {
     p_run_id: runId,
     p_lease_id: leaseId,

@@ -50,3 +50,8 @@ inspector_port = 8083
 # the provider signature itself before applying any order state transition.
 [functions.payment-webhook]
 verify_jwt = false
+
+# WeChat login arrives with a one-time WeChat code, not a Supabase token. The function
+# shape-checks code/state itself and is the only holder of WECHAT_APP_SECRET.
+[functions.wechat-login]
+verify_jwt = false

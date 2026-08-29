@@ -1,0 +1,218 @@
+# U1 profile: retain only the model/session/agent-loop seams needed to inspect
+# ACP. Installed packages are not capabilities: every dangerous base row is
+# disabled here and verified against the fully composed dump.
+
+- id: hmr
+  disabled: true
+
+- id: session-title
+  disabled: true
+
+- id: session-title-llm
+  disabled: true
+
+- id: user-questions
+  disabled: true
+
+- id: jobs
+  disabled: true
+
+- id: settings
+  disabled: true
+
+# Avoid the base credential plugin's project/user .env fallback. The adapter
+# may receive only DEEPSEEK_API_KEY through the parent process whitelist.
+- id: credentials
+  disabled: true
+
+- id: llm-pi-ai
+  disabled: true
+
+- id: session-query-sqlite
+  disabled: true
+
+- id: session-projection
+  disabled: true
+
+- id: session-telemetry-otel
+  disabled: true
+
+- id: subprocess
+  disabled: true
+
+- id: sandbox
+  disabled: true
+
+- id: sandbox-policy
+  disabled: true
+
+- id: bash-sandbox
+  disabled: true
+
+- id: pwsh-sandbox
+  disabled: true
+
+- id: permission
+  disabled: true
+
+- id: shell-env
+  disabled: true
+
+- id: tool-bash
+  disabled: true
+
+- id: tool-pwsh
+  disabled: true
+
+- id: tool-jobs
+  disabled: true
+
+- id: fs-observation-policy
+  disabled: true
+
+- id: tool-fs
+  disabled: true
+
+- id: tool-fs-search
+  disabled: true
+
+- id: agent-instructions
+  disabled: true
+
+- id: skill
+  disabled: true
+
+- id: skill-filesystem
+  disabled: true
+
+- id: skill-badge
+  disabled: true
+
+- id: tool-skill
+  disabled: true
+
+- id: commands
+  disabled: true
+
+- id: command-feedback
+  disabled: true
+
+- id: goal
+  disabled: true
+
+- id: goal-round-driver
+  disabled: true
+
+- id: command-goal
+  disabled: true
+
+- id: plan-mode
+  disabled: true
+
+- id: command-compact
+  disabled: true
+
+- id: subagent
+  disabled: true
+
+- id: subagent-spawn-in-process
+  disabled: true
+
+- id: subagent-fork-in-process
+  disabled: true
+
+- id: tool-subagent-control
+  disabled: true
+
+- id: tool-subagent-list-agents
+  disabled: true
+
+- id: tool-subagent
+  disabled: true
+
+- id: tool-subagent-fork
+  disabled: true
+
+- id: tool-subagent-report
+  disabled: true
+
+- id: workflow-worker-thread
+  disabled: true
+
+- id: tool-workflow
+  disabled: true
+
+- id: tool-todo
+  disabled: true
+
+- id: tool-goal
+  disabled: true
+
+- id: tool-ralph
+  disabled: true
+
+- id: tool-str-replace-editor
+  disabled: true
+
+- id: repeat-tool-reminder
+  disabled: true
+
+- id: web
+  disabled: true
+
+- id: web-search-deepseek
+  disabled: true
+
+- id: tool-web
+  disabled: true
+
+- id: fs-sandbox
+  disabled: true
+
+- id: system-prompt
+  config:
+    persona: >-
+      You are the isolated Bowerbird U1 harness compatibility probe. Use only
+      explicitly registered Bowerbird test tools. When asked to verify the U1
+      tool loop, you must call u1_record_observation exactly once before
+      answering, then reproduce the proof returned by that tool verbatim.
+      Never claim access to files, shell, web, subprocesses, plugins, skills,
+      or other agents.
+
+- id: llm-deepseek
+  config:
+    apiKeyEnv: DEEPSEEK_API_KEY
+    thinking: disabled
+    reasoningEffort: off
+    maxTokens: 512
+    streamIdleTimeoutMs: 60000
+    models:
+      - id: deepseek-v4-flash
+        name: DeepSeek-V4-Flash
+        contextWindow: 1000000
+        maxTokens: 4096
+      - id: deepseek-v4-pro
+        name: DeepSeek-V4-Pro
+        contextWindow: 1000000
+        maxTokens: 4096
+      - id: deepseek-v4-flash-vision-exp
+        name: DeepSeek-V4-Flash-Vision-Exp
+        contextWindow: 1000000
+        maxTokens: 4096
+        inputModalities: [text, image]
+        imagePixelBudget: 640000
+        imageMaxBytes: 1048576
+
+- id: approval
+  config:
+    policy: never
+
+- insert:
+    - id: u1-fixture-tool
+      name: './plugins/u1-fixture-tool.mjs'
+
+    - id: acp
+      name: '@deepseek-ai/dsh-acp'
+      config:
+        provider: deepseek-official
+        model: deepseek-v4-flash

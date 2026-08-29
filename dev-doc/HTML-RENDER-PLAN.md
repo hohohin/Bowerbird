@@ -1,10 +1,11 @@
 # Bowerbird 受限 HTML 离线排版与截图开发计划
 
-> 版本：v1.2  
-> 日期：2026-08-27  
-> 状态：决策已冻结；**H0-T1（代码侧）+ H1 已完成并本地测试通过（apps/html-renderer）**；**H2 已完成（本地代码 + 测试；migration `0044` 与 agent-worker Edge 改动已写、待部署远端）**；H0-T2~T5 容器实机验证待 VPS；H3–H6 未开始  
+> 版本：v1.4
+> 日期：2026-08-28
+> 状态：决策已冻结；**H0–H5 已完成，H6 test-only 观察已开始**：renderer/Worker、migration `0044`–`0046`、Edge 与桌面链路均已完成生产验收；H6 无内容观察报告已上线，首批开发/验收历史样本已形成基线，renderer `0.1.1` 生产指纹 `bwr1-c0ee5722787c038aa560e4a5cbb54df2`；当前不扩大开放、不调整计费，下一步只积累 H5 验收之后的测试名单样本并完成人工 UX 判断
 > 适用范围：Bowerbird VPS Worker、Bowerbird Agent Kernel、官方内置 Skill、桌面 Agent 会话  
-> 依赖文档：[`PROJECT.md`](../PROJECT.md)、[`AGENT-RUNTIME-PLAN.md`](AGENT-RUNTIME-PLAN.md)
+> 依赖文档：[`PROJECT.md`](../PROJECT.md)、[`AGENT-RUNTIME-PLAN.md`](AGENT-RUNTIME-PLAN.md)、[`UNIFIED-AGENT-HARNESS-PLAN.md`](UNIFIED-AGENT-HARNESS-PLAN.md)
+> **2026-08-28 后续架构边界：** 本文件继续作为离线 renderer、安全容器、HTML/CSS 契约、整页/切片和旧 HTML Skill 行为的实现权威；“理解产品图、使用视觉设定、生成缺图、视觉检查与修订”不继续堆入旧 Runner，而在通用云端 Agent Harness 的 U3 纵切中实现。renderer 仍是确定性工具，不演化为浏览器 Agent。
 
 ---
 
@@ -461,7 +462,7 @@ renderer 是 Worker 内部确定性工具服务，不成为新的用户身份或
 
 ### H0 — 契约与 Chromium 沙箱 spike
 
-> 状态（2026-08-27）：T1 代码侧完成——`apps/html-renderer` 的 Dockerfile（node:24-bookworm-slim + playwright 1.62.1 钉版 Chromium + Noto CJK 字体 + 非 root + build-info 烙印）、`compose.renderer.yml`（internal 网络、无端口、read-only rootfs、cap_drop ALL、资源/PID/日志上限、healthcheck）、`.env.renderer.example` 与 renderer fingerprint 机制均已落库。T2–T5 需 Linux Docker/VPS，本机（Windows、无 Docker）无法执行，**未验证**。
+> 状态（2026-08-28）：**T1–T5 完成并通过生产 VPS 实机验收**。实机为 2 vCPU / 1.9 GiB RAM（另有 1.9 GiB swap）；renderer 指纹 `bwr1-233f992b4266eadcfcadea7979149e0a`（Chromium 151.0.7922.34 / Playwright 1.62.1）；与 Worker 仅连 `bowerbird-internal` internal network，无 host port/公网出口。renderer 为非 root + read-only rootfs + `cap_drop: ALL` + `no-new-privileges` + 定制 Playwright seccomp，代码显式 `chromiumSandbox:true`，实机进程无 `--no-sandbox`。20 fixture ×5 = 100/100、0 failed；wall p50 886ms / p95 1,338ms / max 1,509ms，峰值约 383MiB、67.61% CPU、71 PIDs；Worker 心跳/四循环正常。生产控制面真实 Run `6b8251dd-1bf1-490e-96c0-ff2099d0748e` succeeded（整页 1 + 切片 2、Vision 0、render usage 0、总积分 1）。
 
 **目标**：在改控制面前验证当前 VPS 能稳定运行真正断网、非 root 的 Chromium，并冻结 v1 边界。
 
@@ -482,7 +483,7 @@ renderer 是 Worker 内部确定性工具服务，不成为新的用户身份或
 > - 浏览器层（§5.1）：全请求拦截只放行两个虚拟 origin（`src/route-policy.ts`）；`javaScriptEnabled:false` + 封闭 CSP + reducedMotion；无自定义字体，故不依赖 `document.fonts.ready`；布局稳定用 CDP `Page.getLayoutMetrics` 三次采样（不依赖页面 JS）。
 > - PNG：自研纯 stdlib 编解码/裁切（`src/png.ts`，bit depth 8、非隔行、colorType 0/2/4/6，逐 chunk CRC 校验；编码固定 filter 0 + zlib level 6）。
 > - 服务（H1-T1/T5）：内部 HTTP + Bearer 共享 secret（timing-safe）+ 并发 1/等待 1 队列 + 请求体上限 + `/healthz`；日志仅 requestId/时长/字节/稳定码；启动 orphan cleanup + 优雅退出。
-> 局限（待 H0/H5 容器级补证）：断网、非 root、只读 rootfs、sandbox、容量与 100 次连跑属容器/部署层验证；本地 e2e 在 Windows + 回退 Chromium（见 PROJECT.md 踩坑）实跑，生产容器内为钉版 revision。
+> 容器级补证（2026-08-28）：H0 已在生产 VPS 完成断网、非 root、只读 rootfs、sandbox、容量与 100 次连跑；H5 仍负责更长观察期、故障注入矩阵与发布门槛。
 
 **目标**：完成不依赖 Kernel/Skill 的确定性内部渲染服务。
 
@@ -500,7 +501,7 @@ renderer 是 Worker 内部确定性工具服务，不成为新的用户身份或
 > - **T1 契约**：`apps/agent-worker/src/contracts/render-html.ts`（模型可提交输入闭集 + wire 镜像 + `RenderHtmlResultV1`）；`GLOBAL_TOOL_REGISTRY` 新增 `render_html`（kind `renderer`，argumentSchema 无 URL/路径/命令字段）；费率 0 积分。
 > - **T3 门控**：PolicyEngine 通用规则——`render_html` 仅当 Skill manifest 当前 phase 的 `allowedActions` 显式包含才放行（现役 controlled-image-edit 全 phase 拒绝，fail closed）；跨 Run 守卫/预算/幂等 call_id 复用沿用既有管线。
 > - **T2/T4 执行器**：`src/providers/renderer/html-render-executor.ts`——workspace 读 html_document/资源（归属闭集，跨 Run 在 renderer 之前被拒）→ 内部请求（Bearer 共享 secret）→ 复核回显字段 + PNG 签名/IHDR 尺寸/sha/字节 → 上传 manifest + 全部 PNG（同 call 多输出）→ 技术 usage。恢复语义按 §6.1：succeeded 从 manifest artifact 重建（hash 复核）；提交后丢失/崩溃先查 ledger，缺失时**同 call id 确定性重算**（内容寻址幂等，不重复计量）；可重试错误单次有界重试后 outcome_unknown 停车。测试覆盖 kill-after-render/跨进程重算/renderer 连杀/稳定 400 终态/echo 不符 fail closed。
-> - **T5 控制面**：`agent_artifacts` 新 5 角色；保留表级 `(run_id, object_key)` 幂等唯一性，仅对 4 类 renderer 多输出角色放宽 `(run_id, source_call_id)`，legacy 与 html_document 仍是一 call 一产物（**migration `0044` 已写待部署**）；Edge `agent-worker` 支持 `outputName`/role 精确配对与 `render_html` 工具归属校验（prepare/幂等/get）、role 专属 mime/限额/TTL（html_document=text/html≤2MiB、render_manifest=json、截图=png）、text/html 严格 UTF-8 内容校验；usage CHECK 新增 kind `html_render` / provider `renderer`（可选计价块默认 0 积分，向后兼容旧费率行）——**Edge/迁移部署与 `agent_runtime.sql` 远端重跑待执行**。
+> - **T5 控制面**：`agent_artifacts` 新 5 角色；保留表级 `(run_id, object_key)` 幂等唯一性，仅对 4 类 renderer 多输出角色放宽 `(run_id, source_call_id)`，legacy 与 html_document 仍是一 call 一产物（migration `0044` 已部署）；Edge `agent-worker` 支持 `outputName`/role 精确配对与 `render_html` 工具归属校验（prepare/幂等/get）、role 专属 mime/限额/TTL（html_document=text/html≤2MiB、render_manifest=json、截图=png）、text/html 严格 UTF-8 内容校验；usage CHECK 新增 kind `html_render` / provider `renderer`（0 积分）。H0 真实 Run 又补 `0046`，使停车与原子结算按 HTML viewport/full-page 主产物角色验收；远端 `agent_runtime.sql` 29/29。
 > - 消费循环（cloud-agent main）与 Skill/桌面接线归 H3/H4；`RENDERER_URL`/`RENDER_INTERNAL_TOKEN` env 在 H0 部署时注入 Worker 容器。
 
 **目标**：把 renderer 接入现有 Agent 工具生命周期，而不赋予模型浏览器能力。
@@ -515,6 +516,12 @@ renderer 是 Worker 内部确定性工具服务，不成为新的用户身份或
 
 ### H3 — 最小多 Skill 注册与 HTML 排版 Skill
 
+> 状态（2026-08-28）：**T1–T6 完成并已随 H0/H4 修正部署生产 VPS**（agent-worker **191/191** + tsc；生产控制面带显式参考图的真实 Run succeeded）。
+> - **T4 完成**：`runner.ts` 纯 Kernel 引擎（checkpoint codec 同 controlled 纪律；`pendingCompose` 先钉 action 再执行副作用，崩溃恢复 argsHash 稳定不重复模型回合）+ `html-layout-run-processor.ts`（compose 经 DurableToolDispatcher 落 html_document artifact；render 接 H2 HtmlRenderExecutor；RENDERER 未配置 fail closed；输入引用与 claim 逐项复核）+ `SkillDispatchProcessor` 按 runner 分派 + main.ts 接线。awaiting_user_review 复用 await_result_feedback（accept → exporting → succeeded）；放弃走 cancel 信号 → cancelled 正常结算。
+> - **T5 完成**：runner 测试 8 项——唯一模型回合/唯一 render/等待期间无自动推进/accept/discard/崩溃恢复不重复回合/render ≤1 不变量（codec 层拒绝篡改）/retry fail closed/Vision 与生图在本 Skill 全 phase 被 PolicyEngine 拒绝。**PolicyEngine 的 understand_image/generate_image/inspect_generated_image/render_html phase 门控由 controlled 专用泛化为全局规则**（Skill 未声明即拒绝）。
+> - **T6 完成**：`_shared/feature-policy.ts` HTML Skill 仅对 `bowerbird_test` 标记账号追加（POC test-only）；agent-run Edge allowlist + `agent_html_layout_render` 预算档（migration `0045` 已应用远端，15 积分覆盖 DeepSeek 文本回合，渲染 0 积分）+ minInputs=0；agent-run/agent-worker Edge 已重部署；agent_runtime.sql 远端 29/29。桌面可见入口归 H4。
+> VPS Worker 已随 H0 完成 renderer 容器、Worker env（RENDERER_URL/RENDER_INTERNAL_TOKEN）与镜像部署；真实 Run 已证明 compose/render/停车/接受/结算全链路。
+
 **目标**：用第二个真实 Skill 完成最小注册机制，不建设通用 Skill 平台。
 
 - H3-T1：把单 Skill 专用加载演进为显式 `BuiltinSkillRegistry`，保留 bundle hash、版本和 snapshot 兼容校验。
@@ -528,17 +535,29 @@ renderer 是 Worker 内部确定性工具服务，不成为新的用户身份或
 
 ### H4 — 桌面会话与本地入库
 
+> 状态（2026-08-28）：**T1–T5 实现完成**。创作板入口只对 FeaturePolicy 返回 HTML Skill 的 test-only 账号可见；桌面支持视口、DPR、整页/切片和背景规格，显式参考图生成并上传 hash-bound manifest；会话时间线展示 compose/render/review，整页与切片按 `render_manifest` 顺序展示并在下载时校验 SHA-256、MIME 与实际像素尺寸；接受后以同一 `conversation_id` 幂等入库并可在部分失败后补齐，放弃不入库，HTML 不开放 retry/Vision/自动修订。
+>
+> 控制面同步补齐 HTML 输入 manifest/引用 artifact 严格校验、私有 `render_manifest` 回读和截图 artifact 签名下载；修复 compose 模型此前看不到必须原样回显的输入 artifact UUID。生产 Run `72e2aad4-f1fb-4030-a56b-fcf9c0405040` 已用一张显式 PNG 参考图通过 `create → upload manifest/reference → compose → render → awaiting feedback → accept → succeeded`，产出 1 张整页 + 2 张切片，实际结算 1 积分，Vision/生图 usage 为 0；重复 accept 与 HTML retry 均返回 409。桌面真机人工连续性验收仍归 H5-T5。
+
 **目标**：让用户无需理解 HTML renderer 即可发起、查看和保存结果。
 
-- H4-T1：增加 HTML 排版 Skill 入口、结构化输出规格和显式素材选择。
-- H4-T2：复用 Agent 会话时间线展示 compose/render/awaiting review 事件。
-- H4-T3：实现整页图和切片组查看、序号/尺寸展示、下载 SHA-256/MIME/尺寸校验。
-- H4-T4：接受后按 `conversation_id + artifact role + slice index` 幂等组图入库；放弃不入库。
-- H4-T5：实现重启恢复、云端过期、本地已入库、部分下载失败和重复接受场景。
+- [x] H4-T1：增加 HTML 排版 Skill 入口、结构化输出规格和显式素材选择。
+- [x] H4-T2：复用 Agent 会话时间线展示 compose/render/awaiting review 事件。
+- [x] H4-T3：实现整页图和切片组查看、序号/尺寸展示、下载 SHA-256/MIME/尺寸校验。
+- [x] H4-T4：接受后按 `conversation_id + artifact role + slice index` 幂等组图入库；放弃不入库。
+- [x] H4-T5：实现重启恢复、云端过期、本地已入库、部分下载失败和重复接受场景。
 
 验收：用户可完整完成一次整页+切片任务；界面没有 Vision、自评、自动修订或网页访问入口。
 
 ### H5 — 安全、容量与生产 E2E
+
+> 状态（2026-08-28）：**T1–T5 全部完成**（T1/T3/T4 本机；T2/T5 VPS 实跑；完整生产 E2E 审计通过）。
+> - **T1 完成**：`security-matrix.test.ts` 全向量矩阵（公网/协议相对/localhost/IPv6 回环/私网/AWS+GCP 元数据/DNS/非 http scheme/meta refresh/base href/iframe/script/事件属性/svg/object/超大 data URI/契约层 URL·路径·key 注入/PNG 解压炸弹）30+ 向量全部在确定性层（sanitizer/契约/路由/资源防护）fail closed；新增**资源尺寸声明防护**（`image-dimensions.ts`：PNG IHDR/JPEG SOF/WebP VP8X·VP8L·VP8 头，单边 ≤32768 且 ≤64MP，解析失败即拒）堵住「小文件大画布」解压炸弹。
+> - **T4 完成**：`metrics.ts` 无内容指标（渲染计数、按稳定错误码的失败分布、p50/p95/max 时延、256 样本窗口、超时预算外计数）进 `/healthz`；超限率可由错误码计数（too_large/capacity_busy）直接派生。
+> - **T3 完成**：renderer 429/503 → 单次有界重试（保留首个错误码）→ outcome_unknown 停车 → 重 claim 确定性重算成功；崩溃/连接丢失/renderer kill 恢复语义沿用 H2；双 Worker 竞争、容器资源上限与重启恢复已在 H0/H5 VPS 验收覆盖。
+> - **T2 实跑通过（2026-08-28 VPS）**：`verify-container.mjs` **12/12 全绿**——非 root、无业务 secret、**公网 fetch 全部失败（断网实证）**、只读 rootfs（`docker cp` 被拒亦为直接证据）、tmpfs /tmp、无宿主 bind、无 docker.sock、**Chromium 进程无 --no-sandbox**、healthz+fingerprint+metrics 形状。运行期修复：挂载选项逗号分隔的 `ro` 正则。原始脚本（镜像内）走 `docker compose exec`；只读容器更新脚本用 stdin→/tmp 注入法（README）。`scripts/verify-container.mjs` 镜像内自检（非 root、无业务 secret、公网 fetch 必须失败、只读 rootfs + tmpfs、无宿主 bind、无 docker.sock、Chromium 进程无 --no-sandbox、healthz/fingerprint/metrics 形状）；compose 层无 host port 由声明保证 + `docker inspect` 复核（README H0 清单）。镜像扫描与 Chromium 安全更新流程随首次部署固化。
+> - **T5 完整生产 E2E 审计通过（2026-08-28，`apps/cloud/scripts/test-html-render-e2e.mjs`）**：真实 Supabase 控制面 + 生产 VPS Worker + renderer 容器全链路（测试账号 → create/enqueue → DeepSeek compose → renderer 渲染 → awaiting → accept → succeeded，全程 81.8s）。断言全过：**Vision usage = 0**（usage 仅 model_tokens=1 + html_render=0）；tool ledger = compose×1 + render×1 + model_turn×1（每 Run 恰一次 render，无 understand_image/inspect）；artifact 闭集（html_document/render_manifest/整页/5 切片/diagnostic，切片 parent=整页、manifest 不可见）；结算 actual_credits=1（=文本回合）；content_expires_at 已设；720×3987 整页 + 5 切片逐像素拼接复原。运行：`cd apps/cloud && node --env-file=.env scripts/test-html-render-e2e.mjs`。
+> - **T5（renderer 侧）实跑通过（本机 + VPS 容器）**：`scripts/e2e-render-check.mjs`——32×120px 合成中文长页 → 720×3840 整页 + 4 切片，clip 无缝连续、逐像素拼接与整页一致。本机 bwr1-ba3d…/1204ms；H5 指纹 bwr1-233f992b…/renderMs 1843。H6 metrics 部署后以新生产指纹 `bwr1-c0ee5722…` 复跑通过（renderMs 1993、峰值 405 MiB/74 PIDs）；完整 tool/artifact/usage/TTL/Vision 审计已由 H5 E2E 与 H6 报告共同覆盖。
 
 **目标**：达到 test-only VPS 小流量标准。
 
@@ -551,6 +570,14 @@ renderer 是 Worker 内部确定性工具服务，不成为新的用户身份或
 验收：安全测试无一次外网连接或脚本执行；生产 E2E 的 tool/artifact/usage/TTL 可审计且 Vision usage 为 0。
 
 ### H6 — 小名单观察与发布决策
+
+> 状态（2026-08-28）：**T1 完成；T2 观察工具与首份基线完成，持续采样中；T3–T5 保持待决。**
+> - `apps/cloud/scripts/report-html-render-observations.mjs` 只读聚合 test-only HTML Run：Run/失败分类、全程与 render P50/P95、tool exactly-once、Vision=0、usage/积分、artifact 字节、私有 manifest 的像素/切片数、TTL 以及主 Worker 健康；不输出 HTML、文案、图片、hash 或对象路径。纯聚合单测 4/4（含零样本门槛不得误报 PASS）。
+> - 2026-08-28 首份 30 天历史基线共 22 条开发/验收 Run：10 succeeded / 7 failed / 5 cancelled；失败为 H5 联调期 compose、409 冲突与安全闭集试探，**不作为开放后成功率**。12 份可读 manifest：render P50 21.3s / P95 29.0s，平均 2,145,990 device pixels / 4.0 slices；成功 Run render 恰好一次、Vision=0、renderer 0 积分、HTML Skill TTL backlog=0 均通过。
+> - H6 正式观察起点冻结为 `2026-08-28T05:15:00Z`（renderer `0.1.1` 部署后）；后续运行 `cd apps/cloud && node scripts/report-html-render-observations.mjs --since=2026-08-28T05:15:00Z`，不得用 H5 故障注入样本抬高或压低发布成功率。
+> - renderer `/healthz` 已加入 cgroup v2 资源快照（含 Chromium 子进程的 current/peak memory 与 PIDs；本地无 cgroup 时降级为 Node RSS/heap）。生产安全自检全绿，720×3840+4 切片 E2E 后峰值 424,951,808 bytes（约 405 MiB）/ 74 PIDs，Worker queue=0、active=0、expired lease=0。
+> - 首次桌面人工操作暴露入口状态分叉：Skill 下拉可显示“HTML 排版截图”，但独立 Agent 开关仍可能为关闭，发送遂落回普通生图且云端没有创建 HTML Run。桌面现以 `null | skillId` 单状态表达正式 Agent：选择 HTML 会同时激活对应 Agent，关闭或切换其他 Agent 会清空 Skill，消除“看似选中、实际直发”的非法组合；零依赖状态回归 4/4、前端 lint/build 通过。该次操作不计入 H6 样本，T3 待新版桌面真机复测。
+> - 继续维持 test-only 与 `html_render=0`；镜像扫描器当前 VPS 未安装，扩大开放前仍须按 H5 流程补扫描。T3 的界面理解度只能由真实桌面用户判断，T4/T5 不自动决策。
 
 **目标**：以真实负载确认 VPS 容量、输出稳定性和用户价值。
 
@@ -647,18 +674,19 @@ H0 是硬前置：未证明非 root、断网、资源受限 Chromium 可用前�
 
 ## 14. 首版交付清单
 
-> 2026-08-27：前四项与「稳定错误码」已在 `apps/html-renderer` 完成（本地测试）；带 ※ 的条目尚缺 VPS 容器级验证；其余属 H2–H6。
+> 2026-08-28：H0–H5 交付项已完成；H6 test-only 观察工具与首份基线已完成，公开发布、计费和人工 UX 决策继续保留。
 
-- [x] `html-renderer` Dockerfile、内部服务、compose 网络/资源约束和健康检查。※镜像未在 VPS 实机构建/断网验证（H0-T2/T5）
-- [x] 固定 Chromium/Playwright/字体版本及 renderer fingerprint。※构建期烙印 build-info 需实际构建后记录首个 fingerprint
-- [x] HTML sanitizer、资源占位编译、离线请求拦截和 CSP。※容器断网为部署层承诺，未实证
+- [x] `html-renderer` Dockerfile、内部服务、compose 网络/资源约束和健康检查；生产 VPS 断网/sandbox/容量验证通过。
+- [x] 固定 Chromium/Playwright/字体版本及 renderer fingerprint；首个生产指纹 `bwr1-233f992b4266eadcfcadea7979149e0a`。
+- [x] HTML sanitizer、资源占位编译、离线请求拦截和 CSP；容器公网出口阻断实证通过。
 - [x] viewport/full-page PNG 与纵向切片实现。（e2e：无重叠切片逐像素复原整页）
-- [x] `RenderHtmlInputV1/ResultV1`、artifact roles 和稳定错误码。（2026-08-27 H2：模型侧输入/结果契约 + 5 artifact 角色 + §11 错误码全链路实现；DB role CHECK 扩展见 migration `0044`，待部署）
+- [x] `RenderHtmlInputV1/ResultV1`、artifact roles 和稳定错误码。（2026-08-27 H2：模型侧输入/结果契约 + 5 artifact 角色 + §11 错误码全链路实现；DB role CHECK 扩展 migration `0044` 已部署）
 - [x] Kernel `render_html` 工具、PolicyEngine/ToolDispatcher/ledger/checkpoint 接入。（2026-08-27 H2：registry + phase 门控 + durable executor/恢复测试；Skill runner 内的 checkpoint 消费随 H3）
-- [ ] 最小 `BuiltinSkillRegistry`。
-- [ ] 官方 `bowerbird-html-layout-render` Skill、phase graph、schema 和 eval。
-- [ ] FeaturePolicy/Edge/Worker/Desktop 四层 allowlist。
-- [ ] 桌面输出规格、时间线、整图/切片查看和幂等入库。
-- [ ] 离线安全、切片复原、崩溃恢复、容量和 TTL 测试。（代码级单测/e2e 已过；容器与控制面级属 H5）
-- [ ] 合成素材真实 VPS E2E，证明网页访问次数为 0、Vision 调用次数为 0。
-- [ ] test-only 观察报告与公开发布/计费决策。
+- [x] 最小 `BuiltinSkillRegistry`。（2026-08-27：两个官方静态 registration；无扫描/路径/下载/热加载；版本、bundle hash、snapshot schema fail closed）
+- [x] 官方 `bowerbird-html-layout-render` Skill、phase graph、schema 和 eval；runner/checkpoint/生产 Worker 已接线。
+- [x] FeaturePolicy/Edge/Worker/Desktop 四层 allowlist。（test-only `bowerbird_test` 标记账号）
+- [x] 桌面输出规格、时间线、整图/切片查看和幂等入库。
+- [x] 离线安全、切片复原、崩溃恢复、容量和 TTL 测试。（2026-08-28 H5：恶意向量矩阵/解压炸弹防护/429 故障注入与 VPS 容器级断网、资源上限、恢复验证全绿）
+- [x] 合成素材真实 VPS E2E，证明网页访问次数为 0、Vision 调用次数为 0。（H0 100 连跑 + 生产控制面 Run）
+- [x] test-only 无内容观察报告、资源峰值与首份历史基线。
+- [ ] 累积 H6 正式观察样本，完成人工 UX、公开发布与计费决策。

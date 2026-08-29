@@ -58,7 +58,7 @@ node scripts/test-billing.mjs
 
 `billing.sql` 覆盖注册首日 30 分、daily grant 幂等、FIFO、hold/confirm/rollback、余额不足、append-only 流水和客户端权限；Node 脚本让 20 个并发请求竞争同一幂等键，必须只产生一个 hold。
 
-当前开发机器可通过 `npx` 使用 Supabase CLI，但没有 Docker/Podman，因此上述事务型 `billing.sql` 仍不能本地执行；Rust、桌面、官网和扩展基线已通过。具备 Docker/Postgres 后必须补跑 `supabase db reset`，不能用 SQL 静态检查替代真实迁移结果。
+当前开发机器已可使用 Docker Desktop/WSL2 与 Supabase CLI。2026-08-29 已从空库执行 migration `0001`–`0049`，并以容器内 `psql -v ON_ERROR_STOP=1` 跑通 `supabase/tests/agent_runtime.sql` 34/34；事务型 SQL 仍必须真实执行，不能用静态检查替代。
 
 P2 Edge Functions（Supabase CLI/Deno 可用后）：
 
@@ -90,4 +90,4 @@ node scripts/test-payment.mjs
 
 统一错误：401 未登录 / 402 积分不足 / 413 体积超限 / 429 限流 / 502 上游失败 / 503 熔断或未配置 / 504 超时。`BOWERBIRD_CLOUD_MOCK=true` 时只用于开发；生产必须关闭，且未配置真实 adapter 时应返回 503，不能静默输出 Mock 结果。
 
-当前开发机器可通过 `npx` 使用 Supabase CLI 与 Deno，但没有 Docker/Podman，因此不能本地执行 `supabase db reset`。`0001~0010`、5 个 Functions 与东京真实 Cloud E2E 已在线验证；5 个 Functions 通过 Deno type-check，远端数据库 error 级 lint 0 项。真实 E2E 还覆盖了 `0010` 的成本预留、幂等重放、单用户分钟限流、全站每日成本熔断与测试 hold 回滚。事务型 `billing.sql` 全量脚本仍需在具备本地 Docker/Postgres 的环境补跑，不能把 REST/RPC 覆盖等同于整份脚本已执行。
+本机 Docker/Supabase/Deno 验证现已可用。通用 Agent Harness U2 另有本地专用脚本 `scripts/test-unified-agent-approval-local.mjs`，会拒绝非 localhost URL，并覆盖真实 Edge create/upload/enqueue、claim/checkpoint、图片 artifact 服务端尺寸提取、计划停车、无租约重放、漂移拒绝、用户批准与 fresh claim 尺寸回传；运行时只使用本地测试账号和本地 Worker Token，不调用模型或 provider。脚本要求本地 Agent 队列为空，避免 claim 先取得其他测试 Run。既有东京 Cloud E2E 与远端数据库基线继续独立保留，不能把本地通过等同于生产部署。

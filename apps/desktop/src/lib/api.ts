@@ -24,6 +24,7 @@ import type {
   VisualProfileSummary,
   Folder,
   GenerationHistory,
+  HtmlLayoutOptions,
   GenJobSummary,
   LocalAgentRun,
   Preset,
@@ -70,6 +71,8 @@ export const api = {
     imageProvider?: "cloud" | "jimeng" | "codex" | null;
     preferenceCapsule?: PreferenceCapsule | null;
     visualProfileId?: string | null;
+    skillId?: "bowerbird-controlled-image-edit" | "bowerbird-html-layout-render";
+    htmlOptions?: HtmlLayoutOptions | null;
   }) => invoke<CloudAgentRunRecord>("cloud_agent_start", input),
   cloudAgentLatest: () => invoke<CloudAgentRunRecord | null>("cloud_agent_latest"),
   cloudAgentList: () => invoke<CloudAgentRunRecord[]>("cloud_agent_list"),
@@ -389,6 +392,7 @@ export const api = {
   cloudAuthSnapshot: () => invoke<AuthSnapshot>("cloud_auth_snapshot"),
   cloudStartEmailLogin: (email: string) =>
     invoke<void>("cloud_start_email_login", { email }),
+  cloudStartWechatLogin: () => invoke<string>("cloud_start_wechat_login"),
   cloudRestoreSession: () => invoke<AuthSnapshot>("cloud_restore_session"),
   cloudLogout: () => invoke<AuthSnapshot>("cloud_logout"),
   cloudEntitlement: () => invoke<EntitlementSnapshot>("cloud_entitlement"),

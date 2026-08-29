@@ -10,6 +10,8 @@ import { Lightbox } from "./Lightbox";
 
 const TERMINAL = new Set(["succeeded", "failed", "cancelled"]);
 const CURRENT_CONTROLLED_SKILL_VERSION = "0.1.2";
+const CURRENT_HTML_SKILL_VERSION = "0.1.0";
+const HTML_SKILL_ID = "bowerbird-html-layout-render";
 
 function strategyLabel(strategy?: string): string {
   if (strategy === "direct") return "直接单步";
@@ -79,6 +81,9 @@ function artifactRoleLabel(role?: string): string {
   if (role === "control_reference") return "控制参考图";
   if (role === "stage_result") return "阶段结果图";
   if (role === "final_result") return "最终结果图";
+  if (role === "viewport_screenshot") return "视口截图";
+  if (role === "full_page_screenshot") return "整页截图";
+  if (role === "slice_screenshot") return "切片截图";
   return "过程产物";
 }
 
@@ -94,6 +99,9 @@ function eventTitle(type: string): string {
     "feedback.diagnosis.completed": "已完成反馈诊断",
     "result.accepted": "已接受结果",
     "run.succeeded": "Agent 会话已完成",
+    "html.compose.started": "正在编写受限 HTML/CSS",
+    "html.composed": "HTML/CSS 已完成并通过校验",
+    "html.render.completed": "离线渲染已完成",
   };
   return labels[type] ?? type;
 }
@@ -177,16 +185,22 @@ export function CloudAgentSession() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ingestRetry, setIngestRetry] = useState(0);
+  const [ingestComplete, setIngestComplete] = useState(false);
+  const [ingestFailed, setIngestFailed] = useState(false);
   const [lightbox, setLightbox] = useState<{ images: string[]; index: number } | null>(null);
   const previewLoading = useRef(new Set<string>());
   const ingesting = useRef<string | null>(null);
+  const reconciledIngest = useRef(new Set<string>());
   const reconciledTerminal = useRef(new Set<string>());
 
   useEffect(() => {
+    if (run?.runId) reconciledIngest.current.delete(run.runId);
     setArtifactPreviews({});
     setFeedback("");
     setError(null);
     setIngestRetry(0);
+    setIngestComplete(false);
+    setIngestFailed(false);
     setLightbox(null);
     localTaskBusy.current = null;
   }, [run?.runId]);
@@ -239,14 +253,28 @@ export function CloudAgentSession() {
     };
   }, [genPanelOpen, activeSessionKind, run?.runId, run?.status, updateRun]);
 
-  const finalArtifact = useMemo(
-    () => run?.snapshot.artifacts.find((artifact) => artifact.role === "final_result") ?? null,
-    [run?.snapshot.artifacts],
-  );
+  const htmlRun = run?.skillId === HTML_SKILL_ID;
   const generatedArtifacts = useMemo(
-    () => run?.snapshot.artifacts.filter((artifact) =>
-      artifact.user_visible && ["control_reference", "stage_result", "final_result"].includes(artifact.role) && artifact.mime.startsWith("image/")) ?? [],
-    [run?.snapshot.artifacts],
+    () => {
+      if (!run) return [];
+      const visible = new Map(run.snapshot.artifacts
+        .filter((artifact) => artifact.user_visible && artifact.mime.startsWith("image/"))
+        .map((artifact) => [artifact.id, artifact]));
+      if (run.skillId === HTML_SKILL_ID) {
+        return (run.snapshot.renderManifest?.outputs ?? [])
+          .map((output) => visible.get(output.artifactId))
+          .filter((artifact): artifact is CloudAgentArtifact => !!artifact);
+      }
+      return [...visible.values()].filter((artifact) => ["control_reference", "stage_result", "final_result"].includes(artifact.role));
+    },
+    [run],
+  );
+  const primaryArtifact = useMemo(
+    () => generatedArtifacts.find((artifact) => artifact.role === "final_result" || artifact.role === "full_page_screenshot")
+      ?? generatedArtifacts.find((artifact) => artifact.role === "viewport_screenshot")
+      ?? generatedArtifacts[0]
+      ?? null,
+    [generatedArtifacts],
   );
   const pendingApproval = useMemo(
     () => run?.snapshot.approvals.find((approval) => approval.status === "pending") ?? null,
@@ -260,7 +288,8 @@ export function CloudAgentSession() {
     () => run?.referenceAssetIds.map((id) => assets.find((asset) => asset.id === id)).filter(Boolean) ?? [],
     [run?.referenceAssetIds, assets],
   );
-  const skillVersionMismatch = !!run && run.snapshot.run.skill_version !== CURRENT_CONTROLLED_SKILL_VERSION;
+  const currentSkillVersion = htmlRun ? CURRENT_HTML_SKILL_VERSION : CURRENT_CONTROLLED_SKILL_VERSION;
+  const skillVersionMismatch = !!run && run.snapshot.run.skill_version !== currentSkillVersion;
   const approvalsWithPlans = useMemo(
     () => [...(run?.snapshot.approvals ?? [])].filter((approval) => !!approval.proposal).sort((a, b) => a.requested_at.localeCompare(b.requested_at)),
     [run?.snapshot.approvals],
@@ -293,11 +322,11 @@ export function CloudAgentSession() {
           setError(null);
         })
         .catch((cause) => {
-          if (artifact.role === "final_result") setError(cause instanceof Error ? cause.message : String(cause));
+          if (artifact.id === primaryArtifact?.id) setError(cause instanceof Error ? cause.message : String(cause));
         })
         .finally(() => previewLoading.current.delete(artifact.id));
     }
-  }, [genPanelOpen, activeSessionKind, run, generatedArtifacts, artifactPreviews]);
+  }, [genPanelOpen, activeSessionKind, run, generatedArtifacts, artifactPreviews, primaryArtifact]);
 
   useEffect(() => {
     if (!genPanelOpen || activeSessionKind !== "agent" || !run || !TERMINAL.has(run.status) || reconciledTerminal.current.has(run.runId)) return;
@@ -306,22 +335,26 @@ export function CloudAgentSession() {
   }, [genPanelOpen, activeSessionKind, run, updateRun]);
 
   useEffect(() => {
-    if (!run || run.status !== "succeeded" || run.feedbackAction !== "accept" || run.finalAssetId || !finalArtifact) return;
-    if (ingesting.current === finalArtifact.id) return;
-    ingesting.current = finalArtifact.id;
+    if (!run || run.status !== "succeeded" || run.feedbackAction !== "accept" || !primaryArtifact) return;
+    if (ingesting.current === primaryArtifact.id || reconciledIngest.current.has(run.runId)) return;
+    reconciledIngest.current.add(run.runId);
+    ingesting.current = primaryArtifact.id;
     api.cloudAgentIngestArtifacts(run.runId)
       .then(async (assets) => {
-        notifySuccess(`Agent 的 ${assets.length} 张过程/结果图已作为同一组加入素材库`);
+        notifySuccess(`Agent 的 ${assets.length} 张产物已作为同一组加入素材库`);
+        setIngestComplete(true);
+        setIngestFailed(false);
         updateRun(await api.cloudAgentGet(run.runId));
       })
       .catch((cause) => {
         setError(cause instanceof Error ? cause.message : String(cause));
-        notifyError(cause, "Agent 最终图入库失败");
+        setIngestFailed(true);
+        notifyError(cause, "Agent 产物整组入库失败");
       })
       .finally(() => {
         ingesting.current = null;
       });
-  }, [run, finalArtifact, updateRun, ingestRetry]);
+  }, [run, primaryArtifact, updateRun, ingestRetry]);
 
   async function decide(approve: boolean) {
     if (!run || !pendingApproval || busy) return;
@@ -408,7 +441,7 @@ export function CloudAgentSession() {
             {title}
           </strong>
           <span className="shrink-0 rounded-full border border-edge px-2 py-0.5 text-[11px] text-muted">
-            Agent · {cloudAgentStatusLabel(run.status)} · {run.referenceAssetIds.length} 张参考图
+            {htmlRun ? "HTML 排版" : "Agent"} · {cloudAgentStatusLabel(run.status)} · {run.referenceAssetIds.length} 张参考图
           </span>
           {!TERMINAL.has(run.status) && (
             <span className="flex shrink-0 items-center gap-1.5 text-[11px] text-lime">
@@ -531,7 +564,7 @@ export function CloudAgentSession() {
                       <PendingPlan approval={approval} />
                       {isPending && skillVersionMismatch && (
                         <div className="mt-3 rounded-md border border-amber-400/30 bg-amber-400/8 p-3 text-[11px] leading-5 text-amber-200">
-                          这份计划由旧版 Skill {run.snapshot.run.skill_version} 创建，当前版本为 {CURRENT_CONTROLLED_SKILL_VERSION}。为避免用不同规则执行旧计划，请拒绝并重新发起。
+                          这份计划由旧版 Skill {run.snapshot.run.skill_version} 创建，当前版本为 {currentSkillVersion}。为避免用不同规则执行旧计划，请拒绝并重新发起。
                         </div>
                       )}
                       {isPending && (
@@ -572,6 +605,49 @@ export function CloudAgentSession() {
                   </div>
                 )}
 
+                {htmlRun && run.snapshot.renderManifest && generatedArtifacts.length > 0 && (
+                  <div className="rounded-lg border border-edge bg-panel p-4">
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <div className="text-xs font-semibold text-ink">离线渲染结果</div>
+                        <div className="mt-1 text-[10px] text-muted">
+                          文档 {run.snapshot.renderManifest.document.widthDevicePx} × {run.snapshot.renderManifest.document.heightDevicePx}px
+                          · {generatedArtifacts.length} 张 · {run.snapshot.renderManifest.renderMs}ms
+                        </div>
+                      </div>
+                      <span className="max-w-64 truncate rounded bg-black/20 px-2 py-1 text-[9px] text-muted" title={run.snapshot.renderManifest.rendererFingerprint}>
+                        {run.snapshot.renderManifest.rendererFingerprint}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                      {generatedArtifacts.map((artifact) => {
+                        const preview = artifactPreviews[artifact.id];
+                        const output = run.snapshot.renderManifest?.outputs.find((item) => item.artifactId === artifact.id);
+                        return (
+                          <button
+                            key={artifact.id}
+                            type="button"
+                            disabled={!preview}
+                            onClick={() => preview && setLightbox({ images: generatedArtifacts.map((item) => artifactPreviews[item.id]?.path).filter((path): path is string => !!path), index: Math.max(0, generatedArtifacts.filter((item) => !!artifactPreviews[item.id]).findIndex((item) => item.id === artifact.id)) })}
+                            className="overflow-hidden rounded-md border border-edge bg-black/20 text-left disabled:opacity-60"
+                          >
+                            {preview ? <img src={convertFileSrc(preview.path)} alt={artifactRoleLabel(artifact.role)} className="h-36 w-full object-contain" /> : <div className="flex h-36 items-center justify-center text-[10px] text-muted">校验下载中…</div>}
+                            <div className="border-t border-edge px-2 py-1.5 text-[10px] text-muted">
+                              {artifactRoleLabel(artifact.role)}{output?.index != null ? ` ${output.index + 1}` : ""}
+                              {output && <span> · {output.clipDevicePx.width} × {output.clipDevicePx.height}px</span>}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+                {htmlRun && ["awaiting_result_feedback", "succeeded"].includes(run.status) && generatedArtifacts.length === 0 && (
+                  <div className="rounded-lg border border-amber-400/30 bg-amber-400/8 p-3 text-xs text-amber-200">
+                    云端截图内容已过期或清理；若此前已接受，仍可在本地素材库查看已入库副本。
+                  </div>
+                )}
+
                 {run.status === "failed" && (
                   <div className="rounded-lg border border-red-500/30 bg-red-500/8 p-3 text-xs text-red-300">
                     {cloudAgentFailureMessage(run.snapshot.run.safe_message)}
@@ -579,9 +655,9 @@ export function CloudAgentSession() {
                 )}
                 {run.status === "succeeded" && (
                   <div className="rounded-lg border border-lime/25 bg-lime/8 p-3 text-xs text-lime">
-                    结果已接受并完成结算{run.finalAssetId ? "，全部过程图与最终图已作为同一组加入素材库" : "，正在校验并整组入库"}。
-                    {!run.finalAssetId && error && (
-                      <button type="button" onClick={() => setIngestRetry((value) => value + 1)} className="ml-2 underline underline-offset-2 hover:text-white">
+                    结果已接受并完成结算{ingestComplete ? "，全部产物已作为同一组加入素材库" : ingestFailed ? "，部分产物入库未完成" : "，正在校验并整组入库"}。
+                    {ingestFailed && (
+                      <button type="button" onClick={() => { reconciledIngest.current.delete(run.runId); setIngestFailed(false); setIngestRetry((value) => value + 1); }} className="ml-2 underline underline-offset-2 hover:text-white">
                         重新入库
                       </button>
                     )}
@@ -601,19 +677,26 @@ export function CloudAgentSession() {
         <div className="shrink-0 border-t border-edge bg-panel p-4">
           {run.status === "awaiting_result_feedback" ? (
             <div className="mx-auto max-w-3xl">
-              <textarea
+              {!htmlRun && <textarea
                 value={feedback}
                 onChange={(event) => setFeedback(event.target.value.slice(0, 2000))}
                 placeholder="可选：具体说明哪里不满意。Agent 会先诊断，再提交新的修订计划供你批准。"
                 className="min-h-16 w-full resize-y rounded-md bg-black/25 px-3 py-2 text-xs text-ink outline-none ring-1 ring-edge focus:ring-accent"
-              />
+              />}
+              {htmlRun && <p className="text-xs leading-5 text-muted">请检查整图与切片。接受后会按会话、角色和切片顺序幂等入库；放弃则不会继续导出。</p>}
               <div className="mt-2 flex gap-2">
                 <button disabled={busy} onClick={() => void submitFeedback("accept")} className="flex items-center gap-1.5 rounded-md bg-lime/90 px-4 py-2 text-xs font-semibold text-black disabled:opacity-50">
                   <Check size={13} /> 接受结果
                 </button>
-                <button disabled={busy} onClick={() => void submitFeedback("retry")} className="flex items-center gap-1.5 rounded-md border border-edge px-4 py-2 text-xs text-ink disabled:opacity-50">
-                  <RefreshCw size={13} /> 提交修订意见
-                </button>
+                {htmlRun ? (
+                  <button disabled={busy} onClick={() => void cancel()} className="flex items-center gap-1.5 rounded-md border border-edge px-4 py-2 text-xs text-ink disabled:opacity-50">
+                    <XCircle size={13} /> 放弃结果
+                  </button>
+                ) : (
+                  <button disabled={busy} onClick={() => void submitFeedback("retry")} className="flex items-center gap-1.5 rounded-md border border-edge px-4 py-2 text-xs text-ink disabled:opacity-50">
+                    <RefreshCw size={13} /> 提交修订意见
+                  </button>
+                )}
               </div>
             </div>
           ) : (

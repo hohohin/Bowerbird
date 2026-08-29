@@ -45,6 +45,9 @@ Deno.test("invalid units and provider-kind substitutions fail closed", () => {
   assertThrows(() => creditsForAgentUsage(normalizeAgentUsageItem({
     callId: "forged", kind: "model_tokens", provider: "ark", model: "vision", imageCount: 0,
   }), pricing), Error, "agent_usage_binding_invalid");
+  assertThrows(() => creditsForAgentUsage(normalizeAgentUsageItem({
+    callId: "forged-renderer", kind: "image_generation", provider: "renderer", model: "renderer", imageCount: 1,
+  }), pricing), Error, "agent_usage_binding_invalid");
 });
 
 Deno.test("html_render usage: renderer provider, zero credits by default, optional pricing block", () => {

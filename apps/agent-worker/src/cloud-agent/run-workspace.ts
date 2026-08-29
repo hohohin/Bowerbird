@@ -160,6 +160,22 @@ export class RunWorkspace {
     this.remote.set(artifact.artifactId, artifact);
   }
 
+  /** Cache a freshly composed HTML artifact before the next claim can provide a signed download URL. */
+  rememberHtmlDocument(artifact: RegisteredAgentArtifact, html: string): void {
+    if (artifact.role !== "html_document") throw new Error("agent_workspace_html_role_invalid");
+    if (artifact.mime !== "text/html") throw new Error("agent_workspace_html_mime_invalid");
+    const bytes = new TextEncoder().encode(html);
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    if (!bytes.byteLength || bytes.byteLength > MAX_HTML_DOCUMENT_BYTES ||
+        bytes.byteLength !== artifact.bytes || sha256 !== artifact.sha256) {
+      throw new Error("agent_workspace_html_validation_failed");
+    }
+    const path = join(this.path, "inputs", `${artifact.artifactId}.html`);
+    writeFileSync(path, bytes);
+    this.remote.set(artifact.artifactId, artifact);
+    this.localHtml.set(artifact.artifactId, { path, html, sha256 });
+  }
+
   cleanup(): void {
     const resolvedPath = resolve(this.path);
     if (!resolvedPath || resolvedPath.length < 8) throw new Error("agent_workspace_cleanup_path_invalid");

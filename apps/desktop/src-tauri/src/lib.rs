@@ -15,17 +15,23 @@ use std::sync::Arc;
 use tauri::{Emitter, Manager};
 
 fn forward_auth_callback(app: &tauri::AppHandle, value: &str) {
-    if !value.starts_with("bowerbird://auth/callback") {
+    let wechat = value.starts_with("bowerbird://wechat/callback");
+    let email = value.starts_with("bowerbird://auth/callback");
+    if !wechat && !email {
         return;
     }
     let handle = app.clone();
     let callback = value.to_string();
     tauri::async_runtime::spawn(async move {
         let result = match handle.try_state::<cloud::AuthClient>() {
-            Some(auth) => auth
-                .handle_callback(&callback)
-                .await
-                .map_err(|error| error.to_string()),
+            Some(auth) => {
+                if wechat {
+                    auth.handle_wechat_callback(&callback).await
+                } else {
+                    auth.handle_callback(&callback).await
+                }
+            }
+            .map_err(|error| error.to_string()),
             None => Err("账号服务尚未初始化".to_string()),
         };
         match result {
@@ -188,6 +194,7 @@ pub fn run() {
             commands::agent_ds::agent_ds_chat,
             commands::cloud::cloud_auth_snapshot,
             commands::cloud::cloud_start_email_login,
+            commands::cloud::cloud_start_wechat_login,
             commands::cloud::cloud_restore_session,
             commands::cloud::cloud_logout,
             commands::cloud::cloud_entitlement,

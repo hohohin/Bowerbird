@@ -5,6 +5,14 @@ import { cloudProviderLabel, isCloudProvider, supportsAnnotationCoordinates } fr
 import { api } from "../lib/api";
 import { AGENT_DS_ENABLED, AGENT_Z_ENABLED, PRESET_FEATURE_ENABLED } from "../lib/featureFlags";
 import { notify, notifyError, notifySuccess } from "../lib/notify";
+import {
+  CONTROLLED_AGENT_SKILL,
+  HTML_LAYOUT_AGENT_SKILL,
+  activateCloudAgentSkill,
+  cloudAgentSkill as resolveCloudAgentSkill,
+  toggleCloudAgent,
+  type CloudAgentSelection,
+} from "../lib/cloudAgentSelection";
 import { useCreationEditor } from "./creation/useCreationEditor";
 import { RATIOS } from "./creation/ratios";
 import { RatioSelect } from "./creation/RatioSelect";
@@ -116,10 +124,20 @@ export function CreationBoard() {
   const [agentMode, setAgentMode] = useState<"off" | "a" | "b">("off");
   const [agentAvailable, setAgentAvailable] = useState(false);
   const [agentBusy, setAgentBusy] = useState(false);
-  // 正式用户侧 Agent：固定运行 bowerbird-controlled-image-edit 云端 Run。
+  // 正式用户侧 Agent：受服务端 skill allowlist 控制；HTML 排版仅对已开放账号显示。
   // A/B/Z/G/DS 继续保留为 dev 基线，但与正式模式互斥。
-  const [cloudAgentMode, setCloudAgentMode] = useState(false);
+  // null = 正式 Agent 关闭；skill id = Agent 已开启。单状态建模避免 UI 选中 HTML、发送却走普通生图。
+  const [cloudAgentSelection, setCloudAgentSelection] = useState<CloudAgentSelection>(null);
+  const cloudAgentMode = cloudAgentSelection !== null;
+  const cloudAgentSkill = resolveCloudAgentSkill(cloudAgentSelection);
   const [cloudAgentBusy, setCloudAgentBusy] = useState(false);
+  const [htmlViewportWidth, setHtmlViewportWidth] = useState(900);
+  const [htmlViewportHeight, setHtmlViewportHeight] = useState(700);
+  const [htmlDeviceScaleFactor, setHtmlDeviceScaleFactor] = useState<1 | 2>(1);
+  const [htmlCaptureMode, setHtmlCaptureMode] = useState<"viewport" | "full_page" | "full_page_and_slices">("full_page_and_slices");
+  const [htmlSliceHeight, setHtmlSliceHeight] = useState(900);
+  const [htmlOverlap, setHtmlOverlap] = useState(0);
+  const [htmlBackground, setHtmlBackground] = useState<"opaque" | "transparent">("opaque");
   // Agent Z（dev-only）：创作板消息投递到 Claude Code TUI 终端，Bowerbird 侧不走生图链路；与 A/B 互斥。
   const [agentZMode, setAgentZMode] = useState(false);
   const [agentZAvailable, setAgentZAvailable] = useState(false);
@@ -165,7 +183,7 @@ export function CreationBoard() {
   // 复位其余 Agent 开关（与 Agent 按钮点击同款互斥复位）；消费即清，防止重挂载误触发。
   useEffect(() => {
     if (!pendingAgentArm) return;
-    setCloudAgentMode(true);
+    setCloudAgentSelection(CONTROLLED_AGENT_SKILL);
     setAgentMode("off");
     setAgentZMode(false);
     setAgentGMode(false);
@@ -175,7 +193,7 @@ export function CreationBoard() {
 
   // 设置里关闭的模式：隐藏按钮同时复位其激活态（含「开启 Agent 模式再试」等异步置位路径）。
   useEffect(() => {
-    if (!agentModeOn && cloudAgentMode) setCloudAgentMode(false);
+    if (!agentModeOn && cloudAgentMode) setCloudAgentSelection(null);
     if (!agentAOn && agentMode === "a") setAgentMode("off");
     if (!agentBOn && agentMode === "b") setAgentMode("off");
     if (!agentZOn && agentZMode) setAgentZMode(false);
@@ -289,19 +307,30 @@ export function CreationBoard() {
   const activeCloudAgentRunCount = Object.values(cloudAgentRuns).filter((run) =>
     !["succeeded", "failed", "cancelled"].includes(run.status)
   ).length;
-  const cloudAgentEntitled = canUseAgentRun(cloudEntitlement);
-  const cloudAgentHasCapacity = canStartAnotherAgentRun(cloudEntitlement, activeCloudAgentRunCount);
+  const htmlAgentEntitled = canUseAgentRun(cloudEntitlement, HTML_LAYOUT_AGENT_SKILL);
+  const cloudAgentEntitled = canUseAgentRun(cloudEntitlement, cloudAgentSkill);
+  const cloudAgentHasCapacity = canStartAnotherAgentRun(cloudEntitlement, activeCloudAgentRunCount, cloudAgentSkill);
+  const htmlAgentSelected = cloudAgentSkill === HTML_LAYOUT_AGENT_SKILL;
   // Codex 自身已有思考/对话编排，叠加 Bowerbird Agent 会形成重复规划且耗时过长。
   // 暂时禁止新建 Codex + Agent 组合；即梦与 Cloud 路径保持不变。
-  const cloudAgentProviderCompatible = activeGenProvider !== "codex";
+  const cloudAgentProviderCompatible = htmlAgentSelected || activeGenProvider !== "codex";
+  const cloudAgentRequiredBalance = htmlAgentSelected ? 15 : 5;
+  const htmlOptionsValid = !htmlAgentSelected || (
+    htmlViewportWidth >= 320 && htmlViewportWidth <= 2400 &&
+    htmlViewportHeight >= 240 && htmlViewportHeight <= 4000 &&
+    (htmlCaptureMode !== "full_page_and_slices" || (
+      htmlSliceHeight >= 200 && htmlSliceHeight <= 4000 && htmlOverlap >= 0 && htmlOverlap <= 200 && htmlOverlap < htmlSliceHeight
+    ))
+  );
   const cloudAgentReady =
     cloudAgentProviderCompatible &&
-    !!agentImageProvider &&
+    (htmlAgentSelected || !!agentImageProvider) &&
     cloudAgentHasCapacity &&
     cloudAvailable &&
     !!cloudAuth?.logged_in &&
-    cloudBalance >= 5 &&
-    localAgentProviderReady;
+    cloudBalance >= cloudAgentRequiredBalance &&
+    htmlOptionsValid &&
+    (htmlAgentSelected || localAgentProviderReady);
   const targetProviderLabel = isCloudProvider(activeGenProvider)
     ? (cloudProviderLabel(activeGenProvider, cloudEntitlement) ?? "Bowerbird Cloud")
     : activeGenProvider === "jimeng"
@@ -315,7 +344,7 @@ export function CreationBoard() {
 
   useEffect(() => {
     if (!cloudAgentMode || cloudAgentProviderCompatible) return;
-    setCloudAgentMode(false);
+    setCloudAgentSelection(null);
     notify("已关闭 Agent：Codex 与 Bowerbird Agent 暂时互斥，请改用 Codex 直接生成或选择 Cloud / 即梦 Agent。", "info");
   }, [activeGenProvider, cloudAgentMode, cloudAgentProviderCompatible]);
 
@@ -339,9 +368,19 @@ export function CreationBoard() {
           projectId: useStore.getState().currentProjectId,
           imageProvider: agentImageProvider,
           visualProfileId: activeVisualProfileId,
+          skillId: cloudAgentSkill,
+          htmlOptions: htmlAgentSelected ? {
+            viewportWidth: htmlViewportWidth,
+            viewportHeight: htmlViewportHeight,
+            deviceScaleFactor: htmlDeviceScaleFactor,
+            captureMode: htmlCaptureMode,
+            sliceHeight: htmlCaptureMode === "full_page_and_slices" ? htmlSliceHeight : null,
+            overlap: htmlCaptureMode === "full_page_and_slices" ? htmlOverlap : null,
+            background: htmlBackground,
+          } : null,
         });
         openCloudAgentRun(run);
-        notifySuccess("Agent 会话已创建，正在进行纯文本意图分析");
+        notifySuccess(htmlAgentSelected ? "HTML 排版会话已创建，正在生成离线排版文档" : "Agent 会话已创建，正在进行纯文本意图分析");
         exitCreationMode();
       } catch (error) {
         notifyError(error, "启动 Bowerbird Agent 失败");
@@ -689,6 +728,44 @@ export function CreationBoard() {
         />
         {/* 编辑框内 image/keyword chip 的交互浮层（hover 放大图/维度正文 + 点击定位瀑布流） */}
         <BoardChipPreview hostRef={hostRef} />
+        {cloudAgentMode && htmlAgentSelected && (
+          <div className="mt-2 grid grid-cols-2 gap-2 rounded-lg border border-edge bg-black/20 p-2 text-[10px] text-muted sm:grid-cols-4">
+            <label className="space-y-1">视口宽度
+              <input type="number" min={320} max={2400} value={htmlViewportWidth} onChange={(event) => setHtmlViewportWidth(Number(event.target.value))} className="w-full rounded bg-panel px-2 py-1 text-xs text-ink ring-1 ring-edge" />
+            </label>
+            <label className="space-y-1">视口高度
+              <input type="number" min={240} max={4000} value={htmlViewportHeight} onChange={(event) => setHtmlViewportHeight(Number(event.target.value))} className="w-full rounded bg-panel px-2 py-1 text-xs text-ink ring-1 ring-edge" />
+            </label>
+            <label className="space-y-1">像素倍率
+              <select value={htmlDeviceScaleFactor} onChange={(event) => setHtmlDeviceScaleFactor(Number(event.target.value) as 1 | 2)} className="w-full rounded bg-panel px-2 py-1 text-xs text-ink ring-1 ring-edge">
+                <option value={1}>1×</option><option value={2}>2×</option>
+              </select>
+            </label>
+            <label className="space-y-1">背景
+              <select value={htmlBackground} onChange={(event) => setHtmlBackground(event.target.value as "opaque" | "transparent")} className="w-full rounded bg-panel px-2 py-1 text-xs text-ink ring-1 ring-edge">
+                <option value="opaque">不透明</option><option value="transparent">透明</option>
+              </select>
+            </label>
+            <label className="col-span-2 space-y-1">截图方式
+              <select value={htmlCaptureMode} onChange={(event) => setHtmlCaptureMode(event.target.value as typeof htmlCaptureMode)} className="w-full rounded bg-panel px-2 py-1 text-xs text-ink ring-1 ring-edge">
+                <option value="viewport">仅视口</option>
+                <option value="full_page">整页</option>
+                <option value="full_page_and_slices">整页 + 切片</option>
+              </select>
+            </label>
+            {htmlCaptureMode === "full_page_and_slices" && (
+              <>
+                <label className="space-y-1">切片高度
+                  <input type="number" min={200} max={4000} value={htmlSliceHeight} onChange={(event) => setHtmlSliceHeight(Number(event.target.value))} className="w-full rounded bg-panel px-2 py-1 text-xs text-ink ring-1 ring-edge" />
+                </label>
+                <label className="space-y-1">重叠像素
+                  <input type="number" min={0} max={200} value={htmlOverlap} onChange={(event) => setHtmlOverlap(Number(event.target.value))} className="w-full rounded bg-panel px-2 py-1 text-xs text-ink ring-1 ring-edge" />
+                </label>
+              </>
+            )}
+            {!htmlOptionsValid && <span className="col-span-full text-red-300">参数超出安全范围，请检查视口和切片尺寸。</span>}
+          </div>
+        )}
         {/* 工具栏：对话框底部一行——左端帮助，中间快捷参数，右端发送（同款光晕按钮）。 */}
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <div className="group relative flex shrink-0 items-center">
@@ -704,15 +781,15 @@ export function CreationBoard() {
             </div>
           </div>
           {/* Cloud Agent 仍接受显式比例；仅终端型 Agent 不走 Bowerbird 生图参数。 */}
-          <div className={`${agentZMode || agentGMode || agentDsMode ? "pointer-events-none opacity-40" : ""}`}>
+          <div className={`${agentZMode || agentGMode || agentDsMode || (htmlAgentSelected && cloudAgentMode) ? "pointer-events-none opacity-40" : ""}`}>
             <RatioSelect value={ratio} onChange={selectRatio} />
           </div>
           <VisualProfileSelect
             value={activeVisualProfileId}
             onChange={setActiveVisualProfile}
-            disabled={agentZMode || agentGMode || agentDsMode}
+            disabled={agentZMode || agentGMode || agentDsMode || (htmlAgentSelected && cloudAgentMode)}
           />
-          <div className={`${agentZMode || agentGMode || agentDsMode ? "pointer-events-none opacity-40" : ""}`}>
+          <div className={`${agentZMode || agentGMode || agentDsMode || (htmlAgentSelected && cloudAgentMode) ? "pointer-events-none opacity-40" : ""}`}>
             <ProviderSelect
               value={activeGenProvider}
               onChange={setActiveGenProvider}
@@ -726,13 +803,32 @@ export function CreationBoard() {
             />
           </div>
           {agentModeOn && (
+          <div className="flex items-center gap-1">
+          {htmlAgentEntitled && (
+            <select
+              aria-label="Agent Skill"
+              value={cloudAgentSkill}
+              disabled={cloudAgentBusy}
+              onChange={(event) => {
+                setCloudAgentSelection(activateCloudAgentSkill(event.target.value));
+                setAgentMode("off");
+                setAgentZMode(false);
+                setAgentGMode(false);
+                setAgentDsMode(false);
+              }}
+              className="h-7 rounded-[3px] border border-edge bg-panel2 px-2 text-[11px] text-ink outline-none focus:border-accent"
+            >
+              <option value={CONTROLLED_AGENT_SKILL}>受控生图</option>
+              <option value={HTML_LAYOUT_AGENT_SKILL}>HTML 排版截图</option>
+            </select>
+          )}
           <button
             type="button"
             role="switch"
             aria-checked={cloudAgentMode}
-            disabled={cloudAgentBusy || !cloudAgentReady}
+            disabled={cloudAgentBusy || (!cloudAgentMode && !cloudAgentReady)}
             onClick={() => {
-              setCloudAgentMode((on) => !on);
+              setCloudAgentSelection((selection) => toggleCloudAgent(selection));
               setAgentMode("off");
               setAgentZMode(false);
               setAgentGMode(false);
@@ -746,13 +842,17 @@ export function CreationBoard() {
                   ? "当前账号未开放 Bowerbird Agent"
                   : !cloudAgentHasCapacity
                     ? "当前 Agent 并发任务已达上限，请等待已有任务完成"
+                    : htmlAgentSelected
+                      ? cloudBalance < cloudAgentRequiredBalance
+                        ? "积分不足：HTML 排版 Run 需要预授权 15 积分，结束后按实际文本调用结算"
+                        : "把当前文字与显式参考图编译为受限 HTML/CSS，并在断网 renderer 中输出整图或切片；每个 Run 只渲染一次"
                     : !agentImageProvider
                       ? "当前生图引擎不支持 Agent"
                       : agentImageProvider !== "cloud" && !canUseByo(cloudEntitlement)
                         ? "升级 Pro 解锁本机 Codex / 即梦 CLI Agent 生图"
                         : agentImageProvider === "jimeng" && !dreaminaHealth?.ok
                           ? "即梦 CLI 不可用：请先在「设置 · 模型设置」完成安装与登录"
-                          : cloudBalance < 5
+                          : cloudBalance < cloudAgentRequiredBalance
                         ? "积分不足：Agent Run 启动时会预授权积分，结束后按实际工具调用结算"
                         : agentImageProvider === "jimeng"
                           ? "先只从文字分析真实意图，给出可审批计划；批准后生图步骤用本机即梦执行（不消耗 Bowerbird 积分）"
@@ -766,6 +866,7 @@ export function CreationBoard() {
               Agent
             </span>
           </button>
+          </div>
           )}
           {agentAvailable && (agentAOn || agentBOn) && (
             <>
@@ -775,7 +876,7 @@ export function CreationBoard() {
                 role="switch"
                 aria-checked={agentMode === "a"}
                 disabled={agentBusy}
-                onClick={() => { setAgentMode((mode) => (mode === "a" ? "off" : "a")); setCloudAgentMode(false); setAgentZMode(false); setAgentGMode(false); setAgentDsMode(false); }}
+                onClick={() => { setAgentMode((mode) => (mode === "a" ? "off" : "a")); setCloudAgentSelection(null); setAgentZMode(false); setAgentGMode(false); setAgentDsMode(false); }}
                 title="方案A（子句挑选）：Agent 按你的意图从参考图维度原文中挑选子句，确定性拼合后再发送"
                 className={`generation-glow-button flex h-7 items-center rounded-[3px] px-2.5 text-xs font-medium disabled:opacity-40 ${
                   agentMode === "a" ? "" : "is-off"
@@ -793,7 +894,7 @@ export function CreationBoard() {
                 role="switch"
                 aria-checked={agentMode === "b"}
                 disabled={agentBusy}
-                onClick={() => { setAgentMode((mode) => (mode === "b" ? "off" : "b")); setCloudAgentMode(false); setAgentZMode(false); setAgentGMode(false); setAgentDsMode(false); }}
+                onClick={() => { setAgentMode((mode) => (mode === "b" ? "off" : "b")); setCloudAgentSelection(null); setAgentZMode(false); setAgentGMode(false); setAgentDsMode(false); }}
                 title="方案B（skill 审查）：Agent 按官方 skill 审查并修复展开后的完整 prompt，再发送"
                 className={`generation-glow-button flex h-7 items-center rounded-[3px] px-2.5 text-xs font-medium disabled:opacity-40 ${
                   agentMode === "b" ? "" : "is-off"
@@ -815,7 +916,7 @@ export function CreationBoard() {
               disabled={agentZBusy}
               onClick={() => {
                 setAgentZMode((on) => !on);
-                setCloudAgentMode(false);
+                setCloudAgentSelection(null);
                 setAgentMode("off");
                 setAgentGMode(false);
                 setAgentDsMode(false);
@@ -839,7 +940,7 @@ export function CreationBoard() {
               disabled={agentZBusy}
               onClick={() => {
                 setAgentGMode((on) => !on);
-                setCloudAgentMode(false);
+                setCloudAgentSelection(null);
                 setAgentMode("off");
                 setAgentZMode(false);
                 setAgentDsMode(false);
@@ -863,7 +964,7 @@ export function CreationBoard() {
               disabled={agentDsBusy}
               onClick={() => {
                 setAgentDsMode((on) => !on);
-                setCloudAgentMode(false);
+                setCloudAgentSelection(null);
                 setAgentMode("off");
                 setAgentZMode(false);
                 setAgentGMode(false);
@@ -912,9 +1013,11 @@ export function CreationBoard() {
                     ? "当前账号未开放 Bowerbird Agent"
                     : !cloudAgentHasCapacity
                       ? "当前 Agent 并发任务已达上限，请等待已有任务完成"
-                      : cloudBalance < 5
+                      : cloudBalance < cloudAgentRequiredBalance
                         ? "积分不足：Agent Run 启动时会预授权积分，结束后按实际工具调用结算"
-                        : "创建 Bowerbird Agent 会话：先分析文字并提交计划，批准后才执行"
+                        : htmlAgentSelected
+                          ? "创建 HTML 排版会话：单次生成受限 HTML/CSS，并离线渲染整图/切片"
+                          : "创建 Bowerbird Agent 会话：先分析文字并提交计划，批准后才执行"
                 : agentZMode
                 ? "发送到 Agent Z 终端（Claude Code TUI）：对话为主；涉及生图由 Claude Code 理解后自行调用 dreamina CLI"
                 : agentGMode
@@ -936,7 +1039,7 @@ export function CreationBoard() {
               {cloudAgentBusy
                 ? "正在创建 Agent 会话…"
                 : cloudAgentMode
-                  ? "交给 Agent 规划"
+                  ? htmlAgentSelected ? "生成 HTML 排版" : "交给 Agent 规划"
                   : agentZBusy
                 ? "正在投递到 Agent…"
                 : agentZMode
@@ -949,7 +1052,7 @@ export function CreationBoard() {
                         ? "发送给 Agent DS"
                         : agentBusy
                           ? "Agent 正在整理意图…"
-                          : `发送 ${targetProviderLabel} 生成`}
+                          : "生成图像"}
             </span>
           </button>
         </div>

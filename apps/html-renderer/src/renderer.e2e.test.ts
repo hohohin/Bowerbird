@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { chromium } from "playwright";
 import type { Browser } from "playwright";
-import { launchRendererBrowser, renderDocument } from "./renderer.ts";
+import { CHROMIUM_LAUNCH_OPTIONS, launchRendererBrowser, renderDocument } from "./renderer.ts";
 import { createRenderService } from "./render-service.ts";
 import { decodePng, encodePng } from "./png.ts";
 import type { InternalRenderRequest } from "./contracts.ts";
@@ -39,6 +39,11 @@ try {
 }
 
 const skipReason = browser ? false : `chromium unavailable: ${browserError.slice(0, 120)}`;
+
+test("Chromium sandbox is explicitly enabled", () => {
+  assert.equal(CHROMIUM_LAUNCH_OPTIONS.chromiumSandbox, true);
+  assert.ok(!(CHROMIUM_LAUNCH_OPTIONS.args ?? []).includes("--no-sandbox"));
+});
 
 function makeRequest(overrides: Partial<InternalRenderRequest> & { html: string; resources?: InternalRenderRequest["resources"] }): InternalRenderRequest {
   return {

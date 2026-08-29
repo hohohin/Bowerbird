@@ -571,6 +571,7 @@ let imageService = null;
 let supabaseClient = null;
 let supabaseAccessToken = null;
 let supabaseEmail = null;
+let supabaseDisplayName = null;
 
 function hasSupabaseAuth() {
   return Boolean(supabaseClient && imageService?.supabaseUrl);
@@ -587,10 +588,12 @@ async function initSupabaseAuth() {
     const { data } = await supabaseClient.auth.getSession();
     supabaseAccessToken = data.session?.access_token || null;
     supabaseEmail = data.session?.user?.email || null;
+    supabaseDisplayName = data.session?.user?.user_metadata?.nickname || null;
     if (supabaseClient && window.supabase && supabaseClient.auth) {
       supabaseClient.auth.onAuthStateChange((_event, session) => {
         supabaseAccessToken = session?.access_token || null;
         supabaseEmail = session?.user?.email || null;
+        supabaseDisplayName = session?.user?.user_metadata?.nickname || null;
         renderAccountState();
       });
     }
@@ -609,29 +612,135 @@ function renderAccountState() {
   }
   accountState.hidden = false;
   if (supabaseAccessToken) {
-    accountState.textContent = `已登录 · ${supabaseEmail || "账号"}`;
+    accountState.textContent = `已登录 · ${supabaseDisplayName || supabaseEmail || "账号"}`;
     accountState.title = "已登录，使用云端积分生成；点击可退出";
     accountState.onclick = async () => {
       await supabaseClient?.auth.signOut();
     };
   } else {
     accountState.textContent = "登录后使用云端积分";
-    accountState.title = "邮箱魔法链接登录，积分随账号跨官网与桌面使用";
-    accountState.onclick = async () => {
-      const email = window.prompt("输入邮箱登录 Bowerbird：");
-      if (!email || !email.includes("@")) return;
-      try {
-        await supabaseClient?.auth.signInWithOtp({
-          email,
-          options: { emailRedirectTo: window.location.origin },
-        });
-        accountState.textContent = "邮件已发送，请查收并点击验证链接";
-        accountState.onclick = null;
-      } catch (error) {
-        accountState.textContent = "登录邮件发送失败，请重试";
-      }
-    };
+    accountState.title = "微信扫码或邮箱登录，积分随账号跨官网与桌面使用";
+    accountState.onclick = () => showAccountLoginMenu();
   }
+}
+
+const WECHAT_LOGIN_STATE_KEY = "bowerbird.wechatLoginState";
+const SUPABASE_FUNCTION_REGION = "ap-northeast-1";
+let accountLoginMenu = null;
+
+function closeAccountLoginMenu() {
+  if (accountLoginMenu) {
+    accountLoginMenu.remove();
+    accountLoginMenu = null;
+  }
+}
+
+function showAccountLoginMenu() {
+  closeAccountLoginMenu();
+  const menu = document.createElement("div");
+  menu.setAttribute("role", "menu");
+  Object.assign(menu.style, {
+    position: "fixed",
+    zIndex: "60",
+    minWidth: "180px",
+    padding: "6px",
+    borderRadius: "12px",
+    background: "#ffffff",
+    border: "1px solid #e3e3dd",
+    boxShadow: "0 10px 30px rgba(0,0,0,.12)",
+    display: "flex",
+    flexDirection: "column",
+    gap: "2px",
+  });
+  const itemStyle = {
+    border: "none",
+    background: "none",
+    padding: "9px 12px",
+    borderRadius: "8px",
+    fontSize: "13px",
+    textAlign: "left",
+    cursor: "pointer",
+    color: "#1c1c1a",
+  };
+  const wechat = document.createElement("button");
+  wechat.type = "button";
+  wechat.textContent = "微信扫码登录";
+  Object.assign(wechat.style, itemStyle, { fontWeight: "600" });
+  wechat.onclick = () => {
+    closeAccountLoginMenu();
+    void startWechatLogin();
+  };
+  const email = document.createElement("button");
+  email.type = "button";
+  email.textContent = "邮箱魔法链接";
+  Object.assign(email.style, itemStyle, { color: "#6f6f66" });
+  email.onclick = () => {
+    closeAccountLoginMenu();
+    startEmailLogin();
+  };
+  menu.append(wechat, email);
+  document.body.append(menu);
+  const rect = accountState.getBoundingClientRect();
+  menu.style.top = `${Math.round(rect.bottom + 8)}px`;
+  menu.style.right = `${Math.max(8, Math.round(window.innerWidth - rect.right))}px`;
+  accountLoginMenu = menu;
+  window.setTimeout(() => {
+    document.addEventListener("mousedown", function onDown(event) {
+      if (accountLoginMenu && !accountLoginMenu.contains(event.target) && event.target !== accountState) {
+        closeAccountLoginMenu();
+        document.removeEventListener("mousedown", onDown);
+      }
+    });
+  }, 0);
+}
+
+// 微信扫码登录：state 存 sessionStorage 由 /wechat-callback 中转页校验（CSRF 防护）。
+async function startWechatLogin() {
+  const supabaseUrl = imageService?.supabaseUrl;
+  if (!supabaseUrl) {
+    accountState.textContent = "微信登录暂不可用";
+    return;
+  }
+  const random = crypto.randomUUID().replace(/-/g, "");
+  const state = `web_${random}`;
+  try {
+    window.sessionStorage.setItem(WECHAT_LOGIN_STATE_KEY, state);
+  } catch {
+    // 隐私模式下 sessionStorage 不可用时仍可发起，仅失去回调端校验。
+  }
+  accountState.textContent = "正在打开微信登录…";
+  accountState.onclick = null;
+  try {
+    const response = await fetch(
+      `${supabaseUrl.replace(/\/+$/, "")}/functions/v1/wechat-login?forceFunctionRegion=${SUPABASE_FUNCTION_REGION}&state=${encodeURIComponent(state)}`,
+      { headers: { Accept: "application/json" } },
+    );
+    const payload = await response.json();
+    if (!response.ok || !payload.qrconnect_url) {
+      throw new Error(payload?.error?.message || `微信登录暂不可用（HTTP ${response.status}）`);
+    }
+    window.location.href = payload.qrconnect_url;
+  } catch (error) {
+    accountState.textContent = error?.message || "微信登录发起失败";
+    accountState.onclick = () => showAccountLoginMenu();
+  }
+}
+
+function startEmailLogin() {
+  const email = window.prompt("输入邮箱登录 Bowerbird：");
+  if (!email || !email.includes("@")) return;
+  (async () => {
+    try {
+      await supabaseClient?.auth.signInWithOtp({
+        email,
+        options: { emailRedirectTo: window.location.origin },
+      });
+      accountState.textContent = "邮件已发送，请查收并点击验证链接";
+      accountState.onclick = null;
+    } catch (error) {
+      accountState.textContent = "登录邮件发送失败，请重试";
+    }
+  })();
 }
 
 function readDemoUsage() {

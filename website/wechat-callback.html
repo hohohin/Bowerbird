@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>微信登录 · Bowerbird</title>
+  <style>
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+      font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: #f6f6f4; color: #1c1c1a;
+    }
+    .card {
+      width: min(92vw, 380px); padding: 32px 28px; border-radius: 16px; background: #fff;
+      border: 1px solid #e5e5e0; box-shadow: 0 10px 30px rgba(0, 0, 0, .06); text-align: center;
+    }
+    .logo { font-size: 20px; font-weight: 700; letter-spacing: .5px; }
+    .status { margin-top: 14px; font-size: 14px; line-height: 1.7; color: #55554f; }
+    .spinner {
+      margin: 18px auto 0; width: 22px; height: 22px; border-radius: 50%;
+      border: 2.5px solid #e2e2dc; border-top-color: #16a34a; animation: spin .8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .error { color: #b91c1c; }
+    a.button {
+      display: inline-block; margin-top: 20px; padding: 9px 22px; border-radius: 999px;
+      background: #16a34a; color: #fff; font-size: 14px; text-decoration: none; font-weight: 600;
+    }
+    a.secondary { display: inline-block; margin-top: 12px; font-size: 13px; color: #7a7a72; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="logo">🐦 Bowerbird</div>
+    <div id="status" class="status">正在处理微信登录…</div>
+    <div id="spinner" class="spinner"></div>
+    <a id="primary" class="button hidden" href="/">回到 Bowerbird 官网</a>
+    <a id="secondary" class="secondary hidden" href="/">bowerbird.cn</a>
+  </main>
+
+  <script>
+    // 微信授权回调中转页（授权回调域必须是本备案域名，不能直接回调 *.supabase.co）。
+    // state 前缀分流：dt_ = 桌面端（跳 bowerbird:// deep link）；web_ = 官网（本页换会话）。
+    (function () {
+      var status = document.getElementById("status");
+      var spinner = document.getElementById("spinner");
+      var primary = document.getElementById("primary");
+      var secondary = document.getElementById("secondary");
+      var WECHAT_LOGIN_STATE_KEY = "bowerbird.wechatLoginState";
+      var SUPABASE_FUNCTION_REGION = "ap-northeast-1";
+
+      function done(message, isError, primaryHref, primaryText) {
+        spinner.classList.add("hidden");
+        status.textContent = message;
+        status.className = isError ? "status error" : "status";
+        if (primaryHref) {
+          primary.textContent = primaryText || "回到 Bowerbird 官网";
+          primary.setAttribute("href", primaryHref);
+          primary.classList.remove("hidden");
+        }
+        secondary.classList.remove("hidden");
+      }
+
+      var query = new URLSearchParams(window.location.search);
+      var code = query.get("code") || "";
+      var state = query.get("state") || "";
+      var wxError = query.get("error_description") || query.get("error") || "";
+
+      if (wxError) {
+        done("微信登录未完成：" + wxError + "。请回到发起页重新扫码。", true);
+        return;
+      }
+      if (!code || !state) {
+        done("缺少微信登录参数；请回到发起页重新扫码。", true);
+        return;
+      }
+
+      if (state.indexOf("dt_") === 0) {
+        // 桌面端：把一次性 code 交回本机的 Bowerbird，token 不经过浏览器。
+        status.textContent = "正在返回 Bowerbird 桌面应用…";
+        window.location.replace("bowerbird://wechat/callback?code=" + encodeURIComponent(code) + "&state=" + encodeURIComponent(state));
+        // 浏览器可能拦截自定义协议；保留手动重试入口。
+        setTimeout(function () {
+          done("如果没有自动返回，请点击下方按钮重试（需已安装 Bowerbird 桌面版）。", false,
+            "bowerbird://wechat/callback?code=" + encodeURIComponent(code) + "&state=" + encodeURIComponent(state),
+            "打开 Bowerbird");
+        }, 1200);
+        return;
+      }
+
+      if (state.indexOf("web_") !== 0) {
+        done("无法识别的登录来源；请回到官网重新发起微信登录。", true);
+        return;
+      }
+
+      // 官网：校验 sessionStorage 的 state（CSRF），再换取会话写入本站。
+      var expected = null;
+      try { expected = window.sessionStorage.getItem(WECHAT_LOGIN_STATE_KEY); } catch (e) { /* 隐私模式 */ }
+      if (!expected || expected !== state) {
+        done("登录会话不匹配；请回到官网重新发起微信登录。", true);
+        return;
+      }
+
+      Promise.resolve()
+        .then(function () { return fetch("/api/image-config", { headers: { Accept: "application/json" } }); })
+        .then(function (response) { if (!response.ok) throw new Error("配置不可用"); return response.json(); })
+        .then(function (config) {
+          var supabaseUrl = config && config.supabaseUrl;
+          var key = config && (config.supabasePublishableKey || config.supabaseAnonKey);
+          if (!supabaseUrl || !key) throw new Error("官网账号服务未配置");
+          return fetch(supabaseUrl.replace(/\/+$/, "") + "/functions/v1/wechat-login?forceFunctionRegion=" + SUPABASE_FUNCTION_REGION, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ code: code, state: state })
+          }).then(function (response) {
+            return response.json().then(function (payload) {
+              if (!response.ok || !payload || !payload.access_token || !payload.refresh_token) {
+                var message = payload && payload.error && payload.error.message ? payload.error.message : "登录失败（HTTP " + response.status + "）";
+                throw new Error(message);
+              }
+              return { config: config, tokens: payload };
+            });
+          });
+        })
+        .then(function (step) {
+          return new Promise(function (resolve, reject) {
+            var script = document.createElement("script");
+            script.src = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
+            script.onerror = function () { reject(new Error("账号组件加载失败")); };
+            script.onload = function () {
+              try {
+                var client = window.supabase.createClient(
+                  step.config.supabaseUrl,
+                  step.config.supabasePublishableKey || step.config.supabaseAnonKey,
+                  { auth: { persistSession: true, autoRefreshToken: true, flowType: "pkce" } }
+                );
+                resolve(client.auth.setSession({ access_token: step.tokens.access_token, refresh_token: step.tokens.refresh_token }));
+              } catch (error) { reject(error); }
+            };
+            document.head.appendChild(script);
+          });
+        })
+        .then(function () {
+          try { window.sessionStorage.removeItem(WECHAT_LOGIN_STATE_KEY); } catch (e) { /* 忽略 */ }
+          status.textContent = "微信登录成功，正在回到官网…";
+          window.setTimeout(function () { window.location.replace("/"); }, 600);
+        })
+        .catch(function (error) {
+          done((error && error.message ? error.message : "登录失败") + "。请回到官网重试。", true);
+        });
+    })();
+  </script>
+</body>
+</html>

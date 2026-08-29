@@ -75,6 +75,8 @@ export type ClaimedArtifact = {
   mime: string;
   bytes: number;
   sha256: string;
+  width?: number | null;
+  height?: number | null;
   userVisible: boolean;
   url?: string | null;
 };
@@ -282,12 +284,33 @@ export class AgentControlClient {
     progress: number;
   }): Promise<{ checkpointHash: string; objectKey: string }> {
     const encoded = encodeControlledCheckpoint(args.checkpoint);
+    return await this.saveRawCheckpoint({
+      runId: args.runId,
+      leaseId: args.leaseId,
+      bytes: encoded.bytes,
+      sha256: encoded.sha256,
+      snapshotSchemaVersion: args.checkpoint.schemaVersion,
+      step: args.step,
+      progress: args.progress,
+    });
+  }
+
+  /** Skill 无关的 checkpoint 落盘（两阶段 prepare/upload/commit；HTML 等新 Skill 复用）。 */
+  async saveRawCheckpoint(args: {
+    runId: string;
+    leaseId: string;
+    bytes: Uint8Array;
+    sha256: string;
+    snapshotSchemaVersion: number;
+    step: string;
+    progress: number;
+  }): Promise<{ checkpointHash: string; objectKey: string }> {
     const prepared = await this.post({
       action: "checkpoint_prepare",
       runId: args.runId,
       leaseId: args.leaseId,
-      checkpointHash: encoded.sha256,
-      snapshotSchemaVersion: args.checkpoint.schemaVersion,
+      checkpointHash: args.sha256,
+      snapshotSchemaVersion: args.snapshotSchemaVersion,
     });
     if (typeof prepared.uploadUrl !== "string" || typeof prepared.objectKey !== "string") {
       throw new Error("agent_checkpoint_prepare_invalid");
@@ -295,19 +318,30 @@ export class AgentControlClient {
     const uploaded = await this.fetch(prepared.uploadUrl, {
       method: "PUT",
       headers: { "content-type": "application/json", "x-upsert": "true" },
-      body: encoded.bytes,
+      body: args.bytes,
     });
     if (!uploaded.ok) throw new Error(`agent_checkpoint_upload_http_${uploaded.status}`);
     await this.post({
       action: "checkpoint_commit",
       runId: args.runId,
       leaseId: args.leaseId,
-      checkpointHash: encoded.sha256,
-      snapshotSchemaVersion: args.checkpoint.schemaVersion,
+      checkpointHash: args.sha256,
+      snapshotSchemaVersion: args.snapshotSchemaVersion,
       step: args.step,
       progress: args.progress,
     });
-    return { checkpointHash: encoded.sha256, objectKey: prepared.objectKey };
+    return { checkpointHash: args.sha256, objectKey: prepared.objectKey };
+  }
+
+  /** Skill 无关的 checkpoint 读取（hash 由调用方 codec 复核）。 */
+  async loadRawCheckpoint(
+    claimed: ClaimedAgentRun & { run: NonNullable<ClaimedAgentRun["run"]> },
+  ): Promise<Uint8Array | null> {
+    if (!claimed.run.checkpointHash && !claimed.checkpointUrl) return null;
+    if (!claimed.run.checkpointHash || !claimed.checkpointUrl || claimed.run.snapshotSchemaVersion === null) {
+      throw new Error("agent_checkpoint_claim_incomplete");
+    }
+    return await this.download(claimed.checkpointUrl);
   }
 
   async appendEvents(runId: string, leaseId: string, events: AgentDisplayEvent[]): Promise<void> {
@@ -533,6 +567,37 @@ export class AgentControlClient {
     estimatedAdditionalCredits: number;
   }): Promise<void> {
     await this.post({ action: "approval_request", ...args });
+  }
+
+  async requestUnifiedPlanApproval(args: {
+    runId: string;
+    leaseId: string;
+    callId: string;
+    argsHash: string;
+    proposalHash: string;
+    proposal: Record<string, unknown>;
+  }): Promise<{
+    status: "awaiting_approval";
+    proposalHash: string;
+    estimatedAdditionalCredits: number;
+    reused: boolean;
+  }> {
+    const result = await this.post({
+      action: "approval_request",
+      kind: "unified_agent_plan",
+      ...args,
+    });
+    if (result.status !== "awaiting_approval" || result.proposalHash !== args.proposalHash ||
+        !Number.isSafeInteger(result.estimatedAdditionalCredits) || Number(result.estimatedAdditionalCredits) < 0 ||
+        typeof result.reused !== "boolean") {
+      throw new Error("agent_unified_plan_approval_response_invalid");
+    }
+    return {
+      status: "awaiting_approval",
+      proposalHash: args.proposalHash,
+      estimatedAdditionalCredits: Number(result.estimatedAdditionalCredits),
+      reused: result.reused,
+    };
   }
 
   async requestClarification(args: {

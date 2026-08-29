@@ -75,6 +75,7 @@ supabase functions deploy create-checkout
 supabase functions deploy payment-webhook
 supabase functions deploy agent-run
 supabase functions deploy agent-worker --no-verify-jwt
+supabase functions deploy wechat-login --no-verify-jwt
 
 # 注入 secrets（从 .env 读取；只上传一次，函数运行环境持有）
 supabase secrets set SUPABASE_URL=$SUPABASE_URL
@@ -85,7 +86,7 @@ supabase secrets set ARK_BASE_URL=$ARK_BASE_URL
 supabase secrets set ARK_IMAGE_MODEL=$ARK_IMAGE_MODEL
 supabase secrets set ARK_VIDEO_MODEL=$ARK_VIDEO_MODEL
 supabase secrets set ARK_VISION_MODEL=$ARK_VISION_MODEL
-supabase secrets set ALLOWED_ORIGINS="https://<你的官网域名>"
+supabase secrets set ALLOWED_ORIGINS="https://bowerbird.cn,http://127.0.0.1:5173,http://localhost:5173"
 supabase secrets set DAILY_COST_LIMIT_CNY=500
 supabase secrets set COST_CNY_PER_CREDIT=0.047
 supabase secrets set ARK_IMAGE_TIMEOUT_MS=135000
@@ -98,6 +99,9 @@ supabase secrets set UNDERSTAND_WORKER_TOKEN=$UNDERSTAND_WORKER_TOKEN
 supabase secrets set AGENT_WORKER_TOKEN=$AGENT_WORKER_TOKEN
 supabase secrets set BOWERBIRD_PAYMENT_MOCK=true
 supabase secrets set SUPERUN_WEBHOOK_SECRET=$SUPERUN_WEBHOOK_SECRET
+supabase secrets set WECHAT_APP_ID=$WECHAT_APP_ID
+supabase secrets set WECHAT_APP_SECRET=$WECHAT_APP_SECRET
+supabase secrets set WECHAT_REDIRECT_URI=$WECHAT_REDIRECT_URI
 ```
 
 > ⚠️ 目前 `.env` 里 `BOWERBIRD_CLOUD_MOCK=false` 已开启真实方舟；`BOWERBIRD_PAYMENT_MOCK=true` 保持 Mock 支付，**不要**提前改 false。
@@ -144,22 +148,41 @@ UNDERSTAND_CONTROL_URL=https://<project-ref>.supabase.co/functions/v1/understand
 UNDERSTAND_WORKER_TOKEN=<与 Supabase Secret 完全一致的高熵随机值>
 UNDERSTAND_WORKER_ID=lighthouse-guangzhou-1
 ARK_VISION_MODEL=<豆包 Vision endpoint id>
+RENDERER_URL=http://html-renderer:3917
+RENDER_INTERNAL_TOKEN=<与 html-renderer .env.renderer 完全一致的高熵随机值>
 ```
 
 ```bash
+cd /opt/bowerbird/html-renderer
+cp .env.renderer.example .env.renderer
+chmod 600 .env.renderer
+# 生成至少 32 字节随机 token，填入 .env.renderer；同一值也填入 agent-worker/.env.generation
+sudo docker compose -f compose.renderer.yml up -d --build
+
 cd /opt/bowerbird/agent-worker
 sudo docker compose -f compose.generation.yml up -d --build
 sudo docker compose -f compose.generation.yml ps
 sudo docker compose -f compose.generation.yml logs --tail 50
 ```
 
-容器不映射入站端口、只读根文件系统、非 root、丢弃全部 capabilities，并限制 1536 MiB 内存、1.75 CPU、256 PID、256 MiB workspace tmpfs 与 10 MiB × 3 JSON 日志。容器入口为 `src/main.ts` 组合入口：按 `GENERATION_CONTROL_URL` / `UNDERSTAND_CONTROL_URL` / `AGENT_CONTROL_URL` 是否配置分别启动生图、理解与 Agent 三个消费循环，互不阻塞。方舟同步请求（生图与理解）不设置 120/135 秒主动终止；等待期间每 30 秒向 Bowerbird 控制面续租。Agent 循环每 10 分钟运行 TTL/orphan 清理并输出不含用户内容的控制面与磁盘健康指标；可在运维端运行 `node apps/cloud/scripts/check-agent-runtime-health.mjs` 做阈值探测。
+`html-renderer` 只连接 `internal: true` 的 `bowerbird-internal` 网络，无宿主端口和公网出口；Worker 同时连接默认出站网络与该内部网络，通过固定 `RENDERER_URL` 调用。先启动 renderer 创建内部网络，再启动 Worker。两个 env 文件中的 `RENDER_INTERNAL_TOKEN` 必须一致且权限为 `0600`，不得写入仓库或日志。
 
-### 5. 部署 Auth 钩子（注册即发 30 分）
+Worker 容器不映射入站端口、只读根文件系统、非 root、丢弃全部 capabilities，并限制 1536 MiB 内存、1.75 CPU、256 PID、256 MiB workspace tmpfs 与 10 MiB × 3 JSON 日志。容器入口为 `src/main.ts` 组合入口：按 `GENERATION_CONTROL_URL` / `UNDERSTAND_CONTROL_URL` / `AGENT_CONTROL_URL` 是否配置分别启动生图、理解与 Agent 三个消费循环，互不阻塞。方舟同步请求（生图与理解）不设置 120/135 秒主动终止；等待期间每 30 秒向 Bowerbird 控制面续租。Agent 循环每 10 分钟运行 TTL/orphan 清理并输出不含用户内容的控制面与磁盘健康指标；可在运维端运行 `node apps/cloud/scripts/check-agent-runtime-health.mjs` 做阈值探测。
+
+### 5. 微信扫码登录（H5，备案域名 bowerbird.cn）
+
+登录链路：桌面/官网 → 系统浏览器打开 `open.weixin.qq.com/connect/qrconnect`（appid/回调域由 `wechat-login` GET 按 Secrets 组装）→ 微信回调到备案域名静态中转页 [website/wechat-callback.html](../../website/wechat-callback.html)（VPS 直接伺服该静态文件）→ 按 `state` 前缀分流：`dt_` 跳 `bowerbird://wechat/callback` deep link 由桌面 Rust 校验后 POST 换会话；`web_` 中转页同源校验 sessionStorage 后自行 POST 换会话。`wechat-login` Function 用 service role `generateLink(magiclink)→/auth/v1/verify` 铸真实 GoTrue 会话（unionid→确定性合成邮箱建号，注册触发器照常发 30 分）。
 
 ```bash
-supabase functions deploy wechat-login    # 后续微信登录时部署，H5 凭据备好再发
+supabase functions deploy wechat-login --no-verify-jwt   # §4 的 secrets（H5 段）备好后执行
 ```
+
+微信侧与 VPS 侧手工步骤：
+
+1. 微信开放平台 → 网站应用 → 授权回调域填 `bowerbird.cn`（不带协议、不带路径）。
+2. `wechat-callback.html` 随官网 `dist/` 一起部署（`WECHAT_REDIRECT_URI=https://bowerbird.cn/wechat-callback.html`）；与官网同源，nginx/官网 server.mjs 无需任何改动。
+3. `ALLOWED_ORIGINS` 必须包含 `https://bowerbird.cn`（官网浏览器直调该函数走 CORS）。
+4. Supabase Dashboard 无需改动：微信链路不经过 GoTrue redirect/邮件模板，会话由 service role 经 `generateLink`+`verify` 直接签发。
 
 ## 6. 验证
 

@@ -14,6 +14,7 @@ use crate::error::{AppError, AppResult};
 const KEYRING_SERVICE: &str = "com.bowerbird.desktop";
 const KEYRING_USER: &str = "supabase-refresh-token";
 const CALLBACK_PREFIX: &str = "bowerbird://auth/callback";
+const WECHAT_CALLBACK_PREFIX: &str = "bowerbird://wechat/callback";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AuthSnapshot {
@@ -21,6 +22,9 @@ pub struct AuthSnapshot {
     pub logged_in: bool,
     pub user_id: Option<String>,
     pub email: Option<String>,
+    /// 微信登录时来自 user_metadata.nickname；邮箱登录为 None（UI 回退显示 email）。
+    pub display_name: Option<String>,
+    pub avatar_url: Option<String>,
     pub access_expires_at: Option<DateTime<Utc>>,
     pub reason: Option<String>,
 }
@@ -38,6 +42,18 @@ struct TokenResponse {
 struct AuthUser {
     id: String,
     email: Option<String>,
+    user_metadata: Option<AuthUserMetadata>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct AuthUserMetadata {
+    nickname: Option<String>,
+    avatar_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct WechatQrconnect {
+    qrconnect_url: String,
 }
 
 #[derive(Debug, Clone)]
@@ -45,13 +61,16 @@ struct Session {
     access_token: String,
     user_id: Option<String>,
     email: Option<String>,
+    display_name: Option<String>,
+    avatar_url: Option<String>,
     expires_at: DateTime<Utc>,
 }
 
+/// 进行中的登录请求（单槽）：邮箱魔法链接走 PKCE；微信扫码用 state 绑定 deep link 回调。
 #[derive(Debug, Clone)]
-struct PendingPkce {
-    state: String,
-    verifier: String,
+enum PendingLogin {
+    Email { state: String, verifier: String },
+    Wechat { state: String },
 }
 
 struct TokenRequestFailure {
@@ -77,6 +96,26 @@ fn auth_error_code(body: &str) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
+}
+
+fn publishable_key(config: &crate::cloud::config::CloudConfig) -> Option<&str> {
+    config
+        .supabase_publishable_key
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+}
+
+/// 解析 Edge Function 错误响应（`{"error":{"code","message"}}`），回退 GoTrue 风格顶层字段。
+fn function_error_message(body: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    if let Some(nested) = value
+        .get("error")
+        .and_then(|error| error.get("message"))
+        .and_then(|message| message.as_str())
+    {
+        return Some(nested.trim().to_string()).filter(|value| !value.is_empty());
+    }
+    auth_error_detail(body)
 }
 
 fn callback_params(url: &reqwest::Url) -> std::collections::HashMap<String, String> {
@@ -133,7 +172,7 @@ pub struct AuthClient {
 struct AuthInner {
     cloud: CloudClient,
     session: RwLock<Option<Session>>,
-    pending: RwLock<Option<PendingPkce>>,
+    pending: RwLock<Option<PendingLogin>>,
     refresh_lock: Mutex<()>,
 }
 
@@ -171,6 +210,8 @@ impl AuthClient {
                 logged_in: true,
                 user_id: value.user_id.clone(),
                 email: value.email.clone(),
+                display_name: value.display_name.clone(),
+                avatar_url: value.avatar_url.clone(),
                 access_expires_at: Some(value.expires_at),
                 reason: None,
             },
@@ -179,6 +220,8 @@ impl AuthClient {
                 logged_in: false,
                 user_id: None,
                 email: None,
+                display_name: None,
+                avatar_url: None,
                 access_expires_at: None,
                 reason: Some(if cloud_available {
                     "未登录 Bowerbird 账号".into()
@@ -211,7 +254,7 @@ impl AuthClient {
         let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .encode(Sha256::digest(verifier.as_bytes()));
         let state = Ulid::new().to_string();
-        *self.inner.pending.write().unwrap() = Some(PendingPkce {
+        *self.inner.pending.write().unwrap() = Some(PendingLogin::Email {
             state: state.clone(),
             verifier,
         });
@@ -288,7 +331,7 @@ impl AuthClient {
             .get("state")
             .filter(|value| !value.is_empty())
             .ok_or_else(|| AppError::Cloud("登录回调缺少 state".into()))?;
-        let pending = {
+        let verifier = {
             let mut pending_slot = self.inner.pending.write().unwrap();
             let Some(pending) = pending_slot.as_ref() else {
                 // Windows 可能把同一 deep link 同时交给 single-instance 与启动参数路径；第一次已
@@ -298,12 +341,142 @@ impl AuthClient {
                 }
                 return Err(AppError::Cloud("登录请求已过期，请重新发起".into()));
             };
-            if pending.state != *callback_state {
+            let PendingLogin::Email { state, verifier } = pending else {
+                return Err(AppError::Cloud(
+                    "当前进行中的是微信扫码登录；请完成扫码或重新发起邮箱登录".into(),
+                ));
+            };
+            if state != callback_state {
                 return Err(AppError::Cloud("登录回调 state 不匹配".into()));
             }
-            pending_slot.take().unwrap()
+            let verifier = verifier.clone();
+            pending_slot.take();
+            verifier
         };
-        let token = self.exchange_code(code, &pending.verifier).await?;
+        let token = self.exchange_code(code, &verifier).await?;
+        self.store_session(token)?;
+        Ok(self.snapshot())
+    }
+
+    /// 请求微信扫码登录。返回系统浏览器要打开的二维码页 URL；qrconnect 参数（appid /
+    /// 回调域）由 wechat-login Function 按 Secrets 组装，桌面端不内置。
+    pub async fn start_wechat_login(&self) -> AppResult<String> {
+        let config = self.inner.cloud.config();
+        let endpoint = config
+            .endpoint("wechat-login")
+            .ok_or_else(|| AppError::Cloud("Supabase URL 未配置".into()))?;
+        let publishable = publishable_key(config)
+            .ok_or_else(|| AppError::Cloud("Supabase publishable key 未配置".into()))?;
+        let state = format!("dt_{}", Ulid::new());
+        *self.inner.pending.write().unwrap() = Some(PendingLogin::Wechat {
+            state: state.clone(),
+        });
+
+        let response = self
+            .inner
+            .cloud
+            .http()
+            .get(format!("{endpoint}&state={state}"))
+            .header("apikey", publishable)
+            .send()
+            .await
+            .map_err(|error| AppError::Cloud(format!("连接微信登录服务失败: {error}")))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            let detail = function_error_message(&body);
+            let prefix = if status == reqwest::StatusCode::SERVICE_UNAVAILABLE {
+                "微信登录暂未开放"
+            } else {
+                "微信登录暂时不可用"
+            };
+            return Err(AppError::Cloud(format!(
+                "{prefix}（HTTP {status}{}）",
+                detail.map(|value| format!("：{value}")).unwrap_or_default()
+            )));
+        }
+        let payload: WechatQrconnect = response
+            .json()
+            .await
+            .map_err(|error| AppError::Cloud(format!("解析微信登录响应失败: {error}")))?;
+        if payload.qrconnect_url.trim().is_empty() {
+            return Err(AppError::Cloud("微信登录二维码地址无效".into()));
+        }
+        Ok(payload.qrconnect_url)
+    }
+
+    /// 微信扫码 deep link 回调：校验 state 后把微信一次性 code 交给 wechat-login Function
+    /// 换取真实 GoTrue 会话（token 全程不经过浏览器，直接进 keyring/内存）。
+    pub async fn handle_wechat_callback(&self, callback: &str) -> AppResult<AuthSnapshot> {
+        let parsed = reqwest::Url::parse(callback)
+            .map_err(|_| AppError::Cloud("微信登录回调 URL 无效".into()))?;
+        if parsed.scheme() != "bowerbird"
+            || parsed.host_str() != Some("wechat")
+            || parsed.path() != "/callback"
+        {
+            return Err(AppError::Cloud("拒绝非 Bowerbird 微信登录回调".into()));
+        }
+        let params = callback_params(&parsed);
+        if let Some(message) = callback_error_message(&params) {
+            return Err(AppError::Cloud(message));
+        }
+        let code = params
+            .get("code")
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| AppError::Cloud("微信扫码未完成；请重新发起并完成扫码".into()))?;
+        let callback_state = params
+            .get("state")
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| AppError::Cloud("微信登录回调缺少 state".into()))?;
+        {
+            let mut pending_slot = self.inner.pending.write().unwrap();
+            let Some(pending) = pending_slot.as_ref() else {
+                // 与邮箱回调同款幂等：重复 deep link 不得覆盖已完成的登录状态。
+                if self.snapshot().logged_in {
+                    return Ok(self.snapshot());
+                }
+                return Err(AppError::Cloud("微信登录请求已过期，请重新发起".into()));
+            };
+            let PendingLogin::Wechat { state } = pending else {
+                return Err(AppError::Cloud(
+                    "当前进行中的是邮箱登录；请先完成邮件验证或重新发起微信登录".into(),
+                ));
+            };
+            if state != callback_state {
+                return Err(AppError::Cloud("微信登录回调 state 不匹配".into()));
+            }
+            pending_slot.take();
+        }
+
+        let config = self.inner.cloud.config();
+        let endpoint = config
+            .endpoint("wechat-login")
+            .ok_or_else(|| AppError::Cloud("Supabase URL 未配置".into()))?;
+        let publishable = publishable_key(config)
+            .ok_or_else(|| AppError::Cloud("Supabase publishable key 未配置".into()))?;
+        let response = self
+            .inner
+            .cloud
+            .http()
+            .post(endpoint)
+            .header("apikey", publishable)
+            .json(&serde_json::json!({ "code": code, "state": callback_state }))
+            .send()
+            .await
+            .map_err(|error| AppError::Cloud(format!("连接微信登录服务失败: {error}")))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            let detail = function_error_message(&body);
+            return Err(AppError::Cloud(format!(
+                "微信登录失败（HTTP {status}{}）",
+                detail.map(|value| format!("：{value}")).unwrap_or_default()
+            )));
+        }
+        let token: TokenResponse = response
+            .json()
+            .await
+            .map_err(|error| AppError::Cloud(format!("解析微信登录响应失败: {error}")))?;
         self.store_session(token)?;
         Ok(self.snapshot())
     }
@@ -550,10 +723,16 @@ impl AuthClient {
         Self::keyring_entry()?
             .set_password(&token.refresh_token)
             .map_err(|error| AppError::Cloud(format!("写入系统凭据失败: {error}")))?;
+        let metadata = token
+            .user
+            .as_ref()
+            .and_then(|user| user.user_metadata.as_ref());
         *self.inner.session.write().unwrap() = Some(Session {
             access_token: token.access_token,
             user_id: token.user.as_ref().map(|user| user.id.clone()),
-            email: token.user.and_then(|user| user.email),
+            email: token.user.clone().and_then(|user| user.email),
+            display_name: metadata.and_then(|value| value.nickname.clone()),
+            avatar_url: metadata.and_then(|value| value.avatar_url.clone()),
             expires_at,
         });
         Ok(())
@@ -583,8 +762,8 @@ mod tests {
     use chrono::{Duration, TimeZone, Utc};
 
     use super::{
-        auth_error_detail, jwt_expires_at, retry_seconds, session_needs_refresh, AuthClient,
-        PendingPkce, Session,
+        auth_error_detail, function_error_message, jwt_expires_at, retry_seconds,
+        session_needs_refresh, AuthClient, PendingLogin, Session,
     };
     use crate::cloud::{config::CloudConfig, CloudClient};
 
@@ -637,6 +816,8 @@ mod tests {
             access_token: "token".into(),
             user_id: None,
             email: None,
+            display_name: None,
+            avatar_url: None,
             expires_at,
         };
         assert!(session_needs_refresh(
@@ -670,7 +851,7 @@ mod tests {
     #[tokio::test]
     async fn callback_rejects_wrong_scheme_before_network() {
         let auth = client();
-        *auth.inner.pending.write().unwrap() = Some(PendingPkce {
+        *auth.inner.pending.write().unwrap() = Some(PendingLogin::Email {
             state: "state".into(),
             verifier: "verifier".into(),
         });
@@ -684,7 +865,7 @@ mod tests {
     #[tokio::test]
     async fn callback_rejects_mismatched_state_before_network() {
         let auth = client();
-        *auth.inner.pending.write().unwrap() = Some(PendingPkce {
+        *auth.inner.pending.write().unwrap() = Some(PendingLogin::Email {
             state: "expected".into(),
             verifier: "verifier".into(),
         });
@@ -699,9 +880,26 @@ mod tests {
                 .read()
                 .unwrap()
                 .as_ref()
-                .map(|pending| pending.state.as_str()),
+                .map(|pending| match pending {
+                    PendingLogin::Email { state, .. } => state.as_str(),
+                    PendingLogin::Wechat { state } => state.as_str(),
+                }),
             Some("expected")
         );
+    }
+
+    #[tokio::test]
+    async fn callback_rejects_wechat_pending_without_consuming_it() {
+        let auth = client();
+        *auth.inner.pending.write().unwrap() = Some(PendingLogin::Wechat {
+            state: "dt_state".into(),
+        });
+        let error = auth
+            .handle_callback("bowerbird://auth/callback?code=x&state=dt_state")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("微信扫码登录"));
+        assert!(auth.inner.pending.read().unwrap().is_some());
     }
 
     #[tokio::test]
@@ -737,5 +935,87 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.to_string().contains("邮件安全扫描器"));
+    }
+
+    #[tokio::test]
+    async fn wechat_callback_rejects_wrong_scheme_before_network() {
+        let auth = client();
+        *auth.inner.pending.write().unwrap() = Some(PendingLogin::Wechat {
+            state: "dt_expected".into(),
+        });
+        let error = auth
+            .handle_wechat_callback("https://wechat/callback?code=x&state=dt_expected")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("非 Bowerbird"));
+    }
+
+    #[tokio::test]
+    async fn wechat_callback_rejects_mismatched_state_and_keeps_pending() {
+        let auth = client();
+        *auth.inner.pending.write().unwrap() = Some(PendingLogin::Wechat {
+            state: "dt_expected".into(),
+        });
+        let error = auth
+            .handle_wechat_callback("bowerbird://wechat/callback?code=x&state=dt_wrong")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("state 不匹配"));
+        assert!(auth.inner.pending.read().unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn wechat_callback_rejects_email_pending_without_consuming_it() {
+        let auth = client();
+        *auth.inner.pending.write().unwrap() = Some(PendingLogin::Email {
+            state: "expected".into(),
+            verifier: "verifier".into(),
+        });
+        let error = auth
+            .handle_wechat_callback("bowerbird://wechat/callback?code=x&state=expected")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("邮箱登录"));
+        assert!(auth.inner.pending.read().unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn wechat_callback_without_pending_reports_expired() {
+        let auth = client();
+        let error = auth
+            .handle_wechat_callback("bowerbird://wechat/callback?code=x&state=dt_x")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("已过期"));
+    }
+
+    #[tokio::test]
+    async fn wechat_callback_requires_code() {
+        let auth = client();
+        *auth.inner.pending.write().unwrap() = Some(PendingLogin::Wechat {
+            state: "dt_expected".into(),
+        });
+        let error = auth
+            .handle_wechat_callback("bowerbird://wechat/callback?state=dt_expected")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("扫码未完成"));
+    }
+
+    #[test]
+    fn function_error_message_reads_nested_edge_envelope() {
+        assert_eq!(
+            function_error_message(
+                r#"{"error":{"code":"invalid_request","message":"微信登录授权码无效，请重新扫码"}}"#
+            )
+            .as_deref(),
+            Some("微信登录授权码无效，请重新扫码")
+        );
+        assert_eq!(
+            function_error_message(r#"{"message":"top level"}"#).as_deref(),
+            Some("top level")
+        );
+        assert_eq!(function_error_message("not json"), None);
+        assert_eq!(auth_error_detail(r#"{"error":{"message":""}}"#), None);
     }
 }

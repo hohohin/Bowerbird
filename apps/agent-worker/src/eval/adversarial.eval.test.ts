@@ -82,7 +82,8 @@ test("对抗 2/5：重复生图被拒（policy 层）", () => {
   );
   equal(verdict.verdict, "deny");
   if (verdict.verdict === "deny") {
-    equal(verdict.reason, "max_generate_attempts_exceeded");
+    // phase 门控（H3 泛化）先于次数上限：refine phase 未声明 generate_image。
+    equal(verdict.reason, "generate_image_phase_not_allowed");
     equal(verdict.errorClass, "policy_denied");
   }
 });

@@ -10,7 +10,7 @@
  * 用 CDP Page.getLayoutMetrics 连续采样确认尺寸稳定，再执行**唯一一次** rasterization；
  * 切片一律由 render-service 从该整页 PNG 裁出（本文件绝不滚动重截）。
  */
-import { chromium, type Browser, type BrowserContext, type Route, type Request } from "playwright";
+import { chromium, type Browser, type BrowserContext, type LaunchOptions, type Route, type Request } from "playwright";
 import { ASSETS_HOST, DOCUMENT_URL, classifyRouteRequest } from "./route-policy.ts";
 import type { RenderBackground, RenderCaptureMode, RenderResourceMime } from "./contracts.ts";
 import { DEFAULT_STYLESHEET_VERSION } from "./fingerprint.ts";
@@ -24,6 +24,14 @@ export const CHROMIUM_LAUNCH_ARGS: readonly string[] = [
   "--disable-lcd-text",
   "--hide-scrollbars",
 ];
+
+export const CHROMIUM_LAUNCH_OPTIONS: LaunchOptions = {
+  args: [...CHROMIUM_LAUNCH_ARGS],
+  chromiumSandbox: true,
+  handleSIGHUP: false,
+  handleSIGINT: false,
+  handleSIGTERM: false,
+};
 
 /** 封闭 CSP：无脚本、无外部源、无表单/框架/连接；样式仅内联。 */
 const CSP_HEADER =
@@ -95,7 +103,7 @@ export type RenderSessionOk = {
 export type RenderSessionError = { code: "render_layout_unstable" | "render_timeout" | "render_resource_invalid" | "render_document_too_large" | "render_service_unavailable" | "render_output_invalid"; reason: string };
 
 export async function launchRendererBrowser(): Promise<Browser> {
-  return chromium.launch({ args: [...CHROMIUM_LAUNCH_ARGS], handleSIGHUP: false, handleSIGINT: false, handleSIGTERM: false });
+  return chromium.launch(CHROMIUM_LAUNCH_OPTIONS);
 }
 
 export async function renderDocument(browser: Browser, input: RenderSessionInput): Promise<RenderSessionOk | RenderSessionError> {

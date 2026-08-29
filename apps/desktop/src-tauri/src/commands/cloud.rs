@@ -18,6 +18,12 @@ pub async fn cloud_start_email_login(
     auth.start_email_login(&email).await
 }
 
+/// 发起微信扫码登录；返回系统浏览器要打开的二维码页 URL（由前端 open）。
+#[tauri::command]
+pub async fn cloud_start_wechat_login(auth: State<'_, AuthClient>) -> Result<String, AppError> {
+    auth.start_wechat_login().await
+}
+
 #[tauri::command]
 pub async fn cloud_restore_session(auth: State<'_, AuthClient>) -> Result<AuthSnapshot, AppError> {
     auth.restore().await

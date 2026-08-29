@@ -1,4 +1,6 @@
 import { ControlledImageEditRunProcessor } from "./controlled-run-processor.ts";
+import { HtmlLayoutRenderRunProcessor, SkillDispatchProcessor } from "./html-layout-run-processor.ts";
+import { htmlRenderConfigFromEnv } from "../providers/renderer/html-render-executor.ts";
 import { statfsSync } from "node:fs";
 import { agentConfigFromEnv, runAgentWorker } from "./runtime.ts";
 import { cleanupOrphanWorkspaces, RunWorkspace } from "./run-workspace.ts";
@@ -20,7 +22,9 @@ export function runControlledAgentWorker(env: Record<string, string | undefined>
   const deepSeek = deepSeekConfigFromEnv(env);
   const workspaceRoot = env.AGENT_WORKSPACE_ROOT?.trim();
   if (!workspaceRoot) throw new Error("AGENT_WORKSPACE_ROOT_missing");
-  const processor = new ControlledImageEditRunProcessor(
+  // HTML 排版 renderer 未配置时该 Skill 的 Run fail closed（processor 内 render_service_unavailable）。
+  const renderConfig = htmlRenderConfigFromEnv(env);
+  const controlledProcessor = new ControlledImageEditRunProcessor(
     new DeepSeekBackend(deepSeek),
     (context) => {
       const workspace = new RunWorkspace({
@@ -69,7 +73,12 @@ export function runControlledAgentWorker(env: Record<string, string | undefined>
     },
     { meteredModelName: deepSeek.model },
   );
-  return runAgentWorker(worker, processor, {
+  const htmlLayoutProcessor = new HtmlLayoutRenderRunProcessor(new DeepSeekBackend(deepSeek), {
+    meteredModelName: deepSeek.model,
+    ...(renderConfig ? { renderConfig } : {}),
+    workspaceRoot,
+  });
+  return runAgentWorker(worker, new SkillDispatchProcessor(controlledProcessor, htmlLayoutProcessor), {
     maintenance: async (control) => {
       const removed = cleanupOrphanWorkspaces(workspaceRoot);
       const cloud = await control.cleanupExpired();

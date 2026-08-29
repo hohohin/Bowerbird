@@ -125,6 +125,26 @@ begin
     )
     and relation.relrowsecurity
     and relation.relforcerowsecurity;
+  insert into agent_runtime_test_results
+  select 'unified approval identity columns exist', count(*) = 3
+  from information_schema.columns
+  where table_schema = 'public' and table_name = 'agent_approvals'
+    and column_name in ('source_call_id', 'args_hash', 'cost_policy_version');
+  insert into agent_runtime_test_results
+  select 'unified approval kind and non-null identity are constrained',
+    pg_get_constraintdef(oid) like '%unified_agent_plan%'
+      and pg_get_constraintdef(oid) like '%source_call_id IS NOT NULL%'
+  from pg_constraint
+  where conrelid = 'public.agent_approvals'::regclass
+    and conname = 'agent_approvals_source_call_check';
+  insert into agent_runtime_test_results
+  select 'unified approval source call is unique per run',
+    to_regclass('public.agent_approvals_run_source_call_idx') is not null;
+  insert into agent_runtime_test_results
+  select 'service role can persist unified approvals through Edge',
+    has_table_privilege('service_role', 'public.billing_accounts', 'SELECT')
+      and has_table_privilege('service_role', 'public.agent_runs', 'SELECT,INSERT,UPDATE,DELETE')
+      and has_table_privilege('service_role', 'public.agent_approvals', 'SELECT,INSERT,UPDATE,DELETE');
 end;
 $$;
 
@@ -256,6 +276,7 @@ end;
 $$;
 
 do $$
+#variable_conflict use_variable
 declare
   test_user uuid := extensions.gen_random_uuid();
   hold uuid;
@@ -508,6 +529,9 @@ declare
   test_call_id text := repeat('b', 64);
   rendered_count integer;
   duplicate_rejected boolean := false;
+  dimension_pair_rejected boolean := false;
+  claimed public.agent_runs;
+  settled public.agent_runs;
 begin
   insert into auth.users (
     id, instance_id, aud, role, email, encrypted_password,
@@ -525,7 +549,7 @@ begin
     input_count, input_manifest_hash, request_object_key,
     budget_credits, hold_id, pricing_version, queued_at, content_expires_at
   ) values (
-    test_user, 'bowerbird-html-layout-render', '0.0.1', '0.1.0', 'queued',
+    test_user, 'bowerbird-html-layout-render', '0.1.0', '0.1.0', 'queued',
     1, repeat('c', 64), 'runs/html-render/request.json',
     15, hold, 1, now(), now() + interval '24 hours'
   ) returning id, conversation_id into test_run_id, conv_id;
@@ -554,18 +578,18 @@ begin
   -- 一次 render_html 调用产出 manifest + 整页 + 切片（新角色全部通过 CHECK）。
   insert into public.agent_artifacts (
     run_id, conversation_id, kind, role, step_id, object_key,
-    mime, bytes, sha256, source_call_id, user_visible, expires_at
+    mime, bytes, sha256, width, height, source_call_id, user_visible, expires_at
   )
   values
     (test_run_id, conv_id, 'render_manifest', 'render_manifest', 'render',
      'runs/' || test_run_id || '/artifacts/' || test_call_id || '-manifest.json',
-     'application/json', 24, repeat('1', 64), test_call_id, false, now() + interval '7 days'),
+     'application/json', 24, repeat('1', 64), null, null, test_call_id, false, now() + interval '7 days'),
     (test_run_id, conv_id, 'full_page_screenshot', 'full_page_screenshot', 'render',
      'runs/' || test_run_id || '/artifacts/' || test_call_id || '-full.png',
-     'image/png', 10, repeat('2', 64), test_call_id, true, now() + interval '7 days'),
+     'image/png', 10, repeat('2', 64), 900, 2400, test_call_id, true, now() + interval '7 days'),
     (test_run_id, conv_id, 'slice_screenshot', 'slice_screenshot', 'render',
      'runs/' || test_run_id || '/artifacts/' || test_call_id || '-slice-0001.png',
-     'image/png', 4, repeat('3', 64), test_call_id, true, now() + interval '7 days');
+     'image/png', 4, repeat('3', 64), 900, 1200, test_call_id, true, now() + interval '7 days');
 
   select count(*) into rendered_count
   from public.agent_artifacts as artifact
@@ -573,7 +597,23 @@ begin
 
   insert into agent_runtime_test_results values (
     'html render roles accepted with multiple outputs per call',
-    rendered_count = 3
+    rendered_count = 3 and exists (
+      select 1 from public.agent_artifacts as artifact
+      where artifact.run_id = test_run_id and artifact.role = 'full_page_screenshot'
+        and artifact.width = 900 and artifact.height = 2400
+    )
+  );
+
+  begin
+    update public.agent_artifacts
+    set height = null
+    where run_id = test_run_id and role = 'full_page_screenshot';
+  exception when check_violation then
+    dimension_pair_rejected := true;
+  end;
+  insert into agent_runtime_test_results values (
+    'artifact image dimensions require a valid trusted pair',
+    dimension_pair_rejected
   );
 
   -- 同 object_key 重放：唯一索引拒绝（幂等语义 = 同 key 冲突即失败，由 Edge 先查再写）。
@@ -593,6 +633,22 @@ begin
   insert into agent_runtime_test_results values (
     'render artifact replay rejected by object key uniqueness',
     duplicate_rejected
+  );
+
+  claimed := public.claim_agent_run('worker-html-settlement', 60);
+  perform public.transition_agent_run(
+    test_run_id, claimed.lease_id, 'running', 'awaiting_user_review', 80
+  );
+  perform public.transition_agent_run(
+    test_run_id, claimed.lease_id, 'exporting', 'export', 95
+  );
+  settled := public.settle_agent_run(
+    test_run_id, claimed.lease_id, 'succeeded', null, null
+  );
+  insert into agent_runtime_test_results values (
+    'html run settles atomically with one full-page primary result',
+    settled.status = 'succeeded' and settled.actual_credits = 0
+      and settled.lease_id is null and settled.finished_at is not null
   );
 end;
 $$;

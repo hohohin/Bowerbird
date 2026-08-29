@@ -102,6 +102,35 @@ test("Run workspace reads only role=html_document artifacts as verified UTF-8 HT
   workspace.cleanup();
 });
 
+test("Run workspace caches a freshly composed HTML artifact before a signed URL exists", async () => {
+  const html = "<!doctype html><html><body>首次租约</body></html>";
+  const htmlBytes = new TextEncoder().encode(html);
+  const control = new AgentControlClient(
+    { controlUrl: "https://control", workerToken: "secret", workerId: "worker" },
+    async () => { throw new Error("fresh HTML must be read from the local cache"); },
+  );
+  const workspace = new RunWorkspace({
+    root: join(tmpdir(), `bowerbird-workspace-test-${randomUUID()}`),
+    runId: "run-fresh-html",
+    control,
+  });
+  workspace.rememberHtmlDocument({
+    artifactId: "fresh-html",
+    conversationId: "conversation-html",
+    runId: "run-fresh-html",
+    role: "html_document",
+    stepId: "compose",
+    mime: "text/html",
+    bytes: htmlBytes.byteLength,
+    sha256: createHash("sha256").update(htmlBytes).digest("hex"),
+    userVisible: false,
+    objectKey: "runs/run-fresh-html/artifacts/document.html",
+  }, html);
+
+  equal(await workspace.readHtmlDocumentArtifact("fresh-html"), html);
+  workspace.cleanup();
+});
+
 test("orphan cleanup removes only old valid Run directories and is idempotent", () => {
   const root = join(tmpdir(), `bowerbird-workspace-cleanup-${randomUUID()}`);
   const oldRun = join(root, "old-run");

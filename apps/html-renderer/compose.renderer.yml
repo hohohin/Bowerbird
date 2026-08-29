@@ -27,6 +27,7 @@ services:
       - /tmp:size=384m,mode=1777
     security_opt:
       - no-new-privileges:true
+      - seccomp=./seccomp_profile.json
     cap_drop:
       - ALL
     mem_limit: 1536m

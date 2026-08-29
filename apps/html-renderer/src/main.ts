@@ -11,6 +11,9 @@ import { launchRendererBrowser } from "./renderer.ts";
 import { createRenderService } from "./render-service.ts";
 import { startRenderServer } from "./server.ts";
 import { RENDERER_CODE_VERSION, PINNED_PLAYWRIGHT_VERSION, computeRendererFingerprint } from "./fingerprint.ts";
+import { RenderMetrics } from "./metrics.ts";
+import { RENDER_LIMITS } from "./limits.ts";
+import { runtimeResourceSnapshot } from "./runtime-resources.ts";
 
 function log(event: Record<string, unknown>): void {
   console.log(JSON.stringify({ ts: new Date().toISOString(), ...event }));
@@ -57,7 +60,8 @@ async function main(): Promise<void> {
   }
   const chromiumVersion = browser.version();
   const rendererFingerprint = computeRendererFingerprint(chromiumVersion);
-  const service = createRenderService(browser, log);
+  const metrics = new RenderMetrics(RENDER_LIMITS.renderTimeoutMs);
+  const service = createRenderService(browser, log, metrics);
 
   const port = Number(process.env.RENDER_PORT ?? 3917);
   const running = startRenderServer({
@@ -69,6 +73,8 @@ async function main(): Promise<void> {
       chromiumVersion,
       playwrightVersion: PINNED_PLAYWRIGHT_VERSION,
       codeVersion: RENDERER_CODE_VERSION,
+      metrics: metrics.snapshot(),
+      resources: runtimeResourceSnapshot(),
     }),
     log,
   });

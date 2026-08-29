@@ -393,6 +393,31 @@ test("workspace miss (foreign artifact id) never reaches renderer", async () => 
   equal(control.rows.get(callId)?.status, "failed");
 });
 
+test("renderer 429/503 are retried once then parked as outcome_unknown; re-claim recomputes", async () => {
+  // 第一次 render：429 两次（executor 内单次重试也耗尽）→ outcome_unknown，零 artifact。
+  const callId = computeArgsHash({ seed: "call-busy" });
+  fakeRenderer.pushFailure(() => ({ status: 429, body: { ok: false, code: "render_capacity_busy", message: "busy", retryable: true } }));
+  fakeRenderer.pushFailure(() => ({ status: 503, body: { ok: false, code: "render_service_unavailable", message: "down", retryable: true } }));
+  const control = new MemoryRenderControl();
+  const executor = makeExecutor(control);
+  const callsBefore = fakeRenderer.renderCalls;
+  const error = await executor.render({ callId, phase: "render_once", input: validInput(), stepId: "s" }).then(
+    () => undefined,
+    (e: unknown) => e,
+  );
+  ok(error instanceof DurableProviderError);
+  equal((error as DurableProviderError).safeCode, "render_capacity_busy", "保留首个可重试错误码");
+  equal(control.rows.get(callId)?.status, "outcome_unknown");
+  equal(control.artifacts.size, 0);
+  equal(fakeRenderer.renderCalls, callsBefore + 2, "有界重试恰好一次");
+
+  // renderer 恢复后重 claim：reconcile 无 ledger 结果 → 确定性重算成功。
+  const resumed = makeExecutor(control);
+  const result = await resumed.render({ callId, phase: "render_once", input: validInput(), stepId: "s" });
+  equal(result.outputs.length, 3);
+  equal(control.rows.get(callId)?.status, "succeeded");
+});
+
 test("renderer echo mismatch (runId) fails closed as output invalid", async () => {
   const callId = computeArgsHash({ seed: "call7" });
   fakeRenderer.pushFailure((req) => {

@@ -15,7 +15,7 @@ export const PINNED_PLAYWRIGHT_VERSION = "1.62.1";
 /** 注入的 reset/default stylesheet 版本（renderer.ts 内嵌样式的任何改动都要递增）。 */
 export const DEFAULT_STYLESHEET_VERSION = 1;
 
-export const RENDERER_CODE_VERSION = "0.1.0";
+export const RENDERER_CODE_VERSION = "0.1.1";
 
 export type BuildInfo = {
   builtAt?: string;

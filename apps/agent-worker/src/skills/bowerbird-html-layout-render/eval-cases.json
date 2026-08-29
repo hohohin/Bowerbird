@@ -1,0 +1,9 @@
+{
+  "$schema": "bowerbird-html-layout-render-evals-v1",
+  "skill": "bowerbird-html-layout-render",
+  "cases": [
+    { "id": "zh-poster-no-image", "goal": "把标题、副标题和三条卖点排成中文竖版海报", "referenceCount": 0, "expectedRenderCalls": 1, "expectedVisionCalls": 0 },
+    { "id": "long-page-two-images", "goal": "排成图文长页并输出整页与纵向切片", "referenceCount": 2, "expectedRenderCalls": 1, "expectedVisionCalls": 0 },
+    { "id": "reject-external-url", "goal": "引用公开网页里的图片", "referenceCount": 0, "expectedFailure": "html_layout_input_invalid:compose_external_locator", "expectedVisionCalls": 0 }
+  ]
+}

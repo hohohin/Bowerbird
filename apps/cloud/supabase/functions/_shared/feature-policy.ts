@@ -1,4 +1,5 @@
 export const CONTROLLED_IMAGE_EDIT_SKILL = "bowerbird-controlled-image-edit";
+export const HTML_LAYOUT_RENDER_SKILL = "bowerbird-html-layout-render";
 
 export interface FeaturePolicy {
   can_use_byo: boolean;
@@ -71,7 +72,8 @@ export function accountTestMarker(appMetadata: unknown): boolean {
 }
 
 /** 与 policyFor 同源的用户级策略：小名单模式下未标记账号的权益快照隐藏 Agent 能力，
- *  桌面 UI / Rust command / agent-run create 三层随之收敛。 */
+ * 桌面 UI / Rust command / agent-run create 三层随之收敛。
+ * HTML 排版 Skill 为 H3 POC：仅对 bowerbird_test 标记账号追加（HTML-RENDER-PLAN H3-T6）。 */
 export function policyForUser(
   tier: string,
   user: { app_metadata?: unknown },
@@ -79,7 +81,9 @@ export function policyForUser(
 ): FeaturePolicy {
   const policy = policyFor(tier);
   const restricted = options.agentTestOnly ?? agentAccessTestOnly();
-  if (!restricted || accountTestMarker(user?.app_metadata)) return policy;
+  const testAccount = accountTestMarker(user?.app_metadata);
+  const skills = testAccount ? [...policy.allowed_agent_skills, HTML_LAYOUT_RENDER_SKILL] : policy.allowed_agent_skills;
+  if (!restricted || testAccount) return { ...policy, allowed_agent_skills: skills };
   return {
     ...policy,
     can_use_agent_runs: false,

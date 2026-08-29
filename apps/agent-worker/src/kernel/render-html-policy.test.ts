@@ -8,6 +8,7 @@ import { test } from "node:test";
 
 import { evaluatePolicy, GLOBAL_TOOL_REGISTRY, type PolicyContext } from "./policy-engine.ts";
 import { CONTROLLED_IMAGE_EDIT_MANIFEST } from "../skills/bowerbird-controlled-image-edit/manifest.ts";
+import { HTML_LAYOUT_RENDER_MANIFEST } from "../skills/bowerbird-html-layout-render/manifest.ts";
 import { RENDER_HTML_INPUT_SCHEMA } from "../contracts/render-html.ts";
 import type { SkillManifest } from "../contracts/skill.ts";
 import type { BudgetSnapshot } from "../contracts/run.ts";
@@ -46,30 +47,7 @@ const RENDER_INPUT = {
 
 /** 合成 manifest：只有 render_once phase 显式 allowlist 了 render_html。 */
 function htmlSkillManifest(): SkillManifest {
-  return {
-    id: "bowerbird-html-layout-render",
-    version: "0.0.1-test",
-    kernelMinVersion: "0.0.1",
-    snapshotSchemaVersion: 1,
-    title: "HTML 排版截图（测试）",
-    description: "test",
-    inputSchema: { type: "object" },
-    artifactSchema: { type: "object" },
-    initialPhase: "prepare_inputs",
-    terminalPhases: ["succeeded"],
-    phases: [
-      { name: "prepare_inputs", allowedActions: ["record_intent_analysis"], maxTurns: 2, transitions: [{ action: "record_intent_analysis", to: "render_once" }] },
-      { name: "render_once", allowedActions: ["render_html"], maxTurns: 2, transitions: [{ action: "render_html", to: "awaiting_user_review" }] },
-      { name: "awaiting_user_review", allowedActions: [], maxTurns: 0, transitions: [] },
-    ],
-    budgetTiers: [{ id: "std", credits: 10, label: "标准" }],
-    allowedProviders: ["deepseek"],
-    maxRunSeconds: 600,
-    maxModelTurns: 10,
-    maxToolCalls: 10,
-    maxGenerateAttempts: 0,
-    clarifications: { maxPerRun: 0, intentFields: [] },
-  };
+  return HTML_LAYOUT_RENDER_MANIFEST;
 }
 
 test("global registry exposes render_html as renderer-kind tool with closed schema", () => {
@@ -86,7 +64,7 @@ test("controlled-image-edit denies render_html in every phase (fail closed by de
   for (const phase of CONTROLLED_IMAGE_EDIT_MANIFEST.phases) {
     const verdict = evaluatePolicy(ctxFor(CONTROLLED_IMAGE_EDIT_MANIFEST, phase.name), "render_html", RENDER_INPUT);
     equal(verdict.verdict, "deny");
-    if (verdict.verdict === "deny") equal(verdict.reason, "render_phase_not_allowed");
+    if (verdict.verdict === "deny") equal(verdict.reason, "render_html_phase_not_allowed");
   }
 });
 
@@ -101,7 +79,7 @@ test("html skill allows render_html only in the phase that declares it", () => {
   }
   const deniedPhase = evaluatePolicy(ctxFor(manifest, "prepare_inputs"), "render_html", RENDER_INPUT);
   equal(deniedPhase.verdict, "deny");
-  if (deniedPhase.verdict === "deny") equal(deniedPhase.reason, "render_phase_not_allowed");
+  if (deniedPhase.verdict === "deny") equal(deniedPhase.reason, "render_html_phase_not_allowed");
 });
 
 test("cross-run guard still applies to render_html args", () => {
