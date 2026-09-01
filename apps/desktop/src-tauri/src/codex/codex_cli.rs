@@ -475,9 +475,23 @@ pub(crate) fn managed_codex_binary() -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 
+/// 在候选目录中按顺序查找可执行入口；返回完整路径，避免依赖 GUI 进程的 PATH。
+fn find_binary_in_dirs(dirs: impl IntoIterator<Item = PathBuf>, names: &[&str]) -> Option<String> {
+    for dir in dirs {
+        for name in names {
+            let candidate = dir.join(name);
+            if candidate.is_file() {
+                return Some(candidate.to_string_lossy().into_owned());
+            }
+        }
+    }
+    None
+}
+
 /// Windows 的 npm 全局入口通常是 `codex.cmd`，不能直接交给 CreateProcess；
 /// 同时覆盖 GUI 应用常见的 PATH 不完整场景，主动检查 npm 默认目录。
-/// 非 Windows 直接在 PATH 找 `codex`。可用 `BOWERBIRD_CODEX_BINARY` 环境变量显式覆盖。
+/// macOS 从 Finder 启动时 PATH 常不含 Homebrew，主动查 Homebrew 与用户 bin；
+/// 其他非 Windows 在 PATH 找 `codex`。可用 `BOWERBIRD_CODEX_BINARY` 环境变量显式覆盖。
 pub(crate) fn resolve_codex_binary() -> Option<String> {
     if let Ok(explicit) = std::env::var("BOWERBIRD_CODEX_BINARY") {
         if !explicit.trim().is_empty() {
@@ -516,11 +530,30 @@ pub(crate) fn resolve_codex_binary() -> Option<String> {
     }
 
     #[cfg(not(target_os = "windows"))]
-    if let Some(path) = std::env::var_os("PATH") {
-        for dir in std::env::split_paths(&path) {
-            let candidate = dir.join("codex");
-            if candidate.is_file() {
-                return Some(candidate.to_string_lossy().into_owned());
+    {
+        if let Some(path) = std::env::var_os("PATH") {
+            if let Some(binary) = find_binary_in_dirs(std::env::split_paths(&path), &["codex"]) {
+                return Some(binary);
+            }
+        }
+
+        // macOS Finder 启动的 GUI 进程不继承交互 shell 的 PATH（Homebrew / 用户包管理器目录缺席）。
+        #[cfg(target_os = "macos")]
+        {
+            let mut dirs = vec![
+                PathBuf::from("/opt/homebrew/bin"),
+                PathBuf::from("/usr/local/bin"),
+            ];
+            if let Some(home) = std::env::var_os("HOME") {
+                let home = PathBuf::from(home);
+                dirs.extend([
+                    home.join(".local/bin"),
+                    home.join(".volta/bin"),
+                    home.join(".local/share/pnpm"),
+                ]);
+            }
+            if let Some(binary) = find_binary_in_dirs(dirs, &["codex"]) {
+                return Some(binary);
             }
         }
     }
@@ -539,10 +572,41 @@ pub(crate) fn codex_home() -> Option<PathBuf> {
         })
 }
 
+/// GUI 启动的进程 PATH 常不含 node/npm 所在目录（macOS Finder 启动不继承 shell PATH），
+/// 导致 node 脚本 shebang `#!/usr/bin/env node` 找不到 node → `env: node: No such file or
+/// directory`（exit 127）。把二进制所在目录 + Homebrew / 用户 bin 前置进 PATH。
+/// 仅 Unix：Windows 的 npm.cmd 走另一套、且 node 在 `%ProgramFiles%\nodejs` 能被 npm 自解析。
+#[cfg(not(target_os = "windows"))]
+fn enriched_path(bin_dir: Option<&std::path::Path>) -> String {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    if let Some(d) = bin_dir {
+        dirs.push(d.to_path_buf());
+    }
+    dirs.push(PathBuf::from("/opt/homebrew/bin"));
+    dirs.push(PathBuf::from("/usr/local/bin"));
+    if let Some(home) = std::env::var_os("HOME") {
+        let h = PathBuf::from(home);
+        dirs.push(h.join(".local/bin"));
+        dirs.push(h.join(".volta/bin"));
+        dirs.push(h.join(".local/share/pnpm"));
+    }
+    let mut parts: Vec<String> = dirs
+        .iter()
+        .map(|d| d.to_string_lossy().into_owned())
+        .collect();
+    if let Some(path) = std::env::var_os("PATH") {
+        for d in std::env::split_paths(&path) {
+            parts.push(d.to_string_lossy().into_owned());
+        }
+    }
+    parts.join(":")
+}
+
 /// 构造跨平台的 codex 子进程 Command。
 /// Windows 上 `.cmd`/`.bat` 入口必须经 `cmd.exe /D /S /C` 调起（CreateProcess 不解析 PATHEXT）；
 /// 并加 `CREATE_NO_WINDOW`（0x08000000）—— Tauri release 是 windows_subsystem="windows"，
 /// 不加此 flag 时 console 子进程会弹出空白 cmd 窗口（stderr/stdout 仍由 pipe 正常捕获）。
+/// Unix 上 codex 是 `#!/usr/bin/env node` 脚本，须把 node 所在目录前置进 PATH（见 `enriched_path`）。
 pub(crate) fn codex_command(binary: &str) -> Command {
     #[cfg(target_os = "windows")]
     {
@@ -559,13 +623,16 @@ pub(crate) fn codex_command(binary: &str) -> Command {
     }
     #[cfg(not(target_os = "windows"))]
     {
-        Command::new(binary)
+        let mut command = Command::new(binary);
+        command.env("PATH", enriched_path(std::path::Path::new(binary).parent()));
+        command
     }
 }
 
 /// npm 二进制发现（一键安装 codex CLI 用）：`BOWERBIRD_NPM_BINARY` 显式覆盖；
 /// Windows 先找 `%APPDATA%\npm\npm.{cmd,exe,bat}`（与 codex 同目录，装 Node 后默认在此），
-/// 再扫 PATH；非 Windows 在 PATH 找 `npm`。
+/// 再扫 PATH；macOS 从 Finder 启动时 PATH 常不含 Homebrew，主动查 Homebrew 与用户 bin；
+/// 其他非 Windows 在 PATH 找 `npm`。
 pub(crate) fn resolve_npm_binary() -> Option<String> {
     if let Ok(explicit) = std::env::var("BOWERBIRD_NPM_BINARY") {
         if !explicit.trim().is_empty() {
@@ -597,11 +664,30 @@ pub(crate) fn resolve_npm_binary() -> Option<String> {
     }
 
     #[cfg(not(target_os = "windows"))]
-    if let Some(path) = std::env::var_os("PATH") {
-        for dir in std::env::split_paths(&path) {
-            let candidate = dir.join("npm");
-            if candidate.is_file() {
-                return Some(candidate.to_string_lossy().into_owned());
+    {
+        if let Some(path) = std::env::var_os("PATH") {
+            if let Some(binary) = find_binary_in_dirs(std::env::split_paths(&path), &["npm"]) {
+                return Some(binary);
+            }
+        }
+
+        // 与 codex resolver 对称：macOS Finder 启动也能找到 npm。
+        #[cfg(target_os = "macos")]
+        {
+            let mut dirs = vec![
+                PathBuf::from("/opt/homebrew/bin"),
+                PathBuf::from("/usr/local/bin"),
+            ];
+            if let Some(home) = std::env::var_os("HOME") {
+                let home = PathBuf::from(home);
+                dirs.extend([
+                    home.join(".local/bin"),
+                    home.join(".volta/bin"),
+                    home.join(".local/share/pnpm"),
+                ]);
+            }
+            if let Some(binary) = find_binary_in_dirs(dirs, &["npm"]) {
+                return Some(binary);
             }
         }
     }
@@ -628,6 +714,8 @@ pub(crate) fn npm_command(binary: &str, args: &[&str]) -> Command {
         for a in args {
             command.arg(a);
         }
+        // npm 是 `#!/usr/bin/env node` 脚本，须保证子进程 PATH 含 node（见 `enriched_path`）。
+        command.env("PATH", enriched_path(std::path::Path::new(binary).parent()));
         command
     }
 }
@@ -637,6 +725,22 @@ mod tests {
     use super::*;
     use std::fs;
     use ulid::Ulid;
+
+    #[test]
+    fn find_binary_in_dirs_uses_candidate_order() {
+        let root = std::env::temp_dir().join(format!("bb-bin-root-{}", Ulid::new()));
+        let first = root.join("first");
+        let second = root.join("second");
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&second).unwrap();
+        fs::write(first.join("codex"), b"first").unwrap();
+        fs::write(second.join("codex"), b"second").unwrap();
+
+        let found = find_binary_in_dirs([first.clone(), second], &["codex"]).unwrap();
+
+        assert_eq!(PathBuf::from(found), first.join("codex"));
+        fs::remove_dir_all(&root).ok();
+    }
 
     #[test]
     fn list_new_only_returns_files_new_since_snapshot() {
