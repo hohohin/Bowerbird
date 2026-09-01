@@ -514,7 +514,7 @@ begin
   select 'authenticated cannot execute guarded Agent creation',
     not has_function_privilege(
       'authenticated',
-      'public.create_agent_run_guarded(uuid,uuid,uuid,text,text,text,integer,text,text,text,integer,uuid,integer,timestamptz,integer,integer)',
+      'public.create_agent_run_guarded(uuid,uuid,uuid,text,text,text,integer,text,text,text,integer,uuid,integer,timestamptz,integer,integer,text)',
       'EXECUTE'
     );
 end;
@@ -530,6 +530,7 @@ declare
   rendered_count integer;
   duplicate_rejected boolean := false;
   dimension_pair_rejected boolean := false;
+  runtime_update_rejected boolean := false;
   claimed public.agent_runs;
   settled public.agent_runs;
 begin
@@ -553,6 +554,21 @@ begin
     1, repeat('c', 64), 'runs/html-render/request.json',
     15, hold, 1, now(), now() + interval '24 hours'
   ) returning id, conversation_id into test_run_id, conv_id;
+
+  insert into agent_runtime_test_results
+  select 'historical-style insert defaults to legacy Kernel runtime',
+    agent_runtime = 'legacy_kernel'
+  from public.agent_runs where id = test_run_id;
+
+  begin
+    update public.agent_runs set agent_runtime = 'dsh' where id = test_run_id;
+  exception when sqlstate '55000' then
+    runtime_update_rejected := true;
+  end;
+  insert into agent_runtime_test_results values (
+    'Agent runtime is immutable after Run creation',
+    runtime_update_rejected
+  );
 
   insert into public.agent_tool_calls (
     run_id, call_id, phase, tool_name, args_hash, status, submitted_at
@@ -649,6 +665,77 @@ begin
     'html run settles atomically with one full-page primary result',
     settled.status = 'succeeded' and settled.actual_credits = 0
       and settled.lease_id is null and settled.finished_at is not null
+  );
+end;
+$$;
+
+do $$
+declare
+  test_user uuid := extensions.gen_random_uuid();
+  ordinary_user uuid := extensions.gen_random_uuid();
+  test_hold uuid;
+  ordinary_hold uuid;
+  test_pricing integer;
+  ordinary_pricing integer;
+  created public.agent_runs;
+  rejected_detail text;
+  replay_rejected boolean := false;
+begin
+  insert into auth.users (
+    id, instance_id, aud, role, email, encrypted_password,
+    email_confirmed_at, created_at, updated_at, raw_app_meta_data
+  ) values
+    (test_user, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated',
+      'agent-runtime-dsh@example.test', '', now(), now(), now(), '{"bowerbird_test":true}'::jsonb),
+    (ordinary_user, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated',
+      'agent-runtime-ordinary@example.test', '', now(), now(), now(), '{}'::jsonb);
+
+  perform * from public.grant_topup_credits(test_user, 'agent-runtime-dsh-topup', 9);
+  perform * from public.grant_topup_credits(ordinary_user, 'agent-runtime-ordinary-topup', 9);
+  select result.hold_id, result.pricing_version into test_hold, test_pricing
+  from public.credit_hold(test_user, 'agent-runtime-dsh-hold', 'agent_controlled_image_edit_min', 9) as result;
+  select result.hold_id, result.pricing_version into ordinary_hold, ordinary_pricing
+  from public.credit_hold(ordinary_user, 'agent-runtime-ordinary-hold', 'agent_controlled_image_edit_min', 9) as result;
+
+  created := public.create_agent_run_guarded(
+    extensions.gen_random_uuid(), extensions.gen_random_uuid(), test_user,
+    'bowerbird-controlled-image-edit', '0.1.2', '0.1.0', 0, repeat('6', 64),
+    'runs/runtime-dsh/inputs/request.json', 'cloud', 9, test_hold, test_pricing,
+    now() + interval '24 hours', 4, 100, 'dsh'
+  );
+  insert into agent_runtime_test_results values (
+    'test account can pin a DSH runtime Run',
+    created.agent_runtime = 'dsh' and created.is_test = true
+  );
+
+  begin
+    perform public.create_agent_run_guarded(
+      extensions.gen_random_uuid(), extensions.gen_random_uuid(), test_user,
+      'bowerbird-controlled-image-edit', '0.1.2', '0.1.0', 0, repeat('6', 64),
+      'runs/runtime-replay/inputs/request.json', 'cloud', 9, test_hold, test_pricing,
+      now() + interval '24 hours', 4, 100, 'legacy_kernel'
+    );
+  exception when sqlstate '55000' then
+    replay_rejected := true;
+  end;
+  insert into agent_runtime_test_results values (
+    'idempotent replay cannot change the pinned runtime',
+    replay_rejected
+  );
+
+  begin
+    perform public.create_agent_run_guarded(
+      extensions.gen_random_uuid(), extensions.gen_random_uuid(), ordinary_user,
+      'bowerbird-controlled-image-edit', '0.1.2', '0.1.0', 0, repeat('7', 64),
+      'runs/runtime-ordinary/inputs/request.json', 'cloud', 9, ordinary_hold, ordinary_pricing,
+      now() + interval '24 hours', 4, 100, 'dsh'
+    );
+  exception when raise_exception then
+    get stacked diagnostics rejected_detail = PG_EXCEPTION_DETAIL;
+  end;
+  insert into agent_runtime_test_results values (
+    'database rejects DSH runtime for a non-test account',
+    rejected_detail = 'agent_runtime_test_only'
   );
 end;
 $$;

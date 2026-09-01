@@ -1,6 +1,6 @@
 # @bowerbird/agent-worker — Bowerbird Agent Runtime
 
-> 状态：**首版 `bowerbird-controlled-image-edit` 的动态规划、有限澄清、可恢复 RunEngine、确定性上下文组装/压缩、隔离 Run workspace、两阶段 artifact、真实 DeepSeek/方舟 Vision/Seedream adapter、反馈修订二次审批、PreferenceCapsule、可信计量/结算、TTL、容量闸与运行监控均已部署并通过真实 E2E（144 测试全过）**。
+> 状态：**首版 `bowerbird-controlled-image-edit` 的 legacy Kernel 已通过真实 E2E；U4 controlled-image DSH processor 已 test-only 部署，普通账号与 HTML 仍保持 legacy。当前 Worker 283/283 + TypeScript，真实 legacy/DSH 图片与 crash/re-claim 成对验收仍待另行授权。**
 > 桌面 Agent 主路径已人工验收，A5 完成；A6 安全/Cloud 回归与 A7 VPS 运维基线完成。Codex Agent CLI 真机 E2E 已成功，但因双重思考/对话耗时过长暂时禁止新建该组合。Dreamina Agent CLI 真机 E2E 按 2026-08-25 用户决定暂时跳过：实现保留、未宣称验证通过，也不再作为当前发布或继续开发门槛。
 > 依据：[dev-doc/AGENT-RUNTIME-PLAN.md](../../../dev-doc/AGENT-RUNTIME-PLAN.md) §A2 / §A3。
 
@@ -66,12 +66,33 @@ cd apps/agent-worker && node --test "src/**/*.test.ts"
 # A3-T7：真实 DeepSeek 文本规划 + Kernel 指标报告（不看图、不生图）
 npm run eval:controlled-image-edit
 
+# U4：同一 18-case 的 DSH 侧真实文本 eval（不看图、不生图；双显式付费闸门）
+# 还需配置 BOWERBIRD_DSH_PROFILE_TEMPLATE / BOWERBIRD_DSH_RUNTIME_ROOT，且模型固定 deepseek-v4-flash
+$env:BOWERBIRD_U1_ALLOW_NETWORK="1"
+npm run eval:controlled-image-edit:dsh -- --allow-real-u4-dsh-eval
+
+# U4：把同一批 case 的 legacy_kernel / dsh 观察值做成对比较
+# 可传一个合并文件，也可直接传两份 { "observations": [...] }；不得混合 estimated/actual 成本口径
+npm run compare:controlled-image-edit-runtimes -- artifacts/controlled-runtime-observations-legacy-kernel.json artifacts/controlled-runtime-observations-dsh.json artifacts/runtime-comparison.md
+
 # 仅运行 Agent consumer（需配置 AGENT_*、DEEPSEEK_*、ARK_*）
 pnpm --dir apps/agent-worker worker:agent
 ```
 
 或：`pnpm --filter @bowerbird/agent-worker typecheck` / `test`（需先 `pnpm install` 把包装入 workspace；
 当前为零依赖，未跑 install 也能用上面的直连命令）。
+
+### U2/U4 DSH 只读部署（controlled-image test-only 已上线）
+
+候选镜像不会自行替换现役 Worker。它从已审计的 U1/U2 Profile named build context 安装钉版 DSH/ACP，并把依赖模板留在只读镜像层；每次 DSH 启动只在 32 MiB tmpfs 创建独立临时 `DSH_HOME`，用于承接 rc.2 对 `cordis.yml` 和 fallback 软链接的必要写入。生产 `compose.generation.yml` 已复用同一候选 Dockerfile、同一 Profile build context 与 `/dsh-runtime` tmpfs，避免部署时退回不含 DSH 资产的旧镜像；镜像内 unified/controlled 两项 DSH flag 均默认 `false`，仍需按部署环境显式开启。本地仓库默认从 `../../spikes/unified-agent-harness-u1/profiles/bowerbird-u1` 构建；VPS 的扁平部署目录必须在 Compose 插值环境中设置 `BOWERBIRD_DSH_BUILD_CONTEXT=/opt/bowerbird/dsh-profile`，并把同一已审计 Profile 部署到该绝对路径。
+
+```powershell
+cd apps/agent-worker
+docker compose -f compose.unified-harness-candidate.yml build unified-harness-readonly-check
+docker compose -f compose.unified-harness-candidate.yml run --rm --no-deps unified-harness-readonly-check
+```
+
+验证服务使用非 root `node` 用户、只读根文件系统、`network_mode: none`、`cap_drop: ALL`，并在同一容器内连续启动两次 DSH 配置探针，随后通过正式 `NodeDshAcpPort` 完成真实 ACP initialize/new-session/cancel/dispose。它还会从 Worker 的显式部署入口创建正式 processor：容器内 provider fixture 只由父进程 DeepSeek 计量代理访问，DSH 子进程仅获得每 Run capability 与 loopback endpoint；两个模型回合分别形成 durable succeeded call、私有诊断 artifact 与精确 usage，真实 provider key 不进入子进程。同时验证 checkpoint、闭集三工具、`list_run_assets → submit_plan → end_turn`、当前 Run 素材回传、父进程审批停车和所有临时 runtime home 清理；不访问公网或真实 provider。U4 受控图片 DSH 使用独立的三个结构化建议动作 `record_intent_analysis`、`request_clarification`、`submit_plan_for_approval`，只把当前 phase 允许的模型建议交回原 `ModelBackend` 契约；Policy/审批/Ledger/执行仍由既有 Kernel 掌权。当前钉版 DSH 在 Linux live boot 会自动补入 Cordis HMR，因此正式 port 固定以 Node `--expose-internals` 启动；该能力只授予镜像内钉版受信插件，不扩大模型工具面。生产 legacy 可继续使用 `DEEPSEEK_MODEL=deepseek-chat`；DSH 父代理通过独立 `BOWERBIRD_DSH_MODEL=deepseek-v4-flash` 与 Profile 钉版保持一致，两者只共享父进程 key/base。2026-09-01 的 production test-only 部署只开启 `BOWERBIRD_CONTROLLED_IMAGE_EDIT_DSH_ENABLED=true`；unified/HTML DSH 保持 false，Edge runtime 选择只允许 `bowerbird_test` 账号。真实 crash/re-claim 验收可临时叠加 `compose.u4-recovery-probe.yml`，把 `BOWERBIRD_TEST_AGENT_CLAIM_DELAY_MS` 设为 10 秒以形成“lease 已可观察、provider 尚未 submitted”的确定性窗口；该变量默认 0、最大 30 秒，验收结束必须只用基础 `compose.generation.yml` 强制重建并确认恢复 0，不能把测试延迟留在常驻 Worker。
 
 ## eval 覆盖对照
 

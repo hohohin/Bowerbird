@@ -27,7 +27,7 @@ test("HTML layout Skill bundle is hash-pinned and statically registered", () => 
   ok(/^[0-9a-f]{64}$/.test(bundle.instructionHash));
   const resolved = BUILTIN_SKILL_REGISTRY.resolve(bundle.id, bundle.version);
   equal(resolved.runner, "html-layout-render");
-  equal(BUILTIN_SKILL_REGISTRY.list().length, 2);
+  equal(BUILTIN_SKILL_REGISTRY.list().length, 3);
 });
 
 test("HTML layout input validator accepts only a closed explicit artifact manifest", () => {

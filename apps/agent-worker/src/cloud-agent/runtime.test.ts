@@ -43,7 +43,47 @@ test("Agent worker config uses dedicated credentials", () => {
   });
   equal(config.workerId, "agent-1");
   equal(config.heartbeatIntervalMs, 20_000);
+  equal(config.testClaimDelayMs, 0);
+  equal(agentConfigFromEnv({
+    AGENT_CONTROL_URL: "https://control",
+    AGENT_WORKER_TOKEN: "secret",
+    BOWERBIRD_TEST_AGENT_CLAIM_DELAY_MS: "10000",
+  }).testClaimDelayMs, 10_000);
+  throws(() => agentConfigFromEnv({
+    AGENT_CONTROL_URL: "https://control",
+    AGENT_WORKER_TOKEN: "secret",
+    BOWERBIRD_TEST_AGENT_CLAIM_DELAY_MS: "30001",
+  }), /BOWERBIRD_TEST_AGENT_CLAIM_DELAY_MS_invalid/);
   throws(() => agentConfigFromEnv({ AGENT_CONTROL_URL: "https://control" }), /AGENT_WORKER_TOKEN_missing/);
+});
+
+test("explicit test-only claim delay creates a pre-processor crash window", async () => {
+  const stop = { requested: false };
+  const sleeps: number[] = [];
+  let processed = 0;
+  const control = {
+    async claim() { return claim(); },
+    async heartbeat() { return { status: "running", cancelRequested: false, leaseExpiresAt: null }; },
+  } as unknown as AgentControlClient;
+  await runAgentWorker(agentConfigFromEnv({
+    AGENT_CONTROL_URL: "https://control",
+    AGENT_WORKER_TOKEN: "secret",
+    BOWERBIRD_TEST_AGENT_CLAIM_DELAY_MS: "123",
+  }), {
+    async process() {
+      processed += 1;
+      stop.requested = true;
+    },
+  }, {
+    control,
+    stop,
+    sleep: async (ms) => {
+      sleeps.push(ms);
+      if (ms !== 123) await new Promise<void>(() => undefined);
+    },
+  });
+  equal(processed, 1);
+  equal(sleeps[0], 123);
 });
 
 test("heartbeat cancellation is settled at the processor safe point", async () => {
@@ -150,6 +190,7 @@ test("two worker loops sharing one atomic queue process a Run exactly once", asy
     pollIntervalMs: 1,
     heartbeatIntervalMs: 20_000,
     maintenanceIntervalMs: 60_000,
+    testClaimDelayMs: 0,
   }, {
     async process() {
       processedBy.push(workerId);

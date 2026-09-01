@@ -130,7 +130,7 @@ supabase functions deploy entitlement
 
 ### 4.1 部署 VPS Worker（生图 + 理解消费循环，同一容器）
 
-把 `apps/agent-worker/{Dockerfile.generation,compose.generation.yml,src}` 部署到 `/opt/bowerbird/agent-worker`，并创建权限 `0600` 的 `.env.generation`：
+把 `apps/agent-worker/{Dockerfile.unified-harness-candidate,compose.generation.yml,src,scripts}` 部署到 `/opt/bowerbird/agent-worker`，把 `spikes/unified-agent-harness-u1/profiles/bowerbird-u1` 部署到 `/opt/bowerbird/dsh-profile`，并创建权限 `0600` 的 `.env.generation`。仓库内 Compose 默认使用相对 Profile 路径；VPS 扁平目录必须通过同一 env 文件显式覆盖 build context：
 
 ```dotenv
 GENERATION_CONTROL_URL=https://<project-ref>.supabase.co/functions/v1/generation-worker
@@ -150,6 +150,10 @@ UNDERSTAND_WORKER_ID=lighthouse-guangzhou-1
 ARK_VISION_MODEL=<豆包 Vision endpoint id>
 RENDERER_URL=http://html-renderer:3917
 RENDER_INTERNAL_TOKEN=<与 html-renderer .env.renderer 完全一致的高熵随机值>
+BOWERBIRD_DSH_BUILD_CONTEXT=/opt/bowerbird/dsh-profile
+BOWERBIRD_UNIFIED_AGENT_DSH_ENABLED=false
+BOWERBIRD_CONTROLLED_IMAGE_EDIT_DSH_ENABLED=false
+BOWERBIRD_DSH_MODEL=deepseek-v4-flash
 ```
 
 ```bash
@@ -160,9 +164,9 @@ chmod 600 .env.renderer
 sudo docker compose -f compose.renderer.yml up -d --build
 
 cd /opt/bowerbird/agent-worker
-sudo docker compose -f compose.generation.yml up -d --build
-sudo docker compose -f compose.generation.yml ps
-sudo docker compose -f compose.generation.yml logs --tail 50
+sudo docker compose --env-file .env.generation -f compose.generation.yml up -d --build
+sudo docker compose --env-file .env.generation -f compose.generation.yml ps
+sudo docker compose --env-file .env.generation -f compose.generation.yml logs --tail 50
 ```
 
 `html-renderer` 只连接 `internal: true` 的 `bowerbird-internal` 网络，无宿主端口和公网出口；Worker 同时连接默认出站网络与该内部网络，通过固定 `RENDERER_URL` 调用。先启动 renderer 创建内部网络，再启动 Worker。两个 env 文件中的 `RENDER_INTERNAL_TOKEN` 必须一致且权限为 `0600`，不得写入仓库或日志。

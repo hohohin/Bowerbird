@@ -102,11 +102,15 @@ function validateRequest(value: unknown): ToolRequest {
   return { prompt: record.prompt };
 }
 
-function definition(dispatcher: DurableToolDispatcher<unknown, unknown>): ToolGatewayDefinition {
+function definition(
+  dispatcher: DurableToolDispatcher<unknown, unknown>,
+  approvedPlanHash = "f".repeat(64),
+): ToolGatewayDefinition {
   return {
     name: "generate_image",
     allowedPhases: ["execute_approved_plan"],
     requiresApproval: true,
+    approvedPlanHash,
     validate: validateRequest,
     execution: "durable",
     dispatcher,
@@ -134,6 +138,10 @@ test("Gateway rejects unregistered, unallowed, wrong-phase, and model-injected i
   await rejects(() => gateway.dispatch({ ...baseRequest, phase: "compose_plan" }), /tool_phase_denied/);
   await rejects(
     () => gateway.dispatch({ ...baseRequest, approvedPlanHash: undefined }),
+    /tool_approval_required/,
+  );
+  await rejects(
+    () => gateway.dispatch({ ...baseRequest, approvedPlanHash: "e".repeat(64) }),
     /tool_approval_required/,
   );
   await rejects(

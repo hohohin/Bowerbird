@@ -22,6 +22,7 @@ export type ReferenceRole =
   | "garment"
   | "accessory"
   | "composition"
+  | "style"
   | "other";
 
 export type ControlledReferenceInput = {

@@ -7,7 +7,18 @@ import { DeepSeekAdapter, resolveAdapterOptions } from "@deepseek-ai/dsh-llm-dee
 import { probeAcpLifecycle } from "../scripts/acp-probe.mjs";
 import { assessReleaseState } from "../scripts/check-release.mjs";
 import { auditComposedConfig, parseComposedConfig } from "../scripts/config-audit.mjs";
-import { buildDshEnv, runDsh } from "../scripts/runtime.mjs";
+import { buildDshEnv, runDsh, spikeRoot } from "../scripts/runtime.mjs";
+import { NodeDshAcpPort } from "../scripts/dsh-acp-port.mjs";
+import { runFormalVisionSmoke } from "../scripts/formal-vision-smoke.mjs";
+import {
+  assertU3ProductPlanForSmoke,
+  createU3VisualProfileFixture,
+  runU3ProductPlanningSmoke,
+} from "../scripts/u3-product-planning-smoke.mjs";
+import { htmlExecutionToolDefinitions } from "../plugins/bowerbird-html-execution-tools.mjs";
+import { contentExecutionToolDefinitions } from "../plugins/bowerbird-content-execution-tools.mjs";
+import { planningToolDefinitions } from "../plugins/bowerbird-planning-tools.mjs";
+import { controlledModelToolDefinitions } from "../plugins/bowerbird-controlled-model-tools.mjs";
 
 const require = createRequire(import.meta.url);
 
@@ -133,6 +144,7 @@ test("DeepSeek adapter fixture preserves reasoning, raw tool JSON, usage, and to
     const usage = chunks.find((chunk) => chunk.type === "usage");
 
     assert.equal(requestBody.tool_choice, undefined);
+    assert.deepEqual(requestBody.stream_options, { include_usage: true });
     assert.equal(requestBody.tools.length, 1);
     assert.ok(chunks.some((chunk) => chunk.type === "reasoning-delta" && chunk.text === "think"));
     assert.equal(completedTool.block.arguments, malformedArguments);
@@ -209,6 +221,171 @@ test("network smoke requires two explicit gates", () => {
   assert.equal(env.DEEPSEEK_API_KEY, "secret");
   assert.equal(env.DEEPSEEK_BASE_URL, "https://api.deepseek.example/v1");
   assert.equal(env.SUPABASE_SERVICE_ROLE_KEY, undefined);
+});
+
+test("formal Vision smoke refuses provider access without its explicit CLI flag", async () => {
+  await assert.rejects(() => runFormalVisionSmoke(), /real_vision_flag_required/);
+});
+
+test("U3 product planning smoke requires both explicit provider gates", async () => {
+  await assert.rejects(
+    () => runU3ProductPlanningSmoke({ argv: [], env: {} }),
+    /real_u3_planning_flag_required/,
+  );
+  await assert.rejects(
+    () => runU3ProductPlanningSmoke({ argv: ["--allow-real-u3-planning"], env: {} }),
+    /BOWERBIRD_U1_ALLOW_NETWORK_required/,
+  );
+});
+
+test("U3 product planning quality gate accepts only separated product and style duties", () => {
+  const profile = createU3VisualProfileFixture();
+  const plan = {
+    schemaVersion: 2,
+    title: "产品长图",
+    summary: "产品事实与排版参考分离。",
+    contentPlan: {
+      assetAssignments: [
+        { assetId: "asset-product", roles: ["product", "logo", "copy_source"], rationale: "产品可见事实。" },
+        { assetId: "asset-typography-style", roles: ["style_reference"], rationale: "只参考排版节奏。" },
+      ],
+      informationArchitecture: [
+        { id: "hero", purpose: "产品主视觉", sourceAssetIds: ["asset-product"], copySource: "user_goal" },
+        { id: "rhythm", purpose: "排版节奏", sourceAssetIds: ["asset-typography-style"], copySource: "none" },
+      ],
+      missingAssets: [
+        { id: "unverified_claims", purpose: "不使用无法核验的功效事实", decision: "not_needed", resolutionStepId: null },
+      ],
+      visualProfile: {
+        profileId: profile.profileId,
+        version: profile.version,
+        hash: profile.hash,
+        applied: ["信息层级清楚"],
+        ignoredContentThemes: ["咖啡器具"],
+      },
+    },
+    steps: [
+      { id: "compose", kind: "compose_html", goal: "编排", inputAssetIds: ["asset-product", "asset-typography-style"], dependsOn: [] },
+      { id: "render", kind: "render_html", goal: "渲染", inputAssetIds: ["asset-product", "asset-typography-style"], dependsOn: ["compose"] },
+      { id: "inspect", kind: "inspect_artifact", goal: "检查", inputAssetIds: [], dependsOn: ["render"] },
+      { id: "finalize", kind: "finalize_output", goal: "完成", inputAssetIds: [], dependsOn: ["inspect"] },
+    ],
+  };
+  assert.doesNotThrow(() => assertU3ProductPlanForSmoke(
+    plan,
+    profile,
+    ["asset-product", "asset-typography-style"],
+  ));
+
+  const leaked = structuredClone(plan);
+  leaked.contentPlan.assetAssignments[1].roles.push("copy_source");
+  assert.throws(() => assertU3ProductPlanForSmoke(
+    leaked,
+    profile,
+    ["asset-product", "asset-typography-style"],
+  ));
+});
+
+test("planning bridge injects only an exact loopback endpoint and one short-lived capability", () => {
+  const bridge = {
+    BOWERBIRD_TOOL_BRIDGE_ENDPOINT: "http://127.0.0.1:39171/v1/run-tools/call",
+    BOWERBIRD_TOOL_BRIDGE_CAPABILITY: "a".repeat(64),
+  };
+  const env = buildDshEnv({
+    SystemRoot: "C:\\Windows",
+    WORKER_TOKEN: "must-not-pass",
+    ARK_API_KEY: "must-not-pass",
+  }, { toolBridge: bridge });
+  assert.equal(env.BOWERBIRD_TOOL_BRIDGE_ENDPOINT, bridge.BOWERBIRD_TOOL_BRIDGE_ENDPOINT);
+  assert.equal(env.BOWERBIRD_TOOL_BRIDGE_CAPABILITY, bridge.BOWERBIRD_TOOL_BRIDGE_CAPABILITY);
+  assert.equal(env.WORKER_TOKEN, undefined);
+  assert.equal(env.ARK_API_KEY, undefined);
+  assert.throws(
+    () => buildDshEnv({}, { toolBridge: { ...bridge, WORKER_TOKEN: "injected" } }),
+    /invalid Bowerbird tool bridge environment/,
+  );
+  assert.throws(
+    () => buildDshEnv({}, { toolBridge: { ...bridge, BOWERBIRD_TOOL_BRIDGE_ENDPOINT: "http://example.com/" } }),
+    /invalid Bowerbird tool bridge environment/,
+  );
+});
+
+test("approved HTML execution profile exposes only the four ordered execution tools", () => {
+  assert.deepEqual(
+    htmlExecutionToolDefinitions().map((definition) => definition.name).sort(),
+    ["compose_html", "finalize_output", "inspect_artifact", "render_html"],
+  );
+});
+
+test("approved content execution profile reuses HTML tools and adds only the Xiaohongshu compiler", () => {
+  assert.deepEqual(
+    contentExecutionToolDefinitions().map((definition) => definition.name).sort(),
+    ["compose_html", "compose_xiaohongshu", "finalize_output", "inspect_artifact", "render_html"],
+  );
+});
+
+test("planning profile advertises backward-compatible v1 and structured v2 plans", () => {
+  const submitPlan = planningToolDefinitions().find((definition) => definition.name === "submit_plan");
+  assert.ok(submitPlan);
+  const plan = submitPlan.parameters.properties.plan;
+  assert.deepEqual(plan.properties.schemaVersion.enum, [1, 2]);
+  assert.equal(plan.properties.contentPlan.type, "object");
+  assert.equal(plan.properties.contentPlan.properties.assetAssignments.type, "array");
+  assert.equal(plan.properties.contentPlan.properties.informationArchitecture.type, "array");
+  assert.equal(plan.properties.contentPlan.properties.missingAssets.type, "array");
+  assert.equal(plan.properties.contentPlan.properties.visualProfile.oneOf.length, 2);
+});
+
+test("controlled model profile exposes only the three structured suggestion actions", () => {
+  const definitions = controlledModelToolDefinitions();
+  assert.deepEqual(definitions.map((definition) => definition.name).sort(), [
+    "record_intent_analysis",
+    "request_clarification",
+    "submit_plan_for_approval",
+  ]);
+  const analysis = definitions.find((definition) => definition.name === "record_intent_analysis");
+  const plan = definitions.find((definition) => definition.name === "submit_plan_for_approval");
+  assert.equal(analysis.parameters.properties.analysis.additionalProperties, false);
+  assert.ok(analysis.parameters.properties.analysis.required.includes("intentSummary"));
+  assert.equal(plan.parameters.properties.plan.properties.steps.type, "array");
+  assert.ok(plan.parameters.properties.plan.required.includes("strategy"));
+  assert.ok(plan.parameters.properties.plan.properties.referenceRoles.items.properties.role.enum.includes("style"));
+});
+
+test("DSH loads the trusted planning plugin without provider, filesystem, or business secrets", async () => {
+  const port = new NodeDshAcpPort({
+    patches: ["profiles/bowerbird-u1/cordis.bridge.patch.yml"],
+    toolBridge: {
+      BOWERBIRD_TOOL_BRIDGE_ENDPOINT: "http://127.0.0.1:39171/v1/run-tools/call",
+      BOWERBIRD_TOOL_BRIDGE_CAPABILITY: "b".repeat(64),
+    },
+  });
+  try {
+    const initialized = await port.initialize();
+    assert.equal(initialized.protocolVersion, 1);
+    const session = await port.newSession({ cwd: spikeRoot });
+    assert.ok(session.sessionId);
+  } finally {
+    await port.dispose();
+  }
+});
+
+test("DSH loads the controlled model profile with only its loopback capability", async () => {
+  const port = new NodeDshAcpPort({
+    patches: ["profiles/bowerbird-u1/cordis.controlled-model.patch.yml"],
+    toolBridge: {
+      BOWERBIRD_TOOL_BRIDGE_ENDPOINT: "http://127.0.0.1:39171/v1/run-tools/call",
+      BOWERBIRD_TOOL_BRIDGE_CAPABILITY: "c".repeat(64),
+    },
+  });
+  try {
+    const initialized = await port.initialize();
+    assert.equal(initialized.protocolVersion, 1);
+    const session = await port.newSession({ cwd: spikeRoot });
+    assert.ok(session.sessionId);
+  } finally {
+    await port.dispose();
+  }
 });
 
 test("fully composed profile disables every forbidden capability", async () => {

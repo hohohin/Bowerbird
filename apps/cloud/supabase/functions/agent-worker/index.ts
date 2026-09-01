@@ -105,6 +105,7 @@ interface RunRow {
   request_object_key: string;
   skill_id: string;
   skill_version: string;
+  agent_runtime: "legacy_kernel" | "dsh";
   input_manifest_hash: string;
   input_count: number;
   checkpoint_object_key: string | null;
@@ -578,7 +579,16 @@ async function actionClaim(admin: SupabaseClient, workerId: string): Promise<Res
   const feedbackKey = claimed.feedback_object_key;
   // Signed URLs are best-effort here: a not-yet-uploaded input or a pruned
   // checkpoint must not break claiming; the worker re-requests when needed.
-  const [inputUrl, checkpointUrl, feedbackUrl, artifactRows, clarificationResult] = await Promise.all([
+  const approvedPlanResult = claimed.approved_plan_hash
+    ? admin.from("agent_approvals")
+      .select("proposal_hash,planned_tool_count,proposal_object_key")
+      .eq("run_id", claimed.id)
+      .eq("status", "approved")
+      .eq("proposal_hash", claimed.approved_plan_hash)
+      .is("content_deleted_at", null)
+      .maybeSingle()
+    : Promise.resolve({ data: null, error: null });
+  const [inputUrl, checkpointUrl, feedbackUrl, artifactRows, clarificationResult, approvedPlanQuery] = await Promise.all([
     signOrNull(admin, inputKey),
     checkpointKey ? signOrNull(admin, checkpointKey) : Promise.resolve(null),
     feedbackKey ? signOrNull(admin, feedbackKey) : Promise.resolve(null),
@@ -590,9 +600,11 @@ async function actionClaim(admin: SupabaseClient, workerId: string): Promise<Res
       .select("question_key,context_hash,answer_object_key,intent_patch_hash")
       .eq("run_id", claimed.id).eq("status", "answered")
       .order("answered_at", { ascending: false }).limit(1).maybeSingle(),
+    approvedPlanResult,
   ]);
   if (artifactRows.error) throw new ApiError("internal_error", "Run 产物读取失败", true);
   if (clarificationResult.error) throw new ApiError("internal_error", "澄清回答读取失败", true);
+  if (approvedPlanQuery.error) throw new ApiError("internal_error", "已批准计划读取失败", true);
   const artifactUrls = await Promise.all((artifactRows.data ?? []).map(async (artifact) => ({
     artifactId: artifact.id as string,
     conversationId: artifact.conversation_id as string,
@@ -617,12 +629,29 @@ async function actionClaim(admin: SupabaseClient, workerId: string): Promise<Res
   const clarificationAnswerUrl = clarification?.answer_object_key
     ? await signOrNull(admin, clarification.answer_object_key)
     : null;
+  const approvedPlanRow = approvedPlanQuery.data as {
+    proposal_hash: string;
+    planned_tool_count: number;
+    proposal_object_key: string;
+  } | null;
+  if (claimed.approved_plan_hash && (!approvedPlanRow ||
+      approvedPlanRow.proposal_hash !== claimed.approved_plan_hash ||
+      approvedPlanRow.planned_tool_count !== claimed.planned_tool_count)) {
+    throw new ApiError("internal_error", "已批准计划身份不完整", true);
+  }
+  const approvedPlanUrl = approvedPlanRow
+    ? await signOrNull(admin, approvedPlanRow.proposal_object_key)
+    : null;
+  if (approvedPlanRow && !approvedPlanUrl) {
+    throw new ApiError("internal_error", "已批准计划签名失败", true);
+  }
   return jsonResponse({
     run: {
       id: claimed.id,
       conversationId: claimed.conversation_id,
       skillId: claimed.skill_id,
       skillVersion: claimed.skill_version,
+      agentRuntime: claimed.agent_runtime ?? "legacy_kernel",
       inputManifestHash: claimed.input_manifest_hash,
       approvedPlanHash: claimed.approved_plan_hash,
       plannedToolCount: claimed.planned_tool_count,
@@ -636,6 +665,11 @@ async function actionClaim(admin: SupabaseClient, workerId: string): Promise<Res
     lease: { leaseId: claimed.lease_id, expiresAt: null, leaseSeconds: 60 },
     inputUrl,
     checkpointUrl,
+    approvedPlan: approvedPlanRow && approvedPlanUrl ? {
+      proposalHash: approvedPlanRow.proposal_hash,
+      plannedToolCount: approvedPlanRow.planned_tool_count,
+      url: approvedPlanUrl,
+    } : null,
     feedbackUrl,
     clarificationAnswer: clarification && clarificationAnswerUrl ? {
       questionKey: clarification.question_key,
@@ -1174,7 +1208,16 @@ async function actionApprovalRequest(admin: SupabaseClient, body: Record<string,
   let estimateBreakdown: UnifiedAgentPlanEstimate | null = null;
   let estimatedCredits: number;
   if (unifiedPlan) {
-    const assetIds = [...new Set(unifiedPlan.steps.flatMap((step) => step.inputAssetIds))];
+    const structuredAssetIds = unifiedPlan.schemaVersion === 2
+      ? [
+        ...unifiedPlan.contentPlan.assetAssignments.map((item) => item.assetId),
+        ...unifiedPlan.contentPlan.informationArchitecture.flatMap((item) => item.sourceAssetIds),
+      ]
+      : [];
+    const assetIds = [...new Set([
+      ...unifiedPlan.steps.flatMap((step) => step.inputAssetIds),
+      ...structuredAssetIds,
+    ])];
     if (assetIds.length) {
       const { data: assets, error: assetsError } = await admin.from("agent_artifacts")
         .select("id").eq("run_id", runId).in("id", assetIds).is("deleted_at", null);
@@ -1382,6 +1425,10 @@ const RENDER_OUTPUT_ARTIFACT_ROLES = new Set(["render_manifest", "viewport_scree
 const RENDER_ARTIFACT_ROLES = new Set(["html_document", ...RENDER_OUTPUT_ARTIFACT_ROLES]);
 const USER_VISIBLE_RENDER_ARTIFACT_ROLES = new Set(["viewport_screenshot", "full_page_screenshot", "slice_screenshot"]);
 
+function isXiaohongshuPackageArtifact(fields: Pick<ArtifactFields, "role" | "mime">): boolean {
+  return fields.role === "final_result" && fields.mime === "application/json";
+}
+
 function artifactFields(body: Record<string, unknown>): ArtifactFields {
   const runId = typeof body.runId === "string" ? body.runId : "";
   const leaseId = typeof body.leaseId === "string" ? body.leaseId : "";
@@ -1404,7 +1451,8 @@ function artifactFields(body: Record<string, unknown>): ArtifactFields {
   if (role === "diagnostic" || role === "render_manifest") allowedMime = mime === "application/json";
   else if (role === "html_document") allowedMime = mime === "text/html";
   else if (RENDER_ARTIFACT_ROLES.has(role)) allowedMime = mime === "image/png";
-  else allowedMime = ["image/png", "image/jpeg", "image/webp"].includes(mime);
+  else allowedMime = ["image/png", "image/jpeg", "image/webp"].includes(mime) ||
+      role === "final_result" && mime === "application/json";
   const maxBytes = role === "html_document" ? 2 * 1024 * 1024 : mime === "application/json" ? 64 * 1024 : MAX_ARTIFACT_BYTES;
   if (!/^[0-9a-f]{64}$/.test(sha256) || !allowedMime ||
       !Number.isInteger(bytes) || bytes <= 0 || bytes > maxBytes) {
@@ -1423,7 +1471,9 @@ function artifactFields(body: Record<string, unknown>): ArtifactFields {
     bytes,
     stepId: typeof body.stepId === "string" ? body.stepId.slice(0, 120) : null,
     parentArtifactId: typeof body.parentArtifactId === "string" ? body.parentArtifactId : null,
-    userVisible: mime === "application/json" || mime === "text/html" ? false : body.userVisible !== false,
+    userVisible: role === "final_result" && mime === "application/json"
+      ? true
+      : mime === "application/json" || mime === "text/html" ? false : body.userVisible !== false,
   };
 }
 
@@ -1437,6 +1487,9 @@ async function actionArtifactPrepare(admin: SupabaseClient, body: Record<string,
   }
   if (RENDER_OUTPUT_ARTIFACT_ROLES.has(fields.role) && call.tool_name !== "render_html") {
     throw new ApiError("invalid_request", "渲染多输出只能关联 render_html", false, 409);
+  }
+  if (isXiaohongshuPackageArtifact(fields) && call.tool_name !== "compose_xiaohongshu") {
+    throw new ApiError("invalid_request", "渠道草稿只能关联 compose_xiaohongshu", false, 409);
   }
   const { data, error } = await admin.storage.from(BUCKET).createSignedUploadUrl(fields.objectKey);
   if (error || !data) throw new ApiError("internal_error", "artifact 上传地址签发失败", true);
@@ -1454,6 +1507,9 @@ async function actionArtifact(admin: SupabaseClient, body: Record<string, unknow
   }
   if (RENDER_OUTPUT_ARTIFACT_ROLES.has(role) && sourceCall.tool_name !== "render_html") {
     throw new ApiError("invalid_request", "渲染多输出只能关联 render_html", false, 409);
+  }
+  if (isXiaohongshuPackageArtifact(fields) && sourceCall.tool_name !== "compose_xiaohongshu") {
+    throw new ApiError("invalid_request", "渠道草稿只能关联 compose_xiaohongshu", false, 409);
   }
   const object = await admin.storage.from(BUCKET).download(objectKey);
   if (object.error || !object.data) throw new ApiError("invalid_request", "artifact 对象不存在", false, 409);

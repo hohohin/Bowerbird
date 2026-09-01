@@ -4,6 +4,7 @@ import { test } from "node:test";
 import type { PreparedToolCall } from "../control-plane/agent-control-client.ts";
 import { sha256Hex } from "./tool-ledger.ts";
 import {
+  DurableProviderError,
   DurableToolDispatcher,
   SimulatedProcessCrash,
   type DurableToolAdapter,
@@ -49,6 +50,7 @@ class MemoryControl implements DurableToolControl {
     row.status = args.status;
     row.resultObjectKey = args.resultObjectKey;
     row.resultHash = args.resultHash;
+    row.safeErrorCode = args.safeErrorCode;
     return row;
   }
 
@@ -127,4 +129,19 @@ test("same call id with changed normalized arguments fails closed", async () => 
   await dispatcher.dispatch(identity, { prompt: "approved prompt" });
   await rejects(() => dispatcher.dispatch(identity, { prompt: "changed prompt" }), /call_id_args_hash_conflict/);
   equal(tool.executeCount, 1);
+});
+
+test("an outcome-unknown replay preserves the first safe provider code", async () => {
+  const control = new MemoryControl();
+  const tool = new RecoverableFakeImageTool();
+  tool.execute = async () => {
+    tool.executeCount++;
+    throw new DurableProviderError("unknown", "deepseek_transport_unknown");
+  };
+  const dispatcher = new DurableToolDispatcher(control, tool);
+
+  await rejects(() => dispatcher.dispatch(identity, { prompt: "one image" }), /deepseek_transport_unknown/);
+  await rejects(() => dispatcher.dispatch(identity, { prompt: "one image" }), /deepseek_transport_unknown/);
+  equal(tool.executeCount, 1);
+  equal(control.rows.get(identity.callId)?.safeErrorCode, "deepseek_transport_unknown");
 });

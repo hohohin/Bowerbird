@@ -51,6 +51,22 @@ test("Run workspace downloads approved artifacts lazily, verifies them, and clea
   equal(existsSync(workspace.path), false);
 });
 
+test("Run workspace rebuild recovers a deterministic provider result left by process death", () => {
+  const control = new AgentControlClient(
+    { controlUrl: "https://control", workerToken: "secret", workerId: "worker" },
+    async () => { throw new Error("recovery_must_not_download"); },
+  );
+  const root = join(tmpdir(), `bowerbird-workspace-recovery-${randomUUID()}`);
+  const callId = "a".repeat(64);
+  const beforeCrash = new RunWorkspace({ root, runId: "run-recovery", control });
+  const written = beforeCrash.writeProviderResult(callId, png());
+
+  const afterCrash = new RunWorkspace({ root, runId: "run-recovery", control });
+  equal(afterCrash.providerResult(callId)?.sha256, written.sha256);
+  rejects(async () => { afterCrash.providerResult("../foreign"); }, /agent_workspace_call_id_invalid/);
+  afterCrash.cleanup();
+});
+
 test("Run workspace rejects declared image metadata that does not match bytes", async () => {
   const image = png();
   const control = new AgentControlClient(

@@ -9,7 +9,7 @@ const dshBin = path.join(profileDir, "node_modules", "@deepseek-ai", "dsh", "lib
 const WINDOWS_RUNTIME_ENV = ["SystemRoot", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP"];
 const POSIX_RUNTIME_ENV = ["PATH", "TMPDIR", "LANG", "LC_ALL"];
 
-export function buildDshEnv(parentEnv = process.env, { allowNetwork = false } = {}) {
+export function buildDshEnv(parentEnv = process.env, { allowNetwork = false, toolBridge } = {}) {
   const env = Object.create(null);
   const allowedRuntimeKeys = process.platform === "win32" ? WINDOWS_RUNTIME_ENV : POSIX_RUNTIME_ENV;
 
@@ -33,6 +33,17 @@ export function buildDshEnv(parentEnv = process.env, { allowNetwork = false } = 
     if (parentEnv.DEEPSEEK_BASE_URL) {
       env.DEEPSEEK_BASE_URL = parentEnv.DEEPSEEK_BASE_URL;
     }
+  }
+
+  if (toolBridge !== undefined) {
+    const endpoint = toolBridge.BOWERBIRD_TOOL_BRIDGE_ENDPOINT;
+    const capability = toolBridge.BOWERBIRD_TOOL_BRIDGE_CAPABILITY;
+    if (!/^http:\/\/127\.0\.0\.1:\d+\/v1\/run-tools\/call$/.test(endpoint ?? "") ||
+        !/^[0-9a-f]{64}$/.test(capability ?? "") || Object.keys(toolBridge).length !== 2) {
+      throw new Error("invalid Bowerbird tool bridge environment");
+    }
+    env.BOWERBIRD_TOOL_BRIDGE_ENDPOINT = endpoint;
+    env.BOWERBIRD_TOOL_BRIDGE_CAPABILITY = capability;
   }
 
   return env;

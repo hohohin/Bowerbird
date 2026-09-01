@@ -39,6 +39,7 @@ import {
 } from "../providers/renderer/html-render-executor.ts";
 import { RunWorkspace } from "./run-workspace.ts";
 import type { AgentRunContext, AgentRunProcessor } from "./runtime.ts";
+import { agentRuntimeForClaim } from "./agent-runtime.ts";
 
 function reviewEvents(checkpoint: HtmlLayoutRunnerCheckpoint, progress: number) {
   const events = [];
@@ -318,16 +319,40 @@ export class HtmlLayoutRenderRunProcessor implements AgentRunProcessor {
 export class SkillDispatchProcessor implements AgentRunProcessor {
   private readonly controlled: AgentRunProcessor;
   private readonly htmlLayout: AgentRunProcessor;
+  private readonly unified?: AgentRunProcessor;
+  private readonly controlledDsh?: AgentRunProcessor;
 
-  constructor(controlled: AgentRunProcessor, htmlLayout: AgentRunProcessor) {
+  constructor(
+    controlled: AgentRunProcessor,
+    htmlLayout: AgentRunProcessor,
+    unified?: AgentRunProcessor,
+    options: { controlledDsh?: AgentRunProcessor } = {},
+  ) {
     this.controlled = controlled;
     this.htmlLayout = htmlLayout;
+    this.unified = unified;
+    this.controlledDsh = options.controlledDsh;
   }
 
   async process(context: AgentRunContext): Promise<void> {
     const registered = BUILTIN_SKILL_REGISTRY.resolve(context.claimed.run.skillId, context.claimed.run.skillVersion);
-    if (registered.runner === "controlled-image-edit") return await this.controlled.process(context);
-    if (registered.runner === "html-layout-render") return await this.htmlLayout.process(context);
+    const runtime = agentRuntimeForClaim(context.claimed.run);
+    if (registered.runner === "controlled-image-edit") {
+      if (runtime === "dsh") {
+        if (!this.controlledDsh) throw new Error("agent_runtime_unavailable");
+        return await this.controlledDsh.process(context);
+      }
+      return await this.controlled.process(context);
+    }
+    if (registered.runner === "html-layout-render") {
+      // U4 deliberately keeps the proven HTML runner on the legacy path.
+      if (runtime !== "legacy_kernel") throw new Error("agent_runtime_skill_mismatch");
+      return await this.htmlLayout.process(context);
+    }
+    if (registered.runner === "unified-agent") {
+      if (!this.unified) throw new Error("agent_skill_runner_unavailable");
+      return await this.unified.process(context);
+    }
     throw new Error("agent_skill_runner_mismatch");
   }
 }

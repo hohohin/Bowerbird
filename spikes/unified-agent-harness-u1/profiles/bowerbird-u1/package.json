@@ -7,12 +7,16 @@
   "scripts": {
     "acp:probe": "node scripts/acp-probe.mjs",
     "smoke:network": "node scripts/network-smoke.mjs",
-    "smoke:vision": "node scripts/vision-smoke.mjs",
+    "smoke:formal-vision": "node scripts/formal-vision-smoke.mjs",
+    "smoke:u3-product-plan": "node scripts/u3-product-planning-smoke.mjs",
+    "smoke:u3-product-html": "node scripts/u3-product-html-execution-smoke.mjs",
+    "smoke:u3-legacy-baseline": "node scripts/u3-legacy-html-baseline-smoke.mjs",
+    "build:u3-blind-comparison": "node scripts/u3-build-blind-comparison.mjs",
     "smoke:adapter": "node scripts/adapter-smoke.mjs",
     "release:check": "node scripts/check-release.mjs",
     "dump-config": "node scripts/dump-config.mjs",
     "audit": "node scripts/audit-config.mjs",
-    "test": "node --test"
+    "test": "node --test --test-concurrency=1"
   },
   "dsh": {
     "profile": {
@@ -28,7 +32,7 @@
     "@deepseek-ai/dsh-base": "0.1.1-rc.2",
     "@deepseek-ai/dsh-llm-deepseek": "0.1.1-rc.2",
     "@deepseek-ai/dsh-tools": "0.1.1-rc.2",
-    "js-yaml": "4.2.0"
+    "js-yaml": "4.3.1"
   },
   "engines": {
     "node": ">=24 <25"

@@ -15,7 +15,14 @@ test("built-in registry resolves the pinned controlled Skill bundle", () => {
   equal(resolved.bundle.id, resolved.manifest.id);
   equal(resolved.bundle.version, resolved.manifest.version);
   ok(/^[0-9a-f]{64}$/.test(resolved.bundle.instructionHash));
-  equal(BUILTIN_SKILL_REGISTRY.list().length, 2);
+  equal(BUILTIN_SKILL_REGISTRY.list().length, 3);
+});
+
+test("built-in registry resolves the pinned unified Agent without dynamic discovery", () => {
+  const resolved = BUILTIN_SKILL_REGISTRY.resolve("bowerbird-unified-agent", "0.1.0");
+  equal(resolved.runner, "unified-agent");
+  equal(resolved.bundle.id, "bowerbird-unified-agent");
+  ok(/^[0-9a-f]{64}$/.test(resolved.bundle.instructionHash));
 });
 
 test("built-in registry rejects unknown ids, paths and unavailable versions before loading files", () => {

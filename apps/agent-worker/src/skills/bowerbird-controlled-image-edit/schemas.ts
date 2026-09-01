@@ -5,6 +5,7 @@ import type {
   ControlledFeedbackDiagnosis,
   ControlledRunArtifact,
   IntentAnalysis,
+  ReferenceRole,
 } from "../../contracts/controlled-image-edit.ts";
 import { validatePreferenceCapsule } from "../../contracts/preference.ts";
 import { assertVisualProfileCapsule, visualProfileHashPayload } from "../../contracts/visual-profile.ts";
@@ -14,6 +15,17 @@ export const MAX_CONTROLLED_REFERENCES = 8;
 export const MAX_CONTROLLED_PLAN_STEPS = 8;
 export const MAX_INTENT_PROMPT_LENGTH = 4_000;
 const CONTROLLED_RATIOS = new Set(["1:1", "3:4", "4:3", "2:3", "3:2", "16:9", "9:16"]);
+const CONTROLLED_REFERENCE_ROLES = new Set<ReferenceRole>([
+  "base",
+  "pose",
+  "identity",
+  "product",
+  "garment",
+  "accessory",
+  "composition",
+  "style",
+  "other",
+]);
 
 export class ControlledPlanValidationError extends Error {
   readonly safeCode: string;
@@ -189,6 +201,9 @@ export function validateControlledPlan(
   assertUnique(roleIds, "controlled_plan_reference_role_duplicate");
   if (roleIds.length !== input.references.length || roleIds.some((id) => !referenceIds.has(id))) {
     throw new ControlledPlanValidationError("controlled_plan_reference_roles_incomplete");
+  }
+  if (plan.referenceRoles.some((role) => !CONTROLLED_REFERENCE_ROLES.has(role.role))) {
+    throw new ControlledPlanValidationError("controlled_plan_reference_role_invalid");
   }
   const bases = plan.referenceRoles.filter((role) => role.role === "base");
   if (bases.length > 1) throw new ControlledPlanValidationError("controlled_plan_multiple_base_references");

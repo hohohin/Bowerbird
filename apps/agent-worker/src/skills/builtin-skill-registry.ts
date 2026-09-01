@@ -3,6 +3,8 @@ import { loadControlledImageEditSkill } from "./bowerbird-controlled-image-edit/
 import { CONTROLLED_IMAGE_EDIT_MANIFEST } from "./bowerbird-controlled-image-edit/manifest.ts";
 import { loadHtmlLayoutRenderSkill } from "./bowerbird-html-layout-render/loader.ts";
 import { HTML_LAYOUT_RENDER_MANIFEST } from "./bowerbird-html-layout-render/manifest.ts";
+import { loadUnifiedAgentSkill } from "./bowerbird-unified-agent/loader.ts";
+import { UNIFIED_AGENT_MANIFEST } from "./bowerbird-unified-agent/manifest.ts";
 
 export type LoadedSkillBundle = {
   id: string;
@@ -12,7 +14,7 @@ export type LoadedSkillBundle = {
 };
 
 /** 首版 runner 只用显式判别，不允许由 Skill id 或目录路径动态构造模块。 */
-export type BuiltinSkillRunner = "controlled-image-edit" | "html-layout-render";
+export type BuiltinSkillRunner = "controlled-image-edit" | "html-layout-render" | "unified-agent";
 
 export type BuiltinSkillRegistration = {
   id: string;
@@ -98,7 +100,16 @@ const htmlLayoutRenderRegistration: BuiltinSkillRegistration = {
   runner: "html-layout-render",
 };
 
+const unifiedAgentRegistration: BuiltinSkillRegistration = {
+  id: UNIFIED_AGENT_MANIFEST.id,
+  version: UNIFIED_AGENT_MANIFEST.version,
+  loadBundle: loadUnifiedAgentSkill,
+  manifest: UNIFIED_AGENT_MANIFEST,
+  runner: "unified-agent",
+};
+
 export const BUILTIN_SKILL_REGISTRY = new BuiltinSkillRegistry([
   controlledImageEditRegistration,
   htmlLayoutRenderRegistration,
+  unifiedAgentRegistration,
 ]);

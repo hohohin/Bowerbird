@@ -62,6 +62,41 @@ function plan(goal = "生成一张信息图"): HarnessPlan {
   };
 }
 
+function structuredPlan(
+  profile: null | { profileId: string; version: number; hash: string } = null,
+): Extract<HarnessPlan, { schemaVersion: 2 }> {
+  return {
+    schemaVersion: 2,
+    title: "产品长图计划",
+    summary: "明确素材职责与信息架构后生成辅助图并合成 HTML。",
+    contentPlan: {
+      assetAssignments: [{
+        assetId: "asset-product",
+        roles: ["product", "copy_source"],
+        rationale: "产品主体与包装文字均来自当前 Run 素材。",
+      }],
+      informationArchitecture: [{
+        id: "hero",
+        purpose: "展示产品主体与核心卖点",
+        sourceAssetIds: ["asset-product"],
+        copySource: "asset_observation",
+      }],
+      missingAssets: [{
+        id: "support-background",
+        purpose: "补充不含新事实的氛围背景",
+        decision: "generate",
+        resolutionStepId: "generate_support",
+      }],
+      visualProfile: profile ? {
+        ...profile,
+        applied: ["大量留白", "暖灰与深棕"],
+        ignoredContentThemes: ["咖啡器具"],
+      } : null,
+    },
+    steps: plan().steps,
+  };
+}
+
 class MemoryControlPort implements RunControlToolsPort {
   readonly approvals = new Map<string, PlanApprovalRequest>();
   readonly currentManifest: RunAssetManifest;
@@ -191,4 +226,64 @@ test("submit_plan rejects model pricing, unknown assets, invalid dependencies, s
     /tool_not_allowed/,
   );
   equal(port.approvals.size, 0);
+});
+
+test("structured submit_plan binds every Run asset and the required visual profile", async () => {
+  const profile = { profileId: "profile-quiet-luxury", version: 3, hash: "a".repeat(64) };
+  const port = new MemoryControlPort();
+  const gateway = new ScopedToolGateway(createRunControlToolDefinitions(port, {}, {
+    requireStructuredPlan: true,
+    requiredVisualProfile: profile,
+  }));
+  const accepted = await gateway.dispatch(request("submit_plan", "compose_plan", {
+    plan: structuredPlan(profile),
+  }));
+  equal((accepted.value as Record<string, unknown>).proposalHash, sha256Hex(canonicalJson(structuredPlan(profile))));
+  equal([...port.approvals.values()][0]?.proposal.schemaVersion, 2);
+
+  await rejects(
+    () => gateway.dispatch(request("submit_plan", "compose_plan", { plan: plan() })),
+    /plan_structured_required/,
+  );
+
+  const withoutProfile = new ScopedToolGateway(createRunControlToolDefinitions(new MemoryControlPort(), {}, {
+    requireStructuredPlan: true,
+    requiredVisualProfile: null,
+  }));
+  const acceptedWithoutProfile = await withoutProfile.dispatch(request("submit_plan", "compose_plan", {
+    plan: structuredPlan(),
+  }));
+  equal((acceptedWithoutProfile.value as Record<string, unknown>).status, "awaiting_plan_approval");
+  await rejects(
+    () => withoutProfile.dispatch(request("submit_plan", "compose_plan", { plan: structuredPlan(profile) })),
+    /plan_visual_profile_mismatch/,
+  );
+});
+
+test("structured submit_plan rejects incomplete assignments, foreign assets and visual profile drift", async () => {
+  const profile = { profileId: "profile-quiet-luxury", version: 3, hash: "a".repeat(64) };
+  const gateway = new ScopedToolGateway(createRunControlToolDefinitions(new MemoryControlPort(), {}, {
+    requireStructuredPlan: true,
+    requiredVisualProfile: profile,
+  }));
+
+  const incomplete = structuredPlan(profile);
+  incomplete.contentPlan.assetAssignments = [];
+  await rejects(
+    () => gateway.dispatch(request("submit_plan", "compose_plan", { plan: incomplete })),
+    /tool_arguments_invalid/,
+  );
+
+  const foreign = structuredPlan(profile);
+  foreign.contentPlan.informationArchitecture[0]!.sourceAssetIds = ["asset-other-run"];
+  await rejects(
+    () => gateway.dispatch(request("submit_plan", "compose_plan", { plan: foreign })),
+    /plan_asset_not_in_run/,
+  );
+
+  const drifted = structuredPlan({ ...profile, hash: "b".repeat(64) });
+  await rejects(
+    () => gateway.dispatch(request("submit_plan", "compose_plan", { plan: drifted })),
+    /plan_visual_profile_mismatch/,
+  );
 });

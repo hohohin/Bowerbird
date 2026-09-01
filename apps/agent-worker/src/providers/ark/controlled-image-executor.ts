@@ -257,6 +257,8 @@ export function createArkApprovedStepExecutor(args: {
   config: ArkControlledImageConfig;
   signal: AgentLeaseSignal;
   fetch?: AgentWorkerFetch;
+  /** Test-only kill point; production callers leave this unset. */
+  afterExecute?: () => void;
 }): ApprovedStepExecutor {
   const adapter = new ArkControlledImageAdapter({
     runId: args.runId,
@@ -266,7 +268,7 @@ export function createArkApprovedStepExecutor(args: {
     ark: new ArkControlledImageClient(args.config, args.fetch),
     model: args.config.model,
   });
-  const dispatcher = new DurableToolDispatcher(args.control, adapter);
+  const dispatcher = new DurableToolDispatcher(args.control, adapter, { afterExecute: args.afterExecute });
   return {
     generate: async (request) => {
       if (args.signal.aborted) throw new Error("agent_execution_stopped");

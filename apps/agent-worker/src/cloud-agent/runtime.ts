@@ -12,6 +12,7 @@ export type AgentWorkerConfig = {
   pollIntervalMs: number;
   heartbeatIntervalMs: number;
   maintenanceIntervalMs: number;
+  testClaimDelayMs: number;
 };
 
 export type AgentStopSignal = { requested: boolean };
@@ -47,6 +48,12 @@ function positiveInt(value: string | undefined, fallback: number, name: string):
   return parsed;
 }
 
+function boundedNonNegativeInt(value: string | undefined, fallback: number, maximum: number, name: string): number {
+  const parsed = Number.parseInt(value ?? String(fallback), 10);
+  if (!Number.isSafeInteger(parsed) || parsed < 0 || parsed > maximum) throw new Error(`${name}_invalid`);
+  return parsed;
+}
+
 export function agentConfigFromEnv(env: Record<string, string | undefined>): AgentWorkerConfig {
   const workerId = env.AGENT_WORKER_ID?.trim() || `agent-${env.HOSTNAME?.trim() || randomUUID()}`;
   if (workerId.length > 120) throw new Error("AGENT_WORKER_ID_invalid");
@@ -57,6 +64,12 @@ export function agentConfigFromEnv(env: Record<string, string | undefined>): Age
     pollIntervalMs: positiveInt(env.AGENT_POLL_INTERVAL_MS, 2_000, "AGENT_POLL_INTERVAL_MS"),
     heartbeatIntervalMs: positiveInt(env.AGENT_HEARTBEAT_INTERVAL_MS, 20_000, "AGENT_HEARTBEAT_INTERVAL_MS"),
     maintenanceIntervalMs: positiveInt(env.AGENT_MAINTENANCE_INTERVAL_MS, 600_000, "AGENT_MAINTENANCE_INTERVAL_MS"),
+    testClaimDelayMs: boundedNonNegativeInt(
+      env.BOWERBIRD_TEST_AGENT_CLAIM_DELAY_MS,
+      0,
+      30_000,
+      "BOWERBIRD_TEST_AGENT_CLAIM_DELAY_MS",
+    ),
   };
 }
 
@@ -162,6 +175,15 @@ export async function runAgentWorker(
     try {
       const claimed = await control.claim();
       if (claimed.run) {
+        if (config.testClaimDelayMs > 0) {
+          console.log(JSON.stringify({
+            event: "agent_test_claim_delay",
+            run_id: claimed.run.id,
+            delay_ms: config.testClaimDelayMs,
+          }));
+          await sleep(config.testClaimDelayMs);
+          if (stop.requested) continue;
+        }
         await executeClaimedAgentRun(claimed, control, processor, stop, config.heartbeatIntervalMs, sleep);
       } else {
         await sleep(config.pollIntervalMs);

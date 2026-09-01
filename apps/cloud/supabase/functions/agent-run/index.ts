@@ -6,7 +6,7 @@ import { requireUser } from "../_shared/auth.ts";
 import type { AuthContext } from "../_shared/auth.ts";
 import { ensureDailyCredits, holdCredits, rollbackCredits } from "../_shared/billing.ts";
 import { ApiError, errorResponse, jsonResponse, requestId, safeLog } from "../_shared/errors.ts";
-import { activeTier, policyForUser } from "../_shared/feature-policy.ts";
+import { accountTestMarker, activeTier, policyForUser } from "../_shared/feature-policy.ts";
 import { imageMetadata } from "../_shared/image-metadata.ts";
 import { corsHeaders } from "../_shared/limits.ts";
 import { reserveManagedUsage } from "../_shared/usage.ts";
@@ -21,6 +21,14 @@ const ACTIVE_AGENT_STATUSES = [
   "awaiting_approval", "awaiting_result_feedback", "awaiting_local_task",
   "exporting", "cancel_requested",
 ];
+type AgentRuntime = "legacy_kernel" | "dsh";
+
+function dshRuntimeSelectionEnabled(): boolean {
+  const value = (Deno.env.get("AGENT_DSH_RUNTIME_SELECTION_ENABLED") ?? "").trim().toLowerCase();
+  if (!value || value === "false") return false;
+  if (value === "true") return true;
+  throw new ApiError("not_configured", "Agent DSH runtime 选择开关无效", false, 503);
+}
 
 function globalAgentCapacity(): number {
   const value = Number.parseInt(Deno.env.get("AGENT_GLOBAL_ACTIVE_LIMIT") ?? "100", 10);
@@ -296,6 +304,22 @@ function relaxedBudget(service: string, available: number): { budget: number; pr
 async function actionCreate(admin: Parameters<typeof billingAccountId>[0], user: { id: string; app_metadata?: unknown }, body: Record<string, unknown>, requestIdValue: string): Promise<Response> {
   const skillId = typeof body.skillId === "string" ? body.skillId : "";
   if (!ALLOWED_SKILLS.has(skillId)) throw new ApiError("invalid_request", "不支持的 Skill");
+  const requestedRuntime = body.agentRuntime ?? "legacy_kernel";
+  if (requestedRuntime !== "legacy_kernel" && requestedRuntime !== "dsh") {
+    throw new ApiError("invalid_request", "Agent runtime 无效");
+  }
+  const agentRuntime = requestedRuntime as AgentRuntime;
+  if (agentRuntime === "dsh") {
+    if (skillId !== "bowerbird-controlled-image-edit") {
+      throw new ApiError("invalid_request", "该 Skill 尚不支持 DSH runtime");
+    }
+    if (!accountTestMarker(user.app_metadata)) {
+      throw new ApiError("upgrade_required", "DSH runtime 当前仅对测试账号开放", false, 403);
+    }
+    if (!dshRuntimeSelectionEnabled()) {
+      throw new ApiError("not_configured", "DSH runtime 选择尚未启用", false, 503);
+    }
+  }
   const goal = typeof body.goal === "string" ? body.goal.trim() : "";
   if (!goal || goal.length > MAX_GOAL_CHARS) throw new ApiError("invalid_request", "目标文本长度需在 1–4000 字之间");
   const inputCount = Number(body.inputCount);
@@ -400,16 +424,18 @@ async function actionCreate(admin: Parameters<typeof billingAccountId>[0], user:
 
   // Idempotent create: if a run row already references this hold, return it.
   const { data: existing } = await admin.from("agent_runs")
-    .select("id,conversation_id,status,skill_id,input_count,input_manifest_hash,request_object_key,image_provider,budget_credits,pricing_version,visual_profile_id,visual_profile_version,visual_profile_hash")
+    .select("id,conversation_id,status,skill_id,input_count,input_manifest_hash,request_object_key,image_provider,budget_credits,pricing_version,visual_profile_id,visual_profile_version,visual_profile_hash,agent_runtime")
     .eq("hold_id", hold.holdId).maybeSingle();
   if (existing) {
     const row = existing as OwnRun & {
       skill_id: string; input_count: number; input_manifest_hash: string; request_object_key: string;
       image_provider: string; budget_credits: number; pricing_version: number;
       visual_profile_id: string | null; visual_profile_version: number | null; visual_profile_hash: string | null;
+      agent_runtime: AgentRuntime;
     };
     if (row.skill_id !== skillId || row.input_count !== inputCount ||
         row.input_manifest_hash !== body.inputManifestHash || row.image_provider !== imageProvider ||
+        row.agent_runtime !== agentRuntime ||
         row.visual_profile_id !== (visualProfile?.profileId ?? null) || row.visual_profile_version !== (visualProfile?.version ?? null) ||
         row.visual_profile_hash !== (visualProfile?.hash ?? null)) {
       throw new ApiError("invalid_request", "Agent 幂等请求参数不一致", false, 409);
@@ -456,6 +482,7 @@ async function actionCreate(admin: Parameters<typeof billingAccountId>[0], user:
       inputUploads,
       budgetCredits: row.budget_credits,
       pricingVersion: row.pricing_version,
+      agentRuntime: row.agent_runtime,
       reused: true,
     });
   }
@@ -486,6 +513,7 @@ async function actionCreate(admin: Parameters<typeof billingAccountId>[0], user:
     p_content_expires_at: new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
     p_max_user_parallel: policy.max_parallel_agent_runs,
     p_global_active_limit: globalAgentCapacity(),
+    p_agent_runtime: agentRuntime,
   });
   if (guarded.error?.details === "agent_user_parallel_limit") {
     await rollbackCredits(admin, hold.holdId, "agent_user_parallel_limit");
@@ -572,6 +600,7 @@ async function actionCreate(admin: Parameters<typeof billingAccountId>[0], user:
     inputUploads,
     budgetCredits: budget,
     pricingVersion,
+    agentRuntime,
   });
 }
 
@@ -670,7 +699,7 @@ async function actionGet(admin: Parameters<typeof billingAccountId>[0], user: { 
   await loadOwnRun(admin, runId, user.id);
   const [{ data: run }, { data: events }, { data: approvals }, { data: clarifications }] = await Promise.all([
     admin.from("agent_runs").select(
-      "id,conversation_id,status,current_step,progress,skill_id,skill_version,approved_plan_hash,planned_tool_count,budget_credits,actual_credits,result_feedback_action,visual_profile_id,visual_profile_version,visual_profile_hash,created_at,queued_at,started_at,finished_at,content_expires_at,content_deleted_at,error_code,safe_message",
+      "id,conversation_id,status,current_step,progress,skill_id,skill_version,agent_runtime,approved_plan_hash,planned_tool_count,budget_credits,actual_credits,result_feedback_action,visual_profile_id,visual_profile_version,visual_profile_hash,created_at,queued_at,started_at,finished_at,content_expires_at,content_deleted_at,error_code,safe_message",
     ).eq("id", runId).maybeSingle(),
     admin.from("agent_events").select("seq,type,step,progress,display_payload,created_at").eq("run_id", runId).order("seq", { ascending: true }).limit(100),
     admin.from("agent_approvals").select("id,kind,status,proposal_object_key,proposal_hash,planned_tool_count,requested_at,expires_at,content_deleted_at,estimated_additional_credits").eq("run_id", runId).order("requested_at", { ascending: false }).limit(10),

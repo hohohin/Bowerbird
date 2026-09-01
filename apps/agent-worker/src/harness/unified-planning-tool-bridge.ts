@@ -32,6 +32,7 @@ export class UnifiedPlanningToolBridge {
   private readonly gateway: ScopedToolGateway;
   private readonly assetIndexes: ReadonlyMap<string, number>;
   private readonly allowedTools = new Set(["list_run_assets", "understand_asset", "submit_plan"]);
+  private planApprovalRequested = false;
 
   constructor(args: {
     claimed: ClaimedAgentRun & {
@@ -46,8 +47,16 @@ export class UnifiedPlanningToolBridge {
     this.assetIndexes = new Map(manifest.assets.map((asset, index) => [asset.assetId, index]));
   }
 
+  get runId(): string {
+    return this.claimed.run.id;
+  }
+
+  get awaitingPlanApproval(): boolean {
+    return this.planApprovalRequested;
+  }
+
   async dispatch(call: HarnessModelToolCall): Promise<ToolGatewayResult> {
-    return await this.gateway.dispatch({
+    const result = await this.gateway.dispatch({
       runId: this.claimed.run.id,
       leaseId: this.claimed.lease.leaseId,
       phase: "compose_plan",
@@ -56,6 +65,11 @@ export class UnifiedPlanningToolBridge {
       trustedSlot: { logicalSlot: this.logicalSlot(call), revisionIndex: 0 },
       allowedTools: this.allowedTools,
     });
+    if (call.toolName === "submit_plan" && result.value && typeof result.value === "object" &&
+        (result.value as Record<string, unknown>).terminalReason === "awaiting_plan_approval") {
+      this.planApprovalRequested = true;
+    }
+    return result;
   }
 
   private logicalSlot(call: HarnessModelToolCall): number {
@@ -69,7 +83,9 @@ export class UnifiedPlanningToolBridge {
     const assetIndex = typeof record.assetId === "string" ? this.assetIndexes.get(record.assetId) : undefined;
     const focusIndex = UNDERSTAND_ASSET_FOCUS.indexOf(record.focus as UnderstandAssetFocus);
     if (assetIndex === undefined || focusIndex < 0) throw new ToolGatewayError("tool_arguments_invalid");
-    return 1 + assetIndex * UNDERSTAND_ASSET_FOCUS.length + focusIndex;
+    // One durable observation slot per Run asset. Repeating the same focus replays;
+    // changing focus for an already-observed asset becomes args drift before Ark.
+    return 1 + assetIndex;
   }
 }
 
@@ -81,12 +97,16 @@ export function createUnifiedPlanningToolBridge(args: {
   control: AgentControlClient;
   workspace: RunWorkspace;
   vision: ArkAssetUnderstandingConfig;
+  visualProfile?: { profileId: string; version: number; hash: string };
   signal: AgentLeaseSignal;
   fetch?: AgentWorkerFetch;
 }): UnifiedPlanningToolBridge {
   const controlPort = new AgentControlRunToolsPort(args.claimed, args.control);
   const gateway = new ScopedToolGateway([
-    ...createRunControlToolDefinitions(controlPort),
+    ...createRunControlToolDefinitions(controlPort, {}, {
+      requireStructuredPlan: true,
+      requiredVisualProfile: args.visualProfile ?? null,
+    }),
     createUnderstandAssetToolDefinition({
       claimed: args.claimed,
       control: args.control,

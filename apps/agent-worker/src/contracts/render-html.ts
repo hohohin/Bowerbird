@@ -35,6 +35,9 @@ export type RenderHtmlInputV1 = {
   background: RenderHtmlBackground;
 };
 
+/** 用户/父进程可选择并冻结的渲染规格；不包含任何 artifact 或调用身份。 */
+export type RenderHtmlOutputSettingsV1 = Pick<RenderHtmlInputV1, "viewport" | "capture" | "background">;
+
 /** 新增 artifact 角色（HTML-RENDER-PLAN §4.4；migration 0044 扩 DB check 约束）。 */
 export type RenderHtmlArtifactRole =
   | "html_document"
@@ -48,16 +51,9 @@ export const RENDER_HTML_MAX_SLICES = 32;
 export const RENDER_HTML_MAX_RESOURCES = 64;
 
 /** 下发模型的 JSON Schema（闭集；用于 PolicyEngine argumentSchema）。 */
-export const RENDER_HTML_INPUT_SCHEMA = {
+export const RENDER_HTML_OUTPUT_SETTINGS_SCHEMA = {
   type: "object",
   properties: {
-    schemaVersion: { type: "integer", enum: [1] },
-    htmlArtifactId: { type: "string", description: "本 Run 内已提交的 HTML/CSS 文档 artifact id" },
-    resourceArtifactIds: {
-      type: "array",
-      maxItems: RENDER_HTML_MAX_RESOURCES,
-      items: { type: "string", description: "本 Run 内显式登记的图片 artifact id" },
-    },
     viewport: {
       type: "object",
       properties: {
@@ -80,7 +76,23 @@ export const RENDER_HTML_INPUT_SCHEMA = {
     },
     background: { type: "string", enum: ["opaque", "transparent"] },
   },
-  required: ["schemaVersion", "htmlArtifactId", "resourceArtifactIds", "viewport", "capture", "background"],
+  required: ["viewport", "capture", "background"],
+  additionalProperties: false,
+} as const;
+
+export const RENDER_HTML_INPUT_SCHEMA = {
+  type: "object",
+  properties: {
+    schemaVersion: { type: "integer", enum: [1] },
+    htmlArtifactId: { type: "string", description: "本 Run 内已提交的 HTML/CSS 文档 artifact id" },
+    resourceArtifactIds: {
+      type: "array",
+      maxItems: RENDER_HTML_MAX_RESOURCES,
+      items: { type: "string", description: "本 Run 内显式登记的图片 artifact id" },
+    },
+    ...RENDER_HTML_OUTPUT_SETTINGS_SCHEMA.properties,
+  },
+  required: ["schemaVersion", "htmlArtifactId", "resourceArtifactIds", ...RENDER_HTML_OUTPUT_SETTINGS_SCHEMA.required],
   additionalProperties: false,
 } as const;
 
@@ -98,6 +110,32 @@ function onlyKeys(obj: Record<string, unknown>, knownKeys: readonly string[]): b
 
 function isInteger(v: unknown): v is number {
   return typeof v === "number" && Number.isInteger(v);
+}
+
+/** 与 renderer wire 共用的闭集输出规格校验；调用方不能借此表达 URL、路径或 artifact。 */
+export function validateRenderHtmlOutputSettings(
+  input: unknown,
+): { ok: true; value: RenderHtmlOutputSettingsV1 } | { ok: false; violation: RenderHtmlInputViolation } {
+  if (!isPlainObject(input) || !onlyKeys(input, ["viewport", "capture", "background"])) return fail("output_settings_shape");
+  const vp = input.viewport;
+  if (!isPlainObject(vp) || !onlyKeys(vp, ["widthCssPx", "heightCssPx", "deviceScaleFactor"])) return fail("viewport_shape");
+  if (!isInteger(vp.widthCssPx) || vp.widthCssPx < 320 || vp.widthCssPx > 2400) return fail("viewport_width");
+  if (!isInteger(vp.heightCssPx) || vp.heightCssPx < 240 || vp.heightCssPx > 4000) return fail("viewport_height");
+  if (vp.deviceScaleFactor !== 1 && vp.deviceScaleFactor !== 2) return fail("device_scale_factor");
+
+  const cap = input.capture;
+  if (!isPlainObject(cap) || !onlyKeys(cap, ["mode", "sliceHeightCssPx", "overlapCssPx"])) return fail("capture_shape");
+  if (cap.mode !== "viewport" && cap.mode !== "full_page" && cap.mode !== "full_page_and_slices") return fail("capture_mode");
+  if (typeof input.background !== "string" || (input.background !== "opaque" && input.background !== "transparent")) return fail("background");
+  if (cap.mode === "full_page_and_slices") {
+    if (!isInteger(cap.sliceHeightCssPx) || cap.sliceHeightCssPx < 200 || cap.sliceHeightCssPx > 4000) return fail("slice_height");
+    const overlap = cap.overlapCssPx ?? 0;
+    if (!isInteger(overlap) || overlap < 0 || overlap > 200) return fail("slice_overlap");
+    if (overlap >= cap.sliceHeightCssPx) return fail("slice_overlap_ge_height");
+  } else if (cap.sliceHeightCssPx !== undefined || cap.overlapCssPx !== undefined) {
+    return fail("slice_params_without_slice_mode");
+  }
+  return { ok: true, value: input as unknown as RenderHtmlOutputSettingsV1 };
 }
 
 /**
@@ -120,26 +158,13 @@ export function validateRenderHtmlInput(input: unknown): { ok: true; value: Rend
     seen.add(id);
   }
 
-  const vp = input.viewport;
-  if (!isPlainObject(vp) || !onlyKeys(vp, ["widthCssPx", "heightCssPx", "deviceScaleFactor"])) return fail("viewport_shape");
-  if (!isInteger(vp.widthCssPx) || vp.widthCssPx < 320 || vp.widthCssPx > 2400) return fail("viewport_width");
-  if (!isInteger(vp.heightCssPx) || vp.heightCssPx < 240 || vp.heightCssPx > 4000) return fail("viewport_height");
-  if (vp.deviceScaleFactor !== 1 && vp.deviceScaleFactor !== 2) return fail("device_scale_factor");
-
-  const cap = input.capture;
-  if (!isPlainObject(cap) || !onlyKeys(cap, ["mode", "sliceHeightCssPx", "overlapCssPx"])) return fail("capture_shape");
-  if (cap.mode !== "viewport" && cap.mode !== "full_page" && cap.mode !== "full_page_and_slices") return fail("capture_mode");
-  if (typeof input.background !== "string" || (input.background !== "opaque" && input.background !== "transparent")) return fail("background");
-  if (cap.mode === "full_page_and_slices") {
-    if (!isInteger(cap.sliceHeightCssPx) || cap.sliceHeightCssPx < 200 || cap.sliceHeightCssPx > 4000) return fail("slice_height");
-    const overlap = cap.overlapCssPx ?? 0;
-    if (!isInteger(overlap) || overlap < 0 || overlap > 200) return fail("slice_overlap");
-    if (overlap >= cap.sliceHeightCssPx) return fail("slice_overlap_ge_height");
-  } else if (cap.sliceHeightCssPx !== undefined || cap.overlapCssPx !== undefined) {
-    return fail("slice_params_without_slice_mode");
-  }
-
-  return { ok: true, value: input as unknown as RenderHtmlInputV1 };
+  const settings = validateRenderHtmlOutputSettings({
+    viewport: input.viewport,
+    capture: input.capture,
+    background: input.background,
+  });
+  if (!settings.ok) return settings;
+  return { ok: true, value: { ...input, ...settings.value } as unknown as RenderHtmlInputV1 };
 }
 
 function fail(reason: string): { ok: false; violation: RenderHtmlInputViolation } {
