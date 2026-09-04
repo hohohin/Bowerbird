@@ -49,7 +49,8 @@ export function Sidebar() {
   const total = useStore((s) => s.total);
   const selectedCount = useStore((s) => s.selectedIds.size);
   const currentFolderId = useStore((s) => s.currentFolderId);
-  const currentProjectId = useStore((s) => s.currentProjectId);
+  const activeProjectId = useStore((s) => s.activeProjectId);
+  const projectRoutePending = useStore((s) => s.projectRoutePending);
   const projects = useStore((s) => s.projects);
   const enterProject = useStore((s) => s.enterProject);
   const exitProject = useStore((s) => s.exitProject);
@@ -84,7 +85,7 @@ export function Sidebar() {
   const [draftName, setDraftName] = useState("");
   const [smartKind, setSmartKind] = useState<"source" | "ext">("source");
   const [smartValue, setSmartValue] = useState("");
-  const [collapsed, setCollapsed] = useState(loadSidebarCollapsed);
+  const [collapsed, setCollapsed] = useState(() => activeProjectId ? true : loadSidebarCollapsed());
   // 自定义宽度（null = 用 CSS 默认 198px/媒体查询宽度）。拖拽右缘把手调整，持久化到 localStorage。
   const [width, setWidth] = useState<number | null>(loadSidebarWidth);
   const [resizing, setResizing] = useState<{ startX: number; startWidth: number } | null>(null);
@@ -107,8 +108,13 @@ export function Sidebar() {
   }
 
   useEffect(() => {
-    if (tourActive && (tourStep === 1 || tourStep === 2 || tourStep === 3)) setCollapsed(false);
-  }, [tourActive, tourStep]);
+    if (tourActive && (tourStep === 1 || tourStep === 2 || tourStep === 3)) {
+      setCollapsed(false);
+      return;
+    }
+    // 项目即画板：每次进入项目都把主侧栏让位给画板；用户仍可手动展开。
+    if (activeProjectId) setSidebarCollapsed(true);
+  }, [activeProjectId, tourActive, tourStep]);
 
   /** 宽度夹取：最小 160px，最大不超过主面板（侧栏所在 flex 行）的 1/4。 */
   function clampSidebarWidth(w: number | null) {
@@ -228,23 +234,29 @@ export function Sidebar() {
         <SidebarStatus collapsed />
         <div className="app-sidebar-rail-divider" />
         {/* 项目圆标轨：G=全局 + 每个项目一枚首字圆标，点击直接切换（不展开侧栏）。 */}
-        <div className="flex w-full flex-1 flex-col items-center gap-2 overflow-y-auto py-1">
+        <div className="app-sidebar-scroll flex w-full flex-1 flex-col items-center gap-2 overflow-y-auto py-1">
           <button
             type="button"
-            onClick={() => currentProjectId && void exitProject()}
-            className={`app-sidebar-project-badge ${currentProjectId ? "" : "is-active"}`}
+            onClick={() => activeProjectId && void exitProject().catch((error) => {
+              notifyError(error, "项目仍有未保存修改，已留在当前画板");
+            })}
+            disabled={projectRoutePending}
+            className={`app-sidebar-project-badge ${activeProjectId ? "" : "is-active"}`}
             title="全局素材"
             aria-label="全局素材"
           >
             G
           </button>
           {projects.map((p) => {
-            const active = p.id === currentProjectId;
+            const active = p.id === activeProjectId;
             return (
               <button
                 key={p.id}
                 type="button"
-                onClick={() => !active && void enterProject(p.id)}
+                onClick={() => !active && void enterProject(p.id).catch((error) => {
+                  notifyError(error, "无法切换项目，当前画板保持不变");
+                })}
+                disabled={projectRoutePending}
                 onContextMenu={(e) => {
                   // 收起态圆标同样支持项目右键菜单（更新项目文件等）。
                   e.preventDefault();
@@ -278,7 +290,7 @@ export function Sidebar() {
       >
         <PanelLeftClose size={16} />
       </button>
-      <div className="flex-1 overflow-y-auto p-3 pt-4">
+      <div className="app-sidebar-scroll flex-1 overflow-y-auto p-3 pt-4">
       <SidebarStatus />
 
       <ProjectSection />
@@ -355,13 +367,13 @@ export function Sidebar() {
       <div className="space-y-1">
         <button
           type="button"
-          className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left ${
-            currentFolderId === null && !smartFilter && !currentCollectionId ? "bg-panel2" : "hover:bg-panel2"
+          className={`sidebar-nav-item flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left ${
+            currentFolderId === null && !smartFilter && !currentCollectionId ? "is-active" : ""
           }`}
           onClick={() => setCurrentFolder(null)}
         >
           <Library size={15} className="text-muted" />
-          {currentProjectId ? "项目全部" : "全部素材"}
+          {activeProjectId ? "项目全部" : "全部素材"}
         </button>
         {normalFolders.map((f) => (
           <FolderRow key={f.id} folder={f} />
@@ -535,7 +547,7 @@ export function Sidebar() {
         </div>
       </div>
       <div className="px-3 pb-0.5 pt-2 text-[10px] uppercase tracking-wide text-muted">
-        {currentProjectId ? "Project assets" : "Library assets"} · {total}
+        {activeProjectId ? "Project assets" : "Library assets"} · {total}
       </div>
       <SidebarAccount />
       {/* 右缘拖拽把手：调侧栏宽度（最小 160px，最大主面板 1/4） */}
@@ -562,7 +574,7 @@ function FolderRow({ folder }: { folder: Folder }) {
   const setCurrentFolder = useStore((s) => s.setCurrentFolder);
   const setCurrentCollection = useStore((s) => s.setCurrentCollection);
   const reloadFolders = useStore((s) => s.reloadFolders);
-  const currentProjectId = useStore((s) => s.currentProjectId);
+  const activeProjectId = useStore((s) => s.activeProjectId);
   const openVisualProfile = useStore((s) => s.openVisualProfile);
   const isSmart = folder.kind === "smart";
   const isCollection = folder.kind === "collection";
@@ -664,12 +676,12 @@ function FolderRow({ folder }: { folder: Folder }) {
 
   return (
     <div
-      className={`group flex cursor-pointer items-center gap-1 rounded px-2 py-1.5 ${
+      className={`sidebar-nav-item group flex cursor-pointer items-center gap-1 rounded px-2 py-1.5 ${
         dragOver > 0
           ? "ring-2 ring-accent bg-accent/10"
           : active
-            ? "bg-panel2"
-            : "hover:bg-panel2"
+            ? "is-active"
+            : ""
       }`}
       onClick={() => (isCollection ? setCurrentCollection(folder.id) : setCurrentFolder(folder.id))}
       title={folder.smart_query ?? ""}
@@ -705,7 +717,7 @@ function FolderRow({ folder }: { folder: Folder }) {
         {isSmart ? "🔍" : isCollection ? "★" : "📁"} {folder.name}
       </span>
       <span className={`flex items-center gap-0.5 ${actionCls}`}>
-        {!isSmart && !isCollection && currentProjectId && (
+        {!isSmart && !isCollection && activeProjectId && (
           <button
             onClick={(e) => {
               e.stopPropagation();

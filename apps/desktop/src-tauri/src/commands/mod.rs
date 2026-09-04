@@ -10,9 +10,11 @@ pub mod collect;
 pub mod jimeng;
 pub mod library;
 pub mod preset;
+pub mod project_canvas;
 pub mod projects;
 pub mod prompt;
 pub mod settings;
+pub mod source_browser;
 pub mod visual_profile;
 
 use std::sync::Arc;

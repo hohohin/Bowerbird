@@ -20,6 +20,10 @@ pub struct Project {
     pub created_at: i64,
     pub asset_count: i64,
     pub kind: String,
+    pub title_source: String,
+    pub updated_at: i64,
+    pub last_opened_at: i64,
+    pub archived_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,6 +40,15 @@ pub struct ProjectDeleteResult {
     pub preserved_shared: usize,
     pub moved_assets: usize,
     pub failed_moves: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectDeleteImpact {
+    pub project_asset_count: i64,
+    pub thread_count: i64,
+    pub node_count: i64,
+    pub running_generation_count: i64,
+    pub running_agent_count: i64,
 }
 
 /// 「更新项目文件」结果：本次新加入项目的素材数（0 = 文件夹没有新素材）。
@@ -64,6 +77,52 @@ pub enum AssetDeleteMode {
     MoveOut,
     /// 从全局及所有项目物理删除（删文件 + 删行 + 级联清理）。
     Delete,
+}
+
+const PROJECT_RUNNING_GENERATION_COUNT_SQL: &str =
+    "SELECT COUNT(*) FROM task_queue WHERE project_id=?1 AND status IN ('queued','running')";
+
+// Agent terminal states are intentionally allow-listed. Any new/unknown state must block
+// project deletion until its lifecycle semantics are reviewed. A succeeded + accepted run is
+// unfinished until the whole artifact group has its local durable-ingest checkpoint. A primary
+// final_asset_id alone can be written before later artifacts finish projecting/acknowledging.
+const PROJECT_UNFINISHED_AGENT_COUNT_SQL: &str =
+    "SELECT COUNT(*) FROM cloud_agent_runs WHERE project_id=?1 AND (\
+       status NOT IN ('succeeded','failed','cancelled') OR \
+       (status='succeeded' AND feedback_action='accept' AND (\
+          final_asset_id IS NULL OR \
+          COALESCE(json_extract(snapshot_json,'$._bowerbirdAgentIngestV1.schemaVersion'),0) != 1 OR \
+          COALESCE(json_extract(snapshot_json,'$._bowerbirdAgentIngestV1.fingerprint'),'') = '' OR \
+          json_extract(snapshot_json,'$._bowerbirdAgentIngestV1.completedAt') IS NULL\
+       ))\
+     )";
+
+fn project_unfinished_work_counts(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+) -> AppResult<(i64, i64)> {
+    let running_generation_count =
+        conn.query_row(PROJECT_RUNNING_GENERATION_COUNT_SQL, [project_id], |row| {
+            row.get(0)
+        })?;
+    let running_agent_count =
+        conn.query_row(PROJECT_UNFINISHED_AGENT_COUNT_SQL, [project_id], |row| {
+            row.get(0)
+        })?;
+    Ok((running_generation_count, running_agent_count))
+}
+
+fn ensure_project_has_no_unfinished_work(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+) -> AppResult<()> {
+    let (generation_count, agent_count) = project_unfinished_work_counts(conn, project_id)?;
+    if generation_count > 0 || agent_count > 0 {
+        return Err(AppError::Other(format!(
+            "项目仍有未完成任务（生成 {generation_count}，Agent {agent_count}），请等待任务终态且已接受结果完成入库后再删除"
+        )));
+    }
+    Ok(())
 }
 
 /// 单素材删除结果（前端消息提示用）。
@@ -161,10 +220,38 @@ fn project_from_row(row: &rusqlite::Row) -> rusqlite::Result<Project> {
         created_at: row.get("created_at")?,
         asset_count: row.get("asset_count")?,
         kind: row.get("kind")?,
+        title_source: row.get("title_source")?,
+        updated_at: row.get("updated_at")?,
+        last_opened_at: row.get("last_opened_at")?,
+        archived_at: row.get("archived_at")?,
     })
 }
 
 impl Database {
+    pub fn project_delete_impact(&self, project_id: &str) -> AppResult<ProjectDeleteImpact> {
+        let conn = self.conn.lock().unwrap();
+        let exists: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)",
+            [project_id],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Err(AppError::NotFound(format!("project {project_id}")));
+        }
+        let count = |sql: &str| -> AppResult<i64> {
+            Ok(conn.query_row(sql, [project_id], |row| row.get(0))?)
+        };
+        let (running_generation_count, running_agent_count) =
+            project_unfinished_work_counts(&conn, project_id)?;
+        Ok(ProjectDeleteImpact {
+            project_asset_count: count("SELECT COUNT(*) FROM project_assets WHERE project_id=?1")?,
+            thread_count: count("SELECT COUNT(*) FROM creative_threads WHERE project_id=?1")?,
+            node_count: count("SELECT COUNT(*) FROM canvas_nodes WHERE project_id=?1")?,
+            running_generation_count,
+            running_agent_count,
+        })
+    }
+
     pub fn create_project(
         &self,
         id: &str,
@@ -175,8 +262,8 @@ impl Database {
     ) -> AppResult<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO projects (id, name, workspace_path, workspace_key, kind, created_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, strftime('%s','now'))",
+            "INSERT INTO projects (id, name, workspace_path, workspace_key, kind, created_at, title_source, updated_at, last_opened_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, strftime('%s','now'), 'manual', strftime('%s','now'), strftime('%s','now'))",
             rusqlite::params![id, name, workspace_path, workspace_key, kind],
         )?;
         Ok(())
@@ -185,9 +272,9 @@ impl Database {
     pub fn list_projects(&self) -> AppResult<Vec<Project>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT p.id, p.name, p.workspace_path, p.created_at, p.kind, COUNT(pa.asset_id) AS asset_count \
+            "SELECT p.id, p.name, p.workspace_path, p.created_at, p.kind, p.title_source, p.updated_at, p.last_opened_at, p.archived_at, COUNT(pa.asset_id) AS asset_count \
              FROM projects p LEFT JOIN project_assets pa ON pa.project_id = p.id \
-             GROUP BY p.id ORDER BY p.created_at DESC, p.id DESC",
+             WHERE p.archived_at IS NULL GROUP BY p.id ORDER BY p.last_opened_at DESC, p.created_at DESC, p.id DESC",
         )?;
         let rows = stmt.query_map([], project_from_row)?;
         let mut out = Vec::new();
@@ -200,7 +287,7 @@ impl Database {
     pub fn get_project(&self, id: &str) -> AppResult<Option<Project>> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT p.id, p.name, p.workspace_path, p.created_at, p.kind, COUNT(pa.asset_id) AS asset_count \
+            "SELECT p.id, p.name, p.workspace_path, p.created_at, p.kind, p.title_source, p.updated_at, p.last_opened_at, p.archived_at, COUNT(pa.asset_id) AS asset_count \
              FROM projects p LEFT JOIN project_assets pa ON pa.project_id = p.id \
              WHERE p.id = ?1 GROUP BY p.id",
             rusqlite::params![id],
@@ -261,7 +348,11 @@ impl Database {
         mode: ProjectDeleteMode,
     ) -> AppResult<ProjectDeleteResult> {
         let conn = self.conn.lock().unwrap();
-        let (workspace_path, kind): (String, String) = conn
+        // Keep the unfinished-work guard and every project-owned database mutation in the same
+        // transaction. This makes the backend authoritative instead of relying on a potentially
+        // stale frontend impact confirmation.
+        let tx = conn.unchecked_transaction()?;
+        let (workspace_path, kind): (String, String) = tx
             .query_row(
                 "SELECT workspace_path, kind FROM projects WHERE id = ?1",
                 rusqlite::params![project_id],
@@ -269,6 +360,7 @@ impl Database {
             )
             .optional()?
             .ok_or_else(|| AppError::NotFound(format!("project {project_id}")))?;
+        ensure_project_has_no_unfinished_work(&tx, project_id)?;
         // 预置项目（如「欢迎来到园丁鸟」）：workspace_path 是虚拟值，无真实目录可移出，
         // 成员素材（source='sample'）应留全局供未来按 source 清理。强制 Keep 语义，忽略传入 mode。
         // 空白项目（kind="blank"）没有 workspace，「移出」无处可移（MoveOut 会把文件移到相对
@@ -280,7 +372,7 @@ impl Database {
         };
 
         let members: Vec<(String, String, Option<String>, Option<String>, bool)> = {
-            let mut stmt = conn.prepare(
+            let mut stmt = tx.prepare(
                 "SELECT a.id, a.name, a.store_path, a.thumb_path, EXISTS(\
                    SELECT 1 FROM project_assets other \
                    WHERE other.asset_id = a.id AND other.project_id != ?1\
@@ -339,7 +431,6 @@ impl Database {
                 }
             }
             let moved_assets = moved_ids.len();
-            let tx = conn.unchecked_transaction()?;
             for asset_id in &moved_ids {
                 tx.execute(
                     "DELETE FROM assets WHERE id = ?1",
@@ -367,7 +458,6 @@ impl Database {
             });
         }
 
-        let tx = conn.unchecked_transaction()?;
         let mut files = Vec::new();
         let mut deleted_assets = 0;
         if mode == ProjectDeleteMode::DeleteExclusive {
@@ -693,6 +783,112 @@ mod tests {
         assert_eq!(result.deleted_assets, 0);
         assert_eq!(result.preserved_shared, 1);
         assert!(db.get_asset("a1").unwrap().is_some());
+    }
+
+    #[test]
+    fn project_delete_counts_and_blocks_every_unfinished_agent_state() {
+        let db = db();
+        put_asset(&db, "ingested-final");
+        put_project(&db, "p1");
+        let runs = [
+            ("local", "awaiting_local_task", None, None, "{}"),
+            ("cancelling", "cancel_requested", None, None, "{}"),
+            ("feedback", "awaiting_result_feedback", None, None, "{}"),
+            ("future", "future_agent_state", None, None, "{}"),
+            ("accepted-pending", "succeeded", Some("accept"), None, "{}"),
+            ("succeeded", "succeeded", None, None, "{}"),
+            (
+                "accepted-ingested",
+                "succeeded",
+                Some("accept"),
+                Some("ingested-final"),
+                r#"{"_bowerbirdAgentIngestV1":{"schemaVersion":1,"fingerprint":"group-hash","completedAt":1}}"#,
+            ),
+            ("failed", "failed", None, None, "{}"),
+            ("cancelled", "cancelled", None, None, "{}"),
+        ];
+        {
+            let conn = db.conn.lock().unwrap();
+            for (run_id, status, feedback_action, final_asset_id, snapshot_json) in runs {
+                conn.execute(
+                    "INSERT INTO cloud_agent_runs (run_id,conversation_id,skill_id,status,intent_prompt,reference_asset_ids,project_id,snapshot_json,feedback_action,final_asset_id,created_at,updated_at) \
+                     VALUES (?1,?2,'skill',?3,'prompt','[]','p1',?4,?5,?6,1,1)",
+                    rusqlite::params![
+                        run_id,
+                        format!("conversation-{run_id}"),
+                        status,
+                        snapshot_json,
+                        feedback_action,
+                        final_asset_id
+                    ],
+                )
+                .unwrap();
+            }
+        }
+
+        let impact = db.project_delete_impact("p1").unwrap();
+        assert_eq!(impact.running_agent_count, 5);
+
+        let error = db
+            .delete_project("p1", ProjectDeleteMode::Keep)
+            .unwrap_err();
+        assert!(error.to_string().contains("Agent 5"));
+        assert!(db.get_project("p1").unwrap().is_some());
+
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE cloud_agent_runs SET status='failed' \
+                 WHERE status NOT IN ('succeeded','failed','cancelled')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "UPDATE cloud_agent_runs SET final_asset_id='ingested-final' \
+                 WHERE run_id='accepted-pending'",
+                [],
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            db.project_delete_impact("p1").unwrap().running_agent_count,
+            1,
+            "final_asset_id alone must not make a partially ingested group deletable"
+        );
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE cloud_agent_runs SET snapshot_json=?2 WHERE run_id=?1",
+                rusqlite::params![
+                    "accepted-pending",
+                    r#"{"_bowerbirdAgentIngestV1":{"schemaVersion":1,"fingerprint":"group-hash-2","completedAt":2}}"#
+                ],
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            db.project_delete_impact("p1").unwrap().running_agent_count,
+            0
+        );
+
+        db.delete_project("p1", ProjectDeleteMode::Keep).unwrap();
+        let conn = db.conn.lock().unwrap();
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM cloud_agent_runs", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            9,
+            "删除项目不得删除 Agent 审计"
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM cloud_agent_runs WHERE project_id IS NOT NULL",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+            0
+        );
     }
 
     #[test]

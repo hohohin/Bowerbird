@@ -1,6 +1,6 @@
 use std::{path::PathBuf, sync::Arc};
 
-use rusqlite::OptionalExtension;
+use rusqlite::{OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -8,16 +8,30 @@ use tauri::{AppHandle, Emitter, State};
 use ulid::Ulid;
 
 use crate::cloud::{AuthClient, CloudClient, EntitlementService};
-use crate::core::{library::Asset, paths::LibraryPaths};
+use crate::core::{
+    creative_session_contract::{
+        AgentGroupApprovalV1, AgentGroupArtifactV1, AgentGroupClarificationV1, AgentGroupEventV1,
+        AgentGroupNodePayloadV1, VisualProfileRefV1,
+    },
+    library::Asset,
+    paths::LibraryPaths,
+    project_canvas::ProjectAgentLaunchInput,
+    visual_profile::VisualProfileCapsule,
+};
 use crate::db::Database;
 use crate::error::AppError;
 
 const SKILL_ID: &str = "bowerbird-controlled-image-edit";
 const HTML_SKILL_ID: &str = "bowerbird-html-layout-render";
+const UNIFIED_SKILL_ID: &str = "bowerbird-unified-agent";
+const LEGACY_AGENT_RUNTIME: &str = "legacy_kernel";
+const DSH_AGENT_RUNTIME: &str = "dsh";
 const MAX_REFERENCES: usize = 8;
 const MAX_PROMPT_CHARS: usize = 4_000;
 const MAX_FEEDBACK_CHARS: usize = 2_000;
 const MAX_ARTIFACT_BYTES: u64 = 20 * 1024 * 1024;
+const PROJECT_AGENT_LAUNCH_SNAPSHOT_KEY: &str = "_bowerbirdProjectAgentLaunchV1";
+const PROJECT_AGENT_INGEST_SNAPSHOT_KEY: &str = "_bowerbirdAgentIngestV1";
 const CODEX_AGENT_INCOMPATIBLE_MESSAGE: &str =
     "Codex 与 Bowerbird Agent 暂时互斥，请直接使用 Codex 或为 Agent 选择 Cloud / 即梦";
 const ALLOWED_RATIOS: [(&str, f64); 7] = [
@@ -89,6 +103,27 @@ struct HtmlLayoutCapture {
     overlap_css_px: Option<u32>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UnifiedAgentManifest<'a> {
+    schema_version: u8,
+    goal: &'a str,
+    references: &'a [HtmlLayoutReference],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ratio: Option<&'a str>,
+    html_output: UnifiedHtmlOutput<'a>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    visual_profile_capsule: Option<&'a crate::core::visual_profile::VisualProfileCapsule>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UnifiedHtmlOutput<'a> {
+    viewport: HtmlLayoutViewport,
+    capture: HtmlLayoutCapture,
+    background: &'a str,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreferenceFact {
@@ -127,6 +162,8 @@ pub struct CloudAgentRunRecord {
     pub intent_prompt: String,
     pub reference_asset_ids: Vec<String>,
     pub project_id: Option<String>,
+    pub thread_id: Option<String>,
+    pub creative_launch_id: Option<String>,
     pub snapshot: Value,
     pub feedback_action: Option<String>,
     pub final_asset_id: Option<String>,
@@ -274,6 +311,18 @@ fn ensure_agent_provider_compatible(image_provider: Option<&str>) -> Result<(), 
     Ok(())
 }
 
+fn resolve_agent_runtime(
+    agent_runtime: Option<&str>,
+    is_test_account: bool,
+) -> Result<&'static str, AppError> {
+    match agent_runtime {
+        None | Some(LEGACY_AGENT_RUNTIME) => Ok(LEGACY_AGENT_RUNTIME),
+        Some(DSH_AGENT_RUNTIME) if is_test_account => Ok(DSH_AGENT_RUNTIME),
+        Some(DSH_AGENT_RUNTIME) => Err(AppError::Other("DSH Runtime 仅对测试账号开放".into())),
+        Some(_) => Err(AppError::Other("不支持的 Agent Runtime".into())),
+    }
+}
+
 fn nearest_ratio(width: i64, height: i64) -> Option<String> {
     if width <= 0 || height <= 0 {
         return None;
@@ -337,14 +386,278 @@ fn run_status(snapshot: &Value) -> Result<String, AppError> {
         .ok_or_else(|| AppError::Cloud("Agent 响应缺少 Run 状态".into()))
 }
 
-fn save_record(db: &Database, record: &CloudAgentRunRecord) -> Result<(), AppError> {
+fn project_agent_launch_from_snapshot(snapshot: &Value) -> Option<ProjectAgentLaunchInput> {
+    let checkpoint = snapshot.get(PROJECT_AGENT_LAUNCH_SNAPSHOT_KEY)?;
+    if checkpoint.get("schemaVersion").and_then(Value::as_u64) != Some(1) {
+        return None;
+    }
+    serde_json::from_value(checkpoint.get("input")?.clone()).ok()
+}
+
+fn set_project_agent_launch_snapshot(
+    snapshot: &mut Value,
+    launch: &ProjectAgentLaunchInput,
+) -> Result<(), AppError> {
+    let object = snapshot
+        .as_object_mut()
+        .ok_or_else(|| AppError::Other("Agent snapshot must be a JSON object".into()))?;
+    object.insert(
+        PROJECT_AGENT_LAUNCH_SNAPSHOT_KEY.into(),
+        json!({ "schemaVersion": 1, "input": launch }),
+    );
+    Ok(())
+}
+
+fn is_terminal_agent_status(status: &str) -> bool {
+    matches!(status, "succeeded" | "failed" | "cancelled")
+}
+
+fn transfer_cleanup_status(cancel_response: Option<&Value>) -> &'static str {
+    if cancel_response
+        .and_then(|value| value.get("status"))
+        .and_then(Value::as_str)
+        == Some("cancelled")
+    {
+        "cancelled"
+    } else {
+        // A lost enqueue response means the Run may already be queued or executing.
+        // Until the control plane confirms cancellation, keep this checkpoint live so
+        // cloud_agent_list + the coordinator can reconcile the authoritative status.
+        "cancel_requested"
+    }
+}
+
+fn validate_record_launch(record: &CloudAgentRunRecord) -> Result<(), AppError> {
+    if project_agent_launch_from_snapshot(&record.snapshot)
+        .as_ref()
+        .is_some_and(|launch| {
+            record.project_id.as_deref() != Some(launch.project_id.as_str())
+                || record.thread_id.as_deref() != Some(launch.thread_id.as_str())
+                || record.creative_launch_id.as_deref() != Some(launch.launch_id.as_str())
+        })
+    {
+        return Err(AppError::Other(format!(
+            "Cloud Agent run {} creative launch checkpoint does not match its owner",
+            record.run_id
+        )));
+    }
+    Ok(())
+}
+
+fn ensure_same_record_identity(
+    existing: &CloudAgentRunRecord,
+    incoming: &CloudAgentRunRecord,
+) -> Result<(), AppError> {
+    if existing.run_id != incoming.run_id
+        || existing.conversation_id != incoming.conversation_id
+        || existing.skill_id != incoming.skill_id
+        || existing.project_id != incoming.project_id
+        || existing.thread_id != incoming.thread_id
+        || existing.creative_launch_id != incoming.creative_launch_id
+    {
+        return Err(AppError::Other(format!(
+            "Cloud Agent run {} identity or owner cannot change after checkpoint",
+            incoming.run_id
+        )));
+    }
+    Ok(())
+}
+
+fn preserve_artifact_receipts(existing: &Value, incoming: &mut Value) {
+    let Some(existing_artifacts) = existing.get("artifacts").and_then(Value::as_array) else {
+        return;
+    };
+    let Some(incoming_object) = incoming.as_object_mut() else {
+        return;
+    };
+    let Some(incoming_artifacts) = incoming_object
+        .entry("artifacts")
+        .or_insert_with(|| json!([]))
+        .as_array_mut()
+    else {
+        return;
+    };
+    for existing_artifact in existing_artifacts {
+        let Some(artifact_id) = existing_artifact.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(downloaded_at) = existing_artifact
+            .get("downloaded_at")
+            .filter(|value| !value.is_null())
+            .cloned()
+        else {
+            continue;
+        };
+        if let Some(incoming_artifact) = incoming_artifacts
+            .iter_mut()
+            .find(|artifact| artifact.get("id").and_then(Value::as_str) == Some(artifact_id))
+        {
+            if incoming_artifact
+                .get("downloaded_at")
+                .is_none_or(Value::is_null)
+            {
+                if let Some(object) = incoming_artifact.as_object_mut() {
+                    object.insert("downloaded_at".into(), downloaded_at);
+                }
+            }
+        } else {
+            incoming_artifacts.push(existing_artifact.clone());
+        }
+    }
+}
+
+fn merge_record(
+    existing: &CloudAgentRunRecord,
+    incoming: &CloudAgentRunRecord,
+) -> Result<CloudAgentRunRecord, AppError> {
+    validate_record_launch(existing)?;
+    validate_record_launch(incoming)?;
+    ensure_same_record_identity(existing, incoming)?;
+
+    let existing_launch = project_agent_launch_from_snapshot(&existing.snapshot);
+    let incoming_launch = project_agent_launch_from_snapshot(&incoming.snapshot);
+    if let (Some(existing_launch), Some(incoming_launch)) =
+        (existing_launch.as_ref(), incoming_launch.as_ref())
+    {
+        if existing_launch != incoming_launch {
+            return Err(AppError::Other(format!(
+                "Cloud Agent run {} creative parent cannot change after checkpoint",
+                incoming.run_id
+            )));
+        }
+    }
+    if let (Some(existing_asset_id), Some(incoming_asset_id)) = (
+        existing.final_asset_id.as_deref(),
+        incoming.final_asset_id.as_deref(),
+    ) {
+        if existing_asset_id != incoming_asset_id {
+            return Err(AppError::Other(format!(
+                "Cloud Agent run {} final asset cannot change after ingest",
+                incoming.run_id
+            )));
+        }
+    }
+
+    // A completed Run never goes back to an active state. The same terminal
+    // state may still refresh its snapshot so artifact_received/downloaded_at
+    // can become durable after local ingest.
+    let keep_existing_terminal =
+        is_terminal_agent_status(&existing.status) && existing.status != incoming.status;
+    let mut merged = if keep_existing_terminal {
+        existing.clone()
+    } else {
+        incoming.clone()
+    };
+    if let Some(object) = merged.snapshot.as_object_mut() {
+        // This checkpoint is local evidence and must never be accepted from a remote snapshot.
+        object.remove(PROJECT_AGENT_INGEST_SNAPSHOT_KEY);
+    }
+    merged.conversation_id = existing.conversation_id.clone();
+    merged.skill_id = existing.skill_id.clone();
+    merged.intent_prompt = existing.intent_prompt.clone();
+    merged.reference_asset_ids = existing.reference_asset_ids.clone();
+    merged.project_id = existing.project_id.clone();
+    merged.thread_id = existing.thread_id.clone();
+    merged.creative_launch_id = existing.creative_launch_id.clone();
+    merged.created_at = existing.created_at;
+    merged.updated_at = existing.updated_at.max(incoming.updated_at);
+    merged.final_asset_id = existing
+        .final_asset_id
+        .clone()
+        .or_else(|| incoming.final_asset_id.clone());
+    merged.feedback_action = if keep_existing_terminal {
+        existing.feedback_action.clone()
+    } else {
+        incoming
+            .feedback_action
+            .clone()
+            .or_else(|| existing.feedback_action.clone())
+    };
+    preserve_artifact_receipts(&existing.snapshot, &mut merged.snapshot);
+    if let Some(existing_launch) = existing_launch.as_ref() {
+        set_project_agent_launch_snapshot(&mut merged.snapshot, existing_launch)?;
+    }
+    if let Some(checkpoint) = existing.snapshot.get(PROJECT_AGENT_INGEST_SNAPSHOT_KEY) {
+        if ingest_checkpoint_matches(&merged, checkpoint) {
+            if let Some(object) = merged.snapshot.as_object_mut() {
+                object.insert(PROJECT_AGENT_INGEST_SNAPSHOT_KEY.into(), checkpoint.clone());
+            }
+        }
+    }
+    Ok(merged)
+}
+
+#[derive(Debug, Clone)]
+struct StoredCloudAgentRunRecord {
+    record: CloudAgentRunRecord,
+    snapshot_json: String,
+}
+
+enum SaveRecordCasResult {
+    Saved(CloudAgentRunRecord),
+    Conflict(StoredCloudAgentRunRecord),
+}
+
+fn stored_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredCloudAgentRunRecord> {
+    let references: String = row.get(5)?;
+    let snapshot_json: String = row.get(7)?;
+    Ok(StoredCloudAgentRunRecord {
+        record: CloudAgentRunRecord {
+            run_id: row.get(0)?,
+            conversation_id: row.get(1)?,
+            skill_id: row.get(2)?,
+            status: row.get(3)?,
+            intent_prompt: row.get(4)?,
+            reference_asset_ids: serde_json::from_str(&references).unwrap_or_default(),
+            project_id: row.get(6)?,
+            thread_id: row.get(12)?,
+            creative_launch_id: row.get(13)?,
+            snapshot: serde_json::from_str(&snapshot_json).unwrap_or(Value::Null),
+            feedback_action: row.get(8)?,
+            final_asset_id: row.get(9)?,
+            created_at: row.get(10)?,
+            updated_at: row.get(11)?,
+        },
+        snapshot_json,
+    })
+}
+
+fn query_stored_record(
+    conn: &rusqlite::Connection,
+    run_id: &str,
+) -> Result<StoredCloudAgentRunRecord, AppError> {
+    conn.query_row(
+        "SELECT run_id, conversation_id, skill_id, status, intent_prompt, reference_asset_ids, project_id, snapshot_json, feedback_action, final_asset_id, created_at, updated_at, thread_id, creative_launch_id FROM cloud_agent_runs WHERE run_id=?1",
+        [run_id],
+        stored_record_from_row,
+    )
+    .map_err(AppError::from)
+}
+
+fn write_record(conn: &rusqlite::Connection, record: &CloudAgentRunRecord) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE cloud_agent_runs SET status=?2,snapshot_json=?3,feedback_action=?4,final_asset_id=?5,updated_at=?6 WHERE run_id=?1",
+        rusqlite::params![
+            record.run_id,
+            record.status,
+            serde_json::to_string(&record.snapshot)?,
+            record.feedback_action,
+            record.final_asset_id,
+            record.updated_at,
+        ],
+    )?;
+    Ok(())
+}
+
+fn insert_record(
+    conn: &rusqlite::Connection,
+    record: &CloudAgentRunRecord,
+) -> Result<(), AppError> {
     let reference_asset_ids = serde_json::to_string(&record.reference_asset_ids)?;
     let snapshot = serde_json::to_string(&record.snapshot)?;
-    let conn = db.conn.lock().unwrap();
     conn.execute(
-        "INSERT INTO cloud_agent_runs (run_id, conversation_id, skill_id, status, intent_prompt, reference_asset_ids, project_id, snapshot_json, feedback_action, final_asset_id, created_at, updated_at) \
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12) \
-         ON CONFLICT(run_id) DO UPDATE SET status=excluded.status, project_id=excluded.project_id, snapshot_json=excluded.snapshot_json, feedback_action=excluded.feedback_action, final_asset_id=excluded.final_asset_id, updated_at=excluded.updated_at",
+        "INSERT INTO cloud_agent_runs (run_id, conversation_id, skill_id, status, intent_prompt, reference_asset_ids, project_id, snapshot_json, feedback_action, final_asset_id, created_at, updated_at, thread_id, creative_launch_id) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
         rusqlite::params![
             record.run_id,
             record.conversation_id,
@@ -358,44 +671,99 @@ fn save_record(db: &Database, record: &CloudAgentRunRecord) -> Result<(), AppErr
             record.final_asset_id,
             record.created_at,
             record.updated_at,
+            record.thread_id,
+            record.creative_launch_id,
         ],
     )?;
     Ok(())
 }
 
-fn record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CloudAgentRunRecord> {
-    let references: String = row.get(5)?;
-    let snapshot: String = row.get(7)?;
-    Ok(CloudAgentRunRecord {
-        run_id: row.get(0)?,
-        conversation_id: row.get(1)?,
-        skill_id: row.get(2)?,
-        status: row.get(3)?,
-        intent_prompt: row.get(4)?,
-        reference_asset_ids: serde_json::from_str(&references).unwrap_or_default(),
-        project_id: row.get(6)?,
-        snapshot: serde_json::from_str(&snapshot).unwrap_or(Value::Null),
-        feedback_action: row.get(8)?,
-        final_asset_id: row.get(9)?,
-        created_at: row.get(10)?,
-        updated_at: row.get(11)?,
-    })
+fn save_record(
+    db: &Database,
+    record: &CloudAgentRunRecord,
+) -> Result<CloudAgentRunRecord, AppError> {
+    validate_record_launch(record)?;
+    let mut conn = db.conn.lock().unwrap();
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let existing = tx
+        .query_row(
+            "SELECT run_id, conversation_id, skill_id, status, intent_prompt, reference_asset_ids, project_id, snapshot_json, feedback_action, final_asset_id, created_at, updated_at, thread_id, creative_launch_id FROM cloud_agent_runs WHERE run_id=?1",
+            [&record.run_id],
+            stored_record_from_row,
+        )
+        .optional()?;
+    if let Some(existing) = existing {
+        let merged = merge_record(&existing.record, record)?;
+        write_record(&tx, &merged)?;
+    } else {
+        insert_record(&tx, record)?;
+    }
+    let persisted = query_stored_record(&tx, &record.run_id)?.record;
+    tx.commit()?;
+    Ok(persisted)
 }
 
+fn save_record_if_unchanged(
+    db: &Database,
+    expected: &StoredCloudAgentRunRecord,
+    incoming: &CloudAgentRunRecord,
+) -> Result<SaveRecordCasResult, AppError> {
+    ensure_same_record_identity(&expected.record, incoming)?;
+    let merged = merge_record(&expected.record, incoming)?;
+    let snapshot_json = serde_json::to_string(&merged.snapshot)?;
+    let mut conn = db.conn.lock().unwrap();
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let changed = tx.execute(
+        "UPDATE cloud_agent_runs SET status=?2,snapshot_json=?3,feedback_action=?4,final_asset_id=?5,updated_at=?6 \
+         WHERE run_id=?1 AND status=?7 AND snapshot_json=?8 AND feedback_action IS ?9 \
+           AND final_asset_id IS ?10 AND updated_at=?11 AND project_id IS ?12 \
+           AND thread_id IS ?13 AND creative_launch_id IS ?14",
+        rusqlite::params![
+            merged.run_id,
+            merged.status,
+            snapshot_json,
+            merged.feedback_action,
+            merged.final_asset_id,
+            merged.updated_at,
+            expected.record.status,
+            expected.snapshot_json,
+            expected.record.feedback_action,
+            expected.record.final_asset_id,
+            expected.record.updated_at,
+            expected.record.project_id,
+            expected.record.thread_id,
+            expected.record.creative_launch_id,
+        ],
+    )?;
+    let persisted = query_stored_record(&tx, &incoming.run_id)?;
+    ensure_same_record_identity(&persisted.record, incoming)?;
+    tx.commit()?;
+    if changed == 1 {
+        Ok(SaveRecordCasResult::Saved(persisted.record))
+    } else {
+        Ok(SaveRecordCasResult::Conflict(persisted))
+    }
+}
+
+fn record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CloudAgentRunRecord> {
+    stored_record_from_row(row).map(|stored| stored.record)
+}
+
+#[cfg(test)]
 fn load_record(db: &Database, run_id: &str) -> Result<CloudAgentRunRecord, AppError> {
     let conn = db.conn.lock().unwrap();
-    conn.query_row(
-        "SELECT run_id, conversation_id, skill_id, status, intent_prompt, reference_asset_ids, project_id, snapshot_json, feedback_action, final_asset_id, created_at, updated_at FROM cloud_agent_runs WHERE run_id=?1",
-        [run_id],
-        record_from_row,
-    )
-    .map_err(AppError::from)
+    query_stored_record(&conn, run_id).map(|stored| stored.record)
+}
+
+fn load_stored_record(db: &Database, run_id: &str) -> Result<StoredCloudAgentRunRecord, AppError> {
+    let conn = db.conn.lock().unwrap();
+    query_stored_record(&conn, run_id)
 }
 
 fn list_records(db: &Database, limit: usize) -> Result<Vec<CloudAgentRunRecord>, AppError> {
     let conn = db.conn.lock().unwrap();
     let mut statement = conn.prepare(
-        "SELECT run_id, conversation_id, skill_id, status, intent_prompt, reference_asset_ids, project_id, snapshot_json, feedback_action, final_asset_id, created_at, updated_at \
+        "SELECT run_id, conversation_id, skill_id, status, intent_prompt, reference_asset_ids, project_id, snapshot_json, feedback_action, final_asset_id, created_at, updated_at, thread_id, creative_launch_id \
          FROM cloud_agent_runs ORDER BY created_at DESC, rowid DESC LIMIT ?1",
     )?;
     let records = statement
@@ -404,32 +772,554 @@ fn list_records(db: &Database, limit: usize) -> Result<Vec<CloudAgentRunRecord>,
     Ok(records)
 }
 
+fn recover_agent_projections(db: &Database, records: &mut [CloudAgentRunRecord]) {
+    for record in records {
+        if record.thread_id.is_none() || record.creative_launch_id.is_none() {
+            continue;
+        }
+        let projection = match project_agent_record(db, record) {
+            Err(AppError::NotFound(message)) if message.starts_with("agent prompt ") => {
+                if let Some(launch) = project_agent_launch_from_snapshot(&record.snapshot) {
+                    db.begin_project_agent_launch(&launch)
+                        .and_then(|_| project_agent_record(db, record))
+                } else {
+                    Err(AppError::NotFound(message))
+                }
+            }
+            result => result,
+        };
+        if let Err(error) = projection {
+            tracing::warn!(
+                run_id = %record.run_id,
+                error = %error,
+                "failed to recover local creative projection for agent run"
+            );
+        }
+
+        // A process can stop after artifact_received receipts and final_asset_id are
+        // committed but before the separate whole-group checkpoint transaction. The
+        // frontend correctly treats those receipts as already ingested, so repair the
+        // local-only checkpoint from durable mappings while servicing startup reads.
+        // Keep recovery isolated per Run: a corrupt/incomplete record remains
+        // fail-closed without making the whole history list unavailable.
+        let needs_ingest_checkpoint = accepted_ingest_result(record)
+            && record.final_asset_id.is_some()
+            && ingest_artifact_receipts_complete(record)
+            && ingest_artifact_fingerprint(record).is_some()
+            && !record
+                .snapshot
+                .get(PROJECT_AGENT_INGEST_SNAPSHOT_KEY)
+                .is_some_and(|checkpoint| ingest_checkpoint_matches(record, checkpoint));
+        if needs_ingest_checkpoint {
+            match checkpoint_completed_ingest_if_ready(db, record) {
+                Ok(recovered) => *record = recovered,
+                Err(error) => {
+                    tracing::warn!(
+                        run_id = %record.run_id,
+                        error = %error,
+                        "failed to recover local Agent ingest checkpoint"
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn compact_text(value: Option<&Value>, max_chars: usize) -> Option<String> {
+    let text = match value? {
+        Value::String(value) => value.trim().to_string(),
+        value => value.to_string(),
+    };
+    if text.is_empty() {
+        return None;
+    }
+    Some(text.chars().take(max_chars).collect())
+}
+
+fn event_summary(event: &Value) -> Option<String> {
+    let payload = event.get("display_payload")?;
+    ["summary", "message", "title", "goal", "rationale"]
+        .into_iter()
+        .find_map(|key| compact_text(payload.get(key), 240))
+}
+
+fn agent_visual_profile(run: &Value) -> Option<VisualProfileRefV1> {
+    Some(VisualProfileRefV1 {
+        profile_id: compact_text(run.get("visual_profile_id"), 160)?,
+        version: run.get("visual_profile_version")?.as_i64()?,
+        hash: compact_text(run.get("visual_profile_hash"), 160)?,
+    })
+}
+
+fn agent_group_payload(record: &CloudAgentRunRecord) -> AgentGroupNodePayloadV1 {
+    let run = record.snapshot.get("run").unwrap_or(&Value::Null);
+    let events = record
+        .snapshot
+        .get("events")
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .skip(values.len().saturating_sub(96))
+                .filter_map(|event| {
+                    Some(AgentGroupEventV1 {
+                        seq: event.get("seq")?.as_i64()?,
+                        event_type: compact_text(event.get("type"), 80)?,
+                        step: compact_text(event.get("step"), 120),
+                        progress: event
+                            .get("progress")
+                            .and_then(Value::as_u64)
+                            .map(|value| value.min(100) as u8),
+                        summary: event_summary(event),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let approvals = record
+        .snapshot
+        .get("approvals")
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .skip(values.len().saturating_sub(16))
+                .filter_map(|approval| {
+                    let proposal = approval.get("proposal");
+                    Some(AgentGroupApprovalV1 {
+                        id: compact_text(approval.get("id"), 160)?,
+                        kind: compact_text(approval.get("kind"), 80)?,
+                        status: compact_text(approval.get("status"), 40)?,
+                        proposal_hash: compact_text(approval.get("proposal_hash"), 160)
+                            .unwrap_or_default(),
+                        planned_tool_count: approval
+                            .get("planned_tool_count")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0)
+                            .min(u32::MAX as u64)
+                            as u32,
+                        estimated_additional_credits: approval
+                            .get("estimated_additional_credits")
+                            .and_then(Value::as_i64)
+                            .unwrap_or(0),
+                        title: proposal.and_then(|value| compact_text(value.get("title"), 160)),
+                        summary: proposal.and_then(|value| compact_text(value.get("summary"), 320)),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let clarifications = record
+        .snapshot
+        .get("clarifications")
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .skip(values.len().saturating_sub(8))
+                .filter_map(|clarification| {
+                    let question = clarification.get("question");
+                    Some(AgentGroupClarificationV1 {
+                        id: compact_text(clarification.get("id"), 160)?,
+                        status: compact_text(clarification.get("status"), 40)?,
+                        question: question
+                            .and_then(|value| compact_text(value.get("question"), 400)),
+                        recommended_answer: question
+                            .and_then(|value| compact_text(value.get("recommendedAnswer"), 320)),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let artifacts = record
+        .snapshot
+        .get("artifacts")
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(|artifact| {
+                    Some(AgentGroupArtifactV1 {
+                        artifact_id: compact_text(artifact.get("id"), 160)?,
+                        role: compact_text(artifact.get("role"), 80)?,
+                        step_id: compact_text(artifact.get("step_id"), 160),
+                        mime: compact_text(artifact.get("mime"), 120)?,
+                        user_visible: artifact
+                            .get("user_visible")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false),
+                    })
+                })
+                .take(64)
+                .collect()
+        })
+        .unwrap_or_default();
+    AgentGroupNodePayloadV1 {
+        schema_version: 1,
+        run_id: record.run_id.clone(),
+        conversation_id: Some(record.conversation_id.clone()),
+        skill_id: record.skill_id.clone(),
+        status: record.status.clone(),
+        agent_runtime: compact_text(run.get("agent_runtime"), 40),
+        current_step: compact_text(run.get("current_step"), 120),
+        progress: run
+            .get("progress")
+            .and_then(Value::as_u64)
+            .map(|value| value.min(100) as u8),
+        budget_credits: run.get("budget_credits").and_then(Value::as_i64),
+        actual_credits: run.get("actual_credits").and_then(Value::as_i64),
+        visual_profile: agent_visual_profile(run),
+        events,
+        approvals,
+        clarifications,
+        artifacts,
+    }
+}
+
+fn project_agent_artifact_and_map(
+    db: &Database,
+    run_id: &str,
+    artifact_id: &str,
+    role: &str,
+    ordinal: i64,
+    asset: &Asset,
+) -> Result<String, AppError> {
+    let node_id = db.project_agent_artifact_on_canvas(run_id, artifact_id, role, ordinal, asset)?;
+    let mut conn = db.conn.lock().unwrap();
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let existing: Option<(String, Option<String>, Option<String>)> = tx
+        .query_row(
+            "SELECT run_id,asset_id,node_id FROM cloud_agent_artifact_assets WHERE artifact_id=?1",
+            [artifact_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    if let Some((existing_run_id, existing_asset_id, existing_node_id)) = existing.as_ref() {
+        if existing_run_id != run_id
+            || existing_asset_id
+                .as_deref()
+                .is_some_and(|value| value != asset.id)
+            || existing_node_id
+                .as_deref()
+                .is_some_and(|value| value != node_id)
+        {
+            return Err(AppError::Other(format!(
+                "Agent artifact {artifact_id} local projection cannot change after ingest"
+            )));
+        }
+        tx.execute(
+            "UPDATE cloud_agent_artifact_assets SET asset_id=COALESCE(asset_id,?3),node_id=COALESCE(node_id,?4) WHERE run_id=?1 AND artifact_id=?2",
+            rusqlite::params![run_id, artifact_id, asset.id, node_id],
+        )?;
+    } else {
+        tx.execute(
+            "INSERT INTO cloud_agent_artifact_assets (run_id,artifact_id,asset_id,node_id,created_at) VALUES (?1,?2,?3,?4,?5)",
+            rusqlite::params![
+                run_id,
+                artifact_id,
+                asset.id,
+                node_id,
+                chrono::Utc::now().timestamp()
+            ],
+        )?;
+    }
+    tx.commit()?;
+    Ok(node_id)
+}
+
+fn project_agent_record(db: &Database, record: &CloudAgentRunRecord) -> Result<(), AppError> {
+    let (Some(project_id), Some(thread_id), Some(launch_id)) = (
+        record.project_id.as_deref(),
+        record.thread_id.as_deref(),
+        record.creative_launch_id.as_deref(),
+    ) else {
+        return Ok(());
+    };
+    db.project_agent_run_on_canvas(
+        project_id,
+        thread_id,
+        launch_id,
+        &agent_group_payload(record),
+    )?;
+    if let Some(asset_id) = record.final_asset_id.as_deref() {
+        if let Some(asset) = db.get_asset(asset_id)? {
+            db.add_assets_to_project(project_id, std::slice::from_ref(&asset.id))?;
+            if let Some((ordinal, artifact_id, role)) = primary_ingestible_artifact(record) {
+                project_agent_artifact_and_map(
+                    db,
+                    &record.run_id,
+                    &artifact_id,
+                    &role,
+                    ordinal as i64,
+                    &asset,
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn save_and_project_record(
+    db: &Database,
+    record: &CloudAgentRunRecord,
+) -> Result<CloudAgentRunRecord, AppError> {
+    let persisted = save_record(db, record)?;
+    project_agent_record(db, &persisted)?;
+    Ok(persisted)
+}
+
+fn save_feedback_action_and_project(
+    db: &Database,
+    record: &CloudAgentRunRecord,
+    feedback_action: &str,
+) -> Result<CloudAgentRunRecord, AppError> {
+    let mut conn = db.conn.lock().unwrap();
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let existing = query_stored_record(&tx, &record.run_id)?;
+    ensure_same_record_identity(&existing.record, record)?;
+    if !is_terminal_agent_status(&existing.record.status) || existing.record.status == record.status
+    {
+        tx.execute(
+            "UPDATE cloud_agent_runs SET feedback_action=?2,updated_at=MAX(updated_at,?3) WHERE run_id=?1",
+            rusqlite::params![
+                record.run_id,
+                feedback_action,
+                chrono::Utc::now().timestamp()
+            ],
+        )?;
+    }
+    let persisted = query_stored_record(&tx, &record.run_id)?.record;
+    tx.commit()?;
+    drop(conn);
+    project_agent_record(db, &persisted)?;
+    Ok(persisted)
+}
+
+fn save_final_asset_and_project(
+    db: &Database,
+    record: &CloudAgentRunRecord,
+    asset_id: &str,
+) -> Result<CloudAgentRunRecord, AppError> {
+    let mut conn = db.conn.lock().unwrap();
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let existing = query_stored_record(&tx, &record.run_id)?;
+    ensure_same_record_identity(&existing.record, record)?;
+    if existing.record.status != "succeeded"
+        || existing.record.feedback_action.as_deref() != Some("accept")
+    {
+        return Err(AppError::Other(
+            "只有已接受且完成结算的 Agent 会话可以关联最终资产".into(),
+        ));
+    }
+    if existing
+        .record
+        .final_asset_id
+        .as_deref()
+        .is_some_and(|existing_asset_id| existing_asset_id != asset_id)
+    {
+        return Err(AppError::Other(format!(
+            "Cloud Agent run {} final asset cannot change after ingest",
+            record.run_id
+        )));
+    }
+    tx.execute(
+        "UPDATE cloud_agent_runs SET final_asset_id=COALESCE(final_asset_id,?2),updated_at=MAX(updated_at,?3) WHERE run_id=?1",
+        rusqlite::params![record.run_id, asset_id, chrono::Utc::now().timestamp()],
+    )?;
+    let persisted = query_stored_record(&tx, &record.run_id)?.record;
+    tx.commit()?;
+    drop(conn);
+    project_agent_record(db, &persisted)?;
+    Ok(persisted)
+}
+
+fn emit_creative_agent_changed(app: &AppHandle, record: &CloudAgentRunRecord) {
+    if let (Some(project_id), Some(thread_id)) =
+        (record.project_id.as_deref(), record.thread_id.as_deref())
+    {
+        let _ = app.emit(
+            "creative://changed",
+            json!({
+                "projectId": project_id,
+                "threadId": thread_id,
+                "runId": &record.run_id,
+                "status": &record.status,
+            }),
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn begin_creative_launch(
+    db: &Database,
+    project_id: Option<&str>,
+    thread_id: Option<&str>,
+    prompt: &str,
+    provider: &str,
+    ratio: Option<&str>,
+    visual_profile: Option<&VisualProfileCapsule>,
+    reference_asset_ids: &[String],
+    parent_node_id: Option<&str>,
+    parent_asset_id: Option<&str>,
+) -> Result<Option<ProjectAgentLaunchInput>, AppError> {
+    let (Some(project_id), Some(thread_id)) = (project_id, thread_id) else {
+        return Ok(None);
+    };
+    let launch_id = Ulid::new().to_string();
+    let launch = ProjectAgentLaunchInput {
+        project_id: project_id.to_string(),
+        thread_id: thread_id.to_string(),
+        launch_id: launch_id.clone(),
+        prompt: prompt.to_string(),
+        provider: provider.to_string(),
+        ratio: ratio.map(str::to_string),
+        visual_profile: visual_profile.map(|profile| VisualProfileRefV1 {
+            profile_id: profile.profile_id.clone(),
+            version: profile.version,
+            hash: profile.hash.clone(),
+        }),
+        reference_asset_ids: reference_asset_ids.to_vec(),
+        parent_node_id: parent_node_id.map(str::to_string),
+        parent_asset_id: parent_asset_id.map(str::to_string),
+    };
+    db.begin_project_agent_launch(&launch)?;
+    Ok(Some(launch))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn checkpoint_created_run(
+    db: &Database,
+    app: &AppHandle,
+    created: &Value,
+    run_id: &str,
+    conversation_id: &str,
+    skill_id: &str,
+    skill_version: &str,
+    agent_runtime: Option<&str>,
+    intent_prompt: &str,
+    reference_asset_ids: &[String],
+    project_id: Option<&str>,
+    thread_id: Option<&str>,
+    creative_launch_id: Option<&str>,
+    creative_launch: Option<&ProjectAgentLaunchInput>,
+    default_budget: i64,
+) -> Result<CloudAgentRunRecord, AppError> {
+    let now = chrono::Utc::now().timestamp();
+    let mut snapshot = json!({
+        "conversationId": conversation_id,
+        "run": {
+            "id": run_id,
+            "conversation_id": conversation_id,
+            "skill_id": skill_id,
+            "skill_version": skill_version,
+            "agent_runtime": agent_runtime,
+            "status": "uploading",
+            "progress": 0,
+            "budget_credits": created.get("budgetCredits").cloned().unwrap_or(json!(default_budget)),
+        },
+        "events": [], "approvals": [], "clarifications": [], "artifacts": [],
+    });
+    if let Some(launch) = creative_launch {
+        set_project_agent_launch_snapshot(&mut snapshot, launch)?;
+    }
+    let record = CloudAgentRunRecord {
+        run_id: run_id.to_string(),
+        conversation_id: conversation_id.to_string(),
+        skill_id: skill_id.to_string(),
+        status: "uploading".into(),
+        intent_prompt: intent_prompt.to_string(),
+        reference_asset_ids: reference_asset_ids.to_vec(),
+        project_id: project_id.map(str::to_string),
+        thread_id: thread_id.map(str::to_string),
+        creative_launch_id: creative_launch_id.map(str::to_string),
+        snapshot,
+        feedback_action: None,
+        final_asset_id: None,
+        created_at: now,
+        updated_at: now,
+    };
+    let record = save_and_project_record(db, &record)?;
+    emit_creative_agent_changed(app, &record);
+    Ok(record)
+}
+
+fn checkpoint_transfer_failure(
+    db: &Database,
+    app: &AppHandle,
+    record: &mut CloudAgentRunRecord,
+    cancel_response: Option<&Value>,
+) {
+    let status = transfer_cleanup_status(cancel_response);
+    record.status = status.into();
+    record.snapshot["run"]["status"] = json!(status);
+    record.updated_at = chrono::Utc::now().timestamp();
+    if let Ok(persisted) = save_and_project_record(db, record) {
+        *record = persisted;
+    }
+    emit_creative_agent_changed(app, record);
+}
+
+fn finalize_refreshed_record(
+    db: &Database,
+    record: CloudAgentRunRecord,
+) -> Result<CloudAgentRunRecord, AppError> {
+    project_agent_record(db, &record)?;
+    checkpoint_completed_ingest_if_ready(db, &record)
+}
+
 async fn refresh_record(
     db: &Database,
     cloud: &CloudClient,
     auth: &AuthClient,
     run_id: &str,
 ) -> Result<CloudAgentRunRecord, AppError> {
-    let mut record = load_record(db, run_id)?;
-    let snapshot = agent_action(
-        cloud,
-        auth,
-        json!({ "action": "get", "runId": run_id }),
-        "读取 Agent Run 失败",
-    )
-    .await?;
-    record.status = run_status(&snapshot)?;
-    if let Some(action) = snapshot
-        .pointer("/run/result_feedback_action")
-        .and_then(Value::as_str)
-        .filter(|action| matches!(*action, "accept" | "retry"))
-    {
-        record.feedback_action = Some(action.to_string());
+    let mut expected = load_stored_record(db, run_id)?;
+    for attempt in 0..2 {
+        let snapshot = agent_action(
+            cloud,
+            auth,
+            json!({ "action": "get", "runId": run_id }),
+            "读取 Agent Run 失败",
+        )
+        .await?;
+        let mut incoming = expected.record.clone();
+        incoming.status = run_status(&snapshot)?;
+        if let Some(action) = snapshot
+            .pointer("/run/result_feedback_action")
+            .and_then(Value::as_str)
+            .filter(|action| matches!(*action, "accept" | "retry"))
+        {
+            incoming.feedback_action = Some(action.to_string());
+        }
+        incoming.snapshot = snapshot;
+        incoming.updated_at = chrono::Utc::now().timestamp();
+
+        // A response captured before cancel/finish must not be allowed to
+        // regress the local terminal checkpoint, even if it arrives later.
+        if is_terminal_agent_status(&expected.record.status)
+            && expected.record.status != incoming.status
+        {
+            return finalize_refreshed_record(db, expected.record);
+        }
+
+        match save_record_if_unchanged(db, &expected, &incoming)? {
+            SaveRecordCasResult::Saved(persisted) => {
+                return finalize_refreshed_record(db, persisted);
+            }
+            SaveRecordCasResult::Conflict(current) => {
+                if is_terminal_agent_status(&current.record.status)
+                    && current.record.status != incoming.status
+                {
+                    return finalize_refreshed_record(db, current.record);
+                }
+                if attempt == 1 {
+                    return finalize_refreshed_record(db, current.record);
+                }
+                expected = current;
+            }
+        }
     }
-    record.snapshot = snapshot;
-    record.updated_at = chrono::Utc::now().timestamp();
-    save_record(db, &record)?;
-    Ok(record)
+    unreachable!("bounded Cloud Agent refresh loop always returns")
 }
 
 fn normalize_intent_prompt(
@@ -522,6 +1412,7 @@ fn validate_html_layout_options(options: HtmlLayoutOptions) -> Result<HtmlLayout
 }
 
 async fn start_html_layout_run(
+    app: &AppHandle,
     db: &Database,
     cloud: &CloudClient,
     auth: &AuthClient,
@@ -530,6 +1421,9 @@ async fn start_html_layout_run(
     references: Vec<CloudAgentReferenceRequest>,
     project_id: Option<String>,
     options: HtmlLayoutOptions,
+    thread_id: Option<String>,
+    parent_node_id: Option<String>,
+    parent_asset_id: Option<String>,
 ) -> Result<CloudAgentRunRecord, AppError> {
     let options = validate_html_layout_options(options)?;
     let policy = entitlement.current_or_sync(auth).await.policy;
@@ -589,7 +1483,22 @@ async fn start_html_layout_run(
     if manifest.len() > 64 * 1024 {
         return Err(AppError::Other("HTML 排版输入清单过大".into()));
     }
-    let created = agent_action(
+    let creative_launch = begin_creative_launch(
+        db,
+        project_id.as_deref(),
+        thread_id.as_deref(),
+        &normalized_prompt,
+        "cloud",
+        None,
+        None,
+        &reference_ids,
+        parent_node_id.as_deref(),
+        parent_asset_id.as_deref(),
+    )?;
+    let creative_launch_id = creative_launch
+        .as_ref()
+        .map(|launch| launch.launch_id.clone());
+    let create_result = agent_action(
         cloud,
         auth,
         json!({
@@ -598,12 +1507,30 @@ async fn start_html_layout_run(
             "goal": normalized_prompt,
             "inputCount": image_bytes.len(),
             "inputManifestHash": sha256_hex(&manifest),
-            "idempotencyKey": format!("desktop-html-agent-{}", Ulid::new()),
+            "idempotencyKey": creative_launch_id
+                .as_ref()
+                .map(|launch_id| format!("desktop-html-agent-{launch_id}"))
+                .unwrap_or_else(|| format!("desktop-html-agent-{}", Ulid::new())),
             "imageProvider": "cloud",
         }),
         "创建 HTML 排版 Run 失败",
     )
-    .await?;
+    .await;
+    let created = match create_result {
+        Ok(created) => created,
+        Err(error) => {
+            if let (Some(session_id), Some(launch_id)) =
+                (thread_id.as_deref(), creative_launch_id.as_deref())
+            {
+                let _ = db.update_project_agent_launch_status(session_id, launch_id, "failed");
+                let _ = app.emit(
+                    "creative://changed",
+                    json!({ "threadId": session_id, "status": "failed" }),
+                );
+            }
+            return Err(error);
+        }
+    };
     let run_id = created
         .get("runId")
         .and_then(Value::as_str)
@@ -614,6 +1541,23 @@ async fn start_html_layout_run(
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::Cloud("创建 HTML 排版 Run 未返回 conversationId".into()))?
         .to_string();
+    let mut created_checkpoint = checkpoint_created_run(
+        db,
+        app,
+        &created,
+        &run_id,
+        &conversation_id,
+        HTML_SKILL_ID,
+        "0.1.0",
+        None,
+        &normalized_prompt,
+        &reference_ids,
+        project_id.as_deref(),
+        thread_id.as_deref(),
+        creative_launch_id.as_deref(),
+        creative_launch.as_ref(),
+        15,
+    )?;
     let transfer_result: Result<(), AppError> = async {
         let request_url = created
             .get("uploadUrl")
@@ -665,17 +1609,23 @@ async fn start_html_layout_run(
     }
     .await;
     if let Err(error) = transfer_result {
-        let _ = agent_action(
+        let cancel_response = agent_action(
             cloud,
             auth,
             json!({ "action": "cancel", "runId": run_id }),
             "清理未完成的 HTML 排版 Run 失败",
         )
         .await;
+        checkpoint_transfer_failure(
+            db,
+            app,
+            &mut created_checkpoint,
+            cancel_response.as_ref().ok(),
+        );
         return Err(error);
     }
     let now = chrono::Utc::now().timestamp();
-    let fallback_snapshot = json!({
+    let mut fallback_snapshot = json!({
         "conversationId": conversation_id,
         "run": {
             "id": run_id,
@@ -688,6 +1638,9 @@ async fn start_html_layout_run(
         },
         "events": [], "approvals": [], "clarifications": [], "artifacts": [],
     });
+    if let Some(launch) = creative_launch.as_ref() {
+        set_project_agent_launch_snapshot(&mut fallback_snapshot, launch)?;
+    }
     let mut record = CloudAgentRunRecord {
         run_id,
         conversation_id,
@@ -696,31 +1649,333 @@ async fn start_html_layout_run(
         intent_prompt: normalized_prompt,
         reference_asset_ids: reference_ids,
         project_id,
+        thread_id,
+        creative_launch_id,
         snapshot: fallback_snapshot,
         feedback_action: None,
         final_asset_id: None,
         created_at: now,
         updated_at: now,
     };
-    save_record(db, &record)?;
-    if let Ok(snapshot) = agent_action(
-        cloud,
-        auth,
-        json!({ "action": "get", "runId": record.run_id }),
-        "读取 HTML 排版 Run 失败",
-    )
-    .await
+    record = save_and_project_record(db, &record)?;
+    emit_creative_agent_changed(app, &record);
+    if let Ok(refreshed) = refresh_record(db, cloud, auth, &record.run_id).await {
+        record = refreshed;
+        emit_creative_agent_changed(app, &record);
+    }
+    Ok(record)
+}
+
+async fn start_unified_agent_run(
+    app: &AppHandle,
+    db: &Database,
+    cloud: &CloudClient,
+    auth: &AuthClient,
+    entitlement: &EntitlementService,
+    intent_prompt: String,
+    references: Vec<CloudAgentReferenceRequest>,
+    ratio: Option<String>,
+    project_id: Option<String>,
+    visual_profile_id: Option<String>,
+    options: HtmlLayoutOptions,
+    thread_id: Option<String>,
+    parent_node_id: Option<String>,
+    parent_asset_id: Option<String>,
+) -> Result<CloudAgentRunRecord, AppError> {
+    let options = validate_html_layout_options(options)?;
+    let entitlement_snapshot = entitlement.current_or_sync(auth).await;
+    if !entitlement_snapshot.is_test_account
+        || !entitlement_snapshot
+            .policy
+            .allows_agent_run(UNIFIED_SKILL_ID)
     {
-        record.status = run_status(&snapshot)?;
-        record.snapshot = snapshot;
-        record.updated_at = chrono::Utc::now().timestamp();
-        save_record(db, &record)?;
+        return Err(AppError::Other("当前测试账号未开放 DSH 统一 Agent".into()));
+    }
+    if visual_profile_id.is_some() && !entitlement_snapshot.policy.can_use_visual_profiles {
+        return Err(AppError::Other("当前权益不支持项目视觉设定".into()));
+    }
+    if let Some(project) = project_id.as_deref() {
+        if db.get_project(project)?.is_none() {
+            return Err(AppError::Other("当前项目不存在".into()));
+        }
+    }
+    let visual_profile_capsule = match visual_profile_id.as_deref() {
+        Some(profile_id) => {
+            let project_id = project_id
+                .as_deref()
+                .ok_or_else(|| AppError::Other("视觉设定只能在当前项目内使用".into()))?;
+            Some(db.visual_profile_capsule(profile_id, project_id)?)
+        }
+        None => None,
+    };
+    let resolved_ratio = normalize_requested_ratio(ratio)?;
+    let normalized_prompt = normalize_intent_prompt(&intent_prompt, &references)?;
+    let mut image_bytes = Vec::with_capacity(references.len());
+    let mut reference_ids = Vec::with_capacity(references.len());
+    for reference in &references {
+        let asset = db
+            .get_asset(&reference.asset_id)?
+            .ok_or_else(|| AppError::Other("参考图不在素材库中，请先入库再启动 Agent".into()))?;
+        let path = asset
+            .store_path
+            .as_deref()
+            .map(PathBuf::from)
+            .filter(|path| path.is_file())
+            .ok_or_else(|| AppError::Other(format!("参考图 {} 的本地文件不存在", asset.name)))?;
+        image_bytes.push(crate::codex::cloud_image::read_agent_reference_jpeg(&path).await?);
+        reference_ids.push(reference.asset_id.clone());
+    }
+    let manifest_references = image_bytes
+        .iter()
+        .enumerate()
+        .map(|(index, bytes)| HtmlLayoutReference {
+            artifact_id: uuid::Uuid::new_v4().to_string(),
+            token: format!("@图{}", index + 1),
+            ordinal: index + 1,
+            mime: "image/jpeg",
+            bytes: bytes.len(),
+            sha256: sha256_hex(bytes),
+        })
+        .collect::<Vec<_>>();
+    let manifest = serde_json::to_vec(&UnifiedAgentManifest {
+        schema_version: 1,
+        goal: &normalized_prompt,
+        references: &manifest_references,
+        ratio: resolved_ratio.as_deref(),
+        html_output: UnifiedHtmlOutput {
+            viewport: HtmlLayoutViewport {
+                width_css_px: options.viewport_width,
+                height_css_px: options.viewport_height,
+                device_scale_factor: options.device_scale_factor,
+            },
+            capture: HtmlLayoutCapture {
+                mode: options.capture_mode.clone(),
+                slice_height_css_px: options.slice_height,
+                overlap_css_px: options.overlap,
+            },
+            background: &options.background,
+        },
+        visual_profile_capsule: visual_profile_capsule.as_ref(),
+    })?;
+    if manifest.len() > 64 * 1024 {
+        return Err(AppError::Other("统一 Agent 输入清单过大".into()));
+    }
+    let creative_launch = begin_creative_launch(
+        db,
+        project_id.as_deref(),
+        thread_id.as_deref(),
+        &normalized_prompt,
+        "cloud",
+        resolved_ratio.as_deref(),
+        visual_profile_capsule.as_ref(),
+        &reference_ids,
+        parent_node_id.as_deref(),
+        parent_asset_id.as_deref(),
+    )?;
+    let creative_launch_id = creative_launch
+        .as_ref()
+        .map(|launch| launch.launch_id.clone());
+    let mut create_body = json!({
+        "action": "create",
+        "skillId": UNIFIED_SKILL_ID,
+        "goal": normalized_prompt,
+        "inputCount": image_bytes.len(),
+        "inputManifestHash": sha256_hex(&manifest),
+        "idempotencyKey": creative_launch_id
+            .as_ref()
+            .map(|launch_id| format!("desktop-unified-agent-{launch_id}"))
+            .unwrap_or_else(|| format!("desktop-unified-agent-{}", Ulid::new())),
+        "imageProvider": "cloud",
+        "agentRuntime": DSH_AGENT_RUNTIME,
+    });
+    if let Some(capsule) = visual_profile_capsule.as_ref() {
+        create_body["visualProfile"] = json!({
+            "profileId": &capsule.profile_id,
+            "version": capsule.version,
+            "hash": &capsule.hash,
+        });
+    }
+    if let Some(value) = resolved_ratio.as_deref() {
+        create_body["ratio"] = json!(value);
+    }
+    let created = match agent_action(cloud, auth, create_body, "创建 DSH 统一 Agent Run 失败").await
+    {
+        Ok(created) => created,
+        Err(error) => {
+            if let (Some(session_id), Some(launch_id)) =
+                (thread_id.as_deref(), creative_launch_id.as_deref())
+            {
+                let _ = db.update_project_agent_launch_status(session_id, launch_id, "failed");
+                let _ = app.emit(
+                    "creative://changed",
+                    json!({ "threadId": session_id, "status": "failed" }),
+                );
+            }
+            return Err(error);
+        }
+    };
+    let run_id = created
+        .get("runId")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::Cloud("创建统一 Agent Run 未返回 runId".into()))?
+        .to_string();
+    let conversation_id = created
+        .get("conversationId")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::Cloud("创建统一 Agent Run 未返回 conversationId".into()))?
+        .to_string();
+    let mut created_checkpoint = checkpoint_created_run(
+        db,
+        app,
+        &created,
+        &run_id,
+        &conversation_id,
+        UNIFIED_SKILL_ID,
+        "0.1.0",
+        Some(DSH_AGENT_RUNTIME),
+        &normalized_prompt,
+        &reference_ids,
+        project_id.as_deref(),
+        thread_id.as_deref(),
+        creative_launch_id.as_deref(),
+        creative_launch.as_ref(),
+        30,
+    )?;
+    if created.get("agentRuntime").and_then(Value::as_str) != Some(DSH_AGENT_RUNTIME) {
+        let cancel_response = agent_action(
+            cloud,
+            auth,
+            json!({ "action": "cancel", "runId": &run_id }),
+            "清理 runtime 不一致的统一 Agent Run 失败",
+        )
+        .await;
+        checkpoint_transfer_failure(
+            db,
+            app,
+            &mut created_checkpoint,
+            cancel_response.as_ref().ok(),
+        );
+        return Err(AppError::Cloud(
+            "统一 Agent Run 未锁定为 DSH runtime".into(),
+        ));
+    }
+    let transfer_result: Result<(), AppError> = async {
+        let request_url = created
+            .get("uploadUrl")
+            .and_then(Value::as_str)
+            .ok_or_else(|| AppError::Cloud("创建统一 Agent Run 未返回输入上传地址".into()))?;
+        upload_signed(
+            cloud,
+            request_url,
+            "application/json",
+            manifest,
+            "统一 Agent 输入",
+        )
+        .await?;
+        let uploads = created
+            .get("inputUploads")
+            .and_then(Value::as_array)
+            .ok_or_else(|| AppError::Cloud("创建统一 Agent Run 未返回参考图上传清单".into()))?;
+        if uploads.len() != image_bytes.len() {
+            return Err(AppError::Cloud(
+                "统一 Agent 参考图上传清单数量不一致".into(),
+            ));
+        }
+        for (index, bytes) in image_bytes.into_iter().enumerate() {
+            let upload = uploads
+                .iter()
+                .find(|item| {
+                    item.get("ordinal").and_then(Value::as_u64) == Some((index + 1) as u64)
+                })
+                .and_then(|item| item.get("uploadUrl"))
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    AppError::Cloud(format!("第 {} 张统一 Agent 参考图缺少上传地址", index + 1))
+                })?;
+            upload_signed(
+                cloud,
+                upload,
+                "image/jpeg",
+                bytes,
+                &format!("第 {} 张统一 Agent 参考图", index + 1),
+            )
+            .await?;
+        }
+        agent_action(
+            cloud,
+            auth,
+            json!({ "action": "enqueue", "runId": run_id }),
+            "统一 Agent Run 入队失败",
+        )
+        .await?;
+        Ok(())
+    }
+    .await;
+    if let Err(error) = transfer_result {
+        let cancel_response = agent_action(
+            cloud,
+            auth,
+            json!({ "action": "cancel", "runId": run_id }),
+            "清理未完成的统一 Agent Run 失败",
+        )
+        .await;
+        checkpoint_transfer_failure(
+            db,
+            app,
+            &mut created_checkpoint,
+            cancel_response.as_ref().ok(),
+        );
+        return Err(error);
+    }
+    let now = chrono::Utc::now().timestamp();
+    let mut fallback_snapshot = json!({
+        "conversationId": conversation_id,
+        "run": {
+            "id": run_id,
+            "conversation_id": conversation_id,
+            "skill_id": UNIFIED_SKILL_ID,
+            "skill_version": "0.1.0",
+            "agent_runtime": DSH_AGENT_RUNTIME,
+            "status": "queued",
+            "progress": 0,
+            "budget_credits": created.get("budgetCredits").cloned().unwrap_or(json!(30)),
+            "visual_profile_id": visual_profile_capsule.as_ref().map(|capsule| &capsule.profile_id),
+            "visual_profile_version": visual_profile_capsule.as_ref().map(|capsule| capsule.version),
+            "visual_profile_hash": visual_profile_capsule.as_ref().map(|capsule| &capsule.hash),
+        },
+        "events": [], "approvals": [], "clarifications": [], "artifacts": [],
+    });
+    if let Some(launch) = creative_launch.as_ref() {
+        set_project_agent_launch_snapshot(&mut fallback_snapshot, launch)?;
+    }
+    let mut record = CloudAgentRunRecord {
+        run_id,
+        conversation_id,
+        skill_id: UNIFIED_SKILL_ID.into(),
+        status: "queued".into(),
+        intent_prompt: normalized_prompt,
+        reference_asset_ids: reference_ids,
+        project_id,
+        thread_id,
+        creative_launch_id,
+        snapshot: fallback_snapshot,
+        feedback_action: None,
+        final_asset_id: None,
+        created_at: now,
+        updated_at: now,
+    };
+    record = save_and_project_record(db, &record)?;
+    emit_creative_agent_changed(app, &record);
+    if let Ok(refreshed) = refresh_record(db, cloud, auth, &record.run_id).await {
+        record = refreshed;
+        emit_creative_agent_changed(app, &record);
     }
     Ok(record)
 }
 
 #[tauri::command]
 pub async fn cloud_agent_start(
+    app: AppHandle,
     db: State<'_, Arc<Database>>,
     cloud: State<'_, CloudClient>,
     auth: State<'_, AuthClient>,
@@ -733,14 +1988,51 @@ pub async fn cloud_agent_start(
     preference_capsule: Option<PreferenceCapsule>,
     visual_profile_id: Option<String>,
     skill_id: Option<String>,
+    agent_runtime: Option<String>,
     html_options: Option<HtmlLayoutOptions>,
+    thread_id: Option<String>,
+    parent_node_id: Option<String>,
+    parent_asset_id: Option<String>,
 ) -> Result<CloudAgentRunRecord, AppError> {
+    if project_id.is_none() || thread_id.is_none() {
+        return Err(AppError::Other(
+            "新 Agent Run 必须归属于项目画板中的创作线程".into(),
+        ));
+    }
     if references.len() > MAX_REFERENCES {
         return Err(AppError::Other("Agent 最多处理 8 张参考图".into()));
     }
+    if skill_id.as_deref() == Some(UNIFIED_SKILL_ID) {
+        if agent_runtime.as_deref() != Some(DSH_AGENT_RUNTIME) {
+            return Err(AppError::Other("统一 Agent 必须使用 DSH runtime".into()));
+        }
+        let options =
+            html_options.ok_or_else(|| AppError::Other("统一 Agent HTML 输出参数缺失".into()))?;
+        return start_unified_agent_run(
+            &app,
+            &db,
+            &cloud,
+            &auth,
+            &entitlement,
+            intent_prompt,
+            references,
+            ratio,
+            project_id,
+            visual_profile_id,
+            options,
+            thread_id,
+            parent_node_id,
+            parent_asset_id,
+        )
+        .await;
+    }
     if skill_id.as_deref() == Some(HTML_SKILL_ID) {
+        if agent_runtime.is_some() {
+            return Err(AppError::Other("HTML 排版不支持 Agent Runtime 选择".into()));
+        }
         let options = html_options.ok_or_else(|| AppError::Other("HTML 排版参数缺失".into()))?;
         return start_html_layout_run(
+            &app,
             &db,
             &cloud,
             &auth,
@@ -749,6 +2041,9 @@ pub async fn cloud_agent_start(
             references,
             project_id,
             options,
+            thread_id,
+            parent_node_id,
+            parent_asset_id,
         )
         .await;
     }
@@ -757,7 +2052,12 @@ pub async fn cloud_agent_start(
     }
     // 只阻止新建 Codex Agent Run；历史 Run 与已经停车的本机任务仍可查看/收尾。
     ensure_agent_provider_compatible(image_provider.as_deref())?;
-    let policy = entitlement.current_or_sync(&auth).await.policy;
+    let entitlement_snapshot = entitlement.current_or_sync(&auth).await;
+    let resolved_agent_runtime = resolve_agent_runtime(
+        agent_runtime.as_deref(),
+        entitlement_snapshot.is_test_account,
+    )?;
+    let policy = entitlement_snapshot.policy;
     if !policy.allows_agent_run(SKILL_ID) {
         return Err(AppError::Other("当前权益不支持 Bowerbird Agent".into()));
     }
@@ -859,14 +2159,34 @@ pub async fn cloud_agent_start(
         return Err(AppError::Other("Agent 输入清单过大".into()));
     }
 
+    let creative_launch = begin_creative_launch(
+        &db,
+        project_id.as_deref(),
+        thread_id.as_deref(),
+        &normalized_prompt,
+        &image_provider,
+        resolved_ratio.as_deref(),
+        visual_profile_capsule.as_ref(),
+        &reference_ids,
+        parent_node_id.as_deref(),
+        parent_asset_id.as_deref(),
+    )?;
+    let creative_launch_id = creative_launch
+        .as_ref()
+        .map(|launch| launch.launch_id.clone());
+
     let mut create_body = json!({
         "action": "create",
         "skillId": SKILL_ID,
         "goal": normalized_prompt,
         "inputCount": image_bytes.len(),
         "inputManifestHash": sha256_hex(&manifest),
-        "idempotencyKey": format!("desktop-agent-{}", Ulid::new()),
+        "idempotencyKey": creative_launch_id
+            .as_ref()
+            .map(|launch_id| format!("desktop-agent-{launch_id}"))
+            .unwrap_or_else(|| format!("desktop-agent-{}", Ulid::new())),
         "imageProvider": image_provider,
+        "agentRuntime": resolved_agent_runtime,
     });
     if let Some(capsule) = visual_profile_capsule.as_ref() {
         create_body["visualProfile"] = json!({
@@ -879,7 +2199,21 @@ pub async fn cloud_agent_start(
     if let Some(value) = resolved_ratio.as_deref() {
         create_body["ratio"] = json!(value);
     }
-    let created = agent_action(&cloud, &auth, create_body, "创建 Agent Run 失败").await?;
+    let created = match agent_action(&cloud, &auth, create_body, "创建 Agent Run 失败").await {
+        Ok(created) => created,
+        Err(error) => {
+            if let (Some(session_id), Some(launch_id)) =
+                (thread_id.as_deref(), creative_launch_id.as_deref())
+            {
+                let _ = db.update_project_agent_launch_status(session_id, launch_id, "failed");
+                let _ = app.emit(
+                    "creative://changed",
+                    json!({ "threadId": session_id, "status": "failed" }),
+                );
+            }
+            return Err(error);
+        }
+    };
     let run_id = created
         .get("runId")
         .and_then(Value::as_str)
@@ -890,6 +2224,45 @@ pub async fn cloud_agent_start(
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::Cloud("创建 Agent Run 未返回 conversationId".into()))?
         .to_string();
+    let mut created_checkpoint = checkpoint_created_run(
+        &db,
+        &app,
+        &created,
+        &run_id,
+        &conversation_id,
+        SKILL_ID,
+        "0.1.2",
+        Some(resolved_agent_runtime),
+        &normalized_prompt,
+        &reference_ids,
+        project_id.as_deref(),
+        thread_id.as_deref(),
+        creative_launch_id.as_deref(),
+        creative_launch.as_ref(),
+        48,
+    )?;
+    let returned_agent_runtime = created.get("agentRuntime").and_then(Value::as_str);
+    if returned_agent_runtime != Some(resolved_agent_runtime) {
+        let cancel_response = agent_action(
+            &cloud,
+            &auth,
+            json!({ "action": "cancel", "runId": &run_id }),
+            "清理 runtime 不一致的 Agent Run 失败",
+        )
+        .await;
+        checkpoint_transfer_failure(
+            &db,
+            &app,
+            &mut created_checkpoint,
+            cancel_response.as_ref().ok(),
+        );
+        let message = if returned_agent_runtime.is_some() {
+            "服务端锁定的 Agent Runtime 与请求不一致"
+        } else {
+            "创建 Agent Run 未返回已锁定的 runtime"
+        };
+        return Err(AppError::Cloud(message.into()));
+    }
     let transfer_result: Result<(), AppError> = async {
         let request_url = created
             .get("uploadUrl")
@@ -942,26 +2315,33 @@ pub async fn cloud_agent_start(
     if let Err(error) = transfer_result {
         // The Run already holds credits. Best-effort atomic cancellation avoids
         // leaving a failed local upload with a frozen hold.
-        let _ = agent_action(
+        let cancel_response = agent_action(
             &cloud,
             &auth,
             json!({ "action": "cancel", "runId": run_id }),
             "清理未完成的 Agent Run 失败",
         )
         .await;
+        checkpoint_transfer_failure(
+            &db,
+            &app,
+            &mut created_checkpoint,
+            cancel_response.as_ref().ok(),
+        );
         return Err(error);
     }
 
     let now = chrono::Utc::now().timestamp();
     // 入队成功即先落本地记录。即使随后首次 get 短暂失败，重启后仍能恢复并继续轮询，
     // 不会把云端已创建、已冻结积分的 Run 变成桌面端不可见的孤儿任务。
-    let fallback_snapshot = json!({
+    let mut fallback_snapshot = json!({
         "conversationId": conversation_id,
         "run": {
             "id": run_id,
             "conversation_id": conversation_id,
             "skill_id": SKILL_ID,
             "skill_version": "0.1.2",
+            "agent_runtime": resolved_agent_runtime,
             "status": "queued",
             "progress": 0,
             "budget_credits": created.get("budgetCredits").cloned().unwrap_or(json!(48)),
@@ -974,6 +2354,9 @@ pub async fn cloud_agent_start(
         "clarifications": [],
         "artifacts": [],
     });
+    if let Some(launch) = creative_launch.as_ref() {
+        set_project_agent_launch_snapshot(&mut fallback_snapshot, launch)?;
+    }
     let mut record = CloudAgentRunRecord {
         run_id,
         conversation_id,
@@ -982,25 +2365,19 @@ pub async fn cloud_agent_start(
         intent_prompt: normalized_prompt,
         reference_asset_ids: reference_ids,
         project_id,
+        thread_id,
+        creative_launch_id,
         snapshot: fallback_snapshot,
         feedback_action: None,
         final_asset_id: None,
         created_at: now,
         updated_at: now,
     };
-    save_record(&db, &record)?;
-    if let Ok(snapshot) = agent_action(
-        &cloud,
-        &auth,
-        json!({ "action": "get", "runId": record.run_id }),
-        "读取 Agent Run 失败",
-    )
-    .await
-    {
-        record.status = run_status(&snapshot)?;
-        record.snapshot = snapshot;
-        record.updated_at = chrono::Utc::now().timestamp();
-        save_record(&db, &record)?;
+    record = save_and_project_record(&db, &record)?;
+    emit_creative_agent_changed(&app, &record);
+    if let Ok(refreshed) = refresh_record(&db, &cloud, &auth, &record.run_id).await {
+        record = refreshed;
+        emit_creative_agent_changed(&app, &record);
     }
     Ok(record)
 }
@@ -1009,28 +2386,36 @@ pub async fn cloud_agent_start(
 pub async fn cloud_agent_latest(
     db: State<'_, Arc<Database>>,
 ) -> Result<Option<CloudAgentRunRecord>, AppError> {
-    Ok(list_records(&db, 1)?.into_iter().next())
+    let mut records = list_records(&db, 1)?;
+    recover_agent_projections(&db, &mut records);
+    Ok(records.into_iter().next())
 }
 
 #[tauri::command]
 pub async fn cloud_agent_list(
     db: State<'_, Arc<Database>>,
 ) -> Result<Vec<CloudAgentRunRecord>, AppError> {
-    list_records(&db, 100)
+    let mut records = list_records(&db, 100)?;
+    recover_agent_projections(&db, &mut records);
+    Ok(records)
 }
 
 #[tauri::command]
 pub async fn cloud_agent_get(
+    app: AppHandle,
     db: State<'_, Arc<Database>>,
     cloud: State<'_, CloudClient>,
     auth: State<'_, AuthClient>,
     run_id: String,
 ) -> Result<CloudAgentRunRecord, AppError> {
-    refresh_record(&db, &cloud, &auth, &run_id).await
+    let record = refresh_record(&db, &cloud, &auth, &run_id).await?;
+    emit_creative_agent_changed(&app, &record);
+    Ok(record)
 }
 
 #[tauri::command]
 pub async fn cloud_agent_decide_approval(
+    app: AppHandle,
     db: State<'_, Arc<Database>>,
     cloud: State<'_, CloudClient>,
     auth: State<'_, AuthClient>,
@@ -1049,11 +2434,14 @@ pub async fn cloud_agent_decide_approval(
         },
     )
     .await?;
-    refresh_record(&db, &cloud, &auth, &run_id).await
+    let record = refresh_record(&db, &cloud, &auth, &run_id).await?;
+    emit_creative_agent_changed(&app, &record);
+    Ok(record)
 }
 
 #[tauri::command]
 pub async fn cloud_agent_answer_clarification(
+    app: AppHandle,
     db: State<'_, Arc<Database>>,
     cloud: State<'_, CloudClient>,
     auth: State<'_, AuthClient>,
@@ -1078,11 +2466,14 @@ pub async fn cloud_agent_answer_clarification(
         "提交 Agent 澄清答案失败",
     )
     .await?;
-    refresh_record(&db, &cloud, &auth, &run_id).await
+    let record = refresh_record(&db, &cloud, &auth, &run_id).await?;
+    emit_creative_agent_changed(&app, &record);
+    Ok(record)
 }
 
 #[tauri::command]
 pub async fn cloud_agent_cancel(
+    app: AppHandle,
     db: State<'_, Arc<Database>>,
     cloud: State<'_, CloudClient>,
     auth: State<'_, AuthClient>,
@@ -1095,11 +2486,14 @@ pub async fn cloud_agent_cancel(
         "取消 Agent Run 失败",
     )
     .await?;
-    refresh_record(&db, &cloud, &auth, &run_id).await
+    let record = refresh_record(&db, &cloud, &auth, &run_id).await?;
+    emit_creative_agent_changed(&app, &record);
+    Ok(record)
 }
 
 #[tauri::command]
 pub async fn cloud_agent_feedback(
+    app: AppHandle,
     db: State<'_, Arc<Database>>,
     cloud: State<'_, CloudClient>,
     auth: State<'_, AuthClient>,
@@ -1121,10 +2515,9 @@ pub async fn cloud_agent_feedback(
         "提交 Agent 结果反馈失败",
     )
     .await?;
-    let mut record = refresh_record(&db, &cloud, &auth, &run_id).await?;
-    record.feedback_action = Some(feedback_action);
-    record.updated_at = chrono::Utc::now().timestamp();
-    save_record(&db, &record)?;
+    let record = refresh_record(&db, &cloud, &auth, &run_id).await?;
+    let record = save_feedback_action_and_project(&db, &record, &feedback_action)?;
+    emit_creative_agent_changed(&app, &record);
     Ok(record)
 }
 
@@ -1352,9 +2745,18 @@ pub async fn cloud_agent_ingest_final(
         ));
     }
     if let Some(asset_id) = record.final_asset_id.as_deref() {
-        return db
+        let asset = db
             .get_asset(asset_id)?
-            .ok_or_else(|| AppError::Other("Agent 最终资产记录已失效".into()));
+            .ok_or_else(|| AppError::Other("Agent 最终资产记录已失效".into()))?;
+        project_agent_record(&db, &record)?;
+        agent_action(
+            &cloud,
+            &auth,
+            json!({ "action": "artifact_received", "artifactId": artifact_id }),
+            "确认 Agent 最终图接收失败",
+        )
+        .await?;
+        return Ok(asset);
     }
     let preview = download_artifact(&paths, &cloud, &auth, &record, &artifact_id).await?;
     let source = PathBuf::from(&preview.path);
@@ -1375,16 +2777,25 @@ pub async fn cloud_agent_ingest_final(
     if let Some(project_id) = record.project_id.as_deref() {
         db.add_assets_to_project(project_id, std::slice::from_ref(&asset.id))?;
     }
-    record.final_asset_id = Some(asset.id.clone());
-    record.updated_at = chrono::Utc::now().timestamp();
-    save_record(&db, &record)?;
-    let _ = agent_action(
+    record = save_final_asset_and_project(&db, &record, &asset.id)?;
+    if record.thread_id.is_some() {
+        project_agent_artifact_and_map(
+            &db,
+            &record.run_id,
+            &artifact_id,
+            &preview.role,
+            0,
+            &asset,
+        )?;
+        emit_creative_agent_changed(&app, &record);
+    }
+    agent_action(
         &cloud,
         &auth,
         json!({ "action": "artifact_received", "artifactId": artifact_id }),
         "确认 Agent 最终图接收失败",
     )
-    .await;
+    .await?;
     let _ = app.emit("library://assets-changed", ());
     Ok(asset)
 }
@@ -1415,7 +2826,12 @@ fn ingestible_artifacts(record: &CloudAgentRunRecord) -> Vec<(String, String)> {
         .and_then(Value::as_array)
         .into_iter()
         .flatten();
-    if record.skill_id != HTML_SKILL_ID {
+    let has_render_manifest = record
+        .snapshot
+        .pointer("/renderManifest/outputs")
+        .and_then(Value::as_array)
+        .is_some();
+    if record.skill_id != HTML_SKILL_ID && !has_render_manifest {
         return artifacts
             .filter_map(|item| {
                 let id = item.get("id")?.as_str()?;
@@ -1459,6 +2875,175 @@ fn ingestible_artifacts(record: &CloudAgentRunRecord) -> Vec<(String, String)> {
         .collect()
 }
 
+fn primary_ingestible_artifact(record: &CloudAgentRunRecord) -> Option<(usize, String, String)> {
+    let generated = ingestible_artifacts(record);
+    let preferred_index = if record.skill_id == HTML_SKILL_ID
+        || record
+            .snapshot
+            .pointer("/renderManifest/outputs")
+            .and_then(Value::as_array)
+            .is_some()
+    {
+        generated
+            .iter()
+            .position(|(_, role)| role == "full_page_screenshot")
+            .or_else(|| {
+                generated
+                    .iter()
+                    .position(|(_, role)| role == "viewport_screenshot")
+            })
+            .or((!generated.is_empty()).then_some(0))
+    } else {
+        generated
+            .iter()
+            .position(|(_, role)| role == "final_result")
+    }?;
+    let (artifact_id, role) = generated.get(preferred_index)?.clone();
+    Some((preferred_index, artifact_id, role))
+}
+
+fn accepted_ingest_result(record: &CloudAgentRunRecord) -> bool {
+    let feedback_action = record.feedback_action.as_deref().or_else(|| {
+        record
+            .snapshot
+            .pointer("/run/result_feedback_action")
+            .and_then(Value::as_str)
+    });
+    record.status == "succeeded" && feedback_action == Some("accept")
+}
+
+fn ingest_artifact_fingerprint(record: &CloudAgentRunRecord) -> Option<String> {
+    let artifacts = record.snapshot.get("artifacts")?.as_array()?;
+    let mut identities = Vec::new();
+    for (artifact_id, _) in ingestible_artifacts(record) {
+        let artifact = artifacts
+            .iter()
+            .find(|artifact| artifact.get("id").and_then(Value::as_str) == Some(&artifact_id))?;
+        let sha256 = artifact
+            .get("sha256")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())?;
+        identities.push(format!("{artifact_id}:{sha256}"));
+    }
+    if identities.is_empty() {
+        return None;
+    }
+    identities.sort();
+    identities.dedup();
+    Some(sha256_hex(
+        format!("{}:{}", record.run_id, identities.join("|")).as_bytes(),
+    ))
+}
+
+fn ingest_artifact_receipts_complete(record: &CloudAgentRunRecord) -> bool {
+    let generated = ingestible_artifacts(record);
+    let Some(artifacts) = record.snapshot.get("artifacts").and_then(Value::as_array) else {
+        return false;
+    };
+    !generated.is_empty()
+        && generated.iter().all(|(artifact_id, _)| {
+            artifacts.iter().any(|artifact| {
+                artifact.get("id").and_then(Value::as_str) == Some(artifact_id.as_str())
+                    && artifact
+                        .get("downloaded_at")
+                        .is_some_and(|value| !value.is_null())
+            })
+        })
+}
+
+fn ingest_checkpoint_matches(record: &CloudAgentRunRecord, checkpoint: &Value) -> bool {
+    accepted_ingest_result(record)
+        && record.final_asset_id.is_some()
+        && ingest_artifact_receipts_complete(record)
+        && checkpoint.get("schemaVersion").and_then(Value::as_u64) == Some(1)
+        && checkpoint
+            .get("completedAt")
+            .and_then(Value::as_i64)
+            .is_some()
+        && checkpoint.get("fingerprint").and_then(Value::as_str)
+            == ingest_artifact_fingerprint(record).as_deref()
+}
+
+fn mapped_ingest_artifacts_complete(
+    conn: &rusqlite::Connection,
+    record: &CloudAgentRunRecord,
+) -> Result<bool, AppError> {
+    let (Some(project_id), Some(thread_id)) =
+        (record.project_id.as_deref(), record.thread_id.as_deref())
+    else {
+        return Ok(false);
+    };
+    for (artifact_id, _) in ingestible_artifacts(record) {
+        let exists: bool = conn.query_row(
+            "SELECT EXISTS(\
+               SELECT 1 FROM cloud_agent_artifact_assets mapping \
+               JOIN assets asset ON asset.id=mapping.asset_id \
+               JOIN canvas_nodes node ON node.id=mapping.node_id \
+               JOIN project_assets member ON member.asset_id=mapping.asset_id AND member.project_id=?3 \
+               WHERE mapping.run_id=?1 AND mapping.artifact_id=?2 \
+                 AND node.project_id=?3 AND node.thread_id=?4\
+             )",
+            rusqlite::params![record.run_id, artifact_id, project_id, thread_id],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Persist the run-level completion checkpoint only after the whole accepted artifact
+/// group has a local asset, project membership, canvas projection, and durable cloud ack.
+/// The check and marker write share one immediate transaction with project deletion.
+fn checkpoint_completed_ingest_if_ready(
+    db: &Database,
+    candidate: &CloudAgentRunRecord,
+) -> Result<CloudAgentRunRecord, AppError> {
+    let mut conn = db.conn.lock().unwrap();
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let mut persisted = query_stored_record(&tx, &candidate.run_id)?.record;
+    ensure_same_record_identity(&persisted, candidate)?;
+    if persisted
+        .snapshot
+        .get(PROJECT_AGENT_INGEST_SNAPSHOT_KEY)
+        .is_some_and(|checkpoint| ingest_checkpoint_matches(&persisted, checkpoint))
+    {
+        tx.commit()?;
+        return Ok(persisted);
+    }
+    let Some(fingerprint) = ingest_artifact_fingerprint(&persisted) else {
+        tx.commit()?;
+        return Ok(persisted);
+    };
+    if !accepted_ingest_result(&persisted)
+        || persisted.final_asset_id.is_none()
+        || !ingest_artifact_receipts_complete(&persisted)
+        || !mapped_ingest_artifacts_complete(&tx, &persisted)?
+    {
+        tx.commit()?;
+        return Ok(persisted);
+    }
+    let completed_at = chrono::Utc::now().timestamp();
+    let object = persisted
+        .snapshot
+        .as_object_mut()
+        .ok_or_else(|| AppError::Other("Agent snapshot must be a JSON object".into()))?;
+    object.insert(
+        PROJECT_AGENT_INGEST_SNAPSHOT_KEY.into(),
+        json!({
+            "schemaVersion": 1,
+            "fingerprint": fingerprint,
+            "completedAt": completed_at,
+        }),
+    );
+    persisted.updated_at = persisted.updated_at.max(completed_at);
+    write_record(&tx, &persisted)?;
+    persisted = query_stored_record(&tx, &candidate.run_id)?.record;
+    tx.commit()?;
+    Ok(persisted)
+}
+
 #[tauri::command]
 pub async fn cloud_agent_ingest_artifacts(
     app: AppHandle,
@@ -1479,25 +3064,10 @@ pub async fn cloud_agent_ingest_artifacts(
         return Err(AppError::Other("Agent 会话没有可入库的图片产物".into()));
     }
 
-    let primary_artifact_id = if record.skill_id == HTML_SKILL_ID {
-        generated
-            .iter()
-            .find(|(_, role)| role == "full_page_screenshot")
-            .or_else(|| {
-                generated
-                    .iter()
-                    .find(|(_, role)| role == "viewport_screenshot")
-            })
-            .or_else(|| generated.first())
-            .map(|(id, _)| id.clone())
-    } else {
-        generated
-            .iter()
-            .find(|(_, role)| role == "final_result")
-            .map(|(id, _)| id.clone())
-    };
+    let primary_artifact_id =
+        primary_ingestible_artifact(&record).map(|(_, artifact_id, _)| artifact_id);
     let mut assets = Vec::with_capacity(generated.len());
-    for (artifact_id, _role) in generated {
+    for (ordinal, (artifact_id, role)) in generated.into_iter().enumerate() {
         let preview = download_artifact(&paths, &cloud, &auth, &record, &artifact_id).await?;
         let source = PathBuf::from(&preview.path);
         let asset = if let Some(existing) = existing_agent_asset(&db, &source)? {
@@ -1523,20 +3093,40 @@ pub async fn cloud_agent_ingest_artifacts(
             db.add_assets_to_project(project_id, std::slice::from_ref(&asset.id))?;
         }
         if primary_artifact_id.as_deref() == Some(artifact_id.as_str()) {
-            record.final_asset_id = Some(asset.id.clone());
+            record = save_final_asset_and_project(&db, &record, &asset.id)?;
         }
-        save_record(&db, &record)?;
-        let _ = agent_action(
+        if record.thread_id.is_some() {
+            project_agent_artifact_and_map(
+                &db,
+                &record.run_id,
+                &artifact_id,
+                &role,
+                ordinal as i64,
+                &asset,
+            )?;
+        }
+        agent_action(
             &cloud,
             &auth,
             json!({ "action": "artifact_received", "artifactId": artifact_id }),
             "确认 Agent 图片接收失败",
         )
-        .await;
+        .await?;
         assets.push(asset);
     }
     db.record_generation_conversation(&record.conversation_id, &record.conversation_id)?;
+    record = refresh_record(&db, &cloud, &auth, &record.run_id).await?;
+    if !record
+        .snapshot
+        .get(PROJECT_AGENT_INGEST_SNAPSHOT_KEY)
+        .is_some_and(|checkpoint| ingest_checkpoint_matches(&record, checkpoint))
+    {
+        return Err(AppError::Other(
+            "Agent 产物已写入，但整组持久化确认尚未完成".into(),
+        ));
+    }
     let _ = app.emit("library://assets-changed", ());
+    emit_creative_agent_changed(&app, &record);
     Ok(assets)
 }
 
@@ -1883,16 +3473,344 @@ pub async fn cloud_agent_execute_local_task(
 #[cfg(test)]
 mod tests {
     use super::{
-        cache_local_result, ensure_agent_provider_compatible, existing_agent_asset,
-        ingestible_artifacts, list_records, load_cached_local_result, local_generation_instruction,
-        nearest_ratio, normalize_intent_prompt, normalize_requested_ratio, record_from_row,
-        remove_cached_local_result, save_record, validate_html_layout_options,
-        validate_preference_capsule, CloudAgentReferenceRequest, CloudAgentRunRecord,
-        HtmlLayoutOptions, PreferenceCapsule, PreferenceFact, PreferenceScope,
+        agent_group_payload, cache_local_result, ensure_agent_provider_compatible,
+        existing_agent_asset, ingestible_artifacts, list_records, load_cached_local_result,
+        local_generation_instruction, nearest_ratio, normalize_intent_prompt,
+        normalize_requested_ratio, project_agent_record, record_from_row,
+        remove_cached_local_result, resolve_agent_runtime, save_record,
+        validate_html_layout_options, validate_preference_capsule, CloudAgentReferenceRequest,
+        CloudAgentRunRecord, HtmlLayoutOptions, PreferenceCapsule, PreferenceFact, PreferenceScope,
+        DSH_AGENT_RUNTIME, LEGACY_AGENT_RUNTIME,
     };
     use crate::core::paths::LibraryPaths;
     use crate::db::Database;
     use serde_json::json;
+
+    #[test]
+    fn transfer_cleanup_stays_reconcilable_until_cloud_confirms_cancelled() {
+        assert_eq!(super::transfer_cleanup_status(None), "cancel_requested");
+        assert_eq!(
+            super::transfer_cleanup_status(Some(&json!({ "status": "cancel_requested" }))),
+            "cancel_requested"
+        );
+        assert_eq!(
+            super::transfer_cleanup_status(Some(&json!({ "status": "succeeded" }))),
+            "cancel_requested"
+        );
+        assert_eq!(
+            super::transfer_cleanup_status(Some(&json!({ "status": "cancelled" }))),
+            "cancelled"
+        );
+
+        let local = CloudAgentRunRecord {
+            run_id: "run-ambiguous-transfer".into(),
+            conversation_id: "conversation-ambiguous-transfer".into(),
+            skill_id: "skill".into(),
+            status: "cancel_requested".into(),
+            intent_prompt: "goal".into(),
+            reference_asset_ids: vec![],
+            project_id: Some("project-1".into()),
+            thread_id: Some("thread-1".into()),
+            creative_launch_id: Some("launch-1".into()),
+            snapshot: json!({ "run": { "status": "cancel_requested" } }),
+            feedback_action: None,
+            final_asset_id: None,
+            created_at: 1,
+            updated_at: 1,
+        };
+        let mut authoritative = local.clone();
+        authoritative.status = "succeeded".into();
+        authoritative.snapshot = json!({ "run": { "status": "succeeded" } });
+        authoritative.updated_at = 2;
+        assert_eq!(
+            super::merge_record(&local, &authoritative).unwrap().status,
+            "succeeded",
+            "an unconfirmed cleanup checkpoint must remain replaceable by cloud truth"
+        );
+    }
+
+    #[test]
+    fn local_ingest_checkpoint_survives_same_group_refresh_and_invalidates_on_change() {
+        let mut existing = CloudAgentRunRecord {
+            run_id: "run-ingested".into(),
+            conversation_id: "conversation-ingested".into(),
+            skill_id: "bowerbird-controlled-image-edit".into(),
+            status: "succeeded".into(),
+            intent_prompt: "完成创作".into(),
+            reference_asset_ids: vec![],
+            project_id: Some("project-1".into()),
+            thread_id: Some("thread-1".into()),
+            creative_launch_id: Some("launch-1".into()),
+            snapshot: json!({
+                "run": { "status": "succeeded", "result_feedback_action": "accept" },
+                "artifacts": [{
+                    "id": "artifact-final",
+                    "role": "final_result",
+                    "mime": "image/png",
+                    "sha256": "sha-final",
+                    "user_visible": true,
+                    "downloaded_at": "2026-09-04T00:00:00Z"
+                }]
+            }),
+            feedback_action: Some("accept".into()),
+            final_asset_id: Some("asset-final".into()),
+            created_at: 1,
+            updated_at: 2,
+        };
+        let fingerprint = super::ingest_artifact_fingerprint(&existing).unwrap();
+        existing.snapshot.as_object_mut().unwrap().insert(
+            super::PROJECT_AGENT_INGEST_SNAPSHOT_KEY.into(),
+            json!({
+                "schemaVersion": 1,
+                "fingerprint": fingerprint,
+                "completedAt": 2,
+            }),
+        );
+
+        let mut same_group = existing.clone();
+        same_group
+            .snapshot
+            .as_object_mut()
+            .unwrap()
+            .remove(super::PROJECT_AGENT_INGEST_SNAPSHOT_KEY);
+        same_group.snapshot["artifacts"][0]["downloaded_at"] = json!(null);
+        same_group.updated_at = 3;
+        let merged = super::merge_record(&existing, &same_group).unwrap();
+        assert!(merged
+            .snapshot
+            .get(super::PROJECT_AGENT_INGEST_SNAPSHOT_KEY)
+            .is_some_and(|checkpoint| super::ingest_checkpoint_matches(&merged, checkpoint)));
+
+        let mut changed_group = same_group;
+        changed_group.snapshot["artifacts"][0]["sha256"] = json!("sha-revised");
+        let changed = super::merge_record(&existing, &changed_group).unwrap();
+        assert!(changed
+            .snapshot
+            .get(super::PROJECT_AGENT_INGEST_SNAPSHOT_KEY)
+            .is_none());
+    }
+
+    #[test]
+    fn whole_group_checkpoint_requires_durable_asset_membership_and_canvas_projection() {
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.create_project("project-1", "Project", "project-1", "project-1", "blank")
+            .unwrap();
+        db.ensure_project_canvas("project-1").unwrap();
+        db.create_creative_thread(&crate::core::project_canvas::NewCreativeThread {
+            id: "thread-1".into(),
+            project_id: "project-1".into(),
+            title: "Thread".into(),
+            origin: crate::core::creative_session_contract::CreativeThreadOrigin::Direct,
+        })
+        .unwrap();
+        let launch = crate::core::project_canvas::ProjectAgentLaunchInput {
+            project_id: "project-1".into(),
+            thread_id: "thread-1".into(),
+            launch_id: "launch-1".into(),
+            prompt: "完成创作".into(),
+            provider: "cloud".into(),
+            ratio: None,
+            visual_profile: None,
+            reference_asset_ids: vec![],
+            parent_node_id: None,
+            parent_asset_id: None,
+        };
+        db.begin_project_agent_launch(&launch).unwrap();
+        db.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO assets(id,name,store_path,created_at) VALUES ('asset-final','终稿','/final.png',1)",
+                [],
+            )
+            .unwrap();
+        let mut snapshot = json!({
+            "run": { "status": "succeeded", "result_feedback_action": "accept" },
+            "artifacts": [{
+                "id": "artifact-final",
+                "role": "final_result",
+                "mime": "image/png",
+                "sha256": "sha-final",
+                "user_visible": true,
+                "downloaded_at": "2026-09-04T00:00:00Z"
+            }]
+        });
+        super::set_project_agent_launch_snapshot(&mut snapshot, &launch).unwrap();
+        let record = CloudAgentRunRecord {
+            run_id: "run-ingested".into(),
+            conversation_id: "conversation-ingested".into(),
+            skill_id: "bowerbird-controlled-image-edit".into(),
+            status: "succeeded".into(),
+            intent_prompt: "完成创作".into(),
+            reference_asset_ids: vec![],
+            project_id: Some("project-1".into()),
+            thread_id: Some("thread-1".into()),
+            creative_launch_id: Some("launch-1".into()),
+            snapshot,
+            feedback_action: Some("accept".into()),
+            final_asset_id: Some("asset-final".into()),
+            created_at: 1,
+            updated_at: 2,
+        };
+        let saved = save_record(&db, &record).unwrap();
+        let incomplete = super::checkpoint_completed_ingest_if_ready(&db, &saved).unwrap();
+        assert!(incomplete
+            .snapshot
+            .get(super::PROJECT_AGENT_INGEST_SNAPSHOT_KEY)
+            .is_none());
+        project_agent_record(&db, &saved).unwrap();
+        let completed = super::checkpoint_completed_ingest_if_ready(&db, &saved).unwrap();
+        assert!(completed
+            .snapshot
+            .get(super::PROJECT_AGENT_INGEST_SNAPSHOT_KEY)
+            .is_some_and(|checkpoint| super::ingest_checkpoint_matches(&completed, checkpoint)));
+    }
+
+    #[test]
+    fn startup_read_recovers_checkpoint_after_receipts_commit_crash_window() {
+        let path = std::env::temp_dir().join(format!(
+            "bowerbird-agent-ingest-checkpoint-restart-{}.db",
+            ulid::Ulid::new()
+        ));
+        {
+            let db = Database::open(&path).unwrap();
+            db.migrate().unwrap();
+            db.create_project(
+                "project-restart-ingest",
+                "Project",
+                "project-restart-ingest",
+                "project-restart-ingest",
+                "blank",
+            )
+            .unwrap();
+            db.ensure_project_canvas("project-restart-ingest").unwrap();
+            db.create_creative_thread(&crate::core::project_canvas::NewCreativeThread {
+                id: "thread-restart-ingest".into(),
+                project_id: "project-restart-ingest".into(),
+                title: "Thread".into(),
+                origin: crate::core::creative_session_contract::CreativeThreadOrigin::Direct,
+            })
+            .unwrap();
+            let launch = crate::core::project_canvas::ProjectAgentLaunchInput {
+                project_id: "project-restart-ingest".into(),
+                thread_id: "thread-restart-ingest".into(),
+                launch_id: "launch-restart-ingest".into(),
+                prompt: "完成创作".into(),
+                provider: "cloud".into(),
+                ratio: None,
+                visual_profile: None,
+                reference_asset_ids: vec![],
+                parent_node_id: None,
+                parent_asset_id: None,
+            };
+            db.begin_project_agent_launch(&launch).unwrap();
+            db.conn
+                .lock()
+                .unwrap()
+                .execute(
+                    "INSERT INTO assets(id,name,store_path,created_at) VALUES ('asset-restart-ingest','终稿','/restart-final.png',1)",
+                    [],
+                )
+                .unwrap();
+            let mut snapshot = json!({
+                "run": { "status": "succeeded", "result_feedback_action": "accept" },
+                "artifacts": [{
+                    "id": "artifact-restart-ingest",
+                    "role": "final_result",
+                    "mime": "image/png",
+                    "sha256": "sha-restart-ingest",
+                    "user_visible": true,
+                    "downloaded_at": null
+                }]
+            });
+            super::set_project_agent_launch_snapshot(&mut snapshot, &launch).unwrap();
+            let record = CloudAgentRunRecord {
+                run_id: "run-restart-ingest".into(),
+                conversation_id: "conversation-restart-ingest".into(),
+                skill_id: "bowerbird-controlled-image-edit".into(),
+                status: "succeeded".into(),
+                intent_prompt: "完成创作".into(),
+                reference_asset_ids: vec![],
+                project_id: Some("project-restart-ingest".into()),
+                thread_id: Some("thread-restart-ingest".into()),
+                creative_launch_id: Some("launch-restart-ingest".into()),
+                snapshot,
+                feedback_action: Some("accept".into()),
+                final_asset_id: Some("asset-restart-ingest".into()),
+                created_at: 1,
+                updated_at: 1,
+            };
+            let projected = save_record(&db, &record).unwrap();
+            project_agent_record(&db, &projected).unwrap();
+
+            // Simulate refresh_record committing the last artifact_received receipt,
+            // followed by a process crash before checkpoint_completed_ingest_if_ready.
+            let mut acknowledged = projected;
+            acknowledged.snapshot["artifacts"][0]["downloaded_at"] = json!("2026-09-04T00:00:00Z");
+            acknowledged.updated_at = 2;
+            let acknowledged = save_record(&db, &acknowledged).unwrap();
+            assert!(acknowledged
+                .snapshot
+                .get(super::PROJECT_AGENT_INGEST_SNAPSHOT_KEY)
+                .is_none());
+            assert_eq!(
+                db.project_delete_impact("project-restart-ingest")
+                    .unwrap()
+                    .running_agent_count,
+                1,
+                "missing checkpoint must keep project deletion fail-closed"
+            );
+        }
+
+        {
+            let reopened = Database::open(&path).unwrap();
+            let mut records = list_records(&reopened, 100).unwrap();
+            assert_eq!(records.len(), 1);
+            assert!(records[0]
+                .snapshot
+                .get(super::PROJECT_AGENT_INGEST_SNAPSHOT_KEY)
+                .is_none());
+
+            // A corrupt entry must stay uncheckpointed without preventing the
+            // following valid list entry from repairing the durable marker.
+            let persisted_without_marker = records.pop().unwrap();
+            let mut broken = persisted_without_marker.clone();
+            broken.project_id = Some("missing-project".into());
+            records.extend([broken, persisted_without_marker]);
+            super::recover_agent_projections(&reopened, &mut records);
+
+            assert!(records[0]
+                .snapshot
+                .get(super::PROJECT_AGENT_INGEST_SNAPSHOT_KEY)
+                .is_none());
+            assert!(records[1]
+                .snapshot
+                .get(super::PROJECT_AGENT_INGEST_SNAPSHOT_KEY)
+                .is_some_and(|checkpoint| {
+                    super::ingest_checkpoint_matches(&records[1], checkpoint)
+                }));
+            let persisted = super::load_record(&reopened, "run-restart-ingest").unwrap();
+            assert!(persisted
+                .snapshot
+                .get(super::PROJECT_AGENT_INGEST_SNAPSHOT_KEY)
+                .is_some_and(|checkpoint| {
+                    super::ingest_checkpoint_matches(&persisted, checkpoint)
+                }));
+            assert_eq!(
+                reopened
+                    .project_delete_impact("project-restart-ingest")
+                    .unwrap()
+                    .running_agent_count,
+                0,
+                "startup recovery must unblock deletion after all durable evidence exists"
+            );
+        }
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("db-wal"));
+        let _ = std::fs::remove_file(path.with_extension("db-shm"));
+    }
 
     #[tokio::test]
     async fn local_result_cache_reuses_one_call_and_cleans_up_after_completion() {
@@ -1944,6 +3862,24 @@ mod tests {
         assert!(ensure_agent_provider_compatible(Some("cloud")).is_ok());
         assert!(ensure_agent_provider_compatible(Some("jimeng")).is_ok());
         assert!(ensure_agent_provider_compatible(Some("codex")).is_err());
+    }
+
+    #[test]
+    fn agent_runtime_defaults_legacy_and_gates_dsh_to_test_accounts() {
+        assert_eq!(
+            resolve_agent_runtime(None, false).unwrap(),
+            LEGACY_AGENT_RUNTIME
+        );
+        assert_eq!(
+            resolve_agent_runtime(Some(LEGACY_AGENT_RUNTIME), true).unwrap(),
+            LEGACY_AGENT_RUNTIME
+        );
+        assert_eq!(
+            resolve_agent_runtime(Some(DSH_AGENT_RUNTIME), true).unwrap(),
+            DSH_AGENT_RUNTIME
+        );
+        assert!(resolve_agent_runtime(Some(DSH_AGENT_RUNTIME), false).is_err());
+        assert!(resolve_agent_runtime(Some("unknown"), true).is_err());
     }
 
     #[test]
@@ -2014,6 +3950,8 @@ mod tests {
             intent_prompt: "排版".into(),
             reference_asset_ids: vec![],
             project_id: None,
+            thread_id: None,
+            creative_launch_id: None,
             snapshot: json!({
                 "artifacts": [
                     {"id":"slice-2","role":"slice_screenshot","mime":"image/png","user_visible":true},
@@ -2051,6 +3989,8 @@ mod tests {
             intent_prompt: "排版".into(),
             reference_asset_ids: vec![],
             project_id: None,
+            thread_id: None,
+            creative_launch_id: None,
             snapshot: json!({
                 "artifacts": [],
                 "renderManifest": {"outputs": [{"artifactId":"gone","role":"full_page_screenshot"}]}
@@ -2122,24 +4062,82 @@ mod tests {
     fn cloud_agent_checkpoint_uses_its_own_local_table() {
         let db = Database::open_in_memory().unwrap();
         db.migrate().unwrap();
+        db.create_project("project-1", "未命名项目", "project-1", "project-1", "blank")
+            .unwrap();
+        db.ensure_project_canvas("project-1").unwrap();
+        db.create_creative_thread(&crate::core::project_canvas::NewCreativeThread {
+            id: "thread-1".into(),
+            project_id: "project-1".into(),
+            title: "换背景".into(),
+            origin: crate::core::creative_session_contract::CreativeThreadOrigin::Direct,
+        })
+        .unwrap();
+        db.begin_project_agent_launch(&crate::core::project_canvas::ProjectAgentLaunchInput {
+            project_id: "project-1".into(),
+            thread_id: "thread-1".into(),
+            launch_id: "launch-1".into(),
+            prompt: "换背景".into(),
+            provider: "cloud".into(),
+            ratio: None,
+            visual_profile: None,
+            reference_asset_ids: vec![],
+            parent_node_id: None,
+            parent_asset_id: None,
+        })
+        .unwrap();
+        db.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO assets(id,name,store_path,created_at) VALUES ('agent-final','终稿','/agent-final.png',1)",
+                [],
+            )
+            .unwrap();
         let record = CloudAgentRunRecord {
             run_id: "run-1".into(),
             conversation_id: "conv-1".into(),
             skill_id: "bowerbird-controlled-image-edit".into(),
-            status: "queued".into(),
+            status: "succeeded".into(),
             intent_prompt: "换背景".into(),
             reference_asset_ids: vec![],
-            project_id: None,
-            snapshot: json!({"run":{"status":"queued"}}),
-            feedback_action: None,
-            final_asset_id: None,
+            project_id: Some("project-1".into()),
+            thread_id: Some("thread-1".into()),
+            creative_launch_id: Some("launch-1".into()),
+            snapshot: json!({
+                "run":{"status":"succeeded"},
+                "artifacts":[{
+                    "id":"artifact-final",
+                    "role":"final_result",
+                    "mime":"image/png",
+                    "user_visible":true
+                }]
+            }),
+            feedback_action: Some("accept".into()),
+            final_asset_id: Some("agent-final".into()),
             created_at: 1,
             updated_at: 1,
         };
         save_record(&db, &record).unwrap();
+        assert!(db.thread_for_agent("run-1").unwrap().is_none());
+        project_agent_record(&db, &record).unwrap();
+        assert_eq!(
+            db.thread_for_agent("run-1").unwrap().as_deref(),
+            Some("thread-1")
+        );
+        project_agent_record(&db, &record).unwrap();
+        let snapshot = db.project_canvas_snapshot("project-1").unwrap();
+        assert_eq!(
+            snapshot
+                .nodes
+                .iter()
+                .filter(|node| node.asset_id.as_deref() == Some("agent-final"))
+                .count(),
+            1,
+            "恢复与重放只能投影一个最终资产节点"
+        );
         let conn = db.conn.lock().unwrap();
         let loaded = conn.query_row(
-            "SELECT run_id, conversation_id, skill_id, status, intent_prompt, reference_asset_ids, project_id, snapshot_json, feedback_action, final_asset_id, created_at, updated_at FROM cloud_agent_runs WHERE run_id='run-1'",
+            "SELECT run_id, conversation_id, skill_id, status, intent_prompt, reference_asset_ids, project_id, snapshot_json, feedback_action, final_asset_id, created_at, updated_at, thread_id, creative_launch_id FROM cloud_agent_runs WHERE run_id='run-1'",
             [], record_from_row,
         ).unwrap();
         assert_eq!(loaded.conversation_id, "conv-1");
@@ -2147,6 +4145,460 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM task_queue", [], |row| row.get(0))
             .unwrap();
         assert_eq!(task_count, 0);
+    }
+
+    #[test]
+    fn cloud_agent_run_merge_preserves_identity_owner_terminal_and_final_asset() {
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        for (project_id, thread_id) in [
+            ("project-1", "thread-1"),
+            ("project-1", "thread-2"),
+            ("project-2", "thread-3"),
+        ] {
+            if db.get_project(project_id).unwrap().is_none() {
+                db.create_project(project_id, project_id, project_id, project_id, "blank")
+                    .unwrap();
+                db.ensure_project_canvas(project_id).unwrap();
+            }
+            db.create_creative_thread(&crate::core::project_canvas::NewCreativeThread {
+                id: thread_id.into(),
+                project_id: project_id.into(),
+                title: thread_id.into(),
+                origin: crate::core::creative_session_contract::CreativeThreadOrigin::Direct,
+            })
+            .unwrap();
+        }
+
+        let launch = crate::core::project_canvas::ProjectAgentLaunchInput {
+            project_id: "project-1".into(),
+            thread_id: "thread-1".into(),
+            launch_id: "launch-owned".into(),
+            prompt: "换背景".into(),
+            provider: "cloud".into(),
+            ratio: None,
+            visual_profile: None,
+            reference_asset_ids: vec![],
+            parent_node_id: Some("parent-node-1".into()),
+            parent_asset_id: Some("parent-asset-1".into()),
+        };
+        let mut original_snapshot = json!({"run":{"status":"uploading"}});
+        super::set_project_agent_launch_snapshot(&mut original_snapshot, &launch).unwrap();
+        let original = CloudAgentRunRecord {
+            run_id: "run-owned".into(),
+            conversation_id: "conv-owned".into(),
+            skill_id: "bowerbird-controlled-image-edit".into(),
+            status: "uploading".into(),
+            intent_prompt: "换背景".into(),
+            reference_asset_ids: vec![],
+            project_id: Some("project-1".into()),
+            thread_id: Some("thread-1".into()),
+            creative_launch_id: Some("launch-owned".into()),
+            snapshot: original_snapshot,
+            feedback_action: None,
+            final_asset_id: None,
+            created_at: 1,
+            updated_at: 1,
+        };
+        save_record(&db, &original).unwrap();
+
+        let mut same_owner = original.clone();
+        same_owner.status = "running".into();
+        same_owner.snapshot = json!({"run":{"status":"running"}});
+        same_owner.updated_at = 2;
+        save_record(&db, &same_owner).unwrap();
+
+        let preserved = super::load_record(&db, "run-owned").unwrap();
+        assert_eq!(
+            super::project_agent_launch_from_snapshot(&preserved.snapshot),
+            Some(launch.clone()),
+            "远端 snapshot 整包刷新不能抹掉本地精确父节点 checkpoint"
+        );
+
+        let mut changed_parent = same_owner.clone();
+        let mut rebound_launch = launch.clone();
+        rebound_launch.parent_node_id = Some("parent-node-2".into());
+        super::set_project_agent_launch_snapshot(&mut changed_parent.snapshot, &rebound_launch)
+            .unwrap();
+        let error = save_record(&db, &changed_parent).unwrap_err();
+        assert!(error.to_string().contains("creative parent cannot change"));
+
+        let mutations = [
+            (Some("project-2"), Some("thread-3"), "conv-owned"),
+            (Some("project-1"), Some("thread-2"), "conv-owned"),
+            (Some("project-1"), Some("thread-1"), "conv-rebound"),
+        ];
+        for (project_id, thread_id, conversation_id) in mutations {
+            let mut rebound = same_owner.clone();
+            rebound.project_id = project_id.map(str::to_string);
+            rebound.thread_id = thread_id.map(str::to_string);
+            rebound.conversation_id = conversation_id.into();
+            rebound.status = "failed".into();
+            rebound.snapshot = json!({"run":{"status":"failed"}});
+            let error = save_record(&db, &rebound).unwrap_err();
+            assert!(error.to_string().contains("cannot change"));
+        }
+
+        let persisted = super::load_record(&db, "run-owned").unwrap();
+        assert_eq!(persisted.conversation_id, "conv-owned");
+        assert_eq!(persisted.project_id.as_deref(), Some("project-1"));
+        assert_eq!(persisted.thread_id.as_deref(), Some("thread-1"));
+        assert_eq!(
+            persisted.creative_launch_id.as_deref(),
+            Some("launch-owned")
+        );
+        assert_eq!(persisted.status, "running");
+
+        db.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO assets(id,name,store_path,created_at) VALUES ('asset-final','终稿','/final.png',1)",
+                [],
+            )
+            .unwrap();
+        let stale_expected = super::load_stored_record(&db, "run-owned").unwrap();
+        let mut terminal = stale_expected.record.clone();
+        terminal.status = "succeeded".into();
+        terminal.snapshot = json!({
+            "run":{"status":"succeeded","result_feedback_action":"accept"},
+            "artifacts":[{"id":"artifact-final","downloaded_at":null}]
+        });
+        terminal.feedback_action = Some("accept".into());
+        terminal.final_asset_id = Some("asset-final".into());
+        terminal.updated_at = 3;
+        let terminal = save_record(&db, &terminal).unwrap();
+        assert_eq!(terminal.status, "succeeded");
+        assert_eq!(terminal.final_asset_id.as_deref(), Some("asset-final"));
+
+        let mut stale_refresh = stale_expected.record.clone();
+        stale_refresh.status = "running".into();
+        stale_refresh.snapshot = json!({"run":{"status":"running"}});
+        stale_refresh.feedback_action = None;
+        stale_refresh.final_asset_id = None;
+        stale_refresh.updated_at = 4;
+        let conflicted =
+            match super::save_record_if_unchanged(&db, &stale_expected, &stale_refresh).unwrap() {
+                super::SaveRecordCasResult::Saved(_) => panic!("stale refresh must fail CAS"),
+                super::SaveRecordCasResult::Conflict(current) => current.record,
+            };
+        assert_eq!(conflicted.status, "succeeded");
+        assert_eq!(conflicted.final_asset_id.as_deref(), Some("asset-final"));
+
+        let merged = save_record(&db, &stale_refresh).unwrap();
+        assert_eq!(merged.status, "succeeded");
+        assert_eq!(merged.final_asset_id.as_deref(), Some("asset-final"));
+        assert_eq!(
+            super::project_agent_launch_from_snapshot(&merged.snapshot),
+            Some(launch.clone())
+        );
+        assert_eq!(
+            merged
+                .snapshot
+                .pointer("/run/status")
+                .and_then(serde_json::Value::as_str),
+            Some("succeeded")
+        );
+
+        let mut acknowledged = merged.clone();
+        acknowledged.snapshot = json!({
+            "run":{"status":"succeeded","result_feedback_action":"accept"},
+            "artifacts":[{
+                "id":"artifact-final",
+                "downloaded_at":"2026-09-04T00:00:00Z"
+            }]
+        });
+        acknowledged.updated_at = 5;
+        let acknowledged = save_record(&db, &acknowledged).unwrap();
+        assert_eq!(acknowledged.status, "succeeded");
+        assert_eq!(
+            acknowledged
+                .snapshot
+                .pointer("/artifacts/0/downloaded_at")
+                .and_then(serde_json::Value::as_str),
+            Some("2026-09-04T00:00:00Z"),
+            "同一终态必须继续吸收 artifact_received 的持久确认"
+        );
+        assert_eq!(acknowledged.final_asset_id.as_deref(), Some("asset-final"));
+        assert_eq!(
+            super::project_agent_launch_from_snapshot(&acknowledged.snapshot),
+            Some(launch)
+        );
+
+        let mut stale_terminal = acknowledged.clone();
+        stale_terminal.snapshot = json!({
+            "run":{"status":"succeeded","result_feedback_action":"accept"},
+            "artifacts":[{"id":"artifact-final","downloaded_at":null}]
+        });
+        stale_terminal.updated_at = 6;
+        let stale_terminal = save_record(&db, &stale_terminal).unwrap();
+        assert_eq!(
+            stale_terminal
+                .snapshot
+                .pointer("/artifacts/0/downloaded_at")
+                .and_then(serde_json::Value::as_str),
+            Some("2026-09-04T00:00:00Z"),
+            "迟到的同终态响应不能擦除已经确认的 artifact receipt"
+        );
+    }
+
+    #[test]
+    fn legacy_agent_launch_checkpoint_defaults_missing_parent_node() {
+        let launch: crate::core::project_canvas::ProjectAgentLaunchInput =
+            serde_json::from_value(json!({
+                "projectId": "project-1",
+                "threadId": "thread-1",
+                "launchId": "launch-legacy",
+                "prompt": "继续创作",
+                "provider": "cloud",
+                "ratio": null,
+                "visualProfile": null,
+                "referenceAssetIds": [],
+                "parentAssetId": "asset-1"
+            }))
+            .unwrap();
+        assert!(launch.parent_node_id.is_none());
+        assert_eq!(launch.parent_asset_id.as_deref(), Some("asset-1"));
+    }
+
+    #[test]
+    fn cloud_agent_provider_conversation_survives_database_reopen() {
+        let path = std::env::temp_dir().join(format!(
+            "bowerbird-cloud-agent-restart-{}.db",
+            ulid::Ulid::new()
+        ));
+        {
+            let db = Database::open(&path).unwrap();
+            db.migrate().unwrap();
+            db.create_project("project-restart", "项目", "项目", "项目", "blank")
+                .unwrap();
+            db.ensure_project_canvas("project-restart").unwrap();
+            db.create_creative_thread(&crate::core::project_canvas::NewCreativeThread {
+                id: "thread-restart".into(),
+                project_id: "project-restart".into(),
+                title: "换背景".into(),
+                origin: crate::core::creative_session_contract::CreativeThreadOrigin::Direct,
+            })
+            .unwrap();
+            db.conn
+                .lock()
+                .unwrap()
+                .execute(
+                    "INSERT INTO assets(id,name,store_path,created_at) VALUES ('parent-asset','父素材','/parent.png',1)",
+                    [],
+                )
+                .unwrap();
+            let parent_payload = serde_json::json!({
+                "schema_version": 1,
+                "snapshot": { "name": "父素材" },
+                "execution": { "run_id": "older-run" }
+            })
+            .to_string();
+            for (index, node_id) in ["parent-first", "parent-selected"].into_iter().enumerate() {
+                db.create_canvas_node(&crate::core::project_canvas::NewCanvasNode {
+                    id: node_id.into(),
+                    project_id: "project-restart".into(),
+                    thread_id: Some("thread-restart".into()),
+                    kind: crate::core::creative_session_contract::CreativeNodeKind::Asset,
+                    asset_id: Some("parent-asset".into()),
+                    role: Some(crate::core::creative_session_contract::CreativeNodeRole::Output),
+                    payload_json: parent_payload.clone(),
+                    x: index as f64 * 220.0,
+                    y: 0.0,
+                    width: 190.0,
+                    height: 180.0,
+                    z_index: index as i64,
+                    position_locked: false,
+                })
+                .unwrap();
+            }
+            let launch = crate::core::project_canvas::ProjectAgentLaunchInput {
+                project_id: "project-restart".into(),
+                thread_id: "thread-restart".into(),
+                launch_id: "launch-restart".into(),
+                prompt: "换背景".into(),
+                provider: "cloud".into(),
+                ratio: None,
+                visual_profile: None,
+                reference_asset_ids: vec![],
+                parent_node_id: Some("parent-selected".into()),
+                parent_asset_id: Some("parent-asset".into()),
+            };
+            let mut snapshot = json!({
+                "conversationId":"provider-conversation-restart",
+                "run":{
+                    "id":"run-restart",
+                    "conversation_id":"provider-conversation-restart",
+                    "status":"uploading"
+                }
+            });
+            super::set_project_agent_launch_snapshot(&mut snapshot, &launch).unwrap();
+            let record = CloudAgentRunRecord {
+                run_id: "run-restart".into(),
+                conversation_id: "provider-conversation-restart".into(),
+                skill_id: "bowerbird-controlled-image-edit".into(),
+                status: "uploading".into(),
+                intent_prompt: "换背景".into(),
+                reference_asset_ids: vec![],
+                project_id: Some("project-restart".into()),
+                thread_id: Some("thread-restart".into()),
+                creative_launch_id: Some("launch-restart".into()),
+                snapshot,
+                feedback_action: None,
+                final_asset_id: None,
+                created_at: 1,
+                updated_at: 1,
+            };
+            save_record(&db, &record).unwrap();
+        }
+
+        {
+            let reopened = Database::open(&path).unwrap();
+            let mut restored = super::load_record(&reopened, "run-restart").unwrap();
+            assert_eq!(restored.conversation_id, "provider-conversation-restart");
+            assert_eq!(
+                restored
+                    .snapshot
+                    .pointer("/run/conversation_id")
+                    .and_then(serde_json::Value::as_str),
+                Some("provider-conversation-restart")
+            );
+            assert_eq!(restored.status, "uploading");
+            assert_eq!(restored.project_id.as_deref(), Some("project-restart"));
+            assert_eq!(restored.thread_id.as_deref(), Some("thread-restart"));
+            assert_eq!(
+                restored.creative_launch_id.as_deref(),
+                Some("launch-restart")
+            );
+            assert_eq!(
+                super::project_agent_launch_from_snapshot(&restored.snapshot)
+                    .and_then(|launch| launch.parent_node_id),
+                Some("parent-selected".into())
+            );
+            super::recover_agent_projections(&reopened, std::slice::from_mut(&mut restored));
+            assert_eq!(
+                reopened.thread_for_agent("run-restart").unwrap().as_deref(),
+                Some("thread-restart")
+            );
+            let canvas = reopened.project_canvas_snapshot("project-restart").unwrap();
+            let projected = canvas
+                .nodes
+                .iter()
+                .find(|node| {
+                    node.kind
+                        == crate::core::creative_session_contract::CreativeNodeKind::AgentGroup
+                })
+                .expect("restart recovery should restore the Agent execution node");
+            let payload: crate::core::creative_session_contract::AgentGroupNodePayloadV1 =
+                serde_json::from_str(&projected.payload_json).unwrap();
+            assert_eq!(
+                payload.conversation_id.as_deref(),
+                Some("provider-conversation-restart")
+            );
+            let prompt = canvas
+                .nodes
+                .iter()
+                .find(|node| {
+                    node.kind == crate::core::creative_session_contract::CreativeNodeKind::Prompt
+                })
+                .expect("restart recovery should rebuild the Agent prompt");
+            assert!(canvas.edges.iter().any(|edge| {
+                edge.from_node_id == "parent-selected" && edge.to_node_id == prompt.id
+            }));
+            assert!(!canvas.edges.iter().any(|edge| {
+                edge.from_node_id == "parent-first" && edge.to_node_id == prompt.id
+            }));
+        }
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("db-wal"));
+        let _ = std::fs::remove_file(path.with_extension("db-shm"));
+    }
+
+    #[test]
+    fn creative_agent_projection_keeps_a_bounded_safe_snapshot() {
+        let events = (0..120)
+            .map(|seq| {
+                json!({
+                    "seq": seq,
+                    "type": "step_progress",
+                    "step": "render",
+                    "progress": seq,
+                    "display_payload": { "summary": format!("事件 {seq}") },
+                    "private_payload": { "signedUrl": "must-not-project" }
+                })
+            })
+            .collect::<Vec<_>>();
+        let record = CloudAgentRunRecord {
+            run_id: "run-projection".into(),
+            conversation_id: "conv-projection".into(),
+            skill_id: "bowerbird-controlled-image-edit".into(),
+            status: "awaiting_approval".into(),
+            intent_prompt: "生成终稿".into(),
+            reference_asset_ids: vec![],
+            project_id: None,
+            thread_id: Some("creative-1".into()),
+            creative_launch_id: Some("launch-1".into()),
+            snapshot: json!({
+                "run": {
+                    "status": "awaiting_approval",
+                    "agent_runtime": "legacy_kernel",
+                    "current_step": "plan",
+                    "progress": 25,
+                    "budget_credits": 48,
+                    "visual_profile_id": "profile-1",
+                    "visual_profile_version": 3,
+                    "visual_profile_hash": "profile-hash"
+                },
+                "events": events,
+                "approvals": [{
+                    "id": "approval-1",
+                    "kind": "controlled_image_edit_plan",
+                    "status": "pending",
+                    "proposal_hash": "hash",
+                    "planned_tool_count": 2,
+                    "estimated_additional_credits": 16,
+                    "proposal": { "title": "执行计划", "summary": "两步生成" }
+                }],
+                "clarifications": [{
+                    "id": "clarification-1",
+                    "status": "pending",
+                    "question": { "question": "使用哪种构图？", "recommendedAnswer": "居中构图" }
+                }],
+                "artifacts": [{
+                    "id": "artifact-1",
+                    "role": "stage_result",
+                    "step_id": "render",
+                    "mime": "image/png",
+                    "user_visible": true,
+                    "signed_url": "must-not-project"
+                }]
+            }),
+            feedback_action: None,
+            final_asset_id: None,
+            created_at: 1,
+            updated_at: 1,
+        };
+        let payload = agent_group_payload(&record);
+        assert_eq!(payload.events.len(), 96);
+        assert_eq!(payload.events[0].seq, 24);
+        assert_eq!(payload.events.last().unwrap().progress, Some(100));
+        assert_eq!(payload.approvals[0].title.as_deref(), Some("执行计划"));
+        assert_eq!(
+            payload.clarifications[0].recommended_answer.as_deref(),
+            Some("居中构图")
+        );
+        assert_eq!(payload.artifacts[0].artifact_id, "artifact-1");
+        assert_eq!(
+            payload
+                .visual_profile
+                .as_ref()
+                .map(|profile| profile.profile_id.as_str()),
+            Some("profile-1")
+        );
+        let serialized = serde_json::to_string(&payload).unwrap();
+        assert!(!serialized.contains("signedUrl"));
+        assert!(!serialized.contains("must-not-project"));
     }
 
     #[test]
@@ -2168,6 +4620,8 @@ mod tests {
                     intent_prompt: prompt.into(),
                     reference_asset_ids: vec![],
                     project_id: None,
+                    thread_id: None,
+                    creative_launch_id: None,
                     snapshot: json!({"run":{"status":"queued"}}),
                     feedback_action: None,
                     final_asset_id: None,

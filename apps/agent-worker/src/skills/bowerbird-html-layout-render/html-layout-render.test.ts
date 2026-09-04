@@ -27,7 +27,7 @@ test("HTML layout Skill bundle is hash-pinned and statically registered", () => 
   ok(/^[0-9a-f]{64}$/.test(bundle.instructionHash));
   const resolved = BUILTIN_SKILL_REGISTRY.resolve(bundle.id, bundle.version);
   equal(resolved.runner, "html-layout-render");
-  equal(BUILTIN_SKILL_REGISTRY.list().length, 2);
+  equal(BUILTIN_SKILL_REGISTRY.list().length, 3);
 });
 
 test("HTML layout input validator accepts only a closed explicit artifact manifest", () => {
@@ -44,6 +44,8 @@ test("compose action binds asset keys to the exact Run manifest and rejects loca
   throws(() => validateComposeHtmlDocumentAction({ ...valid, html: '<img src="https:\/\/example.com\/a.png">' }, ids), /compose_external_locator/);
   throws(() => validateComposeHtmlDocumentAction({ ...valid, html: '<img src="asset:reference-3">' }, ids), /compose_asset_reference/);
   throws(() => validateComposeHtmlDocumentAction({ ...valid, html: '<script>alert(1)<\/script>' }, ids), /compose_unsafe_markup/);
+  throws(() => validateComposeHtmlDocumentAction({ ...valid, html: '<style>/* section */main{display:block}</style><main>x</main>' }, ids), /compose_unsafe_markup/);
+  throws(() => validateComposeHtmlDocumentAction({ ...valid, html: '<!-- section --><main>x</main>' }, ids), /compose_unsafe_markup/);
 });
 
 test("compose correction tells the model which closed validator rule failed", async () => {

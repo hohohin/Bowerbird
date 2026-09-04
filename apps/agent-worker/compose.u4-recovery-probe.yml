@@ -1,0 +1,6 @@
+services:
+  generation-worker:
+    environment:
+      # Explicitly test-only. The base production Compose does not set this;
+      # deploy without this overlay to restore the zero-delay default.
+      BOWERBIRD_TEST_AGENT_CLAIM_DELAY_MS: "10000"

@@ -24,6 +24,12 @@
 //!   0002 改名触发器不再清空新列，存量整表回填
 //! - `0020_asset_reference_count.sql`：素材被创作板调用（参考）计数（assets.reference_count，
 //!   hook 解析 generation_meta.payload.references 回填历史）
+//! - `0021_project_canvas.sql`：一项目一画板、项目内多条创作线程及语义图
+//!   （PROJECT-CANVAS-PLAN PB1；替代未发布的旧 creative-session migration）
+//! - `0022_project_execution_projection.sql`：普通生成 / Agent 执行身份到
+//!   project + thread 的安全投影（PROJECT-CANVAS-PLAN PB1/PB4）
+//! - `0023_project_canvas_backfill.sql`：项目画板历史合并 v2 的逐来源账本与报告
+//!   （PROJECT-CANVAS-PLAN PB5）
 
 use rusqlite_migration::{Migrations, M};
 
@@ -61,6 +67,11 @@ pub fn migrations() -> Migrations<'static> {
             include_str!("../../sql/0020_asset_reference_count.sql"),
             |tx: &rusqlite::Transaction| backfill_asset_reference_counts(tx),
         ),
+        M::up(include_str!("../../sql/0021_project_canvas.sql")),
+        M::up(include_str!(
+            "../../sql/0022_project_execution_projection.sql"
+        )),
+        M::up(include_str!("../../sql/0023_project_canvas_backfill.sql")),
     ])
 }
 
@@ -207,6 +218,68 @@ mod tests {
     use image::RgbImage;
 
     use crate::media::phash::testutil::make_photo;
+
+    #[test]
+    fn migration_0022_preserves_agent_runs_and_adds_project_thread_projection_keys() {
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        let ms = migrations();
+        ms.to_version(&mut conn, 21).unwrap();
+        conn.execute(
+            "INSERT INTO cloud_agent_runs (run_id,conversation_id,skill_id,status,intent_prompt,reference_asset_ids,snapshot_json,created_at,updated_at) VALUES ('run-old','conv-old','skill','queued','prompt','[]','{}',1,1)",
+            [],
+        )
+        .unwrap();
+
+        ms.to_latest(&mut conn).unwrap();
+
+        let preserved: (String, Option<String>, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT run_id,project_id,thread_id,creative_launch_id FROM cloud_agent_runs WHERE run_id='run-old'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(preserved, ("run-old".into(), None, None, None));
+        let mapping_table: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='cloud_agent_artifact_assets'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(mapping_table, 1);
+    }
+
+    #[test]
+    fn migration_0021_enforces_one_canvas_per_project_and_project_scoped_threads() {
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        migrations().to_version(&mut conn, 21).unwrap();
+        conn.execute(
+            "INSERT INTO projects (id,name,workspace_path,workspace_key,created_at,kind) VALUES ('p1','一','blank:p1','blank:p1',1,'blank'),('p2','二','blank:p2','blank:p2',1,'blank')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO project_canvases (project_id,draft_json,created_at,updated_at) VALUES ('p1','{\"schema_version\":1}',1,1)",
+            [],
+        )
+        .unwrap();
+        assert!(conn.execute(
+            "INSERT INTO project_canvases (project_id,draft_json,created_at,updated_at) VALUES ('p1','{\"schema_version\":1}',2,2)",
+            [],
+        ).is_err());
+        conn.execute(
+            "INSERT INTO creative_threads (id,project_id,title,origin,created_at,updated_at) VALUES ('t1','p1','线程','direct',1,1)",
+            [],
+        )
+        .unwrap();
+        assert!(conn.execute(
+            "INSERT INTO canvas_nodes (id,project_id,thread_id,kind,role,payload_json,x,y,width,height,created_at,updated_at) VALUES ('bad','p2','t1','prompt',NULL,'{\"schema_version\":1,\"text\":\"x\"}',0,0,100,100,1,1)",
+            [],
+        ).is_err());
+    }
 
     /// 0020 回填：v19 旧库（无 reference_count）插入资产生成 meta 后升到最新，
     /// generation_meta.payload.references 命中的资产按次数累加；同条 meta 内重复去重；

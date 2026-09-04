@@ -1,8 +1,8 @@
 # Bowerbird 受限 HTML 离线排版与截图开发计划
 
-> 版本：v1.4
-> 日期：2026-08-28
-> 状态：决策已冻结；**H0–H5 已完成，H6 test-only 观察已开始**：renderer/Worker、migration `0044`–`0046`、Edge 与桌面链路均已完成生产验收；H6 无内容观察报告已上线，首批开发/验收历史样本已形成基线，renderer `0.1.1` 生产指纹 `bwr1-c0ee5722787c038aa560e4a5cbb54df2`；当前不扩大开放、不调整计费，下一步只积累 H5 验收之后的测试名单样本并完成人工 UX 判断
+> 版本：v1.5
+> 日期：2026-09-02
+> 状态：决策已冻结；**H0–H5 已完成，H6 test-only 观察继续**：renderer/Worker、migration `0044`–`0046`、Edge 与桌面旧 HTML Skill 链路均已完成生产验收；U6 统一 DSH Agent 又在不改变 renderer 安全契约的前提下真实复用同一 `render_html`，migration `0052` 补齐 unified HTML 主截图原子结算。renderer `0.1.1` 生产指纹仍为 `bwr1-c0ee5722787c038aa560e4a5cbb54df2`；当前不扩大开放、不调整计费。
 > 适用范围：Bowerbird VPS Worker、Bowerbird Agent Kernel、官方内置 Skill、桌面 Agent 会话  
 > 依赖文档：[`PROJECT.md`](../PROJECT.md)、[`AGENT-RUNTIME-PLAN.md`](AGENT-RUNTIME-PLAN.md)、[`UNIFIED-AGENT-HARNESS-PLAN.md`](UNIFIED-AGENT-HARNESS-PLAN.md)
 > **2026-08-28 后续架构边界：** 本文件继续作为离线 renderer、安全容器、HTML/CSS 契约、整页/切片和旧 HTML Skill 行为的实现权威；“理解产品图、使用视觉设定、生成缺图、视觉检查与修订”不继续堆入旧 Runner，而在通用云端 Agent Harness 的 U3 纵切中实现。renderer 仍是确定性工具，不演化为浏览器 Agent。
@@ -578,6 +578,7 @@ renderer 是 Worker 内部确定性工具服务，不成为新的用户身份或
 > - renderer `/healthz` 已加入 cgroup v2 资源快照（含 Chromium 子进程的 current/peak memory 与 PIDs；本地无 cgroup 时降级为 Node RSS/heap）。生产安全自检全绿，720×3840+4 切片 E2E 后峰值 424,951,808 bytes（约 405 MiB）/ 74 PIDs，Worker queue=0、active=0、expired lease=0。
 > - 首次桌面人工操作暴露入口状态分叉：Skill 下拉可显示“HTML 排版截图”，但独立 Agent 开关仍可能为关闭，发送遂落回普通生图且云端没有创建 HTML Run。桌面现以 `null | skillId` 单状态表达正式 Agent：选择 HTML 会同时激活对应 Agent，关闭或切换其他 Agent 会清空 Skill，消除“看似选中、实际直发”的非法组合；零依赖状态回归 4/4、前端 lint/build 通过。该次操作不计入 H6 样本，T3 待新版桌面真机复测。
 > - 继续维持 test-only 与 `html_render=0`；镜像扫描器当前 VPS 未安装，扩大开放前仍须按 H5 流程补扫描。T3 的界面理解度只能由真实桌面用户判断，T4/T5 不自动决策。
+> - **U6 复用实证（2026-09-02）**：统一 DSH Agent 已在真实 VPS 链路自主选择并完成 `compose_html → render_html → inspect_artifact → finalize_output`，最终 Run `dfd240f5-9787-4cdf-93f6-3a161f90edb4` 由同一 renderer 输出 1080×3948 整页 + 4 切片，renderer usage 仍为 0 credits、指纹不变。Worker 侧补上“刚上传 HTML/PNG 尚无签名 URL”时的本 Run 内存缓存，保证 render 后立即 inspect；migration `0052` 只扩展 unified Agent 的主截图结算，不修改旧 HTML Skill 的 Vision=0、一次 render、用户判断边界。
 
 **目标**：以真实负载确认 VPS 容量、输出稳定性和用户价值。
 

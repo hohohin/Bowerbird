@@ -4,21 +4,21 @@ export default {
   theme: {
     extend: {
       colors: {
-        // 与官网共用的品牌色阶：暖黑基底、强蓝动作色、荧光绿状态色。
-        canvas: "#100e0e",
-        panel: "#171515",
-        panel2: "#1d1b1b",
-        edge: "#292727",
-        ink: "#fdfff0",
-        muted: "#969692",
-        faint: "#666460",
-        cold: "#94a3b8",
-        accent: "#4868ff",
-        "accent-soft": "#dfe5ff",
-        lime: "#d9ff52",
+        // 主题色由 styles.css 的 RGB 令牌提供，保留 Tailwind 的 /opacity 语法。
+        canvas: "rgb(var(--bb-bg-rgb) / <alpha-value>)",
+        panel: "rgb(var(--bb-surface-rgb) / <alpha-value>)",
+        panel2: "rgb(var(--bb-surface-2-rgb) / <alpha-value>)",
+        edge: "rgb(var(--bb-line-rgb) / <alpha-value>)",
+        ink: "rgb(var(--bb-ink-rgb) / <alpha-value>)",
+        muted: "rgb(var(--bb-muted-rgb) / <alpha-value>)",
+        faint: "rgb(var(--bb-faint-rgb) / <alpha-value>)",
+        cold: "rgb(var(--bb-cold-rgb) / <alpha-value>)",
+        accent: "rgb(var(--bb-blue-rgb) / <alpha-value>)",
+        "accent-soft": "rgb(var(--bb-blue-soft-rgb) / <alpha-value>)",
+        lime: "rgb(var(--bb-lime-rgb) / <alpha-value>)",
       },
       boxShadow: {
-        panel: "0 18px 55px rgba(0, 0, 0, 0.34)",
+        panel: "0 18px 55px rgb(var(--bb-shadow-rgb) / 34%)",
       },
     },
   },

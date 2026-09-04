@@ -9,7 +9,6 @@ import { corsHeaders } from "../_shared/limits.ts";
 const BUCKET = "generation-temp";
 const LEASE_SECONDS = 90;
 const SIGNED_URL_SECONDS = 300;
-let nextCleanupAt = 0;
 
 function requiredEnv(name: string): string {
   const value = Deno.env.get(name)?.trim();
@@ -77,7 +76,6 @@ async function assertLease(admin: SupabaseClient, jobId: string, leaseId: string
 }
 
 async function actionClaim(admin: SupabaseClient, workerId: string): Promise<Response> {
-  await maybeCleanupExpired(admin);
   const reconciled = await admin.rpc("reconcile_stale_generation_jobs", { p_limit: 100 });
   if (reconciled.error) throw new ApiError("internal_error", "失联任务对账失败", true);
   const result = await admin.rpc("claim_generation_job", {
@@ -105,24 +103,27 @@ async function actionClaim(admin: SupabaseClient, workerId: string): Promise<Res
   });
 }
 
-async function maybeCleanupExpired(admin: SupabaseClient): Promise<void> {
+async function actionCleanupExpired(admin: SupabaseClient): Promise<Response> {
   const now = Date.now();
-  if (now < nextCleanupAt) return;
-  nextCleanupAt = now + 10 * 60 * 1000;
   const { data, error } = await admin.from("generation_jobs")
     .select("id,request_object_key,output_object_key")
     .lt("content_expires_at", new Date(now).toISOString())
     .is("deleted_at", null)
     .limit(100);
   if (error) throw new ApiError("internal_error", "过期云任务查询失败", true);
-  for (const raw of data ?? []) {
-    const row = raw as { id: string; request_object_key: string; output_object_key: string | null };
-    const keys = [row.request_object_key, row.output_object_key].filter((key): key is string => Boolean(key));
-    const removed = keys.length ? await admin.storage.from(BUCKET).remove(keys) : { error: null };
-    if (removed.error) continue;
-    await admin.from("generation_jobs").update({ deleted_at: new Date().toISOString() })
-      .eq("id", row.id).is("deleted_at", null);
+  const rows = (data ?? []) as Array<{ id: string; request_object_key: string; output_object_key: string | null }>;
+  const keys = [...new Set(rows.flatMap((row) => [row.request_object_key, row.output_object_key])
+    .filter((key): key is string => Boolean(key)))];
+  if (keys.length) {
+    const removed = await admin.storage.from(BUCKET).remove(keys);
+    if (removed.error) throw new ApiError("internal_error", "过期云任务对象删除失败", true);
   }
+  if (rows.length) {
+    const updated = await admin.from("generation_jobs").update({ deleted_at: new Date(now).toISOString() })
+      .in("id", rows.map((row) => row.id)).is("deleted_at", null);
+    if (updated.error) throw new ApiError("internal_error", "过期云任务标记失败", true);
+  }
+  return jsonResponse({ expiredJobs: rows.length, removedObjects: keys.length });
 }
 
 async function actionHeartbeat(admin: SupabaseClient, body: Record<string, unknown>): Promise<Response> {
@@ -233,7 +234,8 @@ Deno.serve(async (request) => {
     const body = await request.json().catch(() => ({})) as Record<string, unknown>;
     const action = typeof body.action === "string" ? body.action : "";
     let response: Response;
-    if (action === "claim") response = await actionClaim(admin, workerId);
+    if (action === "cleanup_expired") response = await actionCleanupExpired(admin);
+    else if (action === "claim") response = await actionClaim(admin, workerId);
     else if (action === "heartbeat") response = await actionHeartbeat(admin, body);
     else if (action === "submitted") response = await actionSubmitted(admin, body);
     else if (action === "output_upload") response = await actionOutputUpload(admin, body);

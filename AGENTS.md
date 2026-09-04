@@ -9,13 +9,15 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 | 文档 | 内容 | 何时读 |
 |---|---|---|
 | `PROJECT.md` | **活文档（项目内容唯一权威）**：项目说明 / 目前进展 / 关键约定 / 踩坑记录 | 每次开工前先读「目前进展」与「关键约定」 |
-| `dev-doc/Bowerbird开发计划.md` | 完整开发计划 v1.3（定位 / 技术栈 / 数据模型 / Roadmap / 风险）；同名 HTML 是其渲染版 | 任何实现工作之前必读，技术权威源 |
+| `dev-doc/Bowerbird开发计划.md` | 完整开发计划 v1.3（定位 / 技术栈 / 数据模型 / Roadmap / 风险）；同名 HTML 是其渲染版 | 任何实现工作之前必读；作为基础设计源，若与 `PROJECT.md` 的较新决策或专项计划冲突，以后两者为准 |
 | `dev-doc/Bowerbird定价方案v2-订阅积分制.md` | 商业模式与定价（免费+订阅+积分混合制 / 四档结构 / 积分消耗表 / 毛利测算；已取代 PRICING.md v1 买断制） | 商业化、定价、积分、功能门控相关工作前必读 |
 | `dev-doc/ARCH-ADJUST-PLAN.md` | 收费化架构调整开发计划（账号 / 积分 / 托管 provider / 支付 / 门控，P0–P9 阶段任务卡 + 验收标准；agent 执行用） | 收费化 / 账号 / 积分 / 云端任何实现工作前必读 |
 | `dev-doc/ARCH-ADJUST-PROGRESS.md` | 收费化架构调整跨会话进度、部署状态、测试基线与剩余阻塞 | 接续收费化任务或核对线上状态时必读 |
 | `dev-doc/AGENT-RUNTIME-PLAN.md` | Bowerbird 内置 Skill Agent Runtime 开发计划（Agent Kernel / 有限澄清 / 项目视觉设定 / VPS Worker / Supabase / 方舟，A0–A8 + V0–V4） | Agent loop / 内置 Skill / 项目视觉设定 / VPS Worker / Agent 临时云工作区实现前必读 |
 | `dev-doc/UNIFIED-AGENT-HARNESS-PLAN.md` | **通用云端 Agent Harness 新专项**（一个 Agent + 多种受控工具；DSH + DeepSeek API Spike；Tool Gateway；HTML/小红书复用边界，U0–U6） | 新 Agent 能力、DSH/ACP、通用 Tool Gateway、HTML 智能编排、小红书或任何可能新增 Agent Runner 的工作前必读 |
 | `dev-doc/HTML-RENDER-PLAN.md` | 受限 HTML 离线排版、整页/切片截图、独立 renderer 容器与内置 Skill 接入开发计划（H0–H6） | HTML 排版/截图、Chromium/Playwright renderer、`render_html` 工具或第二个官方 Skill 实现前必读 |
+| `dev-doc/PROJECT-CANVAS-PLAN.md` | **项目即画板当前专项**（一项目一块无限画板 / 项目内多创作线程 / 普通生成与 Agent Run 归属 / 历史合并，PB0–PB7） | 画板、项目、创作入口、生成时间线、版本分支、历史迁移或相关 SQLite 模型实现前必读；当前执行权威 |
+| `dev-doc/CANVAS-SESSION-PLAN.md` | 已被替代的“一画板一会话”CS0–CS7 实施、测试与旧迁移演练记录 | 仅在追溯旧 `creative_session` 实现和对账证据时阅读；不得作为当前产品契约 |
 | `dev-doc/进展归档.md` | PROJECT.md「目前进展」历史里程碑全量归档（append-only 只进不改；PROJECT.md 只留最近 3 条） | 追溯旧里程碑 / 查历史实现细节时 |
 | `dev-doc/FRAMEWORK_ADJUST.md` | 为收费的架构调整清单（7 项，ARCH-ADJUST-PLAN.md 的依据） | 收费化架构溯源时 |
 | `dev-doc/研究报告-服务器化CLI与API化改造可行性.md` | 服务器套壳 CLI vs 官方 API 可行性结论（推荐火山方舟官方 API） | 托管算力 / 远程化方向决策前必读 |
@@ -31,21 +33,24 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 > **单一权威源**：项目内容（说明 / 进展 / 约定 / 踩坑）只落在 `PROJECT.md`。本文件除「文档索引」表外不存放任何项目内容；项目内容变更一律改 `PROJECT.md`，不要写入本文件。
 
-> 当用户说**存档**时，进行下面步骤
+> 当用户说**存档**时，在同一次存档流程中按下面顺序完成
 
-### git commit
-
-### 更新 `PROJECT.md`（不更新即信息遗漏）
+### 1. 更新 `PROJECT.md`（不更新即信息遗漏）
 
 - **关键约定/决策变化**（技术栈、范围、优先级、架构、是否做某模块）→ 改 `# 关键约定`。
 - **阶段或里程碑变化**（开工、进入新 Phase、完成里程碑、发布版本、关键 spike 出结论）→ 改 `# 目前进展`：新条目插「近期里程碑」顶部，**只保留最近 3 条**；被挤出前 3 的旧条目整条移入 `dev-doc/进展归档.md`「归档条目」区顶部（原样搬运，不改文字、不删内容）。
 - **踩坑并已定位根因/绕过方案** → 写入 `# 踩坑记录`。
 - **项目定位/说明变化** → 改 `# 项目说明`。
 
-### 在本文档更新索引（若有）
+### 2. 在本文档更新索引（若有）
 
 - 新增或删除重要文档 / 板块 → 加行或删行。
 - 文档改名、移动，或其「何时读」定位变化 → 改对应行。
+
+### 3. 复核并提交
+
+- 先检查与本次任务相关的测试结果和最终 diff，确认没有夹带无关修改。
+- 将代码与上述文档更新放进同一个 `git commit`，避免先提交代码、再把文档留在工作区。
 
 ---
 

@@ -5,32 +5,20 @@ import { useStore } from "../store";
 import { api } from "../lib/api";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { notifyError, notifySuccess } from "../lib/notify";
-import type { ProjectDeleteMode, ProjectDeleteResult } from "../lib/types";
+import type { ProjectDeleteImpact } from "../lib/types";
+import {
+  workspaceProjectDeleteMode,
+  type WorkspaceProjectDeleteMode,
+} from "../lib/workspaceRoute";
 
 const MENU_WIDTH = 232;
-// 全量项（更新文件 + 删除组三模式 + 标签与分隔线）估算高度，用于视口边缘钳制。
-const MENU_HEIGHT = 240;
-
-function deleteResultMessage(mode: ProjectDeleteMode, result: ProjectDeleteResult): string {
-  if (mode === "keep") {
-    return "项目已删除，素材仍保留在全局";
-  }
-  if (mode === "move_out") {
-    return (
-      `已移出 ${result.moved_assets} 张素材回 workspace，保留 ${result.preserved_shared} 张共享素材` +
-      (result.failed_moves.length > 0
-        ? `；${result.failed_moves.length} 张移出失败已保留在全局`
-        : "")
-    );
-  }
-  return `已物理删除 ${result.deleted_assets} 张独占素材，保留 ${result.preserved_shared} 张共享素材`;
-}
+const MENU_HEIGHT = 146;
 
 /**
  * 侧栏项目右键菜单：更新项目文件 / 删除项目。
  * 「更新项目文件」重新扫描项目 workspace 文件夹，把应用外手动放进来的新图片导入并加入项目
- * （约定 18：项目不监听文件夹，同步由用户手动触发）；「删除项目」三模式与旧侧栏行内删除
- * 面板语义一致（keep / move_out / delete_exclusive），物理删除仍过确认弹窗。
+ * （约定 18：项目不监听文件夹，同步由用户手动触发）。删除项目只删除其唯一画板、内部
+ * 线程和本地关系；中央素材与底层执行审计始终保留。
  * 全局单实例（store.projectContextMenu 驱动），挂在 App 最外层；
  * 展开态项目行（ProjectSection）/ 收起态圆标（Sidebar）各自 onContextMenu 触发。
  */
@@ -38,14 +26,16 @@ export function ProjectContextMenu() {
   const menu = useStore((s) => s.projectContextMenu);
   const close = useStore((s) => s.closeProjectContextMenu);
   const projects = useStore((s) => s.projects);
-  const exitProject = useStore((s) => s.exitProject);
-  const reloadProjects = useStore((s) => s.reloadProjects);
+  const deleteProjectCanvas = useStore((s) => s.deleteProjectCanvas);
   const [busy, setBusy] = useState(false);
-  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<{
+    projectId: string;
+    impact: ProjectDeleteImpact;
+    mode: WorkspaceProjectDeleteMode;
+  } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  // 每次打开重置子状态。（pendingDeleteId 不在此重置——点「物理删除独占素材」会先 close
-  // 收菜单再弹 dialog，menu=null 触发本 effect，重置会把尚需显示的 dialog 一起清掉。）
+  // 每次打开重置菜单状态；删除影响在菜单关闭后仍要保留给确认框。
   useEffect(() => {
     setBusy(false);
   }, [menu]);
@@ -86,14 +76,15 @@ export function ProjectContextMenu() {
     }
   }
 
-  async function remove(projectId: string, mode: ProjectDeleteMode) {
+  async function remove(projectId: string, mode: WorkspaceProjectDeleteMode) {
     setBusy(true);
     try {
-      const result = await api.deleteProject(projectId, mode);
-      // 删的是当前项目 → 退回全局，否则 active scope 悬空导致列表空白。
-      if (useStore.getState().currentProjectId === projectId) await exitProject();
-      await reloadProjects();
-      notifySuccess(deleteResultMessage(mode, result));
+      // Store owns the serialized route. Persisted canvases flush/delete there;
+      // provisional canvases are discarded without materializing first.
+      await deleteProjectCanvas(projectId);
+      notifySuccess(mode === "discard-provisional"
+        ? "未保存的空白项目已丢弃"
+        : "项目及其画板已删除，中央素材仍保留在素材库");
       close();
     } catch (e) {
       notifyError(e, "删除项目失败");
@@ -101,24 +92,68 @@ export function ProjectContextMenu() {
     }
   }
 
-  // 物理删除确认 dialog：独立于菜单渲染。点「物理删除独占素材」会先 closeContextMenu 收菜单，
-  // menu=null 走此分支单独挂载。
+  async function prepareDelete(projectId: string) {
+    setBusy(true);
+    try {
+      const mode = workspaceProjectDeleteMode(
+        useStore.getState().projects.find((project) => project.id === projectId),
+      );
+      if (mode === "discard-provisional") {
+        setPendingDelete({
+          projectId,
+          mode,
+          impact: {
+            project_asset_count: 0,
+            thread_count: 0,
+            node_count: 0,
+            running_generation_count: 0,
+            running_agent_count: 0,
+          },
+        });
+        close();
+        return;
+      }
+      const impact = await api.projectDeleteImpact(projectId);
+      setPendingDelete({ projectId, impact, mode });
+      close();
+    } catch (error) {
+      notifyError(error, "无法读取项目删除影响");
+      setBusy(false);
+    }
+  }
+
+  // 项目删除确认独立于菜单渲染；menu=null 时继续挂载确认框。
   if (!menu) {
     return (
       <ConfirmDialog
-        open={pendingDeleteId !== null}
+        open={pendingDelete !== null}
         danger
-        title="物理删除独占素材"
+        title={pendingDelete?.mode === "discard-provisional" ? "丢弃未保存项目" : "删除项目及画板"}
         message={
-          <>项目的独占素材将从全局及所有项目物理删除，<strong>不可恢复</strong>；共享素材保留。</>
+          pendingDelete?.mode === "discard-provisional" ? (
+            <>将丢弃这块尚未保存的空白画板；中央素材不受影响。此操作<strong>不可恢复</strong>。</>
+          ) : (
+            <>
+              将删除 1 块项目画板、{pendingDelete?.impact.thread_count ?? 0} 条创作线程和 {pendingDelete?.impact.node_count ?? 0} 个节点；
+              {pendingDelete?.impact.project_asset_count ?? 0} 张中央素材与底层执行审计都会保留。
+              {((pendingDelete?.impact.running_generation_count ?? 0) + (pendingDelete?.impact.running_agent_count ?? 0)) > 0
+                ? <> 当前还有 <strong>{(pendingDelete?.impact.running_generation_count ?? 0) + (pendingDelete?.impact.running_agent_count ?? 0)} 个任务未完成或待入库，暂不可删除。</strong></>
+                : <> 此操作<strong>不可恢复</strong>。</>}
+            </>
+          )
         }
-        confirmLabel="物理删除"
+        confirmLabel={pendingDelete?.mode === "discard-provisional"
+          ? "丢弃项目"
+          : ((pendingDelete?.impact.running_generation_count ?? 0) + (pendingDelete?.impact.running_agent_count ?? 0)) > 0
+            ? "仍有未完成任务"
+            : "删除项目"}
+        confirmDisabled={((pendingDelete?.impact.running_generation_count ?? 0) + (pendingDelete?.impact.running_agent_count ?? 0)) > 0}
         onConfirm={() => {
-          const id = pendingDeleteId;
-          setPendingDeleteId(null);
-          if (id) void remove(id, "delete_exclusive");
+          const pending = pendingDelete;
+          setPendingDelete(null);
+          if (pending) void remove(pending.projectId, pending.mode);
         }}
-        onCancel={() => setPendingDeleteId(null)}
+        onCancel={() => setPendingDelete(null)}
       />
     );
   }
@@ -127,8 +162,7 @@ export function ProjectContextMenu() {
   const projectId = menu.projectId;
   const project = projects.find((p) => p.id === projectId);
   const isBuiltin = project?.kind === "builtin";
-  // 空白项目（菜单「新建空白项目」）：无关联文件夹，「更新文件」无意义、「移出」没有
-  // workspace 可回（后端也降级 Keep），但「物理删除独占素材」照常可用。
+  // 空白项目没有关联文件夹，因此不提供「更新项目文件」。
   const isBlank = project?.kind === "blank";
 
   // 菜单定位：固定到鼠标位置，超右/下边缘时收进来。
@@ -161,49 +195,18 @@ export function ProjectContextMenu() {
       </button>
 
       <div className="app-context-divider" />
-      <div className="app-context-label">删除项目</div>
       <button
         type="button"
         role="menuitem"
-        onClick={() => void remove(projectId, "keep")}
+        onClick={() => {
+          void prepareDelete(projectId);
+        }}
         disabled={busy}
-        title="只删除项目关系，素材全部留在全局"
-        className="app-context-item px-2 py-1.5"
+        title="删除项目画板和内部线程；中央素材保留"
+        className="app-context-item is-danger px-2 py-1.5"
       >
-        仅删除项目 · 素材留在全局
+        删除项目 · 素材保留
       </button>
-      {/* 内置项目（如欢迎项目）后端强制 Keep 语义：移出/物理删除对它无意义，不显示；
-          空白项目无 workspace 可移回，「移出」不显示（「物理删除独占素材」保留）。 */}
-      {!isBuiltin && (
-        <>
-          {!isBlank && (
-            <button
-              type="button"
-              role="menuitem"
-              onClick={() => void remove(projectId, "move_out")}
-              disabled={busy}
-              title="删除项目并将独占素材文件移回 workspace 文件夹；共享素材保留在全局"
-              className="app-context-item px-2 py-1.5"
-            >
-              移出园丁鸟 · 独占素材回 workspace
-            </button>
-          )}
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              // 先收菜单再弹确认，避免两个浮层同时存在。
-              setPendingDeleteId(projectId);
-              close();
-            }}
-            disabled={busy}
-            title="从全局及所有项目物理删除独占素材；共享素材保留"
-            className="app-context-item is-danger px-2 py-1.5"
-          >
-            物理删除独占素材
-          </button>
-        </>
-      )}
     </div>,
     document.body
   );

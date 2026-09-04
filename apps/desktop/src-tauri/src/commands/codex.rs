@@ -504,7 +504,21 @@ pub async fn codex_create_image(
     job_id: String,
     conversation_id: Option<String>,
     anchor_session_id: Option<String>,
+    thread_id: Option<String>,
+    creative_session_id: Option<String>,
+    turn_key: Option<String>,
+    parent_node_id: Option<String>,
+    parent_asset_path: Option<String>,
+    creative_relation: Option<crate::core::creative_session_contract::CreativeGenerationRelation>,
 ) -> Result<String, AppError> {
+    if project_id.is_none() || thread_id.is_none() {
+        return Err(AppError::Other(
+            "新生成任务必须归属于项目画板中的创作线程".into(),
+        ));
+    }
+    // 旧 payload 字段只保留在读取模型中；项目画板上线后的新任务不再写 creative_session_id。
+    let _ = creative_session_id;
+    let turn_key = turn_key.unwrap_or_else(|| Ulid::new().to_string());
     // V4：同一 job 的首轮 capsule 是不可变权威。续轮即使当前 UI 改选了其他 profile，
     // 也必须继续使用启动时版本；新 job 才能选择另一个 confirmed profile。
     let persisted_profile = crate::core::task_queue::Task::by_id(db.inner(), &job_id)?
@@ -723,6 +737,30 @@ pub async fn codex_create_image(
                             job.submit_id = Some(submit_id.clone());
                             job.status = "querying".to_string();
                             let _ = crate::core::task_queue::Task::upsert_gen_job(db, &job);
+                            if let (Some(project_id), Some(thread_id), Some(turn_key)) = (
+                                job.project_id.as_deref(),
+                                job.thread_id.as_deref(),
+                                job.turn_key.as_deref(),
+                            ) {
+                                let _ = db.update_project_generation_turn_status(
+                                    project_id,
+                                    thread_id,
+                                    &job.id,
+                                    turn_key,
+                                    "querying",
+                                    Some(submit_id),
+                                );
+                                let _ = app_clone.emit(
+                                    "creative://changed",
+                                    serde_json::json!({
+                                        "projectId": project_id,
+                                        "threadId": thread_id,
+                                        "jobId": &job.id,
+                                        "turnKey": turn_key,
+                                        "status": "querying",
+                                    }),
+                                );
+                            }
                             tracing::info!(
                                 "gen: submit_id 落库 job={} sid={}",
                                 job_id_for_emit,
@@ -772,6 +810,12 @@ pub async fn codex_create_image(
             references: refs_for_meta.clone(),
             session_id: session_id.clone(),
             conversation_id: conversation_id.clone(),
+            thread_id: thread_id.clone(),
+            creative_session_id: None,
+            turn_key: Some(turn_key.clone()),
+            parent_node_id: parent_node_id.clone(),
+            parent_asset_path: parent_asset_path.clone(),
+            creative_relation,
             project_id: project_id.clone(),
             ratio: ratio.clone(),
             visual_profile: visual_profile.clone(),
@@ -795,6 +839,49 @@ pub async fn codex_create_image(
                 tracing::warn!("会话分组锚定失败 session={anchor} conv={conv}: {e}");
             }
         }
+    }
+
+    if let (Some(project_id), Some(thread_id)) = (project_id.as_deref(), thread_id.as_deref()) {
+        let conversation = conversation_id.as_deref().unwrap_or(&job_id);
+        if let Err(error) = db.inner().begin_project_generation_turn(
+            &crate::core::project_canvas::ProjectGenerationTurnInput {
+                project_id: project_id.to_string(),
+                thread_id: thread_id.to_string(),
+                generation_conversation_id: conversation.to_string(),
+                job_id: job_id.clone(),
+                turn_key: turn_key.clone(),
+                prompt: prompt_for_meta.clone(),
+                applied_prompt: applied_prompt.clone(),
+                provider: provider_name.clone(),
+                provider_session_id: provider_resume.clone(),
+                ratio: ratio.clone(),
+                visual_profile: visual_profile.as_ref().map(|profile| {
+                    crate::core::creative_session_contract::VisualProfileRefV1 {
+                        profile_id: profile.profile_id.clone(),
+                        version: profile.version,
+                        hash: profile.hash.clone(),
+                    }
+                }),
+                references: refs_for_meta.clone(),
+                parent_node_id: parent_node_id.clone(),
+                parent_asset_path: parent_asset_path.clone(),
+                relation: creative_relation,
+            },
+        ) {
+            let _ =
+                crate::core::task_queue::Task::mark_failed(db.inner(), &job_id, &error.to_string());
+            return Err(error);
+        }
+        let _ = app.emit(
+            "creative://changed",
+            serde_json::json!({
+                "projectId": project_id,
+                "threadId": thread_id,
+                "jobId": &job_id,
+                "turnKey": &turn_key,
+                "status": "running",
+            }),
+        );
     }
 
     // 生成开始即通知前端 job_id：同步模型下命令 await 到完成才返回 job_id，生成中前端拿不到
@@ -876,8 +963,33 @@ pub async fn codex_create_image(
             } else {
                 None
             },
+            thread_id.clone(),
+            Some(job_id.clone()),
+            Some(turn_key.clone()),
         )
         .await?;
+
+        if let (Some(project_id), Some(thread_id)) = (project_id.as_deref(), thread_id.as_deref()) {
+            db.inner().complete_project_generation_turn(
+                project_id,
+                thread_id,
+                &job_id,
+                &turn_key,
+                bookkeeping_session.as_deref(),
+                &gen_assets,
+            )?;
+            let _ = app.emit(
+                "creative://changed",
+                serde_json::json!({
+                    "projectId": project_id,
+                    "threadId": thread_id,
+                    "jobId": &job_id,
+                    "turnKey": &turn_key,
+                    "status": "done",
+                    "assetIds": gen_assets.iter().map(|asset| asset.id.clone()).collect::<Vec<_>>(),
+                }),
+            );
+        }
 
         let asset_paths: Vec<PathBuf> = gen_assets
             .iter()
@@ -897,6 +1009,30 @@ pub async fn codex_create_image(
     .await;
     GENERATE_CANCEL.lock().unwrap().remove(&job_id);
     settle_generation_task(db.inner(), &job_id, &generation_result);
+    if let (Err(error), Some(project_id), Some(thread_id)) = (
+        &generation_result,
+        project_id.as_deref(),
+        thread_id.as_deref(),
+    ) {
+        let status = if matches!(error, AppError::Codex(message) if message == "已取消") {
+            "cancelled"
+        } else {
+            "failed"
+        };
+        let _ = db.inner().update_project_generation_turn_status(
+            project_id, thread_id, &job_id, &turn_key, status, None,
+        );
+        let _ = app.emit(
+            "creative://changed",
+            serde_json::json!({
+                "projectId": project_id,
+                "threadId": thread_id,
+                "jobId": &job_id,
+                "turnKey": &turn_key,
+                "status": status,
+            }),
+        );
+    }
     generation_result?;
 
     // 生成图已入库，通知瀑布流刷新（finalize 已 emit analyses://changed + 自动命名）。
@@ -908,6 +1044,7 @@ pub async fn codex_create_image(
 /// 本地停止 CLI 子进程；远端即梦任务可能仍在运行（已扣积分），submit_id 保留可事后取回。
 #[tauri::command]
 pub async fn cancel_codex_create(
+    app: AppHandle,
     db: State<'_, Arc<Database>>,
     job_id: String,
 ) -> Result<(), AppError> {
@@ -915,6 +1052,34 @@ pub async fn cancel_codex_create(
         let _ = tx.send(());
     }
     let _ = crate::core::task_queue::Task::mark_cancelled(db.inner(), &job_id);
+    if let Some(job) =
+        crate::core::task_queue::Task::by_id(db.inner(), &job_id)?.and_then(|task| task.gen_job())
+    {
+        if let (Some(project_id), Some(thread_id), Some(turn_key)) = (
+            job.project_id.as_deref(),
+            job.thread_id.as_deref(),
+            job.turn_key.as_deref(),
+        ) {
+            let _ = db.inner().update_project_generation_turn_status(
+                project_id,
+                thread_id,
+                &job_id,
+                turn_key,
+                "cancelled",
+                job.submit_id.as_deref(),
+            );
+            let _ = app.emit(
+                "creative://changed",
+                serde_json::json!({
+                    "projectId": project_id,
+                    "threadId": thread_id,
+                    "jobId": &job_id,
+                    "turnKey": turn_key,
+                    "status": "cancelled",
+                }),
+            );
+        }
+    }
     Ok(())
 }
 
@@ -930,6 +1095,13 @@ pub struct GenJobSummary {
     pub submit_id: Option<String>,
     pub session_id: Option<String>,
     pub conversation_id: Option<String>,
+    pub thread_id: Option<String>,
+    pub creative_session_id: Option<String>,
+    pub turn_key: Option<String>,
+    pub parent_node_id: Option<String>,
+    pub parent_asset_path: Option<String>,
+    pub creative_relation:
+        Option<crate::core::creative_session_contract::CreativeGenerationRelation>,
     pub project_id: Option<String>,
     pub ratio: Option<String>,
     pub visual_profile: Option<crate::core::visual_profile::VisualProfileCapsule>,
@@ -962,6 +1134,12 @@ pub async fn list_gen_jobs(db: State<'_, Arc<Database>>) -> Result<Vec<GenJobSum
                 submit_id: j.submit_id,
                 session_id: j.session_id,
                 conversation_id: j.conversation_id,
+                thread_id: j.thread_id,
+                creative_session_id: j.creative_session_id,
+                turn_key: j.turn_key,
+                parent_node_id: j.parent_node_id,
+                parent_asset_path: j.parent_asset_path,
+                creative_relation: j.creative_relation,
                 project_id: j.project_id,
                 ratio: j.ratio,
                 visual_profile: j.visual_profile,
@@ -987,6 +1165,9 @@ pub struct RecentGenSession {
     pub error: Option<String>,
     pub session_id: Option<String>,
     pub conversation_id: Option<String>,
+    pub thread_id: Option<String>,
+    pub creative_session_id: Option<String>,
+    pub turn_key: Option<String>,
     pub project_id: Option<String>,
     pub ratio: Option<String>,
     pub visual_profile: Option<crate::core::visual_profile::VisualProfileCapsule>,
@@ -1043,6 +1224,9 @@ pub async fn recent_gen_sessions(
                 error: t.error,
                 session_id: j.session_id,
                 conversation_id: j.conversation_id,
+                thread_id: j.thread_id,
+                creative_session_id: j.creative_session_id,
+                turn_key: j.turn_key,
                 project_id: j.project_id,
                 ratio: j.ratio,
                 visual_profile: j.visual_profile,
@@ -1096,6 +1280,12 @@ pub async fn jimeng_retrieve_orphan(
         references: vec![],
         session_id: None,
         conversation_id: None,
+        thread_id: None,
+        creative_session_id: None,
+        turn_key: None,
+        parent_node_id: None,
+        parent_asset_path: None,
+        creative_relation: None,
         project_id: None,
         ratio: None,
         visual_profile: None,
@@ -1268,6 +1458,12 @@ mod generation_task_tests {
             references: vec![],
             session_id: None,
             conversation_id: None,
+            thread_id: None,
+            creative_session_id: None,
+            turn_key: None,
+            parent_node_id: None,
+            parent_asset_path: None,
+            creative_relation: None,
             project_id: None,
             ratio: None,
             visual_profile: None,

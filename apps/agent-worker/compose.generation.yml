@@ -2,7 +2,9 @@ services:
   generation-worker:
     build:
       context: .
-      dockerfile: Dockerfile.generation
+      dockerfile: Dockerfile.unified-harness-candidate
+      additional_contexts:
+        dsh-profile: ${BOWERBIRD_DSH_BUILD_CONTEXT:-../../spikes/unified-agent-harness-u1/profiles/bowerbird-u1}
     image: bowerbird/generation-worker:local
     restart: unless-stopped
     init: true
@@ -12,6 +14,7 @@ services:
     tmpfs:
       - /tmp:size=64m,mode=1777
       - /workspaces:size=256m,mode=0700,uid=1000,gid=1000
+      - /dsh-runtime:size=32m,mode=0700,uid=1000,gid=1000
     security_opt:
       - no-new-privileges:true
     cap_drop:

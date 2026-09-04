@@ -154,7 +154,9 @@ export function validateComposeHtmlDocumentAction(
   if (!Array.isArray(value.resourceArtifactIds) || value.resourceArtifactIds.length !== expectedResourceArtifactIds.length ||
       value.resourceArtifactIds.some((id, index) => id !== expectedResourceArtifactIds[index])) fail("compose_resource_manifest");
   if (/(?:https?|file|data|javascript|ftp):|\\\\|[A-Za-z]:[\\/]/i.test(value.html)) fail("compose_external_locator");
-  if (/<\s*(?:script|iframe|base|form|object|embed|svg)\b|\bon[a-z]+\s*=|@import\b/i.test(value.html)) fail("compose_unsafe_markup");
+  if (/<\s*(?:script|iframe|base|form|object|embed|svg)\b|\bon[a-z]+\s*=|@import\b|<!--|-->|\/\*|\*\//i.test(value.html)) {
+    fail("compose_unsafe_markup");
+  }
   for (const match of value.html.matchAll(/asset:([A-Za-z0-9-]+)/g)) {
     const key = match[1] ?? "";
     const ordinal = /^reference-(\d+)$/.exec(key);

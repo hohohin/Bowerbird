@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { ControlledRunnerCheckpoint } from "../kernel/controlled-image-edit-runner.ts";
 import { decodeControlledCheckpoint, encodeControlledCheckpoint } from "../kernel/controlled-checkpoint.ts";
 import type { ClarificationProposal } from "../contracts/clarification.ts";
+import type { AgentRuntime } from "../contracts/agent-runtime.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -31,6 +32,8 @@ export type ClaimedAgentRun = {
     conversationId: string;
     skillId: string;
     skillVersion: string;
+    /** Missing only when recovering a pre-U4 claim; such runs are legacy. */
+    agentRuntime?: AgentRuntime;
     inputManifestHash: string;
     approvedPlanHash: string | null;
     plannedToolCount: number | null;
@@ -44,6 +47,11 @@ export type ClaimedAgentRun = {
   lease?: { leaseId: string; leaseSeconds: number };
   inputUrl?: string | null;
   checkpointUrl?: string | null;
+  approvedPlan?: null | {
+    proposalHash: string;
+    plannedToolCount: number;
+    url: string;
+  };
   feedbackUrl?: string | null;
   clarificationAnswer?: null | {
     questionKey: string;
@@ -97,6 +105,7 @@ export type PreparedToolCall = {
   providerRequestId?: string | null;
   resultObjectKey?: string | null;
   resultHash?: string | null;
+  safeErrorCode?: string | null;
   reused: boolean;
 };
 

@@ -41,6 +41,132 @@ fn provider_source_tag(provider: &str) -> &'static str {
     }
 }
 
+fn update_creative_job_status(
+    app: &AppHandle,
+    db: &Database,
+    job: &GenJob,
+    status: &str,
+    provider_session_id: Option<&str>,
+) {
+    let (Some(project_id), Some(thread_id), Some(turn_key)) = (
+        job.project_id.as_deref(),
+        job.thread_id.as_deref(),
+        job.turn_key.as_deref(),
+    ) else {
+        return;
+    };
+    if let Err(error) = db.update_project_generation_turn_status(
+        project_id,
+        thread_id,
+        &job.id,
+        turn_key,
+        status,
+        provider_session_id,
+    ) {
+        tracing::warn!(
+            "gen: failed to update creative graph for {}: {error}",
+            job.id
+        );
+    }
+    let _ = app.emit(
+        "creative://changed",
+        serde_json::json!({
+            "projectId": project_id,
+            "threadId": thread_id,
+            "jobId": &job.id,
+            "turnKey": turn_key,
+            "status": status,
+        }),
+    );
+}
+
+/// 从本地任务与已入库 generation_meta 幂等修复项目画板投影。
+/// 该路径只补 thread link / prompt / output 节点，绝不调用 provider 或重新计费。
+pub(crate) fn recover_project_generation_projection(
+    db: &Database,
+    job: &GenJob,
+    task_status: &str,
+) -> AppResult<bool> {
+    let (Some(project_id), Some(thread_id), Some(turn_key)) = (
+        job.project_id.as_deref(),
+        job.thread_id.as_deref(),
+        job.turn_key.as_deref(),
+    ) else {
+        return Ok(false);
+    };
+    let conversation_id = job.conversation_id.as_deref().unwrap_or(&job.id);
+    db.begin_project_generation_turn(&crate::core::project_canvas::ProjectGenerationTurnInput {
+        project_id: project_id.to_string(),
+        thread_id: thread_id.to_string(),
+        generation_conversation_id: conversation_id.to_string(),
+        job_id: job.id.clone(),
+        turn_key: turn_key.to_string(),
+        prompt: job.prompt.clone(),
+        applied_prompt: job
+            .applied_prompt
+            .clone()
+            .unwrap_or_else(|| job.prompt.clone()),
+        provider: job.provider.clone(),
+        provider_session_id: job.session_id.clone(),
+        ratio: job.ratio.clone(),
+        visual_profile: job.visual_profile.as_ref().map(|profile| {
+            crate::core::creative_session_contract::VisualProfileRefV1 {
+                profile_id: profile.profile_id.clone(),
+                version: profile.version,
+                hash: profile.hash.clone(),
+            }
+        }),
+        references: job.references.clone(),
+        parent_node_id: job.parent_node_id.clone(),
+        parent_asset_path: job.parent_asset_path.clone(),
+        relation: job.creative_relation,
+    })?;
+
+    let asset_ids = {
+        let conn = db.conn.lock().unwrap();
+        let mut statement = conn.prepare(
+            "SELECT DISTINCT asset_id FROM analyses
+             WHERE kind='generation_meta'
+               AND json_extract(payload,'$.job_id')=?1
+               AND json_extract(payload,'$.turn_key')=?2
+             ORDER BY COALESCE(created_at,0),id",
+        )?;
+        let rows = statement
+            .query_map(rusqlite::params![job.id, turn_key], |row| {
+                row.get::<_, String>(0)
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows
+    };
+    let mut outputs = Vec::new();
+    for asset_id in asset_ids {
+        if let Some(asset) = db.get_asset(&asset_id)? {
+            outputs.push(asset);
+        }
+    }
+    if !outputs.is_empty() {
+        db.complete_project_generation_turn(
+            project_id,
+            thread_id,
+            &job.id,
+            turn_key,
+            job.session_id.as_deref(),
+            &outputs,
+        )?;
+    }
+    // `task_queue.status` is the durable task state. The status embedded in the
+    // GenJob payload can lag because terminal transitions update the queue column.
+    db.update_project_generation_turn_status(
+        project_id,
+        thread_id,
+        &job.id,
+        turn_key,
+        task_status,
+        job.session_id.as_deref(),
+    )?;
+    Ok(true)
+}
+
 /// 把 provider 产出的源图收尾入库：ingest（每个 src，不算 pHash 不去重）→ 删临时下载目录 →
 /// project link → generation_meta（payload 增 `submit_id`，详情页「✨ 生成来源」卡片）→ 后台自动命名。
 /// 返回入库的资产。
@@ -67,6 +193,9 @@ pub async fn finalize_generation_assets(
     project_id: Option<String>,
     visual_profile: Option<crate::core::visual_profile::VisualProfileCapsule>,
     codex_thread: Option<String>,
+    thread_id: Option<String>,
+    generation_job_id: Option<String>,
+    turn_key: Option<String>,
 ) -> AppResult<Vec<Asset>> {
     let source_tag = provider_source_tag(&provider).to_string();
 
@@ -118,6 +247,10 @@ pub async fn finalize_generation_assets(
             "applied_prompt": applied_prompt,
             "prompt_raw": prompt_raw,
             "session_id": session_id,
+            "conversation_id": conversation_id,
+            "thread_id": thread_id,
+            "job_id": generation_job_id,
+            "turn_key": turn_key,
             "references": references,
             "dimension_sources": dimension_sources,
             "provider": provider,
@@ -159,6 +292,26 @@ pub async fn finalize_generation_assets(
 /// 异步不阻塞启动；恢复 job 的 permit 与正常生成公平排队（JIMENG_FLY FIFO）。
 pub fn spawn_recovery(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths>) {
     tauri::async_runtime::spawn(async move {
+        match Task::list_project_generation(&db) {
+            Ok(tasks) => {
+                for task in tasks {
+                    let Some(job) = task.gen_job() else { continue };
+                    if let Err(error) =
+                        recover_project_generation_projection(&db, &job, &task.status)
+                    {
+                        tracing::warn!(
+                            job_id = %job.id,
+                            error = %error,
+                            "failed to recover project canvas generation projection"
+                        );
+                    }
+                }
+            }
+            Err(error) => tracing::warn!(
+                error = %error,
+                "failed to scan project generation projections"
+            ),
+        }
         let auth = app.state::<crate::cloud::AuthClient>().inner().clone();
         let entitlement = app.state::<crate::cloud::EntitlementService>();
         let entitlement_snapshot = entitlement.current_or_sync(&auth).await;
@@ -184,6 +337,7 @@ pub fn spawn_recovery(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths
             {
                 let message = "当前账号已降级，升级 Pro 后才能恢复即梦 CLI 任务";
                 let _ = Task::mark_failed(&db, &job.id, message);
+                update_creative_job_status(&app, &db, &job, "failed", None);
                 let _ = app.emit(
                     "codex://chunk",
                     serde_json::json!({ "kind": "error", "job_id": job.id, "message": message }),
@@ -195,6 +349,7 @@ pub fn spawn_recovery(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths
                 "jimeng" | "dreamina" | "bowerbird-cloud"
             ) {
                 let _ = Task::mark_failed(&db, &job.id, "app 重启中断，codex 会话不可恢复");
+                update_creative_job_status(&app, &db, &job, "failed", None);
                 let _ = app.emit(
                     "codex://chunk",
                     serde_json::json!({ "kind": "error", "job_id": job.id, "message": "app 重启中断，codex 会话不可恢复" }),
@@ -203,6 +358,7 @@ pub fn spawn_recovery(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths
             }
             let Some(submit_id) = job.submit_id.clone() else {
                 let _ = Task::mark_failed(&db, &job.id, "重启前未拿到 submit_id，无法续查");
+                update_creative_job_status(&app, &db, &job, "failed", None);
                 let _ = app.emit(
                     "codex://chunk",
                     serde_json::json!({ "kind": "error", "job_id": job.id, "message": "未拿到 submit_id，无法续查" }),
@@ -236,10 +392,19 @@ async fn recover_one_cloud_job(
 ) {
     let _ = app.emit(
         "codex://chunk",
-        serde_json::json!({ "kind": "recover_started", "job_id": job.id, "prompt": job.prompt, "provider": job.provider }),
+        serde_json::json!({
+            "kind": "recover_started",
+            "job_id": job.id,
+            "prompt": job.prompt,
+            "provider": job.provider,
+            "project_id": job.project_id,
+            "thread_id": job.thread_id,
+            "turn_key": job.turn_key,
+        }),
     );
     job.status = "querying".into();
     let _ = Task::upsert_gen_job(&db, &job);
+    update_creative_job_status(&app, &db, &job, "querying", Some(&submit_id));
     let cloud = app.state::<crate::cloud::CloudClient>().inner().clone();
     let auth = app.state::<crate::cloud::AuthClient>().inner().clone();
     match crate::codex::bowerbird_cloud::recover_cloud_generation(&cloud, &auth, &submit_id).await {
@@ -265,10 +430,37 @@ async fn recover_one_cloud_job(
                 job.project_id.clone(),
                 job.visual_profile.clone(),
                 None,
+                job.thread_id.clone(),
+                Some(job.id.clone()),
+                job.turn_key.clone(),
             )
             .await
             {
                 Ok(assets) => {
+                    if let (Some(project_id), Some(thread_id), Some(turn_key)) = (
+                        job.project_id.as_deref(),
+                        job.thread_id.as_deref(),
+                        job.turn_key.as_deref(),
+                    ) {
+                        let _ = db.complete_project_generation_turn(
+                            project_id,
+                            thread_id,
+                            &job.id,
+                            turn_key,
+                            session_for_meta.as_deref(),
+                            &assets,
+                        );
+                        let _ = app.emit(
+                            "creative://changed",
+                            serde_json::json!({
+                                "projectId": project_id,
+                                "threadId": thread_id,
+                                "jobId": &job.id,
+                                "turnKey": turn_key,
+                                "status": "done",
+                            }),
+                        );
+                    }
                     let asset_paths: Vec<PathBuf> = assets
                         .iter()
                         .filter_map(|asset| asset.store_path.clone().map(PathBuf::from))
@@ -283,6 +475,7 @@ async fn recover_one_cloud_job(
                 Err(error) => {
                     let message = error.to_string();
                     let _ = Task::mark_failed(&db, &job.id, &message);
+                    update_creative_job_status(&app, &db, &job, "failed", Some(&submit_id));
                     let _ = app.emit(
                         "codex://chunk",
                         serde_json::json!({ "kind": "error", "job_id": job.id, "message": message }),
@@ -293,6 +486,7 @@ async fn recover_one_cloud_job(
         Err(error) => {
             let message = error.to_string();
             let _ = Task::mark_failed(&db, &job.id, &message);
+            update_creative_job_status(&app, &db, &job, "failed", Some(&submit_id));
             let _ = app.emit(
                 "codex://chunk",
                 serde_json::json!({ "kind": "error", "job_id": job.id, "message": message }),
@@ -315,7 +509,15 @@ pub(crate) async fn recover_one_jimeng_job(
     // ① recover_started 自包含事件：前端据此 upsert 占位 job，防 done 早于 loadGenJobs 丢事件。
     let _ = app.emit(
         "codex://chunk",
-        serde_json::json!({ "kind": "recover_started", "job_id": job.id, "prompt": job.prompt, "provider": job.provider }),
+        serde_json::json!({
+            "kind": "recover_started",
+            "job_id": job.id,
+            "prompt": job.prompt,
+            "provider": job.provider,
+            "project_id": job.project_id,
+            "thread_id": job.thread_id,
+            "turn_key": job.turn_key,
+        }),
     );
     // ② 拿 permit（FIFO 公平，与正常即梦生成串行）。
     let _permit = match JIMENG_FLY.acquire().await {
@@ -328,6 +530,7 @@ pub(crate) async fn recover_one_jimeng_job(
     // ③ status=querying 落库（前端 loadGenJobs 拉到时显示「续查中」）。
     job.status = "querying".into();
     let _ = Task::upsert_gen_job(&db, &job);
+    update_creative_job_status(&app, &db, &job, "querying", Some(&submit_id));
 
     // ④ 轮询续查下载（策略 B：bounded poll loop，向下兼容 query_result 阻塞等待）。
     let binary = resolve_dreamina_binary().unwrap_or_else(|| "dreamina".to_string());
@@ -360,10 +563,37 @@ pub(crate) async fn recover_one_jimeng_job(
                 job.project_id.clone(),
                 job.visual_profile.clone(),
                 None,
+                job.thread_id.clone(),
+                Some(job.id.clone()),
+                job.turn_key.clone(),
             )
             .await
             {
                 Ok(assets) => {
+                    if let (Some(project_id), Some(thread_id), Some(turn_key)) = (
+                        job.project_id.as_deref(),
+                        job.thread_id.as_deref(),
+                        job.turn_key.as_deref(),
+                    ) {
+                        let _ = db.complete_project_generation_turn(
+                            project_id,
+                            thread_id,
+                            &job.id,
+                            turn_key,
+                            session_for_meta.as_deref(),
+                            &assets,
+                        );
+                        let _ = app.emit(
+                            "creative://changed",
+                            serde_json::json!({
+                                "projectId": project_id,
+                                "threadId": thread_id,
+                                "jobId": &job.id,
+                                "turnKey": turn_key,
+                                "status": "done",
+                            }),
+                        );
+                    }
                     let asset_paths: Vec<PathBuf> = assets
                         .iter()
                         .filter_map(|a| a.store_path.clone().map(PathBuf::from))
@@ -378,6 +608,7 @@ pub(crate) async fn recover_one_jimeng_job(
                 Err(e) => {
                     let msg = e.to_string();
                     let _ = Task::mark_failed(&db, &job.id, &msg);
+                    update_creative_job_status(&app, &db, &job, "failed", Some(&submit_id));
                     let _ = app.emit(
                         "codex://chunk",
                         serde_json::json!({ "kind": "error", "job_id": job.id, "message": msg }),
@@ -397,6 +628,7 @@ pub(crate) async fn recover_one_jimeng_job(
                 );
             } else {
                 let _ = Task::mark_failed(&db, &job.id, &msg);
+                update_creative_job_status(&app, &db, &job, "failed", Some(&submit_id));
                 let _ = app.emit(
                     "codex://chunk",
                     serde_json::json!({ "kind": "error", "job_id": job.id, "message": msg }),
@@ -519,6 +751,12 @@ mod tests {
             references: vec![],
             session_id: None,
             conversation_id: None,
+            thread_id: None,
+            creative_session_id: None,
+            turn_key: None,
+            parent_node_id: None,
+            parent_asset_path: None,
+            creative_relation: None,
             project_id: None,
             ratio: None,
             visual_profile: None,
@@ -559,5 +797,304 @@ mod tests {
             "generation_meta submit_id 应算已知"
         );
         assert!(!known.contains("sub-unknown"), "未知 submit_id 不在集合中");
+    }
+
+    #[test]
+    fn startup_projection_recovery_repairs_missing_link_and_output_without_provider_replay() {
+        let db = crate::db::Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.create_project("project-1", "项目", "project-1", "project-1", "blank")
+            .unwrap();
+        db.ensure_project_canvas("project-1").unwrap();
+        db.create_creative_thread(&crate::core::project_canvas::NewCreativeThread {
+            id: "thread-1".into(),
+            project_id: "project-1".into(),
+            title: "生成线程".into(),
+            origin: crate::core::creative_session_contract::CreativeThreadOrigin::Direct,
+        })
+        .unwrap();
+        let job = GenJob {
+            id: "job-1".into(),
+            media: "image".into(),
+            provider: "bowerbird-cloud".into(),
+            status: "done".into(),
+            prompt: "生成一张海报".into(),
+            applied_prompt: Some("完整生成指令".into()),
+            references: vec![],
+            session_id: Some("provider-session-1".into()),
+            conversation_id: Some("conversation-1".into()),
+            thread_id: Some("thread-1".into()),
+            creative_session_id: None,
+            turn_key: Some("turn-1".into()),
+            parent_node_id: None,
+            parent_asset_path: None,
+            creative_relation: None,
+            project_id: Some("project-1".into()),
+            ratio: Some("1:1".into()),
+            visual_profile: None,
+            submit_id: Some("remote-submit-1".into()),
+            video_options: None,
+            turns: serde_json::json!([]),
+            error: None,
+            queue_idx: None,
+            created_at: 1,
+            started_at: Some(1),
+            finished_at: Some(2),
+        };
+        Task::upsert_gen_job(&db, &job).unwrap();
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "INSERT INTO assets(id,name,store_path,created_at) VALUES ('asset-1','结果','/result.png',2)",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO analyses(id,asset_id,kind,payload,created_at) VALUES ('analysis-1','asset-1','generation_meta',?1,2)",
+                [serde_json::json!({"job_id":"job-1","turn_key":"turn-1"}).to_string()],
+            )
+            .unwrap();
+        }
+
+        assert!(db
+            .thread_for_generation("conversation-1")
+            .unwrap()
+            .is_none());
+        assert!(recover_project_generation_projection(&db, &job, "done").unwrap());
+        assert_eq!(
+            db.thread_for_generation("conversation-1")
+                .unwrap()
+                .as_deref(),
+            Some("thread-1")
+        );
+        let first = db.project_canvas_snapshot("project-1").unwrap();
+        assert_eq!(
+            first
+                .nodes
+                .iter()
+                .filter(|node| node.kind
+                    == crate::core::creative_session_contract::CreativeNodeKind::Prompt)
+                .count(),
+            1
+        );
+        assert_eq!(
+            first
+                .nodes
+                .iter()
+                .filter(|node| node.asset_id.as_deref() == Some("asset-1"))
+                .count(),
+            1
+        );
+
+        assert!(recover_project_generation_projection(&db, &job, "done").unwrap());
+        let replay = db.project_canvas_snapshot("project-1").unwrap();
+        assert_eq!(replay.nodes.len(), first.nodes.len());
+        assert_eq!(replay.edges.len(), first.edges.len());
+
+        let prompt_id = replay
+            .nodes
+            .iter()
+            .find(|node| {
+                node.kind == crate::core::creative_session_contract::CreativeNodeKind::Prompt
+            })
+            .unwrap()
+            .id
+            .clone();
+        assert!(matches!(
+            db.remove_canvas_node(&prompt_id).unwrap(),
+            Some(crate::core::project_canvas::CanvasNodeRemoval::Hidden)
+        ));
+        assert!(recover_project_generation_projection(&db, &job, "done").unwrap());
+        assert!(db
+            .get_canvas_node(&prompt_id)
+            .unwrap()
+            .unwrap()
+            .hidden_at
+            .is_some());
+    }
+
+    #[test]
+    fn startup_projection_recovery_uses_persisted_exact_parent_node() {
+        use crate::core::creative_session_contract::{
+            AssetExecutionRefV1, AssetNodePayloadV1, AssetSnapshotV1, CreativeGenerationRelation,
+            CreativeNodeKind, CreativeNodeRole,
+        };
+        use crate::core::project_canvas::{NewCanvasNode, NewCreativeThread};
+
+        let db = crate::db::Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.create_project("project-1", "项目", "project-1", "project-1", "blank")
+            .unwrap();
+        db.ensure_project_canvas("project-1").unwrap();
+        db.create_creative_thread(&NewCreativeThread {
+            id: "thread-1".into(),
+            project_id: "project-1".into(),
+            title: "生成线程".into(),
+            origin: crate::core::creative_session_contract::CreativeThreadOrigin::Direct,
+        })
+        .unwrap();
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "INSERT INTO assets(id,name,store_path,created_at) VALUES ('parent-asset','父素材','/parent.png',1)",
+                [],
+            )
+            .unwrap();
+        }
+        let payload = serde_json::to_string(&AssetNodePayloadV1 {
+            schema_version: 1,
+            snapshot: AssetSnapshotV1 {
+                name: "父素材".into(),
+                width: None,
+                height: None,
+            },
+            execution: Some(AssetExecutionRefV1 {
+                job_id: Some("older-job".into()),
+                turn_key: Some("older-turn".into()),
+                run_id: None,
+                artifact_id: None,
+            }),
+        })
+        .unwrap();
+        for (index, node_id) in ["parent-exact", "parent-duplicate"].into_iter().enumerate() {
+            db.create_canvas_node(&NewCanvasNode {
+                id: node_id.into(),
+                project_id: "project-1".into(),
+                thread_id: Some("thread-1".into()),
+                kind: CreativeNodeKind::Asset,
+                asset_id: Some("parent-asset".into()),
+                role: Some(CreativeNodeRole::Output),
+                payload_json: payload.clone(),
+                x: index as f64 * 220.0,
+                y: 0.0,
+                width: 190.0,
+                height: 180.0,
+                z_index: index as i64,
+                position_locked: false,
+            })
+            .unwrap();
+        }
+        let job = GenJob {
+            id: "job-exact-parent".into(),
+            media: "image".into(),
+            provider: "bowerbird-cloud".into(),
+            status: "running".into(),
+            prompt: "继续生成".into(),
+            applied_prompt: Some("继续生成".into()),
+            references: vec![],
+            session_id: None,
+            conversation_id: Some("conversation-exact-parent".into()),
+            thread_id: Some("thread-1".into()),
+            creative_session_id: None,
+            turn_key: Some("turn-exact-parent".into()),
+            parent_node_id: Some("parent-exact".into()),
+            parent_asset_path: Some("/parent.png".into()),
+            creative_relation: Some(CreativeGenerationRelation::Continued),
+            project_id: Some("project-1".into()),
+            ratio: None,
+            visual_profile: None,
+            submit_id: None,
+            video_options: None,
+            turns: serde_json::json!([]),
+            error: None,
+            queue_idx: None,
+            created_at: 1,
+            started_at: Some(1),
+            finished_at: None,
+        };
+        Task::upsert_gen_job(&db, &job).unwrap();
+        let persisted = Task::by_id(&db, &job.id)
+            .unwrap()
+            .unwrap()
+            .gen_job()
+            .unwrap();
+        assert_eq!(persisted.parent_node_id.as_deref(), Some("parent-exact"));
+
+        assert!(recover_project_generation_projection(&db, &persisted, "running").unwrap());
+        let snapshot = db.project_canvas_snapshot("project-1").unwrap();
+        let prompt = snapshot
+            .nodes
+            .iter()
+            .find(|node| node.kind == CreativeNodeKind::Prompt)
+            .unwrap();
+        assert!(snapshot
+            .edges
+            .iter()
+            .any(|edge| { edge.from_node_id == "parent-exact" && edge.to_node_id == prompt.id }));
+        assert!(!snapshot.edges.iter().any(|edge| {
+            edge.from_node_id == "parent-duplicate" && edge.to_node_id == prompt.id
+        }));
+    }
+
+    fn assert_terminal_task_status_wins_over_stale_payload(task_status: &str) {
+        let db = crate::db::Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.create_project("project-1", "项目", "project-1", "project-1", "blank")
+            .unwrap();
+        db.ensure_project_canvas("project-1").unwrap();
+        db.create_creative_thread(&crate::core::project_canvas::NewCreativeThread {
+            id: "thread-1".into(),
+            project_id: "project-1".into(),
+            title: "生成线程".into(),
+            origin: crate::core::creative_session_contract::CreativeThreadOrigin::Direct,
+        })
+        .unwrap();
+        let job = GenJob {
+            id: "job-1".into(),
+            media: "image".into(),
+            provider: "codex".into(),
+            status: "running".into(),
+            prompt: "生成一张海报".into(),
+            applied_prompt: Some("完整生成指令".into()),
+            references: vec![],
+            session_id: None,
+            conversation_id: Some("conversation-1".into()),
+            thread_id: Some("thread-1".into()),
+            creative_session_id: None,
+            turn_key: Some("turn-1".into()),
+            parent_node_id: None,
+            parent_asset_path: None,
+            creative_relation: None,
+            project_id: Some("project-1".into()),
+            ratio: Some("1:1".into()),
+            visual_profile: None,
+            submit_id: None,
+            video_options: None,
+            turns: serde_json::json!([]),
+            error: None,
+            queue_idx: None,
+            created_at: 1,
+            started_at: Some(1),
+            finished_at: None,
+        };
+        Task::upsert_gen_job(&db, &job).unwrap();
+        match task_status {
+            "failed" => Task::mark_failed(&db, &job.id, "failed for test").unwrap(),
+            "cancelled" => Task::mark_cancelled(&db, &job.id).unwrap(),
+            other => panic!("unsupported terminal status {other}"),
+        }
+        let task = Task::by_id(&db, &job.id).unwrap().unwrap();
+        let persisted_job = task.gen_job().unwrap();
+        assert_eq!(persisted_job.status, "running");
+        assert_eq!(task.status, task_status);
+
+        assert!(recover_project_generation_projection(&db, &persisted_job, &task.status,).unwrap());
+        let prompt = db
+            .project_canvas_snapshot("project-1")
+            .unwrap()
+            .nodes
+            .into_iter()
+            .find(|node| {
+                node.kind == crate::core::creative_session_contract::CreativeNodeKind::Prompt
+            })
+            .unwrap();
+        let payload: serde_json::Value = serde_json::from_str(&prompt.payload_json).unwrap();
+        assert_eq!(payload["status"], task_status);
+    }
+
+    #[test]
+    fn startup_projection_recovery_uses_task_queue_terminal_status() {
+        assert_terminal_task_status_wins_over_stale_payload("failed");
+        assert_terminal_task_status_wins_over_stale_payload("cancelled");
     }
 }

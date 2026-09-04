@@ -210,7 +210,7 @@ export function ImageAnnotator() {
   const closeAnnotator = useStore((s) => s.closeAnnotator);
   const insertAnnotatedToBoard = useStore((s) => s.insertAnnotatedToBoard);
   const assets = useStore((s) => s.assets);
-  const currentProjectId = useStore((s) => s.currentProjectId);
+  const activeProjectId = useStore((s) => s.activeProjectId);
 
   const asset = annotator ? assets.find((a) => a.id === annotator.assetId) : undefined;
   const storePath = asset?.store_path ?? null;
@@ -607,7 +607,7 @@ export function ImageAnnotator() {
       await api.saveAnnotatedImage({
         dataUrl: out.dataUrl,
         fileName: `${chipName(asset!)}-标注`,
-        projectId: currentProjectId,
+        projectId: activeProjectId,
         annotationJson: JSON.stringify(out.meta),
       });
       notifySuccess("标注图已保存到素材库");

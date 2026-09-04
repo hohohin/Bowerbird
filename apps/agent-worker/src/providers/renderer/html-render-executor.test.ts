@@ -123,13 +123,19 @@ class MemoryRenderControl implements HtmlRenderControl {
   }
 }
 
-function fakeWorkspace(html: string): HtmlRenderWorkspace {
+function fakeWorkspace(
+  html: string,
+  remembered = new Map<string, { mime: "image/png"; bytes: Uint8Array; sha256: string }>(),
+): HtmlRenderWorkspace {
   return {
     async readArtifact() {
       return { mime: "image/png", bytes: ONE_PIXEL_PNG, sha256: sha256Hex(ONE_PIXEL_PNG) };
     },
     async readHtmlDocumentArtifact() {
       return html;
+    },
+    rememberArtifact(_callId, artifact, image) {
+      remembered.set(artifact.artifactId, image);
     },
   };
 }
@@ -243,12 +249,16 @@ function onceCrashAfterExecute(): { flag: { crash: boolean }; hook: () => void }
   return { flag, hook: () => { if (flag.crash) { flag.crash = false; throw new SimulatedProcessCrash(); } } };
 }
 
-function makeExecutor(control: MemoryRenderControl, afterExecute?: () => void) {
+function makeExecutor(
+  control: MemoryRenderControl,
+  afterExecute?: () => void,
+  remembered?: Map<string, { mime: "image/png"; bytes: Uint8Array; sha256: string }>,
+) {
   return createHtmlRenderExecutor({
     runId: RUN_ID,
     leaseId: LEASE_ID,
     control,
-    workspace: fakeWorkspace(HTML_DOC),
+    workspace: fakeWorkspace(HTML_DOC, remembered),
     config: executorConfig(),
     ...(afterExecute ? { options: { afterExecute } } : {}),
   });
@@ -256,7 +266,8 @@ function makeExecutor(control: MemoryRenderControl, afterExecute?: () => void) {
 
 test("happy path: full page + slices + manifest artifacts, usage and ledger", async () => {
   const control = new MemoryRenderControl();
-  const executor = makeExecutor(control);
+  const remembered = new Map<string, { mime: "image/png"; bytes: Uint8Array; sha256: string }>();
+  const executor = makeExecutor(control, undefined, remembered);
   const result = await executor.render({
     callId: CALL_ID,
     phase: "render_once",
@@ -287,6 +298,9 @@ test("happy path: full page + slices + manifest artifacts, usage and ledger", as
   equal(slice1.parentArtifactId, full.artifactId);
   equal(slice2.parentArtifactId, full.artifactId);
   equal(slice1.stepId, "step-render");
+  equal(remembered.size, 3, "every freshly uploaded PNG stays readable without a signed URL");
+  equal(remembered.get(full.artifactId)?.sha256, full.sha256);
+  deepEqual(remembered.get(full.artifactId)?.bytes, ONE_PIXEL_PNG);
 
   equal(control.usage.length, 1);
   equal(control.usage[0]!.kind, "html_render");

@@ -3,8 +3,14 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useStore, type GenEditingMode } from "../store";
 import { api } from "../lib/api";
+import { generationParentLocator } from "../lib/creativeGeneration";
+import {
+  awaitGenerationComposerIntent,
+  isGenerationComposerIntentCurrent,
+  type GenerationComposerIntent,
+} from "../lib/generationIntent";
 import { PRESET_FEATURE_ENABLED } from "../lib/featureFlags";
-import { notifyError, notifySuccess } from "../lib/notify";
+import { notify, notifyError, notifySuccess } from "../lib/notify";
 import { canStartAnotherJob, canUseByo, canUseGenerationProvider } from "../lib/entitlement";
 import { cloudProviderLabel, canonicalProviderKey, isCloudProvider, supportsAnnotationCoordinates } from "../lib/genProviders";
 import type { Asset, GenJob, GenTurn, VisualProfileCapsule, VisualProfileRuleValue } from "../lib/types";
@@ -38,8 +44,22 @@ function fmtDuration(ms: number): string {
  * 语义——「重新编辑」开新版本分支（会话内 ←/→ 切换）；底部对话框 resume 同一 session，
  * 图片作为新一轮接在会话下方（一来一往）。
  */
-export function GenerationPanel() {
+export function GenerationPanel({
+  readOnly = false,
+  embedded = false,
+  hydratedAssets = [],
+}: {
+  readOnly?: boolean;
+  embedded?: boolean;
+  hydratedAssets?: Asset[];
+} = {}) {
   const genJobs = useStore((s) => s.genJobs);
+  const listedAssets = useStore((s) => s.assets);
+  const assets = useMemo(() => {
+    const byId = new Map(listedAssets.map((asset) => [asset.id, asset]));
+    for (const asset of hydratedAssets) byId.set(asset.id, asset);
+    return [...byId.values()];
+  }, [hydratedAssets, listedAssets]);
   const genJobOrder = useStore((s) => s.genJobOrder);
   const activeJobId = useStore((s) => s.activeJobId);
   const generating = useStore((s) => s.generating);
@@ -51,6 +71,7 @@ export function GenerationPanel() {
   const cloudAvailable = cloudAuth?.cloud_available ?? false;
   const setGenPanelOpen = useStore((s) => s.setGenPanelOpen);
   const genEditing = useStore((s) => s.genEditing);
+  const interactiveEditing = readOnly ? null : genEditing;
   const setGenEditing = useStore((s) => s.setGenEditing);
   const setActiveJob = useStore((s) => s.setActiveJob);
   const cancelGeneration = useStore((s) => s.cancelGeneration);
@@ -218,7 +239,7 @@ export function GenerationPanel() {
     if (running || !activeJob?.sessionId) return;
     const isLast = activeJob.turns[activeJob.turns.length - 1]?.id === turn.id;
     if (turn.error && isLast) {
-      retryLastGenTurn();
+      retryLastGenTurn(assets);
       return;
     }
     const raw = turn.provider || activeJob.provider;
@@ -227,10 +248,14 @@ export function GenerationPanel() {
       : raw === "jimeng"
         ? "jimeng"
         : "codex";
-    void sendGenRevise(turn.prompt, provider, {
+    const parent = generationParentLocator(activeJob.id, activeJob.turns, assets, { beforeTurnId: turn.id });
+    void sendGenRevise(activeJob.id, turn.prompt, provider, {
       rawPrompt: turn.promptRaw ?? undefined,
       references: turn.refAssets,
       exactReferences: turn.refs?.length ? turn.refs : undefined,
+      parentNodeId: parent.nodeId,
+      parentAssetPath: parent.storePath,
+      creativeRelation: "retry",
     }).catch(console.error);
   }
 
@@ -239,6 +264,12 @@ export function GenerationPanel() {
   function retryFirstTurn() {
     if (running || !activeJob) return;
     const first = activeJob.turns[0];
+    const parent = generationParentLocator(
+      activeJob.id,
+      activeJob.turns,
+      assets,
+      first ? { atTurnId: first.id } : {},
+    );
     const provider = isCloudProvider(activeJob.provider)
       ? canonicalProviderKey(activeJob.provider)
       : activeJob.provider === "jimeng"
@@ -254,14 +285,45 @@ export function GenerationPanel() {
       activeJob.sessionId ?? undefined,
       undefined,
       activeJob.visualProfileId ?? activeJob.visualProfile?.profileId ?? null,
+      activeJob.projectId && activeJob.threadId
+        ? {
+            projectId: activeJob.projectId,
+            threadId: activeJob.threadId,
+            parentNodeId: parent.nodeId,
+            parentAssetPath: parent.storePath,
+            relation: "retry",
+          }
+        : undefined,
     ).catch(console.error);
   }
 
   // 出图气泡底部「开启 Agent 模式再试一次」链接：回主界面（关会话面板/编辑坞/详情页），
   // 首轮组稿（编辑框原文 + 参考图）载入创作板，激活正式 Agent 开关并右上角 toast 提示。
-  function retryWithAgent() {
+  function retryWithAgent(turn: GenTurn) {
     if (!activeJob) return;
-    reusePromptToBoard(activeJob.turns[0]?.promptRaw || activeJob.lastPrompt);
+    const parent = generationParentLocator(activeJob.id, activeJob.turns, assets, { beforeTurnId: turn.id });
+    const outputPath = parent.storePath;
+    const parentAsset = parent.asset;
+    if (outputPath && activeJob.projectId && activeJob.threadId && !parentAsset) {
+      notify("结果仍在同步到项目，请稍后再开启 Agent 模式", "info");
+      return;
+    }
+    const refs = parentAsset
+      ? [parentAsset, ...(turn.refAssets ?? activeJob.refAssets).filter((asset) => asset.id !== parentAsset.id)]
+      : turn.refAssets ?? activeJob.refAssets;
+    reusePromptToBoard(
+      turn.promptRaw || turn.prompt || activeJob.lastPrompt,
+      refs,
+      activeJob.dimAssets,
+      parentAsset && activeJob.projectId && activeJob.threadId
+        ? {
+            projectId: activeJob.projectId,
+            threadId: activeJob.threadId,
+            parentNodeId: parent.nodeId,
+            parentAssetId: parentAsset.id,
+          }
+        : null,
+    );
     armBoardAgent();
     notifySuccess("Agent 模式已开启");
   }
@@ -408,24 +470,26 @@ export function GenerationPanel() {
   // 第一帧开始；若用「退场中」正逻辑，首帧会话即被卸载（硬切），动画只能下一帧补播。
   const [sessionHidden, setSessionHidden] = useState(false);
   useEffect(() => {
-    if (!genEditing) {
+    if (!interactiveEditing) {
       setSessionHidden(false);
       return;
     }
     const t = setTimeout(() => setSessionHidden(true), 200);
     return () => clearTimeout(t);
-  }, [genEditing]);
+  }, [interactiveEditing]);
 
   return (
     <>
-      {(genEditing && activeJob) && (
+      {(interactiveEditing && activeJob) && (
         // 底部编辑坞（「重新编辑」/ 底部对话框共用外壳，mode 区分行为）：面板收起为底部浮动
         // 编辑卡片（不左右通铺，上方两角圆角），上方露出瀑布流选图。
         // 定位（-translate-x-1/2）在外层、入场动画（transform）在内层，互不覆盖。
-        <div className="absolute bottom-0 left-1/2 z-10 w-[min(896px,100%)] -translate-x-1/2">
+        <div className="pointer-events-auto absolute bottom-0 left-1/2 z-10 w-[min(896px,100%)] -translate-x-1/2">
           <GenEditComposer
+            key={`${activeJob.id}:${interactiveEditing}:${editTurnId ?? "new"}`}
             job={activeJob}
-            mode={genEditing}
+            assets={assets}
+            mode={interactiveEditing}
             canStart={canStartAnother}
             recentImages={dockBaseImages?.images ?? []}
             onOpenRecent={(k) =>
@@ -443,53 +507,58 @@ export function GenerationPanel() {
           />
         </div>
       )}
-      {(!genEditing || !activeJob || !sessionHidden) && (
+      {(!interactiveEditing || !activeJob || !sessionHidden) && (
         // 会话全屏视图：进入编辑坞的 200ms 内保留挂载播退场（gen-view-out 下沉淡出，
         // pointer-events-none 让位给坞/瀑布流），从编辑坞回来时 gen-view-in 淡入上移。
         // 无 job 时即使 genEditing 也落在此分支（坞无会话可载，退回会话空态）。
         <div
-          className={`absolute inset-0 z-10 flex flex-col bg-canvas ${
-            genEditing && activeJob ? "gen-view-out pointer-events-none" : ""
+          className={`${embedded ? "flex min-h-0 flex-1 flex-col bg-canvas" : "absolute inset-0 z-10 flex flex-col bg-canvas"} ${
+            interactiveEditing && activeJob ? "gen-view-out pointer-events-none" : ""
           }`}
         >
           <div className="gen-view-in flex min-h-0 flex-1 flex-col">
-      {/* 单行头部（约 38px）：图标 + 会话标题（随内容而定）+ 统计 + 关闭 */}
-      <div className="flex min-h-[38px] shrink-0 items-center gap-2 border-b border-edge bg-canvas/90 px-3 py-1">
-        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-lime/10 text-lime">
-          <Images size={14} />
-        </span>
-        <strong
-          className="min-w-0 max-w-[320px] truncate text-xs font-semibold"
-          title={firstUserText || "生成会话"}
-        >
-          {sessionTitle}
-        </strong>
-        {activeJob && (
-          <span className="shrink-0 rounded-full border border-edge px-2 py-0.5 text-[11px] text-muted">
-            {activeJob.turns.length} 轮 · {imageCount} 图
-            {activeJob.provider === "jimeng"
-              ? " · 即梦"
-              : isCloudProvider(activeJob.provider)
-                ? ` · ${cloudProviderLabel(activeJob.provider, cloudEntitlement) ?? "Bowerbird Cloud"}`
-                : ""}
-          </span>
-        )}
-        {running && (
-          <span className="flex shrink-0 items-center gap-1.5 text-[11px] text-lime">
-            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-lime" />
-            生成中
-          </span>
-        )}
-        <button
-          onClick={() => setGenPanelOpen(false)}
-          className="app-icon-button ml-auto"
-          title="收起（回到瀑布流，生成照常后台跑）"
-          aria-label="收起生成会话"
-        >
-          <X size={16} />
-        </button>
-      </div>
-      <div className="hatch-divider" aria-hidden="true"><span /></div>
+      {!embedded && (
+        <>
+          {/* 旧会话回退仍自带头部；项目工作区由 CanvasWorkspace 的统一 inspector shell 持有。 */}
+          <div className="flex min-h-[38px] shrink-0 items-center gap-2 border-b border-edge bg-canvas/90 px-3 py-1">
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-lime/10 text-lime">
+              <Images size={14} />
+            </span>
+            <strong
+              className="min-w-0 max-w-[320px] truncate text-xs font-semibold"
+              title={firstUserText || "生成会话"}
+            >
+              {sessionTitle}
+            </strong>
+            {activeJob && (
+              <span className="shrink-0 rounded-full border border-edge px-2 py-0.5 text-[11px] text-muted">
+                {activeJob.turns.length} 轮 · {imageCount} 图
+                {activeJob.provider === "jimeng"
+                  ? " · 即梦"
+                  : isCloudProvider(activeJob.provider)
+                    ? ` · ${cloudProviderLabel(activeJob.provider, cloudEntitlement) ?? "Bowerbird Cloud"}`
+                    : ""}
+              </span>
+            )}
+            {readOnly && <span className="rounded-full border border-edge px-2 py-0.5 text-[10px] text-muted">旧会话 · 只读</span>}
+            {running && (
+              <span className="flex shrink-0 items-center gap-1.5 text-[11px] text-lime">
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-lime" />
+                生成中
+              </span>
+            )}
+            <button
+              onClick={() => setGenPanelOpen(false)}
+              className="app-icon-button ml-auto"
+              title="收起（回到瀑布流，生成照常后台跑）"
+              aria-label="收起生成会话"
+            >
+              <X size={16} />
+            </button>
+          </div>
+          <div className="hatch-divider" aria-hidden="true"><span /></div>
+        </>
+      )}
 
       {/* 会话主体：用户消息（右）↔ 助手产出（左），纵向时间线 */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-5">
@@ -509,17 +578,17 @@ export function GenerationPanel() {
                 imageOffset={imageOffset}
                 visualProfile={activeJob.visualProfile}
                 refAssets={i === 0 ? firstRefAssets : undefined}
-                actions={i === 0 ? firstTurnActions : turnActions(turn)}
+                actions={readOnly ? undefined : i === 0 ? firstTurnActions : turnActions(turn)}
                 variantNav={i === 0 ? variantNav : undefined}
                 onOpenLightbox={(g) => setLightbox({ images: allImages, index: g })}
                 onOpenRefLightbox={(r) =>
                   setLightbox({ images: refLightboxImages, index: r })
                 }
                 onOpenTurnRefs={(imgs, i) => setLightbox({ images: imgs, index: i })}
-                onAgentRetry={retryWithAgent}
-                onRetry={retryLastGenTurn}
-                canRetry={targetReady && !running}
-                retryReason={lockedReason}
+                onAgentRetry={readOnly ? undefined : () => retryWithAgent(turn)}
+                onRetry={() => retryLastGenTurn(assets)}
+                canRetry={!readOnly && targetReady && !running}
+                retryReason={readOnly ? "旧会话回退只读；请完成迁移后在创作中继续" : lockedReason}
               />
             ))}
           </div>
@@ -529,7 +598,9 @@ export function GenerationPanel() {
       {/* 底部：对话框入口（点击收起会话、露出瀑布流组稿，同「重新编辑」坞；发送 = 会话下方
           追加一轮对话）。会话级操作（重新编辑/复用/登记）在首轮气泡下方 */}
       <div className="shrink-0 border-t border-edge bg-panel p-4">
-        {running ? (
+        {readOnly ? (
+          <div className="text-center text-[10px] text-muted">旧会话仅供核对；不会继续生成、重试、取消或登记新状态。</div>
+        ) : running ? (
           <button
             onClick={() => cancelGeneration()}
             className="w-full rounded-md border border-edge bg-panel2 px-3 py-2 text-sm font-semibold text-ink hover:text-red-300"
@@ -571,7 +642,7 @@ export function GenerationPanel() {
         />
       )}
       {/* generating 在此仅用于抑制空态下的提示文案（有 job 在跑时给一句反馈），核心状态走 activeJob.running。 */}
-      {generating && !activeJob && !genEditing && (
+      {generating && !activeJob && !interactiveEditing && (
         <div className="pointer-events-none absolute bottom-20 left-1/2 -translate-x-1/2 text-[10px] text-muted">
           生成中…
         </div>
@@ -976,6 +1047,7 @@ function GenerationControlDetails({
  */
 function GenEditComposer({
   job,
+  assets,
   mode,
   canStart,
   recentImages,
@@ -984,6 +1056,7 @@ function GenEditComposer({
   onExit,
 }: {
   job: GenJob;
+  assets: Asset[];
   mode: GenEditingMode;
   canStart: boolean;
   // 左侧「上次结果」缩略图，组稿时对照参考：轮级编辑 = 该轮当时的基图（前一轮产出）；
@@ -1031,9 +1104,14 @@ function GenEditComposer({
   const [agentMode, setAgentMode] = useState<"off" | "a" | "b">("off");
   const [agentAvailable, setAgentAvailable] = useState(false);
   const [agentBusy, setAgentBusy] = useState(false);
+  const composerIntentTokenRef = useRef(0);
   // 设置「开发者选项」的对话框模式开关（与创作板同款默认：A/B 关闭即不渲染）。
   const agentAOn = settings?.agent_a_mode_enabled ?? false;
   const agentBOn = settings?.agent_b_mode_enabled ?? false;
+
+  useEffect(() => () => {
+    composerIntentTokenRef.current += 1;
+  }, [job.id, mode, preloadTurn?.id]);
 
   // 设置里关闭的模式：按钮隐藏同时复位其激活态（与创作板同款）。
   useEffect(() => {
@@ -1122,25 +1200,47 @@ function GenEditComposer({
   async function send() {
     // 续轮复用同 job（无新并行槽占用）；重新编辑开新 job 需过并行上限门。
     if (!finalPrompt || !targetReady || agentBusy || (!isRevise && !canStart)) return;
+    const intent: GenerationComposerIntent = {
+      token: ++composerIntentTokenRef.current,
+      jobId: job.id,
+      mode,
+    };
+    const readCurrentIntent = () => {
+      const state = useStore.getState();
+      return {
+        token: composerIntentTokenRef.current,
+        activeJobId: state.activeJobId,
+        mode: state.genEditing,
+      };
+    };
+    const intentIsCurrent = () =>
+      isGenerationComposerIntentCurrent(intent, readCurrentIntent());
+    if (!intentIsCurrent()) return;
     let prompt = finalPrompt;
     if (agentMode !== "off") {
       setAgentBusy(true);
       try {
-        const result = await api.localAgentCompilePrompt({
-          originalPrompt: rawPrompt || finalPrompt,
-          // 方案 B 需要模板展开后的完整 prompt（= 直发版），Agent 在其上做审查修复。
-          ...(agentMode === "b" ? { expandedPrompt: finalPrompt } : {}),
-          references: agentPromptReferences,
-          output: { kind: "图片", ...(ratio ? { ratio } : {}) },
-        });
-        prompt = result.prompt;
+        const result = await awaitGenerationComposerIntent(
+          intent,
+          readCurrentIntent,
+          () => api.localAgentCompilePrompt({
+            originalPrompt: rawPrompt || finalPrompt,
+            // 方案 B 需要模板展开后的完整 prompt（= 直发版），Agent 在其上做审查修复。
+            ...(agentMode === "b" ? { expandedPrompt: finalPrompt } : {}),
+            references: agentPromptReferences,
+            output: { kind: "图片", ...(ratio ? { ratio } : {}) },
+          }),
+        );
+        if (!result.current) return;
+        prompt = result.value.prompt;
       } catch (error) {
-        notifyError(error, "Agent 意图分析失败");
+        if (intentIsCurrent()) notifyError(error, "Agent 意图分析失败");
         return;
       } finally {
-        setAgentBusy(false);
+        if (intentIsCurrent()) setAgentBusy(false);
       }
     }
+    if (!intentIsCurrent()) return;
     // 点发送立即回会话视图：生成后台跑，结果/错误由会话内对应轮展示。
     // 发送即退出创作模式（boardOpen 置 false）：关面板回瀑布流后左键恢复开详情；
     // 取消编辑不退（onExit 另有取消入口共用，创作模式保留可继续挑图）。
@@ -1161,16 +1261,32 @@ function GenEditComposer({
             ]),
           ).slice(0, 10)
         : undefined;
-      void sendGenRevise(prompt, activeGenProvider, {
+      const parent = generationParentLocator(
+        job.id,
+        job.turns,
+        assets,
+        preloadTurn ? { beforeTurnId: preloadTurn.id } : {},
+      );
+      void sendGenRevise(job.id, prompt, activeGenProvider, {
         rawPrompt,
         references,
         ratio,
         exactReferences: exactRefs,
+        parentNodeId: parent.nodeId,
+        parentAssetPath: parent.storePath,
+        creativeRelation: preloadTurn ? "branch" : "continued",
       }).catch(console.error);
     } else {
       // 归入同一会话：conversationId 传源会话 → 新版本分支可与会话内 ←/→ 切换；
       // anchorSessionId = 源会话 session（旧版生成 / 回看历史的根 session 补映射用）。
       // 纯新构图：不带上一轮产出（回退只留给「继续对话」续轮路径）。
+      const first = job.turns[0];
+      const parent = generationParentLocator(
+        job.id,
+        job.turns,
+        assets,
+        first ? { atTurnId: first.id } : {},
+      );
       void startGeneration(
         prompt,
         references,
@@ -1181,6 +1297,15 @@ function GenEditComposer({
         job.sessionId ?? undefined,
         dimensionSources,
         job.visualProfileId ?? job.visualProfile?.profileId ?? null,
+        job.projectId && job.threadId
+          ? {
+              projectId: job.projectId,
+              threadId: job.threadId,
+              parentNodeId: parent.nodeId,
+              parentAssetPath: parent.storePath,
+              relation: "branch",
+            }
+          : undefined,
       ).catch(console.error);
     }
   }

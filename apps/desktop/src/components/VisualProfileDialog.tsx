@@ -60,7 +60,7 @@ type Phase = "preview" | "draft" | "done";
 
 export function VisualProfileDialog() {
   const folder = useStore((s) => s.visualProfileFolder);
-  const currentProjectId = useStore((s) => s.currentProjectId);
+  const activeProjectId = useStore((s) => s.activeProjectId);
   const close = useStore((s) => s.closeVisualProfile);
   const reloadVisualProfiles = useStore((s) => s.reloadVisualProfiles);
   const cloudAuth = useStore((s) => s.cloudAuth);
@@ -91,7 +91,7 @@ export function VisualProfileDialog() {
     effectivePolicy(cloudEntitlement).can_use_visual_profiles;
 
   useEffect(() => {
-    if (!folder || !currentProjectId) return;
+    if (!folder || !activeProjectId) return;
     setPhase("preview");
     setPreview(null);
     setHistory([]);
@@ -106,8 +106,8 @@ export function VisualProfileDialog() {
     setValidationError(null);
     setBusy(true);
     Promise.all([
-      api.visualProfilePreview(currentProjectId, folder.id),
-      api.visualProfileList(currentProjectId, folder.id),
+      api.visualProfilePreview(activeProjectId, folder.id),
+      api.visualProfileList(activeProjectId, folder.id),
     ])
       .then(([scope, list]) => {
         setPreview(scope);
@@ -115,7 +115,7 @@ export function VisualProfileDialog() {
       })
       .catch((e) => setError(typeof e === "string" ? e : "读取文件夹反推覆盖情况失败"))
       .finally(() => setBusy(false));
-  }, [folder, currentProjectId]);
+  }, [folder, activeProjectId]);
 
   const resetToPreview = () => {
     setPhase("preview");
@@ -161,7 +161,7 @@ export function VisualProfileDialog() {
   // 双击竞态锁（useRef 必须位于早退 return 之前，否则关闭弹窗时 hook 数变少会崩溃）。
   const generatingRef = useRef(false);
 
-  if (!folder || !currentProjectId) return null;
+  if (!folder || !activeProjectId) return null;
 
   const generateValidation = async () => {
     if (!detail || validating || generatingRef.current) return;
@@ -230,10 +230,10 @@ export function VisualProfileDialog() {
     setBusyLabel(cloud ? "云端模型提炼中…（通常 1–3 分钟，失败不扣分）" : "本地基线提炼中…");
     try {
       const created = cloud
-        ? await api.visualProfileCloudExtract(currentProjectId, folder.id)
-        : await api.visualProfileExtract(currentProjectId, folder.id);
+        ? await api.visualProfileCloudExtract(activeProjectId, folder.id)
+        : await api.visualProfileExtract(activeProjectId, folder.id);
       applyDetail(created);
-      setHistory(await api.visualProfileList(currentProjectId, folder.id));
+      setHistory(await api.visualProfileList(activeProjectId, folder.id));
     } catch (e) {
       setError(typeof e === "string" ? e : "提炼失败");
     } finally {
@@ -283,7 +283,7 @@ export function VisualProfileDialog() {
       setDetail(confirmed);
       setRules(confirmed.rules.map((rule) => ({ ...rule })));
       setPhase("done");
-      setHistory(await api.visualProfileList(currentProjectId, folder.id));
+      setHistory(await api.visualProfileList(activeProjectId, folder.id));
       await reloadVisualProfiles();
       notifySuccess(`视觉设定 v${confirmed.version} 已保存`);
     } catch (e) {

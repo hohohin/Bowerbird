@@ -13,7 +13,7 @@ import {
 } from "../control-plane/agent-control-client.ts";
 import { computeArgsHash, deriveCallId } from "../kernel/tool-ledger.ts";
 import { ScopedToolGateway } from "./scoped-tool-gateway.ts";
-import { createUnderstandAssetToolDefinition } from "./understand-asset-tool.ts";
+import { createApprovedInspectArtifactToolDefinition, createUnderstandAssetToolDefinition } from "./understand-asset-tool.ts";
 import { createUnifiedPlanningToolBridge } from "./unified-planning-tool-bridge.ts";
 
 function response(status: number, body = "{}", bytes?: Uint8Array): HttpResponse {
@@ -223,6 +223,80 @@ test("understand_asset rejects cross-Run ids, locators, wrong phases and missing
       fetch,
     }).validate({ assetId: "asset-current", focus: "general" }), /understand_asset_not_in_run/);
     equal(actions.length, 0);
+  } finally {
+    workspace.cleanup();
+  }
+});
+
+test("inspect_artifact binds the rendered artifact, approved goal and Ark usage outside model arguments", async () => {
+  const calls = new Map<string, { callId: string; status: "prepared" | "submitted" | "succeeded"; reused: boolean; resultHash?: string; resultObjectKey?: string }>();
+  const preparedArgsHashes: string[] = [];
+  let usage = 0;
+  const control = {
+    async prepareTool(args: { callId: string; argsHash: string }) {
+      preparedArgsHashes.push(args.argsHash);
+      const existing = calls.get(args.callId);
+      if (existing) return { ...existing, reused: true };
+      const created = { callId: args.callId, status: "prepared" as const, reused: false };
+      calls.set(args.callId, created);
+      return created;
+    },
+    async markToolSubmitted(args: { callId: string }) {
+      const next = { ...calls.get(args.callId)!, status: "submitted" as const };
+      calls.set(args.callId, next);
+      return next;
+    },
+    async completeTool(args: { callId: string; status: "succeeded"; resultHash?: string; resultObjectKey?: string }) {
+      const next = { ...calls.get(args.callId)!, ...args, reused: false };
+      calls.set(args.callId, next);
+      return next;
+    },
+    async uploadDiagnostic(args: { sourceCallId: string; runId: string; stepId: string; bytes: Uint8Array; sha256: string }) {
+      return {
+        artifactId: "diagnostic-inspect", conversationId: "conversation-inspect", runId: args.runId,
+        role: "diagnostic", stepId: args.stepId, mime: "application/json", bytes: args.bytes.byteLength,
+        sha256: args.sha256, userVisible: false, objectKey: `runs/${args.runId}/${args.sourceCallId}.json`,
+      };
+    },
+    async recordUsage(args: { kind: string }) {
+      if (args.kind === "vision_call") usage++;
+    },
+  } as unknown as AgentControlClient;
+  const workspace = new RunWorkspace({
+    root: join(tmpdir(), `bowerbird-inspect-${randomUUID()}`),
+    runId: "run-inspect",
+    control,
+  });
+  workspace.rememberArtifact("c".repeat(64), {
+    artifactId: "full-page", conversationId: "conversation-inspect", runId: "run-inspect",
+    role: "full_page_screenshot", stepId: "render", mime: "image/png", bytes: png.byteLength,
+    sha256: imageHash, userVisible: true, objectKey: "runs/run-inspect/full-page.png",
+  }, { mime: "image/png", bytes: png, sha256: imageHash });
+  try {
+    const approvedPlanHash = "d".repeat(64);
+    const gateway = new ScopedToolGateway([createApprovedInspectArtifactToolDefinition({
+      runId: "run-inspect",
+      leaseId: "lease-inspect",
+      approvedPlanHash,
+      step: { id: "inspect", kind: "inspect_artifact", goal: "检查整页层级", inputAssetIds: [], dependsOn: ["render"] },
+      artifact: { artifactId: "full-page", sha256: imageHash },
+      control,
+      workspace,
+      config: { apiKey: "unused", baseUrl: "https://ark.invalid", model: "ark-vision", mock: true },
+      signal: { aborted: false, cancelRequested: false, leaseLost: false, stopRequested: false },
+    })]);
+    const base = {
+      runId: "run-inspect", leaseId: "lease-inspect", phase: "execute_approved_plan", toolName: "inspect_artifact",
+      trustedSlot: { logicalSlot: 2, revisionIndex: 0 }, allowedTools: new Set(["inspect_artifact"]), approvedPlanHash,
+    };
+    const result = await gateway.dispatch({ ...base, arguments: {} });
+    equal((result.value as { assetId: string }).assetId, "full-page");
+    equal(usage, 1);
+    equal(preparedArgsHashes[0], computeArgsHash({
+      assetId: "full-page", artifactSha256: imageHash, focus: "layout", inspectionGoal: "检查整页层级",
+    }));
+    await rejects(() => gateway.dispatch({ ...base, arguments: { artifactId: "foreign" } }), /tool_arguments_invalid/);
+    equal(preparedArgsHashes.length, 1);
   } finally {
     workspace.cleanup();
   }

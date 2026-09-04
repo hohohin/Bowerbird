@@ -11,6 +11,7 @@ const STEP_KINDS = new Set<UnifiedAgentPlanStepKind>([
   "compose_html",
   "render_html",
   "inspect_artifact",
+  "compose_xiaohongshu",
   "finalize_output",
 ]);
 
@@ -20,6 +21,7 @@ export type UnifiedAgentPlanStepKind =
   | "compose_html"
   | "render_html"
   | "inspect_artifact"
+  | "compose_xiaohongshu"
   | "finalize_output";
 
 export type UnifiedAgentPlanStep = {
@@ -30,12 +32,42 @@ export type UnifiedAgentPlanStep = {
   dependsOn: string[];
 };
 
-export type UnifiedAgentPlan = {
-  schemaVersion: 1;
+export type UnifiedAgentPlanContent = {
+  assetAssignments: Array<{
+    assetId: string;
+    roles: Array<"product" | "logo" | "copy_source" | "style_reference" | "supporting">;
+    rationale: string;
+  }>;
+  informationArchitecture: Array<{
+    id: string;
+    purpose: string;
+    sourceAssetIds: string[];
+    copySource: "user_goal" | "asset_observation" | "none";
+  }>;
+  missingAssets: Array<{
+    id: string;
+    purpose: string;
+    decision: "generate" | "reuse_existing" | "not_needed";
+    resolutionStepId: string | null;
+  }>;
+  visualProfile: null | {
+    profileId: string;
+    version: number;
+    hash: string;
+    applied: string[];
+    ignoredContentThemes: string[];
+  };
+};
+
+type UnifiedAgentPlanBase = {
   title: string;
   summary: string;
   steps: UnifiedAgentPlanStep[];
 };
+
+export type UnifiedAgentPlan =
+  | (UnifiedAgentPlanBase & { schemaVersion: 1 })
+  | (UnifiedAgentPlanBase & { schemaVersion: 2; contentPlan: UnifiedAgentPlanContent });
 
 /**
  * 计划审批使用上限式估算，不相信模型自报 token/credits。
@@ -94,10 +126,108 @@ function uniqueStrings(value: unknown, max: number, pattern: RegExp): string[] {
   return strings;
 }
 
+function uniqueTexts(value: unknown, max: number, maxText: number, allowEmpty = true): string[] {
+  if (!Array.isArray(value) || value.length > max || (!allowEmpty && value.length === 0)) {
+    throw new Error("unified_plan_invalid");
+  }
+  const texts = value.map((item) => boundedText(item, maxText));
+  if (new Set(texts).size !== texts.length) throw new Error("unified_plan_invalid");
+  return texts;
+}
+
+const ASSET_ROLES = new Set(["product", "logo", "copy_source", "style_reference", "supporting"]);
+const COPY_SOURCES = new Set(["user_goal", "asset_observation", "none"]);
+const MISSING_DECISIONS = new Set(["generate", "reuse_existing", "not_needed"]);
+
+function parseContentPlan(value: unknown, steps: UnifiedAgentPlanStep[]): UnifiedAgentPlanContent {
+  const content = exactRecord(value, ["assetAssignments", "informationArchitecture", "missingAssets", "visualProfile"]);
+  if (!Array.isArray(content.assetAssignments) || !content.assetAssignments.length ||
+      content.assetAssignments.length > UNIFIED_AGENT_PLAN_COST_POLICY_V1.maxAssets ||
+      !Array.isArray(content.informationArchitecture) || !content.informationArchitecture.length ||
+      content.informationArchitecture.length > UNIFIED_AGENT_PLAN_COST_POLICY_V1.maxSteps ||
+      !Array.isArray(content.missingAssets) ||
+      content.missingAssets.length > UNIFIED_AGENT_PLAN_COST_POLICY_V1.maxSteps) {
+    throw new Error("unified_plan_invalid");
+  }
+  const assetAssignments = content.assetAssignments.map((raw) => {
+    const assignment = exactRecord(raw, ["assetId", "roles", "rationale"]);
+    const roles = uniqueTexts(assignment.roles, ASSET_ROLES.size, 32, false);
+    if (roles.some((role) => !ASSET_ROLES.has(role))) throw new Error("unified_plan_invalid");
+    return {
+      assetId: uniqueStrings([assignment.assetId], 1, ASSET_ID)[0]!,
+      roles: roles as UnifiedAgentPlanContent["assetAssignments"][number]["roles"],
+      rationale: boundedText(assignment.rationale, 500),
+    };
+  });
+  if (new Set(assetAssignments.map((item) => item.assetId)).size !== assetAssignments.length) {
+    throw new Error("unified_plan_invalid");
+  }
+  const informationArchitecture = content.informationArchitecture.map((raw) => {
+    const section = exactRecord(raw, ["id", "purpose", "sourceAssetIds", "copySource"]);
+    const id = boundedText(section.id, 64);
+    if (!STEP_ID.test(id) || typeof section.copySource !== "string" || !COPY_SOURCES.has(section.copySource)) {
+      throw new Error("unified_plan_invalid");
+    }
+    return {
+      id,
+      purpose: boundedText(section.purpose, 500),
+      sourceAssetIds: uniqueStrings(section.sourceAssetIds, UNIFIED_AGENT_PLAN_COST_POLICY_V1.maxAssets, ASSET_ID),
+      copySource: section.copySource as UnifiedAgentPlanContent["informationArchitecture"][number]["copySource"],
+    };
+  });
+  if (new Set(informationArchitecture.map((item) => item.id)).size !== informationArchitecture.length) {
+    throw new Error("unified_plan_invalid");
+  }
+  const stepById = new Map(steps.map((step) => [step.id, step]));
+  const missingAssets = content.missingAssets.map((raw) => {
+    const item = exactRecord(raw, ["id", "purpose", "decision", "resolutionStepId"]);
+    const id = boundedText(item.id, 64);
+    if (!STEP_ID.test(id) || typeof item.decision !== "string" || !MISSING_DECISIONS.has(item.decision)) {
+      throw new Error("unified_plan_invalid");
+    }
+    if (item.decision === "generate") {
+      if (typeof item.resolutionStepId !== "string" || stepById.get(item.resolutionStepId)?.kind !== "generate_image") {
+        throw new Error("unified_plan_invalid");
+      }
+    } else if (item.resolutionStepId !== null) {
+      throw new Error("unified_plan_invalid");
+    }
+    return {
+      id,
+      purpose: boundedText(item.purpose, 500),
+      decision: item.decision as UnifiedAgentPlanContent["missingAssets"][number]["decision"],
+      resolutionStepId: item.resolutionStepId as string | null,
+    };
+  });
+  if (new Set(missingAssets.map((item) => item.id)).size !== missingAssets.length) {
+    throw new Error("unified_plan_invalid");
+  }
+  let visualProfile: UnifiedAgentPlanContent["visualProfile"] = null;
+  if (content.visualProfile !== null) {
+    const profile = exactRecord(content.visualProfile, ["profileId", "version", "hash", "applied", "ignoredContentThemes"]);
+    if (!Number.isSafeInteger(profile.version) || Number(profile.version) < 1 ||
+        typeof profile.hash !== "string" || !/^[0-9a-f]{64}$/.test(profile.hash)) {
+      throw new Error("unified_plan_invalid");
+    }
+    visualProfile = {
+      profileId: boundedText(profile.profileId, 128),
+      version: Number(profile.version),
+      hash: profile.hash,
+      applied: uniqueTexts(profile.applied, 24, 300, false),
+      ignoredContentThemes: uniqueTexts(profile.ignoredContentThemes, 24, 300),
+    };
+  }
+  return { assetAssignments, informationArchitecture, missingAssets, visualProfile };
+}
+
 /** Edge 与 Worker Gateway 都以此闭集形状为准；未知字段（含 credits/runId/callId/URL）直接拒绝。 */
 export function parseUnifiedAgentPlan(value: unknown): UnifiedAgentPlan {
-  const plan = exactRecord(value, ["schemaVersion", "title", "summary", "steps"]);
-  if (plan.schemaVersion !== 1 || !Array.isArray(plan.steps) || !plan.steps.length ||
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("unified_plan_invalid");
+  const schemaVersion = (value as JsonRecord).schemaVersion;
+  const plan = exactRecord(value, schemaVersion === 2
+    ? ["schemaVersion", "title", "summary", "contentPlan", "steps"]
+    : ["schemaVersion", "title", "summary", "steps"]);
+  if ((schemaVersion !== 1 && schemaVersion !== 2) || !Array.isArray(plan.steps) || !plan.steps.length ||
       plan.steps.length > UNIFIED_AGENT_PLAN_COST_POLICY_V1.maxSteps) {
     throw new Error("unified_plan_invalid");
   }
@@ -127,12 +257,14 @@ export function parseUnifiedAgentPlan(value: unknown): UnifiedAgentPlan {
   if (finalizeIndexes.length !== 1 || finalizeIndexes[0] !== steps.length - 1) {
     throw new Error("unified_plan_invalid");
   }
-  return {
-    schemaVersion: 1,
+  const base = {
     title: boundedText(plan.title, 120),
     summary: boundedText(plan.summary, 2_000),
     steps,
   };
+  return schemaVersion === 2
+    ? { schemaVersion: 2, ...base, contentPlan: parseContentPlan(plan.contentPlan, steps) }
+    : { schemaVersion: 1, ...base };
 }
 
 function checkedAdd(total: number, value: number): number {

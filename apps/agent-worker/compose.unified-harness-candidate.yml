@@ -1,0 +1,24 @@
+services:
+  unified-harness-readonly-check:
+    build:
+      context: .
+      dockerfile: Dockerfile.unified-harness-candidate
+      additional_contexts:
+        dsh-profile: ../../spikes/unified-agent-harness-u1/profiles/bowerbird-u1
+    image: bowerbird/agent-worker-unified-harness:candidate
+    command:
+      - node
+      - /app/scripts/dsh-readonly-probe.mjs
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+      - /dsh-runtime:size=32m,mode=0700,uid=1000,gid=1000
+    network_mode: none
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 768m
+    cpus: 1.0
+    pids_limit: 128

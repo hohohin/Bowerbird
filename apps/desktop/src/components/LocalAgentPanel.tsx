@@ -50,7 +50,7 @@ export function LocalAgentPanel({
   const activeProvider = useStore((state) => state.activeGenProvider);
   const startGeneration = useStore((state) => state.startGeneration);
   const cloudEntitlement = useStore((state) => state.cloudEntitlement);
-  const currentProjectId = useStore((state) => state.currentProjectId);
+  const activeProjectId = useStore((state) => state.activeProjectId);
   const activeVisualProfileId = useStore((state) => state.activeVisualProfileId);
   const [available, setAvailable] = useState(false);
   const [run, setRun] = useState<LocalAgentRun | null>(null);
@@ -87,7 +87,7 @@ export function LocalAgentPanel({
     setStage("DeepSeek 正在评估并形成一次精修计划…");
     setError(null);
     try {
-      setRun(await api.localAgentStart(asset.id, goal.trim(), currentProjectId, activeVisualProfileId));
+      setRun(await api.localAgentStart(asset.id, goal.trim(), activeProjectId, activeVisualProfileId));
     } catch (cause) {
       setError(errorText(cause));
       notifyError(cause, "启动智能精修失败");
@@ -120,7 +120,7 @@ export function LocalAgentPanel({
         .map((id) => id === asset.id ? asset : assets.find((item) => item.id === id))
         .filter((item): item is Asset => !!item);
       setStage(`正在通过 ${activeProvider} 执行一次精修…`);
-      const jobId = await startGeneration(
+      const { jobId } = await startGeneration(
         prompt,
         references,
         pending.arguments.ratio ?? null,

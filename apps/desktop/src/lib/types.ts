@@ -29,6 +29,202 @@ export interface Project {
   created_at: number;
   asset_count: number;
   kind: "user" | "builtin" | "blank";
+  title_source?: ProjectTitleSource;
+  updated_at?: number;
+  last_opened_at?: number;
+  archived_at?: number | null;
+  /** 仅存在于前端的新建占位；第一次有意义编辑后由 project_canvas_materialize 原子落库。 */
+  provisional?: boolean;
+}
+
+export type CreativeNodeKind = "asset" | "prompt" | "agent_group" | "note";
+export type CreativeNodeRole = "reference" | "output" | "intermediate" | "final";
+export type CreativeGroupRole = "base" | "style" | "composition" | "candidate" | "rejected";
+export type CreativeViewMode = "canvas" | "timeline";
+export type CanvasNodeRemoval = "deleted" | "hidden";
+export type CreativeEdgeKind = "input" | "produced" | "continued" | "retry" | "branch" | "agent_step";
+
+// PROJECT-CANVAS-PLAN：项目是画板的唯一身份；creative thread 仅做项目内因果归组。
+export type ProjectTitleSource = "default" | "first_prompt" | "manual";
+export type CreativeThreadOrigin =
+  | "direct"
+  | "generation_backfill"
+  | "agent_backfill"
+  | "merged_legacy";
+export type ProjectTimelineScope = "focused" | "all";
+
+export interface ProjectCanvas {
+  projectId: string;
+  draftJson: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ProjectCanvasMaterializeInput {
+  projectId: string;
+  name: string;
+  workspacePath: string;
+  workspaceKey: string;
+  kind: string;
+  titleSource: ProjectTitleSource;
+  draftJson: string;
+}
+
+export interface CreativeThread {
+  id: string;
+  projectId: string;
+  title: string;
+  origin: CreativeThreadOrigin;
+  archivedAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface NewCreativeThread {
+  id: string;
+  projectId: string;
+  title: string;
+  origin: CreativeThreadOrigin;
+}
+
+export interface CanvasNode {
+  id: string;
+  projectId: string;
+  threadId: string | null;
+  kind: CreativeNodeKind;
+  assetId: string | null;
+  role: CreativeNodeRole | null;
+  payloadJson: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  zIndex: number;
+  positionLocked: boolean;
+  hiddenAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface NewCanvasNode {
+  id: string;
+  projectId: string;
+  threadId: string | null;
+  kind: CreativeNodeKind;
+  assetId: string | null;
+  role: CreativeNodeRole | null;
+  payloadJson: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  zIndex: number;
+  positionLocked: boolean;
+}
+
+export interface CanvasNodeLayoutUpdate {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  zIndex: number;
+  positionLocked: boolean;
+}
+
+export interface CanvasGroup {
+  id: string;
+  projectId: string;
+  name: string;
+  role: CreativeGroupRole | null;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  zIndex: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface NewCanvasGroup {
+  id: string;
+  projectId: string;
+  name: string;
+  role: CreativeGroupRole | null;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  zIndex: number;
+}
+
+export interface CanvasGroupItem {
+  projectId: string;
+  groupId: string;
+  nodeId: string;
+  ordinal: number;
+}
+
+export interface CanvasEdge {
+  id: string;
+  projectId: string;
+  threadId: string;
+  fromNodeId: string;
+  toNodeId: string;
+  kind: CreativeEdgeKind;
+  ordinal: number;
+  createdAt: number;
+}
+
+export interface NewCanvasEdge {
+  id: string;
+  projectId: string;
+  threadId: string;
+  fromNodeId: string;
+  toNodeId: string;
+  kind: CreativeEdgeKind;
+  ordinal: number;
+}
+
+export interface CanvasView {
+  projectId: string;
+  panX: number;
+  panY: number;
+  zoom: number;
+  sourcePanelWidth: number | null;
+  activeNodeId: string | null;
+  focusedThreadId: string | null;
+  viewMode: CreativeViewMode;
+  timelineScope: ProjectTimelineScope;
+  updatedAt: number;
+}
+
+export interface CanvasViewInput {
+  projectId: string;
+  panX: number;
+  panY: number;
+  zoom: number;
+  sourcePanelWidth: number | null;
+  workspaceWidth?: number | null;
+  activeNodeId: string | null;
+  focusedThreadId: string | null;
+  viewMode: CreativeViewMode;
+  timelineScope: ProjectTimelineScope;
+}
+
+export interface ProjectCanvasSnapshot {
+  canvas: ProjectCanvas;
+  threads: CreativeThread[];
+  nodes: CanvasNode[];
+  groups: CanvasGroup[];
+  groupItems: CanvasGroupItem[];
+  edges: CanvasEdge[];
+  view: CanvasView | null;
+}
+
+export interface ProjectCanvasLocation {
+  projectId: string;
+  nodeId: string;
+  threadId: string | null;
 }
 
 export interface ProjectCreateResult {
@@ -42,8 +238,16 @@ export interface ProjectRefreshResult {
   added_count: number;
 }
 
-/** 删除项目时对独占素材的处理方式；共享素材永远保留在全局。 */
-export type ProjectDeleteMode = "keep" | "move_out" | "delete_exclusive";
+/** 项目即画板契约：删除项目始终保留中央素材。 */
+export type ProjectDeleteMode = "keep";
+
+export interface ProjectDeleteImpact {
+  project_asset_count: number;
+  thread_count: number;
+  node_count: number;
+  running_generation_count: number;
+  running_agent_count: number;
+}
 
 export interface ProjectDeleteResult {
   removed_members: number;
@@ -187,6 +391,8 @@ export interface Preset {
 /** 生成对话一轮：用户输入（首轮=编辑器组稿，后续=修改意见）+ 本轮产出图（asset 路径）。 */
 export interface GenTurn {
   id: number;
+  /** 本轮在 creative session 图谱中的稳定键；与易变的 UI 序号分离。 */
+  turnKey?: string;
   prompt: string;
   /** 当时真正提交给 provider 的最终指令（含视觉设定注入与 provider 包装）。 */
   appliedPrompt?: string | null;
@@ -221,6 +427,10 @@ export interface GenJob {
   // 同组 job 在会话面板用 ←/→ 切换编辑前后的版本（agent 应用式分支）。
   // 普通发送 = 自身 id；随 job 落库（generation_conversations），重启后瀑布流分组不丢。
   conversationId?: string;
+  /** Bowerbird 本地创作归属；不得当作 provider resume id。 */
+  threadId?: string | null;
+  /** 旧负载兼容；新任务使用 threadId。 */
+  creativeSessionId?: string | null;
   turns: GenTurn[];
   sessionId: string | null;
   streaming: string;
@@ -256,6 +466,7 @@ export interface JimengOrphanTask {
 /** 「回看生成对话」：某生成图所在 codex 会话的完整时间线（后端 generation_history 返回）。 */
 export interface GenerationHistoryTurn {
   prompt: string;
+  turn_key?: string | null;
   applied_prompt?: string | null;
   prompt_raw?: string | null; // 未铺开的原始编辑框文本（复用优先用它还原 chip）；旧 meta 为 null → 回退 prompt
   images: string[]; // store_path
@@ -281,8 +492,12 @@ export interface GenerationHistory {
   visual_profile?: VisualProfileCapsule | null;
 }
 
+export type AppTheme = "light" | "dark";
+
 /** 应用设置（后端 settings.json 持久化） */
 export interface AppSettings {
+  /** 应用外观；现有黑色界面为 dark。 */
+  theme: AppTheme;
   auto_analyze_on_ingest: boolean;
   auto_analyze_prompt: string;
   library_root: string | null;
@@ -390,7 +605,7 @@ export interface EntitlementSnapshot {
   entitlement_version: number;
   signature_version: number;
   signature: string | null;
-  /** 测试账号标记（bowerbird_test）：只决定「设置 · 开发者选项」可见性，不参与付费门控。 */
+  /** 测试账号标记（bowerbird_test）：决定开发者选项与 test-only runtime 入口，不参与付费门控。 */
   is_test_account?: boolean;
   offline_state: "fresh" | "grace" | "expired" | "invalid" | null;
 }
@@ -413,6 +628,11 @@ export interface GenJobSummary {
   submit_id: string | null;
   session_id: string | null;
   conversation_id: string | null;
+  creative_session_id: string | null;
+  thread_id?: string | null;
+  turn_key: string | null;
+  parent_asset_path: string | null;
+  creative_relation: "continued" | "retry" | "branch" | null;
   project_id: string | null;
   ratio: string | null;
   visual_profile: VisualProfileCapsule | null;
@@ -431,6 +651,9 @@ export interface RecentGenSession {
   error: string | null;
   session_id: string | null;
   conversation_id: string | null;
+  creative_session_id: string | null;
+  thread_id?: string | null;
+  turn_key: string | null;
   project_id: string | null;
   ratio: string | null;
   visual_profile: VisualProfileCapsule | null;
@@ -525,7 +748,7 @@ export interface AgentPromptResult {
   attempts: number;
 }
 
-export interface CloudAgentPlanStep {
+export interface CloudAgentControlledPlanStep {
   id: string;
   kind: "direct_generate" | "generate_control_reference" | "edit_from_previous";
   goal: string;
@@ -538,7 +761,7 @@ export interface CloudAgentPlanStep {
   estimatedUsage: { generateCalls: number; understandCalls: number };
 }
 
-export interface CloudAgentPlan {
+export interface CloudAgentControlledPlan {
   schemaVersion: 1;
   intentAnalysisHash: string;
   intentSummary: string;
@@ -551,12 +774,65 @@ export interface CloudAgentPlan {
     mustExclude: string[];
   }>;
   assumptions: string[];
-  steps: CloudAgentPlanStep[];
+  steps: CloudAgentControlledPlanStep[];
 }
+
+export type CloudAgentUnifiedPlanStepKind =
+  | "understand_asset"
+  | "generate_image"
+  | "compose_html"
+  | "render_html"
+  | "inspect_artifact"
+  | "compose_xiaohongshu"
+  | "finalize_output";
+
+export interface CloudAgentUnifiedPlanStep {
+  id: string;
+  kind: CloudAgentUnifiedPlanStepKind;
+  goal: string;
+  inputAssetIds: string[];
+  dependsOn: string[];
+}
+
+export interface CloudAgentUnifiedPlan {
+  schemaVersion: 1 | 2;
+  title: string;
+  summary: string;
+  steps: CloudAgentUnifiedPlanStep[];
+  contentPlan?: {
+    assetAssignments: Array<{
+      assetId: string;
+      roles: Array<"product" | "logo" | "copy_source" | "style_reference" | "supporting">;
+      rationale: string;
+    }>;
+    informationArchitecture: Array<{
+      id: string;
+      purpose: string;
+      sourceAssetIds: string[];
+      copySource: "user_goal" | "asset_observation" | "none";
+    }>;
+    missingAssets: Array<{
+      id: string;
+      purpose: string;
+      decision: "generate" | "reuse_existing" | "not_needed";
+      resolutionStepId: string | null;
+    }>;
+    visualProfile: null | {
+      profileId: string;
+      version: number;
+      hash: string;
+      applied: string[];
+      ignoredContentThemes: string[];
+    };
+  };
+}
+
+export type CloudAgentPlanStep = CloudAgentControlledPlanStep | CloudAgentUnifiedPlanStep;
+export type CloudAgentPlan = CloudAgentControlledPlan | CloudAgentUnifiedPlan;
 
 export interface CloudAgentApproval {
   id: string;
-  kind: "controlled_image_edit_plan" | "controlled_image_edit_revision";
+  kind: "controlled_image_edit_plan" | "controlled_image_edit_revision" | "unified_agent_plan";
   status: "pending" | "approved" | "rejected" | "expired";
   proposal_hash: string;
   planned_tool_count: number;
@@ -612,6 +888,8 @@ export interface CloudAgentSnapshot {
     progress?: number | null;
     skill_id: string;
     skill_version: string;
+    /** Run 创建时锁定；旧本地快照缺失时按 legacy_kernel 展示。 */
+    agent_runtime?: CloudAgentRuntime;
     planned_tool_count?: number | null;
     budget_credits: number;
     actual_credits?: number | null;
@@ -660,6 +938,8 @@ export interface CloudAgentSnapshot {
   };
 }
 
+export type CloudAgentRuntime = "legacy_kernel" | "dsh";
+
 export interface CloudAgentRunRecord {
   runId: string;
   conversationId: string;
@@ -668,6 +948,10 @@ export interface CloudAgentRunRecord {
   intentPrompt: string;
   referenceAssetIds: string[];
   projectId?: string | null;
+  /** 项目内创作线程；creativeSessionId 仅为旧负载兼容读取。 */
+  threadId?: string | null;
+  creativeSessionId?: string | null;
+  creativeLaunchId?: string | null;
   snapshot: CloudAgentSnapshot;
   feedbackAction?: "accept" | "retry" | null;
   finalAssetId?: string | null;
@@ -717,7 +1001,16 @@ export type CodexChunk =
       session_id?: string | null;
       job_id?: string;
     }
-  | { kind: "recover_started"; job_id: string; prompt: string; provider: string }
+  | {
+      kind: "recover_started";
+      job_id: string;
+      prompt: string;
+      provider: string;
+      project_id?: string | null;
+      thread_id?: string | null;
+      creative_session_id?: string | null;
+      turn_key?: string | null;
+    }
   | { kind: "recover_polling"; job_id: string; message: string }
   | { kind: "error"; message: string; job_id?: string };
 

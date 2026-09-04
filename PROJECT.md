@@ -1,6 +1,6 @@
 # PROJECT.md
 
-本文件是项目的**活文档**（living doc），记录说明、进展、约定与踩坑。权威的完整设计见 `dev-doc/Bowerbird开发计划.md`；面向 Claude Code 的工作规则与索引自见 [CLAUDE.md](CLAUDE.md)。
+本文件是项目内容的**唯一活文档**（living doc），记录说明、进展、约定与踩坑。基础设计见 `dev-doc/Bowerbird开发计划.md`；若其与本文件的较新决策或专项计划冲突，以较新的记录为准。Agent 工作规则与阅读索引见 [AGENTS.md](AGENTS.md)。
 
 ---
 
@@ -10,28 +10,30 @@
 - [dev-doc/AI-PROVIDERS.md](dev-doc/AI-PROVIDERS.md) — AI provider 可切换方案（泛化 GenerationPanel + 全局默认/单次覆盖 + codex/即梦首批 + 即梦走官方 dreamina CLI + 关键约定 1 演进，v2 草案 2026-07-23）
 - [dev-doc/ARCH-ADJUST-PROGRESS.md](dev-doc/ARCH-ADJUST-PROGRESS.md) — 收费化架构调整（P0–P9）跨会话任务进度与交接（更新至 2026-08-11；原始计划见 dev-doc/ARCH-ADJUST-PLAN.md，部署步骤见 apps/cloud/DEPLOY.md）
 - [dev-doc/AGENT-RUNTIME-PLAN.md](dev-doc/AGENT-RUNTIME-PLAN.md) — Bowerbird 受限 VPS Worker 与内置 Skill Agent Runtime 专项计划（首版 `bowerbird-controlled-image-edit`：纯文本意图分析 → 有限澄清 → Skill 动态规划 → 审批 → Cloud 或本机 CLI 工具执行 → 反馈诊断与修订；Agent Kernel / Supabase / 方舟 / 桌面会话 UI，v1.23 2026-08-25，见 [apps/agent-worker](apps/agent-worker/)）
-- [dev-doc/UNIFIED-AGENT-HARNESS-PLAN.md](dev-doc/UNIFIED-AGENT-HARNESS-PLAN.md) — 通用云端 Agent Harness 新专项（一个 Bowerbird Agent + 多种受控 Tool/输出配方；Bowerbird Tool Gateway 与控制面权威；HTML/未来小红书禁止另造 Agent Runner，U0–U6，v1.8 2026-08-29；U2 首个 `understand_asset` 与父进程 Planning Bridge 本地通过、未接生产）
+- [dev-doc/UNIFIED-AGENT-HARNESS-PLAN.md](dev-doc/UNIFIED-AGENT-HARNESS-PLAN.md) — 通用云端 Agent Harness 新专项（一个 Bowerbird Agent + 多种受控 Tool/输出配方；Bowerbird Tool Gateway 与控制面权威；HTML/未来渠道能力禁止另造 Agent Runner，U0–U6，v1.59 2026-09-03；DSH 统一入口已真实自主选择并完成 HTML 四工具链，统一图片执行已在源码放开多 final 并按 DAG 层并发，仍因自然样本与基础层 HIGH/CRITICAL 保持 test-only）
 - [dev-doc/HTML-RENDER-PLAN.md](dev-doc/HTML-RENDER-PLAN.md) — 受限 HTML 离线排版与截图专项计划（独立无外网 Chromium renderer、整页/视口/纵向切片、Kernel `render_html` 工具、第二个官方内置 Skill，H0–H6；明确不做网页访问、自由浏览器 Agent、Vision 自检或自动修订；**H0–H5 已完成，H6 test-only 观察进行中（2026-08-28）**，当前不扩大开放、不调整计费）
+- [dev-doc/PROJECT-CANVAS-PLAN.md](dev-doc/PROJECT-CANVAS-PLAN.md) — “一个项目 = 一块无限画板；项目内多条创作线程”当前桌面专项（项目为一级生命周期与画板身份；普通生成/Agent Run 归入线程；不保留旧用户会话；自动化冲突收敛完成，待真机/升级验收，v1.5 2026-09-04）
+- [dev-doc/CANVAS-SESSION-PLAN.md](dev-doc/CANVAS-SESSION-PLAN.md) — 已被替代的“一画板一会话”v0.8 实施记录；保留 CS0–CS7 自动实现、测试基线和真实库副本旧契约回填证据，不再作为执行权威
 - [dev-doc/进展归档.md](dev-doc/进展归档.md) — 「目前进展」已完成条目的历史全量归档（append-only 只进不改；PROJECT.md 只留最近 3 条里程碑）
 
 ## 项目说明
 
 **Bowerbird（园丁鸟）** —— 为 AI 图像创作服务的、本地优先的「提示词 + 参考图」素材库与编排工作台。形态：Tauri 2 桌面应用 + 浏览器扩展。
 
-- **核心交互**：**创作板**（拟文本编辑器）—— 选图 + 选维度下拉，所见即一段中文句子；每个选项 / 缩略图背后映射真实提示词片段，底部「确认生成」拼出完整 prompt + 参考图发 codex（优化 / 扩写 / 生成）。用户全程不写一字提示词。设计稿见 [dev-doc/桌面端UI设计.html](dev-doc/桌面端UI设计.html)。
+- **核心交互**：目标形态是“一个项目 = 一块无限画板”，项目内可并排组织素材、提示词、普通生成/Agent 线程和结果分支；画板嵌入现有拟文本创作输入（选图 + 维度下拉，所见即一段中文句子），将完整 prompt + 参考图交给所选 provider 或 Agent。当前调整专项见 [PROJECT-CANVAS-PLAN.md](dev-doc/PROJECT-CANVAS-PLAN.md)，早期面板设计见 [桌面端UI设计.html](dev-doc/桌面端UI设计.html)。
 - **范围**：v1 覆盖六大工作流 —— 收集 / 浏览 / 搜索 / 整理 / 分析 / **生成（⑥）**（2026-07-06 决策扩展，覆盖开发计划 v1.2 §1.4「不做生成」，详见关键约定 2）。
 - **定位**：不是「复现 Eagle」，而是把散落的灵感图片组织成可复用的「提示词 + 参考图」资产并交给 AI。
-- **哲学**：素材与提示词 100% 本地（Local-First）；AI 推理与生成经用户自有的 codex CLI（可能联网）。
+- **哲学**：素材库与提示词以本地为权威（Local-First）；AI 推理与生成可经用户自有 CLI 或 Bowerbird Cloud，上传范围、provider 与计费均由用户选择及对应门控约束。
 
-完整定位、范围、技术栈、数据模型、Roadmap 见 `dev-doc/Bowerbird开发计划.md`（v1.2，2026 年 7 月）。
+完整的基础定位、范围、技术栈、数据模型与 Roadmap 见 `dev-doc/Bowerbird开发计划.md`（v1.3，2026 年 7 月）；后续变更以本文件和对应专项计划为准。
 
 ---
 
 ## 目前进展
 
-> 更新时间：2026-08-29
+> 更新时间：2026-09-04
 
-**当前阶段（2026-08-21 快照）：**
+**产品与正式 Agent 稳定基线（截至 2026-08-25；后续增量见下方专项基线与近期里程碑）：**
 **最新 Agent 联调修正：** 用户已于 2026-08-25 确认 Codex Agent 真机完整成功；线上 Run `7b8c2da3-8f12-442c-8db6-824e4631d467` 为 `succeeded`，总耗时 1242 秒（20 分 42 秒），仅两个 DeepSeek 文本回合结算 2 分。此前 provider 约束与重复 checkpoint 签名问题已由 `0037`/`0038`、`agent-worker` v33 修复。实际体验同时证明 Codex 自身已有思考与对话能力，叠加 Bowerbird Agent 会重复规划并显著增加耗时。因此按用户决定暂时将 Codex 与正式 Agent 模式设为互斥：创作板在 Codex 下禁用 Agent，Agent 开启时切到 Codex 会自动退出；Rust `cloud_agent_start` 与云端 `agent-run` v21 同步拒绝新组合。Codex 直接生成、Cloud/即梦 Agent、历史 Codex Agent 会话及已登记任务的恢复均保留。真实即梦 Agent CLI 全链路按 2026-08-25 用户决定暂时跳过：实现与历史恢复保留，但不作为当前发布或继续开发门槛，除非用户日后明确恢复，否则不主动重启该专项。
 **桌面（1.0 功能路径全通）：** 收集（浏览器扩展 + 小红书适配 + 拖拽/剪贴板/文件夹导入，dHash 阈值去重）、瀑布流浏览、FTS5 文件名搜索、文件夹/收藏夹/智能文件夹/颜色/标签筛选、项目 Workspace、创作板（ProseMirror + 维度环形菜单 + 维度车牌稳定引用）、生成会话面板（多 job 并行、会话分组持久化、版本分支、重试/继续对话/轮级编辑重试精确重放、跨引擎续轮交接）、反推（Bowerbird Cloud / 本机 codex 显式选择，维度可就地编辑）、图片标注（画框/箭头/裁剪/旋转 → 火山 Seedream 交互编辑坐标，入库/插板双出口）；codex/即梦 CLI 对小白隐形（app 内一键安装/登录，codex 免 Node 直装）、统一环境状态 Onboarding、自定义素材库位置与完整迁移、Windows NSIS 出包（日期版本 26.8.x）。
 **云端（已上线）：** 账号 + 积分（免费档每日 30 分；档位门控：免费档只能 Bowerbird Cloud，Pro/Studio 可用本机 CLI）；Cloud 生图三档 Pro/Fast/Lite（`service_costs` 数据驱动，上新档位零桌面发版）；生图与反推均走 VPS 异步任务链路（0015 `generation_jobs` + 0019 `understand_jobs`，腾讯云 Lighthouse 广州单容器双循环 Worker）；Agent Runtime 控制面（0012–0014 + agent-run/agent-worker Edge）已部署。真实支付因备案/商户资质暂停（Mock 保持）。官网部署 Render + 首屏试用创作板接真实生图。
@@ -43,22 +45,30 @@
 
 **源码树（按开发计划 §7）：** `apps/desktop/{src, src-tauri}`、`apps/extension/`、`packages/shared/`。常用命令：`pnpm install`、`pnpm tauri dev`、`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml`。
 
-**测试基线：** 桌面 `cargo test` 现为 209 通过 + 2 ignored（Agent Z 真机 e2e，需交互桌面会话），前端 `tsc --noEmit` 与 production build 通过；agent-worker **206/206** + `tsc --noEmit`；Deno Edge check、共享图片元数据/统一计划模块 **8/8**、Rust `cargo fmt --check` 与 `git diff --check` 通过。真实 Supabase/VPS/DeepSeek/方舟 Vision/Seedream 双审批修订、可信计量、原子结算、TTL/容量/账单、安全冒烟、Cloud 生图/理解成功与退款、Worker 重启故障注入基线有效；A2-T9 无 provider 生产控制面 E2E 两次通过。真实即梦 Agent CLI 完整 E2E 按用户决定暂时跳过，未计入通过项，也不再作为发布阻塞。扩展 Node tests 10/10、官网 build 基线沿用 2026-08-13 存档。html-renderer（HTML 离线排版 H0–H6）**71 项（64 pass / 7 本机 Chromium skip）** + `tsc --noEmit`；H6 无内容观察聚合测试 **4/4**。生产 renderer `0.1.1` 指纹 `bwr1-c0ee5722787c038aa560e4a5cbb54df2`，容器安全自检全绿，720×3840+4 切片逐像素复原 E2E 通过（render 1993ms；峰值约 405 MiB/74 PIDs）。远端 migration `0044`–`0046`、agent-worker/agent-run Edge 已部署，VPS renderer/Worker 在线，`agent_runtime.sql` **29/29**；U2 migrations `0047`–`0049` 已在全新本地库按 `0001`–`0049` reset 并通过 `agent_runtime.sql` **34/34** 与真实本地 Edge 停车/图片尺寸/fresh claim E2E，仍未部署、未计入远端 29/29。
+> 下方“测试基线”记录 U4（2026-09-01）阶段，其余带日期的验证基线也都是对应阶段存档，并非滚动最新版；当前结果以“近期里程碑”中相关专项的最新条目为准。
+
+**测试基线：** 桌面 `cargo test` 现为 209 通过 + 2 ignored（Agent Z 真机 e2e，需交互桌面会话），前端 `tsc --noEmit` 与 production build 通过；agent-worker **283/283** + `tsc --noEmit`；U1/U2 DSH Profile **20/20**。正式真实纵切已得到 `ok=true`、3 个 DeepSeek 文本 usage/diagnostic、1 个火山方舟 Vision usage、4 个 durable succeeded call、结构化 observation、权威 approval 与双 provider secret 父进程隔离，真实新计量链路通过。现役 Profile 已移除 DeepSeek Vision 配置与 smoke，所有视觉理解/检查固定走现有方舟 Vision。批准后 fresh claim 返回当前 approved proposal 的签名 URL/hash/步骤数；Worker 以 64 KiB 上限下载并复核对象 SHA-256、闭集 schema、canonical hash 与步骤数。批准后的首个 `generate_image` 执行纵切精确绑定批准 hash/步骤/prompt/输入/输出角色，复用现有 Seedream durable executor、Artifact/usage 与 checkpoint；不支持的工具或游离付费分支在首个 provider 副作用前拒绝。本地统一审批与批准后执行 E2E 已通过停车/租约释放/重放/漂移拒绝/批准/fresh claim/计划正文 hash、Mock Seedream durable call、唯一 final artifact、单次 Ark image usage、结果停车、用户接受与 succeeded；不调用真实 provider。故障注入另覆盖 provider 返回图片后、durable complete 前，以及 artifact 完成后、执行 checkpoint 保存前的进程死亡；重建用同一 call id 恢复当前 Run 的闭集确定性输出，不重复 Seedream、Artifact 上传或 usage。HTML 统一执行现已通过独立四工具 DSH Profile、父进程 approved bridge、durable HTML artifact、结构化 renderer 规格、可选一次火山方舟 Vision 检查及父进程最终产物裁决；模型除 compose 外只能提交 `{}`，不能选择检查图片、路径、URL、目标或最终 Artifact。processor checkpoint 前故障恢复与真实钉版 DSH/ACP + 假 DeepSeek SSE + renderer HTTP wire + Mock Ark Vision 四步组合 E2E 均通过，renderer/Vision 各调用一次。U3 的 `VisualProfileCapsule` 已按 canonical hash 在 DSH 前校验并冻结，规划/HTML compose 使用独立不可信只读块，来源及 must/prefer/avoid 影响进入事件；篡改、prompt 和 event 回归通过。上一候选镜像 `sha256:72e2cda4…09dd63`（161,404,737 bytes）在非 root、只读、无网络、cap-drop ALL 下通过旧基线，但不包含本次恢复/HTML/U3 输入代码，新候选 digest 待重建。共享图片元数据/统一计划模块 **8/8**、Rust `cargo fmt --check` 与既有 `git diff --check` 基线通过。真实 Supabase/VPS/DeepSeek/方舟 Vision/Seedream 双审批修订、可信计量、原子结算、TTL/容量/账单、安全冒烟、Cloud 生图/理解成功与退款、Worker 重启故障注入基线有效；A2-T9 无 provider 生产控制面 E2E 两次通过。真实即梦 Agent CLI 完整 E2E 按用户决定暂时跳过，未计入通过项，也不再作为发布阻塞。扩展 Node tests 10/10、官网 build 基线沿用 2026-08-13 存档。html-renderer（HTML 离线排版 H0–H6）**71 项（64 pass / 7 本机 Chromium skip）** + `tsc --noEmit`；H6 无内容观察聚合测试 **4/4**。生产 renderer `0.1.1` 指纹 `bwr1-c0ee5722787c038aa560e4a5cbb54df2`，容器安全自检全绿，720×3840+4 切片逐像素复原 E2E 通过（render 1993ms；峰值约 405 MiB/74 PIDs）。远端 migration 已到 `0050`，agent-run v42 / agent-worker v46 与 VPS test-only controlled DSH Worker 在线；本地 fresh `0001`–`0050`、`agent_runtime.sql` **39/39** 和本地 Edge E2E 通过，远端另以零 provider runtime create/get/claim/cancel smoke 验证部署。
 
 **A4–A7 最新验证基线（2026-08-25）：** 用户确认桌面会话历史和图片保留，A4 主路径人工通过；A5 全部任务完成；A6/A7 当前范围通过，A7 运维基线在线。agent-worker **144/144** + TypeScript、桌面 175 passed + 2 ignored/production build、Deno Edge check、共享模块 6/6、真实部署与安全冒烟通过。Codex provider 约束与 checkpoint 幂等签名修复后，用户确认 Codex Agent CLI 全链路成功。基于实测耗时，Codex + 正式 Agent 新 Run 已改为 UI/Rust/Edge 三层互斥。A2-T7 确定性上下文组装/压缩与 A2-T9 有限澄清已部署 VPS；远端迁移现为 `0001`–`0043`，VPS 四循环在线（2026-08-26 V4 部署后重建）。真实即梦 Agent CLI 完整 E2E 按用户决定暂时跳过；实现保留、未宣称验证通过。
 
 **项目视觉设定 V1–V4（2026-08-26，云端部署完成、桌面待真机验收）：** 已完成项目普通文件夹 caption 快照、云端纯文字提炼、方向验证图和三种生成接入。已确认设定会编译为带 hash 的只读 `VisualProfileCapsule`：直接生成确定性注入，智能精修转 rubric，正式受控 Agent Skill `0.1.2` 转 preserves/excludes 并在实质冲突时走有限澄清；本次明确任务始终优先，内容主题不自动入画。GenJob/generation meta/Agent Run 追踪启动时 `profile id/version/hash`，续轮与历史恢复使用冻结版本，结果无回写 profile 路径。直接生成结果现提供“本次生成控制”回看：展示冻结 must/prefer/avoid、版本/hash、优先级说明，并持久化/展示当时真正提交 provider 的最终指令；旧记录不重编伪造。智能精修人工验收按用户决定暂时搁置。**云端部署已于 2026-08-26 完成**：migration `0042`（Agent Run 视觉设定追踪三列）与 `0043`（修复 `0040` 的 PL/pgSQL 歧义导致的 TTL 结算停滞，见踩坑）已应用远端，Edge `agent-run`（capsule 三层校验的入队边界）已重部署，VPS Worker 已随 Skill `0.1.2` + capsule 规划上下文重建，四循环在线、健康探测零告警；部署时顺带结算了两个过期停车 Run（一个确认 2 积分、一个全额回滚）并清空 TTL 积压（14 Run/52 对象）。本地基线：桌面 Rust **191 passed + 2 ignored**、前端 production build、agent-worker **153/153** + TypeScript、Edge esbuild 语法检查通过；桌面内 V4 真机验收仍待用户执行。
 
+**U3 增量验证基线（2026-09-01；U3 全项收口）：** agent-worker **259/259** + `tsc --noEmit`；DSH Profile **18/18**；html-renderer **71 项（64 pass / 7 本机缺管理 Playwright Chromium skip）** + `tsc --noEmit`。除结构化计划 v2、素材职责隔离、视觉档案绑定与每素材唯一 Vision logical slot 回归外，新增 HTML 执行 phase 4 MiB SSE 上限、每 proxy 8 个不同模型回合上限、工具失败终止、renderer sanitizer prompt 和方舟 observation category 闭集回归。真实新链为 50,499 ms/5 credits；旧单-compose 基线为 5,947 ms/1 credit，但因 CSS 注释被 sanitizer 拒绝而无用户产物。仅删除注释的视觉等价样本经随机 A/B 封存，用户盲选 A，揭盲 A 为新 U3，质量验收通过。本机系统 Chrome 的真实四工具 Run 及独立 renderer E2E 已覆盖 Playwright skip。Profile 因 rc.2 共享 fallback junction 竞态保持串行；损坏生成态 junction 已移除并由 DSH 正常重建。本机无 Deno，Edge parser/归属变更仅完成 TypeScript 语法检查，不能记作 Deno 测试通过。
+
+**U3 候选镜像验证基线（2026-09-01；已被真实执行修正超越）：** 每素材唯一视觉观察槽修正后的候选 `bowerbird/agent-worker-unified-harness:candidate` 曾重建为 `sha256:b238d6ef77c8a53707b7986ebf55e33be9113f2c19df02f51f3def356fe11864`，Docker inspect size 165,741,401 bytes，运行用户 `node`。449 个依赖及 506 条供应链策略检查通过；在 768 MiB、只读根文件系统、无网络、`no-new-privileges`、`cap_drop: ALL` 下连续两轮完整正式入口探针全绿。首次 OOM 根因是探针仍提交 v1、被新 v2 Policy 拒绝后 fake model 无限重放；fixture 升为 v2 后无需提高内存。本轮真实 HTML 执行又修改了计量代理、processor prompt、Vision prompt 和 DSH bridge，因此该 digest 不再代表当前源码；已由 U6 现役 test-only 镜像 `sha256:21656cce…bfbbcd` 取代。历史镜像仅在本地，未推送或部署。
+
+**当前工作树存档验证（2026-09-04；覆盖上方各阶段旧数字）：** 项目画板/路由/任务/runtime 契约 **80/80**，其余桌面前端契约 **23/23**，桌面 Rust **262 passed + 2 ignored**；agent-worker **299/299** + TypeScript，DSH Profile **23/23**，云端归档辅助脚本 **12/12**；桌面 TypeScript、production build、`cargo fmt --check`、`cargo check --lib` 与 `git diff --check` 通过。
+
 **近期里程碑（只保留最近 3 条；更早的全量历史见 [dev-doc/进展归档.md](dev-doc/进展归档.md)）**
 
-- **通用云端 Agent Harness U2 首个 Vision 工具与父进程 Planning Bridge 本地通过（2026-08-29；未部署）**：此前全新本地 Supabase migration `0001`–`0049`、`agent_runtime.sql` **34/34** 和真实 Edge 停车/fresh claim E2E 基线保持有效；真实 `list_run_assets` 继续由 claim 构造闭集 manifest，图片宽高只取 Edge 从已校验 PNG/JPEG/WebP 字节提取的可信元数据。首个 provider 工具 `understand_asset` 已复用现有 `DurableToolDispatcher`：模型只提交当前 Run 的 `assetId + focus`，父进程注入可信 artifact sha256 并绑定 `args_hash`，经 `RunWorkspace` 校验下载、方舟 Vision 结构化结果校验、私有 diagnostic artifact、usage ledger 与 replay/reconcile 闭环，相同调用重放不会重复 provider 请求或计量。新增 `UnifiedPlanningToolBridge` 将 `list_run_assets`、`understand_asset`、`submit_plan` 收口到同一 scoped Gateway，Run/lease/phase/allowlist/revision/stable logical slot 全由父进程注入。审计确认 rc.2 ACP 不提供客户端工具回调：DSH 工具在子进程插件内执行，因此尚需受信插件经每 Run 短期本机 capability 调用父进程 Bridge，再组装统一 processor；子进程不得获得 Worker Token、方舟 key 或 Supabase/service role。最终回归：agent-worker **206/206** + TypeScript。未改 FeaturePolicy、未部署 migration/Edge/VPS、未调用真实 DeepSeek/Vision/生图/renderer。
+> **项目工作区冲突审计核心收敛完成，进入真机与 legacy 收口阶段（2026-09-04）**：用户侧架构冻结为“素材库 / 项目工作区”两种顶层空间，旧 `creative_session` 用户历史与 backfill v2 退出发布范围，中央资产、文件、项目、计费和 generation/Agent 审计继续保留。项目路由现以 `activeProjectId + routeRevision + pending` 串行提交，切换前同步 flush 编辑器并按 FIFO 日志落盘，失败即留在原画板；跨 route 的异步生成、导入、项目级列表、任务 locator 和一次性初始素材命令均按 project/revision/request identity 防止污染新项目。任务的 thread-only locator 会在 snapshot 后覆盖旧焦点，精确 node locator 拒绝跨线程命中；画板素材改按 snapshot 全量精确 ID 补水，不受瀑布流上限、折叠和筛选影响。普通生成与 Agent 共用严格按项目/线程定域的检查器，任务中心只保留 active/attention；提交冻结 provider、视觉设定、父节点与 continuation，同项目 claim 跨 composer 重挂仍防重复 job/Run，会话 revise 以显式 job id 寻址。Cloud Agent 常驻协调器以同 Run 串行 lane、后端 CAS/单调 merge 和匹配 artifact fingerprint 的整组 durable checkpoint 阻止慢响应与半入库；启动恢复会合并实时 Run、补齐 generation 稀疏占位，并修复 receipt 后/checkpoint 前的崩溃窗口。后端 snapshot、layout/execution、owner 不可改绑、隐藏/终态恢复及 provider conversation 均有约束；项目删除在同一事务内阻止所有非终态、未知状态和“已接受但未完整入库”的任务。全程未写正式库、未调用 provider、未部署、未清理 legacy schema。验证为项目画板/路由/任务/runtime **80/80**、其余桌面前端 **23/23**、Rust **262 passed + 2 ignored**、TypeScript、production build、`cargo fmt --check`、`cargo check --lib` 与 `git diff --check` 通过。剩余按 [PROJECT-CANVAS-PLAN.md](dev-doc/PROJECT-CANVAS-PLAN.md) v1.5 继续：真实 DOM + Tauri IPC 故障注入、Windows 视觉/键盘/窄窗验收、升级副本对账、legacy UI/schema 清理与发布确认。
 
-- **通用云端 Agent Harness U2 服务端权威计划估算与 approval transport 本地完成（2026-08-28–29；未部署）**：真实 DSH ACP fresh-session checkpoint 重建继续通过；`apps/agent-worker/src/harness/` 已具备通用 Adapter、scoped Gateway、`list_run_assets` / `submit_plan` 和实际 `AgentControlClient` transport。模型不再允许提交 `estimatedCredits`：Edge 对 `unified_agent_plan` 独立复核闭集 schema、当前 Run 素材、proposal/args hash 与预算，按 Cost Policy v1（每步骤最多两次 24k/8k 模型回合）叠加版本化 Vision/生图/renderer 费率，返回唯一权威估算。migration `0047` 复用现有 `agent_approvals/awaiting_approval`，新增稳定 `source_call_id + args_hash + cost_policy_version`，没有第二套审批状态机；旧图片编辑审批行为不变。批准后高成本 Gateway 工具必须绑定 64 位 approved plan hash，Adapter 也拒绝畸形批准/已完成调用身份；同时修复既有计价函数错误接受 `renderer + image_generation` 后可能得到 `undefined` 的 fail-open 缺口。验证：agent-worker **202/202** + TypeScript、Edge Deno check、共享计价/计划测试 **8/8**、U1 离线 **9/9**、真实 Adapter smoke `end_turn`。本机无 Docker，故 `0047`、真实停车释放租约及批准后 re-claim 尚未做数据库 E2E；未改 FeaturePolicy、未部署 Edge/VPS。rc.2 ACP 仍不提供 usage wire，生产候选前必须补 DSH 模型回合实际计量，计划估算不能替代 usage ledger。
+> **项目即画板 PB0–PB5 与自动回归完成，进入隔离副本真机验收（2026-09-03）**：桌面主模型已收敛为一个项目一块无限画板、项目内多创作线程；侧栏只列项目，项目名为唯一标题，默认“请参考”、空草稿、焦点/选区、平移缩放均不会把 provisional 项目落库，自定义命名/首次有效草稿/拖入素材/建组/发送才会事务性 materialize。ordinary 与 Agent 的 project/thread link、普通→Agent→普通父输出、时间线聚焦/全部活动、线程归档恢复、项目删除保留中央资产与执行审计、启动恢复和稳定 replay 已接通；旧 creative-session 写入/导航已退出，只保留旧 payload 与 legacy 只读回退。新的 backfill v2 在 Online Backup `.tmp/project-canvas-backfill-copy-20260903-173123/library.db` 完成 191 ordinary + 24 Agent、0 失败、0 资产复制、0 未解释差异，二次 215 来源全 skipped；正式库未执行 v2 回填。桌面 Rust **244 passed + 2 ignored**，画板 **24/24**，Agent/来源前端专项 **23/23**，TypeScript 与 production build 通过。残留开发进程曾先行把正式库 schema 从 v20 推进到 project-canvas v23（未回填），现已全部关闭；后续只用隔离副本启动，PB6 真机 P1–P7、Windows 安装包升级和 PB7 正式回填/发布仍待人工验收与单独授权。
 
-- **通用云端 Agent Harness U1 技术入口通过（2026-08-28；下一步 U2 隔离 Adapter / Tool Gateway）**：`spikes/unified-agent-harness-u1/` 采用正常 npm/npx 路径，无需克隆 DSH 仓库；精确钉死 DSH/ACP/base/DeepSeek adapter/tools `0.1.1-rc.2` 与 ACP SDK `0.25.1`，独立 lockfile 与最终组合配置审计确认 shell/PowerShell/fs/web/Skill/subagent/workflow、凭据扫描和遥测均关闭，子进程默认拿不到任何业务 secret。离线 adapter fixture 验证 reasoning、usage、tool-call 原始参数、malformed SSE `MALFORMED_RESPONSE` 及 `tool_choice` 缺口，测试 **9/9**。经用户授权复用本机 Bowerbird Cloud DeepSeek key 的真实 stdio ACP smoke 已通过：同 session 连续两轮唯一 scoped tool 均返回不同不可猜证明并 `end_turn`，真实在途 prompt 可 `cancelled`；`deepseek-v4-flash-vision-exp` 正确声明 image capability，128×128 PNG inline base64 被识别为蓝色鸟，无图续轮仍保持上一图上下文。rc.2 的 `session/list/resume/close` 和 ACP usage/工具生命周期 wire 仍缺失，但 Bowerbird Run/checkpoint/Tool Ledger 原本就是业务唯一权威，故当前改用 connection-scoped fresh session + checkpoint 重建，不再等待新版停工；U2 必须验证重建幂等与有界纠正。未改 FeaturePolicy、未部署生产。
+> **项目即画板决策重构：旧 CS0–CS7 转为基础证据，PB0–PB7 重新收口（2026-09-03）**：用户侧模型改为“一个项目 = 一块无限画板；一块画板包含多条创作线程”。项目成为唯一一级生命周期、标题、素材范围和视觉设定容器；侧栏不再单列 creative session。无父 prompt 新建线程，继续、重试、跨 provider 与普通/Agent 互转沿用原线程；provider session、Cloud job、Agent `run_id/conversation_id`、FeaturePolicy、积分/usage、审批、TTL 与 Tool Gateway 仍保持原权威。旧 CS0–CS7 已完成的无边画板、节点/边/组、吸附建组、composer、普通/Agent 安全投影、幂等恢复和回填基础继续复用，但“项目多画板、全局画板、逐历史来源建画板、删除项目转全局、侧栏一行一个会话”全部失效。旧副本回填的 ordinary **191/191**、Agent **24/24**、0 失败仅作为旧契约证据；立项时正式用户库仍为 schema v20 且未执行 0021–0023/backfill，后续实际 schema 状态以上一条最新里程碑为准。旧 CS7-T6/T7 已暂停，`LEGACY_CREATIVE_SESSION_FALLBACK_ENABLED` 必须保持开启；下一步按 [PROJECT-CANVAS-PLAN.md](dev-doc/PROJECT-CANVAS-PLAN.md) v1.0 从 PB0 冻结新 schema、历史合并和开发 v21–v23 处理路径。
 
-**未开始 / 待办：**
-- **通用 Agent Harness U2 接续**：本地审批停车/重放/批准后 fresh claim、真实 `list_run_assets` artifact manifest、首个 `understand_asset` durable tool 与父进程 `UnifiedPlanningToolBridge` 已通过。下一编码点是受信 DSH 插件 → 每 Run 短期本机 capability/RPC → 父进程 Bridge，随后组装统一 processor 并做本地 fake E2E；真实 Vision fixture smoke 需另行授权。之后再接 `generate_image`、`compose_html`、`render_html`、`inspect_artifact`、`finalize_output`。任何生产候选前仍须补齐 DSH 模型回合实际 usage 并落现有 usage ledger；不得用计划估算代替结算。`0047`–`0049`、Edge/VPS/FeaturePolicy 均未获生产部署授权。
+**阶段清单（含已完成、延后与当前待办）：**
+- **通用 Agent Harness U6 — 实现与真实四工具链已完成，发布观察待办**：无内容观察、升级/回滚 Runbook、SPDX/license、包含 U5 的候选重建/扫描、test-only 部署、零 provider smoke、部署后真实 paired、桌面测试入口及统一 DSH 自主 HTML 四工具链均已完成；普通账号不显示 DSH，旧专用 HTML 不接受 runtime，创建后会话展示服务端锁定值。当前只剩发布层面的两类观察：继续积累 `bowerbird_test` 自然小名单/人工质量样本，以及等待官方基础镜像修复或由明确责任人接受剩余 4 CRITICAL / 18 HIGH。公开档位、预算/计费和 DSH 默认/双栈/停止三选一需另行产品决策，当前不扩大开放、不扩成小红书发布产品。
 - **多模态看图 spike — 已接通（codex CLI），非待办**：四路径实测后定型为唯一 `CodexCliProvider`（`codex exec --image`，ChatGPT 订阅，绕过 API quota）；Mock / ClaudeCode / DeepSeek / OpenAI HTTP 路线已全部移除（`codex/` 仅 `codex_cli.rs` + `types.rs` + `mod.rs`），反推会话回看走 `open_codex_session`（`codex resume <thread_id>`）。详见关键约定 1 + 踩坑「多模态看图四条路径实测」。旧 provider 切换 / in-app apikey 配置已删（`config.json` / 后端 `Settings` 模块 / `base64` 依赖随路线移除）；**`SettingsDialog` / ⚙️ 设置按钮 2026-07-18 同名复活为「整库运维面板」**（codex 状态检测 / 重建色板 / 智能归类全部，[SettingsDialog.tsx](apps/desktop/src/components/SettingsDialog.tsx)，Toolbar ⚙ 入口、约定 13 全屏 Modal 形态），与 apikey 无关。`codex_health` 命令保留作离线/无账号降级探测（约定 7）。
 - **Phase 4 剩余 — FTS 扩列已完成（2026-08-27，0019）**：`prompt_body`（有 sections 的反推 caption 正文）/ `annotation`（标注 token）经 analyses 触发器同步进 `library_fts`，改名不再清空新列，存量整表回填；检索的 caption 维度从「仅反推提示词 section」扩到**任意 section 正文**（未反推/无 sections 仍搜不到，刻意行为）。`ocr` 列随 Phase 5 简化不再需要。**tags 已可检索**——走 `tag:<name>` 智能文件夹 JOIN（不进 FTS，见 P2 设计）；codex 批量自动打标已通（采集即归类 + `reclassify_all`）。
 - **Phase 5 剩余**：用户已简化为只做反推（caption）；OCR/版式/关键词/灵感卡模板集 + 批量分析队列留待需要时再做。
@@ -73,7 +83,7 @@
 
 ---
 
-## to-do
+## 功能清单
 
 [x] 允许用户通过codex一次生成多张图片（codex无疑能生成多张图片，但bowerbird需要增加在一次发送内接收多张返回的图片的功能）— 2026-07-17 完成（接收侧本就 Vec 全链路；瓶颈是首轮 instruction 硬编码「一张」，改为 prompt 驱动数量，详见「目前进展」）
 [x] 生成结果历史，允许用户像回看对话一样回看某个图片的生成结果界面，能看到生成时的prompt，并且能提出对该图片的修改意见（给codex）— 2026-07-17 完成（后端 `generation_history` 按会话重建各轮 prompt+图；前端复用 GenerationPanel，详情页「回看生成对话」入口 load 历史会话 + 续轮 resume，详见「目前进展」）
@@ -82,11 +92,11 @@
 [x] 改变生成图的点击行为，目前点击之后会跳转默认浏览器打开本地图片。但应该要的是就是跟常见的图片交互一样，点击后放大展示。— 2026-07-18 完成（生成图点击改 app 内 Lightbox 全屏放大，跨轮 ←/→ 切换，详见「目前进展」）
 [ ] 新增功能：允许用户上传文件（如品牌全案）以生成合理的视觉系统规范——可以作为用途。
 [x] 记录素材被创作板调用（参考）的次数 — 2026-08-27 完成（`assets.reference_count`：`codex_create_image` 每次实际下发参考图命中资产各 +1（同次去重），0020 迁移 hook 按 generation_meta.payload.references 回填历史；详情页信息区显示「创作板引用 N 次」。自学习体验策略文档仍待设计输出。）
-[ ] 通用云端 Agent Harness 专项：U1 通过；U2 的真实 ACP 重建、scoped Gateway、崩溃 exactly-once、控制面、权威计划估算、approval transport、真实 claim→`list_run_assets`、首个 `understand_asset` durable tool 与父进程 Planning Bridge 已在本地验证。下一步实现受信 DSH 插件到父进程 Bridge 的短期本机 capability/RPC，并组装统一 processor 做 fake E2E；随后再接其余业务工具并解决 rc.2 无 usage wire 时的 DSH 模型实际计量。继续不改生产 FeaturePolicy，不部署 `0047`–`0049`/Edge/VPS，不为 HTML/小红书新增独立 Agent Runner。
+[x] 通用云端 Agent Harness 专项 U4：runtime 兼容、真实 18-case 文本门禁、本地全回归、test-only 远端 `0047`–`0050`/Edge/VPS、零 provider smoke、legacy/DSH 同 case 真实图片与 crash/re-claim 均已通过；actual paired no-regression PASS。普通账号与 HTML 继续保持 legacy，公开迁移留到 U6 决策。
 
 ## 关键约定
 
-> 团队已定的、不轻易改的决策。详细论证见 `dev-doc/Bowerbird开发计划.md`。（约定内容只在本文件维护、不镜像到 CLAUDE.md——2026-08-18 勘误：原文「必须同步 CLAUDE.md『Architectural constraints』」为死引用，该节不存在。）
+> 团队已定的、不轻易改的决策。基础论证见 `dev-doc/Bowerbird开发计划.md`，后续专项论证见上方索引。约定内容只在本文件维护，不镜像到 `AGENTS.md` 或兼容性规则文件。
 
 1. **AI 全外包，不自建模型**：所有理解/分析（VLM 描述、OCR、版式、关键词、灵感卡）**不自建本地模型、全外包**：本机走 headless codex 子进程，Cloud 走 `UnderstandProvider`（方舟 Vision，2026-08-18 起经 VPS understand 异步链路）；**图像生成（⑥）多 provider 可切换**（2026-07-23 Phase 1+2 落地，2026-08-10 Cloud 加入）——抽象 `GenProvider` trait（原 `CodexProvider`，[codex/mod.rs](apps/desktop/src-tauri/src/codex/mod.rs)），三实现：`CodexCliProvider`（默认，`codex exec --image`，ChatGPT 订阅，真正看图 + 出图）/ `DreaminaCliProvider`（即梦官方 dreamina CLI，OAuth + 积分，**仅出图**，[codex/jimeng.rs](apps/desktop/src-tauri/src/codex/jimeng.rs)）/ `BowerbirdCloudProvider`（Bowerbird Cloud 托管生图，Pro/Fast/Lite 档位数据驱动见约定 31，[codex/bowerbird_cloud.rs](apps/desktop/src-tauri/src/codex/bowerbird_cloud.rs)；免费档唯一生图路径）；命令层 `codex_create_image` 的 `provider` 参数选（None=codex），工厂 `resolve_gen_provider`。**理解类（反推/命名/归类）走 `UnderstandProvider`（[codex/understand.rs](apps/desktop/src-tauri/src/codex/understand.rs)）**：本机 codex 或 Bowerbird Cloud 引擎显式二选一（2026-08-13 起；档位门控免费档仅 Cloud；即梦无文本能力，§4.3）。**禁止** ONNX / CLIP / 本地扩散 / 本地 VLM / tesseract / 向量等任何本地模型；Mock / ClaudeCode / OpenAI HTTP 路线在桌面 provider 层均已移除（[codex/openai_api.rs](apps/desktop/src-tauri/src/codex/openai_api.rs) 仅存 spike 备选；DeepSeek 只在 agent-worker 作 Agent 文本回合后端，见约定 25/28；详见踩坑「多模态看图四条路径实测」）。详见 [dev-doc/AI-PROVIDERS.md](dev-doc/AI-PROVIDERS.md)。
 2. **v1 做图像生成（⑥）**（2026-07-06 决策，**覆盖开发计划 v1.2 §1.4「不做生成」**）：在原五件套（收集/浏览/搜索/整理/分析）基础上加入生成。生成多 provider（约定 1）：codex 路径走 CLI tool-use（codex 内置 `imagegen` 技能，不自建扩散模型），Cloud 路径走方舟 Seedream（VPS 异步链路，约定 24/31），即梦走官方 CLI。**已端到端打通（2026-07-08）**：codex exec 触发 `imagegen` 画图，产物落 `~/.codex/generated_images/<thread>/`（路径不在 JSONL 一等字段，靠**快照差分**取图，详见踩坑）；创作板生成 → 真流式回显 → `ingest_generated` 入库为正式资产（`source=codex`、不算 pHash 不去重、进瀑布流）→ 多轮 `codex exec resume` 迭代修改 → 生成图标记（✨ 角标 / `source:codex` 筛选 / `generation_meta` 来源追溯 / 自动命名）。**生成图 caption 策略（2026-08-11 反转）**：曾从生成 prompt 拆 `【维度】：正文` 自动落 caption（2026-07-10 起，不调 codex 反推），导致所有生成图被标「有反推」（🏷️/创作板 @ 池虚构维度）——已反转：**生成图入库不自动写 caption，需手动反推才有**（generation_worker 移除维度拆解，详见「已完成」条目）。prompt 原文仍存 `generation_meta`；**生成 UI 独立为 `GenerationPanel` 覆盖层**（与创作板解耦，状态在 store）；**同流程合并**（2026-07-10）：同一 `session_id` 的过程图入库时写 `assets.generation_session_id`，瀑布流 `collapse_generation_groups` 每组只显最新一张，缩略图/详情页可左右切换过程图（详情页支持 ←/→ 键）；**2026-08-18 扩展（0014）**：`generation_conversations` 把 session 组再扩成 conversation 组——「重新编辑/重试」的版本分支归入同一会话（后端权威、重启不丢）。**一次生成多张（2026-07-17）**：接收侧本就是 Vec 全链路、无需新增能力；数量完全由用户 prompt 驱动（不加 UI 控件），首轮 instruction 不再硬编码「一张」（改「张数以提示词为准」），续轮 resume 天然支持，首轮多张同 session_id 合并成一组。**剩余**：`generations` 表落库（开发计划 §4.2 原移除；目前用 `analyses(kind=generation_meta)` 存来源元信息，够用）。
@@ -163,11 +173,51 @@
 
 41. **HTML 排版只引入受限离线 renderer，不开放浏览器 Agent（2026-08-27）**：后续在 VPS 上增加独立、无公网入口和外网出口、无业务 secret 的 Chromium renderer，作为确定性 `render_html` 工具把当前 Run 内受限 HTML/CSS 与显式 artifact 渲染为视口/整页 PNG，并可从同一次整页像素结果纵向切片；禁止 URL、导航、点击、登录、Cookie、下载、JavaScript、shell、任意脚本、跨 Run 文件和宿主路径。能力可由版本钉死的官方内置 Skill 通过 Global/Skill/Run/Feature 四层 allowlist 调用，但不开放用户 Skill、热加载、插件或 workflow DSL。截图完成后不调用 Vision、不自动评分/修订/重渲染，只等待用户接受或放弃；用户若要调整需显式发起新 Run。权威任务卡见 `dev-doc/HTML-RENDER-PLAN.md`。
 
-42. **未来内容能力统一接入一个云端 Agent，DSH + DeepSeek API 以可回滚方式渐进验证（2026-08-28；U1 技术入口通过）**：用户明确 HTML 长图、视觉受控和未来小红书等都应是同一 Bowerbird 云端 Agent 可调用的工具/能力，而不是各自拥有 Agent、Runner、会话、审批与恢复。此前真实验证表明：Codex 与 Bowerbird Agent 叠加会重复思考并显著耗时；HTML 首版虽完成安全 renderer 和正式 Run，却因独立 Skill 被限制为不看图、不用视觉设定、不生图、一次 compose/render，真实产品图 + 完整推文只能得到“原图 + Doc 式长文”。根因是通用认知/编排能力被切碎到各 Skill Runner，而非 renderer 失败。后续以 **DeepSeek Harness（DSH）+ DeepSeek 官方 API**作为通用 Agent loop 首选候选：DSH 只负责模型循环、上下文、工具选择与取消；Supabase/Bowerbird 继续唯一掌握账号、FeaturePolicy、积分、Run、计划审批、Policy、`call_id + args_hash` 幂等账本、Artifact/TTL、checkpoint 和终态。DSH 通过本机 stdio ACP 由 Worker 驱动，使用精确版本和最小 Profile，默认移除 shell/web/fs/subagent/任意 MCP/插件；所有副作用只经 Bowerbird Tool Gateway 二次校验。现有 Agent Runtime 与 HTML Runner 在迁移验收前保留为兼容/回退，不一次性重写；新能力默认只能新增 Tool 或输出配方/Skill，若要新增独立 Agent Runner，必须先证明不同信任域/所有权边界并重新取得架构决策。**U1 已用现有 Bowerbird Cloud DeepSeek key 实测双轮真实 tool loop、在途取消、Vision inline base64 与多轮图片上下文通过。当前 npm `@deepseek-ai/dsh-acp@0.1.1-rc.2` 虽缺少 `session/list/resume/close` 和 usage/工具事件 wire，但这不再构成等待新版的总停工条件：rc.2 使用 connection-scoped fresh session，Worker/DSH 重启一律由 Bowerbird checkpoint + 已完成 Tool Ledger 结果重建新 session；不得把 DSH session 变成业务事实源。通用计划不得接受模型或 Worker 自报 credits；审批成本必须由服务端按可信 Policy、Run provider 与版本化 `service_costs` 计算，实际结算仍以逐 call usage ledger 为准，计划估算不能替代真实计量。** U2 只获准做隔离 Adapter / Tool Gateway 合同与重建幂等验证；全程不改生产 FeaturePolicy、不部署生产，失败再按专项止损。权威任务卡见 `dev-doc/UNIFIED-AGENT-HARNESS-PLAN.md`。
+42. **未来内容能力统一接入一个云端 Agent，DSH + DeepSeek API 以可回滚方式渐进验证（2026-08-28；U1 技术入口通过）**：用户明确 HTML 长图、视觉受控和未来小红书等都应是同一 Bowerbird 云端 Agent 可调用的工具/能力，而不是各自拥有 Agent、Runner、会话、审批与恢复。此前真实验证表明：Codex 与 Bowerbird Agent 叠加会重复思考并显著耗时；HTML 首版虽完成安全 renderer 和正式 Run，却因独立 Skill 被限制为不看图、不用视觉设定、不生图、一次 compose/render，真实产品图 + 完整推文只能得到“原图 + Doc 式长文”。根因是通用认知/编排能力被切碎到各 Skill Runner，而非 renderer 失败。后续以 **DeepSeek Harness（DSH）+ DeepSeek 官方 API**作为通用 Agent loop 首选候选：DSH/DeepSeek 只负责文本模型循环、上下文、工具选择与取消；任何图片理解、结果检查等视觉能力一律通过 Tool Gateway 调用 Bowerbird 现有火山方舟 Vision，DeepSeek 代理必须拒绝图片输入，不启用 DeepSeek Vision 产品路径。Supabase/Bowerbird 继续唯一掌握账号、FeaturePolicy、积分、Run、计划审批、Policy、`call_id + args_hash` 幂等账本、Artifact/TTL、checkpoint 和终态。DSH 通过本机 stdio ACP 由 Worker 驱动，使用精确版本和最小 Profile，默认移除 shell/web/fs/subagent/任意 MCP/插件；所有副作用只经 Bowerbird Tool Gateway 二次校验。现有 Agent Runtime 与 HTML Runner 在迁移验收前保留为兼容/回退，不一次性重写；新能力默认只能新增 Tool 或输出配方/Skill，若要新增独立 Agent Runner，必须先证明不同信任域/所有权边界并重新取得架构决策。**U1 已用现有 Bowerbird Cloud DeepSeek key 实测双轮真实文本 tool loop 与在途取消；历史 DeepSeek Vision inline base64/multi-turn 结果只作兼容性记录，不进入产品选型。当前 npm `@deepseek-ai/dsh-acp@0.1.1-rc.2` 虽缺少 `session/list/resume/close` 和 usage/工具事件 wire，但这不再构成等待新版的总停工条件：rc.2 使用 connection-scoped fresh session，Worker/DSH 重启一律由 Bowerbird checkpoint + 已完成 Tool Ledger 结果重建新 session；不得把 DSH session 变成业务事实源。通用计划不得接受模型或 Worker 自报 credits；审批成本必须由服务端按可信 Policy、Run provider 与版本化 `service_costs` 计算，实际结算仍以逐 call usage ledger 为准，计划估算不能替代真实计量。** U2 只获准做隔离 Adapter / Tool Gateway 合同与重建幂等验证；全程不改生产 FeaturePolicy、不部署生产，失败再按专项止损。权威任务卡见 `dev-doc/UNIFIED-AGENT-HARNESS-PLAN.md`。
 
-> **约定 42 最新执行状态（2026-08-29）**：U2 的本地控制面闭环已通过全新数据库 reset 与真实 Edge E2E；`submit_plan` 在释放租约后仍可按相同 `source_call_id + args_hash` 返回原 pending 审批，漂移和已结束调用稳定 409，批准后 fresh claim 必须携带原 checkpoint 与 approved plan hash。真实 `list_run_assets` 已接 claim artifact manifest，图片宽高只由 Edge 从已校验字节提取并落库，模型不会看到 URL/路径。首个 `understand_asset` 已复用现有 Artifact/Ledger/usage：模型只提供当前 Run 的 `assetId + focus`，父进程注入可信 sha256 并绑定幂等身份；`UnifiedPlanningToolBridge` 同时由父进程注入 Run/lease/phase/allowlist/stable slot。对 rc.2 的审计确认 ACP 不提供客户端工具调用 callback，故下一步必须由受信 Bowerbird DSH 插件使用每 Run 短期本机 capability 调用父进程 Bridge；DSH 子进程不得持有 Worker Token、provider key 或 Supabase/service role，也不得把 ACP 消息文本当控制通道。该验证只授权并发生在本地，未调用真实 provider；migration `0047`–`0049`、Edge、VPS 与 FeaturePolicy 均未部署。生产候选前还必须补 DSH 实际模型 usage wire。
+43. **本项目 DeepSeek/火山方舟真实调用采用持续授权 + 事后透明报告（2026-09-01）**：用户已明确允许后续项目内 DeepSeek 与火山方舟/Seedream 调用，不再要求每次调用前重复询问；代码中的显式费用双闸仍保留，执行者可依据该持续授权开启。每轮调用后必须报告 runtime/Run、模型回合或图片数、token、Bowerbird credits、`provider_cost_micros` 与失败/`outcome_unknown` 探针，不能只报告最终成功样本。该授权只覆盖 provider 调用及其正常测试数据，不自动扩大到公开 DSH、永久删除账号、生产破坏性操作或其他外部变更。
+
+44. **项目与画板合并为同一用户对象，创作会话降为项目内线程（2026-09-03；替代旧“一画板一会话”约定）**：用户侧“一个项目 = 一块无限画板”，创建、打开、命名、归档和删除均以项目为唯一一级生命周期；一个项目首版不得拥有第二块画板，也不再创建长期 `project_id=NULL` 的全局画板。画板保存项目内自由素材、便签、素材组、空间布局和多条创作线程；无父 prompt 创建线程，从结果继续、重试、跨 provider 或普通/Agent 互转沿用原线程。线程只负责本地因果归组和时间线聚焦，不是侧栏对象，也不得复用 Codex thread、即梦 submit id、Cloud generation job、普通 provider session 或 Agent `run_id/conversation_id`。普通生成和 Agent 各自执行/恢复状态机、FeaturePolicy、积分/usage、审批、TTL 与 Tool Gateway 保持原权威，只通过显式 thread link 向项目画板安全投影。项目素材成员、画板节点实例、中央库文件夹/分类/标签和画板素材组是四种不同关系；拖入、分组、隐藏节点不改变中央资产的整理或物理文件。删除项目删除其画板布局、线程和本地 links，但不得删除中央资产、账单或低层执行审计；运行中任务必须先阻止。旧 CS0–CS7 和副本 191+24 来源回填仅作为未发布实现证据，旧 CS7-T6/T7 暂停，正式库保持 schema v20、legacy flag 开启；当前权威任务卡见 `dev-doc/PROJECT-CANVAS-PLAN.md` v1.0。
+
+45. **桌面素材发现浏览器是主窗口内的工作区面板，复用来源站原生推荐且不扩大 Agent 浏览权限（2026-09-03）**：素材详情页根据 `source_url` 识别来源；Pinterest 首版以“在 Pinterest 发现更多”从详情页切入同窗面板，打开原 Pin 并由来源站自身提供相关推荐，普通站点只表述为浏览原始来源，不抓取、镜像或伪装成 Bowerbird 自有推荐。面板保留 Bowerbird 顶栏与侧栏，提供返回、前进、刷新、地址、系统浏览器回退和关闭后回原素材详情；网页区由主窗口中的原生 `source-discovery` 子 WebView 承载，仅允许无凭据的 HTTP(S)，拒绝下载，`target=_blank` 回收到同一面板，并使用持久浏览数据目录。默认 capability 必须按本地 `main` **webview** 精确授权而非按 `main` window 授权，使远程子 WebView 不获得文件、对话框、shell 或 Bowerbird IPC。此能力是用户主动打开的桌面浏览功能，与云端 Agent/DSH 的无浏览器、无任意 HTTP 边界及离线 HTML renderer 无关，不得借此向模型开放网页访问。
+
+46. **统一 Agent 图片 Run 允许多个最终结果，同层生成不设额外并发上限（2026-09-03）**：覆盖约定 42 中“所有生成分支汇入唯一 final result”的旧限制。统一计划仍只保留一个 `finalize_output` 收束步骤，但它可以依赖多个生成步骤；这些直接依赖全部作为 `final_result` 交付，反馈停车、原子结算、桌面展示与本地组图入库必须保留完整结果集合，不能只选第一张。批准后执行按依赖 DAG 分层推进，每层所有已就绪的 `generate_image` 同时启动，不再增加 Run 内图片 semaphore 或按图片数量人为串行；测试账号立即适用，Pro 账号在获得 unified 权限后适用同一策略。已有计划最大步骤、预算预授权、人工审批、稳定 `call_id + args_hash`、durable ledger、Artifact/TTL、供应商容量与账号级 `max_parallel_agent_runs` 继续有效，这些不是图片分支并发上限。legacy `bowerbird-controlled-image-edit` 的单 final 与反馈修订语义保持不变；当前 DSH test-only 开放范围也不因本决策扩大。
+
+> **约定 42 最新执行状态（2026-08-30）**：U2 的本地控制面、父进程能力桥、正式 planning processor/dispatch、真实 DSH/DeepSeek/方舟 Vision 旧纵切及只读候选均已通过。DSH 模型调用现改经每 Run 父进程计量代理：子进程只持 64 位短期 capability 与 loopback endpoint，真实 DeepSeek key/base/model 留在父进程；模型回合按稳定身份进入既有 durable ledger，SSE/usage 先落私有 diagnostic artifact，精确 token 再进 usage ledger，相同请求不重复上游，未知结果最小计量并停车。候选镜像 `sha256:b02ff28f…d8ba931` 已完成两个真实 DSH 模型回合、两个 durable succeeded model call、精确 12/4 + 12/4 usage、闭集工具、当前 Run 素材、审批停车和临时 home 清理；agent-worker **228/228** + TypeScript，Profile **13/13**。用户授权的真实-provider smoke 在首个模型回合收到旧代理统一映射的 HTTP 502，未进入 Vision 或输出最终摘要；配置结构正常，但无法从旧输出判定实际上游是 4xx 还是 5xx。代理现已保留原始上游状态并继续隐藏正文，测试与无网络候选复跑通过；未经用户再次明确授权不得重跑或标记真实新计量纵切通过。部署环境未开启闸门；migration `0047`–`0049`、Edge、VPS 与 FeaturePolicy 均未部署。下一步接其余工具。
 
 ---
+
+> **约定 42 手动诊断补充（2026-08-30）**：最新真实输出确认前两个 DeepSeek 文本回合和一次方舟 Vision 已成功，第三文本回合失败；这纠正了此前“首回合/尚未进入 Vision”的判断。首次 safe code 被 reconcile 覆盖、fake usage 重复累计及成功合同少算一个文本回合三处已修复，当前基线 Worker 231/231、Profile 13/13、候选 `sha256:b84e9a7e…206d8`。下一次手动诊断应显示第三回合首次具体 safe code。视觉能力固定复用现有火山方舟 Vision，DeepSeek/DSH 不接图片。
+
+> **约定 42 大 SSE 与视觉单路径补充（2026-08-31）**：第三回合首次具体码已确认为旧 `deepseek_response_invalid`，但该码同时表示空正文或超过旧 60 KiB，不能仅凭摘要断言根因。父进程代理现把完整 SSE 上限提高到 512 KiB，拆分空/超限安全码，并以 gzip+base64、原始长度和 hash 写入仍不超过 64 KiB 的私有 diagnostic artifact；恢复时有界解压并复核 SSE/usage，超过 64 KiB 的本地流已逐字节回放且只调用一次上游。现役 Profile 已删除 DeepSeek Vision 模型声明、专用 patch 与 smoke，视觉统一经 Tool Gateway 调用现有火山方舟 Vision。当前基线 Worker 234/234、Profile 13/13、候选 `sha256:fb9f6a6d…26a110`；真实 3+1 纵切仍待用户一次手动复验，未部署生产。
+
+> **约定 42 正式验收与批准计划恢复补充（2026-08-31）**：真实 3+1 纵切已完整通过，结果为 `modelUsage/modelDiagnostics=3`、`visionUsage=1`、`durableSucceededCalls=4`、审批已保存、结构化视觉结果有效，DeepSeek/方舟 secret 均只留父进程。批准后执行不能只凭 `approvedPlanHash + plannedToolCount` 猜测步骤：fresh claim 必须同时提供控制面已批准 proposal 的短期签名 URL，Worker 下载后复核对象 SHA-256、闭集 schema、canonical hash 与步骤数；不得接受 DSH 或模型在批准后重述。该合同与本地 Edge E2E 已通过，Worker 236/236、Profile 13/13、候选 `sha256:7ac2b761…176503`；仍未部署生产。
+
+> **约定 42 批准后首个执行工具补充（2026-08-31）**：统一 Agent 的 `generate_image` 不接受模型在执行期重述参数；Worker 必须从已签名且 hash/步骤数复核通过的批准计划实例化工具定义，固定 goal/prompt、输入 artifact、依赖、stage/final 角色与当前批准 hash，模型参数严格为空对象，call id 由父进程按计划槽派生。Gateway 必须精确比对工具定义绑定的批准 hash；所有付费生成步骤必须经依赖链汇入唯一 final result，unsupported tool 或游离分支在首个 provider 副作用前拒绝。provider 执行继续复用现有 Ark Seedream durable executor 与同一 Artifact/usage/restore/reconcile 账本。当前只开放该受限生图子集，最终结果停车等待接受，retry、HTML、检查与通用完成工具尚未开放。本地 Supabase/Edge 已用现有 Ark executor mock 模式跑通批准计划恢复、durable call、唯一 final artifact、单次 image usage、结果停车、accept 与 succeeded；生产 HTTPS 校验未放宽。基线 Worker 238/238、Profile 13/13、候选 `sha256:72e2cda4…09dd63`；未调用真实 Seedream、未部署生产。
+
+> **约定 42 崩溃恢复补充（2026-08-31）**：provider 返回结果但 durable complete 尚未落库时，进程重建不得因内存索引丢失而盲目重做付费调用。Worker 只允许从当前 Run 的 `outputs/<64-hex-call-id>.<png|jpg|webp>` 确定性闭集路径恢复，必须重新校验图片 MIME、SHA-256 与扩展名，不扫描目录、不接受模型或外部传入路径。恢复后继续使用相同 call id 完成 Artifact/usage/durable complete；若 artifact 已完成但执行 checkpoint 尚未保存，processor 也必须从旧 checkpoint 派生同一 call id 并重放已有 durable 结果。两处进程死亡故障注入均证明上游调用、Artifact 上传和 usage 不重复；Worker 基线 241/241。含本修复的新候选镜像尚待 Docker 环境恢复后重建，旧 `sha256:72e2cda4…09dd63` 不代表当前源码；未部署生产。
+
+> **约定 42 HTML 执行补充（2026-08-31）**：批准后的 HTML 执行使用独立 DSH session/Profile，只暴露 `compose_html` 与 `render_html`，不得把二者加入规划 session 的常驻工具面。当前批准 shape 严格为 `compose → render → finalize`，compose/render 必须绑定同一有序当前 Run 资源；不支持或漂移的计划在首个执行 checkpoint/renderer 副作用前拒绝。模型只生成经闭集安全校验的 HTML 正文，`render_html` 参数仍必须为 `{}`；HTML artifact、Run/lease/call identity 和批准 hash 由父进程绑定。用户可通过统一 input 的闭集 `htmlOutput` 指定 viewport/capture/background；旧输入补原安全默认，二者都在首次 checkpoint 冻结，批准后只读该值，不能由模型自然语言或部署配置决定。renderer 继续复用既有断网/sanitizer/sandbox/durable executor。崩溃重放与真实钉版 DSH + 假 SSE + renderer wire 组合 E2E 均通过，当前基线 Worker **249/249**、Profile **15/15**。
+
+> **约定 42 HTML 检查与完成补充（2026-08-31）**：HTML execution Profile 的最终闭集为 `compose_html / render_html / inspect_artifact / finalize_output`，顺序只能是 `compose → render → [可选一次 inspect] → finalize`；规划 session 工具面不变。`inspect_artifact` 和 `finalize_output` 的模型参数都必须严格为 `{}`。检查时父进程只选择当前 Run 刚渲染的 full-page（无则 viewport）可见截图，把 Artifact id/SHA-256、`focus=layout` 和批准 step goal 绑定到既有火山方舟 Vision durable call；DeepSeek 不接图片，Ark key 不进 DSH。完成时 primary/visible Artifact 由父进程从 renderer 输出派生，模型不得提交 id、路径或 URL；该工具只产生完成候选，checkpoint、用户 accept/discard 与控制面事务仍是业务终态权威。真实钉版 DSH + 假 SSE + renderer wire + Mock Ark 四步 E2E 和 processor checkpoint 前故障恢复均证明 renderer/Vision 各执行一次。当前基线 Worker **252/252** + TypeScript、Profile **15/15**；未部署生产。
+
+> **约定 42 视觉设定注入补充（2026-08-31）**：统一 Agent 的项目视觉设定只能来自 Run 启动输入中的 `VisualProfileCapsule`；父进程必须在打开 DSH 前复核现有 capsule 结构及去除 `hash` 后 canonical JSON 的 SHA-256，并把规范化值冻结进首次 checkpoint。规划和批准后 HTML compose 只读取该冻结值，明确目标优先，must/prefer 仅补任务未说明项，avoid 作为排除项，contentThemes 不得自动成为主体；capsule 始终是不可信只读上下文，模型和结果都无权修改或回写。首次 checkpoint 同时写来源/影响事件，至少包含 profileId/version/sourceScopeHash/hash 与 must/prefer/avoid。篡改测试和 prompt/event 断言均通过；当前基线 Worker **254/254** + TypeScript、Profile **15/15**。
+
+> **约定 42 结构化计划 v2 补充（2026-08-31）**：统一 Agent 新规划使用闭集 `schemaVersion: 2 + contentPlan`；旧 v1 仅保留历史审批恢复兼容。v2 必须恰好为当前 Run 全部素材声明职责，信息架构必须显式绑定来源素材与文案来源，缺失素材必须选择生成/复用/不需要且生成项绑定批准的 `generate_image` 步骤；有冻结视觉档案时必须精确回写 profileId/version/hash，并列明实际采用约束及未误作主体的 contentThemes。Worker 在审批前复核完整覆盖、当前 Run 归属和档案一致性；Edge 使用同形闭集 parser 并再次查询所有计划引用素材归属。模型不得自报成本，Cost Policy v1 仍只按可执行 `steps` 估算。当前基线 Worker **256/256** + TypeScript、DSH Profile **16/16**；本机缺 Deno，Edge 原生测试尚未补跑，未部署生产。
+
+> **约定 42 当前候选与 U3 视觉调用补充（2026-09-01）**：`understand_asset` 对每个当前 Run 素材只分配一个 durable observation slot；同参数重放复用已存结果，换 focus 必须在方舟调用前按 args drift 拒绝，避免 Agent 通过改焦点重复产生视觉费用。真实 U3 smoke 固定产品 `general`、风格 `style` 各一次，并仅对该 test-only ACP 将整轮时限有界提高为 180 秒；生产默认不随之放宽。包含该修正的本地只读候选固定为 `sha256:b238d6ef77c8a53707b7986ebf55e33be9113f2c19df02f51f3def356fe11864`（Docker inspect 165,741,401 bytes，用户 `node`），已在 768 MiB、1 CPU、128 PIDs、rootfs read-only、network none、`no-new-privileges:true`、`cap_drop: ALL` 和两个 32 MiB tmpfs 下连续两轮通过正式入口探针。探针自身也属于兼容合同：所有新规划 fixture 必须使用 schema v2；若继续发送 v1，被 Policy 拒绝后 fake model 无限重放造成的 OOM 不得误判为需要放宽运行内存。前一候选 `sha256:3a6b9f0a…59fd4a5` 不再代表当前源码；当前镜像未推送 registry、未部署生产。
+
+> **约定 42 U3 真实计划验收补充（2026-09-01）**：真实类型产品规划第三次尝试已成功，使用 4 个 DeepSeek 文本回合、2 次火山方舟 Vision 与 6 个 durable succeeded call 提交完整 schema v2；产品图为唯一产品事实来源，独立排版图仅提供大字/留白节奏，参考图汉字、主体和黑白配色未泄漏，不可核验功效/成分不进入计划，视觉档案精确绑定。自动质量门和源图人工对照均通过，DeepSeek/方舟 secret 保持父进程隔离。审批显示的 9 credits 是后续 `compose/render/inspect/finalize` 执行增量估算，其中 1 次 Vision 是成品检查；已发生的规划 usage 继续按真实 ledger 独立结算。该成功只证明计划质量，本次 `generated/rendered/deployed=false`；真实 HTML 执行、盲评与成本/耗时比较仍需另行批准。
+
+> **约定 42 U3 执行与盲评收口补充（2026-09-01）**：真实新链路已以 4 个 DeepSeek 回合、1 次 renderer、1 次方舟 Vision、50.499s 和 5 credits 完成 `compose → render → inspect → finalize`，产出 1080×4320 整页 + 4 切片。旧单-compose 同素材基线只花 5.947s/1 credit，但因模型写入 3 处 CSS 注释被 sanitizer 拒绝、无用户产物；该失败不得按成功基线美化。仅删除注释的视觉等价样本和新 U3 产物随机编为 A/B，映射 commitment `bf560f7d…697b1` 复算匹配；用户盲选 A，揭盲 A 为新 U3，因此 U3 “相对旧专项有实质提升”验收通过。新链额外 44.552s/4 credits 换取了可渲染、经 Vision 检查且用户盲选胜出的完整产物。该结论只关闭 U3 test-only 验收，不改变生产部署闸门。
+
+> **约定 42 U6 统一入口与精确详情页补充（2026-09-02）**：DSH 是测试账号可选择的统一 Agent runtime/能力入口，不是“受控生图”按钮的另一种执行器。选择 `DSH · 自动选工具` 后桌面必须创建 `bowerbird-unified-agent`，由 Agent 根据目标选择受控工具；旧“受控生图”和“HTML 排版”只作为 legacy 专用 Skill 保留，不能影响 unified DSH 的能力决策。对含冻结长文的产品详情页，父进程策略必须要求 `compose_html → render_html → inspect_artifact → finalize_output`、拒绝 `generate_image`，并在 compose side effect 前逐行验证原文；模型没有权限通过选择图片模型来排长字。该策略已由两个真实 succeeded Run 证明，仍保持 test-only，不表示所有目标都必须走 HTML，也不表示当前视觉质量已达产品标杆。用户已为当前连续开发的 test-only 联调明确提供真实 DeepSeek、火山方舟与远端 test-only 部署的持续授权；后续在相同范围内不重复索取业务授权，只在调用和费用发生后汇报，范围扩大或生产发布不包含在该授权内。
+
+47. **项目即画板：一个项目只有一块无限画板，创作会话降为项目内线程（2026-09-03）**：项目是用户侧唯一一级创作对象，也是标题、素材成员、视觉设定、生命周期和画板身份的唯一权威；侧栏不得再列独立 creative session，也不得在项目内再创建或选择画板。无父 prompt 新建线程，继续、重试、历史轮编辑、跨 provider 与普通/Agent 互转必须沿用父输出所属线程；provider session、generation job、Agent `run_id/conversation_id` 只作底层执行/恢复身份。provisional 项目在首次拖入素材、非空有效草稿、手动命名、建组或发送前只存在前端，原样退出不落库；默认“请参考”、焦点/选区和平移缩放不算有效修改，首个 prompt 可自动命名但永不覆盖手动标题。删除项目只删除其画板、线程与 project-local links，中央资产、账单和底层执行审计必须保留，运行中任务先阻止；这部分明确覆盖约定 18/20 的旧“项目删除三模式/写回 workspace”语义，单素材的移出/物理删除危险确认仍保持。当前执行权威为 [PROJECT-CANVAS-PLAN.md](dev-doc/PROJECT-CANVAS-PLAN.md)，旧 [CANVAS-SESSION-PLAN.md](dev-doc/CANVAS-SESSION-PLAN.md) 只作实施证据。
+
+48. **项目工作区审计收敛：不迁移旧用户会话，保留资产与执行事实（2026-09-04）**：本轮明确放弃旧 `creative_session` 的用户侧列表、独立详情页、标题和历史 backfill，不再用兼容旧会话作为发布门槛；这不授权删除中央资产、物理文件、项目、计费、额度、普通 generation 或 Cloud Agent 的底层执行审计。桌面顶层只允许“素材库”与 `project(projectId)` 两种工作区；画板/时间线、普通与 Agent 共用的项目内检查器、唯一 composer 都归项目内部，全局任务中心只投影运行中、等待用户或失败待处理任务，不能继续充当历史会话导航。页面、选择与继续操作必须以 `projectId + threadId + nodeId` 定位，`assetId` 仅是内容身份；队列状态以 `task_queue.status` 为权威，投影重放不得复活终态任务或清除用户隐藏/布局。当前纠偏任务卡与 UI/架构契约见 [PROJECT-CANVAS-PLAN.md](dev-doc/PROJECT-CANVAS-PLAN.md) v1.5；正式库仍保持零写入，legacy schema 清理仅在新链路通过自动化、升级副本和 Windows 真机验收后另行执行。
+
+49. **项目路由与画板持久化必须 fail-closed（2026-09-04）**：项目 enter/exit/delete/reload 共用串行 route controller；后端 active scope 成功后才能提交前端 route，所有异步完成都要复核 `projectId + routeRevision`。离开前必须先把整个工作区设为 `inert` 并移除编辑焦点，再同步提取编辑器内存草稿，最后按严格 FIFO write journal 落盘；首项失败时后续写入不得越过，后台 snapshot 不得覆盖本地未保存投影，路由必须拒绝切换。初始素材 launch 必须绑定目标 `projectId` 且消费后一次性 ack；持久项目 snapshot 读取失败必须阻断编辑并显式重试，不能降级成空白项目。项目删除必须由后端在同一事务内重新检查未完成 generation/Agent 与待入库结果，不能只信前端确认。对应实现与剩余门槛见 [PROJECT-CANVAS-PLAN.md](dev-doc/PROJECT-CANVAS-PLAN.md) v1.5。
 
 ## 踩坑记录
 
@@ -182,11 +232,113 @@
 - 相关文件：
 ```
 
+### 残留桌面进程会在启动时改写正式 SQLite schema（2026-09-03）
+- 现象：计划按只读方式审计正式 `library.db` 时，数据库已从预期 v20 变为 project-canvas v23，容易误以为 backfill v2 已经执行。
+- 根因：此前启动的 Bowerbird/Cargo 子进程仍持有正式素材库配置；Tauri 启动会自动执行本地 schema migration，关闭可见窗口不等于相关进程全部退出。
+- 解决 / 绕过：任何正式库 preview/备份前先枚举并关闭 Bowerbird、Cargo/rustc 与 dev server 进程，再记录 schema 指纹、文件长度和 mtime；开发运行统一设置 `BOWERBIRD_LIBRARY_ROOT_OVERRIDE` 指向 SQLite Online Backup 隔离副本。schema migration 与 backfill 账本分开审计，v23 不能推导为 v2 已回填；正式回填仍需单独授权。
+- 相关文件：[lib.rs](apps/desktop/src-tauri/src/lib.rs)、[project_canvas_backfill.rs](apps/desktop/src-tauri/src/core/project_canvas_backfill.rs)、[PROJECT-CANVAS-PLAN.md](dev-doc/PROJECT-CANVAS-PLAN.md)。
+
+### 统一 Agent 主产物策略只改 Edge、未同步数据库结算（2026-09-02）
+- 现象：真实 HTML 四工具链已到 `awaiting_result_feedback`，接受结果后 checkpoint 显示 succeeded，但 `finish` 返回 409，Run 最终按失败路径结算为 `agent_control_http_409`。
+- 根因：Edge 等待反馈已允许 `bowerbird-unified-agent` 在没有 `final_result` 时使用唯一整页/viewport 截图，数据库 `settle_agent_run` 仍只对专用 HTML Skill 接受截图，unified 被旧的 `final_result` 规则拒绝。
+- 解决 / 绕过：migration `0052` 使原子结算与 Edge 使用同一策略：专用 HTML 只认唯一截图；unified 优先唯一 `final_result`，没有时认唯一截图；其他 Skill 仍只认唯一 `final_result`。迁移 dry-run 确认只应用 `0052`，远端推送后两个真实 Run succeeded 且积分对账。
+- 相关文件：[0052_unified_agent_html_run_settlement.sql](apps/cloud/supabase/migrations/0052_unified_agent_html_run_settlement.sql)、[agent-result-artifacts.ts](apps/cloud/supabase/functions/_shared/agent-result-artifacts.ts)、[agent-worker/index.ts](apps/cloud/supabase/functions/agent-worker/index.ts)。
+
+### HTTP socket 关闭不代表计量代理的异步 handler 已结束（2026-09-02）
+- 现象：一个 `dsh_acp_prompt_timeout` Run 终态实际结算 9 credits，但约 1 秒后又登记一条 DeepSeek usage，形成 10 usage credits / 9 settled credits 的历史测试差额。
+- 根因：`MeteredDeepSeekProxy.close()` 先 `closeAllConnections()` 再等待 HTTP server close；socket 已断开时，已接受的 async handler 仍可在后台等待上游响应并持久化 usage，Worker 却已进入失败结算。
+- 解决 / 绕过：proxy 关闭先停接新请求、断开子进程连接，再等待全部已接受 handler 完成；上游 fetch 同时绑定既有 90 秒超时。新增回归明确证明 `close()` 不会早于在途 usage 持久化返回。修复前测试差额保留为证据，不追改历史账单；修复后的真实成功 Run 均逐项对账。
+- 相关文件：[metered-deepseek-proxy.ts](apps/agent-worker/src/harness/metered-deepseek-proxy.ts)、[metered-deepseek-proxy.test.ts](apps/agent-worker/src/harness/metered-deepseek-proxy.test.ts)。
+
+### Docker Desktop 按用户安装时 Engine 在运行但 Codex 找不到 CLI（2026-09-01）
+- 现象：Docker Desktop/Engine 进程均在运行，但 Codex PowerShell 的 `docker version` 报命令不存在；标准 `C:\Program Files\Docker\...` 路径也不存在，曾误以为只能等待用户修复 Docker。
+- 根因：本机 Docker Desktop 安装在当前用户目录，CLI 实际为 `C:\Users\Hins\AppData\Local\Programs\DockerDesktop\resources\bin\docker.exe`，该目录没有进入当前 Codex 进程的 PATH。
+- 解决 / 绕过：先从 `Get-Process` 的 `ExecutablePath` 定位 Docker Desktop 根目录，再以 CLI 绝对路径调用并验证 client/server；不要只检查系统级默认路径或把 Engine running 等同于 CLI 已在 PATH。
+- 相关文件：[compose.unified-harness-candidate.yml](apps/agent-worker/compose.unified-harness-candidate.yml)、[UNIFIED-HARNESS-RUNBOOK.md](apps/agent-worker/UNIFIED-HARNESS-RUNBOOK.md)。
+
+### pnpm 11 的项目设置与 run 参数语义会让依赖修复“看似成功、实际未生效”（2026-09-01）
+- 现象：把 `pnpm.overrides` 写入 Profile `package.json` 后，pnpm 11 只警告并忽略；另按旧 Runbook 执行 `pnpm run sbom:unified-harness -- <profile> <output>` 时，`--` 被原样传给 Node，脚本把它当成 Profile 路径。直接依赖升级后顶层显示 `js-yaml 4.3.1`，镜像复扫却仍发现 DSH 精确依赖的隐藏 `4.2.0` 副本。
+- 根因：pnpm 11/12 已把非 registry 项目设置迁到 `pnpm-workspace.yaml`；`pnpm run` 的参数分隔行为也与旧命令假设不同。只检查顶层链接不能证明 pnpm store 已收敛。
+- 解决 / 绕过：在独立 Profile 新增最小 `pnpm-workspace.yaml` override，并把它与 package/lock 一起纳入 Docker COPY 和发布身份；SBOM 命令移除 `--`。最终以 lockfile、镜像 `.pnpm` 存储和 Trivy 复扫共同确认旧版本消失，不能只信安装命令退出 0。
+- 相关文件：[pnpm-workspace.yaml](spikes/unified-agent-harness-u1/profiles/bowerbird-u1/pnpm-workspace.yaml)、[Dockerfile.unified-harness-candidate](apps/agent-worker/Dockerfile.unified-harness-candidate)、[UNIFIED-HARNESS-RUNBOOK.md](apps/agent-worker/UNIFIED-HARNESS-RUNBOOK.md)。
+
+### Legacy 与 DSH 不能误用同一个 DeepSeek model 环境变量（2026-09-01）
+- 现象：U4 镜像、DSH 断网探针和 Compose 均通过后，首次 production Worker 切换进入重启循环；启动门报 `BOWERBIRD_CONTROLLED_IMAGE_EDIT_DSH_MODEL_mismatch`。Edge 的 DSH runtime 选择当时仍关闭，三类队列均为 0，没有 Run 或 provider 调用受影响。
+- 根因：production legacy/visual 路径固定使用 `DEEPSEEK_MODEL=deepseek-chat`，DSH Profile 则钉定 `deepseek-v4-flash`；部署入口错误地把同一个全局 `DeepSeekConfig.model` 同时交给两条 runtime。把生产全局 model 改成 v4 会暗中改变普通用户与视觉提炼行为，不能作为修复。
+- 解决 / 绕过：立即把 controlled DSH flag 恢复 false 并重建容器，四循环恢复；随后新增独立 `BOWERBIRD_DSH_MODEL=deepseek-v4-flash`，只为 DSH 父进程计量代理覆盖 model，key/base 继续由父进程共享，legacy `DEEPSEEK_MODEL` 不变。Worker 283/283、TypeScript、VPS 断网只读双 processor 探针和第二次空队列切换均通过；Edge test-only flag 最后才开启。
+- 相关文件：[main.ts](apps/agent-worker/src/cloud-agent/main.ts)、[main.test.ts](apps/agent-worker/src/cloud-agent/main.test.ts)、[.env.example](apps/cloud/.env.example)、[DEPLOY.md](apps/cloud/DEPLOY.md)。
+
+### Provider 结果只记内存索引会在真实进程死亡后失去恢复入口（2026-08-31）
+- 现象：Ark 已返回并把图片写入 Run 工作区，但在 durable complete 前模拟进程死亡；新进程能看到磁盘文件，却因 `RunWorkspace` 的 provider result 索引只存在旧进程内存而无法恢复，最终安全停车为 outcome unknown。
+- 根因：确定性文件已耐久化，恢复查询却只检查构造期为空的内存 `Map`；单实例重放测试无法暴露这个“磁盘有结果、重建无索引”的窗口。
+- 解决 / 绕过：`providerResult(callId)` 先校验 64 位十六进制 call id，再仅探测当前 Run 的 `outputs/<call-id>.png/.jpg/.webp` 闭集路径，读取后重新验证图片 MIME、SHA-256 与扩展名并恢复内存索引。故障注入用全新 workspace/executor 证明 Seedream 上游仍只调用一次，Artifact/usage 各一次；processor 级测试同时覆盖 artifact 后、checkpoint 前死亡并验证相同 call id 重放。
+- 相关文件：[run-workspace.ts](apps/agent-worker/src/cloud-agent/run-workspace.ts)、[controlled-image-executor.ts](apps/agent-worker/src/providers/ark/controlled-image-executor.ts)、[unified-planning-run-processor.test.ts](apps/agent-worker/src/cloud-agent/unified-planning-run-processor.test.ts)。
+
+### 批准 hash 不能替代批准计划正文的可恢复来源（2026-08-31）
+- 现象：统一 Agent 规划已能停车并在 fresh claim 收到 `approvedPlanHash` 与 `plannedToolCount`，但 Worker 没有被批准的具体步骤正文，无法安全构造批准后的 `generate_image` 调用。
+- 根因：hash 只能校验已知正文，不能反推出正文；若让 DSH 在批准后重新生成或重述计划，即使语义相似也不是用户批准的不可变 proposal，会破坏步骤、输入、成本和 call identity 绑定。
+- 解决 / 绕过：Edge fresh claim 只选择当前 Run、`approved` 状态、精确 proposal hash 且内容未删除的审批对象，返回短期签名 URL/hash/步骤数。Worker 以 64 KiB 上限下载，验证对象 SHA-256、闭集 plan schema、canonical hash 与步骤数；缺失、非 HTTPS URL、hash/计数/正文漂移全部 fail closed。本地 E2E 真实读取签名对象并逐项验证，不调用 provider。
+- 相关文件：[agent-worker/index.ts](apps/cloud/supabase/functions/agent-worker/index.ts)、[approved-unified-plan.ts](apps/agent-worker/src/harness/approved-unified-plan.ts)、[test-unified-agent-approval-local.mjs](apps/cloud/scripts/test-unified-agent-approval-local.mjs)。
+
+### 模型输出 SSE 上限不能与 diagnostic artifact 上限共用（2026-08-31）
+- 现象：正式纵切前两个 DeepSeek 文本回合和一次方舟 Vision 均成功，第三回合在接收视觉事实后返回旧 `deepseek_response_invalid`；其 `modelUsage=3`、`modelDiagnostics=2`、`durableSucceededCalls=3` 与阶段完全对应。
+- 根因：旧实现用同一个约 60/64 KiB 量级限制约束“内存中的完整 SSE”与“持久化 JSON artifact”。SSE 的逐 token 事件包装会显著放大 wire 字节数，而直接把正文嵌入 JSON 还会增加转义开销；同时旧安全码把空正文和超限合并，真实摘要不能严格区分两者。
+- 解决 / 绕过：将完整 SSE 校验上限独立设为 512 KiB，空正文与超限分别返回 `deepseek_response_empty` / `deepseek_response_too_large`；持久化 schema v2 使用 gzip+base64，并保存原始字节数与 SHA-256，artifact 继续限制在 64 KiB。恢复时以 512 KiB 有界解压，验证长度/hash/UTF-8/`[DONE]`/usage/provider request id。新增超过 64 KiB 的精确回放测试，确认只调用一次上游；真实第三回合是否恢复仍以用户下一次手动纵切为准。
+- 相关文件：[metered-deepseek-proxy.ts](apps/agent-worker/src/harness/metered-deepseek-proxy.ts)、[metered-deepseek-proxy.test.ts](apps/agent-worker/src/harness/metered-deepseek-proxy.test.ts)、[formal-vision-smoke.mjs](spikes/unified-agent-harness-u1/profiles/bowerbird-u1/scripts/formal-vision-smoke.mjs)。
+
+### outcome-unknown 重放不能覆盖首次 safe code，测试账本也必须幂等（2026-08-30）
+- 现象：正式 smoke 显示 `provider_outcome_unknown`、`modelUsage=8`，表面上既不知道第三个 DeepSeek 文本回合的具体失败类型，又像发生了八次模型计费；但同时只有两个模型 diagnostic artifact、一次方舟 Vision 和三个 durable succeeded call。
+- 根因：第三个文本回合第一次失败后，DSH 会重试相同请求；`DurableToolDispatcher` 对既有 `outcome_unknown` reconcile 不到 artifact 时，用通用 `provider_outcome_unknown` 覆盖了首次保存的具体 safe code。smoke fake control 又按 `recordUsage` 调用次数累加，没有模拟生产 ledger 按 call id 幂等，重复 reconcile 的最小 usage 因而被重复计数。成功断言还漏算了“收到方舟视觉事实后提交计划”的第三个文本回合。
+- 解决 / 绕过：`PreparedToolCall` 暴露控制面本已返回的 `safeErrorCode`；failed/outcome-unknown replay 保留首次码，HTTP 200 后正文读取失败归一为 `deepseek_transport_unknown`；formal fake usage 按 `kind + callId` 幂等，成功合同修正为 3 个 DeepSeek 文本 usage + 1 个方舟 Vision usage + 4 个 durable succeeded call。新增首次码保留、响应读取失败不泄漏和重放不重复上游回归。
+- 相关文件：[durable-tool-dispatcher.ts](apps/agent-worker/src/kernel/durable-tool-dispatcher.ts)、[metered-deepseek-proxy.ts](apps/agent-worker/src/harness/metered-deepseek-proxy.ts)、[formal-vision-smoke.mjs](spikes/unified-agent-harness-u1/profiles/bowerbird-u1/scripts/formal-vision-smoke.mjs)。
+
+### SSE `[DONE]` 是终止事件，不保证其后还有空行（2026-08-30）
+- 现象：DeepSeek/DSH 单回合、两轮真实工具 loop 和取消均成功，但经父进程计量代理的完整 smoke 连续两次在首个模型回合返回 502。
+- 根因：DSH 已正确发送 `stream_options.include_usage=true`；代理却只接受正文精确以 `data: [DONE]\n\n` 或 CRLF 双换行结束。真实 SSE 可以合法地以 `[DONE]` 行直接结束，旧解析器因此把成功 200 流标成 `deepseek_stream_incomplete`。
+- 解决 / 绕过：按行精确查找唯一终止标记，要求其后不得有非空数据，但允许零个或多个空行；usage 仍必须存在且响应大小继续受限。新增无尾空行回归，Worker 229/229、Profile 13/13、无网络候选复跑通过。用户随后手动运行修复后的完整 smoke 仍在首个文本回合 502，因此这是已修复的真实兼容缺陷，但不是已证明的唯一 502 根因；后续以 durable `safeErrorCode` 继续定位。
+- 相关文件：[metered-deepseek-proxy.ts](apps/agent-worker/src/harness/metered-deepseek-proxy.ts)、[metered-deepseek-proxy.test.ts](apps/agent-worker/src/harness/metered-deepseek-proxy.test.ts)、[profile.test.mjs](spikes/unified-agent-harness-u1/profiles/bowerbird-u1/test/profile.test.mjs)。
+
+### Provider 代理不能把所有上游 HTTP 错误折叠为 502（2026-08-30）
+- 现象：用户授权的首次正式 DSH 计量 smoke 在首个模型回合只显示代理 HTTP 502；配置结构正常，但无法判断 DeepSeek 实际返回的是参数/鉴权类 4xx、限流 429，还是临时 5xx。状态保真修复后的第二次授权重跑仍为 502，说明还可能是实际上游 502，或代理在 200 后判定流/usage/大小不合格。
+- 根因：`MeteredDeepSeekProxy` 已在 durable safe code 中保存 `deepseek_http_<status>`，HTTP 边界却把所有 `DurableProviderError` 统一响应成 502；DSH adapter 只呈现 HTTP 状态，不读取代理安全正文，诊断信息因此丢失。
+- 解决 / 绕过：对确定性的 `deepseek_http_<status>` 保留原始 4xx/5xx 状态，响应正文仍只含稳定错误码且绝不转发 provider 正文；其他未知/内部错误继续统一 502。新增 429 状态保真、正文不泄漏与 durable failed 回归。真实调用失败不自动重试，仍需用户重新授权。
+- 相关文件：[metered-deepseek-proxy.ts](apps/agent-worker/src/harness/metered-deepseek-proxy.ts)、[metered-deepseek-proxy.test.ts](apps/agent-worker/src/harness/metered-deepseek-proxy.test.ts)。
+
+### DSH 被信号终止时 `exitCode` 仍可能为 null（2026-08-30）
+- 现象：正式 ACP 回合已完成，父进程调用 `SIGKILL` 收尾后候选容器仍报 `dsh_acp_child_stuck`。
+- 根因：Node 子进程被信号终止时以 `signalCode` 表示终态，`exitCode` 可以继续为 `null`；只检查 `exitCode` 会把已结束误判为卡住。
+- 解决 / 绕过：退出等待与临时 home 清理统一以 `exitCode !== null || signalCode !== null` 判断终态；候选容器复跑已通过。真实 provider 的前次尝试可能已计费，不能因收尾修复而自动重跑。
+- 相关文件：[node-dsh-acp-port.ts](apps/agent-worker/src/harness/node-dsh-acp-port.ts)、[node-dsh-acp-port.test.ts](apps/agent-worker/src/harness/node-dsh-acp-port.test.ts)。
+
+### ACP SDK 必须从不可变 DSH Profile 解析（2026-08-30）
+- 现象：本地正式计量 smoke 在任何 DeepSeek/方舟请求前报 `ERR_MODULE_NOT_FOUND`，而候选镜像因 `/app/node_modules` 软链接存在未暴露问题。
+- 根因：正式 port 从 agent-worker 自身包解析 `@agentclientprotocol/sdk`，但该 SDK 实际属于钉定 Profile 的依赖闭包；开发树与候选镜像的模块布局不同。
+- 解决 / 绕过：`NodeDshAcpPort` 从 `profileTemplateDir/node_modules/@agentclientprotocol/sdk/dist/acp.js` 的不可变钉定入口直接加载，避免借用应用依赖或容器软链接；Profile 完整性检查继续在 spawn 前 fail closed。
+- 相关文件：[node-dsh-acp-port.ts](apps/agent-worker/src/harness/node-dsh-acp-port.ts)、[Dockerfile.unified-harness-candidate](apps/agent-worker/Dockerfile.unified-harness-candidate)。
+
+### DSH Profile 启动会自愈 pnpm 软链接，不能直接依赖只读根文件系统（2026-08-30）
+- 现象：正式 Vision smoke 在只读开发沙箱启动 DSH 时，尚未调用 DeepSeek/方舟便因尝试 `unlink profiles/.../node_modules/@types/react` 报 `EPERM`；切换到仓库可写后，同一正式链路正常完成。
+- 根因：DSH 启动的 Profile module fallback 会检查并重建 pnpm 软链接，即使依赖已经安装，启动阶段也可能写 `profiles/node_modules`；生产 Worker 当前采用只读根文件系统，直接把该 Profile 放进镜像只读层会在启动前失败。
+- 解决 / 绕过：实测否决“构建期预组装”：第二次启动会把部分 fallback 目标算成 fallback 自身；只给链接树 tmpfs 也不够，因为 rc.2 还会无条件重写 `cordis.yml`。当前候选把依赖本体留在只读镜像层，每个 DSH 进程在 32 MiB tmpfs 创建独立临时 `DSH_HOME`，复制轻量 Profile 配置并链接只读依赖，退出后只删除该临时 child。同一非 root、只读、无网络容器连续两次启动已通过；正式 ACP port 接线前主入口继续 fail closed。
+- 相关文件：[formal-vision-smoke.mjs](spikes/unified-agent-harness-u1/profiles/bowerbird-u1/scripts/formal-vision-smoke.mjs)、[runtime.mjs](spikes/unified-agent-harness-u1/profiles/bowerbird-u1/scripts/runtime.mjs)、[UNIFIED-AGENT-HARNESS-PLAN.md](dev-doc/UNIFIED-AGENT-HARNESS-PLAN.md)。
+
+### DSH 在 Linux live ACP 启动时会自动补入 Cordis HMR（2026-08-30）
+- 现象：同一候选镜像的配置探针通过，但正式 ACP initialize 前子进程关闭；无 secret 的诊断日志显示 `@deepseek-ai/cordis-plugin-hmr` 无法加载 Node internal module。
+- 根因：当前钉版 DSH 在 Profile 未提供 `hmr` service 时仍会自动加入 Cordis HMR；配置 dump 不执行 live HMR，因此旧探针漏检。Windows loader fallback 可工作，Linux Node 24 需要显式 `--expose-internals`。
+- 解决 / 绕过：正式 `NodeDshAcpPort` 固定在 DSH 入口前加入 `--expose-internals`，并以单测锁定启动参数；该 Node 能力仅提供给只读镜像内钉版的受信 DSH/插件，模型仍无 shell/fs/web、动态插件和业务 secret。候选容器必须跑真实 ACP initialize/new-session/cancel/dispose，不能只做配置 dump。
+- 相关文件：[node-dsh-acp-port.ts](apps/agent-worker/src/harness/node-dsh-acp-port.ts)、[dsh-readonly-probe.mjs](apps/agent-worker/scripts/dsh-readonly-probe.mjs)、[Dockerfile.unified-harness-candidate](apps/agent-worker/Dockerfile.unified-harness-candidate)。
+
+### DSH `--patch` 路径相对 `DSH_HOME`，不相对 Profile 目录（2026-08-29）
+- 现象：给 DSH 传裸文件名 `cordis.bridge.patch.yml` 时，即使文件实际存在于 Profile 目录，ACP 启动仍会立即关闭；日志显示 DSH 在 Spike 根目录寻找该文件。
+- 根因：当前钉版 DSH 的 overlay 路径按子进程 `DSH_HOME` / 工作目录解析，不会自动以 `--profile` 指向的目录为基准。
+- 解决 / 绕过：始终传相对 `DSH_HOME` 的完整路径 `profiles/bowerbird-u1/cordis.bridge.patch.yml`；真实启动钉版 DSH/ACP 并加载受信插件的无 provider 测试已锁定该行为，避免只靠静态配置测试漏检。
+- 相关文件：[profile.test.mjs](spikes/unified-agent-harness-u1/profiles/bowerbird-u1/test/profile.test.mjs)、[dsh-acp-port.mjs](spikes/unified-agent-harness-u1/profiles/bowerbird-u1/scripts/dsh-acp-port.mjs)、[runtime.mjs](spikes/unified-agent-harness-u1/profiles/bowerbird-u1/scripts/runtime.mjs)。
+
 ### DSH ACP sessionUpdate 不是客户端工具回调通道（2026-08-29）
 - 现象：ACP `prompt` 能把最终 committed text 返回父进程，但在 DSH 注册工具后，工具会直接在 DSH 子进程插件内执行，父进程客户端看不到工具名与参数，无法直接交给 Bowerbird Tool Gateway。
 - 根因：当前钉死的 `@deepseek-ai/dsh-acp@0.1.1-rc.2` 客户端协议实现只暴露消息/session update，不提供 host-side tool dispatch callback；U1 的 fixture tool 本来就是 DSH 进程内插件，不能据此推断 ACP 会把调用转发给父进程。
-- 解决 / 绕过：Bowerbird 父进程继续唯一拥有 `UnifiedPlanningToolBridge`，由它注入 Run、lease、phase、allowlist、revision 与 stable logical slot。下一步只允许受信 Bowerbird DSH 插件通过每 Run 短期本机 capability/RPC 转发 `toolName + arguments`；DSH 子进程不获得 Worker Token、方舟 key、Supabase/service role 等业务 secret，不把 ACP message text 解析成控制协议。
-- 相关文件：[dsh-acp-port.mjs](spikes/unified-agent-harness-u1/profiles/bowerbird-u1/scripts/dsh-acp-port.mjs)、[u1-fixture-tool.mjs](spikes/unified-agent-harness-u1/profiles/bowerbird-u1/plugins/u1-fixture-tool.mjs)、[unified-planning-tool-bridge.ts](apps/agent-worker/src/harness/unified-planning-tool-bridge.ts)。
+- 解决 / 绕过：Bowerbird 父进程继续唯一拥有 `UnifiedPlanningToolBridge`，由它注入 Run、lease、phase、allowlist、revision 与 stable logical slot。现已实现受信 Bowerbird DSH 插件，通过每 Run 32-byte 短期 capability 的 loopback HTTP 只转发 `toolName + arguments`；DSH 子进程不获得 Worker Token、方舟 key、Supabase/service role 等业务 secret，不把 ACP message text 解析成控制协议。真实 DSH + 假 DeepSeek 本地 E2E 已验证该路径。
+- 相关文件：[dsh-acp-port.mjs](spikes/unified-agent-harness-u1/profiles/bowerbird-u1/scripts/dsh-acp-port.mjs)、[bowerbird-planning-tools.mjs](spikes/unified-agent-harness-u1/profiles/bowerbird-u1/plugins/bowerbird-planning-tools.mjs)、[loopback-tool-bridge-server.ts](apps/agent-worker/src/harness/loopback-tool-bridge-server.ts)、[unified-planning-harness-runner.ts](apps/agent-worker/src/harness/unified-planning-harness-runner.ts)。
 
 ### 计划审批重放必须先按调用身份收敛，再要求当前租约（2026-08-29）
 - 现象：`unified_agent_plan` 首次提交已成功落审批并把 Run 停在 `awaiting_approval`，租约按设计释放；若 Worker 没收到 HTTP 响应而用同一 `callId + argsHash` 重放，Edge 却先执行 `assertLease`，返回 409“租约已失效”，无法确认首次请求是否成功。
@@ -206,11 +358,26 @@
 - 解决 / 绕过：migration `0048` 对当前 public 表显式授予受信 `service_role` CRUD、对序列授予 usage/select，不改变 anon/authenticated grants 与 RLS。`agent_runtime.sql` 新增 Edge 持久化所需权限断言；当前全新 reset 无需手工 grant 即通过 34/34 与真实本地 Edge E2E。以后本地控制面验收必须从 fresh reset 开始，不能在手工修过 ACL 的长寿命容器上得出结论。
 - 相关文件：[0048_explicit_service_role_table_privileges.sql](apps/cloud/supabase/migrations/0048_explicit_service_role_table_privileges.sql)、[agent_runtime.sql](apps/cloud/supabase/tests/agent_runtime.sql)、[test-unified-agent-approval-local.mjs](apps/cloud/scripts/test-unified-agent-approval-local.mjs)。
 
-### Skill 下拉选择与 Agent 开关不能用两个可分叉状态表达（2026-08-28）
+### Skill/runtime 下拉选择与 Agent 开关不能用可分叉状态表达（2026-08-28；2026-09-02 复发补充）
 - 现象：测试账号在创作板下拉选择“HTML 排版截图”后发送，结果仍是一张普通生成图；云端 H6 观察窗没有新增任何 HTML Run，并非切片已生成但桌面漏展示。
 - 根因：`cloudAgentSkill` 与 `cloudAgentMode` 是两份独立 React state。下拉框只更新 Skill，发送函数却只在 `cloudAgentMode=true` 时创建 Agent Run；因此 UI 可显示 HTML Skill、独立 Agent 按钮仍处于关闭，随后静默落回普通生图链路。
 - 解决 / 绕过：正式 Agent 改用 `null | skillId` 单状态建模，派生开关与当前 Skill；选择 HTML 必然激活 HTML Agent，关闭或切换 A/B/Z/G/DS 会清空正式 Skill，发送条件不再可能和显示值分叉。Agent 已激活但登录/余额条件失效时仍允许关闭。新增状态转换回归 4/4，并通过桌面 TypeScript 与 production build；首次误走普通生图的操作不计入 H6 样本，待新版桌面真机复测。
+- 2026-09-02 复发：U6 又把独立 `cloudAgentRuntime` 下拉显示在正式 Agent 开关关闭态；选择 `DSH · 自动选工具` 只改 runtime，没有把 `cloudAgentSelection` 从 `null` 原子置为已开启。账号最近三次操作因此实际创建普通 `generation_jobs/image_hd`；最新 Job `500b38d9-f36d-46df-8184-583eab17af44` 为 1 credit 单 PNG，期间没有新建 Agent Run。实际请求把详情页长文直接交给图片模型，成品是带幻写小字的栅格伪网页，不能作为 DSH 质量样本。
+- 2026-09-02 修复：runtime 状态转换集中到 `activateCloudAgentRuntimeSelection`；测试账号从关闭态选择 DSH 时必须同时激活正式 Agent，随后服务端 skill 固定解析为 `bowerbird-unified-agent`。发送分支另从 runtime 派生 Agent 开启态，保证任何 DSH 状态都不能落回普通直发生图；切回 Legacy 不会反向偷偷开启 Agent，选择 DSH 同时关闭 A/B/Z/G/DS 互斥模式。状态回归更新为 11/11，桌面 TypeScript 与 production build 通过。
+- 2026-09-02 部署补漏：桌面重建后仍提示“账号没有 Agent 权限”，不是测试标记或档位错误，而是 `agent-run`/Worker 已支持 unified，负责签发权限快照的远端 `entitlement v34` 却未随共享 `feature-policy.ts` 更新，形成跨 Function 部署漂移。先下载保存 v34 源码和 digest，再只部署 `entitlement v35`；重启后同一 Pro 测试账号的新签名快照保留 `can_use_agent_runs=true`，并从两个旧 Skill 增为 controlled/HTML/unified 三项。以后新增 Skill 白名单必须把 entitlement 的真实签名响应与桌面缓存刷新列入发布门禁，不能只验 agent-run create。
 - 相关文件：[CreationBoard.tsx](apps/desktop/src/components/CreationBoard.tsx)、[cloudAgentSelection.ts](apps/desktop/src/lib/cloudAgentSelection.ts)、[cloud-agent-selection.test.mjs](apps/desktop/scripts/cloud-agent-selection.test.mjs)、[HTML-RENDER-PLAN.md](dev-doc/HTML-RENDER-PLAN.md)。
+
+### Agent 批准面板必须按计划 schema 分流，不能把 unified 强转成受控生图计划（2026-09-02）
+- 现象：权限修复后第一条真实桌面 DSH Run `6fe0174e-974a-4405-b775-6dc5113f2a28` 已正确创建为 `bowerbird-unified-agent/dsh` 并停在 `awaiting_approval`，前端打开待批准计划时却报错。
+- 根因：云端返回已校验的 unified schema v2：顶层为 `title/summary/contentPlan/steps`，步骤为 `kind/inputAssetIds/dependsOn`；桌面 `PendingPlan` 仍把所有 proposal 强转为旧 controlled schema v1，直接读取不存在的 `referenceRoles.length` 与 `step.preserves.length`，类型断言掩盖了运行期协议分叉。
+- 解决 / 绕过：新增纯函数 `cloudAgentPlanDisplay`，把 controlled 与 unified 两种可信 schema 规范成 render-safe view；unified 明确展示素材职责、内容结构、缺失素材决策、工具名与依赖，旧受控计划展示不变。所有数组先做运行期收窄，畸形/未知 proposal 返回空态而不让 React 崩溃。实际 v2 形状、legacy 兼容与畸形输入测试 3/3，Agent 选择测试 11/11，production/Tauri debug build 通过；原 Run 未自动批准或重复规划。
+- 相关文件：[CloudAgentPanel.tsx](apps/desktop/src/components/CloudAgentPanel.tsx)、[cloudAgentPlan.ts](apps/desktop/src/lib/cloudAgentPlan.ts)、[types.ts](apps/desktop/src/lib/types.ts)、[cloud-agent-plan.test.mjs](apps/desktop/scripts/cloud-agent-plan.test.mjs)。
+
+### Agent 结果呈现必须按实际产物能力分流，不能绑定规划 Skill ID（2026-09-02）
+- 现象：unified Run `fc01d798-598f-41e2-8e77-50c27cb256e1` 已完成 `compose_html → render_html → inspect_artifact`，状态为 `awaiting_result_feedback`，时间线显示“结果已准备好”，但页面没有任何结果图，只显示面向普通生图的修订文本框。
+- 根因：前端已能从 `renderManifest.outputs` 选出截图并在后台下载预览，但结果网格、过期提示和底部“接受/放弃”交互仍用 `htmlRun`（`skill_id === bowerbird-html-layout-render`）作为条件。unified Agent 自主选择 HTML 工具后 Skill ID 仍是 `bowerbird-unified-agent`，因此 1 张整页图和 5 张切片被 JSX 整块隐藏；这是能力路由完成后仍按旧产品入口渲染的遗留耦合。
+- 解决 / 绕过：新增 `selectCloudAgentResultArtifacts/isRenderedDocumentResult`，优先按权威 manifest 顺序选择结果，manifest 暂缺时按 `full_page/viewport/slice` 截图角色兜底；结果网格和反馈动作均以实际产物形态分流。真实六张 PNG 已下载到本地 Run 目录并通过字节/hash/图片解码校验，无需重跑。unified manifest、无 manifest 截图兜底和旧受控结果过滤测试 3/3，plan 测试 3/3，production/Tauri debug build 通过。
+- 相关文件：[CloudAgentPanel.tsx](apps/desktop/src/components/CloudAgentPanel.tsx)、[cloudAgentResult.ts](apps/desktop/src/lib/cloudAgentResult.ts)、[cloud-agent-result.test.mjs](apps/desktop/scripts/cloud-agent-result.test.mjs)。
 
 ### 不要在 npm 自身工作区里用 `npm install` 原位补 bundled 依赖（2026-08-28）
 - 现象：html-renderer 旧镜像可运行，但 H6 仅改健康指标后重新构建，在 `cd /usr/local/lib/node_modules/npm && npm install tar@7.5.22` 阶段请求 `@npmcli/docs@^1.0.0` 并 404，导致同一 Dockerfile 突然不可复现；旧生产容器未被替换，服务未中断。
@@ -352,7 +519,7 @@
 
 ### 删除图片无 UI 入口（2026-07-05）
 - 现象：用户无法删除图片。后端 `delete_asset` 命令、前端 `api.deleteAsset` 都在，但前端无任何调用点。
-- 解决：在 [DetailPanel.tsx](apps/desktop/src/components/DetailPanel.tsx) 顶部加「删除所选」入口（单选/多选通用，两段式确认——避开 Tauri 2 WKWebView 对 `window.confirm` 的拦截）。
+- 解决：当时在 `DetailPanel.tsx` 顶部加入「删除所选」入口（该历史组件现已移除；当前删除交互由详情页与右键菜单承接），单选/多选通用并采用两段式确认，避开 Tauri 2 WKWebView 对 `window.confirm` 的拦截。
 - 注意：`delete_asset` 已物理删除 `store_path`/`thumb_path`（best-effort，忽略 NotFound；去重 SVG 的 thumb==store）；`asset_prompts`/`asset_tags`/`analyses` 由外键 `ON DELETE CASCADE` 自动清理（`foreign_keys` 在连接打开时已启用）。
 
 ### 扩展采集后桌面端不实时刷新（2026-07-05）
@@ -371,7 +538,7 @@
 - 现象：spike"反推看图"时考虑 OpenAI `gpt-image-2`，但它无法产出文本描述。
 - 根因：`gpt-image-2` 是图像「生成」模型（输入文本/图 → 输出新图）；它"能看图"是为了编辑/生成参考图。"图→文本描述"必须用 vision 模型（`gpt-4o` / `gpt-5.x`，Chat Completions / Responses API）。OpenAI 文档 [Images and vision](https://developers.openai.com/api/docs/guides/images-vision) 明确区分。
 - 解决：新增 `OpenAIProvider` 走 Chat Completions + `image_url` data URL（base64 本地图）。与 Bowerbird「v1 不做生成」约定一致。
-- 相关文件：[codex/openai.rs](apps/desktop/src-tauri/src/codex/openai.rs)、[commands/codex.rs](apps/desktop/src-tauri/src/commands/codex.rs)。
+- 相关文件：原 `codex/openai.rs`（已随 OpenAI HTTP 路线移除）、[commands/codex.rs](apps/desktop/src-tauri/src/commands/codex.rs)。
 
 ### 本地 codex CLI 二进制缺失（2026-07-05）
 - 现象：`codex --help` 报 `spawn .../codex/codex ENOENT`。
@@ -654,9 +821,9 @@
 - 现象：app spawn `dreamina login`（无论 CREATE_NO_WINDOW / CREATE_NEW_CONSOLE / 非 headless / headless+checklogin / stderr null）授权后**都不写登录态**（`dreamina user_credit` 仍未登录），但命令行 `dreamina login` 一次成功（写 token）。
 - 根因（2026-07-25 定位）：**`dreamina login` 非 headless 依赖 `isatty(stdout)`**——stdout 是真 TTY 时才走「打印授权材料 + 阻塞等授权 + poll checklogin + 写 token」完整流程。app spawn 时 `stdout(Stdio::piped())`（为读 verification_uri 透传前端）把 stdout 接成 pipe → dreamina 判定非 TTY → 进程在打印 `[OAuthLogin] start login flow` 后静默早退，token 永不写入。`CREATE_NO_WINDOW`/`CREATE_NEW_CONSOLE` 都无效——它们只控弹不弹黑窗，**不改 `isatty(stdout)`**；真正的 TTY 判定由 `Stdio::piped()` 决定，与 creation_flags 无关。
 - 证据：① `~/.dreamina_cli/logs/` 日志时序——终端跑 dreamina login 进程持续 poll **2 分 24 秒**到 `query current user success`（token 写入）；app spawn 每次只有 `[OAuthLogin] start login flow` 一行后再无任何日志（没请求 device_code、没 poll、没报错，进程消失）。② git 时间线——`dreamina_login` 命令在 commit `ac5e171`（2026-07-23 13:28）才引入，而日志里唯一一次成功登录在 2026-07-23 00:31（早 13 小时），那次 100% 是终端手动跑，app spawn 从未成功过。③ `dreamina login --help` 原文「By default … waits for authorization to complete」+ 官方 SKILL.md + 社区共识「stdout redirected breaks because it depends on a TTY」。④ `user_credit`/`text2image` 等非交互命令在 app spawn（CREATE_NO_WINDOW + stdout piped）下完全正常——问题仅限 login 的交互式 OAuth 路径。
-- 解决：新增 [`open_dreamina_login`](apps/desktop/src-tauri/src/commands/jimeng.rs) 命令，**拉起真正的系统终端窗口**（Windows `cmd.exe /D /C start "" cmd.exe /K "dreamina login"`、macOS `osascript`→Terminal.app `do script`）跑 `dreamina login`——真 TTY 保证 dreamina 完整走完 OAuth + 写 token。对称 [`open_codex_session`](apps/desktop/src-tauri/src/commands/codex.rs)（codex「在终端打开会话」已验证同模式）。[`DreaminaLoginDialog`](apps/desktop/src/components/DreaminaLoginDialog.tsx) 主按钮「打开终端登录」调该命令 + 复制命令降为兜底。端到端实测通过。**未采用的备选**：方案 B（`--headless` + `checklogin` 纯 in-app，UX 更好不弹终端）——headless 不依赖 TTY、机制可行（SKILL.md 证实 device flow 打印 verification_uri/user_code/device_code 后退出，checklogin 跨进程补完写 token），但 device_code 时序敏感（2026-07-24 踩过「过期」）+ headless 输出格式 / checklogin 在 app spawn 写 token 未实测，且即梦登录一次性、方案 A 已够用；保留 dead 的 `dreamina_login`/`dreamina_check_login` 命令备方案 B 复用。
+- 解决：新增 [`open_dreamina_login`](apps/desktop/src-tauri/src/commands/jimeng.rs) 命令，**拉起真正的系统终端窗口**（Windows `cmd.exe /D /C start "" cmd.exe /K "dreamina login"`、macOS `osascript`→Terminal.app `do script`）跑 `dreamina login`——真 TTY 保证 dreamina 完整走完 OAuth + 写 token。对称 [`open_codex_session`](apps/desktop/src-tauri/src/commands/codex.rs)（codex「在终端打开会话」已验证同模式）。当前 [DreaminaOnboarding.tsx](apps/desktop/src/components/DreaminaOnboarding.tsx) 的主按钮「打开终端登录」调用该命令，并以复制命令作为兜底。端到端实测通过。**未采用的备选**：方案 B（`--headless` + `checklogin` 纯 in-app，UX 更好不弹终端）——headless 不依赖 TTY、机制可行（SKILL.md 证实 device flow 打印 verification_uri/user_code/device_code 后退出，checklogin 跨进程补完写 token），但 device_code 时序敏感（2026-07-24 踩过「过期」）+ headless 输出格式 / checklogin 在 app spawn 写 token 未实测，且即梦登录一次性、方案 A 已够用；保留 dead 的 `dreamina_login`/`dreamina_check_login` 命令备方案 B 复用。
 - 教训：① CLI 的交互式 OAuth（渲染二维码/链接 + 等 authorization）常依赖 `isatty(stdout)`，GUI app `Stdio::piped()` 会破坏 TTY 身份触发早退——先查 isatty，别往 console/credential store/DPAPI 方向猜。② 命令行验证通≠app spawn 通；登录类操作若必须交互式，拉起一个真终端窗口（真 TTY）是最可靠的 app 内方案。③ 实测 CLI OAuth 时优先翻 `~/.dreamina_cli/logs/`，进程「持续 poll 到完成」vs「早退」一眼可辨。
-- 相关文件：[commands/jimeng.rs](apps/desktop/src-tauri/src/commands/jimeng.rs)（`open_dreamina_login`）、[DreaminaLoginDialog.tsx](apps/desktop/src/components/DreaminaLoginDialog.tsx)、[commands/codex.rs](apps/desktop/src-tauri/src/commands/codex.rs)（`open_codex_session` 模板）。
+- 相关文件：[commands/jimeng.rs](apps/desktop/src-tauri/src/commands/jimeng.rs)（`open_dreamina_login`）、[DreaminaOnboarding.tsx](apps/desktop/src/components/DreaminaOnboarding.tsx)、[commands/codex.rs](apps/desktop/src-tauri/src/commands/codex.rs)（`open_codex_session` 模板）。
 
 ### website 跑 npm install 破坏 pnpm 的 node_modules/.bin（2026-08-04）
 - 现象：`pnpm --filter @bowerbird/website dev` 报 `'vite' 不是内部或外部命令`；查 `website/node_modules/.bin` 目录不存在，但 vite/prosemirror 等软链还在（指向根 `.pnpm` store）。
@@ -720,7 +887,7 @@
 - spike 实测：`dreamina login --headless` 打印后即退出（不依赖 TTY），输出稳定可解析——`verification_uri:` / `user_code:` / `device_code:` / `poll_interval:` / `expires_at:`（一行一个 key: value）。**已有本地登录态时仅输出「已复用当前本地 OAuth 登录态。」**（前端应先 recheck 判定，或命令里识别该文案）。这正是 2026-07-25「方案 A 决策」里搁置的方案 B 所需输出，实测证明可行。
 - 落地：`dreamina_login_headless` 命令解析返回 device flow → 前端自动 `open(verification_uri)` 开浏览器 + 展示 user_code → 复用 `dreamina_check_login`（device_code）补完写 token。翻篇方案 A。
 - 教训：当年因「未实测 headless 输出格式 / checklogin 写 token」搁置的方案 B，实测后完全可行——CLI 的 headless 路径通常就是为无人值守设计的，值得优先 spike 而非直接否定。
-- 相关文件：[commands/jimeng.rs](apps/desktop/src-tauri/src/commands/jimeng.rs)（`dreamina_login_headless`）、[DreaminaLoginDialog.tsx](apps/desktop/src/components/DreaminaLoginDialog.tsx)。
+- 相关文件：[commands/jimeng.rs](apps/desktop/src-tauri/src/commands/jimeng.rs)（`dreamina_login_headless`）、[DreaminaOnboarding.tsx](apps/desktop/src/components/DreaminaOnboarding.tsx)。
 
 ### 火山方舟真实契约两个 400（2026-08-10）
 - 现象：真实方舟联调时两路各踩一个 400——① Seedream 出图带 `sequential_image_generation` 参数报「not supported by the current model」；② Vision 理解发 1×1 测试像素报「Image dimensions too small (min 14px)」。

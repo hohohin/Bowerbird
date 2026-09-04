@@ -12,6 +12,7 @@ import type {
   AssetTag,
   CaptionSection,
   CloudAgentPreview,
+  CloudAgentRuntime,
   CloudAgentRunRecord,
   ColorBucket,
   CodexHealth,
@@ -31,8 +32,26 @@ import type {
   Project,
   ProjectCreateResult,
   ProjectDeleteMode,
+  ProjectDeleteImpact,
   ProjectDeleteResult,
   ProjectRefreshResult,
+  CanvasEdge,
+  CanvasGroup,
+  CanvasGroupItem,
+  CanvasNode,
+  CanvasNodeRemoval,
+  CanvasNodeLayoutUpdate,
+  CanvasView,
+  CanvasViewInput,
+  CreativeThread,
+  NewCanvasEdge,
+  NewCanvasGroup,
+  NewCanvasNode,
+  NewCreativeThread,
+  ProjectCanvas,
+  ProjectCanvasLocation,
+  ProjectCanvasMaterializeInput,
+  ProjectCanvasSnapshot,
   PromptedAsset,
   PreferenceCapsule,
   RecentGenSession,
@@ -40,6 +59,13 @@ import type {
 } from "./types";
 
 const IMAGE_EXT = ["jpg", "jpeg", "png", "webp", "gif", "bmp", "tiff", "tif"];
+
+export interface SourceBrowserBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
 
 export const api = {
   // 健康检查
@@ -71,8 +97,13 @@ export const api = {
     imageProvider?: "cloud" | "jimeng" | "codex" | null;
     preferenceCapsule?: PreferenceCapsule | null;
     visualProfileId?: string | null;
-    skillId?: "bowerbird-controlled-image-edit" | "bowerbird-html-layout-render";
+    skillId?: "bowerbird-controlled-image-edit" | "bowerbird-html-layout-render" | "bowerbird-unified-agent";
+    agentRuntime?: CloudAgentRuntime;
     htmlOptions?: HtmlLayoutOptions | null;
+    threadId?: string | null;
+    creativeSessionId?: string | null;
+    parentNodeId?: string | null;
+    parentAssetId?: string | null;
   }) => invoke<CloudAgentRunRecord>("cloud_agent_start", input),
   cloudAgentLatest: () => invoke<CloudAgentRunRecord | null>("cloud_agent_latest"),
   cloudAgentList: () => invoke<CloudAgentRunRecord[]>("cloud_agent_list"),
@@ -121,9 +152,68 @@ export const api = {
     invoke<number>("remove_assets_from_project", { projectId, assetIds }),
   deleteProject: (projectId: string, mode: ProjectDeleteMode) =>
     invoke<ProjectDeleteResult>("delete_project", { projectId, mode }),
+  projectDeleteImpact: (projectId: string) =>
+    invoke<ProjectDeleteImpact>("project_delete_impact", { projectId }),
   // 「更新项目文件」：重新扫描 workspace 文件夹，新增图片入库进项目（手动同步）。
   refreshProject: (projectId: string) =>
     invoke<ProjectRefreshResult>("refresh_project", { projectId }),
+
+  // 项目即画板（PROJECT-CANVAS-PLAN PB2）；所有新写入只走 project + thread 身份。
+  projectCanvasMaterialize: (
+    value: ProjectCanvasMaterializeInput,
+    initialThreads: NewCreativeThread[] = [],
+    initialNodes: NewCanvasNode[] = [],
+    initialView: CanvasViewInput | null = null,
+  ) => invoke<ProjectCanvas>("project_canvas_materialize", {
+    value,
+    initialThreads,
+    initialNodes,
+    initialView,
+  }),
+  projectCanvasEnsure: (projectId: string) =>
+    invoke<ProjectCanvas>("project_canvas_ensure", { projectId }),
+  projectCanvasGet: (projectId: string) =>
+    invoke<ProjectCanvasSnapshot>("project_canvas_get", { projectId }),
+  projectCanvasRename: (projectId: string, title: string) =>
+    invoke<boolean>("project_canvas_rename", { projectId, title }),
+  projectCanvasTitleFromFirstPrompt: (projectId: string, title: string) =>
+    invoke<boolean>("project_canvas_title_from_first_prompt", { projectId, title }),
+  projectCanvasUpdateDraft: (projectId: string, draftJson: string) =>
+    invoke<boolean>("project_canvas_update_draft", { projectId, draftJson }),
+  projectCanvasTouch: (projectId: string) =>
+    invoke<boolean>("project_canvas_touch", { projectId }),
+  projectThreadCreate: (value: NewCreativeThread) =>
+    invoke<CreativeThread>("project_thread_create", { value }),
+  projectThreadArchive: (threadId: string) =>
+    invoke<boolean>("project_thread_archive", { threadId }),
+  projectThreadRestore: (threadId: string) =>
+    invoke<boolean>("project_thread_restore", { threadId }),
+  projectCanvasNodeCreate: (value: NewCanvasNode) =>
+    invoke<CanvasNode>("project_canvas_node_create", { value }),
+  projectCanvasNodeUpdate: (nodeId: string, value: CanvasNodeLayoutUpdate) =>
+    invoke<CanvasNode | null>("project_canvas_node_update", { nodeId, value }),
+  projectCanvasNodeRemove: (nodeId: string) =>
+    invoke<CanvasNodeRemoval | null>("project_canvas_node_remove", { nodeId }),
+  projectCanvasGroupCreate: (value: NewCanvasGroup, nodeIds: string[]) =>
+    invoke<CanvasGroup>("project_canvas_group_create", { value, nodeIds }),
+  projectCanvasGroupSetItems: (groupId: string, nodeIds: string[]) =>
+    invoke<CanvasGroupItem[]>("project_canvas_group_set_items", { groupId, nodeIds }),
+  projectCanvasGroupUpdate: (value: CanvasGroup) =>
+    invoke<boolean>("project_canvas_group_update", { value }),
+  projectCanvasGroupDelete: (groupId: string) =>
+    invoke<boolean>("project_canvas_group_delete", { groupId }),
+  projectCanvasEdgeCreate: (value: NewCanvasEdge) =>
+    invoke<CanvasEdge>("project_canvas_edge_create", { value }),
+  projectCanvasEdgeDelete: (edgeId: string) =>
+    invoke<boolean>("project_canvas_edge_delete", { edgeId }),
+  projectCanvasViewUpsert: (value: CanvasViewInput) =>
+    invoke<CanvasView>("project_canvas_view_upsert", { value }),
+  projectCanvasViewFlush: (value: CanvasViewInput) =>
+    invoke<CanvasView>("project_canvas_view_flush", { value }),
+  projectCanvasForAsset: (assetId: string) =>
+    invoke<ProjectCanvasLocation | null>("project_canvas_for_asset", { assetId }),
+  projectCanvasForNode: (projectId: string, threadId: string, nodeId: string) =>
+    invoke<ProjectCanvasLocation>("project_canvas_for_node", { projectId, threadId, nodeId }),
 
   // 导入
   importFiles: (sources: string[], projectId?: string | null) =>
@@ -171,6 +261,9 @@ export const api = {
   // 浏览
   listAssets: (folderId?: string, projectId?: string | null, limit = 500, offset = 0) =>
     invoke<Asset[]>("list_assets", { folderId, projectId: projectId ?? null, limit, offset }),
+  /** Exact canvas hydration; no browsing pagination or generation-session collapse. */
+  getAssetsByIds: (assetIds: string[]) =>
+    invoke<Asset[]>("get_assets_by_ids", { assetIds }),
   searchAssets: (query: string, projectId?: string | null, limit = 500) =>
     invoke<Asset[]>("search_assets", { query, projectId: projectId ?? null, limit }),
   listAssetsSmart: (query: string, projectId?: string | null) =>
@@ -290,6 +383,15 @@ export const api = {
     }),
   recomputeColors: () => invoke<void>("recompute_colors"),  assemblePack: (assetIds: string[]) =>
     invoke<CreationPack>("assemble_pack", { assetIds }),
+  openSourceBrowser: (url: string, bounds: SourceBrowserBounds) =>
+    invoke<void>("open_source_browser", { url, bounds }),
+  resizeSourceBrowser: (bounds: SourceBrowserBounds) =>
+    invoke<void>("resize_source_browser", { bounds }),
+  navigateSourceBrowser: (url: string) => invoke<void>("navigate_source_browser", { url }),
+  sourceBrowserBack: () => invoke<void>("source_browser_back"),
+  sourceBrowserForward: () => invoke<void>("source_browser_forward"),
+  reloadSourceBrowser: () => invoke<void>("reload_source_browser"),
+  hideSourceBrowser: () => invoke<void>("hide_source_browser"),
   codexGeneratePromptForAsset: (assetId: string, role: string) =>
     invoke<string>("codex_generate_prompt_for_asset", { assetId, role }),
   // Phase 5：反推（codex CLI 描述图片）+ 分析结果
@@ -351,6 +453,12 @@ export const api = {
     dimensionSources?: string[];
     conversationId?: string | null;
     anchorSessionId?: string | null;
+    threadId?: string | null;
+    creativeSessionId?: string | null;
+    turnKey?: string | null;
+    parentNodeId?: string | null;
+    parentAssetPath?: string | null;
+    creativeRelation?: "continued" | "retry" | "branch" | null;
   }) =>
     invoke<string>("codex_create_image", {
       prompt: req.prompt,
@@ -366,6 +474,11 @@ export const api = {
       dimensionSources: req.dimensionSources ?? [],
       conversationId: req.conversationId ?? null,
       anchorSessionId: req.anchorSessionId ?? null,
+      threadId: req.threadId ?? null,
+      turnKey: req.turnKey ?? null,
+      parentNodeId: req.parentNodeId ?? null,
+      parentAssetPath: req.parentAssetPath ?? null,
+      creativeRelation: req.creativeRelation ?? null,
     }),
   cancelCodexCreate: (jobId: string) => invoke<void>("cancel_codex_create", { jobId }),
   // 启动恢复（Task 5）：列出未完成生成 job，前端挂载时拉取重建 genJobs（恢复中 job 可见）。

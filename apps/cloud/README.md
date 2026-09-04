@@ -58,7 +58,7 @@ node scripts/test-billing.mjs
 
 `billing.sql` 覆盖注册首日 30 分、daily grant 幂等、FIFO、hold/confirm/rollback、余额不足、append-only 流水和客户端权限；Node 脚本让 20 个并发请求竞争同一幂等键，必须只产生一个 hold。
 
-当前开发机器已可使用 Docker Desktop/WSL2 与 Supabase CLI。2026-08-29 已从空库执行 migration `0001`–`0049`，并以容器内 `psql -v ON_ERROR_STOP=1` 跑通 `supabase/tests/agent_runtime.sql` 34/34；事务型 SQL 仍必须真实执行，不能用静态检查替代。
+当前开发机器已可使用 Docker Desktop/WSL2 与 Supabase CLI。2026-09-01 已从空库执行 migration `0001`–`0050`，并以容器内 `psql -v ON_ERROR_STOP=1` 跑通 `supabase/tests/agent_runtime.sql` 39/39；事务型 SQL 仍必须真实执行，不能用静态检查替代。
 
 P2 Edge Functions（Supabase CLI/Deno 可用后）：
 
@@ -90,4 +90,4 @@ node scripts/test-payment.mjs
 
 统一错误：401 未登录 / 402 积分不足 / 413 体积超限 / 429 限流 / 502 上游失败 / 503 熔断或未配置 / 504 超时。`BOWERBIRD_CLOUD_MOCK=true` 时只用于开发；生产必须关闭，且未配置真实 adapter 时应返回 503，不能静默输出 Mock 结果。
 
-本机 Docker/Supabase/Deno 验证现已可用。通用 Agent Harness U2 另有本地专用脚本 `scripts/test-unified-agent-approval-local.mjs`，会拒绝非 localhost URL，并覆盖真实 Edge create/upload/enqueue、claim/checkpoint、图片 artifact 服务端尺寸提取、计划停车、无租约重放、漂移拒绝、用户批准与 fresh claim 尺寸回传；运行时只使用本地测试账号和本地 Worker Token，不调用模型或 provider。脚本要求本地 Agent 队列为空，避免 claim 先取得其他测试 Run。既有东京 Cloud E2E 与远端数据库基线继续独立保留，不能把本地通过等同于生产部署。
+本机 Docker/Supabase/Deno 验证现已可用。通用 Agent Harness 本地专用脚本 `scripts/test-unified-agent-approval-local.mjs` 会拒绝非 localhost URL，并覆盖真实 Edge create/upload/enqueue、claim/checkpoint、图片 artifact 服务端尺寸提取、计划停车、无租约重放、漂移拒绝、用户批准与 fresh claim 尺寸回传；U4 另覆盖 test-only `dsh` create/get/claim、同幂等键 runtime 漂移拒绝和历史默认 legacy。运行时只使用本地测试账号、本地 Worker Token 与 Mock Seedream，不调用模型或真实 provider。远端 test-only 部署后，`scripts/test-agent-runtime-selection-remote.mjs` 以参数 + env 双闸运行；必须先确认队列为空并停止常驻 Worker，再验证普通账号 403、测试账号 DSH create/get/claim、幂等漂移 409 和直接 cancel，保证 processor/provider 调用数为 0，最后恢复 Worker。2026-09-01 远端 `0047`–`0050`、agent-run v42、agent-worker v46 与 VPS controlled DSH processor 已按该流程上线并通过。真实图片继续走 `test-controlled-agent-e2e.mjs` 的参数 + env 费用双闸；`--expect-reclaim` 只采集批准后的执行 lease，并要求外部编排真实 kill/restart。legacy/DSH 同 case 已各自通过两个执行 lease、唯一 Ark side effect/final artifact 和实际积分对账；raw recovery JSON 与 paired Markdown 保存在 gitignored `apps/cloud/artifacts/`。

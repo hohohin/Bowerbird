@@ -1,0 +1,18 @@
+{
+  "name": "single_project_multi_thread",
+  "project_id": "project-a",
+  "threads": [
+    { "id": "thread-a", "origin": "direct", "created_at": 1 },
+    { "id": "thread-b", "origin": "direct", "created_at": 2 }
+  ],
+  "nodes": [
+    { "id": "prompt-a", "thread_id": "thread-a", "kind": "prompt", "payload": { "schema_version": 1, "text": "海报 A", "job_id": "job-a", "turn_key": "turn-a" }, "created_at": 3 },
+    { "id": "output-a", "thread_id": "thread-a", "kind": "asset", "role": "output", "payload": { "schema_version": 1, "snapshot": { "name": "结果 A" }, "execution": { "job_id": "job-a", "turn_key": "turn-a" } }, "created_at": 4 },
+    { "id": "prompt-b", "thread_id": "thread-b", "kind": "prompt", "payload": { "schema_version": 1, "text": "海报 B", "job_id": "job-b", "turn_key": "turn-b" }, "created_at": 5 },
+    { "id": "output-b", "thread_id": "thread-b", "kind": "asset", "role": "output", "payload": { "schema_version": 1, "snapshot": { "name": "结果 B" }, "execution": { "job_id": "job-b", "turn_key": "turn-b" } }, "created_at": 6 }
+  ],
+  "edges": [
+    { "id": "produced-a", "thread_id": "thread-a", "from_node_id": "prompt-a", "to_node_id": "output-a", "kind": "produced", "ordinal": 0, "created_at": 4 },
+    { "id": "produced-b", "thread_id": "thread-b", "from_node_id": "prompt-b", "to_node_id": "output-b", "kind": "produced", "ordinal": 0, "created_at": 6 }
+  ]
+}

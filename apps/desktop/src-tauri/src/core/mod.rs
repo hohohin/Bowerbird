@@ -2,12 +2,15 @@
 
 pub mod autoname;
 pub mod caption;
+pub mod creative_session_contract;
 pub mod generation_worker;
 pub mod ingest;
 pub mod library;
 pub mod migrate;
 pub mod paths;
 pub mod preset;
+pub mod project_canvas;
+pub mod project_canvas_backfill;
 pub mod projects;
 pub mod samples;
 pub mod settings;

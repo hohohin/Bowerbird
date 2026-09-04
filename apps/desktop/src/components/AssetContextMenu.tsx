@@ -8,6 +8,7 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { RenameDialog } from "./RenameDialog";
 import { understandProvider } from "../lib/entitlement";
 import { notifyError, notifySuccess } from "../lib/notify";
+import { isWorkspaceOperationCurrent } from "../lib/workspaceRoute";
 import type { AssetDeleteMode, AssetDeleteResult } from "../lib/types";
 
 const MENU_WIDTH = 232;
@@ -40,7 +41,7 @@ export function AssetContextMenu() {
   const openDetail = useStore((s) => s.openDetail);
   const detailAssetId = useStore((s) => s.detailAssetId);
   const addAssetToBoardFromDetail = useStore((s) => s.addAssetToBoardFromDetail);
-  const currentProjectId = useStore((s) => s.currentProjectId);
+  const activeProjectId = useStore((s) => s.activeProjectId);
   const reloadProjects = useStore((s) => s.reloadProjects);
   const assets = useStore((s) => s.assets);
   const openDescribePicker = useStore((s) => s.openDescribePicker);
@@ -54,6 +55,7 @@ export function AssetContextMenu() {
   const cloudAuth = useStore((s) => s.cloudAuth);
   const cloudEntitlement = useStore((s) => s.cloudEntitlement);
   const cloudAvailable = cloudAuth?.cloud_available ?? false;
+  const reuseIntentRef = useRef(0);
 
   const [busy, setBusy] = useState(false);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
@@ -80,7 +82,7 @@ export function AssetContextMenu() {
     if (!target?.generation_session_id) return;
     let alive = true;
     api
-      .listGenerationGroup(menu.assetId, currentProjectId)
+      .listGenerationGroup(menu.assetId, activeProjectId)
       .then((g) => {
         if (alive) setGroupIds(g.map((a) => a.id));
       })
@@ -88,7 +90,7 @@ export function AssetContextMenu() {
     return () => {
       alive = false;
     };
-  }, [menu, currentProjectId]);
+  }, [menu, activeProjectId]);
 
   // 菜单打开时：点击菜单外关闭、Esc 关闭。
   useEffect(() => {
@@ -245,9 +247,31 @@ export function AssetContextMenu() {
   }
 
   async function reuseGeneration() {
+    const intentId = ++reuseIntentRef.current;
+    const expectedMenu = menu;
+    const route = useStore.getState();
+    const expectedProjectId = route.activeProjectId;
+    const expectedRouteRevision = route.projectRouteRevision;
+    const isCurrentIntent = () => {
+      const current = useStore.getState();
+      return intentId === reuseIntentRef.current
+        && current.contextMenu === expectedMenu
+        && isWorkspaceOperationCurrent(
+          expectedProjectId,
+          current.activeProjectId,
+          current.projectRoutePending,
+          expectedRouteRevision,
+          current.projectRouteRevision,
+        );
+    };
+    if (!isCurrentIntent()) return;
     setBusy(true);
     try {
-      const hist = await api.generationHistory(assetId, currentProjectId);
+      const hist = await api.generationHistory(assetId, expectedProjectId);
+      if (!isCurrentIntent()) {
+        if (useStore.getState().contextMenu === expectedMenu) setBusy(false);
+        return;
+      }
       // 优先未铺开的原始编辑框文本（维度 chip，不展开 body）；旧 meta 无 prompt_raw → 回退铺开 prompt。
       const prompt = hist.turns[0]?.prompt_raw ?? hist.turns[0]?.prompt ?? "";
       if (!prompt) {
@@ -261,6 +285,10 @@ export function AssetContextMenu() {
       notifySuccess("生成提示词已载入创作板");
       closeContextMenu();
     } catch (e) {
+      if (!isCurrentIntent()) {
+        if (useStore.getState().contextMenu === expectedMenu) setBusy(false);
+        return;
+      }
       notifyError(e, "读取生成提示词失败");
       setBusy(false);
     }
@@ -269,7 +297,7 @@ export function AssetContextMenu() {
   async function runDelete(id: string, mode: AssetDeleteMode) {
     setBusy(true);
     try {
-      const result = await api.deleteAssetWithMode(id, mode, currentProjectId);
+      const result = await api.deleteAssetWithMode(id, mode, activeProjectId);
       await reloadProjects();
       if (result.failed_moves.length > 0) {
         notifyError(null, `移出失败：${result.failed_moves.join("、")}，素材保留在全局`);
@@ -292,7 +320,7 @@ export function AssetContextMenu() {
     try {
       for (const id of ids) {
         try {
-          await api.deleteAssetWithMode(id, "delete", currentProjectId);
+          await api.deleteAssetWithMode(id, "delete", activeProjectId);
         } catch (e) {
           failed += 1;
           console.error("delete one failed", e);
@@ -443,16 +471,16 @@ export function AssetContextMenu() {
           type="button"
           role="menuitem"
           onClick={() => {
-            // 先收菜单再开生成会话面板（与详情页「回看生成对话」同一入口）。
+            // 先收菜单再打开所属创作；未迁移的旧图回退到历史生成面板。
             closeContextMenu();
             void viewGenerationHistory(assetId);
           }}
           disabled={busy}
-          title="回看这张图的生成会话：各轮 prompt 与产出图，可继续提修改意见"
+          title="打开这张图所属的创作；旧记录回退到生成历史"
           className="app-context-item px-2 py-1.5"
         >
           <MessageSquare size={13} className="shrink-0" />
-          打开生成会话
+          回看所属创作
         </button>
       )}
 
@@ -519,7 +547,7 @@ export function AssetContextMenu() {
       <div className="app-context-divider" />
       <div className="app-context-label">移出与删除</div>
       <div className="space-y-0.5">
-          {currentProjectId && (
+          {activeProjectId && (
             <button
               type="button"
               role="menuitem"

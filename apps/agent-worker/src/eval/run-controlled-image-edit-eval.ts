@@ -28,7 +28,7 @@ import {
   type ControlledEvalRow,
 } from "./controlled-image-edit-report.ts";
 
-type EvalCase = {
+export type EvalCase = {
   id: string;
   category: string;
   mode: "model" | "kernel";
@@ -85,9 +85,48 @@ function inputFor(testCase: EvalCase): ControlledImageEditInput {
   };
 }
 
-function safeFailure(error: unknown): string {
+export function safeFailure(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return /^[A-Za-z0-9._:-]{1,120}$/.test(message) ? message : "controlled_eval_failed";
+}
+
+function safeDiagnosticToken(value: unknown): string | undefined {
+  return typeof value === "string" && /^[A-Za-z][A-Za-z0-9._:-]{0,119}$/.test(value)
+    ? value
+    : undefined;
+}
+
+/**
+ * Eval-only error fingerprint. It deliberately excludes raw provider/DSH text,
+ * prompts and tool arguments while preserving enough shape to classify failures.
+ */
+export function safeFailureDiagnostic(error: unknown): string {
+  const record = error && typeof error === "object" && !Array.isArray(error)
+    ? error as Record<string, unknown>
+    : {};
+  const message = error instanceof Error ? error.message : String(error);
+  const identifiers = [...new Set(message.match(/\b(?:agent|clarification|controlled|dsh|tool)_[A-Za-z0-9_:-]+\b/g) ?? [])]
+    .slice(0, 8);
+  const categories = [
+    /validat|schema|argument|parameter/i.test(message) ? "validation" : undefined,
+    /timeout|timed out/i.test(message) ? "timeout" : undefined,
+    /json|parse/i.test(message) ? "json" : undefined,
+    /connect|socket|network|fetch/i.test(message) ? "transport" : undefined,
+    /tool/i.test(message) ? "tool" : undefined,
+    /provider|deepseek|model/i.test(message) ? "provider" : undefined,
+    /child|process|exit/i.test(message) ? "child_process" : undefined,
+  ].filter((value): value is string => !!value);
+  const httpStatus = message.match(/\b(?:HTTP\s*)?([45]\d\d)\b/i)?.[1];
+  return canonicalJson({
+    schemaVersion: 1,
+    name: safeDiagnosticToken(error instanceof Error ? error.name : undefined) ?? "unknown",
+    code: safeDiagnosticToken(record.code),
+    identifiers,
+    categories,
+    httpStatus: httpStatus ? Number(httpStatus) : undefined,
+    messageLength: message.length,
+    messageHash: sha256Hex(message).slice(0, 16),
+  });
 }
 
 function expectedIntentCorrect(testCase: EvalCase, analysis: IntentAnalysis): boolean {
@@ -106,7 +145,11 @@ function expectedRolesCorrect(testCase: EvalCase, plan: ControlledImageEditPlan)
   return Object.entries(testCase.expectedRoles).every(([referenceId, role]) => roles.get(referenceId) === role);
 }
 
-async function runModelCase(testCase: EvalCase, base: ModelBackend): Promise<ControlledEvalRow> {
+export async function runModelCase(
+  testCase: EvalCase,
+  base: ModelBackend,
+  options: { onFailure?(error: unknown): void } = {},
+): Promise<ControlledEvalRow> {
   const model = new MeasuringModel(base);
   const input = inputFor(testCase);
   let plan: ControlledImageEditPlan | undefined;
@@ -153,6 +196,7 @@ async function runModelCase(testCase: EvalCase, base: ModelBackend): Promise<Con
     }
   } catch (error) {
     failureCode = safeFailure(error);
+    options.onFailure?.(error);
   }
   const usage = usageTotal(model.turns);
   return {
@@ -279,7 +323,7 @@ async function checkpointWithResult(stepId = "generate-final") {
   return checkpoint;
 }
 
-async function runKernelCase(testCase: EvalCase): Promise<ControlledEvalRow> {
+export async function runKernelCase(testCase: EvalCase): Promise<ControlledEvalRow> {
   try {
     switch (testCase.expected) {
       case "policy_denied": {
@@ -345,25 +389,45 @@ async function runKernelCase(testCase: EvalCase): Promise<ControlledEvalRow> {
   }
 }
 
-async function main(): Promise<void> {
+export function controlledEvalCases(env: Record<string, string | undefined>): EvalCase[] {
   const evalPath = join(import.meta.dirname, "..", "skills", "bowerbird-controlled-image-edit", "eval-cases.json");
   const evalFile = JSON.parse(readFileSync(evalPath, "utf8")) as EvalFile;
   if (evalFile.cases.length < 10 || evalFile.cases.length > 20) throw new Error("controlled_eval_case_count_invalid");
-  const requestedIds = new Set((process.env.CONTROLLED_EVAL_CASES ?? "").split(",").map((id) => id.trim()).filter(Boolean));
+  const requestedIds = new Set((env.CONTROLLED_EVAL_CASES ?? "").split(",").map((id) => id.trim()).filter(Boolean));
   const selectedCases = requestedIds.size
     ? evalFile.cases.filter((testCase) => requestedIds.has(testCase.id))
     : evalFile.cases;
   if (!selectedCases.length || (requestedIds.size && selectedCases.length !== requestedIds.size)) {
     throw new Error("controlled_eval_case_filter_invalid");
   }
-  const config = deepSeekConfigFromEnv(process.env);
+  return selectedCases;
+}
+
+export async function runLegacyControlledImageEditEval(
+  env: Record<string, string | undefined> = process.env,
+): Promise<void> {
+  const selectedCases = controlledEvalCases(env);
+  const config = deepSeekConfigFromEnv(env);
   const model = new DeepSeekBackend(config);
   const rows: ControlledEvalRow[] = [];
+  const observations = [];
   for (const testCase of selectedCases) {
+    const startedAt = Date.now();
     const row = testCase.mode === "model"
       ? await runModelCase(testCase, model)
       : await runKernelCase(testCase);
+    const durationMs = Date.now() - startedAt;
     rows.push(row);
+    observations.push({
+      caseId: row.id,
+      runtime: "legacy_kernel" as const,
+      strategyCorrect: row.strategyCorrect,
+      structuredSuccess: row.structuredSuccess,
+      durationMs,
+      credits: row.estimatedCredits,
+      recoverySuccess: null,
+      costBasis: "estimated" as const,
+    });
     console.log(`[${row.id}] ${row.structuredSuccess ? "ok" : "FAIL"} ${row.outcome}${row.failureCode ? ` ${row.failureCode}` : ""}`);
   }
   const generatedAt = new Date().toISOString();
@@ -372,11 +436,18 @@ async function main(): Promise<void> {
   mkdirSync(artifactsDir, { recursive: true });
   writeFileSync(join(artifactsDir, "controlled-image-edit-eval.json"), JSON.stringify({ generatedAt, model: config.model, summary, rows }, null, 2), "utf8");
   writeFileSync(join(artifactsDir, "controlled-image-edit-eval.md"), renderControlledEvalMarkdown(rows, generatedAt, config.model), "utf8");
+  writeFileSync(join(artifactsDir, "controlled-runtime-observations-legacy-kernel.json"), JSON.stringify({
+    generatedAt,
+    model: config.model,
+    observations,
+  }, null, 2), "utf8");
   console.log(`report=${join(artifactsDir, "controlled-image-edit-eval.md")}`);
   if (summary.structuredSuccessRate < 1 || summary.toolPrivilegeViolationRate > 0) process.exitCode = 1;
 }
 
-main().catch((error: unknown) => {
-  console.error(safeFailure(error));
-  process.exitCode = 1;
-});
+if ((process.argv[1] ?? "").replaceAll("\\", "/").split("/").at(-1) === "run-controlled-image-edit-eval.ts") {
+  runLegacyControlledImageEditEval().catch((error: unknown) => {
+    console.error(safeFailure(error));
+    process.exitCode = 1;
+  });
+}

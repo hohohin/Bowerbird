@@ -140,9 +140,22 @@ export class RunWorkspace {
   }
 
   providerResult(callId: string): WorkspaceImage | null {
+    if (!/^[0-9a-f]{64}$/.test(callId)) throw new Error("agent_workspace_call_id_invalid");
     const existing = this.local.get(`call:${callId}`);
-    if (!existing || !existsSync(existing.path)) return null;
-    return checkedImage(new Uint8Array(readFileSync(existing.path)));
+    if (existing && existsSync(existing.path)) {
+      return checkedImage(new Uint8Array(readFileSync(existing.path)));
+    }
+    // A real process death skips cleanup and loses only the in-memory index.
+    // Recover solely from the deterministic current-Run output path.
+    for (const suffix of ["png", "jpg", "webp"] as const) {
+      const path = join(this.path, "outputs", `${callId}.${suffix}`);
+      if (!existsSync(path)) continue;
+      const image = checkedImage(new Uint8Array(readFileSync(path)));
+      if (extension(image.mime) !== suffix) throw new Error("agent_workspace_image_validation_failed");
+      this.local.set(`call:${callId}`, { path, image });
+      return image;
+    }
+    return null;
   }
 
   rememberArtifact(callId: string, artifact: RegisteredAgentArtifact, image: WorkspaceImage): void {

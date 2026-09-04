@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { api } from "./lib/api";
+import { acknowledgeCreativeContinuation, generationParentLocator } from "./lib/creativeGeneration";
 import {
   canStartAnotherJob,
   canUseByo,
@@ -29,11 +30,50 @@ import type {
 } from "./lib/types";
 import { canonicalProviderKey, isCloudProvider, isKnownGenProvider } from "./lib/genProviders";
 import { normalizeAnnotationPrompt } from "./lib/annotationPrompt";
+import { notifyError } from "./lib/notify";
+import { applyTheme } from "./lib/theme";
 import { autoRatioFromReferences } from "./components/creation/ratios";
+import {
+  backendProjectScopeForRoute,
+  isLatestProjectScopeRead,
+  projectListReadCrossedRoute,
+  shouldRetainInspectorForProjectRoute,
+  workspaceProjectDeleteMode,
+} from "./lib/workspaceRoute";
+import {
+  agentTaskNavigation,
+  clearThreadUnread,
+  generationTaskNavigation,
+  markThreadUnread,
+  taskCenterAgentRuns,
+  taskCenterGenerationJobs,
+} from "./lib/projectActivity";
+import { mergeRecoveredCloudAgentRuns } from "./lib/cloudAgentRuntime";
+import { mergeRecoveredGenJobs } from "./lib/generationRecovery";
 
 // —— 默认出图 provider（localStorage，照 GEN_PROVIDERS 枚举校验；收藏星标写它）——
 const DEFAULT_PROVIDER_KEY = "bowerbird.defaultProvider";
 const VISUAL_PROFILE_KEY_PREFIX = "bowerbird.visualProfile.";
+let projectRouteQueue: Promise<unknown> = Promise.resolve();
+let projectRouteRequestId = 0;
+let projectReloadQueue: Promise<unknown> = Promise.resolve();
+let autoTagsReadRequestId = 0;
+let paletteReadRequestId = 0;
+let promptedAssetsReadRequestId = 0;
+let generationHistoryReadRequestId = 0;
+
+function enqueueProjectRoute<T>(operation: () => Promise<T>): Promise<T> {
+  const next = projectRouteQueue.then(operation, operation);
+  projectRouteQueue = next.then(() => undefined, () => undefined);
+  return next;
+}
+
+function enqueueProjectReload<T>(operation: () => Promise<T>): Promise<T> {
+  const next = projectReloadQueue.then(operation, operation);
+  projectReloadQueue = next.then(() => undefined, () => undefined);
+  return next;
+}
+
 function loadDefaultProvider(): string {
   try {
     const v = localStorage.getItem(DEFAULT_PROVIDER_KEY);
@@ -54,6 +94,7 @@ function saveDefaultProvider(v: string) {
 const DEFAULT_UNDERSTAND_KEY = "bowerbird.defaultUnderstandProvider";
 const UNDERSTAND_PROVIDERS = ["auto", "bowerbird-cloud", "codex"] as const;
 export type UnderstandProviderPref = (typeof UNDERSTAND_PROVIDERS)[number];
+
 function loadDefaultUnderstandProvider(): string {
   try {
     const v = localStorage.getItem(DEFAULT_UNDERSTAND_KEY);
@@ -78,6 +119,22 @@ type Mode = "browse" | "manage";
 
 /** 生成会话底部编辑坞的两种入口：「重新编辑」（新版本分支）与底部对话框（会话内续轮）。 */
 export type GenEditingMode = "edit" | "revise";
+
+export interface CreativeGenerationContext {
+  projectId: string;
+  threadId: string;
+  /** 旧持久化负载兼容；新写入不得依赖。 */
+  creativeSessionId?: string | null;
+  parentNodeId?: string | null;
+  parentAssetPath?: string | null;
+  relation?: "continued" | "retry" | "branch" | null;
+}
+
+export interface GenerationStartResult {
+  jobId: string;
+  /** True only when the backend provider command accepted the submission. */
+  accepted: boolean;
+}
 
 export interface DescribeFailure {
   assetId: string;
@@ -110,10 +167,16 @@ interface State {
   folders: Folder[];
   // —— 项目 workspace ——
   projects: Project[];
-  currentProjectId: string | null;
+  activeProjectId: string | null;
+  projectRoutePending: boolean;
+  projectRouteRevision: number;
   reloadProjects: () => Promise<void>;
   enterProject: (id: string) => Promise<void>;
   exitProject: () => Promise<void>;
+  beginProvisionalProject: (name?: string) => Promise<string>;
+  deleteProjectCanvas: (id: string) => Promise<void>;
+  projectCanvasFlush: (() => Promise<void>) | null;
+  registerProjectCanvasFlush: (flush: (() => Promise<void>) | null) => void;
   visualProfiles: VisualProfileSummary[];
   activeVisualProfileId: string | null;
   reloadVisualProfiles: () => Promise<void>;
@@ -130,6 +193,15 @@ interface State {
   // 由 App 派生隐藏（两个 useCreationEditor 互斥）。
   boardOpen: boolean;
   setBoardActive: (active: boolean) => void;
+  focusedThreadId: string | null;
+  setFocusedThreadId: (id: string | null) => void;
+  projectTimelineScope: "focused" | "all";
+  setProjectTimelineScope: (scope: "focused" | "all") => void;
+  projectUnreadThreads: Record<string, string[]>;
+  markProjectThreadUnread: (projectId: string, threadId: string) => void;
+  clearProjectThreadUnread: (projectId: string, threadId?: string | null) => void;
+  creativeNavigation: { projectId: string; threadId: string | null; nodeId: string | null } | null;
+  clearCreativeNavigation: () => void;
   promptedAssets: PromptedAsset[]; // 创作板挑图集合中带 caption（反推）的子集，供编辑器补 sections / 展开维度片段
   promptedAssetsLoaded: boolean; // promptedAssets 是否与库同步（false=补拉中，维度环加载态提示用）
   captionedIds: Set<string>; // 有反推（caption）的资产 id 集合（瀑布流标 🏷️，轻量，不带正文）
@@ -140,11 +212,22 @@ interface State {
   // 点扇区待插入当前编辑器的维度（assetId = 呼环图：目标编辑器缺该图 chip 时先补插，
   // 保证插入形状是「@图片【维度】」；板未开→先开板，挂载后消费）
   pendingKeyword: { title: string; body: string; assetId?: string; sectionId?: string | null } | null;
-  // 「开启 Agent 模式再试」待激活信号（会话详情出图气泡底部链接置位）：CreationBoard
-  // 挂载后消费——打开正式 Agent 开关并复位其余 Agent 开关（互斥同按钮点击）。
-  pendingAgentArm: boolean;
+  // 从执行结果回到创作器时显式切换 Agent / 普通生成，避免沿用上次本地开关状态。
+  pendingComposerMode: "agent" | "ordinary" | null;
   armBoardAgent: () => void;
-  clearPendingAgentArm: () => void;
+  disarmBoardAgent: () => void;
+  clearPendingComposerMode: () => void;
+  // 跨 ordinary / Agent 交接时冻结画板归属。父图仍必须在本次组稿引用中，
+  // 不能仅凭这份 sidecar 把一个无父 prompt 强行并入旧线程。
+  pendingCreativeContinuation: {
+    requestId: string;
+    projectId: string;
+    threadId: string;
+    parentNodeId?: string | null;
+    parentAssetId: string;
+  } | null;
+  clearPendingCreativeContinuation: () => void;
+  ackPendingCreativeContinuation: (requestId: string) => void;
   // —— 创作板「用途」（preset）——
   presets: Preset[]; // 命名 prompt 预设，发送时作为基底注入（不进编辑器）
   activePresetId: string | null; // 当前选中用途；null=不注入
@@ -168,9 +251,9 @@ interface State {
   reloadFolders: () => Promise<void>;
   reloadPresets: () => Promise<void>;
   setAutoTags: (t: TagCount[]) => void;
-  reloadAutoTags: () => Promise<void>;
+  reloadAutoTags: (projectId?: string | null) => Promise<void>;
   setPalette: (p: ColorBucket[]) => void;
-  reloadPalette: () => Promise<void>;
+  reloadPalette: (projectId?: string | null) => Promise<void>;
   setClassifyProgress: (p: { done: number; total: number } | null) => void;
   setColorRebuild: (p: { done: number; total: number } | null) => void;
   setPromptedAssets: (a: PromptedAsset[]) => void;
@@ -290,17 +373,19 @@ interface State {
   retrieveJimengOrphan: (submitId: string) => Promise<void>;
   dismissJimengOrphan: (submitId: string) => void;
   setActiveJob: (id: string) => void;
-  openCloudAgentRun: (run: CloudAgentRunRecord) => void;
+  openGenerationJob: (id: string, options?: { navigate?: boolean }) => void;
+  openCloudAgentRun: (run: CloudAgentRunRecord, options?: { navigate?: boolean }) => void;
   updateCloudAgentRun: (run: CloudAgentRunRecord) => void;
   loadCloudAgentRuns: () => Promise<void>;
   // 删除生成任务记录（仅前端 genJobs 记录；不取消后端任务、不删已入库图片）。
   removeGenJob: (id: string) => void;
   setGenPanelOpen: (open: boolean) => void;
-  startGeneration: (prompt: string, references: Asset[], ratio?: string | null, provider?: string | null, rawPrompt?: string, conversationId?: string, anchorSessionId?: string, dimensionSources?: PromptedAsset[], visualProfileId?: string | null) => Promise<string>;
+  startGeneration: (prompt: string, references: Asset[], ratio?: string | null, provider?: string | null, rawPrompt?: string, conversationId?: string, anchorSessionId?: string, dimensionSources?: PromptedAsset[], visualProfileId?: string | null, creativeContext?: CreativeGenerationContext) => Promise<GenerationStartResult>;
   // 续轮（底部对话框发送）：instruction = 铺开后实际发送的 prompt；opts 携带编辑框原文
   // （气泡展示）、新挑参考图与比例（jimeng/Cloud 的上一轮产出图由后端权威合并下发）；
   // exactReferences = 轮级重试/编辑的精确重放（该轮当时实际下发的完整参考图，后端跳过合并）。
   sendGenRevise: (
+    jobId: string,
     instruction: string,
     provider?: string | null,
     opts?: {
@@ -308,22 +393,38 @@ interface State {
       references?: Asset[];
       ratio?: string | null;
       exactReferences?: string[];
+      parentNodeId?: string | null;
+      parentAssetPath?: string | null;
+      creativeRelation?: "continued" | "retry" | "branch" | null;
     },
   ) => Promise<void>;
   cancelGeneration: (jobId?: string) => void; // 默认取消 activeJob
   loadGenJobs: () => Promise<void>;
   applyGenChunk: (c: CodexChunk) => void;
   // 重试 activeJob 末尾失败轮：首轮失败 → startGeneration（新建 job 重发），续轮失败 → sendGenRevise（resume 续接）。
-  retryLastGenTurn: () => void;
+  retryLastGenTurn: (assetsOverride?: Asset[]) => void;
   // 「回看生成对话」：拉某生成图所在会话的历史时间线 → 新建 running=false 的 job 并选中，
   // 复用 GenerationPanel 展示 + 续轮 resume（sessionId=历史 sid）。
-  viewGenerationHistory: (assetId: string) => Promise<void>;
+  viewGenerationHistory: (
+    assetId: string,
+    locator?: { projectId: string; threadId: string; nodeId: string } | null,
+  ) => Promise<void>;
   // 「复用到创作板」：把首轮 prompt + 参考图载入创作板编辑器。
   // 开创作板 + 关详情/生成面板/挑图态，延时一帧再 dispatch board-load-prompt，
   // 确保 CreationBoard 已挂载注册 listener（同步 dispatch 会丢）。
   // refs 显式传入优先（右键菜单按 generation_history 复用，含「不入库」标注图的缓存合成）；
   // 缺省取 activeJob（GenerationPanel 复用）。
-  reusePromptToBoard: (prompt: string, refs?: PromptedAsset[], dimRefs?: PromptedAsset[]) => void;
+  reusePromptToBoard: (
+    prompt: string,
+    refs?: PromptedAsset[],
+    dimRefs?: PromptedAsset[],
+    continuation?: {
+      projectId: string;
+      threadId: string;
+      parentNodeId?: string | null;
+      parentAssetId: string;
+    } | null,
+  ) => void;
   // 「标注插入创作板」：注入临时素材（不入库）到当前编辑器。生成面板编辑坞打开 → 原地插入
   // 不动面板；否则保开创作板 + 延一帧 dispatch board-asset-injected（挂载时序同上）。
   insertAnnotatedToBoard: (asset: PromptedAsset) => void;
@@ -375,6 +476,18 @@ function taskErrorMessage(error: unknown): string {
 }
 
 export const useStore = create<State>((set, get) => {
+  function runProjectRoute<T>(operation: () => Promise<T>): Promise<T> {
+    const requestId = ++projectRouteRequestId;
+    set({ projectRoutePending: true, projectRouteRevision: requestId });
+    return enqueueProjectRoute(async () => {
+      try {
+        return await operation();
+      } finally {
+        if (requestId === projectRouteRequestId) set({ projectRoutePending: false });
+      }
+    });
+  }
+
   async function reconcileRejectedCloudSession(message: string) {
     if (!message.includes("登录已失效") && !message.includes("请先登录 Bowerbird")) return;
     try {
@@ -510,12 +623,29 @@ export const useStore = create<State>((set, get) => {
   detailAssetId: null,
   folders: [],
   projects: [],
-  currentProjectId: null,
+  activeProjectId: null,
+  projectRoutePending: false,
+  projectRouteRevision: 0,
+  projectCanvasFlush: null,
+  registerProjectCanvasFlush: (projectCanvasFlush) => set({ projectCanvasFlush }),
   autoTags: [],
   classifyProgress: null,
   colorRebuild: null,
   palette: [],
   boardOpen: false, // 创作模式未激活（对话框仍常驻显示；focus 编辑框激活）
+  focusedThreadId: null,
+  setFocusedThreadId: (focusedThreadId) => set({ focusedThreadId }),
+  projectTimelineScope: "focused",
+  setProjectTimelineScope: (projectTimelineScope) => set({ projectTimelineScope }),
+  projectUnreadThreads: {},
+  markProjectThreadUnread: (projectId, threadId) => set((state) => ({
+    projectUnreadThreads: markThreadUnread(state.projectUnreadThreads, projectId, threadId),
+  })),
+  clearProjectThreadUnread: (projectId, threadId) => set((state) => ({
+    projectUnreadThreads: clearThreadUnread(state.projectUnreadThreads, projectId, threadId),
+  })),
+  creativeNavigation: null,
+  clearCreativeNavigation: () => set({ creativeNavigation: null }),
   promptedAssets: [],
   promptedAssetsLoaded: false,
   captionedIds: new Set<string>(),
@@ -523,7 +653,8 @@ export const useStore = create<State>((set, get) => {
   captionRing: null,
   ringAssetId: null,
   pendingKeyword: null,
-  pendingAgentArm: false,
+  pendingComposerMode: null,
+  pendingCreativeContinuation: null,
   presets: [],
   activePresetId: null,
   setAssets: (assets) => set({ assets }),
@@ -598,15 +729,58 @@ export const useStore = create<State>((set, get) => {
       console.error("reloadFolders failed", e);
     }
   },
-  reloadProjects: async () => {
+  reloadProjects: () => enqueueProjectReload(async () => {
     try {
-      const projects = await api.listProjects();
-      const current = get().currentProjectId;
-      if (current && !projects.some((project) => project.id === current)) {
+      const routeRevisionAtRead = get().projectRouteRevision;
+      const routePendingAtRead = get().projectRoutePending;
+      const persisted = await api.listProjects();
+      const current = get();
+      const provisional = current.projects.filter(
+        (project) => project.provisional && !persisted.some((candidate) => candidate.id === project.id),
+      );
+      const projects = [...provisional, ...persisted];
+      const active = current.activeProjectId;
+      const activeMissing = !!active && !projects.some((project) => project.id === active);
+
+      // A list request that crossed a newer route may be an older SQLite view.
+      // Preserve the route's known project and let a fresh reload reconcile it.
+      if (activeMissing && projectListReadCrossedRoute(
+        routePendingAtRead,
+        current.projectRoutePending,
+        routeRevisionAtRead,
+        current.projectRouteRevision,
+      )) {
+        const activeProject = current.projects.find((project) => project.id === active);
+        set({ projects: activeProject ? [activeProject, ...projects] : projects });
+        if (current.projectRoutePending) {
+          void projectRouteQueue.finally(() => { void get().reloadProjects(); });
+        } else {
+          void get().reloadProjects();
+        }
+        return;
+      }
+
+      set({ projects });
+      if (!activeMissing || !active) return;
+
+      // Missing-route repair shares the same serialized controller as explicit
+      // enter/exit/delete, so an old list response cannot clear a newer project.
+      void runProjectRoute(async () => {
+        const before = get();
+        if (
+          before.activeProjectId !== active
+          || before.projects.some((project) => project.id === active)
+        ) return;
         await api.setActiveProject(null);
+        const after = get();
+        if (
+          after.activeProjectId !== active
+          || after.projects.some((project) => project.id === active)
+        ) return;
         set({
-          projects,
-          currentProjectId: null,
+          activeProjectId: null,
+          boardOpen: false,
+          focusedThreadId: null,
           currentFolderId: null,
           currentCollectionId: null,
           colorFilter: null,
@@ -618,34 +792,67 @@ export const useStore = create<State>((set, get) => {
           activePresetId: null,
           visualProfiles: [],
           activeVisualProfileId: null,
+          genPanelOpen: false,
+          genEditing: null,
+          activeJobId: null,
+          activeCloudAgentRunId: null,
         });
-      } else {
-        set({ projects });
-      }
+      }).catch((error) => console.error("reconcile missing project failed", error));
     } catch (e) {
       console.error("reloadProjects failed", e);
     }
-  },
+  }),
   enterProject: async (id) => {
-    await api.setActiveProject(id);
-    set({
-      currentProjectId: id,
-      currentFolderId: null,
-      currentCollectionId: null,
-      colorFilter: null,
-      searchQuery: "",
-      smartFilter: null,
-      detailAssetId: null,
-      selectedIds: new Set(),
-      mode: "browse",
-      activePresetId: null,
+    if (get().activeProjectId === id && !get().projectRoutePending) return;
+    await runProjectRoute(async () => {
+      if (get().activeProjectId !== id) await get().projectCanvasFlush?.();
+      let project = get().projects.find((candidate) => candidate.id === id);
+      if (!project) {
+        await get().reloadProjects();
+        project = get().projects.find((candidate) => candidate.id === id);
+      }
+      if (!project) throw new Error(`项目不存在或已删除：${id}`);
+      // Commit the backend scope first. Provisional routes explicitly clear the
+      // previous persisted owner; otherwise extension collection could keep
+      // writing into the project we just left.
+      await api.setActiveProject(backendProjectScopeForRoute(project));
+      const retainInspector = shouldRetainInspectorForProjectRoute(id, get().creativeNavigation);
+      set({
+        activeProjectId: id,
+        boardOpen: true,
+        focusedThreadId: null,
+        currentFolderId: null,
+        currentCollectionId: null,
+        colorFilter: null,
+        searchQuery: "",
+        smartFilter: null,
+        detailAssetId: null,
+        selectedIds: new Set(),
+        mode: "browse",
+        activePresetId: null,
+        ...(retainInspector ? {} : {
+          genPanelOpen: false,
+          genEditing: null,
+          activeJobId: null,
+          activeCloudAgentRunId: null,
+        }),
+      });
+      if (!project.provisional) await get().reloadVisualProfiles();
     });
-    await get().reloadVisualProfiles();
   },
-  exitProject: async () => {
+  exitProject: () => runProjectRoute(async () => {
+    await get().projectCanvasFlush?.();
+    const active = get().projects.find((project) => project.id === get().activeProjectId);
+    // Clearing the persisted scope is idempotent and must not depend on the
+    // possibly stale local provisional flag after a successful materialize.
     await api.setActiveProject(null);
     set({
-      currentProjectId: null,
+      projects: active?.provisional
+        ? get().projects.filter((project) => project.id !== active.id)
+        : get().projects,
+      activeProjectId: null,
+      boardOpen: false,
+      focusedThreadId: null,
       currentFolderId: null,
       currentCollectionId: null,
       colorFilter: null,
@@ -657,12 +864,123 @@ export const useStore = create<State>((set, get) => {
       activePresetId: null,
       visualProfiles: [],
       activeVisualProfileId: null,
+      genPanelOpen: false,
+      genEditing: null,
+      activeJobId: null,
+      activeCloudAgentRunId: null,
     });
-  },
+  }),
+  beginProvisionalProject: (name = "未命名创作") => runProjectRoute(async () => {
+    await get().projectCanvasFlush?.();
+    await api.setActiveProject(null);
+    const id = crypto.randomUUID();
+    const normalizedName = name.trim() || "未命名创作";
+    const titleSource = normalizedName === "未命名创作" || normalizedName === "未命名项目"
+      ? "default"
+      : "manual";
+    const project: Project = {
+      id,
+      name: normalizedName,
+      workspace_path: `blank:${id}`,
+      created_at: Math.floor(Date.now() / 1000),
+      asset_count: 0,
+      kind: "blank",
+      title_source: titleSource,
+      provisional: true,
+    };
+    set((state) => ({
+      projects: [project, ...state.projects.filter((candidate) => !candidate.provisional)],
+      activeProjectId: id,
+      boardOpen: true,
+      focusedThreadId: null,
+      projectTimelineScope: "focused",
+      currentFolderId: null,
+      currentCollectionId: null,
+      colorFilter: null,
+      searchQuery: "",
+      smartFilter: null,
+      detailAssetId: null,
+      selectedIds: new Set(),
+      mode: "browse",
+      activePresetId: null,
+      visualProfiles: [],
+      activeVisualProfileId: null,
+      genPanelOpen: false,
+      genEditing: null,
+      activeJobId: null,
+      activeCloudAgentRunId: null,
+    }));
+    return id;
+  }),
+  deleteProjectCanvas: (id) => runProjectRoute(async () => {
+    const project = get().projects.find((candidate) => candidate.id === id);
+    const deletingActiveProject = get().activeProjectId === id;
+    if (workspaceProjectDeleteMode(project) === "discard-provisional") {
+      // An untouched provisional canvas has no projects row. Discard it locally
+      // without flushing (which could materialize an otherwise empty draft) or
+      // invoking persisted impact/delete commands. Keep route commit fail-closed:
+      // an active provisional is cleared in Rust before frontend ownership moves.
+      if (deletingActiveProject) await api.setActiveProject(null);
+      if (deletingActiveProject) {
+        set({
+          projects: get().projects.filter((candidate) => candidate.id !== id),
+          activeProjectId: null,
+          boardOpen: false,
+          focusedThreadId: null,
+          currentFolderId: null,
+          currentCollectionId: null,
+          colorFilter: null,
+          searchQuery: "",
+          smartFilter: null,
+          detailAssetId: null,
+          selectedIds: new Set(),
+          mode: "browse",
+          activePresetId: null,
+          visualProfiles: [],
+          activeVisualProfileId: null,
+          genPanelOpen: false,
+          genEditing: null,
+          activeJobId: null,
+          activeCloudAgentRunId: null,
+        });
+      } else {
+        set({ projects: get().projects.filter((candidate) => candidate.id !== id) });
+      }
+      return;
+    }
+    if (deletingActiveProject) await get().projectCanvasFlush?.();
+    await api.deleteProject(id, "keep");
+    if (deletingActiveProject) {
+      set({
+        projects: get().projects.filter((project) => project.id !== id),
+        activeProjectId: null,
+        boardOpen: false,
+        focusedThreadId: null,
+        currentFolderId: null,
+        currentCollectionId: null,
+        colorFilter: null,
+        searchQuery: "",
+        smartFilter: null,
+        detailAssetId: null,
+        selectedIds: new Set(),
+        mode: "browse",
+        activePresetId: null,
+        visualProfiles: [],
+        activeVisualProfileId: null,
+        genPanelOpen: false,
+        genEditing: null,
+        activeJobId: null,
+        activeCloudAgentRunId: null,
+      });
+    } else {
+      set({ projects: get().projects.filter((project) => project.id !== id) });
+    }
+    await get().reloadProjects();
+  }),
   visualProfiles: [],
   activeVisualProfileId: null,
   reloadVisualProfiles: async () => {
-    const projectId = get().currentProjectId;
+    const projectId = get().activeProjectId;
     if (!projectId) {
       set({ visualProfiles: [], activeVisualProfileId: null });
       return;
@@ -688,7 +1006,7 @@ export const useStore = create<State>((set, get) => {
     }
   },
   setActiveVisualProfile: (activeVisualProfileId) => {
-    const projectId = get().currentProjectId;
+    const projectId = get().activeProjectId;
     if (!projectId) return;
     if (activeVisualProfileId && !get().visualProfiles.some(
       (profile) => profile.id === activeVisualProfileId && profile.status === "confirmed",
@@ -708,18 +1026,58 @@ export const useStore = create<State>((set, get) => {
       console.error("reloadPresets failed", e);
     }
   },
-  setAutoTags: (autoTags) => set({ autoTags }),
-  reloadAutoTags: async () => {
+  setAutoTags: (autoTags) => {
+    autoTagsReadRequestId += 1;
+    set({ autoTags });
+  },
+  reloadAutoTags: async (projectId) => {
+    const initial = get();
+    const expectedProjectId = projectId === undefined ? initial.activeProjectId : projectId;
+    const expectedRouteRevision = initial.projectRouteRevision;
+    const requestId = ++autoTagsReadRequestId;
+    const expectedProject = initial.projects.find((candidate) => candidate.id === expectedProjectId);
+    const backendProjectId = expectedProject?.provisional ? null : expectedProjectId;
     try {
-      set({ autoTags: await api.listTags("auto", get().currentProjectId) });
+      const autoTags = await api.listTags("auto", backendProjectId);
+      const current = get();
+      if (!isLatestProjectScopeRead({
+        expectedProjectId,
+        activeProjectId: current.activeProjectId,
+        routePending: current.projectRoutePending,
+        expectedRouteRevision,
+        currentRouteRevision: current.projectRouteRevision,
+        requestId,
+        latestRequestId: autoTagsReadRequestId,
+      })) return;
+      set({ autoTags });
     } catch (e) {
       console.error("reloadAutoTags failed", e);
     }
   },
-  setPalette: (palette) => set({ palette }),
-  reloadPalette: async () => {
+  setPalette: (palette) => {
+    paletteReadRequestId += 1;
+    set({ palette });
+  },
+  reloadPalette: async (projectId) => {
+    const initial = get();
+    const expectedProjectId = projectId === undefined ? initial.activeProjectId : projectId;
+    const expectedRouteRevision = initial.projectRouteRevision;
+    const requestId = ++paletteReadRequestId;
+    const expectedProject = initial.projects.find((candidate) => candidate.id === expectedProjectId);
+    const backendProjectId = expectedProject?.provisional ? null : expectedProjectId;
     try {
-      set({ palette: await api.paletteOverview(get().currentProjectId) });
+      const palette = await api.paletteOverview(backendProjectId);
+      const current = get();
+      if (!isLatestProjectScopeRead({
+        expectedProjectId,
+        activeProjectId: current.activeProjectId,
+        routePending: current.projectRoutePending,
+        expectedRouteRevision,
+        currentRouteRevision: current.projectRouteRevision,
+        requestId,
+        latestRequestId: paletteReadRequestId,
+      })) return;
+      set({ palette });
     } catch (e) {
       console.error("reloadPalette failed", e);
     }
@@ -742,7 +1100,11 @@ export const useStore = create<State>((set, get) => {
             genPanelOpen: false,
           }
         : {}),
-    }),  setPromptedAssets: (promptedAssets) => set({ promptedAssets, promptedAssetsLoaded: true }),
+    }),
+  setPromptedAssets: (promptedAssets) => {
+    promptedAssetsReadRequestId += 1;
+    set({ promptedAssets, promptedAssetsLoaded: true });
+  },
   setCaptionedIds: (ids) => set({ captionedIds: new Set(ids) }),
   focusAsset: (id) => set({ focusAssetId: id }),
   clearFocusAsset: () => set({ focusAssetId: null }),
@@ -754,13 +1116,45 @@ export const useStore = create<State>((set, get) => {
     // （未加载过 / 数据过期）就按需补拉一次，CaptionRing 响应式订阅到数据后自动补扇区。
     const s = get();
     if (s.promptedAssets.some((a) => a.id === assetId)) return;
+    if (s.projectRoutePending) {
+      set({ promptedAssetsLoaded: true });
+      return;
+    }
+    const expectedProjectId = s.activeProjectId;
+    const expectedRouteRevision = s.projectRouteRevision;
+    const requestId = ++promptedAssetsReadRequestId;
+    const expectedProject = s.projects.find((candidate) => candidate.id === expectedProjectId);
+    const backendProjectId = expectedProject?.provisional ? null : expectedProjectId;
     set({ promptedAssetsLoaded: false });
     api
-      .listPromptedAssets(s.currentProjectId)
-      .then((prompted) => set({ promptedAssets: prompted, promptedAssetsLoaded: true }))
+      .listPromptedAssets(backendProjectId)
+      .then((prompted) => {
+        const current = get();
+        if (!isLatestProjectScopeRead({
+          expectedProjectId,
+          activeProjectId: current.activeProjectId,
+          routePending: current.projectRoutePending,
+          expectedRouteRevision,
+          currentRouteRevision: current.projectRouteRevision,
+          requestId,
+          latestRequestId: promptedAssetsReadRequestId,
+        })) return;
+        set({ promptedAssets: prompted, promptedAssetsLoaded: true });
+      })
       .catch((e) => {
         console.error("load promptedAssets for ring failed", e);
-        set({ promptedAssetsLoaded: true }); // 失败也解除加载态，退回「无维度」空环提示
+        const current = get();
+        if (isLatestProjectScopeRead({
+          expectedProjectId,
+          activeProjectId: current.activeProjectId,
+          routePending: current.projectRoutePending,
+          expectedRouteRevision,
+          currentRouteRevision: current.projectRouteRevision,
+          requestId,
+          latestRequestId: promptedAssetsReadRequestId,
+        })) {
+          set({ promptedAssetsLoaded: true }); // 失败也解除加载态，退回「无维度」空环提示
+        }
       });
   },
   closeCaptionRing: () => set({ captionRing: null }),
@@ -780,8 +1174,16 @@ export const useStore = create<State>((set, get) => {
       },
     })),
   clearPendingKeyword: () => set({ pendingKeyword: null }),
-  armBoardAgent: () => set({ pendingAgentArm: true }),
-  clearPendingAgentArm: () => set({ pendingAgentArm: false }),
+  armBoardAgent: () => set({ pendingComposerMode: "agent" }),
+  disarmBoardAgent: () => set({ pendingComposerMode: "ordinary" }),
+  clearPendingComposerMode: () => set({ pendingComposerMode: null }),
+  clearPendingCreativeContinuation: () => set({ pendingCreativeContinuation: null }),
+  ackPendingCreativeContinuation: (requestId) => set((state) => ({
+    pendingCreativeContinuation: acknowledgeCreativeContinuation(
+      state.pendingCreativeContinuation,
+      requestId,
+    ),
+  })),
   setActivePreset: (id) => set({ activePresetId: id }),
   // —— 反推（全局后台串行）——
   describingId: null,
@@ -930,16 +1332,24 @@ export const useStore = create<State>((set, get) => {
   settings: null,
   loadSettings: async () => {
     try {
-      set({ settings: await api.getSettings() });
+      const settings = await api.getSettings();
+      applyTheme(settings.theme);
+      set({ settings });
     } catch (e) {
       console.error("loadSettings failed", e);
     }
   },
   updateSettings: async (settings) => {
+    const previous = get().settings;
+    applyTheme(settings.theme);
+    set({ settings });
     try {
       await api.updateSettings(settings);
-      set({ settings });
     } catch (e) {
+      if (previous) {
+        applyTheme(previous.theme);
+        set({ settings: previous });
+      }
       console.error("updateSettings failed", e);
     }
   },
@@ -1125,7 +1535,20 @@ export const useStore = create<State>((set, get) => {
   setGenPanelOpen: (open) =>
     set((s) => ({ genPanelOpen: open, genUnread: open ? false : s.genUnread })),
   setActiveJob: (id) => set({ activeJobId: id, activeSessionKind: "generation" }),
-  openCloudAgentRun: (run) => set((s) => ({
+  openGenerationJob: (id, options) => set((s) => {
+    const job = s.genJobs[id];
+    if (!job) return {};
+    return {
+      activeJobId: id,
+      activeSessionKind: "generation" as const,
+      genPanelOpen: true,
+      genEditing: null,
+      detailAssetId: null,
+      genUnread: false,
+      creativeNavigation: options?.navigate === false ? null : generationTaskNavigation(job),
+    };
+  }),
+  openCloudAgentRun: (run, options) => set((s) => ({
     cloudAgentRuns: { ...s.cloudAgentRuns, [run.runId]: run },
     cloudAgentRunOrder: s.cloudAgentRuns[run.runId]
       ? s.cloudAgentRunOrder
@@ -1136,6 +1559,7 @@ export const useStore = create<State>((set, get) => {
     genEditing: null,
     detailAssetId: null,
     genUnread: false,
+    creativeNavigation: options?.navigate === false ? null : agentTaskNavigation(run),
   })),
   updateCloudAgentRun: (run) => set((s) => ({
     cloudAgentRuns: { ...s.cloudAgentRuns, [run.runId]: run },
@@ -1145,19 +1569,18 @@ export const useStore = create<State>((set, get) => {
   })),
   loadCloudAgentRuns: async () => {
     try {
-      const runs = await api.cloudAgentList();
-      if (runs.length === 0) return;
-      const cloudAgentRuns = Object.fromEntries(runs.map((run) => [run.runId, run]));
-      const needsAttention = runs.find((run) =>
-        !["succeeded", "failed", "cancelled"].includes(run.status)
-        || (run.status === "succeeded" && !run.finalAssetId));
-      set({
-        cloudAgentRuns,
-        cloudAgentRunOrder: runs.map((run) => run.runId),
-        activeCloudAgentRunId: needsAttention?.runId ?? null,
-        ...(needsAttention
-          ? { activeSessionKind: "agent" as const, genPanelOpen: true, genEditing: null }
-          : {}),
+      const recoveredRuns = await api.cloudAgentList();
+      set((s) => {
+        const merged = mergeRecoveredCloudAgentRuns(
+          s.cloudAgentRuns,
+          s.cloudAgentRunOrder,
+          recoveredRuns,
+        );
+        return {
+          cloudAgentRuns: merged.runs,
+          cloudAgentRunOrder: merged.order,
+          genUnread: s.genUnread || taskCenterAgentRuns(Object.values(merged.runs)).length > 0,
+        };
       });
     } catch (error) {
       console.error("loadCloudAgentRuns failed", error);
@@ -1202,6 +1625,7 @@ export const useStore = create<State>((set, get) => {
           const failed = r.status === "failed";
           const turns: GenTurn[] = r.turns.map((t) => ({
             id: nextGenTurnId(),
+            turnKey: t.turn_key ?? undefined,
             prompt: t.prompt,
             appliedPrompt: t.applied_prompt ?? null,
             promptRaw: t.prompt_raw ?? null,
@@ -1213,11 +1637,13 @@ export const useStore = create<State>((set, get) => {
             // 失败态标记在最后一轮：面板 ❌ + 生成面板重试入口（错误文本只活在内存，不入库）。
             const err = r.error ?? "生成失败";
             if (turns.length > 0) turns[turns.length - 1] = { ...turns[turns.length - 1], error: err };
-            else turns.push({ id: nextGenTurnId(), prompt: r.prompt, promptRaw: null, images: [], error: err });
+            else turns.push({ id: nextGenTurnId(), turnKey: r.turn_key ?? undefined, prompt: r.prompt, promptRaw: null, images: [], error: err });
           }
           genJobs[r.id] = {
             id: r.id,
             conversationId: r.conversation_id ?? undefined,
+            threadId: r.thread_id ?? r.creative_session_id,
+            creativeSessionId: r.creative_session_id,
             turns,
             sessionId: r.session_id,
             streaming: "",
@@ -1237,14 +1663,16 @@ export const useStore = create<State>((set, get) => {
           genJobOrder.push(r.id);
           if (r.session_id) seenSessions.add(r.session_id);
         }
-        let firstRecoveredId: string | null = null;
+        const persistedJobs: GenJob[] = [];
         for (const j of jobs) {
-          if (genJobs[j.id]) continue; // 已存在（用户本轮新发）不覆盖
-          if (j.session_id && seenSessions.has(j.session_id)) continue; // 同 session 已有终态行，避免双份
-          genJobs[j.id] = {
+          // 同 session 已有另一条终态行时不重复展示；同 id 的 recover_started 占位必须
+          // 继续进入 field-wise hydrate，不能因 seenSessions / 已存在而永久保留稀疏字段。
+          if (j.session_id && seenSessions.has(j.session_id) && !genJobs[j.id]) continue;
+          persistedJobs.push({
             id: j.id,
             turns: [{
               id: nextGenTurnId(),
+              turnKey: j.turn_key ?? undefined,
               prompt: j.prompt,
               appliedPrompt: j.applied_prompt ?? null,
               images: [],
@@ -1252,6 +1680,8 @@ export const useStore = create<State>((set, get) => {
             }],
             sessionId: j.session_id ?? j.submit_id ?? null,
             conversationId: j.conversation_id ?? undefined,
+            threadId: j.thread_id ?? j.creative_session_id,
+            creativeSessionId: j.creative_session_id,
             streaming: "",
             lastPrompt: j.prompt,
             lastRefs: j.references ?? [],
@@ -1265,21 +1695,24 @@ export const useStore = create<State>((set, get) => {
             running: j.running,
             submitId: j.submit_id ?? null,
             remoteStatus: j.running ? "querying" : null,
-          };
-          if (!genJobOrder.includes(j.id)) genJobOrder.push(j.id);
-          if (firstRecoveredId === null) firstRecoveredId = j.id;
+          });
         }
-        const generating = Object.values(genJobs).some((x) => x.running);
-        // 有恢复中 job → 自动弹面板 + 选中首个（历史会话恢复不弹，与 startGeneration 自动弹一致）。
-        return firstRecoveredId
-          ? { genJobs, genJobOrder, generating, genPanelOpen: true, activeSessionKind: "generation" as const, activeJobId: s.activeJobId ?? firstRecoveredId }
-          : { genJobs, genJobOrder, generating };
+        const merged = mergeRecoveredGenJobs(genJobs, genJobOrder, persistedJobs);
+        const generating = Object.values(merged.jobs).some((x) => x.running);
+        const hasTaskAttention = taskCenterGenerationJobs(Object.values(merged.jobs)).length > 0;
+        // 启动恢复只补齐任务状态和未读提醒；详情必须由用户显式打开，不能劫持当前页面。
+        return {
+          genJobs: merged.jobs,
+          genJobOrder: merged.order,
+          generating,
+          genUnread: s.genUnread || hasTaskAttention,
+        };
       });
     } catch (e) {
       console.error("loadGenJobs failed", e);
     }
   },
-  startGeneration: async (prompt, references, ratio, provider, rawPrompt, conversationId, anchorSessionId, dimensionSources, visualProfileId) => {
+  startGeneration: async (prompt, references, ratio, provider, rawPrompt, conversationId, anchorSessionId, dimensionSources, visualProfileId, creativeContext) => {
     // 多 job：不再因 generating 阻塞（并发发起多个生成，各自独立流转）。
     // provider 兜底：调用点没传（CreationBoard send / retry）→ 当前选择 → 全局默认。
     const prov = normalizeGenerationProvider(
@@ -1306,22 +1739,25 @@ export const useStore = create<State>((set, get) => {
       : visualProfileId;
     // 前端生成 jobId：创建 GenJob 即知 id，chunk 按 id 路由无 race；后端 task_queue upsert。
     const jobId = crypto.randomUUID();
+    const turnKey = crypto.randomUUID();
     // 会话级分组（含普通 job：conversationId 兜底 jobId）——后端 done 入库时落
     // generation_conversations（session → conversation），重启后瀑布流分组不丢。
     const conv = conversationId ?? jobId;
     const job: GenJob = {
       id: jobId,
       conversationId: conv,
-      turns: [{ id: nextGenTurnId(), prompt: sentPrompt, promptRaw: rawPrompt ?? null, images: [], refAssets: references, provider: prov, startedAt: Date.now() }],
+      turns: [{ id: nextGenTurnId(), turnKey, prompt: sentPrompt, promptRaw: rawPrompt ?? null, images: [], refAssets: references, provider: prov, startedAt: Date.now() }],
       sessionId: null,
       streaming: "",
+      threadId: creativeContext?.threadId ?? null,
+      creativeSessionId: creativeContext?.creativeSessionId ?? null,
       lastPrompt: sentPrompt,
       lastRefs: refPaths,
       refAssets: references,
       dimAssets: dimensionSources ?? [],
       lastRatio: sentRatio,
       provider: prov,
-      projectId: get().currentProjectId,
+      projectId: creativeContext ? creativeContext.projectId ?? null : get().activeProjectId,
       visualProfileId: selectedVisualProfileId,
       createdAt: Date.now(),
       running: true,
@@ -1331,10 +1767,12 @@ export const useStore = create<State>((set, get) => {
       genJobOrder: [...s.genJobOrder, jobId],
       activeJobId: jobId, // 新发 job 自动选中（续轮/复用/取消聚焦它）
       activeSessionKind: "generation",
-      genPanelOpen: true, // 自动弹面板给即时反馈（创作板在右槽仍可编辑）
+      // creative session 内由画板节点/时间线直接反馈；只有未迁移兼容调用仍打开旧会话外壳。
+      genPanelOpen: creativeContext ? false : true,
       genUnread: false,
       generating: true, // 新 job running → 至少此 job 在跑
     }));
+    let accepted = true;
     try {
       await api.codexCreateImage({
         jobId,
@@ -1350,19 +1788,23 @@ export const useStore = create<State>((set, get) => {
         conversationId: conv,
         // 版本分支才锚定源会话（源 session 可能是旧版生成 / 回看历史，还没有 conversation 映射）。
         anchorSessionId: conversationId ? anchorSessionId ?? null : null,
+        threadId: creativeContext?.threadId ?? null,
+        turnKey,
+        parentNodeId: creativeContext?.parentNodeId ?? null,
+        parentAssetPath: creativeContext?.parentAssetPath ?? null,
+        creativeRelation: creativeContext?.relation ?? null,
       });
     } catch (e) {
+      accepted = false;
       const message = taskErrorMessage(e);
       await reconcileRejectedCloudSession(message);
       genHandleError(jobId, message);
       updateJob(jobId, (j) => ({ ...j, running: false }));
     }
-    return jobId;
+    return { jobId, accepted };
   },
-  sendGenRevise: async (instruction, provider, opts) => {
-    const id = get().activeJobId;
-    if (!id) return;
-    const job = get().genJobs[id];
+  sendGenRevise: async (jobId, instruction, provider, opts) => {
+    const job = get().genJobs[jobId];
     const text = instruction.trim();
     if (!job || !job.sessionId || !text) return;
     const prov = normalizeGenerationProvider(
@@ -1382,13 +1824,23 @@ export const useStore = create<State>((set, get) => {
       .map((r) => r.store_path)
       .filter((p): p is string => !!p);
     const exactRefs = opts?.exactReferences?.length ? opts.exactReferences : undefined;
+    const fallbackParent = generationParentLocator(job.id, job.turns, get().assets);
+    const hasExplicitParentPath = !!opts && Object.prototype.hasOwnProperty.call(opts, "parentAssetPath");
+    const parentAssetPath = hasExplicitParentPath ? opts?.parentAssetPath ?? null : fallbackParent.storePath;
+    const parentNodeId = opts?.parentNodeId !== undefined
+      ? opts.parentNodeId
+      : hasExplicitParentPath
+        ? null
+        : fallbackParent.nodeId;
+    const turnKey = crypto.randomUUID();
     // 续轮复用同 jobId（同一会话）；后端 task_queue upsert 刷新回 running。
-    updateJob(id, (j) => ({
+    updateJob(jobId, (j) => ({
       ...j,
       turns: [
         ...j.turns,
         {
           id: nextGenTurnId(),
+          turnKey,
           prompt: sentText,
           promptRaw: opts?.rawPrompt ?? null,
           images: [],
@@ -1403,7 +1855,7 @@ export const useStore = create<State>((set, get) => {
     }));
     try {
       await api.codexCreateImage({
-        jobId: id,
+        jobId,
         prompt: sentText,
         promptRaw: opts?.rawPrompt ?? null,
         referenceImages: exactRefs ?? reviseRefs,
@@ -1418,12 +1870,17 @@ export const useStore = create<State>((set, get) => {
         provider: prov,
         projectId: job.projectId,
         visualProfileId: job.visualProfileId ?? job.visualProfile?.profileId ?? null,
+        threadId: job.threadId ?? null,
+        turnKey,
+        parentNodeId,
+        parentAssetPath,
+        creativeRelation: opts?.creativeRelation ?? (parentAssetPath ? "continued" : null),
       });
     } catch (e) {
       const message = taskErrorMessage(e);
       await reconcileRejectedCloudSession(message);
-      genHandleError(id, message);
-      updateJob(id, (j) => ({ ...j, running: false }));
+      genHandleError(jobId, message);
+      updateJob(jobId, (j) => ({ ...j, running: false }));
     }
   },
   cancelGeneration: (jobId) => {
@@ -1431,7 +1888,7 @@ export const useStore = create<State>((set, get) => {
     if (!id) return;
     void api.cancelCodexCreate(id).catch(console.error);
   },
-  retryLastGenTurn: () => {
+  retryLastGenTurn: (assetsOverride) => {
     const s = get();
     const id = s.activeJobId;
     if (!id) return;
@@ -1447,14 +1904,23 @@ export const useStore = create<State>((set, get) => {
     const last = job.turns[job.turns.length - 1];
     if (!last?.error) return; // 没有失败轮可重试
     if (job.sessionId) {
+      const parent = generationParentLocator(
+        job.id,
+        job.turns,
+        assetsOverride ?? s.assets,
+        { beforeTurnId: last.id },
+      );
       // 续轮失败：先移除失败轮再 resume，重试轮顶替原位（避免同 prompt 编号递增的重复轮）。
       // 参考图精确重放该轮当时实际下发的完整列表（started 事件已记录，含当时的基图）；
       // 恢复重建的失败轮无 refs 时退回正常合并路径。
       updateJob(id, (j) => ({ ...j, turns: j.turns.slice(0, -1) }));
-      void s.sendGenRevise(last.prompt, provider, {
+      void s.sendGenRevise(id, last.prompt, provider, {
         rawPrompt: last.promptRaw ?? undefined,
         references: last.refAssets,
         exactReferences: last.refs?.length ? last.refs : undefined,
+        parentNodeId: parent.nodeId,
+        parentAssetPath: parent.storePath,
+        creativeRelation: "retry",
       });
     } else {
       // 首轮失败：startGeneration 新建 job 重发（旧失败 job 保留可切回查看）。
@@ -1468,6 +1934,13 @@ export const useStore = create<State>((set, get) => {
         undefined,
         undefined,
         job.visualProfileId ?? job.visualProfile?.profileId ?? null,
+        job.projectId && job.threadId
+          ? {
+              projectId: job.projectId,
+              threadId: job.threadId,
+              relation: "retry",
+            }
+          : undefined,
       );
     }
   },
@@ -1515,25 +1988,25 @@ export const useStore = create<State>((set, get) => {
         if (s.genJobs[rid]) return {}; // 已在（loadGenJobs 已拉到）
         const job: GenJob = {
           id: rid,
-          turns: [{ id: nextGenTurnId(), prompt: c.prompt, images: [], provider: c.provider }],
+          turns: [{ id: nextGenTurnId(), turnKey: c.turn_key ?? undefined, prompt: c.prompt, images: [], provider: c.provider }],
           sessionId: null,
+          threadId: c.thread_id ?? null,
+          creativeSessionId: c.creative_session_id ?? null,
           streaming: "",
           lastPrompt: c.prompt,
           lastRefs: [],
           refAssets: [],
           lastRatio: null,
           provider: c.provider,
-          projectId: null,
+          projectId: c.project_id ?? null,
           createdAt: Date.now(),
           running: true,
         };
         return {
           genJobs: { ...s.genJobs, [rid]: job },
           genJobOrder: [...s.genJobOrder, rid],
-          activeJobId: s.activeJobId ?? rid,
-          activeSessionKind: "generation" as const,
           generating: true,
-          genPanelOpen: true, // 恢复中弹面板（用户看得见恢复进度）
+          genUnread: true,
         };
       });
       return;
@@ -1587,11 +2060,49 @@ export const useStore = create<State>((set, get) => {
       updateJob(id, (j) => ({ ...j, running: false }));
     }
   },
-  viewGenerationHistory: async (assetId) => {
+  viewGenerationHistory: async (assetId, locator) => {
     // 回看历史：生成会话已结束（DB 有 generation_meta），新建一个 running=false 的 job 并选中，
     // 复用 GenerationPanel 展示时间线 + 续轮 resume（sessionId=历史 sid）。
+    const requestId = ++generationHistoryReadRequestId;
+    const origin = get();
+    const expectedProjectId = origin.activeProjectId;
+    const expectedRouteRevision = origin.projectRouteRevision;
+    const isCurrentIntent = () => {
+      const current = get();
+      return isLatestProjectScopeRead({
+        expectedProjectId,
+        activeProjectId: current.activeProjectId,
+        routePending: current.projectRoutePending,
+        expectedRouteRevision,
+        currentRouteRevision: current.projectRouteRevision,
+        requestId,
+        latestRequestId: generationHistoryReadRequestId,
+      });
+    };
+    if (!isCurrentIntent()) return;
     try {
-      const hist = await api.generationHistory(assetId, get().currentProjectId);
+      // 画板/时间线调用必须携带完整 locator；只有素材库详情缺少节点上下文时才允许
+      // 走 assetId 兼容查询。后端会拒绝多节点歧义，前端绝不任选一个。
+      const location = locator
+        ? await api.projectCanvasForNode(locator.projectId, locator.threadId, locator.nodeId)
+        : await api.projectCanvasForAsset(assetId);
+      if (!isCurrentIntent()) return;
+      if (location) {
+        set({
+          creativeNavigation: {
+            projectId: location.projectId,
+            threadId: location.threadId,
+            nodeId: location.nodeId,
+          },
+          detailAssetId: null,
+          genPanelOpen: false,
+          boardOpen: true,
+        });
+        return;
+      }
+      const historyProjectId = locator?.projectId ?? expectedProjectId;
+      const hist = await api.generationHistory(assetId, historyProjectId);
+      if (!isCurrentIntent()) return;
       // 同 sessionId 已有 job 则切过去（避免回看累积重复历史 job）；session_id 为空不去重。
       const existing = hist.session_id
         ? Object.values(get().genJobs).find((j) => j.sessionId === hist.session_id)
@@ -1623,7 +2134,7 @@ export const useStore = create<State>((set, get) => {
         // 不再默认落到 codex（codex resume 拿即梦 submit_id 会直接报错）。遗留 "dreamina"
         // key 归一为 jimeng；旧 meta 无 provider 维持空串（面板按 codex 展示，可手选）。
         provider: hist.provider === "dreamina" ? "jimeng" : hist.provider ?? "",
-        projectId: get().currentProjectId,
+        projectId: historyProjectId,
         visualProfile: hist.visual_profile ?? null,
         visualProfileId: hist.visual_profile?.profileId ?? null,
         createdAt: Date.now(),
@@ -1638,10 +2149,12 @@ export const useStore = create<State>((set, get) => {
         genUnread: false,
       }));
     } catch (e) {
+      if (!isCurrentIntent()) return;
       console.error("viewGenerationHistory failed", e);
+      notifyError(e, "无法唯一定位这张素材所在的画板节点");
     }
   },
-  reusePromptToBoard: (prompt, refs, dimRefs) => {
+  reusePromptToBoard: (prompt, refs, dimRefs, continuation) => {
     const body = prompt.trim();
     if (!body) return;
     set({
@@ -1650,6 +2163,9 @@ export const useStore = create<State>((set, get) => {
       genEditing: null,
       detailAssetId: null,
       genPanelOpen: false, // 聚焦创作板编辑
+      pendingCreativeContinuation: continuation
+        ? { ...continuation, requestId: crypto.randomUUID() }
+        : null,
       // 载入的 prompt 已含完整内容（含原 preset body），清选中避免发送时 startGeneration 重复拼 body
       activePresetId: null,
     });

@@ -1,19 +1,73 @@
-// Real controlled-image-edit E2E. Requires migration 0021, deployed agent-run /
-// agent-worker Functions, and the VPS Agent consumer. It prints the proposed
-// plan and waits for explicit approval unless --yes is supplied.
+// Real controlled-image-edit E2E. DSH requires migration 0050, deployed
+// agent-run / agent-worker Functions, and a VPS Agent consumer with both U4
+// runtime-selection flags enabled. It prints the proposed plan and waits for
+// explicit approval unless --yes is supplied.
 //
 // Usage:
-//   node scripts/test-controlled-agent-e2e.mjs
-//   node scripts/test-controlled-agent-e2e.mjs --reference D:\test-assets\synthetic.png
-//   node scripts/test-controlled-agent-e2e.mjs --yes
-//   node scripts/test-controlled-agent-e2e.mjs --yes --retry-text "背景更浅，主体保持不变"
-//   node scripts/test-controlled-agent-e2e.mjs --reject-plan
-//   node scripts/test-controlled-agent-e2e.mjs --reject-plan --intent "背景换成浅蓝色"
+//   $env:BOWERBIRD_U4_ALLOW_REAL_PROVIDER_COSTS='1'
+//   node scripts/test-controlled-agent-e2e.mjs --runtime dsh --allow-real-provider-costs
+//   node scripts/test-controlled-agent-e2e.mjs --runtime legacy_kernel --allow-real-provider-costs --reference D:\test-assets\synthetic.png
+//   node scripts/test-controlled-agent-e2e.mjs --runtime dsh --allow-real-provider-costs --yes
+//   node scripts/test-controlled-agent-e2e.mjs --runtime dsh --allow-real-provider-costs --yes --retry-text "背景更浅，主体保持不变"
+//   node scripts/test-controlled-agent-e2e.mjs --runtime dsh --allow-real-provider-costs --reject-plan
 
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
+import { evaluateControlledRecoveryEvidence } from "./controlled-agent-recovery-evidence.mjs";
+
+const args = process.argv.slice(2);
+if (args.includes("--help")) {
+  console.log([
+    "真实 controlled-image-edit E2E（会产生 DeepSeek / 方舟费用）",
+    "",
+    "必需：",
+    "  --runtime legacy_kernel|dsh",
+    "  --allow-real-provider-costs",
+    "  BOWERBIRD_U4_ALLOW_REAL_PROVIDER_COSTS=1",
+    "",
+    "可选：--reference <path> --intent <text> --yes --reject-plan --retry-text <text> --expect-reclaim",
+  ].join("\n"));
+  process.exit(0);
+}
+
+const runtimeIndex = args.indexOf("--runtime");
+const agentRuntime = runtimeIndex >= 0 ? args[runtimeIndex + 1] : null;
+if (agentRuntime !== "legacy_kernel" && agentRuntime !== "dsh") {
+  console.error("必须用 --runtime 明确选择 legacy_kernel 或 dsh；不允许隐式默认运行时");
+  process.exit(2);
+}
+if (!args.includes("--allow-real-provider-costs") || process.env.BOWERBIRD_U4_ALLOW_REAL_PROVIDER_COSTS !== "1") {
+  console.error("真实 E2E 已拒绝：必须同时传 --allow-real-provider-costs，并设置 BOWERBIRD_U4_ALLOW_REAL_PROVIDER_COSTS=1");
+  process.exit(2);
+}
+
+const referenceIndex = args.indexOf("--reference");
+const referencePath = referenceIndex >= 0 ? args[referenceIndex + 1] : null;
+const autoApprove = args.includes("--yes");
+const rejectPlan = args.includes("--reject-plan");
+const intentIndex = args.indexOf("--intent");
+const customIntent = intentIndex >= 0 ? args[intentIndex + 1] : null;
+const retryTextIndex = args.indexOf("--retry-text");
+const retryText = retryTextIndex >= 0 ? args[retryTextIndex + 1] : null;
+const expectReclaim = args.includes("--expect-reclaim");
+if (referenceIndex >= 0 && !referencePath) {
+  console.error("--reference 后需要一个明确可测试、非私人图片路径");
+  process.exit(2);
+}
+if (retryTextIndex >= 0 && !retryText) {
+  console.error("--retry-text 后需要具体反馈");
+  process.exit(2);
+}
+if (intentIndex >= 0 && !customIntent) {
+  console.error("--intent 后需要具体的用户意图");
+  process.exit(2);
+}
+if (expectReclaim && (rejectPlan || retryText)) {
+  console.error("--expect-reclaim 只允许单次批准执行，不能与 --reject-plan 或 --retry-text 同用");
+  process.exit(2);
+}
 
 function parseEnv(text) {
   const out = {};
@@ -30,28 +84,6 @@ const publishableKey = env.SUPABASE_PUBLISHABLE_KEY;
 const secretKey = env.SUPABASE_SECRET_KEY;
 if (!baseUrl || !publishableKey || !secretKey) {
   console.error("缺少 apps/cloud/.env 中的 SUPABASE_URL / publishable / secret key");
-  process.exit(2);
-}
-
-const args = process.argv.slice(2);
-const referenceIndex = args.indexOf("--reference");
-const referencePath = referenceIndex >= 0 ? args[referenceIndex + 1] : null;
-const autoApprove = args.includes("--yes");
-const rejectPlan = args.includes("--reject-plan");
-const intentIndex = args.indexOf("--intent");
-const customIntent = intentIndex >= 0 ? args[intentIndex + 1] : null;
-const retryTextIndex = args.indexOf("--retry-text");
-const retryText = retryTextIndex >= 0 ? args[retryTextIndex + 1] : null;
-if (referenceIndex >= 0 && !referencePath) {
-  console.error("--reference 后需要一个明确可测试、非私人图片路径");
-  process.exit(2);
-}
-if (retryTextIndex >= 0 && !retryText) {
-  console.error("--retry-text 后需要具体反馈");
-  process.exit(2);
-}
-if (intentIndex >= 0 && !customIntent) {
-  console.error("--intent 后需要具体的用户意图");
   process.exit(2);
 }
 
@@ -123,11 +155,27 @@ async function usageForRun(runId) {
   });
 }
 
-async function waitFor(headers, runId, wanted, maxWaitMs = 12 * 60_000) {
+async function recoveryRunRow(runId) {
+  const rows = await jsonRequest("读取 recovery Run 证据", `${baseUrl}/rest/v1/agent_runs?id=eq.${encodeURIComponent(runId)}&select=status,current_step,lease_id,agent_runtime,actual_credits`, {
+    method: "GET", headers: adminHeaders,
+  });
+  assert.equal(rows.length, 1, "recovery Run 证据缺失");
+  return rows[0];
+}
+
+async function toolCallsForRun(runId) {
+  return await jsonRequest("读取 Agent tool ledger", `${baseUrl}/rest/v1/agent_tool_calls?run_id=eq.${encodeURIComponent(runId)}&select=call_id,phase,tool_name,status,result_hash`, {
+    method: "GET", headers: adminHeaders,
+  });
+}
+
+async function waitFor(headers, runId, wanted, maxWaitMs = 12 * 60_000, observe) {
   const started = Date.now();
   for (;;) {
     const snapshot = await getRun(headers, runId);
     const status = snapshot.run?.status;
+    assert.equal(snapshot.run?.agent_runtime, agentRuntime, "Run 快照中的 Agent runtime 漂移或缺失");
+    if (observe) await observe(snapshot);
     process.stdout.write(`\rstatus=${status ?? "unknown"} step=${snapshot.run?.current_step ?? "-"} progress=${snapshot.run?.progress ?? 0}%   `);
     if (status === wanted) {
       process.stdout.write("\n");
@@ -138,7 +186,10 @@ async function waitFor(headers, runId, wanted, maxWaitMs = 12 * 60_000) {
       throw new Error(`Run 提前结束：${status} / ${snapshot.run?.error_code ?? "unknown"} / ${snapshot.run?.safe_message ?? ""}`);
     }
     if (Date.now() - started > maxWaitMs) throw new Error(`等待 ${wanted} 超过 ${maxWaitMs / 1000} 秒`);
-    await new Promise((resolve) => setTimeout(resolve, 3_000));
+    // Recovery orchestration must observe the first post-approval lease before
+    // the Worker can submit the provider request. Keep normal E2E polling
+    // conservative, but tighten only the explicit crash/re-claim window.
+    await new Promise((resolve) => setTimeout(resolve, observe ? 250 : 3_000));
   }
 }
 
@@ -165,6 +216,7 @@ async function downloadFinal(headers, runId, snapshot, label = "final") {
 
 let account;
 let runId;
+const e2eStartedAt = Date.now();
 try {
   account = await createAccount();
   // A fresh account has 30 daily credits, while this POC Run reserves a
@@ -199,9 +251,11 @@ try {
     body: JSON.stringify({
       action: "create", skillId: "bowerbird-controlled-image-edit", goal: intentPrompt,
       inputCount: references.length, inputManifestHash: sha256(manifest), ratio: "16:9",
-      idempotencyKey: `controlled-e2e-${randomBytes(8).toString("hex")}`,
+      agentRuntime,
+      idempotencyKey: `controlled-e2e-${agentRuntime}-${randomBytes(8).toString("hex")}`,
     }),
   });
+  assert.equal(created.agentRuntime, agentRuntime, "控制面没有锁定请求的 Agent runtime；停止在任何 provider 调用之前");
   runId = created.runId;
   const requestUpload = await fetch(created.uploadUrl, {
     method: "PUT", headers: { "content-type": "application/json", "x-upsert": "true" }, body: manifest,
@@ -236,7 +290,7 @@ try {
     assert.ok(modelTurns.length >= 2 && modelTurns.length <= 4, "首次分析/规划应登记 2–4 个 DeepSeek 文本回合");
     assert.equal(cancelled.run.actual_credits, usageCredits, "拒绝后实际积分必须等于服务端 usage 汇总");
     console.log("CONTROLLED_AGENT_REJECT_E2E_OK");
-    console.log(`run=${runId} conversation=${cancelled.conversationId} credits=${cancelled.run.actual_credits}`);
+    console.log(`runtime=${agentRuntime} run=${runId} conversation=${cancelled.conversationId} credits=${cancelled.run.actual_credits}`);
   }
   if (!rejectPlan) {
   if (!autoApprove) {
@@ -249,7 +303,28 @@ try {
     method: "POST", headers: account.headers, body: JSON.stringify({ action: "approve", approvalId: approval.id }),
   });
 
-  let resultSnapshot = await waitFor(account.headers, runId, "awaiting_result_feedback");
+  const executionLeaseIds = new Set();
+  let announcedExecutionLeaseCount = 0;
+  const observeExecutionRecovery = expectReclaim ? async () => {
+    const row = await recoveryRunRow(runId);
+    assert.equal(row.agent_runtime, agentRuntime, "执行阶段持久化 runtime 漂移");
+    if (typeof row.lease_id === "string" && row.lease_id) executionLeaseIds.add(row.lease_id);
+    if (executionLeaseIds.size > announcedExecutionLeaseCount) {
+      announcedExecutionLeaseCount = executionLeaseIds.size;
+      if (announcedExecutionLeaseCount === 1) {
+        console.log("\nRECOVERY_FIRST_EXECUTION_LEASE_OBSERVED：现在必须由外部测试编排使候选 Worker 真实退出并重启；脚本本身不会杀进程。");
+      } else {
+        console.log(`\nRECOVERY_EXECUTION_RECLAIM_OBSERVED count=${announcedExecutionLeaseCount}`);
+      }
+    }
+  } : undefined;
+  let resultSnapshot = await waitFor(
+    account.headers,
+    runId,
+    "awaiting_result_feedback",
+    12 * 60_000,
+    observeExecutionRecovery,
+  );
   let finalArtifact = await downloadFinal(account.headers, runId, resultSnapshot, "initial");
   if (retryText) {
     await jsonRequest("提交结果重试反馈", functionUrl("agent-run"), {
@@ -290,7 +365,49 @@ try {
     "Run 终态必须与服务端 usage ledger 完成积分对账",
   );
   console.log("CONTROLLED_AGENT_E2E_OK");
-  console.log(`run=${runId} conversation=${finished.conversationId} artifacts=${finished.artifacts.length} credits=${finished.run.actual_credits}`);
+  console.log(`runtime=${agentRuntime} run=${runId} conversation=${finished.conversationId} artifacts=${finished.artifacts.length} credits=${finished.run.actual_credits}`);
+  if (expectReclaim) {
+    const persisted = await recoveryRunRow(runId);
+    const toolCalls = await toolCallsForRun(runId);
+    const finalArtifactCount = finished.artifacts.filter((item) => item.role === "final_result").length;
+    const evidence = evaluateControlledRecoveryEvidence({
+      requestedRuntime: agentRuntime,
+      persistedRuntime: persisted.agent_runtime,
+      executionLeaseIds: [...executionLeaseIds],
+      toolCalls,
+      usageItems: usage,
+      plannedToolCount: Number(approval.planned_tool_count),
+      finalArtifactCount,
+      finalStatus: persisted.status,
+      actualCredits: Number(persisted.actual_credits),
+      durationMs: Date.now() - e2eStartedAt,
+    });
+    assert.equal(evidence.recoverySuccess, true, `真实 recovery 证据未闭合：${JSON.stringify(evidence.checks)}`);
+    const generatedAt = new Date().toISOString();
+    const recoveryReport = {
+      schemaVersion: 1,
+      generatedAt,
+      source: "controlled-agent-real-recovery-e2e",
+      runId,
+      evidence,
+      observations: [{
+        caseId: "real-controlled-image-recovery-v1",
+        runtime: agentRuntime,
+        strategyCorrect: null,
+        structuredSuccess: true,
+        durationMs: evidence.durationMs,
+        credits: evidence.actualCredits,
+        recoverySuccess: true,
+        costBasis: "actual",
+      }],
+    };
+    const outputDirectory = new URL("../artifacts/", import.meta.url);
+    await mkdir(outputDirectory, { recursive: true });
+    const outputFile = new URL(`controlled-runtime-recovery-${agentRuntime}-${runId}.json`, outputDirectory);
+    await writeFile(outputFile, JSON.stringify(recoveryReport, null, 2), "utf8");
+    console.log("CONTROLLED_AGENT_RECOVERY_E2E_OK");
+    console.log(`recovery_report=${outputFile.pathname}`);
+  }
   }
 } catch (error) {
   console.error(error instanceof Error ? (error.stack ?? error.message) : error);

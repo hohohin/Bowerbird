@@ -64,35 +64,44 @@ export class DurableToolDispatcher<TRequest, TResult> {
   private readonly control: DurableToolControl;
   private readonly adapter: DurableToolAdapter<TRequest, TResult>;
   private readonly afterExecute?: () => void;
+  private readonly onUnexpectedError?: (error: unknown, identity: DurableToolIdentity) => void;
 
   constructor(
     control: DurableToolControl,
     adapter: DurableToolAdapter<TRequest, TResult>,
-    options: { afterExecute?: () => void } = {},
+    options: {
+      afterExecute?: () => void;
+      /** Test/diagnostic observer only. It must not affect the durable error contract. */
+      onUnexpectedError?: (error: unknown, identity: DurableToolIdentity) => void;
+    } = {},
   ) {
     this.control = control;
     this.adapter = adapter;
     this.afterExecute = options.afterExecute;
+    this.onUnexpectedError = options.onUnexpectedError;
   }
 
   async dispatch(identity: DurableToolIdentity, request: TRequest): Promise<TResult> {
     const argsHash = computeArgsHash(request);
     let record = await this.control.prepareTool({ ...identity, argsHash });
     if (record.status === "succeeded") return await this.adapter.restore(record);
-    if (record.status === "failed") throw new DurableProviderError("terminal", "durable_tool_previously_failed");
+    if (record.status === "failed") {
+      throw new DurableProviderError("terminal", record.safeErrorCode ?? "durable_tool_previously_failed");
+    }
 
     try {
       if (record.status === "submitted" || record.status === "outcome_unknown") {
         const reconciled = await this.adapter.reconcile(identity.callId, request);
         if (reconciled === null) {
+          const safeErrorCode = record.safeErrorCode ?? "provider_outcome_unknown";
           await this.control.completeTool({
             runId: identity.runId,
             leaseId: identity.leaseId,
             callId: identity.callId,
             status: "outcome_unknown",
-            safeErrorCode: "provider_outcome_unknown",
+            safeErrorCode,
           });
-          throw new DurableProviderError("unknown", "provider_outcome_unknown");
+          throw new DurableProviderError("unknown", safeErrorCode);
         }
         return await this.persistAndComplete(identity, reconciled);
       }
@@ -119,6 +128,11 @@ export class DurableToolDispatcher<TRequest, TResult> {
           });
         }
         throw error;
+      }
+      try {
+        this.onUnexpectedError?.(error, identity);
+      } catch {
+        // Observability must never change provider durability semantics.
       }
       await this.control.completeTool({
         runId: identity.runId,

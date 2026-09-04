@@ -1,0 +1,16 @@
+{
+  "name": "cross_provider",
+  "project_id": "project-a",
+  "threads": [{ "id": "thread-a", "origin": "direct", "created_at": 1 }],
+  "nodes": [
+    { "id": "prompt-a", "thread_id": "thread-a", "kind": "prompt", "payload": { "schema_version": 1, "text": "首轮", "provider": "codex", "provider_session_id": "codex-thread", "job_id": "job-a", "turn_key": "turn-a" }, "created_at": 2 },
+    { "id": "output-a", "thread_id": "thread-a", "kind": "asset", "role": "output", "payload": { "schema_version": 1, "snapshot": { "name": "首轮结果" }, "execution": { "job_id": "job-a", "turn_key": "turn-a" } }, "created_at": 3 },
+    { "id": "prompt-b", "thread_id": "thread-a", "kind": "prompt", "payload": { "schema_version": 1, "text": "跨引擎续轮", "provider": "cloud-pro", "provider_session_id": "cloud-job", "job_id": "job-b", "turn_key": "turn-b" }, "created_at": 4 },
+    { "id": "output-b", "thread_id": "thread-a", "kind": "asset", "role": "output", "payload": { "schema_version": 1, "snapshot": { "name": "续轮结果" }, "execution": { "job_id": "job-b", "turn_key": "turn-b" } }, "created_at": 5 }
+  ],
+  "edges": [
+    { "id": "produced-a", "thread_id": "thread-a", "from_node_id": "prompt-a", "to_node_id": "output-a", "kind": "produced", "ordinal": 0, "created_at": 3 },
+    { "id": "continued-b", "thread_id": "thread-a", "from_node_id": "output-a", "to_node_id": "prompt-b", "kind": "continued", "ordinal": 0, "created_at": 4 },
+    { "id": "produced-b", "thread_id": "thread-a", "from_node_id": "prompt-b", "to_node_id": "output-b", "kind": "produced", "ordinal": 0, "created_at": 5 }
+  ]
+}

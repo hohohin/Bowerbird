@@ -12,3 +12,6 @@ export const AGENT_Z_ENABLED = true;
 // Agent DS（创作板 × DeepSeek 对话 harness，dev 测试）：对话发生在创作板内（回复追加进编辑器），
 // 生图/反推经 .agent-z/rpc 文件契约回桌面端执行；依赖 agent-worker + apps/cloud/.env（与 Agent A/B 同源）。
 export const AGENT_DS_ENABLED = true;
+// CS6/CS7：只显示尚未回填到 creative session 的旧会话，并强制只读。真实用户库副本
+// 迁移与真机验收通过后改为 false；不得再允许这条回退路径产生平行会话写入。
+export const LEGACY_CREATIVE_SESSION_FALLBACK_ENABLED = true;

@@ -60,7 +60,7 @@ cd apps/cloud
 npx --yes supabase@latest --agent no db push
 ```
 
-会按文件名顺序执行全部本地迁移；当前 Agent Runtime 要求至少到 `0039_agent_clarification_answer.sql`。`0010` 必须先于新版 `generate-proxy` / `understand-proxy`；`0011` 必须先于新版 `entitlement` / `generate-proxy` / `understand-proxy`；`0015` 必须先于异步版 `generate-proxy`、`generation-worker` 与 VPS consumer；`0019` 必须先于异步版 `understand-proxy`、`understand-worker` 与 VPS understand consumer；`0028`–`0030` 必须先于支持 Codex/即梦本机生图停车交接的链路；`0031`/`0032` 必须先于文本 usage 可信计量和定时 TTL 清理版 `agent-worker`；`0033`/`0034` 必须先于 Agent 账单 marker 与原子容量闸版 `entitlement` / `agent-run`；`0035` 负责过期未租约 parked Run 的原子取消，`0036` 负责生产/测试监控样本隔离，`0037`/`0038` 修复已部署早期迁移遗留的 Codex Run、本机任务与 usage provider 数据库约束，`0039` 原子应用有限澄清答案并使旧计划审批失效。
+会按文件名顺序执行全部本地迁移；当前 Agent Runtime 要求至少到 `0039_agent_clarification_answer.sql`。`0010` 必须先于新版 `generate-proxy` / `understand-proxy`；`0011` 必须先于新版 `entitlement` / `generate-proxy` / `understand-proxy`；`0015` 必须先于异步版 `generate-proxy`、`generation-worker` 与 VPS consumer；`0019` 必须先于异步版 `understand-proxy`、`understand-worker` 与 VPS understand consumer；`0028`–`0030` 必须先于支持 Codex/即梦本机生图停车交接的链路；`0031`/`0032` 必须先于文本 usage 可信计量和定时 TTL 清理版 `agent-worker`；`0033`/`0034` 必须先于 Agent 账单 marker 与原子容量闸版 `entitlement` / `agent-run`；`0035` 负责过期未租约 parked Run 的原子取消，`0036` 负责生产/测试监控样本隔离，`0037`/`0038` 修复已部署早期迁移遗留的 Codex Run、本机任务与 usage provider 数据库约束，`0039` 原子应用有限澄清答案并使旧计划审批失效。统一 Agent 进入多图片最终结果版本前，必须先应用 `0053_unified_agent_multi_final_results.sql`，使数据库终态结算与 Edge 的多 `final_result` 策略一致；legacy Skill 仍要求唯一最终结果。
 
 ### 4. 部署 Edge Functions 并注入 Secrets
 
@@ -130,7 +130,7 @@ supabase functions deploy entitlement
 
 ### 4.1 部署 VPS Worker（生图 + 理解消费循环，同一容器）
 
-把 `apps/agent-worker/{Dockerfile.generation,compose.generation.yml,src}` 部署到 `/opt/bowerbird/agent-worker`，并创建权限 `0600` 的 `.env.generation`：
+把 `apps/agent-worker/{Dockerfile.unified-harness-candidate,compose.generation.yml,src,scripts}` 部署到 `/opt/bowerbird/agent-worker`，把 `spikes/unified-agent-harness-u1/profiles/bowerbird-u1` 部署到 `/opt/bowerbird/dsh-profile`，并创建权限 `0600` 的 `.env.generation`。仓库内 Compose 默认使用相对 Profile 路径；VPS 扁平目录必须通过同一 env 文件显式覆盖 build context：
 
 ```dotenv
 GENERATION_CONTROL_URL=https://<project-ref>.supabase.co/functions/v1/generation-worker
@@ -150,6 +150,10 @@ UNDERSTAND_WORKER_ID=lighthouse-guangzhou-1
 ARK_VISION_MODEL=<豆包 Vision endpoint id>
 RENDERER_URL=http://html-renderer:3917
 RENDER_INTERNAL_TOKEN=<与 html-renderer .env.renderer 完全一致的高熵随机值>
+BOWERBIRD_DSH_BUILD_CONTEXT=/opt/bowerbird/dsh-profile
+BOWERBIRD_UNIFIED_AGENT_DSH_ENABLED=false
+BOWERBIRD_CONTROLLED_IMAGE_EDIT_DSH_ENABLED=false
+BOWERBIRD_DSH_MODEL=deepseek-v4-flash
 ```
 
 ```bash
@@ -160,9 +164,9 @@ chmod 600 .env.renderer
 sudo docker compose -f compose.renderer.yml up -d --build
 
 cd /opt/bowerbird/agent-worker
-sudo docker compose -f compose.generation.yml up -d --build
-sudo docker compose -f compose.generation.yml ps
-sudo docker compose -f compose.generation.yml logs --tail 50
+sudo docker compose --env-file .env.generation -f compose.generation.yml up -d --build
+sudo docker compose --env-file .env.generation -f compose.generation.yml ps
+sudo docker compose --env-file .env.generation -f compose.generation.yml logs --tail 50
 ```
 
 `html-renderer` 只连接 `internal: true` 的 `bowerbird-internal` 网络，无宿主端口和公网出口；Worker 同时连接默认出站网络与该内部网络，通过固定 `RENDERER_URL` 调用。先启动 renderer 创建内部网络，再启动 Worker。两个 env 文件中的 `RENDER_INTERNAL_TOKEN` 必须一致且权限为 `0600`，不得写入仓库或日志。
@@ -171,7 +175,7 @@ Worker 容器不映射入站端口、只读根文件系统、非 root、丢弃�
 
 ### 5. 微信扫码登录（H5，备案域名 bowerbird.cn）
 
-登录链路：桌面/官网 → 系统浏览器打开 `open.weixin.qq.com/connect/qrconnect`（appid/回调域由 `wechat-login` GET 按 Secrets 组装）→ 微信回调到备案域名静态中转页 [website/wechat-callback.html](../../website/wechat-callback.html)（VPS 直接伺服该静态文件）→ 按 `state` 前缀分流：`dt_` 跳 `bowerbird://wechat/callback` deep link 由桌面 Rust 校验后 POST 换会话；`web_` 中转页同源校验 sessionStorage 后自行 POST 换会话。`wechat-login` Function 用 service role `generateLink(magiclink)→/auth/v1/verify` 铸真实 GoTrue 会话（unionid→确定性合成邮箱建号，注册触发器照常发 30 分）。
+登录链路：桌面/官网 → 系统浏览器打开 `open.weixin.qq.com/connect/qrconnect`（appid/回调域由 `wechat-login` GET 按 Secrets 组装）→ 微信回调到备案域名静态中转页 [website/wechat-callback.html](../../website/wechat-callback.html)（VPS 直接伺服该静态文件）→ 按 `state` 前缀分流：`dt_` 跳 `bowerbird://wechat/callback` deep link 由桌面 Rust 校验后 POST 换会话；`web_` 中转页同源校验 sessionStorage 后自行 POST 换会话。`wechat-login` Function 用 service role `generateLink(magiclink)` 取得 `hashed_token` 与 GoTrue 返回的 `verification_type`，再调用 `/auth/v1/verify` 铸真实 GoTrue 会话（unionid→确定性合成邮箱建号，注册触发器照常发 30 分）。
 
 ```bash
 supabase functions deploy wechat-login --no-verify-jwt   # §4 的 secrets（H5 段）备好后执行

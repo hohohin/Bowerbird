@@ -33,6 +33,41 @@ function mixedPlan(): UnifiedAgentPlan {
   };
 }
 
+function structuredPlan(): UnifiedAgentPlan {
+  return {
+    schemaVersion: 2,
+    title: "产品长图",
+    summary: "明确素材职责与信息架构后完成产品长图。",
+    contentPlan: {
+      assetAssignments: [{
+        assetId: "asset-product",
+        roles: ["product", "copy_source"],
+        rationale: "产品主体与可核验文案来源。",
+      }],
+      informationArchitecture: [{
+        id: "hero",
+        purpose: "展示产品主体与核心卖点",
+        sourceAssetIds: ["asset-product"],
+        copySource: "asset_observation",
+      }],
+      missingAssets: [{
+        id: "support-background",
+        purpose: "补充氛围背景",
+        decision: "generate",
+        resolutionStepId: "generate",
+      }],
+      visualProfile: {
+        profileId: "profile-quiet-luxury",
+        version: 3,
+        hash: "a".repeat(64),
+        applied: ["大量留白", "暖灰与深棕"],
+        ignoredContentThemes: ["咖啡器具"],
+      },
+    },
+    steps: mixedPlan().steps,
+  };
+}
+
 Deno.test("unified plan parser is closed, ordered and requires one final terminal step", () => {
   assertEquals(parseUnifiedAgentPlan(mixedPlan()), mixedPlan());
   assertThrows(() => parseUnifiedAgentPlan({ ...mixedPlan(), estimatedCredits: 1 }), Error, "unified_plan_invalid");
@@ -63,6 +98,43 @@ Deno.test("server estimate prices bounded model turns and tool kinds from versio
   const byo = estimateUnifiedAgentPlanCredits(mixedPlan(), pricing, "codex");
   assertEquals(byo.imageCredits, 0);
   assertEquals(byo.totalCredits, 14);
+});
+
+Deno.test("structured plan v2 is closed and keeps cost semantics on executable steps", () => {
+  const structured = structuredPlan();
+  assertEquals(parseUnifiedAgentPlan(structured), structured);
+  assertEquals(
+    estimateUnifiedAgentPlanCredits(structured, pricing, "ark"),
+    estimateUnifiedAgentPlanCredits(mixedPlan(), pricing, "ark"),
+  );
+
+  const wrongResolution = structuredClone(structured);
+  if (wrongResolution.schemaVersion !== 2) throw new Error("fixture_invalid");
+  wrongResolution.contentPlan.missingAssets[0]!.resolutionStepId = "compose";
+  assertThrows(() => parseUnifiedAgentPlan(wrongResolution), Error, "unified_plan_invalid");
+
+  const unknownField = structuredClone(structured) as UnifiedAgentPlan & { contentPlan: Record<string, unknown> };
+  unknownField.contentPlan.estimatedCredits = 0;
+  assertThrows(() => parseUnifiedAgentPlan(unknownField), Error, "unified_plan_invalid");
+});
+
+Deno.test("Xiaohongshu derivation is a zero-specialized-cost plan step in the same approved chain", () => {
+  const base = mixedPlan();
+  const derived: UnifiedAgentPlan = {
+    ...base,
+    steps: [
+      ...base.steps.slice(0, -1),
+      { id: "compose_xhs", kind: "compose_xiaohongshu", goal: "派生渠道草稿", inputAssetIds: [], dependsOn: ["inspect"] },
+      { ...base.steps.at(-1)!, dependsOn: ["compose_xhs"] },
+    ],
+  };
+  assertEquals(parseUnifiedAgentPlan(derived), derived);
+  const baseEstimate = estimateUnifiedAgentPlanCredits(base, pricing, "ark");
+  const derivedEstimate = estimateUnifiedAgentPlanCredits(derived, pricing, "ark");
+  assertEquals(derivedEstimate.modelTurns, baseEstimate.modelTurns + 2);
+  assertEquals(derivedEstimate.visionCalls, baseEstimate.visionCalls);
+  assertEquals(derivedEstimate.imageCalls, baseEstimate.imageCalls);
+  assertEquals(derivedEstimate.htmlRenderCalls, baseEstimate.htmlRenderCalls);
 });
 
 Deno.test("canonical plan JSON ignores object insertion order but not step order", () => {

@@ -1,7 +1,4 @@
-import type {
-  DurableToolDispatcher,
-  DurableToolIdentity,
-} from "../kernel/durable-tool-dispatcher.ts";
+import type { DurableToolIdentity } from "../kernel/durable-tool-dispatcher.ts";
 import { deriveCallId } from "../kernel/tool-ledger.ts";
 
 type ToolGatewayDefinitionBase = {
@@ -9,6 +6,8 @@ type ToolGatewayDefinitionBase = {
   allowedPhases: readonly string[];
   /** 高成本/有副作用工具必须绑定控制面已批准的 proposal hash。 */
   requiresApproval?: boolean;
+  /** 工具由批准计划实例化时，必须精确绑定该计划；只校验“存在某个 hash”不够。 */
+  approvedPlanHash?: string;
   validate(argumentsValue: unknown): unknown;
 };
 
@@ -20,9 +19,14 @@ export type ToolGatewayControlDispatcher = {
   dispatch(identity: DurableToolIdentity, argumentsValue: unknown): Promise<unknown>;
 };
 
+export type ToolGatewayDurableDispatcher = {
+  /** Provider 副作用必须由实现内部的 DurableToolDispatcher 覆盖。 */
+  dispatch(identity: DurableToolIdentity, argumentsValue: unknown): Promise<unknown>;
+};
+
 export type ToolGatewayDefinition = ToolGatewayDefinitionBase & ({
   execution: "durable";
-  dispatcher: DurableToolDispatcher<unknown, unknown>;
+  dispatcher: ToolGatewayDurableDispatcher;
 } | {
   execution: "control";
   dispatcher: ToolGatewayControlDispatcher;
@@ -54,6 +58,7 @@ export class ToolGatewayError extends Error {
     | "tool_phase_denied"
     | "tool_approval_required"
     | "tool_arguments_invalid"
+    | "tool_sequence_invalid"
     | "trusted_slot_invalid";
 
   constructor(code: ToolGatewayError["code"]) {
@@ -84,8 +89,12 @@ export class ScopedToolGateway {
     if (!definition.allowedPhases.includes(request.phase)) {
       throw new ToolGatewayError("tool_phase_denied");
     }
-    if (definition.requiresApproval && !/^[0-9a-f]{64}$/.test(request.approvedPlanHash ?? "")) {
-      throw new ToolGatewayError("tool_approval_required");
+    if (definition.requiresApproval) {
+      const approvedPlanHash = request.approvedPlanHash ?? "";
+      if (!/^[0-9a-f]{64}$/.test(approvedPlanHash) ||
+          (definition.approvedPlanHash !== undefined && definition.approvedPlanHash !== approvedPlanHash)) {
+        throw new ToolGatewayError("tool_approval_required");
+      }
     }
     if (
       !Number.isSafeInteger(request.trustedSlot.logicalSlot) ||

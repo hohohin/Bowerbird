@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Toolbar } from "./components/Toolbar";
 import { Sidebar } from "./components/Sidebar";
 import { MasonryGrid } from "./components/MasonryGrid";
+import { CanvasWorkspace, type CreativeLaunchRequest } from "./components/CanvasWorkspace";
 import { AssetDetail } from "./components/AssetDetail";
 import { AssetContextMenu } from "./components/AssetContextMenu";
 import { ProjectContextMenu } from "./components/ProjectContextMenu";
@@ -11,10 +12,13 @@ import { ImageAnnotator } from "./components/ImageAnnotator";
 import { CaptionRing } from "./components/creation/CaptionRing";
 import { DescribeProviderPicker } from "./components/DescribeProviderPicker";
 import { BatchBar } from "./components/BatchBar";
-import { CreationBoard, AGENT_DS_DONE_EVENT } from "./components/CreationBoard";
+import { AGENT_DS_DONE_EVENT } from "./components/CreationBoard";
 import { APPEND_TEXT_EVENT } from "./components/creation/useCreationEditor";
 import { GenerationPanel } from "./components/GenerationPanel";
 import { CloudAgentSession } from "./components/CloudAgentPanel";
+import { CloudAgentRuntimeCoordinator } from "./components/CloudAgentRuntimeCoordinator";
+import { LEGACY_CREATIVE_SESSION_FALLBACK_ENABLED } from "./lib/featureFlags";
+import { SourceBrowserPanel } from "./components/SourceBrowserPanel";
 import { CodexOnboarding } from "./components/CodexOnboarding";
 import { ExtensionOnboarding } from "./components/ExtensionOnboarding";
 import { DreaminaOnboarding } from "./components/DreaminaOnboarding";
@@ -24,6 +28,13 @@ import { ToastViewport } from "./components/ToastViewport";
 import { useStore } from "./store";
 import { api } from "./lib/api";
 import { notify, notifyError, notifySuccess } from "./lib/notify";
+import { creativeLaunchAssetIds, creativeLaunchTargetsProject } from "./lib/creativeLaunch";
+import { resolveProjectInspectorPlacement } from "./lib/projectInspector";
+import {
+  isWorkspaceOperationCurrent,
+  resolveWorkspaceProjectId,
+  shouldDiscardCreativeTarget,
+} from "./lib/workspaceRoute";
 import type { AuthSnapshot, CodexChunk, JimengOrphanTask } from "./lib/types";
 
 let refreshVersion = 0;
@@ -41,6 +52,14 @@ function LibraryLoadingState() {
 
 function App() {
   const [initializing, setInitializing] = useState(true);
+  const [creativeLaunch, setCreativeLaunch] = useState<CreativeLaunchRequest | null>(null);
+  const [creativeTarget, setCreativeTarget] = useState<{
+    projectId: string;
+    threadId: string | null;
+    nodeId: string | null;
+    requestId: string;
+  } | null>(null);
+  const [sourceBrowserUrl, setSourceBrowserUrl] = useState<string | null>(null);
   const setAssets = useStore((s) => s.setAssets);
   const setTotal = useStore((s) => s.setTotal);
   const setPromptedAssets = useStore((s) => s.setPromptedAssets);
@@ -55,7 +74,10 @@ function App() {
   const setColorRebuild = useStore((s) => s.setColorRebuild);
   const setAutoAnalyzing = useStore((s) => s.setAutoAnalyzing);
   const currentFolderId = useStore((s) => s.currentFolderId);
-  const currentProjectId = useStore((s) => s.currentProjectId);
+  const activeProjectId = useStore((s) => s.activeProjectId);
+  const projectRoutePending = useStore((s) => s.projectRoutePending);
+  const projectRouteRevision = useStore((s) => s.projectRouteRevision);
+  const projects = useStore((s) => s.projects);
   const currentCollectionId = useStore((s) => s.currentCollectionId);
   const searchQuery = useStore((s) => s.searchQuery);
   const smartFilter = useStore((s) => s.smartFilter);
@@ -67,6 +89,10 @@ function App() {
   const settings = useStore((s) => s.settings);
   const genPanelOpen = useStore((s) => s.genPanelOpen);
   const activeSessionKind = useStore((s) => s.activeSessionKind);
+  const genJobs = useStore((s) => s.genJobs);
+  const activeJobId = useStore((s) => s.activeJobId);
+  const cloudAgentRuns = useStore((s) => s.cloudAgentRuns);
+  const activeCloudAgentRunId = useStore((s) => s.activeCloudAgentRunId);
   const setCodexHealth = useStore((s) => s.setCodexHealth);
   const setDreaminaHealth = useStore((s) => s.setDreaminaHealth);
   const setExtensionConnected = useStore((s) => s.setExtensionConnected);
@@ -75,6 +101,58 @@ function App() {
   const loadCloudAccount = useStore((s) => s.loadCloudAccount);
   const setCloudAuth = useStore((s) => s.setCloudAuth);
   const setCloudError = useStore((s) => s.setCloudError);
+  const creativeNavigation = useStore((s) => s.creativeNavigation);
+  const clearCreativeNavigation = useStore((s) => s.clearCreativeNavigation);
+  const activeProjectIsProvisional = projects.find((project) => project.id === activeProjectId)?.provisional === true;
+  const workspaceProjectId = resolveWorkspaceProjectId(activeProjectId, projects);
+  const projectWorkspaceActive = workspaceProjectId !== null;
+  const activeInspectorExecution = activeSessionKind === "generation"
+    ? (activeJobId ? genJobs[activeJobId] ?? null : null)
+    : (activeCloudAgentRunId ? cloudAgentRuns[activeCloudAgentRunId] ?? null : null);
+  const legacyInspectorOpen = LEGACY_CREATIVE_SESSION_FALLBACK_ENABLED
+    && resolveProjectInspectorPlacement({
+      open: genPanelOpen,
+      loading: initializing,
+      navigationPending: creativeNavigation != null || projectRoutePending,
+      activeProjectId: workspaceProjectId,
+      execution: activeInspectorExecution,
+    }) === "legacy";
+
+  useEffect(() => {
+    if (!creativeNavigation) return;
+    let cancelled = false;
+    const target = creativeNavigation;
+    const requestId = crypto.randomUUID();
+    setCreativeLaunch(null);
+    setCreativeTarget({ ...target, requestId });
+    void useStore.getState().enterProject(target.projectId).then(() => {
+      if (cancelled) return;
+      const state = useStore.getState();
+      if (state.activeProjectId !== target.projectId) return;
+      state.setFocusedThreadId(target.threadId);
+      if (target.threadId) {
+        state.setProjectTimelineScope("focused");
+        state.clearProjectThreadUnread(target.projectId, target.threadId);
+      }
+    }).catch((error) => {
+      if (cancelled || useStore.getState().creativeNavigation !== target) return;
+      console.error("creative task navigation failed", error);
+      notifyError(error, "无法打开任务所属项目");
+      setCreativeTarget((current) => current?.requestId === requestId ? null : current);
+      useStore.getState().setGenPanelOpen(false);
+    }).finally(() => {
+      if (useStore.getState().creativeNavigation === target) clearCreativeNavigation();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [creativeNavigation, clearCreativeNavigation]);
+
+  useEffect(() => {
+    if (!shouldDiscardCreativeTarget(creativeTarget, activeProjectId, creativeNavigation)) return;
+    const requestId = creativeTarget?.requestId;
+    setCreativeTarget((current) => current?.requestId === requestId ? null : current);
+  }, [activeProjectId, creativeNavigation, creativeTarget]);
 
   // 应用设置：App 挂载时加载一次。
   useEffect(() => {
@@ -122,54 +200,76 @@ function App() {
 
   async function refresh() {
     const version = ++refreshVersion;
+    const initial = useStore.getState();
+    const expectedProjectId = initial.activeProjectId;
+    const expectedRouteRevision = initial.projectRouteRevision;
+    if (initial.projectRoutePending) return;
+    const activeProject = initial.projects.find((project) => project.id === expectedProjectId);
+    // provisional 项目还没有数据库成员，素材栏先展示中央库；第一次拖入时再连同项目/节点原子落库。
+    const assetProjectId = activeProject?.provisional ? null : expectedProjectId;
+    const isCurrentRefresh = () => {
+      const current = useStore.getState();
+      return version === refreshVersion && isWorkspaceOperationCurrent(
+        expectedProjectId,
+        current.activeProjectId,
+        current.projectRoutePending,
+        expectedRouteRevision,
+        current.projectRouteRevision,
+      );
+    };
     // 创作板 / 会话底部编辑坞（重新编辑、底部对话框续轮）共用挑图语义：默认显示全部资产
     // （含未反推），任意图点一下即可插为参考图；promptedAssets 给编辑器补 caption/sections ——
     // 有反推的图可展开维度片段，没反推的作纯参考图。创作板常驻后为不吞掉库的浏览能力，
     // 用户显式筛选（搜索 / 文件夹 / 收藏 / 颜色 / 智能）仍生效，筛出的结果照样可点插 chip。
-    const pickAll = (boardOpen || genEditing) && !searchQuery && !currentFolderId && !currentCollectionId && !colorFilter && !smartFilter;
+    const pickAll = (initial.boardOpen || initial.genEditing)
+      && !initial.searchQuery
+      && !initial.currentFolderId
+      && !initial.currentCollectionId
+      && !initial.colorFilter
+      && !initial.smartFilter;
     try {
       const [assets, total] = await Promise.all([
         pickAll
-          ? api.listAssets(undefined, currentProjectId)
-          : searchQuery
-            ? api.searchAssets(searchQuery, currentProjectId)
-            : smartFilter
-              ? api.listAssetsSmart(smartFilter, currentProjectId)
-              : currentCollectionId
-                ? api.listAssetsByCollection(currentCollectionId, currentProjectId)
-                : colorFilter
+          ? api.listAssets(undefined, assetProjectId)
+          : initial.searchQuery
+            ? api.searchAssets(initial.searchQuery, assetProjectId)
+            : initial.smartFilter
+              ? api.listAssetsSmart(initial.smartFilter, assetProjectId)
+              : initial.currentCollectionId
+                ? api.listAssetsByCollection(initial.currentCollectionId, assetProjectId)
+                : initial.colorFilter
                   ? api.listAssetsByColor(
-                      colorFilter,
-                      currentFolderId ?? undefined,
-                      currentProjectId
+                      initial.colorFilter,
+                      initial.currentFolderId ?? undefined,
+                      assetProjectId
                     )
-                  : api.listAssets(currentFolderId ?? undefined, currentProjectId),
-        api.countAssets(currentProjectId),
+                  : api.listAssets(initial.currentFolderId ?? undefined, assetProjectId),
+        api.countAssets(assetProjectId),
       ]);
-      if (version !== refreshVersion) return;
+      if (!isCurrentRefresh()) return;
       setAssets(assets);
       setTotal(total);
       // promptedAssets 无条件拉取：对话框常驻（未激活也可能有草稿 chip），序列化/维度环
       // 随时要 caption/sections，不能只在创作模式激活时才有。
-      const prompted = await api.listPromptedAssets(currentProjectId);
-      if (version !== refreshVersion) return;
+      const prompted = await api.listPromptedAssets(assetProjectId);
+      if (!isCurrentRefresh()) return;
       setPromptedAssets(prompted);
       await reloadFolders();
-      if (version !== refreshVersion) return;
+      if (!isCurrentRefresh()) return;
       await reloadProjects();
-      if (version !== refreshVersion) return;
-      await reloadAutoTags();
-      if (version !== refreshVersion) return;
-      await reloadPalette();
-      if (version !== refreshVersion) return;
+      if (!isCurrentRefresh()) return;
+      await reloadAutoTags(expectedProjectId);
+      if (!isCurrentRefresh()) return;
+      await reloadPalette(expectedProjectId);
+      if (!isCurrentRefresh()) return;
       await reloadPresets();
     } catch (e) {
-      if (version === refreshVersion) {
+      if (isCurrentRefresh()) {
         console.error("refresh failed", e);
         notifyError(e, "素材库加载失败");
       }
     } finally {
-      if (version === refreshVersion) setInitializing(false);
+      if (isCurrentRefresh()) setInitializing(false);
     }
   }
 
@@ -178,15 +278,34 @@ function App() {
     // 依赖 currentFolderId / searchQuery / boardOpen / genEditing / settings：切换文件夹、搜索、
     // 开关创作板/进入会话编辑、或改了影响列表的设置（如隐藏项目素材）时重拉
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentProjectId, currentFolderId, currentCollectionId, searchQuery, smartFilter, colorFilter, boardOpen, genEditing, settings]);
+  }, [activeProjectId, activeProjectIsProvisional, projectRoutePending, projectRouteRevision, currentFolderId, currentCollectionId, searchQuery, smartFilter, colorFilter, boardOpen, genEditing, settings]);
 
   // 有反推的资产 id 集合（project 级，缩略图标 🏷️ 用）：只随项目切换重拉，切 folder/filter 不重拉。
   useEffect(() => {
+    if (projectRoutePending) return;
+    let alive = true;
+    const expectedProjectId = activeProjectId;
+    const expectedRouteRevision = projectRouteRevision;
+    const assetProjectId = activeProjectIsProvisional ? null : activeProjectId;
     api
-      .listCaptionedAssetIds(currentProjectId)
-      .then(setCaptionedIds)
-      .catch((e) => console.error("load captionedIds failed", e));
-  }, [currentProjectId, setCaptionedIds]);
+      .listCaptionedAssetIds(assetProjectId)
+      .then((ids) => {
+        const current = useStore.getState();
+        if (alive && isWorkspaceOperationCurrent(
+          expectedProjectId,
+          current.activeProjectId,
+          current.projectRoutePending,
+          expectedRouteRevision,
+          current.projectRouteRevision,
+        )) setCaptionedIds(ids);
+      })
+      .catch((e) => {
+        if (alive) console.error("load captionedIds failed", e);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [activeProjectId, activeProjectIsProvisional, projectRoutePending, projectRouteRevision, setCaptionedIds]);
 
   // 浏览器扩展采集入库后后端 emit `library://assets-changed`，
   // 去抖合并（扩展批量采集会连发多条 WS 消息）后刷新。
@@ -212,7 +331,7 @@ function App() {
     };
     // boardOpen 进依赖：保证刷新闭包看到最新 boardOpen（创作板模式下取全量资产 + prompted 集合）
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentProjectId, currentFolderId, currentCollectionId, searchQuery, smartFilter, colorFilter, boardOpen, setCollectedNotice]);
+  }, [activeProjectId, currentFolderId, currentCollectionId, searchQuery, smartFilter, colorFilter, boardOpen, setCollectedNotice]);
 
   // 项目成员/列表变化：刷新侧栏项目计数；项目被删时 reloadProjects 会安全退回全局。
   useEffect(() => {
@@ -252,20 +371,44 @@ function App() {
     let unlisten: UnlistenFn | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let alive = true;
+    let requestVersion = 0;
     listen<{ asset_id: string; kind: string }>("analyses://changed", () => {
       if (timer) clearTimeout(timer);
+      const version = ++requestVersion;
       timer = setTimeout(async () => {
         const st = useStore.getState();
+        if (st.projectRoutePending) return;
+        const expectedProjectId = st.activeProjectId;
+        const expectedRouteRevision = st.projectRouteRevision;
+        const activeProject = st.projects.find((project) => project.id === expectedProjectId);
+        const assetProjectId = activeProject?.provisional ? null : expectedProjectId;
+        const isCurrentRead = () => {
+          const current = useStore.getState();
+          return alive
+            && version === requestVersion
+            && isWorkspaceOperationCurrent(
+              expectedProjectId,
+              current.activeProjectId,
+              current.projectRoutePending,
+              expectedRouteRevision,
+              current.projectRouteRevision,
+            );
+        };
         try {
           // caption（反推）变化 → 🏷️ 标记集合刷新（轻量，始终拉）。
-          setCaptionedIds(await api.listCaptionedAssetIds(st.currentProjectId));
+          const captionedIds = await api.listCaptionedAssetIds(assetProjectId);
+          if (!isCurrentRead()) return;
+          setCaptionedIds(captionedIds);
           // 创作板与会话编辑坞同款对待（二者挑图/维度数据同源）：任一开着都刷新
           // promptedAssets，编辑坞期间新反推的维度也能进编辑器 assetById 供展开。
-          if (st.boardOpen || st.genEditing) {
-            setPromptedAssets(await api.listPromptedAssets(st.currentProjectId));
+          const current = useStore.getState();
+          if (current.boardOpen || current.genEditing) {
+            const promptedAssets = await api.listPromptedAssets(assetProjectId);
+            if (!isCurrentRead()) return;
+            setPromptedAssets(promptedAssets);
           }
         } catch (e) {
-          console.error("refresh after analyses changed failed", e);
+          if (isCurrentRead()) console.error("refresh after analyses changed failed", e);
         }
       }, 300);
     }).then((u) => {
@@ -274,6 +417,7 @@ function App() {
     });
     return () => {
       alive = false;
+      requestVersion += 1;
       unlisten?.();
       if (timer) clearTimeout(timer);
     };
@@ -457,7 +601,7 @@ function App() {
       }
       e.preventDefault();
       const file = imageFile;
-      const projectId = useStore.getState().currentProjectId;
+      const projectId = useStore.getState().activeProjectId;
       const reader = new FileReader();
       reader.onload = () => {
         const dataUrl = reader.result as string;
@@ -565,8 +709,40 @@ function App() {
 
   const showDetail = mode === "browse" && detailAssetId !== null;
 
+  const acknowledgeCreativeLaunch = useCallback((requestId: string) => {
+    setCreativeLaunch((current) => current?.id === requestId ? null : current);
+  }, []);
+
+  const acknowledgeCreativeTarget = useCallback((requestId: string) => {
+    setCreativeTarget((current) => current?.requestId === requestId ? null : current);
+  }, []);
+
+  async function createCreative(blank: boolean) {
+    const state = useStore.getState();
+    const assetIds = creativeLaunchAssetIds(blank, state.selectedIds);
+    const createdProjectId = await state.beginProvisionalProject();
+    const route = useStore.getState();
+    if (!isWorkspaceOperationCurrent(
+      createdProjectId,
+      route.activeProjectId,
+      route.projectRoutePending,
+    )) return;
+    setCreativeLaunch({ id: crypto.randomUUID(), projectId: createdProjectId, assetIds });
+    setCreativeTarget(null);
+    if (state.mode === "manage") state.exitManage();
+  }
+
+  function exitCreative() {
+    setCreativeLaunch(null);
+    setCreativeTarget(null);
+    void useStore.getState().exitProject().catch((error) => {
+      notifyError(error, "项目仍有未保存修改，已留在当前画板");
+    });
+  }
+
   return (
     <div className="app-shell flex h-full w-full flex-col">
+      <CloudAgentRuntimeCoordinator />
       <ToastViewport />
       {/* 环境引导：codex/扩展/即梦由设置面板对应分区直接唤起，不再有「环境状态」总览 */}
       <CodexOnboarding />
@@ -586,39 +762,65 @@ function App() {
       <DescribeProviderPicker />
       {/* 维度环形菜单（全局单实例，store.captionRing 驱动，长按图片呼出） */}
       <CaptionRing />
-      <Toolbar onRefresh={refresh} />
+      <Toolbar
+        onRefresh={refresh}
+        canvasMode={projectWorkspaceActive}
+        onCanvasModeChange={(active) => active ? createCreative(false) : exitCreative()}
+        onCreateCreative={createCreative}
+      />
       <div className="app-shell-hatch" aria-hidden="true"><span /></div>
       <div className="relative flex flex-1 overflow-hidden">
         <Sidebar />
         <main className="app-workspace flex flex-1 flex-col overflow-hidden bg-canvas">
-          {mode === "manage" && <BatchBar />}
-          <div className="relative flex-1 overflow-hidden">
-            {initializing ? <LibraryLoadingState /> : showDetail ? <AssetDetail /> : <MasonryGrid />}
-            {/* 生成结果面板：主区覆盖层（像详情页） */}
-            {genPanelOpen && activeSessionKind === "generation" && <GenerationPanel />}
-            {genPanelOpen && activeSessionKind === "agent" && <CloudAgentSession />}
-            {/* 创作板（核心枢纽）：底部浮动对话框常驻显示（激活与否都在），但与两个
-                详情界面互斥——图片详情 / 会话详情（genPanelOpen）期间不出现（详情页经
-                右键「添加到对话框」回主界面插 chip；会话界面用自带的继续对话/重新编辑坞）。
-                会话编辑坞（genEditing）期间也让位（两个 useCreationEditor 互斥）。 */}
-            {!genEditing && !showDetail && !genPanelOpen && <CreationBoard />}
-            {/* 创作模式视觉标记：瀑布流区品牌蓝线框 + 顶部居中刘海「创作模式」。
-                仅在挑图面（瀑布流）实际可见时呈现：被会话面板/详情页盖住时不显示。 */}
-            {boardOpen && !genEditing && !genPanelOpen && !showDetail && (
-              <>
-                <div
-                  aria-hidden="true"
-                  className="pointer-events-none absolute inset-0 z-20 ring-2 ring-inset ring-[#4868ff] shadow-[inset_0_0_24px_rgba(72,104,255,0.18)]"
-                />
-                <div
-                  aria-hidden="true"
-                  className="creation-mode-notch pointer-events-none absolute left-1/2 top-0 z-20"
-                >
-                  创作模式
-                </div>
-              </>
-            )}
-          </div>
+          {projectWorkspaceActive ? (
+            initializing ? <LibraryLoadingState /> : (
+              <CanvasWorkspace
+                key={workspaceProjectId}
+                projectId={workspaceProjectId}
+                focusThreadId={creativeTarget?.projectId === workspaceProjectId ? creativeTarget.threadId : null}
+                focusNodeId={creativeTarget?.projectId === workspaceProjectId ? creativeTarget.nodeId : null}
+                focusRequestId={creativeTarget?.projectId === workspaceProjectId ? creativeTarget.requestId : null}
+                onFocusConsumed={acknowledgeCreativeTarget}
+                launchRequest={creativeLaunchTargetsProject(creativeLaunch, workspaceProjectId) ? creativeLaunch : null}
+                onLaunchConsumed={acknowledgeCreativeLaunch}
+                onExit={exitCreative}
+              />
+            )
+          ) : (
+            <>
+              {mode === "manage" && <BatchBar />}
+              <div className="relative flex-1 overflow-hidden">
+                {initializing ? (
+                  <LibraryLoadingState />
+                ) : sourceBrowserUrl ? (
+                  <SourceBrowserPanel url={sourceBrowserUrl} onClose={() => setSourceBrowserUrl(null)} />
+                ) : showDetail ? (
+                  <AssetDetail onExploreSource={setSourceBrowserUrl} />
+                ) : (
+                  <MasonryGrid />
+                )}
+                {/* 生成结果面板：主区覆盖层（像详情页） */}
+                {!sourceBrowserUrl && legacyInspectorOpen && activeSessionKind === "generation" && <GenerationPanel readOnly />}
+                {!sourceBrowserUrl && legacyInspectorOpen && activeSessionKind === "agent" && <CloudAgentSession readOnly />}
+                {/* 创作模式视觉标记：瀑布流区品牌蓝线框 + 顶部居中刘海「创作模式」。
+                    仅在挑图面（瀑布流）实际可见时呈现：被会话面板/详情页盖住时不显示。 */}
+                {!sourceBrowserUrl && boardOpen && !genEditing && !genPanelOpen && !showDetail && (
+                  <>
+                    <div
+                      aria-hidden="true"
+                      className="pointer-events-none absolute inset-0 z-20 ring-2 ring-inset ring-[#4868ff] shadow-[inset_0_0_24px_rgba(72,104,255,0.18)]"
+                    />
+                    <div
+                      aria-hidden="true"
+                      className="creation-mode-notch pointer-events-none absolute left-1/2 top-0 z-20"
+                    >
+                      创作模式
+                    </div>
+                  </>
+                )}
+              </div>
+            </>
+          )}
         </main>
       </div>
     </div>

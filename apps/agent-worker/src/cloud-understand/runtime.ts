@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { IdlePollBackoff } from "../idle-poll-backoff.ts";
 
 import {
   isRecord,
@@ -13,6 +14,7 @@ import {
 export type { WorkerFetch } from "../cloud-generation/runtime.ts";
 
 type JsonRecord = Record<string, unknown>;
+const CLEANUP_INTERVAL_MS = 10 * 60_000;
 
 export interface UnderstandWorkerConfig {
   controlUrl: string;
@@ -318,15 +320,29 @@ export async function runUnderstandWorker(
 ): Promise<void> {
   const control = new ControlClient(config, fetchImpl);
   const ark = new ArkVisionClient(config, fetchImpl);
+  const idleBackoff = new IdlePollBackoff(config.pollIntervalMs);
+  let nextCleanupAt = Date.now() + CLEANUP_INTERVAL_MS;
   console.log(JSON.stringify({ event: "understand_worker_started", worker_id: config.workerId }));
   while (!stop.requested) {
+    if (Date.now() >= nextCleanupAt) {
+      nextCleanupAt = Date.now() + CLEANUP_INTERVAL_MS;
+      try {
+        await control.post({ action: "cleanup_expired" });
+      } catch (error) {
+        console.error(JSON.stringify({ event: "understand_cleanup_failed", error: safeErrorKind(error) }));
+      }
+    }
     try {
       const claimed = await control.post({ action: "claim" }) as unknown as ClaimedJob;
-      if (claimed.job) await executeClaim(config, control, ark, fetchImpl, claimed);
-      else await sleep(config.pollIntervalMs);
+      if (claimed.job) {
+        idleBackoff.reset();
+        await executeClaim(config, control, ark, fetchImpl, claimed);
+      } else {
+        await sleep(idleBackoff.nextDelayMs());
+      }
     } catch (error) {
       console.error(JSON.stringify({ event: "understand_claim_failed", error: safeErrorKind(error) }));
-      await sleep(Math.max(config.pollIntervalMs, 5_000));
+      await sleep(Math.max(idleBackoff.nextDelayMs(), 5_000));
     }
   }
 }

@@ -16,6 +16,9 @@
     "local:agent": "node --env-file=../cloud/.env src/local/cli.ts",
     "local:prompt-agent": "node --env-file=../cloud/.env src/local/prompt-agent-cli.ts",
     "ab:prompt": "node --env-file=../cloud/.env src/local/assembly/run-ab.ts",
-    "eval:controlled-image-edit": "node --env-file=../cloud/.env src/eval/run-controlled-image-edit-eval.ts"
+    "eval:controlled-image-edit": "node --env-file=../cloud/.env src/eval/run-controlled-image-edit-eval.ts",
+    "eval:controlled-image-edit:dsh": "node --env-file=../cloud/.env src/eval/run-controlled-image-edit-dsh-eval.ts",
+    "compare:controlled-image-edit-runtimes": "node src/eval/compare-controlled-runtime-reports.ts",
+    "sbom:unified-harness": "node scripts/generate-unified-harness-sbom.mjs"
   }
 }

@@ -514,7 +514,7 @@ begin
   select 'authenticated cannot execute guarded Agent creation',
     not has_function_privilege(
       'authenticated',
-      'public.create_agent_run_guarded(uuid,uuid,uuid,text,text,text,integer,text,text,text,integer,uuid,integer,timestamptz,integer,integer)',
+      'public.create_agent_run_guarded(uuid,uuid,uuid,text,text,text,integer,text,text,text,integer,uuid,integer,timestamptz,integer,integer,text)',
       'EXECUTE'
     );
 end;
@@ -530,6 +530,7 @@ declare
   rendered_count integer;
   duplicate_rejected boolean := false;
   dimension_pair_rejected boolean := false;
+  runtime_update_rejected boolean := false;
   claimed public.agent_runs;
   settled public.agent_runs;
 begin
@@ -553,6 +554,21 @@ begin
     1, repeat('c', 64), 'runs/html-render/request.json',
     15, hold, 1, now(), now() + interval '24 hours'
   ) returning id, conversation_id into test_run_id, conv_id;
+
+  insert into agent_runtime_test_results
+  select 'historical-style insert defaults to legacy Kernel runtime',
+    agent_runtime = 'legacy_kernel'
+  from public.agent_runs where id = test_run_id;
+
+  begin
+    update public.agent_runs set agent_runtime = 'dsh' where id = test_run_id;
+  exception when sqlstate '55000' then
+    runtime_update_rejected := true;
+  end;
+  insert into agent_runtime_test_results values (
+    'Agent runtime is immutable after Run creation',
+    runtime_update_rejected
+  );
 
   insert into public.agent_tool_calls (
     run_id, call_id, phase, tool_name, args_hash, status, submitted_at
@@ -649,6 +665,150 @@ begin
     'html run settles atomically with one full-page primary result',
     settled.status = 'succeeded' and settled.actual_credits = 0
       and settled.lease_id is null and settled.finished_at is not null
+  );
+end;
+$$;
+
+do $$
+declare
+  test_user uuid := extensions.gen_random_uuid();
+  ordinary_user uuid := extensions.gen_random_uuid();
+  test_hold uuid;
+  ordinary_hold uuid;
+  test_pricing integer;
+  ordinary_pricing integer;
+  created public.agent_runs;
+  rejected_detail text;
+  replay_rejected boolean := false;
+begin
+  insert into auth.users (
+    id, instance_id, aud, role, email, encrypted_password,
+    email_confirmed_at, created_at, updated_at, raw_app_meta_data
+  ) values
+    (test_user, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated',
+      'agent-runtime-dsh@example.test', '', now(), now(), now(), '{"bowerbird_test":true}'::jsonb),
+    (ordinary_user, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated',
+      'agent-runtime-ordinary@example.test', '', now(), now(), now(), '{}'::jsonb);
+
+  perform * from public.grant_topup_credits(test_user, 'agent-runtime-dsh-topup', 9);
+  perform * from public.grant_topup_credits(ordinary_user, 'agent-runtime-ordinary-topup', 9);
+  select result.hold_id, result.pricing_version into test_hold, test_pricing
+  from public.credit_hold(test_user, 'agent-runtime-dsh-hold', 'agent_controlled_image_edit_min', 9) as result;
+  select result.hold_id, result.pricing_version into ordinary_hold, ordinary_pricing
+  from public.credit_hold(ordinary_user, 'agent-runtime-ordinary-hold', 'agent_controlled_image_edit_min', 9) as result;
+
+  created := public.create_agent_run_guarded(
+    extensions.gen_random_uuid(), extensions.gen_random_uuid(), test_user,
+    'bowerbird-controlled-image-edit', '0.1.2', '0.1.0', 0, repeat('6', 64),
+    'runs/runtime-dsh/inputs/request.json', 'cloud', 9, test_hold, test_pricing,
+    now() + interval '24 hours', 4, 100, 'dsh'
+  );
+  insert into agent_runtime_test_results values (
+    'test account can pin a DSH runtime Run',
+    created.agent_runtime = 'dsh' and created.is_test = true
+  );
+
+  begin
+    perform public.create_agent_run_guarded(
+      extensions.gen_random_uuid(), extensions.gen_random_uuid(), test_user,
+      'bowerbird-controlled-image-edit', '0.1.2', '0.1.0', 0, repeat('6', 64),
+      'runs/runtime-replay/inputs/request.json', 'cloud', 9, test_hold, test_pricing,
+      now() + interval '24 hours', 4, 100, 'legacy_kernel'
+    );
+  exception when sqlstate '55000' then
+    replay_rejected := true;
+  end;
+  insert into agent_runtime_test_results values (
+    'idempotent replay cannot change the pinned runtime',
+    replay_rejected
+  );
+
+  begin
+    perform public.create_agent_run_guarded(
+      extensions.gen_random_uuid(), extensions.gen_random_uuid(), ordinary_user,
+      'bowerbird-controlled-image-edit', '0.1.2', '0.1.0', 0, repeat('7', 64),
+      'runs/runtime-ordinary/inputs/request.json', 'cloud', 9, ordinary_hold, ordinary_pricing,
+      now() + interval '24 hours', 4, 100, 'dsh'
+    );
+  exception when raise_exception then
+    get stacked diagnostics rejected_detail = PG_EXCEPTION_DETAIL;
+  end;
+  insert into agent_runtime_test_results values (
+    'database rejects DSH runtime for a non-test account',
+    rejected_detail = 'agent_runtime_test_only'
+  );
+end;
+$$;
+
+do $$
+declare
+  test_user uuid := extensions.gen_random_uuid();
+  hold uuid;
+  run_id uuid;
+  conv_id uuid;
+  lease uuid := extensions.gen_random_uuid();
+  settled public.agent_runs;
+  final_count integer;
+begin
+  insert into auth.users (
+    id, instance_id, aud, role, email, encrypted_password,
+    email_confirmed_at, created_at, updated_at
+  ) values (
+    test_user, '00000000-0000-0000-0000-000000000000',
+    'authenticated', 'authenticated', 'agent-multi-final@example.test', '', now(), now(), now()
+  );
+
+  perform * from public.grant_topup_credits(test_user, 'agent-runtime-multi-final-topup', 9);
+  select result.hold_id into hold
+  from public.credit_hold(
+    test_user, 'agent-runtime-multi-final-hold', 'agent_controlled_image_edit_min', 9
+  ) as result;
+
+  insert into public.agent_runs (
+    user_id, skill_id, skill_version, kernel_version, status,
+    input_count, input_manifest_hash, request_object_key,
+    budget_credits, hold_id, pricing_version, queued_at,
+    lease_id, lease_owner, lease_expires_at, content_expires_at
+  ) values (
+    test_user, 'bowerbird-unified-agent', '0.1.0', '0.1.0', 'exporting',
+    2, repeat('5', 64), 'runs/multi-final/request.json',
+    9, hold, 1, now(), lease, 'multi-final-worker', now() + interval '60 seconds',
+    now() + interval '24 hours'
+  ) returning id, conversation_id into run_id, conv_id;
+
+  insert into public.agent_tool_calls (
+    run_id, call_id, phase, tool_name, args_hash, status, submitted_at, finished_at
+  ) values
+    (run_id, 'multi-final-image-call-1', 'execute_approved_plan', 'generate_image', repeat('1', 64), 'succeeded', now(), now()),
+    (run_id, 'multi-final-image-call-2', 'execute_approved_plan', 'generate_image', repeat('2', 64), 'succeeded', now(), now());
+
+  insert into public.agent_usage_items (
+    run_id, call_id, kind, provider, model, image_count, credits, pricing_version
+  ) values
+    (run_id, 'multi-final-image-call-1', 'image_generation', 'ark', 'test-image-model', 1, 1, 1),
+    (run_id, 'multi-final-image-call-2', 'image_generation', 'ark', 'test-image-model', 1, 1, 1);
+
+  insert into public.agent_artifacts (
+    run_id, conversation_id, kind, role, step_id, object_key,
+    mime, bytes, sha256, source_call_id, user_visible, expires_at
+  ) values
+    (run_id, conv_id, 'final_result', 'final_result', 'scene_one',
+      'runs/multi-final/artifacts/scene-one.png', 'image/png', 1, repeat('3', 64),
+      'multi-final-image-call-1', true, now() + interval '7 days'),
+    (run_id, conv_id, 'final_result', 'final_result', 'scene_two',
+      'runs/multi-final/artifacts/scene-two.png', 'image/png', 1, repeat('4', 64),
+      'multi-final-image-call-2', true, now() + interval '7 days');
+
+  settled := public.settle_agent_run(run_id, lease, 'succeeded', null, null);
+  select count(*)::integer into final_count
+  from public.agent_artifacts as artifact
+  where artifact.run_id = run_id
+    and artifact.role = 'final_result'
+    and artifact.deleted_at is null;
+
+  insert into agent_runtime_test_results values (
+    'unified Agent settlement accepts multiple final results',
+    settled.status = 'succeeded' and settled.actual_credits = 2 and final_count = 2
   );
 end;
 $$;

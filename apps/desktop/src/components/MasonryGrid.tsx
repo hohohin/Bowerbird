@@ -36,17 +36,21 @@ function Thumb({
   asset,
   group,
   orderedIds,
+  variant,
 }: {
   asset: Asset;
   group?: Asset[];
   orderedIds: string[]; // 瀑布流可见卡片顺序（Shift 范围多选用）
+  variant: "library" | "canvas-source";
 }) {
   const cardRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
   const selected = useStore((s) => s.mode === "manage" && s.selectedIds.has(asset.id));
   // 挑图模式（点一下插参考图 chip）：创作板对话框常驻 / 会话「重新编辑」中。批量管理
   // （manage）模式优先于挑图——点击仍是选择/框选、可拖拽进文件夹，不受常驻对话框影响。
-  const pickMode = useStore((s) => (s.boardOpen || s.genEditing) && s.mode !== "manage");
+  const pickMode = useStore((s) =>
+    variant === "library" && (s.boardOpen || s.genEditing) && s.mode !== "manage"
+  );
   const openContextMenu = useStore((s) => s.openContextMenu);
   // 反推全局可见：本缩略图正在反推 / 在队列里。角标点击 = 取消（运行中 kill 子进程 / 排队中移出队列）。
   const describeStatus = useStore((s) =>
@@ -75,7 +79,7 @@ function Thumb({
   }
   function beginPress(e: MouseEvent<HTMLDivElement>) {
     cancelPress();
-    if (e.button !== 0) return;
+    if (e.button !== 0 || variant === "canvas-source") return;
     pressStart.current = { x: e.clientX, y: e.clientY };
     pressTimer.current = window.setTimeout(() => {
       pressTimer.current = undefined;
@@ -218,7 +222,7 @@ function Thumb({
     };
   }, [hovering]);
   function onEnter(e: MouseEvent<HTMLDivElement>) {
-    if (!previewSrc) return;
+    if (!previewSrc || variant === "canvas-source") return;
     mouseRef.current = { x: e.clientX, y: e.clientY };
     setHovering(true);
     // 2.8s 延迟：到点时取缩略图实际渲染尺寸，×2 作为放大尺寸（保证对每张图「200%」都真正成立）。
@@ -270,6 +274,7 @@ function Thumb({
   }
   function activateAsset(shift: boolean, at?: { x: number; y: number }) {
     dismissPreview();
+    if (variant === "canvas-source") return;
     const st = useStore.getState();
     // manage 优先于挑图（创作模式激活时批量管理不能被挑图吞掉点击）。
     if (st.mode === "manage") {
@@ -333,12 +338,12 @@ function Thumb({
       role="button"
       tabIndex={0}
       aria-label={`${shown.name}${selected ? "，已选中" : ""}`}
-      className={`group relative mb-2 cursor-pointer overflow-hidden rounded-sm bg-panel transition ${
+      className={`group relative mb-2 overflow-hidden rounded-sm bg-panel transition ${
         selected
           ? "border-2 border-accent shadow-[inset_0_0_0_1px_#4868ff]"
           : "border border-edge hover:border-[#55505a]"
-      }`}
-      draggable={!pickMode}
+      } ${variant === "canvas-source" ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"}`}
+      draggable={variant === "canvas-source" || !pickMode}
       onMouseEnter={onEnter}
       onMouseMove={onMove}
       onMouseLeave={onLeave}
@@ -373,7 +378,7 @@ function Thumb({
             ? Array.from(st.selectedIds)
             : [shown.id];
         setDragAssets(ids);
-        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.effectAllowed = variant === "canvas-source" ? "copy" : "move";
         // setData 必须有一次否则部分浏览器不认这次拖拽；payload 实际走模块变量（dragPayload.ts）。
         e.dataTransfer.setData("text/plain", ids.join(","));
       }}
@@ -543,11 +548,28 @@ function useColumnCount(): number {
   return count;
 }
 
-export function MasonryGrid() {
-  const assets = useStore((s) => s.assets);
-  const total = useStore((s) => s.total);
+export function MasonryGrid({
+  variant = "library",
+  columnCount,
+  assetsOverride,
+  totalOverride,
+  projectScopeId,
+}: {
+  variant?: "library" | "canvas-source";
+  columnCount?: number;
+  /** Project workspace source switch can render a separately loaded library scope. */
+  assetsOverride?: Asset[];
+  totalOverride?: number;
+  /** `undefined` follows the active project; `null` explicitly addresses the central library. */
+  projectScopeId?: string | null;
+} = {}) {
+  const storeAssets = useStore((s) => s.assets);
+  const storeTotal = useStore((s) => s.total);
   const boardOpen = useStore((s) => s.boardOpen);
-  const currentProjectId = useStore((s) => s.currentProjectId);
+  const storeActiveProjectId = useStore((s) => s.activeProjectId);
+  const assets = assetsOverride ?? storeAssets;
+  const total = totalOverride ?? storeTotal;
+  const activeProjectId = projectScopeId === undefined ? storeActiveProjectId : projectScopeId;
   const focusAssetId = useStore((s) => s.focusAssetId);
   const clearFocusAsset = useStore((s) => s.clearFocusAsset);
   const setSearchQuery = useStore((s) => s.setSearchQuery);
@@ -586,7 +608,7 @@ export function MasonryGrid() {
     }
     let alive = true;
     api
-      .listGenerationGroups(ids, currentProjectId)
+      .listGenerationGroups(ids, activeProjectId)
       .then((m) => {
         if (alive) setGroupMap(m);
       })
@@ -594,7 +616,7 @@ export function MasonryGrid() {
     return () => {
       alive = false;
     };
-  }, [assets, currentProjectId]);
+  }, [assets, activeProjectId]);
 
   // 渲染列表：每组只留一张卡——列表已 created_at DESC，同组首见即组内可见的最新成员，
   // 其余成员经轮播查看（组键取组末位 id，同组成员共享同一数组）。轮播组用后端原始组
@@ -619,7 +641,8 @@ export function MasonryGrid() {
   // 顺序近似从左到右、从上到下。高度用 DB width/height 估算（h/w 即相对高度，列宽
   // 是公共因子；无尺寸的按方形兜底）——元数据即最终布局，无需 DOM 测量；列数变化
   // （窗口跨断点）时重新分列。
-  const colCount = useColumnCount();
+  const responsiveColumnCount = useColumnCount();
+  const colCount = columnCount ?? responsiveColumnCount;
   const columns = useMemo(() => {
     const cols: Asset[][] = Array.from({ length: colCount }, () => []);
     const heights = new Array<number>(colCount).fill(0);
@@ -651,7 +674,7 @@ export function MasonryGrid() {
           await api.importImageBytes({
             dataUrl,
             fileName: f.name,
-            projectId: currentProjectId,
+            projectId: activeProjectId,
             source: "imported",
           });
           imported += 1;
@@ -705,7 +728,7 @@ export function MasonryGrid() {
             </span>
             <h2 className="mt-4 text-base font-semibold text-ink">
               {libraryEmpty
-                ? currentProjectId
+                ? activeProjectId
                   ? "这个项目还没有素材"
                   : "收下第一份灵感"
                 : "没有匹配的素材"}
@@ -750,7 +773,13 @@ export function MasonryGrid() {
             {columns.map((col, i) => (
               <div key={i} className="flex min-w-0 flex-1 flex-col">
                 {col.map((a) => (
-                  <Thumb key={a.id} asset={a} group={groupMap[a.id]} orderedIds={orderedIds} />
+                  <Thumb
+                    key={a.id}
+                    asset={a}
+                    group={groupMap[a.id]}
+                    orderedIds={orderedIds}
+                    variant={variant}
+                  />
                 ))}
               </div>
             ))}
@@ -762,7 +791,7 @@ export function MasonryGrid() {
       {dragOver && (
         <div className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center bg-accent/10 ring-2 ring-inset ring-accent">
           <div className="rounded-full border border-accent/30 bg-panel/95 px-4 py-2 text-sm font-medium text-accent-soft shadow-panel">
-            松开导入{currentProjectId ? "到当前项目" : "到素材库"}
+            松开导入{activeProjectId ? "到当前项目" : "到素材库"}
           </div>
         </div>
       )}

@@ -19,11 +19,12 @@ export class NodeDshAcpPort {
   #connection;
   #onCommittedContent;
 
-  constructor({ allowNetwork = false, patches = [] } = {}) {
+  constructor({ allowNetwork = false, patches = [], toolBridge } = {}) {
     const args = patches.flatMap((patch) => ["--patch", patch]);
     this.#child = spawnDsh(args, {
       stdio: ["pipe", "pipe", "pipe"],
       allowNetwork,
+      toolBridge,
     });
     let stderr = "";
     this.#child.stderr.setEncoding("utf8");

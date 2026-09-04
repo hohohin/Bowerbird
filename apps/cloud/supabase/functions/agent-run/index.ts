@@ -6,13 +6,16 @@ import { requireUser } from "../_shared/auth.ts";
 import type { AuthContext } from "../_shared/auth.ts";
 import { ensureDailyCredits, holdCredits, rollbackCredits } from "../_shared/billing.ts";
 import { ApiError, errorResponse, jsonResponse, requestId, safeLog } from "../_shared/errors.ts";
-import { activeTier, policyForUser } from "../_shared/feature-policy.ts";
+import { accountTestMarker, activeTier, policyForUser } from "../_shared/feature-policy.ts";
 import { imageMetadata } from "../_shared/image-metadata.ts";
 import { corsHeaders } from "../_shared/limits.ts";
 import { reserveManagedUsage } from "../_shared/usage.ts";
 
 const BUCKET = "agent-temp";
-const ALLOWED_SKILLS = new Set(["smart-refinement", "bowerbird-controlled-image-edit", "bowerbird-html-layout-render"]);
+const CONTROLLED_SKILL = "bowerbird-controlled-image-edit";
+const HTML_SKILL = "bowerbird-html-layout-render";
+const UNIFIED_SKILL = "bowerbird-unified-agent";
+const ALLOWED_SKILLS = new Set(["smart-refinement", CONTROLLED_SKILL, HTML_SKILL, UNIFIED_SKILL]);
 const MAX_INPUTS = 8;
 const MAX_GOAL_CHARS = 4000;
 const SIGNED_URL_SECONDS = 300;
@@ -21,6 +24,21 @@ const ACTIVE_AGENT_STATUSES = [
   "awaiting_approval", "awaiting_result_feedback", "awaiting_local_task",
   "exporting", "cancel_requested",
 ];
+type AgentRuntime = "legacy_kernel" | "dsh";
+
+function dshRuntimeSelectionEnabled(): boolean {
+  const value = (Deno.env.get("AGENT_DSH_RUNTIME_SELECTION_ENABLED") ?? "").trim().toLowerCase();
+  if (!value || value === "false") return false;
+  if (value === "true") return true;
+  throw new ApiError("not_configured", "Agent DSH runtime 选择开关无效", false, 503);
+}
+
+function unifiedAgentDshEnabled(): boolean {
+  const value = (Deno.env.get("AGENT_UNIFIED_DSH_ENABLED") ?? "").trim().toLowerCase();
+  if (!value || value === "false") return false;
+  if (value === "true") return true;
+  throw new ApiError("not_configured", "统一 Agent DSH 开关无效", false, 503);
+}
 
 function globalAgentCapacity(): number {
   const value = Number.parseInt(Deno.env.get("AGENT_GLOBAL_ACTIVE_LIMIT") ?? "100", 10);
@@ -252,6 +270,31 @@ function parseHtmlLayoutManifest(value: unknown, expectedCount: number): { refer
   return { references };
 }
 
+async function parseUnifiedAgentManifest(
+  value: unknown,
+  expectedCount: number,
+): Promise<{ references: HtmlLayoutReference[]; visualProfile: VisualProfileTrace | null }> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new ApiError("invalid_request", "统一 Agent 输入清单无效");
+  }
+  const manifest = value as Record<string, unknown>;
+  const htmlOutput = manifest.htmlOutput;
+  if (!htmlOutput || typeof htmlOutput !== "object" || Array.isArray(htmlOutput)) {
+    throw new ApiError("invalid_request", "统一 Agent HTML 输出参数无效");
+  }
+  const output = htmlOutput as Record<string, unknown>;
+  const parsed = parseHtmlLayoutManifest({
+    schemaVersion: manifest.schemaVersion,
+    layoutPrompt: manifest.goal,
+    references: manifest.references,
+    viewport: output.viewport,
+    capture: output.capture,
+    background: output.background,
+  }, expectedCount);
+  const visualProfile = await validateVisualProfileCapsule(manifest.visualProfileCapsule);
+  return { references: parsed.references, visualProfile };
+}
+
 async function billingAccountId(admin: AuthContext["admin"], authUserId: string): Promise<string> {
   const { data, error } = await admin.from("billing_accounts").select("id").eq("auth_user_id", authUserId).maybeSingle();
   if (error || !data) throw new ApiError("internal_error", "账号计费身份读取失败", true);
@@ -281,6 +324,9 @@ function serviceBudget(service: string): { budget: number; pricingVersion: numbe
     // HTML 排版 POC 档（0045 service_costs 行；渲染 0 积分，仅 DeepSeek 文本回合计费）。
     return { budget: 15, pricingVersion: 1, billingService: "agent_html_layout_render" };
   }
+  if (service === UNIFIED_SKILL) {
+    return { budget: 30, pricingVersion: 1, billingService: "agent_unified_test" };
+  }
   throw new ApiError("invalid_request", "不支持的 Skill", false);
 }
 
@@ -296,10 +342,36 @@ function relaxedBudget(service: string, available: number): { budget: number; pr
 async function actionCreate(admin: Parameters<typeof billingAccountId>[0], user: { id: string; app_metadata?: unknown }, body: Record<string, unknown>, requestIdValue: string): Promise<Response> {
   const skillId = typeof body.skillId === "string" ? body.skillId : "";
   if (!ALLOWED_SKILLS.has(skillId)) throw new ApiError("invalid_request", "不支持的 Skill");
+  const requestedRuntime = body.agentRuntime ?? "legacy_kernel";
+  if (requestedRuntime !== "legacy_kernel" && requestedRuntime !== "dsh") {
+    throw new ApiError("invalid_request", "Agent runtime 无效");
+  }
+  const agentRuntime = requestedRuntime as AgentRuntime;
+  if (skillId === UNIFIED_SKILL) {
+    if (agentRuntime !== "dsh") {
+      throw new ApiError("invalid_request", "统一 Agent 必须使用 DSH runtime");
+    }
+    if (!accountTestMarker(user.app_metadata)) {
+      throw new ApiError("upgrade_required", "统一 Agent 当前仅对测试账号开放", false, 403);
+    }
+    if (!dshRuntimeSelectionEnabled() || !unifiedAgentDshEnabled()) {
+      throw new ApiError("not_configured", "统一 Agent DSH 尚未启用", false, 503);
+    }
+  } else if (agentRuntime === "dsh") {
+    if (skillId !== CONTROLLED_SKILL) {
+      throw new ApiError("invalid_request", "该 Skill 尚不支持 DSH runtime");
+    }
+    if (!accountTestMarker(user.app_metadata)) {
+      throw new ApiError("upgrade_required", "DSH runtime 当前仅对测试账号开放", false, 403);
+    }
+    if (!dshRuntimeSelectionEnabled()) {
+      throw new ApiError("not_configured", "DSH runtime 选择尚未启用", false, 503);
+    }
+  }
   const goal = typeof body.goal === "string" ? body.goal.trim() : "";
   if (!goal || goal.length > MAX_GOAL_CHARS) throw new ApiError("invalid_request", "目标文本长度需在 1–4000 字之间");
   const inputCount = Number(body.inputCount);
-  const minInputs = skillId === "bowerbird-controlled-image-edit" || skillId === "bowerbird-html-layout-render" ? 0 : 1;
+  const minInputs = [CONTROLLED_SKILL, HTML_SKILL, UNIFIED_SKILL].includes(skillId) ? 0 : 1;
   if (!Number.isInteger(inputCount) || inputCount < minInputs || inputCount > MAX_INPUTS) {
     throw new ApiError("invalid_request", `输入图数量需在 ${minInputs}–${MAX_INPUTS} 张之间`);
   }
@@ -313,7 +385,7 @@ async function actionCreate(admin: Parameters<typeof billingAccountId>[0], user:
   }
   const imageProvider = requestedImageProvider as "cloud" | "jimeng" | "codex";
   const visualProfile = parseVisualProfileTrace(body.visualProfile);
-  if (visualProfile && skillId !== "bowerbird-controlled-image-edit") {
+  if (visualProfile && skillId !== CONTROLLED_SKILL && skillId !== UNIFIED_SKILL) {
     throw new ApiError("invalid_request", "该 Skill 不支持项目视觉设定");
   }
   // Codex already performs its own reasoning/conversation loop. Combining it
@@ -327,7 +399,7 @@ async function actionCreate(admin: Parameters<typeof billingAccountId>[0], user:
       409,
     );
   }
-  if (imageProvider !== "cloud" && skillId !== "bowerbird-controlled-image-edit") {
+  if (imageProvider !== "cloud" && skillId !== CONTROLLED_SKILL) {
     throw new ApiError("invalid_request", "该 Skill 不支持本机生图引擎");
   }
 
@@ -388,7 +460,7 @@ async function actionCreate(admin: Parameters<typeof billingAccountId>[0], user:
   const selectedBudget = relaxedBudget(skillId, available);
   const allowedBillingServices = new Set([
     serviceBudget(skillId).billingService,
-    ...(skillId === "bowerbird-controlled-image-edit" ? [`${serviceBudget(skillId).billingService}_min`] : []),
+    ...(skillId === CONTROLLED_SKILL ? [`${serviceBudget(skillId).billingService}_min`] : []),
   ]);
   if (priorHold && !allowedBillingServices.has(priorHold.service as string)) {
     throw new ApiError("invalid_request", "Agent 幂等请求与 Skill 不匹配", false, 409);
@@ -400,16 +472,18 @@ async function actionCreate(admin: Parameters<typeof billingAccountId>[0], user:
 
   // Idempotent create: if a run row already references this hold, return it.
   const { data: existing } = await admin.from("agent_runs")
-    .select("id,conversation_id,status,skill_id,input_count,input_manifest_hash,request_object_key,image_provider,budget_credits,pricing_version,visual_profile_id,visual_profile_version,visual_profile_hash")
+    .select("id,conversation_id,status,skill_id,input_count,input_manifest_hash,request_object_key,image_provider,budget_credits,pricing_version,visual_profile_id,visual_profile_version,visual_profile_hash,agent_runtime")
     .eq("hold_id", hold.holdId).maybeSingle();
   if (existing) {
     const row = existing as OwnRun & {
       skill_id: string; input_count: number; input_manifest_hash: string; request_object_key: string;
       image_provider: string; budget_credits: number; pricing_version: number;
       visual_profile_id: string | null; visual_profile_version: number | null; visual_profile_hash: string | null;
+      agent_runtime: AgentRuntime;
     };
     if (row.skill_id !== skillId || row.input_count !== inputCount ||
         row.input_manifest_hash !== body.inputManifestHash || row.image_provider !== imageProvider ||
+        row.agent_runtime !== agentRuntime ||
         row.visual_profile_id !== (visualProfile?.profileId ?? null) || row.visual_profile_version !== (visualProfile?.version ?? null) ||
         row.visual_profile_hash !== (visualProfile?.hash ?? null)) {
       throw new ApiError("invalid_request", "Agent 幂等请求参数不一致", false, 409);
@@ -438,7 +512,7 @@ async function actionCreate(admin: Parameters<typeof billingAccountId>[0], user:
       throw new ApiError("internal_error", "上传地址重新签发失败", true);
     }
     const inputUploads = row.status === "uploading" &&
-        (row.skill_id === "bowerbird-controlled-image-edit" || row.skill_id === "bowerbird-html-layout-render")
+        ([CONTROLLED_SKILL, HTML_SKILL, UNIFIED_SKILL].includes(row.skill_id))
       ? await Promise.all(Array.from({ length: row.input_count }, async (_, index) => {
         const ordinal = index + 1;
         const objectKey = controlledInputObjectKey(row.id, ordinal);
@@ -456,13 +530,14 @@ async function actionCreate(admin: Parameters<typeof billingAccountId>[0], user:
       inputUploads,
       budgetCredits: row.budget_credits,
       pricingVersion: row.pricing_version,
+      agentRuntime: row.agent_runtime,
       reused: true,
     });
   }
 
   let runId: string = crypto.randomUUID();
   let conversationId: string = crypto.randomUUID();
-  let requestKey = skillId === "bowerbird-controlled-image-edit"
+  let requestKey = skillId === CONTROLLED_SKILL || skillId === UNIFIED_SKILL
     ? `runs/${runId}/inputs/request.json`
     : `${runId}/inputs/request.json`;
   const guarded = await admin.rpc("create_agent_run_guarded", {
@@ -470,9 +545,9 @@ async function actionCreate(admin: Parameters<typeof billingAccountId>[0], user:
     p_conversation_id: conversationId,
     p_user_id: accountId,
     p_skill_id: skillId,
-    p_skill_version: skillId === "bowerbird-controlled-image-edit"
+    p_skill_version: skillId === CONTROLLED_SKILL
       ? "0.1.2"
-      : skillId === "bowerbird-html-layout-render"
+      : skillId === HTML_SKILL || skillId === UNIFIED_SKILL
       ? "0.1.0"
       : "0.1.0-m0",
     p_kernel_version: "0.1.0",
@@ -486,6 +561,7 @@ async function actionCreate(admin: Parameters<typeof billingAccountId>[0], user:
     p_content_expires_at: new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
     p_max_user_parallel: policy.max_parallel_agent_runs,
     p_global_active_limit: globalAgentCapacity(),
+    p_agent_runtime: agentRuntime,
   });
   if (guarded.error?.details === "agent_user_parallel_limit") {
     await rollbackCredits(admin, hold.holdId, "agent_user_parallel_limit");
@@ -546,7 +622,7 @@ async function actionCreate(admin: Parameters<typeof billingAccountId>[0], user:
   const upload = await admin.storage.from(BUCKET).createSignedUploadUrl(requestKey);
   if (upload.error) throw new ApiError("internal_error", "上传地址签发失败", true);
 
-  const inputUploads = skillId === "bowerbird-controlled-image-edit" || skillId === "bowerbird-html-layout-render"
+  const inputUploads = [CONTROLLED_SKILL, HTML_SKILL, UNIFIED_SKILL].includes(skillId)
     ? await Promise.all(Array.from({ length: inputCount }, async (_, index) => {
       const ordinal = index + 1;
       const objectKey = controlledInputObjectKey(runId, ordinal);
@@ -572,6 +648,7 @@ async function actionCreate(admin: Parameters<typeof billingAccountId>[0], user:
     inputUploads,
     budgetCredits: budget,
     pricingVersion,
+    agentRuntime,
   });
 }
 
@@ -591,7 +668,7 @@ async function actionEnqueue(admin: Parameters<typeof billingAccountId>[0], user
   };
   if (row.status !== "uploading") throw new ApiError("invalid_request", "Run 状态不允许入队");
 
-  if (row.skill_id === "bowerbird-controlled-image-edit" || row.skill_id === "bowerbird-html-layout-render") {
+  if ([CONTROLLED_SKILL, HTML_SKILL, UNIFIED_SKILL].includes(row.skill_id)) {
     const downloaded = await admin.storage.from(BUCKET).download(row.request_object_key);
     if (downloaded.error || !downloaded.data) throw new ApiError("invalid_request", "输入清单尚未上传");
     const requestBytes = new Uint8Array(await downloaded.data.arrayBuffer());
@@ -605,10 +682,12 @@ async function actionEnqueue(admin: Parameters<typeof billingAccountId>[0], user
     } catch {
       throw new ApiError("invalid_request", "输入清单不是有效 JSON");
     }
-    const parsed = row.skill_id === "bowerbird-controlled-image-edit"
+    const parsed = row.skill_id === CONTROLLED_SKILL
       ? await parseControlledManifest(manifest, row.input_count)
-      : parseHtmlLayoutManifest(manifest, row.input_count);
-    if (row.skill_id === "bowerbird-controlled-image-edit") {
+      : row.skill_id === HTML_SKILL
+      ? parseHtmlLayoutManifest(manifest, row.input_count)
+      : await parseUnifiedAgentManifest(manifest, row.input_count);
+    if (row.skill_id === CONTROLLED_SKILL || row.skill_id === UNIFIED_SKILL) {
       const controlled = parsed as Awaited<ReturnType<typeof parseControlledManifest>>;
       if (row.visual_profile_id !== (controlled.visualProfile?.profileId ?? null) ||
           row.visual_profile_version !== (controlled.visualProfile?.version ?? null) ||
@@ -629,7 +708,9 @@ async function actionEnqueue(admin: Parameters<typeof billingAccountId>[0], user
         throw new ApiError("invalid_request", `第 ${reference.ordinal} 张参考图校验失败`);
       }
       artifacts.push({
-        ...(row.skill_id === "bowerbird-html-layout-render" ? { id: (reference as HtmlLayoutReference).artifactId } : {}),
+        ...(row.skill_id === HTML_SKILL || row.skill_id === UNIFIED_SKILL
+          ? { id: (reference as HtmlLayoutReference).artifactId }
+          : {}),
         run_id: runId,
         conversation_id: row.conversation_id,
         kind: "input",
@@ -648,7 +729,7 @@ async function actionEnqueue(admin: Parameters<typeof billingAccountId>[0], user
     if (artifacts.length) {
       const inserted = await admin.from("agent_artifacts").upsert(
         artifacts,
-        row.skill_id === "bowerbird-html-layout-render"
+        row.skill_id === HTML_SKILL || row.skill_id === UNIFIED_SKILL
           ? { onConflict: "id", ignoreDuplicates: true }
           : { onConflict: "run_id,object_key", ignoreDuplicates: true },
       );
@@ -670,7 +751,7 @@ async function actionGet(admin: Parameters<typeof billingAccountId>[0], user: { 
   await loadOwnRun(admin, runId, user.id);
   const [{ data: run }, { data: events }, { data: approvals }, { data: clarifications }] = await Promise.all([
     admin.from("agent_runs").select(
-      "id,conversation_id,status,current_step,progress,skill_id,skill_version,approved_plan_hash,planned_tool_count,budget_credits,actual_credits,result_feedback_action,visual_profile_id,visual_profile_version,visual_profile_hash,created_at,queued_at,started_at,finished_at,content_expires_at,content_deleted_at,error_code,safe_message",
+      "id,conversation_id,status,current_step,progress,skill_id,skill_version,agent_runtime,approved_plan_hash,planned_tool_count,budget_credits,actual_credits,result_feedback_action,visual_profile_id,visual_profile_version,visual_profile_hash,created_at,queued_at,started_at,finished_at,content_expires_at,content_deleted_at,error_code,safe_message",
     ).eq("id", runId).maybeSingle(),
     admin.from("agent_events").select("seq,type,step,progress,display_payload,created_at").eq("run_id", runId).order("seq", { ascending: true }).limit(100),
     admin.from("agent_approvals").select("id,kind,status,proposal_object_key,proposal_hash,planned_tool_count,requested_at,expires_at,content_deleted_at,estimated_additional_credits").eq("run_id", runId).order("requested_at", { ascending: false }).limit(10),
@@ -683,7 +764,7 @@ async function actionGet(admin: Parameters<typeof billingAccountId>[0], user: { 
     .is("deleted_at", null)
     .order("expires_at", { ascending: true });
   let renderManifest: unknown = null;
-  if ((run as { skill_id?: string } | null)?.skill_id === "bowerbird-html-layout-render") {
+  if ([HTML_SKILL, UNIFIED_SKILL].includes((run as { skill_id?: string } | null)?.skill_id ?? "")) {
     const { data: manifestRow, error: manifestError } = await admin.from("agent_artifacts")
       .select("object_key,bytes,sha256,expires_at,deleted_at")
       .eq("run_id", runId).eq("role", "render_manifest")
@@ -1005,8 +1086,8 @@ async function actionResultFeedback(admin: Parameters<typeof billingAccountId>[0
   if (own.status !== "awaiting_result_feedback") {
     throw new ApiError("invalid_request", "Run 当前不等待结果反馈", false, 409);
   }
-  if (own.skill_id === "bowerbird-html-layout-render" && action === "retry") {
-    throw new ApiError("invalid_request", "HTML 排版 Run 只支持接受或放弃结果", false, 409);
+  if ([HTML_SKILL, UNIFIED_SKILL].includes(own.skill_id) && action === "retry") {
+    throw new ApiError("invalid_request", "该 Run 当前只支持接受或放弃结果", false, 409);
   }
   const feedbackId = crypto.randomUUID();
   const feedbackKey = `runs/${runId}/feedback/${feedbackId}.json`;

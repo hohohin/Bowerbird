@@ -1,0 +1,18 @@
+{
+  "$schema": "bowerbird-skill-manifest-v1",
+  "id": "bowerbird-unified-agent",
+  "version": "0.1.0",
+  "instructionHash": "7e2285cb221119152498b7938930c7812b4d8384b45299b606b6df9fe79dce91",
+  "kernelMinVersion": "0.1.0",
+  "snapshotSchemaVersion": 1,
+  "constraints": {
+    "maxModelTurns": 12,
+    "maxToolCalls": 16,
+    "maxGenerateAttempts": 11,
+    "planningImageAccess": false
+  },
+  "phaseGraph": {
+    "initial": "compose_plan",
+    "terminal": ["succeeded", "failed", "cancelled"]
+  }
+}

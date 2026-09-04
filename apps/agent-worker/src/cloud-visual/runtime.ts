@@ -4,6 +4,7 @@
 // 输入输出都只有反推文字：Worker 无从取得图片，也不请求图片。
 
 import { createHash, randomUUID } from "node:crypto";
+import { IdlePollBackoff } from "../idle-poll-backoff.ts";
 
 import {
   isRecord,
@@ -18,6 +19,7 @@ import { planBatches } from "../visual/batch.ts";
 export type { WorkerFetch } from "../cloud-generation/runtime.ts";
 
 type JsonRecord = Record<string, unknown>;
+const CLEANUP_INTERVAL_MS = 10 * 60_000;
 
 export interface VisualWorkerConfig {
   controlUrl: string;
@@ -444,15 +446,29 @@ export async function runVisualProfileWorker(
     return result.content;
   });
   const control = new ControlClient(config, fetchImpl);
+  const idleBackoff = new IdlePollBackoff(config.pollIntervalMs);
+  let nextCleanupAt = Date.now() + CLEANUP_INTERVAL_MS;
   console.log(JSON.stringify({ event: "visual_worker_started", worker_id: config.workerId }));
   while (!stop.requested) {
+    if (Date.now() >= nextCleanupAt) {
+      nextCleanupAt = Date.now() + CLEANUP_INTERVAL_MS;
+      try {
+        await control.post({ action: "cleanup_expired" });
+      } catch (error) {
+        console.error(JSON.stringify({ event: "visual_cleanup_failed", error: safeErrorKind(error) }));
+      }
+    }
     try {
       const claimed = await control.post({ action: "claim" }) as unknown as ClaimedJob;
-      if (claimed.job) await executeClaim(config, control, chat, fetchImpl, claimed);
-      else await sleep(config.pollIntervalMs);
+      if (claimed.job) {
+        idleBackoff.reset();
+        await executeClaim(config, control, chat, fetchImpl, claimed);
+      } else {
+        await sleep(idleBackoff.nextDelayMs());
+      }
     } catch (error) {
       console.error(JSON.stringify({ event: "visual_claim_failed", error: safeErrorKind(error) }));
-      await sleep(Math.max(config.pollIntervalMs, 5_000));
+      await sleep(Math.max(idleBackoff.nextDelayMs(), 5_000));
     }
   }
 }

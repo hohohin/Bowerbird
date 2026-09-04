@@ -10,7 +10,6 @@ const BUCKET = "generation-temp";
 const LEASE_SECONDS = 120;
 const SIGNED_URL_SECONDS = 300;
 const MAX_RESULT_CHARS = 65_536;
-let nextCleanupAt = 0;
 
 function requiredEnv(name: string): string {
   const value = Deno.env.get(name)?.trim();
@@ -75,31 +74,32 @@ async function assertLease(admin: SupabaseClient, jobId: string, leaseId: string
   return job;
 }
 
-async function maybeCleanupExpired(admin: SupabaseClient): Promise<void> {
+async function actionCleanupExpired(admin: SupabaseClient): Promise<Response> {
   const now = Date.now();
-  if (now < nextCleanupAt) return;
-  nextCleanupAt = now + 10 * 60 * 1000;
   const { data, error } = await admin.from("visual_profile_jobs")
     .select("id,request_object_key")
     .lt("content_expires_at", new Date(now).toISOString())
     .is("deleted_at", null)
     .limit(100);
   if (error) throw new ApiError("internal_error", "过期提炼任务查询失败", true);
-  for (const raw of data ?? []) {
-    const row = raw as { id: string; request_object_key: string };
-    const removed = await admin.storage.from(BUCKET).remove([row.request_object_key]);
-    if (removed.error) continue;
-    // 输入对象删除后同步清空结果：draft 只做短时投递，长期权威在桌面本地。
-    await admin.from("visual_profile_jobs").update({
+  const rows = (data ?? []) as Array<{ id: string; request_object_key: string }>;
+  const keys = [...new Set(rows.map((row) => row.request_object_key))];
+  if (keys.length) {
+    const removed = await admin.storage.from(BUCKET).remove(keys);
+    if (removed.error) throw new ApiError("internal_error", "过期提炼对象删除失败", true);
+  }
+  if (rows.length) {
+    const updated = await admin.from("visual_profile_jobs").update({
       deleted_at: new Date(now).toISOString(),
       result_text: null,
     })
-      .eq("id", row.id).is("deleted_at", null);
+      .in("id", rows.map((row) => row.id)).is("deleted_at", null);
+    if (updated.error) throw new ApiError("internal_error", "过期提炼任务标记失败", true);
   }
+  return jsonResponse({ expiredJobs: rows.length, removedObjects: keys.length });
 }
 
 async function actionClaim(admin: SupabaseClient, workerId: string): Promise<Response> {
-  await maybeCleanupExpired(admin);
   const reconciled = await admin.rpc("reconcile_stale_visual_profile_jobs", { p_limit: 100 });
   if (reconciled.error) throw new ApiError("internal_error", "失联提炼任务对账失败", true);
   const result = await admin.rpc("claim_visual_profile_job", {
@@ -201,7 +201,8 @@ Deno.serve(async (request) => {
     const body = await request.json().catch(() => ({})) as Record<string, unknown>;
     const action = typeof body.action === "string" ? body.action : "";
     let response: Response;
-    if (action === "claim") response = await actionClaim(admin, workerId);
+    if (action === "cleanup_expired") response = await actionCleanupExpired(admin);
+    else if (action === "claim") response = await actionClaim(admin, workerId);
     else if (action === "heartbeat") response = await actionHeartbeat(admin, body);
     else if (action === "submitted") response = await actionSubmitted(admin, body);
     else if (action === "finish") response = await actionComplete(admin, body, "succeeded");

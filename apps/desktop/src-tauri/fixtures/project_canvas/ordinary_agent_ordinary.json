@@ -1,0 +1,22 @@
+{
+  "name": "ordinary_agent_ordinary",
+  "project_id": "project-a",
+  "threads": [{ "id": "thread-a", "origin": "direct", "created_at": 1 }],
+  "nodes": [
+    { "id": "ordinary-prompt-1", "thread_id": "thread-a", "kind": "prompt", "payload": { "schema_version": 1, "text": "普通生成", "provider": "cloud-fast", "job_id": "job-1", "turn_key": "turn-1" }, "created_at": 2 },
+    { "id": "ordinary-output-1", "thread_id": "thread-a", "kind": "asset", "role": "output", "payload": { "schema_version": 1, "snapshot": { "name": "普通结果" }, "execution": { "job_id": "job-1", "turn_key": "turn-1" } }, "created_at": 3 },
+    { "id": "agent-prompt", "thread_id": "thread-a", "kind": "prompt", "payload": { "schema_version": 1, "text": "交给 Agent 精修", "provider": "cloud" }, "created_at": 4 },
+    { "id": "agent-run", "thread_id": "thread-a", "kind": "agent_group", "payload": { "schema_version": 1, "run_id": "run-1", "conversation_id": "agent-conversation-1", "skill_id": "bowerbird-controlled-image-edit", "status": "succeeded" }, "created_at": 5 },
+    { "id": "agent-final", "thread_id": "thread-a", "kind": "asset", "role": "final", "payload": { "schema_version": 1, "snapshot": { "name": "Agent 结果" }, "execution": { "run_id": "run-1", "artifact_id": "artifact-1" } }, "created_at": 6 },
+    { "id": "ordinary-prompt-2", "thread_id": "thread-a", "kind": "prompt", "payload": { "schema_version": 1, "text": "回到普通生成", "provider": "jimeng", "job_id": "job-2", "turn_key": "turn-2" }, "created_at": 7 },
+    { "id": "ordinary-output-2", "thread_id": "thread-a", "kind": "asset", "role": "output", "payload": { "schema_version": 1, "snapshot": { "name": "最终普通结果" }, "execution": { "job_id": "job-2", "turn_key": "turn-2" } }, "created_at": 8 }
+  ],
+  "edges": [
+    { "id": "ordinary-produced-1", "thread_id": "thread-a", "from_node_id": "ordinary-prompt-1", "to_node_id": "ordinary-output-1", "kind": "produced", "ordinal": 0, "created_at": 3 },
+    { "id": "to-agent", "thread_id": "thread-a", "from_node_id": "ordinary-output-1", "to_node_id": "agent-prompt", "kind": "continued", "ordinal": 0, "created_at": 4 },
+    { "id": "agent-input", "thread_id": "thread-a", "from_node_id": "agent-prompt", "to_node_id": "agent-run", "kind": "input", "ordinal": 0, "created_at": 5 },
+    { "id": "agent-produced", "thread_id": "thread-a", "from_node_id": "agent-run", "to_node_id": "agent-final", "kind": "produced", "ordinal": 0, "created_at": 6 },
+    { "id": "back-to-ordinary", "thread_id": "thread-a", "from_node_id": "agent-final", "to_node_id": "ordinary-prompt-2", "kind": "continued", "ordinal": 0, "created_at": 7 },
+    { "id": "ordinary-produced-2", "thread_id": "thread-a", "from_node_id": "ordinary-prompt-2", "to_node_id": "ordinary-output-2", "kind": "produced", "ordinal": 0, "created_at": 8 }
+  ]
+}

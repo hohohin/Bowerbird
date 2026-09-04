@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-shell";
-import { RefreshCw } from "lucide-react";
+import { Moon, RefreshCw, Sun } from "lucide-react";
 import { useStore, understandEngineUsable } from "../store";
 import { api } from "../lib/api";
 import { CODEX_ONBOARDING_ENABLED, DREAMINA_ONBOARDING_ENABLED } from "../lib/featureFlags";
@@ -93,7 +93,7 @@ const DEVELOPER_SECTION = { key: "developer", label: "开发者选项" } as cons
 /**
  * 设置面板（约定 13 全屏 Modal 形态）：常见两列式——左侧分区导航，右侧具体内容。
  *
- * 五分区：系统设置（素材库位置 / 浏览器扩展 / 新手教程）、账号管理（账号名 / 等级与升级 / 积分明细）、
+ * 五分区：系统设置（外观 / 素材库位置 / 浏览器扩展 / 新手教程）、账号管理（账号名 / 等级与升级 / 积分明细）、
  * 模型设置（codex CLI / 即梦 CLI / 默认反推模型 / 入库自动反推）、个性化与记忆（创作板 Shift 引入
  * / 全局素材隐藏项目素材开关），
  * 关于我们（当前版本 / 前往官网）。原「环境状态」总览已删除，各引导由对应分区直接唤起。
@@ -241,6 +241,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const commitSettings = (onIngest: boolean, prompt: string) => {
     // 全量覆盖：只改自动反推两项，其余设置保持不变。
     void updateSettings({
+      theme: settings?.theme ?? "dark",
       auto_analyze_on_ingest: onIngest,
       auto_analyze_prompt: prompt || DEFAULT_AUTO_ANALYZE_PROMPT,
       library_root: settings?.library_root ?? null,
@@ -459,18 +460,14 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
       {/* 固定高度：不随分区内容多少变化；右列内部滚动 */}
       <div className="flex h-[480px] gap-4 text-sm">
         {/* 左列：分区导航 */}
-        <nav className="flex w-36 shrink-0 flex-col gap-0.5 border-r border-edge pr-3" aria-label="设置分区">
+        <nav className="settings-nav flex w-36 shrink-0 flex-col gap-0.5" aria-label="设置分区">
           {sections.map((s) => (
             <button
               key={s.key}
               type="button"
               onClick={() => setSection(s.key)}
               aria-current={section === s.key ? "true" : undefined}
-              className={`rounded px-2.5 py-1.5 text-left text-xs ${
-                section === s.key
-                  ? "bg-accent/15 font-medium text-accent"
-                  : "text-muted hover:bg-panel2 hover:text-ink"
-              }`}
+              className={`settings-nav-item ${section === s.key ? "is-active" : ""}`}
             >
               {s.label}
             </button>
@@ -481,6 +478,38 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
         <div className="min-w-0 flex-1 space-y-3 overflow-y-auto">
           {section === "system" && (
             <>
+              {/* 外观：后端 settings.json 持久化；夜间模式沿用原有黑色 UI。 */}
+              <div className="settings-card px-3 py-2.5">
+                <div className="text-ink">外观</div>
+                <p className="mt-1 text-xs text-muted">选择 Bowerbird 的界面明暗，切换后立即生效。</p>
+                <div className="mt-2 grid grid-cols-2 gap-2" role="radiogroup" aria-label="应用外观">
+                  {([
+                    { value: "light" as const, label: "日间模式", icon: Sun },
+                    { value: "dark" as const, label: "夜间模式", icon: Moon },
+                  ]).map(({ value, label, icon: Icon }) => {
+                    const selected = (settings?.theme ?? "dark") === value;
+                    return (
+                      <button
+                        key={value}
+                        type="button"
+                        role="radio"
+                        aria-checked={selected}
+                        onClick={() => settings && void updateSettings({ ...settings, theme: value })}
+                        className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-left text-xs transition-colors ${
+                          selected
+                            ? "border-accent bg-accent/10 text-accent"
+                            : "border-edge bg-canvas/60 text-muted hover:border-muted hover:text-ink"
+                        }`}
+                      >
+                        <Icon size={15} aria-hidden="true" />
+                        <span className="font-medium">{label}</span>
+                        {selected && <span className="ml-auto text-[10px]">当前</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
               {/* 素材库位置 */}
               <div className="settings-card px-3 py-2.5">
                 <div className="text-ink">素材库位置</div>

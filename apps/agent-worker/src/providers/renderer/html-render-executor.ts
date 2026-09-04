@@ -71,6 +71,14 @@ export interface HtmlRenderControl extends DurableToolControl {
 export interface HtmlRenderWorkspace {
   readArtifact(artifactId: string): Promise<{ mime: "image/png" | "image/jpeg" | "image/webp"; bytes: Uint8Array; sha256: string }>;
   readHtmlDocumentArtifact(artifactId: string): Promise<string>;
+  /** Cache fresh verified bytes so a later approved inspection needs no new signed URL. */
+  rememberArtifact?(callId: string, artifact: RegisteredAgentArtifact, image: {
+    mime: "image/png";
+    bytes: Uint8Array;
+    sha256: string;
+  }): void;
+  /** Compatibility fallback for workspaces that can provide a URL on upload. */
+  rememberRemoteArtifact?(artifact: RegisteredAgentArtifact): void;
 }
 
 export type HtmlRenderExecutorConfig = {
@@ -403,6 +411,15 @@ class HtmlRenderAdapter implements DurableToolAdapter<HtmlRenderDispatchRequest,
         sha256: output.sha256,
         outputName: output.outputName,
       });
+      if (this.workspace.rememberArtifact) {
+        this.workspace.rememberArtifact(callId, artifact, {
+          mime: "image/png",
+          bytes: output.bytes,
+          sha256: output.sha256,
+        });
+      } else {
+        this.workspace.rememberRemoteArtifact?.(artifact);
+      }
       if (output.role === "full_page_screenshot") fullArtifactId = artifact.artifactId;
       uploaded.push({
         artifactId: artifact.artifactId,

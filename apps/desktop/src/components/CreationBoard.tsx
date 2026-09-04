@@ -3,17 +3,38 @@ import { useStore } from "../store";
 import { canStartAnotherAgentRun, canStartAnotherJob, canUseAgentRun, canUseByo } from "../lib/entitlement";
 import { cloudProviderLabel, isCloudProvider, supportsAnnotationCoordinates } from "../lib/genProviders";
 import { api } from "../lib/api";
+import {
+  acquireCreativeSubmission,
+  resolveContinuationParent,
+  type CreativeParentCandidate,
+  type CreativeParentSelection,
+  type CreativeThreadResolution,
+} from "../lib/creativeGeneration";
 import { AGENT_DS_ENABLED, AGENT_Z_ENABLED, PRESET_FEATURE_ENABLED } from "../lib/featureFlags";
 import { notify, notifyError, notifySuccess } from "../lib/notify";
+import { isWorkspaceOperationCurrent } from "../lib/workspaceRoute";
+import { captureGenerationSubmissionAuthority } from "../lib/generationIntent";
 import {
   CONTROLLED_AGENT_SKILL,
+  DSH_AGENT_RUNTIME,
   HTML_LAYOUT_AGENT_SKILL,
+  LEGACY_AGENT_RUNTIME,
+  UNIFIED_AGENT_SKILL,
+  activateCloudAgentRuntimeSelection,
   activateCloudAgentSkill,
+  cloudAgentModeForSelection,
   cloudAgentSkill as resolveCloudAgentSkill,
+  runtimeForAgentSkill,
+  runSkillForAgentRuntime,
   toggleCloudAgent,
   type CloudAgentSelection,
 } from "../lib/cloudAgentSelection";
-import { useCreationEditor } from "./creation/useCreationEditor";
+import type { Asset, CloudAgentRuntime } from "../lib/types";
+import {
+  BOARD_ASSET_PICK_EVENT,
+  useCreationEditor,
+  type CreationEditorDraft,
+} from "./creation/useCreationEditor";
 import { RATIOS } from "./creation/ratios";
 import { RatioSelect } from "./creation/RatioSelect";
 import { ProviderSelect } from "./creation/ProviderSelect";
@@ -66,7 +87,39 @@ export const AGENT_DS_DONE_EVENT = "bowerbird://agent-ds-done";
  * 空格/标点后自动识别为 image chip。维度环（CaptionRing）为全局组件（长按图片呼出），
  * 点环上扇区经 store.pendingKeyword 由本板编辑器消费插入 keyword chip。
  */
-export function CreationBoard() {
+export interface CreationBoardProps {
+  embedded?: boolean;
+  projectId?: string;
+  initialDraft?: CreationEditorDraft | null;
+  initialAssetIds?: string[];
+  continuationCandidates?: CreativeParentCandidate[];
+  focusedContinuationNodeId?: string | null;
+  focusedContinuationThreadId?: string | null;
+  onDraftChange?: (draft: CreationEditorDraft) => void;
+  registerDraftFlush?: (flush: (() => void) | null) => void;
+  beforeGenerate?: () => Promise<void>;
+  resolveCreativeThread?: (
+    parentAssetId: string | null,
+    prompt: string,
+    routeRevision?: number,
+    continuationRequestId?: string | null,
+    parentNodeId?: string | null,
+  ) => Promise<CreativeThreadResolution>;
+}
+
+export function CreationBoard({
+  embedded = false,
+  projectId,
+  initialDraft,
+  initialAssetIds = [],
+  continuationCandidates = [],
+  focusedContinuationNodeId = null,
+  focusedContinuationThreadId = null,
+  onDraftChange,
+  registerDraftFlush,
+  beforeGenerate,
+  resolveCreativeThread,
+}: CreationBoardProps = {}) {
   const codexHealth = useStore((s) => s.codexHealth);
   const creating = useStore((s) => s.boardOpen);
   const setBoardActive = useStore((s) => s.setBoardActive);
@@ -74,6 +127,7 @@ export function CreationBoard() {
   const cloudAuth = useStore((s) => s.cloudAuth);
   const cloudEntitlement = useStore((s) => s.cloudEntitlement);
   const cloudAvailable = cloudAuth?.cloud_available ?? false;
+  const isTestAccount = cloudEntitlement?.is_test_account === true;
   const runningJobCount = useStore((s) => Object.values(s.genJobs).filter((j) => j.running).length);
   const activeGenProvider = useStore((s) => s.activeGenProvider);
   const setActiveGenProvider = useStore((s) => s.setActiveGenProvider);
@@ -84,10 +138,11 @@ export function CreationBoard() {
   const activePresetId = useStore((s) => s.activePresetId);
   const setActivePreset = useStore((s) => s.setActivePreset);
   const reloadPresets = useStore((s) => s.reloadPresets);
-  const openCloudAgentRun = useStore((s) => s.openCloudAgentRun);
+  const updateCloudAgentRun = useStore((s) => s.updateCloudAgentRun);
   const cloudAgentRuns = useStore((s) => s.cloudAgentRuns);
-  const pendingAgentArm = useStore((s) => s.pendingAgentArm);
-  const clearPendingAgentArm = useStore((s) => s.clearPendingAgentArm);
+  const pendingComposerMode = useStore((s) => s.pendingComposerMode);
+  const clearPendingComposerMode = useStore((s) => s.clearPendingComposerMode);
+  const ackPendingCreativeContinuation = useStore((s) => s.ackPendingCreativeContinuation);
   const settings = useStore((s) => s.settings);
   const activeVisualProfileId = useStore((s) => s.activeVisualProfileId);
   const setActiveVisualProfile = useStore((s) => s.setActiveVisualProfile);
@@ -98,13 +153,42 @@ export function CreationBoard() {
   const {
     hostRef,
     focus,
+    flushDraft,
     finalPrompt,
     rawPrompt,
     references,
     dimensionSources,
     graphSources,
     agentPromptReferences,
-  } = useCreationEditor({ consumePendingKeyword: true, initialEmpty: true });
+  } = useCreationEditor({
+    consumePendingKeyword: true,
+    initialEmpty: true,
+    draftKey: embedded ? null : undefined,
+    initialDraft,
+    onDraftChange,
+  });
+
+  useEffect(() => {
+    registerDraftFlush?.(flushDraft);
+    return () => registerDraftFlush?.(null);
+  }, [flushDraft, registerDraftFlush]);
+
+  const initialAssetsAppliedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!embedded || !projectId || initialAssetsAppliedRef.current === projectId) return;
+    initialAssetsAppliedRef.current = projectId;
+    if (initialAssetIds.length === 0) {
+      const timer = window.setTimeout(focus, 0);
+      return () => window.clearTimeout(timer);
+    }
+    const timer = window.setTimeout(() => {
+      for (const assetId of initialAssetIds) {
+        window.dispatchEvent(new CustomEvent(BOARD_ASSET_PICK_EVENT, { detail: assetId }));
+      }
+      focus();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [projectId, embedded, focus, initialAssetIds]);
 
   // 画面比例（null=自动/不指定，发送时不注入 instruction）。记忆进 localStorage，跨会话保留。
   const [ratio, setRatio] = useState<string | null>(loadBoardRatio);
@@ -128,8 +212,10 @@ export function CreationBoard() {
   // A/B/Z/G/DS 继续保留为 dev 基线，但与正式模式互斥。
   // null = 正式 Agent 关闭；skill id = Agent 已开启。单状态建模避免 UI 选中 HTML、发送却走普通生图。
   const [cloudAgentSelection, setCloudAgentSelection] = useState<CloudAgentSelection>(null);
-  const cloudAgentMode = cloudAgentSelection !== null;
-  const cloudAgentSkill = resolveCloudAgentSkill(cloudAgentSelection);
+  const [cloudAgentRuntime, setCloudAgentRuntime] = useState<CloudAgentRuntime>(LEGACY_AGENT_RUNTIME);
+  const cloudAgentMode = cloudAgentModeForSelection(cloudAgentSelection, cloudAgentRuntime, isTestAccount);
+  const selectedCloudAgentSkill = resolveCloudAgentSkill(cloudAgentSelection);
+  const cloudAgentSkill = runSkillForAgentRuntime(cloudAgentRuntime, selectedCloudAgentSkill, isTestAccount);
   const [cloudAgentBusy, setCloudAgentBusy] = useState(false);
   const [htmlViewportWidth, setHtmlViewportWidth] = useState(900);
   const [htmlViewportHeight, setHtmlViewportHeight] = useState(700);
@@ -178,22 +264,23 @@ export function CreationBoard() {
     return () => window.removeEventListener(AGENT_DS_DONE_EVENT, onDone);
   }, []);
 
-  // 会话详情「开启 Agent 模式再试」：链接点击置位 pendingAgentArm 并关面板回主界面，
-  // 本板随 genPanelOpen=false 才挂载 → 在挂载/更新时消费信号，打开正式 Agent 开关并
-  // 复位其余 Agent 开关（与 Agent 按钮点击同款互斥复位）；消费即清，防止重挂载误触发。
+  // 执行结果回到创作器时显式恢复 Agent / 普通生成模式；消费即清，防止重挂载误触发。
   useEffect(() => {
-    if (!pendingAgentArm) return;
-    setCloudAgentSelection(CONTROLLED_AGENT_SKILL);
+    if (!pendingComposerMode) return;
+    setCloudAgentSelection(pendingComposerMode === "agent" ? CONTROLLED_AGENT_SKILL : null);
     setAgentMode("off");
     setAgentZMode(false);
     setAgentGMode(false);
     setAgentDsMode(false);
-    clearPendingAgentArm();
-  }, [pendingAgentArm, clearPendingAgentArm]);
+    clearPendingComposerMode();
+  }, [pendingComposerMode, clearPendingComposerMode]);
 
   // 设置里关闭的模式：隐藏按钮同时复位其激活态（含「开启 Agent 模式再试」等异步置位路径）。
   useEffect(() => {
-    if (!agentModeOn && cloudAgentMode) setCloudAgentSelection(null);
+    if (!agentModeOn && cloudAgentMode) {
+      setCloudAgentSelection(null);
+      setCloudAgentRuntime(LEGACY_AGENT_RUNTIME);
+    }
     if (!agentAOn && agentMode === "a") setAgentMode("off");
     if (!agentBOn && agentMode === "b") setAgentMode("off");
     if (!agentZOn && agentZMode) setAgentZMode(false);
@@ -258,6 +345,7 @@ export function CreationBoard() {
   // 退出创作模式：先取消在途自动浮回（否则 350ms 后又弹开，与收起打架）；
   // 非首屏收起让位浏览（滚回顶部会再自动弹出），首屏保持展开（欢迎态）。
   function exitCreationMode() {
+    if (embedded) return;
     setBoardActive(false);
     cancelAutoExpand();
     setCollapsed(!atLibraryTop());
@@ -266,6 +354,7 @@ export function CreationBoard() {
   // 对话框高度 → --board-dock-h：瀑布流滚动容器据此留底部 padding，最后一行素材
   // 不被对话框盖住（与会话编辑坞 --gen-dock-h 同款；收起是纯 transform，高度不变）。
   useEffect(() => {
+    if (embedded) return;
     const el = dockRef.current;
     if (!el) return;
     const apply = () =>
@@ -277,7 +366,7 @@ export function CreationBoard() {
       obs.disconnect();
       document.documentElement.style.removeProperty("--board-dock-h");
     };
-  }, []);
+  }, [embedded]);
 
   // 按当前选中的 provider 判健康（云端需开关+登录+余额，其余读各自 health）。
   const cloudBalance = cloudEntitlement
@@ -310,27 +399,32 @@ export function CreationBoard() {
   const htmlAgentEntitled = canUseAgentRun(cloudEntitlement, HTML_LAYOUT_AGENT_SKILL);
   const cloudAgentEntitled = canUseAgentRun(cloudEntitlement, cloudAgentSkill);
   const cloudAgentHasCapacity = canStartAnotherAgentRun(cloudEntitlement, activeCloudAgentRunCount, cloudAgentSkill);
+  const dshAgentSelected = cloudAgentSkill === UNIFIED_AGENT_SKILL;
   const htmlAgentSelected = cloudAgentSkill === HTML_LAYOUT_AGENT_SKILL;
+  const htmlCapableAgentSelected = htmlAgentSelected || dshAgentSelected;
+  const effectiveCloudAgentRuntime = runtimeForAgentSkill(cloudAgentRuntime, selectedCloudAgentSkill, isTestAccount);
   // Codex 自身已有思考/对话编排，叠加 Bowerbird Agent 会形成重复规划且耗时过长。
   // 暂时禁止新建 Codex + Agent 组合；即梦与 Cloud 路径保持不变。
-  const cloudAgentProviderCompatible = htmlAgentSelected || activeGenProvider !== "codex";
-  const cloudAgentRequiredBalance = htmlAgentSelected ? 15 : 5;
-  const htmlOptionsValid = !htmlAgentSelected || (
+  const cloudAgentProviderCompatible = htmlCapableAgentSelected || activeGenProvider !== "codex";
+  const cloudAgentRequiredBalance = dshAgentSelected ? 30 : htmlAgentSelected ? 15 : 5;
+  const htmlOptionsValid = !htmlCapableAgentSelected || (
     htmlViewportWidth >= 320 && htmlViewportWidth <= 2400 &&
     htmlViewportHeight >= 240 && htmlViewportHeight <= 4000 &&
     (htmlCaptureMode !== "full_page_and_slices" || (
       htmlSliceHeight >= 200 && htmlSliceHeight <= 4000 && htmlOverlap >= 0 && htmlOverlap <= 200 && htmlOverlap < htmlSliceHeight
     ))
   );
+  const projectAgentContextReady = !!projectId && !!resolveCreativeThread;
   const cloudAgentReady =
+    projectAgentContextReady &&
     cloudAgentProviderCompatible &&
-    (htmlAgentSelected || !!agentImageProvider) &&
+    (htmlCapableAgentSelected || !!agentImageProvider) &&
     cloudAgentHasCapacity &&
     cloudAvailable &&
     !!cloudAuth?.logged_in &&
     cloudBalance >= cloudAgentRequiredBalance &&
     htmlOptionsValid &&
-    (htmlAgentSelected || localAgentProviderReady);
+    (htmlCapableAgentSelected || localAgentProviderReady);
   const targetProviderLabel = isCloudProvider(activeGenProvider)
     ? (cloudProviderLabel(activeGenProvider, cloudEntitlement) ?? "Bowerbird Cloud")
     : activeGenProvider === "jimeng"
@@ -345,19 +439,72 @@ export function CreationBoard() {
   useEffect(() => {
     if (!cloudAgentMode || cloudAgentProviderCompatible) return;
     setCloudAgentSelection(null);
+    setCloudAgentRuntime(LEGACY_AGENT_RUNTIME);
     notify("已关闭 Agent：Codex 与 Bowerbird Agent 暂时互斥，请改用 Codex 直接生成或选择 Cloud / 即梦 Agent。", "info");
   }, [activeGenProvider, cloudAgentMode, cloudAgentProviderCompatible]);
 
+  useEffect(() => {
+    if (!isTestAccount) setCloudAgentRuntime(LEGACY_AGENT_RUNTIME);
+  }, [isTestAccount]);
+
   // 把当前组稿发 provider 生成。生成期间编辑器仍可继续组下一轮稿（prompt 在此快照进 store）。
-  // provider 由 store 内 activeGenProvider 兜底（send 不显式传）。
+  // provider / visual profile 与 prompt、refs 一样在点击时冻结；异步 Agent
+  // 整理或画板准备期间的 UI 切换只影响下一次发送。
   // 发送成功即退出创作模式（同「退出创作模式」页签：回普通浏览，左键恢复开详情；
   // 校验不过/发送失败则保持创作模式继续组稿）。
   async function send() {
+    const originRoute = useStore.getState();
+    const originProjectId = projectId ?? originRoute.activeProjectId;
+    const originRouteRevision = originRoute.projectRouteRevision;
+    const submissionClaim = acquireCreativeSubmission(originProjectId);
+    if (!submissionClaim) return;
+    try {
+    const submissionAuthority = captureGenerationSubmissionAuthority({
+      provider: originRoute.activeGenProvider,
+      visualProfileId: originRoute.activeVisualProfileId,
+    });
+    const originContinuation = originRoute.pendingCreativeContinuation?.projectId === originProjectId
+      ? { ...originRoute.pendingCreativeContinuation }
+      : null;
+    const isCurrentWorkspace = () => {
+      const state = useStore.getState();
+      return isWorkspaceOperationCurrent(
+        originProjectId,
+        state.activeProjectId,
+        state.projectRoutePending,
+        originRouteRevision,
+        state.projectRouteRevision,
+      );
+    };
+    const isCurrentSubmission = () => submissionClaim.isCurrent() && isCurrentWorkspace();
+    if (!isCurrentSubmission()) return;
+
     if (cloudAgentMode) {
       const body = (rawPrompt || finalPrompt).trim();
       if (!body || cloudAgentBusy || !cloudAgentReady) return;
       setCloudAgentBusy(true);
       try {
+        await beforeGenerate?.();
+        if (!isCurrentSubmission()) return;
+        const parentSelection = resolveContinuationParent(
+          references,
+          continuationCandidates,
+          {
+            sidecar: originContinuation,
+            focusedNodeId: focusedContinuationNodeId,
+            focusedThreadId: focusedContinuationThreadId,
+          },
+        );
+        const parentAsset = parentSelection?.asset ?? null;
+        const continuation = await resolveCreativeThread?.(
+          parentAsset?.id ?? null,
+          body,
+          originRouteRevision,
+          originContinuation?.requestId ?? null,
+          parentSelection?.nodeId ?? null,
+        ) ?? null;
+        if (!isCurrentSubmission()) return;
+        const threadId = continuation?.threadId ?? null;
         const run = await api.cloudAgentStart({
           intentPrompt: body,
           references: references.map((reference) => ({
@@ -365,11 +512,15 @@ export function CreationBoard() {
             promptToken: agentPromptReferences.find((item) => item.assetId === reference.id)?.name ?? reference.name,
           })),
           ratio,
-          projectId: useStore.getState().currentProjectId,
-          imageProvider: agentImageProvider,
-          visualProfileId: activeVisualProfileId,
+          projectId: originProjectId,
+          threadId,
+          parentNodeId: continuation?.parentNodeId ?? null,
+          parentAssetId: parentAsset?.id ?? null,
+          imageProvider: htmlCapableAgentSelected ? "cloud" : agentImageProvider,
+          visualProfileId: submissionAuthority.visualProfileId,
           skillId: cloudAgentSkill,
-          htmlOptions: htmlAgentSelected ? {
+          agentRuntime: dshAgentSelected ? DSH_AGENT_RUNTIME : htmlAgentSelected ? undefined : effectiveCloudAgentRuntime,
+          htmlOptions: htmlCapableAgentSelected ? {
             viewportWidth: htmlViewportWidth,
             viewportHeight: htmlViewportHeight,
             deviceScaleFactor: htmlDeviceScaleFactor,
@@ -379,11 +530,22 @@ export function CreationBoard() {
             background: htmlBackground,
           } : null,
         });
-        openCloudAgentRun(run);
-        notifySuccess(htmlAgentSelected ? "HTML 排版会话已创建，正在生成离线排版文档" : "Agent 会话已创建，正在进行纯文本意图分析");
+        if (continuation?.continuationRequestId) {
+          ackPendingCreativeContinuation(continuation.continuationRequestId);
+        }
+        if (!isCurrentSubmission()) {
+          updateCloudAgentRun(run);
+          return;
+        }
+        updateCloudAgentRun(run);
+        notifySuccess(dshAgentSelected
+          ? "DSH Agent 会话已创建，将先判断交付形式并自主选择受控工具链"
+          : htmlAgentSelected
+          ? "HTML 排版会话已创建，正在生成离线排版文档"
+          : `Agent 会话已创建（${effectiveCloudAgentRuntime === DSH_AGENT_RUNTIME ? "DSH" : "Legacy"}），正在进行纯文本意图分析`);
         exitCreationMode();
       } catch (error) {
-        notifyError(error, "启动 Bowerbird Agent 失败");
+        if (isCurrentSubmission()) notifyError(error, "启动 Bowerbird Agent 失败");
       } finally {
         setCloudAgentBusy(false);
       }
@@ -404,10 +566,11 @@ export function CreationBoard() {
           refPairs.map((p) => p.path),
           refPairs.map((p) => p.name),
         );
+        if (!isCurrentSubmission()) return;
         notifySuccess("已发送到 Agent Z 终端");
         exitCreationMode();
       } catch (error) {
-        notifyError(error, "发送到 Agent Z 失败");
+        if (isCurrentSubmission()) notifyError(error, "发送到 Agent Z 失败");
       } finally {
         setAgentZBusy(false);
       }
@@ -428,10 +591,11 @@ export function CreationBoard() {
           refPairs.map((p) => p.name),
           "g",
         );
+        if (!isCurrentSubmission()) return;
         notifySuccess("已发送到 Agent G 终端");
         exitCreationMode();
       } catch (error) {
-        notifyError(error, "发送到 Agent G 失败");
+        if (isCurrentSubmission()) notifyError(error, "发送到 Agent G 失败");
       } finally {
         setAgentZBusy(false);
       }
@@ -446,10 +610,11 @@ export function CreationBoard() {
       try {
         const refPaths = references.map((r) => r.store_path).filter((p): p is string => !!p);
         await api.agentDsChat(body, refPaths);
+        if (!isCurrentSubmission()) return;
         notifySuccess("Agent DS 正在思考，回复将追加到创作板");
         exitCreationMode();
       } catch (error) {
-        notifyError(error, "发送到 Agent DS 失败");
+        if (isCurrentSubmission()) notifyError(error, "发送到 Agent DS 失败");
         setAgentDsBusy(false);
       }
       return;
@@ -467,25 +632,75 @@ export function CreationBoard() {
           references: agentPromptReferences,
           output: { kind: "图片", ...(ratio ? { ratio } : {}) },
         });
+        if (!isCurrentSubmission()) return;
         prompt = result.prompt;
       } catch (error) {
-        notifyError(error, "Agent 意图分析失败");
+        if (isCurrentSubmission()) notifyError(error, "Agent 意图分析失败");
         return;
       } finally {
         setAgentBusy(false);
       }
     }
-    await startGeneration(
+    try {
+      await beforeGenerate?.();
+    } catch (error) {
+      if (isCurrentSubmission()) notifyError(error, "无法准备项目画板");
+      return;
+    }
+    if (!isCurrentSubmission()) return;
+    let parentSelection: CreativeParentSelection<Asset> | null;
+    let continuation: CreativeThreadResolution | null;
+    try {
+      parentSelection = resolveContinuationParent(
+        references,
+        continuationCandidates,
+        {
+          sidecar: originContinuation,
+          focusedNodeId: focusedContinuationNodeId,
+          focusedThreadId: focusedContinuationThreadId,
+        },
+      );
+      const parentAsset = parentSelection?.asset ?? null;
+      continuation = await resolveCreativeThread?.(
+        parentAsset?.id ?? null,
+        rawPrompt || prompt,
+        originRouteRevision,
+        originContinuation?.requestId ?? null,
+        parentSelection?.nodeId ?? null,
+      ) ?? null;
+    } catch (error) {
+      if (isCurrentSubmission()) notifyError(error, "无法确定要继续的画板结果");
+      return;
+    }
+    if (!isCurrentSubmission()) return;
+    const parentAsset = parentSelection?.asset ?? null;
+    const threadId = continuation?.threadId ?? null;
+    const generation = await startGeneration(
       prompt,
       references,
       ratio,
-      undefined,
+      submissionAuthority.provider,
       rawPrompt,
       undefined,
       undefined,
       dimensionSources,
+      submissionAuthority.visualProfileId,
+      projectId && threadId ? {
+        projectId,
+        threadId,
+        parentNodeId: continuation?.parentNodeId ?? null,
+        parentAssetPath: parentAsset?.store_path ?? null,
+        relation: parentAsset ? "continued" : null,
+      } : undefined,
     );
-    exitCreationMode();
+    if (!generation.accepted) return;
+    if (continuation?.continuationRequestId) {
+      ackPendingCreativeContinuation(continuation.continuationRequestId);
+    }
+    if (isCurrentSubmission()) exitCreationMode();
+    } finally {
+      submissionClaim.release();
+    }
   }
 
   // 登记=把当前编辑框内容（finalPrompt）存为用途，只需用户给个名字。
@@ -544,7 +759,7 @@ export function CreationBoard() {
     // 外层横向定位条（pointer-events-none 不挡瀑布流点击），section 内 pointer-events-auto。
     // z-20：盖过瀑布流与生成会话面板（z-10，发送后面板弹出、板仍可继续组稿），
     // 让位右键菜单(60)/维度环(65)/tour(70)。
-    <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center">
+    <div className={`pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center ${embedded ? "canvas-composer-host" : ""}`}>
       <section
         ref={dockRef}
         onPointerDown={(e) => {
@@ -559,12 +774,12 @@ export function CreationBoard() {
           if (!creating) setCollapsed(false);
         }}
         aria-label="创作板"
-        className={`creation-dock pointer-events-auto relative w-[min(760px,calc(100%-24px))] rounded-t-2xl p-2.5 pb-2 ${
-          collapsed ? "is-collapsed" : ""
+        className={`creation-dock pointer-events-auto relative w-[min(760px,calc(100%-24px))] rounded-t-2xl p-2.5 pb-2 ${embedded ? "is-canvas-composer" : ""} ${
+          !embedded && collapsed ? "is-collapsed" : ""
         }`}
       >
         {/* 退出创作模式：对话框右上角向上突出的档案标签页签（仅激活态出现）。 */}
-        {creating && (
+        {creating && !embedded && (
           <button
             type="button"
             onClick={exitCreationMode}
@@ -723,6 +938,12 @@ export function CreationBoard() {
           ref={hostRef}
           onClick={focus}
           onFocus={() => setBoardActive(true)}
+          onKeyDown={(event) => {
+            if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+              event.preventDefault();
+              void send();
+            }
+          }}
           data-tour="creation-editor"
           className="creation-editor min-h-16 max-h-56 cursor-text overflow-y-auto rounded-lg bg-black/30 px-3 py-2 text-sm leading-8 text-ink focus-within:ring-1 focus-within:ring-accent/70"
         />
@@ -804,13 +1025,15 @@ export function CreationBoard() {
           </div>
           {agentModeOn && (
           <div className="flex items-center gap-1">
-          {htmlAgentEntitled && (
+          {htmlAgentEntitled && !dshAgentSelected && (
             <select
               aria-label="Agent Skill"
-              value={cloudAgentSkill}
+              value={selectedCloudAgentSkill}
               disabled={cloudAgentBusy}
               onChange={(event) => {
-                setCloudAgentSelection(activateCloudAgentSkill(event.target.value));
+                const nextSkill = activateCloudAgentSkill(event.target.value);
+                setCloudAgentSelection(nextSkill);
+                setCloudAgentRuntime(LEGACY_AGENT_RUNTIME);
                 setAgentMode("off");
                 setAgentZMode(false);
                 setAgentGMode(false);
@@ -822,19 +1045,58 @@ export function CreationBoard() {
               <option value={HTML_LAYOUT_AGENT_SKILL}>HTML 排版截图</option>
             </select>
           )}
+          {isTestAccount && (
+            <select
+              aria-label="Agent Runtime"
+              value={cloudAgentRuntime}
+              disabled={cloudAgentBusy}
+              onChange={(event) => {
+                const next = activateCloudAgentRuntimeSelection(
+                  event.target.value,
+                  isTestAccount,
+                  cloudAgentSelection,
+                );
+                setCloudAgentRuntime(next.runtime);
+                setCloudAgentSelection(next.selection);
+                if (next.runtime === DSH_AGENT_RUNTIME) {
+                  setAgentMode("off");
+                  setAgentZMode(false);
+                  setAgentGMode(false);
+                  setAgentDsMode(false);
+                }
+              }}
+              title="仅测试账号可见；创建 Run 后 runtime 会锁定且不可更改"
+              className="h-7 rounded-[3px] border border-edge bg-panel2 px-2 text-[11px] text-ink outline-none focus:border-accent"
+            >
+              <option value={LEGACY_AGENT_RUNTIME}>Legacy</option>
+              <option value={DSH_AGENT_RUNTIME}>DSH · 自动选工具</option>
+            </select>
+          )}
+          {dshAgentSelected && (
+            <span className="h-7 rounded-[3px] border border-lime/30 bg-lime/10 px-2 text-[11px] leading-7 text-lime" title="DSH 会根据意图选择生图、HTML 排版、检查与最终交付工具；无需用户选择 Skill">
+              统一 Agent
+            </span>
+          )}
           <button
             type="button"
             role="switch"
             aria-checked={cloudAgentMode}
             disabled={cloudAgentBusy || (!cloudAgentMode && !cloudAgentReady)}
             onClick={() => {
-              setCloudAgentSelection((selection) => toggleCloudAgent(selection));
+              if (cloudAgentMode) {
+                setCloudAgentSelection(null);
+                setCloudAgentRuntime(LEGACY_AGENT_RUNTIME);
+              } else {
+                setCloudAgentSelection(toggleCloudAgent(cloudAgentSelection));
+              }
               setAgentMode("off");
               setAgentZMode(false);
               setAgentGMode(false);
               setAgentDsMode(false);
             }}
-            title={!cloudAgentProviderCompatible
+            title={!projectAgentContextReady
+              ? "Bowerbird Agent 需要在项目画板中启动，才能固定线程与结果归属"
+              : !cloudAgentProviderCompatible
               ? "Codex 与 Bowerbird Agent 暂时互斥：Codex 已有思考与对话能力，请直接使用 Codex，或为 Agent 选择 Cloud / 即梦"
               : !cloudAuth?.logged_in
                 ? "请先登录 Bowerbird 账号"
@@ -842,6 +1104,10 @@ export function CreationBoard() {
                   ? "当前账号未开放 Bowerbird Agent"
                   : !cloudAgentHasCapacity
                     ? "当前 Agent 并发任务已达上限，请等待已有任务完成"
+                    : dshAgentSelected
+                      ? cloudBalance < cloudAgentRequiredBalance
+                        ? "积分不足：DSH 统一 Agent 需要预授权 30 积分，结束后按真实模型与工具调用结算"
+                        : "DSH 将根据意图自动选择生图、HTML 排版、检查与最终交付工具；详情页和精确长文案不会交给图片模型排字"
                     : htmlAgentSelected
                       ? cloudBalance < cloudAgentRequiredBalance
                         ? "积分不足：HTML 排版 Run 需要预授权 15 积分，结束后按实际文本调用结算"
@@ -1007,7 +1273,9 @@ export function CreationBoard() {
             }
             title={
               cloudAgentMode
-                ? !cloudAuth?.logged_in
+                ? !projectAgentContextReady
+                  ? "Bowerbird Agent 需要在项目画板中启动"
+                  : !cloudAuth?.logged_in
                   ? "请先登录 Bowerbird 账号"
                   : !cloudAgentEntitled
                     ? "当前账号未开放 Bowerbird Agent"

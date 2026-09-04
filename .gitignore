@@ -49,6 +49,8 @@ my-library/
 dev-doc/*
 !dev-doc/HTML-RENDER-PLAN.md
 !dev-doc/UNIFIED-AGENT-HARNESS-PLAN.md
+!dev-doc/CANVAS-SESSION-PLAN.md
+!dev-doc/PROJECT-CANVAS-PLAN.md
 !dev-doc/进展归档.md
 
 # Agent Z（dev-only）：MCP 桥 + inbox 回传事件（Bowerbird × Claude Code TUI）

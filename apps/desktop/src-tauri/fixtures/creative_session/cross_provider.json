@@ -1,0 +1,45 @@
+{
+  "name": "cross_provider",
+  "nodes": [
+    {
+      "id": "cross-ref-1",
+      "kind": "asset",
+      "role": "reference",
+      "payload": { "schema_version": 1, "snapshot": { "name": "场景参考" } },
+      "created_at": 1
+    },
+    {
+      "id": "cross-prompt-a",
+      "kind": "prompt",
+      "payload": { "schema_version": 1, "text": "生成室内场景", "provider": "codex", "provider_session_id": "codex-thread-a", "job_id": "job-a", "turn_key": "turn-a-1", "status": "done" },
+      "created_at": 2
+    },
+    {
+      "id": "cross-output-a",
+      "kind": "asset",
+      "role": "output",
+      "payload": { "schema_version": 1, "snapshot": { "name": "室内场景 A" }, "execution": { "job_id": "job-a", "turn_key": "turn-a-1" } },
+      "created_at": 3
+    },
+    {
+      "id": "cross-prompt-b",
+      "kind": "prompt",
+      "payload": { "schema_version": 1, "text": "保持构图，改为夜景", "provider": "cloud-pro", "provider_session_id": "cloud-job-b", "job_id": "job-b", "turn_key": "turn-b-1", "status": "done" },
+      "created_at": 4
+    },
+    {
+      "id": "cross-output-b",
+      "kind": "asset",
+      "role": "output",
+      "payload": { "schema_version": 1, "snapshot": { "name": "室内夜景 B" }, "execution": { "job_id": "job-b", "turn_key": "turn-b-1" } },
+      "created_at": 5
+    }
+  ],
+  "edges": [
+    { "id": "cross-input-a", "from_node_id": "cross-ref-1", "to_node_id": "cross-prompt-a", "kind": "input", "ordinal": 0, "created_at": 2 },
+    { "id": "cross-produced-a", "from_node_id": "cross-prompt-a", "to_node_id": "cross-output-a", "kind": "produced", "ordinal": 0, "created_at": 3 },
+    { "id": "cross-continued-b", "from_node_id": "cross-output-a", "to_node_id": "cross-prompt-b", "kind": "continued", "ordinal": 0, "created_at": 4 },
+    { "id": "cross-input-b", "from_node_id": "cross-output-a", "to_node_id": "cross-prompt-b", "kind": "input", "ordinal": 1, "created_at": 4 },
+    { "id": "cross-produced-b", "from_node_id": "cross-prompt-b", "to_node_id": "cross-output-b", "kind": "produced", "ordinal": 0, "created_at": 5 }
+  ]
+}

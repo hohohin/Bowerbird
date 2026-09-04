@@ -93,6 +93,8 @@ pub struct Analysis {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenerationHistoryTurn {
     pub prompt: String,
+    #[serde(default)]
+    pub turn_key: Option<String>,
     /// 当时真正提交给 provider 的最终指令；旧 generation_meta 为 None。
     #[serde(default)]
     pub applied_prompt: Option<String>,
@@ -1238,6 +1240,29 @@ impl Database {
         Ok(a)
     }
 
+    /// Exact canvas hydration lookup. Unlike the browsing queries this never
+    /// paginates or collapses generation sessions, and preserves first-seen
+    /// request order while ignoring duplicate/unknown ids.
+    pub fn get_assets_by_ids(&self, ids: &[String]) -> AppResult<Vec<Asset>> {
+        let conn = self.conn.lock().unwrap();
+        let sql = format!("SELECT {ASSET_COLS} FROM assets WHERE id = ?1");
+        let mut stmt = conn.prepare(&sql)?;
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for id in ids {
+            if !seen.insert(id.as_str()) {
+                continue;
+            }
+            if let Some(asset) = stmt
+                .query_row(rusqlite::params![id], asset_from_row)
+                .optional()?
+            {
+                out.push(asset);
+            }
+        }
+        Ok(out)
+    }
+
     /// 素材被创作板调用（参考）计数：本次生成实际下发的参考图（store_path）各 +1。
     /// 单次调用内去重；库外 / 临时标注文件不命中（UPDATE 0 行，无副作用）。
     pub fn bump_asset_reference_counts(&self, store_paths: &[String]) -> AppResult<()> {
@@ -1620,6 +1645,11 @@ impl Database {
                 .and_then(|v| v.get("applied_prompt"))
                 .and_then(|x| x.as_str())
                 .map(String::from);
+            let row_turn_key = payload_value
+                .as_ref()
+                .and_then(|v| v.get("turn_key"))
+                .and_then(|x| x.as_str())
+                .map(String::from);
             // 本轮实际下发的参考图（同轮多行的 payload 相同；相邻同 prompt 跨轮合并时保留首行）。
             let row_refs: Vec<String> = payload_value
                 .as_ref()
@@ -1632,13 +1662,21 @@ impl Database {
                 })
                 .unwrap_or_default();
             // 相邻同 prompt = 同一轮多图，合并；否则开新轮（首轮的 prompt_raw 随新轮记一次）。
-            if turns.last().is_some_and(|turn| {
-                turn.prompt == prompt && turn.applied_prompt == row_applied_prompt
-            }) {
+            if turns
+                .last()
+                .is_some_and(|turn| match (&turn.turn_key, &row_turn_key) {
+                    (Some(left), Some(right)) => left == right,
+                    (None, None) => {
+                        turn.prompt == prompt && turn.applied_prompt == row_applied_prompt
+                    }
+                    _ => false,
+                })
+            {
                 turns.last_mut().unwrap().images.push(path);
             } else {
                 turns.push(GenerationHistoryTurn {
                     prompt,
+                    turn_key: row_turn_key,
                     applied_prompt: row_applied_prompt,
                     prompt_raw,
                     images: vec![path],
@@ -3626,6 +3664,32 @@ mod tests {
         assert!(p3.sections.is_none());
 
         assert!(db.get_prompted_asset("no-such-id").unwrap().is_none());
+    }
+
+    #[test]
+    fn exact_asset_hydration_preserves_requested_order_without_collapsing() {
+        let db = db();
+        let ids = (0..501)
+            .map(|index| put_asset(&db, &format!("asset-{index}")))
+            .collect::<Vec<_>>();
+        db.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE assets SET generation_session_id = 'shared-session' WHERE id IN (?1, ?2)",
+                rusqlite::params![ids[0], ids[1]],
+            )
+            .unwrap();
+        let expected = ids.iter().rev().cloned().collect::<Vec<_>>();
+        let mut requested = expected.clone();
+        requested.insert(1, "missing".to_string());
+        requested.push(expected[0].clone());
+        let assets = db.get_assets_by_ids(&requested).unwrap();
+        assert_eq!(
+            assets.into_iter().map(|asset| asset.id).collect::<Vec<_>>(),
+            expected,
+            "exact hydration must exceed the 500-item browser page, preserve order, dedupe, and retain both members of one generation session",
+        );
     }
 
     #[test]

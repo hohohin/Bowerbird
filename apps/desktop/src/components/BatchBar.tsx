@@ -22,7 +22,7 @@ export function BatchBar() {
   const selectAll = useStore((s) => s.selectAll);
   const folders = useStore((s) => s.folders);
   const projects = useStore((s) => s.projects);
-  const currentProjectId = useStore((s) => s.currentProjectId);
+  const activeProjectId = useStore((s) => s.activeProjectId);
   const codexHealth = useStore((s) => s.codexHealth);
   const cloudAuth = useStore((s) => s.cloudAuth);
   const cloudEntitlement = useStore((s) => s.cloudEntitlement);
@@ -127,11 +127,11 @@ export function BatchBar() {
     let failedCount = 0;
     try {
       if (mode === "keep") {
-        if (currentProjectId) await api.removeAssetsFromProject(currentProjectId, ids);
+        if (activeProjectId) await api.removeAssetsFromProject(activeProjectId, ids);
       } else {
         for (const id of ids) {
           try {
-            await api.deleteAssetWithMode(id, mode, currentProjectId);
+            await api.deleteAssetWithMode(id, mode, activeProjectId);
           } catch (e) {
             failedCount += 1;
             console.error("delete one failed", e);
@@ -285,7 +285,7 @@ export function BatchBar() {
         </div>
       )}
 
-      {!currentProjectId && projects.length > 0 && !projectInput && (
+      {!activeProjectId && projects.length > 0 && !projectInput && (
         <button
           onClick={() => {
             setTargetProjectId(projects[0]?.id ?? "");
@@ -297,7 +297,7 @@ export function BatchBar() {
           加入项目
         </button>
       )}
-      {!currentProjectId && projectInput && (
+      {!activeProjectId && projectInput && (
         <div className="flex items-center gap-1">
           <select
             value={targetProjectId}
@@ -351,7 +351,7 @@ export function BatchBar() {
         </button>
       ) : (
         <div className="flex items-center gap-1">
-          {currentProjectId && (
+          {activeProjectId && (
             <button
               onClick={() => runDelete("keep")}
               disabled={busy}

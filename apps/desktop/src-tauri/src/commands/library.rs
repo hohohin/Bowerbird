@@ -365,6 +365,18 @@ pub async fn list_assets(
     }))
 }
 
+/// 画板规范化节点按 asset_id 精确补水；不应用素材栏的分页、筛选或生成组折叠。
+#[tauri::command]
+pub async fn get_assets_by_ids(
+    db: State<'_, Arc<Database>>,
+    asset_ids: Vec<String>,
+) -> Result<Vec<Asset>, AppError> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || db.get_assets_by_ids(&asset_ids))
+        .await
+        .map_err(|e| AppError::Other(e.to_string()))?
+}
+
 /// 按 smart_query 直接查资产（`source:codex` 等），供侧栏「✨ 生成图」一键入口用
 /// （无需先建一个智能文件夹）。
 #[tauri::command]

@@ -32,8 +32,20 @@ fn default_true() -> bool {
     true
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AppTheme {
+    Light,
+    #[default]
+    Dark,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
+    /// 应用外观。现有黑色界面保留为夜间模式；旧配置默认夜间，避免升级后突然变色。
+    #[serde(default)]
+    pub theme: AppTheme,
+
     /// 入库时自动反推 + 自动重命名
     #[serde(default)]
     pub auto_analyze_on_ingest: bool,
@@ -93,6 +105,7 @@ pub struct AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
+            theme: AppTheme::Dark,
             auto_analyze_on_ingest: false,
             auto_analyze_prompt: DEFAULT_AUTO_ANALYZE_PROMPT.to_string(),
             library_root: None,
@@ -172,7 +185,25 @@ impl SettingsState {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppSettings, SettingsState};
+    use super::{AppSettings, AppTheme, SettingsState};
+
+    #[test]
+    fn old_settings_default_to_dark_theme() {
+        let settings: AppSettings =
+            serde_json::from_str(r#"{"auto_analyze_on_ingest":true}"#).unwrap();
+        assert_eq!(settings.theme, AppTheme::Dark);
+    }
+
+    #[test]
+    fn light_theme_round_trips() {
+        let mut settings = AppSettings::default();
+        settings.theme = AppTheme::Light;
+        let json = serde_json::to_string(&settings).unwrap();
+        assert_eq!(
+            serde_json::from_str::<AppSettings>(&json).unwrap().theme,
+            AppTheme::Light
+        );
+    }
 
     #[test]
     fn old_settings_ignores_legacy_cloud_connection_fields() {
