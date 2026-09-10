@@ -28,7 +28,12 @@ fn agent_root() -> std::path::PathBuf {
 }
 
 #[tauri::command]
-pub async fn agent_ds_chat(text: String, images: Vec<String>) -> Result<(), AppError> {
+pub async fn agent_ds_chat(
+    db: tauri::State<'_, std::sync::Arc<crate::db::Database>>,
+    text: String,
+    images: Vec<String>,
+    visual_profile_id: Option<String>,
+) -> Result<(), AppError> {
     use tokio::io::AsyncWriteExt;
     ensure_preview_enabled()?;
     let text = text.trim().to_string();
@@ -38,6 +43,10 @@ pub async fn agent_ds_chat(text: String, images: Vec<String>) -> Result<(), AppE
     if images.len() > 10 {
         return Err(AppError::Other("Agent DS 最多附带 10 张参考图".into()));
     }
+    let text = match visual_profile_id.as_deref() {
+        Some(id) => crate::core::visual_profile::inject_visual_profile_prompt(&text, &db.visual_profile_capsule(id)?),
+        None => text,
+    };
     let dir = crate::commands::agent::worker_dir()?;
     let env_file = dir.join("../cloud/.env");
     if !env_file.is_file() {

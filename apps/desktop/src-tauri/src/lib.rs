@@ -226,6 +226,7 @@ pub fn run() {
             }
             let db = Arc::new(db::Database::open(&paths.db)?);
             db.migrate()?;
+            db.recover_project_deletions(&paths)?;
 
             // 用自定义根打开成功后，清理应用数据目录里的旧库残留（迁移不删，留到此步释放系统盘）。
             if configured_library_root.is_some() && debug_library_root_override.is_none() {
@@ -272,6 +273,11 @@ pub fn run() {
             let recovery_db = db.clone();
             let recovery_paths = paths.clone();
             let orphan_scan_db = db.clone();
+
+            app.manage(Arc::new(core::local_classification::LocalClassifier::new(
+                app.path().app_data_dir()?.join("local-classification").join(core::local_classification::runtime::PACK_ID),
+            )));
+            core::local_classification::watch(app.handle().clone(), db.clone(), paths.clone());
 
             app.manage(extension_status);
             app.manage(active_project);
@@ -322,6 +328,7 @@ pub fn run() {
             commands::project_canvas::project_canvas_node_create,
             commands::project_canvas::project_canvas_node_update,
             commands::project_canvas::project_canvas_node_remove,
+            commands::project_canvas::project_canvas_node_restore,
             commands::project_canvas::project_canvas_group_create,
             commands::project_canvas::project_canvas_group_set_items,
             commands::project_canvas::project_canvas_group_update,
@@ -375,6 +382,8 @@ pub fn run() {
             commands::visual_profile::visual_profile_extract,
             commands::visual_profile::visual_profile_confirm,
             commands::visual_profile::visual_profile_list,
+            commands::visual_profile::visual_profile_get,
+            commands::visual_profile::visual_profile_delete,
             commands::visual_profile::visual_profile_cloud_extract,
             commands::visual_profile::visual_profile_update_draft,
             commands::visual_profile::visual_profile_generate_validation,
@@ -387,6 +396,7 @@ pub fn run() {
             commands::library::save_annotation_temp,
             commands::library::read_image_data_url,
             commands::library::list_assets,
+            commands::library::list_library_view,
             commands::library::get_assets_by_ids,
             commands::library::count_assets,
             commands::library::list_folders,
@@ -424,6 +434,13 @@ pub fn run() {
             commands::library::list_asset_tags,
             commands::library::set_asset_tags,
             commands::library::reclassify_all,
+            commands::local_classification::local_classification_status,
+            commands::local_classification::local_classification_start,
+            commands::local_classification::local_classification_stop,
+            commands::local_classification::local_classification_enable,
+            commands::local_classification::local_classification_labels,
+            commands::local_classification::local_classification_save_label,
+            commands::local_classification::local_classification_example,
             commands::library::palette_overview,
             commands::library::list_assets_by_color,
             commands::library::recompute_colors,
@@ -444,6 +461,7 @@ pub fn run() {
             commands::codex::cancel_codex_create,
             commands::codex::list_gen_jobs,
             commands::codex::jimeng_retrieve_orphan,
+            commands::codex::recover_cloud_video,
             commands::codex::recent_gen_sessions,
             commands::codex::dismiss_gen_job,
             commands::codex::open_codex_session,

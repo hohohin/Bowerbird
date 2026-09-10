@@ -1,3 +1,4 @@
+import { parseTaskAuthorization, taskAuthorizationCallCount, type TaskAuthorization } from "./task-authorization.ts";
 import {
   creditsForAgentUsage,
   type AgentUsagePricing,
@@ -66,6 +67,7 @@ type UnifiedAgentPlanBase = {
 };
 
 export type UnifiedAgentPlan =
+  | TaskAuthorization
   | (UnifiedAgentPlanBase & { schemaVersion: 1 })
   | (UnifiedAgentPlanBase & { schemaVersion: 2; contentPlan: UnifiedAgentPlanContent });
 
@@ -141,10 +143,10 @@ const MISSING_DECISIONS = new Set(["generate", "reuse_existing", "not_needed"]);
 
 function parseContentPlan(value: unknown, steps: UnifiedAgentPlanStep[]): UnifiedAgentPlanContent {
   const content = exactRecord(value, ["assetAssignments", "informationArchitecture", "missingAssets", "visualProfile"]);
-  if (!Array.isArray(content.assetAssignments) || !content.assetAssignments.length ||
+  if (!Array.isArray(content.assetAssignments) ||
       content.assetAssignments.length > UNIFIED_AGENT_PLAN_COST_POLICY_V1.maxAssets ||
       !Array.isArray(content.informationArchitecture) || !content.informationArchitecture.length ||
-      content.informationArchitecture.length > UNIFIED_AGENT_PLAN_COST_POLICY_V1.maxSteps ||
+      content.informationArchitecture.length > 64 ||
       !Array.isArray(content.missingAssets) ||
       content.missingAssets.length > UNIFIED_AGENT_PLAN_COST_POLICY_V1.maxSteps) {
     throw new Error("unified_plan_invalid");
@@ -222,6 +224,7 @@ function parseContentPlan(value: unknown, steps: UnifiedAgentPlanStep[]): Unifie
 
 /** Edge 与 Worker Gateway 都以此闭集形状为准；未知字段（含 credits/runId/callId/URL）直接拒绝。 */
 export function parseUnifiedAgentPlan(value: unknown): UnifiedAgentPlan {
+  if ((value as { schemaVersion?: unknown } | null)?.schemaVersion === 3) return parseTaskAuthorization(value);
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("unified_plan_invalid");
   const schemaVersion = (value as JsonRecord).schemaVersion;
   const plan = exactRecord(value, schemaVersion === 2
@@ -280,7 +283,7 @@ export function estimateUnifiedAgentPlanCredits(
 ): UnifiedAgentPlanEstimate {
   const plan = parseUnifiedAgentPlan(planValue);
   const policy = UNIFIED_AGENT_PLAN_COST_POLICY_V1;
-  const modelTurns = plan.steps.length * policy.modelTurnsPerStep;
+  const modelTurns = plan.schemaVersion === 3 ? plan.modelTurns : plan.steps.length * policy.modelTurnsPerStep;
   const modelCreditsPerTurn = creditsForAgentUsage({
     callId: "planned-model-turn",
     kind: "model_tokens",
@@ -295,7 +298,7 @@ export function estimateUnifiedAgentPlanCredits(
   let visionCalls = 0;
   let imageCalls = 0;
   let htmlRenderCalls = 0;
-  for (const step of plan.steps) {
+  for (const step of plan.schemaVersion === 3 ? plan.capabilities.flatMap((item) => Array.from({ length: item.maxCalls }, () => ({ kind: item.tool }))) : plan.steps) {
     if (step.kind === "understand_asset" || step.kind === "inspect_artifact") visionCalls++;
     if (step.kind === "generate_image") imageCalls++;
     if (step.kind === "render_html") htmlRenderCalls++;
@@ -372,4 +375,11 @@ function canonicalJson(value: unknown): string {
 async function sha256Hex(value: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+export function unifiedApprovalCallCount(plan: UnifiedAgentPlan): number {
+  return plan.schemaVersion === 3 ? taskAuthorizationCallCount(plan) : plan.steps.length;
+}
+export function unifiedApprovalAssetIds(plan: UnifiedAgentPlan): string[] {
+  return plan.schemaVersion === 3 ? plan.assetIds : plan.steps.flatMap((step) => step.inputAssetIds);
 }

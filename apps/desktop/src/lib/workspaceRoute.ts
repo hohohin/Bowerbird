@@ -30,8 +30,8 @@ export function resolveWorkspaceProjectId(
 }
 
 /** The project composer and an execution detail editor must never consume global editor events together. */
-export function shouldMountProjectComposer(loading: boolean, inspectorOpen: boolean): boolean {
-  return !loading && !inspectorOpen;
+export function shouldMountProjectComposer(loading: boolean, executionEditing: boolean): boolean {
+  return !loading && !executionEditing;
 }
 
 /** Async work may finish after the user starts leaving its workspace. It can

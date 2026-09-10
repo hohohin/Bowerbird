@@ -1,10 +1,28 @@
 import { equal, rejects } from "node:assert/strict";
 import { test } from "node:test";
+import { DurableProviderError } from "../kernel/durable-tool-dispatcher.ts";
 
 import type { ToolGatewayDefinition } from "./scoped-tool-gateway.ts";
 import { UnifiedHtmlExecutionToolBridge } from "./unified-html-execution-tool-bridge.ts";
 
 const approvedPlanHash = "b".repeat(64);
+
+test("HTML failure retains the renderer error instead of masking it as incomplete", async () => {
+  const bridge = new UnifiedHtmlExecutionToolBridge({
+    runId: "run-error", leaseId: "lease-error", approvedPlanHash,
+    composeSlot: 0, renderSlot: 1, finalizeSlot: 2,
+    composeDefinition: definition("compose_html", { artifactId: "html" }),
+    createRenderDefinition() {
+      const tool = definition("render_html", {});
+      tool.dispatcher.dispatch = async () => { throw new DurableProviderError("terminal", "render_html_unsafe"); };
+      return tool;
+    },
+    createFinalizeDefinition: () => definition("finalize_output", {}),
+  });
+  await bridge.dispatch({ toolName: "compose_html", arguments: {} });
+  await rejects(() => bridge.dispatch({ toolName: "render_html", arguments: {} }), /render_html_unsafe/);
+  equal(bridge.lastErrorCode, "render_html_unsafe");
+});
 
 function definition(name: "compose_html" | "render_html" | "inspect_artifact" | "compose_xiaohongshu" | "finalize_output", value: unknown): ToolGatewayDefinition {
   return {

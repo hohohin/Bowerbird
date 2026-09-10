@@ -5,13 +5,16 @@ import { Slice, Fragment } from "prosemirror-model";
 import type { Node as PmNode, ResolvedPos } from "prosemirror-model";
 import { useStore } from "../../store";
 import { api } from "../../lib/api";
+import type { CreativePromptLoad } from "../../lib/creativeLaunch";
 import type { CaptionSection, PromptedAsset } from "../../lib/types";
 import { creationSchema, imageAttrs } from "./schema";
 import { agentPromptReferencesFromDoc, graphSourcesFromDoc, serializeDoc } from "./serialize";
 import { parsePromptToDoc, parsePromptToInline } from "./parse";
 import { buildPlugins } from "./plugins";
 
+export type BoardAssetPick = string | { assetId: string; canvasNodeId?: string | null };
 export const BOARD_ASSET_PICK_EVENT = "bowerbird://board-asset-picked";
+export const BOARD_PROMPT_LOADED_EVENT = "bowerbird://board-prompt-loaded";
 const LOAD_EVENT = "bowerbird://board-load-prompt";
 // 图片标注「插入创作板（不入库）」：detail = 完整 PromptedAsset（临时文件 + 「标注」维度），
 // 走 extraAssets 旁路（不在 s.assets / promptedAssets 里），随草稿 refs 持久化。
@@ -32,7 +35,7 @@ function initialDoc(empty = false) {
 // EditorView 销毁。把 doc 序列化进 localStorage（跨会话也保留），重挂载时 nodeFromJSON
 // 恢复 —— 保真保留 image/keyword chip（而非展开成纯文本，那样维度 token 会降级）。
 const BOARD_DRAFT_KEY = "bowerbird.boardDraft";
-export type CreationEditorDraft = { doc: unknown; refs: PromptedAsset[] };
+export type CreationEditorDraft = { doc: unknown; refs: PromptedAsset[]; generation?: import("../../lib/videoGeneration").GenerationSettings };
 function loadDraft(key: string): CreationEditorDraft | null {
   try {
     const raw = localStorage.getItem(key);
@@ -73,7 +76,12 @@ function refreshDraftImageAttrs(value: unknown, assets: Map<string, PromptedAsse
     const assetId = typeof attrs.assetId === "string" ? attrs.assetId : "";
     refreshed.attrs = {
       ...attrs,
-      ...imageAttrs(assetId, assets.get(assetId), attrs.silent === true),
+      ...imageAttrs(
+        assetId,
+        assets.get(assetId),
+        attrs.silent === true,
+        typeof attrs.canvasNodeId === "string" ? attrs.canvasNodeId : null,
+      ),
     };
   }
   return refreshed;
@@ -110,6 +118,7 @@ export function useCreationEditor(opts?: {
   const extraAssetsRef = useRef(extraAssets);
   extraAssetsRef.current = extraAssets;
 
+  const loadPromptRef = useRef<(request: CreativePromptLoad) => boolean>(() => false);
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const flushDraftRef = useRef<() => void>(() => {});
@@ -247,7 +256,12 @@ export function useCreationEditor(opts?: {
             if (asset) {
               tr = tr.setNodeMarkup(pos, undefined, {
                 ...node.attrs,
-                ...imageAttrs(asset.id, asset, node.attrs.silent === true),
+                ...imageAttrs(
+                  asset.id,
+                  asset,
+                  node.attrs.silent === true,
+                  typeof node.attrs.canvasNodeId === "string" ? node.attrs.canvasNodeId : null,
+                ),
               });
             }
             return true;
@@ -258,7 +272,10 @@ export function useCreationEditor(opts?: {
     }
 
     function onPick(e: Event) {
-      const assetId = (e as CustomEvent<string>).detail;
+      const detail = (e as CustomEvent<BoardAssetPick>).detail;
+      const assetId = typeof detail === "string" ? detail : detail?.assetId;
+      const canvasNodeId = typeof detail === "string" ? null : detail?.canvasNodeId ?? null;
+      if (!assetId) return;
       const asset = assetByIdRef.current.get(assetId);
       const v = viewRef.current;
       if (!v) return;
@@ -276,7 +293,7 @@ export function useCreationEditor(opts?: {
             view.dispatch(
               view.state.tr
                 .replaceSelectionWith(
-                  view.state.schema.nodes.image.create(imageAttrs(assetId, fetched, false))
+                  view.state.schema.nodes.image.create(imageAttrs(assetId, fetched, false, canvasNodeId))
                 )
                 .scrollIntoView()
             );
@@ -285,7 +302,7 @@ export function useCreationEditor(opts?: {
           .catch(console.error);
         return;
       }
-      const node = v.state.schema.nodes.image.create(imageAttrs(assetId, asset, false));
+      const node = v.state.schema.nodes.image.create(imageAttrs(assetId, asset, false, canvasNodeId));
       v.dispatch(v.state.tr.replaceSelectionWith(node).scrollIntoView());
       v.focus();
     }
@@ -319,15 +336,10 @@ export function useCreationEditor(opts?: {
       scheduleSave();
     }
 
-    function onLoad(e: Event) {
-      const detail = (e as CustomEvent<{
-        prompt: string;
-        refs: PromptedAsset[];
-        dimRefs?: PromptedAsset[];
-      }>).detail;
-      if (!detail || typeof detail.prompt !== "string") return;
+    function applyPromptLoad(detail: CreativePromptLoad) {
+      if (!detail || typeof detail.prompt !== "string") return false;
       const body = detail.prompt.trim();
-      if (!body) return;
+      if (!body) return false;
       const refAssets: PromptedAsset[] = (detail.refs ?? []).map((a) => ({ ...a }));
       // 借用维度源图（复用 sidecar）：随草稿 refs 一起进 extraAssets（车牌寻址要能查到资产），
       // 但不进 parse 的 refs（不作为 silent 参考图还原）——图本来就没被发送。
@@ -335,14 +347,21 @@ export function useCreationEditor(opts?: {
       setExtraAssets([...refAssets, ...dimRefs]);
       // 传 assetByIdRef.current（含已反推图的 sections）；parsePromptToDoc 内部按「只补充」并入 refs，
       // 不让 refs（无 sections）覆盖已反推图，以保证【维度】能按 sections 精确匹配 fragment。
-      const doc = parsePromptToDoc(body, refAssets, assetByIdRef.current, undefined, dimRefs);
+      const doc = parsePromptToDoc(body, refAssets, assetByIdRef.current, undefined, dimRefs, detail.referenceNodeIds);
       const v = viewRef.current;
-      if (!v) return;
+      if (!v) return false;
       v.updateState(EditorState.create({ doc, plugins: v.state.plugins }));
       setTick((t) => t + 1);
       scheduleSave();
       setTimeout(() => v.focus(), 0);
+      return true;
     }
+
+    function onLoad(e: Event) {
+      const detail = (e as CustomEvent<CreativePromptLoad>).detail;
+      applyPromptLoad(detail);
+    }
+    loadPromptRef.current = applyPromptLoad;
 
     function onAppendText(e: Event) {
       const text = (e as CustomEvent<string>).detail;
@@ -383,6 +402,7 @@ export function useCreationEditor(opts?: {
       if (draftKey) saveDraft(draftKey, view.state.doc.toJSON(), extraAssetsRef.current);
       if (draftDirty) opts?.onDraftChange?.({ doc: view.state.doc.toJSON(), refs: extraAssetsRef.current });
       flushDraftRef.current = () => {};
+      loadPromptRef.current = () => false;
       view.destroy();
       viewRef.current = null;
     };
@@ -395,6 +415,7 @@ export function useCreationEditor(opts?: {
       return {
         finalPrompt: "",
         references: [] as PromptedAsset[],
+        referenceNodeIds: [] as Array<string | null>,
         dimensionSources: [] as PromptedAsset[],
       };
     return serializeDoc(doc, assetByIdRef.current);
@@ -423,6 +444,7 @@ export function useCreationEditor(opts?: {
 
   const focus = useCallback(() => viewRef.current?.focus(), []);
   const flushDraft = useCallback(() => flushDraftRef.current(), []);
+  const loadPrompt = useCallback((request: CreativePromptLoad) => loadPromptRef.current(request), []);
 
   // 环点扇区待插的维度：板已开 → 本 effect 即时插；板未开点扇区 → store 先开板再挂载本 hook，
   // 挂载 commit 内本 effect 排在建 view 的 effect 之后运行，同样能消费。
@@ -478,9 +500,11 @@ export function useCreationEditor(opts?: {
     hostRef,
     focus,
     flushDraft,
+    loadPrompt,
     finalPrompt: serialized.finalPrompt,
     rawPrompt,
     references: serialized.references,
+    referenceNodeIds: serialized.referenceNodeIds,
     dimensionSources: serialized.dimensionSources,
     graphSources,
     agentPromptReferences,

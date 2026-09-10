@@ -102,7 +102,7 @@ test("aggregateDraft derives rules, themes and directions with provenance only f
   }
 });
 
-test("aggregateDraft reports conflict instead of rule when split and derives two directions", () => {
+test("aggregateDraft preserves selectable rules for two distinct directions", () => {
   // 3:3 平分 → 主导 <60% 且次势力 ≥25% → 冲突而非规则
   const facts = [
     ...CARDS.slice(0, 3).map((c) => ({ category: "palette", value: "暗调", assetIds: [c.assetId] })),
@@ -111,9 +111,24 @@ test("aggregateDraft reports conflict instead of rule when split and derives two
     ...CARDS.slice(3).map((c) => ({ category: "mood", value: "明快", assetIds: [c.assetId] })),
   ];
   const draft = aggregateDraft(CARDS, [{ facts, themes: [] }]);
-  ok(draft.visualRules.every((rule) => rule.category !== "palette"));
+  equal(draft.visualRules.filter((rule) => rule.category === "palette").length, 2);
   equal(draft.conflicts.length, 2); // palette 与 mood 各一处
   equal(draft.candidateDirections.length, 2);
+});
+
+test("brand synthesis counts independent images and keeps complementary traits", () => {
+  const ids = CARDS.map((c) => c.assetId);
+  const draft = aggregateDraft(CARDS, [{ facts: [
+    { category: "composition", value: "充足留白", assetIds: ids },
+    { category: "composition", value: "清晰层级", assetIds: ids },
+    ...Array.from({ length: 10 }, () => ({ category: "palette", value: "仅一张鲜红", assetIds: [ids[0]!] })),
+  ], themes: [] }]);
+  equal(draft.visualRules.filter((r) => r.category === "composition").length, 2);
+  ok(!draft.visualRules.some((r) => r.category === "palette"));
+  ok(draft.visualRules.every((r) => r.confidence <= 1));
+  ok(draft.visualRules.every((r) => r.opposingAssetIds.length === 0));
+  ok(draft.summary.includes("充足留白") || draft.summary.includes("清晰层级"));
+  ok(!draft.summary.includes("有效反推"));
 });
 
 test("extractVisualDraft batches all cards, tolerates one bad json reply, and outputs draft json", async () => {

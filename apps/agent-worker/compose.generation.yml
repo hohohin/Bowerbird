@@ -10,6 +10,10 @@ services:
     init: true
     env_file:
       - .env.generation
+    environment:
+      BOWERBIRD_BRAND_PROMPT_DIR: /app/brand-prompts
+    volumes:
+      - ./src/prompts/brand-visual:/app/brand-prompts:ro
     read_only: true
     tmpfs:
       - /tmp:size=64m,mode=1777

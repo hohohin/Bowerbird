@@ -2,8 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Toolbar } from "./components/Toolbar";
 import { Sidebar } from "./components/Sidebar";
-import { MasonryGrid } from "./components/MasonryGrid";
-import { CanvasWorkspace, type CreativeLaunchRequest } from "./components/CanvasWorkspace";
+import { LibraryHome } from "./components/LibraryHome";
+import { CanvasWorkspace } from "./components/CanvasWorkspace";
 import { AssetDetail } from "./components/AssetDetail";
 import { AssetContextMenu } from "./components/AssetContextMenu";
 import { ProjectContextMenu } from "./components/ProjectContextMenu";
@@ -12,6 +12,7 @@ import { ImageAnnotator } from "./components/ImageAnnotator";
 import { CaptionRing } from "./components/creation/CaptionRing";
 import { DescribeProviderPicker } from "./components/DescribeProviderPicker";
 import { BatchBar } from "./components/BatchBar";
+import { CollectionAddMode } from "./components/CollectionAddMode";
 import { AGENT_DS_DONE_EVENT } from "./components/CreationBoard";
 import { APPEND_TEXT_EVENT } from "./components/creation/useCreationEditor";
 import { GenerationPanel } from "./components/GenerationPanel";
@@ -28,7 +29,11 @@ import { ToastViewport } from "./components/ToastViewport";
 import { useStore } from "./store";
 import { api } from "./lib/api";
 import { notify, notifyError, notifySuccess } from "./lib/notify";
-import { creativeLaunchAssetIds, creativeLaunchTargetsProject } from "./lib/creativeLaunch";
+import {
+  creativeLaunchAssetIds,
+  creativeLaunchTargetsProject,
+  type CreativeLaunchRequest,
+} from "./lib/creativeLaunch";
 import { resolveProjectInspectorPlacement } from "./lib/projectInspector";
 import {
   isWorkspaceOperationCurrent,
@@ -82,6 +87,7 @@ function App() {
   const searchQuery = useStore((s) => s.searchQuery);
   const smartFilter = useStore((s) => s.smartFilter);
   const mode = useStore((s) => s.mode);
+  const collectionAddTargetId = useStore((s) => s.collectionAddTargetId);
   const detailAssetId = useStore((s) => s.detailAssetId);
   const boardOpen = useStore((s) => s.boardOpen);
   const genEditing = useStore((s) => s.genEditing);
@@ -103,6 +109,9 @@ function App() {
   const setCloudError = useStore((s) => s.setCloudError);
   const creativeNavigation = useStore((s) => s.creativeNavigation);
   const clearCreativeNavigation = useStore((s) => s.clearCreativeNavigation);
+  const pendingCreativeReuse = useStore((s) => s.pendingCreativeReuse);
+  const ackPendingCreativeReuse = useStore((s) => s.ackPendingCreativeReuse);
+  const cancelPendingCreativeReuse = useStore((s) => s.cancelPendingCreativeReuse);
   const activeProjectIsProvisional = projects.find((project) => project.id === activeProjectId)?.provisional === true;
   const workspaceProjectId = resolveWorkspaceProjectId(activeProjectId, projects);
   const projectWorkspaceActive = workspaceProjectId !== null;
@@ -147,6 +156,49 @@ function App() {
       cancelled = true;
     };
   }, [creativeNavigation, clearCreativeNavigation]);
+
+  useEffect(() => {
+    if (!pendingCreativeReuse) return;
+    let cancelled = false;
+    const request = pendingCreativeReuse;
+    void (async () => {
+      try {
+        let targetProjectId = request.targetProjectId;
+        const state = useStore.getState();
+        if (targetProjectId) {
+          await state.enterProject(targetProjectId);
+        } else {
+          targetProjectId = await state.beginProvisionalProject();
+        }
+        if (cancelled || useStore.getState().pendingCreativeReuse?.id !== request.id) return;
+        const route = useStore.getState();
+        if (!isWorkspaceOperationCurrent(
+          targetProjectId,
+          route.activeProjectId,
+          route.projectRoutePending,
+        )) {
+          throw new Error("复用目标项目已变化");
+        }
+        setCreativeLaunch({
+          id: request.id,
+          projectId: targetProjectId,
+          assetIds: [],
+          promptLoad: request.promptLoad,
+        });
+        setCreativeTarget(null);
+        if (route.mode === "manage") route.exitManage();
+        ackPendingCreativeReuse(request.id);
+      } catch (error) {
+        if (cancelled || useStore.getState().pendingCreativeReuse?.id !== request.id) return;
+        console.error("creative prompt reuse routing failed", error);
+        cancelPendingCreativeReuse(request.id);
+        notifyError(error, "无法打开复用提示词的创作项目");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [pendingCreativeReuse, ackPendingCreativeReuse, cancelPendingCreativeReuse]);
 
   useEffect(() => {
     if (!shouldDiscardCreativeTarget(creativeTarget, activeProjectId, creativeNavigation)) return;
@@ -228,27 +280,39 @@ function App() {
       && !initial.colorFilter
       && !initial.smartFilter;
     try {
-      const [assets, total] = await Promise.all([
-        pickAll
-          ? api.listAssets(undefined, assetProjectId)
-          : initial.searchQuery
-            ? api.searchAssets(initial.searchQuery, assetProjectId)
-            : initial.smartFilter
-              ? api.listAssetsSmart(initial.smartFilter, assetProjectId)
-              : initial.currentCollectionId
-                ? api.listAssetsByCollection(initial.currentCollectionId, assetProjectId)
-                : initial.colorFilter
-                  ? api.listAssetsByColor(
-                      initial.colorFilter,
-                      initial.currentFolderId ?? undefined,
-                      assetProjectId
-                    )
-                  : api.listAssets(initial.currentFolderId ?? undefined, assetProjectId),
-        api.countAssets(assetProjectId),
-      ]);
-      if (!isCurrentRefresh()) return;
-      setAssets(assets);
-      setTotal(total);
+      if (!expectedProjectId) {
+        const view = await api.listLibraryView({
+          search: initial.searchQuery,
+          smart: initial.smartFilter,
+          folderId: initial.currentFolderId,
+          collectionId: initial.currentCollectionId,
+          color: initial.colorFilter,
+        });
+        if (!isCurrentRefresh()) return;
+        useStore.setState({ assets: view.assets, total: view.total, libraryMemberships: view.memberships });
+      } else {
+        const [assets, total] = await Promise.all([
+          pickAll
+            ? api.listAssets(undefined, assetProjectId)
+            : initial.searchQuery
+              ? api.searchAssets(initial.searchQuery, assetProjectId)
+              : initial.smartFilter
+                ? api.listAssetsSmart(initial.smartFilter, assetProjectId)
+                : initial.currentCollectionId
+                  ? api.listAssetsByCollection(initial.currentCollectionId, assetProjectId)
+                  : initial.colorFilter
+                    ? api.listAssetsByColor(
+                        initial.colorFilter,
+                        initial.currentFolderId ?? undefined,
+                        assetProjectId
+                      )
+                    : api.listAssets(initial.currentFolderId ?? undefined, assetProjectId),
+          api.countAssets(assetProjectId),
+        ]);
+        if (!isCurrentRefresh()) return;
+        setAssets(assets);
+        setTotal(total);
+      }
       // promptedAssets 无条件拉取：对话框常驻（未激活也可能有草稿 chip），序列化/维度环
       // 随时要 caption/sections，不能只在创作模式激活时才有。
       const prompted = await api.listPromptedAssets(assetProjectId);
@@ -581,6 +645,7 @@ function App() {
   // 焦点在 input/textarea/contenteditable（搜索框/创作板 ProseMirror）时不拦截，让正常文本/图片粘贴。
   useEffect(() => {
     function onPaste(e: ClipboardEvent) {
+      if (e.defaultPrevented || useStore.getState().collectionPanelId) return;
       const items = e.clipboardData?.items;
       if (!items) return;
       let imageFile: File | null = null;
@@ -771,7 +836,7 @@ function App() {
       <div className="app-shell-hatch" aria-hidden="true"><span /></div>
       <div className="relative flex flex-1 overflow-hidden">
         <Sidebar />
-        <main className="app-workspace flex flex-1 flex-col overflow-hidden bg-canvas">
+        <main className="app-workspace relative flex flex-1 flex-col overflow-hidden bg-canvas">
           {projectWorkspaceActive ? (
             initializing ? <LibraryLoadingState /> : (
               <CanvasWorkspace
@@ -788,20 +853,20 @@ function App() {
             )
           ) : (
             <>
-              {mode === "manage" && <BatchBar />}
-              <div className="relative flex-1 overflow-hidden">
+              {mode === "manage" && !collectionAddTargetId && <BatchBar />}
+              <div className={`relative flex-1 overflow-hidden ${collectionAddTargetId ? "collection-add-workspace" : ""}`}>
                 {initializing ? (
                   <LibraryLoadingState />
-                ) : sourceBrowserUrl ? (
+                ) : sourceBrowserUrl && !collectionAddTargetId ? (
                   <SourceBrowserPanel url={sourceBrowserUrl} onClose={() => setSourceBrowserUrl(null)} />
                 ) : showDetail ? (
                   <AssetDetail onExploreSource={setSourceBrowserUrl} />
                 ) : (
-                  <MasonryGrid />
+                  <LibraryHome />
                 )}
                 {/* 生成结果面板：主区覆盖层（像详情页） */}
-                {!sourceBrowserUrl && legacyInspectorOpen && activeSessionKind === "generation" && <GenerationPanel readOnly />}
-                {!sourceBrowserUrl && legacyInspectorOpen && activeSessionKind === "agent" && <CloudAgentSession readOnly />}
+                {!collectionAddTargetId && !sourceBrowserUrl && legacyInspectorOpen && activeSessionKind === "generation" && <GenerationPanel readOnly />}
+                {!collectionAddTargetId && !sourceBrowserUrl && legacyInspectorOpen && activeSessionKind === "agent" && <CloudAgentSession readOnly />}
                 {/* 创作模式视觉标记：瀑布流区品牌蓝线框 + 顶部居中刘海「创作模式」。
                     仅在挑图面（瀑布流）实际可见时呈现：被会话面板/详情页盖住时不显示。 */}
                 {!sourceBrowserUrl && boardOpen && !genEditing && !genPanelOpen && !showDetail && (
@@ -821,6 +886,7 @@ function App() {
               </div>
             </>
           )}
+          <CollectionAddMode />
         </main>
       </div>
     </div>

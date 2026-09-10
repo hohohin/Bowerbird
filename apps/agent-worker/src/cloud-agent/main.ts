@@ -36,8 +36,8 @@ function requiredUnifiedPath(env: Record<string, string | undefined>, name: stri
 }
 
 const UNIFIED_DSH_MODEL = "deepseek-v4-flash";
-export const UNIFIED_DSH_PROMPT_TIMEOUT_MS = 180_000;
-export const UNIFIED_DSH_HTML_EXECUTION_TIMEOUT_MS = 360_000;
+export const UNIFIED_DSH_PROMPT_TIMEOUT_MS = 600_000;
+export const UNIFIED_DSH_HTML_EXECUTION_TIMEOUT_MS = 600_000;
 
 function dshDeepSeekConfig(
   env: Record<string, string | undefined>,
@@ -100,7 +100,7 @@ export function unifiedPlanningProcessorFromEnv(
         },
       },
     } : {}),
-    createAdapter(childEnvironment, providerEnvironment) {
+    createAdapter(childEnvironment, providerEnvironment, activity) {
       if (!providerEnvironment) throw new Error("dsh_model_proxy_environment_missing");
       return new DshAcpHarnessAdapter({
         cwd: runtimeRoot,
@@ -111,6 +111,7 @@ export function unifiedPlanningProcessorFromEnv(
           providerEnvironment,
           parentEnvironment: env,
           timeoutMs: UNIFIED_DSH_PROMPT_TIMEOUT_MS,
+          activity,
         }),
       });
     },

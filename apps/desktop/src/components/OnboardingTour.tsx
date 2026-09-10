@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { ArrowRight, Sparkles } from "lucide-react";
 import { useStore } from "../store";
 import { ModalShell } from "./ModalShell";
+import { BOARD_PROMPT_LOADED_EVENT } from "./creation/useCreationEditor";
 
 type StepDef = { title?: string; body: string | ReactNode; side?: "below" | "right" };
 
@@ -274,14 +275,13 @@ export function OnboardingTour() {
     }
   }, [tourActive, tourStep, contextMenu, assets, setTourStep]);
 
-  // step 5 → 6：点「复用生成提示词」→ reusePromptToBoard 派发 board-load-prompt
-  // （创作板常驻后 boardOpen 恒 true，不能再拿它当「已复用」信号；引导期该事件只可能
-  // 来自右键菜单的复用入口）。
+  // step 5 → 6：目标项目的创作器实际载入 prompt 后推进；不能拿请求发起或 boardOpen
+  // 当完成信号，否则跨素材库新建项目时 UI 尚未挂载就会提前进入下一步。
   useEffect(() => {
     if (!tourActive || tourStep !== 5) return;
     const onLoad = () => setTourStep(6);
-    window.addEventListener("bowerbird://board-load-prompt", onLoad);
-    return () => window.removeEventListener("bowerbird://board-load-prompt", onLoad);
+    window.addEventListener(BOARD_PROMPT_LOADED_EVENT, onLoad);
+    return () => window.removeEventListener(BOARD_PROMPT_LOADED_EVENT, onLoad);
   }, [tourActive, tourStep, setTourStep]);
 
   // step 7 → 8：用户真实点击编辑框（onClick={focus}）。

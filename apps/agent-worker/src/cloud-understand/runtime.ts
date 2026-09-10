@@ -1,3 +1,4 @@
+import { BRAND_OBSERVATION_TASK, loadBrandPrompt } from "../prompts/brand-visual.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { IdlePollBackoff } from "../idle-poll-backoff.ts";
 
@@ -106,6 +107,10 @@ export function configFromEnv(env: Record<string, string | undefined>): Understa
 
 /** 与 Edge _shared/ark.ts visionPrompt 同源的兜底指令；桌面端始终显式传 instruction。 */
 export function visionPrompt(input: UnderstandInput): string {
+  if (input.instruction?.trim() === BRAND_OBSERVATION_TASK) {
+    if (input.operation !== "caption" || !input.image) throw new Error("brand_observation_image_required");
+    return loadBrandPrompt("observation");
+  }
   if (input.instruction?.trim()) return input.instruction.trim();
   if (input.operation === "autoname") {
     return "请看图并严格回复两行：第一行是 8 个汉字以内的图片名称；第二行是图片描述。";
@@ -285,6 +290,8 @@ async function executeClaim(
   let submitted = false;
   try {
     const input = await fetchInput(fetchImpl, claimed.inputUrl, inputManifestHash);
+    // Resolve once before submission; retries use the same prompt even during maintenance.
+    input.instruction = visionPrompt(input);
     await control.post({ action: "submitted", jobId, leaseId });
     submitted = true;
     const resultText = await ark.understand(input);

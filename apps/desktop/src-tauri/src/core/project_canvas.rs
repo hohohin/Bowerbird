@@ -104,6 +104,7 @@ pub struct ProjectGenerationTurnInput {
     pub ratio: Option<String>,
     pub visual_profile: Option<VisualProfileRefV1>,
     pub references: Vec<String>,
+    pub reference_node_ids: Vec<Option<String>>,
     pub parent_node_id: Option<String>,
     pub parent_asset_path: Option<String>,
     pub relation: Option<crate::core::creative_session_contract::CreativeGenerationRelation>,
@@ -127,6 +128,8 @@ pub struct ProjectAgentLaunchInput {
     pub ratio: Option<String>,
     pub visual_profile: Option<VisualProfileRefV1>,
     pub reference_asset_ids: Vec<String>,
+    #[serde(default)]
+    pub reference_node_ids: Vec<Option<String>>,
     #[serde(default)]
     pub parent_node_id: Option<String>,
     #[serde(default)]
@@ -790,6 +793,67 @@ fn exact_visible_parent_node_tx(
     Ok(node)
 }
 
+fn exact_visible_reference_node_tx(
+    tx: &Transaction<'_>,
+    project_id: &str,
+    node_id: &str,
+    store_path: &str,
+) -> AppResult<CanvasNode> {
+    required(node_id, "reference node id")?;
+    let node = get_node_tx(tx, node_id)?
+        .ok_or_else(|| AppError::NotFound(format!("canvas reference node {node_id}")))?;
+    if node.project_id != project_id {
+        return Err(invalid(format!(
+            "reference node {node_id} belongs to another project"
+        )));
+    }
+    if node.hidden_at.is_some() {
+        return Err(AppError::NotFound(format!(
+            "visible canvas reference node {node_id}"
+        )));
+    }
+    if node.kind != CreativeNodeKind::Asset {
+        return Err(invalid(format!(
+            "reference node {node_id} must be an asset"
+        )));
+    }
+    let matches_path = if let Some(asset_id) = node.asset_id.as_deref() {
+        tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM assets WHERE id=?1 AND store_path=?2)",
+            params![asset_id, store_path],
+            |row| row.get::<_, bool>(0),
+        )?
+    } else {
+        false
+    };
+    if !matches_path {
+        return Err(invalid(format!(
+            "reference node {node_id} does not match reference asset path"
+        )));
+    }
+    Ok(node)
+}
+
+fn first_visible_reference_node_for_path_tx(
+    tx: &Transaction<'_>,
+    project_id: &str,
+    store_path: &str,
+) -> AppResult<Option<String>> {
+    let mut statement = tx.prepare(
+        "SELECT n.id FROM canvas_nodes n JOIN assets a ON a.id=n.asset_id
+         WHERE n.project_id=?1
+           AND n.kind='asset' AND n.hidden_at IS NULL
+           AND a.store_path=?2
+         ORDER BY n.created_at,n.id LIMIT 1",
+    )?;
+    let node_ids = statement
+        .query_map(params![project_id, store_path], |row| {
+            row.get::<_, String>(0)
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(node_ids.into_iter().next())
+}
+
 fn upsert_projection_node_tx(
     tx: &Transaction<'_>,
     value: &NewCanvasNode,
@@ -817,6 +881,22 @@ fn upsert_projection_node_tx(
             .ok_or_else(|| AppError::NotFound(format!("canvas node {}", value.id)));
     }
     insert_node_tx(tx, value, now)
+}
+
+// Reference ownership records its origin, not exclusive use. Only an input
+// edge may reuse a reference asset across threads within the same project.
+fn edge_threads_are_valid(value: &NewCanvasEdge, from: &CanvasNode, to: &CanvasNode) -> bool {
+    let shared_reference = value.kind == CreativeEdgeKind::Input
+        && from.kind == CreativeNodeKind::Asset;
+    (shared_reference
+        || from
+            .thread_id
+            .as_deref()
+            .is_none_or(|id| id == value.thread_id))
+        && to
+            .thread_id
+            .as_deref()
+            .is_none_or(|id| id == value.thread_id)
 }
 
 fn insert_projection_edge_tx(
@@ -852,8 +932,7 @@ fn insert_projection_edge_tx(
         .ok_or_else(|| AppError::NotFound(format!("canvas node {}", value.to_node_id)))?;
     if from.project_id != value.project_id
         || to.project_id != value.project_id
-        || from.thread_id.as_deref() != Some(value.thread_id.as_str())
-        || to.thread_id.as_deref() != Some(value.thread_id.as_str())
+        || !edge_threads_are_valid(value, &from, &to)
         || !edge_endpoints_are_valid(value.kind, from.kind, from.role, to.kind, to.role)
     {
         return Err(invalid("invalid project/thread projection edge"));
@@ -862,6 +941,155 @@ fn insert_projection_edge_tx(
         "INSERT INTO canvas_edges (id,project_id,thread_id,from_node_id,to_node_id,kind,ordinal,created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
         params![value.id, value.project_id, value.thread_id, value.from_node_id, value.to_node_id, edge_kind_sql(value.kind), value.ordinal, now],
     )?;
+    Ok(())
+}
+
+// New prompts use vertical free space beside their sources. Recovery never moves them.
+fn place_prompt_near_inputs_tx(
+    tx: &Transaction<'_>,
+    project_id: &str,
+    prompt_id: &str,
+    new_reference_ids: &[String],
+) -> AppResult<()> {
+    let excluded = serde_json::to_string(new_reference_ids)?;
+    let mut statement = tx.prepare(
+        "SELECT COALESCE(g.x,n.x),COALESCE(g.y,n.y),COALESCE(g.width,n.width)
+         FROM canvas_edges e JOIN canvas_nodes n ON n.id=e.from_node_id
+         LEFT JOIN canvas_group_items i ON i.node_id=n.id
+         LEFT JOIN canvas_groups g ON g.id=i.group_id
+         WHERE e.to_node_id=?1 AND n.hidden_at IS NULL
+           AND n.id NOT IN (SELECT value FROM json_each(?2))",
+    )?;
+    let sources = statement
+        .query_map(params![prompt_id, excluded], |row| {
+            Ok((
+                row.get::<_, f64>(0)?,
+                row.get::<_, f64>(1)?,
+                row.get::<_, f64>(2)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    if sources.is_empty() {
+        return Ok(());
+    }
+    let x = sources
+        .iter()
+        .map(|(x, _, w)| x + w)
+        .fold(f64::NEG_INFINITY, f64::max)
+        + 72.0;
+    let mut y = sources
+        .iter()
+        .map(|(_, y, _)| *y)
+        .fold(f64::INFINITY, f64::min);
+    // Include room for the execution card to the right and use group bounds for members.
+    loop {
+        let bottom: Option<f64> = tx.query_row(
+            "SELECT MAX(y+height) FROM (
+                SELECT x,y,width,height FROM canvas_nodes WHERE project_id=?1 AND id<>?2 AND hidden_at IS NULL
+                  AND id NOT IN (SELECT value FROM json_each(?5))
+                  AND id NOT IN (SELECT node_id FROM canvas_group_items WHERE project_id=?1)
+                UNION ALL SELECT x,y,width,height FROM canvas_groups WHERE project_id=?1
+             ) WHERE x < ?3+620 AND x+width+32 > ?3 AND y < ?4+184 AND y+height+32 > ?4",
+            params![project_id,prompt_id,x,y,excluded], |row| row.get(0),
+        )?;
+        match bottom {
+            Some(bottom) => y = bottom + 40.0,
+            None => break,
+        }
+    }
+    tx.execute(
+        "UPDATE canvas_nodes SET x=?2,y=?3 WHERE id=?1",
+        params![prompt_id, x, y],
+    )?;
+    Ok(())
+}
+
+// Only nodes inserted by this transaction receive automatic reference layout.
+// Resolve the visible Agent card on replay; its launch prompt may have been moved separately.
+fn place_new_references_near_card_tx(
+    tx: &Transaction<'_>,
+    project_id: &str,
+    prompt_id: &str,
+    new_reference_ids: &[String],
+    agent: bool,
+) -> AppResult<()> {
+    if new_reference_ids.is_empty() {
+        return Ok(());
+    }
+    let prompt = get_node_tx(tx, prompt_id)?.ok_or_else(|| invalid("missing reference anchor"))?;
+    let group_id: Option<String> = if agent {
+        tx.query_row(
+            "SELECT n.id FROM canvas_edges e JOIN canvas_nodes n ON n.id=e.to_node_id
+             WHERE e.from_node_id=?1 AND n.project_id=?2 AND n.thread_id=?3
+               AND n.kind='agent_group' AND n.hidden_at IS NULL",
+            params![prompt_id, project_id, prompt.thread_id],
+            |row| row.get(0),
+        )
+        .optional()?
+    } else {
+        None
+    };
+    let (x, bottom) = if let Some(group_id) = group_id {
+        let group = get_node_tx(tx, &group_id)?.ok_or_else(|| invalid("missing Agent card"))?;
+        (group.x, group.y + group.height)
+    } else if agent {
+        // The first checkpoint creates the execution card at this exact offset.
+        (prompt.x + 332.0, prompt.y - 18.0 + 184.0)
+    } else {
+        (prompt.x, prompt.y + prompt.height)
+    };
+    let excluded = serde_json::to_string(new_reference_ids)?;
+    let mut statement = tx.prepare(
+        "SELECT x,y,width,height FROM canvas_nodes WHERE project_id=?1 AND hidden_at IS NULL
+           AND id NOT IN (SELECT value FROM json_each(?2))
+           AND id NOT IN (SELECT node_id FROM canvas_group_items WHERE project_id=?1)
+         UNION ALL SELECT x,y,width,height FROM canvas_groups WHERE project_id=?1",
+    )?;
+    let mut occupied = statement
+        .query_map(params![project_id, excluded], |row| {
+            Ok((
+                row.get::<_, f64>(0)?,
+                row.get::<_, f64>(1)?,
+                row.get::<_, f64>(2)?,
+                row.get::<_, f64>(3)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut column = 0;
+    let mut y = bottom + 40.0;
+    let mut row_height: f64 = 0.0;
+    for id in new_reference_ids {
+        let node = get_node_tx(tx, id)?.ok_or_else(|| invalid("missing new reference"))?;
+        let mut candidate_x = x + column as f64 * 230.0;
+        // Try three ordered slots per row, including existing groups as obstacles.
+        while occupied.iter().any(|(ox, oy, ow, oh)| {
+            candidate_x < ox + ow + 32.0
+                && candidate_x + node.width + 32.0 > *ox
+                && y < oy + oh + 32.0
+                && y + node.height + 32.0 > *oy
+        }) {
+            row_height = row_height.max(node.height);
+            column += 1;
+            if column == 3 {
+                column = 0;
+                y += row_height + 40.0;
+                row_height = 0.0;
+            }
+            candidate_x = x + column as f64 * 230.0;
+        }
+        tx.execute(
+            "UPDATE canvas_nodes SET x=?2,y=?3 WHERE id=?1",
+            params![id, candidate_x, y],
+        )?;
+        occupied.push((candidate_x, y, node.width, node.height));
+        row_height = row_height.max(node.height);
+        column += 1;
+        if column == 3 {
+            column = 0;
+            y += row_height + 40.0;
+            row_height = 0.0;
+        }
+    }
     Ok(())
 }
 
@@ -1319,6 +1547,30 @@ impl Database {
         Ok(updated)
     }
 
+    pub fn restore_canvas_node(
+        &self,
+        project_id: &str,
+        node_id: &str,
+    ) -> AppResult<Option<CanvasNode>> {
+        let now = Utc::now().timestamp();
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        let Some(node) = get_node_tx(&tx, node_id)? else {
+            return Ok(None);
+        };
+        if node.project_id != project_id {
+            return Err(invalid("restore node crosses projects"));
+        }
+        tx.execute(
+            "UPDATE canvas_nodes SET hidden_at=NULL,updated_at=?2 WHERE id=?1",
+            params![node_id, now],
+        )?;
+        touch_canvas_tx(&tx, project_id, now)?;
+        let restored = get_node_tx(&tx, node_id)?;
+        tx.commit()?;
+        Ok(restored)
+    }
+
     pub fn remove_canvas_node(&self, node_id: &str) -> AppResult<Option<CanvasNodeRemoval>> {
         let now = Utc::now().timestamp();
         let conn = self.conn.lock().unwrap();
@@ -1326,7 +1578,12 @@ impl Database {
         let Some(node) = get_node_tx(&tx, node_id)? else {
             return Ok(None);
         };
-        let removal = if node_is_execution_owned(&node) {
+        let referenced_by_execution: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM canvas_edges WHERE from_node_id=?1 OR to_node_id=?1)",
+            [node_id],
+            |row| row.get(0),
+        )?;
+        let removal = if node_is_execution_owned(&node) || referenced_by_execution {
             tx.execute(
                 "UPDATE canvas_nodes SET hidden_at=COALESCE(hidden_at,?2),updated_at=?2 WHERE id=?1",
                 params![node_id, now],
@@ -1475,11 +1732,7 @@ impl Database {
         if from.project_id != value.project_id || to.project_id != value.project_id {
             return Err(invalid("edge crosses projects"));
         }
-        if [from.thread_id.as_deref(), to.thread_id.as_deref()]
-            .into_iter()
-            .flatten()
-            .any(|thread_id| thread_id != value.thread_id)
-        {
+        if !edge_threads_are_valid(value, &from, &to) {
             return Err(invalid("edge crosses creative threads"));
         }
         if !edge_endpoints_are_valid(value.kind, from.kind, from.role, to.kind, to.role) {
@@ -1631,6 +1884,7 @@ impl Database {
         let prompt_x = max_right + 72.0;
         let prompt_y = 88.0;
         let prompt_node_id = projection_id("gen-prompt", &value.job_id, &value.turn_key, "0");
+        let new_prompt = get_node_tx(&tx, &prompt_node_id)?.is_none();
         let prompt_payload = serde_json::to_string(&PromptNodePayloadV1 {
             schema_version: 1,
             text: value.prompt.clone(),
@@ -1766,6 +2020,7 @@ impl Database {
         }
 
         let mut reference_node_ids = Vec::new();
+        let mut new_reference_ids = Vec::new();
         let mut seen = std::collections::HashSet::new();
         for (index, store_path) in value.references.iter().enumerate() {
             if !seen.insert(store_path.as_str())
@@ -1773,6 +2028,32 @@ impl Database {
             {
                 continue;
             }
+            let requested_node_id = value
+                .reference_node_ids
+                .get(index)
+                .and_then(|node_id| node_id.as_deref());
+            let existing_node_id = if let Some(node_id) = requested_node_id {
+                Some(
+                    exact_visible_reference_node_tx(&tx, &value.project_id, node_id, store_path)?
+                        .id,
+                )
+            } else {
+                // Once selected, replay retains this input even if another instance is added.
+                let source: Option<String> = tx.query_row(
+                    "SELECT e.from_node_id FROM canvas_edges e JOIN canvas_nodes n ON n.id=e.from_node_id
+                     JOIN assets a ON a.id=n.asset_id WHERE e.id=?1 AND n.project_id=?2 AND a.store_path=?3",
+                    params![projection_id("gen-edge", &value.job_id, &value.turn_key, &format!("input-{index}")), value.project_id, store_path],
+                    |row| row.get(0),
+                ).optional()?;
+                match source {
+                    Some(id) => Some(id),
+                    None => first_visible_reference_node_for_path_tx(
+                        &tx,
+                        &value.project_id,
+                        store_path,
+                    )?,
+                }
+            };
             let found = asset_snapshot_by_store_path_tx(&tx, store_path)?;
             let (asset_id, snapshot) = found.map_or_else(
                 || {
@@ -1791,41 +2072,49 @@ impl Database {
                 },
                 |(id, snapshot)| (Some(id), snapshot),
             );
-            let node_id = projection_id(
-                "gen-reference",
-                &value.job_id,
-                &value.turn_key,
-                &index.to_string(),
-            );
-            let payload = serde_json::to_string(&AssetNodePayloadV1 {
-                schema_version: 1,
-                snapshot: snapshot.clone(),
-                execution: Some(AssetExecutionRefV1 {
-                    job_id: Some(value.job_id.clone()),
-                    turn_key: Some(value.turn_key.clone()),
-                    run_id: None,
-                    artifact_id: None,
-                }),
-            })?;
-            upsert_projection_node_tx(
-                &tx,
-                &NewCanvasNode {
-                    id: node_id.clone(),
-                    project_id: value.project_id.clone(),
-                    thread_id: Some(value.thread_id.clone()),
-                    kind: CreativeNodeKind::Asset,
-                    asset_id,
-                    role: Some(CreativeNodeRole::Reference),
-                    payload_json: payload,
-                    x: (prompt_x - 230.0).max(24.0),
-                    y: prompt_y + index as f64 * 42.0,
-                    width: 190.0,
-                    height: asset_node_height(&snapshot),
-                    z_index: max_z + 2 + index as i64,
-                    position_locked: false,
-                },
-                now,
-            )?;
+            let node_id = if let Some(node_id) = existing_node_id {
+                node_id
+            } else {
+                let node_id = projection_id(
+                    "gen-reference",
+                    &value.job_id,
+                    &value.turn_key,
+                    &index.to_string(),
+                );
+                if get_node_tx(&tx, &node_id)?.is_none() {
+                    new_reference_ids.push(node_id.clone());
+                }
+                let payload = serde_json::to_string(&AssetNodePayloadV1 {
+                    schema_version: 1,
+                    snapshot: snapshot.clone(),
+                    execution: Some(AssetExecutionRefV1 {
+                        job_id: Some(value.job_id.clone()),
+                        turn_key: Some(value.turn_key.clone()),
+                        run_id: None,
+                        artifact_id: None,
+                    }),
+                })?;
+                upsert_projection_node_tx(
+                    &tx,
+                    &NewCanvasNode {
+                        id: node_id.clone(),
+                        project_id: value.project_id.clone(),
+                        thread_id: Some(value.thread_id.clone()),
+                        kind: CreativeNodeKind::Asset,
+                        asset_id,
+                        role: Some(CreativeNodeRole::Reference),
+                        payload_json: payload,
+                        x: (prompt_x - 230.0).max(24.0),
+                        y: prompt_y + index as f64 * 42.0,
+                        width: 190.0,
+                        height: asset_node_height(&snapshot),
+                        z_index: max_z + 2 + index as i64,
+                        position_locked: false,
+                    },
+                    now,
+                )?;
+                node_id
+            };
             insert_projection_edge_tx(
                 &tx,
                 &NewCanvasEdge {
@@ -1846,6 +2135,21 @@ impl Database {
             )?;
             reference_node_ids.push(node_id);
         }
+        if new_prompt {
+            place_prompt_near_inputs_tx(
+                &tx,
+                &value.project_id,
+                &prompt_node_id,
+                &new_reference_ids,
+            )?;
+        }
+        place_new_references_near_card_tx(
+            &tx,
+            &value.project_id,
+            &prompt_node_id,
+            &new_reference_ids,
+            false,
+        )?;
         tx.execute(
             "UPDATE creative_threads SET updated_at=?2 WHERE id=?1",
             params![value.thread_id, now],
@@ -1990,6 +2294,7 @@ impl Database {
         let prompt_x = max_right + 72.0;
         let prompt_y = 88.0;
         let prompt_node_id = projection_id("agent-prompt", &value.launch_id, "0", "0");
+        let new_prompt = get_node_tx(&tx, &prompt_node_id)?.is_none();
         upsert_projection_node_tx(
             &tx,
             &NewCanvasNode {
@@ -2065,6 +2370,7 @@ impl Database {
         }
 
         let mut reference_node_ids = Vec::new();
+        let mut new_reference_ids = Vec::new();
         let mut seen = std::collections::HashSet::new();
         for (index, asset_id) in value.reference_asset_ids.iter().enumerate() {
             if !seen.insert(asset_id.as_str()) || value.parent_asset_id.as_deref() == Some(asset_id)
@@ -2089,36 +2395,83 @@ impl Database {
                 )
                 .optional()?
                 .ok_or_else(|| AppError::NotFound(format!("asset {asset_id}")))?;
-            let node_id =
-                projection_id("agent-reference", &value.launch_id, "0", &index.to_string());
-            upsert_projection_node_tx(
-                &tx,
-                &NewCanvasNode {
-                    id: node_id.clone(),
-                    project_id: value.project_id.clone(),
-                    thread_id: Some(value.thread_id.clone()),
-                    kind: CreativeNodeKind::Asset,
-                    asset_id: Some(asset_id.clone()),
-                    role: Some(CreativeNodeRole::Reference),
-                    payload_json: serde_json::to_string(&AssetNodePayloadV1 {
-                        schema_version: 1,
-                        snapshot: snapshot.clone(),
-                        execution: Some(AssetExecutionRefV1 {
-                            job_id: None,
-                            turn_key: None,
-                            run_id: Some(value.launch_id.clone()),
-                            artifact_id: None,
-                        }),
-                    })?,
-                    x: (prompt_x - 230.0).max(24.0),
-                    y: prompt_y + index as f64 * 42.0,
-                    width: 190.0,
-                    height: asset_node_height(&snapshot),
-                    z_index: max_z + 2 + index as i64,
-                    position_locked: false,
-                },
-                now,
-            )?;
+            let edge_id = projection_id(
+                "agent-edge",
+                &value.launch_id,
+                "0",
+                &format!("input-{index}"),
+            );
+            // Recovery retains the original source, including a subsequently hidden node.
+            let existing_source: Option<String> = tx
+                .query_row(
+                    "SELECT from_node_id FROM canvas_edges WHERE id=?1",
+                    [&edge_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let source = if existing_source.is_some() {
+                existing_source
+            } else if let Some(node_id) = value
+                .reference_node_ids
+                .get(index)
+                .and_then(Option::as_deref)
+            {
+                let node = get_node_tx(&tx, node_id)?
+                    .ok_or_else(|| AppError::NotFound(format!("reference node {node_id}")))?;
+                if node.project_id != value.project_id
+                    || node.hidden_at.is_some()
+                    || node.kind != CreativeNodeKind::Asset
+                    || node.role != Some(CreativeNodeRole::Reference)
+                    || node.asset_id.as_deref() != Some(asset_id)
+                {
+                    return Err(invalid("invalid Agent canvas reference node"));
+                }
+                Some(node.id)
+            } else {
+                let mut statement = tx.prepare("SELECT id FROM canvas_nodes WHERE project_id=?1 AND kind='asset' AND role='reference' AND hidden_at IS NULL AND asset_id=?2 ORDER BY created_at,id LIMIT 1")?;
+                let ids = statement
+                    .query_map(params![value.project_id, asset_id], |row| {
+                        row.get::<_, String>(0)
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+                ids.into_iter().next()
+            };
+            let node_id = source.clone().unwrap_or_else(|| {
+                projection_id("agent-reference", &value.launch_id, "0", &index.to_string())
+            });
+            if source.is_none() {
+                if get_node_tx(&tx, &node_id)?.is_none() {
+                    new_reference_ids.push(node_id.clone());
+                }
+                upsert_projection_node_tx(
+                    &tx,
+                    &NewCanvasNode {
+                        id: node_id.clone(),
+                        project_id: value.project_id.clone(),
+                        thread_id: Some(value.thread_id.clone()),
+                        kind: CreativeNodeKind::Asset,
+                        asset_id: Some(asset_id.clone()),
+                        role: Some(CreativeNodeRole::Reference),
+                        payload_json: serde_json::to_string(&AssetNodePayloadV1 {
+                            schema_version: 1,
+                            snapshot: snapshot.clone(),
+                            execution: Some(AssetExecutionRefV1 {
+                                job_id: None,
+                                turn_key: None,
+                                run_id: Some(value.launch_id.clone()),
+                                artifact_id: None,
+                            }),
+                        })?,
+                        x: (prompt_x - 230.0).max(24.0),
+                        y: prompt_y + index as f64 * 340.0,
+                        width: 190.0,
+                        height: asset_node_height(&snapshot),
+                        z_index: max_z + 2 + index as i64,
+                        position_locked: false,
+                    },
+                    now,
+                )?;
+            }
             insert_projection_edge_tx(
                 &tx,
                 &NewCanvasEdge {
@@ -2139,6 +2492,21 @@ impl Database {
             )?;
             reference_node_ids.push(node_id);
         }
+        if new_prompt {
+            place_prompt_near_inputs_tx(
+                &tx,
+                &value.project_id,
+                &prompt_node_id,
+                &new_reference_ids,
+            )?;
+        }
+        place_new_references_near_card_tx(
+            &tx,
+            &value.project_id,
+            &prompt_node_id,
+            &new_reference_ids,
+            true,
+        )?;
         tx.execute(
             "UPDATE creative_threads SET updated_at=?2 WHERE id=?1",
             params![value.thread_id, now],
@@ -2754,6 +3122,7 @@ mod tests {
             provider_session_id: None,
             ratio: Some("1:1".into()),
             visual_profile: None,
+            reference_node_ids: vec![],
             references: vec![],
             parent_node_id: None,
             parent_asset_path: None,
@@ -2890,6 +3259,325 @@ mod tests {
     }
 
     #[test]
+    fn shared_reference_upgrade_preserves_ownership_and_rejects_cross_thread_outputs() {
+        let db = Database::open_in_memory().unwrap();
+        crate::db::migrations::migrations()
+            .to_version(&mut db.conn.lock().unwrap(), 23)
+            .unwrap();
+        materialize(&db, "p1");
+        materialize(&db, "p2");
+        for (project, thread) in [("p1", "t1"), ("p1", "t2"), ("p2", "t3")] {
+            db.create_creative_thread(&NewCreativeThread {
+                id: thread.into(),
+                project_id: project.into(),
+                title: thread.into(),
+                origin: CreativeThreadOrigin::Direct,
+            })
+            .unwrap();
+        }
+        db.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO assets(id,name,created_at) VALUES ('a','reference',1)",
+                [],
+            )
+            .unwrap();
+        let mut reference = output("p1", "t1", "reference", "a");
+        reference.role = Some(CreativeNodeRole::Reference);
+        db.create_canvas_node(&reference).unwrap();
+        db.create_canvas_node(&output("p1", "t1", "output", "a"))
+            .unwrap();
+        db.create_canvas_node(&prompt("p1", "t2", "target"))
+            .unwrap();
+        db.create_canvas_node(&prompt("p2", "t3", "other-project"))
+            .unwrap();
+        let insert = "INSERT INTO canvas_edges(id,project_id,thread_id,from_node_id,to_node_id,kind,ordinal,created_at) VALUES (?1,?2,?3,?4,?5,?6,0,1)";
+        let shared = params!["shared", "p1", "t2", "reference", "target", "input"];
+        assert!(db.conn.lock().unwrap().execute(insert, shared).is_err());
+        let before = db.get_canvas_node("reference").unwrap().unwrap();
+        // This is the v23 -> v24 contract; v25 deliberately adds generated asset inputs.
+        crate::db::migrations::migrations()
+            .to_version(&mut db.conn.lock().unwrap(), 24)
+            .unwrap();
+        assert_eq!(db.get_canvas_node("reference").unwrap().unwrap(), before);
+        let conn = db.conn.lock().unwrap();
+        conn.execute(insert, shared).unwrap();
+        for kind in ["input", "continued", "retry", "branch"] {
+            assert!(conn
+                .execute(insert, params![kind, "p1", "t2", "output", "target", kind])
+                .is_err());
+        }
+        assert!(conn
+            .execute(
+                insert,
+                params![
+                    "wrong-target-thread",
+                    "p1",
+                    "t1",
+                    "reference",
+                    "target",
+                    "input"
+                ]
+            )
+            .is_err());
+        assert!(conn
+            .execute(
+                insert,
+                params![
+                    "cross-project",
+                    "p2",
+                    "t3",
+                    "reference",
+                    "other-project",
+                    "input"
+                ]
+            )
+            .is_err());
+        drop(conn);
+        db.migrate().unwrap();
+        let conn = db.conn.lock().unwrap();
+        conn.execute(insert, params!["generated-input", "p1", "t2", "output", "target", "input"]).unwrap();
+        for kind in ["continued", "retry", "branch"] {
+            assert!(conn.execute(insert, params![kind, "p1", "t2", "output", "target", kind]).is_err());
+        }
+        assert!(conn.execute(insert, params!["wrong-target-v25", "p1", "t1", "reference", "target", "input"]).is_err());
+        assert!(conn.execute(insert, params!["cross-project-v25", "p2", "t3", "reference", "other-project", "input"]).is_err());
+    }
+
+    #[test]
+    fn agent_reuses_selected_reference_and_keeps_repeated_launches_nearby() {
+        let db = db();
+        materialize(&db, "p1");
+        for id in ["t1", "t2"] {
+            db.create_creative_thread(&NewCreativeThread {
+                id: id.into(),
+                project_id: "p1".into(),
+                title: id.into(),
+                origin: CreativeThreadOrigin::Direct,
+            })
+            .unwrap();
+        }
+        db.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO assets (id,name,created_at) VALUES ('a','reference',1)",
+                [],
+            )
+            .unwrap();
+        let mut original = output("p1", "t1", "original", "a");
+        original.role = Some(CreativeNodeRole::Reference);
+        original.x = 50.0;
+        original.y = 70.0;
+        db.create_canvas_node(&original).unwrap();
+        let mut duplicate = original.clone();
+        duplicate.id = "duplicate".into();
+        duplicate.x = 4000.0;
+        db.create_canvas_node(&duplicate).unwrap();
+        let mut launch = ProjectAgentLaunchInput {
+            project_id: "p1".into(),
+            thread_id: "t1".into(),
+            launch_id: "launch1".into(),
+            prompt: "edit".into(),
+            provider: "cloud".into(),
+            ratio: None,
+            visual_profile: None,
+            reference_asset_ids: vec!["a".into()],
+            reference_node_ids: vec![Some("original".into())],
+            parent_node_id: None,
+            parent_asset_id: None,
+        };
+        let first = db.begin_project_agent_launch(&launch).unwrap();
+        assert_eq!(first.reference_node_ids, vec!["original"]);
+        let first_node = db.get_canvas_node(&first.prompt_node_id).unwrap().unwrap();
+        assert_eq!((first_node.x, first_node.y), (312.0, 70.0));
+        launch.launch_id = "launch2".into();
+        launch.thread_id = "t2".into();
+        let second = db.begin_project_agent_launch(&launch).unwrap();
+        let second_node = db.get_canvas_node(&second.prompt_node_id).unwrap().unwrap();
+        assert_eq!(second.reference_node_ids, vec!["original"]);
+        assert_eq!(second_node.x, first_node.x);
+        assert!(second_node.y >= first_node.y + first_node.height + 32.0);
+        assert_eq!(
+            db.project_canvas_snapshot("p1")
+                .unwrap()
+                .nodes
+                .iter()
+                .filter(|n| n.asset_id.as_deref() == Some("a"))
+                .count(),
+            2
+        );
+        assert_eq!(
+            db.get_canvas_node("original").unwrap().unwrap().x,
+            original.x
+        );
+        db.update_canvas_node_layout(
+            &second.prompt_node_id,
+            &CanvasNodeLayoutUpdate {
+                x: 900.0,
+                y: 800.0,
+                width: second_node.width,
+                height: second_node.height,
+                z_index: second_node.z_index,
+                position_locked: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            db.remove_canvas_node("original").unwrap(),
+            Some(CanvasNodeRemoval::Hidden)
+        );
+        assert_eq!(
+            db.begin_project_agent_launch(&launch)
+                .unwrap()
+                .reference_node_ids,
+            vec!["original"]
+        );
+        let recovered = db.get_canvas_node(&second.prompt_node_id).unwrap().unwrap();
+        assert_eq!((recovered.x, recovered.y), (900.0, 800.0));
+        assert!(db
+            .get_canvas_node("original")
+            .unwrap()
+            .unwrap()
+            .hidden_at
+            .is_some());
+        assert_eq!(
+            db.remove_canvas_node(&second.prompt_node_id).unwrap(),
+            Some(CanvasNodeRemoval::Hidden)
+        );
+        db.begin_project_agent_launch(&launch).unwrap();
+        db.update_project_agent_launch_status("t2", "launch2", "succeeded")
+            .unwrap();
+        assert!(db
+            .get_canvas_node(&second.prompt_node_id)
+            .unwrap()
+            .unwrap()
+            .hidden_at
+            .is_some());
+        launch.launch_id = "invalid".into();
+        assert!(db.begin_project_agent_launch(&launch).is_err());
+        assert!(db
+            .get_canvas_node(&projection_id("agent-prompt", "invalid", "0", "0"))
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn restore_removed_card_preserves_layout_payload_and_edges() {
+        let db = db();
+        materialize(&db, "p1");
+        db.create_creative_thread(&NewCreativeThread {
+            id: "t1".into(),
+            project_id: "p1".into(),
+            title: "test".into(),
+            origin: CreativeThreadOrigin::Direct,
+        })
+        .unwrap();
+        let launch = ProjectAgentLaunchInput {
+            project_id: "p1".into(),
+            thread_id: "t1".into(),
+            launch_id: "restore-test".into(),
+            prompt: "restore me".into(),
+            provider: "cloud".into(),
+            ratio: None,
+            visual_profile: None,
+            reference_asset_ids: vec![],
+            reference_node_ids: vec![],
+            parent_node_id: None,
+            parent_asset_id: None,
+        };
+        let graph = db.begin_project_agent_launch(&launch).unwrap();
+        let original = db.get_canvas_node(&graph.prompt_node_id).unwrap().unwrap();
+        db.remove_canvas_node(&original.id).unwrap();
+        db.update_project_agent_launch_status("t1", "restore-test", "succeeded")
+            .unwrap();
+        assert!(db
+            .restore_canvas_node("wrong-project", &original.id)
+            .is_err());
+        assert!(db
+            .get_canvas_node(&original.id)
+            .unwrap()
+            .unwrap()
+            .hidden_at
+            .is_some());
+        let restored = db.restore_canvas_node("p1", &original.id).unwrap().unwrap();
+        assert!(restored.hidden_at.is_none());
+        assert_eq!((restored.x, restored.y), (original.x, original.y));
+        assert!(restored.payload_json.contains("succeeded"));
+        assert_eq!(restored.thread_id, original.thread_id);
+        db.begin_project_agent_launch(&launch).unwrap();
+        assert!(db
+            .get_canvas_node(&original.id)
+            .unwrap()
+            .unwrap()
+            .hidden_at
+            .is_none());
+        assert!(db.restore_canvas_node("p1", "missing").unwrap().is_none());
+    }
+
+    #[test]
+    fn agent_fallback_reuses_unique_grouped_reference_and_anchors_to_group() {
+        let db = db();
+        materialize(&db, "p1");
+        db.create_creative_thread(&NewCreativeThread {
+            id: "t1".into(),
+            project_id: "p1".into(),
+            title: "t1".into(),
+            origin: CreativeThreadOrigin::Direct,
+        })
+        .unwrap();
+        db.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO assets (id,name,created_at) VALUES ('a','reference',1)",
+                [],
+            )
+            .unwrap();
+        let mut original = output("p1", "t1", "original", "a");
+        original.thread_id = None;
+        original.role = Some(CreativeNodeRole::Reference);
+        db.create_canvas_node(&original).unwrap();
+        db.create_canvas_group_with_items(
+            &NewCanvasGroup {
+                id: "group".into(),
+                project_id: "p1".into(),
+                name: "references".into(),
+                role: None,
+                x: 500.0,
+                y: 800.0,
+                width: 300.0,
+                height: 250.0,
+                z_index: 1,
+            },
+            &["original".into()],
+        )
+        .unwrap();
+        let launch = ProjectAgentLaunchInput {
+            project_id: "p1".into(),
+            thread_id: "t1".into(),
+            launch_id: "launch".into(),
+            prompt: "edit".into(),
+            provider: "cloud".into(),
+            ratio: None,
+            visual_profile: None,
+            reference_asset_ids: vec!["a".into()],
+            reference_node_ids: vec![],
+            parent_node_id: None,
+            parent_asset_id: None,
+        };
+        let graph = db.begin_project_agent_launch(&launch).unwrap();
+        assert_eq!(graph.reference_node_ids, vec!["original"]);
+        let prompt = db.get_canvas_node(&graph.prompt_node_id).unwrap().unwrap();
+        assert_eq!((prompt.x, prompt.y), (872.0, 800.0));
+        assert_eq!(
+            db.project_canvas_snapshot("p1").unwrap().group_items.len(),
+            1
+        );
+    }
+
+    #[test]
     fn asset_location_compatibility_requires_one_visible_node() {
         let db = db();
         materialize(&db, "p1");
@@ -2930,6 +3618,7 @@ mod tests {
                 ratio: None,
                 visual_profile: None,
                 reference_asset_ids: vec![],
+                reference_node_ids: vec![],
                 parent_node_id: None,
                 parent_asset_id: Some("asset-1".into()),
             })
@@ -3031,6 +3720,7 @@ mod tests {
                 provider_session_id: None,
                 ratio: None,
                 visual_profile: None,
+                reference_node_ids: vec![],
                 references: vec![],
                 parent_node_id: Some(parent_node_id.into()),
                 parent_asset_path: Some(parent_asset_path.into()),
@@ -3103,6 +3793,7 @@ mod tests {
                 ratio: None,
                 visual_profile: None,
                 reference_asset_ids: vec![],
+                reference_node_ids: vec![],
                 parent_node_id: Some("parent-duplicate".into()),
                 parent_asset_id: Some("asset-1".into()),
             })
@@ -3121,6 +3812,7 @@ mod tests {
                 ratio: None,
                 visual_profile: None,
                 reference_asset_ids: vec![],
+                reference_node_ids: vec![],
                 parent_node_id: Some("parent-duplicate".into()),
                 parent_asset_id: Some("asset-2".into()),
             })
@@ -3259,6 +3951,7 @@ mod tests {
             ratio: Some("1:1".into()),
             visual_profile: None,
             reference_asset_ids: vec!["reference-asset".into()],
+            reference_node_ids: vec![],
             parent_node_id: None,
             parent_asset_id: None,
         };
@@ -3417,4 +4110,460 @@ mod tests {
             );
         }
     }
+    fn reference_placement_fixture() -> Database {
+        let db = db();
+        materialize(&db, "p1");
+        materialize(&db, "p2");
+        db.create_creative_thread(&NewCreativeThread {
+            id: "t1".into(),
+            project_id: "p1".into(),
+            title: "layout".into(),
+            origin: CreativeThreadOrigin::Direct,
+        })
+        .unwrap();
+        for id in ["existing", "a", "b", "c", "d"] {
+            db.conn.lock().unwrap().execute(
+                "INSERT INTO assets(id,name,store_path,width,height,created_at) VALUES (?1,?1,?2,400,600,1)",
+                params![id, format!("/{id}.png")],
+            ).unwrap();
+        }
+        let mut original = output("p1", "t1", "original", "existing");
+        original.role = Some(CreativeNodeRole::Reference);
+        original.x = 50.0;
+        original.y = 70.0;
+        db.create_canvas_node(&original).unwrap();
+        let mut far = note("p1", "far");
+        far.x = 20_000.0;
+        db.create_canvas_node(&far).unwrap();
+        let mut foreign = original;
+        foreign.id = "foreign".into();
+        foreign.project_id = "p2".into();
+        foreign.thread_id = None;
+        foreign.asset_id = Some("a".into());
+        db.create_canvas_node(&foreign).unwrap();
+        db
+    }
+
+    fn launch_layout_references(
+        db: &Database,
+        agent: bool,
+        launch: &str,
+        refs: &[&str],
+        parent: bool,
+    ) -> ProjectGenerationTurnGraph {
+        if agent {
+            db.begin_project_agent_launch(&ProjectAgentLaunchInput {
+                project_id: "p1".into(),
+                thread_id: "t1".into(),
+                launch_id: launch.into(),
+                prompt: "layout".into(),
+                provider: "bowerbird-cloud".into(),
+                ratio: None,
+                visual_profile: None,
+                reference_asset_ids: refs.iter().map(|id| id.to_string()).collect(),
+                reference_node_ids: vec![],
+                parent_node_id: parent.then(|| "parent".into()),
+                parent_asset_id: parent.then(|| "existing".into()),
+            })
+            .unwrap()
+        } else {
+            db.begin_project_generation_turn(&ProjectGenerationTurnInput {
+                project_id: "p1".into(),
+                thread_id: "t1".into(),
+                generation_conversation_id: "conversation".into(),
+                job_id: launch.into(),
+                turn_key: "turn".into(),
+                prompt: "layout".into(),
+                applied_prompt: "layout".into(),
+                provider: "jimeng".into(),
+                provider_session_id: None,
+                ratio: None,
+                visual_profile: None,
+                references: refs.iter().map(|id| format!("/{id}.png")).collect(),
+                reference_node_ids: vec![],
+                parent_node_id: parent.then(|| "parent".into()),
+                parent_asset_path: parent.then(|| "/existing.png".into()),
+                relation: parent.then_some(
+                    crate::core::creative_session_contract::CreativeGenerationRelation::Continued,
+                ),
+            })
+            .unwrap()
+        }
+    }
+
+    fn assert_reference_rects_clear(db: &Database, ids: &[String]) {
+        let snapshot = db.project_canvas_snapshot("p1").unwrap();
+        for id in ids {
+            let a = snapshot.nodes.iter().find(|node| &node.id == id).unwrap();
+            for b in snapshot
+                .nodes
+                .iter()
+                .filter(|node| node.id != a.id && node.hidden_at.is_none())
+            {
+                assert!(
+                    a.x + a.width <= b.x
+                        || b.x + b.width <= a.x
+                        || a.y + a.height <= b.y
+                        || b.y + b.height <= a.y,
+                    "overlap: {} and {}",
+                    a.id,
+                    b.id
+                );
+            }
+            for g in &snapshot.groups {
+                assert!(
+                    a.x + a.width <= g.x
+                        || g.x + g.width <= a.x
+                        || a.y + a.height <= g.y
+                        || g.y + g.height <= a.y
+                );
+            }
+        }
+    }
+
+    fn assert_same_canvas_layout(before: &[CanvasNode], after: &[CanvasNode]) {
+        assert_eq!(before.len(), after.len());
+        for (a, b) in before.iter().zip(after) {
+            assert_eq!(
+                (
+                    &a.id,
+                    &a.thread_id,
+                    &a.asset_id,
+                    a.x,
+                    a.y,
+                    a.width,
+                    a.height,
+                    a.position_locked,
+                    a.hidden_at
+                ),
+                (
+                    &b.id,
+                    &b.thread_id,
+                    &b.asset_id,
+                    b.x,
+                    b.y,
+                    b.width,
+                    b.height,
+                    b.position_locked,
+                    b.hidden_at
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn new_references_stay_near_card_despite_far_nodes_and_keep_existing_inputs() {
+        for agent in [false, true] {
+            let db = reference_placement_fixture();
+            let original = db.get_canvas_node("original").unwrap().unwrap();
+            let foreign = db.get_canvas_node("foreign").unwrap().unwrap();
+            let graph = launch_layout_references(
+                &db,
+                agent,
+                "mixed",
+                &["existing", "a", "b", "a", "c", "d"],
+                false,
+            );
+            let card = db.get_canvas_node(&graph.prompt_node_id).unwrap().unwrap();
+            assert_eq!(
+                (card.x, card.y),
+                (312.0, 70.0),
+                "new inputs must not drag the card to the global right edge"
+            );
+            assert_eq!(graph.reference_node_ids.len(), 5);
+            assert_eq!(graph.reference_node_ids[0], "original");
+            let refs = &graph.reference_node_ids[1..];
+            for id in refs {
+                let node = db.get_canvas_node(id).unwrap().unwrap();
+                assert!((node.x - card.x).abs() < 900.0 && (node.y - card.y).abs() < 900.0);
+            }
+            assert_reference_rects_clear(&db, refs);
+            assert_eq!(db.get_canvas_node("original").unwrap().unwrap(), original);
+            assert_eq!(db.get_canvas_node("foreign").unwrap().unwrap(), foreign);
+            let before = db.project_canvas_snapshot("p1").unwrap();
+            assert_eq!(
+                launch_layout_references(
+                    &db,
+                    agent,
+                    "mixed",
+                    &["existing", "a", "b", "a", "c", "d"],
+                    false
+                ),
+                graph
+            );
+            assert_same_canvas_layout(
+                &before.nodes,
+                &db.project_canvas_snapshot("p1").unwrap().nodes,
+            );
+            println!(
+                "REFERENCE_COORDS agent={agent} card=({}, {}) refs={:?}",
+                card.x,
+                card.y,
+                before
+                    .nodes
+                    .iter()
+                    .filter(|n| refs.contains(&n.id))
+                    .map(|n| (&n.id, n.x, n.y, n.width, n.height))
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn library_reference_reuses_existing_instances_without_creating_another() {
+        for agent in [false, true] {
+            let db = reference_placement_fixture();
+            let mut duplicate = output("p1", "t1", "second-instance", "existing");
+            duplicate.role = Some(CreativeNodeRole::Reference);
+            duplicate.x = 5000.0;
+            db.create_canvas_node(&duplicate).unwrap();
+            let graph =
+                launch_layout_references(&db, agent, "reuse", &["existing", "existing"], false);
+            assert_eq!(graph.reference_node_ids, vec!["original"]);
+            assert_eq!(
+                db.project_canvas_snapshot("p1")
+                    .unwrap()
+                    .nodes
+                    .iter()
+                    .filter(|node| node.asset_id.as_deref() == Some("existing"))
+                    .count(),
+                2
+            );
+            assert_eq!(
+                db.get_canvas_node("second-instance").unwrap().unwrap().x,
+                5000.0
+            );
+        }
+    }
+
+    #[test]
+    fn missing_references_on_replay_follow_moved_visible_card_and_avoid_groups() {
+        for agent in [false, true] {
+            let db = reference_placement_fixture();
+            let graph = launch_layout_references(&db, agent, "replay", &[], false);
+            let card_id = if agent {
+                let payload: AgentGroupNodePayloadV1 = serde_json::from_value(serde_json::json!({
+                    "schema_version":1,"run_id":"run","skill_id":"bowerbird-unified-agent","status":"running"
+                })).unwrap();
+                db.project_agent_run_on_canvas("p1", "t1", "replay", &payload)
+                    .unwrap()
+            } else {
+                graph.prompt_node_id.clone()
+            };
+            let card = db.get_canvas_node(&card_id).unwrap().unwrap();
+            db.update_canvas_node_layout(
+                &card_id,
+                &CanvasNodeLayoutUpdate {
+                    x: -1600.0,
+                    y: -800.0,
+                    width: card.width,
+                    height: card.height,
+                    z_index: card.z_index,
+                    position_locked: true,
+                },
+            )
+            .unwrap();
+            // Reserve the first slot with a real persisted material group.
+            db.create_canvas_group_with_items(
+                &NewCanvasGroup {
+                    id: "obstacle".into(),
+                    project_id: "p1".into(),
+                    name: "group".into(),
+                    role: None,
+                    x: -1600.0,
+                    y: -800.0 + card.height + 40.0,
+                    width: 190.0,
+                    height: 272.0,
+                    z_index: 0,
+                },
+                &[],
+            )
+            .unwrap();
+            let before = db.project_canvas_snapshot("p1").unwrap();
+            let restored = launch_layout_references(&db, agent, "replay", &["a", "b"], false);
+            for id in &restored.reference_node_ids {
+                let node = db.get_canvas_node(id).unwrap().unwrap();
+                assert!(
+                    node.x >= -1600.0 && node.x < -700.0 && node.y >= -800.0 && node.y < 200.0,
+                    "reference must follow the moved card, got ({},{})",
+                    node.x,
+                    node.y
+                );
+            }
+            assert_reference_rects_clear(&db, &restored.reference_node_ids);
+            for node in before.nodes {
+                let after = db.get_canvas_node(&node.id).unwrap().unwrap();
+                assert_eq!(
+                    (
+                        after.x,
+                        after.y,
+                        after.width,
+                        after.height,
+                        after.position_locked
+                    ),
+                    (
+                        node.x,
+                        node.y,
+                        node.width,
+                        node.height,
+                        node.position_locked
+                    )
+                );
+                if node.kind == CreativeNodeKind::Asset {
+                    assert_eq!(after, node);
+                }
+            }
+            let saved = db.project_canvas_snapshot("p1").unwrap();
+            launch_layout_references(&db, agent, "replay", &["a", "b"], false);
+            assert_same_canvas_layout(
+                &saved.nodes,
+                &db.project_canvas_snapshot("p1").unwrap().nodes,
+            );
+        }
+    }
+
+    #[test]
+    fn continuation_references_use_parent_region_and_startup_video_recovery_is_stable() {
+        for agent in [false, true] {
+            let db = reference_placement_fixture();
+            let mut parent = output("p1", "t1", "parent", "existing");
+            parent.x = -2000.0;
+            parent.y = 1400.0;
+            db.create_canvas_node(&parent).unwrap();
+            let graph = launch_layout_references(&db, agent, "continued", &["a"], true);
+            let card = db.get_canvas_node(&graph.prompt_node_id).unwrap().unwrap();
+            assert_eq!((card.x, card.y), (-1738.0, 1400.0));
+            let reference = db
+                .get_canvas_node(&graph.reference_node_ids[0])
+                .unwrap()
+                .unwrap();
+            assert!((reference.x - card.x).abs() < 900.0 && (reference.y - card.y).abs() < 500.0);
+            assert_reference_rects_clear(&db, &graph.reference_node_ids);
+            if !agent {
+                let job: crate::core::task_queue::GenJob = serde_json::from_value(serde_json::json!({
+                    "id":"continued","media":"video","provider":"jimeng","status":"running","prompt":"layout","created_at":1,
+                    "project_id":"p1","thread_id":"t1","turn_key":"turn","conversation_id":"conversation",
+                    "references":["/a.png"],"parent_node_id":"parent","parent_asset_path":"/existing.png","creative_relation":"continued"
+                })).unwrap();
+                for _ in 0..2 {
+                    crate::core::generation_worker::recover_project_generation_projection(
+                        &db, &job, "running",
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        db.get_canvas_node(&reference.id).unwrap().unwrap(),
+                        reference
+                    );
+                }
+            }
+        }
+    }
+    #[test]
+    fn generation_reuses_the_exact_canvas_reference_node_instead_of_copying_it() {
+        let db = db();
+        materialize(&db, "p1");
+        db.create_creative_thread(&NewCreativeThread {
+            id: "t1".into(),
+            project_id: "p1".into(),
+            title: "生成线程".into(),
+            origin: CreativeThreadOrigin::Direct,
+        })
+        .unwrap();
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "INSERT INTO assets (id,name,store_path,created_at) VALUES ('asset-1','原参考图','/asset-1.png',1)",
+                [],
+            )
+            .unwrap();
+        }
+        db.create_creative_thread(&NewCreativeThread {
+            id: "reference-owner".into(),
+            project_id: "p1".into(),
+            title: "此前使用参考图的线程".into(),
+            origin: CreativeThreadOrigin::Direct,
+        })
+        .unwrap();
+        let mut original = output("p1", "reference-owner", "original-reference", "asset-1");
+        original.role = Some(CreativeNodeRole::Reference);
+        original.x = 37.0;
+        original.y = 59.0;
+        db.create_canvas_node(&original).unwrap();
+
+        let mut input = ProjectGenerationTurnInput {
+            project_id: "p1".into(),
+            thread_id: "t1".into(),
+            generation_conversation_id: "conversation-1".into(),
+            job_id: "job-1".into(),
+            turn_key: "turn-1".into(),
+            prompt: "参考原图生成".into(),
+            applied_prompt: "参考原图生成".into(),
+            provider: "test-provider".into(),
+            provider_session_id: None,
+            ratio: None,
+            visual_profile: None,
+            references: vec!["/asset-1.png".into()],
+            reference_node_ids: vec![Some("original-reference".into())],
+            parent_node_id: None,
+            parent_asset_path: None,
+            relation: None,
+        };
+        let graph = db.begin_project_generation_turn(&input).unwrap();
+
+        assert_eq!(graph.reference_node_ids, vec!["original-reference"]);
+        let snapshot = db.project_canvas_snapshot("p1").unwrap();
+        assert_eq!(
+            snapshot
+                .nodes
+                .iter()
+                .filter(|node| node.asset_id.as_deref() == Some("asset-1"))
+                .count(),
+            1
+        );
+        let preserved = snapshot
+            .nodes
+            .iter()
+            .find(|node| node.id == "original-reference")
+            .unwrap();
+        assert_eq!((preserved.x, preserved.y), (37.0, 59.0));
+        assert_eq!(preserved.thread_id.as_deref(), Some("reference-owner"));
+        assert!(snapshot.edges.iter().any(|edge| {
+            edge.kind == CreativeEdgeKind::Input
+                && edge.from_node_id == "original-reference"
+                && edge.to_node_id == graph.prompt_node_id
+        }));
+
+        // Without a chip node id, unique project-wide lookup must reuse it too.
+        input.job_id = "job-fallback".into();
+        input.turn_key = "turn-fallback".into();
+        input.reference_node_ids.clear();
+        let fallback = db.begin_project_generation_turn(&input).unwrap();
+        assert_eq!(fallback.reference_node_ids, vec!["original-reference"]);
+        assert_eq!(db.begin_project_generation_turn(&input).unwrap(), fallback);
+
+        // A previous generated result can be referenced directly, even when the
+        // same central asset also has another instance in this project.
+        let generated = output("p1", "reference-owner", "generated-reference", "asset-1");
+        db.create_canvas_node(&generated).unwrap();
+        input.job_id = "job-output-reference".into();
+        input.turn_key = "turn-output-reference".into();
+        input.reference_node_ids = vec![Some("generated-reference".into())];
+        let from_output = db.begin_project_generation_turn(&input).unwrap();
+        assert_eq!(from_output.reference_node_ids, vec!["generated-reference"]);
+        assert_eq!(db.project_canvas_snapshot("p1").unwrap().nodes.iter().filter(|n| n.asset_id.as_deref()==Some("asset-1")).count(),2);
+
+        input.job_id = "job-invalid".into();
+        input.turn_key = "turn-invalid".into();
+        input.reference_node_ids = vec![Some("original-reference".into())];
+        input.references = vec!["/different-asset.png".into()];
+        assert!(db
+            .begin_project_generation_turn(&input)
+            .unwrap_err()
+            .to_string()
+            .contains("does not match"));
+        input.references = vec!["/asset-1.png".into()];
+        db.remove_canvas_node("original-reference").unwrap();
+        assert!(db.begin_project_generation_turn(&input).is_err());
+    }
+
 }

@@ -21,7 +21,10 @@ function hydrateMatchingTurn(live: GenTurn, persisted: GenTurn): GenTurn {
     promptRaw: preferText(live.promptRaw, persisted.promptRaw),
     images: preferItems(live.images, persisted.images) ?? [],
     refs: preferItems(live.refs, persisted.refs),
+    referenceNodeIds: preferItems(live.referenceNodeIds, persisted.referenceNodeIds),
     refAssets: preferItems(live.refAssets, persisted.refAssets),
+    media: live.media ?? persisted.media,
+    videoOptions: live.videoOptions ?? persisted.videoOptions,
     provider: preferText(live.provider, persisted.provider),
   };
 }
@@ -61,6 +64,8 @@ function hydrateRecoveredGenJob(live: GenJob, persisted: GenJob): GenJob {
     refAssets: preferItems(live.refAssets, persisted.refAssets) ?? [],
     dimAssets: preferItems(live.dimAssets, persisted.dimAssets),
     lastRatio: preferText(live.lastRatio, persisted.lastRatio),
+    media: live.media ?? persisted.media,
+    videoOptions: live.videoOptions ?? persisted.videoOptions,
     provider: preferText(live.provider, persisted.provider),
     projectId: preferText(live.projectId, persisted.projectId),
     visualProfile: live.visualProfile ?? persisted.visualProfile,

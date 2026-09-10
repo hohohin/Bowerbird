@@ -201,7 +201,7 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
     }
   }
 
-  // 类别（P2）：auto=codex 自动归类、manual=用户手加。改后本页 reload + 全局 emit 刷侧栏计数。
+  // source describes the label creator; origin records who assigned it to this image.
   async function loadTags() {
     if (!id) return;
     try {
@@ -1256,13 +1256,13 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
             )}
           </div>
 
-          {/* 类别（P2 自动归类 + 手动）：codex 归的为 auto（灰），用户加的为 manual（强调）。 */}
+          {/* 分类标签支持本地识别与人工纠正。 */}
           <div className="asset-detail-card space-y-2">
             <div className="text-xs font-medium uppercase tracking-wide text-muted">类别</div>
             <div className="flex flex-wrap items-center gap-1.5">
               {tags.length === 0 && !addingTag && (
                 <span className="text-xs text-muted">
-                  无（采集后会自动归类，也可手动加）
+                  暂无标签，可手动添加或在侧栏开启本地分类
                 </span>
               )}
               {tags.map((t) => (
@@ -1271,7 +1271,7 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
                   className={`flex items-center gap-1 rounded px-2 py-0.5 text-[11px] ${
                     t.source === "auto" ? "bg-panel2 text-muted" : "bg-accent/15 text-accent"
                   }`}
-                  title={t.source === "auto" ? "自动归类（codex）" : "手动添加"}
+                  title={t.origin === "local" ? "本地自动匹配" : t.origin === "manual" ? "手动添加" : "历史标签"}
                 >
                   <span className="opacity-50">#</span> {t.name}
                   <button

@@ -240,7 +240,8 @@ Deno.serve(async (request) => {
     adminClient = admin;
     const raw = await request.json() as Record<string, unknown>;
 
-    if (asyncMode) {
+    // Server-owned brand prompts are resolved exclusively on the VPS worker.
+    if (asyncMode || raw.instruction === "bowerbird:brand-visual-observation:v2" || raw.action === "get" || typeof raw.job_id === "string") {
       const action = typeof raw.action === "string" ? raw.action : "";
       const jobId = typeof raw.job_id === "string" ? raw.job_id : "";
       let response: Response;
@@ -252,7 +253,7 @@ Deno.serve(async (request) => {
       } else {
         response = await createJob(admin, user.id, validate(raw), cors);
       }
-      safeLog({ requestId: id, userId, service: "understand-proxy", status: response.status, elapsedMs: performance.now() - started });
+      safeLog({ requestId: id, userId, service: "understand-proxy", status: String(response.status), elapsedMs: performance.now() - started });
       return response;
     }
 

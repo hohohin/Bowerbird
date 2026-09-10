@@ -14,8 +14,8 @@ const vision = { apiKey: "parent-only", baseUrl: "https://ark.invalid", model: "
 const deepSeek = { apiKey: "parent-only", baseUrl: "https://api.deepseek.com", model: "deepseek-v4-flash" };
 
 test("unified DSH uses the validated long-form ACP prompt timeout", () => {
-  equal(UNIFIED_DSH_PROMPT_TIMEOUT_MS, 180_000);
-  equal(UNIFIED_DSH_HTML_EXECUTION_TIMEOUT_MS, 360_000);
+  equal(UNIFIED_DSH_PROMPT_TIMEOUT_MS, 600_000);
+  equal(UNIFIED_DSH_HTML_EXECUTION_TIMEOUT_MS, 600_000);
 });
 
 test("unified DSH deployment injection stays disabled unless explicitly enabled", () => {

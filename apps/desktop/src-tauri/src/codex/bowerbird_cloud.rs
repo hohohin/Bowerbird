@@ -10,7 +10,7 @@ use ulid::Ulid;
 
 use crate::cloud::{AuthClient, CloudClient};
 use crate::codex::cloud_image::read_cloud_jpeg;
-use crate::codex::types::{Capabilities, Chunk, CodexRequest, CodexResult, GenOutcome};
+use crate::codex::types::{Capabilities, Chunk, CodexRequest, CodexResult, GenOutcome, VideoOptions};
 use crate::codex::GenProvider;
 use crate::error::AppError;
 
@@ -63,6 +63,44 @@ pub(crate) struct GenerateResponse {
     pub(crate) remote_task_id: Option<String>,
     artifact: Option<CloudArtifact>,
     pub(crate) error: Option<CloudJobError>,
+    #[serde(default)]
+    reference_uploads: Vec<ReferenceUpload>,
+}
+
+#[derive(Deserialize)]
+struct ReferenceUpload { index: usize, upload_url: String }
+
+/// Persisted local job + turn identify exactly one Cloud video request, including recovery.
+pub(crate) fn video_idempotency_key(job: &str, turn: &str) -> String {
+    format!("video-{job}-{turn}")
+}
+
+pub(crate) fn video_preflight(req: &CodexRequest, options: &VideoOptions) -> Result<(), AppError> {
+    if !matches!(options.video_resolution.as_str(), "480p" | "720p" | "1080p") {
+        return Err(AppError::Cloud("方舟视频仅支持 480p / 720p / 1080p".into()));
+    }
+    // Both channels share the four reference modes. CLI's resolution guard is narrower.
+    let mut common = options.clone();
+    common.video_resolution = "720p".into();
+    crate::codex::jimeng_video::preflight(req, &common)?;
+    if req.instruction.trim().is_empty() { return Err(AppError::Cloud("请填写视频提示词".into())); }
+    for path in &req.reference_images {
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+        if crate::media::probe::is_video(&ext) && !matches!(ext.as_str(), "mp4" | "mov") {
+            return Err(AppError::Cloud("方舟视频参考仅支持 MP4 / MOV".into()));
+        }
+        if matches!(ext.as_str(), "mp4" | "mov") && std::fs::metadata(path)?.len() > 200 * 1024 * 1024 {
+            return Err(AppError::Cloud("每条参考视频不能超过 200 MiB".into()));
+        }
+        if !crate::media::probe::is_video(&ext) {
+            let meta = crate::media::probe::probe(path)?;
+            let ratio = meta.width as f64 / meta.height as f64;
+            if meta.width < 300 || meta.height < 300 || !(0.4..=2.5).contains(&ratio) {
+                return Err(AppError::Cloud("方舟视频参考图宽高至少 300 像素，宽高比须在 0.4–2.5 之间".into()));
+            }
+        }
+    }
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -102,6 +140,45 @@ impl GenProvider for BowerbirdCloudProvider {
         Err(AppError::Cloud(
             "理解能力请使用 CloudUnderstandProvider".into(),
         ))
+    }
+
+    async fn generate_video(&self, req: CodexRequest, options: VideoOptions, tx: &mpsc::Sender<Chunk>, _resume_session: Option<String>) -> Result<GenOutcome, AppError> {
+        video_preflight(&req, &options)?;
+        if self.service != format!("video_seedance25_{}", options.video_resolution) {
+            return Err(AppError::Cloud("视频服务与分辨率不匹配".into()));
+        }
+        let started = Instant::now();
+        let endpoint = self.cloud.config().endpoint("generate-proxy").ok_or_else(|| AppError::Cloud("当前构建未配置 Bowerbird Cloud".into()))?;
+        let key = req.job_id.as_deref().ok_or_else(|| AppError::Cloud("缺少视频轮次幂等键".into()))?;
+        let mut images = Vec::new();
+        let mut videos = Vec::new();
+        let mut video_paths = Vec::new();
+        for path in &req.reference_images {
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+            if crate::media::probe::is_video(&ext) {
+                videos.push(serde_json::json!({ "object_key": "", "bytes": std::fs::metadata(path)?.len(), "mime": if ext == "mov" { "video/quicktime" } else { "video/mp4" } }));
+                video_paths.push(path);
+            } else { images.push(read_cloud_jpeg(path, true).await?); }
+        }
+        let payload = serde_json::json!({ "idempotency_key": key, "media": "video", "prompt": req.instruction, "reference_images": images, "reference_videos": videos, "video_options": options, "ratio": req.ratio, "service": self.service });
+        let result = send_video_request(&self.cloud, &self.auth, &endpoint, &payload).await?;
+        let remote = result.remote_task_id.ok_or_else(|| AppError::Cloud("云视频任务缺少任务 ID；不会自动重新生成".into()))?;
+        let _ = tx.send(Chunk::Submit { submit_id: remote.clone() }).await;
+        if !result.reference_uploads.is_empty() {
+            for upload in result.reference_uploads {
+                let path = video_paths.get(upload.index).ok_or_else(|| AppError::Cloud("参考视频上传序号无效".into()))?;
+                if !upload.upload_url.starts_with("https://") { return Err(AppError::Cloud("参考视频上传地址无效".into())); }
+                let bytes = tokio::fs::read(path).await?;
+                if bytes.len() as u64 != videos[upload.index]["bytes"].as_u64().unwrap_or(0) { return Err(AppError::Cloud("参考视频在上传前已变化，请重新选择".into())); }
+                let response = self.cloud.http().put(&upload.upload_url).header("content-type", videos[upload.index]["mime"].as_str().unwrap_or("video/mp4")).body(bytes).send().await.map_err(|_| AppError::Cloud("参考视频上传失败；原任务保留待恢复".into()))?;
+                if !response.status().is_success() { return Err(AppError::Cloud("参考视频上传失败；原任务保留待恢复".into())); }
+            }
+            // Same key and exact manifest finalize uploads; this is never another provider POST.
+            let finalized = send_video_request(&self.cloud, &self.auth, &endpoint, &payload).await?;
+            if !finalized.reference_uploads.is_empty() { return Err(AppError::Cloud("参考视频尚未上传完整".into())); }
+        }
+        let (paths, temp_dir) = wait_for_cloud_job(&self.cloud, &self.auth, &endpoint, &remote).await?;
+        Ok(GenOutcome { text: String::new(), session_id: Some(remote.clone()), submit_id: Some(remote), elapsed_ms: started.elapsed().as_millis() as u64, source_images: paths, temp_dir: Some(temp_dir) })
     }
 
     async fn generate_image(
@@ -240,6 +317,14 @@ impl GenProvider for BowerbirdCloudProvider {
     }
 }
 
+async fn send_video_request(cloud: &CloudClient, auth: &AuthClient, endpoint: &str, payload: &serde_json::Value) -> Result<GenerateResponse, AppError> {
+    let response = auth.send_authorized(cloud.http().post(endpoint).json(payload), "云视频请求失败；不会自动重新生成").await?;
+    let status = response.status();
+    let body: serde_json::Value = response.json().await.map_err(|_| AppError::Cloud("云视频响应无法解析；请通过原任务恢复".into()))?;
+    if !status.is_success() { return Err(AppError::Cloud(body.pointer("/error/message").and_then(|v| v.as_str()).unwrap_or("云视频请求失败").into())); }
+    serde_json::from_value(body).map_err(|_| AppError::Cloud("云视频响应格式无效".into()))
+}
+
 async fn poll_remote(
     cloud: &CloudClient,
     auth: &AuthClient,
@@ -288,18 +373,30 @@ pub(crate) async fn wait_for_cloud_job(
             Ok(result) => {
                 transient_failures = 0;
                 match result.status.as_str() {
-                    "uploading" | "queued" | "leased" | "running" | "cancel_requested" => {
+                    "uploading" => {
+                        // Atomic server cleanup only closes an upload that never entered the queue.
+                        // If another request finalized it meanwhile, continue retrieving that job.
+                        let result = send_video_request(cloud, auth, endpoint, &serde_json::json!({
+                            "action": "abandon_video_upload", "job_id": remote_task_id,
+                        })).await?;
+                        if result.status == "failed" {
+                            return Err(AppError::Cloud("视频参考上传中断，原任务已结束并释放预留积分；请重新发起生成".into()));
+                        }
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    }
+                    "queued" | "leased" | "running" | "cancel_requested" => {
                         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                     }
-                    "succeeded" => {
+                    "succeeded" | "settlement_pending" => {
                         let artifact = result
                             .artifact
                             .ok_or_else(|| AppError::Cloud("云任务成功但缺少下载产物".into()))?;
+                        let video = artifact.mime == "video/mp4";
                         let downloaded = download_artifact(cloud, remote_task_id, artifact).await?;
-                        acknowledge_artifact(auth, cloud, endpoint, remote_task_id).await;
+                        if !video { acknowledge_artifact(auth, cloud, endpoint, remote_task_id).await; }
                         return Ok(downloaded);
                     }
-                    "failed" | "cancelled" | "outcome_unknown" => {
+                    "failed" | "cancelled" | "outcome_unknown" | "artifact_expired" => {
                         let message =
                             result
                                 .error
@@ -342,14 +439,15 @@ async fn download_artifact(
     if !artifact.url.starts_with("https://") {
         return Err(AppError::Cloud("云图片下载地址不安全".into()));
     }
-    if artifact.bytes == 0 || artifact.bytes > 20 * 1024 * 1024 {
+    let limit = if artifact.mime == "video/mp4" { 500 * 1024 * 1024 } else { 20 * 1024 * 1024 };
+    if artifact.bytes == 0 || artifact.bytes > limit {
         return Err(AppError::Cloud("云图片大小无效".into()));
     }
     if artifact.sha256.len() != 64 || !artifact.sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
     {
         return Err(AppError::Cloud("云图片校验信息无效".into()));
     }
-    let response = cloud
+    let mut response = cloud
         .http()
         .get(&artifact.url)
         .send()
@@ -361,10 +459,11 @@ async fn download_artifact(
             response.status().as_u16()
         )));
     }
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|error| AppError::Cloud(format!("读取云图片失败: {error}")))?;
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|_| AppError::Cloud("读取云产物失败".into()))? {
+        if bytes.len() as u64 + chunk.len() as u64 > artifact.bytes { return Err(AppError::Cloud("云产物超出声明大小".into())); }
+        bytes.extend_from_slice(&chunk);
+    }
     if bytes.len() as u64 != artifact.bytes {
         return Err(AppError::Cloud("云图片大小校验失败".into()));
     }
@@ -376,6 +475,7 @@ async fn download_artifact(
         "image/jpeg" => "jpg",
         "image/webp" => "webp",
         "image/png" => "png",
+        "video/mp4" => "mp4",
         _ => return Err(AppError::Cloud("云图片格式无效".into())),
     };
     let temp_dir = std::env::temp_dir().join(format!("bowerbird-cloud-{}", Ulid::new()));
@@ -385,7 +485,7 @@ async fn download_artifact(
     Ok((vec![path], temp_dir))
 }
 
-async fn acknowledge_artifact(
+pub(crate) async fn acknowledge_artifact(
     auth: &AuthClient,
     cloud: &CloudClient,
     endpoint: &str,
@@ -412,4 +512,15 @@ pub(crate) async fn recover_cloud_generation(
         .endpoint("generate-proxy")
         .ok_or_else(|| AppError::Cloud("当前构建未配置 Bowerbird Cloud".into()))?;
     wait_for_cloud_job(cloud, auth, &endpoint, remote_task_id).await
+}
+
+pub(crate) async fn find_video_job(cloud: &CloudClient, auth: &AuthClient, job: &str, turn: &str) -> Result<Option<String>, AppError> {
+    let endpoint = cloud.config().endpoint("generate-proxy").ok_or_else(|| AppError::Cloud("Cloud 未配置".into()))?;
+    let response = auth.send_authorized(cloud.http().post(endpoint).json(&serde_json::json!({
+        "action": "get_by_key", "idempotency_key": video_idempotency_key(job, turn),
+    })), "查询原视频任务失败").await?;
+    if response.status().as_u16() == 404 { return Ok(None); }
+    if !response.status().is_success() { return Err(AppError::Cloud("原视频任务状态尚无法确认，不会重新生成".into())); }
+    let result: GenerateResponse = response.json().await.map_err(|_| AppError::Cloud("原视频任务响应无效".into()))?;
+    Ok(result.remote_task_id)
 }

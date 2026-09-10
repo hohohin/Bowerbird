@@ -9,12 +9,12 @@ import type { GenerateApprovedStepRequest } from "../kernel/controlled-image-edi
 import { SimulatedProcessCrash } from "../kernel/durable-tool-dispatcher.ts";
 import type { AgentRunContext } from "./runtime.ts";
 import {
-  requiredDeliveryPolicyContext,
-  requiredDeliverySteps,
   requiredExactCopyLines,
   UnifiedPlanningRunProcessor,
 } from "./unified-planning-run-processor.ts";
+import type { HarnessPlan } from "../harness/run-control-tools.ts";
 import type { RenderHtmlResultV1 } from "../contracts/render-html.ts";
+import { loadUnifiedAgentSkill } from "../skills/bowerbird-unified-agent/loader.ts";
 
 function claimed(
   approvedPlanHash: string | null = null,
@@ -52,25 +52,156 @@ function claimed(
   };
 }
 
-test("product detail pages with exact long copy are hard-routed to the inspected HTML delivery chain", () => {
-  deepEqual(
-    requiredDeliverySteps("给@图1产品做一个详情页。保留下面全部文案与品牌名，按多区块排版。"),
-    ["compose_html", "render_html", "inspect_artifact", "finalize_output"],
-  );
-  deepEqual(
-    requiredDeliveryPolicyContext("给@图1产品做一个详情页。保留下面全部文案与品牌名，按多区块排版。"),
-    {
-      schemaVersion: 1,
-      mode: "exact_approved_plan_sequence",
-      reason: "deterministic_exact_copy_detail_page",
-      approvedPlanStepKinds: ["compose_html", "render_html", "inspect_artifact", "finalize_output"],
-      planningOnlyTools: ["list_run_assets", "understand_asset"],
-      forbiddenApprovedPlanStepKinds: ["understand_asset", "generate_image", "compose_xiaohongshu"],
-      instruction: "plan.steps must contain exactly the four approvedPlanStepKinds in that order, with no extra steps; planning-only tools never appear in plan.steps; do not generate a replacement image for this delivery.",
+for (const htmlCase of [false, true]) test(`v3 uses one Agent for ${htmlCase ? "HTML inspection and revision" : "ten images and selective repair"}, with crash-safe final selection`, async () => {
+  const proposal = { schemaVersion: 3, title: "产品场景", summary: "交付十张产品场景图", assetIds: ["asset-product"],
+    outputCount: htmlCase ? 1 : 10, modelTurns: 16, capabilities: htmlCase
+      ? [{ tool: "compose_html", maxCalls: 2 }, { tool: "render_html", maxCalls: 2 }, { tool: "inspect_artifact", maxCalls: 1 }]
+      : [{ tool: "generate_image", maxCalls: 11 }, { tool: "inspect_artifact", maxCalls: 1 }] };
+  const hash = sha256Hex(canonicalJson(proposal));
+  const plannedToolCount = proposal.capabilities.reduce((sum, item) => sum + item.maxCalls, 1);
+  const runClaim = claimed(hash, plannedToolCount);
+  const observationId = "c".repeat(64);
+  const observation = { schemaVersion: 1, assetId: "asset-product", summary: "已有产品观察",
+    observations: [{ category: "subject", detail: "白色瓶身，蓝色标签" }] };
+  let checkpointText = canonicalJson({ schemaVersion: 1, runId: runClaim.run.id, conversationId: runClaim.run.conversationId,
+    skillId: "bowerbird-unified-agent", skillVersion: "0.1.0", skillHash: loadUnifiedAgentSkill().instructionHash,
+    checkpointVersion: 0, phase: "compose_plan", compactedFacts: [], completedToolResults: [],
+    visualObservations: [{ assetId: "asset-product", imageSha256: "b".repeat(64), focus: "general",
+      callId: observationId, summaryExcerpt: observation.summary }],
+    input: { schemaVersion: 1, goal: "根据产品图生成十张不同场景图片" } });
+  runClaim.run.checkpointHash = sha256Hex(checkpointText);
+  runClaim.run.snapshotSchemaVersion = 1;
+  runClaim.approvedPlan = { proposalHash: hash, plannedToolCount, url: "https://local.invalid/authorization" };
+  let adapterCount = 0, generated = 0, active = 0, peak = 0, parked = 0, visionCalls = 0, rendered = 0;
+  let release!: () => void;
+  const barrier = new Promise<void>((resolve) => { release = resolve; });
+  const statuses = new Map<string, string>();
+  const delivered: string[] = [];
+  let crash = true;
+  const events: Array<{ type: string; displayPayload?: Record<string, unknown> }> = [];
+  const control = {
+    async loadRawCheckpoint() { return new TextEncoder().encode(checkpointText); },
+    async downloadVerifiedJson(url: string) { return url === "https://local.invalid/observation" ? observation : proposal; },
+    async getArtifactByCall(_run: string, _lease: string, id: string) {
+      equal(id, observationId);
+      return { role: "diagnostic", mime: "application/json", url: "https://local.invalid/observation", sha256: "d".repeat(64) };
     },
-  );
-  deepEqual(requiredDeliverySteps("把@图1产品放到海边，生成一张主视觉"), []);
-  equal(requiredDeliveryPolicyContext("把@图1产品放到海边，生成一张主视觉"), undefined);
+    async saveRawCheckpoint(args: { bytes: Uint8Array }) {
+      const next = new TextDecoder().decode(args.bytes);
+      if (crash && JSON.parse(next).phase === "awaiting_result_feedback") { crash = false; throw new SimulatedProcessCrash(); }
+      checkpointText = next;
+    },
+    async appendEvents(_runId: string, _leaseId: string, batch: typeof events) { events.push(...batch); },
+    async awaitResultFeedback() { parked++; },
+    async prepareTool(args: { callId: string }) {
+      const existing = statuses.get(args.callId); statuses.set(args.callId, existing ?? "prepared");
+      return { callId: args.callId, status: existing ?? "prepared", reused: !!existing };
+    },
+    async markToolSubmitted(args: { callId: string }) { statuses.set(args.callId, "submitted"); return { callId: args.callId, status: "submitted", reused: false }; },
+    async completeTool(args: { callId: string }) { statuses.set(args.callId, "succeeded"); },
+    async uploadDiagnostic(args: { sourceCallId: string; bytes: Uint8Array; sha256: string }) {
+      return { artifactId: `diagnostic-${args.sourceCallId}`, objectKey: `diagnostic/${args.sourceCallId}`,
+        mime: "application/json", bytes: args.bytes.byteLength, sha256: args.sha256, role: "diagnostic" };
+    },
+    async recordUsage() { visionCalls++; },
+    async uploadArtifact(args: { sourceCallId: string; parentArtifactId: string; sha256: string; role: string; bytes: Uint8Array; mime: string }) {
+      if (args.role === "final_result") delivered.push(args.parentArtifactId);
+      return { artifactId: `output-${args.sourceCallId}`, runId: runClaim.run.id, conversationId: runClaim.run.conversationId,
+        objectKey: `outputs/${args.sourceCallId}`, sha256: args.sha256, role: args.role, bytes: args.bytes.byteLength, mime: args.mime, userVisible: args.role === "final_result" };
+    },
+  } as unknown as AgentControlClient;
+  const processor = new UnifiedPlanningRunProcessor({
+    workspaceRoot: join(process.env.TEMP ?? ".", "bowerbird-adaptive-tests", randomUUID()),
+    vision: { apiKey: "unused", baseUrl: "https://ark.invalid", model: "unused", mock: true },
+    modelProxy: { upstream: { apiKey: "unused", baseUrl: "https://deepseek.invalid", model: "fixture" } },
+    createApprovedStepExecutor(context, workspace) {
+      return { async generate(request) {
+        generated++; active++; peak = Math.max(peak, active);
+        if (generated === 10) release();
+        await barrier; active--;
+        const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+        const image = { mime: "image/png" as const, bytes, sha256: createHash("sha256").update(bytes).digest("hex") };
+        const artifact = { artifactId: request.stepId, runId: context.claimed.run.id,
+          conversationId: context.claimed.run.conversationId, role: "stage_result" as const,
+          mime: image.mime, bytes: image.bytes.byteLength, sha256: image.sha256, userVisible: false, objectKey: request.stepId };
+        workspace.rememberArtifact(request.callId, artifact, image);
+        return artifact;
+      } };
+    },
+    htmlExecution: {
+      renderConfig: { rendererUrl: "http://renderer.invalid", internalToken: "fixture" },
+      createAdapter() { throw new Error("must_not_start_domain_agent"); },
+      createRenderExecutor(context, workspace) {
+        return { async render(request) {
+          rendered++;
+          const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+          const sha256 = createHash("sha256").update(bytes).digest("hex");
+          const artifactId = `render-${rendered}`;
+          workspace.rememberArtifact(request.callId, { artifactId, role: "full_page_screenshot", mime: "image/png", bytes: bytes.byteLength,
+            sha256, userVisible: true, runId: context.claimed.run.id, conversationId: context.claimed.run.conversationId, objectKey: artifactId },
+            { mime: "image/png", bytes, sha256 });
+          return { schemaVersion: 1, rendererFingerprint: "fixture", sourceHtmlSha256: sha256, argsHash: sha256,
+            document: { widthCssPx: 800, heightCssPx: 600, widthDevicePx: 800, heightDevicePx: 600 }, renderMs: 1,
+            manifestArtifactId: `manifest-${rendered}`, manifestObjectKey: `manifest-${rendered}`,
+            outputs: [{ artifactId, role: "full_page_screenshot", mime: "image/png", bytes: bytes.byteLength, sha256,
+              clipDevicePx: { x: 0, y: 0, width: 800, height: 600 } }] };
+        } };
+      },
+    },
+    createAdapter(environment) {
+      adapterCount++;
+      const execute = (toolName: string, actionId: string, input: unknown) => toolCall(environment, "call_tool", {
+        toolName, actionId, inputJson: JSON.stringify(input),
+      });
+      return { id: "adaptive-fixture", async open(seed) { return { sessionId: "one-agent", runId: seed.runId,
+        async turn(prompt) {
+          const promptText = canonicalJson(prompt);
+          ok(promptText.includes(`vision:${observationId}:0`));
+          ok(promptText.includes("requiredOutputCount"));
+          const readState = async () => (await toolCall(environment, "read_context", { id: "run_state" }) as {
+            content: { progress: { availableCandidateCount: number }; actions: Array<{ outputArtifactIds: string[] }> }
+          }).content;
+          equal((await readState()).progress.availableCandidateCount, 0);
+          const cached = await toolCall(environment, "read_context", { id: `vision:${observationId}:0` }) as { content: { text: string } };
+          deepEqual(JSON.parse(cached.content.text), observation);
+          equal(visionCalls, 0);
+          const unavailable = await toolCall(environment, "understand_asset", { assetId: "asset-product", focus: "general" }) as { correction: string };
+          ok(unavailable.correction.includes("call_tool"));
+          if (htmlCase) {
+            const first = await execute("compose_html", "layout-first", { html: "<main><h1>产品</h1></main>", assetIds: [] }) as { artifactId: string };
+            const preview = await execute("render_html", "preview-first", { documentId: first.artifactId }) as RenderHtmlResultV1;
+            const current = await readState();
+            equal(current.progress.availableCandidateCount, 1);
+            ok(current.actions.some(action => action.outputArtifactIds.includes(preview.outputs[0]!.artifactId)));
+            await execute("inspect_artifact", "inspect-layout", { assetId: preview.outputs[0]!.artifactId, focus: "layout", goal: "检查布局" });
+            const revised = await execute("compose_html", "layout-revised", { html: "<main><h1>产品</h1><p>修订布局</p></main>", assetIds: [] }) as { artifactId: string };
+            const final = await execute("render_html", "preview-revised", { documentId: revised.artifactId }) as RenderHtmlResultV1;
+            await execute("finalize_output", "deliver", { assetIds: [final.outputs[0]!.artifactId] });
+            return { stopReason: "end_turn", committedContent: [] };
+          }
+          await Promise.all(Array.from({ length: 10 }, (_, index) => execute("generate_image", `scene-${index}`,
+            { prompt: `产品场景 ${index}`, assetIds: ["asset-product"] })));
+          await execute("inspect_artifact", "check-one", { assetId: "scene-2", focus: "subject", goal: "检查主体一致性" });
+          await execute("generate_image", "repair-one", { prompt: "修正产品标签", assetIds: ["scene-2"] });
+          const recovered = await toolCall(environment, "read_context", { id: "action:repair-one:0" }) as { content: { text: string } };
+          const action = JSON.parse(recovered.content.text);
+          equal(action.actionId, "repair-one");
+          equal(action.status, "completed");
+          equal(action.arguments.prompt, "修正产品标签");
+          await execute("finalize_output", "deliver", { assetIds: Array.from({ length: 10 }, (_, index) => index === 2 ? "repair-one" : `scene-${index}`) });
+          return { stopReason: "end_turn", committedContent: [] };
+        }, async close() {}, async cancel() {},
+      }; } };
+    },
+  });
+  await rejects(() => processor.process({ claimed: runClaim, control, signal: signal() }), SimulatedProcessCrash);
+  equal(generated, htmlCase ? 0 : 11); equal(peak, htmlCase ? 0 : 10); equal(visionCalls, 1); equal(delivered.length, htmlCase ? 1 : 10);
+  if (htmlCase) { equal(rendered, 2); deepEqual(delivered, ["render-2"]); }
+  else { ok(delivered.includes("repair-one")); ok(!delivered.includes("scene-2")); }
+  runClaim.run.checkpointHash = sha256Hex(checkpointText);
+  await processor.process({ claimed: runClaim, control, signal: signal() });
+  equal(adapterCount, 1); equal(generated, htmlCase ? 0 : 11); equal(delivered.length, htmlCase ? 1 : 10); equal(parked, 1);
+  equal(events.find((event) => event.type === "result.ready")?.displayPayload?.selectionVersion, 1);
 });
 
 test("exact detail delivery extracts only the fenced source copy for parent validation", () => {
@@ -167,10 +298,17 @@ test("formal unified processor checkpoints before DSH and parks through the pare
         async turn(prompt) {
           const text = prompt[0]?.type === "text" ? prompt[0].text : "";
           ok(text.includes("HTML 长图"));
-          ok(text.includes("BOWERBIRD_VISUAL_PROFILE_CAPSULE_V1"));
-          ok(text.includes(visualProfileCapsule.hash));
-          ok(text.includes("contentThemes"));
-          ok(text.includes("never mutate or write back"));
+          ok(!text.includes("htmlOutput"));
+          ok(!text.includes("full_page_and_slices"));
+          ok(!text.includes("普通修图"));
+          ok(!text.includes("staged_controlled"));
+          ok(!text.includes("BOWERBIRD_REQUIRED_DELIVERY_POLICY_V1"));
+          ok(text.includes("project_visual_profile"));
+          ok(!text.includes(visualProfileCapsule.hash));
+          ok(!text.includes("contentThemes"));
+          const profileContext = await toolCall(adapterEnvironment!, "read_context", { id: "project_visual_profile" }) as { content: unknown };
+          ok(JSON.stringify(profileContext.content).includes(visualProfileCapsule.hash));
+          ok(JSON.stringify(profileContext.content).includes("never mutate or write back"));
           const manifest = await toolCall(adapterEnvironment!, "list_run_assets", {}) as {
             assets: Array<{ assetId: string }>;
           };
@@ -496,8 +634,8 @@ test("formal unified processor rebuild reuses the same durable call after artifa
   equal(JSON.parse(checkpointText).phase, "awaiting_result_feedback");
 });
 
-test("formal unified processor executes approved compose_html then parent-owned render_html and parks", async () => {
-  const plan = {
+for (const mixed of [false, true]) test(`approved HTML execution survives restart (generated resources: ${mixed})`, async () => {
+  const plan: HarnessPlan = {
     schemaVersion: 1 as const,
     title: "批准的 HTML 长图",
     summary: "排版当前产品素材并离线渲染",
@@ -508,6 +646,12 @@ test("formal unified processor executes approved compose_html then parent-owned 
       { id: "finalize", kind: "finalize_output" as const, goal: "交付长图", inputAssetIds: [], dependsOn: ["inspect"] },
     ],
   };
+  if (mixed) {
+    plan.steps[0]!.dependsOn = ["generate"];
+    plan.steps.unshift({ id: "generate", kind: "generate_image", goal: "海边产品主视觉", inputAssetIds: ["asset-product"], dependsOn: [] });
+  }
+  const resourceIds = mixed ? ["asset-product", "generated-scene"] : ["asset-product"];
+  const generatedCalls = new Set<string>();
   const approvedPlanHash = sha256Hex(canonicalJson(plan));
   const checkpoint = {
     schemaVersion: 1, runId: "run-unified-1", conversationId: "conversation-unified-1",
@@ -549,7 +693,7 @@ test("formal unified processor executes approved compose_html then parent-owned 
     async saveRawCheckpoint(args: { bytes: Uint8Array }) {
       const nextText = new TextDecoder().decode(args.bytes);
       const next = JSON.parse(nextText) as { completedToolResults: unknown[] };
-      if (crashBeforeResultCheckpoint && next.completedToolResults.length === 4) {
+      if (crashBeforeResultCheckpoint && next.completedToolResults.length === plan.steps.length) {
         crashBeforeResultCheckpoint = false;
         throw new SimulatedProcessCrash();
       }
@@ -615,15 +759,16 @@ test("formal unified processor executes approved compose_html then parent-owned 
         sessionId: "html-session", runId: seed.runId,
         async turn(prompt) {
           const text = prompt[0]?.type === "text" ? prompt[0].text : "";
-          ok(text.includes('"widthCssPx":1080'));
-          ok(text.includes('"resourceArtifactId":"asset-product"'));
-          ok(text.includes('"htmlSrc":"asset:reference-1"'));
-          ok(text.includes("never put a raw artifact id after asset:"));
-          ok(text.includes("none of the literal tokens <!--, -->, /*, or */"));
+          ok(text.includes("html_render_contract"));
+          ok(!text.includes('"widthCssPx":1080'));
+          const renderContext = JSON.stringify(await toolCall(executionEnvironment!, "read_context", { id: "html_render_contract" }));
+          ok(renderContext.includes('"widthCssPx":1080'));
+          ok(renderContext.includes('"htmlSrc":"asset:reference-1"'));
+          ok(renderContext.includes("none of the literal tokens <!--, -->, /*, or */"));
           await toolCall(executionEnvironment!, "compose_html", {
             schemaVersion: 1,
             html: "<main><img src=\"asset:reference-1\"><h1>完整推文</h1></main>",
-            resourceArtifactIds: ["asset-product"],
+            resourceArtifactIds: resourceIds,
           });
           await toolCall(executionEnvironment!, "render_html", {});
           await toolCall(executionEnvironment!, "inspect_artifact", {});
@@ -640,17 +785,28 @@ test("formal unified processor executes approved compose_html then parent-owned 
     vision: { apiKey: "unused", baseUrl: "https://ark.invalid", model: "unused", mock: true },
     createAdapter() { throw new Error("planning_must_not_open"); },
     modelProxy: { upstream: { apiKey: "parent", baseUrl: "https://deepseek.invalid", model: "deepseek-v4-flash" } },
+    createApprovedStepExecutor(_context, workspace) {
+      return { async generate(request) {
+        generatedCalls.add(request.callId);
+        equal(request.outputRole, "stage_result");
+        const artifact = { artifactId: "generated-scene", conversationId: "conversation-unified-1", runId: "run-unified-1", role: "stage_result" as const, stepId: "generate", mime: "image/png" as const, bytes: onePixelPng.byteLength, sha256: onePixelSha256, userVisible: true, objectKey: "generated.png" };
+        workspace.rememberArtifact(request.callId, artifact, { mime: "image/png", bytes: onePixelPng, sha256: onePixelSha256 });
+        return artifact;
+      } };
+    },
     htmlExecution: {
       renderConfig: { rendererUrl: "http://renderer.invalid", internalToken: "fixture" },
       createAdapter(environment) { executionEnvironment = environment; return htmlAdapter; },
       createRenderExecutor(_context, workspace) {
         return {
           async render(request) {
+            if (mixed) equal((await workspace.readArtifact("generated-scene")).sha256, onePixelSha256);
             const restored = renderedByCall.get(request.callId);
             const result = restored ?? (() => {
               renderCalls++;
               equal(request.input.htmlArtifactId, "html-document");
-              deepEqual(request.input.resourceArtifactIds, ["asset-product"]);
+              deepEqual(request.input.resourceArtifactIds, resourceIds);
+
               deepEqual(request.input.viewport, { widthCssPx: 1080, heightCssPx: 720, deviceScaleFactor: 2 });
               deepEqual(request.input.capture, { mode: "full_page" });
               equal(request.input.background, "transparent");
@@ -682,12 +838,9 @@ test("formal unified processor executes approved compose_html then parent-owned 
   equal(parked, 1);
   const saved = JSON.parse(checkpointText);
   equal(saved.phase, "awaiting_result_feedback");
-  equal(saved.completedToolResults.length, 4);
-  equal(saved.completedToolResults[0].toolName, "compose_html");
-  equal(saved.completedToolResults[1].toolName, "render_html");
-  equal(saved.completedToolResults[2].toolName, "inspect_artifact");
-  equal(saved.completedToolResults[3].toolName, "finalize_output");
-  equal(saved.completedToolResults[3].result.primaryArtifactId, "full-page");
+  equal(generatedCalls.size, mixed ? 1 : 0);
+  deepEqual(saved.completedToolResults.map((item: { toolName: string }) => item.toolName), plan.steps.map((step) => step.kind));
+  equal(saved.completedToolResults.at(-1).result.primaryArtifactId, "full-page");
 });
 
 test("U5 reuses one approved execution session to render HTML then derive a Xiaohongshu package", async () => {
@@ -772,8 +925,8 @@ test("U5 reuses one approved execution session to render HTML then derive a Xiao
         sessionId: "content-session", runId: seed.runId,
         async turn(prompt) {
           const text = prompt[0]?.type === "text" ? prompt[0].text : "";
-          ok(text.includes("reviewable Xiaohongshu draft"));
-          ok(text.includes("Never claim that it was published"));
+          ok(!text.includes("reviewable Xiaohongshu draft"));
+          ok(text.includes("xiaohongshu_draft"));
           await toolCall(executionEnvironment!, "compose_html", {
             schemaVersion: 1,
             html: "<main><img src=\"asset:reference-1\"><h1>产品重点</h1></main>",

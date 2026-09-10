@@ -356,7 +356,7 @@ const BUILTIN_SKILLS = {
 - 用户排版目标文本。
 - 用户为本次 Run 显式选择的 0–N 张图片 artifact。
 - 输出模式、viewport、device scale factor、切片高度和背景。
-- 可选的项目视觉设定胶囊；仍低于本次明确目标，且只影响未指定的视觉选择。
+- 可选的已选视觉规范胶囊；规范独立于项目、可跨创作复用，Run 只读取冻结版本。仍低于本次明确目标，且只影响未指定的视觉选择。当前契约见 [AGENT-RUNTIME-PLAN.md](AGENT-RUNTIME-PLAN.md) §8（2026-09-10 同步）；这不改变旧 HTML Runner 与通用 Agent 的职责边界。
 
 首版 phase graph：
 

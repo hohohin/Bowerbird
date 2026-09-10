@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ClipboardCopy, MessageSquare, PenTool, ScanSearch } from "lucide-react";
+import { ClipboardCopy, LayoutDashboard, MessageSquare, PenTool, ScanSearch, Trash2 } from "lucide-react";
 import { useStore } from "../store";
 import { api } from "../lib/api";
 import { loadDescribePrompt } from "../lib/describePrompt";
@@ -10,6 +10,13 @@ import { understandProvider } from "../lib/entitlement";
 import { notifyError, notifySuccess } from "../lib/notify";
 import { isWorkspaceOperationCurrent } from "../lib/workspaceRoute";
 import type { AssetDeleteMode, AssetDeleteResult } from "../lib/types";
+import { canMoveAssetOut } from "../lib/assetDeletion";
+import {
+  CANVAS_REMOVE_NODES_EVENT,
+  CANVAS_ARRANGE_NODES_EVENT,
+  type CanvasArrangeNodesEventDetail,
+  type CanvasRemoveNodesEventDetail,
+} from "../lib/creativeCanvas";
 
 const MENU_WIDTH = 232;
 // 高度按全量项（生成图 + 本地文件 + 项目内，含「物理删除整组」）估算，含四组标签与分隔线。
@@ -39,6 +46,7 @@ export function AssetContextMenu() {
   const menu = useStore((s) => s.contextMenu);
   const closeContextMenu = useStore((s) => s.closeContextMenu);
   const openDetail = useStore((s) => s.openDetail);
+  const exitProject = useStore((s) => s.exitProject);
   const detailAssetId = useStore((s) => s.detailAssetId);
   const addAssetToBoardFromDetail = useStore((s) => s.addAssetToBoardFromDetail);
   const activeProjectId = useStore((s) => s.activeProjectId);
@@ -78,7 +86,7 @@ export function AssetContextMenu() {
   useEffect(() => {
     setGroupIds(null);
     if (!menu) return;
-    const target = useStore.getState().assets.find((a) => a.id === menu.assetId);
+    const target = menu.asset ?? useStore.getState().assets.find((a) => a.id === menu.assetId);
     if (!target?.generation_session_id) return;
     let alive = true;
     api
@@ -121,13 +129,15 @@ export function AssetContextMenu() {
       const offset = e.key === "ArrowDown" ? 1 : -1;
       buttons[(current + offset + buttons.length) % buttons.length].focus();
     }
-    window.addEventListener("mousedown", onMouseDown);
+    // 画板节点会在 pointerdown 中阻止冒泡以启动拖动；用捕获阶段确保
+    // 左键点击画板时仍能先关闭已经打开的右键菜单。
+    window.addEventListener("pointerdown", onMouseDown, true);
     window.addEventListener("keydown", onKey);
     window.requestAnimationFrame(() => {
       menuRef.current?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
     });
     return () => {
-      window.removeEventListener("mousedown", onMouseDown);
+      window.removeEventListener("pointerdown", onMouseDown, true);
       window.removeEventListener("keydown", onKey);
     };
   }, [menu, closeContextMenu]);
@@ -179,8 +189,9 @@ export function AssetContextMenu() {
 
   // 守卫后捕获，闭包里直接用（TS 不会把守卫的收窄带进嵌套函数）。
   const assetId = menu.assetId;
-  const asset = assets.find((a) => a.id === assetId);
+  const asset = menu.asset ?? assets.find((a) => a.id === assetId);
   const storePath = asset?.store_path ?? null;
+  const moveOutAvailable = canMoveAssetOut(asset);
   // 仅生成图显示「复用生成提示词」：generation_session_id 非 null 即任意 provider 的生成图。
   const isGenerated = !!asset?.generation_session_id;
   // 「图片标注」可用：本地有文件且为浏览器可解码位图（视频 / SVG / TIFF 不可标注）。
@@ -267,7 +278,9 @@ export function AssetContextMenu() {
     if (!isCurrentIntent()) return;
     setBusy(true);
     try {
-      const hist = await api.generationHistory(assetId, expectedProjectId);
+      // 生成来源属于中心素材，而不是素材当前出现的项目。画板节点可以引用尚未写入
+      // project_assets 的恢复/迁移结果；按当前项目过滤会把真实 generation_meta 筛空。
+      const hist = await api.generationHistory(assetId, null);
       if (!isCurrentIntent()) {
         if (useStore.getState().contextMenu === expectedMenu) setBusy(false);
         return;
@@ -281,7 +294,7 @@ export function AssetContextMenu() {
       }
       // 复用首轮 prompt + 首版参考图 + 借用维度源图（车牌 sidecar，与 GenerationPanel 一致）
       // → 打开创作板载入。
-      reusePromptToBoard(prompt, hist.references, hist.dimension_assets);
+      reusePromptToBoard(prompt, hist.references, hist.dimension_assets, undefined, { media: hist.media, videoOptions: hist.video_options, ratio: hist.ratio, videoChannel: hist.provider?.startsWith("bowerbird-cloud") ? "cloud" : "jimeng" }, expectedProjectId && hist.turns[0]?.project_id === expectedProjectId ? hist.references.map(asset => hist.turns[0]?.reference_node_ids?.[hist.turns[0]?.references?.indexOf(asset.store_path ?? "") ?? -1] ?? null) : undefined);
       notifySuccess("生成提示词已载入创作板");
       closeContextMenu();
     } catch (e) {
@@ -348,6 +361,22 @@ export function AssetContextMenu() {
     zIndex: 60,
   };
 
+  async function showAssetDetail() {
+    closeContextMenu();
+    if (!activeProjectId) {
+      openDetail(assetId);
+      return;
+    }
+    try {
+      await exitProject();
+      const state = useStore.getState();
+      // 路由期间若用户已进入另一项目，不用迟到的详情请求覆盖新意图。
+      if (state.activeProjectId === null) state.openDetail(assetId);
+    } catch (error) {
+      notifyError(error, "无法打开图片详情，当前画板保持不变");
+    }
+  }
+
   return createPortal(
     <div
       ref={menuRef}
@@ -358,6 +387,36 @@ export function AssetContextMenu() {
       aria-label="素材操作"
     >
       <div className="app-context-label">整理</div>
+      {menu.canvasSelection && (
+        <button type="button" role="menuitem" disabled={busy} className="app-context-item px-2 py-1.5"
+          onClick={() => {
+            window.dispatchEvent(new CustomEvent<CanvasArrangeNodesEventDetail>(CANVAS_ARRANGE_NODES_EVENT, {
+              detail: menu.canvasSelection,
+            }));
+            closeContextMenu();
+          }}>
+          <LayoutDashboard size={13} className="shrink-0" /> 整理
+        </button>
+      )}
+      {menu.canvasSelection && (
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => {
+            window.dispatchEvent(new CustomEvent<CanvasRemoveNodesEventDetail>(CANVAS_REMOVE_NODES_EVENT, {
+              detail: menu.canvasSelection,
+            }));
+            closeContextMenu();
+          }}
+          disabled={busy}
+          className="app-context-item px-2 py-1.5"
+        >
+          <Trash2 size={13} className="shrink-0" />
+          {menu.canvasSelection.nodeIds.length > 1
+            ? `从画板移除所选 ${menu.canvasSelection.nodeIds.length} 项`
+            : "从画板移除"}
+        </button>
+      )}
       {/* 详情页右键（编辑器对话框与详情页互斥，从此处带回主界面插 chip）：菜单第一项。 */}
       {mode === "browse" && detailAssetId !== null && (
         <button
@@ -377,10 +436,7 @@ export function AssetContextMenu() {
       <button
         type="button"
         role="menuitem"
-        onClick={() => {
-          openDetail(assetId);
-          closeContextMenu();
-        }}
+        onClick={() => void showAssetDetail()}
         disabled={busy}
         className="app-context-item px-2 py-1.5"
       >
@@ -562,8 +618,10 @@ export function AssetContextMenu() {
             type="button"
             role="menuitem"
             onClick={() => runDelete(assetId, "move_out")}
-            disabled={busy}
-            title="不会删除文件，文件回到原始位置"
+            disabled={busy || !moveOutAvailable}
+            title={!moveOutAvailable
+              ? "该素材没有可恢复的原始文件位置，请使用物理删除"
+              : "不会删除文件，文件回到原始位置"}
             className="app-context-item px-2 py-1.5"
           >
             移出园丁鸟

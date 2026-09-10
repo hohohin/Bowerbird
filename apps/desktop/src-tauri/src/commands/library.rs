@@ -9,7 +9,6 @@ use rusqlite::OptionalExtension;
 use tauri::{AppHandle, Emitter, State};
 use ulid::Ulid;
 
-use crate::core::autoname;
 use crate::core::caption;
 use crate::core::ingest;
 use crate::core::library::{
@@ -26,6 +25,17 @@ use crate::error::AppError;
 /// 开关来自设置面板（settings.json），命令层每次现读，改设置后无需重启即生效。
 fn hide_in_global(settings: &SettingsState, project_id: &Option<String>) -> bool {
     settings.get().hide_project_assets && project_id.is_none()
+}
+
+#[tauri::command]
+pub async fn list_library_view(
+    db: State<'_, Arc<Database>>,
+    filter: crate::core::library_view::LibraryViewFilter,
+) -> Result<crate::core::library_view::LibraryView, AppError> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || db.library_view(filter))
+        .await
+        .map_err(|e| AppError::Other(e.to_string()))?
 }
 
 #[tauri::command]
@@ -611,8 +621,8 @@ pub async fn delete_asset(
 }
 
 /// 单素材删除（右键菜单）：与「删除项目」三选项一致的语义——
-/// `keep`=仅移出当前项目（素材留全局）；`move_out`=文件移回原始位置并删资产行（同项目的独占素材直接删除）；
-/// `delete`=从全局及所有项目物理删除。`project_id` 只在 `keep` 且当前处于项目时使用。
+/// `keep`=仅移出当前项目（素材留全局）；`move_out`=文件移回原始位置，项目视图中的共享素材
+/// 只移出当前项目，全局素材库中的操作会删资产行及全部项目关系；`delete`=从全局及所有项目物理删除。
 #[tauri::command]
 pub async fn delete_asset_with_mode(
     app: AppHandle,
@@ -990,18 +1000,7 @@ pub async fn set_asset_tags(
 ) -> Result<(), AppError> {
     let db = db.inner().clone();
     tokio::task::spawn_blocking(move || {
-        let ids: Vec<String> = names
-            .iter()
-            .filter_map(|n| {
-                let n = n.trim();
-                if n.is_empty() {
-                    None
-                } else {
-                    db.get_or_create_tag(n, &source).ok()
-                }
-            })
-            .collect();
-        db.set_asset_tags(&asset_id, &ids, &source)
+        db.edit_classification_tags(&asset_id, &names, &source)
     })
     .await
     .map_err(|e| AppError::Other(e.to_string()))??;
@@ -1014,8 +1013,10 @@ pub async fn set_asset_tags(
 /// 立即返回，后台逐张跑并 emit `classify://progress {done,total,ended?}`。
 #[tauri::command]
 pub async fn reclassify_all(app: AppHandle, db: State<'_, Arc<Database>>) -> Result<(), AppError> {
-    autoname::spawn_reclassify_all(app, db.inner().clone());
-    Ok(())
+    use tauri::Manager;
+    let classifier=app.state::<Arc<crate::core::local_classification::LocalClassifier>>().inner().clone();
+    let paths=app.state::<Arc<LibraryPaths>>().inner().clone();
+    classifier.start(app,db.inner().clone(),paths,false,None,true).map_err(AppError::Other)
 }
 
 // ============ 颜色量化（P3）============

@@ -1,3 +1,4 @@
+import { parseTaskAuthorization, taskAuthorizationCallCount, type TaskAuthorization } from "../contracts/task-authorization.ts";
 import type { DurableToolIdentity } from "../kernel/durable-tool-dispatcher.ts";
 import { canonicalJson, computeArgsHash, sha256Hex } from "../kernel/tool-ledger.ts";
 import type {
@@ -91,7 +92,7 @@ export type PlanApprovalRequest = {
   callId: string;
   argsHash: string;
   proposalHash: string;
-  proposal: HarnessPlan;
+  proposal: HarnessPlan | TaskAuthorization;
   plannedToolCount: number;
 };
 
@@ -156,9 +157,9 @@ const MISSING_DECISIONS = new Set(["generate", "reuse_existing", "not_needed"]);
 
 function validateContentPlan(value: unknown, limits: RunControlToolLimits, steps: HarnessPlanStep[]): HarnessPlanContent {
   const content = exactRecord(value, ["assetAssignments", "informationArchitecture", "missingAssets", "visualProfile"]);
-  if (!Array.isArray(content.assetAssignments) || !content.assetAssignments.length ||
+  if (!Array.isArray(content.assetAssignments) ||
       content.assetAssignments.length > limits.maxAssets || !Array.isArray(content.informationArchitecture) ||
-      !content.informationArchitecture.length || content.informationArchitecture.length > limits.maxPlanSteps ||
+      !content.informationArchitecture.length || content.informationArchitecture.length > 64 ||
       !Array.isArray(content.missingAssets) || content.missingAssets.length > limits.maxPlanSteps) {
     throw new Error("plan_content_invalid");
   }
@@ -410,6 +411,27 @@ export function createRunControlToolDefinitions(
     throw new Error("run_control_tool_limits_invalid");
   }
   return [
+    {
+      name: "request_task_authorization",
+      execution: "control",
+      allowedPhases: ["compose_plan"],
+      validate: (value) => parseTaskAuthorization(value),
+      dispatcher: {
+        async dispatch(identity, value) {
+          const authorization = parseTaskAuthorization(value);
+          const manifest = validateManifest(await port.readRunAssets(identity), identity, limits);
+          const ids = new Set(manifest.assets.map((asset) => asset.assetId));
+          if (authorization.assetIds.some((id) => !ids.has(id))) throw new Error("plan_asset_not_in_run");
+          const proposalHash = sha256Hex(canonicalJson(authorization));
+          const result = await port.requestPlanApproval({
+            runId: identity.runId, leaseId: identity.leaseId, callId: identity.callId,
+            argsHash: computeArgsHash({ plan: authorization }), proposalHash, proposal: authorization,
+            plannedToolCount: taskAuthorizationCallCount(authorization),
+          });
+          return { terminalReason: "awaiting_plan_approval", proposalHash, ...result };
+        },
+      },
+    },
     {
       name: "list_run_assets",
       execution: "control",

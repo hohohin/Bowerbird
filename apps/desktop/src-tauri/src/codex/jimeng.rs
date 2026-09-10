@@ -52,6 +52,19 @@ impl GenProvider for DreaminaCliProvider {
         "jimeng"
     }
 
+    async fn generate_video(
+        &self,
+        req: CodexRequest,
+        options: crate::codex::types::VideoOptions,
+        tx: &mpsc::Sender<Chunk>,
+        resume_session: Option<String>,
+    ) -> Result<GenOutcome, AppError> {
+        if !self.enabled {
+            return Err(AppError::Jimeng("DreaminaCliProvider 未启用".into()));
+        }
+        super::jimeng_video::generate(&self.binary, req, options, tx, resume_session).await
+    }
+
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             chat: false,

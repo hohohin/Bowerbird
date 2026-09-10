@@ -43,7 +43,7 @@ function PendingPlan({ approval }: { approval: CloudAgentApproval }) {
 
       {plan.references.length > 0 && (
         <div>
-          <div className="mb-1 text-[11px] font-medium text-muted">参考图职责</div>
+          <div className="mb-1 text-[11px] font-medium text-muted">{approval.proposal?.schemaVersion === 3 ? "授权素材" : "参考图职责"}</div>
           <div className="space-y-1.5">
             {plan.references.map((reference) => (
               <div key={reference.key} className="rounded bg-white/6 px-2 py-1 text-[10px] text-ink/80">
@@ -57,7 +57,7 @@ function PendingPlan({ approval }: { approval: CloudAgentApproval }) {
 
       {plan.sections.length > 0 && (
         <div>
-          <div className="mb-1 text-[11px] font-medium text-muted">内容结构</div>
+          <div className="mb-1 text-[11px] font-medium text-muted">{approval.proposal?.schemaVersion === 3 ? "任务范围" : "内容结构"}</div>
           <div className="space-y-1.5">
             {plan.sections.map((section) => (
               <div key={section.key} className="rounded border border-edge bg-panel2/50 px-2 py-1.5 text-[10px] text-ink/80">
@@ -88,7 +88,7 @@ function PendingPlan({ approval }: { approval: CloudAgentApproval }) {
           <div key={step.id} className="rounded-lg border border-edge bg-panel2/70 p-3">
             <div className="flex items-center gap-2 text-xs font-medium text-ink">
               <span className="flex h-5 w-5 items-center justify-center rounded-full bg-accent/20 text-[10px] text-accent">
-                {index + 1}
+                {approval.proposal?.schemaVersion === 3 ? "≤" : index + 1}
               </span>
               <span>{step.goal}</span>
               {step.kindLabel && <span className="ml-auto shrink-0 text-[10px] font-normal text-muted">{step.kindLabel}</span>}
@@ -104,7 +104,7 @@ function PendingPlan({ approval }: { approval: CloudAgentApproval }) {
       </div>
 
       <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-muted">
-        <span>计划工具调用：{approval.planned_tool_count ?? plan.steps.length}</span>
+        <span>{approval.proposal?.schemaVersion === 3 ? "最多工具调用" : "计划工具调用"}：{approval.planned_tool_count ?? plan.steps.length}</span>
         <span>本次最多新增：{approval.estimated_additional_credits ?? 0} 积分</span>
       </div>
     </div>
@@ -259,7 +259,7 @@ export function CloudAgentSession({
   const htmlRun = run?.skillId === HTML_SKILL_ID;
   const unifiedRun = run?.skillId === UNIFIED_SKILL_ID;
   const generatedArtifacts = useMemo(
-    () => run ? selectCloudAgentResultArtifacts(run.snapshot.artifacts, run.snapshot.renderManifest) : [],
+    () => run ? selectCloudAgentResultArtifacts(run.snapshot.artifacts, run.snapshot.renderManifest, run.snapshot.events) : [],
     [run],
   );
   const renderedDocumentRun = !!run && isRenderedDocumentResult(
@@ -631,18 +631,18 @@ export function CloudAgentSession({
                   </div>
                 )}
 
-                {renderedDocumentRun && generatedArtifacts.length > 0 && (
+                {generatedArtifacts.length > 0 && (
                   <div className="rounded-lg border border-edge bg-panel p-4">
                     <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                       <div>
-                        <div className="text-xs font-semibold text-ink">离线渲染结果</div>
+                        <div className="text-xs font-semibold text-ink">{renderedDocumentRun ? "离线渲染结果" : "图片结果"}</div>
                         {run.snapshot.renderManifest ? (
                           <div className="mt-1 text-[10px] text-muted">
                             文档 {run.snapshot.renderManifest.document.widthDevicePx} × {run.snapshot.renderManifest.document.heightDevicePx}px
                             · {generatedArtifacts.length} 张 · {run.snapshot.renderManifest.renderMs}ms
                           </div>
                         ) : (
-                          <div className="mt-1 text-[10px] text-muted">{generatedArtifacts.length} 张已验证截图</div>
+                          <div className="mt-1 text-[10px] text-muted">{generatedArtifacts.length} 张{renderedDocumentRun ? "截图" : "图片"} · 点击查看大图</div>
                         )}
                       </div>
                       {run.snapshot.renderManifest && (
@@ -720,10 +720,10 @@ export function CloudAgentSession({
             <div className="mx-auto max-w-3xl text-center text-[10px] text-muted">旧 Agent 会话仅供核对；不会批准、回答澄清、执行本机工具、反馈、取消或入库。</div>
           ) : run.status === "awaiting_result_feedback" ? (
             <div className="mx-auto max-w-3xl">
-              {!renderedDocumentRun && <textarea
+              {(!renderedDocumentRun || unifiedRun) && <textarea
                 value={feedback}
                 onChange={(event) => setFeedback(event.target.value.slice(0, 2000))}
-                placeholder="可选：具体说明哪里不满意。Agent 会先诊断，再提交新的修订计划供你批准。"
+                placeholder={unifiedRun ? "说明需要修改的内容。Agent 会结合上一轮结果重新规划，提交修订计划供你批准。" : "可选：具体说明哪里不满意。Agent 会先诊断，再提交新的修订计划供你批准。"}
                 className="min-h-16 w-full resize-y rounded-md bg-black/25 px-3 py-2 text-xs text-ink outline-none ring-1 ring-edge focus:ring-accent"
               />}
               {renderedDocumentRun && <p className="text-xs leading-5 text-muted">请检查整图与切片。接受后会按会话、角色和切片顺序幂等入库；放弃则不会继续导出。</p>}
@@ -731,7 +731,7 @@ export function CloudAgentSession({
                 <button disabled={busy} onClick={() => void submitFeedback("accept")} className="flex items-center gap-1.5 rounded-md bg-lime/90 px-4 py-2 text-xs font-semibold text-black disabled:opacity-50">
                   <Check size={13} /> 接受结果
                 </button>
-                {renderedDocumentRun ? (
+                {renderedDocumentRun && !unifiedRun ? (
                   <button disabled={busy} onClick={() => void cancel()} className="flex items-center gap-1.5 rounded-md border border-edge px-4 py-2 text-xs text-ink disabled:opacity-50">
                     <XCircle size={13} /> 放弃结果
                   </button>

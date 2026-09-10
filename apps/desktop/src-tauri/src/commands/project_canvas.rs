@@ -123,6 +123,15 @@ pub async fn project_canvas_node_update(
 }
 
 #[tauri::command]
+pub async fn project_canvas_node_restore(
+    db: State<'_, Arc<Database>>,
+    project_id: String,
+    node_id: String,
+) -> AppResult<Option<CanvasNode>> {
+    db.restore_canvas_node(&project_id, &node_id)
+}
+
+#[tauri::command]
 pub async fn project_canvas_node_remove(
     db: State<'_, Arc<Database>>,
     node_id: String,

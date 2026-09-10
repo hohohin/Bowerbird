@@ -233,20 +233,33 @@ pub async fn delete_project(
     app: AppHandle,
     db: State<'_, Arc<Database>>,
     active: State<'_, ActiveProjectContext>,
+    paths: State<'_, Arc<LibraryPaths>>,
     project_id: String,
     mode: String,
+    confirmation: Option<String>,
 ) -> Result<ProjectDeleteResult, AppError> {
-    if mode != "keep" {
-        return Err(AppError::Other(
-            "项目画板删除只允许保留中央素材；请在素材库单独执行素材移动或物理删除".into(),
-        ));
+    if mode != "keep" && mode != "delete_exclusive" {
+        return Err(AppError::Other("不支持的项目删除方式".into()));
     }
-    let mode = ProjectDeleteMode::Keep;
+    let paths = paths.inner().clone();
     let db = db.inner().clone();
     let id_for_delete = project_id.clone();
-    let result = tokio::task::spawn_blocking(move || db.delete_project(&id_for_delete, mode))
-        .await
-        .map_err(|error| AppError::Other(error.to_string()))??;
+    let result = tokio::task::spawn_blocking(move || {
+        if mode == "delete_exclusive" {
+            db.delete_project_exclusive(
+                &paths,
+                &id_for_delete,
+                confirmation.as_deref().unwrap_or(""),
+            )
+        } else {
+            // A failed restore must not be followed by Keep: deleting its project marker
+            // would make startup mistake an uncommitted physical deletion for a committed one.
+            db.recover_project_deletions(&paths)?;
+            db.delete_project(&id_for_delete, ProjectDeleteMode::Keep)
+        }
+    })
+    .await
+    .map_err(|error| AppError::Other(error.to_string()))??;
     if active.get().as_deref() == Some(project_id.as_str()) {
         active.set(None);
     }
@@ -258,7 +271,16 @@ pub async fn delete_project(
 #[tauri::command]
 pub async fn project_delete_impact(
     db: State<'_, Arc<Database>>,
+    paths: State<'_, Arc<LibraryPaths>>,
     project_id: String,
 ) -> Result<ProjectDeleteImpact, AppError> {
-    db.project_delete_impact(&project_id)
+    let db = db.inner().clone();
+    let paths = paths.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        let mut impact = db.project_delete_impact(&project_id)?;
+        impact.physical = db.project_exclusive_impact(&paths, &project_id)?;
+        Ok(impact)
+    })
+    .await
+    .map_err(|error| AppError::Other(error.to_string()))?
 }

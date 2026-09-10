@@ -4,6 +4,16 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+/// 即梦 Seedance 2.5 视频参数；不复用图片模型设置或静默降级。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct VideoOptions {
+    pub kind: String,
+    pub model_version: String,
+    pub duration: u32,
+    pub video_resolution: String,
+}
+
 /// 发给 codex 的请求：指令 + 参考图 + 上下文提示词。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CodexRequest {

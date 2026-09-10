@@ -26,48 +26,16 @@ use crate::core::settings::SettingsState;
 use crate::db::Database;
 use crate::error::AppResult;
 
-/// 受控类别词表查空时的硬编码兜底（避免 codex 无类可选）。正常情况词表来自 tags(source='auto')。
-const FALLBACK_VOCAB: &[&str] = &[
-    "人像", "风景", "静物", "美食", "动物", "建筑", "抽象", "插画", "室内", "街景",
-];
-
-/// 采集即命名 + 归类指令：看图 → 取名 + 描述 + 从词表选 1-2 个主类。
-/// 类别用哨兵 `[[CAT: ...]]` 标注（extract_categories 抽取，不污染描述正文）。
-/// 词表查空时用 FALLBACK_VOCAB。
-///
-/// `template` 为空时使用默认硬编码模板；否则用 `{vocab}` 占位符替换词表。
-fn build_auto_instruction(vocab: &[String], template: Option<&str>) -> String {
-    let list = if vocab.is_empty() {
-        FALLBACK_VOCAB.join("、")
-    } else {
-        vocab.join("、")
-    };
-    let tpl = template
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .unwrap_or(DEFAULT_HARDCODED_INSTRUCTION);
-    tpl.replace("{vocab}", &list)
-}
-
-/// 硬编码默认模板（与 settings 的 DEFAULT_AUTO_ANALYZE_PROMPT 保持一致）。
-const DEFAULT_HARDCODED_INSTRUCTION: &str = "请描述这张图片并取名。严格按照以下格式回复：\
- 第一行只回复命名本身，不要有标点符号；\
- 第二行起回复图片的描述；\
- 最后一行单独用 [[CAT: 类别1, 类别2]] 标注主类（最多 2 个，必须从词表里选，只回类别名）。\
- 词表：{vocab}。";
-
-/// 批量重归类指令：喂已有 caption 文本（不看图）→ 只回 `[[CAT: ...]]` 一行。
-fn build_classify_instruction(vocab: &[String], caption: &str) -> String {
-    let list = if vocab.is_empty() {
-        FALLBACK_VOCAB.join("、")
-    } else {
-        vocab.join("、")
-    };
-    format!(
-        "下面是一张图片的描述，请据此判断它属于哪个类别。\
-         从词表里选 1-2 个最合适的主类，只用 [[CAT: 类别1, 类别2]] 格式回复这一行，不要其它内容。\
-         词表：{list}。\n\n图片描述：\n{caption}"
-    )
+/// Naming/caption generation does not supply classification labels.
+fn build_auto_instruction(template: Option<&str>) -> String {
+    let template = template.map(str::trim).filter(|s| !s.is_empty())
+        .unwrap_or(crate::core::settings::DEFAULT_AUTO_ANALYZE_PROMPT);
+    let old_default = "请描述这张图片并取名。严格按照以下格式回复：第一行只回复命名本身，不要有标点符号；第二行起回复图片的描述；最后一行单独用 [[CAT: 类别1, 类别2]] 标注主类（最多 2 个，必须从词表里选，只回类别名）。词表：{vocab}。";
+    let compact = |value: &str| value.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+    if compact(template) == compact(old_default) {
+        return crate::core::settings::DEFAULT_AUTO_ANALYZE_PROMPT.to_string();
+    }
+    template.replace("{vocab}", "")
 }
 
 /// 同时跑的 codex 子进程上限（批量采集/导入时节流）。
@@ -148,11 +116,7 @@ async fn auto_analyze(app: &AppHandle, db: &Arc<Database>, asset: Asset) -> Resu
     // 拿到信号量（即将真正调 codex）才计入在途，emit 让前端状态圈反映导入基础分析。
     let _active = AutoActiveGuard::new(app.clone());
 
-    // 受控类别词表（codex 只见 auto 类别）；查失败用兜底（build_auto_instruction 处理空词表）。
-    let vocab = db_call(db, |db| db.list_auto_tag_names())
-        .await
-        .unwrap_or_default();
-    let instruction = build_auto_instruction(&vocab, Some(&settings.auto_analyze_prompt));
+    let instruction = build_auto_instruction(Some(&settings.auto_analyze_prompt));
 
     let req = CodexRequest {
         instruction: instruction.clone(),
@@ -180,7 +144,7 @@ async fn auto_analyze(app: &AppHandle, db: &Arc<Database>, asset: Asset) -> Resu
         .map_err(|e| e.to_string())?;
 
     // 抽类别哨兵 → (类别, 剥哨兵后的文本)；name/desc/caption 都基于剥哨兵文本（不含类别）。
-    let (cats, clean_text) = extract_categories(&result.text);
+    let (_, clean_text) = extract_categories(&result.text);
     let (name, desc) = split_name_and_desc(&clean_text);
     let mut changed = false;
 
@@ -222,15 +186,8 @@ async fn auto_analyze(app: &AppHandle, db: &Arc<Database>, asset: Asset) -> Resu
         }
     }
 
-    // 3) 自动归类：codex 选中的类别精确匹配词表才写 auto tag；仅当该图尚无 auto tag（防顶手改）。
-    if !cats.is_empty() {
-        let id_for_tag = asset_id.clone();
-        match db_call(db, move |db| apply_auto_categories(&id_for_tag, &cats, db)).await {
-            Ok(true) => changed = true,
-            Ok(false) => {}
-            Err(e) => tracing::warn!("auto-name classify {asset_id}: {e}"),
-        }
-    }
+    // Classification is now exclusively local. Legacy CAT output is parsed only to strip it
+    // from captions; it must not compete with local predictions or overwrite human exclusions.
 
     if changed {
         let _ = app.emit("library://assets-changed", ());
@@ -432,108 +389,17 @@ fn extract_categories(text: &str) -> (Vec<String>, String) {
     (cats, cleaned.trim().to_string())
 }
 
-/// 给资产写 auto 类别：仅当尚无 auto tag（防顶手改）；只收精确匹配词表的类别
-/// （codex 偶尔回不在词表的，丢弃不污染词表）。返回是否有变更。
-fn apply_auto_categories(asset_id: &str, cats: &[String], db: &Arc<Database>) -> AppResult<bool> {
-    if db.has_auto_tag(asset_id)? {
-        return Ok(false);
-    }
-    let vocab: std::collections::HashSet<String> = db.list_auto_tag_names()?.into_iter().collect();
-    let ids: Vec<String> = cats
-        .iter()
-        .filter(|c| vocab.contains(*c))
-        .filter_map(|c| db.get_or_create_tag(c, "auto").ok())
-        .collect();
-    if ids.is_empty() {
-        return Ok(false);
-    }
-    db.set_asset_tags(asset_id, &ids, "auto")?;
-    Ok(true)
-}
-
-/// 批量重归类入口：对所有「无 auto tag 且有 caption」的资产，喂 caption 文本（不看图）
-/// 让 codex 分类。复用 AUTO_SEM 节流；逐张 emit 进度 `classify://progress {done,total,ended?}`。
-/// 无 auto tag 的过滤由 list_assets_to_classify 保证；apply_auto_categories 再查一次防并发竞态。
-pub fn spawn_reclassify_all(app: AppHandle, db: Arc<Database>) {
-    tokio::spawn(async move {
-        let ids = db_call(&db, |db| db.list_assets_to_classify())
-            .await
-            .unwrap_or_default();
-        let total = ids.len();
-        let _ = app.emit(
-            "classify://progress",
-            serde_json::json!({ "done": 0, "total": total }),
-        );
-        for (i, asset_id) in ids.iter().enumerate() {
-            if let Err(e) = classify_one(&app, &db, asset_id).await {
-                tracing::warn!("reclassify {asset_id}: {e}");
-            }
-            let _ = app.emit(
-                "classify://progress",
-                serde_json::json!({ "done": i + 1, "total": total }),
-            );
-        }
-        let _ = app.emit(
-            "classify://progress",
-            serde_json::json!({ "done": total, "total": total, "ended": true }),
-        );
-    });
-}
-
-/// 单张重归类：取最新 caption 文本 → 纯文本 run()（不看图）→ 抽类别 → 写 auto tag。
-async fn classify_one(app: &AppHandle, db: &Arc<Database>, asset_id: &str) -> Result<(), String> {
-    let id_for_cap = asset_id.to_string();
-    let caption_text = db_call(db, move |db| db.latest_caption_text(&id_for_cap))
-        .await?
-        .unwrap_or_default();
-    if caption_text.trim().is_empty() {
-        return Ok(()); // 无 caption 无法分类
-    }
-    let id_for_path = asset_id.to_string();
-    let Some(store_path) = db_call(db, move |db| {
-        Ok(db
-            .get_asset(&id_for_path)?
-            .and_then(|asset| asset.store_path))
-    })
-    .await?
-    else {
-        return Ok(());
-    };
-
-    let _permit = AUTO_SEM.acquire().await.map_err(|e| e.to_string())?;
-    let vocab = db_call(db, |db| db.list_auto_tag_names())
-        .await
-        .unwrap_or_default();
-    let req = CodexRequest {
-        instruction: build_classify_instruction(&vocab, &caption_text),
-        reference_images: vec![store_path.into()],
-        context_prompts: vec![],
-        ratio: None,
-        job_id: None,
-    };
-    let cloud = app.state::<CloudClient>().inner().clone();
-    let auth = app.state::<AuthClient>().inner().clone();
-    let entitlement = app.state::<EntitlementService>();
-    let provider = resolve_entitled_understand_provider(&entitlement, cloud, auth, true)
-        .await
-        .map_err(|e| e.to_string())?;
-    let result = provider
-        .understand(UnderstandOperation::Classify, req)
-        .await
-        .map_err(|e| e.to_string())?;
-    let (cats, _) = extract_categories(&result.text);
-
-    let id_for_tag = asset_id.to_string();
-    let changed = db_call(db, move |db| apply_auto_categories(&id_for_tag, &cats, db)).await?;
-    if changed {
-        let _ = app.emit("library://assets-changed", ());
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn custom_naming_prompt_is_preserved_when_retiring_classification() {
+        let custom="请用日语命名并描述。[[CAT: 类别]] 词表：{vocab}";
+        assert!(build_auto_instruction(Some(custom)).contains("请用日语命名"));
+        assert!(!build_auto_instruction(Some(custom)).contains("{vocab}"));
+        assert!(!build_auto_instruction(None).contains("[[CAT:"));
+    }
 
     #[test]
     fn clean_name_strips_wrapper_chars() {

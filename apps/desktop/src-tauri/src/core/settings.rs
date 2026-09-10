@@ -9,12 +9,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::AppResult;
 
-/// 自动反推提示词的默认模板。`{vocab}` 在运行时替换为受控类别词表。
+/// 自动命名与基础描述模板；分类由独立本地模型处理。
 pub const DEFAULT_AUTO_ANALYZE_PROMPT: &str = "请描述这张图片并取名。严格按照以下格式回复：\
  第一行只回复命名本身，不要有标点符号；\
- 第二行起回复图片的描述；\
- 最后一行单独用 [[CAT: 类别1, 类别2]] 标注主类（最多 2 个，必须从词表里选，只回类别名）。\
- 词表：{vocab}。";
+ 第二行起回复图片的描述。不需要输出分类标签。";
 
 fn default_auto_analyze_prompt() -> String {
     DEFAULT_AUTO_ANALYZE_PROMPT.to_string()
@@ -50,7 +48,7 @@ pub struct AppSettings {
     #[serde(default)]
     pub auto_analyze_on_ingest: bool,
 
-    /// 自动反推的提示词（可用 {vocab} 占位符，运行时替换为受控类别词表）
+    /// 自动命名与基础描述的提示词。
     #[serde(default = "default_auto_analyze_prompt")]
     pub auto_analyze_prompt: String,
 

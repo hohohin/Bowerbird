@@ -342,32 +342,12 @@ function relaxedBudget(service: string, available: number): { budget: number; pr
 async function actionCreate(admin: Parameters<typeof billingAccountId>[0], user: { id: string; app_metadata?: unknown }, body: Record<string, unknown>, requestIdValue: string): Promise<Response> {
   const skillId = typeof body.skillId === "string" ? body.skillId : "";
   if (!ALLOWED_SKILLS.has(skillId)) throw new ApiError("invalid_request", "不支持的 Skill");
-  const requestedRuntime = body.agentRuntime ?? "legacy_kernel";
+  // Old clients omitted the runtime for legacy Runs; keep that snapshot on replay.
+  const requestedRuntime = body.agentRuntime ?? (skillId === UNIFIED_SKILL ? "dsh" : "legacy_kernel");
   if (requestedRuntime !== "legacy_kernel" && requestedRuntime !== "dsh") {
     throw new ApiError("invalid_request", "Agent runtime 无效");
   }
   const agentRuntime = requestedRuntime as AgentRuntime;
-  if (skillId === UNIFIED_SKILL) {
-    if (agentRuntime !== "dsh") {
-      throw new ApiError("invalid_request", "统一 Agent 必须使用 DSH runtime");
-    }
-    if (!accountTestMarker(user.app_metadata)) {
-      throw new ApiError("upgrade_required", "统一 Agent 当前仅对测试账号开放", false, 403);
-    }
-    if (!dshRuntimeSelectionEnabled() || !unifiedAgentDshEnabled()) {
-      throw new ApiError("not_configured", "统一 Agent DSH 尚未启用", false, 503);
-    }
-  } else if (agentRuntime === "dsh") {
-    if (skillId !== CONTROLLED_SKILL) {
-      throw new ApiError("invalid_request", "该 Skill 尚不支持 DSH runtime");
-    }
-    if (!accountTestMarker(user.app_metadata)) {
-      throw new ApiError("upgrade_required", "DSH runtime 当前仅对测试账号开放", false, 403);
-    }
-    if (!dshRuntimeSelectionEnabled()) {
-      throw new ApiError("not_configured", "DSH runtime 选择尚未启用", false, 503);
-    }
-  }
   const goal = typeof body.goal === "string" ? body.goal.trim() : "";
   if (!goal || goal.length > MAX_GOAL_CHARS) throw new ApiError("invalid_request", "目标文本长度需在 1–4000 字之间");
   const inputCount = Number(body.inputCount);
@@ -445,6 +425,17 @@ async function actionCreate(admin: Parameters<typeof billingAccountId>[0], user:
     }
   }
   if (!idempotentRunExists) {
+    // Retired routes remain readable/replayable, but cannot create another Run.
+    // Check before any credit hold or capacity reservation; never fall back.
+    if (skillId !== UNIFIED_SKILL || agentRuntime !== "dsh") {
+      throw new ApiError("invalid_request", "旧版 Agent 已停止新建任务，请使用统一 Agent", false, 409);
+    }
+    if (!accountTestMarker(user.app_metadata)) {
+      throw new ApiError("upgrade_required", "统一 Agent 当前仅对测试账号开放", false, 403);
+    }
+    if (!dshRuntimeSelectionEnabled() || !unifiedAgentDshEnabled()) {
+      throw new ApiError("not_configured", "统一 Agent DSH 尚未启用", false, 503);
+    }
     const { count: activeAgentRuns, error: activeAgentError } = await admin.from("agent_runs")
       .select("id", { count: "exact", head: true })
       .eq("user_id", accountId)
@@ -1086,7 +1077,7 @@ async function actionResultFeedback(admin: Parameters<typeof billingAccountId>[0
   if (own.status !== "awaiting_result_feedback") {
     throw new ApiError("invalid_request", "Run 当前不等待结果反馈", false, 409);
   }
-  if ([HTML_SKILL, UNIFIED_SKILL].includes(own.skill_id) && action === "retry") {
+  if (own.skill_id === HTML_SKILL && action === "retry") {
     throw new ApiError("invalid_request", "该 Run 当前只支持接受或放弃结果", false, 409);
   }
   const feedbackId = crypto.randomUUID();
@@ -1097,14 +1088,16 @@ async function actionResultFeedback(admin: Parameters<typeof billingAccountId>[0
     upsert: false,
   });
   if (uploadError) throw new ApiError("internal_error", "反馈保存失败", true);
-  const { error: updateError } = await admin.from("agent_runs").update({
+  const { data: updatedRun, error: updateError } = await admin.from("agent_runs").update({
     status: "queued",
     queued_at: new Date().toISOString(),
     current_step: action === "accept" ? "export" : "diagnose_feedback",
     feedback_object_key: feedbackKey,
     result_feedback_action: action,
-  }).eq("id", runId).eq("status", "awaiting_result_feedback");
+    ...(own.skill_id === UNIFIED_SKILL && action === "retry" ? { approved_plan_hash: null, planned_tool_count: null } : {}),
+  }).eq("id", runId).eq("status", "awaiting_result_feedback").select("id").maybeSingle();
   if (updateError) throw new ApiError("internal_error", "结果反馈提交失败", true);
+  if (!updatedRun) throw new ApiError("invalid_request", "该结果已被其他操作处理，请刷新后重试", false, 409);
   return jsonResponse({ conversationId: own.conversation_id, runId, feedbackAction: action, status: "queued" });
 }
 

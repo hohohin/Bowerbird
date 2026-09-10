@@ -1,0 +1,89 @@
+.visual-profile-dialog .app-modal[data-width="lg"] { max-width: 780px; max-height: calc(100dvh - 48px); border-radius: 16px; }
+.visual-profile-dialog .app-modal .app-modal-header { padding: 28px 30px 20px; border: 0; background: var(--bb-surface-modal-body); }
+.visual-profile-dialog .app-modal .app-modal-title { font-size: 23px; line-height: 1.35; letter-spacing: -.5px; }
+.visual-profile-dialog .app-modal .app-modal-description { color: var(--bb-muted); font-size: 13px; margin-top: 10px; line-height: 1.7; }
+.visual-profile-dialog .app-modal .app-modal-body { padding: 10px 30px 28px; }
+.visual-profile-dialog .app-modal-body::before, .visual-profile-dialog .app-modal::before { display: none; }
+.visual-profile-dialog .app-modal .app-modal-footer { padding: 18px 30px; gap: 10px; flex-wrap: wrap; }
+.visual-profile-dialog .app-modal-button { min-height: 38px; border-radius: 8px; padding: 8px 15px; }
+.visual-profile-dialog .app-modal-button.is-primary { min-width: 160px; }
+.bv-fields { min-width: 0; padding: 0; margin: 0; border: 0; font-size: 13px; color: var(--bb-ink); line-height: 1.7; }
+.bv-fields button, .bv-fields input, .bv-fields textarea, .bv-fields select { font: inherit; }
+.bv-fields :is(button,input,textarea,select,summary):focus-visible, .bv-secondary summary:focus-visible { outline: 2px solid var(--bb-blue); outline-offset: 3px; }
+.bv-fields:disabled { opacity: .65; }
+.bv-fields p { overflow-wrap: anywhere; }
+.bv-fields button:disabled { cursor: not-allowed; opacity: .5; }
+.bv-image-grid { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 9px; }
+.bv-image-grid figure { aspect-ratio: 1; min-width: 0; margin: 0; overflow: hidden; border-radius: 8px; background: var(--bb-surface-2); display: flex; align-items: center; justify-content: center; }
+.bv-image-grid img { width: 100%; height: 100%; object-fit: cover; }
+.bv-disclosure, .bv-hint { color: var(--bb-muted); font-size: 12px; line-height: 1.7; margin: 13px 0 0; }
+.bv-disclosure { font-size: 11px; }
+.bv-footer-hint { font-size: 12px; color: var(--bb-muted); margin-right: auto; }
+.bv-message { display: flex; gap: 12px; align-items: center; padding: 12px 14px; margin: 0 0 15px; font-size: 12px; line-height: 1.6; color: var(--bb-ink); border-radius: 9px; background: rgb(var(--bb-blue-rgb) / 8%); overflow-wrap: anywhere; }
+.bv-message.is-error { background: rgb(204 99 72 / 10%); border: 1px solid rgb(204 99 72 / 22%); }
+.bv-message button { color: var(--bb-blue); flex-shrink: 0; }
+.bv-working { display: flex; align-items: center; gap: 14px; padding: 20px; margin-bottom: 20px; border: 1px solid var(--bb-line); background: var(--bb-surface); border-radius: 12px; }
+.bv-working div { display: flex; flex-direction: column; gap: 5px; }
+.bv-working strong { font-size: 14px; font-weight: 500; }
+.bv-working div span { font-size: 12px; color: var(--bb-muted); }
+.bv-brand-heading { display: flex; align-items: center; gap: 13px; margin: 5px 0 20px; }
+.bv-brand-icon { width: 48px; height: 48px; display: grid; place-items: center; border-radius: 13px; color: var(--bb-blue); background: rgb(var(--bb-blue-rgb) / 8%); flex-shrink: 0; }
+.bv-brand-heading > div:nth-child(2) { min-width: 0; }
+.bv-brand-heading h3 { font-size: 18px; font-weight: 600; margin: 2px 0 0; overflow-wrap: anywhere; }
+.bv-brand-heading div > span { font-size: 9px; letter-spacing: .14em; color: var(--bb-muted); }
+.bv-brand-heading > button { margin-left: auto; flex-shrink: 0; }
+.bv-overview { font-size: 16px; line-height: 1.9; margin: 0 0 23px; color: var(--bb-ink-soft); }
+.bv-style-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.bv-style-card { border: 1px solid var(--bb-line); border-radius: 11px; background: var(--bb-surface); padding: 17px 18px; min-width: 0; }
+.bv-style-card h4 { font-size: 11px; font-weight: 500; color: var(--bb-blue); margin: 0 0 9px; }
+.bv-style-card p { font-size: 13px; line-height: 1.85; margin: 0; }
+.bv-style-card p + p { margin-top: 7px; }
+.bv-style-card p > span { color: var(--bb-muted); }
+.bv-secondary { margin-top: 17px; padding-top: 12px; border-top: 1px solid var(--bb-line); font-size: 12px; color: var(--bb-muted); }
+.bv-secondary summary { cursor: pointer; padding: 8px 0; min-height: 34px; font-weight: 500; }
+.bv-secondary summary > span { font-size: 11px; margin-left: 6px; font-weight: 400; }
+.bv-secondary summary > svg { display: inline; vertical-align: middle; }
+.bv-secondary[open] > summary { margin-bottom: 8px; }
+.bv-directions { display: flex; gap: 7px; flex-wrap: wrap; margin: 12px 0; }
+.bv-directions button { border: 1px solid var(--bb-line); background: var(--bb-surface); color: var(--bb-muted); border-radius: 7px; padding: 6px 10px; font-size: 12px; }
+.bv-directions button[aria-pressed="true"] { color: var(--bb-blue); border-color: rgb(var(--bb-blue-rgb) / 50%); background: rgb(var(--bb-blue-rgb) / 7%); }
+.bv-text-button { display: flex; align-items: center; gap: 5px; background: none; border: 0; padding: 7px 0; font-size: 12px !important; color: var(--bb-blue); }
+.bv-history-item { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; text-align: left; border: 0; padding: 10px 6px; color: var(--bb-muted); border-radius: 6px; font-size: 12px; background: none; }
+.bv-history-item:hover:not(:disabled) { color: var(--bb-ink); background: var(--bb-surface-hover); }
+.bv-inline-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+.bv-edit-rule { padding: 13px 0; border-top: 1px solid var(--bb-line); }
+.bv-edit-rule label { display: block; color: var(--bb-muted); font-size: 12px; }
+.bv-edit-rule textarea { display: block; width: 100%; min-height: 78px; resize: vertical; margin-top: 8px; }
+.bv-fields :is(textarea,input,select) { border: 1px solid var(--bb-line-strong); background: var(--bb-surface); color: var(--bb-ink); border-radius: 7px; padding: 8px 10px; min-width: 0; }
+.bv-edit-rule > div { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.bv-icon-button { display: grid; place-items: center; width: 34px; height: 34px; color: var(--bb-muted); }
+.bv-icon-button:hover:not(:disabled) { color: #ce6a64; }
+.bv-theme { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
+.bv-theme input { flex: 1; }
+.bv-trial-result img { width: 100%; max-height: 300px; object-fit: contain; border-radius: 8px; background: var(--bb-surface); }
+@media (max-width: 600px) {
+  .visual-profile-dialog .app-modal .app-modal-header { padding: 20px 18px 14px; }
+  .visual-profile-dialog .app-modal .app-modal-body { padding: 8px 18px 20px; }
+  .visual-profile-dialog .app-modal .app-modal-footer { padding: 14px 18px; }
+  .visual-profile-dialog .app-modal .app-modal-title { font-size: 21px; }
+  .bv-image-grid { grid-template-columns: repeat(3, minmax(0,1fr)); }
+  .bv-style-grid { grid-template-columns: 1fr; }
+  .bv-footer-hint { flex-basis: 100%; }
+  .bv-overview { font-size: 14px; }
+}
+
+.visual-profile-dialog.is-preparing .app-modal[data-width="lg"] { max-width: 560px; }
+.bv-collection-source { display: flex; align-items: center; gap: 14px; padding: 18px; background: var(--bb-surface); border: 1px solid var(--bb-line); border-radius: 12px; }
+.bv-collection-source > div:last-child { min-width: 0; }
+.bv-collection-source h3 { margin: 0; font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
+.bv-collection-source p { margin: 3px 0 0; color: var(--bb-muted); font-size: 12px; }
+.bv-source-preview { margin-top: 16px; }
+.bv-history-row { display: flex; align-items: center; gap: 8px; }
+.bv-history-row .bv-history-item { flex: 1; min-width: 0; }
+.bv-history-row .bv-icon-button { flex-shrink: 0; }
+.visual-profile-dialog .bv-delete-button { color: #ce6a64; }
+.bv-saved-sources { margin-bottom: 24px; }
+.bv-saved-sources .bv-image-grid { grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); }
+.bv-saved-sources h4 { margin: 0 0 12px; font-size: 12px; font-weight: 500; }
+.bv-saved-sources h4 span { margin-left: 6px; font-weight: 400; color: var(--bb-muted); }
+.bv-source-missing { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px; font-size: 11px; text-align: center; color: var(--bb-muted); }

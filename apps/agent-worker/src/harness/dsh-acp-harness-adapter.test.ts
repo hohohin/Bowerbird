@@ -4,9 +4,25 @@ import { test } from "node:test";
 import { computeArgsHash } from "../kernel/tool-ledger.ts";
 import type { HarnessCheckpointSeed, HarnessPromptBlock } from "./contracts.ts";
 import {
+  compileCheckpointContext,
   DshAcpHarnessAdapter,
   type DshAcpPort,
 } from "./dsh-acp-harness-adapter.ts";
+
+test("recovery context excludes internal Run input and identities even on structural subtypes", () => {
+  const context = compileCheckpointContext({
+    ...seed(),
+    input: { goal: "private duplicate goal", htmlOutput: { capture: { mode: "full_page_and_slices" } } },
+    skillHash: "internal-skill-hash",
+    pendingQuestion: { question: "stale question" },
+  } as HarnessCheckpointSeed);
+  if (context.type !== "text") throw new Error("expected_text");
+  for (const internal of ["htmlOutput", "full_page_and_slices", "private duplicate goal", "internal-skill-hash", "stale question", "run-u2", "argsHash", "callId"]) {
+    ok(!context.text.includes(internal), internal);
+  }
+  ok(context.text.includes("artifact-existing"));
+  ok(context.text.includes("one step"));
+});
 
 class FakeAcpPort implements DshAcpPort {
   initialized = 0;
@@ -113,4 +129,14 @@ test("DSH adapter rejects malformed completed-call identity before spawning a po
   staleApproval.approvedPlanHash = "not-a-plan-hash";
   await rejects(() => adapter.open(staleApproval), /invalid_checkpoint/);
   equal(created, 0);
+});
+
+test("fresh planning session sends no empty recovery preamble", async () => {
+  const port = new FakeAcpPort();
+  const adapter = new DshAcpHarnessAdapter({ cwd: "D:/isolated/fresh", createPort: () => port });
+  const session = await adapter.open({ ...seed(), compactedFacts: [], completedToolResults: [] });
+  const prompt: HarnessPromptBlock[] = [{ type: "text", text: "current goal" }];
+  await session.turn(prompt);
+  deepEqual(port.prompts[0], prompt);
+  await session.close();
 });

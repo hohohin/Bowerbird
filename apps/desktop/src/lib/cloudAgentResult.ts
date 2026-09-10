@@ -14,6 +14,13 @@ const IMAGE_RESULT_ROLES = new Set([
 
 type RenderManifest = CloudAgentSnapshot["renderManifest"];
 
+/** Canvas payloads omit full selection events; prefer final images over intermediate copies. */
+export function countCloudAgentResultImages(artifacts: Array<{ role?: string; mime?: string; user_visible?: boolean }>): number {
+  const images = artifacts.filter((item) => item.user_visible && item.mime?.startsWith("image/"));
+  const finals = images.filter((item) => item.role === "final_result");
+  return finals.length || images.filter((item) => IMAGE_RESULT_ROLES.has(item.role ?? "") || RENDERED_DOCUMENT_ROLES.has(item.role ?? "")).length;
+}
+
 function visibleImages(artifacts: CloudAgentArtifact[]): Map<string, CloudAgentArtifact> {
   return new Map(artifacts
     .filter((artifact) => artifact.user_visible && artifact.mime.startsWith("image/"))
@@ -37,8 +44,12 @@ export function isRenderedDocumentResult(
 export function selectCloudAgentResultArtifacts(
   artifacts: CloudAgentArtifact[],
   renderManifest?: RenderManifest,
+  events?: CloudAgentSnapshot["events"],
 ): CloudAgentArtifact[] {
   const visible = visibleImages(artifacts);
+  const selected = [...(events ?? [])].sort((a, b) => b.seq - a.seq).find((event) =>
+    event.type === "result.ready" && event.display_payload?.selectionVersion === 1)?.display_payload?.visibleArtifactIds;
+  if (Array.isArray(selected)) return selected.flatMap((id) => typeof id === "string" && visible.has(id) ? [visible.get(id)!] : []);
   if (renderManifest) {
     const ordered = renderManifest.outputs
       .map((output) => visible.get(output.artifactId))

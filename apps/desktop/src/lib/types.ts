@@ -1,3 +1,4 @@
+import type { GenerationMedia, VideoOptions } from "./videoGeneration";
 export interface Asset {
   id: string;
   name: string;
@@ -238,10 +239,17 @@ export interface ProjectRefreshResult {
   added_count: number;
 }
 
-/** 项目即画板契约：删除项目始终保留中央素材。 */
-export type ProjectDeleteMode = "keep";
+/** 默认保留中央素材；物理删除需显式确认后端核验的独有集合。 */
+export type ProjectDeleteMode = "keep" | "delete_exclusive";
 
 export interface ProjectDeleteImpact {
+  physical: {
+    exclusive_asset_count: number;
+    exclusive_file_count: number;
+    preserved_shared_count: number;
+    preserved_unsafe_count: number;
+    confirmation: string;
+  };
   project_asset_count: number;
   thread_count: number;
   node_count: number;
@@ -250,6 +258,7 @@ export interface ProjectDeleteImpact {
 }
 
 export interface ProjectDeleteResult {
+  cleanup_pending: string[];
   removed_members: number;
   deleted_assets: number;
   preserved_shared: number;
@@ -257,7 +266,7 @@ export interface ProjectDeleteResult {
   failed_moves: string[];
 }
 
-/** 右键单素材删除三选项（与「删除项目」语义对齐）。 */
+/** 单素材删除三模式；项目视图与中央素材库的 move_out 作用域不同。 */
 export type AssetDeleteMode = "keep" | "move_out" | "delete";
 
 /** 右键单素材删除结果。 */
@@ -289,6 +298,7 @@ export interface TagCount {
 export interface AssetTag {
   name: string;
   source: string;
+  origin?: "local" | "manual" | "legacy";
 }
 
 /** 色板聚合：颜色桶 + 资产数 + 桶代表 hex（hex 由后端注入，消除双源）。 */
@@ -390,6 +400,10 @@ export interface Preset {
 
 /** 生成对话一轮：用户输入（首轮=编辑器组稿，后续=修改意见）+ 本轮产出图（asset 路径）。 */
 export interface GenTurn {
+  referenceNodeIds?: Array<string | null>;
+  media?: GenerationMedia;
+  videoOptions?: VideoOptions | null;
+  ratio?: string | null;
   id: number;
   /** 本轮在 creative session 图谱中的稳定键；与易变的 UI 序号分离。 */
   turnKey?: string;
@@ -422,6 +436,8 @@ export interface GenTurn {
  * 后端 task_queue upsert）。`running` = 该 job 当前有一个 turn 在跑（用于派生全局 generating）。
  */
 export interface GenJob {
+  media?: GenerationMedia;
+  videoOptions?: VideoOptions | null;
   id: string;
   // 会话分组：「重新编辑 / 重试」发送产生的新 job 归入源会话（= 根 job 的 id），
   // 同组 job 在会话面板用 ←/→ 切换编辑前后的版本（agent 应用式分支）。
@@ -465,6 +481,11 @@ export interface JimengOrphanTask {
 
 /** 「回看生成对话」：某生成图所在 codex 会话的完整时间线（后端 generation_history 返回）。 */
 export interface GenerationHistoryTurn {
+  project_id?: string | null;
+  provider?: string | null;
+  media?: GenerationMedia;
+  video_options?: VideoOptions | null;
+  ratio?: string | null;
   prompt: string;
   turn_key?: string | null;
   applied_prompt?: string | null;
@@ -472,11 +493,15 @@ export interface GenerationHistoryTurn {
   images: string[]; // store_path
   /** 本轮实际下发的参考图（续轮含上一轮产出图）；旧 meta / 空参考为空。 */
   references?: string[];
+  reference_node_ids?: Array<string | null>;
   /** 同一批参考图反查的完整 asset（各轮 chip 气泡 ReadonlyPrompt 用）。 */
   ref_assets?: PromptedAsset[];
 }
 
 export interface GenerationHistory {
+  media?: GenerationMedia;
+  video_options?: VideoOptions | null;
+  ratio?: string | null;
   session_id: string | null;
   turns: GenerationHistoryTurn[];
   /** 首版参考图完整 asset：「复用到创作板」还原参考图 + 「新会话重新生成」派生 store_path。
@@ -619,6 +644,8 @@ export interface MigrateProgress {
 
 /** 未完成生成 job 摘要（list_gen_jobs 命令返回，前端启动重建 genJobs 用）。字段对齐后端 GenJobSummary。 */
 export interface GenJobSummary {
+  reference_node_ids?: Array<string | null>;
+  video_options?: VideoOptions | null;
   id: string;
   media: string;
   provider: string;
@@ -644,6 +671,10 @@ export interface GenJobSummary {
 /** 会话面板历史恢复项（recent_gen_sessions 命令返回）：终态（done/failed）生成 job +
  * 从 generation_meta 重建的各轮时间线（含产出图）。status 取 task_queue 列（权威终态）。 */
 export interface RecentGenSession {
+  reference_node_ids?: Array<string | null>;
+  submit_id?: string | null;
+  media?: GenerationMedia;
+  video_options?: VideoOptions | null;
   id: string;
   provider: string;
   status: string; // "done" | "failed"
@@ -828,7 +859,16 @@ export interface CloudAgentUnifiedPlan {
 }
 
 export type CloudAgentPlanStep = CloudAgentControlledPlanStep | CloudAgentUnifiedPlanStep;
-export type CloudAgentPlan = CloudAgentControlledPlan | CloudAgentUnifiedPlan;
+export interface CloudAgentTaskAuthorization {
+  schemaVersion: 3;
+  title: string;
+  summary: string;
+  assetIds: string[];
+  outputCount: number;
+  modelTurns: number;
+  capabilities: Array<{ tool: "generate_image" | "inspect_artifact" | "compose_html" | "render_html"; maxCalls: number }>;
+}
+export type CloudAgentPlan = CloudAgentControlledPlan | CloudAgentUnifiedPlan | CloudAgentTaskAuthorization;
 
 export interface CloudAgentApproval {
   id: string;
@@ -986,6 +1026,7 @@ export type CodexChunk =
       kind: "started";
       job_id: string;
       references?: string[];
+  reference_node_ids?: Array<string | null>;
       ratio?: string | null;
       applied_prompt?: string | null;
       visual_profile?: VisualProfileCapsule | null;
@@ -1003,6 +1044,12 @@ export type CodexChunk =
     }
   | {
       kind: "recover_started";
+      media?: GenerationMedia;
+      video_options?: VideoOptions | null;
+      references?: string[];
+  reference_node_ids?: Array<string | null>;
+      ratio?: string | null;
+      submit_id?: string | null;
       job_id: string;
       prompt: string;
       provider: string;
@@ -1024,6 +1071,7 @@ export interface VisualProfileMissingAsset {
 }
 
 export interface VisualProfileScopePreview {
+  assetIds: string[];
   folderId: string;
   folderName: string;
   inFolder: number;
@@ -1064,7 +1112,8 @@ export interface VisualProfileCandidateDirection {
 
 export interface VisualProfileSummary {
   id: string;
-  projectId: string;
+  /** Legacy creation context only; never restricts availability. */
+  projectId: string | null;
   folderId: string;
   name: string;
   version: number;
@@ -1080,6 +1129,7 @@ export interface VisualProfileSummary {
 
 export interface VisualProfileDetail extends VisualProfileSummary {
   sourceScopeHash: string;
+  sourceAssetIds: string[];
   rules: VisualProfileDraftRule[];
   contentThemes: VisualProfileContentTheme[];
   conflicts: VisualProfileConflict[];

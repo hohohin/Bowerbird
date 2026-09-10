@@ -61,11 +61,11 @@ async function startFakeDeepSeek() {
     const parsed = JSON.parse(body);
     requests.push(parsed);
     const sequence = requests.length;
-    const payload = sequence === 1
-      ? toolCallSse("compose_html", { schemaVersion: 1, html: HTML, resourceArtifactIds: [RESOURCE_ID] }, sequence)
-      : sequence === 2
+    const payload = sequence <= 2
+      ? toolCallSse("compose_html", { schemaVersion: 1, html: sequence === 1 ? HTML.replace("<img ", '<img height="auto" ') : HTML, resourceArtifactIds: [RESOURCE_ID] }, sequence)
+      : sequence === 3
         ? toolCallSse("render_html", {}, sequence)
-        : sequence === 3
+        : sequence === 4
           ? toolCallSse("inspect_artifact", {}, sequence)
           : toolCallSse("finalize_output", {}, sequence);
     response.writeHead(200, {
@@ -377,12 +377,13 @@ test("real pinned DSH executes approved HTML, Ark inspection, and parent finaliz
     });
 
     assert.equal(result.stopReason, "end_turn");
-    assert.equal(modelServer.requests.length, 4);
+    assert.equal(modelServer.requests.length, 5);
+    assert.ok(modelServer.requests[1].messages.some(message => message.role === "tool" && message.content.includes("numeric_attr_invalid")));
     assert.deepEqual(
       modelServer.requests[0].tools.map((tool) => tool.function.name).sort(),
-      ["compose_html", "finalize_output", "inspect_artifact", "render_html"],
+      ["compose_html", "finalize_output", "inspect_artifact", "read_context", "render_html"],
     );
-    assert.ok(modelServer.requests[1].messages.some(
+    assert.ok(modelServer.requests[2].messages.some(
       (message) => message.role === "tool" && message.content.includes("artifact-1"),
     ));
     assert.equal(rendererServer.requests.length, 1);

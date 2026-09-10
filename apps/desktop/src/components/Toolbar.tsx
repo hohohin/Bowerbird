@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, ChevronDown, FolderOpen, LayoutDashboard, LoaderCircle, Search, Upload, X } from "lucide-react";
+import { SidebarStatus } from "./SidebarStatus";
+import { GeneratedImageFilter } from "./GeneratedImageFilter";
 import { useStore } from "../store";
 import { api } from "../lib/api";
 import { notifyError, notifySuccess } from "../lib/notify";
@@ -27,12 +29,12 @@ export function Toolbar({
   const setCurrentFolder = useStore((s) => s.setCurrentFolder);
   const setCurrentCollection = useStore((s) => s.setCurrentCollection);
   const setSmartFilter = useStore((s) => s.setSmartFilter);
+  const collapsed = useStore((s) => s.projectAssetsCollapsed);
+  const setCollapsed = useStore((s) => s.setProjectAssetsCollapsed);
   const setColorFilter = useStore((s) => s.setColorFilter);
   const [importOpen, setImportOpen] = useState(false);
-  const [creativeOpen, setCreativeOpen] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const importRef = useRef<HTMLDivElement>(null);
-  const creativeRef = useRef<HTMLDivElement>(null);
 
   const currentProject = projects.find((p) => p.id === activeProjectId) ?? null;
 
@@ -53,7 +55,6 @@ export function Toolbar({
     }
     function onPointerDown(e: MouseEvent) {
       if (!importRef.current?.contains(e.target as Node)) setImportOpen(false);
-      if (!creativeRef.current?.contains(e.target as Node)) setCreativeOpen(false);
     }
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("mousedown", onPointerDown);
@@ -165,55 +166,15 @@ export function Toolbar({
             返回素材库
           </button>
         ) : (
-          <div ref={creativeRef} className="relative flex">
-            <button
-              type="button"
-              className="app-button-dark rounded-r-none"
-              title="用当前明确选中的素材开始一项新创作"
-              onClick={() => onCreateCreative(false)}
-            >
-              <LayoutDashboard size={15} />
-              新建创作
-            </button>
-            <button
-              type="button"
-              className="app-button-dark rounded-l-none border-l-0 px-2"
-              aria-haspopup="menu"
-              aria-expanded={creativeOpen}
-              aria-label="新建创作选项"
-              onClick={() => setCreativeOpen((open) => !open)}
-            >
-              <ChevronDown size={13} className={creativeOpen ? "rotate-180" : ""} />
-            </button>
-            {creativeOpen && (
-              <div className="app-popover absolute left-0 top-full z-[70] mt-2 w-52" role="menu" aria-label="新建创作">
-                <button
-                  type="button"
-                  className="app-context-item px-3 py-2 text-xs"
-                  role="menuitem"
-                  onClick={() => {
-                    setCreativeOpen(false);
-                    onCreateCreative(false);
-                  }}
-                >
-                  <LayoutDashboard size={14} className="text-muted" />
-                  新建创作
-                </button>
-                <button
-                  type="button"
-                  className="app-context-item px-3 py-2 text-xs"
-                  role="menuitem"
-                  onClick={() => {
-                    setCreativeOpen(false);
-                    onCreateCreative(true);
-                  }}
-                >
-                  <LayoutDashboard size={14} className="text-muted" />
-                  新建空白项目
-                </button>
-              </div>
-            )}
-          </div>
+          <button
+            type="button"
+            className="app-button-accent"
+            title="用当前明确选中的素材开始一项新创作"
+            onClick={() => onCreateCreative(false)}
+          >
+            <LayoutDashboard size={15} />
+            新建创作
+          </button>
         )}
       </div>
 
@@ -241,7 +202,21 @@ export function Toolbar({
         )}
       </div>
 
-      <div className="app-topbar-actions" />
+      <div className="app-topbar-actions" aria-label="视图与任务">
+        {!canvasMode && (
+          <div className="app-topbar-view-controls" role="group" aria-label="素材视图">
+            <GeneratedImageFilter />
+            <div className="library-view-control">
+              <span>项目素材</span>
+              <div className="library-view-segments" role="group" aria-label="项目素材视图">
+                <button type="button" aria-pressed={collapsed} onClick={() => setCollapsed(true)}>收起</button>
+                <button type="button" aria-pressed={!collapsed} onClick={() => setCollapsed(false)}>展开</button>
+              </div>
+            </div>
+          </div>
+        )}
+        <SidebarStatus />
+      </div>
       {collectedNotice && (
         <button
           onClick={showCollectedAsset}

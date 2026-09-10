@@ -3,6 +3,7 @@ import type {
   Asset,
   CanvasGroup,
   CanvasNode,
+  CanvasEdge,
   CanvasNodeLayoutUpdate,
   CanvasViewInput,
   CreativeViewMode,
@@ -25,7 +26,47 @@ export interface CanvasAssetSnapshot {
   payloadJson?: string;
 }
 
+export const CANVAS_REMOVE_NODES_EVENT = "bowerbird:canvas-remove-nodes";
+export const CANVAS_ARRANGE_NODES_EVENT = "bowerbird:canvas-arrange-nodes";
+
+export interface CanvasArrangeNodesEventDetail {
+  projectId: string;
+  nodeIds: string[];
+}
+
+export interface CanvasRemoveNodesEventDetail {
+  projectId: string;
+  nodeIds: string[];
+}
+
 export type ProjectCanvasUiNode = CanvasGroupNode<CanvasAssetSnapshot>;
+
+/** Keep Agent launch prompts as history, with their group as the canvas card. */
+export function agentPromptGroupMap(nodes: readonly CanvasNode[], edges: readonly CanvasEdge[]): Map<string, CanvasNode> {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const groups = new Map<string, CanvasNode>();
+  for (const edge of edges) {
+    const prompt = byId.get(edge.fromNodeId);
+    const group = byId.get(edge.toNodeId);
+    if (edge.kind === "input" && prompt?.kind === "prompt" && group?.kind === "agent_group"
+      && prompt.projectId === group.projectId && prompt.threadId === group.threadId) {
+      groups.set(prompt.id, group);
+    }
+  }
+  return groups;
+}
+
+export const DEFAULT_CANVAS_SOURCE_THUMBNAIL_SCALE = 2;
+
+export function clampCanvasSourceThumbnailScale(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_CANVAS_SOURCE_THUMBNAIL_SCALE;
+  return Math.min(3, Math.max(1, Math.round(value)));
+}
+
+/** A larger thumbnail scale intentionally means fewer masonry columns. */
+export function canvasSourceColumnCount(thumbnailScale: number): number {
+  return 4 - clampCanvasSourceThumbnailScale(thumbnailScale);
+}
 
 export interface HydratedProjectCanvas {
   nodes: ProjectCanvasUiNode[];
@@ -118,6 +159,47 @@ export function rehydrateProjectCanvasAssets(
     return { ...node, assets };
   });
   return changed ? next : nodes;
+}
+
+/**
+ * The normalized execution graph and the interactive material layout are
+ * loaded independently. Project graph edges must follow the optimistic UI
+ * layout while a material (or its containing group) is being moved, rather
+ * than waiting for the persisted graph snapshot to be read again.
+ */
+export function projectGraphNodesWithLiveLayout(
+  graphNodes: readonly CanvasNode[],
+  uiNodes: readonly ProjectCanvasUiNode[],
+): CanvasNode[] {
+  const layoutByNodeId = new Map<string, Pick<CanvasNode, "x" | "y" | "width" | "height" | "zIndex">>();
+
+  for (const uiNode of uiNodes) {
+    const layout = {
+      x: uiNode.x,
+      y: uiNode.y,
+      width: uiNode.width,
+      height: uiNode.height,
+      zIndex: uiNode.order,
+    };
+    if (uiNode.kind === "asset") {
+      layoutByNodeId.set(uiNode.id, layout);
+      continue;
+    }
+    for (const asset of uiNode.assets) layoutByNodeId.set(asset.id, layout);
+  }
+
+  return graphNodes.map((node) => {
+    const layout = layoutByNodeId.get(node.id);
+    if (!layout
+      || (node.x === layout.x
+        && node.y === layout.y
+        && node.width === layout.width
+        && node.height === layout.height
+        && node.zIndex === layout.zIndex)) {
+      return node;
+    }
+    return { ...node, ...layout };
+  });
 }
 
 export function assetPayloadJson(asset: CanvasAssetSnapshot) {

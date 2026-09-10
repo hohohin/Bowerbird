@@ -6,6 +6,7 @@ import { loadDescribePrompt } from "../lib/describePrompt";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { notifyError, notifySuccess } from "../lib/notify";
 import type { AssetDeleteMode } from "../lib/types";
+import { canMoveAssetOut } from "../lib/assetDeletion";
 
 /**
  * 批量管理动作栏（manage 模式时显示在主区顶部）。
@@ -17,6 +18,7 @@ import type { AssetDeleteMode } from "../lib/types";
  */
 export function BatchBar() {
   const ids = useStore((s) => Array.from(s.selectedIds));
+  const assets = useStore((s) => s.assets);
   const exitManage = useStore((s) => s.exitManage);
   const clearSelect = useStore((s) => s.clearSelect);
   const selectAll = useStore((s) => s.selectAll);
@@ -45,6 +47,9 @@ export function BatchBar() {
   const [failedNotice, setFailedNotice] = useState<string | null>(null);
 
   const empty = ids.length === 0;
+  const hasNonMovableAsset = ids.some(
+    (id) => !canMoveAssetOut(assets.find((asset) => asset.id === id)),
+  );
   const understandRoute = understandProvider(cloudEntitlement);
   const understandReady = understandRoute === "codex"
     ? !!codexHealth?.ok
@@ -131,7 +136,15 @@ export function BatchBar() {
       } else {
         for (const id of ids) {
           try {
-            await api.deleteAssetWithMode(id, mode, activeProjectId);
+            const result = await api.deleteAssetWithMode(id, mode, activeProjectId);
+            // move_out 的文件恢复失败是结构化结果而不是 rejected promise；不能把它吞掉后
+            // 显示“已移出园丁鸟”。全局操作还要求资产行确实被删除。
+            if (
+              result.failed_moves.length > 0
+              || (mode === "move_out" && !activeProjectId && result.deleted_assets === 0)
+            ) {
+              failedCount += 1;
+            }
           } catch (e) {
             failedCount += 1;
             console.error("delete one failed", e);
@@ -362,8 +375,12 @@ export function BatchBar() {
           )}
           <button
             onClick={() => runDelete("move_out")}
-            disabled={busy}
-            title="把图片文件交回原始文件夹，并从素材库移除（共享素材仍保留在全局）"
+            disabled={busy || hasNonMovableAsset}
+            title={hasNonMovableAsset
+              ? "所选内容包含没有可恢复原始位置的素材，只能物理删除"
+              : activeProjectId
+                ? "把图片文件交回原始文件夹；被其他项目引用的素材仍保留在全局"
+                : "把图片文件交回原始文件夹，并从素材库及全部项目移除"}
             className="rounded bg-panel2 px-2 py-1 text-xs hover:bg-edge disabled:opacity-50"
           >
             移出园丁鸟

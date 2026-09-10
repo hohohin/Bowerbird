@@ -59,6 +59,7 @@ pub struct Task {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenJob {
     pub id: String,
+    #[serde(default = "default_generation_media")]
     pub media: String,    // "image" | "video"
     pub provider: String, // "codex" | "jimeng"
     pub status: String, // queued|submitting|running|querying|downloading|ingesting|done|failed|cancelled_local
@@ -69,6 +70,9 @@ pub struct GenJob {
     pub applied_prompt: Option<String>,
     #[serde(default)]
     pub references: Vec<String>,
+    /// 与 references 同序的精确画板输入节点；旧任务或非画板来源为 null。
+    #[serde(default)]
+    pub reference_node_ids: Vec<Option<String>>,
     #[serde(default)]
     pub session_id: Option<String>,
     /// 会话级分组（「重新编辑 / 重试」版本分支）：归入源会话（根 job id）；普通 job = None。
@@ -117,6 +121,8 @@ pub struct GenJob {
     pub finished_at: Option<i64>,
 }
 
+fn default_generation_media() -> String { "image".into() }
+
 impl GenJob {
     /// 细粒度 status → `task_queue.status` 列粗粒度（调度查询用）。
     pub fn coarse_status(fine: &str) -> &'static str {
@@ -150,6 +156,31 @@ fn row_to_task(r: &rusqlite::Row) -> rusqlite::Result<Task> {
 }
 
 impl Task {
+    /// Recover the original Cloud turn, including a lost create response.
+    pub(crate) fn claim_cloud_video_retrieval(db: &Database, job: &GenJob) -> AppResult<bool> {
+        if job.media != "video" || !job.provider.starts_with("bowerbird-cloud") || job.turn_key.is_none() {
+            return Err(AppError::Other("待取回的云视频任务无效".into()));
+        }
+        let conn = db.conn.lock().unwrap();
+        Ok(conn.execute("UPDATE task_queue SET status='running',error=NULL,finished_at=NULL
+            WHERE id=?1 AND kind='generation' AND status IN ('failed','cancelled') AND json_extract(payload,'$.turn_key')=?2",
+            rusqlite::params![job.id,job.turn_key])? == 1)
+    }
+    /// 取回只恢复已有提交；条件更新阻止双击或并发调用重复查询/入库。
+    pub(crate) fn claim_video_retrieval(db: &Database, job: &GenJob) -> AppResult<bool> {
+        if job.media != "video" || job.provider != "jimeng" || job.submit_id.is_none() {
+            return Err(AppError::Other("待取回的视频任务无效".into()));
+        }
+        let conn = db.conn.lock().unwrap();
+        let changed = conn.execute(
+            "UPDATE task_queue SET payload=?1,status='running',error=NULL,finished_at=NULL
+             WHERE id=?2 AND kind='generation' AND status IN ('failed','cancelled')
+             AND json_extract(payload,'$.submit_id')=?3",
+            rusqlite::params![serde_json::to_string(job)?, job.id, job.submit_id],
+        )?;
+        Ok(changed == 1)
+    }
+
     /// 入队一个新任务（通用），返回新 id。
     pub fn enqueue(
         db: &Database,
@@ -402,6 +433,7 @@ mod tests {
             status: status.into(),
             prompt: "p".into(),
             applied_prompt: None,
+            reference_node_ids: vec![],
             references: vec![],
             session_id: None,
             conversation_id: None,
@@ -443,6 +475,7 @@ mod tests {
         let mut value = serde_json::to_value(job("codex", "running")).unwrap();
         let object = value.as_object_mut().unwrap();
         object.remove("creative_session_id");
+        object.remove("reference_node_ids");
         object.remove("thread_id");
         object.remove("turn_key");
         object.remove("parent_node_id");
@@ -450,6 +483,7 @@ mod tests {
         object.remove("creative_relation");
         let restored: GenJob = serde_json::from_value(value).unwrap();
         assert!(restored.creative_session_id.is_none());
+        assert!(restored.reference_node_ids.is_empty());
         assert!(restored.thread_id.is_none());
         assert!(restored.turn_key.is_none());
         assert!(restored.parent_node_id.is_none());
@@ -462,6 +496,8 @@ mod tests {
         let db = db();
         let mut j = job("jimeng", "queued");
         j.applied_prompt = Some("p\n\n必须保持：色彩=低饱和".into());
+        j.references = vec!["/reference.png".into()];
+        j.reference_node_ids = vec![Some("canvas-reference-1".into())];
         j.parent_node_id = Some("canvas-parent-1".into());
         let id = Task::enqueue_gen_job(&db, &j).unwrap();
         assert_eq!(id, j.id);
@@ -477,6 +513,10 @@ mod tests {
             Some("p\n\n必须保持：色彩=低饱和")
         );
         assert_eq!(g.parent_node_id.as_deref(), Some("canvas-parent-1"));
+        assert_eq!(
+            g.reference_node_ids,
+            vec![Some("canvas-reference-1".into())]
+        );
     }
 
     #[test]
@@ -557,6 +597,46 @@ mod tests {
         assert_eq!(t.gen_job().unwrap().submit_id.as_deref(), Some("sid-keep"));
         // cancelled 不进 list_running
         assert!(Task::list_running(&db).unwrap().is_empty());
+    }
+
+    #[test]
+    fn cloud_video_retry_claim_preserves_unknown_or_saved_remote_identity() {
+        for remote in [None,Some("existing-remote".to_string())] {
+            let db=db();
+            let mut j=job("bowerbird-cloud-video_seedance25_480p","submitting");
+            j.media="video".into(); j.turn_key=Some("original-turn".into()); j.submit_id=remote.clone();
+            Task::enqueue_gen_job(&db,&j).unwrap();
+            Task::mark_failed(&db,&j.id,"lost response or failed download").unwrap();
+            assert!(Task::claim_cloud_video_retrieval(&db,&j).unwrap());
+            assert!(!Task::claim_cloud_video_retrieval(&db,&j).unwrap());
+            let recovered=Task::by_id(&db,&j.id).unwrap().unwrap().gen_job().unwrap();
+            assert_eq!(recovered.turn_key,j.turn_key);
+            assert_eq!(recovered.submit_id,remote);
+        }
+    }
+
+    #[test]
+    fn video_cancel_and_reload_preserves_model_options_and_explicit_references() {
+        let db = db();
+        let mut j = job("jimeng", "querying");
+        j.media = "video".into();
+        j.references = vec!["first.png".into(), "last.png".into()];
+        j.video_options = Some(serde_json::json!({"kind":"frames2video", "model_version":"seedance2.5", "duration":30,"video_resolution":"480p"}));
+        j.submit_id = Some("video-submit".into());
+        Task::upsert_gen_job(&db, &j).unwrap();
+        Task::mark_cancelled(&db, &j.id).unwrap();
+        let restored = Task::by_id(&db, &j.id).unwrap().unwrap().gen_job().unwrap();
+        assert_eq!(restored.media, "video");
+        assert_eq!(restored.references, j.references);
+        assert_eq!(restored.video_options, j.video_options);
+        assert_eq!(restored.submit_id, j.submit_id);
+        let mut resumed = restored;
+        resumed.status = "querying".into();
+        assert!(Task::claim_video_retrieval(&db, &resumed).unwrap());
+        assert!(!Task::claim_video_retrieval(&db, &resumed).unwrap(), "second retrieval must not schedule another worker");
+        let mut legacy = serde_json::to_value(&j).unwrap();
+        legacy.as_object_mut().unwrap().remove("media");
+        assert_eq!(serde_json::from_value::<GenJob>(legacy).unwrap().media, "image");
     }
 
     #[test]

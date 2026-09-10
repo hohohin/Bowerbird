@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type DragEvent, type MouseEvent } from "react";
 import { createPortal } from "react-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { Check, ImagePlus, SearchX } from "lucide-react";
@@ -7,6 +7,8 @@ import { api } from "../lib/api";
 import { notifyError, notifySuccess } from "../lib/notify";
 import { setDragAssets } from "../lib/dragPayload";
 import type { Asset } from "../lib/types";
+import type { LibraryProjectGroup } from "../lib/libraryView";
+import { ProjectFolder } from "./ProjectFolder";
 
 function parseColors(c: string | null | undefined): string[] {
   if (!c) return [];
@@ -37,19 +39,23 @@ function Thumb({
   group,
   orderedIds,
   variant,
+  onOpenPreview,
+  idPrefix = "",
 }: {
   asset: Asset;
   group?: Asset[];
   orderedIds: string[]; // 瀑布流可见卡片顺序（Shift 范围多选用）
   variant: "library" | "canvas-source";
+  onOpenPreview?: (asset: Asset, group?: Asset[]) => void;
+  idPrefix?: string;
 }) {
   const cardRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
-  const selected = useStore((s) => s.mode === "manage" && s.selectedIds.has(asset.id));
+  const addingToCollection = useStore((s) => s.collectionAddTargetId !== null);
   // 挑图模式（点一下插参考图 chip）：创作板对话框常驻 / 会话「重新编辑」中。批量管理
   // （manage）模式优先于挑图——点击仍是选择/框选、可拖拽进文件夹，不受常驻对话框影响。
   const pickMode = useStore((s) =>
-    variant === "library" && (s.boardOpen || s.genEditing) && s.mode !== "manage"
+    (s.boardOpen || s.genEditing) && (variant === "canvas-source" || s.mode !== "manage")
   );
   const openContextMenu = useStore((s) => s.openContextMenu);
   // 反推全局可见：本缩略图正在反推 / 在队列里。角标点击 = 取消（运行中 kill 子进程 / 排队中移出队列）。
@@ -79,7 +85,7 @@ function Thumb({
   }
   function beginPress(e: MouseEvent<HTMLDivElement>) {
     cancelPress();
-    if (e.button !== 0 || variant === "canvas-source") return;
+    if (e.button !== 0 || variant === "canvas-source" || addingToCollection) return;
     pressStart.current = { x: e.clientX, y: e.clientY };
     pressTimer.current = window.setTimeout(() => {
       pressTimer.current = undefined;
@@ -117,6 +123,7 @@ function Thumb({
     setIdx(groupLen > 0 ? groupLen - 1 : 0);
   }, [groupLen]);
   const shown: Asset = groupLen > 0 ? group![idx] ?? asset : asset;
+  const selected = useStore((s) => s.mode === "manage" && s.selectedIds.has(shown.id));
   const colors = useMemo(() => parseColors(shown.colors), [shown.colors]);
   // 有反推（caption）→ 左上角 🏷️ 标记（生成图同时在标时，🏷️ 排在 ✨ 右侧）。
   const hasCaption = useStore((s) => s.captionedIds.has(shown.id));
@@ -151,6 +158,12 @@ function Thumb({
 
   // 没有缩略图的占位（非图片格式或解码失败）。
   if (!shown.thumb_path) {
+    if (addingToCollection) return <button type="button" data-asset-id={shown.id}
+      aria-label={`${shown.name}${selected ? "，已选中" : ""}`} aria-pressed={selected}
+      className={`mb-2 flex h-32 w-full items-center justify-center rounded-md border-2 bg-panel2 text-xs ${selected ? "collection-add-selected" : "border-transparent text-muted"}`}
+      onClick={(event) => event.shiftKey ? useStore.getState().selectRange(shown.id, orderedIds) : useStore.getState().toggleSelect(shown.id)}>
+      {selected && <Check size={14} className="mr-2" />}{shown.name}
+    </button>;
     return (
       <div className="mb-2 flex h-32 items-center justify-center rounded-md bg-panel2 text-xs text-muted">
         {shown.ext?.toUpperCase() ?? "?"}
@@ -274,8 +287,27 @@ function Thumb({
   }
   function activateAsset(shift: boolean, at?: { x: number; y: number }) {
     dismissPreview();
-    if (variant === "canvas-source") return;
     const st = useStore.getState();
+    if (st.collectionAddTargetId) {
+      if (shift) st.selectRange(shown.id, orderedIds);
+      else st.toggleSelect(shown.id);
+      return;
+    }
+    if (variant === "canvas-source") {
+      if (st.boardOpen || st.genEditing) {
+        window.dispatchEvent(
+          new CustomEvent("bowerbird://board-asset-picked", { detail: shown.id })
+        );
+        if (st.promptedAssets.some(
+          (a) => a.id === shown.id && a.sections && a.sections.length > 0,
+        )) {
+          st.openCaptionRing(shown.id);
+        }
+      } else {
+        onOpenPreview?.(shown, group);
+      }
+      return;
+    }
     // manage 优先于挑图（创作模式激活时批量管理不能被挑图吞掉点击）。
     if (st.mode === "manage") {
       // Shift+点击 = 从上次点击的卡片框选到本卡（范围多选）；普通点击 = 单张增减选中。
@@ -304,7 +336,8 @@ function Thumb({
         const rect = cardRef.current?.getBoundingClientRect();
         setPickMenu(at ?? (rect ? { x: rect.left, y: rect.bottom + 4 } : { x: 8, y: 8 }));
       }
-    } else st.openDetail(shown.id);
+    } else if (onOpenPreview) onOpenPreview(shown, group);
+    else st.openDetail(shown.id);
   }
   // 浮层定位：默认鼠标右下偏移，靠右/下边时翻转到左/上，留 pad 不贴边。尺寸跟随缩略图×2。
   let previewLeft = 0;
@@ -333,17 +366,18 @@ function Thumb({
   return (
     <div
       ref={cardRef}
-      id={`asset-${shown.id}`}
+      id={`${idPrefix}asset-${shown.id}`}
+      data-asset-id={shown.id}
       data-origin={shown.origin_path ?? undefined}
       role="button"
       tabIndex={0}
-      aria-label={`${shown.name}${selected ? "，已选中" : ""}`}
+      aria-label={`${shown.name}${selected ? "，已选中" : ""}${variant === "canvas-source" ? pickMode ? "，点击加入创作" : "，点击放大" : ""}`}
       className={`group relative mb-2 overflow-hidden rounded-sm bg-panel transition ${
         selected
-          ? "border-2 border-accent shadow-[inset_0_0_0_1px_#4868ff]"
+          ? addingToCollection ? "border-2 collection-add-selected" : "border-2 border-accent shadow-[inset_0_0_0_1px_#4868ff]"
           : "border border-edge hover:border-[#55505a]"
-      } ${variant === "canvas-source" ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"}`}
-      draggable={variant === "canvas-source" || !pickMode}
+      } ${variant === "canvas-source" ? `${pickMode ? "cursor-pointer" : "cursor-zoom-in"} active:cursor-grabbing` : "cursor-pointer"}`}
+      draggable={!addingToCollection && (variant === "canvas-source" || !pickMode)}
       onMouseEnter={onEnter}
       onMouseMove={onMove}
       onMouseLeave={onLeave}
@@ -366,7 +400,8 @@ function Thumb({
         e.preventDefault();
         e.stopPropagation();
         dismissPreview();
-        openContextMenu(e.clientX, e.clientY, shown.id);
+        if (addingToCollection) return;
+        openContextMenu(e.clientX, e.clientY, shown.id, { asset: shown });
       }}
       onDragStart={(e) => {
         dismissPreview();
@@ -426,7 +461,7 @@ function Thumb({
       {/* 选中角标：左下角与选中框同色融合的圆角矩形（左/底边贴内框缘连续，右上圆滑）+ 勾 icon。 */}
       {selected && (
         <span
-          className="absolute bottom-0 left-0 z-10 rounded-tr-lg bg-accent px-1.5 py-1 text-white"
+          className={`absolute bottom-0 left-0 z-10 rounded-tr-lg px-1.5 py-1 ${addingToCollection ? "collection-add-check" : "bg-accent text-white"}`}
           title="已选中"
         >
           <Check size={14} strokeWidth={3} />
@@ -554,7 +589,16 @@ export function MasonryGrid({
   assetsOverride,
   totalOverride,
   projectScopeId,
+  onOpenPreview,
+  projectGroups = [],
+  onOpenProject,
+  embedded = false,
+  restrictGroupsToAssets = false,
 }: {
+  projectGroups?: LibraryProjectGroup[];
+  onOpenProject?: (projectId: string) => void;
+  embedded?: boolean;
+  restrictGroupsToAssets?: boolean;
   variant?: "library" | "canvas-source";
   columnCount?: number;
   /** Project workspace source switch can render a separately loaded library scope. */
@@ -562,8 +606,12 @@ export function MasonryGrid({
   totalOverride?: number;
   /** `undefined` follows the active project; `null` explicitly addresses the central library. */
   projectScopeId?: string | null;
+  /** 画板素材栏保留拖拽；创作时单击引入素材，浏览时由宿主放大查看。 */
+  onOpenPreview?: (asset: Asset, group?: Asset[]) => void;
 } = {}) {
   const storeAssets = useStore((s) => s.assets);
+  const gridRef = useRef<HTMLDivElement>(null);
+  const gridId = useId();
   const storeTotal = useStore((s) => s.total);
   const boardOpen = useStore((s) => s.boardOpen);
   const storeActiveProjectId = useStore((s) => s.activeProjectId);
@@ -583,9 +631,9 @@ export function MasonryGrid({
   useEffect(() => {
     if (!focusAssetId) return;
     const id = focusAssetId;
-    clearFocusAsset();
-    const el = document.getElementById(`asset-${id}`);
+    const el = gridRef.current?.querySelector<HTMLElement>(`[data-asset-id="${CSS.escape(id)}"]`);
     if (!el) return;
+    clearFocusAsset();
     el.scrollIntoView({ block: "center", behavior: "smooth" });
     el.classList.add("board-focus-flash");
     if (flashTimer.current) clearTimeout(flashTimer.current);
@@ -610,13 +658,17 @@ export function MasonryGrid({
     api
       .listGenerationGroups(ids, activeProjectId)
       .then((m) => {
+        if (restrictGroupsToAssets) {
+          const visible = new Set(assets.map((asset) => asset.id));
+          m = Object.fromEntries(Object.entries(m).map(([id, group]) => [id, group.filter((asset) => visible.has(asset.id))]));
+        }
         if (alive) setGroupMap(m);
       })
       .catch((e) => console.error("listGenerationGroups failed", e));
     return () => {
       alive = false;
     };
-  }, [assets, activeProjectId]);
+  }, [assets, activeProjectId, restrictGroupsToAssets]);
 
   // 渲染列表：每组只留一张卡——列表已 created_at DESC，同组首见即组内可见的最新成员，
   // 其余成员经轮播查看（组键取组末位 id，同组成员共享同一数组）。轮播组用后端原始组
@@ -644,16 +696,22 @@ export function MasonryGrid({
   const responsiveColumnCount = useColumnCount();
   const colCount = columnCount ?? responsiveColumnCount;
   const columns = useMemo(() => {
-    const cols: Asset[][] = Array.from({ length: colCount }, () => []);
+    type Item = { kind: "asset"; asset: Asset } | { kind: "project"; group: LibraryProjectGroup };
+    const cols: Item[][] = Array.from({ length: colCount }, () => []);
     const heights = new Array<number>(colCount).fill(0);
-    for (const a of filtered) {
+    const items: Item[] = [
+      ...projectGroups.map((group): Item => ({ kind: "project", group })),
+      ...filtered.map((asset): Item => ({ kind: "asset", asset })),
+    ];
+    for (const item of items) {
       let min = 0;
       for (let i = 1; i < colCount; i++) if (heights[i] < heights[min]) min = i;
-      cols[min].push(a);
-      heights[min] += a.width && a.height ? a.height / a.width : 1;
+      cols[min].push(item);
+      heights[min] += item.kind === "project" ? 1.35
+        : item.asset.width && item.asset.height ? item.asset.height / item.asset.width : 1;
     }
     return cols;
-  }, [filtered, colCount]);
+  }, [filtered, projectGroups, colCount]);
 
   // 拖入外部图片文件 → dataURL → importImageBytes（source=imported，进当前 project scope）。
   // 串行导入（失败隔离）：单张失败不中断后续，错误打控制台。
@@ -702,7 +760,8 @@ export function MasonryGrid({
 
   return (
     <div
-      className="relative flex h-full flex-col"
+      ref={gridRef}
+      className={`relative flex flex-col ${embedded ? "" : "h-full"}`}
       onDragOver={(e) => {
         // 仅响应外部文件拖入（含 "Files"）；preventDefault 才能触发 drop。
         if (Array.from(e.dataTransfer.types).includes("Files")) {
@@ -718,7 +777,7 @@ export function MasonryGrid({
       }}
       onDrop={handleDrop}
     >
-      {filtered.length === 0 ? (
+      {filtered.length === 0 && projectGroups.length === 0 ? (
         <div className="flex h-full items-center justify-center p-8 text-center">
           <div className="library-empty-panel max-w-sm">
             <div className="library-empty-hatch" aria-hidden="true"><span /></div>
@@ -766,19 +825,24 @@ export function MasonryGrid({
         // paddingBottom 跟随底部浮动坞实际高度（会话「重新编辑」坞 --gen-dock-h、创作板
         // 对话框 --board-dock-h，坞/板挂载时由各自 ResizeObserver 写入）——否则底部浮动
         // 坞会盖住最后一行素材，滚不到底。二者互斥，max() 只是兜底；无坞时变量为空归零。
-        <div className="library-scroller h-full overflow-y-auto" style={{ paddingBottom: "max(var(--gen-dock-h, 0px), var(--board-dock-h, 0px))" }}>
+        <div className={embedded ? "" : "library-scroller h-full overflow-y-auto"} style={embedded ? undefined : { paddingBottom: "max(var(--gen-dock-h, 0px), var(--board-dock-h, 0px))" }}>
           {/* 外层固定高度竖向滚动，内层 flex 行式 masonry（各列 flex-1 等宽、纵向
               自然增长）——滚动容器与布局容器保持分离。 */}
           <div className="flex w-full items-start gap-2 p-2" data-tour="masonry">
             {columns.map((col, i) => (
               <div key={i} className="flex min-w-0 flex-1 flex-col">
-                {col.map((a) => (
+                {col.map((item) => item.kind === "project" ? (
+                  <ProjectFolder key={`project-${item.group.project.id}`} group={item.group}
+                    onOpen={() => onOpenProject?.(item.group.project.id)} />
+                ) : (
                   <Thumb
-                    key={a.id}
-                    asset={a}
-                    group={groupMap[a.id]}
+                    key={item.asset.id}
+                    asset={item.asset}
+                    group={groupMap[item.asset.id]}
                     orderedIds={orderedIds}
                     variant={variant}
+                    idPrefix={embedded ? `${gridId}-` : ""}
+                    onOpenPreview={onOpenPreview}
                   />
                 ))}
               </div>

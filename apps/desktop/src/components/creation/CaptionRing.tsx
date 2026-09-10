@@ -103,18 +103,25 @@ function buildMaskImage(g: Geometry): string {
 export function CaptionRing() {
   const openCaptionRing = useStore((s) => s.openCaptionRing);
   const assetId = useStore((s) => s.captionRing);
+  const [peekAnchor, setPeekAnchor] = useState<{ assetId: string; element: HTMLElement } | null>(null);
+
+  useEffect(() => { if (!assetId) setPeekAnchor(null); }, [assetId]);
 
   useEffect(() => {
-    const onPeek = (e: Event) => openCaptionRing((e as CustomEvent<string>).detail);
+    const onPeek = (e: Event) => {
+      const detail = (e as CustomEvent<string | { assetId: string; anchor: HTMLElement }>).detail;
+      setPeekAnchor(typeof detail === "string" ? null : { assetId: detail.assetId, element: detail.anchor });
+      openCaptionRing(typeof detail === "string" ? detail : detail.assetId);
+    };
     window.addEventListener(PEEK_EVENT, onPeek as EventListener);
     return () => window.removeEventListener(PEEK_EVENT, onPeek as EventListener);
   }, [openCaptionRing]);
 
   if (!assetId) return null;
-  return <CaptionRingSession key={assetId} assetId={assetId} />;
+  return <CaptionRingSession key={assetId} assetId={assetId} anchorElement={peekAnchor?.assetId === assetId ? peekAnchor.element : null} />;
 }
 
-function CaptionRingSession({ assetId }: { assetId: string }) {
+function CaptionRingSession({ assetId, anchorElement }: { assetId: string; anchorElement: HTMLElement | null }) {
   const closeCaptionRing = useStore((s) => s.closeCaptionRing);
   const boardOpen = useStore((s) => s.boardOpen);
   const tourActive = useStore((s) => s.tourActive);
@@ -168,6 +175,7 @@ function CaptionRingSession({ assetId }: { assetId: string }) {
     // 锚点：优先瀑布流卡片（长按窥视）；标注注入的临时图不在瀑布流，
     // 回退到编辑框内该资产的 image chip（data-asset-id），环围绕刚插入的 chip 呼出。
     const anchor =
+      anchorElement ??
       document.getElementById(`asset-${assetId}`) ??
       document.querySelector(`[data-asset-id="${CSS.escape(assetId)}"]`);
     const card = anchor?.getBoundingClientRect();
@@ -225,7 +233,7 @@ function CaptionRingSession({ assetId }: { assetId: string }) {
         editor: edRect,
       };
     });
-  }, [assetId, requestClose]);
+  }, [assetId, anchorElement, requestClose]);
 
   useLayoutEffect(() => {
     remeasure();

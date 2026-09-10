@@ -15,12 +15,13 @@ export async function reserveManagedUsage(
   holdId: string,
   estimatedCredits: number,
   allowReplay = false,
+  providerCostMicros?: number,
 ): Promise<void> {
   const dailyLimitCny = positiveNumber("DAILY_COST_LIMIT_CNY", 500);
   const perUserPerMinute = Math.floor(positiveNumber("RATE_LIMIT_PER_USER_PER_MIN", 10));
   const costCnyPerCredit = positiveNumber("COST_CNY_PER_CREDIT", 0.047);
   const mock = (Deno.env.get("BOWERBIRD_CLOUD_MOCK") ?? "true") === "true";
-  const costMicros = mock ? 0 : Math.ceil(estimatedCredits * costCnyPerCredit * 1_000_000);
+  const costMicros = providerCostMicros ?? (mock ? 0 : Math.ceil(estimatedCredits * costCnyPerCredit * 1_000_000));
   const dailyLimitMicros = Math.floor(dailyLimitCny * 1_000_000);
 
   if (!Number.isSafeInteger(costMicros) || !Number.isSafeInteger(dailyLimitMicros) ||

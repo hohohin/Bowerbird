@@ -5,10 +5,10 @@ export function parseCreativeComposerDraft(draftJson: string): CreationEditorDra
   try {
     const value = JSON.parse(draftJson) as {
       schema_version?: number;
-      composer?: { doc?: unknown; refs?: PromptedAsset[] };
+      composer?: { doc?: unknown; refs?: PromptedAsset[]; generation?: CreationEditorDraft["generation"] };
     };
     if (value.schema_version !== 1 || !value.composer || !Array.isArray(value.composer.refs)) return null;
-    return { doc: value.composer.doc, refs: value.composer.refs };
+    return { doc: value.composer.doc, refs: value.composer.refs, ...(value.composer.generation ? { generation: value.composer.generation } : {}) };
   } catch {
     return null;
   }

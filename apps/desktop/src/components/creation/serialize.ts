@@ -8,7 +8,7 @@ import { assignUniqueLabels } from "./parse";
  */
 type Inline =
   | { kind: "text"; text: string }
-  | { kind: "image"; assetId: string; silent?: boolean; name: string }
+  | { kind: "image"; assetId: string; canvasNodeId: string | null; silent?: boolean; name: string }
   | {
       kind: "keyword";
       title: string;
@@ -29,6 +29,7 @@ function docToInline(doc: PmNode): Inline[] {
         flat.push({
           kind: "image",
           assetId: node.attrs.assetId,
+          canvasNodeId: typeof node.attrs.canvasNodeId === "string" ? node.attrs.canvasNodeId : null,
           silent: node.attrs.silent,
           name: node.attrs.name ?? "",
         });
@@ -49,6 +50,8 @@ function docToInline(doc: PmNode): Inline[] {
 export interface Serialized {
   finalPrompt: string;
   references: PromptedAsset[];
+  /** 与 references 同序的精确画板节点；非画板来源或旧草稿为 null。 */
+  referenceNodeIds: Array<string | null>;
   /** 借用维度源图（图 chip 被删、只借维度的资产，doc 序去重）：随 GenJob → generation_meta
    *  落库（dimension_sources），复用生成提示词时据此回绑车牌取最新反推内容。 */
   dimensionSources: PromptedAsset[];
@@ -72,7 +75,9 @@ export function serializeDoc(
   // 发送文本（finalPrompt / rawPrompt）与还原解析（parsePromptToDoc）共用同一分配——
   // 同名参考图的 @标签不再相同，模型与会话详情缩略图都不会绑错图。
   const references: PromptedAsset[] = [];
+  const referenceNodeIds: Array<string | null> = [];
   const seen = new Set<string>();
+  const referenceIndexByAsset = new Map<string, number>();
   const chipAssetIds = new Set<string>(); // 正文里还有非 silent image chip 的资产（维度 raw 序列化用）
   for (const n of flat) {
     if (n.kind !== "image") continue;
@@ -80,7 +85,14 @@ export function serializeDoc(
     const a = assetById.get(n.assetId);
     if (a && !seen.has(a.id)) {
       seen.add(a.id);
+      referenceIndexByAsset.set(a.id, references.length);
       references.push(a);
+      referenceNodeIds.push(n.canvasNodeId);
+    } else if (a && n.canvasNodeId) {
+      const referenceIndex = referenceIndexByAsset.get(a.id);
+      if (referenceIndex !== undefined && !referenceNodeIds[referenceIndex]) {
+        referenceNodeIds[referenceIndex] = n.canvasNodeId;
+      }
     }
   }
   const labels = assignUniqueLabels(references).labelByAsset;
@@ -135,7 +147,7 @@ export function serializeDoc(
       dimensionSources.push(a);
     }
   }
-  return { finalPrompt: out.trim(), references, dimensionSources };
+  return { finalPrompt: out.trim(), references, referenceNodeIds, dimensionSources };
 }
 
 /** 车牌优先寻址：sectionId 直接定位 section（title/body 都取当下值，改名/改正文跟随；

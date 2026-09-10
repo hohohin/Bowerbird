@@ -111,7 +111,7 @@ test("a deferred unowned-task open is cancelled by a newer route intent", () => 
   assert.equal(isDeferredTaskOpenCurrent(4, 5, false), false);
 });
 
-test("the project composer never stays mounted behind an execution inspector", () => {
+test("the project composer stays visible for details and yields only to an execution editor", () => {
   assert.equal(shouldMountProjectComposer(false, false), true);
   assert.equal(shouldMountProjectComposer(true, false), false);
   assert.equal(shouldMountProjectComposer(false, true), false);

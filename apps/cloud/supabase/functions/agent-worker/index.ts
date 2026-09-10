@@ -22,6 +22,8 @@ import {
 import {
   canonicalUnifiedAgentPlanJson,
   estimateUnifiedAgentPlanCredits,
+  unifiedApprovalCallCount,
+  unifiedApprovalAssetIds,
   hashUnifiedAgentPlan,
   hashUnifiedAgentPlanArguments,
   parseUnifiedAgentPlan,
@@ -592,6 +594,7 @@ async function actionClaim(admin: SupabaseClient, workerId: string): Promise<Res
       .eq("status", "approved")
       .eq("proposal_hash", claimed.approved_plan_hash)
       .is("content_deleted_at", null)
+      .order("requested_at", { ascending: false }).limit(1)
       .maybeSingle()
     : Promise.resolve({ data: null, error: null });
   const [inputUrl, checkpointUrl, feedbackUrl, artifactRows, clarificationResult, approvedPlanQuery] = await Promise.all([
@@ -1122,7 +1125,7 @@ async function actionApprovalRequest(admin: SupabaseClient, body: Record<string,
       throw new ApiError("invalid_request", "通用计划 schema 无效");
     }
     proposal = unifiedPlan as unknown as Record<string, unknown>;
-    plannedToolCount = unifiedPlan.steps.length;
+    plannedToolCount = unifiedApprovalCallCount(unifiedPlan);
     sourceCallId = typeof body.callId === "string" ? body.callId : "";
     argsHash = typeof body.argsHash === "string" ? body.argsHash : "";
     if (!/^[0-9a-f]{64}$/.test(sourceCallId) || !/^[0-9a-f]{64}$/.test(argsHash)) {
@@ -1215,7 +1218,7 @@ async function actionApprovalRequest(admin: SupabaseClient, body: Record<string,
       ]
       : [];
     const assetIds = [...new Set([
-      ...unifiedPlan.steps.flatMap((step) => step.inputAssetIds),
+      ...unifiedApprovalAssetIds(unifiedPlan),
       ...structuredAssetIds,
     ])];
     if (assetIds.length) {
@@ -1245,6 +1248,19 @@ async function actionApprovalRequest(admin: SupabaseClient, body: Record<string,
     estimatedCredits = plannedToolCount * imageCredits;
   }
   const spent = await spentCredits(admin, runId);
+  if (unifiedPlan?.schemaVersion === 3 && spent + estimatedCredits > run.budget_credits) {
+    const costPerCredit = Math.ceil(Number(Deno.env.get("COST_CNY_PER_CREDIT") ?? 0.047) * 1_000_000);
+    const dailyLimit = Math.floor(Number(Deno.env.get("DAILY_COST_LIMIT_CNY") ?? 500) * 1_000_000);
+    if (!Number.isSafeInteger(costPerCredit) || costPerCredit < 0 || !Number.isSafeInteger(dailyLimit) || dailyLimit <= 0) {
+      throw new ApiError("not_configured", "测试成本配置无效");
+    }
+    const extended = await admin.rpc("extend_agent_test_budget", { p_run_id: runId, p_lease_id: leaseId,
+      p_budget: spent + estimatedCredits,
+      p_cost_per_credit_micros: (Deno.env.get("BOWERBIRD_CLOUD_MOCK") ?? "true") === "true" ? 0 : costPerCredit,
+      p_daily_cost_limit_micros: dailyLimit });
+    if (extended.error) throw new ApiError("insufficient_credits", "测试任务无法追加预授权，请检查账户积分或云端总成本额度", false, 402);
+    run.budget_credits = Number(extended.data);
+  }
   if (spent + estimatedCredits > run.budget_credits) {
     throw new ApiError("insufficient_credits", "计划超过 Run 剩余预算", false, 402);
   }
@@ -1285,6 +1301,7 @@ async function actionApprovalRequest(admin: SupabaseClient, body: Record<string,
       source_call_id: sourceCallId,
       args_hash: argsHash,
       cost_policy_version: estimateBreakdown?.policyVersion ?? null,
+      ...(unifiedPlan?.schemaVersion === 3 ? { task_policy: { outputCount: unifiedPlan.outputCount, modelTurns: unifiedPlan.modelTurns, capabilities: unifiedPlan.capabilities } } : {}),
       status: "pending",
       expires_at: new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
     }).select("id").single();
@@ -1327,7 +1344,8 @@ async function actionClarificationRequest(admin: SupabaseClient, body: Record<st
   const options = Array.isArray(value.options) ? value.options : [];
   const optionPatches = Array.isArray(value.optionPatches) ? value.optionPatches : [];
   const affectedFields = Array.isArray(value.affectedIntentFields) ? value.affectedIntentFields : [];
-  const allowedFields = new Set(["finalSubjectReferenceId", "mustTransfer", "highConsistencySignals", "strategy", "budget"]);
+  const run = await assertLease(admin, runId, leaseId);
+  const allowedFields = new Set(["finalSubjectReferenceId", "mustTransfer", "highConsistencySignals", "strategy", "budget", ...(run.skill_id === "bowerbird-unified-agent" ? ["goal"] : [])]);
   if (!/^[A-Za-z0-9._:-]{1,120}$/.test(questionKey) || !/^[0-9a-f]{64}$/.test(contextHash) ||
       !question || question.length > 500 || !recommendedAnswer || recommendedAnswer.length > 240 ||
       !rationale || rationale.length > 1_000 || options.length < 2 || options.length > 4 ||
@@ -1358,7 +1376,6 @@ async function actionClarificationRequest(admin: SupabaseClient, body: Record<st
   if (await sha256Hex(canonicalBytes) !== proposalHash) {
     throw new ApiError("invalid_request", "澄清 proposal hash 不匹配", false, 409);
   }
-  const run = await assertLease(admin, runId, leaseId);
   const { data: rows, error: rowsError } = await admin.from("agent_clarifications")
     .select("id,question_key,context_hash,status,question_object_key")
     .eq("run_id", runId).order("asked_at", { ascending: true });
@@ -1370,7 +1387,7 @@ async function actionClarificationRequest(admin: SupabaseClient, body: Record<st
       throw new ApiError("invalid_request", "澄清 question_key 冲突", false, 409);
     }
   } else {
-    if ((rows ?? []).length >= 3) throw new ApiError("invalid_request", "澄清次数已达上限", false, 409);
+    if ((rows ?? []).length >= (run.skill_id === "bowerbird-unified-agent" ? 12 : 3)) throw new ApiError("invalid_request", "澄清次数已达上限", false, 409);
     const encoded = new TextEncoder().encode(JSON.stringify(proposal));
     const upload = await admin.storage.from(BUCKET).upload(objectKey, encoded, {
       contentType: "application/json",

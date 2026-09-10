@@ -8,6 +8,50 @@ export interface CanvasRect extends CanvasPoint {
   height: number;
 }
 
+/** Search the visible canvas only; never push a new card beyond the viewport. */
+export function canvasPlacementForNewCard(
+  card: CanvasRect, viewport: CanvasRect, pan: CanvasPoint, zoom: number, obstacles: CanvasRect[],
+): CanvasPoint | null {
+  const left = (viewport.x - pan.x) / zoom;
+  const top = (viewport.y - pan.y) / zoom;
+  const right = left + viewport.width / zoom - card.width;
+  const bottom = top + viewport.height / zoom - card.height;
+  if (viewport.width <= 0 || viewport.height <= 0 || right < left || bottom < top) return null;
+  const gap = 16 / zoom;
+  const visible = obstacles.filter((other) => other.x + other.width + gap > left
+    && other.x - gap < right + card.width && other.y + other.height + gap > top
+    && other.y - gap < bottom + card.height);
+  const fits = (x: number, y: number) => x >= left && x <= right && y >= top && y <= bottom
+    && !visible.some((other) => x < other.x + other.width + gap && x + card.width + gap > other.x
+      && y < other.y + other.height + gap && y + card.height + gap > other.y);
+  if (fits(card.x, card.y)) return { x: card.x, y: card.y };
+  // Obstacle edges plus viewport edges cover narrow spaces that a fixed grid could miss.
+  const xs = [...new Set([left, right, ...visible.flatMap((other) => [other.x + other.width + gap, other.x - card.width - gap])])]
+    .filter((x) => x >= left && x <= right).sort((a, b) => a - b);
+  const ys = [...new Set([top, bottom, ...visible.flatMap((other) => [other.y + other.height + gap, other.y - card.height - gap])])]
+    .filter((y) => y >= top && y <= bottom).sort((a, b) => a - b);
+  for (const y of ys) for (const x of xs) if (fits(x, y)) return { x, y };
+  return null;
+}
+
+/** Keep a visible card still; fit and center an off-screen card without zooming in. */
+export function canvasViewForNewCard(card: CanvasRect, viewport: CanvasRect, pan: CanvasPoint, zoom: number) {
+  if (viewport.width <= 0 || viewport.height <= 0 || card.width <= 0 || card.height <= 0) return null;
+  const left = pan.x + card.x * zoom;
+  const top = pan.y + card.y * zoom;
+  if (left >= viewport.x && top >= viewport.y
+    && left + card.width * zoom <= viewport.x + viewport.width
+    && top + card.height * zoom <= viewport.y + viewport.height) return null;
+  const nextZoom = clampCanvasZoom(Math.min(zoom, viewport.width / card.width, viewport.height / card.height));
+  return {
+    zoom: nextZoom,
+    pan: {
+      x: viewport.x + viewport.width / 2 - (card.x + card.width / 2) * nextZoom,
+      y: viewport.y + viewport.height / 2 - (card.y + card.height / 2) * nextZoom,
+    },
+  };
+}
+
 export interface CanvasSnapAnchor {
   id: string;
   order: number;
@@ -124,6 +168,24 @@ export function isCanvasPanGesture(button: number, spacePressed: boolean) {
   return button === 1 || (button === 0 && spacePressed);
 }
 
+export function canvasPrimaryMaterialAction(
+  creationModeOpen: boolean,
+  generationEditorOpen: boolean,
+): "compose" | "preview" {
+  return creationModeOpen || generationEditorOpen ? "compose" : "preview";
+}
+
+export function canStartCanvasMarquee(
+  button: number,
+  creationModeOpen: boolean,
+  generationEditorOpen: boolean,
+  targetIsCanvasNode: boolean,
+): boolean {
+  return button === 0
+    && canvasPrimaryMaterialAction(creationModeOpen, generationEditorOpen) === "preview"
+    && !targetIsCanvasNode;
+}
+
 /** 给单击选择留出手部抖动容差，超过阈值后才进入节点拖动。 */
 export function exceedsCanvasDragThreshold(
   start: CanvasPoint,
@@ -131,6 +193,47 @@ export function exceedsCanvasDragThreshold(
   threshold = 4,
 ) {
   return Math.hypot(current.x - start.x, current.y - start.y) >= threshold;
+}
+
+export function canvasRectFromPoints(start: CanvasPoint, end: CanvasPoint): CanvasRect {
+  return {
+    x: Math.min(start.x, end.x),
+    y: Math.min(start.y, end.y),
+    width: Math.abs(end.x - start.x),
+    height: Math.abs(end.y - start.y),
+  };
+}
+
+/** Select every material card touched by a marquee in board coordinates. */
+export function canvasNodeIdsInRect(
+  selection: CanvasRect,
+  nodes: readonly CanvasSnapAnchor[],
+): string[] {
+  const right = selection.x + selection.width;
+  const bottom = selection.y + selection.height;
+  return nodes.flatMap((node) => {
+    const nodeRight = node.rect.x + node.rect.width;
+    const nodeBottom = node.rect.y + node.rect.height;
+    return node.rect.x <= right
+      && nodeRight >= selection.x
+      && node.rect.y <= bottom
+      && nodeBottom >= selection.y
+      ? [node.id]
+      : [];
+  });
+}
+
+/** Translate one selected set by a shared delta so its internal layout stays rigid. */
+export function translateCanvasSelection<T extends CanvasPoint & { id: string }>(
+  nodes: readonly T[],
+  selectedIds: ReadonlySet<string>,
+  dx: number,
+  dy: number,
+): T[] {
+  if (selectedIds.size === 0 || (dx === 0 && dy === 0)) return [...nodes];
+  return nodes.map((node) => selectedIds.has(node.id)
+    ? { ...node, x: node.x + dx, y: node.y + dy }
+    : node);
 }
 
 function uniqueAssets<T extends { id: string }>(assets: T[]) {

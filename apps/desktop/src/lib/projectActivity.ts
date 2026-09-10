@@ -163,6 +163,34 @@ export function isOutsideFocusedThread(
   return !!focusedThreadId && !!threadId && threadId !== focusedThreadId;
 }
 
+/** Only explicit retry/edit successors retire a task card, never thread focus. */
+export function supersededProjectTaskIds(
+  nodes: readonly CanvasNode[],
+  edges: readonly CanvasEdge[],
+): Set<string> {
+  const visible = new Map(nodes.filter((node) => node.hiddenAt == null).map((node) => [node.id, node]));
+  const isTask = (id: string) => {
+    const node = visible.get(id);
+    return node?.kind === "prompt" || node?.kind === "agent_group";
+  };
+  const superseded = new Set<string>();
+  for (const edge of edges) {
+    if ((edge.kind !== "retry" && edge.kind !== "branch") || !isTask(edge.toNodeId)) continue;
+    const parent = visible.get(edge.fromNodeId);
+    const successor = visible.get(edge.toNodeId)!;
+    if (!parent || parent.threadId !== successor.threadId) continue;
+    if (isTask(parent.id)) superseded.add(parent.id);
+    for (const output of edges) {
+      if (output.kind === "produced" && output.toNodeId === parent.id
+        && isTask(output.fromNodeId)
+        && visible.get(output.fromNodeId)?.threadId === successor.threadId) {
+        superseded.add(output.fromNodeId);
+      }
+    }
+  }
+  return superseded;
+}
+
 /** Archived threads are hidden from the default canvas/activity projection.
  * Passing an explicit archived thread keeps only that thread available for inspection/restoration.
  */

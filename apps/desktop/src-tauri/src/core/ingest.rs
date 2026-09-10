@@ -147,9 +147,16 @@ pub fn ingest_generated(
     fs::create_dir_all(store_path.parent().unwrap())?;
     fs::copy(source, &store_path)?;
 
-    let decoded = image::open(&store_path).ok();
+    let mut decoded = image::open(&store_path).ok();
 
-    let thumb_path = if meta.ext == "svg" {
+    let thumb_path = if media::probe::is_video(&meta.ext) {
+        let p = paths.thumb_path(&id);
+        if let Err(error) = media::thumb::generate_video(&store_path, &p, 480) {
+            tracing::warn!("video thumb failed for {}: {error}", source.display());
+        }
+        decoded = image::open(&p).ok();
+        p
+    } else if meta.ext == "svg" {
         store_path.clone()
     } else {
         let p = paths.thumb_path(&id);
@@ -182,7 +189,7 @@ pub fn ingest_generated(
         ext: Some(meta.ext),
         origin_path: Some(source.to_string_lossy().into_owned()),
         store_path: Some(store_path.to_string_lossy().into_owned()),
-        thumb_path: Some(thumb_path.to_string_lossy().into_owned()),
+        thumb_path: thumb_path.is_file().then(|| thumb_path.to_string_lossy().into_owned()),
         size: Some(meta.size as i64),
         width: Some(meta.width as i64),
         height: Some(meta.height as i64),
@@ -309,11 +316,21 @@ pub fn ingest_from_bytes(
 
     let result = (|| -> AppResult<Asset> {
         let mut asset = ingest_file(paths, db, &source_path)?;
+        let has_temporary_origin =
+            asset.origin_path.as_deref() == Some(source_path.to_string_lossy().as_ref());
         let conn = db.conn.lock().unwrap();
-        conn.execute(
-            "UPDATE assets SET source=?1, source_url=?2 WHERE id=?3",
-            rusqlite::params![source, source_url, asset.id],
-        )?;
+        if has_temporary_origin {
+            conn.execute(
+                "UPDATE assets SET source=?1, source_url=?2, origin_path=NULL WHERE id=?3",
+                rusqlite::params![source, source_url, asset.id],
+            )?;
+            asset.origin_path = None;
+        } else {
+            conn.execute(
+                "UPDATE assets SET source=?1, source_url=?2 WHERE id=?3",
+                rusqlite::params![source, source_url, asset.id],
+            )?;
+        }
         asset.source = Some(source.to_string());
         asset.source_url = Some(source_url.to_string());
         Ok(asset)
@@ -428,16 +445,26 @@ pub async fn ingest_from_url(
     fs::write(&source_path, &bytes)?;
 
     let ingested = ingest_file(paths, db, &source_path);
+    let source_path_text = source_path.to_string_lossy().into_owned();
     let _ = fs::remove_file(&source_path);
     let mut asset = ingested?;
+    let has_temporary_origin = asset.origin_path.as_deref() == Some(source_path_text.as_str());
     // 标记来源为 extension + source_url。
     let source_url = source_url.filter(|value| is_http_url(value)).unwrap_or(url);
     {
         let conn = db.conn.lock().unwrap();
-        conn.execute(
-            "UPDATE assets SET source='extension', source_url=?1 WHERE id=?2",
-            rusqlite::params![source_url, asset.id],
-        )?;
+        if has_temporary_origin {
+            conn.execute(
+                "UPDATE assets SET source='extension', source_url=?1, origin_path=NULL WHERE id=?2",
+                rusqlite::params![source_url, asset.id],
+            )?;
+            asset.origin_path = None;
+        } else {
+            conn.execute(
+                "UPDATE assets SET source='extension', source_url=?1 WHERE id=?2",
+                rusqlite::params![source_url, asset.id],
+            )?;
+        }
     }
     asset.source = Some("extension".to_string());
     asset.source_url = Some(source_url.to_string());
@@ -608,6 +635,7 @@ mod tests {
         assert_eq!(asset.width, Some(32));
         assert_eq!(asset.height, Some(24));
         assert_eq!(asset.source.as_deref(), Some("extension"));
+        assert_eq!(asset.origin_path, None);
         assert_eq!(
             asset.source_url.as_deref(),
             Some("https://example.com/image-without-extension")
@@ -616,6 +644,32 @@ mod tests {
             .store_path
             .as_deref()
             .is_some_and(|path| path.ends_with(".png")));
+        assert_eq!(db.count_assets(None).unwrap(), 1);
+    }
+
+    #[test]
+    #[ignore = "requires ffmpeg and ffprobe on PATH; uses generated local fixture, no provider"]
+    fn generated_video_ingest_probes_short_clip_and_real_poster() {
+        let (_tmp, paths, db) = setup();
+        let source = paths.root.join("short.mp4");
+        let mut command = crate::media::tools::command(crate::media::tools::resolve(crate::media::tools::Tool::Ffmpeg).unwrap());
+        #[cfg(target_os = "windows")]
+        { use std::os::windows::process::CommandExt; command.creation_flags(0x08000000); }
+        let output = command.args(["-y", "-f", "lavfi", "-i", "color=c=red:s=120x240:r=25", "-t", "0.4", "-pix_fmt", "yuv420p"])
+            .arg(&source).output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        let asset = ingest_generated(&paths, &db, &source, Some("video-session"), "jimeng").unwrap();
+        assert_eq!(asset.ext.as_deref(), Some("mp4"));
+        assert_eq!((asset.width, asset.height), (Some(120), Some(240)));
+        assert!((asset.duration.unwrap() - 0.4).abs() < 0.05);
+        let poster = image::open(asset.thumb_path.as_deref().unwrap()).unwrap();
+        assert!(poster.width() <= 480 && poster.height() <= 480);
+        assert!(asset.colors.is_some());
+        assert_eq!(asset.source.as_deref(), Some("jimeng"));
+        assert_eq!(asset.generation_session_id.as_deref(), Some("video-session"));
+        let bad = paths.root.join("broken.mp4");
+        std::fs::write(&bad, b"not a video").unwrap();
+        assert!(ingest_generated(&paths, &db, &bad, Some("video-session"), "jimeng").is_err());
         assert_eq!(db.count_assets(None).unwrap(), 1);
     }
 
@@ -759,6 +813,7 @@ mod tests {
 
         assert_eq!(asset.name, "captured");
         assert_eq!(asset.source.as_deref(), Some("extension"));
+        assert_eq!(asset.origin_path, None);
         assert_eq!(
             asset.source_url.as_deref(),
             Some("https://example.test/protected/image?id=42")

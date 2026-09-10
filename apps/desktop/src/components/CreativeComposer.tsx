@@ -1,4 +1,5 @@
 import { CreationBoard } from "./CreationBoard";
+import type { CreativePromptLoadRequest } from "../lib/creativeLaunch";
 import { parseCreativeComposerDraft, serializeCreativeComposerDraft } from "../lib/creativeDraft";
 import type { CreativeParentCandidate, CreativeThreadResolution } from "../lib/creativeGeneration";
 
@@ -9,6 +10,8 @@ export function CreativeComposer({
   continuationCandidates = [],
   focusedContinuationNodeId = null,
   focusedContinuationThreadId = null,
+  promptLoadRequest = null,
+  onPromptLoadConsumed,
   onDraftChange,
   registerDraftFlush,
   beforeGenerate,
@@ -20,6 +23,8 @@ export function CreativeComposer({
   continuationCandidates?: CreativeParentCandidate[];
   focusedContinuationNodeId?: string | null;
   focusedContinuationThreadId?: string | null;
+  promptLoadRequest?: CreativePromptLoadRequest | null;
+  onPromptLoadConsumed?: (requestId: string) => void;
   onDraftChange: (draftJson: string) => void;
   registerDraftFlush?: (flush: (() => void) | null) => void;
   beforeGenerate?: () => Promise<void>;
@@ -40,6 +45,8 @@ export function CreativeComposer({
       continuationCandidates={continuationCandidates}
       focusedContinuationNodeId={focusedContinuationNodeId}
       focusedContinuationThreadId={focusedContinuationThreadId}
+      promptLoadRequest={promptLoadRequest}
+      onPromptLoadConsumed={onPromptLoadConsumed}
       onDraftChange={(composer) => onDraftChange(serializeCreativeComposerDraft(composer))}
       registerDraftFlush={registerDraftFlush}
       beforeGenerate={beforeGenerate}

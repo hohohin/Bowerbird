@@ -52,13 +52,14 @@ function requireWorker(request: Request): { workerId: string; admin: SupabaseCli
 interface JobRow {
   id: string;
   status: string;
-  service: "image_sd" | "image_hd" | "image_lite" | "image_fast";
+  service: string;
   lease_id: string | null;
   request_object_key: string;
   input_manifest_hash: string;
   input_count: number;
   attempt_count: number;
   upstream_submitted_at: string | null;
+  provider_request_id: string | null;
 }
 
 function scalar<T>(value: T | T[] | null): T | null {
@@ -97,6 +98,7 @@ async function actionClaim(admin: SupabaseClient, workerId: string): Promise<Res
       inputManifestHash: job.input_manifest_hash,
       inputCount: job.input_count,
       attempt: job.attempt_count,
+      upstreamTaskId: job.service.startsWith("video_") ? job.provider_request_id : undefined,
     },
     lease: { leaseId: job.lease_id, leaseSeconds: LEASE_SECONDS },
     inputUrl: signed.data.signedUrl,
@@ -105,22 +107,30 @@ async function actionClaim(admin: SupabaseClient, workerId: string): Promise<Res
 
 async function actionCleanupExpired(admin: SupabaseClient): Promise<Response> {
   const now = Date.now();
+  const expiredUploads = await admin.rpc("expire_video_uploads");
+  if (expiredUploads.error) throw new ApiError("internal_error", "过期视频上传关闭失败", true);
   const { data, error } = await admin.from("generation_jobs")
     .select("id,request_object_key,output_object_key")
-    .lt("content_expires_at", new Date(now).toISOString())
-    .is("deleted_at", null)
+    .lt("content_expires_at", new Date(now - 3 * 60 * 60 * 1000).toISOString())
+    .or("status.in.(succeeded,failed,cancelled),and(status.eq.outcome_unknown,error_code.eq.video_usage_exceeds_reservation)")
+    .order("deleted_at", { ascending: true, nullsFirst: true })
     .limit(100);
   if (error) throw new ApiError("internal_error", "过期云任务查询失败", true);
   const rows = (data ?? []) as Array<{ id: string; request_object_key: string; output_object_key: string | null }>;
   const keys = [...new Set(rows.flatMap((row) => [row.request_object_key, row.output_object_key])
     .filter((key): key is string => Boolean(key)))];
+  for (const row of rows) {
+    const inputs = await admin.storage.from(BUCKET).list(`jobs/${row.id}/inputs`, { limit: 100 });
+    if (inputs.error) throw new ApiError("internal_error", "过期输入查询失败", true);
+    for (const file of inputs.data ?? []) keys.push(`jobs/${row.id}/inputs/${file.name}`);
+  }
   if (keys.length) {
     const removed = await admin.storage.from(BUCKET).remove(keys);
     if (removed.error) throw new ApiError("internal_error", "过期云任务对象删除失败", true);
   }
   if (rows.length) {
     const updated = await admin.from("generation_jobs").update({ deleted_at: new Date(now).toISOString() })
-      .in("id", rows.map((row) => row.id)).is("deleted_at", null);
+      .in("id", rows.map((row) => row.id));
     if (updated.error) throw new ApiError("internal_error", "过期云任务标记失败", true);
   }
   return jsonResponse({ expiredJobs: rows.length, removedObjects: keys.length });
@@ -144,6 +154,23 @@ async function actionHeartbeat(admin: SupabaseClient, body: Record<string, unkno
   });
 }
 
+async function actionVideoInputUrl(admin: SupabaseClient, body: Record<string, unknown>): Promise<Response> {
+  const job = await assertLease(admin, String(body.jobId ?? ""), String(body.leaseId ?? ""));
+  const key = String(body.objectKey ?? "");
+  const bytes = Number(body.bytes);
+  if (!job.service.startsWith("video_") || !new RegExp(`^jobs/${job.id}/inputs/video-[0-9]+\\.(mp4|mov)$`).test(key) || !Number.isSafeInteger(bytes) || bytes <= 0 || bytes > 200 * 1024 * 1024) throw new ApiError("invalid_request", "视频引用无效");
+  await assertUploadedObject(admin, key, bytes);
+  const signed = await admin.storage.from(BUCKET).createSignedUrl(key, 86400);
+  if (signed.error || !signed.data) throw new ApiError("internal_error", "视频引用签名失败", true);
+  return jsonResponse({ url: signed.data.signedUrl });
+}
+
+async function actionVideoDefer(admin: SupabaseClient, body: Record<string, unknown>): Promise<Response> {
+  const result = await admin.rpc("defer_generation_video_job", { p_job_id: String(body.jobId ?? ""), p_lease_id: String(body.leaseId ?? "") });
+  if (result.error) throw new ApiError("invalid_request", "视频租约已失效", false, 409);
+  return jsonResponse({ deferred: true });
+}
+
 async function actionSubmitted(admin: SupabaseClient, body: Record<string, unknown>): Promise<Response> {
   const jobId = typeof body.jobId === "string" ? body.jobId : "";
   const leaseId = typeof body.leaseId === "string" ? body.leaseId : "";
@@ -159,6 +186,7 @@ async function actionSubmitted(admin: SupabaseClient, body: Record<string, unkno
 }
 
 function outputExtension(mime: string): string {
+  if (mime === "video/mp4") return "mp4";
   if (mime === "image/jpeg") return "jpg";
   if (mime === "image/webp") return "webp";
   if (mime === "image/png") return "png";
@@ -169,7 +197,8 @@ async function actionOutputUpload(admin: SupabaseClient, body: Record<string, un
   const jobId = typeof body.jobId === "string" ? body.jobId : "";
   const leaseId = typeof body.leaseId === "string" ? body.leaseId : "";
   const mime = typeof body.mime === "string" ? body.mime : "";
-  await assertLease(admin, jobId, leaseId);
+  const job = await assertLease(admin, jobId, leaseId);
+  if (job.service.startsWith("video_") !== (mime === "video/mp4")) throw new ApiError("invalid_request", "产物媒体与服务不匹配");
   const objectKey = `jobs/${jobId}/outputs/result.${outputExtension(mime)}`;
   const result = await admin.storage.from(BUCKET).createSignedUploadUrl(objectKey, { upsert: true });
   if (result.error || !result.data) throw new ApiError("internal_error", "产物上传地址签发失败", true);
@@ -195,7 +224,7 @@ async function actionComplete(
   const jobId = typeof body.jobId === "string" ? body.jobId : "";
   const leaseId = typeof body.leaseId === "string" ? body.leaseId : "";
   if (!jobId || !leaseId) throw new ApiError("invalid_request", "缺少 jobId/leaseId");
-  await assertLease(admin, jobId, leaseId);
+  const leasedJob = await assertLease(admin, jobId, leaseId);
   const objectKey = typeof body.objectKey === "string" ? body.objectKey : null;
   const mime = typeof body.mime === "string" ? body.mime : null;
   const bytes = Number(body.bytes ?? 0);
@@ -206,10 +235,12 @@ async function actionComplete(
     }
     await assertUploadedObject(admin, objectKey, bytes);
   }
-  const result = await admin.rpc("complete_generation_job", {
+  const isVideo = leasedJob.service.startsWith("video_");
+  const result = await admin.rpc(isVideo ? "complete_generation_video_job" : "complete_generation_job", {
     p_job_id: jobId,
     p_lease_id: leaseId,
     p_status: status,
+    ...(isVideo ? { p_completion_tokens: status === "succeeded" ? body.completionTokens : null } : {}),
     p_output_object_key: objectKey,
     p_output_mime: mime,
     p_output_bytes: status === "succeeded" ? bytes : null,
@@ -238,13 +269,15 @@ Deno.serve(async (request) => {
     else if (action === "claim") response = await actionClaim(admin, workerId);
     else if (action === "heartbeat") response = await actionHeartbeat(admin, body);
     else if (action === "submitted") response = await actionSubmitted(admin, body);
+    else if (action === "video_input_url") response = await actionVideoInputUrl(admin, body);
+    else if (action === "video_defer") response = await actionVideoDefer(admin, body);
     else if (action === "output_upload") response = await actionOutputUpload(admin, body);
     else if (action === "finish") response = await actionComplete(admin, body, "succeeded");
     else if (action === "fail") response = await actionComplete(admin, body, "failed");
     else if (action === "outcome_unknown") response = await actionComplete(admin, body, "outcome_unknown");
     else if (action === "cancelled") response = await actionComplete(admin, body, "cancelled");
     else throw new ApiError("invalid_request", "未知 action");
-    safeLog({ requestId: id, service: `generation-worker:${action}`, status: response.status, elapsedMs: Date.now() - started });
+    safeLog({ requestId: id, service: `generation-worker:${action}`, status: String(response.status), elapsedMs: Date.now() - started });
     return response;
   } catch (error) {
     safeLog({ requestId: id, service: "generation-worker", status: error instanceof ApiError ? error.code : "error", elapsedMs: Date.now() - started });

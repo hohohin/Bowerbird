@@ -134,31 +134,13 @@ try {
 }
 
 const plan = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   title: "候选容器计划",
   summary: "明确当前产品素材的职责与信息区块后完成受控输出。",
-  contentPlan: {
-    assetAssignments: [{
-      assetId: "asset-product",
-      roles: ["product", "copy_source"],
-      rationale: "当前 Run 素材提供产品主体与可核验包装文字。",
-    }],
-    informationArchitecture: [{
-      id: "hero",
-      purpose: "展示产品主体与核心卖点",
-      sourceAssetIds: ["asset-product"],
-      copySource: "asset_observation",
-    }],
-    missingAssets: [],
-    visualProfile: null,
-  },
-  steps: [{
-    id: "finalize",
-    kind: "finalize_output",
-    goal: "提交最终结果",
-    inputAssetIds: ["asset-product"],
-    dependsOn: [],
-  }],
+  assetIds: ["asset-product"],
+  outputCount: 1,
+  modelTurns: 8,
+  capabilities: [{ tool: "generate_image", maxCalls: 1 }],
 };
 const controlledIntent = {
   schemaVersion: 1,
@@ -192,7 +174,7 @@ const controlledPlan = {
 };
 const unifiedModelServer = await startFakeDeepSeek([
   { name: "list_run_assets", arguments: {} },
-  { name: "submit_plan", arguments: { plan } },
+  { name: "request_task_authorization", arguments: plan },
 ]);
 let checkpointSaved = false;
 let planningEventRecorded = false;
@@ -447,7 +429,7 @@ const result = {
   realDeepSeekKeyStayedInParent: [...unifiedModelServer.authorizationHeaders, ...controlledModelServer.authorizationHeaders].every(
     (header) => header === "Bearer candidate-fixture-only",
   ),
-  formalProcessorToolSurfaceClosed: firstRequestTools.join(",") === "list_run_assets,submit_plan,understand_asset",
+  formalProcessorToolSurfaceClosed: firstRequestTools.join(",") === "ask_user,call_tool,list_run_assets,list_skills,read_context,read_skill,request_task_authorization,understand_asset",
   formalProcessorSawCurrentAsset: unifiedModelServer.requests[1]?.messages?.some(
     (message) => message.role === "tool" && message.content.includes("asset-product"),
   ) === true,

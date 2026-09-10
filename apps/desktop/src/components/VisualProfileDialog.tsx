@@ -1,737 +1,355 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { ArrowLeft, Check, ChevronDown, Palette, Pencil, RotateCcw, Sparkles, Trash2 } from "lucide-react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { api } from "../lib/api";
 import { effectivePolicy } from "../lib/entitlement";
 import { notifySuccess } from "../lib/notify";
+import { brandOverview } from "../lib/brandVisual";
+import { reminderStorageKey } from "../lib/taskReminders";
+import { startVisualProfileTask, stopVisualProfileTask, useVisualProfileTasks, visualProfileTaskScope } from "../lib/visualProfileTasks";
 import { useStore } from "../store";
 import { ModalShell } from "./ModalShell";
-import type {
-  VisualProfileDetail,
-  VisualProfileDraftRule,
-  VisualProfileScopePreview,
-  VisualProfileSummary,
-} from "../lib/types";
+import type { Asset, VisualProfileDetail, VisualProfileDraftRule, VisualProfileScopePreview, VisualProfileSummary } from "../lib/types";
+import "./VisualProfileDialog.css";
 
-/**
- * 项目视觉设定弹窗（V1+V2）：覆盖率预览 → 云端模型提炼（2 积分，DeepSeek 分批）或
- * 本地基线（免费）→ 可编辑草稿（V2-T3：改值/改强度/删规则/选方向）→ 确认保存。
- * 三条不可变边界文案明示：只用已有反推文字、不上传图片、不自动补反推。
- */
-
-const CATEGORY_LABELS: Record<string, string> = {
-  composition: "构图",
-  light: "光线",
-  palette: "色彩",
-  mood: "氛围",
-  material: "材质",
-  medium: "类型",
-  layout: "版式",
-};
-
-const VALIDATION_THEMES = ["静物台面", "室内一角", "自然场景", "抽象背景"];
-
-const VALIDATION_DIMENSIONS: Array<{ key: string; label: string }> = [
-  { key: "composition", label: "构图" },
-  { key: "palette", label: "色彩" },
-  { key: "light", label: "光线" },
-  { key: "mood", label: "氛围" },
-  { key: "material", label: "材质" },
-];
-
-const RATING_OPTIONS = ["符合", "部分符合", "不符合"];
-
-const POLARITY_LABELS: Record<string, string> = {
-  must: "必须",
-  prefer: "倾向",
-  avoid: "避免",
-};
-
-type EditableRule = VisualProfileDraftRule & { deleted?: boolean };
-
-function categoryLabel(category: string) {
-  return CATEGORY_LABELS[category] ?? category;
-}
-
-function formatTime(unixSeconds: number) {
-  return new Date(unixSeconds * 1000).toLocaleString();
-}
-
-type Phase = "preview" | "draft" | "done";
+const CATEGORIES: Record<string, string> = { mood: "整体气质", palette: "品牌色彩", composition: "画面构图", light: "光线与影调", material: "材质与质感", medium: "表现方式", layout: "文字与版式" };
+const POLARITIES = { must: "保持", prefer: "偏好", avoid: "避免" };
+const THEMES = ["静物台面", "室内一角", "自然场景", "抽象背景"];
+type Rule = VisualProfileDraftRule & { deleted?: boolean };
+type Validation = { imagePath: string; prompt: string; credits: number };
+const errorMessage = (e: unknown) => typeof e === "string" ? e : e instanceof Error ? e.message : "暂时没有完成，请稍后再试";
 
 export function VisualProfileDialog() {
   const folder = useStore((s) => s.visualProfileFolder);
-  const activeProjectId = useStore((s) => s.activeProjectId);
+  if (!folder) return null;
+  return <BrandVisualSession key={`${folder.id}:${folder.profileId ?? ""}`} folder={folder} />;
+}
+
+function BrandVisualSession({ folder }: { folder: { id: string; name: string; profileId?: string } }) {
   const close = useStore((s) => s.closeVisualProfile);
-  const reloadVisualProfiles = useStore((s) => s.reloadVisualProfiles);
   const cloudAuth = useStore((s) => s.cloudAuth);
-  const cloudEntitlement = useStore((s) => s.cloudEntitlement);
-
-  const [phase, setPhase] = useState<Phase>("preview");
-  const [preview, setPreview] = useState<VisualProfileScopePreview | null>(null);
+  const entitlement = useStore((s) => s.cloudEntitlement);
+  const [scope, setScope] = useState<VisualProfileScopePreview | null>(null);
+  const [images, setImages] = useState<Asset[]>([]);
   const [history, setHistory] = useState<VisualProfileSummary[]>([]);
+  const [historyExpanded, setHistoryExpanded] = useState(false);
+  const [deleting, setDeleting] = useState<VisualProfileSummary | null>(null);
+  const [sourceRetry, setSourceRetry] = useState(0);
+  const [savedSources, setSavedSources] = useState<{ profileId: string; assets: Asset[]; error?: string } | null>(null);
+  const deleteMessage = useRef<HTMLDivElement>(null);
+  const cancelDelete = useRef<HTMLButtonElement>(null);
   const [detail, setDetail] = useState<VisualProfileDetail | null>(null);
-  const [rules, setRules] = useState<EditableRule[]>([]);
-  const [selectedDirection, setSelectedDirection] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [busyLabel, setBusyLabel] = useState("");
+  const [rules, setRules] = useState<Rule[]>([]);
+  const [direction, setDirection] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [operationBusy, setBusy] = useState<string | null>("正在打开…");
   const [error, setError] = useState<string | null>(null);
-  // —— V3 方向验证图（可选；未确认不入库，丢弃即删缓存文件）——
-  const [theme, setTheme] = useState(VALIDATION_THEMES[0]!);
-  const [customTheme, setCustomTheme] = useState("");
-  const [validation, setValidation] = useState<{ imagePath: string; prompt: string; credits: number } | null>(null);
-  const [validating, setValidating] = useState(false);
-  const [validationError, setValidationError] = useState<string | null>(null);
-  const [validationRounds, setValidationRounds] = useState(0);
-  const [ratings, setRatings] = useState<Record<string, string>>({});
-  const [adoptedAssetId, setAdoptedAssetId] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [leave, setLeave] = useState<(() => void) | null>(null);
+  const [theme, setTheme] = useState(THEMES[0]!);
+  const [validation, setValidation] = useState<Validation | null>(null);
+  const [rounds, setRounds] = useState<Record<string, number>>({});
+  const [adopted, setAdopted] = useState(false);
+  const [imageFailed, setImageFailed] = useState(false);
+  const tasks = useVisualProfileTasks((s) => s.tasks);
+  const taskScope = useStore((s) => reminderStorageKey(s.settings?.library_root, s.cloudAuth?.user_id));
+  const [taskId, setTaskId] = useState(() => folder.profileId ? undefined : tasks.find((task) => task.folderId === folder.id && task.scopeKey === visualProfileTaskScope() && task.status === "running")?.id);
+  const task = tasks.find((item) => item.id === taskId && item.scopeKey === taskScope);
+  const taskRunning = task?.status === "running";
+  const busy = operationBusy ?? (taskRunning ? task.progress : null);
+  const alive = useRef(true);
+  const lock = useRef(false);
+  const pendingImage = useRef<string | null>(null);
+  const adopting = useRef(false);
+  const policy = effectivePolicy(entitlement);
+  const connected = !!cloudAuth?.logged_in && !!cloudAuth.cloud_available;
+  const cloudAvailable = connected && policy.can_use_visual_profiles;
+  const canAnalyze = connected && policy.can_use_cloud;
+  const credits = entitlement?.generation_services?.[0]?.credits ?? 1;
+  const draft = detail?.status === "draft";
 
-  const cloudAvailable =
-    !!cloudAuth?.logged_in &&
-    !!cloudAuth.cloud_available &&
-    effectivePolicy(cloudEntitlement).can_use_visual_profiles;
-
-  useEffect(() => {
-    if (!folder || !activeProjectId) return;
-    setPhase("preview");
-    setPreview(null);
-    setHistory([]);
-    setDetail(null);
-    setRules([]);
-    setSelectedDirection(null);
-    setError(null);
-    setValidation(null);
-    setValidationRounds(0);
-    setRatings({});
-    setAdoptedAssetId(null);
-    setValidationError(null);
-    setBusy(true);
-    Promise.all([
-      api.visualProfilePreview(activeProjectId, folder.id),
-      api.visualProfileList(activeProjectId, folder.id),
-    ])
-      .then(([scope, list]) => {
-        setPreview(scope);
-        setHistory(list);
-      })
-      .catch((e) => setError(typeof e === "string" ? e : "读取文件夹反推覆盖情况失败"))
-      .finally(() => setBusy(false));
-  }, [folder, activeProjectId]);
-
-  const resetToPreview = () => {
-    setPhase("preview");
-    setDetail(null);
-    setRules([]);
-    setSelectedDirection(null);
-  };
-
-  function applyDetail(value: VisualProfileDetail) {
-    setDetail(value);
-    setRules(value.rules.map((rule) => ({ ...rule })));
-    setSelectedDirection(null);
-    setPhase("draft");
+  function releaseImage() {
+    const path = pendingImage.current;
+    pendingImage.current = null;
+    if (path) void api.visualProfileDiscardValidation(path).catch(() => {});
   }
-
-  const directionAssets = useMemo(() => {
-    const map = new Map<string, Set<string>>();
-    for (const direction of detail?.candidateDirections ?? []) {
-      map.set(direction.label, new Set(direction.supportingAssetIds));
-    }
-    return map;
-  }, [detail]);
-
-  const visibleRules = useMemo(() => {
-    if (!selectedDirection) return rules.filter((rule) => !rule.deleted);
-    const assets = directionAssets.get(selectedDirection) ?? new Set<string>();
-    return rules.filter(
-      (rule) => !rule.deleted && rule.supportingAssetIds.some((id) => assets.has(id)),
-    );
-  }, [rules, selectedDirection, directionAssets]);
-
-  // 关闭/切换文件夹时清理未采用的验证图缓存（V3-T4：未确认不入库不留存）。
-  // 必须位于早退 return 之前，否则关闭再重开时 hook 顺序不一致会崩溃。
-  const pendingValidationRef = useRef<string | null>(null);
-  pendingValidationRef.current = validation && !adoptedAssetId ? validation.imagePath : null;
+  function clearValidation() {
+    releaseImage(); setValidation(null); setAdopted(false); setImageFailed(false);
+  }
+  function apply(value: VisualProfileDetail) {
+    setDetail(value); setRules(value.rules.map((r) => ({ ...r }))); setDirection(null); setEditing(false);
+    setHistory((current) => [value, ...current.filter((p) => p.id !== value.id)].sort((a, b) => b.version - a.version));
+  }
   useEffect(() => {
+    alive.current = true;
     return () => {
-      const pending = pendingValidationRef.current;
-      if (pending) void api.visualProfileDiscardValidation(pending).catch(() => {});
+      alive.current = false;
+      if (!adopting.current) releaseImage();
     };
-  }, [folder]);
+  }, []);
+  useEffect(() => {
+    if (taskId && !task) {
+      setTaskId(undefined);
+      setError("登录账号已变化或已切换素材库，请重新打开规范");
+      return;
+    }
+    if (!task || task.status === "running") return;
+    if (task.status === "succeeded" && task.result) { clearValidation(); apply(task.result); }
+    else if (task.status === "failed") setError(task.error ?? "提炼失败");
+    else if (task.status === "cancelled") setNotice(task.progress);
+  }, [task, taskId]);
 
-  // 双击竞态锁（useRef 必须位于早退 return 之前，否则关闭弹窗时 hook 数变少会崩溃）。
-  const generatingRef = useRef(false);
-
-  if (!folder || !activeProjectId) return null;
-
-  const generateValidation = async () => {
-    if (!detail || validating || generatingRef.current) return;
-    generatingRef.current = true;
-    setValidationError(null);
-    try {
-      if (dirty) {
-        // 有未保存编辑时先自动保存（失败则中止并提示），避免「点了没反应」。
-        const saved = await saveEdits();
-        if (!saved) {
-          setValidationError("规则编辑保存失败，验证图未生成");
-          return;
+  async function readSource() {
+    const preview = await api.visualProfilePreview(folder.id);
+    const assets = await api.getAssetsByIds(preview.assetIds ?? []);
+    if (alive.current) { setScope(preview); setImages(assets); }
+    return preview;
+  }
+  useEffect(() => {
+    let cancelled = false;
+    lock.current = true;
+    async function open() {
+      const [source, list] = await Promise.allSettled([
+        api.visualProfilePreview(folder.id), api.visualProfileList(folder.id),
+      ]);
+      if (cancelled) return;
+      if (list.status === "fulfilled") setHistory(list.value);
+      if (source.status === "fulfilled") {
+        const assets = await api.getAssetsByIds(source.value.assetIds ?? []).catch((error) => {
+          if (!cancelled) setError(errorMessage(error));
+          return [];
+        });
+        if (cancelled) return;
+        setScope(source.value); setImages(assets);
+      }
+      if (list.status === "fulfilled") {
+        const latest = folder.profileId ? list.value.find((p) => p.id === folder.profileId) : null;
+        if (latest) {
+          const value = await api.visualProfileGet(latest.id);
+          if (cancelled) return;
+          apply(value);
         }
       }
-      if (validationRounds >= 2) {
-        setValidationError("已达最多两次验证");
-        return;
-      }
-      setValidating(true);
-      const effectiveTheme = customTheme.trim() || theme;
-      const result = await api.visualProfileGenerateValidation(detail.id, effectiveTheme);
-      if (validation) void api.visualProfileDiscardValidation(validation.imagePath).catch(() => {});
-      setValidation({ imagePath: result.imagePath, prompt: result.prompt, credits: result.credits });
-      setRatings({});
-      setValidationRounds((round) => round + 1);
-    } catch (e) {
-      setValidationError(typeof e === "string" ? e : "验证图生成失败（积分已自动退回）");
-    } finally {
-      setValidating(false);
-      generatingRef.current = false;
+      if (source.status === "rejected" && !(list.status === "fulfilled" && list.value.length)) throw source.reason;
+      if (list.status === "rejected") throw list.reason;
     }
-  };
+    open().catch((e) => { if (!cancelled) setError(errorMessage(e)); })
+      .finally(() => { if (!cancelled) { lock.current = false; setBusy(null); } });
+    return () => { cancelled = true; };
+  }, [folder.id, folder.profileId]);
 
-  const adoptValidation = async () => {
-    if (!detail || !validation || busy) return;
-    setBusy(true);
-    setValidationError(null);
-    try {
-      const adopted = await api.visualProfileConfirmValidation(detail.id, validation.imagePath);
-      setAdoptedAssetId(adopted.assetId);
-      setValidation(null);
-      notifySuccess("验证图已入库并关联该视觉设定");
-    } catch (e) {
-      setValidationError(typeof e === "string" ? e : "采用验证图失败");
-    } finally {
-      setBusy(false);
-    }
-  };
+  useEffect(() => {
+    if (!detail) { setSavedSources(null); return; }
+    let cancelled = false;
+    const profileId = detail.id;
+    setSavedSources(null);
+    api.getAssetsByIds(detail.sourceAssetIds ?? []).then((assets) => {
+      if (!cancelled) setSavedSources({ profileId, assets });
+    }).catch((error) => {
+      if (!cancelled) setSavedSources({ profileId, assets: [], error: errorMessage(error) });
+    });
+    return () => { cancelled = true; };
+  }, [detail?.id, detail?.sourceAssetIds, sourceRetry]);
 
-  const discardValidation = async () => {
-    if (!validation) return;
-    const imagePath = validation.imagePath;
-    setValidation(null);
-    setRatings({});
-    try {
-      await api.visualProfileDiscardValidation(imagePath);
-    } catch {
-      // 缓存清理失败不影响主流程
-    }
-  };
+  useEffect(() => {
+    if (!deleting) return;
+    deleteMessage.current?.scrollIntoView({ block: "nearest" });
+    cancelDelete.current?.focus({ preventScroll: true });
+  }, [deleting]);
 
-  const runExtraction = async (cloud: boolean) => {
-    if (busy) return;
-    setBusy(true);
-    setError(null);
-    setBusyLabel(cloud ? "云端模型提炼中…（通常 1–3 分钟，失败不扣分）" : "本地基线提炼中…");
-    try {
-      const created = cloud
-        ? await api.visualProfileCloudExtract(activeProjectId, folder.id)
-        : await api.visualProfileExtract(activeProjectId, folder.id);
-      applyDetail(created);
-      setHistory(await api.visualProfileList(activeProjectId, folder.id));
-    } catch (e) {
-      setError(typeof e === "string" ? e : "提炼失败");
-    } finally {
-      setBusy(false);
-      setBusyLabel("");
-    }
+  function backToCollection() {
+    clearValidation(); setDetail(null); setRules([]); setDirection(null); setEditing(false);
+    setTaskId(undefined); setHistoryExpanded(true); setError(null); setNotice(null);
+  }
+  function deleteProfile() {
+    if (!deleting || taskRunning) return;
+    const id = deleting.id;
+    void perform("正在删除规范…", async () => {
+      await api.visualProfileDelete(id);
+      if (!alive.current) return;
+      if (useStore.getState().activeVisualProfileId === id) useStore.getState().setActiveVisualProfile(null);
+      useStore.setState((state) => ({ visualProfiles: state.visualProfiles.filter((item) => item.id !== id) }));
+      setHistory((current) => current.filter((item) => item.id !== id));
+      if (detail?.id === id) backToCollection();
+      setDeleting(null);
+      await useStore.getState().reloadVisualProfiles();
+      if (alive.current) notifySuccess("视觉规范已删除");
+    });
+  }
+  function historyRows() {
+    return history.map((item) => <div className="bv-history-row" key={item.id}>
+      <button className="bv-history-item" disabled={!!busy || !!deleting || detail?.id === item.id} onClick={() => openVersion(item.id)}>
+        <span>{new Date(item.createdAt * 1000).toLocaleDateString()} · v{item.version}</span>
+        <span>{detail?.id === item.id ? "当前查看" : item.status === "confirmed" ? "已保存" : "待保存"}</span>
+      </button>
+      <button className="bv-icon-button" disabled={!!busy || !!deleting} aria-label={"删除规范 v" + item.version} onClick={() => setDeleting(item)}><Trash2 size={15} /></button>
+    </div>);
   }
 
-  const dirty =
-    rules.some((rule) => rule.deleted) ||
-    rules.some((rule, index) => {
-      const original = detail?.rules[index];
-      return !original || original.value !== rule.value || original.polarity !== rule.polarity;
-    }) ||
-    (selectedDirection !== null && rules.some((rule) => !rule.deleted && rule.supportingAssetIds.length > 0 &&
-      !rule.supportingAssetIds.some((id) => (directionAssets.get(selectedDirection) ?? new Set<string>()).has(id))));
-
-  const saveEdits = async (): Promise<boolean> => {
-    if (!detail || !dirty) return true;
-    const kept = visibleRules.map((rule) => ({
-      category: rule.category,
-      value: rule.value.trim(),
-      polarity: rule.polarity,
-      confidence: rule.confidence,
-      supportingAssetIds: rule.supportingAssetIds,
-      opposingAssetIds: rule.opposingAssetIds,
-      confirmedByUser: true,
-    }));
-    try {
-      const updated = await api.visualProfileUpdateDraft(detail.id, kept);
-      setDetail(updated);
-      setRules(updated.rules.map((rule) => ({ ...rule })));
-      return true;
-    } catch (e) {
-      setError(typeof e === "string" ? e : "保存编辑失败");
+  async function perform(label: string, action: () => Promise<void>) {
+    if (lock.current || !alive.current) return false;
+    lock.current = true; setBusy(label); setError(null); setNotice(null);
+    try { await action(); return true; }
+    catch (e) {
+      if (alive.current) {
+        if (e instanceof DOMException && e.name === "AbortError") setNotice("已停止提炼。正在分析的图片会完成，下次可接着继续。");
+        else setError(errorMessage(e));
+      }
       return false;
-    }
+    } finally { lock.current = false; if (alive.current) setBusy(null); }
   }
-
-  const confirm = async () => {
-    if (!detail || busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      if (!(await saveEdits())) return;
-      const confirmed = await api.visualProfileConfirm(detail.id);
-      setDetail(confirmed);
-      setRules(confirmed.rules.map((rule) => ({ ...rule })));
-      setPhase("done");
-      setHistory(await api.visualProfileList(activeProjectId, folder.id));
-      await reloadVisualProfiles();
-      notifySuccess(`视觉设定 v${confirmed.version} 已保存`);
-    } catch (e) {
-      setError(typeof e === "string" ? e : "确认失败");
-    } finally {
-      setBusy(false);
-    }
+  const visibleRules = useMemo(() => {
+    const assets = direction === null ? null : new Set(detail?.candidateDirections.find((d) => d.label === direction)?.supportingAssetIds ?? []);
+    return rules.filter((r) => !r.deleted && (!assets || r.value.startsWith("原图明确标注：") || r.value.startsWith("待核对的原图标注：") || r.supportingAssetIds.length === 0 || r.supportingAssetIds.some((id) => assets.has(id))));
+  }, [rules, direction, detail]);
+  const dirty = !!detail && (visibleRules.length !== detail.rules.length || visibleRules.some((r, i) => {
+    const original = detail.rules[i];
+    return !original || r.value !== original.value || r.polarity !== original.polarity || r.category !== original.category;
+  }));
+  const mixedRules = detail?.rules.some((rule, index) => detail.rules.slice(index + 1).some((other) =>
+    other.category === rule.category && rule.supportingAssetIds.length > 0 && other.supportingAssetIds.length > 0 &&
+    !rule.supportingAssetIds.some((id) => other.supportingAssetIds.includes(id)),
+  ));
+  const needsDirection = draft && mixedRules && detail.conflicts.length > 0 && detail.candidateDirections.length > 1 && direction === null;
+  const invalid = visibleRules.some((rule) => rule.value.startsWith("待核对的原图标注：")) ? "品牌标注存在冲突，请在微调描述中核对，保留正确的标注。" : needsDirection ? "这些图片呈现不同风格，先选一种更接近品牌的感觉。" : visibleRules.length === 0 ? "还没有可用的风格描述，请补充更一致的品牌图片后重新总结。" : visibleRules.some((r) => !r.value.trim()) ? "请补充空白的描述，或将它移除。" : null;
+  const ready = !!scope && scope.inFolder >= scope.minRequired && scope.inFolder <= 500 && cloudAvailable && (!scope.missing.length || canAnalyze);
+  const round = detail ? rounds[detail.id] ?? 0 : 0;
+  function navigate(action: () => void) {
+    if (lock.current) return;
+    if (dirty) setLeave(() => action); else action();
   }
+  async function save(): Promise<VisualProfileDetail> {
+    if (!detail) throw new Error("请先提炼视觉规范");
+    if (invalid) throw new Error(invalid);
+    if (!dirty) return detail;
+    const saved = await api.visualProfileUpdateDraft(detail.id, visibleRules.map((r) => ({
+      category: r.category, value: r.value.trim(), polarity: r.polarity, confidence: r.confidence,
+      supportingAssetIds: r.supportingAssetIds, opposingAssetIds: r.opposingAssetIds, confirmedByUser: true,
+    })));
+    if (alive.current) apply(saved);
+    return saved;
+  }
+  function summarize() {
+    if (!scope || !ready || lock.current || taskRunning) return;
+    setError(null); setNotice(null);
+    setTaskId(startVisualProfileTask(folder, scope));
+  }
+  function confirmProfile() {
+    if (!detail || invalid) return;
+    void perform("正在保存规范…", async () => {
+      const saved = await save();
+      if (!alive.current) return;
+      const confirmed = saved.status === "draft" ? await api.visualProfileConfirm(saved.id) : saved;
+      if (!alive.current) return;
+      apply(confirmed);
+      useStore.setState((s) => ({ visualProfiles: [confirmed, ...s.visualProfiles.filter((p) => p.id !== confirmed.id)] }));
+      await useStore.getState().reloadVisualProfiles();
+      if (!alive.current) return;
+      notifySuccess("规范已保存，可在创作对话框中选择使用");
+      close();
+    });
+  }
+  function openVersion(id: string) {
+    navigate(() => void perform("正在打开…", async () => {
+      const value = await api.visualProfileGet(id);
+      if (alive.current) { setTaskId(undefined); clearValidation(); apply(value); }
+    }));
+  }
+  function generate() {
+    if (!draft || invalid || !canAnalyze || round >= 2 || !theme.trim()) return;
+    void perform("正在试画品牌风格…", async () => {
+      const saved = await save();
+      if (!alive.current) return;
+      const result = await api.visualProfileGenerateValidation(saved.id, theme.trim());
+      if (!alive.current) { void api.visualProfileDiscardValidation(result.imagePath).catch(() => {}); return; }
+      clearValidation(); pendingImage.current = result.imagePath; setValidation(result);
+      setRounds((current) => ({ ...current, [saved.id]: (current[saved.id] ?? 0) + 1 }));
+    });
+  }
+  function adopt() {
+    if (!detail || !validation) return;
+    void perform("正在保存图片…", async () => {
+      adopting.current = true;
+      try {
+        await api.visualProfileConfirmValidation(detail.id, validation.imagePath);
+        pendingImage.current = null;
+        if (alive.current) { setAdopted(true); setValidation(null); notifySuccess("图片已保存到素材库"); }
+      } finally { adopting.current = false; if (!alive.current) releaseImage(); }
+    });
+  }
+  const accessHint = !cloudAuth?.logged_in ? "登录后即可提炼视觉规范。" : !cloudAuth.cloud_available ? "暂时无法连接，请稍后重试。" : !policy.can_use_visual_profiles ? "当前账号暂未开放品牌风格总结。" : !scope ? "" : scope.inFolder > 500 ? "一次最多总结 500 张图片，请将品牌作品分组后再试。" : scope.inFolder < scope.minRequired ? "这个集合还没有可提炼的图片，请先回到集合添加素材。" : "";
+  const feeHint = scope?.missing.length ? `总结 2 积分 · 图片分析使用账号额度` : "总结 2 积分";
 
-  const insufficient = preview !== null && preview.effective < preview.minRequired;
-  const isDraft = detail?.status === "draft";
+  return <ModalShell title={detail ? "视觉规范" : "提炼视觉规范"} width="lg" className={`visual-profile-dialog ${!detail ? "is-preparing" : ""}`}
+    description={detail ? "保存后，可在创作对话框中选择使用。" : "从这个集合的素材中提炼共同的视觉风格。"}
+    onClose={() => deleting ? setDeleting(null) : navigate(close)} preventClose={!!operationBusy}
+    footer={deleting ? <>
+      <span className="bv-footer-hint">仅删除所选规范版本</span>
+      <button ref={cancelDelete} className="app-modal-button" disabled={!!busy} onClick={() => setDeleting(null)}>取消删除</button>
+      <button className="app-modal-button bv-delete-button" disabled={!!busy} onClick={deleteProfile}>确认删除</button>
+    </> : leave ? <>
+      <span className="bv-footer-hint">修改还没有保存</span>
+      <button className="app-modal-button" disabled={!!busy} onClick={() => setLeave(null)}>继续修改</button>
+      <button className="app-modal-button" disabled={!!busy} onClick={() => { const action = leave; setLeave(null); action(); }}>放弃修改</button>
+      <button className="app-modal-button is-primary" disabled={!!busy || !!invalid} onClick={async () => {
+        const saved = await perform("正在保存…", async () => { await save(); });
+        if (saved && alive.current) { const action = leave; setLeave(null); action(); }
+      }}>保存后继续</button>
+    </> : <>
+      <span className="bv-footer-hint">{busy ? "" : detail ? editing && dirty ? "有未保存的修改" : "在创作对话框中选择使用" : feeHint}</span>
+      {busy ? taskRunning && <>
+        {task.canStop && <button className="app-modal-button" onClick={() => stopVisualProfileTask(task.id)}>停止提炼</button>}
+        <button className="app-modal-button" onClick={() => navigate(close)}>后台继续</button>
+      </> : detail ? <>
+        <button className="app-modal-button" onClick={() => navigate(backToCollection)}><ArrowLeft size={15} />返回</button>
+        <button className="app-modal-button bv-delete-button" onClick={() => setDeleting(detail)}><Trash2 size={15} />删除规范</button>
+        {editing && <button className="app-modal-button" onClick={() => navigate(() => setEditing(false))}>返回预览</button>}
+        <button className="app-modal-button is-primary" disabled={draft && !!invalid} onClick={draft ? confirmProfile : close}><Check size={15} />{draft ? "保存规范" : "完成"}</button>
+      </> : <><button className="app-modal-button" onClick={close}>取消</button><button className="app-modal-button is-primary" disabled={!ready} onClick={summarize}><Sparkles size={15} />开始提炼</button></>}
+    </>}>
+    {error && <div className="bv-message is-error" role="alert"><span>{error}</span>{!detail && !busy && !deleting && <button onClick={() => void perform("正在重新读取…", async () => { await readSource(); })}>重新读取图片</button>}</div>}
+    {deleting && <div ref={deleteMessage} className="bv-message" role="alert"><span>删除「{deleting.name} · v{deleting.version}」？删除后将无法在创作中选用；原素材和已生成内容会保留。</span></div>}
+    {notice && <div className="bv-message" role="status">{notice}</div>}
+    {busy && <div className="bv-working" role="status"><span className="app-spinner" /><div><strong>{busy}</strong><span>{taskRunning ? "可关闭面板，在任务中心查看进度；完成后会提醒你。" : "交给 Bowerbird，稍等片刻。"}</span></div></div>}
+    <fieldset className="bv-fields" disabled={!!busy || !!leave || !!deleting}>
+    {!detail ? <section className="bv-source">
+      <div className="bv-collection-source"><div className="bv-brand-icon"><Palette size={23} /></div><div><h3>{folder.name}</h3><p>{scope ? scope.inFolder + " 张素材" : "正在读取集合…"}</p></div></div>
+      {images.length > 0 && <div className="bv-image-grid bv-source-preview" aria-label="集合素材">{images.map((asset) => <figure key={asset.id} title={asset.name}>{asset.thumb_path || asset.store_path ? <img loading="lazy" src={convertFileSrc(asset.thumb_path || asset.store_path!)} alt={asset.name} /> : <Palette size={24} />}</figure>)}</div>}
+      {accessHint && <p className="bv-hint">{accessHint}</p>}
+      {scope && scope.missing.length > 0 && cloudAvailable && <p className="bv-disclosure">开始后将使用 Cloud 分析集合素材并提炼规范。</p>}
+    </section> : <div className="bv-result">
+      <section className="bv-brand-heading"><div className="bv-brand-icon"><Palette size={23} /></div><div><span>视觉规范 · v{detail.version}</span><h3>{detail.name}</h3></div>{draft && <button className="bv-text-button" onClick={() => setEditing(!editing)}><Pencil size={13} />{editing ? "预览" : "微调描述"}</button>}</section>
+      <section className="bv-saved-sources" aria-label="提炼时的素材">
+        <h4>提炼时的素材 <span>{detail.sourceAssetIds?.length ?? detail.sourceCount} 张</span></h4>
+        {savedSources?.profileId !== detail.id ? <p className="bv-hint">正在读取当时的素材…</p> : savedSources.error ? <div className="bv-message" role="alert"><span>{savedSources.error}</span><button onClick={() => setSourceRetry((n) => n + 1)}>重新读取来源素材</button></div> : detail.sourceAssetIds?.length ? <div className="bv-image-grid">{detail.sourceAssetIds.map((id, index) => <SourceThumbnail key={id} asset={savedSources.assets.find((asset) => asset.id === id)} index={index} />)}</div> : <p className="bv-hint">该版本没有可读取的来源素材记录。</p>}
+      </section>
+      <p className="bv-overview">{needsDirection ? "发现了不止一种视觉风格。选择你想延续的感觉，我们会保留对应的品牌特征。" : brandOverview({ ...detail, summary: direction ? "" : detail.summary, rules: visibleRules })}</p>
+      {detail.sourceCount < 3 && <p className="bv-hint">这是从当前图片总结的初步风格，补充更多品牌作品后可以进一步完善。</p>}
+      {draft && detail.conflicts.length > 0 && detail.candidateDirections.length > 1 && <div className="bv-directions" aria-label="选择品牌感觉">{detail.candidateDirections.map((d) => <button key={d.label} aria-pressed={direction === d.label} onClick={() => setDirection(d.label)}>{d.label.replace(/\|/g, " · ")}</button>)}</div>}
+      {invalid && <p className="bv-hint" role="alert">{invalid}</p>}
+      <details className="bv-secondary bv-rule-details" open={editing || undefined}><summary>查看规范详情</summary>
+      {editing ? <section className="bv-editing">
+        {dirty && <button className="bv-text-button" onClick={() => { setRules(detail.rules.map((r) => ({ ...r }))); setDirection(null); }}><RotateCcw size={13} />撤销修改</button>}
+        {visibleRules.map((rule) => { const index = rules.indexOf(rule); return <div className="bv-edit-rule" key={index}><label>{CATEGORIES[rule.category] ?? rule.category}<textarea aria-label={`风格描述 ${index + 1}`} maxLength={200} rows={2} value={rule.value} onChange={(e) => setRules((current) => current.map((r, i) => i === index ? { ...r, value: e.target.value } : r))} /></label><div><select aria-label={`描述 ${index + 1} 的使用方式`} value={rule.polarity} onChange={(e) => setRules((current) => current.map((r, i) => i === index ? { ...r, polarity: e.target.value as Rule["polarity"] } : r))}>{Object.entries(POLARITIES).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>{rule.value.startsWith("待核对的原图标注：") && <button className="bv-text-button" onClick={() => setRules((current) => current.map((r, i) => i === index ? { ...r, value: r.value.replace(/^待核对的原图标注：/, "原图明确标注："), confirmedByUser: true } : r))}>已核对，保留</button>}<button className="bv-icon-button" aria-label={`移除描述 ${index + 1}`} onClick={() => setRules((current) => current.map((r, i) => i === index ? { ...r, deleted: true } : r))}><Trash2 size={15} /></button></div></div>; })}
+      </section> : <div className="bv-style-grid">{Object.entries(CATEGORIES).map(([key, label]) => {
+        const entries = visibleRules.filter((rule) => rule.category === key);
+        return entries.length > 0 && <section className="bv-style-card" key={key}><h4>{label}</h4>{entries.map((rule, i) => <p key={i}>{rule.polarity === "avoid" && <span>避免 </span>}{rule.value}</p>)}</section>;
+      })}</div>}
+      {draft && detail.conflicts.length === 0 && detail.candidateDirections.length > 1 && <details className="bv-secondary"><summary>想偏向另一种感觉？</summary><p className="bv-hint">这些图片里有不同的风格，你可以选择更接近品牌的一种。</p><div className="bv-directions"><button aria-pressed={direction === null} onClick={() => setDirection(null)}>保留整体风格</button>{detail.candidateDirections.map((d) => <button key={d.label} aria-pressed={direction === d.label} onClick={() => setDirection(d.label)}>{d.label.replace(/\|/g, " · ")}</button>)}</div></details>}
+      </details>
+      {(draft || validation || adopted) && <details className="bv-secondary bv-try"><summary>先试画一张 <span>可选</span></summary><p className="bv-hint">看看这个风格用在新画面里的感觉。</p>{adopted ? <p>图片已保存到素材库。</p> : <>
+        {validation && <div className="bv-trial-result">{imageFailed ? <p>图片暂时无法显示。</p> : <img src={convertFileSrc(validation.imagePath)} alt="品牌风格试画" onError={() => setImageFailed(true)} />}<div className="bv-inline-actions"><button className="app-modal-button" onClick={clearValidation}>丢弃</button><button className="app-modal-button" onClick={adopt}>保存图片</button></div></div>}
+        {draft && <><label className="bv-theme">画什么<input value={theme} maxLength={120} onChange={(e) => setTheme(e.target.value)} /></label><div className="bv-directions">{THEMES.map((preset) => <button key={preset} aria-pressed={theme === preset} onClick={() => setTheme(preset)}>{preset}</button>)}</div><button className="app-modal-button" disabled={!canAnalyze || !!invalid || round >= 2 || !theme.trim()} onClick={generate}>{validation ? "再试一次" : "试画一张"} · {credits} 积分</button>{round >= 2 && <p className="bv-hint">本次试画已用完，可以直接使用风格继续创作。</p>}</>}
+      </>}</details>}
+      <details className="bv-secondary"><summary>历史版本 <ChevronDown size={13} /></summary>{historyRows()}</details>
+    </div>}
+    </fieldset>
+    {!detail && history.length > 0 && <details className="bv-secondary" open={historyExpanded} onToggle={(event) => setHistoryExpanded(event.currentTarget.open)}><summary>已有规范</summary>{historyRows()}</details>}
+  </ModalShell>;
+}
 
-  return (
-    <ModalShell
-      title={`提炼视觉设定 · ${folder.name}`}
-      eyebrow="Project visual profile"
-      description="从该文件夹素材的已有反推文字中提炼项目级视觉规则。不会上传任何图片；只使用当前分析，不自动补反推。"
-      onClose={close}
-      preventClose={busy}
-      width="md"
-      footer={
-        phase === "preview" ? (
-          <>
-            <button onClick={close} disabled={busy} className="app-modal-button">
-              关闭
-            </button>
-            {cloudAvailable && (
-              <button
-                onClick={() => void runExtraction(true)}
-                disabled={busy || insufficient}
-                className="app-modal-button is-primary"
-              >
-                {busy && <span className="app-spinner" aria-hidden />}
-                {busy ? busyLabel || "提炼中…" : insufficient ? "有效反推不足" : `云端提炼（2 积分）`}
-              </button>
-            )}
-            <button
-              onClick={() => void runExtraction(false)}
-              disabled={busy || insufficient}
-              className={cloudAvailable ? "app-modal-button" : "app-modal-button is-primary"}
-            >
-              本地基线（免费）
-            </button>
-          </>
-        ) : phase === "draft" ? (
-          <>
-            <button onClick={resetToPreview} disabled={busy} className="app-modal-button">
-              返回
-            </button>
-            <button onClick={() => void saveEdits()} disabled={busy || !dirty || !isDraft} className="app-modal-button">
-              保存编辑
-            </button>
-            <button onClick={() => void confirm()} disabled={busy || !isDraft} className="app-modal-button is-primary">
-              {busy && <span className="app-spinner" aria-hidden />}
-              {busy ? "保存中…" : dirty ? "保存并确认" : `确认并保存 v${detail?.version ?? ""}`}
-            </button>
-          </>
-        ) : (
-          <button onClick={close} className="app-modal-button is-primary">
-            完成
-          </button>
-        )
-      }
-    >
-      {error && (
-        <p className="mb-3 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-300">
-          {error}
-        </p>
-      )}
-
-      {phase === "preview" && (
-        <div className="space-y-3 text-xs text-ink">
-          {busy && !preview && <p className="text-muted">{busyLabel || "读取中…"}</p>}
-          {preview && (
-            <>
-              <p data-modal-autofocus className="tabular-nums">
-                将分析 <span className="font-semibold text-accent">{preview.effective}</span>{" "}
-                张已有反推素材；
-                {preview.missing.length > 0 ? (
-                  <>
-                    <span className="font-semibold">{preview.missing.length}</span> 张没有可解析反推，本次忽略。
-                  </>
-                ) : (
-                  "该文件夹项目内素材全部有效。"
-                )}
-              </p>
-              <p className="text-[11px] text-faint">
-                范围 = 当前项目 ∩「{preview.folderName}」文件夹（共 {preview.inFolder} 张项目内素材）。提炼只读取反推文字，
-                不会上传图片或缩略图；数据不足时请先手动反推，系统不会自动补。
-                {cloudAvailable ? " 云端提炼消耗 2 积分，失败自动退回。" : " 当前未登录 Cloud，仅本地基线提炼可用。"}
-              </p>
-              {insufficient && (
-                <p className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-300">
-                  有效反推素材不足（{preview.effective}/{preview.minRequired}）。请先在该文件夹整理并反推至少{" "}
-                  {preview.minRequired} 张素材。
-                </p>
-              )}
-              {preview.missing.length > 0 && (
-                <div className="rounded-lg border border-edge bg-panel2 px-3 py-2">
-                  <p className="mb-1 text-[10px] font-medium text-muted">本次忽略（最多显示 8 条）：</p>
-                  <ul className="space-y-0.5 text-[11px] text-faint">
-                    {preview.missing.slice(0, 8).map((item) => (
-                      <li key={item.assetId} className="truncate">
-                        · {item.name}（{item.reason === "no_caption" ? "没有反推" : "反推无结构，不可解析"}）
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </>
-          )}
-        </div>
-      )}
-
-      {phase !== "preview" && detail && (
-        <div className="space-y-4 text-xs text-ink">
-          {phase === "done" && (
-            <p className="rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-3 py-2 text-emerald-300">
-              视觉设定 v{detail.version} 已确认保存到本地。生成接入属 V4；重新提炼会生成新草稿，不影响此版本。
-            </p>
-          )}
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-[11px] text-faint">
-              草稿 v{detail.version}（{detail.extractor === "cloud_model" ? "云端模型提炼" : "本地基线"} · 基于{" "}
-              {detail.sourceCount} 张素材快照）
-            </p>
-            <span className="text-[10px] text-faint">
-              {isDraft ? "可编辑：改文字、换强度（必须/倾向/避免）、删除" : "已确认，只读"}
-            </span>
-          </div>
-          <div>
-            <p className="mb-2 text-[10px] font-medium text-muted">摘要</p>
-            <p>{detail.summary}</p>
-          </div>
-
-          {(detail.candidateDirections.length > 0 || selectedDirection !== null) && (
-            <div>
-              <p className="mb-2 text-[10px] font-medium text-muted">
-                方向选择（检测到多个方向；选择后只保留该方向的规则）
-              </p>
-              <div className="flex flex-wrap gap-1.5">
-                <button
-                  onClick={() => setSelectedDirection(null)}
-                  disabled={!isDraft}
-                  className={`rounded-full border px-2.5 py-1 text-[10px] ${
-                    selectedDirection === null
-                      ? "border-accent bg-accent/15 text-accent"
-                      : "border-edge bg-panel2 text-muted hover:text-ink"
-                  }`}
-                >
-                  全部保留
-                </button>
-                {detail.candidateDirections.map((direction) => (
-                  <button
-                    key={direction.label}
-                    onClick={() => setSelectedDirection(direction.label)}
-                    disabled={!isDraft}
-                    className={`rounded-full border px-2.5 py-1 text-[10px] ${
-                      selectedDirection === direction.label
-                        ? "border-accent bg-accent/15 text-accent"
-                        : "border-edge bg-panel2 text-muted hover:text-ink"
-                    }`}
-                    title={direction.summary}
-                  >
-                    {direction.label || "default"} · {direction.supportingAssetIds.length} 张
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <div>
-            <p className="mb-2 text-[10px] font-medium text-muted">
-              视觉规则（{visibleRules.length}）
-            </p>
-            {visibleRules.length === 0 ? (
-              <p className="text-faint">未提炼出主导视觉规则（各维度支持度均低于阈值，或有冲突）。</p>
-            ) : (
-              <ul className="space-y-1.5">
-                {visibleRules.map((rule) => {
-                  const ruleIndex = rules.indexOf(rule);
-                  return (
-                    <li
-                      key={`${rule.category}-${ruleIndex}`}
-                      className="flex items-center gap-2 rounded-lg border border-edge bg-panel2 px-2.5 py-1.5"
-                    >
-                      <span className="shrink-0 rounded bg-accent/15 px-1.5 py-0.5 text-[10px] text-accent">
-                        {categoryLabel(rule.category)}
-                      </span>
-                      {isDraft ? (
-                        <>
-                          <input
-                            value={rule.value}
-                            maxLength={200}
-                            onChange={(e) =>
-                              setRules((current) =>
-                                current.map((item, i) =>
-                                  i === ruleIndex ? { ...item, value: e.target.value } : item,
-                                ),
-                              )
-                            }
-                            className="app-form-input min-w-0 flex-1 px-2 py-0.5 text-xs"
-                          />
-                          <select
-                            value={rule.polarity}
-                            onChange={(e) =>
-                              setRules((current) =>
-                                current.map((item, i) =>
-                                  i === ruleIndex
-                                    ? { ...item, polarity: e.target.value as EditableRule["polarity"] }
-                                    : item,
-                                ),
-                              )
-                            }
-                            className="app-form-input shrink-0 px-1 py-0.5 text-[11px]"
-                          >
-                            {Object.entries(POLARITY_LABELS).map(([value, label]) => (
-                              <option key={value} value={value}>
-                                {label}
-                              </option>
-                            ))}
-                          </select>
-                          <button
-                            onClick={() =>
-                              setRules((current) =>
-                                current.map((item, i) => (i === ruleIndex ? { ...item, deleted: true } : item)),
-                              )
-                            }
-                            className="shrink-0 rounded px-1 text-xs text-muted hover:text-red-400"
-                            title="删除该规则"
-                          >
-                            ✕
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          <span className="min-w-0 flex-1 truncate" title={rule.value}>
-                            {rule.value}
-                          </span>
-                          <span className="shrink-0 text-[10px] text-faint">
-                            {POLARITY_LABELS[rule.polarity] ?? rule.polarity} ·{" "}
-                            {(rule.confidence * 100).toFixed(0)}% · {rule.supportingAssetIds.length} 张支持
-                          </span>
-                        </>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </div>
-          {detail.conflicts.length > 0 && (
-            <div>
-              <p className="mb-2 text-[10px] font-medium text-muted">冲突（{detail.conflicts.length}）</p>
-              <ul className="space-y-1 text-[11px] text-faint">
-                {detail.conflicts.map((conflict, index) => (
-                  <li key={index}>
-                    ⚠ {conflict.description}（{conflict.sideA.assetIds.length} 张 vs {conflict.sideB.assetIds.length}{" "}
-                    张）
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {detail.contentThemes.length > 0 && (
-            <div>
-              <p className="mb-2 text-[10px] font-medium text-muted">
-                内容主题（仅背景信息，不会成为生成硬约束）
-              </p>
-              <div className="flex flex-wrap gap-1.5">
-                {detail.contentThemes.slice(0, 12).map((theme) => (
-                  <span
-                    key={theme.value}
-                    className="rounded-full border border-edge bg-panel2 px-2 py-0.5 text-[10px] text-muted"
-                  >
-                    {theme.value} × {theme.supportingAssetIds.length}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-          {cloudAvailable && (isDraft || adoptedAssetId) && (
-            <div className="rounded-lg border border-edge bg-panel2 px-3 py-2.5">
-              <p className="mb-2 text-[10px] font-medium text-muted">
-                方向验证图（可选，V3）：只用上方文字规则纯文生图，不携带任何来源素材；验证的是「规则能否指导生成」。
-              </p>
-              {adoptedAssetId ? (
-                <p className="text-[11px] text-emerald-300">
-                  ✓ 验证图已入库并关联（资产 {adoptedAssetId.slice(0, 12)}…）
-                </p>
-              ) : validation ? (
-                <div className="space-y-2">
-                  <img
-                    src={convertFileSrc(validation.imagePath)}
-                    alt="方向验证图"
-                    className="max-h-64 w-full rounded border border-edge object-contain"
-                  />
-                  <p className="text-[10px] text-faint" title={validation.prompt}>
-                    实际发送的规则摘要：{validation.prompt.replace(/\n/g, " ").slice(0, 120)}…
-                  </p>
-                  <div className="space-y-1">
-                    {VALIDATION_DIMENSIONS.map((dim) => (
-                      <div key={dim.key} className="flex items-center gap-2">
-                        <span className="w-8 shrink-0 text-[10px] text-muted">{dim.label}</span>
-                        <div className="flex gap-1">
-                          {RATING_OPTIONS.map((option) => (
-                            <button
-                              key={option}
-                              onClick={() =>
-                                setRatings((current) => ({ ...current, [dim.key]: option }))
-                              }
-                              className={`rounded-full px-2 py-0.5 text-[10px] ${
-                                ratings[dim.key] === option
-                                  ? "border-accent bg-accent/15 text-accent"
-                                  : "border-edge text-muted hover:text-ink"
-                              }`}
-                            >
-                              {option}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                  <p className="text-[10px] text-faint">
-                    反馈仅指导你编辑规则（改完保存后可再验证一次）；不会回写云端或素材库。
-                  </p>
-                  <div className="flex flex-wrap gap-2 pt-1">
-                    <button
-                      onClick={() => void discardValidation()}
-                      disabled={busy}
-                      className="app-modal-button px-3 py-1 text-[11px]"
-                    >
-                      丢弃
-                    </button>
-                    <button
-                      onClick={() => void generateValidation()}
-                      disabled={busy || validating || validationRounds >= 2}
-                      className="app-modal-button px-3 py-1 text-[11px]"
-                      title={validationRounds >= 2 ? "已达最多两次验证" : "未保存的规则编辑会先自动保存，再重新生成"}
-                    >
-                      {validating ? "生成中…" : `再验证一次（已用 ${validationRounds}/2）`}
-                    </button>
-                    <button
-                      onClick={() => void adoptValidation()}
-                      disabled={busy || validating}
-                      className="app-modal-button is-primary px-3 py-1 text-[11px]"
-                    >
-                      采用此验证图（入库并关联）
-                    </button>
-                  </div>
-                  {validating && (
-                    <p className="pt-1 text-[11px] text-accent">
-                      云端生成中，通常 1–2 分钟——请保持弹窗打开，期间按钮不可再点属正常。
-                    </p>
-                  )}
-                  {validationError && (
-                    <p className="mt-1 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-[11px] text-red-300">
-                      {validationError}
-                    </p>
-                  )}
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    {VALIDATION_THEMES.map((preset) => (
-                      <button
-                        key={preset}
-                        onClick={() => {
-                          setTheme(preset);
-                          setCustomTheme("");
-                        }}
-                        disabled={!isDraft || validating}
-                        className={`rounded-full border px-2.5 py-1 text-[10px] ${
-                          !customTheme.trim() && theme === preset
-                            ? "border-accent bg-accent/15 text-accent"
-                            : "border-edge text-muted hover:text-ink"
-                        }`}
-                      >
-                        {preset}
-                      </button>
-                    ))}
-                    <input
-                      value={customTheme}
-                      maxLength={120}
-                      placeholder="或自定义中性主题"
-                      onChange={(e) => setCustomTheme(e.target.value)}
-                      className="app-form-input ml-1 w-44 px-2 py-0.5 text-[11px]"
-                    />
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => void generateValidation()}
-                      disabled={!isDraft || validating || validationRounds >= 2}
-                      className="app-modal-button px-3 py-1 text-[11px]"
-                    >
-                      {validating && <span className="app-spinner" aria-hidden />}
-                      {validating ? "生成中…" : "生成验证图"}
-                    </button>
-                    <span className="text-[10px] text-faint">
-                      预计 {cloudEntitlement?.generation_services?.[0]?.credits ?? 1} 积分/张 · 已用 {validationRounds}/2 次
-                    </span>
-                  </div>
-                  {validating && (
-                    <p className="text-[11px] text-accent">
-                      云端生成中，通常 1–2 分钟——请保持弹窗打开，期间按钮不可再点属正常。
-                    </p>
-                  )}
-                  {validationError && (
-                    <p className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-[11px] text-red-300">
-                      {validationError}
-                    </p>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
-      {history.length > 0 && (
-        <div className="mt-4 border-t border-edge pt-3">
-          <p className="mb-2 text-[10px] font-medium text-muted">该文件夹的历史版本（不随素材变动自动更新）</p>
-          <ul className="space-y-1 text-[11px] text-faint">
-            {history.map((item) => (
-              <li key={item.id} className="flex items-center gap-2">
-                <span
-                  className={`rounded px-1.5 py-0.5 text-[10px] ${
-                    item.status === "confirmed"
-                      ? "bg-emerald-500/15 text-emerald-300"
-                      : item.status === "draft"
-                        ? "bg-amber-500/15 text-amber-300"
-                        : "bg-panel2 text-muted"
-                  }`}
-                >
-                  v{item.version}{" "}
-                  {item.status === "confirmed" ? "已确认" : item.status === "draft" ? "草稿" : "已归档"}
-                </span>
-                <span className="shrink-0 text-[10px]">
-                  {item.extractor === "cloud_model" ? "云端" : "基线"}
-                </span>
-                <span className="min-w-0 flex-1 truncate">{item.summary}</span>
-                <span className="shrink-0">{formatTime(item.createdAt)}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-    </ModalShell>
-  );
+function SourceThumbnail({ asset, index }: { asset?: Asset; index: number }) {
+  const [failed, setFailed] = useState(false);
+  const path = asset?.thumb_path || asset?.store_path;
+  return <figure title={asset?.name ?? "素材已移除"}>{path && !failed ? <img loading="lazy" src={convertFileSrc(path)} alt={asset!.name} onError={() => setFailed(true)} /> : <span className="bv-source-missing"><Palette size={22} /><span>{asset ? "预览不可用" : "素材 " + (index + 1) + " 已移除"}</span></span>}</figure>;
 }

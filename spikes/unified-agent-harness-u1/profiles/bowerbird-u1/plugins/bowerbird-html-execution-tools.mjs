@@ -24,6 +24,7 @@ function remoteTool({ name, description, parameters, conclude = false, nextRequi
       }
       try {
         const value = await callBowerbirdPlanningBridge(name, args, exec.signal);
+        if (value?.status === "retry_required") return value;
         if (nextRequiredTool) {
           completed = true;
           return {
@@ -55,6 +56,7 @@ export const inject = ["tools"];
 
 export function htmlExecutionToolDefinitions() {
   return [
+    remoteTool({ name: "read_context", description: "Read selected task context using an id from availableContext.", parameters: { id: { type: "string", required: true } } }),
     remoteTool({
       name: "compose_html",
       description: "Commit one approved, offline HTML/CSS document. For exact-copy delivery, copy every requiredExactCopyLines string with every punctuation mark into contiguous visible body text. Echo raw artifact ids only in resourceArtifactIds. Inside HTML, reference resources only as asset:reference-1, asset:reference-2, and so on in manifest order; never put a raw artifact id after asset:. The HTML string must contain none of <!--, -->, /*, or */. URLs, paths, scripts, SVG, viewport meta and meta tags other than charset are forbidden.",

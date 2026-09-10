@@ -64,3 +64,86 @@ test("a deferred prompt compile keeps the provider and visual profile from the s
 
   assert.deepEqual(submitted, [{ provider: "codex", visualProfileId: "profile-a" }]);
 });
+
+// Execute the production store actions with a deferred provider command.
+import { readFileSync } from "node:fs";
+import ts from "typescript";
+import { acquireCreativeSubmission } from "../src/lib/creativeGeneration.ts";
+
+function startupHarness() {
+  const source = readFileSync(new URL("../src/store.ts", import.meta.url), "utf8");
+  const file = ts.createSourceFile("store.ts", source, ts.ScriptTarget.Latest, true);
+  const actions = {};
+  function visit(node) {
+    if (ts.isPropertyAssignment(node) && ["startGeneration", "applyGenChunk"].includes(node.name.getText(file)) && ts.isArrowFunction(node.initializer)) {
+      actions[node.name.getText(file)] = node.initializer.getText(file);
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(file);
+  let resolve, reject;
+  const provider = new Promise((yes, no) => { resolve = yes; reject = no; });
+  const state = { genJobs: {}, genJobOrder: [], presets: [], activeProjectId: "startup-test" };
+  const errors = [];
+  const waiters = new Map();
+  const bindings = {
+    get: () => state, set: (update) => Object.assign(state, update(state)),
+    normalizeGenerationProvider: (value) => value, generationGateError: () => null,
+    normalizeAnnotationPrompt: (value) => value, autoRatioFromReferences: () => null,
+    nextGenTurnId: () => 1, crypto: { randomUUID: () => "job-start" },
+    generationStartupWaiters: waiters, api: { codexCreateImage: () => provider },
+    taskErrorMessage: String, reconcileRejectedCloudSession: async () => {},
+    genHandleError: (id, message) => errors.push({ id, message }),
+    updateJob: (id, update) => { state.genJobs[id] = update(state.genJobs[id]); },
+  };
+  const code = ts.transpileModule(`const start = ${actions.startGeneration}; const chunk = ${actions.applyGenChunk};`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  const handlers = new Function(...Object.keys(bindings), code + "; return { start, chunk };")(...Object.values(bindings));
+  return { ...handlers, state, errors, waiters, resolve, reject,
+    submit: (early) => handlers.start("prompt", [], null, "codex", undefined, undefined, undefined, undefined, null, undefined, early) };
+}
+
+test("backend started releases the project claim while generation is still running", async () => {
+  const h = startupHarness();
+  const claim = acquireCreativeSubmission("startup-test");
+  let settled = false;
+  const pending = h.submit(true).finally(() => { settled = true; claim.release(); });
+  assert.equal(acquireCreativeSubmission("startup-test"), null);
+  h.chunk({ kind: "started", job_id: "unrelated" });
+  await Promise.resolve();
+  assert.equal(settled, false);
+  h.chunk({ kind: "started", job_id: "job-start" });
+  assert.deepEqual(await pending, { jobId: "job-start", accepted: true });
+  assert.equal(h.state.genJobs["job-start"].running, true);
+  const next = acquireCreativeSubmission("startup-test");
+  assert.ok(next);
+  next.release();
+  assert.equal(h.waiters.size, 0);
+  h.reject(new Error("late provider failure"));
+  await new Promise((done) => setImmediate(done));
+  assert.equal(h.state.genJobs["job-start"].running, false);
+  assert.match(h.errors[0].message, /late provider failure/);
+});
+
+test("startup rejection returns failure and clears its waiter", async () => {
+  const h = startupHarness();
+  const pending = h.submit(true);
+  h.reject(new Error("startup denied"));
+  assert.deepEqual(await pending, { jobId: "job-start", accepted: false, error: "Error: startup denied" });
+  assert.equal(h.waiters.size, 0);
+  assert.equal(h.state.genJobs["job-start"].running, false);
+});
+
+test("completion callers still wait for images and commands without started still settle", async () => {
+  for (const early of [false, true]) {
+    const h = startupHarness();
+    let settled = false;
+    const pending = h.submit(early).then((result) => { settled = true; return result; });
+    if (!early) h.chunk({ kind: "started", job_id: "job-start" });
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.equal(settled, false);
+    h.resolve("job-start");
+    assert.equal((await pending).accepted, true);
+    assert.equal(h.waiters.size, 0);
+  }
+});

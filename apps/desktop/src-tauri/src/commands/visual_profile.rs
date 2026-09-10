@@ -1,5 +1,4 @@
-//! 项目视觉设定 V1 命令层：project_id 由前端显式传入（快照语义，
-//! 与 ActiveProjectContext 的「显式命令带参数」约定一致）。
+//! 品牌视觉规范独立于项目；旧客户端传入的 project_id 仅兼容接收，不参与归属。
 
 use tauri::{Manager, State};
 
@@ -72,11 +71,11 @@ mod tests {
 #[tauri::command]
 pub async fn visual_profile_preview(
     db: State<'_, std::sync::Arc<Database>>,
-    project_id: String,
+    project_id: Option<String>,
     folder_id: String,
 ) -> Result<crate::core::visual_profile::ScopePreview, AppError> {
     let db = db.inner().clone();
-    tokio::task::spawn_blocking(move || db.visual_profile_preview(&project_id, &folder_id))
+    tokio::task::spawn_blocking(move || db.visual_profile_preview(project_id.as_deref().unwrap_or(""), &folder_id))
         .await
         .map_err(|error| AppError::Other(format!("读取覆盖率失败: {error}")))?
 }
@@ -84,11 +83,11 @@ pub async fn visual_profile_preview(
 #[tauri::command]
 pub async fn visual_profile_extract(
     db: State<'_, std::sync::Arc<Database>>,
-    project_id: String,
+    project_id: Option<String>,
     folder_id: String,
 ) -> Result<VisualProfileDetail, AppError> {
     let db = db.inner().clone();
-    tokio::task::spawn_blocking(move || db.extract_visual_profile(&project_id, &folder_id))
+    tokio::task::spawn_blocking(move || db.extract_visual_profile(project_id.as_deref().unwrap_or(""), &folder_id))
         .await
         .map_err(|error| AppError::Other(format!("提炼失败: {error}")))?
 }
@@ -105,13 +104,37 @@ pub async fn visual_profile_confirm(
 }
 
 #[tauri::command]
+pub async fn visual_profile_delete(
+    db: State<'_, std::sync::Arc<Database>>,
+    profile_id: String,
+) -> Result<(), AppError> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || db.delete_visual_profile(&profile_id))
+        .await
+        .map_err(|error| AppError::Other(format!("删除规范失败: {error}")))?
+}
+
+#[tauri::command]
+pub async fn visual_profile_get(
+    db: State<'_, std::sync::Arc<Database>>,
+    project_id: Option<String>,
+    profile_id: String,
+) -> Result<VisualProfileDetail, AppError> {
+    let db = db.inner().clone();
+    let _ = project_id; // Legacy clients may still supply their workspace.
+    tokio::task::spawn_blocking(move || db.visual_profile_get(&profile_id))
+    .await
+    .map_err(|error| AppError::Other(format!("读取视觉设定失败: {error}")))?
+}
+
+#[tauri::command]
 pub async fn visual_profile_list(
     db: State<'_, std::sync::Arc<Database>>,
-    project_id: String,
+    project_id: Option<String>,
     folder_id: Option<String>,
 ) -> Result<Vec<VisualProfileSummary>, AppError> {
     let db = db.inner().clone();
-    tokio::task::spawn_blocking(move || db.list_visual_profiles(&project_id, folder_id.as_deref()))
+    tokio::task::spawn_blocking(move || db.list_visual_profiles(project_id.as_deref().unwrap_or(""), folder_id.as_deref()))
         .await
         .map_err(|error| AppError::Other(format!("读取视觉设定列表失败: {error}")))?
 }
@@ -122,8 +145,9 @@ pub async fn visual_profile_cloud_extract(
     cloud: State<'_, CloudClient>,
     auth: State<'_, AuthClient>,
     entitlement: State<'_, EntitlementService>,
-    project_id: String,
+    project_id: Option<String>,
     folder_id: String,
+    expected_asset_ids: Option<Vec<String>>,
 ) -> Result<VisualProfileDetail, AppError> {
     // 客户端门控仅为体验；服务端 create 会按 FeaturePolicy 独立复核。
     let policy = entitlement.current_or_sync(&auth).await.policy;
@@ -131,9 +155,9 @@ pub async fn visual_profile_cloud_extract(
         return Err(AppError::Cloud("当前权益不支持视觉设定云端提炼".into()));
     }
     let db_freeze = db.inner().clone();
-    let (freeze_project, freeze_folder) = (project_id.clone(), folder_id.clone());
+    let (freeze_project, freeze_folder) = (project_id.clone().unwrap_or_default(), folder_id.clone());
     let (_, cards) = tokio::task::spawn_blocking(move || {
-        db_freeze.visual_profile_freeze_cards(&freeze_project, &freeze_folder)
+        db_freeze.visual_profile_freeze_brand_cards(&freeze_project, &freeze_folder, expected_asset_ids.as_deref())
     })
     .await
     .map_err(|error| AppError::Other(format!("冻结快照失败: {error}")))??;
@@ -146,7 +170,7 @@ pub async fn visual_profile_cloud_extract(
     let draft_json = client.extract(&cards_value).await?;
     let db_persist = db.inner().clone();
     tokio::task::spawn_blocking(move || {
-        db_persist.persist_cloud_visual_profile(&project_id, &folder_id, &cards, &draft_json)
+        db_persist.persist_cloud_visual_profile(project_id.as_deref().unwrap_or(""), &folder_id, &cards, &draft_json)
     })
     .await
     .map_err(|error| AppError::Other(format!("落库失败: {error}")))?

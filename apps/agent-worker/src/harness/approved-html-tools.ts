@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { sanitizeHtml } from "../contracts/renderer-preflight/sanitizer.ts";
 
 import {
   AgentControlError,
@@ -174,6 +175,8 @@ export function createApprovedComposeHtmlToolDefinition(args: {
     approvedPlanHash: args.approvedPlanHash,
     validate: (value) => {
       const document = validateComposeHtmlDocumentAction(value, resources);
+      const preflight = sanitizeHtml(document.html);
+      if (!preflight.ok) throw new Error(`approved_html_preflight:${preflight.reason}`);
       validateRequiredTextLines(document.html, requiredTextLines);
       return document;
     },

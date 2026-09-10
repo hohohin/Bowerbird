@@ -222,7 +222,8 @@ export function parsePromptToDoc(
   refs: PromptedAsset[],
   assetById: Map<string, PromptedAsset>,
   schema: Schema = creationSchema,
-  dimSources: PromptedAsset[] = []
+  dimSources: PromptedAsset[] = [],
+  referenceNodeIds: Array<string | null> = []
 ): PmNode {
   // 对象取最新：同 id 时 assetById 的对象优先（含最新反推 sections，【维度】按 sections
   // 精确匹配 fragment）；键注册顺序按 refs——文本里的 @标签由 serialize 按 references 序
@@ -263,6 +264,13 @@ export function parsePromptToDoc(
       paraInline[paraInline.length - 1].push(
         schema.nodes.image.create(imageAttrs(r.id, r, true))
       );
+    }
+  }
+  const nodeByAsset = new Map(refs.map((asset, index) => [asset.id, referenceNodeIds[index] ?? null]));
+  for (const inline of paraInline) {
+    for (let index = 0; index < inline.length; index++) {
+      const node = inline[index];
+      if (node.type === schema.nodes.image) inline[index] = node.type.create({ ...node.attrs, canvasNodeId: nodeByAsset.get(node.attrs.assetId) ?? null });
     }
   }
   const paragraphs = paraInline.map((inline) =>

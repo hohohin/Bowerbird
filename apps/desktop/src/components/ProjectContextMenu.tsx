@@ -1,18 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { FolderSync } from "lucide-react";
+import { FolderSync, Pencil } from "lucide-react";
 import { useStore } from "../store";
 import { api } from "../lib/api";
-import { ConfirmDialog } from "./ConfirmDialog";
+import { useProjectDeletion } from "./useProjectDeletion";
+import { ProjectRenameDialog } from "./ProjectRenameDialog";
 import { notifyError, notifySuccess } from "../lib/notify";
-import type { ProjectDeleteImpact } from "../lib/types";
-import {
-  workspaceProjectDeleteMode,
-  type WorkspaceProjectDeleteMode,
-} from "../lib/workspaceRoute";
 
 const MENU_WIDTH = 232;
-const MENU_HEIGHT = 146;
+const MENU_HEIGHT = 180;
 
 /**
  * 侧栏项目右键菜单：更新项目文件 / 删除项目。
@@ -26,13 +22,9 @@ export function ProjectContextMenu() {
   const menu = useStore((s) => s.projectContextMenu);
   const close = useStore((s) => s.closeProjectContextMenu);
   const projects = useStore((s) => s.projects);
-  const deleteProjectCanvas = useStore((s) => s.deleteProjectCanvas);
+  const { busy: deleting, prepareDelete, confirmation } = useProjectDeletion(close);
   const [busy, setBusy] = useState(false);
-  const [pendingDelete, setPendingDelete] = useState<{
-    projectId: string;
-    impact: ProjectDeleteImpact;
-    mode: WorkspaceProjectDeleteMode;
-  } | null>(null);
+  const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
   // 每次打开重置菜单状态；删除影响在菜单关闭后仍要保留给确认框。
@@ -76,87 +68,9 @@ export function ProjectContextMenu() {
     }
   }
 
-  async function remove(projectId: string, mode: WorkspaceProjectDeleteMode) {
-    setBusy(true);
-    try {
-      // Store owns the serialized route. Persisted canvases flush/delete there;
-      // provisional canvases are discarded without materializing first.
-      await deleteProjectCanvas(projectId);
-      notifySuccess(mode === "discard-provisional"
-        ? "未保存的空白项目已丢弃"
-        : "项目及其画板已删除，中央素材仍保留在素材库");
-      close();
-    } catch (e) {
-      notifyError(e, "删除项目失败");
-      setBusy(false);
-    }
-  }
-
-  async function prepareDelete(projectId: string) {
-    setBusy(true);
-    try {
-      const mode = workspaceProjectDeleteMode(
-        useStore.getState().projects.find((project) => project.id === projectId),
-      );
-      if (mode === "discard-provisional") {
-        setPendingDelete({
-          projectId,
-          mode,
-          impact: {
-            project_asset_count: 0,
-            thread_count: 0,
-            node_count: 0,
-            running_generation_count: 0,
-            running_agent_count: 0,
-          },
-        });
-        close();
-        return;
-      }
-      const impact = await api.projectDeleteImpact(projectId);
-      setPendingDelete({ projectId, impact, mode });
-      close();
-    } catch (error) {
-      notifyError(error, "无法读取项目删除影响");
-      setBusy(false);
-    }
-  }
-
-  // 项目删除确认独立于菜单渲染；menu=null 时继续挂载确认框。
-  if (!menu) {
-    return (
-      <ConfirmDialog
-        open={pendingDelete !== null}
-        danger
-        title={pendingDelete?.mode === "discard-provisional" ? "丢弃未保存项目" : "删除项目及画板"}
-        message={
-          pendingDelete?.mode === "discard-provisional" ? (
-            <>将丢弃这块尚未保存的空白画板；中央素材不受影响。此操作<strong>不可恢复</strong>。</>
-          ) : (
-            <>
-              将删除 1 块项目画板、{pendingDelete?.impact.thread_count ?? 0} 条创作线程和 {pendingDelete?.impact.node_count ?? 0} 个节点；
-              {pendingDelete?.impact.project_asset_count ?? 0} 张中央素材与底层执行审计都会保留。
-              {((pendingDelete?.impact.running_generation_count ?? 0) + (pendingDelete?.impact.running_agent_count ?? 0)) > 0
-                ? <> 当前还有 <strong>{(pendingDelete?.impact.running_generation_count ?? 0) + (pendingDelete?.impact.running_agent_count ?? 0)} 个任务未完成或待入库，暂不可删除。</strong></>
-                : <> 此操作<strong>不可恢复</strong>。</>}
-            </>
-          )
-        }
-        confirmLabel={pendingDelete?.mode === "discard-provisional"
-          ? "丢弃项目"
-          : ((pendingDelete?.impact.running_generation_count ?? 0) + (pendingDelete?.impact.running_agent_count ?? 0)) > 0
-            ? "仍有未完成任务"
-            : "删除项目"}
-        confirmDisabled={((pendingDelete?.impact.running_generation_count ?? 0) + (pendingDelete?.impact.running_agent_count ?? 0)) > 0}
-        onConfirm={() => {
-          const pending = pendingDelete;
-          setPendingDelete(null);
-          if (pending) void remove(pending.projectId, pending.mode);
-        }}
-        onCancel={() => setPendingDelete(null)}
-      />
-    );
-  }
+  if (!menu) return <>{confirmation}{renaming && <ProjectRenameDialog
+    projectId={renaming.id} currentName={renaming.name} onClose={() => setRenaming(null)}
+  />}</>;
 
   // 守卫后捕获，闭包里直接用（TS 不会把守卫的收窄带进嵌套函数）。
   const projectId = menu.projectId;
@@ -181,8 +95,22 @@ export function ProjectContextMenu() {
       <button
         type="button"
         role="menuitem"
+        disabled={busy || deleting || !project}
+        onClick={() => {
+          if (!project) return;
+          setRenaming({ id: project.id, name: project.name });
+          close();
+        }}
+        className="app-context-item px-2 py-1.5"
+      >
+        <Pencil size={13} className="shrink-0" />
+        重命名
+      </button>
+      <button
+        type="button"
+        role="menuitem"
         onClick={() => void refresh(projectId)}
-        disabled={busy || isBuiltin || isBlank}
+        disabled={busy || deleting || isBuiltin || isBlank}
         title={
           isBuiltin || isBlank
             ? "该项目没有关联的本地文件夹"
@@ -201,7 +129,7 @@ export function ProjectContextMenu() {
         onClick={() => {
           void prepareDelete(projectId);
         }}
-        disabled={busy}
+        disabled={busy || deleting}
         title="删除项目画板和内部线程；中央素材保留"
         className="app-context-item is-danger px-2 py-1.5"
       >

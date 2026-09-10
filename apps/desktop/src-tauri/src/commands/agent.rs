@@ -179,6 +179,7 @@ pub async fn local_agent_start(
     visual_profile_id: Option<String>,
 ) -> Result<LocalAgentRun, AppError> {
     ensure_preview_enabled()?;
+    let _ = project_id; // Compatibility with older clients; profiles have no project owner.
     let goal = goal.trim();
     if goal.is_empty() || goal.chars().count() > 4_000 {
         return Err(AppError::Other("精修目标须为 1–4000 个字符".into()));
@@ -193,12 +194,7 @@ pub async fn local_agent_start(
         ));
     }
     let visual_profile_capsule = match visual_profile_id.as_deref() {
-        Some(profile_id) => {
-            let project_id = project_id
-                .as_deref()
-                .ok_or_else(|| AppError::Other("视觉设定只能在当前项目内使用".into()))?;
-            Some(db.visual_profile_capsule(profile_id, project_id)?)
-        }
+        Some(profile_id) => Some(db.visual_profile_capsule(profile_id)?),
         None => None,
     };
     let id = format!("local_{}", ulid::Ulid::new());

@@ -271,7 +271,7 @@ test("structured submit_plan rejects incomplete assignments, foreign assets and 
   incomplete.contentPlan.assetAssignments = [];
   await rejects(
     () => gateway.dispatch(request("submit_plan", "compose_plan", { plan: incomplete })),
-    /tool_arguments_invalid/,
+    /plan_asset_assignment_incomplete/,
   );
 
   const camelCaseSectionId = structuredPlan(profile);

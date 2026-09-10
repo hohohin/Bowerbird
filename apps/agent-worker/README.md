@@ -2,7 +2,7 @@
 
 > 状态：**首版 `bowerbird-controlled-image-edit` 的 legacy Kernel 已通过真实 E2E；U4 controlled-image DSH processor 已 test-only 部署，统一 Agent 图片多 final / DAG 同层并发已在源码完成、尚未部署。当前 Worker 297/297 + TypeScript。**
 > 桌面 Agent 主路径已人工验收，A5 完成；A6 安全/Cloud 回归与 A7 VPS 运维基线完成。Codex Agent CLI 真机 E2E 已成功，但因双重思考/对话耗时过长暂时禁止新建该组合。Dreamina Agent CLI 真机 E2E 按 2026-08-25 用户决定暂时跳过：实现保留、未宣称验证通过，也不再作为当前发布或继续开发门槛。
-> 依据：[dev-doc/AGENT-RUNTIME-PLAN.md](../../../dev-doc/AGENT-RUNTIME-PLAN.md) §A2 / §A3。
+> 依据：[dev-doc/AGENT-RUNTIME-PLAN.md](../../dev-doc/AGENT-RUNTIME-PLAN.md) §A2 / §A3。
 
 ## 当前已实现
 
@@ -51,7 +51,8 @@
 - ✅ Agent Run 文本 usage/ledger、服务端费率/预算复核、终态原子结算、TTL/orphan 清理、账单 marker、原子单用户/全站容量闸与每日成本预留 —— A5
 - ✅ 安全冒烟、Cloud 生图/理解真实回归、隐私文案、Worker 重启故障注入与 VPS 监控/容器约束；Codex Agent 真机已通过并按实测结论暂时与正式 Agent 互斥 —— A6/A7 当前范围完成（Dreamina Agent CLI 真机 E2E 已明确跳过）
 - ❌ OpenClaw / Claude Code / MCP / shell / 用户 Skill / 多 Agent —— 永不做（计划 §1.2 / §7.1）
-- ❌ 视觉设定读取或上传图片 —— 永不做（计划 §8.2 三条不可变边界）
+- **品牌提示词维护（2026-09-10）**：图片观察与文本提炼指令分别为 `src/prompts/brand-visual/observation.md`、`extraction.md`，VPS 同路径可维护并只读挂载；每项任务开始时读取。原图明确标注的色号/标准独立保留，不经多数投票，冲突待核对。维护操作见 [品牌提示词 README](src/prompts/brand-visual/README.md)，本次定向部署与验证状态以 PROJECT.md 为准。
+- **视觉规范当前边界（2026-09-10）**：规范独立于项目，任意生成可显式选用已确认版本。用户在集合内点击“视觉规范”并点击“开始提炼”后，桌面沿既有理解队列补齐该集合素材的观察；保存后由用户在创作对话框中选择，不自动选用；本 Worker 的文字归纳服务仍只收脱敏证据卡，不能自行回取来源图片或改写已确认规范。V0 离线 fixture 的“不读图”不代表用户必须先手动反推。当前产品契约见 [AGENT-RUNTIME-PLAN.md §8](../../dev-doc/AGENT-RUNTIME-PLAN.md#8-独立视觉规范agent-loop-外的本地长期能力)，发布状态以 [PROJECT.md](../../PROJECT.md) 为准。
 
 ## 如何运行
 

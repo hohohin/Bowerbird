@@ -18,6 +18,7 @@ pub(crate) mod cloud_image;
 pub mod codex_cli;
 pub mod install;
 pub mod jimeng;
+pub mod jimeng_video;
 pub mod openai_api;
 pub mod types;
 pub mod understand;
@@ -46,6 +47,16 @@ pub trait GenProvider: Send + Sync {
         tx: &mpsc::Sender<Chunk>,
         resume_session: Option<String>,
     ) -> Result<GenOutcome, AppError>;
+
+    async fn generate_video(
+        &self,
+        _req: CodexRequest,
+        _options: types::VideoOptions,
+        _tx: &mpsc::Sender<Chunk>,
+        _resume_session: Option<String>,
+    ) -> Result<GenOutcome, AppError> {
+        Err(AppError::Other("此引擎不支持视频生成；请选择即梦 Seedance 2.5".into()))
+    }
 }
 
 /// 按 `provider` 参数取实现（AI-PROVIDERS.md §5.2）。

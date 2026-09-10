@@ -81,6 +81,7 @@ export function cloudAgentIngestionFingerprint(run: CloudAgentRunRecord): string
   const artifactKeys = selectCloudAgentResultArtifacts(
     run.snapshot.artifacts,
     run.snapshot.renderManifest,
+    run.snapshot.events,
   )
     .map((artifact) => `${artifact.id}:${artifact.sha256}`)
     .sort();
@@ -110,6 +111,7 @@ export function cloudAgentIngestionPersisted(run: CloudAgentRunRecord): boolean 
   const artifacts = selectCloudAgentResultArtifacts(
     run.snapshot.artifacts,
     run.snapshot.renderManifest,
+    run.snapshot.events,
   );
   const checkpoint = (run.snapshot as unknown as Record<string, unknown>)._bowerbirdAgentIngestV1;
   const durable = checkpoint && typeof checkpoint === "object"

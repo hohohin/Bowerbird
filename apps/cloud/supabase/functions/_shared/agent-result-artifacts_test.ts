@@ -29,8 +29,8 @@ Deno.test("unified Agent accepts every non-empty final_result set", () => {
   assertEquals(acceptsFeedbackResultCount("bowerbird-unified-agent", ["final_result"], 8), true);
 });
 
-Deno.test("legacy and HTML primary result groups remain singular", () => {
+Deno.test("legacy results remain singular while unified revisions retain multiple primaries", () => {
   assertEquals(allowsMultipleFinalResults("bowerbird-controlled-image-edit"), false);
   assertEquals(acceptsFeedbackResultCount("bowerbird-controlled-image-edit", ["final_result"], 2), false);
-  assertEquals(acceptsFeedbackResultCount("bowerbird-unified-agent", ["full_page_screenshot"], 2), false);
+  assertEquals(acceptsFeedbackResultCount("bowerbird-unified-agent", ["full_page_screenshot"], 2), true);
 });

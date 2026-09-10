@@ -127,6 +127,34 @@ const requestBody = {
   tools: [],
 };
 
+for (const permanent of [false, true]) test(`diagnostic persistence ${permanent ? "preserves its failure stage" : "retries a transient control error"} without repeating the model`, async () => {
+  const control = new FakeControl();
+  const upload = control.uploadDiagnostic.bind(control);
+  let uploads = 0, modelCalls = 0;
+  control.uploadDiagnostic = async args => {
+    uploads++;
+    if (permanent || uploads === 1) throw new AgentControlError(500);
+    return upload(args);
+  };
+  const proxy = await startMeteredDeepSeekProxy({ runId: "run-proxy", leaseId: "lease-proxy",
+    phase: "execute_approved_plan", control, allowInsecureLoopback: true,
+    upstream: { apiKey: "fixture", baseUrl: "http://127.0.0.1:43123", model: "deepseek-v4-flash" },
+    async fetch() { modelCalls++; return { ok: true, status: 200, async text() { return sse(); } }; },
+  });
+  try {
+    const response = await proxyRequest(proxy.childEnvironment());
+    equal(response.status, permanent ? 502 : 200);
+    equal(uploads, 2);
+    if (permanent) {
+      equal(proxy.lastErrorCode, "deepseek_diagnostic_http_500");
+      equal(await response.text(), JSON.stringify({ error: { code: "deepseek_diagnostic_http_500" } }));
+    } else equal(await response.text(), sse());
+    const replay = await proxyRequest(proxy.childEnvironment());
+    equal(replay.status, permanent ? 502 : 200);
+    equal(modelCalls, 1);
+  } finally { await proxy.close(); }
+});
+
 function sse(withUsage = true): string {
   return `data: ${JSON.stringify({
     id: "provider-request-1",
@@ -566,10 +594,99 @@ test("metered DeepSeek proxy rejects a new model request after the bounded turn 
     });
     equal(rejected.status, 429);
     equal(await rejected.text(), JSON.stringify({ error: { code: "model_turn_budget_exhausted" } }));
+    equal(proxy.lastErrorCode, "model_turn_budget_exhausted");
     equal(upstreamCalls, 2);
   } finally {
     await proxy.close();
   }
+});
+
+test("DSH history reaches the provider intact and replays durably after proxy restart", async () => {
+  const control = new FakeControl();
+  let calls = 0;
+  const messages = [
+    { role: "system", content: "creative agent" },
+    { role: "user", content: "Exact original copy: " + "原文".repeat(6000) },
+    { role: "assistant", content: "Use navy and an asymmetric layout.", tool_calls: [
+      { id: "profile", type: "function", function: { name: "read_context", arguments: '{"id":"project_visual_profile"}' } }] },
+    { role: "tool", tool_call_id: "profile", content: "PROFILE_NAVY " + "brand ".repeat(1500) },
+    { role: "assistant", content: "Read layout method next.", tool_calls: [
+      { id: "method", type: "function", function: { name: "read_context", arguments: '{"id":"tool:compose_html"}' } }] },
+    { role: "tool", tool_call_id: "method", content: "METHOD_ASYMMETRIC " + "method ".repeat(2000) },
+  ];
+  const options = {
+    runId: "run-proxy", leaseId: "lease-proxy", phase: "execute_approved_plan" as const,
+    control, upstream: { apiKey: "real", baseUrl: "http://127.0.0.1:43123", model: "deepseek-v4-flash" },
+    allowInsecureLoopback: true, maxOutputTokens: 8000,
+    async fetch(_url: string, init: { body: string }) {
+      calls++;
+      deepEqual(JSON.parse(init.body).messages, messages);
+      equal(JSON.parse(init.body).max_tokens, 8000);
+      return { ok: true, status: 200, async text() { return sse(); } };
+    },
+  };
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const proxy = await startMeteredDeepSeekProxy(options);
+    try {
+      const response = await proxyRequest(proxy.childEnvironment(), { ...requestBody, messages });
+      equal(response.status, 200); await response.text();
+    } finally { await proxy.close(); }
+  }
+  equal(calls, 1);
+});
+
+test("large native history advances distinct identical tool reads and replays only the same exchange", async () => {
+  const control = new FakeControl();
+  let calls = 0;
+  const proxy = await startMeteredDeepSeekProxy({
+    runId: "run-proxy", leaseId: "lease-proxy", phase: "execute_approved_plan", control,
+    upstream: { apiKey: "real", baseUrl: "http://127.0.0.1:43123", model: "deepseek-v4-flash" },
+    allowInsecureLoopback: true, maxOutputTokens: 8000,
+    async fetch(_url, init) {
+      calls++;
+      ok(new TextEncoder().encode(init.body).byteLength > 1024 * 1024);
+      ok(init.body.includes("same-eight-images"));
+      return { ok: true, status: 200, async text() { return sse(); } };
+    },
+  });
+  try {
+    for (const toolCallId of ["read-1", "read-2", "read-2"]) {
+      const response = await proxyRequest(proxy.childEnvironment(), { ...requestBody, messages: [
+        { role: "user", content: "history ".repeat(150000) },
+        { role: "assistant", tool_calls: [{ id: toolCallId, type: "function", function: { name: "list_run_assets", arguments: "{}" } }] },
+        { role: "tool", tool_call_id: toolCallId, content: JSON.stringify({ assets: ["same-eight-images"] }) },
+      ] });
+      equal(response.status, 200); await response.text();
+    }
+    equal(calls, 2);
+  } finally { await proxy.close(); }
+});
+
+test("authorized execution filters tool permissions without rewriting history", async () => {
+  const control = new FakeControl();
+  let upstreamCalls = 0;
+  const proxy = await startMeteredDeepSeekProxy({
+    runId: "run-proxy", leaseId: "lease-proxy", phase: "execute_approved_plan", control,
+    upstream: { apiKey: "real", baseUrl: "http://127.0.0.1:43123", model: "deepseek-v4-flash" },
+    allowInsecureLoopback: true, maxOutputTokens: 8000,
+    allowedToolNames: ["call_tool", "read_context"],
+    async fetch(_url, init) {
+      upstreamCalls++;
+      const request = JSON.parse(init.body);
+      deepEqual(request.tools.map((tool: { function: { name: string } }) => tool.function.name), ["call_tool", "read_context"]);
+      deepEqual(request.messages, [{ role: "user", content: "old history".repeat(4000) }]);
+      return { ok: true, status: 200, async text() { return sse(); } };
+    },
+  });
+  try {
+    const response = await proxyRequest(proxy.childEnvironment(), { ...requestBody,
+      tools: ["understand_asset", "ask_user", "request_task_authorization", "call_tool", "read_context"].map(name => ({ type: "function", function: { name } })),
+      messages: [{ role: "user", content: "old history".repeat(4000) }],
+    });
+    equal(response.status, 200);
+    await response.text();
+    equal(upstreamCalls, 1);
+  } finally { await proxy.close(); }
 });
 
 test("metered DeepSeek proxy compresses and replays a bounded SSE larger than the diagnostic artifact limit", async () => {

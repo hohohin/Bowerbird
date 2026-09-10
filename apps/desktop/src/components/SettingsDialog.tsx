@@ -953,8 +953,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                       placeholder={DEFAULT_AUTO_ANALYZE_PROMPT}
                     />
                     <p className="mt-1 text-[11px] text-muted">
-                      可用 <code className="text-[11px]">{`{vocab}`}</code>{" "}
-                      表示受控类别词表，运行时会自动替换。
+                        此提示词用于命名和描述。分类标签请在侧栏「分类标签 → 管理」中使用本地模型处理。
                     </p>
                   </div>
                 )}
@@ -996,7 +995,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
 
               <div className="settings-card px-3 py-2.5">
                 <div className="flex items-center justify-between">
-                  <span className="text-ink">在全局素材中隐藏项目素材</span>
+                  <span className="text-ink">在画板的全局素材栏中隐藏项目素材</span>
                   <Toggle
                     checked={settings?.hide_project_assets ?? false}
                     onChange={(v) =>
@@ -1005,7 +1004,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   />
                 </div>
                 <p className="mt-1 text-xs text-muted">
-                  开启后，全局素材视图的瀑布流只显示未加入任何项目的素材（搜索、颜色、收藏夹、智能筛选同样生效）；进入项目后仍显示该项目素材。
+                  控制画板内全局素材栏的显示范围。首页的项目素材由右上角「收起 / 展开」控制，始终可按项目浏览。
                 </p>
               </div>
             </>

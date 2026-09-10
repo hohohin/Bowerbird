@@ -17,7 +17,7 @@ const pricing = parseAgentUsagePricing({
   html_render: { credits_per_call: 0 },
 }, 1);
 
-function mixedPlan(): UnifiedAgentPlan {
+function mixedPlan(): Exclude<UnifiedAgentPlan, { schemaVersion: 3 }> {
   return {
     schemaVersion: 1,
     title: "产品长图",
@@ -33,7 +33,7 @@ function mixedPlan(): UnifiedAgentPlan {
   };
 }
 
-function structuredPlan(): UnifiedAgentPlan {
+function structuredPlan(): Extract<UnifiedAgentPlan, { schemaVersion: 2 }> {
   return {
     schemaVersion: 2,
     title: "产品长图",
@@ -68,10 +68,23 @@ function structuredPlan(): UnifiedAgentPlan {
   };
 }
 
+Deno.test("13 content sections are accepted independently of steps, including a text-only Run", () => {
+  const value = structuredPlan();
+  if (value.schemaVersion !== 2) throw new Error("fixture");
+  value.contentPlan.assetAssignments = [];
+  value.contentPlan.informationArchitecture = Array.from({ length: 13 }, (_, index) => ({
+    id: `section-${index}`, purpose: "用户文案区块", sourceAssetIds: [], copySource: "user_goal" as const,
+  }));
+  for (const step of value.steps) step.inputAssetIds = [];
+  const parsed = parseUnifiedAgentPlan(value);
+  assertEquals(parsed, value);
+  assertEquals(estimateUnifiedAgentPlanCredits(value, pricing, "ark").totalCredits, estimateUnifiedAgentPlanCredits(structuredPlan(), pricing, "ark").totalCredits);
+});
+
 Deno.test("unified plan parser is closed, ordered and requires one final terminal step", () => {
   assertEquals(parseUnifiedAgentPlan(mixedPlan()), mixedPlan());
   assertThrows(() => parseUnifiedAgentPlan({ ...mixedPlan(), estimatedCredits: 1 }), Error, "unified_plan_invalid");
-  const modelCredits = structuredClone(mixedPlan()) as UnifiedAgentPlan & { steps: Array<UnifiedAgentPlan["steps"][number] & { estimatedCredits?: number }> };
+  const modelCredits = structuredClone(mixedPlan()) as UnifiedAgentPlan & { steps: Array<Exclude<UnifiedAgentPlan, { schemaVersion: 3 }>["steps"][number] & { estimatedCredits?: number }> };
   modelCredits.steps[0]!.estimatedCredits = 1;
   assertThrows(() => parseUnifiedAgentPlan(modelCredits), Error, "unified_plan_invalid");
   const forward = structuredClone(mixedPlan());
@@ -164,4 +177,16 @@ Deno.test("plan and argument hashes are stable and bind different envelopes", as
   assertEquals(argsHash.length, 64);
   assertEquals(planHash === argsHash, false);
   assertEquals(await hashUnifiedAgentPlan(mixedPlan()), planHash);
+});
+
+Deno.test("v3 prices authorized ceilings without requiring an execution graph", () => {
+  const task: Extract<UnifiedAgentPlan, { schemaVersion: 3 }> = { schemaVersion: 3, title: "产品场景", summary: "十张场景图", assetIds: ["asset-product"], outputCount: 10,
+    modelTurns: 16, capabilities: [{ tool: "generate_image", maxCalls: 11 }, { tool: "inspect_artifact", maxCalls: 1 }] };
+  assertEquals(parseUnifiedAgentPlan(task), task);
+  const estimate = estimateUnifiedAgentPlanCredits(task, pricing, "ark");
+  assertEquals(estimate.imageCalls, 11);
+  assertEquals(estimate.visionCalls, 1);
+  assertEquals(estimate.modelTurns, 16);
+  assertEquals(estimate.totalCredits, 72);
+  assertThrows(() => parseUnifiedAgentPlan({ ...task, steps: [] }));
 });

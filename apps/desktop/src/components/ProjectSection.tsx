@@ -3,6 +3,8 @@ import { useStore } from "../store";
 import { NewProjectMenu } from "./NewProjectMenu";
 import { summarizeProjectActivity } from "../lib/projectActivity";
 import { notifyError } from "../lib/notify";
+import { agentReminderKey, generationReminderKey } from "../lib/taskReminders";
+import { useTaskReminders } from "../lib/useTaskReminders";
 
 /** 侧栏「项目」区：新建入口（NewProjectMenu 菜单：空白项目 / 导入文件夹）+ 项目行。
  *  行内只保留 进入（点击）/ 退出（激活行右侧 icon）；删除与「更新项目文件」都在右键菜单。 */
@@ -16,6 +18,7 @@ export function ProjectSection() {
   const genJobs = useStore((s) => s.genJobs);
   const cloudAgentRuns = useStore((s) => s.cloudAgentRuns);
   const projectUnreadThreads = useStore((s) => s.projectUnreadThreads);
+  const reminders = useTaskReminders();
 
   return (
     <section className="mb-5 border-b border-edge pb-5">
@@ -30,8 +33,8 @@ export function ProjectSection() {
           const activity = summarizeProjectActivity({
             projectId: project.id,
             unreadThreadIds: projectUnreadThreads[project.id] ?? [],
-            generationJobs: Object.values(genJobs),
-            agentRuns: Object.values(cloudAgentRuns),
+            generationJobs: Object.values(genJobs).filter((job) => !reminders.isCleared(generationReminderKey(job))),
+            agentRuns: Object.values(cloudAgentRuns).filter((run) => !reminders.isCleared(agentReminderKey(run))),
           });
           return (
             <div

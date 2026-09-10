@@ -1153,6 +1153,7 @@ impl Database {
                 provider_session_id: turn.provider_session_id.clone(),
                 ratio: None,
                 visual_profile: turn.visual_profile,
+                reference_node_ids: vec![],
                 references: turn.references,
                 parent_node_id: None,
                 parent_asset_path,
@@ -1226,6 +1227,7 @@ impl Database {
                     .unwrap_or(&serde_json::Value::Null),
             ),
             reference_asset_ids: references,
+            reference_node_ids: vec![],
             parent_node_id: None,
             parent_asset_id,
         })?;

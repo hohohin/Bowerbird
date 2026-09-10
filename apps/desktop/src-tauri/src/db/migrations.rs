@@ -72,6 +72,10 @@ pub fn migrations() -> Migrations<'static> {
             "../../sql/0022_project_execution_projection.sql"
         )),
         M::up(include_str!("../../sql/0023_project_canvas_backfill.sql")),
+        M::up(include_str!("../../sql/0024_shared_canvas_references.sql")),
+        M::up(include_str!("../../sql/0025_shared_generated_reference_inputs.sql")),
+        M::up(include_str!("../../sql/0026_local_classification.sql")),
+        M::up(include_str!("../../sql/0027_independent_visual_profiles.sql")),
     ])
 }
 

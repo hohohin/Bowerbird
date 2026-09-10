@@ -311,11 +311,11 @@ test("planning bridge injects only an exact loopback endpoint and one short-live
   );
 });
 
-test("approved HTML execution profile exposes only the four ordered execution tools", () => {
+test("approved HTML execution profile exposes execution tools and optional context reads", () => {
   const definitions = htmlExecutionToolDefinitions();
   assert.deepEqual(
     definitions.map((definition) => definition.name).sort(),
-    ["compose_html", "finalize_output", "inspect_artifact", "render_html"],
+    ["compose_html", "finalize_output", "inspect_artifact", "read_context", "render_html"],
   );
   const compose = definitions.find((definition) => definition.name === "compose_html");
   assert.match(compose.description, /asset:reference-1/);
@@ -362,7 +362,7 @@ test("approved content execution profile reuses HTML tools and adds only the Xia
   const definitions = contentExecutionToolDefinitions();
   assert.deepEqual(
     definitions.map((definition) => definition.name).sort(),
-    ["compose_html", "compose_xiaohongshu", "finalize_output", "inspect_artifact", "render_html"],
+    ["compose_html", "compose_xiaohongshu", "finalize_output", "inspect_artifact", "read_context", "render_html"],
   );
   const compose = definitions.find((definition) => definition.name === "compose_html");
   assert.match(compose.description, /asset:reference-1/);
@@ -384,26 +384,15 @@ test("only a compose argument validation error receives the bounded correction",
   );
 });
 
-test("planning profile advertises backward-compatible v1 and structured v2 plans", () => {
-  const submitPlan = planningToolDefinitions().find((definition) => definition.name === "submit_plan");
-  assert.ok(submitPlan);
-  const plan = submitPlan.parameters.properties.plan;
-  assert.deepEqual(plan.properties.schemaVersion.enum, [1, 2]);
-  assert.equal(plan.properties.contentPlan.type, "object");
-  assert.equal(plan.properties.contentPlan.properties.assetAssignments.type, "array");
-  assert.equal(plan.properties.contentPlan.properties.informationArchitecture.type, "array");
-  assert.equal(plan.properties.contentPlan.properties.missingAssets.type, "array");
-  assert.equal(plan.properties.contentPlan.properties.visualProfile.oneOf.length, 2);
-  assert.match(plan.properties.steps.items.properties.id.description, /\^\[a-z\].*never use camelCase/);
-  assert.match(plan.properties.steps.items.properties.inputAssetIds.description, /render_html.*empty array/);
-  assert.equal(
-    plan.properties.contentPlan.properties.informationArchitecture.items.properties.id.description,
-    "Lowercase ASCII identifier matching ^[a-z][a-z0-9_-]{0,63}$; never use camelCase.",
-  );
-  assert.equal(
-    plan.properties.contentPlan.properties.missingAssets.items.properties.id.description,
-    "Lowercase ASCII identifier matching ^[a-z][a-z0-9_-]{0,63}$; never use camelCase.",
-  );
+test("planning profile exposes goal authorization and generic execution without a step DSL", () => {
+  const definitions = planningToolDefinitions();
+  assert.equal(definitions.some((item) => item.name === "submit_plan"), false);
+  const authorization = definitions.find((item) => item.name === "request_task_authorization");
+  assert.ok(authorization);
+  assert.equal(authorization.parameters.properties.schemaVersion.const, 3);
+  assert.equal(authorization.parameters.properties.steps, undefined);
+  assert.equal(authorization.parameters.properties.contentPlan, undefined);
+  assert.ok(definitions.find((item) => item.name === "call_tool"));
 });
 
 test("controlled model profile exposes only the three structured suggestion actions", () => {

@@ -47,6 +47,7 @@ const ALLOWED_RATIOS: [(&str, f64); 7] = [
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CloudAgentReferenceRequest {
+    pub node_id: Option<String>,
     pub asset_id: String,
     pub prompt_token: Option<String>,
 }
@@ -311,6 +312,23 @@ fn ensure_agent_provider_compatible(image_provider: Option<&str>) -> Result<(), 
     Ok(())
 }
 
+fn resolve_new_agent_selection(
+    skill_id: Option<&str>,
+    agent_runtime: Option<&str>,
+) -> Result<(&'static str, &'static str), AppError> {
+    if skill_id.is_some_and(|value| value != UNIFIED_SKILL_ID) {
+        return Err(AppError::Other(
+            "旧 Agent 模式已停止新建，请使用统一 Agent；已有任务仍可继续处理".into(),
+        ));
+    }
+    if agent_runtime.is_some_and(|value| value != DSH_AGENT_RUNTIME) {
+        return Err(AppError::Other("新 Agent 任务必须使用 DSH runtime".into()));
+    }
+    Ok((UNIFIED_SKILL_ID, DSH_AGENT_RUNTIME))
+}
+
+// Retained with the retired creation branches; new IPC requests are normalized
+// by resolve_new_agent_selection before dispatch and cannot select this path.
 fn resolve_agent_runtime(
     agent_runtime: Option<&str>,
     is_test_account: bool,
@@ -1159,6 +1177,7 @@ fn begin_creative_launch(
     ratio: Option<&str>,
     visual_profile: Option<&VisualProfileCapsule>,
     reference_asset_ids: &[String],
+    references: &[CloudAgentReferenceRequest],
     parent_node_id: Option<&str>,
     parent_asset_id: Option<&str>,
 ) -> Result<Option<ProjectAgentLaunchInput>, AppError> {
@@ -1179,6 +1198,15 @@ fn begin_creative_launch(
             hash: profile.hash.clone(),
         }),
         reference_asset_ids: reference_asset_ids.to_vec(),
+        reference_node_ids: reference_asset_ids
+            .iter()
+            .map(|id| {
+                references
+                    .iter()
+                    .find(|reference| &reference.asset_id == id)
+                    .and_then(|reference| reference.node_id.clone())
+            })
+            .collect(),
         parent_node_id: parent_node_id.map(str::to_string),
         parent_asset_id: parent_asset_id.map(str::to_string),
     };
@@ -1492,6 +1520,7 @@ async fn start_html_layout_run(
         None,
         None,
         &reference_ids,
+        &references,
         parent_node_id.as_deref(),
         parent_asset_id.as_deref(),
     )?;
@@ -1692,7 +1721,7 @@ async fn start_unified_agent_run(
         return Err(AppError::Other("当前测试账号未开放 DSH 统一 Agent".into()));
     }
     if visual_profile_id.is_some() && !entitlement_snapshot.policy.can_use_visual_profiles {
-        return Err(AppError::Other("当前权益不支持项目视觉设定".into()));
+        return Err(AppError::Other("当前权益不支持品牌视觉规范".into()));
     }
     if let Some(project) = project_id.as_deref() {
         if db.get_project(project)?.is_none() {
@@ -1700,12 +1729,7 @@ async fn start_unified_agent_run(
         }
     }
     let visual_profile_capsule = match visual_profile_id.as_deref() {
-        Some(profile_id) => {
-            let project_id = project_id
-                .as_deref()
-                .ok_or_else(|| AppError::Other("视觉设定只能在当前项目内使用".into()))?;
-            Some(db.visual_profile_capsule(profile_id, project_id)?)
-        }
+        Some(profile_id) => Some(db.visual_profile_capsule(profile_id)?),
         None => None,
     };
     let resolved_ratio = normalize_requested_ratio(ratio)?;
@@ -1769,6 +1793,7 @@ async fn start_unified_agent_run(
         resolved_ratio.as_deref(),
         visual_profile_capsule.as_ref(),
         &reference_ids,
+        &references,
         parent_node_id.as_deref(),
         parent_asset_id.as_deref(),
     )?;
@@ -1994,6 +2019,12 @@ pub async fn cloud_agent_start(
     parent_node_id: Option<String>,
     parent_asset_id: Option<String>,
 ) -> Result<CloudAgentRunRecord, AppError> {
+    // This guard applies only to new runs. History, approvals, cancellation and
+    // local task recovery continue to use their persisted skill/runtime identity.
+    let (resolved_skill, resolved_runtime) =
+        resolve_new_agent_selection(skill_id.as_deref(), agent_runtime.as_deref())?;
+    let skill_id = Some(resolved_skill.to_string());
+    let agent_runtime = Some(resolved_runtime.to_string());
     if project_id.is_none() || thread_id.is_none() {
         return Err(AppError::Other(
             "新 Agent Run 必须归属于项目画板中的创作线程".into(),
@@ -2067,7 +2098,7 @@ pub async fn cloud_agent_start(
         ));
     }
     if visual_profile_id.is_some() && !policy.can_use_visual_profiles {
-        return Err(AppError::Other("当前权益不支持项目视觉设定".into()));
+        return Err(AppError::Other("当前权益不支持品牌视觉规范".into()));
     }
     // 新 Run 生图引擎：cloud = VPS 方舟 Seedream（默认）；jimeng = 桌面本地 CLI。
     // Codex Agent 暂停组合使用，但历史任务执行器仍保留 Codex 恢复能力。
@@ -2095,12 +2126,7 @@ pub async fn cloud_agent_start(
         validate_preference_capsule(capsule, project_id.as_deref())?;
     }
     let visual_profile_capsule = match visual_profile_id.as_deref() {
-        Some(profile_id) => {
-            let project_id = project_id
-                .as_deref()
-                .ok_or_else(|| AppError::Other("视觉设定只能在当前项目内使用".into()))?;
-            Some(db.visual_profile_capsule(profile_id, project_id)?)
-        }
+        Some(profile_id) => Some(db.visual_profile_capsule(profile_id)?),
         None => None,
     };
 
@@ -2168,6 +2194,7 @@ pub async fn cloud_agent_start(
         resolved_ratio.as_deref(),
         visual_profile_capsule.as_ref(),
         &reference_ids,
+        &references,
         parent_node_id.as_deref(),
         parent_asset_id.as_deref(),
     )?;
@@ -2820,6 +2847,24 @@ fn existing_agent_asset(
 }
 
 fn ingestible_artifacts(record: &CloudAgentRunRecord) -> Vec<(String, String)> {
+    let selection = record.snapshot.get("events").and_then(Value::as_array)
+        .into_iter().flatten()
+        .filter(|event| event.get("type").and_then(Value::as_str) == Some("result.ready")
+            && event.pointer("/display_payload/selectionVersion").and_then(Value::as_u64) == Some(1))
+        .max_by_key(|event| event.get("seq").and_then(Value::as_u64).unwrap_or(0))
+        .and_then(|event| event.pointer("/display_payload/visibleArtifactIds"))
+        .and_then(Value::as_array);
+    if let Some(ids) = selection {
+        let artifacts = record.snapshot.get("artifacts").and_then(Value::as_array);
+        return ids.iter().filter_map(|id| {
+            let id = id.as_str()?;
+            let item = artifacts?.iter().find(|item| item.get("id").and_then(Value::as_str) == Some(id))?;
+            if item.get("user_visible").and_then(Value::as_bool) == Some(false)
+                || !item.get("mime").and_then(Value::as_str).is_some_and(|mime| mime.starts_with("image/")) { return None; }
+            Some((id.to_string(), item.get("role")?.as_str()?.to_string()))
+        }).collect();
+    }
+
     let artifacts = record
         .snapshot
         .get("artifacts")
@@ -3613,6 +3658,7 @@ mod tests {
             ratio: None,
             visual_profile: None,
             reference_asset_ids: vec![],
+            reference_node_ids: vec![],
             parent_node_id: None,
             parent_asset_id: None,
         };
@@ -3701,6 +3747,7 @@ mod tests {
                 ratio: None,
                 visual_profile: None,
                 reference_asset_ids: vec![],
+                reference_node_ids: vec![],
                 parent_node_id: None,
                 parent_asset_id: None,
             };
@@ -3865,6 +3912,26 @@ mod tests {
     }
 
     #[test]
+    fn new_agent_selection_defaults_to_unified_dsh_and_rejects_retired_routes() {
+        for skill in [None, Some(super::UNIFIED_SKILL_ID)] {
+            for runtime in [None, Some(DSH_AGENT_RUNTIME)] {
+                assert_eq!(
+                    super::resolve_new_agent_selection(skill, runtime).unwrap(),
+                    (super::UNIFIED_SKILL_ID, DSH_AGENT_RUNTIME)
+                );
+            }
+            for runtime in [Some(LEGACY_AGENT_RUNTIME), Some("unknown")] {
+                assert!(super::resolve_new_agent_selection(skill, runtime).is_err());
+            }
+        }
+        for skill in [super::SKILL_ID, super::HTML_SKILL_ID, "unknown"] {
+            for runtime in [None, Some(LEGACY_AGENT_RUNTIME), Some(DSH_AGENT_RUNTIME)] {
+                assert!(super::resolve_new_agent_selection(Some(skill), runtime).is_err());
+            }
+        }
+    }
+
+    #[test]
     fn agent_runtime_defaults_legacy_and_gates_dsh_to_test_accounts() {
         assert_eq!(
             resolve_agent_runtime(None, false).unwrap(),
@@ -3888,10 +3955,12 @@ mod tests {
             "让 @海报#2.jpg 保持主体，参考 @海报.jpg 的构图",
             &[
                 CloudAgentReferenceRequest {
+                    node_id: None,
                     asset_id: "a".into(),
                     prompt_token: Some("海报#2.jpg".into()),
                 },
                 CloudAgentReferenceRequest {
+                    node_id: None,
                     asset_id: "b".into(),
                     prompt_token: Some("海报.jpg".into()),
                 },
@@ -3942,7 +4011,7 @@ mod tests {
 
     #[test]
     fn html_artifacts_follow_signed_render_manifest_slice_order() {
-        let record = CloudAgentRunRecord {
+        let mut record = CloudAgentRunRecord {
             run_id: "run-html".into(),
             conversation_id: "conv-html".into(),
             skill_id: "bowerbird-html-layout-render".into(),
@@ -3977,6 +4046,14 @@ mod tests {
                 ("slice-2".into(), "slice_screenshot".into()),
             ]
         );
+        record.snapshot["events"] = json!([{"seq":80,"type":"result.ready","display_payload":{
+            "selectionVersion":1,"visibleArtifactIds":["slice-2","full"]
+        }}]);
+        assert_eq!(ingestible_artifacts(&record), vec![
+            ("slice-2".into(), "slice_screenshot".into()), ("full".into(), "full_page_screenshot".into())
+        ]);
+        record.snapshot["events"][0]["display_payload"]["visibleArtifactIds"] = json!(["gone"]);
+        assert!(ingestible_artifacts(&record).is_empty());
     }
 
     #[test]
@@ -4081,6 +4158,7 @@ mod tests {
             ratio: None,
             visual_profile: None,
             reference_asset_ids: vec![],
+            reference_node_ids: vec![],
             parent_node_id: None,
             parent_asset_id: None,
         })
@@ -4179,6 +4257,7 @@ mod tests {
             ratio: None,
             visual_profile: None,
             reference_asset_ids: vec![],
+            reference_node_ids: vec![],
             parent_node_id: Some("parent-node-1".into()),
             parent_asset_id: Some("parent-asset-1".into()),
         };
@@ -4421,6 +4500,7 @@ mod tests {
                 ratio: None,
                 visual_profile: None,
                 reference_asset_ids: vec![],
+                reference_node_ids: vec![],
                 parent_node_id: Some("parent-selected".into()),
                 parent_asset_id: Some("parent-asset".into()),
             };

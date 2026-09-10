@@ -19,7 +19,7 @@
 3. Rust MSVC 工具链：`rustup default stable-x86_64-pc-windows-msvc`。
 4. Visual Studio 2022 Build Tools，勾选“使用 C++ 的桌面开发”和 Windows 10/11 SDK。
 5. AI 功能可在应用内一键安装 codex CLI（自动下载独立版，无需 Node.js）并登录 ChatGPT；不安装时素材库仍可用，AI 按项目约定降级置灰。
-6. 视频预览另需 `ffmpeg` 与 `ffprobe` 在 PATH；图片功能不依赖它们。
+6. 视频预览另需 `ffmpeg` 与 `ffprobe`；应用会检查随附工具、PATH、Windows 注册表 Path 及常见 WinGet/Scoop/Chocolatey 安装位置。特殊安装可用 `BOWERBIRD_FFMPEG_BINARY` / `BOWERBIRD_FFPROBE_BINARY` 指定绝对路径。图片功能不依赖它们。
 
 ## 开发运行
 
@@ -42,4 +42,4 @@ powershell -ExecutionPolicy Bypass -File .\Windows\build.ps1 -Clean
 - 提示 Rust host 不是 MSVC：运行 `rustup toolchain install stable-x86_64-pc-windows-msvc`，再运行 `rustup default stable-x86_64-pc-windows-msvc`。
 - 链接器或 `windows.h` 缺失：通过 Visual Studio Installer 补装 C++ Build Tools 和 Windows SDK。
 - codex 检测失败：在普通命令提示符运行 `codex --version` 与 `codex login`，然后完全退出并重开 Bowerbird。
-- 视频无缩略图：安装 ffmpeg，并确认 `ffmpeg -version`、`ffprobe -version` 都能运行。
+- 视频工具提示不可用：先看提示中的实际路径和启动错误；已安装不等于进程 PATH 能找到。预检与视频探测/海报使用同一解析器，不必重复安装或修改全局 PATH。更新应用后需重启实例才能使用新解析逻辑。

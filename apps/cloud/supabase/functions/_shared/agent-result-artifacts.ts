@@ -16,7 +16,7 @@ export function allowsMultipleFinalResults(skillId: string): boolean {
 }
 
 export function acceptsFeedbackResultCount(skillId: string, roles: readonly string[], count: number): boolean {
-  if (allowsMultipleFinalResults(skillId) && roles.length === 1 && roles[0] === "final_result") {
+  if (allowsMultipleFinalResults(skillId)) {
     return count >= 1;
   }
   return count === 1;

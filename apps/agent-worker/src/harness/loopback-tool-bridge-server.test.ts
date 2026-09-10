@@ -167,8 +167,10 @@ test("isolated plugin child reaches the real parent Planning Bridge with parent-
       toolName: "list_run_assets",
       arguments: { runId: "model-injected" },
     });
-    equal(injected.status, 409);
-    deepEqual(await injected.json(), { ok: false, error: { code: "tool_arguments_invalid" } });
+    equal(injected.status, 200);
+    const correction = await injected.json() as { value: { status: string; correction: string } };
+    equal(correction.value.status, "retry_required");
+    ok(correction.value.correction);
     equal(identities.length, 1);
   } finally {
     await server.close();

@@ -8,12 +8,20 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 | 文档 | 内容 | 何时读 |
 |---|---|---|
+| `dev-doc/VIDEO-API-PROVENANCE.json` | 视频增量原始快照/补丁哈希、冲突处理与最终文件哈希 | 审查或合入视频 API 隔离工作树时 |
+| `dev-doc/VIDEO-API-INTEGRATION.md` | 国内方舟视频 Cloud 实现、恢复/结算、离线验收与 CLI 前置归因 | 接续视频 API 接入、核验 2.5 模型与异步任务/计费边界时必读 |
+| `dev-doc/VIDEO-API-INTEGRATION-PREP-V2.md` | 视频历史集成演练及下一次实测操作准备 | 追溯 v2 或安排鉴权实测之前 |
+| `dev-doc/VIDEO-API-INTEGRATION-V2.json` | 已废止的 v2 快照归因；由 v3 manifest 接续 | 仅追溯历史，不再用于应用补丁 |
+| `dev-doc/VIDEO-API-INTEGRATION-V3.md`、`dev-doc/VIDEO-API-INTEGRATION-V3.json` | 视频与 FFmpeg 主目录集成、0058 迁移归属、回滚及阶段哈希 | 接续视频集成或安排 GUI 验收之前 |
+| `dev-doc/LOCAL-CLASSIFICATION.md` | 本地动态分类模型包、标签发现/自定义匹配、人工保护与验证记录 | 本地分类、自动标签、分类模型下载与运行时相关工作前必读 |
 | `PROJECT.md` | **活文档（项目内容唯一权威）**：项目说明 / 目前进展 / 关键约定 / 踩坑记录 | 每次开工前先读「目前进展」与「关键约定」 |
 | `dev-doc/Bowerbird开发计划.md` | 完整开发计划 v1.3（定位 / 技术栈 / 数据模型 / Roadmap / 风险）；同名 HTML 是其渲染版 | 任何实现工作之前必读；作为基础设计源，若与 `PROJECT.md` 的较新决策或专项计划冲突，以后两者为准 |
 | `dev-doc/Bowerbird定价方案v2-订阅积分制.md` | 商业模式与定价（免费+订阅+积分混合制 / 四档结构 / 积分消耗表 / 毛利测算；已取代 PRICING.md v1 买断制） | 商业化、定价、积分、功能门控相关工作前必读 |
 | `dev-doc/ARCH-ADJUST-PLAN.md` | 收费化架构调整开发计划（账号 / 积分 / 托管 provider / 支付 / 门控，P0–P9 阶段任务卡 + 验收标准；agent 执行用） | 收费化 / 账号 / 积分 / 云端任何实现工作前必读 |
 | `dev-doc/ARCH-ADJUST-PROGRESS.md` | 收费化架构调整跨会话进度、部署状态、测试基线与剩余阻塞 | 接续收费化任务或核对线上状态时必读 |
-| `dev-doc/AGENT-RUNTIME-PLAN.md` | Bowerbird 内置 Skill Agent Runtime 开发计划（Agent Kernel / 有限澄清 / 项目视觉设定 / VPS Worker / Supabase / 方舟，A0–A8 + V0–V4） | Agent loop / 内置 Skill / 项目视觉设定 / VPS Worker / Agent 临时云工作区实现前必读 |
+| `dev-doc/AGENT-RUNTIME-PLAN.md` | Bowerbird 内置 Skill Agent Runtime 开发计划（Agent Kernel / 有限澄清 / 独立视觉规范 / VPS Worker / Supabase / 方舟，A0–A8 + V0–V4） | Agent loop / 内置 Skill / 独立视觉规范 / VPS Worker / Agent 临时云工作区实现前必读 |
+| `apps/agent-worker/src/prompts/brand-visual/README.md` | 品牌图片观察/文本提炼提示词、VPS 维护目录及标注保留格式 | 修改品牌视觉提示词、色号提取或维护 VPS 提示词文件前必读 |
+| `dev-doc/CREATIVE-MEMORY-PLAN.md` | 创作记忆与常用提示词库开发计划（复用记录、候选提炼、用户确认、只读注入，CM0–CM7） | 提示词复用统计、常用库、个人偏好学习、记忆设置或生成偏好注入工作前必读 |
 | `dev-doc/UNIFIED-AGENT-HARNESS-PLAN.md` | **通用云端 Agent Harness 新专项**（一个 Agent + 多种受控工具；DSH + DeepSeek API Spike；Tool Gateway；HTML/小红书复用边界，U0–U6） | 新 Agent 能力、DSH/ACP、通用 Tool Gateway、HTML 智能编排、小红书或任何可能新增 Agent Runner 的工作前必读 |
 | `dev-doc/HTML-RENDER-PLAN.md` | 受限 HTML 离线排版、整页/切片截图、独立 renderer 容器与内置 Skill 接入开发计划（H0–H6） | HTML 排版/截图、Chromium/Playwright renderer、`render_html` 工具或第二个官方 Skill 实现前必读 |
 | `dev-doc/PROJECT-CANVAS-PLAN.md` | **项目即画板当前专项**（一项目一块无限画板 / 项目内多创作线程 / 普通生成与 Agent Run 归属 / 历史合并，PB0–PB7） | 画板、项目、创作入口、生成时间线、版本分支、历史迁移或相关 SQLite 模型实现前必读；当前执行权威 |
@@ -22,6 +30,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 | `dev-doc/FRAMEWORK_ADJUST.md` | 为收费的架构调整清单（7 项，ARCH-ADJUST-PLAN.md 的依据） | 收费化架构溯源时 |
 | `dev-doc/研究报告-服务器化CLI与API化改造可行性.md` | 服务器套壳 CLI vs 官方 API 可行性结论（推荐火山方舟官方 API） | 托管算力 / 远程化方向决策前必读 |
 | `dev-doc/AI-PROVIDERS.md` | AI provider 可切换方案（泛化 GenerationPanel + codex/即梦首批 + 即梦接入调研 + 关键约定 1 演进；草案） | provider 切换 / 即梦接入 / 生成能力多 provider 解耦相关工作前必读 |
+| `dev-doc/SEEDANCE-2.5-INTEGRATION.md` | 即梦 Seedance 2.5 视频接入、官方 CLI 四模式契约与验收证据；历史规划见 `dev-doc/VIDEO-GENERATION.md` | 视频生成、参数、任务恢复、视频入库与播放相关工作前必读 |
 | `dev-doc/Eagle类创意收集工具调查报告.html` | 前序竞品调研，计划的依据 | 需要背景/对标时 |
 | `dev-doc/draft.md`、`reference/theory.md` | 早期 UX 路径与素材分类（A–F 类）草稿，部分已被计划取代 | 仅在追溯原始意图时 |
 | `dev-doc/桌面端UI设计.html` | 桌面端 UI 面板与入口设计稿（三区外壳 + 创作板拟文本编辑器 + 现状对照） | 桌面端 UI 工作前必读 |

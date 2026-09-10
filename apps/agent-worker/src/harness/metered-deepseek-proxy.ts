@@ -17,11 +17,12 @@ import {
 import { canonicalJson, sha256Hex } from "../kernel/tool-ledger.ts";
 
 const REQUEST_PATH = "/chat/completions";
-const MAX_REQUEST_BYTES = 1024 * 1024;
+// Transport protection only. DSH owns token measurement and conversation compaction.
+const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
 const MAX_PLANNING_RESPONSE_BYTES = 2 * 1024 * 1024;
 const MAX_HTML_EXECUTION_RESPONSE_BYTES = 4 * 1024 * 1024;
 const MAX_RESULT_ARTIFACT_BYTES = 64 * 1024;
-const DEFAULT_MAX_MODEL_TURNS = 8;
+const DEFAULT_MAX_MODEL_TURNS = 32;
 const MAX_UPSTREAM_ATTEMPTS = 2;
 const RETRYABLE_UPSTREAM_STATUSES = new Set([502, 503, 504]);
 
@@ -64,6 +65,8 @@ export type MeteredDeepSeekProxyOptions = {
   upstream: DeepSeekConfig;
   allowInsecureLoopback?: boolean;
   maxModelTurns?: number;
+  maxOutputTokens?: number;
+  allowedToolNames?: readonly string[];
   fetch?: MeteredDeepSeekProxyFetch;
   /** Optional test-only observer for unexpected local persistence/control errors. */
   onUnexpectedError?: (error: unknown, identity: {
@@ -138,13 +141,13 @@ function authorized(request: IncomingMessage, capability: Uint8Array): boolean {
   return candidate.byteLength === capability.byteLength && timingSafeEqual(candidate, capability);
 }
 
-async function readJson(request: IncomingMessage): Promise<unknown> {
+async function readJson(request: IncomingMessage, maxBytes = MAX_REQUEST_BYTES): Promise<unknown> {
   const contentType = request.headers["content-type"];
   if (typeof contentType !== "string" || contentType.split(";", 1)[0]?.trim().toLowerCase() !== "application/json") {
     throw new ProxyHttpError(415, "content_type_invalid");
   }
   const declaredLength = Number(request.headers["content-length"] ?? 0);
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_REQUEST_BYTES) {
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
     throw new ProxyHttpError(413, "request_too_large");
   }
   const chunks: Uint8Array[] = [];
@@ -154,7 +157,7 @@ async function readJson(request: IncomingMessage): Promise<unknown> {
     request.on("data", (chunk) => {
       if (settled) return;
       total += chunk.byteLength;
-      if (total > MAX_REQUEST_BYTES) {
+      if (total > maxBytes) {
         settled = true;
         reject(new ProxyHttpError(413, "request_too_large"));
         return;
@@ -394,23 +397,37 @@ class MeteredProxyAdapter implements DurableToolAdapter<ProxyRequest, ProxyResul
     }
     const sha256 = sha256Hex(content);
     if (result.providerRequestId) {
-      await this.options.control.markToolSubmitted({
+      await this.persistOperation("response_id", () => this.options.control.markToolSubmitted({
         runId: this.options.runId,
         leaseId: this.options.leaseId,
         callId,
         providerRequestId: result.providerRequestId,
-      });
+      }));
     }
-    const artifact = await this.options.control.uploadDiagnostic({
+    const artifact = await this.persistOperation("diagnostic", () => this.options.control.uploadDiagnostic({
       runId: this.options.runId,
       leaseId: this.options.leaseId,
       sourceCallId: callId,
       stepId: `model-${this.options.phase}`,
       bytes,
       sha256,
-    });
-    await this.recordUsage(callId, result.usage);
+    }));
+    await this.persistOperation("usage", () => this.recordUsage(callId, result.usage));
     return { value: result, resultObjectKey: artifact.objectKey, resultHash: sha256 };
+  }
+
+  private async persistOperation<T>(stage: string, operation: () => Promise<T>): Promise<T> {
+    // These writes already use the same durable callId/hash. Retry only a
+    // received transient control/storage status, never the model request.
+    for (let attempt = 0; ; attempt++) {
+      try { return await operation(); }
+      catch (error) {
+        const status = error instanceof AgentControlError ? error.status
+          : error instanceof Error ? Number(/^agent_diagnostic_upload_http_(\d{3})$/.exec(error.message)?.[1]) : NaN;
+        if (attempt === 0 && [500, 502, 503, 504].includes(status)) continue;
+        throw new DurableProviderError("unknown", `deepseek_${stage}_${Number.isInteger(status) ? `http_${status}` : "failed"}`);
+      }
+    }
   }
 
   async restore(record: PreparedToolCall): Promise<ProxyResult> {
@@ -454,6 +471,7 @@ class MeteredProxyAdapter implements DurableToolAdapter<ProxyRequest, ProxyResul
 }
 
 export class MeteredDeepSeekProxy {
+  lastErrorCode?: string;
   private closed = false;
   private readonly server: Server;
   private readonly baseUrl: string;
@@ -498,7 +516,7 @@ export class MeteredDeepSeekProxy {
 export async function startMeteredDeepSeekProxy(options: MeteredDeepSeekProxyOptions): Promise<MeteredDeepSeekProxy> {
   const upstream = validateUpstream(options.upstream, options.allowInsecureLoopback === true);
   const maxModelTurns = options.maxModelTurns ?? DEFAULT_MAX_MODEL_TURNS;
-  if (!Number.isSafeInteger(maxModelTurns) || maxModelTurns < 1 || maxModelTurns > 16) {
+  if (!Number.isSafeInteger(maxModelTurns) || maxModelTurns < 1 || maxModelTurns > 128) {
     throw new Error("dsh_model_proxy_turn_limit_invalid");
   }
   const capabilityValue = Array.from(randomBytes(32), (byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -511,6 +529,7 @@ export async function startMeteredDeepSeekProxy(options: MeteredDeepSeekProxyOpt
   let inFlight = false;
   const distinctCalls = new Set<string>();
   const activeRequests = new Set<Promise<void>>();
+  let proxy: MeteredDeepSeekProxy;
 
   const handleRequest = async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
     if (!active) return sendJson(response, 410, "proxy_closed");
@@ -520,6 +539,16 @@ export async function startMeteredDeepSeekProxy(options: MeteredDeepSeekProxyOpt
     inFlight = true;
     try {
       const modelRequest = validateRequest(await readJson(request), upstream.model);
+      if (options.allowedToolNames && Array.isArray(modelRequest.tools)) {
+        modelRequest.tools = modelRequest.tools.filter((tool) => {
+          const name = (tool as { function?: { name?: string } })?.function?.name;
+          return typeof name === "string" && options.allowedToolNames!.includes(name);
+        });
+      }
+      if (options.maxOutputTokens !== undefined) {
+        modelRequest.max_tokens = Math.min(Number(modelRequest.max_tokens) || options.maxOutputTokens, options.maxOutputTokens);
+        if (!Number.isSafeInteger(modelRequest.max_tokens) || Number(modelRequest.max_tokens) < 1) throw new ProxyHttpError(400, "request_invalid");
+      }
       const requestHash = sha256Hex(canonicalJson(modelRequest));
       const callId = sha256Hex(canonicalJson({
         schemaVersion: 1,
@@ -544,7 +573,10 @@ export async function startMeteredDeepSeekProxy(options: MeteredDeepSeekProxyOpt
         "x-content-type-options": "nosniff",
       });
       response.end(result.body);
+      proxy.lastErrorCode = undefined;
     } catch (error) {
+      proxy.lastErrorCode = error instanceof ProxyHttpError ? error.code
+        : error instanceof DurableProviderError ? error.safeCode : "model_proxy_failed";
       if (error instanceof ProxyHttpError) sendJson(response, error.status, error.code);
       else if (error instanceof DurableProviderError) sendJson(response, durableErrorStatus(error), error.safeCode);
       else sendJson(response, 502, "model_proxy_failed");
@@ -579,11 +611,12 @@ export async function startMeteredDeepSeekProxy(options: MeteredDeepSeekProxyOpt
       await Promise.allSettled([...activeRequests]);
     }
   };
-  return new MeteredDeepSeekProxy(
+  proxy = new MeteredDeepSeekProxy(
     server,
     `http://127.0.0.1:${address.port}`,
     capabilityValue,
     deactivate,
     waitForIdle,
   );
+  return proxy;
 }

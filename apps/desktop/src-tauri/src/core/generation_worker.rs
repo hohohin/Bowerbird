@@ -29,6 +29,21 @@ use crate::error::{AppError, AppResult};
 ///（`recover_one_jimeng_job`）共用此令牌，FIFO 公平排队（恢复轮询久时新发即梦 job 等待，可接受）。
 pub static JIMENG_FLY: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(1));
 
+/// 取消覆盖等待账号名额与远端查询，返回后不再取消同步入库。
+async fn cancellable_jimeng_query<T>(
+    semaphore: &Semaphore,
+    cancel_rx: &mut Option<tokio::sync::oneshot::Receiver<()>>,
+    query: impl std::future::Future<Output = AppResult<T>>,
+) -> Option<AppResult<T>> {
+    tokio::select! {
+        result = async {
+            let _permit = semaphore.acquire().await.map_err(|e| AppError::Other(e.to_string()))?;
+            query.await
+        } => Some(result),
+        _ = async { match cancel_rx.as_mut() { Some(rx) => { let _ = rx.await; }, None => std::future::pending::<()>().await } } => None,
+    }
+}
+
 fn provider_source_tag(provider: &str) -> &'static str {
     if provider.starts_with("bowerbird-cloud") {
         // Cloud 三档变体（Pro/标准/Lite）入库 source 统一，侧栏 smart query 与徽标零特判。
@@ -39,6 +54,10 @@ fn provider_source_tag(provider: &str) -> &'static str {
             _ => "codex",
         }
     }
+}
+
+fn media_from_paths(paths: &[PathBuf]) -> &'static str {
+    if paths.iter().any(|p| p.extension().and_then(|e| e.to_str()).is_some_and(crate::media::probe::is_video)) { "video" } else { "image" }
 }
 
 fn update_creative_job_status(
@@ -116,6 +135,7 @@ pub(crate) fn recover_project_generation_projection(
                 hash: profile.hash.clone(),
             }
         }),
+        reference_node_ids: job.reference_node_ids.clone(),
         references: job.references.clone(),
         parent_node_id: job.parent_node_id.clone(),
         parent_asset_path: job.parent_asset_path.clone(),
@@ -198,6 +218,14 @@ pub async fn finalize_generation_assets(
     turn_key: Option<String>,
 ) -> AppResult<Vec<Asset>> {
     let source_tag = provider_source_tag(&provider).to_string();
+    let generation_job = generation_job_id.as_deref()
+        .map(|id| Task::by_id(&db, id)).transpose()?.flatten()
+        .and_then(|task| task.gen_job());
+    let video_options = generation_job.as_ref().and_then(|job| job.video_options.clone());
+    let reference_node_ids = generation_job.as_ref().map(|job| job.reference_node_ids.clone()).unwrap_or_default();
+    let cloud_video_remote = if provider.starts_with("bowerbird-cloud") { submit_id.clone().filter(|_| media_from_paths(&src_images) == "video") } else { None };
+    let ratio = generation_job.as_ref().and_then(|job| job.ratio.clone());
+    let media = if src_images.iter().any(|p| p.extension().and_then(|e| e.to_str()).is_some_and(crate::media::probe::is_video)) { "video" } else { "image" };
 
     // ingest + 删 temp + project link + generation_meta + caption（同步 DB 写，spawn_blocking）
     let db_b = db.clone();
@@ -252,12 +280,17 @@ pub async fn finalize_generation_assets(
             "job_id": generation_job_id,
             "turn_key": turn_key,
             "references": references,
+            "reference_node_ids": reference_node_ids,
             "dimension_sources": dimension_sources,
             "provider": provider,
             "visual_profile": visual_profile_meta,
             "visual_profile_capsule": visual_profile,
             "submit_id": submit_id,
             "codex_thread": codex_thread,
+            "media": media,
+            "media_type": media,
+            "video_options": video_options,
+            "ratio": ratio,
         })
         .to_string();
         for a in &out {
@@ -276,9 +309,18 @@ pub async fn finalize_generation_assets(
     .await
     .map_err(|e| AppError::Other(e.to_string()))??;
 
+    if let Some(remote) = cloud_video_remote {
+        let cloud = app.state::<crate::cloud::CloudClient>();
+        let auth = app.state::<crate::cloud::AuthClient>();
+        if let Some(endpoint) = cloud.config().endpoint("generate-proxy") {
+            crate::codex::bowerbird_cloud::acknowledge_artifact(&auth, &cloud, &endpoint, &remote).await;
+        }
+    }
+
     // 后台自动命名（每张生成图各跑一次，用生成 prompt 维度数据纯文本取名——codex 与
     // cloud 共用一条通路，不看图；替代 codex 默认 ig_<hash>，见 autoname）。
     for a in gen_assets.clone() {
+        if a.ext.as_deref().is_some_and(crate::media::probe::is_video) { continue; }
         crate::core::autoname::spawn_auto_name_only(app.clone(), db.clone(), a);
     }
     Ok(gen_assets)
@@ -315,16 +357,25 @@ pub fn spawn_recovery(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths
         let auth = app.state::<crate::cloud::AuthClient>().inner().clone();
         let entitlement = app.state::<crate::cloud::EntitlementService>();
         let entitlement_snapshot = entitlement.current_or_sync(&auth).await;
-        let running = match Task::list_running(&db) {
+        let mut running = match Task::list_running(&db) {
             Ok(v) => v,
             Err(e) => {
                 tracing::warn!("启动恢复：list_running 失败: {e}");
                 return;
             }
         };
+        // Local Cloud video failures remain recoverable with their original key.
+        if let Ok(tasks) = Task::list_project_generation(&db) {
+            for task in tasks {
+                if task.status != "failed" { continue; }
+                if let Some(job) = task.gen_job().filter(|job| job.media == "video" && job.provider.starts_with("bowerbird-cloud")) {
+                    if Task::claim_cloud_video_retrieval(&db,&job).unwrap_or(false) { running.push(task); }
+                }
+            }
+        }
         tracing::info!("启动恢复：list_running 扫到 {} 条未完成 job", running.len());
         for task in running {
-            let Some(job) = task.gen_job() else { continue };
+            let Some(mut job) = task.gen_job() else { continue };
             tracing::info!(
                 "恢复扫描：job={} provider={} status={} submit_id={:?}",
                 job.id,
@@ -347,7 +398,7 @@ pub fn spawn_recovery(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths
             if !matches!(
                 job.provider.as_str(),
                 "jimeng" | "dreamina" | "bowerbird-cloud"
-            ) {
+            ) && !job.provider.starts_with("bowerbird-cloud-") {
                 let _ = Task::mark_failed(&db, &job.id, "app 重启中断，codex 会话不可恢复");
                 update_creative_job_status(&app, &db, &job, "failed", None);
                 let _ = app.emit(
@@ -355,6 +406,20 @@ pub fn spawn_recovery(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths
                     serde_json::json!({ "kind": "error", "job_id": job.id, "message": "app 重启中断，codex 会话不可恢复" }),
                 );
                 continue;
+            }
+            if job.media == "video" && job.provider.starts_with("bowerbird-cloud") && job.submit_id.is_none() {
+                let cloud = app.state::<crate::cloud::CloudClient>();
+                if let Some(turn) = job.turn_key.as_deref() {
+                    match crate::codex::bowerbird_cloud::find_video_job(&cloud, &auth, &job.id, turn).await {
+                        Ok(Some(id)) => { job.submit_id = Some(id); let _ = Task::upsert_gen_job(&db, &job); }
+                        _ => {
+                            let message = "原视频提交状态待核对，不会自动重新生成";
+                            let _ = Task::mark_failed(&db,&job.id,message);
+                            let _ = app.emit("codex://chunk", serde_json::json!({ "kind": "error", "job_id": job.id, "message": message }));
+                            continue;
+                        }
+                    }
+                }
             }
             let Some(submit_id) = job.submit_id.clone() else {
                 let _ = Task::mark_failed(&db, &job.id, "重启前未拿到 submit_id，无法续查");
@@ -365,7 +430,7 @@ pub fn spawn_recovery(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths
                 );
                 continue;
             };
-            if job.provider == "bowerbird-cloud" {
+            if job.provider.starts_with("bowerbird-cloud") {
                 let (app2, db2, paths2) = (app.clone(), db.clone(), paths.clone());
                 tokio::spawn(async move {
                     recover_one_cloud_job(app2, db2, paths2, job, submit_id).await;
@@ -383,7 +448,7 @@ pub fn spawn_recovery(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths
 
 /// 续查 Bowerbird Cloud 持久任务。Cloud 任务由 VPS 独立执行，桌面重启后只需按 job_id
 /// 恢复轮询和产物下载；不会重新提交方舟请求。
-async fn recover_one_cloud_job(
+pub(crate) async fn recover_one_cloud_job(
     app: AppHandle,
     db: Arc<Database>,
     paths: Arc<LibraryPaths>,
@@ -400,6 +465,12 @@ async fn recover_one_cloud_job(
             "project_id": job.project_id,
             "thread_id": job.thread_id,
             "turn_key": job.turn_key,
+            "media": job.media,
+            "video_options": job.video_options,
+            "references": job.references,
+            "reference_node_ids": job.reference_node_ids,
+            "ratio": job.ratio,
+            "submit_id": submit_id,
         }),
     );
     job.status = "querying".into();
@@ -407,7 +478,18 @@ async fn recover_one_cloud_job(
     update_creative_job_status(&app, &db, &job, "querying", Some(&submit_id));
     let cloud = app.state::<crate::cloud::CloudClient>().inner().clone();
     let auth = app.state::<crate::cloud::AuthClient>().inner().clone();
-    match crate::codex::bowerbird_cloud::recover_cloud_generation(&cloud, &auth, &submit_id).await {
+    let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel();
+    crate::commands::codex::GENERATE_CANCEL.lock().unwrap().insert(job.id.clone(),cancel_tx);
+    let recovered = tokio::select! {
+        result = crate::codex::bowerbird_cloud::recover_cloud_generation(&cloud, &auth, &submit_id) => result,
+        _ = &mut cancel_rx => {
+            let _ = Task::mark_cancelled(&db,&job.id);
+            let _ = app.emit("codex://chunk",serde_json::json!({"kind":"error","job_id":job.id,"message":"已停止等待，可按原任务取回视频"}));
+            return;
+        }
+    };
+    crate::commands::codex::GENERATE_CANCEL.lock().unwrap().remove(&job.id);
+    match recovered {
         Ok((src_images, temp_dir)) => {
             // 会话语义（同即梦恢复）：job 死在续轮时记回会话首轮 session，不把历史撕成两段。
             let session_for_meta = job.session_id.clone().or_else(|| Some(submit_id.clone()));
@@ -426,7 +508,7 @@ async fn recover_one_cloud_job(
                 session_for_meta.clone(),
                 job.conversation_id.clone(),
                 Some(submit_id.clone()),
-                "bowerbird-cloud".to_string(),
+                job.provider.clone(),
                 job.project_id.clone(),
                 job.visual_profile.clone(),
                 None,
@@ -503,8 +585,26 @@ pub(crate) async fn recover_one_jimeng_job(
     app: AppHandle,
     db: Arc<Database>,
     paths: Arc<LibraryPaths>,
+    job: GenJob,
+    submit_id: String,
+) {
+    if job.media != "video" {
+        recover_one_jimeng_job_inner(app, db, paths, job, submit_id, None).await;
+        return;
+    }
+    let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
+    crate::commands::codex::GENERATE_CANCEL.lock().unwrap().insert(job.id.clone(), cancel_tx);
+    recover_one_jimeng_job_inner(app, db, paths, job.clone(), submit_id, Some(cancel_rx)).await;
+    crate::commands::codex::GENERATE_CANCEL.lock().unwrap().remove(&job.id);
+}
+
+async fn recover_one_jimeng_job_inner(
+    app: AppHandle,
+    db: Arc<Database>,
+    paths: Arc<LibraryPaths>,
     mut job: GenJob,
     submit_id: String,
+    mut cancel_rx: Option<tokio::sync::oneshot::Receiver<()>>,
 ) {
     // ① recover_started 自包含事件：前端据此 upsert 占位 job，防 done 早于 loadGenJobs 丢事件。
     let _ = app.emit(
@@ -517,16 +617,14 @@ pub(crate) async fn recover_one_jimeng_job(
             "project_id": job.project_id,
             "thread_id": job.thread_id,
             "turn_key": job.turn_key,
+            "media": job.media,
+            "video_options": job.video_options,
+            "ratio": job.ratio,
+            "references": job.references,
+            "submit_id": job.submit_id,
         }),
     );
     // ② 拿 permit（FIFO 公平，与正常即梦生成串行）。
-    let _permit = match JIMENG_FLY.acquire().await {
-        Ok(p) => p,
-        Err(e) => {
-            tracing::warn!("恢复 job {} 获取即梦令牌失败: {e}", job.id);
-            return;
-        }
-    };
     // ③ status=querying 落库（前端 loadGenJobs 拉到时显示「续查中」）。
     job.status = "querying".into();
     let _ = Task::upsert_gen_job(&db, &job);
@@ -534,12 +632,31 @@ pub(crate) async fn recover_one_jimeng_job(
 
     // ④ 轮询续查下载（策略 B：bounded poll loop，向下兼容 query_result 阻塞等待）。
     let binary = resolve_dreamina_binary().unwrap_or_else(|| "dreamina".to_string());
-    match poll_query_and_download(&binary, &submit_id, 30, Duration::from_secs(10)).await {
-        Ok(src_images) => {
+    let query = async {
+    if job.media == "video" {
+        crate::codex::jimeng_video::poll_video(&binary, &submit_id).await.map(|(files, dir)| (files, Some(dir)))
+    } else {
+        poll_query_and_download(&binary, &submit_id, 30, Duration::from_secs(10)).await.map(|files| {
+            let dir = files.first().and_then(|p| p.parent()).map(std::path::Path::to_path_buf);
+            (files, dir)
+        })
+    }
+    };
+    let downloaded = match cancellable_jimeng_query(&JIMENG_FLY, &mut cancel_rx, query).await {
+        Some(result) => result,
+        None => {
+            let _ = Task::mark_cancelled(&db, &job.id);
+            update_creative_job_status(&app, &db, &job, "cancelled", job.session_id.as_deref());
+            let _ = app.emit("codex://chunk", serde_json::json!({"kind":"error", "job_id":job.id, "message":"已停止本地查询；即梦远端任务可能仍在运行，可取回视频"}));
+            return;
+        }
+    };
+    if job.media == "video" {
+        crate::commands::codex::GENERATE_CANCEL.lock().unwrap().remove(&job.id);
+    }
+    match downloaded {
+        Ok((src_images, temp_dir)) => {
             tracing::info!("恢复续查成功：job={} 图={} 张", job.id, src_images.len());
-            let temp_dir = src_images
-                .first()
-                .and_then(|p| p.parent().map(|x| x.to_path_buf()));
             // 会话语义：job 死在续轮时 task_queue 已有会话首轮 session（即梦首轮 submit_id），
             // meta/done 都要记回该 session（记成本轮自己的 submit_id 会把会话历史撕裂成两段，
             // 前端回看/重启恢复只剩半截）；死在首轮则本轮 submit_id 即会话 id。
@@ -620,7 +737,7 @@ pub(crate) async fn recover_one_jimeng_job(
             let msg = e.to_string();
             tracing::info!("恢复续查未完成：job={} err={}", job.id, msg);
             // 远端仍排队中（querying/未下载到图/轮询超时）→ 保持 running + 提示；真失败 mark_failed。
-            if msg.contains("排队") || msg.contains("querying") || msg.contains("未下载到图片")
+            if job.media != "video" && (msg.contains("排队") || msg.contains("querying") || msg.contains("未下载到图片"))
             {
                 let _ = app.emit(
                     "codex://chunk",
@@ -729,6 +846,32 @@ fn known_submit_ids(db: &Arc<Database>) -> AppResult<std::collections::HashSet<S
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn video_recovery_cancel_before_permit_never_starts_query() {
+        let semaphore = Semaphore::new(0);
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let mut cancel = Some(rx);
+        tx.send(()).unwrap();
+        let result = cancellable_jimeng_query(&semaphore, &mut cancel, async {
+            panic!("query must not run while queued");
+            #[allow(unreachable_code)] Ok::<(), AppError>(())
+        }).await;
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn video_recovery_cancel_drops_query_and_releases_permit() {
+        let semaphore = Semaphore::new(1);
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let mut cancel = Some(rx);
+        let result = cancellable_jimeng_query(&semaphore, &mut cancel, async {
+            tx.send(()).unwrap();
+            std::future::pending::<AppResult<()>>().await
+        }).await;
+        assert!(result.is_none());
+        assert_eq!(semaphore.available_permits(), 1);
+    }
+
     #[test]
     fn cloud_provider_keeps_own_source_tag() {
         assert_eq!(provider_source_tag("bowerbird-cloud"), "bowerbird-cloud");
@@ -748,6 +891,7 @@ mod tests {
             status: "failed".into(),
             prompt: String::new(),
             applied_prompt: None,
+            reference_node_ids: vec![],
             references: vec![],
             session_id: None,
             conversation_id: None,
@@ -820,6 +964,7 @@ mod tests {
             status: "done".into(),
             prompt: "生成一张海报".into(),
             applied_prompt: Some("完整生成指令".into()),
+            reference_node_ids: vec![],
             references: vec![],
             session_id: Some("provider-session-1".into()),
             conversation_id: Some("conversation-1".into()),
@@ -981,6 +1126,7 @@ mod tests {
             status: "running".into(),
             prompt: "继续生成".into(),
             applied_prompt: Some("继续生成".into()),
+            reference_node_ids: vec![],
             references: vec![],
             session_id: None,
             conversation_id: Some("conversation-exact-parent".into()),
@@ -1046,6 +1192,7 @@ mod tests {
             status: "running".into(),
             prompt: "生成一张海报".into(),
             applied_prompt: Some("完整生成指令".into()),
+            reference_node_ids: vec![],
             references: vec![],
             session_id: None,
             conversation_id: Some("conversation-1".into()),

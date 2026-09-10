@@ -193,5 +193,20 @@ function normalizeUnifiedPlan(plan: JsonRecord): CloudAgentPlanDisplay | null {
 export function cloudAgentPlanDisplay(value: unknown): CloudAgentPlanDisplay | null {
   const plan = record(value);
   if (!plan) return null;
+  if (plan.schemaVersion === 3) {
+    const title = text(plan.title), summary = text(plan.summary);
+    const count = plan.outputCount, turns = plan.modelTurns;
+    if (!title || !summary || !Number.isSafeInteger(count) || Number(count) < 1 ||
+        !Number.isSafeInteger(turns) || Number(turns) < 1 || !Array.isArray(plan.capabilities)) return null;
+    const capabilities = records(plan.capabilities);
+    if (!capabilities.length || capabilities.some((item) => !TOOL_LABELS[String(item.tool)] || !Number.isSafeInteger(item.maxCalls) || Number(item.maxCalls) < 1)) return null;
+    return { title, summary, strategyLabel: "按目标自主执行",
+      references: strings(plan.assetIds).map((id) => ({ key: id, label: id })),
+      sections: [{ key: "output", label: `交付 ${count} 张图片` },
+        { key: "scope", label: "Agent 可根据结果调整顺序与方法；以下均为消耗上限。" },
+        { key: "model", label: `最多 ${turns} 次模型调用` }], missingAssets: [],
+      steps: capabilities.map((item) => ({ id: String(item.tool), goal: `${TOOL_LABELS[String(item.tool)]}最多 ${item.maxCalls} 次`, details: [] })),
+    };
+  }
   return "intentSummary" in plan ? normalizeLegacyPlan(plan) : normalizeUnifiedPlan(plan);
 }

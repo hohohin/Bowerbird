@@ -16,6 +16,7 @@ import {
   resolveProjectFocusNode,
   resolveProjectFocusThread,
   summarizeProjectActivity,
+  supersededProjectTaskIds,
   taskCenterAgentRuns,
   taskCenterGenerationJobs,
 } from "../src/lib/projectActivity.ts";
@@ -46,6 +47,28 @@ test("canvas thread focus subdues only nodes owned by another thread", () => {
   assert.equal(isOutsideFocusedThread("t1", "t1"), false);
   assert.equal(isOutsideFocusedThread(null, "t1"), false);
   assert.equal(isOutsideFocusedThread("t2", null), false);
+});
+
+test("only retry and edit successors subdue their source task, preserving independent cards and images", () => {
+  const nodes = [
+    { id: "old", kind: "prompt", threadId: "t1" },
+    { id: "image", kind: "asset", threadId: "t1" },
+    { id: "next", kind: "prompt", threadId: "t1" },
+    { id: "independent", kind: "prompt", threadId: "t2" },
+  ];
+  const produced = { fromNodeId: "old", toNodeId: "image", kind: "produced" };
+  for (const kind of ["retry", "branch"]) {
+    const edges = [produced, { fromNodeId: "image", toNodeId: "next", kind }];
+    assert.deepEqual([...supersededProjectTaskIds(nodes, edges)], ["old"]);
+    assert.deepEqual([...supersededProjectTaskIds(nodes.map((node) =>
+      node.id === "next" ? { ...node, hiddenAt: 1 } : node), edges)], []);
+  }
+  for (const kind of ["input", "continued"]) {
+    assert.deepEqual([...supersededProjectTaskIds(nodes, [produced,
+      { fromNodeId: "image", toNodeId: "next", kind }])], []);
+  }
+  assert.deepEqual([...supersededProjectTaskIds(nodes, [produced,
+    { fromNodeId: "image", toNodeId: "independent", kind: "retry" }])], []);
 });
 
 test("unread thread sets are idempotent and project scoped", () => {

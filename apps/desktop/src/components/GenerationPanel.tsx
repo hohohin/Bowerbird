@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { ChevronLeft, ChevronRight } from "lucide-react";
+import { DEFAULT_VIDEO_OPTIONS, videoInputError, videoProvider, type VideoOptions } from "../lib/videoGeneration";
+import { VideoControls } from "./creation/VideoControls";
+import { MediaPreview } from "./MediaPreview";
 import { useStore, type GenEditingMode } from "../store";
 import { api } from "../lib/api";
 import { generationParentLocator } from "../lib/creativeGeneration";
@@ -236,6 +239,10 @@ export function GenerationPanel({
   // retryLastGenTurn（移除失败轮原位顶替）；其余轮 = 追加重发——参考图**精确重放**该轮
   // 当时实际下发的完整列表（含当时的基图，非会话最新产出），prompt 原样。
   function retryTurn(turn: GenTurn) {
+    if (activeJob && turn.error && (turn.media ?? activeJob.media) === "video" && (turn.provider ?? activeJob.provider).startsWith("bowerbird-cloud")) {
+      void api.recoverCloudVideo(activeJob.id).catch(error => notifyError(error, "原视频取回失败"));
+      return;
+    }
     if (running || !activeJob?.sessionId) return;
     const isLast = activeJob.turns[activeJob.turns.length - 1]?.id === turn.id;
     if (turn.error && isLast) {
@@ -250,9 +257,12 @@ export function GenerationPanel({
         : "codex";
     const parent = generationParentLocator(activeJob.id, activeJob.turns, assets, { beforeTurnId: turn.id });
     void sendGenRevise(activeJob.id, turn.prompt, provider, {
+      generation: { media: turn.media ?? activeJob.media, videoOptions: turn.videoOptions ?? activeJob.videoOptions },
+      ratio: turn.ratio ?? activeJob.lastRatio,
       rawPrompt: turn.promptRaw ?? undefined,
       references: turn.refAssets,
-      exactReferences: turn.refs?.length ? turn.refs : undefined,
+      referenceNodeIds: turn.referenceNodeIds,
+      exactReferences: (turn.media ?? activeJob.media) === "video" ? turn.refs ?? turn.refAssets?.flatMap((asset) => asset.store_path ? [asset.store_path] : []) ?? activeJob.lastRefs : turn.refs?.length ? turn.refs : undefined,
       parentNodeId: parent.nodeId,
       parentAssetPath: parent.storePath,
       creativeRelation: "retry",
@@ -264,21 +274,26 @@ export function GenerationPanel({
   function retryFirstTurn() {
     if (running || !activeJob) return;
     const first = activeJob.turns[0];
+    if (first?.error && (first.media ?? activeJob.media) === "video" && (first.provider ?? activeJob.provider).startsWith("bowerbird-cloud")) {
+      void api.recoverCloudVideo(activeJob.id).catch(error => notifyError(error, "原视频取回失败"));
+      return;
+    }
     const parent = generationParentLocator(
       activeJob.id,
       activeJob.turns,
       assets,
       first ? { atTurnId: first.id } : {},
     );
-    const provider = isCloudProvider(activeJob.provider)
-      ? canonicalProviderKey(activeJob.provider)
-      : activeJob.provider === "jimeng"
+    const firstProvider = first?.provider ?? activeJob.provider;
+    const provider = isCloudProvider(firstProvider)
+      ? canonicalProviderKey(firstProvider)
+      : firstProvider === "jimeng"
         ? "jimeng"
         : "codex";
     void startGeneration(
       first?.prompt ?? activeJob.lastPrompt,
       activeJob.refAssets,
-      activeJob.lastRatio,
+      first?.ratio ?? activeJob.lastRatio,
       provider,
       first?.promptRaw ?? undefined,
       activeJob.conversationId ?? activeJob.id,
@@ -292,8 +307,11 @@ export function GenerationPanel({
             parentNodeId: parent.nodeId,
             parentAssetPath: parent.storePath,
             relation: "retry",
+            referenceNodeIds: first?.referenceNodeIds,
           }
         : undefined,
+      false,
+      { media: first?.media ?? activeJob.media, videoOptions: first?.videoOptions ?? activeJob.videoOptions },
     ).catch(console.error);
   }
 
@@ -585,7 +603,7 @@ export function GenerationPanel({
                   setLightbox({ images: refLightboxImages, index: r })
                 }
                 onOpenTurnRefs={(imgs, i) => setLightbox({ images: imgs, index: i })}
-                onAgentRetry={readOnly ? undefined : () => retryWithAgent(turn)}
+                onAgentRetry={readOnly || (turn.media ?? activeJob.media) === "video" ? undefined : () => retryWithAgent(turn)}
                 onRetry={() => retryLastGenTurn(assets)}
                 canRetry={!readOnly && targetReady && !running}
                 retryReason={readOnly ? "旧会话回退只读；请完成迁移后在创作中继续" : lockedReason}
@@ -605,7 +623,7 @@ export function GenerationPanel({
             onClick={() => cancelGeneration()}
             className="w-full rounded-md border border-edge bg-panel2 px-3 py-2 text-sm font-semibold text-ink hover:text-red-300"
           >
-            取消生成
+            {activeJob?.media === "video" ? "停止本地查询（远端可能仍在生成并已扣费）" : "取消生成"}
           </button>
         ) : activeJob?.sessionId ? (
           <div className="space-y-1">
@@ -619,7 +637,7 @@ export function GenerationPanel({
               className="w-full rounded bg-panel2 px-2.5 py-2 text-left text-xs text-muted ring-1 ring-edge transition-colors hover:text-ink hover:ring-accent"
               title="像创作板一样组稿：点瀑布流图片插入参考图；发送后图片接在会话下方"
             >
-              继续对话——提修改意见（如：背景改成白天、去掉霓虹…），或点瀑布流图片加参考图
+              {activeJob.media === "video" ? "继续创作视频——请明确选择参考素材，每次发送会创建新的即梦视频任务" : "继续对话——提修改意见（如：背景改成白天、去掉霓虹…），或点瀑布流图片加参考图"}
             </button>
           </div>
         ) : (
@@ -628,6 +646,13 @@ export function GenerationPanel({
               ? lockedReason
               : "🎨 在创作板点「✓ 发送」开始一个生成会话；出图后可在此继续对话迭代。"}
           </div>
+        )}
+        {!readOnly && !running && activeJob?.media === "video" && (activeJob.submitId || isCloudProvider(activeJob.provider)) && activeJob.turns[activeJob.turns.length - 1]?.error && (
+          <button type="button" disabled={!targetReady} className="mt-2 w-full rounded border border-accent px-3 py-2 text-xs text-accent disabled:opacity-40"
+            onClick={() => void (isCloudProvider(activeJob.provider) ? api.recoverCloudVideo(activeJob.id) : api.jimengRetrieveOrphan(activeJob.submitId!, activeJob.lastPrompt, activeJob.id))
+              .then(() => useStore.getState().loadGenJobs()).catch((error) => notifyError(error, "取回视频失败"))}>
+            取回已提交的视频（继续查询，不重新生成）
+          </button>
         )}
       </div>
           </div>
@@ -752,7 +777,7 @@ function TurnView({
                 className="cursor-zoom-in"
                 aria-label={`放大参考图 ${j + 1}`}
               >
-                <img
+                <MediaPreview
                   src={convertFileSrc(t.src)}
                   alt={t.name}
                   draggable={false}
@@ -873,7 +898,7 @@ function TurnView({
                     className="mx-auto block w-fit cursor-zoom-in"
                     title="点击放大"
                   >
-                    <img
+                    <MediaPreview
                       src={convertFileSrc(p)}
                       alt=""
                       draggable={false}
@@ -1072,7 +1097,12 @@ function GenEditComposer({
   const startGeneration = useStore((s) => s.startGeneration);
   const sendGenRevise = useStore((s) => s.sendGenRevise);
   const setBoardActive = useStore((s) => s.setBoardActive);
-  const activeGenProvider = useStore((s) => s.activeGenProvider);
+  const selectedProvider = useStore((s) => s.activeGenProvider);
+  const sourceTurn = preloadTurn ?? (isRevise ? job.turns[job.turns.length - 1] : job.turns[0]);
+  const isVideo = (sourceTurn?.media ?? job.media) === "video";
+  const [videoOptions, setVideoOptions] = useState<VideoOptions>(sourceTurn?.videoOptions ?? job.videoOptions ?? DEFAULT_VIDEO_OPTIONS);
+  const [videoChannel, setVideoChannel] = useState<"jimeng" | "cloud">((sourceTurn?.provider ?? job.provider).startsWith("bowerbird-cloud") ? "cloud" : "jimeng");
+  const activeGenProvider = isVideo ? videoProvider(videoChannel, videoOptions) : selectedProvider;
   const setActiveGenProvider = useStore((s) => s.setActiveGenProvider);
   const defaultProvider = useStore((s) => s.defaultProvider);
   const setDefaultProvider = useStore((s) => s.setDefaultProvider);
@@ -1089,6 +1119,7 @@ function GenEditComposer({
     finalPrompt,
     rawPrompt,
     references,
+    referenceNodeIds,
     dimensionSources,
     graphSources,
     agentPromptReferences,
@@ -1099,15 +1130,15 @@ function GenEditComposer({
     consumePendingKeyword: true,
   });
   // 比例初值取会话首轮的值；编辑坞内改动不持久化（创作板有自己的记忆）。
-  const [ratio, setRatio] = useState<string | null>(job.lastRatio ?? null);
+  const [ratio, setRatio] = useState<string | null>(sourceTurn?.ratio ?? job.lastRatio ?? null);
   // Agent 方案开关（与创作板同款三态）：off = 直发；a = 方案A（子句挑选）；b = 方案B（skill 审查修复）。
   const [agentMode, setAgentMode] = useState<"off" | "a" | "b">("off");
   const [agentAvailable, setAgentAvailable] = useState(false);
   const [agentBusy, setAgentBusy] = useState(false);
   const composerIntentTokenRef = useRef(0);
   // 设置「开发者选项」的对话框模式开关（与创作板同款默认：A/B 关闭即不渲染）。
-  const agentAOn = settings?.agent_a_mode_enabled ?? false;
-  const agentBOn = settings?.agent_b_mode_enabled ?? false;
+  const agentAOn = !isVideo && (settings?.agent_a_mode_enabled ?? false);
+  const agentBOn = !isVideo && (settings?.agent_b_mode_enabled ?? false);
 
   useEffect(() => () => {
     composerIntentTokenRef.current += 1;
@@ -1121,10 +1152,11 @@ function GenEditComposer({
 
   // provider 初值 = 该会话的 provider（进入编辑时同步当前选择，坞内可再切换；遗留 cloud key 归一化）。
   useEffect(() => {
-    const initial = isCloudProvider(job.provider)
-      ? canonicalProviderKey(job.provider)
-      : job.provider === "jimeng"
-        ? job.provider
+    const sourceProvider = sourceTurn?.provider ?? job.provider;
+    const initial = isCloudProvider(sourceProvider)
+      ? canonicalProviderKey(sourceProvider)
+      : sourceProvider === "jimeng"
+        ? sourceProvider
         : "codex";
     setActiveGenProvider(initial);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1188,7 +1220,7 @@ function GenEditComposer({
     const t = setTimeout(() => {
       window.dispatchEvent(
         new CustomEvent("bowerbird://board-load-prompt", {
-          detail: { prompt: raw, refs },
+          detail: { prompt: raw, refs, referenceNodeIds: refs.map(asset => { const turn = src ?? job.turns[0]; const index = (turn?.refs ?? turn?.refAssets?.map(a => a.store_path) ?? []).indexOf(asset.store_path); return turn?.referenceNodeIds?.[index] ?? null; }) },
         }),
       );
     }, 0);
@@ -1200,6 +1232,10 @@ function GenEditComposer({
   async function send() {
     // 续轮复用同 job（无新并行槽占用）；重新编辑开新 job 需过并行上限门。
     if (!finalPrompt || !targetReady || agentBusy || (!isRevise && !canStart)) return;
+    if (isVideo) {
+      const error = videoInputError(videoOptions, references, ratio, activeGenProvider);
+      if (error) { notifyError(error, "视频参数无效"); return; }
+    }
     const intent: GenerationComposerIntent = {
       token: ++composerIntentTokenRef.current,
       jobId: job.id,
@@ -1251,7 +1287,7 @@ function GenEditComposer({
       // 轮级「编辑」预载的发送 = 精确重放：基图固定为该轮**当时**自动带入的参考图
       // （turn.refs 去掉当时 chips 的部分），与编辑器当前 chips 合成完整列表——编辑第 N
       // 轮时基图仍是第 N 轮的基图，不会漂移成会话最新产出。
-      const exactRefs = preloadTurn?.refs?.length
+      const exactRefs = !isVideo && preloadTurn?.refs?.length
         ? Array.from(
             new Set([
               ...preloadTurn.refs.filter(
@@ -1268,10 +1304,12 @@ function GenEditComposer({
         preloadTurn ? { beforeTurnId: preloadTurn.id } : {},
       );
       void sendGenRevise(job.id, prompt, activeGenProvider, {
+        generation: { media: isVideo ? "video" : "image", videoOptions: isVideo ? videoOptions : null, videoChannel },
         rawPrompt,
         references,
         ratio,
         exactReferences: exactRefs,
+        referenceNodeIds: (exactRefs ?? references.map(a => a.store_path)).map(path => { const index = references.findIndex(a => a.store_path === path); return index >= 0 ? referenceNodeIds[index] ?? null : preloadTurn?.referenceNodeIds?.[preloadTurn.refs?.indexOf(path!) ?? -1] ?? null; }),
         parentNodeId: parent.nodeId,
         parentAssetPath: parent.storePath,
         creativeRelation: preloadTurn ? "branch" : "continued",
@@ -1304,8 +1342,11 @@ function GenEditComposer({
               parentNodeId: parent.nodeId,
               parentAssetPath: parent.storePath,
               relation: "branch",
+              referenceNodeIds,
             }
           : undefined,
+        false,
+        { media: isVideo ? "video" : "image", videoOptions: isVideo ? videoOptions : null, videoChannel },
       ).catch(console.error);
     }
   }
@@ -1351,7 +1392,7 @@ function GenEditComposer({
                 className="block w-fit cursor-zoom-in"
                 aria-label={`放大上次结果 ${k + 1}`}
               >
-                <img
+                <MediaPreview
                   src={convertFileSrc(p)}
                   alt=""
                   draggable={false}
@@ -1395,11 +1436,12 @@ function GenEditComposer({
         ref={hostRef}
         onClick={focus}
         data-tour="creation-editor"
-        className="creation-editor min-h-16 max-h-56 cursor-text overflow-y-auto rounded-lg bg-black/30 px-3 py-2 text-sm leading-8 text-ink focus-within:ring-1 focus-within:ring-accent/70"
+        className="creation-editor generation-input min-h-16 max-h-56 cursor-text overflow-y-auto px-3 py-2 text-sm leading-8 text-ink"
       />
       {/* 编辑框内 chip 的交互浮层（hover 放大图/维度正文 + 点击定位瀑布流） */}
       <BoardChipPreview hostRef={hostRef} />
-      <div className="mt-2 flex flex-wrap items-center gap-2">
+      <div className="generation-toolbar flex flex-wrap items-center gap-2">
+          {isVideo ? <VideoControls channel={videoChannel} onChannelChange={channel => { setVideoChannel(channel); if (channel === "jimeng" && videoOptions.video_resolution === "1080p") setVideoOptions({ ...videoOptions, video_resolution: "720p" }); }} options={videoOptions} onChange={setVideoOptions} ratio={ratio} onRatioChange={setRatio} /> : <>
           <RatioSelect value={ratio} onChange={setRatio} />
           <ProviderSelect
             value={activeGenProvider}
@@ -1412,6 +1454,7 @@ function GenEditComposer({
             defaultProvider={defaultProvider}
             onSetDefaultProvider={setDefaultProvider}
           />
+          </>}
           {/* Agent 方案开关（A/B 互斥，与创作板同款）：本机 Agent 可用且「开发者选项」
               未关闭时渲染——release 包中 health 命令被后端门控拒绝，开关不出现。 */}
           {agentAvailable && (agentAOn || agentBOn) && (
@@ -1424,11 +1467,11 @@ function GenEditComposer({
                   disabled={agentBusy}
                   onClick={() => setAgentMode((mode) => (mode === "a" ? "off" : "a"))}
                   title="方案A（子句挑选）：Agent 按你的意图从参考图维度原文中挑选子句，确定性拼合后再发送"
-                  className={`generation-glow-button flex h-7 items-center rounded-[3px] px-2.5 text-xs font-medium disabled:opacity-40 ${
+                  className={`generation-mode-button flex h-7 items-center rounded-[3px] px-2.5 text-xs font-medium disabled:opacity-40 ${
                     agentMode === "a" ? "" : "is-off"
                   }`}
                 >
-                  <span className="generation-glow-button__content gap-1.5">
+                  <span className="generation-button-content gap-1.5">
                     <span className={`h-2 w-2 rounded-full ${agentMode === "a" ? "bg-lime" : "bg-muted/50"}`} />
                     Agent A
                   </span>
@@ -1442,11 +1485,11 @@ function GenEditComposer({
                   disabled={agentBusy}
                   onClick={() => setAgentMode((mode) => (mode === "b" ? "off" : "b"))}
                   title="方案B（skill 审查）：Agent 按官方 skill 审查并修复展开后的完整 prompt，再发送"
-                  className={`generation-glow-button flex h-7 items-center rounded-[3px] px-2.5 text-xs font-medium disabled:opacity-40 ${
+                  className={`generation-mode-button flex h-7 items-center rounded-[3px] px-2.5 text-xs font-medium disabled:opacity-40 ${
                     agentMode === "b" ? "" : "is-off"
                   }`}
                 >
-                  <span className="generation-glow-button__content gap-1.5">
+                  <span className="generation-button-content gap-1.5">
                     <span className={`h-2 w-2 rounded-full ${agentMode === "b" ? "bg-lime" : "bg-muted/50"}`} />
                     Agent B
                   </span>
@@ -1480,7 +1523,7 @@ function GenEditComposer({
               onClick={() => void send()}
               disabled={sendDisabled}
               title={sendTitle}
-              className="flex items-center gap-1.5 rounded bg-accent px-4 py-1.5 text-xs font-semibold text-black disabled:opacity-50"
+              className="generation-send-button"
             >
               <Send size={12} />
               {agentBusy ? "Agent 整理中…" : "发送"}
