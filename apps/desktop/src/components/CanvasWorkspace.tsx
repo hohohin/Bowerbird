@@ -4,6 +4,7 @@ import { newReferencesForCanvasCard, placeNewCanvasReferences, trackNewCanvasRef
 import { isVideoPath } from "../lib/videoGeneration";
 import {
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -29,6 +30,8 @@ import {
   Maximize2,
   Minus,
   Move,
+  PanelLeftClose,
+  PanelLeftOpen,
   Plus,
   Sparkles,
   Trash2,
@@ -118,6 +121,7 @@ import {
 } from "../lib/creativeLaunch";
 import { createOrderedWriteJournal, drainOrderedWriteJournal } from "../lib/orderedWriteJournal";
 import { useStore } from "../store";
+import { EXPLORER_CANVAS_DROP_EVENT, type ExplorerCanvasDropDetail } from "../lib/explorerCanvasDrop";
 import type {
   Asset,
   CanvasGroup,
@@ -425,6 +429,7 @@ function ProjectInspectorShell({
 
 export function CanvasWorkspace({
   projectId,
+  exploring = false,
   focusThreadId = null,
   focusNodeId = null,
   focusRequestId = null,
@@ -434,6 +439,7 @@ export function CanvasWorkspace({
   onExit,
 }: {
   projectId: string | null;
+  exploring?: boolean;
   focusThreadId?: string | null;
   focusNodeId?: string | null;
   focusRequestId?: string | null;
@@ -486,6 +492,8 @@ export function CanvasWorkspace({
   const [viewMode, setViewMode] = useState<CreativeViewMode>("canvas");
   const [composerSeedIds, setComposerSeedIds] = useState<string[]>([]);
   const [sourceWidth, setSourceWidth] = useState(360);
+  const [sourceCollapsed, setSourceCollapsed] = useState(exploring);
+  const sourcePanelId = useId();
   const [sourceThumbnailScale, setSourceThumbnailScale] = useState(readCanvasSourceThumbnailScale);
   const [sourceScope, setSourceScope] = useState<CanvasSourceScope>(() => project?.provisional ? "library" : "project");
   const [librarySourceAssets, setLibrarySourceAssets] = useState<Asset[]>([]);
@@ -1503,8 +1511,16 @@ export function CanvasWorkspace({
   }, [focusNodeId, focusRequestId, focusThreadId, graphNodes, graphEdges, loadFailed, loading, onFocusConsumed, projectId, threads]);
 
   useEffect(() => {
+    if (exploring) {
+      setSourceCollapsed(true);
+      resizeRef.current = null;
+      setSourceResizing(false);
+    }
+  }, [exploring]);
+
+  useEffect(() => {
     const workspace = workspaceRef.current;
-    if (!workspace) return;
+    if (!workspace || sourceCollapsed) return;
     const observer = new ResizeObserver(([entry]) => {
       const width = entry.contentRect.width;
       const min = Math.min(240, width * 0.42);
@@ -1519,7 +1535,7 @@ export function CanvasWorkspace({
     });
     observer.observe(workspace);
     return () => observer.disconnect();
-  }, []);
+  }, [sourceCollapsed]);
 
   useEffect(() => {
     if (!sourceResizing) return;
@@ -2043,6 +2059,41 @@ export function CanvasWorkspace({
       if (positions.has(node.id) && (node.kind === "prompt" || node.kind === "agent_group")) persistGraphNodeGeometry(node);
     }
   }
+
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    function prepareDrop(event: Event) {
+      const detail = (event as CustomEvent<ExplorerCanvasDropDetail>).detail;
+      if (loadingRef.current || viewModeRef.current !== "canvas"
+        || detail.projectId !== activeCanvasRef.current.id || useStore.getState().projectRoutePending) return;
+      const projectId = detail.projectId;
+      const point = toBoardPoint(detail.clientX, detail.clientY);
+      const order = nodesRef.current.reduce((max, node) => Math.max(max, node.order), 0) + 1;
+      detail.place = async (asset) => {
+        const snapshot = createCanvasAssetSnapshot(asset, canvasId("asset"));
+        const size = assetNodeSize(snapshot);
+        const node: CanvasAssetNode = {
+          kind: "asset", id: snapshot.id, asset: snapshot,
+          x: point.x - size.width / 2, y: point.y - size.height / 2,
+          ...size, order,
+        };
+        // Capture already materialized this project. Persist to the frozen ID
+        // even if another project is now visible, without moving the viewport.
+        await enqueueWrite(async () => {
+          await api.projectCanvasNodeCreate(newProjectCanvasAssetNode(projectId, node));
+          const route = useStore.getState();
+          if (stage?.isConnected && activeCanvasRef.current.id === projectId
+            && route.activeProjectId === projectId && !route.projectRoutePending) {
+            commitNodes([...nodesRef.current.filter(existing => existing.id !== node.id), node]);
+          }
+        });
+        if (writeJournalRef.current.failure != null) throw writeJournalRef.current.failure;
+      };
+    }
+    stage.addEventListener(EXPLORER_CANVAS_DROP_EVENT, prepareDrop);
+    return () => stage.removeEventListener(EXPLORER_CANVAS_DROP_EVENT, prepareDrop);
+  }, []);
 
   function openCanvasNodeMenu(event: React.MouseEvent<HTMLElement>, nodeId: string, node: ProjectGraphNode | null = null) {
     event.preventDefault();
@@ -2994,10 +3045,35 @@ export function CanvasWorkspace({
       ref={workspaceRef}
       className={`canvas-workspace${loading || projectRoutePending ? " is-route-pending" : ""}`}
       aria-busy={loading || projectRoutePending}
-      style={{ gridTemplateColumns: `${sourceWidth}px 7px minmax(0, 1fr)` }}
+      style={{ gridTemplateColumns: sourceCollapsed ? "36px minmax(0, 1fr)" : `${sourceWidth}px 7px minmax(0, 1fr)` }}
     >
-      <aside className="canvas-source-panel">
+      <aside id={sourcePanelId} className="canvas-source-panel" aria-label="画板素材库">
+        {sourceCollapsed && <button
+          type="button"
+          className="canvas-source-toggle canvas-source-expand"
+          aria-label="展开画板素材库"
+          title="展开素材库"
+          aria-expanded={false}
+          aria-controls={`${sourcePanelId}-content`}
+          onClick={() => {
+            setSourceCollapsed(false);
+            requestAnimationFrame(() => workspaceRef.current?.querySelector<HTMLButtonElement>(".canvas-source-collapse")?.focus());
+          }}
+        ><PanelLeftOpen size={14} /><span>素材库</span></button>}
+        <div id={`${sourcePanelId}-content`} className="canvas-source-content" hidden={sourceCollapsed}>
         <div className="canvas-source-header">
+          <button
+            type="button"
+            className="canvas-source-toggle canvas-source-collapse"
+            aria-label="收起画板素材库"
+            title="收起素材库"
+            aria-expanded={true}
+            aria-controls={`${sourcePanelId}-content`}
+            onClick={() => {
+              setSourceCollapsed(true);
+              requestAnimationFrame(() => workspaceRef.current?.querySelector<HTMLButtonElement>(".canvas-source-expand")?.focus());
+            }}
+          ><PanelLeftClose size={14} /></button>
           <div>
             <span className="panel-kicker">素材来源</span>
             <div className="canvas-source-tabs" role="tablist" aria-label="画板素材来源">
@@ -3097,10 +3173,12 @@ export function CanvasWorkspace({
             />
           )}
         </div>
+        </div>
       </aside>
 
       <div
         className={`canvas-source-resizer ${sourceResizing ? "is-active" : ""}`}
+        hidden={sourceCollapsed}
         role="separator"
         aria-label="调整素材面板宽度"
         aria-orientation="vertical"

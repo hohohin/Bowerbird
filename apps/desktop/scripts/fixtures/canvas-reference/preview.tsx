@@ -3,20 +3,26 @@ import { createRoot } from "react-dom/client";
 import { CanvasWorkspace } from "../../../src/components/CanvasWorkspace";
 import { AssetContextMenu } from "../../../src/components/AssetContextMenu";
 import { useStore } from "../../../src/store";
+import { ExploreWorkspace } from "../../../src/components/ExploreWorkspace";
+import { ToastViewport } from "../../../src/components/ToastViewport";
 import "../../../src/styles.css";
 
 // Closed synthetic IPC fixture: never reads a library or invokes a provider.
 const w = window as any;
+const explorer = new URLSearchParams(location.search).has("explorer");
+w.store = useStore;
 const callbacks = new Map();
 const listeners = new Map();
 const project = { id: "p", name: "引用布局合成验收", kind: "blank", workspace_path: "blank:p", asset_count: 5,
   title_source: "manual", created_at: 1, updated_at: 1 };
+if (explorer && new URLSearchParams(location.search).has("provisional")) Object.assign(project, { provisional: true, title_source: "default" });
 const canvas = { projectId: "p", draftJson: "{}", createdAt: 1, updatedAt: 1 };
 const base = { projectId: "p", threadId: "t", hiddenAt: null, positionLocked: false, createdAt: 1, updatedAt: 1,
   width: 190, height: 180, zIndex: 1, role: "reference", kind: "asset", assetId: "existing" };
 const image = (color: string) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="190" height="150"><rect width="190" height="150" fill="${color}"/></svg>`)}`;
 const assets = ["existing", "a", "b", "c", "d"].map((id, i) => ({ id, name: `合成参考 ${id}`, width: 190, height: 150,
   store_path: image(["#64748b", "#0369a1", "#4f46e5", "#0d9488", "#9333ea"][i]), source: "imported" }));
+if (explorer) assets.push({ ...assets[1], id: "collected", name: "网页采集图片", source: "extension" });
 const payload = (id: string) => JSON.stringify({ schema_version: 1, snapshot: { name: `合成参考 ${id}`, width: 190, height: 150 } });
 let snapshot = JSON.parse(sessionStorage.getItem("reference-fixture") || "null") || {
   canvas, nodes: [{ ...base, id: "old", x: 400, y: 300, payloadJson: payload("existing") },
@@ -56,8 +62,19 @@ w.__TAURI_INTERNALS__ = {
   invoke: async (command: string, args: any) => {
     w.calls.push({ command, args });
     if (command === "plugin:event|listen") { listeners.set(args.handler, args.event); return args.handler; }
-    if (command === "list_projects") return [project];
-    if (command === "project_canvas_get") return structuredClone(snapshot);
+    if (command === "list_projects") return explorer ? [project, { ...project, id: "q", name: "另一个项目" }] : [project];
+    if (command === "project_canvas_get") return args.projectId === "q"
+      ? { ...structuredClone(snapshot), canvas: { ...canvas, projectId: "q" }, nodes: [], edges: [], groups: [], groupItems: [], threads: [], view: null }
+      : structuredClone(snapshot);
+    if (command === "capture_source_browser_image") {
+      if (w.holdCapture) await new Promise(resolve => { w.releaseCapture = resolve; });
+      if (w.failCapture) throw "模拟采集失败";
+      return assets.find(asset => asset.id === "collected");
+    }
+    if (command === "project_canvas_node_create") {
+      const node = { ...args.value, hiddenAt: null, createdAt: 10, updatedAt: 10 };
+      snapshot.nodes.push(node); return node;
+    }
     if (command === "project_canvas_node_update") {
       const node = snapshot.nodes.find((n: any) => n.id === args.nodeId);
       Object.assign(node, args.value); return structuredClone(node);
@@ -76,5 +93,15 @@ w.__TAURI_INTERNALS__ = {
   },
 };
 w.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
-useStore.setState({ projects: [project] as any, activeProjectId: "p", assets: assets as any, boardOpen: false, settings: {} as any });
-createRoot(document.getElementById("root")!).render(<div className="app-shell" style={{ display: "flex", height: "100vh" }}><CanvasWorkspace projectId="p" /><AssetContextMenu /></div>);
+useStore.setState({ projects: (explorer ? [project, { ...project, id: "q", name: "另一个项目" }] : [project]) as any, activeProjectId: "p", assets: assets as any, boardOpen: false, settings: {} as any });
+function Fixture() {
+  const projectId = useStore(state => state.activeProjectId)!;
+  const [exploring, setExploring] = React.useState(explorer);
+  w.setExploring = setExploring;
+  const canvas = <CanvasWorkspace key={projectId} projectId={projectId} exploring={exploring} />;
+  return <div className="app-shell" style={{ display: "flex", height: "100vh" }}>
+    {explorer ? <ExploreWorkspace url="https://www.pinterest.com/" open={exploring} onClose={() => setExploring(false)}>{canvas}</ExploreWorkspace> : canvas}
+    <AssetContextMenu /><ToastViewport />
+  </div>;
+}
+createRoot(document.getElementById("root")!).render(<Fixture />);

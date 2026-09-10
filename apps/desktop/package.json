@@ -17,7 +17,8 @@
     "test:source-discovery": "node --experimental-strip-types --test scripts/source-discovery.test.mjs",
     "test:explorer": "node --experimental-strip-types --test scripts/explorer.test.mjs scripts/source-discovery.test.mjs",
     "test:explorer:ui": "node scripts/explorer-ui.test.mjs",
-    "test:explorer:drag": "node scripts/explorer-drag.test.mjs"
+    "test:explorer:drag": "node scripts/explorer-drag.test.mjs",
+    "test:explorer:canvas": "node scripts/explorer-canvas-ui.test.mjs"
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.10.7",

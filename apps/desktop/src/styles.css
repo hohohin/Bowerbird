@@ -2829,6 +2829,55 @@ html[data-theme="light"] .app-form-input:focus {
   background: var(--bb-surface);
 }
 
+.canvas-source-content[hidden],
+.canvas-source-resizer[hidden] {
+  display: none;
+}
+
+.canvas-source-toggle {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 5px;
+  height: 26px;
+  padding: 0 6px;
+  border-radius: 6px;
+}
+
+.canvas-source-toggle:hover {
+  background: var(--bb-surface-2);
+  color: var(--bb-ink);
+}
+
+.canvas-source-content {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.canvas-source-collapse {
+  position: absolute;
+  top: 10px;
+  right: 8px;
+}
+
+.canvas-source-expand {
+  flex-direction: column;
+  height: auto;
+  margin: 8px 3px;
+  padding: 7px 3px;
+  gap: 8px;
+  color: var(--bb-muted);
+}
+
+.canvas-source-expand span {
+  writing-mode: vertical-rl;
+  font-size: 11px;
+  letter-spacing: 2px;
+}
+
 .canvas-session-controls {
   min-width: 0;
   padding: 10px 10px 6px;
@@ -2896,8 +2945,9 @@ html[data-theme="light"] .app-form-input:focus {
 }
 
 .canvas-source-header {
+  position: relative;
   min-height: 56px;
-  padding: 10px 12px;
+  padding: 10px 40px 10px 12px;
   border-bottom: 1px solid var(--bb-line);
   display: flex;
   flex-wrap: wrap;
@@ -2913,7 +2963,7 @@ html[data-theme="light"] .app-form-input:focus {
   gap: 2px;
 }
 
-.canvas-source-header > div:first-child,
+.canvas-source-header > div:first-of-type,
 .canvas-source-scale-control {
   align-self: flex-start;
 }

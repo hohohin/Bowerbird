@@ -5,6 +5,7 @@ import { useStore } from "../store";
 import { api } from "../lib/api";
 import { EXPLORER_MIME, parseExplorerImage } from "../lib/explorer";
 import { notifyError, notifySuccess } from "../lib/notify";
+import { prepareExplorerCanvasDrop } from "../lib/explorerCanvasDrop";
 
 export function ExploreWorkspace({ url, open, navigationId = 0, onClose, children }: { url: string | null; open: boolean; navigationId?: number; onClose: () => void; children: ReactNode }) {
   const [busy, setBusy] = useState(false);
@@ -30,6 +31,7 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
     busyRef.current = true; setBusy(true);
     const target = state.activeProjectId;
     const revision = state.projectRouteRevision;
+    const placeOnCanvas = prepareExplorerCanvasDrop(event.target, target, event.clientX, event.clientY);
     try {
       // Flush existing composer state before materializing a still-empty project.
       if (target) {
@@ -49,8 +51,12 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
           if (!route.projectRoutePending && route.projectRouteRevision === revision && route.activeProjectId === target) await api.setActiveProject(target);
         }
       }
-      await api.captureSourceBrowserImage(image.imageUrl, image.pageUrl, target);
-      notifySuccess("图片已采集");
+      const asset = await api.captureSourceBrowserImage(image.imageUrl, image.pageUrl, target);
+      if (placeOnCanvas) {
+        try { await placeOnCanvas(asset); }
+        catch (error) { notifyError(error, "图片已入库，但画板卡片保存失败"); return; }
+      }
+      notifySuccess(placeOnCanvas ? "图片已采集并添加到画板" : "图片已采集");
     } catch (error) { notifyError(error, "采集失败，请重试"); }
     finally { busyRef.current = false; setBusy(false); }
   }
@@ -75,7 +81,7 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
       onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOver(false); }}
       onDropCapture={event => void drop(event)}>
       {children}
-      {busy && <div className="explore-capture-status" role="status"><LoaderCircle size={13} className="animate-spin" />采集中…</div>}
+      {busy && <div className="explore-capture-status pointer-events-none" role="status"><LoaderCircle size={13} className="animate-spin" />采集中…</div>}
       {over && <div className="explore-drop-hint">松开采集图片</div>}
     </section>
   </div>;

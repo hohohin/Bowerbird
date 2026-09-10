@@ -857,6 +857,7 @@ function App() {
               <CanvasWorkspace
                 key={workspaceProjectId}
                 projectId={workspaceProjectId}
+                exploring={sourceBrowserOpen && !collectionAddTargetId}
                 focusThreadId={creativeTarget?.projectId === workspaceProjectId ? creativeTarget.threadId : null}
                 focusNodeId={creativeTarget?.projectId === workspaceProjectId ? creativeTarget.nodeId : null}
                 focusRequestId={creativeTarget?.projectId === workspaceProjectId ? creativeTarget.requestId : null}

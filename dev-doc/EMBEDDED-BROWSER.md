@@ -9,6 +9,8 @@
 - 主页面和浏览器组件保持挂载，展开/收起只变更可见性和尺寸。再次展开不导航、不刷新，保留网页实例、表单、滚动位置与浏览历史；只有显式点击站点、输入网址、来源链接或刷新才发起对应导航。素材沿用原主页面的详情、挑图、右键等交互。
 - 拖动网页图片或覆盖图片的卡片链接/遮罩，在右侧主页面松开才采集。遮罩只匹配同一卡片中指针位置下唯一的图片，不把普通网页链接当成图片。数据包含图片地址与同站卡片链接（找不到卡片链接时记录当前页面）；沿扩展候选工具选择 `srcset` 高清版本与常见懒加载地址。一次拖入只采一张。
 - 松手时冻结项目身份。临时项目先刷新草稿写入并物化；下载期间切换项目不会把结果转存新项目；目标项目已删除则拒绝导入。没有活动项目时进入中央素材库。
+- **画板落点（2026-09-10 增量）：** 拖到画板舞台时，松手即按当前平移/缩放换算并冻结画板坐标；采集成功后创建以该点为中心的素材卡片并持久化。重复采集同一资产仍创建独立卡片实例。下载中调整视口不改变落点，切换项目后仍保存到原项目，返回或重开可见；素材栏、工具栏等非画板区域松手只入库。采集失败不创建卡片，卡片保存失败另行提示。
+- **画板素材栏折叠（2026-09-10 增量）：** 素材栏内提供收起按钮与 36px 展开窄栏，支持键盘操作。打开探索自动收起，探索期间可手动展开；关闭探索后保持当前状态。内容与分隔条隐藏但组件不卸载，来源选项、宽度、原有卡片与画板视口保留；开关不放入画板工具条。
 - 图片复用 `ingest_from_bytes(..., "extension")`，沿用真实格式识别、缩略图、提色、dHash 去重与现有自动处理策略。此首版不做批量页面采集、CSS 背景图、blob/data URL、视频或网站专属原图接口。
 
 ## 本地登录状态与权限
@@ -26,12 +28,19 @@ macOS/Linux 此首版保留浏览器基础能力，拖图取字节明确返回�
 - `apps/desktop/src/components/ExploreWorkspace.tsx`：左侧附加面板、原主页面容器、拖入状态、冻结目标与物化；不再持有素材副本。
 - `SourceBrowserPanel.tsx`：浏览器控件、地址记忆、串行原生操作、视图尺寸和弹窗遮挡。
 - `apps/desktop/src/lib/explorer.ts`：站点、拖入协议校验、原生操作队列。
+- `apps/desktop/src/lib/explorerCanvasDrop.ts` / `CanvasWorkspace.tsx`：松手同步冻结坐标、采集后卡片写入与素材栏折叠。
 - `apps/desktop/src-tauri/src/commands/source_browser.rs` / `source_browser_drag.js`：持久子视图及网页拖拽元数据。
 - `source_browser_network.rs` / `source_browser_capture.rs`：WebView2 网络读取、主窗口边界与标准入库。
 
 原生子 WebView 高于 DOM 层：拖动分隔条及可见 `dialog/alertdialog/menu` 打开时隐藏浏览器，关闭后恢复；通知摆在右侧主区，避免落在原生网页下方。非路由调用画板 flush 时不锁死画板；路由切换仍同步锁定输入。
 
 ## 验证与复跑
+
+2026-09-10 本次增量存档复跑：`test:explorer:canvas`、`test:explorer:ui`、`test:canvas`（111/111）和 `build`（含 TypeScript）通过。新增素材栏断言覆盖打开探索自动收起、手动/键盘切换、来源选项和宽度保留、DOM/旧卡片/视口保持、分隔条隐藏及窄窗入口；同一脚本继续覆盖下述画板落点场景。构建保留现有大 chunk 提示；本次未重跑原生/Rust 或真实站点验收，未发布安装包。日志位于本地 `.tmp/archive-explorer-*.log`。
+
+2026-09-10 画板落点增量验证：`test:explorer:canvas` 使用真实 ExploreWorkspace + CanvasWorkspace、隔离合成 IPC，验证缩放/平移坐标转换、下载中缩放、同资产多卡片、采集失败、切换项目后原项目保存、重开坐标保留、临时项目先物化以及非画板仅入库。既有探索界面、画板/路由 111 项及 TypeScript/production build 同时通过；此增量未做用户窗口实测。
+
+原有普通生成/Agent 引用布局断言也通过：原 `canvas-reference-ui.test.mjs` 的独立 Vite 配置首次启动在导航阶段超时，本轮临时 runner 仅改用桌面标准 Vite 配置启动，保持其布局、旧节点/视口、重复事件与重开断言原样。runner 位于本地 `.tmp/explorer-reference-regression.mjs`，不提交；不将原启动方式记为通过。
 
 2026-09-10 用户验收：修复后反馈“采集成功了。不错，存档。”；采集故障标记为已解决，代码、测试与文档同次提交。本次存档沿用下列已通过的相关检查和用户实测结果，没有重新操作用户窗口或发布安装包。
 
@@ -47,6 +56,7 @@ macOS/Linux 此首版保留浏览器基础能力，拖图取字节明确返回�
 pnpm test:explorer
 pnpm test:explorer:ui
 pnpm test:explorer:drag
+pnpm test:explorer:canvas
 pnpm test:canvas
 pnpm build
 ```
