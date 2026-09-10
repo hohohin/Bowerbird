@@ -389,8 +389,10 @@ export const api = {
     invoke<CreationPack>("assemble_pack", { assetIds }),
   openSourceBrowser: (url: string, bounds: SourceBrowserBounds) =>
     invoke<void>("open_source_browser", { url, bounds }),
-  resizeSourceBrowser: (bounds: SourceBrowserBounds) =>
-    invoke<void>("resize_source_browser", { bounds }),
+  resizeSourceBrowser: (bounds: SourceBrowserBounds, visible?: boolean) =>
+    invoke<void>("resize_source_browser", { bounds, visible }),
+  captureSourceBrowserImage: (imageUrl: string, pageUrl: string, projectId: string | null) =>
+    invoke<Asset>("capture_source_browser_image", { imageUrl, pageUrl, projectId }),
   navigateSourceBrowser: (url: string) => invoke<void>("navigate_source_browser", { url }),
   sourceBrowserBack: () => invoke<void>("source_browser_back"),
   sourceBrowserForward: () => invoke<void>("source_browser_forward"),

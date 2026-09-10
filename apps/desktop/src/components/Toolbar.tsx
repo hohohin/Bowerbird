@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, ChevronDown, FolderOpen, LayoutDashboard, LoaderCircle, Search, Upload, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, Compass, FolderOpen, LayoutDashboard, LoaderCircle, Search, Upload, X } from "lucide-react";
 import { SidebarStatus } from "./SidebarStatus";
 import { GeneratedImageFilter } from "./GeneratedImageFilter";
 import { useStore } from "../store";
@@ -12,11 +12,15 @@ export function Toolbar({
   canvasMode,
   onCanvasModeChange,
   onCreateCreative,
+  onExplore,
+  exploring = false,
 }: {
   onRefresh: () => Promise<void>;
   canvasMode: boolean;
   onCanvasModeChange: (active: boolean) => void;
   onCreateCreative: (blank: boolean) => void;
+  onExplore?: () => void;
+  exploring?: boolean;
 }) {
   const setLoading = useStore((s) => s.setLoading);
   const busy = useStore((s) => s.loading);
@@ -155,6 +159,8 @@ export function Toolbar({
             </div>
           )}
         </div>
+        {onExplore && <button type="button" className="app-button-dark" aria-pressed={exploring}
+          onClick={onExplore} title="浏览灵感网站，拖图采集到素材库"><Compass size={15} />探索</button>}
         {canvasMode ? (
           <button
             type="button"

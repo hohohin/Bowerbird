@@ -53,6 +53,7 @@ dev-doc/*
 !dev-doc/CANVAS-SESSION-PLAN.md
 !dev-doc/PROJECT-CANVAS-PLAN.md
 !dev-doc/LOCAL-CLASSIFICATION.md
+!dev-doc/EMBEDDED-BROWSER.md
 !dev-doc/CREATIVE-MEMORY-PLAN.md
 !dev-doc/SEEDANCE-2.5-INTEGRATION.md
 !dev-doc/VIDEO-API-INTEGRATION.md

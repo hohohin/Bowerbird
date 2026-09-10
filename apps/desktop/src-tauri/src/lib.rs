@@ -483,6 +483,7 @@ pub fn run() {
             commands::source_browser::source_browser_forward,
             commands::source_browser::reload_source_browser,
             commands::source_browser::hide_source_browser,
+            commands::source_browser_capture::capture_source_browser_image,
             commands::jimeng::dreamina_health,
             commands::jimeng::dreamina_login,
             commands::jimeng::dreamina_check_login,

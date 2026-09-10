@@ -611,6 +611,16 @@ export function MasonryGrid({
 } = {}) {
   const storeAssets = useStore((s) => s.assets);
   const gridRef = useRef<HTMLDivElement>(null);
+  const [containerColumns, setContainerColumns] = useState(Infinity);
+  useEffect(() => {
+    const element = gridRef.current;
+    if (!element) return;
+    const observer = new ResizeObserver(([entry]) => {
+      setContainerColumns(Math.max(1, Math.floor(entry.contentRect.width / 160)));
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
   const gridId = useId();
   const storeTotal = useStore((s) => s.total);
   const boardOpen = useStore((s) => s.boardOpen);
@@ -694,7 +704,7 @@ export function MasonryGrid({
   // 是公共因子；无尺寸的按方形兜底）——元数据即最终布局，无需 DOM 测量；列数变化
   // （窗口跨断点）时重新分列。
   const responsiveColumnCount = useColumnCount();
-  const colCount = columnCount ?? responsiveColumnCount;
+  const colCount = columnCount ?? Math.min(responsiveColumnCount, containerColumns);
   const columns = useMemo(() => {
     type Item = { kind: "asset"; asset: Asset } | { kind: "project"; group: LibraryProjectGroup };
     const cols: Item[][] = Array.from({ length: colCount }, () => []);

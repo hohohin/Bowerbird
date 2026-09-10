@@ -407,6 +407,7 @@ dependencies = [
  "tracing-subscriber",
  "ulid",
  "uuid",
+ "webview2-com",
  "windows",
 ]
 

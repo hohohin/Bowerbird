@@ -27,7 +27,7 @@ struct SourceBrowserStatus {
     loading: bool,
 }
 
-fn parse_http_source_url(raw: &str) -> AppResult<Url> {
+pub(super) fn parse_http_source_url(raw: &str) -> AppResult<Url> {
     let url = Url::parse(raw.trim())
         .map_err(|_| AppError::Other("来源网址无效，无法在应用内打开".to_string()))?;
     if !navigation_allowed(&url) {
@@ -98,9 +98,7 @@ pub async fn open_source_browser(
 
     if let Some(webview) = app.get_webview(SOURCE_BROWSER_LABEL) {
         set_bounds(&webview, bounds)?;
-        webview
-            .navigate(url)
-            .map_err(|error| tauri_error("切换素材发现页面失败", error))?;
+        // Reopening resumes the live document. Explicit navigation has its own command.
         webview
             .show()
             .map_err(|error| tauri_error("显示素材发现面板失败", error))?;
@@ -118,6 +116,9 @@ pub async fn open_source_browser(
         .app_data_dir()
         .map_err(|error| tauri_error("读取应用数据目录失败", error))?
         .join("source-browser");
+    #[cfg(debug_assertions)]
+    let data_directory = std::env::var_os("BOWERBIRD_EXPLORER_TEST_DATA_DIR")
+        .map(std::path::PathBuf::from).unwrap_or(data_directory);
 
     let navigation_app = app.clone();
     let page_load_app = app.clone();
@@ -125,6 +126,9 @@ pub async fn open_source_browser(
     let new_window_app = app.clone();
     let builder = WebviewBuilder::new(SOURCE_BROWSER_LABEL, WebviewUrl::External(url))
         .data_directory(data_directory)
+        .disable_drag_drop_handler()
+        .initialization_script(include_str!("../../../../extension/candidate-utils.js"))
+        .initialization_script(include_str!("source_browser_drag.js"))
         .on_navigation(move |url| {
             let allowed = navigation_allowed(url);
             if allowed {
@@ -154,6 +158,14 @@ pub async fn open_source_browser(
         })
         .on_download(|_, event| !matches!(event, DownloadEvent::Requested { .. }));
 
+    #[cfg(debug_assertions)]
+    let builder = match std::env::var("BOWERBIRD_EXPLORER_TEST_DEBUG_PORT") {
+        Ok(port) if port.parse::<u16>().is_ok() => builder.additional_browser_args(
+            &format!("--remote-debugging-port={port} --remote-debugging-address=127.0.0.1")
+        ),
+        _ => builder,
+    };
+
     let webview = main_window
         .add_child(
             builder,
@@ -168,10 +180,14 @@ pub async fn open_source_browser(
 }
 
 #[tauri::command]
-pub async fn resize_source_browser(app: AppHandle, bounds: SourceBrowserBounds) -> AppResult<()> {
+pub async fn resize_source_browser(app: AppHandle, bounds: SourceBrowserBounds, visible: Option<bool>) -> AppResult<()> {
     let bounds = validate_bounds(bounds)?;
     if let Some(webview) = app.get_webview(SOURCE_BROWSER_LABEL) {
         set_bounds(&webview, bounds)?;
+        if let Some(visible) = visible {
+            if visible { webview.show() } else { webview.hide() }
+                .map_err(|error| tauri_error("更新探索面板显示失败", error))?;
+        }
     }
     Ok(())
 }

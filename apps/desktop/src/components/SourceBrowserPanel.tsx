@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { api, type SourceBrowserBounds } from "../lib/api";
 import { normalizeSourceAddress, sourceDiscoveryFor } from "../lib/sourceDiscovery";
+import { EXPLORER_SITES, queueBrowserOperation } from "../lib/explorer";
 
 const STATUS_EVENT = "source-browser://status";
 const TITLE_EVENT = "source-browser://title";
@@ -41,16 +42,25 @@ function hostnameFor(url: string) {
   }
 }
 
-export function SourceBrowserPanel({ url, onClose }: { url: string; onClose: () => void }) {
+export function SourceBrowserPanel({ url, onClose, visible = true, suspended = false, navigationId = 0 }: { url: string; onClose: () => void; visible?: boolean; suspended?: boolean; navigationId?: number }) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const addressFocusedRef = useRef(false);
   const addressRef = useRef<HTMLInputElement>(null);
+  const openedRef = useRef(false);
+  const requestedUrlRef = useRef({ url, navigationId });
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
   const [currentUrl, setCurrentUrl] = useState(url);
   const [address, setAddress] = useState(url);
   const [title, setTitle] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const discovery = useMemo(() => sourceDiscoveryFor(currentUrl), [currentUrl]);
+  const suspendedRef = useRef(suspended);
+  suspendedRef.current = suspended;
+  const browserAction = useCallback((operation: () => Promise<void>) => {
+    void queueBrowserOperation(operation).catch(cause => setError(String(cause)));
+  }, []);
 
   const navigate = useCallback(async (nextUrl: string) => {
     const normalized = normalizeSourceAddress(nextUrl);
@@ -61,7 +71,7 @@ export function SourceBrowserPanel({ url, onClose }: { url: string; onClose: () 
     setError(null);
     setLoading(true);
     try {
-      await api.navigateSourceBrowser(normalized);
+      await queueBrowserOperation(() => api.navigateSourceBrowser(normalized));
       setCurrentUrl(normalized);
       setAddress(normalized);
     } catch (cause) {
@@ -69,6 +79,10 @@ export function SourceBrowserPanel({ url, onClose }: { url: string; onClose: () 
       setError(String(cause));
     }
   }, []);
+
+  useEffect(() => {
+    try { if (normalizeSourceAddress(currentUrl)) localStorage.setItem("bowerbird.explorer.lastUrl", currentUrl); } catch { /* unavailable storage */ }
+  }, [currentUrl]);
 
   useEffect(() => {
     let alive = true;
@@ -94,24 +108,44 @@ export function SourceBrowserPanel({ url, onClose }: { url: string; onClose: () 
 
   useLayoutEffect(() => {
     const viewport = viewportRef.current;
-    if (!viewport) return;
+    if (!viewport || !visible) return;
 
     let alive = true;
     let openFrame = 0;
     let resizeFrame = 0;
     const resize = () => {
+      if (!alive) return;
       window.cancelAnimationFrame(resizeFrame);
       resizeFrame = window.requestAnimationFrame(() => {
-        void api.resizeSourceBrowser(boundsFor(viewport)).catch((cause) => {
+        if (!alive || !visibleRef.current) return;
+        const bounds = boundsFor(viewport);
+        if (bounds.width < 240 || bounds.height < 180) return;
+        const overlay = Array.from(document.querySelectorAll('[role="dialog"], [role="alertdialog"], [role="menu"]'))
+          .some(element => element.getClientRects().length > 0);
+        void queueBrowserOperation(() => api.resizeSourceBrowser(bounds, !overlay && !suspendedRef.current)).catch((cause) => {
           if (alive) setError(String(cause));
         });
       });
     };
     const observer = new ResizeObserver(resize);
     observer.observe(viewport);
+    const overlays = new MutationObserver(resize);
+    overlays.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["role", "hidden"] });
+    window.addEventListener("resize", resize);
+    window.addEventListener("explorer:layout", resize);
 
     openFrame = window.requestAnimationFrame(() => {
-      void api.openSourceBrowser(url, boundsFor(viewport)).catch((cause) => {
+      void queueBrowserOperation(async () => {
+        if (!openedRef.current) {
+          await api.openSourceBrowser(url, boundsFor(viewport));
+          openedRef.current = true;
+        }
+        const previous = requestedUrlRef.current;
+        if (previous.url !== url || previous.navigationId !== navigationId) {
+          await api.navigateSourceBrowser(url);
+          requestedUrlRef.current = { url, navigationId };
+        }
+      }).then(resize).catch((cause) => {
         if (alive) {
           setLoading(false);
           setError(String(cause));
@@ -122,31 +156,37 @@ export function SourceBrowserPanel({ url, onClose }: { url: string; onClose: () 
     return () => {
       alive = false;
       observer.disconnect();
+      overlays.disconnect();
+      window.removeEventListener("resize", resize);
+      window.removeEventListener("explorer:layout", resize);
       window.cancelAnimationFrame(openFrame);
       window.cancelAnimationFrame(resizeFrame);
-      void api.hideSourceBrowser();
+      void queueBrowserOperation(() => api.hideSourceBrowser()).catch(() => {});
     };
-  }, [url]);
+  }, [visible, url, navigationId]);
+
+  useEffect(() => { window.dispatchEvent(new Event("explorer:layout")); }, [suspended]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (!visibleRef.current || event.defaultPrevented || suspendedRef.current || document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"]')) return;
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "l") {
         event.preventDefault();
         addressRef.current?.focus();
         addressRef.current?.select();
       } else if (event.altKey && event.key === "ArrowLeft") {
         event.preventDefault();
-        void api.sourceBrowserBack();
+        browserAction(() => api.sourceBrowserBack());
       } else if (event.altKey && event.key === "ArrowRight") {
         event.preventDefault();
-        void api.sourceBrowserForward();
+        browserAction(() => api.sourceBrowserForward());
       } else if (event.key === "Escape" && document.activeElement !== addressRef.current) {
         onClose();
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
+  }, [onClose, browserAction]);
 
   function submitAddress(event: FormEvent) {
     event.preventDefault();
@@ -160,24 +200,24 @@ export function SourceBrowserPanel({ url, onClose }: { url: string; onClose: () 
 
   const host = hostnameFor(currentUrl);
   return (
-    <section className="source-browser-panel" aria-label="素材发现浏览器">
+    <section className="source-browser-panel" aria-label="探索浏览器">
       <header className="source-browser-header">
         <div className="source-browser-heading">
           <span className="source-browser-mark"><Compass size={16} /></span>
           <div className="min-w-0">
             <div className="truncate text-xs font-semibold text-ink">{title || discovery?.actionLabel || "素材发现"}</div>
-            <div className="truncate text-[10px] text-muted">从原素材继续探索 · {host}</div>
+            <div className="truncate text-[10px] text-muted">探索 · {host}</div>
           </div>
         </div>
 
         <div className="source-browser-nav" aria-label="网页导航">
-          <button type="button" onClick={() => void api.sourceBrowserBack()} title="返回上一页" aria-label="返回上一页">
+          <button type="button" onClick={() => browserAction(() => api.sourceBrowserBack())} title="返回上一页" aria-label="返回上一页">
             <ArrowLeft size={15} />
           </button>
-          <button type="button" onClick={() => void api.sourceBrowserForward()} title="前往下一页" aria-label="前往下一页">
+          <button type="button" onClick={() => browserAction(() => api.sourceBrowserForward())} title="前往下一页" aria-label="前往下一页">
             <ArrowRight size={15} />
           </button>
-          <button type="button" onClick={() => void api.reloadSourceBrowser()} title="刷新" aria-label="刷新">
+          <button type="button" onClick={() => browserAction(() => api.reloadSourceBrowser())} title="刷新" aria-label="刷新">
             {loading ? <LoaderCircle size={15} className="animate-spin" /> : <RefreshCw size={15} />}
           </button>
         </div>
@@ -199,11 +239,16 @@ export function SourceBrowserPanel({ url, onClose }: { url: string; onClose: () 
           <button type="button" onClick={openExternal} title="用系统浏览器打开" aria-label="用系统浏览器打开">
             <ExternalLink size={15} />
           </button>
-          <button type="button" onClick={onClose} title="关闭素材发现" aria-label="关闭素材发现">
+          <button type="button" onClick={onClose} title="收起浏览器" aria-label="收起浏览器">
             <X size={16} />
           </button>
         </div>
       </header>
+
+      <nav className="explore-sites" aria-label="探索网站">
+        {EXPLORER_SITES.map(site => <button key={site.name} type="button" onClick={() => void navigate(site.url)}>{site.name}</button>)}
+        <span>登录状态保存在本机</span>
+      </nav>
 
       {error && <div className="source-browser-error" role="alert">{error}</div>}
       <div ref={viewportRef} className="source-browser-viewport" data-source-browser-viewport>

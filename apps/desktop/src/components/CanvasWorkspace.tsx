@@ -1655,7 +1655,7 @@ export function CanvasWorkspace({
     const flush = async () => {
       // Route transitions set pending before entering this callback. Lock and
       // blur synchronously so no focused editor can mutate after the snapshot.
-      lockWorkspaceInteraction();
+      if (useStore.getState().projectRoutePending) lockWorkspaceInteraction();
       await flushCanvasWrites(true);
     };
     useStore.getState().registerProjectCanvasFlush(flush);

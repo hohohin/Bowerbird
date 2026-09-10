@@ -40,7 +40,7 @@ export function sourceDiscoveryFor(sourceUrl?: string | null): SourceDiscovery |
   if (hostMatches(hostname, "pinterest.com") || hostMatches(hostname, "pin.it")) {
     return {
       actionLabel: "在 Pinterest 发现更多",
-      hint: "打开原 Pin 和 Pinterest 相关推荐；采集新素材可用系统浏览器扩展",
+      hint: "打开原 Pin 和 Pinterest 相关推荐，将网页图片拖到素材区即可采集",
     };
   }
 

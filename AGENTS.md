@@ -14,6 +14,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 | `dev-doc/VIDEO-API-INTEGRATION-V2.json` | 已废止的 v2 快照归因；由 v3 manifest 接续 | 仅追溯历史，不再用于应用补丁 |
 | `dev-doc/VIDEO-API-INTEGRATION-V3.md`、`dev-doc/VIDEO-API-INTEGRATION-V3.json` | 视频与 FFmpeg 主目录集成、0058 迁移归属、回滚及阶段哈希 | 接续视频集成或安排 GUI 验收之前 |
 | `dev-doc/LOCAL-CLASSIFICATION.md` | 本地动态分类模型包、标签发现/自定义匹配、人工保护与验证记录 | 本地分类、自动标签、分类模型下载与运行时相关工作前必读 |
+| `dev-doc/EMBEDDED-BROWSER.md` | 探索内置浏览器、登录资料持久化、网页拖图入库与隔离 WebView2 验证 | 内置浏览器、探索工作区、网页拖图与登录状态相关工作前必读 |
 | `PROJECT.md` | **活文档（项目内容唯一权威）**：项目说明 / 目前进展 / 关键约定 / 踩坑记录 | 每次开工前先读「目前进展」与「关键约定」 |
 | `dev-doc/Bowerbird开发计划.md` | 完整开发计划 v1.3（定位 / 技术栈 / 数据模型 / Roadmap / 风险）；同名 HTML 是其渲染版 | 任何实现工作之前必读；作为基础设计源，若与 `PROJECT.md` 的较新决策或专项计划冲突，以后两者为准 |
 | `dev-doc/Bowerbird定价方案v2-订阅积分制.md` | 商业模式与定价（免费+订阅+积分混合制 / 四档结构 / 积分消耗表 / 毛利测算；已取代 PRICING.md v1 买断制） | 商业化、定价、积分、功能门控相关工作前必读 |

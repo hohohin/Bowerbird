@@ -19,7 +19,8 @@ import { GenerationPanel } from "./components/GenerationPanel";
 import { CloudAgentSession } from "./components/CloudAgentPanel";
 import { CloudAgentRuntimeCoordinator } from "./components/CloudAgentRuntimeCoordinator";
 import { LEGACY_CREATIVE_SESSION_FALLBACK_ENABLED } from "./lib/featureFlags";
-import { SourceBrowserPanel } from "./components/SourceBrowserPanel";
+import { ExploreWorkspace } from "./components/ExploreWorkspace";
+import { EXPLORER_SITES } from "./lib/explorer";
 import { CodexOnboarding } from "./components/CodexOnboarding";
 import { ExtensionOnboarding } from "./components/ExtensionOnboarding";
 import { DreaminaOnboarding } from "./components/DreaminaOnboarding";
@@ -65,6 +66,8 @@ function App() {
     requestId: string;
   } | null>(null);
   const [sourceBrowserUrl, setSourceBrowserUrl] = useState<string | null>(null);
+  const [sourceBrowserOpen, setSourceBrowserOpen] = useState(false);
+  const [sourceBrowserNavigation, setSourceBrowserNavigation] = useState(0);
   const setAssets = useStore((s) => s.setAssets);
   const setTotal = useStore((s) => s.setTotal);
   const setPromptedAssets = useStore((s) => s.setPromptedAssets);
@@ -793,11 +796,13 @@ function App() {
       route.projectRoutePending,
     )) return;
     setCreativeLaunch({ id: crypto.randomUUID(), projectId: createdProjectId, assetIds });
+    setSourceBrowserOpen(false);
     setCreativeTarget(null);
     if (state.mode === "manage") state.exitManage();
   }
 
   function exitCreative() {
+    setSourceBrowserOpen(false);
     setCreativeLaunch(null);
     setCreativeTarget(null);
     void useStore.getState().exitProject().catch((error) => {
@@ -832,11 +837,21 @@ function App() {
         canvasMode={projectWorkspaceActive}
         onCanvasModeChange={(active) => active ? createCreative(false) : exitCreative()}
         onCreateCreative={createCreative}
+        exploring={sourceBrowserOpen}
+        onExplore={() => {
+          if (!sourceBrowserUrl) {
+            let lastUrl = EXPLORER_SITES[0].url as string;
+            try { lastUrl = localStorage.getItem("bowerbird.explorer.lastUrl") || lastUrl; } catch { /* unavailable storage */ }
+            setSourceBrowserUrl(lastUrl);
+          }
+          setSourceBrowserOpen(current => !current);
+        }}
       />
       <div className="app-shell-hatch" aria-hidden="true"><span /></div>
       <div className="relative flex flex-1 overflow-hidden">
         <Sidebar />
         <main className="app-workspace relative flex flex-1 flex-col overflow-hidden bg-canvas">
+          <ExploreWorkspace url={sourceBrowserUrl} navigationId={sourceBrowserNavigation} open={sourceBrowserOpen && !collectionAddTargetId} onClose={() => setSourceBrowserOpen(false)}>
           {projectWorkspaceActive ? (
             initializing ? <LibraryLoadingState /> : (
               <CanvasWorkspace
@@ -857,19 +872,17 @@ function App() {
               <div className={`relative flex-1 overflow-hidden ${collectionAddTargetId ? "collection-add-workspace" : ""}`}>
                 {initializing ? (
                   <LibraryLoadingState />
-                ) : sourceBrowserUrl && !collectionAddTargetId ? (
-                  <SourceBrowserPanel url={sourceBrowserUrl} onClose={() => setSourceBrowserUrl(null)} />
                 ) : showDetail ? (
-                  <AssetDetail onExploreSource={setSourceBrowserUrl} />
+                  <AssetDetail onExploreSource={url => { setSourceBrowserUrl(url); setSourceBrowserNavigation(id => id + 1); setSourceBrowserOpen(true); }} />
                 ) : (
                   <LibraryHome />
                 )}
                 {/* 生成结果面板：主区覆盖层（像详情页） */}
-                {!collectionAddTargetId && !sourceBrowserUrl && legacyInspectorOpen && activeSessionKind === "generation" && <GenerationPanel readOnly />}
-                {!collectionAddTargetId && !sourceBrowserUrl && legacyInspectorOpen && activeSessionKind === "agent" && <CloudAgentSession readOnly />}
+                {!collectionAddTargetId && legacyInspectorOpen && activeSessionKind === "generation" && <GenerationPanel readOnly />}
+                {!collectionAddTargetId && legacyInspectorOpen && activeSessionKind === "agent" && <CloudAgentSession readOnly />}
                 {/* 创作模式视觉标记：瀑布流区品牌蓝线框 + 顶部居中刘海「创作模式」。
                     仅在挑图面（瀑布流）实际可见时呈现：被会话面板/详情页盖住时不显示。 */}
-                {!sourceBrowserUrl && boardOpen && !genEditing && !genPanelOpen && !showDetail && (
+                {boardOpen && !genEditing && !genPanelOpen && !showDetail && (
                   <>
                     <div
                       aria-hidden="true"
@@ -887,6 +900,7 @@ function App() {
             </>
           )}
           <CollectionAddMode />
+          </ExploreWorkspace>
         </main>
       </div>
     </div>

@@ -14,7 +14,10 @@
     "test:agent-plan": "node --experimental-strip-types --test scripts/cloud-agent-plan.test.mjs",
     "test:agent-result": "node --experimental-strip-types --test scripts/cloud-agent-result.test.mjs",
     "test:agent-selection": "node --test scripts/cloud-agent-selection.test.mjs",
-    "test:source-discovery": "node --experimental-strip-types --test scripts/source-discovery.test.mjs"
+    "test:source-discovery": "node --experimental-strip-types --test scripts/source-discovery.test.mjs",
+    "test:explorer": "node --experimental-strip-types --test scripts/explorer.test.mjs scripts/source-discovery.test.mjs",
+    "test:explorer:ui": "node scripts/explorer-ui.test.mjs",
+    "test:explorer:drag": "node scripts/explorer-drag.test.mjs"
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.10.7",

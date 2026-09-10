@@ -16,6 +16,8 @@ pub mod projects;
 pub mod prompt;
 pub mod settings;
 pub mod source_browser;
+pub mod source_browser_capture;
+pub mod source_browser_network;
 pub mod visual_profile;
 
 use std::sync::Arc;
