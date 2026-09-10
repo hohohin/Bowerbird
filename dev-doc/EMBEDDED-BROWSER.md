@@ -32,9 +32,11 @@ macOS/Linux 此首版保留浏览器基础能力，拖图取字节明确返回�
 - `apps/desktop/src-tauri/src/commands/source_browser.rs` / `source_browser_drag.js`：持久子视图及网页拖拽元数据。
 - `source_browser_network.rs` / `source_browser_capture.rs`：WebView2 网络读取、主窗口边界与标准入库。
 
-原生子 WebView 高于 DOM 层：拖动分隔条及可见 `dialog/alertdialog/menu` 打开时隐藏浏览器，关闭后恢复；通知摆在右侧主区，避免落在原生网页下方。非路由调用画板 flush 时不锁死画板；路由切换仍同步锁定输入。
+原生子 WebView 高于 DOM 层：拖动分隔条及可见 `dialog/alertdialog` 打开时隐藏浏览器；`menu` 仅在实际矩形与浏览器 viewport 相交时隐藏，画板侧的右键菜单不影响网页。遮挡移除后恢复，不导航或刷新；临时隐藏显示说明而非加载动画，尺寸/可见性相同不重复调用原生接口。通知摆在右侧主区，避免落在原生网页下方。非路由调用画板 flush 时不锁死画板；路由切换仍同步锁定输入。
 
 ## 验证与复跑
+
+2026-09-11 画板右键“刷新状态”修复：真实 CanvasWorkspace 合成 IPC 测试在修复前复现右键菜单导致 `visible:false`，其根因是全局菜单判定把未遮挡网页的菜单也当遮挡，随后露出恒定转圈的占位。改为菜单矩形相交判断、遮挡独立占位及原生布局去重；新增连续三次真实组件右键菜单、重叠菜单移动/隐藏、对话框保护与无重复原生调用断言。测试验证未发导航或刷新命令，不声称已复测用户窗口或真实站点。
 
 2026-09-10 本次增量存档复跑：`test:explorer:canvas`、`test:explorer:ui`、`test:canvas`（111/111）和 `build`（含 TypeScript）通过。新增素材栏断言覆盖打开探索自动收起、手动/键盘切换、来源选项和宽度保留、DOM/旧卡片/视口保持、分隔条隐藏及窄窗入口；同一脚本继续覆盖下述画板落点场景。构建保留现有大 chunk 提示；本次未重跑原生/Rust 或真实站点验收，未发布安装包。日志位于本地 `.tmp/archive-explorer-*.log`。
 

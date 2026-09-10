@@ -529,6 +529,8 @@ export interface AppSettings {
   cloud_auto_understand: boolean;
   board_shift_pick: boolean;
   hide_project_assets: boolean;
+  generation_completion_popup: boolean;
+  generation_completion_sound: boolean;
   /** 即梦 dreamina CLI 出图模型版本（text2image: 3.0~5.0Pro；image2image 仅 4.0+） */
   dreamina_model_version: string;
   // —— 开发者选项（仅测试账号可见）：对话框 Agent 模式开关，默认只开正式 Agent，

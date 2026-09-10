@@ -413,7 +413,7 @@ function Thumb({
             ? Array.from(st.selectedIds)
             : [shown.id];
         setDragAssets(ids);
-        e.dataTransfer.effectAllowed = variant === "canvas-source" ? "copy" : "move";
+        e.dataTransfer.effectAllowed = variant === "canvas-source" ? "copy" : "copyMove";
         // setData 必须有一次否则部分浏览器不认这次拖拽；payload 实际走模块变量（dragPayload.ts）。
         e.dataTransfer.setData("text/plain", ids.join(","));
       }}

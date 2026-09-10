@@ -6,6 +6,8 @@
 
 ## 子文档索引
 
+- [dev-doc/ONBOARDING.md](dev-doc/ONBOARDING.md) — 项目画板入门引导 v2：本地示例、五步操作、暂停恢复、按需提示与隔离验收（2026-09-11）。
+
 - [dev-doc/EMBEDDED-BROWSER.md](dev-doc/EMBEDDED-BROWSER.md) — 探索内置浏览器、登录状态、拖图采集与隔离验证（2026-09-10，Windows 首版完成，用户确认采集成功，未发包）。
 
 - [dev-doc/LOCAL-CLASSIFICATION.md](dev-doc/LOCAL-CLASSIFICATION.md) — 本地动态标签发现、自定义标签匹配、模型包与验证记录（2026-09-10）。
@@ -46,11 +48,13 @@
 
 **近期里程碑（只保留最近 3 条；更早的全量历史见 [dev-doc/进展归档.md](dev-doc/进展归档.md)）**
 
+> **Windows 26.9.11 安装包与桌面增量存档（2026-09-11）：** 本次打包包含新版五步项目画板引导与集合教程、普通图片/视频及正式 Agent 完成弹窗和提示音、素材拖入项目卡片/侧栏、画板保存状态防闪烁，以及画板右键不再误隐藏探索网页的修复；也包含此前已存档的探索采集、独立视觉规范、本地分类、视频与统一 Agent 桌面源码。Tauri/Cargo 日期版本更新为 26.9.11，从 canonical 主源码构建 Windows x64 NSIS，并复制至 `Windows/dist/Bowerbird_26.9.11_x64-setup.exe`。本次只生成本地安装包，不安装到用户环境、不修改真实素材库、不部署云端；原生首启/提示音、真实库升级及真实视频生成仍待验收。复核与产物指纹见下方。
+
+> **项目画板入门引导 v2（2026-09-11，源码完成，未发包）：** 替换旧版导入文件夹/逐控件聚光灯引导，采用独立本地示例项目与五步真实操作清单：拖图、移动、目标与参考、维度、主动生成；按用户要求删除末尾续改步骤，旧第六步兼容恢复到生成步骤。集合新增独立四段教程及创建/打开入口，覆盖命名、添加/导入、提炼和保存后选择，集合内可随时重看。无需账号即可准备示例；暂停先保存草稿，重开恢复学习进度，允许明确跳过维度或先完成准备。升级用户看到独立新版变化，探索/反推/视觉规范/本地分类/整理提供按需提示。本轮进度契约 4 项、引导/集合 UI、TypeScript 与 production build 通过；此前画板/路由 111 项、两组探索 UI 与 Rust 临时库 2 项通过；未调用真实生成服务、未操作用户库，原生首启和实际生成待验收。实现与复跑见 [ONBOARDING.md](dev-doc/ONBOARDING.md)。
+
 > **探索画板落点与素材栏折叠（2026-09-10，源码完成，未发包）：** 网页图片拖到画板时按松手瞬间的项目、平移与缩放冻结落点，采集成功后居中创建并持久化独立素材卡片；重复采集可复用资产并新建卡片，下载中切项目仍保存到原项目，非画板区域仅入库。画板素材栏支持手动与键盘收起/展开，打开探索时自动收起，关闭探索后保持当前状态；折叠入口留在素材栏内，保留来源选项、宽度、组件与画板视口。探索画板和既有探索界面两组隔离合成 IPC 回归、画板/路由 **111/111**、TypeScript 与 production build 通过。未操作用户窗口或真实素材库，本增量尚无真机验收，未发布安装包。实施与复跑见 [EMBEDDED-BROWSER.md](dev-doc/EMBEDDED-BROWSER.md)。
 
-> **探索内置浏览器首版（2026-09-10，用户确认采集成功，未发包）：** “新建创作”左侧新增探索入口，左侧独立浏览器面板与右侧原主页面并排，主页面保持挂载；收起再展开不刷新，保留网页表单和滚动位置，支持 Pinterest、花瓣、小红书、即梦快捷入口、地址导航、宽度调整和图片预览。网页拖图在松手时冻结目标，复用扩展入库、高清候选、来源链接与去重；临时项目先物化，下载中切项目不转存。WebView2 独立资料目录保存网站登录状态，取图使用浏览器自身凭据，不导出 Cookie 或开放远程页 IPC。针对松手无反应，修复链接/卡片遮罩识别、CSS 禁拖及站点先行取消事件；用户复测明确反馈“采集成功了”，本次采集故障闭环。前端协议/来源 7 项、拖拽 5 类、界面交互、画板路由 111 项与 Rust 浏览器/真实入库 7 项通过；类型检查、production build、隐藏隔离 WebView2 跨视图 CDP 数据传输、跨域取图、HttpOnly 登录重启恢复、401/HTML 拒绝与权限验证通过。用户未逐站列明验收范围，不将此次成功扩大为四站账号/验证码/所有图片类型均通过；安装包未发布，macOS/Linux 取图未实现。实施与复跑见 [EMBEDDED-BROWSER.md](dev-doc/EMBEDDED-BROWSER.md)。
-
-> **桌面工作区、独立视觉规范与通用 Agent 增量存档（2026-09-10）**：本次统一保存 2026-09-04 之后的项目/素材视图、画板引用共享与局部落点、主动整理、稳定项目顺序、任务提醒、项目删除可选物理清理、本地动态分类、独立视觉规范及视频接入源码。视觉规范沿集合提炼、保存后显式选择，支持跨项目复用、版本归档和冻结来源回看；品牌原文色号/字体/尺寸单独保留，两阶段提示词改由 VPS 文件维护。DSH 独占 Agent 对话与原生压缩，Bowerbird 保留授权、提问、工具、计量和持久化；本次同时归档自主工具、观察记忆、并发图片执行及 SSE 持久化/错误透传修复。创作记忆仅完成 CM0–CM7 计划，尚未实现。服务端部署记录以约定中的 2026-09-10 品牌定向发布为最新已记录快照；本次仅本地存档，没有重新核验或更新线上。桌面安装包、真实用户库升级与视频真实端到端仍待验收，未发包。存档复核结果见下方；旧部署、费用、失败和验证记录已原样移入历史归档。
+**26.9.11 存档打包复核（2026-09-11）：** 契约 **122/122**（引导 4、画板/路由 111、探索/来源 7）、七组 Chrome 隔离 UI（引导/集合、生成完成提醒、项目拖图、工具条、探索界面、探索画板、既有集合面板）通过；Rust **330 passed / 4 ignored / 11 filtered**，包含示例真实资源导入、设置持久化和迁移回归，沿既有记录跳过媒体工具子进程组。Tauri 的前置 TypeScript/production build 与 release/NSIS 构建通过，保留既有大 chunk 和 Rust unused/dead-code 警告。构建命令为根目录 `pnpm tauri build --bundles nsis`，直接使用主源码及资源，未使用历史 override。安装包 **53,619,569 bytes**，SHA-256 **`434C09ED8A32C3FDDE4C6BE11BB0DD7882D6C15FF089E2E78EB3EFDBBC0A0BA2`**。最终 diff、暂存空白检查与旧里程碑原样归档检查通过；代码、版本和文档同次提交。复跑日志在本地 `.tmp/archive-20260911-*.log`；安装包与 SHA-256 校验文件在 `Windows/dist/`。广告素材、临时截图/日志、旧 spike 结果及无关网页未纳入提交。未重跑线上服务、真实模型、完整原生 UI 或历史项目删除 UI 待办，因此不宣称全量产品验收通过。
 
 **本次存档复核（2026-09-10）：** Worker **352/352**、DSH Profile **25/25**、桌面契约及 Agent 入口 **173/173**、Rust **324 passed / 4 ignored / 11 filtered**（沿本地分类已记录边界过滤媒体工具子进程测试，未重跑真实模型 ignored 项）、视频验收脚本 **7/7**、Edge **14 tests / 15 steps** 通过；两端 TypeScript、桌面 production build 与六个 Edge 入口 Deno check 通过。另有 9 组浏览器脚本通过：视觉规范、后台提炼任务、本地分类、画板整理、引用落点、项目顺序、项目重命名、集合面板、视频引用编辑器。**未通过/未覆盖：** 独立 `project-deletion-ui.test.mjs` 在合成 Vite 服务启动后仍等待“删除测试项目”按钮超时，待定位（项目删除 Rust 回归和重命名脚本中的删除选项验证已通过，不能替代此项）；`cargo fmt --check` 发现已有 Rust 格式差异，未在存档中批量重排；媒体子进程 11 项及 Tauri 真机/真实视频链路未重验。因此本轮不宣称全量通过。桌面测试须从 `apps/desktop` 启动并使用本机 Chrome；根目录启动会漏载 Tailwind 配置，部分界面脚本还须显式指定 renderer 的 Playwright 模块。`git diff --cached --check` 在提交前复核；日志保留在本地 `.tmp/archive-*.log`，不随源码提交。
 
@@ -86,6 +90,12 @@
 [x] 通用云端 Agent Harness 专项 U4：runtime 兼容、真实 18-case 文本门禁、本地全回归、test-only 远端 `0047`–`0050`/Edge/VPS、零 provider smoke、legacy/DSH 同 case 真实图片与 crash/re-claim 均已通过；actual paired no-regression PASS。普通账号与 HTML 继续保持 legacy，公开迁移留到 U6 决策。
 
 ## 关键约定
+
+**2026-09-11 项目拖图与画板反馈：** 素材库单张或多选图片可拖入首页折叠/展开项目、侧栏项目及折叠侧栏入口，通过既有项目成员 API 添加关联；同一素材可供多个项目使用，重复拖入不重复增加关系，不切换项目或移动/删除原素材。临时/归档项目不接受拖入；失败提示后可重试。画板保存提示固定占位，短写入不闪烁，慢写入延迟显示并短暂保留，避免工具条尺寸跳动；保存失败继续明确显示。探索浏览器仅在对话框或实际覆盖网页的菜单出现时暂时隐藏，画板侧右键菜单不影响网页，恢复不导航、不刷新。
+
+**2026-09-11 Windows 打包版本：** 继续使用两位年份的日期版本，本次 Tauri 配置与 Cargo package/lock 同步为 `26.9.11`；根与前端 npm workspace 的 `0.1.0` 不作为安装包版本。安装包仅本地交付，服务端部署状态沿用专项记录。
+
+**2026-09-11 生成完成提醒（已纳入 26.9.11 本地安装包）：** 普通图片、视频每轮成功收到产物，以及正式 Agent 整组产物入库确认后，显示应用右上角弹窗并播放短提示音。设置 → 个性化与记忆 → 生成完成提醒提供独立弹窗/声音开关，默认开启，写入 settings.json；旧配置补默认值，启动恢复先读取已保存偏好。提醒在全局完成入口触发，关闭详情或切换项目仍有效；回看已完成历史、失败、取消和空产物不触发，重复完成按任务轮次/Agent 产物组去重，同时完成的短提示音合并。采用应用内弹窗与 Web Audio，未增加操作系统通知。`npm run test:generation-notifications` 合成 IPC/真实组件界面回归、画板 111 项、Rust 设置 7 项、TypeScript 与 production build 通过；未调用真实生成服务，原生 WebView2 提示音及最小化场景待真机验收。
 
 **2026-09-10 画板素材栏折叠：** 素材栏自身提供收起按钮与 36px 展开窄栏，支持键盘操作；打开探索（含进入已打开探索的画板）自动收起，探索期间可手动展开，关闭探索后保持当前折叠状态。隐藏内容与分隔条但不卸载素材栏，保留来源选项、宽度、原有卡片和画板平移/缩放；不把素材栏开关放进画板工具条。
 
@@ -141,7 +151,7 @@
 
 15. **codex CLI 隐形（一键安装 + OAuth 登录）**（2026-07-29）：codex CLI 是本机 provider 之一（约定 1：另有即梦与 Bowerbird Cloud），但用户**无需碰终端**——首启引导（[CodexOnboarding.tsx](apps/desktop/src/components/CodexOnboarding.tsx)）从「复制命令让用户去终端跑」升级为 app 内一键执行：step1 `codex_install`（spawn `npm install -g @openai/codex`，逐行进度经 `codex://setup-progress` 流式）+ step2 `codex_login`（spawn `codex login`，codex 自己开浏览器走 ChatGPT OAuth，写 `~/.codex/auth.json`）。后端 spawn 走 `tokio::process::Command`（**不受 Tauri shell scope 限制**，不改 capabilities）。Node/npm 缺失返回 reason，前端引导装 Node。安装/登录成功 emit `codex://health-changed`，App + AssetDetail 各自监听重取 codexHealth（修 AssetDetail 独立 useState 不同步，见踩坑）。Windows 上 npm.cmd 路径常含空格（`C:\Program Files\nodejs`），`npm_command` 用 `raw_arg` 拼 `cmd /S /C ""path" args"`（详见踩坑）。**备选**：[codex/openai_api.rs](apps/desktop/src-tauri/src/codex/openai_api.rs)（OpenAI Images API 生图，API key 路线，未接入主线）——经研究 ChatGPT 订阅额度不对第三方 API 开放、codex CLI 是唯一合法订阅通道，故走 CLI 隐形而非换 provider。
 
-16. **环境状态入口收敛进设置面板 + 扩展心跳连接跟踪（2026-07-31 立，2026-08-15 重构）**：原两级「环境状态 Onboarding」（一级 Onboarding.tsx 三卡片总览 + store `onboardingForceOpen` 跳转二级）**已于 2026-08-15 删除**——codex / 即梦 CLI 状态与引导移入设置「模型设置」、浏览器扩展引导移入「系统设置」直接唤起，二级引导（Codex/Dreamina/Extension Onboarding）关闭即返回设置；新手上手改走交互式 OnboardingTour（右键复用生成提示词 → 进创作板 → 插 chip 实操逐步解锁）。**扩展连接跟踪不变**：canonical 扩展（[apps/extension/](apps/extension/)）每 15s WS ping；后端 `ExtensionStatus`（last_seen + connected）收任意消息 touch/emit connected、后台 tick 30s 超时 emit disconnected。随包内嵌（tauri resources `../../extension/` → `extension/`，用**目录源**保留子目录结构——map+glob 会拍平子目录致 release 扩展图标加载失败，见踩坑；dev 源码、release resource）。
+16. **环境状态入口收敛进设置面板 + 扩展心跳连接跟踪（2026-07-31 立，2026-08-15 重构）**：原两级「环境状态 Onboarding」（一级 Onboarding.tsx 三卡片总览 + store `onboardingForceOpen` 跳转二级）**已于 2026-08-15 删除**——codex / 即梦 CLI 状态与引导移入设置「模型设置」、浏览器扩展引导移入「系统设置」直接唤起，二级引导（Codex/Dreamina/Extension Onboarding）关闭即返回设置；**2026-09-11 入门主线更新为项目画板实操**：本地示例项目或自己的图片 → 拖入与移动卡片 → 写目标并选参考/维度 → 用户主动图片生成即完成五步主线；集合通过独立教程覆盖创建、添加素材、按需提炼及保存后选择规范。版本化进度独立保存，可暂停/恢复；先完成准备与实际生成完成分别记录，跳过维度明确标注。账号和模型配置沿原入口按需进行，引导不得自动调用分析/生成；旧用户用一次新版变化介绍，专题说明按需展示。详见 [ONBOARDING.md](dev-doc/ONBOARDING.md)。**扩展连接跟踪不变**：canonical 扩展（[apps/extension/](apps/extension/)）每 15s WS ping；后端 `ExtensionStatus`（last_seen + connected）收任意消息 touch/emit connected、后台 tick 30s 超时 emit disconnected。随包内嵌（tauri resources `../../extension/` → `extension/`，用**目录源**保留子目录结构——map+glob 会拍平子目录致 release 扩展图标加载失败，见踩坑；dev 源码、release resource）。
 
 17. **扩展采集统一走浏览器 save_blob + 通用候选管线（2026-07-29）**：canonical 与旧 Windows 版不再分叉——[background.js](apps/extension/background.js) 在浏览器会话内 fetch（继承代理/Cookie/登录态）后，以 `save_blob` metadata + binary WS 上传；桌面 [ws_server.rs](apps/desktop/src-tauri/src/collect/ws_server.rs) → [ingest_from_bytes](apps/desktop/src-tauri/src/core/ingest.rs) 按真实字节 sniff/decode，**禁止退回桌面 reqwest 二次下载作为主路径**（Pinterest/登录态站会回归）。通用候选见 [candidate-utils.js](apps/extension/candidate-utils.js)：`img/currentSrc`、srcset/picture、lazy data-*、CSS background、OG/Twitter、JSON-LD、poster/SVG、open shadow；拖拽 HTML 图片优先，禁止把外层商品页 URL混为图片；Alt 明确目标支持 overlay/CSS/blob/data/canvas。XHS 结构化适配保留为高置信度增强但共用后续管线。安全边界：候选≤100、fetch 45s、图片≤50MiB、HTML fallback≤2MiB且深度1、防循环、Rust 100MP/32768边界、metadata状态机/长度限制、日志 query 脱敏；不绕 closed shadow/跨域 iframe/tainted canvas。真机以 Pinterest + `petcollars.com.au` 商品页通过为验收。
 
@@ -256,6 +266,11 @@
 **画板选择与主动整理（2026-09-06）**：Ctrl/Command + 点击可追加或取消节点选择，Ctrl/Command 框选保留已有选择。节点右键“整理”以当前所选节点为起点（右键未选节点则只取该节点），沿连接方向收集当前可见的后续卡片；素材组成员和 Agent 隐藏提示卡映射到可见容器。按连接层级对齐、留出间距，并整体避开未参与整理的卡片；不移动上游或无关卡片。整理后整组选中，节点/素材组坐标沿用现有画板写入队列持久化；不更改线程、连接、素材归属或执行记录。
 
 ## 踩坑记录
+
+### 画板右键菜单让探索浏览器看似反复刷新（2026-09-11）
+
+- 根因：SourceBrowserPanel 发现任意 `role=menu` 就隐藏原生 WebView，未判断菜单是否与浏览器相交；隐藏后露出恒定的“正在打开”转圈占位。隔离真实 CanvasWorkspace 右键测试复现错误的 `visible:false`，并非代码主动发送 reload。
+- 修复：菜单仅在矩形覆盖浏览器 viewport 时临时隐藏，对话框保留整体遮挡保护；临时隐藏使用独立说明，布局/可见性不变时不重复调原生接口。新增连续右键、覆盖菜单移开/隐藏、无导航/刷新及调用去重的前端回归；用户窗口和实际站点尚未复测。
 
 ### 探索拖图不能只监听 IMG 的 document dragstart（2026-09-10）
 

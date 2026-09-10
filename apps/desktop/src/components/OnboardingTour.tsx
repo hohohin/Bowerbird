@@ -1,519 +1,214 @@
-import { useEffect, useLayoutEffect, useState, type CSSProperties, type ReactNode } from "react";
-import { createPortal } from "react-dom";
-import { ArrowRight, Sparkles } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { BookOpen, Check, ChevronDown, ChevronUp, X } from "lucide-react";
 import { useStore } from "../store";
+import { api } from "../lib/api";
+import { nextLessonStep } from "../lib/onboarding";
+import { LEARNING_TOPICS, useOnboarding } from "../lib/onboardingStore";
 import { ModalShell } from "./ModalShell";
-import { BOARD_PROMPT_LOADED_EVENT } from "./creation/useCreationEditor";
+import { CollectionOnboarding } from "./CollectionOnboarding";
+import "./OnboardingTour.css";
 
-type StepDef = { title?: string; body: string | ReactNode; side?: "below" | "right" };
+const STEPS = [
+  ["放一张参考到画板", "从左侧素材栏拖一张图片到画板。素材库保存图片，画板组织这次创作；同一张图可以用于多个项目。", ".canvas-source-panel"],
+  ["安排你的创作空间", "拖动画板上的素材卡片，或选中后按方向键移动。一个项目就是一块画板，布局会自动保存。", "[data-canvas-stage]"],
+  ["写下目标，加入参考", "点击下方输入框，写清楚想制作什么，再点击产品图加入参考。比如：为这款护发产品制作宣传图，保留产品外观，顶部留出标题空间。", '[data-tour="creation-editor"]'],
+  ["借用一个图片特征", "把配色参考也拖到画板，在创作模式下点击它，打开维度环。选择「色调」等一个维度，看看输入中增加了什么。", '.canvas-source-panel'],
+  ["检查并开始生成", "检查需求与参考图，选择普通图片生成，再主动点击发送。生成会使用所选服务的额度；登录或配置完成后，可以回到这份草稿继续。", ".generation-toolbar"],
+] as const;
 
-/** 测试辅助：step 气泡右上角「跳过此步」按钮（tourStep+1，不补做前置动作——被跳过的
- *  真实交互缺失时下一步锚点可能不在，气泡回退默认位置）。仅方便测试走查，
- *  打包时可置 false 隐藏（或连同按钮渲染整段删除）。 */
-const TOUR_SKIP_STEP_ENABLED = true;
-
-const STEP_DEFS: Record<number, StepDef> = {
-  1: {
-    title: "先来创建一个项目吧",
-    side: "right",
-    body: "点击这个 + 号，看看创建项目的两种方式。",
-  },
-  2: {
-    side: "right",
-    body:
-      "创作项目有两种方式：\n" +
-      "「新建空白项目」——先建一个空项目，不关联任何文件夹，素材之后再导入或生成；\n" +
-      "「导入已有文件夹」——选一个装着图片的文件夹，一键导入全部素材并建立项目。",
-  },
-  3: {
-    side: "right",
-    body:
-      "本引导走第二种：点击「导入已有文件夹」，选择「初始引导」文件夹，然后点右下角「选择文件夹」。\n\n" +
-      "tips：建议文件夹内只存放图片素材；项目建好后若通过外部应用添加了图片，可右键「更新项目文件」同步。\n\n" +
-      "当前显示则为进入了项目的状态，采集、生成的图片默认归为该项目。\n" +
-      "点击右侧的图标则退出项目，返回全局；\n" +
-      "可通过右键菜单删除项目。",
-  },
-  4: {
-    body: "项目建好了，预设图已就位。右键点这个素材，选「复用生成提示词」。",
-  },
-  5: {
-    side: "right",
-    body: "点「复用生成提示词」，把它的提示词和参考图带进创作板。",
-  },
-  6: {
-    body: "你可以像这样，直接用文字和素材写出你的想法——需要素材的时候，点击想要的素材即可。",
-  },
-  7: {
-    body: "先点一下这里，开始编辑。",
-  },
- 8: {
-    body:
-      "再点击这张素材——它四周会出现维度环。（单击图片则是把它加进编辑框作参考图。）\n" +
-      "点击后环不会消失",
-  },
-  9: {
-    body:
-      <>
-        环上每个扇区是这张图反推出的一个维度，用来
-        <span className="text-accent underline">精准控制</span>
-        生成的走向{"\n"}
-        悬停扇区可预览该维度的反推内容，点击扇区即加入创作板，可连续添加多个。{"\n"}
-        未经反推的素材没有维度，可通过右键菜单进行反推。{"\n"}
-        也可以在设置中打开入库即自动反推的选项
-      </>,
-  },
-  10: {
-    body: "点击环上的「构图」扇区，把它加入创作板（已选扇区会打 ✓ 变淡）。",
-  },
-  11: {
-    body: "想要关闭维度环，移出鼠标或直接开始打字输入内容即可。",
-  },
-  12: {
-    body: "当创作模式激活，默认左键为添加素材\n（可以在设置 · 个性化与记忆中改变）",
-  },
-  13: {
-    body: "点击该按钮即可退出创作模式，左键则为打开素材详情",
-  },
-};
-
-/** 气泡左上角序号「教程号-步号」的教程号：新手教程是第 1 个教程，故步骤显示 1-x。 */
-const TUTORIAL_NO = 1;
-
-function bubblePosition(rect: DOMRect, side: "below" | "right"): CSSProperties {
-  const bubbleH = 150;
-  const bubbleW = 320;
-  const margin = 12;
-  if (side === "right") {
-    const fitsRight = rect.right + bubbleW + margin < window.innerWidth;
-    const left = fitsRight ? rect.right + margin : Math.max(12, rect.left - bubbleW - margin);
-    const top = Math.max(12, Math.min(rect.top, window.innerHeight - bubbleH - margin));
-    return { top, left };
-  }
-  const below = rect.bottom + bubbleH + margin < window.innerHeight;
-  const top = below ? rect.bottom + margin : Math.max(12, rect.top - bubbleH - margin);
-  const left = Math.max(12, Math.min(rect.left, window.innerWidth - bubbleW - margin));
-  return { top, left };
+function visible(element: Element | null): element is HTMLElement {
+  return !!element && element instanceof HTMLElement && element.getBoundingClientRect().width > 0
+    && element.getBoundingClientRect().height > 0;
+}
+function editorEvidence(root: Element | null) {
+  const editor = root?.querySelector('.ProseMirror');
+  const copy = editor?.cloneNode(true) as HTMLElement | undefined;
+  copy?.querySelectorAll('[contenteditable="false"]').forEach(node => node.remove());
+  const text = copy?.textContent?.trim() ?? "";
+  return { hasText: !!text && text !== "请参考", hasReference: !!editor?.querySelector('[data-asset-id]'),
+    hasDimension: !!editor?.querySelector('[data-keyword]') };
 }
 
-/** 编辑框内文本末尾坐标（step 6 虚拟鼠标要指向光标该落的位置）：取 .ProseMirror 内最后一个非空
- * 文本节点的末尾——真正的文本末尾，而非段落块容器的末尾（避免落到行中间）。 */
-function editorTextEndCoords(): { x: number; y: number } | null {
-  const pm = document.querySelector(
-    '[data-tour="creation-editor"] .ProseMirror',
-  ) as HTMLElement | null;
-  if (!pm) return null;
-  const walker = document.createTreeWalker(pm, NodeFilter.SHOW_TEXT);
-  let lastText: Text | null = null;
-  while (walker.nextNode()) {
-    const t = walker.currentNode as Text;
-    if (t.data.length > 0) lastText = t;
-  }
-  if (lastText) {
-    const range = document.createRange();
-    range.setEnd(lastText, lastText.data.length);
-    range.collapse(false);
-    const r = range.getBoundingClientRect();
-    if (r.width > 0 || r.height > 0) return { x: r.right, y: r.top + r.height / 2 };
-  }
-  // 回退：最后一个块末尾。
-  const lastBlock = pm.querySelector("p:last-of-type") ?? pm.lastElementChild;
-  if (lastBlock) {
-    const range = document.createRange();
-    range.selectNodeContents(lastBlock);
-    range.collapse(false);
-    const r = range.getBoundingClientRect();
-    return { x: r.right, y: r.top + r.height / 2 };
-  }
-  const r = pm.getBoundingClientRect();
-  return { x: r.left + 16, y: r.bottom - 14 };
+export function LearningHint({ topic }: { topic: typeof LEARNING_TOPICS[number]["id"] }) {
+  const { progress, patch } = useOnboarding();
+  const item = LEARNING_TOPICS.find(item => item.id === topic)!;
+  if (progress.dismissed.includes(topic) || progress.status === "active") return null;
+  return <aside className="learning-hint" aria-label={item.title}>
+    <div><strong>{item.title}</strong><p>{item.body}</p></div>
+    <button type="button" aria-label={`关闭${item.title}提示`} onClick={() => patch({ dismissed: [...progress.dismissed, topic] })}><X size={14} /></button>
+  </aside>;
 }
 
-/**
- * 新手引导 tour（阶段 B，替代首启自动注入）。自写 spotlight（box-shadow 挖洞 z-70 + pulse ring
- * + 气泡 z-71）+ 虚拟鼠标（z-72，移动到目标 + 脉冲点击示意），零依赖。步骤：
- * 0 入口弹窗 → 1 点 + 开新建菜单 → 2 两种创建方式（锚菜单本体并框选「导入已有文件夹」，
- * 选完文件夹转「导入中」）→ 3 导入操作提示 + 进入项目状态（侧栏激活项目）→ 4 首图右键 →
- * 5 菜单复用 → 6 编辑框 → 7 虚拟鼠标示意点编辑框（用户真点）→ 8 虚拟鼠标指向 preset-05
- * （用户真点击 → 四周呼出维度环 CaptionRing）→ 9 高亮维度环 → 10 虚拟鼠标示意点
- * 环上「构图」扇区（用户真点）→ 11 高亮编辑框教关环手势（用户真关环）→ 12 高亮瀑布流
- * 讲创作模式左键行为【下一步】→ 13 虚拟鼠标指向「退出创作模式」页签（用户真点退出）→
- * 14 结束语。
- * 推进：1→2 + 按钮菜单打开（new-project-menu 事件，NewProjectMenu 广播）；
- * 2→3【下一步】（tourImported 后；step 2 期间收到 project-import-started 事件起脚注显「正在导入…」）；
- * 3→4【下一步】；4→5 右键首图（contextMenu）；5→6 点复用（board-load-prompt）；6→7【下一步】；
- * 7→8 用户真点编辑框；8→9 用户真点击瀑布流图（store.captionRing）；9→10【下一步】；
- * 10→11 用户真点环上维度扇区（CaptionRing pick）；11→12 用户真关环（captionRing 收起，
- * CaptionRing 在 tourStep ≥ 11 起恢复移出/输入收起）；12→13【下一步】；13→14 用户真点
- * 「退出创作模式」（boardOpen 置 false）。
- */
 export function OnboardingTour() {
-  const tourActive = useStore((s) => s.tourActive);
-  const tourStep = useStore((s) => s.tourStep);
-  const tourImported = useStore((s) => s.tourImported);
-  const setTourStep = useStore((s) => s.setTourStep);
-  const endTour = useStore((s) => s.endTour);
-  const assets = useStore((s) => s.assets);
-  const boardOpen = useStore((s) => s.boardOpen);
-  const contextMenu = useStore((s) => s.contextMenu);
-  const captionRing = useStore((s) => s.captionRing);
-  // tour step 4 锁定「罂粟夜宴」（生成图，有可复用的 prompt_raw）；不依赖 assets[0]（排序不定）。
-  const yysyAsset = assets.find((a) => a.name === "罂粟夜宴");
-  const [rect, setRect] = useState<DOMRect | null>(null);
-  const [optionRect, setOptionRect] = useState<DOMRect | null>(null);
-  const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
-  // step 2 是否已选完文件夹（导入即将/正在跑）：脚注在「按提示操作」与「正在导入…」间切换。
-  const [importStarted, setImportStarted] = useState(false);
+  const { progress, panel, patch, show } = useOnboarding();
+  const activeProjectId = useStore(s => s.activeProjectId);
+  const routePending = useStore(s => s.projectRoutePending);
+  const genJobs = useStore(s => s.genJobs);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [minimized, setMinimized] = useState(false);
+  const [blocked, setBlocked] = useState(false);
+  const [missingDimension, setMissingDimension] = useState(false);
+  const [generationReady, setGenerationReady] = useState(false);
+  const moving = useRef(new Map<string, string>());
+  const job = progress.jobId ? genJobs[progress.jobId] : null;
+  const onProject = activeProjectId === progress.projectId && !routePending;
 
-  const selector: string | null = (() => {
-    if (!tourActive || tourStep <= 0 || tourStep >= 14) return null;
-    if (tourStep === 1 || tourStep === 2) return `[data-tour="new-project"]`;
-    if (tourStep === 3) return `[data-tour="active-project"]`;
-    if (tourStep === 4) return yysyAsset ? `#asset-${yysyAsset.id}` : null;
-    if (tourStep === 5) return `[data-tour="ctx-reuse-gen"]`;
-    if (tourStep === 6 || tourStep === 7 || tourStep === 11) return `[data-tour="creation-editor"]`;
-    if (tourStep === 8) return `[data-origin*="preset-05"]`;
-    if (tourStep === 9) return `[data-tour="creation-keywords"]`;
-    if (tourStep === 10) return `[data-dim="构图"]`;
-    if (tourStep === 12) return `[data-tour="masonry"]`;
-    if (tourStep === 13) return `[data-tour="board-exit"]`;
-    return null;
-  })();
-
-  // 测量 spotlight 锚点 rect；监听 resize/scroll + 定时兜底（首图加载/右键菜单打开延迟）。
-  useLayoutEffect(() => {
-    if (!selector) {
-      setRect(null);
-      return;
-    }
-    const measure = () => {
-      // step 1/2：菜单打开时锚菜单本体（讲两种创建方式；新建菜单 z-80 在 spotlight 之上）；
-      // 菜单已关（选完文件夹导入中 / 被收起）退回 + 按钮。
-      const el =
-        tourStep === 1 || tourStep === 2
-          ? ((document.querySelector("#new-project-menu") as HTMLElement | null) ??
-            (document.querySelector(selector) as HTMLElement | null))
-          : (document.querySelector(selector) as HTMLElement | null);
-      setRect(el ? el.getBoundingClientRect() : null);
-      setOptionRect(
-        tourStep === 2
-          ? ((document.querySelector('[data-tour="new-project-import"]') as HTMLElement | null)?.getBoundingClientRect() ?? null)
-          : null
-      );
-    };
-    measure();
-    const raf = requestAnimationFrame(measure);
-    window.addEventListener("resize", measure);
-    window.addEventListener("scroll", measure, true);
-    const t = setInterval(measure, 400);
-    return () => {
-      cancelAnimationFrame(raf);
-      window.removeEventListener("resize", measure);
-      window.removeEventListener("scroll", measure, true);
-      clearInterval(t);
-    };
-  }, [selector, assets, tourStep]);
-
-  // 虚拟鼠标坐标：step 7 指向编辑框文本末尾（光标应落处）；8/10 指向目标元素中心；13 指向退出按钮。
-  useLayoutEffect(() => {
-    if (tourStep !== 7 && tourStep !== 8 && tourStep !== 10 && tourStep !== 13) {
-      setCursor(null);
-      return;
-    }
-    const measure = () => {
-      if (tourStep === 7) {
-        setCursor(editorTextEndCoords());
-        return;
+  // Only the mounted lesson project and its new task can advance progress.
+  useEffect(() => {
+    if (panel !== "lesson" || progress.status !== "active") return;
+    moving.current.clear();
+    let highlighted: HTMLElement | null = null;
+    const inspect = () => {
+      const current = useOnboarding.getState().progress;
+      const state = useStore.getState();
+      const root = document.querySelector<HTMLElement>('.canvas-workspace');
+      const modal = Array.from(document.querySelectorAll('[role="dialog"][aria-modal="true"]'))
+        .some(element => visible(element) && !element.hasAttribute("data-project-inspector"));
+      setBlocked(modal);
+      const ready = state.activeProjectId === current.projectId && !state.projectRoutePending
+        && root?.dataset.onboardingProject === current.projectId && root.getAttribute("aria-busy") !== "true";
+      const target = ready && !modal ? (current.step === 4
+        ? Array.from(document.querySelectorAll('[data-tour="creation-keywords"]')).find(visible) : null)
+        ?? Array.from(root?.querySelectorAll(STEPS[current.step - 1][2]) ?? []).find(visible) : null;
+      if (highlighted !== target) {
+        highlighted?.classList.remove("onboarding-target");
+        highlighted = target instanceof HTMLElement ? target : null;
+        highlighted?.classList.add("onboarding-target");
       }
-      const sel =
-        tourStep === 8
-          ? `[data-origin*="preset-05"]`
-          : tourStep === 10
-            ? `[data-dim="构图"]`
-            : `[data-tour="board-exit"]`;
-      const el = document.querySelector(sel) as HTMLElement | null;
-      if (!el) {
-        setCursor(null);
-        return;
+      if (!ready || modal || !root) { setGenerationReady(false); return; }
+      const cards = Array.from(root.querySelectorAll<HTMLElement>('.canvas-node.is-asset')).filter(visible);
+      let movedCard = false;
+      for (const card of cards) {
+        const id = card.dataset.canvasNodeId!;
+        if (moving.current.has(id) && moving.current.get(id) !== card.style.transform) movedCard = true;
+        moving.current.set(id, card.style.transform);
       }
-      if (tourStep === 8) {
-        const r0 = el.getBoundingClientRect();
-        if (r0.bottom < 0 || r0.top > window.innerHeight) {
-          el.scrollIntoView({ block: "center", behavior: "smooth" });
-        }
-      }
-      const r = el.getBoundingClientRect();
-      if (r.width === 0) {
-        setCursor(null);
-        return;
-      }
-      setCursor({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
+      const editor = editorEvidence(root.querySelector('[data-onboarding-composer]'));
+      const previous = current.jobId ? state.genJobs[current.jobId] : null;
+      const candidate = previous && (previous.running || previous.turns.some(turn => turn.images.length)) ? previous : Object.values(state.genJobs)
+        .filter(job => job.projectId === current.projectId && job.createdAt >= current.startedAt && job.media !== "video")
+        .sort((a, b) => b.createdAt - a.createdAt)[0];
+      if (current.step === 5 && candidate && current.jobId !== candidate.id) patch({ jobId: candidate.id });
+      const generated = !!candidate && !candidate.running && candidate.turns.some(turn => turn.images.length > 0)
+        && candidate.projectId === current.projectId;
+      setMissingDimension(current.step === 4 && !!state.captionRing && state.promptedAssetsLoaded
+        && !state.promptedAssets.find(asset => asset.id === state.captionRing)?.sections?.length);
+      const next = nextLessonStep(current.step, { onProject: true, hasCard: cards.length > 0, movedCard,
+        ...editor, generated });
+      setGenerationReady(next === 6);
+      if (next !== 6 && next !== current.step) patch({ step: next });
     };
-    measure();
-    const raf = requestAnimationFrame(measure);
-    const t = setInterval(measure, 400);
-    window.addEventListener("resize", measure);
-    window.addEventListener("scroll", measure, true);
-    return () => {
-      cancelAnimationFrame(raf);
-      clearInterval(t);
-      window.removeEventListener("resize", measure);
-      window.removeEventListener("scroll", measure, true);
-    };
-  }, [tourStep]);
+    inspect();
+    const timer = setInterval(inspect, 300);
+    return () => { clearInterval(timer); highlighted?.classList.remove("onboarding-target"); };
+  }, [panel, progress.status, progress.step, patch, show]);
 
-  // step 4 → 5：用户右键首图打开菜单 → 高亮菜单内「复用生成提示词」。
-  useEffect(() => {
-    if (
-      tourActive &&
-      tourStep === 4 &&
-      contextMenu &&
-      yysyAsset &&
-      contextMenu.assetId === yysyAsset.id
-    ) {
-      setTourStep(5);
-    }
-  }, [tourActive, tourStep, contextMenu, assets, setTourStep]);
-
-  // step 5 → 6：目标项目的创作器实际载入 prompt 后推进；不能拿请求发起或 boardOpen
-  // 当完成信号，否则跨素材库新建项目时 UI 尚未挂载就会提前进入下一步。
-  useEffect(() => {
-    if (!tourActive || tourStep !== 5) return;
-    const onLoad = () => setTourStep(6);
-    window.addEventListener(BOARD_PROMPT_LOADED_EVENT, onLoad);
-    return () => window.removeEventListener(BOARD_PROMPT_LOADED_EVENT, onLoad);
-  }, [tourActive, tourStep, setTourStep]);
-
-  // step 7 → 8：用户真实点击编辑框（onClick={focus}）。
-  useEffect(() => {
-    if (tourStep !== 7) return;
-    const el = document.querySelector(`[data-tour="creation-editor"]`);
-    if (!el) return;
-    const onClick = () => setTourStep(8);
-    el.addEventListener("click", onClick);
-    return () => el.removeEventListener("click", onClick);
-  }, [tourStep, setTourStep]);
-
-  // step 8 → 9：用户真点击瀑布流图 → 创作模式内加参考图并呼出维度环（store.captionRing）。
-  useEffect(() => {
-    if (tourActive && tourStep === 8 && captionRing) setTourStep(9);
-  }, [tourActive, tourStep, captionRing, setTourStep]);
-
-  // step 11 → 12：用户按提示关掉维度环（移开鼠标 / 直接输入——CaptionRing 在 tourStep ≥ 11
-  // 起恢复这两种收起手势）→ captionRing 清空。
-  useEffect(() => {
-    if (tourActive && tourStep === 11 && !captionRing) setTourStep(12);
-  }, [tourActive, tourStep, captionRing, setTourStep]);
-
-  // step 13 → 14：用户真点「退出创作模式」页签 → setBoardActive(false) → boardOpen 置 false。
-  useEffect(() => {
-    if (tourActive && tourStep === 13 && !boardOpen) setTourStep(14);
-  }, [tourActive, tourStep, boardOpen, setTourStep]);
-
-  // step 1 → 2：用户点 + 打开新建菜单（NewProjectMenu 广播）→ 锚定菜单讲两种创建方式。
-  useEffect(() => {
-    if (!tourActive || tourStep !== 1) return;
-    const onMenuOpen = () => setTourStep(2);
-    window.addEventListener("bowerbird://new-project-menu", onMenuOpen);
-    return () => window.removeEventListener("bowerbird://new-project-menu", onMenuOpen);
-  }, [tourActive, tourStep, setTourStep]);
-
-  // step 2 脚注：收到「开始导入」广播起显示「正在导入…」；离开该步重置。
-  useEffect(() => {
-    if (tourStep !== 2) setImportStarted(false);
-  }, [tourStep]);
-  useEffect(() => {
-    if (!tourActive || tourStep !== 2) return;
-    const onStart = () => setImportStarted(true);
-    window.addEventListener("bowerbird://project-import-started", onStart);
-    return () => window.removeEventListener("bowerbird://project-import-started", onStart);
-  }, [tourActive, tourStep]);
-
-  if (!tourActive) return null;
-
-  // step 0：引导入口弹窗（进入引导 / 跳过）。
-  if (tourStep === 0) {
-    return (
-      <ModalShell
-        title="把灵感变成下一张作品"
-        eyebrow="Welcome to Bowerbird"
-        description="花一分钟走一遍核心流程：导入素材、复用提示词、开始创作。"
-        width="sm"
-        onClose={endTour}
-        footer={(
-          <>
-            <button type="button" onClick={endTour} className="app-modal-button">跳过引导</button>
-            <button type="button" onClick={() => setTourStep(1)} className="app-modal-button is-primary">
-              进入引导模式 <ArrowRight size={15} />
-            </button>
-          </>
-        )}
-      >
-        <div className="setup-card flex items-start gap-3 p-4">
-          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent text-white"><Sparkles size={18} /></span>
-          <p className="text-xs leading-5 text-muted">你会创建第一个项目、导入预设素材，并把一张参考图的提示词带进创作板。</p>
-        </div>
-      </ModalShell>
-    );
+  async function start(mode: "sample" | "own" | "resume") {
+    if (busy) return;
+    setBusy(true); setError("");
+    const origin = useStore.getState();
+    const originId = origin.activeProjectId, revision = origin.projectRouteRevision;
+    try {
+      let id = progress.projectId;
+      if (mode === "sample") {
+        id = progress.sampleProjectId ?? `onboarding-${crypto.randomUUID()}`;
+        patch({ sampleProjectId: id });
+        const result = await api.createOnboardingProject(id);
+        useStore.setState(s => ({ projects: s.projects.some(p => p.id === result.project.id)
+          ? s.projects.map(p => p.id === result.project.id ? result.project : p)
+          : [result.project, ...s.projects] }));
+      } else if (mode === "own") {
+        id = originId;
+        if (!id) id = await origin.beginProvisionalProject();
+      } else {
+        const projects = await api.listProjects();
+        if (!projects.some(project => project.id === id) && !origin.projects.some(project => project.id === id && project.provisional))
+          throw new Error("原引导项目已不存在。可以使用示例或自己的图片重新开始。");
+        await useStore.getState().reloadProjects();
+      }
+      if (!id) throw new Error("请先创建或打开一个项目");
+      const route = useStore.getState();
+      if (mode !== "own" && (route.projectRoutePending || route.activeProjectId !== originId || route.projectRouteRevision !== revision))
+        throw new Error("页面已切换，项目已保留。请回到入门引导后继续。");
+      await useStore.getState().enterProject(id);
+      patch({ status: "active", projectId: id, updateSeen: true,
+        ...(mode === "resume" ? {} : { step: 1, startedAt: Date.now(), jobId: null, outcome: null, skippedSteps: [] }) });
+      setMinimized(false); show("lesson");
+    } catch (e) { setError(String(e instanceof Error ? e.message : e)); }
+    finally { setBusy(false); }
+  }
+  async function pause(prepared = false) {
+    try {
+      await useStore.getState().projectCanvasFlush?.();
+      patch({ status: "paused", ...(prepared ? { outcome: "prepared" as const } : {}) });
+      show(prepared ? "done" : "closed");
+    } catch { setError("草稿尚未保存，学习进度仍保留。请重试或查看画板保存提示。"); }
   }
 
-  // step 14：结束语居中模态（下半部分列状容器，预留动图/链接教程）。
-  if (tourStep >= 14) {
-    return (
-      <ModalShell
-        title="第一条创作路径已完成"
-        eyebrow="Tour complete"
-        description="随时能在侧栏底部「设置 → 系统设置 · 新手教程」重温本引导。"
-        width="sm"
-        onClose={endTour}
-        footer={<button type="button" onClick={endTour} className="app-modal-button is-primary">开始使用</button>}
-      >
-          <div className="mb-4 flex items-center gap-3 rounded-xl border border-lime/20 bg-lime/5 p-3 text-lime">
-            <Sparkles size={18} />
-            <span className="text-xs font-medium">素材已经进入创作工作流</span>
-          </div>
-          {/* 下一步建议：列状容器，「配置素材采集插件」是按钮，点击结束 tour 并唤起扩展配置面板 */}
-          <div className="text-left">
-            <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted">下一步建议</h3>
-            <div className="flex flex-col gap-2">
-              <button
-                onClick={() => {
-                  endTour();
-                  useStore.getState().setExtensionOnboardingForceOpen(true);
-                }}
-                className="setup-card flex w-full items-center justify-between px-3 py-3 text-left hover:bg-panel2"
-              >
-                <span>
-                  <span className="block text-xs text-ink">配置素材采集插件</span>
-                  <span className="mt-0.5 block text-[10px] text-muted">方便你把灵感收入巢中</span>
-                </span>
-                <span className="ml-2 shrink-0 text-xs text-accent">前往 →</span>
-              </button>
-            </div>
-          </div>
-      </ModalShell>
-    );
+  async function learnCollections() {
+    try {
+      await useStore.getState().projectCanvasFlush?.();
+      patch({ updateSeen: true, ...(useOnboarding.getState().progress.status === "active" ? { status: "paused" as const } : {}) });
+      show("collections");
+    } catch { setError("草稿尚未保存，请保存后再学习集合。"); }
   }
 
-  const def = STEP_DEFS[tourStep];
-  const text = def?.body ?? "";
-  const title = def?.title;
-  const side = def?.side ?? "below";
-  const bubbleStyle: CSSProperties = rect ? bubblePosition(rect, side) : { top: 120, left: 120 };
-  const awaitClick = tourStep === 7 || tourStep === 8 || tourStep === 10 || tourStep === 13;
-
-  return createPortal(
-    <>
-      {rect && (
-        <>
-          <div
-            className="tour-spotlight"
-            style={{
-              left: rect.left - 6,
-              top: rect.top - 6,
-              width: rect.width + 12,
-              height: rect.height + 12,
-            }}
-          />
-          <div
-            className="tour-spotlight-ring"
-            style={{
-              left: rect.left - 2,
-              top: rect.top - 2,
-              width: rect.width + 4,
-              height: rect.height + 4,
-            }}
-          />
-        </>
-      )}
-      {optionRect && (
-        <div
-          className="tour-option-frame"
-          style={{
-            left: optionRect.left - 3,
-            top: optionRect.top - 3,
-            width: optionRect.width + 6,
-            height: optionRect.height + 6,
-          }}
-        />
-      )}
-      {cursor && (
-        <div className="tour-cursor" style={{ transform: `translate(${cursor.x}px, ${cursor.y}px)` }}>
-          <div className="tour-cursor-ring" />
-          <div className="tour-cursor-dot" />
-        </div>
-      )}
-      <div className="tour-bubble" style={bubbleStyle}>
-        <div className="relative rounded-lg border border-edge bg-panel p-3 shadow-2xl">
-          <span className="absolute -left-2 -top-3 rounded-full border border-edge bg-panel2 px-2 py-0.5 text-[10px] tabular-nums text-muted">
-            {TUTORIAL_NO}-{tourStep}
-          </span>
-          {TOUR_SKIP_STEP_ENABLED && (
-            <button
-              type="button"
-              onClick={() => setTourStep(tourStep + 1)}
-              title="测试辅助：直接跳到下一步"
-              className="absolute -right-2 -top-3 rounded-full border border-edge bg-panel2 px-2 py-0.5 text-[10px] text-muted hover:text-ink"
-            >
-              跳过此步
-            </button>
-          )}
-          {title && <div className="mb-1 text-sm font-semibold text-ink">{title}</div>}
-          <p className="whitespace-pre-line text-sm leading-relaxed text-ink">{text}</p>
-          <div className="mt-3 flex items-center justify-between gap-3">
-            <button onClick={endTour} className="shrink-0 text-xs text-muted hover:text-ink">
-              跳过引导
-            </button>
-            {tourStep === 2 ? (
-              tourImported ? (
-                <button
-                  onClick={() => setTourStep(3)}
-                  className="rounded bg-accent px-3 py-1 text-xs font-medium text-black hover:opacity-90"
-                >
-                  下一步
-                </button>
-              ) : (
-                <span className="text-[11px] text-muted">
-                  {importStarted ? "正在导入…" : "按提示操作自动继续"}
-                </span>
-              )
-            ) : tourStep === 3 ? (
-              <button
-                onClick={() => setTourStep(4)}
-                className="rounded bg-accent px-3 py-1 text-xs font-medium text-black hover:opacity-90"
-              >
-                下一步
-              </button>
-            ) : tourStep === 6 ? (
-              <button
-                onClick={() => setTourStep(7)}
-                className="rounded bg-accent px-3 py-1 text-xs font-medium text-black hover:opacity-90"
-              >
-                下一步
-              </button>
-            ) : tourStep === 9 ? (
-              <button
-                onClick={() => setTourStep(10)}
-                className="rounded bg-accent px-3 py-1 text-xs font-medium text-black hover:opacity-90"
-              >
-                下一步
-              </button>
-            ) : tourStep === 12 ? (
-              <button
-                onClick={() => setTourStep(13)}
-                className="rounded bg-accent px-3 py-1 text-xs font-medium text-black hover:opacity-90"
-              >
-                下一步
-              </button>
-            ) : awaitClick ? (
-              <span className="text-[11px] text-muted">点击高亮处继续</span>
-            ) : (
-              <span className="text-[11px] text-muted">按提示操作自动继续</span>
-            )}
-          </div>
-        </div>
-      </div>
-    </>,
-    document.body,
-  );
+  if (panel === "collections") return <CollectionOnboarding />;
+  if (panel === "closed") return progress.status === "paused"
+    ? <button className="onboarding-resume" onClick={() => show("welcome")}><BookOpen size={14} />继续入门引导</button> : null;
+  if (panel === "welcome") return <ModalShell title="把参考图里的灵感，变成你的作品" eyebrow="入门引导"
+    description="在一块画板上，试一次放入参考、借用特征和生成作品。示例准备无需登录或调用模型。"
+    width="md" preventClose={busy} onClose={() => { patch({ status: progress.status === "completed" ? "completed" : progress.projectId ? "paused" : "skipped", updateSeen: true }); show("closed"); }}
+    footer={<><button className="app-modal-button" disabled={busy} onClick={() => { patch({ status: progress.status === "completed" ? "completed" : progress.projectId ? "paused" : "skipped", updateSeen: true }); show("closed"); }}>先自己逛逛</button>
+      <button className="app-modal-button is-primary" disabled={busy} onClick={() => void start("sample")}>{busy ? "准备中…" : "跟着示例做一次"}</button></>}>
+    <p className="mb-3 text-sm text-muted">示例包含护发产品和蓝色配色参考，已有可借用的图片维度。生成前由你确认使用的模型和额度。</p>
+    <div className="flex flex-wrap gap-2">
+      {progress.projectId && progress.status !== "completed" && <button className="app-modal-button" disabled={busy} onClick={() => void start("resume")}>继续上次进度 · {progress.step}/{STEPS.length}</button>}
+      <button className="app-modal-button" disabled={busy} onClick={() => void start("own")}>用自己的图片开始</button>
+    </div>
+    <button className="app-modal-button mt-4" disabled={busy} onClick={() => void learnCollections()}>学习集合与视觉规范</button>
+    {error && <p role="alert" className="mt-3 text-sm text-red-400">{error}</p>}
+    <div className="mt-5 space-y-2"><strong className="text-sm">按需学习</strong>{LEARNING_TOPICS.map(item => <details className="onboarding-topic" key={item.id}><summary>{item.title}</summary><p>{item.body}</p></details>)}</div>
+  </ModalShell>;
+  if (panel === "update") return <ModalShell title="新版创作，从项目画板开始" eyebrow="新版变化" width="sm"
+    onClose={() => { patch({ updateSeen: true }); show("closed"); }}
+    footer={<><button className="app-modal-button" onClick={() => { patch({ updateSeen: true }); show("closed"); }}>知道了</button><button className="app-modal-button is-primary" onClick={() => { patch({ updateSeen: true }); show("welcome"); }}>体验新版引导</button></>}>
+    <ol className="space-y-4 text-sm"><li><strong>项目就是画板</strong><p className="text-muted">参考、创作过程和多次结果，在一个空间里组织。</p></li>
+      <li><strong>探索就在创作旁边</strong><p className="text-muted">边浏览边收集。Windows 可直接拖图到画板落点。</p></li>
+      <li><strong>集合整理参考，规范跨项目用</strong><p className="text-muted">创建集合并加入图片；按需提炼、保存规范，再到创作输入中主动选择。</p></li></ol>
+  </ModalShell>;
+  if (panel === "done") return <ModalShell title={progress.outcome === "generated" ? "第一条创作路径已完成" : "你已学会准备一次创作"}
+    eyebrow="入门引导" width="sm" onClose={() => show("closed")}
+    footer={<><button className="app-modal-button" onClick={() => void learnCollections()}>学习集合与视觉规范</button><button className="app-modal-button is-primary" onClick={() => show("closed")}>继续使用</button></>}>
+    <p className="text-sm text-muted">{progress.outcome === "generated" ? "结果已生成并保留在项目中。你已完成这次从参考到作品的创作。" : "参考与需求留在项目里。准备好模型或账号后，可继续入门引导并尝试生成。"}</p>
+    <p className="mt-4 text-sm">下一步：把相关图片整理成集合，按需提炼视觉规范。更多教程在「设置 → 系统设置 → 入门引导」。</p>
+    {error && <p role="alert" className="mt-3 text-sm text-red-400">{error}</p>}
+  </ModalShell>;
+  if (blocked) return null;
+  return <aside className={`onboarding-lesson${minimized ? " is-minimized" : ""}`} aria-label="入门任务清单">
+    <header><span><BookOpen size={14} /> 入门引导 · {progress.step}/{STEPS.length}</span><div>
+      <button aria-label={minimized ? "展开入门引导" : "收起入门引导"} onClick={() => setMinimized(!minimized)}>{minimized ? <ChevronDown size={15} /> : <ChevronUp size={15} />}</button>
+      <button aria-label="暂停入门引导" onClick={() => void pause()}><X size={15} /></button></div></header>
+    {!minimized && <>
+      <ol>{STEPS.map(([title], index) => <li key={title} aria-current={progress.step === index + 1 ? "step" : undefined} className={index + 1 < progress.step ? "is-complete" : ""}><span>{progress.skippedSteps.includes(index + 1) ? "–" : index + 1 < progress.step ? <Check size={12} /> : index + 1}</span>{title}{progress.skippedSteps.includes(index + 1) && " · 已跳过"}</li>)}</ol>
+      <p aria-live="polite">{onProject ? generationReady ? "已收到这次生成的结果。可以完成入门引导，或接着学习如何用集合整理参考。" : STEPS[progress.step - 1][1] : "你已离开引导项目，学习进度已保留。回到原项目后继续。"}</p>
+      {!onProject && <button className="app-modal-button" disabled={busy} onClick={() => void start("resume")}>回到引导项目</button>}
+      {onProject && progress.step === 1 && <small>没有素材时，可先导入本地图片，再从素材栏拖入。</small>}
+      {onProject && missingDimension && <div><small>这张图片还没有可用维度。可换一张已有反推的图片，或稍后再分析。</small><button className="app-modal-button" onClick={() => void pause()}>稍后学习维度</button></div>}
+      {onProject && progress.step === 4 && <button className="app-modal-button" onClick={() => patch({ step: 5, skippedSteps: [4] })}>暂不借用维度，继续准备</button>}
+      {onProject && progress.step === 5 && !generationReady && <div className="space-y-2">
+        {job?.running && <p role="status">任务进行中。可以暂停教程，结果不会因此取消。</p>}
+        {job && !job.running && !job.turns.some(turn => turn.images.length) && <p role="status">尚未取得生成结果。请查看任务提示，重试后继续。</p>}
+        <button className="app-modal-button" onClick={() => void pause(true)}>先完成准备，稍后生成</button>
+      </div>}
+      {onProject && progress.step === 5 && generationReady && <div className="space-y-2">
+        <button className="app-modal-button is-primary" disabled={!generationReady} onClick={() => {
+          patch({ status: "completed", outcome: "generated" }); show("done");
+        }}>完成入门引导</button>
+      </div>}
+      {error && <p role="alert" className="text-red-400">{error}</p>}
+      <button className="onboarding-pause" onClick={() => void pause()}>稍后继续</button>
+    </>}
+  </aside>;
 }

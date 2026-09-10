@@ -25,8 +25,10 @@ import { CodexOnboarding } from "./components/CodexOnboarding";
 import { ExtensionOnboarding } from "./components/ExtensionOnboarding";
 import { DreaminaOnboarding } from "./components/DreaminaOnboarding";
 import { AccountOnboarding } from "./components/AccountOnboarding";
+import { useOnboarding } from "./lib/onboardingStore";
 import { OnboardingTour } from "./components/OnboardingTour";
 import { ToastViewport } from "./components/ToastViewport";
+import { prepareGenerationSound } from "./lib/generationNotifications";
 import { useStore } from "./store";
 import { api } from "./lib/api";
 import { notify, notifyError, notifySuccess } from "./lib/notify";
@@ -57,6 +59,7 @@ function LibraryLoadingState() {
 }
 
 function App() {
+  useEffect(prepareGenerationSound, []);
   const [initializing, setInitializing] = useState(true);
   const [creativeLaunch, setCreativeLaunch] = useState<CreativeLaunchRequest | null>(null);
   const [creativeTarget, setCreativeTarget] = useState<{
@@ -511,16 +514,20 @@ function App() {
     };
   }, [setClassifyProgress]);
 
-  // 首启空库 → 起 tour（阶段 B，替代自动注入；startTour 进 step 0 入口弹窗）。
-  // 「环境状态」总览已并入设置面板，不再有弹出的环境 dialog，直接起。
+  // Wait for actual library state; upgrades receive a separate introduction.
   useEffect(() => {
-    if (localStorage.getItem("bowerbird.tutorialSeen") === "1") return;
-    const t = setTimeout(() => {
-      const s = useStore.getState();
-      if (s.assets.length !== 0) return;
-      s.startTour();
+    let alive = true;
+    const timer = setTimeout(() => {
+      void Promise.all([api.countAssets(), api.listProjects()]).then(([count, projects]) => {
+        if (!alive) return;
+        const lesson = useOnboarding.getState();
+        if (lesson.panel !== "closed" || lesson.progress.status !== "new" || lesson.progress.updateSeen) return;
+        let legacySeen = false;
+        try { legacySeen = localStorage.getItem("bowerbird.tutorialSeen") === "1"; } catch { /* optional legacy preference */ }
+        lesson.show(legacySeen || count > 0 || projects.length > 0 ? "update" : "welcome");
+      }).catch(() => { /* Settings still offers the lesson after a library read failure. */ });
     }, 1500);
-    return () => clearTimeout(t);
+    return () => { alive = false; clearTimeout(timer); };
   }, []);
 
   // 重建色板进度（P3）：color://rebuild-progress {done,total,ended?}；ended 时清空。
@@ -819,7 +826,7 @@ function App() {
       <ExtensionOnboarding />
       <DreaminaOnboarding />
       <AccountOnboarding />
-      {/* 新手引导 tour（阶段 B）：spotlight 分步引导，替代首启自动注入 */}
+      {/* 版本化入门引导，独立保存学习进度 */}
       <OnboardingTour />
       {/* 图片右键菜单（全局单实例，store.contextMenu 驱动） */}
       <AssetContextMenu />

@@ -371,6 +371,7 @@ pub fn run() {
             commands::projects::create_project,
             commands::projects::create_blank_project,
             commands::preset::release_preset_pack,
+            commands::preset::create_onboarding_project,
             commands::projects::list_projects,
             commands::projects::refresh_project,
             commands::projects::set_active_project,

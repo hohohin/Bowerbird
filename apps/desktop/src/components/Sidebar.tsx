@@ -3,6 +3,7 @@ import { FolderOpen, FolderPlus, PanelLeftClose, PanelLeftOpen, RefreshCw } from
 import { useStore } from "../store";
 import { api } from "../lib/api";
 import { getDragAssets } from "../lib/dragPayload";
+import { useProjectAssetDrop } from "../lib/useProjectAssetDrop";
 import { LocalClassificationDialog } from "./LocalClassificationDialog";
 import { notifyError, notifySuccess } from "../lib/notify";
 import { ProjectSection } from "./ProjectSection";
@@ -49,6 +50,7 @@ export function Sidebar() {
   const total = useStore((s) => s.total);
   const selectedCount = useStore((s) => s.selectedIds.size);
   const activeProjectId = useStore((s) => s.activeProjectId);
+  const projectDrop = useProjectAssetDrop();
   const projectRoutePending = useStore((s) => s.projectRoutePending);
   const projects = useStore((s) => s.projects);
   const enterProject = useStore((s) => s.enterProject);
@@ -63,8 +65,6 @@ export function Sidebar() {
   const autoTags = useStore((s) => s.autoTags);
   const colorRebuild = useStore((s) => s.colorRebuild);
   const [classificationOpen, setClassificationOpen] = useState(false);
-  const tourActive = useStore((s) => s.tourActive);
-  const tourStep = useStore((s) => s.tourStep);
 
   // inline 新建表单：none | folder | smart | collection（避开 window.prompt——Tauri WKWebView 拦截原生对话框）。
   const [creating, setCreating] = useState<"none" | "folder" | "smart" | "collection">("none");
@@ -118,17 +118,12 @@ export function Sidebar() {
   }, [activeProjectId]);
 
   useEffect(() => {
-    if (tourActive && (tourStep === 1 || tourStep === 2 || tourStep === 3)) {
-      collapsedRef.current = false;
-      setCollapsed(false);
-      return;
-    }
     // 项目即画板：进入项目时把主侧栏让位给画板；用户仍可临时展开。
     if (activeProjectId) {
       collapsedRef.current = true;
       setCollapsed(true);
     }
-  }, [activeProjectId, tourActive, tourStep]);
+  }, [activeProjectId]);
 
   /** 宽度夹取：最小 160px，最大不超过主面板（侧栏所在 flex 行）的 1/4。 */
   function clampSidebarWidth(w: number | null) {
@@ -253,6 +248,7 @@ export function Sidebar() {
             return (
               <button
                 key={p.id}
+                {...projectDrop(p)}
                 type="button"
                 onClick={() => !active && void enterProject(p.id).catch((error) => {
                   notifyError(error, "无法切换项目，当前画板保持不变");
@@ -272,6 +268,7 @@ export function Sidebar() {
             );
           })}
         </div>
+        {openFolder && <CollectionPanel key={openFolder.id} folder={openFolder} onClose={() => setOpenFolderId(null)} />}
       </aside>
     );
   }

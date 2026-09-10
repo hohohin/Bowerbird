@@ -2,9 +2,12 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { Image, PanelsTopLeft } from "lucide-react";
 import { useStore } from "../store";
 import type { LibraryProjectGroup } from "../lib/libraryView";
+import { useProjectAssetDrop } from "../lib/useProjectAssetDrop";
 
 export function ProjectFolder({ group, onOpen }: { group: LibraryProjectGroup; onOpen: () => void }) {
+  const projectDrop = useProjectAssetDrop();
   return <button type="button" className="library-project-folder" onClick={onOpen}
+    {...projectDrop(group.project)}
     aria-label={`展开项目 ${group.project.name}，${group.assets.length} 张素材`} aria-expanded={false}
     onContextMenu={(event) => {
       event.preventDefault();

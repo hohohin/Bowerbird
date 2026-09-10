@@ -12,9 +12,7 @@ const MENU_HEIGHT = 92;
 
 /** 侧栏「项目」区的新建入口：点 + 不再直接弹系统文件夹框，而是先弹菜单——「新建空白
  *  项目」过命名窗建无文件夹项目（kind="blank"，素材之后导入/生成攒），「导入已有文件夹」
- *  走原选文件夹建项+全量导入流程。菜单与命名窗都是本地状态（单一入口，不进 store）。
- *  tour：菜单打开广播 new-project-menu（step 1→2 锚定菜单讲两种方式）；选完文件夹广播
- *  project-import-started（step 2 脚注切「正在导入…」）。 */
+ *  走原选文件夹建项+全量导入流程。菜单与命名窗都是本地状态（单一入口，不进 store）。 */
 export function NewProjectMenu() {
   const reloadProjects = useStore((s) => s.reloadProjects);
   const enterProject = useStore((s) => s.enterProject);
@@ -55,34 +53,12 @@ export function NewProjectMenu() {
     inputRef.current?.select();
   }, [naming]);
 
-  // 菜单打开广播（tour step 1→2：引导从「点 +」推进到锚定菜单、讲两种创建方式）。
-  useEffect(() => {
-    if (menu) window.dispatchEvent(new CustomEvent("bowerbird://new-project-menu"));
-  }, [menu]);
-
   async function importFolder() {
-    // tour 引导期（step 1/2 都可能，开菜单即推进到 2）：默认定位到预设图目录的上一级
-    // （已释放到文档目录），让用户点进「初始引导」。
-    const tourActive = useStore.getState().tourActive;
-    const tourStep = useStore.getState().tourStep;
-    let defaultPath: string | undefined;
-    if (tourActive && (tourStep === 1 || tourStep === 2)) {
-      try {
-        defaultPath = await api.releasePresetPack();
-      } catch {
-        /* 释放失败用系统默认路径 */
-      }
-    }
-    const path = await api.pickFolder(defaultPath);
+    const path = await api.pickFolder();
     if (!path) return;
     const originRoute = useStore.getState();
     const originProjectId = originRoute.activeProjectId;
     const originRouteRevision = originRoute.projectRouteRevision;
-    // 用户已点 OS「选择文件夹」→ 广播导入开始（tour step 2 脚注切「正在导入…」；
-    // step 1→2 的推进已在菜单打开时广播，此处不再 setTourStep）。
-    if (useStore.getState().tourActive) {
-      window.dispatchEvent(new CustomEvent("bowerbird://project-import-started"));
-    }
     setCreating(true);
     try {
       const result = await api.createProject(path);
@@ -97,10 +73,6 @@ export function NewProjectMenu() {
         notifySuccess(`项目已创建并打开，导入 ${result.imported_count} 张素材`);
       } else {
         notifySuccess(`项目已创建，导入 ${result.imported_count} 张素材；当前页面未被切换`);
-      }
-      // 导入成功 → 标记完成，让「导入中」步骤的【下一步】按钮出现。
-      if (useStore.getState().tourActive && useStore.getState().tourStep === 2) {
-        useStore.getState().setTourImported(true);
       }
     } catch (error) {
       notifyError(error, "创建项目失败");

@@ -13,7 +13,8 @@ import {
   pendingLocalTaskKey,
   publishCloudAgentIngestState,
 } from "../lib/cloudAgentRuntime";
-import { notifyError, notifySuccess } from "../lib/notify";
+import { notifyError } from "../lib/notify";
+import { notifyGenerationComplete } from "../lib/generationNotifications";
 import type { CloudAgentRunRecord } from "../lib/types";
 import { useStore } from "../store";
 
@@ -105,7 +106,11 @@ export function CloudAgentRuntimeCoordinator() {
             error: null,
           });
           notifiedIngestFailures.current.delete(fingerprint);
-          notifySuccess(`Agent 的 ${assets.length} 张产物已作为同一组加入素材库`);
+          void notifyGenerationComplete(
+            `agent:${next.runId}:${nextFingerprint ?? fingerprint}`,
+            `Agent 生成完成，${assets.length} 张产物已加入素材库`,
+            useStore.getState().settings,
+          );
         })
         .catch((error) => {
           if (!alive) return;

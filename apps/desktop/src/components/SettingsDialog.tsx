@@ -8,6 +8,7 @@ import { api } from "../lib/api";
 import { CODEX_ONBOARDING_ENABLED, DREAMINA_ONBOARDING_ENABLED } from "../lib/featureFlags";
 import { DEFAULT_AUTO_ANALYZE_PROMPT, WEBSITE_URL } from "../lib/constants";
 import type { MigrateProgress } from "../lib/types";
+import { useOnboarding } from "../lib/onboardingStore";
 import { ModalShell } from "./ModalShell";
 
 const STAGE_LABEL: Record<string, string> = {
@@ -109,7 +110,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const setCodexOnboardingForceOpen = useStore((s) => s.setCodexOnboardingForceOpen);
   const setDreaminaOnboardingForceOpen = useStore((s) => s.setDreaminaOnboardingForceOpen);
   const setAccountOnboardingForceOpen = useStore((s) => s.setAccountOnboardingForceOpen);
-  const startTour = useStore((s) => s.startTour);
+  const startTour = useOnboarding((s) => s.open);
   const settings = useStore((s) => s.settings);
   const loadSettings = useStore((s) => s.loadSettings);
   const updateSettings = useStore((s) => s.updateSettings);
@@ -248,6 +249,8 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
       cloud_auto_understand: settings?.cloud_auto_understand ?? false,
       board_shift_pick: settings?.board_shift_pick ?? false,
       hide_project_assets: settings?.hide_project_assets ?? false,
+      generation_completion_popup: settings?.generation_completion_popup ?? true,
+      generation_completion_sound: settings?.generation_completion_sound ?? true,
       dreamina_model_version: settings?.dreamina_model_version ?? DEFAULT_DREAMINA_MODEL_VERSION,
       agent_mode_enabled: settings?.agent_mode_enabled ?? true,
       agent_a_mode_enabled: settings?.agent_a_mode_enabled ?? false,
@@ -614,11 +617,11 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                 </button>
               </div>
 
-              {/* 新手教程：分步引导（视频/图片教程待补充） */}
+              {/* 入门引导：主线续学与按需教程 */}
               <div className="settings-card px-3 py-2">
-                <div className="text-ink">新手教程</div>
+                <div className="text-ink">入门引导</div>
                 <p className="mt-1 text-xs text-muted">
-                    跟着 spotlight 分步引导走一遍导入、复用与创作的核心流程。
+                    在项目画板上学习拖图、参考、图片特征与生成；可续学或查看按需教程。
                 </p>
                 <button
                   onClick={() => {
@@ -627,7 +630,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   }}
                   className="mt-2 rounded-md bg-accent px-3 py-1 text-[12px] font-medium text-white hover:opacity-90"
                 >
-                  新手引导
+                  打开入门引导
                 </button>
               </div>
             </>
@@ -977,6 +980,27 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
 
           {section === "personalization" && (
             <>
+              <div className="settings-card px-3 py-2.5">
+                <div className="text-ink">生成完成提醒</div>
+                <p className="mt-1 text-xs text-muted">图片、视频或 Agent 产物生成成功后提醒，切换项目后仍然有效。</p>
+                <label className="mt-3 flex items-center justify-between">
+                  <span>弹窗提示</span>
+                  <Toggle
+                    checked={settings?.generation_completion_popup ?? true}
+                    disabled={!settings}
+                    onChange={(v) => settings && void updateSettings({ ...settings, generation_completion_popup: v })}
+                  />
+                </label>
+                <label className="mt-3 flex items-center justify-between">
+                  <span>提示音</span>
+                  <Toggle
+                    checked={settings?.generation_completion_sound ?? true}
+                    disabled={!settings}
+                    onChange={(v) => settings && void updateSettings({ ...settings, generation_completion_sound: v })}
+                  />
+                </label>
+                <p className="mt-2 text-xs text-muted">默认开启；可分别关闭，设置自动保存。弹窗显示在应用右上角。</p>
+              </div>
               <div className="settings-card px-3 py-2.5">
                 <div className="flex items-center justify-between">
                   <span className="text-ink">创作板打开时，Shift + 左键点击素材引入</span>

@@ -54,6 +54,7 @@ export function SourceBrowserPanel({ url, onClose, visible = true, suspended = f
   const [address, setAddress] = useState(url);
   const [title, setTitle] = useState("");
   const [loading, setLoading] = useState(true);
+  const [occluded, setOccluded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const discovery = useMemo(() => sourceDiscoveryFor(currentUrl), [currentUrl]);
   const suspendedRef = useRef(suspended);
@@ -113,16 +114,31 @@ export function SourceBrowserPanel({ url, onClose, visible = true, suspended = f
     let alive = true;
     let openFrame = 0;
     let resizeFrame = 0;
+    let lastLayout: string | null = null;
     const resize = () => {
       if (!alive) return;
       window.cancelAnimationFrame(resizeFrame);
       resizeFrame = window.requestAnimationFrame(() => {
-        if (!alive || !visibleRef.current) return;
+        if (!alive || !visibleRef.current || !openedRef.current) return;
         const bounds = boundsFor(viewport);
         if (bounds.width < 240 || bounds.height < 180) return;
+        const viewportRect = viewport.getBoundingClientRect();
         const overlay = Array.from(document.querySelectorAll('[role="dialog"], [role="alertdialog"], [role="menu"]'))
-          .some(element => element.getClientRects().length > 0);
-        void queueBrowserOperation(() => api.resizeSourceBrowser(bounds, !overlay && !suspendedRef.current)).catch((cause) => {
+          .some(element => {
+            if (element.getClientRects().length === 0 || getComputedStyle(element).visibility === "hidden") return false;
+            // Dialogs can have a full-window backdrop outside their own bounds.
+            if (element.getAttribute("role") !== "menu") return true;
+            const rect = element.getBoundingClientRect();
+            return rect.left < viewportRect.right && rect.right > viewportRect.left
+              && rect.top < viewportRect.bottom && rect.bottom > viewportRect.top;
+          });
+        const hidden = overlay || suspendedRef.current;
+        setOccluded(hidden);
+        const layout = JSON.stringify([bounds, hidden]);
+        if (lastLayout === layout) return;
+        lastLayout = layout;
+        void queueBrowserOperation(() => api.resizeSourceBrowser(bounds, !hidden)).catch((cause) => {
+          if (lastLayout === layout) lastLayout = null;
           if (alive) setError(String(cause));
         });
       });
@@ -130,7 +146,7 @@ export function SourceBrowserPanel({ url, onClose, visible = true, suspended = f
     const observer = new ResizeObserver(resize);
     observer.observe(viewport);
     const overlays = new MutationObserver(resize);
-    overlays.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["role", "hidden"] });
+    overlays.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["role", "hidden", "style", "class"] });
     window.addEventListener("resize", resize);
     window.addEventListener("explorer:layout", resize);
 
@@ -253,8 +269,7 @@ export function SourceBrowserPanel({ url, onClose, visible = true, suspended = f
       {error && <div className="source-browser-error" role="alert">{error}</div>}
       <div ref={viewportRef} className="source-browser-viewport" data-source-browser-viewport>
         <div className="source-browser-placeholder" aria-hidden>
-          <LoaderCircle size={20} className="animate-spin" />
-          正在打开 {host}
+          {occluded ? "网页暂时隐藏，操作结束后恢复" : loading ? <><LoaderCircle size={20} className="animate-spin" />正在打开 {host}</> : "网页已就绪"}
         </div>
       </div>
     </section>

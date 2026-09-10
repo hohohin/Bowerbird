@@ -29,6 +29,18 @@ function atPoint(node, point) {
 try {
   await page.goto("http://127.0.0.1:1556/scripts/fixtures/canvas-reference/preview.html?explorer");
   await page.locator('[data-canvas-node-id="old"]').waitFor();
+  await page.waitForFunction(() => window.calls.filter(call => call.command === "resize_source_browser").at(-1)?.args.visible === true);
+  const browserNavigationCount = await page.evaluate(() => window.calls.filter(call => ["open_source_browser", "navigate_source_browser", "reload_source_browser"].includes(call.command)).length);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await page.locator('[data-canvas-node-id="old"]').click({ button: "right" });
+    await page.getByRole("menu").waitFor();
+    await page.waitForTimeout(120);
+    assert.equal(await page.evaluate(() => window.calls.filter(call => call.command === "resize_source_browser").at(-1)?.args.visible), true,
+      "a context menu on the canvas must not hide the browser behind a loading placeholder");
+    await page.keyboard.press("Escape");
+    await page.getByRole("menu").waitFor({ state: "hidden" });
+  }
+  assert.equal(await page.evaluate(() => window.calls.filter(call => ["open_source_browser", "navigate_source_browser", "reload_source_browser"].includes(call.command)).length), browserNavigationCount);
   const source = page.locator(".canvas-source-content");
   const resizer = page.getByRole("separator", { name: "调整素材面板宽度" });
   const toggle = page.locator(".canvas-source-toggle:visible");
@@ -106,5 +118,5 @@ try {
   assert.ok(commands.indexOf("project_canvas_materialize") < commands.indexOf("capture_source_browser_image"));
   assert.ok(commands.indexOf("capture_source_browser_image") < commands.indexOf("project_canvas_node_create"));
   assert.deepEqual(errors, []);
-  console.log("PASS explorer canvas: automatic library collapse, manual/keyboard toggle, retained filters/width/DOM/viewport, narrow controls, drop coordinates, zoom while downloading, duplicate instances, failure, frozen project, persisted reload, provisional project, library-only drop");
+  console.log("PASS explorer canvas: right-click keeps browser visible without navigation, automatic library collapse, manual/keyboard toggle, retained filters/width/DOM/viewport, narrow controls, drop coordinates, zoom while downloading, duplicate instances, failure, frozen project, persisted reload, provisional project, library-only drop");
 } finally { await browser.close(); await server.close(); }

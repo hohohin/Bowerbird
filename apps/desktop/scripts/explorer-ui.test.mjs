@@ -47,8 +47,31 @@ try {
   assert.equal((await calls("navigate_source_browser")).at(-1).args.url, "https://huaban.com/");
   await page.getByRole("button", { name: "测试弹窗", exact: true }).click();
   await page.waitForFunction(() => window.calls.filter(c => c.command === "resize_source_browser").at(-1)?.args.visible === false);
+  assert.equal(await page.locator(".source-browser-placeholder .animate-spin").count(), 0, "occlusion is not page loading");
   await page.getByRole("button", { name: "测试弹窗", exact: true }).click();
   await page.waitForFunction(() => window.calls.filter(c => c.command === "resize_source_browser").at(-1)?.args.visible === true);
+  const menuNavigationCount = (await calls("navigate_source_browser")).length;
+  await page.evaluate(() => {
+    const viewport = document.querySelector("[data-source-browser-viewport]").getBoundingClientRect();
+    const menu = document.createElement("div"); menu.id = "overlap-menu"; menu.setAttribute("role", "menu");
+    menu.style.cssText = `position:fixed;left:${viewport.left + 20}px;top:${viewport.top + 20}px;width:100px;height:100px`;
+    document.body.append(menu);
+  });
+  await page.waitForFunction(() => window.calls.filter(c => c.command === "resize_source_browser").at(-1)?.args.visible === false);
+  assert.equal(await page.locator(".source-browser-placeholder .animate-spin").count(), 0);
+  // Menus can move after their first render or hide without unmounting.
+  await page.evaluate(() => { document.querySelector("#overlap-menu").style.left = "10000px"; });
+  await page.waitForFunction(() => window.calls.filter(c => c.command === "resize_source_browser").at(-1)?.args.visible === true);
+  await page.evaluate(() => { document.querySelector("#overlap-menu").style.left = "30px"; });
+  await page.waitForFunction(() => window.calls.filter(c => c.command === "resize_source_browser").at(-1)?.args.visible === false);
+  await page.evaluate(() => { document.querySelector("#overlap-menu").style.display = "none"; });
+  await page.waitForFunction(() => window.calls.filter(c => c.command === "resize_source_browser").at(-1)?.args.visible === true);
+  const layoutCount = (await calls("resize_source_browser")).length;
+  await page.evaluate(() => { document.querySelector("#overlap-menu").remove(); document.querySelector('[aria-label="主页面草稿"]').style.color = "red"; });
+  await page.waitForTimeout(120);
+  assert.equal((await calls("resize_source_browser")).length, layoutCount, "unchanged bounds and visibility do not repeat native operations");
+  assert.equal((await calls("navigate_source_browser")).length, menuNavigationCount);
+  assert.equal((await calls("reload_source_browser")).length, 0);
   await drop({ version: 1, imageUrl: "file:///secret", pageUrl: "https://example.com" });
   assert.equal((await calls("capture_source_browser_image")).length, 0);
   await page.getByText("未能识别拖入的图片，请重新拖动网页图片", { exact: true }).waitFor();

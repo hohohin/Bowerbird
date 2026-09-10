@@ -342,6 +342,7 @@ export const api = {
     return (r as string | null) ?? null;
   },
   releasePresetPack: () => invoke<string>("release_preset_pack"),
+  createOnboardingProject: (projectId: string) => invoke<ProjectCreateResult>("create_onboarding_project", { projectId }),
 
   // 创作板（统一走 codex CLI）
   listPromptedAssets: (projectId?: string | null) =>

@@ -993,6 +993,7 @@ export function CreationBoard({
               void send();
             }
           }}
+          data-onboarding-composer
           data-tour="creation-editor"
           className="creation-editor generation-input min-h-16 max-h-56 cursor-text overflow-y-auto px-3 py-2 text-sm leading-8 text-ink"
         />

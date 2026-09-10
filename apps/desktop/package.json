@@ -11,6 +11,7 @@
     "lint": "tsc --noEmit",
     "test:canvas": "node --experimental-strip-types --test scripts/canvas-logic.test.mjs scripts/canvas-arrangement.test.mjs scripts/cloud-agent-runtime.test.mjs scripts/creative-canvas.test.mjs scripts/generation-intent.test.mjs scripts/generation-recovery.test.mjs scripts/project-activity.test.mjs scripts/workspace-route.test.mjs",
     "test:asset-deletion": "node --experimental-strip-types --test scripts/asset-deletion.test.mjs",
+    "test:generation-notifications": "node scripts/generation-notifications-ui.test.mjs",
     "test:agent-plan": "node --experimental-strip-types --test scripts/cloud-agent-plan.test.mjs",
     "test:agent-result": "node --experimental-strip-types --test scripts/cloud-agent-result.test.mjs",
     "test:agent-selection": "node --test scripts/cloud-agent-selection.test.mjs",
@@ -18,7 +19,9 @@
     "test:explorer": "node --experimental-strip-types --test scripts/explorer.test.mjs scripts/source-discovery.test.mjs",
     "test:explorer:ui": "node scripts/explorer-ui.test.mjs",
     "test:explorer:drag": "node scripts/explorer-drag.test.mjs",
-    "test:explorer:canvas": "node scripts/explorer-canvas-ui.test.mjs"
+    "test:explorer:canvas": "node scripts/explorer-canvas-ui.test.mjs",
+    "test:onboarding": "node --experimental-strip-types --test scripts/onboarding.test.mjs",
+    "test:onboarding:ui": "node scripts/onboarding-ui.test.mjs"
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.10.7",

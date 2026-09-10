@@ -69,6 +69,12 @@ pub struct AppSettings {
     #[serde(default)]
     pub hide_project_assets: bool,
 
+    /// 生成成功时的应用内弹窗与提示音，可分别关闭；旧配置默认开启。
+    #[serde(default = "default_true")]
+    pub generation_completion_popup: bool,
+    #[serde(default = "default_true")]
+    pub generation_completion_sound: bool,
+
     /// 首启预置示例图是否已注入完成。true = 不再重灌（配合 count_assets==0 双 gate）。
     #[serde(default)]
     pub samples_seeded: bool,
@@ -110,6 +116,8 @@ impl Default for AppSettings {
             cloud_auto_understand: false,
             board_shift_pick: false,
             hide_project_assets: false,
+            generation_completion_popup: true,
+            generation_completion_sound: true,
             samples_seeded: false,
             dreamina_model_version: DEFAULT_DREAMINA_MODEL_VERSION.to_string(),
             agent_mode_enabled: true,
@@ -184,6 +192,24 @@ impl SettingsState {
 #[cfg(test)]
 mod tests {
     use super::{AppSettings, AppTheme, SettingsState};
+
+    #[test]
+    fn generation_reminders_default_on_and_preserve_opt_out_on_disk() {
+        let old: AppSettings = serde_json::from_str("{}").unwrap();
+        assert!(old.generation_completion_popup);
+        assert!(old.generation_completion_sound);
+        let dir = std::env::temp_dir().join(format!("bb-reminders-{}", ulid::Ulid::new()));
+        let path = dir.join("settings.json");
+        let state = SettingsState::init(path.clone()).unwrap();
+        let mut settings = state.get();
+        settings.generation_completion_popup = false;
+        settings.generation_completion_sound = false;
+        state.update(settings).unwrap();
+        let restored = SettingsState::init(path).unwrap().get();
+        assert!(!restored.generation_completion_popup);
+        assert!(!restored.generation_completion_sound);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn old_settings_default_to_dark_theme() {

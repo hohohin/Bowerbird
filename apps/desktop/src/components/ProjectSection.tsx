@@ -5,6 +5,7 @@ import { summarizeProjectActivity } from "../lib/projectActivity";
 import { notifyError } from "../lib/notify";
 import { agentReminderKey, generationReminderKey } from "../lib/taskReminders";
 import { useTaskReminders } from "../lib/useTaskReminders";
+import { useProjectAssetDrop } from "../lib/useProjectAssetDrop";
 
 /** 侧栏「项目」区：新建入口（NewProjectMenu 菜单：空白项目 / 导入文件夹）+ 项目行。
  *  行内只保留 进入（点击）/ 退出（激活行右侧 icon）；删除与「更新项目文件」都在右键菜单。 */
@@ -19,6 +20,7 @@ export function ProjectSection() {
   const cloudAgentRuns = useStore((s) => s.cloudAgentRuns);
   const projectUnreadThreads = useStore((s) => s.projectUnreadThreads);
   const reminders = useTaskReminders();
+  const projectDrop = useProjectAssetDrop();
 
   return (
     <section className="mb-5 border-b border-edge pb-5">
@@ -39,6 +41,7 @@ export function ProjectSection() {
           return (
             <div
               key={project.id}
+              {...projectDrop(project)}
               data-tour={active ? "active-project" : undefined}
               className={`sidebar-nav-item group rounded-lg px-2.5 py-2 ${active ? "is-active" : ""}`}
               onContextMenu={(e) => {

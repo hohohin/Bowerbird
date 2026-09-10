@@ -1,3 +1,4 @@
+import { LearningHint } from "./OnboardingTour";
 import { notify, notifyError } from "../lib/notify";
 import { arrangeCanvasNodes } from "../lib/canvasArrangement";
 import { newReferencesForCanvasCard, placeNewCanvasReferences, trackNewCanvasReferences } from "../lib/canvasReferencePlacement";
@@ -506,6 +507,12 @@ export function CanvasWorkspace({
   const [loadFailed, setLoadFailed] = useState(false);
   const [loadRevision, setLoadRevision] = useState(0);
   const [saving, setSaving] = useState(false);
+  const [savingVisible, setSavingVisible] = useState(false);
+  useEffect(() => {
+    // Ignore quick local writes and bridge short gaps between queued writes.
+    const timer = window.setTimeout(() => setSavingVisible(saving), saving ? 250 : 350);
+    return () => window.clearTimeout(timer);
+  }, [saving]);
   const [error, setError] = useState<string | null>(null);
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
   const [guides, setGuides] = useState<CanvasSnapGuide[]>([]);
@@ -3043,6 +3050,7 @@ export function CanvasWorkspace({
   return (
     <div
       ref={workspaceRef}
+      data-onboarding-project={projectId ?? undefined}
       className={`canvas-workspace${loading || projectRoutePending ? " is-route-pending" : ""}`}
       aria-busy={loading || projectRoutePending}
       style={{ gridTemplateColumns: sourceCollapsed ? "36px minmax(0, 1fr)" : `${sourceWidth}px 7px minmax(0, 1fr)` }}
@@ -3061,6 +3069,7 @@ export function CanvasWorkspace({
           }}
         ><PanelLeftOpen size={14} /><span>素材库</span></button>}
         <div id={`${sourcePanelId}-content`} className="canvas-source-content" hidden={sourceCollapsed}>
+        {nodes.length >= 4 && <LearningHint topic="arrange" />}
         <div className="canvas-source-header">
           <button
             type="button"
@@ -3275,9 +3284,9 @@ export function CanvasWorkspace({
                 </button>
               </>
             )}
-            {(loading || saving) && (
-              <small className="canvas-save-state"><LoaderCircle size={12} /> {loading ? "载入中" : "保存中"}</small>
-            )}
+            <small className={`canvas-save-state${loading || savingVisible ? " is-visible" : ""}`} aria-hidden={!loading && !savingVisible}>
+              <LoaderCircle size={12} /> {loading ? "载入中" : "保存中"}
+            </small>
             {error && <small className="canvas-save-error" title={error}>保存失败，修改仍保留在当前画面</small>}
           </div>
           <div className="canvas-zoom-controls" aria-label="画布缩放">

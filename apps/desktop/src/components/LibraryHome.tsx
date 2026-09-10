@@ -7,6 +7,7 @@ import { notifyError } from "../lib/notify";
 import { MasonryGrid } from "./MasonryGrid";
 import { ProjectFolder } from "./ProjectFolder";
 import { useProjectDeletion } from "./useProjectDeletion";
+import { useProjectAssetDrop } from "../lib/useProjectAssetDrop";
 
 function ExpandedProject({ group, onCollapse, onDelete, deleting }: {
   group: LibraryProjectGroup;
@@ -20,6 +21,7 @@ function ExpandedProject({ group, onCollapse, onDelete, deleting }: {
   const cancelled = useRef(false);
   const savingRef = useRef(false);
   const projectRoutePending = useStore((s) => s.projectRoutePending);
+  const projectDrop = useProjectAssetDrop();
 
   async function saveTitle() {
     if (cancelled.current || savingRef.current) return;
@@ -43,6 +45,7 @@ function ExpandedProject({ group, onCollapse, onDelete, deleting }: {
   }
 
   return <section className="library-project-frame" aria-label={`项目 ${group.project.name}`}
+    {...projectDrop(group.project)}
     onContextMenu={(event) => {
       event.preventDefault();
       event.stopPropagation();

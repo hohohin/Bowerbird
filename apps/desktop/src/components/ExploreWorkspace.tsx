@@ -6,6 +6,7 @@ import { api } from "../lib/api";
 import { EXPLORER_MIME, parseExplorerImage } from "../lib/explorer";
 import { notifyError, notifySuccess } from "../lib/notify";
 import { prepareExplorerCanvasDrop } from "../lib/explorerCanvasDrop";
+import { LearningHint } from "./OnboardingTour";
 
 export function ExploreWorkspace({ url, open, navigationId = 0, onClose, children }: { url: string | null; open: boolean; navigationId?: number; onClose: () => void; children: ReactNode }) {
   const [busy, setBusy] = useState(false);
@@ -80,6 +81,7 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
       }}
       onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOver(false); }}
       onDropCapture={event => void drop(event)}>
+      {open && <div className="explore-learning-hint"><LearningHint topic="explore" /></div>}
       {children}
       {busy && <div className="explore-capture-status pointer-events-none" role="status"><LoaderCircle size={13} className="animate-spin" />采集中…</div>}
       {over && <div className="explore-drop-hint">松开采集图片</div>}

@@ -1,3 +1,4 @@
+import { LearningHint } from "./OnboardingTour";
 import { useEffect, useRef, useState } from "react";
 import { localClassification as local, type ClassificationLabel, type LocalClassificationStatus } from "../lib/localClassification";
 import { useStore } from "../store";
@@ -55,6 +56,7 @@ export function LocalClassificationDialog({ onClose }: { onClose: () => void }) 
   return <ModalShell title="本地分类" width="lg" onClose={onClose}
     description="从图片内容与风格发现标签，也可按你创建的标签寻找素材。图片识别在本机完成。">
     <div className="space-y-5 text-sm">
+      <LearningHint topic="classification" />
       {error && <p role="alert" className="text-red-400">{error}</p>}
       <section className="rounded border border-edge bg-panel2 p-3 space-y-3">
         <p>{status?.installed ? "本地模型已安装 · 无需账号或积分" : "首次下载约 756 MB，安装后可离线使用。"}</p>

@@ -1,3 +1,4 @@
+import { LearningHint } from "./OnboardingTour";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -1088,6 +1089,7 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
                 {err}
               </div>
             )}
+            <LearningHint topic="dimensions" />
             {captions.length === 0 ? (
               <div className="text-xs text-muted">
                 {!understandReady

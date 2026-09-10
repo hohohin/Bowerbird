@@ -83,7 +83,11 @@ w.__TAURI_INTERNALS__ = {
       const group = snapshot.groups.find((g: any) => g.id === args.value.id);
       Object.assign(group, args.value); return structuredClone(group);
     }
-    if (command === "project_canvas_view_upsert" || command === "project_canvas_view_flush") { snapshot.view = { ...args.value }; return snapshot.view; }
+    if (command === "project_canvas_view_upsert" || command === "project_canvas_view_flush") {
+      if (w.holdViewSave) await new Promise(resolve => { w.releaseViewSave = resolve; });
+      if (w.failViewSave) throw "模拟画板保存失败";
+      snapshot.view = { ...args.value }; return snapshot.view;
+    }
     if (command === "get_assets_by_ids") return assets.filter(a => args.assetIds.includes(a.id));
     if (command === "project_canvas_ensure") return canvas;
     if (command === "list_generation_groups") return {};

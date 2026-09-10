@@ -1,3 +1,4 @@
+import { CollectionLearning } from "./CollectionOnboarding";
 import { useEffect, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -138,6 +139,7 @@ export function CollectionPanel({ folder, onClose }: { folder: Folder; onClose: 
     </span>}
     onClose={onClose}>
     <CollectionScrollArea>
+    <CollectionLearning />
     {dragOver && <p className="collection-drop-hint" role="status">松手导入到「{folder.name}」</p>}
     {importErrors.length > 0 && <div role="alert" className="mb-3 text-xs text-red-500">
       {importErrors.map((message, index) => <p key={index}>{message}</p>)}
