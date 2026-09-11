@@ -2,14 +2,17 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   Check,
+  Circle,
   Crop,
   Eraser,
   MoveUpRight,
+  Pencil,
   RotateCcw,
   RotateCw,
   Save,
   Square,
   TextCursorInput,
+  Type,
   Undo2,
   X,
 } from "lucide-react";
@@ -25,7 +28,7 @@ import type {
 } from "../lib/types";
 
 /**
- * 图片标注面板（全屏遮罩，Lightbox 同级 z-[90]）：截图软件式在图上画框/箭头 + 裁剪/旋转。
+ * 图片标注面板（全屏遮罩，Lightbox 同级 z-[90]）：画框/箭头/圆、铅笔、文字 + 裁剪/旋转。
  * 右键菜单 openAnnotator 唤起，App 最外层挂单实例（store.annotator 驱动）。
  *
  * 底图变换：ops 序列（rotate 90° 步进 / crop 归一化矩形）按操作顺序即时生效；每次变换把
@@ -45,17 +48,23 @@ import type {
 
 /** 面板内绘制形状：坐标 0-1 相对当前底图；strokeRatio = 线宽/底图宽（分辨率无关）。 */
 type DrawShape = {
-  type: "rect" | "arrow";
+  type: "rect" | "arrow" | "ellipse" | "pencil" | "text";
   x1: number;
   y1: number;
   x2: number;
   y2: number;
   color: string;
   strokeRatio: number;
+  points?: Array<{ x: number; y: number }>;
+  text?: string;
+  fontRatio?: number;
+  fontFamily?: string;
+  fontWeight?: number;
+  rotation?: number;
 };
 
 type BaseOp = AnnotationTransformOp;
-type Tool = "rect" | "arrow" | "crop";
+type Tool = DrawShape["type"] | "crop";
 
 /** 待应用的裁剪框（0-1 相对当前底图；进入裁剪工具后常驻，应用才落为 crop op）。 */
 type CropRect = { x1: number; y1: number; x2: number; y2: number };
@@ -65,19 +74,42 @@ type CropDrag =
   | { kind: "move"; sx: number; sy: number; rect: CropRect }
   | { kind: "resize"; handle: string; rect: CropRect };
 
-const COLORS = ["#ff4d4d", "#ffd21e", "#3ddc84", "#4d9fff", "#ffffff"];
+const COLORS = ["#ff4d4d", "#ffd21e", "#3ddc84", "#4d9fff", "#ffffff", "#111111"];
+const FONTS = [
+  { name: "黑体", value: '"Microsoft YaHei", "PingFang SC", sans-serif' },
+  { name: "宋体", value: 'SimSun, "Songti SC", serif' },
+  { name: "等宽", value: 'Consolas, "Microsoft YaHei", monospace' },
+];
+
+function shapeBounds(s: DrawShape) {
+  const points = s.points ?? [{ x: s.x1, y: s.y1 }, { x: s.x2, y: s.y2 }];
+  return points.reduce((bounds, point) => ({
+    x1: Math.min(bounds.x1, point.x), y1: Math.min(bounds.y1, point.y),
+    x2: Math.max(bounds.x2, point.x), y2: Math.max(bounds.y2, point.y),
+  }), { x1: Infinity, y1: Infinity, x2: -Infinity, y2: -Infinity });
+}
+
+function blankImageDataUrl(): string {
+  const canvas = document.createElement("canvas");
+  canvas.width = 1600;
+  canvas.height = 1200;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("无法创建草稿底图");
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/png");
+}
 
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 // 0-1 → 火山 0-999 归一化整数：round(v*1000) 后 clamp（右下角 999,999）。
 const v999 = (v: number) => Math.max(0, Math.min(999, Math.round(v * 1000)));
 
 function shapeToken(s: DrawShape): string {
-  if (s.type === "rect") {
-    const x1 = v999(Math.min(s.x1, s.x2));
-    const y1 = v999(Math.min(s.y1, s.y2));
-    const x2 = v999(Math.max(s.x1, s.x2));
-    const y2 = v999(Math.max(s.y1, s.y2));
-    return `<bbox>${x1} ${y1} ${x2} ${y2}</bbox>`;
+  if (s.type !== "arrow") {
+    const bounds = shapeBounds(s);
+    const prefix = s.type === "ellipse" ? "椭圆区域 " : s.type === "pencil" ? "手绘线条所在区域 "
+      : s.type === "text" ? `文字 ${JSON.stringify(s.text)} 所在区域 ` : "";
+    return `${prefix}<bbox>${v999(bounds.x1)} ${v999(bounds.y1)} ${v999(bounds.x2)} ${v999(bounds.y2)}</bbox>`;
   }
   return `<point>${v999(s.x1)} ${v999(s.y1)}</point> → <point>${v999(s.x2)} ${v999(s.y2)}</point>`;
 }
@@ -107,7 +139,17 @@ function mapShape(s: DrawShape, op: BaseOp, oldW: number, oldH: number): DrawSha
   const [x1, y1] = opPoint(op, s.x1, s.y1);
   const [x2, y2] = opPoint(op, s.x2, s.y2);
   const d = opDims(op, oldW, oldH);
-  return { ...s, x1, y1, x2, y2, strokeRatio: (s.strokeRatio * oldW) / d.w };
+  return {
+    ...s, x1, y1, x2, y2, strokeRatio: (s.strokeRatio * oldW) / d.w,
+    ...(s.points ? { points: s.points.map((point) => {
+      const [x, y] = opPoint(op, point.x, point.y);
+      return { x, y };
+    }) } : {}),
+    ...(s.type === "text" ? {
+      fontRatio: (s.fontRatio! * oldW) / d.w,
+      rotation: ((s.rotation ?? 0) + (op.kind === "rotate" ? op.dir * 90 : 0) + 360) % 360,
+    } : {}),
+  };
 }
 
 /** pristine 原图按序应用 ops → 当前底图 canvas（步进像素变换；显示与导出共用）。空序列返回 null（直接用原图）。 */
@@ -182,6 +224,31 @@ function drawShapeCanvas(
   ctx.lineWidth = lw;
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
+  if (s.type === "text") {
+    const size = s.fontRatio! * w;
+    ctx.save();
+    ctx.translate(s.x1 * w, s.y1 * h);
+    ctx.rotate((s.rotation ?? 0) * Math.PI / 180);
+    ctx.font = `${s.fontWeight} ${size}px ${s.fontFamily}`;
+    ctx.fillStyle = s.color;
+    ctx.textBaseline = "alphabetic";
+    s.text!.split("\n").forEach((line, index) => ctx.fillText(line, 0, size * (1 + index * 1.25)));
+    ctx.restore();
+    return;
+  }
+  if (s.type === "ellipse") {
+    ctx.beginPath();
+    ctx.ellipse((s.x1 + s.x2) * w / 2, (s.y1 + s.y2) * h / 2,
+      Math.abs(s.x2 - s.x1) * w / 2, Math.abs(s.y2 - s.y1) * h / 2, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    return;
+  }
+  if (s.type === "pencil") {
+    ctx.beginPath();
+    s.points!.forEach((point, index) => index === 0 ? ctx.moveTo(point.x * w, point.y * h) : ctx.lineTo(point.x * w, point.y * h));
+    ctx.stroke();
+    return;
+  }
   if (s.type === "rect") {
     ctx.strokeRect(
       Math.min(s.x1, s.x2) * w,
@@ -215,6 +282,7 @@ export function ImageAnnotator() {
   const asset = annotator ? assets.find((a) => a.id === annotator.assetId) : undefined;
   const storePath = asset?.store_path ?? null;
   const open = !!annotator;
+  const isDraft = !!annotator?.saveDraft;
 
   // 底图 data URL（Rust 读取）+ 预解码元素（导出 drawImage 用）。nat 由预加载解出——
   // 不能依赖渲染中 <img> 的 onLoad：显示区尺寸依赖 nat，nat 又要等 <img> 渲染，互相等会
@@ -225,7 +293,7 @@ export function ImageAnnotator() {
   const baseImgRef = useRef<HTMLImageElement | null>(null);
 
   useEffect(() => {
-    if (!open || !storePath) {
+    if (!open || (!storePath && !isDraft)) {
       setImgUrl(null);
       setLoadError(null);
       setNat(null);
@@ -236,8 +304,8 @@ export function ImageAnnotator() {
     setImgUrl(null);
     setLoadError(null);
     setNat(null);
-    api
-      .readImageDataUrl(storePath)
+    Promise.resolve()
+      .then(() => isDraft ? blankImageDataUrl() : api.readImageDataUrl(storePath!))
       .then((url) => {
         const img = new Image();
         img.onload = () => {
@@ -257,7 +325,7 @@ export function ImageAnnotator() {
     return () => {
       cancelled = true;
     };
-  }, [open, storePath]);
+  }, [open, storePath, isDraft]);
 
   // 形状 / 底图变换 / 撤销快照栈；换图重置。
   const [shapes, setShapes] = useState<DrawShape[]>([]);
@@ -270,6 +338,11 @@ export function ImageAnnotator() {
   const [color, setColor] = useState(COLORS[0]);
   const [pen, setPen] = useState(4); // 线宽（显示像素，提交时按显示宽换算 strokeRatio）
   const [busy, setBusy] = useState(false);
+  const [text, setText] = useState("");
+  const [fontSize, setFontSize] = useState(32);
+  const [fontFamily, setFontFamily] = useState(FONTS[0].value);
+  const [bold, setBold] = useState(false);
+  const textInputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     setShapes([]);
@@ -279,7 +352,12 @@ export function ImageAnnotator() {
     setCropRect(null);
     cropDragRef.current = null;
     setBusy(false);
-  }, [annotator?.assetId]);
+    setText("");
+    if (annotator?.saveDraft) {
+      setTool("rect");
+      setColor("#111111");
+    }
+  }, [annotator]);
 
   // 当前底图 = 原图按序应用 ops（无变换 = 原图本身）。显示用 url/dims，导出用 canvas。
   const [base, setBase] = useState<{ url: string; w: number; h: number } | null>(null);
@@ -351,6 +429,9 @@ export function ImageAnnotator() {
   useEffect(() => {
     if (!open) return;
     function onKey(e: KeyboardEvent) {
+      if (busy) return;
+      // Text input (including IME confirmation and native undo) owns its keys.
+      if (e.isComposing || (e.target instanceof HTMLElement && e.target.closest("input, textarea, select"))) return;
       if (e.key === "Escape") {
         e.preventDefault();
         if (tool === "crop") cancelCropMode();
@@ -366,7 +447,7 @@ export function ImageAnnotator() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, closeAnnotator, undoStack, shapes, ops, tool, cropRect, base]);
+  }, [open, closeAnnotator, undoStack, shapes, ops, tool, cropRect, base, busy]);
 
   function rotate(dir: 1 | -1) {
     if (!base) return;
@@ -488,6 +569,25 @@ export function ImageAnnotator() {
     if (e.button !== 0 || !displaySize) return;
     e.preventDefault();
     const p = toRel(e);
+    if (tool === "text") {
+      if (!text.trim() || !base) {
+        textInputRef.current?.focus();
+        return;
+      }
+      const size = fontSize * base.w / displaySize.w;
+      const ctx = document.createElement("canvas").getContext("2d");
+      if (!ctx) return;
+      ctx.font = `${bold ? 700 : 400} ${size}px ${fontFamily}`;
+      const lines = text.split("\n");
+      const width = Math.max(...lines.map(line => ctx.measureText(line).width));
+      pushUndo();
+      setShapes((current) => [...current, {
+        type: "text", x1: p.x, y1: p.y, x2: p.x + width / base.w,
+        y2: p.y + size * lines.length * 1.25 / base.h, color, strokeRatio: 0,
+        text, fontRatio: size / base.w, fontFamily, fontWeight: bold ? 700 : 400, rotation: 0,
+      }]);
+      return;
+    }
     if (tool === "crop") {
       // 落点未命中手柄/框内（事件已 stopPropagation）→ 框外重画新裁剪框。
       cropDragRef.current = { kind: "new", sx: p.x, sy: p.y, prev: cropRect ? { ...cropRect } : null };
@@ -503,6 +603,7 @@ export function ImageAnnotator() {
       y2: p.y,
       color,
       strokeRatio: pen / displaySize.w,
+      ...(tool === "pencil" ? { points: [p] } : {}),
     });
     (e.currentTarget as Element).setPointerCapture(e.pointerId);
   }
@@ -514,7 +615,16 @@ export function ImageAnnotator() {
       return;
     }
     if (!draft) return;
-    setDraft({ ...draft, x2: p.x, y2: p.y });
+    if (draft.type === "pencil") {
+      setDraft((current) => current ? { ...current, x2: p.x, y2: p.y, points: [...current.points!, p] } : null);
+    } else if (draft.type === "ellipse" && e.shiftKey && displaySize) {
+      const dx = p.x - draft.x1, dy = p.y - draft.y1;
+      const side = Math.min(Math.abs(dx) * displaySize.w, Math.abs(dy) * displaySize.h);
+      setDraft({ ...draft, x2: draft.x1 + Math.sign(dx) * side / displaySize.w,
+        y2: draft.y1 + Math.sign(dy) * side / displaySize.h });
+    } else {
+      setDraft({ ...draft, x2: p.x, y2: p.y });
+    }
   }
 
   function onPointerUp() {
@@ -542,7 +652,8 @@ export function ImageAnnotator() {
     const dx = Math.abs(draft.x2 - draft.x1);
     const dy = Math.abs(draft.y2 - draft.y1);
     // 误触过滤：框需两向都有跨度，箭头需最小长度（约图宽 2%）。
-    const ok = draft.type === "rect" ? dx > 0.008 && dy > 0.008 : Math.hypot(dx, dy) > 0.02;
+    const ok = draft.type === "pencil" ? (draft.points?.length ?? 0) > 1
+      : draft.type === "rect" || draft.type === "ellipse" ? dx > 0.008 && dy > 0.008 : Math.hypot(dx, dy) > 0.02;
     if (ok) {
       pushUndo();
       setShapes((s) => [...s, draft]);
@@ -559,7 +670,7 @@ export function ImageAnnotator() {
   /** 导出：最终底图（原图 → ops）烧录标注 → dataURL + 火山格式坐标元数据（相对输出图）。 */
   async function buildOutput(): Promise<{ dataUrl: string; meta: AnnotationMeta } | null> {
     const img = baseImgRef.current;
-    if (!img || !asset || !base) return null;
+    if (!img || (!asset && !isDraft) || !base) return null;
     const w = base.w;
     const h = base.h;
     const canvas = document.createElement("canvas");
@@ -567,7 +678,7 @@ export function ImageAnnotator() {
     canvas.height = h;
     const ctx = canvas.getContext("2d");
     if (!ctx) throw new Error("无法创建画布上下文");
-    const jpeg = asset.ext === "jpg" || asset.ext === "jpeg";
+    const jpeg = asset?.ext === "jpg" || asset?.ext === "jpeg";
     if (jpeg) {
       // 透明底画进 JPEG 会变黑，先铺白。
       ctx.fillStyle = "#ffffff";
@@ -580,19 +691,22 @@ export function ImageAnnotator() {
       : canvas.toDataURL("image/png");
     const meta: AnnotationMeta = {
       schema_version: 1,
-      source_asset_id: asset.id,
-      source_store_path: asset.store_path ?? "",
+      source_asset_id: asset?.id ?? null,
+      source_store_path: asset?.store_path ?? "",
       image: { width: w, height: h },
       transform: ops.length > 0 ? ops : undefined,
       shapes: shapes.map<AnnotationShape>((s) => ({
         type: s.type,
-        x1: v999(s.type === "rect" ? Math.min(s.x1, s.x2) : s.x1),
-        y1: v999(s.type === "rect" ? Math.min(s.y1, s.y2) : s.y1),
-        x2: v999(s.type === "rect" ? Math.max(s.x1, s.x2) : s.x2),
-        y2: v999(s.type === "rect" ? Math.max(s.y1, s.y2) : s.y2),
+        x1: v999(s.type === "rect" || s.type === "ellipse" ? Math.min(s.x1, s.x2) : s.x1),
+        y1: v999(s.type === "rect" || s.type === "ellipse" ? Math.min(s.y1, s.y2) : s.y1),
+        x2: v999(s.type === "rect" || s.type === "ellipse" ? Math.max(s.x1, s.x2) : s.x2),
+        y2: v999(s.type === "rect" || s.type === "ellipse" ? Math.max(s.y1, s.y2) : s.y2),
         color: s.color,
         width: Math.max(1, Math.round(s.strokeRatio * w)),
         token: shapeToken(s),
+        ...(s.points ? { points: s.points.map(point => ({ x: v999(point.x), y: v999(point.y) })) } : {}),
+        ...(s.type === "text" ? { text: s.text, fontSize: s.fontRatio! * w,
+          fontFamily: s.fontFamily, fontWeight: s.fontWeight, rotation: s.rotation } : {}),
       })),
     };
     return { dataUrl, meta };
@@ -604,6 +718,12 @@ export function ImageAnnotator() {
     try {
       const out = await buildOutput();
       if (!out) return;
+      if (annotator?.saveDraft) {
+        await annotator.saveDraft(out.dataUrl, out.meta);
+        notifySuccess("草稿已保存到画板和素材库");
+        closeAnnotator();
+        return;
+      }
       await api.saveAnnotatedImage({
         dataUrl: out.dataUrl,
         fileName: `${chipName(asset!)}-标注`,
@@ -660,6 +780,20 @@ export function ImageAnnotator() {
 
   const renderShape = (s: DrawShape, key: string) => {
     const w = strokeW(s);
+    if (s.type === "ellipse") return <ellipse key={key}
+      cx={(s.x1 + s.x2) * dw / 2} cy={(s.y1 + s.y2) * dh / 2}
+      rx={Math.abs(s.x2 - s.x1) * dw / 2} ry={Math.abs(s.y2 - s.y1) * dh / 2}
+      fill="none" stroke={s.color} strokeWidth={w} />;
+    if (s.type === "pencil") return <polyline key={key}
+      points={s.points!.map(point => `${point.x * dw},${point.y * dh}`).join(" ")}
+      fill="none" stroke={s.color} strokeWidth={w} strokeLinecap="round" strokeLinejoin="round" />;
+    if (s.type === "text") {
+      const size = s.fontRatio! * dw;
+      return <text key={key} fill={s.color} fontSize={size} fontFamily={s.fontFamily} fontWeight={s.fontWeight}
+        style={{ whiteSpace: "pre" }} transform={`translate(${s.x1 * dw} ${s.y1 * dh}) rotate(${s.rotation ?? 0})`}>
+        {s.text!.split("\n").map((line, index) => <tspan key={index} x={0} y={size * (1 + index * 1.25)}>{line}</tspan>)}
+      </text>;
+    }
     if (s.type === "rect") {
       return (
         <rect
@@ -812,15 +946,24 @@ export function ImageAnnotator() {
       className="fixed inset-0 z-[90] flex flex-col bg-black/90"
       role="dialog"
       aria-modal="true"
-      aria-label="图片标注"
+      aria-label={isDraft ? "草稿" : "图片标注"}
     >
       {/* 工具条 */}
-      <div className="flex flex-wrap items-center gap-1.5 border-b border-white/10 px-3 py-2 text-xs text-white">
+      <fieldset disabled={busy} className="flex flex-wrap items-center gap-1.5 border-b border-white/10 px-3 py-2 text-xs text-white">
         <button type="button" className={toolBtn(tool === "rect")} onClick={() => setTool("rect")}>
           <Square size={14} /> 画框
         </button>
         <button type="button" className={toolBtn(tool === "arrow")} onClick={() => setTool("arrow")}>
           <MoveUpRight size={14} /> 箭头
+        </button>
+        <button type="button" className={toolBtn(tool === "ellipse")} onClick={() => setTool("ellipse")} title="拖动画椭圆，按住 Shift 画正圆">
+          <Circle size={14} /> 画圆
+        </button>
+        <button type="button" className={toolBtn(tool === "pencil")} onClick={() => setTool("pencil")}>
+          <Pencil size={14} /> 铅笔
+        </button>
+        <button type="button" className={toolBtn(tool === "text")} onClick={() => setTool("text")}>
+          <Type size={14} /> 文字
         </button>
         <button type="button" className={toolBtn(tool === "crop")} onClick={enterCropMode} title="裁剪：拖手柄调范围，框内拖动移动，Enter 应用">
           <Crop size={14} /> 裁剪
@@ -900,9 +1043,9 @@ export function ImageAnnotator() {
             title={hasEdits ? undefined : "请先画标注或裁剪/旋转"}
             className="flex items-center gap-1.5 rounded bg-accent px-3 py-1.5 font-medium text-white transition-colors hover:bg-accent/85 disabled:opacity-40"
           >
-            <Save size={14} /> 保存到素材库
+            <Save size={14} /> {busy ? "保存中…" : isDraft ? "保存到画板" : "保存到素材库"}
           </button>
-          <button
+          {!isDraft && <button
             type="button"
             disabled={!hasEdits || busy}
             onClick={insertToBoard}
@@ -910,9 +1053,10 @@ export function ImageAnnotator() {
             className="flex items-center gap-1.5 rounded border border-white/25 px-3 py-1.5 text-white transition-colors hover:bg-white/10 disabled:opacity-40"
           >
             <TextCursorInput size={14} /> 插入创作板 · 不入库
-          </button>
+          </button>}
           <button
             type="button"
+            disabled={busy}
             onClick={closeAnnotator}
             title="关闭（Esc）"
             className="flex h-7 w-7 items-center justify-center rounded-full text-white/70 transition-colors hover:bg-white/10 hover:text-white"
@@ -920,11 +1064,29 @@ export function ImageAnnotator() {
             <X size={16} />
           </button>
         </div>
-      </div>
+      </fieldset>
+
+      {tool === "text" && <fieldset disabled={busy} className="flex flex-wrap items-center gap-3 border-b border-white/10 px-3 py-2 text-xs text-white">
+        <textarea ref={textInputRef} aria-label="文字内容" placeholder="输入文字后，点击图片放置" rows={2}
+          value={text} onChange={(event) => setText(event.target.value)}
+          className="min-w-48 flex-1 resize-y rounded border border-white/25 bg-black/40 px-2 py-1 text-white" />
+        <label className="flex items-center gap-2">字体
+          <select aria-label="字体" value={fontFamily} onChange={(event) => setFontFamily(event.target.value)} className="rounded bg-zinc-800 p-1">
+            {FONTS.map(font => <option key={font.name} value={font.value}>{font.name}</option>)}
+          </select>
+        </label>
+        <label className="flex items-center gap-2">字号
+          <input aria-label="字号" type="number" min={12} max={96} value={fontSize}
+            onChange={(event) => setFontSize(Math.max(12, Math.min(96, Number(event.target.value) || 12)))}
+            className="w-16 rounded bg-zinc-800 px-2 py-1" />
+        </label>
+        <button type="button" aria-pressed={bold} className={toolBtn(bold)} onClick={() => setBold(!bold)}>粗体</button>
+        <span className="text-white/60">支持换行 · 点击图片放置 · 撤销可移除</span>
+      </fieldset>}
 
       {/* 画布区 */}
-      <div ref={stageRef} className="relative flex flex-1 items-center justify-center overflow-hidden p-6">
-        {!asset ? (
+      <div ref={stageRef} className="relative flex flex-1 items-center justify-center overflow-hidden p-6" style={{ pointerEvents: busy ? "none" : undefined }}>
+        {!asset && !isDraft ? (
           <p className="text-sm text-white/60">素材不存在或已删除</p>
         ) : loadError ? (
           <p className="text-sm text-red-300">底图加载失败：{loadError}</p>
@@ -934,7 +1096,7 @@ export function ImageAnnotator() {
           <div className="relative shadow-2xl" style={{ width: dw, height: dh }}>
             <img
               src={base.url}
-              alt={asset.name}
+              alt={isDraft ? "白底草稿" : asset?.name}
               draggable={false}
               className="absolute inset-0 h-full w-full select-none"
             />
@@ -951,7 +1113,7 @@ export function ImageAnnotator() {
               }}
               onContextMenu={(e) => e.preventDefault()}
             >
-              {shapes.map((s, i) => renderShape(s, `s${i}`))}
+              <g pointerEvents="none">{shapes.map((s, i) => renderShape(s, `s${i}`))}</g>
               {draft && renderShape(draft, "draft")}
               {tool === "crop" && cropRect && renderCropUI(cropRect)}
             </svg>
@@ -965,16 +1127,16 @@ export function ImageAnnotator() {
         <span>
           {tool === "crop"
             ? "裁剪：拖手柄调整范围 · 框内拖动移动 · 框外拖拽重画 · Enter 应用 / Esc 取消"
-            : `${asset ? `${asset.name} · ${base ? `${base.w}×${base.h}` : "…"}` : ""}${
+            : `${isDraft ? `草稿 · ${base ? `${base.w}×${base.h}` : "…"}` : asset ? `${asset.name} · ${base ? `${base.w}×${base.h}` : "…"}` : ""}${
                 shapes.length > 0 ? ` · 已画 ${shapes.length} 个标注` : ""
               }${ops.length > 0 ? " · 已裁剪/旋转" : ""}`}
         </span>
-        <span>
+        {isDraft ? <span>支持画框、箭头、画圆、铅笔和文字，保存后可作为参考图使用</span> : <span>
           坐标按火山 Seedream 归一化（0-999）记录，相对最终输出图；创作板选「标注」维度即注入
           <code className="mx-1 rounded bg-white/10 px-1">&lt;bbox&gt;</code>/
           <code className="mx-1 rounded bg-white/10 px-1">&lt;point&gt;</code>
           坐标
-        </span>
+        </span>}
       </div>
     </div>,
     document.body

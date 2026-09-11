@@ -33,6 +33,7 @@ import {
   Move,
   PanelLeftClose,
   PanelLeftOpen,
+  PenTool,
   Plus,
   Sparkles,
   Trash2,
@@ -525,7 +526,7 @@ export function CanvasWorkspace({
   const [canvasMarquee, setCanvasMarquee] = useState<CanvasMarquee | null>(null);
   const [selectedCanvasNodeIds, setSelectedCanvasNodeIds] = useState<Set<string>>(() => new Set());
   const [canvasLightbox, setCanvasLightbox] = useState<{ images: string[]; index: number } | null>(null);
-  const [promptMenu, setPromptMenu] = useState<{ node: ProjectGraphNode | null; nodeIds: string[]; x: number; y: number } | null>(null);
+  const [promptMenu, setPromptMenu] = useState<{ node: ProjectGraphNode | null; nodeIds: string[]; x: number; y: number; point: CanvasPoint } | null>(null);
   const promptMenuRef = useRef<HTMLDivElement>(null);
   useEffect(() => { setPromptMenu(null); }, [projectId, viewMode]);
   useEffect(() => {
@@ -2108,7 +2109,48 @@ export function CanvasWorkspace({
     useStore.getState().closeContextMenu();
     const nodeIds = selectedCanvasNodeIdsRef.current.has(nodeId) ? [...selectedCanvasNodeIdsRef.current] : [nodeId];
     setSelectedCanvasNodeIds(new Set(nodeIds));
-    setPromptMenu({ node, nodeIds, x: event.clientX, y: event.clientY });
+    setPromptMenu({ node, nodeIds, x: event.clientX, y: event.clientY, point: toBoardPoint(event.clientX, event.clientY) });
+  }
+
+  function newDraftAt(point: CanvasPoint) {
+    if (loadingRef.current || useStore.getState().projectRoutePending) return;
+    const project = activeCanvasRef.current;
+    const stage = stageRef.current;
+    const nodeId = canvasId("asset");
+    let savedAsset: Asset | null = null;
+    let queued = false;
+    let completed = false;
+    setPromptMenu(null);
+    useStore.getState().openDraftAnnotator(async (dataUrl, meta) => {
+      // A failed queued write is retried in place, without importing another image.
+      await retryPendingWrites();
+      if (completed) return;
+      if (!queued) {
+        queued = true;
+        await enqueueWrite(async () => {
+          await ensureMaterialized(project);
+          savedAsset ??= await api.saveAnnotatedImage({
+            dataUrl, fileName: "草稿", projectId: project.id, annotationJson: JSON.stringify(meta),
+          });
+          const snapshot = createCanvasAssetSnapshot(savedAsset, nodeId);
+          const size = assetNodeSize(snapshot);
+          const node: CanvasAssetNode = {
+            kind: "asset", id: nodeId, asset: snapshot,
+            x: point.x - size.width / 2, y: point.y - size.height / 2, ...size,
+            order: nodesRef.current.reduce((max, node) => Math.max(max, node.order), 0) + 1,
+          };
+          await api.projectCanvasNodeCreate(newProjectCanvasAssetNode(project.id, node));
+          completed = true;
+          const route = useStore.getState();
+          if (stage?.isConnected && activeCanvasRef.current.id === project.id
+            && route.activeProjectId === project.id && !route.projectRoutePending) {
+            setCanvasAssets((current) => [...current.filter(asset => asset.id !== savedAsset!.id), savedAsset!]);
+            commitNodes([...nodesRef.current.filter(existing => existing.id !== node.id), node]);
+          }
+        });
+      }
+      if (writeJournalRef.current.failure != null) throw writeJournalRef.current.failure;
+    });
   }
 
   function toggleCanvasNodeSelection(nodeId: string) {
@@ -2259,7 +2301,9 @@ export function CanvasWorkspace({
       ? new Set(selectedCanvasNodeIdsRef.current)
       : new Set([selectionNode.id]);
     if (!selectedCanvasNodeIdsRef.current.has(selectionNode.id)) setSelectedCanvasNodeIds(selectedIds);
+    const draftPoint = toBoardPoint(event.clientX, event.clientY);
     openContextMenu(event.clientX, event.clientY, selectedAsset.assetId, {
+      onNewDraft: () => newDraftAt(draftPoint),
       asset: canvasAssets.find((asset) => asset.id === selectedAsset.assetId),
       canvasSelection: {
         projectId: activeCanvasRef.current.id,
@@ -3389,6 +3433,12 @@ export function CanvasWorkspace({
             backgroundSize: `${24 * zoom}px ${24 * zoom}px`,
           }}
           onPointerDown={beginPan}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            if (loadingRef.current || useStore.getState().projectRoutePending) return;
+            useStore.getState().closeContextMenu();
+            setPromptMenu({ node: null, nodeIds: [], x: event.clientX, y: event.clientY, point: toBoardPoint(event.clientX, event.clientY) });
+          }}
           onPointerMove={movePan}
           onPointerUp={endPan}
           onPointerCancel={(event) => endPan(event, true)}
@@ -3740,15 +3790,18 @@ export function CanvasWorkspace({
             role="menu"
             aria-label={promptMenu.node?.kind === "agent_group" ? "Agent 执行组菜单" : promptMenu.node ? "生成指令菜单" : "画板节点菜单"}
             className="fixed z-[60] w-[200px] rounded-lg border border-edge bg-panel p-1 shadow-xl"
-            style={{ left: Math.max(8, Math.min(promptMenu.x, window.innerWidth - 208)), top: Math.max(8, Math.min(promptMenu.y, window.innerHeight - 124)) }}
+            style={{ left: Math.max(8, Math.min(promptMenu.x, window.innerWidth - 208)), top: Math.max(8, Math.min(promptMenu.y, window.innerHeight - 164)) }}
             onContextMenu={(event) => event.preventDefault()}
           >
-            <button type="button" role="menuitem" className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs hover:bg-panel2" onClick={() => {
+            <button type="button" role="menuitem" className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs hover:bg-panel2" onClick={() => newDraftAt(promptMenu.point)}>
+              <PenTool size={14} /> 新建草稿
+            </button>
+            {promptMenu.nodeIds.length > 0 && <button type="button" role="menuitem" className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs hover:bg-panel2" onClick={() => {
               arrangeNodes(promptMenu.nodeIds);
               setPromptMenu(null);
             }}>
               <LayoutDashboard size={14} /> 整理
-            </button>
+            </button>}
             {promptMenu.node && <button type="button" role="menuitem" className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs hover:bg-panel2" onClick={() => reuseCanvasPrompt(promptMenu.node!)}>
               <Copy size={14} /> 复用提示词
             </button>}

@@ -5,6 +5,7 @@ services:
       dockerfile: Dockerfile.unified-harness-candidate
       additional_contexts:
         dsh-profile: ${BOWERBIRD_DSH_BUILD_CONTEXT:-../../spikes/unified-agent-harness-u1/profiles/bowerbird-u1}
+        cloud-shared: ${BOWERBIRD_CLOUD_SHARED_BUILD_CONTEXT:-../cloud/supabase/functions/_shared}
     image: bowerbird/generation-worker:local
     restart: unless-stopped
     init: true
@@ -16,7 +17,8 @@ services:
       - ./src/prompts/brand-visual:/app/brand-prompts:ro
     read_only: true
     tmpfs:
-      - /tmp:size=64m,mode=1777
+      # Video probing writes one bounded output (up to 500 MiB) at a time.
+      - /tmp:size=640m,mode=1777
       - /workspaces:size=256m,mode=0700,uid=1000,gid=1000
       - /dsh-runtime:size=32m,mode=0700,uid=1000,gid=1000
     security_opt:

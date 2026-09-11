@@ -1,10 +1,43 @@
 # 国内方舟 Seedance 2.5 视频接入
 
-> 当前状态：视频与 FFmpeg 修复已完成主目录本地集成，见 [VIDEO-API-INTEGRATION-V3.md](VIDEO-API-INTEGRATION-V3.md)。视频迁移最终为 0058，未部署、未启价、未完成真实生成验收；下文保留 v1/v2 历史证据。
+> 当前状态：视频与 FFmpeg 修复已完成主目录本地集成，见 [VIDEO-API-INTEGRATION-V3.md](VIDEO-API-INTEGRATION-V3.md)。视频迁移最终为 0058，已于 2026-09-11 与 Worker、Edge 一并部署；未启价、未完成真实生成验收。当前发布证据见本节，下文保留 v1/v2 历史证据。
 
 > v2 后续：完整代码已提交为 522a26d，安全集成演练和新实测准备见 [VIDEO-API-INTEGRATION-PREP-V2.md](VIDEO-API-INTEGRATION-PREP-V2.md)。下文 v1 状态保留为当时证据。
 
 > 2026-09-06，结果版本 video-api-local-v1。独立 worktree / 未提交 / 未合入保存项目 / 未部署 / 未启用生产价格。代码与离线验证完成，真实生成验收未完成。
+
+## 2026-09-11 云端同步部署
+
+用户授权“全面都更新后就再存档并重新打包”。核验 Supabase 原为 0001–0056，本次只应用 **0058_video_generation_jobs.sql**（SHA-256 `59745e7bbb97206e827b00ac178366cd1c08c0424793903552102dda005de826`）；0057 仍为未集成 Harness 预留，没有补造或执行。迁移后远端与本地一致，视频价格配置和 Seedance 2.5 活动服务行均为 0，未启用模型计费。
+
+全部 12 个 Edge Functions 已从当前审核工作区部署，保留各自原 JWT 设置及既有 Secrets；无删除函数操作。发布清单与源码哈希为本地 `.tmp/release-20260911/edge-deployment-manifest.json`，上线结果为 `edge-after.json`。
+
+| 函数 | 版本 | verify_jwt |
+|---|---|---|
+| generate-proxy | 33 → 34 | false |
+| understand-proxy | 32 → 33 | true |
+| entitlement | 35 → 36 | true |
+| create-checkout | 23 → 24 | true |
+| payment-webhook | 24 → 25 | false |
+| agent-run | 48 → 49 | false |
+| agent-worker | 54 → 55 | false |
+| generation-worker | 25 → 26 | false |
+| understand-worker | 16 → 17 | false |
+| visual-profile | 12 → 13 | true |
+| visual-profile-worker | 11 → 12 | false |
+| wechat-login | 11 → 12 | false |
+
+VPS Worker 镜像为 **`sha256:a353810bd6385c9c70caf50b879515994c5170d58778e355c10ff19104fef46c`**（336367007 bytes）。本次以已核验现役镜像叠加 FFmpeg/CA 与当前 Worker 源码，保留锁定的 DSH 依赖；正式 Dockerfiles/Compose 已补齐同等构建要求。`cloud-shared` 只复制 `video-contract.ts` 和测试所需 `task-authorization.ts` 到镜像对应跨包路径，VPS 源文件位于 `/opt/bowerbird/cloud-shared/`。现役容器 `agent-worker-generation-worker-1` 保持 node 用户、只读根目录、全部 capabilities 丢弃及原 1536 MiB 内存/CPU/PID 限制；/tmp 从 64 MiB 调整为有界 640 MiB，容纳单个最大 500 MiB 探测文件；唯一新增环境字段是 Cloud 共享源码构建目录。品牌提示词及 DSH Profile 已逐文件核对一致；renderer 运行源码一致，无需重建或重启。
+
+验证：本地 Worker 352/352 与类型检查、视频 PGlite SQL 测试、Edge 52 tests/15 steps 和 12 入口 Deno check 通过。修复全量检查发现的权益签名 typed-array/结构类型、undefined 规范化既有断言与理解 Worker 日志状态类型；线上签名公钥验签通过，临时账号清理已核验。镜像在原 1536 MiB 内存限制下无网络探测 500 MiB（524288000 bytes）合成 MP4，通过合法 free box 补足大小，返回 320×320、24fps、1s；验证的是探测容量，不替代真实下载/生成/计费或并发峰值验收；DSH 离线 ACP/取消/审批/持久化调用/用量/封闭工具面探针通过。完整源码测试搬入精简只读镜像为 335 passed/17 failed，失败项为缺仓库夹具或不可写的测试路径；额外夹具上传被自动审批拒绝，未放宽生产权限，未将其称为容器全套通过。
+
+上线后 12 函数 ACTIVE、JWT 配置逐项一致；10 个受保护入口未登录均 401；有效 Worker 身份访问新 video_input_url 路由的随机不存在任务返回 404，未写入数据；video_service_pricing 与 Seedance 2.5 活动服务均 0。Worker 四循环启动、重启 0、控制面无排队/活动/失效租约，renderer healthy。未调用 Ark/DeepSeek，未发起真实生成、未对历史未知任务重发或退款；真实视频结果、账单及桌面完整链路仍待正式启价后专项验收。支付 Mock、DSH test-only 范围保持不变，未重跑基础镜像漏洞扫描或扩大账号开放。
+
+回滚：VPS 原镜像保留为 `bowerbird/generation-worker:rollback-full-20260911`，ID `sha256:04732a2a630d0a58f814696d98ffdbf35313224639ed41dbc45b279057ecf977`。原源文件与仅远端保存的 0600 环境备份在 `/opt/bowerbird/deploy-backups/full-20260911/pre-source.tar`、`pre-env.generation`；切换脚本带失败自动恢复，实际未触发。需要回退时在停接新任务并核验无活动租约后，恢复对应文件/环境，将 rollback 镜像重新标为 local，以原 Compose no-build 重建 Worker；新增兼容迁移保持关闭价格，不做生产 DROP。
+
+自动审批拒绝将 12 个现役 Edge 源码下载到本机，也拒绝额外技能/插件测试夹具上传；这些传输均未执行。没有声称拥有完整的上线前 Edge 源码备份；本地 `cloud-local-before.tar` 来自 Git `4d21dd3`，并非现役字节快照。需要 Edge 回滚时必须核对该函数目标版本与源文件，不能盲目整体回推本地旧树。新发布的源码、JWT/版本元数据与 VPS 回滚镜像已保留。
+
+---
 
 ## 1. 已确定范围
 

@@ -18,12 +18,12 @@
 
 - [dev-doc/VIDEO-API-INTEGRATION-PREP-V2.md](dev-doc/VIDEO-API-INTEGRATION-PREP-V2.md) — 视频隔离提交与 v2 历史集成演练（2026-09-06；已由 v3 实际集成接续）。
 
-- [dev-doc/VIDEO-API-INTEGRATION.md](dev-doc/VIDEO-API-INTEGRATION.md) — 国内方舟 Seedance 2.5 Cloud 视频实现及历史归因（2026-09-06；v3 已本地集成，未部署/未完成真实生成验收）。
+- [dev-doc/VIDEO-API-INTEGRATION.md](dev-doc/VIDEO-API-INTEGRATION.md) — 国内方舟 Seedance 2.5 Cloud 视频实现及历史归因（2026-09-11；0058/Worker/Edge 已部署，未启价/未完成真实生成验收）。
 
 - [dev-doc/SEEDANCE-2.5-INTEGRATION.md](dev-doc/SEEDANCE-2.5-INTEGRATION.md) — 即梦 Seedance 2.5 四模式视频接入、官方 CLI 核验与验收记录（2026-09-06；沿用即梦账号与积分）。
 - [dev-doc/analyse-panel-todo.md](dev-doc/analyse-panel-todo.md) — 详情页「反推」面板待优化清单（结果管理 / 流式取消 / 术语统一 / 未登录置灰 等，2026-07-07 评审，P0–P2 分级）
 - [dev-doc/AI-PROVIDERS.md](dev-doc/AI-PROVIDERS.md) — AI provider 可切换方案（泛化 GenerationPanel + 全局默认/单次覆盖 + codex/即梦首批 + 即梦走官方 dreamina CLI + 关键约定 1 演进，v2 草案 2026-07-23）
-- [dev-doc/ARCH-ADJUST-PROGRESS.md](dev-doc/ARCH-ADJUST-PROGRESS.md) — 收费化架构调整（P0–P9）跨会话任务进度与交接（更新至 2026-08-11；原始计划见 dev-doc/ARCH-ADJUST-PLAN.md，部署步骤见 apps/cloud/DEPLOY.md）
+- [dev-doc/ARCH-ADJUST-PROGRESS.md](dev-doc/ARCH-ADJUST-PROGRESS.md) — 收费化架构调整（P0–P9）跨会话任务进度与交接（本地进度已更新至 2026-09-11；当前线上指纹见 VIDEO-API-INTEGRATION.md，部署步骤见 apps/cloud/DEPLOY.md）
 - [dev-doc/AGENT-RUNTIME-PLAN.md](dev-doc/AGENT-RUNTIME-PLAN.md) — Bowerbird 受限 VPS Worker 与内置 Skill Agent Runtime 专项计划（首版 `bowerbird-controlled-image-edit`：纯文本意图分析 → 有限澄清 → Skill 动态规划 → 审批 → Cloud 或本机 CLI 工具执行 → 反馈诊断与修订；Agent Kernel / 独立视觉规范 / Supabase / 方舟 / 桌面会话 UI，历史 v1.23 2026-08-25，见 [apps/agent-worker](apps/agent-worker/)）
 - [dev-doc/UNIFIED-AGENT-HARNESS-PLAN.md](dev-doc/UNIFIED-AGENT-HARNESS-PLAN.md) — 通用云端 Agent Harness 新专项（一个 Bowerbird Agent + 多种受控 Tool/输出配方；Bowerbird Tool Gateway 与控制面权威；HTML/未来渠道能力禁止另造 Agent Runner，U0–U6 与开发收敛，v1.60 2026-09-05；DSH 统一入口已真实自主选择并完成 HTML 四工具链，统一图片执行已在源码放开多 final 并按 DAG 层并发，仍因自然样本与基础层 HIGH/CRITICAL 保持 test-only）
 - [dev-doc/HTML-RENDER-PLAN.md](dev-doc/HTML-RENDER-PLAN.md) — 受限 HTML 离线排版与截图专项计划（独立无外网 Chromium renderer、整页/视口/纵向切片、Kernel `render_html` 工具、第二个官方内置 Skill，H0–H6；明确不做网页访问、自由浏览器 Agent、Vision 自检或自动修订；**H0–H5 已完成，H6 test-only 观察进行中（2026-08-28）**，当前不扩大开放、不调整计费）
@@ -48,11 +48,13 @@
 
 **近期里程碑（只保留最近 3 条；更早的全量历史见 [dev-doc/进展归档.md](dev-doc/进展归档.md)）**
 
+> **云端同步上线、画板草稿与 Windows 26.9.11 重新打包（2026-09-11）：** 按用户“全面更新后再存档并重新打包”指令完成 VPS Worker 视频链路、Supabase 0058 与全部 12 个 Edge Functions 同步；新 Worker 含 ffprobe 和跨包契约，非 root/只读运行，HTML renderer 与 DSH Profile 运行源码核对一致。视频价格仍未启用、真实生成及账单验收未完成，支付 Mock 与 DSH test-only 策略不变。桌面同时纳入已完成的白底草稿与画圆、铅笔、多行文字标注增量，复用既有图片入库和画板持久化；重新构建同日版本的 Windows x64 NSIS，旧包保留至 `Windows/dist/archive/20260911-before-cloud-update/`。源码、部署与测试证据随本次存档提交；线上状态与回滚见 [VIDEO-API-INTEGRATION.md](dev-doc/VIDEO-API-INTEGRATION.md#2026-09-11-云端同步部署)。
+
 > **Windows 26.9.11 安装包与桌面增量存档（2026-09-11）：** 本次打包包含新版五步项目画板引导与集合教程、普通图片/视频及正式 Agent 完成弹窗和提示音、素材拖入项目卡片/侧栏、画板保存状态防闪烁，以及画板右键不再误隐藏探索网页的修复；也包含此前已存档的探索采集、独立视觉规范、本地分类、视频与统一 Agent 桌面源码。Tauri/Cargo 日期版本更新为 26.9.11，从 canonical 主源码构建 Windows x64 NSIS，并复制至 `Windows/dist/Bowerbird_26.9.11_x64-setup.exe`。本次只生成本地安装包，不安装到用户环境、不修改真实素材库、不部署云端；原生首启/提示音、真实库升级及真实视频生成仍待验收。复核与产物指纹见下方。
 
 > **项目画板入门引导 v2（2026-09-11，源码完成，未发包）：** 替换旧版导入文件夹/逐控件聚光灯引导，采用独立本地示例项目与五步真实操作清单：拖图、移动、目标与参考、维度、主动生成；按用户要求删除末尾续改步骤，旧第六步兼容恢复到生成步骤。集合新增独立四段教程及创建/打开入口，覆盖命名、添加/导入、提炼和保存后选择，集合内可随时重看。无需账号即可准备示例；暂停先保存草稿，重开恢复学习进度，允许明确跳过维度或先完成准备。升级用户看到独立新版变化，探索/反推/视觉规范/本地分类/整理提供按需提示。本轮进度契约 4 项、引导/集合 UI、TypeScript 与 production build 通过；此前画板/路由 111 项、两组探索 UI 与 Rust 临时库 2 项通过；未调用真实生成服务、未操作用户库，原生首启和实际生成待验收。实现与复跑见 [ONBOARDING.md](dev-doc/ONBOARDING.md)。
 
-> **探索画板落点与素材栏折叠（2026-09-10，源码完成，未发包）：** 网页图片拖到画板时按松手瞬间的项目、平移与缩放冻结落点，采集成功后居中创建并持久化独立素材卡片；重复采集可复用资产并新建卡片，下载中切项目仍保存到原项目，非画板区域仅入库。画板素材栏支持手动与键盘收起/展开，打开探索时自动收起，关闭探索后保持当前状态；折叠入口留在素材栏内，保留来源选项、宽度、组件与画板视口。探索画板和既有探索界面两组隔离合成 IPC 回归、画板/路由 **111/111**、TypeScript 与 production build 通过。未操作用户窗口或真实素材库，本增量尚无真机验收，未发布安装包。实施与复跑见 [EMBEDDED-BROWSER.md](dev-doc/EMBEDDED-BROWSER.md)。
+**全面更新与重新打包复核（2026-09-11）：** Worker 本地 **352/352**、Worker TypeScript、视频迁移 PGlite 事务/恢复/结算测试、Edge **52 tests / 15 steps**、全部 12 个入口 Deno check 通过。VPS 镜像在原内存限制下通过 500 MiB 合成 MP4 探测，DSH ACP/审批/计量离线探针通过；完整源码测试直接运行于精简只读镜像为 335/352，另 17 项需要仓库夹具或测试工作目录，不能称容器全套通过。线上 12 函数 ACTIVE 且 JWT 设置逐项保持、10 个受保护入口返回 401、视频路由无任务返回 404、价格活动行 0；权益 Ed25519 真实签名冒烟通过且临时账号删除复核成功，Worker 四个循环正常、重启 0、renderer healthy，无 provider 调用。桌面草稿、标注、入门、工具条、探索画板五组 UI 与画板/路由 **111/111**、TypeScript/Vite 和 canonical Tauri NSIS 构建通过；Rust 沿用本次稍早未变源码的 **330 passed / 4 ignored / 11 filtered** 结果，未再次扩大原生测试。新安装包 **53,626,916 bytes**，SHA-256 **`FC5DC9A22ED159F282C64B0E1713C863C2FE68B604F4E89F4213880C5A75D6E7`**；校验文件同目录。日志与发布清单保留在本地 `.tmp/release-20260911/`，不入 Git；未操作真实素材库、未安装新包，真实视频生成/计费仍待启价后专项验收。
 
 **26.9.11 存档打包复核（2026-09-11）：** 契约 **122/122**（引导 4、画板/路由 111、探索/来源 7）、七组 Chrome 隔离 UI（引导/集合、生成完成提醒、项目拖图、工具条、探索界面、探索画板、既有集合面板）通过；Rust **330 passed / 4 ignored / 11 filtered**，包含示例真实资源导入、设置持久化和迁移回归，沿既有记录跳过媒体工具子进程组。Tauri 的前置 TypeScript/production build 与 release/NSIS 构建通过，保留既有大 chunk 和 Rust unused/dead-code 警告。构建命令为根目录 `pnpm tauri build --bundles nsis`，直接使用主源码及资源，未使用历史 override。安装包 **53,619,569 bytes**，SHA-256 **`434C09ED8A32C3FDDE4C6BE11BB0DD7882D6C15FF089E2E78EB3EFDBBC0A0BA2`**。最终 diff、暂存空白检查与旧里程碑原样归档检查通过；代码、版本和文档同次提交。复跑日志在本地 `.tmp/archive-20260911-*.log`；安装包与 SHA-256 校验文件在 `Windows/dist/`。广告素材、临时截图/日志、旧 spike 结果及无关网页未纳入提交。未重跑线上服务、真实模型、完整原生 UI 或历史项目删除 UI 待办，因此不宣称全量产品验收通过。
 
@@ -72,7 +74,7 @@
 - **图像生成（⑥）— 已端到端打通（2026-07-08，见「已完成」，非待办）**：创作板→codex imagegen→真流式回显→入库进瀑布流→多轮修改（resume）→生成图标记（角标/筛选/来源/命名）整条打通。**剩余**：`generations` 表落库（开发计划 §4.2 原移除；目前用 `analyses(kind=generation_meta)` 存来源元信息，够用）。
 
 - **收费化 P9 剩余**：P9-T2/T3/T4/T5 与 P6.1 多层权限门控代码已完成；**Entitlement 非对称签名已上线（2026-08-27）**——Edge Ed25519 私钥（Secret `ENTITLEMENT_SIGNING_KEY`）对权益快照门控字段做规范化 JSON 签名（`_shared/entitlement-signing.ts` ↔ 桌面 `cloud/entitlement.rs` 逐字节镜像，跨语言向量测试锁定），桌面构建期内置公钥验签（`BOWERBIRD_ENTITLEMENT_PUBKEY`），验签通过的快照才允许 7 天离线 Pro 宽限；线上冒烟（`smoke-entitlement-signing.mjs`）已通过。剩余：用测试订阅数据验收 Pro/Studio 解锁、到期降级、历史任务阻断；P9-T1 真实购买/到账仍等待备案/商户资质。跨会话细节见 [dev-doc/ARCH-ADJUST-PROGRESS.md](dev-doc/ARCH-ADJUST-PROGRESS.md)。
-- **收费化延后项（凭据/决策驱动）**：Seedance 视频 Cloud 已完成 v3 主目录集成，待真实端到端/账单验收及部署、微信登录真实联调（H5）；真实支付在备案完成前不选 provider、不做真实联调，历史候选仅供恢复时重新调研，决策前 `BOWERBIRD_PAYMENT_MOCK` 保持 true。
+- **收费化延后项（凭据/决策驱动）**：Seedance 视频 Cloud 已完成 v3 主目录集成并于 2026-09-11 部署，待正式启价与真实端到端/账单验收、微信登录真实联调（H5）；真实支付在备案完成前不选 provider、不做真实联调，历史候选仅供恢复时重新调研，决策前 `BOWERBIRD_PAYMENT_MOCK` 保持 true。
 
 **里程碑：** 内部 Alpha（Phase 1 ✅）→ 公开 Beta 0.5（Phase 3 ✅）→ 1.0 正式版（Phase 5 简化版 ✅，真实 VLM 看图 spike 后转正）→ **1.x 生成（⑥，codex imagegen 端到端实测跑通 + 入库 + 标记，2026-07-08）**。
 
@@ -91,9 +93,11 @@
 
 ## 关键约定
 
+**2026-09-11 画板草稿（已纳入本日重新打包）：** 在项目画板空白处、图片、素材组及生成卡片的右键菜单提供“新建草稿”，复用图片标注器打开本地生成的 1600×1200 白底 PNG，默认黑色线条，支持画框、箭头、画圆（Shift 正圆）、铅笔自由线条、文字、裁剪、旋转和撤销。草稿与素材标注共用全部工具；文字可选黑体/宋体/等宽、字号和粗体，支持多行，输入后点击图片放置。自由线条保留完整轨迹，文字保留字体样式，裁剪/旋转同步变换新增标注；导出的 annotation 继续用既有 bbox/point 加文字说明，不增加模型专用标记。打开或取消不新增素材、不持久化临时项目；首次保存先持久化项目，再沿既有 annotation 入库链路保存图片及坐标，在右键时冻结的画板坐标创建独立素材卡片。保存失败保留编辑器，队列重试复用已入库素材；白底草稿的 `source_asset_id=null`，不伪造来源资产。已有图片标注仍保留“保存到素材库”和“不入库插入创作板”出口。隔离合成 IPC 界面验收见 `apps/desktop/scripts/canvas-draft-ui.test.mjs` 与 `apps/desktop/scripts/annotation-tools-ui.test.mjs`，覆盖两种入口、PNG 实际像素、正圆/闭合自由线条、中英多行文字、字体/字号/粗体、输入法与撤销、裁剪/旋转，以及入库/临时输出；画板契约 111 项及 TypeScript/production build 通过，未操作真实素材库；本次综合存档已重新构建安装包。
+
 **2026-09-11 项目拖图与画板反馈：** 素材库单张或多选图片可拖入首页折叠/展开项目、侧栏项目及折叠侧栏入口，通过既有项目成员 API 添加关联；同一素材可供多个项目使用，重复拖入不重复增加关系，不切换项目或移动/删除原素材。临时/归档项目不接受拖入；失败提示后可重试。画板保存提示固定占位，短写入不闪烁，慢写入延迟显示并短暂保留，避免工具条尺寸跳动；保存失败继续明确显示。探索浏览器仅在对话框或实际覆盖网页的菜单出现时暂时隐藏，画板侧右键菜单不影响网页，恢复不导航、不刷新。
 
-**2026-09-11 Windows 打包版本：** 继续使用两位年份的日期版本，本次 Tauri 配置与 Cargo package/lock 同步为 `26.9.11`；根与前端 npm workspace 的 `0.1.0` 不作为安装包版本。安装包仅本地交付，服务端部署状态沿用专项记录。
+**2026-09-11 Windows 打包版本：** 继续使用两位年份的日期版本，本次 Tauri 配置与 Cargo package/lock 同步为 `26.9.11`；根与前端 npm workspace 的 `0.1.0` 不作为安装包版本。安装包仅本地交付；同日云端全面更新后重新打包覆盖主交付文件，旧包单独保留，当前 SHA-256 以上方最新复核为准。
 
 **2026-09-11 生成完成提醒（已纳入 26.9.11 本地安装包）：** 普通图片、视频每轮成功收到产物，以及正式 Agent 整组产物入库确认后，显示应用右上角弹窗并播放短提示音。设置 → 个性化与记忆 → 生成完成提醒提供独立弹窗/声音开关，默认开启，写入 settings.json；旧配置补默认值，启动恢复先读取已保存偏好。提醒在全局完成入口触发，关闭详情或切换项目仍有效；回看已完成历史、失败、取消和空产物不触发，重复完成按任务轮次/Agent 产物组去重，同时完成的短提示音合并。采用应用内弹窗与 Web Audio，未增加操作系统通知。`npm run test:generation-notifications` 合成 IPC/真实组件界面回归、画板 111 项、Rust 设置 7 项、TypeScript 与 production build 通过；未调用真实生成服务，原生 WebView2 提示音及最小化场景待真机验收。
 
@@ -266,6 +270,10 @@
 **画板选择与主动整理（2026-09-06）**：Ctrl/Command + 点击可追加或取消节点选择，Ctrl/Command 框选保留已有选择。节点右键“整理”以当前所选节点为起点（右键未选节点则只取该节点），沿连接方向收集当前可见的后续卡片；素材组成员和 Agent 隐藏提示卡映射到可见容器。按连接层级对齐、留出间距，并整体避开未参与整理的卡片；不移动上游或无关卡片。整理后整组选中，节点/素材组坐标沿用现有画板写入队列持久化；不更改线程、连接、素材归属或执行记录。
 
 ## 踩坑记录
+
+### VPS 视频依赖必须同时包含 ffprobe 与跨包契约（2026-09-11）
+
+本地 Worker 可以导入兄弟目录的 Cloud 视频契约，但旧独立镜像只有 `/app/src`，既没有 `/cloud/supabase/functions/_shared/video-contract.ts` 也没有 ffprobe，直接只同步源码会造成启动或媒体探测失败；原 64 MiB /tmp 还会拒绝规格允许的大文件，已调为有界 640 MiB 并以 500 MiB 合成 MP4 验证。Dockerfile/Compose 新增最小 `cloud-shared` 构建上下文并安装 ca-certificates/ffmpeg；候选与现役镜像用合成视频探测验证生产导入路径。VPS 默认 Debian 源下载缓慢，临时发布层改用腾讯内网 Debian 镜像并保留 APT 签名校验；镜像缺 CA 时先从签名校验的 HTTP 源安装证书，未关闭 TLS 校验。仓库源码测试依赖夹具和可写工作目录，不能将精简只读容器中的夹具缺失误记为功能测试通过或放宽生产权限。
 
 ### 画板右键菜单让探索浏览器看似反复刷新（2026-09-11）
 

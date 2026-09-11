@@ -65,7 +65,7 @@ Deno.serve(async (request) => {
         sub: credits?.sub_balance ?? 0,
         topup: credits?.topup_balance ?? 0,
       },
-      policy: policyForUser(tier, user),
+      policy: { ...policyForUser(tier, user) },
       generation_services: generationServices,
       prompt_configs: promptConfigRows,
       issued_at: issuedAt.toISOString(),

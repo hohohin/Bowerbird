@@ -2,6 +2,7 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import { CanvasWorkspace } from "../../../src/components/CanvasWorkspace";
 import { AssetContextMenu } from "../../../src/components/AssetContextMenu";
+import { ImageAnnotator } from "../../../src/components/ImageAnnotator";
 import { useStore } from "../../../src/store";
 import { ExploreWorkspace } from "../../../src/components/ExploreWorkspace";
 import { ToastViewport } from "../../../src/components/ToastViewport";
@@ -15,7 +16,7 @@ const callbacks = new Map();
 const listeners = new Map();
 const project = { id: "p", name: "引用布局合成验收", kind: "blank", workspace_path: "blank:p", asset_count: 5,
   title_source: "manual", created_at: 1, updated_at: 1 };
-if (explorer && new URLSearchParams(location.search).has("provisional")) Object.assign(project, { provisional: true, title_source: "default" });
+if (new URLSearchParams(location.search).has("provisional") && !sessionStorage.getItem("reference-fixture")) Object.assign(project, { provisional: true, title_source: "default" });
 const canvas = { projectId: "p", draftJson: "{}", createdAt: 1, updatedAt: 1 };
 const base = { projectId: "p", threadId: "t", hiddenAt: null, positionLocked: false, createdAt: 1, updatedAt: 1,
   width: 190, height: 180, zIndex: 1, role: "reference", kind: "asset", assetId: "existing" };
@@ -23,6 +24,7 @@ const image = (color: string) => `data:image/svg+xml,${encodeURIComponent(`<svg 
 const assets = ["existing", "a", "b", "c", "d"].map((id, i) => ({ id, name: `合成参考 ${id}`, width: 190, height: 150,
   store_path: image(["#64748b", "#0369a1", "#4f46e5", "#0d9488", "#9333ea"][i]), source: "imported" }));
 if (explorer) assets.push({ ...assets[1], id: "collected", name: "网页采集图片", source: "extension" });
+assets.push(...JSON.parse(sessionStorage.getItem("reference-drafts") || "[]"));
 const payload = (id: string) => JSON.stringify({ schema_version: 1, snapshot: { name: `合成参考 ${id}`, width: 190, height: 150 } });
 let snapshot = JSON.parse(sessionStorage.getItem("reference-fixture") || "null") || {
   canvas, nodes: [{ ...base, id: "old", x: 400, y: 300, payloadJson: payload("existing") },
@@ -32,7 +34,10 @@ let snapshot = JSON.parse(sessionStorage.getItem("reference-fixture") || "null")
 };
 w.calls = [];
 w.snapshot = () => structuredClone(snapshot);
-w.save = () => sessionStorage.setItem("reference-fixture", JSON.stringify(snapshot));
+w.save = () => {
+  sessionStorage.setItem("reference-fixture", JSON.stringify(snapshot));
+  sessionStorage.setItem("reference-drafts", JSON.stringify(assets.filter(asset => asset.source === "annotation")));
+};
 w.emitChange = () => {
   for (const [handler, event] of listeners) if (event === "creative://changed") callbacks.get(handler)?.({ event, id: handler, payload: { projectId: "p" } });
 };
@@ -72,6 +77,7 @@ w.__TAURI_INTERNALS__ = {
       return assets.find(asset => asset.id === "collected");
     }
     if (command === "project_canvas_node_create") {
+      if (w.failNodeSave) throw "模拟草稿卡片保存失败";
       const node = { ...args.value, hiddenAt: null, createdAt: 10, updatedAt: 10 };
       snapshot.nodes.push(node); return node;
     }
@@ -89,6 +95,14 @@ w.__TAURI_INTERNALS__ = {
       snapshot.view = { ...args.value }; return snapshot.view;
     }
     if (command === "get_assets_by_ids") return assets.filter(a => args.assetIds.includes(a.id));
+    if (command === "save_annotated_image") {
+      if (w.failDraftSave) throw "模拟草稿保存失败";
+      const asset = { id: `draft-${assets.length}`, name: args.fileName, ext: "png", width: 1600, height: 1200,
+        store_path: args.dataUrl, source: "annotation" };
+      assets.push(asset);
+      return asset;
+    }
+    if (command === "read_image_data_url") return args.path;
     if (command === "project_canvas_ensure") return canvas;
     if (command === "list_generation_groups") return {};
     if (command === "count_assets") return 0;
@@ -105,7 +119,7 @@ function Fixture() {
   const canvas = <CanvasWorkspace key={projectId} projectId={projectId} exploring={exploring} />;
   return <div className="app-shell" style={{ display: "flex", height: "100vh" }}>
     {explorer ? <ExploreWorkspace url="https://www.pinterest.com/" open={exploring} onClose={() => setExploring(false)}>{canvas}</ExploreWorkspace> : canvas}
-    <AssetContextMenu /><ToastViewport />
+    <AssetContextMenu /><ImageAnnotator /><ToastViewport />
   </div>;
 }
 createRoot(document.getElementById("root")!).render(<Fixture />);

@@ -151,6 +151,7 @@ ARK_VISION_MODEL=<豆包 Vision endpoint id>
 RENDERER_URL=http://html-renderer:3917
 RENDER_INTERNAL_TOKEN=<与 html-renderer .env.renderer 完全一致的高熵随机值>
 BOWERBIRD_DSH_BUILD_CONTEXT=/opt/bowerbird/dsh-profile
+BOWERBIRD_CLOUD_SHARED_BUILD_CONTEXT=/opt/bowerbird/cloud-shared
 BOWERBIRD_UNIFIED_AGENT_DSH_ENABLED=false
 BOWERBIRD_CONTROLLED_IMAGE_EDIT_DSH_ENABLED=false
 BOWERBIRD_DSH_MODEL=deepseek-v4-flash
@@ -172,6 +173,8 @@ sudo docker compose --env-file .env.generation -f compose.generation.yml logs --
 `html-renderer` 只连接 `internal: true` 的 `bowerbird-internal` 网络，无宿主端口和公网出口；Worker 同时连接默认出站网络与该内部网络，通过固定 `RENDERER_URL` 调用。先启动 renderer 创建内部网络，再启动 Worker。两个 env 文件中的 `RENDER_INTERNAL_TOKEN` 必须一致且权限为 `0600`，不得写入仓库或日志。
 
 Worker 容器不映射入站端口、只读根文件系统、非 root、丢弃全部 capabilities，并限制 1536 MiB 内存、1.75 CPU、256 PID、256 MiB workspace tmpfs 与 10 MiB × 3 JSON 日志。容器入口为 `src/main.ts` 组合入口：按 `GENERATION_CONTROL_URL` / `UNDERSTAND_CONTROL_URL` / `AGENT_CONTROL_URL` 是否配置分别启动生图、理解与 Agent 三个消费循环，互不阻塞。方舟同步请求（生图与理解）不设置 120/135 秒主动终止；等待期间每 30 秒向 Bowerbird 控制面续租。Agent 循环每 10 分钟运行 TTL/orphan 清理并输出不含用户内容的控制面与磁盘健康指标；可在运维端运行 `node apps/cloud/scripts/check-agent-runtime-health.mjs` 做阈值探测。
+
+视频 Worker 镜像安装 `ca-certificates` 与 `ffmpeg`（包含 `ffprobe`），并从 `cloud-shared` 构建上下文复制 `video-contract.ts` 与 `task-authorization.ts` 到 `/cloud/supabase/functions/_shared/`，保持源码跨包导入路径。VPS 上将仓库 `apps/cloud/supabase/functions/_shared/` 中这两个文件同步到 `/opt/bowerbird/cloud-shared/`；不得把包含 `.env` 的整个 Cloud 目录当作构建上下文。直接调用 `docker build` 时也要传 `--build-context cloud-shared=<上述目录>`。生产 `/tmp` 为有界 640 MiB，覆盖单个 500 MiB 视频探测文件；其他 CPU/内存/PID 限制不变。候选镜像需在无网络、只读根目录和可写 `/tmp` 下运行 `node /app/scripts/video-readonly-probe.mjs`，核验生产入口导入及真实合成 MP4 探测；加 `--max-size` 用合法 MP4 free box 检查 500 MiB 上限（采用 640 MiB /tmp 和原 1536 MiB 内存限制），不调用模型或替代真实下载/并发验收。视频上线同时需要 `0058` 迁移和 `generate-proxy` / `generation-worker`；迁移默认不启价，价格须另行确认。
 
 ### 5. 微信扫码登录（H5，备案域名 bowerbird.cn）
 

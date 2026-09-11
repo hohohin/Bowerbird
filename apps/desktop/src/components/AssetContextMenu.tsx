@@ -387,6 +387,11 @@ export function AssetContextMenu() {
       aria-label="素材操作"
     >
       <div className="app-context-label">整理</div>
+      {menu.onNewDraft && (
+        <button type="button" role="menuitem" className="app-context-item px-2 py-1.5" onClick={menu.onNewDraft}>
+          <PenTool size={13} className="shrink-0" /> 新建草稿
+        </button>
+      )}
       {menu.canvasSelection && (
         <button type="button" role="menuitem" disabled={busy} className="app-context-item px-2 py-1.5"
           onClick={() => {

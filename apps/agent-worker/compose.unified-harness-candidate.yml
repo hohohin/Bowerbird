@@ -5,6 +5,7 @@ services:
       dockerfile: Dockerfile.unified-harness-candidate
       additional_contexts:
         dsh-profile: ../../spikes/unified-agent-harness-u1/profiles/bowerbird-u1
+        cloud-shared: ../cloud/supabase/functions/_shared
     image: bowerbird/agent-worker-unified-harness:candidate
     command:
       - node

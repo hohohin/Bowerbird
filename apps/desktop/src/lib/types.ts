@@ -328,9 +328,10 @@ export interface PromptedAsset extends Asset {
 
 /** 图片标注单个形状：坐标为火山 Seedream 交互编辑归一化整数（0-999，左上 0,0 / 右下 999,999）。
  *  token 即可注入 prompt 的坐标标记——rect `<bbox>x1 y1 x2 y2</bbox>`；
- *  arrow 火山无专用标记，用起终点两个 point 表达方向。 */
+ *  arrow 用起终点两个 point 表达方向；圆/自由线条/文字使用说明 + bbox，
+ *  不引入模型未知的标记。text 的端点为旋转后的锚点与对角点，token 中为包围框。 */
 export interface AnnotationShape {
-  type: "rect" | "arrow";
+  type: "rect" | "arrow" | "ellipse" | "pencil" | "text";
   x1: number;
   y1: number;
   x2: number;
@@ -340,6 +341,14 @@ export interface AnnotationShape {
   /** 线宽（烧录进输出图的像素，随导出图分辨率）。 */
   width: number;
   token: string;
+  /** 自由线条的完整轨迹，坐标同为 0-999。 */
+  points?: Array<{ x: number; y: number }>;
+  text?: string;
+  /** 输出图像中的字号（像素）、字体、字重与顺时针旋转角度。 */
+  fontSize?: number;
+  fontFamily?: string;
+  fontWeight?: number;
+  rotation?: number;
 }
 
 /** 标注输出相对原图的变换序列（面板内按操作顺序记录；裁剪坐标为当时底图归一化 0-1）。
@@ -351,7 +360,8 @@ export type AnnotationTransformOp =
 /** analyses(kind=annotation) 的 payload：标注输出图尺寸 + 相对原图的形状列表（坐标同图 1:1）。 */
 export interface AnnotationMeta {
   schema_version: 1;
-  source_asset_id: string;
+  /** 白底草稿没有来源素材。 */
+  source_asset_id: string | null;
   source_store_path: string;
   image: { width: number; height: number };
   /** 裁剪/旋转过程（无变换时缺省）；供追溯与未来重编辑。 */

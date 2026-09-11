@@ -205,7 +205,7 @@ Deno.serve(async (request) => {
     else if (action === "fail") response = await actionComplete(admin, body, "failed");
     else if (action === "outcome_unknown") response = await actionComplete(admin, body, "outcome_unknown");
     else throw new ApiError("invalid_request", "未知 action");
-    safeLog({ requestId: id, service: `understand-worker:${action}`, status: response.status, elapsedMs: Date.now() - started });
+    safeLog({ requestId: id, service: `understand-worker:${action}`, status: String(response.status), elapsedMs: Date.now() - started });
     return response;
   } catch (error) {
     safeLog({ requestId: id, service: "understand-worker", status: error instanceof ApiError ? error.code : "error", elapsedMs: Date.now() - started });

@@ -11,6 +11,7 @@ import {
   understandProvider,
 } from "./lib/entitlement";
 import type {
+  AnnotationMeta,
   AppSettings,
   AuthSnapshot,
   Asset,
@@ -460,8 +461,9 @@ interface State {
   // 该图有维度数据则同时呼出维度环（环点扇区继续挑维度）。
   addAssetToBoardFromDetail: (assetId: string) => void;
   // —— 图片标注面板（右键菜单唤起，全局单实例）——
-  annotator: { assetId: string } | null;
+  annotator: { assetId: string | null; saveDraft?: (dataUrl: string, meta: AnnotationMeta) => Promise<void> } | null;
   openAnnotator: (assetId: string) => void;
+  openDraftAnnotator: (saveDraft: (dataUrl: string, meta: AnnotationMeta) => Promise<void>) => void;
   closeAnnotator: () => void;
   // —— 右键菜单（瀑布流缩略图 / 详情页大图）——
   contextMenu: {
@@ -469,13 +471,14 @@ interface State {
     y: number;
     assetId: string;
     asset?: Asset;
+    onNewDraft?: () => void;
     canvasSelection?: { projectId: string; nodeIds: string[] };
   } | null;
   openContextMenu: (
     x: number,
     y: number,
     assetId: string,
-    context?: { asset?: Asset; canvasSelection?: { projectId: string; nodeIds: string[] } },
+    context?: { asset?: Asset; canvasSelection?: { projectId: string; nodeIds: string[] }; onNewDraft?: () => void },
   ) => void;
   closeContextMenu: () => void;
   // —— 项目右键菜单（侧栏项目行 / 收起态圆标）——
@@ -2394,6 +2397,7 @@ export const useStore = create<State>((set, get) => {
   // —— 图片标注面板 ——
   annotator: null,
   openAnnotator: (assetId) => set({ annotator: { assetId } }),
+  openDraftAnnotator: (saveDraft) => set({ annotator: { assetId: null, saveDraft }, contextMenu: null }),
   closeAnnotator: () => set({ annotator: null }),
   // —— 右键菜单 ——
   contextMenu: null,

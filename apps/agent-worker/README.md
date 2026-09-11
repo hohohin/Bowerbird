@@ -1,10 +1,12 @@
 # @bowerbird/agent-worker — Bowerbird Agent Runtime
 
-> 状态：**首版 `bowerbird-controlled-image-edit` 的 legacy Kernel 已通过真实 E2E；U4 controlled-image DSH processor 已 test-only 部署，统一 Agent 图片多 final / DAG 同层并发已在源码完成、尚未部署。当前 Worker 297/297 + TypeScript。**
+> 状态（2026-09-11）：**VPS 已同步当前 Worker 源码，包含统一 Agent 多 final / DAG 同层并发、品牌视觉与 Seedance 2.5 视频处理；DSH 保持既有 test-only 开放策略，视频价格未启用。Worker 本地 352/352 与 TypeScript 通过；生产镜像的视频探测和 DSH 离线验证通过。部署版本、验证边界与回滚见 [视频部署记录](../../dev-doc/VIDEO-API-INTEGRATION.md#2026-09-11-云端同步部署)。**
 > 桌面 Agent 主路径已人工验收，A5 完成；A6 安全/Cloud 回归与 A7 VPS 运维基线完成。Codex Agent CLI 真机 E2E 已成功，但因双重思考/对话耗时过长暂时禁止新建该组合。Dreamina Agent CLI 真机 E2E 按 2026-08-25 用户决定暂时跳过：实现保留、未宣称验证通过，也不再作为当前发布或继续开发门槛。
 > 依据：[dev-doc/AGENT-RUNTIME-PLAN.md](../../dev-doc/AGENT-RUNTIME-PLAN.md) §A2 / §A3。
 
 ## 当前已实现
+
+视频容器构建还需要 `cloud-shared` named context（仓库默认为 `../cloud/supabase/functions/_shared`；VPS 通过 `BOWERBIRD_CLOUD_SHARED_BUILD_CONTEXT` 指向仅含共享源码的目录）。镜像内包含 `ffprobe` 和跨包契约，离线验收运行 `node scripts/video-readonly-probe.mjs`。具体发布顺序见 [部署说明](../cloud/DEPLOY.md)。
 
 - **冻结 9 个 v1 契约**（TypeScript 类型）：`ModelBackend` / `SkillManifest` / `RunSnapshot` /
   `ToolCall` / `ClarificationProposal` / `IntentPatch` / `VisualEvidenceCard` /
