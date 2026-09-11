@@ -1,4 +1,4 @@
-//! 导入流水线（开发计划 §5.1）：probe → 复制原图 → 缩略图 → pHash → 去重 → 入库。
+//! 导入流水线：本地文件按字节去重；网页采集可按 dHash 合并近似变体。
 //! 视频/PSD/SVG 等多格式在 Phase 2 接入；Phase 1 覆盖常见光栅图。
 
 use std::fs;
@@ -18,9 +18,55 @@ use crate::db::Database;
 use crate::error::{AppError, AppResult};
 use crate::media;
 
-/// 导入单个文件。若 pHash 命中已有资产，删除新副本并返回已有资产。
+/// 显式本地导入只合并字节完全相同的文件，保留相似构图和修订版本。
 pub fn ingest_file(paths: &LibraryPaths, db: &Database, source: &Path) -> AppResult<Asset> {
+    ingest_file_with_dedup(paths, db, source, false)
+}
+
+fn exact_duplicate(db: &Database, source: &Path, size: u64) -> AppResult<Option<Asset>> {
+    use std::io::Read;
+    let candidates = {
+        let conn = db.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT id, store_path FROM assets WHERE size=?1 AND store_path IS NOT NULL")?;
+        let rows = stmt.query_map([size as i64], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
+        rows.collect::<Result<Vec<_>, _>>()?
+    };
+    for (id, stored) in candidates {
+        let Ok(mut existing) = fs::File::open(&stored) else { continue };
+        if existing.metadata()?.len() != size { continue; }
+        let mut incoming = fs::File::open(source)?;
+        let mut left = [0u8; 65536];
+        let mut right = [0u8; 65536];
+        let mut remaining = size;
+        let mut identical = true;
+        while remaining > 0 {
+            let count = remaining.min(left.len() as u64) as usize;
+            incoming.read_exact(&mut left[..count])?;
+            if existing.read_exact(&mut right[..count]).is_err() || left[..count] != right[..count] {
+                identical = false;
+                break;
+            }
+            remaining -= count as u64;
+        }
+        if identical { return db.get_asset(&id); }
+    }
+    Ok(None)
+}
+
+fn ingest_file_with_dedup(paths: &LibraryPaths, db: &Database, source: &Path, approximate: bool) -> AppResult<Asset> {
     let meta = media::probe::probe(source)?;
+    let decoded = if media::probe::is_video(&meta.ext) || matches!(meta.ext.as_str(), "svg" | "psd") {
+        None
+    } else {
+        Some(image::ImageReader::open(source)?.with_guessed_format()?.decode()
+            .map_err(|error| AppError::Media(format!("无法解码图片 {}: {error}", source.display())))?)
+    };
+    if !approximate {
+        if let Some(mut existing) = exact_duplicate(db, source, meta.size)? {
+            preset::recognize_and_prefill(db, source, &mut existing)?;
+            return Ok(existing);
+        }
+    }
     let id = Ulid::new().to_string();
     let name = source
         .file_stem()
@@ -31,9 +77,6 @@ pub fn ingest_file(paths: &LibraryPaths, db: &Database, source: &Path) -> AppRes
     let store_path = paths.asset_store_path(&id, &meta.ext);
     fs::create_dir_all(store_path.parent().unwrap())?;
     fs::copy(source, &store_path)?;
-
-    // 解码一次，后续缩略图 / pHash / 提色均复用（每张大图 3 次 decode → 1 次）。
-    let decoded = image::open(&store_path).ok();
 
     // 缩略图：图片用 image resize；视频用 ffmpeg 抽帧；SVG 用原文件（前端直渲染）。
     let thumb_path = if media::probe::is_video(&meta.ext) {
@@ -74,7 +117,7 @@ pub fn ingest_file(paths: &LibraryPaths, db: &Database, source: &Path) -> AppRes
     };
 
     // 去重：pHash 命中则回滚新副本。
-    if let Some(ref h) = phash {
+    if let Some(ref h) = phash.as_ref().filter(|_| approximate) {
         if let Some(mut existing) = db.find_asset_by_phash(h)? {
             let _ = fs::remove_file(&store_path);
             let _ = fs::remove_file(&thumb_path);
@@ -244,7 +287,7 @@ pub fn walk_images(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
-/// 导入目录下所有图片，返回成功入库的资产（含 dHash 命中的已有资产）。
+/// 导入目录下所有图片，返回成功入库的资产（含字节相同的已有资产）。
 pub fn ingest_dir(paths: &LibraryPaths, db: &Database, dir: &Path) -> AppResult<Vec<Asset>> {
     let mut assets = Vec::new();
     for p in walk_images(dir) {
@@ -315,7 +358,7 @@ pub fn ingest_from_bytes(
     fs::write(&source_path, bytes)?;
 
     let result = (|| -> AppResult<Asset> {
-        let mut asset = ingest_file(paths, db, &source_path)?;
+        let mut asset = ingest_file_with_dedup(paths, db, &source_path, !source_url.is_empty())?;
         let has_temporary_origin =
             asset.origin_path.as_deref() == Some(source_path.to_string_lossy().as_ref());
         let conn = db.conn.lock().unwrap();
@@ -760,6 +803,37 @@ mod tests {
         );
     }
 
+    #[test]
+    fn local_import_preserves_similar_revisions_and_recovers_missing_files() {
+        let (tmp, paths, db) = setup();
+        let original = make_photo_file(&tmp.dir, "original.png", 320, 7);
+        let first = ingest_file(&paths, &db, &original).unwrap();
+        let revised = tmp.dir.join("revised.png");
+        let mut image = image::open(&original).unwrap().to_rgb8();
+        image.put_pixel(100, 100, image::Rgb([255, 0, 0]));
+        image.save(&revised).unwrap();
+        let hash = crate::media::phash::compute(&revised).unwrap().unwrap();
+        assert_eq!(db.find_asset_by_phash(&hash).unwrap().unwrap().id, first.id,
+            "the old approximate importer would discard this revision");
+        let second = ingest_file(&paths, &db, &revised).unwrap();
+        assert_ne!(first.id, second.id);
+        assert_eq!(ingest_file(&paths, &db, &revised).unwrap().id, second.id);
+        fs::remove_file(second.store_path.as_ref().unwrap()).unwrap();
+        let restored = ingest_file(&paths, &db, &revised).unwrap();
+        assert!(Path::new(restored.store_path.as_ref().unwrap()).is_file());
+        assert_ne!(restored.id, second.id);
+    }
+
+    #[test]
+    fn local_import_rejects_corrupt_images_without_creating_assets() {
+        let (tmp, paths, db) = setup();
+        let source = tmp.dir.join("broken.png");
+        fs::write(&source, b"not an image").unwrap();
+        assert!(ingest_file(&paths, &db, &source).is_err());
+        assert!(ingest_file(&paths, &db, &tmp.dir.join("missing.png")).is_err());
+        assert_eq!(db.count_assets(None).unwrap(), 0);
+    }
+
     /// 报告 bug 的回归：浏览器扩展把同一张图以两种分辨率采集（如 Pinterest 236w 缩略图
     /// 与完整图），精确 phash 相等匹配会漏 → 瀑布流出现两张一样素材。
     /// dHash 阈值去重后：第二张（不同分辨率）应归并到第一张，不新增资产。
@@ -780,11 +854,11 @@ mod tests {
         );
         small_img.save(&small_path).unwrap();
 
-        let first = ingest_file(&paths, &db, &full).unwrap();
+        let first = ingest_file_with_dedup(&paths, &db, &full, true).unwrap();
         assert_eq!(db.count_assets(None).unwrap(), 1);
 
         // 导入低清变体：应被模糊去重归并到高分图，不新增。
-        let merged = ingest_file(&paths, &db, &small_path).unwrap();
+        let merged = ingest_file_with_dedup(&paths, &db, &small_path, true).unwrap();
         assert_eq!(
             db.count_assets(None).unwrap(),
             1,

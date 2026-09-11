@@ -116,7 +116,9 @@ function Fixture() {
   const projectId = useStore(state => state.activeProjectId)!;
   const [exploring, setExploring] = React.useState(explorer);
   w.setExploring = setExploring;
-  const canvas = <CanvasWorkspace key={projectId} projectId={projectId} exploring={exploring} />;
+  const canvas = <React.Profiler id="canvas" onRender={() => { w.canvasCommits = (w.canvasCommits || 0) + 1; }}>
+    <CanvasWorkspace key={projectId} projectId={projectId} exploring={exploring} />
+  </React.Profiler>;
   return <div className="app-shell" style={{ display: "flex", height: "100vh" }}>
     {explorer ? <ExploreWorkspace url="https://www.pinterest.com/" open={exploring} onClose={() => setExploring(false)}>{canvas}</ExploreWorkspace> : canvas}
     <AssetContextMenu /><ImageAnnotator /><ToastViewport />

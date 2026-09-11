@@ -13,6 +13,7 @@
     "test:canvas:draft": "node scripts/canvas-draft-ui.test.mjs",
     "test:annotation:tools": "node scripts/annotation-tools-ui.test.mjs",
     "test:asset-deletion": "node --experimental-strip-types --test scripts/asset-deletion.test.mjs",
+    "test:file-drop": "node scripts/file-drop-ui.test.mjs",
     "test:generation-notifications": "node scripts/generation-notifications-ui.test.mjs",
     "test:agent-plan": "node --experimental-strip-types --test scripts/cloud-agent-plan.test.mjs",
     "test:agent-result": "node --experimental-strip-types --test scripts/cloud-agent-result.test.mjs",

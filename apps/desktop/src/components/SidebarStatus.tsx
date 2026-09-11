@@ -297,6 +297,7 @@ export function SidebarStatus() {
   }
 
   function cloudAgentRow(run: (typeof agentTasks)[number]) {
+    const reminderKey = agentReminderKey(run);
     const firstLine = run.intentPrompt.split("\n").find((line) => line.trim())?.trim() || "Agent 任务";
     const maxChars = 16;
     const label = firstLine.length > maxChars ? `${firstLine.slice(0, maxChars)}…` : firstLine;
@@ -304,15 +305,15 @@ export function SidebarStatus() {
     const unowned = ownerState === "unowned";
     const invalidOwner = ownerState === "invalid";
     return (
+      <div key={run.runId} className="group relative">
       <button
-        key={run.runId}
         type="button"
         disabled={projectRoutePending || invalidOwner}
         onClick={() => {
           openTask(unowned, () => openCloudAgentRun(run));
         }}
         title={`Bowerbird Agent · ${cloudAgentStatusLabel(run.status)} · ${firstLine}${unowned ? " · 未归属" : invalidOwner ? " · 归属异常，无法打开" : ""}`}
-        className="block w-full rounded px-2 py-1.5 text-left hover:bg-panel2 disabled:pointer-events-none disabled:opacity-50"
+        className="block w-full rounded py-1.5 pl-2 pr-7 text-left hover:bg-panel2 disabled:pointer-events-none disabled:opacity-50"
       >
         <div className="flex items-center gap-2">
           <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-sm border border-edge bg-accent/10 text-accent">
@@ -337,6 +338,19 @@ export function SidebarStatus() {
           </span>
         </div>
       </button>
+      {reminderKey && (
+        <button
+          type="button"
+          onClick={() => reminders.clear([reminderKey])}
+          disabled={reminders.isCleared(reminderKey)}
+          title="清除提醒，保留任务和结果"
+          aria-label={`清除 Agent 任务提醒 ${firstLine}`}
+          className="absolute right-1 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted hover:bg-panel hover:text-ink disabled:opacity-30"
+        >
+          <X size={11} />
+        </button>
+      )}
+      </div>
     );
   }
 

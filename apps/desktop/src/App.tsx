@@ -28,6 +28,7 @@ import { AccountOnboarding } from "./components/AccountOnboarding";
 import { useOnboarding } from "./lib/onboardingStore";
 import { OnboardingTour } from "./components/OnboardingTour";
 import { ToastViewport } from "./components/ToastViewport";
+import { FileDropImport } from "./components/FileDropImport";
 import { prepareGenerationSound } from "./lib/generationNotifications";
 import { useStore } from "./store";
 import { api } from "./lib/api";
@@ -821,6 +822,7 @@ function App() {
     <div className="app-shell flex h-full w-full flex-col">
       <CloudAgentRuntimeCoordinator />
       <ToastViewport />
+      <FileDropImport />
       {/* 环境引导：codex/扩展/即梦由设置面板对应分区直接唤起，不再有「环境状态」总览 */}
       <CodexOnboarding />
       <ExtensionOnboarding />

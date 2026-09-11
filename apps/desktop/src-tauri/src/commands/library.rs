@@ -51,11 +51,18 @@ pub async fn import_files(
     let db_for_ingest = db.clone();
     let assets = tokio::task::spawn_blocking(move || {
         let mut assets = Vec::with_capacity(sources.len());
+        let mut failures = Vec::new();
         for s in sources {
             match ingest::ingest_file(&paths, &db_for_ingest, &PathBuf::from(&s)) {
                 Ok(a) => assets.push(a),
-                Err(e) => tracing::warn!("ingest failed for {s}: {e}"),
+                Err(e) => {
+                    tracing::warn!("ingest failed for {s}: {e}");
+                    failures.push(format!("{s}: {e}"));
+                }
             }
+        }
+        if assets.is_empty() && !failures.is_empty() {
+            return Err(AppError::Other(format!("未导入任何素材：{}", failures.join("\n"))));
         }
         Ok::<_, AppError>(assets)
     })
@@ -65,12 +72,15 @@ pub async fn import_files(
         let ids: Vec<String> = assets.iter().map(|asset| asset.id.clone()).collect();
         if let Err(e) = db.add_assets_to_project(project_id, &ids) {
             tracing::warn!("failed to link imported assets to project {project_id}: {e}");
+            let _ = app.emit("library://assets-changed", ());
+            return Err(AppError::Other(format!("素材已写入素材库，但未能加入目标项目：{e}")));
         }
     }
     // 后台命名 + 反推（非阻塞，约定 7 离线降级）。
     for a in &assets {
         crate::core::autoname::spawn_auto_analyze(app.clone(), db.clone(), a.clone());
     }
+    let _ = app.emit("library://assets-changed", ());
     Ok(assets)
 }
 
@@ -94,11 +104,14 @@ pub async fn import_folder(
         let ids: Vec<String> = assets.iter().map(|asset| asset.id.clone()).collect();
         if let Err(e) = db.add_assets_to_project(project_id, &ids) {
             tracing::warn!("failed to link imported assets to project {project_id}: {e}");
+            let _ = app.emit("library://assets-changed", ());
+            return Err(AppError::Other(format!("素材已写入素材库，但未能加入目标项目：{e}")));
         }
     }
     for a in &assets {
         crate::core::autoname::spawn_auto_analyze(app.clone(), db.clone(), a.clone());
     }
+    let _ = app.emit("library://assets-changed", ());
     Ok(assets.len())
 }
 
@@ -149,6 +162,8 @@ pub async fn import_image_bytes(
                 "link pasted/dropped asset {} to project failed: {e}",
                 asset.id
             );
+            let _ = app.emit("library://assets-changed", ());
+            return Err(AppError::Other(format!("素材已写入素材库，但未能加入目标项目：{e}")));
         }
     }
     crate::core::autoname::spawn_auto_analyze(app.clone(), db.clone(), asset.clone());

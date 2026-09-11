@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 
 import {
   activeCloudAgentRunIds,
@@ -146,6 +147,18 @@ function acceptedRun(overrides = {}) {
     ...overrides,
   };
 }
+
+test("Rust completion checkpoint uses the same wire identity as the frontend", () => {
+  const wire = JSON.parse(readFileSync(new URL("./fixtures/agent-ingest-identity.json", import.meta.url), "utf8"));
+  const record = acceptedRun();
+  record.runId = wire.runId;
+  record.finalAssetId = "asset-final";
+  record.snapshot.artifacts = wire.artifacts;
+  record.snapshot._bowerbirdAgentIngestV1 = { schemaVersion: 1, fingerprint: wire.fingerprint, completedAt: 2 };
+  assert.equal(cloudAgentIngestionFingerprint(record), wire.fingerprint);
+  assert.equal(cloudAgentIngestionPersisted(record), true);
+  assert.equal(cloudAgentNeedsAttention(record), false);
+});
 
 test("accepted succeeded project runs remain owned by the background ingestion lifecycle", () => {
   const accepted = acceptedRun();

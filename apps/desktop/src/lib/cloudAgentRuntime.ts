@@ -78,12 +78,12 @@ export function mergeRecoveredCloudAgentRuns(
 export type CloudAgentAttentionInput = { status: string } & Partial<CloudAgentRunRecord>;
 
 export function cloudAgentIngestionFingerprint(run: CloudAgentRunRecord): string | null {
-  const artifactKeys = selectCloudAgentResultArtifacts(
+  const artifactKeys = [...new Set(selectCloudAgentResultArtifacts(
     run.snapshot.artifacts,
     run.snapshot.renderManifest,
     run.snapshot.events,
   )
-    .map((artifact) => `${artifact.id}:${artifact.sha256}`)
+    .map((artifact) => `${artifact.id}:${artifact.sha256}`))]
     .sort();
   return artifactKeys.length > 0 ? `${run.runId}:${artifactKeys.join("|")}` : null;
 }

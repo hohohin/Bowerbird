@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { LibraryHome } from "../../../src/components/LibraryHome";
 import { Sidebar } from "../../../src/components/Sidebar";
 import { ToastViewport } from "../../../src/components/ToastViewport";
+import { FileDropImport } from "../../../src/components/FileDropImport";
 import { useStore } from "../../../src/store";
 import "../../../src/styles.css";
 
@@ -17,6 +18,14 @@ w.__TAURI_INTERNALS__ = {
   convertFileSrc: (path: string) => path,
   invoke: async (command: string, args: any) => {
     w.calls.push({ command, args });
+    if (command === "import_image_bytes") {
+      if (args.fileName === "bad.png") throw "模拟图片损坏";
+      if (w.holdImport) await new Promise(resolve => w.releaseImport = resolve);
+      const asset = { ...assets[0], id: `import-${w.calls.length}`, name: args.fileName };
+      useStore.setState(s => ({ assets: [...s.assets, asset] as any, total: s.total + 1,
+        libraryMemberships: args.projectId ? [...s.libraryMemberships, { projectId: args.projectId, assetId: asset.id }] : s.libraryMemberships }));
+      return asset;
+    }
     if (command === "add_assets_to_project") {
       if (w.fail) throw "模拟添加失败";
       if (w.hold) await new Promise(resolve => w.release = resolve);
@@ -29,6 +38,8 @@ w.__TAURI_INTERNALS__ = {
       return added.length;
     }
     if (command === "list_generation_groups") return {};
+    if (command === "list_library_view") return { assets: [], total: 0, memberships: [] };
+    if (command === "move_assets_to_folder") return args.assetIds.length;
     if (command.startsWith("list_")) return [];
     throw new Error("Unexpected IPC: " + command);
   },
@@ -38,5 +49,5 @@ useStore.setState({ assets: assets as any, total: assets.length, projects: proje
   projectAssetsCollapsed: true, boardOpen: false, settings: {} as any });
 w.store = useStore;
 createRoot(document.getElementById("root")!).render(<div className="app-shell" style={{ display: "flex", height: "100vh" }}>
-  <Sidebar /><main style={{ flex: 1, minWidth: 0, overflow: "hidden" }}><LibraryHome /></main><ToastViewport />
+  <FileDropImport /><Sidebar /><main style={{ flex: 1, minWidth: 0, overflow: "hidden" }}><header data-test-topbar>测试工具栏 <input aria-label="测试搜索框" /></header><LibraryHome /></main><ToastViewport />
 </div>);

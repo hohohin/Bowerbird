@@ -82,6 +82,7 @@ export function Sidebar() {
   const [width, setWidth] = useState<number | null>(loadSidebarWidth);
   const [resizing, setResizing] = useState<{ startX: number; startWidth: number } | null>(null);
   const sidebarRef = useRef<HTMLElement>(null);
+  const dragWidthRef = useRef<number | null>(null);
 
   const palette = useStore((s) => s.palette);
   const normalFolders = folders.filter(
@@ -136,20 +137,25 @@ export function Sidebar() {
   function startResize(e: React.PointerEvent<HTMLDivElement>) {
     e.preventDefault();
     e.currentTarget.setPointerCapture(e.pointerId);
+    dragWidthRef.current = sidebarRef.current?.offsetWidth ?? 198;
     setResizing({ startX: e.clientX, startWidth: sidebarRef.current?.offsetWidth ?? 198 });
   }
 
   function moveResize(e: React.PointerEvent<HTMLDivElement>) {
     if (!resizing) return;
-    setWidth(clampSidebarWidth(resizing.startWidth + e.clientX - resizing.startX));
+    const next = clampSidebarWidth(resizing.startWidth + e.clientX - resizing.startX);
+    dragWidthRef.current = next;
+    if (sidebarRef.current && next != null) sidebarRef.current.style.width = `${next}px`;
   }
 
   function endResize() {
     if (!resizing) return;
+    const next = dragWidthRef.current;
+    setWidth(next);
     setResizing(null);
-    if (width != null) {
+    if (next != null) {
       try {
-        localStorage.setItem(SIDEBAR_WIDTH_KEY, String(width));
+        localStorage.setItem(SIDEBAR_WIDTH_KEY, String(next));
       } catch {
         // ignore storage errors
       }
@@ -503,6 +509,7 @@ export function Sidebar() {
         onPointerMove={moveResize}
         onPointerUp={endResize}
         onPointerCancel={endResize}
+        onLostPointerCapture={endResize}
       />
     </aside>
   );

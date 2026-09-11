@@ -2975,9 +2975,10 @@ fn ingest_artifact_fingerprint(record: &CloudAgentRunRecord) -> Option<String> {
     }
     identities.sort();
     identities.dedup();
-    Some(sha256_hex(
-        format!("{}:{}", record.run_id, identities.join("|")).as_bytes(),
-    ))
+    // Shared with cloudAgentIngestionFingerprint in the desktop runtime. This
+    // local marker is an identity, not a signature. Older hashed markers are
+    // rebuilt from durable receipts/mappings by checkpoint recovery.
+    Some(format!("{}:{}", record.run_id, identities.join("|")))
 }
 
 fn ingest_artifact_receipts_complete(record: &CloudAgentRunRecord) -> bool {
@@ -3603,6 +3604,10 @@ mod tests {
             updated_at: 2,
         };
         let fingerprint = super::ingest_artifact_fingerprint(&existing).unwrap();
+        let wire: serde_json::Value = serde_json::from_str(include_str!("../../../scripts/fixtures/agent-ingest-identity.json")).unwrap();
+        assert_eq!(existing.run_id, wire["runId"].as_str().unwrap());
+        assert_eq!(existing.snapshot["artifacts"], wire["artifacts"]);
+        assert_eq!(fingerprint, wire["fingerprint"].as_str().unwrap());
         existing.snapshot.as_object_mut().unwrap().insert(
             super::PROJECT_AGENT_INGEST_SNAPSHOT_KEY.into(),
             json!({
@@ -3711,6 +3716,15 @@ mod tests {
             .snapshot
             .get(super::PROJECT_AGENT_INGEST_SNAPSHOT_KEY)
             .is_some_and(|checkpoint| super::ingest_checkpoint_matches(&completed, checkpoint)));
+        // Upgrade a marker written by the old backend without downloading or
+        // projecting the artifacts again.
+        let mut legacy = completed.clone();
+        legacy.snapshot[super::PROJECT_AGENT_INGEST_SNAPSHOT_KEY]["fingerprint"] =
+            json!(super::sha256_hex(super::ingest_artifact_fingerprint(&legacy).unwrap().as_bytes()));
+        super::write_record(&db.conn.lock().unwrap(), &legacy).unwrap();
+        let recovered = super::checkpoint_completed_ingest_if_ready(&db, &legacy).unwrap();
+        assert_eq!(recovered.snapshot[super::PROJECT_AGENT_INGEST_SNAPSHOT_KEY]["fingerprint"],
+            completed.snapshot[super::PROJECT_AGENT_INGEST_SNAPSHOT_KEY]["fingerprint"]);
     }
 
     #[test]

@@ -646,7 +646,7 @@ export function CanvasWorkspace({
   panRef.current = pan;
   zoomRef.current = zoom;
   viewModeRef.current = viewMode;
-  sourceWidthRef.current = sourceWidth;
+  if (!resizeRef.current) sourceWidthRef.current = sourceWidth;
   activeCanvasRef.current = activeCanvas;
   loadingRef.current = loading;
   selectedCanvasNodeIdsRef.current = selectedCanvasNodeIds;
@@ -1530,6 +1530,7 @@ export function CanvasWorkspace({
     const workspace = workspaceRef.current;
     if (!workspace || sourceCollapsed) return;
     const observer = new ResizeObserver(([entry]) => {
+      if (resizeRef.current) return;
       const width = entry.contentRect.width;
       const min = Math.min(240, width * 0.42);
       const max = Math.max(min, width * 0.55);
@@ -1635,6 +1636,8 @@ export function CanvasWorkspace({
         setPanning(false);
       }
       if (resizeRef.current) {
+        setSourceWidth(sourceWidthRef.current);
+        if (resizeRef.current.moved) markViewDirty();
         resizeRef.current = null;
         setSourceResizing(false);
       }
@@ -3252,16 +3255,26 @@ export function CanvasWorkspace({
           drag.moved = true;
           const next = clampSourcePanelWidth(drag.width + event.clientX - drag.startX);
           sourceWidthRef.current = next;
-          setSourceWidth(next);
+          if (workspaceRef.current) {
+            workspaceRef.current.style.gridTemplateColumns = `${next}px 7px minmax(0, 1fr)`;
+          }
         }}
         onPointerUp={(event) => {
           if (resizeRef.current?.pointerId !== event.pointerId) return;
+          setSourceWidth(sourceWidthRef.current);
           if (resizeRef.current.moved) markViewDirty();
           resizeRef.current = null;
           setSourceResizing(false);
           if (event.currentTarget.hasPointerCapture(event.pointerId)) {
             event.currentTarget.releasePointerCapture(event.pointerId);
           }
+        }}
+        onLostPointerCapture={() => {
+          if (!resizeRef.current) return;
+          setSourceWidth(sourceWidthRef.current);
+          if (resizeRef.current.moved) markViewDirty();
+          resizeRef.current = null;
+          setSourceResizing(false);
         }}
         onKeyDown={(event) => {
           if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;

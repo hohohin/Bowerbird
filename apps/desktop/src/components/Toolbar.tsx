@@ -78,13 +78,20 @@ export function Toolbar({
     setCollectedNotice(null);
   }
 
-  async function withBusy(fn: () => Promise<boolean>, successMessage: string) {
+  async function withBusy(fn: () => Promise<string | null>) {
+    const route = useStore.getState();
+    const routeRevision = route.projectRouteRevision;
     setLoading(true);
     try {
-      const changed = await fn();
-      if (!changed) return;
+      const message = await fn();
+      if (!message) return;
+      const current = useStore.getState();
+      if (current.activeProjectId === route.activeProjectId
+        && current.projectRouteRevision === routeRevision && !current.projectRoutePending) {
+        showCollectedAsset();
+      }
       await onRefresh();
-      notifySuccess(successMessage);
+      notifySuccess(message);
     } catch (error) {
       console.error(error);
       notifyError(error, "导入失败，请稍后重试");
@@ -97,20 +104,23 @@ export function Toolbar({
     setImportOpen(false);
     void withBusy(async () => {
       const paths = await api.pickImageFiles();
-      if (!paths.length) return false;
-      await api.importFiles(paths, activeProjectId);
-      return true;
-    }, "素材已导入");
+      if (!paths.length) return null;
+      const assets = await api.importFiles(paths, activeProjectId);
+      if (!assets.length) throw new Error("未导入任何素材，请检查所选文件是否可读取");
+      if (assets.length < paths.length) notifyError(null, `${paths.length - assets.length} 个文件导入失败`);
+      return `已导入 ${assets.length} 个文件（相同文件复用已有素材）`;
+    });
   }
 
   function importFolder() {
     setImportOpen(false);
     void withBusy(async () => {
       const path = await api.pickFolder();
-      if (!path) return false;
-      await api.importFolder(path, activeProjectId);
-      return true;
-    }, "文件夹已导入");
+      if (!path) return null;
+      const count = await api.importFolder(path, activeProjectId);
+      if (!count) throw new Error("文件夹中没有成功导入的素材，请检查文件格式和读取权限");
+      return `已从文件夹导入 ${count} 个文件（相同文件复用已有素材）`;
+    });
   }
 
   return (

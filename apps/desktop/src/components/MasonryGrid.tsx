@@ -1,10 +1,9 @@
-import { useEffect, useId, useMemo, useRef, useState, type DragEvent, type MouseEvent } from "react";
+import { memo, useEffect, useId, useMemo, useRef, useState, type MouseEvent } from "react";
 import { createPortal } from "react-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { Check, ImagePlus, SearchX } from "lucide-react";
 import { useStore } from "../store";
 import { api } from "../lib/api";
-import { notifyError, notifySuccess } from "../lib/notify";
 import { setDragAssets } from "../lib/dragPayload";
 import type { Asset } from "../lib/types";
 import type { LibraryProjectGroup } from "../lib/libraryView";
@@ -20,21 +19,12 @@ function parseColors(c: string | null | undefined): string[] {
   }
 }
 
-/** 读 File 为 data URL（拖拽 / 粘贴入库用，传后端 base64 解码）。 */
-function readFileAsDataURL(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => resolve(r.result as string);
-    r.onerror = () => reject(r.error);
-    r.readAsDataURL(file);
-  });
-}
 
 // 引入二选一菜单（「Shift + 左键引入」开启时的左键行为）尺寸估算，用于视口钳制。
 const PICK_MENU_W = 172;
 const PICK_MENU_H = 78;
 
-function Thumb({
+const Thumb = memo(function Thumb({
   asset,
   group,
   orderedIds,
@@ -560,7 +550,7 @@ function Thumb({
         )}
     </div>
   );
-}
+});
 
 /** 瀑布流（行式 masonry：JS 按元数据分列 + 缩略图懒加载）。颜色筛选走后端（App refresh 按 colorFilter 分流），非前端过滤。 */
 
@@ -576,9 +566,16 @@ function useColumnCount(): number {
   const [count, setCount] = useState(readColumnCount);
   useEffect(() => {
     const mqls = [768, 1024, 1280].map((w) => window.matchMedia(`(min-width: ${w}px)`));
-    const onChange = () => setCount(readColumnCount());
+    let timer = 0;
+    const onChange = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => setCount(readColumnCount()), 120);
+    };
     mqls.forEach((q) => q.addEventListener("change", onChange));
-    return () => mqls.forEach((q) => q.removeEventListener("change", onChange));
+    return () => {
+      window.clearTimeout(timer);
+      mqls.forEach((q) => q.removeEventListener("change", onChange));
+    };
   }, []);
   return count;
 }
@@ -615,15 +612,28 @@ export function MasonryGrid({
   useEffect(() => {
     const element = gridRef.current;
     if (!element) return;
+    let timer = 0;
+    let measured = false;
     const observer = new ResizeObserver(([entry]) => {
-      setContainerColumns(Math.max(1, Math.floor(entry.contentRect.width / 160)));
+      const next = Math.max(1, Math.floor(entry.contentRect.width / 160));
+      window.clearTimeout(timer);
+      if (!measured) {
+        measured = true;
+        setContainerColumns(next);
+      } else {
+        // Width follows CSS continuously; redistribute cards only after resizing
+        // settles, so crossing a column boundary does not remount the whole grid.
+        timer = window.setTimeout(() => setContainerColumns(next), 120);
+      }
     });
     observer.observe(element);
-    return () => observer.disconnect();
+    return () => {
+      window.clearTimeout(timer);
+      observer.disconnect();
+    };
   }, []);
   const gridId = useId();
   const storeTotal = useStore((s) => s.total);
-  const boardOpen = useStore((s) => s.boardOpen);
   const storeActiveProjectId = useStore((s) => s.activeProjectId);
   const assets = assetsOverride ?? storeAssets;
   const total = totalOverride ?? storeTotal;
@@ -652,9 +662,6 @@ export function MasonryGrid({
       flashTimer.current = undefined;
     }, 1600);
   }, [focusAssetId, clearFocusAsset]);
-  // 拖拽外部图片入库（仅瀑布流区域）：HTML5 DnD，dragDropEnabled=false 保持内部拖拽到侧栏。
-  const [dragOver, setDragOver] = useState(false);
-  const [importing, setImporting] = useState(false);
 
   // 同流程生成图（一次生成多图的过程组 + 会话级归组的版本分支）：批量取可见生成图的分组，
   // 供缩略图轮播。会话归组由后端 generation_conversations 持久化，重启后分组不丢。无生成图时清空。
@@ -723,40 +730,6 @@ export function MasonryGrid({
     return cols;
   }, [filtered, projectGroups, colCount]);
 
-  // 拖入外部图片文件 → dataURL → importImageBytes（source=imported，进当前 project scope）。
-  // 串行导入（失败隔离）：单张失败不中断后续，错误打控制台。
-  async function handleDrop(e: DragEvent<HTMLDivElement>) {
-    e.preventDefault();
-    setDragOver(false);
-    const files = Array.from(e.dataTransfer.files).filter((f) =>
-      f.type.startsWith("image/")
-    );
-    if (files.length === 0) return;
-    setImporting(true);
-    let imported = 0;
-    let failed = 0;
-    try {
-      for (const f of files) {
-        try {
-          const dataUrl = await readFileAsDataURL(f);
-          await api.importImageBytes({
-            dataUrl,
-            fileName: f.name,
-            projectId: activeProjectId,
-            source: "imported",
-          });
-          imported += 1;
-        } catch (err) {
-          console.error("drop import failed", f.name, err);
-          failed += 1;
-        }
-      }
-    } finally {
-      setImporting(false);
-      if (imported > 0) notifySuccess(`已导入 ${imported} 张素材`);
-      if (failed > 0) notifyError(null, `${failed} 张素材导入失败`);
-    }
-  }
 
   function clearFilters() {
     setSearchQuery("");
@@ -771,21 +744,8 @@ export function MasonryGrid({
   return (
     <div
       ref={gridRef}
+      data-file-import-project-id={activeProjectId ?? ""}
       className={`relative flex flex-col ${embedded ? "" : "h-full"}`}
-      onDragOver={(e) => {
-        // 仅响应外部文件拖入（含 "Files"）；preventDefault 才能触发 drop。
-        if (Array.from(e.dataTransfer.types).includes("Files")) {
-          e.preventDefault();
-          setDragOver(true);
-        }
-      }}
-      onDragLeave={(e) => {
-        // relatedTarget 不在容器内 = 真离开，清遮罩（防子元素进出抖动）。
-        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
-          setDragOver(false);
-        }
-      }}
-      onDrop={handleDrop}
     >
       {filtered.length === 0 && projectGroups.length === 0 ? (
         <div className="flex h-full items-center justify-center p-8 text-center">
@@ -804,29 +764,17 @@ export function MasonryGrid({
             </h2>
             <p className="mt-2 text-xs leading-5 text-muted">
               {libraryEmpty
-                ? boardOpen
-                  ? "先从左上角导入图片；在素材库中点一下图片，就会进入当前创作板。"
-                  : "从左上角导入图片或文件夹，也可以把图片拖到这里，或粘贴刚刚截取的画面。"
+                ? "点击左上方导入按钮导入素材 或 投放导入素材 或 ctrl+v 粘贴导入素材"
                 : "试试清除搜索或侧栏筛选条件，回到更大的素材范围。"}
             </p>
-            <button
-              type="button"
-              onClick={() => {
-                if (libraryEmpty) {
-                  document.querySelector<HTMLButtonElement>("[data-import-trigger]")?.click();
-                } else {
-                  clearFilters();
-                }
-              }}
-              className={`mt-4 ${libraryEmpty ? "app-button-dark" : "app-button-secondary"}`}
-            >
-              {libraryEmpty ? "导入第一批素材" : "清除筛选"}
-            </button>
-            {libraryEmpty && (
-              <div className="mt-4 flex items-center justify-center gap-2 text-[11px] text-faint">
-                <kbd className="rounded border border-edge bg-panel px-1.5 py-0.5">Ctrl V</kbd>
-                <span>粘贴图片</span>
-              </div>
+            {!libraryEmpty && (
+              <button
+                type="button"
+                onClick={clearFilters}
+                className="mt-4 app-button-secondary"
+              >
+                清除筛选
+              </button>
             )}
             </div>
           </div>
@@ -861,20 +809,6 @@ export function MasonryGrid({
         </div>
       )}
 
-      {/* 拖拽遮罩：拖文件进入瀑布流时提示「松开导入」。 */}
-      {dragOver && (
-        <div className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center bg-accent/10 ring-2 ring-inset ring-accent">
-          <div className="rounded-full border border-accent/30 bg-panel/95 px-4 py-2 text-sm font-medium text-accent-soft shadow-panel">
-            松开导入{activeProjectId ? "到当前项目" : "到素材库"}
-          </div>
-        </div>
-      )}
-      {importing && !dragOver && (
-        <div className="pointer-events-none absolute right-3 top-3 z-30 flex items-center gap-2 rounded-full border border-edge bg-panel/95 px-3 py-1.5 text-xs text-muted shadow-panel">
-          <span className="app-spinner" aria-hidden="true" />
-          正在导入素材…
-        </div>
-      )}
     </div>
   );
 }
