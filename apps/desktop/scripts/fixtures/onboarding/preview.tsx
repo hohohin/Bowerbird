@@ -9,6 +9,8 @@ import { OnboardingTour } from "../../../src/components/OnboardingTour";
 import { useOnboarding } from "../../../src/lib/onboardingStore";
 import { CaptionRing } from "../../../src/components/creation/CaptionRing";
 import { Sidebar } from "../../../src/components/Sidebar";
+import { AccountOnboarding } from "../../../src/components/AccountOnboarding";
+import { SettingsDialog } from "../../../src/components/SettingsDialog";
 
 // Closed synthetic IPC fixture: never reads a library or invokes a provider.
 const w = window as any;
@@ -91,6 +93,7 @@ w.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
 useStore.setState({ folders: folders as any, projects: [project] as any, activeProjectId: project.id, assets: assets as any, promptedAssets: assets as any, promptedAssetsLoaded: true, boardOpen: true, settings: {} as any });
 if (useOnboarding.getState().progress.status === "new") useOnboarding.getState().show("welcome");
 function Fixture() {
+  const [settingsOpen, setSettingsOpen] = React.useState(false);
   const projectId = useStore(state => state.activeProjectId)!;
   const navigation = useStore(state => state.creativeNavigation);
   // The full App normally consumes task navigation; this isolated shell already
@@ -99,6 +102,11 @@ function Fixture() {
   return <div className="app-shell" style={{ display: "flex", height: "100vh" }}>
     <Sidebar />
     <CanvasWorkspace key={projectId} projectId={projectId} />
+    <div style={{ position: "fixed", top: 0, left: 400, zIndex: 49 }}>
+      <button onClick={() => useStore.getState().setAccountOnboardingForceOpen(true)}>测试登录入口</button>
+      <button onClick={() => setSettingsOpen(true)}>测试设置入口</button>
+    </div>
+    <AccountOnboarding />{settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
     <AssetContextMenu /><ToastViewport /><CaptionRing /><OnboardingTour />
   </div>;
 }

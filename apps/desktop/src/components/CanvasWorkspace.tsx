@@ -46,6 +46,7 @@ import { Lightbox } from "./Lightbox";
 import { CreativeComposer } from "./CreativeComposer";
 import { GenerationPanel } from "./GenerationPanel";
 import { CloudAgentSession } from "./CloudAgentPanel";
+import { AgentApprovalToggle } from "./AgentApprovalToggle";
 import { CreativeTimeline } from "./CreativeTimeline";
 import { api } from "../lib/api";
 import { countCloudAgentResultImages, selectCloudAgentResultArtifacts } from "../lib/cloudAgentResult";
@@ -3594,6 +3595,7 @@ export function CanvasWorkspace({
                     {summary.pendingClarifications > 0 ? ` · ${summary.pendingClarifications} 个待澄清` : ""}
                     {resultCount > 0 ? ` · ${resultCount} 张图片` : ""}
                   </p>
+                  {run && <footer className="mt-auto flex justify-start pt-2"><AgentApprovalToggle run={run} /></footer>}
                   <button
                     type="button"
                     className="canvas-prompt-node__remove"

@@ -1589,6 +1589,26 @@ impl Database {
         Self::history_for_session(&conn, &session_id, project_id, annotations_dir)
     }
 
+    /// 首轮任务 payload 可能尚无 session_id；从已入库产物找回实际簿记会话。
+    pub fn generation_history_by_job(
+        &self,
+        job_id: &str,
+        annotations_dir: Option<&Path>,
+    ) -> AppResult<Option<GenerationHistory>> {
+        let conn = self.conn.lock().unwrap();
+        let session_id: Option<String> = conn.query_row(
+            "SELECT json_extract(an.payload, '$.session_id') \
+             FROM analyses an JOIN assets a ON a.id = an.asset_id \
+             WHERE an.kind = 'generation_meta' \
+               AND json_extract(an.payload, '$.job_id') = ?1 \
+               AND json_extract(an.payload, '$.session_id') IS NOT NULL \
+             ORDER BY an.created_at DESC, an.id DESC LIMIT 1",
+            [job_id],
+            |row| row.get(0),
+        ).optional()?;
+        session_id.map(|sid| Self::history_for_session(&conn, &sid, None, annotations_dir)).transpose()
+    }
+
     /// 按 session_id 直取完整生成时间线（会话面板历史恢复用，全局不过滤项目）。
     /// 重建逻辑与 [`Database::generation_history`] 同源（helper 复用）。
     pub fn generation_history_by_session(
@@ -3092,6 +3112,36 @@ mod tests {
         let none = db.generation_history_by_session("sess-NOPE", None).unwrap();
         assert_eq!(none.session_id.as_deref(), Some("sess-NOPE"));
         assert!(none.turns.is_empty());
+    }
+
+    #[test]
+    fn generation_history_by_job_recovers_first_turn_session_and_full_history() {
+        let db = db();
+        for (index, job, session, prompt) in [
+            (1, "job-first", "session-1", "first prompt"),
+            (2, "job-next", "session-1", "revise prompt"),
+            (3, "job-other", "session-other", "unrelated prompt"),
+        ] {
+            let asset_id = put_asset(&db, &format!("recovered-{index}"));
+            db.insert_analysis(&Analysis {
+                id: format!("recovered-meta-{index}"), asset_id,
+                kind: "generation_meta".into(), provider: Some("codex-cli".into()),
+                created_at: Some(index),
+                payload: serde_json::json!({
+                    "job_id": job, "session_id": session, "prompt": prompt,
+                    "prompt_raw": format!("raw {prompt}"), "turn_key": format!("turn-{index}"),
+                }).to_string(),
+            }).unwrap();
+        }
+        // The caller has only the original job ID: no provider session was in its payload.
+        let history = db.generation_history_by_job("job-first", None).unwrap().unwrap();
+        assert_eq!(history.session_id.as_deref(), Some("session-1"));
+        assert_eq!(history.turns.len(), 2);
+        assert_eq!(history.turns[0].prompt, "first prompt");
+        assert_eq!(history.turns[0].prompt_raw.as_deref(), Some("raw first prompt"));
+        assert_eq!(history.turns[1].prompt, "revise prompt");
+        assert_eq!(history.turns[0].images.len(), 1);
+        assert!(db.generation_history_by_job("unknown-job", None).unwrap().is_none());
     }
 
     #[test]

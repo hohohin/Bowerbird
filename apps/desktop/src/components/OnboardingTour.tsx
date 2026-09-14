@@ -20,6 +20,10 @@ function visible(element: Element | null): element is HTMLElement {
   return !!element && element instanceof HTMLElement && element.getBoundingClientRect().width > 0
     && element.getBoundingClientRect().height > 0;
 }
+function hasBlockingModal() {
+  return Array.from(document.querySelectorAll('[role="dialog"][aria-modal="true"]'))
+    .some(element => visible(element) && !element.hasAttribute("data-project-inspector"));
+}
 function editorEvidence(root: Element | null) {
   const editor = root?.querySelector('.ProseMirror');
   const copy = editor?.cloneNode(true) as HTMLElement | undefined;
@@ -54,6 +58,17 @@ export function OnboardingTour() {
   const job = progress.jobId ? genJobs[progress.jobId] : null;
   const onProject = activeProjectId === progress.projectId && !routePending;
 
+  // Both the lesson and the paused reminder must yield to login/settings dialogs.
+  useEffect(() => {
+    if (panel !== "lesson" && !(panel === "closed" && progress.status === "paused")) return;
+    const inspect = () => setBlocked(hasBlockingModal());
+    inspect();
+    const observer = new MutationObserver(inspect);
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true,
+      attributeFilter: ["role", "aria-modal", "hidden", "style", "class"] });
+    return () => observer.disconnect();
+  }, [panel, progress.status]);
+
   // Only the mounted lesson project and its new task can advance progress.
   useEffect(() => {
     if (panel !== "lesson" || progress.status !== "active") return;
@@ -63,9 +78,7 @@ export function OnboardingTour() {
       const current = useOnboarding.getState().progress;
       const state = useStore.getState();
       const root = document.querySelector<HTMLElement>('.canvas-workspace');
-      const modal = Array.from(document.querySelectorAll('[role="dialog"][aria-modal="true"]'))
-        .some(element => visible(element) && !element.hasAttribute("data-project-inspector"));
-      setBlocked(modal);
+      const modal = hasBlockingModal();
       const ready = state.activeProjectId === current.projectId && !state.projectRoutePending
         && root?.dataset.onboardingProject === current.projectId && root.getAttribute("aria-busy") !== "true";
       const target = ready && !modal ? (current.step === 4
@@ -141,9 +154,16 @@ export function OnboardingTour() {
   async function pause(prepared = false) {
     try {
       await useStore.getState().projectCanvasFlush?.();
+      if (useOnboarding.getState().progress.status !== "active" || useOnboarding.getState().panel !== "lesson") return;
       patch({ status: "paused", ...(prepared ? { outcome: "prepared" as const } : {}) });
       show(prepared ? "done" : "closed");
     } catch { setError("草稿尚未保存，学习进度仍保留。请重试或查看画板保存提示。"); }
+  }
+
+  function skip() {
+    // Dismissing help does not navigate away or discard the canvas draft.
+    patch({ status: progress.status === "completed" ? "completed" : "skipped", updateSeen: true });
+    setError(""); show("closed");
   }
 
   async function learnCollections() {
@@ -155,12 +175,15 @@ export function OnboardingTour() {
   }
 
   if (panel === "collections") return <CollectionOnboarding />;
-  if (panel === "closed") return progress.status === "paused"
-    ? <button className="onboarding-resume" onClick={() => show("welcome")}><BookOpen size={14} />继续入门引导</button> : null;
+  if (panel === "closed") return progress.status === "paused" && !blocked
+    ? <aside className="onboarding-resume" aria-label="入门引导提醒">
+      <button onClick={() => show("welcome")}><BookOpen size={14} />继续入门引导</button>
+      <button aria-label="跳过入门引导" title="跳过入门引导，可在设置中重新打开" onClick={skip}><X size={14} /></button>
+    </aside> : null;
   if (panel === "welcome") return <ModalShell title="把参考图里的灵感，变成你的作品" eyebrow="入门引导"
     description="在一块画板上，试一次放入参考、借用特征和生成作品。示例准备无需登录或调用模型。"
-    width="md" preventClose={busy} onClose={() => { patch({ status: progress.status === "completed" ? "completed" : progress.projectId ? "paused" : "skipped", updateSeen: true }); show("closed"); }}
-    footer={<><button className="app-modal-button" disabled={busy} onClick={() => { patch({ status: progress.status === "completed" ? "completed" : progress.projectId ? "paused" : "skipped", updateSeen: true }); show("closed"); }}>先自己逛逛</button>
+    width="md" preventClose={busy} onClose={skip}
+    footer={<><button className="app-modal-button" disabled={busy} onClick={skip}>跳过入门引导</button>
       <button className="app-modal-button is-primary" disabled={busy} onClick={() => void start("sample")}>{busy ? "准备中…" : "跟着示例做一次"}</button></>}>
     <p className="mb-3 text-sm text-muted">示例包含护发产品和蓝色配色参考，已有可借用的图片维度。生成前由你确认使用的模型和额度。</p>
     <div className="flex flex-wrap gap-2">
@@ -210,5 +233,6 @@ export function OnboardingTour() {
       {error && <p role="alert" className="text-red-400">{error}</p>}
       <button className="onboarding-pause" onClick={() => void pause()}>稍后继续</button>
     </>}
+    <button className="onboarding-skip" disabled={busy} title="跳过后可在设置 → 系统设置 → 入门引导中继续" onClick={skip}>跳过入门引导</button>
   </aside>;
 }

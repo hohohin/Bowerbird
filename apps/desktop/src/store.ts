@@ -56,6 +56,7 @@ import {
   taskCenterGenerationJobs,
 } from "./lib/projectActivity";
 import { mergeRecoveredCloudAgentRuns } from "./lib/cloudAgentRuntime";
+import { agentApprovalScope, loadAgentApprovalModes, saveAgentApprovalModes, type AgentApprovalMode, type AgentApprovalModes } from "./lib/cloudAgentApproval";
 import { mergeRecoveredGenJobs } from "./lib/generationRecovery";
 import {
   acknowledgeCreativeReuseRequest,
@@ -386,6 +387,8 @@ interface State {
   activeSessionKind: "generation" | "agent";
   cloudAgentRuns: Record<string, CloudAgentRunRecord>;
   cloudAgentRunOrder: string[];
+  agentApprovalModes: AgentApprovalModes;
+  setAgentApprovalMode: (run: Pick<CloudAgentRunRecord, "projectId" | "threadId">, mode: AgentApprovalMode) => void;
   activeCloudAgentRunId: string | null;
   genJobs: Record<string, GenJob>; // 所有生成会话（首轮创建，续轮追加 turn）
   genJobOrder: string[]; // job 创建顺序（侧栏 Status 任务列表稳定排序）
@@ -1594,6 +1597,22 @@ export const useStore = create<State>((set, get) => {
   genPanelOpen: false,
   activeSessionKind: "generation",
   cloudAgentRuns: {},
+  agentApprovalModes: loadAgentApprovalModes(),
+  setAgentApprovalMode: (run, mode) => {
+    const scope = agentApprovalScope(run);
+    if (!scope) return;
+    const modes = { ...get().agentApprovalModes };
+    if (mode === "auto") modes[scope] = "auto";
+    else delete modes[scope];
+    // Revoking authorization takes effect even if persistence is unavailable.
+    if (mode === "request") set({ agentApprovalModes: modes });
+    try {
+      saveAgentApprovalModes(modes);
+      set({ agentApprovalModes: modes });
+    } catch (error) {
+      notifyError(error, "保存审批模式失败");
+    }
+  },
   cloudAgentRunOrder: [],
   activeCloudAgentRunId: null,
   genJobs: {},
@@ -1726,11 +1745,14 @@ export const useStore = create<State>((set, get) => {
             referenceNodeIds: t.reference_node_ids, provider: t.provider ?? undefined,
             refAssets: t.ref_assets,
           }));
+          // 已有任务但产物被移除或历史读取失败时，仍显示真实提交，不能当作未开始。
+          if (turns.length === 0) {
+            turns.push({ id: nextGenTurnId(), turnKey: r.turn_key ?? undefined, prompt: r.prompt, promptRaw: null, images: [], provider: r.provider, media: r.media, videoOptions: r.video_options, ratio: r.ratio, refs: r.references, referenceNodeIds: r.reference_node_ids, refAssets: r.ref_assets });
+          }
           if (failed) {
             // 失败态标记在最后一轮：面板 ❌ + 生成面板重试入口（错误文本只活在内存，不入库）。
             const err = r.error ?? "生成失败";
-            if (turns.length > 0) turns[turns.length - 1] = { ...turns[turns.length - 1], error: err };
-            else turns.push({ id: nextGenTurnId(), turnKey: r.turn_key ?? undefined, prompt: r.prompt, promptRaw: null, images: [], error: err, media: r.media, videoOptions: r.video_options, ratio: r.ratio, refs: r.references, referenceNodeIds: r.reference_node_ids, refAssets: r.ref_assets });
+            turns[turns.length - 1] = { ...turns[turns.length - 1], error: err };
           }
           genJobs[r.id] = {
             id: r.id,

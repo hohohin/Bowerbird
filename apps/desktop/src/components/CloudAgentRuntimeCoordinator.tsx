@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { api } from "../lib/api";
+import { automaticAgentApproval, automaticAgentResultAcceptance, autoApproveAgentRun } from "../lib/cloudAgentApproval";
 import {
   activeCloudAgentRunIds,
   cloudAgentIngestionFingerprint,
@@ -13,7 +14,7 @@ import {
   pendingLocalTaskKey,
   publishCloudAgentIngestState,
 } from "../lib/cloudAgentRuntime";
-import { notifyError } from "../lib/notify";
+import { notify, notifyError } from "../lib/notify";
 import { notifyGenerationComplete } from "../lib/generationNotifications";
 import type { CloudAgentRunRecord } from "../lib/types";
 import { useStore } from "../store";
@@ -26,6 +27,7 @@ const POLL_INTERVAL_MS = 2500;
  */
 export function CloudAgentRuntimeCoordinator() {
   const polling = useRef(new Set<string>());
+  const approving = useRef(new Set<string>());
   const executingLocalTasks = useRef(new Set<string>());
   const ingesting = useRef(new Map<string, string>());
   const reconciledTerminal = useRef(new Set<string>());
@@ -33,6 +35,28 @@ export function CloudAgentRuntimeCoordinator() {
 
   useEffect(() => {
     let alive = true;
+
+    function approvePendingAction(run: CloudAgentRunRecord) {
+      const modes = useStore.getState().agentApprovalModes;
+      if (approving.current.has(run.runId)
+        || (!automaticAgentApproval(run, modes) && !automaticAgentResultAcceptance(run, modes))) return;
+      approving.current.add(run.runId);
+      autoApproveAgentRun(run.runId, {
+        getRun: () => useStore.getState().cloudAgentRuns[run.runId],
+        getModes: () => useStore.getState().agentApprovalModes,
+        isActive: () => alive,
+        approve: (runId, approvalId) => api.cloudAgentDecideApproval(runId, approvalId, true),
+        accept: (runId) => api.cloudAgentFeedback(runId, "accept", ""),
+        updateRun: (next) => {
+          useStore.getState().updateCloudAgentRun(next);
+          if (alive) reconcileIngestion(next);
+        },
+      }).catch((error) => {
+        useStore.getState().setAgentApprovalMode(run, "request");
+        const reason = error instanceof Error ? error.message : String(error);
+        notify(`自行批准失败（执行计划或接受结果），已切回请求批准，请检查任务状态：${reason}`, "error");
+      }).finally(() => approving.current.delete(run.runId));
+    }
 
     function reconcileIngestion(run: CloudAgentRunRecord) {
       if (!cloudAgentNeedsIngestion(run)) return;
@@ -158,6 +182,7 @@ export function CloudAgentRuntimeCoordinator() {
           if (!alive) return;
           useStore.getState().updateCloudAgentRun(next);
           executePendingLocalTask(next);
+          approvePendingAction(next);
           if (cloudAgentNeedsIngestion(next)) {
             reconciledTerminal.current.add(next.runId);
             reconcileIngestion(next);
@@ -177,6 +202,7 @@ export function CloudAgentRuntimeCoordinator() {
         const run = state.cloudAgentRuns[runId];
         if (!run) continue;
         reconciledTerminal.current.delete(runId);
+        approvePendingAction(run);
         executePendingLocalTask(run);
         pollRun(runId);
       }

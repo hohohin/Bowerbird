@@ -2,6 +2,8 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { Check, Circle, RefreshCw, Sparkles, X, XCircle } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api";
+import { agentApprovalMode, currentAgentSkillVersion } from "../lib/cloudAgentApproval";
+import { AgentApprovalToggle } from "./AgentApprovalToggle";
 import { cloudAgentFailureMessage, cloudAgentStatusLabel } from "../lib/cloudAgent";
 import { cloudAgentPlanDisplay, type CloudAgentPlanDisplayStep } from "../lib/cloudAgentPlan";
 import { isRenderedDocumentResult, selectCloudAgentResultArtifacts } from "../lib/cloudAgentResult";
@@ -21,8 +23,6 @@ import { useStore } from "../store";
 import { Lightbox } from "./Lightbox";
 
 const TERMINAL = new Set(["succeeded", "failed", "cancelled"]);
-const CURRENT_CONTROLLED_SKILL_VERSION = "0.1.2";
-const CURRENT_HTML_SKILL_VERSION = "0.1.0";
 const HTML_SKILL_ID = "bowerbird-html-layout-render";
 const UNIFIED_SKILL_ID = "bowerbird-unified-agent";
 
@@ -217,6 +217,7 @@ export function CloudAgentSession({
 } = {}) {
   const activeRunId = useStore((state) => state.activeCloudAgentRunId);
   const run = useStore((state) => activeRunId ? state.cloudAgentRuns[activeRunId] ?? null : null);
+  const automaticApproval = useStore((state) => !!run && agentApprovalMode(run, state.agentApprovalModes) === "auto");
   const listedAssets = useStore((state) => state.assets);
   const assets = useMemo(
     () => mergeCloudAgentAssets(listedAssets, hydratedAssets),
@@ -286,7 +287,7 @@ export function CloudAgentSession({
     () => run?.referenceAssetIds.map((id) => assets.find((asset) => asset.id === id)).filter(Boolean) ?? [],
     [run?.referenceAssetIds, assets],
   );
-  const currentSkillVersion = htmlRun || unifiedRun ? CURRENT_HTML_SKILL_VERSION : CURRENT_CONTROLLED_SKILL_VERSION;
+  const currentSkillVersion = run ? currentAgentSkillVersion(run.skillId) : null;
   const skillVersionMismatch = !!run && run.snapshot.run.skill_version !== currentSkillVersion;
   const approvalsWithPlans = useMemo(
     () => [...(run?.snapshot.approvals ?? [])].filter((approval) => !!approval.proposal).sort((a, b) => a.requested_at.localeCompare(b.requested_at)),
@@ -366,11 +367,18 @@ export function CloudAgentSession({
     setBusy(true);
     setError(null);
     try {
-      updateRun(await enqueueCloudAgentRunOperation(
+      const decided = await enqueueCloudAgentRunOperation(
         run.runId,
-        () => api.cloudAgentDecideApproval(run.runId, pendingApproval.id, approve),
-      ));
-      if (!approve) notifySuccess("已拒绝计划并安全结算");
+        async () => {
+          const current = useStore.getState().cloudAgentRuns[run.runId];
+          if (!current || current.status !== "awaiting_approval"
+            || !current.snapshot.approvals.some((item) => item.id === pendingApproval.id && item.status === "pending")) return false;
+          const next = await api.cloudAgentDecideApproval(run.runId, pendingApproval.id, approve);
+          updateRun(next);
+          return true;
+        },
+      );
+      if (decided && !approve) notifySuccess("已拒绝计划并安全结算");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
       notifyError(cause, approve ? "批准计划失败" : "拒绝计划失败");
@@ -407,11 +415,16 @@ export function CloudAgentSession({
     setBusy(true);
     setError(null);
     try {
-      updateRun(await enqueueCloudAgentRunOperation(
+      const submitted = await enqueueCloudAgentRunOperation(
         run.runId,
-        () => api.cloudAgentFeedback(run.runId, action, feedback),
-      ));
-      if (action === "retry") {
+        async () => {
+          const current = useStore.getState().cloudAgentRuns[run.runId];
+          if (current?.status !== "awaiting_result_feedback") return false;
+          updateRun(await api.cloudAgentFeedback(run.runId, action, feedback));
+          return true;
+        },
+      );
+      if (submitted && action === "retry") {
         setArtifactPreviews({});
         notifySuccess("反馈已提交，Agent 将诊断后给出新的修订计划");
       }
@@ -541,7 +554,7 @@ export function CloudAgentSession({
                         : run.snapshot.run.current_step === "diagnose_feedback"
                           ? "正在根据你的修改意见定向诊断上一结果，可能需要一分钟左右。"
                           : run.snapshot.run.current_step === "compose_revision_plan"
-                            ? "诊断完成，正在制定修订计划；新计划会再次提交给你批准。"
+                            ? automaticApproval ? "诊断完成，正在制定修订计划；新计划将按当前模式自行批准。" : "诊断完成，正在制定修订计划；新计划会再次提交给你批准。"
                             : run.snapshot.run.current_step
                               ? `当前步骤：${run.snapshot.run.current_step}`
                               : "Agent 会在需要你决定时暂停。"}
@@ -584,7 +597,7 @@ export function CloudAgentSession({
                           {approval.kind === "controlled_image_edit_revision" ? `修订计划 ${index + 1}` : "执行计划"}
                         </h3>
                         <span className={`text-[10px] ${isPending ? "text-amber-300" : approval.status === "approved" ? "text-lime" : "text-muted"}`}>
-                          {isPending ? "等待批准" : approval.status === "approved" ? "已批准" : approval.status === "rejected" ? "已拒绝" : "已过期"}
+                          {isPending ? automaticApproval && !skillVersionMismatch ? "等待自行批准" : "等待批准" : approval.status === "approved" ? "已批准" : approval.status === "rejected" ? "已拒绝" : "已过期"}
                         </span>
                       </div>
                       <PendingPlan approval={approval} />
@@ -716,8 +729,13 @@ export function CloudAgentSession({
         </div>
 
         <div className="shrink-0 border-t border-edge bg-panel p-4">
+          {!readOnly && <div className="mx-auto mb-3 flex max-w-3xl justify-start"><AgentApprovalToggle run={run} /></div>}
           {readOnly ? (
             <div className="mx-auto max-w-3xl text-center text-[10px] text-muted">旧 Agent 会话仅供核对；不会批准、回答澄清、执行本机工具、反馈、取消或入库。</div>
+          ) : run.status === "awaiting_result_feedback" && automaticApproval ? (
+            <div className="mx-auto flex max-w-3xl items-center gap-2 text-xs text-muted">
+              <RefreshCw size={13} className="animate-spin" /> 正在自动接受结果并入库…
+            </div>
           ) : run.status === "awaiting_result_feedback" ? (
             <div className="mx-auto max-w-3xl">
               {(!renderedDocumentRun || unifiedRun) && <textarea

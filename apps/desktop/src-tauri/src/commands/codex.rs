@@ -1290,17 +1290,19 @@ pub async fn recent_gen_sessions(
                 continue;
             };
             if t.status == "cancelled" && j.media != "video" { continue; }
-            // 时间线从 generation_meta 按 session 重建（无 session 的失败 job → 空时间线，
-            // 前端仍有 prompt 可重试）；重建失败不阻断其余会话恢复。
-            let (turns, mut ref_assets) = match &j.session_id {
-                Some(sid) => match db.generation_history_by_session(sid, Some(&annotations_dir)) {
-                    Ok(h) => (h.turns, h.references),
-                    Err(e) => {
-                        tracing::warn!("recent_gen_sessions: history for {sid} failed: {e}");
-                        (Vec::new(), Vec::new())
-                    }
-                },
-                None => (Vec::new(), Vec::new()),
+            // 首轮 payload 保存于 provider 返回前，session_id 可能为空；按 job_id
+            // 从产物元数据找回会话，兼容已安装版本写出的历史任务。
+            let history = match &j.session_id {
+                Some(sid) => db.generation_history_by_session(sid, Some(&annotations_dir)).map(Some),
+                None => db.generation_history_by_job(&j.id, Some(&annotations_dir)),
+            };
+            let (session_id, turns, mut ref_assets) = match history {
+                Ok(Some(h)) => (h.session_id, h.turns, h.references),
+                Ok(None) => (j.session_id.clone(), Vec::new(), Vec::new()),
+                Err(e) => {
+                    tracing::warn!("recent_gen_sessions: history for {} failed: {e}", j.id);
+                    (j.session_id.clone(), Vec::new(), Vec::new())
+                }
             };
             if j.media == "video" {
                 ref_assets = db.generation_reference_assets(&j.references, Some(&annotations_dir))?;
@@ -1314,7 +1316,7 @@ pub async fn recent_gen_sessions(
                 status: t.status,
                 prompt: j.prompt,
                 error: t.error,
-                session_id: j.session_id,
+                session_id,
                 conversation_id: j.conversation_id,
                 thread_id: j.thread_id,
                 creative_session_id: j.creative_session_id,

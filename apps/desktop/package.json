@@ -16,6 +16,8 @@
     "test:file-drop": "node scripts/file-drop-ui.test.mjs",
     "test:generation-notifications": "node scripts/generation-notifications-ui.test.mjs",
     "test:agent-plan": "node --experimental-strip-types --test scripts/cloud-agent-plan.test.mjs",
+    "test:agent-approval": "node --experimental-strip-types --test scripts/cloud-agent-approval.test.mjs",
+    "test:agent-approval:ui": "node scripts/cloud-agent-approval-ui.test.mjs",
     "test:agent-result": "node --experimental-strip-types --test scripts/cloud-agent-result.test.mjs",
     "test:agent-selection": "node --test scripts/cloud-agent-selection.test.mjs",
     "test:source-discovery": "node --experimental-strip-types --test scripts/source-discovery.test.mjs",
