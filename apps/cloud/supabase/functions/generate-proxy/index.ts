@@ -5,6 +5,7 @@ import { ensureDailyCredits, holdCredits } from "../_shared/billing.ts";
 import { ApiError, errorResponse, jsonResponse, requestId, safeLog } from "../_shared/errors.ts";
 import { assertBodySize, assertReferenceImages, corsHeaders } from "../_shared/limits.ts";
 import { reserveManagedUsage } from "../_shared/usage.ts";
+import { LAYER_SERVICES, validateLayerRequest, type LayerOptions } from "../_shared/layer-contract.ts";
 import { validateVideoInput, videoService, type CloudVideoOptions, type VideoReference, type VideoInput } from "../_shared/video-contract.ts";
 
 const BUCKET = "generation-temp";
@@ -21,6 +22,7 @@ interface GenerateRequest {
   mock_scenario?: MockScenario;
   video_options?: CloudVideoOptions;
   reference_videos?: VideoReference[];
+  layer_options?: LayerOptions;
 }
 
 interface GenerationJob {
@@ -53,10 +55,12 @@ function validate(body: unknown): GenerateRequest {
   if (value.media !== "image" && value.media !== "video") {
     throw new ApiError("invalid_request", "不支持的生成媒体类型");
   }
-  if (typeof value.prompt !== "string" || !value.prompt.trim() || value.prompt.length > 20_000) {
+  if (typeof value.prompt !== "string" || (!value.prompt.trim() && value.service !== "image_layer_decompose") || value.prompt.length > 20_000) {
     throw new ApiError("invalid_request", "prompt 不能为空且最多 20000 字符");
   }
   assertReferenceImages(value.reference_images ?? [], value.media === "video" ? 30 : 10);
+  try { validateLayerRequest(value, String(value.service ?? "image_sd")); }
+  catch (error) { throw new ApiError("invalid_request", error instanceof Error ? error.message : "分层参数无效"); }
   if (value.media === "video") {
     if (Deno.env.get("BOWERBIRD_CLOUD_MOCK") !== "false") throw new ApiError("not_configured", "视频服务尚未启用真实生成");
     try { validateVideoInput({ ...value, schema_version: 1, ratio: value.ratio ?? null, reference_images: value.reference_images ?? [], reference_videos: value.reference_videos ?? [] } as unknown as VideoInput); }
@@ -74,11 +78,12 @@ async function serviceFor(admin: SupabaseClient, body: GenerateRequest): Promise
   if (body.media === "video" ? service !== videoService(body.video_options!.video_resolution) : !/^image_[a-z0-9_]{1,40}$/.test(service)) {
     throw new ApiError("invalid_request", "service 与生成媒体类型不匹配");
   }
-  const { data } = await admin.from("service_costs").select("service").eq("service", service)
+  const { data } = await admin.from("service_costs").select("service,unit_cost,parameters").eq("service", service)
     .eq("active", true).maybeSingle();
   if (!data) {
-    throw new ApiError("invalid_request", "service 与生成媒体类型不匹配");
+    throw new ApiError("invalid_request", LAYER_SERVICES.includes(service as typeof LAYER_SERVICES[number]) ? "分层服务尚未开放，请等待积分定价与服务启用" : "service 与生成媒体类型不匹配");
   }
+  if (LAYER_SERVICES.includes(service as typeof LAYER_SERVICES[number]) && (Number(data.unit_cost) <= 0 || data.parameters?.pricing_ready !== true)) throw new ApiError("not_configured", "分层服务价格尚未确认");
   return service;
 }
 
@@ -205,6 +210,7 @@ async function createJob(
     ratio: body.ratio ?? null,
     mock_scenario: body.mock_scenario ?? null,
     ...(body.media === "video" ? { video_options: body.video_options, reference_videos: videoReferences } : {}),
+    ...(body.layer_options ? { layer_options: body.layer_options } : {}),
   });
   const manifestHash = await sha256Hex(requestPayload);
 
@@ -298,7 +304,16 @@ Deno.serve(async (request) => {
       : typeof raw.remote_task_id === "string" ? raw.remote_task_id : "";
 
     let response: Response;
-    if (action === "get" || (!action && jobId)) response = await actionGet(admin, user.id, jobId, cors);
+    if (action === "layer_quote") {
+      const prices = await admin.from("service_costs").select("service,unit_cost,active,parameters").in("service", [...LAYER_SERVICES]);
+      if (prices.error) throw new ApiError("internal_error", "分层价格读取失败", true);
+      response = jsonResponse({ status: "quoted", services: LAYER_SERVICES.map(service => {
+        const row = prices.data?.find(row => row.service === service);
+        const available = !!row?.active && row.parameters?.pricing_ready === true && Number(row.unit_cost) > 0;
+        return { service, available, credits: available ? row!.unit_cost : null };
+      }) }, 200, cors);
+    }
+    else if (action === "get" || (!action && jobId)) response = await actionGet(admin, user.id, jobId, cors);
     else if (action === "get_by_key") {
       if (typeof raw.idempotency_key !== "string" || !raw.idempotency_key) throw new ApiError("invalid_request", "缺少幂等键");
       const found = await admin.from("generation_jobs").select("*").eq("user_id", user.id).eq("idempotency_key", raw.idempotency_key).maybeSingle();

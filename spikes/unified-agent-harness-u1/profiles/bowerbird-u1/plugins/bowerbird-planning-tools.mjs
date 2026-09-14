@@ -46,7 +46,7 @@ export function planningToolDefinitions() {
         },
       },
     }),
-    remoteTool({ name: "call_tool", description: "Execute an authorized capability. Read its input contract from availableContext. Use a unique actionId for new work; reuse it only to retrieve the same action.",
+    remoteTool({ name: "call_tool", description: "Execute an authorized capability. Read its input contract from availableContext and include every required field in inputJson. Use a unique actionId for new work. If validation returns retry_required with executed=false, correct the input and retry the same actionId; rejected inputs do not consume capability calls. Completed actions must keep the same input when replayed.",
       isConcurrencySafe: (args) => ["generate_image", "inspect_artifact"].includes(args.toolName),
       parameters: { actionId: { type: "string", required: true }, toolName: { type: "string", required: true }, inputJson: { type: "string", required: true } }, conclude: true }),
     remoteTool({ name: "request_task_authorization", description: "Request approval for the goal, input scope and maximum resource use. Capability counts include possible rework; they do not prescribe steps. No credits may be self-reported. Maximum 31 capability calls plus finalization.",

@@ -24,7 +24,7 @@ import {
 } from "./run-controlled-image-edit-eval.ts";
 
 const REAL_DSH_EVAL_FLAG = "--allow-real-u4-dsh-eval";
-const DSH_MODEL = "deepseek-v4-flash";
+const DSH_MODEL = "deepseek-flash";
 
 function required(env: Record<string, string | undefined>, name: string): string {
   const value = env[name]?.trim();

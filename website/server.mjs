@@ -410,7 +410,7 @@ async function handleAuthenticatedGenerate(request, response, accessToken) {
 async function serveStatic(request, response, root) {
   const url = new URL(request.url, "http://localhost");
   const decoded = decodeURIComponent(url.pathname);
-  const relativePath = decoded === "/" ? "index.html" : decoded.replace(/^\/+/, "");
+  const relativePath = decoded === "/" ? "index.html" : ["/admin", "/admin/"].includes(decoded) ? "admin/index.html" : decoded.replace(/^\/+/, "");
   const filePath = resolve(root, relativePath);
   const normalizedRoot = resolve(root).toLowerCase();
   const normalizedFile = filePath.toLowerCase();
@@ -453,7 +453,7 @@ async function serveStatic(request, response, root) {
   response.writeHead(200, {
     "Content-Type": MIME_TYPES.get(extension) || "application/octet-stream",
     "Content-Length": body.length,
-    "Cache-Control": shouldRevalidate ? "no-cache" : "public, max-age=3600",
+    "Cache-Control": relativePath.startsWith("admin/") ? "no-store" : shouldRevalidate ? "no-cache" : "public, max-age=3600",
     "X-Content-Type-Options": "nosniff",
   });
   if (request.method === "HEAD") response.end();
@@ -465,6 +465,10 @@ export function startServer(options = parseArgs(process.argv.slice(2))) {
   const server = createServer(async (request, response) => {
     try {
       const pathname = new URL(request.url, "http://localhost").pathname;
+      if ((request.method === "GET" || request.method === "HEAD") && pathname === "/admin") {
+        response.writeHead(308, { Location: "/admin/", "Cache-Control": "no-store" });
+        return response.end();
+      }
       if ((request.method === "GET" || request.method === "HEAD") && pathname === "/healthz") {
         response.writeHead(204, { "Cache-Control": "no-store" });
         return response.end();

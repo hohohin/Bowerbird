@@ -54,6 +54,16 @@ pub struct PromptConfig {
     pub version: i32,
 }
 
+#[derive(Serialize, Deserialize)]
+pub struct CodeRedemption {
+    pub already_redeemed: bool,
+    pub period_end: DateTime<Utc>,
+    pub credits: i32,
+    pub credits_expires_at: DateTime<Utc>,
+    #[serde(default)]
+    pub entitlement: Option<EntitlementSnapshot>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum OfflineState {
@@ -211,6 +221,42 @@ impl EntitlementService {
             return current;
         }
         self.sync(auth).await.unwrap_or(current)
+    }
+
+    pub async fn redeem_code(&self, auth: &AuthClient, code: &str) -> AppResult<CodeRedemption> {
+        if code.len() > 128 || code.trim().is_empty() {
+            return Err(AppError::Cloud("请输入有效的兑换码".into()));
+        }
+        let endpoint = self
+            .cloud
+            .config()
+            .endpoint("redeem-code")
+            .ok_or_else(|| AppError::Cloud("当前构建未配置 Bowerbird Cloud".into()))?;
+        let response = auth
+            .send_authorized(
+                self.cloud
+                    .http()
+                    .post(endpoint)
+                    .json(&serde_json::json!({ "code": code })),
+                "兑换请求失败，请使用同一码重试",
+            )
+            .await?;
+        let status = response.status();
+        if !status.is_success() {
+            let body: serde_json::Value = response.json().await.unwrap_or_default();
+            let message = body
+                .pointer("/error/message")
+                .and_then(|value| value.as_str())
+                .unwrap_or("兑换请求失败，请使用同一码重试");
+            return Err(AppError::Cloud(message.into()));
+        }
+        let mut result: CodeRedemption = response
+            .json()
+            .await
+            .map_err(|_| AppError::Cloud("兑换结果读取失败，请使用同一码重试确认".into()))?;
+        // The server already committed the grant. A sync failure must not report redemption failure.
+        result.entitlement = self.sync(auth).await.ok();
+        Ok(result)
     }
 
     pub fn clear(&self) -> AppResult<()> {

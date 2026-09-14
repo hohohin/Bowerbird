@@ -527,16 +527,9 @@ pub(crate) fn resolve_codex_binary() -> Option<String> {
     None
 }
 
-/// codex 凭证/产物根目录：`CODEX_HOME` 优先，否则 `USERPROFILE`（Windows）/ `HOME`（Unix）+ `.codex`。
-/// 与反推/生成的取图快照、auth.json 检测共用，保证三处对「codex home」的判定一致。
+/// Bowerbird 独立的凭证/产物根；不复用系统 CODEX_HOME 或 ~/.codex。
 pub(crate) fn codex_home() -> Option<PathBuf> {
-    std::env::var_os("CODEX_HOME")
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("USERPROFILE")
-                .or_else(|| std::env::var_os("HOME"))
-                .map(|home| PathBuf::from(home).join(".codex"))
-        })
+    app_data_dir().map(|dir| dir.join("cli-profiles/codex"))
 }
 
 /// 构造跨平台的 codex 子进程 Command。
@@ -548,18 +541,23 @@ pub(crate) fn codex_command(binary: &str) -> Command {
     {
         let lower = binary.to_ascii_lowercase();
         if lower.ends_with(".cmd") || lower.ends_with(".bat") {
-            let mut command = Command::new("cmd.exe");
-            command.arg("/D").arg("/S").arg("/C").arg(binary);
+            let mut command = Command::new(crate::cli_credentials::launcher());
+            command.args(["--plain", "cmd.exe", "/D", "/S", "/C", binary]);
             command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+            crate::cli_credentials::codex_environment(&mut command);
             return command;
         }
-        let mut command = Command::new(binary);
+        let mut command = Command::new(crate::cli_credentials::launcher());
+        command.args(["--plain", binary]);
         command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        crate::cli_credentials::codex_environment(&mut command);
         return command;
     }
     #[cfg(not(target_os = "windows"))]
     {
-        Command::new(binary)
+        let mut command = Command::new(binary);
+        crate::cli_credentials::codex_environment(&mut command);
+        command
     }
 }
 

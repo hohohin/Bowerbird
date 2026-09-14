@@ -60,7 +60,7 @@ export function auditComposedConfig(rows) {
   assert.equal(acp?.name, "@deepseek-ai/dsh-acp");
   assert.deepEqual(acp?.config, {
     provider: "deepseek-official",
-    model: "deepseek-v4-flash",
+    model: "deepseek-flash",
   });
 
   const deepseek = byId.get("llm-deepseek");

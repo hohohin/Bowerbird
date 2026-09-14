@@ -340,7 +340,7 @@ try {
   }, {
     apiKey: "candidate-fixture-only",
     baseUrl: unifiedModelServer.baseUrl,
-    model: "deepseek-v4-flash",
+    model: "deepseek-flash",
   }, { allowInsecureLoopback: true });
   if (!processor) throw new Error("candidate_unified_processor_not_injected");
   await processor.process({
@@ -368,7 +368,7 @@ try {
   }, {
     apiKey: "candidate-fixture-only",
     baseUrl: controlledModelServer.baseUrl,
-    model: "deepseek-v4-flash",
+    model: "deepseek-flash",
   }, () => ({
     generate: async () => { throw new Error("candidate_generation_before_approval"); },
   }), { allowInsecureLoopback: true });
@@ -424,7 +424,7 @@ const result = {
   formalProcessorModelTurns: unifiedModelServer.requests.length,
   formalProcessorModelCallsDurable: succeededModelCallsFor("run-candidate-processor") === 2,
   formalProcessorModelUsageMetered: modelUsageFor("run-candidate-processor").length === 2 && modelUsageFor("run-candidate-processor").every(
-    (usage) => usage.inputUnits === 12 && usage.outputUnits === 4 && usage.model === "deepseek-v4-flash",
+    (usage) => usage.inputUnits === 12 && usage.outputUnits === 4 && usage.model === "deepseek-flash",
   ),
   realDeepSeekKeyStayedInParent: [...unifiedModelServer.authorizationHeaders, ...controlledModelServer.authorizationHeaders].every(
     (header) => header === "Bearer candidate-fixture-only",
@@ -438,7 +438,7 @@ const result = {
   controlledProcessorModelTurns: controlledModelServer.requests.length,
   controlledProcessorModelCallsDurable: succeededModelCallsFor("run-candidate-controlled") === 2,
   controlledProcessorModelUsageMetered: modelUsageFor("run-candidate-controlled").length === 2 && modelUsageFor("run-candidate-controlled").every(
-    (usage) => usage.inputUnits === 12 && usage.outputUnits === 4 && usage.model === "deepseek-v4-flash",
+    (usage) => usage.inputUnits === 12 && usage.outputUnits === 4 && usage.model === "deepseek-flash",
   ),
   controlledProcessorToolSurfaceClosed: controlledIntentTools.join(",") === "record_intent_analysis,request_clarification,submit_plan_for_approval" &&
     controlledPlanTools.join(",") === "record_intent_analysis,request_clarification,submit_plan_for_approval",

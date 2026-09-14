@@ -186,6 +186,7 @@ async function actionSubmitted(admin: SupabaseClient, body: Record<string, unkno
 }
 
 function outputExtension(mime: string): string {
+  if (mime === "application/json") return "json";
   if (mime === "video/mp4") return "mp4";
   if (mime === "image/jpeg") return "jpg";
   if (mime === "image/webp") return "webp";
@@ -198,6 +199,7 @@ async function actionOutputUpload(admin: SupabaseClient, body: Record<string, un
   const leaseId = typeof body.leaseId === "string" ? body.leaseId : "";
   const mime = typeof body.mime === "string" ? body.mime : "";
   const job = await assertLease(admin, jobId, leaseId);
+  if (job.service.startsWith("image_layer_") !== (mime === "application/json")) throw new ApiError("invalid_request", "图层服务必须返回完整图层包");
   if (job.service.startsWith("video_") !== (mime === "video/mp4")) throw new ApiError("invalid_request", "产物媒体与服务不匹配");
   const objectKey = `jobs/${jobId}/outputs/result.${outputExtension(mime)}`;
   const result = await admin.storage.from(BUCKET).createSignedUploadUrl(objectKey, { upsert: true });
@@ -230,6 +232,8 @@ async function actionComplete(
   const bytes = Number(body.bytes ?? 0);
   const sha256 = typeof body.sha256 === "string" ? body.sha256 : null;
   if (status === "succeeded") {
+    if (leasedJob.service.startsWith("image_layer_") !== (mime === "application/json")) throw new ApiError("invalid_request", "图层产物与服务不匹配");
+    if (mime === "application/json" && bytes > 256 * 1024 * 1024) throw new ApiError("invalid_request", "图层包超出大小限制");
     if (!objectKey || !objectKey.startsWith(`jobs/${jobId}/outputs/`) || !Number.isSafeInteger(bytes) || bytes <= 0) {
       throw new ApiError("invalid_request", "产物元数据无效");
     }

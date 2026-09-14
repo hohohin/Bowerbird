@@ -15,7 +15,7 @@ import { NodeDshAcpPort } from "../../../../../apps/agent-worker/src/harness/nod
 const REAL_VISION_FLAG = "--allow-real-vision";
 const FIXTURE_PATH = join(import.meta.dirname, "../../../../../apps/extension/icons/128x128.png");
 const PROFILE_TEMPLATE = join(import.meta.dirname, "..");
-const DSH_MODEL = "deepseek-v4-flash";
+const DSH_MODEL = "deepseek-flash";
 
 function required(value, name) {
   const normalized = value?.trim();

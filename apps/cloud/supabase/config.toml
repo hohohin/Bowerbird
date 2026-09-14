@@ -30,6 +30,7 @@ site_url = "http://127.0.0.1:5173"
 # the callback allow-listed while still restricting it to Bowerbird's scheme.
 additional_redirect_urls = [
   "bowerbird://auth/callback**",
+  "https://bowerbird.cn/admin/",
   "http://127.0.0.1:5173/**",
   "http://localhost:5173/**",
 ]
@@ -55,3 +56,9 @@ verify_jwt = false
 # shape-checks code/state itself and is the only holder of WECHAT_APP_SECRET.
 [functions.wechat-login]
 verify_jwt = false
+
+[functions.redeem-code]
+verify_jwt = true
+
+[functions.code-admin]
+verify_jwt = true

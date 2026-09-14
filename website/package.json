@@ -9,7 +9,8 @@
     "dev:vite": "pnpm run bundle:file && vite --host 127.0.0.1",
     "build": "pnpm run bundle:file && vite build",
     "preview": "node server.mjs --root dist",
-    "start": "node server.mjs --root dist"
+    "start": "node server.mjs --root dist",
+    "test:admin": "node scripts/admin-ui.test.mjs"
   },
   "dependencies": {
     "prosemirror-commands": "^1.7.1",

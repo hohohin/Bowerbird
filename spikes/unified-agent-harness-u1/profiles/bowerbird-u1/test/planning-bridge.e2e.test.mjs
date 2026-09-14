@@ -12,8 +12,72 @@ import { canonicalJson, sha256Hex } from "../../../../../apps/agent-worker/src/k
 import { NodeDshAcpPort } from "../scripts/dsh-acp-port.mjs";
 import { loadUnifiedAgentSkill } from "../../../../../apps/agent-worker/src/skills/bowerbird-unified-agent/loader.ts";
 import { spikeRoot } from "../scripts/runtime.mjs";
+import { AdaptiveToolGateway } from "../../../../../apps/agent-worker/src/harness/adaptive-tool-gateway.ts";
+import { validateAdaptiveInputObject } from "../../../../../apps/agent-worker/src/harness/adaptive-tool-inputs.ts";
 
 const BRIDGE_PATCH = "profiles/bowerbird-u1/cordis.bridge.patch.yml";
+
+test("real DSH returns missing assetIds to the model and retries without spending a generation slot", async () => {
+  let requests = 0, generated = 0;
+  const authorization = { schemaVersion: 3, title: "Original image", summary: "Generate a gift image",
+    assetIds: [], outputCount: 1, modelTurns: 4, capabilities: [{ tool: "generate_image", maxCalls: 1 }] };
+  const gateway = new AdaptiveToolGateway(authorization, { authorizationHash: sha256Hex(canonicalJson(authorization)), actions: [] }, {
+    validate: validateAdaptiveInputObject,
+    async save() {},
+    async execute(action) {
+      if (action.toolName === "generate_image") { generated++; return { artifactId: "gift-image" }; }
+      return { terminalReason: "awaiting_result_feedback" };
+    },
+  });
+  const server = createServer(async (request, response) => {
+    let body = "";
+    request.setEncoding("utf8");
+    for await (const chunk of request) body += chunk;
+    const wire = JSON.parse(body);
+    assert.equal(wire.model, "deepseek-flash");
+    requests++;
+    let args;
+    if (requests === 1) args = { actionId: "gift", toolName: "generate_image", inputJson: JSON.stringify({ prompt: "Gift" }) };
+    else if (requests === 2) {
+      const feedback = wire.messages.filter(message => message.role === "tool").map(message => message.content).join("\n");
+      assert.ok(feedback.includes('"missingFields":["assetIds"]'));
+      assert.ok(feedback.includes('"executed":false'));
+      assert.ok(feedback.includes('"remainingCalls":1'));
+      assert.equal(generated, 0);
+      args = { actionId: "gift", toolName: "generate_image", inputJson: JSON.stringify({ prompt: "Gift", assetIds: [] }) };
+    } else {
+      assert.equal(requests, 3);
+      assert.equal(generated, 1);
+      args = { actionId: "deliver", toolName: "finalize_output", inputJson: JSON.stringify({ assetIds: ["gift-image"] }) };
+    }
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.end(toolCallSse("call_tool", args, requests));
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  const previous = Object.fromEntries(["BOWERBIRD_U1_ALLOW_NETWORK", "DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL"].map(key => [key, process.env[key]]));
+  Object.assign(process.env, { BOWERBIRD_U1_ALLOW_NETWORK: "1", DEEPSEEK_API_KEY: "fixture-only", DEEPSEEK_BASE_URL: `http://127.0.0.1:${server.address().port}` });
+  try {
+    const runner = new UnifiedPlanningHarnessRunner({ runId: "input-recovery", dispatch(call) {
+      const args = call.arguments;
+      return gateway.dispatch({ toolName: args.toolName, arguments: { actionId: args.actionId, input: JSON.parse(args.inputJson) } });
+    } }, toolBridge => new DshAcpHarnessAdapter({ cwd: spikeRoot,
+      createPort: () => new NodeDshAcpPort({ allowNetwork: true, patches: [BRIDGE_PATCH], toolBridge }),
+    }));
+    const result = await runner.run({ schemaVersion: 1, runId: "input-recovery", checkpointVersion: 0,
+      phase: "execute_approved_plan", approvedPlanHash: "a".repeat(64), compactedFacts: [], completedToolResults: [] },
+    [{ type: "text", text: "Generate the authorized original gift image, then deliver it." }]);
+    assert.equal(result.stopReason, "end_turn");
+    assert.equal(requests, 3);
+    assert.equal(generated, 1);
+    assert.equal(gateway.snapshot().actions.length, 2);
+    assert.ok(gateway.finalResult);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  }
+});
 
 test("real DSH dispatches eight independent image calls concurrently before finalization", async () => {
   let requests = 0, active = 0, peak = 0, completed = 0;

@@ -1,5 +1,6 @@
 import { AdaptiveToolGateway, type AdaptiveJournal } from "../harness/adaptive-tool-gateway.ts";
 import { AdaptiveRunTools } from "../harness/adaptive-run-tools.ts";
+import { ADAPTIVE_TOOL_INPUTS, adaptiveInputContract } from "../harness/adaptive-tool-inputs.ts";
 import { taskAuthorizationCallCount, type TaskAuthorization } from "../contracts/task-authorization.ts";
 import { RunContextTools, type RunContextResource } from "../harness/run-context-tools.ts";
 import { actionContextPages, actionOutputIds, executionProgress } from "../harness/task-context.ts";
@@ -642,21 +643,15 @@ export class UnifiedPlanningRunProcessor implements AgentRunProcessor {
         references: checkpoint.visualObservations, control: context.control,
         save: async () => { throw new Error("execution_observations_are_read_only"); },
       });
-      const toolInputs: Record<string, string> = {
-        generate_image: '{"prompt":"Describe the desired image and reference roles","assetIds":["authorized input or generated image ids"]}',
-        inspect_artifact: '{"assetId":"image id","goal":"What to check","focus":"general|subject|text|layout|style"}',
-        compose_html: '{"html":"Static HTML, images use asset:reference-N in assetIds order","assetIds":["image ids"]}',
-        render_html: '{"documentId":"compose_html output artifactId"}',
-        finalize_output: '{"assetIds":["selected generated or rendered image ids, exactly outputCount"]}',
-      };
+      const toolInputs = ADAPTIVE_TOOL_INPUTS;
       const resources: RunContextResource[] = [
-        ...authorization.capabilities.map(({ tool }) => ({ id: `tool:${tool}`, description: `${tool} 参数契约`, read: () => ({ input: toolInputs[tool],
+        ...authorization.capabilities.map(({ tool }) => ({ id: `tool:${tool}`, description: `${tool} 参数契约`, read: () => ({ ...adaptiveInputContract(tool),
           ...(tool === "compose_html" ? { method: loadUnifiedAgentSkill().methods["bowerbird-html-layout-render"],
             requiredTextLines: requiredExactCopyLines(checkpoint.feedback?.at(-1) ?? checkpoint.input.goal),
             constraints: "No scripts, SVG, comments, external URLs or viewport meta. Images use asset:reference-1, etc. Only charset meta is supported." } : {}),
           ...(tool === "render_html" ? { htmlOutput: checkpoint.input.htmlOutput } : {}),
         }) })),
-        { id: "tool:finalize_output", description: "选择本次交付图片", read: () => ({ input: toolInputs.finalize_output }) },
+        { id: "tool:finalize_output", description: "选择本次交付图片", read: () => adaptiveInputContract("finalize_output") },
         ...(checkpoint.input.visualProfileCapsule ? [{ id: "project_visual_profile", description: "当前项目视觉规范",
           read: () => visualProfileContext(checkpoint.input) }] : []),
       ];

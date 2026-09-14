@@ -18,7 +18,7 @@ import { imageMetadata } from "../../../../../apps/cloud/supabase/functions/_sha
 
 const REAL_PLANNING_FLAG = "--allow-real-u3-planning";
 const PROFILE_TEMPLATE = join(import.meta.dirname, "..");
-const DSH_MODEL = "deepseek-v4-flash";
+const DSH_MODEL = "deepseek-flash";
 const U3_PROMPT_TIMEOUT_MS = 180_000;
 const MAX_PLANNING_SSE_BYTES = 2 * 1024 * 1024;
 const PRODUCT_PATH = join(import.meta.dirname, "../../../../../apps/desktop/src-tauri/resources/samples/preset-01.webp");

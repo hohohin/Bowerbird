@@ -1,0 +1,26 @@
+.layer-editor.app-modal-backdrop { z-index: 90; }
+.layer-editor .app-modal[data-width="lg"] { width: min(1440px, 96vw); max-width: 96vw; max-height: 94vh; height: min(920px, 94vh); }
+.layer-editor .app-modal-body { flex: 1; min-height: 0; padding: 0; overflow: hidden; }
+.layer-layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; height: 100%; min-height: 0; }
+.layer-preview { display: flex; align-items: center; justify-content: center; padding: 32px; background: #151619; min-width: 0; min-height: 0; overflow: hidden; }
+.layer-source { max-width: 100%; max-height: 100%; object-fit: contain; }
+.layer-stage { position: relative; width: 100%; overflow: hidden; background-color: #ddd; background-image: conic-gradient(#bbb 25%, transparent 0 50%, #bbb 0 75%, transparent 0); background-size: 20px 20px; }
+.layer-object { position: absolute; touch-action: none; user-select: none; }
+.layer-object img { width: 100%; height: 100%; pointer-events: none; }
+.layer-object.is-selected { outline: 2px solid #88abff; outline-offset: -1px; }
+.layer-resize { position: absolute; right: 0; bottom: 0; width: 12px; height: 12px; background: #88abff; border: 1px solid white; cursor: nwse-resize; touch-action: none; }
+.layer-controls { padding: 18px; display: flex; flex-direction: column; gap: 14px; border-left: 1px solid var(--bb-line); overflow: auto; font-size: 12px; }
+.layer-controls label { display: flex; flex-direction: column; gap: 6px; }
+.layer-controls input:not([type=range]), .layer-controls textarea, .layer-controls select { width: 100%; border: 1px solid var(--bb-line-hover); background: var(--bb-surface-muted); border-radius: 6px; padding: 7px; }
+.layer-controls button:disabled { opacity: .4; cursor: not-allowed; }
+.layer-editor .app-button, .layer-editor .app-button-primary { display: inline-flex; align-items: center; justify-content: center; gap: 5px; border: 1px solid var(--bb-line-hover); border-radius: 6px; padding: 7px 10px; font-size: 12px; }
+.layer-editor .app-button-primary { background: var(--bb-blue); color: white; }
+.layer-editor button:disabled { opacity: .4; cursor: not-allowed; }
+.layer-list { max-height: 240px; overflow: auto; flex-shrink: 0; }
+.layer-row { display: flex; align-items: center; gap: 8px; padding: 5px; border-radius: 6px; }
+.layer-row.is-selected { background: #779fff25; }
+.layer-select { display: flex; align-items: center; gap: 8px; text-align: left; min-width: 0; flex: 1; }
+.layer-select img { width: 32px; height: 32px; object-fit: contain; background: #ddd; border-radius: 3px; }
+.layer-select span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.layer-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+@media (max-width: 850px) { .layer-layout { grid-template-columns: minmax(0, 1fr) 250px; } .layer-preview { padding: 12px; } }

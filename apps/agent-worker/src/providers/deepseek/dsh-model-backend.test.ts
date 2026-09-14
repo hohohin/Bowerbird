@@ -188,7 +188,7 @@ test("DSH model backend returns one captured action and closes its metered proxy
     runId: "run-controlled",
     leaseId: "lease-1",
     control: {} as MeteredDeepSeekProxyControl,
-    upstream: { apiKey: "parent", baseUrl: "https://deepseek.invalid", model: "deepseek-v4-flash" },
+    upstream: { apiKey: "parent", baseUrl: "https://deepseek.invalid", model: "deepseek-flash" },
     createAdapter: adapterFactory("record_intent_analysis", observed),
   }, dependencies(state));
 
@@ -219,7 +219,7 @@ test("DSH model backend fails closed when no accepted action arrives and still c
     runId: "run-controlled",
     leaseId: "lease-1",
     control: {} as MeteredDeepSeekProxyControl,
-    upstream: { apiKey: "parent", baseUrl: "https://deepseek.invalid", model: "deepseek-v4-flash" },
+    upstream: { apiKey: "parent", baseUrl: "https://deepseek.invalid", model: "deepseek-flash" },
     createAdapter: adapterFactory(undefined, {}),
   }, dependencies(state));
   await rejects(() => backend.turn(request(), { aborted: false }), /controlled_dsh_model_action_missing/);
@@ -232,7 +232,7 @@ test("DSH model backend refuses pre-aborted turns without starting DSH or provid
     runId: "run-controlled",
     leaseId: "lease-1",
     control: {} as MeteredDeepSeekProxyControl,
-    upstream: { apiKey: "parent", baseUrl: "https://deepseek.invalid", model: "deepseek-v4-flash" },
+    upstream: { apiKey: "parent", baseUrl: "https://deepseek.invalid", model: "deepseek-flash" },
     createAdapter: adapterFactory("record_intent_analysis", {}),
   }, dependencies(state));
   deepEqual(await backend.turn(request(), { aborted: true }), {
@@ -287,7 +287,7 @@ test("DSH model backend rebuild replays a persisted provider response without a 
               "content-type": "application/json",
             },
             body: JSON.stringify({
-              model: "deepseek-v4-flash",
+              model: "deepseek-flash",
               stream: true,
               messages: [{ role: "user", content: "stable controlled request" }],
             }),
@@ -317,7 +317,7 @@ test("DSH model backend rebuild replays a persisted provider response without a 
     runId: "run-controlled",
     leaseId: "lease-1",
     control,
-    upstream: { apiKey: "parent", baseUrl: "https://deepseek.invalid", model: "deepseek-v4-flash" },
+    upstream: { apiKey: "parent", baseUrl: "https://deepseek.invalid", model: "deepseek-flash" },
     createAdapter,
   };
   const first = await new DshModelBackend(options, dependencies).turn(request(), { aborted: false });

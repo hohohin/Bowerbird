@@ -6,7 +6,7 @@ RUN apt-get update \
 
 WORKDIR /app
 COPY src ./src
-COPY --from=cloud-shared video-contract.ts task-authorization.ts /cloud/supabase/functions/_shared/
+COPY --from=cloud-shared video-contract.ts task-authorization.ts layer-contract.ts image-metadata.ts /cloud/supabase/functions/_shared/
 COPY scripts/video-readonly-probe.mjs ./scripts/video-readonly-probe.mjs
 
 USER node

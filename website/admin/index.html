@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <meta name="referrer" content="no-referrer">
+  <title>兑换码管理 · Bowerbird</title>
+  <link rel="stylesheet" href="./admin.css">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" defer></script>
+  <script src="./admin.js" type="module"></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="/" aria-label="Bowerbird 官网"><span class="brand-mark">b.</span><span>Bowerbird<small>园丁鸟 · 管理后台</small></span></a>
+    <div class="nav-label">工作台</div>
+    <div class="nav-current"><span>▦</span> 兑换码管理 <span class="nav-dot"></span></div>
+    <div class="sidebar-bottom"><span class="live-dot"></span> 账号与权益管理<p>让每一次创作，从这里开始。</p></div>
+  </aside>
+  <main>
+    <header class="topbar"><span>运营管理 <span class="slash">/</span> 兑换码</span><div class="account"><span id="account-email">管理员入口</span><button id="logout" class="text-button" hidden>退出登录</button></div></header>
+    <section id="login-panel" class="login-panel">
+      <div class="eyebrow">BOWERBIRD CONSOLE</div><h1>管理创作的通行证。</h1>
+      <p>使用你的 Bowerbird 管理员账号登录，创建、发放并跟踪 Pro 兑换码。</p>
+      <form id="login-form"><label for="login-email">管理员邮箱</label><input id="login-email" type="email" autocomplete="email" placeholder="you@example.com" required><button id="login-submit" class="primary">发送登录链接 <span>↗</span></button></form>
+      <p id="login-status" role="status">正在连接账号服务…</p>
+    </section>
+    <section id="console" hidden>
+      <div class="page-heading"><div><div class="eyebrow">PRO ACCESS</div><h1>兑换码管理<span class="heading-dot">.</span></h1><p>创建一批兑换码，把 Pro 创作体验交到用户手中。</p></div><button id="refresh" class="secondary">↻ 刷新数据</button></div>
+      <div id="notice" class="notice" role="status" hidden></div>
+      <div class="stats">
+        <div class="stat"><span>累计生成</span><strong id="stat-total">—</strong><small>全部兑换码</small></div>
+        <div class="stat active-stat"><span><i class="live-dot"></i> 可发放</span><strong id="stat-unused">—</strong><small>未兑换且在有效期内</small></div>
+        <div class="stat"><span>已兑换</span><strong id="stat-redeemed">—</strong><small>Pro 权益已到账</small></div>
+        <div class="stat"><span>已停用 / 已过期</span><strong id="stat-closed">—</strong><small>不再接受兑换</small></div>
+      </div>
+      <section class="issue-card">
+        <div class="issue-intro"><div class="ticket-icon">↗</div><h2>生成新批次</h2><p>1 个月 Pro <span>+</span> 1100 积分</p><small>每码限兑换一次 · 积分到账后 30 天有效</small></div>
+        <form id="issue-form"><div class="issue-fields"><label>批次名称<input id="batch-label" maxlength="80" placeholder="例如：九月内测邀请" required></label><label class="count-field">生成数量<input id="batch-count" type="number" min="1" max="1000" value="20" required></label><label>兑换截止时间<input id="batch-expiry" type="datetime-local" required></label></div><div class="issue-footer"><span>生成后即可复制或导出给用户。</span><button id="issue-submit" class="primary">＋ 生成兑换码</button></div><p id="issue-pending" hidden>上次发码结果尚未确认。再次提交会确认同一批次，不会重复生成。</p></form>
+      </section>
+      <section class="inventory">
+        <div class="inventory-heading"><div><h2>兑换码清单</h2><span id="result-count">正在读取…</span></div><button id="export" class="secondary" disabled>↓ 导出本批可用码</button></div>
+        <form id="filter-form" class="filters"><label class="search"><span>⌕</span><input id="search" placeholder="搜索批次、码尾号或领取账号" aria-label="搜索兑换码" maxlength="100"></label><select id="status-filter" aria-label="状态筛选"><option value="">全部状态</option><option value="unused">可发放</option><option value="redeemed">已兑换</option><option value="disabled">已停用</option><option value="expired">已过期</option></select><select id="batch-filter" aria-label="批次筛选"><option value="">全部批次</option></select><button class="secondary" type="submit">查询</button></form>
+        <div class="table-wrap"><table><thead><tr><th>兑换码 / 批次</th><th>状态</th><th>兑换截止时间</th><th>领取账号</th><th class="right">操作</th></tr></thead><tbody id="code-rows"></tbody></table></div>
+        <div id="empty" class="empty" hidden><div>▤</div><h3>这里还没有兑换码</h3><p>创建你的第一批兑换码，或调整筛选条件。</p></div>
+        <div class="pagination"><span id="page-label">每页 50 条</span><div><button id="previous" class="secondary" disabled>← 上一页</button><button id="next" class="secondary" disabled>下一页 →</button></div></div>
+      </section>
+      <footer>兑换码开通权益与积分，用户素材仍保存在本地。<span>BOWERBIRD · ADMIN</span></footer>
+    </section>
+  </main>
+  <dialog id="disable-dialog"><form method="dialog"><div class="eyebrow">停用兑换码</div><h2>停止这张码的兑换？</h2><p id="disable-description"></p><p>停用后不可恢复。已兑换用户的权益不受影响。</p><div class="dialog-actions"><button class="secondary" value="cancel">取消</button><button id="confirm-disable" class="danger" value="confirm">确认停用</button></div></form></dialog>
+  <dialog id="codes-dialog"><div class="eyebrow">可发放兑换码</div><h2 id="codes-title">批次已准备好</h2><p>复制或下载后发给用户。下次也可从此批次重新导出可用码。</p><textarea id="codes-output" readonly aria-label="可发放兑换码" spellcheck="false"></textarea><div class="dialog-actions"><button id="close-codes" class="secondary">关闭</button><button id="download-codes" class="secondary">下载 CSV</button><button id="copy-codes" class="primary">复制全部</button></div><p id="copy-status" role="status"></p></dialog>
+</body>
+</html>

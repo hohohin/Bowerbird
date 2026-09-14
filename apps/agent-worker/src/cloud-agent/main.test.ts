@@ -11,7 +11,7 @@ import {
 import type { ApprovedStepExecutor } from "../kernel/controlled-image-edit-runner.ts";
 
 const vision = { apiKey: "parent-only", baseUrl: "https://ark.invalid", model: "vision", mock: true };
-const deepSeek = { apiKey: "parent-only", baseUrl: "https://api.deepseek.com", model: "deepseek-v4-flash" };
+const deepSeek = { apiKey: "parent-only", baseUrl: "https://api.deepseek.com", model: "deepseek-flash" };
 
 test("unified DSH uses the validated long-form ACP prompt timeout", () => {
   equal(UNIFIED_DSH_PROMPT_TIMEOUT_MS, 600_000);
@@ -49,7 +49,7 @@ test("unified DSH deployment injection creates the formal processor only with th
     BOWERBIRD_UNIFIED_AGENT_DSH_ENABLED: "true",
     BOWERBIRD_DSH_PROFILE_TEMPLATE: "/profile",
     BOWERBIRD_DSH_RUNTIME_ROOT: "/runtime",
-    BOWERBIRD_DSH_MODEL: "deepseek-v4-flash",
+    BOWERBIRD_DSH_MODEL: "deepseek-flash",
     DEEPSEEK_API_KEY: "parent-only",
     ARK_API_KEY: "must-not-be-forwarded-by-port",
   }, "/workspace", vision, { ...deepSeek, model: "deepseek-chat" });
@@ -89,7 +89,7 @@ test("controlled DSH deployment injection creates only the per-Run DSH processor
     BOWERBIRD_CONTROLLED_IMAGE_EDIT_DSH_ENABLED: "true",
     BOWERBIRD_DSH_PROFILE_TEMPLATE: "/profile",
     BOWERBIRD_DSH_RUNTIME_ROOT: "/runtime",
-    BOWERBIRD_DSH_MODEL: "deepseek-v4-flash",
+    BOWERBIRD_DSH_MODEL: "deepseek-flash",
   }, { ...deepSeek, model: "deepseek-chat" }, executorFactory);
   ok(processor instanceof ControlledDshRunProcessor);
 });

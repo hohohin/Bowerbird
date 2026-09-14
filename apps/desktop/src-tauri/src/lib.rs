@@ -1,6 +1,8 @@
 //! Bowerbird 桌面应用入口。
 
 mod cloud;
+mod cli_credentials;
+mod installation;
 mod codex;
 mod collect;
 mod commands;
@@ -14,6 +16,21 @@ use std::sync::Arc;
 use std::{path::Path, path::PathBuf};
 
 use tauri::{Emitter, Manager};
+
+/// Installer-only, before Tauri, session restoration or background workers.
+pub fn reset_install_auth() -> i32 {
+    let result = (|| -> error::AppResult<()> {
+        let app_dir = codex::codex_cli::app_data_dir()
+            .ok_or_else(|| error::AppError::Other("应用数据目录不可用".into()))?;
+        std::fs::create_dir_all(&app_dir)?;
+        std::fs::write(app_dir.join(installation::PENDING), b"1")?;
+        installation::reset_pending(&app_dir)
+    })();
+    match result {
+        Ok(()) => 0,
+        Err(error) => { eprintln!("Bowerbird login reset: {error}"); 1 }
+    }
+}
 
 fn checked_backfill_database_path(path: &Path) -> Result<PathBuf, String> {
     let path = std::fs::canonicalize(path)
@@ -172,6 +189,9 @@ pub fn run() {
             }
 
             let app_dir = app.path().app_data_dir()?;
+            // Before loading credentials/rights or starting any background workers.
+            installation::reset_pending(&app_dir)?;
+            cli_credentials::initialize()?;
 
             // 设置：从 <app_data>/settings.json 加载（文件不存在则用默认值）。
             let settings_path = app_dir.join("settings.json");
@@ -355,6 +375,7 @@ pub fn run() {
             commands::cloud::cloud_logout,
             commands::cloud::cloud_entitlement,
             commands::cloud::cloud_sync_entitlement,
+            commands::cloud::cloud_redeem_code,
             commands::cloud_agent::cloud_agent_start,
             commands::cloud_agent::cloud_agent_latest,
             commands::cloud_agent::cloud_agent_list,
@@ -394,6 +415,10 @@ pub fn run() {
             commands::library::import_folder,
             commands::library::import_image_bytes,
             commands::library::save_annotated_image,
+            commands::layers::layer_workspace_load,
+            commands::layers::layer_workspace_save,
+            commands::layers::layer_export,
+            commands::layers::layer_cloud_request,
             commands::library::save_annotation_temp,
             commands::library::read_image_data_url,
             commands::library::list_assets,

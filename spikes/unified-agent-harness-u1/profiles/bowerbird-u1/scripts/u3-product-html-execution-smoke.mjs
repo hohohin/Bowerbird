@@ -31,7 +31,7 @@ const PRODUCT_PATH = join(REPO_ROOT, "apps/desktop/src-tauri/resources/samples/p
 const STYLE_PATH = join(REPO_ROOT, "apps/desktop/src-tauri/resources/samples/preset-11.webp");
 const PRODUCT_ASSET_ID = "asset-product";
 const STYLE_ASSET_ID = "asset-typography-style";
-const DSH_MODEL = "deepseek-v4-flash";
+const DSH_MODEL = "deepseek-flash";
 const EXECUTION_TIMEOUT_MS = 240_000;
 
 const PRICING = parseAgentUsagePricing({

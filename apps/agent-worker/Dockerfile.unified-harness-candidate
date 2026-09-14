@@ -36,7 +36,7 @@ ENV BOWERBIRD_DSH_PROFILE_TEMPLATE=/opt/bowerbird-dsh-profile \
 WORKDIR /app
 RUN ln -s /opt/bowerbird-dsh-profile/node_modules /app/node_modules
 COPY src ./src
-COPY --from=cloud-shared video-contract.ts task-authorization.ts /cloud/supabase/functions/_shared/
+COPY --from=cloud-shared video-contract.ts task-authorization.ts layer-contract.ts image-metadata.ts /cloud/supabase/functions/_shared/
 COPY scripts/dsh-readonly-probe.mjs scripts/video-readonly-probe.mjs ./scripts/
 
 USER node

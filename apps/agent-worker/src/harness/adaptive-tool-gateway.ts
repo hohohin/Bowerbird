@@ -2,6 +2,7 @@ import { canonicalJson, computeArgsHash } from "../kernel/tool-ledger.ts";
 import { parseTaskAuthorization, type TaskAuthorization } from "../contracts/task-authorization.ts";
 import type { HarnessModelToolCall } from "./unified-planning-tool-bridge.ts";
 import type { ToolGatewayResult } from "./scoped-tool-gateway.ts";
+import { AdaptiveInputError, adaptiveInputContract } from "./adaptive-tool-inputs.ts";
 
 export type AdaptiveAction = {
   actionId: string;
@@ -83,7 +84,15 @@ export class AdaptiveToolGateway {
     if (!this.limit(call.toolName)) return correction("adaptive_capability_not_authorized");
     let input: unknown;
     try { input = JSON.parse(canonicalJson(this.port.validate(call.toolName, raw.input))); }
-    catch (error) { return correction(error instanceof Error && /^[a-z0-9_:-]{1,120}$/.test(error.message) ? error.message : "adaptive_tool_arguments_invalid"); }
+    catch (error) {
+      const errorCode = error instanceof Error && /^[a-z0-9_:-]{1,120}$/.test(error.message) ? error.message : "adaptive_tool_arguments_invalid";
+      return { callId: "validation", value: { status: "retry_required", errorCode,
+        executed: false, capabilityCallConsumed: false,
+        remainingCalls: this.limit(call.toolName) - this.journal.actions.filter(action => action.toolName === call.toolName).length,
+        correction: "Input validation rejected this request before execution. Correct the input and retry the same actionId; this rejection did not use a capability call. Read run_state for current progress.",
+        ...(error instanceof AdaptiveInputError ? { missingFields: error.missingFields, ...adaptiveInputContract(call.toolName) } : {}),
+      } };
+    }
     const argsHash = computeArgsHash({ toolName: call.toolName, arguments: input });
     let leader: AdaptiveAction | undefined;
     let resolveFlight!: (value: unknown) => void;

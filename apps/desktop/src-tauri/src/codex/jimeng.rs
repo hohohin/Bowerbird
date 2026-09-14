@@ -366,7 +366,9 @@ pub(crate) fn resolve_dreamina_binary() -> Option<String> {
 pub(crate) fn dreamina_command(binary: &str) -> Command {
     #[cfg(target_os = "windows")]
     {
-        let mut command = Command::new(binary);
+        let mut command = Command::new(crate::cli_credentials::launcher());
+        command.arg(binary);
+        crate::cli_credentials::dreamina_environment(&mut command);
         command.creation_flags(0x08000000); // CREATE_NO_WINDOW
         return command;
     }

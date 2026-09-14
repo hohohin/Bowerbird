@@ -33,7 +33,7 @@ test("real DSH survives a buffered response beyond 60s, owns compaction, and con
   let step = 0, summaries = 0, delivered = false;
   const proxy = await startMeteredDeepSeekProxy({ runId: "native-context", leaseId: "lease",
     phase: "execute_approved_plan", maxModelTurns: 12, maxOutputTokens: 8000, control,
-    upstream: { apiKey: "fixture", baseUrl: "http://127.0.0.1:43123", model: "deepseek-v4-flash" }, allowInsecureLoopback: true,
+    upstream: { apiKey: "fixture", baseUrl: "http://127.0.0.1:43123", model: "deepseek-flash" }, allowInsecureLoopback: true,
     async fetch(_url, init) {
       const request = JSON.parse(init.body); requests.push(request);
       assert.deepEqual(request.thinking, { type: "disabled" }, "profile patches replace config; preserve the explicit provider mode");

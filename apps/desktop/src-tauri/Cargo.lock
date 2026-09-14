@@ -379,6 +379,7 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.22.1",
+ "cc",
  "chrono",
  "ed25519-dalek",
  "fast_image_resize",

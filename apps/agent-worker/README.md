@@ -71,7 +71,7 @@ cd apps/agent-worker && node --test "src/**/*.test.ts"
 npm run eval:controlled-image-edit
 
 # U4：同一 18-case 的 DSH 侧真实文本 eval（不看图、不生图；双显式付费闸门）
-# 还需配置 BOWERBIRD_DSH_PROFILE_TEMPLATE / BOWERBIRD_DSH_RUNTIME_ROOT，且模型固定 deepseek-v4-flash
+# 还需配置 BOWERBIRD_DSH_PROFILE_TEMPLATE / BOWERBIRD_DSH_RUNTIME_ROOT，且模型固定 deepseek-flash（DeepSeek V4.1 Flash）
 $env:BOWERBIRD_U1_ALLOW_NETWORK="1"
 npm run eval:controlled-image-edit:dsh -- --allow-real-u4-dsh-eval
 
@@ -96,7 +96,7 @@ docker compose -f compose.unified-harness-candidate.yml build unified-harness-re
 docker compose -f compose.unified-harness-candidate.yml run --rm --no-deps unified-harness-readonly-check
 ```
 
-验证服务使用非 root `node` 用户、只读根文件系统、`network_mode: none`、`cap_drop: ALL`，并在同一容器内连续启动两次 DSH 配置探针，随后通过正式 `NodeDshAcpPort` 完成真实 ACP initialize/new-session/cancel/dispose。它还会从 Worker 的显式部署入口创建正式 processor：容器内 provider fixture 只由父进程 DeepSeek 计量代理访问，DSH 子进程仅获得每 Run capability 与 loopback endpoint；两个模型回合分别形成 durable succeeded call、私有诊断 artifact 与精确 usage，真实 provider key 不进入子进程。同时验证 checkpoint、闭集三工具、`list_run_assets → submit_plan → end_turn`、当前 Run 素材回传、父进程审批停车和所有临时 runtime home 清理；不访问公网或真实 provider。U4 受控图片 DSH 使用独立的三个结构化建议动作 `record_intent_analysis`、`request_clarification`、`submit_plan_for_approval`，只把当前 phase 允许的模型建议交回原 `ModelBackend` 契约；Policy/审批/Ledger/执行仍由既有 Kernel 掌权。当前钉版 DSH 在 Linux live boot 会自动补入 Cordis HMR，因此正式 port 固定以 Node `--expose-internals` 启动；该能力只授予镜像内钉版受信插件，不扩大模型工具面。生产 legacy 可继续使用 `DEEPSEEK_MODEL=deepseek-chat`；DSH 父代理通过独立 `BOWERBIRD_DSH_MODEL=deepseek-v4-flash` 与 Profile 钉版保持一致，两者只共享父进程 key/base。2026-09-01 的 production test-only 部署只开启 `BOWERBIRD_CONTROLLED_IMAGE_EDIT_DSH_ENABLED=true`；unified/HTML DSH 保持 false，Edge runtime 选择只允许 `bowerbird_test` 账号。真实 crash/re-claim 验收可临时叠加 `compose.u4-recovery-probe.yml`，把 `BOWERBIRD_TEST_AGENT_CLAIM_DELAY_MS` 设为 10 秒以形成“lease 已可观察、provider 尚未 submitted”的确定性窗口；该变量默认 0、最大 30 秒，验收结束必须只用基础 `compose.generation.yml` 强制重建并确认恢复 0，不能把测试延迟留在常驻 Worker。
+验证服务使用非 root `node` 用户、只读根文件系统、`network_mode: none`、`cap_drop: ALL`，并在同一容器内连续启动两次 DSH 配置探针，随后通过正式 `NodeDshAcpPort` 完成真实 ACP initialize/new-session/cancel/dispose。它还会从 Worker 的显式部署入口创建正式 processor：容器内 provider fixture 只由父进程 DeepSeek 计量代理访问，DSH 子进程仅获得每 Run capability 与 loopback endpoint；两个模型回合分别形成 durable succeeded call、私有诊断 artifact 与精确 usage，真实 provider key 不进入子进程。同时验证 checkpoint、闭集三工具、`list_run_assets → submit_plan → end_turn`、当前 Run 素材回传、父进程审批停车和所有临时 runtime home 清理；不访问公网或真实 provider。U4 受控图片 DSH 使用独立的三个结构化建议动作 `record_intent_analysis`、`request_clarification`、`submit_plan_for_approval`，只把当前 phase 允许的模型建议交回原 `ModelBackend` 契约；Policy/审批/Ledger/执行仍由既有 Kernel 掌权。当前钉版 DSH 在 Linux live boot 会自动补入 Cordis HMR，因此正式 port 固定以 Node `--expose-internals` 启动；该能力只授予镜像内钉版受信插件，不扩大模型工具面。生产 legacy 可继续使用 `DEEPSEEK_MODEL=deepseek-chat`；DSH 父代理通过独立 `BOWERBIRD_DSH_MODEL=deepseek-flash` 与 Profile 钉版保持一致，两者只共享父进程 key/base。2026-09-01 的 production test-only 部署只开启 `BOWERBIRD_CONTROLLED_IMAGE_EDIT_DSH_ENABLED=true`；unified/HTML DSH 保持 false，Edge runtime 选择只允许 `bowerbird_test` 账号。真实 crash/re-claim 验收可临时叠加 `compose.u4-recovery-probe.yml`，把 `BOWERBIRD_TEST_AGENT_CLAIM_DELAY_MS` 设为 10 秒以形成“lease 已可观察、provider 尚未 submitted”的确定性窗口；该变量默认 0、最大 30 秒，验收结束必须只用基础 `compose.generation.yml` 强制重建并确认恢复 0，不能把测试延迟留在常驻 Worker。
 
 ## eval 覆盖对照
 

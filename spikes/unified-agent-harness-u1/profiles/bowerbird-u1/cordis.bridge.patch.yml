@@ -23,8 +23,8 @@
     # Its silence includes the 90s upstream deadline, not just provider idleness.
     streamIdleTimeoutMs: 300000
     models:
-      - id: deepseek-v4-flash
-        name: DeepSeek-V4-Flash
+      - id: deepseek-flash
+        name: DeepSeek-V4.1-Flash
         contextWindow: 32000
         maxTokens: 8000
       - id: deepseek-v4-pro

@@ -173,10 +173,11 @@ pub fn migrate_library(
     let new_paths = LibraryPaths::init(normalize(new_root)?)?;
     let new_root = new_paths.root.clone();
 
-    // 1. images / thumbnails 递归复制（逐文件进度）。
+    // 1. 媒体与独立图层工程递归复制（逐文件进度）。
     let new_str = new_root.to_string_lossy().into_owned();
     for (name, src_dir, dst_dir) in [
         ("images", paths.images.clone(), new_paths.images.clone()),
+        ("layers", paths.root.join("layers"), new_paths.root.join("layers")),
         (
             "thumbnails",
             paths.thumbnails.clone(),
@@ -216,6 +217,7 @@ pub fn migrate_library(
 pub fn cleanup_legacy_root(app_data_dir: &Path) {
     for name in [
         "images",
+        "layers",
         "thumbnails",
         "library.db",
         "library.db-wal",
@@ -252,6 +254,8 @@ mod tests {
         std::fs::write(&store_file, b"data").unwrap();
 
         let paths = LibraryPaths::init(old_root.clone()).unwrap();
+        std::fs::create_dir_all(old_root.join("layers")).unwrap();
+        std::fs::write(old_root.join("layers/document.json"), b"layer-workspace").unwrap();
         let db = Database::open(&paths.db).unwrap();
         db.migrate().unwrap();
         db.insert_asset(&Asset {
@@ -309,6 +313,7 @@ mod tests {
 
         // 新根：媒体文件已复制、新库路径已改写。
         assert!(new_root.join("images/2026/07/asset-1.png").exists());
+        assert_eq!(std::fs::read(new_root.join("layers/document.json")).unwrap(), b"layer-workspace");
         let new_db = Database::open(&new_root.join("library.db")).unwrap();
         let rewritten: Option<String> = new_db
             .conn

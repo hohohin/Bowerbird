@@ -9,6 +9,7 @@ pub mod codex;
 pub mod collect;
 pub mod jimeng;
 pub mod library;
+pub mod layers;
 pub mod local_classification;
 pub mod preset;
 pub mod project_canvas;

@@ -2,6 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { IdlePollBackoff } from "../idle-poll-backoff.ts";
 import { executeVideo } from "./video.ts";
 import type { VideoInput } from "../../../cloud/supabase/functions/_shared/video-contract.ts";
+import { LAYER_MODEL, validateLayerRequest, type LayerOptions } from "../../../cloud/supabase/functions/_shared/layer-contract.ts";
+import { layerPayload, parseLayerResult } from "./layers.ts";
 
 const CLEANUP_INTERVAL_MS = 10 * 60_000;
 
@@ -58,6 +60,7 @@ interface GenerationInput {
   reference_images: Array<{ mime: "image/jpeg" | "image/png" | "image/webp"; base64: string }>;
   ratio?: string | null;
   mock_scenario?: string | null;
+  layer_options?: LayerOptions;
 }
 
 interface GeneratedImage {
@@ -240,7 +243,7 @@ class ArkImageClient {
     this.fetch = fetchImpl;
   }
 
-  async generate(input: GenerationInput, choice: ServiceModelChoice): Promise<GeneratedImage> {
+  async generate(input: GenerationInput, choice: ServiceModelChoice): Promise<{ mime: GeneratedImage["mime"] | "application/json"; bytes: Uint8Array }> {
     if (this.config.mock) return { mime: "image/png", bytes: bytesFromBase64(ONE_PIXEL_PNG) };
     const response = await this.fetch(`${this.config.arkBaseUrl}/images/generations`, {
       method: "POST",
@@ -248,7 +251,7 @@ class ArkImageClient {
         authorization: `Bearer ${this.config.arkApiKey}`,
         "content-type": "application/json",
       },
-      body: JSON.stringify({
+      body: JSON.stringify(input.layer_options ? layerPayload(input, input.layer_options) : {
         model: choice.model,
         prompt: input.prompt,
         ...(input.reference_images.length
@@ -273,6 +276,7 @@ class ArkImageClient {
       );
     }
     const value = parseJson(text);
+    if (input.layer_options) return { mime: "application/json", bytes: await parseLayerResult(value, input.layer_options, this.fetch) };
     const data = isRecord(value) && Array.isArray(value.data) ? value.data : [];
     const first = data.find(isRecord);
     if (!first) throw new KnownProviderError("empty_provider_result", "Seedream 未返回图片");
@@ -370,7 +374,9 @@ async function executeClaim(
       return;
     }
     if (!service.startsWith("image_")) throw new Error("image_service_mismatch");
-    const choice = modelForService(config, service);
+    const layerOptions = validateLayerRequest(input as unknown as Record<string, unknown>, service);
+    if (layerOptions && config.mock) throw new KnownProviderError("layer_mock_disabled", "分层服务需要真实模型，当前尚未启用");
+    const choice = layerOptions ? { model: LAYER_MODEL, optimizePromptMode: null } : modelForService(config, service);
     await control.post({ action: "submitted", jobId, leaseId });
     submitted = true;
     const image = await ark.generate(input, choice);

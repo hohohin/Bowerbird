@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ClipboardCopy, LayoutDashboard, MessageSquare, PenTool, ScanSearch, Trash2 } from "lucide-react";
+import { ClipboardCopy, Layers, LayoutDashboard, MessageSquare, PenTool, ScanSearch, Trash2 } from "lucide-react";
 import { useStore } from "../store";
 import { api } from "../lib/api";
 import { loadDescribePrompt } from "../lib/describePrompt";
@@ -20,7 +20,7 @@ import {
 
 const MENU_WIDTH = 232;
 // 高度按全量项（生成图 + 本地文件 + 项目内，含「物理删除整组」）估算，含四组标签与分隔线。
-const MENU_HEIGHT = 560;
+const MENU_HEIGHT = 590;
 
 /** 可标注图片：浏览器 <img>/canvas 能解码的位图格式（tiff 浏览器不解码，排除）。 */
 const ANNOTATABLE_EXTS = ["jpg", "jpeg", "png", "webp", "gif", "bmp"];
@@ -526,6 +526,12 @@ export function AssetContextMenu() {
       >
         <PenTool size={13} className="shrink-0" />
         图片标注
+      </button>
+      <button type="button" role="menuitem" disabled={busy || !annotatable}
+        title={annotatable ? "拆分并独立调整图层" : "该素材不是可编辑的图片"}
+        className="app-context-item px-2 py-1.5"
+        onClick={() => useStore.getState().openLayerEditor(assetId)}>
+        <Layers size={13} className="shrink-0" />分层编辑
       </button>
       {isGenerated && (
         <button

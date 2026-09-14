@@ -35,7 +35,7 @@ function requiredUnifiedPath(env: Record<string, string | undefined>, name: stri
   return value;
 }
 
-const UNIFIED_DSH_MODEL = "deepseek-v4-flash";
+const UNIFIED_DSH_MODEL = "deepseek-flash";
 export const UNIFIED_DSH_PROMPT_TIMEOUT_MS = 600_000;
 export const UNIFIED_DSH_HTML_EXECUTION_TIMEOUT_MS = 600_000;
 

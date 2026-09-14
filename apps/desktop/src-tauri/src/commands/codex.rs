@@ -51,11 +51,11 @@ pub struct CodexHealth {
     pub reason: String,
 }
 
-/// 检测 codex CLI 是否就绪（Pro/Studio 本机理解/生成引擎之一）：① CLI 可执行；② CODEX_HOME（或用户目录）内 auth.json 非空。
+/// 检测 codex CLI 是否就绪：① CLI 可执行；② Bowerbird 独立目录内 auth.json 非空。
 /// 任一不满足返回 `ok=false` + 中文 reason。注意：免费档反推/生成走 Bowerbird Cloud，**不依赖此检测结果**——
 /// 前端「环境就绪」应按权益路由判断（见 `lib/entitlement.ts` understandReady），而非直判 codexHealth。
 /// 跨平台：binary 经 `resolve_codex_binary`（Windows 找 codex.cmd、补 %APPDATA%\npm）、
-/// home 经 `codex_home`（CODEX_HOME → USERPROFILE/HOME），不再死读 `$HOME`。
+/// home 经 `codex_home` 固定到应用私有目录，忽略系统 CODEX_HOME。
 #[tauri::command]
 pub async fn codex_health() -> Result<CodexHealth, AppError> {
     let binary = resolve_codex_binary();
@@ -84,7 +84,7 @@ pub async fn codex_health() -> Result<CodexHealth, AppError> {
     if !logged_in {
         return Ok(CodexHealth {
             ok: false,
-            reason: "codex 未登录（需运行 codex login）".into(),
+            reason: "Bowerbird 的 Codex 未登录，请在设置中登录".into(),
         });
     }
     Ok(CodexHealth {
@@ -195,7 +195,7 @@ pub async fn codex_login(app: AppHandle) -> Result<CodexHealth, AppError> {
     if !logged_in {
         return Ok(CodexHealth {
             ok: false,
-            reason: "codex login 已结束但未检测到登录态；可重试，或手动在终端跑一次 codex login"
+            reason: "未检测到 Bowerbird 独立登录态，请在设置中重试登录"
                 .into(),
         });
     }
@@ -1514,18 +1514,18 @@ pub async fn open_codex_session(
     {
         #[cfg(target_os = "windows")]
         {
-            // `start "" cmd.exe /K` 经 cmd.exe 另开一个常驻命令提示符；含空格的二进制
-            // 路径经 raw_arg 以引号包裹（同 npm_command 约定——标准 .arg 的转义会被
-            // cmd 拆成多 token）。
+            // 与即梦登录一致，直接创建新终端；raw_arg 保留路径和 cmd shim 的引号。
             let mut command = tokio::process::Command::new("cmd.exe");
-            command
-                .arg("/D")
-                .arg("/C")
-                .arg("start")
-                .arg("")
-                .arg("cmd.exe")
-                .arg("/K");
-            command.raw_arg(format!("\"{binary}\" resume {sid}"));
+            let launcher = crate::cli_credentials::launcher();
+            let lower = binary.to_ascii_lowercase();
+            let cli = if lower.ends_with(".cmd") || lower.ends_with(".bat") {
+                format!("cmd.exe /D /S /C \"{binary}\"")
+            } else {
+                format!("\"{binary}\"")
+            };
+            command.raw_arg(format!("/D /S /K \"\"{}\" --plain {cli} resume {sid}\"", launcher.display()));
+            command.creation_flags(0x00000010); // CREATE_NEW_CONSOLE
+            crate::cli_credentials::codex_environment(&mut command);
             command
                 .spawn()
                 .map_err(|e| AppError::Codex(format!("启动命令提示符失败: {e}")))?;

@@ -46,15 +46,19 @@
 
 ## 目前进展
 
+**Agent 漏参纠正与 DSH 模型升级（2026-09-14，已部署）：** 会话 `31e79331` 对应 Run `5006f5ea-3acf-4678-a1f5-5ca10dbcca4c` 的四次生图请求均漏传 `assetIds`，在 provider 调用前被拒，最后报 `adaptive_task_incomplete`。现将展示契约与字段校验共用同一来源，无参考图示例明确 `assetIds: []`；校验失败返回缺失字段、完整字段契约、未执行/未消耗能力次数、剩余次数及同 actionId 纠正指引，保留闭集字段、资源归属和持久化幂等。Worker 353/353、TypeScript 与 DSH 全套 26/26（Profile 21、规划/纠正/并发 3、HTML 执行 1、长响应与上下文压缩 1）通过（模型/图片使用 fixture），覆盖漏参纠正、非法引用拒绝、单次生成、重复调用和最终保存崩溃恢复。用户指定升级 V4.1 Flash；官方 2026-09-10 公告及当前账号 `/models` 确认有效 API 名称为 `deepseek-flash`，Worker DSH 独立模型、Profile/ACP、探针与运维示例已同步；非 DSH 的 `DEEPSEEK_MODEL` 不变。自动审批首次拒绝源码上传后，用户明确回复“授权”；2026-09-14 15:44 北京时间已将包 SHA-256 `E80E2199BCAD3728D4FA147FD2A25FCF0924AE46B6A2DCFC7C466BF0CEF94EB0` 上传至现有 `106.55.44.143`，在现役镜像上仅叠加该补丁，断网/只读/非 root DSH 双 processor 探针与候选相关回归 24/24 通过后上线。现役镜像 `sha256:be46bf7c8bd84f1d32a379ad0bc23f7b289ffe3ae337e3a4cccf2db3d0911b0c`，容器模型配置 `BOWERBIRD_DSH_MODEL=deepseek-flash`，11 个文件在本地、宿主和容器的 SHA-256 全匹配；四消费循环启动、restart 0、renderer healthy、queue/expired lease/TTL backlog 均 0，active 1 为原有 awaiting_clarification。原有两条 generation outcome_unknown 保留。回退镜像 `bowerbird/generation-worker:rollback-input-20260914`（原 `sha256:a353810bd6385c9c70caf50b879515994c5170d58778e355c10ff19104fef46c`），源码与环境备份 `/opt/bowerbird/deploy-backups/agent-input-20260914/{source.before.tar,env.generation.before}`；回滚必须同时恢复旧 DSH 环境和 Profile。小范围更新包、清单及验证记录在 `.tmp/agent-input-20260914/`。未改 Edge/数据库/桌面安装包，未重跑失败用户任务、未修改账本、未调用真实生成模型。
+
 **近期里程碑（只保留最近 3 条；更早的全量历史见 [dev-doc/进展归档.md](dev-doc/进展归档.md)）**
+
+> **独立凭据、重装清登录与 Windows 26.9.14 重新打包（2026-09-14）：** 按用户确认改为 Bowerbird 独立凭据：Codex 使用私有 CODEX_HOME 与文件凭据，Dreamina Windows 使用私有注册表空间；检测、登录、生成、退出及会话入口统一隔离。后续每次 NSIS 安装、同版本重装或升级均清除 Bowerbird 账号、权益缓存与独立 CLI 登录；失败保留标记并在正常启动前重试，停止未完成的私有 CLI 登录进程，避免迟到写回。系统 CLI 原登录保留，素材、项目、设置与独立 CLI 历史保留。此次同时存档已完成的 Agent 漏参纠正/DSH 模型升级、兑换码管理与分层编辑源码；前两项部署状态沿下文记录，分层云服务仍未部署、未启价。构建同日 Windows x64 NSIS，旧包备份在 Windows/dist/archive/20260914-before-independent-auth/；独立凭据与安装流程测试、桌面及 Worker 回归通过，产物指纹见本次复核。未安装到用户环境、未调用真实生成服务。
 
 > **Windows 26.9.14 存档与打包（2026-09-14）：** 纳入 Agent 按项目/线程记忆的「请求批准 / 自行批准」切换、后台执行与修订计划自动审批、结果自动接受整组入库及失败回退；入门引导支持在欢迎页、展开/收起清单和恢复气泡明确跳过，保留学习进度与草稿并避让登录/设置弹窗；修复首次生成任务缺少 session_id 时的历史恢复，仍可找回完整轮次，产物缺失时保留真实提交。Tauri/Cargo 日期版本同步为 26.9.14，从 canonical 主源码构建 Windows x64 NSIS；旧 26.9.11 包保留。相关逻辑、隔离界面和 Rust 回归通过，代码、测试、版本与文档同次提交。本次为桌面更新，无 Worker/Edge/数据库差异，无需部署 VPS；未运行安装程序或调用真实生成服务。
 
 > **桌面导入、Agent 提醒与拖动修复存档及重新打包（2026-09-11）：** 本次纳入显式本地文件按字节去重、损坏图片拒绝、导入失败/部分成功反馈、全窗口文件拖入与冻结项目/画板落点、Agent 整组持久化标识对齐及旧 checkpoint 恢复、任务提醒独立清除、侧栏/画板素材栏拖动减少 React 提交，以及空素材库提示文案调整。回归通过后从 canonical 主源码重建 Windows x64 NSIS，继续使用同日版本 26.9.11，旧包保留在 `Windows/dist/archive/20260911-b01a522/`。本次只有桌面更新，VPS/Edge/数据库维持上一轮部署状态；没有调用 provider 或修改真实用户素材库。代码、共享测试 fixture、测试与 PROJECT/历史归档同次提交。
 
-> **云端同步上线、画板草稿与 Windows 26.9.11 重新打包（2026-09-11）：** 按用户“全面更新后再存档并重新打包”指令完成 VPS Worker 视频链路、Supabase 0058 与全部 12 个 Edge Functions 同步；新 Worker 含 ffprobe 和跨包契约，非 root/只读运行，HTML renderer 与 DSH Profile 运行源码核对一致。视频价格仍未启用、真实生成及账单验收未完成，支付 Mock 与 DSH test-only 策略不变。桌面同时纳入已完成的白底草稿与画圆、铅笔、多行文字标注增量，复用既有图片入库和画板持久化；重新构建同日版本的 Windows x64 NSIS，旧包保留至 `Windows/dist/archive/20260911-before-cloud-update/`。源码、部署与测试证据随本次存档提交；线上状态与回滚见 [VIDEO-API-INTEGRATION.md](dev-doc/VIDEO-API-INTEGRATION.md#2026-09-11-云端同步部署)。
+**独立凭据版存档打包复核（2026-09-14，当前本地交付）：** Rust **338 passed / 4 ignored / 11 filtered**（沿用既有媒体工具子进程过滤）、Worker **358/358**、画板/路由 **112/112**、Worker TypeScript、兑换码与分层编辑 Chrome 合成 IPC 界面测试通过；前置 TypeScript/Vite、最终 release 与 x64 NSIS 构建通过，保留已有 Rust unused/dead-code 与大 chunk 警告。正式 release 启动器通过私有 HKCU 读写/重启/重置、共享测试哨兵不变、原生与 npm shim/终端引号、隔离失败拒绝、真实 Dreamina 测试命名空间 logout，以及真实 Codex 假密钥私有登录/退出；实际 NSIS 测试安装器覆盖安装、同版本重装、清理失败保留标记与重试。最终安装包 Windows/dist/Bowerbird_26.9.14_x64-setup.exe 为 **53,746,727 bytes**，SHA-256 **735FA642A5C9B470454778BA9F968AE21E72EC4B60C33F680E04D26465432403**，校验文件同目录；32 个桌面构建源文件指纹匹配。旧包保留于 Windows/dist/archive/20260914-before-independent-auth/（SHA-256 5BE358FE4837C659090D7F47834716E3C3AC588BEC0EBDE9D0BBEE1233914FB7）。源码、测试和文档同次存档提交；日志及指纹位于本地 .tmp/repack-auth-20260914/，不入 Git。本次未安装到用户环境、未操作真实账号或素材库、未调用真实生成；完整浏览器 OAuth 与真机产品链路未自动验收。官网下载仍为下文记录的 pro-codes 发布包，本次未覆盖网站或部署分层服务。
 
-**26.9.14 存档打包复核（2026-09-14，当前交付）：** 审批/自动接受 **7/7**、入门引导 **4/4**、画板/路由/Agent 契约 **112/112**，两组 Chrome 合成 IPC 界面回归（Agent 审批与自动入库、入门引导退出与弹窗避让）通过；Rust **333 passed / 4 ignored / 11 filtered**，包含新增按 job 找回首次生成会话及完整历史测试，沿用既有媒体工具子进程组过滤。根目录 pnpm tauri build --bundles nsis 的 TypeScript/Vite、release 与 x64 NSIS 构建通过，保留既有大 chunk 和 Rust unused/dead-code 警告。安装包 Windows/dist/Bowerbird_26.9.14_x64-setup.exe 为 **53,631,569 bytes**，SHA-256 **02A842241B5DADE3C83F4C95F02737DBC598B0D129A5075218D660015E8DBD48**，校验文件同目录；旧 26.9.11 包保持原文件。日志与源文件指纹保留于本地 .tmp/repack-20260914/，不入 Git。未操作真实素材库、未安装新包；原生窗口、真实付费生成和计费验收仍待进行。
+**26.9.14 首次存档打包复核（2026-09-14，历史交付）：** 审批/自动接受 **7/7**、入门引导 **4/4**、画板/路由/Agent 契约 **112/112**，两组 Chrome 合成 IPC 界面回归（Agent 审批与自动入库、入门引导退出与弹窗避让）通过；Rust **333 passed / 4 ignored / 11 filtered**，包含新增按 job 找回首次生成会话及完整历史测试，沿用既有媒体工具子进程组过滤。根目录 pnpm tauri build --bundles nsis 的 TypeScript/Vite、release 与 x64 NSIS 构建通过，保留既有大 chunk 和 Rust unused/dead-code 警告。安装包 Windows/dist/Bowerbird_26.9.14_x64-setup.exe 为 **53,631,569 bytes**，SHA-256 **02A842241B5DADE3C83F4C95F02737DBC598B0D129A5075218D660015E8DBD48**，校验文件同目录；旧 26.9.11 包保持原文件。日志与源文件指纹保留于本地 .tmp/repack-20260914/，不入 Git。未操作真实素材库、未安装新包；原生窗口、真实付费生成和计费验收仍待进行。
 
 **桌面修复重包复核（2026-09-11）：** Rust **332 passed / 4 ignored / 11 filtered**（沿用既有媒体工具子进程过滤，包含入库、Agent 恢复与迁移回归）、画板/路由/Agent 契约 **112/112**、五组 Chrome 合成 IPC 界面测试（桌面可靠性、全局文件拖图、画板工具条、项目拖图、集合面板）均通过。Tauri 前置 TypeScript/Vite、release 与 x64 NSIS 构建通过；既有大 chunk、Rust unused/dead-code 警告保留。安装包 `Windows/dist/Bowerbird_26.9.11_x64-setup.exe` 为 **53,627,396 bytes**，SHA-256 **`96B5E439D8EE51F21B0009DEEC39ACEEA4C99D82A2CDD75CA78FA25F0E520D58`**，同目录附校验文件；上一份包的指纹为 FC5DC9A2…A75D6E7，已按 b01a522 单独保留。测试和构建日志位于本地 `.tmp/repack-20260911-r3/`，不入 Git。此次未安装新包、未验证原生窗口帧率或真实生成/计费；不将合成 IPC 回归扩大为真机全量验收。
 
@@ -96,6 +100,16 @@
 [x] 通用云端 Agent Harness 专项 U4：runtime 兼容、真实 18-case 文本门禁、本地全回归、test-only 远端 `0047`–`0050`/Edge/VPS、零 provider smoke、legacy/DSH 同 case 真实图片与 crash/re-claim 均已通过；actual paired no-regression PASS。普通账号与 HTML 继续保持 legacy，公开迁移留到 U6 决策。
 
 ## 关键约定
+
+**2026-09-14 Windows 独立凭据与重装契约：** 后续打包必须保留安装钩子，每次 NSIS 安装都清除 Bowerbird 的 Supabase refresh token、entitlement.json、私有 Codex auth.json 与私有 Dreamina 注册表；普通启动不清登录。首次切换不导入共享凭据，必须从 Bowerbird 设置重新登录；不复制系统 CLI 原生会话，旧共享 Codex 终端续聊仍归系统 CLI，素材库生成历史保留。Codex 子进程固定私有 CODEX_HOME 与 file 存储并移除继承 API 凭据环境；Dreamina 官方 Windows 二进制经应用启动器在自己创建的子进程内重映射 HKCU，隔离失败拒绝执行，不能回退系统登录。该机制是凭据命名空间隔离，不是权限沙箱；不修改全局环境或官方 CLI 文件。所有 CLI 启动器用 Job Object 管理子进程，重装先终止私有运行目录中的启动器，清理失败保留待重置标记并阻止恢复账号/启动任务。重置保留素材、项目、设置和独立 CLI 会话历史。Windows x64 范围与验证命令见 [Windows/README.md](Windows/README.md)。
+
+**分层编辑验证（2026-09-14）：** Worker 协议/既有路由 **11/11**、Rust 工程/路径校验 **2/2**、库迁移 **2/2**、PGlite 隔离事务/计费、Chrome 真实组件合成 IPC、两端 TypeScript、两个 Edge 入口 Deno check 与桌面 Vite production build 通过。覆盖所有图层坐标/alpha、完整包、普通服务绕过拒绝、提交响应丢失后重开查询且不重发、图层调整/撤销/保存重开、保存失败保留、冻结项目与合成像素、未启价禁用、幂等结算/失败退款/未知状态保留。构建保留已有大 chunk 和 Rust unused/dead-code 警告；未执行真实模型、原生 WebView2、线上部署或安装包验收。界面截图为隔离合成素材，所示积分仅为 fixture。
+
+**2026-09-14 分层编辑（已纳入本地安装包，云端未部署）：** 用户要求图片右键新增“分层编辑”，采用与标注同级的独立全屏面板；接 Bowerbird Cloud 方舟 Seedream 5.0 Pro，原图自动或按要求拆为底图与最多 16 个透明图层。首版包含拖动、等比缩放、数值尺寸/坐标、名称、显隐、不透明度、层级、撤销、单透明图层 AI 修改、保存工程和合成 PNG 入库；本地编辑不消耗积分。完整图层及待取回任务保存在本机，保存后从原图/合成图右键继续；合成新资产不覆盖原图，项目归属在打开时冻结。Cloud 复用已有 durable generation job、鉴权、预授权和任务恢复，按完整图层包传回，禁止只取第一张图；缺层/坏坐标/缺 alpha 不静默成功，已提交结果未知不自动重发。用户已确认**先实现并验证，价格另定**：0061 的两个独立档位均未启用，未定正价且 pricing_ready 未确认时不能启用，UI 显示待开放；测试 20/23 分不是正式价格。本功能实现阶段不部署、不启价、不调用真实付费模型；桌面入口已随独立凭据版本打包，云端继续待开放。协议与验证入口见 [LAYER-EDITING.md](dev-doc/LAYER-EDITING.md)。
+
+**兑换码可视化管理（2026-09-14，已部署）：** 用户自行发码给用户；官网新增 `/admin/` 管理入口，使用 Bowerbird 邮箱登录及服务端专属 `app_metadata.bowerbird_admin=true` 授权，普通用户、Pro 或测试账号标记不等于管理员。支持批量生成、批次备注、状态/批次/领取账号筛选、分页、单码查看/复制、批次导出可用码及确认停用。为支持后续取码，后台生成的码在原 SHA-256 核销哈希外追加 AES-256-GCM 密文，独立密钥仅在 Edge；原离线脚本码继续兼容但不可恢复明文。发码幂等且批次/码原子入库，停用与兑换共享码行锁，管理员操作留无明文审计；不自动代发邮件、不撤回已兑换权益。用户明确授权上线后，0059/0060 迁移、redeem-code/code-admin v1（JWT 开启）、发码加密密钥及官网 `/admin/` 已发布；已追加正式登录回调。`admin@bowerbird.cn` 已核验邮箱并在 Auth 合并授予管理员标记，部署后回读验证通过。24 项真实线上验收通过，包含并发只核销一次、签名权益刷新、浏览器登录/退出和撤权；临时账号已删除、测试码全部不可再领取，账本保留审计。官网保留旧发布目录可回滚，未部署其他 Worker 改动。操作步骤见 [PRO-REDEMPTION.md](apps/cloud/PRO-REDEMPTION.md)。
+
+**Pro 兑换码（2026-09-14）：** 用户确认每次兑换按购买一个月 Pro 的权益处理，当前发放 **1 个自然月 Pro + 1100 订阅积分**；积分立即入账，沿用订阅积分到账后 30 天有效规则。每码全局一次；同一账号重试返回原兑换回执，不重复续期或发分；已有有效 Pro 从原到期时间顺延，保留其支付来源信息。有效 Studio 或无到期时间的 Pro 暂不接受兑换且不消耗码。入口为「设置 → 账号管理 → 兑换 Pro」；核销、升级、积分批次及流水由服务端单事务完成，客户端仅刷新既有权益/签名缓存。0059 迁移和 redeem-code v1 已上线，真实领取与签名刷新验证通过；桌面兑换入口已通过本地验证，Windows 26.9.14 已重新构建并发布到官网：Windows/dist/Bowerbird_26.9.14_x64-setup.exe（53,630,686 bytes，SHA-256 5be358fe4837c659090d7f47834716e3c3ac588bec0ebde9d0bbee1233914fb7），同日旧包保留于 Windows/dist/archive/20260914-before-pro-codes；官网下载已切换到 /downloads/Bowerbird_26.9.14-pro-codes_x64-setup.exe。未安装新包或操作真实素材库。运维与测试见 [apps/cloud/PRO-REDEMPTION.md](apps/cloud/PRO-REDEMPTION.md)。真实支付仍保持 Mock；本次 1100 为兑换发放规则，未来付费 SKU 接入时需统一复核定价文档中的历史 800 分值。
 
 **2026-09-11 入门引导退出与弹窗避让（已纳入 26.9.14 本地安装包）：** 欢迎页、任务清单（含收起状态）与暂停恢复气泡均可明确跳过；跳过立即关闭浮层并记住选择，保留项目、草稿和学习步骤，可从设置重新打开续学。草稿保存失败不阻止跳过，暂停保存完成的迟到回调不能重新弹出已跳过的引导。登录、设置等模态窗口出现时清单和恢复气泡均隐藏，关闭窗口后恢复，浮层层级低于模态遮罩。详见 [ONBOARDING.md](dev-doc/ONBOARDING.md)。
 
@@ -282,6 +296,11 @@
 **画板选择与主动整理（2026-09-06）**：Ctrl/Command + 点击可追加或取消节点选择，Ctrl/Command 框选保留已有选择。节点右键“整理”以当前所选节点为起点（右键未选节点则只取该节点），沿连接方向收集当前可见的后续卡片；素材组成员和 Agent 隐藏提示卡映射到可见容器。按连接层级对齐、留出间距，并整体避开未参与整理的卡片；不移动上游或无关卡片。整理后整组选中，节点/素材组坐标沿用现有画板写入队列持久化；不更改线程、连接、素材归属或执行记录。
 
 ## 踩坑记录
+
+### Dreamina Windows 登录不能只通过 HOME 隔离（2026-09-14）
+
+- 根因：官方 CLI 的 authsdk 使用 DPAPI 与 RegistryStore；只改 HOME/APPDATA 仍可能读取或退出系统共享注册表登录。只读检查与原生 CLI 测试确认这一边界。
+- 处理：在自己创建的暂停子进程中加载随包 DLL，以 RegOverridePredefKey 映射到 Bowerbird 私有 HKCU，再启动 CLI；不附加既有进程、不改官方文件。临时注册表探针覆盖读写、重复读取、私有清理与共享测试哨兵不变；真实 Dreamina logout 在测试命名空间运行，Codex 假密钥登录/退出在临时 CODEX_HOME 运行。真实 OAuth 浏览器完整链路未自动验收。
 
 ### 首轮生成 payload 无 session_id 导致重启后历史为空（2026-09-14）
 

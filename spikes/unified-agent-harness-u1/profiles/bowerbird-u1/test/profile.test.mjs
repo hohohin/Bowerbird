@@ -137,7 +137,7 @@ test("DeepSeek adapter fixture preserves reasoning, raw tool JSON, usage, and to
   try {
     const chunks = await collect(createOfflineAdapter().stream({
       provider: "deepseek-official",
-      model: "deepseek-v4-flash",
+      model: "deepseek-flash",
       messages: [{ role: "user", content: [{ type: "text", text: "write the artifact" }] }],
       tools: [{ name: "write_artifact", description: "fixture tool", parameters: { type: "object" } }],
     }));
@@ -169,7 +169,7 @@ test("DeepSeek adapter normalizes malformed SSE JSON without network access", as
     await assert.rejects(
       collect(createOfflineAdapter().stream({
         provider: "deepseek-official",
-        model: "deepseek-v4-flash",
+        model: "deepseek-flash",
         messages: [{ role: "user", content: [{ type: "text", text: "fixture" }] }],
       })),
       (error) => error?.code === "MALFORMED_RESPONSE",

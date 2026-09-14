@@ -17,6 +17,7 @@ import type {
   Asset,
   CaptionSection,
   CloudAgentRunRecord,
+  CodeRedemption,
   CodexChunk,
   CodexHealth,
   ColorBucket,
@@ -358,6 +359,7 @@ interface State {
   startCloudEmailLogin: (email: string) => Promise<void>;
   startCloudWechatLogin: () => Promise<string>;
   syncCloudEntitlement: () => Promise<void>;
+  redeemCloudCode: (code: string) => Promise<CodeRedemption>;
   reconcileCloudEntitlement: () => Promise<void>;
   logoutCloud: () => Promise<void>;
   setCloudAuth: (snapshot: AuthSnapshot) => void;
@@ -468,6 +470,9 @@ interface State {
   openAnnotator: (assetId: string) => void;
   openDraftAnnotator: (saveDraft: (dataUrl: string, meta: AnnotationMeta) => Promise<void>) => void;
   closeAnnotator: () => void;
+  layerEditor: { assetId: string; projectId: string | null } | null;
+  openLayerEditor: (assetId: string) => void;
+  closeLayerEditor: () => void;
   // —— 右键菜单（瀑布流缩略图 / 详情页大图）——
   contextMenu: {
     x: number;
@@ -1522,6 +1527,31 @@ export const useStore = create<State>((set, get) => {
       set({ cloudBusy: false });
     }
   },
+  redeemCloudCode: async (code) => {
+    if (get().cloudBusy) throw new Error("账号操作正在进行，请稍后重试");
+    const userId = get().cloudAuth?.user_id;
+    if (!get().cloudAuth?.logged_in || !userId) throw new Error("请先登录再兑换");
+    set({ cloudBusy: true, cloudError: null });
+    try {
+      const result = await api.cloudRedeemCode(code);
+      if (result.entitlement && get().cloudAuth?.user_id === userId) {
+        const cloudEntitlement = result.entitlement;
+        set((s) => ({
+          cloudEntitlement,
+          activeGenProvider: canUseGenerationProvider(cloudEntitlement, s.defaultProvider)
+            ? s.defaultProvider : "bowerbird-cloud-image_hd",
+        }));
+      }
+      return result;
+    } catch (e) {
+      const message = taskErrorMessage(e) || "兑换请求失败，请使用同一码重试";
+      set({ cloudError: message });
+      await reconcileRejectedCloudSession(message);
+      throw new Error(message);
+    } finally {
+      set({ cloudBusy: false });
+    }
+  },
   // 静默对账：缓存 Fresh 时只是本地读；降级（重启/超 6h/同步失败）时 Rust 会在线自愈，
   // 顺带把 Rust 侧因门控操作恢复的权益带回 store——修复 Pro 被显示成 free 直到手动刷新。
   reconcileCloudEntitlement: async () => {
@@ -2421,6 +2451,9 @@ export const useStore = create<State>((set, get) => {
   openAnnotator: (assetId) => set({ annotator: { assetId } }),
   openDraftAnnotator: (saveDraft) => set({ annotator: { assetId: null, saveDraft }, contextMenu: null }),
   closeAnnotator: () => set({ annotator: null }),
+  layerEditor: null,
+  openLayerEditor: (assetId) => set({ layerEditor: { assetId, projectId: get().activeProjectId }, contextMenu: null }),
+  closeLayerEditor: () => set({ layerEditor: null }),
   // —— 右键菜单 ——
   contextMenu: null,
   openContextMenu: (x, y, assetId, context) => set({ contextMenu: { x, y, assetId, ...context } }),

@@ -99,7 +99,7 @@ export async function runU3LegacyHtmlBaselineSmoke({ argv = process.argv, env = 
   if (!argv.includes(REAL_BASELINE_FLAG)) throw new Error("real_u3_legacy_baseline_flag_required");
   if (env.BOWERBIRD_U1_ALLOW_NETWORK !== "1") throw new Error("BOWERBIRD_U1_ALLOW_NETWORK_required");
   const apiKey = required(env.DEEPSEEK_API_KEY, "DEEPSEEK_API_KEY");
-  const modelName = (env.DEEPSEEK_MODEL || "deepseek-v4-flash").trim();
+  const modelName = (env.DEEPSEEK_MODEL || "deepseek-flash").trim();
   const runId = `run-u3-legacy-${randomUUID()}`;
   const outputDir = join(outputRoot(argv), runId);
   mkdirSync(outputDir, { recursive: true });

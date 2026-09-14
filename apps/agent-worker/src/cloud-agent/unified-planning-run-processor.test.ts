@@ -52,23 +52,26 @@ function claimed(
   };
 }
 
-for (const htmlCase of [false, true]) test(`v3 uses one Agent for ${htmlCase ? "HTML inspection and revision" : "ten images and selective repair"}, with crash-safe final selection`, async () => {
-  const proposal = { schemaVersion: 3, title: "产品场景", summary: "交付十张产品场景图", assetIds: ["asset-product"],
-    outputCount: htmlCase ? 1 : 10, modelTurns: 16, capabilities: htmlCase
+for (const scenario of ["images", "html", "no-references"]) test(`v3 ${scenario} recovers invalid input and preserves crash-safe final selection`, async () => {
+  const htmlCase = scenario === "html", noReferences = scenario === "no-references";
+  const proposal = { schemaVersion: 3, title: "产品场景", summary: "交付产品场景图", assetIds: noReferences ? [] : ["asset-product"],
+    outputCount: htmlCase || noReferences ? 1 : 10, modelTurns: 16, capabilities: htmlCase
       ? [{ tool: "compose_html", maxCalls: 2 }, { tool: "render_html", maxCalls: 2 }, { tool: "inspect_artifact", maxCalls: 1 }]
+      : noReferences ? [{ tool: "generate_image", maxCalls: 1 }]
       : [{ tool: "generate_image", maxCalls: 11 }, { tool: "inspect_artifact", maxCalls: 1 }] };
   const hash = sha256Hex(canonicalJson(proposal));
   const plannedToolCount = proposal.capabilities.reduce((sum, item) => sum + item.maxCalls, 1);
   const runClaim = claimed(hash, plannedToolCount);
+  if (noReferences) runClaim.artifactUrls = [];
   const observationId = "c".repeat(64);
   const observation = { schemaVersion: 1, assetId: "asset-product", summary: "已有产品观察",
     observations: [{ category: "subject", detail: "白色瓶身，蓝色标签" }] };
   let checkpointText = canonicalJson({ schemaVersion: 1, runId: runClaim.run.id, conversationId: runClaim.run.conversationId,
     skillId: "bowerbird-unified-agent", skillVersion: "0.1.0", skillHash: loadUnifiedAgentSkill().instructionHash,
     checkpointVersion: 0, phase: "compose_plan", compactedFacts: [], completedToolResults: [],
-    visualObservations: [{ assetId: "asset-product", imageSha256: "b".repeat(64), focus: "general",
+    visualObservations: noReferences ? [] : [{ assetId: "asset-product", imageSha256: "b".repeat(64), focus: "general",
       callId: observationId, summaryExcerpt: observation.summary }],
-    input: { schemaVersion: 1, goal: "根据产品图生成十张不同场景图片" } });
+    input: { schemaVersion: 1, goal: noReferences ? "原创生成一张中秋礼盒图片" : "根据产品图生成十张不同场景图片" } });
   runClaim.run.checkpointHash = sha256Hex(checkpointText);
   runClaim.run.snapshotSchemaVersion = 1;
   runClaim.approvedPlan = { proposalHash: hash, plannedToolCount, url: "https://local.invalid/authorization" };
@@ -117,7 +120,8 @@ for (const htmlCase of [false, true]) test(`v3 uses one Agent for ${htmlCase ? "
     createApprovedStepExecutor(context, workspace) {
       return { async generate(request) {
         generated++; active++; peak = Math.max(peak, active);
-        if (generated === 10) release();
+        if (generated === (noReferences ? 1 : 10)) release();
+        if (noReferences) deepEqual(request.inputArtifactIds, []);
         await barrier; active--;
         const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
         const image = { mime: "image/png" as const, bytes, sha256: createHash("sha256").update(bytes).digest("hex") };
@@ -156,12 +160,45 @@ for (const htmlCase of [false, true]) test(`v3 uses one Agent for ${htmlCase ? "
       return { id: "adaptive-fixture", async open(seed) { return { sessionId: "one-agent", runId: seed.runId,
         async turn(prompt) {
           const promptText = canonicalJson(prompt);
-          ok(promptText.includes(`vision:${observationId}:0`));
+          if (!noReferences) ok(promptText.includes(`vision:${observationId}:0`));
           ok(promptText.includes("requiredOutputCount"));
           const readState = async () => (await toolCall(environment, "read_context", { id: "run_state" }) as {
             content: { progress: { availableCandidateCount: number }; actions: Array<{ outputArtifactIds: string[] }> }
           }).content;
           equal((await readState()).progress.availableCandidateCount, 0);
+          if (noReferences) {
+            const contract = await toolCall(environment, "read_context", { id: "tool:generate_image" }) as {
+              content: { requiredFields: string[]; input: string; instructions: string }
+            };
+            deepEqual(contract.content.requiredFields, ["prompt", "assetIds"]);
+            deepEqual(JSON.parse(contract.content.input).assetIds, []);
+            ok(contract.content.instructions.includes("assetIds: []"));
+            for (const input of [{ prompt: "中秋礼盒" }, { prompt: "Moonlit gift box" },
+              { prompt: "Gift", assetIds: [], extra: true }, { prompt: "Gift", assetIds: null },
+              { prompt: "Gift", assetIds: ["outside-run"] }]) {
+              const rejected = await execute("generate_image", "gen-midautumn-01", input) as {
+                status: string; errorCode: string; missingFields?: string[]; remainingCalls: number;
+                executed: boolean; capabilityCallConsumed: boolean; correction: string; input?: string;
+              };
+              equal(rejected.status, "retry_required");
+              equal(rejected.executed, false);
+              equal(rejected.capabilityCallConsumed, false);
+              equal(rejected.remainingCalls, 1);
+              ok(rejected.correction.includes("same actionId"));
+              if (!("assetIds" in input)) {
+                equal(rejected.errorCode, "adaptive_input_invalid");
+                deepEqual(rejected.missingFields, ["assetIds"]);
+                deepEqual(JSON.parse(rejected.input!).assetIds, []);
+              }
+              equal(generated, 0);
+              equal((await readState()).actions.length, 0);
+            }
+            await execute("generate_image", "gen-midautumn-01", { prompt: "中秋礼盒", assetIds: [] });
+            await execute("generate_image", "gen-midautumn-01", { prompt: "中秋礼盒", assetIds: [] });
+            equal(generated, 1);
+            await execute("finalize_output", "deliver", { assetIds: ["gen-midautumn-01"] });
+            return { stopReason: "end_turn", committedContent: [] };
+          }
           const cached = await toolCall(environment, "read_context", { id: `vision:${observationId}:0` }) as { content: { text: string } };
           deepEqual(JSON.parse(cached.content.text), observation);
           equal(visionCalls, 0);
@@ -195,12 +232,14 @@ for (const htmlCase of [false, true]) test(`v3 uses one Agent for ${htmlCase ? "
     },
   });
   await rejects(() => processor.process({ claimed: runClaim, control, signal: signal() }), SimulatedProcessCrash);
-  equal(generated, htmlCase ? 0 : 11); equal(peak, htmlCase ? 0 : 10); equal(visionCalls, 1); equal(delivered.length, htmlCase ? 1 : 10);
+  equal(generated, htmlCase ? 0 : noReferences ? 1 : 11); equal(peak, htmlCase ? 0 : noReferences ? 1 : 10);
+  equal(visionCalls, noReferences ? 0 : 1); equal(delivered.length, proposal.outputCount);
   if (htmlCase) { equal(rendered, 2); deepEqual(delivered, ["render-2"]); }
+  else if (noReferences) deepEqual(delivered, ["gen-midautumn-01"]);
   else { ok(delivered.includes("repair-one")); ok(!delivered.includes("scene-2")); }
   runClaim.run.checkpointHash = sha256Hex(checkpointText);
   await processor.process({ claimed: runClaim, control, signal: signal() });
-  equal(adapterCount, 1); equal(generated, htmlCase ? 0 : 11); equal(delivered.length, htmlCase ? 1 : 10); equal(parked, 1);
+  equal(adapterCount, 1); equal(generated, htmlCase ? 0 : noReferences ? 1 : 11); equal(delivered.length, proposal.outputCount); equal(parked, 1);
   equal(events.find((event) => event.type === "result.ready")?.displayPayload?.selectionVersion, 1);
 });
 
@@ -784,7 +823,7 @@ for (const mixed of [false, true]) test(`approved HTML execution survives restar
     workspaceRoot: join(process.env.TEMP ?? ".", "bowerbird-unified-tests", randomUUID()),
     vision: { apiKey: "unused", baseUrl: "https://ark.invalid", model: "unused", mock: true },
     createAdapter() { throw new Error("planning_must_not_open"); },
-    modelProxy: { upstream: { apiKey: "parent", baseUrl: "https://deepseek.invalid", model: "deepseek-v4-flash" } },
+    modelProxy: { upstream: { apiKey: "parent", baseUrl: "https://deepseek.invalid", model: "deepseek-flash" } },
     createApprovedStepExecutor(_context, workspace) {
       return { async generate(request) {
         generatedCalls.add(request.callId);
@@ -952,7 +991,7 @@ test("U5 reuses one approved execution session to render HTML then derive a Xiao
     workspaceRoot: join(process.env.TEMP ?? ".", "bowerbird-unified-tests", randomUUID()),
     vision: { apiKey: "unused", baseUrl: "https://ark.invalid", model: "unused", mock: true },
     createAdapter() { throw new Error("planning_must_not_open"); },
-    modelProxy: { upstream: { apiKey: "parent", baseUrl: "https://deepseek.invalid", model: "deepseek-v4-flash" } },
+    modelProxy: { upstream: { apiKey: "parent", baseUrl: "https://deepseek.invalid", model: "deepseek-flash" } },
     htmlExecution: {
       renderConfig: { rendererUrl: "http://renderer.invalid", internalToken: "fixture" },
       createAdapter(environment, _provider, profileMode) {

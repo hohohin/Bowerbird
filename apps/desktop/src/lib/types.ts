@@ -1177,3 +1177,10 @@ export interface VisualProfileCapsule {
   contentThemes: string[];
   hash: string;
 }
+export interface CodeRedemption {
+  already_redeemed: boolean;
+  period_end: string;
+  credits: number;
+  credits_expires_at: string;
+  entitlement: EntitlementSnapshot | null;
+}

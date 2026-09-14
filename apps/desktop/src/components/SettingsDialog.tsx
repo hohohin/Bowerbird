@@ -10,6 +10,7 @@ import { DEFAULT_AUTO_ANALYZE_PROMPT, WEBSITE_URL } from "../lib/constants";
 import type { MigrateProgress } from "../lib/types";
 import { useOnboarding } from "../lib/onboardingStore";
 import { ModalShell } from "./ModalShell";
+import { RedeemCodeCard } from "./RedeemCodeCard";
 
 const STAGE_LABEL: Record<string, string> = {
   images: "复制原图",
@@ -689,6 +690,8 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   </button>
                 </div>
               )}
+
+              {loggedIn && <RedeemCodeCard key={cloudAuth?.user_id} />}
 
               {/* credits 明细 */}
               {loggedIn && (

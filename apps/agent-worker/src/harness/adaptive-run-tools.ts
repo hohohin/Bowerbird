@@ -11,13 +11,9 @@ import { createApprovedComposeHtmlToolDefinition, createApprovedRenderHtmlToolDe
 import { ScopedToolGateway, type ToolGatewayDefinition } from "./scoped-tool-gateway.ts";
 import type { HarnessPlanStep } from "./run-control-tools.ts";
 import type { RenderHtmlInputV1, RenderHtmlResultV1 } from "../contracts/render-html.ts";
+import { validateAdaptiveInputObject } from "./adaptive-tool-inputs.ts";
 
 type ImageArtifact = { artifactId: string; sha256: string };
-function object(value: unknown, keys: string[]): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value) ||
-      Object.keys(value).sort().join(",") !== keys.sort().join(",")) throw new Error("adaptive_input_invalid");
-  return value as Record<string, unknown>;
-}
 function text(value: unknown, max = 8000): string {
   if (typeof value !== "string" || !value.trim() || value.length > max) throw new Error("adaptive_text_invalid");
   return value;
@@ -72,17 +68,17 @@ export class AdaptiveRunTools {
 
   validate(toolName: string, value: unknown): unknown {
     if (toolName === "generate_image") {
-      const raw = object(value, ["prompt", "assetIds"]);
+      const raw = validateAdaptiveInputObject(toolName, value);
       return { prompt: text(raw.prompt), assetIds: this.ids(raw.assetIds) };
     }
     if (toolName === "inspect_artifact") {
-      const raw = object(value, ["assetId", "goal", "focus"]);
+      const raw = validateAdaptiveInputObject(toolName, value);
       const assetId = this.ids([raw.assetId])[0]!;
       if (!["general", "subject", "text", "layout", "style"].includes(String(raw.focus))) throw new Error("adaptive_focus_invalid");
       return { assetId, goal: text(raw.goal, 1000), focus: raw.focus };
     }
     if (toolName === "compose_html") {
-      const raw = object(value, ["html", "assetIds"]);
+      const raw = validateAdaptiveInputObject(toolName, value);
       const html = text(raw.html, 48_000);
       const assetIds = this.ids(raw.assetIds);
       const { context, workspace } = this.options;
@@ -94,12 +90,12 @@ export class AdaptiveRunTools {
       return { html, assetIds };
     }
     if (toolName === "render_html") {
-      const raw = object(value, ["documentId"]);
+      const raw = validateAdaptiveInputObject(toolName, value);
       if (typeof raw.documentId !== "string" || !this.documents.has(raw.documentId)) throw new Error("adaptive_document_not_authorized");
       return { documentId: raw.documentId };
     }
     if (toolName === "finalize_output") {
-      const raw = object(value, ["assetIds"]);
+      const raw = validateAdaptiveInputObject(toolName, value);
       const assetIds = this.ids(raw.assetIds, true);
       if (assetIds.length !== this.options.authorization.outputCount) throw new Error("adaptive_output_count_mismatch");
       return { assetIds };
