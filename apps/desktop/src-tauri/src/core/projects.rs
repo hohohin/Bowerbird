@@ -564,10 +564,13 @@ impl Database {
                 // 仅移出当前项目：素材留全局。
                 let mut removed_members = 0;
                 if let Some(pid) = project_id {
-                    removed_members = conn.execute(
+                    let tx = conn.unchecked_transaction()?;
+                    crate::core::project_canvas::hide_asset_canvas_nodes(&tx, asset_id, Some(pid))?;
+                    removed_members = tx.execute(
                         "DELETE FROM project_assets WHERE project_id = ?1 AND asset_id = ?2",
                         rusqlite::params![pid, asset_id],
                     )?;
+                    tx.commit()?;
                 }
                 Ok(AssetDeleteResult {
                     deleted_assets: 0,
@@ -594,10 +597,13 @@ impl Database {
                     // 即算「已恢复」，原始文件不在时如实报告失败。
                     let mut removed_members = 0;
                     if let Some(pid) = project_id {
-                        removed_members = conn.execute(
+                        let tx = conn.unchecked_transaction()?;
+                        crate::core::project_canvas::hide_asset_canvas_nodes(&tx, asset_id, Some(pid))?;
+                        removed_members = tx.execute(
                             "DELETE FROM project_assets WHERE project_id = ?1 AND asset_id = ?2",
                             rusqlite::params![pid, asset_id],
                         )?;
+                        tx.commit()?;
                     }
                     let origin_exists = origin_path
                         .as_deref()
@@ -651,10 +657,13 @@ impl Database {
                     if store_path.as_deref() == origin_path.as_deref() {
                         // 兼容旧库/迁移数据中 store_path 直接指向原文件的记录：只删 DB 与独立
                         // 缩略图，绝不能调用 delete_asset 把用户原文件一并物理删除。
-                        conn.execute(
+                        let tx = conn.unchecked_transaction()?;
+                        crate::core::project_canvas::hide_asset_canvas_nodes(&tx, asset_id, None)?;
+                        tx.execute(
                             "DELETE FROM assets WHERE id = ?1",
                             rusqlite::params![asset_id],
                         )?;
+                        tx.commit()?;
                         let removable_thumb = thumb_path
                             .as_deref()
                             .filter(|path| Some(*path) != origin_path.as_deref());
@@ -996,6 +1005,42 @@ mod tests {
         let dst = move_destination(&workspace, "dup", store, "01ABCDEFGH99");
         assert_eq!(dst.file_name().unwrap(), "dup-01ABCDEF.png");
         let _ = std::fs::remove_dir_all(&workspace);
+    }
+
+    #[test]
+    fn asset_deletion_hides_canvas_instances_in_the_correct_projects() {
+        for mode in [AssetDeleteMode::Keep, AssetDeleteMode::Delete] {
+            let db = db();
+            put_asset(&db, "a1");
+            put_project(&db, "p1");
+            put_project(&db, "p2");
+            for (id, project) in [("n1", "p1"), ("n2", "p1"), ("n3", "p2")] {
+                db.add_assets_to_project(project, &["a1".into()]).unwrap();
+                db.conn.lock().unwrap().execute(
+                    "INSERT INTO canvas_nodes (id,project_id,kind,asset_id,role,payload_json,x,y,width,height,created_at,updated_at)
+                     VALUES (?1,?2,'asset','a1','reference','{\"schema_version\":1,\"snapshot\":{\"name\":\"素材\"}}',0,0,190,180,1,1)",
+                    rusqlite::params![id, project],
+                ).unwrap();
+            }
+            let table = if mode == AssetDeleteMode::Keep { "project_assets" } else { "assets" };
+            db.conn.lock().unwrap().execute_batch(&format!(
+                "CREATE TRIGGER reject_test_delete BEFORE DELETE ON {table} BEGIN SELECT RAISE(ABORT, 'delete failed'); END;"
+            )).unwrap();
+            assert!(db.delete_asset_with_mode("a1", mode, Some("p1")).is_err());
+            for id in ["n1", "n2", "n3"] {
+                assert!(db.get_canvas_node(id).unwrap().unwrap().hidden_at.is_none());
+            }
+            assert!(db.get_asset("a1").unwrap().is_some());
+            assert_eq!(db.get_project("p1").unwrap().unwrap().asset_count, 1);
+            db.conn.lock().unwrap().execute_batch("DROP TRIGGER reject_test_delete").unwrap();
+            db.delete_asset_with_mode("a1", mode, Some("p1")).unwrap();
+            for id in ["n1", "n2", "n3"] {
+                let node = db.get_canvas_node(id).unwrap().unwrap();
+                assert_eq!(node.hidden_at.is_some(), mode == AssetDeleteMode::Delete || id != "n3");
+                assert_eq!(node.asset_id.is_none(), mode == AssetDeleteMode::Delete);
+            }
+            assert_eq!(db.get_asset("a1").unwrap().is_some(), mode == AssetDeleteMode::Keep);
+        }
     }
 
     #[test]

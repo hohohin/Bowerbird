@@ -17,6 +17,15 @@ import {
   rehydrateProjectCanvasAssets,
 } from "../src/lib/creativeCanvas.ts";
 
+test("deleted asset tombstones disappear from the canvas while graph history survives", () => {
+  const deleted = node("deleted", null);
+  const hidden = { ...node("hidden", "a"), hiddenAt: 20 };
+  const live = node("live", "a");
+  const graph = snapshot([deleted, hidden, live]);
+  assert.deepEqual(hydrateProjectCanvas(graph, new Map()).nodes.map(node => node.id), ["live"]);
+  assert.equal(graph.nodes.length, 3, "projection never removes stored history");
+});
+
 test("Agent launch prompts map only to their own group, including removed groups", () => {
   const prompt = { ...node("agent-prompt", null), kind: "prompt" };
   const ordinary = { ...node("ordinary", null), kind: "prompt" };
@@ -510,7 +519,7 @@ import React from "react";
 import { selectCloudAgentResultArtifacts } from "../src/lib/cloudAgentResult.ts";
 
 for (const collection of ["promptGraphNodes", "agentGraphNodes"]) {
-  test(collection + " cards can be removed in every execution state", () => {
+  test(collection + " cards expose removal only through the context menu in every execution state", () => {
     const source = readFileSync(new URL("../src/components/CanvasWorkspace.tsx", import.meta.url), "utf8");
     const file = ts.createSourceFile("CanvasWorkspace.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
     let callback;
@@ -531,27 +540,21 @@ for (const collection of ["promptGraphNodes", "agentGraphNodes"]) {
         supersededTaskIds: new Set(),
         selectedCanvasNodeIds: new Set(), selectedCanvasNodeIdsRef: { current: new Set() },
         removeNodes: (ids) => removed.push(...ids),
-        isOutsideFocusedThread: () => false, moveGraphNode() {}, endGraphNodeDrag() {},
-        removeGraphNode: (id) => removed.push(id) };
+        isOutsideFocusedThread: () => false, moveGraphNode() {}, endGraphNodeDrag() {} };
       const render = new Function(...Object.keys(bindings), code + "; return render;")(...Object.values(bindings));
       const card = render({ id: "card", width: 260, height: 148, x: 0, y: 0, zIndex: 1 });
       const button = React.Children.toArray(card.props.children).find((child) => child.type === "button");
-      assert.ok(button, status + " must expose removal");
-      assert.notEqual(card.type, "button", "remove button must not be nested in a button");
-      let stopped = 0;
-      button.props.onPointerDown({ stopPropagation() { stopped++; } });
-      button.props.onClick({ stopPropagation() { stopped++; } });
-      assert.equal(stopped, 2);
-      assert.deepEqual(removed, ["card"]);
+      assert.equal(button, undefined, status + " must not expose inline removal");
+      assert.equal(typeof card.props.onContextMenu, "function");
       for (const key of ["Delete", "Backspace"]) {
         const target = {};
         let prevented = false;
         card.props.onKeyDown({ key, target, currentTarget: target, preventDefault() { prevented = true; }, stopPropagation() {} });
-        assert.ok(prevented);
+        assert.equal(prevented, false);
       }
-      assert.deepEqual(removed, ["card", "card", "card"]);
+      assert.deepEqual(removed, []);
       card.props.onKeyDown({ key: "Delete", target: {}, currentTarget: {} });
-      assert.equal(removed.length, 3, "nested controls own their keyboard events");
+      assert.equal(removed.length, 0, "nested controls own their keyboard events");
     }
   });
 }
@@ -635,7 +638,7 @@ for (const grouped of [false, true]) {
 test("one undo restores " + (grouped ? "grouped" : "mixed") + " removal without replacing updated execution state", async () => {
   const source = readFileSync(new URL("../src/components/CanvasWorkspace.tsx", import.meta.url), "utf8");
   const file = ts.createSourceFile("canvas.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-  const names = ["removeNodes", "removeGraphNode", "undoRemoval"];
+  const names = ["removeNodes", "undoRemoval"];
   const declarations = [];
   function visit(node) {
     if (ts.isFunctionDeclaration(node) && names.includes(node.name?.text)) declarations.push(node.getText(file));

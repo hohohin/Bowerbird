@@ -1,4 +1,5 @@
 import { LearningHint } from "./OnboardingTour";
+import { beginOnboardingOperation, useOnboarding } from "../lib/onboardingStore";
 import { notify, notifyError } from "../lib/notify";
 import { arrangeCanvasNodes } from "../lib/canvasArrangement";
 import { newReferencesForCanvasCard, placeNewCanvasReferences, trackNewCanvasReferences } from "../lib/canvasReferencePlacement";
@@ -26,6 +27,7 @@ import {
   Folder,
   Images,
   LayoutDashboard,
+  Layers,
   List,
   LoaderCircle,
   Maximize2,
@@ -103,7 +105,6 @@ import {
   createCanvasAssetSnapshot,
   DEFAULT_CANVAS_SOURCE_THUMBNAIL_SCALE,
   hydrateProjectCanvas,
-  isCanvasAssetHydrationCurrent,
   newProjectCanvasAssetNode,
   newProjectCanvasGroup,
   projectGraphNodesWithLiveLayout,
@@ -314,18 +315,20 @@ function FolderPreview({
   node: CanvasFolderNode;
   onAssetContextMenu: (event: React.MouseEvent<HTMLElement>, asset: CanvasAssetSnapshot) => void;
 }) {
+  const layerWorkspaceIds = useStore((state) => state.layerWorkspaceIds);
   return (
     <div className="canvas-folder-grid" aria-hidden="true">
       {node.assets.slice(0, 4).map((asset) => {
         const path = asset.thumbPath ?? asset.storePath;
         return path && isVideoPath(path) ? <video key={asset.id} src={convertFileSrc(path)} preload="metadata" muted playsInline /> : path ? (
-          <img
-            key={asset.id}
-            src={convertFileSrc(path)}
-            alt=""
-            draggable={false}
-            onContextMenu={(event) => onAssetContextMenu(event, asset)}
-          />
+          <div key={asset.id} className="relative min-h-0" onContextMenu={(event) => onAssetContextMenu(event, asset)}>
+            <img
+              src={convertFileSrc(path)}
+              alt=""
+              draggable={false}
+            />
+            {asset.assetId && layerWorkspaceIds.has(asset.assetId) && <span className="pointer-events-none absolute left-1 top-1 z-10 rounded-full bg-black/70 px-1.5 py-1 text-white backdrop-blur" title="有分层工程" aria-label="有分层工程"><Layers size={12} /></span>}
+          </div>
         ) : (
           <span key={asset.id} onContextMenu={(event) => onAssetContextMenu(event, asset)}>
             {asset.name.slice(0, 1)}
@@ -455,6 +458,8 @@ export function CanvasWorkspace({
   const smartFilter = useStore((state) => state.smartFilter);
   const assetTotal = useStore((state) => state.total);
   const promptedAssets = useStore((state) => state.promptedAssets);
+  const captionedIds = useStore((state) => state.captionedIds);
+  const layerWorkspaceIds = useStore((state) => state.layerWorkspaceIds);
   const folders = useStore((state) => state.folders);
   const projects = useStore((state) => state.projects);
   const reloadProjects = useStore((state) => state.reloadProjects);
@@ -496,6 +501,8 @@ export function CanvasWorkspace({
   const [composerSeedIds, setComposerSeedIds] = useState<string[]>([]);
   const [sourceWidth, setSourceWidth] = useState(360);
   const [sourceCollapsed, setSourceCollapsed] = useState(exploring);
+  const explainTutorialSources = useOnboarding(state => state.guide.status === "active" && state.guide.role === "designer"
+    && state.guide.sessions.designer?.projectId === projectId && [2, 7].includes(state.guide.sessions.designer.step));
   const sourcePanelId = useId();
   const [sourceThumbnailScale, setSourceThumbnailScale] = useState(readCanvasSourceThumbnailScale);
   const [sourceScope, setSourceScope] = useState<CanvasSourceScope>(() => project?.provisional ? "library" : "project");
@@ -527,7 +534,7 @@ export function CanvasWorkspace({
   const [canvasMarquee, setCanvasMarquee] = useState<CanvasMarquee | null>(null);
   const [selectedCanvasNodeIds, setSelectedCanvasNodeIds] = useState<Set<string>>(() => new Set());
   const [canvasLightbox, setCanvasLightbox] = useState<{ images: string[]; index: number } | null>(null);
-  const [promptMenu, setPromptMenu] = useState<{ node: ProjectGraphNode | null; nodeIds: string[]; x: number; y: number; point: CanvasPoint } | null>(null);
+  const [promptMenu, setPromptMenu] = useState<{ node: ProjectGraphNode | null; nodeIds: string[]; x: number; y: number; point: CanvasPoint | null } | null>(null);
   const promptMenuRef = useRef<HTMLDivElement>(null);
   useEffect(() => { setPromptMenu(null); }, [projectId, viewMode]);
   useEffect(() => {
@@ -597,7 +604,6 @@ export function CanvasWorkspace({
   const loadTokenRef = useRef(0);
   const loadingRef = useRef(loading);
   const initialSnapshotRestoredRef = useRef(false);
-  const assetHydrationEpochRef = useRef(0);
   const processedLaunchRef = useRef<string | null>(null);
   const externalInstancesRef = useRef<{ signature: string; assets: CanvasAssetSnapshot[] } | null>(null);
   const spacePressedRef = useRef(false);
@@ -946,7 +952,6 @@ export function CanvasWorkspace({
         route.projectRouteRevision,
       )
     ) return false;
-    assetHydrationEpochRef.current += 1;
     const archivedThreadIds = new Set(
       snapshot.threads.filter((thread) => thread.archivedAt != null).map((thread) => thread.id),
     );
@@ -1026,7 +1031,6 @@ export function CanvasWorkspace({
     setGraphNodes([]);
     setGraphEdges([]);
     setThreads([]);
-    assetHydrationEpochRef.current += 1;
     setCanvasAssets([]);
     panRef.current = { x: 0, y: 0 };
     zoomRef.current = 1;
@@ -1272,48 +1276,6 @@ export function CanvasWorkspace({
   }, [sourceScope, librarySourceFolderId]);
 
   useEffect(() => {
-    if (!projectId || project?.provisional) return;
-    let alive = true;
-    let requestVersion = 0;
-    let unlisten: UnlistenFn | undefined;
-
-    async function refreshExactCanvasAssets() {
-      const version = ++requestVersion;
-      const epoch = assetHydrationEpochRef.current;
-      const requestedAssetIds = projectCanvasAssetIds(graphNodesRef.current);
-      try {
-        const next = await api.getAssetsByIds(requestedAssetIds);
-        const route = useStore.getState();
-        if (
-          !alive
-          || version !== requestVersion
-          || activeCanvasRef.current.id !== projectId
-          || !isWorkspaceOperationCurrent(projectId, route.activeProjectId, route.projectRoutePending)
-          || !isCanvasAssetHydrationCurrent(
-            epoch,
-            assetHydrationEpochRef.current,
-            requestedAssetIds,
-            projectCanvasAssetIds(graphNodesRef.current),
-          )
-        ) return;
-        setCanvasAssets(next);
-      } catch (reason) {
-        if (alive && version === requestVersion) reportError(reason);
-      }
-    }
-
-    listen("library://assets-changed", () => void refreshExactCanvasAssets()).then((cleanup) => {
-      if (alive) unlisten = cleanup;
-      else cleanup();
-    });
-    return () => {
-      alive = false;
-      requestVersion += 1;
-      unlisten?.();
-    };
-  }, [project?.provisional, projectId]);
-
-  useEffect(() => {
     const token = ++loadTokenRef.current;
     const loadRouteRevision = projectRouteRevision;
     let cancelled = false;
@@ -1389,6 +1351,7 @@ export function CanvasWorkspace({
 
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
+    let unlistenAssets: UnlistenFn | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let alive = true;
     let refreshVersion = 0;
@@ -1444,6 +1407,15 @@ export function CanvasWorkspace({
       }
     }
 
+    // Deletion changes graph visibility as well as metadata. Use the same
+    // journal/gesture/route guards as execution refreshes, preserving the live draft and view.
+    listen("library://assets-changed", () => {
+      if (projectId && activeCanvasRef.current.materialized) scheduleRefresh(projectId, 40);
+    }).then((cleanup) => {
+      if (alive) unlistenAssets = cleanup;
+      else cleanup();
+    });
+
     // This listener must stay mounted for the whole project lifetime. Asset
     // ingestion emits library://assets-changed immediately before the terminal
     // creative event; rebinding on assetById changes leaves an async listener
@@ -1476,6 +1448,7 @@ export function CanvasWorkspace({
       alive = false;
       refreshVersion += 1;
       unlisten?.();
+      unlistenAssets?.();
       if (timer) clearTimeout(timer);
     };
   }, [projectId]);
@@ -1528,6 +1501,10 @@ export function CanvasWorkspace({
   }, [exploring]);
 
   useEffect(() => {
+    if (explainTutorialSources) { setSourceCollapsed(false); setSourceScope("project"); }
+  }, [explainTutorialSources, exploring]);
+
+  useEffect(() => {
     const workspace = workspaceRef.current;
     if (!workspace || sourceCollapsed) return;
     const observer = new ResizeObserver(([entry]) => {
@@ -1578,21 +1555,6 @@ export function CanvasWorkspace({
           spacePressedRef.current = true;
           setSpacePanReady(true);
         }
-        return;
-      }
-      if (event.key === "Delete" || event.key === "Backspace") {
-        const selectedIds = selectedCanvasNodeIdsRef.current;
-        if (
-          event.defaultPrevented
-          || editing
-          || scopedInspectorOpen
-          || viewModeRef.current !== "canvas"
-          || selectedIds.size === 0
-          || useStore.getState().contextMenu != null
-          || document.querySelector('[role="dialog"][aria-modal="true"]')
-        ) return;
-        event.preventDefault();
-        removeNodes(selectedIds);
         return;
       }
       if (event.key !== "Escape") return;
@@ -2113,7 +2075,7 @@ export function CanvasWorkspace({
     useStore.getState().closeContextMenu();
     const nodeIds = selectedCanvasNodeIdsRef.current.has(nodeId) ? [...selectedCanvasNodeIdsRef.current] : [nodeId];
     setSelectedCanvasNodeIds(new Set(nodeIds));
-    setPromptMenu({ node, nodeIds, x: event.clientX, y: event.clientY, point: toBoardPoint(event.clientX, event.clientY) });
+    setPromptMenu({ node, nodeIds, x: event.clientX, y: event.clientY, point: null });
   }
 
   function newDraftAt(point: CanvasPoint) {
@@ -2289,6 +2251,28 @@ export function CanvasWorkspace({
     }
   }
 
+  function canvasImagesForSelection(nodeIds: Iterable<string>) {
+    const ids = new Set(nodeIds);
+    const images = new Map<string, { assetId: string; canvasNodeId: string }>();
+    for (const node of nodesRef.current) {
+      if (!ids.has(node.id)) continue;
+      for (const asset of node.kind === "asset" ? [node.asset] : node.assets) {
+        if (asset.assetId && asset.storePath && !isVideoPath(asset.storePath) && !images.has(asset.assetId)) {
+          images.set(asset.assetId, { assetId: asset.assetId, canvasNodeId: asset.id });
+        }
+      }
+    }
+    return [...images.values()];
+  }
+
+  function addCanvasImagesToBoard(nodeIds: Iterable<string>) {
+    if (loadingRef.current || useStore.getState().projectRoutePending) return;
+    setPromptMenu(null);
+    for (const asset of canvasImagesForSelection(nodeIds)) {
+      window.dispatchEvent(new CustomEvent(BOARD_ASSET_PICK_EVENT, { detail: asset }));
+    }
+  }
+
   function openCanvasAssetContextMenu(
     event: React.MouseEvent<HTMLElement>,
     selectionNode: CanvasNode,
@@ -2305,9 +2289,11 @@ export function CanvasWorkspace({
       ? new Set(selectedCanvasNodeIdsRef.current)
       : new Set([selectionNode.id]);
     if (!selectedCanvasNodeIdsRef.current.has(selectionNode.id)) setSelectedCanvasNodeIds(selectedIds);
-    const draftPoint = toBoardPoint(event.clientX, event.clientY);
     openContextMenu(event.clientX, event.clientY, selectedAsset.assetId, {
-      onNewDraft: () => newDraftAt(draftPoint),
+      addCanvasImagesToBoard: {
+        count: canvasImagesForSelection(selectedIds).length,
+        run: () => addCanvasImagesToBoard(selectedIds),
+      },
       asset: canvasAssets.find((asset) => asset.id === selectedAsset.assetId),
       canvasSelection: {
         projectId: activeCanvasRef.current.id,
@@ -2672,10 +2658,6 @@ export function CanvasWorkspace({
       const groupIds = new Set(materials.filter((node) => node.kind === "folder").map((node) => node.id));
       for (const id of ids) if (!groupIds.has(id)) await api.projectCanvasNodeRemove(id);
     });
-  }
-
-  function removeGraphNode(nodeId: string) {
-    removeNodes([nodeId]);
   }
 
   function promptSessionJobs(node: ProjectGraphNode) {
@@ -3113,6 +3095,7 @@ export function CanvasWorkspace({
           aria-controls={`${sourcePanelId}-content`}
           onClick={() => {
             setSourceCollapsed(false);
+            beginOnboardingOperation("expand-source", projectId)();
             requestAnimationFrame(() => workspaceRef.current?.querySelector<HTMLButtonElement>(".canvas-source-collapse")?.focus());
           }}
         ><PanelLeftOpen size={14} /><span>素材库</span></button>}
@@ -3131,7 +3114,7 @@ export function CanvasWorkspace({
               requestAnimationFrame(() => workspaceRef.current?.querySelector<HTMLButtonElement>(".canvas-source-expand")?.focus());
             }}
           ><PanelLeftClose size={14} /></button>
-          <div>
+          <div data-tour="source-scope">
             <span className="panel-kicker">素材来源</span>
             <div className="canvas-source-tabs" role="tablist" aria-label="画板素材来源">
               <button
@@ -3327,20 +3310,9 @@ export function CanvasWorkspace({
                 : "项目内创作线程的顺序投影"}
             </small>
             {selectedCanvasNodeIds.size > 0 && (
-              <>
-                <small className="canvas-selection-count">
-                  已选择 {selectedCanvasNodeIds.size} 项 · 拖动可整体移动
-                </small>
-                <button
-                  type="button"
-                  className="canvas-selection-delete"
-                  title="从画板移除所选内容（Delete）"
-                  aria-label={`从画板移除所选 ${selectedCanvasNodeIds.size} 项`}
-                  onClick={() => removeNodes(selectedCanvasNodeIds)}
-                >
-                  <Trash2 size={12} /> 移除
-                </button>
-              </>
+              <small className="canvas-selection-count">
+                已选择 {selectedCanvasNodeIds.size} 项 · 拖动可整体移动
+              </small>
             )}
             <small className={`canvas-save-state${loading || savingVisible ? " is-visible" : ""}`} aria-hidden={!loading && !savingVisible}>
               <LoaderCircle size={12} /> {loading ? "载入中" : "保存中"}
@@ -3451,7 +3423,7 @@ export function CanvasWorkspace({
             event.preventDefault();
             if (loadingRef.current || useStore.getState().projectRoutePending) return;
             useStore.getState().closeContextMenu();
-            setPromptMenu({ node: null, nodeIds: [], x: event.clientX, y: event.clientY, point: toBoardPoint(event.clientX, event.clientY) });
+            setPromptMenu({ node: null, nodeIds: [...selectedCanvasNodeIdsRef.current], x: event.clientX, y: event.clientY, point: toBoardPoint(event.clientX, event.clientY) });
           }}
           onPointerMove={movePan}
           onPointerUp={endPan}
@@ -3515,12 +3487,6 @@ export function CanvasWorkspace({
                   }}
                   onKeyDown={(event) => {
                     if (event.target !== event.currentTarget) return;
-                    if (event.key === "Delete" || event.key === "Backspace") {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      removeNodes(selectedCanvasNodeIdsRef.current.has(node.id) ? selectedCanvasNodeIdsRef.current : [node.id]);
-                      return;
-                    }
                     if (event.key !== "Enter" && event.key !== " ") return;
                     event.preventDefault();
                     event.currentTarget.click();
@@ -3528,19 +3494,6 @@ export function CanvasWorkspace({
                 >
                   <div><span>生成指令</span><small>{summary.provider} · {summary.status}</small></div>
                   <p>{summary.text}</p>
-                  <button
-                    type="button"
-                    className="canvas-prompt-node__remove"
-                    title="从画板移除"
-                    aria-label="从画板移除生成指令"
-                    onPointerDown={(event) => event.stopPropagation()}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      removeGraphNode(node.id);
-                    }}
-                  >
-                    <X size={13} />
-                  </button>
                 </div>
               );
             })}
@@ -3576,12 +3529,6 @@ export function CanvasWorkspace({
                   }}
                   onKeyDown={(event) => {
                     if (event.target !== event.currentTarget) return;
-                    if (event.key === "Delete" || event.key === "Backspace") {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      removeNodes(selectedCanvasNodeIdsRef.current.has(node.id) ? selectedCanvasNodeIdsRef.current : [node.id]);
-                      return;
-                    }
                     if (event.key !== "Enter" && event.key !== " ") return;
                     event.preventDefault();
                     event.currentTarget.click();
@@ -3596,19 +3543,6 @@ export function CanvasWorkspace({
                     {resultCount > 0 ? ` · ${resultCount} 张图片` : ""}
                   </p>
                   {run && <footer className="mt-auto flex justify-start pt-2"><AgentApprovalToggle run={run} /></footer>}
-                  <button
-                    type="button"
-                    className="canvas-prompt-node__remove"
-                    title="从画板移除"
-                    aria-label="从画板移除 Agent 执行组"
-                    onPointerDown={(event) => event.stopPropagation()}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      removeGraphNode(node.id);
-                    }}
-                  >
-                    <X size={13} />
-                  </button>
                 </div>
               );
             })}
@@ -3674,6 +3608,16 @@ export function CanvasWorkspace({
                         <div className="canvas-node-placeholder">{node.asset.name.slice(0, 1)}</div>
                       )}
                       {isVideoPath(node.asset.storePath) && <span className="pointer-events-none absolute right-2 top-2 rounded bg-black/60 px-1.5 text-xs text-white" aria-label="视频">▶ 视频</span>}
+                      <div className="pointer-events-none absolute left-1 top-1 z-10 flex items-center gap-1">
+                        {node.asset.assetId && layerWorkspaceIds.has(node.asset.assetId) && <span className="rounded-full bg-black/70 px-1.5 py-1 text-white backdrop-blur" title="有分层工程" aria-label="有分层工程"><Layers size={12} /></span>}
+                        {node.asset.assetId && captionedIds.has(node.asset.assetId) && (
+                          <span
+                            className="rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-white backdrop-blur"
+                            title="已反推（有提示词描述）"
+                            aria-label="已反推（有提示词描述）"
+                          >🏷️</span>
+                        )}
+                      </div>
                       <span className="canvas-node-name">{node.asset.name}</span>
                     </>
                   ) : (
@@ -3701,21 +3645,6 @@ export function CanvasWorkspace({
                         <Ungroup size={13} />
                       </button>
                     )}
-                    <button
-                      type="button"
-                      title="从画布移除"
-                      aria-label="从画布移除"
-                      onPointerDown={(event) => {
-                        if (!isCanvasPanGesture(event.button, spacePressedRef.current)) event.stopPropagation();
-                      }}
-                      onClick={() => {
-                        if (consumeSuppressedNodeClick()) return;
-                        const selectedIds = selectedCanvasNodeIdsRef.current;
-                        removeNodes(selectedIds.has(node.id) ? selectedIds : [node.id]);
-                      }}
-                    >
-                      <X size={13} />
-                    </button>
                   </div>
                   {holding && <span className="canvas-folder-hint" role="tooltip">创建素材组</span>}
                   {directFolderTarget && <span className="canvas-folder-hint" role="tooltip">松手移入素材组</span>}
@@ -3804,13 +3733,18 @@ export function CanvasWorkspace({
             ref={promptMenuRef}
             role="menu"
             aria-label={promptMenu.node?.kind === "agent_group" ? "Agent 执行组菜单" : promptMenu.node ? "生成指令菜单" : "画板节点菜单"}
-            className="fixed z-[60] w-[200px] rounded-lg border border-edge bg-panel p-1 shadow-xl"
-            style={{ left: Math.max(8, Math.min(promptMenu.x, window.innerWidth - 208)), top: Math.max(8, Math.min(promptMenu.y, window.innerHeight - 164)) }}
+            className="fixed z-[60] max-h-[calc(100vh-16px)] w-[200px] overflow-y-auto rounded-lg border border-edge bg-panel p-1 shadow-xl"
+            style={{ left: Math.max(8, Math.min(promptMenu.x, window.innerWidth - 208)), top: Math.max(8, Math.min(promptMenu.y, window.innerHeight - 280)) }}
             onContextMenu={(event) => event.preventDefault()}
           >
-            <button type="button" role="menuitem" className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs hover:bg-panel2" onClick={() => newDraftAt(promptMenu.point)}>
+            {promptMenu.point && <button type="button" role="menuitem" className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs hover:bg-panel2" onClick={() => newDraftAt(promptMenu.point!)}>
               <PenTool size={14} /> 新建草稿
-            </button>
+            </button>}
+            {canvasImagesForSelection(promptMenu.nodeIds).length > 0 && <button type="button" role="menuitem" className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs hover:bg-panel2" onClick={() => addCanvasImagesToBoard(promptMenu.nodeIds)}>
+              <Images size={14} className="shrink-0" /> {canvasImagesForSelection(promptMenu.nodeIds).length > 1
+                ? `添加所选 ${canvasImagesForSelection(promptMenu.nodeIds).length} 张图片到对话框`
+                : "添加到对话框"}
+            </button>}
             {promptMenu.nodeIds.length > 0 && <button type="button" role="menuitem" className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs hover:bg-panel2" onClick={() => {
               arrangeNodes(promptMenu.nodeIds);
               setPromptMenu(null);
@@ -3819,6 +3753,14 @@ export function CanvasWorkspace({
             </button>}
             {promptMenu.node && <button type="button" role="menuitem" className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs hover:bg-panel2" onClick={() => reuseCanvasPrompt(promptMenu.node!)}>
               <Copy size={14} /> 复用提示词
+            </button>}
+            {promptMenu.nodeIds.length > 0 && <button type="button" role="menuitem" className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs text-red-400 hover:bg-panel2" onClick={() => {
+              removeNodes(promptMenu.nodeIds);
+              setPromptMenu(null);
+            }}>
+              <Trash2 size={14} className="shrink-0" /> {promptMenu.nodeIds.length > 1
+                ? `从画板移除所选 ${promptMenu.nodeIds.length} 项`
+                : "从画板移除"}
             </button>}
             {promptMenu.node?.kind === "prompt" && <button type="button" role="menuitem" className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs text-red-400 hover:bg-panel2 disabled:opacity-40"
               disabled={promptSessionJobs(promptMenu.node).some((job) => job.running)}

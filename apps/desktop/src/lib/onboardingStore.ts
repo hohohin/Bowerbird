@@ -1,5 +1,13 @@
 import { create } from "zustand";
 import { ONBOARDING_KEY, parseOnboarding, type OnboardingProgress } from "./onboarding";
+import { freshRoleGuide, ONBOARDING_ROUTES, parseRoleGuide, type GuideScene, type RoleGuideProgress, type RoleSession } from "./onboardingRoutes";
+
+const ROLE_GUIDE_KEY = "bowerbird.onboarding.roles.v2";
+function readGuide() {
+  try { return parseRoleGuide(JSON.parse(localStorage.getItem(ROLE_GUIDE_KEY) ?? "null")); }
+  catch { return freshRoleGuide(); }
+}
+type OnboardingPanel = "welcome" | "lesson" | "done" | "closed" | "collections";
 
 function read() {
   try { return parseOnboarding(localStorage.getItem(ONBOARDING_KEY)); }
@@ -7,12 +15,18 @@ function read() {
 }
 export const useOnboarding = create<{
   progress: OnboardingProgress;
-  panel: "welcome" | "lesson" | "update" | "done" | "closed" | "collections";
+  guide: RoleGuideProgress;
+  setGuide: (guide: RoleGuideProgress) => void;
+  panel: OnboardingPanel;
   patch: (patch: Partial<OnboardingProgress>) => void;
   open: () => void;
-  show: (panel: "welcome" | "lesson" | "update" | "done" | "closed" | "collections") => void;
+  show: (panel: OnboardingPanel) => void;
 }>((set, get) => ({
-  progress: read(), panel: "closed",
+  progress: read(), guide: readGuide(), panel: "closed",
+  setGuide: (guide) => {
+    try { localStorage.setItem(ROLE_GUIDE_KEY, JSON.stringify(guide)); } catch { /* Keep this session usable. */ }
+    set({ guide });
+  },
   patch: (patch) => {
     const progress = { ...get().progress, ...patch };
     try { localStorage.setItem(ONBOARDING_KEY, JSON.stringify(progress)); } catch { /* in-memory session remains usable */ }
@@ -21,6 +35,25 @@ export const useOnboarding = create<{
   open: () => set({ panel: "welcome" }),
   show: (panel) => set({ panel }),
 }));
+
+/** Capture before an operation; late success cannot advance another project, step or replay. */
+export function beginOnboardingOperation(scene: GuideScene, projectId: string | null) {
+  const initial = useOnboarding.getState().guide;
+  const role = initial.role;
+  const session = role && initial.sessions[role];
+  return (details: Partial<Pick<RoleSession, "projectId" | "collectionId" | "profileId" | "analysisAssetId" | "annotationAssetId">> = {}) => {
+    const store = useOnboarding.getState();
+    const current = role && store.guide.sessions[role];
+    if (!role || !session || !current || initial.status !== "active" || store.guide.role !== role
+      || !["active", "paused"].includes(store.guide.status) || (current.projectId || null) !== projectId
+      || current.runId !== session.runId || current.step !== session.step
+      || (ONBOARDING_ROUTES[role][current.step].scene !== scene && !(scene === "create-project" && role === "designer" && !current.projectId))) return;
+    if (scene === "create-project" && !details.projectId) return;
+    if (scene === "profile" && details.collectionId !== current.collectionId) return;
+    if (scene === "profile-select" && details.profileId !== current.profileId) return;
+    store.setGuide({ ...store.guide, sessions: { ...store.guide.sessions, [role]: { ...current, ...details, ready: scene === "create-project" && current.step !== 0 ? current.ready : true } } });
+  };
+}
 
 export const LEARNING_TOPICS = [
   { id: "explore", title: "探索：把灵感拖到画板", body: "Windows 支持从左侧网页拖图到右侧画板，松手的位置就是卡片落点。素材栏会自动收起，点击窄栏可重新展开。网站可能需要你先登录；也可以导入本地图片。" },

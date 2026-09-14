@@ -1,4 +1,5 @@
 export const EXPLORER_MIME = "application/x-bowerbird-explorer";
+export const DEFAULT_EXPLORER_URL = "https://www.xiaohongshu.com/explore";
 export const EXPLORER_SITES = [
   { name: "Pinterest", url: "https://www.pinterest.com/" },
   { name: "花瓣", url: "https://huaban.com/" },

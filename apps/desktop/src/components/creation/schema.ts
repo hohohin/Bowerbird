@@ -97,6 +97,7 @@ export const creationSchema = new Schema({
             class: "mx-0.5 underline decoration-accent text-accent underline-offset-4",
             contentEditable: "false",
             "data-keyword": "1",
+            "data-source-asset-id": node.attrs.assetId ?? "",
             "data-body": node.attrs.body ?? "",
           },
           `【${node.attrs.title}】`,

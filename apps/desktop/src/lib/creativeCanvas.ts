@@ -344,7 +344,8 @@ export function isCanvasAssetHydrationCurrent(
 }
 
 function snapshotForNode(node: CanvasNode, assetById: Map<string, Asset>): CanvasAssetSnapshot | null {
-  if (node.kind !== "asset" || node.hiddenAt != null) return null;
+  // Legacy deletions leave an unhidden tombstone; retain it in history, not on the canvas.
+  if (node.kind !== "asset" || node.hiddenAt != null || node.assetId == null) return null;
   const payload = parseAssetPayload(node.payloadJson);
   if (!payload) return null;
   const asset = node.assetId ? assetById.get(node.assetId) : null;

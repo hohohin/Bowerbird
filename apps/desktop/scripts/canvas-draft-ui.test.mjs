@@ -11,11 +11,19 @@ const errors = [];
 page.on("pageerror", error => errors.push(error.message));
 const dialog = page.getByRole("dialog", { name: "草稿", exact: true });
 const saves = () => page.evaluate(() => window.calls.filter(call => call.command === "save_annotated_image"));
-async function openDraft(selector = "[data-canvas-stage]") {
-  const target = page.locator(selector);
-  const box = await target.boundingBox();
-  const x = box.x + (selector === "[data-canvas-stage]" ? 80 : box.width / 2);
-  const y = box.y + (selector === "[data-canvas-stage]" ? 80 : box.height / 2);
+async function openDraft() {
+  const target = page.locator("[data-canvas-stage]");
+  const { x, y } = await target.evaluate(element => {
+    const rect = element.getBoundingClientRect();
+    for (let dy = 80; dy < rect.height - 120; dy += 100) {
+      for (let dx = 80; dx < rect.width - 80; dx += 100) {
+        const x = rect.left + dx, y = rect.top + dy;
+        const hit = document.elementFromPoint(x, y);
+        if (hit === element || hit?.classList.contains("canvas-plane")) return { x, y };
+      }
+    }
+    throw new Error("没有找到可右键的画布空白位置");
+  });
   const point = await page.locator("[data-canvas-stage]").evaluate((element, { x, y }) => {
     const rect = element.getBoundingClientRect();
     const matrix = new DOMMatrix(getComputedStyle(document.querySelector(".canvas-plane")).transform);
@@ -25,6 +33,12 @@ async function openDraft(selector = "[data-canvas-stage]") {
   await page.getByRole("menuitem", { name: "新建草稿", exact: true }).click();
   await dialog.getByAltText("白底草稿").waitFor();
   return point;
+}
+async function expectNoDraft(selector) {
+  await page.locator(selector).click({ button: "right" });
+  await page.getByRole("menu").waitFor();
+  assert.equal(await page.getByRole("menuitem", { name: "新建草稿", exact: true }).count(), 0);
+  await page.keyboard.press("Escape");
 }
 async function draw(tool = "画框") {
   await dialog.getByRole("button", { name: tool, exact: true }).click();
@@ -101,13 +115,13 @@ try {
   await regular.waitFor({ state: "hidden" });
   assert.equal(JSON.parse((await saves())[1].args.annotationJson).source_asset_id, node.assetId);
 
-  await openDraft('[data-canvas-node-id="old"]');
+  await expectNoDraft('[data-canvas-node-id="old"]');
+  await openDraft();
   assert.equal(await dialog.getByRole("button", { name: "保存到画板", exact: true }).isEnabled(), false, "new drafts reset previous annotations");
   await page.keyboard.press("Escape");
   await page.evaluate(() => window.launch());
   await page.locator('[data-canvas-node-id="gen-prompt:job:turn:0"]').waitFor();
-  await openDraft('[data-canvas-node-id="gen-prompt:job:turn:0"]');
-  await page.keyboard.press("Escape");
+  await expectNoDraft('[data-canvas-node-id="gen-prompt:job:turn:0"]');
 
   await load("?provisional");
   await openDraft(); await page.keyboard.press("Escape");
@@ -126,5 +140,5 @@ try {
   await page.evaluate(() => window.save()); await page.reload();
   await page.waitForFunction(() => document.querySelector('[data-canvas-node-id^="asset-"]'));
   assert.deepEqual(errors, []);
-  console.log("PASS canvas draft: blank/asset/prompt menus, white PNG, black marks, arrows, undo, cancel/reset, zoomed placement, failure/retry without duplicates, provisional persistence and reload");
+  console.log("PASS canvas draft: blank-only creation, no draft in asset/prompt menus, white PNG, black marks, arrows, undo, cancel/reset, zoomed placement, failure/retry without duplicates, provisional persistence and reload");
 } finally { await browser.close(); await server.close(); }

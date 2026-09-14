@@ -243,7 +243,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const commitSettings = (onIngest: boolean, prompt: string) => {
     // 全量覆盖：只改自动反推两项，其余设置保持不变。
     void updateSettings({
-      theme: settings?.theme ?? "dark",
+      theme: settings?.theme ?? "light",
       auto_analyze_on_ingest: onIngest,
       auto_analyze_prompt: prompt || DEFAULT_AUTO_ANALYZE_PROMPT,
       library_root: settings?.library_root ?? null,
@@ -491,7 +491,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                     { value: "light" as const, label: "日间模式", icon: Sun },
                     { value: "dark" as const, label: "夜间模式", icon: Moon },
                   ]).map(({ value, label, icon: Icon }) => {
-                    const selected = (settings?.theme ?? "dark") === value;
+                    const selected = (settings?.theme ?? "light") === value;
                     return (
                       <button
                         key={value}

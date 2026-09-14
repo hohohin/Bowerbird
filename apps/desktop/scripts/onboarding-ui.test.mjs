@@ -2,188 +2,254 @@ import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
-
-const server = await createServer({ server: { host: '127.0.0.1', port: 1561, strictPort: true, hmr: false, watch: null } });
+const server = await createServer({ server: { host:'127.0.0.1', port:1561, strictPort:true, hmr:false, watch:null } });
 await server.listen();
-const browser = await chromium.launch({ channel: 'chrome', headless: true });
-const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
-const errors = []; page.on('pageerror', e => errors.push(e.message));
-const step = n => page.waitForFunction(n => window.lesson.getState().progress.step === n, n);
-async function checkDialogAvoidance(selector) {
-  for (const entry of ['测试登录入口', '测试设置入口']) {
-    await page.getByRole('button', { name: entry, exact: true }).click();
-    const dialog = page.getByRole('dialog');
-    await dialog.waitFor();
-    await page.locator(selector).waitFor({ state: 'hidden' });
-    const close = dialog.getByRole('button', { name: '关闭', exact: true }).first();
-    assert.equal(await close.evaluate(button => {
-      const rect = button.getBoundingClientRect();
-      return button.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
-    }), true);
-    await close.click();
-    await page.locator(selector).waitFor();
-  }
+const browser = await chromium.launch({ channel:'chrome', headless:true });
+const page = await browser.newPage({ viewport:{width:1600,height:1000} });
+page.setDefaultTimeout(10000);
+const errors = [];
+page.on('pageerror', e => errors.push(e.message));
+const button = name => page.getByRole('button', {name,exact:true});
+const next = () => button('下一步');
+async function at(scene) {
+  await page.waitForFunction(async scene => {
+    const {ONBOARDING_ROUTES} = await import('/src/lib/onboardingRoutes.ts');
+    const g = window.lesson.getState().guide;
+    return g.role && ONBOARDING_ROUTES[g.role][g.sessions[g.role].step].scene === scene;
+  }, scene);
+}
+async function ready() { await page.waitForFunction(() => { const g=window.lesson.getState().guide; return g.sessions[g.role].ready; }); }
+async function notReady() {
+  await page.waitForTimeout(400);
+  assert.equal(await page.evaluate(() => { const g=window.lesson.getState().guide; return g.sessions[g.role].ready; }),false);
+}
+async function pick(label) {
+  await page.locator('[data-import-trigger]').click();
+  await page.getByRole('menuitem',{name:label,exact:true}).click();
+}
+async function fakeResult(media, count, overrides = {}) {
+  await page.evaluate(({media,count,overrides}) => {
+    const state=window.store.getState(), g=window.lesson.getState().guide, s=g.sessions[g.role];
+    const id=overrides.id ?? crypto.randomUUID();
+    const job={id, projectId:s.projectId, media, createdAt:Date.now(), running:false, provider:'jimeng', turns:[{
+      id:1, startedAt:Date.now(), media, prompt:'fixture result', refAssets:s.annotationAssetId?[{id:s.annotationAssetId}]:[], images:Array.from({length:count},(_,i)=>'fixture-result-'+id+'-'+i), error:null
+    }], ...overrides};
+    window.store.setState({genJobs:{...state.genJobs,[id]:job}});
+  }, {media,count,overrides});
 }
 try {
   await page.goto('http://127.0.0.1:1561/scripts/fixtures/onboarding/preview.html');
-  await page.getByRole('button', { name: '跟着示例做一次', exact: true }).waitFor();
-  await page.getByRole('button', {name:'学习集合与视觉规范',exact:true}).click();
-  const collectionGuide = page.getByRole('dialog');
-  await collectionGuide.getByText('3. 从一组参考提炼视觉规范', {exact:true}).waitFor();
-  assert.equal(await collectionGuide.getByRole('option', {name:'收藏夹不属于集合'}).count(), 0);
-  await page.getByLabel('创建你的第一个集合').fill('春季品牌参考');
-  await page.evaluate(() => { window.failCollection = true; });
-  await page.getByRole('button', {name:'创建并打开集合',exact:true}).click();
-  await page.getByRole('alert').filter({hasText:'模拟集合创建失败'}).waitFor();
-  await page.evaluate(() => { window.failCollection = false; window.failFolders = true; });
-  await page.getByRole('button', {name:'创建并打开集合',exact:true}).click();
-  await page.getByRole('alert').filter({hasText:'模拟集合列表加载失败'}).waitFor();
-  await page.evaluate(() => { window.failFolders = false; });
-  await page.getByRole('button', {name:'打开所选集合',exact:true}).click();
-  await page.getByText('这个集合还没有素材', {exact:true}).waitFor();
-  assert.equal(await page.evaluate(() => window.calls.filter(c => c.command === 'create_folder').length), 2);
-  const inlineGuide = page.locator('.collection-learning');
-  assert.equal(await inlineGuide.getAttribute('open'), '');
-  await inlineGuide.locator('summary').click();
-  await page.waitForFunction(() => window.lesson.getState().progress.dismissed.includes('collections'));
-  await inlineGuide.locator('summary').click();
-  await page.waitForFunction(() => !window.lesson.getState().progress.dismissed.includes('collections'));
-  await mkdir('.tmp', {recursive:true});
-  await page.screenshot({path:'.tmp/onboarding-collection.png',animations:'disabled'});
-  await page.getByRole('button', {name:'关闭',exact:true}).click();
-  await page.evaluate(() => window.lesson.getState().open());
-  await page.getByRole('button', {name:'学习集合与视觉规范',exact:true}).click();
-  await page.getByLabel('也可以使用已有集合').selectOption('existing-folder');
-  await page.getByRole('button', {name:'打开所选集合',exact:true}).click();
-  await page.getByText('已有品牌集合', {exact:true}).waitFor();
-  await page.getByRole('button', {name:'关闭',exact:true}).click();
-  await page.evaluate(() => window.lesson.getState().open());
-  await page.evaluate(() => { window.failSample = true; });
-  await page.getByRole('button', { name: '跟着示例做一次', exact: true }).click();
-  await page.getByRole('alert').filter({ hasText: '模拟示例缺失' }).waitFor();
-  await page.evaluate(() => { window.failSample = false; });
-  await page.getByRole('button', { name: '跟着示例做一次', exact: true }).click();
-  await page.getByRole('complementary', { name: '入门任务清单' }).waitFor();
+  await page.getByRole('heading',{name:'请选择你的身份',exact:true}).waitFor();
+  for (const name of ['设计师','市场运营','视频编导']) await button('我是'+name).waitFor();
+  assert.equal(await page.getByText(/操作示意|继续原来的实操引导|开始这条路线|用示例实际做一次/).count(),0);
+  await mkdir('.tmp',{recursive:true});
+  await page.screenshot({path:'.tmp/onboarding-practice-welcome.png'});
+  await button('我是设计师').click();
+  await at('create-project'); await notReady();
+  assert.equal(await page.evaluate(()=>window.store.getState().activeProjectId),null);
+  assert.equal(await page.locator('.canvas-workspace').count(),0);
+  await page.locator('[data-spotlight-hole]').waitFor({state:'attached'});
+  async function spotlightContains(selector) {
+    await page.waitForFunction(selector=>{
+      const hole=document.querySelector('[data-spotlight-hole]'), target=document.querySelector(selector);
+      if (!hole || !target) return false;
+      const x=Number(hole.getAttribute('x')),y=Number(hole.getAttribute('y')),r=target.getBoundingClientRect();
+      return x<=r.left && y<=r.top && x+Number(hole.getAttribute('width'))>=r.right && y+Number(hole.getAttribute('height'))>=r.bottom;
+    },selector);
+    const fits=await page.locator('[data-spotlight-hole]').evaluate((hole,selector)=>{
+      const left=Number(hole.getAttribute('x')),top=Number(hole.getAttribute('y'));
+      const h={left,top,right:left+Number(hole.getAttribute('width')),bottom:top+Number(hole.getAttribute('height'))},r=document.querySelector(selector).getBoundingClientRect();
+      return h.left<=r.left && h.top<=r.top && h.right>=r.right && h.bottom>=r.bottom;
+    },selector);
+    assert.equal(fits,true);
+    assert.equal(await page.locator('.onboarding-target').count(),0);
+  }
+  await spotlightContains('[data-tour=new-creation]');
+  await page.screenshot({path:'.tmp/onboarding-designer-create.png'});
+  await button('稍后继续').click(); await page.reload();
+  await button('继续入门引导').click(); await button('我是设计师').click(); await at('create-project');
+  await button('新建创作').click(); await at('folder'); await notReady();
   await page.locator('.canvas-workspace[aria-busy="false"]').waitFor();
-  assert.equal(await page.evaluate(() => window.lesson.getState().progress.step), 1);
-  await checkDialogAvoidance('.onboarding-lesson');
-  // Real native HTML drag from the real MasonryGrid to the real canvas.
-  await page.locator('.canvas-source-panel [data-asset-id="existing"]').dragTo(page.locator('[data-canvas-stage]'), { targetPosition: { x: 180, y: 180 } });
-  await step(2);
-  const card = page.locator('.canvas-node.is-asset').first();
-  await card.focus(); await card.press('ArrowRight'); await step(3);
-  const editor = page.locator('[data-onboarding-composer] .ProseMirror');
-  await editor.fill('为这款产品制作宣传图，保留产品外观。');
-  await card.click();
-  await step(4);
-  await page.locator('[data-dim="色调"]').focus();
-  await page.locator('[data-dim="色调"]').press('Enter');
-  await step(5);
-  assert.equal(await editor.locator('[data-keyword]').count(), 1);
-  assert.equal(await page.evaluate(() => window.calls.some(call => /codex_create_image|cloud_agent_start/.test(call.command))), false);
-  await page.keyboard.press('Escape');
-  await page.getByRole('button', { name: '先完成准备，稍后生成' }).click();
-  await page.getByText('你已学会准备一次创作', { exact: true }).waitFor();
-  assert.equal(await page.evaluate(() => window.lesson.getState().progress.status), 'paused');
-  await page.getByRole('button', { name: '继续使用', exact: true }).click();
-  await checkDialogAvoidance('.onboarding-resume');
-  const pausedProgress = await page.evaluate(() => window.lesson.getState().progress);
-  await page.getByRole('button', { name: '跳过入门引导', exact: true }).click();
-  await page.locator('.onboarding-resume').waitFor({ state: 'hidden' });
-  assert.equal(await page.evaluate(() => window.lesson.getState().progress.status), 'skipped');
-  await page.evaluate(() => window.persistLesson());
+  const projectId=await page.evaluate(()=>window.store.getState().activeProjectId);
+  assert.notEqual(projectId,'p');
+  assert.equal(await page.evaluate(id=>!!window.store.getState().projects.find(p=>p.id===id).provisional,projectId),false);
+  await page.evaluate(()=>{window.cancelPick=true;});
+  await pick('导入文件夹'); await notReady();
+  await page.evaluate(()=>{window.cancelPick=false;window.wrongFolder=true;});
+  await pick('导入文件夹'); await notReady();
+  assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.command==='import_folder').length),0);
+  await page.evaluate(()=>{window.wrongFolder=false;window.failImport=true;});
+  await pick('导入文件夹'); await notReady();
+  await page.evaluate(()=>{window.failImport=false;});
+  await page.locator('[data-import-trigger]').click();
+  await page.waitForTimeout(200); await spotlightContains('[data-tour=import-folder]');
+  await page.locator('[data-spotlight-highlight]').waitFor();
+  await page.screenshot({path:'.tmp/onboarding-designer-import.png'});
+  await page.getByRole('menuitem',{name:'导入文件夹',exact:true}).click();
+  await at('source-scope'); await ready();
+  await page.waitForTimeout(200); await spotlightContains('[data-tour=source-scope]');
+  assert.equal(await page.getByRole('tab',{name:'项目素材',exact:true}).getAttribute('aria-selected'),'true');
+  await page.getByText(/全局素材包含项目素材/).waitFor();
+  assert.equal(await page.evaluate(()=>window.calls.some(c=>c.command==='import_files')),false);
+  assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.command==='plugin:dialog|open').at(-1).args.options.defaultPath),'C:/fixture');
+  await page.screenshot({path:'.tmp/onboarding-designer-scope.png'});
+  await next().click(); await at('open-explore'); await notReady();
+  await button('探索').click(); await at('explore'); await notReady();
+  await page.waitForFunction(()=>window.calls.some(c=>c.command==='open_source_browser'));
+  assert.equal(await page.evaluate(()=>window.calls.find(c=>c.command==='open_source_browser').args.url),'https://www.xiaohongshu.com/explore');
+  await page.locator('.onboarding-drag-demo').waitFor();
+  await page.locator('.canvas-source-expand').waitFor();
+  await button('稍后继续').click(); await page.reload();
+  await button('继续入门引导').click(); await button('我是设计师').click(); await at('explore');
+  await button('打开探索继续采集').click();
+  await page.locator('.canvas-source-expand').waitFor();
+  await page.setViewportSize({width:1200,height:800});
+  await page.waitForTimeout(250);
+  assert.equal(await page.locator('.onboarding-spotlight-card').evaluate(el=>{
+    const r=el.getBoundingClientRect(), b=document.querySelector('.explore-browser').getBoundingClientRect();
+    return r.left>=b.right && r.right<=innerWidth && r.bottom<=innerHeight;
+  }),true);
+  await page.setViewportSize({width:1600,height:1000}); await page.waitForTimeout(250);
+  await page.screenshot({path:'.tmp/onboarding-designer-drag.png'});
+  await page.emulateMedia({reducedMotion:'reduce'});
+  assert.equal(await page.locator('.demo-cursor').evaluate(el=>getComputedStyle(el).animationName),'none');
+  await page.emulateMedia({reducedMotion:'no-preference'});
+  async function drop() {
+    await page.locator('[data-canvas-stage]').evaluate(el=>{
+      const rect=el.getBoundingClientRect(), data=new DataTransfer();
+      data.setData('application/x-bowerbird-explorer',JSON.stringify({version:1,imageUrl:'https://fixture.invalid/a.png',pageUrl:'https://fixture.invalid/'}));
+      el.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:data,clientX:rect.x+160,clientY:rect.y+160}));
+    });
+  }
+  await page.evaluate(()=>{window.failCapture=true;});
+  await drop(); await notReady();
+  await page.evaluate(()=>{window.failCapture=false;});
+  await drop(); await at('expand-source'); await notReady();
+  await page.waitForTimeout(200); await spotlightContains('.canvas-workspace');
+  const frame=await page.locator('[data-spotlight-highlight]').boundingBox();
+  const expand=await page.locator('.canvas-source-expand').boundingBox();
+  assert.ok(frame.width < expand.width+10 && frame.height < expand.height+10);
+  await page.screenshot({path:'.tmp/onboarding-designer-expand.png'});
+  assert.ok((await page.locator('.onboarding-step-copy').innerText()).includes('该项目中。\n当然'));
+  await button('展开画板素材库').click(); await ready();
+  await next().click(); await at('activate-composer'); await notReady();
+  await page.locator('[data-onboarding-composer] .ProseMirror').click();
+  await at('sample-dimensions'); await notReady();
+  await button('稍后继续').click();
+  await button('继续入门引导').click(); await button('我是设计师').click(); await at('sample-dimensions');
+  await page.waitForTimeout(300);
+  await spotlightContains('.canvas-source-panel [data-asset-id="existing"]');
+  assert.equal(await page.locator('.onboarding-step-copy strong').innerText(),'反推');
+  await page.screenshot({path:'.tmp/onboarding-designer-sample.png'});
+  await page.locator('.canvas-source-panel [data-asset-id="existing"]').click();
+  await page.getByRole('group',{name:'可选维度环'}).waitFor(); await ready();
+  await page.screenshot({path:'.tmp/onboarding-designer-ring.png'});
+  assert.equal(await page.evaluate(()=>window.calls.some(c=>c.command==='codex_describe_asset')),false);
+  await button('完成这条路线').click();
+  await page.getByRole('heading',{name:'设计师路线已完成',exact:true}).waitFor();
+  assert.deepEqual(await page.evaluate(()=>window.lesson.getState().guide.completedRoles),['designer']);
+  const editor=page.locator('[data-onboarding-composer] .ProseMirror');
+  await button('我是视频编导').click(); await ready(); await next().click();
+  await button('探索').click();
+  await pick('导入图片'); await ready(); await next().click(); await at('script');
+  await editor.fill('镜头一：产品居中，镜头缓慢推进。\n镜头二：近景展示包装，保持柔和侧光。');
+  await ready(); await next().click(); await at('storyboard'); await notReady();
+  await fakeResult('image',1); await ready(); await next().click(); await at('video');
+  await fakeResult('image',1); await notReady();
+  await fakeResult('video',1); await ready(); await button('完成这条路线').click();
+  await button('我是市场运营').click(); await ready(); await next().click();
+  await pick('导入图片'); await ready(); await next().click(); await at('collections');
+  await page.evaluate(()=>{window.collectionHasAssets=true;window.store.getState().setCollectionPanel('existing-folder');});
+  await page.getByRole('dialog',{name:'已有品牌集合',exact:true}).waitFor();
+  await ready();
+  await page.getByRole('dialog').getByRole('button',{name:'关闭',exact:true}).first().click();
+  await next().click(); await at('profile');
+  // Isolate the completion hook for saved profile scope; save UI has its own regression.
+  await page.evaluate(async()=>{
+    const {beginOnboardingOperation}=await import('/src/lib/onboardingStore.ts');
+    beginOnboardingOperation('profile',window.store.getState().activeProjectId)({collectionId:'wrong',profileId:'profile'});
+  });
+  await notReady();
+  await page.evaluate(async()=>{
+    const {beginOnboardingOperation}=await import('/src/lib/onboardingStore.ts');
+    beginOnboardingOperation('profile',window.store.getState().activeProjectId)({collectionId:'existing-folder',profileId:'profile'});
+    window.store.setState({visualProfiles:[{id:'profile',name:'测试规范',status:'confirmed',version:1}]});
+  });
+  await ready(); await next().click(); await at('profile-select');
+  await page.getByLabel('品牌视觉规范',{exact:true}).selectOption('profile'); await ready();
+  await next().click(); await at('batch');
+  await fakeResult('image',2,{visualProfileId:'wrong'}); await notReady();
+  await fakeResult('image',1,{visualProfileId:'profile'}); await notReady();
+  await fakeResult('image',1,{visualProfileId:'profile'}); await ready();
+  await button('完成这条路线').click();
+  await page.getByRole('heading',{name:'你已完成所有身份的实操引导',exact:true}).waitFor();
+  await button('继续使用').click(); await page.reload();
+  assert.equal(await page.locator('.onboarding-resume').count(),0);
+  assert.equal(await page.evaluate(()=>window.lesson.getState().guide.completedRoles.length),3);
+  await page.evaluate(()=>window.lesson.getState().open()); await button('我是设计师').click();
+  await at('create-project'); await button('新建创作').click(); await at('folder');
+  await button('稍后继续').click(); await page.locator('.onboarding-resume').waitFor();
+  await button('测试登录入口').click(); await page.locator('.onboarding-resume').waitFor({state:'hidden'});
+  await page.getByRole('dialog').getByRole('button',{name:'关闭',exact:true}).first().click();
+  await page.reload(); await button('继续入门引导').click(); await button('我是设计师').click();
+  await at('folder'); await notReady();
+  await page.evaluate(async()=>{
+    const {beginOnboardingOperation}=await import('/src/lib/onboardingStore.ts');
+    const store=window.lesson.getState(), original=store.guide, s=original.sessions.designer;
+    const oldCompletion=beginOnboardingOperation('folder',s.projectId);
+    const replay={...original,sessions:{...original.sessions,designer:{...s,runId:'new-replay'}}};
+    store.setGuide(replay); oldCompletion();
+    if (window.lesson.getState().guide.sessions.designer.ready) throw Error('late operation advanced replay');
+    store.setGuide(original);
+    beginOnboardingOperation('folder','another-project')();
+    if (window.lesson.getState().guide.sessions.designer.ready) throw Error('wrong project advanced practice');
+  });
+  const kept=await page.evaluate(()=>window.lesson.getState().guide.sessions.designer.projectId);
+  await page.evaluate(()=>{window.failSave=true;window.store.setState({projectCanvasFlush:async()=>{throw Error('save');}});});
+  await button('暂停入门引导').click(); await page.getByRole('alert').filter({hasText:'草稿尚未保存'}).waitFor();
+  await button('收起入门引导').click(); await button('跳过入门引导').click();
+  assert.equal(await page.locator('.onboarding-lesson,.onboarding-resume').count(),0);
+  assert.equal(await page.evaluate(()=>window.lesson.getState().guide.sessions.designer.projectId),kept);
   await page.reload();
-  await page.locator('.canvas-workspace[aria-busy="false"]').waitFor();
-  assert.equal(await page.locator('.onboarding-resume, .onboarding-lesson').count(), 0);
-  assert.equal(await page.evaluate(() => window.lesson.getState().progress.projectId), pausedProgress.projectId);
-  assert.equal(await page.evaluate(() => window.lesson.getState().progress.step), pausedProgress.step);
-  await page.getByRole('button', { name: '测试设置入口', exact: true }).click();
-  await page.getByRole('button', { name: '打开入门引导', exact: true }).click();
-  await page.getByRole('button', { name: '继续上次进度 · 5/5' }).click();
-  await step(5);
-  assert.ok((await editor.textContent()).includes('制作宣传图'));
-  const id = await page.evaluate(() => window.lesson.getState().progress.projectId);
-  // Synthetic provider events only: failure and unrelated work do not pass.
-  await page.evaluate(id => {
-    const job = { id:'unrelated', projectId:'elsewhere', createdAt:Date.now(), running:false, turns:[{ images:['result'] }] };
-    window.store.setState({ genJobs:{ unrelated:job } });
-  }, id);
-  await page.waitForTimeout(650); assert.equal(await page.evaluate(() => window.lesson.getState().progress.step), 5);
-  await page.evaluate(id => {
-    window.store.setState({ genJobs:{ lessonJob: { id:'lessonJob', projectId:id, createdAt:Date.now(), running:false,
-      provider:'jimeng', sessionId:'session', threadId:'t', refAssets:[], lastRefs:[], lastPrompt:'宣传图', lastRatio:null, streaming:'',
-      turns:[{ id:'turn', prompt:'宣传图', images:[], error:'模拟失败' }] } } });
-  }, id);
-  await page.getByText('尚未取得生成结果。请查看任务提示，重试后继续。').waitFor();
-  await page.evaluate(() => {
-    const job=window.store.getState().genJobs.lessonJob;
-    window.store.setState({ genJobs:{ lessonJob:{...job,turns:[{...job.turns[0],error:null,images:['data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg"/%3E']}] } } });
+  assert.equal(await page.locator('.onboarding-lesson,.onboarding-resume').count(),0);
+  await page.evaluate(()=>window.lesson.getState().open());
+  await page.setViewportSize({width:560,height:720});
+  await page.screenshot({path:'.tmp/onboarding-practice-narrow.png'});
+  assert.equal(await page.getByRole('dialog').evaluate(el=>el.scrollWidth<=el.clientWidth),true);
+  await page.setViewportSize({width:1600,height:1000});
+  await button('我是设计师').click(); await at('folder');
+  const late=await page.evaluate(async()=>{
+    const {beginOnboardingOperation}=await import('/src/lib/onboardingStore.ts');
+    window.lateFolder=beginOnboardingOperation('folder',window.store.getState().activeProjectId);
+    return true;
   });
-  await page.waitForTimeout(650);
-  assert.equal(await page.evaluate(() => window.lesson.getState().progress.step), 5);
-  assert.equal(await page.getByText('从结果继续修改', {exact:true}).count(), 0);
-  await page.getByRole('button', { name:'完成入门引导',exact:true }).click();
-  await page.getByText('第一条创作路径已完成', { exact: true }).waitFor();
-  assert.equal(await page.evaluate(() => window.lesson.getState().progress.outcome), 'generated');
-  await mkdir('.tmp', {recursive:true});
-  await page.waitForTimeout(300);
-  await page.screenshot({path:'.tmp/onboarding-complete.png'});
-  await page.getByRole('button', { name:'继续使用',exact:true }).click();
-  await page.evaluate(() => window.lesson.getState().show('update'));
-  await page.getByRole('button',{name:'知道了',exact:true}).click();
-  assert.equal(await page.evaluate(() => window.lesson.getState().progress.updateSeen),true);
-  await page.evaluate(() => window.lesson.getState().open());
-  await page.setViewportSize({width:1000,height:720});
-  await page.waitForTimeout(300);
-  await page.screenshot({path:'.tmp/onboarding-welcome.png'});
-  await page.getByRole('button', { name: '跳过入门引导', exact: true }).click();
-  assert.equal(await page.evaluate(() => window.lesson.getState().progress.status), 'completed');
-  await page.evaluate(() => {
-    window.missingProject = true;
-    window.lesson.getState().patch({status:'paused', step:5, jobId:null, startedAt:Date.now()+1000});
-    window.lesson.getState().open();
-  });
-  await page.getByRole('button', { name: '继续上次进度 · 5/5' }).click();
-  await page.getByRole('alert').filter({hasText:'原引导项目已不存在'}).waitFor();
-  assert.equal(await page.evaluate(() => window.lesson.getState().progress.status), 'paused');
-  await page.evaluate(() => { window.missingProject = false; });
-  await page.getByRole('button', { name: '继续上次进度 · 5/5' }).click();
-  await page.getByRole('complementary', { name: '入门任务清单' }).waitFor();
-  await page.evaluate(() => { window.failSave = true; });
-  await editor.fill('这条草稿保存失败时应保留教程');
-  await page.getByRole('button', {name:'暂停入门引导',exact:true}).click();
-  await page.getByRole('alert').filter({hasText:'草稿尚未保存'}).waitFor();
-  assert.equal(await page.evaluate(() => window.lesson.getState().progress.status), 'active');
-  const draftBeforeSkip = await editor.textContent();
-  await page.getByRole('button', { name: '收起入门引导', exact: true }).click();
-  await page.getByRole('button', { name: '跳过入门引导', exact: true }).click();
-  await page.locator('.onboarding-lesson').waitFor({ state: 'hidden' });
-  assert.equal(await page.locator('.onboarding-resume').count(), 0);
-  assert.equal(await page.evaluate(() => window.lesson.getState().progress.status), 'skipped');
-  assert.equal(await editor.textContent(), draftBeforeSkip);
-  await page.evaluate(() => window.lesson.getState().open());
-  await page.getByRole('button', { name: '跳过入门引导', exact: true }).click();
-  assert.equal(await page.locator('.onboarding-resume, .onboarding-lesson').count(), 0);
-  // A pending pause must not restore a reminder after the user skips.
-  await page.evaluate(() => {
-    window.store.setState({ projectCanvasFlush: () => new Promise(resolve => { window.releasePause = resolve; }) });
-    window.lesson.getState().patch({ status: 'active' });
-    window.lesson.getState().show('lesson');
-  });
-  await page.getByRole('button', { name: '暂停入门引导', exact: true }).click();
-  await page.getByRole('button', { name: '跳过入门引导', exact: true }).click();
-  await page.evaluate(async () => { window.releasePause(); await new Promise(resolve => setTimeout(resolve, 0)); });
-  assert.equal(await page.evaluate(() => window.lesson.getState().progress.status), 'skipped');
-  assert.equal(await page.locator('.onboarding-resume, .onboarding-lesson').count(), 0);
-  await page.evaluate(() => window.lesson.getState().open());
-  await page.getByRole('button', { name: '关闭', exact: true }).click();
-  assert.equal(await page.locator('.onboarding-resume, .onboarding-lesson').count(), 0);
-  assert.deepEqual(errors, []);
-  console.log('PASS onboarding: login/settings avoidance for active and paused help, dismissible reminder, persisted skip and settings resume, minimized skip despite save failure with draft retained; collection create/open, retry without duplicate, inline learning toggle, real canvas/editor actions, preparation, generation completion, completed status, missing project, save failure.');
-} catch (error) {
-  await mkdir('.tmp', {recursive:true});
-  await page.screenshot({path:'.tmp/onboarding-failure.png'});
-  console.error(await page.evaluate(() => ({ lesson:window.lesson.getState(), text:document.body.innerText.slice(-4000), calls:window.calls.slice(-12) })));
-  console.error(errors);
-  throw error;
+  assert.ok(late);
+  await button('跳过本步').click(); await at('source-scope');
+  await page.evaluate(()=>window.lateFolder());
+  assert.deepEqual(await page.evaluate(()=>window.lesson.getState().guide.sessions.designer.skippedSteps),[1]);
+  await button('稍后继续').click(); await page.reload();
+  await button('继续入门引导').click(); await button('我是设计师').click(); await at('source-scope');
+  await button('跳过本步').click(); await at('open-explore');
+  await button('跳过本步').click(); await at('explore');
+  await button('跳过本步').click(); await at('expand-source');
+  await button('跳过本步').click(); await at('activate-composer');
+  await page.evaluate(()=>{window.missingSample=true;});
+  await button('跳过本步').click(); await at('sample-dimensions');
+  await page.getByText(/未找到带反推数据的示例图/).waitFor(); await notReady();
+  await button('跳过本步').click();
+  await page.getByText('已走完 · 含跳过步骤').waitFor();
+  await button('我是设计师').click(); await at('create-project');
+  await button('跳过本步').click(); await at('folder');
+  assert.equal(await page.evaluate(()=>window.store.getState().activeProjectId),null);
+  await button('稍后继续').click(); await page.reload();
+  await button('继续入门引导').click(); await button('我是设计师').click(); await at('folder');
+  await button('新建创作').click(); await page.locator('.canvas-workspace[aria-busy="false"]').waitFor();
+  await at('folder'); await notReady();
+  assert.ok(await page.evaluate(()=>window.lesson.getState().guide.sessions.designer.projectId));
+  assert.deepEqual(errors,[]);
+  console.log('PASS designer eight-step spotlight practice, per-step skips and sample dimension ring, starter folder and capture failure gates, native browser URL, drag demo, all roles, pause/reload/skip and modal/narrow layout.');
+} catch(error) {
+  await mkdir('.tmp',{recursive:true}); await page.screenshot({path:'.tmp/onboarding-practice-failure.png'});
+  console.error(await page.evaluate(()=>({guide:window.lesson?.getState().guide,text:document.body.innerText.slice(-3500),calls:window.calls?.slice(-10)})));
+  console.error(errors); throw error;
 } finally { await browser.close(); await server.close(); }

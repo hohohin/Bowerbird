@@ -5,6 +5,7 @@ import { GeneratedImageFilter } from "./GeneratedImageFilter";
 import { useStore } from "../store";
 import { api } from "../lib/api";
 import { notifyError, notifySuccess } from "../lib/notify";
+import { beginOnboardingOperation, useOnboarding } from "../lib/onboardingStore";
 
 /** 顶部工具栏：导入 + 画布模式 + 搜索 + 运行状态。（创作板对话框已常驻。） */
 export function Toolbar({
@@ -101,24 +102,38 @@ export function Toolbar({
   }
 
   function importFiles() {
+    const completeLesson = beginOnboardingOperation("import", activeProjectId);
     setImportOpen(false);
     void withBusy(async () => {
       const paths = await api.pickImageFiles();
       if (!paths.length) return null;
       const assets = await api.importFiles(paths, activeProjectId);
       if (!assets.length) throw new Error("未导入任何素材，请检查所选文件是否可读取");
+      completeLesson();
       if (assets.length < paths.length) notifyError(null, `${paths.length - assets.length} 个文件导入失败`);
       return `已导入 ${assets.length} 个文件（相同文件复用已有素材）`;
     });
   }
 
   function importFolder() {
+    const completeLesson = beginOnboardingOperation("folder", activeProjectId);
+    const guide = useOnboarding.getState().guide;
+    const starterFolder = guide.status === "active" && guide.role === "designer"
+      && [1, 7].includes(guide.sessions.designer?.step ?? -1) && guide.sessions.designer?.projectId === activeProjectId;
     setImportOpen(false);
     void withBusy(async () => {
-      const path = await api.pickFolder();
+      const parent = starterFolder ? await api.releasePresetPack() : undefined;
+      const path = await api.pickFolder(parent);
       if (!path) return null;
+      if (parent) {
+        const normalize = (value: string) => value.replace(/\\/g, "/").replace(/\/$/, "").toLowerCase();
+        if (normalize(path) !== normalize(parent + "/初始引导")) {
+          throw new Error("请在打开的位置选择「初始引导」文件夹，再继续入门引导");
+        }
+      }
       const count = await api.importFolder(path, activeProjectId);
       if (!count) throw new Error("文件夹中没有成功导入的素材，请检查文件格式和读取权限");
+      completeLesson();
       return `已从文件夹导入 ${count} 个文件（相同文件复用已有素材）`;
     });
   }
@@ -145,6 +160,7 @@ export function Toolbar({
               <button
                 type="button"
                 onClick={importFiles}
+                data-tour="import-files"
                 className="app-context-item px-3 py-2 text-xs"
                 role="menuitem"
               >
@@ -154,6 +170,7 @@ export function Toolbar({
               <button
                 type="button"
                 onClick={importFolder}
+                data-tour="import-folder"
                 className="app-context-item px-3 py-2 text-xs"
                 role="menuitem"
               >
@@ -169,7 +186,7 @@ export function Toolbar({
             </div>
           )}
         </div>
-        {onExplore && <button type="button" className="app-button-dark" aria-pressed={exploring}
+        {onExplore && <button type="button" data-tour="explore" className="app-button-dark" aria-pressed={exploring}
           onClick={onExplore} title="浏览灵感网站，拖图采集到素材库"><Compass size={15} />探索</button>}
         {canvasMode ? (
           <button
@@ -185,6 +202,7 @@ export function Toolbar({
           <button
             type="button"
             className="app-button-accent"
+            data-tour="new-creation"
             title="用当前明确选中的素材开始一项新创作"
             onClick={() => onCreateCreative(false)}
           >
@@ -223,7 +241,6 @@ export function Toolbar({
           <div className="app-topbar-view-controls" role="group" aria-label="素材视图">
             <GeneratedImageFilter />
             <div className="library-view-control">
-              <span>项目素材</span>
               <div className="library-view-segments" role="group" aria-label="项目素材视图">
                 <button type="button" aria-pressed={collapsed} onClick={() => setCollapsed(true)}>收起</button>
                 <button type="button" aria-pressed={!collapsed} onClick={() => setCollapsed(false)}>展开</button>

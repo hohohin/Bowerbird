@@ -1,4 +1,28 @@
-.onboarding-target { outline: 2px solid #7c9cff; outline-offset: -2px; }
+.onboarding-spotlight { position: fixed; inset: 0; z-index: 48; pointer-events: none; }
+.onboarding-control-frame { fill: none; stroke: #4868ff; stroke-width: 2; }
+.onboarding-step-copy { white-space: pre-line; }
+.onboarding-spotlight-card.is-ring-open { z-index: 68; }
+.onboarding-spotlight-card { right: auto; max-height: calc(100vh - 32px); }
+.onboarding-spotlight-card h2 { margin: 18px 0 10px; font-size: 18px; font-weight: 600; }
+.onboarding-drag-demo { margin: 14px 0; color: var(--bb-muted); }
+.onboarding-drag-demo svg { width: 100%; }
+.onboarding-drag-demo text { fill: currentColor; font-size: 11px; }
+.onboarding-drag-demo .demo-panel { fill: var(--bb-surface); stroke: var(--bb-line); }
+.onboarding-drag-demo figcaption { margin-top: 8px; text-align: center; font-size: 11px; }
+.demo-cursor { animation: onboarding-drag 4s ease-in-out infinite; }
+.demo-image { animation: onboarding-drag 4s ease-in-out infinite; opacity: .9; }
+@keyframes onboarding-drag { 0%, 20% { transform: translate(0, 0); } 70%, 88% { transform: translate(170px, 0); opacity: 1; } 95%, 100% { transform: translate(170px, 0); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .demo-cursor, .demo-image { animation: none; } }
+.guide-role-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.guide-role-card { display: flex; flex-direction: column; align-items: flex-start; gap: 14px; text-align: left; padding: 24px 20px; border: 1px solid var(--bb-line); border-radius: 14px; background: var(--bb-surface); color: var(--bb-ink); }
+.guide-role-card:hover, .guide-role-card:focus-visible { border-color: #7c9cff; outline: 2px solid #7c9cff55; background: #7c9cff0a; }
+.guide-role-card > svg { color: #7c9cff; }
+.guide-role-card strong { font-size: 20px; }
+.guide-role-card p { font-size: 13px; line-height: 1.8; }
+.guide-role-card small { color: var(--bb-muted); font-size: 11px; line-height: 1.7; }
+.guide-role-card > span { display: flex; align-items: center; gap: 6px; margin-top: auto; padding-top: 12px; font-size: 12px; color: var(--bb-ink); }
+.onboarding-lesson-actions { display: flex; gap: 16px; }
+@media (max-width: 640px) { .guide-role-grid { grid-template-columns: 1fr; } .guide-role-card { padding: 16px; gap: 8px; } }
 .onboarding-lesson { position: fixed; top: 72px; right: 18px; z-index: 49; width: min(292px, calc(100vw - 32px)); max-height: calc(100vh - 100px); overflow: auto; padding: 14px; border: 1px solid var(--bb-line); border-radius: 12px; background: var(--bb-surface); color: var(--bb-ink); box-shadow: 0 8px 30px #0003; font-size: 12px; }
 .onboarding-lesson header, .onboarding-lesson header > span, .onboarding-lesson header > div { display: flex; align-items: center; gap: 8px; }
 .onboarding-lesson header { justify-content: space-between; font-weight: 600; }

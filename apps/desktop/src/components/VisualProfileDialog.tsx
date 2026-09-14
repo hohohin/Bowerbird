@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Check, ChevronDown, Palette, Pencil, RotateCcw, Sparkles, Trash2 } from "lucide-react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { api } from "../lib/api";
+import { beginOnboardingOperation } from "../lib/onboardingStore";
 import { effectivePolicy } from "../lib/entitlement";
 import { notifySuccess } from "../lib/notify";
 import { brandOverview } from "../lib/brandVisual";
@@ -236,12 +237,14 @@ function BrandVisualSession({ folder }: { folder: { id: string; name: string; pr
   }
   function confirmProfile() {
     if (!detail || invalid) return;
+    const completeLesson = beginOnboardingOperation("profile", useStore.getState().activeProjectId);
     void perform("正在保存规范…", async () => {
       const saved = await save();
       if (!alive.current) return;
       const confirmed = saved.status === "draft" ? await api.visualProfileConfirm(saved.id) : saved;
       if (!alive.current) return;
       apply(confirmed);
+      completeLesson({ collectionId: folder.id, profileId: confirmed.id });
       useStore.setState((s) => ({ visualProfiles: [confirmed, ...s.visualProfiles.filter((p) => p.id !== confirmed.id)] }));
       await useStore.getState().reloadVisualProfiles();
       if (!alive.current) return;

@@ -260,7 +260,13 @@ export const api = {
     }),
   // 读本地图片为 data URL（标注面板 canvas 导出用，规避 asset 协议跨域污染画布）。
   readImageDataUrl: (path: string) => invoke<string>("read_image_data_url", { path }),
+  layerWorkspaceAssetIds: () => invoke<string[]>("layer_workspace_asset_ids"),
+  layerExportPsd: (path: string, base64: string) => invoke<void>("layer_export_psd", { path, base64 }),
+  layerExportFontNames: (fonts: string[]) => invoke<Record<string, string>>("layer_export_font_names", { fonts }),
+  layerExportAi: (path: string, document: import("./layerDocument").LayerDocument) => invoke<string>("layer_export_ai", { path, document }),
   layerWorkspaceLoad: (assetId: string) => invoke<import("./layerDocument").LayerWorkspace | null>("layer_workspace_load", { assetId }),
+  layerFonts: () => invoke<string[]>("layer_fonts"),
+  layerTextRequest: (request: { action: "get_by_key" | "create"; idempotency_key: string; image?: import("./layerDocument").TextRecognitionPending["image"] }) => invoke<{ status: string; text?: string; error?: { message?: string } }>("layer_text_request", { request }),
   layerWorkspaceSave: (assetId: string, workspace: import("./layerDocument").LayerWorkspace) => invoke<void>("layer_workspace_save", { assetId, workspace }),
   layerExport: (assetId: string, document: import("./layerDocument").LayerDocument, dataUrl: string, projectId: string | null) => invoke<Asset>("layer_export", { assetId, document, dataUrl, projectId }),
   layerCloudRequest: (request: import("./layerDocument").LayerRequest | { action: string; idempotency_key?: string; job_id?: string }) => invoke<{ status: string; progress?: number; services?: { service: string; available: boolean; credits: number | null }[]; error?: { message: string }; layer_result?: { document?: import("./layerDocument").LayerDocument; image?: string } }>("layer_cloud_request", { request }),

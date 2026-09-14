@@ -705,13 +705,13 @@ export function CloudAgentSession({
                       <button
                         type="button"
                         onClick={continueWithOrdinaryGeneration}
-                        className="ml-2 underline underline-offset-2 hover:text-white"
+                        className="ml-2 underline underline-offset-2 hover:text-ink"
                       >
                         用此结果继续普通生成
                       </button>
                     )}
                     {ingestFailed && !readOnly && (
-                      <button type="button" onClick={() => requestCloudAgentIngestRetry(run.runId)} className="ml-2 underline underline-offset-2 hover:text-white">
+                      <button type="button" onClick={() => requestCloudAgentIngestRetry(run.runId)} className="ml-2 underline underline-offset-2 hover:text-ink">
                         重新入库
                       </button>
                     )}

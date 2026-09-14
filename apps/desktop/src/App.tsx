@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Toolbar } from "./components/Toolbar";
+import { WindowTitlebar } from "./components/WindowTitlebar";
 import { Sidebar } from "./components/Sidebar";
 import { LibraryHome } from "./components/LibraryHome";
 import { CanvasWorkspace } from "./components/CanvasWorkspace";
@@ -21,12 +22,12 @@ import { CloudAgentSession } from "./components/CloudAgentPanel";
 import { CloudAgentRuntimeCoordinator } from "./components/CloudAgentRuntimeCoordinator";
 import { LEGACY_CREATIVE_SESSION_FALLBACK_ENABLED } from "./lib/featureFlags";
 import { ExploreWorkspace } from "./components/ExploreWorkspace";
-import { EXPLORER_SITES } from "./lib/explorer";
+import { DEFAULT_EXPLORER_URL } from "./lib/explorer";
 import { CodexOnboarding } from "./components/CodexOnboarding";
 import { ExtensionOnboarding } from "./components/ExtensionOnboarding";
 import { DreaminaOnboarding } from "./components/DreaminaOnboarding";
 import { AccountOnboarding } from "./components/AccountOnboarding";
-import { useOnboarding } from "./lib/onboardingStore";
+import { beginOnboardingOperation, useOnboarding } from "./lib/onboardingStore";
 import { OnboardingTour } from "./components/OnboardingTour";
 import { ToastViewport } from "./components/ToastViewport";
 import { FileDropImport } from "./components/FileDropImport";
@@ -379,6 +380,14 @@ function App() {
     };
   }, [activeProjectId, activeProjectIsProvisional, projectRoutePending, projectRouteRevision, setCaptionedIds]);
 
+  useEffect(() => {
+    let alive = true;
+    void api.layerWorkspaceAssetIds().then(ids => {
+      if (alive) useStore.setState(state => ({ layerWorkspaceIds: new Set([...ids, ...state.layerWorkspaceIds]) }));
+    }).catch(error => console.error("load layer workspace badges failed", error));
+    return () => { alive = false; };
+  }, []);
+
   // 浏览器扩展采集入库后后端 emit `library://assets-changed`，
   // 去抖合并（扩展批量采集会连发多条 WS 消息）后刷新。
   useEffect(() => {
@@ -516,17 +525,15 @@ function App() {
     };
   }, [setClassifyProgress]);
 
-  // Wait for actual library state; upgrades receive a separate introduction.
+  // Wait for the library to be ready; every new guide starts with identity selection.
   useEffect(() => {
     let alive = true;
     const timer = setTimeout(() => {
-      void Promise.all([api.countAssets(), api.listProjects()]).then(([count, projects]) => {
+      void Promise.all([api.countAssets(), api.listProjects()]).then(() => {
         if (!alive) return;
         const lesson = useOnboarding.getState();
         if (lesson.panel !== "closed" || lesson.progress.status !== "new" || lesson.progress.updateSeen) return;
-        let legacySeen = false;
-        try { legacySeen = localStorage.getItem("bowerbird.tutorialSeen") === "1"; } catch { /* optional legacy preference */ }
-        lesson.show(legacySeen || count > 0 || projects.length > 0 ? "update" : "welcome");
+        lesson.show("welcome");
       }).catch(() => { /* Settings still offers the lesson after a library read failure. */ });
     }, 1500);
     return () => { alive = false; clearTimeout(timer); };
@@ -797,13 +804,17 @@ function App() {
   async function createCreative(blank: boolean) {
     const state = useStore.getState();
     const assetIds = creativeLaunchAssetIds(blank, state.selectedIds);
-    const createdProjectId = await state.beginProvisionalProject();
+    const completeLesson = beginOnboardingOperation("create-project", state.activeProjectId);
+    const guide = useOnboarding.getState().guide;
+    const designerStart = guide.status === "active" && guide.role === "designer" && !guide.sessions.designer?.projectId;
+    const createdProjectId = await state.beginProvisionalProject(designerStart ? "设计师 · 入门创作" : undefined);
     const route = useStore.getState();
     if (!isWorkspaceOperationCurrent(
       createdProjectId,
       route.activeProjectId,
       route.projectRoutePending,
     )) return;
+    completeLesson({ projectId: createdProjectId });
     setCreativeLaunch({ id: crypto.randomUUID(), projectId: createdProjectId, assetIds });
     setSourceBrowserOpen(false);
     setCreativeTarget(null);
@@ -843,6 +854,7 @@ function App() {
       <DescribeProviderPicker />
       {/* 维度环形菜单（全局单实例，store.captionRing 驱动，长按图片呼出） */}
       <CaptionRing />
+      <WindowTitlebar />
       <Toolbar
         onRefresh={refresh}
         canvasMode={projectWorkspaceActive}
@@ -850,10 +862,11 @@ function App() {
         onCreateCreative={createCreative}
         exploring={sourceBrowserOpen}
         onExplore={() => {
-          if (!sourceBrowserUrl) {
-            let lastUrl = EXPLORER_SITES[0].url as string;
-            try { lastUrl = localStorage.getItem("bowerbird.explorer.lastUrl") || lastUrl; } catch { /* unavailable storage */ }
-            setSourceBrowserUrl(lastUrl);
+          const guide = useOnboarding.getState().guide;
+          const designerExplore = guide.status === "active" && guide.role === "designer" && guide.sessions.designer?.step === 3;
+          if (!sourceBrowserUrl || designerExplore) {
+            setSourceBrowserUrl(DEFAULT_EXPLORER_URL);
+            if (designerExplore) setSourceBrowserNavigation(id => id + 1);
           }
           setSourceBrowserOpen(current => !current);
         }}

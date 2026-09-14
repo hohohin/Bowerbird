@@ -16,7 +16,7 @@ fn invalid() -> AppError {
     AppError::Other("分层工程数据无效或超出大小限制".into())
 }
 
-fn image_bytes(url: &str) -> Result<Vec<u8>, AppError> {
+pub(super) fn image_bytes(url: &str) -> Result<Vec<u8>, AppError> {
     let (head, encoded) = url.split_once(',').ok_or_else(invalid)?;
     if !matches!(head, "data:image/png;base64" | "data:image/jpeg;base64")
         || encoded.len() > 42 * 1024 * 1024
@@ -38,7 +38,7 @@ fn image_bytes(url: &str) -> Result<Vec<u8>, AppError> {
     Ok(bytes)
 }
 
-fn validate_workspace(value: &Value) -> Result<(), AppError> {
+pub(super) fn validate_workspace(value: &Value) -> Result<(), AppError> {
     let doc = &value["document"];
     if !doc.is_null() {
         let w = doc["width"].as_u64().ok_or_else(invalid)?;
@@ -78,12 +78,75 @@ fn validate_workspace(value: &Value) -> Result<(), AppError> {
                 }
             }
             image_bytes(layer["dataUrl"].as_str().ok_or_else(invalid)?)?;
+            for field in ["text", "textBackup"] {
+                let text = &layer[field];
+                if text.is_null() {
+                    continue;
+                }
+                if index == 0
+                    || !text.is_object()
+                    || text["content"]
+                        .as_str()
+                        .is_none_or(|s| s.chars().count() > 5000)
+                    || text["fontFamily"]
+                        .as_str()
+                        .is_none_or(|s| s.is_empty() || s.len() > 256)
+                    || !text["bold"].is_boolean()
+                    || !matches!(text["align"].as_str(), Some("left" | "center" | "right"))
+                    || text["color"].as_str().is_none_or(|s| {
+                        s.len() != 7
+                            || !s.starts_with('#')
+                            || !s[1..].bytes().all(|b| b.is_ascii_hexdigit())
+                    })
+                {
+                    return Err(invalid());
+                }
+                for (key, min, max) in [
+                    ("fontSize", 1.0, 2000.0),
+                    ("lineHeight", 0.5, 5.0),
+                    ("letterSpacing", -50.0, 200.0),
+                    ("boxWidth", 1.0, 6000.0),
+                    ("boxHeight", 1.0, 6000.0),
+                ] {
+                    if text[key]
+                        .as_f64()
+                        .is_none_or(|v| !v.is_finite() || v < min || v > max)
+                    {
+                        return Err(invalid());
+                    }
+                }
+            }
         }
     }
     if !value["pending"].is_null()
         && (!value["pending"]["request"].is_object() || !value["pending"]["userId"].is_string())
     {
         return Err(invalid());
+    }
+    if !value["textPending"].is_null() {
+        let pending = &value["textPending"];
+        if (!pending["allowCreate"].is_null() && !pending["allowCreate"].is_boolean())
+            || !value["pending"].is_null()
+            || pending["idempotencyKey"]
+                .as_str()
+                .is_none_or(|s| s.is_empty() || s.len() > 200)
+            || !pending["userId"].is_string()
+            || !doc["layers"].as_array().is_some_and(|layers| {
+                layers
+                    .iter()
+                    .any(|layer| layer["id"] == pending["layerId"] && layer["background"] == false)
+            })
+            || pending["image"]["mime"] != "image/jpeg"
+            || pending["image"]["base64"]
+                .as_str()
+                .is_none_or(|s| s.len() > 1_398_100)
+        {
+            return Err(invalid());
+        }
+        image_bytes(&format!(
+            "data:image/jpeg;base64,{}",
+            pending["image"]["base64"].as_str().unwrap()
+        ))?;
     }
     Ok(())
 }
@@ -150,6 +213,22 @@ fn save_workspace(
 fn safe_name(name: &str) -> bool {
     name.strip_suffix(".json")
         .is_some_and(|id| id.parse::<Ulid>().is_ok())
+}
+
+#[tauri::command]
+pub async fn layer_workspace_asset_ids(
+    db: State<'_, Arc<Database>>,
+) -> Result<Vec<String>, AppError> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = db.conn.lock().unwrap();
+        let mut statement =
+            conn.prepare("SELECT DISTINCT asset_id FROM analyses WHERE kind='layer_workspace'")?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    })
+    .await
+    .map_err(|error| AppError::Other(error.to_string()))?
 }
 
 #[tauri::command]
@@ -341,6 +420,49 @@ pub async fn layer_cloud_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn text_layers_round_trip_and_reject_invalid_style() {
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgba8(2, 2)
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        let data_url = format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(png.into_inner())
+        );
+        let base = json!({"id":"base","name":"底图","description":"","dataUrl":data_url,"background":true,"visible":true,"opacity":1,"x":0,"y":0,"width":100,"height":100});
+        let mut layer = base.clone();
+        layer["id"] = json!("text");
+        layer["background"] = json!(false);
+        layer["text"] = json!({"content":"可编辑\nBowerbird","fontFamily":"SimSun","fontSize":20,"color":"#ff0000","bold":false,"align":"left","lineHeight":1.2,"letterSpacing":0,"boxWidth":100,"boxHeight":100});
+        let workspace = json!({"document":{"schemaVersion":1,"width":100,"height":100,"layers":[base,layer]},"pending":null});
+        assert!(validate_workspace(&workspace).is_ok());
+        let encoded = serde_json::to_vec(&workspace).unwrap();
+        let decoded: Value = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(decoded, workspace);
+        let mut empty_text = workspace.clone();
+        empty_text["document"]["layers"][1]["text"]["content"] = json!("");
+        assert!(validate_workspace(&empty_text).is_ok());
+        let mut image_mode = workspace.clone();
+        image_mode["document"]["layers"][1]["textBackup"] =
+            image_mode["document"]["layers"][1]["text"].take();
+        assert!(validate_workspace(&image_mode).is_ok());
+        let decoded: Value =
+            serde_json::from_slice(&serde_json::to_vec(&image_mode).unwrap()).unwrap();
+        assert_eq!(decoded, image_mode);
+        image_mode["document"]["layers"][1]["textBackup"]["fontSize"] = json!(0);
+        assert!(validate_workspace(&image_mode).is_err());
+        for (key, value) in [
+            ("fontSize", json!(0)),
+            ("color", json!("red")),
+            ("boxWidth", json!(100000)),
+            ("content", json!(false)),
+        ] {
+            let mut invalid_text = workspace.clone();
+            invalid_text["document"]["layers"][1]["text"][key] = value;
+            assert!(validate_workspace(&invalid_text).is_err());
+        }
+    }
     #[test]
     fn rejects_escaping_and_invalid_workspaces() {
         assert!(!safe_name("../secret.json"));

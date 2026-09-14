@@ -1,6 +1,7 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { LayerEditor } from "../../../src/components/LayerEditor";
+import { MasonryGrid } from "../../../src/components/MasonryGrid";
 import { AssetContextMenu } from "../../../src/components/AssetContextMenu";
 import { useStore } from "../../../src/store";
 import "../../../src/styles.css";
@@ -19,7 +20,7 @@ const documentValue = { schemaVersion: 1, width: 1024, height: 768, layers: [
   { ...layer, id: "circle", name: "圆形装饰", dataUrl: circle, x: 380, y: 200, width: 400, height: 400 },
   { ...layer, id: "title", name: "标题文字", description: "保留透明通道的独立标题", dataUrl: title, x: 140, y: 85, width: 700, height: 100 },
 ] };
-const source = { id: "source", name: "设计探索", ext: "png", store_path: background, width: 1024, height: 768, source: "imported" };
+const source = { id: "source", name: "设计探索", ext: "png", store_path: background, thumb_path: background, width: 1024, height: 768, source: "imported" };
 w.store = useStore; w.calls = []; w.exports = []; w.failSave = false; w.pendingBusy = false; w.enabled = true;
 let job: any = JSON.parse(sessionStorage.getItem("layer-job") || "null");
 let saved = JSON.parse(sessionStorage.getItem("layer-workspace") || "null");
@@ -33,6 +34,25 @@ w.__TAURI_INTERNALS__ = {
     if (command === "get_assets_by_ids") return [source];
     if (command === "read_image_data_url") return background;
     if (command === "layer_workspace_load") return saved;
+    if (command === "plugin:dialog|save") return w.cancelExport ? null : `C:/exports/layers.${args.options.filters[0].extensions[0]}`;
+    if (command === "layer_export_psd" || command === "layer_export_ai") {
+      if (w.failExport) throw "模拟工程导出失败";
+      w.fileExports ??= []; w.fileExports.push({ command, args }); return "";
+    }
+    if (command === "layer_workspace_asset_ids") return saved ? [source.id] : [];
+    if (command === "layer_fonts") return ["Microsoft YaHei", "Arial", "SimSun"];
+    if (command === "layer_export_font_names") return { Arial: "ArialMT" };
+    if (command === "layer_text_request") {
+      const request = args.request;
+      const old = JSON.parse(sessionStorage.getItem("layer-text-job") || "null");
+      if (request.action === "get_by_key") {
+        if (!old || old.idempotency_key !== request.idempotency_key) return { status: "not_found" };
+        return { status: "succeeded", text: JSON.stringify({ text: w.noText ? "" : "BOWERBIRD", color: "#263731", bold: true, alignment: "left" }) };
+      }
+      sessionStorage.setItem("layer-text-job", JSON.stringify(request));
+      if (w.textDisconnect) { w.textDisconnect = false; throw "模拟文字识别响应丢失"; }
+      return { status: "queued" };
+    }
     if (command === "layer_workspace_save") {
       if (w.failSave) throw "模拟磁盘保存失败";
       saved = structuredClone(args.workspace); sessionStorage.setItem("layer-workspace", JSON.stringify(saved)); return;
@@ -55,6 +75,6 @@ w.__TAURI_INTERNALS__ = {
     throw new Error(`Unexpected synthetic IPC: ${command}`);
   },
 };
-useStore.setState({ assets: [source], activeProjectId: "project-original", cloudAuth: { logged_in: true, cloud_available: true, user_id: "user-original" } as any });
+useStore.setState({ assets: [source], layerWorkspaceIds: new Set(saved ? [source.id] : []), activeProjectId: "project-original", cloudAuth: { logged_in: true, cloud_available: true, user_id: "user-original" } as any });
 const open = () => useStore.getState().openLayerEditor("source");
-createRoot(document.getElementById("root")!).render(<><button onClick={open}>打开分层编辑</button><button onClick={() => useStore.setState({ contextMenu: { assetId: "source", x: 120, y: 80, asset: source } as any })}>打开右键菜单</button><LayerEditor /><AssetContextMenu /></>);
+createRoot(document.getElementById("root")!).render(<><button onClick={open}>打开分层编辑</button><button onClick={() => useStore.setState({ contextMenu: { assetId: "source", x: 120, y: 80, asset: source } as any })}>打开右键菜单</button><div style={{ width: 300 }}><MasonryGrid columnCount={1} assetsOverride={[source]} /></div><LayerEditor /><AssetContextMenu /></>);

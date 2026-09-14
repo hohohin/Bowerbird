@@ -387,11 +387,6 @@ export function AssetContextMenu() {
       aria-label="素材操作"
     >
       <div className="app-context-label">整理</div>
-      {menu.onNewDraft && (
-        <button type="button" role="menuitem" className="app-context-item px-2 py-1.5" onClick={menu.onNewDraft}>
-          <PenTool size={13} className="shrink-0" /> 新建草稿
-        </button>
-      )}
       {menu.canvasSelection && (
         <button type="button" role="menuitem" disabled={busy} className="app-context-item px-2 py-1.5"
           onClick={() => {
@@ -420,6 +415,17 @@ export function AssetContextMenu() {
           {menu.canvasSelection.nodeIds.length > 1
             ? `从画板移除所选 ${menu.canvasSelection.nodeIds.length} 项`
             : "从画板移除"}
+        </button>
+      )}
+      {menu.addCanvasImagesToBoard && menu.addCanvasImagesToBoard.count > 0 && (
+        <button type="button" role="menuitem" disabled={busy} className="app-context-item px-2 py-1.5"
+          onClick={() => {
+            closeContextMenu();
+            menu.addCanvasImagesToBoard!.run();
+          }}>
+          {menu.addCanvasImagesToBoard.count > 1
+            ? `添加所选 ${menu.addCanvasImagesToBoard.count} 张图片到对话框`
+            : "添加到对话框"}
         </button>
       )}
       {/* 详情页右键（编辑器对话框与详情页互斥，从此处带回主界面插 chip）：菜单第一项。 */}

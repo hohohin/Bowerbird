@@ -15,9 +15,9 @@ function isAppTheme(value: unknown): value is AppTheme {
 export function loadCachedTheme(): AppTheme {
   try {
     const cached = localStorage.getItem(THEME_CACHE_KEY);
-    return isAppTheme(cached) ? cached : "dark";
+    return isAppTheme(cached) ? cached : "light";
   } catch {
-    return "dark";
+    return "light";
   }
 }
 

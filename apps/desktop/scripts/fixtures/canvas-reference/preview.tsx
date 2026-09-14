@@ -41,6 +41,9 @@ w.save = () => {
 w.emitChange = () => {
   for (const [handler, event] of listeners) if (event === "creative://changed") callbacks.get(handler)?.({ event, id: handler, payload: { projectId: "p" } });
 };
+w.emitAssetsChanged = () => {
+  for (const [handler, event] of listeners) if (event === "library://assets-changed") callbacks.get(handler)?.({ event, id: handler, payload: null });
+};
 w.launch = (agent = false) => {
   const prompt = { ...base, id: agent ? "agent-prompt:launch:0:0" : "gen-prompt:job:turn:0", kind: "prompt", role: null, assetId: null,
     x: 20264, y: 70, width: 260, height: 148, createdAt: 2, payloadJson: JSON.stringify({ schema_version: 1, text: "用这些图片生成海报", status: "running", provider: "jimeng", ...(agent ? {} : { job_id: "job", turn_key: "turn" }) }) };
@@ -95,6 +98,21 @@ w.__TAURI_INTERNALS__ = {
       snapshot.view = { ...args.value }; return snapshot.view;
     }
     if (command === "get_assets_by_ids") return assets.filter(a => args.assetIds.includes(a.id));
+    if (command === "delete_asset_with_mode") {
+      if (w.failAssetDelete) throw "模拟删除失败";
+      for (const node of snapshot.nodes) {
+        if (node.assetId === args.id && (args.mode === "delete" || node.projectId === args.projectId)) {
+          node.hiddenAt = 20;
+          if (args.mode === "delete") node.assetId = null;
+        }
+      }
+      if (args.mode === "delete") {
+        const index = assets.findIndex(asset => asset.id === args.id);
+        if (index >= 0) assets.splice(index, 1);
+      }
+      w.emitAssetsChanged();
+      return { deleted_assets: args.mode === "delete" ? 1 : 0, removed_members: args.mode === "keep" ? 1 : 0, moved_files: 0, failed_moves: [] };
+    }
     if (command === "save_annotated_image") {
       if (w.failDraftSave) throw "模拟草稿保存失败";
       const asset = { id: `draft-${assets.length}`, name: args.fileName, ext: "png", width: 1600, height: 1200,

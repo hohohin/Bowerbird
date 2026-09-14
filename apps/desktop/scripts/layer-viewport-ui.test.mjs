@@ -1,0 +1,87 @@
+import assert from "node:assert/strict";
+import { mkdir } from "node:fs/promises";
+import { createServer } from "vite";
+import { chromium } from "../../html-renderer/node_modules/playwright/index.mjs";
+const server = await createServer({ server: { host: "127.0.0.1", port: 1579, strictPort: true, hmr: false, watch: null } });
+await server.listen();
+const browser = await chromium.launch({ channel: "chrome", headless: true });
+const page = await browser.newPage({ viewport: { width: 1500, height: 1050 } });
+const errors = []; page.on("pageerror", error => errors.push(error.message));
+const dialog = page.getByRole("dialog", { name: "分层编辑" });
+const stage = dialog.locator(".layer-stage"), preview = dialog.getByLabel("图层画布");
+const near = (a, b, tolerance = 1) => assert.ok(Math.abs(a - b) < tolerance, `${a} vs ${b}`);
+const drag = async (x, y, dx, dy, button = "left") => {
+  await page.mouse.move(x, y); await page.mouse.down({ button });
+  await page.mouse.move(x + dx, y + dy, { steps: 8 }); await page.mouse.up({ button });
+};
+try {
+  await page.goto("http://127.0.0.1:1579/scripts/fixtures/layers/preview.html");
+  await page.evaluate(() => sessionStorage.setItem("layer-workspace", JSON.stringify({ document: window.documentFixture, pending: null })));
+  await page.reload(); await page.getByRole("button", { name: "打开分层编辑", exact: true }).click();
+  await dialog.getByLabel("图层名称").waitFor();
+  await page.evaluate(() => document.fonts.ready);
+  await page.evaluate(() => Promise.all(document.getAnimations().filter(animation => animation.effect?.getTiming().iterations !== Infinity).map(animation => animation.finished)));
+  const initial = await stage.boundingBox();
+  const original = await page.evaluate(() => window.saved().document);
+  await dialog.getByRole("button", { name: "放大画布" }).click();
+  near((await stage.boundingBox()).width, initial.width * 1.25);
+  await dialog.getByRole("button", { name: "缩小画布" }).click();
+  near((await stage.boundingBox()).width, initial.width);
+  const pointer = { x: initial.x + initial.width * .6, y: initial.y + initial.height * .6 };
+  await page.mouse.move(pointer.x, pointer.y); await page.mouse.wheel(0, -200);
+  await page.waitForFunction(() => document.querySelector('[aria-label="画布缩放"]').textContent !== "100%");
+  const zoomed = await stage.boundingBox(); assert.ok(zoomed.width > initial.width);
+  near((pointer.x - zoomed.x) / zoomed.width, .6, .002);
+  near((pointer.y - zoomed.y) / zoomed.height, .6, .002);
+  // Pan from an element: neither its geometry nor the selection/undo history changes.
+  await dialog.getByRole("button", { name: "适应窗口", exact: true }).click();
+  await dialog.getByRole("button", { name: "圆形装饰", exact: true }).click();
+  let circle = await stage.locator('[data-layer-id="circle"]').boundingBox();
+  await page.keyboard.down("Space");
+  await drag(circle.x + circle.width / 2, circle.y + circle.height / 2, 90, 45);
+  await page.keyboard.up("Space");
+  let moved = await stage.boundingBox(); near(moved.x, initial.x + 90); near(moved.y, initial.y + 45);
+  assert.equal(await stage.locator('.is-selected').getAttribute("data-layer-id"), "circle");
+  assert.equal(await dialog.getByRole("button", { name: "撤销", exact: true }).isDisabled(), true);
+  circle = await stage.locator('[data-layer-id="circle"]').boundingBox();
+  await drag(circle.x + circle.width / 2, circle.y + circle.height / 2, -70, -30, "middle");
+  moved = await stage.boundingBox(); near(moved.x, initial.x + 20); near(moved.y, initial.y + 15);
+  await dialog.getByRole("button", { name: "保存图层工程", exact: true }).click();
+  assert.deepEqual(await page.evaluate(() => window.saved().document), original, "viewport gestures must not persist layer changes");
+  await dialog.getByRole("button", { name: "适应窗口", exact: true }).click();
+  near((await stage.boundingBox()).x, initial.x); near((await stage.boundingBox()).width, initial.width);
+  // Blank workspace deselects; transparent raster margins can select their layer.
+  await page.mouse.click(initial.x + 30, initial.y + initial.height - 30);
+  assert.equal(await stage.locator(".is-selected").count(), 0);
+  await dialog.getByRole("button", { name: "圆形装饰", exact: true }).click();
+  circle = await stage.locator('[data-layer-id="circle"]').boundingBox();
+  await page.mouse.click(circle.x + 3, circle.y + 3);
+  assert.equal(await stage.locator(".is-selected").getAttribute("data-layer-id"), "circle");
+  await page.mouse.click(circle.x + circle.width / 2, circle.y + circle.height / 2);
+  assert.equal(await stage.locator(".is-selected").count(), 1);
+  const outside = await preview.boundingBox(); await page.mouse.click(outside.x + 5, outside.y + outside.height - 5);
+  assert.equal(await stage.locator(".is-selected").count(), 0);
+  // Layer dragging still uses document coordinates after zoom.
+  await dialog.getByRole("button", { name: "放大画布" }).click();
+  circle = await stage.locator('[data-layer-id="circle"]').boundingBox();
+  const expanded = await stage.boundingBox();
+  await drag(circle.x + circle.width / 2, circle.y + circle.height / 2, 40, 25);
+  near(+await dialog.getByLabel("图层 X", { exact: true }).inputValue(), 380 + 40 * 1024 / expanded.width, 1.1);
+  await page.keyboard.press("Control+z");
+  near(+await dialog.getByLabel("图层 X", { exact: true }).inputValue(), 380);
+  await dialog.getByLabel("图层 X", { exact: true }).fill("430");
+  await page.keyboard.press("Control+z");
+  near(+await dialog.getByLabel("图层 X", { exact: true }).inputValue(), 380);
+  // Space in an input remains text, and window blur clears a held pan shortcut.
+  await dialog.getByLabel("图层名称").focus(); await page.keyboard.press("End"); await page.keyboard.press("Space");
+  assert.ok((await dialog.getByLabel("图层名称").inputValue()).endsWith(" "));
+  assert.equal(await preview.evaluate(node => node.classList.contains("is-pan-ready")), false);
+  await preview.focus(); await page.keyboard.down("Space");
+  assert.equal(await preview.evaluate(node => node.classList.contains("is-pan-ready")), true);
+  await page.evaluate(() => window.dispatchEvent(new Event("blur"))); await page.keyboard.up("Space");
+  assert.equal(await preview.evaluate(node => node.classList.contains("is-pan-ready")), false);
+  await dialog.getByRole("button", { name: "适应窗口", exact: true }).click();
+  await mkdir(".tmp", { recursive: true }); await page.screenshot({ path: ".tmp/layer-viewport.png" });
+  assert.deepEqual(errors, []);
+  console.log("PASS zoom/anchor/reset, pan, unchanged document, blank deselect, transparent bounds selection, zoomed drag and Ctrl+Z, field undo, typing and blur cleanup");
+} finally { await browser.close(); await server.close(); }

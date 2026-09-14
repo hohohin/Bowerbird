@@ -26,6 +26,21 @@ pub const PROJECT_CANVAS_DRAFT_SCHEMA_VERSION: u64 = 1;
 pub const MIN_PROJECT_CANVAS_ZOOM: f64 = 0.35;
 pub const MAX_PROJECT_CANVAS_ZOOM: f64 = 2.4;
 
+/// Hide every instance of a removed asset, retaining graph/history identities.
+/// Call inside the same transaction that removes the asset or project membership.
+pub(crate) fn hide_asset_canvas_nodes(
+    conn: &rusqlite::Connection,
+    asset_id: &str,
+    project_id: Option<&str>,
+) -> AppResult<()> {
+    conn.execute(
+        "UPDATE canvas_nodes SET hidden_at = ?3, updated_at = ?3
+         WHERE asset_id = ?1 AND (?2 IS NULL OR project_id = ?2) AND hidden_at IS NULL",
+        params![asset_id, project_id, Utc::now().timestamp()],
+    )?;
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProjectTitleSource {

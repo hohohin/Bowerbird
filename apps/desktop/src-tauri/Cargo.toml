@@ -1,6 +1,6 @@
 [package]
 name = "bowerbird-desktop"
-version = "26.9.14"
+version = "26.9.15"
 description = "Bowerbird desktop app"
 authors = ["Bowerbird"]
 edition = "2021"
@@ -101,6 +101,7 @@ windows = { version = "0.61", features = [
   "Win32_Storage_FileSystem",
   "Win32_Security",
   "Win32_Foundation",
+  "Win32_Graphics_Gdi",
 ] }
 
 # --- 发布优化 ---

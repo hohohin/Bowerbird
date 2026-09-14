@@ -1,3 +1,4 @@
+import { beginOnboardingOperation } from "../lib/onboardingStore";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { DEFAULT_VIDEO_OPTIONS, VIDEO_RATIOS, videoInputError, videoProvider, type GenerationSettings } from "../lib/videoGeneration";
 import { VideoControls } from "./creation/VideoControls";
@@ -191,12 +192,12 @@ export function CreationBoard({
     if (initialAssetIds.length === 0) return;
     const timer = window.setTimeout(() => {
       for (const assetId of initialAssetIds) {
-        window.dispatchEvent(new CustomEvent(BOARD_ASSET_PICK_EVENT, { detail: assetId }));
+        // 新建项目的参考图预填不代表用户已点击对话框。
+        window.dispatchEvent(new CustomEvent(BOARD_ASSET_PICK_EVENT, { detail: { assetId, focus: false } }));
       }
-      focus();
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [projectId, embedded, focus, initialAssetIds]);
+  }, [projectId, embedded, initialAssetIds]);
 
   const appliedPromptLoadRef = useRef<string | null>(null);
   useEffect(() => {
@@ -986,7 +987,7 @@ export function CreationBoard({
         <div
           ref={hostRef}
           onClick={focus}
-          onFocus={() => setBoardActive(true)}
+          onFocus={() => { setBoardActive(true); beginOnboardingOperation("activate-composer", useStore.getState().activeProjectId)(); }}
           onKeyDown={(event) => {
             if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
               event.preventDefault();

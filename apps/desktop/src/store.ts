@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { beginOnboardingOperation } from "./lib/onboardingStore";
 import type { ProjectMembership } from "./lib/libraryView";
 import { videoInputError, videoRatio, type GenerationSettings } from "./lib/videoGeneration";
 import { api } from "./lib/api";
@@ -236,6 +237,7 @@ interface State {
   promptedAssets: PromptedAsset[]; // 创作板挑图集合中带 caption（反推）的子集，供编辑器补 sections / 展开维度片段
   promptedAssetsLoaded: boolean; // promptedAssets 是否与库同步（false=补拉中，维度环加载态提示用）
   captionedIds: Set<string>; // 有反推（caption）的资产 id 集合（瀑布流标 🏷️，轻量，不带正文）
+  layerWorkspaceIds: Set<string>;
   focusAssetId: string | null; // 创作板 chip 点击 → 瀑布流滚动定位+高亮的目标 id（消费后清空）
   // —— 维度环形菜单（CaptionRing，长按图片呼出，全局单例挂 App 根）——
   captionRing: string | null; // 打开中的环会话（assetId）；null = 收起
@@ -306,7 +308,7 @@ interface State {
   // 单槽 + 前端排队：同一时刻只调一次 codex_describe_asset（后端 DESCRIBE_CANCEL 单例）。
   describingId: string | null;
   describingName: string | null; // 反推中素材名（随队列捕获，切视图仍可显示）
-  describeQueue: { assetId: string; instruction: string; name: string; provider?: string }[];
+  describeQueue: { assetId: string; instruction: string; name: string; provider?: string; onTutorialComplete?: () => void }[];
   describeFailures: DescribeFailure[]; // 当前会话失败记录，供右上角 AI 任务清单展示/重试
   describeStartedAt: number | null; // 当前任务开始时间戳；跨组件已耗时显示用
   runDescribe: (assetId: string, instruction: string, provider?: string) => void;
@@ -479,14 +481,14 @@ interface State {
     y: number;
     assetId: string;
     asset?: Asset;
-    onNewDraft?: () => void;
+    addCanvasImagesToBoard?: { count: number; run: () => void };
     canvasSelection?: { projectId: string; nodeIds: string[] };
   } | null;
   openContextMenu: (
     x: number,
     y: number,
     assetId: string,
-    context?: { asset?: Asset; canvasSelection?: { projectId: string; nodeIds: string[] }; onNewDraft?: () => void },
+    context?: { asset?: Asset; canvasSelection?: { projectId: string; nodeIds: string[] }; addCanvasImagesToBoard?: { count: number; run: () => void } },
   ) => void;
   closeContextMenu: () => void;
   // —— 项目右键菜单（侧栏项目行 / 收起态圆标）——
@@ -570,6 +572,7 @@ export const useStore = create<State>((set, get) => {
     });
     try {
       await api.describeAsset(next.assetId, next.instruction, next.provider);
+      next.onTutorialComplete?.();
     } catch (e) {
       const msg = taskErrorMessage(e);
       await reconcileRejectedCloudSession(msg);
@@ -747,6 +750,7 @@ export const useStore = create<State>((set, get) => {
   promptedAssets: [],
   promptedAssetsLoaded: false,
   captionedIds: new Set<string>(),
+  layerWorkspaceIds: new Set<string>(),
   focusAssetId: null,
   captionRing: null,
   ringAssetId: null,
@@ -925,7 +929,7 @@ export const useStore = create<State>((set, get) => {
       const retainInspector = shouldRetainInspectorForProjectRoute(id, get().creativeNavigation);
       set({
         activeProjectId: id,
-        boardOpen: true,
+        boardOpen: false,
         focusedThreadId: null,
         currentFolderId: null,
         currentCollectionId: null,
@@ -995,7 +999,7 @@ export const useStore = create<State>((set, get) => {
     set((state) => ({
       projects: [project, ...state.projects.filter((candidate) => !candidate.provisional)],
       activeProjectId: id,
-      boardOpen: true,
+      boardOpen: false,
       focusedThreadId: null,
       projectTimelineScope: "focused",
       currentFolderId: null,
@@ -1333,6 +1337,10 @@ export const useStore = create<State>((set, get) => {
           instruction: trimmed,
           name: s.assets.find((a) => a.id === assetId)?.name ?? "未知素材",
           provider: route ?? undefined,
+          onTutorialComplete: (() => {
+            const complete = beginOnboardingOperation("analyse", s.activeProjectId);
+            return () => complete({ analysisAssetId: assetId });
+          })(),
         },
       ],
       describeFailures: s.describeFailures.filter((failure) => failure.assetId !== assetId),

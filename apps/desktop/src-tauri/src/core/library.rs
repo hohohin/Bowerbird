@@ -763,7 +763,10 @@ impl Database {
             )
             .optional()?
             .unwrap_or((None, None));
-        conn.execute("DELETE FROM assets WHERE id = ?1", rusqlite::params![id])?;
+        let tx = conn.unchecked_transaction()?;
+        crate::core::project_canvas::hide_asset_canvas_nodes(&tx, id, None)?;
+        tx.execute("DELETE FROM assets WHERE id = ?1", rusqlite::params![id])?;
+        tx.commit()?;
         drop(conn); // 释放锁后再做文件 IO，避免阻塞其它 DB 操作。
         delete_asset_files(
             store_path.as_deref().map(Path::new),

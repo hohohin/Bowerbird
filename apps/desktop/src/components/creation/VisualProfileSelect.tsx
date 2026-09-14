@@ -1,6 +1,7 @@
 import { Palette, Settings2 } from "lucide-react";
 import { useEffect } from "react";
 import { useStore } from "../../store";
+import { beginOnboardingOperation } from "../../lib/onboardingStore";
 
 export function VisualProfileSelect({
   value,
@@ -36,7 +37,11 @@ export function VisualProfileSelect({
         disabled={disabled || profiles.length === 0}
         onChange={(event) => {
           const selected = event.target.value;
-          if (!selected || profiles.some((profile) => profile.id === selected)) onChange(selected || null);
+          if (!selected || profiles.some((profile) => profile.id === selected)) {
+            const completeLesson = beginOnboardingOperation("profile-select", useStore.getState().activeProjectId);
+            onChange(selected || null);
+            if (selected) completeLesson({ profileId: selected });
+          }
         }}
         className="min-w-0 max-w-36 bg-transparent text-[11px] text-ink focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent disabled:opacity-60"
       >

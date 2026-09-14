@@ -7,6 +7,7 @@ import { EXPLORER_MIME, parseExplorerImage } from "../lib/explorer";
 import { notifyError, notifySuccess } from "../lib/notify";
 import { prepareExplorerCanvasDrop } from "../lib/explorerCanvasDrop";
 import { LearningHint } from "./OnboardingTour";
+import { beginOnboardingOperation } from "../lib/onboardingStore";
 
 export function ExploreWorkspace({ url, open, navigationId = 0, onClose, children }: { url: string | null; open: boolean; navigationId?: number; onClose: () => void; children: ReactNode }) {
   const [busy, setBusy] = useState(false);
@@ -31,6 +32,7 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
     if (busyRef.current || state.projectRoutePending) return;
     busyRef.current = true; setBusy(true);
     const target = state.activeProjectId;
+    const completeLesson = beginOnboardingOperation("explore", target);
     const revision = state.projectRouteRevision;
     const placeOnCanvas = prepareExplorerCanvasDrop(event.target, target, event.clientX, event.clientY);
     try {
@@ -57,6 +59,7 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
         try { await placeOnCanvas(asset); }
         catch (error) { notifyError(error, "图片已入库，但画板卡片保存失败"); return; }
       }
+      if (placeOnCanvas) completeLesson();
       notifySuccess(placeOnCanvas ? "图片已采集并添加到画板" : "图片已采集");
     } catch (error) { notifyError(error, "采集失败，请重试"); }
     finally { busyRef.current = false; setBusy(false); }

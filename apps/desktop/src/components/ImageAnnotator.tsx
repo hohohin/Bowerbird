@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { useStore } from "../store";
 import { api } from "../lib/api";
+import { beginOnboardingOperation } from "../lib/onboardingStore";
 import { notifyError, notifySuccess } from "../lib/notify";
 import { chipName } from "./creation/schema";
 import type {
@@ -741,6 +742,8 @@ export function ImageAnnotator() {
 
   async function insertToBoard() {
     if (busy) return;
+    const onboardingProjectId = useStore.getState().activeProjectId;
+    const completeLesson = beginOnboardingOperation("annotate", onboardingProjectId);
     setBusy(true);
     try {
       const out = await buildOutput();
@@ -764,6 +767,7 @@ export function ImageAnnotator() {
       };
       closeAnnotator();
       insertAnnotatedToBoard(prompted);
+      if (tokens && useStore.getState().activeProjectId === onboardingProjectId) completeLesson({ annotationAssetId: temp.id });
       notifySuccess("标注图已插入创作板（未入库）");
     } catch (e) {
       notifyError(e, "插入创作板失败");
@@ -943,7 +947,7 @@ export function ImageAnnotator() {
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[90] flex flex-col bg-black/90"
+      className="image-annotator fixed inset-0 z-[90] flex flex-col bg-black/90"
       role="dialog"
       aria-modal="true"
       aria-label={isDraft ? "草稿" : "图片标注"}

@@ -1,4 +1,5 @@
 import { CollectionLearning } from "./CollectionOnboarding";
+import { beginOnboardingOperation } from "../lib/onboardingStore";
 import { useEffect, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -79,12 +80,16 @@ export function CollectionPanel({ folder, onClose }: { folder: Folder; onClose: 
     let revision = 0;
     let unlisten: (() => void) | undefined;
     async function refresh() {
+      const completeLesson = beginOnboardingOperation("collections", useStore.getState().activeProjectId);
       const request = ++revision;
       setLoading(true);
       setError(false);
       try {
         const result = await api.listLibraryView({ folderId: folder.id });
-        if (alive && request === revision) setAssets(result.assets);
+        if (alive && request === revision) {
+          setAssets(result.assets);
+          if (result.assets.length) completeLesson({ collectionId: folder.id });
+        }
       } catch {
         if (alive && request === revision) setError(true);
       } finally {

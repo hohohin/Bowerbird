@@ -12,7 +12,7 @@ import { agentPromptReferencesFromDoc, graphSourcesFromDoc, serializeDoc } from 
 import { parsePromptToDoc, parsePromptToInline } from "./parse";
 import { buildPlugins } from "./plugins";
 
-export type BoardAssetPick = string | { assetId: string; canvasNodeId?: string | null };
+export type BoardAssetPick = string | { assetId: string; canvasNodeId?: string | null; focus?: boolean };
 export const BOARD_ASSET_PICK_EVENT = "bowerbird://board-asset-picked";
 export const BOARD_PROMPT_LOADED_EVENT = "bowerbird://board-prompt-loaded";
 const LOAD_EVENT = "bowerbird://board-load-prompt";
@@ -275,6 +275,7 @@ export function useCreationEditor(opts?: {
       const detail = (e as CustomEvent<BoardAssetPick>).detail;
       const assetId = typeof detail === "string" ? detail : detail?.assetId;
       const canvasNodeId = typeof detail === "string" ? null : detail?.canvasNodeId ?? null;
+      const shouldFocus = typeof detail === "string" || detail?.focus !== false;
       if (!assetId) return;
       const asset = assetByIdRef.current.get(assetId);
       const v = viewRef.current;
@@ -297,14 +298,14 @@ export function useCreationEditor(opts?: {
                 )
                 .scrollIntoView()
             );
-            view.focus();
+            if (shouldFocus) view.focus();
           })
           .catch(console.error);
         return;
       }
       const node = v.state.schema.nodes.image.create(imageAttrs(assetId, asset, false, canvasNodeId));
       v.dispatch(v.state.tr.replaceSelectionWith(node).scrollIntoView());
-      v.focus();
+      if (shouldFocus) v.focus();
     }
 
     function onInject(e: Event) {
