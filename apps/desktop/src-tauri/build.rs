@@ -57,6 +57,25 @@ fn public_value(names: &[&str], files: &[HashMap<String, String>]) -> Option<Str
 }
 
 fn main() {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        println!("cargo:rerun-if-changed=macos/browser_capture.m");
+        cc::Build::new()
+            .file("macos/browser_capture.m")
+            .flag("-fobjc-arc")
+            .flag("-fblocks")
+            .compile("bowerbird_browser_capture");
+        println!("cargo:rustc-link-lib=framework=WebKit");
+        println!("cargo:rustc-link-lib=framework=Foundation");
+        // @available needs Clang's version-check helper when Tauri targets older macOS.
+        // Rust links with -nodefaultlibs, so Clang does not add this runtime itself.
+        let runtime = cc::Build::new().get_compiler().to_command()
+            .arg("-print-file-name=libclang_rt.osx.a").output().expect("locate Clang runtime");
+        assert!(runtime.status.success(), "cannot locate Clang runtime");
+        let runtime = PathBuf::from(String::from_utf8(runtime.stdout).unwrap().trim());
+        assert!(runtime.is_file(), "Clang macOS runtime is missing");
+        println!("cargo:rustc-link-search=native={}", runtime.parent().unwrap().display());
+        println!("cargo:rustc-link-lib=static=clang_rt.osx");
+    }
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         let output = PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
         let compiler = cc::Build::new().cpp(true).get_compiler();

@@ -2,6 +2,14 @@
 
 本目录记录 Mac 上的本地开发、运行和未签名构建流程。Bowerbird 使用 canonical Tauri / React / Rust 源码，不维护 macOS override。构建架构以 `rustc -vV` 的 host 为准；Intel 为 `x86_64-apple-darwin`，Apple Silicon 原生工具链为 `aarch64-apple-darwin`。
 
+## 2026-09-15 内置浏览器采集修复
+
+Mac 取图此前直接进入“不支持”分支。现在通过当前 WKWebView 的原生 WKDownload 获取图片，沿用浏览器登录态，复用现有去重、来源记录与目标项目入库流程。需要 macOS 11.3+，单图上限 50 MiB、超时 45 秒，采集不刷新原网页。
+
+隔离原生测试使用真实 WKWebView 与生产桥接，验证带 HttpOnly Cookie 的跨域图片、重定向、分块响应、HTTP/HTML/大小/断网/超时错误、临时文件清理与网页状态保持；Rust 浏览器相关 7 项、前端探索契约 7 项及 TypeScript/Vite 构建通过。命令及验收边界见 `dev-doc/EMBEDDED-BROWSER.md`。未操作真实站点账号或生产素材库，物理拖放仍需使用新版实机确认。
+
+构建接缝：Tauri 的较低部署目标会让 Objective-C `@available` 生成 Clang 运行库调用，而 Rust 的 `-nodefaultlibs` 不会自动补入该库。`build.rs` 从实际编译器查询并链接 `libclang_rt.osx.a`；独立 Rust/Objective-C 链接及回调验证通过。
+
 ## 2026-09-15 同步
 
 `mac` 从远端 `0fcde4d` 合入 `dev` 的 `01e8372`（26.9.15），包含项目画板、编辑工具、生成恢复、视觉规范与随包引导项目。保留 Finder 启动时的 Homebrew/用户 bin 探测和子进程 PATH；Codex 调用及终端会话回看统一使用 Bowerbird 私有 `cli-profiles/codex`。终端命令通过 AppleScript 参数传递，路径、参数和环境变量逐项进行 shell 转义；同时修复即梦登录入口的 macOS 条件编译错误。
@@ -21,13 +29,13 @@
 本次交付为 **Intel x86_64**（本机 Node 26.4.0、Rust 1.96.0），不是 arm64/Universal 构建：
 
 - 应用：`apps/desktop/src-tauri/target/release/bundle/macos/Bowerbird.app`。
-- 未经 Developer ID 签名/公证的测试包：`macOS/dist/Bowerbird_26.9.15_x64.dmg`，74,542,833 bytes。
-- SHA-256：`afb050bd357797bbfd29da9e65b606b9c220bcfb6b1e4aa9cfb8b6fe58bf0415`；同目录附 `.sha256`，`hdiutil verify` 完整性检查通过。
-- 已核对版本、Mach-O 架构、公开 Cloud 配置构建注入与 49 个包内资源文件哈希；487 个构建源文件与构建前指纹一致。日志、截图和校验结果位于本地 `macOS/dist/verification/`。
+- 未经 Developer ID 签名/公证的测试包：`macOS/dist/Bowerbird_26.9.15_x64.dmg`，74,555,353 bytes。
+- SHA-256：`77c471410264c727ea5e5f85be3f540ff424b8fd2449d466a48656b41c1dd966`；同目录附 `.sha256`，`hdiutil verify` 完整性检查通过。
+- 本次采集修复重包已核对版本、Mach-O 架构、原生桥接类/方法、49 个包内资源文件与 87 个 Rust/原生源文件指纹；结果见本地 `macOS/dist/verification/browser-capture/`。此前同步验证（包含公开 Cloud 配置构建注入）见父目录记录。修复前安装包备份在 `macOS/dist/archive/20260915-before-browser-fix/`。
 
 平台边界：
 
-- 本地分类模型运行时、探索内置浏览器的登录态拖图取字节、原生 Adobe Illustrator AI 导出仍沿用 dev 的 Windows 实现；Mac 可用浏览器扩展采集、图片导入与 PSD 导出。
+- 本地分类模型运行时、原生 Adobe Illustrator AI 导出仍沿用 dev 的 Windows 实现；Mac 可用图片导入与 PSD 导出。
 - Dreamina 在 Mac 上沿用官方 CLI 的凭据存储；Windows 注册表隔离与 NSIS 安装清登录钩子不适用于 Mac，不能宣称 Mac Dreamina 凭据已隔离。
 - 本次不改写真实素材库，不执行付费生成或真实 OAuth。Chrome 合成 IPC 回归不等同于 WKWebView/Finder 真机验收。
 
