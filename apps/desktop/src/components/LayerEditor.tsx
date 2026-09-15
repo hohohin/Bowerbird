@@ -8,7 +8,7 @@ import { ModalShell } from "./ModalShell";
 import { LayerTextControls } from "./LayerTextControls";
 import { useLayerViewport } from "./useLayerViewport";
 import { exportBytesBase64, exportLayerPsd } from "../lib/layerExport";
-import { decodeLayerImage, isTextLayer, moveLayer, paintLayerText, parseRecognizedText, patchLayer, prepareTextImage, renderLayerDocument, renderTextLayer, textFont, type ImageLayer, type LayerDocument, type LayerRequest, type LayerText, type LayerWorkspace, type TextRecognitionPending } from "../lib/layerDocument";
+import { decodeLayerImage, moveLayer, packLayerHistory, paintLayerText, parseRecognizedText, patchLayer, prepareTextImage, renderLayerDocument, renderTextLayer, textFont, unpackLayerHistory, type ImageLayer, type LayerDocument, type LayerRequest, type LayerText, type LayerWorkspace, type TextRecognitionPending } from "../lib/layerDocument";
 import "./LayerEditor.css";
 
 const empty: LayerWorkspace = { document: null, pending: null };
@@ -41,10 +41,11 @@ function LayerEditorPanel({ assetId, projectId }: { assetId: string; projectId: 
   const [size, setSize] = useState<LayerRequest["layer_options"]["size"]>("auto");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [cloudWaiting, setCloudWaiting] = useState(false);
+  const exiting = useRef(false);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [dirty, setDirty] = useState(false);
-  const [confirmClose, setConfirmClose] = useState(false);
   const [history, setHistory] = useState<LayerDocument[]>([]);
   const [prices, setPrices] = useState<{ service: string; available: boolean; credits: number | null }[]>([]);
   const [fonts, setFonts] = useState<string[]>(["Microsoft YaHei", "SimSun", "Arial"]);
@@ -54,6 +55,7 @@ function LayerEditorPanel({ assetId, projectId }: { assetId: string; projectId: 
   const inlineChanged = useRef(false);
   const recognitionStarting = useRef(false);
   const [convertLayer, setConvertLayer] = useState<ImageLayer | null>(null);
+  const [convertMode, setConvertMode] = useState<"recognize" | "blank">("recognize");
   const [previewSize, setPreviewSize] = useState({ width: 600, height: 500 });
   const preview = useRef<HTMLElement>(null);
   const stage = useRef<HTMLDivElement>(null);
@@ -81,6 +83,10 @@ function LayerEditorPanel({ assetId, projectId }: { assetId: string; projectId: 
       inlineInput.current?.focus({ preventScroll: true });
     }
   }, [textPanelId, selectedId, busy]);
+
+  useEffect(() => {
+    if (!loading) preview.current?.focus({ preventScroll: true });
+  }, [loading]);
 
   useEffect(() => {
     if (!preview.current) return;
@@ -112,6 +118,7 @@ function LayerEditorPanel({ assetId, projectId }: { assetId: string; projectId: 
         await decodeLayerImage(url);
         if (cancelled) return;
         setSource(url); setName(asset.name); setWorkspace(saved ?? empty);
+        setHistory(saved ? unpackLayerHistory(saved) : []);
         const savedLayers = saved?.document?.layers;
         setSelectedId(savedLayers?.[savedLayers.length - 1]?.id ?? "");
         if (saved?.pending) setStatus("存在未完成任务，继续取回会使用原任务，不会重新生成。");
@@ -170,7 +177,7 @@ function LayerEditorPanel({ assetId, projectId }: { assetId: string; projectId: 
 
   async function recognizeText(pending: TextRecognitionPending, initial: LayerWorkspace) {
     if (auth?.user_id !== pending.userId) { setError("请登录提交文字识别的账号后继续取回"); return; }
-    setBusy(true); setError(""); stop.current = false;
+    setBusy(true); setCloudWaiting(true); setError(""); stop.current = false;
     try {
       let result = await api.layerTextRequest({ action: "get_by_key", idempotency_key: pending.idempotencyKey });
       if (!mounted.current || stop.current) return;
@@ -189,6 +196,8 @@ function LayerEditorPanel({ assetId, projectId }: { assetId: string; projectId: 
         if (useStore.getState().cloudAuth?.user_id !== pending.userId) throw new Error("账号已切换，请登录原账号取回文字");
         result = await api.layerTextRequest({ action: "get_by_key", idempotency_key: pending.idempotencyKey });
       }
+      if (stop.current || !mounted.current) return;
+      setCloudWaiting(false);
       if (result.status === "succeeded") {
         if (!mounted.current || useStore.getState().cloudAuth?.user_id !== pending.userId) return;
         let recognized;
@@ -207,8 +216,9 @@ function LayerEditorPanel({ assetId, projectId }: { assetId: string; projectId: 
         const maxWidth = Math.max(...text.content.split("\n").map(line => context.measureText(line).width));
         if (maxWidth > text.boxWidth) text.fontSize = Math.max(1, Math.floor(text.fontSize * text.boxWidth / maxWidth));
         const next = { ...initial, document: patchLayer(initial.document, layer.id, { text, visible: true }), textPending: null };
-        await persist(next);
-        setHistory(previous => [...previous.slice(-29), initial.document!]); setWorkspace(next); setDirty(false);
+        const nextHistory = [...history.slice(-29), initial.document];
+        await persist(next, nextHistory);
+        setHistory(nextHistory); setWorkspace(next); setDirty(false);
         setSelectedId(layer.id); setTextPanelId(layer.id); setStatus("文字已识别，可直接修改内容和字体；原图片已保留。");
         void useStore.getState().syncCloudEntitlement();
       } else if (["failed", "cancelled", "rejected"].includes(result.status)) {
@@ -216,7 +226,7 @@ function LayerEditorPanel({ assetId, projectId }: { assetId: string; projectId: 
         setError(result.error?.message ?? "文字识别未完成，原图层已保留"); setStatus("");
       } else setError(result.error?.message ?? "文字识别结果尚无法确认，请继续取回原任务");
     } catch (error) { if (mounted.current) setError(String(error)); }
-    finally { if (mounted.current) setBusy(false); }
+    finally { if (mounted.current) { setBusy(false); setCloudWaiting(false); } }
   }
 
   function editText(layer: ImageLayer) {
@@ -240,9 +250,24 @@ function LayerEditorPanel({ assetId, projectId }: { assetId: string; projectId: 
     setError(""); setStatus("直接在画布上输入文字；右侧可更换本机字体和样式。");
   }
 
-  async function persist(next: LayerWorkspace) {
-    await api.layerWorkspaceSave(assetId, next);
+  async function persist(next: LayerWorkspace, undoHistory = history) {
+    await api.layerWorkspaceSave(assetId, { ...next, history: packLayerHistory(next.document, undoHistory) });
     useStore.setState(state => ({ layerWorkspaceIds: new Set([...state.layerWorkspaceIds, assetId]) }));
+  }
+
+  async function temporarilyExit() {
+    if (exiting.current || loading || convertLayer || (busy && !cloudWaiting)) return;
+    exiting.current = true;
+    // Cloud requests and their undo history are already saved before submission.
+    if (cloudWaiting) { stop.current = true; close(); return; }
+    setBusy(true); setError("");
+    const undoHistory = drag.current?.moved ? [...history.slice(-29), drag.current.document] : history;
+    drag.current = null; setHistory(undoHistory);
+    try {
+      if (doc || workspace.pending || workspace.textPending) await persist(workspace, undoHistory);
+      close();
+    } catch (error) { setError(`自动保存失败：${String(error)}`); }
+    finally { exiting.current = false; if (mounted.current) setBusy(false); }
   }
 
   async function save() {
@@ -254,9 +279,10 @@ function LayerEditorPanel({ assetId, projectId }: { assetId: string; projectId: 
 
   async function run(pending: NonNullable<LayerWorkspace["pending"]>, initial: LayerWorkspace, create: boolean) {
     if (auth?.user_id !== pending.userId) { setError("请登录提交此任务的账号后继续取回"); return; }
-    setBusy(true); setError(""); stop.current = false;
+    setBusy(true); setCloudWaiting(true); setError(""); stop.current = false;
     try {
       let result = await api.layerCloudRequest({ action: "get_by_key", idempotency_key: pending.request.idempotency_key });
+      if (stop.current || !mounted.current) return;
       if (result.status === "not_found" && create) result = await api.layerCloudRequest(pending.request);
       while (activeStatuses.includes(result.status)) {
         setStatus(`云端处理中 ${result.progress ?? 0}% · 可以停止等待，稍后继续取回`);
@@ -265,6 +291,8 @@ function LayerEditorPanel({ assetId, projectId }: { assetId: string; projectId: 
         if (stop.current || !mounted.current) return;
         result = await api.layerCloudRequest({ action: "get_by_key", idempotency_key: pending.request.idempotency_key });
       }
+      if (stop.current || !mounted.current) return;
+      setCloudWaiting(false);
       if (result.status === "succeeded") {
         let next = result.layer_result?.document;
         if (pending.layerId) {
@@ -277,9 +305,10 @@ function LayerEditorPanel({ assetId, projectId }: { assetId: string; projectId: 
         await Promise.all(next.layers.map(layer => decodeLayerImage(layer.dataUrl)));
         const saved: LayerWorkspace = { document: next, pending: null };
         // Do not clear pending until the full result is durably local.
-        await persist(saved);
+        const nextHistory = initial.document ? [...history.slice(-29), initial.document] : history;
+        await persist(saved, nextHistory);
         setWorkspace(saved); setSelectedId(pending.layerId ?? next.layers[next.layers.length - 1].id);
-        setDirty(false); setHistory([]); setStatus("图层已取回并保存到本地");
+        setDirty(false); setHistory(nextHistory); setStatus("图层已取回并保存到本地");
         void useStore.getState().syncCloudEntitlement();
       } else if (["failed", "cancelled", "artifact_expired", "rejected"].includes(result.status)) {
         const saved = { ...initial, pending: null };
@@ -289,7 +318,7 @@ function LayerEditorPanel({ assetId, projectId }: { assetId: string; projectId: 
         setError(result.error?.message ?? "任务结果尚无法确认，请保留原任务继续查询");
       }
     } catch (error) { setError(`${String(error)}。原任务信息已保留，可继续取回。`); }
-    finally { if (mounted.current) setBusy(false); }
+    finally { if (mounted.current) { setBusy(false); setCloudWaiting(false); } }
   }
 
   async function start(operation: "decompose" | "edit") {
@@ -408,11 +437,13 @@ function LayerEditorPanel({ assetId, projectId }: { assetId: string; projectId: 
   }
 
   return <>
-    <ModalShell title="分层编辑" eyebrow={name} width="lg" className="layer-editor" preventClose={busy || !!convertLayer}
+    <ModalShell title="分层编辑" eyebrow={name} width="lg" className="layer-editor" preventClose={(busy && !cloudWaiting) || !!convertLayer}
       panelProps={{ ...(convertLayer ? { inert: "" } : {}), onKeyDownCapture: panelKeyDown }}
-      onClose={() => dirty ? setConfirmClose(true) : close()}
+      showCloseButton={false}
+      onClose={() => void temporarilyExit()}
+      headerActions={<><span className="text-xs text-muted" aria-live="polite">{dirty ? "有未保存的修改" : ""}</span><button className="app-modal-button" disabled={loading || busy} onClick={close}>舍弃修改</button><button className="app-modal-button" data-modal-autofocus disabled={loading || (busy && !cloudWaiting)} onClick={() => void temporarilyExit()}>暂时退出</button></>}
       description="拆出独立图层，自由调整后重新组合。图层工程保存在本机。"
-      footer={confirmClose ? <><span className="mr-auto text-xs">放弃未保存修改并关闭？</span><button className="app-modal-button" onClick={() => setConfirmClose(false)}>继续编辑</button><button className="app-modal-button is-danger" onClick={close}>放弃修改并关闭</button></> : <><span className="mr-auto text-xs text-muted">{dirty ? "有未保存修改" : ""}</span><button className="app-button" disabled={locked || !doc} onClick={() => void exportProject("psd")}>导出 PSD</button><button className="app-button" disabled={locked || !doc} title="需要 Windows 本机安装 Adobe Illustrator；将启动 Illustrator 写入原生工程" onClick={() => void exportProject("ai")}>导出 AI（需 Illustrator）</button><button className="app-button" disabled={busy || !doc} onClick={() => void save()}>保存图层工程</button><button className="app-button-primary" disabled={locked || !doc} onClick={() => void exportImage()}>合成图片入库</button></>}>
+      footer={<><button className="app-button" disabled={locked || !doc} onClick={() => void exportProject("psd")}>导出 PSD</button><button className="app-button" disabled={locked || !doc} title="需要 Windows 本机安装 Adobe Illustrator；将启动 Illustrator 写入原生工程" onClick={() => void exportProject("ai")}>导出 AI（需 Illustrator）</button><button className="app-button" disabled={busy || !doc} onClick={() => void save()}>保存图层工程</button><button className="app-button-primary" disabled={locked || !doc} onClick={() => void exportImage()}>合成图片入库</button></>}>
       <div className="layer-layout">
         <section ref={preview} tabIndex={-1} className={`layer-preview ${viewport.spaceHeld ? "is-pan-ready" : ""} ${viewport.panning ? "is-panning" : ""}`} aria-label="图层画布"
           onPointerDownCapture={viewport.onPointerDownCapture} onPointerDown={canvasPointerDown}
@@ -473,10 +504,19 @@ function LayerEditorPanel({ assetId, projectId }: { assetId: string; projectId: 
       </div>
     </ModalShell>
     {convertLayer && <ModalShell title="转为可编辑文字" className="layer-convert-confirm" onClose={() => setConvertLayer(null)}
-      footer={<><button className="app-modal-button" data-modal-autofocus onClick={() => setConvertLayer(null)}>取消</button><button className="app-modal-button" disabled={!ready} onClick={() => void startTextRecognition()}>识别文字后编辑</button><button className="app-modal-button is-primary" onClick={convertToText}>创建空白文字对象</button></>}>
-      <div className="mb-3 text-xs text-muted">识别文字后编辑：保留识别到的文字，尝试匹配颜色与粗细，之后可在画布修改。需要登录 Bowerbird，沿用云端图像理解的计费与次数限制，无法完整复刻原图特效。{!ready && " 当前未登录，仍可创建空白文字对象。"}</div>
-      <strong>创建空白文字对象</strong>
-      <p>{isTextLayer(convertLayer) ? "是否要把该图层转变为可编辑文字对象？注意，转变后会丢失原图样式以及文本内容，但可以选择本机字体进行替换。" : "此元素并未识别到有文字，是否要把该图层转变为可编辑文字对象？注意，转变后会丢失原素材，整体变为一个文本框。"}</p>
+      footer={<><button className="app-modal-button" data-modal-autofocus onClick={() => setConvertLayer(null)}>取消</button><button className="app-modal-button" disabled={convertMode === "recognize" && !ready} onClick={() => convertMode === "recognize" ? void startTextRecognition() : convertToText()}>确认</button></>}>
+      <div className="layer-convert-tabs" role="tablist" aria-label="文字转换方式">
+        {(["recognize", "blank"] as const).map(mode => <button key={mode} type="button" role="tab" id={`layer-convert-tab-${mode}`} aria-controls={`layer-convert-panel-${mode}`} aria-selected={convertMode === mode} tabIndex={convertMode === mode ? 0 : -1} onClick={() => setConvertMode(mode)} onKeyDown={event => {
+          if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+          event.preventDefault();
+          const next = event.key === "Home" ? "recognize" : event.key === "End" ? "blank" : mode === "recognize" ? "blank" : "recognize";
+          setConvertMode(next); document.getElementById(`layer-convert-tab-${next}`)?.focus();
+        }}>{mode === "recognize" ? "识别文字后编辑" : "创建空白文字对象"}</button>)}
+      </div>
+      <div className="layer-convert-description" role="tabpanel" id={`layer-convert-panel-${convertMode}`} aria-labelledby={`layer-convert-tab-${convertMode}`}>
+        <p>{convertMode === "recognize" ? "保留识别到的文字，尝试匹配颜色与粗细，之后可在画布修改。需要登录 Bowerbird，无法完整复刻原图特效。" : "把该图层转变为空白文字对象（沿用框体）。转变后会丢失原图样式及文本内容。可使用本机字体进行替换。"}</p>
+        {convertMode === "recognize" && !ready && <div className="mt-3 text-xs text-muted">当前未登录，登录后可识别文字。</div>}
+      </div>
     </ModalShell>}
   </>;
 }

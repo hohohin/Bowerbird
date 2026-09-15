@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{
     webview::{DownloadEvent, NewWindowResponse, PageLoadEvent, WebviewBuilder},
     AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Url, WebviewUrl,
@@ -11,6 +12,14 @@ const SOURCE_BROWSER_LABEL: &str = "source-discovery";
 const SOURCE_BROWSER_STATUS_EVENT: &str = "source-browser://status";
 const SOURCE_BROWSER_TITLE_EVENT: &str = "source-browser://title";
 const SOURCE_BROWSER_NEW_WINDOW_EVENT: &str = "source-browser://new-window";
+static SOURCE_BROWSER_DIMMED: AtomicBool = AtomicBool::new(false);
+
+fn spotlight_script() -> String {
+    include_str!("source_browser_spotlight.js").replace(
+        "__BOWERBIRD_DIMMED__",
+        if SOURCE_BROWSER_DIMMED.load(Ordering::Relaxed) { "true" } else { "false" },
+    )
+}
 
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -136,7 +145,10 @@ pub async fn open_source_browser(
             }
             allowed
         })
-        .on_page_load(move |_, payload| {
+        .on_page_load(move |webview, payload| {
+            if matches!(payload.event(), PageLoadEvent::Finished) {
+                let _ = webview.eval(&spotlight_script());
+            }
             emit_status(
                 &page_load_app,
                 payload.url(),
@@ -180,9 +192,16 @@ pub async fn open_source_browser(
 }
 
 #[tauri::command]
-pub async fn resize_source_browser(app: AppHandle, bounds: SourceBrowserBounds, visible: Option<bool>) -> AppResult<()> {
+pub async fn resize_source_browser(app: AppHandle, bounds: SourceBrowserBounds, visible: Option<bool>, dimmed: Option<bool>) -> AppResult<()> {
     let bounds = validate_bounds(bounds)?;
+    if let Some(dimmed) = dimmed {
+        SOURCE_BROWSER_DIMMED.store(dimmed, Ordering::Relaxed);
+    }
     if let Some(webview) = app.get_webview(SOURCE_BROWSER_LABEL) {
+        if dimmed.is_some() {
+            webview.eval(&spotlight_script())
+                .map_err(|error| tauri_error("更新探索引导遮罩失败", error))?;
+        }
         set_bounds(&webview, bounds)?;
         if let Some(visible) = visible {
             if visible { webview.show() } else { webview.hide() }

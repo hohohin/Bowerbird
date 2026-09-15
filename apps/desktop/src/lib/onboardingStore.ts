@@ -7,7 +7,7 @@ function readGuide() {
   try { return parseRoleGuide(JSON.parse(localStorage.getItem(ROLE_GUIDE_KEY) ?? "null")); }
   catch { return freshRoleGuide(); }
 }
-type OnboardingPanel = "welcome" | "lesson" | "done" | "closed" | "collections";
+type OnboardingPanel = "login" | "welcome" | "lesson" | "done" | "closed" | "collections";
 
 function read() {
   try { return parseOnboarding(localStorage.getItem(ONBOARDING_KEY)); }
@@ -46,7 +46,7 @@ export function beginOnboardingOperation(scene: GuideScene, projectId: string | 
     const current = role && store.guide.sessions[role];
     if (!role || !session || !current || initial.status !== "active" || store.guide.role !== role
       || !["active", "paused"].includes(store.guide.status) || (current.projectId || null) !== projectId
-      || current.runId !== session.runId || current.step !== session.step
+      || current.runId !== session.runId || current.step !== session.step || current.stepVisit !== session.stepVisit
       || (ONBOARDING_ROUTES[role][current.step].scene !== scene && !(scene === "create-project" && role === "designer" && !current.projectId))) return;
     if (scene === "create-project" && !details.projectId) return;
     if (scene === "profile" && details.collectionId !== current.collectionId) return;

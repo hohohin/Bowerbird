@@ -8,12 +8,13 @@ const page = await browser.newPage({ viewport: { width: 1400, height: 950 } });
 page.setDefaultTimeout(8000);
 const errors = []; page.on("pageerror", e => errors.push(e.message));
 const imports = () => page.evaluate(() => window.calls.filter(c => c.command === "import_image_bytes"));
-async function drag(selector, names = ["test.png"]) {
-  await page.locator(selector).first().evaluate((element, names) => {
+async function drag(selector, names = ["test.png"], text = "") {
+  await page.locator(selector).first().evaluate((element, { names, text }) => {
     window.files = new DataTransfer();
     for (const name of names) window.files.items.add(new File([new Uint8Array([1, 2, 3])], name, { type: "image/png" }));
+    if (text) window.files.setData("text/plain", text);
     for (const type of ["dragenter", "dragover"]) element.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: window.files }));
-  }, names);
+  }, { names, text });
 }
 async function drop(selector) {
   await page.locator(selector).first().evaluate(element => element.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: window.files })));
@@ -69,6 +70,18 @@ try {
   });
   assert.equal((await imports()).length, before);
   assert.equal(await page.locator("[data-file-drop-overlay]").count(), 0);
+  // A file plus ordinary text still imports, even over an open explorer target.
+  await page.evaluate(() => {
+    const workspace = document.createElement("div"); workspace.className = "explore-workspace is-open";
+    const target = document.createElement("div"); target.className = "explore-main";
+    workspace.append(target); document.body.append(workspace);
+  });
+  await drag(".explore-main", ["mixed-local.png"], "ordinary file description");
+  assert.equal(await page.locator("[data-file-drop-overlay]").count(), 0);
+  await drop(".explore-main");
+  await page.waitForFunction(() => window.store.getState().assets.some(a => a.name === "mixed-local.png"));
+  assert.equal((await imports()).length, before + 1);
+  await page.evaluate(() => document.querySelector('.explore-workspace').remove());
   // Collection portals retain their own destination and import exactly once.
   await page.evaluate(async () => {
     const [{ default: React }, { default: { createRoot } }, { CollectionPanel }] = await Promise.all([
@@ -85,7 +98,7 @@ try {
   assert.equal(await page.locator("[data-file-drop-overlay]").count(), 0);
   await drop(".collection-panel .app-modal");
   await page.waitForFunction(() => window.calls.some(c => c.command === "move_assets_to_folder"));
-  assert.equal((await imports()).length, before + 1);
+  assert.equal((await imports()).length, before + 2);
   assert.equal((await imports()).at(-1).args.projectId, null);
   assert.equal(await page.evaluate(() => window.calls.find(c => c.command === "move_assets_to_folder").args.folderId), "collection");
   assert.deepEqual(errors, []);

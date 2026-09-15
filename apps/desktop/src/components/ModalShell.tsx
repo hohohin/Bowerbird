@@ -16,6 +16,7 @@ export function ModalShell({
   eyebrow,
   description,
   headerActions,
+  showCloseButton = true,
   panelProps,
   children,
   footer,
@@ -28,6 +29,7 @@ export function ModalShell({
   eyebrow?: string;
   description?: ReactNode;
   headerActions?: ReactNode;
+  showCloseButton?: boolean;
   panelProps?: HTMLAttributes<HTMLDivElement>;
   children: ReactNode;
   footer?: ReactNode;
@@ -96,7 +98,7 @@ export function ModalShell({
           </div>
           <div className="flex shrink-0 items-center gap-2">
             {headerActions}
-            <button
+            {showCloseButton && <button
               type="button"
               onClick={onClose}
               disabled={preventClose}
@@ -105,7 +107,7 @@ export function ModalShell({
               aria-label="关闭"
             >
               <X size={16} />
-            </button>
+            </button>}
           </div>
         </header>
         <div className="app-modal-body">{children}</div>

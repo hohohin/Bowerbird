@@ -139,6 +139,7 @@ export function SidebarAccount() {
         onClick={() => setOpen((v) => !v)}
         className="flex w-full items-center gap-2 rounded-lg px-2 py-2 hover:bg-panel2"
         title={loggedIn ? `${name} · ${tier || "已登录"}` : "未登录"}
+        data-tour="sidebar-account"
         aria-haspopup="menu"
         aria-expanded={open}
       >

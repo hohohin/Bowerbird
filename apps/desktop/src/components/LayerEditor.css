@@ -36,6 +36,11 @@
 .layer-inline-text { position: absolute; inset: 0; transform-origin: top left; display: block; min-height: 0; margin: 0; padding: 0; border: 0; border-radius: 0; outline: 0; background: transparent; resize: none; overflow: hidden; white-space: pre-wrap; word-break: break-all; user-select: text; cursor: text; }
 .layer-inline-text::placeholder { color: #777; opacity: .7; }
 .layer-convert-confirm.app-modal-backdrop { z-index: 91; }
+.layer-convert-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-bottom: 1px solid var(--bb-line); }
+.layer-convert-tabs button { padding: 12px 8px; border-bottom: 2px solid transparent; font-size: 13px; font-weight: 500; color: var(--bb-ink-soft); }
+.layer-convert-tabs button[aria-selected=true] { border-bottom-color: currentColor; color: var(--bb-ink); }
+.layer-convert-tabs button:focus-visible { outline: 2px solid var(--bb-line-hover); outline-offset: -2px; }
+.layer-convert-description { min-height: 112px; padding-top: 18px; font-size: 13px; line-height: 1.8; }
 .layer-thumbnail { width: 32px; height: 32px; flex-shrink: 0; background: #ddd; border-radius: 3px; overflow: hidden; }
 .layer-text-controls { display: flex; flex-direction: column; gap: 12px; padding: 12px 0; border-block: 1px solid var(--bb-line); }
 @media (max-width: 850px) { .layer-layout { grid-template-columns: minmax(0, 1fr) 250px; } .layer-preview { padding: 12px; } }

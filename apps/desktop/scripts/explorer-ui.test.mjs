@@ -43,6 +43,43 @@ try {
   const library = await page.locator('[aria-label="探索采集素材"]').boundingBox();
   assert.ok(browserPanel.x + browserPanel.width <= library.x, "browser is a left panel beside the existing main page");
   assert.equal(await page.evaluate(() => window.primaryPage === document.querySelector('[aria-label="主页面草稿"]')), true);
+  // Native image drags can advertise Files alongside the explorer metadata.
+  // Mount the global importer too: its window capture listener runs before React.
+  for (const textOnly of [false, true]) {
+    const before = (await calls("capture_source_browser_image")).length;
+    await page.locator('.explore-main input').evaluate((el, textOnly) => {
+      const transfer = new DataTransfer();
+      const payload = JSON.stringify({ version: 1, imageUrl: "https://i.pinimg.com/mixed.png", pageUrl: "https://www.pinterest.com/pin/mixed" });
+      transfer.items.add(new File(["native image"], "mixed.png", { type: "image/png" }));
+      transfer.setData("text/plain", "bowerbird-explorer:" + payload);
+      if (!textOnly) transfer.setData("application/x-bowerbird-explorer", payload);
+      window.mixedTransfer = transfer;
+      // During dragover the native drag data store is protected: only types are readable.
+      const protectedTransfer = new DataTransfer();
+      for (const type of transfer.types) if (type !== "Files") protectedTransfer.setData(type, "");
+      protectedTransfer.items.add(new File([], "mixed.png"));
+      for (const type of ["dragenter", "dragover"]) el.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: protectedTransfer }));
+    }, textOnly);
+    assert.equal(await page.locator('[data-file-drop-overlay]').count(), 0, "explorer drag must not be intercepted as a file import");
+    await page.locator('.explore-drop-hint').waitFor();
+    await page.locator('.explore-main input').evaluate(el => el.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: window.mixedTransfer })));
+    await page.waitForFunction(count => window.calls.filter(c => c.command === "capture_source_browser_image").length === count + 1, before);
+    await page.waitForFunction(() => !document.querySelector('.explore-capture-status'));
+    assert.equal((await calls("import_image_bytes")).length, 0);
+    assert.equal((await calls("capture_source_browser_image")).at(-1).args.pageUrl, "https://www.pinterest.com/pin/mixed");
+  }
+  for (const textOnly of [false, true]) {
+    await page.locator('.explore-main input').evaluate((el, textOnly) => {
+      const transfer = new DataTransfer();
+      transfer.items.add(new File(["image"], "invalid.png", { type: "image/png" }));
+      transfer.setData("text/plain", "bowerbird-explorer:invalid");
+      if (!textOnly) transfer.setData("application/x-bowerbird-explorer", "invalid");
+      el.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: transfer }));
+    }, textOnly);
+    await page.getByText("未能识别拖入的图片，请重新拖动网页图片", { exact: true }).last().waitFor();
+    assert.equal((await calls("import_image_bytes")).length, 0, "malformed capture metadata must not fall back to file import");
+  }
+  await page.evaluate(() => { window.calls = window.calls.filter(c => c.command !== "capture_source_browser_image"); window.store.setState({ assets: [], total: 0 }); });
   await page.getByRole("button", { name: "花瓣", exact: true }).click();
   assert.equal((await calls("navigate_source_browser")).at(-1).args.url, "https://huaban.com/");
   await page.getByRole("button", { name: "测试弹窗", exact: true }).click();
@@ -74,7 +111,7 @@ try {
   assert.equal((await calls("reload_source_browser")).length, 0);
   await drop({ version: 1, imageUrl: "file:///secret", pageUrl: "https://example.com" });
   assert.equal((await calls("capture_source_browser_image")).length, 0);
-  await page.getByText("未能识别拖入的图片，请重新拖动网页图片", { exact: true }).waitFor();
+  await page.getByText("未能识别拖入的图片，请重新拖动网页图片", { exact: true }).last().waitFor();
   await page.evaluate(() => { window.hold = true; });
   await drop(); await drop();
   await page.waitForFunction(() => window.release);

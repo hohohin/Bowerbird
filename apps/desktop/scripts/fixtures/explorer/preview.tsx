@@ -5,6 +5,7 @@ import { Toolbar } from "../../../src/components/Toolbar";
 import { ToastViewport } from "../../../src/components/ToastViewport";
 import { MasonryGrid } from "../../../src/components/MasonryGrid";
 import { Lightbox } from "../../../src/components/Lightbox";
+import { FileDropImport } from "../../../src/components/FileDropImport";
 import { useStore } from "../../../src/store";
 import "../../../src/styles.css";
 const w = window as any;
@@ -40,7 +41,7 @@ function Fixture() {
   const [dialog, setDialog] = useState(false);
   const [url, setUrl] = useState<string | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
-  return <div className="app-shell flex flex-col" style={{ height: "100vh" }}><ToastViewport />
+  return <div className="app-shell flex flex-col" style={{ height: "100vh" }}><ToastViewport /><FileDropImport />
     <Toolbar canvasMode={false} onCanvasModeChange={() => {}} onCreateCreative={() => {}} onRefresh={async () => {}}
       onExplore={() => { setUrl("https://www.pinterest.com/"); setOpened(v => !v); }} exploring={opened} />
     <button onClick={() => setDialog(v => !v)}>测试弹窗</button>

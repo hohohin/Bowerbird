@@ -50,7 +50,7 @@ try {
   await dialog.getByLabel("不透明度", { exact: true }).fill("55");
   await dialog.getByRole("button", { name: "保存图层工程", exact: true }).click();
   await page.waitForFunction(() => window.saved().document.layers[1].opacity === .55);
-  await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+  await dialog.getByRole("button", { name: "暂时退出", exact: true }).click();
   await page.getByRole("button", { name: "打开分层编辑", exact: true }).click();
   await dialog.getByLabel("图层名称").waitFor();
   await dialog.getByRole("button", { name: "标题文字", exact: true }).click();
@@ -77,7 +77,7 @@ try {
   assert.equal(edited.x, 220); assert.equal(edited.opacity, .55);
   await dialog.getByRole("button", { name: "保存图层工程", exact: true }).click();
   await page.screenshot({ path: ".tmp/layer-editor.png" });
-  await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+  await dialog.getByRole("button", { name: "暂时退出", exact: true }).click();
   await page.evaluate(() => { sessionStorage.clear(); });
   await page.reload();
   await page.evaluate(() => { window.enabled = false; });

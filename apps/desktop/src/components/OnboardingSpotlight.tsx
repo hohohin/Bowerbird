@@ -7,20 +7,20 @@ interface Bounds { x: number; y: number; width: number; height: number }
 /** The spotlight and the framed control can have different bounds. Both pass pointer events through. */
 export function OnboardingSpotlight({ step, children, minimized, ringOpen = false }: { step: GuideStep; children: ReactNode; minimized: boolean; ringOpen?: boolean }) {
   const card = useRef<HTMLElement>(null);
-  const [layout, setLayout] = useState<{ hole: Bounds | null; highlight: Bounds | null; left: number; top: number; width: number }>({ hole: null, highlight: null, left: 16, top: 80, width: 320 });
+  const [layout, setLayout] = useState<{ hole: Bounds | null; highlight: Bounds | null; left: number; top: number; width: number }>({ hole: null, highlight: null, left: 16, top: 80, width: 416 });
   useLayoutEffect(() => {
     function measure() {
       const rects = Array.from(document.querySelectorAll(step.target)).map(el => el.getBoundingClientRect())
         .filter(rect => rect.width > 0 && rect.height > 0);
       const browser = document.querySelector('.explore-workspace.is-open .explore-browser')?.getBoundingClientRect();
       const browserRight = browser && browser.width > 0 ? browser.right : 0;
-      const width = Math.min(320, window.innerWidth - 32);
+      const width = Math.min(416, window.innerWidth - 32);
       const height = card.current?.getBoundingClientRect().height ?? 260;
       let hole: Bounds | null = null;
       let highlight: Bounds | null = null;
       const framed = step.highlight && Array.from(document.querySelectorAll(step.highlight)).map(el => el.getBoundingClientRect()).find(r => r.width > 0 && r.height > 0);
-      if (framed && !minimized && !ringOpen) highlight = { x: framed.left - 3, y: framed.top - 3, width: framed.width + 6, height: framed.height + 6 };
-      if (rects.length && step.scene !== "explore" && !minimized && !ringOpen) {
+      if (framed && !minimized) highlight = { x: framed.left - 3, y: framed.top - 3, width: framed.width + 6, height: framed.height + 6 };
+      if (rects.length && step.scene !== "explore" && !minimized) {
         const x = Math.max(0, Math.min(...rects.map(r => r.left)) - 7);
         const y = Math.max(0, Math.min(...rects.map(r => r.top)) - 7);
         hole = { x, y, width: Math.min(window.innerWidth, Math.max(...rects.map(r => r.right)) + 7) - x,
@@ -32,7 +32,9 @@ export function OnboardingSpotlight({ step, children, minimized, ringOpen = fals
       }
       const ring = ringOpen ? document.querySelector(".caption-ring-svg")?.getBoundingClientRect() : null;
       const anchor = ring ? { x: ring.left, y: ring.top, width: ring.width, height: ring.height } : highlight ?? hole;
-      if (anchor) {
+      if (anchor && anchor.height >= window.innerHeight * .8 && anchor.width < 100) {
+        left = anchor.x + anchor.width + 16;
+      } else if (anchor && anchor.height < window.innerHeight * .8) {
         left = anchor.x;
         top = anchor.y + anchor.height + 16;
         if ((anchor.y > 90 || ringOpen) && anchor.x + anchor.width + width + 32 < window.innerWidth) {
@@ -54,13 +56,13 @@ export function OnboardingSpotlight({ step, children, minimized, ringOpen = fals
   }, [step.target, step.highlight, step.scene, minimized, ringOpen]);
   const { hole, highlight } = layout;
   return <>
-    {hole && <svg className="onboarding-spotlight" aria-hidden="true" width="100%" height="100%">
+    {hole && createPortal(<svg data-onboarding-dim-browser className={"onboarding-spotlight" + (ringOpen ? " is-ring-open" : "")} aria-hidden="true" width="100%" height="100%">
       <defs><mask id="onboarding-spotlight-mask"><rect width="100%" height="100%" fill="white" />
         <rect data-spotlight-hole x={hole.x} y={hole.y} width={hole.width} height={hole.height} rx="10" fill="black" />
       </mask></defs>
       <rect width="100%" height="100%" fill="rgba(0,0,0,.56)" mask="url(#onboarding-spotlight-mask)" />
       {highlight && <rect data-spotlight-highlight className="onboarding-control-frame" x={highlight.x} y={highlight.y} width={highlight.width} height={highlight.height} rx="7" />}
-    </svg>}
+    </svg>, document.body)}
     {createPortal(<aside ref={card} className={"onboarding-lesson onboarding-spotlight-card" + (ringOpen ? " is-ring-open" : "")} aria-label="入门任务清单"
       style={{ left: layout.left, top: layout.top, width: layout.width }}>{children}</aside>, document.body)}
   </>;

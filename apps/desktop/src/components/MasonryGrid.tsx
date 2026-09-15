@@ -45,8 +45,9 @@ const Thumb = memo(function Thumb({
   // 挑图模式（点一下插参考图 chip）：创作板对话框常驻 / 会话「重新编辑」中。批量管理
   // （manage）模式优先于挑图——点击仍是选择/框选、可拖拽进文件夹，不受常驻对话框影响。
   const pickMode = useStore((s) =>
-    (s.boardOpen || s.genEditing) && (variant === "canvas-source" || s.mode !== "manage")
+    (s.boardOpen || s.genEditing) && s.mode !== "manage"
   );
+  const manageMode = useStore((s) => s.mode === "manage");
   const openContextMenu = useStore((s) => s.openContextMenu);
   // 反推全局可见：本缩略图正在反推 / 在队列里。角标点击 = 取消（运行中 kill 子进程 / 排队中移出队列）。
   const describeStatus = useStore((s) =>
@@ -285,6 +286,13 @@ const Thumb = memo(function Thumb({
       return;
     }
     if (variant === "canvas-source") {
+      // 选择优先于预览和挑图；Shift 可直接进入多选，后续普通点击增减选择。
+      if (shift || st.mode === "manage") {
+        if (st.mode !== "manage") st.enterManage();
+        if (shift) st.selectRange(shown.id, orderedIds);
+        else st.toggleSelect(shown.id);
+        return;
+      }
       if (st.boardOpen || st.genEditing) {
         window.dispatchEvent(
           new CustomEvent("bowerbird://board-asset-picked", { detail: shown.id })
@@ -362,12 +370,13 @@ const Thumb = memo(function Thumb({
       data-origin={shown.origin_path ?? undefined}
       role="button"
       tabIndex={0}
-      aria-label={`${shown.name}${selected ? "，已选中" : ""}${variant === "canvas-source" ? pickMode ? "，点击加入创作" : "，点击放大" : ""}`}
+      aria-label={`${shown.name}${selected ? "，已选中" : ""}${variant === "canvas-source" ? manageMode ? "，点击选择或取消选择" : pickMode ? "，点击加入创作" : "，点击放大" : ""}`}
+      aria-pressed={manageMode ? selected : undefined}
       className={`group relative mb-2 overflow-hidden rounded-sm bg-panel transition ${
         selected
           ? addingToCollection ? "border-2 collection-add-selected" : "border-2 border-accent shadow-[inset_0_0_0_1px_#4868ff]"
           : "border border-edge hover:border-[#55505a]"
-      } ${variant === "canvas-source" ? `${pickMode ? "cursor-pointer" : "cursor-zoom-in"} active:cursor-grabbing` : "cursor-pointer"}`}
+      } ${variant === "canvas-source" ? `${manageMode || pickMode ? "cursor-pointer" : "cursor-zoom-in"} active:cursor-grabbing` : "cursor-pointer"}`}
       draggable={!addingToCollection && (variant === "canvas-source" || !pickMode)}
       onMouseEnter={onEnter}
       onMouseMove={onMove}

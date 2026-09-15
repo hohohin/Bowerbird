@@ -19,7 +19,7 @@ export function RoleOnboarding() {
     try {
       await useStore.getState().projectCanvasFlush?.();
       let session = restart || guide.completedRoles.includes(role) ? undefined : guide.sessions[role];
-      if (session && !session.projectId) {
+      if (session && (!session.projectId || (role === "designer" && session.step === 0 && session.reviewUntil !== undefined))) {
         await useStore.getState().exitProject();
       } else if (session) {
         const projects = await api.listProjects();

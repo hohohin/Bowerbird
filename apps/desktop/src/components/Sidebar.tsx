@@ -1,3 +1,4 @@
+import { useOnboarding } from "../lib/onboardingStore";
 import { useEffect, useRef, useState } from "react";
 import { FolderOpen, FolderPlus, PanelLeftClose, PanelLeftOpen, RefreshCw } from "lucide-react";
 import { useStore } from "../store";
@@ -125,6 +126,13 @@ export function Sidebar() {
       setCollapsed(true);
     }
   }, [activeProjectId]);
+
+  const tutorialSidebar = useOnboarding(state => state.panel === "login");
+  useEffect(() => {
+    if (!tutorialSidebar) return;
+    collapsedRef.current = false;
+    setCollapsed(false);
+  }, [tutorialSidebar]);
 
   /** 宽度夹取：最小 160px，最大不超过主面板（侧栏所在 flex 行）的 1/4。 */
   function clampSidebarWidth(w: number | null) {

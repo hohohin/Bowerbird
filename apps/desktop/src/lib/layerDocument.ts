@@ -57,6 +57,28 @@ export interface LayerWorkspace {
   document: LayerDocument | null;
   pending: { request: LayerRequest; userId: string; layerId: string | null } | null;
   textPending?: TextRecognitionPending | null;
+  history?: {
+    images: string[];
+    documents: (Omit<LayerDocument, "layers"> & { layers: (Omit<ImageLayer, "dataUrl"> & { image: number })[] })[];
+  };
+}
+
+// Negative image indexes reuse the current document; older pixels are stored once.
+export function packLayerHistory(document: LayerDocument | null, history: LayerDocument[]): NonNullable<LayerWorkspace["history"]> {
+  const images: string[] = [];
+  const indexes = new Map(document?.layers.map((layer, index) => [layer.dataUrl, -index - 1]));
+  const documents = history.slice(-30).map(snapshot => ({ ...snapshot, layers: snapshot.layers.map(({ dataUrl, ...layer }) => {
+    let image = indexes.get(dataUrl);
+    if (image === undefined) { image = images.length; images.push(dataUrl); indexes.set(dataUrl, image); }
+    return { ...layer, image };
+  }) }));
+  return { images, documents };
+}
+
+export function unpackLayerHistory(workspace: LayerWorkspace): LayerDocument[] {
+  return workspace.history?.documents.map(snapshot => ({ ...snapshot, layers: snapshot.layers.map(({ image, ...layer }) => ({
+    ...layer, dataUrl: image < 0 ? workspace.document!.layers[-image - 1].dataUrl : workspace.history!.images[image],
+  })) })) ?? [];
 }
 
 export function isTextLayer(layer: ImageLayer): boolean {

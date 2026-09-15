@@ -43,7 +43,6 @@ import {
   X,
 } from "lucide-react";
 import { MasonryGrid } from "./MasonryGrid";
-import { GeneratedImageFilter } from "./GeneratedImageFilter";
 import { Lightbox } from "./Lightbox";
 import { CreativeComposer } from "./CreativeComposer";
 import { GenerationPanel } from "./GenerationPanel";
@@ -502,7 +501,7 @@ export function CanvasWorkspace({
   const [sourceWidth, setSourceWidth] = useState(360);
   const [sourceCollapsed, setSourceCollapsed] = useState(exploring);
   const explainTutorialSources = useOnboarding(state => state.guide.status === "active" && state.guide.role === "designer"
-    && state.guide.sessions.designer?.projectId === projectId && [2, 7].includes(state.guide.sessions.designer.step));
+    && state.guide.sessions.designer?.projectId === projectId && [2, 7, 8].includes(state.guide.sessions.designer.step));
   const sourcePanelId = useId();
   const [sourceThumbnailScale, setSourceThumbnailScale] = useState(readCanvasSourceThumbnailScale);
   const [sourceScope, setSourceScope] = useState<CanvasSourceScope>(() => project?.provisional ? "library" : "project");
@@ -3115,7 +3114,6 @@ export function CanvasWorkspace({
             }}
           ><PanelLeftClose size={14} /></button>
           <div data-tour="source-scope">
-            <span className="panel-kicker">素材来源</span>
             <div className="canvas-source-tabs" role="tablist" aria-label="画板素材来源">
               <button
                 type="button"
@@ -3138,9 +3136,7 @@ export function CanvasWorkspace({
             </div>
           </div>
           <div className="canvas-source-view-controls">
-            <GeneratedImageFilter />
             <div className="canvas-source-scale-control" title="调整素材缩略图大小">
-              <span className="canvas-source-scale-label">缩略图大小</span>
               <div className="canvas-source-scale-dots" role="group" aria-label="调整素材缩略图大小">
                 {[1, 2, 3].map((scale) => {
                   const label = scale === 1 ? "小" : scale === 2 ? "中" : "大";

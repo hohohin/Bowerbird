@@ -1,14 +1,15 @@
 .onboarding-spotlight { position: fixed; inset: 0; z-index: 48; pointer-events: none; }
 .onboarding-control-frame { fill: none; stroke: #4868ff; stroke-width: 2; }
 .onboarding-step-copy { white-space: pre-line; }
+.onboarding-spotlight.is-ring-open { z-index: 67; }
 .onboarding-spotlight-card.is-ring-open { z-index: 68; }
 .onboarding-spotlight-card { right: auto; max-height: calc(100vh - 32px); }
-.onboarding-spotlight-card h2 { margin: 18px 0 10px; font-size: 18px; font-weight: 600; }
+.onboarding-spotlight-card h2 { margin: 18px 0 10px; font-size: 22px; font-weight: 600; }
 .onboarding-drag-demo { margin: 14px 0; color: var(--bb-muted); }
 .onboarding-drag-demo svg { width: 100%; }
 .onboarding-drag-demo text { fill: currentColor; font-size: 11px; }
 .onboarding-drag-demo .demo-panel { fill: var(--bb-surface); stroke: var(--bb-line); }
-.onboarding-drag-demo figcaption { margin-top: 8px; text-align: center; font-size: 11px; }
+.onboarding-drag-demo figcaption { margin-top: 8px; text-align: center; font-size: 15px; }
 .demo-cursor { animation: onboarding-drag 4s ease-in-out infinite; }
 .demo-image { animation: onboarding-drag 4s ease-in-out infinite; opacity: .9; }
 @keyframes onboarding-drag { 0%, 20% { transform: translate(0, 0); } 70%, 88% { transform: translate(170px, 0); opacity: 1; } 95%, 100% { transform: translate(170px, 0); opacity: 0; } }
@@ -23,7 +24,7 @@
 .guide-role-card > span { display: flex; align-items: center; gap: 6px; margin-top: auto; padding-top: 12px; font-size: 12px; color: var(--bb-ink); }
 .onboarding-lesson-actions { display: flex; gap: 16px; }
 @media (max-width: 640px) { .guide-role-grid { grid-template-columns: 1fr; } .guide-role-card { padding: 16px; gap: 8px; } }
-.onboarding-lesson { position: fixed; top: 72px; right: 18px; z-index: 49; width: min(292px, calc(100vw - 32px)); max-height: calc(100vh - 100px); overflow: auto; padding: 14px; border: 1px solid var(--bb-line); border-radius: 12px; background: var(--bb-surface); color: var(--bb-ink); box-shadow: 0 8px 30px #0003; font-size: 12px; }
+.onboarding-lesson { position: fixed; top: 72px; right: 18px; z-index: 49; width: min(380px, calc(100vw - 32px)); max-height: calc(100vh - 100px); overflow: auto; padding: 18px; border: 1px solid var(--bb-line); border-radius: 16px; background: var(--bb-surface); color: var(--bb-ink); box-shadow: 0 8px 30px #0003; font-size: 16px; }
 .onboarding-lesson header, .onboarding-lesson header > span, .onboarding-lesson header > div { display: flex; align-items: center; gap: 8px; }
 .onboarding-lesson header { justify-content: space-between; font-weight: 600; }
 .onboarding-lesson header button { padding: 4px; border-radius: 4px; }
@@ -36,7 +37,7 @@
 .onboarding-lesson small { display: block; color: var(--bb-muted); line-height: 1.6; margin: 8px 0; }
 .onboarding-pause { margin-top: 12px; color: var(--bb-muted); text-decoration: underline; }
 .onboarding-skip { display: block; margin-top: 12px; color: var(--bb-muted); text-decoration: underline; }
-.onboarding-resume { position: fixed; bottom: 14px; left: 16px; z-index: 49; display: flex; align-items: center; gap: 6px; background: var(--bb-surface); border: 1px solid var(--bb-line); color: var(--bb-ink); padding: 8px 12px; border-radius: 20px; font-size: 12px; }
+.onboarding-resume { position: fixed; right: 18px; z-index: 49; display: flex; align-items: center; gap: 6px; background: var(--bb-surface); border: 1px solid var(--bb-line); color: var(--bb-ink); padding: 8px 12px; border-radius: 20px; font-size: 12px; }
 .onboarding-resume button { display: flex; align-items: center; gap: 6px; padding: 3px; }
 .onboarding-topic { padding: 10px 12px; border: 1px solid var(--bb-line); border-radius: 8px; font-size: 12px; }
 .onboarding-topic summary { cursor: pointer; }
@@ -54,3 +55,9 @@
 .collection-learning-start > div { display: flex; gap: 8px; flex-wrap: wrap; }
 .collection-learning-start input, .collection-learning-start select { flex: 1; min-width: 160px; }
 @media (min-width: 800px) { .collection-learning .collection-learning-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+.onboarding-lesson .app-modal-button { font-size: 16px; }
+.onboarding-lesson header button:disabled { opacity: .3; cursor: default; }
+.onboarding-brand { display: block; width: 64px; height: 64px; margin: 18px 0; object-fit: contain; }
+.onboarding-login-hint { position: fixed; z-index: 69; max-width: calc(100vw - 32px); display: flex; align-items: center; gap: 12px; padding: 18px; border: 1px solid var(--bb-line); border-radius: 12px; background: var(--bb-surface); color: var(--bb-ink); font-size: 16px; box-shadow: 0 8px 30px #0003; }
+.onboarding-login-hint::before { content: ""; position: absolute; left: -7px; top: calc(50% - 7px); width: 12px; height: 12px; background: var(--bb-surface); border-left: 1px solid var(--bb-line); border-bottom: 1px solid var(--bb-line); transform: rotate(45deg); }

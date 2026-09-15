@@ -108,6 +108,18 @@ try {
   await source.waitForTimeout(300);
   assert.deepEqual(await source.evaluate(() => ({ token: window.explorerDocumentToken, draft: document.querySelector("#draft")?.value, scroll: window.scrollY })),
     { token: "same-live-document", draft: "unsaved web form", scroll: 500 });
+  const shade = async dimmed => main.evaluate(dimmed => window.__TAURI_INTERNALS__.invoke("resize_source_browser", {
+    bounds: { x: 0, y: 100, width: 500, height: 600 }, visible: true, dimmed,
+  }), dimmed);
+  await shade(true);
+  await source.locator("#bowerbird-onboarding-shade").waitFor();
+  assert.deepEqual(await source.locator("#bowerbird-onboarding-shade").evaluate(el => ({
+    color: getComputedStyle(el).backgroundColor, topLayer: el.matches(":popover-open"),
+  })), { color: "rgba(0, 0, 0, 0.56)", topLayer: true });
+  await shade(false);
+  await source.locator("#bowerbird-onboarding-shade").waitFor({ state: "detached" });
+  assert.deepEqual(await source.evaluate(() => ({ token: window.explorerDocumentToken, draft: document.querySelector("#draft")?.value, scroll: window.scrollY })),
+    { token: "same-live-document", draft: "unsaved web form", scroll: 500 });
   const payload = await source.locator("#image").evaluate(image => {
     const transfer = new DataTransfer(); image.dispatchEvent(new DragEvent("dragstart", { bubbles: true, dataTransfer: transfer }));
     return JSON.parse(transfer.getData("application/x-bowerbird-explorer"));
@@ -123,13 +135,19 @@ try {
     catch { return "denied"; }
   });
   assert.equal(remote, "denied");
+  await shade(true);
+  await main.evaluate(() => window.__TAURI_INTERNALS__.invoke("reload_source_browser"));
+  await source.waitForLoadState("load");
+  await source.waitForFunction(() => !window.explorerDocumentToken && !!document.querySelector("#bowerbird-onboarding-shade:popover-open"));
+  await shade(false);
+  await source.locator("#bowerbird-onboarding-shade").waitFor({ state: "detached" });
   await stop(main);
   ({ main, source } = await start());
   await source.getByText("logged in", { exact: true }).waitFor();
   const restored = await main.evaluate(() => window.__TAURI_INTERNALS__.invoke("smoke_capture", { url: "http://127.0.0.1:1559/protected.png" }));
   assert.deepEqual(Buffer.from(restored, "base64"), png);
   await stop(main);
-  console.log(JSON.stringify({ ok: true, nativeWebView2: true, browserGeneratedDragTransferredViaCdp: true, crossOriginImageWithoutCors: true,
+  console.log(JSON.stringify({ ok: true, nativeWebView2: true, spotlightDimRestoresWithoutReload: true, spotlightSurvivesPageReload: true, browserGeneratedDragTransferredViaCdp: true, crossOriginImageWithoutCors: true,
     httpOnlyCookiePersistedAcrossRestart: true, reopenPreservesDocumentFormAndScroll: true, remoteIpcDenied: true, dragMetadata: payload, imageRequests, profiles: directory }));
 } finally {
   if (child && child.exitCode === null) await new Promise(resolve => {

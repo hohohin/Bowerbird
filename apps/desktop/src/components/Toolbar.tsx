@@ -119,7 +119,7 @@ export function Toolbar({
     const completeLesson = beginOnboardingOperation("folder", activeProjectId);
     const guide = useOnboarding.getState().guide;
     const starterFolder = guide.status === "active" && guide.role === "designer"
-      && [1, 7].includes(guide.sessions.designer?.step ?? -1) && guide.sessions.designer?.projectId === activeProjectId;
+      && [1, 7, 8].includes(guide.sessions.designer?.step ?? -1) && guide.sessions.designer?.projectId === activeProjectId;
     setImportOpen(false);
     void withBusy(async () => {
       const parent = starterFolder ? await api.releasePresetPack() : undefined;
@@ -237,17 +237,17 @@ export function Toolbar({
       </div>
 
       <div className="app-topbar-actions" aria-label="视图与任务">
-        {!canvasMode && (
-          <div className="app-topbar-view-controls" role="group" aria-label="素材视图">
-            <GeneratedImageFilter />
+        <div className="app-topbar-view-controls" role="group" aria-label="素材视图">
+          <GeneratedImageFilter />
+          {!canvasMode && (
             <div className="library-view-control">
               <div className="library-view-segments" role="group" aria-label="项目素材视图">
                 <button type="button" aria-pressed={collapsed} onClick={() => setCollapsed(true)}>收起</button>
                 <button type="button" aria-pressed={!collapsed} onClick={() => setCollapsed(false)}>展开</button>
               </div>
             </div>
-          </div>
-        )}
+          )}
+        </div>
         <SidebarStatus />
       </div>
       {collectedNotice && (

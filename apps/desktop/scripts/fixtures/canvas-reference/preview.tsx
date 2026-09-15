@@ -6,11 +6,13 @@ import { ImageAnnotator } from "../../../src/components/ImageAnnotator";
 import { useStore } from "../../../src/store";
 import { ExploreWorkspace } from "../../../src/components/ExploreWorkspace";
 import { ToastViewport } from "../../../src/components/ToastViewport";
+import { Toolbar } from "../../../src/components/Toolbar";
 import "../../../src/styles.css";
 
 // Closed synthetic IPC fixture: never reads a library or invokes a provider.
 const w = window as any;
 const explorer = new URLSearchParams(location.search).has("explorer");
+const sourceLibrary = new URLSearchParams(location.search).has("source-library");
 w.store = useStore;
 const callbacks = new Map();
 const listeners = new Map();
@@ -22,6 +24,7 @@ const base = { projectId: "p", threadId: "t", hiddenAt: null, positionLocked: fa
   width: 190, height: 180, zIndex: 1, role: "reference", kind: "asset", assetId: "existing" };
 const image = (color: string) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="190" height="150"><rect width="190" height="150" fill="${color}"/></svg>`)}`;
 const assets = ["existing", "a", "b", "c", "d"].map((id, i) => ({ id, name: `合成参考 ${id}`, width: 190, height: 150,
+  ...(sourceLibrary ? { thumb_path: image(["#64748b", "#0369a1", "#4f46e5", "#0d9488", "#9333ea"][i]) } : {}),
   store_path: image(["#64748b", "#0369a1", "#4f46e5", "#0d9488", "#9333ea"][i]), source: "imported" }));
 if (explorer) assets.push({ ...assets[1], id: "collected", name: "网页采集图片", source: "extension" });
 assets.push(...JSON.parse(sessionStorage.getItem("reference-drafts") || "[]"));
@@ -123,6 +126,7 @@ w.__TAURI_INTERNALS__ = {
     if (command === "read_image_data_url") return args.path;
     if (command === "project_canvas_ensure") return canvas;
     if (command === "list_generation_groups") return {};
+    if (sourceLibrary && command === "list_assets") return assets;
     if (command === "count_assets") return 0;
     if (command.startsWith("list_")) return [];
     return null;
@@ -133,12 +137,17 @@ useStore.setState({ projects: (explorer ? [project, { ...project, id: "q", name:
 function Fixture() {
   const projectId = useStore(state => state.activeProjectId)!;
   const [exploring, setExploring] = React.useState(explorer);
+  const [toolbarCanvasMode, setToolbarCanvasMode] = React.useState(true);
+  w.setToolbarCanvasMode = setToolbarCanvasMode;
   w.setExploring = setExploring;
   const canvas = <React.Profiler id="canvas" onRender={() => { w.canvasCommits = (w.canvasCommits || 0) + 1; }}>
     <CanvasWorkspace key={projectId} projectId={projectId} exploring={exploring} />
   </React.Profiler>;
   return <div className="app-shell" style={{ display: "flex", height: "100vh" }}>
-    {explorer ? <ExploreWorkspace url="https://www.pinterest.com/" open={exploring} onClose={() => setExploring(false)}>{canvas}</ExploreWorkspace> : canvas}
+    {sourceLibrary ? <div className="flex min-w-0 flex-1 flex-col">
+      <Toolbar canvasMode={toolbarCanvasMode} onCanvasModeChange={setToolbarCanvasMode} onCreateCreative={() => {}} onRefresh={async () => {}} />
+      <div className="flex min-h-0 flex-1">{canvas}</div>
+    </div> : explorer ? <ExploreWorkspace url="https://www.pinterest.com/" open={exploring} onClose={() => setExploring(false)}>{canvas}</ExploreWorkspace> : canvas}
     <AssetContextMenu /><ImageAnnotator /><ToastViewport />
   </div>;
 }

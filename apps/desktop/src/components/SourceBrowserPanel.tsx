@@ -134,10 +134,11 @@ export function SourceBrowserPanel({ url, onClose, visible = true, suspended = f
           });
         const hidden = overlay || suspendedRef.current;
         setOccluded(hidden);
-        const layout = JSON.stringify([bounds, hidden]);
+        const dimmed = !!document.querySelector("[data-onboarding-dim-browser]");
+        const layout = JSON.stringify([bounds, hidden, dimmed]);
         if (lastLayout === layout) return;
         lastLayout = layout;
-        void queueBrowserOperation(() => api.resizeSourceBrowser(bounds, !hidden)).catch((cause) => {
+        void queueBrowserOperation(() => api.resizeSourceBrowser(bounds, !hidden, dimmed)).catch((cause) => {
           if (lastLayout === layout) lastLayout = null;
           if (alive) setError(String(cause));
         });

@@ -3,6 +3,7 @@ import { useStore } from "../store";
 import { api } from "../lib/api";
 import { notifyError, notifySuccess } from "../lib/notify";
 import { prepareExplorerCanvasDrop } from "../lib/explorerCanvasDrop";
+import { EXPLORER_MIME } from "../lib/explorer";
 
 /** Capture external files above cards, editors and portals; internal asset drags keep their own handlers. */
 export function FileDropImport() {
@@ -10,7 +11,18 @@ export function FileDropImport() {
   const [pending, setPending] = useState(0);
   useEffect(() => {
     let alive = true;
-    const isFiles = (event: DragEvent) => !!event.dataTransfer?.types.includes("Files");
+    const isFiles = (event: DragEvent) => {
+      const data = event.dataTransfer;
+      if (!data?.types.includes("Files")) return false;
+      // WebView2 image drags can carry both Files and our capture protocol.
+      // Let ExploreWorkspace validate even malformed metadata and report errors.
+      if (data.types.includes(EXPLORER_MIME) || data.getData("text/plain").startsWith("bowerbird-explorer:")) return false;
+      // Native bridges can strip custom MIME; dragover exposes types but no text.
+      // Defer mixed text/files over the explorer target until drop can read it.
+      if (event.type !== "drop" && data.types.includes("text/plain") && event.target instanceof Element
+        && event.target.closest(".explore-workspace.is-open .explore-main")) return false;
+      return true;
+    };
     const collection = (event: DragEvent) => event.target instanceof Element && !!event.target.closest(".collection-panel .app-modal");
     const targetProject = (event: DragEvent) => {
       const target = event.target instanceof Element

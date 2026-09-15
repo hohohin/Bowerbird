@@ -21,6 +21,8 @@ async fn smoke_capture(app: tauri::AppHandle, url: String) -> Result<String, Str
 fn main() {
     assert!(cfg!(debug_assertions), "test fixture only");
     let mut context = tauri::generate_context!("tests/fixtures/explorer/tauri.conf.json");
+    context.config_mut().app.windows[0].decorations = false;
+    context.config_mut().app.windows[0].visible = std::env::var_os("BOWERBIRD_EXPLORER_TEST_VISIBLE").is_some();
     context.config_mut().app.windows[0].data_directory = Some(std::path::PathBuf::from(
         std::env::var_os("BOWERBIRD_EXPLORER_TEST_MAIN_DATA_DIR").expect("isolated main profile required")
     ));

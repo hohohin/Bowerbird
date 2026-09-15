@@ -574,6 +574,7 @@ export function SidebarStatus() {
     <div className="task-center-entry">
       <button
         ref={ringRef}
+        data-tour="app-status"
         type="button"
         onClick={togglePanel}
         title={title}

@@ -38,8 +38,7 @@ pub(super) fn image_bytes(url: &str) -> Result<Vec<u8>, AppError> {
     Ok(bytes)
 }
 
-pub(super) fn validate_workspace(value: &Value) -> Result<(), AppError> {
-    let doc = &value["document"];
+fn validate_document(doc: &Value, check_images: bool) -> Result<(), AppError> {
     if !doc.is_null() {
         let w = doc["width"].as_u64().ok_or_else(invalid)?;
         let h = doc["height"].as_u64().ok_or_else(invalid)?;
@@ -77,7 +76,9 @@ pub(super) fn validate_workspace(value: &Value) -> Result<(), AppError> {
                     return Err(invalid());
                 }
             }
-            image_bytes(layer["dataUrl"].as_str().ok_or_else(invalid)?)?;
+            if check_images {
+                image_bytes(layer["dataUrl"].as_str().ok_or_else(invalid)?)?;
+            }
             for field in ["text", "textBackup"] {
                 let text = &layer[field];
                 if text.is_null() {
@@ -114,6 +115,46 @@ pub(super) fn validate_workspace(value: &Value) -> Result<(), AppError> {
                     {
                         return Err(invalid());
                     }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn validate_workspace(value: &Value) -> Result<(), AppError> {
+    let doc = &value["document"];
+    validate_document(doc, true)?;
+    if !value["history"].is_null() {
+        let history = &value["history"];
+        let images = history["images"].as_array().ok_or_else(invalid)?;
+        let documents = history["documents"].as_array().ok_or_else(invalid)?;
+        if images.len() > 510 || documents.len() > 30 {
+            return Err(invalid());
+        }
+        for image in images {
+            image_bytes(image.as_str().ok_or_else(invalid)?)?;
+        }
+        for snapshot in documents {
+            if snapshot.is_null() {
+                return Err(invalid());
+            }
+            validate_document(snapshot, false)?;
+            for layer in snapshot["layers"].as_array().ok_or_else(invalid)? {
+                let index = layer["image"].as_i64().ok_or_else(invalid)?;
+                if index < 0 {
+                    let current_index = index
+                        .checked_neg()
+                        .and_then(|v| v.checked_sub(1))
+                        .ok_or_else(invalid)? as usize;
+                    if !doc["layers"]
+                        .as_array()
+                        .is_some_and(|layers| current_index < layers.len())
+                    {
+                        return Err(invalid());
+                    }
+                } else if index as usize >= images.len() {
+                    return Err(invalid());
                 }
             }
         }
@@ -440,6 +481,27 @@ mod tests {
         let encoded = serde_json::to_vec(&workspace).unwrap();
         let decoded: Value = serde_json::from_slice(&encoded).unwrap();
         assert_eq!(decoded, workspace);
+        let mut with_history = workspace.clone();
+        let mut snapshot = workspace["document"].clone();
+        for layer in snapshot["layers"].as_array_mut().unwrap() {
+            layer.as_object_mut().unwrap().remove("dataUrl");
+            layer["image"] = json!(-1);
+        }
+        with_history["history"] = json!({"images":[],"documents":[snapshot.clone()]});
+        assert!(validate_workspace(&with_history).is_ok());
+        with_history["history"]["images"] = json!([workspace["document"]["layers"][0]["dataUrl"]]);
+        with_history["history"]["documents"][0]["layers"][0]["image"] = json!(0);
+        assert!(validate_workspace(&with_history).is_ok());
+        for reference in [json!(-3), json!(1), json!(0.5), json!(i64::MIN)] {
+            let mut broken = with_history.clone();
+            broken["history"]["documents"][0]["layers"][0]["image"] = reference;
+            assert!(validate_workspace(&broken).is_err());
+        }
+        let mut broken = with_history.clone();
+        broken["history"]["documents"][0]["layers"][1]["text"]["fontSize"] = json!(0);
+        assert!(validate_workspace(&broken).is_err());
+        broken["history"]["documents"] = json!(vec![snapshot; 31]);
+        assert!(validate_workspace(&broken).is_err());
         let mut empty_text = workspace.clone();
         empty_text["document"]["layers"][1]["text"]["content"] = json!("");
         assert!(validate_workspace(&empty_text).is_ok());

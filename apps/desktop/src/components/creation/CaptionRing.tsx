@@ -285,6 +285,8 @@ function CaptionRingSession({ assetId, anchorElement }: { assetId: string; ancho
     const threshold = geom.outerR + 120;
     const onMove = (e: PointerEvent) => {
       if (closeRef.current) return;
+      // Reading or advancing the adjacent tutorial must leave its dimension target open.
+      if (e.target instanceof Element && e.target.closest(".onboarding-spotlight-card.is-ring-open")) return;
       const dx = e.clientX - geom.cx;
       const dy = e.clientY - geom.cy;
       if (dx * dx + dy * dy <= threshold * threshold) return;

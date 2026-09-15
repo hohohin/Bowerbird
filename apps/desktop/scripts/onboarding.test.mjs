@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { freshRoleGuide, parseRoleGuide, advanceRoleGuide, practiceReady, ONBOARDING_ROUTES } from '../src/lib/onboardingRoutes.ts';
+import { freshRoleGuide, parseRoleGuide, advanceRoleGuide, previousRoleGuide, practiceReady, ONBOARDING_ROUTES } from '../src/lib/onboardingRoutes.ts';
 const session = (step = 0) => ({ designerRevision: 2, projectId: 'p', runId: 'run', step, stepStartedAt: 100, ready: false,
   baselineText: '', collectionId: null, profileId: null, analysisAssetId: null, annotationAssetId: null, tasks: {} });
 test('identity text and designer practice order match the requested workflow', () => {
-  assert.deepEqual(ONBOARDING_ROUTES.designer.map(s => s.scene), ['create-project', 'folder', 'source-scope', 'open-explore', 'explore', 'expand-source', 'activate-composer', 'sample-dimensions']);
+  assert.deepEqual(ONBOARDING_ROUTES.designer.map(s => s.scene), ['create-project', 'folder', 'source-scope', 'open-explore', 'explore', 'expand-source', 'activate-composer', 'sample-dimensions', 'pick-prompt', 'ready-to-create']);
 });
 test('discarded demonstration completion never migrates to practice completion', () => {
   assert.deepEqual(parseRoleGuide({ role: 'designer', status: 'completed', steps: { designer: 5 }, completedRoles: ['designer','marketing','director'] }), freshRoleGuide());
@@ -77,6 +77,30 @@ test('completed six-step designer sessions resume at the new composer lesson', (
   const restored=parseRoleGuide({...freshRoleGuide(),role:'designer',status:'completed',completedRoles:['designer'],sessions:{designer:{...session(5),ready:true}}});
   assert.equal(restored.sessions.designer.step,6);
   assert.equal(restored.sessions.designer.ready,false);
+  assert.equal(restored.status,'paused');
+  assert.deepEqual(restored.completedRoles,[]);
+});
+
+test('back navigation preserves the project and review boundary without accepting new work', () => {
+  const guide = {...freshRoleGuide(), role:'designer', status:'active', sessions:{designer:session(2)}};
+  let back = previousRoleGuide(guide, 200);
+  assert.equal(back.sessions.designer.step, 1);
+  assert.equal(back.sessions.designer.projectId, 'p');
+  assert.equal(back.sessions.designer.ready, false);
+  assert.equal(back.sessions.designer.reviewUntil, 2);
+  back = previousRoleGuide(back, 201);
+  assert.equal(previousRoleGuide(back), back);
+  assert.deepEqual(parseRoleGuide(back).sessions, back.sessions);
+  back = advanceRoleGuide(back, '', 202);
+  back = advanceRoleGuide(back, '', 203);
+  assert.equal(back.sessions.designer.step, 2);
+  assert.equal(back.sessions.designer.reviewUntil, undefined);
+  assert.equal(back.sessions.designer.stepVisit, 4);
+  assert.equal(advanceRoleGuide(back, ''), back);
+});
+test('completed eight-step designer sessions resume at the prompt selection lesson', () => {
+  const restored=parseRoleGuide({...freshRoleGuide(),role:'designer',status:'completed',completedRoles:['designer'],sessions:{designer:{...session(7),ready:true}}});
+  assert.equal(restored.sessions.designer.step,8);
   assert.equal(restored.status,'paused');
   assert.deepEqual(restored.completedRoles,[]);
 });

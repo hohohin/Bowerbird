@@ -39,7 +39,7 @@ let snapshot = JSON.parse(sessionStorage.getItem("reference-fixture") || "null")
 w.calls = [];
 w.snapshot = () => structuredClone(snapshot);
 w.save = () => sessionStorage.setItem("reference-fixture", JSON.stringify(snapshot));
-for (const asset of assets) Object.assign(asset, { thumb_path: asset.store_path, ext: 'png', sections: [{ id: 'palette-' + asset.id, title: "色调", body: "以蓝色和奶油白为主色，保留柔和的明暗层次。" }] });
+for (const asset of assets) Object.assign(asset, { thumb_path: asset.store_path, ext: 'png', sections: [{ id: "prompt-" + asset.id, title: "反推提示词", body: "柔和的自然光，奶油白背景中的蓝色包装。" }, { id: 'palette-' + asset.id, title: "色调", body: "以蓝色和奶油白为主色，保留柔和的明暗层次。" }] });
 w.persistLesson = () => { w.save(); sessionStorage.setItem("lesson-project", JSON.stringify(project)); };
 w.__TAURI_INTERNALS__ = {
   transformCallback: (callback: any) => { const id = callbacks.size + 1; callbacks.set(id, callback); return id; },
