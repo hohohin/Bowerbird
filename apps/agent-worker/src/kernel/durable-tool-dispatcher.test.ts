@@ -145,3 +145,25 @@ test("an outcome-unknown replay preserves the first safe provider code", async (
   equal(tool.executeCount, 1);
   equal(control.rows.get(identity.callId)?.safeErrorCode, "deepseek_transport_unknown");
 });
+
+test("unexpected error observer cannot change the fail-closed durable outcome", async () => {
+  const control = new MemoryControl();
+  const tool = new RecoverableFakeImageTool();
+  tool.execute = async () => {
+    tool.executeCount++;
+    throw new TypeError("local_test_failure");
+  };
+  const observed: Array<{ error: unknown; callId: string }> = [];
+  const dispatcher = new DurableToolDispatcher(control, tool, {
+    onUnexpectedError(error, observedIdentity) {
+      observed.push({ error, callId: observedIdentity.callId });
+      throw new Error("observer_must_be_ignored");
+    },
+  });
+
+  await rejects(() => dispatcher.dispatch(identity, { prompt: "one image" }), /provider_outcome_unknown/);
+  equal(observed.length, 1);
+  equal(observed[0]?.callId, identity.callId);
+  equal((observed[0]?.error as Error).message, "local_test_failure");
+  equal(control.rows.get(identity.callId)?.status, "outcome_unknown");
+});

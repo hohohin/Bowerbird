@@ -21,8 +21,7 @@ const PEEK_EVENT = "bowerbird://board-asset-peek";
  *
  * 收起手势：Esc / 点遮罩 / 再点目标图片 / 右键 / 窗口缩放 / 鼠标移出环一定距离（编辑框
  * 区域除外）/ 直接输入文字。环心胶囊文字（主行「挑选你需要的维度」+ 小字关闭手势）说明
- * 这些。tour 激活时 suppressScrim（tour 自带聚光灯），且距离/输入收起不生效（避免引导中
- * 环意外消失）——但 tourStep ≥ 11（引导教「移开鼠标/直接输入关环」那步）起恢复这两种收起。
+ * 这些。引导期间仍保留正常的关闭手势。
  *
  * 定位沿 AssetContextMenu / BoardChipPreview 范式：portal 到 body + fixed 坐标；
  * z-65/66 占用上下文菜单(60)与 tour/Popover(70) 之间的空档，保证 tour 聚光灯在最上层。
@@ -103,22 +102,27 @@ function buildMaskImage(g: Geometry): string {
 export function CaptionRing() {
   const openCaptionRing = useStore((s) => s.openCaptionRing);
   const assetId = useStore((s) => s.captionRing);
+  const [peekAnchor, setPeekAnchor] = useState<{ assetId: string; element: HTMLElement } | null>(null);
+
+  useEffect(() => { if (!assetId) setPeekAnchor(null); }, [assetId]);
 
   useEffect(() => {
-    const onPeek = (e: Event) => openCaptionRing((e as CustomEvent<string>).detail);
+    const onPeek = (e: Event) => {
+      const detail = (e as CustomEvent<string | { assetId: string; anchor: HTMLElement }>).detail;
+      setPeekAnchor(typeof detail === "string" ? null : { assetId: detail.assetId, element: detail.anchor });
+      openCaptionRing(typeof detail === "string" ? detail : detail.assetId);
+    };
     window.addEventListener(PEEK_EVENT, onPeek as EventListener);
     return () => window.removeEventListener(PEEK_EVENT, onPeek as EventListener);
   }, [openCaptionRing]);
 
   if (!assetId) return null;
-  return <CaptionRingSession key={assetId} assetId={assetId} />;
+  return <CaptionRingSession key={assetId} assetId={assetId} anchorElement={peekAnchor?.assetId === assetId ? peekAnchor.element : null} />;
 }
 
-function CaptionRingSession({ assetId }: { assetId: string }) {
+function CaptionRingSession({ assetId, anchorElement }: { assetId: string; anchorElement: HTMLElement | null }) {
   const closeCaptionRing = useStore((s) => s.closeCaptionRing);
   const boardOpen = useStore((s) => s.boardOpen);
-  const tourActive = useStore((s) => s.tourActive);
-  const tourStep = useStore((s) => s.tourStep);
   // 维度数据：瀑布流资产 + 反推集合合并（prompted 后置覆盖补 sections），与 hook 的 assetById
   // 同源逻辑。响应式订阅——板外呼环时 openCaptionRing 补拉、开板瞬间 App.refresh 未返回时，
   // 数据到位即重算补扇区（非响应式 getState 会卡在挂载那一刻的空态）。
@@ -168,6 +172,7 @@ function CaptionRingSession({ assetId }: { assetId: string }) {
     // 锚点：优先瀑布流卡片（长按窥视）；标注注入的临时图不在瀑布流，
     // 回退到编辑框内该资产的 image chip（data-asset-id），环围绕刚插入的 chip 呼出。
     const anchor =
+      anchorElement ??
       document.getElementById(`asset-${assetId}`) ??
       document.querySelector(`[data-asset-id="${CSS.escape(assetId)}"]`);
     const card = anchor?.getBoundingClientRect();
@@ -225,7 +230,7 @@ function CaptionRingSession({ assetId }: { assetId: string }) {
         editor: edRect,
       };
     });
-  }, [assetId, requestClose]);
+  }, [assetId, anchorElement, requestClose]);
 
   useLayoutEffect(() => {
     remeasure();
@@ -240,8 +245,7 @@ function CaptionRingSession({ assetId }: { assetId: string }) {
 
   // 收起：Esc / 直接输入文字（不拦截，按键落进编辑框）/ 窗口缩放（几何整体失效）/ 右键
   // （先收环再出菜单，避免菜单 z-60 压在环层 z-66 下面）。遮罩与洞内点击区的收起见各自
-  // onClick；滚动不收起、只重测跟随。tour 期间只有 Esc 生效（防环在引导中意外消失）——
-  // tourStep ≥ 11 起输入收起也生效（引导开始教关环手势）。
+  // onClick；滚动不收起、只重测跟随。
   useLayoutEffect(() => {
     window.addEventListener("keydown", onKey, true);
     // IME 组合开始 = 用户在输入文字（中文输入法 keydown 的 key 是 "Process"，字符判定兜不住）
@@ -257,7 +261,6 @@ function CaptionRingSession({ assetId }: { assetId: string }) {
       window.removeEventListener("contextmenu", requestClose, true);
     };
     function onCompositionStart() {
-      if (tourActive && tourStep < 11) return;
       requestClose();
     }
     function onKey(e: KeyboardEvent) {
@@ -265,7 +268,6 @@ function CaptionRingSession({ assetId }: { assetId: string }) {
         requestClose();
         return;
       }
-      if (tourActive && tourStep < 11) return;
       // 直接输入文字 → 收起环让位。"Process" = IME 处理中的键（中文输入法下可打印字符
       // 判定拿不到）；Backspace/Delete 属编辑输入，一并算；空格不算（扇区键盘激活用）。
       const typing =
@@ -275,15 +277,16 @@ function CaptionRingSession({ assetId }: { assetId: string }) {
         (e.key.length === 1 && e.key !== " " && !e.ctrlKey && !e.metaKey && !e.altKey);
       if (typing) requestClose();
     }
-  }, [requestClose, remeasure, tourActive, tourStep]);
+  }, [requestClose, remeasure]);
 
   // 鼠标移出环一定距离即收起。编辑框区域豁免：用户常移过去挪光标/继续输入。
-  // tour 期间不生效（防环在引导中意外消失），tourStep ≥ 11 起恢复（引导教关环手势）。
   useLayoutEffect(() => {
-    if (!geom || (tourActive && tourStep < 11)) return;
+    if (!geom) return;
     const threshold = geom.outerR + 120;
     const onMove = (e: PointerEvent) => {
       if (closeRef.current) return;
+      // Reading or advancing the adjacent tutorial must leave its dimension target open.
+      if (e.target instanceof Element && e.target.closest(".onboarding-spotlight-card.is-ring-open")) return;
       const dx = e.clientX - geom.cx;
       const dy = e.clientY - geom.cy;
       if (dx * dx + dy * dy <= threshold * threshold) return;
@@ -301,7 +304,7 @@ function CaptionRingSession({ assetId }: { assetId: string }) {
     };
     window.addEventListener("pointermove", onMove);
     return () => window.removeEventListener("pointermove", onMove);
-  }, [geom, requestClose, tourActive, tourStep]);
+  }, [geom, requestClose]);
 
   const maskImage = useMemo(() => (geom ? buildMaskImage(geom) : null), [geom]);
 
@@ -347,9 +350,6 @@ function CaptionRingSession({ assetId }: { assetId: string }) {
     if (closeRef.current) return;
     setUsed((prev) => new Set(prev).add(section.title));
     useStore.getState().pickCaptionSection(section, assetId);
-    // tour step 10：用户点环上维度（如「构图」）→ 引导完成
-    const st = useStore.getState();
-    if (st.tourActive && st.tourStep === 10) st.setTourStep(11);
   }
 
   if (!geom) return null;
@@ -384,13 +384,11 @@ function CaptionRingSession({ assetId }: { assetId: string }) {
 
   return createPortal(
     <>
-      {!tourActive && (
-        <div
-          className={`caption-ring-scrim${closing ? " is-closing" : ""}`}
-          style={{ maskImage: maskImage ?? undefined, WebkitMaskImage: maskImage ?? undefined }}
-          onClick={requestClose}
-        />
-      )}
+      <div
+        className={`caption-ring-scrim${closing ? " is-closing" : ""}`}
+        style={{ maskImage: maskImage ?? undefined, WebkitMaskImage: maskImage ?? undefined }}
+        onClick={requestClose}
+      />
       <div className={`caption-ring-layer${closing ? " is-closing" : ""}`}>
         {/* 洞内透明点击区：盖住目标图片（整张图 + 环内径取大），再点 = 收起，
             也挡住误触重复拾取；环带上的点击由扇区（更上层）优先接管 */}

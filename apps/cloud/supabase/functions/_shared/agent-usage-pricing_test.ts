@@ -3,6 +3,7 @@ import {
   agentUsageService,
   creditsForAgentUsage,
   estimateProviderCostMicros,
+  isAgentUsageToolBindingValid,
   normalizeAgentUsageItem,
   parseAgentUsagePricing,
 } from "./agent-usage-pricing.ts";
@@ -48,6 +49,23 @@ Deno.test("invalid units and provider-kind substitutions fail closed", () => {
   assertThrows(() => creditsForAgentUsage(normalizeAgentUsageItem({
     callId: "forged-renderer", kind: "image_generation", provider: "renderer", model: "renderer", imageCount: 1,
   }), pricing), Error, "agent_usage_binding_invalid");
+});
+
+Deno.test("usage tool binding admits only the registered legacy and unified tool names", () => {
+  const vision = normalizeAgentUsageItem({
+    callId: "vision", kind: "vision_call", provider: "ark", model: "vision", imageCount: 0,
+  });
+  assertEquals(isAgentUsageToolBindingValid(vision, "understand_image", "ark"), true);
+  assertEquals(isAgentUsageToolBindingValid(vision, "understand_asset", "ark"), true);
+  assertEquals(isAgentUsageToolBindingValid(vision, "inspect_artifact", "ark"), true);
+  assertEquals(isAgentUsageToolBindingValid(vision, "generate_image", "ark"), false);
+  assertEquals(isAgentUsageToolBindingValid({ ...vision, provider: "deepseek" }, "understand_asset", "ark"), false);
+
+  const render = normalizeAgentUsageItem({
+    callId: "render", kind: "html_render", provider: "renderer", model: "renderer", imageCount: 0,
+  });
+  assertEquals(isAgentUsageToolBindingValid(render, "render_html", "ark"), true);
+  assertEquals(isAgentUsageToolBindingValid(render, "inspect_artifact", "ark"), false);
 });
 
 Deno.test("html_render usage: renderer provider, zero credits by default, optional pricing block", () => {

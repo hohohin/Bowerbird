@@ -1,0 +1,2786 @@
+{
+  "version": "video-api-local-v1",
+  "taskId": "01a075d3-a061-76f0-b987-4329e8ac74a6",
+  "baseCommit": "e2d2898c13674e1760a7da545dab3d340432cc6b",
+  "branch": "codex/video-api-preflight",
+  "sourceReadOnly": "D:/H/Project/Bowerbird",
+  "committed": true,
+  "integratedIntoSavedProject": false,
+  "deployed": false,
+  "productionPricingEnabled": false,
+  "candidatePatches": [
+    {
+      "path": "apps/desktop/src-tauri/src/codex/jimeng.rs",
+      "sourceSha256": "abbfedcb7818deb0064c445de3871d9c6102b09a5271fca2fcce908e7fddfd23",
+      "baselineSha256": "b0da2d8ad301f6f3b52c933a99d2cfbaabd0dcd844a3b34bf7704ca5ed7002eb",
+      "patchFile": ".tmp/video-api/cli-delta/00.patch",
+      "patchSha256": "7d9aa71ccbc3599cb9710991786ecebc07d547957481a5db2b3131ae7c2f1701",
+      "applies": true,
+      "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash.",
+      "hunks": [
+        {
+          "header": "@@ -52,6 +52,19 @@ impl GenProvider for DreaminaCliProvider {",
+          "sha256": "a44af2b02e7cccb87b33a49abed10681f0d8cd2c0f9f89d6b7f72b90a5084481",
+          "addedLines": 13,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        }
+      ],
+      "finalSha256": "30e5128d29c85a0d29388cd6af62ac835d214de1aa5b7d44c36cdb5bae5bb19d"
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/codex/mod.rs",
+      "sourceSha256": "543debc5d47ddb4b9ce5d877496e36b586a816bf1294c0f4e78abc6b8881c285",
+      "baselineSha256": "1efd2de7e39aec16d3014499a2452efc9e3a9405e7e54c113cb03cc2612a83da",
+      "patchFile": ".tmp/video-api/cli-delta/01.patch",
+      "patchSha256": "25fd20cfea5d8fdb0809fd61ecaebb3e462fd5013b54d29ead93db46315cc149",
+      "applies": true,
+      "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash.",
+      "hunks": [
+        {
+          "header": "@@ -18,6 +18,7 @@ pub(crate) mod cloud_image;",
+          "sha256": "6e816e2cdcdbc84eb0a0472fa73748a51996c1ddb5fe756faedd1c8a648b6412",
+          "addedLines": 1,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -46,6 +47,16 @@ pub trait GenProvider: Send + Sync {",
+          "sha256": "92f70e11f4e06c31060876213319d7073701055bedb567488c5f3e8b239d66c2",
+          "addedLines": 10,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        }
+      ],
+      "finalSha256": "9ef0b0ad0e9ff83a84c683d02ce4c57d3a8e14ecf3b1e5626518863986e5b526"
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/codex/types.rs",
+      "sourceSha256": "ad971867ef8ce96e3541bb93930a82080b9a82eb0b4d00d20979207845b8eac5",
+      "baselineSha256": "b5ef1de48636c09704ebc358e24af4dcda551e6e3eee3edd0fa2dc8b65c593d8",
+      "patchFile": ".tmp/video-api/cli-delta/02.patch",
+      "patchSha256": "aa4f4e939f9a7d4f6541c6da80cac8c74ac41a51e620aefab0eba0129bb7d7a0",
+      "applies": true,
+      "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash.",
+      "hunks": [
+        {
+          "header": "@@ -4,6 +4,16 @@ use std::path::PathBuf;",
+          "sha256": "b983af50a825eda1977f384b247d8597b21201db9a6cc0dd3a56e43feb623d2d",
+          "addedLines": 10,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        }
+      ],
+      "finalSha256": "545f84fb7d560908bbb1f089a344b5d0efbb2d32475324f00c7709b0750bf6ad"
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/commands/codex.rs",
+      "sourceSha256": "7c0a4d3b1b2ac5fe6a124e5438a1a595da6bf6d9cb2d2d294c5987c5ad9a48ab",
+      "baselineSha256": "bc967229ca94e2b3e246d065ea4cacf13a6abe1a1249494012fc0d8f00150356",
+      "patchFile": ".tmp/video-api/cli-delta/03.patch",
+      "patchSha256": "1fc5fcdf4a1fb38804bb3d78bbeeb775cdc5d6df9ba22bdcb0dcc746a4d8c226",
+      "applies": true,
+      "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash.",
+      "hunks": [
+        {
+          "header": "@@ -376,7 +376,7 @@ pub async fn cancel_codex_describe() -> Result<(), AppError> {",
+          "sha256": "4ebfb253a10019a15be080d17839d3a078291fb270113b7c9f7f7e4a334d426d",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -498,6 +498,8 @@ pub async fn codex_create_image(",
+          "sha256": "7599f5d02160ffeadd0bc70cd68cbe7bcbd0f9fc7165c2668fd6ba7ff99c9ee4",
+          "addedLines": 2,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -513,6 +515,17 @@ pub async fn codex_create_image(",
+          "sha256": "f645e74ea8be095409536848876bb8876e280f795ff7cd55caeff902fdd19d40",
+          "addedLines": 11,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -592,7 +605,7 @@ pub async fn codex_create_image(",
+          "sha256": "0d2a81f918457d5bd354e9fb48aad5e1c509a72cf8fa66ff0b4ca0f1982e0dd4",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -659,12 +672,18 @@ pub async fn codex_create_image(",
+          "sha256": "95138b885a554422d07575d013b17c355c5bf12a27dda4a63e2aea08e3fc498e",
+          "addedLines": 8,
+          "removedLines": 2,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -703,6 +722,12 @@ pub async fn codex_create_image(",
+          "sha256": "c79b4573bcd7afecc7af16331d596a1fc6af5992d3fb1d7dae1d9272d5f8c92a",
+          "addedLines": 6,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -755,11 +780,13 @@ pub async fn codex_create_image(",
+          "sha256": "a4f1dd02845971bf7489450aee5f2003874bd60607bc09e14f9d83f9464a3cd7",
+          "addedLines": 5,
+          "removedLines": 3,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -771,7 +798,7 @@ pub async fn codex_create_image(",
+          "sha256": "d3ba50b3ab99b72b35a362c1c5b083dec5c5d5bddbf91a50b97ef9b239f508a0",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -781,7 +808,7 @@ pub async fn codex_create_image(",
+          "sha256": "3556e58becd21245b92bb16888e4cd85b572887537e30a2ca2e3d2daba50271d",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -826,7 +853,7 @@ pub async fn codex_create_image(",
+          "sha256": "cac4a4c484667892793627131a767801b2f62e8de16bc596a491926d5a370cc4",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -845,7 +872,7 @@ pub async fn codex_create_image(",
+          "sha256": "d3cbb8ec0017ef82756a596fdbf7cd3941e29aa23751cc67133efeb4ebf042c8",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -925,6 +952,8 @@ pub async fn codex_create_image(",
+          "sha256": "ee12c02b83e6b4ae056ef28273cdeeeebd152c69864719c8a0d4b65cbfe974e2",
+          "addedLines": 2,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -935,30 +964,30 @@ pub async fn codex_create_image(",
+          "sha256": "10a152c253fc98c63556542d35d8bd35e8a421752d49f7764a4b7ce6e8facd6a",
+          "addedLines": 14,
+          "removedLines": 14,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -1074,9 +1103,8 @@ pub async fn cancel_codex_create(",
+          "sha256": "3f972a95744f0b355b806daf16b70876e88096194229ece61f373b80023867a2",
+          "addedLines": 2,
+          "removedLines": 3,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -1114,6 +1142,7 @@ pub async fn cancel_codex_create(",
+          "sha256": "8b591d334efec1a3340087b763f78149fd5051b009b47cf17c6509ee0b1a3783",
+          "addedLines": 1,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -1153,6 +1182,7 @@ pub async fn list_gen_jobs(db: State<'_, Arc<Database>>) -> Result<Vec<GenJobSum",
+          "sha256": "19907a8f6f38981e6e3d991a32bd92f79314004c8ec8276fd6526ff920554269",
+          "addedLines": 1,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -1185,6 +1215,9 @@ pub async fn list_gen_jobs(db: State<'_, Arc<Database>>) -> Result<Vec<GenJobSum",
+          "sha256": "cbb33d0aae683df31d843043bb7aa99e96da74d8a6f5295846f8c397e212e2bb",
+          "addedLines": 3,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -1224,15 +1257,16 @@ pub async fn recent_gen_sessions(",
+          "sha256": "820447f4305bb15f1dbe7d5944533a0317bc99f9842c6c50d57404f11e59b030",
+          "addedLines": 3,
+          "removedLines": 2,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -1242,8 +1276,14 @@ pub async fn recent_gen_sessions(",
+          "sha256": "10cc9add33bee3950b58a2d70966a9768ecefbabefbff69e61e2bfaf3b6a1d7c",
+          "addedLines": 6,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -1290,11 +1330,36 @@ pub async fn jimeng_retrieve_orphan(",
+          "sha256": "7b1b2d58ff685c16f9bfe90a9a389a49dfdf5d1842e8322793db5e78f0c0616f",
+          "addedLines": 25,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        }
+      ],
+      "finalSha256": "d46566f289d3bb9883eda3f94b4c8266039e7a35f9e416d05b93a3b5932bb4de"
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/core/generation_worker.rs",
+      "sourceSha256": "7e58195f5e84994dc7ffadb41359a06b8c0867d179aed3ea4eca484270716447",
+      "baselineSha256": "1fc970473a4b485728ee00c5ee86ab5e7ff7788efd5c44f77ac8c1db3446319c",
+      "patchFile": ".tmp/video-api/cli-delta/04.patch",
+      "patchSha256": "b83facd2cc4eaefb9b20b4e868b7c513f8ed7ac83a043a19b3584a6d82a555f9",
+      "applies": true,
+      "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash.",
+      "hunks": [
+        {
+          "header": "@@ -29,6 +29,21 @@ use crate::error::{AppError, AppResult};",
+          "sha256": "b5d70635b58419bb55449be1c9574ff43333d274850002aaa28fe2dd97cdfe4a",
+          "addedLines": 15,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -199,6 +214,12 @@ pub async fn finalize_generation_assets(",
+          "sha256": "baaa6053216e5b6cf67ab9402a0dd6f18c6c66f37bc8957bdc1f3117b7e1fd7a",
+          "addedLines": 6,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -259,6 +280,10 @@ pub async fn finalize_generation_assets(",
+          "sha256": "7be3ef52a9627036f2809bb1a55782a22a8d0ac08971f0f023f7b71e6a796263",
+          "addedLines": 4,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -280,6 +305,7 @@ pub async fn finalize_generation_assets(",
+          "sha256": "baae273332bbccd904009650af2899ccd3bc9d3855865cdbd17ac67748e7f0c5",
+          "addedLines": 1,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -501,11 +527,29 @@ async fn recover_one_cloud_job(",
+          "sha256": "623924bf1167135cec158f1a1b99ce0298452f31ff750f2c4fc134040f8d9903",
+          "addedLines": 18,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -518,16 +562,14 @@ pub(crate) async fn recover_one_jimeng_job(",
+          "sha256": "29c1d9a53f20dae20dc2116171d410da394abd3776c27a79e7b18373f2545a39",
+          "addedLines": 5,
+          "removedLines": 7,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -535,12 +577,31 @@ pub(crate) async fn recover_one_jimeng_job(",
+          "sha256": "77bffb11d51cb138446af3233b98c0fcdceeddc7e34d7454e75fecd14bc77e30",
+          "addedLines": 24,
+          "removedLines": 5,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -621,7 +682,7 @@ pub(crate) async fn recover_one_jimeng_job(",
+          "sha256": "3a60b3ef1735852edde4e26f36f0ab86531707b9212826851845ef94b8b55dde",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -730,6 +791,32 @@ fn known_submit_ids(db: &Arc<Database>) -> AppResult<std::collections::HashSet<S",
+          "sha256": "736a0a00bf5ac639e11f2e7834aac731b58bc3e438c118fddc50a303802cb02c",
+          "addedLines": 26,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        }
+      ],
+      "finalSha256": "e119108a6f065c61c7a851b92a0b04e1d1615cd9f3a7acef48cb98e8bca630fa"
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/core/ingest.rs",
+      "sourceSha256": "7bc986491173d9b204869ac9cc2f4214d739a72677c0da829a95cb55fabdd86d",
+      "baselineSha256": "5e53c3870ff29f3c7bb8fd3efb41b3d0b669fada017f426be96fed7f7b387f18",
+      "patchFile": ".tmp/video-api/cli-delta/05.patch",
+      "patchSha256": "e88e0a524b63db952925eadedbf31ea6767ce62aef8780d3a009e2c6ae360231",
+      "applies": true,
+      "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash.",
+      "hunks": [
+        {
+          "header": "@@ -147,9 +147,16 @@ pub fn ingest_generated(",
+          "sha256": "3f8bcbadf3d532c6173c6153ed088623eba1d31fdfb0f197819a3d7669a2456b",
+          "addedLines": 9,
+          "removedLines": 2,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -182,7 +189,7 @@ pub fn ingest_generated(",
+          "sha256": "746cf7f1887543bd1617fff2df271fcf7b903823c68f3d72a34595418c91e469",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -640,6 +647,32 @@ mod tests {",
+          "sha256": "ba12e0d829eea2f5ec61b8631482b5e2c8171b03e2ba07c4ca3ddb1c34847235",
+          "addedLines": 26,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        }
+      ],
+      "finalSha256": "1ebc67f6fc2477feffb60102918c3397669c89c8c7bd2a5bf174725a304c557f"
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/core/library.rs",
+      "sourceSha256": "05eb80686735ce5d7d427ebde55581a11c780909b19b78841398a8ef4abf0134",
+      "baselineSha256": "5a7fab045f7c91576fe2e0bc8ec06ef9b59f345db227b3ce04fe40d8b5de1d91",
+      "patchFile": ".tmp/video-api/cli-delta/06.patch",
+      "patchSha256": "79b42f180cf7e4c1e3ab4fc7a7f1f0effe678942c422a4e5d49aa9d8a84b2f19",
+      "applies": true,
+      "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash.",
+      "hunks": [
+        {
+          "header": "@@ -93,6 +93,12 @@ pub struct Analysis {",
+          "sha256": "a7db58314a93768fe6fe3dacfc67c77673ade535936272a82e8fe3f488754b5a",
+          "addedLines": 6,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -106,6 +112,8 @@ pub struct GenerationHistoryTurn {",
+          "sha256": "c41c6c12e6192603b8c57ca379426126b73e5827c4c004fe9ca4607b6c326aea",
+          "addedLines": 2,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -114,6 +122,12 @@ pub struct GenerationHistoryTurn {",
+          "sha256": "f6bc545cadf925c89737074a0c601c3f24df3f20ab7521ebb65bbfd1e5020fa2",
+          "addedLines": 6,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -1554,6 +1568,9 @@ impl Database {",
+          "sha256": "036e73c704df367741f24405e913dcdb07ed531b7ab5f5b26eb633ba0c4159a0",
+          "addedLines": 3,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -1676,6 +1693,9 @@ impl Database {",
+          "sha256": "9c31cc1cce0d174aff64c6139dcadadf49bdd9e4c73a5434419b82f6d8a1e638",
+          "addedLines": 3,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -1739,6 +1759,9 @@ impl Database {",
+          "sha256": "a1e1840045d9fc509463ce5ccb319f54c32bbbd93dab22ac3d23320d44030064",
+          "addedLines": 3,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -1750,6 +1773,12 @@ impl Database {",
+          "sha256": "51e706cbc04ef4f6422fbcddef73599fd54d14754ff9c303c851a6d5bffbdd1a",
+          "addedLines": 6,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -3083,6 +3112,26 @@ mod tests {",
+          "sha256": "dc06fb54a268577620cb5b1faeb50a5ea398e0400b9e5718368f082cbd7bcb1d",
+          "addedLines": 20,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        }
+      ],
+      "finalSha256": "bce29afe0e6e86e898bccfdf4d5a12fa6ecac8a070630fb8ea2bb576f682640c"
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/core/task_queue.rs",
+      "sourceSha256": "69ad473c2e5f7b6593c769ad62fa8f9b3fe5aa441182452cd0ce97a83188301f",
+      "baselineSha256": "9f3af46399c375bdaa7ca59fd83422ca864747f8c72a6c7034f78212d5ccbfc7",
+      "patchFile": ".tmp/video-api/cli-delta/07.patch",
+      "patchSha256": "54a23ede38f05ae405c5fd9df42997cf307dbbd1af8bdb678f3cfbd1809fc679",
+      "applies": true,
+      "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash.",
+      "hunks": [
+        {
+          "header": "@@ -59,6 +59,7 @@ pub struct Task {",
+          "sha256": "f5862fcc48b280d7714b3d6ef212b1e592c3c011216da3abce7f6327dcf17fb9",
+          "addedLines": 1,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -120,6 +121,8 @@ pub struct GenJob {",
+          "sha256": "9d0c5df6c8d6244f382f439b10837bb7ee740541c679be6598a351a0cee08556",
+          "addedLines": 2,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -153,6 +156,21 @@ fn row_to_task(r: &rusqlite::Row) -> rusqlite::Result<Task> {",
+          "sha256": "fb4c31f070386c2b015475c293c1b0a593737d94e3a6a86a607c746cacad9cdb",
+          "addedLines": 15,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -571,6 +589,30 @@ mod tests {",
+          "sha256": "99786da8babd97cdd97c1ad0bfdc77e993884b62ff52103e5f47e11c6b5a79a7",
+          "addedLines": 24,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        }
+      ],
+      "finalSha256": "0c99b15041c5567c14efffd59f525e2b3c4765ce31acd72d83a545a90aae2262"
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/media/probe.rs",
+      "sourceSha256": "3b6a66106681298291d15afc45ee2bbad47d0b91d701734950f36a6caadcf439",
+      "baselineSha256": "1f66a87434aa63f15e1aac8377c9c636fc5bc0cd6401cba475e9e1c6929c6f0c",
+      "patchFile": ".tmp/video-api/cli-delta/08.patch",
+      "patchSha256": "d1f5ff84dcf6b685c9623acea94825effb173a84aa3968297d0a1de66592a4a7",
+      "applies": true,
+      "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash.",
+      "hunks": [
+        {
+          "header": "@@ -6,7 +6,30 @@ use std::process::Command;",
+          "sha256": "441403f2efa5e78af0778fa19c4cda57ead892b596a451371b53ade3d45fe495",
+          "addedLines": 24,
+          "removedLines": 1,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -51,7 +74,7 @@ pub fn probe(path: &Path) -> AppResult<ProbeMeta> {",
+          "sha256": "0004bf3e84fa011a0b4dbc6b21c0a38161bdf4268492182ae76911ee252a33e4",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -65,6 +88,16 @@ fn probe_video(path: &Path, ext: String, size: u64) -> AppResult<ProbeMeta> {",
+          "sha256": "0024051b5a3fa8f2e06560a32042e3e0cafb7909d9c296b79464917da2308992",
+          "addedLines": 10,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -82,6 +115,9 @@ fn probe_video(path: &Path, ext: String, size: u64) -> AppResult<ProbeMeta> {",
+          "sha256": "42af0a2ae4c4cd3cd652810de4dacfe0c52272c108ad5ea67f44db6733302cbb",
+          "addedLines": 3,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        }
+      ],
+      "finalSha256": "07dd0c0bc81b591a70b7e51b713a3ec9a5dc0100d6fa5bdb75dbe2e43b5be2eb"
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/media/thumb.rs",
+      "sourceSha256": "dfadee8355bb08199e731b5cc7db0c04f23ac3018f46c0fe6105154e98d4e1d3",
+      "baselineSha256": "a9b1698516b8c8b7814e6b86001708411840405ec0a12762c3da12cff9a0d459",
+      "patchFile": ".tmp/video-api/cli-delta/09.patch",
+      "patchSha256": "4150accc5fe27bfd66512c6443ddc24ea17b6796d1a457b20fbd8a3a24cafd4a",
+      "applies": true,
+      "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash.",
+      "hunks": [
+        {
+          "header": "@@ -47,18 +47,29 @@ pub fn generate_video(src: &Path, dst: &Path, max_size: u32) -> AppResult<()> {",
+          "sha256": "0a11ad80f3b071299bff199bc2591fceb291a121271848c7db7e6a0588661dcc",
+          "addedLines": 24,
+          "removedLines": 13,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        }
+      ],
+      "finalSha256": "302788cbc4c1176cb0451dbe02452f1969d4c0135ec7e879a6f7463d68f85e9b"
+    },
+    {
+      "path": "apps/desktop/src/lib/videoGeneration.ts",
+      "sourceSha256": "c947ef91785e3fc618650e9a4a35ed0e18426ef4e1eb950a4efb38ed8ee3455d",
+      "baselineSha256": null,
+      "patchFile": ".tmp/video-api/cli-delta/10.patch",
+      "patchSha256": "7bb4da3f1450b286b1a15281a974160c9454d76a7a65fb8220c28027fe3d5103",
+      "applies": true,
+      "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash.",
+      "hunks": [
+        {
+          "header": "@@ -0,0 +1,51 @@",
+          "sha256": "c3229c0d97ca954fda425692fb689950fd187ebf38cc9502c89755e3ada05657",
+          "addedLines": 51,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        }
+      ],
+      "finalSha256": "b468f258e0702499c4ed9b26b442d58225f7d3850c7f10c02253aa64db4ac21d"
+    },
+    {
+      "path": "apps/desktop/src/components/creation/VideoControls.tsx",
+      "sourceSha256": "da59a1e342de287829620935d5ee043d6519f0cd71d1ff66daebb76ecfd36592",
+      "baselineSha256": null,
+      "patchFile": ".tmp/video-api/cli-delta/11.patch",
+      "patchSha256": "7adfb0eee3bf6f5aedb116183d161a18322070d67e5bb788388bfba5f5fe8287",
+      "applies": true,
+      "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash.",
+      "hunks": [
+        {
+          "header": "@@ -0,0 +1,26 @@",
+          "sha256": "fc2dd3c6a97c06308895af5ed5890ef9b0f45b299de1dd3dd4132effd1942d7f",
+          "addedLines": 26,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        }
+      ],
+      "finalSha256": "e57e328e8f5cefefd1d417197c8e9420c4f6803481b207b76e7cab82a3d3734c"
+    },
+    {
+      "path": "apps/desktop/src/components/MediaPreview.tsx",
+      "sourceSha256": "40918f9f5b7facfa9dda1cda71aaa5952e11735fcba289e013e1d1c249a2976a",
+      "baselineSha256": null,
+      "patchFile": ".tmp/video-api/cli-delta/12.patch",
+      "patchSha256": "45998a2e7ff1082fa517fdff7e8a867a053b03471ea228135f0e79f218a6d28c",
+      "applies": true,
+      "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash.",
+      "hunks": [
+        {
+          "header": "@@ -0,0 +1,11 @@",
+          "sha256": "0adcd0ff63f50fdec30a8e8608309d1992daeff5ee97e303332d2413590e2de5",
+          "addedLines": 11,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        }
+      ],
+      "finalSha256": "deb2baad3a90dce77a0de962ee164d21c197bd8c5f7aeaafec212699fa154647"
+    },
+    {
+      "path": "apps/desktop/src/lib/types.ts",
+      "sourceSha256": "3fef0b20a60d7257452d05439299ffdf0280e291bb04f9a5484b69d8d985efd9",
+      "baselineSha256": "e5c7f0c954f3930ab2f558a2f26d3ff12b2dca5535949366248932d8e90c063f",
+      "patchFile": ".tmp/video-api/cli-delta/13.patch",
+      "patchSha256": "58eb2c1da59080fff29d7a4263677f42bb1f42dcd201fd8ee1b4d374f64a8e67",
+      "applies": true,
+      "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash.",
+      "hunks": [
+        {
+          "header": "@@ -1,3 +1,4 @@",
+          "sha256": "02ecfcbbb19175e3321f53fc0eb7b727889f03f1f7b0ea6fc5d5ec8dbdb85d55",
+          "addedLines": 1,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -390,6 +391,9 @@ export interface Preset {",
+          "sha256": "446e6af7f6d3c63d96f975d3dbb39653c677abd788ad271a38922dd8e5e26602",
+          "addedLines": 3,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -422,6 +426,8 @@ export interface GenTurn {",
+          "sha256": "aca2ae873f1865becd7be19aa263ebb241874b3b5b5b9d07cef23bae7b0f3d3f",
+          "addedLines": 2,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -465,6 +471,9 @@ export interface JimengOrphanTask {",
+          "sha256": "70afae26222ede28309d62aa40eaff9a21af05b573bc234d34257412404d3ea4",
+          "addedLines": 3,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -477,6 +486,9 @@ export interface GenerationHistoryTurn {",
+          "sha256": "2cd2cf7dffe9a448716c511a72355a22e00696bc47f1631d57efb7b1936e9fcb",
+          "addedLines": 3,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -619,6 +631,7 @@ export interface MigrateProgress {",
+          "sha256": "9a3537fcd4944c38edb53708330809f6ec3d62b456756b808fd76450f91a69f4",
+          "addedLines": 1,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -644,6 +657,9 @@ export interface GenJobSummary {",
+          "sha256": "628287b84296b0997b8c6b85097b661281ce586dcd1489680902da4c836ceb55",
+          "addedLines": 3,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -1012,6 +1028,11 @@ export type CodexChunk =",
+          "sha256": "0c319b63818725fda2fd34e6dd060d07c5b585427c44245012eba55c01fc0a03",
+          "addedLines": 5,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        }
+      ],
+      "finalSha256": "fb80f1d4a77847dc8c2699383e98df0e4f0666838afdda22858b5bd89936b411"
+    },
+    {
+      "path": "apps/desktop/src/lib/api.ts",
+      "sourceSha256": "813f23d968a5398855a5ea54cca425612dc62c823f30faebf4faf5b9e945e26a",
+      "baselineSha256": "2e248cb8b81789ef7586dea3ac154f56ebc9e070e604c12f400d442abd8f6644",
+      "patchFile": ".tmp/video-api/cli-delta/14.patch",
+      "patchSha256": "99813e2193b0c64acd8e0d7cb0312a8739a133afc7756d75d689d5856bc53c2e",
+      "applies": true,
+      "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash.",
+      "hunks": [
+        {
+          "header": "@@ -442,6 +442,8 @@ export const api = {",
+          "sha256": "e7c749cafa24fe0fb28ca47d4db743be926682baca5b6eb7a8159aaea4963bdb",
+          "addedLines": 2,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -466,6 +468,8 @@ export const api = {",
+          "sha256": "c5b32999ca1ff0d91413f3e4f369aae743b66142688e2910f05e5a8351f5d098",
+          "addedLines": 2,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -494,8 +498,8 @@ export const api = {",
+          "sha256": "64dac9ff0aa4be82c72841061c2c7c40f0b22dfba394396de9919311d92f5b64",
+          "addedLines": 2,
+          "removedLines": 2,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        }
+      ],
+      "finalSha256": "f7486ae80cfb9dd6e50e5629bdce964ae861ce42d00cb8ac78a65a3d67e8c702"
+    },
+    {
+      "path": "apps/desktop/src/lib/generationRecovery.ts",
+      "sourceSha256": "d1d919ebd5ace27a2843d26372702517c11118c49aa33f3894c874761ac213dd",
+      "baselineSha256": "3be04f957e4fc55f124bb061b0496681fefdfd60ce3c615f088becd3588c9a83",
+      "patchFile": ".tmp/video-api/cli-delta/15.patch",
+      "patchSha256": "11d43dd189f72b1a3967c3978affcbe16bf8d21e1b6ad5376cf3b366092bb2fa",
+      "applies": true,
+      "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash.",
+      "hunks": [
+        {
+          "header": "@@ -22,6 +22,8 @@ function hydrateMatchingTurn(live: GenTurn, persisted: GenTurn): GenTurn {",
+          "sha256": "4ca3f8acc4d9cbbbdf780ffcdb62115049d4fc988bb6b164c1f47fd10406a628",
+          "addedLines": 2,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -61,6 +63,8 @@ function hydrateRecoveredGenJob(live: GenJob, persisted: GenJob): GenJob {",
+          "sha256": "349534648d09762d3edc4b352545b56d1c0cd53be28b867adc9b78e6e8165788",
+          "addedLines": 2,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        }
+      ],
+      "finalSha256": "76660536121287b94f4b90d21903d790f540f8d79b7fcb63957d50ea6bf0eb71"
+    },
+    {
+      "path": "apps/desktop/src/lib/creativeLaunch.ts",
+      "sourceSha256": "6039910480e16d16111fc33fbfbb3ae9d1dd0f6beeb921ea58360535699f0ec7",
+      "baselineSha256": "ad2441b8c5e590d948f69e11b9f0f882bdcc2507512ce92afceca6193a0ce2b1",
+      "patchFile": ".tmp/video-api/cli-delta/16.patch",
+      "patchSha256": "f4955aa01f50175f99dc772e9d489e24ad998afbc94ab67d3801570ef9a9d2a5",
+      "applies": false,
+      "resolution": "Applied after the minimal persistent prompt-load/project-routing prerequisite.",
+      "hunks": [
+        {
+          "header": "@@ -1,6 +1,7 @@",
+          "sha256": "78f4faf6d35128e5d1eec145cb8ed50dd353ad8c89901971dfef605f23a35e9b",
+          "addedLines": 1,
+          "removedLines": 0,
+          "resolution": "Applied after the minimal persistent prompt-load/project-routing prerequisite."
+        }
+      ],
+      "finalSha256": "faae2be971dd13411c5f426f1e250d847efeab96dd08bd2f0488b914c9c5dd4f"
+    },
+    {
+      "path": "apps/desktop/src/lib/creativeDraft.ts",
+      "sourceSha256": "081b9d8134faad0fc5e150d5c3ff7a841a2be72fc17d9b60db02a2dcedc268a0",
+      "baselineSha256": "70f32611c1c64665203fa93113af113ad0a1fb3da15ab2ad1fd9db470cd82cb4",
+      "patchFile": ".tmp/video-api/cli-delta/17.patch",
+      "patchSha256": "d27ba5268b0c4a806e3687d3fb4d0479be0202f72f1f84516cfb6fc39d562270",
+      "applies": true,
+      "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash.",
+      "hunks": [
+        {
+          "header": "@@ -5,10 +5,10 @@ export function parseCreativeComposerDraft(draftJson: string): CreationEditorDra",
+          "sha256": "2528bc1c7bcadb783f495ec28152e02a54e7c318c43c4f9fadbf9bb79a34fd19",
+          "addedLines": 2,
+          "removedLines": 2,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        }
+      ],
+      "finalSha256": "081b9d8134faad0fc5e150d5c3ff7a841a2be72fc17d9b60db02a2dcedc268a0"
+    },
+    {
+      "path": "apps/desktop/src/store.ts",
+      "sourceSha256": "aaf1081b0b083186298a901674ef3d55e423f6196928a9489053a6c5c63b3ee5",
+      "baselineSha256": "7118e3aa7e12ccca28490ac1762a7378d4c8edf79e38873409e8aab52fb47c4d",
+      "patchFile": ".tmp/video-api/cli-delta/18.patch",
+      "patchSha256": "69174dfadce8536a50a79472756708533e525e5cc45b5b990774eedc900dcff4",
+      "applies": false,
+      "resolution": "Manually integrated video dispatch, state, history and retry against HEAD; Cloud recovery and reference identity were added separately.",
+      "hunks": [
+        {
+          "header": "@@ -1,6 +1,7 @@",
+          "sha256": "364cbb938bc15f01c0d1b0eed28643178677ed5e5481a8e2a4dfe0b9b16237bc",
+          "addedLines": 1,
+          "removedLines": 0,
+          "resolution": "Manually integrated video dispatch, state, history and retry against HEAD; Cloud recovery and reference identity were added separately."
+        },
+        {
+          "header": "@@ -164,6 +165,7 @@ interface State {",
+          "sha256": "8a76620f4631739de2e3bc0f8a2fc53f0338b4515f360145870ce678cf1f2fa9",
+          "addedLines": 1,
+          "removedLines": 0,
+          "resolution": "Manually integrated video dispatch, state, history and retry against HEAD; Cloud recovery and reference identity were added separately."
+        },
+        {
+          "header": "@@ -398,7 +400,7 @@ interface State {",
+          "sha256": "f2fc951b6f30b688ca79e7c18710777cdf71d60c8dbeb7494921392501dbb970",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Manually integrated video dispatch, state, history and retry against HEAD; Cloud recovery and reference identity were added separately."
+        },
+        {
+          "header": "@@ -407,6 +409,7 @@ interface State {",
+          "sha256": "5e8e3d6b1914194c15ff4d21c6e06c911c6d0a9e3a4ff9d7f94072a4d7a66b44",
+          "addedLines": 1,
+          "removedLines": 0,
+          "resolution": "Manually integrated video dispatch, state, history and retry against HEAD; Cloud recovery and reference identity were added separately."
+        },
+        {
+          "header": "@@ -442,6 +445,7 @@ interface State {",
+          "sha256": "e6a7e3d0e62790d87b6847311f74bb256f1c60ff70a74219c7ffd99de20fe121",
+          "addedLines": 1,
+          "removedLines": 0,
+          "resolution": "Manually integrated video dispatch, state, history and retry against HEAD; Cloud recovery and reference identity were added separately."
+        },
+        {
+          "header": "@@ -644,10 +648,11 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "997eca5e6d31402043046d8bda100d878f6145c6cf6e2261d326940c92c8d79a",
+          "addedLines": 2,
+          "removedLines": 1,
+          "resolution": "Manually integrated video dispatch, state, history and retry against HEAD; Cloud recovery and reference identity were added separately."
+        },
+        {
+          "header": "@@ -1677,11 +1682,12 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "a2f9709fd77df0a09b01490160237619e563e5cae39b0256f3fad6ee6b97c76c",
+          "addedLines": 2,
+          "removedLines": 1,
+          "resolution": "Manually integrated video dispatch, state, history and retry against HEAD; Cloud recovery and reference identity were added separately."
+        },
+        {
+          "header": "@@ -1692,10 +1698,11 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "8aed44bf6217a634ef9ff3042f2a10ecd186591a66fdb5c1c64500dafbca3ac9",
+          "addedLines": 2,
+          "removedLines": 1,
+          "resolution": "Manually integrated video dispatch, state, history and retry against HEAD; Cloud recovery and reference identity were added separately."
+        },
+        {
+          "header": "@@ -1712,7 +1719,7 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "bf6d817db4be04e69d6d88404ced8f574e79c7d89f926c88a7ee9993d2b04bf3",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Manually integrated video dispatch, state, history and retry against HEAD; Cloud recovery and reference identity were added separately."
+        },
+        {
+          "header": "@@ -1725,12 +1732,14 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "bbcf11f5decacb65ae8f4261ad3b5b2844e072a2cee67f36f872c02035c52728",
+          "addedLines": 2,
+          "removedLines": 0,
+          "resolution": "Manually integrated video dispatch, state, history and retry against HEAD; Cloud recovery and reference identity were added separately."
+        },
+        {
+          "header": "@@ -1767,7 +1776,7 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "412d093bb010f3e1b5ac2d1853f3976953feba3d9eb0b1aa00a9e37d4a8b6d90",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Manually integrated video dispatch, state, history and retry against HEAD; Cloud recovery and reference identity were added separately."
+        },
+        {
+          "header": "@@ -1793,7 +1802,14 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "2b53b9c64e072cbee4a45f83edf25f07fd0ed00f0b384df600f28ebcc466389e",
+          "addedLines": 8,
+          "removedLines": 1,
+          "resolution": "Manually integrated video dispatch, state, history and retry against HEAD; Cloud recovery and reference identity were added separately."
+        },
+        {
+          "header": "@@ -1805,8 +1821,9 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "0c5919d70a8b8b96324e53d209cc476da9f9c976753a95b18fb7c33417adb3ec",
+          "addedLines": 2,
+          "removedLines": 1,
+          "resolution": "Manually integrated video dispatch, state, history and retry against HEAD; Cloud recovery and reference identity were added separately."
+        },
+        {
+          "header": "@@ -1842,6 +1859,7 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "c76eb5dc4f8156aed0bc3f12f7cb1b9c3feceb148c6061b1ac4c79d89b194269",
+          "addedLines": 1,
+          "removedLines": 0,
+          "resolution": "Manually integrated video dispatch, state, history and retry against HEAD; Cloud recovery and reference identity were added separately."
+        },
+        {
+          "header": "@@ -1896,7 +1914,15 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "98b3fd2ae0a4e60fcdadc0b9475ccc5354ee26e7c4cd7afa35e37262ccfd6932",
+          "addedLines": 9,
+          "removedLines": 1,
+          "resolution": "Manually integrated video dispatch, state, history and retry against HEAD; Cloud recovery and reference identity were added separately."
+        },
+        {
+          "header": "@@ -1909,12 +1935,14 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "94552d15079f99f4230891499406ac341f8abe6b0ab163c3ead526b1e54e3f7f",
+          "addedLines": 2,
+          "removedLines": 0,
+          "resolution": "Manually integrated video dispatch, state, history and retry against HEAD; Cloud recovery and reference identity were added separately."
+        },
+        {
+          "header": "@@ -1930,16 +1958,17 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "77cc0d4b5566d3d380fa4068563d2a634789f90824cb4b7c79ee58b86b9b6c15",
+          "addedLines": 3,
+          "removedLines": 2,
+          "resolution": "Manually integrated video dispatch, state, history and retry against HEAD; Cloud recovery and reference identity were added separately."
+        },
+        {
+          "header": "@@ -1988,9 +2017,11 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "3a5fb3a6c6d4f54ee9f10c5376e24eda0884e0eafb0c6ea7f303e3f2b52aa262",
+          "addedLines": 3,
+          "removedLines": 1,
+          "resolution": "Manually integrated video dispatch, state, history and retry against HEAD; Cloud recovery and reference identity were added separately."
+        },
+        {
+          "header": "@@ -2014,6 +2045,8 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "b59f387f3b2922535d8254caec5590f857ce6b09cf9257052406fea80dd09ea7",
+          "addedLines": 2,
+          "removedLines": 0,
+          "resolution": "Manually integrated video dispatch, state, history and retry against HEAD; Cloud recovery and reference identity were added separately."
+        },
+        {
+          "header": "@@ -2033,6 +2066,7 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "4b8a97053ba5b529d46192bdc00901f5fb4370217fb707d4d7afe26bd1ce6479",
+          "addedLines": 1,
+          "removedLines": 0,
+          "resolution": "Manually integrated video dispatch, state, history and retry against HEAD; Cloud recovery and reference identity were added separately."
+        },
+        {
+          "header": "@@ -2040,7 +2074,7 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "1a724e072a53332cf635053eadd1165aa9ad89df3cc5c13c6a14da3385f61c97",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Manually integrated video dispatch, state, history and retry against HEAD; Cloud recovery and reference identity were added separately."
+        },
+        {
+          "header": "@@ -2059,18 +2093,26 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "7b86e0272ba72cfd585ad154f63a63adb20d6b17900b531c0c2d9a2d135b65bb",
+          "addedLines": 12,
+          "removedLines": 4,
+          "resolution": "Manually integrated video dispatch, state, history and retry against HEAD; Cloud recovery and reference identity were added separately."
+        },
+        {
+          "header": "@@ -2188,9 +2230,11 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "f5768e2aa9f1f6450d41866ec0c97e0e46a93712a54c608a19aeef6f3eaf56c7",
+          "addedLines": 2,
+          "removedLines": 0,
+          "resolution": "Manually integrated video dispatch, state, history and retry against HEAD; Cloud recovery and reference identity were added separately."
+        },
+        {
+          "header": "@@ -2203,7 +2247,7 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "79c103e63cbc895bf87ea469ac11d1cd6da6eaef4ba3b58aabcec052f4a2905a",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Manually integrated video dispatch, state, history and retry against HEAD; Cloud recovery and reference identity were added separately."
+        },
+        {
+          "header": "@@ -2230,7 +2274,7 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "bec0bcc0d48ae74e7f9958c211734a0528355cef0811858b3cf62ee464ba280f",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Manually integrated video dispatch, state, history and retry against HEAD; Cloud recovery and reference identity were added separately."
+        },
+        {
+          "header": "@@ -2258,6 +2302,7 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "cea1fa33735536fdbec8dcdb6cbc02b54b13a09910c554478887d51ca23b00a2",
+          "addedLines": 1,
+          "removedLines": 0,
+          "resolution": "Manually integrated video dispatch, state, history and retry against HEAD; Cloud recovery and reference identity were added separately."
+        }
+      ],
+      "finalSha256": "0bba18ca97baa62a9315dab804ddb87da24f106e8b6b649c2c8299504fac5bde"
+    },
+    {
+      "path": "apps/desktop/src/components/CreationBoard.tsx",
+      "sourceSha256": "5644e0945578f6ead79d0fd7c7875113925b5399b1e985310024d486dbdfe8ff",
+      "baselineSha256": "e4b1a6b123485ae238550458a8f84ffb77136ccc2892d975b8224f73c7feec2e",
+      "patchFile": ".tmp/video-api/cli-delta/19.patch",
+      "patchSha256": "90b5cd9a93a4f682ccde792e283f9d736ef2a53f4468f40ac7a711668edb3282",
+      "applies": false,
+      "resolution": "Manually integrated video composer controls, provider selection and generation request; retained HEAD routing.",
+      "hunks": [
+        {
+          "header": "@@ -1,4 +1,6 @@",
+          "sha256": "42c7ef954f58e0b6a7dfd04c5c300796c30c4ef52a02b72c2c546634ca3c17bb",
+          "addedLines": 2,
+          "removedLines": 0,
+          "resolution": "Manually integrated video composer controls, provider selection and generation request; retained HEAD routing."
+        },
+        {
+          "header": "@@ -122,7 +124,21 @@ export function CreationBoard({",
+          "sha256": "718820f6fca9879a9584148261907faa62678a85b8337edb8b865e72e0af838b",
+          "addedLines": 15,
+          "removedLines": 1,
+          "resolution": "Manually integrated video composer controls, provider selection and generation request; retained HEAD routing."
+        },
+        {
+          "header": "@@ -160,7 +176,7 @@ export function CreationBoard({",
+          "sha256": "75cb89983c5530810ce77ab98739138a0c62bd440fd5811e5779986c644301d0",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Manually integrated video composer controls, provider selection and generation request; retained HEAD routing."
+        },
+        {
+          "header": "@@ -175,6 +191,8 @@ export function CreationBoard({",
+          "sha256": "a71ef0a7e644425280fa279c106e9c6004f5ca121d5ce193ae4dbe561eae3de2",
+          "addedLines": 2,
+          "removedLines": 0,
+          "resolution": "Manually integrated video composer controls, provider selection and generation request; retained HEAD routing."
+        },
+        {
+          "header": "@@ -201,9 +219,10 @@ export function CreationBoard({",
+          "sha256": "554d322849fe4712f7f8bc2822414193131fef814340d72918079d451edc80fc",
+          "addedLines": 2,
+          "removedLines": 1,
+          "resolution": "Manually integrated video composer controls, provider selection and generation request; retained HEAD routing."
+        },
+        {
+          "header": "@@ -237,12 +256,12 @@ export function CreationBoard({",
+          "sha256": "75af5815836c265f7609d0bbbf313f753602158d3960fc0d12899949dfd61eec",
+          "addedLines": 6,
+          "removedLines": 6,
+          "resolution": "Manually integrated video composer controls, provider selection and generation request; retained HEAD routing."
+        },
+        {
+          "header": "@@ -463,7 +482,7 @@ export function CreationBoard({",
+          "sha256": "00266a4c4897df3f441497a9f7ecf559d8d8593db6e76283e915fb14ff6caa55",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Manually integrated video composer controls, provider selection and generation request; retained HEAD routing."
+        },
+        {
+          "header": "@@ -481,6 +500,10 @@ export function CreationBoard({",
+          "sha256": "729fbda1512bc6baf25af336850e6ab7a4b0834ba86e2d89b298ad6c265c846a",
+          "addedLines": 4,
+          "removedLines": 0,
+          "resolution": "Manually integrated video composer controls, provider selection and generation request; retained HEAD routing."
+        },
+        {
+          "header": "@@ -703,6 +726,7 @@ export function CreationBoard({",
+          "sha256": "a612a5595119130f6a8ca3025021d612590496b1b0eb954b5663d0cbc58ea8d3",
+          "addedLines": 1,
+          "removedLines": 0,
+          "resolution": "Manually integrated video composer controls, provider selection and generation request; retained HEAD routing."
+        },
+        {
+          "header": "@@ -985,16 +1009,26 @@ export function CreationBoard({",
+          "sha256": "f25bf38f42b5efc90e85007d54d8d658bd2e0e77fe4c1ed8041739126879161e",
+          "addedLines": 12,
+          "removedLines": 2,
+          "resolution": "Manually integrated video composer controls, provider selection and generation request; retained HEAD routing."
+        },
+        {
+          "header": "@@ -1239,10 +1273,11 @@ export function CreationBoard({",
+          "sha256": "9d305695646ee886403104794a2e4a8c7ce18db8a8e4defa049c437d4481531d",
+          "addedLines": 2,
+          "removedLines": 1,
+          "resolution": "Manually integrated video composer controls, provider selection and generation request; retained HEAD routing."
+        }
+      ],
+      "finalSha256": "0e4f8e9b6164d23f5d190925d79d1cec402df790a9adb928c90b7aab0c7d96b1"
+    },
+    {
+      "path": "apps/desktop/src/components/GenerationPanel.tsx",
+      "sourceSha256": "7babdfa64514c53f686ad99cd22c07903ec978c52f58d341edcc6409ba3f27e3",
+      "baselineSha256": "dbe6782ba3ef566f93eb2c3ae70d224d86101a4adcc1ff51acb8acf04b7ac046",
+      "patchFile": ".tmp/video-api/cli-delta/20.patch",
+      "patchSha256": "bc07e90be65a7facd336ab8678f76e2a7c2392814ff68b6e28b2feb09b836c50",
+      "applies": false,
+      "resolution": "Manually integrated per-turn video edit/retry controls and parameter replay; exact references added separately.",
+      "hunks": [
+        {
+          "header": "@@ -1,6 +1,9 @@",
+          "sha256": "ab9fb38b22685d432722e827c2763ee9884c40f14554e95853798815a0c58ee8",
+          "addedLines": 3,
+          "removedLines": 0,
+          "resolution": "Manually integrated per-turn video edit/retry controls and parameter replay; exact references added separately."
+        },
+        {
+          "header": "@@ -250,9 +253,11 @@ export function GenerationPanel({",
+          "sha256": "0917ccc9c9992cb41a6debc0c264ec6f46eb2ff08de30233ec6a48b0c70ab77e",
+          "addedLines": 3,
+          "removedLines": 1,
+          "resolution": "Manually integrated per-turn video edit/retry controls and parameter replay; exact references added separately."
+        },
+        {
+          "header": "@@ -270,15 +275,16 @@ export function GenerationPanel({",
+          "sha256": "20aaa60098dd75a8cb55eb9f424d0e883ba1297451f4d53fad778bc4c5800f0e",
+          "addedLines": 5,
+          "removedLines": 4,
+          "resolution": "Manually integrated per-turn video edit/retry controls and parameter replay; exact references added separately."
+        },
+        {
+          "header": "@@ -294,6 +300,8 @@ export function GenerationPanel({",
+          "sha256": "48dd10a18dd7aab05a950cefd07dcb2a92ab244703cddc379f13f755a6010f6e",
+          "addedLines": 2,
+          "removedLines": 0,
+          "resolution": "Manually integrated per-turn video edit/retry controls and parameter replay; exact references added separately."
+        },
+        {
+          "header": "@@ -585,7 +593,7 @@ export function GenerationPanel({",
+          "sha256": "dc7bf6e04d26d375044eedd7e20ed9036cbe92c16c9f065dc9522edf798eee24",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Manually integrated per-turn video edit/retry controls and parameter replay; exact references added separately."
+        },
+        {
+          "header": "@@ -605,7 +613,7 @@ export function GenerationPanel({",
+          "sha256": "646eb247da40cd684e6de8bc2b6a9c4702f23eb875ad8d637369ba854c98c957",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Manually integrated per-turn video edit/retry controls and parameter replay; exact references added separately."
+        },
+        {
+          "header": "@@ -619,7 +627,7 @@ export function GenerationPanel({",
+          "sha256": "300922e14fc92417e0ca5256e404877ff519d45ba6a35abcc370c002d3d34d17",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Manually integrated per-turn video edit/retry controls and parameter replay; exact references added separately."
+        },
+        {
+          "header": "@@ -629,6 +637,13 @@ export function GenerationPanel({",
+          "sha256": "3da4e59d15e4b76bfab734c2ec92cb301239a4b1d13d3e09c8afbf4f7e42e932",
+          "addedLines": 7,
+          "removedLines": 0,
+          "resolution": "Manually integrated per-turn video edit/retry controls and parameter replay; exact references added separately."
+        },
+        {
+          "header": "@@ -752,7 +767,7 @@ function TurnView({",
+          "sha256": "484cab185d1d1b805b6498735b766b05b32f5c706b5b7bf52f9665a8f9436fca",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Manually integrated per-turn video edit/retry controls and parameter replay; exact references added separately."
+        },
+        {
+          "header": "@@ -873,7 +888,7 @@ function TurnView({",
+          "sha256": "460dda741248bce4acc4ec6a09ab3782b87b83070d967c856c448ed6514ec657",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Manually integrated per-turn video edit/retry controls and parameter replay; exact references added separately."
+        },
+        {
+          "header": "@@ -1072,7 +1087,11 @@ function GenEditComposer({",
+          "sha256": "307e265a431ff70f7bb89487331c8154bbd19878924e7c7f8983b94b9e761c3f",
+          "addedLines": 5,
+          "removedLines": 1,
+          "resolution": "Manually integrated per-turn video edit/retry controls and parameter replay; exact references added separately."
+        },
+        {
+          "header": "@@ -1099,15 +1118,15 @@ function GenEditComposer({",
+          "sha256": "a6feb11be8ce1ca59f4d26290d78de6b4da0497a232c605a1561fc51e642f844",
+          "addedLines": 3,
+          "removedLines": 3,
+          "resolution": "Manually integrated per-turn video edit/retry controls and parameter replay; exact references added separately."
+        },
+        {
+          "header": "@@ -1121,10 +1140,11 @@ function GenEditComposer({",
+          "sha256": "151d237cd770fa064acc57da8a21319d7831b27c1a7e0e8a0423da99add18053",
+          "addedLines": 5,
+          "removedLines": 4,
+          "resolution": "Manually integrated per-turn video edit/retry controls and parameter replay; exact references added separately."
+        },
+        {
+          "header": "@@ -1200,6 +1220,10 @@ function GenEditComposer({",
+          "sha256": "5ff7b0e49c04a88c9a6de7e211f550ff91c570a867e97f62b1349a6ef47804bb",
+          "addedLines": 4,
+          "removedLines": 0,
+          "resolution": "Manually integrated per-turn video edit/retry controls and parameter replay; exact references added separately."
+        },
+        {
+          "header": "@@ -1251,7 +1275,7 @@ function GenEditComposer({",
+          "sha256": "9bbb51aea75a98a31d4183028a82df0e7f2cb502c3ae039f574e88329cde6b13",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Manually integrated per-turn video edit/retry controls and parameter replay; exact references added separately."
+        },
+        {
+          "header": "@@ -1268,6 +1292,7 @@ function GenEditComposer({",
+          "sha256": "e429408d21d6ce6d53fd6f331211fb57629029c885fc94c612f718c72daf0145",
+          "addedLines": 1,
+          "removedLines": 0,
+          "resolution": "Manually integrated per-turn video edit/retry controls and parameter replay; exact references added separately."
+        },
+        {
+          "header": "@@ -1306,6 +1331,8 @@ function GenEditComposer({",
+          "sha256": "564f66681f94a5b31fee3ac1576fb17f4d05c011b35a4de37aa45e91e85f2679",
+          "addedLines": 2,
+          "removedLines": 0,
+          "resolution": "Manually integrated per-turn video edit/retry controls and parameter replay; exact references added separately."
+        },
+        {
+          "header": "@@ -1351,7 +1378,7 @@ function GenEditComposer({",
+          "sha256": "b71851d3b3517b9790da98c8112fb571686cf9a09bca19909f3b69d0d26bc76a",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Manually integrated per-turn video edit/retry controls and parameter replay; exact references added separately."
+        },
+        {
+          "header": "@@ -1400,6 +1427,7 @@ function GenEditComposer({",
+          "sha256": "ba37495009ac4aa87376d27c8ecd45babed9534625765925a482a36788863bde",
+          "addedLines": 1,
+          "removedLines": 0,
+          "resolution": "Manually integrated per-turn video edit/retry controls and parameter replay; exact references added separately."
+        },
+        {
+          "header": "@@ -1412,6 +1440,7 @@ function GenEditComposer({",
+          "sha256": "a39b81d7e91d8f4864cf50aa950a400fbbc4a26406894b4763728daed8872468",
+          "addedLines": 1,
+          "removedLines": 0,
+          "resolution": "Manually integrated per-turn video edit/retry controls and parameter replay; exact references added separately."
+        }
+      ],
+      "finalSha256": "3eecda4b8330886ec89da3beaeb57035031bc7180ee5bbaf309a7e6f03174a57"
+    },
+    {
+      "path": "apps/desktop/src/components/Lightbox.tsx",
+      "sourceSha256": "c10fc86765ca8d3aea847b7e034c170d8c3f3faa2111896d0daf7a07f9de4f0b",
+      "baselineSha256": "1105eb3781ce3fb60321f3caa7741b86ee4bd7670a8d029c8454efed8b2bde20",
+      "patchFile": ".tmp/video-api/cli-delta/21.patch",
+      "patchSha256": "b0ab25199c4efb3502ded806d4f0a41457accada6fd0ce549cd103ae1db73d63",
+      "applies": true,
+      "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash.",
+      "hunks": [
+        {
+          "header": "@@ -1,3 +1,4 @@",
+          "sha256": "259e5e371f032270e917d541ce39552f0f018fe0e37fe9aac5425246011b2dee",
+          "addedLines": 1,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -49,9 +50,10 @@ export function Lightbox({",
+          "sha256": "d5f30ea485d236211f98bda12708461e65d3fea3fd3459edca2b009a84788317",
+          "addedLines": 3,
+          "removedLines": 2,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -64,7 +66,7 @@ export function Lightbox({",
+          "sha256": "38c4471bb09d6633797f1ed8beedd477413f63078e32503cb408e6d6cc72b83f",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        }
+      ],
+      "finalSha256": "c10fc86765ca8d3aea847b7e034c170d8c3f3faa2111896d0daf7a07f9de4f0b"
+    },
+    {
+      "path": "apps/desktop/src/components/CanvasWorkspace.tsx",
+      "sourceSha256": "594bc390494d5c9e6fcf81a60641f8a63c2df97633439caf35f1a966283c5cf9",
+      "baselineSha256": "6b9faba3bfdff3ef68792cecb67895214b3d44f70e3b85f46399ba4d5c1145ec",
+      "patchFile": ".tmp/video-api/cli-delta/22.patch",
+      "patchSha256": "f3d18107cb72c03042451f8f1f45c33d0fdd56d72ac0cac448a57859d6bc2381",
+      "applies": false,
+      "resolution": "Partial migration: video rendering and composer handoff; omitted absent folder-preview and prompt-menu infrastructure.",
+      "hunks": [
+        {
+          "header": "@@ -1,3 +1,4 @@",
+          "sha256": "9335a04fd11719b1bcffc9439e25ed5f472794a361bc1868ef83d6b078e94a49",
+          "addedLines": 1,
+          "removedLines": 0,
+          "resolution": "Partial migration: video rendering and composer handoff; omitted absent folder-preview and prompt-menu infrastructure."
+        },
+        {
+          "header": "@@ -33,6 +34,7 @@ import {",
+          "sha256": "5b00e25feacc38f7276bc798e5d4001971cd56ac7e6e8100381d61fc94c4e8e0",
+          "addedLines": 1,
+          "removedLines": 0,
+          "resolution": "Partial migration: video rendering and composer handoff; omitted absent folder-preview and prompt-menu infrastructure."
+        },
+        {
+          "header": "@@ -305,7 +307,7 @@ function FolderPreview({",
+          "sha256": "dcf9839a29058a66cda05ea436b49c2d6ae563870c011200a3304a88ecb945e9",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Partial migration: video rendering and composer handoff; omitted absent folder-preview and prompt-menu infrastructure."
+        },
+        {
+          "header": "@@ -2476,10 +2478,32 @@ export function CanvasWorkspace({",
+          "sha256": "a7d20650f022cbac56c54ac9637492e34203113a1aa85d8c4e19737d2509fb18",
+          "addedLines": 22,
+          "removedLines": 0,
+          "resolution": "Partial migration: video rendering and composer handoff; omitted absent folder-preview and prompt-menu infrastructure."
+        },
+        {
+          "header": "@@ -3351,10 +3375,11 @@ export function CanvasWorkspace({",
+          "sha256": "0d6cf4c6bd5d81fd1657219e7bb10dd12b5ef1d56582e7d1da28c0b6d5d161d8",
+          "addedLines": 2,
+          "removedLines": 1,
+          "resolution": "Partial migration: video rendering and composer handoff; omitted absent folder-preview and prompt-menu infrastructure."
+        }
+      ],
+      "finalSha256": "c77dcab9f3d23dc13ebdec49f7f89207b8077a723df4a52f742801abcb366376"
+    },
+    {
+      "path": "apps/desktop/src/components/AssetContextMenu.tsx",
+      "sourceSha256": "16ae1f5e006c0fdd81145fcdc9cdecbea72c095a3288f780bac4b73b62376d9e",
+      "baselineSha256": "f2dc3e36f9a4e3c44aa63be2db6ef941aedece6b61cb2915187055f6963a3150",
+      "patchFile": ".tmp/video-api/cli-delta/23.patch",
+      "patchSha256": "273d029569873a5952d577d6c3cf4abb961fbfc86fee375c495274d5eaf2aa66",
+      "applies": false,
+      "resolution": "Manually integrated history video parameters/provider and exact references into HEAD context menu.",
+      "hunks": [
+        {
+          "header": "@@ -292,7 +292,7 @@ export function AssetContextMenu() {",
+          "sha256": "baaa9a5a28472f05d434f6e885de4377b320f2be9d543376537c7f1d19f0dd15",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Manually integrated history video parameters/provider and exact references into HEAD context menu."
+        }
+      ],
+      "finalSha256": "60806303259df7c559c2bddc55e9f27fb335b34b583b0c281912f4024c9700d7"
+    },
+    {
+      "path": "apps/desktop/src/components/creation/useCreationEditor.ts",
+      "sourceSha256": "e3b351ed63d53c0d71471e6f89e3a9742c7bf06eaaf2d674a9aa616e185568cb",
+      "baselineSha256": "834a579546022816068596d7b9617be76859b57a960ef71d59b42c678edf9db8",
+      "patchFile": ".tmp/video-api/cli-delta/24.patch",
+      "patchSha256": "eb494b659a469d6814d89a49ef0ea5ef649761451e9b3e52c8fc86c949b16eaa",
+      "applies": true,
+      "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash.",
+      "hunks": [
+        {
+          "header": "@@ -35,7 +35,7 @@ function initialDoc(empty = false) {",
+          "sha256": "c6b4ba461eec1d28dc4084df10dc4a41fd92a70edf7a449e6135b0228852797e",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        }
+      ],
+      "finalSha256": "30d9d2dd2dfe99a66e32e4cbf7b9b574d7c941a9333237f9899694e0aff0c550"
+    },
+    {
+      "path": "apps/desktop/src/components/creation/BoardChipPreview.tsx",
+      "sourceSha256": "ef2316f9429a2c139f563ab64f392c37c7f9a745437721e337aa380b0ef55104",
+      "baselineSha256": "30204d675481b7c0c7184fb605995c61241a9a8ef9772617cdcd83843663477d",
+      "patchFile": ".tmp/video-api/cli-delta/25.patch",
+      "patchSha256": "f431bb311204eb0b5b4618c16f39f3f8d43ee3172c79216f0ad3da0795082f9d",
+      "applies": true,
+      "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash.",
+      "hunks": [
+        {
+          "header": "@@ -1,3 +1,4 @@",
+          "sha256": "601a1d1d07576e24ed3821fc29c3e209eb866a54e7f986f153b1f88dc65c1e14",
+          "addedLines": 1,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -119,7 +120,7 @@ export function BoardChipPreview({",
+          "sha256": "89e34f24841c10446c5bf4e95bdadbb40f67df3690b354b9b07002b686dcc5e1",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        },
+        {
+          "header": "@@ -139,7 +140,7 @@ export function BoardChipPreview({",
+          "sha256": "8c53378df109e01745bcbe05e408a1b621da76ede1778f3b0d040a71b074584d",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        }
+      ],
+      "finalSha256": "ef2316f9429a2c139f563ab64f392c37c7f9a745437721e337aa380b0ef55104"
+    },
+    {
+      "path": "apps/desktop/src/components/creation/schema.ts",
+      "sourceSha256": "460df2978d3d0e0d65a9e6184182cd9fb831453e0a2ee117775c94d705c9ce26",
+      "baselineSha256": "b3cc5eebc61bf829e2bcce8e9899bf0f3fa9932c8020abbfca83ab513f55b1ee",
+      "patchFile": ".tmp/video-api/cli-delta/26.patch",
+      "patchSha256": "f7ee9a82c48b540e3b0e36b401ef42035d58ebbbf17823fa78c03a0696f4bba8",
+      "applies": true,
+      "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash.",
+      "hunks": [
+        {
+          "header": "@@ -57,7 +57,7 @@ export const creationSchema = new Schema({",
+          "sha256": "b4e6a88b7b81e5aa25bd46bbb569220315b2efa2e9666c23f6c88043c79caf4d",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        }
+      ],
+      "finalSha256": "460df2978d3d0e0d65a9e6184182cd9fb831453e0a2ee117775c94d705c9ce26"
+    },
+    {
+      "path": "apps/desktop/scripts/creative-canvas.test.mjs",
+      "sourceSha256": "d78f874510b0695b48ce381520d82b736870f4857dba5c38a3c018ac0b6abe41",
+      "baselineSha256": "1a6e0eb0381ca55688359861b8ae49c00a5a961abf252d1a8f895000c0a35d2c",
+      "patchFile": ".tmp/video-api/cli-delta/27.patch",
+      "patchSha256": "cbfb278b12034c31aa590cf4851919f3d1447e10ee0e785b82d6cd16bd68c5e3",
+      "applies": false,
+      "resolution": "Not applied: depends on prompt-menu UI absent in HEAD. Existing assertions unchanged; current store and editor contracts covered in new video tests.",
+      "hunks": [
+        {
+          "header": "@@ -729,7 +729,7 @@ test(\"canvas Ctrl+Z undoes removal without taking over text editing or adding to",
+          "sha256": "9a1e7c078105049b00332bc901fc0433d8c614681d285c60930bc1636f21a083",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Not applied: depends on prompt-menu UI absent in HEAD. Existing assertions unchanged; current store and editor contracts covered in new video tests."
+        },
+        {
+          "header": "@@ -758,14 +758,19 @@ test(\"prompt menu reuses the selected turn and deletes only its idle conversatio",
+          "sha256": "997b52ffc3f68d1a1a89f8222004b8272a9c9421e4633388d75c9ca0d2686da8",
+          "addedLines": 7,
+          "removedLines": 2,
+          "resolution": "Not applied: depends on prompt-menu UI absent in HEAD. Existing assertions unchanged; current store and editor contracts covered in new video tests."
+        },
+        {
+          "header": "@@ -774,6 +779,29 @@ test(\"prompt menu reuses the selected turn and deletes only its idle conversatio",
+          "sha256": "2ac68b676f315032200a622fa77faf7c8f775bcb5975e5f57a295a21dbff4f73",
+          "addedLines": 23,
+          "removedLines": 0,
+          "resolution": "Not applied: depends on prompt-menu UI absent in HEAD. Existing assertions unchanged; current store and editor contracts covered in new video tests."
+        }
+      ],
+      "finalSha256": "b63d3ad9cd23caad3c14b137eb95ed1c1dbc3b68a55b9922ebe68434ff60fa9f"
+    },
+    {
+      "path": "apps/desktop/scripts/video-generation.test.mjs",
+      "sourceSha256": "4164bf9b45d7a113f7def6a8c1fbc69b645de0eeb0852e60e27f8187f138c28c",
+      "baselineSha256": null,
+      "patchFile": ".tmp/video-api/cli-delta/28.patch",
+      "patchSha256": "ea13c93d4220baca009a39ac5c605c214f9ae436b1748276a7b6f5d26e052716",
+      "applies": true,
+      "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash.",
+      "hunks": [
+        {
+          "header": "@@ -0,0 +1,167 @@",
+          "sha256": "8f7d561fd2cbd1829cd038c227ed70b7589ac35e566863668b3cfb302e1b2403",
+          "addedLines": 167,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        }
+      ],
+      "finalSha256": "4caa1a82bc38db6b1b6cbd66ecf4218830ef6a353492ae4ee723368af19b1f8f"
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/codex/jimeng_video.rs",
+      "sourceSha256": "fb87370db5d0cefe4f2aec0e006ef8cdc4978d741b64edaced5619d7c261ef8f",
+      "baselineSha256": null,
+      "patchFile": ".tmp/video-api/cli-delta/29.patch",
+      "patchSha256": "dc7278b40b7ff488ae70ac6f084d6d12dbb5a920313525c44c9cc7b43f2e395f",
+      "applies": true,
+      "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash.",
+      "hunks": [
+        {
+          "header": "@@ -0,0 +1,437 @@",
+          "sha256": "3cfc6afccdb8c5d4703bc4373a5db6e101497cdc816833a6e010b674a1ea9f94",
+          "addedLines": 437,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        }
+      ],
+      "finalSha256": "8b8c84d2b406462401a0df2cddfe0554110cd61706b4fe4f6ef9142c46d51acc"
+    },
+    {
+      "path": "apps/desktop/src-tauri/tests/fixtures/dreamina-video-cli.rs",
+      "sourceSha256": "fa7fdb4d98b690d298fc74b947b19c9364aab558e2881f1f74477a40670650c7",
+      "baselineSha256": null,
+      "patchFile": ".tmp/video-api/cli-delta/30.patch",
+      "patchSha256": "da874547a1a94725782dc1860f2e2bc1dafaf1c42d69405dc4fbec6a6aaa8560",
+      "applies": true,
+      "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash.",
+      "hunks": [
+        {
+          "header": "@@ -0,0 +1,29 @@",
+          "sha256": "8699e34b24065ff3a544300d673fb4d11d2cdca7b0c8992513d4a74140c5f47d",
+          "addedLines": 29,
+          "removedLines": 0,
+          "resolution": "Migrated original CLI delta; any subsequent API/reference changes are included in final file hash."
+        }
+      ],
+      "finalSha256": "8af8b33de4584d1066ff833c99b1e2af2da63763352152f95799d840848b9779"
+    }
+  ],
+  "prerequisitePatches": [
+    {
+      "path": "apps/desktop/src/lib/creativeLaunch.ts",
+      "patchFile": ".tmp/video-api/prerequisites/0.patch",
+      "patchSha256": "58d118584cd7635e831c3acb2fdb2434d03985c1959658b6ac19a8ec0ffa213d",
+      "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded.",
+      "hunks": [
+        {
+          "header": "@@ -1,3 +1,28 @@",
+          "sha256": "b8181a3708969b4b74fa59f86017d576326bed47590a28d8b13a21b62b7df06e",
+          "addedLines": 25,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -10,3 +35,20 @@ export function creativeLaunchTargetsProject(",
+          "sha256": "0b584e1340cdeb86d3a9f776fb9c769f26440e96904c92ce7e957dc9aaefb0c0",
+          "addedLines": 17,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        }
+      ]
+    },
+    {
+      "path": "apps/desktop/src/store.ts",
+      "patchFile": ".tmp/video-api/prerequisites/1.patch",
+      "patchSha256": "03a354e5184d4fd72c210b5a502068fd56b7532142dfda9446404014a5f5f0bc",
+      "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded.",
+      "hunks": [
+        {
+          "header": "@@ -1,4 +1,5 @@",
+          "sha256": "372236d4a875664a078eca6c93cea6d5c2ce742792f00dea8c10ccacac6aa5ae",
+          "addedLines": 1,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -50,6 +51,10 @@ import {",
+          "sha256": "fa29af088e6f620f1a57df0592db10f55250bc5cb3f86315296a463d0736d9aa",
+          "addedLines": 4,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -61,6 +66,8 @@ let autoTagsReadRequestId = 0;",
+          "sha256": "e5bbcd9c5c48f22819fef123ecd05c88ae614b213be8468d943f998f484fcc00",
+          "addedLines": 2,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -127,6 +134,8 @@ export interface CreativeGenerationContext {",
+          "sha256": "e47d024b930719c9b651a03af206b0106f93f534edd206a0dde03f42017397e2",
+          "addedLines": 2,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -134,6 +143,7 @@ export interface GenerationStartResult {",
+          "sha256": "4a553313a2573be90855de4f426a09e8da626f6c3560dee3fa7090a1e5b33222",
+          "addedLines": 1,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -152,6 +162,9 @@ export type DescribeTask =",
+          "sha256": "817b67f6fc0977154138ebcc993413f8bee2825a0fcd4c425d7bc5a261ff996a",
+          "addedLines": 3,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -228,6 +241,11 @@ interface State {",
+          "sha256": "f500f7d3ed69cfec4c07829d7c3ed763edd8e5932a3de6bd74329e8b61fce7a1",
+          "addedLines": 5,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -380,7 +398,7 @@ interface State {",
+          "sha256": "baf78da3d337a1ae23ad0167481dcbc00134bb85fbeb9e94df29bc13308c1d96",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -437,8 +455,19 @@ interface State {",
+          "sha256": "58b0cc72280a64a5db47250ce8b892cdd8b67437f51fbf5cec6322bef98a7ed3",
+          "addedLines": 13,
+          "removedLines": 2,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -610,6 +639,16 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "cba7ce1cba03655a8e9f36188f69b5dd45a56c7b5a1e5f2c9148575cc0c1b449",
+          "addedLines": 10,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -655,6 +694,7 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "32a4fdeff26a92b970fe194e262e15e0a5d76f26d2fb9ff09d0d3795ddf47afd",
+          "addedLines": 1,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -1184,6 +1224,16 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "26e4471ceba2ee3380a30f26f862e929708e25ee88c4c807c57c149668926542",
+          "addedLines": 10,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -1497,8 +1547,7 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "40a9173e82658b63146586177c9bee9b31ff8a4857d17eb4efd4c987b9e2a424",
+          "addedLines": 1,
+          "removedLines": 2,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -1533,7 +1582,11 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "d7196ba9b5a10b135880ec9e9c760069ea594ea522ed018bcc333c2e11232924",
+          "addedLines": 5,
+          "removedLines": 1,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -1542,6 +1595,7 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "0032dd91ffa58a1457cc82fa1dc8ee8687a30e784accb61b94da360dec36ee12",
+          "addedLines": 1,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -1556,6 +1610,7 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "f0999bf3ace4d708d73e0d441051c96fa2b47d2feca03f9dac6eda324fc6cfdc",
+          "addedLines": 1,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -1712,7 +1767,7 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "929d1f25f4893b6e5606314182f1ae7f922aac64a41e021ed23ce7784df06684",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -1730,6 +1785,11 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "6907f740488df6e0890b6366db375dfba4ccb5544ab25fe7531b052e0c234e6c",
+          "addedLines": 5,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -1772,7 +1832,12 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "4e4c336eb559e6c91af56b43e3281d721a362bc37ee60e60ddfd1c68159db349",
+          "addedLines": 5,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -1792,16 +1857,24 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "2e3b63305454c21ae9cd69d4c6e9acd0e6c33bcf0614463e53346acad6989eea",
+          "addedLines": 9,
+          "removedLines": 1,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -1946,6 +2019,7 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "7c5fa301a02193afa98fbcb4835e88ed8bc8c1b3384f6bc7aec137a726e26ed2",
+          "addedLines": 1,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -2108,7 +2182,7 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "42378b354789f2edb74d2fd2b45fee761b4745dc76ea9d0a8d6369c2e0e3acd4",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -2146,6 +2220,8 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "838111838e76a9fb3b9dd72007ecefadb07de5fe7528cd0508905e0ddcd1371d",
+          "addedLines": 2,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -2157,33 +2233,38 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "f85b3ec5cc798aeead7c758cf2be93f0c2ab0392b148f94c37672ac91bcbc832",
+          "addedLines": 24,
+          "removedLines": 19,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -2221,7 +2302,7 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "7645880412ff140c071dc57a475f18a5c1c9c8aad3f5958d0afdd892de811c3b",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        }
+      ]
+    },
+    {
+      "path": "apps/desktop/src/components/CreationBoard.tsx",
+      "patchFile": ".tmp/video-api/prerequisites/2.patch",
+      "patchSha256": "3f8703b743dc57a028c456f8fa356f40ec15901c40da2042a4662091561632b8",
+      "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded.",
+      "hunks": [
+        {
+          "header": "@@ -14,27 +14,15 @@ import { AGENT_DS_ENABLED, AGENT_Z_ENABLED, PRESET_FEATURE_ENABLED } from \"../li",
+          "sha256": "40f5e5cf602a07efa6422cc598b9631e7c60e30e44a6e0c63a44bc7d8e7867be",
+          "addedLines": 4,
+          "removedLines": 16,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -95,6 +83,8 @@ export interface CreationBoardProps {",
+          "sha256": "b46041f0cc1adf03af3c59ff7cc899e0f0d215adb6d0ae00f1f10b9641df0aaa",
+          "addedLines": 2,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -115,11 +105,14 @@ export function CreationBoard({",
+          "sha256": "1d42356880f03d9a99a6164723c5f86679d8456c8b9829f014fe1b3d4524d5cb",
+          "addedLines": 3,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -154,9 +147,11 @@ export function CreationBoard({",
+          "sha256": "fb9a342ff149691450ef77eebd770b564bc991ea6d60775d8e815d6fd22563ee",
+          "addedLines": 2,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -173,14 +168,29 @@ export function CreationBoard({",
+          "sha256": "7a0ca5802743e77fef13338e0c160e9f18b70103b2114fd71edcf8b3bc598c7d",
+          "addedLines": 19,
+          "removedLines": 4,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -208,22 +218,10 @@ export function CreationBoard({",
+          "sha256": "6e6f2cdf9b7dec03f78a68556117543c56798c0c6bf0b543f58f168c3f39759e",
+          "addedLines": 3,
+          "removedLines": 15,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -267,7 +265,7 @@ export function CreationBoard({",
+          "sha256": "48348425b22924be312c3bdd1b45128dcf095016c2f6c84fa5c6182c65e353f3",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -278,8 +276,7 @@ export function CreationBoard({",
+          "sha256": "cd170c2ef9386954472b76a29646ea72afffde5ad7bf9f0da9c1d1d138ff9761",
+          "addedLines": 1,
+          "removedLines": 2,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -345,12 +342,57 @@ export function CreationBoard({",
+          "sha256": "20976bae260237bd80c1f560c872a5fde5c3318b2be3ae2a6582f6d63f4c468b",
+          "addedLines": 46,
+          "removedLines": 1,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -377,54 +419,22 @@ export function CreationBoard({",
+          "sha256": "527b6ea358b88345e5b313c227a25e7b535fce36b8aad2d5bdb64ec7d9c64a3a",
+          "addedLines": 7,
+          "removedLines": 39,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -436,17 +446,6 @@ export function CreationBoard({",
+          "sha256": "6d3508c679eeb1db2a264a96578fd774e898ae111dd847a39b265e11231d29b2",
+          "addedLines": 0,
+          "removedLines": 11,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -457,7 +456,11 @@ export function CreationBoard({",
+          "sha256": "9c070ddf9e5f755848302077ca53817ed1ecfa8d4faa8d44c73649099c56b29f",
+          "addedLines": 5,
+          "removedLines": 1,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -504,11 +507,21 @@ export function CreationBoard({",
+          "sha256": "3cc42f52d0095792e2b682755e237305f03a2f764f6ee0a15c503ed1a3005395",
+          "addedLines": 11,
+          "removedLines": 1,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -516,19 +529,19 @@ export function CreationBoard({",
+          "sha256": "88fedf4c2775aa2d44e106589e8b77ca74f09f92f203b133f83fbb9c45fb91a5",
+          "addedLines": 12,
+          "removedLines": 12,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -538,11 +551,7 @@ export function CreationBoard({",
+          "sha256": "e6dbd71d075beb6549b8aee0929778a3c004b879e86cf8b67924a3bc7cf047ec",
+          "addedLines": 1,
+          "removedLines": 5,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -690,16 +699,24 @@ export function CreationBoard({",
+          "sha256": "196a197bc24763de48459cbca05df00dca035e45e180d86a59651014b51ec370",
+          "addedLines": 9,
+          "removedLines": 1,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -774,18 +791,20 @@ export function CreationBoard({",
+          "sha256": "68dbbc65b10eaeb1fd0d9abc60ec908c9a652671ee1691393cf42275ce480f69",
+          "addedLines": 6,
+          "removedLines": 4,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -818,7 +837,10 @@ export function CreationBoard({",
+          "sha256": "e416f3303f7b267bd169451f6c112fa05573f758f8d072a25f68fb9d3be420d5",
+          "addedLines": 4,
+          "removedLines": 1,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -932,7 +954,7 @@ export function CreationBoard({",
+          "sha256": "dcda4cf26488a918f13fa3839d5b15acf71c144ae94eca6daaaf209992055f95",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -945,50 +967,12 @@ export function CreationBoard({",
+          "sha256": "d08ec1fd077503ac5c22e1b694c0fab79aa59dceb7c0110e119b49173b777157",
+          "addedLines": 3,
+          "removedLines": 41,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -1002,15 +986,18 @@ export function CreationBoard({",
+          "sha256": "78fc1225ee6f560f3d36b9ff46dbd3cd0c00ed4fb1543f9d75a0f0cfd599e497",
+          "addedLines": 6,
+          "removedLines": 3,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -1023,72 +1010,16 @@ export function CreationBoard({",
+          "sha256": "2cdae6ba70df5f5c9bc3094cde5674e433916ff759f78480ec3a630a1ee3912a",
+          "addedLines": 2,
+          "removedLines": 58,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -1096,38 +1027,20 @@ export function CreationBoard({",
+          "sha256": "7108b4b6fb1a0578ec412f5444bd76437c1788dc4c05581efb8121b33c27f0c1",
+          "addedLines": 6,
+          "removedLines": 24,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -1142,13 +1055,13 @@ export function CreationBoard({",
+          "sha256": "4ada8fa00fea3428e6b90cff42a4bbd83b698eb81577ba1298d43f17c0b9cafc",
+          "addedLines": 3,
+          "removedLines": 3,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -1160,13 +1073,13 @@ export function CreationBoard({",
+          "sha256": "cf6b39277a7ea4633c4956beb1bdff951129e51e5fad17bb084fcf0301306085",
+          "addedLines": 3,
+          "removedLines": 3,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -1182,17 +1095,17 @@ export function CreationBoard({",
+          "sha256": "1c93b95d0ffdf7ccf3b5b86d8537490cecae282729f5b385865e2eeed895f82b",
+          "addedLines": 3,
+          "removedLines": 3,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -1206,17 +1119,17 @@ export function CreationBoard({",
+          "sha256": "fd9e7b7da8af654e4fa705fb9ed4f20c44519550c29dfc955de7f019ee33decb",
+          "addedLines": 3,
+          "removedLines": 3,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -1230,17 +1143,17 @@ export function CreationBoard({",
+          "sha256": "ef85e86c4b2be21453d496f90c6019733af2d5ad90e40d0ddcc9e16224c9a034",
+          "addedLines": 3,
+          "removedLines": 3,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -1254,6 +1167,11 @@ export function CreationBoard({",
+          "sha256": "0690b1b357baad668b05752f6d18f70615bfcd33b2f9985b57ae183556af7286",
+          "addedLines": 5,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -1262,6 +1180,7 @@ export function CreationBoard({",
+          "sha256": "71489ba6bf46a8b72ac735b229473cb0748f0ee55f1ecd86d149060848ed9e27",
+          "addedLines": 1,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -1272,20 +1191,18 @@ export function CreationBoard({",
+          "sha256": "942cfb9ade05bbdb806140d14086652fdf271633e37f8f79c6772fbf3d22b5f9",
+          "addedLines": 3,
+          "removedLines": 5,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -1300,14 +1217,16 @@ export function CreationBoard({",
+          "sha256": "11cfe0062fce5ca1af1ff46f18184b39516f9743a2958406269381be15298cb2",
+          "addedLines": 6,
+          "removedLines": 4,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        }
+      ]
+    },
+    {
+      "path": "apps/desktop/src/components/CanvasWorkspace.tsx",
+      "patchFile": ".tmp/video-api/prerequisites/3.patch",
+      "patchSha256": "fcf8ba820eef799356aa188131e18728013b4723e93157d950005e7d310f012a",
+      "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded.",
+      "hunks": [
+        {
+          "header": "@@ -9,12 +9,14 @@ import {",
+          "sha256": "35a0de21e1b1aa55ed245b54cb4b51c0253ae113ecd816f4dd48a2c995df8596",
+          "addedLines": 2,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -25,18 +27,22 @@ import {",
+          "sha256": "c580b6c3cca8c84e866021c0ed9c414d4bc2b41734d456241c2405f1100a69c2",
+          "addedLines": 5,
+          "removedLines": 1,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -59,6 +65,12 @@ import { cloudAgentStatusLabel } from \"../lib/cloudAgent\";",
+          "sha256": "a75f9fb3a912f009371aa87d048a228028d24e5a4df7d3f3b58eff859cc0bf87",
+          "addedLines": 6,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -66,16 +78,23 @@ import {",
+          "sha256": "744c879fc526be761b7215f72e6ac2b52779a3956b1d8b8d424a7b1ca164d976",
+          "addedLines": 7,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -83,9 +102,14 @@ import {",
+          "sha256": "2eef37768aefd8abaaec50733835ecf6e04311c0a890d95de8c663c554c21eb3",
+          "addedLines": 6,
+          "removedLines": 1,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -103,12 +127,38 @@ const ASSET_WIDTH = 190;",
+          "sha256": "c7969c312f4411ea1dad801a257ca32e41e12e94e4440cfe78a2ded1e0023b97",
+          "addedLines": 26,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -117,12 +167,6 @@ interface ActiveCanvasState {",
+          "sha256": "bb014348e3d002a1c7fe85d2b3af0c70ae40915d1384799d440a8ff28feb49d4",
+          "addedLines": 0,
+          "removedLines": 6,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -160,7 +204,7 @@ function assetNodeSize(asset: CanvasAssetSnapshot) {",
+          "sha256": "77241780fab70bcd17e3e8deaa87ecb732782d6921da92b674f1267d8b778295",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -197,18 +241,20 @@ function promptNodeSummary(node: ProjectGraphNode) {",
+          "sha256": "9479e9e158b236049eb025208d5f7bc0fda2633364b2ef36c11f3333867f98fb",
+          "addedLines": 3,
+          "removedLines": 1,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -222,7 +268,7 @@ function agentGroupSummary(node: ProjectGraphNode) {",
+          "sha256": "249687f5240398b2c54349941031d8513f57d866668a3e03271fc8de6db3f9e4",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -232,7 +278,7 @@ function agentGroupSummary(node: ProjectGraphNode) {",
+          "sha256": "9efec986249001877c5720eb005f0b971bc18608c81c97fd3848c8af9f0838aa",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -248,15 +294,29 @@ function agentGroupSummary(node: ProjectGraphNode) {",
+          "sha256": "09bfcd5cf32cbd8600edd2ce0af4157d9a78c03f6aaf6745ae782505bd404783",
+          "addedLines": 17,
+          "removedLines": 3,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -281,14 +341,14 @@ function ProjectInspectorShell({",
+          "sha256": "e3e74c6542c80f96bc4837055558b1657061c3f17dc9b675bf1e53094f5e23ab",
+          "addedLines": 2,
+          "removedLines": 2,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -296,68 +356,41 @@ function ProjectInspectorShell({",
+          "sha256": "a7f0d0c79fe0fcf5e6d32d2a84c94d5e4aea2037913fb00b4f98ea308a7c5f61",
+          "addedLines": 19,
+          "removedLines": 46,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -403,11 +436,15 @@ export function CanvasWorkspace({",
+          "sha256": "bfb3e52019c8657c7d6d0cecd810238866dc64bc5c02a80e4ec46ebbc3f5b8c2",
+          "addedLines": 4,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -433,6 +470,7 @@ export function CanvasWorkspace({",
+          "sha256": "bb49a6395005dab7a701ad4a60fc82136ba05c215a61b7ae584361949b93c3be",
+          "addedLines": 1,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -440,11 +478,14 @@ export function CanvasWorkspace({",
+          "sha256": "91dd5b7a2a140b95c354c5e058f83462bee5f7fbfb6f75d0bb7e74a813d949f5",
+          "addedLines": 3,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -458,6 +499,38 @@ export function CanvasWorkspace({",
+          "sha256": "01ca2bfa723cf78c67dd4bf50f83d5e2ce330f7742b7f166b0faf4d79b8bde0e",
+          "addedLines": 32,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -471,6 +544,10 @@ export function CanvasWorkspace({",
+          "sha256": "f1819fe5bb12b69b51f6150670c5379706f0d21523aac4611c231c1a9318fce3",
+          "addedLines": 4,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -483,6 +560,7 @@ export function CanvasWorkspace({",
+          "sha256": "edcfcc43045663dad639496d7eea9f4de942b33f1451b6408757731a24555b26",
+          "addedLines": 1,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -501,6 +579,21 @@ export function CanvasWorkspace({",
+          "sha256": "7b8b39485edfd0cd97c45f79726a297f04dd4e8ad54b77742051df55258ae7cc",
+          "addedLines": 15,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -517,6 +610,8 @@ export function CanvasWorkspace({",
+          "sha256": "ecf5d60fa53ead20d9966b806047d1b04774ff22a66f4c3c13bb9c56eabbfee1",
+          "addedLines": 2,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -528,6 +623,33 @@ export function CanvasWorkspace({",
+          "sha256": "5132000cdc5417b2ee5328e80a2e527109f3aead7f2cb75dfac449b865c6473a",
+          "addedLines": 27,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -545,8 +667,17 @@ export function CanvasWorkspace({",
+          "sha256": "0629f6ff9f10e703d63f8fe0e44de09797a8ad324cd3b7783f2a79cf7d1fe81f",
+          "addedLines": 10,
+          "removedLines": 1,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -715,19 +846,22 @@ export function CanvasWorkspace({",
+          "sha256": "6a72ecdc47466d138df38d5b1aa18ffc0aa13e5693dc8b76f9bf52c74ddcdd98",
+          "addedLines": 12,
+          "removedLines": 9,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -797,6 +931,18 @@ export function CanvasWorkspace({",
+          "sha256": "d0372522c1d70fbbdcb9bf4ea76ea578a507f7e0453df6346d15bdf38e9f1454",
+          "addedLines": 12,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -828,6 +974,7 @@ export function CanvasWorkspace({",
+          "sha256": "14b150ab883e2c5d1b975645d78d4d2087bf6db54f08e7789670b162d8506edc",
+          "addedLines": 1,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -1056,12 +1203,13 @@ export function CanvasWorkspace({",
+          "sha256": "cbb2c0187f0fea521b835e38810c7228a2c6f9564e01733ce540e3e46cbf12b0",
+          "addedLines": 4,
+          "removedLines": 3,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -1078,7 +1226,7 @@ export function CanvasWorkspace({",
+          "sha256": "9810edc9b0eda797fa7b1e1934c0ed0ede58ebeb59426b78a08c5d87b28bcb12",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -1186,6 +1334,7 @@ export function CanvasWorkspace({",
+          "sha256": "80a15ef0ab3da80cf4f79dc2f81aea218c63c74cc1eb69573e99da7f489f3acc",
+          "addedLines": 1,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -1222,7 +1371,7 @@ export function CanvasWorkspace({",
+          "sha256": "fe5981e42e1e3a7b6ba02e8e6271b795212845e5a8ce71437dc2d65ba119e7e1",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -1242,7 +1391,7 @@ export function CanvasWorkspace({",
+          "sha256": "5d2206c409186c8a4656f1b29632d4bcd41154a1be113279e71095aac3f037fd",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -1252,6 +1401,10 @@ export function CanvasWorkspace({",
+          "sha256": "7b1cea9f72bcf6f92aadf5f903c3f2869cc4961da07a0a2b77f66107e38df2ba",
+          "addedLines": 4,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -1282,7 +1435,7 @@ export function CanvasWorkspace({",
+          "sha256": "86c1ae23114069da62d6203b55757908479ada5ee13604d3f1ab52955817e911",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -1295,7 +1448,7 @@ export function CanvasWorkspace({",
+          "sha256": "8e1aea8b1704ad53736f3cdcb63bfafe02d4a693e014d79903f1d28324aad03a",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -1321,7 +1474,7 @@ export function CanvasWorkspace({",
+          "sha256": "eb0e3dcdcb6759baeb9692a1913d6ba7abc20d29459a0bc7cdbf4fbc80ae626c",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -1350,15 +1503,24 @@ export function CanvasWorkspace({",
+          "sha256": "59c64e8b4557312ccc9402ab15f65887e9a65232577d3b75416bc2a1c90876b5",
+          "addedLines": 16,
+          "removedLines": 7,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -1366,8 +1528,22 @@ export function CanvasWorkspace({",
+          "sha256": "55f0f710f112a5524d6582c3327e804024b297b4cb86dcf0ee8fd917530b3102",
+          "addedLines": 15,
+          "removedLines": 1,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -1385,12 +1561,25 @@ export function CanvasWorkspace({",
+          "sha256": "ceff4b04877d5a2bad132145ea7c322975da15b2c654942b2df1a27777af6a67",
+          "addedLines": 13,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -1745,12 +1934,61 @@ export function CanvasWorkspace({",
+          "sha256": "1af8e524ac73779b386907a51e4c202e0a806b8b9f47f88ee39cb288a68393e3",
+          "addedLines": 49,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -1759,14 +1997,142 @@ export function CanvasWorkspace({",
+          "sha256": "ad01ca0e3e00f492e39c8d5f0bb3fa9cd7aa14eb4842a58fa4ba1f85b339aa69",
+          "addedLines": 130,
+          "removedLines": 2,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -1779,20 +2145,24 @@ export function CanvasWorkspace({",
+          "sha256": "cacc4d341d938af2848e81ffb25786fd474302d6684313a308cf3bb87da3fb49",
+          "addedLines": 13,
+          "removedLines": 9,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -1821,13 +2191,14 @@ export function CanvasWorkspace({",
+          "sha256": "fb4ef4484525aa7265ec5a51dcd5ae034c0de2ea483fe44f2d536345cd51769a",
+          "addedLines": 6,
+          "removedLines": 5,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -1843,7 +2214,8 @@ export function CanvasWorkspace({",
+          "sha256": "f24b7fa1f72e02a624b05a8132b1977e7ee408078706842f029edf3f2ef2ebb4",
+          "addedLines": 2,
+          "removedLines": 1,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -1857,11 +2229,32 @@ export function CanvasWorkspace({",
+          "sha256": "e2f271b84202334699ac2a4069e4c88805d8d3877e939e17eaa6bbc5d636000d",
+          "addedLines": 22,
+          "removedLines": 1,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -1879,6 +2272,41 @@ export function CanvasWorkspace({",
+          "sha256": "0c33eecdf46d16009df7d3abe74d732ebf010cf2db4402064727698b3108edde",
+          "addedLines": 35,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -1890,7 +2318,21 @@ export function CanvasWorkspace({",
+          "sha256": "2ba0e5874181412ed485caf7aec7bdd23fc7bb3bd8305e3a9773a621e924449c",
+          "addedLines": 15,
+          "removedLines": 1,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -1971,19 +2413,125 @@ export function CanvasWorkspace({",
+          "sha256": "0e130c2f18be3c2541e4dd176b6a478e0c63694b2591ae172154e3f7377d0ba7",
+          "addedLines": 116,
+          "removedLines": 10,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -2018,16 +2566,24 @@ export function CanvasWorkspace({",
+          "sha256": "7b72c7e93d89a3fa4ee90ceeae3ca95d4ddfc8f07a2ad286d69ad2cc0129bfb5",
+          "addedLines": 12,
+          "removedLines": 4,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -2047,7 +2603,11 @@ export function CanvasWorkspace({",
+          "sha256": "f57b9f39b62d4cbdeded75000d66470db7b4d0164f35cc7326fc9473176ca64b",
+          "addedLines": 5,
+          "removedLines": 1,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -2058,14 +2618,14 @@ export function CanvasWorkspace({",
+          "sha256": "e81a1eda4aea4ab4e39e22612dc3299ae4829804b0d8cf779ad82fe82fb3a315",
+          "addedLines": 2,
+          "removedLines": 2,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -2076,22 +2636,80 @@ export function CanvasWorkspace({",
+          "sha256": "04f3610da004136bf4cce9dd181c68697fa08d2ea04a400c4353f6d955eb7e4b",
+          "addedLines": 65,
+          "removedLines": 7,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -2155,10 +2773,10 @@ export function CanvasWorkspace({",
+          "sha256": "15c06ccd6232532ebd55086285f6eca4352b0cbbfe767710699a9c32a1aff207",
+          "addedLines": 2,
+          "removedLines": 2,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -2226,10 +2844,67 @@ export function CanvasWorkspace({",
+          "sha256": "275e37883fb3876af9d38aec21a43216e3825bcf745d993a4a9a6f2a5fd6df68",
+          "addedLines": 59,
+          "removedLines": 2,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -2242,6 +2917,7 @@ export function CanvasWorkspace({",
+          "sha256": "688cb845f98183bdf23e39e04cf97097fe13f0fa409f98bd2be9ba9747da2143",
+          "addedLines": 1,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -2290,7 +2966,15 @@ export function CanvasWorkspace({",
+          "sha256": "0e3f41bf1883f61604f24a8f968b44c06540932e4f92dfac675ebf3b9ad1555f",
+          "addedLines": 9,
+          "removedLines": 1,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -2314,7 +2998,29 @@ export function CanvasWorkspace({",
+          "sha256": "a8e4f2a09ce793d51e4dbe8a1be6198fd8b98c54bc8ea28421dd74097d3a0846",
+          "addedLines": 23,
+          "removedLines": 1,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -2414,7 +3120,7 @@ export function CanvasWorkspace({",
+          "sha256": "b8b8a7874446fe982919dadb5c2a8903ad38580b4fe798f50ff7e0b01ee6b210",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -2422,7 +3128,7 @@ export function CanvasWorkspace({",
+          "sha256": "fe61d2ec80eb2456123c71641ff5c9c5bfe725874a0a0f05146e014ca7177da5",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -2444,7 +3150,7 @@ export function CanvasWorkspace({",
+          "sha256": "82dd069655b874fa5dd66ac2f611fec80f2c4aa5324b9758dfdb58a67af297be",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -2453,21 +3159,31 @@ export function CanvasWorkspace({",
+          "sha256": "adbcee10620f8e90e75723cde024c5150c614144e019340b27b2b0c486ff396e",
+          "addedLines": 15,
+          "removedLines": 5,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -2475,36 +3191,84 @@ export function CanvasWorkspace({",
+          "sha256": "88b19022075542f7a49353cc6ec101922384e32a499ea1e5d97c878579332c0e",
+          "addedLines": 54,
+          "removedLines": 6,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -2512,9 +3276,22 @@ export function CanvasWorkspace({",
+          "sha256": "ad22a852fb3ff5bfe137fa0aeb76bcb48fe28900167896051743fdd025205c53",
+          "addedLines": 15,
+          "removedLines": 2,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -2527,6 +3304,8 @@ export function CanvasWorkspace({",
+          "sha256": "e57792aa2e55804afb926e08fb9b7b806c99f7122fd154553092c8bb43c8590e",
+          "addedLines": 2,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -2535,19 +3314,28 @@ export function CanvasWorkspace({",
+          "sha256": "645cf24533baed9998e2788c97ae30e1690fb50d120c618f19f80fe9acbdcc9c",
+          "addedLines": 12,
+          "removedLines": 3,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -2571,7 +3359,10 @@ export function CanvasWorkspace({",
+          "sha256": "63339ea928da1ef06930f7e2780166ed0e2218e7d91800059d049a72ab4755aa",
+          "addedLines": 4,
+          "removedLines": 1,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -2599,7 +3390,9 @@ export function CanvasWorkspace({",
+          "sha256": "64d44604123b00cb8b9354bbaeaf0f9d4ea17effc8a1a7ada39ced2683a29b28",
+          "addedLines": 3,
+          "removedLines": 1,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -2612,6 +3405,19 @@ export function CanvasWorkspace({",
+          "sha256": "74fdcb8412e386b466da2e0d5e6bec47fff435ad7219452c6a0e4772a8f8aefc",
+          "addedLines": 13,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -2630,7 +3436,7 @@ export function CanvasWorkspace({",
+          "sha256": "80e55b55fbb919bed609b2343a44b4ec9f53766b88aa7df2dfc072efe7438665",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -2639,6 +3445,8 @@ export function CanvasWorkspace({",
+          "sha256": "1f6709a3d1cce9e666c0d0045f0864b672dbd804b2da5e3e79a5e143f9aff66e",
+          "addedLines": 2,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -2672,6 +3480,34 @@ export function CanvasWorkspace({",
+          "sha256": "d1992801efda29c5d89f0e1a737a902724480b41c6889d4d5003703cef386ed1",
+          "addedLines": 28,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        }
+      ]
+    },
+    {
+      "path": "apps/desktop/src/components/AssetContextMenu.tsx",
+      "patchFile": ".tmp/video-api/prerequisites/4.patch",
+      "patchSha256": "1f1c568570f8d367b5c3253921e2c52cc3b5bf35b5b3a5eb7824ed6e345be334",
+      "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded.",
+      "hunks": [
+        {
+          "header": "@@ -1,6 +1,6 @@",
+          "sha256": "8287d81b3b98c4c4dafbc5abda2ff42bdd44f72ce4e4709253500809770baa15",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -10,6 +10,11 @@ import { understandProvider } from \"../lib/entitlement\";",
+          "sha256": "9a1eef538d2f81fa0b868b6f4a79f0011ba39894981e26410db5221ed0623ade",
+          "addedLines": 5,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -39,6 +44,7 @@ export function AssetContextMenu() {",
+          "sha256": "0c94d45a39f9f002791b947b369b68348a433feed223914fae8449505961a1ea",
+          "addedLines": 1,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -78,7 +84,7 @@ export function AssetContextMenu() {",
+          "sha256": "003b33b8a9e28c4405f5e4ca0c7c4cec169f8e0c4a261b323d3da8c9e5dfd041",
+          "addedLines": 1,
+          "removedLines": 1,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -121,13 +127,15 @@ export function AssetContextMenu() {",
+          "sha256": "973a89b1cda1f9709c7e094baffc8bb5fe599b9de631d456596c3d1ba0a6d703",
+          "addedLines": 4,
+          "removedLines": 2,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -179,8 +187,9 @@ export function AssetContextMenu() {",
+          "sha256": "24a28199fb2e3e12f32708e2cc2be891876ce843e79524d181c1e61dd232ff34",
+          "addedLines": 2,
+          "removedLines": 1,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -267,7 +276,9 @@ export function AssetContextMenu() {",
+          "sha256": "9ed7296aedc51083db7cea073b790ffc0929e4800773f664543f881707df8b8a",
+          "addedLines": 3,
+          "removedLines": 1,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -282,7 +293,6 @@ export function AssetContextMenu() {",
+          "sha256": "d06012d60d92839d9899e315afae5cfb60c2f0f7a653fb654ca78887d96dd0e5",
+          "addedLines": 0,
+          "removedLines": 1,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -348,6 +358,22 @@ export function AssetContextMenu() {",
+          "sha256": "a157598f60ba0f5b2877b59224b7cf3baa4e34fd4b68bee93173155b9c5209d4",
+          "addedLines": 16,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -358,6 +384,25 @@ export function AssetContextMenu() {",
+          "sha256": "c1f881b0c611d8efd41e6730ffa01c9d018268ff241c321a449c06ff666d2fbe",
+          "addedLines": 19,
+          "removedLines": 0,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -377,10 +422,7 @@ export function AssetContextMenu() {",
+          "sha256": "6bd9a70ffcb8b31c152fbe98c5c2956e2a91d06dd002f1835b716326da3f9e51",
+          "addedLines": 1,
+          "removedLines": 4,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        },
+        {
+          "header": "@@ -562,8 +604,10 @@ export function AssetContextMenu() {",
+          "sha256": "6ab83cb630711f421ac98d6da774f048871431de6dc9372593c0f6a3b3d30a31",
+          "addedLines": 4,
+          "removedLines": 2,
+          "resolution": "Selected/manual prerequisite: persistent prompt-load, project route and exact reference plumbing only. projectAssetsViewRevision and unrelated preview/menu features excluded."
+        }
+      ]
+    },
+    {
+      "path": "apps/desktop/scripts/creative-canvas.test.mjs",
+      "patchFile": ".tmp/video-api/prerequisites/5.patch",
+      "patchSha256": "867cbe6d313500bca486e5bd633bf308843f1a739f4de283cffb911d83438efb",
+      "resolution": "Not applied: tests for unrelated absent menu/preview features. Existing canvas suite preserved.",
+      "hunks": [
+        {
+          "header": "@@ -3,21 +3,41 @@ import assert from \"node:assert/strict\";",
+          "sha256": "ea2a90fbe3abf65aa9e7f8d879b3df7f3de3cbeb89886d6a9e3f89723438ba71",
+          "addedLines": 21,
+          "removedLines": 1,
+          "resolution": "Not applied: tests for unrelated absent menu/preview features. Existing canvas suite preserved."
+        },
+        {
+          "header": "@@ -76,6 +96,52 @@ function snapshot(nodes, overrides = {}) {",
+          "sha256": "5925e4e5e6d7064168990e71bc654b927601cdeaa303d3e68d6fdef1fcf2a9fb",
+          "addedLines": 46,
+          "removedLines": 0,
+          "resolution": "Not applied: tests for unrelated absent menu/preview features. Existing canvas suite preserved."
+        },
+        {
+          "header": "@@ -283,6 +349,27 @@ test(\"creative launch carries explicit selection while blank project starts empt",
+          "sha256": "bcca675cc789e672fccb790e522c2c4219e8c0a3d0ec5a030b949cb3887ed5d7",
+          "addedLines": 21,
+          "removedLines": 0,
+          "resolution": "Not applied: tests for unrelated absent menu/preview features. Existing canvas suite preserved."
+        },
+        {
+          "header": "@@ -415,3 +502,309 @@ test(\"continuation acknowledgement cannot consume a newer sidecar\", () => {",
+          "sha256": "45c833a98802d27be5c0cb8694212ca8a6398ecc7261cb665d76616d8d381856",
+          "addedLines": 306,
+          "removedLines": 0,
+          "resolution": "Not applied: tests for unrelated absent menu/preview features. Existing canvas suite preserved."
+        }
+      ]
+    }
+  ],
+  "additionalPrerequisites": [
+    {
+      "path": "apps/desktop/src/App.tsx",
+      "sourceReadOnly": "D:/H/Project/Bowerbird/apps/desktop/src/App.tsx",
+      "sourceSha256AtFinalAudit": "d71c4890b415647ba216ea969ffd02eba469bdab393bd6438dc206ff704497b5",
+      "finalSha256": "e7fe1f9ca49e2517f4c3c687db77fda59d8c02d9da2b2e420fa0fd930bd17619",
+      "resolution": "Selected source hunks/manual integration needed for project handoff and precise reference identity; no wholesale file replacement."
+    },
+    {
+      "path": "apps/desktop/src/components/CreativeComposer.tsx",
+      "sourceReadOnly": "D:/H/Project/Bowerbird/apps/desktop/src/components/CreativeComposer.tsx",
+      "sourceSha256AtFinalAudit": "590fdca948e1987f512766411ad1438ae3b468fc171998cd8593b269f5705cfc",
+      "finalSha256": "14a041a4a08810c50a728a64670864d049f9aef8e63478ff03357302f40a8833",
+      "resolution": "Selected source hunks/manual integration needed for project handoff and precise reference identity; no wholesale file replacement."
+    },
+    {
+      "path": "apps/desktop/src/components/creation/schema.ts",
+      "sourceReadOnly": "D:/H/Project/Bowerbird/apps/desktop/src/components/creation/schema.ts",
+      "sourceSha256AtFinalAudit": "460df2978d3d0e0d65a9e6184182cd9fb831453e0a2ee117775c94d705c9ce26",
+      "finalSha256": "460df2978d3d0e0d65a9e6184182cd9fb831453e0a2ee117775c94d705c9ce26",
+      "resolution": "Selected source hunks/manual integration needed for project handoff and precise reference identity; no wholesale file replacement."
+    },
+    {
+      "path": "apps/desktop/src/components/creation/serialize.ts",
+      "sourceReadOnly": "D:/H/Project/Bowerbird/apps/desktop/src/components/creation/serialize.ts",
+      "sourceSha256AtFinalAudit": "c4b2d51dfc6020c3d84d6da609b6406054e3218ecd27ffe20cf41051af089e45",
+      "finalSha256": "ed21382e29de80711c9b00f8da075e272ffc676b7f73406dbb1be336dc15b83d",
+      "resolution": "Selected source hunks/manual integration needed for project handoff and precise reference identity; no wholesale file replacement."
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/core/project_canvas.rs",
+      "sourceReadOnly": "D:/H/Project/Bowerbird/apps/desktop/src-tauri/src/core/project_canvas.rs",
+      "sourceSha256AtFinalAudit": "81a807839dc9a07e6bd5a42afc458b468a4fe542b0021e1f760e9a9ce56bdc8f",
+      "finalSha256": "f9ad83d0e5d84cf83020782b60baba706ba9e0ea2f8e7d194c243a37be4fe579",
+      "resolution": "Selected source hunks/manual integration needed for project handoff and precise reference identity; no wholesale file replacement."
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/core/project_canvas_backfill.rs",
+      "sourceReadOnly": "D:/H/Project/Bowerbird/apps/desktop/src-tauri/src/core/project_canvas_backfill.rs",
+      "sourceSha256AtFinalAudit": "f92ffb927a702048817b5456d26d9fdb786f9e2a4a960c86b960dae5085fa45c",
+      "finalSha256": "6b1da4e3b263ea0a87ca3f3fc6887e87d02766c9a2c96608d0daed99b13ec241",
+      "resolution": "Selected source hunks/manual integration needed for project handoff and precise reference identity; no wholesale file replacement."
+    },
+    {
+      "path": "apps/desktop/src-tauri/sql/0024_shared_canvas_references.sql",
+      "sourceReadOnly": "D:/H/Project/Bowerbird/apps/desktop/src-tauri/sql/0024_shared_canvas_references.sql",
+      "sourceSha256AtFinalAudit": "e36d538ac082c6ea3537ad9a1c5d2c7b7862474b000e7ae8448aefabbc60052a",
+      "finalSha256": "c89ec9071410527d63080f46591c3bd7ce0d9eb43cfd226ccde0638bcb6ac02d",
+      "resolution": "SQL copied with normalized trailing blank lines in isolated commit; integration keeps saved-project file unchanged."
+    }
+  ],
+  "authoredMigration": "apps/desktop/src-tauri/sql/0025_shared_generated_reference_inputs.sql",
+  "excluded": [
+    "projectAssetsViewRevision",
+    "folder hover preview",
+    "unrelated prompt-menu infrastructure and tests"
+  ],
+  "finalFiles": [
+    {
+      "path": ".gitignore",
+      "sha256": "09948d710b9e2f866832e1f94fe724f0297c3d206f909f665d44b05266bb6611"
+    },
+    {
+      "path": "AGENTS.md",
+      "sha256": "b5edb344e712f930587c7a16dac3e2ebd04ba92cc0899d3a9767df57b8cd9f47"
+    },
+    {
+      "path": "PROJECT.md",
+      "sha256": "fc5f85d416bfb94d6b9a660c19ac9585b977fb3bcbb67d0fc033c8bab4244d75"
+    },
+    {
+      "path": "apps/agent-worker/src/cloud-generation/ark-video.test.ts",
+      "sha256": "6ee2d0b7ab6afa8528481b7aabdd5bdb48e85ef64ef716c51926c3132c5c34a5"
+    },
+    {
+      "path": "apps/agent-worker/src/cloud-generation/ark-video.ts",
+      "sha256": "ff94cd8f78e010818558695417f288b4b3e4b1430de29ea41c62b5e07c391097"
+    },
+    {
+      "path": "apps/agent-worker/src/cloud-generation/runtime.ts",
+      "sha256": "a33738010e7a54fd4adb68ad40c2550c9662a6cc84860285588cf5600bed7aaf"
+    },
+    {
+      "path": "apps/agent-worker/src/cloud-generation/video.test.ts",
+      "sha256": "b13799fbb1f409c80e63a83ae4bba6ffbdcf4126b15aa630edb8fe1872c82408"
+    },
+    {
+      "path": "apps/agent-worker/src/cloud-generation/video.ts",
+      "sha256": "6a4e03b8be3d51afd10340b5670b713fbd008824c050998d620d22ecc4c65c7b"
+    },
+    {
+      "path": "apps/agent-worker/src/types/node-ambient.d.ts",
+      "sha256": "aab69498ad4c36b3b858396fb7e887b9798d178ed1ec671a8db811937fcf1201"
+    },
+    {
+      "path": "apps/cloud/scripts/video-generation-db.test.mjs",
+      "sha256": "e1a75f7a8732851b01127636f15da1d9e351d53163c7635d45b18eafcf6e10fe"
+    },
+    {
+      "path": "apps/cloud/supabase/functions/_shared/usage.ts",
+      "sha256": "c6bb8c95b1a833b90de83ee11c927330a48b570d823dca8a414d9e02a58e36d3"
+    },
+    {
+      "path": "apps/cloud/supabase/functions/_shared/video-contract.ts",
+      "sha256": "09c7aefbdb68081fec0102499d93eb3fd42099bac088d5aa1c8d7a6a03f810e5"
+    },
+    {
+      "path": "apps/cloud/supabase/functions/generate-proxy/index.ts",
+      "sha256": "17fec50246c9f3f45675e1a1378348e59c39cf9174e2e804cb61e119e1c66c30"
+    },
+    {
+      "path": "apps/cloud/supabase/functions/generation-worker/index.ts",
+      "sha256": "f177bba14ccbc03b9273f96784148213190a45efb2478f2575aa82f35a8c29fc"
+    },
+    {
+      "path": "apps/cloud/supabase/migrations/0058_video_generation_jobs.sql",
+      "sha256": "338435ed5c8799578ac8f850d15c0825392749f56e46defe6bd71b2120dc4367"
+    },
+    {
+      "path": "apps/desktop/scripts/video-generation.test.mjs",
+      "sha256": "4caa1a82bc38db6b1b6cbd66ecf4218830ef6a353492ae4ee723368af19b1f8f"
+    },
+    {
+      "path": "apps/desktop/scripts/video-reference-editor.test.mjs",
+      "sha256": "d0483201ba215d924cbe6494c0068970a1833358c71f1e4c7ee50acb18f897de"
+    },
+    {
+      "path": "apps/desktop/src-tauri/sql/0024_shared_canvas_references.sql",
+      "sha256": "c89ec9071410527d63080f46591c3bd7ce0d9eb43cfd226ccde0638bcb6ac02d"
+    },
+    {
+      "path": "apps/desktop/src-tauri/sql/0025_shared_generated_reference_inputs.sql",
+      "sha256": "ca73d9a63969a83a0e1fe148c6c6f7063301f8885c35a501b56fe1a00291cc34"
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/codex/bowerbird_cloud.rs",
+      "sha256": "346317f2d0221089b9414d8dadb54cbdee0d46e446466761e76cd0d3623c42f8"
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/codex/jimeng.rs",
+      "sha256": "30e5128d29c85a0d29388cd6af62ac835d214de1aa5b7d44c36cdb5bae5bb19d"
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/codex/jimeng_video.rs",
+      "sha256": "8b8c84d2b406462401a0df2cddfe0554110cd61706b4fe4f6ef9142c46d51acc"
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/codex/mod.rs",
+      "sha256": "9ef0b0ad0e9ff83a84c683d02ce4c57d3a8e14ecf3b1e5626518863986e5b526"
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/codex/types.rs",
+      "sha256": "545f84fb7d560908bbb1f089a344b5d0efbb2d32475324f00c7709b0750bf6ad"
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/commands/codex.rs",
+      "sha256": "d46566f289d3bb9883eda3f94b4c8266039e7a35f9e416d05b93a3b5932bb4de"
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/core/generation_worker.rs",
+      "sha256": "e119108a6f065c61c7a851b92a0b04e1d1615cd9f3a7acef48cb98e8bca630fa"
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/core/ingest.rs",
+      "sha256": "1ebc67f6fc2477feffb60102918c3397669c89c8c7bd2a5bf174725a304c557f"
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/core/library.rs",
+      "sha256": "bce29afe0e6e86e898bccfdf4d5a12fa6ecac8a070630fb8ea2bb576f682640c"
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/core/project_canvas.rs",
+      "sha256": "137e1d1df4ab1f0d05617cb9e007615fd0f5578a9e84c13fc6119bd7babebb75"
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/core/project_canvas_backfill.rs",
+      "sha256": "6b1da4e3b263ea0a87ca3f3fc6887e87d02766c9a2c96608d0daed99b13ec241"
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/core/task_queue.rs",
+      "sha256": "0c99b15041c5567c14efffd59f525e2b3c4765ce31acd72d83a545a90aae2262"
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/db/migrations.rs",
+      "sha256": "471d727cc67436929f717c00a062f209df529587c5f0e494a67ce1d7dc6b850c"
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/lib.rs",
+      "sha256": "dde42e759f212fe6ba15fb12ebc2bcb3606b9acec2ac6bda75d7af62f9195702"
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/media/probe.rs",
+      "sha256": "07dd0c0bc81b591a70b7e51b713a3ec9a5dc0100d6fa5bdb75dbe2e43b5be2eb"
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/media/thumb.rs",
+      "sha256": "302788cbc4c1176cb0451dbe02452f1969d4c0135ec7e879a6f7463d68f85e9b"
+    },
+    {
+      "path": "apps/desktop/src-tauri/tests/fixtures/dreamina-video-cli.rs",
+      "sha256": "8af8b33de4584d1066ff833c99b1e2af2da63763352152f95799d840848b9779"
+    },
+    {
+      "path": "apps/desktop/src/App.tsx",
+      "sha256": "e7fe1f9ca49e2517f4c3c687db77fda59d8c02d9da2b2e420fa0fd930bd17619"
+    },
+    {
+      "path": "apps/desktop/src/components/AssetContextMenu.tsx",
+      "sha256": "60806303259df7c559c2bddc55e9f27fb335b34b583b0c281912f4024c9700d7"
+    },
+    {
+      "path": "apps/desktop/src/components/CanvasWorkspace.tsx",
+      "sha256": "c77dcab9f3d23dc13ebdec49f7f89207b8077a723df4a52f742801abcb366376"
+    },
+    {
+      "path": "apps/desktop/src/components/CreationBoard.tsx",
+      "sha256": "0e4f8e9b6164d23f5d190925d79d1cec402df790a9adb928c90b7aab0c7d96b1"
+    },
+    {
+      "path": "apps/desktop/src/components/CreativeComposer.tsx",
+      "sha256": "14a041a4a08810c50a728a64670864d049f9aef8e63478ff03357302f40a8833"
+    },
+    {
+      "path": "apps/desktop/src/components/GenerationPanel.tsx",
+      "sha256": "3eecda4b8330886ec89da3beaeb57035031bc7180ee5bbaf309a7e6f03174a57"
+    },
+    {
+      "path": "apps/desktop/src/components/Lightbox.tsx",
+      "sha256": "c10fc86765ca8d3aea847b7e034c170d8c3f3faa2111896d0daf7a07f9de4f0b"
+    },
+    {
+      "path": "apps/desktop/src/components/MediaPreview.tsx",
+      "sha256": "deb2baad3a90dce77a0de962ee164d21c197bd8c5f7aeaafec212699fa154647"
+    },
+    {
+      "path": "apps/desktop/src/components/creation/BoardChipPreview.tsx",
+      "sha256": "ef2316f9429a2c139f563ab64f392c37c7f9a745437721e337aa380b0ef55104"
+    },
+    {
+      "path": "apps/desktop/src/components/creation/VideoControls.tsx",
+      "sha256": "e57e328e8f5cefefd1d417197c8e9420c4f6803481b207b76e7cab82a3d3734c"
+    },
+    {
+      "path": "apps/desktop/src/components/creation/parse.ts",
+      "sha256": "88bf90e39862baac40f525a320080ecaf2c1eab52429decfa72b166a46278524"
+    },
+    {
+      "path": "apps/desktop/src/components/creation/schema.ts",
+      "sha256": "460df2978d3d0e0d65a9e6184182cd9fb831453e0a2ee117775c94d705c9ce26"
+    },
+    {
+      "path": "apps/desktop/src/components/creation/serialize.ts",
+      "sha256": "ed21382e29de80711c9b00f8da075e272ffc676b7f73406dbb1be336dc15b83d"
+    },
+    {
+      "path": "apps/desktop/src/components/creation/useCreationEditor.ts",
+      "sha256": "30d9d2dd2dfe99a66e32e4cbf7b9b574d7c941a9333237f9899694e0aff0c550"
+    },
+    {
+      "path": "apps/desktop/src/lib/api.ts",
+      "sha256": "f7486ae80cfb9dd6e50e5629bdce964ae861ce42d00cb8ac78a65a3d67e8c702"
+    },
+    {
+      "path": "apps/desktop/src/lib/creativeDraft.ts",
+      "sha256": "081b9d8134faad0fc5e150d5c3ff7a841a2be72fc17d9b60db02a2dcedc268a0"
+    },
+    {
+      "path": "apps/desktop/src/lib/creativeLaunch.ts",
+      "sha256": "faae2be971dd13411c5f426f1e250d847efeab96dd08bd2f0488b914c9c5dd4f"
+    },
+    {
+      "path": "apps/desktop/src/lib/generationRecovery.ts",
+      "sha256": "76660536121287b94f4b90d21903d790f540f8d79b7fcb63957d50ea6bf0eb71"
+    },
+    {
+      "path": "apps/desktop/src/lib/types.ts",
+      "sha256": "fb80f1d4a77847dc8c2699383e98df0e4f0666838afdda22858b5bd89936b411"
+    },
+    {
+      "path": "apps/desktop/src/lib/videoGeneration.ts",
+      "sha256": "b468f258e0702499c4ed9b26b442d58225f7d3850c7f10c02253aa64db4ac21d"
+    },
+    {
+      "path": "apps/desktop/src/store.ts",
+      "sha256": "0bba18ca97baa62a9315dab804ddb87da24f106e8b6b649c2c8299504fac5bde"
+    },
+    {
+      "path": "dev-doc/VIDEO-API-INTEGRATION.md",
+      "sha256": "722e05f854e8e513bcb99315e1924ef09e64da82b1fa2eceeddfdba4fc1c72cf"
+    }
+  ],
+  "implementationCommit": "522a26df58e0c1a2aeefa6d4da5f6b632ac9f0d8",
+  "finalFilesScope": "v1 implementation paths refreshed during integration-prep-v2; full v2 integration manifest is separate"
+}

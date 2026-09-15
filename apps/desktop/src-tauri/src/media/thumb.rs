@@ -2,6 +2,7 @@
 //! 性能不足时切换到 fast_image_resize（已列入 Cargo.toml 备用）。
 
 use std::path::Path;
+use super::tools::{self, Tool};
 
 use image::imageops::FilterType;
 use image::{ImageFormat, ImageReader};
@@ -41,24 +42,31 @@ pub fn generate_from_image(img: &image::DynamicImage, dst: &Path, max_size: u32)
     Ok(())
 }
 
-/// 视频缩略图：用系统 ffmpeg 在第 1 秒抽一帧（max_size 最长边）。
+/// 视频缩略图：用解析出的 ffmpeg 在第 1 秒抽一帧（max_size 最长边）。
 pub fn generate_video(src: &Path, dst: &Path, max_size: u32) -> AppResult<()> {
     use std::process::Stdio;
     if let Some(parent) = dst.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let status = std::process::Command::new("ffmpeg")
-        .args(["-y", "-ss", "1", "-i"])
-        .arg(src)
-        .args(["-frames:v", "1", "-vf"])
-        .arg(format!("scale={max_size}:-2"))
-        .arg(dst)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map_err(|e| AppError::Media(format!("spawn ffmpeg: {e}")))?;
-    if !status.success() {
-        return Err(AppError::Media(format!("ffmpeg exited {status}")));
+    let binary = tools::resolve(Tool::Ffmpeg)?;
+    for seek in ["1", "0"] {
+        let mut command = tools::command(binary);
+        let status = command
+            .args(["-y", "-ss", seek, "-i"])
+            .arg(src)
+            .args(["-frames:v", "1", "-vf"])
+            .arg(format!(
+                "scale={max_size}:{max_size}:force_original_aspect_ratio=decrease"
+            ))
+            .arg(dst)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map_err(|e| tools::spawn_error(Tool::Ffmpeg, binary, e))?;
+        if status.success() && image::open(dst).is_ok() {
+            return Ok(());
+        }
     }
-    Ok(())
+    let _ = std::fs::remove_file(dst);
+    Err(AppError::Media("ffmpeg 未能生成视频缩略图".into()))
 }

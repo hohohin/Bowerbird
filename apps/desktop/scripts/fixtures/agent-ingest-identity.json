@@ -1,0 +1,7 @@
+{
+  "runId": "run-ingested",
+  "artifacts": [
+    {"id": "artifact-final", "role": "final_result", "mime": "image/png", "sha256": "sha-final", "user_visible": true, "downloaded_at": "2026-09-04T00:00:00Z"}
+  ],
+  "fingerprint": "run-ingested:artifact-final:sha-final"
+}

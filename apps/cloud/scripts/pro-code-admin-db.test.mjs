@@ -1,0 +1,72 @@
+import assert from "node:assert/strict";
+import { readFileSync, readdirSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+import path from "node:path";
+import { randomUUID, createHash } from "node:crypto";
+const { PGlite } = await import(pathToFileURL(path.resolve(process.argv[2])).href);
+const db = new PGlite();
+const q = async (sql, params = []) => (await db.query(sql, params)).rows;
+const actor = randomUUID(), customer = randomUUID(), other = randomUUID();
+const codes = (count) => Array.from({ length: count }, () => ({ id: randomUUID(), hash: createHash("sha256").update(randomUUID()).digest("hex"), suffix: "ABCD1234", ciphertext: "encrypted-fixture-".repeat(5) }));
+const issue = async (batch, label, items, who = actor) => (await q("select admin_issue_pro_codes($1,$2,$3,'2027-01-01T00:00:00Z',$4::jsonb) r", [who, batch, label, JSON.stringify(items)]))[0].r;
+const list = async (status = "", search = "", batch = null, page = 0, who = actor) => (await q("select admin_list_pro_codes($1,$2,$3,$4,$5) r", [who, status, search, batch, page]))[0].r;
+const disable = async (id) => (await q("select admin_disable_pro_code($1,$2) r", [actor, id]))[0].r;
+const reveal = async (batch, code) => (await q("select admin_read_pro_codes($1,$2,$3) r", [actor, batch, code]))[0].r;
+try {
+  await db.exec(`create role anon; create role authenticated; create role service_role; create role supabase_auth_admin;
+    create schema auth; create schema extensions;
+    create table auth.users(id uuid primary key, email text, raw_app_meta_data jsonb, raw_user_meta_data jsonb);
+    create function auth.uid() returns uuid language sql as $$ select null::uuid $$;
+    create function extensions.gen_random_uuid() returns uuid language sql as $$ select gen_random_uuid() $$;`);
+  const dir = new URL("../supabase/migrations/", import.meta.url);
+  for (const prefix of ["0001", "0002", "0003", "0008", "0059", "0060"]) {
+    await db.exec(readFileSync(new URL(readdirSync(dir).find((n) => n.startsWith(prefix)), dir), "utf8").replace("create extension if not exists pgcrypto with schema extensions;", ""));
+  }
+  await q("insert into auth.users values($1,'admin@example.test','{\"bowerbird_admin\":true}','{}'),($2,'reader@example.test','{}','{\"bowerbird_admin\":true}'),($3,'other@example.test','{\"bowerbird_admin\":\"true\"}','{}')", [actor, customer, other]);
+  await assert.rejects(list("", "", null, 0, customer), /admin required/);
+  await assert.rejects(list("", "", null, 0, other), /admin required/);
+  const batch = randomUUID(), items = codes(53);
+  assert.equal((await issue(batch, "September invites", items)).created, true);
+  assert.equal((await issue(batch, "September invites", codes(53))).created, false);
+  assert.equal((await list()).stats.total, 53);
+  await assert.rejects(issue(batch, "different contents", items), /batch request conflict/);
+  const first = await list(), second = await list("", "", batch, 1);
+  assert.equal(first.rows.length, 50); assert.equal(second.rows.length, 3);
+  assert.equal(new Set([...first.rows, ...second.rows].map((r) => r.id)).size, 53);
+  assert.equal(JSON.stringify(first).includes("ciphertext"), false);
+  assert.equal(JSON.stringify(first).includes(items[0].hash), false);
+  assert.equal((await list("", "September")).total, 53);
+  assert.equal((await list("", "ABCD1234")).total, 53);
+  assert.equal((await list("", "nomatch")).total, 0);
+  assert.equal((await reveal(batch, null)).length, 53);
+  assert.equal((await reveal(null, items[0].id))[0].ciphertext, items[0].ciphertext);
+  await assert.rejects(reveal(batch, items[0].id), /one target required/);
+  assert.equal((await disable(items[0].id)).status, "disabled");
+  assert.equal((await disable(items[0].id)).status, "disabled");
+  assert.equal((await reveal(null, items[0].id)).length, 0);
+  assert.equal((await q("select redeem_pro_code($1,$2) r", [customer, items[0].hash]))[0].r.status, "invalid_code");
+  assert.equal((await q("select redeem_pro_code($1,$2) r", [customer, items[1].hash]))[0].r.status, "redeemed");
+  assert.equal((await disable(items[1].id)).status, "already_redeemed");
+  assert.equal((await reveal(null, items[1].id)).length, 0);
+  assert.equal((await list("redeemed", "reader@example.test")).rows[0].redeemed_by, customer);
+  assert.equal((await q("select tier from subscriptions where user_id=$1", [customer]))[0].tier, "pro");
+  await q("update pro_redemption_codes set expires_at=now()-interval '1 day' where id=$1", [items[2].id]);
+  assert.equal((await list("expired")).total, 1);
+  assert.equal((await reveal(batch, null)).length, 50);
+  const audit = await q("select action,count(*)::int n from pro_code_admin_events group by action");
+  assert.equal(audit.find((r) => r.action === "issue").n, 1); assert.equal(audit.find((r) => r.action === "disable").n, 1);
+  const bad = codes(2); bad[1].hash = bad[0].hash;
+  await assert.rejects(issue(randomUUID(), "rollback", bad), /unique constraint/);
+  assert.equal((await q("select count(*)::int n from pro_code_batches where label='rollback'"))[0].n, 0);
+  for (const role of ["anon", "authenticated"]) {
+    await db.exec(`set role ${role}`);
+    for (const table of ["pro_code_batches", "pro_code_admin_events", "pro_code_admin_inventory", "pro_redemption_codes"]) await assert.rejects(q(`select * from ${table}`), /permission denied/);
+    await assert.rejects(list(), /permission denied/); await assert.rejects(disable(items[3].id), /permission denied/);
+    await assert.rejects(reveal(batch, null), /permission denied/); await assert.rejects(issue(randomUUID(), "forged", codes(1)), /permission denied/);
+    await db.exec("reset role");
+  }
+  await q("update auth.users set raw_app_meta_data='{}' where id=$1", [actor]);
+  await assert.rejects(list(), /admin required/); await assert.rejects(disable(items[3].id), /admin required/);
+  await assert.rejects(reveal(batch, null), /admin required/); await assert.rejects(issue(randomUUID(), "revoked", codes(1)), /admin required/);
+  console.log("PASS: admin claims, atomic batch issuance/retry, pagination/search, cipher isolation, audit, export availability, disable/redeem ordering, RLS and immediate revocation");
+} finally { await db.close(); }

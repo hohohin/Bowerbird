@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { LibraryView } from "./libraryView";
 import { open } from "@tauri-apps/plugin-dialog";
 import type {
   Analysis,
@@ -13,6 +14,7 @@ import type {
   CaptionSection,
   CloudAgentPreview,
   CloudAgentRunRecord,
+  CodeRedemption,
   ColorBucket,
   CodexHealth,
   CreationPack,
@@ -31,8 +33,26 @@ import type {
   Project,
   ProjectCreateResult,
   ProjectDeleteMode,
+  ProjectDeleteImpact,
   ProjectDeleteResult,
   ProjectRefreshResult,
+  CanvasEdge,
+  CanvasGroup,
+  CanvasGroupItem,
+  CanvasNode,
+  CanvasNodeRemoval,
+  CanvasNodeLayoutUpdate,
+  CanvasView,
+  CanvasViewInput,
+  CreativeThread,
+  NewCanvasEdge,
+  NewCanvasGroup,
+  NewCanvasNode,
+  NewCreativeThread,
+  ProjectCanvas,
+  ProjectCanvasLocation,
+  ProjectCanvasMaterializeInput,
+  ProjectCanvasSnapshot,
   PromptedAsset,
   PreferenceCapsule,
   RecentGenSession,
@@ -40,6 +60,13 @@ import type {
 } from "./types";
 
 const IMAGE_EXT = ["jpg", "jpeg", "png", "webp", "gif", "bmp", "tiff", "tif"];
+
+export interface SourceBrowserBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
 
 export const api = {
   // 健康检查
@@ -65,14 +92,19 @@ export const api = {
     invoke<string | null>("local_agent_find_asset_id", { storePath }),
   cloudAgentStart: (input: {
     intentPrompt: string;
-    references: Array<{ assetId: string; promptToken?: string | null }>;
+    references: Array<{ assetId: string; nodeId?: string | null; promptToken?: string | null }>;
     ratio?: string | null;
     projectId?: string | null;
     imageProvider?: "cloud" | "jimeng" | "codex" | null;
     preferenceCapsule?: PreferenceCapsule | null;
     visualProfileId?: string | null;
-    skillId?: "bowerbird-controlled-image-edit" | "bowerbird-html-layout-render";
+    skillId?: "bowerbird-unified-agent";
+    agentRuntime?: "dsh";
     htmlOptions?: HtmlLayoutOptions | null;
+    threadId?: string | null;
+    creativeSessionId?: string | null;
+    parentNodeId?: string | null;
+    parentAssetId?: string | null;
   }) => invoke<CloudAgentRunRecord>("cloud_agent_start", input),
   cloudAgentLatest: () => invoke<CloudAgentRunRecord | null>("cloud_agent_latest"),
   cloudAgentList: () => invoke<CloudAgentRunRecord[]>("cloud_agent_list"),
@@ -99,13 +131,13 @@ export const api = {
   // Agent Z/G（dev-only）：创作板消息投递到 Claude Code（z）/ codex（g）TUI 终端
   agentZHealth: () =>
     invoke<{ ok: boolean; needsLogin: boolean }>("agent_z_health"),
-  agentZSend: (text: string, images: string[], imageNames?: string[], engine?: "z" | "g") =>
-    invoke<void>("agent_z_send", { text, images, imageNames, engine }),
+  agentZSend: (text: string, images: string[], imageNames?: string[], engine?: "z" | "g", visualProfileId?: string | null) =>
+    invoke<void>("agent_z_send", { text, images, imageNames, engine, visualProfileId }),
 
   // Agent DS（dev-only）：创作板消息发给 DeepSeek 对话 harness（detached Node 子进程），
   // 回复经事件链路追加进创作板；可用性与 Agent A/B 同源（localAgentHealth）。
-  agentDsChat: (text: string, images: string[]) =>
-    invoke<void>("agent_ds_chat", { text, images }),
+  agentDsChat: (text: string, images: string[], visualProfileId?: string | null) =>
+    invoke<void>("agent_ds_chat", { text, images, visualProfileId }),
 
   // 项目 workspace
   createProject: (workspacePath: string) =>
@@ -119,11 +151,74 @@ export const api = {
     invoke<number>("add_assets_to_project", { projectId, assetIds }),
   removeAssetsFromProject: (projectId: string, assetIds: string[]) =>
     invoke<number>("remove_assets_from_project", { projectId, assetIds }),
-  deleteProject: (projectId: string, mode: ProjectDeleteMode) =>
-    invoke<ProjectDeleteResult>("delete_project", { projectId, mode }),
+  deleteProject: (projectId: string, mode: ProjectDeleteMode, confirmation?: string) =>
+    invoke<ProjectDeleteResult>("delete_project", { projectId, mode, confirmation: confirmation ?? null }),
+  projectDeleteImpact: (projectId: string) =>
+    invoke<ProjectDeleteImpact>("project_delete_impact", { projectId }),
   // 「更新项目文件」：重新扫描 workspace 文件夹，新增图片入库进项目（手动同步）。
   refreshProject: (projectId: string) =>
     invoke<ProjectRefreshResult>("refresh_project", { projectId }),
+
+  // 项目即画板（PROJECT-CANVAS-PLAN PB2）；所有新写入只走 project + thread 身份。
+  projectCanvasMaterialize: (
+    value: ProjectCanvasMaterializeInput,
+    initialThreads: NewCreativeThread[] = [],
+    initialNodes: NewCanvasNode[] = [],
+    initialView: CanvasViewInput | null = null,
+  ) => invoke<ProjectCanvas>("project_canvas_materialize", {
+    value,
+    initialThreads,
+    initialNodes,
+    initialView,
+  }),
+  projectCanvasEnsure: (projectId: string) =>
+    invoke<ProjectCanvas>("project_canvas_ensure", { projectId }),
+  projectCanvasGet: (projectId: string) =>
+    invoke<ProjectCanvasSnapshot>("project_canvas_get", { projectId }),
+  projectCanvasRename: (projectId: string, title: string) =>
+    invoke<boolean>("project_canvas_rename", { projectId, title }),
+  projectCanvasTitleFromFirstPrompt: (projectId: string, title: string) =>
+    invoke<boolean>("project_canvas_title_from_first_prompt", { projectId, title }),
+  projectCanvasUpdateDraft: (projectId: string, draftJson: string) =>
+    invoke<boolean>("project_canvas_update_draft", { projectId, draftJson }),
+  projectCanvasTouch: (projectId: string) =>
+    invoke<boolean>("project_canvas_touch", { projectId }),
+  projectThreadCreate: (value: NewCreativeThread) =>
+    invoke<CreativeThread>("project_thread_create", { value }),
+  projectThreadArchive: (threadId: string) =>
+    invoke<boolean>("project_thread_archive", { threadId }),
+  projectThreadRestore: (threadId: string) =>
+    invoke<boolean>("project_thread_restore", { threadId }),
+  projectCanvasNodeCreate: (value: NewCanvasNode) =>
+    invoke<CanvasNode>("project_canvas_node_create", { value }),
+  projectCanvasNodeUpdate: (nodeId: string, value: CanvasNodeLayoutUpdate) =>
+    invoke<CanvasNode | null>("project_canvas_node_update", { nodeId, value }),
+  projectCanvasNoteUpdate: (nodeId: string, payloadJson: string) =>
+    invoke<CanvasNode>("project_canvas_note_update", { nodeId, payloadJson }),
+  projectCanvasNodeRemove: (nodeId: string) =>
+    invoke<CanvasNodeRemoval | null>("project_canvas_node_remove", { nodeId }),
+  projectCanvasNodeRestore: (projectId: string, nodeId: string) =>
+    invoke<CanvasNode | null>("project_canvas_node_restore", { projectId, nodeId }),
+  projectCanvasGroupCreate: (value: NewCanvasGroup, nodeIds: string[]) =>
+    invoke<CanvasGroup>("project_canvas_group_create", { value, nodeIds }),
+  projectCanvasGroupSetItems: (groupId: string, nodeIds: string[]) =>
+    invoke<CanvasGroupItem[]>("project_canvas_group_set_items", { groupId, nodeIds }),
+  projectCanvasGroupUpdate: (value: CanvasGroup) =>
+    invoke<boolean>("project_canvas_group_update", { value }),
+  projectCanvasGroupDelete: (groupId: string) =>
+    invoke<boolean>("project_canvas_group_delete", { groupId }),
+  projectCanvasEdgeCreate: (value: NewCanvasEdge) =>
+    invoke<CanvasEdge>("project_canvas_edge_create", { value }),
+  projectCanvasEdgeDelete: (edgeId: string) =>
+    invoke<boolean>("project_canvas_edge_delete", { edgeId }),
+  projectCanvasViewUpsert: (value: CanvasViewInput) =>
+    invoke<CanvasView>("project_canvas_view_upsert", { value }),
+  projectCanvasViewFlush: (value: CanvasViewInput) =>
+    invoke<CanvasView>("project_canvas_view_flush", { value }),
+  projectCanvasForAsset: (assetId: string) =>
+    invoke<ProjectCanvasLocation | null>("project_canvas_for_asset", { assetId }),
+  projectCanvasForNode: (projectId: string, threadId: string, nodeId: string) =>
+    invoke<ProjectCanvasLocation>("project_canvas_for_node", { projectId, threadId, nodeId }),
 
   // 导入
   importFiles: (sources: string[], projectId?: string | null) =>
@@ -167,10 +262,25 @@ export const api = {
     }),
   // 读本地图片为 data URL（标注面板 canvas 导出用，规避 asset 协议跨域污染画布）。
   readImageDataUrl: (path: string) => invoke<string>("read_image_data_url", { path }),
+  layerWorkspaceAssetIds: () => invoke<string[]>("layer_workspace_asset_ids"),
+  layerExportPsd: (path: string, base64: string) => invoke<void>("layer_export_psd", { path, base64 }),
+  layerExportFontNames: (fonts: string[]) => invoke<Record<string, string>>("layer_export_font_names", { fonts }),
+  layerExportAi: (path: string, document: import("./layerDocument").LayerDocument) => invoke<string>("layer_export_ai", { path, document }),
+  layerWorkspaceLoad: (assetId: string) => invoke<import("./layerDocument").LayerWorkspace | null>("layer_workspace_load", { assetId }),
+  layerFonts: () => invoke<string[]>("layer_fonts"),
+  layerTextRequest: (request: { action: "get_by_key" | "create"; idempotency_key: string; image?: import("./layerDocument").TextRecognitionPending["image"] }) => invoke<{ status: string; text?: string; error?: { message?: string } }>("layer_text_request", { request }),
+  layerWorkspaceSave: (assetId: string, workspace: import("./layerDocument").LayerWorkspace) => invoke<void>("layer_workspace_save", { assetId, workspace }),
+  layerExport: (assetId: string, document: import("./layerDocument").LayerDocument, dataUrl: string, projectId: string | null) => invoke<Asset>("layer_export", { assetId, document, dataUrl, projectId }),
+  layerCloudRequest: (request: import("./layerDocument").LayerRequest | { action: string; idempotency_key?: string; job_id?: string }) => invoke<{ status: string; progress?: number; services?: { service: string; available: boolean; credits: number | null }[]; error?: { message: string }; layer_result?: { document?: import("./layerDocument").LayerDocument; image?: string } }>("layer_cloud_request", { request }),
 
   // 浏览
+  listLibraryView: (filter: { search?: string; smart?: string | null; folderId?: string | null; collectionId?: string | null; color?: string | null }) =>
+    invoke<LibraryView>("list_library_view", { filter }),
   listAssets: (folderId?: string, projectId?: string | null, limit = 500, offset = 0) =>
     invoke<Asset[]>("list_assets", { folderId, projectId: projectId ?? null, limit, offset }),
+  /** Exact canvas hydration; no browsing pagination or generation-session collapse. */
+  getAssetsByIds: (assetIds: string[]) =>
+    invoke<Asset[]>("get_assets_by_ids", { assetIds }),
   searchAssets: (query: string, projectId?: string | null, limit = 500) =>
     invoke<Asset[]>("search_assets", { query, projectId: projectId ?? null, limit }),
   listAssetsSmart: (query: string, projectId?: string | null) =>
@@ -178,7 +288,7 @@ export const api = {
   countAssets: (projectId?: string | null) =>
     invoke<number>("count_assets", { projectId: projectId ?? null }),
   deleteAsset: (id: string) => invoke<void>("delete_asset", { id }),
-  /** 右键单素材删除（三选项，与「删除项目」对齐）：keep=仅移出当前项目；move_out=移出园丁鸟；delete=全局物理删除。 */
+  /** 单素材三模式：keep=仅移出当前项目；move_out=保留原文件并移出园丁鸟；delete=全局物理删除。 */
   deleteAssetWithMode: (
     id: string,
     mode: AssetDeleteMode,
@@ -245,6 +355,7 @@ export const api = {
     return (r as string | null) ?? null;
   },
   releasePresetPack: () => invoke<string>("release_preset_pack"),
+  createOnboardingProject: (projectId: string) => invoke<ProjectCreateResult>("create_onboarding_project", { projectId }),
 
   // 创作板（统一走 codex CLI）
   listPromptedAssets: (projectId?: string | null) =>
@@ -290,6 +401,17 @@ export const api = {
     }),
   recomputeColors: () => invoke<void>("recompute_colors"),  assemblePack: (assetIds: string[]) =>
     invoke<CreationPack>("assemble_pack", { assetIds }),
+  openSourceBrowser: (url: string, bounds: SourceBrowserBounds) =>
+    invoke<void>("open_source_browser", { url, bounds }),
+  resizeSourceBrowser: (bounds: SourceBrowserBounds, visible?: boolean, dimmed?: boolean) =>
+    invoke<void>("resize_source_browser", { bounds, visible, dimmed }),
+  captureSourceBrowserImage: (imageUrl: string, pageUrl: string, projectId: string | null) =>
+    invoke<Asset>("capture_source_browser_image", { imageUrl, pageUrl, projectId }),
+  navigateSourceBrowser: (url: string) => invoke<void>("navigate_source_browser", { url }),
+  sourceBrowserBack: () => invoke<void>("source_browser_back"),
+  sourceBrowserForward: () => invoke<void>("source_browser_forward"),
+  reloadSourceBrowser: () => invoke<void>("reload_source_browser"),
+  hideSourceBrowser: () => invoke<void>("hide_source_browser"),
   codexGeneratePromptForAsset: (assetId: string, role: string) =>
     invoke<string>("codex_generate_prompt_for_asset", { assetId, role }),
   // Phase 5：反推（codex CLI 描述图片）+ 分析结果
@@ -336,8 +458,11 @@ export const api = {
   // conversationId：会话级分组（「重新编辑 / 重试」版本分支归组），后端 done 入库时落
   // generation_conversations；anchorSessionId：源会话 session（根 session 补映射用）。
   codexCreateImage: (req: {
+    media?: import("./videoGeneration").GenerationMedia;
+    videoOptions?: import("./videoGeneration").VideoOptions | null;
     prompt: string;
     referenceImages: string[];
+    referenceNodeIds?: Array<string | null>;
     /** 参考图列表已完整（轮级重试/编辑精确重放）：后端跳过续轮自动合并上一轮产出图。 */
     exactReferences?: boolean;
     sessionId?: string | null;
@@ -351,10 +476,19 @@ export const api = {
     dimensionSources?: string[];
     conversationId?: string | null;
     anchorSessionId?: string | null;
+    threadId?: string | null;
+    creativeSessionId?: string | null;
+    turnKey?: string | null;
+    parentNodeId?: string | null;
+    parentAssetPath?: string | null;
+    creativeRelation?: "continued" | "retry" | "branch" | null;
   }) =>
     invoke<string>("codex_create_image", {
+      media: req.media ?? "image",
+      videoOptions: req.videoOptions ?? null,
       prompt: req.prompt,
       referenceImages: req.referenceImages,
+      referenceNodeIds: req.referenceNodeIds ?? [],
       exactReferences: req.exactReferences ?? false,
       sessionId: req.sessionId ?? null,
       ratio: req.ratio ?? null,
@@ -366,6 +500,11 @@ export const api = {
       dimensionSources: req.dimensionSources ?? [],
       conversationId: req.conversationId ?? null,
       anchorSessionId: req.anchorSessionId ?? null,
+      threadId: req.threadId ?? null,
+      turnKey: req.turnKey ?? null,
+      parentNodeId: req.parentNodeId ?? null,
+      parentAssetPath: req.parentAssetPath ?? null,
+      creativeRelation: req.creativeRelation ?? null,
     }),
   cancelCodexCreate: (jobId: string) => invoke<void>("cancel_codex_create", { jobId }),
   // 启动恢复（Task 5）：列出未完成生成 job，前端挂载时拉取重建 genJobs（恢复中 job 可见）。
@@ -375,8 +514,9 @@ export const api = {
   // 移除已完成会话的持久记录（删 task_queue 终态行；重启恢复不再出现该会话）。
   dismissGenJob: (jobId: string) => invoke<void>("dismiss_gen_job", { jobId }),
   // 即梦孤儿任务取回（约定 23 阶段 3）：远端在跑/已完成但本地无记录的任务，用户显式取回。
-  jimengRetrieveOrphan: (submitId: string, prompt: string) =>
-    invoke<void>("jimeng_retrieve_orphan", { submitId, prompt }),
+  jimengRetrieveOrphan: (submitId: string, prompt: string, jobId?: string) =>
+    invoke<void>("jimeng_retrieve_orphan", { submitId, prompt, jobId: jobId ?? null }),
+  recoverCloudVideo: (jobId: string) => invoke<void>("recover_cloud_video", { jobId }),
   // 扩展小白化：连接状态 + 扩展文件夹路径（引导「一键复制」用，不自动打开——Windows 上不稳）。
   extensionStatus: () => invoke<boolean>("extension_status"),
   extensionFolderPath: () => invoke<string>("extension_folder_path"),
@@ -398,16 +538,22 @@ export const api = {
   cloudEntitlement: () => invoke<EntitlementSnapshot>("cloud_entitlement"),
   cloudSyncEntitlement: () =>
     invoke<EntitlementSnapshot>("cloud_sync_entitlement"),
-  visualProfilePreview: (projectId: string, folderId: string) =>
-    invoke<VisualProfileScopePreview>("visual_profile_preview", { projectId, folderId }),
-  visualProfileExtract: (projectId: string, folderId: string) =>
-    invoke<VisualProfileDetail>("visual_profile_extract", { projectId, folderId }),
+  cloudRedeemCode: (code: string) =>
+    invoke<CodeRedemption>("cloud_redeem_code", { code }),
+  visualProfilePreview: (folderId: string) =>
+    invoke<VisualProfileScopePreview>("visual_profile_preview", { folderId }),
+  visualProfileExtract: (folderId: string) =>
+    invoke<VisualProfileDetail>("visual_profile_extract", { folderId }),
   visualProfileConfirm: (profileId: string) =>
     invoke<VisualProfileDetail>("visual_profile_confirm", { profileId }),
-  visualProfileList: (projectId: string, folderId: string | null) =>
-    invoke<VisualProfileSummary[]>("visual_profile_list", { projectId, folderId: folderId ?? null }),
-  visualProfileCloudExtract: (projectId: string, folderId: string) =>
-    invoke<VisualProfileDetail>("visual_profile_cloud_extract", { projectId, folderId }),
+  visualProfileGet: (profileId: string) =>
+    invoke<VisualProfileDetail>("visual_profile_get", { profileId }),
+  visualProfileDelete: (profileId: string) =>
+    invoke<void>("visual_profile_delete", { profileId }),
+  visualProfileList: (folderId: string | null) =>
+    invoke<VisualProfileSummary[]>("visual_profile_list", { folderId: folderId ?? null }),
+  visualProfileCloudExtract: (folderId: string, expectedAssetIds?: string[]) =>
+    invoke<VisualProfileDetail>("visual_profile_cloud_extract", { folderId, expectedAssetIds: expectedAssetIds ?? null }),
   visualProfileUpdateDraft: (profileId: string, rules: VisualProfileRuleEdit[]) =>
     invoke<VisualProfileDetail>("visual_profile_update_draft", { profileId, rules }),
   visualProfileGenerateValidation: (profileId: string, theme: string) =>

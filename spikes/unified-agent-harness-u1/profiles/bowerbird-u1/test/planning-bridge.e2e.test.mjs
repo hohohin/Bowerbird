@@ -1,3 +1,4 @@
+import { RunContextTools } from "../../../../../apps/agent-worker/src/harness/run-context-tools.ts";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
@@ -9,9 +10,132 @@ import { UnifiedPlanningHarnessRunner } from "../../../../../apps/agent-worker/s
 import { UnifiedPlanningToolBridge } from "../../../../../apps/agent-worker/src/harness/unified-planning-tool-bridge.ts";
 import { canonicalJson, sha256Hex } from "../../../../../apps/agent-worker/src/kernel/tool-ledger.ts";
 import { NodeDshAcpPort } from "../scripts/dsh-acp-port.mjs";
+import { loadUnifiedAgentSkill } from "../../../../../apps/agent-worker/src/skills/bowerbird-unified-agent/loader.ts";
 import { spikeRoot } from "../scripts/runtime.mjs";
+import { AdaptiveToolGateway } from "../../../../../apps/agent-worker/src/harness/adaptive-tool-gateway.ts";
+import { validateAdaptiveInputObject } from "../../../../../apps/agent-worker/src/harness/adaptive-tool-inputs.ts";
 
 const BRIDGE_PATCH = "profiles/bowerbird-u1/cordis.bridge.patch.yml";
+
+test("real DSH returns missing assetIds to the model and retries without spending a generation slot", async () => {
+  let requests = 0, generated = 0;
+  const authorization = { schemaVersion: 3, title: "Original image", summary: "Generate a gift image",
+    assetIds: [], outputCount: 1, modelTurns: 4, capabilities: [{ tool: "generate_image", maxCalls: 1 }] };
+  const gateway = new AdaptiveToolGateway(authorization, { authorizationHash: sha256Hex(canonicalJson(authorization)), actions: [] }, {
+    validate: validateAdaptiveInputObject,
+    async save() {},
+    async execute(action) {
+      if (action.toolName === "generate_image") { generated++; return { artifactId: "gift-image" }; }
+      return { terminalReason: "awaiting_result_feedback" };
+    },
+  });
+  const server = createServer(async (request, response) => {
+    let body = "";
+    request.setEncoding("utf8");
+    for await (const chunk of request) body += chunk;
+    const wire = JSON.parse(body);
+    assert.equal(wire.model, "deepseek-flash");
+    requests++;
+    let args;
+    if (requests === 1) args = { actionId: "gift", toolName: "generate_image", inputJson: JSON.stringify({ prompt: "Gift" }) };
+    else if (requests === 2) {
+      const feedback = wire.messages.filter(message => message.role === "tool").map(message => message.content).join("\n");
+      assert.ok(feedback.includes('"missingFields":["assetIds"]'));
+      assert.ok(feedback.includes('"executed":false'));
+      assert.ok(feedback.includes('"remainingCalls":1'));
+      assert.equal(generated, 0);
+      args = { actionId: "gift", toolName: "generate_image", inputJson: JSON.stringify({ prompt: "Gift", assetIds: [] }) };
+    } else {
+      assert.equal(requests, 3);
+      assert.equal(generated, 1);
+      args = { actionId: "deliver", toolName: "finalize_output", inputJson: JSON.stringify({ assetIds: ["gift-image"] }) };
+    }
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.end(toolCallSse("call_tool", args, requests));
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  const previous = Object.fromEntries(["BOWERBIRD_U1_ALLOW_NETWORK", "DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL"].map(key => [key, process.env[key]]));
+  Object.assign(process.env, { BOWERBIRD_U1_ALLOW_NETWORK: "1", DEEPSEEK_API_KEY: "fixture-only", DEEPSEEK_BASE_URL: `http://127.0.0.1:${server.address().port}` });
+  try {
+    const runner = new UnifiedPlanningHarnessRunner({ runId: "input-recovery", dispatch(call) {
+      const args = call.arguments;
+      return gateway.dispatch({ toolName: args.toolName, arguments: { actionId: args.actionId, input: JSON.parse(args.inputJson) } });
+    } }, toolBridge => new DshAcpHarnessAdapter({ cwd: spikeRoot,
+      createPort: () => new NodeDshAcpPort({ allowNetwork: true, patches: [BRIDGE_PATCH], toolBridge }),
+    }));
+    const result = await runner.run({ schemaVersion: 1, runId: "input-recovery", checkpointVersion: 0,
+      phase: "execute_approved_plan", approvedPlanHash: "a".repeat(64), compactedFacts: [], completedToolResults: [] },
+    [{ type: "text", text: "Generate the authorized original gift image, then deliver it." }]);
+    assert.equal(result.stopReason, "end_turn");
+    assert.equal(requests, 3);
+    assert.equal(generated, 1);
+    assert.equal(gateway.snapshot().actions.length, 2);
+    assert.ok(gateway.finalResult);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  }
+});
+
+test("real DSH dispatches eight independent image calls concurrently before finalization", async () => {
+  let requests = 0, active = 0, peak = 0, completed = 0;
+  const nativeRequests = [];
+  const server = createServer(async (request, response) => {
+    let body = "";
+    request.setEncoding("utf8");
+    for await (const chunk of request) body += chunk;
+    const wire = JSON.parse(body);
+    nativeRequests.push(wire);
+    requests++;
+    const event = JSON.parse(toolCallSse("call_tool", {}, requests).split("\n")[0].slice(6));
+    event.choices[0].delta.tool_calls = (requests === 1 ? Array.from({ length: 8 }, (_, index) => ({
+      actionId: `scene-${index}`, toolName: "generate_image", inputJson: "{}",
+    })) : [{ actionId: "deliver", toolName: "finalize_output", inputJson: "{}" }]).map((args, index) => ({
+      index, id: `batch-${requests}-${index}`, type: "function",
+      function: { name: "call_tool", arguments: JSON.stringify(args) },
+    }));
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.end(`data: ${JSON.stringify(event)}\n\ndata: [DONE]\n\n`);
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const previous = { allow: process.env.BOWERBIRD_U1_ALLOW_NETWORK, key: process.env.DEEPSEEK_API_KEY, base: process.env.DEEPSEEK_BASE_URL };
+  process.env.BOWERBIRD_U1_ALLOW_NETWORK = "1";
+  process.env.DEEPSEEK_API_KEY = "fixture-only";
+  process.env.DEEPSEEK_BASE_URL = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const runner = new UnifiedPlanningHarnessRunner({ runId: "run-parallel", async dispatch(call) {
+      if (call.arguments.toolName === "finalize_output") {
+        assert.equal(completed, 8);
+        return { callId: "deliver", value: { terminalReason: "awaiting_result_feedback" } };
+      }
+      active++; peak = Math.max(peak, active);
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      active--; completed++;
+      return { callId: call.arguments.actionId, value: { artifactId: call.arguments.actionId } };
+    } }, (toolBridge) => new DshAcpHarnessAdapter({ cwd: spikeRoot,
+      createPort: () => new NodeDshAcpPort({ allowNetwork: true, patches: [BRIDGE_PATCH], toolBridge }),
+    }));
+    const result = await runner.run({ schemaVersion: 1, runId: "run-parallel", checkpointVersion: 0,
+      phase: "execute_approved_plan", approvedPlanHash: "a".repeat(64), compactedFacts: [], completedToolResults: [] },
+      [{ type: "text", text: "Generate the authorized images." }]);
+    assert.equal(result.stopReason, "end_turn");
+    assert.equal(peak, 8);
+    assert.equal(requests, 2);
+    const tail = nativeRequests[1].messages.slice(-9);
+    assert.equal(tail[0].role, "assistant");
+    assert.equal(tail[0].tool_calls.length, 8);
+    assert.equal(tail.slice(1).every(message => message.role === "tool"), true);
+    assert.deepEqual(tail.slice(1).map(message => message.tool_call_id), tail[0].tool_calls.map(call => call.id));
+    assert.ok(tail.slice(1).every(message => message.content.includes("artifactId")));
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    for (const [name, value] of [["BOWERBIRD_U1_ALLOW_NETWORK", previous.allow], ["DEEPSEEK_API_KEY", previous.key], ["DEEPSEEK_BASE_URL", previous.base]]) {
+      if (value === undefined) delete process.env[name]; else process.env[name] = value;
+    }
+  }
+});
 
 function toolCallSse(name, argumentsValue, sequence) {
   const event = {
@@ -48,9 +172,17 @@ async function startFakeDeepSeek(plan) {
     const parsed = JSON.parse(body);
     requests.push(parsed);
     const sequence = requests.length;
-    const payload = sequence === 1
-      ? toolCallSse("list_run_assets", {}, sequence)
-      : toolCallSse("submit_plan", { plan }, sequence);
+    const invalidPlan = structuredClone(plan);
+    invalidPlan.capabilities = [{ tool: "generate_image", maxCalls: 32 }];
+    const actions = [
+      ["list_run_assets", {}], ["list_skills", {}],
+      ["read_skill", { skillId: "bowerbird-controlled-image-edit" }],
+      ["read_context", { id: "project_visual_profile" }],
+      ["request_task_authorization", invalidPlan], ["request_task_authorization", plan],
+    ];
+    const action = actions[sequence - 1];
+    if (!action) { response.writeHead(500); response.end(); return; }
+    const payload = toolCallSse(action[0], action[1], sequence);
     response.writeHead(200, {
       "content-type": "text/event-stream",
       "cache-control": "no-cache",
@@ -71,7 +203,7 @@ async function startFakeDeepSeek(plan) {
   };
 }
 
-test("real DSH plugin executes list_run_assets then parks one authoritative plan through the parent bridge", async () => {
+test("real DSH loads methods on demand and submits a minimal plan without context pollution", async () => {
   const assets = [{
     assetId: "asset-product",
     role: "input",
@@ -85,33 +217,8 @@ test("real DSH plugin executes list_run_assets then parks one authoritative plan
     manifestHash: sha256Hex(canonicalJson({ schemaVersion: 1, assets })),
     assets,
   };
-  const plan = {
-    schemaVersion: 2,
-    title: "产品长图计划",
-    summary: "明确当前产品素材的职责和信息区块后产出最终结果。",
-    contentPlan: {
-      assetAssignments: [{
-        assetId: "asset-product",
-        roles: ["product", "copy_source"],
-        rationale: "当前 Run 素材提供产品主体与可核验包装文字。",
-      }],
-      informationArchitecture: [{
-        id: "hero",
-        purpose: "展示产品主体与核心卖点",
-        sourceAssetIds: ["asset-product"],
-        copySource: "asset_observation",
-      }],
-      missingAssets: [],
-      visualProfile: null,
-    },
-    steps: [{
-      id: "finalize",
-      kind: "finalize_output",
-      goal: "提交最终结果",
-      inputAssetIds: ["asset-product"],
-      dependsOn: [],
-    }],
-  };
+  const plan = { schemaVersion: 3, title: "产品图片", summary: "基于产品图生成图片", assetIds: ["asset-product"],
+    outputCount: 1, modelTurns: 8, capabilities: [{ tool: "generate_image", maxCalls: 1 }] };
   const approvals = [];
   const identities = [];
   const controlPort = {
@@ -155,8 +262,9 @@ test("real DSH plugin executes list_run_assets then parks one authoritative plan
   };
   const planningBridge = new UnifiedPlanningToolBridge({
     claimed,
+    contextTools: new RunContextTools([{ id: "project_visual_profile", description: "Brand context", read: () => ({ must: ["PROFILE_SENTINEL_NAVY"] }) }]),
     gateway: new ScopedToolGateway(createRunControlToolDefinitions(controlPort, {}, {
-      requireStructuredPlan: true,
+
       requiredVisualProfile: null,
     })),
   });
@@ -187,19 +295,30 @@ test("real DSH plugin executes list_run_assets then parks one authoritative plan
       phase: "compose_plan",
       compactedFacts: [],
       completedToolResults: [],
-    }, [{ type: "text", text: "请为当前产品图制定一个最小计划。" }]);
+      input: { htmlOutput: { capture: { mode: "full_page_and_slices" } } },
+    }, [{ type: "text", text: `${loadUnifiedAgentSkill().instructions}\n[BOWERBIRD_USER_GOAL_V1]\n${canonicalJson({ goal: "请为当前产品图制定一个最小计划。", revision: 0, feedback: [] })}\n[/BOWERBIRD_USER_GOAL_V1]` }]);
     assert.equal(result.stopReason, "end_turn");
-    assert.equal(modelServer.requests.length, 2);
+    assert.equal(modelServer.requests.length, 6);
+    assert.ok(modelServer.requests[5].messages.some((message) => message.role === "tool" && message.content.includes("retry_required") && message.content.includes("31")));
     assert.deepEqual(
       modelServer.requests[0].tools.map((tool) => tool.function.name).sort(),
-      ["list_run_assets", "submit_plan", "understand_asset"],
+      ["ask_user", "call_tool", "list_run_assets", "list_skills", "read_context", "read_skill", "request_task_authorization", "understand_asset"],
     );
     assert.ok(modelServer.requests[1].messages.some(
       (message) => message.role === "tool" && message.content.includes("asset-product"),
     ));
+    const initial = JSON.stringify(modelServer.requests[0]);
+    for (const forbidden of ["htmlOutput", "full_page_and_slices", "contentPlan", "informationArchitecture", "Start with general", "ControlledImageEditPlan", "普通修图", "staged_controlled", "BOWERBIRD_CHECKPOINT_V1", "Current runtime context."]) {
+      assert.ok(!initial.includes(forbidden), forbidden);
+    }
+    assert.ok(!initial.includes("参考图数量本身不决定步骤数"));
+    assert.ok(JSON.stringify(modelServer.requests[3]).includes("参考图数量本身不决定步骤数"));
+    assert.ok(!JSON.stringify(modelServer.requests).includes("# HTML 图文排版"));
+    assert.ok(!JSON.stringify(modelServer.requests.slice(0, 4)).includes("PROFILE_SENTINEL_NAVY"));
+    assert.ok(JSON.stringify(modelServer.requests[4]).includes("PROFILE_SENTINEL_NAVY"));
     assert.equal(approvals.length, 1);
-    assert.equal(approvals[0].proposal.schemaVersion, 2);
-    assert.equal(approvals[0].proposal.contentPlan.assetAssignments[0].assetId, "asset-product");
+    assert.equal(approvals[0].proposal.schemaVersion, 3);
+    assert.equal(approvals[0].proposal.contentPlan, undefined);
     assert.equal(approvals[0].proposalHash, sha256Hex(canonicalJson(plan)));
     assert.equal(identities.length, 2);
     assert.equal(identities.every((identity) => identity.runId === manifest.runId), true);

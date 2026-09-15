@@ -1,10 +1,12 @@
 # @bowerbird/agent-worker — Bowerbird Agent Runtime
 
-> 状态：**首版 `bowerbird-controlled-image-edit` 的 legacy Kernel 已通过真实 E2E；U4 controlled-image DSH processor 已 test-only 部署，普通账号与 HTML 仍保持 legacy。当前 Worker 283/283 + TypeScript，真实 legacy/DSH 图片与 crash/re-claim 成对验收仍待另行授权。**
+> 状态（2026-09-11）：**VPS 已同步当前 Worker 源码，包含统一 Agent 多 final / DAG 同层并发、品牌视觉与 Seedance 2.5 视频处理；DSH 保持既有 test-only 开放策略，视频价格未启用。Worker 本地 352/352 与 TypeScript 通过；生产镜像的视频探测和 DSH 离线验证通过。部署版本、验证边界与回滚见 [视频部署记录](../../dev-doc/VIDEO-API-INTEGRATION.md#2026-09-11-云端同步部署)。**
 > 桌面 Agent 主路径已人工验收，A5 完成；A6 安全/Cloud 回归与 A7 VPS 运维基线完成。Codex Agent CLI 真机 E2E 已成功，但因双重思考/对话耗时过长暂时禁止新建该组合。Dreamina Agent CLI 真机 E2E 按 2026-08-25 用户决定暂时跳过：实现保留、未宣称验证通过，也不再作为当前发布或继续开发门槛。
-> 依据：[dev-doc/AGENT-RUNTIME-PLAN.md](../../../dev-doc/AGENT-RUNTIME-PLAN.md) §A2 / §A3。
+> 依据：[dev-doc/AGENT-RUNTIME-PLAN.md](../../dev-doc/AGENT-RUNTIME-PLAN.md) §A2 / §A3。
 
 ## 当前已实现
+
+视频容器构建还需要 `cloud-shared` named context（仓库默认为 `../cloud/supabase/functions/_shared`；VPS 通过 `BOWERBIRD_CLOUD_SHARED_BUILD_CONTEXT` 指向仅含共享源码的目录）。镜像内包含 `ffprobe` 和跨包契约，离线验收运行 `node scripts/video-readonly-probe.mjs`。具体发布顺序见 [部署说明](../cloud/DEPLOY.md)。
 
 - **冻结 9 个 v1 契约**（TypeScript 类型）：`ModelBackend` / `SkillManifest` / `RunSnapshot` /
   `ToolCall` / `ClarificationProposal` / `IntentPatch` / `VisualEvidenceCard` /
@@ -34,12 +36,13 @@
   - 见 [src/cloud-agent/](src/cloud-agent/)、[src/control-plane/](src/control-plane/)、[src/kernel/controlled-run-engine.ts](src/kernel/controlled-run-engine.ts)。
 - **运行期图片链路**：批准前不下载参考图；批准后才在 `/workspaces/<run-id>` 校验物化。Seedream 结果先落工作区，再经 `artifact_prepare → signed PUT → artifact commit/hash+magic 校验` 登记；同一 `source_call_id` 幂等恢复。
   - 见 [src/cloud-agent/run-workspace.ts](src/cloud-agent/run-workspace.ts)、[src/providers/ark/controlled-image-executor.ts](src/providers/ark/controlled-image-executor.ts)。
+- **统一图片多结果与 DAG 并发**：`bowerbird-unified-agent` 的单个 `finalize_output` 可依赖多个生成步骤；直接依赖均登记为 `final_result`。批准后的执行按依赖层推进，同层所有已就绪图片调用同时启动，不设置额外 Run 内并发 semaphore；旧受控编辑 Skill 仍维持单 final。
 - **反馈修订链路**：用户反馈后才允许方舟 Vision 比较必要参考与当前结果；诊断先落私有 `diagnostic` artifact，再由 DeepSeek 生成必须引用上一结果的新计划，经过新 hash 二次审批后执行一次纠偏生成。
   - 见 [src/providers/ark/feedback-diagnoser.ts](src/providers/ark/feedback-diagnoser.ts)、[src/kernel/controlled-run-engine.ts](src/kernel/controlled-run-engine.ts)。
 - **原子结算与恢复**：终态、usage 聚合、hold confirm/rollback 在数据库单事务内完成；过期 `exporting` Run 可重新领取并幂等完成结算。
 - **可信计量与短期内容清理**：DeepSeek 回合使用稳定 call id 先记 submitted、持久化脱敏结果再写 usage，恢复不重复请求；Edge 以版本化 `service_costs` 复核 provider/工具/预算。Agent consumer 每 10 分钟清理过期对象和事件正文，VPS 清理超过 24 小时的 orphan workspace，均可幂等重跑。
 - **运维与安全**：控制面提供不含用户内容的 queue/lease/status/cost/failure/TTL 指标；VPS 定时输出 health + 磁盘，测试账号与生产统计隔离。生产安全冒烟覆盖 JWT/Worker Token/IDOR/RLS/MIME/幂等冲突，过期 parked Run 自动取消，Worker 重启后的未知上游结果不盲重放。
-- **eval**：`node --test` 当前跑 144 个用例，全过；生产双 Worker 并发 claim 专项确认同一 Run 只有一个租约、`attempt_count=1`。
+- **eval**：`node --test` 当前跑 297 个用例，全过；其中 8 场景统一图片回归确认峰值并发 8、8 张均保留为 final；生产双 Worker 并发 claim 专项确认同一 Run 只有一个租约、`attempt_count=1`。
 
 ## 当前范围边界
 
@@ -50,7 +53,8 @@
 - ✅ Agent Run 文本 usage/ledger、服务端费率/预算复核、终态原子结算、TTL/orphan 清理、账单 marker、原子单用户/全站容量闸与每日成本预留 —— A5
 - ✅ 安全冒烟、Cloud 生图/理解真实回归、隐私文案、Worker 重启故障注入与 VPS 监控/容器约束；Codex Agent 真机已通过并按实测结论暂时与正式 Agent 互斥 —— A6/A7 当前范围完成（Dreamina Agent CLI 真机 E2E 已明确跳过）
 - ❌ OpenClaw / Claude Code / MCP / shell / 用户 Skill / 多 Agent —— 永不做（计划 §1.2 / §7.1）
-- ❌ 视觉设定读取或上传图片 —— 永不做（计划 §8.2 三条不可变边界）
+- **品牌提示词维护（2026-09-10）**：图片观察与文本提炼指令分别为 `src/prompts/brand-visual/observation.md`、`extraction.md`，VPS 同路径可维护并只读挂载；每项任务开始时读取。原图明确标注的色号/标准独立保留，不经多数投票，冲突待核对。维护操作见 [品牌提示词 README](src/prompts/brand-visual/README.md)，本次定向部署与验证状态以 PROJECT.md 为准。
+- **视觉规范当前边界（2026-09-10）**：规范独立于项目，任意生成可显式选用已确认版本。用户在集合内点击“视觉规范”并点击“开始提炼”后，桌面沿既有理解队列补齐该集合素材的观察；保存后由用户在创作对话框中选择，不自动选用；本 Worker 的文字归纳服务仍只收脱敏证据卡，不能自行回取来源图片或改写已确认规范。V0 离线 fixture 的“不读图”不代表用户必须先手动反推。当前产品契约见 [AGENT-RUNTIME-PLAN.md §8](../../dev-doc/AGENT-RUNTIME-PLAN.md#8-独立视觉规范agent-loop-外的本地长期能力)，发布状态以 [PROJECT.md](../../PROJECT.md) 为准。
 
 ## 如何运行
 
@@ -67,7 +71,7 @@ cd apps/agent-worker && node --test "src/**/*.test.ts"
 npm run eval:controlled-image-edit
 
 # U4：同一 18-case 的 DSH 侧真实文本 eval（不看图、不生图；双显式付费闸门）
-# 还需配置 BOWERBIRD_DSH_PROFILE_TEMPLATE / BOWERBIRD_DSH_RUNTIME_ROOT，且模型固定 deepseek-v4-flash
+# 还需配置 BOWERBIRD_DSH_PROFILE_TEMPLATE / BOWERBIRD_DSH_RUNTIME_ROOT，且模型固定 deepseek-flash（DeepSeek V4.1 Flash）
 $env:BOWERBIRD_U1_ALLOW_NETWORK="1"
 npm run eval:controlled-image-edit:dsh -- --allow-real-u4-dsh-eval
 
@@ -92,7 +96,7 @@ docker compose -f compose.unified-harness-candidate.yml build unified-harness-re
 docker compose -f compose.unified-harness-candidate.yml run --rm --no-deps unified-harness-readonly-check
 ```
 
-验证服务使用非 root `node` 用户、只读根文件系统、`network_mode: none`、`cap_drop: ALL`，并在同一容器内连续启动两次 DSH 配置探针，随后通过正式 `NodeDshAcpPort` 完成真实 ACP initialize/new-session/cancel/dispose。它还会从 Worker 的显式部署入口创建正式 processor：容器内 provider fixture 只由父进程 DeepSeek 计量代理访问，DSH 子进程仅获得每 Run capability 与 loopback endpoint；两个模型回合分别形成 durable succeeded call、私有诊断 artifact 与精确 usage，真实 provider key 不进入子进程。同时验证 checkpoint、闭集三工具、`list_run_assets → submit_plan → end_turn`、当前 Run 素材回传、父进程审批停车和所有临时 runtime home 清理；不访问公网或真实 provider。U4 受控图片 DSH 使用独立的三个结构化建议动作 `record_intent_analysis`、`request_clarification`、`submit_plan_for_approval`，只把当前 phase 允许的模型建议交回原 `ModelBackend` 契约；Policy/审批/Ledger/执行仍由既有 Kernel 掌权。当前钉版 DSH 在 Linux live boot 会自动补入 Cordis HMR，因此正式 port 固定以 Node `--expose-internals` 启动；该能力只授予镜像内钉版受信插件，不扩大模型工具面。生产 legacy 可继续使用 `DEEPSEEK_MODEL=deepseek-chat`；DSH 父代理通过独立 `BOWERBIRD_DSH_MODEL=deepseek-v4-flash` 与 Profile 钉版保持一致，两者只共享父进程 key/base。2026-09-01 的 production test-only 部署只开启 `BOWERBIRD_CONTROLLED_IMAGE_EDIT_DSH_ENABLED=true`；unified/HTML DSH 保持 false，Edge runtime 选择只允许 `bowerbird_test` 账号。真实 crash/re-claim 验收可临时叠加 `compose.u4-recovery-probe.yml`，把 `BOWERBIRD_TEST_AGENT_CLAIM_DELAY_MS` 设为 10 秒以形成“lease 已可观察、provider 尚未 submitted”的确定性窗口；该变量默认 0、最大 30 秒，验收结束必须只用基础 `compose.generation.yml` 强制重建并确认恢复 0，不能把测试延迟留在常驻 Worker。
+验证服务使用非 root `node` 用户、只读根文件系统、`network_mode: none`、`cap_drop: ALL`，并在同一容器内连续启动两次 DSH 配置探针，随后通过正式 `NodeDshAcpPort` 完成真实 ACP initialize/new-session/cancel/dispose。它还会从 Worker 的显式部署入口创建正式 processor：容器内 provider fixture 只由父进程 DeepSeek 计量代理访问，DSH 子进程仅获得每 Run capability 与 loopback endpoint；两个模型回合分别形成 durable succeeded call、私有诊断 artifact 与精确 usage，真实 provider key 不进入子进程。同时验证 checkpoint、闭集三工具、`list_run_assets → submit_plan → end_turn`、当前 Run 素材回传、父进程审批停车和所有临时 runtime home 清理；不访问公网或真实 provider。U4 受控图片 DSH 使用独立的三个结构化建议动作 `record_intent_analysis`、`request_clarification`、`submit_plan_for_approval`，只把当前 phase 允许的模型建议交回原 `ModelBackend` 契约；Policy/审批/Ledger/执行仍由既有 Kernel 掌权。当前钉版 DSH 在 Linux live boot 会自动补入 Cordis HMR，因此正式 port 固定以 Node `--expose-internals` 启动；该能力只授予镜像内钉版受信插件，不扩大模型工具面。生产 legacy 可继续使用 `DEEPSEEK_MODEL=deepseek-chat`；DSH 父代理通过独立 `BOWERBIRD_DSH_MODEL=deepseek-flash` 与 Profile 钉版保持一致，两者只共享父进程 key/base。2026-09-01 的 production test-only 部署只开启 `BOWERBIRD_CONTROLLED_IMAGE_EDIT_DSH_ENABLED=true`；unified/HTML DSH 保持 false，Edge runtime 选择只允许 `bowerbird_test` 账号。真实 crash/re-claim 验收可临时叠加 `compose.u4-recovery-probe.yml`，把 `BOWERBIRD_TEST_AGENT_CLAIM_DELAY_MS` 设为 10 秒以形成“lease 已可观察、provider 尚未 submitted”的确定性窗口；该变量默认 0、最大 30 秒，验收结束必须只用基础 `compose.generation.yml` 强制重建并确认恢复 0，不能把测试延迟留在常驻 Worker。
 
 ## eval 覆盖对照
 

@@ -10,6 +10,10 @@ if (!process.argv.includes(CLI_FLAG) || process.env.BOWERBIRD_U4_ALLOW_REMOTE_CO
   console.error(`需要 ${CLI_FLAG} 与 BOWERBIRD_U4_ALLOW_REMOTE_CONTROL_PLANE_SMOKE=1`);
   process.exit(2);
 }
+const skillMode = process.argv.includes("--skill=unified") ? "unified" : "controlled";
+const skillId = skillMode === "unified"
+  ? "bowerbird-unified-agent"
+  : "bowerbird-controlled-image-edit";
 
 function namedKey(directName, objectName, legacyName) {
   const direct = process.env[directName]?.trim();
@@ -69,7 +73,7 @@ async function jsonRequest(label, url, init, expected = [200]) {
 }
 
 async function createAccount(isTest) {
-  const email = `u4-runtime-${Date.now()}-${randomBytes(5).toString("hex")}@example.test`;
+  const email = `u6-${skillMode}-runtime-${Date.now()}-${randomBytes(5).toString("hex")}@example.test`;
   const password = `${randomBytes(18).toString("hex")}Aa1!`;
   const created = await jsonRequest("create account", `${baseUrl}/auth/v1/admin/users`, {
     method: "POST",
@@ -95,13 +99,24 @@ async function createAccount(isTest) {
 }
 
 function createBody(idempotencyKey, runtime) {
-  const manifest = JSON.stringify({ schemaVersion: 1, intentPrompt: "U4 runtime selection smoke", references: [] });
+  const manifest = skillMode === "unified"
+    ? JSON.stringify({
+      schemaVersion: 1,
+      goal: "U6 unified runtime selection smoke",
+      references: [],
+      htmlOutput: {
+        viewport: { widthCssPx: 900, heightCssPx: 700, deviceScaleFactor: 1 },
+        capture: { mode: "full_page_and_slices", sliceHeightCssPx: 900, overlapCssPx: 0 },
+        background: "opaque",
+      },
+    })
+    : JSON.stringify({ schemaVersion: 1, intentPrompt: "U4 runtime selection smoke", references: [] });
   return {
     manifest,
     body: {
       action: "create",
-      skillId: "bowerbird-controlled-image-edit",
-      goal: "U4 test-only runtime selection smoke",
+      skillId,
+      goal: `${skillMode} test-only runtime selection smoke`,
       inputCount: 0,
       inputManifestHash: sha256(manifest),
       agentRuntime: runtime,
@@ -137,7 +152,10 @@ try {
     headers: ownerHeaders,
     body: JSON.stringify(drifted.body),
   });
-  assert.equal(driftResult.status, 409, "idempotency replay must not change runtime");
+  assert.ok(
+    skillMode === "unified" ? [400, 409].includes(driftResult.status) : driftResult.status === 409,
+    "idempotency replay must not change runtime",
+  );
 
   const upload = await fetch(created.uploadUrl, {
     method: "PUT",
@@ -162,6 +180,7 @@ try {
     body: JSON.stringify({ action: "get", runId }),
   });
   assert.equal(snapshot.run?.agent_runtime, "dsh");
+  assert.equal(snapshot.run?.skill_id, skillId);
 
   const claim = await jsonRequest("claim DSH run", functionUrl("agent-worker"), {
     method: "POST",
@@ -170,6 +189,7 @@ try {
   });
   assert.equal(claim.run?.id, runId, "smoke must be the only claimable Agent Run");
   assert.equal(claim.run?.agentRuntime, "dsh");
+  assert.equal(claim.run?.skillId, skillId);
   leaseId = claim.lease?.leaseId;
   assert.ok(leaseId);
   await jsonRequest("cancel DSH run", functionUrl("agent-worker"), {
@@ -187,8 +207,8 @@ try {
   assert.equal(cancelled.run?.status, "cancelled");
   assert.equal(cancelled.run?.agent_runtime, "dsh");
 
-  console.log("AGENT_RUNTIME_SELECTION_REMOTE_OK");
-  console.log("ordinary_denied=1 dsh_created=1 drift_rejected=1 runtime_get_bound=1 runtime_claim_bound=1 cancelled_without_processor=1 provider_calls=0");
+  console.log(`AGENT_RUNTIME_SELECTION_REMOTE_OK skill=${skillMode}`);
+  console.log("ordinary_denied=1 dsh_created=1 drift_rejected=1 skill_get_bound=1 skill_claim_bound=1 runtime_get_bound=1 runtime_claim_bound=1 cancelled_without_processor=1 provider_calls=0");
 } catch (error) {
   testError = error;
   console.error(error instanceof Error ? (error.stack ?? error.message) : error);

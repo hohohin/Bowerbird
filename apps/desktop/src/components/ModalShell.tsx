@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useId, useRef } from "react";
+import { type HTMLAttributes, type ReactNode, useEffect, useId, useRef } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 
@@ -15,18 +15,26 @@ export function ModalShell({
   title,
   eyebrow,
   description,
+  headerActions,
+  showCloseButton = true,
+  panelProps,
   children,
   footer,
   width = "sm",
+  className = "",
   preventClose = false,
   onClose,
 }: {
   title: string;
   eyebrow?: string;
   description?: ReactNode;
+  headerActions?: ReactNode;
+  showCloseButton?: boolean;
+  panelProps?: HTMLAttributes<HTMLDivElement>;
   children: ReactNode;
   footer?: ReactNode;
   width?: "sm" | "md" | "lg";
+  className?: string;
   preventClose?: boolean;
   onClose: () => void;
 }) {
@@ -73,7 +81,7 @@ export function ModalShell({
 
   return createPortal(
     <div
-      className="app-modal-backdrop"
+      className={`app-modal-backdrop ${className}`}
       role="dialog"
       aria-modal="true"
       aria-labelledby={titleId}
@@ -81,23 +89,26 @@ export function ModalShell({
         if (event.target === event.currentTarget && !preventClose) onClose();
       }}
     >
-      <div ref={panelRef} className="app-modal" data-width={width}>
+      <div {...panelProps} ref={panelRef} className="app-modal" data-width={width}>
         <header className="app-modal-header">
           <div className="min-w-0">
             {eyebrow && <div className="app-modal-eyebrow">{eyebrow}</div>}
             <h2 id={titleId} className="app-modal-title">{title}</h2>
             {description && <div className="app-modal-description">{description}</div>}
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={preventClose}
-            className="app-modal-close"
-            title={preventClose ? "当前操作完成后可关闭" : "关闭"}
-            aria-label="关闭"
-          >
-            <X size={16} />
-          </button>
+          <div className="flex shrink-0 items-center gap-2">
+            {headerActions}
+            {showCloseButton && <button
+              type="button"
+              onClick={onClose}
+              disabled={preventClose}
+              className="app-modal-close"
+              title={preventClose ? "当前操作完成后可关闭" : "关闭"}
+              aria-label="关闭"
+            >
+              <X size={16} />
+            </button>}
+          </div>
         </header>
         <div className="app-modal-body">{children}</div>
         {footer && <footer className="app-modal-footer">{footer}</footer>}

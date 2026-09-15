@@ -7,7 +7,7 @@
 - 构建 Windows x64 桌面应用与 NSIS `.exe` 安装包。
 - 兼容 npm 全局安装生成的 `codex.cmd`，并在 GUI 的 PATH 不完整时检查 `%APPDATA%\npm`。
 - 应用内可一键直装官方独立版 codex（从 npm 镜像下载平台包 tarball 解压到应用数据目录，用户无需安装 Node.js；解析时托管副本优先）。
-- 登录检测支持 `CODEX_HOME` 和 `%USERPROFILE%\.codex\auth.json`。
+- Codex 登录、生成、检测和打开会话统一使用 `%APPDATA%\com.bowerbird.desktop\cli-profiles\codex`，不继承系统 `CODEX_HOME`、API Key 或共享登录。
 - “在 codex 中打开会话”会启动 Windows 命令提示符并运行 `codex resume`。
 - 浏览器采集服务的 `save_batch` 与 `save_blob + binary` 两条协议均位于 canonical Rust 源码；`apps/extension/` 与 `Windows/extension/` 分别使用对应协议。
 - 用户数据继续由 Tauri 写入 Windows AppData，不写入安装目录。
@@ -19,7 +19,7 @@
 3. Rust MSVC 工具链：`rustup default stable-x86_64-pc-windows-msvc`。
 4. Visual Studio 2022 Build Tools，勾选“使用 C++ 的桌面开发”和 Windows 10/11 SDK。
 5. AI 功能可在应用内一键安装 codex CLI（自动下载独立版，无需 Node.js）并登录 ChatGPT；不安装时素材库仍可用，AI 按项目约定降级置灰。
-6. 视频预览另需 `ffmpeg` 与 `ffprobe` 在 PATH；图片功能不依赖它们。
+6. 视频预览另需 `ffmpeg` 与 `ffprobe`；应用会检查随附工具、PATH、Windows 注册表 Path 及常见 WinGet/Scoop/Chocolatey 安装位置。特殊安装可用 `BOWERBIRD_FFMPEG_BINARY` / `BOWERBIRD_FFPROBE_BINARY` 指定绝对路径。图片功能不依赖它们。
 
 ## 开发运行
 
@@ -31,6 +31,24 @@ powershell -ExecutionPolicy Bypass -File .\Windows\dev.ps1
 
 ## 构建安装包
 
+后续 NSIS 安装包必须保留 `src-tauri/windows/installer-hooks.nsh`：每次安装（包括同版本重装、升级及静默安装）都清除 Bowerbird 账号 refresh token、权益缓存及独立 CLI 登录。重置失败时安装报错并保留待重置标记；下次启动在恢复账号和启动后台任务前重试。首次升级到独立凭据版本需要在 Bowerbird 设置中重新登录，系统 Codex/Dreamina 原登录保留。
+
+Dreamina Windows 凭据保存在其进程的私有注册表空间 `HKCU\Software\Bowerbird\CliAuth\Dreamina`。启动器仅对自己创建的 CLI 子进程重映射 HKCU，使用 Job Object 管理生命周期；隔离失败即拒绝执行，不回退共享凭据。重装先结束应用私有运行目录中的 CLI 启动器，避免旧 OAuth 进程迟到写回登录。只重置登录及权益缓存，素材、项目、settings 与 CLI 历史文件保留。此注册表适配与安装钩子针对 Windows x64；不能把设置 HOME 等同于其他平台的原生凭据隔离。
+
+验证命令（隔离脚本使用 PowerShell 7；仅使用临时目录、测试注册表分支及假凭据）：
+
+```powershell
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib cli_credentials
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib installation
+# HelperDirectory 为上述构建生成的 target/debug/build/bowerbird-desktop-*/out
+./Windows/test-cli-isolation.ps1 -HelperDirectory <helper-output-directory>
+./Windows/test-installer-auth.ps1
+```
+
+首次切换不复制系统 CLI 的凭据或原生会话目录；素材库中的生成历史保留，但旧共享 Codex 会话的终端续聊仍归原系统 CLI。之后由 Bowerbird 新建的独立 CLI 会话历史在重装时保留。
+
+原生启动器由 `build.rs` 使用 MSVC 构建并嵌入桌面程序，无需改写 Dreamina 官方二进制。该机制隔离凭据命名空间，不是权限沙箱。参考：[Tauri NSIS hooks](https://v2.tauri.app/distribute/windows-installer/#extending-the-installer)、[Windows RegOverridePredefKey](https://learn.microsoft.com/en-us/windows/win32/api/winreg/nf-winreg-regoverridepredefkey)。
+
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\Windows\build.ps1 -Clean
 ```
@@ -41,5 +59,5 @@ powershell -ExecutionPolicy Bypass -File .\Windows\build.ps1 -Clean
 
 - 提示 Rust host 不是 MSVC：运行 `rustup toolchain install stable-x86_64-pc-windows-msvc`，再运行 `rustup default stable-x86_64-pc-windows-msvc`。
 - 链接器或 `windows.h` 缺失：通过 Visual Studio Installer 补装 C++ Build Tools 和 Windows SDK。
-- codex 检测失败：在普通命令提示符运行 `codex --version` 与 `codex login`，然后完全退出并重开 Bowerbird。
-- 视频无缩略图：安装 ffmpeg，并确认 `ffmpeg -version`、`ffprobe -version` 都能运行。
+- codex 检测失败：在 Bowerbird 设置中检查或安装 CLI，并使用该设置页的登录入口；普通终端的 `codex login` 属于系统 CLI，不会登录 Bowerbird 的独立配置。
+- 视频工具提示不可用：先看提示中的实际路径和启动错误；已安装不等于进程 PATH 能找到。预检与视频探测/海报使用同一解析器，不必重复安装或修改全局 PATH。更新应用后需重启实例才能使用新解析逻辑。

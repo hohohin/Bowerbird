@@ -1,15 +1,121 @@
 # Bowerbird 通用云端 Agent Harness 专项计划
 
-> 版本：v1.52
-> 日期：2026-09-01
+> 2026-09-06 02:12 协议修复上线：c2c1ec1d再次耗尽60执行回合，补充修复每轮状态尾插user与压缩丢失assistant/tool配对的问题。状态前置，保留最近完整工具交换；Worker332/332、真实DSH协议2/2、真实DeepSeek合成任务5回合完成（工具模拟）通过。现役镜像 `sha256:78a5e4775fc08860c871bbbf24cc61ad5bccd657dd577250da07def23bede3e3`，健康通过，原用户任务未重跑，详见PROJECT.md。
+
+> 2026-09-06 01:29 修复上线：2c11aa4e 在 compose_html 后重复读上下文，耗尽20执行模型回合。动作状态新增输出ID、分页结果前置、压缩逐级缩短并保留分页游标；Worker331/331与TypeScript、候选断网探针通过，现役镜像 `sha256:28940332c9359df10045290eb8422e326def56e286efaf817454fc33ee31410a`，健康检查通过。详见 PROJECT.md 对应故障记录；未提高回合额度或重跑真实任务。
+
+> 2026-09-06 00:24 部署完成：用户明确授权六文件包后，视觉记忆、进度、压缩回合身份与大历史入口修复已切换到现役镜像 `sha256:c613d6b2a68c3918969132e9e62f73033cf06bd8c0e937b9e36a4b599076ba4f`。断网双 processor 探针、源码哈希与线上健康通过；覆盖下方未部署/审批阻止历史状态。回滚与验证边界见 PROJECT.md「DSH 六文件补丁部署完成」。尚未重跑真实用户任务。
+
+> 2026-09-06 源码修复（未部署）：f113cb4e 的 8 张候选已生成但未交付，最终 request_too_large。修复压缩丢失工具回合身份导致不同回合误复用 durable 模型响应的问题，并把有权威压缩上下文的执行历史入口放宽至 8 MiB，provider 请求仍保持 16,000 字节边界。Worker 330/330、TypeScript 通过。含视觉记忆的六文件包上传被自动审批拒绝，待用户明确授权；线上未变，详见 PROJECT.md 对应故障记录。
+
+> 2026-09-05 后续源码增量（未部署）：视觉观察检查点索引与 v3 每轮执行进度上下文已完成。设计复用已有 diagnostic/journal，不复制完整观察进检查点、不新增视觉调用；免费分页读取跨审批/租约恢复，同图同 focus 规划请求直接复用。候选图数与最终交付数分别记录；压缩仍保留观察入口及进度。Worker 328/328、Profile 24/24、TypeScript 通过。当前线上镜像与具体行为约定以 PROJECT.md「DSH 视觉记忆与执行进度」为准，不能把本增量记为已上线。
+
+> 版本：v1.64
+> 日期：2026-09-05
 > 状态：**U0/U1 完成，U2 本地代码纵切收口；U3 真实计划、HTML 四工具执行与旧基线盲评已全部收口。新链路 Run `run-u3-html-4e835643-146f-4f52-b3b4-8b6eab275fef` 真实完成 `compose_html → render_html → inspect_artifact → finalize_output`：DeepSeek 4 回合（18,434 input / 2,020 output tokens）、方舟 Vision 1 次、renderer 1 次，总耗时 50,499 ms，实际 5 credits，输出 1080×4320 整页 + 4 切片。旧 `bowerbird-html-layout-render` 同素材基线以 1 个 DeepSeek 回合（1,935 input / 795 output）、5,947 ms、1 credit 生成 HTML，但因 3 处 CSS 注释被 renderer 权威拒绝，因此运行结果仍记失败。为进行纯视觉对照，仅删除这 3 处视觉语义不变的注释并本地渲染 1080×2387 样本，不产生 provider usage，不伪装为旧链路成功。A/B 映射用 commitment `bf560f7d…697b1` 预先封存；用户在不知映射时选择 A，揭盲后 A 为新 U3，因此“相对旧专项有实质质量提升”的 U3 人工验收通过。回归为 agent-worker 259/259 + TypeScript、DSH Profile 18/18、html-renderer 71 项（64 pass / 7 本机缺管理 Playwright Chromium skip）+ TypeScript；旧候选镜像 `sha256:b238d6ef…1864` 已过期，本机无 Deno，未部署 FeaturePolicy、migration `0047`–`0049`、Edge 或 VPS。**
 > U4 当前：**test-only 双 runtime 全门槛完成（U4 完成）**：远端 migration `0050`、`agent-run` v42、`agent-worker` v46 与 VPS controlled-image DSH 已上线，普通账号/HTML 保持 legacy。真实 18-case 同 eval 的策略正确率 legacy/DSH 均为 77.8%、结构化成功率均为 100%；同一真实图片 case 的 legacy Run `165ad0af-fdbe-4879-80e9-879b4706b121` 与 DSH Run `95ea1bb3-4c08-49f0-aa5b-9243f7261ff7` 又分别通过真实 Worker kill/restart、两个执行 lease、唯一 Ark side effect/final artifact、终态与积分对账。actual paired no-regression PASS：legacy 239,100 ms/7 credits，DSH 236,424 ms/8 credits；人工图像对照无明显 DSH 退化。最终 Worker 镜像 `sha256:c436892f…e16dec`（165,781,303 bytes，用户 `node`），test-only claim grace 已恢复默认 0，安全/资源约束与四消费循环无漂移，最终健康/队列全绿。U4 只证明 test-only 双栈可用，不把 DSH 公开设为默认；下一步为 U5“零新 Harness”小红书复用。**
 > U5 当前：**最小“零新 Harness”架构证明完成（未部署、无真实 provider 调用）**。统一计划只增加 `compose_xiaohongshu` 步骤；执行在同一 Bowerbird Run/批准链与同一短生命周期内容执行 session 中复用 `compose_html → render_html → [inspect_artifact] → compose_xiaohongshu → finalize_output`。新增内容限定为保守内部草稿配方/schema、父进程绑定图片顺序的 deterministic compiler/durable tool，以及仅多一个工具的 DSH content profile；仍由现有 `UnifiedPlanningRunProcessor`、Tool Gateway、Ledger、Artifact 与结果反馈停车机制掌权，没有新增 Agent Runner、Run/审批/计费表、migration 或历史 UI。Worker **289/289** + TypeScript、DSH Profile **21/21**，Edge 相关文件 TypeScript 语法检查通过；本轮未登录/发布小红书，未调用 DeepSeek、方舟或 Seedream，未产生费用。U5 只证明复用猜想，不宣称渠道规则、产品 UI 或发布链已完成；下一步 U6。
-> U6 当前：**供应链候选已 test-only 部署并通过零 provider 冒烟与首组真实 paired；自然样本仍不足，保持 test-only**。无内容 reporter 按 runtime 聚合失败/取消、p50/p95、积分/provider cost、tool retry/`outcome_unknown`、call/usage identity 重复，并且只从显式 paired 文件读取质量与 crash/re-claim，绝不从普通 claim 次数推断 recovery。U4 上线后基线（2026-09-01 07:30Z 起）为 legacy 5 / DSH 2 个 terminal Run；call/usage 无重复、终态积分均对账。paired 18-case + 双 runtime 真实 recovery 文件给出两侧策略 77.8%、结构化 100%、recovery 100%。包含 U5 的本地候选 `sha256:3e9efd…dfa0dd` 经相同白名单在 VPS 重建为 `sha256:58de8b87…3d3e8`（inspect 165,844,481 bytes，用户 `node`），断网只读双 processor 探针、空队列切换、零 provider runtime-selection smoke 与部署后同意图 legacy/DSH 真实样本均通过；两侧真实样本各 7 credits、1 个 final artifact、无重复/重试/`outcome_unknown`，provider cost 分别为 268,180 / 277,214 micros。Trivy 删除运行时 package managers、将全部旧 `js-yaml` 收敛到 `4.3.1` 后，Node HIGH 为 0、secret 为 0；仍有当前 Debian 基础层 4 CRITICAL / 18 HIGH，均无 FixedVersion、未获明确接受，因此只允许 test-only，不扩大开放。SPDX inventory 为 448 个唯一包、189 个 DSH 包、缺失 license 声明 0，lock SHA-256 `6e714f14…fd19`。公开档位、预算/计费和默认 runtime 决策均未开始。
-> 适用范围：Bowerbird Cloud Agent、VPS Worker、官方能力工具、项目视觉设定、HTML 长图及后续小红书等内容工作流
+> U6 当前：**DSH 统一入口与真实长文详情页四工具链已 test-only 跑通；能力选择猜想成立，质量与供应链门槛决定继续保持 test-only**。测试账号选择 `DSH · 自动选工具` 后创建 `bowerbird-unified-agent`，不再由“受控生图/HTML 排版”按钮替 Agent 选能力；父进程对详情页精确长文强制 `compose_html → render_html → inspect_artifact → finalize_output`，并在模型外校验原文、批准资源、工具顺序和唯一主产物。最终候选镜像 `sha256:21656cce…bfbbcd` 上真实 Run `dfd240f5-9787-4cdf-93f6-3a161f90edb4` succeeded：31 行原文全保留，DeepSeek 10 回合（83,517 input / 11,450 output）、方舟 Vision 2 次、renderer 1 次、Seedream 0 次，291,783 ms、12 credits、295,734 provider-cost micros，输出 1080×3948 整页 + 4 切片。migration `0052` 已把 unified HTML 主截图纳入原子结算；proxy 关闭会等待已接受请求完成 usage 持久化，避免终态后迟到 usage。Worker **296/296** + TypeScript、DSH Profile **23/23**；容器仍为非 root/只读根/drop ALL/no-new-privileges，queue/active/expired lease/TTL 全 0。10 个开发 Run 的真实费用已完整单列：DeepSeek 80 回合、Ark Vision 17 次、renderer 7 次、Seedream 0 次，共 2,242,120 provider-cost micros；唯一 1-credit 结算差额来自修复前超时竞态并保留为证据。桌面真机权限复测另发现远端 `entitlement v34` 未带 unified 白名单；保存 v34 回滚源码后已单独上线 `v35`，同一 Pro 测试账号的新签名快照现包含 controlled/HTML/unified 三项且普通账号边界不变。视觉结果已从“图片模型排长字”纠正为可交付 HTML 长页，但中后段仍偏同构长文模板，证明路由/工具编排而非最终质量标杆。Debian 基础层仍有 4 CRITICAL / 18 HIGH 且无 FixedVersion/接受人，自然小名单样本也不足，因此不扩大开放、不改公开定价或默认 runtime。
+> U6-T6 当前：**统一图片执行已在源码中放开“一个 Run 只能有一个 final result”并改为按 DAG 层并发，2026-09-05 已部署云端**。`finalize_output.dependsOn` 可列出多个生成步骤；这些步骤全部登记为 `final_result`，Edge 反馈停车、原子结算和桌面结果选择均接受并保留完整集合。每一轮所有依赖已满足的 `generate_image` 同时启动，不设置额外的 Run 内图片并发 semaphore；测试账号现有 test-only 路径立即适用，未来 Pro 获得 unified 权限时沿用相同行为。既有计划步骤/预算/审批、durable call、Artifact 和账号级并发 Run 门控不变；legacy `bowerbird-controlled-image-edit` 仍保持单 final。8 张独立场景回归确认峰值并发 8、8 张均为 final；Worker **297/297** + TypeScript、桌面结果选择 **4/4**，Edge 文件通过 Node TypeScript 语法检查。migration `0053`/`0054` 与 Edge/VPS 已于 2026-09-05 部署；证据见下方开发收敛。
+> 适用范围：Bowerbird Cloud Agent、VPS Worker、官方能力工具、视觉规范、HTML 长图及后续小红书等内容工作流
 > 前置文档：[`PROJECT.md`](../PROJECT.md)、[`AGENT-RUNTIME-PLAN.md`](AGENT-RUNTIME-PLAN.md)、[`HTML-RENDER-PLAN.md`](HTML-RENDER-PLAN.md)、[`研究报告-服务器化CLI与API化改造可行性.md`](研究报告-服务器化CLI与API化改造可行性.md)
 
 ---
+
+## 2026-09-05 上下文审计与按需 Skill（覆盖下文全局领域规则）
+
+### 整体改造：目标授权与结果驱动执行（2026-09-05，云端已部署，保持 test-only）
+
+本节是最新实现状态，覆盖下方前一阶段“未完成的架构迁移”记录。产品决策以 `PROJECT.md` 约定 51 为准。
+
+#### 当前收口清单（2026-09-05 18:31）
+
+**品牌规范入口后续定位：** 用户确认是入口缺失；空 confirmed 列表导致选择器完全不渲染。桌面源码已改为常驻品牌规范选择/空态及参考文件夹创建管理入口，支持与统一 DSH 同时选择；TypeScript、前端 build、组件渲染/事件验证和 Agent 选择 11/11 通过，安装包仍待发布。覆盖下方“待界面现象定位”的阶段记录，详见 `PROJECT.md` 最新进展。
+
+**20:23 批量故障增量：** 真实用户八图 Run 因 DSH 插件默认串行 + ACP 整回合 600 秒（含生图等待）超时；根因、用量与部署记录见 `PROJECT.md` 最新进展/踩坑。已发布工具并发声明和父工具活动感知超时，Worker 322/322、Profile 24/24，新增真实 DSH + 假模型峰值并发 8 验证；现役镜像 `sha256:9e859444d5919e5eb5f630c4e89b02bde931b0e49f876d5dcf21a11a7bfbbc24`。本次没有真实重生成，不能把失败样本标成通过；用户报告单图/分阶段成功是自然样本反馈，尚非完整三场景质量/成本验收。品牌规范选择问题仍待界面现象定位，不能因后端具备 capsule 就宣称用户入口问题消失。
+
+- [x] 按需方法/视觉规范/工具契约，v3 目标授权，同一逻辑 Agent 动态循环，逐动作 checkpoint 和旧审批兼容；已部署。
+- [x] 测试预算自动追加、能力/模型调用额度与最终集合选择；已部署，数据库/桌面逻辑回归通过。
+- [x] 上下文过长时从持久化事实重建；完整目标、授权、反馈、素材和动作索引保留，原始动作 JSON 每 2,000 字符分页按需读取。模型请求在计量前确定性压缩，恢复命中原 durable 调用；既有精确计划不变。Worker **320/320**、TypeScript 与新镜像断网探针通过，已部署。
+- [ ] **真实 v3 验收**：普通修图、品牌十场景图、HTML 长文三类；核对自然工具选择、主体/文案保真、选择性返工、完整交付、实际 token/积分/时延。当前证据为假模型集成与真实 DSH 协议探针，不代表此项完成。按既有约定，真实付费模型与 fixture 外发需明确授权。
+- [ ] **桌面真机与安装包**：在隔离数据副本验证 v3 审批、等待/取消、恢复、最终集合入库与旧会话；完成 Windows 构建/发布。当前桌面源码同时包含项目画板专项改动，不能未经专项验收把整包当作本 Harness 已验证发布物。
+- [ ] **运行观察与公开决策**：持续积累 test-only 自然样本，复核取消/失败/恢复/成本与基础镜像风险；公开档位和默认 runtime 仍保持原政策。本项对应下方 U6 未勾选观察卡。
+
+后续能力扩展（不是当前图片/HTML 主链验收门槛）：小红书草稿工具迁入 v3；耗尽批准能力时停车申请追加授权；更广泛输出类型。不能为这些能力另起领域 Agent，也不能把当前额度拒绝描述为已支持自动追加能力。积分预授权自动增长与扩大能力授权是不同操作。
+
+**会话 135b1448 排查与修复（2026-09-05 23:30，已部署）：** Run `afd8d123-75d8-41c2-bc8e-f13ed4ff7e78` 使用 v3 DSH，审批目标8图，3次generate_image均succeeded后失败，error_code为agent_run_failed；15模型回合、2 Vision、3生成图，33,167 input / 3,068 output tokens、32 credits、894,742 provider-cost micros，无已记录的failed/unknown工具。模型在执行阶段多次调用understand_asset，但执行桥只返回task_already_authorized，形成接口暴露与实际能力不一致；审批后新session也没有规划阶段的全部视觉对话。修复：执行请求在父进程代理中过滤掉规划专用工具；压缩重建状态保留execution说明和授权工具参数契约；错用接口返回明确call_tool纠正说明；executeAdaptiveTask捕获代理lastErrorCode，避免ACP异常掩盖上下文/预算/上游错误。原始最终异常细节已丢弃，无法确定最后一次退出的具体底层原因，不把已确认的重复调用缺陷等同于已证明的唯一终止根因。Worker323/323、TypeScript及真实钉版DSH的8调用并发/按需方法测试2/2通过。发布包仅含两个Worker源码文件，SHA256 B7F707A5C70BE62B046F481A533A5DEDECC973640C786CA237012109F2F0BF04；自动审批首次拒绝后，用户明确回复“确认，授权部署”；已上传至现有106.55.44.143并部署镜像 `sha256:67628cc39f1f7ba093159ede62944446355bb7482dce0675aa29f1cfd2f54ca9`。两个远端源码SHA256与已测试本地文件一致，新镜像断网双processor探针通过。四消费循环正常、restart0、renderer healthy，queue/active/expired lease/TTL均0。回退镜像 `bowerbird/generation-worker:rollback-phase-tools-20260905`、源码备份 `/opt/bowerbird/deploy-backups/adaptive-20260905/pre-phase-tools.tar`；Edge v48/v54和迁移0055/0056未变。未重跑用户任务、未改账本、未调用真实provider。
+
+**上下文补充上线（18:31）：** 现役镜像 `sha256:15f5b05b7622b5da6ed7d8564b2168c54a464b4ab3488a0ee0a049333425e020`；Edge v48/v54、迁移 0055/0056、Profile/指令 hash 均不变。四循环正常、restart=0，queue/expired lease/TTL=0，一个旧待审批 Run 保持；renderer healthy。回滚至压缩前 v3 使用 `bowerbird/generation-worker:rollback-context-20260905` 和 `/opt/bowerbird/deploy-backups/adaptive-20260905/pre-context-source.tar`。本轮没有真实 provider 调用；证据 `.tmp/deploy-adaptive-20260905/context-probe.txt`、`.tmp/adaptive-harness-20260905/context-worker-full.txt`。
+
+- 新审批 v3 只包含目标、输入素材、交付数量、模型回合和能力调用上限，没有 steps/DAG 或模型自报积分。模型表面发布 `request_task_authorization`；v1/v2 审批继续按原 hash 与精确步骤恢复。
+- 同一 `UnifiedPlanningRunProcessor` 和统一 DSH Profile 在批准后进入动态 `call_tool` 循环；生图、视觉检查、HTML 编排/渲染都是父进程工具。参数契约和视觉规范通过 `read_context` 读取，领域方法通过 `read_skill` 读取，不开启专用 HTML/content Agent。审批或重启后可以创建新物理连接，逻辑 Run、授权和已完成动作保持连续。
+- 动态 journal 在副作用前保存 pending，完成后保存结果；稳定 actionId/参数 hash/Kernel slot 防重复与参数漂移，独立动作可并发。恢复先重放未完成的 durable 调用，再把事实交回 Agent；未完成动作期间不能交付。
+- 中间生成物为 stage_result；Agent 显式选择最终集合，Kernel 校验来源与数量并持久化 final_result。`result.ready.selectionVersion=1` 让桌面展示、指纹与 Rust 入库使用同一有序集合，旧 HTML manifest 不会重新混入被替换草稿。
+- migration `0055` 在工具登记前以 Run 行锁约束批准能力/模型回合，usage 写入在同一 Run 锁下校验总额；`0056` 为测试账号提供原子追加 hold。按服务端报价在执行前扩充初始 30 积分预授权，重复调用不重复占用，余额不足全量回滚；普通账号不能调用该测试路径，实际积分和全局日成本限制保留。
+
+验证：Worker **317/317**、DSH Profile **23/23**、Edge **13/13** 与 Deno check、桌面相关逻辑 **22/22**、Worker/桌面 TypeScript、Rust 结果入库专项通过。新集成测试覆盖十张并发→检查→替换一张→选择十张，以及 HTML 渲染→检查→重排→再次渲染，两条路径均在最终保存处注入崩溃并恢复，验证没有重复 provider/交付调用。真实钉版 DSH 使用本地假 SSE；本地 PGlite PostgreSQL 执行两份 migration，验证额度扩充/幂等/回滚/非测试拒绝、能力与模型上限、usage 总额及旧审批兼容，不宣称多连接压力测试。
+
+边界：v3 当前支持图片及 HTML 截图交付，小红书旧能力仍走旧批准路径；每次批准最多 31 次能力调用加一次交付，模型最多 128 回合，超出能力范围不自动扩权。为匹配最坏成本估算，执行模型请求限制为 16,000 UTF-8 字节、64 条消息与 8,000 输出 tokens，超过边界时从持久化任务状态重建上下文，动作原始参数/结果按页读取；若完整目标、授权、必要事实与工具定义本身仍超限则拒绝，不截断用户目标。云端已部署，桌面安装包未发布；未请求真实 DeepSeek/方舟，未验证自然模型路由和视觉质量，也不改变普通账号公开政策。
+
+**上线证据（2026-09-05 18:02 北京时间）：** 用户明确授权源码上传至现有 VPS `106.55.44.143` 及发布现有 Supabase 项目后，完成独立候选构建、断网只读双 processor 探针、迁移 `0055`/`0056`、agent-run v48 / agent-worker v54 与 Worker/Profile 切换。镜像 `sha256:85c14486aad97b5d07fdaaa13036d791c8704805e896c2fa9ade6f71e748832d`，指令 hash `8e9aaea0d6792a25d8057b150f9e770a6032ad38e235442fb895324c31dbea16`。四消费循环启动、restart 0，非 root/read-only/drop ALL/no-new-privileges、1.5 GiB/256 PID 配置保持；test claim delay=0。健康接口 queue=0、expired leases=0、TTL=0，active=1 对应部署前已有 awaiting_approval，并无 running/queued Run；renderer healthy。数据库确认两 trigger 启用，追加预算 RPC 对 anon/authenticated 拒绝、仅 service_role 可执行。本次 provider/token/图片费用均为 0；断网探针使用本地模型 fixture，不能作为真实模型质量验收。
+
+回滚点：VPS 镜像 `bowerbird/generation-worker:rollback-adaptive-20260905`（旧 digest `sha256:c3d20526094bea2532b18dd88e565d08961931efa9e63fa69c7e65c441752e73`）；源码 `/opt/bowerbird/deploy-backups/adaptive-20260905/source.tar`；旧 Edge v47/v53 下载至 `.tmp/deploy-adaptive-20260905/edge-backup`。如需回滚先确认没有新 v3 Run 在执行，不能用旧 Worker 接手新授权；迁移为增量结构，不需删表或回写历史 Run。候选与探针记录在 `.tmp/deploy-adaptive-20260905`。桌面本轮没有打包或发布。
+
+### 追加审计：执行上下文也按需读取（前一阶段记录，本地完成，未部署）
+
+用户确认一个 Agent + Kernel 执行边界的目标，权威决策见 `PROJECT.md` 约定 51。此次继续落实上下文边界：
+
+- 新增 Run 内 `read_context({id})`：常驻只有 `availableContext` 的 id/description，内容通过注册的读取函数延迟提供。只接受当前 Run 已登记 id，不接受路径、URL、Run id 或额外参数。
+- 视觉规范不再在规划 prompt 全文注入；Agent 可按目标读取冻结的 capsule。原 hash 校验、checkpoint、审批关联和用户可见 profile 事件保留。
+- 已批准 HTML 执行的渲染规格、资源映射、方法与 sanitizer/精确文案契约移入 `html_render_contract`；视觉规范与小红书配方分别读取。入口不再全文拼接这些资源。
+- HTML/content Profile 关闭 runtime context，移除 persona 重复列举领域步骤的指令。父进程对旧审批的工具顺序、资源、产物与安全校验保留。
+
+验证：Worker **310/310** + TypeScript，钉版 DSH Profile **23/23**。真实本地 DSH/ACP + 假 SSE 断言项目规范标记在 `read_context` 前不存在、调用后才出现；Worker 集成测试验证 HTML 参数在入口缺席、资源读取后完整返回；原审批、故障恢复、渲染与结果集合回归通过。测试没有访问真实模型，不能作为自然模型路由质量证明。
+
+**未完成的架构迁移**：当前仍然是 v1/v2 步骤计划审批，图片由父流程执行，HTML 使用单独执行 session；不是结果驱动的通用工具循环。下一轮实现必须引入独立的目标/能力/消耗授权契约，在 provider 副作用前原子预留预算，持久化动态工具调用及结果，再接入同一逻辑 Agent；旧批准 hash 不能复用成更宽的授权。服务当前固定 30 积分，十张图场景需要明确的预算产品契约，不能静默提高预授权。当前修改未部署、未改变收费或已批准 Run。
+
+状态：**源码与本地验证完成，尚未部署；自然模型质量待验证。** 产品决策见 `PROJECT.md` 约定 50。本节记录实现证据，不把历史已部署版本视为包含本次修改。
+
+用户报告的会话 `ef43070d-f1bd-4fd4-a2df-00a6eb6f8170` 对应 Run `fa1883ad-45a2-488d-b3d5-1394093c0f9e`。原始目标是模特换姿势和耳环；模型计划自行增加 HTML 展示容器，renderer 依据 `full_page_and_slices` 输出整页和两片。模型确实过度规划，但上下文结构存在明确诱因，不能只归咎于模型。先前“普通修图无需 HTML 包装”补丁已在本轮删除。
+
+| 注入位置 | 审计发现 | 本轮处理 |
+|---|---|---|
+| unified `SKILL.md` | HTML 关键词→必须路线、长文禁生图、强制内容表单、普通修图反例补丁混在所有任务的指令中 | 常驻只保留通用目标、按需工具、审批和信任边界；领域方法不默认展开 |
+| DSH planning persona | 默认要求发现/读取 Skill，并提示组合生成、排版、渲染和检查 | 精简角色说明；Skill 为可选按需读取；关闭与创作任务无关的 DSH runtime context |
+| `BOWERBIRD_USER_GOAL_V1` | 系统默认的 900×700、整页+切片参数随用户目标一起发给模型 | 规划上下文移除 htmlOutput；参数继续在父进程冻结，并只在已批准 HTML 执行时提供 |
+| ACP checkpoint 编译 | `canonicalJson(seed)` 实际会序列化结构子类型的所有字段，重复注入整个 input、htmlOutput、profile、内部身份与旧问题 | 显式投影 phase、恢复事实和已完成工具结果；去除业务身份/hash；无恢复事实时不发送空恢复块 |
+| `submit_plan` schema + Worker policy | 所有任务强制 contentPlan：产品角色、信息区块、缺失资产、视觉档案逐项回写 | 新模型界面使用已支持的 v1：title/summary/steps；父进程接受最小计划。旧 v2 parser、归属/结构校验和恢复兼容保留 |
+| `read_skill` | 返回整个 legacy bundle，再要求模型忽略 legacy 限制；旧规则包含规划不看图、单 final、独立 IntentAnalysis/ControlledImageEditPlan 等 | 独立的静态方法目录，返回 id/description；按需读取经过裁剪的图片编辑、HTML、小红书方法，不返回 Runner 指令，也不把统一 Agent 自身列为领域 Skill |
+| `understand_asset` 说明 | 强制“先 general，再其他 focus”，可能引发无必要的双重视觉调用 | 按当前信息缺口直接选择 focus；同 focus 的 durable 复用保留 |
+| 执行阶段与其他路径 | HTML sanitizer/资源别名只用于已批准 HTML 执行；Seedream 只接受批准 step.goal；legacy DSH backend 与 unified dispatcher 分离 | 保留执行工具契约与审批约束，不将这些执行期说明移回规划上下文；保留已确认视觉规范作为真实任务背景 |
+
+方法资源位于 `apps/agent-worker/src/skills/bowerbird-unified-agent/references/`，目录在 `domain-skills.ts`。统一 loader 校验根指令和各方法资源的组合 hash，但仅返回当前被选择的方法给模型；读取磁盘验证完整性不等于上下文全量注入。上一已部署指令 hash `830806f1…576885` 加入明确兼容列表，恢复不改写批准计划或已完成 durable call。
+
+字符量对照（同一口径，非 tokenizer 数）：常驻 Skill **2225→474**；工具定义序列化 **4637→3117**。这些数字不包括具体用户内容，也不是请求 token 降幅承诺。
+
+验证：Worker **308/308**、TypeScript；DSH Profile **23/23**，其中真实钉版 DSH/ACP + 模拟 SSE 检查首轮请求不含 htmlOutput、full_page_and_slices、contentPlan、informationArchitecture、legacy 策略、空 checkpoint 或运行目录上下文，选中方法只在 read_skill 后出现，其他方法未泄漏。Worker→Edge parser→桌面最小计划展示 **4/4**；已有图片并发、多 final、HTML 混合链、旧 hash 恢复、故障重放与审批测试通过。
+
+真实 DeepSeek 的三案例纯文本规划测试已准备（换姿势/饰品、森林图片、活动通知排版），每例最多 10 回合，只用合成观察，不调用 Vision/生图，不执行/批准计划。自动审批在启动前因“内部 Skill 上下文外传至 DeepSeek 未获本次明确授权”拒绝该动作，**未发送请求、无新增模型费用**。本次未部署、未更改已批准历史 Run、未扩大 test-only 范围。现有验证证明上下文边界与兼容性，不能宣称自然模型过度规划率已下降。
+
+## 2026-09-05 开发收敛（覆盖下文历史固定路线限制）
+
+用户要求开发阶段减少约束，向一个云端通用 Agent 收敛。本轮源码完成：
+
+- 移除关键词强制四步与禁止生图策略；批准执行支持生成 DAG → HTML compose → render → 可选检查/内容输出 → finalize，生成资源按依赖交给排版，并复用原 durable executor。
+- 规划工具增加 list_skills/read_skill/ask_user；Skill 是同一个 Agent 的领域方法，不启动旧 Runner。澄清使用既有问题/回答/停车协议，验证回答 hash/context，重启可重放待回答问题；统一 Run 最多 12 次。
+- 修复 13 区块案例：信息架构最多 64 项，执行步骤仍 12 项，纯文本输入允许零 assetAssignments。工具 schema 文本说明与 Worker/Edge 同步；参数错误返回 retry_required + 可操作提示。
+- 相同素材可按 general/subject/text/layout/style 分别理解，重复同 focus 复用。代理默认 32 回合（可配置至 128），规划与 HTML ACP 超时 600 秒；实际预算仍由控制面掌握。
+- 结果 retry 原子清除旧 approval 后在同一 Run 重新规划，输入包含用户反馈与上一轮产物。revision 进入 tool call/event 身份，重新审批，同 hash 多审批读取最新记录。0054 与结果门控支持保留多轮 HTML 主截图。
+- 已知旧 Skill instruction hash 可迁移到新指令 bundle，保留批准计划 hash 与已完成工具身份；未放开任意外部 Skill/插件、凭据或跨 Run 访问。
+
+验证范围：真实失败的两份 13 区块计划无修改通过 Worker/Edge；纯文本/13/64/65 区块、错误修正、Skill 加载、澄清/回答完整性与停车恢复、反馈重规划与不同调用身份、混合生成→排版→检查及 checkpoint 前崩溃恢复、本地钉版 DSH + 假 DeepSeek 工具循环。
+
+验证结果：Worker 302/302、DSH Profile/真实本地桥 23/23、Deno 共享计划/结果 12/12、桌面 Agent 合同 18/18，Worker/桌面 TypeScript、两 Edge Deno check、diff check 通过；0053/0054 已在远端执行，dry-run 无待应用迁移。
+
+**部署状态：已部署。** 2026-09-05 12:33（北京时间）test-only 云端部署完成：0053/0054 已应用，agent-run v47 / agent-worker v53 ACTIVE；Worker/Profile 镜像 `sha256:cf0c9863655f31d2e67afe22edb40f418174467158b4f720a898b0a75eb4eebe`，四消费循环正常、restart 0、renderer healthy。断网双 processor 探针（含六个规划工具）和线上 DSH create/get/claim/cancel 冒烟通过；queue/expired lease/TTL 为 0，保留 1 个 awaiting_approval Run，历史 generation outcome_unknown 未改写。此次真实 provider 调用/图片/token/积分/provider-cost micros 均为 0，新版真实模型编排质量尚未重跑，桌面安装包未发布。回退镜像 `bowerbird/generation-worker:rollback-dev-20260905`，源码备份 `/opt/bowerbird/deploy-backups/20260905-dsh/source.tar`。 没有扩大公开开放，也没有将 mock 测试视为模型自然意图理解/视觉质量验收。当前支持图片生成 DAG 与可选前置生成的单 HTML 交付链；任意工具图、多次自主检查修图循环以及跨任务长期记忆不在本次已验证范围。
+
+
+**DSH 渲染失败热修复（2026-09-05）：** 部署后 Run `df95e9fb-3d94-43cc-92d6-889844a346c4` 的 Seedream 已成功，随后 HTML 含 `img height="auto"` 被 renderer 以 `numeric_attr_invalid` / `render_html_unsafe` 拒绝；桥接插件终止后 processor 又覆盖为 `unified_agent_html_execution_incomplete`。现已在 durable compose 前接入 renderer sanitizer/limits 的同源镜像（跨包一致性测试），拒绝返回具体 correction 且不锁定 compose，DSH 修正后再提交；保留 DurableProviderError safeCode。Skill 说明普通修图直接交付图片、htmlOutput 默认参数不代表 HTML 意图，并继续兼容两个旧指令 hash。Worker 全量 304/304 + 新错误透传测试、TypeScript、DSH Profile 23/23 通过；真实钉版 DSH/ACP 5 回合测试完成无效 HTML→修正→渲染→检查→交付，仅提交1份HTML。无用户内容的云端 renderer 对照：原错误样例400、CSS auto修正200/1截图。失败 Run 用量8模型回合/6 Vision/1生成图、41,554 input/3,455 output tokens、19 credits、533,838 provider-cost micros；此次修复无新增模型调用或费用。原失败Run不改写终态，已生成图片保存本地供取回。修复已热部署：现役 Worker/Profile `sha256:c3d20526094bea2532b18dd88e565d08961931efa9e63fa69c7e65c441752e73`，断网双 processor 探针通过；截至 15:52（北京时间）容器运行约3小时、restart 0，Agent health无告警、queue/expired lease/TTL均0，renderer healthy。实际用户 Run `fa1883ad-45a2-488d-b3d5-1394093c0f9e` 15:48 批准后在本修复镜像成功执行 generate_image/compose_html/render_html/inspect_artifact，15:50 result.ready并进入awaiting_result_feedback（尚未用户接受，非succeeded）；全Run累计8模型回合、4 Vision、1生成图、36,720 input/5,294 output tokens、17 credits、475,186 provider-cost micros，无失败/unknown工具调用。这是用户审批产生的实际费用，与本次零模型费诊断分列。回退镜像 `bowerbird/generation-worker:rollback-render-fix-20260905`。Edge仍为agent-run v47/agent-worker v53、迁移0054，无需更改。understand/visual清理循环另有既存control_http_500日志，未计作Agent渲染修复通过项。自动审批未批准上传用户内容作云端复现，已改用无用户内容的合成样例完成真实renderer对照验证。
 
 ## 0. 一页结论
 
@@ -22,7 +128,7 @@ Bowerbird 后续不再为 HTML 长图、小红书或其他内容形态分别建�
 - Bowerbird 继续拥有账号、权益、积分、Run 状态、计划审批、Policy、幂等 Tool Ledger、Artifact、TTL 和结算；这些业务权威不得迁入 DSH。
 - 能力通过 Bowerbird Tool Gateway 暴露；DSH 默认的 shell、文件写入、网页、终端、子 Agent、任意 MCP 和插件安装全部关闭。
 - HTML 长图和小红书在产品上是同一 Agent 的能力；内部可拆成“输出配方/Skill + 确定性工具”，但不得再拥有独立 Agent loop。
-- 项目视觉设定以冻结、带 hash、只读的 `VisualProfileCapsule` 进入同一 Agent 上下文，供所有能力共享；本次明确任务始终优先。
+- 视觉规范以冻结、带 hash、只读的 `VisualProfileCapsule` 进入同一 Agent 上下文，供所有能力共享；本次明确任务始终优先。
 - 现有受控图像编辑和 HTML Runner 在迁移验收前继续稳定运行；新方向不以一次性重写替换已验证生产链路。
 
 本专项要消除的不是“代码重复”这么简单，而是**认知层重复**：如果每增加一种内容能力都重新实现规划、澄清、审批、上下文、视觉读取、生成、恢复和反馈，最终会出现多个互不理解、质量边界各异的 Agent。统一 Harness 后，新增能力的正常形式应是新增工具或输出配方，而不是新增 Agent。
@@ -112,17 +218,19 @@ DSH 的 session log 可以保存模型上下文和执行事件，但不得成为
 
 ### 2.4 视觉设定是共享上下文，不是某个输出格式的私有功能
 
+视觉规范属于本地资料库，独立于项目；从集合内的“视觉规范”按钮发起并点击“开始提炼”，保存后在创作对话框中显式选择；保存不自动选用，同一规范可跨项目、跨生成入口选择。项目不是读取许可或所有权边界，规范确认状态、用户显式选择与既有账号权益仍须校验。来源集合或项目删除不使已冻结的历史任务失效。此关系按 2026-09-10 用户决策同步，详见 [PROJECT.md](../PROJECT.md) 约定 26；历史工具标识 `project_visual_profile` 不表示项目归属，也不在本次文档同步中重命名协议。
+
 `VisualProfileCapsule` 在 Run 创建时冻结 `profile_id/version/hash`，按以下优先级进入通用 Agent：
 
 ```text
 系统安全与当前 phase
   > 用户本次明确目标与明确素材职责
   > 已批准计划与预算
-  > 项目视觉设定 capsule
+  > 视觉规范 capsule
   > 历史偏好与旧对话摘要
 ```
 
-HTML、小红书、直接生成或其他能力都读取同一冻结 capsule；任何能力不得静默修改或回写项目视觉设定。
+HTML、小红书、直接生成或其他能力都读取同一冻结 capsule；任何能力不得静默修改或回写视觉规范。
 
 ---
 
@@ -301,7 +409,7 @@ DSH 能减少通用基础设施开发，但不会自动提高创意质量。以�
 - 信息架构与视觉叙事 rubric；
 - 产品/品牌内容不可篡改约束；
 - 缺图判断和生成策略；
-- 项目视觉设定优先级；
+- 视觉规范优先级；
 - HTML/小红书等输出配方；
 - 视觉检查次数、成本和终止条件；
 - 用户何时必须审批。
@@ -409,7 +517,7 @@ conversation_id / run_id
 - [x] Worker 唯一入口已增加精确 `true` 的显式配置闸门并注入正式 ACP port；未配置、`false` 或畸形值分别保持禁用/启动拒绝。候选容器已从该入口创建正式 processor，完成 checkpoint、`list_run_assets → submit_plan → end_turn`、闭集工具面、当前 Run 素材回传、父进程审批停车和清理验证。
 - [x] 父进程 DeepSeek 计量代理已接入正式入口：一 Run 一实例、只监听 loopback、请求/响应有界；模型回合复用 `DurableToolDispatcher`，真实 SSE/usage 先落私有 diagnostic artifact，再落现有 usage ledger；相同请求恢复不重复上游，usage 缺失或结果不确定按最小计量停车。候选容器以真实 DSH + 本机 provider fixture 验证两个 durable model call 与精确 usage，真实 key 未进入子进程。
 - [x] 用户手动执行的单回合 adapter smoke、两轮真实工具 loop + 在途取消及完整正式 smoke 均通过；最终真实摘要为 3 个 DeepSeek 文本 usage / diagnostic、1 个火山方舟 Vision usage、4 个 durable succeeded call，结构化 observation、权威 approval 与 DeepSeek/方舟 secret 父进程隔离全部有效。
-- [x] 批准后首个 `generate_image` 执行纵切已接入：只从控制面签名对象恢复精确批准计划；Gateway 绑定批准 hash 与父进程派生 call id，模型不能改 prompt/素材/角色/身份；复用现有 Seedream durable executor，支持多步依赖、唯一 final artifact、checkpoint 与结果反馈停车，未支持的计划形状在任何 provider 副作用前拒绝。
+- [x] 批准后 `generate_image` 执行纵切已接入：只从控制面签名对象恢复精确批准计划；Gateway 绑定批准 hash 与父进程派生 call id，模型不能改 prompt/素材/角色/身份；复用现有 Seedream durable executor，支持多步依赖与多个 final artifact，同一 DAG 层全部并发执行，checkpoint 与结果反馈停车保持不变，未支持的计划形状在任何 provider 副作用前拒绝。
 - [x] 本地 Supabase/Edge 批准后执行 E2E 已通过：批准停车/重放/漂移拒绝、签名计划恢复、现有 Ark executor Mock Seedream durable call、唯一 final artifact、单次 image usage、结果停车、用户接受与 succeeded 全链成立；生产 HTTPS 校验保持不变，本地 HTTP storage 只在脚本 fetch 层使用测试别名。
 - [x] `generate_image` 关键崩溃点故障注入已通过：provider 返回图片后、durable complete 前进程死亡时，新进程只从当前 Run 的确定性 call-id 输出路径重建并复核图片，不二次调用 Seedream；artifact 已完成但执行 checkpoint 保存失败时，重建派生相同 call id、恢复同一 durable 结果并重新停车，不重复上游、上传或 usage。
 - [x] HTML 执行 session 的最小 DSH 工具面已隔离：独立钉死 patch 只注册 `compose_html` / `render_html` / `inspect_artifact` / `finalize_output`，与规划 session 的三工具 patch 分离；正式 ACP port 可显式选择 `html-execution`，runtime home 与候选构建只复制闭集 patch/plugin，未增加环境变量或业务 secret。
@@ -537,6 +645,7 @@ conversation_id / run_id
 ### U6：小名单观察与生产决策
 
 - [ ] test-only 小名单观察取消率、失败率、p50/p95 时延、模型/工具成本、重复 call、恢复和人工质量。（无内容 reporter、首份基线和部署后首组真实 paired 已完成；自然 DSH 样本仍仅 2 条，不足以完成观察。）
+- [x] 为 `bowerbird_test` 账号提供桌面 Legacy/DSH 显式选择入口；普通账号隐藏 DSH，HTML 不接受 runtime，创建后展示服务端锁定值。
 - [x] 完成 DSH 升级/回滚 runbook、镜像扫描、SBOM/许可证与依赖变更审计。（证据已完成；剩余基础层 4 CRITICAL / 18 HIGH 均无修复且无人接受，故只维持 test-only。）
 - [ ] 明确公开档位、预算和计费；未经用户授权不扩大开放。
 - [ ] 达标后再决定 DSH 成为默认 Harness、继续双栈，或停止采用。
@@ -546,6 +655,22 @@ conversation_id / run_id
 **U6-T2 供应链/镜像结论（2026-09-01；完成证据、保持 test-only）**：[`UNIFIED-HARNESS-RUNBOOK.md`](../apps/agent-worker/UNIFIED-HARNESS-RUNBOOK.md) 已覆盖钉版升级、test-only 发布、fail-closed 回滚，并把 `package.json` / `pnpm-lock.yaml` / `pnpm-workspace.yaml` 一并纳入冻结身份。最终真实安装树 SPDX 2.3 inventory 为 448 个唯一 package、189 个 DSH package、0 个缺失 license 声明，lock SHA-256 `6e714f147748fce3a8b3ef22c2262604a19c3bbe759b3e00eee2a0055351fd19`；SBOM 的 `CONTAINS` 只表示安装清单。包含 U5 的候选 `sha256:3e9efd079f72352dd50efbf77d7459384ad69cd676b0c1bb6f39c71162dfa0dd` 为 165,800,960 bytes、用户 `node`；Compose 展开确认 read-only rootfs、`network none`、`cap_drop: ALL`、`no-new-privileges`、无 host port/无 Docker socket，正式 planning/controlled processor 探针再次全绿。扫描器固定为 Trivy `0.70.0@sha256:be1190afcb28352bfddc4ddeb71470835d16462af68d310f9f4bca710961a41e`；先不挂载候选下载 ECR DB，再对只读候选 tar 在断网/无 socket 容器中分别输出 vulnerability 与 secret JSON。首次扫描为 203 项（4 CRITICAL / 25 HIGH，其中 Node HIGH 7），secret 0；移除仅构建期需要的 npm/corepack/pnpm，并用 pnpm 11 的 `pnpm-workspace.yaml` override 将 DSH 精确依赖的旧 `js-yaml` 全部收敛到 `4.3.1` 后，最终为 188 项（4 CRITICAL / 18 HIGH，Node HIGH 0、fixable HIGH/CRITICAL 0），secret 仍为 0。剩余 HIGH/CRITICAL 全来自当前官方 `node:24-bookworm-slim` 同一 digest 的 Debian 12.15 基础层且无 FixedVersion；没有明确接受人，因此按 Runbook 只维持 test-only，不作为公开建议。修复后 DSH Profile **21/21**、Worker **289/289** + TypeScript、候选资产 **2/2**、联网 release check 和完整断网探针通过；未部署、未调用 provider。
 
 **U6-T3 test-only 部署与首组真实观察（2026-09-01；PASS，继续观察）**：部署前后两次 health gate 均为 queue/active/expired lease/TTL backlog 全 0。VPS 先冻结现役 `sha256:c436892f…e16dec` 为 `bowerbird/generation-worker:rollback-u6-20260901T1538Z`，保存源码/Profile 归档与 0600 env；两个发布 tar 的 SHA-256 分别为 `06805903…da978`、`c2ea77b9…99ed`。相同白名单在 Linux/BuildKit 生成 OCI index `sha256:58de8b8784e12d8b1b75bd0a5c3bb25d3802fd79a0e9f544684707c2f593d3e8`，inspect size 165,844,481 bytes、用户 `node`；正式双 processor 探针在 `network none`、read-only、drop ALL、no-new-privileges、768 MiB/1 CPU/128 PID 下全绿。空队列切换后仍只开 `BOWERBIRD_CONTROLLED_IMAGE_EDIT_DSH_ENABLED=true`，统一 Agent/HTML/小红书路径未开启；容器 restart 0、OOM false、无端口/宿主挂载。停止 Worker 的零 provider smoke 证明普通账号拒绝、test-only DSH create/get/claim、幂等 runtime 漂移 409 与直接 cancel，`provider_calls=0`，随后立即恢复四循环。经持续费用授权，相同纯文本浅蓝背景意图各跑 1 条真实 legacy/DSH：Run `7fc7a4f8-4acf-4642-afa3-d8000922117b` / `72ef08ca-3ac2-40dd-ba80-6a4e511dfe7c` 均 succeeded、恰 1 个 final artifact、3 条 succeeded tool、7 credits，0 retry/`outcome_unknown`/duplicate call/usage；legacy 93,684 ms、268,180 provider-cost micros、7,437 input / 551 output tokens，DSH 95,049 ms、277,214 micros、11,315 input / 764 output tokens。两侧各确认 1 次 Seedream、0 Vision；费用调用已单列报告。最终 health gate 仍全 0，容器安全边界无漂移。含 env 的 staging 与 `/tmp` 包已删除，现役/回滚 env 均保持 0600。本组是合成 test-only paired，不计作自然小名单流量；公开/默认决策仍等待更多自然样本及基础层风险处置。
+
+**U6-T4 桌面自然样本入口（2026-09-02；源码完成）**：创作板正式 Agent 工具栏复用已签名权益快照中的 `is_test_account`，仅对 `bowerbird_test` 账号且仅在“受控生图”Skill 下显示 Legacy/DSH 下拉；默认仍为 `legacy_kernel`，切换 HTML、关闭 Agent、账号失去测试标记或兼容性自动关停时都回退 Legacy。桌面创建请求显式透传 `agentRuntime`；Rust 再按当前权益拒绝普通账号伪造 DSH、拒绝 HTML 携带 runtime，并校验 `agent-run` 创建响应回显与请求一致，否则取消已冻结积分的 Run。会话头部展示服务端 snapshot 锁定的 DSH/Legacy，旧本地快照按 Legacy 展示。自然观察样本的来源因此明确为：测试账号在实际日常任务中主动选择 DSH 并完成 Run；脚本 paired 继续只算合成证据。前端 runtime/skill 选择测试 **7/7**、production build、Rust **217 passed + 2 ignored** 与 `cargo fmt --check` 全部通过；本项不调用 provider、不产生费用，也不改变远端默认或公开范围。
+
+**U6-T5 DSH 统一入口真实 HTML 纵切（2026-09-02；PASS，保持 test-only）**：桌面测试入口已从“为受控生图选择 DSH runtime”改为显式 `DSH · 自动选工具`；选中时实际创建 `bowerbird-unified-agent`，旧受控生图/HTML Skill 选择不再决定 DSH 能力。详情页精确长文由 Worker 在模型外硬路由为 `compose_html → render_html → inspect_artifact → finalize_output`，计划不得包含 `generate_image`；compose 前提取 31 行冻结原文并逐行规范化校验，最多两次模型内纠正，成功 compose 后 Profile 锁定下一工具为 render，拒绝重复 compose。新鲜 HTML 与 renderer PNG 会立即写入 RunWorkspace 缓存，解决上传后尚无签名 URL 时 inspect 读不到的问题。Edge 等待反馈与 migration `0052` 的原子结算采用同一主产物规则：unified 优先唯一 `final_result`，否则接受唯一 viewport/full-page 截图；其他 Skill 未放宽。HTML execution ACP 总窗口独立从 180 秒提高到 360 秒，planning 仍为 180 秒。另修复 model proxy `closeAllConnections()` 后异步 handler 仍可能迟到写 usage 的竞态：关闭时先停新请求、断开子进程，再等待所有已接受 handler 完成，且上游 fetch 使用既有 90 秒信号上限；新增回归证明 `close()` 不会早于 usage 持久化返回。
+
+本专项后续相同 test-only 联调已获用户持续授权，可直接调用真实 DeepSeek、火山方舟并执行 test-only 远端部署，发生后汇报真实调用与费用；该授权不包含扩大测试范围或生产发布。
+
+桌面入口在真实用户操作中补出一处 U6 状态分叉：测试账号可在正式 Agent 关闭时看到并选择 DSH runtime，但旧 handler 只改 runtime、不激活 Agent，`send()` 随后静默创建普通 Cloud `generation_job`。账号最近三条均为 `image_hd` 单图；最新 Job `500b38d9-f36d-46df-8184-583eab17af44` 把整篇详情页文案直接交给图片模型，1 credit 后产出单 PNG，并非 unified DSH 决策。修复后选择 DSH 会通过单一状态转换同时激活正式 Agent、排他关闭开发 Agent 模式，并解析为 `bowerbird-unified-agent`；发送分支还从 runtime 派生 Agent 开启态，任何 DSH 状态都不能再静默落回普通直发生图，切回 Legacy 也不会偷偷打开 Agent。新增关闭态选择 DSH 与 DSH 永不解析为直发的回归后，桌面状态测试 **11/11**、TypeScript 与 production build 通过。该普通 Job 不计入 DSH 质量样本。
+
+重建后的桌面真机还暴露了独立的部署一致性缺口：账号 `is_test_account=true`、Pro、`can_use_agent_runs=true` 均正确，但远端 `entitlement v34` 的签名 payload 只列 controlled/HTML 两个旧 Skill，因而 unified 入口按设计 fail closed 显示“账号没有 Agent 权限”。下载的 v34 源码确认其共享 `feature-policy.ts` 完全没有 `UNIFIED_AGENT_SKILL`；本地策略断言 test-only Pro 返回三个 Skill 后，只部署 `entitlement v35`。桌面重启强制在线同步于 2026-09-02 15:59 写入新签名快照，现含 `bowerbird-controlled-image-edit`、`bowerbird-html-layout-render`、`bowerbird-unified-agent`，没有改变普通账号范围。v34 源码留存在忽略提交的 `apps/cloud/artifacts/rollback-entitlement-v34-20260902/`；后续 Skill 发布门禁必须同时验证 agent-run 接受、entitlement 真实响应和桌面缓存刷新。
+
+权限恢复后的第一条自然桌面 Run `6fe0174e-974a-4405-b775-6dc5113f2a28` 正确锁定 `bowerbird-unified-agent/dsh` 并完成规划、停在 `awaiting_approval`，由此暴露前端批准视图仍只理解 controlled schema v1：`PendingPlan` 强转类型后读取 unified schema v2 不存在的 `referenceRoles.length`、`step.preserves.length`，导致 React 运行期报错。桌面现通过 `cloudAgentPlanDisplay` 对两种 schema 做运行期收窄和 render-safe 归一：unified 展示 `title/summary`、asset assignments、information architecture、missing asset decisions 与工具依赖，legacy 内容不变；畸形 proposal 降级为空态而非崩溃。实际 v2 fixture、legacy 兼容、畸形输入测试 **3/3**，选择状态 **11/11**，production build 与 Tauri debug build 均通过。原 Run 保持待批准，没有自动执行或重复产生 provider usage。
+
+下一条自然 Run `fc01d798-598f-41e2-8e77-50c27cb256e1` 完成 compose/render/inspect 后停在 `awaiting_result_feedback`，云端有 1 张整页图、5 张切片和有效 render manifest，本地也已下载六张 PNG 并通过完整性/解码校验，但旧结果网格、过期提示和反馈按钮仍以 `htmlRun` Skill ID 为条件。unified 自主选择 HTML 工具时 Skill ID 不会变成专用 HTML Skill，导致时间线显示“结果已准备好”而结果卡片完全隐藏。桌面现按真实 `renderManifest` 或用户可见截图角色识别 rendered-document 结果，manifest 顺序优先、缺失时按 full-page/viewport/slice 兜底，并把结果反馈切成“接受/放弃”而非图片修订。结果选择回归 **3/3**、plan 回归 **3/3**，production build 与 Tauri debug build 通过；原 Run 和产物无需重新执行。
+
+真实收口先后暴露三类故障而未放宽约束：旧 Edge 只认 unified `final_result` 导致停车 409；旧数据库 settlement 仍只认非 HTML Skill 的 `final_result` 导致 accept 后 409；180 秒执行窗口在 compose/render/inspect 全成功后抢先终止 finalize。修复后 Run `3ef41a92-0606-4009-984a-b28757664eae` 与最终候选 Run `dfd240f5-9787-4cdf-93f6-3a161f90edb4` 均完整 succeeded、31 行原文全保留、唯一整页主产物、四工具 checkpoint 顺序正确且无 `generate_image`/image usage。最终 Run 为 291,783 ms，DeepSeek 10 回合（83,517 input / 11,450 output）、Ark Vision 2 次、renderer 1 次、12 credits、295,734 provider-cost micros，1080×3948 整页 + 4 切片，指纹 `bwr1-c0ee5722787c038aa560e4a5cbb54df2`。最终 Worker 镜像 `sha256:21656ccebb41fa64db4ed7216a5d0bfd425e63afd2bd54b76e2ac7c15abfbbcd`，回滚镜像 `rollback-proxy-drain-20260902T132606Z` 指向 `sha256:d240b955…b3275f2`；非 root、read-only、drop ALL、no-new-privileges、restart 0、OOM false。Worker **296/296** + TypeScript、Profile **23/23**。本轮 10 个开发 Run 合计 DeepSeek 80 回合/610,145 input/85,305 output、Ark Vision 17、renderer 7、Seedream 0，provider cost 2,242,120 micros；97 usage credits 与 96 settled credits 的唯一差额来自修复前超时 Run `51287fc2…` 在终态后迟到的一条 usage，保留为竞态证据、不追改测试账单。最终两条成功 Run 各自 12=12 对账。人工视觉复核认为首屏品牌/产品层级和长文可读性成立，但中后段仍高度同构、缺少材质细节/局部放大/转化模块；因此本项证明自主路由与工具编排猜想，不把该样本升级为质量标杆或公开依据。
 
 ---
 
@@ -613,7 +738,7 @@ conversation_id / run_id
 
 ### 13.1 `AGENT-RUNTIME-PLAN.md`
 
-- 继续作为已上线 Bowerbird Agent Kernel、控制面、受控图像编辑、项目视觉设定、计量、TTL 和恢复的实现权威。
+- 继续作为已上线 Bowerbird Agent Kernel、控制面、受控图像编辑、视觉规范、计量、TTL 和恢复的实现权威。
 - 其中“一种官方 Skill 对应受限 phase graph/processor”的现状保持兼容，但不再作为未来内容能力的默认扩展模式。
 - 本专项通过 U2/U4 渐进复用和迁移，不推倒 A0–A8 的已验证业务不变量。
 

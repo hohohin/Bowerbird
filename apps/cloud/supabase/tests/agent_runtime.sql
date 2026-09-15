@@ -741,6 +741,79 @@ end;
 $$;
 
 do $$
+declare
+  test_user uuid := extensions.gen_random_uuid();
+  hold uuid;
+  run_id uuid;
+  conv_id uuid;
+  lease uuid := extensions.gen_random_uuid();
+  settled public.agent_runs;
+  final_count integer;
+begin
+  insert into auth.users (
+    id, instance_id, aud, role, email, encrypted_password,
+    email_confirmed_at, created_at, updated_at
+  ) values (
+    test_user, '00000000-0000-0000-0000-000000000000',
+    'authenticated', 'authenticated', 'agent-multi-final@example.test', '', now(), now(), now()
+  );
+
+  perform * from public.grant_topup_credits(test_user, 'agent-runtime-multi-final-topup', 9);
+  select result.hold_id into hold
+  from public.credit_hold(
+    test_user, 'agent-runtime-multi-final-hold', 'agent_controlled_image_edit_min', 9
+  ) as result;
+
+  insert into public.agent_runs (
+    user_id, skill_id, skill_version, kernel_version, status,
+    input_count, input_manifest_hash, request_object_key,
+    budget_credits, hold_id, pricing_version, queued_at,
+    lease_id, lease_owner, lease_expires_at, content_expires_at
+  ) values (
+    test_user, 'bowerbird-unified-agent', '0.1.0', '0.1.0', 'exporting',
+    2, repeat('5', 64), 'runs/multi-final/request.json',
+    9, hold, 1, now(), lease, 'multi-final-worker', now() + interval '60 seconds',
+    now() + interval '24 hours'
+  ) returning id, conversation_id into run_id, conv_id;
+
+  insert into public.agent_tool_calls (
+    run_id, call_id, phase, tool_name, args_hash, status, submitted_at, finished_at
+  ) values
+    (run_id, 'multi-final-image-call-1', 'execute_approved_plan', 'generate_image', repeat('1', 64), 'succeeded', now(), now()),
+    (run_id, 'multi-final-image-call-2', 'execute_approved_plan', 'generate_image', repeat('2', 64), 'succeeded', now(), now());
+
+  insert into public.agent_usage_items (
+    run_id, call_id, kind, provider, model, image_count, credits, pricing_version
+  ) values
+    (run_id, 'multi-final-image-call-1', 'image_generation', 'ark', 'test-image-model', 1, 1, 1),
+    (run_id, 'multi-final-image-call-2', 'image_generation', 'ark', 'test-image-model', 1, 1, 1);
+
+  insert into public.agent_artifacts (
+    run_id, conversation_id, kind, role, step_id, object_key,
+    mime, bytes, sha256, source_call_id, user_visible, expires_at
+  ) values
+    (run_id, conv_id, 'final_result', 'final_result', 'scene_one',
+      'runs/multi-final/artifacts/scene-one.png', 'image/png', 1, repeat('3', 64),
+      'multi-final-image-call-1', true, now() + interval '7 days'),
+    (run_id, conv_id, 'final_result', 'final_result', 'scene_two',
+      'runs/multi-final/artifacts/scene-two.png', 'image/png', 1, repeat('4', 64),
+      'multi-final-image-call-2', true, now() + interval '7 days');
+
+  settled := public.settle_agent_run(run_id, lease, 'succeeded', null, null);
+  select count(*)::integer into final_count
+  from public.agent_artifacts as artifact
+  where artifact.run_id = run_id
+    and artifact.role = 'final_result'
+    and artifact.deleted_at is null;
+
+  insert into agent_runtime_test_results values (
+    'unified Agent settlement accepts multiple final results',
+    settled.status = 'succeeded' and settled.actual_credits = 2 and final_count = 2
+  );
+end;
+$$;
+
+do $$
 declare failed text;
 begin
   select string_agg(name, ', ' order by name) into failed

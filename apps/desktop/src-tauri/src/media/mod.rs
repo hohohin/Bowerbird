@@ -5,6 +5,7 @@ pub mod color;
 pub mod phash;
 pub mod probe;
 pub mod thumb;
+pub(crate) mod tools;
 
 /// 判断扩展名是否为支持的图片格式（用于文件夹导入过滤）。
 pub fn is_image_ext(ext: &str) -> bool {

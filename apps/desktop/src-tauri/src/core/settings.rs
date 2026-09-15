@@ -9,12 +9,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::AppResult;
 
-/// 自动反推提示词的默认模板。`{vocab}` 在运行时替换为受控类别词表。
+/// 自动命名与基础描述模板；分类由独立本地模型处理。
 pub const DEFAULT_AUTO_ANALYZE_PROMPT: &str = "请描述这张图片并取名。严格按照以下格式回复：\
  第一行只回复命名本身，不要有标点符号；\
- 第二行起回复图片的描述；\
- 最后一行单独用 [[CAT: 类别1, 类别2]] 标注主类（最多 2 个，必须从词表里选，只回类别名）。\
- 词表：{vocab}。";
+ 第二行起回复图片的描述。不需要输出分类标签。";
 
 fn default_auto_analyze_prompt() -> String {
     DEFAULT_AUTO_ANALYZE_PROMPT.to_string()
@@ -32,13 +30,25 @@ fn default_true() -> bool {
     true
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AppTheme {
+    #[default]
+    Light,
+    Dark,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
+    /// 应用外观。新配置及未设置主题的旧配置默认日间；保留已保存的主题选择。
+    #[serde(default)]
+    pub theme: AppTheme,
+
     /// 入库时自动反推 + 自动重命名
     #[serde(default)]
     pub auto_analyze_on_ingest: bool,
 
-    /// 自动反推的提示词（可用 {vocab} 占位符，运行时替换为受控类别词表）
+    /// 自动命名与基础描述的提示词。
     #[serde(default = "default_auto_analyze_prompt")]
     pub auto_analyze_prompt: String,
 
@@ -58,6 +68,12 @@ pub struct AppSettings {
     /// 全局素材视图中隐藏已加入任一项目的素材（瀑布流只显示未入项目的素材）。默认 false。
     #[serde(default)]
     pub hide_project_assets: bool,
+
+    /// 生成成功时的应用内弹窗与提示音，可分别关闭；旧配置默认开启。
+    #[serde(default = "default_true")]
+    pub generation_completion_popup: bool,
+    #[serde(default = "default_true")]
+    pub generation_completion_sound: bool,
 
     /// 首启预置示例图是否已注入完成。true = 不再重灌（配合 count_assets==0 双 gate）。
     #[serde(default)]
@@ -93,12 +109,15 @@ pub struct AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
+            theme: AppTheme::Light,
             auto_analyze_on_ingest: false,
             auto_analyze_prompt: DEFAULT_AUTO_ANALYZE_PROMPT.to_string(),
             library_root: None,
             cloud_auto_understand: false,
             board_shift_pick: false,
             hide_project_assets: false,
+            generation_completion_popup: true,
+            generation_completion_sound: true,
             samples_seeded: false,
             dreamina_model_version: DEFAULT_DREAMINA_MODEL_VERSION.to_string(),
             agent_mode_enabled: true,
@@ -172,7 +191,44 @@ impl SettingsState {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppSettings, SettingsState};
+    use super::{AppSettings, AppTheme, SettingsState};
+
+    #[test]
+    fn generation_reminders_default_on_and_preserve_opt_out_on_disk() {
+        let old: AppSettings = serde_json::from_str("{}").unwrap();
+        assert!(old.generation_completion_popup);
+        assert!(old.generation_completion_sound);
+        let dir = std::env::temp_dir().join(format!("bb-reminders-{}", ulid::Ulid::new()));
+        let path = dir.join("settings.json");
+        let state = SettingsState::init(path.clone()).unwrap();
+        let mut settings = state.get();
+        settings.generation_completion_popup = false;
+        settings.generation_completion_sound = false;
+        state.update(settings).unwrap();
+        let restored = SettingsState::init(path).unwrap().get();
+        assert!(!restored.generation_completion_popup);
+        assert!(!restored.generation_completion_sound);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn old_settings_default_to_light_theme() {
+        let settings: AppSettings =
+            serde_json::from_str(r#"{"auto_analyze_on_ingest":true}"#).unwrap();
+        assert_eq!(settings.theme, AppTheme::Light);
+        assert_eq!(AppSettings::default().theme, AppTheme::Light);
+    }
+
+    #[test]
+    fn saved_dark_theme_round_trips() {
+        let mut settings = AppSettings::default();
+        settings.theme = AppTheme::Dark;
+        let json = serde_json::to_string(&settings).unwrap();
+        assert_eq!(
+            serde_json::from_str::<AppSettings>(&json).unwrap().theme,
+            AppTheme::Dark
+        );
+    }
 
     #[test]
     fn old_settings_ignores_legacy_cloud_connection_fields() {

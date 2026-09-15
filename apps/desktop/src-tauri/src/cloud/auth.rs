@@ -604,8 +604,13 @@ impl AuthClient {
     pub fn logout(&self) -> AppResult<AuthSnapshot> {
         *self.inner.session.write().unwrap() = None;
         *self.inner.pending.write().unwrap() = None;
+        Self::clear_saved_login()?;
+        Ok(self.snapshot())
+    }
+
+    pub(crate) fn clear_saved_login() -> AppResult<()> {
         match Self::keyring_entry()?.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(self.snapshot()),
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(error) => Err(AppError::Cloud(format!("清除系统凭据失败: {error}"))),
         }
     }

@@ -112,6 +112,10 @@ async function exchangeWechatSession(
     options: { data: metadata },
   });
   const tokenHash = link?.properties?.hashed_token;
+  const verificationType = typeof link?.properties?.verification_type === "string" &&
+      link.properties.verification_type.trim()
+    ? link.properties.verification_type.trim()
+    : "magiclink";
   if (linkError || !tokenHash || !link.user?.id) {
     throw new ApiError("internal_error", "微信登录会话创建失败，请重试", true);
   }
@@ -123,7 +127,7 @@ async function exchangeWechatSession(
       "apikey": namedKey("SUPABASE_PUBLISHABLE_KEYS", "SUPABASE_PUBLISHABLE_KEY", "SUPABASE_ANON_KEY"),
       "content-type": "application/json",
     },
-    body: JSON.stringify({ token_hash: tokenHash, type: "magiclink" }),
+    body: JSON.stringify({ token_hash: tokenHash, type: verificationType }),
     signal: AbortSignal.timeout(WECHAT_API_TIMEOUT_MS),
   });
   const session = await verify.json().catch(() => null);

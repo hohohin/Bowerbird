@@ -1,3 +1,4 @@
+import { MediaPreview } from "../MediaPreview";
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -119,7 +120,7 @@ export function BoardChipPreview({
   let imgPortal = null;
   if (visible && hover?.kind === "image") {
     const asset = assetMap.get(hover.assetId);
-    const src = asset?.store_path && !asset.duration ? convertFileSrc(asset.store_path) : null;
+    const src = asset?.store_path ? convertFileSrc(asset.store_path) : null;
     if (src && asset) {
       // 原图比例 + 最长边 360px（chip rect ×2 太小看不清；与瀑布流体感一致而非像素一致）
       const MAX = 360;
@@ -139,7 +140,7 @@ export function BoardChipPreview({
       left = Math.max(pad, left);
       top = Math.max(pad, top);
       imgPortal = createPortal(
-        <img
+        <MediaPreview
           src={src}
           alt=""
           draggable={false}

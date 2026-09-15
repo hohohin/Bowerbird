@@ -1,3 +1,4 @@
+import { parseTaskAuthorization, taskAuthorizationCallCount, type TaskAuthorization } from "../contracts/task-authorization.ts";
 import type { ClaimedAgentRun } from "../control-plane/agent-control-client.ts";
 import { canonicalJson, sha256Hex } from "../kernel/tool-ledger.ts";
 import { validateHarnessPlan, type HarnessPlan } from "./run-control-tools.ts";
@@ -12,10 +13,10 @@ const MAX_APPROVED_PLAN_BYTES = 64 * 1024;
  * Loads only the exact approved proposal selected by the control plane.
  * The Worker never accepts a plan body from DSH after approval.
  */
-export async function loadApprovedUnifiedPlan(
+export async function loadApprovedUnifiedProposal(
   claimed: ClaimedAgentRun & { run: NonNullable<ClaimedAgentRun["run"]> },
   downloader: ApprovedPlanDownloader,
-): Promise<HarnessPlan> {
+): Promise<HarnessPlan | TaskAuthorization> {
   const expectedHash = claimed.run.approvedPlanHash;
   const expectedCount = claimed.run.plannedToolCount;
   const reference = claimed.approvedPlan;
@@ -27,9 +28,15 @@ export async function loadApprovedUnifiedPlan(
     throw new Error("unified_agent_approved_plan_identity_invalid");
   }
   const value = await downloader.downloadVerifiedJson(reference.url, expectedHash, MAX_APPROVED_PLAN_BYTES);
-  const plan = validateHarnessPlan(value);
-  if (plan.steps.length !== expectedCount || sha256Hex(canonicalJson(plan)) !== expectedHash) {
+  const plan = (value as { schemaVersion?: unknown } | null)?.schemaVersion === 3 ? parseTaskAuthorization(value) : validateHarnessPlan(value);
+  if ((plan.schemaVersion === 3 ? taskAuthorizationCallCount(plan) : plan.steps.length) !== expectedCount || sha256Hex(canonicalJson(plan)) !== expectedHash) {
     throw new Error("unified_agent_approved_plan_mismatch");
   }
   return plan;
+}
+
+export async function loadApprovedUnifiedPlan(claimed: ClaimedAgentRun & { run: NonNullable<ClaimedAgentRun["run"]> }, downloader: ApprovedPlanDownloader): Promise<HarnessPlan> {
+  const proposal = await loadApprovedUnifiedProposal(claimed, downloader);
+  if (proposal.schemaVersion === 3) throw new Error("unified_agent_legacy_executor_denied");
+  return proposal;
 }

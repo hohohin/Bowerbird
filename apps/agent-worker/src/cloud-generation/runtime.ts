@@ -1,4 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
+import { IdlePollBackoff } from "../idle-poll-backoff.ts";
+import { executeVideo } from "./video.ts";
+import type { VideoInput } from "../../../cloud/supabase/functions/_shared/video-contract.ts";
+import { LAYER_MODEL, validateLayerRequest, type LayerOptions } from "../../../cloud/supabase/functions/_shared/layer-contract.ts";
+import { layerPayload, parseLayerResult } from "./layers.ts";
+
+const CLEANUP_INTERVAL_MS = 10 * 60_000;
 
 type JsonRecord = Record<string, unknown>;
 
@@ -12,12 +19,14 @@ interface HttpResponse {
   headers: HttpHeaders;
   text(): Promise<string>;
   arrayBuffer(): Promise<ArrayBuffer>;
+  body?: { getReader(): { read(): Promise<{ done: boolean; value?: Uint8Array }>; cancel(): Promise<void> } } | null;
 }
 
 interface HttpRequest {
   method?: "GET" | "POST" | "PUT";
   headers?: Record<string, string>;
   body?: string | Uint8Array;
+  redirect?: "error";
 }
 
 export type WorkerFetch = (url: string, request?: HttpRequest) => Promise<HttpResponse>;
@@ -39,7 +48,7 @@ export interface GenerationWorkerConfig {
 }
 
 interface ClaimedJob {
-  job: null | { id: string; service: string; inputManifestHash: string; inputCount: number; attempt: number };
+  job: null | { id: string; service: string; inputManifestHash: string; inputCount: number; attempt: number; upstreamTaskId?: string };
   lease?: { leaseId: string; leaseSeconds: number };
   inputUrl?: string;
 }
@@ -51,6 +60,7 @@ interface GenerationInput {
   reference_images: Array<{ mime: "image/jpeg" | "image/png" | "image/webp"; base64: string }>;
   ratio?: string | null;
   mock_scenario?: string | null;
+  layer_options?: LayerOptions;
 }
 
 interface GeneratedImage {
@@ -233,7 +243,7 @@ class ArkImageClient {
     this.fetch = fetchImpl;
   }
 
-  async generate(input: GenerationInput, choice: ServiceModelChoice): Promise<GeneratedImage> {
+  async generate(input: GenerationInput, choice: ServiceModelChoice): Promise<{ mime: GeneratedImage["mime"] | "application/json"; bytes: Uint8Array }> {
     if (this.config.mock) return { mime: "image/png", bytes: bytesFromBase64(ONE_PIXEL_PNG) };
     const response = await this.fetch(`${this.config.arkBaseUrl}/images/generations`, {
       method: "POST",
@@ -241,7 +251,7 @@ class ArkImageClient {
         authorization: `Bearer ${this.config.arkApiKey}`,
         "content-type": "application/json",
       },
-      body: JSON.stringify({
+      body: JSON.stringify(input.layer_options ? layerPayload(input, input.layer_options) : {
         model: choice.model,
         prompt: input.prompt,
         ...(input.reference_images.length
@@ -266,6 +276,7 @@ class ArkImageClient {
       );
     }
     const value = parseJson(text);
+    if (input.layer_options) return { mime: "application/json", bytes: await parseLayerResult(value, input.layer_options, this.fetch) };
     const data = isRecord(value) && Array.isArray(value.data) ? value.data : [];
     const first = data.find(isRecord);
     if (!first) throw new KnownProviderError("empty_provider_result", "Seedream 未返回图片");
@@ -310,15 +321,15 @@ export async function sleep(ms: number): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
-function parseInput(value: unknown): GenerationInput {
-  if (!isRecord(value) || value.schema_version !== 1 || value.media !== "image" ||
+function parseInput(value: unknown): GenerationInput | VideoInput {
+  if (!isRecord(value) || value.schema_version !== 1 || !["image", "video"].includes(String(value.media)) ||
       typeof value.prompt !== "string" || !Array.isArray(value.reference_images)) {
     throw new Error("invalid_generation_input");
   }
-  return value as unknown as GenerationInput;
+  return value as unknown as GenerationInput | VideoInput;
 }
 
-async function fetchInput(fetchImpl: WorkerFetch, url: string, expectedHash: string): Promise<GenerationInput> {
+async function fetchInput(fetchImpl: WorkerFetch, url: string, expectedHash: string): Promise<GenerationInput | VideoInput> {
   const response = await fetchImpl(url, { method: "GET" });
   if (!response.ok) throw new Error(`input_http_${response.status}`);
   const text = await response.text();
@@ -352,9 +363,20 @@ async function executeClaim(
   const heartbeatState = { stopped: false };
   void heartbeatLoop(control, jobId, leaseId, config.heartbeatIntervalMs, heartbeatState);
   let submitted = false;
+  let videoExecutionEntered = false;
   try {
     const input = await fetchInput(fetchImpl, claimed.inputUrl, inputManifestHash);
-    const choice = modelForService(config, service);
+    if (input.media === "video") {
+      if (config.mock) throw new Error("video_mock_not_supported");
+      if (service !== `video_seedance25_${input.video_options.video_resolution}`) throw new Error("video_service_mismatch");
+      videoExecutionEntered = true;
+      await executeVideo(input, { id: jobId, leaseId, upstreamTaskId: claimed.job.upstreamTaskId }, config.arkApiKey, body => control.post(body), fetchImpl);
+      return;
+    }
+    if (!service.startsWith("image_")) throw new Error("image_service_mismatch");
+    const layerOptions = validateLayerRequest(input as unknown as Record<string, unknown>, service);
+    if (layerOptions && config.mock) throw new KnownProviderError("layer_mock_disabled", "分层服务需要真实模型，当前尚未启用");
+    const choice = layerOptions ? { model: LAYER_MODEL, optimizePromptMode: null } : modelForService(config, service);
     await control.post({ action: "submitted", jobId, leaseId });
     submitted = true;
     const image = await ark.generate(input, choice);
@@ -385,6 +407,12 @@ async function executeClaim(
       bytes: image.bytes.byteLength,
     }));
   } catch (error) {
+    // Video execution owns its durable submission boundary and settlement. A failed
+    // control-plane update must never fall through to the image refund path.
+    if (videoExecutionEntered || claimed.job.upstreamTaskId) {
+      console.error(JSON.stringify({ event: "video_control_pending", job_id: jobId }));
+      return;
+    }
     const known = error instanceof KnownProviderError;
     const action = known || !submitted ? "fail" : "outcome_unknown";
     const safeErrorCode = known ? error.safeCode : safeErrorKind(error);
@@ -409,15 +437,29 @@ export async function runGenerationWorker(
 ): Promise<void> {
   const control = new ControlClient(config, fetchImpl);
   const ark = new ArkImageClient(config, fetchImpl);
+  const idleBackoff = new IdlePollBackoff(config.pollIntervalMs);
+  let nextCleanupAt = Date.now() + CLEANUP_INTERVAL_MS;
   console.log(JSON.stringify({ event: "generation_worker_started", worker_id: config.workerId }));
   while (!stop.requested) {
+    if (Date.now() >= nextCleanupAt) {
+      nextCleanupAt = Date.now() + CLEANUP_INTERVAL_MS;
+      try {
+        await control.post({ action: "cleanup_expired" });
+      } catch (error) {
+        console.error(JSON.stringify({ event: "generation_cleanup_failed", error: safeErrorKind(error) }));
+      }
+    }
     try {
       const claimed = await control.post({ action: "claim" }) as unknown as ClaimedJob;
-      if (claimed.job) await executeClaim(config, control, ark, fetchImpl, claimed);
-      else await sleep(config.pollIntervalMs);
+      if (claimed.job) {
+        idleBackoff.reset();
+        await executeClaim(config, control, ark, fetchImpl, claimed);
+      } else {
+        await sleep(idleBackoff.nextDelayMs());
+      }
     } catch (error) {
       console.error(JSON.stringify({ event: "generation_claim_failed", error: safeErrorKind(error) }));
-      await sleep(Math.max(config.pollIntervalMs, 5_000));
+      await sleep(Math.max(idleBackoff.nextDelayMs(), 5_000));
     }
   }
 }

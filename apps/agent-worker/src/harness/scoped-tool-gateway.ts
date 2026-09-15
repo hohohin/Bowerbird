@@ -52,6 +52,7 @@ export type ToolGatewayResult = {
 };
 
 export class ToolGatewayError extends Error {
+  readonly validationCode?: string;
   readonly code:
     | "tool_not_registered"
     | "tool_not_allowed"
@@ -61,10 +62,11 @@ export class ToolGatewayError extends Error {
     | "tool_sequence_invalid"
     | "trusted_slot_invalid";
 
-  constructor(code: ToolGatewayError["code"]) {
+  constructor(code: ToolGatewayError["code"], validationCode?: string) {
     super(code);
     this.name = "ToolGatewayError";
     this.code = code;
+    this.validationCode = validationCode;
   }
 }
 
@@ -108,8 +110,8 @@ export class ScopedToolGateway {
     let validatedArguments: unknown;
     try {
       validatedArguments = definition.validate(request.arguments);
-    } catch {
-      throw new ToolGatewayError("tool_arguments_invalid");
+    } catch (error) {
+      throw new ToolGatewayError("tool_arguments_invalid", error instanceof Error ? error.message : undefined);
     }
 
     const callId = deriveCallId({

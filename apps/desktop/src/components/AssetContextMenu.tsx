@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ClipboardCopy, MessageSquare, PenTool, ScanSearch } from "lucide-react";
+import { ClipboardCopy, Layers, LayoutDashboard, MessageSquare, PenTool, ScanSearch, Trash2 } from "lucide-react";
 import { useStore } from "../store";
 import { api } from "../lib/api";
 import { loadDescribePrompt } from "../lib/describePrompt";
@@ -8,11 +8,19 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { RenameDialog } from "./RenameDialog";
 import { understandProvider } from "../lib/entitlement";
 import { notifyError, notifySuccess } from "../lib/notify";
+import { isWorkspaceOperationCurrent } from "../lib/workspaceRoute";
 import type { AssetDeleteMode, AssetDeleteResult } from "../lib/types";
+import { canMoveAssetOut } from "../lib/assetDeletion";
+import {
+  CANVAS_REMOVE_NODES_EVENT,
+  CANVAS_ARRANGE_NODES_EVENT,
+  type CanvasArrangeNodesEventDetail,
+  type CanvasRemoveNodesEventDetail,
+} from "../lib/creativeCanvas";
 
 const MENU_WIDTH = 232;
 // 高度按全量项（生成图 + 本地文件 + 项目内，含「物理删除整组」）估算，含四组标签与分隔线。
-const MENU_HEIGHT = 560;
+const MENU_HEIGHT = 590;
 
 /** 可标注图片：浏览器 <img>/canvas 能解码的位图格式（tiff 浏览器不解码，排除）。 */
 const ANNOTATABLE_EXTS = ["jpg", "jpeg", "png", "webp", "gif", "bmp"];
@@ -38,9 +46,10 @@ export function AssetContextMenu() {
   const menu = useStore((s) => s.contextMenu);
   const closeContextMenu = useStore((s) => s.closeContextMenu);
   const openDetail = useStore((s) => s.openDetail);
+  const exitProject = useStore((s) => s.exitProject);
   const detailAssetId = useStore((s) => s.detailAssetId);
   const addAssetToBoardFromDetail = useStore((s) => s.addAssetToBoardFromDetail);
-  const currentProjectId = useStore((s) => s.currentProjectId);
+  const activeProjectId = useStore((s) => s.activeProjectId);
   const reloadProjects = useStore((s) => s.reloadProjects);
   const assets = useStore((s) => s.assets);
   const openDescribePicker = useStore((s) => s.openDescribePicker);
@@ -54,6 +63,7 @@ export function AssetContextMenu() {
   const cloudAuth = useStore((s) => s.cloudAuth);
   const cloudEntitlement = useStore((s) => s.cloudEntitlement);
   const cloudAvailable = cloudAuth?.cloud_available ?? false;
+  const reuseIntentRef = useRef(0);
 
   const [busy, setBusy] = useState(false);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
@@ -76,11 +86,11 @@ export function AssetContextMenu() {
   useEffect(() => {
     setGroupIds(null);
     if (!menu) return;
-    const target = useStore.getState().assets.find((a) => a.id === menu.assetId);
+    const target = menu.asset ?? useStore.getState().assets.find((a) => a.id === menu.assetId);
     if (!target?.generation_session_id) return;
     let alive = true;
     api
-      .listGenerationGroup(menu.assetId, currentProjectId)
+      .listGenerationGroup(menu.assetId, activeProjectId)
       .then((g) => {
         if (alive) setGroupIds(g.map((a) => a.id));
       })
@@ -88,7 +98,7 @@ export function AssetContextMenu() {
     return () => {
       alive = false;
     };
-  }, [menu, currentProjectId]);
+  }, [menu, activeProjectId]);
 
   // 菜单打开时：点击菜单外关闭、Esc 关闭。
   useEffect(() => {
@@ -119,13 +129,15 @@ export function AssetContextMenu() {
       const offset = e.key === "ArrowDown" ? 1 : -1;
       buttons[(current + offset + buttons.length) % buttons.length].focus();
     }
-    window.addEventListener("mousedown", onMouseDown);
+    // 画板节点会在 pointerdown 中阻止冒泡以启动拖动；用捕获阶段确保
+    // 左键点击画板时仍能先关闭已经打开的右键菜单。
+    window.addEventListener("pointerdown", onMouseDown, true);
     window.addEventListener("keydown", onKey);
     window.requestAnimationFrame(() => {
       menuRef.current?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
     });
     return () => {
-      window.removeEventListener("mousedown", onMouseDown);
+      window.removeEventListener("pointerdown", onMouseDown, true);
       window.removeEventListener("keydown", onKey);
     };
   }, [menu, closeContextMenu]);
@@ -177,8 +189,9 @@ export function AssetContextMenu() {
 
   // 守卫后捕获，闭包里直接用（TS 不会把守卫的收窄带进嵌套函数）。
   const assetId = menu.assetId;
-  const asset = assets.find((a) => a.id === assetId);
+  const asset = menu.asset ?? assets.find((a) => a.id === assetId);
   const storePath = asset?.store_path ?? null;
+  const moveOutAvailable = canMoveAssetOut(asset);
   // 仅生成图显示「复用生成提示词」：generation_session_id 非 null 即任意 provider 的生成图。
   const isGenerated = !!asset?.generation_session_id;
   // 「图片标注」可用：本地有文件且为浏览器可解码位图（视频 / SVG / TIFF 不可标注）。
@@ -245,9 +258,33 @@ export function AssetContextMenu() {
   }
 
   async function reuseGeneration() {
+    const intentId = ++reuseIntentRef.current;
+    const expectedMenu = menu;
+    const route = useStore.getState();
+    const expectedProjectId = route.activeProjectId;
+    const expectedRouteRevision = route.projectRouteRevision;
+    const isCurrentIntent = () => {
+      const current = useStore.getState();
+      return intentId === reuseIntentRef.current
+        && current.contextMenu === expectedMenu
+        && isWorkspaceOperationCurrent(
+          expectedProjectId,
+          current.activeProjectId,
+          current.projectRoutePending,
+          expectedRouteRevision,
+          current.projectRouteRevision,
+        );
+    };
+    if (!isCurrentIntent()) return;
     setBusy(true);
     try {
-      const hist = await api.generationHistory(assetId, currentProjectId);
+      // 生成来源属于中心素材，而不是素材当前出现的项目。画板节点可以引用尚未写入
+      // project_assets 的恢复/迁移结果；按当前项目过滤会把真实 generation_meta 筛空。
+      const hist = await api.generationHistory(assetId, null);
+      if (!isCurrentIntent()) {
+        if (useStore.getState().contextMenu === expectedMenu) setBusy(false);
+        return;
+      }
       // 优先未铺开的原始编辑框文本（维度 chip，不展开 body）；旧 meta 无 prompt_raw → 回退铺开 prompt。
       const prompt = hist.turns[0]?.prompt_raw ?? hist.turns[0]?.prompt ?? "";
       if (!prompt) {
@@ -257,10 +294,14 @@ export function AssetContextMenu() {
       }
       // 复用首轮 prompt + 首版参考图 + 借用维度源图（车牌 sidecar，与 GenerationPanel 一致）
       // → 打开创作板载入。
-      reusePromptToBoard(prompt, hist.references, hist.dimension_assets);
+      reusePromptToBoard(prompt, hist.references, hist.dimension_assets, undefined, { media: hist.media, videoOptions: hist.video_options, ratio: hist.ratio, videoChannel: hist.provider?.startsWith("bowerbird-cloud") ? "cloud" : "jimeng" }, expectedProjectId && hist.turns[0]?.project_id === expectedProjectId ? hist.references.map(asset => hist.turns[0]?.reference_node_ids?.[hist.turns[0]?.references?.indexOf(asset.store_path ?? "") ?? -1] ?? null) : undefined);
       notifySuccess("生成提示词已载入创作板");
       closeContextMenu();
     } catch (e) {
+      if (!isCurrentIntent()) {
+        if (useStore.getState().contextMenu === expectedMenu) setBusy(false);
+        return;
+      }
       notifyError(e, "读取生成提示词失败");
       setBusy(false);
     }
@@ -269,7 +310,7 @@ export function AssetContextMenu() {
   async function runDelete(id: string, mode: AssetDeleteMode) {
     setBusy(true);
     try {
-      const result = await api.deleteAssetWithMode(id, mode, currentProjectId);
+      const result = await api.deleteAssetWithMode(id, mode, activeProjectId);
       await reloadProjects();
       if (result.failed_moves.length > 0) {
         notifyError(null, `移出失败：${result.failed_moves.join("、")}，素材保留在全局`);
@@ -292,7 +333,7 @@ export function AssetContextMenu() {
     try {
       for (const id of ids) {
         try {
-          await api.deleteAssetWithMode(id, "delete", currentProjectId);
+          await api.deleteAssetWithMode(id, "delete", activeProjectId);
         } catch (e) {
           failed += 1;
           console.error("delete one failed", e);
@@ -320,6 +361,22 @@ export function AssetContextMenu() {
     zIndex: 60,
   };
 
+  async function showAssetDetail() {
+    closeContextMenu();
+    if (!activeProjectId) {
+      openDetail(assetId);
+      return;
+    }
+    try {
+      await exitProject();
+      const state = useStore.getState();
+      // 路由期间若用户已进入另一项目，不用迟到的详情请求覆盖新意图。
+      if (state.activeProjectId === null) state.openDetail(assetId);
+    } catch (error) {
+      notifyError(error, "无法打开图片详情，当前画板保持不变");
+    }
+  }
+
   return createPortal(
     <div
       ref={menuRef}
@@ -330,6 +387,47 @@ export function AssetContextMenu() {
       aria-label="素材操作"
     >
       <div className="app-context-label">整理</div>
+      {menu.canvasSelection && (
+        <button type="button" role="menuitem" disabled={busy} className="app-context-item px-2 py-1.5"
+          onClick={() => {
+            window.dispatchEvent(new CustomEvent<CanvasArrangeNodesEventDetail>(CANVAS_ARRANGE_NODES_EVENT, {
+              detail: menu.canvasSelection,
+            }));
+            closeContextMenu();
+          }}>
+          <LayoutDashboard size={13} className="shrink-0" /> 整理
+        </button>
+      )}
+      {menu.canvasSelection && (
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => {
+            window.dispatchEvent(new CustomEvent<CanvasRemoveNodesEventDetail>(CANVAS_REMOVE_NODES_EVENT, {
+              detail: menu.canvasSelection,
+            }));
+            closeContextMenu();
+          }}
+          disabled={busy}
+          className="app-context-item px-2 py-1.5"
+        >
+          <Trash2 size={13} className="shrink-0" />
+          {menu.canvasSelection.nodeIds.length > 1
+            ? `从画板移除所选 ${menu.canvasSelection.nodeIds.length} 项`
+            : "从画板移除"}
+        </button>
+      )}
+      {menu.addCanvasImagesToBoard && menu.addCanvasImagesToBoard.count > 0 && (
+        <button type="button" role="menuitem" disabled={busy} className="app-context-item px-2 py-1.5"
+          onClick={() => {
+            closeContextMenu();
+            menu.addCanvasImagesToBoard!.run();
+          }}>
+          {menu.addCanvasImagesToBoard.count > 1
+            ? `添加所选 ${menu.addCanvasImagesToBoard.count} 张图片到对话框`
+            : "添加到对话框"}
+        </button>
+      )}
       {/* 详情页右键（编辑器对话框与详情页互斥，从此处带回主界面插 chip）：菜单第一项。 */}
       {mode === "browse" && detailAssetId !== null && (
         <button
@@ -349,10 +447,7 @@ export function AssetContextMenu() {
       <button
         type="button"
         role="menuitem"
-        onClick={() => {
-          openDetail(assetId);
-          closeContextMenu();
-        }}
+        onClick={() => void showAssetDetail()}
         disabled={busy}
         className="app-context-item px-2 py-1.5"
       >
@@ -438,21 +533,27 @@ export function AssetContextMenu() {
         <PenTool size={13} className="shrink-0" />
         图片标注
       </button>
+      <button type="button" role="menuitem" disabled={busy || !annotatable}
+        title={annotatable ? "拆分并独立调整图层" : "该素材不是可编辑的图片"}
+        className="app-context-item px-2 py-1.5"
+        onClick={() => useStore.getState().openLayerEditor(assetId)}>
+        <Layers size={13} className="shrink-0" />分层编辑
+      </button>
       {isGenerated && (
         <button
           type="button"
           role="menuitem"
           onClick={() => {
-            // 先收菜单再开生成会话面板（与详情页「回看生成对话」同一入口）。
+            // 先收菜单再打开所属创作；未迁移的旧图回退到历史生成面板。
             closeContextMenu();
             void viewGenerationHistory(assetId);
           }}
           disabled={busy}
-          title="回看这张图的生成会话：各轮 prompt 与产出图，可继续提修改意见"
+          title="打开这张图所属的创作；旧记录回退到生成历史"
           className="app-context-item px-2 py-1.5"
         >
           <MessageSquare size={13} className="shrink-0" />
-          打开生成会话
+          回看所属创作
         </button>
       )}
 
@@ -519,7 +620,7 @@ export function AssetContextMenu() {
       <div className="app-context-divider" />
       <div className="app-context-label">移出与删除</div>
       <div className="space-y-0.5">
-          {currentProjectId && (
+          {activeProjectId && (
             <button
               type="button"
               role="menuitem"
@@ -534,8 +635,10 @@ export function AssetContextMenu() {
             type="button"
             role="menuitem"
             onClick={() => runDelete(assetId, "move_out")}
-            disabled={busy}
-            title="不会删除文件，文件回到原始位置"
+            disabled={busy || !moveOutAvailable}
+            title={!moveOutAvailable
+              ? "该素材没有可恢复的原始文件位置，请使用物理删除"
+              : "不会删除文件，文件回到原始位置"}
             className="app-context-item px-2 py-1.5"
           >
             移出园丁鸟

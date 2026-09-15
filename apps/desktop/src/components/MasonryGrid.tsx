@@ -1,12 +1,13 @@
-import { useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent } from "react";
+import { memo, useEffect, useId, useMemo, useRef, useState, type MouseEvent } from "react";
 import { createPortal } from "react-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { Check, ImagePlus, SearchX } from "lucide-react";
+import { Check, ImagePlus, Layers, SearchX } from "lucide-react";
 import { useStore } from "../store";
 import { api } from "../lib/api";
-import { notifyError, notifySuccess } from "../lib/notify";
 import { setDragAssets } from "../lib/dragPayload";
 import type { Asset } from "../lib/types";
+import type { LibraryProjectGroup } from "../lib/libraryView";
+import { ProjectFolder } from "./ProjectFolder";
 
 function parseColors(c: string | null | undefined): string[] {
   if (!c) return [];
@@ -18,35 +19,35 @@ function parseColors(c: string | null | undefined): string[] {
   }
 }
 
-/** 读 File 为 data URL（拖拽 / 粘贴入库用，传后端 base64 解码）。 */
-function readFileAsDataURL(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => resolve(r.result as string);
-    r.onerror = () => reject(r.error);
-    r.readAsDataURL(file);
-  });
-}
 
 // 引入二选一菜单（「Shift + 左键引入」开启时的左键行为）尺寸估算，用于视口钳制。
 const PICK_MENU_W = 172;
 const PICK_MENU_H = 78;
 
-function Thumb({
+const Thumb = memo(function Thumb({
   asset,
   group,
   orderedIds,
+  variant,
+  onOpenPreview,
+  idPrefix = "",
 }: {
   asset: Asset;
   group?: Asset[];
   orderedIds: string[]; // 瀑布流可见卡片顺序（Shift 范围多选用）
+  variant: "library" | "canvas-source";
+  onOpenPreview?: (asset: Asset, group?: Asset[]) => void;
+  idPrefix?: string;
 }) {
   const cardRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
-  const selected = useStore((s) => s.mode === "manage" && s.selectedIds.has(asset.id));
+  const addingToCollection = useStore((s) => s.collectionAddTargetId !== null);
   // 挑图模式（点一下插参考图 chip）：创作板对话框常驻 / 会话「重新编辑」中。批量管理
   // （manage）模式优先于挑图——点击仍是选择/框选、可拖拽进文件夹，不受常驻对话框影响。
-  const pickMode = useStore((s) => (s.boardOpen || s.genEditing) && s.mode !== "manage");
+  const pickMode = useStore((s) =>
+    (s.boardOpen || s.genEditing) && s.mode !== "manage"
+  );
+  const manageMode = useStore((s) => s.mode === "manage");
   const openContextMenu = useStore((s) => s.openContextMenu);
   // 反推全局可见：本缩略图正在反推 / 在队列里。角标点击 = 取消（运行中 kill 子进程 / 排队中移出队列）。
   const describeStatus = useStore((s) =>
@@ -75,7 +76,7 @@ function Thumb({
   }
   function beginPress(e: MouseEvent<HTMLDivElement>) {
     cancelPress();
-    if (e.button !== 0) return;
+    if (e.button !== 0 || variant === "canvas-source" || addingToCollection) return;
     pressStart.current = { x: e.clientX, y: e.clientY };
     pressTimer.current = window.setTimeout(() => {
       pressTimer.current = undefined;
@@ -113,9 +114,11 @@ function Thumb({
     setIdx(groupLen > 0 ? groupLen - 1 : 0);
   }, [groupLen]);
   const shown: Asset = groupLen > 0 ? group![idx] ?? asset : asset;
+  const selected = useStore((s) => s.mode === "manage" && s.selectedIds.has(shown.id));
   const colors = useMemo(() => parseColors(shown.colors), [shown.colors]);
   // 有反推（caption）→ 左上角 🏷️ 标记（生成图同时在标时，🏷️ 排在 ✨ 右侧）。
   const hasCaption = useStore((s) => s.captionedIds.has(shown.id));
+  const hasLayerWorkspace = useStore((s) => s.layerWorkspaceIds.has(shown.id));
 
   function step(delta: number) {
     setIdx((cur) => {
@@ -147,6 +150,12 @@ function Thumb({
 
   // 没有缩略图的占位（非图片格式或解码失败）。
   if (!shown.thumb_path) {
+    if (addingToCollection) return <button type="button" data-asset-id={shown.id}
+      aria-label={`${shown.name}${selected ? "，已选中" : ""}`} aria-pressed={selected}
+      className={`mb-2 flex h-32 w-full items-center justify-center rounded-md border-2 bg-panel2 text-xs ${selected ? "collection-add-selected" : "border-transparent text-muted"}`}
+      onClick={(event) => event.shiftKey ? useStore.getState().selectRange(shown.id, orderedIds) : useStore.getState().toggleSelect(shown.id)}>
+      {selected && <Check size={14} className="mr-2" />}{shown.name}
+    </button>;
     return (
       <div className="mb-2 flex h-32 items-center justify-center rounded-md bg-panel2 text-xs text-muted">
         {shown.ext?.toUpperCase() ?? "?"}
@@ -218,7 +227,7 @@ function Thumb({
     };
   }, [hovering]);
   function onEnter(e: MouseEvent<HTMLDivElement>) {
-    if (!previewSrc) return;
+    if (!previewSrc || variant === "canvas-source") return;
     mouseRef.current = { x: e.clientX, y: e.clientY };
     setHovering(true);
     // 2.8s 延迟：到点时取缩略图实际渲染尺寸，×2 作为放大尺寸（保证对每张图「200%」都真正成立）。
@@ -271,6 +280,33 @@ function Thumb({
   function activateAsset(shift: boolean, at?: { x: number; y: number }) {
     dismissPreview();
     const st = useStore.getState();
+    if (st.collectionAddTargetId) {
+      if (shift) st.selectRange(shown.id, orderedIds);
+      else st.toggleSelect(shown.id);
+      return;
+    }
+    if (variant === "canvas-source") {
+      // 选择优先于预览和挑图；Shift 可直接进入多选，后续普通点击增减选择。
+      if (shift || st.mode === "manage") {
+        if (st.mode !== "manage") st.enterManage();
+        if (shift) st.selectRange(shown.id, orderedIds);
+        else st.toggleSelect(shown.id);
+        return;
+      }
+      if (st.boardOpen || st.genEditing) {
+        window.dispatchEvent(
+          new CustomEvent("bowerbird://board-asset-picked", { detail: shown.id })
+        );
+        if (st.promptedAssets.some(
+          (a) => a.id === shown.id && a.sections && a.sections.length > 0,
+        )) {
+          st.openCaptionRing(shown.id);
+        }
+      } else {
+        onOpenPreview?.(shown, group);
+      }
+      return;
+    }
     // manage 优先于挑图（创作模式激活时批量管理不能被挑图吞掉点击）。
     if (st.mode === "manage") {
       // Shift+点击 = 从上次点击的卡片框选到本卡（范围多选）；普通点击 = 单张增减选中。
@@ -299,7 +335,8 @@ function Thumb({
         const rect = cardRef.current?.getBoundingClientRect();
         setPickMenu(at ?? (rect ? { x: rect.left, y: rect.bottom + 4 } : { x: 8, y: 8 }));
       }
-    } else st.openDetail(shown.id);
+    } else if (onOpenPreview) onOpenPreview(shown, group);
+    else st.openDetail(shown.id);
   }
   // 浮层定位：默认鼠标右下偏移，靠右/下边时翻转到左/上，留 pad 不贴边。尺寸跟随缩略图×2。
   let previewLeft = 0;
@@ -328,17 +365,19 @@ function Thumb({
   return (
     <div
       ref={cardRef}
-      id={`asset-${shown.id}`}
+      id={`${idPrefix}asset-${shown.id}`}
+      data-asset-id={shown.id}
       data-origin={shown.origin_path ?? undefined}
       role="button"
       tabIndex={0}
-      aria-label={`${shown.name}${selected ? "，已选中" : ""}`}
-      className={`group relative mb-2 cursor-pointer overflow-hidden rounded-sm bg-panel transition ${
+      aria-label={`${shown.name}${selected ? "，已选中" : ""}${variant === "canvas-source" ? manageMode ? "，点击选择或取消选择" : pickMode ? "，点击加入创作" : "，点击放大" : ""}`}
+      aria-pressed={manageMode ? selected : undefined}
+      className={`group relative mb-2 overflow-hidden rounded-sm bg-panel transition ${
         selected
-          ? "border-2 border-accent shadow-[inset_0_0_0_1px_#4868ff]"
+          ? addingToCollection ? "border-2 collection-add-selected" : "border-2 border-accent shadow-[inset_0_0_0_1px_#4868ff]"
           : "border border-edge hover:border-[#55505a]"
-      }`}
-      draggable={!pickMode}
+      } ${variant === "canvas-source" ? `${manageMode || pickMode ? "cursor-pointer" : "cursor-zoom-in"} active:cursor-grabbing` : "cursor-pointer"}`}
+      draggable={!addingToCollection && (variant === "canvas-source" || !pickMode)}
       onMouseEnter={onEnter}
       onMouseMove={onMove}
       onMouseLeave={onLeave}
@@ -361,7 +400,8 @@ function Thumb({
         e.preventDefault();
         e.stopPropagation();
         dismissPreview();
-        openContextMenu(e.clientX, e.clientY, shown.id);
+        if (addingToCollection) return;
+        openContextMenu(e.clientX, e.clientY, shown.id, { asset: shown });
       }}
       onDragStart={(e) => {
         dismissPreview();
@@ -373,7 +413,7 @@ function Thumb({
             ? Array.from(st.selectedIds)
             : [shown.id];
         setDragAssets(ids);
-        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.effectAllowed = variant === "canvas-source" ? "copy" : "copyMove";
         // setData 必须有一次否则部分浏览器不认这次拖拽；payload 实际走模块变量（dragPayload.ts）。
         e.dataTransfer.setData("text/plain", ids.join(","));
       }}
@@ -398,8 +438,9 @@ function Thumb({
           <span>{describeStatus === "running" ? "反推中" : `排队 ${queuePos}`}</span>
         </button>
       )}
-      {(shown.source === "codex" || shown.source === "jimeng" || shown.source === "bowerbird-cloud" || hasCaption) && (
+      {(shown.source === "codex" || shown.source === "jimeng" || shown.source === "bowerbird-cloud" || hasCaption || hasLayerWorkspace) && (
         <div className="absolute left-1 top-1 z-10 flex items-center gap-1">
+          {hasLayerWorkspace && <span className="rounded-full bg-black/70 px-1.5 py-1 text-white backdrop-blur" title="有分层工程" aria-label="有分层工程"><Layers size={12} /></span>}
           {(shown.source === "codex" || shown.source === "jimeng" || shown.source === "bowerbird-cloud") && (
             <span
               className="rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-white backdrop-blur"
@@ -421,7 +462,7 @@ function Thumb({
       {/* 选中角标：左下角与选中框同色融合的圆角矩形（左/底边贴内框缘连续，右上圆滑）+ 勾 icon。 */}
       {selected && (
         <span
-          className="absolute bottom-0 left-0 z-10 rounded-tr-lg bg-accent px-1.5 py-1 text-white"
+          className={`absolute bottom-0 left-0 z-10 rounded-tr-lg px-1.5 py-1 ${addingToCollection ? "collection-add-check" : "bg-accent text-white"}`}
           title="已选中"
         >
           <Check size={14} strokeWidth={3} />
@@ -520,7 +561,7 @@ function Thumb({
         )}
     </div>
   );
-}
+});
 
 /** 瀑布流（行式 masonry：JS 按元数据分列 + 缩略图懒加载）。颜色筛选走后端（App refresh 按 colorFilter 分流），非前端过滤。 */
 
@@ -536,18 +577,78 @@ function useColumnCount(): number {
   const [count, setCount] = useState(readColumnCount);
   useEffect(() => {
     const mqls = [768, 1024, 1280].map((w) => window.matchMedia(`(min-width: ${w}px)`));
-    const onChange = () => setCount(readColumnCount());
+    let timer = 0;
+    const onChange = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => setCount(readColumnCount()), 120);
+    };
     mqls.forEach((q) => q.addEventListener("change", onChange));
-    return () => mqls.forEach((q) => q.removeEventListener("change", onChange));
+    return () => {
+      window.clearTimeout(timer);
+      mqls.forEach((q) => q.removeEventListener("change", onChange));
+    };
   }, []);
   return count;
 }
 
-export function MasonryGrid() {
-  const assets = useStore((s) => s.assets);
-  const total = useStore((s) => s.total);
-  const boardOpen = useStore((s) => s.boardOpen);
-  const currentProjectId = useStore((s) => s.currentProjectId);
+export function MasonryGrid({
+  variant = "library",
+  columnCount,
+  assetsOverride,
+  totalOverride,
+  projectScopeId,
+  onOpenPreview,
+  projectGroups = [],
+  onOpenProject,
+  embedded = false,
+  restrictGroupsToAssets = false,
+}: {
+  projectGroups?: LibraryProjectGroup[];
+  onOpenProject?: (projectId: string) => void;
+  embedded?: boolean;
+  restrictGroupsToAssets?: boolean;
+  variant?: "library" | "canvas-source";
+  columnCount?: number;
+  /** Project workspace source switch can render a separately loaded library scope. */
+  assetsOverride?: Asset[];
+  totalOverride?: number;
+  /** `undefined` follows the active project; `null` explicitly addresses the central library. */
+  projectScopeId?: string | null;
+  /** 画板素材栏保留拖拽；创作时单击引入素材，浏览时由宿主放大查看。 */
+  onOpenPreview?: (asset: Asset, group?: Asset[]) => void;
+} = {}) {
+  const storeAssets = useStore((s) => s.assets);
+  const gridRef = useRef<HTMLDivElement>(null);
+  const [containerColumns, setContainerColumns] = useState(Infinity);
+  useEffect(() => {
+    const element = gridRef.current;
+    if (!element) return;
+    let timer = 0;
+    let measured = false;
+    const observer = new ResizeObserver(([entry]) => {
+      const next = Math.max(1, Math.floor(entry.contentRect.width / 160));
+      window.clearTimeout(timer);
+      if (!measured) {
+        measured = true;
+        setContainerColumns(next);
+      } else {
+        // Width follows CSS continuously; redistribute cards only after resizing
+        // settles, so crossing a column boundary does not remount the whole grid.
+        timer = window.setTimeout(() => setContainerColumns(next), 120);
+      }
+    });
+    observer.observe(element);
+    return () => {
+      window.clearTimeout(timer);
+      observer.disconnect();
+    };
+  }, []);
+  const gridId = useId();
+  const storeTotal = useStore((s) => s.total);
+  const storeActiveProjectId = useStore((s) => s.activeProjectId);
+  const assets = assetsOverride ?? storeAssets;
+  const total = totalOverride ?? storeTotal;
+  const activeProjectId = projectScopeId === undefined ? storeActiveProjectId : projectScopeId;
   const focusAssetId = useStore((s) => s.focusAssetId);
   const clearFocusAsset = useStore((s) => s.clearFocusAsset);
   const setSearchQuery = useStore((s) => s.setSearchQuery);
@@ -561,9 +662,9 @@ export function MasonryGrid() {
   useEffect(() => {
     if (!focusAssetId) return;
     const id = focusAssetId;
-    clearFocusAsset();
-    const el = document.getElementById(`asset-${id}`);
+    const el = gridRef.current?.querySelector<HTMLElement>(`[data-asset-id="${CSS.escape(id)}"]`);
     if (!el) return;
+    clearFocusAsset();
     el.scrollIntoView({ block: "center", behavior: "smooth" });
     el.classList.add("board-focus-flash");
     if (flashTimer.current) clearTimeout(flashTimer.current);
@@ -572,9 +673,6 @@ export function MasonryGrid() {
       flashTimer.current = undefined;
     }, 1600);
   }, [focusAssetId, clearFocusAsset]);
-  // 拖拽外部图片入库（仅瀑布流区域）：HTML5 DnD，dragDropEnabled=false 保持内部拖拽到侧栏。
-  const [dragOver, setDragOver] = useState(false);
-  const [importing, setImporting] = useState(false);
 
   // 同流程生成图（一次生成多图的过程组 + 会话级归组的版本分支）：批量取可见生成图的分组，
   // 供缩略图轮播。会话归组由后端 generation_conversations 持久化，重启后分组不丢。无生成图时清空。
@@ -586,15 +684,19 @@ export function MasonryGrid() {
     }
     let alive = true;
     api
-      .listGenerationGroups(ids, currentProjectId)
+      .listGenerationGroups(ids, activeProjectId)
       .then((m) => {
+        if (restrictGroupsToAssets) {
+          const visible = new Set(assets.map((asset) => asset.id));
+          m = Object.fromEntries(Object.entries(m).map(([id, group]) => [id, group.filter((asset) => visible.has(asset.id))]));
+        }
         if (alive) setGroupMap(m);
       })
       .catch((e) => console.error("listGenerationGroups failed", e));
     return () => {
       alive = false;
     };
-  }, [assets, currentProjectId]);
+  }, [assets, activeProjectId, restrictGroupsToAssets]);
 
   // 渲染列表：每组只留一张卡——列表已 created_at DESC，同组首见即组内可见的最新成员，
   // 其余成员经轮播查看（组键取组末位 id，同组成员共享同一数组）。轮播组用后端原始组
@@ -619,53 +721,26 @@ export function MasonryGrid() {
   // 顺序近似从左到右、从上到下。高度用 DB width/height 估算（h/w 即相对高度，列宽
   // 是公共因子；无尺寸的按方形兜底）——元数据即最终布局，无需 DOM 测量；列数变化
   // （窗口跨断点）时重新分列。
-  const colCount = useColumnCount();
+  const responsiveColumnCount = useColumnCount();
+  const colCount = columnCount ?? Math.min(responsiveColumnCount, containerColumns);
   const columns = useMemo(() => {
-    const cols: Asset[][] = Array.from({ length: colCount }, () => []);
+    type Item = { kind: "asset"; asset: Asset } | { kind: "project"; group: LibraryProjectGroup };
+    const cols: Item[][] = Array.from({ length: colCount }, () => []);
     const heights = new Array<number>(colCount).fill(0);
-    for (const a of filtered) {
+    const items: Item[] = [
+      ...projectGroups.map((group): Item => ({ kind: "project", group })),
+      ...filtered.map((asset): Item => ({ kind: "asset", asset })),
+    ];
+    for (const item of items) {
       let min = 0;
       for (let i = 1; i < colCount; i++) if (heights[i] < heights[min]) min = i;
-      cols[min].push(a);
-      heights[min] += a.width && a.height ? a.height / a.width : 1;
+      cols[min].push(item);
+      heights[min] += item.kind === "project" ? 1.35
+        : item.asset.width && item.asset.height ? item.asset.height / item.asset.width : 1;
     }
     return cols;
-  }, [filtered, colCount]);
+  }, [filtered, projectGroups, colCount]);
 
-  // 拖入外部图片文件 → dataURL → importImageBytes（source=imported，进当前 project scope）。
-  // 串行导入（失败隔离）：单张失败不中断后续，错误打控制台。
-  async function handleDrop(e: DragEvent<HTMLDivElement>) {
-    e.preventDefault();
-    setDragOver(false);
-    const files = Array.from(e.dataTransfer.files).filter((f) =>
-      f.type.startsWith("image/")
-    );
-    if (files.length === 0) return;
-    setImporting(true);
-    let imported = 0;
-    let failed = 0;
-    try {
-      for (const f of files) {
-        try {
-          const dataUrl = await readFileAsDataURL(f);
-          await api.importImageBytes({
-            dataUrl,
-            fileName: f.name,
-            projectId: currentProjectId,
-            source: "imported",
-          });
-          imported += 1;
-        } catch (err) {
-          console.error("drop import failed", f.name, err);
-          failed += 1;
-        }
-      }
-    } finally {
-      setImporting(false);
-      if (imported > 0) notifySuccess(`已导入 ${imported} 张素材`);
-      if (failed > 0) notifyError(null, `${failed} 张素材导入失败`);
-    }
-  }
 
   function clearFilters() {
     setSearchQuery("");
@@ -679,23 +754,11 @@ export function MasonryGrid() {
 
   return (
     <div
-      className="relative flex h-full flex-col"
-      onDragOver={(e) => {
-        // 仅响应外部文件拖入（含 "Files"）；preventDefault 才能触发 drop。
-        if (Array.from(e.dataTransfer.types).includes("Files")) {
-          e.preventDefault();
-          setDragOver(true);
-        }
-      }}
-      onDragLeave={(e) => {
-        // relatedTarget 不在容器内 = 真离开，清遮罩（防子元素进出抖动）。
-        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
-          setDragOver(false);
-        }
-      }}
-      onDrop={handleDrop}
+      ref={gridRef}
+      data-file-import-project-id={activeProjectId ?? ""}
+      className={`relative flex flex-col ${embedded ? "" : "h-full"}`}
     >
-      {filtered.length === 0 ? (
+      {filtered.length === 0 && projectGroups.length === 0 ? (
         <div className="flex h-full items-center justify-center p-8 text-center">
           <div className="library-empty-panel max-w-sm">
             <div className="library-empty-hatch" aria-hidden="true"><span /></div>
@@ -705,36 +768,24 @@ export function MasonryGrid() {
             </span>
             <h2 className="mt-4 text-base font-semibold text-ink">
               {libraryEmpty
-                ? currentProjectId
+                ? activeProjectId
                   ? "这个项目还没有素材"
                   : "收下第一份灵感"
                 : "没有匹配的素材"}
             </h2>
             <p className="mt-2 text-xs leading-5 text-muted">
               {libraryEmpty
-                ? boardOpen
-                  ? "先从左上角导入图片；在素材库中点一下图片，就会进入当前创作板。"
-                  : "从左上角导入图片或文件夹，也可以把图片拖到这里，或粘贴刚刚截取的画面。"
+                ? "点击左上方导入按钮导入素材 或 投放导入素材 或 ctrl+v 粘贴导入素材"
                 : "试试清除搜索或侧栏筛选条件，回到更大的素材范围。"}
             </p>
-            <button
-              type="button"
-              onClick={() => {
-                if (libraryEmpty) {
-                  document.querySelector<HTMLButtonElement>("[data-import-trigger]")?.click();
-                } else {
-                  clearFilters();
-                }
-              }}
-              className={`mt-4 ${libraryEmpty ? "app-button-dark" : "app-button-secondary"}`}
-            >
-              {libraryEmpty ? "导入第一批素材" : "清除筛选"}
-            </button>
-            {libraryEmpty && (
-              <div className="mt-4 flex items-center justify-center gap-2 text-[11px] text-faint">
-                <kbd className="rounded border border-edge bg-panel px-1.5 py-0.5">Ctrl V</kbd>
-                <span>粘贴图片</span>
-              </div>
+            {!libraryEmpty && (
+              <button
+                type="button"
+                onClick={clearFilters}
+                className="mt-4 app-button-secondary"
+              >
+                清除筛选
+              </button>
             )}
             </div>
           </div>
@@ -743,14 +794,25 @@ export function MasonryGrid() {
         // paddingBottom 跟随底部浮动坞实际高度（会话「重新编辑」坞 --gen-dock-h、创作板
         // 对话框 --board-dock-h，坞/板挂载时由各自 ResizeObserver 写入）——否则底部浮动
         // 坞会盖住最后一行素材，滚不到底。二者互斥，max() 只是兜底；无坞时变量为空归零。
-        <div className="library-scroller h-full overflow-y-auto" style={{ paddingBottom: "max(var(--gen-dock-h, 0px), var(--board-dock-h, 0px))" }}>
+        <div className={embedded ? "" : "library-scroller h-full overflow-y-auto"} style={embedded ? undefined : { paddingBottom: "max(var(--gen-dock-h, 0px), var(--board-dock-h, 0px))" }}>
           {/* 外层固定高度竖向滚动，内层 flex 行式 masonry（各列 flex-1 等宽、纵向
               自然增长）——滚动容器与布局容器保持分离。 */}
           <div className="flex w-full items-start gap-2 p-2" data-tour="masonry">
             {columns.map((col, i) => (
               <div key={i} className="flex min-w-0 flex-1 flex-col">
-                {col.map((a) => (
-                  <Thumb key={a.id} asset={a} group={groupMap[a.id]} orderedIds={orderedIds} />
+                {col.map((item) => item.kind === "project" ? (
+                  <ProjectFolder key={`project-${item.group.project.id}`} group={item.group}
+                    onOpen={() => onOpenProject?.(item.group.project.id)} />
+                ) : (
+                  <Thumb
+                    key={item.asset.id}
+                    asset={item.asset}
+                    group={groupMap[item.asset.id]}
+                    orderedIds={orderedIds}
+                    variant={variant}
+                    idPrefix={embedded ? `${gridId}-` : ""}
+                    onOpenPreview={onOpenPreview}
+                  />
                 ))}
               </div>
             ))}
@@ -758,20 +820,6 @@ export function MasonryGrid() {
         </div>
       )}
 
-      {/* 拖拽遮罩：拖文件进入瀑布流时提示「松开导入」。 */}
-      {dragOver && (
-        <div className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center bg-accent/10 ring-2 ring-inset ring-accent">
-          <div className="rounded-full border border-accent/30 bg-panel/95 px-4 py-2 text-sm font-medium text-accent-soft shadow-panel">
-            松开导入{currentProjectId ? "到当前项目" : "到素材库"}
-          </div>
-        </div>
-      )}
-      {importing && !dragOver && (
-        <div className="pointer-events-none absolute right-3 top-3 z-30 flex items-center gap-2 rounded-full border border-edge bg-panel/95 px-3 py-1.5 text-xs text-muted shadow-panel">
-          <span className="app-spinner" aria-hidden="true" />
-          正在导入素材…
-        </div>
-      )}
     </div>
   );
 }

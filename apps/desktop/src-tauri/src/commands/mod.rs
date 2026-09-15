@@ -8,11 +8,21 @@ pub mod cloud_agent;
 pub mod codex;
 pub mod collect;
 pub mod jimeng;
+#[cfg(target_os = "macos")]
+mod macos_terminal;
 pub mod library;
+pub mod layers;
+pub mod layer_text;
+pub mod layer_export;
+pub mod local_classification;
 pub mod preset;
+pub mod project_canvas;
 pub mod projects;
 pub mod prompt;
 pub mod settings;
+pub mod source_browser;
+pub mod source_browser_capture;
+pub mod source_browser_network;
 pub mod visual_profile;
 
 use std::sync::Arc;

@@ -64,15 +64,21 @@ export class DurableToolDispatcher<TRequest, TResult> {
   private readonly control: DurableToolControl;
   private readonly adapter: DurableToolAdapter<TRequest, TResult>;
   private readonly afterExecute?: () => void;
+  private readonly onUnexpectedError?: (error: unknown, identity: DurableToolIdentity) => void;
 
   constructor(
     control: DurableToolControl,
     adapter: DurableToolAdapter<TRequest, TResult>,
-    options: { afterExecute?: () => void } = {},
+    options: {
+      afterExecute?: () => void;
+      /** Test/diagnostic observer only. It must not affect the durable error contract. */
+      onUnexpectedError?: (error: unknown, identity: DurableToolIdentity) => void;
+    } = {},
   ) {
     this.control = control;
     this.adapter = adapter;
     this.afterExecute = options.afterExecute;
+    this.onUnexpectedError = options.onUnexpectedError;
   }
 
   async dispatch(identity: DurableToolIdentity, request: TRequest): Promise<TResult> {
@@ -122,6 +128,11 @@ export class DurableToolDispatcher<TRequest, TResult> {
           });
         }
         throw error;
+      }
+      try {
+        this.onUnexpectedError?.(error, identity);
+      } catch {
+        // Observability must never change provider durability semantics.
       }
       await this.control.completeTool({
         runId: identity.runId,

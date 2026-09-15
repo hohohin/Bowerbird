@@ -115,3 +115,26 @@ test("approved HTML tools bind resources and renderer settings to the approved p
   }), /tool_arguments_invalid/);
   equal(createHash("sha256").update(new TextEncoder().encode(html)).digest("hex").length, 64);
 });
+
+test("approved compose rejects exact-copy loss before creating a durable call", async () => {
+  const durable = control();
+  const compose = createApprovedComposeHtmlToolDefinition({
+    runId: "run-copy", leaseId: "lease-copy", approvedPlanHash,
+    step: { id: "compose", kind: "compose_html", goal: "逐字排版", inputAssetIds: [], dependsOn: [] },
+    resourceArtifactIds: [],
+    requiredTextLines: ["在一室之内，观山听海 —— 玉石香薰「观沧海」", "原样保留 & 安静落版"],
+    control: durable,
+    workspace: { rememberHtmlDocument() {}, rememberRemoteArtifact() {} },
+  });
+  const gateway = new ScopedToolGateway([compose]);
+  const request = (html: string) => gateway.dispatch({
+    runId: "run-copy", leaseId: "lease-copy", phase: "execute_approved_plan", toolName: "compose_html",
+    arguments: { schemaVersion: 1, html, resourceArtifactIds: [] },
+    trustedSlot: { logicalSlot: 0, revisionIndex: 0 }, allowedTools: new Set(["compose_html"]), approvedPlanHash,
+  });
+
+  await rejects(() => request("<main><h1>在一室之内，观山听海</h1><p>玉石香薰「观沧海」</p><p>原样保留 &amp; 安静落版</p></main>"), /tool_arguments_invalid/);
+  equal(durable.uploads, 0);
+  await request("<main><h1>在一室之内，观山听海 <span>——</span> 玉石香薰「观沧海」</h1><p>原样保留 &amp; 安静落版</p></main>");
+  equal(durable.uploads, 1);
+});

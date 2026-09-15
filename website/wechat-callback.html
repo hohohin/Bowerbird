@@ -113,7 +113,7 @@
           if (!supabaseUrl || !key) throw new Error("官网账号服务未配置");
           return fetch(supabaseUrl.replace(/\/+$/, "") + "/functions/v1/wechat-login?forceFunctionRegion=" + SUPABASE_FUNCTION_REGION, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", apikey: key },
             body: JSON.stringify({ code: code, state: state })
           }).then(function (response) {
             return response.json().then(function (payload) {

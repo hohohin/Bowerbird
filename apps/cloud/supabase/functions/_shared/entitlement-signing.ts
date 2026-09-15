@@ -32,7 +32,7 @@ export interface EntitlementSigningInput {
  *  数字按 JS/serde_json 的最短往返表示（本子集只有整数）、字符串转义规则两边相同、
  *  键按 UTF-16 码元升序（Rust String 字节序对 ASCII 键等价——本子集键全为 ASCII）。 */
 export function canonicalJson(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
   const record = value as Record<string, unknown>;
   const body = Object.keys(record).sort()
@@ -45,7 +45,7 @@ export function entitlementSigningPayload(snapshot: EntitlementSigningInput): st
   return canonicalJson(snapshot);
 }
 
-function base64ToBytes(value: string): Uint8Array {
+function base64ToBytes(value: string) {
   const normalized = value.replace(/\s+/g, "");
   const binary = atob(normalized);
   const bytes = new Uint8Array(binary.length);

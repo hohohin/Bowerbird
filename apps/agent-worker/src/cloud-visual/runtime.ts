@@ -1,9 +1,12 @@
+import { loadBrandPrompt } from "../prompts/brand-visual.ts";
+import { declaredStandards } from "./declared-standards.ts";
 // V2 视觉设定云端提炼 · VPS 消费循环（AGENT-RUNTIME-PLAN §8.7 / §11 V2-T2）。
 // 任务执行 = 分批事实抽取（DeepSeek 文本回合，全库唯一模型依赖）+ 确定性聚合
 // （复用 V0 阈值语义：≥60% 出 prefer 规则 / 次势力 ≥25% 记冲突 / palette+mood 聚类出候选方向）。
 // 输入输出都只有反推文字：Worker 无从取得图片，也不请求图片。
 
 import { createHash, randomUUID } from "node:crypto";
+import { IdlePollBackoff } from "../idle-poll-backoff.ts";
 
 import {
   isRecord,
@@ -18,6 +21,7 @@ import { planBatches } from "../visual/batch.ts";
 export type { WorkerFetch } from "../cloud-generation/runtime.ts";
 
 type JsonRecord = Record<string, unknown>;
+const CLEANUP_INTERVAL_MS = 10 * 60_000;
 
 export interface VisualWorkerConfig {
   controlUrl: string;
@@ -57,7 +61,7 @@ export interface CloudVisualDraft {
   visualRules: Array<{
     category: string;
     value: string;
-    polarity: "prefer";
+    polarity: "must" | "prefer";
     confidence: number;
     supportingAssetIds: string[];
     opposingAssetIds: string[];
@@ -129,22 +133,11 @@ export function configFromEnv(env: Record<string, string | undefined>): VisualWo
   };
 }
 
-const EXTRACTION_SYSTEM_PROMPT = [
-  "你是视觉素材库的结构化抽取器。输入是若干素材的反推描述卡片（只有文字，没有图片）。",
-  "请从中抽取可复用的视觉语言事实与内容主题，输出严格 JSON，不要输出任何其他文字或代码块围栏。",
-  "规则：",
-  "1) facts[].category 只能是 composition/light/palette/mood/material/medium/layout 之一；",
-  "2) value 是简短视觉特征描述（60 字以内），同一特征在多张素材重复出现时合并为一条并列出全部 assetIds；",
-  "3) assetIds 只能使用输入中出现的 assetId，不得臆造；",
-  "4) 主体/内容/题材类信息（画了什么）只能进 themes，绝不能进 facts（facts 只收怎么画）；",
-  "5) 不臆造输入中没有的特征；输入信息不足就少输出。",
-  '输出格式：{"facts":[{"category":"...","value":"...","assetIds":["..."]}],"themes":[{"value":"...","assetIds":["..."]}]}',
-].join("\n");
 
 function cardForPrompt(card: VisualEvidenceCard): JsonRecord {
   return {
     assetId: card.assetId,
-    sections: card.sections,
+    sections: card.sections.filter((section) => section.title.trim() !== "品牌规范"),
     dimensions: card.dimensions,
     ...(card.textFallback ? { text: card.textFallback } : {}),
   };
@@ -199,45 +192,53 @@ async function extractBatch(chat: ModelChat, batch: VisualEvidenceCard[], attemp
 }
 
 function aggregateGroups(values: Array<{ value: string; assetId: string }>): Array<{ value: string; assetIds: string[] }> {
-  const map = new Map<string, string[]>();
+  const map = new Map<string, Set<string>>();
   for (const { value, assetId } of values) {
-    const arr = map.get(value) ?? [];
-    arr.push(assetId);
+    const arr = map.get(value) ?? new Set<string>();
+    arr.add(assetId);
     map.set(value, arr);
   }
   return [...map.entries()]
-    .map(([value, assetIds]) => ({ value, assetIds }))
+    .map(([value, assetIds]) => ({ value, assetIds: [...assetIds].sort() }))
     .sort((a, b) => b.assetIds.length - a.assetIds.length || (a.value < b.value ? -1 : 1));
 }
 
 /** 确定性聚合（阈值与 V0 extract.ts 一致）：facts → 规则/冲突，themes → 内容主题，palette+mood → 候选方向。 */
 export function aggregateDraft(cards: VisualEvidenceCard[], collected: BatchFacts[]): CloudVisualDraft {
+  const known = new Set(cards.map((card) => card.assetId));
+  const total = known.size || 1;
   const byCategory = new Map<string, Array<{ value: string; assetId: string }>>();
   for (const { facts } of collected) {
     for (const fact of facts) {
       const arr = byCategory.get(fact.category) ?? [];
-      for (const assetId of fact.assetIds) arr.push({ value: fact.value, assetId });
+      for (const assetId of fact.assetIds) if (known.has(assetId)) arr.push({ value: fact.value, assetId });
       byCategory.set(fact.category, arr);
     }
   }
-  const visualRules: CloudVisualDraft["visualRules"] = [];
+  const visualRules: CloudVisualDraft["visualRules"] = declaredStandards(cards);
   const conflicts: CloudVisualDraft["conflicts"] = [];
   for (const [category, values] of byCategory) {
-    const total = values.length || 1;
     const agg = aggregateGroups(values);
     const top = agg[0];
     if (!top) continue;
-    if (top.assetIds.length / total >= DOMINANT_COVERAGE) {
-      visualRules.push({
+    const dominant = agg.filter((group) => group.assetIds.length / total >= DOMINANT_COVERAGE).slice(0, 3);
+    if (dominant.length) {
+      visualRules.push(...dominant.map((group) => ({
         category,
-        value: top.value,
-        polarity: "prefer",
-        confidence: top.assetIds.length / total,
-        supportingAssetIds: top.assetIds,
-        opposingAssetIds: agg.slice(1).flatMap((group) => group.assetIds),
-        confirmedByUser: false,
-      });
+        value: group.value,
+        polarity: "prefer" as const,
+        confidence: group.assetIds.length / total,
+        supportingAssetIds: group.assetIds,
+        opposingAssetIds: [],
+        confirmedByUser: false as const,
+      })));
     } else if (agg.length >= 2 && agg[1].assetIds.length / total >= SECONDARY_CONFLICT_RATIO) {
+      // Keep both evidenced directions selectable; an empty rule set cannot become a usable brand profile.
+      visualRules.push(...agg.filter((group) => group.assetIds.length / total >= SECONDARY_CONFLICT_RATIO).slice(0, 3).map((group) => ({
+        category, value: group.value, polarity: "prefer" as const,
+        confidence: group.assetIds.length / total, supportingAssetIds: group.assetIds,
+        opposingAssetIds: [], confirmedByUser: false as const,
+      })));
       conflicts.push({
         description: `${category}: ${agg[0].value} vs ${agg[1].value}`,
         sideA: { value: agg[0].value, assetIds: agg[0].assetIds },
@@ -249,10 +250,10 @@ export function aggregateDraft(cards: VisualEvidenceCard[], collected: BatchFact
   const themeValues: Array<{ value: string; assetId: string }> = [];
   for (const { themes } of collected) {
     for (const theme of themes) {
-      for (const assetId of theme.assetIds) themeValues.push({ value: theme.value, assetId });
+      for (const assetId of theme.assetIds) if (known.has(assetId)) themeValues.push({ value: theme.value, assetId });
     }
   }
-  const themeTotal = themeValues.length || 1;
+  const themeTotal = total;
   const contentThemes = aggregateGroups(themeValues).map(({ value, assetIds }) => {
     const coverage = assetIds.length / themeTotal;
     return { value, supportingAssetIds: assetIds, coverage, confidence: coverage };
@@ -264,6 +265,7 @@ export function aggregateDraft(cards: VisualEvidenceCard[], collected: BatchFact
     for (const fact of facts) {
       if (fact.category !== "palette" && fact.category !== "mood") continue;
       for (const assetId of fact.assetIds) {
+        if (!known.has(assetId)) continue;
         const entry = signatureByAsset.get(assetId) ?? {};
         entry[fact.category] = fact.value;
         signatureByAsset.set(assetId, entry);
@@ -285,8 +287,8 @@ export function aggregateDraft(cards: VisualEvidenceCard[], collected: BatchFact
       if (assetIds.length / totalAssets < MIN_DIRECTION_RATIO) continue;
       if (candidateDirections.length >= MAX_CANDIDATE_DIRECTIONS) break;
       candidateDirections.push({
-        label: signature || "default",
-        summary: `${assetIds.length} 张素材支持此方向`,
+        label: signature.split("|").filter(Boolean).join(" · ") || "另一种风格",
+        summary: signature.split("|").filter(Boolean).join("，"),
         supportingAssetIds: assetIds,
         opposingAssetIds: sortedClusters.filter(([s]) => s !== signature).flatMap(([, ids]) => ids),
       });
@@ -295,7 +297,9 @@ export function aggregateDraft(cards: VisualEvidenceCard[], collected: BatchFact
 
   return {
     schemaVersion: 1,
-    summary: `${cards.length} 张有效反推素材；${visualRules.length} 条视觉规则，${conflicts.length} 处冲突，${contentThemes.length} 个内容主题。`,
+    summary: visualRules.length
+      ? `${["mood", "palette", "composition", "light", "material", "medium", "layout"].flatMap((category) => visualRules.filter((rule) => rule.category === category).slice(0, 1).map((rule) => rule.value.replace(/[。；;]+$/, ""))).slice(0, 4).join("；")}。`
+      : "这些图片呈现了不同的视觉方向，可以选择更接近品牌的一种，或补充更一致的作品。",
     visualRules,
     contentThemes,
     conflicts,
@@ -382,7 +386,7 @@ async function heartbeatLoop(control: ControlClient, jobId: string, leaseId: str
 async function executeClaim(
   config: VisualWorkerConfig,
   control: ControlClient,
-  chat: ModelChat,
+  chat: ModelChat | undefined,
   fetchImpl: WorkerFetch,
   claimed: ClaimedJob,
 ): Promise<void> {
@@ -394,9 +398,11 @@ async function executeClaim(
   let submitted = false;
   try {
     const cards = await fetchInput(fetchImpl, claimed.inputUrl, claimed.job.inputManifestHash);
+    declaredStandards(cards); // Validate before charging/submitting a model request.
+    const jobChat = chat ?? createVisualChat(config);
     await control.post({ action: "submitted", jobId, leaseId });
     submitted = true;
-    const resultText = await extractVisualDraft(cards, chat, config.maxCharsPerBatch);
+    const resultText = await extractVisualDraft(cards, jobChat, config.maxCharsPerBatch);
     await control.post({ action: "finish", jobId, leaseId, resultText });
     console.log(JSON.stringify({ event: "visual_succeeded", job_id: jobId, cards: cards.length, chars: resultText.length }));
   } catch (error) {
@@ -417,24 +423,20 @@ async function executeClaim(
   }
 }
 
-export async function runVisualProfileWorker(
-  config: VisualWorkerConfig,
-  modelChat?: ModelChat,
-  fetchImpl: WorkerFetch = defaultFetch(),
-  stop: { requested: boolean } = { requested: false },
-): Promise<void> {
+function createVisualChat(config: VisualWorkerConfig): ModelChat {
+  const prompt = loadBrandPrompt("extraction");
   const backend = new DeepSeekBackend({
     apiKey: config.deepseekApiKey,
     baseUrl: config.deepseekBaseUrl,
     model: config.deepseekModel,
     timeoutMs: config.deepseekTimeoutMs,
   });
-  const chat: ModelChat = modelChat ?? (async (userContent) => {
+  return async (userContent) => {
     // AbortSignalLike 只有 aborted 一个字段；DeepSeek 调用不设主动超时中断，
     // 生命周期由租约心跳管理（生图/理解同款铁律）。
     const result = await backend.chat(
       [
-        { role: "system", content: EXTRACTION_SYSTEM_PROMPT },
+        { role: "system", content: prompt },
         { role: "user", content: userContent },
       ],
       [],
@@ -442,17 +444,39 @@ export async function runVisualProfileWorker(
     );
     if (!result.content.trim()) throw new Error("deepseek_empty_content");
     return result.content;
-  });
+  };
+}
+
+export async function runVisualProfileWorker(
+  config: VisualWorkerConfig,
+  modelChat?: ModelChat,
+  fetchImpl: WorkerFetch = defaultFetch(),
+  stop: { requested: boolean } = { requested: false },
+): Promise<void> {
   const control = new ControlClient(config, fetchImpl);
+  const idleBackoff = new IdlePollBackoff(config.pollIntervalMs);
+  let nextCleanupAt = Date.now() + CLEANUP_INTERVAL_MS;
   console.log(JSON.stringify({ event: "visual_worker_started", worker_id: config.workerId }));
   while (!stop.requested) {
+    if (Date.now() >= nextCleanupAt) {
+      nextCleanupAt = Date.now() + CLEANUP_INTERVAL_MS;
+      try {
+        await control.post({ action: "cleanup_expired" });
+      } catch (error) {
+        console.error(JSON.stringify({ event: "visual_cleanup_failed", error: safeErrorKind(error) }));
+      }
+    }
     try {
       const claimed = await control.post({ action: "claim" }) as unknown as ClaimedJob;
-      if (claimed.job) await executeClaim(config, control, chat, fetchImpl, claimed);
-      else await sleep(config.pollIntervalMs);
+      if (claimed.job) {
+        idleBackoff.reset();
+        await executeClaim(config, control, modelChat, fetchImpl, claimed);
+      } else {
+        await sleep(idleBackoff.nextDelayMs());
+      }
     } catch (error) {
       console.error(JSON.stringify({ event: "visual_claim_failed", error: safeErrorKind(error) }));
-      await sleep(Math.max(config.pollIntervalMs, 5_000));
+      await sleep(Math.max(idleBackoff.nextDelayMs(), 5_000));
     }
   }
 }

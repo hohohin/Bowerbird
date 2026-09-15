@@ -1,0 +1,1374 @@
+{
+  "version": "video-api-integration-v3",
+  "taskId": "01a075d3-a061-76f0-b987-4329e8ac74a6",
+  "sourceDirectory": "D:/H/Project/Bowerbird",
+  "baseHead": "e2d2898c13674e1760a7da545dab3d340432cc6b",
+  "videoCommits": [
+    "522a26df58e0c1a2aeefa6d4da5f6b632ac9f0d8",
+    "c7d9ad9a1ddf900f25b0d1ef09b89779c624658c"
+  ],
+  "ffmpegCommit": "887b119c420addf3b3adfd2008f2a917ee932a00",
+  "videoMigration": "0058_video_generation_jobs.sql",
+  "reservedUnmodifiedMigration": "0057_agent_automatic_review.sql",
+  "hashConvention": "UTF-8 CRLF->LF, no trimming; null means absent",
+  "integrationFiles": [
+    {
+      "path": ".gitignore",
+      "savedSha256": "8e61d7e3cb99c51d0d5020295411521142b00ca2f409f5197788b4a6a523c07d",
+      "apiSha256": "2646e223fde6afe6664aff5a65900b38d21070fd5b7401a768e0cdffb8c84438",
+      "mergedSha256": "2646e223fde6afe6664aff5a65900b38d21070fd5b7401a768e0cdffb8c84438",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -51,7 +51,16 @@ dev-doc/*",
+          "sha256": "25ce942f83cbdd10793b206c42586afc90ec4daaad449cc03aa059439dc54d86"
+        }
+      ]
+    },
+    {
+      "path": "AGENTS.md",
+      "savedSha256": "c525b4d6f05ee69a862548bbf0393ad87da08c2855626c2b8542ec7f591dbb68",
+      "apiSha256": "987ad233bcfda9319eb501365681b89cce795ea034e74a1ca78e648d1f5aba4b",
+      "mergedSha256": "987ad233bcfda9319eb501365681b89cce795ea034e74a1ca78e648d1f5aba4b",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -8,6 +8,11 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t",
+          "sha256": "7c230acc7501fd801a86914ddf8c9f26a94ca158e3e4ee6a48553de55ebfa7fe"
+        }
+      ]
+    },
+    {
+      "path": "PROJECT.md",
+      "savedSha256": "0c1f5ccc76d8917ee5d5551af8f734f39ad9499cdbb0c2ba6a5b7d52cac1aa34",
+      "apiSha256": "d0998c637f144e76d9c5f6167a3185eba47575a802ffd56130863caaceed9096",
+      "mergedSha256": "d0998c637f144e76d9c5f6167a3185eba47575a802ffd56130863caaceed9096",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -6,6 +6,12 @@",
+          "sha256": "288eed468128adfeb013bb5e2411337ebd0b963e89fe2044224f73fd67221447"
+        },
+        {
+          "header": "@@ -32,6 +38,8 @@",
+          "sha256": "d1bff130f95b041a7646a0e9abde830d7841d523255ac7b5777abae622a2a671"
+        },
+        {
+          "header": "@@ -126,7 +134,7 @@",
+          "sha256": "efd150927d1e3fb5809b380e48d16af253e367f891413e5211725defcec75295"
+        },
+        {
+          "header": "@@ -145,6 +153,8 @@",
+          "sha256": "cd3934bf07196d7b4de5b42069e68805fe4f93b1bab87b041e926db8c6a49805"
+        }
+      ]
+    },
+    {
+      "path": "Windows/README.md",
+      "savedSha256": "764f33e8a8645bcee5ba46cad6a12b0b28cb51b1d95ad37b24cceea04184f406",
+      "apiSha256": "8b3798a1c9ba1af3e5274ce34f946de53e6cd4e4eaa3fcea8fe294a16fbacd89",
+      "mergedSha256": "8b3798a1c9ba1af3e5274ce34f946de53e6cd4e4eaa3fcea8fe294a16fbacd89",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -19,7 +19,7 @@",
+          "sha256": "2f45366cbf7405642621e5d2574de8413e4d60d494fb7c5315f5c449260dff40"
+        },
+        {
+          "header": "@@ -42,4 +42,4 @@ powershell -ExecutionPolicy Bypass -File .\\Windows\\build.ps1 -Clean",
+          "sha256": "1cdd16b397634190518e7bc3a7198a3cb9b28cea6a909b522b5ff19f3ac971da"
+        }
+      ]
+    },
+    {
+      "path": "apps/agent-worker/scripts/video-api-acceptance.mjs",
+      "savedSha256": null,
+      "apiSha256": "8c6791f9f216c59e1029aba3133d977c70c369de8cc6b49c7dc7bf565c903655",
+      "mergedSha256": "8c6791f9f216c59e1029aba3133d977c70c369de8cc6b49c7dc7bf565c903655",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -0,0 +1,184 @@",
+          "sha256": "2a43f6d482116809dbb6794be096770a5f8f8741c9a1ae6a775fc9e1038899dd"
+        }
+      ]
+    },
+    {
+      "path": "apps/agent-worker/scripts/video-api-acceptance.test.mjs",
+      "savedSha256": null,
+      "apiSha256": "7381ceda70cdf6c923ce1946907dbd225927eab04320539e45e97d627586f43d",
+      "mergedSha256": "7381ceda70cdf6c923ce1946907dbd225927eab04320539e45e97d627586f43d",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -0,0 +1,87 @@",
+          "sha256": "fbfac463247816fbef6af813e02bd2687c7e5fcb92ad9db5be075f21eee8ca49"
+        }
+      ]
+    },
+    {
+      "path": "apps/agent-worker/src/cloud-generation/ark-video.test.ts",
+      "savedSha256": null,
+      "apiSha256": "6ee2d0b7ab6afa8528481b7aabdd5bdb48e85ef64ef716c51926c3132c5c34a5",
+      "mergedSha256": "6ee2d0b7ab6afa8528481b7aabdd5bdb48e85ef64ef716c51926c3132c5c34a5",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -0,0 +1,73 @@",
+          "sha256": "673475795374f31c68b256f9a1369e58b2c917015e7ce6220f9163f13f91331f"
+        }
+      ]
+    },
+    {
+      "path": "apps/agent-worker/src/cloud-generation/ark-video.ts",
+      "savedSha256": null,
+      "apiSha256": "ff94cd8f78e010818558695417f288b4b3e4b1430de29ea41c62b5e07c391097",
+      "mergedSha256": "ff94cd8f78e010818558695417f288b4b3e4b1430de29ea41c62b5e07c391097",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -0,0 +1,71 @@",
+          "sha256": "e2d119fc39d4940238d3200232570ff0fd08c19e0a9fe6edc421c3461519fba0"
+        }
+      ]
+    },
+    {
+      "path": "apps/agent-worker/src/cloud-generation/runtime.ts",
+      "savedSha256": "972a6185a400ae94150763a6ebed9fb7e4c99593dc4a4d5245b82279f4d4aada",
+      "apiSha256": "4c53ee9a78a758a0984980d3bc3abe52a67213d47979fa40ecdae6a8e6928566",
+      "mergedSha256": "4c53ee9a78a758a0984980d3bc3abe52a67213d47979fa40ecdae6a8e6928566",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -1,5 +1,7 @@",
+          "sha256": "8d0ed7a7e638023ff88d315c489e70a6ef132f8a743d60fc34336eb620f9f283"
+        },
+        {
+          "header": "@@ -15,12 +17,14 @@ interface HttpResponse {",
+          "sha256": "69b0fe5b1419df654216447ea5e7ab12a07b100a029c85478e51824cf57b479c"
+        },
+        {
+          "header": "@@ -42,7 +46,7 @@ export interface GenerationWorkerConfig {",
+          "sha256": "f27025547f6505190fde2c5c6bac478899c6b30e0e76d40be1ad85941f5cc6f8"
+        },
+        {
+          "header": "@@ -313,15 +317,15 @@ export async function sleep(ms: number): Promise<void> {",
+          "sha256": "ecc31c37011e77753d42d20367139474b2c11386261cc23167ded050dd7487a5"
+        },
+        {
+          "header": "@@ -355,8 +359,17 @@ async function executeClaim(",
+          "sha256": "ff6c07adfbdfc3bb168870b347e21323e42430350fa685cf75c05e31e91c6c60"
+        },
+        {
+          "header": "@@ -388,6 +401,12 @@ async function executeClaim(",
+          "sha256": "bc7fea32cbb152123736a8dfa91a0153127202a5397fe04e816ca5b67e711bf4"
+        }
+      ]
+    },
+    {
+      "path": "apps/agent-worker/src/cloud-generation/video.test.ts",
+      "savedSha256": null,
+      "apiSha256": "b13799fbb1f409c80e63a83ae4bba6ffbdcf4126b15aa630edb8fe1872c82408",
+      "mergedSha256": "b13799fbb1f409c80e63a83ae4bba6ffbdcf4126b15aa630edb8fe1872c82408",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -0,0 +1,75 @@",
+          "sha256": "967f01eab214380e44eaebe6ec1703839c78919326ff93639974cdce6953e361"
+        }
+      ]
+    },
+    {
+      "path": "apps/agent-worker/src/cloud-generation/video.ts",
+      "savedSha256": null,
+      "apiSha256": "6a4e03b8be3d51afd10340b5670b713fbd008824c050998d620d22ecc4c65c7b",
+      "mergedSha256": "6a4e03b8be3d51afd10340b5670b713fbd008824c050998d620d22ecc4c65c7b",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -0,0 +1,125 @@",
+          "sha256": "9f74de73b584949400f0386221283ef2eaf2a4ba9b739364eca4176a37121280"
+        }
+      ]
+    },
+    {
+      "path": "apps/agent-worker/src/types/node-ambient.d.ts",
+      "savedSha256": "539f800336d97489e7280626935d7996c618e83d7cc9498c32448e4b8f18822d",
+      "apiSha256": "3e5f8704c01293e1c4e313fb4c8305e6936071bdaeb51952912cb7971ae454d6",
+      "mergedSha256": "3e5f8704c01293e1c4e313fb4c8305e6936071bdaeb51952912cb7971ae454d6",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -65,6 +65,12 @@ declare module \"node:path\" {",
+          "sha256": "29a1ae21eb933759181de5a3ce949e4b3939c674588a73348cc413afa2d299aa"
+        },
+        {
+          "header": "@@ -88,6 +94,7 @@ declare module \"node:url\" {",
+          "sha256": "25ad53edd0826234cc5d5211b35e4a9bc5f5275d3d42ef44bae080408083dce2"
+        }
+      ]
+    },
+    {
+      "path": "apps/cloud/scripts/video-generation-db.test.mjs",
+      "savedSha256": null,
+      "apiSha256": "f190c1dffdf619814eeb70ea067193a10238835fb468ea4d03b834d0fe550475",
+      "mergedSha256": "f190c1dffdf619814eeb70ea067193a10238835fb468ea4d03b834d0fe550475",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -0,0 +1,77 @@",
+          "sha256": "d264dbf368c74b645583ebaa0c06e4b6814afb7a4040de91e5bd1b23229b24bc"
+        }
+      ]
+    },
+    {
+      "path": "apps/cloud/supabase/functions/_shared/usage.ts",
+      "savedSha256": "a1fb7f02ae89fee755b181af3fa77316213e5a0d595b607c662591b77d7fe744",
+      "apiSha256": "5c5181fa26e040dbc26c7e2520637c917c01f520e846b0169f0085edb6c05527",
+      "mergedSha256": "5c5181fa26e040dbc26c7e2520637c917c01f520e846b0169f0085edb6c05527",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -15,12 +15,13 @@ export async function reserveManagedUsage(",
+          "sha256": "8664daad3ff68af895aea24c9696a92592d6169fb22e179d21a2bcad7590a3ea"
+        }
+      ]
+    },
+    {
+      "path": "apps/cloud/supabase/functions/_shared/video-contract.ts",
+      "savedSha256": null,
+      "apiSha256": "09c7aefbdb68081fec0102499d93eb3fd42099bac088d5aa1c8d7a6a03f810e5",
+      "mergedSha256": "09c7aefbdb68081fec0102499d93eb3fd42099bac088d5aa1c8d7a6a03f810e5",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -0,0 +1,96 @@",
+          "sha256": "c4d825387a70f79f001ed986e70b3e178548795dc4ac0c3e7a6db1573ada2496"
+        }
+      ]
+    },
+    {
+      "path": "apps/cloud/supabase/functions/generate-proxy/index.ts",
+      "savedSha256": "5f613f1d60cfd139e64641b6109750aacbc2343120a97d68c3a1f1f39c8b065a",
+      "apiSha256": "1029831ae98d5dba0995e2c568b1c84c152f9683a1614c8f5f2df6dadcefbcc7",
+      "mergedSha256": "1029831ae98d5dba0995e2c568b1c84c152f9683a1614c8f5f2df6dadcefbcc7",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -1,10 +1,11 @@",
+          "sha256": "452f3990c628a637865e2169c5eb13f00bef489b4cffce13db0ee2918953d00a"
+        },
+        {
+          "header": "@@ -18,6 +19,8 @@ interface GenerateRequest {",
+          "sha256": "9821ace7eaf80325137f41e22cb349c54a8372b2b44a5fb20b54f6ac0290fd01"
+        },
+        {
+          "header": "@@ -47,21 +50,28 @@ function validate(body: unknown): GenerateRequest {",
+          "sha256": "fbc912c34f1518d75220ed40631b6abdc247eddce57055ef9938918176d4a982"
+        },
+        {
+          "header": "@@ -101,7 +111,9 @@ async function jobResponse(admin: SupabaseClient, job: GenerationJob, cors: Head",
+          "sha256": "f9bc97912c3d45bc7d4bb8f762016a4f3f4f609fd037e4549955687180b2d99f"
+        },
+        {
+          "header": "@@ -110,6 +122,7 @@ async function jobResponse(admin: SupabaseClient, job: GenerationJob, cors: Head",
+          "sha256": "1b123e7f217a7758fb855d9188324e977704ff84e065de8b3735b2ced6b93d95"
+        },
+        {
+          "header": "@@ -153,7 +166,7 @@ async function actionCancel(",
+          "sha256": "74cb9b32f34df8f00249887b0b8068eb805756a321b2863483a35a5f98b5ed1a"
+        },
+        {
+          "header": "@@ -168,28 +181,40 @@ async function createJob(",
+          "sha256": "9d6d26290941daa61bf28ada45a5003772ded61988a5a9107eab0eba1b9f619c"
+        },
+        {
+          "header": "@@ -199,40 +224,53 @@ async function createJob(",
+          "sha256": "3c78994fb63712adab35c3af0ff418377b2ddf85f21bd22daa348f90a21e0196"
+        },
+        {
+          "header": "@@ -261,12 +299,25 @@ Deno.serve(async (request) => {",
+          "sha256": "d77a23a299e32cf92e84a83312f959f32a514af53b6ada5b7764c82fdfe23d60"
+        }
+      ]
+    },
+    {
+      "path": "apps/cloud/supabase/functions/generation-worker/index.ts",
+      "savedSha256": "638aceeef257678ed4b28ddbfaeac1426dfdae258587df5e0eed9300b8523f68",
+      "apiSha256": "ebea8526c859f71217410324b93628bb2733b150c65ec0ecc26e680bd808a83a",
+      "mergedSha256": "ebea8526c859f71217410324b93628bb2733b150c65ec0ecc26e680bd808a83a",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -52,13 +52,14 @@ function requireWorker(request: Request): { workerId: string; admin: SupabaseCli",
+          "sha256": "42f8b9a3eb558d5315cb2fc332df43ed8f4b9b0d2c1c4ddd60ba1487713f9938"
+        },
+        {
+          "header": "@@ -97,6 +98,7 @@ async function actionClaim(admin: SupabaseClient, workerId: string): Promise<Res",
+          "sha256": "61f6e7095583c872bb6157af9c8007ca8f11c7da816803bd7f47652b8558c219"
+        },
+        {
+          "header": "@@ -105,22 +107,30 @@ async function actionClaim(admin: SupabaseClient, workerId: string): Promise<Res",
+          "sha256": "1430e17c3c9f8c99d7085c193c3a8ccdc206e5f0ba0495d9a3e47cb78044633c"
+        },
+        {
+          "header": "@@ -144,6 +154,23 @@ async function actionHeartbeat(admin: SupabaseClient, body: Record<string, unkno",
+          "sha256": "fbf6d9d1e6f67b2636689fe05e746ae88cd4366afdce8665500c77622584ec0c"
+        },
+        {
+          "header": "@@ -159,6 +186,7 @@ async function actionSubmitted(admin: SupabaseClient, body: Record<string, unkno",
+          "sha256": "9e9ceeaa9b9acca50c5206a5a38b405fd582ce123e9475704b8e29fba9ac3db5"
+        },
+        {
+          "header": "@@ -169,7 +197,8 @@ async function actionOutputUpload(admin: SupabaseClient, body: Record<string, un",
+          "sha256": "7ffd4bcf903e048a81c1e5d5b9dee3b1555f584b50b8faa0413c4187502686c0"
+        },
+        {
+          "header": "@@ -195,7 +224,7 @@ async function actionComplete(",
+          "sha256": "fc312a5a788ba3341ac38f34d928b5d997a2ee4d7cf18490aa00c67f273d2e08"
+        },
+        {
+          "header": "@@ -206,10 +235,12 @@ async function actionComplete(",
+          "sha256": "ed819568404a924d0a8c27c4aea9130eecf9d824082b7b496356868b001de994"
+        },
+        {
+          "header": "@@ -238,13 +269,15 @@ Deno.serve(async (request) => {",
+          "sha256": "5e3fee4200fc4eaf2c61f37c36b69b31cb0beca65b00c7878a055eb4a2884f32"
+        }
+      ]
+    },
+    {
+      "path": "apps/cloud/supabase/migrations/0058_video_generation_jobs.sql",
+      "savedSha256": null,
+      "apiSha256": "338435ed5c8799578ac8f850d15c0825392749f56e46defe6bd71b2120dc4367",
+      "mergedSha256": "338435ed5c8799578ac8f850d15c0825392749f56e46defe6bd71b2120dc4367",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -0,0 +1,485 @@",
+          "sha256": "5ef7f9690dc89e0572381545ff87532947cc42526eff374494eb265dedefcf3c"
+        }
+      ]
+    },
+    {
+      "path": "apps/desktop/scripts/verify-video-integration.mjs",
+      "savedSha256": null,
+      "apiSha256": "89c6f252f690ac419b1c350b79923f4b13deda7a1dbd1ea1abf9b9a4d3c4380e",
+      "mergedSha256": "89c6f252f690ac419b1c350b79923f4b13deda7a1dbd1ea1abf9b9a4d3c4380e",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -0,0 +1,22 @@",
+          "sha256": "086967a95de49f63cfc6d4fede54939df46cd04afb33f3417113e282bf8fed3f"
+        }
+      ]
+    },
+    {
+      "path": "apps/desktop/scripts/video-generation.test.mjs",
+      "savedSha256": "4164bf9b45d7a113f7def6a8c1fbc69b645de0eeb0852e60e27f8187f138c28c",
+      "apiSha256": "6ec29e32ff9ee673dd7fc9128f3b25457f15f15ff758f7c079af71d46be566d3",
+      "mergedSha256": "6ec29e32ff9ee673dd7fc9128f3b25457f15f15ff758f7c079af71d46be566d3",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -33,7 +33,7 @@ test(\"Seedance 2.5 validates all four explicit modes without silently dropping r",
+          "sha256": "73ac3307146384fbbedcb5a565c898ae8836afd89e8788cac117cf59b3f9fe98"
+        },
+        {
+          "header": "@@ -52,7 +52,7 @@ function harness() {",
+          "sha256": "29d677d3c470100b36976ac0a2a9884bc517bb16b480102d262b1dd7ea0cfc96"
+        },
+        {
+          "header": "@@ -62,6 +62,21 @@ function harness() {",
+          "sha256": "0bd464fe1a6458f44c6a73afb07e118ac3fbe68f77f68d0a95c656cb1e9c8af4"
+        },
+        {
+          "header": "@@ -99,6 +114,49 @@ test(\"video revision uses explicit references and never borrows the preceding MP",
+          "sha256": "990531092a19962ec16d1d9afe4fc615ff7b19c7b46ac527f2eb69beb54598ea"
+        }
+      ]
+    },
+    {
+      "path": "apps/desktop/scripts/video-reference-editor.test.mjs",
+      "savedSha256": null,
+      "apiSha256": "d0483201ba215d924cbe6494c0068970a1833358c71f1e4c7ee50acb18f897de",
+      "mergedSha256": "d0483201ba215d924cbe6494c0068970a1833358c71f1e4c7ee50acb18f897de",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -0,0 +1,35 @@",
+          "sha256": "768f6a150a7aec6808ce27cf1e4153f9a1a3b0deff66d39b84342bfce5e0073f"
+        }
+      ]
+    },
+    {
+      "path": "apps/desktop/src-tauri/sql/0024_shared_canvas_references.sql",
+      "savedSha256": "e36d538ac082c6ea3537ad9a1c5d2c7b7862474b000e7ae8448aefabbc60052a",
+      "apiSha256": "e36d538ac082c6ea3537ad9a1c5d2c7b7862474b000e7ae8448aefabbc60052a",
+      "mergedSha256": "e36d538ac082c6ea3537ad9a1c5d2c7b7862474b000e7ae8448aefabbc60052a",
+      "owner": "video-api-integration-v3",
+      "apiHunks": []
+    },
+    {
+      "path": "apps/desktop/src-tauri/sql/0025_shared_generated_reference_inputs.sql",
+      "savedSha256": null,
+      "apiSha256": "ca73d9a63969a83a0e1fe148c6c6f7063301f8885c35a501b56fe1a00291cc34",
+      "mergedSha256": "ca73d9a63969a83a0e1fe148c6c6f7063301f8885c35a501b56fe1a00291cc34",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -0,0 +1,40 @@",
+          "sha256": "aa580c0538075d5a02a18b012ec045df7af1cdfea65ff647bce6da6d529c2743"
+        }
+      ]
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/codex/bowerbird_cloud.rs",
+      "savedSha256": "30b566a6ea82f6bf04ec5e4d825e53c59a7dbc3703371b8104d98b79b19abe83",
+      "apiSha256": "0b52f591ac4383912ac84b8af4326f6287a59a470cbd84f7864abab1c99bae00",
+      "mergedSha256": "0b52f591ac4383912ac84b8af4326f6287a59a470cbd84f7864abab1c99bae00",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -10,7 +10,7 @@ use ulid::Ulid;",
+          "sha256": "36974d50c6ab16fef07c7841b3d9540c8392ea81e3217ac201b554154b1cd600"
+        },
+        {
+          "header": "@@ -63,6 +63,44 @@ pub(crate) struct GenerateResponse {",
+          "sha256": "8cdf11e68cfed727490db05f6f10186ee44b2458c37dcd3e1650fa535202e5b4"
+        },
+        {
+          "header": "@@ -104,6 +142,45 @@ impl GenProvider for BowerbirdCloudProvider {",
+          "sha256": "98b05a730ddeff3f9c1de037aa593ad5c27edd41ac9617a2ea670c3b5e4b46d7"
+        },
+        {
+          "header": "@@ -240,6 +317,14 @@ impl GenProvider for BowerbirdCloudProvider {",
+          "sha256": "8138a89dbfa2ed02e5d1509b7bf6175872b8e303979391e3e294dcaeffdfd626"
+        },
+        {
+          "header": "@@ -288,18 +373,30 @@ pub(crate) async fn wait_for_cloud_job(",
+          "sha256": "4669fb18cd547d6e61ecca483082d49ccc17fba459833c10e6ec89322c7fed2c"
+        },
+        {
+          "header": "@@ -342,14 +439,15 @@ async fn download_artifact(",
+          "sha256": "3bf0742b072fa4e174337451e2f365e6ebe66c740e5971c18d8609dfba3c7491"
+        },
+        {
+          "header": "@@ -361,10 +459,11 @@ async fn download_artifact(",
+          "sha256": "5138fa7fcc53cead118310cdeb46ec795deab8bf1350f2c1fe7d804941dcc60c"
+        },
+        {
+          "header": "@@ -376,6 +475,7 @@ async fn download_artifact(",
+          "sha256": "51f2731f216b1c7f0142b4dc7499a367d6a06eb2490efb19340a4c1537b4fe88"
+        },
+        {
+          "header": "@@ -385,7 +485,7 @@ async fn download_artifact(",
+          "sha256": "3fb3239f7caa99e4ec6dd28e9dcba11574c78035c10649f21a45857ff8363369"
+        },
+        {
+          "header": "@@ -413,3 +513,14 @@ pub(crate) async fn recover_cloud_generation(",
+          "sha256": "430702071fdd1bc525d34162d55960f8e95674f09a52f98bef414c837c0331f5"
+        }
+      ]
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/codex/jimeng.rs",
+      "savedSha256": "abbfedcb7818deb0064c445de3871d9c6102b09a5271fca2fcce908e7fddfd23",
+      "apiSha256": "abbfedcb7818deb0064c445de3871d9c6102b09a5271fca2fcce908e7fddfd23",
+      "mergedSha256": "abbfedcb7818deb0064c445de3871d9c6102b09a5271fca2fcce908e7fddfd23",
+      "owner": "video-api-integration-v3",
+      "apiHunks": []
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/codex/jimeng_video.rs",
+      "savedSha256": "fb87370db5d0cefe4f2aec0e006ef8cdc4978d741b64edaced5619d7c261ef8f",
+      "apiSha256": "fb87370db5d0cefe4f2aec0e006ef8cdc4978d741b64edaced5619d7c261ef8f",
+      "mergedSha256": "fb87370db5d0cefe4f2aec0e006ef8cdc4978d741b64edaced5619d7c261ef8f",
+      "owner": "video-api-integration-v3",
+      "apiHunks": []
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/codex/mod.rs",
+      "savedSha256": "543debc5d47ddb4b9ce5d877496e36b586a816bf1294c0f4e78abc6b8881c285",
+      "apiSha256": "543debc5d47ddb4b9ce5d877496e36b586a816bf1294c0f4e78abc6b8881c285",
+      "mergedSha256": "543debc5d47ddb4b9ce5d877496e36b586a816bf1294c0f4e78abc6b8881c285",
+      "owner": "video-api-integration-v3",
+      "apiHunks": []
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/codex/types.rs",
+      "savedSha256": "279c65bd7f26eaa55d6fc213374e3d6bc4e8db7bda4ee4aec12d2dd2d4f66185",
+      "apiSha256": "279c65bd7f26eaa55d6fc213374e3d6bc4e8db7bda4ee4aec12d2dd2d4f66185",
+      "mergedSha256": "279c65bd7f26eaa55d6fc213374e3d6bc4e8db7bda4ee4aec12d2dd2d4f66185",
+      "owner": "video-api-integration-v3",
+      "apiHunks": []
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/commands/codex.rs",
+      "savedSha256": "7c0a4d3b1b2ac5fe6a124e5438a1a595da6bf6d9cb2d2d294c5987c5ad9a48ab",
+      "apiSha256": "756262a857676f829cf18c9c7191da929a0e21d5c8f045f855105d241169d823",
+      "mergedSha256": "756262a857676f829cf18c9c7191da929a0e21d5c8f045f855105d241169d823",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -520,8 +520,9 @@ pub async fn codex_create_image(",
+          "sha256": "c37a7f4e7150ecad0eab7a2a357412bcfbe5de15b3a4740c70d2f69c18408a9d"
+        },
+        {
+          "header": "@@ -719,11 +720,12 @@ pub async fn codex_create_image(",
+          "sha256": "752a15681f7fa0bed356db89ed661ef96c8f2abb9661844f8b19864b36c34a5b"
+        },
+        {
+          "header": "@@ -858,8 +860,8 @@ pub async fn codex_create_image(",
+          "sha256": "4c6e49b0f516c9141ed9a12cdd47e74dfc0876f89ba6d13ff091991a13e1292b"
+        },
+        {
+          "header": "@@ -914,8 +916,8 @@ pub async fn codex_create_image(",
+          "sha256": "ce7d035a303e37de0ad36226d4a82700fc85639994488feb25d39a8b875b302e"
+        },
+        {
+          "header": "@@ -949,6 +951,7 @@ pub async fn codex_create_image(",
+          "sha256": "a966b1b01bdbccf1ffd5202da3c5ce0baa376cfe32acf991771bcef20b844173"
+        },
+        {
+          "header": "@@ -1137,6 +1140,31 @@ pub async fn cancel_codex_create(",
+          "sha256": "6a5d4771f487c1a3ef6940a713ab97570f7749cc0053d940f030877f9ce11843"
+        },
+        {
+          "header": "@@ -1161,6 +1189,7 @@ pub struct GenJobSummary {",
+          "sha256": "bbbd4e83682ec07b7361f82512f98b57644dab4ee853a8e5f338902f015252f8"
+        },
+        {
+          "header": "@@ -1200,6 +1229,7 @@ pub async fn list_gen_jobs(db: State<'_, Arc<Database>>) -> Result<Vec<GenJobSum",
+          "sha256": "b0a44f12baebd4f085ad8b460d52cb33149f5b5f87bd7a92e38367d18d4f6493"
+        },
+        {
+          "header": "@@ -1231,6 +1261,7 @@ pub struct RecentGenSession {",
+          "sha256": "49a21b5197f375e0205aece456c30676792a1591df386e03d74353604fcb7fc9"
+        },
+        {
+          "header": "@@ -1297,6 +1328,7 @@ pub async fn recent_gen_sessions(",
+          "sha256": "b8b2e8c3ccbaed5786248e5c9ae26e99f6469dbb6b45803c4b26ca218b921f26"
+        },
+        {
+          "header": "@@ -1368,8 +1400,8 @@ pub async fn jimeng_retrieve_orphan(",
+          "sha256": "17b66fb31a7463a73ae4c5dcef37d489c0c70ce9d38d059fd0ba4c671bb4af28"
+        },
+        {
+          "header": "@@ -1547,8 +1579,8 @@ mod generation_task_tests {",
+          "sha256": "bbf13fcb70b4ab2ef64a23056e5f3de1a0f00b578e2d0608f8c3647fe1c4fff4"
+        }
+      ]
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/core/generation_worker.rs",
+      "savedSha256": "7e58195f5e84994dc7ffadb41359a06b8c0867d179aed3ea4eca484270716447",
+      "apiSha256": "e119108a6f065c61c7a851b92a0b04e1d1615cd9f3a7acef48cb98e8bca630fa",
+      "mergedSha256": "e119108a6f065c61c7a851b92a0b04e1d1615cd9f3a7acef48cb98e8bca630fa",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -56,6 +56,10 @@ fn provider_source_tag(provider: &str) -> &'static str {",
+          "sha256": "1d80f2bc9c131649003af1eb46cb706da0101f11a7c8d3a49ee50f57438bbb6c"
+        },
+        {
+          "header": "@@ -131,8 +135,8 @@ pub(crate) fn recover_project_generation_projection(",
+          "sha256": "834d7761e6b22ab484ee896af372649e7b3b2093fc09ab97582755455711f8f4"
+        },
+        {
+          "header": "@@ -218,6 +222,8 @@ pub async fn finalize_generation_assets(",
+          "sha256": "6da5ba4410afd87869ac0bcc0fbb234021c64070e83edab4e1c5c4150a4a50d3"
+        },
+        {
+          "header": "@@ -274,6 +280,7 @@ pub async fn finalize_generation_assets(",
+          "sha256": "38f836d0043681beb9cb37a37655405a7888314b7dd36e63fcb0c0dab72edcc4"
+        },
+        {
+          "header": "@@ -302,6 +309,14 @@ pub async fn finalize_generation_assets(",
+          "sha256": "a331bb6ba5095783fa20406468ee06be9a3e67376a3f656fcf2050f1dec1fd06"
+        },
+        {
+          "header": "@@ -342,16 +357,25 @@ pub fn spawn_recovery(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths",
+          "sha256": "1d2a5744cb2dc41ac6e67d0b4736f24ddbd1c3325444464d04bfd72e115681bd"
+        },
+        {
+          "header": "@@ -374,7 +398,7 @@ pub fn spawn_recovery(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths",
+          "sha256": "69acb48e765ebd9c96097d96c9953e00f805a029a296438f8cfd569b61540c3a"
+        },
+        {
+          "header": "@@ -383,6 +407,20 @@ pub fn spawn_recovery(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths",
+          "sha256": "181ac04ab2f7a0227d7143bb48a0d3030fca85412a3dab426ef15c377ad9533f"
+        },
+        {
+          "header": "@@ -392,7 +430,7 @@ pub fn spawn_recovery(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths",
+          "sha256": "da0a94e9e64fa171e933b260215237fe48e32f54eac2c0b2d4ad03f41c5da202"
+        },
+        {
+          "header": "@@ -410,7 +448,7 @@ pub fn spawn_recovery(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths",
+          "sha256": "70ca57a06379332e46f25fd1196ac25ab2c3a3ef6316f94a89bcc6946eb4a89b"
+        },
+        {
+          "header": "@@ -427,6 +465,12 @@ async fn recover_one_cloud_job(",
+          "sha256": "852f88c83ca897211104feaf1fe7c3a893cc720d1494803c705e0247645f1cfd"
+        },
+        {
+          "header": "@@ -434,7 +478,18 @@ async fn recover_one_cloud_job(",
+          "sha256": "f92ecc9e6aaab2f976354c81402aae1201a9a6bcff41d1c79d9d3d0f8884734d"
+        },
+        {
+          "header": "@@ -453,7 +508,7 @@ async fn recover_one_cloud_job(",
+          "sha256": "684af50491a5dec257642e7ec3d2e939f01d137cc7f4b409e83fe30871ad2da3"
+        },
+        {
+          "header": "@@ -836,8 +891,8 @@ mod tests {",
+          "sha256": "60415d4ed4a64e8f333a6b6d11dcdfc0caf276358c0b46de6ac0e185ddd6bb41"
+        },
+        {
+          "header": "@@ -909,8 +964,8 @@ mod tests {",
+          "sha256": "a4c6de25634e08d99a4736fc0b81c149f25178e850d60cf6d34431df73dbf2a6"
+        },
+        {
+          "header": "@@ -1071,8 +1126,8 @@ mod tests {",
+          "sha256": "99ade6d98a448031754518b510cbf77ea7cf0614ae09e0092421a5ec8c3535c2"
+        },
+        {
+          "header": "@@ -1137,8 +1192,8 @@ mod tests {",
+          "sha256": "6d00c60454d4d75854c65f375b46905141c34682669e96afac3a19ae8cf34f74"
+        }
+      ]
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/core/ingest.rs",
+      "savedSha256": "cfd17d383fd2e83ca210583217f0982d6c8fc3de0eba6fc9b7153d750bb59cf0",
+      "apiSha256": "282c3d102823de5d057a86df47237ff619a1ae619fa17a2b0fa7dc38c4023186",
+      "mergedSha256": "282c3d102823de5d057a86df47237ff619a1ae619fa17a2b0fa7dc38c4023186",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -652,7 +652,7 @@ mod tests {",
+          "sha256": "7c18001ebff04c063642759c997b36e3d5eada0d1d87fd1e9668801f6a33cc6d"
+        }
+      ]
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/core/library.rs",
+      "savedSha256": "05eb80686735ce5d7d427ebde55581a11c780909b19b78841398a8ef4abf0134",
+      "apiSha256": "f405ebc964bf8661a7fa5200cfd6f3ea8de9f77831336815efa207ba35231718",
+      "mergedSha256": "f405ebc964bf8661a7fa5200cfd6f3ea8de9f77831336815efa207ba35231718",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -92,6 +92,12 @@ pub struct Analysis {",
+          "sha256": "a18b6a638d3f8e3adb281ca927bb0ca826a22b2c413d4f20f5cdf6ff7957675a"
+        },
+        {
+          "header": "@@ -1692,6 +1698,9 @@ impl Database {",
+          "sha256": "b21a6500e0131bd9697eceb893b0a5d018d3775a06b44ff18daba2d6feffa461"
+        }
+      ]
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/core/project_canvas.rs",
+      "savedSha256": "81a807839dc9a07e6bd5a42afc458b468a4fe542b0021e1f760e9a9ce56bdc8f",
+      "apiSha256": "e8903a169e8dca6fb6854a72868790a18c885e0fc9aa4d7aadcd7fef02252483",
+      "mergedSha256": "e8903a169e8dca6fb6854a72868790a18c885e0fc9aa4d7aadcd7fef02252483",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -812,9 +812,9 @@ fn exact_visible_reference_node_tx(",
+          "sha256": "d5d2f38ad54ee7dc0cd9e9b8f8ab2b76a35f3fee5ece08aec390750dec8d7811"
+        },
+        {
+          "header": "@@ -887,8 +887,7 @@ fn upsert_projection_node_tx(",
+          "sha256": "740587e524769f05873ac75b959000e0a9809eaf850b5f94ea36ce93bb49fd7e"
+        },
+        {
+          "header": "@@ -2984,8 +2983,8 @@ mod tests {",
+          "sha256": "b92f9f0d768d5a2733f957ea30d47e4f3b7ff0a4327a7a15e4bfa72b2ce94e40"
+        },
+        {
+          "header": "@@ -3158,7 +3157,10 @@ mod tests {",
+          "sha256": "616e59bf815e5a860cec8b63a279f5cda7eafa9aacf7252a218e6b5c42d63c8c"
+        },
+        {
+          "header": "@@ -3193,103 +3195,15 @@ mod tests {",
+          "sha256": "008f2d69cc24dfde00605cf0dc7adca851003c52c7071f49cf31c7ce84d86679"
+        },
+        {
+          "header": "@@ -3667,8 +3581,8 @@ mod tests {",
+          "sha256": "455870211c5b69309cd49c7b9fd058bb19edeb3ef099cdd5df150d9b8e46708c"
+        },
+        {
+          "header": "@@ -4057,4 +3971,112 @@ mod tests {",
+          "sha256": "c01980b37723b0c815748fb28057618653582d1aaaf8b3857bbe684ee1db7561"
+        }
+      ]
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/core/project_canvas_backfill.rs",
+      "savedSha256": "f92ffb927a702048817b5456d26d9fdb786f9e2a4a960c86b960dae5085fa45c",
+      "apiSha256": "1a225e57ee3fb259ca33ef7da47ad07dea43d56e7a9604c0479d90ab7696ffbb",
+      "mergedSha256": "1a225e57ee3fb259ca33ef7da47ad07dea43d56e7a9604c0479d90ab7696ffbb",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -1153,8 +1153,8 @@ impl Database {",
+          "sha256": "af714660b15b53cd2de9f090c56a8a64315efa5d8bb0a286da0af87f242a6d00"
+        }
+      ]
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/core/task_queue.rs",
+      "savedSha256": "69ad473c2e5f7b6593c769ad62fa8f9b3fe5aa441182452cd0ce97a83188301f",
+      "apiSha256": "522f0aa871a9447f3687d6d482be588a10a7c339df326fa54071589f3122a51d",
+      "mergedSha256": "522f0aa871a9447f3687d6d482be588a10a7c339df326fa54071589f3122a51d",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -156,6 +156,16 @@ fn row_to_task(r: &rusqlite::Row) -> rusqlite::Result<Task> {",
+          "sha256": "8458f8caee7bf663fd8c32f7de9d17ed757fb35b61cb9d3aebb65c109dd47ce0"
+        },
+        {
+          "header": "@@ -423,8 +433,8 @@ mod tests {",
+          "sha256": "4e956237dc52485ff52f638cd33898ce6c364644e652ad28365308a0260230e6"
+        },
+        {
+          "header": "@@ -589,6 +599,22 @@ mod tests {",
+          "sha256": "df78dd72d91b0a1d268f6aa301b21b06a3533b1c8d4f03667ecf4ef1db0beb13"
+        }
+      ]
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/db/migrations.rs",
+      "savedSha256": "dbfdeb909cb7e5772bc7534b2675d97136c507b01796520840f81aedfb8278e8",
+      "apiSha256": "c966e0276098446becf55c433ec679a4863bdd82664a2bad4d6ac11570c7a06f",
+      "mergedSha256": "c966e0276098446becf55c433ec679a4863bdd82664a2bad4d6ac11570c7a06f",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -73,6 +73,7 @@ pub fn migrations() -> Migrations<'static> {",
+          "sha256": "50db4a088f96cae32b573e94b25464353857ceb7c660bffe1ee7c849a227346b"
+        }
+      ]
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/lib.rs",
+      "savedSha256": "0bff4449cd796990d555278d5ea16c8229f9a0680255548a431f60ca0967f1d5",
+      "apiSha256": "fb53b9c81fd83e25056c2b70360495fac61b716968efd8abfaf7a5a3d6b9d234",
+      "mergedSha256": "fb53b9c81fd83e25056c2b70360495fac61b716968efd8abfaf7a5a3d6b9d234",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -447,6 +447,7 @@ pub fn run() {",
+          "sha256": "c2c2427b790ab5afb1e628bbbcc14b95cd536759a90008e7dfdf0fbf53ae0005"
+        }
+      ]
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/media/mod.rs",
+      "savedSha256": "fc02f7f1cad655b247b2f42830a18eb19529f88f3d76a337e8649cf30449be0f",
+      "apiSha256": "fc02f7f1cad655b247b2f42830a18eb19529f88f3d76a337e8649cf30449be0f",
+      "mergedSha256": "bf9f12a67e5c88cd01541a4f432b1aa251f48b9192ab256f623073d2fe89ec2c",
+      "owner": "ffmpeg-discovery-v1",
+      "apiHunks": []
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/media/probe.rs",
+      "savedSha256": "3b6a66106681298291d15afc45ee2bbad47d0b91d701734950f36a6caadcf439",
+      "apiSha256": "3b6a66106681298291d15afc45ee2bbad47d0b91d701734950f36a6caadcf439",
+      "mergedSha256": "0199fb002cfbd22a57fc48ea86e9f73b0e7131b0a6d40b9c3e8b1c410b884297",
+      "owner": "ffmpeg-discovery-v1",
+      "apiHunks": []
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/media/thumb.rs",
+      "savedSha256": "dfadee8355bb08199e731b5cc7db0c04f23ac3018f46c0fe6105154e98d4e1d3",
+      "apiSha256": "dfadee8355bb08199e731b5cc7db0c04f23ac3018f46c0fe6105154e98d4e1d3",
+      "mergedSha256": "d163df4260f7dd529c052fb249c788b4e844e0049290eb603da9ab880415e733",
+      "owner": "ffmpeg-discovery-v1",
+      "apiHunks": []
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/media/tools.rs",
+      "savedSha256": null,
+      "apiSha256": null,
+      "mergedSha256": "5210499dfc66230be2d8856b4fdc79623fb6d85a30c6d0d005a1bd2ea58bd096",
+      "owner": "ffmpeg-discovery-v1",
+      "apiHunks": []
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/media/tools_test_fixture.rs",
+      "savedSha256": null,
+      "apiSha256": null,
+      "mergedSha256": "92968ff10342cb3c02838d8d696e9c9b69c185acf49ad283222c576a622a7dff",
+      "owner": "ffmpeg-discovery-v1",
+      "apiHunks": []
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/media/tools_tests.rs",
+      "savedSha256": null,
+      "apiSha256": null,
+      "mergedSha256": "595cc04e01feeee1b4c0d3dac84a0cde6d03d7e7436689a5c33a5f3a793a345d",
+      "owner": "ffmpeg-discovery-v1",
+      "apiHunks": []
+    },
+    {
+      "path": "apps/desktop/src-tauri/tests/fixtures/dreamina-video-cli.rs",
+      "savedSha256": "fa7fdb4d98b690d298fc74b947b19c9364aab558e2881f1f74477a40670650c7",
+      "apiSha256": "fa7fdb4d98b690d298fc74b947b19c9364aab558e2881f1f74477a40670650c7",
+      "mergedSha256": "fa7fdb4d98b690d298fc74b947b19c9364aab558e2881f1f74477a40670650c7",
+      "owner": "video-api-integration-v3",
+      "apiHunks": []
+    },
+    {
+      "path": "apps/desktop/src/App.tsx",
+      "savedSha256": "d71c4890b415647ba216ea969ffd02eba469bdab393bd6438dc206ff704497b5",
+      "apiSha256": "d71c4890b415647ba216ea969ffd02eba469bdab393bd6438dc206ff704497b5",
+      "mergedSha256": "d71c4890b415647ba216ea969ffd02eba469bdab393bd6438dc206ff704497b5",
+      "owner": "video-api-integration-v3",
+      "apiHunks": []
+    },
+    {
+      "path": "apps/desktop/src/components/AssetContextMenu.tsx",
+      "savedSha256": "fd023270caecb4490c695e451a62d054362a17d3670cb168950672135bb64a5c",
+      "apiSha256": "6db5aa518d9973c95496ec23b7a053f4161bc970fb17159614159bb6a31ad224",
+      "mergedSha256": "6db5aa518d9973c95496ec23b7a053f4161bc970fb17159614159bb6a31ad224",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -292,7 +292,8 @@ export function AssetContextMenu() {",
+          "sha256": "c9b3016528431b6dd8249c229c78e5deaa5bde8e2b8c7b857bef1fb1838cb039"
+        }
+      ]
+    },
+    {
+      "path": "apps/desktop/src/components/CanvasWorkspace.tsx",
+      "savedSha256": "80d0d9e21f27a5636f339d1c5b8c4a0e4791f4a4263456d3aa0f07aafc288deb",
+      "apiSha256": "e9ff6adb7d0ce175593d9db9be42f6d5243ff81a752f276370f291e6b729d13d",
+      "mergedSha256": "e9ff6adb7d0ce175593d9db9be42f6d5243ff81a752f276370f291e6b729d13d",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -1,4 +1,5 @@",
+          "sha256": "ed74205bb2f57eeead35dfaf94bbbde2b13d43b9f3820595fbfaeb22697fa045"
+        },
+        {
+          "header": "@@ -34,7 +35,6 @@ import {",
+          "sha256": "ed8949cc1e0d15d583f7bc555ab2fc6095680e4cf257ee0640135fe5c32d1329"
+        },
+        {
+          "header": "@@ -1336,8 +1336,8 @@ export function CanvasWorkspace({",
+          "sha256": "b4d9c7374514254a6ce45aa41dbe40b722984c5697826fbd64a5b2d4ed7d5b6e"
+        }
+      ]
+    },
+    {
+      "path": "apps/desktop/src/components/CreationBoard.tsx",
+      "savedSha256": "1d291bdd5cf2c8ad17e2f95b6ddb23340670f0f63b6ce05431d79c88ca2dc721",
+      "apiSha256": "138139310bbd250c43778da1a60427dfdcae3ec3a7da8389ee2a450bbbcf7836",
+      "mergedSha256": "138139310bbd250c43778da1a60427dfdcae3ec3a7da8389ee2a450bbbcf7836",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -1,5 +1,5 @@",
+          "sha256": "f4ce9650ad39e71f2450c4922cd8cded386788a7c97a35ed5c6b3e1a66abbb5f"
+        },
+        {
+          "header": "@@ -128,7 +128,7 @@ export function CreationBoard({",
+          "sha256": "e4b976310460047c5fc62860ffd58364caa3fe20e056207ce7a98d838852ff4d"
+        },
+        {
+          "header": "@@ -184,6 +184,20 @@ export function CreationBoard({",
+          "sha256": "5d97d649a16ee31bcf3767385342befad15b3056372570584c50d6263ceaf0e9"
+        },
+        {
+          "header": "@@ -204,20 +218,6 @@ export function CreationBoard({",
+          "sha256": "9aa4151cd037cfbba066756cf2ca4a3df036f13e1e0d6813245ab659f0c0c2ae"
+        },
+        {
+          "header": "@@ -482,7 +482,7 @@ export function CreationBoard({",
+          "sha256": "41d65a80232abd6ac2094e92ab30e1b69a9bb85b68b6f7bff68a1379778d37a8"
+        },
+        {
+          "header": "@@ -501,7 +501,7 @@ export function CreationBoard({",
+          "sha256": "0579569db3acfdb0798a51cf704eb4c5d5f729855b278313d8f0b254fa2831fe"
+        },
+        {
+          "header": "@@ -707,7 +707,7 @@ export function CreationBoard({",
+          "sha256": "6607d9c35f60d5dea50fe648e56c5ef94b901551bb813978d3eaf11fffb96be6"
+        },
+        {
+          "header": "@@ -725,11 +725,11 @@ export function CreationBoard({",
+          "sha256": "312f33704a5701461830755dbfb30a827240e1615c6caf3c4ebe237deecd7831"
+        },
+        {
+          "header": "@@ -1015,10 +1015,10 @@ export function CreationBoard({",
+          "sha256": "aaaf26f005551b8130b9cfb2cc6365585c0b8e5c1ddbc0094c0a5e1c9f0e2b47"
+        },
+        {
+          "header": "@@ -1277,7 +1277,7 @@ export function CreationBoard({",
+          "sha256": "e3179eebe4df64d243197d860832b8d23b5cce4d993f35a94708852f7ab978c8"
+        }
+      ]
+    },
+    {
+      "path": "apps/desktop/src/components/CreativeComposer.tsx",
+      "savedSha256": "590fdca948e1987f512766411ad1438ae3b468fc171998cd8593b269f5705cfc",
+      "apiSha256": "c4541d992b425e827c080774632b61fd29425f94ce1c43551ee6396c5072d1e3",
+      "mergedSha256": "c4541d992b425e827c080774632b61fd29425f94ce1c43551ee6396c5072d1e3",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -1,7 +1,7 @@",
+          "sha256": "fb409b62c883fa409d42c332dd4f9d042d4902fb154aa40f47df26f1ff57a70d"
+        }
+      ]
+    },
+    {
+      "path": "apps/desktop/src/components/GenerationPanel.tsx",
+      "savedSha256": "ff258e67bdf6e4dd5364239c2b75ee8f56649bd7802c64c9f47e9e057e062c0d",
+      "apiSha256": "431e9a252bc624f82dbf408242cc9bfd19ea0c84903e190eabb09306821bf0bf",
+      "mergedSha256": "431e9a252bc624f82dbf408242cc9bfd19ea0c84903e190eabb09306821bf0bf",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -1,7 +1,7 @@",
+          "sha256": "ecc8808823d01ea105da6e4ba0ac7f535f4763ae0a9e564ade7b4da6a7b5dd3e"
+        },
+        {
+          "header": "@@ -239,6 +239,10 @@ export function GenerationPanel({",
+          "sha256": "58ff8a4b5cddb36bfcbbb42081234e56c6c9344bfa4c73e48027d32ba92f8714"
+        },
+        {
+          "header": "@@ -257,6 +261,7 @@ export function GenerationPanel({",
+          "sha256": "0fe4e585b30462c7979a2ce9dcfe5dc6bcb59c212a04f94e9753df1cf088ff3e"
+        },
+        {
+          "header": "@@ -269,6 +274,10 @@ export function GenerationPanel({",
+          "sha256": "b03a8fcae54c448ef05a14f3840977f49a900ee272c45b1ab021aca9ecdc6e1b"
+        },
+        {
+          "header": "@@ -298,6 +307,7 @@ export function GenerationPanel({",
+          "sha256": "31e01e752cd26ce7d3e71020310eba97c1f1cdabcda7a43570a01a1a5928e3f9"
+        },
+        {
+          "header": "@@ -637,9 +647,9 @@ export function GenerationPanel({",
+          "sha256": "a20034a4b0845b0c16889de7c5f3885dcf9a30cb92f80f62034d76a2052a99e4"
+        },
+        {
+          "header": "@@ -1091,7 +1101,8 @@ function GenEditComposer({",
+          "sha256": "359ca95a2371850ad47d1b24890322eca1df99bdef3e1c6eac5a90419122ca70"
+        },
+        {
+          "header": "@@ -1108,6 +1119,7 @@ function GenEditComposer({",
+          "sha256": "3593eb19fcb46362e2a425bb7ff6064589e6dae5721480210b8bfa2a5f3e21fc"
+        },
+        {
+          "header": "@@ -1208,7 +1220,7 @@ function GenEditComposer({",
+          "sha256": "1aa039561ea5440390f6b233c8922e744efc6ee19ed932cc4cb994b3522a1370"
+        },
+        {
+          "header": "@@ -1221,7 +1233,7 @@ function GenEditComposer({",
+          "sha256": "5da6714db83259059c33978aa38c6ee7f112d707a136632572cadc3ad19e60a1"
+        },
+        {
+          "header": "@@ -1292,11 +1304,12 @@ function GenEditComposer({",
+          "sha256": "74ef0e2c68a0981f84d501e961aede40878049d764746d52f7606b5e546c2166"
+        },
+        {
+          "header": "@@ -1329,10 +1342,11 @@ function GenEditComposer({",
+          "sha256": "22137ca84db212bfc781cfc1eba122a0f6a2a3abef9d526143b526a8cb5dc5c3"
+        },
+        {
+          "header": "@@ -1427,7 +1441,7 @@ function GenEditComposer({",
+          "sha256": "e87b852ea28901c19d5b18e00bf2ab51575f87b02f4912eb4396fdc0b1602062"
+        }
+      ]
+    },
+    {
+      "path": "apps/desktop/src/components/Lightbox.tsx",
+      "savedSha256": "df1af60177eb2ef9f8ef459309561c1416eda1af9f7103d53b6de636ac663735",
+      "apiSha256": "df1af60177eb2ef9f8ef459309561c1416eda1af9f7103d53b6de636ac663735",
+      "mergedSha256": "df1af60177eb2ef9f8ef459309561c1416eda1af9f7103d53b6de636ac663735",
+      "owner": "video-api-integration-v3",
+      "apiHunks": []
+    },
+    {
+      "path": "apps/desktop/src/components/MediaPreview.tsx",
+      "savedSha256": "40918f9f5b7facfa9dda1cda71aaa5952e11735fcba289e013e1d1c249a2976a",
+      "apiSha256": "40918f9f5b7facfa9dda1cda71aaa5952e11735fcba289e013e1d1c249a2976a",
+      "mergedSha256": "40918f9f5b7facfa9dda1cda71aaa5952e11735fcba289e013e1d1c249a2976a",
+      "owner": "video-api-integration-v3",
+      "apiHunks": []
+    },
+    {
+      "path": "apps/desktop/src/components/creation/BoardChipPreview.tsx",
+      "savedSha256": "8e79388668ddf2d9949c3bf54ef10474d87cf87f35aaa354bd539ded5e8fe1d1",
+      "apiSha256": "8e79388668ddf2d9949c3bf54ef10474d87cf87f35aaa354bd539ded5e8fe1d1",
+      "mergedSha256": "8e79388668ddf2d9949c3bf54ef10474d87cf87f35aaa354bd539ded5e8fe1d1",
+      "owner": "video-api-integration-v3",
+      "apiHunks": []
+    },
+    {
+      "path": "apps/desktop/src/components/creation/VideoControls.tsx",
+      "savedSha256": "da59a1e342de287829620935d5ee043d6519f0cd71d1ff66daebb76ecfd36592",
+      "apiSha256": "83ee9d92442528a7db847231943d4d60441dd4261c04540e19c1e0b0c4c0b918",
+      "mergedSha256": "83ee9d92442528a7db847231943d4d60441dd4261c04540e19c1e0b0c4c0b918",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -1,12 +1,18 @@",
+          "sha256": "6580f713c03dcb45c76ada0be4b3aac7631f1eddfd05be9f0e235fc135dfe345"
+        }
+      ]
+    },
+    {
+      "path": "apps/desktop/src/components/creation/parse.ts",
+      "savedSha256": "3678ef1afed59b071277796a30ee3fc1e939baa22ff62f6719974a2ecf8c18a7",
+      "apiSha256": "400d5594586b01bab797fc6268d0240ece6e8976f70a6a559a2cb84bfcfd4a27",
+      "mergedSha256": "400d5594586b01bab797fc6268d0240ece6e8976f70a6a559a2cb84bfcfd4a27",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -222,7 +222,8 @@ export function parsePromptToDoc(",
+          "sha256": "7a87dc50c05d9fb9ff6b6722af0ca5914c738e7ed7503cf555dcf67db74f1c23"
+        },
+        {
+          "header": "@@ -265,6 +266,13 @@ export function parsePromptToDoc(",
+          "sha256": "6e1986a6dc35fc3180ce47709e9ed49390857a874f5da8f5fd9cb3a205665775"
+        }
+      ]
+    },
+    {
+      "path": "apps/desktop/src/components/creation/schema.ts",
+      "savedSha256": "b7710ea3da6c0a0c5bfeaa0337f613cc6b36bbbfa5453f9cd6ddfae40053bc15",
+      "apiSha256": "b7710ea3da6c0a0c5bfeaa0337f613cc6b36bbbfa5453f9cd6ddfae40053bc15",
+      "mergedSha256": "b7710ea3da6c0a0c5bfeaa0337f613cc6b36bbbfa5453f9cd6ddfae40053bc15",
+      "owner": "video-api-integration-v3",
+      "apiHunks": []
+    },
+    {
+      "path": "apps/desktop/src/components/creation/serialize.ts",
+      "savedSha256": "bbc63632e16bb9178dba0ccca228780ea80a9ae17f898dab30615511eaccbe42",
+      "apiSha256": "bbc63632e16bb9178dba0ccca228780ea80a9ae17f898dab30615511eaccbe42",
+      "mergedSha256": "bbc63632e16bb9178dba0ccca228780ea80a9ae17f898dab30615511eaccbe42",
+      "owner": "video-api-integration-v3",
+      "apiHunks": []
+    },
+    {
+      "path": "apps/desktop/src/components/creation/useCreationEditor.ts",
+      "savedSha256": "a0c72b1405526983c97c60fe1ea3b27337ff924d3b55023bf388117bf5a58adb",
+      "apiSha256": "882bdcb6775831dc2fa038a80b523db633e4dd217bc05bffd9f134e6cbb85d9a",
+      "mergedSha256": "882bdcb6775831dc2fa038a80b523db633e4dd217bc05bffd9f134e6cbb85d9a",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -12,10 +12,10 @@ import { agentPromptReferencesFromDoc, graphSourcesFromDoc, serializeDoc } from",
+          "sha256": "5d69735133fef473f495a6857a71db85cd0f0d0227e7e6fd27b51d8e036e1c50"
+        },
+        {
+          "header": "@@ -118,10 +118,10 @@ export function useCreationEditor(opts?: {",
+          "sha256": "0a6f341d0eca2cd2866269dee54af48e067f5fcf88135c67f1a275b3903188b6"
+        },
+        {
+          "header": "@@ -347,7 +347,7 @@ export function useCreationEditor(opts?: {",
+          "sha256": "65c1d6389fcb3fe7c2a5ffbb6f2204308d133ecfdd6e7bdde78badf0431978d2"
+        }
+      ]
+    },
+    {
+      "path": "apps/desktop/src/lib/api.ts",
+      "savedSha256": "a1554f1ed9161c52ad6396c8c61d150a86258ffaa1fff500d4d3184c8308497b",
+      "apiSha256": "09b5dc6530ee89279756090c32fbb48c7ddaabc0c6f30f89ab19f07992f6c8f6",
+      "mergedSha256": "09b5dc6530ee89279756090c32fbb48c7ddaabc0c6f30f89ab19f07992f6c8f6",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -446,6 +446,7 @@ export const api = {",
+          "sha256": "c95e8e0fd191ecd50068a2d2994213979c95931475e59ac94fecb5ca5b2fbba9"
+        },
+        {
+          "header": "@@ -464,7 +465,6 @@ export const api = {",
+          "sha256": "285d09e0d1c2abcad07ececa5453f80e2e1f4ef7279ac25d2f27ed1b2b1c8a8a"
+        },
+        {
+          "header": "@@ -472,6 +472,7 @@ export const api = {",
+          "sha256": "073d3d869679b8d461f3e35503cd73097f6db4f766cea43d227aa3e7ee4fb790"
+        },
+        {
+          "header": "@@ -487,7 +488,6 @@ export const api = {",
+          "sha256": "5d393008c58ccad1b90be58329df93a325aecd0aa948a1081abbb46ad781365f"
+        },
+        {
+          "header": "@@ -500,6 +500,7 @@ export const api = {",
+          "sha256": "336844f2470e740a802125a85cb56b3d69931e34d88ce9640c20741b330e64cf"
+        }
+      ]
+    },
+    {
+      "path": "apps/desktop/src/lib/creativeDraft.ts",
+      "savedSha256": "9f1cf096e395076532d38381b59c3f1dbb8c5751bd259b238473fa6fbd0be114",
+      "apiSha256": "9f1cf096e395076532d38381b59c3f1dbb8c5751bd259b238473fa6fbd0be114",
+      "mergedSha256": "9f1cf096e395076532d38381b59c3f1dbb8c5751bd259b238473fa6fbd0be114",
+      "owner": "video-api-integration-v3",
+      "apiHunks": []
+    },
+    {
+      "path": "apps/desktop/src/lib/creativeLaunch.ts",
+      "savedSha256": "5b7c0eb9fa8497501e16656a306687bb1996bd58eb02af48255fb161d68038b3",
+      "apiSha256": "ae8580fcc1af275ff3749ea9e47dd91d53205154debd4b21993adc9a0eddde7a",
+      "mergedSha256": "ae8580fcc1af275ff3749ea9e47dd91d53205154debd4b21993adc9a0eddde7a",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -1,6 +1,7 @@",
+          "sha256": "d1b1c49cf43c2654d909075470c352ffe57edbe4050bf292e729127ddecd1fc9"
+        }
+      ]
+    },
+    {
+      "path": "apps/desktop/src/lib/generationRecovery.ts",
+      "savedSha256": "ee44fa1e60bd8897285eba279fb3ca09097ef14065eebfc65a0787f021f85ebd",
+      "apiSha256": "3edf136112f5542eb9ee74f263e86e7c3c34232bfa45d90f9d7e79d6d91bf574",
+      "mergedSha256": "3edf136112f5542eb9ee74f263e86e7c3c34232bfa45d90f9d7e79d6d91bf574",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -21,6 +21,7 @@ function hydrateMatchingTurn(live: GenTurn, persisted: GenTurn): GenTurn {",
+          "sha256": "39b9dccc3fdd5db475cba8d8fb9bfe06855da22f9807de2febf505ab7d146573"
+        }
+      ]
+    },
+    {
+      "path": "apps/desktop/src/lib/types.ts",
+      "savedSha256": "d410e4a7f3e94470832c4ea634b43239ab43e81e9bf52a1fa3202da8c3f0add4",
+      "apiSha256": "258c73b20e9840f191566c358a316bd343181b2d0c8a4001ad6edcf5998d82e6",
+      "mergedSha256": "258c73b20e9840f191566c358a316bd343181b2d0c8a4001ad6edcf5998d82e6",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -399,6 +399,7 @@ export interface Preset {",
+          "sha256": "c7c5baff72977970ecdba55937e38f2ef9c484132bd6a0973e866c4591b68613"
+        },
+        {
+          "header": "@@ -479,6 +480,8 @@ export interface JimengOrphanTask {",
+          "sha256": "ef30586efd57f7563c20f65d81b210a222bf137dd6b28e192d343d45a098b57d"
+        },
+        {
+          "header": "@@ -489,6 +492,7 @@ export interface GenerationHistoryTurn {",
+          "sha256": "23121595dfaa5b5cee74fd667c5cfa287c06bd596b6f843332ccf5156141b538"
+        },
+        {
+          "header": "@@ -639,6 +643,7 @@ export interface MigrateProgress {",
+          "sha256": "80c13330cf71d243074e589b4af4cabbda96b0f0ec522a4fedb73bb8182be0c8"
+        },
+        {
+          "header": "@@ -665,6 +670,7 @@ export interface GenJobSummary {",
+          "sha256": "f9f073afbe7be17dd573333b9fe1a6a4aed96b2561d7a01488e92561bac72744"
+        },
+        {
+          "header": "@@ -1019,6 +1025,7 @@ export type CodexChunk =",
+          "sha256": "4f4f5443e10bc99c51c28745115f40a12ad7c337f49c567ab2180e4f60cf9cd4"
+        },
+        {
+          "header": "@@ -1039,6 +1046,7 @@ export type CodexChunk =",
+          "sha256": "0be27fe53d194f3fd03677b33fb19abc7a9ff192a6f767398e07f7a1a0a1f3f2"
+        }
+      ]
+    },
+    {
+      "path": "apps/desktop/src/lib/videoGeneration.ts",
+      "savedSha256": "c947ef91785e3fc618650e9a4a35ed0e18426ef4e1eb950a4efb38ed8ee3455d",
+      "apiSha256": "37d0c42a1bc9c4807a7e6daaaa7364073ec147d2cde6a5e5b4dd9b3e91a29f3c",
+      "mergedSha256": "37d0c42a1bc9c4807a7e6daaaa7364073ec147d2cde6a5e5b4dd9b3e91a29f3c",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -5,13 +5,17 @@ export interface VideoOptions {",
+          "sha256": "fad20a9d8746b97409b593b0b0aaef81637143f6109a8a9b56e3e28cd4acfeba"
+        },
+        {
+          "header": "@@ -26,13 +30,15 @@ export function videoRatio(options: VideoOptions, ratio?: string | null): string",
+          "sha256": "2d5ec26d9090f4de8766e0702e536ee06d2965b2f2d80105fc69b28b2d51c659"
+        }
+      ]
+    },
+    {
+      "path": "apps/desktop/src/store.ts",
+      "savedSha256": "cc66f98e88afbea6dbf0332c4f5383a0aa4a1603d3e86eeeeda29cdb798aa651",
+      "apiSha256": "eccac00811f95f6114be1ed72dd2f02829f93e28b96b4f2084f4718c4c4b1791",
+      "mergedSha256": "eccac00811f95f6114be1ed72dd2f02829f93e28b96b4f2084f4718c4c4b1791",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -1,7 +1,7 @@",
+          "sha256": "4bbf005b0b401c78aea4efae711497a3570176eb1ebc3876453a31e40d7aae2c"
+        },
+        {
+          "header": "@@ -417,6 +417,7 @@ interface State {",
+          "sha256": "4f077bcc811d7b99b3dd034415b09648105220861087320355e00a30f41d2808"
+        },
+        {
+          "header": "@@ -449,6 +450,7 @@ interface State {",
+          "sha256": "f648fb9b492fbbcf7f0e70791d6bb84019155d13d319555f85f021bf120811bc"
+        },
+        {
+          "header": "@@ -1697,13 +1699,14 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "a4c564775648a40bbd73b5cfde068b5144d695cd196520e4f0cabe752e2109b1"
+        },
+        {
+          "header": "@@ -1744,7 +1747,7 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "3b233f377b109f0d648415f133b55bb67fd997817a1852fa4884e8b3c40c5aba"
+        },
+        {
+          "header": "@@ -1810,8 +1813,8 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "580a1f80982a154095ae3b910c9744cdfe4ff5260bf37156a2b328021da1af89"
+        },
+        {
+          "header": "@@ -1828,7 +1831,7 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "278095185147cbed6f9766bb940f6a09a123429fe5a02e0e52b3fd3096b81234"
+        },
+        {
+          "header": "@@ -1869,6 +1872,7 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "19e56bb2560c4c47e98974b4d493ddc0f416a72245aae828841181dbc9d8b549"
+        },
+        {
+          "header": "@@ -1880,7 +1884,6 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "357368ef7585252738fb1a0a10167f58bbbc90f1f53b2cf024f1662d2ecccc60"
+        },
+        {
+          "header": "@@ -1924,8 +1927,8 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "1dd875b80f05dcbc6f148a574681b12c1d29fd550de848a132530ce79829ad2a"
+        },
+        {
+          "header": "@@ -1947,7 +1950,7 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "2f0ce5b9bb5008f2cc887d9e70c544ca29a78f36a44bbe8325323b3b11a54f60"
+        },
+        {
+          "header": "@@ -1966,6 +1969,7 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "c0a74d3b0456b90fb2ad7d932ce252d64d63798727d48bacadb19a177e7d3bc8"
+        },
+        {
+          "header": "@@ -2010,6 +2014,10 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "2c87eff95e589ada6391cb327e2d2dff4deb56c4345352e8360ef832eda46fb9"
+        },
+        {
+          "header": "@@ -2026,6 +2034,7 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "fac4072c675cdcbf6c52646b7f7cb18c5bf3eba0fe2d0259a3cbac3173491b01"
+        },
+        {
+          "header": "@@ -2048,6 +2057,7 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "7751d5cf8a57d3d35b7bcbbe528d58f610fe02cb80debbe995a22cfff49ba2f2"
+        },
+        {
+          "header": "@@ -2071,6 +2081,7 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "df00074fc90f6c0633298bab94f9bf60acc7f3bc89804c28e50c4437b66f4e2b"
+        },
+        {
+          "header": "@@ -2109,7 +2120,7 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "fb9f6c4aaffab05baafe986df0f35121864b8f7ca00b13e0bca9ebdfa5bad5ee"
+        },
+        {
+          "header": "@@ -2244,6 +2255,7 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "c0b1b9782174734ee9ce7d89c2c05d6116bf5398b66efa1fa9bc2c662c583f1f"
+        },
+        {
+          "header": "@@ -2279,7 +2291,7 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "bddc5e6bd53d659adb53e42fb19753185d0555d73295c999980ad26379d7825c"
+        },
+        {
+          "header": "@@ -2307,7 +2319,8 @@ export const useStore = create<State>((set, get) => {",
+          "sha256": "3a9d9297adb4e3e330fb06c28fe6569530e94a13ea88978d65a4f1eba9111a3b"
+        }
+      ]
+    },
+    {
+      "path": "dev-doc/VIDEO-API-INTEGRATION-PREP-V2.md",
+      "savedSha256": null,
+      "apiSha256": "9de32a2174488b7f25d2e5be0f8e701c7ab34582a85b710edd9f29342ce169c9",
+      "mergedSha256": "9de32a2174488b7f25d2e5be0f8e701c7ab34582a85b710edd9f29342ce169c9",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -0,0 +1,90 @@",
+          "sha256": "74d1ffb9eeb779cf063dce9567559bb0ff87b4ce1ee4e9499854e35a7a6a6017"
+        }
+      ]
+    },
+    {
+      "path": "dev-doc/VIDEO-API-INTEGRATION-V2.json",
+      "savedSha256": null,
+      "apiSha256": "f9380a291fa99bfd7842c4bcd615bf18d9b0904129d563e9ce2c22b588b5f2ef",
+      "mergedSha256": "f9380a291fa99bfd7842c4bcd615bf18d9b0904129d563e9ce2c22b588b5f2ef",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -0,0 +1,2173 @@",
+          "sha256": "d5a781255921e150f4719833f7a24eb49af027b836645bdb39b32c0c33bbd1ac"
+        }
+      ]
+    },
+    {
+      "path": "dev-doc/VIDEO-API-INTEGRATION-V3.md",
+      "savedSha256": null,
+      "apiSha256": "18d889fde91a79e195f7b49eec5f0c007b65ed132f2a1784eeedc420c8483d33",
+      "mergedSha256": "18d889fde91a79e195f7b49eec5f0c007b65ed132f2a1784eeedc420c8483d33",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -0,0 +1,45 @@",
+          "sha256": "d507148a065851774dcd1335c4d49cb2675e71f5a0d5090c64dcd6b590f0fe0a"
+        }
+      ]
+    },
+    {
+      "path": "dev-doc/VIDEO-API-INTEGRATION.md",
+      "savedSha256": null,
+      "apiSha256": "889f3bd7c2d459538fa0147797df8cfa97c2e33be7e6208ba87d2c1443462ae6",
+      "mergedSha256": "889f3bd7c2d459538fa0147797df8cfa97c2e33be7e6208ba87d2c1443462ae6",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -0,0 +1,92 @@",
+          "sha256": "c26102aca68bc383cc2db072304023f37fe152d5d3a526950a5d88295415e98a"
+        }
+      ]
+    },
+    {
+      "path": "dev-doc/VIDEO-API-PROVENANCE.json",
+      "savedSha256": null,
+      "apiSha256": "045d20ef2cfb2490a06f8cbcacf21fbc003dd39bac50b004d538ac85649d1c74",
+      "mergedSha256": "045d20ef2cfb2490a06f8cbcacf21fbc003dd39bac50b004d538ac85649d1c74",
+      "owner": "video-api-integration-v3",
+      "apiHunks": [
+        {
+          "header": "@@ -0,0 +1,2786 @@",
+          "sha256": "fc9919bbcb5f4805ef1b49580363654a762a9358eca2c2ccb537363a5e6f5fc3"
+        }
+      ]
+    }
+  ],
+  "patchOrder": [
+    "api-ready.patch",
+    "ffmpeg-ready.patch"
+  ],
+  "ffmpegPatchSha256": "902023746eb6821d58e6690d655cb1c7770ccad8513880a5d4a9cbb3a542107b",
+  "manifestSelfBeforeSha256": null,
+  "validation": {
+    "mergedRustPassed": 308,
+    "mergedRustIgnored": 3,
+    "realMp4IngestPassed": 1,
+    "desktopTestsPassed": 124,
+    "sqlMigration": "0058",
+    "desktopTypeScript": true,
+    "workerTypeScript": true,
+    "workerTestsPassed": 22,
+    "cloudDenoEntrypoints": 2,
+    "mainViteBuild": true,
+    "mainTauriBuild": true,
+    "mainIntegrated": true,
+    "untouchedFilesByteIdentical": 785
+  },
+  "guiInstanceRestarted": false,
+  "realApiRequestsThisRound": 0
+}

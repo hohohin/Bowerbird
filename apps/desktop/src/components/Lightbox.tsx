@@ -1,3 +1,4 @@
+import { isVideoPath } from "../lib/videoGeneration";
 import { useEffect } from "react";
 import { createPortal } from "react-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -49,9 +50,10 @@ export function Lightbox({
       onClick={onClose}
       role="dialog"
       aria-modal="true"
-      aria-label={`图片预览，${index + 1} / ${images.length}`}
+      aria-label={`媒体预览，${index + 1} / ${images.length}`}
     >
-      <img
+      {isVideoPath(images[index]) ? <video key={images[index]} src={convertFileSrc(images[index])} controls preload="metadata"
+        onClick={(event) => event.stopPropagation()} className="max-h-[92vh] max-w-[92vw]" /> : <img
         ref={zoom.imgRef}
         src={convertFileSrc(images[index])}
         alt={`预览图 ${index + 1}`}
@@ -64,7 +66,7 @@ export function Lightbox({
         }}
         className="max-h-[92vh] max-w-[92vw] select-none object-contain"
         style={zoom.style}
-      />
+      />}
       <button
         type="button"
         onClick={(e) => {

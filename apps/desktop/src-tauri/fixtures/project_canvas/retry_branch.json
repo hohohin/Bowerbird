@@ -1,0 +1,16 @@
+{
+  "name": "retry_branch",
+  "project_id": "project-a",
+  "threads": [{ "id": "thread-a", "origin": "direct", "created_at": 1 }],
+  "nodes": [
+    { "id": "prompt-root", "thread_id": "thread-a", "kind": "prompt", "payload": { "schema_version": 1, "text": "初版", "provider": "cloud-fast", "job_id": "job-root", "turn_key": "turn-root" }, "created_at": 2 },
+    { "id": "output-root", "thread_id": "thread-a", "kind": "asset", "role": "output", "payload": { "schema_version": 1, "snapshot": { "name": "初版结果" }, "execution": { "job_id": "job-root", "turn_key": "turn-root" } }, "created_at": 3 },
+    { "id": "prompt-retry", "thread_id": "thread-a", "kind": "prompt", "payload": { "schema_version": 1, "text": "重试", "provider": "cloud-fast", "job_id": "job-retry", "turn_key": "turn-retry" }, "created_at": 4 },
+    { "id": "output-retry", "thread_id": "thread-a", "kind": "asset", "role": "output", "payload": { "schema_version": 1, "snapshot": { "name": "重试结果" }, "execution": { "job_id": "job-retry", "turn_key": "turn-retry" } }, "created_at": 5 }
+  ],
+  "edges": [
+    { "id": "produced-root", "thread_id": "thread-a", "from_node_id": "prompt-root", "to_node_id": "output-root", "kind": "produced", "ordinal": 0, "created_at": 3 },
+    { "id": "retry", "thread_id": "thread-a", "from_node_id": "output-root", "to_node_id": "prompt-retry", "kind": "retry", "ordinal": 0, "created_at": 4 },
+    { "id": "produced-retry", "thread_id": "thread-a", "from_node_id": "prompt-retry", "to_node_id": "output-retry", "kind": "produced", "ordinal": 0, "created_at": 5 }
+  ]
+}

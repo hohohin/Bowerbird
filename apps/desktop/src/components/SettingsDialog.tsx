@@ -2,13 +2,15 @@ import { useEffect, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-shell";
-import { RefreshCw } from "lucide-react";
+import { Moon, RefreshCw, Sun } from "lucide-react";
 import { useStore, understandEngineUsable } from "../store";
 import { api } from "../lib/api";
 import { CODEX_ONBOARDING_ENABLED, DREAMINA_ONBOARDING_ENABLED } from "../lib/featureFlags";
 import { DEFAULT_AUTO_ANALYZE_PROMPT, WEBSITE_URL } from "../lib/constants";
 import type { MigrateProgress } from "../lib/types";
+import { useOnboarding } from "../lib/onboardingStore";
 import { ModalShell } from "./ModalShell";
+import { RedeemCodeCard } from "./RedeemCodeCard";
 
 const STAGE_LABEL: Record<string, string> = {
   images: "复制原图",
@@ -93,7 +95,7 @@ const DEVELOPER_SECTION = { key: "developer", label: "开发者选项" } as cons
 /**
  * 设置面板（约定 13 全屏 Modal 形态）：常见两列式——左侧分区导航，右侧具体内容。
  *
- * 五分区：系统设置（素材库位置 / 浏览器扩展 / 新手教程）、账号管理（账号名 / 等级与升级 / 积分明细）、
+ * 五分区：系统设置（外观 / 素材库位置 / 浏览器扩展 / 新手教程）、账号管理（账号名 / 等级与升级 / 积分明细）、
  * 模型设置（codex CLI / 即梦 CLI / 默认反推模型 / 入库自动反推）、个性化与记忆（创作板 Shift 引入
  * / 全局素材隐藏项目素材开关），
  * 关于我们（当前版本 / 前往官网）。原「环境状态」总览已删除，各引导由对应分区直接唤起。
@@ -109,7 +111,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const setCodexOnboardingForceOpen = useStore((s) => s.setCodexOnboardingForceOpen);
   const setDreaminaOnboardingForceOpen = useStore((s) => s.setDreaminaOnboardingForceOpen);
   const setAccountOnboardingForceOpen = useStore((s) => s.setAccountOnboardingForceOpen);
-  const startTour = useStore((s) => s.startTour);
+  const startTour = useOnboarding((s) => s.open);
   const settings = useStore((s) => s.settings);
   const loadSettings = useStore((s) => s.loadSettings);
   const updateSettings = useStore((s) => s.updateSettings);
@@ -241,12 +243,15 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const commitSettings = (onIngest: boolean, prompt: string) => {
     // 全量覆盖：只改自动反推两项，其余设置保持不变。
     void updateSettings({
+      theme: settings?.theme ?? "light",
       auto_analyze_on_ingest: onIngest,
       auto_analyze_prompt: prompt || DEFAULT_AUTO_ANALYZE_PROMPT,
       library_root: settings?.library_root ?? null,
       cloud_auto_understand: settings?.cloud_auto_understand ?? false,
       board_shift_pick: settings?.board_shift_pick ?? false,
       hide_project_assets: settings?.hide_project_assets ?? false,
+      generation_completion_popup: settings?.generation_completion_popup ?? true,
+      generation_completion_sound: settings?.generation_completion_sound ?? true,
       dreamina_model_version: settings?.dreamina_model_version ?? DEFAULT_DREAMINA_MODEL_VERSION,
       agent_mode_enabled: settings?.agent_mode_enabled ?? true,
       agent_a_mode_enabled: settings?.agent_a_mode_enabled ?? false,
@@ -459,18 +464,14 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
       {/* 固定高度：不随分区内容多少变化；右列内部滚动 */}
       <div className="flex h-[480px] gap-4 text-sm">
         {/* 左列：分区导航 */}
-        <nav className="flex w-36 shrink-0 flex-col gap-0.5 border-r border-edge pr-3" aria-label="设置分区">
+        <nav className="settings-nav flex w-36 shrink-0 flex-col gap-0.5" aria-label="设置分区">
           {sections.map((s) => (
             <button
               key={s.key}
               type="button"
               onClick={() => setSection(s.key)}
               aria-current={section === s.key ? "true" : undefined}
-              className={`rounded px-2.5 py-1.5 text-left text-xs ${
-                section === s.key
-                  ? "bg-accent/15 font-medium text-accent"
-                  : "text-muted hover:bg-panel2 hover:text-ink"
-              }`}
+              className={`settings-nav-item ${section === s.key ? "is-active" : ""}`}
             >
               {s.label}
             </button>
@@ -481,6 +482,38 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
         <div className="min-w-0 flex-1 space-y-3 overflow-y-auto">
           {section === "system" && (
             <>
+              {/* 外观：后端 settings.json 持久化；夜间模式沿用原有黑色 UI。 */}
+              <div className="settings-card px-3 py-2.5">
+                <div className="text-ink">外观</div>
+                <p className="mt-1 text-xs text-muted">选择 Bowerbird 的界面明暗，切换后立即生效。</p>
+                <div className="mt-2 grid grid-cols-2 gap-2" role="radiogroup" aria-label="应用外观">
+                  {([
+                    { value: "light" as const, label: "日间模式", icon: Sun },
+                    { value: "dark" as const, label: "夜间模式", icon: Moon },
+                  ]).map(({ value, label, icon: Icon }) => {
+                    const selected = (settings?.theme ?? "light") === value;
+                    return (
+                      <button
+                        key={value}
+                        type="button"
+                        role="radio"
+                        aria-checked={selected}
+                        onClick={() => settings && void updateSettings({ ...settings, theme: value })}
+                        className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-left text-xs transition-colors ${
+                          selected
+                            ? "border-accent bg-accent/10 text-accent"
+                            : "border-edge bg-canvas/60 text-muted hover:border-muted hover:text-ink"
+                        }`}
+                      >
+                        <Icon size={15} aria-hidden="true" />
+                        <span className="font-medium">{label}</span>
+                        {selected && <span className="ml-auto text-[10px]">当前</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
               {/* 素材库位置 */}
               <div className="settings-card px-3 py-2.5">
                 <div className="text-ink">素材库位置</div>
@@ -585,11 +618,11 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                 </button>
               </div>
 
-              {/* 新手教程：分步引导（视频/图片教程待补充） */}
+              {/* 入门引导：主线续学与按需教程 */}
               <div className="settings-card px-3 py-2">
-                <div className="text-ink">新手教程</div>
+                <div className="text-ink">入门引导</div>
                 <p className="mt-1 text-xs text-muted">
-                    跟着 spotlight 分步引导走一遍导入、复用与创作的核心流程。
+                    在项目画板上学习拖图、参考、图片特征与生成；可续学或查看按需教程。
                 </p>
                 <button
                   onClick={() => {
@@ -598,7 +631,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   }}
                   className="mt-2 rounded-md bg-accent px-3 py-1 text-[12px] font-medium text-white hover:opacity-90"
                 >
-                  新手引导
+                  打开入门引导
                 </button>
               </div>
             </>
@@ -657,6 +690,8 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   </button>
                 </div>
               )}
+
+              {loggedIn && <RedeemCodeCard key={cloudAuth?.user_id} />}
 
               {/* credits 明细 */}
               {loggedIn && (
@@ -924,8 +959,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                       placeholder={DEFAULT_AUTO_ANALYZE_PROMPT}
                     />
                     <p className="mt-1 text-[11px] text-muted">
-                      可用 <code className="text-[11px]">{`{vocab}`}</code>{" "}
-                      表示受控类别词表，运行时会自动替换。
+                        此提示词用于命名和描述。分类标签请在侧栏「分类标签 → 管理」中使用本地模型处理。
                     </p>
                   </div>
                 )}
@@ -950,6 +984,27 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
           {section === "personalization" && (
             <>
               <div className="settings-card px-3 py-2.5">
+                <div className="text-ink">生成完成提醒</div>
+                <p className="mt-1 text-xs text-muted">图片、视频或 Agent 产物生成成功后提醒，切换项目后仍然有效。</p>
+                <label className="mt-3 flex items-center justify-between">
+                  <span>弹窗提示</span>
+                  <Toggle
+                    checked={settings?.generation_completion_popup ?? true}
+                    disabled={!settings}
+                    onChange={(v) => settings && void updateSettings({ ...settings, generation_completion_popup: v })}
+                  />
+                </label>
+                <label className="mt-3 flex items-center justify-between">
+                  <span>提示音</span>
+                  <Toggle
+                    checked={settings?.generation_completion_sound ?? true}
+                    disabled={!settings}
+                    onChange={(v) => settings && void updateSettings({ ...settings, generation_completion_sound: v })}
+                  />
+                </label>
+                <p className="mt-2 text-xs text-muted">默认开启；可分别关闭，设置自动保存。弹窗显示在应用右上角。</p>
+              </div>
+              <div className="settings-card px-3 py-2.5">
                 <div className="flex items-center justify-between">
                   <span className="text-ink">创作板打开时，Shift + 左键点击素材引入</span>
                   <Toggle
@@ -967,7 +1022,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
 
               <div className="settings-card px-3 py-2.5">
                 <div className="flex items-center justify-between">
-                  <span className="text-ink">在全局素材中隐藏项目素材</span>
+                  <span className="text-ink">在画板的全局素材栏中隐藏项目素材</span>
                   <Toggle
                     checked={settings?.hide_project_assets ?? false}
                     onChange={(v) =>
@@ -976,7 +1031,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   />
                 </div>
                 <p className="mt-1 text-xs text-muted">
-                  开启后，全局素材视图的瀑布流只显示未加入任何项目的素材（搜索、颜色、收藏夹、智能筛选同样生效）；进入项目后仍显示该项目素材。
+                  控制画板内全局素材栏的显示范围。首页的项目素材由右上角「收起 / 展开」控制，始终可按项目浏览。
                 </p>
               </div>
             </>

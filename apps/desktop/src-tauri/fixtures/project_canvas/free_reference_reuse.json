@@ -1,0 +1,17 @@
+{
+  "name": "free_reference_reuse",
+  "project_id": "project-a",
+  "threads": [
+    { "id": "thread-a", "origin": "direct", "created_at": 1 },
+    { "id": "thread-b", "origin": "direct", "created_at": 2 }
+  ],
+  "nodes": [
+    { "id": "shared-reference", "kind": "asset", "role": "reference", "payload": { "schema_version": 1, "snapshot": { "name": "共享参考" } }, "created_at": 1 },
+    { "id": "prompt-a", "thread_id": "thread-a", "kind": "prompt", "payload": { "schema_version": 1, "text": "方向 A", "job_id": "job-a", "turn_key": "turn-a" }, "created_at": 3 },
+    { "id": "prompt-b", "thread_id": "thread-b", "kind": "prompt", "payload": { "schema_version": 1, "text": "方向 B", "job_id": "job-b", "turn_key": "turn-b" }, "created_at": 4 }
+  ],
+  "edges": [
+    { "id": "input-a", "thread_id": "thread-a", "from_node_id": "shared-reference", "to_node_id": "prompt-a", "kind": "input", "ordinal": 0, "created_at": 3 },
+    { "id": "input-b", "thread_id": "thread-b", "from_node_id": "shared-reference", "to_node_id": "prompt-b", "kind": "input", "ordinal": 0, "created_at": 4 }
+  ]
+}

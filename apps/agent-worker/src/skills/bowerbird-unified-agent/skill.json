@@ -2,17 +2,27 @@
   "$schema": "bowerbird-skill-manifest-v1",
   "id": "bowerbird-unified-agent",
   "version": "0.1.0",
-  "instructionHash": "d54e2216c43a8ae62baa4a1d2c9df4f3cb349c4f340304bb69a84bf77f2c8169",
+  "instructionHash": "8e9aaea0d6792a25d8057b150f9e770a6032ad38e235442fb895324c31dbea16",
   "kernelMinVersion": "0.1.0",
   "snapshotSchemaVersion": 1,
   "constraints": {
-    "maxModelTurns": 12,
+    "maxModelTurns": 32,
     "maxToolCalls": 16,
     "maxGenerateAttempts": 11,
     "planningImageAccess": false
   },
   "phaseGraph": {
     "initial": "compose_plan",
-    "terminal": ["succeeded", "failed", "cancelled"]
-  }
+    "terminal": [
+      "succeeded",
+      "failed",
+      "cancelled"
+    ]
+  },
+  "previousInstructionHashes": [
+    "37231090bd74c9a6e874d5e2c7bef061c97caf8b6fecd3eed24f8cb0ff034312",
+    "7e2285cb221119152498b7938930c7812b4d8384b45299b606b6df9fe79dce91",
+    "3fecdacb938701ccea0fc0186304b239de37b92159e8139289ab9d20fe7ef937",
+    "830806f19fa7be2385f12101056f3b7b04639dcb3c409244aa3ccee915576885"
+  ]
 }

@@ -51,11 +51,11 @@ pub struct CodexHealth {
     pub reason: String,
 }
 
-/// 检测 codex CLI 是否就绪（Pro/Studio 本机理解/生成引擎之一）：① CLI 可执行；② CODEX_HOME（或用户目录）内 auth.json 非空。
+/// 检测 codex CLI 是否就绪：① CLI 可执行；② Bowerbird 独立目录内 auth.json 非空。
 /// 任一不满足返回 `ok=false` + 中文 reason。注意：免费档反推/生成走 Bowerbird Cloud，**不依赖此检测结果**——
 /// 前端「环境就绪」应按权益路由判断（见 `lib/entitlement.ts` understandReady），而非直判 codexHealth。
 /// 跨平台：binary 经 `resolve_codex_binary`（Windows 找 codex.cmd、补 %APPDATA%\npm）、
-/// home 经 `codex_home`（CODEX_HOME → USERPROFILE/HOME），不再死读 `$HOME`。
+/// home 经 `codex_home` 固定到应用私有目录，忽略系统 CODEX_HOME。
 #[tauri::command]
 pub async fn codex_health() -> Result<CodexHealth, AppError> {
     let binary = resolve_codex_binary();
@@ -84,7 +84,7 @@ pub async fn codex_health() -> Result<CodexHealth, AppError> {
     if !logged_in {
         return Ok(CodexHealth {
             ok: false,
-            reason: "codex 未登录（需运行 codex login）".into(),
+            reason: "Bowerbird 的 Codex 未登录，请在设置中登录".into(),
         });
     }
     Ok(CodexHealth {
@@ -195,7 +195,7 @@ pub async fn codex_login(app: AppHandle) -> Result<CodexHealth, AppError> {
     if !logged_in {
         return Ok(CodexHealth {
             ok: false,
-            reason: "codex login 已结束但未检测到登录态；可重试，或手动在终端跑一次 codex login"
+            reason: "未检测到 Bowerbird 独立登录态，请在设置中重试登录"
                 .into(),
         });
     }
@@ -376,7 +376,7 @@ pub async fn cancel_codex_describe() -> Result<(), AppError> {
 /// 当前进行中的图像生成任务取消信号（per-job，key=job_id）。与反推 `DESCRIBE_CANCEL` 独立。
 /// Phase A（视频 spec task 2）：单槽 `Option<Sender>` → `HashMap<job_id, Sender>`，
 /// 支持多任务并行 + 各自独立取消。
-static GENERATE_CANCEL: std::sync::LazyLock<
+pub(crate) static GENERATE_CANCEL: std::sync::LazyLock<
     std::sync::Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<()>>>,
 > = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
@@ -493,9 +493,13 @@ pub async fn codex_create_image(
     // 复用生成提示词时据此回绑车牌（generation_history → dimension_assets）。
     dimension_sources: Option<Vec<String>>,
     reference_images: Vec<String>,
+    // 与 reference_images 同序；画板内点击素材时携带具体节点实例，避免生成投影复制引用图。
+    reference_node_ids: Option<Vec<Option<String>>>,
     // 参考图列表已完整（轮级重试/编辑的精确重放）：跳过续轮自动合并上一轮产出图。
     // None/false = 正常续轮（自动合并会话最新产出作基图）。
     exact_references: Option<bool>,
+    media: Option<String>,
+    video_options: Option<crate::codex::types::VideoOptions>,
     session_id: Option<String>,
     ratio: Option<String>,
     provider: Option<String>,
@@ -504,19 +508,40 @@ pub async fn codex_create_image(
     job_id: String,
     conversation_id: Option<String>,
     anchor_session_id: Option<String>,
+    thread_id: Option<String>,
+    creative_session_id: Option<String>,
+    turn_key: Option<String>,
+    parent_node_id: Option<String>,
+    parent_asset_path: Option<String>,
+    creative_relation: Option<crate::core::creative_session_contract::CreativeGenerationRelation>,
 ) -> Result<String, AppError> {
+    let media = media.unwrap_or_else(|| "image".into());
+    if !matches!(media.as_str(), "image" | "video") {
+        return Err(AppError::Other("不支持的生成媒体类型".into()));
+    }
+    let is_video = media == "video";
+    let cloud_video = provider.as_deref().is_some_and(|p| p.starts_with("bowerbird-cloud-video_seedance25_"));
+    if is_video && ((!cloud_video && provider.as_deref() != Some("jimeng")) || video_options.is_none()) {
+        return Err(AppError::Other("请选择方舟或即梦 Seedance 2.5 视频参数".into()));
+    }
+    if !is_video && video_options.is_some() {
+        return Err(AppError::Other("图片生成不能携带视频参数".into()));
+    }
+    if project_id.is_none() || thread_id.is_none() {
+        return Err(AppError::Other(
+            "新生成任务必须归属于项目画板中的创作线程".into(),
+        ));
+    }
+    // 旧 payload 字段只保留在读取模型中；项目画板上线后的新任务不再写 creative_session_id。
+    let _ = creative_session_id;
+    let turn_key = turn_key.unwrap_or_else(|| Ulid::new().to_string());
     // V4：同一 job 的首轮 capsule 是不可变权威。续轮即使当前 UI 改选了其他 profile，
     // 也必须继续使用启动时版本；新 job 才能选择另一个 confirmed profile。
     let persisted_profile = crate::core::task_queue::Task::by_id(db.inner(), &job_id)?
         .and_then(|task| task.gen_job())
         .and_then(|job| job.visual_profile);
     let requested_profile = match visual_profile_id.as_deref() {
-        Some(profile_id) => {
-            let project_id = project_id
-                .as_deref()
-                .ok_or_else(|| AppError::Other("视觉设定只能在当前项目内使用".into()))?;
-            Some(db.visual_profile_capsule(profile_id, project_id)?)
-        }
+        Some(profile_id) => Some(db.visual_profile_capsule(profile_id)?),
         None => None,
     };
     let visual_profile = match (persisted_profile, requested_profile) {
@@ -555,10 +580,28 @@ pub async fn codex_create_image(
     // exact_references=true（轮级重试/编辑）时跳过合并/附加：调用方已给该轮**当时实际下发**
     // 的完整参考图列表，精确重放（重试第 N 轮用当时的基图，而不是该轮自己产出的最新图）。
     let mut reference_images = reference_images;
+    let supplied_reference_node_ids = reference_node_ids.unwrap_or_default();
+    if !supplied_reference_node_ids.is_empty()
+        && supplied_reference_node_ids.len() != reference_images.len()
+    {
+        return Err(AppError::Other(
+            "参考图与画板节点定位数量不一致，请重新选择参考图".into(),
+        ));
+    }
+    let reference_nodes_by_path = reference_images
+        .iter()
+        .enumerate()
+        .filter_map(|(index, path)| {
+            supplied_reference_node_ids
+                .get(index)
+                .and_then(|node_id| node_id.clone())
+                .map(|node_id| (path.clone(), node_id))
+        })
+        .collect::<std::collections::HashMap<_, _>>();
     // provider 侧的 resume 句柄（codex = thread id；即梦/Cloud 沿用 session id 记账）。
     let mut provider_resume = session_id.clone();
     let exact = exact_references.unwrap_or(false);
-    if let Some(sid) = session_id.as_deref() {
+    if let Some(sid) = session_id.as_deref().filter(|_| !is_video) {
         let is_codex_provider = matches!(
             provider.as_deref(),
             None | Some("codex" | "default" | "codex-cli")
@@ -617,16 +660,26 @@ pub async fn codex_create_image(
         }
     }
     let refs_for_meta = reference_images.clone();
+    let reference_node_ids_for_meta = refs_for_meta
+        .iter()
+        .map(|path| reference_nodes_by_path.get(path).cloned())
+        .collect::<Vec<_>>();
     // 「自动」比例解析（后端权威）：显式选档照传；自动（空）且有参考图时，跟随**第一张参考图**
     // （续轮 = 参考图合并后的首位 = 上一轮产出图）的宽高比吸附到最近档位、显式下发——即梦
     // omit --ratio 固定回退 16:9（竖图被横切）；解析不了（无参考图/读不出尺寸）维持自动。
     // 档位与前端创作板 RATIOS 同一套 7 档（creation/ratios.ts）。
-    let ratio = match ratio.as_deref().map(str::trim).filter(|r| !r.is_empty()) {
+    let ratio = if is_video {
+        if video_options.as_ref().is_some_and(|o| matches!(o.kind.as_str(), "image2video" | "frames2video")) {
+            None
+        } else {
+            Some(ratio.as_deref().map(str::trim).filter(|r| !r.is_empty()).unwrap_or("16:9").to_string())
+        }
+    } else { match ratio.as_deref().map(str::trim).filter(|r| !r.is_empty()) {
         Some(r) => Some(r.to_string()),
         None => reference_images
             .first()
             .and_then(|p| snap_ratio_from_reference(std::path::Path::new(p))),
-    };
+    }};
     // job_id 由前端生成（crypto.randomUUID）传入：前端创建 GenJob 时即知 id，chunk 事件按 job_id
     // 路由无 race；续轮（resume 同一 session）复用同一 job_id，task_queue 行 upsert 刷新回 running。
     let is_codex = matches!(provider.as_deref(), None | Some("codex" | "default"));
@@ -662,12 +715,19 @@ pub async fn codex_create_image(
         reference_images: reference_images.into_iter().map(PathBuf::from).collect(),
         context_prompts: vec![],
         ratio: ratio.clone(),
-        job_id: Some(job_id.clone()),
+        job_id: Some(if cloud_video { crate::codex::bowerbird_cloud::video_idempotency_key(&job_id, &turn_key) } else { job_id.clone() }),
     };
+
+    if let Some(options) = &video_options {
+        if cloud_video { crate::codex::bowerbird_cloud::video_preflight(&req, options)?; }
+        else { crate::codex::jimeng_video::preflight(&req, options)?; }
+    } else if req.reference_images.iter().any(|p| p.extension().and_then(|e| e.to_str()).is_some_and(crate::media::probe::is_video)) {
+        return Err(AppError::Other("图片生成不能使用视频文件作为参考，请切换即梦视频多模态模式或选择图片".into()));
+    }
 
     let entitlement_snapshot = entitlement.current_or_sync(&auth_client).await;
     if visual_profile.is_some() && !entitlement_snapshot.policy.can_use_visual_profiles {
-        return Err(AppError::Other("当前权益不支持项目视觉设定".into()));
+        return Err(AppError::Other("当前权益不支持品牌视觉规范".into()));
     }
     if !entitlement_snapshot
         .policy
@@ -717,12 +777,38 @@ pub async fn codex_create_image(
                     match crate::core::task_queue::Task::by_id(db, &job_id_for_emit)
                         .ok()
                         .flatten()
-                        .and_then(|t| t.gen_job())
+                        .and_then(|t| t.gen_job().map(|job| (job, t.status)))
                     {
-                        Some(mut job) => {
+                        Some((mut job, task_status)) => {
                             job.submit_id = Some(submit_id.clone());
-                            job.status = "querying".to_string();
+                            job.status = if matches!(task_status.as_str(), "cancelled" | "failed" | "done") {
+                                task_status
+                            } else { "querying".to_string() };
                             let _ = crate::core::task_queue::Task::upsert_gen_job(db, &job);
+                            if let (Some(project_id), Some(thread_id), Some(turn_key)) = (
+                                job.project_id.as_deref(),
+                                job.thread_id.as_deref(),
+                                job.turn_key.as_deref(),
+                            ) {
+                                let _ = db.update_project_generation_turn_status(
+                                    project_id,
+                                    thread_id,
+                                    &job.id,
+                                    turn_key,
+                                    &job.status,
+                                    Some(submit_id),
+                                );
+                                let _ = app_clone.emit(
+                                    "creative://changed",
+                                    serde_json::json!({
+                                        "projectId": project_id,
+                                        "threadId": thread_id,
+                                        "jobId": &job.id,
+                                        "turnKey": turn_key,
+                                        "status": &job.status,
+                                    }),
+                                );
+                            }
                             tracing::info!(
                                 "gen: submit_id 落库 job={} sid={}",
                                 job_id_for_emit,
@@ -764,19 +850,26 @@ pub async fn codex_create_image(
     {
         let job = crate::core::task_queue::GenJob {
             id: job_id.clone(),
-            media: "image".to_string(),
+            media: media.clone(),
             provider: provider_name.clone(),
             status: "running".to_string(),
             prompt: prompt_for_meta.clone(),
             applied_prompt: Some(applied_prompt.clone()),
+            reference_node_ids: reference_node_ids_for_meta.clone(),
             references: refs_for_meta.clone(),
             session_id: session_id.clone(),
             conversation_id: conversation_id.clone(),
+            thread_id: thread_id.clone(),
+            creative_session_id: None,
+            turn_key: Some(turn_key.clone()),
+            parent_node_id: parent_node_id.clone(),
+            parent_asset_path: parent_asset_path.clone(),
+            creative_relation,
             project_id: project_id.clone(),
             ratio: ratio.clone(),
             visual_profile: visual_profile.clone(),
             submit_id: None,
-            video_options: None,
+            video_options: video_options.as_ref().map(serde_json::to_value).transpose()?,
             turns: serde_json::json!([]),
             error: None,
             queue_idx: None,
@@ -797,6 +890,50 @@ pub async fn codex_create_image(
         }
     }
 
+    if let (Some(project_id), Some(thread_id)) = (project_id.as_deref(), thread_id.as_deref()) {
+        let conversation = conversation_id.as_deref().unwrap_or(&job_id);
+        if let Err(error) = db.inner().begin_project_generation_turn(
+            &crate::core::project_canvas::ProjectGenerationTurnInput {
+                project_id: project_id.to_string(),
+                thread_id: thread_id.to_string(),
+                generation_conversation_id: conversation.to_string(),
+                job_id: job_id.clone(),
+                turn_key: turn_key.clone(),
+                prompt: prompt_for_meta.clone(),
+                applied_prompt: applied_prompt.clone(),
+                provider: provider_name.clone(),
+                provider_session_id: provider_resume.clone(),
+                ratio: ratio.clone(),
+                visual_profile: visual_profile.as_ref().map(|profile| {
+                    crate::core::creative_session_contract::VisualProfileRefV1 {
+                        profile_id: profile.profile_id.clone(),
+                        version: profile.version,
+                        hash: profile.hash.clone(),
+                    }
+                }),
+                reference_node_ids: reference_node_ids_for_meta.clone(),
+                references: refs_for_meta.clone(),
+                parent_node_id: parent_node_id.clone(),
+                parent_asset_path: parent_asset_path.clone(),
+                relation: creative_relation,
+            },
+        ) {
+            let _ =
+                crate::core::task_queue::Task::mark_failed(db.inner(), &job_id, &error.to_string());
+            return Err(error);
+        }
+        let _ = app.emit(
+            "creative://changed",
+            serde_json::json!({
+                "projectId": project_id,
+                "threadId": thread_id,
+                "jobId": &job_id,
+                "turnKey": &turn_key,
+                "status": "running",
+            }),
+        );
+    }
+
     // 生成开始即通知前端 job_id：同步模型下命令 await 到完成才返回 job_id，生成中前端拿不到
     // → currentGenJobId 为 null → 取消失效。started 事件让前端早 set currentGenJobId，取消可生效。
     // references = 本轮最终下发的参考图（续轮含后端合并的上一轮产出图）——前端落到该轮
@@ -809,9 +946,12 @@ pub async fn codex_create_image(
             "kind": "started",
             "job_id": &job_id,
             "references": refs_for_meta.clone(),
+            "reference_node_ids": reference_node_ids_for_meta.clone(),
             "ratio": ratio.clone(),
             "applied_prompt": &applied_prompt,
             "visual_profile": &visual_profile,
+            "media": &media,
+            "video_options": &video_options,
         }),
     );
 
@@ -822,30 +962,30 @@ pub async fn codex_create_image(
         .insert(job_id.clone(), cancel_tx);
 
     // 即梦并发=1（spike 实测）：permit=1 Semaphore 串行化即梦 job，避免多 job 同时跑 dreamina
-    // 子进程撞 ExceedConcurrencyLimit；codex 不受限可并行。持有到 fn 结束（return 时 drop 释放名额）。
-    // 排队中取消：等拿到名额后 provider select 命中 cancel（MVP 简化，不中断 acquire）。
-    let _jimeng_permit = if matches!(provider_name.as_str(), "jimeng" | "dreamina") {
-        Some(
-            crate::core::generation_worker::JIMENG_FLY
-                .acquire()
-                .await
-                .unwrap(),
-        )
-    } else {
-        None
-    };
-
+    // 子进程撞 ExceedConcurrencyLimit；codex 不受限可并行。等待名额和生成均响应取消。
     let generation_result: Result<(), AppError> = async {
         // generate_image 借用 tx 推 Delta；用 block 限定借期，结束后 command 才能 reuse tx 发 Done。
         // resume 句柄用 provider_resume（非 codex 原生会话切 codex = None 开新 thread）。
         let outcome = {
-            let gen_fut = p.generate_image(req, &tx, provider_resume);
+            let gen_fut = async {
+                let _jimeng_permit = if matches!(provider_name.as_str(), "jimeng" | "dreamina") {
+                    Some(crate::core::generation_worker::JIMENG_FLY.acquire().await
+                        .map_err(|e| AppError::Other(e.to_string()))?)
+                } else { None };
+                if let Some(options) = video_options.clone() {
+                    p.generate_video(req, options, &tx, provider_resume).await
+                } else {
+                    p.generate_image(req, &tx, provider_resume).await
+                }
+            };
             tokio::pin!(gen_fut);
             tokio::select! {
                 res = &mut gen_fut => res,
                 _ = &mut cancel_rx => Err(AppError::Codex("已取消".into())),
             }?
         };
+        // 文件已返回后进入不可取消的短暂入库阶段，防后台入库完成覆盖取消终态。
+        GENERATE_CANCEL.lock().unwrap().remove(&job_id);
 
         // 簿记 session：优先请求时的会话 id（新 thread 轮也归原会话——meta/前端 sessionId/
         // 重启时间线都不裂），首轮（请求无 session）才用 provider 产出的新 id。
@@ -876,8 +1016,33 @@ pub async fn codex_create_image(
             } else {
                 None
             },
+            thread_id.clone(),
+            Some(job_id.clone()),
+            Some(turn_key.clone()),
         )
         .await?;
+
+        if let (Some(project_id), Some(thread_id)) = (project_id.as_deref(), thread_id.as_deref()) {
+            db.inner().complete_project_generation_turn(
+                project_id,
+                thread_id,
+                &job_id,
+                &turn_key,
+                bookkeeping_session.as_deref(),
+                &gen_assets,
+            )?;
+            let _ = app.emit(
+                "creative://changed",
+                serde_json::json!({
+                    "projectId": project_id,
+                    "threadId": thread_id,
+                    "jobId": &job_id,
+                    "turnKey": &turn_key,
+                    "status": "done",
+                    "assetIds": gen_assets.iter().map(|asset| asset.id.clone()).collect::<Vec<_>>(),
+                }),
+            );
+        }
 
         let asset_paths: Vec<PathBuf> = gen_assets
             .iter()
@@ -897,6 +1062,30 @@ pub async fn codex_create_image(
     .await;
     GENERATE_CANCEL.lock().unwrap().remove(&job_id);
     settle_generation_task(db.inner(), &job_id, &generation_result);
+    if let (Err(error), Some(project_id), Some(thread_id)) = (
+        &generation_result,
+        project_id.as_deref(),
+        thread_id.as_deref(),
+    ) {
+        let status = if matches!(error, AppError::Codex(message) if message == "已取消") {
+            "cancelled"
+        } else {
+            "failed"
+        };
+        let _ = db.inner().update_project_generation_turn_status(
+            project_id, thread_id, &job_id, &turn_key, status, None,
+        );
+        let _ = app.emit(
+            "creative://changed",
+            serde_json::json!({
+                "projectId": project_id,
+                "threadId": thread_id,
+                "jobId": &job_id,
+                "turnKey": &turn_key,
+                "status": status,
+            }),
+        );
+    }
     generation_result?;
 
     // 生成图已入库，通知瀑布流刷新（finalize 已 emit analyses://changed + 自动命名）。
@@ -908,13 +1097,66 @@ pub async fn codex_create_image(
 /// 本地停止 CLI 子进程；远端即梦任务可能仍在运行（已扣积分），submit_id 保留可事后取回。
 #[tauri::command]
 pub async fn cancel_codex_create(
+    app: AppHandle,
     db: State<'_, Arc<Database>>,
     job_id: String,
 ) -> Result<(), AppError> {
-    if let Some(tx) = GENERATE_CANCEL.lock().unwrap().remove(&job_id) {
-        let _ = tx.send(());
-    }
+    let Some(tx) = GENERATE_CANCEL.lock().unwrap().remove(&job_id) else { return Ok(()) };
+    let _ = tx.send(());
     let _ = crate::core::task_queue::Task::mark_cancelled(db.inner(), &job_id);
+    if let Some(job) =
+        crate::core::task_queue::Task::by_id(db.inner(), &job_id)?.and_then(|task| task.gen_job())
+    {
+        if let (Some(project_id), Some(thread_id), Some(turn_key)) = (
+            job.project_id.as_deref(),
+            job.thread_id.as_deref(),
+            job.turn_key.as_deref(),
+        ) {
+            let _ = db.inner().update_project_generation_turn_status(
+                project_id,
+                thread_id,
+                &job_id,
+                turn_key,
+                "cancelled",
+                job.submit_id.as_deref(),
+            );
+            let _ = app.emit(
+                "creative://changed",
+                serde_json::json!({
+                    "projectId": project_id,
+                    "threadId": thread_id,
+                    "jobId": &job_id,
+                    "turnKey": turn_key,
+                    "status": "cancelled",
+                }),
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Recover the original Cloud video without a new provider submission.
+#[tauri::command]
+pub async fn recover_cloud_video(app: AppHandle, db: State<'_, Arc<Database>>, paths: State<'_, Arc<LibraryPaths>>, job_id: String) -> Result<(), AppError> {
+    let mut job = crate::core::task_queue::Task::by_id(db.inner(),&job_id)?.and_then(|task| task.gen_job()).ok_or_else(|| AppError::Other("原视频任务不存在".into()))?;
+    if !crate::core::task_queue::Task::claim_cloud_video_retrieval(db.inner(),&job)? { return Ok(()); }
+    let cloud = app.state::<crate::cloud::CloudClient>();
+    let auth = app.state::<crate::cloud::AuthClient>();
+    let remote = if let Some(id) = job.submit_id.clone() { Ok(Some(id)) } else {
+        crate::codex::bowerbird_cloud::find_video_job(&cloud,&auth,&job.id,job.turn_key.as_deref().unwrap()).await
+    };
+    let remote = match remote {
+        Ok(Some(id)) => id,
+        _ => {
+            let message = "原视频任务状态尚无法确认；不会重新生成";
+            crate::core::task_queue::Task::mark_failed(db.inner(),&job.id,message)?;
+            return Err(AppError::Cloud(message.into()));
+        }
+    };
+    job.submit_id=Some(remote.clone()); job.status="querying".into();
+    crate::core::task_queue::Task::upsert_gen_job(db.inner(),&job)?;
+    let (db,paths)=(db.inner().clone(),paths.inner().clone());
+    tokio::spawn(async move { crate::core::generation_worker::recover_one_cloud_job(app,db,paths,job,remote).await; });
     Ok(())
 }
 
@@ -923,6 +1165,7 @@ pub async fn cancel_codex_create(
 pub struct GenJobSummary {
     pub id: String,
     pub media: String,
+    pub video_options: Option<serde_json::Value>,
     pub provider: String,
     pub status: String,
     pub prompt: String,
@@ -930,10 +1173,18 @@ pub struct GenJobSummary {
     pub submit_id: Option<String>,
     pub session_id: Option<String>,
     pub conversation_id: Option<String>,
+    pub thread_id: Option<String>,
+    pub creative_session_id: Option<String>,
+    pub turn_key: Option<String>,
+    pub parent_node_id: Option<String>,
+    pub parent_asset_path: Option<String>,
+    pub creative_relation:
+        Option<crate::core::creative_session_contract::CreativeGenerationRelation>,
     pub project_id: Option<String>,
     pub ratio: Option<String>,
     pub visual_profile: Option<crate::core::visual_profile::VisualProfileCapsule>,
     pub references: Vec<String>,
+    pub reference_node_ids: Vec<Option<String>>,
     pub created_at: i64,
     pub running: bool,
 }
@@ -955,6 +1206,7 @@ pub async fn list_gen_jobs(db: State<'_, Arc<Database>>) -> Result<Vec<GenJobSum
                 ),
                 id: j.id,
                 media: j.media,
+                video_options: j.video_options,
                 provider: j.provider,
                 status: j.status,
                 prompt: j.prompt,
@@ -962,10 +1214,17 @@ pub async fn list_gen_jobs(db: State<'_, Arc<Database>>) -> Result<Vec<GenJobSum
                 submit_id: j.submit_id,
                 session_id: j.session_id,
                 conversation_id: j.conversation_id,
+                thread_id: j.thread_id,
+                creative_session_id: j.creative_session_id,
+                turn_key: j.turn_key,
+                parent_node_id: j.parent_node_id,
+                parent_asset_path: j.parent_asset_path,
+                creative_relation: j.creative_relation,
                 project_id: j.project_id,
                 ratio: j.ratio,
                 visual_profile: j.visual_profile,
                 references: j.references,
+                reference_node_ids: j.reference_node_ids,
                 created_at: j.created_at,
             })
             .collect())
@@ -981,16 +1240,23 @@ pub async fn list_gen_jobs(db: State<'_, Arc<Database>>) -> Result<Vec<GenJobSum
 #[derive(Debug, Clone, Serialize)]
 pub struct RecentGenSession {
     pub id: String,
+    pub media: String,
+    pub video_options: Option<serde_json::Value>,
+    pub submit_id: Option<String>,
     pub provider: String,
     pub status: String, // done | failed
     pub prompt: String,
     pub error: Option<String>,
     pub session_id: Option<String>,
     pub conversation_id: Option<String>,
+    pub thread_id: Option<String>,
+    pub creative_session_id: Option<String>,
+    pub turn_key: Option<String>,
     pub project_id: Option<String>,
     pub ratio: Option<String>,
     pub visual_profile: Option<crate::core::visual_profile::VisualProfileCapsule>,
     pub references: Vec<String>,
+    pub reference_node_ids: Vec<Option<String>>,
     pub created_at: i64,
     pub turns: Vec<GenerationHistoryTurn>,
     pub ref_assets: Vec<PromptedAsset>,
@@ -1017,36 +1283,49 @@ pub async fn recent_gen_sessions(
             if out.len() >= limit as usize {
                 break;
             }
-            if !matches!(t.status.as_str(), "done" | "failed") {
+            if !matches!(t.status.as_str(), "done" | "failed" | "cancelled") {
                 continue;
             }
             let Some(j) = t.gen_job() else {
                 continue;
             };
-            // 时间线从 generation_meta 按 session 重建（无 session 的失败 job → 空时间线，
-            // 前端仍有 prompt 可重试）；重建失败不阻断其余会话恢复。
-            let (turns, ref_assets) = match &j.session_id {
-                Some(sid) => match db.generation_history_by_session(sid, Some(&annotations_dir)) {
-                    Ok(h) => (h.turns, h.references),
-                    Err(e) => {
-                        tracing::warn!("recent_gen_sessions: history for {sid} failed: {e}");
-                        (Vec::new(), Vec::new())
-                    }
-                },
-                None => (Vec::new(), Vec::new()),
+            if t.status == "cancelled" && j.media != "video" { continue; }
+            // 首轮 payload 保存于 provider 返回前，session_id 可能为空；按 job_id
+            // 从产物元数据找回会话，兼容已安装版本写出的历史任务。
+            let history = match &j.session_id {
+                Some(sid) => db.generation_history_by_session(sid, Some(&annotations_dir)).map(Some),
+                None => db.generation_history_by_job(&j.id, Some(&annotations_dir)),
             };
+            let (session_id, turns, mut ref_assets) = match history {
+                Ok(Some(h)) => (h.session_id, h.turns, h.references),
+                Ok(None) => (j.session_id.clone(), Vec::new(), Vec::new()),
+                Err(e) => {
+                    tracing::warn!("recent_gen_sessions: history for {} failed: {e}", j.id);
+                    (j.session_id.clone(), Vec::new(), Vec::new())
+                }
+            };
+            if j.media == "video" {
+                ref_assets = db.generation_reference_assets(&j.references, Some(&annotations_dir))?;
+            }
             out.push(RecentGenSession {
                 id: j.id,
+                media: j.media,
+                video_options: j.video_options,
+                submit_id: j.submit_id,
                 provider: j.provider,
                 status: t.status,
                 prompt: j.prompt,
                 error: t.error,
-                session_id: j.session_id,
+                session_id,
                 conversation_id: j.conversation_id,
+                thread_id: j.thread_id,
+                creative_session_id: j.creative_session_id,
+                turn_key: j.turn_key,
                 project_id: j.project_id,
                 ratio: j.ratio,
                 visual_profile: j.visual_profile,
                 references: j.references,
+                reference_node_ids: j.reference_node_ids,
                 created_at: j.created_at,
                 turns,
                 ref_assets,
@@ -1080,11 +1359,36 @@ pub async fn jimeng_retrieve_orphan(
     app: AppHandle,
     db: State<'_, Arc<Database>>,
     paths: State<'_, Arc<LibraryPaths>>,
+    auth_client: State<'_, crate::cloud::AuthClient>,
+    entitlement: State<'_, EntitlementService>,
     submit_id: String,
     prompt: String,
+    job_id: Option<String>,
 ) -> Result<(), AppError> {
+    require_byo(&entitlement, &auth_client).await?;
     let db = db.inner().clone();
     let paths = paths.inner().clone();
+    if let Some(job_id) = job_id {
+        let task = crate::core::task_queue::Task::by_id(&db, &job_id)?
+            .ok_or_else(|| AppError::Other("未找到待取回视频任务".into()))?;
+        let mut job = task.gen_job().ok_or_else(|| AppError::Other("任务数据无效".into()))?;
+        if job.media != "video" || job.provider != "jimeng" || job.submit_id.as_deref() != Some(&submit_id) {
+            return Err(AppError::Other("待取回任务与原视频提交不匹配".into()));
+        }
+        if !matches!(task.status.as_str(), "failed" | "cancelled") {
+            return Err(AppError::Other("该视频正在查询或已经入库，无需重复取回".into()));
+        }
+        crate::media::probe::ensure_video_tools()?;
+        job.status = "querying".into();
+        job.error = None;
+        if !crate::core::task_queue::Task::claim_video_retrieval(&db, &job)? {
+            return Err(AppError::Other("该视频已经开始取回，无需重复操作".into()));
+        }
+        tokio::spawn(async move {
+            crate::core::generation_worker::recover_one_jimeng_job(app, db, paths, job, submit_id).await;
+        });
+        return Ok(());
+    }
     let now = chrono::Utc::now().timestamp();
     let job = crate::core::task_queue::GenJob {
         id: format!("orphan-{submit_id}"),
@@ -1093,9 +1397,16 @@ pub async fn jimeng_retrieve_orphan(
         status: "querying".into(),
         prompt,
         applied_prompt: None,
+        reference_node_ids: vec![],
         references: vec![],
         session_id: None,
         conversation_id: None,
+        thread_id: None,
+        creative_session_id: None,
+        turn_key: None,
+        parent_node_id: None,
+        parent_asset_path: None,
+        creative_relation: None,
         project_id: None,
         ratio: None,
         visual_profile: None,
@@ -1188,14 +1499,10 @@ pub async fn open_codex_session(
 
     #[cfg(target_os = "macos")]
     {
-        // 二进制路径可能含空格，作为 shell 命令须整体加引号（AppleScript 字符串内 \"）。
-        let script = format!(
-            "tell application \"Terminal\"\nactivate\ndo script \"\\\"{binary}\\\" resume {sid}\"\nend tell"
-        );
-        tokio::process::Command::new("osascript")
-            .arg("-e")
-            .arg(&script)
-            .spawn()
+        let mut command = crate::codex::codex_cli::codex_command(&binary);
+        command.args(["resume", sid]);
+        super::macos_terminal::open(&command)
+            .await
             .map_err(|e| AppError::Codex(format!("启动 Terminal 失败: {e}")))?;
         Ok(())
     }
@@ -1203,18 +1510,18 @@ pub async fn open_codex_session(
     {
         #[cfg(target_os = "windows")]
         {
-            // `start "" cmd.exe /K` 经 cmd.exe 另开一个常驻命令提示符；含空格的二进制
-            // 路径经 raw_arg 以引号包裹（同 npm_command 约定——标准 .arg 的转义会被
-            // cmd 拆成多 token）。
+            // 与即梦登录一致，直接创建新终端；raw_arg 保留路径和 cmd shim 的引号。
             let mut command = tokio::process::Command::new("cmd.exe");
-            command
-                .arg("/D")
-                .arg("/C")
-                .arg("start")
-                .arg("")
-                .arg("cmd.exe")
-                .arg("/K");
-            command.raw_arg(format!("\"{binary}\" resume {sid}"));
+            let launcher = crate::cli_credentials::launcher();
+            let lower = binary.to_ascii_lowercase();
+            let cli = if lower.ends_with(".cmd") || lower.ends_with(".bat") {
+                format!("cmd.exe /D /S /C \"{binary}\"")
+            } else {
+                format!("\"{binary}\"")
+            };
+            command.raw_arg(format!("/D /S /K \"\"{}\" --plain {cli} resume {sid}\"", launcher.display()));
+            command.creation_flags(0x00000010); // CREATE_NEW_CONSOLE
+            crate::cli_credentials::codex_environment(&mut command);
             command
                 .spawn()
                 .map_err(|e| AppError::Codex(format!("启动命令提示符失败: {e}")))?;
@@ -1265,9 +1572,16 @@ mod generation_task_tests {
             status: "running".into(),
             prompt: "test".into(),
             applied_prompt: None,
+            reference_node_ids: vec![],
             references: vec![],
             session_id: None,
             conversation_id: None,
+            thread_id: None,
+            creative_session_id: None,
+            turn_key: None,
+            parent_node_id: None,
+            parent_asset_path: None,
+            creative_relation: None,
             project_id: None,
             ratio: None,
             visual_profile: None,

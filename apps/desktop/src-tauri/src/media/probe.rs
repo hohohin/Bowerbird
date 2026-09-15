@@ -2,11 +2,13 @@
 //! Phase 2：图片走 image crate；视频走 ffprobe；SVG/PSD 暂不取尺寸（前端/占位渲染）。
 
 use std::path::Path;
-use std::process::Command;
+use super::tools::{self, Tool};
 
 use image::ImageReader;
 
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
+
+pub(crate) use super::tools::ensure_video_tools;
 
 #[derive(Debug, Clone)]
 pub struct ProbeMeta {
@@ -51,7 +53,8 @@ pub fn probe(path: &Path) -> AppResult<ProbeMeta> {
 }
 
 fn probe_video(path: &Path, ext: String, size: u64) -> AppResult<ProbeMeta> {
-    let out = Command::new("ffprobe")
+    let binary = tools::resolve(Tool::Ffprobe)?;
+    let out = tools::command(binary)
         .args([
             "-v",
             "error",
@@ -63,7 +66,17 @@ fn probe_video(path: &Path, ext: String, size: u64) -> AppResult<ProbeMeta> {
             "csv=p=0",
         ])
         .arg(path)
-        .output()?;
+        .output().map_err(|e| tools::spawn_error(Tool::Ffprobe, binary, e))?;
+
+    if !out.status.success() {
+        return Err(AppError::Media(format!(
+            "ffprobe 无法读取视频：{}",
+            String::from_utf8_lossy(&out.stderr)
+                .chars()
+                .take(300)
+                .collect::<String>()
+        )));
+    }
 
     let stdout = String::from_utf8_lossy(&out.stdout);
     let mut width = 0u32;
@@ -81,6 +94,9 @@ fn probe_video(path: &Path, ext: String, size: u64) -> AppResult<ProbeMeta> {
                 duration = d;
             }
         }
+    }
+    if width == 0 || height == 0 || !duration.is_finite() || duration <= 0.0 {
+        return Err(AppError::Media("视频没有有效尺寸或时长".into()));
     }
     Ok(ProbeMeta {
         ext,

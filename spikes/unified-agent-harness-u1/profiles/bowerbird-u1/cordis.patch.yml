@@ -187,8 +187,8 @@
     maxTokens: 512
     streamIdleTimeoutMs: 60000
     models:
-      - id: deepseek-v4-flash
-        name: DeepSeek-V4-Flash
+      - id: deepseek-flash
+        name: DeepSeek-V4.1-Flash
         contextWindow: 1000000
         maxTokens: 4096
       - id: deepseek-v4-pro
@@ -208,4 +208,4 @@
       name: '@deepseek-ai/dsh-acp'
       config:
         provider: deepseek-official
-        model: deepseek-v4-flash
+        model: deepseek-flash

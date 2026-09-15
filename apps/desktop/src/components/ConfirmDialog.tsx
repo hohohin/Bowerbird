@@ -13,6 +13,7 @@ export function ConfirmDialog({
   confirmLabel,
   cancelLabel = "取消",
   danger = false,
+  confirmDisabled = false,
   onConfirm,
   onCancel,
 }: {
@@ -22,6 +23,7 @@ export function ConfirmDialog({
   confirmLabel: string;
   cancelLabel?: string;
   danger?: boolean;
+  confirmDisabled?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
@@ -39,6 +41,7 @@ export function ConfirmDialog({
           </button>
           <button
             onClick={onConfirm}
+            disabled={confirmDisabled}
             className={`app-modal-button ${danger ? "is-danger" : "is-primary"}`}
           >
             {confirmLabel}

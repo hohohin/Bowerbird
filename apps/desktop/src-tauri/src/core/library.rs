@@ -92,7 +92,21 @@ pub struct Analysis {
 /// ReadonlyPrompt 用，与首轮对齐）。旧 meta 无此语义（早期只记首版），缺省为空。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenerationHistoryTurn {
+    #[serde(default)]
+    pub project_id: Option<String>,
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub reference_node_ids: Vec<Option<String>>,
     pub prompt: String,
+    #[serde(default = "default_generation_history_media")]
+    pub media: String,
+    #[serde(default)]
+    pub video_options: Option<serde_json::Value>,
+    #[serde(default)]
+    pub ratio: Option<String>,
+    #[serde(default)]
+    pub turn_key: Option<String>,
     /// 当时真正提交给 provider 的最终指令；旧 generation_meta 为 None。
     #[serde(default)]
     pub applied_prompt: Option<String>,
@@ -104,6 +118,8 @@ pub struct GenerationHistoryTurn {
     pub ref_assets: Vec<PromptedAsset>,
 }
 
+fn default_generation_history_media() -> String { "image".into() }
+
 /// 某生成图所在 codex 会话的完整生成时间线（「回看生成对话」用）。
 /// `references` 取首版 generation_meta 的参考图（按 store_path 反查的完整 asset，含 name/
 /// thumb_path/store_path）：前端「复用到创作板」据此还原参考图，「新会话重新生成」从 store_path 派生。
@@ -112,6 +128,12 @@ pub struct GenerationHistoryTurn {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenerationHistory {
     pub session_id: Option<String>,
+    #[serde(default = "default_generation_history_media")]
+    pub media: String,
+    #[serde(default)]
+    pub video_options: Option<serde_json::Value>,
+    #[serde(default)]
+    pub ratio: Option<String>,
     pub turns: Vec<GenerationHistoryTurn>,
     pub references: Vec<PromptedAsset>,
     /// 首版 generation_meta 的 dimension_sources（图 chip 被删的借用维度源图）按 asset id
@@ -178,6 +200,8 @@ pub struct TagCount {
 pub struct AssetTag {
     pub name: String,
     pub source: String,
+    #[serde(default)]
+    pub origin: String,
 }
 
 /// 色板聚合：某颜色桶 + 资产数 + 桶代表 hex（前端色块渲染，hex 由后端注入消除双源）。
@@ -739,7 +763,10 @@ impl Database {
             )
             .optional()?
             .unwrap_or((None, None));
-        conn.execute("DELETE FROM assets WHERE id = ?1", rusqlite::params![id])?;
+        let tx = conn.unchecked_transaction()?;
+        crate::core::project_canvas::hide_asset_canvas_nodes(&tx, id, None)?;
+        tx.execute("DELETE FROM assets WHERE id = ?1", rusqlite::params![id])?;
+        tx.commit()?;
         drop(conn); // 释放锁后再做文件 IO，避免阻塞其它 DB 操作。
         delete_asset_files(
             store_path.as_deref().map(Path::new),
@@ -1238,6 +1265,29 @@ impl Database {
         Ok(a)
     }
 
+    /// Exact canvas hydration lookup. Unlike the browsing queries this never
+    /// paginates or collapses generation sessions, and preserves first-seen
+    /// request order while ignoring duplicate/unknown ids.
+    pub fn get_assets_by_ids(&self, ids: &[String]) -> AppResult<Vec<Asset>> {
+        let conn = self.conn.lock().unwrap();
+        let sql = format!("SELECT {ASSET_COLS} FROM assets WHERE id = ?1");
+        let mut stmt = conn.prepare(&sql)?;
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for id in ids {
+            if !seen.insert(id.as_str()) {
+                continue;
+            }
+            if let Some(asset) = stmt
+                .query_row(rusqlite::params![id], asset_from_row)
+                .optional()?
+            {
+                out.push(asset);
+            }
+        }
+        Ok(out)
+    }
+
     /// 素材被创作板调用（参考）计数：本次生成实际下发的参考图（store_path）各 +1。
     /// 单次调用内去重；库外 / 临时标注文件不命中（UPDATE 0 行，无副作用）。
     pub fn bump_asset_reference_counts(&self, store_paths: &[String]) -> AppResult<()> {
@@ -1529,6 +1579,9 @@ impl Database {
         let Some(session_id) = session_id else {
             return Ok(GenerationHistory {
                 session_id: None,
+                media: "image".into(),
+                video_options: None,
+                ratio: None,
                 turns: vec![],
                 references: vec![],
                 dimension_assets: vec![],
@@ -1537,6 +1590,26 @@ impl Database {
             });
         };
         Self::history_for_session(&conn, &session_id, project_id, annotations_dir)
+    }
+
+    /// 首轮任务 payload 可能尚无 session_id；从已入库产物找回实际簿记会话。
+    pub fn generation_history_by_job(
+        &self,
+        job_id: &str,
+        annotations_dir: Option<&Path>,
+    ) -> AppResult<Option<GenerationHistory>> {
+        let conn = self.conn.lock().unwrap();
+        let session_id: Option<String> = conn.query_row(
+            "SELECT json_extract(an.payload, '$.session_id') \
+             FROM analyses an JOIN assets a ON a.id = an.asset_id \
+             WHERE an.kind = 'generation_meta' \
+               AND json_extract(an.payload, '$.job_id') = ?1 \
+               AND json_extract(an.payload, '$.session_id') IS NOT NULL \
+             ORDER BY an.created_at DESC, an.id DESC LIMIT 1",
+            [job_id],
+            |row| row.get(0),
+        ).optional()?;
+        session_id.map(|sid| Self::history_for_session(&conn, &sid, None, annotations_dir)).transpose()
     }
 
     /// 按 session_id 直取完整生成时间线（会话面板历史恢复用，全局不过滤项目）。
@@ -1620,6 +1693,11 @@ impl Database {
                 .and_then(|v| v.get("applied_prompt"))
                 .and_then(|x| x.as_str())
                 .map(String::from);
+            let row_turn_key = payload_value
+                .as_ref()
+                .and_then(|v| v.get("turn_key"))
+                .and_then(|x| x.as_str())
+                .map(String::from);
             // 本轮实际下发的参考图（同轮多行的 payload 相同；相邻同 prompt 跨轮合并时保留首行）。
             let row_refs: Vec<String> = payload_value
                 .as_ref()
@@ -1632,13 +1710,27 @@ impl Database {
                 })
                 .unwrap_or_default();
             // 相邻同 prompt = 同一轮多图，合并；否则开新轮（首轮的 prompt_raw 随新轮记一次）。
-            if turns.last().is_some_and(|turn| {
-                turn.prompt == prompt && turn.applied_prompt == row_applied_prompt
-            }) {
+            if turns
+                .last()
+                .is_some_and(|turn| match (&turn.turn_key, &row_turn_key) {
+                    (Some(left), Some(right)) => left == right,
+                    (None, None) => {
+                        turn.prompt == prompt && turn.applied_prompt == row_applied_prompt
+                    }
+                    _ => false,
+                })
+            {
                 turns.last_mut().unwrap().images.push(path);
             } else {
                 turns.push(GenerationHistoryTurn {
+                    project_id: payload_value.as_ref().and_then(|v| v.get("project_id")).and_then(|v| v.as_str()).map(String::from),
+                    provider: payload_value.as_ref().and_then(|v| v.get("provider")).and_then(|v| v.as_str()).map(String::from),
+                    reference_node_ids: payload_value.as_ref().and_then(|v| v.get("reference_node_ids")).cloned().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default(),
                     prompt,
+                    media: payload_value.as_ref().and_then(|v| v.get("media")).and_then(|v| v.as_str()).unwrap_or("image").into(),
+                    video_options: payload_value.as_ref().and_then(|v| v.get("video_options")).filter(|v| !v.is_null()).cloned(),
+                    ratio: payload_value.as_ref().and_then(|v| v.get("ratio")).and_then(|v| v.as_str()).map(String::from),
+                    turn_key: row_turn_key,
                     applied_prompt: row_applied_prompt,
                     prompt_raw,
                     images: vec![path],
@@ -1701,6 +1793,9 @@ impl Database {
         };
         Ok(GenerationHistory {
             session_id: Some(session_id.to_string()),
+            media: turns.first().map(|turn| turn.media.clone()).unwrap_or_else(|| "image".into()),
+            video_options: turns.first().and_then(|turn| turn.video_options.clone()),
+            ratio: turns.first().and_then(|turn| turn.ratio.clone()),
             turns,
             references,
             dimension_assets,
@@ -1712,6 +1807,12 @@ impl Database {
     /// 按 store_path 反查完整 asset → PromptedAsset 映射（generation_meta 参考图共用）：
     /// 项目 scope 过滤不可见资产；未命中且位于标注缓存目录（<库根>/annotations/）时从
     /// 临时文件 + sidecar 合成「不入库」标注图。
+    pub(crate) fn generation_reference_assets(&self, paths: &[String], annotations_dir: Option<&Path>) -> AppResult<Vec<PromptedAsset>> {
+        let conn = self.conn.lock().unwrap();
+        let by_path = Self::lookup_ref_assets_by_path(&conn, paths, None, annotations_dir)?;
+        Ok(paths.iter().filter_map(|path| by_path.get(path).cloned()).collect())
+    }
+
     fn lookup_ref_assets_by_path(
         conn: &Connection,
         paths: &[String],
@@ -2065,7 +2166,7 @@ impl Database {
     pub fn list_asset_tags(&self, asset_id: &str) -> AppResult<Vec<AssetTag>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT t.name, t.source FROM tags t \
+            "SELECT t.name, t.source, at.origin FROM tags t \
              JOIN asset_tags at ON at.tag_id = t.id WHERE at.asset_id = ?1 \
              ORDER BY t.source, t.name",
         )?;
@@ -2073,6 +2174,7 @@ impl Database {
             Ok(AssetTag {
                 name: r.get::<_, String>(0)?,
                 source: r.get::<_, String>(1)?,
+                origin: r.get::<_, String>(2)?,
             })
         })?;
         let mut out = Vec::new();
@@ -2094,18 +2196,6 @@ impl Database {
         Ok(exists)
     }
 
-    /// 全部 auto 词表名（注入 codex instruction 的受控词表）。
-    pub fn list_auto_tag_names(&self) -> AppResult<Vec<String>> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT name FROM tags WHERE source = 'auto' ORDER BY name")?;
-        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
-        let mut out = Vec::new();
-        for r in rows {
-            out.push(r?);
-        }
-        Ok(out)
-    }
-
     /// 侧栏聚合：某 source 的 tag + 每个的资产计数（count>0），不受 list_assets 的 500 限制。
     pub fn list_tags_with_count(
         &self,
@@ -2116,11 +2206,11 @@ impl Database {
         let mut stmt = conn.prepare(
             "SELECT t.id, t.name, COUNT(at.asset_id) AS cnt FROM tags t \
              LEFT JOIN asset_tags at ON at.tag_id = t.id \
-             WHERE t.source = ?1 AND (?2 IS NULL OR EXISTS(\
+             WHERE (?1 = 'all' OR t.source = ?1) AND (?2 IS NULL OR EXISTS(\
                SELECT 1 FROM project_assets pa \
                WHERE pa.asset_id = at.asset_id AND pa.project_id IS ?2\
              )) \
-             GROUP BY t.id HAVING cnt > 0 ORDER BY cnt DESC",
+             GROUP BY t.id HAVING cnt > 0 OR ?1 = 'all' ORDER BY cnt DESC, t.name",
         )?;
         let rows = stmt.query_map(rusqlite::params![source, project_id], |r| {
             Ok(TagCount {
@@ -2165,24 +2255,6 @@ impl Database {
             .optional()?
             .flatten();
         Ok(text)
-    }
-
-    /// 列出所有「无 auto tag 且有 caption」的资产 id（批量重归类目标）。
-    pub fn list_assets_to_classify(&self) -> AppResult<Vec<String>> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT a.id FROM assets a \
-             WHERE NOT EXISTS (SELECT 1 FROM asset_tags at JOIN tags t ON t.id = at.tag_id \
-                               WHERE at.asset_id = a.id AND t.source = 'auto') \
-             AND EXISTS (SELECT 1 FROM analyses an WHERE an.asset_id = a.id AND an.kind = 'caption') \
-             ORDER BY a.created_at DESC",
-        )?;
-        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
-        let mut out = Vec::new();
-        for r in rows {
-            out.push(r?);
-        }
-        Ok(out)
     }
 
     // ============ 颜色量化桶（P3）============
@@ -3046,6 +3118,56 @@ mod tests {
     }
 
     #[test]
+    fn generation_history_by_job_recovers_first_turn_session_and_full_history() {
+        let db = db();
+        for (index, job, session, prompt) in [
+            (1, "job-first", "session-1", "first prompt"),
+            (2, "job-next", "session-1", "revise prompt"),
+            (3, "job-other", "session-other", "unrelated prompt"),
+        ] {
+            let asset_id = put_asset(&db, &format!("recovered-{index}"));
+            db.insert_analysis(&Analysis {
+                id: format!("recovered-meta-{index}"), asset_id,
+                kind: "generation_meta".into(), provider: Some("codex-cli".into()),
+                created_at: Some(index),
+                payload: serde_json::json!({
+                    "job_id": job, "session_id": session, "prompt": prompt,
+                    "prompt_raw": format!("raw {prompt}"), "turn_key": format!("turn-{index}"),
+                }).to_string(),
+            }).unwrap();
+        }
+        // The caller has only the original job ID: no provider session was in its payload.
+        let history = db.generation_history_by_job("job-first", None).unwrap().unwrap();
+        assert_eq!(history.session_id.as_deref(), Some("session-1"));
+        assert_eq!(history.turns.len(), 2);
+        assert_eq!(history.turns[0].prompt, "first prompt");
+        assert_eq!(history.turns[0].prompt_raw.as_deref(), Some("raw first prompt"));
+        assert_eq!(history.turns[1].prompt, "revise prompt");
+        assert_eq!(history.turns[0].images.len(), 1);
+        assert!(db.generation_history_by_job("unknown-job", None).unwrap().is_none());
+    }
+
+    #[test]
+    fn generation_video_history_retains_each_turn_options_and_ratio() {
+        let db = db();
+        let options = serde_json::json!({"kind":"text2video", "model_version":"seedance2.5", "duration":30,"video_resolution":"480p"});
+        for (index, ratio) in [(1, "9:16"), (2, "21:9")] {
+            let id = put_asset(&db, &format!("video-{index}"));
+            db.insert_analysis(&Analysis { id:format!("video-meta-{index}"), asset_id:id,
+                kind:"generation_meta".into(), provider:Some("jimeng".into()), created_at:Some(index),
+                payload:serde_json::json!({"prompt":"bird", "turn_key":format!("turn-{index}"), "session_id":"video-session", "media":"video", "provider":"jimeng", "video_options":options, "ratio":ratio, "references":[]}).to_string() }).unwrap();
+        }
+        let history = db.generation_history_by_session("video-session", None).unwrap();
+        assert_eq!(history.media, "video");
+        assert_eq!(history.video_options, Some(options.clone()));
+        assert_eq!(history.ratio.as_deref(), Some("9:16"));
+        assert_eq!(history.turns.len(), 2);
+        assert_eq!(history.turns[1].ratio.as_deref(), Some("21:9"));
+        assert_eq!(history.turns[1].video_options, Some(options));
+        assert!(history.turns.iter().all(|turn| turn.references.is_empty()));
+    }
+
+    #[test]
     fn last_generated_images_takes_last_imaged_turn_capped() {
         // 续轮服务端回退：取「最后一个有图的轮」（末尾失败轮无 meta 不影响）、单轮超 10 张截前
         // 10（服务端参考图上限）、无图会话 / 未知 session 返回空。
@@ -3626,6 +3748,32 @@ mod tests {
         assert!(p3.sections.is_none());
 
         assert!(db.get_prompted_asset("no-such-id").unwrap().is_none());
+    }
+
+    #[test]
+    fn exact_asset_hydration_preserves_requested_order_without_collapsing() {
+        let db = db();
+        let ids = (0..501)
+            .map(|index| put_asset(&db, &format!("asset-{index}")))
+            .collect::<Vec<_>>();
+        db.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE assets SET generation_session_id = 'shared-session' WHERE id IN (?1, ?2)",
+                rusqlite::params![ids[0], ids[1]],
+            )
+            .unwrap();
+        let expected = ids.iter().rev().cloned().collect::<Vec<_>>();
+        let mut requested = expected.clone();
+        requested.insert(1, "missing".to_string());
+        requested.push(expected[0].clone());
+        let assets = db.get_assets_by_ids(&requested).unwrap();
+        assert_eq!(
+            assets.into_iter().map(|asset| asset.id).collect::<Vec<_>>(),
+            expected,
+            "exact hydration must exceed the 500-item browser page, preserve order, dedupe, and retain both members of one generation session",
+        );
     }
 
     #[test]

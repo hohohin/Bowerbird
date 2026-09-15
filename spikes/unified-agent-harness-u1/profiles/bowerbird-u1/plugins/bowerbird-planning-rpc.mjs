@@ -59,4 +59,9 @@ export async function callBowerbirdPlanningBridge(toolName, args, signal, enviro
   throw new Error(`bowerbird_tool_error:${code}`);
 }
 
+export function isRetryableComposeValidationError(toolName, error) {
+  return toolName === "compose_html" && error instanceof Error &&
+    error.message === "bowerbird_tool_error:tool_arguments_invalid";
+}
+
 export const BOWERBIRD_PLANNING_BRIDGE_ENV = Object.freeze([ENDPOINT_ENV, CAPABILITY_ENV]);

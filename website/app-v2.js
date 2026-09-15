@@ -936,7 +936,8 @@ function showAccountLoginMenu() {
 // 微信扫码登录：state 存 sessionStorage 由 /wechat-callback 中转页校验（CSRF 防护）。
 async function startWechatLogin() {
   const supabaseUrl = imageService?.supabaseUrl;
-  if (!supabaseUrl) {
+  const publishableKey = imageService?.supabasePublishableKey || imageService?.supabaseAnonKey;
+  if (!supabaseUrl || !publishableKey) {
     accountState.textContent = "微信登录暂不可用";
     return;
   }
@@ -952,7 +953,7 @@ async function startWechatLogin() {
   try {
     const response = await fetch(
       `${supabaseUrl.replace(/\/+$/, "")}/functions/v1/wechat-login?forceFunctionRegion=${SUPABASE_FUNCTION_REGION}&state=${encodeURIComponent(state)}`,
-      { headers: { Accept: "application/json" } },
+      { headers: { Accept: "application/json", apikey: publishableKey } },
     );
     const payload = await response.json();
     if (!response.ok || !payload.qrconnect_url) {
@@ -960,6 +961,7 @@ async function startWechatLogin() {
     }
     window.location.href = payload.qrconnect_url;
   } catch (error) {
+    try { window.sessionStorage.removeItem(WECHAT_LOGIN_STATE_KEY); } catch { /* 忽略 */ }
     accountState.textContent = error?.message || "微信登录发起失败";
     accountState.onclick = () => showAccountLoginMenu();
   }

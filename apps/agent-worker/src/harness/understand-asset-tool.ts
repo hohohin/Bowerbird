@@ -342,6 +342,7 @@ export function createApprovedInspectArtifactToolDefinition(args: {
   approvedPlanHash: string;
   step: HarnessPlanStep;
   artifact: { artifactId: string; sha256: string };
+  focus?: UnderstandAssetFocus;
   control: AgentControlClient;
   workspace: RunWorkspace;
   config: ArkAssetUnderstandingConfig;
@@ -355,7 +356,7 @@ export function createApprovedInspectArtifactToolDefinition(args: {
   const request: UnderstandAssetRequest = {
     assetId: args.artifact.artifactId,
     artifactSha256: args.artifact.sha256,
-    focus: "layout",
+    focus: args.focus ?? "layout",
     inspectionGoal: args.step.goal,
   };
   const adapter = new UnderstandAssetAdapter({

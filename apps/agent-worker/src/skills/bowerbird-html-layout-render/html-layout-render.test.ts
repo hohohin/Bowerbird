@@ -44,6 +44,8 @@ test("compose action binds asset keys to the exact Run manifest and rejects loca
   throws(() => validateComposeHtmlDocumentAction({ ...valid, html: '<img src="https:\/\/example.com\/a.png">' }, ids), /compose_external_locator/);
   throws(() => validateComposeHtmlDocumentAction({ ...valid, html: '<img src="asset:reference-3">' }, ids), /compose_asset_reference/);
   throws(() => validateComposeHtmlDocumentAction({ ...valid, html: '<script>alert(1)<\/script>' }, ids), /compose_unsafe_markup/);
+  throws(() => validateComposeHtmlDocumentAction({ ...valid, html: '<style>/* section */main{display:block}</style><main>x</main>' }, ids), /compose_unsafe_markup/);
+  throws(() => validateComposeHtmlDocumentAction({ ...valid, html: '<!-- section --><main>x</main>' }, ids), /compose_unsafe_markup/);
 });
 
 test("compose correction tells the model which closed validator rule failed", async () => {

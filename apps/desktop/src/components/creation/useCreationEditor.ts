@@ -5,13 +5,16 @@ import { Slice, Fragment } from "prosemirror-model";
 import type { Node as PmNode, ResolvedPos } from "prosemirror-model";
 import { useStore } from "../../store";
 import { api } from "../../lib/api";
+import type { CreativePromptLoad } from "../../lib/creativeLaunch";
 import type { CaptionSection, PromptedAsset } from "../../lib/types";
 import { creationSchema, imageAttrs } from "./schema";
 import { agentPromptReferencesFromDoc, graphSourcesFromDoc, serializeDoc } from "./serialize";
 import { parsePromptToDoc, parsePromptToInline } from "./parse";
 import { buildPlugins } from "./plugins";
 
-const PICK_EVENT = "bowerbird://board-asset-picked";
+export type BoardAssetPick = string | { assetId: string; canvasNodeId?: string | null; focus?: boolean };
+export const BOARD_ASSET_PICK_EVENT = "bowerbird://board-asset-picked";
+export const BOARD_PROMPT_LOADED_EVENT = "bowerbird://board-prompt-loaded";
 const LOAD_EVENT = "bowerbird://board-load-prompt";
 // 图片标注「插入创作板（不入库）」：detail = 完整 PromptedAsset（临时文件 + 「标注」维度），
 // 走 extraAssets 旁路（不在 s.assets / promptedAssets 里），随草稿 refs 持久化。
@@ -32,8 +35,8 @@ function initialDoc(empty = false) {
 // EditorView 销毁。把 doc 序列化进 localStorage（跨会话也保留），重挂载时 nodeFromJSON
 // 恢复 —— 保真保留 image/keyword chip（而非展开成纯文本，那样维度 token 会降级）。
 const BOARD_DRAFT_KEY = "bowerbird.boardDraft";
-type BoardDraft = { doc: unknown; refs: PromptedAsset[] };
-function loadDraft(key: string): BoardDraft | null {
+export type CreationEditorDraft = { doc: unknown; refs: PromptedAsset[]; generation?: import("../../lib/videoGeneration").GenerationSettings };
+function loadDraft(key: string): CreationEditorDraft | null {
   try {
     const raw = localStorage.getItem(key);
     if (!raw) return null;
@@ -50,6 +53,38 @@ function saveDraft(key: string, doc: unknown, refs: PromptedAsset[]) {
   } catch {
     // ignore storage errors（quota / 无痕模式）
   }
+}
+
+function isTransientAnnotation(asset: PromptedAsset) {
+  return asset.source === "annotation";
+}
+
+/**
+ * 草稿里的 image attrs 只是 UI 快照，素材库迁移/重命名后可能已经过期。恢复时用当前资产
+ * 重建 attrs；暂时查不到的普通库资产先清空路径，避免 WebView 立刻请求旧绝对路径。
+ */
+function refreshDraftImageAttrs(value: unknown, assets: Map<string, PromptedAsset>): unknown {
+  if (Array.isArray(value)) return value.map((item) => refreshDraftImageAttrs(item, assets));
+  if (!value || typeof value !== "object") return value;
+  const node = value as Record<string, unknown>;
+  const refreshed: Record<string, unknown> = { ...node };
+  if (Array.isArray(node.content)) {
+    refreshed.content = node.content.map((item) => refreshDraftImageAttrs(item, assets));
+  }
+  if (node.type === "image" && node.attrs && typeof node.attrs === "object") {
+    const attrs = node.attrs as Record<string, unknown>;
+    const assetId = typeof attrs.assetId === "string" ? attrs.assetId : "";
+    refreshed.attrs = {
+      ...attrs,
+      ...imageAttrs(
+        assetId,
+        assets.get(assetId),
+        attrs.silent === true,
+        typeof attrs.canvasNodeId === "string" ? attrs.canvasNodeId : null,
+      ),
+    };
+  }
+  return refreshed;
 }
 
 /**
@@ -70,6 +105,8 @@ export function useCreationEditor(opts?: {
   draftKey?: string | null;
   initialEmpty?: boolean;
   consumePendingKeyword?: boolean;
+  initialDraft?: CreationEditorDraft | null;
+  onDraftChange?: (draft: CreationEditorDraft) => void;
 }) {
   const draftKey = opts?.draftKey === undefined ? BOARD_DRAFT_KEY : opts.draftKey;
   const promptedAssets = useStore((s) => s.promptedAssets);
@@ -81,8 +118,10 @@ export function useCreationEditor(opts?: {
   const extraAssetsRef = useRef(extraAssets);
   extraAssetsRef.current = extraAssets;
 
+  const loadPromptRef = useRef<(request: CreativePromptLoad) => boolean>(() => false);
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
+  const flushDraftRef = useRef<() => void>(() => {});
   const [tick, setTick] = useState(0);
 
   // 最近呼环的图（store.ringAssetId，环收起后仍保留）：驱动 smartPunct 的维度名→chip 匹配正文
@@ -117,29 +156,47 @@ export function useCreationEditor(opts?: {
       chipAssetIdRef: ringAssetIdRef,
     });
     // 恢复上次草稿：nodeFromJSON 保真恢复 doc；refs 补进 extraAssets 供序列化匹配。
-    const saved = draftKey ? loadDraft(draftKey) : null;
+    const saved = opts?.initialDraft ?? (draftKey ? loadDraft(draftKey) : null);
+    const restoredRefs = (saved?.refs ?? []).map((savedAsset) => {
+      const current = assetByIdRef.current.get(savedAsset.id);
+      if (current) return current;
+      // 不入库标注图仍由草稿独占，保留其现有路径；普通库资产路径则等待按 id 补拉。
+      return isTransientAnnotation(savedAsset)
+        ? savedAsset
+        : { ...savedAsset, store_path: null, thumb_path: null };
+    });
+    const restoreAssets = new Map(assetByIdRef.current);
+    for (const asset of restoredRefs) restoreAssets.set(asset.id, asset);
     let startDoc;
     try {
-      startDoc = saved ? creationSchema.nodeFromJSON(saved.doc) : initialDoc(opts?.initialEmpty === true);
+      startDoc = saved
+        ? creationSchema.nodeFromJSON(refreshDraftImageAttrs(saved.doc, restoreAssets))
+        : initialDoc(opts?.initialEmpty === true);
     } catch {
       startDoc = initialDoc(opts?.initialEmpty === true);
     }
-    if (saved && saved.refs.length) setExtraAssets(saved.refs);
+    if (restoredRefs.length) setExtraAssets(restoredRefs);
     // 去抖保存：编辑频繁，400ms 静止后落盘（避免每次按键都写 localStorage）。
     let saveTimer: ReturnType<typeof setTimeout> | undefined;
+    let draftDirty = false;
+    const commitDraft = () => {
+      const draft = { doc: view.state.doc.toJSON(), refs: extraAssetsRef.current };
+      if (draftKey) saveDraft(draftKey, draft.doc, draft.refs);
+      opts?.onDraftChange?.(draft);
+      draftDirty = false;
+    };
     const scheduleSave = () => {
-      if (!draftKey) return;
+      if (!draftKey && !opts?.onDraftChange) return;
+      draftDirty = true;
       if (saveTimer) clearTimeout(saveTimer);
-      saveTimer = setTimeout(() => {
-        saveDraft(draftKey, view.state.doc.toJSON(), extraAssetsRef.current);
-      }, 400);
+      saveTimer = setTimeout(commitDraft, 400);
     };
     const view = new EditorView(hostRef.current, {
       state: EditorState.create({ doc: startDoc, plugins }),
       dispatchTransaction: (tr) => {
         view.updateState(view.state.apply(tr));
         setTick((t) => t + 1);
-        scheduleSave();
+        if (tr.docChanged) scheduleSave();
       },
       clipboardTextParser: (text: string, $context: ResolvedPos) => {
         // 粘贴也走 @图名 解析：按换行分段，每段 parsePromptToInline。单段返回 inline slice
@@ -164,9 +221,62 @@ export function useCreationEditor(opts?: {
       },
     });
     viewRef.current = view;
+    flushDraftRef.current = () => {
+      if (saveTimer) {
+        clearTimeout(saveTimer);
+        saveTimer = undefined;
+      }
+      commitDraft();
+    };
+
+    // 当前瀑布流可能因筛选/折叠不含草稿引用；按 id 从 DB 补拉，拿到迁移后的权威路径，
+    // 再同步更新 extraAssets 与 ProseMirror image attrs。标注临时图没有 DB 行，不参与。
+    const refreshIds = Array.from(
+      new Set((saved?.refs ?? []).filter((a) => !isTransientAnnotation(a)).map((a) => a.id))
+    );
+    let cancelled = false;
+    if (refreshIds.length) {
+      void Promise.all(refreshIds.map((assetId) => api.getPromptedAsset(assetId)))
+        .then((assets) => {
+          if (cancelled) return;
+          const fetched = assets.filter((asset): asset is PromptedAsset => asset !== null);
+          if (!fetched.length) return;
+          const fetchedById = new Map(fetched.map((asset) => [asset.id, asset]));
+          setExtraAssets((prev) => {
+            const next = new Map(prev.map((asset) => [asset.id, asset]));
+            for (const asset of fetched) next.set(asset.id, asset);
+            return Array.from(next.values());
+          });
+          const currentView = viewRef.current;
+          if (!currentView) return;
+          let tr = currentView.state.tr;
+          currentView.state.doc.descendants((node, pos) => {
+            if (node.type.name !== "image") return true;
+            const asset = fetchedById.get(node.attrs.assetId);
+            if (asset) {
+              tr = tr.setNodeMarkup(pos, undefined, {
+                ...node.attrs,
+                ...imageAttrs(
+                  asset.id,
+                  asset,
+                  node.attrs.silent === true,
+                  typeof node.attrs.canvasNodeId === "string" ? node.attrs.canvasNodeId : null,
+                ),
+              });
+            }
+            return true;
+          });
+          if (tr.docChanged) currentView.dispatch(tr);
+        })
+        .catch(console.error);
+    }
 
     function onPick(e: Event) {
-      const assetId = (e as CustomEvent<string>).detail;
+      const detail = (e as CustomEvent<BoardAssetPick>).detail;
+      const assetId = typeof detail === "string" ? detail : detail?.assetId;
+      const canvasNodeId = typeof detail === "string" ? null : detail?.canvasNodeId ?? null;
+      const shouldFocus = typeof detail === "string" || detail?.focus !== false;
+      if (!assetId) return;
       const asset = assetByIdRef.current.get(assetId);
       const v = viewRef.current;
       if (!v) return;
@@ -184,18 +294,18 @@ export function useCreationEditor(opts?: {
             view.dispatch(
               view.state.tr
                 .replaceSelectionWith(
-                  view.state.schema.nodes.image.create(imageAttrs(assetId, fetched, false))
+                  view.state.schema.nodes.image.create(imageAttrs(assetId, fetched, false, canvasNodeId))
                 )
                 .scrollIntoView()
             );
-            view.focus();
+            if (shouldFocus) view.focus();
           })
           .catch(console.error);
         return;
       }
-      const node = v.state.schema.nodes.image.create(imageAttrs(assetId, asset, false));
+      const node = v.state.schema.nodes.image.create(imageAttrs(assetId, asset, false, canvasNodeId));
       v.dispatch(v.state.tr.replaceSelectionWith(node).scrollIntoView());
-      v.focus();
+      if (shouldFocus) v.focus();
     }
 
     function onInject(e: Event) {
@@ -227,15 +337,10 @@ export function useCreationEditor(opts?: {
       scheduleSave();
     }
 
-    function onLoad(e: Event) {
-      const detail = (e as CustomEvent<{
-        prompt: string;
-        refs: PromptedAsset[];
-        dimRefs?: PromptedAsset[];
-      }>).detail;
-      if (!detail || typeof detail.prompt !== "string") return;
+    function applyPromptLoad(detail: CreativePromptLoad) {
+      if (!detail || typeof detail.prompt !== "string") return false;
       const body = detail.prompt.trim();
-      if (!body) return;
+      if (!body) return false;
       const refAssets: PromptedAsset[] = (detail.refs ?? []).map((a) => ({ ...a }));
       // 借用维度源图（复用 sidecar）：随草稿 refs 一起进 extraAssets（车牌寻址要能查到资产），
       // 但不进 parse 的 refs（不作为 silent 参考图还原）——图本来就没被发送。
@@ -243,14 +348,21 @@ export function useCreationEditor(opts?: {
       setExtraAssets([...refAssets, ...dimRefs]);
       // 传 assetByIdRef.current（含已反推图的 sections）；parsePromptToDoc 内部按「只补充」并入 refs，
       // 不让 refs（无 sections）覆盖已反推图，以保证【维度】能按 sections 精确匹配 fragment。
-      const doc = parsePromptToDoc(body, refAssets, assetByIdRef.current, undefined, dimRefs);
+      const doc = parsePromptToDoc(body, refAssets, assetByIdRef.current, undefined, dimRefs, detail.referenceNodeIds);
       const v = viewRef.current;
-      if (!v) return;
+      if (!v) return false;
       v.updateState(EditorState.create({ doc, plugins: v.state.plugins }));
       setTick((t) => t + 1);
       scheduleSave();
       setTimeout(() => v.focus(), 0);
+      return true;
     }
+
+    function onLoad(e: Event) {
+      const detail = (e as CustomEvent<CreativePromptLoad>).detail;
+      applyPromptLoad(detail);
+    }
+    loadPromptRef.current = applyPromptLoad;
 
     function onAppendText(e: Event) {
       const text = (e as CustomEvent<string>).detail;
@@ -277,17 +389,21 @@ export function useCreationEditor(opts?: {
 
     // 生成成功关闭创作板 / 手动收起 / 切项目 → 卸载。卸载即把当前 doc 落盘
     // （比 400ms 去抖更可靠——刚编辑完就关板时去抖计时器还挂着），重开创作板恢复。
-    window.addEventListener(PICK_EVENT, onPick);
+    window.addEventListener(BOARD_ASSET_PICK_EVENT, onPick);
     window.addEventListener(LOAD_EVENT, onLoad);
     window.addEventListener(INJECT_EVENT, onInject);
     window.addEventListener(APPEND_TEXT_EVENT, onAppendText);
     return () => {
-      window.removeEventListener(PICK_EVENT, onPick);
+      cancelled = true;
+      window.removeEventListener(BOARD_ASSET_PICK_EVENT, onPick);
       window.removeEventListener(LOAD_EVENT, onLoad);
       window.removeEventListener(INJECT_EVENT, onInject);
       window.removeEventListener(APPEND_TEXT_EVENT, onAppendText);
       if (saveTimer) clearTimeout(saveTimer);
       if (draftKey) saveDraft(draftKey, view.state.doc.toJSON(), extraAssetsRef.current);
+      if (draftDirty) opts?.onDraftChange?.({ doc: view.state.doc.toJSON(), refs: extraAssetsRef.current });
+      flushDraftRef.current = () => {};
+      loadPromptRef.current = () => false;
       view.destroy();
       viewRef.current = null;
     };
@@ -300,6 +416,7 @@ export function useCreationEditor(opts?: {
       return {
         finalPrompt: "",
         references: [] as PromptedAsset[],
+        referenceNodeIds: [] as Array<string | null>,
         dimensionSources: [] as PromptedAsset[],
       };
     return serializeDoc(doc, assetByIdRef.current);
@@ -327,6 +444,8 @@ export function useCreationEditor(opts?: {
   }, [tick, assetById]);
 
   const focus = useCallback(() => viewRef.current?.focus(), []);
+  const flushDraft = useCallback(() => flushDraftRef.current(), []);
+  const loadPrompt = useCallback((request: CreativePromptLoad) => loadPromptRef.current(request), []);
 
   // 环点扇区待插的维度：板已开 → 本 effect 即时插；板未开点扇区 → store 先开板再挂载本 hook，
   // 挂载 commit 内本 effect 排在建 view 的 effect 之后运行，同样能消费。
@@ -381,9 +500,12 @@ export function useCreationEditor(opts?: {
   return {
     hostRef,
     focus,
+    flushDraft,
+    loadPrompt,
     finalPrompt: serialized.finalPrompt,
     rawPrompt,
     references: serialized.references,
+    referenceNodeIds: serialized.referenceNodeIds,
     dimensionSources: serialized.dimensionSources,
     graphSources,
     agentPromptReferences,

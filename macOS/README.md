@@ -1,6 +1,35 @@
 # Bowerbird macOS 开发版
 
-本目录记录 Apple Silicon（arm64）Mac 上的本地开发、运行和未签名构建流程。Bowerbird 使用 canonical Tauri / React / Rust 源码，不维护 macOS override。
+本目录记录 Mac 上的本地开发、运行和未签名构建流程。Bowerbird 使用 canonical Tauri / React / Rust 源码，不维护 macOS override。构建架构以 `rustc -vV` 的 host 为准；Intel 为 `x86_64-apple-darwin`，Apple Silicon 原生工具链为 `aarch64-apple-darwin`。
+
+## 2026-09-15 同步
+
+`mac` 从远端 `0fcde4d` 合入 `dev` 的 `01e8372`（26.9.15），包含项目画板、编辑工具、生成恢复、视觉规范与随包引导项目。保留 Finder 启动时的 Homebrew/用户 bin 探测和子进程 PATH；Codex 调用及终端会话回看统一使用 Bowerbird 私有 `cli-profiles/codex`。终端命令通过 AppleScript 参数传递，路径、参数和环境变量逐项进行 shell 转义；同时修复即梦登录入口的 macOS 条件编译错误。
+
+视频工具使用同一绝对路径解析器，Mac 额外探测 `/opt/homebrew/bin`、`/usr/local/bin` 与 `~/.local/bin` 下的 FFmpeg/ffprobe，不修改系统 PATH。
+
+前后端同时识别 `/var/folders/.../T/` 与 `/private/var/folders/.../T/` 中的采集临时来源，禁止把它们作为“移出园丁鸟”的恢复位置；普通用户文件夹仍可恢复。
+
+本次自动化验证：
+
+- Rust 库测试：353 passed / 2 ignored，无过滤；其中真实视频测试另行运行并通过，余下本地分类模型测试未执行。
+- 真实视频测试将子进程 PATH 限制为 `/usr/bin:/bin`，清除 FFmpeg 路径覆盖，通过公共解析器找到本机工具，验证临时视频入库、时长/尺寸与 JPEG 海报。
+- 画板/生成恢复/引导/探索/路由 136 项、资产移出规则 4 项通过。
+- 标题栏与随包引导项目两组 Chrome 合成 IPC 界面回归通过；截图位于本地 `macOS/dist/verification/`。
+- TypeScript/Vite production build 通过；保留 dev 既有 Rust 警告与 Vite 大 chunk 提示。
+
+本次交付为 **Intel x86_64**（本机 Node 26.4.0、Rust 1.96.0），不是 arm64/Universal 构建：
+
+- 应用：`apps/desktop/src-tauri/target/release/bundle/macos/Bowerbird.app`。
+- 未经 Developer ID 签名/公证的测试包：`macOS/dist/Bowerbird_26.9.15_x64.dmg`，74,542,833 bytes。
+- SHA-256：`afb050bd357797bbfd29da9e65b606b9c220bcfb6b1e4aa9cfb8b6fe58bf0415`；同目录附 `.sha256`，`hdiutil verify` 完整性检查通过。
+- 已核对版本、Mach-O 架构、公开 Cloud 配置构建注入与 49 个包内资源文件哈希；487 个构建源文件与构建前指纹一致。日志、截图和校验结果位于本地 `macOS/dist/verification/`。
+
+平台边界：
+
+- 本地分类模型运行时、探索内置浏览器的登录态拖图取字节、原生 Adobe Illustrator AI 导出仍沿用 dev 的 Windows 实现；Mac 可用浏览器扩展采集、图片导入与 PSD 导出。
+- Dreamina 在 Mac 上沿用官方 CLI 的凭据存储；Windows 注册表隔离与 NSIS 安装清登录钩子不适用于 Mac，不能宣称 Mac Dreamina 凭据已隔离。
+- 本次不改写真实素材库，不执行付费生成或真实 OAuth。Chrome 合成 IPC 回归不等同于 WKWebView/Finder 真机验收。
 
 > **codex CLI 隐形**：首启若 codex 未就绪，引导页可在 app 内一键安装（优先免 Node 直装独立版，直装失败且本机有 npm 时回退 `npm install -g @openai/codex`，进度流式）+ 一键 OAuth 登录（`codex login` 自动开浏览器），用户全程不碰终端。macOS 上 npm/codex 检测除当前 PATH 外还会查 `/opt/homebrew/bin`、`/usr/local/bin` 与用户 bin，Finder 双击启动 `.app` 也能找到。
 
@@ -10,7 +39,7 @@
 
 本阶段目标：
 
-- Apple Silicon Mac 本地开发运行；
+- Mac 本地开发运行（按本机 Rust 架构构建）；
 - 生成本地 `.app`；
 - 生成仅供测试的未签名 DMG；
 - 验证 Finder、WKWebView、浏览器扩展与 AI CLI 的平台接缝。
@@ -18,7 +47,7 @@
 本阶段不包含：
 
 - Developer ID 签名与 Apple 公证；
-- Intel Mac 或 Universal Binary；
+- Universal Binary 与跨架构运行验收；
 - App Store 发布；
 - Windows 素材库/数据库迁移；
 - ffmpeg/ffprobe sidecar 打包。
@@ -42,15 +71,15 @@
 
    项目固定使用 pnpm `11.10.0`。
 
-3. 安装原生 Apple Silicon Rust 工具链：
+3. 安装与本机架构匹配的 Rust 工具链：
 
    ```bash
-   rustup default stable-aarch64-apple-darwin
+   rustup default stable
    rustc -vV
    cargo --version
    ```
 
-   `rustc -vV` 的 host 应为 `aarch64-apple-darwin`。
+   `rustc -vV` 的 host 应与目标机器匹配；不要把 x86_64 构建标记为 arm64。
 
 4. 可选外部能力：
 
@@ -71,7 +100,11 @@ cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
 ```
 
-`uname -m` 应输出 `arm64`。
+`uname -m` 与 `rustc -vV` 用于记录本次构建架构。
+
+Cloud 构建需在被 Git 忽略的 `apps/cloud/.env.local` 配置 `BOWERBIRD_SUPABASE_URL` 与 `BOWERBIRD_SUPABASE_PUBLISHABLE_KEY`；仅放公开客户端配置，不放 service-role 或模型密钥。官方站点 `/api/image-config` 提供公开 URL 与 publishable key。离线权益验证另需匹配服务端的 `BOWERBIRD_ENTITLEMENT_PUBKEY`；缺失时不启用离线宽限验签。
+
+网络需要代理时，可仅为本次命令设置 `https_proxy=http://127.0.0.1:7890 http_proxy=http://127.0.0.1:7890`。
 
 ## 开发运行
 
@@ -89,7 +122,7 @@ pnpm tauri dev
 - Chrome/Chromium 加载 `apps/extension/` 后能连接 `127.0.0.1:39871` 并采集入库；
 - 未安装 AI CLI 时相应功能置灰，应用不崩溃。
 
-## 构建 Apple Silicon app 与未签名 DMG
+## 构建本机架构 app 与未签名 DMG
 
 ```bash
 pnpm tauri build --bundles app,dmg
@@ -108,7 +141,7 @@ apps/desktop/src-tauri/target/release/bundle/dmg/
 file apps/desktop/src-tauri/target/release/bundle/macos/Bowerbird.app/Contents/MacOS/*
 ```
 
-应显示 arm64 Mach-O。本阶段不要求 Universal Binary。
+应显示与本次 Rust host 匹配的 Mach-O 架构。本阶段不要求 Universal Binary。
 
 构建完成后必须在 Finder 中双击 `.app` 测试，不要只从 Terminal 运行可执行文件；Finder 启动环境更接近用户实际使用，也能暴露 PATH 差异。
 

@@ -19,6 +19,7 @@ import { htmlExecutionToolDefinitions } from "../plugins/bowerbird-html-executio
 import { contentExecutionToolDefinitions } from "../plugins/bowerbird-content-execution-tools.mjs";
 import { planningToolDefinitions } from "../plugins/bowerbird-planning-tools.mjs";
 import { controlledModelToolDefinitions } from "../plugins/bowerbird-controlled-model-tools.mjs";
+import { isRetryableComposeValidationError } from "../plugins/bowerbird-planning-rpc.mjs";
 
 const require = createRequire(import.meta.url);
 
@@ -136,7 +137,7 @@ test("DeepSeek adapter fixture preserves reasoning, raw tool JSON, usage, and to
   try {
     const chunks = await collect(createOfflineAdapter().stream({
       provider: "deepseek-official",
-      model: "deepseek-v4-flash",
+      model: "deepseek-flash",
       messages: [{ role: "user", content: [{ type: "text", text: "write the artifact" }] }],
       tools: [{ name: "write_artifact", description: "fixture tool", parameters: { type: "object" } }],
     }));
@@ -168,7 +169,7 @@ test("DeepSeek adapter normalizes malformed SSE JSON without network access", as
     await assert.rejects(
       collect(createOfflineAdapter().stream({
         provider: "deepseek-official",
-        model: "deepseek-v4-flash",
+        model: "deepseek-flash",
         messages: [{ role: "user", content: [{ type: "text", text: "fixture" }] }],
       })),
       (error) => error?.code === "MALFORMED_RESPONSE",
@@ -310,30 +311,88 @@ test("planning bridge injects only an exact loopback endpoint and one short-live
   );
 });
 
-test("approved HTML execution profile exposes only the four ordered execution tools", () => {
+test("approved HTML execution profile exposes execution tools and optional context reads", () => {
+  const definitions = htmlExecutionToolDefinitions();
   assert.deepEqual(
-    htmlExecutionToolDefinitions().map((definition) => definition.name).sort(),
-    ["compose_html", "finalize_output", "inspect_artifact", "render_html"],
+    definitions.map((definition) => definition.name).sort(),
+    ["compose_html", "finalize_output", "inspect_artifact", "read_context", "render_html"],
   );
+  const compose = definitions.find((definition) => definition.name === "compose_html");
+  assert.match(compose.description, /asset:reference-1/);
+  assert.match(compose.description, /never put a raw artifact id after asset:/);
+  assert.match(compose.parameters.properties.html.description, /Literal <!--, -->, \/\*, and \*\//);
+  assert.match(compose.parameters.properties.resourceArtifactIds.description, /must not be used as HTML asset: URLs/);
+});
+
+test("a successful compose is immutable and a duplicate is redirected to render without another bridge call", async () => {
+  const previousEndpoint = process.env.BOWERBIRD_TOOL_BRIDGE_ENDPOINT;
+  const previousCapability = process.env.BOWERBIRD_TOOL_BRIDGE_CAPABILITY;
+  const previousFetch = globalThis.fetch;
+  let fetchCalls = 0;
+  let concluded = 0;
+  process.env.BOWERBIRD_TOOL_BRIDGE_ENDPOINT = "http://127.0.0.1:39171/v1/run-tools/call";
+  process.env.BOWERBIRD_TOOL_BRIDGE_CAPABILITY = "a".repeat(64);
+  globalThis.fetch = async () => {
+    fetchCalls += 1;
+    return new Response(JSON.stringify({ ok: true, value: { artifactId: "html-1" } }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  try {
+    const compose = htmlExecutionToolDefinitions().find((definition) => definition.name === "compose_html");
+    const exec = { signal: new AbortController().signal, concludeTurn() { concluded += 1; } };
+    const first = await compose.execute({ schemaVersion: 1, html: "<main>一</main>", resourceArtifactIds: [] }, exec);
+    const duplicate = await compose.execute({ schemaVersion: 1, html: "<main>二</main>", resourceArtifactIds: [] }, exec);
+    assert.equal(fetchCalls, 1);
+    assert.equal(first.nextRequiredTool, "render_html");
+    assert.equal(duplicate.status, "already_committed");
+    assert.equal(duplicate.nextRequiredTool, "render_html");
+    assert.equal(concluded, 0);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousEndpoint === undefined) delete process.env.BOWERBIRD_TOOL_BRIDGE_ENDPOINT;
+    else process.env.BOWERBIRD_TOOL_BRIDGE_ENDPOINT = previousEndpoint;
+    if (previousCapability === undefined) delete process.env.BOWERBIRD_TOOL_BRIDGE_CAPABILITY;
+    else process.env.BOWERBIRD_TOOL_BRIDGE_CAPABILITY = previousCapability;
+  }
 });
 
 test("approved content execution profile reuses HTML tools and adds only the Xiaohongshu compiler", () => {
+  const definitions = contentExecutionToolDefinitions();
   assert.deepEqual(
-    contentExecutionToolDefinitions().map((definition) => definition.name).sort(),
-    ["compose_html", "compose_xiaohongshu", "finalize_output", "inspect_artifact", "render_html"],
+    definitions.map((definition) => definition.name).sort(),
+    ["compose_html", "compose_xiaohongshu", "finalize_output", "inspect_artifact", "read_context", "render_html"],
+  );
+  const compose = definitions.find((definition) => definition.name === "compose_html");
+  assert.match(compose.description, /asset:reference-1/);
+  assert.match(compose.description, /never put a raw artifact id after asset:/);
+});
+
+test("only a compose argument validation error receives the bounded correction", () => {
+  assert.equal(
+    isRetryableComposeValidationError("compose_html", new Error("bowerbird_tool_error:tool_arguments_invalid")),
+    true,
+  );
+  assert.equal(
+    isRetryableComposeValidationError("render_html", new Error("bowerbird_tool_error:tool_arguments_invalid")),
+    false,
+  );
+  assert.equal(
+    isRetryableComposeValidationError("compose_html", new Error("bowerbird_tool_error:tool_execution_failed")),
+    false,
   );
 });
 
-test("planning profile advertises backward-compatible v1 and structured v2 plans", () => {
-  const submitPlan = planningToolDefinitions().find((definition) => definition.name === "submit_plan");
-  assert.ok(submitPlan);
-  const plan = submitPlan.parameters.properties.plan;
-  assert.deepEqual(plan.properties.schemaVersion.enum, [1, 2]);
-  assert.equal(plan.properties.contentPlan.type, "object");
-  assert.equal(plan.properties.contentPlan.properties.assetAssignments.type, "array");
-  assert.equal(plan.properties.contentPlan.properties.informationArchitecture.type, "array");
-  assert.equal(plan.properties.contentPlan.properties.missingAssets.type, "array");
-  assert.equal(plan.properties.contentPlan.properties.visualProfile.oneOf.length, 2);
+test("planning profile exposes goal authorization and generic execution without a step DSL", () => {
+  const definitions = planningToolDefinitions();
+  assert.equal(definitions.some((item) => item.name === "submit_plan"), false);
+  const authorization = definitions.find((item) => item.name === "request_task_authorization");
+  assert.ok(authorization);
+  assert.equal(authorization.parameters.properties.schemaVersion.const, 3);
+  assert.equal(authorization.parameters.properties.steps, undefined);
+  assert.equal(authorization.parameters.properties.contentPlan, undefined);
+  assert.ok(definitions.find((item) => item.name === "call_tool"));
 });
 
 test("controlled model profile exposes only the three structured suggestion actions", () => {

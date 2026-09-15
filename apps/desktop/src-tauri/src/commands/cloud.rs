@@ -1,7 +1,7 @@
 use tauri::State;
 
 use crate::cloud::auth::AuthSnapshot;
-use crate::cloud::entitlement::EntitlementSnapshot;
+use crate::cloud::entitlement::{CodeRedemption, EntitlementSnapshot};
 use crate::cloud::{AuthClient, EntitlementService};
 use crate::error::AppError;
 
@@ -54,4 +54,13 @@ pub async fn cloud_sync_entitlement(
     entitlement: State<'_, EntitlementService>,
 ) -> Result<EntitlementSnapshot, AppError> {
     entitlement.sync(&auth).await
+}
+
+#[tauri::command]
+pub async fn cloud_redeem_code(
+    auth: State<'_, AuthClient>,
+    entitlement: State<'_, EntitlementService>,
+    code: String,
+) -> Result<CodeRedemption, AppError> {
+    entitlement.redeem_code(&auth, &code).await
 }

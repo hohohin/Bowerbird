@@ -201,6 +201,12 @@ try {
   const requestValue = {
     schemaVersion: 1,
     goal: "验证统一 Agent 批准后 Mock Seedream 执行",
+    references: [],
+    htmlOutput: {
+      viewport: { widthCssPx: 900, heightCssPx: 700, deviceScaleFactor: 1 },
+      capture: { mode: "full_page_and_slices", sliceHeightCssPx: 900, overlapCssPx: 0 },
+      background: "opaque",
+    },
   };
   const requestManifest = canonicalJson(requestValue);
   const created = await jsonRequest("创建 Run", functionUrl("agent-run"), {
@@ -208,22 +214,17 @@ try {
     headers: owner.headers,
     body: JSON.stringify({
       action: "create",
-      skillId: "bowerbird-controlled-image-edit",
+      skillId: "bowerbird-unified-agent",
       goal: "验证统一 Agent 计划审批控制面",
       inputCount: 0,
       inputManifestHash: sha(requestManifest),
+      agentRuntime: "dsh",
       idempotencyKey: `unified-agent-local-${randomBytes(8).toString("hex")}`,
     }),
   });
   const runId = created.runId;
   assert.ok(runId, "create 未返回 runId");
-  assert.equal(created.agentRuntime, "legacy_kernel", "未声明 runtime 的历史路径必须保持 legacy Kernel");
-
-  await jsonRequest("切换为本地统一 Skill", `${baseUrl}/rest/v1/agent_runs?id=eq.${encodeURIComponent(runId)}`, {
-    method: "PATCH",
-    headers: { ...adminHeaders, prefer: "return=minimal" },
-    body: JSON.stringify({ skill_id: "bowerbird-unified-agent", skill_version: "0.1.0" }),
-  }, [204]);
+  assert.equal(created.agentRuntime, "dsh", "统一 Agent create 必须原生锁定 DSH runtime");
 
   const requestUpload = await fetch(reachableLocalUrl(created.uploadUrl), {
     method: "PUT",
@@ -248,7 +249,7 @@ try {
     body: JSON.stringify({ action: "claim" }),
   });
   assert.equal(firstClaim.run?.id, runId, "Worker 应认领当前测试 Run");
-  assert.equal(firstClaim.run?.agentRuntime, "legacy_kernel", "默认 legacy runtime 必须跨 claim 保持不变");
+  assert.equal(firstClaim.run?.agentRuntime, "dsh", "统一 Agent 的 DSH runtime 必须跨 claim 保持不变");
   const firstLeaseId = firstClaim.lease?.leaseId;
   assert.ok(firstLeaseId, "首次认领缺少 leaseId");
 

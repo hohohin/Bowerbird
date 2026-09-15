@@ -10,6 +10,12 @@ use crate::core::paths::LibraryPaths;
 use crate::db::Database;
 use crate::error::{AppError, AppResult};
 
+const JSON_PATH_COLUMNS: [(&str, &str); 3] = [
+    ("analyses", "payload"),
+    ("task_queue", "payload"),
+    ("local_agent_runs", "checkpoint_json"),
+];
+
 /// 迁移进度事件（经 `library://migrate-progress` 推给前端）。
 #[derive(Debug, Clone, Serialize)]
 pub struct MigrateProgress {
@@ -97,6 +103,64 @@ fn copy_dir_recursive(
     Ok(())
 }
 
+fn json_escaped(value: &str) -> AppResult<String> {
+    let encoded = serde_json::to_string(value)?;
+    Ok(encoded[1..encoded.len() - 1].to_string())
+}
+
+/// 改写库内媒体路径。JSON 文本里的 Windows 路径包含双反斜杠，必须用 JSON 转义后的
+/// 前缀替换；直接拿 `C:\foo` 替换不会命中存储为 `C:\\foo` 的 payload。
+///
+/// 这里只迁移实际复制过的 images / thumbnails。annotations、agent-runs 等仍位于 app data，
+/// 不能把整个旧根前缀无差别替换到新库根。
+fn rewrite_library_paths(conn: &Connection, old_root: &Path, new_root: &Path) -> AppResult<usize> {
+    let mut changed = 0;
+    for directory in ["images", "thumbnails"] {
+        let old = normalize(old_root)?
+            .join(directory)
+            .to_string_lossy()
+            .into_owned();
+        let new = normalize(new_root)?
+            .join(directory)
+            .to_string_lossy()
+            .into_owned();
+
+        changed += conn.execute(
+            "UPDATE assets SET store_path = replace(store_path, ?1, ?2) \
+                WHERE store_path LIKE ?1 || '%'",
+            rusqlite::params![old, new],
+        )?;
+        changed += conn.execute(
+            "UPDATE assets SET thumb_path = replace(thumb_path, ?1, ?2) \
+                WHERE thumb_path LIKE ?1 || '%'",
+            rusqlite::params![old, new],
+        )?;
+
+        let old_json = json_escaped(&old)?;
+        let new_json = json_escaped(&new)?;
+        for (table, column) in JSON_PATH_COLUMNS {
+            changed += conn.execute(
+                &format!(
+                    "UPDATE {table} SET {column} = replace({column}, ?1, ?2) \
+                        WHERE {column} LIKE '%' || ?1 || '%'"
+                ),
+                rusqlite::params![old_json, new_json],
+            )?;
+        }
+    }
+    Ok(changed)
+}
+
+/// 兼容旧版本已经完成的 app-data → 自定义库迁移：启动新库后补改未命中的 JSON 路径。
+pub fn repair_migrated_library_paths(
+    db: &Database,
+    old_root: &Path,
+    new_root: &Path,
+) -> AppResult<usize> {
+    let conn = db.conn.lock().unwrap();
+    rewrite_library_paths(&conn, old_root, new_root)
+}
+
 /// 迁移主流程（只复制、不删除旧文件；旧库残留由 lib.rs 在下次启动清理）。
 /// 返回规范化后的新根目录，供命令层写入设置。
 pub fn migrate_library(
@@ -109,11 +173,11 @@ pub fn migrate_library(
     let new_paths = LibraryPaths::init(normalize(new_root)?)?;
     let new_root = new_paths.root.clone();
 
-    // 1. images / thumbnails 递归复制（逐文件进度）。
-    let old_str = normalize(&paths.root)?.to_string_lossy().into_owned();
+    // 1. 媒体与独立图层工程递归复制（逐文件进度）。
     let new_str = new_root.to_string_lossy().into_owned();
     for (name, src_dir, dst_dir) in [
         ("images", paths.images.clone(), new_paths.images.clone()),
+        ("layers", paths.root.join("layers"), new_paths.root.join("layers")),
         (
             "thumbnails",
             paths.thumbnails.clone(),
@@ -139,25 +203,10 @@ pub fn migrate_library(
         )?;
     }
 
-    // 3. 改写新库中的绝对路径前缀（store/thumb 为关键；analyses payload 里 generation 引用
-    //    存了 store_path 字符串，一并替换避免悬空引用）。
+    // 3. 改写新库中的绝对媒体路径（含 JSON payload/checkpoint 中的转义路径）。
     {
         let conn = Connection::open(&new_paths.db)?;
-        conn.execute(
-            "UPDATE assets SET store_path = replace(store_path, ?1, ?2) \
-                WHERE store_path LIKE ?1 || '%'",
-            rusqlite::params![old_str, new_str],
-        )?;
-        conn.execute(
-            "UPDATE assets SET thumb_path = replace(thumb_path, ?1, ?2) \
-                WHERE thumb_path LIKE ?1 || '%'",
-            rusqlite::params![old_str, new_str],
-        )?;
-        conn.execute(
-            "UPDATE analyses SET payload = replace(payload, ?1, ?2) \
-                WHERE payload LIKE '%' || ?1 || '%'",
-            rusqlite::params![old_str, new_str],
-        )?;
+        rewrite_library_paths(&conn, &paths.root, &new_root)?;
     }
 
     Ok(new_str)
@@ -168,6 +217,7 @@ pub fn migrate_library(
 pub fn cleanup_legacy_root(app_data_dir: &Path) {
     for name in [
         "images",
+        "layers",
         "thumbnails",
         "library.db",
         "library.db-wal",
@@ -204,6 +254,8 @@ mod tests {
         std::fs::write(&store_file, b"data").unwrap();
 
         let paths = LibraryPaths::init(old_root.clone()).unwrap();
+        std::fs::create_dir_all(old_root.join("layers")).unwrap();
+        std::fs::write(old_root.join("layers/document.json"), b"layer-workspace").unwrap();
         let db = Database::open(&paths.db).unwrap();
         db.migrate().unwrap();
         db.insert_asset(&Asset {
@@ -229,6 +281,30 @@ mod tests {
             reference_count: 0,
         })
         .unwrap();
+        let annotation_file = old_root.join("annotations").join("temp.png");
+        let payload = serde_json::json!({
+            "image": store_file.to_string_lossy(),
+            "annotation": annotation_file.to_string_lossy(),
+        })
+        .to_string();
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "INSERT INTO analyses (id, asset_id, kind, payload) VALUES ('analysis-1', 'asset-1', 'generation_meta', ?1)",
+                [&payload],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO task_queue (id, kind, payload, created_at) VALUES ('task-1', 'generation', ?1, 0)",
+                [&payload],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO local_agent_runs (id, skill_id, target_asset_id, status, phase, checkpoint_json, created_at, updated_at) VALUES ('run-1', 'test', 'asset-1', 'running', 'test', ?1, 0, 0)",
+                [&payload],
+            )
+            .unwrap();
+        }
 
         let mut progress: Box<ProgressFn> = Box::new(|_, _, _| {});
         let new_str = migrate_library(&db, &paths, &new_root, &mut *progress).unwrap();
@@ -237,6 +313,7 @@ mod tests {
 
         // 新根：媒体文件已复制、新库路径已改写。
         assert!(new_root.join("images/2026/07/asset-1.png").exists());
+        assert_eq!(std::fs::read(new_root.join("layers/document.json")).unwrap(), b"layer-workspace");
         let new_db = Database::open(&new_root.join("library.db")).unwrap();
         let rewritten: Option<String> = new_db
             .conn
@@ -251,6 +328,28 @@ mod tests {
         let new_path = new_root.to_string_lossy();
         let rewritten = rewritten.unwrap();
         assert!(rewritten.starts_with(new_path.as_ref()), "{rewritten:?}");
+        for (table, column) in JSON_PATH_COLUMNS {
+            let sql = format!("SELECT {column} FROM {table} LIMIT 1");
+            let rewritten_json: String = new_db
+                .conn
+                .lock()
+                .unwrap()
+                .query_row(&sql, [], |r| r.get(0))
+                .unwrap();
+            let value: serde_json::Value = serde_json::from_str(&rewritten_json).unwrap();
+            assert!(
+                value["image"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with(new_path.as_ref()),
+                "{table}.{column}: {rewritten_json}"
+            );
+            assert_eq!(
+                value["annotation"].as_str().unwrap(),
+                annotation_file.to_string_lossy(),
+                "未复制的 annotations 路径不应被改写"
+            );
+        }
 
         // 旧根原样保留（迁移不删）。
         assert!(old_root.join("images/2026/07/asset-1.png").exists());

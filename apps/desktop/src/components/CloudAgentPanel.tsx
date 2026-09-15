@@ -2,47 +2,82 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { Check, Circle, RefreshCw, Sparkles, X, XCircle } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api";
+import { agentApprovalMode, currentAgentSkillVersion } from "../lib/cloudAgentApproval";
+import { AgentApprovalToggle } from "./AgentApprovalToggle";
 import { cloudAgentFailureMessage, cloudAgentStatusLabel } from "../lib/cloudAgent";
+import { cloudAgentPlanDisplay, type CloudAgentPlanDisplayStep } from "../lib/cloudAgentPlan";
+import { isRenderedDocumentResult, selectCloudAgentResultArtifacts } from "../lib/cloudAgentResult";
+import {
+  cloudAgentIngestionPersisted,
+  enqueueCloudAgentRunOperation,
+  getCloudAgentIngestState,
+  mergeCloudAgentAssets,
+  requestCloudAgentIngestRetry,
+  subscribeCloudAgentIngestState,
+  type CloudAgentIngestRuntimeState,
+} from "../lib/cloudAgentRuntime";
 import { notifyError, notifySuccess } from "../lib/notify";
-import type { CloudAgentApproval, CloudAgentArtifact, CloudAgentPlan, CloudAgentPlanStep, CloudAgentPreview } from "../lib/types";
+import { agentArtifactNodeId } from "../lib/projectNodeIds";
+import type { Asset, CloudAgentApproval, CloudAgentArtifact, CloudAgentPreview } from "../lib/types";
 import { useStore } from "../store";
 import { Lightbox } from "./Lightbox";
 
 const TERMINAL = new Set(["succeeded", "failed", "cancelled"]);
-const CURRENT_CONTROLLED_SKILL_VERSION = "0.1.2";
-const CURRENT_HTML_SKILL_VERSION = "0.1.0";
 const HTML_SKILL_ID = "bowerbird-html-layout-render";
-
-function strategyLabel(strategy?: string): string {
-  if (strategy === "direct") return "直接单步";
-  if (strategy === "controlled") return "一致性控制";
-  if (strategy === "staged_controlled") return "分阶段控制";
-  return "动态计划";
-}
+const UNIFIED_SKILL_ID = "bowerbird-unified-agent";
 
 function PendingPlan({ approval }: { approval: CloudAgentApproval }) {
-  const plan = approval.proposal as CloudAgentPlan | undefined;
+  const plan = cloudAgentPlanDisplay(approval.proposal);
   if (!plan) return <p className="text-xs text-muted">计划正文正在同步，请稍候。</p>;
   return (
     <div className="space-y-3">
       <div className="rounded-lg bg-black/20 p-3 ring-1 ring-white/8">
         <div className="mb-1 flex items-center justify-between gap-3">
-          <span className="text-xs font-semibold text-ink">Agent 对真实意图的理解</span>
+          <span className="text-xs font-semibold text-ink">{plan.title}</span>
           <span className="rounded bg-accent/15 px-2 py-0.5 text-[10px] text-accent">
-            {strategyLabel(plan.strategy)}
+            {plan.strategyLabel}
           </span>
         </div>
-        <p className="text-xs leading-5 text-ink/85">{plan.intentSummary}</p>
+        <p className="text-xs leading-5 text-ink/85">{plan.summary}</p>
       </div>
 
-      {plan.referenceRoles.length > 0 && (
+      {plan.references.length > 0 && (
         <div>
-          <div className="mb-1 text-[11px] font-medium text-muted">参考图职责</div>
-          <div className="flex flex-wrap gap-1.5">
-            {plan.referenceRoles.map((reference) => (
-              <span key={reference.referenceId} className="rounded bg-white/6 px-2 py-1 text-[10px] text-ink/80">
-                {reference.referenceId} · {reference.role}
-              </span>
+          <div className="mb-1 text-[11px] font-medium text-muted">{approval.proposal?.schemaVersion === 3 ? "授权素材" : "参考图职责"}</div>
+          <div className="space-y-1.5">
+            {plan.references.map((reference) => (
+              <div key={reference.key} className="rounded bg-white/6 px-2 py-1 text-[10px] text-ink/80">
+                <div>{reference.label}</div>
+                {reference.detail && <div className="mt-0.5 text-muted">{reference.detail}</div>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {plan.sections.length > 0 && (
+        <div>
+          <div className="mb-1 text-[11px] font-medium text-muted">{approval.proposal?.schemaVersion === 3 ? "任务范围" : "内容结构"}</div>
+          <div className="space-y-1.5">
+            {plan.sections.map((section) => (
+              <div key={section.key} className="rounded border border-edge bg-panel2/50 px-2 py-1.5 text-[10px] text-ink/80">
+                <div>{section.label}</div>
+                {section.detail && <div className="mt-0.5 text-muted">{section.detail}</div>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {plan.missingAssets.length > 0 && (
+        <div>
+          <div className="mb-1 text-[11px] font-medium text-muted">缺失素材处理</div>
+          <div className="space-y-1.5">
+            {plan.missingAssets.map((item) => (
+              <div key={item.key} className="rounded border border-edge bg-panel2/50 px-2 py-1.5 text-[10px] text-ink/80">
+                <div>{item.label}</div>
+                {item.detail && <div className="mt-0.5 text-muted">{item.detail}</div>}
+              </div>
             ))}
           </div>
         </div>
@@ -53,16 +88,15 @@ function PendingPlan({ approval }: { approval: CloudAgentApproval }) {
           <div key={step.id} className="rounded-lg border border-edge bg-panel2/70 p-3">
             <div className="flex items-center gap-2 text-xs font-medium text-ink">
               <span className="flex h-5 w-5 items-center justify-center rounded-full bg-accent/20 text-[10px] text-accent">
-                {index + 1}
+                {approval.proposal?.schemaVersion === 3 ? "≤" : index + 1}
               </span>
               <span>{step.goal}</span>
+              {step.kindLabel && <span className="ml-auto shrink-0 text-[10px] font-normal text-muted">{step.kindLabel}</span>}
             </div>
-            <p className="mt-1.5 text-[11px] leading-4 text-muted">{step.rationale}</p>
-            {(step.preserves.length > 0 || step.modifies.length > 0 || step.excludes.length > 0) && (
+            {step.rationale && <p className="mt-1.5 text-[11px] leading-4 text-muted">{step.rationale}</p>}
+            {step.details.length > 0 && (
               <div className="mt-2 text-[10px] leading-4 text-muted">
-                {step.modifies.length > 0 && <div>修改：{step.modifies.join("、")}</div>}
-                {step.preserves.length > 0 && <div>保持：{step.preserves.join("、")}</div>}
-                {step.excludes.length > 0 && <div>排除：{step.excludes.join("、")}</div>}
+                {step.details.map((detail) => <div key={detail.label}>{detail.label}：{detail.values.join("、")}</div>)}
               </div>
             )}
           </div>
@@ -70,7 +104,7 @@ function PendingPlan({ approval }: { approval: CloudAgentApproval }) {
       </div>
 
       <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-muted">
-        <span>计划工具调用：{approval.planned_tool_count ?? plan.steps.length}</span>
+        <span>{approval.proposal?.schemaVersion === 3 ? "最多工具调用" : "计划工具调用"}：{approval.planned_tool_count ?? plan.steps.length}</span>
         <span>本次最多新增：{approval.estimated_additional_credits ?? 0} 积分</span>
       </div>
     </div>
@@ -118,7 +152,7 @@ function TimelineEvent({
   onPreview,
 }: {
   event: { seq: number; type: string; step?: string | null; progress?: number | null; display_payload?: Record<string, unknown> };
-  step?: CloudAgentPlanStep;
+  step?: CloudAgentPlanDisplayStep;
   artifact?: CloudAgentArtifact;
   preview?: CloudAgentPreview;
   onPreview: (path: string) => void;
@@ -172,102 +206,67 @@ function TimelineEvent({
  * Agent Run 会话内容。它与普通生成共用 genPanelOpen / 侧栏会话入口和主区详情外壳，
  * 仅数据源保持独立：Agent 权威状态来自 cloud_agent_runs，不塞进 generation task_queue。
  */
-export function CloudAgentSession() {
+export function CloudAgentSession({
+  readOnly = false,
+  embedded = false,
+  hydratedAssets = [],
+}: {
+  readOnly?: boolean;
+  embedded?: boolean;
+  hydratedAssets?: Asset[];
+} = {}) {
   const activeRunId = useStore((state) => state.activeCloudAgentRunId);
   const run = useStore((state) => activeRunId ? state.cloudAgentRuns[activeRunId] ?? null : null);
-  const assets = useStore((state) => state.assets);
+  const automaticApproval = useStore((state) => !!run && agentApprovalMode(run, state.agentApprovalModes) === "auto");
+  const listedAssets = useStore((state) => state.assets);
+  const assets = useMemo(
+    () => mergeCloudAgentAssets(listedAssets, hydratedAssets),
+    [hydratedAssets, listedAssets],
+  );
   const genPanelOpen = useStore((state) => state.genPanelOpen);
   const activeSessionKind = useStore((state) => state.activeSessionKind);
   const setGenPanelOpen = useStore((state) => state.setGenPanelOpen);
   const updateRun = useStore((state) => state.updateCloudAgentRun);
+  const reusePromptToBoard = useStore((state) => state.reusePromptToBoard);
+  const disarmBoardAgent = useStore((state) => state.disarmBoardAgent);
   const [artifactPreviews, setArtifactPreviews] = useState<Record<string, CloudAgentPreview>>({});
   const [feedback, setFeedback] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [ingestRetry, setIngestRetry] = useState(0);
-  const [ingestComplete, setIngestComplete] = useState(false);
-  const [ingestFailed, setIngestFailed] = useState(false);
+  const [ingestState, setIngestState] = useState<CloudAgentIngestRuntimeState | null>(null);
   const [lightbox, setLightbox] = useState<{ images: string[]; index: number } | null>(null);
   const previewLoading = useRef(new Set<string>());
-  const ingesting = useRef<string | null>(null);
-  const reconciledIngest = useRef(new Set<string>());
-  const reconciledTerminal = useRef(new Set<string>());
 
   useEffect(() => {
-    if (run?.runId) reconciledIngest.current.delete(run.runId);
     setArtifactPreviews({});
     setFeedback("");
     setError(null);
-    setIngestRetry(0);
-    setIngestComplete(false);
-    setIngestFailed(false);
     setLightbox(null);
-    localTaskBusy.current = null;
   }, [run?.runId]);
 
-  // 本地 CLI Run 停车等待生图：发现 pendingLocalTask 即驱动本机执行。命令内部完成
-  // 「解析输入 → 调用任务指定 provider → 直传 → 回报 → 重取」；
-  // 失败时云端已原子结算为 failed。网络类瞬断允许下一轮轮询自然重试。
+  useEffect(() => {
+    if (!run) {
+      setIngestState(null);
+      return;
+    }
+    const sync = () => setIngestState(getCloudAgentIngestState(run.runId));
+    sync();
+    return subscribeCloudAgentIngestState(run.runId, sync);
+  }, [run?.runId]);
+
+  // 执行与轮询由 App 常驻 CloudAgentRuntimeCoordinator 持有；详情只展示当前快照。
   const pendingLocalTask = run?.snapshot.pendingLocalTask ?? null;
   const localTaskProviderLabel = pendingLocalTask?.provider === "codex" ? "Codex" : "即梦";
-  const localTaskBusy = useRef<string | null>(null);
-  const [localTaskRunning, setLocalTaskRunning] = useState(false);
-  useEffect(() => {
-    if (!genPanelOpen || activeSessionKind !== "agent" || !run || !pendingLocalTask) return;
-    if (localTaskBusy.current) return;
-    localTaskBusy.current = pendingLocalTask.callId;
-    setLocalTaskRunning(true);
-    api.cloudAgentExecuteLocalTask(run.runId)
-      .then((next) => {
-        updateRun(next);
-        setError(null);
-      })
-      .catch((cause) => {
-        setError(cause instanceof Error ? cause.message : String(cause));
-      })
-      .finally(() => {
-        localTaskBusy.current = null;
-        setLocalTaskRunning(false);
-      });
-  }, [genPanelOpen, activeSessionKind, run, pendingLocalTask, updateRun]);
-
-  useEffect(() => {
-    if (!genPanelOpen || activeSessionKind !== "agent" || !run || TERMINAL.has(run.status)) return;
-    let alive = true;
-    const poll = async () => {
-      try {
-        const next = await api.cloudAgentGet(run.runId);
-        if (alive) {
-          updateRun(next);
-          setError(null);
-        }
-      } catch (cause) {
-        if (alive) setError(cause instanceof Error ? cause.message : String(cause));
-      }
-    };
-    const timer = window.setInterval(() => void poll(), 2500);
-    void poll();
-    return () => {
-      alive = false;
-      window.clearInterval(timer);
-    };
-  }, [genPanelOpen, activeSessionKind, run?.runId, run?.status, updateRun]);
-
   const htmlRun = run?.skillId === HTML_SKILL_ID;
+  const unifiedRun = run?.skillId === UNIFIED_SKILL_ID;
   const generatedArtifacts = useMemo(
-    () => {
-      if (!run) return [];
-      const visible = new Map(run.snapshot.artifacts
-        .filter((artifact) => artifact.user_visible && artifact.mime.startsWith("image/"))
-        .map((artifact) => [artifact.id, artifact]));
-      if (run.skillId === HTML_SKILL_ID) {
-        return (run.snapshot.renderManifest?.outputs ?? [])
-          .map((output) => visible.get(output.artifactId))
-          .filter((artifact): artifact is CloudAgentArtifact => !!artifact);
-      }
-      return [...visible.values()].filter((artifact) => ["control_reference", "stage_result", "final_result"].includes(artifact.role));
-    },
+    () => run ? selectCloudAgentResultArtifacts(run.snapshot.artifacts, run.snapshot.renderManifest, run.snapshot.events) : [],
     [run],
+  );
+  const renderedDocumentRun = !!run && isRenderedDocumentResult(
+    run.skillId,
+    run.snapshot.artifacts,
+    run.snapshot.renderManifest,
   );
   const primaryArtifact = useMemo(
     () => generatedArtifacts.find((artifact) => artifact.role === "final_result" || artifact.role === "full_page_screenshot")
@@ -288,13 +287,16 @@ export function CloudAgentSession() {
     () => run?.referenceAssetIds.map((id) => assets.find((asset) => asset.id === id)).filter(Boolean) ?? [],
     [run?.referenceAssetIds, assets],
   );
-  const currentSkillVersion = htmlRun ? CURRENT_HTML_SKILL_VERSION : CURRENT_CONTROLLED_SKILL_VERSION;
+  const currentSkillVersion = run ? currentAgentSkillVersion(run.skillId) : null;
   const skillVersionMismatch = !!run && run.snapshot.run.skill_version !== currentSkillVersion;
   const approvalsWithPlans = useMemo(
     () => [...(run?.snapshot.approvals ?? [])].filter((approval) => !!approval.proposal).sort((a, b) => a.requested_at.localeCompare(b.requested_at)),
     [run?.snapshot.approvals],
   );
-  const planSteps = useMemo(() => approvalsWithPlans.flatMap((approval) => approval.proposal?.steps ?? []), [approvalsWithPlans]);
+  const planSteps = useMemo(
+    () => approvalsWithPlans.flatMap((approval) => cloudAgentPlanDisplay(approval.proposal)?.steps ?? []),
+    [approvalsWithPlans],
+  );
   const timelineEvents = useMemo(() => {
     if (!run) return [];
     if (run.snapshot.events.length) return [...run.snapshot.events].sort((a, b) => a.seq - b.seq);
@@ -316,7 +318,10 @@ export function CloudAgentSession() {
     for (const artifact of generatedArtifacts) {
       if (artifactPreviews[artifact.id] || previewLoading.current.has(artifact.id)) continue;
       previewLoading.current.add(artifact.id);
-      api.cloudAgentPreviewArtifact(run.runId, artifact.id)
+      enqueueCloudAgentRunOperation(
+        run.runId,
+        () => api.cloudAgentPreviewArtifact(run.runId, artifact.id),
+      )
         .then((value) => {
           setArtifactPreviews((current) => ({ ...current, [artifact.id]: value }));
           setError(null);
@@ -328,41 +333,52 @@ export function CloudAgentSession() {
     }
   }, [genPanelOpen, activeSessionKind, run, generatedArtifacts, artifactPreviews, primaryArtifact]);
 
-  useEffect(() => {
-    if (!genPanelOpen || activeSessionKind !== "agent" || !run || !TERMINAL.has(run.status) || reconciledTerminal.current.has(run.runId)) return;
-    reconciledTerminal.current.add(run.runId);
-    api.cloudAgentGet(run.runId).then(updateRun).catch(() => reconciledTerminal.current.delete(run.runId));
-  }, [genPanelOpen, activeSessionKind, run, updateRun]);
+  const ordinaryContinuationAsset = useMemo(() => {
+    if (!run) return null;
+    const ingestedAssets = ingestState?.assets ?? [];
+    const candidates = mergeCloudAgentAssets(assets, ingestedAssets);
+    return candidates.find((asset) => asset.id === run.finalAssetId)
+      ?? ingestedAssets[0]
+      ?? null;
+  }, [run, ingestState?.assets, assets]);
 
-  useEffect(() => {
-    if (!run || run.status !== "succeeded" || run.feedbackAction !== "accept" || !primaryArtifact) return;
-    if (ingesting.current === primaryArtifact.id || reconciledIngest.current.has(run.runId)) return;
-    reconciledIngest.current.add(run.runId);
-    ingesting.current = primaryArtifact.id;
-    api.cloudAgentIngestArtifacts(run.runId)
-      .then(async (assets) => {
-        notifySuccess(`Agent 的 ${assets.length} 张产物已作为同一组加入素材库`);
-        setIngestComplete(true);
-        setIngestFailed(false);
-        updateRun(await api.cloudAgentGet(run.runId));
-      })
-      .catch((cause) => {
-        setError(cause instanceof Error ? cause.message : String(cause));
-        setIngestFailed(true);
-        notifyError(cause, "Agent 产物整组入库失败");
-      })
-      .finally(() => {
-        ingesting.current = null;
-      });
-  }, [run, primaryArtifact, updateRun, ingestRetry]);
+  function continueWithOrdinaryGeneration() {
+    if (!run?.projectId || !run.threadId || !ordinaryContinuationAsset) return;
+    const originalReferences = run.referenceAssetIds
+      .map((assetId) => assets.find((asset) => asset.id === assetId))
+      .filter((asset): asset is Asset => !!asset && asset.id !== ordinaryContinuationAsset.id);
+    reusePromptToBoard(
+      run.intentPrompt,
+      [ordinaryContinuationAsset, ...originalReferences],
+      undefined,
+      {
+        projectId: run.projectId,
+        threadId: run.threadId,
+        parentNodeId: primaryArtifact ? agentArtifactNodeId(run.runId, primaryArtifact.id) : null,
+        parentAssetId: ordinaryContinuationAsset.id,
+      },
+    );
+    disarmBoardAgent();
+    notifySuccess("已带着 Agent 结果回到同一线程，可继续普通生成");
+  }
 
   async function decide(approve: boolean) {
-    if (!run || !pendingApproval || busy) return;
+    if (readOnly || !run || !pendingApproval || busy) return;
     setBusy(true);
     setError(null);
     try {
-      updateRun(await api.cloudAgentDecideApproval(run.runId, pendingApproval.id, approve));
-      if (!approve) notifySuccess("已拒绝计划并安全结算");
+      const decided = await enqueueCloudAgentRunOperation(
+        run.runId,
+        async () => {
+          const current = useStore.getState().cloudAgentRuns[run.runId];
+          if (!current || current.status !== "awaiting_approval"
+            || !current.snapshot.approvals.some((item) => item.id === pendingApproval.id && item.status === "pending")) return false;
+          const next = await api.cloudAgentDecideApproval(run.runId, pendingApproval.id, approve);
+          updateRun(next);
+          return true;
+        },
+      );
+      if (decided && !approve) notifySuccess("已拒绝计划并安全结算");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
       notifyError(cause, approve ? "批准计划失败" : "拒绝计划失败");
@@ -372,15 +388,18 @@ export function CloudAgentSession() {
   }
 
   async function answerClarification(answer: string) {
-    if (!run || !pendingClarification || busy) return;
+    if (readOnly || !run || !pendingClarification || busy) return;
     setBusy(true);
     setError(null);
     try {
-      updateRun(await api.cloudAgentAnswerClarification(
+      updateRun(await enqueueCloudAgentRunOperation(
         run.runId,
-        pendingClarification.id,
-        pendingClarification.context_hash,
-        answer,
+        () => api.cloudAgentAnswerClarification(
+          run.runId,
+          pendingClarification.id,
+          pendingClarification.context_hash,
+          answer,
+        ),
       ));
       notifySuccess("答案已提交，Agent 将按新意图重新规划");
     } catch (cause) {
@@ -392,12 +411,20 @@ export function CloudAgentSession() {
   }
 
   async function submitFeedback(action: "accept" | "retry") {
-    if (!run || busy) return;
+    if (readOnly || !run || busy) return;
     setBusy(true);
     setError(null);
     try {
-      updateRun(await api.cloudAgentFeedback(run.runId, action, feedback));
-      if (action === "retry") {
+      const submitted = await enqueueCloudAgentRunOperation(
+        run.runId,
+        async () => {
+          const current = useStore.getState().cloudAgentRuns[run.runId];
+          if (current?.status !== "awaiting_result_feedback") return false;
+          updateRun(await api.cloudAgentFeedback(run.runId, action, feedback));
+          return true;
+        },
+      );
+      if (submitted && action === "retry") {
         setArtifactPreviews({});
         notifySuccess("反馈已提交，Agent 将诊断后给出新的修订计划");
       }
@@ -410,10 +437,13 @@ export function CloudAgentSession() {
   }
 
   async function cancel() {
-    if (!run || busy) return;
+    if (readOnly || !run || busy) return;
     setBusy(true);
     setError(null);
     try {
+      // Cancellation deliberately preempts the per-Run lane: a local provider call
+      // can occupy it for up to 20 minutes. Rust persistence merges the resulting
+      // terminal checkpoint so the older in-flight command cannot regress it.
       updateRun(await api.cloudAgentCancel(run.runId));
       notifySuccess("Agent Run 已请求安全取消");
     } catch (cause) {
@@ -426,39 +456,50 @@ export function CloudAgentSession() {
 
   if (!run) return null;
   const progress = Math.max(0, Math.min(100, Number(run.snapshot.run.progress ?? 0)));
-  const canCancel = !TERMINAL.has(run.status) && run.status !== "cancel_requested";
+  const canCancel = !readOnly && !TERMINAL.has(run.status) && run.status !== "cancel_requested";
+  const ingestComplete = !readOnly
+    && (ingestState?.phase === "succeeded" || cloudAgentIngestionPersisted(run));
+  const ingestFailed = !readOnly && ingestState?.phase === "failed";
+  const visibleError = error ?? ingestState?.error ?? null;
   const title = run.intentPrompt.split("\n").find((line) => line.trim())?.trim() || "Bowerbird Agent";
+  const runtimeLabel = run.snapshot.run.agent_runtime === "dsh" ? "DSH" : "Legacy";
 
   return (
     <>
-      <div className="absolute inset-0 z-10 flex flex-col bg-canvas">
+      <div className={embedded ? "flex min-h-0 flex-1 flex-col bg-canvas" : "absolute inset-0 z-10 flex flex-col bg-canvas"}>
       <div className="gen-view-in flex min-h-0 flex-1 flex-col">
-        <div className="flex min-h-[38px] shrink-0 items-center gap-2 border-b border-edge bg-canvas/90 px-3 py-1">
-          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-lime/10 text-lime">
-            <Sparkles size={14} />
-          </span>
-          <strong className="min-w-0 max-w-[420px] truncate text-xs font-semibold" title={run.intentPrompt}>
-            {title}
-          </strong>
-          <span className="shrink-0 rounded-full border border-edge px-2 py-0.5 text-[11px] text-muted">
-            {htmlRun ? "HTML 排版" : "Agent"} · {cloudAgentStatusLabel(run.status)} · {run.referenceAssetIds.length} 张参考图
-          </span>
-          {!TERMINAL.has(run.status) && (
-            <span className="flex shrink-0 items-center gap-1.5 text-[11px] text-lime">
-              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-lime" />
-              运行中
-            </span>
-          )}
-          <button
-            onClick={() => setGenPanelOpen(false)}
-            className="app-icon-button ml-auto"
-            title="收起（回到瀑布流，Agent 照常后台运行）"
-            aria-label="收起 Agent 会话"
-          >
-            <X size={16} />
-          </button>
-        </div>
-        <div className="hatch-divider" aria-hidden="true"><span /></div>
+        {!embedded && (
+          <>
+            {/* 旧会话回退仍自带头部；项目工作区由 CanvasWorkspace 的统一 inspector shell 持有。 */}
+            <div className="flex min-h-[38px] shrink-0 items-center gap-2 border-b border-edge bg-canvas/90 px-3 py-1">
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-lime/10 text-lime">
+                <Sparkles size={14} />
+              </span>
+              <strong className="min-w-0 max-w-[420px] truncate text-xs font-semibold" title={run.intentPrompt}>
+                {title}
+              </strong>
+              <span className="shrink-0 rounded-full border border-edge px-2 py-0.5 text-[11px] text-muted">
+                {htmlRun ? "HTML 排版" : unifiedRun ? "DSH · 自动选工具" : `Agent · ${runtimeLabel}`} · {cloudAgentStatusLabel(run.status)} · {run.referenceAssetIds.length} 张参考图
+              </span>
+              {readOnly && <span className="rounded-full border border-edge px-2 py-0.5 text-[10px] text-muted">旧会话 · 只读</span>}
+              {!TERMINAL.has(run.status) && (
+                <span className="flex shrink-0 items-center gap-1.5 text-[11px] text-lime">
+                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-lime" />
+                  运行中
+                </span>
+              )}
+              <button
+                onClick={() => setGenPanelOpen(false)}
+                className="app-icon-button ml-auto"
+                title="收起（回到瀑布流，Agent 照常后台运行）"
+                aria-label="收起 Agent 会话"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="hatch-divider" aria-hidden="true"><span /></div>
+          </>
+        )}
         <div className="h-1 shrink-0 bg-black/30">
           <div className="h-full bg-accent transition-all" style={{ width: `${progress}%` }} />
         </div>
@@ -509,13 +550,11 @@ export function CloudAgentSession() {
                     {run.status === "failed"
                       ? "Agent 已安全停止，未调用后续生图工具。"
                       : run.status === "awaiting_local_task"
-                        ? localTaskRunning
-                          ? `正在使用本机 ${localTaskProviderLabel} 生成这一步的图片，完成后会自动继续执行计划。`
-                          : `等待本机 ${localTaskProviderLabel} 执行生图步骤，即将自动开始。`
+                        ? `正在使用本机 ${localTaskProviderLabel} 执行生图步骤，详情收起后也会继续。`
                         : run.snapshot.run.current_step === "diagnose_feedback"
                           ? "正在根据你的修改意见定向诊断上一结果，可能需要一分钟左右。"
                           : run.snapshot.run.current_step === "compose_revision_plan"
-                            ? "诊断完成，正在制定修订计划；新计划会再次提交给你批准。"
+                            ? automaticApproval ? "诊断完成，正在制定修订计划；新计划将按当前模式自行批准。" : "诊断完成，正在制定修订计划；新计划会再次提交给你批准。"
                             : run.snapshot.run.current_step
                               ? `当前步骤：${run.snapshot.run.current_step}`
                               : "Agent 会在需要你决定时暂停。"}
@@ -534,7 +573,7 @@ export function CloudAgentSession() {
                           <button
                             key={option}
                             type="button"
-                            disabled={busy}
+                            disabled={readOnly || busy}
                             onClick={() => void answerClarification(option)}
                             className={recommended
                               ? "rounded-md bg-accent px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
@@ -558,7 +597,7 @@ export function CloudAgentSession() {
                           {approval.kind === "controlled_image_edit_revision" ? `修订计划 ${index + 1}` : "执行计划"}
                         </h3>
                         <span className={`text-[10px] ${isPending ? "text-amber-300" : approval.status === "approved" ? "text-lime" : "text-muted"}`}>
-                          {isPending ? "等待批准" : approval.status === "approved" ? "已批准" : approval.status === "rejected" ? "已拒绝" : "已过期"}
+                          {isPending ? automaticApproval && !skillVersionMismatch ? "等待自行批准" : "等待批准" : approval.status === "approved" ? "已批准" : approval.status === "rejected" ? "已拒绝" : "已过期"}
                         </span>
                       </div>
                       <PendingPlan approval={approval} />
@@ -569,10 +608,10 @@ export function CloudAgentSession() {
                       )}
                       {isPending && (
                         <div className="mt-4 flex gap-2">
-                          <button disabled={busy || skillVersionMismatch} onClick={() => void decide(true)} className="rounded-md bg-accent px-4 py-2 text-xs font-semibold text-white disabled:opacity-50">
+                          <button disabled={readOnly || busy || skillVersionMismatch} onClick={() => void decide(true)} className="rounded-md bg-accent px-4 py-2 text-xs font-semibold text-white disabled:opacity-50">
                             批准并执行
                           </button>
-                          <button disabled={busy} onClick={() => void decide(false)} className="rounded-md border border-edge px-4 py-2 text-xs text-muted hover:text-ink disabled:opacity-50">
+                          <button disabled={readOnly || busy} onClick={() => void decide(false)} className="rounded-md border border-edge px-4 py-2 text-xs text-muted hover:text-ink disabled:opacity-50">
                             拒绝并结束
                           </button>
                         </div>
@@ -605,19 +644,25 @@ export function CloudAgentSession() {
                   </div>
                 )}
 
-                {htmlRun && run.snapshot.renderManifest && generatedArtifacts.length > 0 && (
+                {generatedArtifacts.length > 0 && (
                   <div className="rounded-lg border border-edge bg-panel p-4">
                     <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                       <div>
-                        <div className="text-xs font-semibold text-ink">离线渲染结果</div>
-                        <div className="mt-1 text-[10px] text-muted">
-                          文档 {run.snapshot.renderManifest.document.widthDevicePx} × {run.snapshot.renderManifest.document.heightDevicePx}px
-                          · {generatedArtifacts.length} 张 · {run.snapshot.renderManifest.renderMs}ms
-                        </div>
+                        <div className="text-xs font-semibold text-ink">{renderedDocumentRun ? "离线渲染结果" : "图片结果"}</div>
+                        {run.snapshot.renderManifest ? (
+                          <div className="mt-1 text-[10px] text-muted">
+                            文档 {run.snapshot.renderManifest.document.widthDevicePx} × {run.snapshot.renderManifest.document.heightDevicePx}px
+                            · {generatedArtifacts.length} 张 · {run.snapshot.renderManifest.renderMs}ms
+                          </div>
+                        ) : (
+                          <div className="mt-1 text-[10px] text-muted">{generatedArtifacts.length} 张{renderedDocumentRun ? "截图" : "图片"} · 点击查看大图</div>
+                        )}
                       </div>
-                      <span className="max-w-64 truncate rounded bg-black/20 px-2 py-1 text-[9px] text-muted" title={run.snapshot.renderManifest.rendererFingerprint}>
-                        {run.snapshot.renderManifest.rendererFingerprint}
-                      </span>
+                      {run.snapshot.renderManifest && (
+                        <span className="max-w-64 truncate rounded bg-black/20 px-2 py-1 text-[9px] text-muted" title={run.snapshot.renderManifest.rendererFingerprint}>
+                          {run.snapshot.renderManifest.rendererFingerprint}
+                        </span>
+                      )}
                     </div>
                     <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                       {generatedArtifacts.map((artifact) => {
@@ -642,7 +687,7 @@ export function CloudAgentSession() {
                     </div>
                   </div>
                 )}
-                {htmlRun && ["awaiting_result_feedback", "succeeded"].includes(run.status) && generatedArtifacts.length === 0 && (
+                {renderedDocumentRun && ["awaiting_result_feedback", "succeeded"].includes(run.status) && generatedArtifacts.length === 0 && (
                   <div className="rounded-lg border border-amber-400/30 bg-amber-400/8 p-3 text-xs text-amber-200">
                     云端截图内容已过期或清理；若此前已接受，仍可在本地素材库查看已入库副本。
                   </div>
@@ -656,8 +701,17 @@ export function CloudAgentSession() {
                 {run.status === "succeeded" && (
                   <div className="rounded-lg border border-lime/25 bg-lime/8 p-3 text-xs text-lime">
                     结果已接受并完成结算{ingestComplete ? "，全部产物已作为同一组加入素材库" : ingestFailed ? "，部分产物入库未完成" : "，正在校验并整组入库"}。
-                    {ingestFailed && (
-                      <button type="button" onClick={() => { reconciledIngest.current.delete(run.runId); setIngestFailed(false); setIngestRetry((value) => value + 1); }} className="ml-2 underline underline-offset-2 hover:text-white">
+                    {ingestComplete && ordinaryContinuationAsset && run.projectId && run.threadId && !readOnly && (
+                      <button
+                        type="button"
+                        onClick={continueWithOrdinaryGeneration}
+                        className="ml-2 underline underline-offset-2 hover:text-ink"
+                      >
+                        用此结果继续普通生成
+                      </button>
+                    )}
+                    {ingestFailed && !readOnly && (
+                      <button type="button" onClick={() => requestCloudAgentIngestRetry(run.runId)} className="ml-2 underline underline-offset-2 hover:text-ink">
                         重新入库
                       </button>
                     )}
@@ -668,27 +722,34 @@ export function CloudAgentSession() {
                   <span>最大预算 {run.snapshot.run.budget_credits} 积分</span>
                   {run.snapshot.run.actual_credits != null && <span>实际结算 {run.snapshot.run.actual_credits} 积分</span>}
                 </div>
-                {error && <div className="rounded-lg bg-red-500/10 p-3 text-xs text-red-300">{error}</div>}
+                {visibleError && <div className="rounded-lg bg-red-500/10 p-3 text-xs text-red-300">{visibleError}</div>}
               </div>
             </div>
           </div>
         </div>
 
         <div className="shrink-0 border-t border-edge bg-panel p-4">
-          {run.status === "awaiting_result_feedback" ? (
+          {!readOnly && <div className="mx-auto mb-3 flex max-w-3xl justify-start"><AgentApprovalToggle run={run} /></div>}
+          {readOnly ? (
+            <div className="mx-auto max-w-3xl text-center text-[10px] text-muted">旧 Agent 会话仅供核对；不会批准、回答澄清、执行本机工具、反馈、取消或入库。</div>
+          ) : run.status === "awaiting_result_feedback" && automaticApproval ? (
+            <div className="mx-auto flex max-w-3xl items-center gap-2 text-xs text-muted">
+              <RefreshCw size={13} className="animate-spin" /> 正在自动接受结果并入库…
+            </div>
+          ) : run.status === "awaiting_result_feedback" ? (
             <div className="mx-auto max-w-3xl">
-              {!htmlRun && <textarea
+              {(!renderedDocumentRun || unifiedRun) && <textarea
                 value={feedback}
                 onChange={(event) => setFeedback(event.target.value.slice(0, 2000))}
-                placeholder="可选：具体说明哪里不满意。Agent 会先诊断，再提交新的修订计划供你批准。"
+                placeholder={unifiedRun ? "说明需要修改的内容。Agent 会结合上一轮结果重新规划，提交修订计划供你批准。" : "可选：具体说明哪里不满意。Agent 会先诊断，再提交新的修订计划供你批准。"}
                 className="min-h-16 w-full resize-y rounded-md bg-black/25 px-3 py-2 text-xs text-ink outline-none ring-1 ring-edge focus:ring-accent"
               />}
-              {htmlRun && <p className="text-xs leading-5 text-muted">请检查整图与切片。接受后会按会话、角色和切片顺序幂等入库；放弃则不会继续导出。</p>}
+              {renderedDocumentRun && <p className="text-xs leading-5 text-muted">请检查整图与切片。接受后会按会话、角色和切片顺序幂等入库；放弃则不会继续导出。</p>}
               <div className="mt-2 flex gap-2">
                 <button disabled={busy} onClick={() => void submitFeedback("accept")} className="flex items-center gap-1.5 rounded-md bg-lime/90 px-4 py-2 text-xs font-semibold text-black disabled:opacity-50">
                   <Check size={13} /> 接受结果
                 </button>
-                {htmlRun ? (
+                {renderedDocumentRun && !unifiedRun ? (
                   <button disabled={busy} onClick={() => void cancel()} className="flex items-center gap-1.5 rounded-md border border-edge px-4 py-2 text-xs text-ink disabled:opacity-50">
                     <XCircle size={13} /> 放弃结果
                   </button>

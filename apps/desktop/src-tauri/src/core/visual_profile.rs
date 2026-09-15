@@ -1,10 +1,8 @@
-//! 项目视觉设定 V1 —— 本地来源文件夹与快照（AGENT-RUNTIME-PLAN.md §8 / §11 V1-T1~T4）。
+//! 品牌视觉规范 —— 素材库内独立保存的版本与快照。
 //!
-//! 三条不可变输入边界（§8.2）：
-//! 1. 不上传图片：只读已有 caption（analyses kind='caption'）的 sections/dimensions 文字，
-//!    不读图片文件、不调 Vision、不自动补反推；
-//! 2. 只分析用户指定的普通文件夹 ∩ 当前项目成员（root/收藏/智能/全局不允许）；
-//! 3. 只由命令主动触发：不监听库变化、不自动重算、不静默更新（extract 每次创建新 draft）。
+//! 本模块只读取文字观察记录；品牌工作流会在用户点击总结后，通过既有理解队列补齐图片分析。
+//! 来源是用户指定的普通素材库文件夹，规范可用于任何创作，不依附项目。
+//! 只由命令主动触发，不监听库变化、不自动改写已保存版本。
 //!
 //! 提炼为确定性基线（apps/agent-worker/src/visual/extract.ts 的 Rust 移植，V0 可审计基线）；
 //! 真实模型的分批事实抽取与聚合属 V2。内容主题只进 contentThemes，绝不转视觉硬约束。
@@ -19,6 +17,9 @@ use ulid::Ulid;
 use crate::error::{AppError, AppResult};
 
 pub const MIN_EFFECTIVE_CARDS: usize = 5;
+/// 品牌图片工作流允许从一张图片开始；离线统计基线仍保留原门槛。
+pub const MIN_BRAND_IMAGES: usize = 1;
+const BRAND_OBSERVATION_TASK: &str = "bowerbird:brand-visual-observation:v2";
 const DOMINANT_COVERAGE: f64 = 0.6;
 const SECONDARY_CONFLICT_RATIO: f64 = 0.25;
 const MIN_DIRECTION_RATIO: f64 = 0.2;
@@ -128,6 +129,8 @@ pub struct CandidateDirection {
 #[derive(Debug, Default, Deserialize)]
 struct CaptionPayload {
     #[serde(default)]
+    instruction: Option<String>,
+    #[serde(default)]
     sections: Vec<EvidenceSection>,
     #[serde(default)]
     dimensions: BTreeMap<String, String>,
@@ -209,7 +212,7 @@ fn card_is_effective(card: &VisualEvidenceCard) -> bool {
 // ---------------------------------------------------------------------------
 
 pub fn source_scope_hash(
-    project_id: &str,
+    _project_id: &str,
     folder_id: &str,
     cards: &[VisualEvidenceCard],
 ) -> String {
@@ -218,7 +221,7 @@ pub fn source_scope_hash(
         .map(|c| format!("{}:{}:{}", c.asset_id, c.caption_id, c.caption_hash))
         .collect();
     entries.sort();
-    hex_digest(format!("scope|{project_id}|{folder_id}|{}", entries.join("|")).as_bytes())
+    hex_digest(format!("scope|{folder_id}|{}", entries.join("|")).as_bytes())
 }
 
 // ---------------------------------------------------------------------------
@@ -495,7 +498,7 @@ pub fn compile_validation_prompt(rules: &[DraftRule], theme: &str) -> String {
         }
     }
     let mut prompt = format!(
-        "一张{}的图片。整体遵循以下项目视觉风格规范：",
+        "一张{}的图片。整体遵循以下品牌视觉风格规范：",
         theme.trim().chars().take(120).collect::<String>()
     );
     if !must.is_empty() {
@@ -530,9 +533,10 @@ pub struct MissingAsset {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScopePreview {
+    pub asset_ids: Vec<String>,
     pub folder_id: String,
     pub folder_name: String,
-    /// 当前项目 ∩ 普通文件夹 的素材数
+    /// 用户明确选择的普通文件夹中的素材数（不要求项目成员关系）
     pub in_folder: usize,
     /// 有最新有效反推、将参与提炼的素材数
     pub effective: usize,
@@ -544,11 +548,13 @@ pub struct ScopePreview {
 #[serde(rename_all = "camelCase")]
 pub struct VisualProfileSummary {
     pub id: String,
-    pub project_id: String,
+    /// Historical origin only; independent profiles have no project owner.
+    pub project_id: Option<String>,
     pub folder_id: String,
     pub name: String,
     pub version: i64,
     pub status: String,
+    pub extractor: String,
     pub summary: String,
     pub source_count: i64,
     pub rule_count: i64,
@@ -562,6 +568,7 @@ pub struct VisualProfileDetail {
     #[serde(flatten)]
     pub summary: VisualProfileSummary,
     pub source_scope_hash: String,
+    pub source_asset_ids: Vec<String>,
     pub rules: Vec<DraftRule>,
     pub content_themes: Vec<ContentTheme>,
     pub conflicts: Vec<EvidenceConflict>,
@@ -710,7 +717,7 @@ pub fn inject_visual_profile_prompt(prompt: &str, capsule: &VisualProfileCapsule
         return prompt.to_string();
     }
     format!(
-        "{prompt}\n\n【项目视觉设定 v{}】\n以下规则只补充本次任务未明确指定的部分；若与本次明确要求冲突，一律以本次要求为准。不得把常见内容主题自动加入画面。\n{rules}",
+        "{prompt}\n\n【品牌视觉规范 v{}】\n以下规则只补充本次任务未明确指定的部分；若与本次明确要求冲突，一律以本次要求为准。不得把常见内容主题自动加入画面。\n{rules}",
         capsule.version
     )
 }
@@ -728,9 +735,10 @@ struct FolderAssetRow {
 
 fn load_folder_assets(
     conn: &Connection,
-    project_id: &str,
     folder_id: &str,
 ) -> AppResult<Vec<FolderAssetRow>> {
+    // Source images and saved profiles belong to the central library.
+    // Do not intersect the source selection with canvas membership.
     // 最新 caption 按 created_at DESC, rowid DESC 决胜（同秒多行约定，core/library.rs）。
     let sql = r#"
         SELECT a.id, a.name, a.origin_path, a.store_path, a.source_url, a.source,
@@ -742,12 +750,10 @@ fn load_folder_assets(
                  ORDER BY ca.created_at DESC, ca.rowid DESC LIMIT 1)
         FROM assets a
         WHERE a.folder_id = ?1
-          AND EXISTS (SELECT 1 FROM project_assets pa
-                       WHERE pa.asset_id = a.id AND pa.project_id = ?2)
         ORDER BY a.id
     "#;
     let mut stmt = conn.prepare(sql)?;
-    let rows = stmt.query_map(rusqlite::params![folder_id, project_id], |row| {
+    let rows = stmt.query_map(rusqlite::params![folder_id], |row| {
         Ok(FolderAssetRow {
             asset_id: row.get(0)?,
             name: row.get(1)?,
@@ -766,10 +772,10 @@ fn load_folder_assets(
     Ok(out)
 }
 
-fn assert_source_folder(conn: &Connection, project_id: &str, folder_id: &str) -> AppResult<String> {
+fn assert_source_folder(conn: &Connection, _project_id: &str, folder_id: &str) -> AppResult<String> {
     if folder_id == "root" {
         return Err(AppError::Other(
-            "「全部素材」不能作为视觉设定来源，请选择项目内普通文件夹".into(),
+            "「全部素材」不能作为视觉设定来源，请选择一个普通文件夹".into(),
         ));
     }
     let folder: Option<(String, String)> = conn
@@ -790,16 +796,6 @@ fn assert_source_folder(conn: &Connection, project_id: &str, folder_id: &str) ->
         return Err(AppError::Other(
             "只有普通文件夹能提炼视觉设定（收藏夹/智能文件夹不支持）".into(),
         ));
-    }
-    let project_exists: bool = conn
-        .query_row(
-            "SELECT COUNT(*) FROM projects WHERE id = ?1",
-            rusqlite::params![project_id],
-            |row| row.get::<_, i64>(0),
-        )
-        .map(|n| n > 0)?;
-    if !project_exists {
-        return Err(AppError::Other("项目不存在".into()));
     }
     Ok(name)
 }
@@ -1059,7 +1055,7 @@ impl crate::db::Database {
     ) -> AppResult<ScopePreview> {
         let conn = self.conn.lock().unwrap();
         let folder_name = assert_source_folder(&conn, project_id, folder_id)?;
-        let rows = load_folder_assets(&conn, project_id, folder_id)?;
+        let rows = load_folder_assets(&conn, folder_id)?;
         let mut missing = Vec::new();
         let mut effective = 0usize;
         for row in &rows {
@@ -1067,7 +1063,8 @@ impl crate::db::Database {
                 .caption_payload
                 .as_deref()
                 .and_then(|payload| serde_json::from_str::<CaptionPayload>(payload).ok())
-                .map(|parsed| !parsed.sections.is_empty() || !parsed.dimensions.is_empty())
+                .map(|parsed| parsed.instruction.as_deref() == Some(BRAND_OBSERVATION_TASK)
+                    && (!parsed.sections.is_empty() || !parsed.dimensions.is_empty()))
                 .unwrap_or(false);
             if effective_row {
                 effective += 1;
@@ -1075,7 +1072,7 @@ impl crate::db::Database {
                 let reason = if row.caption_id.is_none() {
                     "no_caption"
                 } else {
-                    "not_parseable"
+                    "brand_observation_required"
                 };
                 missing.push(MissingAsset {
                     asset_id: row.asset_id.clone(),
@@ -1085,12 +1082,13 @@ impl crate::db::Database {
             }
         }
         Ok(ScopePreview {
+            asset_ids: rows.iter().map(|row| row.asset_id.clone()).collect(),
             folder_id: folder_id.to_string(),
             folder_name,
             in_folder: rows.len(),
             effective,
             missing,
-            min_required: MIN_EFFECTIVE_CARDS,
+            min_required: MIN_BRAND_IMAGES,
         })
     }
 
@@ -1102,7 +1100,7 @@ impl crate::db::Database {
     ) -> AppResult<VisualProfileDetail> {
         let mut conn = self.conn.lock().unwrap();
         let folder_name = assert_source_folder(&conn, project_id, folder_id)?;
-        let rows = load_folder_assets(&conn, project_id, folder_id)?;
+        let rows = load_folder_assets(&conn, folder_id)?;
         let cards: Vec<VisualEvidenceCard> = rows
             .iter()
             .filter_map(|row| {
@@ -1148,7 +1146,7 @@ impl crate::db::Database {
     /// 共享落库：新 draft 版本（不覆盖旧行）。extractor 标记来源（V2）。
     fn insert_draft_row(
         conn: &mut Connection,
-        project_id: &str,
+        _project_id: &str,
         folder_id: &str,
         folder_name: &str,
         draft: &VisualProfileDraft,
@@ -1160,8 +1158,8 @@ impl crate::db::Database {
         let profile_id = Ulid::new().to_string();
         let next_version: i64 = tx.query_row(
             "SELECT COALESCE(MAX(version), 0) + 1 FROM project_visual_profiles
-              WHERE project_id = ?1 AND source_folder_id = ?2",
-            rusqlite::params![project_id, folder_id],
+              WHERE source_folder_id = ?1",
+            rusqlite::params![folder_id],
             |row| row.get(0),
         )?;
         tx.execute(
@@ -1173,7 +1171,7 @@ impl crate::db::Database {
                        CAST(strftime('%s','now') AS INTEGER))"#,
             rusqlite::params![
                 profile_id,
-                project_id,
+                Option::<String>::None,
                 folder_id,
                 folder_name,
                 next_version,
@@ -1228,9 +1226,32 @@ impl crate::db::Database {
         project_id: &str,
         folder_id: &str,
     ) -> AppResult<(String, Vec<VisualEvidenceCard>)> {
+        self.visual_profile_freeze_brand_cards(project_id, folder_id, None)
+    }
+
+    pub fn visual_profile_freeze_brand_cards(
+        &self,
+        project_id: &str,
+        folder_id: &str,
+        expected_asset_ids: Option<&[String]>,
+    ) -> AppResult<(String, Vec<VisualEvidenceCard>)> {
         let conn = self.conn.lock().unwrap();
         let folder_name = assert_source_folder(&conn, project_id, folder_id)?;
-        let rows = load_folder_assets(&conn, project_id, folder_id)?;
+        let rows = load_folder_assets(&conn, folder_id)?;
+        if let Some(expected) = expected_asset_ids {
+            let expected: std::collections::BTreeSet<_> = expected.iter().map(String::as_str).collect();
+            let actual: std::collections::BTreeSet<_> = rows.iter().map(|row| row.asset_id.as_str()).collect();
+            if expected != actual {
+                return Err(AppError::Other("品牌图片已发生变化，请重新查看后再总结".into()));
+            }
+        }
+        if expected_asset_ids.is_some() && rows.iter().any(|row| {
+            row.caption_payload.as_deref()
+                .and_then(|payload| serde_json::from_str::<CaptionPayload>(payload).ok())
+                .and_then(|parsed| parsed.instruction).as_deref() != Some(BRAND_OBSERVATION_TASK)
+        }) {
+            return Err(AppError::Other("需要补齐可保留品牌标注的图片分析，请重新开始提炼".into()));
+        }
         let cards: Vec<VisualEvidenceCard> = rows
             .iter()
             .filter_map(|row| {
@@ -1243,9 +1264,12 @@ impl crate::db::Database {
             })
             .collect();
         let effective = cards.iter().filter(|c| card_is_effective(c)).count();
-        if effective < MIN_EFFECTIVE_CARDS {
+        if expected_asset_ids.is_some() && effective != rows.len() {
+            return Err(AppError::Other("还有图片尚未分析完成，请稍后重试".into()));
+        }
+        if effective < MIN_BRAND_IMAGES {
             return Err(AppError::Other(format!(
-                "有效反推素材不足（{effective}/{MIN_EFFECTIVE_CARDS}）。请先在该文件夹整理并反推素材。"
+                "还没有可用的品牌图片（{effective}/{MIN_BRAND_IMAGES}），请添加图片后再试。"
             )));
         }
         assert_payload_clean(&cards, &rows)?;
@@ -1285,8 +1309,9 @@ impl crate::db::Database {
         profile_id: &str,
         rules: &[RuleEdit],
     ) -> AppResult<VisualProfileDetail> {
-        let conn = self.conn.lock().unwrap();
-        let status: Option<String> = conn
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let status: Option<String> = tx
             .query_row(
                 "SELECT status FROM project_visual_profiles WHERE id = ?1",
                 rusqlite::params![profile_id],
@@ -1308,12 +1333,12 @@ impl crate::db::Database {
         for rule in rules {
             validate_rule_shape(&rule.category, &rule.value, &rule.polarity)?;
         }
-        conn.execute(
+        tx.execute(
             "DELETE FROM visual_profile_rules WHERE profile_id = ?1",
             rusqlite::params![profile_id],
         )?;
         for rule in rules {
-            conn.execute(
+            tx.execute(
                 r#"INSERT INTO visual_profile_rules
                      (id, profile_id, category, value, polarity, confidence,
                       supporting_asset_ids, opposing_asset_ids, confirmed_by_user)
@@ -1332,7 +1357,9 @@ impl crate::db::Database {
                 ],
             )?;
         }
-        Ok(Self::visual_profile_detail(&conn, profile_id)?)
+        let detail = Self::visual_profile_detail(&tx, profile_id)?;
+        tx.commit()?;
+        Ok(detail)
     }
 
     /// 单个 profile 的完整读取（V3 验证图编译 prompt 用；桌面命令层入口）。
@@ -1341,18 +1368,13 @@ impl crate::db::Database {
         Self::visual_profile_detail(&conn, profile_id)
     }
 
-    /// V4：按本地不可变 confirmed 版本编译冻结 capsule。调用方必须同时给出当前项目，
-    /// 防止把其他项目的视觉设定带入本次生成/Agent Run。
+    /// 按用户选中的不可变 confirmed 版本编译冻结 capsule，可用于任何创作。
     pub fn visual_profile_capsule(
         &self,
         profile_id: &str,
-        project_id: &str,
     ) -> AppResult<VisualProfileCapsule> {
         let conn = self.conn.lock().unwrap();
         let detail = Self::visual_profile_detail(&conn, profile_id)?;
-        if detail.summary.project_id != project_id {
-            return Err(AppError::Other("视觉设定不属于当前项目".into()));
-        }
         compile_capsule(&detail)
     }
 
@@ -1380,6 +1402,10 @@ impl crate::db::Database {
     /// 用户「确认并保存」：draft → confirmed（幂等拒绝二次确认以外的状态）。
     pub fn confirm_visual_profile(&self, profile_id: &str) -> AppResult<VisualProfileDetail> {
         let conn = self.conn.lock().unwrap();
+        let detail = Self::visual_profile_detail(&conn, profile_id)?;
+        if detail.rules.iter().any(|rule| rule.value.starts_with("待核对的原图标注：")) {
+            return Err(AppError::Other("品牌标注存在冲突，请核对并微调后保存".into()));
+        }
         let updated = conn.execute(
             "UPDATE project_visual_profiles
                 SET status = 'confirmed', confirmed_at = CAST(strftime('%s','now') AS INTEGER)
@@ -1403,22 +1429,33 @@ impl crate::db::Database {
         Self::visual_profile_detail(&conn, profile_id)
     }
 
+    /// Remove a version from user-facing lists without destroying frozen generation provenance.
+    pub fn delete_visual_profile(&self, profile_id: &str) -> AppResult<()> {
+        let conn = self.conn.lock().unwrap();
+        let updated = conn.execute(
+            "UPDATE project_visual_profiles SET status = 'archived' WHERE id = ?1",
+            rusqlite::params![profile_id],
+        )?;
+        if updated == 0 { return Err(AppError::Other("视觉规范不存在".into())); }
+        Ok(())
+    }
+
     pub fn list_visual_profiles(
         &self,
-        project_id: &str,
+        _project_id: &str,
         folder_id: Option<&str>,
     ) -> AppResult<Vec<VisualProfileSummary>> {
         let conn = self.conn.lock().unwrap();
         let sql = r#"
             SELECT p.id, p.project_id, p.source_folder_id, p.name, p.version, p.status,
                    p.summary, p.source_count, p.created_at, p.confirmed_at,
-                   (SELECT COUNT(*) FROM visual_profile_rules r WHERE r.profile_id = p.id)
+                   (SELECT COUNT(*) FROM visual_profile_rules r WHERE r.profile_id = p.id), p.extractor
             FROM project_visual_profiles p
-            WHERE p.project_id = ?1 AND (?2 IS NULL OR p.source_folder_id = ?2)
-            ORDER BY p.source_folder_id, p.version DESC
+            WHERE p.status != 'archived' AND (?1 IS NULL OR p.source_folder_id = ?1)
+            ORDER BY p.source_folder_id, p.version DESC, p.created_at DESC, p.id DESC
         "#;
         let mut stmt = conn.prepare(sql)?;
-        let rows = stmt.query_map(rusqlite::params![project_id, folder_id], |row| {
+        let rows = stmt.query_map(rusqlite::params![folder_id], |row| {
             Ok(VisualProfileSummary {
                 id: row.get(0)?,
                 project_id: row.get(1)?,
@@ -1431,6 +1468,7 @@ impl crate::db::Database {
                 rule_count: row.get(10)?,
                 created_at: row.get(8)?,
                 confirmed_at: row.get(9)?,
+                extractor: row.get(11)?,
             })
         })?;
         let mut out = Vec::new();
@@ -1449,7 +1487,7 @@ impl crate::db::Database {
                 r#"SELECT p.id, p.project_id, p.source_folder_id, p.name, p.version, p.status,
                           p.summary, p.source_count, p.created_at, p.confirmed_at,
                           (SELECT COUNT(*) FROM visual_profile_rules r WHERE r.profile_id = p.id),
-                          p.source_scope_hash
+                          p.source_scope_hash, p.extractor
                    FROM project_visual_profiles p WHERE p.id = ?1"#,
                 rusqlite::params![profile_id],
                 |row| {
@@ -1466,6 +1504,7 @@ impl crate::db::Database {
                             rule_count: row.get(10)?,
                             created_at: row.get(8)?,
                             confirmed_at: row.get(9)?,
+                            extractor: row.get(12)?,
                         },
                         row.get::<_, String>(11)?,
                     ))
@@ -1516,6 +1555,9 @@ impl crate::db::Database {
         Ok(VisualProfileDetail {
             summary,
             source_scope_hash: scope_hash,
+            source_asset_ids: draft_asset_ids(&parse_json_column(
+                "SELECT source_payload FROM project_visual_profiles WHERE id = ?1",
+            )?),
             rules,
             content_themes,
             conflicts,
@@ -1560,6 +1602,7 @@ mod tests {
             .collect();
         serde_json::json!({
             "schema_version": 1,
+            "instruction": BRAND_OBSERVATION_TASK,
             "text": "fallback text",
             "sections": sections
                 .iter()
@@ -1725,7 +1768,7 @@ mod tests {
             )
             .unwrap();
         }
-        // 无反推素材：在项目外（不计入）；项目内一张无 caption、一张不可解析
+        // 来源按所选文件夹读取；包含尚未加入项目的素材。
         conn.execute(
             "INSERT INTO assets (id, name, folder_id, source, created_at) VALUES ('asset-out', '外部素材.png', 'f1', 'imported', 1)",
             [],
@@ -1753,11 +1796,103 @@ mod tests {
     }
 
     #[test]
-    fn preview_counts_project_folder_intersection_with_reasons() {
+    fn independent_visual_profile_migration_preserves_versions_rules_and_links() {
+        let db = Database::open_in_memory().unwrap();
+        {
+            let mut conn = db.conn.lock().unwrap();
+            crate::db::migrations::migrations().to_version(&mut conn, 26).unwrap();
+            conn.execute_batch(r#"
+                INSERT INTO projects(id,name,workspace_path,workspace_key,kind,created_at)
+                  VALUES ('old-a','A','a','a','user',1), ('old-b','B','b','b','user',1);
+                INSERT INTO folders(id,name,kind,created_at) VALUES ('brand','Brand','folder',1);
+                INSERT INTO assets(id,name,source,created_at) VALUES ('photo','Photo','imported',1);
+                INSERT INTO project_visual_profiles(id,project_id,source_folder_id,name,version,status,source_scope_hash,source_payload,created_at)
+                  VALUES ('guide-a','old-a','brand','A',1,'confirmed','frozen-a','[]',1),
+                         ('guide-b','old-b','brand','B',1,'confirmed','frozen-b','[]',2);
+                INSERT INTO visual_profile_rules(id,profile_id,category,value,polarity)
+                  VALUES ('rule-a','guide-a','palette','自然暖色','prefer');
+                INSERT INTO visual_profile_assets(profile_id,asset_id,role) VALUES ('guide-a','photo','source');
+            "#).unwrap();
+        }
+        let before = db.visual_profile_capsule("guide-a").unwrap();
+        db.migrate().unwrap();
+        db.migrate().unwrap();
+        assert_eq!(db.list_visual_profiles("", None).unwrap().len(), 2);
+        assert_eq!(db.visual_profile_capsule("guide-a").unwrap().hash, before.hash);
+        {
+            let conn = db.conn.lock().unwrap();
+            assert_eq!(conn.query_row("SELECT COUNT(*) FROM visual_profile_assets", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+            conn.execute("DELETE FROM projects WHERE id IN ('old-a','old-b')", []).unwrap();
+            conn.execute("DELETE FROM folders WHERE id='brand'", []).unwrap();
+            assert_eq!(conn.query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+            assert_eq!(conn.query_row("PRAGMA foreign_keys", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+        }
+        assert_eq!(db.visual_profile_capsule("guide-a").unwrap().hash, before.hash);
+        assert_eq!(db.visual_profile_get("guide-b").unwrap().summary.version, 1);
+        assert_eq!(db.list_visual_profiles("unrelated-project", None).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn brand_profiles_can_be_created_without_project_and_used_after_project_deletion() {
+        let db = seeded_db();
+        let first = db.extract_visual_profile("", "f1").unwrap();
+        assert!(first.summary.project_id.is_none());
+        db.confirm_visual_profile(&first.summary.id).unwrap();
+        let capsule = db.visual_profile_capsule(&first.summary.id).unwrap();
+        db.conn.lock().unwrap().execute("DELETE FROM projects WHERE id='p1'", []).unwrap();
+        assert_eq!(db.visual_profile_capsule(&first.summary.id).unwrap().hash, capsule.hash);
+        assert_eq!(db.visual_profile_preview("", "f1").unwrap().in_folder, 9);
+        let next = db.extract_visual_profile("unrelated-project", "f1").unwrap();
+        assert_eq!(next.summary.version, first.summary.version + 1);
+        assert_eq!(db.list_visual_profiles("", Some("f1")).unwrap().len(), 2);
+        assert!(db.visual_profile_capsule(&next.summary.id).is_err(), "drafts still require confirmation");
+    }
+
+    #[test]
+    fn draft_edit_rolls_back_all_rules_when_an_insert_fails() {
+        let db = seeded_db();
+        let original = db.extract_visual_profile("p1", "f1").unwrap();
+        db.conn.lock().unwrap().execute_batch(
+            "CREATE TEMP TRIGGER fail_rule_insert BEFORE INSERT ON visual_profile_rules
+             WHEN NEW.value = '模拟写入失败' BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END;",
+        ).unwrap();
+        let edits = ["第一条应回滚", "模拟写入失败"].map(|value| RuleEdit {
+            category: "palette".into(), value: value.into(), polarity: "prefer".into(),
+            confidence: 0.8, supporting_asset_ids: vec![], opposing_asset_ids: vec![],
+            confirmed_by_user: true,
+        });
+        assert!(db.update_visual_profile_rules(&original.summary.id, &edits).is_err());
+        let after = db.visual_profile_get(&original.summary.id).unwrap();
+        assert_eq!(serde_json::to_value(&after.rules).unwrap(), serde_json::to_value(&original.rules).unwrap());
+        assert_eq!(after.summary.status, "draft");
+        db.conn.lock().unwrap().execute_batch("DROP TRIGGER fail_rule_insert").unwrap();
+        let saved = db.update_visual_profile_rules(&original.summary.id, &edits[..1]).unwrap();
+        assert_eq!(saved.rules.len(), 1);
+        assert_eq!(saved.rules[0].value, "第一条应回滚");
+    }
+
+    #[test]
+    fn profile_reads_preserve_extractor_identity() {
+        let db = seeded_db();
+        let original = db.extract_visual_profile("p1", "f1").unwrap();
+        assert_eq!(original.summary.extractor, "local_baseline");
+        db.conn.lock().unwrap().execute(
+            "UPDATE project_visual_profiles SET extractor = 'cloud_model' WHERE id = ?1",
+            params![original.summary.id],
+        ).unwrap();
+        let detail = db.visual_profile_get(&original.summary.id).unwrap();
+        let list = db.list_visual_profiles("p1", Some("f1")).unwrap();
+        assert_eq!(detail.summary.extractor, "cloud_model");
+        assert_eq!(list[0].extractor, "cloud_model");
+        assert_eq!(serde_json::to_value(&detail).unwrap()["extractor"], "cloud_model");
+    }
+
+    #[test]
+    fn preview_counts_selected_folder_with_reasons() {
         let db = seeded_db();
         let preview = db.visual_profile_preview("p1", "f1").unwrap();
         assert_eq!(preview.folder_name, "风格参考");
-        assert_eq!(preview.in_folder, 8); // 6 有效 + asset-none + asset-raw（asset-out 不在项目内）
+        assert_eq!(preview.in_folder, 9); // 6 有效 + asset-none + asset-raw + asset-out
         assert_eq!(preview.effective, 6);
         let no_caption = preview
             .missing
@@ -1770,13 +1905,35 @@ mod tests {
             .iter()
             .find(|m| m.asset_id == "asset-raw")
             .unwrap();
-        assert_eq!(raw.reason, "not_parseable");
+        assert_eq!(raw.reason, "brand_observation_required");
 
         // root / 收藏夹 / 不存在文件夹 均拒绝
         assert!(db.visual_profile_preview("p1", "root").is_err());
         assert!(db.visual_profile_preview("p1", "col1").is_err());
         assert!(db.visual_profile_preview("p1", "missing").is_err());
-        assert!(db.visual_profile_preview("missing", "f1").is_err());
+        assert!(db.visual_profile_preview("missing", "f1").is_ok());
+    }
+
+    #[test]
+    fn folder_captions_are_usable_without_project_membership() {
+        let db = seeded_db();
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute("DELETE FROM project_assets WHERE project_id = 'p1'", []).unwrap();
+            conn.execute("INSERT INTO assets (id,name,folder_id,source,created_at) VALUES ('elsewhere','其他夹',NULL,'imported',1)", []).unwrap();
+            conn.execute("INSERT INTO analyses (id,asset_id,kind,payload,provider,created_at) VALUES ('elsewhere-caption','elsewhere','caption',?1,'test',1)",
+                params![caption_json(&[("palette", "不应读入")], &[])]).unwrap();
+        }
+        let preview = db.visual_profile_preview("p1", "f1").unwrap();
+        assert_eq!(preview.in_folder, 9);
+        assert_eq!(preview.effective, 6);
+        let (_, cards) = db.visual_profile_freeze_cards("p1", "f1").unwrap();
+        assert_eq!(cards.iter().filter(|card| card_is_effective(card)).count(), 6);
+        assert!(!cards.iter().any(|card| card.asset_id == "elsewhere"));
+        let detail = db.extract_visual_profile("p1", "f1").unwrap();
+        assert_eq!(detail.summary.source_count, 6);
+        let conn = db.conn.lock().unwrap();
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM project_assets WHERE project_id='p1'", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
     }
 
     #[test]
@@ -1826,6 +1983,50 @@ mod tests {
         assert_eq!(detail3.summary.version, 3);
         assert_eq!(detail3.summary.source_count, 5);
         assert_ne!(detail3.source_scope_hash, scope_v1);
+    }
+
+    #[test]
+    fn deleted_versions_leave_lists_but_preserve_sources_and_version_numbers() {
+        let db = seeded_db();
+        let first = db.extract_visual_profile("p1", "f1").unwrap();
+        let second = db.extract_visual_profile("p1", "f1").unwrap();
+        let id = &second.summary.id;
+        db.confirm_visual_profile(id).unwrap();
+        let capsule = db.visual_profile_capsule(id).unwrap();
+        db.delete_visual_profile(id).unwrap();
+        db.delete_visual_profile(id).unwrap(); // Retrying a completed deletion is safe.
+        assert!(db.delete_visual_profile("missing").is_err());
+        let list = db.list_visual_profiles("p1", None).unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].id, first.summary.id);
+        assert_eq!(db.list_visual_profiles("p1", Some("f1")).unwrap().len(), 1);
+        let archived = db.visual_profile_get(id).unwrap();
+        assert_eq!(archived.summary.status, "archived");
+        assert_eq!(archived.rules.len(), second.rules.len());
+        assert_eq!(archived.source_asset_ids, second.source_asset_ids);
+        assert!(db.visual_profile_capsule(id).is_err());
+        assert!(db.confirm_visual_profile(id).is_err());
+        assert!(!inject_visual_profile_prompt("新画面", &capsule).is_empty());
+        assert_eq!(db.visual_profile_preview("p1", "f1").unwrap().effective, 6);
+        assert_eq!(db.extract_visual_profile("p1", "f1").unwrap().summary.version, 3);
+    }
+
+    #[test]
+    fn saved_sources_survive_collection_changes_and_asset_removal() {
+        let db = seeded_db();
+        let profile = db.extract_visual_profile("p1", "f1").unwrap();
+        // The frozen input also includes the legacy caption with no usable style claims.
+        assert_eq!(profile.source_asset_ids.len(), 7);
+        assert!(profile.source_asset_ids.contains(&"asset-0".to_string()));
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute("UPDATE assets SET folder_id = NULL WHERE id = 'asset-0'", []).unwrap();
+            conn.execute("DELETE FROM assets WHERE id = 'asset-1'", []).unwrap();
+        }
+        let saved = db.visual_profile_get(&profile.summary.id).unwrap();
+        assert_eq!(saved.source_asset_ids, profile.source_asset_ids);
+        assert_eq!(saved.summary.source_count, 6);
+        assert_eq!(db.visual_profile_preview("p1", "f1").unwrap().effective, 4);
     }
 
     #[test]
@@ -1983,15 +2184,13 @@ mod tests {
             .unwrap();
         db.confirm_visual_profile(&detail.summary.id).unwrap();
 
-        let capsule = db.visual_profile_capsule(&detail.summary.id, "p1").unwrap();
+        let capsule = db.visual_profile_capsule(&detail.summary.id).unwrap();
         assert_eq!(capsule.profile_id, detail.summary.id);
         assert_eq!(capsule.version, 1);
         assert_eq!(capsule.must.len(), 1);
         assert_eq!(capsule.avoid.len(), 1);
         assert_eq!(capsule.hash.len(), 64);
-        assert!(db
-            .visual_profile_capsule(&capsule.profile_id, "other-project")
-            .is_err());
+        assert_eq!(db.visual_profile_capsule(&capsule.profile_id).unwrap().hash, capsule.hash);
 
         let prompt = inject_visual_profile_prompt("本次明确改成高饱和红色海报", &capsule);
         assert!(prompt.starts_with("本次明确改成高饱和红色海报"));
@@ -2002,11 +2201,70 @@ mod tests {
     }
 
     #[test]
+    fn brand_scope_rejects_new_unanalyzed_images_before_submission() {
+        let db = seeded_db();
+        db.conn.lock().unwrap().execute("UPDATE assets SET folder_id = NULL WHERE id != 'asset-0'", []).unwrap();
+        let expected = vec!["asset-0".to_string()];
+        assert!(db.visual_profile_freeze_brand_cards("p1", "f1", Some(&expected)).is_ok());
+        db.conn.lock().unwrap().execute("UPDATE assets SET folder_id = 'f1' WHERE id = 'asset-none'", []).unwrap();
+        let error = db.visual_profile_freeze_brand_cards("p1", "f1", Some(&expected)).unwrap_err();
+        assert!(error.to_string().contains("图片已发生变化"));
+    }
+
+    #[test]
+    fn old_captions_require_brand_observation_without_rewriting_saved_profiles() {
+        let db = seeded_db();
+        db.conn.lock().unwrap().execute("UPDATE assets SET folder_id = NULL WHERE id != 'asset-0'", []).unwrap();
+        db.conn.lock().unwrap().execute("UPDATE analyses SET payload = json_remove(payload, '$.instruction') WHERE asset_id = 'asset-0'", []).unwrap();
+        let preview = db.visual_profile_preview("", "f1").unwrap();
+        assert_eq!(preview.effective, 0);
+        assert_eq!(preview.missing[0].reason, "brand_observation_required");
+        assert!(db.visual_profile_freeze_brand_cards("", "f1", Some(&preview.asset_ids)).is_err());
+    }
+
+    #[test]
+    fn labelled_colour_codes_survive_caption_draft_confirmation_and_capsule() {
+        let db = seeded_db();
+        let raw = "- **品牌规范**\npalette | 主色 HEX | #1a2B3c\npalette | 主色 CMYK | C57 M28 Y0 K76\n- **色调**\n低饱和冷色";
+        let parsed = crate::core::caption::parse(raw);
+        let payload = crate::core::caption::build_payload(raw, BRAND_OBSERVATION_TASK, None, "bowerbird-cloud", &parsed);
+        let card = to_evidence_card("asset-0", "labelled", &payload, "imported");
+        assert!(card.sections.iter().any(|section| section.title == "品牌规范" && section.body.contains("#1a2B3c") && section.body.contains("C57 M28 Y0 K76")));
+        let value = "原图明确标注：主色 HEX：#1a2B3c";
+        let draft = serde_json::json!({"schemaVersion":1,"visualRules":[{"category":"palette","value":value,"polarity":"must","confidence":1,"supportingAssetIds":["asset-0"]}]}).to_string();
+        let detail = db.persist_cloud_visual_profile("", "f1", &[card], &draft).unwrap();
+        db.confirm_visual_profile(&detail.summary.id).unwrap();
+        let capsule = db.visual_profile_capsule(&detail.summary.id).unwrap();
+        assert_eq!(capsule.must[0].value, value);
+        assert!(inject_visual_profile_prompt("做一张海报", &capsule).contains("#1a2B3c"));
+    }
+
+    #[test]
+    fn conflicting_labelled_standards_require_review_before_confirmation() {
+        let db = seeded_db();
+        let (_, cards) = db.visual_profile_freeze_cards("p1", "f1").unwrap();
+        let draft = serde_json::json!({"schemaVersion":1,"visualRules":[{"category":"palette","value":"待核对的原图标注：主色 HEX：#112233","polarity":"prefer","supportingAssetIds":["asset-0"]}]}).to_string();
+        let detail = db.persist_cloud_visual_profile("", "f1", &cards, &draft).unwrap();
+        assert!(db.confirm_visual_profile(&detail.summary.id).unwrap_err().to_string().contains("冲突"));
+    }
+
+    #[test]
+    fn brand_cloud_scope_can_start_with_one_analyzed_image() {
+        let db = seeded_db();
+        db.conn.lock().unwrap().execute("DELETE FROM analyses WHERE asset_id != 'asset-0'", []).unwrap();
+        let preview = db.visual_profile_preview("p1", "f1").unwrap();
+        assert_eq!(preview.min_required, 1);
+        assert_eq!(preview.asset_ids.len(), preview.in_folder);
+        let (_, cards) = db.visual_profile_freeze_cards("p1", "f1").unwrap();
+        assert_eq!(cards.iter().filter(|card| card_is_effective(card)).count(), 1);
+    }
+
+    #[test]
     fn freeze_rejects_insufficient_coverage() {
         let db = seeded_db();
         {
             let conn = db.conn.lock().unwrap();
-            for i in 0..4 {
+            for i in 0..6 {
                 conn.execute(
                     "DELETE FROM analyses WHERE asset_id = ?1",
                     params![format!("asset-{i}")],

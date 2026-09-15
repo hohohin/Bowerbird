@@ -4,6 +4,8 @@
  * 仅声明 M0 实际用到的 node API 子集；不追求与 @types/node 完全等价。
  */
 
+interface ImportMeta { readonly dirname: string; }
+
 declare module "node:test" {
   export function test(name: string, fn: () => void | Promise<void>): void;
   export function test(
@@ -65,6 +67,12 @@ declare module "node:path" {
   export function isAbsolute(path: string): boolean;
 }
 
+declare module "node:fs/promises" {
+  export function mkdtemp(prefix: string): Promise<string>;
+  export function writeFile(path: string, bytes: Uint8Array): Promise<void>;
+  export function rm(path: string, options: { recursive: boolean; force: boolean }): Promise<void>;
+}
+
 declare module "node:os" {
   export function tmpdir(): string;
 }
@@ -88,6 +96,7 @@ declare module "node:url" {
 }
 
 declare module "node:child_process" {
+  export function execFile(command: string, args: string[], options: { timeout: number; maxBuffer: number; windowsHide: boolean }, callback: (error: Error | null, stdout: string) => void): void;
   export interface ChildProcess {
     readonly exitCode: number | null;
     readonly signalCode: string | null;

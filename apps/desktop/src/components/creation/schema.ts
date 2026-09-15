@@ -30,6 +30,9 @@ export const creationSchema = new Schema({
       draggable: false,
       attrs: {
         assetId: { default: "" },
+        // 画板内点选素材时冻结具体节点实例；同一中心素材可在同一项目出现多次，
+        // 生成投影必须据此把输入边连回用户点到的原节点，而不是复制一张“引用图”。
+        canvasNodeId: { default: null },
         silent: { default: false },
         name: { default: "" },
         ext: { default: null },
@@ -54,7 +57,7 @@ export const creationSchema = new Schema({
                   class:
                     "flex h-6 w-8 items-center justify-center rounded bg-panel2 text-[10px]",
                 },
-                "IMG",
+                /^(mp4|mov|webm|m4v|avi|mkv)$/i.test(node.attrs.ext ?? "") ? "▶" : "IMG",
               ]
         );
         // 只显缩略图不出图名（采集图名多为 hash/ulid 噪音）；hover 由 BoardChipPreview 弹放大图。
@@ -94,6 +97,7 @@ export const creationSchema = new Schema({
             class: "mx-0.5 underline decoration-accent text-accent underline-offset-4",
             contentEditable: "false",
             "data-keyword": "1",
+            "data-source-asset-id": node.attrs.assetId ?? "",
             "data-body": node.attrs.body ?? "",
           },
           `【${node.attrs.title}】`,
@@ -111,10 +115,12 @@ export const creationSchema = new Schema({
 export function imageAttrs(
   assetId: string,
   asset: PromptedAsset | undefined,
-  silent: boolean
+  silent: boolean,
+  canvasNodeId: string | null = null,
 ) {
   return {
     assetId,
+    canvasNodeId,
     silent,
     name: asset ? chipName(asset) : assetId,
     ext: asset?.ext ?? null,

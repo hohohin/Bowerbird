@@ -10,7 +10,7 @@ use crate::core::ingest;
 use crate::core::paths::LibraryPaths;
 use crate::core::projects::{
     refresh_workspace_assets, ActiveProjectContext, Project, ProjectCreateResult,
-    ProjectDeleteMode, ProjectDeleteResult, ProjectRefreshResult,
+    ProjectDeleteImpact, ProjectDeleteMode, ProjectDeleteResult, ProjectRefreshResult,
 };
 use crate::db::Database;
 use crate::error::{AppError, AppResult};
@@ -39,7 +39,6 @@ pub async fn create_project(
     app: AppHandle,
     paths: State<'_, Arc<LibraryPaths>>,
     db: State<'_, Arc<Database>>,
-    active: State<'_, ActiveProjectContext>,
     workspace_path: String,
 ) -> Result<ProjectCreateResult, AppError> {
     let (workspace, name, workspace_key) = workspace_identity(&workspace_path)?;
@@ -51,6 +50,7 @@ pub async fn create_project(
     let id_for_import = project_id.clone();
     let assets = tokio::task::spawn_blocking(move || -> Result<Vec<_>, AppError> {
         db_for_import.create_project(&id_for_import, &name, &display, &workspace_key, "user")?;
+        db_for_import.ensure_project_canvas(&id_for_import)?;
         match ingest::ingest_dir(&paths, &db_for_import, &workspace) {
             Ok(assets) => {
                 let mut unique = std::collections::HashMap::new();
@@ -74,7 +74,6 @@ pub async fn create_project(
     for asset in &assets {
         crate::core::autoname::spawn_auto_analyze(app.clone(), db.clone(), asset.clone());
     }
-    active.set(Some(project_id.clone()));
     let project = db
         .get_project(&project_id)?
         .ok_or_else(|| AppError::NotFound(format!("project {project_id}")))?;
@@ -93,7 +92,6 @@ pub async fn create_project(
 pub async fn create_blank_project(
     app: AppHandle,
     db: State<'_, Arc<Database>>,
-    active: State<'_, ActiveProjectContext>,
     name: String,
 ) -> Result<ProjectCreateResult, AppError> {
     let name = name.trim();
@@ -110,12 +108,13 @@ pub async fn create_blank_project(
     let db_for_insert = db.clone();
     let id_for_insert = project_id.clone();
     tokio::task::spawn_blocking(move || {
-        db_for_insert.create_project(&id_for_insert, &name, "", &workspace_key, "blank")
+        db_for_insert.create_project(&id_for_insert, &name, "", &workspace_key, "blank")?;
+        db_for_insert.ensure_project_canvas(&id_for_insert)?;
+        Ok::<_, AppError>(())
     })
     .await
     .map_err(|error| AppError::Other(error.to_string()))??;
 
-    active.set(Some(project_id.clone()));
     let project = db
         .get_project(&project_id)?
         .ok_or_else(|| AppError::NotFound(format!("project {project_id}")))?;
@@ -188,6 +187,8 @@ pub async fn set_active_project(
         if db.get_project(id)?.is_none() {
             return Err(AppError::NotFound(format!("project {id}")));
         }
+        db.ensure_project_canvas(id)?;
+        db.touch_project_canvas(id)?;
     }
     active.set(project_id);
     Ok(())
@@ -232,24 +233,54 @@ pub async fn delete_project(
     app: AppHandle,
     db: State<'_, Arc<Database>>,
     active: State<'_, ActiveProjectContext>,
+    paths: State<'_, Arc<LibraryPaths>>,
     project_id: String,
     mode: String,
+    confirmation: Option<String>,
 ) -> Result<ProjectDeleteResult, AppError> {
-    let mode = match mode.as_str() {
-        "keep" => ProjectDeleteMode::Keep,
-        "move_out" => ProjectDeleteMode::MoveOut,
-        "delete_exclusive" => ProjectDeleteMode::DeleteExclusive,
-        other => return Err(AppError::Other(format!("未知删除模式: {other}"))),
-    };
+    if mode != "keep" && mode != "delete_exclusive" {
+        return Err(AppError::Other("不支持的项目删除方式".into()));
+    }
+    let paths = paths.inner().clone();
     let db = db.inner().clone();
     let id_for_delete = project_id.clone();
-    let result = tokio::task::spawn_blocking(move || db.delete_project(&id_for_delete, mode))
-        .await
-        .map_err(|error| AppError::Other(error.to_string()))??;
+    let result = tokio::task::spawn_blocking(move || {
+        if mode == "delete_exclusive" {
+            db.delete_project_exclusive(
+                &paths,
+                &id_for_delete,
+                confirmation.as_deref().unwrap_or(""),
+            )
+        } else {
+            // A failed restore must not be followed by Keep: deleting its project marker
+            // would make startup mistake an uncommitted physical deletion for a committed one.
+            db.recover_project_deletions(&paths)?;
+            db.delete_project(&id_for_delete, ProjectDeleteMode::Keep)
+        }
+    })
+    .await
+    .map_err(|error| AppError::Other(error.to_string()))??;
     if active.get().as_deref() == Some(project_id.as_str()) {
         active.set(None);
     }
     let _ = app.emit("projects://changed", ());
     let _ = app.emit("library://assets-changed", ());
     Ok(result)
+}
+
+#[tauri::command]
+pub async fn project_delete_impact(
+    db: State<'_, Arc<Database>>,
+    paths: State<'_, Arc<LibraryPaths>>,
+    project_id: String,
+) -> Result<ProjectDeleteImpact, AppError> {
+    let db = db.inner().clone();
+    let paths = paths.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        let mut impact = db.project_delete_impact(&project_id)?;
+        impact.physical = db.project_exclusive_impact(&paths, &project_id)?;
+        Ok(impact)
+    })
+    .await
+    .map_err(|error| AppError::Other(error.to_string()))?
 }

@@ -1464,12 +1464,19 @@ pub fn agent_z_health() -> Result<AgentZStatus, AppError> {
 
 #[tauri::command]
 pub fn agent_z_send(
+    db: tauri::State<'_, std::sync::Arc<crate::db::Database>>,
     text: String,
     images: Vec<String>,
     // 与 images 同序的素材名（正文 @名 与路径对号）；缺省 / 长度不齐退化为纯路径。
     image_names: Option<Vec<String>>,
     engine: Option<String>,
+    visual_profile_id: Option<String>,
 ) -> Result<(), AppError> {
+    ensure_preview_enabled()?;
+    let text = match visual_profile_id.as_deref() {
+        Some(id) => crate::core::visual_profile::inject_visual_profile_prompt(&text, &db.visual_profile_capsule(id)?),
+        None => text,
+    };
     #[cfg(windows)]
     {
         let names = image_names.unwrap_or_default();

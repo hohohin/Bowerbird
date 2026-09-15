@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { deepEqual, equal, ok } from "node:assert/strict";
 import { test } from "node:test";
+import { BRAND_OBSERVATION_TASK, loadBrandPrompt } from "../prompts/brand-visual.ts";
 
 import {
   burstBackoffMs,
@@ -132,6 +133,14 @@ const INPUT = JSON.stringify({
   image: { mime: "image/jpeg", base64: "aGVsbG8=" },
   instruction: "请描述这张图片",
   mock_scenario: null,
+});
+
+test("brand observation task reaches Ark as maintained prompt text with the original image", async () => {
+  const recorded = await runOnce(async () => ({ ok: true, status: 200, body: JSON.stringify({ choices: [{ message: { content: "- **品牌规范**\npalette | 主色 HEX | #123456" } }] }) }), baseConfig(), JSON.stringify({ ...JSON.parse(INPUT), instruction: BRAND_OBSERVATION_TASK }));
+  const sent = recorded.arkRequestBody as { messages: Array<{ content: Array<{ type: string; text?: string }> }> };
+  equal(sent.messages[0].content[0].type, "image_url");
+  equal(sent.messages[0].content[1].text, loadBrandPrompt("observation"));
+  equal(recorded.finishBody?.resultText, "- **品牌规范**\npalette | 主色 HEX | #123456");
 });
 
 async function runOnce(

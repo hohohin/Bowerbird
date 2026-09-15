@@ -1,0 +1,163 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { createServer } from "vite";
+import { chromium } from "../../html-renderer/node_modules/playwright/index.mjs";
+const server = await createServer({ server: { host: "127.0.0.1", port: 1556, strictPort: true, hmr: false, watch: null } });
+await server.listen();
+const browser = await chromium.launch({ channel: "chrome", headless: true });
+const page = await browser.newPage({ viewport: { width: 1280, height: 850 } });
+const errors = []; page.on("pageerror", e => errors.push(e.message));
+const calls = command => page.evaluate(command => window.calls.filter(call => call.command === command), command);
+async function drop(payload = { version: 1, imageUrl: "https://i.pinimg.com/image.png", pageUrl: "https://www.pinterest.com/pin/1" }) {
+  await page.locator('[aria-label="探索采集素材"]').evaluate((el, payload) => {
+    const transfer = new DataTransfer(); transfer.setData("application/x-bowerbird-explorer", JSON.stringify(payload));
+    el.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: transfer }));
+  }, payload);
+}
+try {
+  // Exercise the production injection with a real DOM, including sites that disable image dragging.
+  const source = await browser.newPage();
+  await source.route("https://fixture.example/**", route => route.fulfill({ contentType: "text/html", body: '<a href="/pin/1"><img id="source" draggable="false" src="/small.png" srcset="/small.png 1x, /large.png 2x"></a>' }));
+  await source.addInitScript(await readFile("../extension/candidate-utils.js", "utf8"));
+  await source.addInitScript(await readFile("src-tauri/src/commands/source_browser_drag.js", "utf8"));
+  await source.goto("https://fixture.example/");
+  const injected = await source.locator("#source").evaluate(image => {
+    image.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    image.addEventListener("dragstart", event => event.preventDefault());
+    const transfer = new DataTransfer();
+    const allowed = image.dispatchEvent(new DragEvent("dragstart", { bubbles: true, cancelable: true, dataTransfer: transfer }));
+    return { draggable: image.draggable, allowed, payload: JSON.parse(transfer.getData("application/x-bowerbird-explorer")) };
+  });
+  assert.deepEqual(injected, { draggable: true, allowed: true, payload: { version: 1, imageUrl: "https://fixture.example/large.png", pageUrl: "https://fixture.example/pin/1" } });
+  await source.close();
+  await page.goto("http://127.0.0.1:1556/scripts/fixtures/explorer/preview.html");
+  await page.getByRole("textbox", { name: "主页面草稿" }).fill("保留主页面状态");
+  await page.evaluate(() => { window.primaryPage = document.querySelector('[aria-label="主页面草稿"]'); });
+  assert.equal((await calls("open_source_browser")).length, 0);
+  await page.getByRole("button", { name: "探索", exact: true }).click();
+  await page.waitForFunction(() => window.calls.some(c => c.command === "open_source_browser"));
+  const explore = await page.getByRole("button", { name: "探索", exact: true }).boundingBox();
+  const create = await page.getByRole("button", { name: "新建创作", exact: true }).boundingBox();
+  assert.ok(explore.x < create.x);
+  const browserPanel = await page.getByRole("complementary", { name: "探索面板" }).boundingBox();
+  const library = await page.locator('[aria-label="探索采集素材"]').boundingBox();
+  assert.ok(browserPanel.x + browserPanel.width <= library.x, "browser is a left panel beside the existing main page");
+  assert.equal(await page.evaluate(() => window.primaryPage === document.querySelector('[aria-label="主页面草稿"]')), true);
+  // Native image drags can advertise Files alongside the explorer metadata.
+  // Mount the global importer too: its window capture listener runs before React.
+  for (const textOnly of [false, true]) {
+    const before = (await calls("capture_source_browser_image")).length;
+    await page.locator('.explore-main input').evaluate((el, textOnly) => {
+      const transfer = new DataTransfer();
+      const payload = JSON.stringify({ version: 1, imageUrl: "https://i.pinimg.com/mixed.png", pageUrl: "https://www.pinterest.com/pin/mixed" });
+      transfer.items.add(new File(["native image"], "mixed.png", { type: "image/png" }));
+      transfer.setData("text/plain", "bowerbird-explorer:" + payload);
+      if (!textOnly) transfer.setData("application/x-bowerbird-explorer", payload);
+      window.mixedTransfer = transfer;
+      // During dragover the native drag data store is protected: only types are readable.
+      const protectedTransfer = new DataTransfer();
+      for (const type of transfer.types) if (type !== "Files") protectedTransfer.setData(type, "");
+      protectedTransfer.items.add(new File([], "mixed.png"));
+      for (const type of ["dragenter", "dragover"]) el.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: protectedTransfer }));
+    }, textOnly);
+    assert.equal(await page.locator('[data-file-drop-overlay]').count(), 0, "explorer drag must not be intercepted as a file import");
+    await page.locator('.explore-drop-hint').waitFor();
+    await page.locator('.explore-main input').evaluate(el => el.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: window.mixedTransfer })));
+    await page.waitForFunction(count => window.calls.filter(c => c.command === "capture_source_browser_image").length === count + 1, before);
+    await page.waitForFunction(() => !document.querySelector('.explore-capture-status'));
+    assert.equal((await calls("import_image_bytes")).length, 0);
+    assert.equal((await calls("capture_source_browser_image")).at(-1).args.pageUrl, "https://www.pinterest.com/pin/mixed");
+  }
+  for (const textOnly of [false, true]) {
+    await page.locator('.explore-main input').evaluate((el, textOnly) => {
+      const transfer = new DataTransfer();
+      transfer.items.add(new File(["image"], "invalid.png", { type: "image/png" }));
+      transfer.setData("text/plain", "bowerbird-explorer:invalid");
+      if (!textOnly) transfer.setData("application/x-bowerbird-explorer", "invalid");
+      el.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: transfer }));
+    }, textOnly);
+    await page.getByText("未能识别拖入的图片，请重新拖动网页图片", { exact: true }).last().waitFor();
+    assert.equal((await calls("import_image_bytes")).length, 0, "malformed capture metadata must not fall back to file import");
+  }
+  await page.evaluate(() => { window.calls = window.calls.filter(c => c.command !== "capture_source_browser_image"); window.store.setState({ assets: [], total: 0 }); });
+  await page.getByRole("button", { name: "花瓣", exact: true }).click();
+  assert.equal((await calls("navigate_source_browser")).at(-1).args.url, "https://huaban.com/");
+  await page.getByRole("button", { name: "测试弹窗", exact: true }).click();
+  await page.waitForFunction(() => window.calls.filter(c => c.command === "resize_source_browser").at(-1)?.args.visible === false);
+  assert.equal(await page.locator(".source-browser-placeholder .animate-spin").count(), 0, "occlusion is not page loading");
+  await page.getByRole("button", { name: "测试弹窗", exact: true }).click();
+  await page.waitForFunction(() => window.calls.filter(c => c.command === "resize_source_browser").at(-1)?.args.visible === true);
+  const menuNavigationCount = (await calls("navigate_source_browser")).length;
+  await page.evaluate(() => {
+    const viewport = document.querySelector("[data-source-browser-viewport]").getBoundingClientRect();
+    const menu = document.createElement("div"); menu.id = "overlap-menu"; menu.setAttribute("role", "menu");
+    menu.style.cssText = `position:fixed;left:${viewport.left + 20}px;top:${viewport.top + 20}px;width:100px;height:100px`;
+    document.body.append(menu);
+  });
+  await page.waitForFunction(() => window.calls.filter(c => c.command === "resize_source_browser").at(-1)?.args.visible === false);
+  assert.equal(await page.locator(".source-browser-placeholder .animate-spin").count(), 0);
+  // Menus can move after their first render or hide without unmounting.
+  await page.evaluate(() => { document.querySelector("#overlap-menu").style.left = "10000px"; });
+  await page.waitForFunction(() => window.calls.filter(c => c.command === "resize_source_browser").at(-1)?.args.visible === true);
+  await page.evaluate(() => { document.querySelector("#overlap-menu").style.left = "30px"; });
+  await page.waitForFunction(() => window.calls.filter(c => c.command === "resize_source_browser").at(-1)?.args.visible === false);
+  await page.evaluate(() => { document.querySelector("#overlap-menu").style.display = "none"; });
+  await page.waitForFunction(() => window.calls.filter(c => c.command === "resize_source_browser").at(-1)?.args.visible === true);
+  const layoutCount = (await calls("resize_source_browser")).length;
+  await page.evaluate(() => { document.querySelector("#overlap-menu").remove(); document.querySelector('[aria-label="主页面草稿"]').style.color = "red"; });
+  await page.waitForTimeout(120);
+  assert.equal((await calls("resize_source_browser")).length, layoutCount, "unchanged bounds and visibility do not repeat native operations");
+  assert.equal((await calls("navigate_source_browser")).length, menuNavigationCount);
+  assert.equal((await calls("reload_source_browser")).length, 0);
+  await drop({ version: 1, imageUrl: "file:///secret", pageUrl: "https://example.com" });
+  assert.equal((await calls("capture_source_browser_image")).length, 0);
+  await page.getByText("未能识别拖入的图片，请重新拖动网页图片", { exact: true }).last().waitFor();
+  await page.evaluate(() => { window.hold = true; });
+  await drop(); await drop();
+  await page.waitForFunction(() => window.release);
+  assert.equal((await calls("capture_source_browser_image")).length, 1);
+  await page.evaluate(() => { window.store.setState({ activeProjectId: "p", projects: [{ id: "p", name: "新项目", provisional: true, kind: "blank" }] }); window.hold = false; window.release(); });
+  await page.waitForFunction(() => !document.querySelector('[aria-label="探索采集素材"]').textContent.includes("采集中"));
+  assert.equal(await page.locator('[data-asset-id="captured"]').count(), 0, "old project completion must not populate new project");
+  await drop();
+  await page.locator('[data-asset-id="captured"]').waitFor();
+  assert.equal((await calls("capture_source_browser_image")).at(-1).args.projectId, "p");
+  assert.equal(JSON.parse((await calls("project_canvas_materialize"))[0].args.value.draftJson).schema_version, 1);
+  await page.locator('[data-asset-id="captured"]').click();
+  await page.getByRole("dialog", { name: "媒体预览，1 / 1" }).waitFor();
+  await page.waitForFunction(() => window.calls.filter(c => c.command === "resize_source_browser").at(-1)?.args.visible === false);
+  await page.keyboard.press("Escape");
+  assert.equal(await page.getByRole("dialog").count(), 0);
+  assert.equal(await page.locator("[data-source-browser-viewport]").count(), 1, "Escape closes only the preview");
+  await page.waitForFunction(() => window.calls.filter(c => c.command === "resize_source_browser").at(-1)?.args.visible === true);
+  await page.evaluate(() => { window.fail = true; }); await drop();
+  await page.getByText("模拟网站拒绝图片", { exact: true }).waitFor();
+  const notice = await page.getByText("模拟网站拒绝图片", { exact: true }).boundingBox();
+  const native = await page.locator("[data-source-browser-viewport]").boundingBox();
+  assert.ok(notice.x >= native.x + native.width, "capture errors stay outside the native view");
+  await page.setViewportSize({ width: 900, height: 650 });
+  await page.waitForTimeout(250);
+  const viewport = await page.locator("[data-source-browser-viewport]").boundingBox();
+  assert.ok(viewport.width >= 240 && viewport.height >= 180);
+  await page.screenshot({ path: ".tmp/explorer-narrow.png" });
+  await page.setViewportSize({ width: 1280, height: 850 });
+  await page.screenshot({ path: ".tmp/explorer-desktop.png" });
+  await page.getByRole("button", { name: "收起浏览器", exact: true }).click();
+  await page.waitForFunction(() => window.calls.some(call => call.command === "hide_source_browser"));
+  assert.equal(await page.locator("[data-source-browser-viewport]").isVisible(), false);
+  const navigations = (await calls("navigate_source_browser")).length;
+  await page.getByRole("button", { name: "探索", exact: true }).click();
+  await page.waitForFunction(() => window.calls.filter(c => c.command === "resize_source_browser").at(-1)?.args.visible === true);
+  assert.equal((await calls("open_source_browser")).length, 1, "reopening only shows the existing webview");
+  assert.equal((await calls("navigate_source_browser")).length, navigations);
+  assert.equal((await calls("reload_source_browser")).length, 0);
+  assert.equal(await page.getByRole("textbox", { name: "网页地址" }).inputValue(), "https://huaban.com/");
+  assert.equal(await page.getByRole("textbox", { name: "主页面草稿" }).inputValue(), "保留主页面状态");
+  assert.equal(await page.evaluate(() => window.primaryPage === document.querySelector('[aria-label="主页面草稿"]')), true);
+  assert.deepEqual(errors, []);
+  console.log("PASS explorer entry, side-by-side collection, sites, modal occlusion, drop validation, duplicate guard, frozen project, provisional materialize, errors, resize and close.");
+} catch (error) {
+  console.log(JSON.stringify({ errors, calls: await page.evaluate(() => window.calls.slice(-12)) }));
+  await page.screenshot({ path: ".tmp/explorer-failure.png" });
+  throw error;
+} finally { await browser.close(); await server.close(); }

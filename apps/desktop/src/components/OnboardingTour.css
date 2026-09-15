@@ -1,0 +1,71 @@
+.onboarding-spotlight { position: fixed; inset: 0; z-index: 48; pointer-events: none; }
+.onboarding-control-frame { fill: none; stroke: #4868ff; stroke-width: 2; }
+.onboarding-step-copy { white-space: pre-line; }
+.onboarding-spotlight.is-ring-open { z-index: 67; }
+.onboarding-spotlight-card.is-ring-open { z-index: 68; }
+.onboarding-spotlight-card { right: auto; max-height: calc(100vh - 32px); }
+.onboarding-spotlight-card h2 { margin: 18px 0 10px; font-size: 22px; font-weight: 600; }
+.onboarding-drag-demo { margin: 14px 0; color: var(--bb-muted); }
+.onboarding-drag-demo svg { width: 100%; }
+.onboarding-drag-demo text { fill: currentColor; font-size: 11px; }
+.onboarding-drag-demo .demo-panel { fill: var(--bb-surface); stroke: var(--bb-line); }
+.onboarding-drag-demo figcaption { margin-top: 8px; text-align: center; font-size: 15px; }
+.demo-cursor { animation: onboarding-drag 4s ease-in-out infinite; }
+.demo-image { animation: onboarding-drag 4s ease-in-out infinite; opacity: .9; }
+@keyframes onboarding-drag { 0%, 20% { transform: translate(0, 0); } 70%, 88% { transform: translate(170px, 0); opacity: 1; } 95%, 100% { transform: translate(170px, 0); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .demo-cursor, .demo-image { animation: none; } }
+.guide-role-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.guide-role-card { display: flex; flex-direction: column; align-items: flex-start; gap: 14px; text-align: left; padding: 24px 20px; border: 1px solid var(--bb-line); border-radius: 14px; background: var(--bb-surface); color: var(--bb-ink); }
+.guide-role-card:hover, .guide-role-card:focus-visible { border-color: #7c9cff; outline: 2px solid #7c9cff55; background: #7c9cff0a; }
+.guide-role-card > svg { color: #7c9cff; }
+.guide-role-card strong { font-size: 20px; }
+.guide-role-card p { font-size: 13px; line-height: 1.8; }
+.guide-role-card small { color: var(--bb-muted); font-size: 11px; line-height: 1.7; }
+.guide-role-card > span { display: flex; align-items: center; gap: 6px; margin-top: auto; padding-top: 12px; font-size: 12px; color: var(--bb-ink); }
+.onboarding-lesson-actions { display: flex; gap: 16px; }
+@media (max-width: 640px) { .guide-role-grid { grid-template-columns: 1fr; } .guide-role-card { padding: 16px; gap: 8px; } }
+.onboarding-lesson { position: fixed; top: 72px; right: 18px; z-index: 49; width: min(380px, calc(100vw - 32px)); max-height: calc(100vh - 100px); overflow: auto; padding: 18px; border: 1px solid var(--bb-line); border-radius: 16px; background: var(--bb-surface); color: var(--bb-ink); box-shadow: 0 8px 30px #0003; font-size: 16px; }
+.onboarding-lesson header, .onboarding-lesson header > span, .onboarding-lesson header > div { display: flex; align-items: center; gap: 8px; }
+.onboarding-lesson header { justify-content: space-between; font-weight: 600; }
+.onboarding-lesson header button { padding: 4px; border-radius: 4px; }
+.onboarding-lesson ol { display: grid; gap: 8px; margin: 16px 0; }
+.onboarding-lesson li { display: flex; align-items: center; gap: 8px; color: var(--bb-muted); }
+.onboarding-lesson li > span { display: grid; place-items: center; width: 20px; height: 20px; border: 1px solid var(--bb-line); border-radius: 50%; }
+.onboarding-lesson li[aria-current] { color: var(--bb-ink); font-weight: 600; }
+.onboarding-lesson li[aria-current] > span { background: #7c9cff; color: #13171f; }
+.onboarding-lesson p, .onboarding-topic p, .learning-hint p { line-height: 1.7; margin: 8px 0; }
+.onboarding-lesson small { display: block; color: var(--bb-muted); line-height: 1.6; margin: 8px 0; }
+.onboarding-pause { margin-top: 12px; color: var(--bb-muted); text-decoration: underline; }
+.onboarding-skip { display: block; margin-top: 12px; color: var(--bb-muted); text-decoration: underline; }
+.onboarding-resume { position: fixed; right: 18px; z-index: 49; display: flex; align-items: center; gap: 6px; background: var(--bb-surface); border: 1px solid var(--bb-line); color: var(--bb-ink); padding: 8px 12px; border-radius: 20px; font-size: 12px; }
+.onboarding-resume button { display: flex; align-items: center; gap: 6px; padding: 3px; }
+.onboarding-topic { padding: 10px 12px; border: 1px solid var(--bb-line); border-radius: 8px; font-size: 12px; }
+.onboarding-topic summary { cursor: pointer; }
+.onboarding-topic p { color: var(--bb-muted); }
+.learning-hint { display: flex; gap: 10px; align-items: flex-start; margin: 8px; padding: 10px 12px; background: var(--bb-surface); color: var(--bb-ink); border: 1px solid var(--bb-line); border-radius: 8px; font-size: 12px; }
+.learning-hint p { margin-bottom: 0; color: var(--bb-muted); }
+.learning-hint button { margin-left: auto; padding: 3px; flex-shrink: 0; }
+.explore-learning-hint { flex-shrink: 0; }
+.collection-learning { margin-bottom: 16px; padding: 12px; border: 1px solid var(--bb-line); border-radius: 8px; font-size: 12px; }
+.collection-learning summary { cursor: pointer; font-weight: 600; }
+.collection-learning-steps { display: grid; gap: 14px; margin: 12px 0; font-size: 12px; }
+.collection-learning-steps p { margin-top: 5px; line-height: 1.7; color: var(--bb-muted); }
+.collection-learning-start { margin-top: 20px; font-size: 12px; }
+.collection-learning-start label { display: block; margin-bottom: 8px; font-weight: 600; }
+.collection-learning-start > div { display: flex; gap: 8px; flex-wrap: wrap; }
+.collection-learning-start input, .collection-learning-start select { flex: 1; min-width: 160px; }
+@media (min-width: 800px) { .collection-learning .collection-learning-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+.onboarding-lesson .app-modal-button { font-size: 16px; }
+.onboarding-lesson header button:disabled { opacity: .3; cursor: default; }
+.onboarding-brand { display: block; width: 64px; height: 64px; margin: 18px 0; object-fit: contain; }
+
+.onboarding-completion .app-modal-body { font-size: 16px; }
+.onboarding-completion-grid { display: grid; grid-template-columns: 1.15fr 1fr; gap: 32px; }
+.onboarding-completion-message { padding: 8px 8px 16px; }
+.onboarding-completion-grid h3 { font-size: 22px; font-weight: 600; margin: 16px 0; }
+.onboarding-completion-grid p { line-height: 1.7; margin: 12px 0; color: var(--bb-muted); overflow-wrap: anywhere; }
+.onboarding-completion-login { padding: 24px; border: 1px solid var(--bb-line); border-radius: 16px; background: var(--bb-surface-2); }
+.onboarding-completion-login > svg { color: var(--bb-blue); }
+.onboarding-completion .app-modal-button { font-size: 16px; }
+@media (max-width: 640px) { .onboarding-completion-grid { grid-template-columns: 1fr; gap: 16px; } }

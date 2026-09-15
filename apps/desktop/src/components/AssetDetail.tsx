@@ -1,3 +1,4 @@
+import { LearningHint } from "./OnboardingTour";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -7,6 +8,7 @@ import {
   Bookmark,
   ChevronLeft,
   ChevronRight,
+  Compass,
   Copy,
   Edit3,
   ExternalLink,
@@ -19,6 +21,7 @@ import { useStore } from "../store";
 import { understandProvider } from "../lib/entitlement";
 import { api } from "../lib/api";
 import { SMART_REFINE_ENABLED } from "../lib/featureFlags";
+import { sourceDiscoveryFor } from "../lib/sourceDiscovery";
 import { useImageZoom } from "../lib/useImageZoom";
 import { notifyError, notifySuccess } from "../lib/notify";
 import { RenameDialog } from "./RenameDialog";
@@ -131,10 +134,10 @@ function Meta({ label, value }: { label: string; value: ReactNode }) {
  * 资产详情页（浏览模式下覆盖主区）：大图 + 元信息 + 反推描述 + 提示词板块 + 来源外链。
  * 大图走 store_path（原图全尺寸）；视频用 <video>；SVG/图片用 <img>。
  */
-export function AssetDetail() {
+export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string) => void }) {
   const id = useStore((s) => s.detailAssetId);
   const assets = useStore((s) => s.assets);
-  const currentProjectId = useStore((s) => s.currentProjectId);
+  const activeProjectId = useStore((s) => s.activeProjectId);
   const closeDetail = useStore((s) => s.closeDetail);
   const openDetail = useStore((s) => s.openDetail);
   const openDescribePicker = useStore((s) => s.openDescribePicker);
@@ -199,7 +202,7 @@ export function AssetDetail() {
     }
   }
 
-  // 类别（P2）：auto=codex 自动归类、manual=用户手加。改后本页 reload + 全局 emit 刷侧栏计数。
+  // source describes the label creator; origin records who assigned it to this image.
   async function loadTags() {
     if (!id) return;
     try {
@@ -318,7 +321,7 @@ export function AssetDetail() {
     setGenerationSource(null);
     if (!id) return;
     api
-      .generationHistory(id, currentProjectId)
+      .generationHistory(id, activeProjectId)
       .then((history) => {
         if (alive && (history.turns.length > 0 || history.references.length > 0)) {
           setGenerationSource(history);
@@ -330,7 +333,7 @@ export function AssetDetail() {
     return () => {
       alive = false;
     };
-  }, [id, currentProjectId]);
+  }, [id, activeProjectId]);
 
   // 同流程轮播：本图是生成图（或被合并掉的 sibling）时取整组过程图。非生成图置空。
   // sibling 不在主列表 → assets.find 落空 → 仍走 listGenerationGroup 取组。
@@ -348,7 +351,7 @@ export function AssetDetail() {
     }
     let alive = true;
     api
-      .listGenerationGroup(id, currentProjectId)
+      .listGenerationGroup(id, activeProjectId)
       .then((g) => {
         if (alive) setGroup(g);
       })
@@ -357,7 +360,7 @@ export function AssetDetail() {
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, currentProjectId]);
+  }, [id, activeProjectId]);
 
   // 左右方向键切换过程图（输入框内不拦截，留给光标移动）。
   useEffect(() => {
@@ -546,7 +549,7 @@ export function AssetDetail() {
     }
   }
 
-  async function openSource(url: string) {
+  async function openSourceExternal(url: string) {
     try {
       await open(url);
     } catch (e) {
@@ -603,6 +606,7 @@ export function AssetDetail() {
     );
   }
   const colors = parseColors(asset.colors);
+  const sourceDiscovery = sourceDiscoveryFor(asset.source_url);
   const captions = analyses.filter((a) => a.kind === "caption");
   const generationPrompt =
     generationSource?.turns[0]?.prompt_raw?.trim() ||
@@ -666,12 +670,23 @@ export function AssetDetail() {
             {asset.source}
           </span>
         ) : null}
+        {sourceDiscovery && asset.source_url && (
+          <button
+            type="button"
+            onClick={() => onExploreSource(asset.source_url!)}
+            className="asset-detail-collect ml-auto"
+            title={sourceDiscovery.actionLabel}
+          >
+            <Compass size={14} />
+            发现更多
+          </button>
+        )}
         <button
           onClick={() => {
             setDetailTab("info");
             setCollectionPanelOpen((v) => !v);
           }}
-          className={`asset-detail-collect ml-auto ${
+          className={`asset-detail-collect ${sourceDiscovery ? "" : "ml-auto"} ${
             assetCollections.length > 0 ? "is-active" : ""
           }`}
           title={
@@ -930,7 +945,7 @@ export function AssetDetail() {
                     title="像回看对话一样，看这张图生成时的各轮 prompt 与产出图，并可继续提修改意见"
                   >
                     <MessageSquare size={13} />
-                    回看生成对话
+                    回看所属创作
                   </button>
                   {genMeta.provider === "codex" && (
                     <button
@@ -1074,6 +1089,7 @@ export function AssetDetail() {
                 {err}
               </div>
             )}
+            <LearningHint topic="dimensions" />
             {captions.length === 0 ? (
               <div className="text-xs text-muted">
                 {!understandReady
@@ -1242,13 +1258,13 @@ export function AssetDetail() {
             )}
           </div>
 
-          {/* 类别（P2 自动归类 + 手动）：codex 归的为 auto（灰），用户加的为 manual（强调）。 */}
+          {/* 分类标签支持本地识别与人工纠正。 */}
           <div className="asset-detail-card space-y-2">
             <div className="text-xs font-medium uppercase tracking-wide text-muted">类别</div>
             <div className="flex flex-wrap items-center gap-1.5">
               {tags.length === 0 && !addingTag && (
                 <span className="text-xs text-muted">
-                  无（采集后会自动归类，也可手动加）
+                  暂无标签，可手动添加或在侧栏开启本地分类
                 </span>
               )}
               {tags.map((t) => (
@@ -1257,7 +1273,7 @@ export function AssetDetail() {
                   className={`flex items-center gap-1 rounded px-2 py-0.5 text-[11px] ${
                     t.source === "auto" ? "bg-panel2 text-muted" : "bg-accent/15 text-accent"
                   }`}
-                  title={t.source === "auto" ? "自动归类（codex）" : "手动添加"}
+                  title={t.origin === "local" ? "本地自动匹配" : t.origin === "manual" ? "手动添加" : "历史标签"}
                 >
                   <span className="opacity-50">#</span> {t.name}
                   <button
@@ -1322,13 +1338,30 @@ export function AssetDetail() {
               来源
             </div>
             {asset.source_url ? (
-              <button
-                onClick={() => void openSource(asset.source_url!)}
-                className="block w-full truncate rounded bg-panel2 px-2 py-1.5 text-left text-xs text-accent hover:underline"
-                title={asset.source_url}
-              >
-                打开来源网页 <ExternalLink size={11} className="inline" />
-              </button>
+              <div className="space-y-2">
+                {sourceDiscovery && (
+                  <button
+                    onClick={() => onExploreSource(asset.source_url!)}
+                    className="flex w-full items-center gap-2 rounded bg-accent px-2.5 py-2 text-left text-xs font-medium text-black hover:opacity-90"
+                    title={asset.source_url}
+                  >
+                    <Compass size={13} className="shrink-0" />
+                    <span className="truncate">{sourceDiscovery.actionLabel}</span>
+                  </button>
+                )}
+                {sourceDiscovery && (
+                  <div className="text-[10px] leading-relaxed text-muted">
+                    {sourceDiscovery.hint}
+                  </div>
+                )}
+                <button
+                  onClick={() => void openSourceExternal(asset.source_url!)}
+                  className="block w-full truncate rounded bg-panel2 px-2 py-1.5 text-left text-xs text-accent hover:underline"
+                  title={asset.source_url}
+                >
+                  用系统浏览器打开 <ExternalLink size={11} className="inline" />
+                </button>
+              </div>
             ) : (
               <div className="text-xs text-muted">无来源链接</div>
             )}

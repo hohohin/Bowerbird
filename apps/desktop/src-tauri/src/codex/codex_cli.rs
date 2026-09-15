@@ -560,16 +560,9 @@ pub(crate) fn resolve_codex_binary() -> Option<String> {
     None
 }
 
-/// codex 凭证/产物根目录：`CODEX_HOME` 优先，否则 `USERPROFILE`（Windows）/ `HOME`（Unix）+ `.codex`。
-/// 与反推/生成的取图快照、auth.json 检测共用，保证三处对「codex home」的判定一致。
+/// Bowerbird 独立的凭证/产物根；不复用系统 CODEX_HOME 或 ~/.codex。
 pub(crate) fn codex_home() -> Option<PathBuf> {
-    std::env::var_os("CODEX_HOME")
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("USERPROFILE")
-                .or_else(|| std::env::var_os("HOME"))
-                .map(|home| PathBuf::from(home).join(".codex"))
-        })
+    app_data_dir().map(|dir| dir.join("cli-profiles/codex"))
 }
 
 /// GUI 启动的进程 PATH 常不含 node/npm 所在目录（macOS Finder 启动不继承 shell PATH），
@@ -612,19 +605,23 @@ pub(crate) fn codex_command(binary: &str) -> Command {
     {
         let lower = binary.to_ascii_lowercase();
         if lower.ends_with(".cmd") || lower.ends_with(".bat") {
-            let mut command = Command::new("cmd.exe");
-            command.arg("/D").arg("/S").arg("/C").arg(binary);
+            let mut command = Command::new(crate::cli_credentials::launcher());
+            command.args(["--plain", "cmd.exe", "/D", "/S", "/C", binary]);
             command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+            crate::cli_credentials::codex_environment(&mut command);
             return command;
         }
-        let mut command = Command::new(binary);
+        let mut command = Command::new(crate::cli_credentials::launcher());
+        command.args(["--plain", binary]);
         command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        crate::cli_credentials::codex_environment(&mut command);
         return command;
     }
     #[cfg(not(target_os = "windows"))]
     {
         let mut command = Command::new(binary);
         command.env("PATH", enriched_path(std::path::Path::new(binary).parent()));
+        crate::cli_credentials::codex_environment(&mut command);
         command
     }
 }
@@ -725,6 +722,22 @@ mod tests {
     use super::*;
     use std::fs;
     use ulid::Ulid;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn gui_codex_command_keeps_node_path_and_private_credentials() {
+        use std::ffi::OsStr;
+        let command = codex_command("/Applications/Bowerbird CLI/codex");
+        let environment: std::collections::HashMap<_, _> = command.as_std().get_envs().collect();
+        let path: Vec<_> = std::env::split_paths(environment[OsStr::new("PATH")].unwrap()).collect();
+        assert_eq!(path[0], PathBuf::from("/Applications/Bowerbird CLI"));
+        assert!(path.contains(&PathBuf::from("/opt/homebrew/bin")));
+        assert!(path.contains(&PathBuf::from("/usr/local/bin")));
+        assert_eq!(environment[OsStr::new("CODEX_HOME")], Some(crate::cli_credentials::codex_home().as_os_str()));
+        for name in ["OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_BASE_URL", "CODEX_AUTH_JSON"] {
+            assert_eq!(environment[OsStr::new(name)], None);
+        }
+    }
 
     #[test]
     fn find_binary_in_dirs_uses_candidate_order() {

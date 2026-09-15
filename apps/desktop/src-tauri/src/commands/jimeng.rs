@@ -74,7 +74,7 @@ pub async fn dreamina_health(force: Option<bool>) -> Result<CodexHealth, AppErro
     if !check_dreamina_logged_in(binary_str).await {
         return Ok(store_health(CodexHealth {
             ok: false,
-            reason: "dreamina 未登录（运行 dreamina login）".into(),
+            reason: "Bowerbird 的即梦未登录，请在设置中登录".into(),
         }));
     }
     Ok(store_health(CodexHealth {
@@ -183,24 +183,16 @@ pub async fn open_dreamina_login() -> Result<(), AppError> {
         .ok_or_else(|| AppError::Jimeng("未检测到 dreamina CLI，请先安装".into()))?;
     #[cfg(target_os = "macos")]
     {
-        // binary 是 resolve_dreamina_binary 返回的固定路径（env 或 ~/.local/bin/dreamina），
-        // 非用户自由输入，osascript do script 单参传入无注入风险。
-        let script = format!(
-            "tell application \"Terminal\"\nactivate\ndo script \"{binary} login\"\nend tell"
-        );
-        tokio::process::Command::new("osascript")
-            .arg("-e")
-            .arg(&script)
-            .spawn()
+        let mut command = dreamina_command(&binary);
+        command.arg("login");
+        super::macos_terminal::open(&command)
+            .await
             .map_err(|e| AppError::Jimeng(format!("启动 Terminal 失败: {e}")))?;
         Ok(())
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
-        #[cfg(not(target_os = "macos"))]
-        {
-            Err(AppError::Jimeng("当前系统暂不支持打开即梦登录终端".into()))
-        }
+        Err(AppError::Jimeng("当前系统暂不支持打开即梦登录终端".into()))
     }
     #[cfg(target_os = "windows")]
     {
@@ -210,7 +202,9 @@ pub async fn open_dreamina_login() -> Result<(), AppError> {
         // 是 PROJECT.md 踩坑已验证的 cmd 引号模式（npm_command），raw_arg 绕开 Rust 二次转义。
         // binary 非用户自由输入，无注入风险。
         let mut cmd = tokio::process::Command::new("cmd.exe");
-        cmd.raw_arg(&format!("/D /S /K \"\"{binary}\" login\""));
+        let launcher = crate::cli_credentials::launcher();
+        cmd.raw_arg(&format!("/D /S /K \"\"{}\" \"{binary}\" login\"", launcher.display()));
+        crate::cli_credentials::dreamina_environment(&mut cmd);
         // CREATE_NEW_CONSOLE（0x10）：强制 cmd 开新终端窗口。dev 模式 Bowerbird 是 console 子系统
         // （attach 到 `npm run tauri dev` 的终端），cmd 默认继承父 console 而不开新窗——dreamina login
         // 输出流进 dev 终端、无独立交互；CREATE_NEW_CONSOLE 总是开独立窗口（与 release GUI 行为一致）。

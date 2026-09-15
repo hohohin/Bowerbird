@@ -1,0 +1,44 @@
+{
+  "name": "multi_turn",
+  "nodes": [
+    {
+      "id": "multi-ref-1",
+      "kind": "asset",
+      "role": "reference",
+      "payload": { "schema_version": 1, "snapshot": { "name": "产品参考", "width": 1200, "height": 1600 } },
+      "created_at": 1
+    },
+    {
+      "id": "multi-prompt-1",
+      "kind": "prompt",
+      "payload": { "schema_version": 1, "text": "做一张产品主图", "provider": "jimeng", "provider_session_id": "jimeng-submit-1", "job_id": "job-multi-1", "turn_key": "turn-1", "status": "done" },
+      "created_at": 2
+    },
+    {
+      "id": "multi-output-1",
+      "kind": "asset",
+      "role": "output",
+      "payload": { "schema_version": 1, "snapshot": { "name": "产品主图首版" }, "execution": { "job_id": "job-multi-1", "turn_key": "turn-1" } },
+      "created_at": 3
+    },
+    {
+      "id": "multi-prompt-2",
+      "kind": "prompt",
+      "payload": { "schema_version": 1, "text": "背景再亮一点", "provider": "jimeng", "provider_session_id": "jimeng-submit-1", "job_id": "job-multi-1", "turn_key": "turn-2", "status": "done" },
+      "created_at": 4
+    },
+    {
+      "id": "multi-output-2",
+      "kind": "asset",
+      "role": "output",
+      "payload": { "schema_version": 1, "snapshot": { "name": "产品主图第二轮" }, "execution": { "job_id": "job-multi-1", "turn_key": "turn-2" } },
+      "created_at": 5
+    }
+  ],
+  "edges": [
+    { "id": "multi-input-1", "from_node_id": "multi-ref-1", "to_node_id": "multi-prompt-1", "kind": "input", "ordinal": 0, "created_at": 2 },
+    { "id": "multi-produced-1", "from_node_id": "multi-prompt-1", "to_node_id": "multi-output-1", "kind": "produced", "ordinal": 0, "created_at": 3 },
+    { "id": "multi-continued-1", "from_node_id": "multi-output-1", "to_node_id": "multi-prompt-2", "kind": "continued", "ordinal": 0, "created_at": 4 },
+    { "id": "multi-produced-2", "from_node_id": "multi-prompt-2", "to_node_id": "multi-output-2", "kind": "produced", "ordinal": 0, "created_at": 5 }
+  ]
+}

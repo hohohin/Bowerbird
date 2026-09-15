@@ -1,4 +1,6 @@
+import { BRAND_OBSERVATION_TASK, loadBrandPrompt } from "../prompts/brand-visual.ts";
 import { createHash, randomUUID } from "node:crypto";
+import { IdlePollBackoff } from "../idle-poll-backoff.ts";
 
 import {
   isRecord,
@@ -13,6 +15,7 @@ import {
 export type { WorkerFetch } from "../cloud-generation/runtime.ts";
 
 type JsonRecord = Record<string, unknown>;
+const CLEANUP_INTERVAL_MS = 10 * 60_000;
 
 export interface UnderstandWorkerConfig {
   controlUrl: string;
@@ -104,6 +107,10 @@ export function configFromEnv(env: Record<string, string | undefined>): Understa
 
 /** 与 Edge _shared/ark.ts visionPrompt 同源的兜底指令；桌面端始终显式传 instruction。 */
 export function visionPrompt(input: UnderstandInput): string {
+  if (input.instruction?.trim() === BRAND_OBSERVATION_TASK) {
+    if (input.operation !== "caption" || !input.image) throw new Error("brand_observation_image_required");
+    return loadBrandPrompt("observation");
+  }
   if (input.instruction?.trim()) return input.instruction.trim();
   if (input.operation === "autoname") {
     return "请看图并严格回复两行：第一行是 8 个汉字以内的图片名称；第二行是图片描述。";
@@ -283,6 +290,8 @@ async function executeClaim(
   let submitted = false;
   try {
     const input = await fetchInput(fetchImpl, claimed.inputUrl, inputManifestHash);
+    // Resolve once before submission; retries use the same prompt even during maintenance.
+    input.instruction = visionPrompt(input);
     await control.post({ action: "submitted", jobId, leaseId });
     submitted = true;
     const resultText = await ark.understand(input);
@@ -318,15 +327,29 @@ export async function runUnderstandWorker(
 ): Promise<void> {
   const control = new ControlClient(config, fetchImpl);
   const ark = new ArkVisionClient(config, fetchImpl);
+  const idleBackoff = new IdlePollBackoff(config.pollIntervalMs);
+  let nextCleanupAt = Date.now() + CLEANUP_INTERVAL_MS;
   console.log(JSON.stringify({ event: "understand_worker_started", worker_id: config.workerId }));
   while (!stop.requested) {
+    if (Date.now() >= nextCleanupAt) {
+      nextCleanupAt = Date.now() + CLEANUP_INTERVAL_MS;
+      try {
+        await control.post({ action: "cleanup_expired" });
+      } catch (error) {
+        console.error(JSON.stringify({ event: "understand_cleanup_failed", error: safeErrorKind(error) }));
+      }
+    }
     try {
       const claimed = await control.post({ action: "claim" }) as unknown as ClaimedJob;
-      if (claimed.job) await executeClaim(config, control, ark, fetchImpl, claimed);
-      else await sleep(config.pollIntervalMs);
+      if (claimed.job) {
+        idleBackoff.reset();
+        await executeClaim(config, control, ark, fetchImpl, claimed);
+      } else {
+        await sleep(idleBackoff.nextDelayMs());
+      }
     } catch (error) {
       console.error(JSON.stringify({ event: "understand_claim_failed", error: safeErrorKind(error) }));
-      await sleep(Math.max(config.pollIntervalMs, 5_000));
+      await sleep(Math.max(idleBackoff.nextDelayMs(), 5_000));
     }
   }
 }

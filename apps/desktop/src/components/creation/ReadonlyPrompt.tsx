@@ -12,7 +12,7 @@ export function ReadonlyPrompt({
   references,
 }: {
   prompt: string;
-  references: Asset[];
+  references: Array<Asset & { referenceNames?: string[] }>;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
 
@@ -22,7 +22,8 @@ export function ReadonlyPrompt({
     host.replaceChildren();
     const promptedReferences = references as PromptedAsset[];
     const assetById = new Map(promptedReferences.map((reference) => [reference.id, reference]));
-    const doc = parsePromptToDoc(prompt, promptedReferences, assetById);
+    const aliases = new Map(references.map(reference => [reference.id, reference.referenceNames ?? []]));
+    const doc = parsePromptToDoc(prompt, promptedReferences, assetById, undefined, [], [], aliases);
     const view = new EditorView(host, {
       state: EditorState.create({ doc }),
       editable: () => false,

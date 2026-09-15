@@ -1,4 +1,4 @@
-import { deepEqual, equal, rejects } from "node:assert/strict";
+import { deepEqual, equal, ok, rejects } from "node:assert/strict";
 import { test } from "node:test";
 import type { HarnessAdapter, HarnessCheckpointSeed, HarnessSession } from "./contracts.ts";
 import { createRunControlToolDefinitions, type RunAssetManifest, type RunControlToolsPort } from "./run-control-tools.ts";
@@ -6,6 +6,8 @@ import { ScopedToolGateway, type ToolGatewayRequest } from "./scoped-tool-gatewa
 import { UnifiedPlanningHarnessRunner } from "./unified-planning-harness-runner.ts";
 import { UnifiedPlanningToolBridge } from "./unified-planning-tool-bridge.ts";
 import { canonicalJson, sha256Hex } from "../kernel/tool-ledger.ts";
+import { VisualObservationMemory, type VisualObservationReference } from "./visual-observation-memory.ts";
+import type { AgentControlClient } from "../control-plane/agent-control-client.ts";
 
 function fixture() {
   const assets: RunAssetManifest["assets"] = [{
@@ -59,6 +61,48 @@ function seed(runId: string): HarnessCheckpointSeed {
   };
 }
 
+test("planning bridge persists observations before returning and reuses them across revisions", async () => {
+  const { claimed } = fixture();
+  let calls = 0;
+  let saved: VisualObservationReference[] = [];
+  const value = { schemaVersion: 1, assetId: "asset-runner", summary: "产品观察",
+    observations: [{ category: "subject", detail: "蓝色瓶身" }] };
+  const memory = new VisualObservationMemory({ runId: claimed.run.id, leaseId: claimed.lease.leaseId,
+    assets: claimed.artifactUrls, control: {} as AgentControlClient, save: async refs => { saved = refs; } });
+  const gateway = { async dispatch() { calls++; return { callId: "c".repeat(64), value }; } } as unknown as ScopedToolGateway;
+  const call = { toolName: "understand_asset", arguments: { assetId: "asset-runner", focus: "general" } };
+  const bridge = new UnifiedPlanningToolBridge({ claimed, gateway, observations: memory });
+  deepEqual((await bridge.dispatch(call)).value, value);
+  equal(saved.length, 1);
+  const revision = new UnifiedPlanningToolBridge({ claimed, gateway, observations: memory, revisionIndex: 1 });
+  deepEqual((await revision.dispatch(call)).value, value);
+  equal(calls, 1);
+  const page = await revision.dispatch({ toolName: "read_context", arguments: { id: memory.catalog()[0]!.contextId } });
+  deepEqual(JSON.parse((page.value as { content: { text: string } }).content.text), value);
+});
+
+test("skill discovery returns metadata and reads only the selected method without legacy Runner rules", async () => {
+  const { bridge } = fixture();
+  const catalog = (await bridge.dispatch({ toolName: "list_skills", arguments: {} })).value as Array<{ id: string; description: string }>;
+  equal(catalog.length, 3);
+  for (const entry of catalog) {
+    deepEqual(Object.keys(entry).sort(), ["description", "id"]);
+    ok(entry.description.length > 0);
+    const result = (await bridge.dispatch({ toolName: "read_skill", arguments: { skillId: entry.id } })).value as { id: string; instructions: string };
+    equal(result.id, entry.id);
+    ok(result.instructions.length > 100);
+    for (const legacy of ["IntentAnalysis", "ControlledImageEditPlan", "awaiting_user_review", "compose_html_document", "恰有一个", "不读取图片内容", "staged_controlled"]) {
+      ok(!result.instructions.includes(legacy), legacy);
+    }
+    if (entry.id === "bowerbird-controlled-image-edit") ok(!result.instructions.includes("HTML"));
+    if (entry.id === "bowerbird-html-layout-render") ok(!result.instructions.includes("饰品"));
+  }
+  for (const skillId of ["bowerbird-unified-agent", "../../secret"]) {
+    const result = (await bridge.dispatch({ toolName: "read_skill", arguments: { skillId } })).value as { status: string };
+    equal(result.status, "retry_required");
+  }
+});
+
 test("planning runner scopes one fresh session to one short-lived bridge environment", async () => {
   const { bridge, manifest } = fixture();
   let closed = 0;
@@ -103,7 +147,7 @@ test("planning runner rejects foreign Run, wrong phase and image prompt before o
   equal(adapters, 0);
 });
 
-test("planning bridge binds every focus for one asset to one durable observation slot", async () => {
+test("planning bridge gives each focus a stable distinct slot", async () => {
   const { claimed } = fixture();
   const requests: ToolGatewayRequest[] = [];
   const gateway = {
@@ -118,5 +162,7 @@ test("planning bridge binds every focus for one asset to one durable observation
   await bridge.dispatch({ toolName: "understand_asset", arguments: { assetId: "asset-runner", focus: "text" } });
 
   equal(requests[0]?.trustedSlot.logicalSlot, 1);
-  equal(requests[1]?.trustedSlot.logicalSlot, 1);
+  equal(requests[1]?.trustedSlot.logicalSlot, 1002);
+  await bridge.dispatch({ toolName: "understand_asset", arguments: { assetId: "asset-runner", focus: "text" } });
+  equal(requests[2]?.trustedSlot.logicalSlot, 1002);
 });

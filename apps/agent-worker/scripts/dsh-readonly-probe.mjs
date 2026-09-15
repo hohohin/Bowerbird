@@ -134,31 +134,13 @@ try {
 }
 
 const plan = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   title: "候选容器计划",
   summary: "明确当前产品素材的职责与信息区块后完成受控输出。",
-  contentPlan: {
-    assetAssignments: [{
-      assetId: "asset-product",
-      roles: ["product", "copy_source"],
-      rationale: "当前 Run 素材提供产品主体与可核验包装文字。",
-    }],
-    informationArchitecture: [{
-      id: "hero",
-      purpose: "展示产品主体与核心卖点",
-      sourceAssetIds: ["asset-product"],
-      copySource: "asset_observation",
-    }],
-    missingAssets: [],
-    visualProfile: null,
-  },
-  steps: [{
-    id: "finalize",
-    kind: "finalize_output",
-    goal: "提交最终结果",
-    inputAssetIds: ["asset-product"],
-    dependsOn: [],
-  }],
+  assetIds: ["asset-product"],
+  outputCount: 1,
+  modelTurns: 8,
+  capabilities: [{ tool: "generate_image", maxCalls: 1 }],
 };
 const controlledIntent = {
   schemaVersion: 1,
@@ -192,7 +174,7 @@ const controlledPlan = {
 };
 const unifiedModelServer = await startFakeDeepSeek([
   { name: "list_run_assets", arguments: {} },
-  { name: "submit_plan", arguments: { plan } },
+  { name: "request_task_authorization", arguments: plan },
 ]);
 let checkpointSaved = false;
 let planningEventRecorded = false;
@@ -358,7 +340,7 @@ try {
   }, {
     apiKey: "candidate-fixture-only",
     baseUrl: unifiedModelServer.baseUrl,
-    model: "deepseek-v4-flash",
+    model: "deepseek-flash",
   }, { allowInsecureLoopback: true });
   if (!processor) throw new Error("candidate_unified_processor_not_injected");
   await processor.process({
@@ -386,7 +368,7 @@ try {
   }, {
     apiKey: "candidate-fixture-only",
     baseUrl: controlledModelServer.baseUrl,
-    model: "deepseek-v4-flash",
+    model: "deepseek-flash",
   }, () => ({
     generate: async () => { throw new Error("candidate_generation_before_approval"); },
   }), { allowInsecureLoopback: true });
@@ -442,12 +424,12 @@ const result = {
   formalProcessorModelTurns: unifiedModelServer.requests.length,
   formalProcessorModelCallsDurable: succeededModelCallsFor("run-candidate-processor") === 2,
   formalProcessorModelUsageMetered: modelUsageFor("run-candidate-processor").length === 2 && modelUsageFor("run-candidate-processor").every(
-    (usage) => usage.inputUnits === 12 && usage.outputUnits === 4 && usage.model === "deepseek-v4-flash",
+    (usage) => usage.inputUnits === 12 && usage.outputUnits === 4 && usage.model === "deepseek-flash",
   ),
   realDeepSeekKeyStayedInParent: [...unifiedModelServer.authorizationHeaders, ...controlledModelServer.authorizationHeaders].every(
     (header) => header === "Bearer candidate-fixture-only",
   ),
-  formalProcessorToolSurfaceClosed: firstRequestTools.join(",") === "list_run_assets,submit_plan,understand_asset",
+  formalProcessorToolSurfaceClosed: firstRequestTools.join(",") === "ask_user,call_tool,list_run_assets,list_skills,read_context,read_skill,request_task_authorization,understand_asset",
   formalProcessorSawCurrentAsset: unifiedModelServer.requests[1]?.messages?.some(
     (message) => message.role === "tool" && message.content.includes("asset-product"),
   ) === true,
@@ -456,7 +438,7 @@ const result = {
   controlledProcessorModelTurns: controlledModelServer.requests.length,
   controlledProcessorModelCallsDurable: succeededModelCallsFor("run-candidate-controlled") === 2,
   controlledProcessorModelUsageMetered: modelUsageFor("run-candidate-controlled").length === 2 && modelUsageFor("run-candidate-controlled").every(
-    (usage) => usage.inputUnits === 12 && usage.outputUnits === 4 && usage.model === "deepseek-v4-flash",
+    (usage) => usage.inputUnits === 12 && usage.outputUnits === 4 && usage.model === "deepseek-flash",
   ),
   controlledProcessorToolSurfaceClosed: controlledIntentTools.join(",") === "record_intent_analysis,request_clarification,submit_plan_for_approval" &&
     controlledPlanTools.join(",") === "record_intent_analysis,request_clarification,submit_plan_for_approval",

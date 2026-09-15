@@ -52,6 +52,19 @@ impl GenProvider for DreaminaCliProvider {
         "jimeng"
     }
 
+    async fn generate_video(
+        &self,
+        req: CodexRequest,
+        options: crate::codex::types::VideoOptions,
+        tx: &mpsc::Sender<Chunk>,
+        resume_session: Option<String>,
+    ) -> Result<GenOutcome, AppError> {
+        if !self.enabled {
+            return Err(AppError::Jimeng("DreaminaCliProvider 未启用".into()));
+        }
+        super::jimeng_video::generate(&self.binary, req, options, tx, resume_session).await
+    }
+
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             chat: false,
@@ -353,7 +366,9 @@ pub(crate) fn resolve_dreamina_binary() -> Option<String> {
 pub(crate) fn dreamina_command(binary: &str) -> Command {
     #[cfg(target_os = "windows")]
     {
-        let mut command = Command::new(binary);
+        let mut command = Command::new(crate::cli_credentials::launcher());
+        command.arg(binary);
+        crate::cli_credentials::dreamina_environment(&mut command);
         command.creation_flags(0x08000000); // CREATE_NO_WINDOW
         return command;
     }

@@ -1,4 +1,6 @@
+import { RunContextTools } from "./run-context-tools.ts";
 import type { ApprovedHtmlDocument } from "./approved-html-tools.ts";
+import { DurableProviderError } from "../kernel/durable-tool-dispatcher.ts";
 import { computeArgsHash } from "../kernel/tool-ledger.ts";
 import type { HarnessModelToolCall } from "./unified-planning-tool-bridge.ts";
 import {
@@ -15,6 +17,7 @@ export class UnifiedHtmlExecutionToolBridge<TRender, TInspection = unknown, TFin
   readonly runId: string;
   private readonly leaseId: string;
   private readonly approvedPlanHash: string;
+  private readonly revisionIndex: number;
   private readonly composeSlot: number;
   private readonly renderSlot: number;
   private readonly inspectSlot?: number;
@@ -26,6 +29,10 @@ export class UnifiedHtmlExecutionToolBridge<TRender, TInspection = unknown, TFin
   private readonly createSocialDefinition?: (render: TRender, inspection?: TInspection) => ToolGatewayDefinition;
   private readonly createFinalizeDefinition: (render: TRender, inspection?: TInspection, social?: TSocial) => ToolGatewayDefinition;
   private documentValue?: ApprovedHtmlDocument;
+  private readonly contextTools: RunContextTools;
+  private failureCode?: string;
+
+  get lastErrorCode(): string | undefined { return this.failureCode; }
   private renderValue?: TRender;
   private inspectionValue?: TInspection;
   private socialValue?: TSocial;
@@ -36,12 +43,14 @@ export class UnifiedHtmlExecutionToolBridge<TRender, TInspection = unknown, TFin
     runId: string;
     leaseId: string;
     approvedPlanHash: string;
+    revisionIndex?: number;
     composeSlot: number;
     renderSlot: number;
     inspectSlot?: number;
     socialSlot?: number;
     finalizeSlot: number;
     composeDefinition: ToolGatewayDefinition;
+    contextTools?: RunContextTools;
     createRenderDefinition(document: ApprovedHtmlDocument): ToolGatewayDefinition;
     createInspectDefinition?(render: TRender): ToolGatewayDefinition;
     createSocialDefinition?(render: TRender, inspection?: TInspection): ToolGatewayDefinition;
@@ -58,9 +67,11 @@ export class UnifiedHtmlExecutionToolBridge<TRender, TInspection = unknown, TFin
         (args.socialSlot === undefined) !== (args.createSocialDefinition === undefined)) {
       throw new Error("unified_agent_html_bridge_invalid");
     }
+    this.contextTools = args.contextTools ?? new RunContextTools([]);
     this.runId = args.runId;
     this.leaseId = args.leaseId;
     this.approvedPlanHash = args.approvedPlanHash;
+    this.revisionIndex = args.revisionIndex ?? 0;
     this.composeSlot = args.composeSlot;
     this.renderSlot = args.renderSlot;
     this.inspectSlot = args.inspectSlot;
@@ -98,6 +109,25 @@ export class UnifiedHtmlExecutionToolBridge<TRender, TInspection = unknown, TFin
   }
 
   async dispatch(call: HarnessModelToolCall): Promise<ToolGatewayResult> {
+    try {
+      const contextResult = this.contextTools.dispatch(call);
+      if (contextResult) return contextResult;
+      return await this.dispatchTool(call);
+    } catch (error) {
+      if (error instanceof DurableProviderError) this.failureCode = error.safeCode;
+      if (call.toolName === "compose_html" && error instanceof ToolGatewayError &&
+          error.validationCode?.startsWith("approved_html_preflight:")) {
+        return { callId: "validation", value: {
+          status: "retry_required",
+          errorCode: "render_html_unsafe",
+          correction: `HTML preflight rejected ${error.validationCode.slice(24)}. Correct the document and call compose_html again. Image width/height attributes must be integers; use style="height:auto" or omit the height attribute for automatic sizing. No document has been committed.`,
+        } };
+      }
+      throw error;
+    }
+  }
+
+  private async dispatchTool(call: HarnessModelToolCall): Promise<ToolGatewayResult> {
     if (call.toolName === "compose_html") {
       if (this.documentValue !== undefined || this.renderValue !== undefined || this.finalValue !== undefined) throw new ToolGatewayError("tool_sequence_invalid");
       const result = await this.composeGateway.dispatch({
@@ -106,7 +136,7 @@ export class UnifiedHtmlExecutionToolBridge<TRender, TInspection = unknown, TFin
         phase: "execute_approved_plan",
         toolName: "compose_html",
         arguments: call.arguments,
-        trustedSlot: { logicalSlot: this.composeSlot, revisionIndex: 0 },
+        trustedSlot: { logicalSlot: this.composeSlot, revisionIndex: this.revisionIndex },
         allowedTools: new Set(["compose_html"]),
         approvedPlanHash: this.approvedPlanHash,
       });
@@ -125,7 +155,7 @@ export class UnifiedHtmlExecutionToolBridge<TRender, TInspection = unknown, TFin
         phase: "execute_approved_plan",
         toolName: "render_html",
         arguments: call.arguments,
-        trustedSlot: { logicalSlot: this.renderSlot, revisionIndex: 0 },
+        trustedSlot: { logicalSlot: this.renderSlot, revisionIndex: this.revisionIndex },
         allowedTools: new Set(["render_html"]),
         approvedPlanHash: this.approvedPlanHash,
       });
@@ -147,7 +177,7 @@ export class UnifiedHtmlExecutionToolBridge<TRender, TInspection = unknown, TFin
         phase: "execute_approved_plan",
         toolName: "inspect_artifact",
         arguments: call.arguments,
-        trustedSlot: { logicalSlot: this.inspectSlot, revisionIndex: 0 },
+        trustedSlot: { logicalSlot: this.inspectSlot, revisionIndex: this.revisionIndex },
         allowedTools: new Set(["inspect_artifact"]),
         approvedPlanHash: this.approvedPlanHash,
       });
@@ -170,7 +200,7 @@ export class UnifiedHtmlExecutionToolBridge<TRender, TInspection = unknown, TFin
         phase: "execute_approved_plan",
         toolName: "compose_xiaohongshu",
         arguments: call.arguments,
-        trustedSlot: { logicalSlot: this.socialSlot, revisionIndex: 0 },
+        trustedSlot: { logicalSlot: this.socialSlot, revisionIndex: this.revisionIndex },
         allowedTools: new Set(["compose_xiaohongshu"]),
         approvedPlanHash: this.approvedPlanHash,
       });
@@ -193,7 +223,7 @@ export class UnifiedHtmlExecutionToolBridge<TRender, TInspection = unknown, TFin
         phase: "execute_approved_plan",
         toolName: "finalize_output",
         arguments: call.arguments,
-        trustedSlot: { logicalSlot: this.finalizeSlot, revisionIndex: 0 },
+        trustedSlot: { logicalSlot: this.finalizeSlot, revisionIndex: this.revisionIndex },
         allowedTools: new Set(["finalize_output"]),
         approvedPlanHash: this.approvedPlanHash,
       });

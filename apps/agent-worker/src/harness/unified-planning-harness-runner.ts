@@ -9,11 +9,14 @@ import {
   startLoopbackToolBridge,
   type LoopbackToolBridgeServer,
 } from "./loopback-tool-bridge-server.ts";
-import type { UnifiedPlanningToolBridge } from "./unified-planning-tool-bridge.ts";
+import type { PlanningToolDispatchPort } from "./loopback-tool-bridge-server.ts";
+import { ToolActivity } from "./tool-activity.ts";
+type RunToolBridge = PlanningToolDispatchPort & { readonly runId: string };
 
 export type PlanningHarnessAdapterFactory = (
   childEnvironment: Readonly<Record<string, string>>,
   providerEnvironment?: Readonly<Record<string, string>>,
+  activity?: ToolActivity,
 ) => HarnessAdapter;
 
 /**
@@ -21,11 +24,11 @@ export type PlanningHarnessAdapterFactory = (
  * session, and deterministic teardown. It does not own Run/checkpoint state.
  */
 export class UnifiedPlanningHarnessRunner {
-  private readonly bridge: UnifiedPlanningToolBridge;
+  private readonly bridge: RunToolBridge;
   private readonly createAdapter: PlanningHarnessAdapterFactory;
 
   constructor(
-    bridge: UnifiedPlanningToolBridge,
+    bridge: RunToolBridge,
     createAdapter: PlanningHarnessAdapterFactory,
   ) {
     this.bridge = bridge;
@@ -33,7 +36,8 @@ export class UnifiedPlanningHarnessRunner {
   }
 
   async run(seed: HarnessCheckpointSeed, prompt: HarnessPromptBlock[]): Promise<HarnessTurnResult> {
-    if (seed.runId !== this.bridge.runId || seed.phase !== "compose_plan" || !prompt.length ||
+    if (seed.runId !== this.bridge.runId || !["compose_plan", "execute_approved_plan"].includes(seed.phase) ||
+        (seed.phase === "execute_approved_plan" && !/^[0-9a-f]{64}$/.test(seed.approvedPlanHash ?? "")) || !prompt.length ||
         prompt.some((block) => block.type !== "text" || !block.text.trim())) {
       throw new Error("unified_planning_input_invalid");
     }
@@ -41,8 +45,9 @@ export class UnifiedPlanningHarnessRunner {
     let server: LoopbackToolBridgeServer | undefined;
     let session: HarnessSession | undefined;
     try {
-      server = await startLoopbackToolBridge(this.bridge);
-      const adapter = this.createAdapter(server.childEnvironment());
+      const activity = new ToolActivity();
+      server = await startLoopbackToolBridge({ dispatch: (call) => activity.run(() => this.bridge.dispatch(call)) });
+      const adapter = this.createAdapter(server.childEnvironment(), undefined, activity);
       session = await adapter.open(seed);
       return await session.turn(prompt);
     } finally {

@@ -271,6 +271,13 @@ test("structured submit_plan rejects incomplete assignments, foreign assets and 
   incomplete.contentPlan.assetAssignments = [];
   await rejects(
     () => gateway.dispatch(request("submit_plan", "compose_plan", { plan: incomplete })),
+    /plan_asset_assignment_incomplete/,
+  );
+
+  const camelCaseSectionId = structuredPlan(profile);
+  camelCaseSectionId.contentPlan.informationArchitecture[0]!.id = "brandFooter";
+  await rejects(
+    () => gateway.dispatch(request("submit_plan", "compose_plan", { plan: camelCaseSectionId })),
     /tool_arguments_invalid/,
   );
 
@@ -286,4 +293,44 @@ test("structured submit_plan rejects incomplete assignments, foreign assets and 
     () => gateway.dispatch(request("submit_plan", "compose_plan", { plan: drifted })),
     /plan_visual_profile_mismatch/,
   );
+});
+
+test("detail-page delivery policy accepts only the exact inspected HTML sequence", async () => {
+  const port = new MemoryControlPort();
+  const requiredStepKinds = ["compose_html", "render_html", "inspect_artifact", "finalize_output"] as const;
+  const gateway = new ScopedToolGateway(createRunControlToolDefinitions(port, {}, {
+    requiredStepKinds: [...requiredStepKinds],
+  }));
+  await rejects(
+    () => gateway.dispatch(request("submit_plan", "compose_plan", { plan: plan() })),
+    /plan_required_delivery_tools_mismatch/,
+  );
+  equal(port.approvals.size, 0);
+
+  const withExtraGeneration = plan();
+  withExtraGeneration.steps.splice(2, 0,
+    { id: "render_page", kind: "render_html", goal: "离线渲染详情页", inputAssetIds: [], dependsOn: ["compose_page"] },
+    { id: "inspect_page", kind: "inspect_artifact", goal: "检查文字与层级", inputAssetIds: [], dependsOn: ["render_page"] },
+  );
+  withExtraGeneration.steps.at(-1)!.dependsOn = ["inspect_page"];
+  await rejects(
+    () => gateway.dispatch(request("submit_plan", "compose_plan", { plan: withExtraGeneration })),
+    /plan_required_delivery_tools_mismatch/,
+  );
+  equal(port.approvals.size, 0);
+
+  const accepted: HarnessPlan = {
+    schemaVersion: 1,
+    title: "精确文案详情页",
+    summary: "使用当前产品图排版完整文案，并在交付前检查整页。",
+    steps: [
+      { id: "compose_page", kind: "compose_html", goal: "逐字排版详情页", inputAssetIds: ["asset-product"], dependsOn: [] },
+      { id: "render_page", kind: "render_html", goal: "离线渲染详情页", inputAssetIds: [], dependsOn: ["compose_page"] },
+      { id: "inspect_page", kind: "inspect_artifact", goal: "检查文字与层级", inputAssetIds: [], dependsOn: ["render_page"] },
+      { id: "finalize", kind: "finalize_output", goal: "提交长图结果", inputAssetIds: [], dependsOn: ["inspect_page"] },
+    ],
+  };
+  const result = await gateway.dispatch(request("submit_plan", "compose_plan", { plan: accepted }));
+  equal((result.value as Record<string, unknown>).status, "awaiting_plan_approval");
+  equal(port.approvals.size, 1);
 });

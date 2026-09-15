@@ -12,7 +12,7 @@ import { reserveManagedUsage } from "../_shared/usage.ts";
 
 const BUCKET = "generation-temp";
 const CONTENT_TTL_MS = 24 * 60 * 60 * 1000;
-const MIN_CARDS = 5;
+const MIN_CARDS = 1;
 const MAX_CARDS = 500;
 
 interface SanitizedCard {
@@ -73,6 +73,9 @@ function sanitizeCards(raw: unknown): SanitizedCard[] {
         throw new ApiError("invalid_request", "反推卡 section 无效");
       }
       const value = section as Record<string, unknown>;
+      if (value.title === "品牌规范" && (typeof value.body !== "string" || value.body.length > 4000)) {
+        throw new ApiError("invalid_request", "品牌标注过长，请将色板分组后重新提炼，避免截断色号");
+      }
       return { title: cleanString(value.title, 120), body: cleanString(value.body, 4000) };
     }).filter((section) => section.title && section.body);
     const dimensions: Record<string, string> = {};

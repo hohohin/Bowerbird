@@ -57,6 +57,23 @@ fn public_value(names: &[&str], files: &[HashMap<String, String>]) -> Option<Str
 }
 
 fn main() {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        let output = PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
+        let compiler = cc::Build::new().cpp(true).get_compiler();
+        for (source, name, dll) in [
+            ("windows/cli-registry.cpp", "cli-registry.dll", true),
+            ("windows/cli-launcher.cpp", "cli-launcher.exe", false),
+        ] {
+            println!("cargo:rerun-if-changed={source}");
+            let mut command = compiler.to_command();
+            command.args(["/nologo", "/O2", "/MT", "/EHsc", "/std:c++17"]);
+            if dll { command.arg("/LD"); }
+            command.arg(source).arg(format!("/Fo{}", output.join(format!("{name}.obj")).display()))
+                .arg(format!("/Fe{}", output.join(name).display()))
+                .args(["/link", "Advapi32.lib"]);
+            assert!(command.status().expect("compile CLI isolation helper").success(), "CLI isolation helper build failed");
+        }
+    }
     for name in URL_NAMES.into_iter().chain(KEY_NAMES).chain(PUBKEY_NAMES) {
         println!("cargo:rerun-if-env-changed={name}");
     }

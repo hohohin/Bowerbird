@@ -150,6 +150,20 @@ export function normalizeAgentUsageItem(raw: unknown): AgentUsageItem {
   };
 }
 
+const ARK_VISION_TOOL_NAMES = new Set(["understand_image", "understand_asset", "inspect_artifact"]);
+
+/** Bind every metered usage kind to the exact durable tool surface that may produce it. */
+export function isAgentUsageToolBindingValid(
+  item: AgentUsageItem,
+  toolName: string,
+  imageProvider: "ark" | "jimeng" | "codex",
+): boolean {
+  if (item.kind === "model_tokens") return toolName === "model_turn" && item.provider === "deepseek";
+  if (item.kind === "vision_call") return ARK_VISION_TOOL_NAMES.has(toolName) && item.provider === "ark";
+  if (item.kind === "html_render") return toolName === "render_html" && item.provider === "renderer";
+  return toolName === "generate_image" && item.provider === imageProvider;
+}
+
 export function creditsForAgentUsage(item: AgentUsageItem, pricing: AgentUsagePricing): number {
   if (item.kind === "model_tokens") {
     if (item.provider !== pricing.modelTokens.provider || item.imageCount !== 0) throw new Error("agent_usage_binding_invalid");

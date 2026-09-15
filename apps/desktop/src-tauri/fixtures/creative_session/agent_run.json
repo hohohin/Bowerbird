@@ -1,0 +1,44 @@
+{
+  "name": "agent_run",
+  "nodes": [
+    {
+      "id": "agent-ref-1",
+      "kind": "asset",
+      "role": "reference",
+      "payload": { "schema_version": 1, "snapshot": { "name": "Agent 底图", "width": 1024, "height": 1365 } },
+      "created_at": 1
+    },
+    {
+      "id": "agent-prompt-1",
+      "kind": "prompt",
+      "payload": { "schema_version": 1, "text": "把背景换成浅蓝色", "provider": "cloud", "turn_key": "agent-intent-1", "status": "accepted" },
+      "created_at": 2
+    },
+    {
+      "id": "agent-group-1",
+      "kind": "agent_group",
+      "payload": { "schema_version": 1, "run_id": "run-agent-1", "conversation_id": "conversation-agent-1", "skill_id": "bowerbird-controlled-image-edit", "status": "succeeded" },
+      "created_at": 3
+    },
+    {
+      "id": "agent-intermediate-1",
+      "kind": "asset",
+      "role": "intermediate",
+      "payload": { "schema_version": 1, "snapshot": { "name": "Agent 过程图" }, "execution": { "run_id": "run-agent-1", "artifact_id": "artifact-step-1" } },
+      "created_at": 4
+    },
+    {
+      "id": "agent-final-1",
+      "kind": "asset",
+      "role": "final",
+      "payload": { "schema_version": 1, "snapshot": { "name": "Agent 最终图" }, "execution": { "run_id": "run-agent-1", "artifact_id": "artifact-final-1" } },
+      "created_at": 5
+    }
+  ],
+  "edges": [
+    { "id": "agent-input-ref", "from_node_id": "agent-ref-1", "to_node_id": "agent-prompt-1", "kind": "input", "ordinal": 0, "created_at": 2 },
+    { "id": "agent-input-prompt", "from_node_id": "agent-prompt-1", "to_node_id": "agent-group-1", "kind": "input", "ordinal": 0, "created_at": 3 },
+    { "id": "agent-step-output", "from_node_id": "agent-group-1", "to_node_id": "agent-intermediate-1", "kind": "agent_step", "ordinal": 0, "created_at": 4 },
+    { "id": "agent-final-output", "from_node_id": "agent-group-1", "to_node_id": "agent-final-1", "kind": "produced", "ordinal": 1, "created_at": 5 }
+  ]
+}

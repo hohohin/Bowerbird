@@ -9,7 +9,6 @@ use rusqlite::OptionalExtension;
 use tauri::{AppHandle, Emitter, State};
 use ulid::Ulid;
 
-use crate::core::autoname;
 use crate::core::caption;
 use crate::core::ingest;
 use crate::core::library::{
@@ -29,6 +28,17 @@ fn hide_in_global(settings: &SettingsState, project_id: &Option<String>) -> bool
 }
 
 #[tauri::command]
+pub async fn list_library_view(
+    db: State<'_, Arc<Database>>,
+    filter: crate::core::library_view::LibraryViewFilter,
+) -> Result<crate::core::library_view::LibraryView, AppError> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || db.library_view(filter))
+        .await
+        .map_err(|e| AppError::Other(e.to_string()))?
+}
+
+#[tauri::command]
 pub async fn import_files(
     app: AppHandle,
     paths: State<'_, Arc<LibraryPaths>>,
@@ -41,11 +51,18 @@ pub async fn import_files(
     let db_for_ingest = db.clone();
     let assets = tokio::task::spawn_blocking(move || {
         let mut assets = Vec::with_capacity(sources.len());
+        let mut failures = Vec::new();
         for s in sources {
             match ingest::ingest_file(&paths, &db_for_ingest, &PathBuf::from(&s)) {
                 Ok(a) => assets.push(a),
-                Err(e) => tracing::warn!("ingest failed for {s}: {e}"),
+                Err(e) => {
+                    tracing::warn!("ingest failed for {s}: {e}");
+                    failures.push(format!("{s}: {e}"));
+                }
             }
+        }
+        if assets.is_empty() && !failures.is_empty() {
+            return Err(AppError::Other(format!("未导入任何素材：{}", failures.join("\n"))));
         }
         Ok::<_, AppError>(assets)
     })
@@ -55,12 +72,15 @@ pub async fn import_files(
         let ids: Vec<String> = assets.iter().map(|asset| asset.id.clone()).collect();
         if let Err(e) = db.add_assets_to_project(project_id, &ids) {
             tracing::warn!("failed to link imported assets to project {project_id}: {e}");
+            let _ = app.emit("library://assets-changed", ());
+            return Err(AppError::Other(format!("素材已写入素材库，但未能加入目标项目：{e}")));
         }
     }
     // 后台命名 + 反推（非阻塞，约定 7 离线降级）。
     for a in &assets {
         crate::core::autoname::spawn_auto_analyze(app.clone(), db.clone(), a.clone());
     }
+    let _ = app.emit("library://assets-changed", ());
     Ok(assets)
 }
 
@@ -74,6 +94,18 @@ pub async fn import_folder(
 ) -> Result<usize, AppError> {
     let paths = paths.inner().clone();
     let db = db.inner().clone();
+    if Path::new(&path).join(crate::core::onboarding_pack::MANIFEST).is_file() {
+        let project_id = project_id.ok_or_else(|| AppError::Other("请先新建创作，再导入包含画板的初始引导".into()))?;
+        let target_project = project_id.clone();
+        let (count, imported) = tokio::task::spawn_blocking(move || {
+            crate::core::onboarding_pack::import(&paths, &db, Path::new(&path), &target_project)
+        }).await.map_err(|e| AppError::Other(e.to_string()))??;
+        let _ = app.emit("library://assets-changed", ());
+        if imported {
+            let _ = app.emit("project-canvas://imported", serde_json::json!({ "projectId": project_id }));
+        }
+        return Ok(count);
+    }
     let db_for_ingest = db.clone();
     let assets = tokio::task::spawn_blocking(move || {
         ingest::ingest_dir(&paths, &db_for_ingest, &PathBuf::from(path))
@@ -84,11 +116,14 @@ pub async fn import_folder(
         let ids: Vec<String> = assets.iter().map(|asset| asset.id.clone()).collect();
         if let Err(e) = db.add_assets_to_project(project_id, &ids) {
             tracing::warn!("failed to link imported assets to project {project_id}: {e}");
+            let _ = app.emit("library://assets-changed", ());
+            return Err(AppError::Other(format!("素材已写入素材库，但未能加入目标项目：{e}")));
         }
     }
     for a in &assets {
         crate::core::autoname::spawn_auto_analyze(app.clone(), db.clone(), a.clone());
     }
+    let _ = app.emit("library://assets-changed", ());
     Ok(assets.len())
 }
 
@@ -139,6 +174,8 @@ pub async fn import_image_bytes(
                 "link pasted/dropped asset {} to project failed: {e}",
                 asset.id
             );
+            let _ = app.emit("library://assets-changed", ());
+            return Err(AppError::Other(format!("素材已写入素材库，但未能加入目标项目：{e}")));
         }
     }
     crate::core::autoname::spawn_auto_analyze(app.clone(), db.clone(), asset.clone());
@@ -363,6 +400,18 @@ pub async fn list_assets(
     Ok(collapse_generation_groups(v, |a: &Asset| {
         a.generation_session_id.as_deref()
     }))
+}
+
+/// 画板规范化节点按 asset_id 精确补水；不应用素材栏的分页、筛选或生成组折叠。
+#[tauri::command]
+pub async fn get_assets_by_ids(
+    db: State<'_, Arc<Database>>,
+    asset_ids: Vec<String>,
+) -> Result<Vec<Asset>, AppError> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || db.get_assets_by_ids(&asset_ids))
+        .await
+        .map_err(|e| AppError::Other(e.to_string()))?
 }
 
 /// 按 smart_query 直接查资产（`source:codex` 等），供侧栏「✨ 生成图」一键入口用
@@ -599,8 +648,8 @@ pub async fn delete_asset(
 }
 
 /// 单素材删除（右键菜单）：与「删除项目」三选项一致的语义——
-/// `keep`=仅移出当前项目（素材留全局）；`move_out`=文件移回原始位置并删资产行（同项目的独占素材直接删除）；
-/// `delete`=从全局及所有项目物理删除。`project_id` 只在 `keep` 且当前处于项目时使用。
+/// `keep`=仅移出当前项目（素材留全局）；`move_out`=文件移回原始位置，项目视图中的共享素材
+/// 只移出当前项目，全局素材库中的操作会删资产行及全部项目关系；`delete`=从全局及所有项目物理删除。
 #[tauri::command]
 pub async fn delete_asset_with_mode(
     app: AppHandle,
@@ -978,18 +1027,7 @@ pub async fn set_asset_tags(
 ) -> Result<(), AppError> {
     let db = db.inner().clone();
     tokio::task::spawn_blocking(move || {
-        let ids: Vec<String> = names
-            .iter()
-            .filter_map(|n| {
-                let n = n.trim();
-                if n.is_empty() {
-                    None
-                } else {
-                    db.get_or_create_tag(n, &source).ok()
-                }
-            })
-            .collect();
-        db.set_asset_tags(&asset_id, &ids, &source)
+        db.edit_classification_tags(&asset_id, &names, &source)
     })
     .await
     .map_err(|e| AppError::Other(e.to_string()))??;
@@ -1002,8 +1040,10 @@ pub async fn set_asset_tags(
 /// 立即返回，后台逐张跑并 emit `classify://progress {done,total,ended?}`。
 #[tauri::command]
 pub async fn reclassify_all(app: AppHandle, db: State<'_, Arc<Database>>) -> Result<(), AppError> {
-    autoname::spawn_reclassify_all(app, db.inner().clone());
-    Ok(())
+    use tauri::Manager;
+    let classifier=app.state::<Arc<crate::core::local_classification::LocalClassifier>>().inner().clone();
+    let paths=app.state::<Arc<LibraryPaths>>().inner().clone();
+    classifier.start(app,db.inner().clone(),paths,false,None,true).map_err(AppError::Other)
 }
 
 // ============ 颜色量化（P3）============

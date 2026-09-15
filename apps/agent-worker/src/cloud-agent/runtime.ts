@@ -4,6 +4,7 @@ import {
   AgentControlError,
   type ClaimedAgentRun,
 } from "../control-plane/agent-control-client.ts";
+import { IdlePollBackoff } from "../idle-poll-backoff.ts";
 
 export type AgentWorkerConfig = {
   controlUrl: string;
@@ -161,6 +162,7 @@ export async function runAgentWorker(
   const stop = options.stop ?? { requested: false };
   const sleep = options.sleep ?? defaultSleep;
   const now = options.now ?? Date.now;
+  const idleBackoff = new IdlePollBackoff(config.pollIntervalMs);
   let lastMaintenanceAt = Number.NEGATIVE_INFINITY;
   console.log(JSON.stringify({ event: "agent_worker_started", worker_id: config.workerId }));
   while (!stop.requested) {
@@ -175,6 +177,7 @@ export async function runAgentWorker(
     try {
       const claimed = await control.claim();
       if (claimed.run) {
+        idleBackoff.reset();
         if (config.testClaimDelayMs > 0) {
           console.log(JSON.stringify({
             event: "agent_test_claim_delay",
@@ -186,11 +189,11 @@ export async function runAgentWorker(
         }
         await executeClaimedAgentRun(claimed, control, processor, stop, config.heartbeatIntervalMs, sleep);
       } else {
-        await sleep(config.pollIntervalMs);
+        await sleep(idleBackoff.nextDelayMs());
       }
     } catch (error) {
       console.error(JSON.stringify({ event: "agent_claim_failed", error: safeErrorCode(error) }));
-      if (!stop.requested) await sleep(Math.max(config.pollIntervalMs, 5_000));
+      if (!stop.requested) await sleep(Math.max(idleBackoff.nextDelayMs(), 5_000));
     }
   }
 }

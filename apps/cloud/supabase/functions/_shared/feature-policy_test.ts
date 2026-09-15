@@ -7,6 +7,7 @@ import {
   HTML_LAYOUT_RENDER_SKILL,
   policyFor,
   policyForUser,
+  UNIFIED_AGENT_SKILL,
 } from "./feature-policy.ts";
 
 Deno.test("agent policy is derived with the rest of the tier policy", () => {
@@ -50,7 +51,7 @@ Deno.test("A8 test-only access mode hides agent capability for unmarked accounts
 
   const marked = policyForUser("free", { app_metadata: { bowerbird_test: true } }, { agentTestOnly: true });
   assertEquals(marked.can_use_agent_runs, true);
-  assertEquals(marked.allowed_agent_skills, [CONTROLLED_IMAGE_EDIT_SKILL, HTML_LAYOUT_RENDER_SKILL]);
+  assertEquals(marked.allowed_agent_skills, [CONTROLLED_IMAGE_EDIT_SKILL, HTML_LAYOUT_RENDER_SKILL, UNIFIED_AGENT_SKILL]);
 
   const openMode = policyForUser("free", { app_metadata: {} }, { agentTestOnly: false });
   assertEquals(openMode.can_use_agent_runs, true);
@@ -66,4 +67,12 @@ Deno.test("H3 HTML layout skill is visible only to bowerbird_test accounts (POC 
   assertEquals(markedOpen.allowed_agent_skills.includes(HTML_LAYOUT_RENDER_SKILL), true);
   // 档位本身（policyFor）不包含 HTML Skill——只有用户级策略按标记追加。
   assertEquals(policyFor("pro").allowed_agent_skills.includes(HTML_LAYOUT_RENDER_SKILL), false);
+});
+
+Deno.test("U6 unified Agent skill is visible only to bowerbird_test accounts", () => {
+  const unmarked = policyForUser("pro", { app_metadata: {} }, { agentTestOnly: false });
+  const marked = policyForUser("pro", { app_metadata: { bowerbird_test: true } }, { agentTestOnly: false });
+  assertEquals(unmarked.allowed_agent_skills.includes(UNIFIED_AGENT_SKILL), false);
+  assertEquals(marked.allowed_agent_skills.includes(UNIFIED_AGENT_SKILL), true);
+  assertEquals(policyFor("pro").allowed_agent_skills.includes(UNIFIED_AGENT_SKILL), false);
 });

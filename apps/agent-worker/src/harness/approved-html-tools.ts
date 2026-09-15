@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { sanitizeHtml } from "../contracts/renderer-preflight/sanitizer.ts";
 
 import {
   AgentControlError,
@@ -44,6 +45,40 @@ export interface ApprovedHtmlControl extends DurableToolControl {
 export interface ApprovedHtmlWorkspace {
   rememberHtmlDocument(artifact: RegisteredAgentArtifact, html: string): void;
   rememberRemoteArtifact(artifact: RegisteredAgentArtifact): void;
+}
+
+function normalizedText(value: string): string {
+  return value.normalize("NFKC").replace(/\s+/g, "").trim();
+}
+
+function decodeHtmlEntities(value: string): string {
+  const named: Record<string, string> = {
+    amp: "&", apos: "'", gt: ">", lt: "<", nbsp: " ", quot: '"',
+  };
+  return value.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (entity, token: string) => {
+    if (token.startsWith("#x") || token.startsWith("#X")) {
+      const codePoint = Number.parseInt(token.slice(2), 16);
+      return Number.isSafeInteger(codePoint) && codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : entity;
+    }
+    if (token.startsWith("#")) {
+      const codePoint = Number.parseInt(token.slice(1), 10);
+      return Number.isSafeInteger(codePoint) && codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : entity;
+    }
+    return named[token.toLowerCase()] ?? entity;
+  });
+}
+
+function visibleHtmlText(html: string): string {
+  const body = html.match(/<body\b[^>]*>([\s\S]*?)<\/body>/i)?.[1] ?? html.replace(/<head\b[^>]*>[\s\S]*?<\/head>/gi, " ");
+  return normalizedText(decodeHtmlEntities(body.replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ")));
+}
+
+function validateRequiredTextLines(html: string, requiredTextLines: readonly string[]): void {
+  if (!requiredTextLines.length) return;
+  const visibleText = visibleHtmlText(html);
+  if (requiredTextLines.some((line) => !visibleText.includes(normalizedText(line)))) {
+    throw new Error("approved_html_exact_copy_missing");
+  }
 }
 
 type ComposeResult = { html: string; artifact?: RegisteredAgentArtifact };
@@ -117,6 +152,7 @@ export function createApprovedComposeHtmlToolDefinition(args: {
   approvedPlanHash: string;
   step: HarnessPlanStep;
   resourceArtifactIds: readonly string[];
+  requiredTextLines?: readonly string[];
   control: ApprovedHtmlControl;
   workspace: ApprovedHtmlWorkspace;
 }): ToolGatewayDefinition {
@@ -124,6 +160,7 @@ export function createApprovedComposeHtmlToolDefinition(args: {
     throw new Error("unified_agent_html_compose_definition_invalid");
   }
   const resources = [...args.resourceArtifactIds];
+  const requiredTextLines = [...(args.requiredTextLines ?? [])];
   const dispatcher = new DurableToolDispatcher(args.control, new ApprovedComposeHtmlAdapter({
     runId: args.runId,
     leaseId: args.leaseId,
@@ -136,7 +173,13 @@ export function createApprovedComposeHtmlToolDefinition(args: {
     allowedPhases: ["execute_approved_plan"],
     requiresApproval: true,
     approvedPlanHash: args.approvedPlanHash,
-    validate: (value) => validateComposeHtmlDocumentAction(value, resources),
+    validate: (value) => {
+      const document = validateComposeHtmlDocumentAction(value, resources);
+      const preflight = sanitizeHtml(document.html);
+      if (!preflight.ok) throw new Error(`approved_html_preflight:${preflight.reason}`);
+      validateRequiredTextLines(document.html, requiredTextLines);
+      return document;
+    },
     dispatcher: {
       async dispatch(identity: DurableToolIdentity, value: unknown) {
         if (identity.runId !== args.runId || identity.leaseId !== args.leaseId || identity.toolName !== "compose_html") {
