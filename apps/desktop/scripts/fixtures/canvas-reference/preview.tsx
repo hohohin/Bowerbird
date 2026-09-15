@@ -27,6 +27,12 @@ const assets = ["existing", "a", "b", "c", "d"].map((id, i) => ({ id, name: `合
   ...(sourceLibrary ? { thumb_path: image(["#64748b", "#0369a1", "#4f46e5", "#0d9488", "#9333ea"][i]) } : {}),
   store_path: image(["#64748b", "#0369a1", "#4f46e5", "#0d9488", "#9333ea"][i]), source: "imported" }));
 if (explorer) assets.push({ ...assets[1], id: "collected", name: "网页采集图片", source: "extension" });
+if (sessionStorage.getItem("canvas-media-dimensions")) {
+  for (const [id, width, height] of [["a", 1600, 400], ["b", 400, 1600]] as const) {
+    const asset = assets.find(asset => asset.id === id)!;
+    Object.assign(asset, { width, height, store_path: `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="#64748b"/></svg>`)}` });
+  }
+}
 assets.push(...JSON.parse(sessionStorage.getItem("reference-drafts") || "[]"));
 const payload = (id: string) => JSON.stringify({ schema_version: 1, snapshot: { name: `合成参考 ${id}`, width: 190, height: 150 } });
 let snapshot = JSON.parse(sessionStorage.getItem("reference-fixture") || "null") || {
@@ -87,9 +93,25 @@ w.__TAURI_INTERNALS__ = {
       const node = { ...args.value, hiddenAt: null, createdAt: 10, updatedAt: 10 };
       snapshot.nodes.push(node); return node;
     }
+    if (command === "project_canvas_note_update") {
+      if (w.failNoteSave) throw "模拟文本保存失败";
+      const node = snapshot.nodes.find((n: any) => n.id === args.nodeId);
+      node.payloadJson = args.payloadJson; return structuredClone(node);
+    }
     if (command === "project_canvas_node_update") {
       const node = snapshot.nodes.find((n: any) => n.id === args.nodeId);
       Object.assign(node, args.value); return structuredClone(node);
+    }
+    if (command === "project_canvas_node_remove") {
+      const node = snapshot.nodes.find((n: any) => n.id === args.nodeId);
+      if (node) node.hiddenAt = 20;
+      return null;
+    }
+    if (command === "project_canvas_node_restore") {
+      const node = snapshot.nodes.find((n: any) => n.id === args.nodeId);
+      if (!node) return false;
+      node.hiddenAt = null;
+      return true;
     }
     if (command === "project_canvas_group_update") {
       const group = snapshot.groups.find((g: any) => g.id === args.value.id);

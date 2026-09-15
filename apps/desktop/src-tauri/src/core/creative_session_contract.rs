@@ -219,6 +219,52 @@ pub struct AgentGroupNodePayloadV1 {
 pub struct NoteNodePayloadV1 {
     pub schema_version: u8,
     pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note_type: Option<CanvasNoteType>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cells: Vec<Vec<CanvasTextCell>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub member_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_height_percent: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bubble_tail: Option<CanvasBubbleTail>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CanvasBubbleTail {
+    pub side: CanvasBubbleSide,
+    pub position: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CanvasBubbleSide { Top, Right, Bottom, Left }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CanvasNoteType {
+    Text,
+    Section,
+    Bubble,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CanvasTextAlign {
+    Left,
+    Center,
+    Right,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CanvasTextCell {
+    pub text: String,
+    pub bold: bool,
+    pub italic: bool,
+    pub align: CanvasTextAlign,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -233,6 +279,12 @@ pub enum CreativeNodePayload {
 pub enum CreativeContractError {
     #[error("creative node payload exceeds {MAX_CREATIVE_NODE_PAYLOAD_BYTES} bytes")]
     PayloadTooLarge,
+    #[error("text card rows must have the same nonzero number of columns")]
+    InvalidNoteGrid,
+    #[error("text card line height must be between 100 and 300 percent")]
+    InvalidNoteLineHeight,
+    #[error("bubble notes require one cell and an edge position between 0 and 100")]
+    InvalidBubbleNote,
     #[error("invalid creative JSON: {0}")]
     InvalidJson(#[from] serde_json::Error),
     #[error("creative node payload is missing integer schema_version")]
@@ -543,7 +595,24 @@ fn parse_node_payload_value(
         CreativeNodeKind::AgentGroup => {
             CreativeNodePayload::AgentGroup(serde_json::from_value(value)?)
         }
-        CreativeNodeKind::Note => CreativeNodePayload::Note(serde_json::from_value(value)?),
+        CreativeNodeKind::Note => {
+            let note: NoteNodePayloadV1 = serde_json::from_value(value)?;
+            if note.line_height_percent.is_some_and(|height| !(100..=300).contains(&height)) {
+                return Err(CreativeContractError::InvalidNoteLineHeight);
+            }
+            let bubble = note.note_type == Some(CanvasNoteType::Bubble);
+            if (bubble && (note.cells.len() != 1 || note.cells[0].len() != 1))
+                || note.bubble_tail.as_ref().is_some_and(|tail| !bubble || tail.position > 100)
+            {
+                return Err(CreativeContractError::InvalidBubbleNote);
+            }
+            if let Some(first) = note.cells.first() {
+                if first.is_empty() || note.cells.iter().any(|row| row.len() != first.len()) {
+                    return Err(CreativeContractError::InvalidNoteGrid);
+                }
+            }
+            CreativeNodePayload::Note(note)
+        }
     })
 }
 

@@ -114,6 +114,15 @@ pub async fn project_canvas_node_create(
 }
 
 #[tauri::command]
+pub async fn project_canvas_note_update(
+    db: State<'_, Arc<Database>>,
+    node_id: String,
+    payload_json: String,
+) -> AppResult<CanvasNode> {
+    db.update_canvas_note_payload(&node_id, &payload_json)
+}
+
+#[tauri::command]
 pub async fn project_canvas_node_update(
     db: State<'_, Arc<Database>>,
     node_id: String,

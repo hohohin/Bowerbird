@@ -23,7 +23,7 @@ use crate::db::Database;
 use crate::error::{AppError, AppResult};
 
 pub const PROJECT_CANVAS_DRAFT_SCHEMA_VERSION: u64 = 1;
-pub const MIN_PROJECT_CANVAS_ZOOM: f64 = 0.35;
+pub const MIN_PROJECT_CANVAS_ZOOM: f64 = 0.1;
 pub const MAX_PROJECT_CANVAS_ZOOM: f64 = 2.4;
 
 /// Hide every instance of a removed asset, retaining graph/history identities.
@@ -1533,6 +1533,26 @@ impl Database {
             .collect::<Result<Vec<_>, _>>()
             .map_err(AppError::from)?;
         Ok(nodes)
+    }
+
+    pub fn update_canvas_note_payload(&self, node_id: &str, payload_json: &str) -> AppResult<CanvasNode> {
+        parse_node_payload(CreativeNodeKind::Note, payload_json)
+            .map_err(|error| invalid(error.to_string()))?;
+        let now = Utc::now().timestamp();
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        let existing = get_node_tx(&tx, node_id)?.ok_or_else(|| invalid("note not found"))?;
+        if existing.kind != CreativeNodeKind::Note || existing.hidden_at.is_some() {
+            return Err(invalid("only visible notes can be edited"));
+        }
+        tx.execute(
+            "UPDATE canvas_nodes SET payload_json=?2,updated_at=?3 WHERE id=?1",
+            params![node_id, payload_json, now],
+        )?;
+        touch_canvas_tx(&tx, &existing.project_id, now)?;
+        let updated = get_node_tx(&tx, node_id)?.ok_or_else(|| invalid("note not found"))?;
+        tx.commit()?;
+        Ok(updated)
     }
 
     pub fn update_canvas_node_layout(
@@ -3065,6 +3085,75 @@ mod tests {
                 .unwrap(),
             1
         );
+    }
+
+    #[test]
+    fn note_editing_preserves_layout_and_rejects_execution_nodes() {
+        let db = db();
+        materialize(&db, "p1");
+        let original = db.create_canvas_node(&note("p1", "text")).unwrap();
+        let payload = r#"{"schema_version":1,"text":"hello","note_type":"text","cells":[[{"text":"hello","bold":true,"italic":true,"align":"center"}]],"member_ids":[]}"#;
+        let updated = db.update_canvas_note_payload("text", payload).unwrap();
+        assert_eq!(updated.payload_json, payload);
+        assert_eq!((updated.x, updated.y, updated.width), (original.x, original.y, original.width));
+        assert_eq!(updated.thread_id, None);
+        for height in [100, 155, 300] {
+            let mut spaced: serde_json::Value = serde_json::from_str(payload).unwrap();
+            spaced["line_height_percent"] = serde_json::json!(height);
+            let json = spaced.to_string();
+            db.update_canvas_note_payload("text", &json).unwrap();
+            let snapshot = db.project_canvas_snapshot("p1").unwrap();
+            assert_eq!(snapshot.nodes.iter().find(|node| node.id == "text").unwrap().payload_json, json);
+        }
+        for height in [99, 301] {
+            let mut spaced: serde_json::Value = serde_json::from_str(payload).unwrap();
+            spaced["line_height_percent"] = serde_json::json!(height);
+            assert!(db.update_canvas_note_payload("text", &spaced.to_string()).is_err());
+        }
+        let view = CanvasViewInput {
+            project_id: "p1".into(), pan_x: 0.0, pan_y: 0.0, zoom: 0.1,
+            source_panel_width: None, workspace_width: None, active_node_id: None,
+            focused_thread_id: None, view_mode: ProjectCanvasViewMode::Canvas,
+            timeline_scope: ProjectTimelineScope::All,
+        };
+        db.upsert_canvas_view(&view).unwrap();
+        assert_eq!(db.project_canvas_snapshot("p1").unwrap().view.unwrap().zoom, 0.1);
+        assert!(db.update_canvas_note_payload("text", r#"{"schema_version":1,"text":"","cells":[[]]}"#).is_err());
+        let section = r#"{"schema_version":1,"text":"分区","note_type":"section","cells":[],"member_ids":["text"]}"#;
+        db.create_canvas_node(&NewCanvasNode { payload_json: section.into(), ..note("p1", "section") }).unwrap();
+        assert_eq!(db.project_canvas_snapshot("p1").unwrap().nodes.len(), 2);
+        db.create_creative_thread(&NewCreativeThread { id: "t".into(), project_id: "p1".into(), title: "t".into(), origin: CreativeThreadOrigin::Direct }).unwrap();
+        db.create_canvas_node(&prompt("p1", "t", "execution")).unwrap();
+        assert!(db.update_canvas_note_payload("execution", payload).is_err());
+        db.remove_canvas_node("text").unwrap();
+        assert!(db.update_canvas_note_payload("text", payload).is_err());
+    }
+
+    #[test]
+    fn bubble_notes_persist_tail_and_reject_table_cells() {
+        let db = db();
+        materialize(&db, "p1");
+        let mut payload = serde_json::json!({
+            "schema_version": 1, "text": "说明", "note_type": "bubble",
+            "cells": [[{"text":"说明", "bold":false, "italic":false, "align":"left"}]],
+            "bubble_tail": {"side":"bottom", "position":25}
+        });
+        db.create_canvas_node(&NewCanvasNode { payload_json: payload.to_string(), ..note("p1", "bubble") }).unwrap();
+        for side in ["top", "right", "bottom", "left"] {
+            payload["bubble_tail"] = serde_json::json!({"side":side, "position":65});
+            db.update_canvas_note_payload("bubble", &payload.to_string()).unwrap();
+            assert_eq!(db.project_canvas_snapshot("p1").unwrap().nodes[0].payload_json, payload.to_string());
+        }
+        payload["bubble_tail"]["position"] = serde_json::json!(101);
+        assert!(db.update_canvas_note_payload("bubble", &payload.to_string()).is_err());
+        payload["bubble_tail"]["position"] = serde_json::json!(25);
+        let cell = payload["cells"][0][0].clone();
+        payload["cells"] = serde_json::json!([[cell.clone(), cell.clone()]]);
+        assert!(db.update_canvas_note_payload("bubble", &payload.to_string()).is_err());
+        payload["cells"] = serde_json::json!([[cell.clone()], [cell]]);
+        assert!(db.update_canvas_note_payload("bubble", &payload.to_string()).is_err());
+        payload["cells"] = serde_json::json!([]);
+        assert!(db.update_canvas_note_payload("bubble", &payload.to_string()).is_err());
     }
 
     #[test]

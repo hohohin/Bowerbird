@@ -160,7 +160,7 @@ export function findCanvasHoverTarget<T extends CanvasSnapAnchor>(
 }
 
 export function clampCanvasZoom(value: number) {
-  return Math.min(2.4, Math.max(0.35, value));
+  return Math.min(2.4, Math.max(0.1, value));
 }
 
 /** 画板平移只接受中键，或按住空格时的左键。 */

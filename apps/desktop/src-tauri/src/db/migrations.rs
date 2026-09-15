@@ -76,6 +76,8 @@ pub fn migrations() -> Migrations<'static> {
         M::up(include_str!("../../sql/0025_shared_generated_reference_inputs.sql")),
         M::up(include_str!("../../sql/0026_local_classification.sql")),
         M::up(include_str!("../../sql/0027_independent_visual_profiles.sql")),
+        M::up(include_str!("../../sql/0028_canvas_zoom_10.sql")),
+        M::up(include_str!("../../sql/0029_onboarding_imports.sql")),
     ])
 }
 
@@ -218,6 +220,31 @@ fn backfill_asset_reference_counts(tx: &rusqlite::Transaction) -> rusqlite_migra
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn canvas_zoom_upgrade_preserves_view_and_constraints() {
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        migrations().to_version(&mut conn, 27).unwrap();
+        conn.execute_batch(r#"
+            INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES ('zoom-p','Project','blank:zoom-p','blank:zoom-p',1),('zoom-q','Other','blank:zoom-q','blank:zoom-q',1);
+            INSERT INTO project_canvases(project_id,draft_json,created_at,updated_at) VALUES ('zoom-p','{}',1,1),('zoom-q','{}',1,1);
+            INSERT INTO creative_threads(id,project_id,title,origin,created_at,updated_at) VALUES ('zoom-t','zoom-p','Thread','direct',1,1);
+            INSERT INTO canvas_nodes(id,project_id,kind,payload_json,x,y,width,height,z_index,created_at,updated_at) VALUES ('zoom-n','zoom-p','note','{"schema_version":1,"text":"keep"}',10,20,300,180,1,1,1);
+            INSERT INTO canvas_views(project_id,pan_x,pan_y,zoom,source_panel_width,active_node_id,focused_thread_id,view_mode,timeline_scope,updated_at) VALUES ('zoom-p',12,34,0.35,280,'zoom-n','zoom-t','canvas','all',123);
+        "#).unwrap();
+        let before: String = conn.query_row("SELECT json_array(project_id,pan_x,pan_y,zoom,source_panel_width,active_node_id,focused_thread_id,view_mode,timeline_scope,updated_at) FROM canvas_views WHERE project_id='zoom-p'", [], |row| row.get(0)).unwrap();
+        migrations().to_latest(&mut conn).unwrap();
+        let after: String = conn.query_row("SELECT json_array(project_id,pan_x,pan_y,zoom,source_panel_width,active_node_id,focused_thread_id,view_mode,timeline_scope,updated_at) FROM canvas_views WHERE project_id='zoom-p'", [], |row| row.get(0)).unwrap();
+        assert_eq!(before, after);
+        conn.execute("UPDATE canvas_views SET zoom=0.1 WHERE project_id='zoom-p'", []).unwrap();
+        assert!(conn.execute("UPDATE canvas_views SET zoom=0.09 WHERE project_id='zoom-p'", []).is_err());
+        assert!(conn.execute("UPDATE canvas_views SET zoom=2.5 WHERE project_id='zoom-p'", []).is_err());
+        assert!(conn.execute("INSERT INTO canvas_views(project_id,active_node_id,updated_at) VALUES ('zoom-q','zoom-n',1)", []).is_err());
+        assert!(conn.execute("UPDATE canvas_views SET project_id='zoom-q' WHERE project_id='zoom-p'", []).is_err());
+        assert_eq!(conn.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
+        migrations().to_latest(&mut conn).unwrap();
+    }
     use crate::media::phash;
     use image::RgbImage;
 

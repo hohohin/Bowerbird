@@ -1,4 +1,9 @@
 import { LearningHint } from "./OnboardingTour";
+import { CanvasTextCard } from "./CanvasTextCard";
+import { CanvasResizeHandle } from "./CanvasResizeHandle";
+import { ReadonlyPrompt } from "./creation/ReadonlyPrompt";
+import "./CanvasNotes.css";
+import { canvasSectionMembers, canvasTextMinSize, emptyCanvasCell, expandCanvasSections, readCanvasNote, type CanvasNotePayload } from "../lib/canvasNotes";
 import { beginOnboardingOperation, useOnboarding } from "../lib/onboardingStore";
 import { notify, notifyError } from "../lib/notify";
 import { arrangeCanvasNodes } from "../lib/canvasArrangement";
@@ -33,6 +38,11 @@ import {
   Maximize2,
   Minus,
   Move,
+  MousePointer2,
+  MessageCircle,
+  Frame,
+  Type,
+  GripHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
   PenTool,
@@ -91,11 +101,14 @@ import {
   snapCanvasRect,
   translateCanvasSelection,
   type CanvasPoint,
+  type CanvasRect,
   type CanvasSnapGuide,
 } from "../lib/canvasLogic";
 import { BOARD_ASSET_PICK_EVENT } from "./creation/useCreationEditor";
 import {
   canvasSourceColumnCount,
+  canvasAssetNodeSize,
+  canvasPromptReferences,
   agentPromptGroupMap,
   CANVAS_REMOVE_NODES_EVENT,
   CANVAS_ARRANGE_NODES_EVENT,
@@ -212,9 +225,7 @@ function activeFromProject(
 }
 
 function assetNodeSize(asset: CanvasAssetSnapshot) {
-  const ratio = asset.width && asset.height ? asset.height / asset.width : 0.78;
-  const imageHeight = Math.min(242, Math.max(112, Math.round(ASSET_WIDTH * ratio)));
-  return { width: ASSET_WIDTH, height: imageHeight + 30 };
+  return canvasAssetNodeSize(asset, ASSET_WIDTH);
 }
 
 function nodeRect(node: { x: number; y: number; width: number; height: number }) {
@@ -644,6 +655,9 @@ export function CanvasWorkspace({
   const resizeRef = useRef<{ pointerId: number; startX: number; width: number; moved: boolean } | null>(null);
   const marqueePressRef = useRef<CanvasMarqueePress | null>(null);
   const selectedCanvasNodeIdsRef = useRef(selectedCanvasNodeIds);
+  const [drawingTool, setDrawingTool] = useState<"select" | "section" | "text" | "bubble">("select");
+  const [sectionPreview, setSectionPreview] = useState<CanvasRect | null>(null);
+  const sectionDrawRef = useRef<{ pointerId: number; start: CanvasPoint } | null>(null);
 
   nodesRef.current = nodes;
   graphNodesRef.current = graphNodes;
@@ -659,6 +673,9 @@ export function CanvasWorkspace({
 
   useEffect(() => {
     setSelectedCanvasNodeIds(new Set());
+    setDrawingTool("select");
+    setSectionPreview(null);
+    sectionDrawRef.current = null;
     setCanvasLightbox(null);
     removalHistoryRef.current = [];
     setCanvasMarquee(null);
@@ -937,7 +954,7 @@ export function CanvasWorkspace({
 
   function applySnapshot(
     snapshot: Awaited<ReturnType<typeof api.projectCanvasGet>>,
-    options: { restoreView: boolean },
+    options: { restoreView: boolean; restoreDraft?: boolean },
     exactAssets: Asset[],
     expectedRouteRevision: number,
   ) {
@@ -968,7 +985,7 @@ export function CanvasWorkspace({
     // A background execution refresh owns graph projection only. The live title
     // and composer draft are user-owned local state and may be newer than the
     // snapshot that was in flight.
-    if (options.restoreView) {
+    if (options.restoreView && options.restoreDraft !== false) {
       replaceActive(activeFromProject(currentProject, snapshot.canvas.draftJson));
     }
     groupsRef.current = new Map(snapshot.groups.map((group) => [group.id, group]));
@@ -1351,6 +1368,8 @@ export function CanvasWorkspace({
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
     let unlistenAssets: UnlistenFn | undefined;
+    let unlistenImport: UnlistenFn | undefined;
+    let restoreImportedView = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let alive = true;
     let refreshVersion = 0;
@@ -1400,7 +1419,9 @@ export function CanvasWorkspace({
           scheduleRefresh(eventProjectId, 80);
           return;
         }
-        applySnapshot(snapshot, { restoreView: false }, exactAssets, refreshRouteRevision);
+        if (applySnapshot(snapshot, { restoreView: restoreImportedView, restoreDraft: false }, exactAssets, refreshRouteRevision)) {
+          restoreImportedView = false;
+        }
       } catch (reason) {
         reportError(reason);
       }
@@ -1412,6 +1433,15 @@ export function CanvasWorkspace({
       if (projectId && activeCanvasRef.current.materialized) scheduleRefresh(projectId, 40);
     }).then((cleanup) => {
       if (alive) unlistenAssets = cleanup;
+      else cleanup();
+    });
+
+    listen<{ projectId: string }>("project-canvas://imported", (event) => {
+      if (event.payload.projectId !== projectId) return;
+      restoreImportedView = true;
+      scheduleRefresh(event.payload.projectId, 0);
+    }).then((cleanup) => {
+      if (alive) unlistenImport = cleanup;
       else cleanup();
     });
 
@@ -1448,6 +1478,7 @@ export function CanvasWorkspace({
       refreshVersion += 1;
       unlisten?.();
       unlistenAssets?.();
+      unlistenImport?.();
       if (timer) clearTimeout(timer);
     };
   }, [projectId]);
@@ -1557,6 +1588,9 @@ export function CanvasWorkspace({
         return;
       }
       if (event.key !== "Escape") return;
+      setDrawingTool("select");
+      sectionDrawRef.current = null;
+      setSectionPreview(null);
       if (shouldCloseProjectInspectorOnEscape({
         key: event.key,
         open: scopedInspectorOpen,
@@ -1983,7 +2017,7 @@ export function CanvasWorkspace({
     const agentPrompts = agentPromptGroupMap(graph, graphEdges);
     return [
       ...materials.map((node) => ({ id: node.id, order: node.order, rect: nodeRect(node) })),
-      ...graph.filter((node) => (node.kind === "prompt" || node.kind === "agent_group")
+      ...graph.filter((node) => (node.kind === "prompt" || node.kind === "agent_group" || node.kind === "note")
         && !agentPrompts.has(node.id)
         && node.hiddenAt == null && (!node.threadId || !archived.has(node.threadId)))
         .map((node) => ({ id: node.id, order: node.zIndex, rect: nodeRect(node) })),
@@ -2006,7 +2040,11 @@ export function CanvasWorkspace({
       if (node.kind === "folder") for (const asset of node.assets) aliases.set(asset.id, node.id);
     }
     for (const [id, group] of agentPromptGroupMap(graphNodesRef.current, graphEdges)) aliases.set(id, group.id);
-    const anchors = selectionAnchors();
+    const sections = graphNodesRef.current.filter(node => node.kind === "note" && node.hiddenAt == null && readCanvasNote(node).note_type === "section");
+    const sectionOwners = new Map(sections.flatMap(section => readCanvasNote(section).member_ids.map(id => [id, section.id] as const)));
+    const allAnchors = selectionAnchors();
+    const anchors = allAnchors.filter(anchor => !sectionOwners.has(anchor.id));
+    const resolveAnchor = (id: string) => sectionOwners.get(aliases.get(id) ?? id) ?? aliases.get(id) ?? id;
     const elements = new Map(Array.from(stageRef.current?.querySelectorAll<HTMLElement>("[data-canvas-node-id]") ?? [])
       .map((element) => [element.dataset.canvasNodeId, element]));
     for (const anchor of anchors) {
@@ -2017,10 +2055,17 @@ export function CanvasWorkspace({
       }
     }
     const positions = arrangeCanvasNodes(anchors, graphEdges.map((edge) => ({
-      fromNodeId: aliases.get(edge.fromNodeId) ?? edge.fromNodeId,
-      toNodeId: aliases.get(edge.toNodeId) ?? edge.toNodeId,
-    })), nodeIds);
+      fromNodeId: resolveAnchor(edge.fromNodeId),
+      toNodeId: resolveAnchor(edge.toNodeId),
+    })), [...nodeIds].map(resolveAnchor));
     if (positions.size === 0) return;
+    for (const section of sections) {
+      const position = positions.get(section.id);
+      if (!position) continue;
+      for (const member of allAnchors.filter(anchor => sectionOwners.get(anchor.id) === section.id)) {
+        positions.set(member.id, { x: member.rect.x + position.x - section.x, y: member.rect.y + position.y - section.y });
+      }
+    }
     const next = nodesRef.current.map((node) => positions.has(node.id) ? { ...node, ...positions.get(node.id)! } : node);
     const graph = graphNodesRef.current.map((node) => positions.has(node.id) ? { ...node, ...positions.get(node.id)! } : node);
     commitNodes(next);
@@ -2029,7 +2074,7 @@ export function CanvasWorkspace({
     setSelectedCanvasNodeIds(new Set(positions.keys()));
     persistGeometries(next.filter((node) => positions.has(node.id)));
     for (const node of graph) {
-      if (positions.has(node.id) && (node.kind === "prompt" || node.kind === "agent_group")) persistGraphNodeGeometry(node);
+      if (positions.has(node.id) && node.kind !== "asset") persistGraphNodeGeometry(node);
     }
   }
 
@@ -2132,9 +2177,9 @@ export function CanvasWorkspace({
     event.stopPropagation();
     const point = toBoardPoint(event.clientX, event.clientY);
     const toggleSelection = event.ctrlKey || event.metaKey;
-    const selectedIds = toggleSelection || selectedCanvasNodeIdsRef.current.has(node.id)
+    const selectedIds = expandCanvasSections(toggleSelection || selectedCanvasNodeIdsRef.current.has(node.id)
       ? new Set([...selectedCanvasNodeIdsRef.current, node.id])
-      : new Set([node.id]);
+      : new Set([node.id]), graphNodesRef.current);
     nodeDragRef.current = {
       nodeId: node.id,
       toggleSelection,
@@ -2165,8 +2210,8 @@ export function CanvasWorkspace({
       toggleSelection,
       initialNodes: graphNodesRef.current,
       initialMaterialNodes: nodesRef.current,
-      selectedIds: toggleSelection || selectedCanvasNodeIdsRef.current.has(node.id)
-        ? new Set([...selectedCanvasNodeIdsRef.current, node.id]) : new Set([node.id]),
+      selectedIds: expandCanvasSections(toggleSelection || selectedCanvasNodeIdsRef.current.has(node.id)
+        ? new Set([...selectedCanvasNodeIdsRef.current, node.id]) : new Set([node.id]), graphNodesRef.current),
       pointerId: event.pointerId,
       offsetX: point.x - node.x,
       offsetY: point.y - node.y,
@@ -2176,7 +2221,7 @@ export function CanvasWorkspace({
     };
     if (!toggleSelection) {
       focusGraphNode(node.id);
-      if (!selectedCanvasNodeIdsRef.current.has(node.id)) setSelectedCanvasNodeIds(new Set());
+      if (!selectedCanvasNodeIdsRef.current.has(node.id)) setSelectedCanvasNodeIds(new Set(node.kind === "note" ? [node.id] : []));
     }
     event.currentTarget.setPointerCapture(event.pointerId);
   }
@@ -2239,7 +2284,7 @@ export function CanvasWorkspace({
       commitNodes(drag.initialMaterialNodes);
     } else if (drag.moved && node) {
       suppressNodeClickRef.current = true;
-      for (const selected of graphNodesRef.current.filter((candidate) => drag.selectedIds.has(candidate.id) && (candidate.kind === "prompt" || candidate.kind === "agent_group"))) persistGraphNodeGeometry(selected);
+      for (const selected of graphNodesRef.current.filter((candidate) => drag.selectedIds.has(candidate.id) && candidate.kind !== "asset" && candidate.hiddenAt == null)) persistGraphNodeGeometry(selected);
       persistGeometries(nodesRef.current.filter((candidate) => drag.selectedIds.has(candidate.id)));
     }
     graphNodeDragRef.current = null;
@@ -2432,7 +2477,7 @@ export function CanvasWorkspace({
       }
     } else if (moving && drag.moved) {
       persistGeometries(nodesRef.current.filter((node) => drag.selectedIds.has(node.id)));
-      for (const selected of graphNodesRef.current.filter((node) => drag.selectedIds.has(node.id) && (node.kind === "prompt" || node.kind === "agent_group"))) persistGraphNodeGeometry(selected);
+      for (const selected of graphNodesRef.current.filter((node) => drag.selectedIds.has(node.id) && node.kind !== "asset" && node.hiddenAt == null)) persistGraphNodeGeometry(selected);
     }
     nodeDragRef.current = null;
     setActiveDragId(null);
@@ -2441,6 +2486,96 @@ export function CanvasWorkspace({
     setFolderDropTargetId(null);
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }
+
+  function updateCanvasNote(nodeId: string, value: CanvasNotePayload) {
+    const payloadJson = JSON.stringify(value);
+    const node = graphNodesRef.current.find(candidate => candidate.id === nodeId);
+    if (!node) return;
+    const minimum = value.note_type !== "section" ? canvasTextMinSize(value.cells) : node;
+    const updated = { ...node, payloadJson, width: Math.max(node.width, minimum.width), height: Math.max(node.height, minimum.height) };
+    graphNodesRef.current = graphNodesRef.current.map(candidate => candidate.id === nodeId ? updated : candidate);
+    setGraphNodes(graphNodesRef.current);
+    void enqueueWrite(async () => { await api.projectCanvasNoteUpdate(nodeId, payloadJson); });
+    if (updated.width !== node.width || updated.height !== node.height) persistGraphNodeGeometry(updated);
+  }
+
+  function resizeCanvasNote(nodeId: string, size: { width: number; height: number }, finished: boolean, cancelled = false) {
+    const node = graphNodesRef.current.find(candidate => candidate.id === nodeId);
+    if (!node) return;
+    const updated = { ...node, ...size };
+    graphNodesRef.current = graphNodesRef.current.map(candidate => candidate.id === nodeId ? updated : candidate);
+    setGraphNodes(graphNodesRef.current);
+    setActiveDragId(finished ? null : nodeId);
+    if (finished && !cancelled) {
+      persistGraphNodeGeometry(updated);
+      const value = readCanvasNote(updated);
+      if (value.note_type === "section") updateCanvasNote(nodeId, { ...value, member_ids: claimSectionMembers(updated, nodeId) });
+    }
+  }
+
+  function resizeCanvasMaterial(nodeId: string, size: { width: number; height: number }, finished: boolean, cancelled = false) {
+    const node = nodesRef.current.find(candidate => candidate.id === nodeId);
+    if (!node) return;
+    const updated = { ...node, ...size };
+    commitNodes(nodesRef.current.map(candidate => candidate.id === nodeId ? updated : candidate));
+    setActiveDragId(finished ? null : nodeId);
+    if (finished && !cancelled) persistGeometries([updated]);
+  }
+
+  function claimSectionMembers(rect: CanvasRect, sectionId?: string) {
+    const otherSections = new Set(graphNodesRef.current.filter(node => node.kind === "note" && readCanvasNote(node).note_type === "section").map(node => node.id));
+    const anchors = selectionAnchors().filter(anchor => !otherSections.has(anchor.id));
+    const elements = new Map(Array.from(stageRef.current?.querySelectorAll<HTMLElement>("[data-canvas-node-id]") ?? [])
+      .map(element => [element.dataset.canvasNodeId, element]));
+    for (const anchor of anchors) {
+      const bounds = elements.get(anchor.id)?.getBoundingClientRect();
+      if (bounds) anchor.rect = { ...anchor.rect, width: bounds.width / zoomRef.current, height: bounds.height / zoomRef.current };
+    }
+    const members = canvasSectionMembers(rect, anchors);
+    // A card belongs to the most recently drawn section, never two moving parents.
+    for (const node of graphNodesRef.current) {
+      if (node.id === sectionId || !otherSections.has(node.id) || node.hiddenAt != null) continue;
+      const value = readCanvasNote(node);
+      if (value.member_ids.some(id => members.includes(id))) updateCanvasNote(node.id, { ...value, member_ids: value.member_ids.filter(id => !members.includes(id)) });
+    }
+    return members;
+  }
+
+  function createCanvasNote(rect: CanvasRect, noteType: "text" | "section" | "bubble") {
+    const draft = activeCanvasRef.current;
+    const members = noteType === "section" ? claimSectionMembers(rect) : [];
+    const value: CanvasNotePayload = { schema_version: 1, text: noteType === "section" ? "分区" : "", note_type: noteType,
+      cells: noteType !== "section" ? [[emptyCanvasCell()]] : [], member_ids: members,
+      ...(noteType === "bubble" ? { bubble_tail: { side: "bottom" as const, position: 25 } } : {}) };
+    const node: ProjectGraphNode = { id: canvasId(noteType), projectId: draft.id, threadId: null, kind: "note", assetId: null, role: null,
+      payloadJson: JSON.stringify(value), ...rect, zIndex: Math.max(0, ...selectionAnchors().map(anchor => anchor.order)) + 1, positionLocked: false, hiddenAt: null, createdAt: Date.now(), updatedAt: Date.now() };
+    graphNodesRef.current = [...graphNodesRef.current, node];
+    setGraphNodes(graphNodesRef.current);
+    setSelectedCanvasNodeIds(new Set([node.id]));
+    void enqueueWrite(async () => {
+      await ensureMaterialized(draft);
+      const { hiddenAt: _hidden, createdAt: _created, updatedAt: _updated, ...input } = node;
+      await api.projectCanvasNodeCreate(input);
+    });
+    setDrawingTool("select");
+  }
+
+  function beginDrawing(event: PointerEvent<HTMLDivElement>) {
+    if (drawingTool === "select" || event.button !== 0 || spacePressedRef.current
+      || (event.target as HTMLElement).closest(".canvas-drawing-tools") || loadingRef.current) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.focus({ preventScroll: true });
+    const start = toBoardPoint(event.clientX, event.clientY);
+    if (drawingTool === "text" || drawingTool === "bubble") {
+      createCanvasNote({ ...start, width: drawingTool === "bubble" ? 240 : 320,
+        height: drawingTool === "bubble" ? 120 : canvasTextMinSize([[emptyCanvasCell()]]).height }, drawingTool);
+    } else {
+      sectionDrawRef.current = { pointerId: event.pointerId, start };
+      setSectionPreview({ ...start, width: 0, height: 0 });
+      event.currentTarget.setPointerCapture(event.pointerId);
     }
   }
 
@@ -2456,6 +2591,7 @@ export function CanvasWorkspace({
         const state = useStore.getState();
         if (canStartCanvasMarquee(event.button, state.boardOpen, !!state.genEditing, targetIsCanvasNode)) {
           event.preventDefault();
+          event.currentTarget.focus({ preventScroll: true });
           const stageRect = event.currentTarget.getBoundingClientRect();
           const press: CanvasMarqueePress = {
             pointerId: event.pointerId,
@@ -2489,6 +2625,11 @@ export function CanvasWorkspace({
   }
 
   function movePan(event: PointerEvent<HTMLDivElement>) {
+    const drawing = sectionDrawRef.current;
+    if (drawing?.pointerId === event.pointerId) {
+      setSectionPreview(canvasRectFromPoints(drawing.start, toBoardPoint(event.clientX, event.clientY)));
+      return;
+    }
     const marqueePress = marqueePressRef.current;
     if (marqueePress?.pointerId === event.pointerId) {
       if (!marqueePress.active) {
@@ -2515,9 +2656,11 @@ export function CanvasWorkspace({
         toBoardPoint(marqueePress.startClientX, marqueePress.startClientY),
         toBoardPoint(event.clientX, event.clientY),
       );
+      const sectionIds = new Set(graphNodesRef.current.filter(node => node.kind === "note"
+        && readCanvasNote(node).note_type === "section").map(node => node.id));
       const selected = canvasNodeIdsInRect(
         selection,
-        selectionAnchors(),
+        selectionAnchors().filter(anchor => !sectionIds.has(anchor.id) || canvasSectionMembers(selection, [anchor]).length > 0),
       );
       setSelectedCanvasNodeIds(new Set(
         marqueePress.additive ? [...marqueePress.baseSelection, ...selected] : selected,
@@ -2536,6 +2679,15 @@ export function CanvasWorkspace({
   }
 
   function endPan(event: PointerEvent<HTMLDivElement>, cancelled = false) {
+    const drawing = sectionDrawRef.current;
+    if (drawing?.pointerId === event.pointerId) {
+      const rect = canvasRectFromPoints(drawing.start, toBoardPoint(event.clientX, event.clientY));
+      sectionDrawRef.current = null;
+      setSectionPreview(null);
+      if (!cancelled && rect.width * zoomRef.current >= 12 && rect.height * zoomRef.current >= 12) createCanvasNote(rect, "section");
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+      return;
+    }
     const marqueePress = marqueePressRef.current;
     if (marqueePress?.pointerId === event.pointerId) {
       if (cancelled) {
@@ -2598,7 +2750,8 @@ export function CanvasWorkspace({
 
   function fitCanvas() {
     const stage = stageRef.current;
-    if (!stage || nodesRef.current.length === 0) {
+    const content = selectionAnchors().map(anchor => anchor.rect);
+    if (!stage || content.length === 0) {
       panRef.current = { x: 0, y: 0 };
       zoomRef.current = 1;
       setPan({ x: 0, y: 0 });
@@ -2606,7 +2759,7 @@ export function CanvasWorkspace({
       markViewDirty();
       return;
     }
-    const bounds = nodesRef.current.reduce(
+    const bounds = content.reduce(
       (acc, node) => ({
         left: Math.min(acc.left, node.x),
         top: Math.min(acc.top, node.y),
@@ -2892,6 +3045,8 @@ export function CanvasWorkspace({
     () => activeGraphNodes.filter((node) => node.kind === "agent_group" && node.hiddenAt == null),
     [activeGraphNodes],
   );
+  const promptReferences = useMemo(() => new Map(graphNodes.filter(node => node.kind === "prompt")
+    .map(node => [node.id, canvasPromptReferences(node.id, graphNodes, graphEdges, assetById)])), [graphNodes, graphEdges, assetById]);
   useLayoutEffect(() => {
     const nodeId = pendingNewCardRef.current;
     if (!nodeId || loading || projectRoutePending || panning || activeDragId) return;
@@ -3409,12 +3564,27 @@ export function CanvasWorkspace({
           ref={stageRef}
           tabIndex={-1}
           data-canvas-stage
-          className={`canvas-stage ${externalDragOver ? "is-drag-over" : ""} ${spacePanReady ? "is-pan-ready" : ""} ${panning ? "is-panning" : ""} ${boardOpen || genEditing ? "is-creation-mode" : ""} ${viewMode !== "canvas" ? "is-view-hidden" : ""}`}
+          className={`canvas-stage ${drawingTool !== "select" ? "is-drawing" : ""} ${externalDragOver ? "is-drag-over" : ""} ${spacePanReady ? "is-pan-ready" : ""} ${panning ? "is-panning" : ""} ${boardOpen || genEditing ? "is-creation-mode" : ""} ${viewMode !== "canvas" ? "is-view-hidden" : ""}`}
           style={{
             backgroundPosition: `${pan.x}px ${pan.y}px`,
             backgroundSize: `${24 * zoom}px ${24 * zoom}px`,
           }}
+          onPointerDownCapture={beginDrawing}
           onPointerDown={beginPan}
+          onKeyDown={(event) => {
+            if (event.key !== "Delete" || event.defaultPrevented || event.repeat || event.nativeEvent.isComposing
+              || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+            const target = event.target as HTMLElement;
+            if (target.isContentEditable || target.closest("input, textarea, select")) return;
+            if (viewModeRef.current !== "canvas" || loadingRef.current || useStore.getState().projectRoutePending
+              || scopedInspectorOpen || canvasLightbox || promptMenu || useStore.getState().contextMenu
+              || nodeDragRef.current || graphNodeDragRef.current || marqueePressRef.current || panDragRef.current
+              || document.querySelector('[role="dialog"][aria-modal="true"]')
+              || selectedCanvasNodeIdsRef.current.size === 0) return;
+            event.preventDefault();
+            event.stopPropagation();
+            removeNodes(selectedCanvasNodeIdsRef.current);
+          }}
           onContextMenu={(event) => {
             event.preventDefault();
             if (loadingRef.current || useStore.getState().projectRoutePending) return;
@@ -3431,10 +3601,45 @@ export function CanvasWorkspace({
           }}
           onDrop={onCanvasDrop}
         >
+          <div className="canvas-drawing-tools" role="toolbar" aria-label="画板工具" onPointerDown={event => event.stopPropagation()}>
+            <button title="选择" aria-label="选择工具" aria-pressed={drawingTool === "select"} onClick={() => setDrawingTool("select")}><MousePointer2 size={18} /></button>
+            <hr />
+            <button title="分区 · 拖拽画框" aria-label="分区工具" aria-pressed={drawingTool === "section"} onClick={() => setDrawingTool("section")}><Frame size={18} /></button>
+            <button title="文本卡片 · 点击放置" aria-label="文本卡片工具" aria-pressed={drawingTool === "text"} onClick={() => setDrawingTool("text")}><Type size={18} /></button>
+            <button title="气泡便签 · 点击放置" aria-label="气泡便签工具" aria-pressed={drawingTool === "bubble"} onClick={() => setDrawingTool("bubble")}><MessageCircle size={18} /></button>
+          </div>
           <div
             className="canvas-plane"
             style={{ transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})` }}
           >
+            {graphNodes.filter(node => node.kind === "note" && node.hiddenAt == null).map(node => {
+              const value = readCanvasNote(node);
+              const section = value.note_type === "section";
+              const selected = selectedCanvasNodeIds.has(node.id);
+              return <div key={node.id} data-canvas-node data-canvas-node-id={node.id} tabIndex={0}
+                className={`canvas-note ${section ? "is-section" : value.note_type === "bubble" ? "is-bubble" : "is-text"} ${selected ? "is-selected" : ""}`}
+                style={{ width: node.width, height: node.height, transform: `translate3d(${node.x}px, ${node.y}px, 0)`, zIndex: section ? 0 : selected ? 10000 + node.zIndex : node.zIndex }}
+                onPointerDown={event => beginGraphNodeDrag(event, node)} onPointerMove={moveGraphNode}
+                onPointerUp={endGraphNodeDrag} onPointerCancel={event => endGraphNodeDrag(event, true)}
+                onLostPointerCapture={event => endGraphNodeDrag(event, true)}
+                onContextMenu={event => openCanvasNodeMenu(event, node.id)}>
+                {section ? <>
+                  <div className="canvas-section-heading"><GripHorizontal size={17} />
+                    <input aria-label="分区名称" value={value.text} placeholder="分区"
+                      onPointerDown={event => event.stopPropagation()}
+                      onFocus={() => setSelectedCanvasNodeIds(new Set([node.id]))}
+                      onChange={event => updateCanvasNote(node.id, { ...value, text: event.target.value })}
+                      onBlur={() => { if (!value.text.trim()) updateCanvasNote(node.id, { ...value, text: "分区" }); }} />
+                  </div>
+                  {["top", "bottom", "left", "right"].map(edge => <div key={edge} className={`canvas-section-edge ${edge}`} />)}
+                  {selected && <CanvasResizeHandle label="调整分区大小" size={node} zoom={zoom} minimum={{ width: 120, height: 80 }}
+                    onResize={(size, finished, cancelled) => resizeCanvasNote(node.id, size, finished, cancelled)} />}
+                </> : <CanvasTextCard value={value} selected={selected} width={node.width} height={node.height} zoom={zoom}
+                  onResize={(size, finished, cancelled) => resizeCanvasNote(node.id, size, finished, cancelled)} onSelect={() => setSelectedCanvasNodeIds(new Set([node.id]))}
+                  onChange={next => updateCanvasNote(node.id, next)} />}
+              </div>;
+            })}
+            {sectionPreview && <div className="canvas-section-preview" style={{ left: sectionPreview.x, top: sectionPreview.y, width: sectionPreview.width, height: sectionPreview.height }} />}
             <svg className="canvas-graph-edges" aria-hidden="true">
               {drawableEdges.map(({ edge, from, to }) => {
                 const x1 = from.x + from.width;
@@ -3489,7 +3694,7 @@ export function CanvasWorkspace({
                   }}
                 >
                   <div><span>生成指令</span><small>{summary.provider} · {summary.status}</small></div>
-                  <p>{summary.text}</p>
+                  <section className="canvas-prompt-content"><ReadonlyPrompt prompt={summary.text} references={promptReferences.get(node.id) ?? []} /></section>
                 </div>
               );
             })}
@@ -3532,6 +3737,10 @@ export function CanvasWorkspace({
                 >
                   <div><span>Agent 执行组</span><small>{summary.status}</small></div>
                   <strong>{summary.currentStep ?? summary.skill}</strong>
+                  {(() => {
+                    const prompt = graphNodes.find(candidate => agentPromptGroups.get(candidate.id)?.id === node.id);
+                    return prompt ? <section className="canvas-prompt-content"><ReadonlyPrompt prompt={promptNodeSummary(prompt).text} references={promptReferences.get(prompt.id) ?? []} /></section> : null;
+                  })()}
                   <p>
                     {summary.progress != null ? `${summary.progress}%` : "等待进度"}
                     {summary.pendingApprovals > 0 ? ` · ${summary.pendingApprovals} 项待批准` : ""}
@@ -3644,6 +3853,15 @@ export function CanvasWorkspace({
                   </div>
                   {holding && <span className="canvas-folder-hint" role="tooltip">创建素材组</span>}
                   {directFolderTarget && <span className="canvas-folder-hint" role="tooltip">松手移入素材组</span>}
+                  <CanvasResizeHandle label={node.kind === "asset" ? "调整素材大小" : "调整素材组大小"} size={node} zoom={zoom}
+                    minimum={{ width: 140, height: 120 }}
+                    constrain={node.kind === "asset" ? (start, delta) => {
+                      // Preserve the image ratio, excluding the fixed caption and borders.
+                      const ratio = node.asset.width && node.asset.height ? node.asset.height / node.asset.width : (start.height - 32) / (start.width - 2);
+                      const change = Math.abs(delta.width) >= Math.abs(delta.height / ratio) ? delta.width : delta.height / ratio;
+                      return canvasAssetNodeSize({ width: 1, height: ratio }, Math.max(96, 2 + 32 / ratio, start.width + change));
+                    } : undefined}
+                    onResize={(size, finished, cancelled) => resizeCanvasMaterial(node.id, size, finished, cancelled)} />
                 </div>
               );
             })}

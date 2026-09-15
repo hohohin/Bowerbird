@@ -9,6 +9,7 @@ pub mod library;
 pub mod library_view;
 pub mod local_classification;
 pub mod migrate;
+pub mod onboarding_pack;
 pub mod paths;
 pub mod preset;
 pub mod project_canvas;

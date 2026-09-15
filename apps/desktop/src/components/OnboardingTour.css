@@ -59,5 +59,13 @@
 .onboarding-lesson .app-modal-button { font-size: 16px; }
 .onboarding-lesson header button:disabled { opacity: .3; cursor: default; }
 .onboarding-brand { display: block; width: 64px; height: 64px; margin: 18px 0; object-fit: contain; }
-.onboarding-login-hint { position: fixed; z-index: 69; max-width: calc(100vw - 32px); display: flex; align-items: center; gap: 12px; padding: 18px; border: 1px solid var(--bb-line); border-radius: 12px; background: var(--bb-surface); color: var(--bb-ink); font-size: 16px; box-shadow: 0 8px 30px #0003; }
-.onboarding-login-hint::before { content: ""; position: absolute; left: -7px; top: calc(50% - 7px); width: 12px; height: 12px; background: var(--bb-surface); border-left: 1px solid var(--bb-line); border-bottom: 1px solid var(--bb-line); transform: rotate(45deg); }
+
+.onboarding-completion .app-modal-body { font-size: 16px; }
+.onboarding-completion-grid { display: grid; grid-template-columns: 1.15fr 1fr; gap: 32px; }
+.onboarding-completion-message { padding: 8px 8px 16px; }
+.onboarding-completion-grid h3 { font-size: 22px; font-weight: 600; margin: 16px 0; }
+.onboarding-completion-grid p { line-height: 1.7; margin: 12px 0; color: var(--bb-muted); overflow-wrap: anywhere; }
+.onboarding-completion-login { padding: 24px; border: 1px solid var(--bb-line); border-radius: 16px; background: var(--bb-surface-2); }
+.onboarding-completion-login > svg { color: var(--bb-blue); }
+.onboarding-completion .app-modal-button { font-size: 16px; }
+@media (max-width: 640px) { .onboarding-completion-grid { grid-template-columns: 1fr; gap: 16px; } }

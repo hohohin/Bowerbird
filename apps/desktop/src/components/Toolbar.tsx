@@ -131,10 +131,11 @@ export function Toolbar({
           throw new Error("请在打开的位置选择「初始引导」文件夹，再继续入门引导");
         }
       }
+      await useStore.getState().projectCanvasFlush?.();
       const count = await api.importFolder(path, activeProjectId);
       if (!count) throw new Error("文件夹中没有成功导入的素材，请检查文件格式和读取权限");
       completeLesson();
-      return `已从文件夹导入 ${count} 个文件（相同文件复用已有素材）`;
+      return starterFolder ? `已导入初始引导：${count} 个素材及完整画板` : `已从文件夹导入 ${count} 个文件（相同文件复用已有素材）`;
     });
   }
 

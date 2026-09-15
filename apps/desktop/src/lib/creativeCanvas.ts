@@ -41,6 +41,35 @@ export interface CanvasRemoveNodesEventDetail {
 
 export type ProjectCanvasUiNode = CanvasGroupNode<CanvasAssetSnapshot>;
 
+/** The image area excludes the two border pixels and the 30px caption. */
+export function canvasAssetNodeSize(asset: Pick<CanvasAssetSnapshot, "width" | "height">, width = 190) {
+  const ratio = asset.width && asset.width > 0 && asset.height && asset.height > 0 ? asset.height / asset.width : 0.78;
+  return { width, height: (width - 2) * ratio + 32 };
+}
+
+/** Parent images are stored as continued/retry/branch edges, not duplicate input edges. */
+export function canvasPromptReferences(promptId: string, nodes: readonly CanvasNode[], edges: readonly CanvasEdge[], assets: Map<string, Asset>): Array<Asset & { referenceNames: string[] }> {
+  const byId = new Map(nodes.map(node => [node.id, node]));
+  const seen = new Set<string>();
+  return edges.filter(edge => ["input", "continued", "retry", "branch"].includes(edge.kind) && edge.toNodeId === promptId)
+    .sort((a, b) => a.ordinal - b.ordinal || a.id.localeCompare(b.id))
+    .flatMap(edge => {
+      const node = byId.get(edge.fromNodeId);
+      if (node?.kind !== "asset") return [];
+      const id = node.assetId ?? node.id;
+      if (seen.has(id)) return [];
+      seen.add(id);
+      const asset = node.assetId ? assets.get(node.assetId) : undefined;
+      const snapshot = parseAssetPayload(node.payloadJson)?.snapshot;
+      return [{ ...asset, id, name: snapshot?.name ?? asset?.name ?? "引用图",
+        referenceNames: [asset?.name, asset?.origin_path?.split(/[\\/]/).pop(), asset?.store_path?.split(/[\\/]/).pop()]
+          .filter((name): name is string => !!name),
+        ext: asset?.ext ?? null,
+        thumb_path: asset?.thumb_path ?? (asset?.duration ? null : asset?.store_path ?? null),
+        store_path: asset?.store_path ?? null } as Asset & { referenceNames: string[] }];
+    });
+}
+
 /** Keep Agent launch prompts as history, with their group as the canvas card. */
 export function agentPromptGroupMap(nodes: readonly CanvasNode[], edges: readonly CanvasEdge[]): Map<string, CanvasNode> {
   const byId = new Map(nodes.map((node) => [node.id, node]));
@@ -144,9 +173,10 @@ export function rehydrateProjectCanvasAssets(
   const next = nodes.map((node) => {
     if (node.kind === "asset") {
       const asset = rehydrateAssetSnapshot(node.asset, assetById);
-      if (asset === node.asset) return node;
+      const size = asset.width && asset.height ? canvasAssetNodeSize(asset, node.width) : { width: node.width, height: node.height };
+      if (asset === node.asset && size.height === node.height) return node;
       changed = true;
-      return { ...node, asset };
+      return { ...node, asset, ...size };
     }
     let groupChanged = false;
     const assets = node.assets.map((snapshot) => {
@@ -381,7 +411,8 @@ export function hydrateProjectCanvas(
   const nodes: ProjectCanvasUiNode[] = [];
   for (const { node, asset } of assetNodes.values()) {
     if (!memberIds.has(node.id)) {
-      nodes.push({ kind: "asset", id: node.id, asset, x: node.x, y: node.y, width: node.width, height: node.height, order: node.zIndex });
+      const size = asset.width && asset.height ? canvasAssetNodeSize(asset, node.width) : { width: node.width, height: node.height };
+      nodes.push({ kind: "asset", id: node.id, asset, x: node.x, y: node.y, ...size, order: node.zIndex });
     }
   }
   for (const group of snapshot.groups) {

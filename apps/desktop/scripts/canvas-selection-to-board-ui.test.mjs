@@ -9,7 +9,7 @@ const page = await browser.newPage({ viewport: { width: 1800, height: 1200 } });
 const errors = [];
 page.on("pageerror", error => errors.push(error.message));
 const node = id => page.locator(`[data-canvas-node-id="${id}"]`);
-const editor = page.locator(".ProseMirror");
+const editor = page.locator(".ProseMirror:not([aria-readonly])");
 const chips = () => editor.locator("[data-asset-id]").evaluateAll(elements => elements.map(e => e.dataset.assetId));
 
 async function reset() {
@@ -22,18 +22,18 @@ async function reset() {
   });
   await page.waitForFunction(() => !document.querySelector(".canvas-stage.is-creation-mode"));
 }
-async function marquee() {
+async function marquee(width = 970, height = 290, count = 4) {
   const rect = await page.locator(".canvas-stage").boundingBox();
   await page.mouse.move(rect.x + 20, rect.y + 60);
   await page.mouse.down();
-  await page.mouse.move(rect.x + 970, rect.y + 290, { steps: 12 });
+  await page.mouse.move(rect.x + width, rect.y + height, { steps: 12 });
   await page.mouse.up();
-  await page.waitForFunction(() => document.querySelectorAll("[data-canvas-node-id].is-selected").length === 4, null, { timeout: 5000 });
-  assert.equal(await page.locator("[data-canvas-node-id].is-selected").count(), 4);
+  await page.waitForFunction(count => document.querySelectorAll("[data-canvas-node-id].is-selected").length === count, count, { timeout: 5000 });
+  assert.equal(await page.locator("[data-canvas-node-id].is-selected").count(), count);
 }
 async function addFromMenu(name) {
   await page.getByRole("menuitem", { name, exact: true }).click();
-  await page.waitForFunction(() => document.querySelectorAll(".ProseMirror [data-asset-id]").length > 0);
+  await page.waitForFunction(() => document.querySelectorAll(".ProseMirror:not([aria-readonly]) [data-asset-id]").length > 0);
   assert.match(await editor.innerText(), /保留已有指令/);
   assert.equal(await page.getByRole("menu").count(), 0);
 }
@@ -91,7 +91,57 @@ try {
   await node("prompt").click({ button: "right", position: { x: 30, y: 30 } });
   assert.equal(await page.getByRole("menuitem", { name: /添加.*对话框/ }).count(), 0);
 
-  // Removal is available only in context menus, including folders and execution cards.
+  // Delete removes the actual marquee selection without requiring a node click.
+  for (const [width, height, ids] of [
+    [260, 290, ["old"]],
+    [700, 290, ["old", "a", "duplicate-a"]],
+    [970, 290, ["old", "a", "duplicate-a", "prompt"]],
+    [970, 620, ["old", "a", "duplicate-a", "prompt", "outside", "agent", "folder"]],
+  ]) {
+    await reset();
+    if (ids.length === 1) {
+      await editor.focus();
+      await page.evaluate(() => window.store.setState({ boardOpen: false }));
+      await page.waitForFunction(() => !document.querySelector(".canvas-stage.is-creation-mode"));
+    }
+    await marquee(width, height, ids.length);
+    await page.keyboard.press("Delete");
+    for (const id of ids) await node(id).waitFor({ state: "detached", timeout: 5000 });
+    assert.equal(await page.locator("[data-canvas-node-id]").count(), 7 - ids.length);
+    await page.waitForFunction(ids => ids.filter(id => id !== "folder").every(id =>
+      window.calls.some(call => call.command === "project_canvas_node_remove" && call.args.nodeId === id)), ids);
+    assert.equal(await page.evaluate(() => window.calls.some(call => /delete_asset|generation.*delete/.test(call.command))), false);
+    await page.keyboard.press("Control+z");
+    for (const id of ids) await node(id).waitFor();
+  }
+
+  // Editing, other controls, and modal dialogs must not delete an existing selection.
+  await reset();
+  await marquee();
+  await editor.fill("文字编辑保护");
+  await page.keyboard.press("Control+a");
+  await page.keyboard.press("Delete");
+  assert.equal((await editor.innerText()).trim(), "");
+  assert.equal(await page.locator("[data-canvas-node-id]").count(), 7);
+  await page.evaluate(() => { document.activeElement?.blur(); window.store.setState({ boardOpen: false }); });
+  await page.getByRole("button", { name: "放大", exact: true }).focus();
+  await page.keyboard.press("Delete");
+  assert.equal(await page.locator("[data-canvas-node-id]").count(), 7);
+  await page.locator(".canvas-stage").focus();
+  await page.evaluate(() => {
+    const dialog = document.createElement("div");
+    dialog.id = "test-modal"; dialog.setAttribute("role", "dialog"); dialog.setAttribute("aria-modal", "true");
+    document.body.append(dialog);
+  });
+  await page.keyboard.press("Delete");
+  assert.equal(await page.locator("[data-canvas-node-id]").count(), 7);
+  await page.evaluate(() => document.getElementById("test-modal").remove());
+  await page.locator(".canvas-stage").click({ position: { x: 20, y: 60 } });
+  await node("old").focus();
+  await page.keyboard.press("Delete");
+  assert.equal(await page.locator("[data-canvas-node-id]").count(), 7, "focus alone is not a selection");
+
+  // Backspace stays disabled; context-menu removal and undo remain available.
   for (const id of ["old", "folder", "prompt", "agent"]) {
     await reset();
     await node(id).hover();
@@ -99,9 +149,8 @@ try {
     await marquee();
     assert.equal(await page.locator(".canvas-selection-delete").count(), 0);
     await node(id).focus();
-    await page.keyboard.press("Delete");
     await page.keyboard.press("Backspace");
-    assert.equal(await page.locator("[data-canvas-node-id]").count(), 7, "keys cannot remove canvas content");
+    assert.equal(await page.locator("[data-canvas-node-id]").count(), 7, "Backspace cannot remove canvas content");
     // Clear the multi-selection before checking the single-node context action.
     await page.locator(".canvas-stage").click({ position: { x: 20, y: 60 } });
     await node(id).click({ button: "right", position: { x: 30, y: 30 } });
@@ -116,8 +165,19 @@ try {
   await page.getByRole("menuitem", { name: "从画板移除所选 4 项", exact: true }).click();
   for (const id of ["old", "a", "duplicate-a", "prompt"]) await node(id).waitFor({ state: "detached" });
   assert.equal(await node("outside").count(), 1, "unselected material stays on the canvas");
+
+  await reset();
+  await marquee();
+  await page.keyboard.press("Delete");
+  await page.waitForFunction(() => ["old", "a", "duplicate-a", "prompt"].every(id =>
+    window.snapshot().nodes.find(node => node.id === id)?.hiddenAt != null));
+  await page.evaluate(() => window.save());
+  await page.reload();
+  await node("outside").waitFor();
+  for (const id of ["old", "a", "duplicate-a", "prompt"]) assert.equal(await node(id).count(), 0);
+  assert.equal(await page.evaluate(() => window.store.getState().assets.length), 5, "central assets survive removal and reload");
   assert.deepEqual(errors, []);
-  console.log("PASS marquee to composer and context-menu-only removal: image/blank/card/group menus, keyboard safety, batch removal and undo");
+  console.log("PASS marquee references and Delete: single/multiple images, mixed cards, keyboard safety, context menus and undo");
 } finally {
   await browser.close();
   await server.close();

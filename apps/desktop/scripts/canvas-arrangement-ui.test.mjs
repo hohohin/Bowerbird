@@ -1,10 +1,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "vite";
-import react from "@vitejs/plugin-react";
 const { chromium } = await import(process.env.BOWERBIRD_PLAYWRIGHT_MODULE || "playwright");
-const server = await createServer({ configFile: false, plugins: [react()], cacheDir: ".tmp/arrangement-vite-cache",
-  optimizeDeps: { entries: ["scripts/fixtures/canvas-reference/preview.html"] },
-  server: { host: "127.0.0.1", port: 1448, strictPort: true } });
+const server = await createServer({ server: { host: "127.0.0.1", port: 1448, strictPort: true, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: "chrome", headless: true });
 const page = await browser.newPage({ viewport: { width: 1800, height: 1600 } });

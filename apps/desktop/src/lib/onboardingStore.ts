@@ -7,7 +7,7 @@ function readGuide() {
   try { return parseRoleGuide(JSON.parse(localStorage.getItem(ROLE_GUIDE_KEY) ?? "null")); }
   catch { return freshRoleGuide(); }
 }
-type OnboardingPanel = "login" | "welcome" | "lesson" | "done" | "closed" | "collections";
+type OnboardingPanel = "welcome" | "lesson" | "done" | "closed" | "collections";
 
 function read() {
   try { return parseOnboarding(localStorage.getItem(ONBOARDING_KEY)); }

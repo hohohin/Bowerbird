@@ -70,7 +70,8 @@ test("hover grouping chooses the topmost visible target", () => {
 });
 
 test("infinite-canvas zoom remains inside usable bounds", () => {
-  assert.equal(clampCanvasZoom(0.1), 0.35);
+  assert.equal(clampCanvasZoom(0.01), 0.1);
+  assert.equal(clampCanvasZoom(0.1), 0.1);
   assert.equal(clampCanvasZoom(3), 2.4);
   assert.equal(clampCanvasZoom(1.25), 1.25);
 });
@@ -210,7 +211,7 @@ test("large control cards zoom out to fit and respect the canvas zoom minimum", 
   const next = canvasViewForNewCard(card, viewport, { x: 0, y: 0 }, 2);
   assert.equal(next.zoom, 0.5);
   assert.equal(canvasViewForNewCard(card, viewport, next.pan, next.zoom), null);
-  assert.equal(canvasViewForNewCard(card, { ...viewport, width: 100, height: 100 }, { x: 0, y: 0 }, 1).zoom, 0.35);
+  assert.equal(canvasViewForNewCard(card, { ...viewport, width: 50, height: 50 }, { x: 0, y: 0 }, 1).zoom, 0.1);
   assert.equal(canvasViewForNewCard(card, { ...viewport, width: 0 }, { x: 0, y: 0 }, 1), null);
 });
 

@@ -33,3 +33,34 @@ test("old history with no instance IDs stays explicit null instead of guessing a
   const restored = parsePromptToDoc("@reference.png", [asset], assets);
   assert.deepEqual(serializeDoc(restored, assets).referenceNodeIds, [null]);
 });
+
+test("readonly reference aliases resolve renamed files without consuming adjacent prose", () => {
+  const refs = [{ id: "a", name: "旧名", ext: "png" }, { id: "b", name: "参考", ext: "jpg" }];
+  const assets = new Map(refs.map(asset => [asset.id, asset]));
+  const aliases = new Map([["a", ["新名", "result-original.png"]]]);
+  for (const label of ["旧名.png", "新名.png", "result-original.png"]) {
+    const doc = parsePromptToDoc(`@${label}的光影和 @参考.jpg的色彩，保留正文。`, refs, assets, undefined, [], [], aliases);
+    assert.equal(doc.textContent, "的光影和 的色彩，保留正文。");
+    const images = [];
+    doc.descendants(node => { if (node.type.name === "image") images.push([node.attrs.assetId, node.attrs.silent]); });
+    assert.deepEqual(images, [["a", false], ["b", false]]);
+  }
+});
+
+test("reference aliases keep duplicate filename ordinals and leave unknown labels untouched", () => {
+  const refs = [{ id: "a", name: "旧图甲", ext: "png" }, { id: "b", name: "旧图乙", ext: "png" }];
+  const assets = new Map(refs.map(asset => [asset.id, asset]));
+  const aliases = new Map([["a", ["同名图"]], ["b", ["同名图"]]]);
+  const doc = parsePromptToDoc("@同名图.png 的构图 @同名图#2.png 的颜色 @未关联.png", refs, assets, undefined, [], [], aliases);
+  const images = [];
+  doc.descendants(node => { if (node.type.name === "image") images.push(node.attrs.assetId); });
+  assert.deepEqual(images, ["a", "b"]);
+  assert.equal(doc.textContent, " 的构图  的颜色 @未关联.png");
+});
+
+test("ambiguous alternate names never overwrite primary reference labels", () => {
+  const refs = [{ id: "a", name: "主图", ext: "png" }, { id: "b", name: "辅图", ext: "png" }];
+  const assets = new Map(refs.map(asset => [asset.id, asset]));
+  const doc = parsePromptToDoc("@主图.png", refs, assets, undefined, [], [], new Map([["b", ["主图"]]]));
+  assert.equal(doc.firstChild.firstChild.attrs.assetId, "a");
+});

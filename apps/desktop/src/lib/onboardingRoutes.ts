@@ -4,7 +4,7 @@ export const ONBOARDING_ROLES = [
   { id: "director", name: "视频编导", description: "编写分镜脚本，制作分镜表，制作视频" },
 ] as const;
 export type OnboardingRole = typeof ONBOARDING_ROLES[number]["id"];
-export type GuideScene = "pick-prompt" | "ready-to-create" | "activate-composer" | "sample-dimensions" | "create-project" | "source-scope" | "open-explore" | "expand-source" | "workspace" | "import" | "folder" | "explore" | "annotate" | "edit" | "analyse" | "dimensions" | "collections" | "profile" | "profile-select" | "batch" | "script" | "storyboard" | "video";
+export type GuideScene = "more-uses" | "pick-prompt" | "ready-to-create" | "activate-composer" | "sample-dimensions" | "create-project" | "source-scope" | "open-explore" | "expand-source" | "workspace" | "import" | "folder" | "explore" | "annotate" | "edit" | "analyse" | "dimensions" | "collections" | "profile" | "profile-select" | "batch" | "script" | "storyboard" | "video";
 export interface GuideStep { scene: GuideScene; title: string; body: string; target: string; highlight?: string }
 const workspace: GuideStep = { scene: "workspace", title: "认识真实工作台", body: "顶部可以导入和探索，左侧管理素材与项目，中央是本次创作的画板，下方输入需求。先在界面中找到这几个区域，再继续。", target: ".app-topbar, .app-sidebar, .canvas-source-panel, .canvas-board-toolbar, [data-tour=creation-editor]" };
 const importStep: GuideStep = { scene: "import", title: "导入你的图片", body: "点击顶部「导入 → 导入图片」，从电脑选择一张参考图。导入成功后，图片会出现在左侧素材栏。", target: "[data-import-trigger], [data-tour=import-files], .canvas-source-panel" };
@@ -19,7 +19,8 @@ export const ONBOARDING_ROUTES: Record<OnboardingRole, GuideStep[]> = {
     { scene: "activate-composer", title: "激活创作模式", body: "点击对话框激活创作模式", target: "[data-onboarding-composer]" },
     { scene: "sample-dimensions", title: "认识反推和维度环", body: "对于一张图片，你可以通过**反推**来获得其风格、类型、技术细节等提示词或者反推提示词。\n当你不想图像模型过多参考原图片的时候，可以试着用维度来进行生成\n反推需要登录，所以我们先试试看这张已经有反推数据的图片", target: ".canvas-source-panel" },
     { scene: "pick-prompt", title: "添加反推提示词", body: "请点击选择「反推提示词」维度，将其添加到对话框", target: '[data-dim="反推提示词"]', highlight: '[data-dim="反推提示词"]' },
-    { scene: "ready-to-create", title: "开始筑巢吧", body: "恭喜你，现在你已经准备好生成了！开始筑巢吧", target: ".canvas-workspace" },
+    { scene: "ready-to-create", title: "入门引导已完成", body: "恭喜你，已完成设计师入门引导！现在你已经准备好生成了，开始筑巢吧。", target: ".onboarding-completion" },
+    { scene: "more-uses", title: "探索更多使用方法", body: "这里还有更多使用方法，一定要试试哦！", target: ".canvas-workspace" },
   ],
   marketing: [workspace, importStep,
     { scene: "collections", title: "整理一个品牌素材集合", body: "在左侧「集合」旁点击 +，按品牌命名；打开集合，通过「添加素材」选择图片，确认添加。也可以打开一个已有素材的品牌集合。", target: ".app-sidebar, [data-tour=collection-panel]" },
@@ -72,8 +73,8 @@ export function parseRoleGuide(value: unknown): RoleGuideProgress {
       annotationAssetId: typeof s.annotationAssetId === "string" ? s.annotationAssetId : null,
       tasks: Object.fromEntries(Object.entries(s.tasks ?? {}).filter(([, index]) => Number.isInteger(index) && index >= 0)) };
   }
-  // Append the new lessons after a previously completed six- or eight-step designer route.
-  if (Array.isArray(p.completedRoles) && p.completedRoles.includes("designer") && [5, 7].includes(fresh.sessions.designer?.step ?? -1)) {
+  // Append the new lessons after a previously completed six-, eight- or ten-step designer route.
+  if (Array.isArray(p.completedRoles) && p.completedRoles.includes("designer") && [5, 7, 9].includes(fresh.sessions.designer?.step ?? -1)) {
     fresh.sessions.designer = { ...fresh.sessions.designer!, step: fresh.sessions.designer!.step + 1, ready: false, stepStartedAt: Date.now(), tasks: {} };
   }
   fresh.completedRoles = roles.filter(id => Array.isArray(p.completedRoles) && p.completedRoles.includes(id) && (fresh.sessions[id]?.ready || fresh.sessions[id]?.skippedSteps?.includes(ONBOARDING_ROUTES[id].length - 1))
@@ -104,9 +105,10 @@ export function previousRoleGuide(guide: RoleGuideProgress, now = Date.now()): R
 }
 export interface PracticeEvidence { onProject: boolean; text: string; hasDimensionOnly: boolean; imageCount: number; videoCount: number }
 export function practiceReady(scene: GuideScene, session: RoleSession, evidence: PracticeEvidence): boolean {
+  if (scene === "ready-to-create") return true;
   if (!evidence.onProject) return false;
   switch (scene) {
-    case "workspace": case "source-scope": case "ready-to-create": return true;
+    case "workspace": case "source-scope": case "more-uses": return true;
     case "script": return evidence.text !== session.baselineText && evidence.text.trim().length >= 20 && evidence.text.trim().split(/\n+/).filter(Boolean).length >= 2;
     case "dimensions": return evidence.hasDimensionOnly;
     case "edit": case "storyboard": return evidence.imageCount >= 1;

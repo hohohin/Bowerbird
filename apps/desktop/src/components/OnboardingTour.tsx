@@ -9,7 +9,7 @@ import { ExploreDragDemo, OnboardingSpotlight } from "./OnboardingSpotlight";
 import { api } from "../lib/api";
 import type { PromptedAsset } from "../lib/types";
 import { createPortal } from "react-dom";
-import brandIcon from "../../src-tauri/icons/128x128.png";
+import { OnboardingCompletion } from "./OnboardingCompletion";
 import "./OnboardingTour.css";
 
 function visible(element: Element): element is HTMLElement {
@@ -17,7 +17,7 @@ function visible(element: Element): element is HTMLElement {
 }
 function hasBlockingModal() {
   return Array.from(document.querySelectorAll('[role="dialog"][aria-modal="true"]'))
-    .some(element => visible(element) && !element.hasAttribute("data-project-inspector"));
+    .some(element => visible(element) && !element.hasAttribute("data-project-inspector") && !element.classList.contains("onboarding-completion"));
 }
 function editorState() {
   const root = document.querySelector<HTMLElement>(".canvas-workspace");
@@ -61,14 +61,19 @@ export function OnboardingTour() {
   const sampleStep = step?.scene === "sample-dimensions" || step?.scene === "pick-prompt";
 
   useEffect(() => {
+    if (guide.role !== "designer" || guide.status !== "active" || panel !== "lesson" || step?.scene !== "more-uses" || !onProject) return;
+    document.querySelector<HTMLButtonElement>('[data-tour=explore][aria-pressed=true]')?.click();
+  }, [guide.role, guide.status, panel, step?.scene, onProject]);
+
+  useEffect(() => {
     setSample(null);
     if (!sampleStep || !session?.projectId || !onProject) return;
     let alive = true;
     setSampleLoading(true);
     void api.listPromptedAssets(session.projectId).then(assets => {
       if (!alive) return;
-      const candidates = assets.filter(asset => asset.sections?.some(section => section.title === "反推提示词") && /(?:^|[\\/])preset-(?:0[1-9]|1[01])\.[^.]+$/i.test(asset.origin_path ?? ""));
-      const selected = candidates.find(asset => /preset-01\./i.test(asset.origin_path ?? "")) ?? candidates[0] ?? null;
+      const candidates = assets.filter(asset => asset.sections?.some(section => section.title === "反推提示词") && /(?:^|[\\/])初始引导[\\/]asset-01[46]\.webp$/i.test(asset.origin_path ?? ""));
+      const selected = candidates.find(asset => /asset-016\./i.test(asset.origin_path ?? "")) ?? candidates[0] ?? null;
       setSample(selected);
       // Left-click uses the existing cached dimension data; never start analysis.
       if (selected) useStore.setState(state => ({ promptedAssets: [...state.promptedAssets.filter(asset => asset.id !== selected.id), selected] }));
@@ -174,9 +179,9 @@ export function OnboardingTour() {
       if (next.status !== "active") {
         useStore.getState().closeCaptionRing();
         if (role === "designer") {
-          // Keep the login bubble on the app surface instead of under a native webpage.
+          // Return to the creative workspace when dismissing the completion dialog.
           document.querySelector<HTMLButtonElement>('[data-tour=explore][aria-pressed=true]')?.click();
-          current.show("login");
+          current.show("closed");
         } else current.show("done");
       } else if (ONBOARDING_ROUTES[role][next.sessions[role]!.step].scene === "ready-to-create") useStore.getState().closeCaptionRing();
     } catch { setError("项目尚未打开，请重试。"); }
@@ -207,12 +212,14 @@ export function OnboardingTour() {
       current.setGuide({ ...current.guide, status: "paused" }); setError(""); current.show(switchRole ? "welcome" : "closed");
     } catch { setError("草稿尚未保存，请重试。也可以跳过引导，当前草稿和进度会保留。"); }
   }
-  if (panel === "login") return <OnboardingLoginHint blocked={blocked} />;
   if (panel === "collections") return <CollectionOnboarding />;
   if (panel === "welcome" || panel === "done") return <RoleOnboarding />;
   if (panel === "closed") return guide.status === "paused" && !blocked
     ? <OnboardingResumeHint onResume={() => show("welcome")} onSkip={skip} /> : null;
   if (!session || !step || blocked) return null;
+  if (guide.role === "designer" && step.scene === "ready-to-create") return <OnboardingCompletion
+    onComplete={() => void nextStep()} onPrevious={() => void previousStep()} onSkip={() => void nextStep(true)}
+    disabled={routePending || !session.ready} error={error} stepNumber={session.step + 1} totalSteps={steps.length} />;
   const roleName = ONBOARDING_ROLES.find(role => role.id === guide.role)!.name;
   const designer = guide.role === "designer";
   const needsProject = designer && !session.projectId && step.scene !== "create-project";
@@ -237,15 +244,14 @@ export function OnboardingTour() {
         {!sample && !sampleLoading && <button className="app-modal-button" onClick={() => setSampleAttempt(value => value + 1)}>重新查找示例图</button>}
         {!boardOpen && <button className="app-modal-button" onClick={() => document.querySelector<HTMLElement>("[data-onboarding-composer] .ProseMirror")?.focus()}>激活创作模式</button>}
       </>}
-      {step.scene === "ready-to-create" && <img className="onboarding-brand" src={brandIcon} alt="园丁鸟" />}
       {designer && onProject && step.scene === "explore" && <>
         {!exploring && <button className="app-modal-button" onClick={() => document.querySelector<HTMLButtonElement>("[data-tour=explore]")?.click()}>打开探索继续采集</button>}
         <ExploreDragDemo />
       </>}
       {!onProject && <button className="app-modal-button" onClick={() => show("welcome")}>返回身份页并继续项目</button>}
       {onProject && <>
-        <p role="status">{reviewing ? "正在回看此步，点击下一步继续。" : session.ready ? step.scene === "workspace" || step.scene === "source-scope" ? "了解后继续下一步。" : "已检测到本步操作完成，可以继续。" : designer ? "请在界面中完成这一步操作。" : "完成上面的实际操作后，才能继续。"}</p>
-        {(!designer || reviewing || ["source-scope", "expand-source", "pick-prompt", "ready-to-create"].includes(step.scene)) && <button className="app-modal-button is-primary" disabled={!session.ready && !reviewing} onClick={() => void nextStep()}>{step.scene === "ready-to-create" ? "完成本次引导" : session.step === steps.length - 1 ? "完成这条路线" : "下一步"}</button>}
+        {step.scene !== "more-uses" && <p role="status">{reviewing ? "正在回看此步，点击下一步继续。" : session.ready ? step.scene === "workspace" || step.scene === "source-scope" ? "了解后继续下一步。" : "已检测到本步操作完成，可以继续。" : designer ? "请在界面中完成这一步操作。" : "完成上面的实际操作后，才能继续。"}</p>}
+        {(!designer || reviewing || ["source-scope", "expand-source", "pick-prompt", "more-uses"].includes(step.scene)) && <button className="app-modal-button is-primary" disabled={!session.ready && !reviewing} onClick={() => void nextStep()}>{step.scene === "more-uses" ? "完成本次引导" : session.step === steps.length - 1 ? "完成这条路线" : "下一步"}</button>}
       </>}
       {error && <p role="alert" className="text-red-400">{error}</p>}
       <div className="onboarding-lesson-actions"><button className="onboarding-pause" onClick={() => void pause(true)}>切换身份</button><button className="onboarding-pause" onClick={() => void pause()}>稍后继续</button></div>
@@ -254,27 +260,6 @@ export function OnboardingTour() {
   </>;
   return designer && onProject ? <OnboardingSpotlight step={displayStep} minimized={minimized} ringOpen={sampleStep && !promptAdded && !!captionRing}>{content}</OnboardingSpotlight>
     : <aside className={"onboarding-lesson" + (minimized ? " is-minimized" : "")} aria-label="入门任务清单">{content}</aside>;
-}
-
-function OnboardingLoginHint({ blocked }: { blocked: boolean }) {
-  const show = useOnboarding(state => state.show);
-  const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
-  useEffect(() => {
-    function measure() {
-      const target = document.querySelector('[data-tour="sidebar-account"]');
-      if (!target) { setPosition(null); return; }
-      const rect = target.getBoundingClientRect();
-      setPosition({ left: rect.right + 14, top: Math.max(16, Math.min(innerHeight - 86, rect.top + rect.height / 2 - 31)) });
-    }
-    measure();
-    const timer = setInterval(measure, 200);
-    return () => clearInterval(timer);
-  }, []);
-  if (!position || blocked) return null;
-  return createPortal(<aside className="onboarding-login-hint" role="status" style={position}>
-    <button onClick={() => { show("closed"); useStore.getState().setAccountOnboardingForceOpen(true); }}>登陆以使用园丁鸟创作功能</button>
-    <button aria-label="关闭登录提示" onClick={() => show("closed")}><X size={18} /></button>
-  </aside>, document.body);
 }
 
 function OnboardingResumeHint({ onResume, onSkip }: { onResume: () => void; onSkip: () => void }) {

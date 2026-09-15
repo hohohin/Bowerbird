@@ -46,7 +46,8 @@
     "targets": "all",
     "resources": {
       "../../extension/": "extension/",
-      "resources/samples/*": "samples/"
+      "resources/samples/*": "samples/",
+      "resources/onboarding-v0915/*": "onboarding-v0915/"
     },
     "windows": {
       "nsis": {

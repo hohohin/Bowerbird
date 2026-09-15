@@ -107,34 +107,22 @@ pub async fn create_onboarding_project(
     Ok(result)
 }
 
-/// 把 resources/samples/ 下的预设图复制到 document_dir/Bowerbird/初始引导/，返回其父目录
-/// （document_dir/Bowerbird/）。新手引导 pickFolder 默认打开父目录，让用户看到并点进「初始引导」，
-/// 而非直接定位到文件夹内。幂等（文件不存在或大小不同才覆盖）；dev 图未放则跳过不崩。
+/// 释放 v0915 素材与画板快照。选择器打开父目录，旧文件夹原样备份。
 #[tauri::command]
 pub async fn release_preset_pack(app: AppHandle) -> Result<String, AppError> {
-    let src_dir = samples::resolve_samples_dir(&app)
-        .ok_or_else(|| AppError::Other("预设图资源目录未找到".into()))?;
+    let src_dir = if cfg!(debug_assertions) {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/onboarding-v0915")
+    } else {
+        app.path().resource_dir().map_err(|e| AppError::Other(e.to_string()))?.join("onboarding-v0915")
+    };
     let doc = app
         .path()
         .document_dir()
         .map_err(|e| AppError::Other(format!("无法解析文档目录: {e}")))?;
     let parent = doc.join("Bowerbird");
     let target = parent.join("初始引导");
-    std::fs::create_dir_all(&target)?;
-    for spec in PRESET_SPECS {
-        let from = src_dir.join(spec.filename);
-        if !from.exists() {
-            continue;
-        }
-        let to = target.join(spec.filename);
-        let need = match std::fs::metadata(&to) {
-            Ok(m) => m.len() != std::fs::metadata(&from).ok().map(|x| x.len()).unwrap_or(0),
-            Err(_) => true,
-        };
-        if need {
-            std::fs::copy(&from, &to)?;
-        }
-    }
+    tokio::task::spawn_blocking(move || crate::core::onboarding_pack::release(&src_dir, &target))
+        .await.map_err(|e| AppError::Other(e.to_string()))??;
     Ok(parent.to_string_lossy().to_string())
 }
 

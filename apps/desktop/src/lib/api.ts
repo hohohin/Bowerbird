@@ -193,6 +193,8 @@ export const api = {
     invoke<CanvasNode>("project_canvas_node_create", { value }),
   projectCanvasNodeUpdate: (nodeId: string, value: CanvasNodeLayoutUpdate) =>
     invoke<CanvasNode | null>("project_canvas_node_update", { nodeId, value }),
+  projectCanvasNoteUpdate: (nodeId: string, payloadJson: string) =>
+    invoke<CanvasNode>("project_canvas_note_update", { nodeId, payloadJson }),
   projectCanvasNodeRemove: (nodeId: string) =>
     invoke<CanvasNodeRemoval | null>("project_canvas_node_remove", { nodeId }),
   projectCanvasNodeRestore: (projectId: string, nodeId: string) =>

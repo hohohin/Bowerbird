@@ -347,6 +347,7 @@ pub fn run() {
             commands::project_canvas::project_thread_restore,
             commands::project_canvas::project_canvas_node_create,
             commands::project_canvas::project_canvas_node_update,
+            commands::project_canvas::project_canvas_note_update,
             commands::project_canvas::project_canvas_node_remove,
             commands::project_canvas::project_canvas_node_restore,
             commands::project_canvas::project_canvas_group_create,

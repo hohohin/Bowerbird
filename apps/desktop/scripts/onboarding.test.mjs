@@ -4,7 +4,7 @@ import { freshRoleGuide, parseRoleGuide, advanceRoleGuide, previousRoleGuide, pr
 const session = (step = 0) => ({ designerRevision: 2, projectId: 'p', runId: 'run', step, stepStartedAt: 100, ready: false,
   baselineText: '', collectionId: null, profileId: null, analysisAssetId: null, annotationAssetId: null, tasks: {} });
 test('identity text and designer practice order match the requested workflow', () => {
-  assert.deepEqual(ONBOARDING_ROUTES.designer.map(s => s.scene), ['create-project', 'folder', 'source-scope', 'open-explore', 'explore', 'expand-source', 'activate-composer', 'sample-dimensions', 'pick-prompt', 'ready-to-create']);
+  assert.deepEqual(ONBOARDING_ROUTES.designer.map(s => s.scene), ['create-project', 'folder', 'source-scope', 'open-explore', 'explore', 'expand-source', 'activate-composer', 'sample-dimensions', 'pick-prompt', 'ready-to-create', 'more-uses']);
 });
 test('discarded demonstration completion never migrates to practice completion', () => {
   assert.deepEqual(parseRoleGuide({ role: 'designer', status: 'completed', steps: { designer: 5 }, completedRoles: ['designer','marketing','director'] }), freshRoleGuide());
@@ -103,4 +103,14 @@ test('completed eight-step designer sessions resume at the prompt selection less
   assert.equal(restored.sessions.designer.step,8);
   assert.equal(restored.status,'paused');
   assert.deepEqual(restored.completedRoles,[]);
+});
+
+test('completed ten-step designer sessions continue with the final canvas hint', () => {
+  const restored = parseRoleGuide({...freshRoleGuide(), role:'designer', status:'paused', completedRoles:['designer'], sessions:{designer:{...session(9), ready:true}}});
+  assert.equal(restored.sessions.designer.step, 10);
+  assert.equal(restored.sessions.designer.ready, false);
+  assert.deepEqual(restored.completedRoles, []);
+  assert.equal(ONBOARDING_ROUTES.designer[10].body, '这里还有更多使用方法，一定要试试哦！');
+  assert.equal(practiceReady('more-uses', restored.sessions.designer, {onProject:true}), true);
+  assert.equal(practiceReady('more-uses', restored.sessions.designer, {onProject:false}), false);
 });

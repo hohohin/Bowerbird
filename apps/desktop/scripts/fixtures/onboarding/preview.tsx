@@ -23,6 +23,9 @@ w.store = useStore;
 w.lesson = useOnboarding;
 const callbacks = new Map();
 const listeners = new Map();
+w.emit = (event: string, payload: any) => {
+  for (const [id, name] of listeners) if (name === event) callbacks.get(id)?.({ event, id, payload });
+};
 const folders = [{id:'existing-folder', name:'已有品牌集合', kind:'folder'}, {id:'favorite', name:'收藏夹不属于集合', kind:'collection'}];
 const project = JSON.parse(sessionStorage.getItem("lesson-project") || "null") || { id: "p", name: "入门引导合成验收", kind: "blank", workspace_path: "blank:p", asset_count: 2,
   title_source: "manual", created_at: 1, updated_at: 1 };
@@ -30,7 +33,7 @@ const projects = JSON.parse(sessionStorage.getItem("lesson-projects") || "null")
 const canvas = { projectId: project.id, draftJson: "{}", createdAt: 1, updatedAt: 1 };
 const image = (color: string) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="190" height="150"><rect width="190" height="150" fill="${color}"/></svg>`)}`;
 const assets = ["existing", "a"].map((id, i) => ({ id, name: `合成参考 ${id}`, width: 190, height: 150,
-  store_path: image(["#64748b", "#0369a1", "#4f46e5", "#0d9488", "#9333ea"][i]), source: "imported", origin_path: i === 0 ? "C:/fixture/初始引导/preset-01.webp" : "C:/fixture/other.png" }));
+  store_path: image(["#64748b", "#0369a1", "#4f46e5", "#0d9488", "#9333ea"][i]), source: "imported", origin_path: i === 0 ? "C:/fixture/初始引导/asset-016.webp" : "C:/fixture/other.png" }));
 let snapshot = JSON.parse(sessionStorage.getItem("reference-fixture") || "null") || {
   canvas, nodes: [],
   edges: [], groups: [], groupItems: [], threads: [{ id: "t", projectId: "p", title: "合成线程", archivedAt: null }],
@@ -47,11 +50,32 @@ w.__TAURI_INTERNALS__ = {
   metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main" } },
   invoke: async (command: string, args: any) => {
     w.calls.push({ command, args });
+    if (command === "cloud_start_wechat_login") { if (w.failWechat) throw "模拟扫码登录失败"; return "https://open.weixin.qq.com/connect/qrconnect?state=fixture"; }
+    if (command === "plugin:shell|open" && w.failWechatBrowser) throw "模拟浏览器打开失败";
+
     if (command === "plugin:event|listen") { listeners.set(args.handler, args.event); return args.handler; }
     if (command === "plugin:dialog|open") return w.cancelPick ? null : args.options?.directory ? (w.wrongFolder ? "fixture-folder" : "C:/fixture/初始引导") : ["fixture-image.png"];
     if (command === "release_preset_pack") return "C:/fixture";
     if (command === "import_files") { if (w.failImport) throw "模拟导入失败"; return assets; }
-    if (command === "import_folder") { if (w.failImport) throw "模拟文件夹失败"; return 2; }
+    if (command === "import_folder") {
+      if (w.failImport) throw "模拟文件夹失败";
+      if (w.pack && !w.packImported) {
+        const camel = (row: any) => Object.fromEntries(Object.entries(row).map(([k, v]) => [k.replace(/_([a-z])/g, (_, c) => c.toUpperCase()), v]));
+        const tables = w.pack.tables;
+        assets.splice(0, assets.length, ...tables.assets.map((asset: any) => ({ ...asset,
+          store_path: `/src-tauri/resources/onboarding-v0915/${asset.store_path}`,
+          thumb_path: `/src-tauri/resources/onboarding-v0915/${asset.thumb_path}`,
+        })));
+        snapshot = { canvas: { ...camel(tables.project_canvases[0]), projectId: args.projectId, draftJson: snapshot.canvas.draftJson },
+          nodes: tables.canvas_nodes.map(camel), edges: tables.canvas_edges.map(camel),
+          groups: tables.canvas_groups.map(camel), groupItems: tables.canvas_group_items.map(camel),
+          threads: tables.creative_threads.map(camel), view: { ...camel(tables.canvas_views[0]), projectId: args.projectId } };
+        w.packImported = true;
+        w.emit("library://assets-changed", null);
+        w.emit("project-canvas://imported", { projectId: args.projectId });
+      }
+      return w.pack ? w.pack.tables.assets.length : 2;
+    }
     if (command === "capture_source_browser_image") { if (w.failCapture) throw "模拟采集失败"; return assets[0]; }
     if (command === "save_annotation_temp") { if (w.failAnnotation) throw "模拟标注失败"; return { ...assets[0], id: "annotated", name: "标注参考", store_path: args.dataUrl, thumb_path: args.dataUrl }; }
     if (command === "get_asset") return assets.find(asset => asset.id === args.assetId);

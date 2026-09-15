@@ -13,6 +13,9 @@
     "test:creation-entry": "node scripts/creation-entry-ui.test.mjs",
     "test:canvas": "node --experimental-strip-types --test scripts/canvas-logic.test.mjs scripts/canvas-arrangement.test.mjs scripts/cloud-agent-runtime.test.mjs scripts/creative-canvas.test.mjs scripts/generation-intent.test.mjs scripts/generation-recovery.test.mjs scripts/project-activity.test.mjs scripts/workspace-route.test.mjs",
     "test:canvas:draft": "node scripts/canvas-draft-ui.test.mjs",
+    "test:canvas:notes": "node scripts/canvas-notes-ui.test.mjs",
+    "test:canvas:bubble": "node scripts/canvas-bubble-ui.test.mjs",
+    "test:canvas:media": "node scripts/canvas-media-ui.test.mjs",
     "test:annotation:tools": "node scripts/annotation-tools-ui.test.mjs",
     "test:layers": "node scripts/layer-editor-ui.test.mjs",
     "test:asset-deletion": "node --experimental-strip-types --test scripts/asset-deletion.test.mjs",
@@ -30,7 +33,8 @@
     "test:explorer:canvas": "node scripts/explorer-canvas-ui.test.mjs",
     "test:onboarding": "node --experimental-strip-types --test scripts/onboarding.test.mjs",
     "test:redemption": "node scripts/redemption-ui.test.mjs",
-    "test:onboarding:ui": "node scripts/onboarding-ui.test.mjs"
+    "test:onboarding:ui": "node scripts/onboarding-ui.test.mjs",
+    "test:onboarding:pack": "node scripts/onboarding-pack-ui.test.mjs"
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.10.7",

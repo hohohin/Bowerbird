@@ -223,7 +223,8 @@ export function parsePromptToDoc(
   assetById: Map<string, PromptedAsset>,
   schema: Schema = creationSchema,
   dimSources: PromptedAsset[] = [],
-  referenceNodeIds: Array<string | null> = []
+  referenceNodeIds: Array<string | null> = [],
+  referenceAliases: ReadonlyMap<string, readonly string[]> = new Map()
 ): PmNode {
   // 对象取最新：同 id 时 assetById 的对象优先（含最新反推 sections，【维度】按 sections
   // 精确匹配 fragment）；键注册顺序按 refs——文本里的 @标签由 serialize 按 references 序
@@ -233,6 +234,25 @@ export function parsePromptToDoc(
   for (const a of assetById.values()) byId.set(a.id, a);
   const ordered = refs.map((r) => byId.get(r.id)!).filter(Boolean);
   const assetByName = assignUniqueLabels(ordered).byKey;
+  // 画板节点可能早于这轮生成：同时接受素材的当前名称。每套名称按原 refs 顺序
+  // 分配 #k，跨版本有歧义的别名不抢占主标签，也不按位置猜测未知引用。
+  const aliasCandidates = new Map<string, PromptedAsset | null>();
+  const aliasCount = Math.max(0, ...ordered.map(asset => referenceAliases.get(asset.id)?.length ?? 0));
+  for (let index = 0; index < aliasCount; index++) {
+    const variants = ordered.map(asset => {
+      const name = referenceAliases.get(asset.id)?.[index];
+      // 路径文件名已带后缀，不再拼一次 .ext；普通名称仍按发送规则分配。
+      return name ? { ...asset, name, ext: TAIL_EXT.test(name) ? null : asset.ext } : asset;
+    });
+    for (const [label, variant] of assignUniqueLabels(variants).byKey) {
+      const asset = byId.get(variant.id)!;
+      if (aliasCandidates.has(label) && aliasCandidates.get(label)?.id !== asset.id) aliasCandidates.set(label, null);
+      else if (!aliasCandidates.has(label)) aliasCandidates.set(label, asset);
+    }
+  }
+  for (const [label, asset] of aliasCandidates) {
+    if (asset && !assetByName.has(label)) assetByName.set(label, asset);
+  }
   // 库内其余素材（不在本次 refs 里）只注册空闲键——重名时不得抢占 refs 的标签，
   // 否则 #k 分配错乱会把 @标签绑到非参考图上。
   const refIds = new Set(refs.map((r) => r.id));

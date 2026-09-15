@@ -94,6 +94,18 @@ pub async fn import_folder(
 ) -> Result<usize, AppError> {
     let paths = paths.inner().clone();
     let db = db.inner().clone();
+    if Path::new(&path).join(crate::core::onboarding_pack::MANIFEST).is_file() {
+        let project_id = project_id.ok_or_else(|| AppError::Other("请先新建创作，再导入包含画板的初始引导".into()))?;
+        let target_project = project_id.clone();
+        let (count, imported) = tokio::task::spawn_blocking(move || {
+            crate::core::onboarding_pack::import(&paths, &db, Path::new(&path), &target_project)
+        }).await.map_err(|e| AppError::Other(e.to_string()))??;
+        let _ = app.emit("library://assets-changed", ());
+        if imported {
+            let _ = app.emit("project-canvas://imported", serde_json::json!({ "projectId": project_id }));
+        }
+        return Ok(count);
+    }
     let db_for_ingest = db.clone();
     let assets = tokio::task::spawn_blocking(move || {
         ingest::ingest_dir(&paths, &db_for_ingest, &PathBuf::from(path))

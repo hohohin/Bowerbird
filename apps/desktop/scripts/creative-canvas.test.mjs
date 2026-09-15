@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { performance } from "node:perf_hooks";
 import {
   assetPayloadJson,
+  canvasAssetNodeSize,
+  canvasPromptReferences,
   agentPromptGroupMap,
   canvasSourceColumnCount,
   clampCanvasSourceThumbnailScale,
@@ -16,6 +18,44 @@ import {
   projectCanvasViewInput,
   rehydrateProjectCanvasAssets,
 } from "../src/lib/creativeCanvas.ts";
+
+test("canvas images retain native aspect ratios without clamping wide or tall cards", () => {
+  for (const [width, height] of [[1600, 900], [900, 1600], [2000, 250], [250, 2000], [1000, 1000]]) {
+    const size = canvasAssetNodeSize({ width, height });
+    assert.ok(Math.abs((size.width - 2) / (size.height - 32) - width / height) < 1e-9);
+  }
+});
+
+test("card thumbnails follow exact ordered input edges, including hidden references and frozen names", () => {
+  const a = { ...node("a", "asset-a"), hiddenAt: 10, payloadJson: JSON.stringify({ schema_version: 1, snapshot: { name: "原名称" } }) };
+  const b = { ...node("b", "asset-b"), payloadJson: JSON.stringify({ schema_version: 1, snapshot: { name: "另一张图" } }) };
+  const edges = [
+    { id: "b-edge", fromNodeId: "b", toNodeId: "prompt", kind: "input", ordinal: 1 },
+    { id: "a-edge", fromNodeId: "a", toNodeId: "prompt", kind: "input", ordinal: 0 },
+    { id: "other", fromNodeId: "b", toNodeId: "other-turn", kind: "input", ordinal: 0 },
+  ];
+  const references = canvasPromptReferences("prompt", [a, b], edges, new Map([["asset-a", { id: "asset-a", name: "已改名", thumb_path: "a.webp" }]]));
+  assert.deepEqual(references.map(asset => asset.id), ["asset-a", "asset-b"]);
+  assert.equal(references[0].name, "原名称");
+  assert.deepEqual(references[0].referenceNames, ["已改名"]);
+  assert.equal(references[0].thumb_path, "a.webp");
+  assert.equal(references[1].store_path, null);
+});
+
+test("continued, retry and branch cards include their exact parent image alongside new references", () => {
+  for (const kind of ["continued", "retry", "branch"]) {
+    const parent = { ...node("parent", "parent-asset"), hiddenAt: 10 };
+    const added = node("added", "added-asset");
+    const unrelated = node("unrelated", "other-asset");
+    const edges = [
+      { id: "new", kind: "input", fromNodeId: added.id, toNodeId: "prompt", ordinal: 1 },
+      { id: "parent", kind, fromNodeId: parent.id, toNodeId: "prompt", ordinal: 0 },
+      { id: "other", kind, fromNodeId: unrelated.id, toNodeId: "other-prompt", ordinal: 0 },
+    ];
+    assert.deepEqual(canvasPromptReferences("prompt", [parent, added, unrelated], edges, new Map()).map(asset => asset.id), ["parent-asset", "added-asset"]);
+    assert.deepEqual(canvasPromptReferences("prompt", [{ ...parent, kind: "prompt" }, added], edges, new Map()).map(asset => asset.id), ["added-asset"]);
+  }
+});
 
 test("deleted asset tombstones disappear from the canvas while graph history survives", () => {
   const deleted = node("deleted", null);
@@ -537,7 +577,7 @@ for (const collection of ["promptGraphNodes", "agentGraphNodes"]) {
       const summary = () => ({ status, jobId: "job", runId: "run" });
       const bindings = { React, X: () => null, selectCloudAgentResultArtifacts, promptNodeSummary: summary, agentGroupSummary: summary,
         cloudAgentRuns: {}, focusedNodeId: null, activeDragId: null, focusedThreadId: null,
-        supersededTaskIds: new Set(),
+        supersededTaskIds: new Set(), ReadonlyPrompt: () => null, CanvasResizeHandle: () => null, promptReferences: new Map(), graphNodes: [], agentPromptGroups: new Map(),
         selectedCanvasNodeIds: new Set(), selectedCanvasNodeIdsRef: { current: new Set() },
         removeNodes: (ids) => removed.push(...ids),
         isOutsideFocusedThread: () => false, moveGraphNode() {}, endGraphNodeDrag() {} };
@@ -560,6 +600,7 @@ for (const collection of ["promptGraphNodes", "agentGraphNodes"]) {
 }
 
 import { snapCanvasRect, translateCanvasSelection, exceedsCanvasDragThreshold, isCanvasPanGesture, canvasNodeIdsInRect } from "../src/lib/canvasLogic.ts";
+import { expandCanvasSections } from "../src/lib/canvasNotes.ts";
 
 for (const dragKind of ["material", "execution"]) {
   for (const cancel of [false, true]) {
@@ -586,7 +627,7 @@ for (const dragKind of ["material", "execution"]) {
       const persisted = [];
       let activated = 0;
       const bindings = {
-        agentPromptGroupMap, graphEdges: [],
+        agentPromptGroupMap, expandCanvasSections, graphEdges: [],
         activateCanvasMaterial: () => activated++, hitNode: () => null,
         nodesRef, graphNodesRef, threads: [{ id: "old", archivedAt: 1 }],
         selectedCanvasNodeIdsRef: { current: selectedIds }, nodeDragRef: { current: null }, graphNodeDragRef: { current: null },
