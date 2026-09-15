@@ -2,6 +2,16 @@
 
 本目录记录 Mac 上的本地开发、运行和未签名构建流程。Bowerbird 使用 canonical Tauri / React / Rust 源码，不维护 macOS override。构建架构以 `rustc -vV` 的 host 为准；Intel 为 `x86_64-apple-darwin`，Apple Silicon 原生工具链为 `aarch64-apple-darwin`。
 
+## 2026-09-15 原生 Mac 标题栏
+
+Mac 使用系统原生标题栏：左上角红色关闭、黄色最小化、绿色缩放/全屏，标题由系统居中显示，悬停和失焦外观交给 AppKit。现有 `applyTheme` 同步 Tauri 应用主题；`capabilities/macos-titlebar.json` 仅为 Mac 的 main WebView 授予 `core:app:allow-set-app-theme`，原生标题栏跟随应用浅色/深色设置。前端 Mac 不再渲染自绘标题栏，因此没有右侧重复按钮或多余空白；Windows 保持原来的自绘标题栏。
+
+`tauri.macos.conf.json` 仅覆盖主窗口配置，尺寸、最小尺寸和网页拖放设置与公共配置一致；使用 `decorations: true` 与 `titleBarStyle: Visible`。原生标题栏位于网页内容之外，加载或应用弹窗不会挡住按钮。配置机制见 [Tauri 平台配置](https://v2.tauri.app/reference/config/)。
+
+验证命令：在桌面目录运行 `node scripts/window-titlebar-ui.test.mjs`；原生隔离验证运行 `cargo run --offline --manifest-path src-tauri/Cargo.toml --example mac_titlebar_smoke`。后者仅创建隐藏的非持久窗口，核验三个 AppKit 标准按钮存在、未隐藏、启用以及原生装饰与主题，不运行生产初始化或读取用户素材库。
+
+本次通过 Windows/Mac Chrome 合成 IPC 标题栏回归（含 900px 布局、无重复控件/空白、主题同步）、TypeScript/Vite 构建，以及上述真实 Tauri/AppKit 隐藏窗口验证。证据保存在本地 `macOS/dist/verification/native-titlebar/`；未操作生产窗口或用户数据，未自动演练真实窗口的全屏空间切换。
+
 ## 2026-09-15 引导遮挡与结束顺序修复
 
 维度环出现时暂时隐藏原生网页，关闭维度环后恢复同一网页，避免第九步「反推提示词」被 WKWebView 覆盖。设计师第十步先显示全画布提示，第十一步才显示最终完成/微信登录弹窗；全画布提示使用「下一步」，只在最终弹窗完成一次。旧会话迁移保留项目及已完成状态。
@@ -35,9 +45,9 @@ Mac 取图此前直接进入“不支持”分支。现在通过当前 WKWebView
 本次交付为 **Intel x86_64**（本机 Node 26.4.0、Rust 1.96.0），不是 arm64/Universal 构建：
 
 - 应用：`apps/desktop/src-tauri/target/release/bundle/macos/Bowerbird.app`。
-- 未经 Developer ID 签名/公证的测试包：`macOS/dist/Bowerbird_26.9.15_x64.dmg`，74,555,391 bytes。
-- SHA-256：`11af9c9c93c2371b19a2e533de88b2106b9eb2734b43e337d7b1662e7aa9f40a`；同目录附 `.sha256`，`hdiutil verify` 完整性检查通过。
-- 本次引导修复重包已核对版本、Mach-O 架构、原生取图桥接保留、49 个包内资源文件与 230 个前端/Rust/原生源文件指纹；结果见本地 `macOS/dist/verification/onboarding-order/`。此前取图验证见 `browser-capture/`，同步验证（包含公开 Cloud 配置构建注入）见父目录记录。上一个取图修复包备份在 `macOS/dist/archive/20260915-before-onboarding-order-fix/`，更早的包仍保留。
+- 未经 Developer ID 签名/公证的测试包：`macOS/dist/Bowerbird_26.9.15_x64.dmg`，74,555,790 bytes。
+- SHA-256：`efa87f439b5f6b2f354776e7a4a04ae855404f044471aa44bf7463e42cce948c`；同目录附 `.sha256`，`hdiutil verify` 完整性检查通过。
+- 本次原生标题栏重包已核对版本、Mach-O 架构、原生取图桥接保留、Mac 主窗口主题权限、49 个包内资源文件与 233 个构建源码/配置文件指纹；结果见本地 `macOS/dist/verification/native-titlebar/`。此前引导和取图验证分别见 `onboarding-order/`、`browser-capture/`，同步验证（包含公开 Cloud 配置构建注入）见父目录记录。上一个引导修复包备份在 `macOS/dist/archive/20260915-before-native-titlebar/`，更早的包仍保留。
 
 平台边界：
 

@@ -8,9 +8,11 @@ import appIcon from "../../src-tauri/icons/32x32.png";
 /** 窗口控制独立于工作区，加载中及打开弹窗时仍可操作。 */
 export function WindowTitlebar() {
   const [maximized, setMaximized] = useState(false);
+  // macOS uses its native title bar and traffic lights (tauri.macos.conf.json).
+  const nativeTitlebar = /Mac/i.test(navigator.platform);
 
   useEffect(() => {
-    if (!isTauri()) return;
+    if (!isTauri() || nativeTitlebar) return;
     const appWindow = getCurrentWindow();
     let alive = true;
     let unlisten: (() => void) | undefined;
@@ -25,9 +27,9 @@ export function WindowTitlebar() {
       else stop();
     }).catch(error => console.error("监听窗口状态失败", error));
     return () => { alive = false; unlisten?.(); };
-  }, []);
+  }, [nativeTitlebar]);
 
-  if (!isTauri()) return null;
+  if (!isTauri() || nativeTitlebar) return null;
 
   function control(action: "minimize" | "toggleMaximize" | "close" | "startDragging") {
     void getCurrentWindow()[action]().catch(error => notifyError(error, "窗口操作失败"));

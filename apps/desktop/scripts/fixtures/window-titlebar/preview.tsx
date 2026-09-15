@@ -7,6 +7,7 @@ import { Toolbar } from "../../../src/components/Toolbar";
 import { useStore } from "../../../src/store";
 import "../../../src/styles.css";
 
+Object.defineProperty(navigator, "platform", { value: new URL(location.href).searchParams.has("mac") ? "MacIntel" : "Win32", configurable: true });
 const w = window as any;
 w.isTauri = true;
 w.calls = [];

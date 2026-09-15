@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "macos-titlebar",
+  "description": "Mac 主窗口原生标题栏跟随应用主题",
+  "platforms": ["macOS"],
+  "webviews": ["main"],
+  "permissions": ["core:app:allow-set-app-theme"]
+}
