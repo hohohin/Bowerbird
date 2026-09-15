@@ -30,7 +30,7 @@ export function RoleOnboarding() {
         await useStore.getState().enterProject(session.projectId);
       } else if (role === "designer") {
         await useStore.getState().exitProject();
-        session = { designerRevision: 2, projectId: "", runId: crypto.randomUUID(), step: 0, stepStartedAt: Date.now(), ready: false,
+        session = { designerRevision: 2, designerEndingRevision: 1, projectId: "", runId: crypto.randomUUID(), step: 0, stepStartedAt: Date.now(), ready: false,
           baselineText: "", collectionId: null, profileId: null, analysisAssetId: null, annotationAssetId: null, tasks: {} };
       } else {
         const name = ONBOARDING_ROLES.find(item => item.id === role)!.name + " · 入门创作";

@@ -19,8 +19,8 @@ export const ONBOARDING_ROUTES: Record<OnboardingRole, GuideStep[]> = {
     { scene: "activate-composer", title: "激活创作模式", body: "点击对话框激活创作模式", target: "[data-onboarding-composer]" },
     { scene: "sample-dimensions", title: "认识反推和维度环", body: "对于一张图片，你可以通过**反推**来获得其风格、类型、技术细节等提示词或者反推提示词。\n当你不想图像模型过多参考原图片的时候，可以试着用维度来进行生成\n反推需要登录，所以我们先试试看这张已经有反推数据的图片", target: ".canvas-source-panel" },
     { scene: "pick-prompt", title: "添加反推提示词", body: "请点击选择「反推提示词」维度，将其添加到对话框", target: '[data-dim="反推提示词"]', highlight: '[data-dim="反推提示词"]' },
-    { scene: "ready-to-create", title: "入门引导已完成", body: "恭喜你，已完成设计师入门引导！现在你已经准备好生成了，开始筑巢吧。", target: ".onboarding-completion" },
     { scene: "more-uses", title: "探索更多使用方法", body: "这里还有更多使用方法，一定要试试哦！", target: ".canvas-workspace" },
+    { scene: "ready-to-create", title: "入门引导已完成", body: "恭喜你，已完成设计师入门引导！现在你已经准备好生成了，开始筑巢吧。", target: ".onboarding-completion" },
   ],
   marketing: [workspace, importStep,
     { scene: "collections", title: "整理一个品牌素材集合", body: "在左侧「集合」旁点击 +，按品牌命名；打开集合，通过「添加素材」选择图片，确认添加。也可以打开一个已有素材的品牌集合。", target: ".app-sidebar, [data-tour=collection-panel]" },
@@ -36,6 +36,7 @@ export const ONBOARDING_ROUTES: Record<OnboardingRole, GuideStep[]> = {
 };
 export interface RoleSession {
   designerRevision?: 2;
+  designerEndingRevision?: 1;
   skippedSteps?: number[];
   stepVisit?: number;
   reviewUntil?: number;
@@ -76,6 +77,19 @@ export function parseRoleGuide(value: unknown): RoleGuideProgress {
   // Append the new lessons after a previously completed six-, eight- or ten-step designer route.
   if (Array.isArray(p.completedRoles) && p.completedRoles.includes("designer") && [5, 7, 9].includes(fresh.sessions.designer?.step ?? -1)) {
     fresh.sessions.designer = { ...fresh.sessions.designer!, step: fresh.sessions.designer!.step + 1, ready: false, stepStartedAt: Date.now(), tasks: {} };
+  }
+  // The old ending showed completion before the canvas hint. Pending sessions
+  // resume at the hint; fully finished routes stay finished after upgrading.
+  const designer = fresh.sessions.designer;
+  if (designer && designer.designerEndingRevision !== 1) {
+    const finished = Array.isArray(p.completedRoles) && p.completedRoles.includes("designer")
+      && p.sessions?.designer?.step === 10 && (designer.ready || designer.skippedSteps?.includes(10));
+    const skipped = designer.skippedSteps?.map(step => step === 9 ? 10 : step === 10 ? 9 : step);
+    if (finished && !designer.ready && skipped && !skipped.includes(10)) skipped.push(10);
+    fresh.sessions.designer = { ...designer, designerEndingRevision: 1,
+      ...(skipped ? { skippedSteps: skipped } : {}),
+      ...(designer.step >= 9 && !finished ? { step: 9, ready: false, tasks: {}, reviewUntil: undefined,
+        stepVisit: (designer.stepVisit ?? 0) + 1, stepStartedAt: Date.now() } : {}) };
   }
   fresh.completedRoles = roles.filter(id => Array.isArray(p.completedRoles) && p.completedRoles.includes(id) && (fresh.sessions[id]?.ready || fresh.sessions[id]?.skippedSteps?.includes(ONBOARDING_ROUTES[id].length - 1))
     && fresh.sessions[id]?.step === ONBOARDING_ROUTES[id].length - 1);

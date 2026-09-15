@@ -2,6 +2,12 @@
 
 本目录记录 Mac 上的本地开发、运行和未签名构建流程。Bowerbird 使用 canonical Tauri / React / Rust 源码，不维护 macOS override。构建架构以 `rustc -vV` 的 host 为准；Intel 为 `x86_64-apple-darwin`，Apple Silicon 原生工具链为 `aarch64-apple-darwin`。
 
+## 2026-09-15 引导遮挡与结束顺序修复
+
+维度环出现时暂时隐藏原生网页，关闭维度环后恢复同一网页，避免第九步「反推提示词」被 WKWebView 覆盖。设计师第十步先显示全画布提示，第十一步才显示最终完成/微信登录弹窗；全画布提示使用「下一步」，只在最终弹窗完成一次。旧会话迁移保留项目及已完成状态。
+
+14 项进度契约、三身份 Chrome 合成 IPC 界面回归与 TypeScript/Vite 构建通过，截图及日志位于本地 `macOS/dist/verification/onboarding-order/`。此轮未执行真实站点、账号或用户素材库操作。
+
 ## 2026-09-15 内置浏览器采集修复
 
 Mac 取图此前直接进入“不支持”分支。现在通过当前 WKWebView 的原生 WKDownload 获取图片，沿用浏览器登录态，复用现有去重、来源记录与目标项目入库流程。需要 macOS 11.3+，单图上限 50 MiB、超时 45 秒，采集不刷新原网页。
@@ -29,9 +35,9 @@ Mac 取图此前直接进入“不支持”分支。现在通过当前 WKWebView
 本次交付为 **Intel x86_64**（本机 Node 26.4.0、Rust 1.96.0），不是 arm64/Universal 构建：
 
 - 应用：`apps/desktop/src-tauri/target/release/bundle/macos/Bowerbird.app`。
-- 未经 Developer ID 签名/公证的测试包：`macOS/dist/Bowerbird_26.9.15_x64.dmg`，74,555,353 bytes。
-- SHA-256：`77c471410264c727ea5e5f85be3f540ff424b8fd2449d466a48656b41c1dd966`；同目录附 `.sha256`，`hdiutil verify` 完整性检查通过。
-- 本次采集修复重包已核对版本、Mach-O 架构、原生桥接类/方法、49 个包内资源文件与 87 个 Rust/原生源文件指纹；结果见本地 `macOS/dist/verification/browser-capture/`。此前同步验证（包含公开 Cloud 配置构建注入）见父目录记录。修复前安装包备份在 `macOS/dist/archive/20260915-before-browser-fix/`。
+- 未经 Developer ID 签名/公证的测试包：`macOS/dist/Bowerbird_26.9.15_x64.dmg`，74,555,391 bytes。
+- SHA-256：`11af9c9c93c2371b19a2e533de88b2106b9eb2734b43e337d7b1662e7aa9f40a`；同目录附 `.sha256`，`hdiutil verify` 完整性检查通过。
+- 本次引导修复重包已核对版本、Mach-O 架构、原生取图桥接保留、49 个包内资源文件与 230 个前端/Rust/原生源文件指纹；结果见本地 `macOS/dist/verification/onboarding-order/`。此前取图验证见 `browser-capture/`，同步验证（包含公开 Cloud 配置构建注入）见父目录记录。上一个取图修复包备份在 `macOS/dist/archive/20260915-before-onboarding-order-fix/`，更早的包仍保留。
 
 平台边界：
 

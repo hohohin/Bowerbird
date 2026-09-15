@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { freshRoleGuide, parseRoleGuide, advanceRoleGuide, previousRoleGuide, practiceReady, ONBOARDING_ROUTES } from '../src/lib/onboardingRoutes.ts';
-const session = (step = 0) => ({ designerRevision: 2, projectId: 'p', runId: 'run', step, stepStartedAt: 100, ready: false,
+const session = (step = 0) => ({ designerRevision: 2, designerEndingRevision: 1, projectId: 'p', runId: 'run', step, stepStartedAt: 100, ready: false,
   baselineText: '', collectionId: null, profileId: null, analysisAssetId: null, annotationAssetId: null, tasks: {} });
 test('identity text and designer practice order match the requested workflow', () => {
-  assert.deepEqual(ONBOARDING_ROUTES.designer.map(s => s.scene), ['create-project', 'folder', 'source-scope', 'open-explore', 'explore', 'expand-source', 'activate-composer', 'sample-dimensions', 'pick-prompt', 'ready-to-create', 'more-uses']);
+  assert.deepEqual(ONBOARDING_ROUTES.designer.map(s => s.scene), ['create-project', 'folder', 'source-scope', 'open-explore', 'explore', 'expand-source', 'activate-composer', 'sample-dimensions', 'pick-prompt', 'more-uses', 'ready-to-create']);
 });
 test('discarded demonstration completion never migrates to practice completion', () => {
   assert.deepEqual(parseRoleGuide({ role: 'designer', status: 'completed', steps: { designer: 5 }, completedRoles: ['designer','marketing','director'] }), freshRoleGuide());
@@ -106,11 +106,30 @@ test('completed eight-step designer sessions resume at the prompt selection less
 });
 
 test('completed ten-step designer sessions continue with the final canvas hint', () => {
-  const restored = parseRoleGuide({...freshRoleGuide(), role:'designer', status:'paused', completedRoles:['designer'], sessions:{designer:{...session(9), ready:true}}});
-  assert.equal(restored.sessions.designer.step, 10);
+  const restored = parseRoleGuide({...freshRoleGuide(), role:'designer', status:'paused', completedRoles:['designer'], sessions:{designer:{...session(9), designerEndingRevision:undefined, ready:true}}});
+  assert.equal(restored.sessions.designer.step, 9);
   assert.equal(restored.sessions.designer.ready, false);
   assert.deepEqual(restored.completedRoles, []);
-  assert.equal(ONBOARDING_ROUTES.designer[10].body, '这里还有更多使用方法，一定要试试哦！');
+  assert.equal(ONBOARDING_ROUTES.designer[9].body, '这里还有更多使用方法，一定要试试哦！');
   assert.equal(practiceReady('more-uses', restored.sessions.designer, {onProject:true}), true);
   assert.equal(practiceReady('more-uses', restored.sessions.designer, {onProject:false}), false);
+});
+
+test('old pending endings resume at the canvas hint once; finished routes stay finished', () => {
+  for (const step of [9, 10]) {
+    const old = {...freshRoleGuide(), role:'designer', status:'paused', sessions:{designer:{...session(step), designerEndingRevision:undefined, ready:true, skippedSteps:[9]}}};
+    const restored=parseRoleGuide(old);
+    assert.equal(restored.sessions.designer.step,9);
+    assert.equal(restored.sessions.designer.ready,false);
+    assert.equal(restored.sessions.designer.projectId,'p');
+    assert.deepEqual(restored.sessions.designer.skippedSteps,[10]);
+    assert.deepEqual(parseRoleGuide(restored),restored);
+  }
+  for (const ready of [true, false]) {
+    const old={...freshRoleGuide(),role:'designer',status:'paused',completedRoles:['designer'],sessions:{designer:{...session(10),designerEndingRevision:undefined,ready,skippedSteps:ready?[]:[10]}}};
+    const restored=parseRoleGuide(old);
+    assert.deepEqual(restored.completedRoles,['designer']);
+    assert.equal(restored.sessions.designer.step,10);
+    assert.deepEqual(parseRoleGuide(restored),restored);
+  }
 });

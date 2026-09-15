@@ -123,10 +123,10 @@ export function SourceBrowserPanel({ url, onClose, visible = true, suspended = f
         const bounds = boundsFor(viewport);
         if (bounds.width < 240 || bounds.height < 180) return;
         const viewportRect = viewport.getBoundingClientRect();
-        const overlay = Array.from(document.querySelectorAll('[role="dialog"], [role="alertdialog"], [role="menu"]'))
+        const overlay = Array.from(document.querySelectorAll('[role="dialog"], [role="alertdialog"], [role="menu"], .caption-ring-layer'))
           .some(element => {
             if (element.getClientRects().length === 0 || getComputedStyle(element).visibility === "hidden") return false;
-            // Dialogs can have a full-window backdrop outside their own bounds.
+            // Dialogs and dimension rings have backdrops beyond their own bounds.
             if (element.getAttribute("role") !== "menu") return true;
             const rect = element.getBoundingClientRect();
             return rect.left < viewportRect.right && rect.right > viewportRect.left
@@ -186,7 +186,7 @@ export function SourceBrowserPanel({ url, onClose, visible = true, suspended = f
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!visibleRef.current || event.defaultPrevented || suspendedRef.current || document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"]')) return;
+      if (!visibleRef.current || event.defaultPrevented || suspendedRef.current || document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"], .caption-ring-layer')) return;
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "l") {
         event.preventDefault();
         addressRef.current?.focus();
