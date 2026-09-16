@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { CanvasLayerMenuItem } from "./CanvasLayerMenuItem";
 import { createPortal } from "react-dom";
 import { ClipboardCopy, Layers, LayoutDashboard, MessageSquare, PenTool, ScanSearch, Trash2, Ungroup } from "lucide-react";
@@ -19,12 +19,9 @@ import {
   type CanvasRemoveNodesEventDetail,
 } from "../lib/creativeCanvas";
 
-const MENU_WIDTH = 232;
-// 高度按全量项（生成图 + 本地文件 + 项目内，含「物理删除整组」）估算，含四组标签与分隔线。
-const MENU_HEIGHT = 590;
-
 /** 可标注图片：浏览器 <img>/canvas 能解码的位图格式（tiff 浏览器不解码，排除）。 */
 const ANNOTATABLE_EXTS = ["jpg", "jpeg", "png", "webp", "gif", "bmp"];
+const CANVAS_IMAGE_EXTS = [...ANNOTATABLE_EXTS, "avif", "svg", "ico", "tif", "tiff"];
 
 function resultMessage(mode: AssetDeleteMode, result: AssetDeleteResult): string {
   if (mode === "keep") {
@@ -39,7 +36,7 @@ function resultMessage(mode: AssetDeleteMode, result: AssetDeleteResult): string
 }
 
 /**
- * 图片右键菜单：整理 / 再创作 / 文件 / 移出与删除 四组。
+ * 图片右键菜单：常用 / 再创作、文件 / 移出与删除 两列。
  * 全局只有一个实例（store.contextMenu 状态驱动），挂在 App 最外层；
  * 瀑布流缩略图 / 详情页大图各自 onContextMenu 触发。
  */
@@ -67,12 +64,42 @@ export function AssetContextMenu() {
   const reuseIntentRef = useRef(0);
 
   const [busy, setBusy] = useState(false);
+  const [canvasLibraryCheck, setCanvasLibraryCheck] = useState<{ menu: typeof menu; available: boolean } | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   // 右键素材所在生成组的成员 id（菜单打开时取，>1 张才显示「物理删除整组」）。
   const [groupIds, setGroupIds] = useState<string[] | null>(null);
   const [pendingGroupDelete, setPendingGroupDelete] = useState<string[] | null>(null);
   const [renameTarget, setRenameTarget] = useState<{ id: string; name: string } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menu?.libraryProjectId) return;
+    let alive = true;
+    api.projectCanvasGet(menu.libraryProjectId).then(snapshot => {
+      if (alive) setCanvasLibraryCheck({ menu, available: snapshot.nodes.some(node =>
+        node.kind === "asset" && node.assetId === menu.assetId && node.hiddenAt == null) });
+    }).catch(() => { if (alive) setCanvasLibraryCheck({ menu, available: false }); });
+    return () => { alive = false; };
+  }, [menu]);
+
+  // 按实际尺寸避让窗口边缘；异步出现的整组删除和窗口缩放也重新定位。
+  useLayoutEffect(() => {
+    const element = menuRef.current;
+    if (!menu || !element) return;
+    const position = () => {
+      const rect = element.getBoundingClientRect();
+      element.style.left = `${Math.max(8, Math.min(menu.x, window.innerWidth - rect.width - 8))}px`;
+      element.style.top = `${Math.max(8, Math.min(menu.y, window.innerHeight - rect.height - 8))}px`;
+    };
+    position();
+    const observer = new ResizeObserver(position);
+    observer.observe(element);
+    window.addEventListener("resize", position);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", position);
+    };
+  }, [menu]);
 
   // 每次打开重置子状态。
   // （pendingDeleteId / pendingGroupDelete / renameTarget 不在此重置——「物理删除」/「物理删除
@@ -114,10 +141,20 @@ export function AssetContextMenu() {
         closeContextMenu();
         return;
       }
-      if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
+      if (!["ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return;
       const buttons = Array.from(menuRef.current?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") ?? []);
       if (buttons.length === 0) return;
       e.preventDefault();
+      if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+        const columns = menuRef.current?.querySelectorAll<HTMLElement>(".asset-context-column");
+        const target = columns?.[e.key === "ArrowRight" ? 1 : 0];
+        const currentColumn = document.activeElement?.closest(".asset-context-column");
+        const currentButtons = Array.from(currentColumn?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") ?? []);
+        const targetButtons = Array.from(target?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") ?? []);
+        const index = Math.max(0, currentButtons.indexOf(document.activeElement as HTMLButtonElement));
+        targetButtons[Math.min(index, targetButtons.length - 1)]?.focus();
+        return;
+      }
       if (e.key === "Home") {
         buttons[0].focus();
         return;
@@ -193,6 +230,8 @@ export function AssetContextMenu() {
   const asset = menu.asset ?? assets.find((a) => a.id === assetId);
   const storePath = asset?.store_path ?? null;
   const moveOutAvailable = canMoveAssetOut(asset);
+  const canvasLibraryAvailable = canvasLibraryCheck?.menu === menu && canvasLibraryCheck.available;
+  const canChangeLibraryVisibility = !!asset?.store_path && CANVAS_IMAGE_EXTS.includes((asset.ext ?? "").toLowerCase());
   // 仅生成图显示「复用生成提示词」：generation_session_id 非 null 即任意 provider 的生成图。
   const isGenerated = !!asset?.generation_session_id;
   // 「图片标注」可用：本地有文件且为浏览器可解码位图（视频 / SVG / TIFF 不可标注）。
@@ -213,10 +252,6 @@ export function AssetContextMenu() {
     : !cloudAuth?.logged_in
       ? "免费版反推需要先登录 Bowerbird Cloud（每日 10 次）"
       : "Bowerbird Cloud 不可用";
-
-  // 菜单定位：固定到鼠标位置，超右/下边缘时收进来（近似估算尺寸即可）。
-  const x = Math.max(4, Math.min(menu.x, window.innerWidth - MENU_WIDTH - 8));
-  const y = Math.max(4, Math.min(menu.y, window.innerHeight - MENU_HEIGHT - 8));
 
   async function reveal() {
     setBusy(true);
@@ -326,6 +361,22 @@ export function AssetContextMenu() {
     }
   }
 
+  async function setLibraryVisibility(visible: boolean) {
+    const projectId = visible ? menu?.canvasSelection?.projectId : menu?.libraryProjectId;
+    if (!projectId) return;
+    const expectedMenu = menu;
+    setBusy(true);
+    try {
+      await api.setCanvasAssetLibraryVisibility(projectId, assetId, visible);
+      notifySuccess(visible ? "已加入素材库" : "已从素材库移除，画布图片已保留");
+      if (useStore.getState().contextMenu === expectedMenu) closeContextMenu();
+      void reloadProjects();
+    } catch (error) {
+      notifyError(error, "调整素材库归属失败");
+      if (useStore.getState().contextMenu === expectedMenu) setBusy(false);
+    }
+  }
+
   /** 整组物理删除：循环单条 delete（无批量 API，与 BatchBar 批量删除同模式），
    *  单条失败不中断后续；有失败 → 报失败数，全成功 → toast 总数。 */
   async function runDeleteGroup(ids: string[]) {
@@ -356,9 +407,8 @@ export function AssetContextMenu() {
 
   const menuStyle: React.CSSProperties = {
     position: "fixed",
-    left: x,
-    top: y,
-    width: MENU_WIDTH,
+    left: menu.x,
+    top: menu.y,
     zIndex: 60,
   };
 
@@ -383,305 +433,325 @@ export function AssetContextMenu() {
       ref={menuRef}
       style={menuStyle}
       onContextMenu={(e) => e.preventDefault()}
-      className="app-context-menu p-1.5 text-xs"
+      className="app-context-menu asset-context-menu p-1.5 text-xs"
       role="menu"
       aria-label="素材操作"
     >
-      <div className="app-context-label">整理</div>
-      {menu.canvasSelection && <CanvasLayerMenuItem {...menu.canvasSelection} disabled={busy} className="app-context-item px-2 py-1.5" />}
-      {menu.ungroupCanvasFolder && (
-        <button type="button" role="menuitem" disabled={busy} className="app-context-item px-2 py-1.5"
-          onClick={() => {
-            closeContextMenu();
-            menu.ungroupCanvasFolder!();
-          }}>
-          <Ungroup size={13} className="shrink-0" /> 解散素材组
-        </button>
-      )}
-      {menu.canvasSelection && (
-        <button type="button" role="menuitem" disabled={busy} className="app-context-item px-2 py-1.5"
-          onClick={() => {
-            window.dispatchEvent(new CustomEvent<CanvasArrangeNodesEventDetail>(CANVAS_ARRANGE_NODES_EVENT, {
-              detail: menu.canvasSelection,
-            }));
-            closeContextMenu();
-          }}>
-          <LayoutDashboard size={13} className="shrink-0" /> 整理
-        </button>
-      )}
-      {menu.canvasSelection && (
-        <button
-          type="button"
-          role="menuitem"
-          onClick={() => {
-            window.dispatchEvent(new CustomEvent<CanvasRemoveNodesEventDetail>(CANVAS_REMOVE_NODES_EVENT, {
-              detail: menu.canvasSelection,
-            }));
-            closeContextMenu();
-          }}
-          disabled={busy}
-          className="app-context-item px-2 py-1.5"
-        >
-          <Trash2 size={13} className="shrink-0" />
-          {menu.canvasSelection.nodeIds.length > 1
-            ? `从画板移除所选 ${menu.canvasSelection.nodeIds.length} 项`
-            : "从画板移除"}
-        </button>
-      )}
-      {menu.addCanvasImagesToBoard && menu.addCanvasImagesToBoard.count > 0 && (
-        <button type="button" role="menuitem" disabled={busy} className="app-context-item px-2 py-1.5"
-          onClick={() => {
-            closeContextMenu();
-            menu.addCanvasImagesToBoard!.run();
-          }}>
-          {menu.addCanvasImagesToBoard.count > 1
-            ? `添加所选 ${menu.addCanvasImagesToBoard.count} 张图片到对话框`
-            : "添加到对话框"}
-        </button>
-      )}
-      {/* 详情页右键（编辑器对话框与详情页互斥，从此处带回主界面插 chip）：菜单第一项。 */}
-      {mode === "browse" && detailAssetId !== null && (
-        <button
-          type="button"
-          role="menuitem"
-          onClick={() => {
-            addAssetToBoardFromDetail(assetId);
-            closeContextMenu();
-          }}
-          disabled={busy}
-          className="app-context-item px-2 py-1.5"
-        >
-          添加到对话框
-        </button>
-      )}
-      {/* 浏览（未激活创作）模式下右键开详情；激活态左键是插 chip，详情也走这里。 */}
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => void showAssetDetail()}
-        disabled={busy}
-        className="app-context-item px-2 py-1.5"
-      >
-        打开图片详情
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          // browse 模式：右键直接进 manage 并选中此图；manage 模式：仅切换选中。继续点其它图加选。
-          if (mode !== "manage") enterManage();
-          toggleSelect(assetId);
-          closeContextMenu();
-        }}
-        disabled={busy}
-        className="app-context-item px-2 py-1.5"
-      >
-        {mode === "manage" ? "选择/取消选择" : "选择"}
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          // 先收菜单再开 dialog，避免两个浮层同时存在。
-          setRenameTarget({ id: assetId, name: asset?.name ?? "" });
-          closeContextMenu();
-        }}
-        disabled={busy || !storePath}
-        title={storePath ? "重命名（同步改磁盘文件名）" : "该素材没有本地文件，无法重命名"}
-        className="app-context-item px-2 py-1.5"
-      >
-        重命名
-      </button>
-      <div className="app-context-divider" />
-      <div className="app-context-label">再创作</div>
-      <button
-        type="button"
-        role="menuitem"
-        onClick={(e) => {
-          const r = e.currentTarget.getBoundingClientRect();
-          openDescribePicker(
-            { kind: "single", assetId, instruction: loadDescribePrompt() },
-            { x: r.left, y: r.bottom },
-          );
-          closeContextMenu();
-        }}
-        disabled={busy || describing || !understandReady}
-        title={understandReady ? "反推提示词" : understandReason}
-        className="app-context-item px-2 py-1.5"
-      >
-        <ScanSearch size={13} className="shrink-0" />
-        反推提示词
-      </button>
-      {isGenerated && (
-        <button
-          type="button"
-          role="menuitem"
-          data-tour="ctx-reuse-gen"
-          onClick={reuseGeneration}
-          disabled={busy}
-          title="打开创作板，填入该图生成时的提示词与参考素材"
-          className="app-context-item px-2 py-1.5"
-        >
-          <ClipboardCopy size={13} className="shrink-0" />
-          复用生成提示词
-        </button>
-      )}
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          openAnnotator(assetId);
-          closeContextMenu();
-        }}
-        disabled={busy || !annotatable}
-        title={
-          annotatable
-            ? "截图软件式画框 / 箭头标注；输出可保存到素材库或插入创作板（不入库）"
-            : "该素材不是可标注的图片"
-        }
-        className="app-context-item px-2 py-1.5"
-      >
-        <PenTool size={13} className="shrink-0" />
-        图片标注
-      </button>
-      <button type="button" role="menuitem" disabled={busy || !annotatable}
-        title={annotatable ? "拆分并独立调整图层" : "该素材不是可编辑的图片"}
-        className="app-context-item px-2 py-1.5"
-        onClick={() => useStore.getState().openLayerEditor(assetId)}>
-        <Layers size={13} className="shrink-0" />分层编辑
-      </button>
-      {isGenerated && (
-        <button
-          type="button"
-          role="menuitem"
-          onClick={() => {
-            // 先收菜单再打开所属创作；未迁移的旧图回退到历史生成面板。
-            closeContextMenu();
-            void viewGenerationHistory(assetId);
-          }}
-          disabled={busy}
-          title="打开这张图所属的创作；旧记录回退到生成历史"
-          className="app-context-item px-2 py-1.5"
-        >
-          <MessageSquare size={13} className="shrink-0" />
-          回看所属创作
-        </button>
-      )}
-
-      <div className="app-context-divider" />
-      <div className="app-context-label">文件</div>
-      <button
-        type="button"
-        role="menuitem"
-        onClick={reveal}
-        disabled={busy}
-        className="app-context-item px-2 py-1.5"
-      >
-        打开所在文件夹
-      </button>
-      {storePath && (
-        <>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={async () => {
-              try {
-                await api.openWithSystem(storePath);
-                notifySuccess("已用系统程序打开素材");
-                closeContextMenu();
-              } catch (e) {
-                notifyError(e, "无法用系统程序打开素材");
-              }
-            }}
-            disabled={busy}
-            className="app-context-item px-2 py-1.5"
-          >
-            用系统程序打开
+      <div className="asset-context-column">
+        <div className="app-context-label">常用</div>
+        {menu.canvasSelection && <CanvasLayerMenuItem {...menu.canvasSelection} disabled={busy} className="app-context-item px-2 py-1.5" />}
+        {menu.ungroupCanvasFolder && (
+          <button type="button" role="menuitem" disabled={busy} className="app-context-item px-2 py-1.5"
+            onClick={() => {
+              closeContextMenu();
+              menu.ungroupCanvasFolder!();
+            }}>
+            <Ungroup size={13} className="shrink-0" /> 解散素材组
           </button>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={copyImage}
-            disabled={busy || !annotatable}
-            title={annotatable ? "复制图片位图，可粘贴到聊天 / 编辑等应用" : "该素材不是可复制的图片（支持 PNG/JPG/WebP/GIF/BMP）"}
-            className="app-context-item px-2 py-1.5"
-          >
-            复制图片
+        )}
+        {menu.canvasSelection && menu.canvasSelection.nodeIds.length > 1 && (
+          <button type="button" role="menuitem" disabled={busy} className="app-context-item px-2 py-1.5"
+            onClick={() => {
+              window.dispatchEvent(new CustomEvent<CanvasArrangeNodesEventDetail>(CANVAS_ARRANGE_NODES_EVENT, {
+                detail: menu.canvasSelection,
+              }));
+              closeContextMenu();
+            }}>
+            <LayoutDashboard size={13} className="shrink-0" /> 整理
           </button>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={async () => {
-              try {
-                await navigator.clipboard.writeText(storePath);
-                notifySuccess("文件路径已复制");
-                closeContextMenu();
-              } catch (e) {
-                notifyError(e, "复制文件路径失败");
-              }
-            }}
-            disabled={busy}
-            className="app-context-item px-2 py-1.5"
-          >
-            复制文件路径
+        )}
+        {menu.addCanvasImagesToBoard && menu.addCanvasImagesToBoard.count > 0 && (
+          <button type="button" role="menuitem" disabled={busy} className="app-context-item px-2 py-1.5"
+            onClick={() => {
+              closeContextMenu();
+              menu.addCanvasImagesToBoard!.run();
+            }}>
+            {menu.addCanvasImagesToBoard.count > 1
+              ? `添加所选 ${menu.addCanvasImagesToBoard.count} 张图片到对话框`
+              : "添加到对话框"}
           </button>
-        </>
-      )}
-
-      <div className="app-context-divider" />
-      <div className="app-context-label">移出与删除</div>
-      <div className="space-y-0.5">
-          {activeProjectId && (
-            <button
-              type="button"
-              role="menuitem"
-              onClick={() => runDelete(assetId, "keep")}
-              disabled={busy}
-              className="app-context-item px-2 py-1.5"
-            >
-              仅移出当前项目 · 素材留在全局
-            </button>
-          )}
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => runDelete(assetId, "move_out")}
-            disabled={busy || !moveOutAvailable}
-            title={!moveOutAvailable
-              ? "该素材没有可恢复的原始文件位置，请使用物理删除"
-              : "不会删除文件，文件回到原始位置"}
-            className="app-context-item px-2 py-1.5"
-          >
-            移出园丁鸟
-          </button>
+        )}
+        {/* 详情页右键（编辑器对话框与详情页互斥，从此处带回主界面插 chip）：菜单第一项。 */}
+        {mode === "browse" && detailAssetId !== null && (
           <button
             type="button"
             role="menuitem"
             onClick={() => {
-              // 先收菜单再弹确认，避免两个浮层同时存在。
-              setPendingDeleteId(assetId);
+              addAssetToBoardFromDetail(assetId);
               closeContextMenu();
             }}
             disabled={busy}
-            className="app-context-item is-danger px-2 py-1.5"
+            className="app-context-item px-2 py-1.5"
           >
-            物理删除
+            添加到对话框
           </button>
-          {groupIds && groupIds.length > 1 && (
+        )}
+        {/* 浏览（未激活创作）模式下右键开详情；激活态左键是插 chip，详情也走这里。 */}
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => void showAssetDetail()}
+          disabled={busy}
+          className="app-context-item px-2 py-1.5"
+        >
+          打开图片详情
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => {
+            // browse 模式：右键直接进 manage 并选中此图；manage 模式：仅切换选中。继续点其它图加选。
+            if (mode !== "manage") enterManage();
+            toggleSelect(assetId);
+            closeContextMenu();
+          }}
+          disabled={busy}
+          className="app-context-item px-2 py-1.5"
+        >
+          {mode === "manage" ? "选择/取消选择" : "选择"}
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => {
+            // 先收菜单再开 dialog，避免两个浮层同时存在。
+            setRenameTarget({ id: assetId, name: asset?.name ?? "" });
+            closeContextMenu();
+          }}
+          disabled={busy || !storePath}
+          title={storePath ? "重命名（同步改磁盘文件名）" : "该素材没有本地文件，无法重命名"}
+          className="app-context-item px-2 py-1.5"
+        >
+          重命名
+        </button>
+        <div className="app-context-divider" />
+        <div className="app-context-label">再创作</div>
+        <button
+          type="button"
+          role="menuitem"
+          onClick={(e) => {
+            const r = e.currentTarget.getBoundingClientRect();
+            openDescribePicker(
+              { kind: "single", assetId, instruction: loadDescribePrompt() },
+              { x: r.left, y: r.bottom },
+            );
+            closeContextMenu();
+          }}
+          disabled={busy || describing || !understandReady}
+          title={understandReady ? "反推提示词" : understandReason}
+          className="app-context-item px-2 py-1.5"
+        >
+          <ScanSearch size={13} className="shrink-0" />
+          反推提示词
+        </button>
+        {isGenerated && (
+          <button
+            type="button"
+            role="menuitem"
+            data-tour="ctx-reuse-gen"
+            onClick={reuseGeneration}
+            disabled={busy}
+            title="打开创作板，填入该图生成时的提示词与参考素材"
+            className="app-context-item px-2 py-1.5"
+          >
+            <ClipboardCopy size={13} className="shrink-0" />
+            复用生成提示词
+          </button>
+        )}
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => {
+            openAnnotator(assetId);
+            closeContextMenu();
+          }}
+          disabled={busy || !annotatable}
+          title={
+            annotatable
+              ? "截图软件式画框 / 箭头标注；输出可保存到素材库或插入创作板（不入库）"
+              : "该素材不是可标注的图片"
+          }
+          className="app-context-item px-2 py-1.5"
+        >
+          <PenTool size={13} className="shrink-0" />
+          图片标注
+        </button>
+        <button type="button" role="menuitem" disabled={busy || !annotatable}
+          title={annotatable ? "拆分并独立调整图层" : "该素材不是可编辑的图片"}
+          className="app-context-item px-2 py-1.5"
+          onClick={() => useStore.getState().openLayerEditor(assetId)}>
+          <Layers size={13} className="shrink-0" />分层编辑
+        </button>
+        {isGenerated && (
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              // 先收菜单再打开所属创作；未迁移的旧图回退到历史生成面板。
+              closeContextMenu();
+              void viewGenerationHistory(assetId);
+            }}
+            disabled={busy}
+            title="打开这张图所属的创作；旧记录回退到生成历史"
+            className="app-context-item px-2 py-1.5"
+          >
+            <MessageSquare size={13} className="shrink-0" />
+            回看所属创作
+          </button>
+        )}
+
+      </div>
+      <div className="asset-context-column">
+        <div className="app-context-label">文件</div>
+        <button
+          type="button"
+          role="menuitem"
+          onClick={reveal}
+          disabled={busy}
+          className="app-context-item px-2 py-1.5"
+        >
+          打开所在文件夹
+        </button>
+        {storePath && (
+          <>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={async () => {
+                try {
+                  await api.openWithSystem(storePath);
+                  notifySuccess("已用系统程序打开素材");
+                  closeContextMenu();
+                } catch (e) {
+                  notifyError(e, "无法用系统程序打开素材");
+                }
+              }}
+              disabled={busy}
+              className="app-context-item px-2 py-1.5"
+            >
+              用系统程序打开
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={copyImage}
+              disabled={busy || !annotatable}
+              title={annotatable ? "复制图片位图，可粘贴到聊天 / 编辑等应用" : "该素材不是可复制的图片（支持 PNG/JPG/WebP/GIF/BMP）"}
+              className="app-context-item px-2 py-1.5"
+            >
+              复制图片
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(storePath);
+                  notifySuccess("文件路径已复制");
+                  closeContextMenu();
+                } catch (e) {
+                  notifyError(e, "复制文件路径失败");
+                }
+              }}
+              disabled={busy}
+              className="app-context-item px-2 py-1.5"
+            >
+              复制文件路径
+            </button>
+          </>
+        )}
+
+        <div className="app-context-divider" />
+        <div className="app-context-label asset-context-label-with-icon">
+          <Trash2 size={12} aria-hidden="true" />
+          移出与删除
+        </div>
+        <div className="space-y-0.5">
+            {menu.libraryProjectId && canChangeLibraryVisibility && !asset?.library_hidden && (
+              <button type="button" role="menuitem" disabled={busy || !canvasLibraryAvailable}
+                className="app-context-item px-2 py-1.5"
+                title={canvasLibraryAvailable ? "从中央和各项目素材库列表移除，保留所有画布中的图片及原文件" : "请先将图片拖到当前画布"}
+                onClick={() => void setLibraryVisibility(false)}>
+                从库中删除 · 在画布保留
+              </button>
+            )}
+            {menu.canvasSelection && asset?.library_hidden && (
+              <button type="button" role="menuitem" disabled={busy}
+                className="app-context-item px-2 py-1.5" onClick={() => void setLibraryVisibility(true)}>
+                加入素材库
+              </button>
+            )}
+            {menu.canvasSelection && (
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  window.dispatchEvent(new CustomEvent<CanvasRemoveNodesEventDetail>(CANVAS_REMOVE_NODES_EVENT, {
+                    detail: menu.canvasSelection,
+                  }));
+                  closeContextMenu();
+                }}
+                disabled={busy}
+                className="app-context-item px-2 py-1.5"
+              >
+                {menu.canvasSelection.nodeIds.length > 1
+                  ? `从画布移出所选 ${menu.canvasSelection.nodeIds.length} 项`
+                  : "从画布移出"}
+              </button>
+            )}
+            {activeProjectId && (
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => runDelete(assetId, "keep")}
+                disabled={busy}
+                title="仅移出当前项目 · 素材留在全局"
+                className="app-context-item px-2 py-1.5"
+              >
+                移出当前项目
+              </button>
+            )}
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => runDelete(assetId, "move_out")}
+              disabled={busy || !moveOutAvailable}
+              title={!moveOutAvailable
+                ? "该素材没有可恢复的原始文件位置，请使用物理删除"
+                : "不会删除文件，文件回到原始位置"}
+              className="app-context-item px-2 py-1.5"
+            >
+              移出园丁鸟
+            </button>
             <button
               type="button"
               role="menuitem"
               onClick={() => {
-                setPendingGroupDelete(groupIds);
+                // 先收菜单再弹确认，避免两个浮层同时存在。
+                setPendingDeleteId(assetId);
                 closeContextMenu();
               }}
               disabled={busy}
-              title="删除这组同流程生成图的全部成员（含当前显示的这张）"
               className="app-context-item is-danger px-2 py-1.5"
             >
-              物理删除整组 · {groupIds.length} 张
+              物理删除
             </button>
-          )}
+            {groupIds && groupIds.length > 1 && (
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setPendingGroupDelete(groupIds);
+                  closeContextMenu();
+                }}
+                disabled={busy}
+                title="删除这组同流程生成图的全部成员（含当前显示的这张）"
+                className="app-context-item is-danger px-2 py-1.5"
+              >
+                物理删除整组 · {groupIds.length} 张
+              </button>
+            )}
+        </div>
       </div>
     </div>,
     document.body

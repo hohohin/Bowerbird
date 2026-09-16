@@ -21,6 +21,8 @@ export interface Asset {
   generation_session_id?: string | null;
   /** 被创作板当参考图调用的次数（详情页信息区展示；0 不显示）。 */
   reference_count?: number;
+  /** Retained for canvas/history use, excluded from library browsing. */
+  library_hidden?: boolean;
 }
 
 export interface Project {

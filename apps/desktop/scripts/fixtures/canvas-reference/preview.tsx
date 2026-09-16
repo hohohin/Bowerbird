@@ -14,6 +14,7 @@ import "../../../src/styles.css";
 const w = window as any;
 const explorer = new URLSearchParams(location.search).has("explorer");
 const sourceLibrary = new URLSearchParams(location.search).has("source-library");
+const canvasLibrary = new URLSearchParams(location.search).has("canvas-library");
 w.store = useStore;
 const callbacks = new Map();
 const listeners = new Map();
@@ -35,6 +36,10 @@ if (sessionStorage.getItem("canvas-media-dimensions")) {
   }
 }
 assets.push(...JSON.parse(sessionStorage.getItem("reference-drafts") || "[]"));
+if (canvasLibrary) {
+  const hidden: string[] = JSON.parse(sessionStorage.getItem("canvas-only-assets") || "[]");
+  for (const asset of assets) Object.assign(asset, { ext: "svg", library_hidden: hidden.includes(asset.id) });
+}
 const payload = (id: string) => JSON.stringify({ schema_version: 1, snapshot: { name: `合成参考 ${id}`, width: 190, height: 150 } });
 let snapshot = JSON.parse(sessionStorage.getItem("reference-fixture") || "null") || {
   canvas, nodes: [{ ...base, id: "old", x: 400, y: 300, payloadJson: payload("existing") },
@@ -54,10 +59,10 @@ w.emitChange = () => {
 w.emitAssetsChanged = () => {
   for (const [handler, event] of listeners) if (event === "library://assets-changed") callbacks.get(handler)?.({ event, id: handler, payload: null });
 };
-w.launch = (agent = false) => {
+w.launch = (agent = false, withReferences = true) => {
   const prompt = { ...base, id: agent ? "agent-prompt:launch:0:0" : "gen-prompt:job:turn:0", kind: "prompt", role: null, assetId: null,
     x: 20264, y: 70, width: 260, height: 148, createdAt: 2, payloadJson: JSON.stringify({ schema_version: 1, text: "用这些图片生成海报", status: "running", provider: "jimeng", ...(agent ? {} : { job_id: "job", turn_key: "turn" }) }) };
-  const refs = ["a", "b", "c", "d"].map((id, i) => ({ ...base, id: `${agent ? "agent-reference:launch:0" : "gen-reference:job:turn"}:${i}`, assetId: id,
+  const refs = (withReferences ? ["a", "b", "c", "d"] : []).map((id, i) => ({ ...base, id: `${agent ? "agent-reference:launch:0" : "gen-reference:job:turn"}:${i}`, assetId: id,
     x: 20002, y: 88 + i * 42, height: 180, createdAt: 2, payloadJson: payload(id) }));
   snapshot.nodes.push(prompt, ...refs);
   snapshot.edges.push(...[snapshot.nodes[0], ...refs].map((ref, i) => ({ id: `input-${i}`, projectId: "p", threadId: "t", fromNodeId: ref.id,
@@ -143,6 +148,16 @@ w.__TAURI_INTERNALS__ = {
       snapshot.view = { ...args.value }; return snapshot.view;
     }
     if (command === "get_assets_by_ids") return assets.filter(a => args.assetIds.includes(a.id));
+    if (command === "set_canvas_asset_library_visibility") {
+      if (w.failLibraryVisibility) throw "模拟归属修改失败";
+      const asset = assets.find(asset => asset.id === args.assetId);
+      if (!asset || !snapshot.nodes.some((node: any) => node.projectId === args.projectId && node.assetId === args.assetId && node.hiddenAt == null)) throw "请先将图片拖到当前画布";
+      Object.assign(asset, { library_hidden: !args.visible });
+      sessionStorage.setItem("canvas-only-assets", JSON.stringify(assets.filter((asset: any) => asset.library_hidden).map(asset => asset.id)));
+      useStore.setState({ assets: assets.filter((asset: any) => !asset.library_hidden) as any });
+      w.emitAssetsChanged();
+      return null;
+    }
     if (command === "delete_asset_with_mode") {
       if (w.failAssetDelete) throw "模拟删除失败";
       for (const node of snapshot.nodes) {
@@ -168,14 +183,15 @@ w.__TAURI_INTERNALS__ = {
     if (command === "read_image_data_url") return args.path;
     if (command === "project_canvas_ensure") return canvas;
     if (command === "list_generation_groups") return {};
-    if (sourceLibrary && command === "list_assets") return assets;
+    if (canvasLibrary && command === "list_projects") return [{ ...project, asset_count: assets.filter((asset: any) => !asset.library_hidden).length }];
+    if (sourceLibrary && command === "list_assets") return assets.filter((asset: any) => !asset.library_hidden);
     if (command === "count_assets") return 0;
     if (command.startsWith("list_")) return [];
     return null;
   },
 };
 w.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
-useStore.setState({ projects: (explorer ? [project, { ...project, id: "q", name: "另一个项目" }] : [project]) as any, activeProjectId: "p", assets: assets as any, boardOpen: false, settings: JSON.parse(sessionStorage.getItem("canvas-settings") || "{}") });
+useStore.setState({ projects: (explorer ? [project, { ...project, id: "q", name: "另一个项目" }] : [project]) as any, activeProjectId: "p", assets: assets.filter((asset: any) => !asset.library_hidden) as any, boardOpen: false, settings: JSON.parse(sessionStorage.getItem("canvas-settings") || "{}") });
 function Fixture() {
   const [settingsOpen, setSettingsOpen] = React.useState(false);
   w.openSettings = () => setSettingsOpen(true);

@@ -3,7 +3,7 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
 
-const pack = JSON.parse(await readFile('src-tauri/resources/onboarding-v0915/bowerbird-onboarding.json', 'utf8'));
+const pack = JSON.parse(await readFile('src-tauri/resources/onboarding-v0917/bowerbird-onboarding.json', 'utf8'));
 const server = await createServer({ server: { host: '127.0.0.1', port: 1579, strictPort: true, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
@@ -57,15 +57,15 @@ try {
   assert.ok(Math.abs(view.y - expectedView.pan_y) < 0.01);
   assert.ok(Math.abs(view.zoom - expectedView.zoom) < 0.00001);
   const noteText = await page.locator('.canvas-note input, .canvas-note textarea').evaluateAll(elements => elements.map(el => el.value));
-  for (const text of ['多步对话', '分层编辑', '维度生成 & 直接参考', '右键可以「复用提示词」哦']) assert.ok(noteText.includes(text), text);
+  for (const text of ['多步对话', '分层编辑', '维度生成 & 直接参考', '右键可以「复用提示词」哦', '层级调整', '可以批量生成', '右键点击图片，找到分层编辑']) assert.ok(noteText.includes(text), text);
   await page.waitForFunction(() => [...document.querySelectorAll('.canvas-node.is-asset img')].every(image => image.complete && image.naturalWidth > 0));
   await importFolder();
   assert.equal(await page.locator('[data-canvas-node-id]').count(), visible.length);
   assert.deepEqual(await readView(), view);
   assert.deepEqual(errors, []);
   await mkdir('.tmp', { recursive: true });
-  await page.screenshot({ path: '.tmp/onboarding-pack-v0915.png' });
-  console.log('PASS v0915 pack: visible cards, exact positions/sizes, notes, media, viewport restore and repeat import.');
+  await page.screenshot({ path: '.tmp/onboarding-pack-v0917.png' });
+  console.log('PASS v0917 pack: visible cards, exact positions/sizes, notes, media, viewport restore and repeat import.');
 } catch (error) {
   console.error(await page.evaluate(() => ({ nodes: document.querySelectorAll('[data-canvas-node-id]').length,
     calls: window.calls?.slice(-12), errorText: document.querySelector('.canvas-workspace')?.textContent?.slice(-500) })));

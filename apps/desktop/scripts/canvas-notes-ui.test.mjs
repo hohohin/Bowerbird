@@ -274,7 +274,7 @@ try {
   await saved();
   assert.ok((await node(textId).boundingBox()).x > textBefore.x + 20);
   await textSection.locator(".canvas-section-heading svg").click({ button: "right" });
-  await page.getByRole("menuitem", { name: /从画板移除/ }).click();
+  await page.getByRole("menuitem", { name: /从画布移出/ }).click();
   assert.equal(await node(textId).count(), 1);
   assert.equal(await node(textSectionId).count(), 0);
   await stage.click({ position: { x: 1200, y: 450 } });

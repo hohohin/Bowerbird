@@ -28,7 +28,7 @@ def prune_pack(manifest):
     return removed_files
 
 
-def export(database, project_name, output):
+def export(database, project_name, output, version):
     output.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True)
     db.row_factory = sqlite3.Row
@@ -46,11 +46,18 @@ def export(database, project_name, output):
         key = "id" if table == "assets" else "asset_id"
         rows[table] = [dict(r) for r in db.execute(
             f"SELECT * FROM {table} WHERE {key} IN "
-            "(SELECT asset_id FROM project_assets WHERE project_id=?) ORDER BY rowid", (project_id,))]
+            "(SELECT asset_id FROM project_assets WHERE project_id=? UNION "
+            "SELECT asset_id FROM canvas_nodes WHERE project_id=? AND asset_id IS NOT NULL) ORDER BY rowid", (project_id, project_id))]
     db.close()
     # Execution history and local layer-workspace paths are not portable canvas content.
     # Prompts/results remain in the canvas nodes; keep their reusable image analysis.
-    rows["analyses"] = [r for r in rows["analyses"] if r["kind"] not in ("generation_meta", "layer_workspace")]
+    # Cropped/annotated pixels are copied as media. Author-side annotation
+    # source files, execution history and unsent composer input are not lessons.
+    rows["analyses"] = [r for r in rows["analyses"] if r["kind"] == "caption"]
+    samples = {r["asset_id"] for r in rows["analyses"]
+               if any(s.get("title") == "反推提示词" for s in json.loads(r["payload"]).get("sections", []))}
+    sample = next((a["id"] for a in rows["assets"] if a["id"] in samples and "asset-016." in (a["origin_path"] or "")),
+                  next((a["id"] for a in rows["assets"] if a["id"] in samples), None))
 
     ids = {project_id: "pack:project"}
     for table, records in rows.items():
@@ -77,6 +84,8 @@ def export(database, project_name, output):
         original = Path(asset["store_path"])
         origin_name = re.split(r"[\\/]", asset["origin_path"] or "")[-1]
         filename = origin_name if re.fullmatch(r"preset-\d+\.(webp|png)", origin_name) else f"asset-{index + 1:03d}.{asset['ext']}"
+        if version != "v0915" and asset["id"] == sample:
+            filename = f"sample-dimensions.{asset['ext']}"
         asset["store_path"] = copy_file(original, filename)
         asset["thumb_path"] = copy_file(asset["thumb_path"], f"thumb-{index + 1:03d}.jpg") if asset["thumb_path"] else None
         asset["origin_path"] = filename
@@ -85,24 +94,29 @@ def export(database, project_name, output):
         asset["source"] = "imported"
         asset["source_url"] = None
         asset["reference_count"] = 0
+    node_ids = {node["id"] for node in rows["canvas_nodes"]}
     for node in rows["canvas_nodes"]:
         payload = json.loads(node["payload_json"])
+        # Deleted section members may remain in saved payloads; do not export dangling IDs.
+        if isinstance(payload.get("member_ids"), list):
+            payload["member_ids"] = [member for member in payload["member_ids"] if member in node_ids]
         # Preserve visible prompts and results, never resume the author's jobs/accounts.
         for key in ("execution", "provider_session_id", "job_id", "turn_key", "visual_profile"):
             if key in payload:
                 payload[key] = None
         node["payload_json"] = json.dumps(remap(payload), ensure_ascii=False, separators=(",", ":"))
     for canvas in rows["project_canvases"]:
-        canvas["draft_json"] = json.dumps(remap(json.loads(canvas["draft_json"])), ensure_ascii=False, separators=(",", ":"))
+        canvas["draft_json"] = '{"schema_version":1}'
     for analysis in rows["analyses"]:
         analysis["provider"] = "bundled-example"
         if analysis["kind"] == "caption":
             payload = json.loads(analysis["payload"])
             payload["session_id"] = None
             analysis["payload"] = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-    manifest = {"version": "v0915", "name": project_name, "files": files, "tables": remap(rows)}
-    for filename in prune_pack(manifest):
-        (output / filename).unlink()
+    manifest = {"version": version, "name": project_name, "files": files, "tables": remap(rows)}
+    if version == "v0915":
+        for filename in prune_pack(manifest):
+            (output / filename).unlink()
     (output / "bowerbird-onboarding.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({table: len(records) for table, records in manifest["tables"].items()}))
 
@@ -112,5 +126,6 @@ if __name__ == "__main__":
     parser.add_argument("database", type=Path)
     parser.add_argument("project_name")
     parser.add_argument("output", type=Path)
+    parser.add_argument("--version", required=True)
     args = parser.parse_args()
-    export(args.database, args.project_name, args.output)
+    export(args.database, args.project_name, args.output, args.version)

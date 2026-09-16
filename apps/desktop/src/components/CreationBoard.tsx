@@ -68,7 +68,7 @@ export const AGENT_DS_DONE_EVENT = "bowerbird://agent-ds-done";
  * 档案标签页签（⌄ 退出创作模式，V 形下箭头示意「收起/退出」）退出。会话「重新编辑」坞期间本组件整体让位
  * （App 按 !genEditing 挂载）。
  *
- * 未聚焦时向下收起 80%，点击露出区域或键盘聚焦后展开；退出创作模式立即收起。
+ * 非创作模式未聚焦时向下收起 70%，点击露出区域或键盘聚焦后展开；创作模式保持展开。
  * 在工具栏与内部菜单间操作保持展开，草稿与创作模式不因失焦被清空。
  *
  * 参考图入口：创作模式激活时点瀑布流任意图即在光标处插 image chip；也可手输 @图名，
@@ -305,7 +305,7 @@ export function CreationBoard({
     cloudAgentMode, agentMode, agentZMode, agentGMode, agentDsMode,
   ]);
 
-  // 焦点离开整个对话框后下沉；工具栏与内部菜单之间切换焦点不收起。
+  // 记录焦点收起状态；创作模式优先保持展开，退出后恢复收起。
   const dockRef = useRef<HTMLDivElement>(null);
   const [collapsed, setCollapsed] = useState(true);
   useEffect(() => {
@@ -777,7 +777,7 @@ export function CreationBoard({
         }}
         aria-label="创作板"
         className={`creation-dock pointer-events-auto relative w-[min(760px,calc(100%-24px))] rounded-t-2xl p-2.5 pb-2 ${creating ? "is-creating" : ""} ${embedded ? "is-canvas-composer" : ""} ${
-          collapsed ? "is-collapsed" : ""
+          !creating && collapsed ? "is-collapsed" : ""
         }`}
       >
         {/* 退出创作模式：素材库与项目画板共用同一显式退出入口。 */}

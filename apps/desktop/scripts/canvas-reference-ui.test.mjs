@@ -1,11 +1,8 @@
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
-import { createServer, build } from "vite";
-import react from "@vitejs/plugin-react";
-const { chromium } = await import(process.env.BOWERBIRD_PLAYWRIGHT_MODULE || "playwright");
-const server = await createServer({ configFile: false, plugins: [react()], cacheDir: ".tmp/reference-vite-cache",
-  optimizeDeps: { entries: ["scripts/fixtures/canvas-reference/preview.html"] },
-  server: { host: "127.0.0.1", port: 1446, strictPort: true } });
+import { createServer } from "vite";
+const { chromium } = await import(process.env.BOWERBIRD_PLAYWRIGHT_MODULE || "../../html-renderer/node_modules/playwright/index.mjs");
+const server = await createServer({ server: { host: "127.0.0.1", port: 1446, strictPort: true, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: "chrome", headless: true });
 const page = await browser.newPage({ viewport: { width: 1440, height: 1100 } });
@@ -14,44 +11,60 @@ page.on("pageerror", error => errors.push(error.message));
 const evidence = [];
 await mkdir(".tmp/reference-placement", { recursive: true });
 try {
-  for (const agent of [false, true]) {
+  for (const [agent, withReferences] of [[false, true], [true, true], [false, false]]) {
     await page.goto("http://127.0.0.1:1446/scripts/fixtures/canvas-reference/preview.html");
     await page.waitForFunction(() => window.launch && document.querySelector('[data-canvas-node-id="old"]'));
     const initial = await page.evaluate(() => window.snapshot());
-    await page.evaluate(agent => window.launch(agent), agent);
-    await page.waitForFunction(() => window.calls.filter(c => c.command === "project_canvas_node_update" && c.args.nodeId.includes("reference:")).length >= 4);
+    if (agent) await page.getByRole('button', { name: '时间线视图', exact: true }).click();
+    await page.evaluate(([agent, withReferences]) => window.launch(agent, withReferences), [agent, withReferences]);
+    if (withReferences) await page.waitForFunction(() => window.calls.filter(c => c.command === "project_canvas_node_update" && c.args.nodeId.includes("reference:")).length >= 4);
     if (agent) {
       await page.evaluate(() => window.addAgentGroup());
       await page.waitForFunction(() => window.calls.filter(c => c.command === "project_canvas_node_update" && c.args.nodeId.includes("reference:")).length >= 8);
     }
+    await page.waitForFunction(agent => {
+      const id = agent ? 'agent-group:run:0:0' : 'gen-prompt:job:turn:0';
+      return window.snapshot().view.activeNodeId === id && document.activeElement?.getAttribute('data-canvas-node-id') === id;
+    }, agent);
     const snapshot = await page.evaluate(() => window.snapshot());
     const card = snapshot.nodes.find(n => agent ? n.kind === "agent_group" : n.kind === "prompt");
     const refs = snapshot.nodes.filter(n => n.id.includes("reference:"));
-    assert.equal(refs.length, 4);
+    assert.equal(refs.length, withReferences ? 4 : 0);
     assert.ok(card.x < 10000, "the real component brings the new card into view");
-    assert.equal(refs[0].x, card.x);
+    if (withReferences) assert.equal(refs[0].x, card.x);
     assert.ok(refs.every(n => n.x >= card.x && n.x <= card.x + 500 && n.y > card.y && n.y < card.y + 1200));
     for (const old of initial.nodes) assert.deepEqual(snapshot.nodes.find(n => n.id === old.id), old);
-    assert.deepEqual([snapshot.view.panX, snapshot.view.panY, snapshot.view.zoom], [100, 60, 0.9]);
-    evidence.push({ agent, card, references: refs, view: snapshot.view });
-    await page.screenshot({ path: `.tmp/reference-placement/${agent ? "agent" : "ordinary"}.png` });
+    assert.equal(snapshot.view.zoom, 0.9);
+    assert.equal(snapshot.view.focusedThreadId, 't');
+    assert.equal(snapshot.view.viewMode, 'canvas');
+    const centered = await page.evaluate(id => {
+      const stage = document.querySelector('[data-canvas-stage]').getBoundingClientRect();
+      const card = document.querySelector(`[data-canvas-node-id="${id}"]`).getBoundingClientRect();
+      const composer = document.querySelector('.canvas-composer-host').getBoundingClientRect();
+      const bottom = Math.min(stage.height, composer.top - stage.top);
+      return [card.x + card.width / 2 - (stage.x + stage.width / 2),
+        card.y + card.height / 2 - (stage.y + 72 + (bottom - 96) / 2)];
+    }, card.id);
+    assert.ok(centered.every(offset => Math.abs(offset) < 2), `card is centered: ${centered}`);
+    evidence.push({ agent, withReferences, card, references: refs, view: snapshot.view });
+    await page.screenshot({ path: `.tmp/reference-placement/${agent ? "agent" : withReferences ? "ordinary" : "no-references"}.png` });
     const writes = await page.evaluate(() => window.calls.filter(c => c.command === "project_canvas_node_update").length);
     await page.evaluate(() => window.emitChange());
     await page.waitForTimeout(500);
     assert.equal(await page.evaluate(() => window.calls.filter(c => c.command === "project_canvas_node_update").length), writes);
+    assert.deepEqual((await page.evaluate(() => window.snapshot())).view, snapshot.view);
     await page.evaluate(() => window.save());
     await page.reload();
     await page.waitForFunction(() => document.querySelector('[data-canvas-node-id="old"]'));
     assert.deepEqual((await page.evaluate(() => window.snapshot())).nodes, snapshot.nodes);
+    assert.deepEqual((await page.evaluate(() => window.snapshot())).view, snapshot.view);
     assert.equal(await page.evaluate(() => window.calls.filter(c => c.command === "project_canvas_node_update").length), 0);
     await page.evaluate(() => sessionStorage.clear());
   }
   assert.deepEqual(errors, []);
   await writeFile(".tmp/reference-placement/coordinates.json", JSON.stringify(evidence, null, 2));
-  console.log("PASS real CanvasWorkspace: ordinary + staged Agent snapshots, four references, unchanged old nodes/view, repeat and reload, persisted coordinate evidence");
+  console.log("PASS real CanvasWorkspace: ordinary + staged Agent card focus, centered view, timeline return, unchanged old nodes, repeat and reload, persisted coordinates");
 } finally {
   await browser.close();
   await server.close();
 }
-await build({ configFile: false, plugins: [react()], cacheDir: ".tmp/reference-vite-cache",
-  build: { outDir: ".tmp/reference-placement-dist", target: "es2021" } });

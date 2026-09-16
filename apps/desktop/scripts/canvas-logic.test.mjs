@@ -250,6 +250,15 @@ test("off-screen control cards center inside the unobscured viewport at current 
   assert.equal(canvasViewForNewCard(card, viewport, next.pan, next.zoom), null);
 });
 
+test("submission focus centers an already visible card without zooming in", () => {
+  const card = { x: 100, y: 100, width: 260, height: 148 };
+  const viewport = { x: 24, y: 72, width: 752, height: 504 };
+  const next = canvasViewForNewCard(card, viewport, { x: 0, y: 0 }, 1, true);
+  assert.equal(next.zoom, 1);
+  assert.equal(next.pan.x + (card.x + card.width / 2) * next.zoom, 400);
+  assert.equal(next.pan.y + (card.y + card.height / 2) * next.zoom, 324);
+});
+
 test("large control cards zoom out to fit and respect the canvas zoom minimum", () => {
   const card = { x: 2000, y: 2000, width: 800, height: 600 };
   const viewport = { x: 24, y: 72, width: 400, height: 300 };

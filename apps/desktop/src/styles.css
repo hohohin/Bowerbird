@@ -1168,10 +1168,10 @@ html .generation-mode-button:focus-visible {
 /*
  * 创作板底部浮动对话框（creation-dock）：主题自适应半透明表面，宽而矮，
  * 浮在瀑布流下方居中、底边贴应用底边（App 内挂在主区容器 bottom-0）。
- * 未聚焦时加 .is-collapsed，下沉 80%；点击或键盘聚焦后展开。
+ * 非创作模式未聚焦时加 .is-collapsed，下沉 70%；创作模式始终展开。
  */
 .creation-dock {
-  --bb-dock-peek: 20%;
+  --bb-dock-peek: 30%;
   color: var(--bb-ink);
   background: rgb(var(--bb-surface-rgb) / 94%);
   backdrop-filter: blur(20px) saturate(1.25);
@@ -2213,6 +2213,32 @@ html[data-theme="light"] .settings-card [role="radio"][aria-checked="true"] {
   overflow-y: auto;
 }
 .app-context-item { min-height: 30px; }
+.asset-context-menu {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: 400px;
+  max-width: calc(100vw - 16px);
+}
+.asset-context-column { min-width: 0; }
+.asset-context-label-with-icon {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.asset-context-column + .asset-context-column {
+  margin-left: 6px;
+  padding-left: 6px;
+  border-left: 1px solid var(--bb-line-strong);
+}
+@media (max-width: 500px) {
+  .asset-context-menu { grid-template-columns: minmax(0, 1fr); width: 248px; }
+  .asset-context-column + .asset-context-column {
+    margin: 5px 0 0;
+    padding: 5px 0 0;
+    border-left: 0;
+    border-top: 1px solid var(--bb-line-strong);
+  }
+}
 .app-context-item.is-danger { color: var(--bb-danger); }
 .app-context-item.is-danger:hover:not(:disabled),
 .app-context-item.is-danger:focus-visible { background: rgb(244 63 94 / 15%); color: var(--bb-danger); }

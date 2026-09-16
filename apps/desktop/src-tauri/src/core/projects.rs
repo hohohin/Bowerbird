@@ -302,7 +302,7 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT p.id, p.name, p.workspace_path, p.created_at, p.kind, p.title_source, p.updated_at, p.last_opened_at, p.archived_at, COUNT(pa.asset_id) AS asset_count \
-             FROM projects p LEFT JOIN project_assets pa ON pa.project_id = p.id \
+             FROM projects p LEFT JOIN project_assets pa ON pa.project_id = p.id AND pa.asset_id IN (SELECT id FROM assets WHERE library_hidden=0) \
              WHERE p.archived_at IS NULL GROUP BY p.id ORDER BY p.last_opened_at DESC, p.created_at DESC, p.id DESC",
         )?;
         let rows = stmt.query_map([], project_from_row)?;
@@ -317,7 +317,7 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
             "SELECT p.id, p.name, p.workspace_path, p.created_at, p.kind, p.title_source, p.updated_at, p.last_opened_at, p.archived_at, COUNT(pa.asset_id) AS asset_count \
-             FROM projects p LEFT JOIN project_assets pa ON pa.project_id = p.id \
+             FROM projects p LEFT JOIN project_assets pa ON pa.project_id = p.id AND pa.asset_id IN (SELECT id FROM assets WHERE library_hidden=0) \
              WHERE p.id = ?1 GROUP BY p.id",
             rusqlite::params![id],
             project_from_row,
@@ -767,6 +767,7 @@ mod tests {
             file_mtime: Some(0),
             generation_session_id: None,
             reference_count: 0,
+            library_hidden: false,
         })
         .unwrap();
     }

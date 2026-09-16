@@ -31,6 +31,7 @@ const Thumb = memo(function Thumb({
   variant,
   onOpenPreview,
   idPrefix = "",
+  libraryProjectId,
 }: {
   asset: Asset;
   group?: Asset[];
@@ -38,6 +39,7 @@ const Thumb = memo(function Thumb({
   variant: "library" | "canvas-source";
   onOpenPreview?: (asset: Asset, group?: Asset[]) => void;
   idPrefix?: string;
+  libraryProjectId?: string;
 }) {
   const cardRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
@@ -403,7 +405,7 @@ const Thumb = memo(function Thumb({
         e.stopPropagation();
         dismissPreview();
         if (addingToCollection) return;
-        openContextMenu(e.clientX, e.clientY, shown.id, { asset: shown });
+        openContextMenu(e.clientX, e.clientY, shown.id, { asset: shown, libraryProjectId });
       }}
       onDragStart={(e) => {
         dismissPreview();
@@ -812,6 +814,7 @@ export function MasonryGrid({
                     group={groupMap[item.asset.id]}
                     orderedIds={orderedIds}
                     variant={variant}
+                    libraryProjectId={activeProjectId ?? undefined}
                     idPrefix={embedded ? `${gridId}-` : ""}
                     onOpenPreview={onOpenPreview}
                   />

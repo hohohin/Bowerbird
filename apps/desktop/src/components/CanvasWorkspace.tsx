@@ -3095,11 +3095,13 @@ export function CanvasWorkspace({
   );
   const promptReferences = useMemo(() => new Map(graphNodes.filter(node => node.kind === "prompt")
     .map(node => [node.id, canvasPromptReferences(node.id, graphNodes, graphEdges, assetById)])), [graphNodes, graphEdges, assetById]);
-  useLayoutEffect(() => {
+  // ReadonlyPrompt creates its content in an effect; measure after it has mounted.
+  useEffect(() => {
     const nodeId = pendingNewCardRef.current;
     if (!nodeId || loading || projectRoutePending || panning || activeDragId) return;
     if (viewMode !== "canvas") {
-      pendingNewCardRef.current = null;
+      viewModeRef.current = "canvas";
+      setViewMode("canvas");
       return;
     }
     const target = [...promptGraphNodes, ...agentGraphNodes].find((node) => node.id === nodeId);
@@ -3151,11 +3153,7 @@ export function CanvasWorkspace({
         if (target.id.startsWith("agent-prompt:")) pendingNewReferencesRef.current.set(reference.id, reference);
         else pendingNewReferencesRef.current.delete(reference.id);
       }
-      setFocusedNodeId(nodeId);
-      markViewDirty();
-      return;
-    }
-    if (placement) {
+    } else if (placement) {
       if (placement.x !== target.x || placement.y !== target.y) {
         const moved = { ...target, ...placement };
         const updated = graphNodesRef.current.map((node) => node.id === nodeId ? moved : node);
@@ -3163,18 +3161,17 @@ export function CanvasWorkspace({
         setGraphNodes(updated);
         persistGraphNodeGeometry(moved);
       }
-      setFocusedNodeId(nodeId);
-      markViewDirty();
-      return;
     }
-    const next = canvasViewForNewCard(measuredCard, viewport, panRef.current, zoomRef.current);
-    if (!next) return;
-    panRef.current = next.pan;
-    zoomRef.current = next.zoom;
-    setPan(next.pan);
-    setZoom(next.zoom);
-    setFocusedNodeId(nodeId);
-    markViewDirty();
+    const next = canvasViewForNewCard({ ...measuredCard, ...(placement ?? {}) }, viewport, panRef.current, zoomRef.current, true);
+    if (next) {
+      panRef.current = next.pan;
+      zoomRef.current = next.zoom;
+      setPan(next.pan);
+      setZoom(next.zoom);
+    }
+    focusGraphNode(nodeId);
+    setSelectedCanvasNodeIds(new Set([nodeId]));
+    element?.focus({ preventScroll: true });
   }, [promptGraphNodes, agentGraphNodes, loading, projectRoutePending, panning, activeDragId, viewMode, scopedInspectorOpen]);
   const continuationCandidates = useMemo(
     () => activeGraphNodes.flatMap((node) => (
@@ -4059,8 +4056,8 @@ export function CanvasWorkspace({
               setPromptMenu(null);
             }}>
               <Trash2 size={14} className="shrink-0" /> {promptMenu.nodeIds.length > 1
-                ? `从画板移除所选 ${promptMenu.nodeIds.length} 项`
-                : "从画板移除"}
+                ? `从画布移出所选 ${promptMenu.nodeIds.length} 项`
+                : "从画布移出"}
             </button>}
             {promptMenu.node?.kind === "prompt" && <button type="button" role="menuitem" className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs text-red-400 hover:bg-panel2 disabled:opacity-40"
               disabled={promptSessionJobs(promptMenu.node).some((job) => job.running)}

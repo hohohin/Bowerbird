@@ -111,9 +111,9 @@ pub async fn create_onboarding_project(
 #[tauri::command]
 pub async fn release_preset_pack(app: AppHandle) -> Result<String, AppError> {
     let src_dir = if cfg!(debug_assertions) {
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/onboarding-v0915")
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/onboarding-v0917")
     } else {
-        app.path().resource_dir().map_err(|e| AppError::Other(e.to_string()))?.join("onboarding-v0915")
+        app.path().resource_dir().map_err(|e| AppError::Other(e.to_string()))?.join("onboarding-v0917")
     };
     let doc = app
         .path()

@@ -34,12 +34,12 @@ export function canvasPlacementForNewCard(
   return null;
 }
 
-/** Keep a visible card still; fit and center an off-screen card without zooming in. */
-export function canvasViewForNewCard(card: CanvasRect, viewport: CanvasRect, pan: CanvasPoint, zoom: number) {
+/** Fit without zooming in; center explicitly when focusing a newly submitted card. */
+export function canvasViewForNewCard(card: CanvasRect, viewport: CanvasRect, pan: CanvasPoint, zoom: number, center = false) {
   if (viewport.width <= 0 || viewport.height <= 0 || card.width <= 0 || card.height <= 0) return null;
   const left = pan.x + card.x * zoom;
   const top = pan.y + card.y * zoom;
-  if (left >= viewport.x && top >= viewport.y
+  if (!center && left >= viewport.x && top >= viewport.y
     && left + card.width * zoom <= viewport.x + viewport.width
     && top + card.height * zoom <= viewport.y + viewport.height) return null;
   const nextZoom = clampCanvasZoom(Math.min(zoom, viewport.width / card.width, viewport.height / card.height));

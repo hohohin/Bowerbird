@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Bowerbird",
-  "version": "26.9.16",
+  "version": "26.9.17",
   "identifier": "com.bowerbird.desktop",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -47,7 +47,7 @@
     "resources": {
       "../../extension/": "extension/",
       "resources/samples/*": "samples/",
-      "resources/onboarding-v0915/*": "onboarding-v0915/"
+      "resources/onboarding-v0917/*": "onboarding-v0917/"
     },
     "windows": {
       "nsis": {

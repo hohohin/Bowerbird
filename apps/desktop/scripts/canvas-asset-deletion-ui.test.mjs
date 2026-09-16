@@ -35,8 +35,16 @@ try {
     await page.evaluate(() => { window.failAssetDelete = true; });
     async function remove() {
       await node("old").click({ button: "right", position: { x: 30, y: 30 } });
+      const menu = page.getByRole("menu", { name: "素材操作" });
+      const menuBox = await menu.boundingBox();
+      assert.ok(menuBox.width <= 401, `context menu should stay compact, got ${menuBox.width}px`);
+      assert.equal(await menu.locator(".asset-context-column").count(), 2);
+      assert.equal(await menu.locator(".asset-context-label-with-icon svg").count(), 1);
+      assert.equal(await menu.getByRole("menuitem", { name: "从画布移出", exact: true }).locator("svg").count(), 0);
       if (mode === "keep") {
-        await page.getByRole("menuitem", { name: "仅移出当前项目 · 素材留在全局", exact: true }).click();
+        const moveOutOfProject = page.getByRole("menuitem", { name: "移出当前项目", exact: true });
+        assert.equal(await moveOutOfProject.getAttribute("title"), "仅移出当前项目 · 素材留在全局");
+        await moveOutOfProject.click();
       } else {
         await page.getByRole("menuitem", { name: "物理删除", exact: true }).click();
         await page.getByRole("dialog").getByRole("button", { name: "物理删除", exact: true }).click();

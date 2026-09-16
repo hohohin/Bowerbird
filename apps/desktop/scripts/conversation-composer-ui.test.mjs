@@ -15,7 +15,7 @@ try {
   await page.waitForFunction(() => {
     const dock = document.querySelector('.creation-dock');
     const rect = dock.getBoundingClientRect();
-    return dock.classList.contains('is-collapsed') && Math.abs((innerHeight - rect.top) / rect.height - 0.2) < 0.02;
+    return dock.classList.contains('is-collapsed') && Math.abs((innerHeight - rect.top) / rect.height - 0.3) < 0.02;
   });
   await dock.click({ position: { x: 100, y: 5 } });
   const editor = dock.locator('.ProseMirror');
@@ -24,11 +24,18 @@ try {
   await dock.getByRole('option', { name: '1:1', exact: true }).click();
   assert.equal(await dock.evaluate(el => el.classList.contains('is-collapsed')), false);
   await page.locator('[data-canvas-stage]').click({ position: { x: 80, y: 80 } });
-  await page.waitForFunction(() => document.querySelector('.creation-dock.is-collapsed'));
+  assert.equal(await page.evaluate(() => window.store.getState().boardOpen), true);
+  assert.equal(await dock.evaluate(el => el.classList.contains('is-collapsed')), false);
+  await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+  assert.equal(await dock.evaluate(el => el.classList.contains('is-collapsed')), false);
   assert.equal(await editor.innerText(), '保留失焦草稿');
   await editor.focus();
   await page.waitForFunction(() => !document.querySelector('.creation-dock.is-collapsed'));
   await page.keyboard.press('Escape');
+  await page.waitForFunction(() => document.querySelector('.creation-dock.is-collapsed'));
+  await page.evaluate(() => window.store.getState().setBoardActive(true));
+  await page.waitForFunction(() => !document.querySelector('.creation-dock.is-collapsed'));
+  await dock.getByRole('button', { name: '退出创作模式', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('.creation-dock.is-collapsed'));
 
   await page.evaluate(async () => {
@@ -118,7 +125,7 @@ try {
   assert.equal(await inspector.evaluate(el => el.classList.contains('is-editing')), true);
   assert.equal(await page.locator('[data-generation-composer="inline"]').count(), 0);
   assert.deepEqual(errors, []);
-  console.log('PASS: 20% focus dock, internal controls, draft preservation, inline continuation, fixed model and ratio submission');
+  console.log('PASS: 30% dock, creation mode stays expanded, internal controls, draft preservation, inline continuation, fixed model and ratio submission');
 } finally {
   await browser.close();
   await server.close();

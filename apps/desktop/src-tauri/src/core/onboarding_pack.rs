@@ -13,7 +13,7 @@ use crate::{
 };
 
 pub const MANIFEST: &str = "bowerbird-onboarding.json";
-const BUNDLED: &str = include_str!("../../resources/onboarding-v0915/bowerbird-onboarding.json");
+const BUNDLED: &str = include_str!("../../resources/onboarding-v0917/bowerbird-onboarding.json");
 
 #[derive(Deserialize)]
 struct Pack {
@@ -236,7 +236,7 @@ mod tests {
     use super::*;
 
     fn source() -> std::path::PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/onboarding-v0915")
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/onboarding-v0917")
     }
 
     fn setup() -> (LibraryPaths, Database) {
@@ -265,12 +265,12 @@ mod tests {
         let (paths, db) = setup();
         assert_eq!(
             import(&paths, &db, &source(), "lesson").unwrap(),
-            (12, true)
+            (21, true)
         );
         let pack = verify(&source()).unwrap();
         let nodes = db.list_canvas_nodes("lesson").unwrap();
-        assert_eq!(nodes.len(), 39);
-        assert_eq!(nodes.iter().filter(|n| n.hidden_at.is_none()).count(), 24);
+        assert_eq!(nodes.len(), 103);
+        assert_eq!(nodes.iter().filter(|n| n.hidden_at.is_none()).count(), 39);
         for expected in &pack.tables["canvas_nodes"] {
             // Positions and complete payloads survive; identifiers are freshly scoped.
             let node = nodes
@@ -295,13 +295,15 @@ mod tests {
             assert!(payload["provider_session_id"].is_null());
         }
         let edges = db.list_canvas_edges("lesson").unwrap();
-        assert_eq!(edges.len(), 28);
+        assert_eq!(edges.len(), 81);
         for edge in edges {
             assert!(nodes.iter().any(|n| n.id == edge.from_node_id));
             assert!(nodes.iter().any(|n| n.id == edge.to_node_id));
         }
-        let assets = db.list_assets(None, Some("lesson"), 100, 0).unwrap();
-        assert_eq!(assets.len(), 12);
+        let assets = db.get_assets_by_ids(&nodes.iter().filter_map(|node| node.asset_id.clone()).collect::<Vec<_>>()).unwrap();
+        assert_eq!(assets.len(), 21);
+        assert_eq!(assets.iter().filter(|asset| asset.library_hidden).count(), 3);
+        assert_eq!(db.list_assets(None, Some("lesson"), 100, 0).unwrap().len(), 18);
         assert!(assets.iter().all(|asset| {
             let origin = asset.origin_path.as_deref().unwrap_or("");
             !origin.contains("preset-") && !origin.ends_with("asset-024.png") && !origin.ends_with("asset-027.png")
@@ -359,11 +361,11 @@ mod tests {
         }
         assert_eq!(
             import(&paths, &db, &source(), "lesson").unwrap(),
-            (12, false)
+            (21, false)
         );
         assert_eq!(db.get_canvas_node(&nodes[0].id).unwrap().unwrap().x, 9999.0);
         assert!(db.get_canvas_node(&nodes[1].id).unwrap().is_none());
-        assert_eq!(import(&paths, &db, &source(), "other").unwrap(), (12, true));
+        assert_eq!(import(&paths, &db, &source(), "other").unwrap(), (21, true));
         assert!(db
             .list_assets(None, Some("other"), 100, 0)
             .unwrap()
@@ -399,7 +401,7 @@ mod tests {
         );
         release(&source(), &target).unwrap();
         assert_eq!(backups().len(), 1);
-        std::fs::write(target.join("asset-016.webp"), "corrupt").unwrap();
+        std::fs::write(target.join("sample-dimensions.webp"), "corrupt").unwrap();
         assert!(import(&paths, &db, &target, "lesson").is_err());
         assert!(db
             .list_assets(None, Some("lesson"), 100, 0)
@@ -434,7 +436,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             import(&paths, &db, &source(), "lesson").unwrap(),
-            (12, true)
+            (21, true)
         );
         std::fs::remove_dir_all(paths.root).unwrap();
     }

@@ -72,8 +72,8 @@ export function OnboardingTour() {
     setSampleLoading(true);
     void api.listPromptedAssets(session.projectId).then(assets => {
       if (!alive) return;
-      const candidates = assets.filter(asset => asset.sections?.some(section => section.title === "反推提示词") && /(?:^|[\\/])初始引导[\\/]asset-01[46]\.webp$/i.test(asset.origin_path ?? ""));
-      const selected = candidates.find(asset => /asset-016\./i.test(asset.origin_path ?? "")) ?? candidates[0] ?? null;
+      const candidates = assets.filter(asset => asset.sections?.some(section => section.title === "反推提示词") && /(?:^|[\\/])初始引导[\\/](?:sample-dimensions\.(?:webp|png|jpe?g)|asset-01[46]\.webp)$/i.test(asset.origin_path ?? ""));
+      const selected = candidates.find(asset => /sample-dimensions\./i.test(asset.origin_path ?? "")) ?? candidates[0] ?? null;
       setSample(selected);
       // Left-click uses the existing cached dimension data; never start analysis.
       if (selected) useStore.setState(state => ({ promptedAssets: [...state.promptedAssets.filter(asset => asset.id !== selected.id), selected] }));
