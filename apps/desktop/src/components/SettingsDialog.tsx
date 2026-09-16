@@ -250,6 +250,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
       cloud_auto_understand: settings?.cloud_auto_understand ?? false,
       board_shift_pick: settings?.board_shift_pick ?? false,
       hide_project_assets: settings?.hide_project_assets ?? false,
+      canvas_show_asset_names: settings?.canvas_show_asset_names ?? false,
       generation_completion_popup: settings?.generation_completion_popup ?? true,
       generation_completion_sound: settings?.generation_completion_sound ?? true,
       dreamina_model_version: settings?.dreamina_model_version ?? DEFAULT_DREAMINA_MODEL_VERSION,
@@ -983,6 +984,14 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
 
           {section === "personalization" && (
             <>
+              <div className="settings-card px-3 py-2.5">
+                <label className="flex items-center justify-between gap-3">
+                  <span className="text-ink">显示画板素材名称</span>
+                  <Toggle checked={settings?.canvas_show_asset_names ?? false} disabled={!settings}
+                    onChange={value => settings && void updateSettings({ ...settings, canvas_show_asset_names: value })} />
+                </label>
+                <p className="mt-1 text-xs text-muted">在画板图片和视频下方显示素材名称，默认关闭。</p>
+              </div>
               <div className="settings-card px-3 py-2.5">
                 <div className="text-ink">生成完成提醒</div>
                 <p className="mt-1 text-xs text-muted">图片、视频或 Agent 产物生成成功后提醒，切换项目后仍然有效。</p>

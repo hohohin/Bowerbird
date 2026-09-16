@@ -109,6 +109,19 @@ try {
   assert.equal((await calls("resize_source_browser")).length, layoutCount, "unchanged bounds and visibility do not repeat native operations");
   assert.equal((await calls("navigate_source_browser")).length, menuNavigationCount);
   assert.equal((await calls("reload_source_browser")).length, 0);
+  // A sidebar drawer must cover the native page from the start of its slide-in.
+  await page.evaluate(() => {
+    const viewport = document.querySelector("[data-source-browser-viewport]").getBoundingClientRect();
+    const host = document.createElement("div"); host.id = "sidebar-overlay-test";
+    host.style.cssText = `position:fixed;left:${viewport.left - 50}px;top:${viewport.top}px;height:300px;width:50px`;
+    const drawer = document.createElement("aside"); drawer.className = "app-sidebar is-auto-hide is-auto-hidden";
+    host.append(drawer); document.body.append(host);
+    drawer.classList.remove("is-auto-hidden");
+  });
+  await page.waitForFunction(() => window.calls.filter(c => c.command === "resize_source_browser").at(-1)?.args.visible === false);
+  await page.evaluate(() => document.querySelector("#sidebar-overlay-test aside").classList.add("is-auto-hidden"));
+  await page.waitForFunction(() => window.calls.filter(c => c.command === "resize_source_browser").at(-1)?.args.visible === true);
+  await page.evaluate(() => document.querySelector("#sidebar-overlay-test").remove());
   await drop({ version: 1, imageUrl: "file:///secret", pageUrl: "https://example.com" });
   assert.equal((await calls("capture_source_browser_image")).length, 0);
   await page.getByText("未能识别拖入的图片，请重新拖动网页图片", { exact: true }).last().waitFor();

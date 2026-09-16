@@ -41,6 +41,16 @@ export interface CanvasRemoveNodesEventDetail {
 
 export type ProjectCanvasUiNode = CanvasGroupNode<CanvasAssetSnapshot>;
 
+/** Legacy JPEG thumbnails discard alpha; use browser-renderable originals on the canvas. */
+export function canvasAssetMediaPath(asset: Pick<CanvasAssetSnapshot, "thumbPath" | "storePath">): string | null {
+  const original = asset.storePath;
+  if (original && (/\.(png|webp|gif|avif|svg|ico|bmp)(?:[?#].*)?$/i.test(original)
+    || /^data:image\/(png|webp|gif|avif|svg\+xml|x-icon|bmp)[;,]/i.test(original))) {
+    return original;
+  }
+  return asset.thumbPath ?? original;
+}
+
 /** The image area excludes the two border pixels and the 30px caption. */
 export function canvasAssetNodeSize(asset: Pick<CanvasAssetSnapshot, "width" | "height">, width = 190) {
   const ratio = asset.width && asset.width > 0 && asset.height && asset.height > 0 ? asset.height / asset.width : 0.78;
@@ -65,7 +75,7 @@ export function canvasPromptReferences(promptId: string, nodes: readonly CanvasN
         referenceNames: [asset?.name, asset?.origin_path?.split(/[\\/]/).pop(), asset?.store_path?.split(/[\\/]/).pop()]
           .filter((name): name is string => !!name),
         ext: asset?.ext ?? null,
-        thumb_path: asset?.thumb_path ?? (asset?.duration ? null : asset?.store_path ?? null),
+        thumb_path: canvasAssetMediaPath({ thumbPath: asset?.thumb_path ?? null, storePath: asset?.duration ? null : asset?.store_path ?? null }),
         store_path: asset?.store_path ?? null } as Asset & { referenceNames: string[] }];
     });
 }

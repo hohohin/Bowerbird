@@ -123,12 +123,19 @@ export function SourceBrowserPanel({ url, onClose, visible = true, suspended = f
         const bounds = boundsFor(viewport);
         if (bounds.width < 240 || bounds.height < 180) return;
         const viewportRect = viewport.getBoundingClientRect();
-        const overlay = Array.from(document.querySelectorAll('[role="dialog"], [role="alertdialog"], [role="menu"]'))
+        const overlay = Array.from(document.querySelectorAll('[role="dialog"], [role="alertdialog"], [role="menu"], .caption-ring-layer, .app-sidebar.is-auto-hide:not(.is-auto-hidden)'))
           .some(element => {
             if (element.getClientRects().length === 0 || getComputedStyle(element).visibility === "hidden") return false;
-            // Dialogs can have a full-window backdrop outside their own bounds.
-            if (element.getAttribute("role") !== "menu") return true;
+            // Dialogs and the dimension ring have full-window backdrops. The
+            // native webpage must yield until they close, regardless of z-index.
+            if (element.matches('[role="dialog"], [role="alertdialog"], .caption-ring-layer')) return true;
             const rect = element.getBoundingClientRect();
+            // Use the drawer's destination while it slides in; WebView2 must yield before it covers the controls.
+            if (element.matches(".app-sidebar.is-auto-hide")) {
+              const left = element.parentElement!.getBoundingClientRect().left;
+              return left < viewportRect.right && left + rect.width > viewportRect.left
+                && rect.top < viewportRect.bottom && rect.bottom > viewportRect.top;
+            }
             return rect.left < viewportRect.right && rect.right > viewportRect.left
               && rect.top < viewportRect.bottom && rect.bottom > viewportRect.top;
           });

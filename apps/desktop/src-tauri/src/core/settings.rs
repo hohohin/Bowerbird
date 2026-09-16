@@ -69,6 +69,10 @@ pub struct AppSettings {
     #[serde(default)]
     pub hide_project_assets: bool,
 
+    /// 在画板图片和视频下方显示素材名称；旧设置默认隐藏。
+    #[serde(default)]
+    pub canvas_show_asset_names: bool,
+
     /// 生成成功时的应用内弹窗与提示音，可分别关闭；旧配置默认开启。
     #[serde(default = "default_true")]
     pub generation_completion_popup: bool,
@@ -116,6 +120,7 @@ impl Default for AppSettings {
             cloud_auto_understand: false,
             board_shift_pick: false,
             hide_project_assets: false,
+            canvas_show_asset_names: false,
             generation_completion_popup: true,
             generation_completion_sound: true,
             samples_seeded: false,
@@ -192,6 +197,23 @@ impl SettingsState {
 #[cfg(test)]
 mod tests {
     use super::{AppSettings, AppTheme, SettingsState};
+
+    #[test]
+    fn canvas_names_default_hidden_and_persist_choice() {
+        let old: AppSettings = serde_json::from_str("{}").unwrap();
+        assert!(!old.canvas_show_asset_names);
+        let dir = std::env::temp_dir().join(format!("bb-canvas-names-{}", ulid::Ulid::new()));
+        let path = dir.join("settings.json");
+        let state = SettingsState::init(path.clone()).unwrap();
+        assert!(!state.get().canvas_show_asset_names);
+        for visible in [true, false] {
+            let mut settings = state.get();
+            settings.canvas_show_asset_names = visible;
+            state.update(settings).unwrap();
+            assert_eq!(SettingsState::init(path.clone()).unwrap().get().canvas_show_asset_names, visible);
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn generation_reminders_default_on_and_preserve_opt_out_on_disk() {

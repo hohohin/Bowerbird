@@ -564,9 +564,42 @@ html[data-theme="light"] [role="button"]:focus-visible {
 }
 
 .app-sidebar {
+  --app-sidebar-width: 198px;
   position: relative;
-  width: 198px;
+  width: var(--app-sidebar-width);
   background: var(--bb-surface);
+}
+
+.app-sidebar-host { --app-sidebar-width: 198px; display: contents; }
+.app-sidebar-host.is-canvas {
+  position: relative;
+  display: block;
+  flex: 0 0 var(--app-sidebar-width);
+  transition: flex-basis 180ms ease;
+}
+.app-sidebar-host.is-collapsed { --app-sidebar-width: 50px; }
+.app-sidebar-host.is-canvas.is-auto-hidden { flex-basis: 4px; }
+.app-sidebar.is-auto-hide {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 45;
+  transition: left 180ms ease;
+  box-shadow: 8px 0 24px rgb(var(--bb-shadow-rgb) / 10%);
+}
+.app-sidebar.is-auto-hidden {
+  left: calc(-1 * var(--app-sidebar-width));
+  pointer-events: none;
+  box-shadow: none;
+}
+.app-sidebar-reveal {
+  position: absolute;
+  inset: 0 auto 0 0;
+  z-index: 44;
+  width: 4px;
+  background: transparent;
+  border: 0;
 }
 
 /* 侧栏滚动条默认退场，仅在用户进入侧栏或用键盘操作其中内容时显现。 */
@@ -644,7 +677,7 @@ html[data-theme="light"] [role="button"]:focus-visible {
 }
 
 .app-sidebar.is-collapsed {
-  width: 50px;
+  --app-sidebar-width: 50px;
   padding: 10px 0;
   background: var(--bb-surface-muted);
 }
@@ -1135,11 +1168,10 @@ html .generation-mode-button:focus-visible {
 /*
  * 创作板底部浮动对话框（creation-dock）：主题自适应半透明表面，宽而矮，
  * 浮在瀑布流下方居中、底边贴应用底边（App 内挂在主区容器 bottom-0）。
- * 主区滚动时组件加 .is-collapsed——整体下沉 translateY，只露编辑框第一行
- * （--bb-dock-peek），其余被应用底边截断；停滚后 transform 归位浮回。
+ * 未聚焦时加 .is-collapsed，下沉 80%；点击或键盘聚焦后展开。
  */
 .creation-dock {
-  --bb-dock-peek: 50px; /* 对话框 padding-top(10) + 编辑框 padding-top(8) + 一行行高(32) */
+  --bb-dock-peek: 20%;
   color: var(--bb-ink);
   background: rgb(var(--bb-surface-rgb) / 94%);
   backdrop-filter: blur(20px) saturate(1.25);
@@ -1510,8 +1542,8 @@ html .generation-mode-button:focus-visible {
     gap: 10px;
   }
 
-  .app-sidebar {
-    width: 176px;
+  .app-sidebar, .app-sidebar-host {
+    --app-sidebar-width: 176px;
   }
 
   .topbar-action-label {
@@ -1527,8 +1559,8 @@ html .generation-mode-button:focus-visible {
     padding-inline: 10px;
   }
 
-  .app-sidebar {
-    width: 162px;
+  .app-sidebar, .app-sidebar-host {
+    --app-sidebar-width: 162px;
   }
 
 }
@@ -3759,10 +3791,9 @@ html[data-theme="light"] .app-form-input:focus {
 
 .canvas-node.is-moving { cursor: grabbing; }
 
-.canvas-node.is-asset,
-.canvas-node.is-folder { cursor: zoom-in; }
-.canvas-stage.is-creation-mode .canvas-node.is-asset,
-.canvas-stage.is-creation-mode .canvas-node.is-folder { cursor: copy; }
+.canvas-node.is-asset { cursor: zoom-in; background: transparent; }
+.canvas-node.is-folder { cursor: pointer; }
+.canvas-stage.is-creation-mode .canvas-node.is-asset { cursor: copy; }
 .canvas-node.is-asset.is-moving,
 .canvas-node.is-folder.is-moving { cursor: grabbing; }
 
@@ -3843,6 +3874,47 @@ html[data-theme="light"] .app-form-input:focus {
   background: rgb(var(--bb-surface-2-rgb) / 78%);
   color: var(--bb-muted);
   object-fit: contain;
+}
+
+.canvas-node.is-asset > img { background: transparent; }
+.canvas-node-name { background: var(--bb-surface-card); }
+
+.canvas-node.is-folder.is-expanded {
+  padding: 12px;
+  border-color: rgb(var(--bb-blue-rgb) / 50%);
+  background: color-mix(in srgb, var(--bb-surface-card) 97%, var(--bb-blue) 3%);
+  cursor: default;
+}
+
+.canvas-folder-grid img { background: transparent; }
+.canvas-folder-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 44px;
+  padding: 0 8px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid rgb(var(--bb-blue-rgb) / 20%);
+  color: var(--bb-blue);
+  cursor: grab;
+}
+.canvas-folder-header strong { flex: 1; color: var(--bb-ink); font-size: 13px; font-weight: 600; }
+.canvas-folder-header > span { color: var(--bb-muted); font-size: 11px; }
+.canvas-folder-header > button { padding: 6px; border-radius: 6px; color: var(--bb-muted); }
+.canvas-folder-header > button:hover { color: var(--bb-blue); background: rgb(var(--bb-blue-rgb) / 9%); }
+.canvas-folder-expanded-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.canvas-folder-asset { display: flex; flex-direction: column; min-width: 0; overflow: hidden; border-radius: 8px; background: transparent; cursor: zoom-in; }
+.canvas-stage.is-creation-mode .canvas-folder-asset { cursor: copy; }
+.canvas-folder-asset > img, .canvas-folder-asset > video, .canvas-folder-asset-placeholder { width: 100%; height: 140px; flex-shrink: 0; object-fit: contain; pointer-events: none; }
+.canvas-folder-asset-placeholder { display: grid; place-items: center; color: var(--bb-muted); font-size: 24px; }
+.canvas-folder-asset-name { width: 100%; height: 24px; padding: 4px 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; color: var(--bb-ink-soft); font-size: 10px; }
+.canvas-folder-asset:hover { box-shadow: inset 0 0 0 1px var(--bb-blue); }
+.canvas-folder-asset:focus-visible, .canvas-folder-header > button:focus-visible { outline: 2px solid var(--bb-blue); outline-offset: 2px; }
+
+.canvas-node.is-asset.is-name-hidden > img,
+.canvas-node.is-asset.is-name-hidden > video,
+.canvas-node.is-asset.is-name-hidden > .canvas-node-placeholder {
+  height: 100%;
 }
 
 .canvas-folder-grid b {
@@ -3957,18 +4029,18 @@ html[data-theme="light"] .app-form-input:focus {
 .canvas-snap-guide {
   position: absolute;
   z-index: 20000;
-  background: var(--bb-blue);
-  box-shadow: 0 0 5px rgb(var(--bb-blue-rgb) / 70%);
   pointer-events: none;
 }
 
 .canvas-snap-guide.is-x {
+  background-image: linear-gradient(to bottom, var(--bb-blue) 50%, transparent 50%);
   top: -10000px;
   width: 1px;
   height: 20000px;
 }
 
 .canvas-snap-guide.is-y {
+  background-image: linear-gradient(to right, var(--bb-blue) 50%, transparent 50%);
   left: -10000px;
   width: 20000px;
   height: 1px;

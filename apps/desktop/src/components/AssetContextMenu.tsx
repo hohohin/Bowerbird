@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
+import { CanvasLayerMenuItem } from "./CanvasLayerMenuItem";
 import { createPortal } from "react-dom";
-import { ClipboardCopy, Layers, LayoutDashboard, MessageSquare, PenTool, ScanSearch, Trash2 } from "lucide-react";
+import { ClipboardCopy, Layers, LayoutDashboard, MessageSquare, PenTool, ScanSearch, Trash2, Ungroup } from "lucide-react";
 import { useStore } from "../store";
 import { api } from "../lib/api";
 import { loadDescribePrompt } from "../lib/describePrompt";
@@ -387,6 +388,16 @@ export function AssetContextMenu() {
       aria-label="素材操作"
     >
       <div className="app-context-label">整理</div>
+      {menu.canvasSelection && <CanvasLayerMenuItem {...menu.canvasSelection} disabled={busy} className="app-context-item px-2 py-1.5" />}
+      {menu.ungroupCanvasFolder && (
+        <button type="button" role="menuitem" disabled={busy} className="app-context-item px-2 py-1.5"
+          onClick={() => {
+            closeContextMenu();
+            menu.ungroupCanvasFolder!();
+          }}>
+          <Ungroup size={13} className="shrink-0" /> 解散素材组
+        </button>
+      )}
       {menu.canvasSelection && (
         <button type="button" role="menuitem" disabled={busy} className="app-context-item px-2 py-1.5"
           onClick={() => {

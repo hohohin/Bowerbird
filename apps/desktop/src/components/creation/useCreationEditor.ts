@@ -461,26 +461,8 @@ export function useCreationEditor(opts?: {
       const v = viewRef.current;
       if (!v) return;
       const schema = v.state.schema;
-      let tr = v.state.tr;
-      // 呼环图的 chip 缺席（长按窥视不插 chip）→ 先补插，保证插入形状是「@图片【维度】」；
-      // 已有（左键点图路径刚插过）只追加 keyword。
-      if (pendingKeyword.assetId) {
-        const assetId = pendingKeyword.assetId;
-        let hasChip = false;
-        v.state.doc.descendants((n) => {
-          if (n.type.name === "image" && n.attrs.assetId === assetId) {
-            hasChip = true;
-            return false;
-          }
-          return true;
-        });
-        if (!hasChip) {
-          tr = tr.replaceSelectionWith(
-            schema.nodes.image.create(imageAttrs(assetId, assetByIdRef.current.get(assetId), false))
-          );
-        }
-      }
-      tr = tr
+      // 维度保留来源身份用于展开正文，不自动把来源图片加入参考图。
+      const tr = v.state.tr
         .replaceSelectionWith(
           schema.nodes.keyword.create({
             title: pendingKeyword.title,

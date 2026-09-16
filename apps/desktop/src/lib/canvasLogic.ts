@@ -76,7 +76,8 @@ export type CanvasGroupNode<T extends { id: string }> =
   | (CanvasGroupNodeBase & { kind: "asset"; asset: T })
   | (CanvasGroupNodeBase & { kind: "folder"; assets: T[] });
 
-const SNAP_THRESHOLD = 12;
+const SNAP_THRESHOLD = 24;
+const ALIGNMENT_RANGE = 600;
 
 function overlapsOrNearlyTouches(
   aStart: number,
@@ -95,53 +96,68 @@ function overlapsOrNearlyTouches(
 export function snapCanvasRect(
   moving: CanvasRect,
   anchors: CanvasSnapAnchor[],
-  threshold = SNAP_THRESHOLD,
+  options: { enabled?: boolean; zoom?: number } = {},
 ): CanvasSnapResult {
+  if (options.enabled === false) return { x: moving.x, y: moving.y, guides: [] };
+  // Keep both the capture tolerance and search range consistent on screen.
+  const zoom = options.zoom ?? 1;
+  const threshold = SNAP_THRESHOLD / zoom;
+  const range = ALIGNMENT_RANGE / zoom;
   const ordered = [...anchors].sort((a, b) => a.order - b.order);
-  let bestX: { distance: number; value: number; guide: number; order: number } | null = null;
-  let bestY: { distance: number; value: number; guide: number; order: number } | null = null;
+  type Snap = { distance: number; value: number; rect: CanvasRect };
+  let bestX: Snap | null = null;
+  let bestY: Snap | null = null;
 
-  function takeX(value: number, guide: number, order: number) {
+  function takeX(value: number, rect: CanvasRect) {
     const distance = Math.abs(moving.x - value);
     if (distance > threshold) return;
-    if (!bestX || distance < bestX.distance || (distance === bestX.distance && order < bestX.order)) {
-      bestX = { distance, value, guide, order };
+    if (!bestX || distance < bestX.distance) {
+      bestX = { distance, value, rect };
     }
   }
 
-  function takeY(value: number, guide: number, order: number) {
+  function takeY(value: number, rect: CanvasRect) {
     const distance = Math.abs(moving.y - value);
     if (distance > threshold) return;
-    if (!bestY || distance < bestY.distance || (distance === bestY.distance && order < bestY.order)) {
-      bestY = { distance, value, guide, order };
+    if (!bestY || distance < bestY.distance) {
+      bestY = { distance, value, rect };
     }
   }
 
   for (const anchor of ordered) {
     const rect = anchor.rect;
     if (overlapsOrNearlyTouches(moving.y, moving.height, rect.y, rect.height, threshold)) {
-      takeX(rect.x + rect.width, rect.x + rect.width, anchor.order);
-      takeX(rect.x - moving.width, rect.x, anchor.order);
-      takeX(rect.x, rect.x, anchor.order);
-      takeX(rect.x + rect.width - moving.width, rect.x + rect.width, anchor.order);
+      takeX(rect.x + rect.width, rect);
+      takeX(rect.x - moving.width, rect);
+    }
+    if (overlapsOrNearlyTouches(moving.y, moving.height, rect.y, rect.height, range)) {
+      takeX(rect.x, rect);
+      takeX(rect.x + rect.width - moving.width, rect);
     }
     if (overlapsOrNearlyTouches(moving.x, moving.width, rect.x, rect.width, threshold)) {
-      takeY(rect.y + rect.height, rect.y + rect.height, anchor.order);
-      takeY(rect.y - moving.height, rect.y, anchor.order);
-      takeY(rect.y, rect.y, anchor.order);
-      takeY(rect.y + rect.height - moving.height, rect.y + rect.height, anchor.order);
+      takeY(rect.y + rect.height, rect);
+      takeY(rect.y - moving.height, rect);
+    }
+    if (overlapsOrNearlyTouches(moving.x, moving.width, rect.x, rect.width, range)) {
+      takeY(rect.y, rect);
+      takeY(rect.y + rect.height - moving.height, rect);
     }
   }
 
-  const xSnap = bestX as { value: number; guide: number } | null;
-  const ySnap = bestY as { value: number; guide: number } | null;
-  const guides: CanvasSnapGuide[] = [];
-  if (xSnap) guides.push({ axis: "x", position: xSnap.guide });
-  if (ySnap) guides.push({ axis: "y", position: ySnap.guide });
+  const xSnap = bestX as Snap | null;
+  const ySnap = bestY as Snap | null;
+  function alignedGuides(axis: "x" | "y", snap: Snap | null): CanvasSnapGuide[] {
+    if (!snap) return [];
+    const dimension = axis === "x" ? "width" : "height";
+    const ends = [snap.value, snap.value + moving[dimension]];
+    return [snap.rect[axis], snap.rect[axis] + snap.rect[dimension]]
+      .filter(position => ends.some(end => Math.abs(end - position) < 0.001))
+      .map(position => ({ axis, position }));
+  }
   return {
     x: xSnap?.value ?? moving.x,
     y: ySnap?.value ?? moving.y,
-    guides,
+    guides: [...alignedGuides("x", xSnap), ...alignedGuides("y", ySnap)],
   };
 }
 

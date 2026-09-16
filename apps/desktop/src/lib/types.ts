@@ -539,6 +539,7 @@ export interface AppSettings {
   cloud_auto_understand: boolean;
   board_shift_pick: boolean;
   hide_project_assets: boolean;
+  canvas_show_asset_names: boolean;
   generation_completion_popup: boolean;
   generation_completion_sound: boolean;
   /** 即梦 dreamina CLI 出图模型版本（text2image: 3.0~5.0Pro；image2image 仅 4.0+） */

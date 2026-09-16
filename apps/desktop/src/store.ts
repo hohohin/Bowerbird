@@ -482,13 +482,14 @@ interface State {
     assetId: string;
     asset?: Asset;
     addCanvasImagesToBoard?: { count: number; run: () => void };
+    ungroupCanvasFolder?: () => void;
     canvasSelection?: { projectId: string; nodeIds: string[] };
   } | null;
   openContextMenu: (
     x: number,
     y: number,
     assetId: string,
-    context?: { asset?: Asset; canvasSelection?: { projectId: string; nodeIds: string[] }; addCanvasImagesToBoard?: { count: number; run: () => void } },
+    context?: { asset?: Asset; canvasSelection?: { projectId: string; nodeIds: string[] }; addCanvasImagesToBoard?: { count: number; run: () => void }; ungroupCanvasFolder?: () => void },
   ) => void;
   closeContextMenu: () => void;
   // —— 项目右键菜单（侧栏项目行 / 收起态圆标）——
@@ -1678,7 +1679,8 @@ export const useStore = create<State>((set, get) => {
     set((s) => ({
       genPanelOpen: open,
       genUnread: open ? false : s.genUnread,
-      ...(open ? { boardOpen: false, genEditing: null } : {}),
+      genEditing: null,
+      ...(open ? { boardOpen: false } : {}),
     })),
   setActiveJob: (id) => set({ activeJobId: id, activeSessionKind: "generation" }),
   openGenerationJob: (id, options) => set((s) => {

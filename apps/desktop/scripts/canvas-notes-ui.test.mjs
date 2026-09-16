@@ -65,7 +65,7 @@ try {
   // Resize an existing section: keep cards still and refresh membership on release.
   async function resizeSection(dx, dy, cancel = false) {
     await section.locator(".canvas-section-heading svg").click();
-    const knob = await section.getByRole("button", { name: "调整分区大小" }).boundingBox();
+    const knob = await section.getByRole("button", { name: "调整分区大小（右下角）", exact: true }).boundingBox();
     await page.mouse.move(knob.x + knob.width / 2, knob.y + knob.height / 2);
     await page.mouse.down();
     await page.mouse.move(knob.x + knob.width / 2 + dx, knob.y + knob.height / 2 + dy, { steps: 8 });

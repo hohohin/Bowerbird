@@ -7,6 +7,7 @@ import { useStore } from "../../../src/store";
 import { ExploreWorkspace } from "../../../src/components/ExploreWorkspace";
 import { ToastViewport } from "../../../src/components/ToastViewport";
 import { Toolbar } from "../../../src/components/Toolbar";
+import { SettingsDialog } from "../../../src/components/SettingsDialog";
 import "../../../src/styles.css";
 
 // Closed synthetic IPC fixture: never reads a library or invokes a provider.
@@ -78,6 +79,8 @@ w.__TAURI_INTERNALS__ = {
   metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main" } },
   invoke: async (command: string, args: any) => {
     w.calls.push({ command, args });
+    if (command === "get_settings") return JSON.parse(sessionStorage.getItem("canvas-settings") || "{}");
+    if (command === "update_settings") { sessionStorage.setItem("canvas-settings", JSON.stringify(args.settings)); return null; }
     if (command === "plugin:event|listen") { listeners.set(args.handler, args.event); return args.handler; }
     if (command === "list_projects") return explorer ? [project, { ...project, id: "q", name: "另一个项目" }] : [project];
     if (command === "project_canvas_get") return args.projectId === "q"
@@ -113,9 +116,26 @@ w.__TAURI_INTERNALS__ = {
       node.hiddenAt = null;
       return true;
     }
+    if (command === "project_canvas_group_create") {
+      const group = { ...args.value, createdAt: 10, updatedAt: 10 };
+      snapshot.groups.push(group);
+      snapshot.groupItems.push(...args.nodeIds.map((nodeId: string, ordinal: number) => ({ groupId: group.id, nodeId, ordinal })));
+      return structuredClone(group);
+    }
+    if (command === "project_canvas_group_set_items") {
+      snapshot.groupItems = snapshot.groupItems.filter((item: any) => item.groupId !== args.groupId);
+      const items = args.nodeIds.map((nodeId: string, ordinal: number) => ({ groupId: args.groupId, nodeId, ordinal }));
+      snapshot.groupItems.push(...items);
+      return structuredClone(items);
+    }
     if (command === "project_canvas_group_update") {
       const group = snapshot.groups.find((g: any) => g.id === args.value.id);
       Object.assign(group, args.value); return structuredClone(group);
+    }
+    if (command === "project_canvas_group_delete") {
+      snapshot.groups = snapshot.groups.filter((group: any) => group.id !== args.groupId);
+      snapshot.groupItems = snapshot.groupItems.filter((item: any) => item.groupId !== args.groupId);
+      return true;
     }
     if (command === "project_canvas_view_upsert" || command === "project_canvas_view_flush") {
       if (w.holdViewSave) await new Promise(resolve => { w.releaseViewSave = resolve; });
@@ -155,8 +175,10 @@ w.__TAURI_INTERNALS__ = {
   },
 };
 w.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
-useStore.setState({ projects: (explorer ? [project, { ...project, id: "q", name: "另一个项目" }] : [project]) as any, activeProjectId: "p", assets: assets as any, boardOpen: false, settings: {} as any });
+useStore.setState({ projects: (explorer ? [project, { ...project, id: "q", name: "另一个项目" }] : [project]) as any, activeProjectId: "p", assets: assets as any, boardOpen: false, settings: JSON.parse(sessionStorage.getItem("canvas-settings") || "{}") });
 function Fixture() {
+  const [settingsOpen, setSettingsOpen] = React.useState(false);
+  w.openSettings = () => setSettingsOpen(true);
   const projectId = useStore(state => state.activeProjectId)!;
   const [exploring, setExploring] = React.useState(explorer);
   const [toolbarCanvasMode, setToolbarCanvasMode] = React.useState(true);
@@ -170,7 +192,7 @@ function Fixture() {
       <Toolbar canvasMode={toolbarCanvasMode} onCanvasModeChange={setToolbarCanvasMode} onCreateCreative={() => {}} onRefresh={async () => {}} />
       <div className="flex min-h-0 flex-1">{canvas}</div>
     </div> : explorer ? <ExploreWorkspace url="https://www.pinterest.com/" open={exploring} onClose={() => setExploring(false)}>{canvas}</ExploreWorkspace> : canvas}
-    <AssetContextMenu /><ImageAnnotator /><ToastViewport />
+    <AssetContextMenu /><ImageAnnotator /><ToastViewport />{settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
   </div>;
 }
 createRoot(document.getElementById("root")!).render(<Fixture />);

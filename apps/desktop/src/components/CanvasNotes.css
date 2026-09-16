@@ -2,6 +2,8 @@
 .canvas-drawing-tools button { width:34px; height:34px; display:grid; place-items:center; border-radius:7px; color:var(--bb-muted); }
 .canvas-drawing-tools button:hover, .canvas-drawing-tools button[aria-pressed=true] { background:var(--bb-blue); color:white; }
 .canvas-drawing-tools hr { border:0; border-top:1px solid var(--bb-line); margin:2px 3px; }
+.canvas-assist-tools { display:flex; flex-direction:column; align-items:center; gap:4px; }
+.canvas-assist-tools > span { color:var(--bb-muted); font-size:9px; line-height:14px; }
 .canvas-stage.is-drawing, .canvas-stage.is-drawing * { cursor:crosshair !important; }
 .canvas-note { position:absolute; left:0; top:0; overflow:visible; border:1px solid var(--bb-line); border-radius:10px; color:var(--bb-ink); background:var(--bb-surface); box-shadow:0 3px 12px #0001; }
 .canvas-note.is-selected { outline:2px solid var(--bb-blue); }
@@ -44,6 +46,9 @@
 .canvas-text-cell.is-removing { background:rgb(220 69 69 / 12%); box-shadow:inset 0 0 0 1px rgb(220 69 69 / 50%); }
 .canvas-note .canvas-resize-handle, .canvas-node .canvas-resize-handle { position:absolute; right:-6px; bottom:-6px; width:14px; height:14px; border:2px solid var(--bb-blue); border-radius:3px; background:var(--bb-surface); cursor:nwse-resize; z-index:4; touch-action:none; pointer-events:auto; }
 .canvas-resize-handle:focus-visible { outline:2px solid var(--bb-blue); outline-offset:2px; }
+.canvas-note .canvas-resize-handle[data-corner="nw"] { left:-6px; top:-6px; right:auto; bottom:auto; }
+.canvas-note .canvas-resize-handle[data-corner="ne"] { top:-6px; bottom:auto; cursor:nesw-resize; }
+.canvas-note .canvas-resize-handle[data-corner="sw"] { left:-6px; right:auto; cursor:nesw-resize; }
 .canvas-node .canvas-resize-handle { right:4px; bottom:4px; opacity:0; }
 .canvas-node:hover .canvas-resize-handle, .canvas-node.is-selected .canvas-resize-handle, .canvas-node:focus-within .canvas-resize-handle { opacity:1; }
 .canvas-text-stylebar { position:absolute; bottom:calc(100% + 10px); left:0; display:flex; align-items:center; gap:3px; padding:5px; border:1px solid var(--bb-line); border-radius:9px; background:var(--bb-surface); box-shadow:0 3px 12px #0002; white-space:nowrap; }

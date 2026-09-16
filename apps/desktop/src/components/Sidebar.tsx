@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type FocusEvent, type MouseEvent } from "react";
 import { FolderOpen, FolderPlus, PanelLeftClose, PanelLeftOpen, RefreshCw } from "lucide-react";
 import { useStore } from "../store";
 import { api } from "../lib/api";
@@ -83,6 +83,52 @@ export function Sidebar() {
   const [resizing, setResizing] = useState<{ startX: number; startWidth: number } | null>(null);
   const sidebarRef = useRef<HTMLElement>(null);
   const dragWidthRef = useRef<number | null>(null);
+  const [autoHidden, setAutoHidden] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  const [keyboardFocused, setKeyboardFocused] = useState(false);
+  const [accountInteracting, setAccountInteracting] = useState(false);
+  const projectContextMenu = useStore((s) => s.projectContextMenu);
+
+  useEffect(() => {
+    // Closing an inline menu under the pointer may not dispatch mouseleave.
+    setHovered(sidebarRef.current?.matches(":hover") ?? false);
+  }, [accountInteracting]);
+
+  useEffect(() => {
+    setAutoHidden(false);
+    if (!activeProjectId || hovered || keyboardFocused || accountInteracting
+      || resizing || classificationOpen || openFolder || creating !== "none" || projectContextMenu) return;
+    const timer = window.setTimeout(() => setAutoHidden(true), 2000);
+    return () => window.clearTimeout(timer);
+  }, [activeProjectId, hovered, keyboardFocused, accountInteracting, resizing, classificationOpen, openFolder, creating, projectContextMenu, collapsed]);
+
+  const visibilityProps = {
+    onMouseEnter: (event: MouseEvent<HTMLElement>) => {
+      if (event.currentTarget.contains(event.target as Node)) setHovered(true);
+    },
+    onMouseLeave: () => setHovered(false),
+    onFocusCapture: (event: FocusEvent<HTMLElement>) => {
+      if (!event.currentTarget.contains(event.target)) return;
+      setKeyboardFocused(event.target.matches(":focus-visible"));
+      setAutoHidden(false);
+    },
+    onBlurCapture: (event: FocusEvent<HTMLElement>) => {
+      if (!event.currentTarget.contains(event.relatedTarget)) setKeyboardFocused(false);
+    },
+  };
+  const autoHideClass = activeProjectId ? ` is-auto-hide${autoHidden ? " is-auto-hidden" : ""}` : "";
+  const hostClass = `app-sidebar-host${activeProjectId ? " is-canvas" : ""}${collapsed ? " is-collapsed" : ""}${activeProjectId && autoHidden ? " is-auto-hidden" : ""}`;
+  const sidebarStyle = !collapsed && width != null
+    ? { "--app-sidebar-width": `${width}px` } as CSSProperties : undefined;
+  const revealHandle = activeProjectId && autoHidden && (
+    <button type="button" className="app-sidebar-reveal"
+      aria-label="显示侧栏" title="显示侧栏"
+      onMouseEnter={() => setAutoHidden(false)} onDragEnter={() => setAutoHidden(false)}
+      onFocus={() => {
+        setAutoHidden(false);
+        sidebarRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+      }} onClick={() => setAutoHidden(false)} />
+  );
 
   const palette = useStore((s) => s.palette);
   const normalFolders = folders.filter(
@@ -129,7 +175,7 @@ export function Sidebar() {
   /** 宽度夹取：最小 160px，最大不超过主面板（侧栏所在 flex 行）的 1/4。 */
   function clampSidebarWidth(w: number | null) {
     if (w == null) return null;
-    const rowWidth = sidebarRef.current?.parentElement?.clientWidth ?? window.innerWidth;
+    const rowWidth = sidebarRef.current?.parentElement?.parentElement?.clientWidth ?? window.innerWidth;
     const max = Math.max(SIDEBAR_MIN_WIDTH, Math.round(rowWidth / 4));
     return Math.min(max, Math.max(SIDEBAR_MIN_WIDTH, Math.round(w)));
   }
@@ -145,7 +191,10 @@ export function Sidebar() {
     if (!resizing) return;
     const next = clampSidebarWidth(resizing.startWidth + e.clientX - resizing.startX);
     dragWidthRef.current = next;
-    if (sidebarRef.current && next != null) sidebarRef.current.style.width = `${next}px`;
+    if (sidebarRef.current && next != null) {
+      sidebarRef.current.style.setProperty("--app-sidebar-width", `${next}px`);
+      sidebarRef.current.parentElement?.style.setProperty("--app-sidebar-width", `${next}px`);
+    }
   }
 
   function endResize() {
@@ -224,7 +273,8 @@ export function Sidebar() {
 
   if (collapsed) {
     return (
-      <aside className="app-sidebar is-collapsed flex shrink-0 flex-col items-center border-r border-edge">
+      <div className={hostClass} style={sidebarStyle}>{revealHandle}<aside ref={sidebarRef} {...visibilityProps}
+        className={`app-sidebar is-collapsed flex shrink-0 flex-col items-center border-r border-edge${autoHideClass}`}>
         <button
           type="button"
           onClick={() => setSidebarCollapsed(false)}
@@ -274,16 +324,18 @@ export function Sidebar() {
             );
           })}
         </div>
+        <SidebarAccount collapsed onInteractionChange={setAccountInteracting} />
         {openFolder && <CollectionPanel key={openFolder.id} folder={openFolder} onClose={() => setOpenFolderId(null)} />}
-      </aside>
+      </aside></div>
     );
   }
 
   return (
-    <aside
+    <div className={hostClass} style={sidebarStyle}>{revealHandle}<aside
       ref={sidebarRef}
-      style={width != null ? { width } : undefined}
-      className="app-sidebar flex shrink-0 flex-col border-r border-edge text-sm"
+      {...visibilityProps}
+      style={sidebarStyle}
+      className={`app-sidebar flex shrink-0 flex-col border-r border-edge text-sm${autoHideClass}`}
     >
       <button
         type="button"
@@ -496,7 +548,7 @@ export function Sidebar() {
       <div className="px-3 pb-0.5 pt-2 text-[10px] uppercase tracking-wide text-muted">
         {activeProjectId ? "Project assets" : "Library assets"} · {total}
       </div>
-      <SidebarAccount />
+      <SidebarAccount onInteractionChange={setAccountInteracting} />
       {openFolder && <CollectionPanel key={openFolder.id} folder={openFolder} onClose={() => setOpenFolderId(null)} />}
       {/* 右缘拖拽把手：调侧栏宽度（最小 160px，最大主面板 1/4） */}
       <div
@@ -511,7 +563,7 @@ export function Sidebar() {
         onPointerCancel={endResize}
         onLostPointerCapture={endResize}
       />
-    </aside>
+    </aside></div>
   );
 }
 

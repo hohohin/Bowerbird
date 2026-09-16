@@ -30,13 +30,22 @@ try {
     const { hydrateProjectCanvas } = await import('/src/lib/creativeCanvas.ts');
     return hydrateProjectCanvas(window.snapshot(), new Map(window.pack.tables.assets.map(asset => [asset.id, asset]))).nodes;
   });
-  for (const node of visible) {
-    const layout = await page.locator(`[data-canvas-node-id="${node.id}"]`).evaluate(el => {
-      const matrix = new DOMMatrix(el.style.transform);
-      return { x: matrix.m41, y: matrix.m42, width: parseFloat(el.style.width), height: parseFloat(el.style.height || el.style.minHeight) };
-    });
-    const source = sourceLayout.find(item => item.id === node.id) ?? node;
-    for (const key of ['x', 'y', 'width', 'height']) assert.ok(Math.abs(layout[key] - source[key]) < 0.01, `${node.id}: ${key}`);
+  for (const showNames of [false, true, false]) {
+    await page.evaluate(showNames => window.store.setState({
+      settings: { ...window.store.getState().settings, canvas_show_asset_names: showNames },
+    }), showNames);
+    await page.waitForFunction(showNames => [...document.querySelectorAll('.canvas-node.is-asset')]
+      .every(el => el.classList.contains('is-name-hidden') === !showNames), showNames);
+    for (const node of visible) {
+      const layout = await page.locator(`[data-canvas-node-id="${node.id}"]`).evaluate(el => {
+        const matrix = new DOMMatrix(el.style.transform);
+        return { x: matrix.m41, y: matrix.m42, width: parseFloat(el.style.width), height: parseFloat(el.style.height || el.style.minHeight) };
+      });
+      const source = sourceLayout.find(item => item.id === node.id) ?? node;
+      // Hiding names removes the 30px caption from display, not saved geometry.
+      const expected = { ...source, height: source.height - (node.kind === 'asset' && !showNames ? 30 : 0) };
+      for (const key of ['x', 'y', 'width', 'height']) assert.ok(Math.abs(layout[key] - expected[key]) < 0.01, `${node.id}: ${key}, names=${showNames}`);
+    }
   }
   const expectedView = pack.tables.canvas_views[0];
   const readView = () => page.locator('[data-canvas-node-id]').first().evaluate(el => {

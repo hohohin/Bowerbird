@@ -4,6 +4,7 @@ import { performance } from "node:perf_hooks";
 import {
   assetPayloadJson,
   canvasAssetNodeSize,
+  canvasAssetMediaPath,
   canvasPromptReferences,
   agentPromptGroupMap,
   canvasSourceColumnCount,
@@ -18,6 +19,18 @@ import {
   projectCanvasViewInput,
   rehydrateProjectCanvasAssets,
 } from "../src/lib/creativeCanvas.ts";
+
+test("canvas preserves alpha from existing originals instead of flattened JPEG thumbnails", () => {
+  for (const storePath of ["C:\\assets\\alpha.PNG", "/assets/alpha.webp", "alpha.gif", "alpha.avif", "alpha.svg", "alpha.ico", "alpha.bmp", "data:image/png;base64,AAA", "data:image/svg+xml;charset=utf-8,%3Csvg"]) {
+    assert.equal(canvasAssetMediaPath({ storePath, thumbPath: "legacy.jpg" }), storePath);
+  }
+  for (const storePath of ["photo.jpg", "clip.mp4", "document.psd", "image.tiff"]) {
+    assert.equal(canvasAssetMediaPath({ storePath, thumbPath: "thumb.jpg" }), "thumb.jpg");
+  }
+  assert.equal(canvasAssetMediaPath({ storePath: "photo.jpg", thumbPath: null }), "photo.jpg");
+  assert.equal(canvasAssetMediaPath({ storePath: null, thumbPath: "thumb.jpg" }), "thumb.jpg");
+  assert.equal(canvasAssetMediaPath({ storePath: null, thumbPath: null }), null);
+});
 
 test("canvas images retain native aspect ratios without clamping wide or tall cards", () => {
   for (const [width, height] of [[1600, 900], [900, 1600], [2000, 250], [250, 2000], [1000, 1000]]) {
@@ -629,6 +642,8 @@ for (const dragKind of ["material", "execution"]) {
       const bindings = {
         agentPromptGroupMap, expandCanvasSections, graphEdges: [],
         activateCanvasMaterial: () => activated++, hitNode: () => null,
+        hoverRef: { current: null },
+        snapEnabledRef: { current: true }, zoomRef: { current: 1 },
         nodesRef, graphNodesRef, threads: [{ id: "old", archivedAt: 1 }],
         selectedCanvasNodeIdsRef: { current: selectedIds }, nodeDragRef: { current: null }, graphNodeDragRef: { current: null },
         spacePressedRef: { current: false }, suppressNodeClickRef: { current: false }, activeCanvasRef: { current: {} },
@@ -873,7 +888,8 @@ test("canvas selection opens dimensions only in creation mode and anchors to the
     };
     const activate = new Function(...Object.keys(bindings), code + "; return activateCanvasMaterial;")(...Object.values(bindings));
     activate({ id: "instance", kind: "asset", asset: { id: "instance", assetId: "asset", storePath: "image.png" } });
-    assert.equal(events.filter((event) => event.type === "pick").length, creating ? 1 : 0);
+    assert.equal(events.filter((event) => event.type === "pick").length, creating && !hasDimensions ? 1 : 0,
+      "opening dimensions keeps the source image out of reference inputs");
     const rings = events.filter((event) => event.type === "bowerbird://board-asset-peek");
     assert.equal(rings.length, creating && hasDimensions ? 1 : 0);
     if (rings.length) assert.deepEqual(rings[0].detail, { assetId: "asset", anchor });
