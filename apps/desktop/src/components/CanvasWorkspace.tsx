@@ -27,7 +27,6 @@ import { createPortal } from "react-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
-  ArrowLeft,
   Archive,
   ArchiveRestore,
   Copy,
@@ -59,6 +58,8 @@ import {
 import { MasonryGrid } from "./MasonryGrid";
 import { Lightbox } from "./Lightbox";
 import { CreativeComposer } from "./CreativeComposer";
+import { CanvasConversation } from "./CanvasConversation";
+import { canvasConversationTurn, canvasConversationTurns } from "../lib/canvasConversation";
 import { GenerationPanel } from "./GenerationPanel";
 import { CloudAgentSession } from "./CloudAgentPanel";
 import { AgentApprovalToggle } from "./AgentApprovalToggle";
@@ -508,6 +509,7 @@ export function CanvasWorkspace({
   const setProjectTimelineScope = useStore((state) => state.setProjectTimelineScope);
   const [activeCanvas, setActiveCanvasState] = useState<ActiveCanvasState>(() => provisionalCanvas(project));
   const [nodes, setNodes] = useState<CanvasNode[]>([]);
+  const [snapshotPromptId, setSnapshotPromptId] = useState<string | null>(null);
   const [graphNodes, setGraphNodes] = useState<ProjectGraphNode[]>([]);
   const [graphEdges, setGraphEdges] = useState<CanvasEdge[]>([]);
   const [threads, setThreads] = useState<CreativeThread[]>([]);
@@ -597,9 +599,14 @@ export function CanvasWorkspace({
   const [viewRevision, setViewRevision] = useState(0);
   const activeGenerationJob = activeJobId ? genJobs[activeJobId] ?? null : null;
   const activeAgentRun = activeCloudAgentRunId ? cloudAgentRuns[activeCloudAgentRunId] ?? null : null;
-  const activeInspectorExecution = activeSessionKind === "generation"
+  const snapshotPrompt = !activeGenerationJob && !activeAgentRun && genPanelOpen
+    ? graphNodes.find(node => node.id === snapshotPromptId && node.hiddenAt == null) ?? null : null;
+  useEffect(() => {
+    if (!genPanelOpen || activeJobId || activeCloudAgentRunId) setSnapshotPromptId(null);
+  }, [genPanelOpen, activeJobId, activeCloudAgentRunId]);
+  const activeInspectorExecution = snapshotPrompt ?? (activeSessionKind === "generation"
     ? activeGenerationJob
-    : activeAgentRun;
+    : activeAgentRun);
   const scopedInspectorOpen = resolveProjectInspectorPlacement({
     open: genPanelOpen,
     loading,
@@ -2886,6 +2893,17 @@ export function CanvasWorkspace({
       : node.id;
     const prompt = graphNodesRef.current.find((candidate) => candidate.id === promptId);
     if (!prompt) return;
+    const savedTurn = canvasConversationTurn(prompt, graphNodesRef.current, graphEdges, assetById);
+    if (savedTurn) {
+      if (savedTurn.references.some(asset => !asset.store_path)) {
+        notify("引用图片已不可用，请恢复图片后再复用这条提示词", "info"); return;
+      }
+      state.reusePromptToBoard(savedTurn.text, savedTurn.references, [], undefined,
+        { media: "image", ratio: savedTurn.ratio }, savedTurn.referenceNodeIds);
+      setSnapshotPromptId(null);
+      setPromptMenu(null);
+      return;
+    }
     const summary = promptNodeSummary(prompt);
     const job = state.genJobs[summary.jobId];
     const turn = job?.turns.find((candidate) => candidate.turnKey === summary.turnKey);
@@ -3185,8 +3203,18 @@ export function CanvasWorkspace({
     )),
     [activeGraphNodes],
   );
+  const savedConversation = useMemo(() => snapshotPrompt
+    ? canvasConversationTurns(snapshotPrompt, graphNodes, graphEdges, assetById) : [],
+    [snapshotPrompt, graphNodes, graphEdges, assetById]);
   const inspectorHeader = useMemo(() => {
     if (!scopedInspectorOpen) return null;
+    if (snapshotPrompt) {
+      const provider = savedConversation[0]?.provider;
+      const providerLabel = provider === "jimeng" ? "即梦" : isCloudProvider(provider)
+        ? cloudProviderLabel(provider, cloudEntitlement) ?? "Bowerbird Cloud" : "codex";
+      return projectInspectorHeader({ kind: "generation", prompt: savedConversation[0]?.text,
+        detail: `${savedConversation.length} 轮 · ${savedConversation.reduce((total, turn) => total + turn.outputs.length, 0)} 图 · ${providerLabel}`, running: false });
+    }
     if (activeSessionKind === "generation") {
       const imageCount = activeGenerationJob?.turns.reduce((total, turn) => total + turn.images.length, 0) ?? 0;
       const provider = activeGenerationJob?.provider;
@@ -3230,6 +3258,8 @@ export function CanvasWorkspace({
     activeGenerationJob,
     activeSessionKind,
     cloudEntitlement,
+    snapshotPrompt,
+    savedConversation,
     scopedInspectorOpen,
   ]);
   const inspectorEditing = activeSessionKind === "generation" && genEditing === "edit";
@@ -3477,32 +3507,29 @@ export function CanvasWorkspace({
         )}
         <div className="canvas-board-toolbar">
           <div>
-            {onExit && (
-              <button type="button" className="canvas-back-button" onClick={onExit}>
-                <ArrowLeft size={14} /> 返回素材库
-              </button>
-            )}
-            <input
-              className="canvas-board-title"
-              aria-label="项目名称"
-              title="点击重命名项目"
-              value={activeCanvas.title}
-              onChange={(event) => {
-                const draft = activeCanvasRef.current;
-                draft.title = event.target.value;
-                draft.titleSource = "manual";
-                replaceActive(draft);
-              }}
-              onBlur={commitProjectTitle}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") event.currentTarget.blur();
-              }}
-            />
+            <span className="canvas-board-title-field" data-title={activeCanvas.title || " "}>
+              <input
+                className="canvas-board-title"
+                aria-label="项目名称"
+                title="点击重命名项目"
+                value={activeCanvas.title}
+                onChange={(event) => {
+                  const draft = activeCanvasRef.current;
+                  draft.title = event.target.value;
+                  draft.titleSource = "manual";
+                  replaceActive(draft);
+                }}
+                onBlur={commitProjectTitle}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") event.currentTarget.blur();
+                }}
+              />
+            </span>
             <small>
               {viewMode === "canvas"
                 ? boardOpen || genEditing
-                  ? "创作模式 · 点击素材加入创作 · 拖动素材调整位置"
-                  : "浏览模式 · 点击素材放大 · 空白拖动框选 · Ctrl/⌘ + 点击增减选择 · 空格 + 左键 / 中键平移"
+                  ? "创作模式 · 点击素材加入创作"
+                  : "浏览模式 · 双指移动 / 空格 + 左键 / 中键 平移"
                 : "项目内创作线程的顺序投影"}
             </small>
             {selectedCanvasNodeIds.size > 0 && (
@@ -3743,7 +3770,11 @@ export function CanvasWorkspace({
                     if (consumeSuppressedNodeClick()) return;
                     focusGraphNode(node.id);
                     if (summary.jobId && genJobs[summary.jobId]) {
+                      setSnapshotPromptId(null);
                       openGenerationJob(summary.jobId, { navigate: false });
+                    } else if (!summary.jobId) {
+                      setSnapshotPromptId(node.id);
+                      useStore.setState({ activeJobId: null, activeCloudAgentRunId: null, activeSessionKind: "generation", genEditing: null, genPanelOpen: true });
                     }
                   }}
                   onKeyDown={(event) => {
@@ -4006,7 +4037,9 @@ export function CanvasWorkspace({
             composing={activeSessionKind === "generation" && genEditing === "revise"}
             onClose={() => setGenPanelOpen(false)}
           >
-            {activeSessionKind === "generation"
+            {snapshotPrompt
+              ? <CanvasConversation turns={savedConversation} selectedId={snapshotPrompt.id} onReuse={reuseCanvasPrompt} />
+              : activeSessionKind === "generation"
               ? <GenerationPanel embedded hydratedAssets={canvasAssets} />
               : activeAgentRun
                 ? <CloudAgentSession embedded hydratedAssets={canvasAssets} />

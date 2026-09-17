@@ -9,6 +9,7 @@ await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
 page.setDefaultTimeout(10000);
+page.setDefaultNavigationTimeout(60000);
 const errors = [];
 page.on('pageerror', error => errors.push(error.message));
 try {
@@ -62,10 +63,98 @@ try {
   await importFolder();
   assert.equal(await page.locator('[data-canvas-node-id]').count(), visible.length);
   assert.deepEqual(await readView(), view);
+  // Imported prompt cards have no job id: open their saved multi-turn conversation.
+  const promptId = 'pack:canvas_nodes:018';
+  const promptCard = page.locator(`[data-canvas-node-id="${promptId}"]`);
+  await page.getByRole('button',{name:'适应内容',exact:true}).click();
+  await promptCard.click({position:{x:5,y:5}});
+  const inspector = page.locator('[data-project-inspector]');
+  await inspector.locator('[data-generation-turn-key]').first().waitFor();
+  assert.equal(await inspector.locator('[data-generation-turn-key]').count(),4);
+  assert.equal(await inspector.getByText(/4 轮 · 3 图 · 即梦/).count(),1);
+  assert.equal(await inspector.getByText(/保存的会话/).count(),0);
+  const turn = inspector.locator(`[data-generation-turn-key="${promptId}"]`);
+  assert.equal(await turn.getByRole('button',{name:/放大参考图/}).count(),2);
+  assert.equal(await turn.locator('button[title="点击放大"] img').count(),1);
+  assert.equal(await inspector.getByText(/图片已不可用|第 1 轮/).count(),0);
+  assert.equal(await turn.getByRole('button',{name:'展开全文',exact:true}).count(),1);
+  const turnStyles = locator => locator.evaluate(el => {
+    const bubble=el.querySelector('[aria-label="展开全文"]');
+    const result=el.querySelector('button[title="点击放大"] img');
+    const reference=el.querySelector('button[aria-label="放大参考图 1"] img');
+    const pick=element=>{const css=getComputedStyle(element);return [css.backgroundColor,css.borderRadius,css.maxHeight,css.fontSize,css.padding,css.objectFit];};
+    return {bubble:pick(bubble),result:pick(result),reference:pick(reference)};
+  });
+  const savedStyles = await turnStyles(turn);
+  await mkdir('.tmp',{recursive:true});
+  await inspector.screenshot({path:'.tmp/onboarding-unified-session.png'});
+  await turn.locator('button[title="点击放大"]').click();
+  await page.getByRole('dialog',{name:/媒体预览/}).waitFor();
+  await page.keyboard.press('Escape');
+
+  assert.deepEqual(await page.evaluate(()=>Object.keys(window.store.getState().genJobs)),[]);
+  await inspector.getByRole('button',{name:'关闭项目详情',exact:true}).click();
+  // The context menu must restore the same images as the session, including a prior output.
+  await promptCard.click({button:'right',position:{x:5,y:5}});
+  await page.getByRole('menuitem',{name:'复用提示词',exact:true}).click();
+  const editor = page.locator('[data-onboarding-composer] .ProseMirror');
+  await editor.locator('[data-asset-id="pack:assets:006"]').waitFor();
+  await editor.locator('[data-asset-id="pack:assets:002"]').waitFor();
+  const restored = await page.evaluate(async()=>{
+    const load=window.lastPromptLoad;
+    const {parsePromptToDoc}=await import('/src/components/creation/parse.ts');
+    const {serializeDoc}=await import('/src/components/creation/serialize.ts');
+    const byId=new Map(load.refs.map(a=>[a.id,a]));
+    const doc=parsePromptToDoc(load.prompt,load.refs,byId,undefined,[],load.referenceNodeIds,
+      new Map(load.refs.map(a=>[a.id,[a.name,...(a.referenceNames??[])]])));
+    const result=serializeDoc(doc,byId);
+    return {ids:result.references.map(a=>a.id),paths:result.references.map(a=>a.store_path),nodes:result.referenceNodeIds,ratio:load.generation.ratio};
+  });
+  assert.deepEqual(restored.ids,['pack:assets:006','pack:assets:002']);
+  assert.deepEqual(restored.nodes,['pack:canvas_nodes:016','pack:canvas_nodes:004']);
+  assert.ok(restored.paths.every(path=>path.startsWith('/src-tauri/resources/onboarding-v0917/')));
+  assert.equal(restored.ratio,'9:16');
+  assert.equal(await page.getByRole('menuitem',{name:'复用提示词',exact:true}).count(),0);
+  const allReferences = await page.evaluate(async()=>{
+    const {canvasConversationTurn}=await import('/src/lib/canvasConversation.ts');
+    const {parsePromptToDoc}=await import('/src/components/creation/parse.ts');
+    const {serializeDoc}=await import('/src/components/creation/serialize.ts');
+    const snapshot=window.snapshot();
+    const assets=await window.__TAURI_INTERNALS__.invoke('get_assets_by_ids',{assetIds:window.pack.tables.assets.map(a=>a.id)});
+    const byId=new Map(assets.map(a=>[a.id,a]));
+    return snapshot.nodes.filter(n=>n.kind==='prompt' && n.hiddenAt==null).map(node=>{
+      const turn=canvasConversationTurn(node,snapshot.nodes,snapshot.edges,byId);
+      const doc=parsePromptToDoc(turn.text,turn.references,byId,undefined,[],turn.referenceNodeIds,
+        new Map(turn.references.map(a=>[a.id,[a.name,...a.referenceNames]])));
+      const serialized=serializeDoc(doc,byId);
+      return {id:node.id,expected:turn.references.map(a=>a.id).sort(),actual:serialized.references.map(a=>a.id).sort(),paths:serialized.references.map(a=>a.store_path)};
+    });
+  });
+  assert.equal(allReferences.length,7);
+  for(const result of allReferences) {
+    assert.deepEqual(result.actual,result.expected,result.id);
+    assert.ok(result.paths.every(path=>path?.startsWith('/src-tauri/resources/onboarding-v0917/')),result.id);
+  }
+  // Render an ordinary user job through the same panel and compare its visible turn styles.
+  await page.evaluate(async()=>{
+    const {canvasConversationTurn}=await import('/src/lib/canvasConversation.ts');
+    const snapshot=window.snapshot();
+    const assets=await window.__TAURI_INTERNALS__.invoke('get_assets_by_ids',{assetIds:window.pack.tables.assets.map(a=>a.id)});
+    const turn=canvasConversationTurn(snapshot.nodes.find(n=>n.id==='pack:canvas_nodes:018'),snapshot.nodes,snapshot.edges,new Map(assets.map(a=>[a.id,a])));
+    const job={id:'ordinary-session',projectId:window.store.getState().activeProjectId,threadId:turn.node.threadId,
+      provider:turn.provider,sessionId:null,running:false,streaming:'',createdAt:1,lastPrompt:turn.text,lastRatio:turn.ratio,
+      refAssets:turn.references,lastRefs:turn.references.map(a=>a.store_path),turns:[{id:1,turnKey:'ordinary-turn',
+        prompt:turn.appliedPrompt,promptRaw:turn.text,refAssets:turn.references,refs:turn.references.map(a=>a.store_path),
+        images:turn.outputs.map(a=>a.store_path),provider:turn.provider}]};
+    window.store.setState({genJobs:{[job.id]:job},genJobOrder:[job.id],activeJobId:job.id,activeSessionKind:'generation',genPanelOpen:true});
+  });
+  const ordinaryTurn=inspector.locator('[data-generation-turn-key="ordinary-turn"]');
+  await ordinaryTurn.waitFor();
+  assert.deepEqual(await turnStyles(ordinaryTurn),savedStyles);
   assert.deepEqual(errors, []);
   await mkdir('.tmp', { recursive: true });
   await page.screenshot({ path: '.tmp/onboarding-pack-v0917.png' });
-  console.log('PASS v0917 pack: visible cards, exact positions/sizes, notes, media, viewport restore and repeat import.');
+  console.log('PASS v0917 pack: visible cards, exact positions/sizes, notes, media, viewport restore, repeat import, saved conversation panel and all seven prompt reference roundtrips.');
 } catch (error) {
   console.error(await page.evaluate(() => ({ nodes: document.querySelectorAll('[data-canvas-node-id]').length,
     calls: window.calls?.slice(-12), errorText: document.querySelector('.canvas-workspace')?.textContent?.slice(-500) })));

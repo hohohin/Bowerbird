@@ -60,7 +60,7 @@ w.__TAURI_INTERNALS__ = {
     if (command === "import_folder") {
       if (w.failImport) throw "模拟文件夹失败";
       if (w.pack && !w.packImported) {
-        const camel = (row: any) => Object.fromEntries(Object.entries(row).map(([k, v]) => [k.replace(/_([a-z])/g, (_, c) => c.toUpperCase()), v]));
+        const camel = (row: any) => Object.fromEntries(Object.entries(row).map(([k, v]) => [k.replace(/_([a-z])/g, (_, c) => c.toUpperCase()), k === "project_id" ? args.projectId : v]));
         const tables = w.pack.tables;
         assets.splice(0, assets.length, ...tables.assets.map((asset: any) => ({ ...asset,
           store_path: `/src-tauri/resources/onboarding-v0917/${asset.store_path}`,
@@ -145,6 +145,14 @@ function Fixture() {
   const [settingsOpen, setSettingsOpen] = React.useState(false);
   const [exploring, setExploring] = React.useState(false);
   const projectId = useStore(state => state.activeProjectId);
+  const pendingReuse = useStore(state => state.pendingCreativeReuse);
+  const [launch, setLaunch] = React.useState<any>(null);
+  React.useEffect(() => {
+    if (!pendingReuse || pendingReuse.targetProjectId !== projectId) return;
+    w.lastPromptLoad = pendingReuse.promptLoad;
+    setLaunch({ id: pendingReuse.id, projectId, assetIds: [], promptLoad: pendingReuse.promptLoad });
+    useStore.getState().ackPendingCreativeReuse(pendingReuse.id);
+  }, [pendingReuse, projectId]);
   const navigation = useStore(state => state.creativeNavigation);
   // The full App normally consumes task navigation; this isolated shell already
   // displays the requested project and only acknowledges that local navigation.
@@ -157,7 +165,7 @@ function Fixture() {
     }} onExplore={() => setExploring(!exploring)} exploring={exploring} />
     <ExploreWorkspace url={exploring ? DEFAULT_EXPLORER_URL : null} open={exploring} onClose={() => setExploring(false)}><div style={{ display: "flex", height: "100%" }}>
     <Sidebar />
-    {projectId ? <CanvasWorkspace key={projectId} projectId={projectId} exploring={exploring} /> : <main className="app-workspace">素材主界面</main>}
+    {projectId ? <CanvasWorkspace key={projectId} projectId={projectId} exploring={exploring} launchRequest={launch} onLaunchConsumed={() => setLaunch(null)} /> : <main className="app-workspace">素材主界面</main>}
     </div></ExploreWorkspace>
     <div style={{ position: "fixed", bottom: 0, left: 400, zIndex: 49 }}>
       <button onClick={() => useStore.getState().setAccountOnboardingForceOpen(true)}>测试登录入口</button>

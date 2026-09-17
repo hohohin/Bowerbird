@@ -3289,6 +3289,7 @@ html[data-theme="light"] .app-form-input:focus {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  white-space: nowrap;
   pointer-events: none;
 }
 
@@ -3312,17 +3313,35 @@ html[data-theme="light"] .app-form-input:focus {
 .canvas-board-toolbar .canvas-zoom-controls { flex-shrink: 0; }
 
 @container (max-width: 600px) {
-  .canvas-board-toolbar .canvas-back-button,
   .canvas-board-toolbar small:not(.canvas-save-state):not(.canvas-save-error) { display: none; }
 }
 
 .canvas-board-toolbar small {
+  flex-shrink: 0;
   color: var(--bb-faint);
   font-size: 9px;
 }
 
+.canvas-board-title-field {
+  position: relative;
+  flex-shrink: 0;
+  font-weight: 600;
+}
+
+.canvas-board-title-field::after {
+  content: attr(data-title);
+  display: block;
+  height: 26px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  white-space: pre;
+  visibility: hidden;
+}
+
 .canvas-board-title {
-  width: min(180px, 22vw);
+  position: absolute;
+  inset: 0;
+  width: 100%;
   min-width: 0;
   height: 26px;
   padding: 0 7px;
@@ -3382,21 +3401,6 @@ html[data-theme="light"] .app-form-input:focus {
 .canvas-board-toolbar .canvas-zoom-controls {
   padding: 3px;
   gap: 2px;
-}
-
-.canvas-back-button {
-  height: 26px;
-  padding: 0 8px;
-  border-right: 1px solid var(--bb-line-strong);
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--bb-muted);
-  font-size: 10px;
-}
-
-.canvas-back-button:hover {
-  color: var(--bb-ink);
 }
 
 .canvas-zoom-controls button {

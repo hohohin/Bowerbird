@@ -5,8 +5,8 @@ import { useStore } from "../store";
 import { ModalShell } from "./ModalShell";
 import brandIcon from "../../src-tauri/icons/128x128.png";
 
-export function OnboardingCompletion({ onComplete, onPrevious, onSkip, disabled, error, stepNumber, totalSteps }: {
-  onComplete: () => void; onPrevious: () => void; onSkip: () => void; disabled: boolean; error: string;
+export function OnboardingCompletion({ onComplete, onPrevious, disabled, error, stepNumber, totalSteps }: {
+  onComplete: () => void; onPrevious: () => void; disabled: boolean; error: string;
   stepNumber: number; totalSteps: number;
 }) {
   const auth = useStore(state => state.cloudAuth);
@@ -33,7 +33,7 @@ export function OnboardingCompletion({ onComplete, onPrevious, onSkip, disabled,
     onClose={onComplete}
     headerActions={<>
       <button className="app-modal-close" aria-label="上一步" title="上一步" disabled={disabled} onClick={onPrevious}><ArrowLeft size={20} /></button>
-      <button className="app-modal-close" aria-label="跳过此步" title="跳过此步" disabled={disabled} onClick={onSkip}><ArrowRight size={20} /></button>
+      <button className="app-modal-close" aria-label="完成本次引导" title="完成本次引导" disabled={disabled} onClick={onComplete}><ArrowRight size={20} /></button>
     </>}
     footer={<button className="app-modal-button is-primary" disabled={disabled} onClick={onComplete}>完成本次引导</button>}>
     <div className="onboarding-completion-grid">

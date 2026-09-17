@@ -348,7 +348,8 @@ export function useCreationEditor(opts?: {
       setExtraAssets([...refAssets, ...dimRefs]);
       // 传 assetByIdRef.current（含已反推图的 sections）；parsePromptToDoc 内部按「只补充」并入 refs，
       // 不让 refs（无 sections）覆盖已反推图，以保证【维度】能按 sections 精确匹配 fragment。
-      const doc = parsePromptToDoc(body, refAssets, assetByIdRef.current, undefined, dimRefs, detail.referenceNodeIds);
+      const doc = parsePromptToDoc(body, refAssets, assetByIdRef.current, undefined, dimRefs, detail.referenceNodeIds,
+        new Map((detail.refs ?? []).map(asset => [asset.id, [asset.name ?? "", ...(asset.referenceNames ?? [])]])));
       const v = viewRef.current;
       if (!v) return false;
       v.updateState(EditorState.create({ doc, plugins: v.state.plugins }));

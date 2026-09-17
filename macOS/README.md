@@ -2,6 +2,18 @@
 
 本目录记录 Mac 上的本地开发、运行和未签名构建流程。Bowerbird 使用 canonical Tauri / React / Rust 源码，不维护 macOS override。构建架构以 `rustc -vV` 的 host 为准；Intel 为 `x86_64-apple-darwin`，Apple Silicon 原生工具链为 `aarch64-apple-darwin`。
 
+## 2026-09-17 引导快照会话与创作提示存档重包
+
+引导卡片从本地画板快照恢复多轮会话，复用普通生成详情和 Lightbox；提示词复用保留引用图、节点、历史别名与画幅。引导右箭头仅在当前步骤完成后推进；创作按钮通过悬停或键盘焦点显示禁用原因。同步保存画板标题与操作提示调整。
+
+本轮验证：画板/生成逻辑 **125/125**、引导逻辑 **14/14**，三身份引导、真实引导快照、禁用原因提示、普通会话续聊 **4 组 Chrome 合成 IPC 回归**通过；TypeScript/Vite 与 Rust release 构建通过。界面测试首次因沙箱禁止绑定本机端口失败，放行后全部通过。260 个原生输入在构建开始时与上一轮验证版本一致，沿用上一轮 Rust **363 passed / 2 ignored**，本轮未重复执行 Rust 测试。保留既有编译警告。
+
+标准 DMG 阶段失败后，使用固定 `package-dmg.sh` 封装本轮 `.app`，应用逐文件一致性、Applications 目标、背景与布局文件、镜像完整性通过。67 个包内资源匹配，版本 26.9.17、Intel x86_64 与 bowerbird 协议注册核验通过。
+
+产物：`macOS/dist/Bowerbird_26.9.17_x64-conversation-installer.dmg`，**86,321,098 bytes**；SHA-256 `038572c9b16551c2d775b90fcf0337c609c1fdc0d98a60c1d674fb17a36278c5`，同目录附 `.sha256`，旧包保留。仅供本地测试，未签名/未公证；打开镜像后将 Bowerbird 拖到 Applications。
+
+证据位于 `macOS/dist/verification/archive-20260917-conversation/`。构建开始保存 415 个输入指纹；等待期间另一任务修改 Cargo.toml、Cargo.lock 和本地分类 runtime.rs，其余 412 项保持一致。本轮存档不纳入这组并行修改；已保留构建输入清单和独立应用副本，二进制不含并行 runtime 新增的系统代理提示。其后新增分类文档也继续留在工作区。未执行真实 OAuth、生成服务、用户库写入或 Apple Silicon 验收，未推送或部署。
+
 ## 2026-09-17 引导入口统一存档重包
 
 本轮统一设置重开引导与首次进入：重置身份进度和完成标记，从身份选择、第一步开始；原项目及素材保留，暂停后继续仍恢复当前步骤，不再显示回看提示。同时存档本地分类 Mac 运行时、微信登录回流及固定 DMG 安装布局。

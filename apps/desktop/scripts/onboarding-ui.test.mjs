@@ -9,7 +9,8 @@ const page = await browser.newPage({ viewport:{width:1600,height:1000} });
 page.setDefaultTimeout(10000);
 const errors = [];
 page.on('pageerror', e => errors.push(e.message));
-const button = name => page.getByRole('button', {name,exact:true});
+const button = name => page.getByRole('button', {name,exact:true}).last();
+const forward = () => page.locator('.onboarding-lesson header').getByRole('button', {name:'下一步',exact:true});
 const next = () => button('下一步');
 async function at(scene) {
   await page.waitForFunction(async scene => {
@@ -22,6 +23,7 @@ async function ready() { await page.waitForFunction(() => { const g=window.lesso
 async function notReady() {
   await page.waitForTimeout(400);
   assert.equal(await page.evaluate(() => { const g=window.lesson.getState().guide; return g.sessions[g.role].ready; }),false);
+  assert.equal(await forward().isDisabled(),true);
 }
 async function pick(label) {
   await page.locator('[data-import-trigger]').click();
@@ -333,41 +335,25 @@ try {
   await page.setViewportSize({width:1600,height:1000});
   await button('我是设计师').click(); await at('create-project'); await notReady();
   await button('新建创作').click(); await at('folder'); await notReady();
-  const late=await page.evaluate(async()=>{
-    const {beginOnboardingOperation}=await import('/src/lib/onboardingStore.ts');
-    window.lateFolder=beginOnboardingOperation('folder',window.store.getState().activeProjectId);
-    return true;
+  // The header arrow must never skip an unfinished operation, even on a DOM click.
+  await forward().evaluate(el=>el.click()); await at('folder'); await notReady();
+  await pick('导入文件夹'); await at('source-scope'); await ready();
+  assert.equal(await forward().isEnabled(),true);
+  await forward().click(); await at('open-explore'); await notReady();
+  assert.deepEqual(await page.evaluate(()=>window.lesson.getState().guide.sessions.designer.skippedSteps ?? []),[]);
+  await button('稍后继续').click(); await page.reload();
+  await button('继续入门引导').click(); await button('我是设计师').click(); await at('open-explore'); await notReady();
+  // Existing saved sessions may still reach a sample step without the sample asset.
+  await page.evaluate(()=>{
+    window.missingSample=true;
+    const store=window.lesson.getState(),g=store.guide;
+    store.setGuide({...g,sessions:{...g.sessions,designer:{...g.sessions.designer,step:7,ready:false}}});
   });
-  assert.ok(late);
-  await button('跳过此步').click(); await at('source-scope');
-  await page.evaluate(()=>window.lateFolder());
-  assert.deepEqual(await page.evaluate(()=>window.lesson.getState().guide.sessions.designer.skippedSteps),[1]);
-  await button('稍后继续').click(); await page.reload();
-  await button('继续入门引导').click(); await button('我是设计师').click(); await at('source-scope');
-  await button('跳过此步').click(); await at('open-explore');
-  await button('跳过此步').click(); await at('explore');
-  await button('跳过此步').click(); await at('expand-source');
-  await button('跳过此步').click(); await at('activate-composer');
-  await page.evaluate(()=>{window.missingSample=true;});
-  await button('跳过此步').click(); await at('sample-dimensions');
+  await at('sample-dimensions');
   await page.getByText(/未找到带反推数据的示例图/).waitFor(); await notReady();
-  await button('跳过此步').click();
-  await at('pick-prompt'); await notReady();
-  await button('跳过此步').click(); await at('more-uses');
-  await button('跳过此步').click(); await at('ready-to-create');
-  await button('跳过此步').click();
-  await page.evaluate(()=>window.lesson.getState().open());
-  assert.equal(await page.getByText('已走完 · 含跳过步骤').count(),0);
-  await button('我是设计师').click(); await at('create-project');
-  await button('跳过此步').click(); await at('folder');
-  assert.equal(await page.evaluate(()=>window.store.getState().activeProjectId),null);
-  await button('稍后继续').click(); await page.reload();
-  await button('继续入门引导').click(); await button('我是设计师').click(); await at('folder');
-  await button('新建创作').click(); await page.locator('.canvas-workspace[aria-busy="false"]').waitFor();
-  await at('folder'); await notReady();
-  assert.ok(await page.evaluate(()=>window.lesson.getState().guide.sessions.designer.projectId));
+  assert.equal(await page.getByRole('button',{name:'跳过此步',exact:true}).count(),0);
   assert.deepEqual(errors,[]);
-  console.log('PASS designer eleven-step spotlight practice, final canvas hint, back/reload, prompt selection and completion modal with WeChat-only login, per-step skips and sample dimension ring, starter folder and capture failure gates, native browser URL, drag demo, all roles, pause/reload/skip and modal/narrow layout.');
+  console.log('PASS designer eleven-step spotlight practice, final canvas hint, back/reload, prompt selection and completion modal with WeChat-only login, gated header navigation and sample dimension ring, starter folder and capture failure gates, native browser URL, drag demo, all roles, pause/reload/skip and modal/narrow layout.');
 } catch(error) {
   await mkdir('.tmp',{recursive:true}); await page.screenshot({path:'.tmp/onboarding-practice-failure.png'});
   console.error(await page.evaluate(()=>({guide:window.lesson?.getState().guide,text:document.body.innerText.slice(-3500),calls:window.calls?.slice(-10)})));
