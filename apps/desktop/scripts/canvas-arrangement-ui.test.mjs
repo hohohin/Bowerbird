@@ -38,6 +38,10 @@ try {
   await page.reload();
   await node("prompt").waitFor();
   const before = await page.evaluate(() => window.snapshot());
+  await node("old").click({ button: "right", position: { x: 35, y: 35 } });
+  assert.equal(await page.getByRole("menuitem", { name: "整理", exact: true }).count(), 0, "single image hides arrange");
+  await page.keyboard.press("Escape");
+  await node("prompt").click({ modifiers: ["Control"], position: { x: 35, y: 35 } });
   await arrange("old");
   const selected = await page.locator("[data-canvas-node-id].is-selected").evaluateAll(elements => elements.map(e => e.dataset.canvasNodeId).sort());
   assert.deepEqual(selected, ["old", "prompt", "output", "agent", "agent-output"].sort());
@@ -59,9 +63,11 @@ try {
   await page.reload();
   await node("old").waitFor();
   assert.deepEqual((await page.evaluate(() => window.snapshot())).nodes, after.nodes);
-  // With no multi-selection, arranging a result cannot pull in its upstream nodes.
-  await arrange("agent-output");
+  // A single result has no arrange action and does not pull in its upstream nodes.
+  await node("agent-output").click({ button: "right", position: { x: 35, y: 35 } });
+  assert.equal(await page.getByRole("menuitem", { name: "整理", exact: true }).count(), 0);
   assert.deepEqual(await page.locator("[data-canvas-node-id].is-selected").evaluateAll(elements => elements.map(e => e.dataset.canvasNodeId)), ["agent-output"]);
+  await page.keyboard.press("Escape");
   await page.evaluate(() => {
     const snapshot = window.snapshot();
     const old = snapshot.nodes.find(n => n.id === "old");

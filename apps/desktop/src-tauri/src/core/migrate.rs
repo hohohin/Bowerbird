@@ -279,6 +279,7 @@ mod tests {
             file_mtime: Some(0),
             generation_session_id: None,
             reference_count: 0,
+            library_hidden: false,
         })
         .unwrap();
         let annotation_file = old_root.join("annotations").join("temp.png");

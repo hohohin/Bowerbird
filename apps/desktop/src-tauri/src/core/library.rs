@@ -35,6 +35,8 @@ pub struct Asset {
     /// 被创作板当参考图调用的次数（generation_meta 回填 + 每次实际下发 +1）。
     #[serde(default)]
     pub reference_count: i64,
+    #[serde(default)]
+    pub library_hidden: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -321,6 +323,7 @@ fn synth_annotation_asset(annotations_dir: &Path, store_path: &str) -> Option<Pr
             file_mtime: None,
             generation_session_id: None,
             reference_count: 0,
+            library_hidden: false,
         },
         caption: None,
         sections,
@@ -351,17 +354,18 @@ fn asset_from_row(r: &rusqlite::Row) -> rusqlite::Result<Asset> {
         file_mtime: r.get("file_mtime")?,
         generation_session_id: r.get("generation_session_id")?,
         reference_count: r.get("reference_count")?,
+        library_hidden: r.get("library_hidden")?,
     })
 }
 
 const ASSET_COLS: &str =
     "id, name, ext, origin_path, store_path, thumb_path, size, width, height, \
     duration, phash, colors, rating, source, source_url, folder_id, created_at, file_mtime, \
-    generation_session_id, reference_count";
+    generation_session_id, reference_count, library_hidden";
 const ASSET_COLS_A: &str = "a.id, a.name, a.ext, a.origin_path, a.store_path, a.thumb_path, \
     a.size, a.width, a.height, a.duration, a.phash, a.colors, a.rating, a.source, \
     a.source_url, a.folder_id, a.created_at, a.file_mtime, a.generation_session_id, \
-    a.reference_count";
+    a.reference_count, a.library_hidden";
 
 /// 瀑布流「同流程合并」：列表已 `ORDER BY created_at DESC` → 同 generation_session_id 的首见者
 /// 即最新一张。按 session 去重保首见、丢后续过程图；无 session（非生成图）原样全留。
@@ -534,7 +538,7 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         let sql = format!(
             "SELECT {ASSET_COLS} FROM assets \
-             WHERE (?1 IS NULL OR folder_id IS ?1) \
+             WHERE library_hidden=0 AND (?1 IS NULL OR folder_id IS ?1) \
              AND (?2 IS NULL OR EXISTS(SELECT 1 FROM project_assets pa \
                  WHERE pa.asset_id = assets.id AND pa.project_id IS ?2)) \
              AND (?3 = 0 OR ?2 IS NOT NULL OR NOT EXISTS(SELECT 1 FROM project_assets pa \
@@ -565,7 +569,7 @@ impl Database {
     ) -> AppResult<i64> {
         let conn = self.conn.lock().unwrap();
         let n: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM assets a WHERE (?1 IS NULL OR EXISTS(\
+            "SELECT COUNT(*) FROM assets a WHERE a.library_hidden=0 AND (?1 IS NULL OR EXISTS(\
                SELECT 1 FROM project_assets pa WHERE pa.asset_id = a.id AND pa.project_id IS ?1\
              )) AND (?2 = 0 OR ?1 IS NOT NULL OR NOT EXISTS(\
                SELECT 1 FROM project_assets pa WHERE pa.asset_id = a.id\
@@ -973,7 +977,7 @@ impl Database {
         let sql = format!(
             "SELECT {ASSET_COLS_A} FROM assets a \
              JOIN asset_collections ac ON ac.asset_id = a.id \
-             WHERE ac.folder_id = ?1 \
+             WHERE a.library_hidden=0 AND ac.folder_id = ?1 \
              AND (?2 IS NULL OR EXISTS(SELECT 1 FROM project_assets pa \
                  WHERE pa.asset_id = a.id AND pa.project_id IS ?2)) \
              AND (?5 = 0 OR ?2 IS NOT NULL OR NOT EXISTS(SELECT 1 FROM project_assets pa \
@@ -1065,7 +1069,7 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         if let Some(name) = query.strip_prefix("tag:") {
             let sql = format!(
-                "SELECT {ASSET_COLS} FROM assets WHERE id IN (\
+                "SELECT {ASSET_COLS} FROM assets WHERE library_hidden=0 AND id IN (\
                    SELECT at.asset_id FROM asset_tags at JOIN tags t ON t.id = at.tag_id WHERE t.name = ?4\
                  ) AND (?3 IS NULL OR EXISTS(SELECT 1 FROM project_assets pa \
                    WHERE pa.asset_id = assets.id AND pa.project_id IS ?3)) \
@@ -1094,7 +1098,7 @@ impl Database {
                 "generation_session_id IS NULL"
             };
             let sql = format!(
-                "SELECT {ASSET_COLS} FROM assets WHERE {cond} \
+                "SELECT {ASSET_COLS} FROM assets WHERE library_hidden=0 AND {cond} \
                  AND (?3 IS NULL OR EXISTS(SELECT 1 FROM project_assets pa \
                    WHERE pa.asset_id = assets.id AND pa.project_id IS ?3)) \
                  AND (?4 = 0 OR ?3 IS NOT NULL OR NOT EXISTS(SELECT 1 FROM project_assets pa \
@@ -1120,7 +1124,7 @@ impl Database {
             ("1=1", String::new())
         };
         let sql = format!(
-            "SELECT {ASSET_COLS} FROM assets WHERE {cond} \
+            "SELECT {ASSET_COLS} FROM assets WHERE library_hidden=0 AND {cond} \
              AND (?4 IS NULL OR EXISTS(SELECT 1 FROM project_assets pa \
                WHERE pa.asset_id = assets.id AND pa.project_id IS ?4)) \
              AND (?5 = 0 OR ?4 IS NOT NULL OR NOT EXISTS(SELECT 1 FROM project_assets pa \
@@ -1421,9 +1425,9 @@ impl Database {
             "SELECT a.id, a.name, a.ext, a.origin_path, a.store_path, a.thumb_path, \
              a.size, a.width, a.height, a.duration, a.phash, a.colors, a.rating, a.source, \
              a.source_url, a.folder_id, a.created_at, a.file_mtime, a.generation_session_id, \
-             a.reference_count \
+             a.reference_count, a.library_hidden \
              FROM assets a \
-             WHERE {} \
+             WHERE a.library_hidden=0 AND {} \
              AND (?{} IS NULL OR EXISTS(SELECT 1 FROM project_assets pf \
                  WHERE pf.asset_id = a.id AND pf.project_id IS ?{})) \
              AND (?{} = 0 OR ?{} IS NOT NULL OR NOT EXISTS(SELECT 1 FROM project_assets pg \
@@ -1532,14 +1536,14 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         let sql = format!(
             "SELECT {ASSET_COLS} FROM assets \
-             WHERE generation_session_id IN ( \
+             WHERE library_hidden=0 AND generation_session_id IN ( \
                SELECT gc.session_id FROM generation_conversations gc \
                  WHERE gc.conversation_id = ( \
                    SELECT conversation_id FROM generation_conversations \
                      WHERE session_id = \
-                       (SELECT generation_session_id FROM assets WHERE id = ?1)) \
+                       (SELECT generation_session_id FROM assets WHERE library_hidden=0 AND id = ?1)) \
                UNION ALL \
-               SELECT generation_session_id FROM assets WHERE id = ?1) \
+               SELECT generation_session_id FROM assets WHERE library_hidden=0 AND id = ?1) \
              AND (?2 IS NULL OR EXISTS(SELECT 1 FROM project_assets pa \
                WHERE pa.asset_id = assets.id AND pa.project_id IS ?2)) \
              ORDER BY id ASC"
@@ -2205,7 +2209,7 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT t.id, t.name, COUNT(at.asset_id) AS cnt FROM tags t \
-             LEFT JOIN asset_tags at ON at.tag_id = t.id \
+             LEFT JOIN asset_tags at ON at.tag_id = t.id AND at.asset_id IN (SELECT id FROM assets WHERE library_hidden=0) \
              WHERE (?1 = 'all' OR t.source = ?1) AND (?2 IS NULL OR EXISTS(\
                SELECT 1 FROM project_assets pa \
                WHERE pa.asset_id = at.asset_id AND pa.project_id IS ?2\
@@ -2303,7 +2307,7 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         let sql = format!(
             "SELECT {ASSET_COLS} FROM assets \
-             WHERE (?3 IS NULL OR folder_id IS ?3) \
+             WHERE library_hidden=0 AND (?3 IS NULL OR folder_id IS ?3) \
              AND (?4 IS NULL OR EXISTS(SELECT 1 FROM project_assets pa \
                WHERE pa.asset_id = assets.id AND pa.project_id IS ?4)) \
              AND id IN (SELECT asset_id FROM asset_colors WHERE bucket = ?5) \
@@ -2334,7 +2338,7 @@ impl Database {
     pub fn palette_overview(&self, project_id: Option<&str>) -> AppResult<Vec<ColorBucket>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT ac.bucket, COUNT(*) AS cnt FROM asset_colors ac \
+            "SELECT ac.bucket, COUNT(*) AS cnt FROM asset_colors ac JOIN assets a ON a.id=ac.asset_id AND a.library_hidden=0 \
              WHERE (?1 IS NULL OR EXISTS(SELECT 1 FROM project_assets pa \
                WHERE pa.asset_id = ac.asset_id AND pa.project_id IS ?1)) \
              GROUP BY ac.bucket HAVING cnt > 0 ORDER BY cnt DESC LIMIT 12",
@@ -2426,6 +2430,7 @@ mod tests {
             file_mtime: Some(0),
             generation_session_id: None,
             reference_count: 0,
+            library_hidden: false,
         })
         .unwrap();
         id
@@ -2473,6 +2478,7 @@ mod tests {
             file_mtime: None,
             generation_session_id: None,
             reference_count: 0,
+            library_hidden: false,
         })
         .unwrap();
         (store, thumb)
@@ -2938,6 +2944,7 @@ mod tests {
                 file_mtime: Some(0),
                 generation_session_id: Some(session.into()),
                 reference_count: 0,
+                library_hidden: false,
             })
             .unwrap();
         }
@@ -3004,6 +3011,7 @@ mod tests {
                 file_mtime: Some(0),
                 generation_session_id: None,
                 reference_count: 0,
+                library_hidden: false,
             })
             .unwrap();
         }
@@ -3079,6 +3087,7 @@ mod tests {
                 file_mtime: Some(0),
                 generation_session_id: Some(session.into()),
                 reference_count: 0,
+                library_hidden: false,
             })
             .unwrap();
         }
@@ -3194,6 +3203,7 @@ mod tests {
                 file_mtime: Some(0),
                 generation_session_id: Some(session.into()),
                 reference_count: 0,
+                library_hidden: false,
             })
             .unwrap();
         }
@@ -3266,6 +3276,7 @@ mod tests {
                 file_mtime: Some(0),
                 generation_session_id: Some(session.into()),
                 reference_count: 0,
+                library_hidden: false,
             })
             .unwrap();
         }
@@ -3332,6 +3343,7 @@ mod tests {
                 file_mtime: Some(0),
                 generation_session_id: Some(session.into()),
                 reference_count: 0,
+                library_hidden: false,
             })
             .unwrap();
         }
@@ -3415,6 +3427,7 @@ mod tests {
             file_mtime: Some(0),
             generation_session_id: Some("sess-anno".into()),
             reference_count: 0,
+            library_hidden: false,
         })
         .unwrap();
 
@@ -3493,6 +3506,7 @@ mod tests {
             file_mtime: None,
             generation_session_id: session.map(String::from),
             reference_count: 0,
+            library_hidden: false,
         };
         let items = vec![
             mk("a1", Some("s1")), // s1 最新
@@ -3531,6 +3545,7 @@ mod tests {
                 file_mtime: Some(0),
                 generation_session_id: Some(session.into()),
                 reference_count: 0,
+                library_hidden: false,
             })
             .unwrap();
         }
@@ -3576,6 +3591,7 @@ mod tests {
                 file_mtime: Some(0),
                 generation_session_id: Some(session.into()),
                 reference_count: 0,
+                library_hidden: false,
             })
             .unwrap();
         }
@@ -3928,6 +3944,7 @@ mod tests {
             file_mtime: Some(0),
             generation_session_id: None,
             reference_count: 0,
+            library_hidden: false,
         })
         .unwrap();
 

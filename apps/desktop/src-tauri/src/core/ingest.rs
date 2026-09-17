@@ -158,6 +158,7 @@ fn ingest_file_with_dedup(paths: &LibraryPaths, db: &Database, source: &Path, ap
         file_mtime: Some(file_mtime),
         generation_session_id: None,
         reference_count: 0,
+        library_hidden: false,
     };
     db.insert_asset(&asset)?;
     link_colors(db, &asset.id, asset.colors.as_deref());
@@ -247,6 +248,7 @@ pub fn ingest_generated(
         file_mtime: Some(now),
         generation_session_id: session_id.map(|s| s.to_string()),
         reference_count: 0,
+        library_hidden: false,
     };
     db.insert_asset(&asset)?;
     link_colors(db, &asset.id, asset.colors.as_deref());

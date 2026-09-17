@@ -31,6 +31,7 @@ const Thumb = memo(function Thumb({
   variant,
   onOpenPreview,
   idPrefix = "",
+  libraryProjectId,
 }: {
   asset: Asset;
   group?: Asset[];
@@ -38,6 +39,7 @@ const Thumb = memo(function Thumb({
   variant: "library" | "canvas-source";
   onOpenPreview?: (asset: Asset, group?: Asset[]) => void;
   idPrefix?: string;
+  libraryProjectId?: string;
 }) {
   const cardRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
@@ -294,13 +296,14 @@ const Thumb = memo(function Thumb({
         return;
       }
       if (st.boardOpen || st.genEditing) {
-        window.dispatchEvent(
-          new CustomEvent("bowerbird://board-asset-picked", { detail: shown.id })
-        );
         if (st.promptedAssets.some(
           (a) => a.id === shown.id && a.sections && a.sections.length > 0,
         )) {
           st.openCaptionRing(shown.id);
+        } else {
+          window.dispatchEvent(
+            new CustomEvent("bowerbird://board-asset-picked", { detail: shown.id })
+          );
         }
       } else {
         onOpenPreview?.(shown, group);
@@ -314,11 +317,8 @@ const Thumb = memo(function Thumb({
       else st.toggleSelect(shown.id);
     } else if (st.boardOpen || st.genEditing) {
       if (shift || !st.settings?.board_shift_pick) {
-        window.dispatchEvent(
-          new CustomEvent("bowerbird://board-asset-picked", { detail: shown.id })
-        );
-        // 创作模式左键：有维度数据（反推/标注 sections）的图同步展开维度环，插完参考图
-        // 直接挑维度；无维度不呼环（纯参考图）。长按窥视不受影响——长按触发的松开被
+        // 创作模式左键：有维度数据的图只展开维度环，选维度不默认插入参考图；
+        // 无维度则插入参考图。长按窥视不受影响——长按触发的松开被
         // suppressClick 吞掉不会走到这里，两条路径不重复呼环。会话编辑坞同样呼环：
         // 点扇区插进当前编辑器（pickCaptionSection 不再退出坞）。
         if (
@@ -328,6 +328,10 @@ const Thumb = memo(function Thumb({
           )
         ) {
           st.openCaptionRing(shown.id);
+        } else {
+          window.dispatchEvent(
+            new CustomEvent("bowerbird://board-asset-picked", { detail: shown.id })
+          );
         }
       } else {
         // 设置开启「Shift + 左键引入」时，未按 Shift 的点击不直接引入（防误触），
@@ -401,7 +405,7 @@ const Thumb = memo(function Thumb({
         e.stopPropagation();
         dismissPreview();
         if (addingToCollection) return;
-        openContextMenu(e.clientX, e.clientY, shown.id, { asset: shown });
+        openContextMenu(e.clientX, e.clientY, shown.id, { asset: shown, libraryProjectId });
       }}
       onDragStart={(e) => {
         dismissPreview();
@@ -810,6 +814,7 @@ export function MasonryGrid({
                     group={groupMap[item.asset.id]}
                     orderedIds={orderedIds}
                     variant={variant}
+                    libraryProjectId={activeProjectId ?? undefined}
                     idPrefix={embedded ? `${gridId}-` : ""}
                     onOpenPreview={onOpenPreview}
                   />

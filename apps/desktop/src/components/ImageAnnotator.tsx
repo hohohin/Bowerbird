@@ -22,6 +22,7 @@ import { beginOnboardingOperation } from "../lib/onboardingStore";
 import { notifyError, notifySuccess } from "../lib/notify";
 import { chipName } from "./creation/schema";
 import type {
+  Asset,
   AnnotationMeta,
   AnnotationShape,
   AnnotationTransformOp,
@@ -280,10 +281,38 @@ export function ImageAnnotator() {
   const assets = useStore((s) => s.assets);
   const activeProjectId = useStore((s) => s.activeProjectId);
 
-  const asset = annotator ? assets.find((a) => a.id === annotator.assetId) : undefined;
+  const cachedAsset = annotator ? assets.find((a) => a.id === annotator.assetId) : undefined;
+  const [assetResult, setAssetResult] = useState<{
+    request: typeof annotator;
+    asset: Asset | null;
+    error: string | null;
+  } | null>(null);
+  const resolvedAsset = assetResult?.request === annotator ? assetResult : null;
+  const asset = cachedAsset ?? resolvedAsset?.asset;
   const storePath = asset?.store_path ?? null;
   const open = !!annotator;
   const isDraft = !!annotator?.saveDraft;
+  const assetLoading = !!annotator?.assetId && !cachedAsset && !resolvedAsset;
+  const assetError = !cachedAsset ? resolvedAsset?.error : null;
+
+  // assets 只是当前筛选列表；画板图片可能不在其中，不能据此判定素材已删除。
+  useEffect(() => {
+    setAssetResult(null);
+    if (!annotator?.assetId || cachedAsset || annotator.saveDraft) return;
+    let cancelled = false;
+    api.getAssetsByIds([annotator.assetId])
+      .then((found) => {
+        if (!cancelled) setAssetResult({
+          request: annotator, asset: found.find((item) => item.id === annotator.assetId) ?? null, error: null,
+        });
+      })
+      .catch((error) => {
+        if (!cancelled) setAssetResult({
+          request: annotator, asset: null, error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    return () => { cancelled = true; };
+  }, [annotator, cachedAsset]);
 
   // 底图 data URL（Rust 读取）+ 预解码元素（导出 drawImage 用）。nat 由预加载解出——
   // 不能依赖渲染中 <img> 的 onLoad：显示区尺寸依赖 nat，nat 又要等 <img> 渲染，互相等会
@@ -1090,7 +1119,11 @@ export function ImageAnnotator() {
 
       {/* 画布区 */}
       <div ref={stageRef} className="relative flex flex-1 items-center justify-center overflow-hidden p-6" style={{ pointerEvents: busy ? "none" : undefined }}>
-        {!asset && !isDraft ? (
+        {assetLoading ? (
+          <p className="text-sm text-white/60">正在加载素材…</p>
+        ) : assetError ? (
+          <p className="text-sm text-red-300">素材加载失败：{assetError}</p>
+        ) : !asset && !isDraft ? (
           <p className="text-sm text-white/60">素材不存在或已删除</p>
         ) : loadError ? (
           <p className="text-sm text-red-300">底图加载失败：{loadError}</p>

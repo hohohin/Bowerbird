@@ -71,7 +71,7 @@ try {
   // AI replacement preserves the earlier raster in the deduplicated history pool.
   await dialog.getByLabel("图层修改要求").fill("修改图层");
   await page.evaluate(() => { window.pendingBusy = true; });
-  await dialog.getByRole("button", { name: "修改选中图层 · 20 积分/次" }).click();
+  await dialog.getByRole("button", { name: "修改选中图层" }).click();
   await dialog.getByRole("button", { name: "停止等待" }).waitFor();
   await exit();
   assert.ok(await page.evaluate(() => window.saved().pending));

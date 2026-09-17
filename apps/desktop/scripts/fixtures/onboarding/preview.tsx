@@ -33,7 +33,7 @@ const projects = JSON.parse(sessionStorage.getItem("lesson-projects") || "null")
 const canvas = { projectId: project.id, draftJson: "{}", createdAt: 1, updatedAt: 1 };
 const image = (color: string) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="190" height="150"><rect width="190" height="150" fill="${color}"/></svg>`)}`;
 const assets = ["existing", "a"].map((id, i) => ({ id, name: `合成参考 ${id}`, width: 190, height: 150,
-  store_path: image(["#64748b", "#0369a1", "#4f46e5", "#0d9488", "#9333ea"][i]), source: "imported", origin_path: i === 0 ? "C:/fixture/初始引导/asset-016.webp" : "C:/fixture/other.png" }));
+  store_path: image(["#64748b", "#0369a1", "#4f46e5", "#0d9488", "#9333ea"][i]), source: "imported", origin_path: i === 0 ? "C:/fixture/初始引导/sample-dimensions.webp" : "C:/fixture/other.png" }));
 let snapshot = JSON.parse(sessionStorage.getItem("reference-fixture") || "null") || {
   canvas, nodes: [],
   edges: [], groups: [], groupItems: [], threads: [{ id: "t", projectId: "p", title: "合成线程", archivedAt: null }],
@@ -63,8 +63,8 @@ w.__TAURI_INTERNALS__ = {
         const camel = (row: any) => Object.fromEntries(Object.entries(row).map(([k, v]) => [k.replace(/_([a-z])/g, (_, c) => c.toUpperCase()), v]));
         const tables = w.pack.tables;
         assets.splice(0, assets.length, ...tables.assets.map((asset: any) => ({ ...asset,
-          store_path: `/src-tauri/resources/onboarding-v0915/${asset.store_path}`,
-          thumb_path: `/src-tauri/resources/onboarding-v0915/${asset.thumb_path}`,
+          store_path: `/src-tauri/resources/onboarding-v0917/${asset.store_path}`,
+          thumb_path: `/src-tauri/resources/onboarding-v0917/${asset.thumb_path}`,
         })));
         snapshot = { canvas: { ...camel(tables.project_canvases[0]), projectId: args.projectId, draftJson: snapshot.canvas.draftJson },
           nodes: tables.canvas_nodes.map(camel), edges: tables.canvas_edges.map(camel),

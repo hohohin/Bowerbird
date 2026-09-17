@@ -154,7 +154,7 @@ try {
     // Clear the multi-selection before checking the single-node context action.
     await page.locator(".canvas-stage").click({ position: { x: 20, y: 60 } });
     await node(id).click({ button: "right", position: { x: 30, y: 30 } });
-    await page.getByRole("menuitem", { name: "从画板移除", exact: true }).click();
+    await page.getByRole("menuitem", { name: "从画布移出", exact: true }).click();
     await node(id).waitFor({ state: "detached" });
     await page.keyboard.press("Control+z");
     await node(id).waitFor();
@@ -162,7 +162,7 @@ try {
   await reset();
   await marquee();
   await page.locator(".canvas-stage").click({ button: "right", position: { x: 20, y: 60 } });
-  await page.getByRole("menuitem", { name: "从画板移除所选 4 项", exact: true }).click();
+  await page.getByRole("menuitem", { name: "从画布移出所选 4 项", exact: true }).click();
   for (const id of ["old", "a", "duplicate-a", "prompt"]) await node(id).waitFor({ state: "detached" });
   assert.equal(await node("outside").count(), 1, "unselected material stays on the canvas");
 

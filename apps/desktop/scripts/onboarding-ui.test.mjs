@@ -204,6 +204,8 @@ try {
   await editor.locator('[data-keyword][data-source-asset-id="existing"]').filter({hasText:'【反推提示词】'}).waitFor();
   await page.getByText('所选的「反推提示词」维度已经添加到了对话框。你可以继续补充创作需求。',{exact:true}).waitFor();
   await page.locator('.caption-ring-svg').waitFor({state:'hidden'});
+  await page.waitForFunction(()=>window.calls.filter(c=>c.command==='resize_source_browser').at(-1)?.args.visible===true);
+  assert.equal(await page.evaluate(()=>window.calls.filter(c=>['navigate_source_browser','reload_source_browser'].includes(c.command)).length),ringNavigations);
   await spotlightContains('[data-onboarding-composer]');
   await page.waitForFunction(()=>window.calls.filter(c=>c.command==='resize_source_browser').at(-1)?.args.visible===true);
   assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.command==='open_source_browser'||c.command==='navigate_source_browser').length),ringOpenCount,'ring dismissal restores the same webview without navigation');

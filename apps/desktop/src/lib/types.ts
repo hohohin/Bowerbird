@@ -21,6 +21,8 @@ export interface Asset {
   generation_session_id?: string | null;
   /** 被创作板当参考图调用的次数（详情页信息区展示；0 不显示）。 */
   reference_count?: number;
+  /** Retained for canvas/history use, excluded from library browsing. */
+  library_hidden?: boolean;
 }
 
 export interface Project {
@@ -539,6 +541,7 @@ export interface AppSettings {
   cloud_auto_understand: boolean;
   board_shift_pick: boolean;
   hide_project_assets: boolean;
+  canvas_show_asset_names: boolean;
   generation_completion_popup: boolean;
   generation_completion_sound: boolean;
   /** 即梦 dreamina CLI 出图模型版本（text2image: 3.0~5.0Pro；image2image 仅 4.0+） */

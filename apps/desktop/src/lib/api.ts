@@ -288,6 +288,8 @@ export const api = {
   countAssets: (projectId?: string | null) =>
     invoke<number>("count_assets", { projectId: projectId ?? null }),
   deleteAsset: (id: string) => invoke<void>("delete_asset", { id }),
+  setCanvasAssetLibraryVisibility: (projectId: string, assetId: string, visible: boolean) =>
+    invoke<void>("set_canvas_asset_library_visibility", { projectId, assetId, visible }),
   /** 单素材三模式：keep=仅移出当前项目；move_out=保留原文件并移出园丁鸟；delete=全局物理删除。 */
   deleteAssetWithMode: (
     id: string,

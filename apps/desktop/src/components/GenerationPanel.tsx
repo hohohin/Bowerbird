@@ -42,8 +42,8 @@ function fmtDuration(ms: number): string {
  * （产出图 / 流式过程日志 / 失败重试）。面板标题随会话内容而定（首轮 prompt 首行）。
  * 会话切换/管理统一在侧栏 Status 任务区（SidebarStatus）；面板为主区覆盖层，可随时开合不丢对话。
  *
- * 底部对话框与首轮「重新编辑」共用底部编辑坞（GenEditComposer）：点击收起会话、露出
- * 瀑布流，创作板同款 ProseMirror + 工具栏（比例/provider/Agent）组稿。二者差异在发送
+ * 续轮在详情底部使用内嵌编辑器，沿用当前模型；首轮「重新编辑」仍使用浮动编辑坞。
+ * 两者共用 ProseMirror 与发送逻辑，差异在发送
  * 语义——「重新编辑」开新版本分支（会话内 ←/→ 切换）；底部对话框 resume 同一 session，
  * 图片作为新一轮接在会话下方（一来一往）。
  */
@@ -75,6 +75,7 @@ export function GenerationPanel({
   const setGenPanelOpen = useStore((s) => s.setGenPanelOpen);
   const genEditing = useStore((s) => s.genEditing);
   const interactiveEditing = readOnly ? null : genEditing;
+  const floatingEditing = interactiveEditing === "edit";
   const setGenEditing = useStore((s) => s.setGenEditing);
   const setActiveJob = useStore((s) => s.setActiveJob);
   const cancelGeneration = useStore((s) => s.cancelGeneration);
@@ -154,21 +155,6 @@ export function GenerationPanel({
     }
     return found;
   }, [turnsWithOffset]);
-  // 轮级「编辑」时「上次结果」= 所编辑轮**当时**的基图（其之前最后一个有图轮的产出），而非
-  // 会话最新产出——与发送侧精确重放一致：编辑第 N 轮，左侧对照的就是当时的「上次结果」。
-  const turnBaseImages = useMemo(() => {
-    if (editTurnId == null) return null;
-    const idx = activeJob?.turns.findIndex((t) => t.id === editTurnId) ?? -1;
-    let found: { images: string[]; offset: number } | null = null;
-    for (let i = 0; i < idx; i++) {
-      const { turn, imageOffset } = turnsWithOffset[i];
-      if (turn.images.length > 0) found = { images: turn.images, offset: imageOffset };
-    }
-    return found;
-  }, [editTurnId, activeJob, turnsWithOffset]);
-  // 编辑坞左侧「上次结果」：轮级编辑用该轮当时的基图；其余入口（重新编辑 / 空白续轮）
-  // 用会话最新产出（新续轮自动带的就是它）。
-  const dockBaseImages = editTurnId != null ? turnBaseImages : lastImageTurn;
   // 参考图「附件」点开放大：Lightbox 用原图（store_path），与产出图各自独立成组。
   const refLightboxImages = useMemo(
     () => firstRefAssets.map((a) => a.store_path).filter((p): p is string => !!p),
@@ -488,18 +474,18 @@ export function GenerationPanel({
   // 第一帧开始；若用「退场中」正逻辑，首帧会话即被卸载（硬切），动画只能下一帧补播。
   const [sessionHidden, setSessionHidden] = useState(false);
   useEffect(() => {
-    if (!interactiveEditing) {
+    if (!floatingEditing) {
       setSessionHidden(false);
       return;
     }
     const t = setTimeout(() => setSessionHidden(true), 200);
     return () => clearTimeout(t);
-  }, [interactiveEditing]);
+  }, [floatingEditing]);
 
   return (
     <>
-      {(interactiveEditing && activeJob) && (
-        // 底部编辑坞（「重新编辑」/ 底部对话框共用外壳，mode 区分行为）：面板收起为底部浮动
+      {(floatingEditing && activeJob) && (
+        // 首轮重新编辑：面板收起为底部浮动
         // 编辑卡片（不左右通铺，上方两角圆角），上方露出瀑布流选图。
         // 定位（-translate-x-1/2）在外层、入场动画（transform）在内层，互不覆盖。
         <div className="pointer-events-auto absolute bottom-0 left-1/2 z-10 w-[min(896px,100%)] -translate-x-1/2">
@@ -507,11 +493,11 @@ export function GenerationPanel({
             key={`${activeJob.id}:${interactiveEditing}:${editTurnId ?? "new"}`}
             job={activeJob}
             assets={assets}
-            mode={interactiveEditing}
+            mode="edit"
             canStart={canStartAnother}
-            recentImages={dockBaseImages?.images ?? []}
+            recentImages={lastImageTurn?.images ?? []}
             onOpenRecent={(k) =>
-              dockBaseImages && setLightbox({ images: allImages, index: dockBaseImages.offset + k })
+              lastImageTurn && setLightbox({ images: allImages, index: lastImageTurn.offset + k })
             }
             preloadTurn={
               editTurnId != null
@@ -525,13 +511,13 @@ export function GenerationPanel({
           />
         </div>
       )}
-      {(!interactiveEditing || !activeJob || !sessionHidden) && (
+      {(!floatingEditing || !activeJob || !sessionHidden) && (
         // 会话全屏视图：进入编辑坞的 200ms 内保留挂载播退场（gen-view-out 下沉淡出，
         // pointer-events-none 让位给坞/瀑布流），从编辑坞回来时 gen-view-in 淡入上移。
         // 无 job 时即使 genEditing 也落在此分支（坞无会话可载，退回会话空态）。
         <div
           className={`${embedded ? "flex min-h-0 flex-1 flex-col bg-canvas" : "absolute inset-0 z-10 flex flex-col bg-canvas"} ${
-            interactiveEditing && activeJob ? "gen-view-out pointer-events-none" : ""
+            floatingEditing && activeJob ? "gen-view-out pointer-events-none" : ""
           }`}
         >
           <div className="gen-view-in flex min-h-0 flex-1 flex-col">
@@ -613,8 +599,7 @@ export function GenerationPanel({
         )}
       </div>
 
-      {/* 底部：对话框入口（点击收起会话、露出瀑布流组稿，同「重新编辑」坞；发送 = 会话下方
-          追加一轮对话）。会话级操作（重新编辑/复用/登记）在首轮气泡下方 */}
+      {/* 续轮就地在详情底部编辑，详情与历史始终可见。 */}
       <div className="shrink-0 border-t border-edge bg-panel p-4">
         {readOnly ? (
           <div className="text-center text-[10px] text-muted">旧会话仅供核对；不会继续生成、重试、取消或登记新状态。</div>
@@ -625,6 +610,19 @@ export function GenerationPanel({
           >
             {activeJob?.media === "video" ? "停止本地查询（远端可能仍在生成并已扣费）" : "取消生成"}
           </button>
+        ) : activeJob && interactiveEditing === "revise" ? (
+          <GenEditComposer
+            key={`${activeJob.id}:revise:${editTurnId ?? "new"}`}
+            inline
+            job={activeJob}
+            assets={assets}
+            mode="revise"
+            canStart={canStartAnother}
+            recentImages={[]}
+            onOpenRecent={() => {}}
+            preloadTurn={editTurnId != null ? activeJob.turns.find(turn => turn.id === editTurnId) ?? null : null}
+            onExit={() => { setGenEditing(null); setEditTurnId(null); }}
+          />
         ) : activeJob?.sessionId ? (
           <div className="space-y-1">
             {!targetReady && <div className="text-[10px] text-muted">{lockedReason}</div>}
@@ -635,7 +633,7 @@ export function GenerationPanel({
                 setGenEditing("revise");
               }}
               className="w-full rounded bg-panel2 px-2.5 py-2 text-left text-xs text-muted ring-1 ring-edge transition-colors hover:text-ink hover:ring-accent"
-              title="像创作板一样组稿：点瀑布流图片插入参考图；发送后图片接在会话下方"
+              title="在详情底部继续对话，发送后结果接在当前会话下方"
             >
               {activeJob.media === "video" ? "继续创作视频——请明确选择参考素材，每次发送会创建新的即梦视频任务" : "继续对话——提修改意见（如：背景改成白天、去掉霓虹…），或点瀑布流图片加参考图"}
             </button>
@@ -1059,16 +1057,16 @@ function GenerationControlDetails({
 }
 
 /**
- * 会话底部编辑坞（jimeng / gemini 式）：会话面板收起为底部条，露出的瀑布流
- * 点一下即插参考图 chip（board-asset-picked）。编辑器与创作板同款（useCreationEditor +
- * RatioSelect + ProviderSelect + Agent 模式 + BoardChipPreview），但不持久化草稿
+ * 会话编辑器：首轮重新编辑使用浮动坞，续轮使用详情底部内嵌输入。
+ * 编辑器与创作板共用 useCreationEditor、比例及 Agent 控件；仅首轮编辑可切换模型。
+ * 不持久化草稿
  * （draftKey:null，不覆盖创作板的 bowerbird.boardDraft）。两种入口：
  * - mode="edit"（首轮「重新编辑」）：载入首轮编辑框原文 + 参考图；发送 = 在**同一会话**里
  *   开新版本分支（conversationId 归组，会话面板 ←/→ 切换编辑前后）。
  * - mode="revise"（底部对话框）：空编辑器自由组稿；发送 = resume 同一 session 在会话下方
  *   追加一轮对话（一来一往），不产生版本分支。
  * 两种模式点发送都立即回会话视图（生成后台跑），取消 = 回到会话全屏视图。
- * provider 在坞内自选（初值 = 该会话的 provider）。
+ * 重新编辑可选择 provider；续轮沿用所编辑轮或会话最近一轮的 provider。
  */
 function GenEditComposer({
   job,
@@ -1079,7 +1077,9 @@ function GenEditComposer({
   onOpenRecent,
   preloadTurn,
   onExit,
+  inline = false,
 }: {
+  inline?: boolean;
   job: GenJob;
   assets: Asset[];
   mode: GenEditingMode;
@@ -1102,7 +1102,11 @@ function GenEditComposer({
   const isVideo = (sourceTurn?.media ?? job.media) === "video";
   const [videoOptions, setVideoOptions] = useState<VideoOptions>(sourceTurn?.videoOptions ?? job.videoOptions ?? DEFAULT_VIDEO_OPTIONS);
   const [videoChannel, setVideoChannel] = useState<"jimeng" | "cloud">((sourceTurn?.provider ?? job.provider).startsWith("bowerbird-cloud") ? "cloud" : "jimeng");
-  const activeGenProvider = isVideo ? videoProvider(videoChannel, videoOptions) : selectedProvider;
+  const sourceProvider = sourceTurn?.provider ?? job.provider;
+  const continuationProvider = isCloudProvider(sourceProvider)
+    ? canonicalProviderKey(sourceProvider)
+    : sourceProvider === "jimeng" ? "jimeng" : "codex";
+  const activeGenProvider = isVideo ? videoProvider(videoChannel, videoOptions) : isRevise ? continuationProvider : selectedProvider;
   const setActiveGenProvider = useStore((s) => s.setActiveGenProvider);
   const defaultProvider = useStore((s) => s.defaultProvider);
   const setDefaultProvider = useStore((s) => s.setDefaultProvider);
@@ -1152,6 +1156,7 @@ function GenEditComposer({
 
   // provider 初值 = 该会话的 provider（进入编辑时同步当前选择，坞内可再切换；遗留 cloud key 归一化）。
   useEffect(() => {
+    if (isRevise) return;
     const sourceProvider = sourceTurn?.provider ?? job.provider;
     const initial = isCloudProvider(sourceProvider)
       ? canonicalProviderKey(sourceProvider)
@@ -1193,6 +1198,7 @@ function GenEditComposer({
   // 编辑坞高度 → CSS 变量：瀑布流滚动容器据此留出底部 padding，避免坞盖住最后一行素材。
   const dockRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
+    if (inline) return;
     const el = dockRef.current;
     if (!el) return;
     const apply = () =>
@@ -1204,7 +1210,7 @@ function GenEditComposer({
       obs.disconnect();
       document.documentElement.style.removeProperty("--gen-dock-h");
     };
-  }, []);
+  }, [inline]);
 
   // 编辑器挂载（注册 board-load-prompt listener）后延一帧载入组稿（与 reusePromptToBoard 同款
   // 事件；此时创作板已关，不会双编辑器响应）。「重新编辑」载入首轮原文 + 参考图；底部对话框
@@ -1378,7 +1384,7 @@ function GenEditComposer({
     // 浮动卡片本体：与创作板 creation-dock 同款形态（底部浮动、上方两角圆角、毛玻璃），
     // 配色深灰蓝（.session-dock）区分会话上下文。高度随内容收缩；dockRef 高度经
     // ResizeObserver 写入 --gen-dock-h，瀑布流据此留底部空隙。
-    <div ref={dockRef} className="gen-dock-in session-dock w-full rounded-t-2xl p-2.5 pb-2">
+    <div ref={dockRef} data-generation-composer={inline ? "inline" : "floating"} className={inline ? "w-full" : "gen-dock-in session-dock w-full rounded-t-2xl p-2.5 pb-2"}>
       <div className="flex items-start gap-2.5">
         {/* 左侧「上次结果」缩略图：露瀑布流选图的同时对照会话最近产出编辑/续写；点击放大。 */}
         {recentImages.length > 0 && (
@@ -1408,7 +1414,7 @@ function GenEditComposer({
         <div className="min-w-0 flex-1 space-y-2">
       {/* 顶部指示器：会话名截断（悬停看全名），「…… 任务中，新的生成会纳为该任务的结果」
           后缀固定贴在关闭按钮左侧——长会话名被截断也不会把提示字样挤掉。 */}
-      <div className="flex items-center gap-2">
+      {!inline && <div className="flex items-center gap-2">
         <span className="h-2 w-2 shrink-0 rounded-full bg-[#7c9cff]" aria-hidden="true" />
         <strong className="shrink-0 text-xs font-semibold text-ink">
           {isRevise ? "继续对话" : "重新编辑"}
@@ -1431,7 +1437,7 @@ function GenEditComposer({
         >
           <X size={14} />
         </button>
-      </div>
+      </div>}
       <div
         ref={hostRef}
         onClick={focus}
@@ -1443,7 +1449,7 @@ function GenEditComposer({
       <div className="generation-toolbar flex flex-wrap items-center gap-2">
           {isVideo ? <VideoControls channel={videoChannel} onChannelChange={channel => { setVideoChannel(channel); if (channel === "jimeng" && videoOptions.video_resolution === "1080p") setVideoOptions({ ...videoOptions, video_resolution: "720p" }); }} options={videoOptions} onChange={setVideoOptions} ratio={ratio} onRatioChange={setRatio} /> : <>
           <RatioSelect value={ratio} onChange={setRatio} />
-          <ProviderSelect
+          {!isRevise && <ProviderSelect
             value={activeGenProvider}
             onChange={setActiveGenProvider}
             codexHealth={codexHealth}
@@ -1453,7 +1459,7 @@ function GenEditComposer({
             cloudEntitlement={cloudEntitlement}
             defaultProvider={defaultProvider}
             onSetDefaultProvider={setDefaultProvider}
-          />
+          />}
           </>}
           {/* Agent 方案开关（A/B 互斥，与创作板同款）：本机 Agent 可用且「开发者选项」
               未关闭时渲染——release 包中 health 命令被后端门控拒绝，开关不出现。 */}
@@ -1497,9 +1503,9 @@ function GenEditComposer({
               )}
             </>
           )}
-          <span className="hidden text-[10px] text-muted md:inline">
-            点瀑布流图片插入参考图，或输入 @图名
-          </span>
+          {!inline && <span className="hidden text-[10px] text-muted md:inline">
+            点画板图片插入参考图，或输入 @图名
+          </span>}
           <div className="ml-auto flex items-center gap-1.5">
             {!targetReady && (
               <span className="max-w-48 truncate text-[10px] text-muted" title={lockedReason}>

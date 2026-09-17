@@ -78,6 +78,7 @@ pub fn migrations() -> Migrations<'static> {
         M::up(include_str!("../../sql/0027_independent_visual_profiles.sql")),
         M::up(include_str!("../../sql/0028_canvas_zoom_10.sql")),
         M::up(include_str!("../../sql/0029_onboarding_imports.sql")),
+        M::up(include_str!("../../sql/0030_canvas_only_assets.sql")),
     ])
 }
 

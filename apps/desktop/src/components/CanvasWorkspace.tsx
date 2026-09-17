@@ -1,6 +1,8 @@
 import { LearningHint } from "./OnboardingTour";
 import { CanvasTextCard } from "./CanvasTextCard";
 import { CanvasResizeHandle } from "./CanvasResizeHandle";
+import { CanvasLayerMenuItem } from "./CanvasLayerMenuItem";
+import { CANVAS_LAYER_STEP_EVENT, stepCanvasLayers, type CanvasLayerStepDetail } from "../lib/canvasLayers";
 import { ReadonlyPrompt } from "./creation/ReadonlyPrompt";
 import "./CanvasNotes.css";
 import { canvasSectionMembers, canvasTextMinSize, emptyCanvasCell, expandCanvasSections, readCanvasNote, type CanvasNotePayload } from "../lib/canvasNotes";
@@ -29,6 +31,7 @@ import {
   Archive,
   ArchiveRestore,
   Copy,
+  ChevronUp,
   Folder,
   Images,
   LayoutDashboard,
@@ -36,6 +39,7 @@ import {
   List,
   LoaderCircle,
   Maximize2,
+  Magnet,
   Minus,
   Move,
   MousePointer2,
@@ -108,6 +112,7 @@ import { BOARD_ASSET_PICK_EVENT } from "./creation/useCreationEditor";
 import {
   canvasSourceColumnCount,
   canvasAssetNodeSize,
+  canvasAssetMediaPath,
   canvasPromptReferences,
   agentPromptGroupMap,
   CANVAS_REMOVE_NODES_EVENT,
@@ -154,6 +159,7 @@ const FOLDER_WIDTH = 204;
 const FOLDER_HEIGHT = 178;
 const DEFAULT_TITLE = "未命名创作";
 const CANVAS_SOURCE_THUMBNAIL_SCALE_KEY = "bowerbird.canvasSourceThumbnailScale";
+const CANVAS_SNAP_ENABLED_KEY = "bowerbird.canvasSnapEnabled";
 
 function readCanvasSourceThumbnailScale(): number {
   try {
@@ -228,8 +234,10 @@ function assetNodeSize(asset: CanvasAssetSnapshot) {
   return canvasAssetNodeSize(asset, ASSET_WIDTH);
 }
 
-function nodeRect(node: { x: number; y: number; width: number; height: number }) {
-  return { x: node.x, y: node.y, width: node.width, height: node.height };
+function baseNodeRect(node: { x: number; y: number; width: number; height: number; kind?: string }) {
+  // Stored asset geometry includes its caption, independent of this display preference.
+  const caption = node.kind === "asset" && !useStore.getState().settings?.canvas_show_asset_names ? 30 : 0;
+  return { x: node.x, y: node.y, width: node.width, height: node.height - caption };
 }
 
 function containedNodeIds(nodes: CanvasNode[]) {
@@ -329,13 +337,14 @@ function FolderPreview({
   return (
     <div className="canvas-folder-grid" aria-hidden="true">
       {node.assets.slice(0, 4).map((asset) => {
-        const path = asset.thumbPath ?? asset.storePath;
+        const path = canvasAssetMediaPath(asset);
         return path && isVideoPath(path) ? <video key={asset.id} src={convertFileSrc(path)} preload="metadata" muted playsInline /> : path ? (
           <div key={asset.id} className="relative min-h-0" onContextMenu={(event) => onAssetContextMenu(event, asset)}>
             <img
               src={convertFileSrc(path)}
               alt=""
               draggable={false}
+              loading="lazy"
             />
             {asset.assetId && layerWorkspaceIds.has(asset.assetId) && <span className="pointer-events-none absolute left-1 top-1 z-10 rounded-full bg-black/70 px-1.5 py-1 text-white backdrop-blur" title="有分层工程" aria-label="有分层工程"><Layers size={12} /></span>}
           </div>
@@ -355,6 +364,7 @@ function ProjectInspectorShell({
   anchorNodeId,
   restoreFocusTarget,
   editing = false,
+  composing = false,
   onClose,
   children,
 }: {
@@ -362,6 +372,7 @@ function ProjectInspectorShell({
   anchorNodeId?: string | null;
   restoreFocusTarget?: () => HTMLElement | null;
   editing?: boolean;
+  composing?: boolean;
   onClose: () => void;
   children: ReactNode;
 }) {
@@ -384,7 +395,7 @@ function ProjectInspectorShell({
 
   useEffect(() => {
     closedByOutsideClickRef.current = false;
-    if (editing) return;
+    if (editing || composing) return;
     function closeOnOutsideClick(event: MouseEvent) {
       if (event.button !== 0 || !(event.target instanceof Element)) return;
       if (shellRef.current?.contains(event.target)) return;
@@ -397,7 +408,7 @@ function ProjectInspectorShell({
     // 使用 click 而非 pointerdown，避免收起后布局变化影响本次点击目标。
     document.addEventListener("click", closeOnOutsideClick, true);
     return () => document.removeEventListener("click", closeOnOutsideClick, true);
-  }, [editing, onClose, anchorNodeId]);
+  }, [editing, composing, onClose, anchorNodeId]);
 
   return (
     <section
@@ -474,6 +485,7 @@ export function CanvasWorkspace({
   const projects = useStore((state) => state.projects);
   const reloadProjects = useStore((state) => state.reloadProjects);
   const openContextMenu = useStore((state) => state.openContextMenu);
+  const showAssetNames = useStore((state) => state.settings?.canvas_show_asset_names ?? false);
   const genPanelOpen = useStore((state) => state.genPanelOpen);
   const boardOpen = useStore((state) => state.boardOpen);
   const activeSessionKind = useStore((state) => state.activeSessionKind);
@@ -535,8 +547,17 @@ export function CanvasWorkspace({
   const [error, setError] = useState<string | null>(null);
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
   const [guides, setGuides] = useState<CanvasSnapGuide[]>([]);
+  const [snapEnabled, setSnapEnabled] = useState(() => {
+    try { return localStorage.getItem(CANVAS_SNAP_ENABLED_KEY) !== "false"; }
+    catch { return true; }
+  });
+  const snapEnabledRef = useRef(snapEnabled);
   const [hoverIntent, setHoverIntent] = useState<HoverIntent | null>(null);
+  const hoverRef = useRef<{ intent: HoverIntent; ready: boolean } | null>(null);
+  const [hoverReady, setHoverReady] = useState(false);
   const [folderDropTargetId, setFolderDropTargetId] = useState<string | null>(null);
+  const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(() => new Set());
+  const expandedFolderIdsRef = useRef(expandedFolderIds);
   const [sourceResizing, setSourceResizing] = useState(false);
   const [externalDragOver, setExternalDragOver] = useState(false);
   const [spacePanReady, setSpacePanReady] = useState(false);
@@ -544,7 +565,7 @@ export function CanvasWorkspace({
   const [canvasMarquee, setCanvasMarquee] = useState<CanvasMarquee | null>(null);
   const [selectedCanvasNodeIds, setSelectedCanvasNodeIds] = useState<Set<string>>(() => new Set());
   const [canvasLightbox, setCanvasLightbox] = useState<{ images: string[]; index: number } | null>(null);
-  const [promptMenu, setPromptMenu] = useState<{ node: ProjectGraphNode | null; nodeIds: string[]; x: number; y: number; point: CanvasPoint | null } | null>(null);
+  const [promptMenu, setPromptMenu] = useState<{ node: ProjectGraphNode | null; nodeIds: string[]; folder?: CanvasFolderNode; x: number; y: number; point: CanvasPoint | null } | null>(null);
   const promptMenuRef = useRef<HTMLDivElement>(null);
   useEffect(() => { setPromptMenu(null); }, [projectId, viewMode]);
   useEffect(() => {
@@ -708,6 +729,30 @@ export function CanvasWorkspace({
     }
     window.addEventListener(CANVAS_ARRANGE_NODES_EVENT, arrangeRequestedNodes);
     return () => window.removeEventListener(CANVAS_ARRANGE_NODES_EVENT, arrangeRequestedNodes);
+  }, [graphEdges, threads]);
+
+  useEffect(() => {
+    function changeLayers(event: Event) {
+      const detail = (event as CustomEvent<CanvasLayerStepDetail>).detail;
+      if (!detail || detail.projectId !== activeCanvasRef.current.id || loadingRef.current
+        || viewModeRef.current !== "canvas" || useStore.getState().projectRoutePending) return;
+      const sections = new Set(graphNodesRef.current.filter(node => node.kind === "note"
+        && readCanvasNote(node).note_type === "section").map(node => node.id));
+      const anchors = new Map(selectionAnchors().filter(node => !sections.has(node.id)).map(node => [node.id, node]));
+      const cards = Array.from(stageRef.current?.querySelectorAll<HTMLElement>("[data-canvas-node-id]") ?? [])
+        .flatMap(element => anchors.has(element.dataset.canvasNodeId!) ? [anchors.get(element.dataset.canvasNodeId!)!] : []);
+      const orders = stepCanvasLayers(cards, new Set(detail.nodeIds), detail.direction);
+      if (!orders.size) return;
+      const materials = nodesRef.current.map(node => orders.has(node.id) ? { ...node, order: orders.get(node.id)! } : node);
+      const graph = graphNodesRef.current.map(node => orders.has(node.id) ? { ...node, zIndex: orders.get(node.id)! } : node);
+      commitNodes(materials);
+      graphNodesRef.current = graph;
+      setGraphNodes(graph);
+      persistGeometries(materials.filter(node => orders.has(node.id)));
+      for (const node of graph) if (node.kind !== "asset" && orders.has(node.id)) persistGraphNodeGeometry(node);
+    }
+    window.addEventListener(CANVAS_LAYER_STEP_EVENT, changeLayers);
+    return () => window.removeEventListener(CANVAS_LAYER_STEP_EVENT, changeLayers);
   }, [graphEdges, threads]);
 
   const assetById = useMemo(() => {
@@ -1821,6 +1866,23 @@ export function CanvasWorkspace({
     };
   }
 
+  function setFolderExpanded(id: string, expanded: boolean) {
+    const next = new Set(expandedFolderIdsRef.current);
+    if (expanded) next.add(id);
+    else next.delete(id);
+    expandedFolderIdsRef.current = next;
+    setExpandedFolderIds(next);
+  }
+
+  function nodeRect(node: CanvasNode | ProjectGraphNode) {
+    if (node.kind === "folder" && expandedFolderIdsRef.current.has(node.id)) {
+      const rows = Math.ceil(node.assets.length / 3);
+      const rowHeight = useStore.getState().settings?.canvas_show_asset_names ? 164 : 140;
+      return { x: node.x, y: node.y, width: Math.max(548, node.width), height: 82 + rows * rowHeight + Math.max(0, rows - 1) * 12 };
+    }
+    return baseNodeRect(node);
+  }
+
   function clampSourcePanelWidth(value: number) {
     const workspaceWidth = workspaceRef.current?.getBoundingClientRect().width ?? 900;
     const min = Math.min(240, workspaceWidth * 0.42);
@@ -1829,7 +1891,10 @@ export function CanvasWorkspace({
   }
 
   function setHover(next: HoverIntent | null) {
-    setHoverIntent((current) => current?.key === next?.key ? current : next);
+    if (hoverRef.current?.intent.key === next?.key) return;
+    hoverRef.current = next ? { intent: next, ready: false } : null;
+    setHoverReady(false);
+    setHoverIntent(next);
   }
 
   function hitNode(point: CanvasPoint, excludedId?: string) {
@@ -1848,48 +1913,10 @@ export function CanvasWorkspace({
   useEffect(() => {
     if (!hoverIntent) return;
     const timer = window.setTimeout(() => {
-      const current = nodesRef.current;
-      if (hoverIntent.kind === "internal") {
-        const moving = current.find((node): node is CanvasAssetNode =>
-          node.id === hoverIntent.movingId && node.kind === "asset");
-        const next = mergeCanvasNodesIntoFolder(
-          current,
-          hoverIntent.movingId,
-          hoverIntent.targetId,
-          canvasId("group"),
-          { width: FOLDER_WIDTH, height: FOLDER_HEIGHT },
-        );
-        if (next !== current) {
-          commitNodes(next);
-          const group = next.find((node): node is CanvasFolderNode =>
-            node.kind === "folder" && node.assets.some((asset) => asset.id === hoverIntent.movingId));
-          if (group && groupsRef.current.has(group.id)) persistGroupMembership(group, [], moving);
-          else if (group) persistCreatedGroup(group, [], moving);
-        }
-        nodeDragRef.current = null;
-        setActiveDragId(null);
-        setGuides([]);
-      } else {
-        const targetWasGroup = groupsRef.current.has(hoverIntent.targetId);
-        const next = mergeCanvasAssetsIntoTarget(
-          current,
-          hoverIntent.targetId,
-          hoverIntent.assets,
-          canvasId("group"),
-          { width: FOLDER_WIDTH, height: FOLDER_HEIGHT },
-        );
-        if (next !== current) {
-          commitNodes(next);
-          const group = next.find((node): node is CanvasFolderNode =>
-            node.kind === "folder" && node.assets.some((asset) => hoverIntent.assets.some((item) => item.id === asset.id)));
-          if (group) {
-            const newMembers = hoverIntent.assets.map((asset, index) => groupedAssetNode(asset, group, index));
-            if (targetWasGroup) persistGroupMembership(group, newMembers);
-            else persistCreatedGroup(group, newMembers);
-          }
-        }
-      }
-      setHoverIntent(null);
+      // Hover only arms grouping; the release must still hit this same target.
+      if (hoverRef.current?.intent !== hoverIntent) return;
+      hoverRef.current.ready = true;
+      setHoverReady(true);
     }, 1000);
     return () => window.clearTimeout(timer);
   }, [hoverIntent]);
@@ -1914,6 +1941,7 @@ export function CanvasWorkspace({
       const snapped = snapCanvasRect(
         raw,
         next.map((node) => ({ id: node.id, order: node.order, rect: nodeRect(node) })),
+        { enabled: snapEnabledRef.current, zoom: zoomRef.current },
       );
       const node: CanvasAssetNode = {
         kind: "asset",
@@ -1980,12 +2008,15 @@ export function CanvasWorkspace({
     const incoming = draggedSnapshots();
     if (incoming.length === 0) return;
     event.preventDefault();
+    const hover = hoverRef.current;
     setExternalDragOver(false);
     setHover(null);
     setFolderDropTargetId(null);
     const point = toBoardPoint(event.clientX, event.clientY);
     const target = hitNode(point);
-    if (target?.kind === "folder") {
+    if (target && (target.kind === "folder" || (hover?.ready
+      && hover.intent.kind === "external" && hover.intent.targetId === target.id
+      && hover.intent.assets === incoming))) {
       const current = nodesRef.current;
       const next = mergeCanvasAssetsIntoTarget(
         current,
@@ -1996,13 +2027,15 @@ export function CanvasWorkspace({
       );
       if (next !== current) {
         commitNodes(next);
-        const group = next.find((node): node is CanvasFolderNode => node.id === target.id && node.kind === "folder");
+        const group = next.find((node): node is CanvasFolderNode => node.kind === "folder"
+          && node.assets.some((asset) => asset.id === incoming[0].id));
         if (group) {
           const newIds = new Set(incoming.map((asset) => asset.id));
           const newMembers = group.assets
             .filter((asset) => newIds.has(asset.id))
             .map((asset, index) => groupedAssetNode(asset, group, index));
-          persistGroupMembership(group, newMembers);
+          if (target.kind === "folder") persistGroupMembership(group, newMembers);
+          else persistCreatedGroup(group, newMembers);
         }
       }
       externalInstancesRef.current = null;
@@ -2119,7 +2152,8 @@ export function CanvasWorkspace({
     useStore.getState().closeContextMenu();
     const nodeIds = selectedCanvasNodeIdsRef.current.has(nodeId) ? [...selectedCanvasNodeIdsRef.current] : [nodeId];
     setSelectedCanvasNodeIds(new Set(nodeIds));
-    setPromptMenu({ node, nodeIds, x: event.clientX, y: event.clientY, point: null });
+    const folder = nodesRef.current.find((candidate): candidate is CanvasFolderNode => candidate.id === nodeId && candidate.kind === "folder");
+    setPromptMenu({ node, nodeIds, folder, x: event.clientX, y: event.clientY, point: null });
   }
 
   function newDraftAt(point: CanvasPoint) {
@@ -2249,6 +2283,7 @@ export function CanvasWorkspace({
         height: origin.height,
       },
       selectionAnchors(drag.initialMaterialNodes, drag.initialNodes).filter((node) => !drag.selectedIds.has(node.id)),
+      { enabled: snapEnabledRef.current, zoom: zoomRef.current },
     );
     setGuides(snapped.guides);
     translateGraphSelection(drag.initialNodes, drag.selectedIds, snapped.x - origin.x, snapped.y - origin.y);
@@ -2334,6 +2369,7 @@ export function CanvasWorkspace({
       : new Set([selectionNode.id]);
     if (!selectedCanvasNodeIdsRef.current.has(selectionNode.id)) setSelectedCanvasNodeIds(selectedIds);
     openContextMenu(event.clientX, event.clientY, selectedAsset.assetId, {
+      ungroupCanvasFolder: selectionNode.kind === "folder" ? () => ungroupFolder(selectionNode) : undefined,
       addCanvasImagesToBoard: {
         count: canvasImagesForSelection(selectedIds).length,
         run: () => addCanvasImagesToBoard(selectedIds),
@@ -2346,29 +2382,34 @@ export function CanvasWorkspace({
     });
   }
 
-  function activateCanvasMaterial(node: CanvasNode) {
+  function activateCanvasMaterial(node: CanvasNode, assetAnchor?: HTMLElement) {
+    if (node.kind === "folder") {
+      setFolderExpanded(node.id, true);
+      return;
+    }
     const state = useStore.getState();
     if (canvasPrimaryMaterialAction(state.boardOpen, !!state.genEditing) === "compose") {
-      const assetIds = (node.kind === "asset" ? [node.asset] : node.assets)
+      const assetIds = [node.asset]
         .flatMap((asset) => asset.assetId ? [{ assetId: asset.assetId, canvasNodeId: asset.id }] : []);
-      for (const asset of assetIds) {
-        window.dispatchEvent(new CustomEvent(BOARD_ASSET_PICK_EVENT, { detail: asset }));
-      }
       if (assetIds.length === 1 && state.promptedAssets.some(
         (asset) => asset.id === assetIds[0].assetId && asset.sections && asset.sections.length > 0,
       )) {
-        const anchor = Array.from(stageRef.current?.querySelectorAll<HTMLElement>("[data-canvas-node-id]") ?? [])
+        const anchor = assetAnchor ?? Array.from(stageRef.current?.querySelectorAll<HTMLElement>("[data-canvas-node-id]") ?? [])
           .find((element) => element.dataset.canvasNodeId === node.id);
         if (anchor) {
           window.dispatchEvent(new CustomEvent("bowerbird://board-asset-peek", {
             detail: { assetId: assetIds[0].assetId, anchor },
           }));
         }
+      } else {
+        for (const asset of assetIds) {
+          window.dispatchEvent(new CustomEvent(BOARD_ASSET_PICK_EVENT, { detail: asset }));
+        }
       }
       return;
     }
 
-    const images = (node.kind === "asset" ? [node.asset] : node.assets)
+    const images = [node.asset]
       .map((asset) => asset.storePath ?? asset.thumbPath)
       .filter((path): path is string => !!path);
     if (images.length > 0) setCanvasLightbox({ images, index: 0 });
@@ -2406,12 +2447,13 @@ export function CanvasWorkspace({
     const raw = {
       x: point.x - drag.offsetX,
       y: point.y - drag.offsetY,
-      width: originMoving.width,
-      height: originMoving.height,
+      width: nodeRect(originMoving).width,
+      height: nodeRect(originMoving).height,
     };
     const snapped = snapCanvasRect(
       raw,
       selectionAnchors(drag.initialNodes, drag.initialGraphNodes).filter((node) => !drag.selectedIds.has(node.id)),
+      { enabled: snapEnabledRef.current, zoom: zoomRef.current },
     );
     setGuides(snapped.guides);
     const next = translateCanvasSelection(
@@ -2452,6 +2494,7 @@ export function CanvasWorkspace({
     const drag = nodeDragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
     const moving = nodesRef.current.find((node) => node.id === drag.nodeId);
+    const hover = hoverRef.current;
     const target = !cancelled && drag.moved && drag.selectedIds.size === 1
       ? hitNode(toBoardPoint(event.clientX, event.clientY), drag.nodeId)
       : null;
@@ -2461,7 +2504,9 @@ export function CanvasWorkspace({
     } else if (!cancelled && !drag.moved && moving) {
       if (drag.toggleSelection) toggleCanvasNodeSelection(moving.id);
       else activateCanvasMaterial(moving);
-    } else if (!cancelled && moving?.kind === "asset" && target?.kind === "folder") {
+    } else if (!cancelled && moving?.kind === "asset" && target
+      && (target.kind === "folder" || (hover?.ready && hover.intent.kind === "internal"
+        && hover.intent.movingId === moving.id && hover.intent.targetId === target.id))) {
       const current = nodesRef.current;
       const next = mergeCanvasNodesIntoFolder(
         current,
@@ -2472,8 +2517,10 @@ export function CanvasWorkspace({
       );
       if (next !== current) {
         commitNodes(next);
-        const group = next.find((node): node is CanvasFolderNode => node.id === target.id && node.kind === "folder");
-        if (group) persistGroupMembership(group, [], moving);
+        const group = next.find((node): node is CanvasFolderNode => node.kind === "folder"
+          && node.assets.some((asset) => asset.id === moving.id));
+        if (group && target.kind === "folder") persistGroupMembership(group, [], moving);
+        else if (group) persistCreatedGroup(group, [], moving);
       }
     } else if (moving && drag.moved) {
       persistGeometries(nodesRef.current.filter((node) => drag.selectedIds.has(node.id)));
@@ -2501,7 +2548,7 @@ export function CanvasWorkspace({
     if (updated.width !== node.width || updated.height !== node.height) persistGraphNodeGeometry(updated);
   }
 
-  function resizeCanvasNote(nodeId: string, size: { width: number; height: number }, finished: boolean, cancelled = false) {
+  function resizeCanvasNote(nodeId: string, size: { width: number; height: number; x?: number; y?: number }, finished: boolean, cancelled = false) {
     const node = graphNodesRef.current.find(candidate => candidate.id === nodeId);
     if (!node) return;
     const updated = { ...node, ...size };
@@ -2963,6 +3010,7 @@ export function CanvasWorkspace({
       nodesRef.current
         .filter((candidate) => !selectedIds.has(candidate.id))
         .map((candidate) => ({ id: candidate.id, order: candidate.order, rect: nodeRect(candidate) })),
+      { enabled: snapEnabledRef.current, zoom: zoomRef.current },
     );
     const next = translateCanvasSelection(
       nodesRef.current,
@@ -3047,11 +3095,13 @@ export function CanvasWorkspace({
   );
   const promptReferences = useMemo(() => new Map(graphNodes.filter(node => node.kind === "prompt")
     .map(node => [node.id, canvasPromptReferences(node.id, graphNodes, graphEdges, assetById)])), [graphNodes, graphEdges, assetById]);
-  useLayoutEffect(() => {
+  // ReadonlyPrompt creates its content in an effect; measure after it has mounted.
+  useEffect(() => {
     const nodeId = pendingNewCardRef.current;
     if (!nodeId || loading || projectRoutePending || panning || activeDragId) return;
     if (viewMode !== "canvas") {
-      pendingNewCardRef.current = null;
+      viewModeRef.current = "canvas";
+      setViewMode("canvas");
       return;
     }
     const target = [...promptGraphNodes, ...agentGraphNodes].find((node) => node.id === nodeId);
@@ -3103,11 +3153,7 @@ export function CanvasWorkspace({
         if (target.id.startsWith("agent-prompt:")) pendingNewReferencesRef.current.set(reference.id, reference);
         else pendingNewReferencesRef.current.delete(reference.id);
       }
-      setFocusedNodeId(nodeId);
-      markViewDirty();
-      return;
-    }
-    if (placement) {
+    } else if (placement) {
       if (placement.x !== target.x || placement.y !== target.y) {
         const moved = { ...target, ...placement };
         const updated = graphNodesRef.current.map((node) => node.id === nodeId ? moved : node);
@@ -3115,18 +3161,17 @@ export function CanvasWorkspace({
         setGraphNodes(updated);
         persistGraphNodeGeometry(moved);
       }
-      setFocusedNodeId(nodeId);
-      markViewDirty();
-      return;
     }
-    const next = canvasViewForNewCard(measuredCard, viewport, panRef.current, zoomRef.current);
-    if (!next) return;
-    panRef.current = next.pan;
-    zoomRef.current = next.zoom;
-    setPan(next.pan);
-    setZoom(next.zoom);
-    setFocusedNodeId(nodeId);
-    markViewDirty();
+    const next = canvasViewForNewCard({ ...measuredCard, ...(placement ?? {}) }, viewport, panRef.current, zoomRef.current, true);
+    if (next) {
+      panRef.current = next.pan;
+      zoomRef.current = next.zoom;
+      setPan(next.pan);
+      setZoom(next.zoom);
+    }
+    focusGraphNode(nodeId);
+    setSelectedCanvasNodeIds(new Set([nodeId]));
+    element?.focus({ preventScroll: true });
   }, [promptGraphNodes, agentGraphNodes, loading, projectRoutePending, panning, activeDragId, viewMode, scopedInspectorOpen]);
   const continuationCandidates = useMemo(
     () => activeGraphNodes.flatMap((node) => (
@@ -3187,7 +3232,7 @@ export function CanvasWorkspace({
     cloudEntitlement,
     scopedInspectorOpen,
   ]);
-  const inspectorEditing = activeSessionKind === "generation" && !!genEditing;
+  const inspectorEditing = activeSessionKind === "generation" && genEditing === "edit";
   const drawableEdges = useMemo(
     () => graphEdges.flatMap((edge) => {
       const from = graphNodeById.get(edge.fromNodeId);
@@ -3607,6 +3652,17 @@ export function CanvasWorkspace({
             <button title="分区 · 拖拽画框" aria-label="分区工具" aria-pressed={drawingTool === "section"} onClick={() => setDrawingTool("section")}><Frame size={18} /></button>
             <button title="文本卡片 · 点击放置" aria-label="文本卡片工具" aria-pressed={drawingTool === "text"} onClick={() => setDrawingTool("text")}><Type size={18} /></button>
             <button title="气泡便签 · 点击放置" aria-label="气泡便签工具" aria-pressed={drawingTool === "bubble"} onClick={() => setDrawingTool("bubble")}><MessageCircle size={18} /></button>
+            <hr />
+            <div className="canvas-assist-tools" role="group" aria-label="辅助">
+              <span>辅助</span>
+              <button type="button" title={snapEnabled ? "关闭吸附对齐" : "开启吸附对齐"} aria-label="吸附对齐" aria-pressed={snapEnabled} onClick={() => {
+                const next = !snapEnabled;
+                snapEnabledRef.current = next;
+                setSnapEnabled(next);
+                setGuides([]);
+                try { localStorage.setItem(CANVAS_SNAP_ENABLED_KEY, String(next)); } catch { /* Keep the toggle usable when storage is unavailable. */ }
+              }}><Magnet size={18} /></button>
+            </div>
           </div>
           <div
             className="canvas-plane"
@@ -3618,7 +3674,7 @@ export function CanvasWorkspace({
               const selected = selectedCanvasNodeIds.has(node.id);
               return <div key={node.id} data-canvas-node data-canvas-node-id={node.id} tabIndex={0}
                 className={`canvas-note ${section ? "is-section" : value.note_type === "bubble" ? "is-bubble" : "is-text"} ${selected ? "is-selected" : ""}`}
-                style={{ width: node.width, height: node.height, transform: `translate3d(${node.x}px, ${node.y}px, 0)`, zIndex: section ? 0 : selected ? 10000 + node.zIndex : node.zIndex }}
+                style={{ width: node.width, height: node.height, transform: `translate3d(${node.x}px, ${node.y}px, 0)`, zIndex: section ? 0 : activeDragId === node.id || (activeDragId != null && selected) ? 10000 + node.zIndex : node.zIndex }}
                 onPointerDown={event => beginGraphNodeDrag(event, node)} onPointerMove={moveGraphNode}
                 onPointerUp={endGraphNodeDrag} onPointerCancel={event => endGraphNodeDrag(event, true)}
                 onLostPointerCapture={event => endGraphNodeDrag(event, true)}
@@ -3632,8 +3688,10 @@ export function CanvasWorkspace({
                       onBlur={() => { if (!value.text.trim()) updateCanvasNote(node.id, { ...value, text: "分区" }); }} />
                   </div>
                   {["top", "bottom", "left", "right"].map(edge => <div key={edge} className={`canvas-section-edge ${edge}`} />)}
-                  {selected && <CanvasResizeHandle label="调整分区大小" size={node} zoom={zoom} minimum={{ width: 120, height: 80 }}
-                    onResize={(size, finished, cancelled) => resizeCanvasNote(node.id, size, finished, cancelled)} />}
+                  {selected && ([["nw", "左上角"], ["ne", "右上角"], ["sw", "左下角"], ["se", "右下角"]] as const).map(([corner, label]) => (
+                    <CanvasResizeHandle key={corner} label={`调整分区大小（${label}）`} corner={corner} size={node} position={{ x: node.x, y: node.y }} zoom={zoom}
+                      minimum={{ width: 120, height: 80 }} onResize={(size, finished, cancelled) => resizeCanvasNote(node.id, size, finished, cancelled)} />
+                  ))}
                 </> : <CanvasTextCard value={value} selected={selected} width={node.width} height={node.height} zoom={zoom}
                   onResize={(size, finished, cancelled) => resizeCanvasNote(node.id, size, finished, cancelled)} onSelect={() => setSelectedCanvasNodeIds(new Set([node.id]))}
                   onChange={next => updateCanvasNote(node.id, next)} />}
@@ -3642,10 +3700,12 @@ export function CanvasWorkspace({
             {sectionPreview && <div className="canvas-section-preview" style={{ left: sectionPreview.x, top: sectionPreview.y, width: sectionPreview.width, height: sectionPreview.height }} />}
             <svg className="canvas-graph-edges" aria-hidden="true">
               {drawableEdges.map(({ edge, from, to }) => {
-                const x1 = from.x + from.width;
-                const y1 = from.y + from.height / 2;
+                const fromMaterial = nodes.find(node => node.id === from.id || (node.kind === "folder" && node.assets.some(asset => asset.id === from.id)));
+                const toMaterial = nodes.find(node => node.id === to.id || (node.kind === "folder" && node.assets.some(asset => asset.id === to.id)));
+                const x1 = from.x + (fromMaterial ? nodeRect(fromMaterial).width : from.width);
+                const y1 = from.y + (fromMaterial ? nodeRect(fromMaterial).height : from.height) / 2;
                 const x2 = to.x;
-                const y2 = to.y + to.height / 2;
+                const y2 = to.y + (toMaterial ? nodeRect(toMaterial).height : to.height) / 2;
                 const bend = Math.max(48, Math.abs(x2 - x1) * 0.42);
                 return (
                   <path
@@ -3755,15 +3815,18 @@ export function CanvasWorkspace({
               <span
                 key={`${guide.axis}-${guide.position}`}
                 className={`canvas-snap-guide is-${guide.axis}`}
-                style={guide.axis === "x" ? { left: guide.position } : { top: guide.position }}
+                style={guide.axis === "x"
+                  ? { left: guide.position, width: 1 / zoom, backgroundSize: `100% ${12 / zoom}px` }
+                  : { top: guide.position, height: 1 / zoom, backgroundSize: `${12 / zoom}px 100%` }}
               />
             ))}
             {nodes.map((node) => {
+              const expanded = node.kind === "folder" && expandedFolderIds.has(node.id);
               const holding = hoverTargetId === node.id;
               const directFolderTarget = folderDropTargetId === node.id;
               const movingWithSelection = activeDragId === node.id
                 || (activeDragId != null && selectedCanvasNodeIds.has(node.id));
-              const path = node.kind === "asset" ? node.asset.thumbPath ?? node.asset.storePath : null;
+              const path = node.kind === "asset" ? canvasAssetMediaPath(node.asset) : null;
               return (
                 <div
                   key={node.id}
@@ -3771,11 +3834,12 @@ export function CanvasWorkspace({
                   data-canvas-node-id={node.id}
                   role="group"
                   tabIndex={0}
-                  aria-label={`${node.kind === "asset" ? node.asset.name : `素材组，${node.assets.length} 个素材`}，${boardOpen || genEditing ? "点击加入创作" : "点击放大"}${selectedCanvasNodeIds.has(node.id) ? "，已选中" : ""}`}
-                  className={`canvas-node is-${node.kind} ${focusedNodeId === node.id ? "is-focused" : ""} ${selectedCanvasNodeIds.has(node.id) ? "is-selected" : ""} ${movingWithSelection ? "is-moving" : ""} ${holding ? "is-folder-target" : ""} ${directFolderTarget ? "is-folder-drop-target" : ""} `}
+                  aria-label={`${node.kind === "asset" ? `${node.asset.name}，${boardOpen || genEditing ? "点击加入创作" : "点击放大"}` : `素材组，${node.assets.length} 个素材，${expanded ? "已展开" : "点击展开"}`}${selectedCanvasNodeIds.has(node.id) ? "，已选中" : ""}`}
+                  aria-expanded={node.kind === "folder" ? expanded : undefined}
+                  className={`canvas-node is-${node.kind} ${expanded ? "is-expanded" : ""} ${!showAssetNames ? "is-name-hidden" : ""} ${focusedNodeId === node.id ? "is-focused" : ""} ${selectedCanvasNodeIds.has(node.id) ? "is-selected" : ""} ${movingWithSelection ? "is-moving" : ""} ${holding ? "is-folder-target" : ""} ${directFolderTarget ? "is-folder-drop-target" : ""} `}
                   style={{
-                    width: node.width,
-                    height: node.height,
+                    width: nodeRect(node).width,
+                    height: nodeRect(node).height,
                     transform: `translate3d(${node.x}px, ${node.y}px, 0)`,
                     zIndex: movingWithSelection ? 10000 + node.order : node.order,
                   }}
@@ -3808,7 +3872,7 @@ export function CanvasWorkspace({
                   {node.kind === "asset" ? (
                     <>
                       {path ? (
-                        isVideoPath(path) ? <video src={convertFileSrc(path)} preload="metadata" muted playsInline className="pointer-events-none" /> : <img src={convertFileSrc(path)} alt={node.asset.name} draggable={false} />
+                        isVideoPath(path) ? <video src={convertFileSrc(path)} preload="metadata" muted playsInline className="pointer-events-none" /> : <img src={convertFileSrc(path)} alt={node.asset.name} draggable={false} loading="lazy" />
                       ) : (
                         <div className="canvas-node-placeholder">{node.asset.name.slice(0, 1)}</div>
                       )}
@@ -3823,45 +3887,55 @@ export function CanvasWorkspace({
                           >🏷️</span>
                         )}
                       </div>
-                      <span className="canvas-node-name">{node.asset.name}</span>
+                      {showAssetNames && <span className="canvas-node-name">{node.asset.name}</span>}
                     </>
                   ) : (
                     <>
-                      <FolderPreview
-                        node={node}
-                        onAssetContextMenu={(event, asset) => openCanvasAssetContextMenu(event, node, asset)}
-                      />
-                      <span className="canvas-folder-name"><Folder size={13} /> 素材组 · {node.assets.length}</span>
+                      {expanded ? <>
+                        <header className="canvas-folder-header">
+                          <Folder size={16} /><strong>素材组</strong><span>{node.assets.length} 张素材</span>
+                          <button type="button" aria-label="收起素材组" title="收起素材组"
+                            onPointerDown={(event) => event.stopPropagation()}
+                            onKeyDown={(event) => { if (event.key === "Enter" || event.key === " " || event.key.startsWith("Arrow")) event.stopPropagation(); }}
+                            onClick={() => setFolderExpanded(node.id, false)}><ChevronUp size={16} /></button>
+                        </header>
+                        <div className="canvas-folder-expanded-grid" style={{ gridAutoRows: showAssetNames ? 164 : 140 }}>
+                          {node.assets.map((asset, index) => {
+                            const assetPath = canvasAssetMediaPath(asset);
+                            return <button type="button" key={asset.id} data-canvas-folder-asset-id={asset.id}
+                              className="canvas-folder-asset" aria-label={asset.name}
+                              onPointerDown={(event) => { if (!isCanvasPanGesture(event.button, spacePressedRef.current)) event.stopPropagation(); }}
+                              onKeyDown={(event) => { if (event.key === "Enter" || event.key === " " || event.key.startsWith("Arrow")) event.stopPropagation(); }}
+                              onClick={(event) => { if (!consumeSuppressedNodeClick()) activateCanvasMaterial(groupedAssetNode(asset, node, index), event.currentTarget); }}
+                              onContextMenu={(event) => openCanvasAssetContextMenu(event, node, asset)}>
+                              {assetPath ? isVideoPath(assetPath)
+                                ? <video src={convertFileSrc(assetPath)} preload="metadata" muted playsInline />
+                                : <img src={convertFileSrc(assetPath)} alt="" draggable={false} loading="lazy" />
+                                : <span className="canvas-folder-asset-placeholder">{asset.name.slice(0, 1)}</span>}
+                              {showAssetNames && <span className="canvas-folder-asset-name">{asset.name}</span>}
+                            </button>;
+                          })}
+                        </div>
+                      </> : <>
+                        <FolderPreview node={node} onAssetContextMenu={(event, asset) => openCanvasAssetContextMenu(event, node, asset)} />
+                        <span className="canvas-folder-name"><Folder size={13} /> 素材组 · {node.assets.length}</span>
+                      </>}
                     </>
                   )}
-                  <div className="canvas-node-actions">
-                    {node.kind === "folder" && (
-                      <button
-                        type="button"
-                        title="解散素材组"
-                        aria-label="解散素材组"
-                        onPointerDown={(event) => {
-                          if (!isCanvasPanGesture(event.button, spacePressedRef.current)) event.stopPropagation();
-                        }}
-                        onClick={() => {
-                          if (!consumeSuppressedNodeClick()) ungroupFolder(node);
-                        }}
-                      >
-                        <Ungroup size={13} />
-                      </button>
-                    )}
-                  </div>
-                  {holding && <span className="canvas-folder-hint" role="tooltip">创建素材组</span>}
+                  {holding && <span className="canvas-folder-hint" role="tooltip">{hoverReady ? "松开创建素材组" : "悬停以创建素材组"}</span>}
                   {directFolderTarget && <span className="canvas-folder-hint" role="tooltip">松手移入素材组</span>}
-                  <CanvasResizeHandle label={node.kind === "asset" ? "调整素材大小" : "调整素材组大小"} size={node} zoom={zoom}
+                  {!expanded && <CanvasResizeHandle label={node.kind === "asset" ? "调整素材大小" : "调整素材组大小"} size={nodeRect(node)} zoom={zoom}
                     minimum={{ width: 140, height: 120 }}
                     constrain={node.kind === "asset" ? (start, delta) => {
                       // Preserve the image ratio, excluding the fixed caption and borders.
-                      const ratio = node.asset.width && node.asset.height ? node.asset.height / node.asset.width : (start.height - 32) / (start.width - 2);
+                      const ratio = node.asset.width && node.asset.height ? node.asset.height / node.asset.width : (start.height - (showAssetNames ? 32 : 2)) / (start.width - 2);
                       const change = Math.abs(delta.width) >= Math.abs(delta.height / ratio) ? delta.width : delta.height / ratio;
-                      return canvasAssetNodeSize({ width: 1, height: ratio }, Math.max(96, 2 + 32 / ratio, start.width + change));
+                      const size = canvasAssetNodeSize({ width: 1, height: ratio }, Math.max(96, 2 + 32 / ratio, start.width + change));
+                      return { ...size, height: size.height - (showAssetNames ? 0 : 30) };
                     } : undefined}
-                    onResize={(size, finished, cancelled) => resizeCanvasMaterial(node.id, size, finished, cancelled)} />
+                    onResize={(size, finished, cancelled) => resizeCanvasMaterial(node.id, {
+                      ...size, height: size.height + (node.kind === "asset" && !showAssetNames ? 30 : 0),
+                    }, finished, cancelled)} />}
                 </div>
               );
             })}
@@ -3884,7 +3958,7 @@ export function CanvasWorkspace({
             <div className="canvas-empty-state" aria-hidden="true">
               <span><Move size={20} /></span>
               <strong>把左侧素材拖到这里</strong>
-              <p>素材靠近时会自动吸附；叠在另一素材上停留 1 秒即可建立透明素材组。</p>
+              <p>素材靠近时会自动吸附；在另一素材上停留 1 秒后松开，即可建立透明素材组。</p>
             </div>
           )}
           {externalDragOver && <div className="canvas-drop-label">松开放到画布</div>}
@@ -3898,7 +3972,7 @@ export function CanvasWorkspace({
             onLocate={locateGraphNode}
           />
         )}
-        {shouldMountProjectComposer(loading, inspectorEditing) && (
+        {shouldMountProjectComposer(loading, activeSessionKind === "generation" && !!genEditing) && (
           <CreativeComposer
             key={activeCanvas.id}
             projectId={activeCanvas.id}
@@ -3929,6 +4003,7 @@ export function CanvasWorkspace({
               return anchor ?? stage;
             }}
             editing={inspectorEditing}
+            composing={activeSessionKind === "generation" && genEditing === "revise"}
             onClose={() => setGenPanelOpen(false)}
           >
             {activeSessionKind === "generation"
@@ -3954,6 +4029,8 @@ export function CanvasWorkspace({
             {promptMenu.point && <button type="button" role="menuitem" className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs hover:bg-panel2" onClick={() => newDraftAt(promptMenu.point!)}>
               <PenTool size={14} /> 新建草稿
             </button>}
+            {promptMenu.nodeIds.length > 0 && <CanvasLayerMenuItem projectId={activeCanvasRef.current.id} nodeIds={promptMenu.nodeIds}
+              className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs hover:bg-panel2" />}
             {canvasImagesForSelection(promptMenu.nodeIds).length > 0 && <button type="button" role="menuitem" className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs hover:bg-panel2" onClick={() => addCanvasImagesToBoard(promptMenu.nodeIds)}>
               <Images size={14} className="shrink-0" /> {canvasImagesForSelection(promptMenu.nodeIds).length > 1
                 ? `添加所选 ${canvasImagesForSelection(promptMenu.nodeIds).length} 张图片到对话框`
@@ -3968,13 +4045,19 @@ export function CanvasWorkspace({
             {promptMenu.node && <button type="button" role="menuitem" className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs hover:bg-panel2" onClick={() => reuseCanvasPrompt(promptMenu.node!)}>
               <Copy size={14} /> 复用提示词
             </button>}
+            {promptMenu.folder && <button type="button" role="menuitem" className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs hover:bg-panel2" onClick={() => {
+              ungroupFolder(promptMenu.folder!);
+              setPromptMenu(null);
+            }}>
+              <Ungroup size={14} /> 解散素材组
+            </button>}
             {promptMenu.nodeIds.length > 0 && <button type="button" role="menuitem" className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs text-red-400 hover:bg-panel2" onClick={() => {
               removeNodes(promptMenu.nodeIds);
               setPromptMenu(null);
             }}>
               <Trash2 size={14} className="shrink-0" /> {promptMenu.nodeIds.length > 1
-                ? `从画板移除所选 ${promptMenu.nodeIds.length} 项`
-                : "从画板移除"}
+                ? `从画布移出所选 ${promptMenu.nodeIds.length} 项`
+                : "从画布移出"}
             </button>}
             {promptMenu.node?.kind === "prompt" && <button type="button" role="menuitem" className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs text-red-400 hover:bg-panel2 disabled:opacity-40"
               disabled={promptSessionJobs(promptMenu.node).some((job) => job.running)}

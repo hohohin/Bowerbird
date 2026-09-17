@@ -74,22 +74,20 @@ export function parseRoleGuide(value: unknown): RoleGuideProgress {
       annotationAssetId: typeof s.annotationAssetId === "string" ? s.annotationAssetId : null,
       tasks: Object.fromEntries(Object.entries(s.tasks ?? {}).filter(([, index]) => Number.isInteger(index) && index >= 0)) };
   }
-  // Append the new lessons after a previously completed six-, eight- or ten-step designer route.
-  if (Array.isArray(p.completedRoles) && p.completedRoles.includes("designer") && [5, 7, 9].includes(fresh.sessions.designer?.step ?? -1)) {
-    fresh.sessions.designer = { ...fresh.sessions.designer!, step: fresh.sessions.designer!.step + 1, ready: false, stepStartedAt: Date.now(), tasks: {} };
-  }
-  // The old ending showed completion before the canvas hint. Pending sessions
-  // resume at the hint; fully finished routes stay finished after upgrading.
   const designer = fresh.sessions.designer;
   if (designer && designer.designerEndingRevision !== 1) {
-    const finished = Array.isArray(p.completedRoles) && p.completedRoles.includes("designer")
-      && p.sessions?.designer?.step === 10 && (designer.ready || designer.skippedSteps?.includes(10));
-    const skipped = designer.skippedSteps?.map(step => step === 9 ? 10 : step === 10 ? 9 : step);
-    if (finished && !designer.ready && skipped && !skipped.includes(10)) skipped.push(10);
+    // The discarded order put the completion modal before the canvas hint.
+    // Resume unfinished endings at the hint; never reset the actual project.
+    const endingCompleted = Array.isArray(p.completedRoles) && p.completedRoles.includes("designer") && designer.step === 10;
     fresh.sessions.designer = { ...designer, designerEndingRevision: 1,
-      ...(skipped ? { skippedSteps: skipped } : {}),
-      ...(designer.step >= 9 && !finished ? { step: 9, ready: false, tasks: {}, reviewUntil: undefined,
-        stepVisit: (designer.stepVisit ?? 0) + 1, stepStartedAt: Date.now() } : {}) };
+      ...(endingCompleted ? { ready: !designer.skippedSteps?.includes(9) } : {}),
+      ...(designer.step >= 9 && !endingCompleted ? { step: 9, ready: false, stepVisit: (designer.stepVisit ?? 0) + 1, stepStartedAt: Date.now(), tasks: {} } : {}),
+      ...(designer.reviewUntil !== undefined && designer.reviewUntil >= 9 ? { reviewUntil: undefined } : {}),
+      ...(designer.skippedSteps ? { skippedSteps: designer.skippedSteps.map(step => step === 9 ? 10 : step === 10 ? 9 : step) } : {}) };
+  }
+  // Append the new lessons after a previously completed six- or eight-step designer route.
+  if (Array.isArray(p.completedRoles) && p.completedRoles.includes("designer") && [5, 7].includes(fresh.sessions.designer?.step ?? -1)) {
+    fresh.sessions.designer = { ...fresh.sessions.designer!, step: fresh.sessions.designer!.step + 1, ready: false, stepStartedAt: Date.now(), tasks: {} };
   }
   fresh.completedRoles = roles.filter(id => Array.isArray(p.completedRoles) && p.completedRoles.includes(id) && (fresh.sessions[id]?.ready || fresh.sessions[id]?.skippedSteps?.includes(ONBOARDING_ROUTES[id].length - 1))
     && fresh.sessions[id]?.step === ONBOARDING_ROUTES[id].length - 1);

@@ -12,11 +12,11 @@ try {
   await page.goto("http://127.0.0.1:1577/scripts/fixtures/layers/preview.html");
   await page.getByRole("button", { name: "打开右键菜单", exact: true }).click();
   await page.getByRole("menuitem", { name: "分层编辑", exact: true }).click();
-  await dialog.getByRole("button", { name: "开始拆分 · 20 积分/次" }).waitFor();
+  await dialog.getByRole("button", { name: "开始拆分" }).waitFor();
   await dialog.getByLabel("拆分要求").fill("拆出标题文字与圆形装饰");
   // Submission response loss is recovered using the persisted idempotency key.
   await page.evaluate(() => { window.submitDisconnect = true; });
-  await dialog.getByRole("button", { name: "开始拆分 · 20 积分/次" }).click();
+  await dialog.getByRole("button", { name: "开始拆分" }).click();
   await dialog.getByRole("button", { name: "继续取回原任务" }).waitFor();
   const request = await page.evaluate(() => window.saved().pending.request);
   assert.equal(request.layer_options.operation, "decompose");
@@ -71,7 +71,7 @@ try {
   }, exported);
   assert.equal(mismatch, false, "export pixels must match the edited composition");
   await dialog.getByLabel("图层修改要求").fill("把文字改为圆形装饰");
-  await dialog.getByRole("button", { name: "修改选中图层 · 20 积分/次" }).click();
+  await dialog.getByRole("button", { name: "修改选中图层" }).click();
   await page.waitForFunction(() => window.saved().pending === null && window.saved().document.layers[1].dataUrl === window.documentFixture.layers[1].dataUrl);
   const edited = await page.evaluate(() => window.saved().document.layers[1]);
   assert.equal(edited.x, 220); assert.equal(edited.opacity, .55);

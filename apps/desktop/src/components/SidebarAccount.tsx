@@ -12,7 +12,10 @@ import { SettingsDialog } from "./SettingsDialog";
  * 账号详情（账号名 / 积分明细 / 升级）已移入设置面板「账号管理」。
  * 菜单沿 ProviderSelect/RatioSelect 的 inline 面板范式（不发明浮层），展开在账号行上方。
  */
-export function SidebarAccount() {
+export function SidebarAccount({ collapsed = false, onInteractionChange }: {
+  collapsed?: boolean;
+  onInteractionChange?: (active: boolean) => void;
+}) {
   const cloudAuth = useStore((s) => s.cloudAuth);
   const cloudEntitlement = useStore((s) => s.cloudEntitlement);
   const cloudBusy = useStore((s) => s.cloudBusy);
@@ -29,6 +32,11 @@ export function SidebarAccount() {
   const avatarUrl = cloudAuth?.avatar_url ?? null;
   const tier = cloudEntitlement?.tier?.toUpperCase() ?? "";
   const hasIssue = !understandReady({ entitlement: cloudEntitlement, codexHealth, cloudAuth }) || !extensionConnected;
+
+  useEffect(() => {
+    onInteractionChange?.(open || settingsOpen);
+    return () => onInteractionChange?.(false);
+  }, [open, settingsOpen, onInteractionChange]);
 
   function openAccountDetail() {
     setOpen(false);
@@ -52,9 +60,9 @@ export function SidebarAccount() {
   }, [open]);
 
   return (
-    <div ref={rootRef} className="mt-2 border-t border-edge px-1 pb-1 pt-2">
+    <div ref={rootRef} className={`relative border-t border-edge px-1 pb-1 pt-2 ${collapsed ? "mt-auto w-full" : "mt-2"}`}>
       {open && (
-        <div className="app-popover mb-1.5 flex flex-col gap-0.5" role="menu" aria-label="账号与设置">
+        <div className={`app-popover mb-1.5 flex flex-col gap-0.5 ${collapsed ? "absolute bottom-full left-1 z-[60] w-56" : ""}`} role="menu" aria-label="账号与设置">
           {loggedIn ? (
             <>
               <div className="px-2 py-1 text-[11px] text-muted">
@@ -137,8 +145,9 @@ export function SidebarAccount() {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-2 rounded-lg px-2 py-2 hover:bg-panel2"
+        className={`flex w-full items-center rounded-lg py-2 hover:bg-panel2 ${collapsed ? "justify-center" : "gap-2 px-2"}`}
         title={loggedIn ? `${name} · ${tier || "已登录"}` : "未登录"}
+        aria-label={loggedIn ? `${name}，账号与设置` : "未登录，账号与设置"}
         data-tour="sidebar-account"
         aria-haspopup="menu"
         aria-expanded={open}
@@ -150,7 +159,7 @@ export function SidebarAccount() {
             {loggedIn ? (name[0] ?? "?").toUpperCase() : "?"}
           </span>
         )}
-        <span className="min-w-0 flex-1 truncate text-left text-xs text-ink">
+        {!collapsed && <><span className="min-w-0 flex-1 truncate text-left text-xs text-ink">
           {loggedIn ? name : "未登录"}
         </span>
         {tier && (
@@ -158,7 +167,7 @@ export function SidebarAccount() {
             {tier}
           </span>
         )}
-        {open ? <ChevronUp size={13} className="shrink-0 text-muted" /> : <ChevronDown size={13} className="shrink-0 text-muted" />}
+        {open ? <ChevronUp size={13} className="shrink-0 text-muted" /> : <ChevronDown size={13} className="shrink-0 text-muted" />}</>}
       </button>
 
       {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}

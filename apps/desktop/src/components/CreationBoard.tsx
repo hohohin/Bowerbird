@@ -68,11 +68,8 @@ export const AGENT_DS_DONE_EVENT = "bowerbird://agent-ds-done";
  * 档案标签页签（⌄ 退出创作模式，V 形下箭头示意「收起/退出」）退出。会话「重新编辑」坞期间本组件整体让位
  * （App 按 !genEditing 挂载）。
  *
- * 主区滚动时整体下沉收起（.is-collapsed：只露编辑框第一行，其余被应用底边截断）。
- * 收起/展开规则（优先级从高到低）：① 退出创作模式 = 取消在途自动浮回，非首屏收起、
- * 首屏保持展开；② 滚回顶部立即展开；③ 未激活态非首屏收起后不自动弹出，hover/点击
- * 展开；④ 激活态滚动停 350ms 自动浮回。对话框高度经 ResizeObserver 写入
- * --board-dock-h，瀑布流据此留底部 padding（同会话编辑坞 --gen-dock-h 模式）。
+ * 非创作模式未聚焦时向下收起 70%，点击露出区域或键盘聚焦后展开；创作模式保持展开。
+ * 在工具栏与内部菜单间操作保持展开，草稿与创作模式不因失焦被清空。
  *
  * 参考图入口：创作模式激活时点瀑布流任意图即在光标处插 image chip；也可手输 @图名，
  * 空格/标点后自动识别为 image chip。维度环（CaptionRing）为全局组件（长按图片呼出），
@@ -308,67 +305,26 @@ export function CreationBoard({
     cloudAgentMode, agentMode, agentZMode, agentGMode, agentDsMode,
   ]);
 
-  // —— 底部浮动对话框形态（收起/展开规则，优先级从高到低；改这里先核对不打架）——
-  // ① 退出创作模式（exitCreationMode）：取消在途自动浮回；非首屏立即收起、首屏保持展开；
-  // ② 滚动：滚回顶部（library-scroller 在顶）立即展开并取消在途浮回；非顶部收起；
-  // ③ 未激活态非首屏：收起后不自动弹出，hover 或点击展开（点击编辑框同时激活）；
-  // ④ 激活态滚动停 350ms 自动浮回。①③④都可能「展开」，共享 cancelAutoExpand 防串场。
+  // 记录焦点收起状态；创作模式优先保持展开，退出后恢复收起。
   const dockRef = useRef<HTMLDivElement>(null);
-  const [collapsed, setCollapsed] = useState(false);
-  // 滚动监听 [] 只注册一次；creatingRef 读当前激活态。
-  const creatingRef = useRef(creating);
-  creatingRef.current = creating;
-  const expandTimerRef = useRef<number | undefined>(undefined);
-  const cancelAutoExpand = () => {
-    if (expandTimerRef.current !== undefined) {
-      window.clearTimeout(expandTimerRef.current);
-      expandTimerRef.current = undefined;
-    }
-  };
+  const [collapsed, setCollapsed] = useState(true);
   useEffect(() => {
-    function onScroll(e: Event) {
-      const target = e.target;
-      const dock = dockRef.current;
-      if (!(target instanceof Node) || !dock) return;
-      if (dock.contains(target)) return;
-      if (!dock.closest(".app-workspace")?.contains(target)) return;
-      // 回滚到首屏（滚动容器已在顶部）：取消在途浮回，立即弹出。
-      if (target instanceof Element && target.scrollTop <= 0) {
-        cancelAutoExpand();
-        setCollapsed(false);
-        return;
-      }
-      setCollapsed(true);
-      cancelAutoExpand();
-      if (!creatingRef.current) return; // 未激活非首屏：保持收起，等 hover / 点击展开
-      expandTimerRef.current = window.setTimeout(() => {
-        expandTimerRef.current = undefined;
-        setCollapsed(false);
-      }, 350);
+    function onPointerDown(event: PointerEvent) {
+      if (event.target instanceof Node && !dockRef.current?.contains(event.target)) setCollapsed(true);
     }
-    window.addEventListener("scroll", onScroll, true);
+    const onWindowBlur = () => setCollapsed(true);
+    window.addEventListener("pointerdown", onPointerDown, true);
+    window.addEventListener("blur", onWindowBlur);
     return () => {
-      window.removeEventListener("scroll", onScroll, true);
-      cancelAutoExpand();
+      window.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("blur", onWindowBlur);
     };
   }, []);
-  // 主区（瀑布流）滚动容器是否在顶 = 「首屏」；空库无滚动容器时视作首屏。
-  function atLibraryTop(): boolean {
-    const scroller = dockRef.current
-      ?.closest(".app-workspace")
-      ?.querySelector(".library-scroller");
-    return !scroller || scroller.scrollTop <= 0;
-  }
-  // 退出创作模式：先取消在途自动浮回（否则 350ms 后又弹开，与收起打架）；
-  // 非首屏收起让位浏览（滚回顶部会再自动弹出），首屏保持展开（欢迎态）。
   function exitCreationMode() {
     setBoardActive(false);
-    cancelAutoExpand();
-    if (embedded) {
-      setCollapsed(false);
-      return;
-    }
-    setCollapsed(!atLibraryTop());
+    const focused = document.activeElement;
+    if (focused instanceof HTMLElement && dockRef.current?.contains(focused)) focused.blur();
+    setCollapsed(true);
   }
 
   const exitCreationModeRef = useRef(exitCreationMode);
@@ -808,19 +764,20 @@ export function CreationBoard({
       <section
         ref={dockRef}
         onPointerDown={(e) => {
-          // 退出页签的 pointerdown 不展开（其 click 自带收起/展开决策），
-          // 避免「先弹又收」打架；其余任意处点击 = 展开。
           if (!(e.target instanceof Element && e.target.closest(".creation-exit-tab"))) {
             setCollapsed(false);
           }
         }}
-        onMouseEnter={() => {
-          // 未激活：收起态 hover 展开（激活态由滚动停 350ms 自动浮回，不抢）。
-          if (!creating) setCollapsed(false);
+        onClick={(e) => {
+          if (e.target === e.currentTarget) focus();
+        }}
+        onFocusCapture={() => setCollapsed(false)}
+        onBlurCapture={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setCollapsed(true);
         }}
         aria-label="创作板"
         className={`creation-dock pointer-events-auto relative w-[min(760px,calc(100%-24px))] rounded-t-2xl p-2.5 pb-2 ${creating ? "is-creating" : ""} ${embedded ? "is-canvas-composer" : ""} ${
-          !embedded && collapsed ? "is-collapsed" : ""
+          !creating && collapsed ? "is-collapsed" : ""
         }`}
       >
         {/* 退出创作模式：素材库与项目画板共用同一显式退出入口。 */}
@@ -832,7 +789,7 @@ export function CreationBoard({
             data-tour="board-exit"
             title={embedded
               ? "退出创作模式（回到画板浏览：点图放大，按住空白拖动框选）"
-              : "退出创作模式（回普通浏览：点图开详情；非首屏会先收起，滚回顶部自动弹出）"}
+              : "退出创作模式（回普通浏览并收起对话框）"}
             aria-label="退出创作模式"
           >
             <ChevronDown size={13} aria-hidden="true" />
@@ -1011,7 +968,7 @@ export function CreationBoard({
               <Info size={13} />
             </button>
             <div className="pointer-events-none absolute bottom-full left-0 z-10 mb-1.5 hidden w-60 rounded-lg bg-panel2 p-2 text-[11px] leading-4 text-muted ring-1 ring-edge group-hover:block">
-              像跟 AI 输入 prompt 一样书写；<span className="text-accent">点瀑布流图片</span> 在光标处插入参考图，或输入 <span className="text-accent">@图名</span>（空格/标点后自动识别）。<span className="text-accent">长按任意图片</span>四周会出现<span className="text-accent">维度环</span>，点环上扇区即可把该维度加入创作板（创作板未打开会自动打开）；无维度数据的图会提示先右键反推。
+              像跟 AI 输入 prompt 一样书写；<span className="text-accent">点瀑布流图片</span>，有维度数据时打开维度环，仅添加所选维度，不自动插入参考图；无维度数据时插入参考图。也可输入 <span className="text-accent">@图名</span> 插入参考图（空格/标点后自动识别）。<span className="text-accent">长按任意图片</span>四周会出现<span className="text-accent">维度环</span>，点环上扇区即可把该维度加入创作板（创作板未打开会自动打开）；无维度数据的图会提示先右键反推。
             </div>
           </div>
           <select aria-label="生成媒体" value={isVideo ? "video" : "image"}

@@ -371,6 +371,7 @@ fn empty_asset(id: String) -> Asset {
         file_mtime: None,
         generation_session_id: None,
         reference_count: 0,
+        library_hidden: false,
     }
 }
 
@@ -642,6 +643,22 @@ pub async fn delete_asset(
     tokio::task::spawn_blocking(move || db.delete_asset(&id))
         .await
         .map_err(|e| AppError::Other(e.to_string()))??;
+    let _ = app.emit("projects://changed", ());
+    let _ = app.emit("library://assets-changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_canvas_asset_library_visibility(
+    app: AppHandle,
+    db: State<'_, Arc<Database>>,
+    project_id: String,
+    asset_id: String,
+    visible: bool,
+) -> Result<(), AppError> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || db.set_canvas_asset_library_visibility(&project_id, &asset_id, visible))
+        .await.map_err(|e| AppError::Other(e.to_string()))??;
     let _ = app.emit("projects://changed", ());
     let _ = app.emit("library://assets-changed", ());
     Ok(())

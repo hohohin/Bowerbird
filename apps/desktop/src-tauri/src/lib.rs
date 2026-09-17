@@ -449,6 +449,7 @@ pub fn run() {
             commands::library::delete_folder,
             commands::library::delete_asset,
             commands::library::delete_asset_with_mode,
+            commands::library::set_canvas_asset_library_visibility,
             commands::library::reveal_asset_folder,
             commands::library::move_assets_to_folder,
             commands::library::search_assets,

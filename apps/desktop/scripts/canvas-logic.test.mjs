@@ -19,7 +19,7 @@ import {
 
 test("new material snaps to the stationary material edge", () => {
   const result = snapCanvasRect(
-    { x: 109, y: 20, width: 80, height: 60 },
+    { x: 109, y: 40, width: 80, height: 20 },
     [{ id: "first", order: 1, rect: { x: 0, y: 0, width: 100, height: 100 } }],
   );
   assert.equal(result.x, 100);
@@ -51,11 +51,56 @@ test("equal-distance snap prefers the material that entered first", () => {
 
 test("material outside the threshold is not pulled across the canvas", () => {
   const result = snapCanvasRect(
-    { x: 130, y: 10, width: 60, height: 60 },
+    { x: 130, y: 40, width: 60, height: 10 },
     [{ id: "first", order: 1, rect: { x: 0, y: 0, width: 100, height: 80 } }],
   );
   assert.equal(result.x, 130);
   assert.deepEqual(result.guides, []);
+});
+
+test("spaced horizontal and vertical cards align both edges without closing the gap", () => {
+  const anchors = [{ id: "anchor", order: 1, rect: { x: 0, y: 0, width: 100, height: 80 } }];
+  assert.deepEqual(snapCanvasRect({ x: 500, y: 18, width: 100, height: 80 }, anchors), {
+    x: 500, y: 0, guides: [{ axis: "y", position: 0 }, { axis: "y", position: 80 }],
+  });
+  assert.deepEqual(snapCanvasRect({ x: 18, y: 500, width: 100, height: 80 }, anchors), {
+    x: 0, y: 500, guides: [{ axis: "x", position: 0 }, { axis: "x", position: 100 }],
+  });
+});
+
+test("snap toggle preserves free placement and removes all guides", () => {
+  const moving = { x: 110, y: 12, width: 100, height: 80 };
+  assert.deepEqual(snapCanvasRect(moving, [{ id: "anchor", order: 1, rect: { x: 0, y: 0, width: 100, height: 80 } }], { enabled: false }), {
+    x: 110, y: 12, guides: [],
+  });
+});
+
+test("snap tolerance and alignment search distance remain constant on screen", () => {
+  const anchors = [{ id: "anchor", order: 1, rect: { x: 0, y: 0, width: 100, height: 80 } }];
+  for (const zoom of [0.1, 0.5, 1, 2.4]) {
+    const moving = { x: 500 / zoom, y: 23 / zoom, width: 100, height: 80 };
+    assert.equal(snapCanvasRect(moving, anchors, { zoom }).y, 0);
+    assert.equal(snapCanvasRect({ ...moving, y: 25 / zoom }, anchors, { zoom }).y, 25 / zoom);
+    assert.deepEqual(snapCanvasRect({ ...moving, x: 100 + 601 / zoom }, anchors, { zoom }).guides, []);
+  }
+});
+
+test("different sizes show only edges that actually align", () => {
+  const result = snapCanvasRect({ x: 500, y: 18, width: 100, height: 60 }, [
+    { id: "anchor", order: 1, rect: { x: 0, y: 0, width: 100, height: 100 } },
+  ]);
+  assert.deepEqual(result.guides, [{ axis: "y", position: 0 }]);
+});
+
+test("horizontal and vertical alignment can use different stationary cards", () => {
+  const result = snapCanvasRect({ x: 18, y: 20, width: 100, height: 80 }, [
+    { id: "below", order: 1, rect: { x: 0, y: 500, width: 100, height: 80 } },
+    { id: "right", order: 2, rect: { x: 500, y: 0, width: 100, height: 80 } },
+  ]);
+  assert.deepEqual(result, { x: 0, y: 0, guides: [
+    { axis: "x", position: 0 }, { axis: "x", position: 100 },
+    { axis: "y", position: 0 }, { axis: "y", position: 80 },
+  ] });
 });
 
 test("hover grouping chooses the topmost visible target", () => {
@@ -126,7 +171,7 @@ test("moving a marquee selection preserves its internal layout", () => {
   );
 });
 
-test("one-second internal hover creates a folder at the stationary target", () => {
+test("confirmed internal grouping creates a folder at the stationary target", () => {
   const nodes = [
     { kind: "asset", id: "fixed", asset: { id: "a" }, x: 20, y: 30, width: 100, height: 90, order: 1 },
     { kind: "asset", id: "moving", asset: { id: "b" }, x: 200, y: 220, width: 100, height: 90, order: 2 },
@@ -203,6 +248,15 @@ test("off-screen control cards center inside the unobscured viewport at current 
   assert.equal(next.pan.x + (card.x + card.width / 2) * next.zoom, 234);
   assert.equal(next.pan.y + (card.y + card.height / 2) * next.zoom, 222);
   assert.equal(canvasViewForNewCard(card, viewport, next.pan, next.zoom), null);
+});
+
+test("submission focus centers an already visible card without zooming in", () => {
+  const card = { x: 100, y: 100, width: 260, height: 148 };
+  const viewport = { x: 24, y: 72, width: 752, height: 504 };
+  const next = canvasViewForNewCard(card, viewport, { x: 0, y: 0 }, 1, true);
+  assert.equal(next.zoom, 1);
+  assert.equal(next.pan.x + (card.x + card.width / 2) * next.zoom, 400);
+  assert.equal(next.pan.y + (card.y + card.height / 2) * next.zoom, 324);
 });
 
 test("large control cards zoom out to fit and respect the canvas zoom minimum", () => {
