@@ -192,7 +192,7 @@ try {
   await page.locator('.canvas-source-panel [data-asset-id="existing"]').click();
   await at('pick-prompt'); await page.getByRole('group',{name:'可选维度环'}).waitFor(); await notReady();
   await page.waitForFunction(()=>window.calls.filter(c=>c.command==='resize_source_browser').at(-1)?.args.visible===false);
-  const ringOpenCount=await page.evaluate(()=>window.calls.filter(c=>c.command==='open_source_browser'||c.command==='navigate_source_browser').length);
+  const ringOpenCount=await page.evaluate(()=>window.calls.filter(c=>['open_source_browser','navigate_source_browser','reload_source_browser'].includes(c.command)).length);
   await spotlightContains('[data-dim="反推提示词"]');
   await page.screenshot({path:'.tmp/onboarding-designer-ring.png'});
   assert.equal(await page.evaluate(()=>window.calls.some(c=>c.command==='codex_describe_asset')),false);
@@ -205,10 +205,8 @@ try {
   await page.getByText('所选的「反推提示词」维度已经添加到了对话框。你可以继续补充创作需求。',{exact:true}).waitFor();
   await page.locator('.caption-ring-svg').waitFor({state:'hidden'});
   await page.waitForFunction(()=>window.calls.filter(c=>c.command==='resize_source_browser').at(-1)?.args.visible===true);
-  assert.equal(await page.evaluate(()=>window.calls.filter(c=>['navigate_source_browser','reload_source_browser'].includes(c.command)).length),ringNavigations);
   await spotlightContains('[data-onboarding-composer]');
-  await page.waitForFunction(()=>window.calls.filter(c=>c.command==='resize_source_browser').at(-1)?.args.visible===true);
-  assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.command==='open_source_browser'||c.command==='navigate_source_browser').length),ringOpenCount,'ring dismissal restores the same webview without navigation');
+  assert.equal(await page.evaluate(()=>window.calls.filter(c=>['open_source_browser','navigate_source_browser','reload_source_browser'].includes(c.command)).length),ringOpenCount,'ring dismissal restores the same webview without navigation');
   await page.screenshot({path:'.tmp/onboarding-designer-prompt-added.png'});
   await next().click(); await at('more-uses'); await ready();
   await page.getByText('这里还有更多使用方法，一定要试试哦！',{exact:true}).waitFor();
