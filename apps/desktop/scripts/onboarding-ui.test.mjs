@@ -135,6 +135,7 @@ try {
   assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.command==='plugin:dialog|open').at(-1).args.options.defaultPath),'C:/fixture');
   await page.screenshot({path:'.tmp/onboarding-designer-scope.png'});
   await button('上一步').click(); await at('folder'); await notReady();
+  assert.equal(await page.getByText(/回看/).count(),0);
   await next().click(); await at('source-scope'); await ready();
   await next().click(); await at('open-explore'); await notReady();
   await button('探索').click(); await at('explore'); await notReady();
@@ -256,7 +257,7 @@ try {
   assert.deepEqual(await page.evaluate(()=>window.lesson.getState().guide.completedRoles),['designer']);
   assert.equal(await page.locator('.onboarding-login-hint').count(),0);
   await page.evaluate(()=>window.store.setState({cloudAuth:{logged_in:false,cloud_available:true}}));
-  await page.evaluate(()=>window.lesson.getState().open());
+  await page.evaluate(()=>window.lesson.getState().show('welcome'));
   await button('我是视频编导').click(); await ready(); await next().click();
   await pick('导入图片'); await ready(); await next().click(); await at('script');
   await editor.fill('镜头一：产品居中，镜头缓慢推进。\n镜头二：近景展示包装，保持柔和侧光。');
@@ -293,7 +294,13 @@ try {
   await button('继续使用').click(); await page.reload();
   assert.equal(await page.locator('.onboarding-resume').count(),0);
   assert.equal(await page.evaluate(()=>window.lesson.getState().guide.completedRoles.length),3);
-  await page.evaluate(()=>window.lesson.getState().open()); await button('我是设计师').click();
+  const priorProjects = await page.evaluate(()=>window.store.getState().projects.map(p=>p.id));
+  await page.evaluate(()=>window.lesson.getState().open());
+  assert.deepEqual(await page.evaluate(()=>window.lesson.getState().guide), {version:2,role:null,status:'new',sessions:{},completedRoles:[]});
+  assert.deepEqual(await page.evaluate(()=>JSON.parse(localStorage.getItem('bowerbird.onboarding.roles.v2'))), {version:2,role:null,status:'new',sessions:{},completedRoles:[]});
+  assert.deepEqual(await page.evaluate(()=>window.store.getState().projects.map(p=>p.id)), priorProjects);
+  assert.equal(await page.getByText(/已完成实操|进度已保留|回看/).count(),0);
+  await button('我是设计师').click();
   await at('create-project'); await button('新建创作').click(); await at('folder');
   await button('稍后继续').click(); await page.locator('.onboarding-resume').waitFor();
   await button('测试登录入口').click(); await page.locator('.onboarding-resume').waitFor({state:'hidden'});
@@ -324,7 +331,8 @@ try {
   await page.screenshot({path:'.tmp/onboarding-practice-narrow.png'});
   assert.equal(await page.getByRole('dialog').evaluate(el=>el.scrollWidth<=el.clientWidth),true);
   await page.setViewportSize({width:1600,height:1000});
-  await button('我是设计师').click(); await at('folder');
+  await button('我是设计师').click(); await at('create-project'); await notReady();
+  await button('新建创作').click(); await at('folder'); await notReady();
   const late=await page.evaluate(async()=>{
     const {beginOnboardingOperation}=await import('/src/lib/onboardingStore.ts');
     window.lateFolder=beginOnboardingOperation('folder',window.store.getState().activeProjectId);
@@ -349,7 +357,7 @@ try {
   await button('跳过此步').click(); await at('ready-to-create');
   await button('跳过此步').click();
   await page.evaluate(()=>window.lesson.getState().open());
-  await page.getByText('已走完 · 含跳过步骤').waitFor();
+  assert.equal(await page.getByText('已走完 · 含跳过步骤').count(),0);
   await button('我是设计师').click(); await at('create-project');
   await button('跳过此步').click(); await at('folder');
   assert.equal(await page.evaluate(()=>window.store.getState().activeProjectId),null);

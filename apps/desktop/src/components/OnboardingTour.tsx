@@ -250,7 +250,7 @@ export function OnboardingTour() {
       </>}
       {!onProject && <button className="app-modal-button" onClick={() => show("welcome")}>返回身份页并继续项目</button>}
       {onProject && <>
-        {step.scene !== "more-uses" && <p role="status">{reviewing ? "正在回看此步，点击下一步继续。" : session.ready ? step.scene === "workspace" || step.scene === "source-scope" ? "了解后继续下一步。" : "已检测到本步操作完成，可以继续。" : designer ? "请在界面中完成这一步操作。" : "完成上面的实际操作后，才能继续。"}</p>}
+        {step.scene !== "more-uses" && <p role="status">{reviewing ? "点击下一步继续。" : session.ready ? step.scene === "workspace" || step.scene === "source-scope" ? "了解后继续下一步。" : "已检测到本步操作完成，可以继续。" : designer ? "请在界面中完成这一步操作。" : "完成上面的实际操作后，才能继续。"}</p>}
         {(!designer || reviewing || ["source-scope", "expand-source", "pick-prompt", "more-uses"].includes(step.scene)) && <button className="app-modal-button is-primary" disabled={!session.ready && !reviewing} onClick={() => void nextStep()}>{session.step === steps.length - 1 ? "完成这条路线" : "下一步"}</button>}
       </>}
       {error && <p role="alert" className="text-red-400">{error}</p>}

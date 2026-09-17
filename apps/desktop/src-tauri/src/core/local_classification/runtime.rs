@@ -13,14 +13,103 @@ use tokio::process::{Child, Command};
 use super::data::{Label, Prediction};
 
 pub const PACK_ID: &str = "qwen35-08b-b10809-v1";
-pub const DOWNLOAD_BYTES: u64 = 755911809;
+const MODEL_BYTES: u64 = 532517120 + 204987232;
 const REV: &str = "6ab461498e2023f6e3c1baea90a8f0fe38ab64d0";
 const MODEL_HASH: &str = "bd258782e35f7f458f8aced1adc053e6e92e89bc735ba3be89d38a06121dc517";
 const PROJ_HASH: &str = "56e4c6cfe73b0c82e3e82bc518d7591997e61d81f723fc41a586f4fa69ea2453";
-const RUNTIME_HASH: &str = "9df3158ed228a641a4b127942d7f459f24c9e13f04682659d05c00c80099b6b5";
+pub const UNSUPPORTED_MESSAGE: &str =
+    "本地模型包支持 Windows x64、macOS 13.3+（Intel / Apple Silicon）";
+
+#[derive(Clone, Copy)]
+struct RuntimePack {
+    archive: &'static str,
+    sha256: &'static str,
+    bytes: u64,
+    directory: &'static str,
+    server: &'static str,
+}
+
+fn runtime_pack(os: &str, arch: &str) -> Option<RuntimePack> {
+    match (os, arch) {
+        ("windows", "x86_64") => Some(RuntimePack {
+            archive: "llama-b10809-bin-win-cpu-x64.zip",
+            sha256: "9df3158ed228a641a4b127942d7f459f24c9e13f04682659d05c00c80099b6b5",
+            bytes: 18407457,
+            directory: "runtime",
+            server: "llama-server.exe",
+        }),
+        ("macos", "x86_64") => Some(RuntimePack {
+            archive: "llama-b10809-bin-macos-x64.tar.gz",
+            sha256: "13b34aa8a5d87341a21065a83f54a8167e1aaa6fe0d66065de01632a1ed64be6",
+            bytes: 11175330,
+            directory: "runtime-macos-x64",
+            server: "llama-b10809/llama-server",
+        }),
+        ("macos", "aarch64") => Some(RuntimePack {
+            archive: "llama-b10809-bin-macos-arm64.tar.gz",
+            sha256: "7d692df9e1e386e62f1c12b843903218041e6cd74c9415aa39a7ed3176f9eaa2",
+            bytes: 11123196,
+            directory: "runtime-macos-arm64",
+            server: "llama-b10809/llama-server",
+        }),
+        _ => None,
+    }
+}
+
+fn current_pack() -> Result<RuntimePack, String> {
+    // Both official Mac archives target macOS 13.3; avoid downloading an unusable pack.
+    #[cfg(target_os = "macos")]
+    {
+        static COMPATIBLE: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
+            std::process::Command::new("/usr/bin/sw_vers")
+                .arg("-productVersion")
+                .output()
+                .is_ok_and(|output| {
+                    output.status.success()
+                        && mac_version_supported(&String::from_utf8_lossy(&output.stdout))
+                })
+        });
+        if !*COMPATIBLE {
+            return Err(UNSUPPORTED_MESSAGE.into());
+        }
+    }
+    runtime_pack(std::env::consts::OS, std::env::consts::ARCH)
+        .ok_or_else(|| UNSUPPORTED_MESSAGE.into())
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn mac_version_supported(version: &str) -> bool {
+    let mut parts = version.trim().split('.');
+    match (
+        parts.next().and_then(|v| v.parse::<u32>().ok()),
+        parts.next().and_then(|v| v.parse::<u32>().ok()),
+    ) {
+        (Some(major), Some(minor)) => (major, minor) >= (13, 3),
+        _ => false,
+    }
+}
 
 pub fn supported() -> bool {
-    cfg!(all(windows, target_arch = "x86_64"))
+    current_pack().is_ok()
+}
+
+pub fn download_bytes() -> u64 {
+    current_pack().map_or(0, |pack| MODEL_BYTES + pack.bytes)
+}
+
+fn executable(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        return path
+            .metadata()
+            .is_ok_and(|m| m.permissions().mode() & 0o111 != 0);
+    }
+    #[cfg(not(unix))]
+    true
 }
 
 async fn cancellable<T>(
@@ -46,8 +135,8 @@ fn hidden(command: &mut Command) {
 }
 
 pub fn installed(root: &Path) -> bool {
-    root.join("ready.json").is_file()
-        && root.join("runtime/llama-server.exe").is_file()
+    current_pack().is_ok_and(|pack| executable(&root.join(pack.directory).join(pack.server)))
+        && root.join("ready.json").is_file()
         && root.join("model.gguf").is_file()
         && root.join("mmproj.gguf").is_file()
 }
@@ -153,43 +242,53 @@ pub async fn install(
     cancel: &AtomicBool,
     progress: impl Fn(&str, u64, u64),
 ) -> Result<(), String> {
-    if !supported() {
-        return Err("此本地模型包目前支持 Windows x64".into());
-    }
+    let pack = current_pack()?;
     tokio::fs::create_dir_all(root)
         .await
         .map_err(|e| e.to_string())?;
     let host = format!("https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/{REV}");
-    for (url,name,hash,size) in [
-        (format!("{host}/Qwen3.5-0.8B-Q4_K_M.gguf"),"model.gguf",MODEL_HASH,532517120),
-        (format!("{host}/mmproj-F16.gguf"),"mmproj.gguf",PROJ_HASH,204987232),
-        ("https://github.com/ggml-org/llama.cpp/releases/download/b10809/llama-b10809-bin-win-cpu-x64.zip".into(),"runtime.zip",RUNTIME_HASH,18407457),
+    for (url, name, hash, size) in [
+        (
+            format!("{host}/Qwen3.5-0.8B-Q4_K_M.gguf"),
+            "model.gguf",
+            MODEL_HASH,
+            532517120,
+        ),
+        (
+            format!("{host}/mmproj-F16.gguf"),
+            "mmproj.gguf",
+            PROJ_HASH,
+            204987232,
+        ),
     ] {
-        download(root,&url,name,hash,size,cancel,&progress).await?;
+        download(root, &url, name, hash, size, cancel, &progress).await?;
     }
+    // Keep the Windows cache name compatible with existing installations.
+    let archive = if cfg!(windows) {
+        "runtime.zip"
+    } else {
+        pack.archive
+    };
+    let url = format!(
+        "https://github.com/ggml-org/llama.cpp/releases/download/b10809/{}",
+        pack.archive
+    );
+    download(
+        root,
+        &url,
+        archive,
+        pack.sha256,
+        pack.bytes,
+        cancel,
+        &progress,
+    )
+    .await?;
     if cancel.load(Ordering::Relaxed) {
         return Err("已停止下载".into());
     }
-    // The archive is pinned and verified before extraction; use the Windows system binary.
-    let runtime = root.join("runtime");
-    tokio::fs::create_dir_all(&runtime)
-        .await
-        .map_err(|e| e.to_string())?;
-    let system = std::env::var_os("SystemRoot").ok_or("找不到 Windows 系统目录")?;
-    let mut command = Command::new(PathBuf::from(system).join("System32/tar.exe"));
-    hidden(&mut command);
-    let output = command
-        .arg("-xf")
-        .arg(root.join("runtime.zip"))
-        .arg("-C")
-        .arg(&runtime)
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(|e| format!("运行时解压失败：{e}"))?;
-    if !output.status.success() || !runtime.join("llama-server.exe").is_file() {
-        return Err("运行时解压失败，请检查磁盘空间后重试".into());
+    extract_runtime(root, archive, pack).await?;
+    if cancel.load(Ordering::Relaxed) {
+        return Err("已停止下载".into());
     }
     tokio::fs::write(
         root.join("THIRD-PARTY-NOTICES.txt"),
@@ -200,6 +299,36 @@ pub async fn install(
     tokio::fs::write(root.join("ready.json"), json!({"pack":PACK_ID}).to_string())
         .await
         .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+async fn extract_runtime(root: &Path, archive: &str, pack: RuntimePack) -> Result<(), String> {
+    // The archive is pinned and verified before extraction. Preserve dylib links and modes.
+    let runtime = root.join(pack.directory);
+    tokio::fs::create_dir_all(&runtime)
+        .await
+        .map_err(|e| e.to_string())?;
+    let tar = if cfg!(windows) {
+        let system = std::env::var_os("SystemRoot").ok_or("找不到 Windows 系统目录")?;
+        PathBuf::from(system).join("System32/tar.exe")
+    } else {
+        PathBuf::from("/usr/bin/tar")
+    };
+    let mut command = Command::new(tar);
+    hidden(&mut command);
+    let output = command
+        .arg("-xf")
+        .arg(root.join(archive))
+        .arg("-C")
+        .arg(&runtime)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(|e| format!("运行时解压失败：{e}"))?;
+    if !output.status.success() || !executable(&runtime.join(pack.server)) {
+        return Err("运行时解压失败，请检查磁盘空间后重试".into());
+    }
     Ok(())
 }
 
@@ -228,7 +357,8 @@ impl Server {
             .map_err(|e| e.to_string())?
             .port();
         let key = uuid::Uuid::new_v4().to_string();
-        let mut command = Command::new(root.join("runtime/llama-server.exe"));
+        let pack = current_pack()?;
+        let mut command = Command::new(root.join(pack.directory).join(pack.server));
         hidden(&mut command);
         let child = command
             .arg("-m")
@@ -428,6 +558,83 @@ pub fn image_data(path: &Path, library: &Path) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mac_runtime_requires_its_deployment_target() {
+        for version in ["13.3", "13.3.1", "14.0", "26.6.2\n"] {
+            assert!(mac_version_supported(version));
+        }
+        for version in ["12.7", "13.2.1", "", "unknown"] {
+            assert!(!mac_version_supported(version));
+        }
+    }
+
+    #[test]
+    fn platform_packs_keep_windows_compatible_and_mac_architectures_separate() {
+        let windows = runtime_pack("windows", "x86_64").unwrap();
+        assert_eq!(windows.directory, "runtime");
+        assert_eq!(windows.server, "llama-server.exe");
+        assert_eq!(MODEL_BYTES + windows.bytes, 755911809);
+        let intel = runtime_pack("macos", "x86_64").unwrap();
+        let arm = runtime_pack("macos", "aarch64").unwrap();
+        assert_ne!(intel.directory, arm.directory);
+        assert_ne!(intel.archive, arm.archive);
+        assert_ne!(intel.sha256, arm.sha256);
+        assert_eq!(MODEL_BYTES + intel.bytes, 748679682);
+        assert_eq!(MODEL_BYTES + arm.bytes, 748627548);
+        assert!(runtime_pack("linux", "x86_64").is_none());
+        assert!(runtime_pack("windows", "aarch64").is_none());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn mac_archive_preserves_executable_and_dylib_links_in_paths_with_spaces() {
+        use std::os::unix::fs::PermissionsExt;
+        let root =
+            std::env::temp_dir().join(format!("bowerbird 模型 test {}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let pack = current_pack().unwrap();
+        let archive = std::fs::File::create(root.join(pack.archive)).unwrap();
+        let encoder = flate2::write::GzEncoder::new(archive, flate2::Compression::default());
+        let mut builder = tar::Builder::new(encoder);
+        for (name, bytes, mode) in [
+            (pack.server, &b"#!/bin/sh\nexit 0\n"[..], 0o755),
+            ("llama-b10809/libtest.0.dylib", &b"fixture"[..], 0o644),
+        ] {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(bytes.len() as u64);
+            header.set_mode(mode);
+            header.set_cksum();
+            builder.append_data(&mut header, name, bytes).unwrap();
+        }
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Symlink);
+        header.set_size(0);
+        header.set_mode(0o777);
+        builder
+            .append_link(&mut header, "llama-b10809/libtest.dylib", "libtest.0.dylib")
+            .unwrap();
+        builder.into_inner().unwrap().finish().unwrap();
+        extract_runtime(&root, pack.archive, pack).await.unwrap();
+        let server = root.join(pack.directory).join(pack.server);
+        assert!(executable(&server));
+        assert_eq!(
+            std::fs::read(root.join(pack.directory).join("llama-b10809/libtest.dylib")).unwrap(),
+            b"fixture"
+        );
+        for name in ["ready.json", "model.gguf", "mmproj.gguf"] {
+            std::fs::write(root.join(name), "fixture").unwrap();
+        }
+        assert!(installed(&root));
+        std::fs::set_permissions(&server, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(!installed(&root));
+        std::fs::remove_file(&server).unwrap();
+        assert!(extract_runtime(&root, "missing.tar.gz", pack)
+            .await
+            .is_err());
+        assert!(!installed(&root));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[tokio::test]
     async fn cancelled_network_wait_returns_without_waiting_for_timeout() {

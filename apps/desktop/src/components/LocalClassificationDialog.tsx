@@ -59,8 +59,8 @@ export function LocalClassificationDialog({ onClose }: { onClose: () => void }) 
       <LearningHint topic="classification" />
       {error && <p role="alert" className="text-red-400">{error}</p>}
       <section className="rounded border border-edge bg-panel2 p-3 space-y-3">
-        <p>{status?.installed ? "本地模型已安装 · 无需账号或积分" : "首次下载约 756 MB，安装后可离线使用。"}</p>
-        {status && !status.supported && <p className="text-muted">此模型包目前支持 Windows x64。</p>}
+        <p>{status?.installed ? "本地模型已安装 · 无需账号或积分" : "首次下载约 750 MB，安装后可离线使用。"}</p>
+        {status && !status.supported && <p className="text-muted">此模型包支持 Windows x64、macOS 13.3+（Intel / Apple Silicon）。</p>}
         <div className="flex flex-wrap gap-2">
           {!status?.installed && <button className="app-modal-button" disabled={!status?.supported || busy} onClick={() => void action(() => local.start({ install: true }))}>下载本地模型</button>}
           {status?.installed && <>

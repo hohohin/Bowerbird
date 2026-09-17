@@ -2,6 +2,26 @@
 
 本目录记录 Mac 上的本地开发、运行和未签名构建流程。Bowerbird 使用 canonical Tauri / React / Rust 源码，不维护 macOS override。构建架构以 `rustc -vV` 的 host 为准；Intel 为 `x86_64-apple-darwin`，Apple Silicon 原生工具链为 `aarch64-apple-darwin`。
 
+## 2026-09-17 引导入口统一存档重包
+
+本轮统一设置重开引导与首次进入：重置身份进度和完成标记，从身份选择、第一步开始；原项目及素材保留，暂停后继续仍恢复当前步骤，不再显示回看提示。同时存档本地分类 Mac 运行时、微信登录回流及固定 DMG 安装布局。
+
+验证：引导契约 **14/14**、三身份引导及本地分类两组 Chrome 合成 IPC 界面回归、TypeScript/Vite 通过；Rust 全量首次 **362 passed / 1 failed / 2 ignored**，唯一失败为沙箱禁止测试绑定本机端口，放行后该项 **1/1** 通过，合计 **363 passed / 2 ignored**。未执行真实 OAuth、真实用户库操作或 Apple Silicon 验收；保留既有编译警告。
+
+产物：`macOS/dist/Bowerbird_26.9.17_x64-onboarding-installer.dmg`，**86,320,119 bytes**，SHA-256 `5e3af307002edc5ef49a9aa0a86e4ecacc5f48b1d1256fc3013a1f4401d6dcc5`；同目录附 `.sha256`，旧包保留。release 构建、67 个包内资源逐文件匹配、413 个构建输入指纹、26.9.17 版本/x86_64 架构/协议注册核验通过。DMG 脚本已检查应用逐文件一致性、Applications 目标、背景和布局文件，镜像完整性通过。
+
+构建与测试证据保存在 `macOS/dist/verification/archive-20260917-onboarding/`。本轮只交付本地 Intel 未签名/未公证测试包，不推送或部署服务端，不替换 `/Applications` 中现有应用。
+
+## 2026-09-17 微信登录回流修复
+
+安装布局补包：上一份基础 `hdiutil` 镜像遗漏 Applications 快捷方式及安装提示。现提供 `macOS/dist/Bowerbird_26.9.17_x64-wechat-fix-installer.dmg`（86,320,030 bytes；SHA-256 `fa3ed530dafe4ada9eb2dcfb881885ba9e094c0939d3ca57788c1b1cb58fe304`），应用与上一份修复版逐文件一致，增加 `/Applications` 快捷方式、左右图标布局和中文拖动提示背景。HFS+ 镜像完整性、重新挂载后的图标位置与大小、快捷方式及应用内容检查通过；当前环境不能截图，Finder 背景属性读取失败，因此未将背景实际显示标记为视觉验收通过。`tauri.macos.conf.json` 已配置相同背景与布局；标准打包不可用时可运行 `bash macOS/installer/package-dmg.sh <已构建.app> <新输出.dmg>`，脚本需访问磁盘镜像服务与 Finder，拒绝覆盖已有输出。
+
+主事件循环补接 macOS `RunEvent::Opened`，将系统投递的微信/邮箱登录链接交给既有 Rust 账号处理。此前仅处理启动参数与 single-instance 回调，Mac 扫码后无法进入验证。回调 state 校验、服务端换码、Keychain 持久化和前端通知沿用现有实现。
+
+登录专项 Rust **19/19** 通过，包含 Opened 批量 URL/编码参数保留、非 URL 事件忽略及现有微信/邮箱安全校验。真实微信扫码仍需安装修复版后重新发起验证；测试未读写真实账号或素材库。证据保存在本地 `macOS/dist/verification/wechat-login-20260917/`。
+
+TypeScript/Vite 与 Rust release 构建通过。Tauri DMG 脚本在沙箱中失败后，使用系统 `hdiutil` 从完整 `.app` 目录生成独立未签名 Intel 包 `macOS/dist/Bowerbird_26.9.17_x64-wechat-fix.dmg`（88,339,538 bytes；SHA-256 `5096cfb322990dcdf00d2c7dc3afd27e5b76b42cfb7ce1c2f66ec54d978f39e3`）。完整性校验、只读挂载后应用逐文件对比、x86_64 架构及 `bowerbird` 协议注册检查通过。原 26.9.17 DMG 保留；未替换 `/Applications` 中的应用，未执行真实 OAuth。
+
 ## 2026-09-17 同步 dev 26.9.17
 
 本地 `dev` 已经 7890 代理快进到远端 `8bef9d2`；`mac` 合入该版本，保留 WKWebView 原生取图、系统标题栏、Finder CLI 路径探测和 FFmpeg 适配。新版画板交互、0030 素材库可见性与 v0917 引导资源均已同步；引导保持先画布提示、后完成/登录弹窗，维度环或滑出侧栏出现时原生网页临时隐藏。
@@ -64,7 +84,7 @@ Mac 取图此前直接进入“不支持”分支。现在通过当前 WKWebView
 
 平台边界：
 
-- 本地分类模型运行时、原生 Adobe Illustrator AI 导出仍沿用 dev 的 Windows 实现；Mac 可用图片导入与 PSD 导出。
+- 本地分类源码已于 2026-09-16 支持 macOS 13.3+（Intel / Apple Silicon），尚未纳入此处 26.9.15 安装包；固定包及验证边界见 `dev-doc/LOCAL-CLASSIFICATION.md`。原生 Adobe Illustrator AI 导出仍限 Windows，Mac 可用图片导入与 PSD 导出。
 - Dreamina 在 Mac 上沿用官方 CLI 的凭据存储；Windows 注册表隔离与 NSIS 安装清登录钩子不适用于 Mac，不能宣称 Mac Dreamina 凭据已隔离。
 - 本次不改写真实素材库，不执行付费生成或真实 OAuth。Chrome 合成 IPC 回归不等同于 WKWebView/Finder 真机验收。
 
@@ -159,7 +179,20 @@ pnpm tauri dev
 - Chrome/Chromium 加载 `apps/extension/` 后能连接 `127.0.0.1:39871` 并采集入库；
 - 未安装 AI CLI 时相应功能置灰，应用不崩溃。
 
-## 构建本机架构 app 与未签名 DMG
+## Mac DMG 固定打包与交付流程
+
+本节是后续每次 Mac 打包的操作入口，适用于测试版、热修复版和同版本重包。产品约定见 [PROJECT.md「关键约定」](../PROJECT.md#关键约定)。
+
+### 1. 保持统一安装界面
+
+- 窗口 660 × 400，左侧 `Bowerbird.app`，右侧 `Applications` 快捷方式，目标必须是 `/Applications`。
+- 图标位置分别为 `(180, 190)`、`(480, 190)`；背景使用 [installer/background.png](installer/background.png)，包含方向箭头及中文拖动安装提示。
+- 标准构建读取 `apps/desktop/src-tauri/tauri.macos.conf.json`；独立重打包脚本使用同一背景和位置。修改布局时同步两处。
+- 不交付缺少 Applications 快捷方式或安装提示的基础 DMG。
+
+### 2. 构建或重封装
+
+源码有变化时，完成相关检查后从仓库根目录运行标准构建：
 
 ```bash
 pnpm tauri build --bundles app,dmg
@@ -180,7 +213,24 @@ file apps/desktop/src-tauri/target/release/bundle/macos/Bowerbird.app/Contents/M
 
 应显示与本次 Rust host 匹配的 Mach-O 架构。本阶段不要求 Universal Binary。
 
-构建完成后必须在 Finder 中双击 `.app` 测试，不要只从 Terminal 运行可执行文件；Finder 启动环境更接近用户实际使用，也能暴露 PATH 差异。
+仅调整安装布局，或标准 DMG 阶段失败但 `.app` 已构建通过时，复用该应用，不为重新封装重复编译。使用以下脚本，先把输出文件名替换为本次实际版本与架构：
+
+```bash
+bash macOS/installer/package-dmg.sh \
+  apps/desktop/src-tauri/target/release/bundle/macos/Bowerbird.app \
+  "macOS/dist/Bowerbird_<版本>_<架构>-installer.dmg"
+```
+
+脚本制作 HFS+ 镜像、加入 Applications 快捷方式和背景，通过 Finder 保存图标布局，再转换为只读压缩 DMG；自动检查应用内容一致性、链接目标、`.DS_Store`、镜像完整性并生成 `.sha256`。需要本机磁盘镜像服务和 Finder 可用；沙箱报设备不可用时使用正常权限流程运行该脚本，不改用缺少布局的简包。若 `/Volumes/Bowerbird 安装` 已存在，先确认并推出旧的同名安装镜像。脚本拒绝覆盖已有输出，旧包应保留或归档，再选择新文件名。
+
+### 3. 检查后直接交付
+
+1. 确认版本、实际架构、`bowerbird` 协议注册与本次要求的资源；只重封装时确认包内 `.app` 与输入应用逐文件一致。
+2. 运行 `hdiutil verify <成品.dmg>`；核对 Applications 链接、背景文件和已保存的 `.DS_Store`。新建或修改打包流程时，可只读重新挂载核对布局；已有检查通过后不重复验证。
+3. 在 `macOS/dist/` 保留成品与 SHA-256 校验文件，记录产物路径、大小、哈希及实际检查结果；保留旧版本。未经签名/公证的包如实标注。
+4. **无需截图或录屏验收，也不把 Finder 背景属性读取失败当成交付阻塞。** 基础检查通过即交付安装包链接，说明将 Bowerbird 拖到 Applications；不为获取截图反复挂载、重包。
+
+涉及 Finder 启动环境、登录回调等功能变更时，功能实测与安装包检查分开记录；未执行的真实登录/用户环境验证不得写成已通过。纯安装布局重包不要求重新登录、操作素材库或重复完整功能验收。
 
 ## Codex / Dreamina PATH 排查
 

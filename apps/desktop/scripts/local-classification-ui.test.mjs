@@ -45,6 +45,12 @@ try {
   await page.setViewportSize({ width: 540, height: 900 });
   await page.screenshot({ path: ".tmp/local-classification-light-narrow.png" });
   assert.equal(await dialog.evaluate(el => el.scrollWidth > el.clientWidth + 1), false);
+  await page.evaluate(() => {
+    window.classificationStatus.installed = false;
+    window.classificationStatus.supported = false;
+  });
+  await dialog.getByText("此模型包支持 Windows x64、macOS 13.3+（Intel / Apple Silicon）。", { exact: true }).waitFor();
+  assert.equal(await dialog.getByRole("button", { name: "下载本地模型" }).isDisabled(), true);
   assert.deepEqual(errors, []);
   console.log("local classification UI: install/stop/reopen/create/match/examples/errors/dark/light/narrow passed");
 } finally { await browser.close(); await server.close(); }

@@ -155,6 +155,42 @@ fn forward_auth_callback(app: &tauri::AppHandle, value: &str) {
     });
 }
 
+// macOS delivers custom URL schemes as Opened events, not process arguments.
+#[cfg(target_os = "macos")]
+fn forward_opened_urls(event: tauri::RunEvent, mut forward: impl FnMut(&str)) {
+    if let tauri::RunEvent::Opened { urls } = event {
+        for url in urls {
+            forward(url.as_str());
+        }
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod mac_auth_callback_tests {
+    #[test]
+    fn opened_event_forwards_wechat_and_email_callbacks_without_losing_parameters() {
+        let urls = [
+            "bowerbird://wechat/callback?code=test%2Bcode&state=dt_test",
+            "bowerbird://auth/callback?code=test&state=test",
+        ];
+        let mut forwarded = Vec::new();
+        super::forward_opened_urls(
+            tauri::RunEvent::Opened {
+                urls: urls.iter().map(|url| url.parse().unwrap()).collect(),
+            },
+            |url| forwarded.push(url.to_owned()),
+        );
+        assert_eq!(forwarded, urls);
+    }
+
+    #[test]
+    fn other_app_events_do_not_trigger_login() {
+        super::forward_opened_urls(tauri::RunEvent::Ready, |_| {
+            panic!("non-URL event must not trigger login")
+        });
+    }
+}
+
 pub fn run() {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
@@ -527,6 +563,10 @@ pub fn run() {
             commands::jimeng::dreamina_logout,
             commands::jimeng::dreamina_login_headless,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, _event| {
+            #[cfg(target_os = "macos")]
+            forward_opened_urls(_event, |value| forward_auth_callback(_app, value));
+        });
 }

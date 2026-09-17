@@ -32,7 +32,10 @@ export const useOnboarding = create<{
     try { localStorage.setItem(ONBOARDING_KEY, JSON.stringify(progress)); } catch { /* in-memory session remains usable */ }
     set({ progress });
   },
-  open: () => set({ panel: "welcome" }),
+  open: () => {
+    get().setGuide(freshRoleGuide());
+    set({ panel: "welcome" });
+  },
   show: (panel) => set({ panel }),
 }));
 

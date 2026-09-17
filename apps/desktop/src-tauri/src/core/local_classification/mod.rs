@@ -54,7 +54,7 @@ impl LocalClassifier {
         result.enabled = db.local_enabled().map_err(|e| e.to_string())?;
         result.model = data::MODEL_ID.into();
         if result.download_total == 0 {
-            result.download_total = runtime::DOWNLOAD_BYTES;
+            result.download_total = runtime::download_bytes();
         }
         Ok(result)
     }
@@ -82,7 +82,7 @@ impl LocalClassifier {
         pending_only: bool,
     ) -> Result<(), String> {
         if !runtime::supported() {
-            return Err("本地模型包目前支持 Windows x64".into());
+            return Err(runtime::UNSUPPORTED_MESSAGE.into());
         }
         let guard = self
             .gate

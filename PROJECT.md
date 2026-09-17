@@ -50,11 +50,11 @@
 
 **近期里程碑（只保留最近 3 条；更早的全量历史见 [dev-doc/进展归档.md](dev-doc/进展归档.md)）**
 
+> **Mac 引导入口统一与 26.9.17 存档重包（2026-09-17）：** 设置重开引导统一从身份选择及第一步开始，重置引导记录、保留旧项目和素材，暂停恢复不变，移除回看提示。同步存档 Mac 本地分类运行时、微信登录 Opened 回流及统一 DMG 拖动安装布局。验证与安装包校验结果见 `macOS/README.md`；本次只交付本地 Intel 测试包，不推送或部署服务端。
+
 > **mac 端同步 dev 26.9.17（2026-09-17）：** 经本机 7890 代理同步远端 dev `8bef9d2`，将新版画板交互、素材库可见性与 v0917 引导整合到 mac 分支，保留 WKWebView 原生采集、系统标题栏与 macOS 路径适配。合并前未提交的本地分类修改单独备份，合并后恢复为未提交状态；验证与打包结果见 `macOS/README.md`。
 
 > **新版引导快照、素材可见性与 Windows 26.9.17 存档打包（2026-09-17）：** 等待引导重构任务结束后，纳入初始引导 v0917 的 21 个素材、2 份反推、14 条线程、103 个节点与 81 条连线，保留 3 个仅画板素材及完整布局。新增图片从素材库移除但保留画布、恢复入库与最后实例移除后的自动恢复；同步纳入发送后居中并聚焦会话卡片、创作模式对话框保持展开、图片右键两列菜单与移出文案。SQLite 0030、356 项 Rust、152 项契约、12 组界面回归及 TypeScript/Vite、release/NSIS 构建通过；Tauri/Cargo 版本同步为 26.9.17，源码、资源、测试与文档同次提交。43 个引导资源逐项校验并确认 NSIS 收录，保留独立凭据和每次安装清登录钩子，旧 26.9.16 安装包保留。本次仅本地交付；原生探索网页无法点击仍待定位，未扩大为真机全量验收。产物与边界见本次复核。
-
-> **画板交互、详情续轮与 Windows 26.9.16 存档打包（2026-09-16 启动，09-17 完成）：** 纳入画板层级调整、素材名称设置、分区四角缩放、辅助吸附开关与间隔对齐、拖拽松手确认建组、组内展开及透明素材显示。维度环默认仅插入维度文字；主创作框失焦下沉，续轮在详情底部就地编辑。同步纳入画板侧栏自动收起及收起态账号入口、图片标注按 ID 补查、分层按钮简化，以及引导先画布提示后扫码结束和原生网页浮层避让。Tauri/Cargo 日期版本升至 26.9.16；352 项 Rust、151 项契约、18 组界面回归及 release/NSIS 构建通过，代码、测试、版本与文档同次提交。保留独立凭据及每次安装清登录机制，旧 26.9.15 包保留；仅本地交付，无 VPS/官网变更。原生探索网页无法点击的问题仍待定位，未将浮层避让修正扩大为真机故障全部解决。产物与验收边界见本次复核。
 
 **26.9.17 存档打包复核（2026-09-17，当前本地交付）：** Rust **356 passed / 5 ignored / 11 filtered**（沿用既有媒体工具组过滤，未运行真实 Adobe/模型/交互 ignored 项），画板/路由/引导/探索等契约 **152/152**，**12 组 Chrome 合成 IPC 界面回归**全部通过，覆盖三身份引导、真实随包快照、素材隐藏/恢复和原删除行为、普通/Agent 会话定位、创作框、画板整理/便签/框选/层级/建组及探索。TypeScript/Vite、Rust release 和 x64 NSIS 构建通过，保留既有 Rust 和大 chunk 警告。构建输入指纹保持一致，43 个引导资源与 release 目录逐项匹配且 NSIS 收录完整，安装清登录钩子保留。交付 Windows/dist/Bowerbird_26.9.17_x64-setup.exe，**83051794 bytes**，SHA-256 **AC570FD9C4F96B452D4B0F9F776EF221CE5E23888386D8A4DC417FA54325477F**，校验文件同目录；旧 26.9.16 包原位保留（SHA-256 FD6CEF1955606A24598771E3120CB1F7BA2C08E59AAD1A9747EC6AA23085119A）。代码、资源、版本、测试和文档同次存档，日志及指纹位于本地 .tmp/repack-20260917/，不入 Git。独立凭据及安装钩子源码未变，安装/重装/失败重试沿用 9 月 15 日隔离验证；本次未运行真实安装、OAuth、原生 WebView2 或模型，不写真实账号和素材库。原生探索网页无法点击仍待定位；本轮无 VPS/Edge/数据库服务部署及官网下载更新。
 
@@ -111,6 +111,10 @@
 [x] 通用云端 Agent Harness 专项 U4：runtime 兼容、真实 18-case 文本门禁、本地全回归、test-only 远端 `0047`–`0050`/Edge/VPS、零 provider smoke、legacy/DSH 同 case 真实图片与 crash/re-claim 均已通过；actual paired no-regression PASS。普通账号与 HTML 继续保持 legacy，公开迁移留到 U6 决策。
 
 ## 关键约定
+
+**2026-09-17 Mac DMG 固定交付规范（后续打包必须遵守）：** 所有 Mac DMG，包括测试版、热修复版和同版本重包，统一提供拖动安装界面：左侧 `Bowerbird.app`、右侧指向 `/Applications` 的 `Applications` 快捷方式、中间箭头及中文安装提示。禁止交付仅包含 `.app`、缺少安装入口和提示的基础镜像。标准 Tauri 打包沿用 `tauri.macos.conf.json` 的布局；仅重封装已验证应用或标准打包失败时，使用 `macOS/installer/package-dmg.sh`，不得退回直接 `hdiutil -srcfolder .app` 的简包。保留旧交付物，标明真实架构/版本/签名状态，附 SHA-256；以镜像完整性、包内应用一致性、Applications 目标、背景资源及保存的布局为交付检查。**按用户要求，打包验收不需要截图或录屏，不因无法截图/录屏或 Finder 背景属性读取失败而反复重包、阻塞交付**；实际未验证的功能不宣称通过。操作步骤及命令统一见 [macOS/README.md](macOS/README.md#mac-dmg-固定打包与交付流程)。
+
+**2026-09-16 本地分类 Mac 适配：** 同一 Qwen3.5 模型包扩展到 macOS 13.3+ Intel / Apple Silicon，按应用进程架构选择固定版本及 SHA256 的 llama.cpp 运行时；Mac 下载约 749 MB，Windows 约 756 MB。两种 Mac 运行时分目录，权重共用，保留 Windows 安装缓存；沿用 CPU 推理、仅回环服务及原有人工纠正规则。13 项分类回归及界面/TypeScript 检查通过；Intel 真实安装与五次推理完成，但产品图误命中“野生动物”，原负例断言未通过。Apple Silicon 包已校验、原生推理待验。实现与验证边界见 [LOCAL-CLASSIFICATION.md](dev-doc/LOCAL-CLASSIFICATION.md)；源码适配尚未重新打包。
 
 **2026-09-17 图片右键菜单（已纳入 26.9.17 本地安装包）：** 常用/再创作和文件/移出与删除分为两列，按实际菜单尺寸避让窗口边缘；窄窗降为单列，键盘左右切列、上下逐项移动，异步条目及缩放后重新定位。画布移除统一为「从画布移出」，项目移除简写为「移出当前项目」，保留原操作、确认及运行中保护。
 
@@ -262,7 +266,7 @@
 
 15. **codex CLI 隐形（一键安装 + OAuth 登录）**（2026-07-29）：codex CLI 是本机 provider 之一（约定 1：另有即梦与 Bowerbird Cloud），但用户**无需碰终端**——首启引导（[CodexOnboarding.tsx](apps/desktop/src/components/CodexOnboarding.tsx)）从「复制命令让用户去终端跑」升级为 app 内一键执行：step1 `codex_install`（spawn `npm install -g @openai/codex`，逐行进度经 `codex://setup-progress` 流式）+ step2 `codex_login`（spawn `codex login`，codex 自己开浏览器走 ChatGPT OAuth，写 `~/.codex/auth.json`）。后端 spawn 走 `tokio::process::Command`（**不受 Tauri shell scope 限制**，不改 capabilities）。Node/npm 缺失返回 reason，前端引导装 Node。安装/登录成功 emit `codex://health-changed`，App + AssetDetail 各自监听重取 codexHealth（修 AssetDetail 独立 useState 不同步，见踩坑）。Windows 上 npm.cmd 路径常含空格（`C:\Program Files\nodejs`），`npm_command` 用 `raw_arg` 拼 `cmd /S /C ""path" args"`（详见踩坑）。**备选**：[codex/openai_api.rs](apps/desktop/src-tauri/src/codex/openai_api.rs)（OpenAI Images API 生图，API key 路线，未接入主线）——经研究 ChatGPT 订阅额度不对第三方 API 开放、codex CLI 是唯一合法订阅通道，故走 CLI 隐形而非换 provider。
 
-16. **环境状态入口收敛进设置面板 + 扩展心跳连接跟踪（2026-07-31 立，2026-08-15 重构）**：原两级「环境状态 Onboarding」（一级 Onboarding.tsx 三卡片总览 + store `onboardingForceOpen` 跳转二级）**已于 2026-08-15 删除**——codex / 即梦 CLI 状态与引导移入设置「模型设置」、浏览器扩展引导移入「系统设置」直接唤起，二级引导（Codex/Dreamina/Extension Onboarding）关闭即返回设置；**2026-09-11 入门主线更新为项目画板实操**：本地示例项目或自己的图片 → 拖入与移动卡片 → 写目标并选参考/维度 → 用户主动图片生成即完成五步主线；集合通过独立教程覆盖创建、添加素材、按需提炼及保存后选择规范。版本化进度独立保存，可暂停/恢复；先完成准备与实际生成完成分别记录，跳过维度明确标注。账号和模型配置沿原入口按需进行，引导不得自动调用分析/生成；旧用户用一次新版变化介绍，专题说明按需展示。详见 [ONBOARDING.md](dev-doc/ONBOARDING.md)。**扩展连接跟踪不变**：canonical 扩展（[apps/extension/](apps/extension/)）每 15s WS ping；后端 `ExtensionStatus`（last_seen + connected）收任意消息 touch/emit connected、后台 tick 30s 超时 emit disconnected。随包内嵌（tauri resources `../../extension/` → `extension/`，用**目录源**保留子目录结构——map+glob 会拍平子目录致 release 扩展图标加载失败，见踩坑；dev 源码、release resource）。
+16. **环境状态入口收敛进设置面板 + 扩展心跳连接跟踪（2026-07-31 立，2026-08-15 重构）**：原两级「环境状态 Onboarding」（一级 Onboarding.tsx 三卡片总览 + store `onboardingForceOpen` 跳转二级）**已于 2026-08-15 删除**——codex / 即梦 CLI 状态与引导移入设置「模型设置」、浏览器扩展引导移入「系统设置」直接唤起，二级引导（Codex/Dreamina/Extension Onboarding）关闭即返回设置；**2026-09-11 入门主线更新为项目画板实操**：本地示例项目或自己的图片 → 拖入与移动卡片 → 写目标并选参考/维度 → 用户主动图片生成即完成五步主线；集合通过独立教程覆盖创建、添加素材、按需提炼及保存后选择规范。版本化进度独立保存，可暂停/恢复；先完成准备与实际生成完成分别记录，跳过维度明确标注。账号和模型配置沿原入口按需进行，引导不得自动调用分析/生成；旧用户用一次新版变化介绍，专题说明按需展示。**2026-09-17 入口行为更新**：从设置进入入门引导一律按初次进入，重置各身份引导进度与完成标记，从身份选择和第一步开始，保留已有项目/素材；暂停后继续仍恢复当前步骤，不再展示「正在回看此步」提示。详见 [ONBOARDING.md](dev-doc/ONBOARDING.md)。**扩展连接跟踪不变**：canonical 扩展（[apps/extension/](apps/extension/)）每 15s WS ping；后端 `ExtensionStatus`（last_seen + connected）收任意消息 touch/emit connected、后台 tick 30s 超时 emit disconnected。随包内嵌（tauri resources `../../extension/` → `extension/`，用**目录源**保留子目录结构——map+glob 会拍平子目录致 release 扩展图标加载失败，见踩坑；dev 源码、release resource）。
 
 17. **扩展采集统一走浏览器 save_blob + 通用候选管线（2026-07-29）**：canonical 与旧 Windows 版不再分叉——[background.js](apps/extension/background.js) 在浏览器会话内 fetch（继承代理/Cookie/登录态）后，以 `save_blob` metadata + binary WS 上传；桌面 [ws_server.rs](apps/desktop/src-tauri/src/collect/ws_server.rs) → [ingest_from_bytes](apps/desktop/src-tauri/src/core/ingest.rs) 按真实字节 sniff/decode，**禁止退回桌面 reqwest 二次下载作为主路径**（Pinterest/登录态站会回归）。通用候选见 [candidate-utils.js](apps/extension/candidate-utils.js)：`img/currentSrc`、srcset/picture、lazy data-*、CSS background、OG/Twitter、JSON-LD、poster/SVG、open shadow；拖拽 HTML 图片优先，禁止把外层商品页 URL混为图片；Alt 明确目标支持 overlay/CSS/blob/data/canvas。XHS 结构化适配保留为高置信度增强但共用后续管线。安全边界：候选≤100、fetch 45s、图片≤50MiB、HTML fallback≤2MiB且深度1、防循环、Rust 100MP/32768边界、metadata状态机/长度限制、日志 query 脱敏；不绕 closed shadow/跨域 iframe/tainted canvas。真机以 Pinterest + `petcollars.com.au` 商品页通过为验收。
 
@@ -377,6 +381,12 @@
 **画板选择与主动整理（2026-09-06）**：Ctrl/Command + 点击可追加或取消节点选择，Ctrl/Command 框选保留已有选择。节点右键“整理”以当前所选节点为起点（右键未选节点则只取该节点），沿连接方向收集当前可见的后续卡片；素材组成员和 Agent 隐藏提示卡映射到可见容器。按连接层级对齐、留出间距，并整体避开未参与整理的卡片；不移动上游或无关卡片。整理后整组选中，节点/素材组坐标沿用现有画板写入队列持久化；不更改线程、连接、素材归属或执行记录。
 
 ## 踩坑记录
+
+### macOS 微信扫码成功但应用未登录（2026-09-17）
+
+同日安装布局补包：基础 `hdiutil` 镜像只收录 `.app`，遗漏 Applications 快捷方式与拖动安装提示。已新增标准 Mac DMG 背景/布局配置及独立重打包脚本；交付 `macOS/dist/Bowerbird_26.9.17_x64-wechat-fix-installer.dmg`，应用内容与登录修复包一致。成品完整性、Applications 目标、重新挂载后的图标布局检查通过；背景实际显示未完成截图验收。详见 `macOS/README.md`。
+
+桌面原先只从进程参数和 single-instance 回调接收登录链接；macOS 通过 Tauri `RunEvent::Opened` 投递自定义 URL，导致浏览器回流后未进入账号验证。主事件循环现将 macOS Opened 中的 URL 交给既有 `forward_auth_callback`，沿用微信 state 校验、服务端换码、Keychain 保存和前端 auth 事件；Windows/Linux 原路径保留。Mac 登录专项 Rust 回归 **19/19** 通过，含新增 Opened 参数保留及非 URL 事件测试；真实微信扫码尚待修复包实测。
 
 ### macOS GUI 进程 PATH 不含 node → npm/codex 脚本 exit 127（2026-07-29 mac 线实测，2026-09-01 复刻回正典）
 - 现象：release `.app`（Finder/DMG 启动）里点「一键安装 codex CLI」报 `npm 安装失败，exit status 127. env: node: No such file or directory`；codex login / 反推 / 生成同理（codex 也是 node 脚本）。dev（终端 `pnpm tauri dev`）PATH 完整，测不出。
