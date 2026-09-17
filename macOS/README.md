@@ -2,6 +2,19 @@
 
 本目录记录 Mac 上的本地开发、运行和未签名构建流程。Bowerbird 使用 canonical Tauri / React / Rust 源码，不维护 macOS override。构建架构以 `rustc -vV` 的 host 为准；Intel 为 `x86_64-apple-darwin`，Apple Silicon 原生工具链为 `aarch64-apple-darwin`。
 
+## 2026-09-17 同步 dev 26.9.17
+
+本地 `dev` 已经 7890 代理快进到远端 `8bef9d2`；`mac` 合入该版本，保留 WKWebView 原生取图、系统标题栏、Finder CLI 路径探测和 FFmpeg 适配。新版画板交互、0030 素材库可见性与 v0917 引导资源均已同步；引导保持先画布提示、后完成/登录弹窗，维度环或滑出侧栏出现时原生网页临时隐藏。
+
+本次在 Intel Mac 验证：Rust **361 passed / 2 ignored**（无过滤）、前端契约 **151/151**、**14 组 Chrome 合成 IPC 界面回归**、TypeScript/Vite 和 release 构建通过。界面覆盖引导流程/完整快照、双平台标题栏、探索/侧栏、素材库隐藏与恢复、建组/展开、层级、分区缩放、吸附、透明图、创作框及本地分类。真实 WKWebView 取图夹具通过 Cookie/跨域/重定向/分块/错误/超时清理及页面状态保持；真实 Tauri/AppKit 隐藏窗口验证三个标准按钮与主题切换通过。保留已有 Rust 警告和 Vite 大 chunk 提示。
+
+- Intel x86_64 测试包：`macOS/dist/Bowerbird_26.9.17_x64.dmg`，**86,325,439 bytes**；未经 Developer ID 签名/公证。
+- SHA-256：`25b1a2a3674153a8f388f4f2ab8933e4b98a94f1d7d3502a9a31a8da15d613fc`，同目录附 `.sha256`；`hdiutil verify` 通过，旧 26.9.15 DMG 保留。
+- 应用：`apps/desktop/src-tauri/target/release/bundle/macos/Bowerbird.app`；版本、架构、原生取图桥接、Mac 主题权限、**67 个资源文件**（含 43 个 v0917 文件）及 **418 个构建输入指纹**核对通过。
+- 证据：本地 `macOS/dist/verification/sync-dev-20260917/`，包含测试/构建日志、引导截图、源码指纹和产物校验。
+
+合并前七个文件的本地分类适配修改已完整恢复，继续保持未提交，并保留 stash 备份；本次应用按恢复后的工作区构建，因此包含这组适配。该功能的真实模型分类质量仍有已记录的误判，不能将安装/推理和界面回归通过视作准确率验收；详见 `dev-doc/LOCAL-CLASSIFICATION.md`。未操作真实素材库/账号或付费生成，未推送分支或部署服务；完整应用中的真实站点拖放、全屏空间切换及 Apple Silicon 构建未在本轮验收。
+
 ## 2026-09-15 原生 Mac 标题栏
 
 Mac 使用系统原生标题栏：左上角红色关闭、黄色最小化、绿色缩放/全屏，标题由系统居中显示，悬停和失焦外观交给 AppKit。现有 `applyTheme` 同步 Tauri 应用主题；`capabilities/macos-titlebar.json` 仅为 Mac 的 main WebView 授予 `core:app:allow-set-app-theme`，原生标题栏跟随应用浅色/深色设置。前端 Mac 不再渲染自绘标题栏，因此没有右侧重复按钮或多余空白；Windows 保持原来的自绘标题栏。
