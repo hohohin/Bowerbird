@@ -13,10 +13,13 @@ const button = name => page.getByRole('button', {name,exact:true}).last();
 const forward = () => page.locator('.onboarding-lesson header').getByRole('button', {name:'下一步',exact:true});
 const next = () => button('下一步');
 async function at(scene) {
-  await page.waitForFunction(async scene => {
-    const {ONBOARDING_ROUTES} = await import('/src/lib/onboardingRoutes.ts');
+  // Load the module before polling so each readiness check returns a boolean.
+  await page.evaluate(async () => {
+    window.onboardingRoutes = (await import('/src/lib/onboardingRoutes.ts')).ONBOARDING_ROUTES;
+  });
+  await page.waitForFunction(scene => {
     const g = window.lesson.getState().guide;
-    return g.role && ONBOARDING_ROUTES[g.role][g.sessions[g.role].step].scene === scene;
+    return g.role && window.onboardingRoutes[g.role][g.sessions[g.role].step].scene === scene;
   }, scene);
 }
 async function ready() { await page.waitForFunction(() => { const g=window.lesson.getState().guide; return g.sessions[g.role].ready; }); }

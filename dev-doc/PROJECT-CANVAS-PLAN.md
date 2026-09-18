@@ -1,11 +1,8 @@
 # Bowerbird「项目即画板」开发专项计划
 
-> **2026-09-10 视觉规范边界同步：** 视觉规范独立保存，项目只引用用户所选版本；项目删除不能删除规范或把其来源判为项目独有素材。决策见 [PROJECT.md](../PROJECT.md) 约定 26/47，规范契约见 [AGENT-RUNTIME-PLAN.md](AGENT-RUNTIME-PLAN.md) §8。
-> 文档版本：v2.1 · 2026-09-04
-> 决策状态：2026-09-04 自动化审计纠偏已收敛；PB0–PB6 的勾选只代表既有实现证据，当前按 PCU0–PCU6 验收，尚待真实 DOM/Tauri、Windows 真机与升级副本验证
-> 发布状态：用户已明确放弃旧用户可见会话历史的迁移与保留；禁止执行历史 backfill，正式用户库保持零写入，项目、中央资产、文件、计费与底层执行审计仍必须保留
-> 适用范围：桌面端项目、无限画板、画板内创作线程、普通生成、Cloud Agent、项目内详情、任务恢复与旧会话入口退出
-> 替代文档：`CANVAS-SESSION-PLAN.md` v0.8；旧文档只保留为实施与测试证据
+> 状态（2026-09-17）：项目画板、多线程及后续交互已纳入 Windows 26.9.17 本地包；当前验收以 PCU0–PCU6 与 PROJECT.md 为准，真机完整剧本和升级副本对账未全部完成。
+> 当前契约：项目是一块画板；视觉规范独立保存，项目仅引用所选版本；旧用户可见会话不迁移、不 backfill，素材、文件、项目、计费和底层执行审计继续保留。
+> 本页保留数据边界与验收，已删除被替代的 CS 方案和 PB 历史回填执行单。历史实现见 Git。
 
 ---
 
@@ -62,25 +59,9 @@ Bowerbird 的用户侧一级创作对象收敛为“项目”：
 
 新模型的代价是单项目可能积累大量节点，因此线程聚焦、定位、项目活动筛选、性能门槛和必要时的视口裁剪必须进入首版，而不是留给未知未来。
 
-### 1.2 旧专项中可复用的成果
+### 1.2 兼容范围
 
-`CANVAS-SESSION-PLAN.md` v0.8 的 CS0–CS7 已完成自动实现但尚未发布。以下能力继续复用：
-
-- SQLite 节点、边、素材组、视口、普通 generation link 与 Agent link repository。
-- 无边画板、可调素材栏、重复素材实例、边缘吸附、hover 1 秒建组、folder drop 即加入和浅蓝发光。
-- ProseMirror composer、普通生成分支、Agent 安全投影、画板/时间线互相定位。
-- provider session、Agent Run、FeaturePolicy、积分、审批、TTL 与 Tool Gateway 的独立权威边界。
-- 历史 preview、SQLite Online Backup、逐来源账本、幂等重跑、失败隔离和删除后不复活。
-- 真实用户库副本曾完成 ordinary 191/191、Agent 24/24、0 失败、二次全部 skipped；正式库未执行。
-
-以下旧结论已失效：
-
-- 一个项目拥有多个用户可见会话/画板。
-- `project_id=NULL` 的全局画板是长期正式对象。
-- 侧栏“创作”一行对应一块画板。
-- 每个历史 conversation/Run 自动生成独立画板。
-- 删除项目后把画板转为全局创作。
-- `creative_session_id` 同时承担画板根、一级对象和执行归组。
+沿用已有节点/边/组/视口、generation/Agent link、ProseMirror 输入及 provider/计费/审批/TTL 的独立身份。旧 creative session、历史回填与副本演练仅作兼容证据，不恢复侧栏旧会话、不创建全局画板、不执行正式库回填。
 
 ### 1.3 当前发布闸门
 
@@ -264,14 +245,9 @@ PCU0–PCU6 完成前：
 - `GenJob` 与本地 Agent checkpoint 携带 `project_id + thread_id`；旧字段只做兼容读。
 - link 缺失时只能从已有本地执行记录补链，禁止重发 provider 或创建第二个 Run。
 
-### 4.5 旧 `creative_sessions` 的处理原则
+### 4.5 升级边界
 
-旧 0021–0023 尚未进入正式用户库，但已经用于开发副本。PB0 必须把两条路径分开：
-
-1. **正式发布路径**：以 v20 为升级源，落干净的 project canvas/thread schema，不把 `creative_sessions` 暴露为正式业务概念。
-2. **开发 v21–v23 路径**：提供一次转换，或明确要求从 v20 一致性备份重建；不能为了保留临时开发库而让正式模型继续背负错误语义。
-
-选择标准是正式数据安全和最终 schema 清晰度，不以减少临时代码改动为优先。
+SQLite 0021–0023 已承担项目画板 schema；旧开发会话 schema 的兼容识别由数据库迁移实现负责，不再假定用户库停留于 v20。升级只保留必要的派生 UI 兼容，不能删中央资产、文件或执行审计；复制库升级与数量对账仍按 PCU5/PCU6 验收。
 
 ---
 
@@ -286,30 +262,9 @@ PCU0–PCU6 完成前：
 5. Agent create 成功后立即 checkpoint project/thread/launch/run，再补 link；崩溃恢复不得创建第二个 Run。
 6. 结果和用户可见 artifact 先入中央库与项目，再幂等创建原线程节点。
 
-### 5.2 历史迁移 v2
+### 5.2 历史执行保留
 
-迁移从原始 ordinary/Agent 历史重建，不能把旧 v0.8 副本中的 215 个 creative session 当新事实源。
-
-已有项目归属的历史：
-
-- 每个现有项目只创建一块画板。
-- 每个旧 generation conversation 或独立 Agent 来源创建线程；只有稳定 parent/correlation 能证明连续时才合并。
-- 同项目多个旧空间按 `(created_at, stable source id)` 排序，以不重叠网格偏移放入同一画板，来源内部相对坐标不变。
-
-无项目归属的历史：
-
-- 默认创建系统项目“未归档创作”，每个来源成为独立线程和空间区域。
-- dry-run 必须报告预计节点数、画布范围、project/thread 数和渲染基线。
-- 若节点数超过 PB6 已验证上限，不得生成不可用巨型画板；正式执行前按年份确定性分片为“未归档创作 YYYY”，并把规则写进报告。
-
-共同规则：
-
-- 使用新的版本化逐来源账本；旧 v0.8 完成标记不能冒充新契约完成。
-- 资产只引用不复制，坏来源隔离；二次执行全部 skipped。
-- 用户删除项目/线程后完成标记保留，来源不自动复活。
-- 迁移前后 asset、generation conversation、Agent Run、project、thread、node、edge 和 link 全量对账。
-- 正式执行前重新从运行中用户库做 SQLite Online Backup；旧演练副本不能直接晋升。
-- 回滚只切 UI/read path，不删新表、不改低层历史、不触发反向 provider 操作。
+不迁移旧用户可见会话，不执行 backfill，不按历史来源新建“未归档创作”项目。已有执行记录仅用于恢复、审计和安全的 link 补齐，不能借恢复重发 provider。升级前使用 SQLite Online Backup；复制库验收不能冒充正式用户库已验证。
 
 ---
 
@@ -345,103 +300,9 @@ ProjectCanvasShell
 
 ---
 
-## 7. 分阶段任务卡
+## 7. 任务状态
 
-### PB0 — 新契约与迁移路径冻结
-
-- [x] PB0-T1：建立单项目多线程、自由参考复用、普通→Agent→普通、跨 provider 和重试分支 fixture。
-- [x] PB0-T2：冻结 project/thread/node/edge/group/view/link enum、payload schema 与大小上限。
-- [x] PB0-T3：审计正式库与所有 v21–v23 开发副本；正式库当前为 project-canvas v23、尚无 v2 回填账本。
-- [x] PB0-T4：确定正式 migration 落号和开发库转换/重建策略，禁止两套可写事实源。
-- [x] PB0-T5：只读统计 project-owned/unscoped 来源分布，生成历史合并 dry-run。
-- [x] PB0-T6：证明 legacy flag 仍开启且旧 CS7-T6/T7 已暂停。
-
-验收：fixture 仅凭 project/thread/edges/stable execution id 可重放；迁移输入和目标数量可计算；三层身份无歧义。
-
-### PB1 — Project Canvas 数据层
-
-- [x] PB1-T1：落地 project canvas、thread、node、group、edge、view 和 thread links schema。
-- [x] PB1-T2：SQLite/Rust 双层拒绝跨项目关系、非法 thread、端点和环路。
-- [x] PB1-T3：实现全部语义 CRUD 和 project canvas 一对一约束。
-- [x] PB1-T4：实现 provisional project 的事务性 materialize。
-- [x] PB1-T5：实现项目删除保护、线程归档、执行节点隐藏和资产 tombstone。
-- [x] PB1-T6：迁移/复用稳定 node/edge key，证明 replay 不重复。
-
-验收：fresh v20 与选定开发兼容路径通过；一个项目无法创建第二画板；删除项目不删资产、账单或执行审计。
-
-### PB2 — 命令与前端状态改为项目中心
-
-- [x] PB2-T1：新增 project canvas commands/types，旧 creative-session commands 退出可写与导航面，仅保留旧 payload 兼容读。
-- [x] PB2-T2：Zustand 改为 `activeProjectId/focusedThreadId`，移除平行 active session。
-- [x] PB2-T3：切项目前 flush 视口/草稿；后台 job/Run 不因切换取消。
-- [x] PB2-T4：实现线程聚焦、显示全部、未读和项目聚合状态的纯函数测试。
-- [x] PB2-T5：asset detail、通知和后台完成事件定位 project + node。
-- [x] PB2-T6：旧 payload 兼容读；所有新写入必须带 project + thread。
-
-验收：重启、切项目、后台完成和资产反查只定位项目画板；前端不存在两套 active id。
-
-### PB3 — 项目即画板的入口与导航
-
-- [x] PB3-T1：侧栏移除“创作”一级列表；项目项直接打开 `ProjectCanvasShell`。
-- [x] PB3-T2：实现带选择的“新建创作”和忽略选择的“新建空白项目”。
-- [x] PB3-T3：未发生有意义修改不落库；首 prompt 自动标题且手动标题优先。
-- [x] PB3-T4：复用可调素材栏、无边画板、吸附、hover 建组和 folder drop 动效。
-- [x] PB3-T5：项目素材/中央库切换明确，首次拖入时成员与节点原子写入。
-- [x] PB3-T6：统一画板/时间线/项目设置；当时的“视觉设定归项目”已由 2026-09-10 独立规范决策取代。
-- [x] PB3-T7：删除项目提示节点、线程和运行任务影响。
-
-验收：所有创建路径只得到一个项目和一块画板；界面不存在“项目下面再选画板”。
-
-### PB4 — 多线程生成、Agent 与时间线
-
-- [x] PB4-T1：无父 prompt 新建线程；继续、重试、历史轮编辑和跨 provider 沿用原线程。
-- [x] PB4-T2：ordinary job/link/recovery 改带 project/thread，执行协议不变。
-- [x] PB4-T3：Agent create/checkpoint/link/artifact 投影改带 project/thread，故障窗口幂等。
-- [x] PB4-T4：普通→Agent→普通保持同线程和明确父输出。
-- [x] PB4-T5：线程聚焦不影响拖动、组、选择、输入引用或节点命中。
-- [x] PB4-T6：时间线实现当前线程/项目全部活动，并与画板双向定位。
-- [x] PB4-T7：项目 active/failed/unread 从线程子执行派生。
-- [x] PB4-T8：FeaturePolicy、积分、审批、TTL、Codex 互斥和 DSH/Tool Gateway 回归。
-
-验收：同项目多线程并行不串数据；跨 provider、普通/Agent 互转不串 thread；画板与两种时间线数量一致。
-
-### PB5 — 历史合并 backfill v2
-
-- [x] PB5-T1：实现新的 versioned backfill 与逐来源账本。
-- [x] PB5-T2：同项目来源合并到同一画板，每来源建线程并稳定错位布局。
-- [x] PB5-T3：无项目来源进入未归档项目，超门槛时按 preview 规则分片。
-- [x] PB5-T4：只用确定性 correlation 合并 ordinary/Agent 线程，不猜 prompt 相似度。
-- [x] PB5-T5：全量数量对账、二次全 skipped、删除后不复活、坏来源隔离。
-- [x] PB5-T6：使用重新生成的 Online Backup 副本演练，正式库零写入。
-
-验收：每个旧来源可从项目画板/时间线定位；同项目只有一块画板；0 资产复制、0 重复 link、0 未解释差异。
-
-**2026-09-03 演练记录：** 正式库只读 preview 识别 191 条 ordinary generation、24 条 Agent Run、190 个中央资产、111 个 conversation、4 个已有项目；预计 4 块目标画板、202 条线程、846 个节点，14 条确定性 correlation 形成 13 次有效合并。使用 SQLite Online Backup 新建 `.tmp/project-canvas-backfill-copy-20260903-173123/library.db` 后执行 v2：191 + 24 来源全部完成、0 失败，资产保持 190→190，项目 4→5，线程 0→202，节点 0→803，边 0→591，ordinary links 0→191，Agent links 0→24，资产复制 0、未解释差异 0；第二次执行 215 条全 skipped 且所有数量不变。演练期间正式库未执行 v2 回填。
-
-### PB6 — 性能、恢复与人工验收
-
-- [ ] PB6-T1：测量 300/1000 节点、多线程长时间线的加载、平移、缩放、聚焦和内存。
-- [ ] PB6-T2：只针对实测瓶颈做 viewport culling、延迟加载或缩略层级。
-- [ ] PB6-T3：覆盖拖动未 flush、provider 已启动未 link、结果已入库未建节点、Agent create 未 link、accept 未入库。（ordinary/Agent 投影恢复与幂等重放已自动覆盖；拖动后立即退出留待真机 P5。）
-- [x] PB6-T4：覆盖项目删除、资产删除、线程归档、运行任务、项目成员和 tombstone 矩阵。
-- [ ] PB6-T5：在真实库新副本执行 P1–P7 人工剧本；真实调用按既有授权报告成本。
-- [ ] PB6-T6：Windows dev 与安装包升级各验证一次。
-
-验收：真实副本和真机通过；没有重复 provider 调用、重复扣费、丢资产或跨项目写入。
-
-**自动验证基线（2026-09-03）：** 桌面 Rust 全量 244 passed / 2 ignored；画板逻辑 24/24（含 300/1000 节点 hydration、1000 节点多线程时间线、provisional 有效草稿门）；Agent plan/result/selection 与来源发现 23/23；TypeScript 与 production build 通过。纯数据投影没有达到 culling 门槛；PB6-T1 的真实交互/内存、PB6-T5 P1–P7 和 PB6-T6 Windows dev/安装包仍必须在隔离副本与真机完成，不能用纯函数耗时替代。
-
-### PB7 — 发布收口
-
-- [ ] PB7-T1：复核最终 diff、migration、回填报告、自动测试和人工记录。
-- [ ] PB7-T2：正式库按 preview → 备份 → schema → backfill 执行，每步可停回只读 legacy。
-- [x] PB7-T3：关闭旧 creative-session 导航和写入，legacy 保留一发布周期只读回退。
-- [ ] PB7-T4：验证稳定后删除旧 UI active state 和不可达入口，不删除低层历史。（源码清理已完成，等待真机验证后关闭任务。）
-- [ ] PB7-T5：更新 `PROJECT.md`、本专项、Windows 说明和准确测试/部署基线。
-
-验收：用户只看到项目画板；正式库对账通过；回滚 UI 不需删表或恢复资产；文档不再宣称“一会话一画板”。
-
----
+PB0–PB7 历史实施单已由 §12 的 PCU0–PCU6 取代，删除重复任务卡及正式回填发布步骤。已完成的项目/线程数据层、投影和路由由现有代码与回归覆盖；未完成的原生 UI、升级和 legacy 清理不得因已发本地包而勾选完成。
 
 ## 8. 总体验收剧本
 
@@ -451,7 +312,7 @@ ProjectCanvasShell
 
 ### P2：空白项目与素材组
 
-有多选时点击“新建空白项目”仍为空；原样退出不留垃圾项目。再次创建后拖入同一素材两次，只有一个项目成员、两个节点；hover 普通素材 1 秒建组，drop 到已有组立即加入并显示放大和浅蓝发光；重启后恢复。
+有多选时点击“新建空白项目”仍为空；原样退出不留垃圾项目。再次创建后拖入同一素材两次，只有一个项目成员、两个节点；hover 普通素材 1 秒后在原目标松手建组，drop 到已有组立即加入并显示放大和浅蓝发光；重启后恢复。
 
 ### P3：同项目多线程
 
@@ -465,9 +326,9 @@ ProjectCanvasShell
 
 从普通结果启动允许的 Agent Run，沿用项目与线程；计划、审批、事件和用户可见 artifact 正确投影。在 approval/running/feedback 阶段重启均恢复同一 Run；接受后入库且不重复调用或扣费。
 
-### P6：历史迁移
+### P6：升级保留
 
-对真实库新副本 preview 并执行：同项目历史成为一块画板内多线程，无项目历史进入明确的未归档项目；每个旧来源可定位，图片/prompt 不丢；二次执行全 skipped。
+在复制库升级，核对中央资产、项目、文件与底层执行审计不丢失，不进行旧会话 backfill，也不按旧节点数量验收。
 
 ### P7：删除与审计
 
@@ -510,43 +371,23 @@ ProjectCanvasShell
 
 ---
 
-## 10. 执行顺序与交付
+## 10. 接续顺序
 
-```text
-PB0 契约 / migration 决策
-  ↓
-PB1 Project Canvas 数据层
-  ↓
-PB2 commands / store
-  ↓
-PB3 项目即画板 UI
-  ↓
-PB4 多线程 generation / Agent / timeline
-  ↓
-PB5 历史合并 backfill v2
-  ↓
-PB6 性能、恢复与人工验收
-  ↓
-PB7 正式迁移与 legacy 收口
-```
-
-首版交付包括：一项目一画板、多线程与执行 links、项目直达画板、provisional 创建、可调素材栏与素材组交互、线程聚焦与两种时间线、普通/Agent 全链路、历史合并与对账、删除/恢复/性能/Windows 验收、legacy 回退与退出路径。
-
----
+按 PCU0–PCU6 尚未完成的验收继续；当前交付、自动化基线及未覆盖项统一见 PROJECT.md。不得重新执行已废止的 PB5/PB7 正式回填流程。
 
 ## 11. 文档维护规则
 
-1. 本文是“项目即画板”专项当前执行权威；`CANVAS-SESSION-PLAN.md` v0.8 只作为旧实现证据。
+1. 本文是“项目即画板”专项当前执行权威；旧 CS 方案见 Git 历史。
 2. 项目定位、当前进展、关键约定和踩坑仍只写 `PROJECT.md`。
-3. 每完成一个 PB 阶段，更新本文任务状态、准确测试基线和剩余门槛。
-4. 涉及 provider、Agent、计费或云端边界时，同时核对 `AI-PROVIDERS.md`、`AGENT-RUNTIME-PLAN.md`、`UNIFIED-AGENT-HARNESS-PLAN.md` 与收费化文档。
+3. 每完成一个 PCU 验收项，更新本文任务状态、准确测试基线和剩余门槛。
+4. 涉及 provider、Agent、计费或云端边界时，同时核对 `Bowerbird开发计划.md`、`AGENT-RUNTIME-PLAN.md`、`UNIFIED-AGENT-HARNESS-PLAN.md` 与收费化文档。
 5. 只有用户说“存档”时才按仓库规则执行 git commit；单纯更新计划不自动提交。
 
 ---
 
 ## 12. 2026-09-04 审计纠偏与收敛计划（当前执行顺序）
 
-本节覆盖前文中与它冲突的发布顺序、历史迁移和完成状态。前文 PB0–PB7 保留为设计演进与已实现代码的证据；从本节开始，以 PCU0–PCU6 的验收结果判断功能是否完成。
+本节覆盖前文中与它冲突的发布顺序、历史迁移和完成状态。以 PCU0–PCU6 的验收结果判断完成度；旧 PB 卡已删除，不重新执行历史回填。
 
 ### 12.1 本轮边界
 

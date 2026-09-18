@@ -215,6 +215,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             // Windows/Linux 开发态不会像安装包那样自动注册自定义协议。
             // 仅在这些环境运行时注册 tauri.conf.json 中已有的 bowerbird scheme。

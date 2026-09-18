@@ -28,6 +28,7 @@ pub struct Status {
     pub message: String,
     pub last_error: String,
     pub model: String,
+    pub acceleration: String,
 }
 
 pub struct LocalClassifier {
@@ -194,7 +195,44 @@ impl LocalClassifier {
             }
             return Ok(());
         }
+        // Existing CPU installations reuse their weights and fetch only the small GPU runtime.
+        let gpu_installed = runtime::gpu_installed(&self.root);
+        let gpu_available = gpu_installed || runtime::nvidia_available(&self.cancel).await;
+        if !gpu_installed && gpu_available {
+            self.update(app, |s| {
+                s.phase = "downloading".into();
+                s.message = "正在补充 NVIDIA GPU 加速组件（约 645 MB）".into();
+                s.download_done = 0;
+                s.download_total = runtime::GPU_DOWNLOAD_BYTES;
+            });
+        }
+        let gpu_install = if gpu_installed || !gpu_available {
+            Ok(())
+        } else {
+            runtime::install_gpu(&self.root, &self.cancel, |_, done, total| {
+                self.update(app, |s| {
+                    s.phase = "downloading".into();
+                    s.message = "正在补充 NVIDIA GPU 加速组件（约 645 MB）".into();
+                    s.download_done = done;
+                    s.download_total = total;
+                });
+            })
+            .await
+        };
+        if self.cancel.load(Ordering::Relaxed) {
+            return Err("已停止分类".into());
+        }
+        self.update(app, |s| {
+            s.phase = "loading".into();
+            s.message = "正在加载本地模型".into();
+        });
         let mut server = runtime::Server::start(&self.root, &self.cancel).await?;
+        self.update(app, |s| {
+            s.acceleration = match gpu_install {
+                Err(error) => format!("CPU · GPU 组件下载未完成，已回退 CPU：{error}"),
+                Ok(()) => server.acceleration.clone(),
+            };
+        });
         for (index, id) in targets.iter().enumerate() {
             if self.cancel.load(Ordering::Relaxed) {
                 break;

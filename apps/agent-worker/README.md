@@ -1,6 +1,6 @@
 # @bowerbird/agent-worker — Bowerbird Agent Runtime
 
-> 状态（2026-09-11）：**VPS 已同步当前 Worker 源码，包含统一 Agent 多 final / DAG 同层并发、品牌视觉与 Seedance 2.5 视频处理；DSH 保持既有 test-only 开放策略，视频价格未启用。Worker 本地 352/352 与 TypeScript 通过；生产镜像的视频探测和 DSH 离线验证通过。部署版本、验证边界与回滚见 [视频部署记录](../../dev-doc/VIDEO-API-INTEGRATION.md#2026-09-11-云端同步部署)。**
+> 状态（2026-09-17 核对）：VPS 已部署统一 Agent、视频、DSH `deepseek-flash`/漏参纠正及分层服务；DSH 保持 test-only，视频未启价，分层暂用 20/23 积分测试价。最近发布与回滚入口统一见 [收费化进度](../../dev-doc/ARCH-ADJUST-PROGRESS.md)。
 > 桌面 Agent 主路径已人工验收，A5 完成；A6 安全/Cloud 回归与 A7 VPS 运维基线完成。Codex Agent CLI 真机 E2E 已成功，但因双重思考/对话耗时过长暂时禁止新建该组合。Dreamina Agent CLI 真机 E2E 按 2026-08-25 用户决定暂时跳过：实现保留、未宣称验证通过，也不再作为当前发布或继续开发门槛。
 > 依据：[dev-doc/AGENT-RUNTIME-PLAN.md](../../dev-doc/AGENT-RUNTIME-PLAN.md) §A2 / §A3。
 
@@ -109,15 +109,14 @@ docker compose -f compose.unified-harness-candidate.yml run --rm --no-deps unifi
 
 ## 已知配置与后续项
 
-历史前置清单见 [A1-PREREQUISITES.md](A1-PREREQUISITES.md)；当前状态：
+A1 前置已完成，当前能力边界：
 - DeepSeek 文本回合真实 tool-calling + usage 已通过；`deepseek-v4-flash` 默认 thinking 会拒绝 `tool_choice=required`，adapter 已显式发送 `thinking.type=disabled` 并通过真实探针、A3-T7 与 VPS 部署验证
 - Vision + Seedream 已完成 VPS 真实出站与同 Run 修订 E2E；区域/时延/并发仍需发布级压测
 - `credit_hold` 预算预授权、Agent 原子终态结算与 DeepSeek 文本回合可信 usage/ledger 已统一
 - FeaturePolicy 正式字段与首版预算选项已统一上线；对外定价归属仍待运营确认
-- VPS 单容器三循环、容器资源/PID/日志约束和无内容健康监控已部署；数据库容量门槛与 Worker 重启租约恢复已验收
+- VPS 单容器四类消费循环、容器资源/PID/日志约束和无内容健康监控已部署；数据库容量门槛与 Worker 重启租约恢复已验收
 
-> M0 的费率采用「每动作固定积分」降级规则（计划 §9.2），上游 token 不可靠时的可审计兜底；
-> 真实 token-based 费率待 A0-T1 确定后由 `service_costs` + Edge 纯函数实现。
+计量已使用服务端费率与可信 usage/ledger，早期 M0 固定动作 fixture 不作为生产定价。
 
 ## 文件结构
 

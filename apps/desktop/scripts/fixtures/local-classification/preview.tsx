@@ -7,7 +7,7 @@ import "../../../src/styles.css";
 const w = window as any;
 w.calls = [];
 w.failure = null;
-w.classificationStatus = { supported: true, installed: false, enabled: false, busy: false, phase: "", done: 0, total: 0, failed: 0, download_done: 0, download_total: 755911809, message: "", model: "local-test" };
+w.classificationStatus = { supported: true, installed: false, enabled: false, busy: false, phase: "", done: 0, total: 0, failed: 0, download_done: 0, download_total: 1401293979, message: "", model: "local-test", acceleration: "" };
 w.labels = [];
 w.__TAURI_INTERNALS__ = { invoke: async (command: string, args: any) => {
   w.calls.push({ command, args });

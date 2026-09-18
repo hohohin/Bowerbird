@@ -117,6 +117,9 @@ pub(super) async fn browser_bytes(webview: &Webview, url: &str) -> AppResult<Vec
 pub(super) async fn browser_bytes(webview: &Webview, url: &str) -> AppResult<Vec<u8>> {
     use std::ffi::{c_char, c_void, CStr, CString};
     type Sender = tokio::sync::oneshot::Sender<AppResult<Vec<u8>>>;
+    // The archive comes from build.rs; the attribute also covers targets that
+    // compile this module via #[path] without linking the library crate.
+    #[link(name = "bowerbird_browser_capture", kind = "static")]
     extern "C" {
         fn bb_browser_capture(
             view: *mut c_void,

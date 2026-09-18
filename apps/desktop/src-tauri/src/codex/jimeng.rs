@@ -2,7 +2,7 @@
 //!
 //! 走 OAuth 登录态（`dreamina login`，即梦会员积分），与 codex CLI 同构的本地子进程。
 //! 仅实现 `generate_image`（文生图 / 图生图）；`run`（理解类）不支持——即梦无文本对话能力。
-//! 详见 AI-PROVIDERS.md §3（spike 实测）/§5.3。
+//! 详见 PROJECT.md 约定 1
 //!
 //! 依赖：`dreamina` CLI 已登录（`dreamina login`）且在 PATH（或 `%USERPROFILE%\bin`）。
 
@@ -73,7 +73,7 @@ impl GenProvider for DreaminaCliProvider {
         }
     }
 
-    /// 即梦无文本对话能力（仅生成），理解类任务不支持（AI-PROVIDERS.md §4.3）。
+    /// 即梦无文本对话能力（仅生成），理解类任务不支持（PROJECT.md 约定 1）。
     async fn run(&self, _req: CodexRequest) -> Result<CodexResult, AppError> {
         Err(AppError::Jimeng(
             "即梦无文本对话能力（仅生成；理解类走 codex）".into(),
@@ -179,7 +179,7 @@ impl GenProvider for DreaminaCliProvider {
 /// spike 实测结构：`{ "submit_id": "<UUID>", "gen_status": "success", "result_json": {...} }`。
 /// dreamina 输出 **pretty JSON（多行带缩进，非 JSONL）**，须整体解析为一个对象，
 /// 不能按行找（codex JSONL 那样逐行 `{...}` 在这里只有首行是 `{`、不完整）。
-/// gen_status ∈ {success, querying} 视为提交成功（AI-PROVIDERS.md §3.3 契约）；fail/空报错。
+/// gen_status ∈ {success, querying} 视为提交成功（PROJECT.md 约定 1）；fail/空报错。
 fn parse_submit_id(stdout: &str) -> Result<String, AppError> {
     let head = || -> String { stdout.trim().chars().take(400).collect() };
     // 取第一个 '{' 起（容忍前导提示行），流式解析取首个值（容忍尾随文本）。

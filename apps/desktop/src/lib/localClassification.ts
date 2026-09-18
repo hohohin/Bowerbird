@@ -14,6 +14,7 @@ export interface LocalClassificationStatus {
   message: string;
   last_error: string;
   model: string;
+  acceleration: string;
 }
 export interface ClassificationLabel {
   id: string;

@@ -193,7 +193,7 @@ fn upgrading_preserves_used_seeds_without_learning_from_legacy_assignments() {
     assert!(db.local_examples("cat_landscape", "b").unwrap().is_empty());
 }
 
-/// Opt-in, real CPU inference against downloaded pinned weights. No network and no user library.
+/// Opt-in inference against an already installed isolated pack. No network and no user library.
 #[tokio::test]
 #[ignore = "requires the pinned local model pack in BOWERBIRD_LOCAL_MODEL_TEST_DIR"]
 async fn real_local_model_smoke() {
@@ -204,12 +204,11 @@ async fn real_local_model_smoke() {
     );
     let samples = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/samples");
     let image = image_data(&samples.join("preset-01.webp"), &samples).unwrap();
+    std::fs::write(model.join("smoke-product-image.txt"), &image).unwrap();
     let cancel = AtomicBool::new(false);
-    super::runtime::install(&model, &cancel, |_, _, _| {})
-        .await
-        .unwrap();
     assert!(super::runtime::installed(&model));
     let mut server = Server::start(&model, &cancel).await.unwrap();
+    println!("smoke backend: {}", server.acceleration);
     let labels = vec![
         Label {
             id: "product".into(),
@@ -236,6 +235,7 @@ async fn real_local_model_smoke() {
     let matches = server.predict(&image, &labels, false, &[], &cancel).await;
     println!("real matching: {:?}", matches);
     let illustration = image_data(&samples.join("preset-02.webp"), &samples).unwrap();
+    std::fs::write(model.join("smoke-illustration-image.txt"), &illustration).unwrap();
     let custom = vec![Label {
         id: "custom".into(),
         name: "东方诗意插画".into(),
@@ -243,6 +243,11 @@ async fn real_local_model_smoke() {
         enabled: true,
         count: 0,
     }];
+    let custom_negative_before = server.predict(&image, &custom, false, &[], &cancel).await;
+    println!(
+        "custom negative before positive: {:?}",
+        custom_negative_before
+    );
     let custom_match = server
         .predict(&illustration, &custom, false, &[], &cancel)
         .await;
@@ -280,6 +285,7 @@ async fn real_local_model_smoke() {
     assert!(!matches.matches.contains(&"animal".into()));
     assert!(!prediction.description.is_empty());
     assert_eq!(custom_match.unwrap().matches, vec!["custom"]);
+    assert!(custom_negative_before.unwrap().matches.is_empty());
     assert!(custom_negative.unwrap().matches.is_empty());
     assert_eq!(example_match.unwrap().matches, vec!["personal"]);
 }

@@ -1,24 +1,9 @@
 # Bowerbird 通用云端 Agent Harness 专项计划
 
-> 2026-09-06 02:12 协议修复上线：c2c1ec1d再次耗尽60执行回合，补充修复每轮状态尾插user与压缩丢失assistant/tool配对的问题。状态前置，保留最近完整工具交换；Worker332/332、真实DSH协议2/2、真实DeepSeek合成任务5回合完成（工具模拟）通过。现役镜像 `sha256:78a5e4775fc08860c871bbbf24cc61ad5bccd657dd577250da07def23bede3e3`，健康通过，原用户任务未重跑，详见PROJECT.md。
-
-> 2026-09-06 01:29 修复上线：2c11aa4e 在 compose_html 后重复读上下文，耗尽20执行模型回合。动作状态新增输出ID、分页结果前置、压缩逐级缩短并保留分页游标；Worker331/331与TypeScript、候选断网探针通过，现役镜像 `sha256:28940332c9359df10045290eb8422e326def56e286efaf817454fc33ee31410a`，健康检查通过。详见 PROJECT.md 对应故障记录；未提高回合额度或重跑真实任务。
-
-> 2026-09-06 00:24 部署完成：用户明确授权六文件包后，视觉记忆、进度、压缩回合身份与大历史入口修复已切换到现役镜像 `sha256:c613d6b2a68c3918969132e9e62f73033cf06bd8c0e937b9e36a4b599076ba4f`。断网双 processor 探针、源码哈希与线上健康通过；覆盖下方未部署/审批阻止历史状态。回滚与验证边界见 PROJECT.md「DSH 六文件补丁部署完成」。尚未重跑真实用户任务。
-
-> 2026-09-06 源码修复（未部署）：f113cb4e 的 8 张候选已生成但未交付，最终 request_too_large。修复压缩丢失工具回合身份导致不同回合误复用 durable 模型响应的问题，并把有权威压缩上下文的执行历史入口放宽至 8 MiB，provider 请求仍保持 16,000 字节边界。Worker 330/330、TypeScript 通过。含视觉记忆的六文件包上传被自动审批拒绝，待用户明确授权；线上未变，详见 PROJECT.md 对应故障记录。
-
-> 2026-09-05 后续源码增量（未部署）：视觉观察检查点索引与 v3 每轮执行进度上下文已完成。设计复用已有 diagnostic/journal，不复制完整观察进检查点、不新增视觉调用；免费分页读取跨审批/租约恢复，同图同 focus 规划请求直接复用。候选图数与最终交付数分别记录；压缩仍保留观察入口及进度。Worker 328/328、Profile 24/24、TypeScript 通过。当前线上镜像与具体行为约定以 PROJECT.md「DSH 视觉记忆与执行进度」为准，不能把本增量记为已上线。
-
-> 版本：v1.64
-> 日期：2026-09-05
-> 状态：**U0/U1 完成，U2 本地代码纵切收口；U3 真实计划、HTML 四工具执行与旧基线盲评已全部收口。新链路 Run `run-u3-html-4e835643-146f-4f52-b3b4-8b6eab275fef` 真实完成 `compose_html → render_html → inspect_artifact → finalize_output`：DeepSeek 4 回合（18,434 input / 2,020 output tokens）、方舟 Vision 1 次、renderer 1 次，总耗时 50,499 ms，实际 5 credits，输出 1080×4320 整页 + 4 切片。旧 `bowerbird-html-layout-render` 同素材基线以 1 个 DeepSeek 回合（1,935 input / 795 output）、5,947 ms、1 credit 生成 HTML，但因 3 处 CSS 注释被 renderer 权威拒绝，因此运行结果仍记失败。为进行纯视觉对照，仅删除这 3 处视觉语义不变的注释并本地渲染 1080×2387 样本，不产生 provider usage，不伪装为旧链路成功。A/B 映射用 commitment `bf560f7d…697b1` 预先封存；用户在不知映射时选择 A，揭盲后 A 为新 U3，因此“相对旧专项有实质质量提升”的 U3 人工验收通过。回归为 agent-worker 259/259 + TypeScript、DSH Profile 18/18、html-renderer 71 项（64 pass / 7 本机缺管理 Playwright Chromium skip）+ TypeScript；旧候选镜像 `sha256:b238d6ef…1864` 已过期，本机无 Deno，未部署 FeaturePolicy、migration `0047`–`0049`、Edge 或 VPS。**
-> U4 当前：**test-only 双 runtime 全门槛完成（U4 完成）**：远端 migration `0050`、`agent-run` v42、`agent-worker` v46 与 VPS controlled-image DSH 已上线，普通账号/HTML 保持 legacy。真实 18-case 同 eval 的策略正确率 legacy/DSH 均为 77.8%、结构化成功率均为 100%；同一真实图片 case 的 legacy Run `165ad0af-fdbe-4879-80e9-879b4706b121` 与 DSH Run `95ea1bb3-4c08-49f0-aa5b-9243f7261ff7` 又分别通过真实 Worker kill/restart、两个执行 lease、唯一 Ark side effect/final artifact、终态与积分对账。actual paired no-regression PASS：legacy 239,100 ms/7 credits，DSH 236,424 ms/8 credits；人工图像对照无明显 DSH 退化。最终 Worker 镜像 `sha256:c436892f…e16dec`（165,781,303 bytes，用户 `node`），test-only claim grace 已恢复默认 0，安全/资源约束与四消费循环无漂移，最终健康/队列全绿。U4 只证明 test-only 双栈可用，不把 DSH 公开设为默认；下一步为 U5“零新 Harness”小红书复用。**
-> U5 当前：**最小“零新 Harness”架构证明完成（未部署、无真实 provider 调用）**。统一计划只增加 `compose_xiaohongshu` 步骤；执行在同一 Bowerbird Run/批准链与同一短生命周期内容执行 session 中复用 `compose_html → render_html → [inspect_artifact] → compose_xiaohongshu → finalize_output`。新增内容限定为保守内部草稿配方/schema、父进程绑定图片顺序的 deterministic compiler/durable tool，以及仅多一个工具的 DSH content profile；仍由现有 `UnifiedPlanningRunProcessor`、Tool Gateway、Ledger、Artifact 与结果反馈停车机制掌权，没有新增 Agent Runner、Run/审批/计费表、migration 或历史 UI。Worker **289/289** + TypeScript、DSH Profile **21/21**，Edge 相关文件 TypeScript 语法检查通过；本轮未登录/发布小红书，未调用 DeepSeek、方舟或 Seedream，未产生费用。U5 只证明复用猜想，不宣称渠道规则、产品 UI 或发布链已完成；下一步 U6。
-> U6 当前：**DSH 统一入口与真实长文详情页四工具链已 test-only 跑通；能力选择猜想成立，质量与供应链门槛决定继续保持 test-only**。测试账号选择 `DSH · 自动选工具` 后创建 `bowerbird-unified-agent`，不再由“受控生图/HTML 排版”按钮替 Agent 选能力；父进程对详情页精确长文强制 `compose_html → render_html → inspect_artifact → finalize_output`，并在模型外校验原文、批准资源、工具顺序和唯一主产物。最终候选镜像 `sha256:21656cce…bfbbcd` 上真实 Run `dfd240f5-9787-4cdf-93f6-3a161f90edb4` succeeded：31 行原文全保留，DeepSeek 10 回合（83,517 input / 11,450 output）、方舟 Vision 2 次、renderer 1 次、Seedream 0 次，291,783 ms、12 credits、295,734 provider-cost micros，输出 1080×3948 整页 + 4 切片。migration `0052` 已把 unified HTML 主截图纳入原子结算；proxy 关闭会等待已接受请求完成 usage 持久化，避免终态后迟到 usage。Worker **296/296** + TypeScript、DSH Profile **23/23**；容器仍为非 root/只读根/drop ALL/no-new-privileges，queue/active/expired lease/TTL 全 0。10 个开发 Run 的真实费用已完整单列：DeepSeek 80 回合、Ark Vision 17 次、renderer 7 次、Seedream 0 次，共 2,242,120 provider-cost micros；唯一 1-credit 结算差额来自修复前超时竞态并保留为证据。桌面真机权限复测另发现远端 `entitlement v34` 未带 unified 白名单；保存 v34 回滚源码后已单独上线 `v35`，同一 Pro 测试账号的新签名快照现包含 controlled/HTML/unified 三项且普通账号边界不变。视觉结果已从“图片模型排长字”纠正为可交付 HTML 长页，但中后段仍偏同构长文模板，证明路由/工具编排而非最终质量标杆。Debian 基础层仍有 4 CRITICAL / 18 HIGH 且无 FixedVersion/接受人，自然小名单样本也不足，因此不扩大开放、不改公开定价或默认 runtime。
-> U6-T6 当前：**统一图片执行已在源码中放开“一个 Run 只能有一个 final result”并改为按 DAG 层并发，2026-09-05 已部署云端**。`finalize_output.dependsOn` 可列出多个生成步骤；这些步骤全部登记为 `final_result`，Edge 反馈停车、原子结算和桌面结果选择均接受并保留完整集合。每一轮所有依赖已满足的 `generate_image` 同时启动，不设置额外的 Run 内图片并发 semaphore；测试账号现有 test-only 路径立即适用，未来 Pro 获得 unified 权限时沿用相同行为。既有计划步骤/预算/审批、durable call、Artifact 和账号级并发 Run 门控不变；legacy `bowerbird-controlled-image-edit` 仍保持单 final。8 张独立场景回归确认峰值并发 8、8 张均为 final；Worker **297/297** + TypeScript、桌面结果选择 **4/4**，Edge 文件通过 Node TypeScript 语法检查。migration `0053`/`0054` 与 Edge/VPS 已于 2026-09-05 部署；证据见下方开发收敛。
-> 适用范围：Bowerbird Cloud Agent、VPS Worker、官方能力工具、视觉规范、HTML 长图及后续小红书等内容工作流
-> 前置文档：[`PROJECT.md`](../PROJECT.md)、[`AGENT-RUNTIME-PLAN.md`](AGENT-RUNTIME-PLAN.md)、[`HTML-RENDER-PLAN.md`](HTML-RENDER-PLAN.md)、[`研究报告-服务器化CLI与API化改造可行性.md`](研究报告-服务器化CLI与API化改造可行性.md)
+> 当前状态（2026-09-17）：U0–U5 实现与既有验收完成，U6 保持 test-only。新任务统一为 `bowerbird-unified-agent + dsh`；按需 Skill、目标授权、动态工具执行、多 final 与恢复链路已部署，真实 HTML 纵切与旧基线盲评已通过。
+> 9 月 14 日已部署漏参纠正与独立 DSH 模型 `deepseek-flash`；后续分层 Worker 保留这些变更。当前镜像/回滚入口见 [收费化进度](ARCH-ADJUST-PROGRESS.md)，不再使用本文早期候选摘要指代现役镜像。
+> 剩余：自然小名单/人工质量样本、基础层漏洞修复或明确责任人风险接受。上次扫描 4 CRITICAL / 18 HIGH 尚无后续收口证据；不扩大开放、不改公开档位或计费。小红书只验证工具复用，没有登录/发布产品。
+> 下方 U0–U6 表保留历史任务与验收证据；执行规则以当前目标授权模型及 PROJECT.md 约定 50/51 为准，旧固定四步/单 final 限制不用于新 Run。
 
 ---
 
@@ -388,13 +373,9 @@ ACP 的 `session/request_permission` 只用于进程内一次性工具许可或�
 
 ## 7. DeepSeek 模型策略
 
-### 7.1 首批候选
+### 7.1 当前配置
 
-- 主规划候选：`deepseek-v4-pro`，用于复杂结构、工具编排和质量优先任务。
-- 低成本/低延迟候选：`deepseek-v4-flash`。
-- 视觉执行方：Bowerbird 现有火山方舟 Vision，由 `understand_asset` / `inspect_artifact` 等受控工具调用；DeepSeek 模型不得接收图片。
-
-模型名称会变化，生产配置必须数据驱动；文档中的型号只是 2026-08-28 调研快照。
+DSH 使用独立环境字段 `BOWERBIRD_DSH_MODEL=deepseek-flash`（2026-09-14 已部署）；非 DSH 沿 `DEEPSEEK_MODEL`，不得共用或相互覆盖。模型端只接收文字，Vision 仍由方舟受控工具调用；变更必须同步 Profile、探针与部署配置。
 
 ### 7.2 固定视觉路线
 
@@ -754,18 +735,9 @@ conversation_id / run_id
 
 ---
 
-## 14. 新会话交接摘要
+## 14. 接续入口
 
-1. 用户已于 2026-08-28 确认“一个云端 Agent + 多个工具/能力”的产品方向。
-2. DSH + DeepSeek 官方 API 已完成文档层可行性调研；技术可行，但 DSH 仍为 developer preview，尚未批准生产替换。
-3. U1 技术入口与 U2 本地纵切均已通过；U3 已冻结 `VisualProfileCapsule` 输入/追踪及结构化计划 schema v2，并用真实类型产品图 + 独立排版参考完成真实 DSH/DeepSeek/方舟规划和人工核对。下一步是另行批准该无生图计划，执行 `compose_html → render_html → inspect_artifact → finalize_output`，再与旧一次 compose 基线做盲评和成本/耗时对比。
-4. U2 沿用精确版本、最小 ACP Profile、本机 stdio和无高危默认工具；当前 rc.2 采用 connection-scoped fresh session，由 Bowerbird checkpoint 重建，不依赖 ACP `resume`。
-5. 现有 dirty worktree 与生产部署属于已完成 HTML 专项，必须保留；U2 当前只做本地/隔离实现与显式授权的真实 fixture，不改 FeaturePolicy、不部署生产；任何 VPS/Edge/migration/FeaturePolicy 上线仍需另行授权。
-6. 未来小红书等能力必须复用同一 Agent、视觉设定、审批、Tool Gateway、Ledger 和会话；若准备新增独立 Runner，先停止并重新阅读本文件 §2 与 §11.5。
-7. 2026-08-31 用户手动真实 3+1 已通过，不再等待或重复诊断第三回合；未经用户明确授权不要再次调用真实 DeepSeek/方舟。批准后首个生图执行已有单元、本地控制面 Mock Seedream E2E 与两处进程死亡恢复覆盖，但尚未调用真实 Seedream或部署生产，不得写成已上线。`sha256:72e2cda4…09dd63` 是本次恢复修复前最后通过安全探针的候选；Docker 恢复后须重建新 digest，不能把旧 digest 标成当前源码。
-8. 产品视觉路线固定使用 Bowerbird 现有火山方舟 Vision；DeepSeek/DSH 只负责文本规划与工具调用，DeepSeek 代理拒绝图片输入。历史 DeepSeek Vision Spike 只作兼容性记录，不进入生产或后续 A/B。
-9. 2026-09-01 每素材唯一视觉观察槽修正后的当前源码候选已重建并连续两次通过只读安全探针；现役本地 digest 为 `sha256:b238d6ef…1864`。`sha256:3a6b9f0a…59fd4a5` 与更早候选只作历史记录，不再代表当前源码。候选仅存在本地，未推送或部署。
-10. 2026-09-01 U3 第三次真实类型规划成功：4 个 DeepSeek 回合、2 次方舟 Vision、6 个 durable succeeded call，完整计划 v2 通过自动闸门和源图人工核对；未生成、未渲染、未部署。未经另行批准不得进入真实 HTML 执行或成品 Vision 检查。
+当前状态见页首与 [PROJECT.md](../PROJECT.md)，部署操作与升级/回滚见 [UNIFIED-HARNESS-RUNBOOK.md](../apps/agent-worker/UNIFIED-HARNESS-RUNBOOK.md)。U3 真实计划/执行/盲评、U4 双 runtime 和 U5 复用证明已完成，不重新列为下一阶段；剩余 U6 观察不等于公开发布。
 
 ---
 

@@ -2,6 +2,18 @@
 
 本目录记录 Mac 上的本地开发、运行和未签名构建流程。Bowerbird 使用 canonical Tauri / React / Rust 源码，不维护 macOS override。构建架构以 `rustc -vV` 的 host 为准；Intel 为 `x86_64-apple-darwin`，Apple Silicon 原生工具链为 `aarch64-apple-darwin`。
 
+## 2026-09-18 同步 dev 26.9.18
+
+`mac` 合入远端 dev `a7d5dae`（26.9.18 更新器发布与桌面改进归档）。新增内容：Windows 应用内更新与官网更新通道源码（`AppUpdateCard`、`appUpdater`、`tauri.conf.json` updater 公钥/端点、`tauri-plugin-updater/process`、官网 `desktop-update` 接口与 `update-manifest.mjs`，版本升至 26.9.18）、本地分类 NVIDIA CUDA GPU 加速与重复标签逐项重判、下载错误带系统代理提示，以及文档索引整理（CLAUDE.md 收敛为指向 AGENTS.md 的入口）。
+
+冲突融合：本地分类 runtime 在 mac 跨平台 RuntimePack（macOS 13.3+ Intel / Apple Silicon、`sw_vers` 版本门控、`/usr/bin/tar` 解压、可执行位校验）之上并入 dev 的 CUDA 路径——`extract_runtime` 统一为「归档名 + 目标目录 + server 路径 + 取消」签名，`Server::start` 先试 GPU 再回退 CPU 并回报实际后端；mac 上 `nvidia_available`/`gpu_installed` 自然为 false，保持 CPU 推理。分类面板同时显示 GPU 加速状态与 macOS 支持范围文案。保留 WKWebView 原生取图、系统标题栏、Finder 路径探测、微信 `RunEvent::Opened` 回流、`tauri.macos.conf.json` 与 DMG 固定交付规范。
+
+修一个本机既有缺口：`explorer_smoke` example 通过 `#[path]` 直接编译 `source_browser_network.rs` 且不引用库 crate，cargo 不向 example 传递 build.rs 的 `-l static=bowerbird_browser_capture`，原生 arm64 全量 `cargo test` 因此链接失败（此前记录来自 Intel 环境产物）。在 macOS extern 块补 `#[link(name = "bowerbird_browser_capture", kind = "static")]`，任何编译该模块的目标都自带链接指令；example 及全套测试恢复链接。
+
+本机（Apple Silicon、rustc 1.97.1）验证：Rust 全量 **368 passed / 0 failed / 5 ignored**（无过滤，首次在此机器跑通含 examples 的全套）；画板/生成契约 **125/125**、引导 **14/14**；`local-classification-ui`、`app-updater-ui`、`composer-disabled-tooltip-ui`、`onboarding-pack-ui`、`onboarding-ui` 五组 Chrome 合成 IPC 回归、TypeScript `tsc --noEmit` 与 Vite production build 全部通过，保留既有 Rust 警告与大 chunk 提示。文档同批更新：PROJECT.md 新增同步里程碑并按「只保留 3 条」将旧条目移入进展归档，LOCAL-CLASSIFICATION/ONBOARDING 融合双平台记录。
+
+本轮仅本地合并与测试：未打包 DMG、未运行真实模型下载/GPU 推理（Mac 无 CUDA 路径）、未操作真实账号或素材库、未推送分支或部署服务。updater 端点目前仅发布 Windows x64 通道；Mac 更新通道未配置，不代表 Mac 自动更新已可用。
+
 ## 2026-09-17 引导快照会话与创作提示存档重包
 
 引导卡片从本地画板快照恢复多轮会话，复用普通生成详情和 Lightbox；提示词复用保留引用图、节点、历史别名与画幅。引导右箭头仅在当前步骤完成后推进；创作按钮通过悬停或键盘焦点显示禁用原因。同步保存画板标题与操作提示调整。
