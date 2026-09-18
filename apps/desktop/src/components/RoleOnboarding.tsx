@@ -14,7 +14,7 @@ export function RoleOnboarding() {
   const [error, setError] = useState("");
   const [missingRole, setMissingRole] = useState<OnboardingRole | null>(null);
   async function choose(role: OnboardingRole, restart = false) {
-    if (busy) return;
+    if (busy || ["marketing", "director"].includes(role)) return;
     setBusy(true); setError(""); setMissingRole(null);
     try {
       await useStore.getState().projectCanvasFlush?.();
@@ -64,10 +64,11 @@ export function RoleOnboarding() {
     <div className="guide-role-grid">{ONBOARDING_ROLES.map(item => {
       const Icon = ROLE_ICONS[item.id];
       const complete = guide.completedRoles.includes(item.id);
-      return <button key={item.id} className="guide-role-card" disabled={busy} onClick={() => void choose(item.id)} aria-label={"我是" + item.name}>
+      const preparing = item.id !== "designer";
+      return <button key={item.id} className="guide-role-card" disabled={busy || preparing} onClick={() => void choose(item.id)} aria-label={"我是" + item.name}>
         <Icon size={25} /><strong>我是{item.name}</strong><p>{item.description}</p>
-        {complete && <span><Check size={14} /> {guide.sessions[item.id]?.skippedSteps?.length ? "已走完 · 含跳过步骤" : "已完成实操"}</span>}
-        {!complete && guide.sessions[item.id] && <small>进度已保留</small>}
+        {preparing ? <small>正在准备中</small> : complete ? <span><Check size={14} /> {guide.sessions[item.id]?.skippedSteps?.length ? "已走完 · 含跳过步骤" : "已完成实操"}</span>
+          : guide.sessions[item.id] && <small>进度已保留</small>}
       </button>;
     })}</div>
     {busy && <p className="mt-3 text-sm text-muted" role="status">正在准备入门引导…</p>}

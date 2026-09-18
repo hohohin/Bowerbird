@@ -104,7 +104,10 @@ const DEVELOPER_SECTION = { key: "developer", label: "开发者选项" } as cons
  * 创作板 / 会话编辑坞渲染（默认只开正式 Agent）。
  * 由侧栏底部账号区「设置」唤起。点背景 / ✕ 关闭。
  */
-export function SettingsDialog({ onClose }: { onClose: () => void }) {
+export function SettingsDialog({ onClose, initialSection = "system" }: {
+  onClose: () => void;
+  initialSection?: "system" | "account";
+}) {
   const codexHealth = useStore((s) => s.codexHealth);
   const setCodexHealth = useStore((s) => s.setCodexHealth);
   const extensionConnected = useStore((s) => s.extensionConnected);
@@ -126,7 +129,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const defaultUnderstandProvider = useStore((s) => s.defaultUnderstandProvider);
   const setDefaultUnderstandProvider = useStore((s) => s.setDefaultUnderstandProvider);
 
-  const [section, setSection] = useState<SectionKey>("system");
+  const [section, setSection] = useState<SectionKey>(initialSection);
   const [appVersion, setAppVersion] = useState<string | null>(null);
   const [checkingCodex, setCheckingCodex] = useState(false);
   const [checkingDreamina, setCheckingDreamina] = useState(false);
@@ -676,20 +679,19 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
 
               {/* 等级 & 升级 */}
               {loggedIn && (
-                <div className="settings-card flex items-center justify-between px-3 py-2.5">
+                <div className="settings-card px-3 py-2.5">
                   <span className="text-ink">
                     当前档位：
                     <span className="ml-1 rounded bg-accent/15 px-1.5 py-0.5 text-xs font-semibold text-accent">
                       {tier}
                     </span>
                   </span>
-                  <button
-                    onClick={() => void open(WEBSITE_URL)}
-                    className="rounded-md bg-accent px-3 py-1 text-[12px] font-medium text-black hover:opacity-90"
-                    title="打开官网查看订阅方案"
-                  >
-                    升级
-                  </button>
+                  <p className="mt-2 text-xs text-ink">
+                    Pro 可使用自有 ChatGPT / 即梦订阅进行创作，本机引擎生成不扣 Bowerbird 积分；Cloud 生成按服务消耗积分。
+                  </p>
+                  <p className="mt-1 text-[11px] text-muted">
+                    在线购买暂未开放。如有 Pro 兑换码，可在下方兑换，权益将同步到当前账号。
+                  </p>
                 </div>
               )}
 

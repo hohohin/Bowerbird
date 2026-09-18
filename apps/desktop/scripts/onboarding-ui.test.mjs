@@ -12,6 +12,18 @@ page.on('pageerror', e => errors.push(e.message));
 const button = name => page.getByRole('button', {name,exact:true}).last();
 const forward = () => page.locator('.onboarding-lesson header').getByRole('button', {name:'下一步',exact:true});
 const next = () => button('下一步');
+// Retain regression coverage for dormant routes without enabling their entry cards.
+async function loadDormantRoute(role) {
+  await page.evaluate(role => {
+    const lesson = window.lesson.getState(), guide = lesson.guide;
+    lesson.setGuide({...guide, role, status:'active', sessions:{...guide.sessions, [role]:{
+      projectId:window.store.getState().activeProjectId, runId:crypto.randomUUID(), step:0,
+      stepStartedAt:Date.now(), ready:false, baselineText:'', collectionId:null,
+      profileId:null, analysisAssetId:null, annotationAssetId:null, tasks:{}
+    }}});
+    lesson.show('lesson');
+  }, role);
+}
 async function at(scene) {
   // Load the module before polling so each readiness check returns a boolean.
   await page.evaluate(async () => {
@@ -60,6 +72,14 @@ try {
   await page.goto('http://127.0.0.1:1561/scripts/fixtures/onboarding/preview.html');
   await page.getByRole('heading',{name:'请选择你的身份',exact:true}).waitFor();
   for (const name of ['设计师','市场运营','视频编导']) await button('我是'+name).waitFor();
+  assert.equal(await button('我是设计师').isEnabled(),true);
+  for (const name of ['市场运营','视频编导']) {
+    const card = button('我是'+name);
+    assert.equal(await card.isDisabled(),true);
+    assert.equal(await card.locator('small').innerText(),'正在准备中');
+    await card.evaluate(el=>el.click());
+  }
+  assert.equal(await page.evaluate(()=>window.lesson.getState().guide.role),null);
   assert.equal(await page.getByText(/操作示意|继续原来的实操引导|开始这条路线|用示例实际做一次/).count(),0);
   await mkdir('.tmp',{recursive:true});
   await page.screenshot({path:'.tmp/onboarding-practice-welcome.png'});
@@ -284,14 +304,16 @@ try {
   assert.equal(await page.locator('.onboarding-login-hint').count(),0);
   await page.evaluate(()=>window.store.setState({cloudAuth:{logged_in:false,cloud_available:true}}));
   await page.evaluate(()=>window.lesson.getState().show('welcome'));
-  await button('我是视频编导').click(); await ready(); await next().click();
+  assert.equal(await button('我是视频编导').isDisabled(),true);
+  await loadDormantRoute('director'); await ready(); await next().click();
   await pick('导入图片'); await ready(); await next().click(); await at('script');
   await editor.fill('镜头一：产品居中，镜头缓慢推进。\n镜头二：近景展示包装，保持柔和侧光。');
   await ready(); await next().click(); await at('storyboard'); await notReady();
   await fakeResult('image',1); await ready(); await next().click(); await at('video');
   await fakeResult('image',1); await notReady();
   await fakeResult('video',1); await ready(); await button('完成这条路线').click();
-  await button('我是市场运营').click(); await ready(); await next().click();
+  assert.equal(await button('我是市场运营').isDisabled(),true);
+  await loadDormantRoute('marketing'); await ready(); await next().click();
   await pick('导入图片'); await ready(); await next().click(); await at('collections');
   await page.evaluate(()=>{window.collectionHasAssets=true;window.store.getState().setCollectionPanel('existing-folder');});
   await page.getByRole('dialog',{name:'已有品牌集合',exact:true}).waitFor();

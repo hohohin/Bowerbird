@@ -11,7 +11,9 @@ function busyReason() {
   return null;
 }
 
-export function AppUpdateCard({ version, migrating }: { version: string | null; migrating: boolean }) {
+export function AppUpdateCard({ version, migrating, downloadLabel = "下载更新" }: {
+  version: string | null; migrating: boolean; downloadLabel?: string;
+}) {
   const updater = useAppUpdater();
   const { phase, update, downloaded, total, error } = updater;
   const percent = total && total > 0 ? Math.min(100, Math.floor(downloaded / total * 100)) : null;
@@ -19,7 +21,7 @@ export function AppUpdateCard({ version, migrating }: { version: string | null; 
   const label = phase === "checking" ? "正在检查…"
     : phase === "downloading" ? "正在下载…"
     : phase === "installing" ? "正在安装…"
-    : phase === "available" ? "下载更新"
+    : phase === "available" ? downloadLabel
     : phase === "ready" ? "安装并重启"
     : phase === "installed" ? "重启应用" : "检查更新";
 

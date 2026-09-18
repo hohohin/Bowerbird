@@ -1,14 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronUp, LogIn, LogOut, Settings, Zap } from "lucide-react";
-import { open as openExternal } from "@tauri-apps/plugin-shell";
 import { useStore } from "../store";
 import { understandReady } from "../lib/entitlement";
-import { WEBSITE_URL } from "../lib/constants";
 import { SettingsDialog } from "./SettingsDialog";
 
 /**
  * 左边栏底部账号区（chatgpt 式）：头像 + 用户名 + 档位徽章，点击向上展开 inline 菜单。
- * 已登录 → 升级账号（官网）/ 设置 / 登出；未登录 → 登录 Bowerbird 账号 / 设置。
+ * 已登录 → 升级账号（应用内账号管理）/ 设置 / 登出；未登录 → 登录 Bowerbird 账号 / 设置。
  * 账号详情（账号名 / 积分明细 / 升级）已移入设置面板「账号管理」。
  * 菜单沿 ProviderSelect/RatioSelect 的 inline 面板范式（不发明浮层），展开在账号行上方。
  */
@@ -25,6 +23,7 @@ export function SidebarAccount({ collapsed = false, onInteractionChange }: {
   const extensionConnected = useStore((s) => s.extensionConnected);
   const [open, setOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsSection, setSettingsSection] = useState<"system" | "account">("system");
   const rootRef = useRef<HTMLDivElement>(null);
 
   const loggedIn = cloudAuth?.logged_in === true;
@@ -71,9 +70,13 @@ export function SidebarAccount({ collapsed = false, onInteractionChange }: {
               </div>
               <button
                 type="button"
-                onClick={() => void openExternal(WEBSITE_URL)}
+                onClick={() => {
+                  setOpen(false);
+                  setSettingsSection("account");
+                  setSettingsOpen(true);
+                }}
                 className="app-context-item px-2 py-1 text-xs"
-                title="打开官网查看订阅方案"
+                title="查看会员权益与兑换 Pro"
                 role="menuitem"
               >
                 <Zap size={13} />
@@ -83,6 +86,7 @@ export function SidebarAccount({ collapsed = false, onInteractionChange }: {
                 type="button"
                 onClick={() => {
                   setOpen(false);
+                  setSettingsSection("system");
                   setSettingsOpen(true);
                 }}
                 className="app-context-item px-2 py-1 text-xs"
@@ -123,6 +127,7 @@ export function SidebarAccount({ collapsed = false, onInteractionChange }: {
                 type="button"
                 onClick={() => {
                   setOpen(false);
+                  setSettingsSection("system");
                   setSettingsOpen(true);
                 }}
                 className="app-context-item px-2 py-1 text-xs"
@@ -170,7 +175,7 @@ export function SidebarAccount({ collapsed = false, onInteractionChange }: {
         {open ? <ChevronUp size={13} className="shrink-0 text-muted" /> : <ChevronDown size={13} className="shrink-0 text-muted" />}</>}
       </button>
 
-      {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && <SettingsDialog initialSection={settingsSection} onClose={() => setSettingsOpen(false)} />}
     </div>
   );
 }

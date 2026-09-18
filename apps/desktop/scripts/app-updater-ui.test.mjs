@@ -10,8 +10,78 @@ const page = await browser.newPage({ viewport: { width: 1050, height: 700 } });
 const errors = [];
 page.on("pageerror", (error) => errors.push(error.message));
 const button = (name) => page.getByRole("button", { name, exact: true });
+const fixture = "http://127.0.0.1:1597/scripts/fixtures/app-updater/preview.html";
+const startupDialog = page.getByRole("dialog", { name: "发现新版本", exact: true });
+const checkCount = () => page.evaluate(() => window.calls.filter(c => c === "plugin:updater|check").length);
 try {
-  await page.goto("http://127.0.0.1:1597/scripts/fixtures/app-updater/preview.html");
+  for (const mode of ["current", "offline"]) {
+    await page.goto(`${fixture}?startup&mode=${mode}`);
+    await page.waitForFunction(() => window.updater.getState().startupChecked && window.updater.getState().phase !== "checking");
+    assert.equal(await checkCount(), 1, "StrictMode must not duplicate the startup request");
+    assert.equal(await startupDialog.count(), 0);
+    assert.equal(await page.getByRole("alert").count(), 0, "startup failure is silent");
+    if (mode === "offline") {
+      await button("检查更新").click();
+      await page.getByRole("alert").filter({ hasText: "网络不可用" }).waitFor();
+    }
+  }
+
+  await page.goto(`${fixture}?startup&notReady`);
+  await button("初始化完成").waitFor();
+  assert.equal(await checkCount(), 0, "wait for application initialization");
+  await button("初始化完成").click();
+  await startupDialog.waitFor();
+  assert.equal(await checkCount(), 1);
+  assert.equal(await page.evaluate(() => window.calls.includes("plugin:updater|download")), false, "prompt needs consent");
+  await startupDialog.getByRole("button", { name: "暂不更新" }).click();
+  await button("切换启动组件").click();
+  await button("切换启动组件").click();
+  await page.evaluate(() => window.updater.getState().check({ startup: true }));
+  assert.equal(await startupDialog.count(), 0, "dismissal lasts for the session, including remounts");
+  assert.equal(await checkCount(), 1);
+  await button("下载更新").click();
+  await page.getByText(/50%/).waitFor();
+  await page.evaluate(() => window.finishDownload());
+  await button("安装并重启").waitFor();
+
+  await page.goto(`${fixture}?startup&blocked`);
+  await page.waitForFunction(() => window.updater.getState().phase === "available");
+  assert.equal(await startupDialog.count(), 0, "do not interrupt another modal or library migration");
+  await button("迁移完成").click();
+  await startupDialog.waitFor();
+  assert.equal(await checkCount(), 1, "next app launch checks again");
+  await mkdir(".tmp/app-updater", { recursive: true });
+  await startupDialog.evaluate(async element => {
+    await Promise.all(element.getAnimations({ subtree: true }).map(animation => animation.finished));
+  });
+  await page.screenshot({ path: ".tmp/app-updater/startup.png" });
+  await startupDialog.getByRole("button", { name: "立即更新" }).click();
+  await startupDialog.getByText(/50%/).waitFor();
+  await page.evaluate(() => { window.badSignature = true; window.finishDownload(); });
+  await startupDialog.getByRole("alert").filter({ hasText: "签名校验失败" }).waitFor();
+  assert.equal(await startupDialog.getByRole("button", { name: "安装并重启" }).count(), 0);
+  await page.evaluate(() => { window.badSignature = false; });
+  await startupDialog.getByRole("button", { name: "立即更新" }).click();
+  await startupDialog.getByText(/50%/).waitFor();
+  await page.evaluate(() => window.finishDownload());
+  await startupDialog.getByRole("button", { name: "安装并重启" }).waitFor();
+  await page.evaluate(() => window.store.setState({ generating: true }));
+  await startupDialog.getByRole("button", { name: "安装并重启" }).click();
+  await startupDialog.getByRole("alert").filter({ hasText: "正在进行" }).waitFor();
+  assert.equal(await page.evaluate(() => window.calls.includes("plugin:updater|install")), false);
+  await page.evaluate(() => { window.store.setState({ generating: false }); });
+  await startupDialog.getByRole("button", { name: "安装并重启" }).click();
+  await page.waitForFunction(() => window.calls.includes("plugin:process|restart"));
+  const startupCalls = await page.evaluate(() => window.calls);
+  assert.ok(startupCalls.indexOf("flush") < startupCalls.indexOf("plugin:updater|install"));
+
+  await page.goto(`${fixture}?startup`);
+  await startupDialog.waitFor();
+  await page.keyboard.press("Escape");
+  await startupDialog.waitFor({ state: "detached" });
+  assert.equal(await page.evaluate(() => window.updater.getState().startupPrompt), false, "Escape also dismisses for the session");
+
+  await page.goto(fixture);
   await page.evaluate(() => { window.mode = "offline"; });
   await button("检查更新").click();
   await page.getByRole("alert").filter({ hasText: "网络不可用" }).waitFor();
@@ -58,5 +128,5 @@ try {
   assert.ok(calls.indexOf("flush") < calls.indexOf("plugin:updater|install"));
   assert.equal(calls.filter(c => c === "plugin:updater|install").length, 2, "restart retries never install again");
   assert.deepEqual(errors, []);
-  console.log("PASS updater: offline/current/new release, progress, reopen, duplicate calls, invalid signature, retry, task/save guards, install/restart failures");
+  console.log("PASS updater: startup prompt/consent/defer/next launch, StrictMode, initialization/modal gates, silent startup errors, manual check, progress, reopen, duplicate calls, invalid signature, retry, task/save guards, install/restart failures");
 } finally { await browser.close(); await server.close(); }
