@@ -2,15 +2,15 @@
 
 本目录记录 Mac 上的本地开发、运行和未签名构建流程。Bowerbird 使用 canonical Tauri / React / Rust 源码，不维护 macOS override。构建架构以 `rustc -vV` 的 host 为准；Intel 为 `x86_64-apple-darwin`，Apple Silicon 原生工具链为 `aarch64-apple-darwin`。
 
-## 2026-09-18 Mac 26.9.19 引导更新包（本机构建待发布）
+## 2026-09-18 Mac 26.9.1802 引导更新包（本机构建待发布）
 
-合并 dev `56699d3`（官网更新修复 + 设计师引导文案与 7.1 步骤）后，按 [DESKTOP-UPDATES.md](../dev-doc/DESKTOP-UPDATES.md) 流程构建 26.9.19：版本升至 26.9.19（tauri.conf.json + Cargo.toml），签名 release 构建通过；合并后引导契约 **14/14**、三身份引导 UI 与 v0917 包界面回归通过。arm64 二进制内嵌 Mac 公钥，`CFBundleShortVersionString` = 26.9.19，DMG `hdiutil verify` 通过。产物在 `macOS/dist/`（不入 Git）：
+合并 dev `56699d3`（官网更新修复 + 设计师引导文案与 7.1 步骤）后，按 [DESKTOP-UPDATES.md](../dev-doc/DESKTOP-UPDATES.md) 流程构建同日第二包：版本采用同日 patch 序号规范 **26.9.1802**（tauri.conf.json + Cargo.toml，> 已发布 26.9.18，updater 识别为升级），签名 release 构建通过；合并后引导契约 **14/14**、三身份引导 UI 与 v0917 包界面回归通过。arm64 二进制内嵌 Mac 公钥，`CFBundleShortVersionString` = 26.9.1802，DMG `hdiutil verify` 通过。产物在 `macOS/dist/`（不入 Git）：
 
-- 更新器安装包：`Bowerbird_26.9.19_aarch64.app.tar.gz`，**85,891,768 bytes**，SHA-256 `cba3a3b3f4a05cc410147e1b0bca1d2e7e20a567b29c2fe5072e54446b09fdcc`；同名 `.sig`/`.sha256` 附带。
-- 手动安装 DMG：`Bowerbird_26.9.19_aarch64-updater-installer.dmg`，**86,426,181 bytes**，SHA-256 `d139e04d99c0b4e6949f3729899d870825ada817d5db06f36689dc7f6842f2c4`；未签名/未公证。
-- 更新清单：`darwin-aarch64.json`（version 26.9.19，notes 为设计师引导更新说明，URL 暂指官网镜像 `https://bowerbird.cn/downloads/Bowerbird_26.9.19_aarch64.app.tar.gz`；若沿用 R2 直下，发布前用实际 URL 重新生成清单）。
+- 更新器安装包：`Bowerbird_26.9.1802_aarch64.app.tar.gz`，**85,891,597 bytes**，SHA-256 `70696d89fbdc9a2794038ebb68c739c4eb142e62f89253830b45ab6846d40be5`；同名 `.sig`/`.sha256` 附带。
+- 手动安装 DMG：`Bowerbird_26.9.1802_aarch64-updater-installer.dmg`，**86,425,875 bytes**，SHA-256 `3ba05d84f3d523ee526b831b149e79e22ebeaf4777bbbbffa784fd0d4d2b70d3`；未签名/未公证。
+- 更新清单：`darwin-aarch64.json`（version 26.9.1802，notes 为设计师引导更新说明，URL 暂指官网镜像 `https://bowerbird.cn/downloads/Bowerbird_26.9.1802_aarch64.app.tar.gz`；若沿用 R2 直下，发布前用实际 URL 重新生成清单）。
 
-**待发布**：上传包/签名/哈希 → 核对完整下载与公钥验签 → 原子替换清单后，26.9.18 客户端应能在应用内检查、下载、验签并替换重启——这将是 darwin 通道首次真实升级，验收后把结果记入 DESKTOP-UPDATES.md。本轮未运行真实应用内更新。
+**待发布**：上传包/签名/哈希 → 核对完整下载与公钥验签 → 原子替换清单后，26.9.18 客户端应能在应用内检查、下载、验签并替换重启——这将是 darwin 通道首次真实升级，验收后把结果记入 DESKTOP-UPDATES.md。本轮未运行真实应用内更新。（曾短暂构建过 26.9.19 版本号，不符合同日序号规范，产物未发布已删除。）
 
 ## Mac 应用内更新（darwin 通道，2026-09-18 配置）
 
