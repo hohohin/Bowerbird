@@ -2,6 +2,16 @@
 
 本目录记录 Mac 上的本地开发、运行和未签名构建流程。Bowerbird 使用 canonical Tauri / React / Rust 源码，不维护 macOS override。构建架构以 `rustc -vV` 的 host 为准；Intel 为 `x86_64-apple-darwin`，Apple Silicon 原生工具链为 `aarch64-apple-darwin`。
 
+## 2026-09-18 Mac 26.9.19 引导更新包（本机构建待发布）
+
+合并 dev `56699d3`（官网更新修复 + 设计师引导文案与 7.1 步骤）后，按 [DESKTOP-UPDATES.md](../dev-doc/DESKTOP-UPDATES.md) 流程构建 26.9.19：版本升至 26.9.19（tauri.conf.json + Cargo.toml），签名 release 构建通过；合并后引导契约 **14/14**、三身份引导 UI 与 v0917 包界面回归通过。arm64 二进制内嵌 Mac 公钥，`CFBundleShortVersionString` = 26.9.19，DMG `hdiutil verify` 通过。产物在 `macOS/dist/`（不入 Git）：
+
+- 更新器安装包：`Bowerbird_26.9.19_aarch64.app.tar.gz`，**85,891,768 bytes**，SHA-256 `cba3a3b3f4a05cc410147e1b0bca1d2e7e20a567b29c2fe5072e54446b09fdcc`；同名 `.sig`/`.sha256` 附带。
+- 手动安装 DMG：`Bowerbird_26.9.19_aarch64-updater-installer.dmg`，**86,426,181 bytes**，SHA-256 `d139e04d99c0b4e6949f3729899d870825ada817d5db06f36689dc7f6842f2c4`；未签名/未公证。
+- 更新清单：`darwin-aarch64.json`（version 26.9.19，notes 为设计师引导更新说明，URL 暂指官网镜像 `https://bowerbird.cn/downloads/Bowerbird_26.9.19_aarch64.app.tar.gz`；若沿用 R2 直下，发布前用实际 URL 重新生成清单）。
+
+**待发布**：上传包/签名/哈希 → 核对完整下载与公钥验签 → 原子替换清单后，26.9.18 客户端应能在应用内检查、下载、验签并替换重启——这将是 darwin 通道首次真实升级，验收后把结果记入 DESKTOP-UPDATES.md。本轮未运行真实应用内更新。
+
 ## Mac 应用内更新（darwin 通道，2026-09-18 配置）
 
 Mac 与 Windows 共用 Tauri 官方 updater 及同一入口 `https://bowerbird.cn/api/desktop-update/{{target}}-{{arch}}`；官网端点现接受 `darwin-aarch64` 与 `darwin-x86_64`，307 跳转到 `https://bowerbird.cn/downloads/updates/darwin-<arch>.json`（可用 `BOWERBIRD_DARWIN_AARCH64_UPDATE_MANIFEST_URL` / `BOWERBIRD_DARWIN_X86_64_UPDATE_MANIFEST_URL` 覆盖），其他平台仍返回 204。
@@ -43,7 +53,7 @@ pnpm tauri build --bundles app,dmg
 - 手动安装 DMG：`Bowerbird_26.9.18_aarch64-updater-installer.dmg`，**86,425,997 bytes**，SHA-256 `1504d411b2f3fe48a85c3e74057bf6696f57d64d04773a2166b0b84b13f35f3d`；未签名/未公证，仅本地测试。
 - 更新清单：`darwin-aarch64.json`（version 26.9.18，signature 为 `.sig` 内容，URL 指向 `https://bowerbird.cn/downloads/Bowerbird_26.9.18_aarch64.app.tar.gz`）。
 
-**尚未完成：** 产物与清单未上传官网 downloads，`/api/desktop-update/darwin-aarch64` 端点未部署——上传并部署前，已安装本包的应用「检查更新」会失败或显示无更新，不代表通道可用。x86_64 通道（Intel Mac）未构建：本机无 x86_64 工具链，需要时按同流程在对应架构构建发布。本轮未运行真实应用内更新（旧版 → 新版替换/重启），首次发布后应在实机演练一次。
+**后续（同日）：** 上述产物经用户 R2 中转由 Windows 侧核验后已正式发布：`darwin-aarch64` 清单上线（实际下载走 R2，官网留镜像），入口/清单/包与双端公钥验签通过，官网现役目录 `20260918-mac-updater-published`。本节「尚未上传/未部署」的表述自此作废；发布证据、复测命令与验收边界统一见 [DESKTOP-UPDATES.md](../dev-doc/DESKTOP-UPDATES.md)。仍未完成：x86_64（Intel）通道、Developer ID 签名/公证、旧版 → 新版实机替换重启验收。
 
 ## 2026-09-18 同步 dev 26.9.18
 
