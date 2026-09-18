@@ -13,6 +13,7 @@ pub struct Label {
     pub description: String,
     pub enabled: bool,
     pub count: i64,
+    pub has_examples: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -76,7 +77,9 @@ impl Database {
     pub fn local_labels(&self) -> AppResult<Vec<Label>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT t.id,t.name,t.classification_description,t.classification_enabled,COUNT(a.asset_id) \
+            "SELECT t.id,t.name,t.classification_description,t.classification_enabled,COUNT(a.asset_id), \
+             EXISTS(SELECT 1 FROM asset_tags m WHERE m.tag_id=t.id AND m.origin='manual') \
+             OR EXISTS(SELECT 1 FROM local_tag_rejections r WHERE r.tag_id=t.id) \
              FROM tags t LEFT JOIN asset_tags a ON a.tag_id=t.id GROUP BY t.id ORDER BY COUNT(a.asset_id) DESC,t.name")?;
         let rows = stmt.query_map([], |r| {
             Ok(Label {
@@ -85,6 +88,7 @@ impl Database {
                 description: r.get(2)?,
                 enabled: r.get(3)?,
                 count: r.get(4)?,
+                has_examples: r.get(5)?,
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)

@@ -703,9 +703,9 @@ impl Server {
             根据可见的主体、画法、材质或设计用途判断，不推断审批状态、客户归属或个人喜好。\
             {}已有标签及含义：{}。不确定的细节不要编造。",
             if discover {
-                "请生成1到4个简短中文分类标签。优先复用适合的已有名称，也可自由提出新标签。只返回JSON，description为简短中文视觉描述，tags为分类名称数组。"
+                "请生成1到4个简短中文分类标签，每个标签都来自图中实际可见的主体、画法、材质或设计用途，图中没有的概念不要输出。已有标签仅用于统一命名：仅当你要提出的标签与某个已有标签含义相同时才复用该名称，含义不同就提出新名称。只返回JSON，description为简短中文视觉描述，tags为分类名称数组。"
             } else {
-                "逐个判断目标图片是否属于已有标签。每个标签先用evidence说明图中是否具有要求的内容或风格，再用match返回true或false。目标图片不相关或缺少证据时必须返回false。所有标签都必须判断，不能因为只有一个候选就选中。只返回JSON，decisions为判断数组，每项包含name、evidence、match。"
+                "逐个判断目标图片是否属于已有标签。每个标签先用evidence指出图中可见的具体依据（主体、画法或材质），再用match返回true或false。无法指出可见依据时match必须为false。所有标签都必须判断，不能因为只有一个候选就选中。只返回JSON，decisions为判断数组，每项包含name、evidence、match。"
             },
             serde_json::to_string(&definitions).map_err(|e| e.to_string())?
         );
@@ -913,6 +913,7 @@ mod tests {
                 description: String::new(),
                 enabled: true,
                 count: 0,
+                has_examples: false,
             })
             .collect()
     }

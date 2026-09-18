@@ -22,6 +22,7 @@ export interface ClassificationLabel {
   description: string;
   enabled: boolean;
   count: number;
+  has_examples: boolean;
 }
 export const localClassification = {
   status: () => invoke<LocalClassificationStatus>("local_classification_status"),

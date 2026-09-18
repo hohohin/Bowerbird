@@ -5,6 +5,8 @@ pub mod runtime;
 mod tests;
 
 use serde::Serialize;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -242,7 +244,14 @@ impl LocalClassifier {
                 s.message = "正在识别素材".into();
             });
             let result = self
-                .classify_one(&server, db, library, id, tag.as_deref())
+                .classify_one(
+                    &server,
+                    db,
+                    library,
+                    id,
+                    tag.as_deref(),
+                    tag.is_none() && !pending_only,
+                )
                 .await;
             if self.cancel.load(Ordering::Relaxed) {
                 break;
@@ -276,9 +285,10 @@ impl LocalClassifier {
         library: &LibraryPaths,
         id: &str,
         tag: Option<&str>,
+        rebuild: bool,
     ) -> Result<(), String> {
         let revision = db.local_revision().map_err(|e| e.to_string())?;
-        let labels: Vec<_> = db
+        let mut labels: Vec<data::Label> = db
             .local_labels()
             .map_err(|e| e.to_string())?
             .into_iter()
@@ -287,33 +297,34 @@ impl LocalClassifier {
         if tag.is_some() && labels.is_empty() {
             return Err("标签已停用或删除".into());
         }
-        let evaluated: Vec<_> = labels.iter().map(|l| l.id.clone()).collect();
         let image = Self::image(db, library, id).await?;
         let mut combined = data::Prediction {
             description: String::new(),
             tags: vec![],
             matches: vec![],
         };
+        let mut evaluated: Vec<String> = Vec::new();
+        let mut exampleless: Vec<String> = Vec::new();
         if tag.is_none() {
-            let shortlist = &labels[..labels.len().min(8)];
+            discovery_sample(&mut labels, id);
             combined = server
-                .predict(&image, shortlist, true, &[], &self.cancel)
+                .predict(&image, &labels, true, &[], &self.cancel)
                 .await?;
+            // A discovered name that already exists is grounded in this image and
+            // attaches the existing label directly, without a second blind judgment.
             combined.matches.clear();
-            combined.tags.retain(|name| {
-                !labels
-                    .iter()
-                    .any(|label| label.name.eq_ignore_ascii_case(name))
-            });
+            ground_discovered_names(&labels, &mut combined);
         }
-        // Labels with manual examples are evaluated individually. All others are batched, with no vocabulary truncation.
-        let mut plain = Vec::new();
-        for label in labels {
+        // Labels with manual examples are evaluated individually. Automatic passes
+        // skip labels without examples instead of batch-voting them onto the image;
+        // those labels are only judged in an explicit per-label run. A full re-scan
+        // re-derives every automatic association, so stale ones are removed.
+        for label in &labels {
             let examples = db
                 .local_examples(&label.id, id)
                 .map_err(|e| e.to_string())?;
-            if examples.is_empty() {
-                plain.push(label);
+            if examples.is_empty() && tag != Some(label.id.as_str()) {
+                exampleless.push(label.id.clone());
                 continue;
             }
             let mut images = Vec::new();
@@ -321,15 +332,13 @@ impl LocalClassifier {
                 images.push((Self::image(db, library, &asset).await?, positive));
             }
             let prediction = server
-                .predict(&image, &[label], false, &images, &self.cancel)
+                .predict(&image, std::slice::from_ref(label), false, &images, &self.cancel)
                 .await?;
             combined.matches.extend(prediction.matches);
+            evaluated.push(label.id.clone());
         }
-        for chunk in plain.chunks(8) {
-            let prediction = server
-                .predict(&image, chunk, false, &[], &self.cancel)
-                .await?;
-            combined.matches.extend(prediction.matches);
+        if rebuild {
+            evaluated.extend(exampleless);
         }
         if self.cancel.load(Ordering::Relaxed) {
             return Err("已停止分类".into());
@@ -342,6 +351,40 @@ impl LocalClassifier {
         }
         Ok(())
     }
+}
+
+/// Discovery references a per-asset deterministic sample, never the most-used
+/// labels: an automatic attach must not raise a tag's rank and feed back into
+/// later suggestions.
+fn discovery_sample(labels: &mut Vec<data::Label>, asset: &str) {
+    const REFERENCE: usize = 8;
+    if labels.len() <= REFERENCE {
+        return;
+    }
+    labels.sort_unstable_by_key(|label| {
+        let mut hash = DefaultHasher::new();
+        label.id.hash(&mut hash);
+        asset.hash(&mut hash);
+        hash.finish()
+    });
+    labels.truncate(REFERENCE);
+}
+
+/// `labels` is the enabled set. Discovered names that match an existing label
+/// attach it directly; only genuinely new names create labels.
+fn ground_discovered_names(labels: &[data::Label], prediction: &mut data::Prediction) {
+    prediction.tags.retain(|name| {
+        match labels
+            .iter()
+            .find(|label| label.name.eq_ignore_ascii_case(name))
+        {
+            Some(label) => {
+                prediction.matches.push(label.id.clone());
+                false
+            }
+            None => true,
+        }
+    });
 }
 
 /// Also covers generated images and imports from every entry point. No inference runs without opt-in.

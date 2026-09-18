@@ -74,9 +74,9 @@ export function LocalClassificationDialog({ onClose }: { onClose: () => void }) 
         <label className="flex items-center gap-2">
           <input type="checkbox" checked={status?.enabled ?? false} disabled={!status?.installed || working}
             onChange={(e) => void action(() => local.enable(e.target.checked))} />
-          自动识别新素材，并匹配新增或修改的标签
+          自动识别新素材，并为设过示例的标签自动匹配图片
         </label>
-        <p className="text-xs text-muted">手动添加的标签会保留；你移除的标签不会自动贴回。停止任务也会暂停自动处理。</p>
+        <p className="text-xs text-muted">手动添加的标签会保留；你移除的标签不会自动贴回。未设示例的标签只用于统一命名，不会自动匹配。停止任务也会暂停自动处理。</p>
         {status?.message && <p role="status" aria-live="polite">{status.message}</p>}
         {status?.last_error && <p className="text-xs text-red-400">最近一次未完成原因：{status.last_error}</p>}
         {status?.busy && status.phase === "downloading" && <>
@@ -114,7 +114,7 @@ export function LocalClassificationDialog({ onClose }: { onClose: () => void }) 
           {labels.map((label) => <div key={label.id} className="py-2 space-y-1">
             <div className="flex flex-wrap items-center gap-2">
               <button className="text-cold font-medium" onClick={() => { setSmartFilter(`tag:${label.name}`); onClose(); }}>#{label.name}</button>
-              <span className="text-xs text-muted">{label.count} 张{label.enabled ? "" : " · 已停用自动匹配"}</span>
+              <span className="text-xs text-muted">{label.count} 张{label.enabled ? (label.has_examples ? "" : " · 未设示例，不自动匹配") : " · 已停用自动匹配"}</span>
               <button className="text-xs" onClick={() => edit(label)}>编辑</button>
               <button className="text-xs disabled:opacity-40" disabled={!canRun || !label.enabled} onClick={() => void action(() => local.start({ tagId: label.id }))}>寻找匹配</button>
               {selected.size > 0 && <>
