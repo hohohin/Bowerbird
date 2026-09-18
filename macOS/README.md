@@ -12,6 +12,25 @@
 
 **待发布**：上传包/签名/哈希 → 核对完整下载与公钥验签 → 原子替换清单后，26.9.18 客户端应能在应用内检查、下载、验签并替换重启——这将是 darwin 通道首次真实升级，验收后把结果记入 DESKTOP-UPDATES.md。本轮未运行真实应用内更新。（曾短暂构建过 26.9.19 版本号，不符合同日序号规范，产物未发布已删除。）
 
+## 一键发布流程（打包后自动上传 R2，2026-09-18 建立）
+
+`macOS/release.sh` 把发布串成一条命令（协议见 [DESKTOP-UPDATES.md](../dev-doc/DESKTOP-UPDATES.md)）：
+
+```bash
+bash macOS/release.sh <release-notes.txt>          # 完整：护栏→签名构建→归档校验→R2清单→上传→公网核对
+R2_SKIP_BUILD=1 R2_SKIP_UPLOAD=1 bash macOS/release.sh   # 本地演练：复用产物、不上传、无需凭据
+```
+
+流程内容：读取 `tauri.conf.json` 版本并按本机 rustc 架构选 `aarch64`/`x86_64`；**版本护栏**（必须高于该通道线上清单版本，同日重发布用日期+序号如 `26.9.1802`）；带私钥签名构建 `app,dmg`；核对包内版本/架构、DMG 完整性，归档 `macOS/dist/` 并生成 SHA-256；生成**指向 R2 直下地址**的 `darwin-<arch>.json` 清单；用 rclone 上传 `mac_package/`（更新包、`.sig`、`.sha256`、DMG、DMG 校验、清单）；最后公网 HEAD 核对 Content-Length。结束打印交接摘要（版本、URL、SHA-256、清单路径）。
+
+一次性准备：
+
+1. `brew install rclone`（上传工具，环境变量内联配置，不留配置文件）。
+2. `cp macOS/r2.env.example macOS/.signing/r2.env` 并填入 R2 的 Account ID / Access Key / Secret / 桶名（创建方式见模板注释；`.signing/` 不入 Git）。
+3. 更新器私钥沿用 `macOS/.signing/updater.key`。
+
+上传 ≠ 发布：官网 `downloads/updates/darwin-<arch>.json` 仍由发布侧**核验完整下载、SHA-256、公钥验签后原子替换**；上传后本机公网核对只验证了可达与大小。上传前请确认版本号已按规范提升（脚本护栏会拦同版本/降版本）。
+
 ## Mac 应用内更新（darwin 通道，2026-09-18 配置）
 
 Mac 与 Windows 共用 Tauri 官方 updater 及同一入口 `https://bowerbird.cn/api/desktop-update/{{target}}-{{arch}}`；官网端点现接受 `darwin-aarch64` 与 `darwin-x86_64`，307 跳转到 `https://bowerbird.cn/downloads/updates/darwin-<arch>.json`（可用 `BOWERBIRD_DARWIN_AARCH64_UPDATE_MANIFEST_URL` / `BOWERBIRD_DARWIN_X86_64_UPDATE_MANIFEST_URL` 覆盖），其他平台仍返回 204。
