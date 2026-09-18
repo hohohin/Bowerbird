@@ -20,7 +20,7 @@
 - 检查 Node.js、pnpm、Rust 和 Cargo 是否可用。
 - 强制要求 Rust 使用 Windows MSVC target，避免 GNU/MSVC 工具链混用。
 - 使用 `robocopy` 将 canonical 仓库复制到 `Windows/.work/`。
-- 排除 `.git`、`Windows`、`node_modules`、`target`、`dist` 和 `AGENTS.md`，避免递归复制和污染工作目录。
+- 排除 `.git`、仓库根目录 `Windows` 的绝对路径、`node_modules`、`target`、`dist` 和 `AGENTS.md`，避免递归复制和污染工作目录。不能按目录名排除 `Windows`：Robocopy 不区分大小写，会同时漏掉 `src-tauri/windows` 中的凭据隔离组件和安装钩子。
 - 不再应用 `Windows/overrides/`；`.work` 直接使用 canonical 源码。
 - 支持 `-Clean` 重建工作树。
 

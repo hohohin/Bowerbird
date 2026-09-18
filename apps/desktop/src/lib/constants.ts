@@ -2,5 +2,5 @@
 export const DEFAULT_AUTO_ANALYZE_PROMPT =
   "请描述这张图片并取名。严格按照以下格式回复：第一行只回复命名本身，不要有标点符号；第二行起回复图片的描述。不需要输出分类标签。";
 
-/** 官网首页（设置「关于我们」与账号「升级」共用同一链接）。TODO: 官网域名定稿后替换。 */
-export const WEBSITE_URL = "https://bowerbird-demo.onrender.com";
+/** 官网首页（设置「关于我们」入口）。 */
+export const WEBSITE_URL = "https://bowerbird.cn";

@@ -16,7 +16,8 @@
 @media (prefers-reduced-motion: reduce) { .demo-cursor, .demo-image { animation: none; } }
 .guide-role-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
 .guide-role-card { display: flex; flex-direction: column; align-items: flex-start; gap: 14px; text-align: left; padding: 24px 20px; border: 1px solid var(--bb-line); border-radius: 14px; background: var(--bb-surface); color: var(--bb-ink); }
-.guide-role-card:hover, .guide-role-card:focus-visible { border-color: #7c9cff; outline: 2px solid #7c9cff55; background: #7c9cff0a; }
+.guide-role-card:enabled:hover, .guide-role-card:enabled:focus-visible { border-color: #7c9cff; outline: 2px solid #7c9cff55; background: #7c9cff0a; }
+.guide-role-card:disabled { cursor: not-allowed; opacity: .6; }
 .guide-role-card > svg { color: #7c9cff; }
 .guide-role-card strong { font-size: 20px; }
 .guide-role-card p { font-size: 13px; line-height: 1.8; }

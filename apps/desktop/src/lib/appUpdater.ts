@@ -9,7 +9,10 @@ interface AppUpdaterState {
   downloaded: number;
   total: number | null;
   error: string | null;
-  check: () => Promise<void>;
+  startupChecked: boolean;
+  startupPrompt: boolean;
+  dismissStartupPrompt: () => void;
+  check: (options?: { startup?: boolean }) => Promise<void>;
   download: () => Promise<void>;
   install: (beforeInstall: () => Promise<void>) => Promise<void>;
   restart: () => Promise<void>;
@@ -19,16 +22,24 @@ interface AppUpdaterState {
 // persisted: after an app restart the release must be checked and verified again.
 export const useAppUpdater = create<AppUpdaterState>((set, get) => ({
   phase: "idle", update: null, downloaded: 0, total: null, error: null,
-  check: async () => {
+  startupChecked: false, startupPrompt: false,
+  dismissStartupPrompt: () => set({ startupPrompt: false }),
+  check: async ({ startup = false } = {}) => {
+    // Session-only guard also covers StrictMode and component remounts.
+    if (startup) {
+      if (get().startupChecked) return;
+      set({ startupChecked: true });
+    }
     if (!["idle", "current", "available"].includes(get().phase)) return;
     const previous = get().update;
     set({ phase: "checking", error: null });
     try {
       const update = await check({ timeout: 30_000 });
-      set({ update, phase: update ? "available" : "current", downloaded: 0, total: null });
+      set({ update, phase: update ? "available" : "current", downloaded: 0, total: null,
+        startupPrompt: startup && update !== null });
       await previous?.close().catch(() => {});
     } catch (error) {
-      set({ phase: previous ? "available" : "idle", error: `检查更新失败：${String(error)}` });
+      set({ phase: previous ? "available" : "idle", error: startup ? null : `检查更新失败：${String(error)}` });
     }
   },
   download: async () => {
