@@ -54,6 +54,7 @@ dev-doc/*
 !dev-doc/LOCAL-CLASSIFICATION.md
 !dev-doc/EMBEDDED-BROWSER.md
 !dev-doc/ONBOARDING.md
+!dev-doc/DESKTOP-UPDATES.md
 !dev-doc/CREATIVE-MEMORY-PLAN.md
 !dev-doc/SEEDANCE-2.5-INTEGRATION.md
 !dev-doc/VIDEO-API-INTEGRATION.md

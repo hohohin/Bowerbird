@@ -27,11 +27,14 @@ try {
   process.env.BOWERBIRD_WINDOWS_UPDATE_MANIFEST_URL = "http://example.com/insecure.json";
   response = await channelUrl("windows-x86_64");
   assert.equal(response.headers.get("location"), "https://bowerbird.cn/downloads/updates/windows-x86_64.json");
-  for (const target of ["darwin-aarch64", "darwin-x86_64"]) {
-    response = await channelUrl(target);
-    assert.equal(response.status, 307);
-    assert.equal(response.headers.get("cache-control"), "no-store");
-    assert.equal(response.headers.get("location"), `https://bowerbird.cn/downloads/updates/${target}.json`);
+  for (const target of ["windows-x86_64", "darwin-aarch64", "darwin-x86_64"]) {
+    for (const method of ["GET", "HEAD"]) {
+      response = await fetch(`${base}/api/desktop-update/${target}`, { method, redirect: "manual" });
+      assert.equal(response.status, 307);
+      assert.equal(response.headers.get("cache-control"), "no-store");
+      assert.equal(response.headers.get("location"), `https://bowerbird.cn/downloads/updates/${target}.json`);
+      assert.equal(await response.text(), "");
+    }
   }
   process.env.BOWERBIRD_DARWIN_AARCH64_UPDATE_MANIFEST_URL = "https://example.com/mac.json";
   response = await channelUrl("darwin-aarch64");
@@ -40,6 +43,7 @@ try {
   response = await channelUrl("darwin-aarch64");
   assert.equal(response.headers.get("location"), "https://bowerbird.cn/downloads/updates/darwin-aarch64.json");
   assert.equal((await channelUrl("linux-x86_64")).status, 204);
+  assert.equal((await fetch(`${base}/api/desktop-update/linux-x86_64`, { method: "HEAD" })).status, 204);
   assert.equal((await fetch(`${base}/healthz`)).status, 204);
   response = await fetch(`${base}/downloads/updates/windows-x86_64.json`);
   assert.equal(response.headers.get("cache-control"), "no-store");
