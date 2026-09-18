@@ -2,7 +2,19 @@
 
 本目录记录 Mac 上的本地开发、运行和未签名构建流程。Bowerbird 使用 canonical Tauri / React / Rust 源码，不维护 macOS override。构建架构以 `rustc -vV` 的 host 为准；Intel 为 `x86_64-apple-darwin`，Apple Silicon 原生工具链为 `aarch64-apple-darwin`。
 
-## 2026-09-18 Mac 26.9.1802 引导更新包（本机构建待发布）
+## 2026-09-19 Mac 26.9.1901 更新包（本机构建待发布）
+
+合并远端 dev `3f089bf`（Windows 26.9.1803 源码：启动静默检查更新与可跳过提醒 `StartupUpdateDialog`、仅开放设计师路线、账号升级直达权益/兑换面板、官网快照对齐）并纳入 mac 侧本地分类误标根治后出包。版本按同日 patch 序号规范定为 **26.9.1901**（9 月 19 日第 1 包；因前日已用 26.9.1802/1803 四位序号，19 日首个包需用 1901 才能高于线上 darwin-aarch64 26.9.1802，护栏通过）。合并后验证：Rust 全量 **371 passed / 5 ignored**、TypeScript `tsc --noEmit`、app-updater/引导/本地分类三组 UI 回归通过（随包 Vite production build 在 tauri build 内完成）。
+
+用 `R2_SKIP_UPLOAD=1 bash macOS/release.sh macOS/dist/release-notes-26.9.1901.txt` 完成签名构建与归档（本轮仅本地产出，未上传 R2）：arm64 二进制内嵌 Mac 公钥、`CFBundleShortVersionString` = 26.9.1901、DMG `hdiutil verify` 通过。产物在 `macOS/dist/`（不入 Git）：
+
+- 更新器安装包：`Bowerbird_26.9.1901_aarch64.app.tar.gz`，**85,893,526 bytes**，SHA-256 `af077004a66804fe9f16c79ecf35828b3acdfd5b00df48c64090b29b5c3ec06f`；同名 `.sig`/`.sha256` 附带。
+- 手动安装 DMG：`Bowerbird_26.9.1901_aarch64-updater-installer.dmg`，**86,439,465 bytes**，SHA-256 `f1d59df9ed63c6c9ff7a7eb15fb922a037e960103e863cf178247cc3af2035bf`；未签名/未公证。
+- 更新清单：`darwin-aarch64.json`（version 26.9.1901，notes 为本地分类防误标与启动检查更新说明，URL 指向 R2 直下 `mac_package/Bowerbird_26.9.1901_aarch64.app.tar.gz`）。
+
+**待发布**：上传包/签名/哈希 → 核对完整下载与公钥验签 → 原子替换官网 `downloads/updates/darwin-aarch64.json`。发布后 26.9.1802 客户端应用内升级即为启动静默检查的首次 darwin 通道验收。本轮未运行真实应用内更新。
+
+## 2026-09-18 Mac 26.9.1802 引导更新包（已发布）
 
 合并 dev `56699d3`（官网更新修复 + 设计师引导文案与 7.1 步骤）后，按 [DESKTOP-UPDATES.md](../dev-doc/DESKTOP-UPDATES.md) 流程构建同日第二包：版本采用同日 patch 序号规范 **26.9.1802**（tauri.conf.json + Cargo.toml，> 已发布 26.9.18，updater 识别为升级），签名 release 构建通过；合并后引导契约 **14/14**、三身份引导 UI 与 v0917 包界面回归通过。arm64 二进制内嵌 Mac 公钥，`CFBundleShortVersionString` = 26.9.1802，DMG `hdiutil verify` 通过。产物在 `macOS/dist/`（不入 Git）：
 
@@ -10,7 +22,7 @@
 - 手动安装 DMG：`Bowerbird_26.9.1802_aarch64-updater-installer.dmg`，**86,425,875 bytes**，SHA-256 `3ba05d84f3d523ee526b831b149e79e22ebeaf4777bbbbffa784fd0d4d2b70d3`；未签名/未公证。
 - 更新清单：`darwin-aarch64.json`（version 26.9.1802，notes 为设计师引导更新说明，URL 暂指官网镜像 `https://bowerbird.cn/downloads/Bowerbird_26.9.1802_aarch64.app.tar.gz`；若沿用 R2 直下，发布前用实际 URL 重新生成清单）。
 
-**待发布**：上传包/签名/哈希 → 核对完整下载与公钥验签 → 原子替换清单后，26.9.18 客户端应能在应用内检查、下载、验签并替换重启——这将是 darwin 通道首次真实升级，验收后把结果记入 DESKTOP-UPDATES.md。本轮未运行真实应用内更新。（曾短暂构建过 26.9.19 版本号，不符合同日序号规范，产物未发布已删除。）
+**已发布（同日）：** 上述 26.9.1802 产物已经双端发布流程核验上线，`darwin-aarch64` 清单现指向 R2 直下包；发布证据与验收边界以 [DESKTOP-UPDATES.md](../dev-doc/DESKTOP-UPDATES.md) 为准。（曾短暂构建过 26.9.19 版本号，不符合同日序号规范，产物未发布已删除。）
 
 ## 一键发布流程（打包后自动上传 R2，2026-09-18 建立）
 
