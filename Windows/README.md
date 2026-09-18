@@ -66,7 +66,7 @@ powershell -ExecutionPolicy Bypass -File .\Windows\build.ps1 -Clean
 1. 同步提升 `Cargo.toml` 与 `tauri.conf.json` 版本。必须高于已发布版本；同一天再次发布可增加 patch 数字，不覆盖已发布安装包。
 2. 执行 `Windows/build.ps1`，可传 `-ReleaseNotesFile <UTF-8文本>`，产出 `.exe`、`.exe.sig` 和 `windows-x86_64.json`。清单 URL 默认 `https://bowerbird.cn/downloads/Bowerbird_<version>_x64-setup.exe`。
 3. 先上传安装包及签名至现有官网 downloads，并验证下载内容与本地哈希及签名一致；随后原子替换 `downloads/updates/windows-x86_64.json`。版本清单中 signature 是 `.sig` 文件内容，不能填文件地址。最后更新官网手动下载链接。
-4. 官网 `/api/desktop-update/windows-x86_64` 以禁止缓存的 307 跳转到清单，可用 `BOWERBIRD_WINDOWS_UPDATE_MANIFEST_URL` 指定 HTTPS 清单地址。没有上传清单或网络失败会报检查失败，不冒充「最新版本」。目前只发布 Windows x64，其他平台返回 204；Mac 必须另外构建签名 `.app.tar.gz` 并接入对应平台入口。
+4. 官网 `/api/desktop-update/windows-x86_64` 以禁止缓存的 307 跳转到清单，可用 `BOWERBIRD_WINDOWS_UPDATE_MANIFEST_URL` 指定 HTTPS 清单地址。没有上传清单或网络失败会报检查失败，不冒充「最新版本」。官网现支持 `windows-x86_64`、`darwin-aarch64` 与 `darwin-x86_64` 三个更新入口，未支持的平台返回 204。目前只发布 Windows x64 签名包及清单；Mac 仍须另外构建签名 `.app.tar.gz` 并发布对应清单，入口上线不等于更新包可用。
 
 本地回归：`pnpm --filter @bowerbird/desktop test:app-updater`、`node website/scripts/app-updater.test.mjs`。合成 IPC 回归不会启动真实安装程序；正式发布前仍需在隔离 Windows 环境演练旧版 → 新版安装、重启、登录重置和素材保留。
 
