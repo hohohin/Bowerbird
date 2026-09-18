@@ -12,10 +12,10 @@ export const ONBOARDING_ROUTES: Record<OnboardingRole, GuideStep[]> = {
   designer: [
     { scene: "create-project", title: "创建第一个项目", body: "现在我们的巢里什么都没有，先来创建一个新的项目吧", target: "[data-tour=new-creation]" },
     { scene: "folder", title: "导入初始引导文件夹", body: "点击「导入 → 导入文件夹」，在打开的位置选择「初始引导」文件夹，将示例素材导入这个项目。", target: "[data-import-trigger], [role=menu][aria-label=导入素材]", highlight: "[data-tour=import-folder]" },
-    { scene: "source-scope", title: "认识素材的归属", body: "目前我们在项目中进行导入，则素材默认归为所打开的项目。你也可以在主界面导入素材/文件夹，那所导入的素材则属于全局素材。全局素材包含项目素材。", target: ".canvas-source-panel", highlight: "[data-tour=source-scope]" },
+    { scene: "source-scope", title: "认识素材的归属", body: "目前我们在项目中进行导入，则素材默认归为所打开的项目。\n你也可以在主界面导入素材/文件夹，那所导入的素材则属于全局素材。", target: ".canvas-source-panel", highlight: "[data-tour=source-scope]" },
     { scene: "open-explore", title: "打开探索", body: "你可以点击这里，直接浏览常用网站，收集灵感", target: "[data-tour=explore]" },
-    { scene: "explore", title: "把喜欢的素材拖到画板", body: "先点击小红书登录框右上角的「×」关闭弹窗，再选一张喜欢的素材，按住图片拖到右侧画板并松开。如果没有登录框，直接开始选图即可。", target: "[data-canvas-stage]" },
-    { scene: "expand-source", title: "展开素材库查看采集结果", body: "拖入画板中的素材即采集到该项目中。\n当然，在主界面也可以打开探索页进行灵感采集。", target: ".canvas-workspace", highlight: ".canvas-source-expand, .canvas-source-collapse" },
+    { scene: "explore", title: "把喜欢的素材拖到画板", body: "选一张喜欢的素材，按住图片拖到右侧画板并松开。", target: "[data-canvas-stage]" },
+    { scene: "expand-source", title: "", body: "探索面板展开时，素材库面板会收起来\n点击这里即可重新打开", target: ".canvas-workspace", highlight: ".canvas-source-expand, .canvas-source-collapse" },
     { scene: "activate-composer", title: "激活创作模式", body: "点击对话框激活创作模式", target: "[data-onboarding-composer]" },
     { scene: "sample-dimensions", title: "认识反推和维度环", body: "对于一张图片，你可以通过**反推**来获得其风格、类型、技术细节等提示词或者反推提示词。\n当你不想图像模型过多参考原图片的时候，可以试着用维度来进行生成\n反推需要登录，所以我们先试试看这张已经有反推数据的图片", target: ".canvas-source-panel" },
     { scene: "pick-prompt", title: "添加反推提示词", body: "请点击选择「反推提示词」维度，将其添加到对话框", target: '[data-dim="反推提示词"]', highlight: '[data-dim="反推提示词"]' },

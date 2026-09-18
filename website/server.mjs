@@ -474,7 +474,7 @@ export function startServer(options = parseArgs(process.argv.slice(2))) {
         return response.end();
       }
       if (request.method === "GET" && pathname === "/api/image-config") return jsonResponse(response, 200, publicConfig());
-      if (request.method === "GET" && pathname.startsWith("/api/desktop-update/")) {
+      if ((request.method === "GET" || request.method === "HEAD") && pathname.startsWith("/api/desktop-update/")) {
         // Separate from the website's manual download URL: only signed releases
         // are published to this manifest. Missing releases must not look current.
         const UPDATE_CHANNELS = {

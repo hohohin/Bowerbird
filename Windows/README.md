@@ -57,18 +57,7 @@ powershell -ExecutionPolicy Bypass -File .\Windows\build.ps1 -Clean
 
 ## 应用内更新
 
-设置 → 关于我们 → 当前版本提供「检查更新 → 下载更新 → 安装并重启」。采用 Tauri 官方 updater，HTTPS 获取版本清单，内置公钥验证安装包签名；校验失败不启用安装。关闭设置保留当前下载状态，安装前阻止已知运行中的生成/Agent/素材整理，并等待画板写入队列。Windows 使用 passive NSIS 安装并自动重新启动，保留原有清登录钩子和用户素材/项目。现有无更新入口的版本需先手动安装一次 26.9.18 或更高版本。
-
-发布公钥固定在 `apps/desktop/src-tauri/tauri.conf.json`。本机私钥在被 Git 忽略的 `Windows/.signing/updater.key`，请在发布前安全备份；不可提交、复制到官网或打入安装包，也不能为每次发布重新生成。其他构建机器通过 `TAURI_SIGNING_PRIVATE_KEY`（路径或内容）和可选 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 使用同一私钥。直接 `pnpm tauri build` 也必须设置该环境变量。`Windows/build.ps1` 优先使用环境变量，否则读取本机私钥；缺少签名会使打包失败。
-
-每次发布：
-
-1. 同步提升 `Cargo.toml` 与 `tauri.conf.json` 版本。必须高于已发布版本；同一天再次发布可增加 patch 数字，不覆盖已发布安装包。
-2. 执行 `Windows/build.ps1`，可传 `-ReleaseNotesFile <UTF-8文本>`，产出 `.exe`、`.exe.sig` 和 `windows-x86_64.json`。清单 URL 默认 `https://bowerbird.cn/downloads/Bowerbird_<version>_x64-setup.exe`。
-3. 先上传安装包及签名至现有官网 downloads，并验证下载内容与本地哈希及签名一致；随后原子替换 `downloads/updates/windows-x86_64.json`。版本清单中 signature 是 `.sig` 文件内容，不能填文件地址。最后更新官网手动下载链接。
-4. 官网 `/api/desktop-update/windows-x86_64` 以禁止缓存的 307 跳转到清单，可用 `BOWERBIRD_WINDOWS_UPDATE_MANIFEST_URL` 指定 HTTPS 清单地址。没有上传清单或网络失败会报检查失败，不冒充「最新版本」。Mac 通道（`darwin-aarch64` / `darwin-x86_64`）已接入同一端点并使用 Mac 专用密钥，流程见 [macOS/README.md](../macOS/README.md)；其余平台返回 204。
-
-本地回归：`pnpm --filter @bowerbird/desktop test:app-updater`、`node website/scripts/app-updater.test.mjs`。合成 IPC 回归不会启动真实安装程序；正式发布前仍需在隔离 Windows 环境演练旧版 → 新版安装、重启、登录重置和素材保留。
+更新操作、签名密钥、版本清单、双端发布/回滚及验收边界已集中到 [桌面自动更新](../dev-doc/DESKTOP-UPDATES.md)。打包或发布前先读该文档；Windows 安装清登录与数据保留要求继续见本页「构建安装包」。
 
 ## 常见问题
 

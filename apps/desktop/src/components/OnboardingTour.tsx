@@ -157,7 +157,7 @@ export function OnboardingTour() {
       // Successful real operations immediately reveal the next control. Reading
       // the source explanation and finishing the route remain explicit actions.
       if (role === "designer" && !(lesson.reviewUntil !== undefined && lesson.step < lesson.reviewUntil) && ready && readyProject && !modal && current.status === "active" && store.panel === "lesson"
-        && ["create-project", "folder", "open-explore", "explore", "activate-composer", "sample-dimensions"].includes(currentStep.scene)) {
+        && ["create-project", "folder", "open-explore", "explore", "sample-dimensions"].includes(currentStep.scene)) {
         store.setGuide(advanceRoleGuide(updated, text));
       } else if (tasksChanged || ready !== lesson.ready) store.setGuide(updated);
     }
@@ -175,6 +175,9 @@ export function OnboardingTour() {
       const current = useOnboarding.getState();
       if (current.guide !== before.guide) return;
       const next = advanceRoleGuide(current.guide, editorState().text, Date.now());
+      // Resuming 7.1 after an app restart retains the lesson, but the workspace
+      // may be back in browsing mode. Restore creation when the user continues.
+      if (next !== current.guide && role === "designer" && ONBOARDING_ROUTES[role][lesson.step].scene === "activate-composer") useStore.getState().setBoardActive(true);
       current.setGuide(next);
       if (next.status !== "active") {
         useStore.getState().closeCaptionRing();
@@ -225,21 +228,25 @@ export function OnboardingTour() {
   const needsProject = designer && !session.projectId && step.scene !== "create-project";
   const sampleTarget = sample ? `.canvas-source-panel [data-asset-id="${CSS.escape(sample.id)}"]` : ".canvas-source-panel";
   const promptAdded = step.scene === "pick-prompt" && session.ready;
-  const displayStep = promptAdded ? { ...step, target: "[data-onboarding-composer]", highlight: undefined, title: "维度已加入对话框", body: "所选的「反推提示词」维度已经添加到了对话框。你可以继续补充创作需求。" } : needsProject ? { ...step, target: "[data-tour=new-creation]", highlight: undefined }
+  // Keep 7.1 in the persisted ready state of step 7 without renumbering later lessons.
+  const composerIntro = designer && step.scene === "activate-composer" && session.ready;
+  const displayStep = composerIntro ? { ...step, title: "描述你的创作需求", body: "在对话框里用自然语言描述你想要的画面，或者通过园丁鸟AI工坊的更多功能辅助你的生成。" }
+    : promptAdded ? { ...step, target: "[data-onboarding-composer]", highlight: undefined, title: "维度已加入对话框", body: "所选的「反推提示词」维度已经添加到了对话框。你可以继续补充创作需求。" } : needsProject ? { ...step, target: "[data-tour=new-creation]", highlight: undefined }
     : sampleStep && (step.scene === "sample-dimensions" || !captionRing) ? { ...step, target: sampleTarget, highlight: sample ? sampleTarget : undefined } : step;
+  const hideStatus = designer && ["explore", "expand-source", "activate-composer", "sample-dimensions", "pick-prompt", "more-uses"].includes(step.scene);
   const content = <>
-    <header><span><BookOpen size={18} />{roleName} · {session.step + 1}/{steps.length}</span><div>
+    <header><span><BookOpen size={18} />{roleName} · {composerIntro ? "7.1" : session.step + 1}/{steps.length}</span><div>
       <button aria-label="上一步" title="上一步" disabled={session.step === 0 || routePending} onClick={() => void previousStep()}><ArrowLeft size={20} /></button>
       <button aria-label="下一步" title="下一步" disabled={routePending || !onProject || !session.ready} onClick={() => void nextStep()}><ArrowRight size={20} /></button>
       <button aria-label={minimized ? "展开入门引导" : "收起入门引导"} onClick={() => setMinimized(!minimized)}>{minimized ? <ChevronDown size={15} /> : <ChevronUp size={15} />}</button>
       <button aria-label="暂停入门引导" onClick={() => void pause()}><X size={15} /></button></div></header>
     {!minimized && <>
-      {designer ? <h2>{displayStep.title}</h2> : <ol>{steps.map((item, index) => <li key={item.scene} aria-current={session.step === index ? "step" : undefined} className={index < session.step ? "is-complete" : ""}>
+      {designer ? displayStep.title && <h2>{displayStep.title}</h2> : <ol>{steps.map((item, index) => <li key={item.scene} aria-current={session.step === index ? "step" : undefined} className={index < session.step ? "is-complete" : ""}>
         <span>{session.skippedSteps?.includes(index) ? "—" : index < session.step ? <Check size={12} /> : index + 1}</span>{item.title}{session.skippedSteps?.includes(index) ? "（已跳过）" : ""}</li>)}</ol>}
       <p className="onboarding-step-copy">{(onProject ? displayStep.body : "你已离开本路线的项目。进度已保留，请回到实操项目继续。").split("**").map((text, index) => index % 2 ? <strong key={index}>{text}</strong> : text)}</p>
       {needsProject && <p>这一步需要项目。请点击「新建创作」继续。</p>}
       {onProject && !needsProject && sampleStep && !promptAdded && <>
-        {sample ? !captionRing && <p>请左键点击框选的「初始引导」示例图，打开维度环。</p>
+        {sample ? !captionRing && <p className="onboarding-step-copy">{"在创作模式激活的时候，左键点击素材图片，即可打开维度环。\n请点击这张高亮的素材图片。"}</p>
           : <p role="status">{sampleLoading ? "正在查找示例图…" : "未找到带反推数据的示例图。请先导入「初始引导」文件夹，再重新查找。"}</p>}
         {!sample && !sampleLoading && <button className="app-modal-button" onClick={() => setSampleAttempt(value => value + 1)}>重新查找示例图</button>}
         {!boardOpen && <button className="app-modal-button" onClick={() => document.querySelector<HTMLElement>("[data-onboarding-composer] .ProseMirror")?.focus()}>激活创作模式</button>}
@@ -250,8 +257,8 @@ export function OnboardingTour() {
       </>}
       {!onProject && <button className="app-modal-button" onClick={() => show("welcome")}>返回身份页并继续项目</button>}
       {onProject && <>
-        {step.scene !== "more-uses" && <p role="status">{reviewing ? "点击下一步继续。" : session.ready ? step.scene === "workspace" || step.scene === "source-scope" ? "了解后继续下一步。" : "已检测到本步操作完成，可以继续。" : designer ? "请在界面中完成这一步操作。" : "完成上面的实际操作后，才能继续。"}</p>}
-        {(!designer || reviewing || ["source-scope", "expand-source", "pick-prompt", "more-uses"].includes(step.scene)) && <button className="app-modal-button is-primary" disabled={!session.ready && !reviewing} onClick={() => void nextStep()}>{session.step === steps.length - 1 ? "完成这条路线" : "下一步"}</button>}
+        {!hideStatus && <p role="status">{reviewing ? "点击下一步继续。" : session.ready ? step.scene === "workspace" || step.scene === "source-scope" ? "了解后继续下一步。" : "已检测到本步操作完成，可以继续。" : step.scene === "open-explore" ? "请点击上方探索按钮" : designer ? "请在界面中完成这一步操作。" : "完成上面的实际操作后，才能继续。"}</p>}
+        {(!designer || reviewing || composerIntro || ["source-scope", "expand-source", "pick-prompt", "more-uses"].includes(step.scene)) && <button className="app-modal-button is-primary" disabled={!session.ready && !reviewing} onClick={() => void nextStep()}>{step.scene === "more-uses" ? "完成设计师路线引导" : session.step === steps.length - 1 ? "完成这条路线" : "下一步"}</button>}
       </>}
       {error && <p role="alert" className="text-red-400">{error}</p>}
       <div className="onboarding-lesson-actions"><button className="onboarding-pause" onClick={() => void pause(true)}>切换身份</button><button className="onboarding-pause" onClick={() => void pause()}>稍后继续</button></div>
