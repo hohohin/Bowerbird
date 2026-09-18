@@ -29,7 +29,7 @@ if ($Clean -and (Test-Path $WorkDir)) {
 New-Item -ItemType Directory -Force $WorkDir | Out-Null
 
 # Keep the entire generated worktree under Windows/ and exclude it from recursion.
-& robocopy $RepoRoot $WorkDir /MIR /XD .git Windows node_modules target dist /XF AGENTS.md | Out-Null
+& robocopy $RepoRoot $WorkDir /MIR /XD .git $WindowsDir node_modules target dist /XF AGENTS.md | Out-Null
 if ($LASTEXITCODE -ge 8) {
     throw "Failed to copy the project into Windows/.work (robocopy exit $LASTEXITCODE)."
 }
