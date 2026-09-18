@@ -35,6 +35,16 @@ pnpm tauri build --bundles app,dmg
 
 边界：updater 签名只保证更新包完整性，与 Developer ID 签名/公证无关；当前 DMG 仍为未签名本地测试包，公开分发前仍需完成签名公证。老版本 Mac 安装包没有更新入口，需先手动安装一次带更新入口的版本。官网服务端改动需另行部署后通道才实际可用；本轮只完成本机配置与验证，未上传任何产物。
 
+## 2026-09-18 首个 Mac 更新包（26.9.18 aarch64，本机构建待上传）
+
+按上节流程完成首个 darwin 更新包：签名 release 构建（`--bundles app,dmg`）通过，二进制为 arm64、内嵌 Mac 公钥（Windows 公钥为 0）。标准 Tauri DMG 阶段本机首次直接通过，`hdiutil verify` 校验有效，挂载检查含 `Applications -> /Applications` 快捷方式、`.background` 背景与图标布局。产物在 `macOS/dist/`（不入 Git）：
+
+- 更新器安装包：`Bowerbird_26.9.18_aarch64.app.tar.gz`，**85,891,464 bytes**，SHA-256 `e7d51d75be739a3ff121a51694350b2b807056c33439b1e2bf23a7da9f7c3d91`；同名 `.sig` 与 `.sha256` 附带。
+- 手动安装 DMG：`Bowerbird_26.9.18_aarch64-updater-installer.dmg`，**86,425,997 bytes**，SHA-256 `1504d411b2f3fe48a85c3e74057bf6696f57d64d04773a2166b0b84b13f35f3d`；未签名/未公证，仅本地测试。
+- 更新清单：`darwin-aarch64.json`（version 26.9.18，signature 为 `.sig` 内容，URL 指向 `https://bowerbird.cn/downloads/Bowerbird_26.9.18_aarch64.app.tar.gz`）。
+
+**尚未完成：** 产物与清单未上传官网 downloads，`/api/desktop-update/darwin-aarch64` 端点未部署——上传并部署前，已安装本包的应用「检查更新」会失败或显示无更新，不代表通道可用。x86_64 通道（Intel Mac）未构建：本机无 x86_64 工具链，需要时按同流程在对应架构构建发布。本轮未运行真实应用内更新（旧版 → 新版替换/重启），首次发布后应在实机演练一次。
+
 ## 2026-09-18 同步 dev 26.9.18
 
 `mac` 合入远端 dev `a7d5dae`（26.9.18 更新器发布与桌面改进归档）。新增内容：Windows 应用内更新与官网更新通道源码（`AppUpdateCard`、`appUpdater`、`tauri.conf.json` updater 公钥/端点、`tauri-plugin-updater/process`、官网 `desktop-update` 接口与 `update-manifest.mjs`，版本升至 26.9.18）、本地分类 NVIDIA CUDA GPU 加速与重复标签逐项重判、下载错误带系统代理提示，以及文档索引整理（CLAUDE.md 收敛为指向 AGENTS.md 的入口）。

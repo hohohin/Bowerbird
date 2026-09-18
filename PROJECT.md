@@ -39,7 +39,7 @@
 
 **近期里程碑（仅保留最近 3 条；历史详见 [进展归档](dev-doc/进展归档.md)）**
 
-> **mac 端同步 dev 26.9.18（2026-09-18）：** mac 合入远端 dev `a7d5dae`（26.9.18 更新器发布与桌面改进归档）：Windows 应用内更新/官网更新通道源码（AppUpdateCard、appUpdater、update-manifest、website 更新接口）、本地分类 NVIDIA GPU 加速与重复标签恢复、下载系统代理提示及文档索引整理进入 mac；本地分类 runtime 融合 mac 跨平台 RuntimePack（macOS 13.3+ Intel/Apple Silicon）与 dev CUDA GPU 支持，界面同时保留 GPU 加速状态与 macOS 支持范围说明。保留 WKWebView 原生采集、系统标题栏、Finder 路径探测、微信 Opened 回流与 DMG 固定交付规范。验证与边界见 `macOS/README.md`；本次仅本地合并与测试，未打包 DMG、未推送。
+> **mac 端同步 dev 26.9.18（2026-09-18）：** mac 合入远端 dev `a7d5dae`（26.9.18 更新器发布与桌面改进归档）：Windows 应用内更新/官网更新通道源码（AppUpdateCard、appUpdater、update-manifest、website 更新接口）、本地分类 NVIDIA GPU 加速与重复标签恢复、下载系统代理提示及文档索引整理进入 mac；本地分类 runtime 融合 mac 跨平台 RuntimePack（macOS 13.3+ Intel/Apple Silicon）与 dev CUDA GPU 支持，界面同时保留 GPU 加速状态与 macOS 支持范围说明。保留 WKWebView 原生采集、系统标题栏、Finder 路径探测、微信 Opened 回流与 DMG 固定交付规范。同日配置 Mac 更新通道并构建首个更新包：官网端点扩展 darwin-aarch64/x86_64、Mac 独立签名密钥（pubkey 覆盖于 `tauri.macos.conf.json`）、`macOS/update-manifest.mjs` 清单工具，26.9.18 aarch64 的 `.app.tar.gz`+签名、DMG 与 `darwin-aarch64.json` 已在本机产出；产物未上传官网、官网服务端部署与真实应用内更新演练仍待完成，x86_64 通道未构建。合并、通道、构建与验证细节见 `macOS/README.md`。
 
 > **26.9.18 发布源码统一存档（2026-09-18）：** 将已发布的 Windows 自动更新与官网更新通道、本地分类系统代理/NVIDIA GPU/重复标签恢复、Mac 共用引导与快照会话交互，以及文档索引和历史整理统一纳入 Git。沿用已发布 26.9.18 安装包，SHA-256 f7da5237d1d8d75cab5363769c9c3f76795fe0f725525e0046a74abd9ee5a781，本次核对文件哈希，不重新打包或部署。存档复跑 Rust 361 passed / 8 ignored / 11 filtered、画板/引导等契约 139/139、官网更新接口测试、6 组 Chrome 合成 IPC 界面及 TypeScript/Vite 构建全部通过。源码、版本、测试和项目文档同次提交到 dev；签名私钥、安装产物及临时验证文件不入 Git。真实安装/重启/登录全链路与原生探索点击问题仍按既有记录待验，GPU 实测沿用专项证据；本次不操作真实账号或素材库。复核日志在本地 .tmp/archive-20260918/。
 
