@@ -477,13 +477,19 @@ export function startServer(options = parseArgs(process.argv.slice(2))) {
       if (request.method === "GET" && pathname.startsWith("/api/desktop-update/")) {
         // Separate from the website's manual download URL: only signed releases
         // are published to this manifest. Missing releases must not look current.
-        if (pathname !== "/api/desktop-update/windows-x86_64") {
+        const UPDATE_CHANNELS = {
+          "windows-x86_64": ["BOWERBIRD_WINDOWS_UPDATE_MANIFEST_URL", "windows-x86_64"],
+          "darwin-aarch64": ["BOWERBIRD_DARWIN_AARCH64_UPDATE_MANIFEST_URL", "darwin-aarch64"],
+          "darwin-x86_64": ["BOWERBIRD_DARWIN_X86_64_UPDATE_MANIFEST_URL", "darwin-x86_64"],
+        };
+        const channel = UPDATE_CHANNELS[pathname.slice("/api/desktop-update/".length)];
+        if (!channel) {
           response.writeHead(204, { "Cache-Control": "no-store" });
           return response.end();
         }
-        const manifestUrl = publicHttpsUrl(process.env.BOWERBIRD_WINDOWS_UPDATE_MANIFEST_URL)
-          || "https://bowerbird.cn/downloads/updates/windows-x86_64.json";
-        response.writeHead(307, { Location: manifestUrl, "Cache-Control": "no-store" });
+        const manifestUrl = publicHttpsUrl(process.env[channel[0]])
+          || `https://bowerbird.cn/downloads/updates/${channel[1]}.json`;
+        response.writeHead(307, { "Location": manifestUrl, "Cache-Control": "no-store" });
         return response.end();
       }
       if (request.method === "POST" && pathname === "/api/generate") return await handleGenerate(request, response);

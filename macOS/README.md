@@ -2,6 +2,39 @@
 
 本目录记录 Mac 上的本地开发、运行和未签名构建流程。Bowerbird 使用 canonical Tauri / React / Rust 源码，不维护 macOS override。构建架构以 `rustc -vV` 的 host 为准；Intel 为 `x86_64-apple-darwin`，Apple Silicon 原生工具链为 `aarch64-apple-darwin`。
 
+## Mac 应用内更新（darwin 通道，2026-09-18 配置）
+
+Mac 与 Windows 共用 Tauri 官方 updater 及同一入口 `https://bowerbird.cn/api/desktop-update/{{target}}-{{arch}}`；官网端点现接受 `darwin-aarch64` 与 `darwin-x86_64`，307 跳转到 `https://bowerbird.cn/downloads/updates/darwin-<arch>.json`（可用 `BOWERBIRD_DARWIN_AARCH64_UPDATE_MANIFEST_URL` / `BOWERBIRD_DARWIN_X86_64_UPDATE_MANIFEST_URL` 覆盖），其他平台仍返回 204。
+
+Mac 使用**独立签名密钥**，与 Windows 通道互不影响：私钥在本机被 Git 忽略的 `macOS/.signing/updater.key`（当前为空口令，首个 Mac 更新版本发布前可换为带口令密钥并同步更新 pubkey——一旦有带更新入口的 Mac 版本发布，密钥不可再换），公钥覆盖在 `apps/desktop/src-tauri/tauri.macos.conf.json` 的 `plugins.updater.pubkey`。共享 `tauri.conf.json` 已开启 `createUpdaterArtifacts`，因此**每次 mac 构建都必须提供私钥**，否则打包在签名一步失败：
+
+```bash
+TAURI_SIGNING_PRIVATE_KEY="$(cat macOS/.signing/updater.key)" \
+TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" \
+pnpm tauri build --bundles app,dmg
+```
+
+（密钥文件是空口令的 minisign 加密容器；不显式给 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""` 时 CLI 会尝试交互式询问口令，无终端的打包脚本直接失败。）
+
+构建产出 `apps/desktop/src-tauri/target/release/bundle/macos/Bowerbird.app.tar.gz` 与同名 `.sig`（updater 安装包及 minisign 签名）。发布流程沿用 Windows 约定：
+
+1. 版本高于已发布版本；按本机 `rustc -vV` 架构选 `aarch64` 或 `x86_64`。
+2. 上传前把 `Bowerbird.app.tar.gz` 重命名为 `Bowerbird_<版本>_<架构>.app.tar.gz`，连同 `.sig` 上传官网 downloads；核对下载内容与本地哈希一致。
+3. 生成本平台清单（signature 填 `.sig` 文件内容，不是地址）：
+
+   ```bash
+   node macOS/update-manifest.mjs \
+     apps/desktop/src-tauri/target/release/bundle/macos/Bowerbird.app.tar.gz \
+     <aarch64|x86_64> \
+     https://bowerbird.cn/downloads/Bowerbird_<版本>_<架构>.app.tar.gz \
+     darwin-<架构>.json [release-notes.txt]
+   ```
+
+4. 原子替换官网 `downloads/updates/darwin-<架构>.json`；官网 server 部署含新端点的 `website/server.mjs` 后通道生效。
+5. 更新器在 Mac 上的行为：下载 `.app.tar.gz`、内置公钥验签通过后替换正在运行的 `.app` 并重启（`appUpdater.ts` 的 install 后 relaunch 路径）；素材、项目与 Keychain 登录状态保留，没有 Windows 的清登录钩子。
+
+边界：updater 签名只保证更新包完整性，与 Developer ID 签名/公证无关；当前 DMG 仍为未签名本地测试包，公开分发前仍需完成签名公证。老版本 Mac 安装包没有更新入口，需先手动安装一次带更新入口的版本。官网服务端改动需另行部署后通道才实际可用；本轮只完成本机配置与验证，未上传任何产物。
+
 ## 2026-09-18 同步 dev 26.9.18
 
 `mac` 合入远端 dev `a7d5dae`（26.9.18 更新器发布与桌面改进归档）。新增内容：Windows 应用内更新与官网更新通道源码（`AppUpdateCard`、`appUpdater`、`tauri.conf.json` updater 公钥/端点、`tauri-plugin-updater/process`、官网 `desktop-update` 接口与 `update-manifest.mjs`，版本升至 26.9.18）、本地分类 NVIDIA CUDA GPU 加速与重复标签逐项重判、下载错误带系统代理提示，以及文档索引整理（CLAUDE.md 收敛为指向 AGENTS.md 的入口）。
@@ -12,7 +45,7 @@
 
 本机（Apple Silicon、rustc 1.97.1）验证：Rust 全量 **368 passed / 0 failed / 5 ignored**（无过滤，首次在此机器跑通含 examples 的全套）；画板/生成契约 **125/125**、引导 **14/14**；`local-classification-ui`、`app-updater-ui`、`composer-disabled-tooltip-ui`、`onboarding-pack-ui`、`onboarding-ui` 五组 Chrome 合成 IPC 回归、TypeScript `tsc --noEmit` 与 Vite production build 全部通过，保留既有 Rust 警告与大 chunk 提示。文档同批更新：PROJECT.md 新增同步里程碑并按「只保留 3 条」将旧条目移入进展归档，LOCAL-CLASSIFICATION/ONBOARDING 融合双平台记录。
 
-本轮仅本地合并与测试：未打包 DMG、未运行真实模型下载/GPU 推理（Mac 无 CUDA 路径）、未操作真实账号或素材库、未推送分支或部署服务。updater 端点目前仅发布 Windows x64 通道；Mac 更新通道未配置，不代表 Mac 自动更新已可用。
+本轮仅本地合并与测试：未打包 DMG、未运行真实模型下载/GPU 推理（Mac 无 CUDA 路径）、未操作真实账号或素材库、未推送分支或部署服务。Mac 更新通道在同日另行配置（见上节）；官网服务端与清单未部署前，Mac 检查更新仍表现为无更新或失败，不代表自动更新已可用。
 
 ## 2026-09-17 引导快照会话与创作提示存档重包
 
