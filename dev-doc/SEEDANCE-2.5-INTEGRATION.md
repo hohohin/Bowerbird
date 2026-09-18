@@ -1,19 +1,19 @@
 # Seedance 2.5 视频接入与验收记录
 
 > 日期：2026-09-06。状态：本地接入、自动回归与合成媒体验收完成；真实即梦生成及 Tauri 原生 UI 待验。
-> 本次用户已确认使用即梦官方 Dreamina CLI 路线；不扩展方舟托管视频 adapter。
+> 本文负责即梦官方 Dreamina CLI；并行的 Cloud 国内方舟接入见 [VIDEO-API-INTEGRATION.md](VIDEO-API-INTEGRATION.md)。两者均已纳入当前桌面源码，CLI 真实生成验收仍待完成。
 > 本文记录本专项的接口核验与验收证据；项目全局决策仍以 [PROJECT.md](../PROJECT.md) 为准。
 
 ## 1. 范围与依据
 
 应用接入 `seedance2.5` 文生视频、单图生视频、首尾帧生视频和全能参考四种模式。沿用现有本机即梦登录态、生成队列、持久化和项目画板归属。
 
-本次明确指定 Seedance 2.5：请求必须显式传 `--model_version seedance2.5`；权限不足或服务暂不可用时说明原因，不能静默切换为 2.0/fast。历史 [VIDEO-GENERATION.md](VIDEO-GENERATION.md) 的 2026-08-06 spike 与五模式规划保留原文；本次不把固定模型的 `multiframe2video` 当作 Seedance 2.5 实现。
+本次明确指定 Seedance 2.5：请求必须显式传 `--model_version seedance2.5`；权限不足或服务暂不可用时说明原因，不能静默切换为 2.0/fast。固定旧模型的 `multiframe2video` 不属于 Seedance 2.5 四模式；早期五模式规划已删除，历史 spike 可从 Git 查阅。
 
 相关资料：
 
 - [官方 Dreamina CLI 入口](https://jimeng.jianying.com/cli)。网页工具本次未成功提取入口内容，接口契约以已安装官方 CLI 的本机帮助输出为证。
-- [AI provider 接入路线](AI-PROVIDERS.md) 与 [历史生成系统规划/spike](VIDEO-GENERATION.md)。
+- [生成与理解 provider](Bowerbird开发计划.md#生成与理解)。
 - [当前项目画板契约](PROJECT-CANVAS-PLAN.md)。
 
 ## 2. 官方 CLI 本机核验

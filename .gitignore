@@ -50,7 +50,6 @@ my-library/
 dev-doc/*
 !dev-doc/HTML-RENDER-PLAN.md
 !dev-doc/UNIFIED-AGENT-HARNESS-PLAN.md
-!dev-doc/CANVAS-SESSION-PLAN.md
 !dev-doc/PROJECT-CANVAS-PLAN.md
 !dev-doc/LOCAL-CLASSIFICATION.md
 !dev-doc/EMBEDDED-BROWSER.md
@@ -68,7 +67,5 @@ dev-doc/*
 .tmp/local-classification/
 apps/desktop/.tmp/local-classification-build/
 !dev-doc/VIDEO-API-PROVENANCE.json
-!dev-doc/VIDEO-API-INTEGRATION-PREP-V2.md
-!dev-doc/VIDEO-API-INTEGRATION-V2.json
 !dev-doc/VIDEO-API-INTEGRATION-V3.md
 !dev-doc/VIDEO-API-INTEGRATION-V3.json

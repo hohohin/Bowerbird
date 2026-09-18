@@ -51,10 +51,12 @@ export function GenerationPanel({
   readOnly = false,
   embedded = false,
   hydratedAssets = [],
+  snapshot,
 }: {
   readOnly?: boolean;
   embedded?: boolean;
   hydratedAssets?: Asset[];
+  snapshot?: { job: GenJob; selectedTurnKey: string; onReuse: (turn: GenTurn) => void };
 } = {}) {
   const genJobs = useStore((s) => s.genJobs);
   const listedAssets = useStore((s) => s.assets);
@@ -74,7 +76,7 @@ export function GenerationPanel({
   const cloudAvailable = cloudAuth?.cloud_available ?? false;
   const setGenPanelOpen = useStore((s) => s.setGenPanelOpen);
   const genEditing = useStore((s) => s.genEditing);
-  const interactiveEditing = readOnly ? null : genEditing;
+  const interactiveEditing = readOnly || snapshot ? null : genEditing;
   const floatingEditing = interactiveEditing === "edit";
   const setGenEditing = useStore((s) => s.setGenEditing);
   const setActiveJob = useStore((s) => s.setActiveJob);
@@ -97,7 +99,7 @@ export function GenerationPanel({
   const [lightbox, setLightbox] = useState<{ images: string[]; index: number } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  const activeJob: GenJob | null = activeJobId ? genJobs[activeJobId] ?? null : null;
+  const activeJob: GenJob | null = snapshot?.job ?? (activeJobId ? genJobs[activeJobId] ?? null : null);
 
   // 历史任务也必须重新读取当前权益；降级后不可通过续改/重试绕过 BYO 门控。
   const activeProvider = activeJob?.provider === "codex-cli" || !activeJob?.provider
@@ -199,14 +201,17 @@ export function GenerationPanel({
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-  }, [imageCount, turnCount, activeJobId]);
+    if (snapshot) {
+      el.querySelector<HTMLElement>(`[data-generation-turn-key="${CSS.escape(snapshot.selectedTurnKey)}"]`)?.scrollIntoView({ block: "nearest" });
+    } else el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  }, [imageCount, turnCount, activeJobId, snapshot?.selectedTurnKey]);
 
   const running = !!activeJob?.running;
 
   // 「重新编辑」（首轮气泡 icon）：会话收起为底部编辑坞（载入首轮编辑框原文，创作板同等编辑），
   // 瀑布流露出并进入点图插 chip 模式；改完发送 = 用新组稿开新会话（版本分支）。
   function startEdit() {
+    if (snapshot) { snapshot.onReuse(snapshot.job.turns[0]); return; }
     if (running) return;
     setEditTurnId(null);
     setGenEditing("edit");
@@ -364,10 +369,12 @@ export function GenerationPanel({
           <button
             type="button"
             onClick={retryFirstTurn}
-            disabled={!targetReady || !canStartAnother}
+            disabled={!!snapshot || !targetReady || !canStartAnother}
             className="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-panel2 hover:text-accent disabled:opacity-40"
             title={
-              !targetReady
+              snapshot
+                ? "请复用提示词后生成"
+                : !targetReady
                 ? lockedReason
                 : !canStartAnother
                   ? "已达当前档位的并行生成上限"
@@ -378,7 +385,7 @@ export function GenerationPanel({
           </button>
           <button
             type="button"
-            onClick={() =>
+            onClick={() => snapshot ? snapshot.onReuse(snapshot.job.turns[0]) :
               reusePromptToBoard(
                 activeJob!.turns[0]?.promptRaw || activeJob!.lastPrompt,
                 undefined,
@@ -391,7 +398,7 @@ export function GenerationPanel({
             <Copy size={13} />
           </button>
           {/* 「登记为用途」（preset）：功能未完成，随 PRESET_FEATURE_ENABLED 隐藏。 */}
-          {PRESET_FEATURE_ENABLED && (
+          {PRESET_FEATURE_ENABLED && !snapshot && (
             <button
               type="button"
               onClick={() => setSavingPreset(true)}
@@ -440,6 +447,9 @@ export function GenerationPanel({
   // 续轮气泡下方的轮级操作（icon，与首轮同款样式）：编辑 / 重试。复用同 job 不占并行槽，
   // 仅按 provider 健康门控重试。
   function turnActions(turn: GenTurn) {
+    if (snapshot) return <button type="button" onClick={() => snapshot.onReuse(turn)}
+      className="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-panel2 hover:text-accent"
+      title="把编辑框原文 + 参考图载入创作板，可在其基础上编辑后重新生成"><Copy size={13} /></button>;
     if (running || !activeJob?.sessionId) return undefined;
     return (
       <div className="flex items-center gap-0.5">
@@ -589,9 +599,9 @@ export function GenerationPanel({
                   setLightbox({ images: refLightboxImages, index: r })
                 }
                 onOpenTurnRefs={(imgs, i) => setLightbox({ images: imgs, index: i })}
-                onAgentRetry={readOnly || (turn.media ?? activeJob.media) === "video" ? undefined : () => retryWithAgent(turn)}
+                onAgentRetry={readOnly || snapshot || (turn.media ?? activeJob.media) === "video" ? undefined : () => retryWithAgent(turn)}
                 onRetry={() => retryLastGenTurn(assets)}
-                canRetry={!readOnly && targetReady && !running}
+                canRetry={!readOnly && !snapshot && targetReady && !running}
                 retryReason={readOnly ? "旧会话回退只读；请完成迁移后在创作中继续" : lockedReason}
               />
             ))}
@@ -601,7 +611,12 @@ export function GenerationPanel({
 
       {/* 续轮就地在详情底部编辑，详情与历史始终可见。 */}
       <div className="shrink-0 border-t border-edge bg-panel p-4">
-        {readOnly ? (
+        {snapshot ? (
+          <button type="button" onClick={() => snapshot.onReuse(snapshot.job.turns[snapshot.job.turns.length - 1])}
+            className="w-full rounded bg-panel2 px-2.5 py-2 text-left text-xs text-muted ring-1 ring-edge transition-colors hover:text-ink hover:ring-accent">
+            复用提示词继续创作
+          </button>
+        ) : readOnly ? (
           <div className="text-center text-[10px] text-muted">旧会话仅供核对；不会继续生成、重试、取消或登记新状态。</div>
         ) : running ? (
           <button
@@ -757,7 +772,7 @@ function TurnView({
           .filter((t) => t.src);
 
   return (
-    <div className="flex flex-col gap-2.5">
+    <div className="flex flex-col gap-2.5" data-generation-turn-key={turn.turnKey}>
       {/* 用户消息：右侧气泡；各轮气泡上方常驻参考图「附件」缩略图（可点开放大）——
           续轮同样展示（用户需要看到上一轮产出图被带上了） */}
       <div className="flex flex-col items-end gap-1.5">

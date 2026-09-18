@@ -106,7 +106,7 @@ test('completed eight-step designer sessions resume at the prompt selection less
 });
 
 test('completed ten-step designer sessions continue with the final canvas hint', () => {
-  const restored = parseRoleGuide({...freshRoleGuide(), role:'designer', status:'paused', completedRoles:['designer'], sessions:{designer:{...session(9), designerEndingRevision: undefined, ready:true}}});
+  const restored = parseRoleGuide({...freshRoleGuide(), role:'designer', status:'paused', completedRoles:['designer'], sessions:{designer:{...session(9), designerEndingRevision:undefined, ready:true}}});
   assert.equal(restored.sessions.designer.step, 9);
   assert.equal(restored.sessions.designer.ready, false);
   assert.deepEqual(restored.completedRoles, []);
@@ -115,12 +115,21 @@ test('completed ten-step designer sessions continue with the final canvas hint',
   assert.equal(practiceReady('more-uses', restored.sessions.designer, {onProject:false}), false);
 });
 
-test('old ending order resumes at the hint, while completed endings stay completed', () => {
-  const legacy = {...freshRoleGuide(), role:'designer', status:'paused', sessions:{designer:{...session(10), designerEndingRevision:undefined}}};
-  const resumed = parseRoleGuide(legacy);
-  assert.equal(resumed.sessions.designer.step, 9);
-  assert.equal(resumed.sessions.designer.designerEndingRevision, 1);
-  assert.equal(ONBOARDING_ROUTES.designer[10].scene, 'ready-to-create');
-  assert.deepEqual(parseRoleGuide({...legacy, completedRoles:['designer'], sessions:{designer:{...legacy.sessions.designer, skippedSteps:[10]}}}).completedRoles, ['designer']);
-  assert.deepEqual(parseRoleGuide(resumed).sessions, resumed.sessions);
+test('old pending endings resume at the canvas hint once; finished routes stay finished', () => {
+  for (const step of [9, 10]) {
+    const old = {...freshRoleGuide(), role:'designer', status:'paused', sessions:{designer:{...session(step), designerEndingRevision:undefined, ready:true, skippedSteps:[9]}}};
+    const restored=parseRoleGuide(old);
+    assert.equal(restored.sessions.designer.step,9);
+    assert.equal(restored.sessions.designer.ready,false);
+    assert.equal(restored.sessions.designer.projectId,'p');
+    assert.deepEqual(restored.sessions.designer.skippedSteps,[10]);
+    assert.deepEqual(parseRoleGuide(restored),restored);
+  }
+  for (const ready of [true, false]) {
+    const old={...freshRoleGuide(),role:'designer',status:'paused',completedRoles:['designer'],sessions:{designer:{...session(10),designerEndingRevision:undefined,ready,skippedSteps:ready?[]:[10]}}};
+    const restored=parseRoleGuide(old);
+    assert.deepEqual(restored.completedRoles,['designer']);
+    assert.equal(restored.sessions.designer.step,10);
+    assert.deepEqual(parseRoleGuide(restored),restored);
+  }
 });

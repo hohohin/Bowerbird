@@ -1,5 +1,5 @@
 import { beginOnboardingOperation } from "../lib/onboardingStore";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { DEFAULT_VIDEO_OPTIONS, VIDEO_RATIOS, videoInputError, videoProvider, type GenerationSettings } from "../lib/videoGeneration";
 import { VideoControls } from "./creation/VideoControls";
 import { useStore } from "../store";
@@ -390,11 +390,24 @@ export function CreationBoard({
   const cloudBalance = cloudEntitlement
     ? cloudEntitlement.balances.daily + cloudEntitlement.balances.sub + cloudEntitlement.balances.topup
     : 0;
-  const targetReady = isCloudProvider(activeGenProvider)
-    ? cloudAvailable && !!cloudAuth?.logged_in && cloudBalance > 0
-    : activeGenProvider === "jimeng"
-      ? canUseByo(cloudEntitlement) && !!dreaminaHealth?.ok
-      : canUseByo(cloudEntitlement) && !!codexHealth?.ok;
+  const targetHealth = activeGenProvider === "jimeng" ? dreaminaHealth : codexHealth;
+  const targetCliLabel = activeGenProvider === "jimeng" ? "即梦 CLI" : "Codex CLI";
+  const targetUnavailableReason = isCloudProvider(activeGenProvider)
+    ? !cloudAvailable
+      ? "当前版本未配置 Bowerbird Cloud，请在设置中选择可用引擎。"
+      : !cloudAuth?.logged_in
+        ? "尚未登录 Bowerbird 账号，请通过左侧账号入口登录。"
+        : cloudBalance <= 0
+          ? "Bowerbird 积分不足，请补充积分后重试。"
+          : null
+    : !canUseByo(cloudEntitlement)
+      ? !cloudAuth?.logged_in
+        ? "请先登录具有自备引擎权限的 Bowerbird 账号。"
+        : "当前账号未开放自备引擎权限，请升级 Pro 后使用。"
+      : !targetHealth?.ok
+        ? `${targetCliLabel} 未就绪：${targetHealth?.reason?.trim() || "尚未取得可用的检测结果"}。请前往「设置 → 模型设置」检查安装和登录状态，并重新检测。`
+        : null;
+  const targetReady = targetUnavailableReason === null;
   // 统一 Agent 使用云端工具；普通生成的引擎选择不改变 Agent 路线。
   const activeCloudAgentRunCount = Object.values(cloudAgentRuns).filter((run) =>
     !["succeeded", "failed", "cancelled"].includes(run.status)
@@ -416,6 +429,37 @@ export function CreationBoard({
     : activeGenProvider === "jimeng"
       ? "即梦"
       : "codex";
+  const sendTooltipId = useId();
+  const sendDisabledReason = submitting
+    ? "正在提交指令，任务启动后即可继续生成。"
+    : agentZBusy
+      ? "正在投递到 Agent 终端，请等待投递完成。"
+      : agentDsBusy
+        ? "Agent DS 正在处理，请等待本轮完成。"
+        : cloudAgentBusy
+          ? "正在创建 Agent 会话，请稍候。"
+          : cloudAgentMode
+            ? !projectAgentContextReady
+              ? "Bowerbird Agent 需要在项目画板中启动，请先打开一个项目。"
+              : !cloudAvailable
+                ? "当前版本未配置 Bowerbird Cloud，暂时无法使用 Agent。"
+                : !cloudAuth?.logged_in
+                  ? "请通过左侧账号入口登录 Bowerbird 账号后使用 Agent。"
+                  : !cloudAgentEntitled
+                    ? "当前账号暂未开放 Agent，仅已获授权的测试账号可用。"
+                    : !cloudAgentHasCapacity
+                      ? "Agent 并发任务已达上限，请等待已有任务完成或取消任务。"
+                      : cloudBalance < cloudAgentRequiredBalance
+                        ? "积分不足：Agent 需要预授权 30 积分，请补充积分后重试。"
+                        : !(rawPrompt || finalPrompt).trim() ? "请先输入创作要求。" : null
+            : agentZMode || agentGMode || agentDsMode
+              ? !(rawPrompt || finalPrompt).trim() ? "请先输入创作要求。" : null
+              : agentBusy
+                ? "Agent 正在整理意图，请等待处理完成。"
+                : targetUnavailableReason
+                  ?? (!canStartAnotherJob(cloudEntitlement, runningJobCount)
+                    ? "已达当前档位的并行生成上限，请等待已有任务完成或取消任务。"
+                    : !finalPrompt ? "请先输入创作要求或添加参考内容。" : null);
   const hasAnnotationDimension = graphSources.some((source) =>
     source.dimensions.some((title) => title === "标注" || title === "标记")
   );
@@ -967,8 +1011,14 @@ export function CreationBoard({
             >
               <Info size={13} />
             </button>
-            <div className="pointer-events-none absolute bottom-full left-0 z-10 mb-1.5 hidden w-60 rounded-lg bg-panel2 p-2 text-[11px] leading-4 text-muted ring-1 ring-edge group-hover:block">
+            <div className="pointer-events-none absolute bottom-full left-0 z-10 mb-1.5 hidden w-60 rounded-lg bg-panel2 p-2 text-[11px] leading-4 text-muted ring-1 ring-edge group-hover:block group-focus-within:block">
               像跟 AI 输入 prompt 一样书写；<span className="text-accent">点瀑布流图片</span>，有维度数据时打开维度环，仅添加所选维度，不自动插入参考图；无维度数据时插入参考图。也可输入 <span className="text-accent">@图名</span> 插入参考图（空格/标点后自动识别）。<span className="text-accent">长按任意图片</span>四周会出现<span className="text-accent">维度环</span>，点环上扇区即可把该维度加入创作板（创作板未打开会自动打开）；无维度数据的图会提示先右键反推。
+              {isVideo && <p className="mt-2 text-[11px] leading-4 text-muted">{videoOptions.kind === "frames2video" ? "按编辑框中的参考顺序：第 1 张为首帧，第 2 张为尾帧。" : videoOptions.kind === "multimodal2video" ? "支持图片与视频参考；参考视频每段及总时长均须为 2–30 秒。" : ""}{generation.videoChannel === "cloud" ? "使用 Bowerbird 积分，按成功任务实际用量结算。" : "使用即梦 VIP 及即梦会员积分。"}提交后停止等待，远端任务仍可能完成并计费。</p>}
+              {cloudAgentMode && (
+                <p className="mt-2 text-[10px] leading-4 text-muted">
+                  隐私说明：本次文字和所选参考图会加密上传至 Bowerbird Cloud，仅用于规划与执行。输入和过程内容通常最长保留 24 小时，最终结果最长保留 7 天；取消会停止后续调用，已上传副本仍按上述期限清理。接受后的图片保存到本地素材库，其余素材和本地数据库不会上传。
+                </p>
+              )}
             </div>
           </div>
           <select aria-label="生成媒体" value={isVideo ? "video" : "image"}
@@ -1154,96 +1204,64 @@ export function CreationBoard({
               </span>
             </button>
           )}
-          {!targetReady && !cloudAgentMode && !agentZMode && !agentGMode && !agentDsMode && (
-            <span
-              className="max-w-56 truncate text-[10px] text-muted"
-              title="请先登录 Bowerbird 账号或在「设置 · AI 出图引擎」选择可用引擎"
-            >
-              请先登录账号或选择可用引擎
-            </span>
-          )}
-          {targetReady && !cloudAgentMode && !agentZMode && !agentGMode && !agentDsMode && !canStartAnotherJob(cloudEntitlement, runningJobCount) && (
-            <span className="text-[10px] text-muted" role="status">
-              已达并行生成上限，请等待已有任务完成或取消任务
-            </span>
-          )}
           {annotationWarning && (
             <span className="flex shrink-0 items-center text-red-400" title="该模型不支持标注参数，标注图可以被发送，但控制效果可能不及预期。">
               <Info size={14} aria-label="该模型不支持标注参数，标注图可以被发送，但控制效果可能不及预期。" />
             </span>
           )}
-          <button
-            onClick={() => void send()}
-            disabled={
-              submitting ||
-              agentZBusy ||
-              agentDsBusy ||
-              cloudAgentBusy ||
-              (cloudAgentMode
-                ? !(rawPrompt || finalPrompt).trim() || !cloudAgentReady
-                : agentZMode || agentGMode || agentDsMode
-                ? !(rawPrompt || finalPrompt).trim()
-                : agentBusy || !finalPrompt || !targetReady || !canStartAnotherJob(cloudEntitlement, runningJobCount))
-            }
-            title={
-              submitting ? "正在提交指令，任务启动后即可继续生成" : cloudAgentMode
-                ? !projectAgentContextReady
-                  ? "Bowerbird Agent 需要在项目画板中启动"
-                  : !cloudAuth?.logged_in
-                  ? "请先登录 Bowerbird 账号"
-                  : !cloudAgentEntitled
-                    ? "当前账号暂未开放 Agent，仅已获授权的测试账号可用"
-                    : !cloudAgentHasCapacity
-                      ? "当前 Agent 并发任务已达上限，请等待已有任务完成"
-                      : cloudBalance < cloudAgentRequiredBalance
-                        ? "积分不足：Agent Run 启动时会预授权积分，结束后按实际工具调用结算"
-                        : "创建 Bowerbird Agent 会话：明确目标并获得授权后执行"
-                : agentZMode
-                ? "发送到 Agent Z 终端（Claude Code TUI）：对话为主；涉及生图由 Claude Code 理解后自行调用 dreamina CLI"
-                : agentGMode
-                  ? "发送到 Agent G 终端（codex TUI）：对话为主；涉及生图/反推由 codex 调用 Bowerbird MCP 工具"
-                  : agentDsMode
-                    ? "发送给 Agent DS（DeepSeek 对话助手）：回复追加到创作板；生图/反推经 Bowerbird 链路执行"
-                    : !targetReady
-                      ? `${targetProviderLabel} 不可用`
-                      : !canStartAnotherJob(cloudEntitlement, runningJobCount)
-                        ? "已达当前档位的并行生成上限"
-                        : agentMode !== "off"
-                          ? `先由 Agent（${agentMode === "a" ? "方案A" : "方案B"}）整理意图，再发 ${targetProviderLabel} 生成图像`
-                          : `把当前 prompt + 参考图发 ${targetProviderLabel} 生成图像`
-            }
-            className="generation-send-button ml-auto"
+          <div
+            className="group relative ml-auto"
+            tabIndex={sendDisabledReason ? 0 : undefined}
+            aria-label={sendDisabledReason ? "生成暂不可用" : undefined}
+            aria-describedby={sendDisabledReason ? sendTooltipId : undefined}
           >
-            <span className="generation-button-content gap-1.5">
-              <Sparkles size={13} />
-              {submitting && !cloudAgentBusy && !agentZBusy && !agentDsBusy && !agentBusy
-                ? "正在提交…"
-                : cloudAgentBusy
-                ? "正在创建 Agent 会话…"
-                : cloudAgentMode
-                  ? "交给 Agent"
-                  : agentZBusy
-                ? "正在投递到 Agent…"
+            <button
+              onClick={() => void send()}
+              disabled={sendDisabledReason !== null}
+              aria-describedby={sendDisabledReason ? sendTooltipId : undefined}
+              title={sendDisabledReason ? undefined : cloudAgentMode
+                ? "创建 Bowerbird Agent 会话：明确目标并获得授权后执行"
                 : agentZMode
-                  ? "发送到 Agent Z"
+                  ? "发送到 Agent Z 终端（Claude Code TUI）"
                   : agentGMode
-                    ? "发送到 Agent G"
-                    : agentDsBusy
-                      ? "Agent DS 处理中…"
-                      : agentDsMode
-                        ? "发送给 Agent DS"
-                        : agentBusy
-                          ? "Agent 正在整理意图…"
-                          : isVideo ? "生成视频" : "生成图像"}
-            </span>
-          </button>
+                    ? "发送到 Agent G 终端（Codex TUI）"
+                    : agentDsMode
+                      ? "发送给 Agent DS（DeepSeek 对话助手）"
+                      : agentMode !== "off"
+                        ? `先由 Agent（${agentMode === "a" ? "方案A" : "方案B"}）整理意图，再发 ${targetProviderLabel} 生成${isVideo ? "视频" : "图像"}`
+                        : `把当前 prompt + 参考图发 ${targetProviderLabel} 生成${isVideo ? "视频" : "图像"}`}
+              className={`generation-send-button ${sendDisabledReason ? "pointer-events-none" : ""}`}
+            >
+              <span className="generation-button-content gap-1.5">
+                <Sparkles size={13} />
+                {submitting && !cloudAgentBusy && !agentZBusy && !agentDsBusy && !agentBusy
+                  ? "正在提交…"
+                  : cloudAgentBusy
+                  ? "正在创建 Agent 会话…"
+                  : cloudAgentMode
+                    ? "交给 Agent"
+                    : agentZBusy
+                  ? "正在投递到 Agent…"
+                  : agentZMode
+                    ? "发送到 Agent Z"
+                    : agentGMode
+                      ? "发送到 Agent G"
+                      : agentDsBusy
+                        ? "Agent DS 处理中…"
+                        : agentDsMode
+                          ? "发送给 Agent DS"
+                          : agentBusy
+                            ? "Agent 正在整理意图…"
+                            : isVideo ? "生成视频" : "生成图像"}
+              </span>
+            </button>
+            {sendDisabledReason && (
+              <div id={sendTooltipId} role="tooltip" className="pointer-events-none absolute bottom-full right-0 z-40 mb-2 hidden w-72 max-w-[calc(100vw-2rem)] whitespace-normal rounded-lg bg-panel2 p-2.5 text-xs leading-5 text-ink shadow-lg ring-1 ring-edge group-hover:block group-focus-within:block">
+                {sendDisabledReason}
+              </div>
+            )}
+          </div>
         </div>
-        {isVideo && <p className="mt-1.5 text-[11px] leading-4 text-muted">{videoOptions.kind === "frames2video" ? "按编辑框中的参考顺序：第 1 张为首帧，第 2 张为尾帧。" : videoOptions.kind === "multimodal2video" ? "支持图片与视频参考；参考视频每段及总时长均须为 2–30 秒。" : ""}{generation.videoChannel === "cloud" ? "使用 Bowerbird 积分，按成功任务实际用量结算。" : "使用即梦 VIP 及即梦会员积分。"}提交后停止等待，远端任务仍可能完成并计费。</p>}
-        {cloudAgentMode && (
-          <p className="mt-1.5 text-[10px] leading-4 text-muted">
-            隐私说明：本次文字和所选参考图会加密上传至 Bowerbird Cloud，仅用于规划与执行。输入和过程内容通常最长保留 24 小时，最终结果最长保留 7 天；取消会停止后续调用，已上传副本仍按上述期限清理。接受后的图片保存到本地素材库，其余素材和本地数据库不会上传。
-          </p>
-        )}
       </section>
     </div>
   );

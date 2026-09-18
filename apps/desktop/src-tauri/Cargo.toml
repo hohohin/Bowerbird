@@ -1,6 +1,6 @@
 [package]
 name = "bowerbird-desktop"
-version = "26.9.17"
+version = "26.9.18"
 description = "Bowerbird desktop app"
 authors = ["Bowerbird"]
 edition = "2021"
@@ -24,6 +24,8 @@ tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-deep-link = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
@@ -64,6 +66,8 @@ palette = "0.7"
 #   multipart：OpenAI Images /v1/images/edits 带参考图生图（spike）需要。
 reqwest = { version = "0.12", default-features = false, features = [
   "rustls-tls",
+  # GUI launches do not inherit shell proxy variables; honor the OS proxy settings.
+  "system-proxy",
   "json",
   "stream",
   "multipart",

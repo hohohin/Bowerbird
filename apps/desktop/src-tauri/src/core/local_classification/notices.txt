@@ -3,6 +3,8 @@ Qwen3.5-0.8B (Alibaba Qwen), Unsloth GGUF conversion: Apache-2.0
 https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF
 llama.cpp b10809: MIT
 https://github.com/ggml-org/llama.cpp
+NVIDIA CUDA 12.4 runtime libraries (downloaded from the pinned llama.cpp release): NVIDIA CUDA Toolkit License
+https://docs.nvidia.com/cuda/archive/12.4.0/eula/index.html
 
 
                                  Apache License

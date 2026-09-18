@@ -1,10 +1,6 @@
 # 国内方舟 Seedance 2.5 视频接入
 
-> 当前状态：视频与 FFmpeg 修复已完成主目录本地集成，见 [VIDEO-API-INTEGRATION-V3.md](VIDEO-API-INTEGRATION-V3.md)。视频迁移最终为 0058，已于 2026-09-11 与 Worker、Edge 一并部署；未启价、未完成真实生成验收。当前发布证据见本节，下文保留 v1/v2 历史证据。
-
-> v2 后续：完整代码已提交为 522a26d，安全集成演练和新实测准备见 [VIDEO-API-INTEGRATION-PREP-V2.md](VIDEO-API-INTEGRATION-PREP-V2.md)。下文 v1 状态保留为当时证据。
-
-> 2026-09-06，结果版本 video-api-local-v1。独立 worktree / 未提交 / 未合入保存项目 / 未部署 / 未启用生产价格。代码与离线验证完成，真实生成验收未完成。
+> 当前状态：0058、Worker 与 Edge 已于 2026-09-11 部署，未启价、未完成真实视频生成/账单验收；后续 Worker 与函数更新见 [收费化进度](ARCH-ADJUST-PROGRESS.md)。本文保存视频协议与当次部署回滚证据，历史集成哈希见 [v3 记录](VIDEO-API-INTEGRATION-V3.md)。
 
 ## 2026-09-11 云端同步部署
 
@@ -27,7 +23,7 @@
 | visual-profile-worker | 11 → 12 | false |
 | wechat-login | 11 → 12 | false |
 
-VPS Worker 镜像为 **`sha256:a353810bd6385c9c70caf50b879515994c5170d58778e355c10ff19104fef46c`**（336367007 bytes）。本次以已核验现役镜像叠加 FFmpeg/CA 与当前 Worker 源码，保留锁定的 DSH 依赖；正式 Dockerfiles/Compose 已补齐同等构建要求。`cloud-shared` 只复制 `video-contract.ts` 和测试所需 `task-authorization.ts` 到镜像对应跨包路径，VPS 源文件位于 `/opt/bowerbird/cloud-shared/`。现役容器 `agent-worker-generation-worker-1` 保持 node 用户、只读根目录、全部 capabilities 丢弃及原 1536 MiB 内存/CPU/PID 限制；/tmp 从 64 MiB 调整为有界 640 MiB，容纳单个最大 500 MiB 探测文件；唯一新增环境字段是 Cloud 共享源码构建目录。品牌提示词及 DSH Profile 已逐文件核对一致；renderer 运行源码一致，无需重建或重启。
+当次 VPS Worker 镜像为 **`sha256:a353810bd6385c9c70caf50b879515994c5170d58778e355c10ff19104fef46c`**（336367007 bytes）。本次以已核验现役镜像叠加 FFmpeg/CA 与当前 Worker 源码，保留锁定的 DSH 依赖；正式 Dockerfiles/Compose 已补齐同等构建要求。`cloud-shared` 只复制 `video-contract.ts` 和测试所需 `task-authorization.ts` 到镜像对应跨包路径，VPS 源文件位于 `/opt/bowerbird/cloud-shared/`。现役容器 `agent-worker-generation-worker-1` 保持 node 用户、只读根目录、全部 capabilities 丢弃及原 1536 MiB 内存/CPU/PID 限制；/tmp 从 64 MiB 调整为有界 640 MiB，容纳单个最大 500 MiB 探测文件；唯一新增环境字段是 Cloud 共享源码构建目录。品牌提示词及 DSH Profile 已逐文件核对一致；renderer 运行源码一致，无需重建或重启。
 
 验证：本地 Worker 352/352 与类型检查、视频 PGlite SQL 测试、Edge 52 tests/15 steps 和 12 入口 Deno check 通过。修复全量检查发现的权益签名 typed-array/结构类型、undefined 规范化既有断言与理解 Worker 日志状态类型；线上签名公钥验签通过，临时账号清理已核验。镜像在原 1536 MiB 内存限制下无网络探测 500 MiB（524288000 bytes）合成 MP4，通过合法 free box 补足大小，返回 320×320、24fps、1s；验证的是探测容量，不替代真实下载/生成/计费或并发峰值验收；DSH 离线 ACP/取消/审批/持久化调用/用量/封闭工具面探针通过。完整源码测试搬入精简只读镜像为 335 passed/17 failed，失败项为缺仓库夹具或不可写的测试路径；额外夹具上传被自动审批拒绝，未放宽生产权限，未将其称为容器全套通过。
 
@@ -122,4 +118,6 @@ Windows 内存不足时仅构建测试目标并关闭该目标 debug info：carg
 
 本任务自动审批曾拒绝本地读取 Key 的诊断动作，原因是转述的授权不足以构成可信授权；没有绕过。用户随后在经理窗口授权并由经理执行上述 GET。未在此任务重复凭据诊断或第二次提交。
 
-待经理处理：确认是否合入这份未提交代码；核对首次未知提交，并在明确授权后安排可审阅的新真实案例；完成四模式、Cloud→桌面下载入库、重启恢复和实际账单的线上验收。需实际部署时按顺序应用云迁移、Edge、VPS（安装 ffprobe），最后桌面；先在隔离环境设置测试价格，正式价格须单独决定。当前未充值、未购买、未开通模型、未推送迁移、未发布桌面，不能称为正式接通。
+当前只剩真实调用与启价验收：核对首次未知提交，在明确执行范围后准备独立新案例，完成四模式、Cloud→桌面下载入库、重启恢复和实际账单核对。代码集成、0058/Edge/VPS 部署及桌面本地打包已完成，不再重复安排；正式价格仍须单独决定。
+
+最小上游验收使用 `apps/agent-worker/scripts/video-api-acceptance.mjs`，准备模式离线，联网操作须显式 `--execute`。`submit` 在网络前排他写入并 fsync 门闩，同案例不可二次提交；结果未知保留原记录，不删除/复制门闩绕过。已知 task ID 的 `query` 只 GET 原任务。`list` 每次只读一页，`inspect` 只核对独立取得的 ID；时间、模型或相似参数不能建立唯一归属，空列表也不能证明未创建/未收费。`safety_identifier` 是终端用户标识，不是请求幂等键。诊断不落 Key、原始响应、提示词或签名 URL；实际 usage 与账单是否核实分别记录。此脚本只验上游 adapter，不替代完整 Cloud 账本及桌面验收。

@@ -453,7 +453,7 @@ async function serveStatic(request, response, root) {
   response.writeHead(200, {
     "Content-Type": MIME_TYPES.get(extension) || "application/octet-stream",
     "Content-Length": body.length,
-    "Cache-Control": relativePath.startsWith("admin/") ? "no-store" : shouldRevalidate ? "no-cache" : "public, max-age=3600",
+    "Cache-Control": relativePath.startsWith("admin/") || relativePath.startsWith("downloads/updates/") ? "no-store" : shouldRevalidate ? "no-cache" : "public, max-age=3600",
     "X-Content-Type-Options": "nosniff",
   });
   if (request.method === "HEAD") response.end();
@@ -474,6 +474,18 @@ export function startServer(options = parseArgs(process.argv.slice(2))) {
         return response.end();
       }
       if (request.method === "GET" && pathname === "/api/image-config") return jsonResponse(response, 200, publicConfig());
+      if (request.method === "GET" && pathname.startsWith("/api/desktop-update/")) {
+        // Separate from the website's manual download URL: only signed releases
+        // are published to this manifest. Missing releases must not look current.
+        if (pathname !== "/api/desktop-update/windows-x86_64") {
+          response.writeHead(204, { "Cache-Control": "no-store" });
+          return response.end();
+        }
+        const manifestUrl = publicHttpsUrl(process.env.BOWERBIRD_WINDOWS_UPDATE_MANIFEST_URL)
+          || "https://bowerbird.cn/downloads/updates/windows-x86_64.json";
+        response.writeHead(307, { Location: manifestUrl, "Cache-Control": "no-store" });
+        return response.end();
+      }
       if (request.method === "POST" && pathname === "/api/generate") return await handleGenerate(request, response);
       if (request.method !== "GET" && request.method !== "HEAD") throw httpError(405, "不支持的请求方法");
       await serveStatic(request, response, root);

@@ -22,6 +22,10 @@ try {
   assert.equal(await page.evaluate(() => window.calls.filter(c => c.command === "local_classification_start").length), 1);
   await page.evaluate(() => window.classificationStatus.installed = true);
   await dialog.getByRole("button", { name: "识别未处理素材" }).waitFor();
+  await page.evaluate(() => window.classificationStatus.acceleration = "GPU · NVIDIA GeForce RTX 4070 Ti SUPER（CUDA）");
+  await dialog.getByText("GPU · NVIDIA GeForce RTX 4070 Ti SUPER（CUDA）", { exact: true }).waitFor();
+  await page.evaluate(() => window.classificationStatus.acceleration = "CPU · GPU 驱动不可用，已回退 CPU");
+  await dialog.getByText("CPU · GPU 驱动不可用，已回退 CPU", { exact: true }).waitFor();
   await dialog.getByLabel("标签名称").fill("水彩植物");
   await dialog.getByLabel("分类说明").fill("有透明水彩笔触的植物插画");
   await dialog.getByRole("button", { name: "保存并寻找匹配素材" }).evaluate(el => { el.click(); el.click(); });

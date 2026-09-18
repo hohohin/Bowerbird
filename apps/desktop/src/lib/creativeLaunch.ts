@@ -4,7 +4,7 @@ export interface CreativePromptLoad {
   referenceNodeIds?: Array<string | null>;
   generation?: import("./videoGeneration").GenerationSettings;
   prompt: string;
-  refs: PromptedAsset[];
+  refs: Array<PromptedAsset & { referenceNames?: string[] }>;
   dimRefs: PromptedAsset[];
 }
 

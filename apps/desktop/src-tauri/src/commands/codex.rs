@@ -2,7 +2,7 @@
 //!
 //! 理解类（反推 / 命名 / 归类）经 understand provider 抽象按权益路由（codex CLI 或
 //! Bowerbird Cloud）；生成经 gen provider 抽象可选 codex / 即梦 / Cloud。命令名仍叫
-//! `codex_*` 是历史保留（见 AI-PROVIDERS.md 开放问题 1），语义已泛化。
+//! `codex_*` 是历史保留（见 PROJECT.md 约定 1），语义已泛化。
 //! 流式：通过 event `codex://chunk` 推 Chunk（Delta / Done / Error / Submit 等）。
 
 use std::path::PathBuf;

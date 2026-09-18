@@ -1,4 +1,5 @@
 import test from "node:test";
+import { canvasConversationTurn } from "../src/lib/canvasConversation.ts";
 import assert from "node:assert/strict";
 import { performance } from "node:perf_hooks";
 import {
@@ -810,7 +811,7 @@ test("prompt menu reuses the selected turn and deletes only its idle conversatio
   };
   const removed = [], dismissed = [], reused = [], closed = [];
   const state = { genJobs: jobs, activeJobId: "a", reusePromptToBoard: (...args) => reused.push(args), removeGenJob: (id) => dismissed.push(id), setGenPanelOpen: (value) => closed.push(value) };
-  const bindings = { useStore: { getState: () => state }, graphNodesRef: { current: [selected, node("version", "b"), node("result", "a", "asset"), node("unrelated", "other"), node("foreign", "foreign")] }, removeNodes: (ids) => removed.push(...ids), setPromptMenu() {} };
+  const bindings = { canvasConversationTurn, useStore: { getState: () => state }, graphNodesRef: { current: [selected, node("version", "b"), node("result", "a", "asset"), node("unrelated", "other"), node("foreign", "foreign")] }, removeNodes: (ids) => removed.push(...ids), setPromptMenu() {} };
   const agent = node("group", "", "agent_group");
   state.cloudAgentRuns = { run: { intentPrompt: "Agent original prompt", referenceAssetIds: ["turn-ref"] } };
   Object.assign(bindings, { agentGroupSummary: () => ({ runId: "run" }), assetById: new Map([["turn-ref", refs[0]]]), agentPromptGroupMap, graphEdges: [] });

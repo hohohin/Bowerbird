@@ -81,7 +81,7 @@ export function parseRoleGuide(value: unknown): RoleGuideProgress {
     const endingCompleted = Array.isArray(p.completedRoles) && p.completedRoles.includes("designer") && designer.step === 10;
     fresh.sessions.designer = { ...designer, designerEndingRevision: 1,
       ...(endingCompleted ? { ready: !designer.skippedSteps?.includes(9) } : {}),
-      ...(designer.step >= 9 && !endingCompleted ? { step: 9, ready: false, stepStartedAt: Date.now(), tasks: {} } : {}),
+      ...(designer.step >= 9 && !endingCompleted ? { step: 9, ready: false, stepVisit: (designer.stepVisit ?? 0) + 1, stepStartedAt: Date.now(), tasks: {} } : {}),
       ...(designer.reviewUntil !== undefined && designer.reviewUntil >= 9 ? { reviewUntil: undefined } : {}),
       ...(designer.skippedSteps ? { skippedSteps: designer.skippedSteps.map(step => step === 9 ? 10 : step === 10 ? 9 : step) } : {}) };
   }

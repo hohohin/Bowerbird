@@ -19,7 +19,7 @@ fn default_auto_analyze_prompt() -> String {
 }
 
 /// 即梦 dreamina CLI 默认模型版本（`--model_version`）。CLI 原生默认 5.0，
-/// Bowerbird 改用 5.0Pro 起步（AI-PROVIDERS.md 开放问题 3 的决策反转）。
+/// Bowerbird 改用 5.0Pro 起步（PROJECT.md 约定 1）。
 pub const DEFAULT_DREAMINA_MODEL_VERSION: &str = "5.0Pro";
 
 fn default_dreamina_model_version() -> String {

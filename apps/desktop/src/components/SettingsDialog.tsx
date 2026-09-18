@@ -11,6 +11,7 @@ import type { MigrateProgress } from "../lib/types";
 import { useOnboarding } from "../lib/onboardingStore";
 import { ModalShell } from "./ModalShell";
 import { RedeemCodeCard } from "./RedeemCodeCard";
+import { AppUpdateCard } from "./AppUpdateCard";
 
 const STAGE_LABEL: Record<string, string> = {
   images: "复制原图",
@@ -1048,10 +1049,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
 
           {section === "about" && (
             <>
-              <div className="settings-card px-3 py-2.5">
-                <div className="text-ink">当前版本</div>
-                <p className="mt-1 text-xs text-muted">{appVersion ?? "读取中…"}</p>
-              </div>
+              <AppUpdateCard version={appVersion} migrating={migrating} />
               <div className="settings-card flex items-center justify-between px-3 py-2.5">
                 <span className="text-ink">关于 Bowerbird</span>
                 <button
