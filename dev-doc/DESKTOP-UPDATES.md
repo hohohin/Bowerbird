@@ -16,6 +16,21 @@
 
 **Windows 26.9.18 / 26.9.1802 可通过设置发现 26.9.1803；Mac 最新仍为 26.9.1802。** 已上线的旧客户端需先手动检查或下载安装含启动检测的新包；仅更改服务器清单不会给旧客户端增加启动行为。同版本检查显示“当前已是最新版本”，后续更新须提高实际包版本。
 
+## Mac 26.9.1901 发布侧核验（2026-09-19，清单替换待执行）
+
+Mac `darwin-aarch64` 26.9.1901 更新包（mac 同步 dev `3f089bf` + 本地分类误标根治）已上传 R2 并完成发布侧核验，**官网清单尚未替换，线上仍为 26.9.1802**；替换后 26.9.1802 客户端经设置手动检查可升级，启动静默检查自本版本起在 Mac 生效。
+
+| 项 | 值 |
+|---|---|
+| 更新包 | `mac_package/Bowerbird_26.9.1901_aarch64.app.tar.gz`（R2 直下），85,893,526 bytes，SHA-256 `af077004a66804fe9f16c79ecf35828b3acdfd5b00df48c64090b29b5c3ec06f` |
+| 手动 DMG | `Bowerbird_26.9.1901_aarch64-updater-installer.dmg`，86,439,465 bytes，SHA-256 `f1d59df9ed63c6c9ff7a7eb15fb922a037e960103e863cf178247cc3af2035bf`；未签名/未公证 |
+| 新清单（待发布） | R2 `mac_package/darwin-aarch64.json`，SHA-256 `9211dc7b356a9d0398796a309a48642e590bf67333d8276d0e7b746fe3ed7bc5`；version 26.9.1901，signature 与包 `.sig` 逐字节一致 |
+| 公钥 | 与已发布 26.9.1802 客户端内嵌 Mac 公钥一致（key id `0b5a2efc4865664f`） |
+
+已通过：R2 完整下载大小与哈希、minisign 主签名与全局签名（`minisign-verify` 0.2.5 同构造：BLAKE2b-512 摘要 + Ed25519）、篡改字节拒绝、R2 `.sig`/`.sha256`/DMG/清单文件齐全。核验脚本与交接件在本地 `/tmp/bowerbird-release-26.9.1901/`（verify-minisign.mjs、swap-manifest.sh）。
+
+待执行（服务器 106.55.44.143，root）：`bash /tmp/bowerbird-release-26.9.1901/swap-manifest.sh` —— 备份现役目录 `downloads/updates/darwin-aarch64.json` 后，从 R2 下载新清单到同目录临时文件（哈希断言 `9211dc7b…`），rename 原子替换并公网复核入口 307、清单 26.9.1901 与 no-store。回滚：把备份文件 rename 回原名。仅变更清单，不改路由/服务/环境，Windows 通道与首页不受影响。
+
 ## Windows 26.9.1803 发布记录
 
 2026-09-18 23:57:06（北京时间）完成公网验收。包含启动时静默检查/可跳过新版提醒、仅开放设计师路线、应用内账号管理与兑换入口及官网链接修正。旧客户端先通过设置检查并升级一次，之后每次启动自动检查；发现更新仍由用户决定下载、安装和重启。

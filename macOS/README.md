@@ -12,7 +12,7 @@
 - 手动安装 DMG：`Bowerbird_26.9.1901_aarch64-updater-installer.dmg`，**86,439,465 bytes**，SHA-256 `f1d59df9ed63c6c9ff7a7eb15fb922a037e960103e863cf178247cc3af2035bf`；未签名/未公证。
 - 更新清单：`darwin-aarch64.json`（version 26.9.1901，notes 为本地分类防误标与启动检查更新说明，URL 指向 R2 直下 `mac_package/Bowerbird_26.9.1901_aarch64.app.tar.gz`）。
 
-**待发布**：上传包/签名/哈希 → 核对完整下载与公钥验签 → 原子替换官网 `downloads/updates/darwin-aarch64.json`。发布后 26.9.1802 客户端应用内升级即为启动静默检查的首次 darwin 通道验收。本轮未运行真实应用内更新。
+**发布进度（2026-09-19）**：包/签名/哈希/DMG/清单已上传 R2（`mac_package/`），发布侧核验全部通过——完整下载大小与 SHA-256 一致、minisign 主签名与全局签名通过（`minisign-verify` 0.2.5 同构造）、篡改字节被拒、公钥与已发布 26.9.1802 连续（key id `0b5a2efc4865664f`）、R2 清单 signature 与包 `.sig` 逐字节一致。**官网清单尚未替换，线上仍为 26.9.1802**；在服务器执行 `/tmp/bowerbird-release-26.9.1901/swap-manifest.sh`（备份→同目录临时文件→rename 原子替换→公网复核）即完成发布，交接值与回滚见 [DESKTOP-UPDATES.md](../dev-doc/DESKTOP-UPDATES.md)「Mac 26.9.1901 发布侧核验」。发布后 26.9.1802 客户端经设置手动检查升级；启动静默检查自本版本起在 Mac 生效，本轮未运行真实应用内更新。
 
 ## 2026-09-18 Mac 26.9.1802 引导更新包（已发布）
 
