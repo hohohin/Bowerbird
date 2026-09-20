@@ -109,7 +109,11 @@ export function LocalClassificationDialog({ onClose }: { onClose: () => void }) 
         <p className="text-xs text-muted">安装后标签匹配改用图像与文本的向量相似度判断（SigLIP2 系模型，int8 量化约 834 MB，含运行组件共约 881 MB，经国内镜像下载）；内置视觉模型只负责发现和命名，不再逐标签「看图打勾」。未安装时沿用内置视觉模型判断。</p>
         {status?.vector_supported && !status.vector_installed &&
           <button className="app-modal-button" disabled={busy} onClick={() => void action(() => local.vectorInstall())}>下载向量匹配模型</button>}
-        {status?.vector_installed && <p className="text-xs text-muted">安装或升级后运行一次「重新扫描全部图片」，全部自动标签将按向量判断重建。</p>}
+        {status?.vector_installed && <>
+          <p className="text-xs text-muted">安装或升级后运行一次「重新扫描全部图片」，全部自动标签将按向量判断重建。</p>
+          <button className="app-modal-button" disabled={busy} onClick={() => void action(() => local.vectorUninstall())}>卸载向量匹配模型</button>
+          <p className="text-xs text-muted">卸载后立即回退内置视觉模型判断，标签与示例不受影响；重新下载即可恢复。</p>
+        </>}
       </section>
 
       <section className="rounded border border-edge bg-panel2 p-3 space-y-2">

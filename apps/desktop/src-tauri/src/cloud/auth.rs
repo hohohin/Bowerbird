@@ -174,6 +174,9 @@ struct AuthInner {
     session: RwLock<Option<Session>>,
     pending: RwLock<Option<PendingLogin>>,
     refresh_lock: Mutex<()>,
+    /// 最近一次持久化成功的 refresh token。token 每次刷新都会轮换，缓存可以避免
+    /// 每小时刷新时重复读钥匙串（macOS 上未受信的钥匙串 ACL 每次读都会弹授权框）。
+    refresh_token: RwLock<Option<String>>,
 }
 
 fn jwt_expires_at(access_token: &str) -> Option<DateTime<Utc>> {
@@ -197,6 +200,7 @@ impl AuthClient {
                 session: RwLock::new(None),
                 pending: RwLock::new(None),
                 refresh_lock: Mutex::new(()),
+                refresh_token: RwLock::new(None),
             }),
         }
     }
@@ -488,13 +492,17 @@ impl AuthClient {
     }
 
     async fn refresh_from_keyring(&self) -> AppResult<bool> {
-        let refresh_token = match Self::keyring_entry()?.get_password() {
-            Ok(value) => value,
-            Err(keyring::Error::NoEntry) => {
-                *self.inner.session.write().unwrap() = None;
-                return Ok(false);
-            }
-            Err(error) => return Err(AppError::Cloud(format!("读取系统凭据失败: {error}"))),
+        let cached = self.inner.refresh_token.read().unwrap().clone();
+        let refresh_token = match cached {
+            Some(token) => token,
+            None => match Self::keyring_entry()?.get_password() {
+                Ok(value) => value,
+                Err(keyring::Error::NoEntry) => {
+                    *self.inner.session.write().unwrap() = None;
+                    return Ok(false);
+                }
+                Err(error) => return Err(AppError::Cloud(format!("读取系统凭据失败: {error}"))),
+            },
         };
         let token = self.refresh_with(&refresh_token).await?;
         self.store_session(token)?;
@@ -604,6 +612,7 @@ impl AuthClient {
     pub fn logout(&self) -> AppResult<AuthSnapshot> {
         *self.inner.session.write().unwrap() = None;
         *self.inner.pending.write().unwrap() = None;
+        *self.inner.refresh_token.write().unwrap() = None;
         Self::clear_saved_login()?;
         Ok(self.snapshot())
     }
@@ -711,6 +720,7 @@ impl AuthClient {
 
     fn invalidate_session(&self) {
         *self.inner.session.write().unwrap() = None;
+        *self.inner.refresh_token.write().unwrap() = None;
         let _ = Self::keyring_entry().and_then(|entry| match entry.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(error) => Err(AppError::Cloud(format!("清除失效凭据失败: {error}"))),
@@ -728,6 +738,7 @@ impl AuthClient {
         Self::keyring_entry()?
             .set_password(&token.refresh_token)
             .map_err(|error| AppError::Cloud(format!("写入系统凭据失败: {error}")))?;
+        *self.inner.refresh_token.write().unwrap() = Some(token.refresh_token.clone());
         let metadata = token
             .user
             .as_ref()

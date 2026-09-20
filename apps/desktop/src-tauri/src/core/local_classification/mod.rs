@@ -171,6 +171,18 @@ impl LocalClassifier {
         Ok(())
     }
 
+    /// Removes the vector pack. Refused while a classification or download
+    /// holds the busy gate: a live embedding session must not lose its files
+    /// (Windows cannot delete a loaded DLL mid-run).
+    pub fn uninstall_vector(&self) -> Result<(), String> {
+        let _guard = self
+            .gate
+            .clone()
+            .try_lock_owned()
+            .map_err(|_| "已有本地分类或下载任务在运行，请先停止再卸载")?;
+        vector::uninstall(&self.root)
+    }
+
     async fn image(db: &Database, library: &LibraryPaths, id: &str) -> Result<String, String> {
         let path = db
             .local_image_path(id)

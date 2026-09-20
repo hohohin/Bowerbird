@@ -381,3 +381,16 @@ async fn real_local_model_smoke() {
     assert!(custom_negative.unwrap().matches.is_empty());
     assert_eq!(example_match.unwrap().matches, vec!["personal"]);
 }
+
+#[test]
+fn vector_uninstall_waits_for_the_busy_gate() {
+    let dir = std::env::temp_dir().join(format!("vector-gate-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("vector")).unwrap();
+    let classifier = super::LocalClassifier::new(dir.clone());
+    let _held = classifier.gate.clone().try_lock_owned().unwrap();
+    assert!(classifier.uninstall_vector().unwrap_err().contains("请先停止"));
+    drop(_held);
+    classifier.uninstall_vector().unwrap();
+    assert!(!dir.join("vector").exists());
+    std::fs::remove_dir_all(&dir).unwrap();
+}

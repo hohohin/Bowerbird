@@ -50,6 +50,13 @@ pub async fn local_classification_vector_install(
 }
 
 #[tauri::command]
+pub async fn local_classification_vector_uninstall(
+    classifier: State<'_, Arc<LocalClassifier>>,
+) -> Result<(), String> {
+    classifier.inner().uninstall_vector()
+}
+
+#[tauri::command]
 pub async fn local_classification_stop(
     classifier: State<'_, Arc<LocalClassifier>>,
     db: State<'_, Arc<Database>>,

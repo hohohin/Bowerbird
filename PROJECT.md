@@ -321,6 +321,10 @@ DSH 当前执行遵循约定 50/51：按需加载领域 Skill，由 Agent 决定
 
 ## 踩坑记录
 
+### Mac 钥匙串反复弹“com.bowerbird.desktop 机密信息”授权框（2026-09-20）
+
+登录 refresh token 存 macOS 钥匙串（keyring crate，服务 `com.bowerbird.desktop`）。钥匙串条目的授权 ACL 按**签名身份**记录“始终允许”；此前 Mac 包是 ad-hoc 签名，每次发版 CDHash 都变，信任随即失效，于是每次读/写都弹授权框；而 token 每小时轮换一次，一次刷新就是“读一次 + 写回一次”两次钥匙串操作——用户输完密码还会连弹 2-3 次即由此而来。修复分三层：`cloud/auth.rs` 内存缓存最近一次 refresh token（缓存命中不再读钥匙串，轮换写回仍保留）；`macOS/setup-codesign-cert.sh` 一次性生成自签名 codeSigning 证书（`Bowerbird Local Code Signing`，10 年，存 `.signing/codesign.crt/.key`）导入 login 钥匙串；`release.sh` 检测到该身份时导出 `APPLE_SIGNING_IDENTITY` 让 Tauri 以稳定身份签名，并在 `tauri.macos.conf.json` 显式 `hardenedRuntime: false`（Tauri 默认 true，会拒掉无 Apple Events 授权的 AppleScript 拉 Terminal，且本地自签名不公证用不上）。用户升级到带稳定签名的版本后，首个钥匙串弹窗点一次“始终允许”即长期生效。坑：macOS 自带 LibreSSL 生成的 pkcs12 会被 `security import` 以 MAC 校验失败拒绝，须分别导入 PEM 私钥/证书；自签名证书不受系统信任，`security find-identity -v` 不列出它（正常，codesign 可用，用试签验证）；`$VAR` 后紧跟全角标点会被 bash 当作变量名字节（C locale），脚本内一律 `${VAR}`。
+
 ### mp4 crate 测试夹具空 SPS 触发 AvcCBox 越界 panic（2026-09-20）
 
 用 `Mp4Writer` 离线造 MP4 测试夹具时，`AvcConfig::default()` 的空 `seq_param_set` 会让 `AvcCBox::new` 读 `sps[1..=3]` 直接 index out of bounds panic（mp4 0.14.0），与被测逻辑无关且发生在 crate 内部。夹具需给 ≥4 字节占位 SPS（如 `0x67,0x42,0x00,0x1e`）与 ≥1 字节 PPS（`0x68`）。

@@ -34,6 +34,7 @@ export const localClassification = {
     invoke<void>("local_classification_start", { install: false, tagId: null, pendingOnly: true, ...options }),
   stop: () => invoke<void>("local_classification_stop"),
   vectorInstall: () => invoke<void>("local_classification_vector_install"),
+  vectorUninstall: () => invoke<void>("local_classification_vector_uninstall"),
   enable: (enabled: boolean) => invoke<void>("local_classification_enable", { enabled }),
   save: (id: string | null, name: string, description: string, enabled: boolean) =>
     invoke<string>("local_classification_save_label", { id, name, description, enabled }),

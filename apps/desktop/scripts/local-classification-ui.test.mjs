@@ -47,6 +47,9 @@ try {
   assert.equal(await page.evaluate(() => window.calls.filter(c => c.command === "local_classification_vector_install").length), 1);
   await page.evaluate(() => { window.classificationStatus.vector_installed = true; window.classificationStatus.busy = false; });
   await dialog.getByText("安装后标签匹配改用图像与文本的向量相似度判断", { exact: false }).waitFor();
+  await dialog.getByRole("button", { name: "卸载向量匹配模型" }).click();
+  assert.equal(await page.evaluate(() => window.calls.filter(c => c.command === "local_classification_vector_uninstall").length), 1);
+  await dialog.getByRole("button", { name: "下载向量匹配模型" }).waitFor();
   await page.evaluate(() => window.failure = "local_classification_start");
   await dialog.getByRole("button", { name: "寻找匹配", exact: true }).click();
   await dialog.getByRole("alert").waitFor();

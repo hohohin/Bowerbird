@@ -514,6 +514,7 @@ pub fn run() {
             commands::library::reclassify_all,
             commands::local_classification::local_classification_status,
             commands::local_classification::local_classification_vector_install,
+            commands::local_classification::local_classification_vector_uninstall,
             commands::local_classification::local_classification_start,
             commands::local_classification::local_classification_stop,
             commands::local_classification::local_classification_enable,

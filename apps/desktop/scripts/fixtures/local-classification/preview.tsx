@@ -25,6 +25,8 @@ w.__TAURI_INTERNALS__ = { invoke: async (command: string, args: any) => {
     case "local_classification_vector_install":
       w.classificationStatus.busy = true; w.classificationStatus.phase = "downloading";
       w.classificationStatus.message = "正在下载向量匹配模型（约 834 MB）"; return;
+    case "local_classification_vector_uninstall":
+      w.classificationStatus.vector_installed = false; w.classificationStatus.message = "向量匹配模型已卸载"; return;
     case "local_classification_enable": w.classificationStatus.enabled = args.enabled; return;
     case "local_classification_save_label": {
       const id = args.id ?? `label-${w.labels.length}`;

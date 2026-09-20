@@ -69,6 +69,17 @@ pub fn vector_installed(root: &Path) -> bool {
         && root.join("vector/ready.json").is_file()
 }
 
+/// Removes the pack outright. Missing directory is success so the button
+/// stays idempotent; the caller holds the busy gate so a live session never
+/// loses its files (Windows cannot delete a loaded DLL mid-run).
+pub fn uninstall(root: &Path) -> Result<(), String> {
+    match std::fs::remove_dir_all(root.join("vector")) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("卸载向量模型失败：{e}")),
+    }
+}
+
 fn verify(path: &Path, hash: &str) -> Result<(), String> {
     let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let mut digest = Sha256::new();
@@ -516,6 +527,17 @@ mod tests {
         let expected = (0.0_f32 - MEAN[0]) / STD[0];
         assert!((pixels[[0, 0, 0, 0]] - expected).abs() < 1e-6);
         assert!((pixels[[0, 1, 256, 256]] - (0.0 - MEAN[1]) / STD[1]).abs() < 1e-6);
+    }
+
+    #[test]
+    fn uninstall_removes_the_pack_and_tolerates_a_missing_directory() {
+        let dir = std::env::temp_dir().join(format!("vector-uninstall-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("vector")).unwrap();
+        std::fs::write(dir.join("vector/ready.json"), "{}").unwrap();
+        uninstall(&dir).unwrap();
+        assert!(!dir.join("vector").exists());
+        uninstall(&dir).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

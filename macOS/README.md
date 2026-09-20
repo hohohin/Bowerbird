@@ -10,11 +10,11 @@
 
 - 更新器安装包：`Bowerbird_26.9.2001_aarch64.app.tar.gz`，**86,344,811 bytes**，SHA-256 `de431a5fdc9da85cda13df2901df3ab54b1e075c2b793bb5fe077179d19931e0`；同名 `.sig`/`.sha256` 附带。
 - 手动安装 DMG：`Bowerbird_26.9.2001_aarch64-updater-installer.dmg`，**86,881,253 bytes**，SHA-256 `852fe0edd1d2304c4761a583bf3f75f43f2f049c1b537acf6e0f139f7220cfa5`；未签名/未公证。
-- 更新清单：`darwin-aarch64.json`（version 26.9.2001，SHA-256 `ed68d36aecf2f6c5ae3d2c18c670a4e71ff238af2e06ebd9f9f80ef8b27de46a`，URL 指向 R2 直下 `mac_package/Bowerbird_26.9.2001_aarch64.app.tar.gz`）。
+- 更新清单：`darwin-aarch64.json`（version 26.9.2001，SHA-256 `9114ec34faacf8d6ddc937d9f697be7f52528d4f219977be1dac2b1cb34e68fc`，URL 指向 cdn.bowerbird.cn 直下 `mac_package/Bowerbird_26.9.2001_aarch64.app.tar.gz`；2026-09-20 分发迁移腾讯 COS+CDN 后重新生成，原 R2 版清单哈希 `ed68d36a…` 作废）。
 
 本机核验：`CFBundleShortVersionString` = 26.9.2001、arm64 二进制内嵌 Mac 公钥与 `tauri.macos.conf.json` 及已发布 26.9.1802/1901 逐字节一致（key id `0b5a2efc4865664f`）、DMG `hdiutil verify` 通过、minisign 主签名与全局签名通过（`minisign-verify` 0.2.5 同构造）、篡改字节被拒、清单 signature 与 `.sig` 逐字节一致。
 
-**发布进度（2026-09-20）**：待恢复 `macOS/.signing/r2.env` 后在仓库根执行 `/tmp/bowerbird-release-26.9.2001/upload-r2.sh`（上传 6 个文件 + 公网完整下载哈希 + minisign 复核），再在服务器 106.55.44.143 执行 `/tmp/bowerbird-release-26.9.2001/swap-manifest.sh`（备份 26.9.1901 清单 → 哈希断言 `ed68d36a…` → rename 原子替换 → 公网复核）。回滚：把备份文件 rename 回原名。交接值与协议见 [DESKTOP-UPDATES.md](../dev-doc/DESKTOP-UPDATES.md)「Mac 26.9.2001 发布侧核验」。本轮未运行真实应用内更新。
+**发布进度（2026-09-20，分发迁移腾讯 COS+CDN）**：Mac 分发自本版起从 R2 r2.dev（Cloudflare 声明仅限开发且有速率限制）迁移至腾讯 COS + CDN 域名 `cdn.bowerbird.cn`（bowerbird.cn 已有粤 ICP 备案，DNS 在火山引擎）。前置：腾讯云控制台建桶（大陆地域，建议 ap-guangzhou 与官网服务器同地域）、CDN 域名 cdn.bowerbird.cn（COS 源站 + HTTPS 证书 + 一键授权）、火山 DNS 加 CNAME；随后 `cp macOS/cos.env.example macOS/.signing/cos.env` 填入密钥，在仓库根执行 `/tmp/bowerbird-release-26.9.2001/upload-cos.sh`（上传 26.9.2001 六件 + 镜像 26.9.18/1802/1901 历史包 + 公网完整下载哈希 + minisign 复核），再在服务器 106.55.44.143 执行 `/tmp/bowerbird-release-26.9.2001/swap-manifest.sh`（备份 26.9.1901 清单 → 哈希断言 `9114ec34…` → rename 原子替换 → 公网复核）。R2 桶与旧 r2.dev URL 原样保留（已发布历史清单仍指向它），不再作为新发布通道。回滚：把备份清单 rename 回原名。交接值与协议见 [DESKTOP-UPDATES.md](../dev-doc/DESKTOP-UPDATES.md)「Mac 26.9.2001 发布侧核验」。本轮未运行真实应用内更新。
 
 ## 2026-09-19 Mac 26.9.1901 更新包（已发布）
 
@@ -38,24 +38,40 @@
 
 **已发布（同日）：** 上述 26.9.1802 产物已经双端发布流程核验上线，`darwin-aarch64` 清单现指向 R2 直下包；发布证据与验收边界以 [DESKTOP-UPDATES.md](../dev-doc/DESKTOP-UPDATES.md) 为准。（曾短暂构建过 26.9.19 版本号，不符合同日序号规范，产物未发布已删除。）
 
-## 一键发布流程（打包后自动上传 R2，2026-09-18 建立）
+## 一键发布流程（打包后自动上传腾讯 COS，2026-09-18 建立、2026-09-20 自 R2 迁移）
 
 `macOS/release.sh` 把发布串成一条命令（协议见 [DESKTOP-UPDATES.md](../dev-doc/DESKTOP-UPDATES.md)）：
 
 ```bash
-bash macOS/release.sh <release-notes.txt>          # 完整：护栏→签名构建→归档校验→R2清单→上传→公网核对
-R2_SKIP_BUILD=1 R2_SKIP_UPLOAD=1 bash macOS/release.sh   # 本地演练：复用产物、不上传、无需凭据
+bash macOS/release.sh <release-notes.txt>            # 完整：护栏→签名构建→归档校验→COS清单→上传→公网核对
+COS_SKIP_BUILD=1 COS_SKIP_UPLOAD=1 bash macOS/release.sh   # 本地演练：复用产物、不上传、无需凭据
 ```
 
-流程内容：读取 `tauri.conf.json` 版本并按本机 rustc 架构选 `aarch64`/`x86_64`；**版本护栏**（必须高于该通道线上清单版本，同日重发布用日期+序号如 `26.9.1802`）；带私钥签名构建 `app,dmg`；核对包内版本/架构、DMG 完整性，归档 `macOS/dist/` 并生成 SHA-256；生成**指向 R2 直下地址**的 `darwin-<arch>.json` 清单；用 rclone 上传 `mac_package/`（更新包、`.sig`、`.sha256`、DMG、DMG 校验、清单）；最后公网 HEAD 核对 Content-Length。结束打印交接摘要（版本、URL、SHA-256、清单路径）。
+流程内容：读取 `tauri.conf.json` 版本并按本机 rustc 架构选 `aarch64`/`x86_64`；**版本护栏**（必须高于该通道线上清单版本，同日重发布用日期+序号如 `26.9.1802`）；带私钥签名构建 `app,dmg`；核对包内版本/架构、DMG 完整性，归档 `macOS/dist/` 并生成 SHA-256；生成**指向 cdn.bowerbird.cn 直下地址**的 `darwin-<arch>.json` 清单；用 rclone（TencentCOS provider）上传 `mac_package/`（更新包、`.sig`、`.sha256`、DMG、DMG 校验、清单）；最后公网 HEAD 核对 Content-Length。结束打印交接摘要（版本、URL、SHA-256、清单路径）。
 
 一次性准备：
 
 1. `brew install rclone`（上传工具，环境变量内联配置，不留配置文件）。
-2. `cp macOS/r2.env.example macOS/.signing/r2.env` 并填入 R2 的 Account ID / Access Key / Secret / 桶名（创建方式见模板注释；`.signing/` 不入 Git）。
+2. `cp macOS/cos.env.example macOS/.signing/cos.env` 并填入腾讯云 SecretId / SecretKey / 桶名（含 appid 后缀）/ 地域（创建方式见模板注释；`.signing/` 不入 Git）。
 3. 更新器私钥沿用 `macOS/.signing/updater.key`。
 
 上传 ≠ 发布：官网 `downloads/updates/darwin-<arch>.json` 仍由发布侧**核验完整下载、SHA-256、公钥验签后原子替换**；上传后本机公网核对只验证了可达与大小。上传前请确认版本号已按规范提升（脚本护栏会拦同版本/降版本）。
+
+## 钥匙串授权弹窗与本地稳定签名（2026-09-20）
+
+**现象**：使用应用时系统反复弹「bowerbird-desktop 想要使用你储存在钥匙串中的 com.bowerbird.desktop 中的机密信息」，输密码后还会再弹 2-3 次。
+
+**根因**：登录 refresh token 存在钥匙串（`cloud/auth.rs`，keyring 服务名 `com.bowerbird.desktop`）。钥匙串条目的“始终允许”按**签名身份**记录信任；此前包是 ad-hoc 签名，每次发版二进制指纹（CDHash）都变，信任每次更新即失效。且 token 每小时轮换，一次刷新 = 读 + 写回共两次钥匙串操作，未受信时各弹一次。
+
+**修复（三层）**：
+
+1. `cloud/auth.rs`：内存缓存最近一次 refresh token，缓存命中时不再读钥匙串（轮换后的写回保留，否则旧 token 失效会掉登录态）。
+2. `macOS/setup-codesign-cert.sh`：一次性生成自签名 codeSigning 证书 `Bowerbird Local Code Signing`（10 年有效期，保存在 Git 忽略的 `macOS/.signing/codesign.crt` / `codesign.key`）并导入 login 钥匙串。已在本机完成导入；证书/私钥请像 `updater.key` 一样保管，换机构建机需带走这两个文件并重跑脚本。
+3. `macOS/release.sh`：检测到该身份时导出 `APPLE_SIGNING_IDENTITY`，Tauri 自动以它签名 `.app`（与 DMG），签名身份跨版本稳定。同时 `tauri.macos.conf.json` 显式设 `hardenedRuntime: false`——Tauri 默认 true，但 hardened runtime 会让无 Apple Events 授权的 AppleScript（Dreamina 登录拉 Terminal）被系统拒绝；本地自签名不做公证，无需 hardened runtime。
+
+**用户侧效果**：升级到带稳定签名的版本后，第一次弹钥匙串授权框时输入密码并点**「始终允许」**（不是「允许」）即长期生效，后续版本更新与每小时 token 轮换都不再弹。存量老版本仍会弹，属预期。
+
+**边界与坑**：本地自签名只解决钥匙串信任的稳定性，不等于 Developer ID 签名/公证，Gatekeeper 首次打开仍需右键打开；updater 完整性仍由 minisign 签名保证，与代码签名互不影响。首次用该身份签名（或跑 setup 脚本试签）时系统可能弹「codesign 想要使用私钥」，点“始终允许”一次即可。macOS 自带 LibreSSL 生成的 pkcs12 会被 `security import` 报 MAC 校验失败，脚本因此直接导入 PEM 私钥与证书；自签名证书不出现在 `security find-identity -v` 输出属正常，脚本用试签验证。
 
 ## Mac 应用内更新（darwin 通道，2026-09-18 配置）
 
