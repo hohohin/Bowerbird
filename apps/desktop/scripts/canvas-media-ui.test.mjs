@@ -27,6 +27,10 @@ try {
     ];
     snapshot.nodes[0].payloadJson = JSON.stringify({ schema_version: 1, snapshot: { name: "合成参考 a", width: 1600, height: 400 } });
     snapshot.nodes[1].payloadJson = JSON.stringify({ schema_version: 1, snapshot: { name: "改名前的参考 b", width: 400, height: 1600 } });
+    snapshot.nodes.push({ ...base, id: "clip", assetId: "v", x: 1150, y: 100, height: 272,
+      payloadJson: JSON.stringify({ schema_version: 1, snapshot: { name: "演示视频", width: 1280, height: 720 } }) });
+    sessionStorage.setItem("reference-drafts", JSON.stringify([
+      { id: "v", name: "演示视频.mp4", width: 1280, height: 720, store_path: "demo-clip.mp4", source: "imported" }]));
     snapshot.edges = [["wide", "prompt"], ["tall", "prompt"], ["tall", "agent-prompt"], ["agent-prompt", "agent"]].map(([fromNodeId, toNodeId], ordinal) => ({ id: `e${ordinal}`, projectId: "p", threadId: "t", fromNodeId, toNodeId, kind: "input", ordinal }));
     snapshot.edges[0].kind = "continued";
     snapshot.view = { ...snapshot.view, panX: 0, panY: 0, zoom: 1 };
@@ -50,6 +54,12 @@ try {
     assert.ok(id === "wide" ? after.width > before.width : after.width < before.width);
   }
   assert.deepEqual(await node("duplicate").boundingBox(), duplicateBefore, "resizing affects only this instance");
+  // Video cards carry their own identity: dedicated class, badge and video element.
+  assert.equal(await node("clip").evaluate(e => e.classList.contains("is-video")), true, "video asset node gets the is-video class");
+  assert.equal(await node("clip").locator(":scope > video").count(), 1);
+  assert.equal(await node("clip").locator(".canvas-video-badge").count(), 1);
+  assert.equal(await node("wide").evaluate(e => e.classList.contains("is-video")), false, "image nodes keep the plain asset style");
+  assert.equal(await node("wide").locator(".canvas-video-badge").count(), 0);
   const resized = await node("wide").boundingBox();
   for (const [id, ratio] of [["wide", 4], ["tall", 0.25]]) {
     const geometry = await node(id).locator(":scope > img").evaluate(image => {
@@ -83,5 +93,5 @@ try {
     assert.doesNotMatch(await node("prompt").innerText(), /合成参考/);
   }
   assert.deepEqual(errors, []);
-  console.log("PASS original canvas aspect ratios and per-turn/Agent reference thumbnails, prose and reload.");
+  console.log("PASS original canvas aspect ratios, per-turn/Agent reference thumbnails, prose, video card identity and reload.");
 } finally { await browser.close(); await server.close(); }

@@ -3922,6 +3922,52 @@ html[data-theme="light"] .app-form-input:focus {
 .canvas-node.is-asset > img { background: transparent; }
 .canvas-node-name { background: var(--bb-surface-card); }
 
+/* Video cards keep their own identity: violet accent frame, dark letterbox and
+   a play badge, so they never read as plain image cards at a glance. */
+.canvas-node.is-asset.is-video {
+  border: 2px solid rgb(139 92 246 / 62%);
+  background: #12141c;
+}
+
+.canvas-node.is-asset.is-video:hover,
+.canvas-node.is-asset.is-video:focus-visible {
+  border-color: rgb(139 92 246 / 92%);
+  box-shadow: 0 16px 42px var(--bb-shadow-popover), 0 0 0 3px rgb(139 92 246 / 16%);
+}
+
+.canvas-node.is-asset.is-video > video { background: #0b0d13; }
+
+.canvas-node.is-asset.is-video .canvas-node-name {
+  background: linear-gradient(90deg, rgb(139 92 246 / 16%), rgb(139 92 246 / 4%)), var(--bb-surface-card);
+}
+
+.canvas-video-badge {
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  z-index: 5;
+  pointer-events: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #8b5cf6, #6d28d9);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  box-shadow: 0 2px 8px rgb(109 40 217 / 45%);
+}
+
+.canvas-video-badge svg { flex: none; }
+
+.canvas-folder-grid > video,
+.canvas-folder-asset:has(> video) {
+  background: linear-gradient(135deg, rgb(139 92 246 / 22%), rgb(15 17 24 / 88%));
+  border-color: rgb(139 92 246 / 45%);
+}
+
 .canvas-node.is-folder.is-expanded {
   padding: 12px;
   border-color: rgb(var(--bb-blue-rgb) / 50%);

@@ -2,6 +2,8 @@
 
 截至 2026-09-17，探索已纳入当前 Windows 本地安装包。9 月 10 日拖图修复后用户确认采集成功，后续仍报告原生网页可滚动但无法点击，此问题待定位。下文自动化与隔离 WebView2 证据不代表真实站点、账号、验证码及所有图片类型均已验收；当前决策以 `PROJECT.md` 为准。
 
+2026-09-15 维度环避让修复：`SourceBrowserPanel` 将 `.caption-ring-layer` 与模态弹窗一样视为原生网页遮挡；开环时发送隐藏 resize，收环后恢复同一网页，键盘快捷键也在环打开时让位。主网页的 CSS z-index 无法覆盖独立原生 WebView，因此不通过提高维度环 z-index 处理。
+
 ## 交互与范围
 
 - 顶部“新建创作”左侧的“探索”打开左侧独立浏览器面板；右侧保留原来的主页面、素材库或画板。浏览器是附加面板，不再创建另一份素材瀑布流或覆盖主页面。中间分隔条支持拖动及方向键调整浏览器宽度，素材列数随主区可用宽度调整。
@@ -22,7 +24,9 @@
 
 Windows 取图通过 WebView2 `CallDevToolsProtocolMethod` 的 `Network.loadNetworkResource`，带当前浏览器凭据和网络环境，流式读取后交给本地入库；不导出 Cookie，不让 Rust 重新使用无登录态的 HTTP 客户端下载。主窗口命令检查调用者、HTTP(S) 地址、来源站点与当前浏览器 origin 一致、目标项目存在。图片最多 50 MiB，单次协议调用超时 45 秒，拒绝非图片/损坏内容。现有上传管线支持 JPEG/PNG/WebP/GIF/BMP；此接口不接受 SVG。
 
-macOS/Linux 此首版保留浏览器基础能力，拖图取字节明确返回尚不支持；本轮只完成 Windows 取图实现。
+2026-09-15 macOS 补齐取图：在当前 WKWebView 上调用 `startDownloadUsingRequest`（macOS 11.3+），由浏览器处理登录 Cookie 和网络请求，WKDownloadDelegate 将字节交给同一入库管线。不导出 Cookie、不导航原页面、不新增远程页 IPC。下载使用私有临时目录，限制 50 MiB / 45 秒，拒绝 HTTP 错误、HTML 和非图片，完成或取消后清理临时文件。Linux 仍未实现此原生取图通道。
+
+Mac 原生回归：在 `apps/desktop` 运行 `node scripts/mac-browser-capture.test.mjs`，编译生产 Objective-C 桥接与隐藏 WKWebView fixture，使用非持久资料和本机合成站点。覆盖跨端口无 CORS 的 HttpOnly Cookie 图片、重定向、未知长度分块响应、401、HTML、已知/未知长度超限、断网、45 秒超时、临时文件清理与原网页表单/JS 状态保持。此验证覆盖原生下载通道，不代表真实站点账号或 macOS 物理拖放已逐站验收。
 
 ## 相关文件
 

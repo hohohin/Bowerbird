@@ -21,9 +21,9 @@
 
 ## 目前进展
 
-截至 2026-09-19，桌面与官网自动更新发布已重新核对生产；Worker、数据库及模型服务仍沿用下述既有部署记录，本次未变更。
+截至 2026-09-20，Mac 更新通道已由发布侧替换至 **26.9.1901**（启动静默检查更新等 26.9.1803 同源功能随包上线）；Windows 保持 26.9.1803。Worker、数据库及模型服务仍沿用下述既有部署记录，本次未变更。
 
-**自动更新：** Windows x64 已发布 **26.9.1803**，含启动时检查更新、设计师路线开放范围及应用内账号升级入口；M 系列 Mac 已发布 **26.9.1901**，发布说明包含启动更新提醒、账号升级入口和本地分类改进，原生功能验收待补。官网检查、完整包下载和验签已通过，Intel、Mac 公证及双端原生升级仍待验收。发布/回滚和双端交接见 [桌面自动更新](dev-doc/DESKTOP-UPDATES.md)。
+**自动更新：** Windows x64 已发布 **26.9.1803**，含启动时检查更新、设计师路线开放范围及应用内账号升级入口；M 系列 Mac 线上为 **26.9.1901**（2026-09-20 确认清单已替换上线，含上述新增客户端功能与本地分类防误标），**26.9.2001 已本机构建待上传发布**（向量匹配判官、Jev 云端校验与画板/文本卡增强）。官网检查、完整包下载和验签已通过，Intel、Mac 公证及双端原生升级仍待验收。发布/回滚和双端交接见 [桌面自动更新](dev-doc/DESKTOP-UPDATES.md)。
 
 - **桌面**：当前 Windows 已发布 **26.9.1803**，M 系列 Mac 为 **26.9.1901**（SQLite 至 `0030`）。在此前 26.9.17 的项目画板、多线程、身份引导、素材仅画板可见、分层编辑、Mac 共用更新、本地分类代理/GPU 与标签恢复基础上，合并工作区既有改动及设置内自动更新；采用用户确认的整包发布范围。老版本仍需先手动安装一次 26.9.18，之后由设置检查后续新版。
 - **云端**：最近部署记录为 9 月 14 日；在 9 月 11 日的视频基线上加入兑换码/后台（`0059/0060`）与分层服务（`0061`），保留 `0057` 未集成预留。Worker 的 DSH 已改为 `deepseek-flash` 并部署漏参纠正；后续分层镜像包含这些更新。版本与回滚入口见 [收费化进度](dev-doc/ARCH-ADJUST-PROGRESS.md)。
@@ -38,6 +38,9 @@
 - 反推旧清单的结果管理、取消/耗时、复制及维度复用已实现；单图指令记忆、视频反推支持与流式结果显示仍未形成验收闭环。当前提交反推还会保存全局默认指令，与“保存为默认”提示存在差异，需单独修正。PSD 导入预览仍未实现，已有图层 PSD 导出不等于支持 PSD 素材预览。OCR/版式/灵感卡等保持延后。
 
 **近期里程碑（仅保留最近 3 条；历史详见 [进展归档](dev-doc/进展归档.md)）**
+> **Mac 26.9.2001 更新包（2026-09-20，本机构建待上传）：** 收录 9 月 19/20 存档工作——本地分类向量精确匹配判官（jina-clip-v2 int8 可选安装）与可选云端最终校验 Jev、画板新卡锚定可视区左上角、视频卡独立样式、文本卡表格增强（标题编辑/整表 CSV 复制/行列尺寸拖拽）、创作模式框选、mac「打开所在文件夹」选中与方向键乱码修复；按同日序号规范定为 **26.9.2001**（> 线上 26.9.1901——1901 清单已由发布侧替换上线，2026-09-20 确认，护栏通过）。构建前 Rust 全量 **379 passed / 6 ignored**、画板纯逻辑 **127/127**、creation-editor/creation-marquee/notes/media/reference/local-classification 六组 UI 回归与 TypeScript 通过。`release.sh`（R2_SKIP_UPLOAD=1，本机缺 r2.env 凭据）完成签名构建，产物在 `macOS/dist/`：更新包 `Bowerbird_26.9.2001_aarch64.app.tar.gz` **86,344,811 bytes**，SHA-256 `de431a5fdc9da85cda13df2901df3ab54b1e075c2b793bb5fe077179d19931e0`；手动 DMG **86,881,253 bytes**，`852fe0edd1d2304c4761a583bf3f75f43f2f049c1b537acf6e0f139f7220cfa5`；清单 `darwin-aarch64.json`（R2 直下，SHA-256 `ed68d36aecf2f6c5ae3d2c18c670a4e71ff238af2e06ebd9f9f80ef8b27de46a`）。本机核验：包内版本/架构/arm64、内嵌 Mac 公钥与已发布 1802/1901 逐字节一致（key id `0b5a2efc4865664f`）、DMG `hdiutil verify`、minisign 主签名与全局签名、篡改字节拒绝、清单 signature 与 `.sig` 逐字节一致全部通过。**待恢复 R2 凭据后上传并替换官网清单**（交接件 `/tmp/bowerbird-release-26.9.2001/`：upload-r2.sh → 服务器 swap-manifest.sh，备份 26.9.1901）；本轮未运行真实应用内更新。细节见 `macOS/README.md` 与 DESKTOP-UPDATES.md「Mac 26.9.2001 发布侧核验」。
+
+> **本地分类匹配判断切换为 SigLIP2 系向量匹配（2026-09-19，本机实现+真实模型验证）：** 应用户澄清，引入 jina-clip-v2（SigLIP2 视觉塔 + jina-embeddings-v3 文本塔，ONNX int8 874MB）作为匹配阶段判官：安装向量包后逐标签判断改为「图像嵌入 × 标签文本/示例图嵌入」余弦相似度（≥0.27 且不低于排除示例），VLM 只负责发现与命名；未安装/加载失败/平台无运行库（Intel Mac）时回退原 VLM 判断。`ort` 2.0.0-rc.13 load-dynamic，onnxruntime 1.28.0 运行库随包经 SHA-256 固定下载（hf-mirror 优先），全链路本机完成不出机。21 张引导素材实测：矿泉水瓶产品图 top-1 即「矿泉水瓶」0.289（「女孩」跌出前五），真负例 <0.22，阈值 0.27 由此标定；生产代码真实模型测试 8.0s 通过。Rust **378 passed / 6 ignored**、TypeScript 与面板 UI 回归通过。Windows x64 清单已钉定未实机验证；int8 未与 fp16 对照、UI 截图对「产品图」0.328 为已知误报面，真实库观察待续。详见 [LOCAL-CLASSIFICATION.md](dev-doc/LOCAL-CLASSIFICATION.md)。
 
 > **Mac 26.9.1901 更新发布（2026-09-19）：** 核验用户 R2 新包后发布官网 Mac 清单及双首页下载入口；发布说明含启动更新提醒、账号升级、设计师路线范围及本地分类改进。完整包/DMG 哈希、ARM64/包内版本、旧 Mac 公钥验签与篡改拒绝、候选/正式服务及公网链路通过。Windows 26.9.1803 清单保持，旧包与回滚目录保留；现役 20260919-mac-26.9.1901，回滚 20260918-26.9.1803。慢网络下载超时、原生升级/启动提示、Apple 公证和 Mac 新源码提交仍待跟进，未修改 Worker/数据库。详见 [桌面自动更新](dev-doc/DESKTOP-UPDATES.md)。
 
@@ -50,6 +53,7 @@
 
 
 
+> **本地分类引入可选云端最终校验 Jev（2026-09-19，源码更新未打包）：** 落地前一日调研决策：TypeSafe Jev（System One Model）作为 opt-in 最终闸门加入本地分类——识图始终本地（llama.cpp + 固定 Qwen3.5-0.8B 不变），出机仅图片文字描述与标签文本，默认关闭、面板配置 API Key；一次请求并行复核全部候选（noul 概率 ≥0.6 才写入），校验失败按资产失败处理、不写部分结果。附带修复发现抽样就地截断标签集导致示例匹配只遍历前八个的问题。本地分类回归 **24 passed / 4 ignored**（新增 Jev 阈值过滤/错误不放行/空描述跳过三测）、settings 回归 9 passed、TypeScript 与面板 UI 脚本（含云端校验保存断言）通过；未启用时行为与上版一致，阈值待真实 key + 引导素材标注集调优。详见 [LOCAL-CLASSIFICATION.md](dev-doc/LOCAL-CLASSIFICATION.md)。
 
 
 
@@ -58,6 +62,16 @@
 ---
 
 ## 关键约定
+
+**2026-09-20 画板新卡左上角锚定、视频卡独立样式与文本卡片表格增强：** ①新生成卡片（普通生成指令卡/Agent 卡）不再按引用图位置落位：前端测量挂载后将卡片锚定到当前可视区域左上角（屏幕 x24/y72，被占时按视口/障碍边扫描就近避让），仅在视口放不下时才沿用后端临时位置并缩放聚焦，不再强制居中改视角；参考图仍随卡排在卡下方、输出图在指令卡右侧。`canvasPlacementForNewCard` 契约改为左上角优先，引用落位 UI 回归同步改判锚定。②视频卡片与图片卡样式区分：asset 节点按 storePath 判视频加 `is-video`，紫色 2px 描边、深色底、专属 ▶ 徽标与名称栏渐变，素材组内视频缩略图同紫调（media 回归断言类与徽标）。③文本卡表格整表复制为 CSV（RFC 4180 转义），按钮并入原行距工具组（组名改「文本工具」，气泡不显示）。④表格行高/列宽拖拽自由调节：note payload 新增可选 `column_widths`/`row_heights` 正数权重（schema 仍为 1，Rust 契约校验维度一致且为正、非法拒收），插删行列同步维护权重，边界手柄与插删控件按权重定位且两轴手柄错位避让命中冲突，Escape 取消拖拽不落盘。⑤文本卡标题可编辑（T 图标右侧输入框，payload 可选 `title`，重开保留；气泡不显示标题）。验证：画板纯逻辑 127/127（新增 CSV/权重两测）、reference/notes/bubble/section/marquee/media/transparency/snap/layers/draft UI 回归、Rust 379 passed / 6 ignored（新增 note 契约一测）、TypeScript 与 production build 通过；`canvas-arrangement-ui` 与 `canvas-selection-to-board-ui` 在改动前 HEAD 即因「整理」菜单等待失败，属既有问题未处理。
+
+**2026-09-19 创作模式允许画板框选并去除文字蓝底：** 画板空白拖动框选不再限于浏览模式，创作模式（主对话框或会话编辑坞激活）同样生效，Shift 追加、普通空白点击清空等语义与浏览模式一致；框选或拖动卡片（含文本便签）期间不得出现原生文字蓝底选区——便签容器 `user-select` 关闭（单元格 textarea 编辑选字不受影响），框选起点的 preventDefault 双模式生效。图片卡/生成卡/Agent 卡原本已禁选字。验收见 `pnpm test:canvas:creation-marquee` 与画板专项验收第 17 条更新。
+
+**2026-09-19 本地分类匹配判断优先向量模型：** 安装向量包（jina-clip-v2 ONNX int8 + onnxruntime 1.28.0，SHA-256 钉定，hf-mirror 优先下载）后，逐标签匹配判断 = 图像嵌入与标签文本/正例示例嵌入的余弦 ≥0.27 且不低于排除示例；VLM 只负责发现与命名。未安装/加载失败/Intel Mac（无 1.28.0 x86_64 运行库）一律回退 VLM 判断；向量判断与 Jev 云端校验正交叠加。阈值 0.27 为 21 张引导素材标定初值，真实库持续观察。详见 [LOCAL-CLASSIFICATION.md](dev-doc/LOCAL-CLASSIFICATION.md)。
+
+**2026-09-19 本地分类可选云端最终校验（Jev）：** TypeSafe Jev（System One Model，仅文本/JSON 输入）作为 opt-in 最终闸门：识图始终本地，出机内容限于图片的本地文字描述与标签名/说明，图片本身永不出机。默认关闭，面板配置 API Key（settings.json `jev_verify_enabled`/`jev_api_key`）；启用后全部存活候选一次请求并行复核，noul 概率 ≥0.6 才写入，校验失败按资产失败处理、不写部分结果，自动处理暂停；单标签显式匹配与无描述路径不经过云端。阈值 0.6 为工程初值，Jev 无公开基准，质量结论以真实 key + 标注集验收为准。详见 [LOCAL-CLASSIFICATION.md](dev-doc/LOCAL-CLASSIFICATION.md)。
+
+**2026-09-18 本地分类自动匹配需示例背书（已纳入 Mac 26.9.1901）：** 自动处理只对设过人工示例（手动正例或排除记录）的标签做自动匹配；无示例标签仅在发现阶段用于统一命名，用户显式「保存并寻找匹配素材 / 寻找匹配」仍可单独判断整库。发现阶段的参考标签按素材确定性哈希抽样注入，不再按引用次数排序，自动归属不得反馈抬高标签排名。发现提出的已有标签名直接落地，不再经盲匹配补挂。「重新扫描全部图片」按当前规则重建全部自动归属：不再成立的自动标签被移除，人工归属与排除记录不动。提示词要求标签来自图中可见内容、判断须指出可见证据。模型仍为 Qwen3.5-0.8B Q4_K_M，准确率验收与更大模型对照按 [LOCAL-CLASSIFICATION.md](dev-doc/LOCAL-CLASSIFICATION.md) 原计划另行进行。
 
 **2026-09-18 账号升级入口（Windows 26.9.1803）：** 头像菜单的「升级账号」直接进入设置的账号管理，显示档位、Pro 权益和兑换入口；普通设置仍默认打开系统分区。在线购买尚未开放，移除旧 Render 升级跳转，「前往官网」统一为 bowerbird.cn。
 
@@ -73,6 +87,12 @@
 **2026-09-17 本地分类下载使用系统代理：** reqwest 在关闭默认功能的配置下显式启用 `system-proxy`；模型和运行时下载读取操作系统现有代理，保留环境变量覆盖，不硬编码本机代理端口、不更换固定权重/运行时版本或校验值。下载失败显示文件名、底层连接原因和代理检查提示。本地推理仍 `.no_proxy()` 只访问回环地址，图片不上传。正式下载器已在无代理环境变量、全新隔离目录下完成 755,911,809 bytes 下载、三个 SHA-256、解压和安装状态校验；不等同于模型准确率或安装版完整 GUI 验收。Mac 远端打包说明提及的同期代理修改尚未提交，本轮在 Windows 补齐这一共用能力。
 
 **2026-09-17 Windows 同步 Mac 共用更新（来源 `b6e3ec9`）：** 设置中的入门入口重置三身份引导记录，从第一步开始，保留已有项目和素材；暂停气泡继续恢复原进度。顶部右箭头仅在当前步骤就绪后推进，末页正常完成，旧跳步记录只保留兼容。无生成任务 ID 的引导提示词卡片按当前项目图谱还原历史会话，复用普通生成详情、参考图与结果图展示；复用时保留具体参考节点、历史名称别名及画幅，不创建作者任务或恢复作者会话。同步生成按钮的具体禁用原因及键盘/悬停提示、说明收纳和画板标题精简。未引入 Mac 标题栏、Homebrew/终端/深链、WKDownload、本地模型运行时、临时路径或 DMG 适配，Windows 自绘标题栏、WebView2、独立凭据和每次安装清登录钩子保持原样；不代表原生探索点击问题已解决。
+
+**2026-09-17 创作框与画板提示：** 生成按钮禁用时通过悬停或键盘聚焦显示具体原因（引擎、登录、权限、积分、并行限制或输入），恢复可用后撤销提示。画板工具栏项目名随文字宽度显示，移除重复的返回素材库按钮，浏览提示统一为双指移动、空格加左键或中键平移。
+
+**2026-09-17 Mac DMG 固定交付规范（后续打包必须遵守）：** 所有 Mac DMG，包括测试版、热修复版和同版本重包，统一提供拖动安装界面：左侧 `Bowerbird.app`、右侧指向 `/Applications` 的 `Applications` 快捷方式、中间箭头及中文安装提示。禁止交付仅包含 `.app`、缺少安装入口和提示的基础镜像。标准 Tauri 打包沿用 `tauri.macos.conf.json` 的布局；仅重封装已验证应用或标准打包失败时，使用 `macOS/installer/package-dmg.sh`，不得退回直接 `hdiutil -srcfolder .app` 的简包。保留旧交付物，标明真实架构/版本/签名状态，附 SHA-256；以镜像完整性、包内应用一致性、Applications 目标、背景资源及保存的布局为交付检查。**按用户要求，打包验收不需要截图或录屏，不因无法截图/录屏或 Finder 背景属性读取失败而反复重包、阻塞交付**；实际未验证的功能不宣称通过。操作步骤及命令统一见 [macOS/README.md](macOS/README.md#mac-dmg-固定打包与交付流程)。
+
+**2026-09-16 本地分类 Mac 适配：** 同一 Qwen3.5 模型包扩展到 macOS 13.3+ Intel / Apple Silicon，按应用进程架构选择固定版本及 SHA256 的 llama.cpp 运行时；Mac 下载约 749 MB，Windows 约 756 MB。两种 Mac 运行时分目录，权重共用，保留 Windows 安装缓存；沿用 CPU 推理、仅回环服务及原有人工纠正规则。13 项分类回归及界面/TypeScript 检查通过；Intel 真实安装与五次推理完成，但产品图误命中“野生动物”，原负例断言未通过。Apple Silicon 包已校验、原生推理待验。实现与验证边界见 [LOCAL-CLASSIFICATION.md](dev-doc/LOCAL-CLASSIFICATION.md)；源码适配尚未重新打包。
 
 **2026-09-17 图片右键菜单（已纳入 26.9.17 本地安装包）：** 常用/再创作和文件/移出与删除分为两列，按实际菜单尺寸避让窗口边缘；窄窗降为单列，键盘左右切列、上下逐项移动，异步条目及缩放后重新定位。画布移除统一为「从画布移出」，项目移除简写为「移出当前项目」，保留原操作、确认及运行中保护。
 
@@ -115,6 +135,8 @@
 **2026-09-15 探索拖图接收端修复与待办：** FileDropImport 的窗口捕获监听不再把同时携带 Files 和探索协议的图片当成本地文件，协议图片交回 ExploreWorkspace 校验；拖动保护阶段仅能读取类型时延后到松手判定。两组件同时挂载的回归覆盖自定义 MIME、标准文本、无效元数据和普通文件混合文本。本次已纳入安装包；用户另报网页可滚动但不能点击、光标固定，退出引导仍发生，该原生输入故障尚未定位，保留待办，详见 [EMBEDDED-BROWSER.md](dev-doc/EMBEDDED-BROWSER.md)。
 
 **2026-09-15 画板素材库布局与多选（已纳入 26.9.15 本次重包）：** 按用户最终要求，「只看/不看生成图」在主素材库和画板模式均固定于主界面顶部工具栏，画板内素材库不再重复显示。画板素材库顶部按来源切换、缩略图大小、收起按钮排列为一行，控件统一 28px 高并移除缩略图凹陷阴影；最窄面板下保持同排且不重叠，缩略图大小说明由悬停提示与可访问名称提供。项目素材、中央素材均支持 Shift+左键直接进入多选及按可见顺序范围追加；多选模式普通左键增减选择，优先于放大预览和创作挑图，保留批量拖拽与键盘选择。退出多选后恢复原预览/挑图。`canvas-source-ui.test.mjs` 隔离合成 IPC 回归覆盖两种来源、浏览/创作/编辑状态、范围/取消/键盘选择、批量拖拽及窄宽栏对齐；既有画板工具条回归和 TypeScript/Vite 构建通过，未操作真实素材库。
+
+**2026-09-15 Mac 原生标题栏：** Mac 改用 AppKit 原生红黄绿控制及居中标题，前端移除 Mac 的重复自绘标题栏，原生外观沿用应用主题同步。平台配置保持公共窗口尺寸和拖放设置；Windows 自绘标题栏及操作保持。验证与交付见 `macOS/README.md`。
 
 **2026-09-15 顶部窗口与草稿入口（已纳入 26.9.15 本地安装包）：** Windows 主窗口采用统一风格的自绘标题栏，包含园丁鸟图标、窗口拖动、双击最大化/还原和最小化/最大化/关闭控制；原生窗口状态变化同步按钮，加载或弹窗期间仍可操作，仅为主窗口增加必要权限。顶部移除「生成图」「项目素材」两处重复小字，保留筛选和展开/收起功能。新建草稿只显示在画板空白处的右键菜单，素材、素材组、生成和 Agent 卡片右键均不显示；取代旧草稿入口约定。窗口与草稿合成 IPC 回归及构建通过，原生窗口拖动/DPI/Snap 行为未在本次存档中重新验收。
 
@@ -222,7 +244,7 @@
 
 15. **CLI 安装与登录在应用内完成**：用户通过设置中的模型卡片安装/登录，安装进度与错误由应用呈现。Codex 与 Dreamina 使用 Bowerbird 独立凭据；检测、生成、退出及会话入口统一隔离，安装/升级清登录遵循 9 月 14 日约定，不读取或覆盖系统 CLI 登录。具体平台实现以 `codex/install.rs` 与 Windows 安装钩子为准。
 
-16. **环境状态入口收敛进设置面板 + 扩展心跳连接跟踪（2026-07-31 立，2026-08-15 重构）**：原两级「环境状态 Onboarding」（一级 Onboarding.tsx 三卡片总览 + store `onboardingForceOpen` 跳转二级）**已于 2026-08-15 删除**——codex / 即梦 CLI 状态与引导移入设置「模型设置」、浏览器扩展引导移入「系统设置」直接唤起，二级引导（Codex/Dreamina/Extension Onboarding）关闭即返回设置；**2026-09-11 入门主线更新为项目画板实操**：本地示例项目或自己的图片 → 拖入与移动卡片 → 写目标并选参考/维度 → 用户主动图片生成即完成五步主线；集合通过独立教程覆盖创建、添加素材、按需提炼及保存后选择规范。版本化进度独立保存，可暂停/恢复；先完成准备与实际生成完成分别记录，跳过维度明确标注。账号和模型配置沿原入口按需进行，引导不得自动调用分析/生成；旧用户用一次新版变化介绍，专题说明按需展示。详见 [ONBOARDING.md](dev-doc/ONBOARDING.md)。**扩展连接跟踪不变**：canonical 扩展（[apps/extension/](apps/extension/)）每 15s WS ping；后端 `ExtensionStatus`（last_seen + connected）收任意消息 touch/emit connected、后台 tick 30s 超时 emit disconnected。随包内嵌（tauri resources `../../extension/` → `extension/`，用**目录源**保留子目录结构——map+glob 会拍平子目录致 release 扩展图标加载失败，见踩坑；dev 源码、release resource）。
+16. **环境状态入口收敛进设置面板 + 扩展心跳连接跟踪（2026-07-31 立，2026-08-15 重构）**：原两级「环境状态 Onboarding」（一级 Onboarding.tsx 三卡片总览 + store `onboardingForceOpen` 跳转二级）**已于 2026-08-15 删除**——codex / 即梦 CLI 状态与引导移入设置「模型设置」、浏览器扩展引导移入「系统设置」直接唤起，二级引导（Codex/Dreamina/Extension Onboarding）关闭即返回设置；**2026-09-11 入门主线更新为项目画板实操**：本地示例项目或自己的图片 → 拖入与移动卡片 → 写目标并选参考/维度 → 用户主动图片生成即完成五步主线；集合通过独立教程覆盖创建、添加素材、按需提炼及保存后选择规范。版本化进度独立保存，可暂停/恢复；先完成准备与实际生成完成分别记录，跳过维度明确标注。账号和模型配置沿原入口按需进行，引导不得自动调用分析/生成；旧用户用一次新版变化介绍，专题说明按需展示。**2026-09-17 入口行为更新**：从设置进入入门引导一律按初次进入，重置各身份引导进度与完成标记，从身份选择和第一步开始，保留已有项目/素材；暂停后继续仍恢复当前步骤，不再展示「正在回看此步」提示。顶部右箭头作为正常下一步，当前步骤未完成时禁用，完成后才可推进，末步正常结束引导，不再跳过步骤。引导包中无执行任务 ID 的会话卡片按本地画板快照恢复多轮数据，直接复用普通生成的 GenerationPanel 展示详情；仅排除原包已隐藏且参考图已丢失的历史轮次，保留图谱。复用从引用连线恢复图片、节点和画幅，不复制或伪造作者的执行会话。详见 [ONBOARDING.md](dev-doc/ONBOARDING.md)。**扩展连接跟踪不变**：canonical 扩展（[apps/extension/](apps/extension/)）每 15s WS ping；后端 `ExtensionStatus`（last_seen + connected）收任意消息 touch/emit connected、后台 tick 30s 超时 emit disconnected。随包内嵌（tauri resources `../../extension/` → `extension/`，用**目录源**保留子目录结构——map+glob 会拍平子目录致 release 扩展图标加载失败，见踩坑；dev 源码、release resource）。
 
 17. **扩展采集统一走浏览器 save_blob + 通用候选管线（2026-07-29）**：canonical 与旧 Windows 版不再分叉——[background.js](apps/extension/background.js) 在浏览器会话内 fetch（继承代理/Cookie/登录态）后，以 `save_blob` metadata + binary WS 上传；桌面 [ws_server.rs](apps/desktop/src-tauri/src/collect/ws_server.rs) → [ingest_from_bytes](apps/desktop/src-tauri/src/core/ingest.rs) 按真实字节 sniff/decode，**禁止退回桌面 reqwest 二次下载作为主路径**（Pinterest/登录态站会回归）。通用候选见 [candidate-utils.js](apps/extension/candidate-utils.js)：`img/currentSrc`、srcset/picture、lazy data-*、CSS background、OG/Twitter、JSON-LD、poster/SVG、open shadow；拖拽 HTML 图片优先，禁止把外层商品页 URL混为图片；Alt 明确目标支持 overlay/CSS/blob/data/canvas。XHS 结构化适配保留为高置信度增强但共用后续管线。安全边界：候选≤100、fetch 45s、图片≤50MiB、HTML fallback≤2MiB且深度1、防循环、Rust 100MP/32768边界、metadata状态机/长度限制、日志 query 脱敏；不绕 closed shadow/跨域 iframe/tainted canvas。真机以 Pinterest + `petcollars.com.au` 商品页通过为验收。
 
@@ -308,6 +330,14 @@ DSH 当前执行遵循约定 50/51：按需加载领域 Skill，由 Agent 决定
 
 ## 踩坑记录
 
+### mac「打开所在文件夹」不选中素材文件（2026-09-19）
+
+右键素材「打开所在文件夹」的 `reveal_asset_folder` 自带一份 `reveal_in_file_manager`：Windows 用 `explorer /select,` 会选中文件，但 macOS 只 `open <目录>` 打开父目录不选中；素材库内文件又是纯 ID 命名，用户在打开的文件夹里找不到自己右键的那张图。而画板节点「在资源管理器中定位」走的 `spawn_locate_or_open` 早已正确（macOS `open -R` 在 Finder 中选中）。修复即删除重复实现，`reveal_asset_folder` 复用 `spawn_locate_or_open(reveal=true)`，双端入口行为一致；失败从静默 tracing 变为前端明确报错。Linux 无统一「定位选中」协议，维持打开所在目录。素材库文件命名方案（纯 ID）未改，选中高亮已可直接定位；若要人读文件名需另立迁移专项。
+
+### mac 对话框末尾按右方向键插入方框乱码（2026-09-19）
+
+macOS WKWebView 里方向键 / Home / End 等功能键会派发携带 charCode 的 keypress，值是旧 Mac 功能键私用区映射（U+F700–U+F8FF，右方向键 = U+F703）。创作对话框（ProseMirror contentEditable）光标已在文本末尾、原生移动无效时，WebKit 把该字符当文本插入，显示为方框乱码并可随草稿持久化。修复在 `creation/plugins.ts`：插件对私用区 keypress preventDefault（keypress 默认行为只有插字，不影响 keydown 的光标移动），`handleTextInput` 再兜底过滤同类字符（ProseMirror 自身 keypress 分支在非普通文本选区时会直接插字）。Chromium 无法原生复现，`scripts/creation-editor-ui.test.mjs` 用合成 keypress 验证拦截与正常输入不受影响；Windows WebView2 未见此行为。
+
 ### 升版后的假 CLI 测试缺少启动器（2026-09-18）
 
 假 Dreamina 视频 CLI 协议测试直接调用生成入口，未经过应用启动时 cli_credentials::initialize；版本升至 26.9.1803 后，版本专属 cli-runtime 目录不存在，报路径不存在。以临时 APPDATA 预置本次构建的 cli-launcher.exe 和 cli-registry.dll 后独立复跑通过。该项不能依赖开发机恰好运行过相同版本；本轮未修改生产凭据逻辑，也未为测试写真实用户运行目录。
@@ -317,6 +347,12 @@ DSH 当前执行遵循约定 50/51：按需加载领域 Skill，由 Agent 决定
 
 `Windows/prepare.ps1` 原用 Robocopy `/XD Windows` 按目录名排除构建目录；Windows 上不区分大小写，同时漏掉 `apps/desktop/src-tauri/windows`，造成 `cli-registry.cpp` 缺失和独立凭据组件编译失败。改为仅排除仓库根目录 `Windows` 的绝对路径；准备后逐一核对 528 个受 Git 跟踪的构建输入（含浏览器扩展），平台目录及安装清登录钩子完整保留。
 
+
+### macOS 微信扫码成功但应用未登录（2026-09-17）
+
+同日安装布局补包：基础 `hdiutil` 镜像只收录 `.app`，遗漏 Applications 快捷方式与拖动安装提示。已新增标准 Mac DMG 背景/布局配置及独立重打包脚本；交付 `macOS/dist/Bowerbird_26.9.17_x64-wechat-fix-installer.dmg`，应用内容与登录修复包一致。成品完整性、Applications 目标、重新挂载后的图标布局检查通过；背景实际显示未完成截图验收。详见 `macOS/README.md`。
+
+桌面原先只从进程参数和 single-instance 回调接收登录链接；macOS 通过 Tauri `RunEvent::Opened` 投递自定义 URL，导致浏览器回流后未进入账号验证。主事件循环现将 macOS Opened 中的 URL 交给既有 `forward_auth_callback`，沿用微信 state 校验、服务端换码、Keychain 保存和前端 auth 事件；Windows/Linux 原路径保留。Mac 登录专项 Rust 回归 **19/19** 通过，含新增 Opened 参数保留及非 URL 事件测试；真实微信扫码尚待修复包实测。
 
 ### 自动更新 404 与大文件下载超时（2026-09-18）
 
@@ -329,6 +365,12 @@ DSH 当前执行遵循约定 50/51：按需加载领域 Skill，由 Agent 决定
 - 根因：`default-features = false` 同时关闭 reqwest 默认的 `system-proxy`。仅构造 Client 不会自动恢复 Windows 注册表代理读取；Mac 分支打包记录中提到的代理修改又尚未提交、未进入交付包。
 - 验证：同机同官方地址无代理连接 8 秒超时；明确经现有系统代理返回 HTTP 200。启用该功能后不手动指定代理，正式下载器从空目录完成约 756 MB 下载并校验通过（54.74 秒）。
 - 修复与边界：显式启用 `system-proxy`，保留底层错误链；本机模型推理仍禁用代理。升级需使用本轮修复后的安装包，不能仅凭模型名称相同、代码编译通过或复用旧权重的 smoke test 宣称真实下载可用。
+
+### macOS GUI 进程 PATH 不含 node → npm/codex 脚本 exit 127（2026-07-29 mac 线实测，2026-09-01 复刻回正典）
+- 现象：release `.app`（Finder/DMG 启动）里点「一键安装 codex CLI」报 `npm 安装失败，exit status 127. env: node: No such file or directory`；codex login / 反推 / 生成同理（codex 也是 node 脚本）。dev（终端 `pnpm tauri dev`）PATH 完整，测不出。
+- 根因：app 找到了 npm 并 spawn，但 npm 是 `#!/usr/bin/env node` 脚本，其 shebang 在**子进程的 PATH** 里找 `node`；macOS GUI 进程不继承交互 shell 的 PATH（缺 `/opt/homebrew/bin` 等），`env` 找不到 node → exit 127。
+- 解决：[codex_cli.rs](apps/desktop/src-tauri/src/codex/codex_cli.rs) 加 `enriched_path()`——spawn npm / codex 时把二进制所在目录（node 与 npm/codex 同目录）+ `/opt/homebrew/bin`、`/usr/local/bin`、`~/.local/bin`、`~/.volta/bin`、`~/.local/share/pnpm` 前置进子进程 PATH（`.env("PATH", ...)`）；codex/npm 双 resolver 同步用 `find_binary_in_dirs` 补 Homebrew 与用户 bin 目录探测。仅 Unix（Windows npm.cmd 自解析 node、无需）。
+- 教训：macOS GUI 应用 spawn 任何 node 脚本（npm/codex/yarn/pnpm…）都必须显式给子进程 PATH 补 node 所在目录——不能假设继承了 shell PATH；「能找到二进制」≠「二进制能找到它的运行时」。
 
 ### 存档回归断言与最新交互契约同步（2026-09-16）
 

@@ -258,6 +258,15 @@ fn search_dirs() -> Vec<PathBuf> {
     if let Some(path) = std::env::var_os("PATH") {
         add_path(&mut dirs, &path);
     }
+    #[cfg(target_os = "macos")]
+    {
+        // Finder does not inherit the interactive shell's Homebrew PATH.
+        push_dir(&mut dirs, PathBuf::from("/opt/homebrew/bin"));
+        push_dir(&mut dirs, PathBuf::from("/usr/local/bin"));
+        if let Some(home) = std::env::var_os("HOME") {
+            push_dir(&mut dirs, PathBuf::from(home).join(".local/bin"));
+        }
+    }
     #[cfg(target_os = "windows")]
     {
         for path in registered_paths() {

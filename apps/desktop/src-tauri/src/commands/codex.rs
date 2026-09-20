@@ -1516,14 +1516,10 @@ pub async fn open_codex_session(
 
     #[cfg(target_os = "macos")]
     {
-        // 二进制路径可能含空格，作为 shell 命令须整体加引号（AppleScript 字符串内 \"）。
-        let script = format!(
-            "tell application \"Terminal\"\nactivate\ndo script \"\\\"{binary}\\\" resume {sid}\"\nend tell"
-        );
-        tokio::process::Command::new("osascript")
-            .arg("-e")
-            .arg(&script)
-            .spawn()
+        let mut command = crate::codex::codex_cli::codex_command(&binary);
+        command.args(["resume", sid]);
+        super::macos_terminal::open(&command)
+            .await
             .map_err(|e| AppError::Codex(format!("启动 Terminal 失败: {e}")))?;
         Ok(())
     }

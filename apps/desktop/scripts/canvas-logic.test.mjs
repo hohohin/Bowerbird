@@ -279,11 +279,11 @@ test("new cards prefer the current viewport without changing pan or zoom", () =>
   }
 });
 
-test("new cards preserve an available visible position and avoid existing cards", () => {
+test("new cards anchor at the visible top-left and avoid existing cards", () => {
   const viewport = { x: 0, y: 0, width: 600, height: 400 };
   const pan = { x: 0, y: 0 };
   const card = { x: 24, y: 24, width: 100, height: 100 };
-  assert.deepEqual(canvasPlacementForNewCard(card, viewport, pan, 1, []), { x: 24, y: 24 });
+  assert.deepEqual(canvasPlacementForNewCard(card, viewport, pan, 1, []), { x: 0, y: 0 }, "the provisional visible position is not kept");
   const obstacle = { x: 0, y: 0, width: 350, height: 400 };
   const position = canvasPlacementForNewCard(card, viewport, pan, 1, [obstacle]);
   assert.ok(position.x >= 366);

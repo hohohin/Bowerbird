@@ -193,6 +193,94 @@ fn upgrading_preserves_used_seeds_without_learning_from_legacy_assignments() {
     assert!(db.local_examples("cat_landscape", "b").unwrap().is_empty());
 }
 
+#[test]
+fn discovery_reference_samples_per_asset_not_by_usage() {
+    fn labels() -> Vec<Label> {
+        (0..9)
+            .map(|index| Label {
+                id: format!("label-{index}"),
+                name: format!("标签{index}"),
+                description: String::new(),
+                enabled: true,
+                count: 9 - index as i64,
+                has_examples: false,
+            })
+            .collect()
+    }
+    let mut first = labels();
+    super::discovery_sample(&mut first, "asset-a");
+    assert_eq!(first.len(), 8);
+    let mut second = labels();
+    super::discovery_sample(&mut second, "asset-a");
+    assert_eq!(
+        first.iter().map(|l| &l.id).collect::<Vec<_>>(),
+        second.iter().map(|l| &l.id).collect::<Vec<_>>()
+    );
+    // The rarely used label is still sampled for some assets instead of being
+    // crowded out forever by the eight most-used labels.
+    let mut seen_rare = false;
+    for asset in [
+        "asset-b", "asset-c", "asset-d", "asset-e", "asset-f", "asset-g", "asset-h", "asset-i",
+    ] {
+        let mut sample = labels();
+        super::discovery_sample(&mut sample, asset);
+        seen_rare |= sample.iter().any(|l| l.id == "label-8");
+    }
+    assert!(seen_rare);
+}
+
+#[test]
+fn discovered_existing_names_attach_directly() {
+    let labels = vec![
+        Label {
+            id: "plant".into(),
+            name: "植物".into(),
+            description: String::new(),
+            enabled: true,
+            count: 0,
+            has_examples: false,
+        },
+        Label {
+            id: "bottle".into(),
+            name: "矿泉水瓶".into(),
+            description: String::new(),
+            enabled: true,
+            count: 0,
+            has_examples: false,
+        },
+    ];
+    let mut prediction = Prediction {
+        description: "矿泉水瓶与马蹄莲的产品渲染图".into(),
+        tags: vec!["植物".into(), "水瓶设计".into()],
+        matches: vec![],
+    };
+    super::ground_discovered_names(&labels, &mut prediction);
+    assert_eq!(prediction.tags, vec!["水瓶设计".to_string()]);
+    assert_eq!(prediction.matches, vec!["plant".to_string()]);
+}
+
+#[test]
+fn label_example_flag_marks_what_automatic_matching_uses() {
+    let db = db();
+    db.apply_local_prediction(
+        "a",
+        0,
+        &Prediction {
+            description: "".into(),
+            tags: vec!["水彩植物".into()],
+            matches: vec![],
+        },
+        true,
+        &[],
+    )
+    .unwrap();
+    let tag = db.local_labels().unwrap().remove(0);
+    assert_eq!(tag.count, 1);
+    assert!(!tag.has_examples);
+    db.local_example(&tag.id, &["b".into()], false).unwrap();
+    assert!(db.local_labels().unwrap().remove(0).has_examples);
+}
+
 /// Opt-in inference against an already installed isolated pack. No network and no user library.
 #[tokio::test]
 #[ignore = "requires the pinned local model pack in BOWERBIRD_LOCAL_MODEL_TEST_DIR"]
@@ -216,6 +304,7 @@ async fn real_local_model_smoke() {
             description: "以商品为视觉中心的广告设计".into(),
             enabled: true,
             count: 0,
+            has_examples: false,
         },
         Label {
             id: "animal".into(),
@@ -223,6 +312,7 @@ async fn real_local_model_smoke() {
             description: "自然环境中的动物".into(),
             enabled: true,
             count: 0,
+            has_examples: false,
         },
     ];
     let start = std::time::Instant::now();
@@ -242,6 +332,7 @@ async fn real_local_model_smoke() {
         description: "中国古代人物、月亮、树木构成的平面插画".into(),
         enabled: true,
         count: 0,
+        has_examples: false,
     }];
     let custom_negative_before = server.predict(&image, &custom, false, &[], &cancel).await;
     println!(
@@ -262,6 +353,7 @@ async fn real_local_model_smoke() {
         description: "根据正例的平面插画风格判断，不要求相同主体".into(),
         enabled: true,
         count: 0,
+        has_examples: false,
     }];
     let example_match = server
         .predict(

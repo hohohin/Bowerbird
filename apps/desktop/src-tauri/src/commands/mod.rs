@@ -8,6 +8,8 @@ pub mod cloud_agent;
 pub mod codex;
 pub mod collect;
 pub mod jimeng;
+#[cfg(target_os = "macos")]
+mod macos_terminal;
 pub mod library;
 pub mod layers;
 pub mod layer_text;

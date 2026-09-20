@@ -1,4 +1,4 @@
-//! Windows WebView2 transport shared by production capture and the native smoke fixture.
+//! Native browser transports shared by production capture and smoke fixtures.
 use crate::error::{AppError, AppResult};
 use tauri::Webview;
 const MAX_BYTES: usize = 50 * 1024 * 1024;
@@ -113,10 +113,68 @@ pub(super) async fn browser_bytes(webview: &Webview, url: &str) -> AppResult<Vec
     result
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+pub(super) async fn browser_bytes(webview: &Webview, url: &str) -> AppResult<Vec<u8>> {
+    use std::ffi::{c_char, c_void, CStr, CString};
+    type Sender = tokio::sync::oneshot::Sender<AppResult<Vec<u8>>>;
+    // The archive comes from build.rs; the attribute also covers targets that
+    // compile this module via #[path] without linking the library crate.
+    #[link(name = "bowerbird_browser_capture", kind = "static")]
+    extern "C" {
+        fn bb_browser_capture(
+            view: *mut c_void,
+            url: *const c_char,
+            context: *mut c_void,
+            callback: extern "C" fn(*mut c_void, *const u8, usize, *const c_char),
+        );
+    }
+    extern "C" fn complete(
+        context: *mut c_void,
+        data: *const u8,
+        len: usize,
+        error: *const c_char,
+    ) {
+        // Native code completes exactly once and keeps data alive through this callback.
+        let sender = unsafe { Box::from_raw(context.cast::<Sender>()) };
+        let result = if !error.is_null() {
+            Err(AppError::Other(
+                unsafe { CStr::from_ptr(error) }
+                    .to_string_lossy()
+                    .into_owned(),
+            ))
+        } else if len == 0 || data.is_null() || len > MAX_BYTES {
+            Err(AppError::Other("浏览器图片为空或超过 50 MiB 上限".into()))
+        } else {
+            Ok(unsafe { std::slice::from_raw_parts(data, len) }.to_vec())
+        };
+        let _ = sender.send(result);
+    }
+    let url = CString::new(url).map_err(|_| AppError::Other("图片地址无效".into()))?;
+    let (tx, rx) = tokio::sync::oneshot::channel::<AppResult<Vec<u8>>>();
+    webview
+        .with_webview(move |view| unsafe {
+            bb_browser_capture(
+                view.inner(),
+                url.as_ptr(),
+                Box::into_raw(Box::new(tx)).cast(),
+                complete,
+            );
+        })
+        .map_err(|e| AppError::Other(format!("浏览器取图初始化失败：{e}")))?;
+    // The native timer cancels the download and removes temporary files after 45 seconds.
+    let bytes = tokio::time::timeout(std::time::Duration::from_secs(50), rx)
+        .await
+        .map_err(|_| AppError::Other("浏览器读取图片超时，请重试".into()))?
+        .map_err(|_| AppError::Other("浏览器已关闭，无法读取图片".into()))??;
+    image::guess_format(&bytes)
+        .map_err(|_| AppError::Other("网站返回的内容不是可识别图片".into()))?;
+    Ok(bytes)
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub(super) async fn browser_bytes(_: &Webview, _: &str) -> AppResult<Vec<u8>> {
     Err(AppError::Other(
-        "内置浏览器拖图采集目前支持 Windows；此平台可使用浏览器扩展采集".into(),
+        "内置浏览器拖图采集目前支持 Windows 和 macOS；此平台可使用浏览器扩展采集".into(),
     ))
 }
 

@@ -85,7 +85,10 @@ ulid = { version = "1", features = ["serde"] }
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 # Supabase PKCE + OS 原生凭据库（refresh token 不落 settings.json）
+ndarray = "0.17"
+ort = { version = "2.0.0-rc.13", default-features = false, features = ["ndarray", "load-dynamic"] }
 sha2 = "0.10"
+tokenizers = { version = "0.21", default-features = false, features = ["fancy-regex"] }
 keyring = { version = "3", features = [
   "apple-native",
   "windows-native",

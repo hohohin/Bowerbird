@@ -23,3 +23,12 @@ test("a local file import with a stable origin can be moved out", () => {
     true,
   );
 });
+
+test("Mac temporary capture paths cannot be restored, while user folders remain eligible", () => {
+  for (const root of ["/var/folders/ab/session/T", "/private/var/folders/ab/session/T"]) {
+    for (const prefix of ["bowerbird-upload-", "bowerbird-cloud-", "bowerbird-dreamina-"]) {
+      assert.equal(canMoveAssetOut({ source: "imported", origin_path: `${root}/${prefix}01ABC/image.png` }), false);
+    }
+  }
+  assert.equal(canMoveAssetOut({ source: "imported", origin_path: "/Users/test/Pictures/T/bowerbird-upload-project/image.png" }), true);
+});

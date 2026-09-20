@@ -1,5 +1,6 @@
 use crate::core::local_classification::{data::Label, LocalClassifier, Status};
 use crate::core::paths::LibraryPaths;
+use crate::core::settings::SettingsState;
 use crate::db::Database;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
@@ -18,18 +19,34 @@ pub async fn local_classification_start(
     classifier: State<'_, Arc<LocalClassifier>>,
     db: State<'_, Arc<Database>>,
     paths: State<'_, Arc<LibraryPaths>>,
+    settings: State<'_, SettingsState>,
     install: bool,
     tag_id: Option<String>,
     pending_only: bool,
 ) -> Result<(), String> {
+    let snapshot = settings.get();
+    let jev_key = if snapshot.jev_verify_enabled {
+        snapshot.jev_api_key.filter(|key| !key.trim().is_empty())
+    } else {
+        None
+    };
     classifier.inner().start(
         app,
         db.inner().clone(),
         paths.inner().clone(),
         install,
         tag_id,
+        jev_key,
         pending_only,
     )
+}
+
+#[tauri::command]
+pub async fn local_classification_vector_install(
+    app: AppHandle,
+    classifier: State<'_, Arc<LocalClassifier>>,
+) -> Result<(), String> {
+    classifier.inner().start_vector(app)
 }
 
 #[tauri::command]

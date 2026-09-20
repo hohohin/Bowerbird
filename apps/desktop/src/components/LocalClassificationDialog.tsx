@@ -13,6 +13,9 @@ export function LocalClassificationDialog({ onClose }: { onClose: () => void }) 
   const [enabled, setEnabled] = useState(true);
   const [error, setError] = useState("");
   const [working, setWorking] = useState(false);
+  const [jevEnabled, setJevEnabled] = useState(false);
+  const [jevKey, setJevKey] = useState("");
+  const [jevLoaded, setJevLoaded] = useState(false);
   const lock = useRef(false);
   const selected = useStore((s) => s.selectedIds);
   const setSmartFilter = useStore((s) => s.setSmartFilter);
@@ -39,6 +42,16 @@ export function LocalClassificationDialog({ onClose }: { onClose: () => void }) 
     return () => { active = false; window.clearInterval(timer); };
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    void local.jevConfig().then((config) => {
+      if (!active) return;
+      setJevEnabled(config.enabled);
+      setJevKey(config.apiKey);
+      setJevLoaded(true);
+    }).catch(() => {});
+    return () => { active = false; };
+  }, []);
   async function action(fn: () => Promise<unknown>) {
     if (lock.current) return;
     lock.current = true; setWorking(true); setError("");
@@ -61,7 +74,7 @@ export function LocalClassificationDialog({ onClose }: { onClose: () => void }) 
       <section className="rounded border border-edge bg-panel2 p-3 space-y-3">
         <p>{status?.installed ? "本地模型已安装 · 无需账号或积分" : "首次下载约 756 MB，NVIDIA 显卡另需约 645 MB 加速组件，安装后可离线使用。"}</p>
         <p className="text-xs text-muted">{status?.acceleration || "优先使用 NVIDIA GPU 加速，不可用时自动使用 CPU。已有模型首次运行补充加速组件，无需重下模型。"}</p>
-        {status && !status.supported && <p className="text-muted">此模型包目前支持 Windows x64。</p>}
+        {status && !status.supported && <p className="text-muted">此模型包支持 Windows x64、macOS 13.3+（Intel / Apple Silicon）。</p>}
         <div className="flex flex-wrap gap-2">
           {!status?.installed && <button className="app-modal-button" disabled={!status?.supported || busy} onClick={() => void action(() => local.start({ install: true }))}>下载本地模型</button>}
           {status?.installed && <>
@@ -74,9 +87,9 @@ export function LocalClassificationDialog({ onClose }: { onClose: () => void }) 
         <label className="flex items-center gap-2">
           <input type="checkbox" checked={status?.enabled ?? false} disabled={!status?.installed || working}
             onChange={(e) => void action(() => local.enable(e.target.checked))} />
-          自动识别新素材，并匹配新增或修改的标签
+          自动识别新素材，并为设过示例的标签自动匹配图片
         </label>
-        <p className="text-xs text-muted">手动添加的标签会保留；你移除的标签不会自动贴回。停止任务也会暂停自动处理。</p>
+        <p className="text-xs text-muted">手动添加的标签会保留；你移除的标签不会自动贴回。未设示例的标签只用于统一命名，不会自动匹配。停止任务也会暂停自动处理。</p>
         {status?.message && <p role="status" aria-live="polite">{status.message}</p>}
         {status?.last_error && <p className="text-xs text-red-400">最近一次未完成原因：{status.last_error}</p>}
         {status?.busy && status.phase === "downloading" && <>
@@ -84,6 +97,34 @@ export function LocalClassificationDialog({ onClose }: { onClose: () => void }) 
           <p className="text-xs text-muted">{Math.round(status.download_done / 1048576)} / {Math.round(status.download_total / 1048576)} MiB · 可关闭面板，下载继续</p>
         </>}
         {status?.total ? <p className="text-xs text-muted">已处理 {status.done} / {status.total} · 未完成 {status.failed}</p> : null}
+      </section>
+
+      <section className="rounded border border-edge bg-panel2 p-3 space-y-2">
+        <div className="flex items-center justify-between">
+          <span>向量精确匹配（jina-clip-v2）</span>
+          <span className="text-xs text-muted">
+            {status?.vector_installed ? "已安装" : status?.vector_supported ? "未安装" : "此平台暂不支持"}
+          </span>
+        </div>
+        <p className="text-xs text-muted">安装后标签匹配改用图像与文本的向量相似度判断（SigLIP2 系模型，int8 量化约 834 MB，含运行组件共约 881 MB，经国内镜像下载）；内置视觉模型只负责发现和命名，不再逐标签「看图打勾」。未安装时沿用内置视觉模型判断。</p>
+        {status?.vector_supported && !status.vector_installed &&
+          <button className="app-modal-button" disabled={busy} onClick={() => void action(() => local.vectorInstall())}>下载向量匹配模型</button>}
+        {status?.vector_installed && <p className="text-xs text-muted">安装或升级后运行一次「重新扫描全部图片」，全部自动标签将按向量判断重建。</p>}
+      </section>
+
+      <section className="rounded border border-edge bg-panel2 p-3 space-y-2">
+        <label className="flex items-center gap-2">
+          <input type="checkbox" checked={jevEnabled} disabled={!jevLoaded} onChange={(e) => setJevEnabled(e.target.checked)} />
+          云端最终校验（Jev）
+        </label>
+        <input type="password" aria-label="Jev API Key" className="w-full rounded border border-edge bg-panel2 px-3 py-2"
+          placeholder="console.typesafe.ai 申请的 API Key" value={jevKey} disabled={!jevLoaded}
+          onChange={(e) => setJevKey(e.target.value)} />
+        <div>
+          <button className="app-modal-button" disabled={!jevLoaded || working}
+            onClick={() => void action(async () => { await local.saveJevConfig(jevEnabled, jevKey); })}>保存云端校验设置</button>
+        </div>
+        <p className="text-xs text-muted">启用后，本地识别的候选标签会连同图片的文字描述与标签文本发送到 TypeSafe（Jev）做最终复核，低于阈值的标签不写入；图片本身永不离开本机，未启用时分类完全离线。校验失败会暂停自动处理，可停用后重试。</p>
       </section>
 
       <section className="space-y-2">
@@ -114,7 +155,7 @@ export function LocalClassificationDialog({ onClose }: { onClose: () => void }) 
           {labels.map((label) => <div key={label.id} className="py-2 space-y-1">
             <div className="flex flex-wrap items-center gap-2">
               <button className="text-cold font-medium" onClick={() => { setSmartFilter(`tag:${label.name}`); onClose(); }}>#{label.name}</button>
-              <span className="text-xs text-muted">{label.count} 张{label.enabled ? "" : " · 已停用自动匹配"}</span>
+              <span className="text-xs text-muted">{label.count} 张{label.enabled ? (label.has_examples ? "" : " · 未设示例，不自动匹配") : " · 已停用自动匹配"}</span>
               <button className="text-xs" onClick={() => edit(label)}>编辑</button>
               <button className="text-xs disabled:opacity-40" disabled={!canRun || !label.enabled} onClick={() => void action(() => local.start({ tagId: label.id }))}>寻找匹配</button>
               {selected.size > 0 && <>

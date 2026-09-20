@@ -23,6 +23,9 @@ fn is_bowerbird_temporary_origin(path: &str) -> bool {
     .any(|prefix| {
         normalized.contains(&format!("/temp/{prefix}"))
             || normalized.contains(&format!("/tmp/{prefix}"))
+            || ((normalized.starts_with("/var/folders/")
+                || normalized.starts_with("/private/var/folders/"))
+                && normalized.contains(&format!("/t/{prefix}")))
     })
 }
 
@@ -994,7 +997,7 @@ mod tests {
         let stamp = ulid::Ulid::new().to_string();
         let workspace = std::env::temp_dir().join(format!("bowerbird-dst-{stamp}"));
         std::fs::create_dir_all(&workspace).unwrap();
-        let store = Path::new("C:\\library\\images\\2026\\07\\01ABC.ulid.png");
+        let store = Path::new("library/images/2026/07/01ABC.ulid.png");
         // 非法字符净化。
         let dst = move_destination(&workspace, "a/b:c*?\"<>|", store, "01ABCDEFGH99");
         assert_eq!(dst.file_name().unwrap(), "a_b_c______.png");
@@ -1162,6 +1165,16 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&origin_dir);
         let _ = std::fs::remove_dir_all(&store_dir);
+    }
+
+    #[test]
+    fn mac_temporary_origins_cannot_be_restored_to_deleted_capture_folders() {
+        for root in ["/var/folders/ab/session/T", "/private/var/folders/ab/session/T"] {
+            for prefix in ["bowerbird-upload-", "bowerbird-cloud-", "bowerbird-dreamina-"] {
+                assert!(!asset_can_move_out(Some("imported"), Some(&format!("{root}/{prefix}01ABC/image.png"))));
+            }
+        }
+        assert!(asset_can_move_out(Some("imported"), Some("/Users/test/Pictures/T/bowerbird-upload-project/image.png")));
     }
 
     #[test]

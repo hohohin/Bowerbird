@@ -1,6 +1,6 @@
 # 本地动态分类
 
-2026-09-10 用户确认并完成首版源码：不预设类别，根据实际素材识别产生多标签；用户新建标签可匹配存量及后续图片，人工纠正优先。分类全部本地，反推维度继续使用现有 API/CLI。已纳入 Windows 本地安装包，当前交付以 PROJECT.md 为准。
+2026-09-10 用户确认并完成首版源码：不预设类别，根据实际素材识别产生多标签；用户新建标签可匹配存量及后续图片，人工纠正优先。分类全部本地，反推维度继续使用现有 API/CLI。Windows 已随后续版本打包；下述 macOS 适配已纳入 26.9.17 Mac 安装包，交付记录见 `macOS/README.md`。
 
 ## 实现与验收
 
@@ -30,6 +30,54 @@ RTX 4070 Ti SUPER 上通过生产启动路径确认 `offloaded 25/25 layers to G
 
 本轮获取的 `origin/mac` 仍为 `b6e3ec9`，其已提交分类运行时保留旧的重复判断错误，未找到可直接移植的对应修复。Windows 本轮补齐恢复逻辑。确定性 Rust 回归 **361 passed / 8 ignored / 11 filtered**，新增覆盖重复冲突、漏判后失败不返回部分结果、正常结果不额外请求及序列化顺序；ignored 的真实 GPU、CPU 回退和分类专项另跑，交付结果见 PROJECT.md。分类面板含 GPU/CPU 提示的 Chrome 合成 IPC、TypeScript/Vite 通过；未扫描或修改用户的 471 张素材库。证据：本地 `.tmp/local-gpu-fix-20260917/`。
 
+## 2026-09-18 误标根治：切断反馈回路与无示例盲匹配
+
+用户报告矿泉水瓶产品图被误标 #女孩 #插画 #梅花 #植物。核查用户真实库（只读 SQLite）确认这不是单图偶发：模型把马蹄莲认成梅花尚属能力问题，但「女孩」上水瓶、另一张水瓶图同时命中 猫/宠物/中秋/月饼 共 8 个标签，是管线把小模型误判放大成全库污染。全库 20 个标签全部由自动发现产生、无任何人工示例；「梅花」5 次命中全部错误，「女孩」仅 1 次正确（标签诞生图）。
+
+根因（均为模型以外的结构问题，本轮不动模型与权重）：
+
+1. **复用滚雪球**：发现阶段注入按引用次数降序的前八标签并提示「优先复用」，误标自动抬高标签排名、进入后续每张图的提示词，形成只放大不纠错的反馈回路。
+2. **无示例盲匹配**：自动处理对没有任何人工示例的标签按每批八个做纯文本 true/false 批量判断，0.8B 模型成片打 true；发现阶段提出的已有标签名也被丢弃后交给该盲匹配补挂，两个通道都在制造假阳性。
+3. **提示词顺序**：先给参考标签再要求命名，助长小模型从清单里挑名字而不看图。
+
+修改（`apps/desktop/src-tauri/src/core/local_classification/`）：
+
+- `mod.rs`：发现参考改为按素材 ID 确定性哈希抽样的 `discovery_sample`（同一图稳定、不同图覆盖不同标签，与引用次数彻底解耦）；新增 `ground_discovered_names`，发现阶段提出的、与已有标签同名的名称直接以 local 来源落地，不再交给盲匹配；自动处理只评估有人工示例（手动正例或排除记录）的标签，无示例标签仅在用户显式「保存并寻找匹配素材 / 寻找匹配」的单标签运行中判断；「重新扫描全部图片」（`pendingOnly: false`）升级为重建：全部启用标签计入 evaluated，不再成立的自动归属被清退，人工归属与排除记录不动。
+- `runtime.rs`：发现提示词改为「每个标签都来自图中实际可见的主体、画法、材质或设计用途……已有标签仅用于统一命名：仅当含义相同时才复用」；匹配提示词要求 evidence 指出图中可见的具体依据，无法指出时必须 false。
+- `data.rs`：`Label` 新增 `has_examples`（存在手动正例或排除记录），面板按标签显示「未设示例，不自动匹配」，自动处理文案同步；发现/匹配协议、JSON Schema、重复/遗漏重判与人工保护逻辑未改。
+
+验证：本地分类回归 **21 passed / 0 failed / 4 ignored**（ignored 为需真实模型/隔离环境的既有用例），新增 `discovery_reference_samples_per_asset_not_by_usage`（抽样上限、确定性、低频标签仍会被抽到）、`discovered_existing_names_attach_directly`（同名落地与新名保留）、`label_example_flag_marks_what_automatic_matching_uses`（示例标记随人工记录变化）三项；`tsc --noEmit` 与 `scripts/local-classification-ui.test.mjs` 通过。批内重复/遗漏重判路径保留但自动管线不再触发多标签批请求。
+
+边界与后续：模型能力与 480px 缩略图输入未变，发现阶段仍可能提出偏宽泛或个别错误标签，只是不再互相放大；既有库的历史错误自动标签需在新版执行一次「重新扫描全部图片」按新规则重建清退。0.8B 的准确率验收、更大模型或专用向量匹配的对照仍按文末原计划进行。本轮只读检查过用户库，未修改用户数据；源码更新未打包。
+
+## 2026-09-19 可选云端最终校验（Jev）
+
+用户确认引入 TypeSafe Jev（System One Model，2026-09-15 发布）作为本地分类的可选最终闸门。识图仍全部本地（llama.cpp + 固定 Qwen3.5-0.8B 不变）；Jev 只做「视觉描述 ⊨ 标签定义」的文本蕴含复核，**出机内容限于图片的本地文字描述与标签名/说明，图片本身永不离开本机**。
+
+- 配置：settings.json 新增 `jev_verify_enabled`（默认关闭）与 `jev_api_key`（为空视为未启用）；面板新增「云端最终校验（Jev）」区块保存两者，文案明示出机范围。未启用时行为与上一版完全一致。
+- 机制：`classify_one` 在写入前把全部存活候选（发现阶段落地/新建的标签 + 示例匹配的命中）作为并行 noul 问题，一次 `POST api.typesafe.ai/v1/systemone`（`jev-latest`）复核；概率 ≥ 0.6（`jev.rs::THRESHOLD`）才写入，低于阈值丢弃。单标签显式「寻找匹配」没有视觉描述，自然跳过云端复核。
+- 失败语义：请求失败、非 2xx、响应缺概率值均按该资产失败处理，不写部分结果，自动处理由既有逻辑暂停——**校验失败永远不放行**。取消令牌沿用分类停止按钮。
+- 同轮修复：发现阶段的确定性抽样此前就地把标签列表截断到八个，导致示例标签匹配也只遍历前八个；现改为对副本抽样，匹配仍遍历全部启用标签。
+
+验证：本地分类回归 **24 passed / 0 failed / 4 ignored**（新增 `gate_keeps_candidates_above_threshold_and_shapes_the_request` 阈值过滤与请求形状、`gate_failures_are_errors_never_silent_passes` 401 不放行、`empty_description_or_no_candidates_skips_the_call` 空描述跳过，均走本机 mock 服务，不联网）；settings 回归 9 passed（含 jev 默认关闭断言）；TypeScript 与 `scripts/local-classification-ui.test.mjs` 通过（新增云端校验保存断言）。请求经系统代理（沿用下载器网络栈），推理本机部分不变。
+
+边界：Jev 无公开基准，厂商「不会幻觉」仅是输出格式保证而非正确性保证；阈值 0.6 为工程初值，待用户配置真实 key 后用引导素材标注集（21 张已核对 ground truth）调优并复测精确率；Jev 当前仅支持文本/JSON 输入，无法承担识图。后续更大模型（Qwen3.5-2B/4B）与向量匹配的升级路径不变，云端校验与它们正交可叠加。
+
+## 2026-09-19 匹配判断切换：SigLIP2 系向量匹配（jina-clip-v2）
+
+用户澄清「引入」指 SigLIP2 系向量匹配替代 VLM 判断，从根本治理误标。本轮实现：**安装向量包后，逐标签「看图打勾」的判断改为图像嵌入与标签文本/示例图嵌入的余弦相似度**（≥ `vector.rs::MATCH_THRESHOLD` 0.27 判匹配，且任何排除示例的相似度不得高于最佳证据）；VLM（Qwen3.5-0.8B）只保留发现与命名职责。未安装向量包时完全回退既有 VLM 判断，行为不变；向量包加载失败也按资产回退 VLM 而非中断整轮。
+
+- 模型：`jinaai/jina-clip-v2`（SigLIP2 视觉塔 + jina-embeddings-v3 文本塔，89 语言含中文，1024 维，输出已 L2 归一化）。ONNX int8 量化版，Hugging Face 官方 `onnx/model_int8.onnx`：874,350,932 bytes，SHA256 `21b8b77a009865faecaa29f076ee55d6334ea42699a9efa14d542ce8d3938a3f`（= HF LFS oid，已本机复算一致）；`tokenizer.json`：17,082,997 bytes，SHA256 `6601c4120779a1a3863897ba332fe3481d548e363bec2c91eba10ef8640a5e93`。
+- 运行时：`ort` 2.0.0-rc.13 **load-dynamic**（构建期不链接、不下载二进制），onnxruntime 1.28.0 运行库随包下载：macOS arm64 tgz 32,396,562 bytes（SHA256 `1268b359718099bde2cedb55787f182a130067bc4f31e8c88478c445b850d3d8`，解出 `libonnxruntime.dylib` 39,312,136 bytes）；Windows x64 zip 78,796,801 bytes（SHA256 `abef733dacbe2f571547a7150b479b5cb9cc0df22f96c24983a42cadb1b4f8bc`，解出 `onnxruntime.dll`）。解压用系统 `tar`（Windows 10+ 自带 bsdtar 可解 zip）。**1.28.0 无 macOS x86_64 资产：Intel Mac 不支持向量包，面板显示「此平台暂不支持」并回退 VLM 判断。**
+- 下载走 hf-mirror.com 优先、huggingface.co 兜底（本机实测官方域名不可达、镜像可用且字节保真——tokenizer 与模型的 SHA256 与官方 LFS oid 完全一致）；onnxruntime 走 GitHub Releases。全部文件先写 `.part`、逐块 SHA-256、大小上限校验后原子改名；包内容纳于 `local-classification/<PACK>/vector/`，`ready.json` 记录 `jina-clip-v2-int8-onnxruntime128-v1`。
+- 图预处理与官方一致：bicubic 短边 512 + 中央裁剪 512×512、CLIP mean/std、CHW（`preprocess`，有确定性单测）。文本 = 标签名（+「；」+说明），XLM-R 分词 **必须带特殊 token**（`<s>`/`</s>`）——实测缺省特殊 token 时中文裸词分数退化为 0.15–0.25 无区分度、UI 截图反而全场最高；开启后立即恢复正常排序。图输入固定 512×512（ONNX 图静态维度），文本编码时视觉塔喂零张量、图像编码时文本塔喂空串分词（单图已验证无害）。
+- 管线：`run()` 起始加载一次 `Matcher`（标签文本向量与示例图向量按 id 缓存，整个 run 复用）；`classify_one` 对每个有示例标签：素材图向量 × max(文本相似度, 正例示例相似度) ≥ 0.27 且低于任何排除示例时写入。CPU 密集段用 `block_in_place` 挂离执行器。示例缺失缩略图按资产失败重试（与 VLM 路径同语义）。Jev 云端校验闸门在向量判断之后照常适用（正交叠加）。
+- 状态与 UI：`Status` 新增 `vector_supported`/`vector_installed`；新命令 `local_classification_vector_install`（与分类/下载共用 busy 闸）；面板新增「向量精确匹配（jina-clip-v2）」区块（约 881 MB、镜像说明、安装后需「重新扫描全部图片」重建自动标签）。
+
+验证（2026-09-19，Apple Silicon 本机）：探针 + 生产代码双路径真实推理。**21 张引导素材实测**：矿泉水瓶产品图（asset-007，原图即剪纸风马蹄莲产品照）top-1「矿泉水瓶」0.289、「产品摄影」0.245，「女孩」跌出前五；006/008/009 瓶身图同样「矿泉水瓶」top-1（0.285–0.333）；猫图「猫」0.283 top-1；插画图「插画」0.277 top-1。真负例普遍 < 0.22（阈值 0.27 由此标定）；软件界面截图对「产品图」0.328 是已知误报面。性能：4 线程 int8 文本约 1.7s/条（含零张量视觉塔开销）、图像约 1.5–1.9s/张，874MB 模型加载后真实测试全程 8.0s。Rust **378 passed / 6 ignored / 0 failed**（新增 decide 阈值与反证否决、preprocess 尺寸与归一化、工件哈希钉定 3 项确定性测试 + `real_model_orders_labels_correctly` ignored 真实测试，`BOWERBIRD_VECTOR_PACK=<含包文件与 asset-007.png 的 vector 目录>` 时运行，本机已跑通）；TypeScript 与面板 UI 回归（新增向量区块下载断言）通过。
+
+边界与待办：阈值 0.27 是 21 张素材上的初值，标签文本措辞（裸词 vs 模板句）与 UI 截图误报需在真实库继续观察；int8 量化在本素材集上区分度可用，未与 fp16 对照；中文裸词无需模板句（模板句实测反而劣化排序）；Intel Mac 待 onnxruntime 发布 x86_64 包后补固定清单；示例向量缓存按 run 生命周期，跨 run 不复用；Windows x64 包清单已钉定但**未在 Windows 实机验证下载/解压/推理**。
+
 ## 固定模型
 
 - 模型：unsloth/Qwen3.5-0.8B-GGUF，revision `6ab461498e2023f6e3c1baea90a8f0fe38ab64d0`。
@@ -55,10 +103,28 @@ RTX 4070 Ti SUPER 上通过生产启动路径确认 `offloaded 25/25 layers to G
 
 ## 使用与边界
 
-侧栏「分类标签 → 管理」打开本地分类面板。首次下载约 756 MB，NVIDIA GPU 加速另需约 645 MB；可先手动「识别未处理素材」，也可打开自动处理。自动开关会扫描当前库中尚未识别的图片，并处理已排队的新增/修改标签；每 15 秒检查一次。关闭面板不终止后台任务，“停止”也关闭自动处理，已完成结果保留；下载重试复用完整且通过校验的文件，未完成的单文件重新下载。无法补齐的分类错误会暂停自动处理，原因在面板保留。
+侧栏「分类标签 → 管理」打开本地分类面板。首次下载 Windows 约 756 MB、Mac 约 749 MB，Windows NVIDIA GPU 加速另需约 645 MB；可先手动「识别未处理素材」，也可打开自动处理。自动开关会扫描当前库中尚未识别的图片，并处理已排队的新增/修改标签；每 15 秒检查一次。关闭面板不终止后台任务，“停止”也关闭自动处理，已完成结果保留；下载重试复用完整且通过校验的文件，未完成的单文件重新下载。无法补齐的分类错误会暂停自动处理，原因在面板保留。
 
 标签名称/说明可编辑，停用后不参与自动匹配但保留已有归属。开启自动处理时保存标签会排队匹配存量；未开启时用「保存并寻找匹配素材」。选中素材后可明确添加正例或排除；单次上下文取至多两个手动正例和一个反例，自动及历史来源不作为训练示例。重新扫描只撤销本地模型自己的、不再匹配的归属，不删除人工或历史标签。
 
-此版本是单 VLM 的动态标签基线，不含向量聚类/相似搜索或模型微调。发现阶段参考最多八个已有标签名，匹配阶段每批八个遍历全部启用标签；语义近义词合并依赖模型复用名称，尚无独立的语义去重索引。当前分支模型包支持 Windows x64 NVIDIA CUDA / CPU；其他平台显示不可安装。模型包保存在应用数据目录 `local-classification/qwen35-08b-b10809-v1`，识别记录/标签/纠正在当前库 SQLite 中，与反推 caption 分离。
+此版本是单 VLM 的动态标签基线加可选向量匹配判官，不含向量聚类/相似搜索或模型微调。发现阶段参考按素材确定性抽样的最多八个已有标签名（仅用于统一命名，不按引用次数排序）；自动匹配只作用于设过人工示例的标签，无示例标签仅由用户显式「寻找匹配」判断整库；**安装向量包（jina-clip-v2 int8，约 881 MB，macOS Apple Silicon / Windows x64）后匹配判断改用余弦相似度，未安装或加载失败回退 VLM 判断，Intel Mac 暂无向量包**；可选的 Jev 云端校验默认关闭，启用后仅出机文字描述与标签文本。语义近义词合并依赖模型复用名称，尚无独立的语义去重索引。模型包保存在应用数据目录 `local-classification/qwen35-08b-b10809-v1`（向量包在其 `vector/` 子目录），识别记录/标签/纠正在当前库 SQLite 中，与反推 caption 分离。
 
 后续质量验收：用用户实际素材建立独立标注集，测标签精确率、覆盖率、风格区分、近义标签膨胀及 CPU 耗时/内存；若 0.8B 无法达到要求，再对照更大模型或专用向量匹配模型。未发布、未部署 Cloud、未进行付费模型调用。
+
+## macOS 适配（2026-09-16）
+
+复用同一模型、视觉投影与模型目录，按应用进程架构选择 [llama.cpp b10809 官方包](https://github.com/ggml-org/llama.cpp/releases/tag/b10809)。Intel 应用在 Apple Silicon 的 Rosetta 下仍选择 x64 包，原生 arm64 应用选择 arm64 包。运行时分别解压到 `runtime-macos-x64` / `runtime-macos-arm64`，保留包内 `llama-b10809/`、动态库软链接和可执行权限；Windows 原目录及 `runtime.zip` 缓存兼容。
+
+- Intel：`llama-b10809-bin-macos-x64.tar.gz`，11,175,330 bytes，SHA256 `13b34aa8a5d87341a21065a83f54a8167e1aaa6fe0d66065de01632a1ed64be6`；总下载 748,679,682 bytes。
+- Apple Silicon：`llama-b10809-bin-macos-arm64.tar.gz`，11,123,196 bytes，SHA256 `7d692df9e1e386e62f1c12b843903218041e6cd74c9415aa39a7ed3176f9eaa2`；总下载 748,627,548 bytes。
+- 两包已实际下载并核对官方 digest；Mach-O 架构与所有二进制的最低系统版本均检查：macOS 13.3。低于该版本不可安装，系统版本仅查询一次。
+- 使用绝对路径 `/usr/bin/tar` 及包内 `llama-server`，无需 Homebrew / Python / Node。沿用仅回环监听、随机 API key、可取消子进程、权重校验和 CPU 参数；本轮未启用 Metal 加速。
+
+验证日志保存在本地 `.tmp/local-classification-mac/`。真实推理使用随包 preset 图片及独立模型目录，不读写用户素材库；Apple Silicon 原生推理与新版 Tauri/Finder 完整 GUI 尚待对应机器验收。当次未重新构建 app/DMG；后续已纳入 26.9.17 Mac 包，见 `macOS/README.md`。
+
+本轮最终验证：
+
+- `cargo test --offline --lib --manifest-path apps/desktop/src-tauri/Cargo.toml local_classification -- --nocapture`：**13 passed / 1 ignored**（真实模型另跑）。覆盖 Mac 最低版本、平台选择、中文/空格路径、执行权限、动态库软链接、损坏下载及现有标签/人工保护逻辑。首轮沙箱禁止回环监听造成下载校验测试失败，允许本机监听后最终回归通过。
+- `node scripts/local-classification-ui.test.mjs`：安装/停止/重开、标签与示例、错误、深浅主题及窄窗通过，新增不支持系统提示与安装禁用检查。`node node_modules/typescript/bin/tsc --noEmit` 通过；pnpm 快捷入口触发依赖自动安装及网络失败，改用已安装的 TypeScript 执行检查，未修改依赖。
+- Intel macOS 26.6.2 真实测试：固定文件校验、正式安装器解压与安装状态、加载、五次本机图像推理及停止均完成，总计 111.84 秒；标签发现返回“产品、化妆品、护肤”，该次发现请求耗时 6.56 秒。自定义“东方诗意插画”正负例及视觉示例匹配结果符合既有断言。
+- **真实质量断言未全部通过**：产品图同时命中“产品海报”和“野生动物”，后者为误判，`real_local_model_smoke` 因该负例断言失败。保留原断言、权重与提示词，不为单个平台样本调参；这证明 Mac 安装/推理链路可用，不代表分类准确率验收完成，也不能沿用 Windows 旧记录宣称 Mac 真模型测试通过。

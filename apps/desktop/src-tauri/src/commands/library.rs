@@ -2,7 +2,6 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Arc;
 
 use rusqlite::OptionalExtension;
@@ -62,7 +61,10 @@ pub async fn import_files(
             }
         }
         if assets.is_empty() && !failures.is_empty() {
-            return Err(AppError::Other(format!("未导入任何素材：{}", failures.join("\n"))));
+            return Err(AppError::Other(format!(
+                "未导入任何素材：{}",
+                failures.join("\n")
+            )));
         }
         Ok::<_, AppError>(assets)
     })
@@ -73,7 +75,9 @@ pub async fn import_files(
         if let Err(e) = db.add_assets_to_project(project_id, &ids) {
             tracing::warn!("failed to link imported assets to project {project_id}: {e}");
             let _ = app.emit("library://assets-changed", ());
-            return Err(AppError::Other(format!("素材已写入素材库，但未能加入目标项目：{e}")));
+            return Err(AppError::Other(format!(
+                "素材已写入素材库，但未能加入目标项目：{e}"
+            )));
         }
     }
     // 后台命名 + 反推（非阻塞，约定 7 离线降级）。
@@ -94,15 +98,24 @@ pub async fn import_folder(
 ) -> Result<usize, AppError> {
     let paths = paths.inner().clone();
     let db = db.inner().clone();
-    if Path::new(&path).join(crate::core::onboarding_pack::MANIFEST).is_file() {
-        let project_id = project_id.ok_or_else(|| AppError::Other("请先新建创作，再导入包含画板的初始引导".into()))?;
+    if Path::new(&path)
+        .join(crate::core::onboarding_pack::MANIFEST)
+        .is_file()
+    {
+        let project_id = project_id
+            .ok_or_else(|| AppError::Other("请先新建创作，再导入包含画板的初始引导".into()))?;
         let target_project = project_id.clone();
         let (count, imported) = tokio::task::spawn_blocking(move || {
             crate::core::onboarding_pack::import(&paths, &db, Path::new(&path), &target_project)
-        }).await.map_err(|e| AppError::Other(e.to_string()))??;
+        })
+        .await
+        .map_err(|e| AppError::Other(e.to_string()))??;
         let _ = app.emit("library://assets-changed", ());
         if imported {
-            let _ = app.emit("project-canvas://imported", serde_json::json!({ "projectId": project_id }));
+            let _ = app.emit(
+                "project-canvas://imported",
+                serde_json::json!({ "projectId": project_id }),
+            );
         }
         return Ok(count);
     }
@@ -117,7 +130,9 @@ pub async fn import_folder(
         if let Err(e) = db.add_assets_to_project(project_id, &ids) {
             tracing::warn!("failed to link imported assets to project {project_id}: {e}");
             let _ = app.emit("library://assets-changed", ());
-            return Err(AppError::Other(format!("素材已写入素材库，但未能加入目标项目：{e}")));
+            return Err(AppError::Other(format!(
+                "素材已写入素材库，但未能加入目标项目：{e}"
+            )));
         }
     }
     for a in &assets {
@@ -175,7 +190,9 @@ pub async fn import_image_bytes(
                 asset.id
             );
             let _ = app.emit("library://assets-changed", ());
-            return Err(AppError::Other(format!("素材已写入素材库，但未能加入目标项目：{e}")));
+            return Err(AppError::Other(format!(
+                "素材已写入素材库，但未能加入目标项目：{e}"
+            )));
         }
     }
     crate::core::autoname::spawn_auto_analyze(app.clone(), db.clone(), asset.clone());
@@ -657,8 +674,11 @@ pub async fn set_canvas_asset_library_visibility(
     visible: bool,
 ) -> Result<(), AppError> {
     let db = db.inner().clone();
-    tokio::task::spawn_blocking(move || db.set_canvas_asset_library_visibility(&project_id, &asset_id, visible))
-        .await.map_err(|e| AppError::Other(e.to_string()))??;
+    tokio::task::spawn_blocking(move || {
+        db.set_canvas_asset_library_visibility(&project_id, &asset_id, visible)
+    })
+    .await
+    .map_err(|e| AppError::Other(e.to_string()))??;
     let _ = app.emit("projects://changed", ());
     let _ = app.emit("library://assets-changed", ());
     Ok(())
@@ -882,7 +902,8 @@ pub async fn rename_asset(
 }
 
 /// 右键「打开所在文件夹」：原始位置（origin_path）优先，不存在则回退素材库内位置（store_path）。
-/// 平台分支：Windows 打开资源管理器并选中该文件（`explorer /select,"..."`）；macOS/Linux 打开所在目录。
+/// 跨平台定位并选中该文件（与画板节点「在资源管理器中定位」同一条路径）：
+/// Windows `explorer /select,`、macOS `open -R`（Finder 选中）、Linux 打开所在目录。
 #[tauri::command]
 pub async fn reveal_asset_folder(db: State<'_, Arc<Database>>, id: String) -> Result<(), AppError> {
     let db = db.inner().clone();
@@ -912,38 +933,7 @@ pub async fn reveal_asset_folder(db: State<'_, Arc<Database>>, id: String) -> Re
     let Some(target) = target else {
         return Err(AppError::NotFound(format!("asset 文件: {id}")));
     };
-    reveal_in_file_manager(target);
-    Ok(())
-}
-
-/// 在系统文件管理器中显示/打开目标。Windows 用 `explorer /select,` 选中文件（并打开所在文件夹）；
-/// 其它平台打开所在目录（macOS `open`、Linux `xdg-open`）。
-fn reveal_in_file_manager(target: &Path) {
-    #[cfg(target_os = "windows")]
-    {
-        let path = target.to_string_lossy();
-        // explorer /select 无法定位目标时（罕见）会自动打开所在文件夹；参数按单个 arg 传入避免引号歧义。
-        if let Err(error) = Command::new("explorer")
-            .arg(format!("/select,{path}"))
-            .spawn()
-        {
-            tracing::warn!("explorer reveal failed: {error}");
-        }
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let dir = target.parent().unwrap_or(target);
-        if let Err(error) = Command::new("open").arg(dir).spawn() {
-            tracing::warn!("open reveal failed: {error}");
-        }
-    }
-    #[cfg(target_os = "linux")]
-    {
-        let dir = target.parent().unwrap_or(target);
-        if let Err(error) = Command::new("xdg-open").arg(dir).spawn() {
-            tracing::warn!("xdg-open reveal failed: {error}");
-        }
-    }
+    spawn_locate_or_open(target, true).await
 }
 
 /// 取某资产所属生成会话的全部图（含自己），按 id ASC（过程顺序）。详情页轮播用。
@@ -1043,11 +1033,9 @@ pub async fn set_asset_tags(
     source: String,
 ) -> Result<(), AppError> {
     let db = db.inner().clone();
-    tokio::task::spawn_blocking(move || {
-        db.edit_classification_tags(&asset_id, &names, &source)
-    })
-    .await
-    .map_err(|e| AppError::Other(e.to_string()))??;
+    tokio::task::spawn_blocking(move || db.edit_classification_tags(&asset_id, &names, &source))
+        .await
+        .map_err(|e| AppError::Other(e.to_string()))??;
     // 类别归属变了 → 刷侧栏 autoTags 计数（App 监听 library://assets-changed → reloadAutoTags）。
     let _ = app.emit("library://assets-changed", ());
     Ok(())
@@ -1058,9 +1046,23 @@ pub async fn set_asset_tags(
 #[tauri::command]
 pub async fn reclassify_all(app: AppHandle, db: State<'_, Arc<Database>>) -> Result<(), AppError> {
     use tauri::Manager;
-    let classifier=app.state::<Arc<crate::core::local_classification::LocalClassifier>>().inner().clone();
-    let paths=app.state::<Arc<LibraryPaths>>().inner().clone();
-    classifier.start(app,db.inner().clone(),paths,false,None,true).map_err(AppError::Other)
+    let classifier = app
+        .state::<Arc<crate::core::local_classification::LocalClassifier>>()
+        .inner()
+        .clone();
+    let paths = app.state::<Arc<LibraryPaths>>().inner().clone();
+    let jev_key = {
+        let settings = app.state::<crate::core::settings::SettingsState>();
+        let snapshot = settings.get();
+        if snapshot.jev_verify_enabled {
+            snapshot.jev_api_key.filter(|key| !key.trim().is_empty())
+        } else {
+            None
+        }
+    };
+    classifier
+        .start(app, db.inner().clone(), paths, false, None, jev_key, true)
+        .map_err(AppError::Other)
 }
 
 // ============ 颜色量化（P3）============
@@ -1176,7 +1178,7 @@ pub async fn open_path_with_system(path: String) -> Result<(), AppError> {
 ///   Windows  open   → cmd /C start "" <path>（ShellExecute 用关联程序打开，CREATE_NO_WINDOW 防闪黑窗）
 ///   macOS    reveal → open -R；open → open <path>
 ///   Linux    reveal → xdg-open 父目录（无统一「定位选中」协议，退化为打开所在目录）；open → xdg-open <path>
-async fn spawn_locate_or_open(path: &PathBuf, reveal: bool) -> Result<(), AppError> {
+async fn spawn_locate_or_open(path: &Path, reveal: bool) -> Result<(), AppError> {
     let path_str = path.to_string_lossy().into_owned();
     let action = if reveal {
         "定位文件"

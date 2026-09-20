@@ -214,7 +214,7 @@ pub struct AgentGroupNodePayloadV1 {
     pub artifacts: Vec<AgentGroupArtifactV1>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NoteNodePayloadV1 {
     pub schema_version: u8,
@@ -229,6 +229,13 @@ pub struct NoteNodePayloadV1 {
     pub line_height_percent: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bubble_tail: Option<CanvasBubbleTail>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Relative column widths / row heights for the text table; f64 breaks Eq.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub column_widths: Option<Vec<f64>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub row_heights: Option<Vec<f64>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -267,7 +274,7 @@ pub struct CanvasTextCell {
     pub align: CanvasTextAlign,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum CreativeNodePayload {
     Asset(AssetNodePayloadV1),
     Prompt(PromptNodePayloadV1),
@@ -283,6 +290,8 @@ pub enum CreativeContractError {
     InvalidNoteGrid,
     #[error("text card line height must be between 100 and 300 percent")]
     InvalidNoteLineHeight,
+    #[error("text card grid sizes must match the table and stay positive")]
+    InvalidNoteGridLayout,
     #[error("bubble notes require one cell and an edge position between 0 and 100")]
     InvalidBubbleNote,
     #[error("invalid creative JSON: {0}")]
@@ -610,6 +619,18 @@ fn parse_node_payload_value(
                 if first.is_empty() || note.cells.iter().any(|row| row.len() != first.len()) {
                     return Err(CreativeContractError::InvalidNoteGrid);
                 }
+            }
+            let valid_sizes = |sizes: Option<&Vec<f64>>, expected: usize| {
+                sizes.map_or(true, |sizes| {
+                    sizes.len() == expected
+                        && sizes.iter().all(|size| size.is_finite() && *size > 0.0)
+                })
+            };
+            let columns = note.cells.first().map_or(0, Vec::len);
+            if !valid_sizes(note.column_widths.as_ref(), columns)
+                || !valid_sizes(note.row_heights.as_ref(), note.cells.len())
+            {
+                return Err(CreativeContractError::InvalidNoteGridLayout);
             }
             CreativeNodePayload::Note(note)
         }
@@ -1112,6 +1133,40 @@ mod tests {
             )
             .unwrap();
         assert_eq!(project_id, None, "项目删除后创作必须转为全局");
+    }
+
+    #[test]
+    fn note_payload_accepts_title_and_grid_sizes_and_rejects_mismatches() {
+        let note_json = r#"{"schema_version":1,"text":"表格","note_type":"text","title":"配方表","column_widths":[2.0,1.0],"row_heights":[1.0,3.0],"cells":[[{"text":"a","bold":false,"italic":false,"align":"left"},{"text":"b","bold":false,"italic":false,"align":"left"}],[{"text":"c","bold":false,"italic":false,"align":"left"},{"text":"d","bold":false,"italic":false,"align":"left"}]]}"#;
+        let CreativeNodePayload::Note(note) =
+            parse_node_payload(CreativeNodeKind::Note, note_json).unwrap()
+        else {
+            panic!("note payload expected");
+        };
+        assert_eq!(note.title.as_deref(), Some("配方表"));
+        assert_eq!(note.column_widths.as_deref(), Some(&[2.0, 1.0][..]));
+        assert_eq!(note.row_heights.as_deref(), Some(&[1.0, 3.0][..]));
+
+        let single = r#"{"schema_version":1,"text":"","note_type":"text","cells":[[{"text":"","bold":false,"italic":false,"align":"left"}]]}"#;
+        assert!(parse_node_payload(CreativeNodeKind::Note, single).is_ok());
+
+        for bad in [
+            // Width vector shorter than the two columns of the table.
+            r#"{"schema_version":1,"text":"","note_type":"text","column_widths":[1.0],"cells":[[{"text":"","bold":false,"italic":false,"align":"left"},{"text":"","bold":false,"italic":false,"align":"left"}]]}"#,
+            // Row vector longer than the single table row.
+            r#"{"schema_version":1,"text":"","note_type":"text","row_heights":[1.0,1.0],"cells":[[{"text":"","bold":false,"italic":false,"align":"left"}]]}"#,
+            // Zero and non-finite weights are both rejected.
+            r#"{"schema_version":1,"text":"","note_type":"text","column_widths":[0.0],"cells":[[{"text":"","bold":false,"italic":false,"align":"left"}]]}"#,
+            r#"{"schema_version":1,"text":"","note_type":"text","column_widths":[-1.5],"cells":[[{"text":"","bold":false,"italic":false,"align":"left"}]]}"#,
+        ] {
+            assert!(
+                matches!(
+                    parse_node_payload(CreativeNodeKind::Note, bad),
+                    Err(CreativeContractError::InvalidNoteGridLayout)
+                ),
+                "expected grid layout rejection: {bad}"
+            );
+        }
     }
 
     fn spike_database() -> Connection {

@@ -1,14 +1,14 @@
 //! Bowerbird 桌面应用入口。
 
-mod cloud;
 mod cli_credentials;
-mod installation;
+mod cloud;
 mod codex;
 mod collect;
 mod commands;
 mod core;
 mod db;
 mod error;
+mod installation;
 mod media;
 mod prompt;
 
@@ -28,7 +28,10 @@ pub fn reset_install_auth() -> i32 {
     })();
     match result {
         Ok(()) => 0,
-        Err(error) => { eprintln!("Bowerbird login reset: {error}"); 1 }
+        Err(error) => {
+            eprintln!("Bowerbird login reset: {error}");
+            1
+        }
     }
 }
 
@@ -153,6 +156,42 @@ fn forward_auth_callback(app: &tauri::AppHandle, value: &str) {
             }
         }
     });
+}
+
+// macOS delivers custom URL schemes as Opened events, not process arguments.
+#[cfg(target_os = "macos")]
+fn forward_opened_urls(event: tauri::RunEvent, mut forward: impl FnMut(&str)) {
+    if let tauri::RunEvent::Opened { urls } = event {
+        for url in urls {
+            forward(url.as_str());
+        }
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod mac_auth_callback_tests {
+    #[test]
+    fn opened_event_forwards_wechat_and_email_callbacks_without_losing_parameters() {
+        let urls = [
+            "bowerbird://wechat/callback?code=test%2Bcode&state=dt_test",
+            "bowerbird://auth/callback?code=test&state=test",
+        ];
+        let mut forwarded = Vec::new();
+        super::forward_opened_urls(
+            tauri::RunEvent::Opened {
+                urls: urls.iter().map(|url| url.parse().unwrap()).collect(),
+            },
+            |url| forwarded.push(url.to_owned()),
+        );
+        assert_eq!(forwarded, urls);
+    }
+
+    #[test]
+    fn other_app_events_do_not_trigger_login() {
+        super::forward_opened_urls(tauri::RunEvent::Ready, |_| {
+            panic!("non-URL event must not trigger login")
+        });
+    }
 }
 
 pub fn run() {
@@ -297,7 +336,10 @@ pub fn run() {
             let orphan_scan_db = db.clone();
 
             app.manage(Arc::new(core::local_classification::LocalClassifier::new(
-                app.path().app_data_dir()?.join("local-classification").join(core::local_classification::runtime::PACK_ID),
+                app.path()
+                    .app_data_dir()?
+                    .join("local-classification")
+                    .join(core::local_classification::runtime::PACK_ID),
             )));
             core::local_classification::watch(app.handle().clone(), db.clone(), paths.clone());
 
@@ -471,6 +513,7 @@ pub fn run() {
             commands::library::set_asset_tags,
             commands::library::reclassify_all,
             commands::local_classification::local_classification_status,
+            commands::local_classification::local_classification_vector_install,
             commands::local_classification::local_classification_start,
             commands::local_classification::local_classification_stop,
             commands::local_classification::local_classification_enable,
@@ -529,6 +572,10 @@ pub fn run() {
             commands::jimeng::dreamina_logout,
             commands::jimeng::dreamina_login_headless,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, _event| {
+            #[cfg(target_os = "macos")]
+            forward_opened_urls(_event, |value| forward_auth_callback(_app, value));
+        });
 }

@@ -6,9 +6,15 @@ import { chromium } from "../../html-renderer/node_modules/playwright/index.mjs"
 const config = JSON.parse(await readFile("src-tauri/tauri.conf.json", "utf8"));
 const capability = JSON.parse(await readFile("src-tauri/capabilities/default.json", "utf8"));
 assert.equal(config.app.windows[0].decorations, false);
+const macConfig = JSON.parse(await readFile("src-tauri/tauri.macos.conf.json", "utf8"));
+assert.deepEqual(macConfig.app.windows, [{ ...config.app.windows[0], decorations: true, titleBarStyle: "Visible" }], "Mac keeps the shared window geometry and drag/drop settings");
 for (const action of ["minimize", "toggle-maximize", "close", "start-dragging"]) {
   assert.ok(capability.permissions.includes(`core:window:allow-${action}`));
 }
+const macCapability = JSON.parse(await readFile("src-tauri/capabilities/macos-titlebar.json", "utf8"));
+assert.deepEqual(macCapability.platforms, ["macOS"]);
+assert.deepEqual(macCapability.webviews, ["main"]);
+assert.deepEqual(macCapability.permissions, ["core:app:allow-set-app-theme"]);
 const server = await createServer({ server: { host: "127.0.0.1", port: 1594, strictPort: true, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: "chrome", headless: true });
@@ -46,6 +52,17 @@ try {
   await page.setViewportSize({ width: 900, height: 600 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   await page.screenshot({ path: ".tmp/window-titlebar/compact.png" });
+  await page.goto("http://127.0.0.1:1594/scripts/fixtures/window-titlebar/preview.html?mac");
+  await page.locator(".app-topbar").waitFor();
+  assert.equal(await page.locator(".app-window-titlebar").count(), 0, "native title bar must not have a duplicate web title bar");
+  assert.equal(await page.getByRole("group", { name: "窗口控制" }).count(), 0);
+  assert.equal(await page.locator(".app-topbar").evaluate(el => el.getBoundingClientRect().top), 0, "no empty web title bar gap");
+  assert.equal(await page.evaluate(() => window.calls.some(command => command.startsWith("plugin:window|"))), false);
+  for (const theme of ["light", "dark"]) {
+    await page.evaluate(async theme => { const {applyTheme}=await import('/src/lib/theme.ts'); applyTheme(theme); }, theme);
+    await page.waitForFunction(() => window.calls.includes("plugin:app|set_app_theme"));
+    await page.screenshot({path: `.tmp/window-titlebar/mac-${theme}.png`});
+  }
   assert.deepEqual(errors, []);
   console.log("PASS: window actions, double-click and external resize, theme switching, removed labels, retained filters, 900px layout, configuration permissions");
 } finally {

@@ -28,7 +28,9 @@
       "assetProtocol": {
         "enable": true,
         "scope": {
-          "allow": ["$APPDATA/**"],
+          "allow": [
+            "$APPDATA/**"
+          ],
           "deny": []
         }
       }
@@ -37,12 +39,18 @@
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEM0NDAwQkNFRTI1MkNEOEUKUldTT3pWTGl6Z3RBeEc2NUZTWE4rblNUMmc3eTlXMElhQ1A4YjRZaG5OWnQ2dVEzVTBqdWFkYmgK",
-      "endpoints": ["https://bowerbird.cn/api/desktop-update/{{target}}-{{arch}}"],
-      "windows": { "installMode": "passive" }
+      "endpoints": [
+        "https://bowerbird.cn/api/desktop-update/{{target}}-{{arch}}"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
     },
     "deep-link": {
       "desktop": {
-        "schemes": ["bowerbird"]
+        "schemes": [
+          "bowerbird"
+        ]
       }
     }
   },

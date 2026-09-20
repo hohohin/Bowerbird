@@ -88,6 +88,15 @@ pub struct AppSettings {
     #[serde(default = "default_dreamina_model_version")]
     pub dreamina_model_version: String,
 
+    /// 本地分类的云端最终校验（TypeSafe Jev）。默认关闭；启用后仅发送图片的
+    /// 文字描述与标签文本，图片本身不出机。
+    #[serde(default)]
+    pub jev_verify_enabled: bool,
+
+    /// TypeSafe API Key（console.typesafe.ai 申请）；为空时即使开关开启也不启用校验。
+    #[serde(default)]
+    pub jev_api_key: Option<String>,
+
     // —— 开发者选项（设置 · 开发者选项，仅测试账号可见）：对话框 Agent 模式开关。
     //    默认只开正式 Agent；关闭的模式不在创作板 / 会话编辑坞对话框渲染。
     /// 「Agent」：正式 Bowerbird Agent（云端 Run：意图分析 → 计划审批 → 执行）。默认开启。
@@ -125,6 +134,8 @@ impl Default for AppSettings {
             generation_completion_sound: true,
             samples_seeded: false,
             dreamina_model_version: DEFAULT_DREAMINA_MODEL_VERSION.to_string(),
+            jev_verify_enabled: false,
+            jev_api_key: None,
             agent_mode_enabled: true,
             agent_a_mode_enabled: false,
             agent_b_mode_enabled: false,
@@ -210,7 +221,13 @@ mod tests {
             let mut settings = state.get();
             settings.canvas_show_asset_names = visible;
             state.update(settings).unwrap();
-            assert_eq!(SettingsState::init(path.clone()).unwrap().get().canvas_show_asset_names, visible);
+            assert_eq!(
+                SettingsState::init(path.clone())
+                    .unwrap()
+                    .get()
+                    .canvas_show_asset_names,
+                visible
+            );
         }
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -268,6 +285,13 @@ mod tests {
         let settings: AppSettings =
             serde_json::from_str(r#"{"auto_analyze_on_ingest":true}"#).unwrap();
         assert_eq!(settings.dreamina_model_version, "5.0Pro");
+    }
+
+    #[test]
+    fn jev_gate_defaults_off_without_key() {
+        let settings: AppSettings = serde_json::from_str("{}").unwrap();
+        assert!(!settings.jev_verify_enabled);
+        assert!(settings.jev_api_key.is_none());
     }
 
     #[test]

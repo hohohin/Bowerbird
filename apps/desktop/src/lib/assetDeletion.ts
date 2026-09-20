@@ -3,7 +3,9 @@ import type { Asset } from "./types";
 function isBowerbirdTemporaryOrigin(path: string): boolean {
   const normalized = path.replaceAll("\\", "/").toLowerCase();
   return ["bowerbird-upload-", "bowerbird-cloud-", "bowerbird-dreamina-"].some(
-    (prefix) => normalized.includes(`/temp/${prefix}`) || normalized.includes(`/tmp/${prefix}`),
+    (prefix) => normalized.includes(`/temp/${prefix}`) || normalized.includes(`/tmp/${prefix}`)
+      || ((normalized.startsWith("/var/folders/") || normalized.startsWith("/private/var/folders/"))
+        && normalized.includes(`/t/${prefix}`)),
   );
 }
 

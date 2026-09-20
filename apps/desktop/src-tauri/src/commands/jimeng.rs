@@ -183,24 +183,16 @@ pub async fn open_dreamina_login() -> Result<(), AppError> {
         .ok_or_else(|| AppError::Jimeng("未检测到 dreamina CLI，请先安装".into()))?;
     #[cfg(target_os = "macos")]
     {
-        // binary 是 resolve_dreamina_binary 返回的固定路径（env 或 ~/.local/bin/dreamina），
-        // 非用户自由输入，osascript do script 单参传入无注入风险。
-        let script = format!(
-            "tell application \"Terminal\"\nactivate\ndo script \"{binary} login\"\nend tell"
-        );
-        tokio::process::Command::new("osascript")
-            .arg("-e")
-            .arg(&script)
-            .spawn()
+        let mut command = dreamina_command(&binary);
+        command.arg("login");
+        super::macos_terminal::open(&command)
+            .await
             .map_err(|e| AppError::Jimeng(format!("启动 Terminal 失败: {e}")))?;
         Ok(())
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
-        #[cfg(not(target_os = "macos"))]
-        {
-            Err(AppError::Jimeng("当前系统暂不支持打开即梦登录终端".into()))
-        }
+        Err(AppError::Jimeng("当前系统暂不支持打开即梦登录终端".into()))
     }
     #[cfg(target_os = "windows")]
     {
