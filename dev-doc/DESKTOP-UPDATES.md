@@ -4,21 +4,36 @@
 
 ## 当前基线
 
-最近公网验收：**2026-09-18 23:57:06（北京时间）**。Windows 已更新至 26.9.1803；M 系列 Mac 保持 26.9.1802。
+最近公网复核：**2026-09-20**。Windows 已更新至 26.9.1803；M 系列 Mac 清单已由发布侧替换至 **26.9.1901**（2026-09-20 确认，含启动静默检查更新与本地分类防误标）。
 
 | 平台 | channel | 已发布版本 | 更新入口 / 清单 / 签名包 | 尚未完成 |
 |---|---|---|---|---|
 | Windows x64 | `windows-x86_64` | 26.9.1803 | 307 / 200 / 完整下载与验签通过 | 真实旧版到新版的安装、重启、登录重置和素材保留验收 |
-| Apple Silicon（M 系列）Mac | `darwin-aarch64` | 26.9.1802 | 307 / 200 / 完整下载与验签通过 | 原生替换与重启验收；Developer ID 签名及 Apple 公证 |
+| Apple Silicon（M 系列）Mac | `darwin-aarch64` | 26.9.1901 | 307 / 200 / 完整下载与验签通过 | 原生替换与重启验收；Developer ID 签名及 Apple 公证 |
 | Intel Mac | `darwin-x86_64` | 未发布 | 307 / 404 / 无对应包 | 构建、签名、上传清单和安装包，再做实机验收 |
 
 用户已确认本次只提供 M 系列 Mac 包。不能把 ARM64 包放进 Intel 清单，也不能把 Mac 更新签名当成 Apple 公证。2026-09-18 16:55 官网首页已按用户要求开放 M 系列 Mac 26.9.1802 DMG 下载；Windows 下载同步显示 26.9.1802。后续按用户要求移除首页下载区及 FAQ 的签名、公证及测试版提示，包的技术验收状态仍按本页记录。
 
-**Windows 26.9.18 / 26.9.1802 可通过设置发现 26.9.1803；Mac 最新仍为 26.9.1802。** 已上线的旧客户端需先手动检查或下载安装含启动检测的新包；仅更改服务器清单不会给旧客户端增加启动行为。同版本检查显示“当前已是最新版本”，后续更新须提高实际包版本。
+**Windows 26.9.18 / 26.9.1802 可通过设置发现 26.9.1803；Mac 26.9.1802 及更早可通过设置发现 26.9.1901。** 已上线的旧客户端需先手动检查或下载安装含启动检测的新包；仅更改服务器清单不会给旧客户端增加启动行为。同版本检查显示“当前已是最新版本”，后续更新须提高实际包版本。
 
-## Mac 26.9.1901 发布侧核验（2026-09-19，清单替换待执行）
+## Mac 26.9.2001 发布侧核验（2026-09-20，本机已验、待上传 R2 与清单替换）
 
-Mac `darwin-aarch64` 26.9.1901 更新包（mac 同步 dev `3f089bf` + 本地分类误标根治）已上传 R2 并完成发布侧核验，**官网清单尚未替换，线上仍为 26.9.1802**；替换后 26.9.1802 客户端经设置手动检查可升级，启动静默检查自本版本起在 Mac 生效。
+Mac `darwin-aarch64` 26.9.2001 更新包（本地分类向量匹配判官 + Jev 可选云端校验 + 画板新卡锚定/视频卡/文本卡表格增强 + 两项 mac 修复）已在本机完成签名构建与发布侧核验；**本机构建时缺失 R2 凭据（`macOS/.signing/r2.env`），产物尚未上传 R2，官网清单仍为 26.9.1901**。
+
+| 项 | 值 |
+|---|---|
+| 更新包 | `mac_package/Bowerbird_26.9.2001_aarch64.app.tar.gz`（R2 直下，待上传），86,344,811 bytes，SHA-256 `de431a5fdc9da85cda13df2901df3ab54b1e075c2b793bb5fe077179d19931e0` |
+| 手动 DMG | `Bowerbird_26.9.2001_aarch64-updater-installer.dmg`，86,881,253 bytes，SHA-256 `852fe0edd1d2304c4761a583bf3f75f43f2f049c1b537acf6e0f139f7220cfa5`；未签名/未公证 |
+| 新清单（待发布） | R2 `mac_package/darwin-aarch64.json`，SHA-256 `ed68d36aecf2f6c5ae3d2c18c670a4e71ff238af2e06ebd9f9f80ef8b27de46a`；version 26.9.2001，signature 与包 `.sig` 逐字节一致 |
+| 公钥 | 与已发布客户端内嵌 Mac 公钥一致（key id `0b5a2efc4865664f`，26.9.18/1802/1901 连续） |
+
+本机已通过：包内版本 26.9.2001、arm64、二进制内嵌 Mac 公钥、DMG `hdiutil verify`、minisign 主签名与全局签名（`minisign-verify` 0.2.5 同构造）、篡改字节拒绝、清单结构/签名/notes 一致。核验脚本与交接件在本地 `/tmp/bowerbird-release-26.9.2001/`（SHA256SUMS、verify-minisign.mjs、mac.pubkey.b64、upload-r2.sh、swap-manifest.sh）。
+
+待执行：①恢复 `macOS/.signing/r2.env` 后在仓库根运行 `bash /tmp/bowerbird-release-26.9.2001/upload-r2.sh`（上传包/`.sig`/`.sha256`/DMG/DMG 校验/清单，公网完整下载哈希 + minisign 复核）；②在服务器 106.55.44.143 以 root 运行 `bash /tmp/bowerbird-release-26.9.2001/swap-manifest.sh`（备份现役 `downloads/updates/darwin-aarch64.json` 后按哈希断言 `ed68d36a…` 原子替换并公网复核 307/26.9.2001/no-store）。回滚：把备份文件 rename 回原名。仅变更清单，不改路由/服务/环境，Windows 通道与首页不受影响。本轮未运行真实应用内更新。
+
+## Mac 26.9.1901 发布侧核验（2026-09-19，清单替换已执行）
+
+Mac `darwin-aarch64` 26.9.1901 更新包（mac 同步 dev `3f089bf` + 本地分类误标根治）已上传 R2 并完成发布侧核验；**清单替换已由发布侧执行，2026-09-20 公网复核线上为 26.9.1901**，26.9.1802 客户端经设置手动检查可升级，启动静默检查自本版本起在 Mac 生效。
 
 | 项 | 值 |
 |---|---|
@@ -29,7 +44,7 @@ Mac `darwin-aarch64` 26.9.1901 更新包（mac 同步 dev `3f089bf` + 本地分�
 
 已通过：R2 完整下载大小与哈希、minisign 主签名与全局签名（`minisign-verify` 0.2.5 同构造：BLAKE2b-512 摘要 + Ed25519）、篡改字节拒绝、R2 `.sig`/`.sha256`/DMG/清单文件齐全。核验脚本与交接件在本地 `/tmp/bowerbird-release-26.9.1901/`（verify-minisign.mjs、swap-manifest.sh）。
 
-待执行（服务器 106.55.44.143，root）：`bash /tmp/bowerbird-release-26.9.1901/swap-manifest.sh` —— 备份现役目录 `downloads/updates/darwin-aarch64.json` 后，从 R2 下载新清单到同目录临时文件（哈希断言 `9211dc7b…`），rename 原子替换并公网复核入口 307、清单 26.9.1901 与 no-store。回滚：把备份文件 rename 回原名。仅变更清单，不改路由/服务/环境，Windows 通道与首页不受影响。
+已执行（2026-09-20 确认）：服务器清单替换按 `/tmp/bowerbird-release-26.9.1901/swap-manifest.sh` 交接完成（备份现役 `downloads/updates/darwin-aarch64.json` → 同目录临时文件哈希断言 `9211dc7b…` → rename 原子替换 → 公网复核 307、26.9.1901 与 no-store）；回滚方式为把备份 rename 回原名。后续发布接替见上节「Mac 26.9.2001 发布侧核验」。
 
 ## Windows 26.9.1803 发布记录
 
@@ -184,7 +199,7 @@ Mac DMG 来源为 `origin/mac:13c7280` 所记构建产物，R2 完整下载 **86
 curl -sS -D - https://bowerbird.cn/api/desktop-update/darwin-aarch64
 # HEAD 已修复，应同为 307
 curl -sSI https://bowerbird.cn/api/desktop-update/darwin-aarch64
-# 跟随跳转：应得到 version=26.9.1802、Mac channel 及 R2 包 URL
+# 跟随跳转：应得到 version=26.9.1901、Mac channel 及 R2 包 URL（26.9.2001 发布后以其为准）
 curl -fsSL https://bowerbird.cn/api/desktop-update/darwin-aarch64
 # Windows 清单应为 200；Intel 在未发布前仍为 404
 curl -fsSL https://bowerbird.cn/api/desktop-update/windows-x86_64

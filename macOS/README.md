@@ -2,7 +2,21 @@
 
 本目录记录 Mac 上的本地开发、运行和未签名构建流程。Bowerbird 使用 canonical Tauri / React / Rust 源码，不维护 macOS override。构建架构以 `rustc -vV` 的 host 为准；Intel 为 `x86_64-apple-darwin`，Apple Silicon 原生工具链为 `aarch64-apple-darwin`。
 
-## 2026-09-19 Mac 26.9.1901 更新包（本机构建待发布）
+## 2026-09-20 Mac 26.9.2001 更新包（本机构建待上传）
+
+收录 9 月 19/20 存档工作：本地分类向量精确匹配判官（jina-clip-v2 int8，可选安装、未装回退 VLM）与可选云端最终校验 Jev、画板新卡锚定当前可视区左上角、视频卡独立样式与 ▶ 徽标、文本卡表格增强（标题编辑/整表复制 CSV/行高列宽拖拽）、创作模式空白框选、mac「打开所在文件夹」Finder 选中与对话框方向键乱码修复。版本按同日序号规范定为 **26.9.2001**（20 日第 1 包，> 线上 26.9.1901，护栏通过；1901 清单已由发布侧替换上线，2026-09-20 确认）。构建前验证：Rust 全量 **379 passed / 6 ignored**、画板纯逻辑 **127/127**、creation-editor/creation-marquee/notes/media/reference/local-classification 六组 UI 回归与 `tsc --noEmit` 通过（`canvas-arrangement-ui`、`canvas-selection-to-board-ui` 的既有等待失败维持不处理）。
+
+本机缺失 `macOS/.signing/r2.env`（R2 凭据），本轮 `R2_SKIP_UPLOAD=1 bash macOS/release.sh macOS/dist/release-notes-26.9.2001.txt` 仅本地产出（产物在 `macOS/dist/`，不入 Git）：
+
+- 更新器安装包：`Bowerbird_26.9.2001_aarch64.app.tar.gz`，**86,344,811 bytes**，SHA-256 `de431a5fdc9da85cda13df2901df3ab54b1e075c2b793bb5fe077179d19931e0`；同名 `.sig`/`.sha256` 附带。
+- 手动安装 DMG：`Bowerbird_26.9.2001_aarch64-updater-installer.dmg`，**86,881,253 bytes**，SHA-256 `852fe0edd1d2304c4761a583bf3f75f43f2f049c1b537acf6e0f139f7220cfa5`；未签名/未公证。
+- 更新清单：`darwin-aarch64.json`（version 26.9.2001，SHA-256 `ed68d36aecf2f6c5ae3d2c18c670a4e71ff238af2e06ebd9f9f80ef8b27de46a`，URL 指向 R2 直下 `mac_package/Bowerbird_26.9.2001_aarch64.app.tar.gz`）。
+
+本机核验：`CFBundleShortVersionString` = 26.9.2001、arm64 二进制内嵌 Mac 公钥与 `tauri.macos.conf.json` 及已发布 26.9.1802/1901 逐字节一致（key id `0b5a2efc4865664f`）、DMG `hdiutil verify` 通过、minisign 主签名与全局签名通过（`minisign-verify` 0.2.5 同构造）、篡改字节被拒、清单 signature 与 `.sig` 逐字节一致。
+
+**发布进度（2026-09-20）**：待恢复 `macOS/.signing/r2.env` 后在仓库根执行 `/tmp/bowerbird-release-26.9.2001/upload-r2.sh`（上传 6 个文件 + 公网完整下载哈希 + minisign 复核），再在服务器 106.55.44.143 执行 `/tmp/bowerbird-release-26.9.2001/swap-manifest.sh`（备份 26.9.1901 清单 → 哈希断言 `ed68d36a…` → rename 原子替换 → 公网复核）。回滚：把备份文件 rename 回原名。交接值与协议见 [DESKTOP-UPDATES.md](../dev-doc/DESKTOP-UPDATES.md)「Mac 26.9.2001 发布侧核验」。本轮未运行真实应用内更新。
+
+## 2026-09-19 Mac 26.9.1901 更新包（已发布）
 
 合并远端 dev `3f089bf`（Windows 26.9.1803 源码：启动静默检查更新与可跳过提醒 `StartupUpdateDialog`、仅开放设计师路线、账号升级直达权益/兑换面板、官网快照对齐）并纳入 mac 侧本地分类误标根治后出包。版本按同日 patch 序号规范定为 **26.9.1901**（9 月 19 日第 1 包；因前日已用 26.9.1802/1803 四位序号，19 日首个包需用 1901 才能高于线上 darwin-aarch64 26.9.1802，护栏通过）。合并后验证：Rust 全量 **371 passed / 5 ignored**、TypeScript `tsc --noEmit`、app-updater/引导/本地分类三组 UI 回归通过（随包 Vite production build 在 tauri build 内完成）。
 
@@ -12,7 +26,7 @@
 - 手动安装 DMG：`Bowerbird_26.9.1901_aarch64-updater-installer.dmg`，**86,439,465 bytes**，SHA-256 `f1d59df9ed63c6c9ff7a7eb15fb922a037e960103e863cf178247cc3af2035bf`；未签名/未公证。
 - 更新清单：`darwin-aarch64.json`（version 26.9.1901，notes 为本地分类防误标与启动检查更新说明，URL 指向 R2 直下 `mac_package/Bowerbird_26.9.1901_aarch64.app.tar.gz`）。
 
-**发布进度（2026-09-19）**：包/签名/哈希/DMG/清单已上传 R2（`mac_package/`），发布侧核验全部通过——完整下载大小与 SHA-256 一致、minisign 主签名与全局签名通过（`minisign-verify` 0.2.5 同构造）、篡改字节被拒、公钥与已发布 26.9.1802 连续（key id `0b5a2efc4865664f`）、R2 清单 signature 与包 `.sig` 逐字节一致。**官网清单尚未替换，线上仍为 26.9.1802**；在服务器执行 `/tmp/bowerbird-release-26.9.1901/swap-manifest.sh`（备份→同目录临时文件→rename 原子替换→公网复核）即完成发布，交接值与回滚见 [DESKTOP-UPDATES.md](../dev-doc/DESKTOP-UPDATES.md)「Mac 26.9.1901 发布侧核验」。发布后 26.9.1802 客户端经设置手动检查升级；启动静默检查自本版本起在 Mac 生效，本轮未运行真实应用内更新。
+**已发布（2026-09-19/20 交接确认）：** 上述 26.9.1901 产物已经发布侧执行清单原子替换上线，2026-09-20 公网复核线上 darwin-aarch64 清单为 26.9.1901；26.9.1802 客户端经设置手动检查升级，启动静默检查自本版本起在 Mac 生效。后续 26.9.2001 见上节。
 
 ## 2026-09-18 Mac 26.9.1802 引导更新包（已发布）
 
