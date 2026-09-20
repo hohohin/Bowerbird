@@ -8,7 +8,8 @@ export interface CanvasRect extends CanvasPoint {
   height: number;
 }
 
-/** Search the visible canvas only; never push a new card beyond the viewport. */
+/** Anchor new cards at the visible top-left instead of their provisional spot;
+ * never push a new card beyond the viewport. */
 export function canvasPlacementForNewCard(
   card: CanvasRect, viewport: CanvasRect, pan: CanvasPoint, zoom: number, obstacles: CanvasRect[],
 ): CanvasPoint | null {
@@ -24,7 +25,6 @@ export function canvasPlacementForNewCard(
   const fits = (x: number, y: number) => x >= left && x <= right && y >= top && y <= bottom
     && !visible.some((other) => x < other.x + other.width + gap && x + card.width + gap > other.x
       && y < other.y + other.height + gap && y + card.height + gap > other.y);
-  if (fits(card.x, card.y)) return { x: card.x, y: card.y };
   // Obstacle edges plus viewport edges cover narrow spaces that a fixed grid could miss.
   const xs = [...new Set([left, right, ...visible.flatMap((other) => [other.x + other.width + gap, other.x - card.width - gap])])]
     .filter((x) => x >= left && x <= right).sort((a, b) => a - b);
@@ -191,15 +191,12 @@ export function canvasPrimaryMaterialAction(
   return creationModeOpen || generationEditorOpen ? "compose" : "preview";
 }
 
+/** 画板空白处左键按下即可框选（浏览 / 创作模式一致）；落在节点上时交给节点自身的拖动。 */
 export function canStartCanvasMarquee(
   button: number,
-  creationModeOpen: boolean,
-  generationEditorOpen: boolean,
   targetIsCanvasNode: boolean,
 ): boolean {
-  return button === 0
-    && canvasPrimaryMaterialAction(creationModeOpen, generationEditorOpen) === "preview"
-    && !targetIsCanvasNode;
+  return button === 0 && !targetIsCanvasNode;
 }
 
 /** 给单击选择留出手部抖动容差，超过阈值后才进入节点拖动。 */

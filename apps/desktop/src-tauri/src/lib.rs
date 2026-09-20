@@ -1,14 +1,14 @@
 //! Bowerbird 桌面应用入口。
 
-mod cloud;
 mod cli_credentials;
-mod installation;
+mod cloud;
 mod codex;
 mod collect;
 mod commands;
 mod core;
 mod db;
 mod error;
+mod installation;
 mod media;
 mod prompt;
 
@@ -28,7 +28,10 @@ pub fn reset_install_auth() -> i32 {
     })();
     match result {
         Ok(()) => 0,
-        Err(error) => { eprintln!("Bowerbird login reset: {error}"); 1 }
+        Err(error) => {
+            eprintln!("Bowerbird login reset: {error}");
+            1
+        }
     }
 }
 
@@ -333,7 +336,10 @@ pub fn run() {
             let orphan_scan_db = db.clone();
 
             app.manage(Arc::new(core::local_classification::LocalClassifier::new(
-                app.path().app_data_dir()?.join("local-classification").join(core::local_classification::runtime::PACK_ID),
+                app.path()
+                    .app_data_dir()?
+                    .join("local-classification")
+                    .join(core::local_classification::runtime::PACK_ID),
             )));
             core::local_classification::watch(app.handle().clone(), db.clone(), paths.clone());
 
@@ -507,6 +513,7 @@ pub fn run() {
             commands::library::set_asset_tags,
             commands::library::reclassify_all,
             commands::local_classification::local_classification_status,
+            commands::local_classification::local_classification_vector_install,
             commands::local_classification::local_classification_start,
             commands::local_classification::local_classification_stop,
             commands::local_classification::local_classification_enable,

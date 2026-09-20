@@ -546,6 +546,10 @@ export interface AppSettings {
   generation_completion_sound: boolean;
   /** 即梦 dreamina CLI 出图模型版本（text2image: 3.0~5.0Pro；image2image 仅 4.0+） */
   dreamina_model_version: string;
+  /** 本地分类的云端最终校验（TypeSafe Jev）；默认关闭，启用后图片本身不出机。 */
+  jev_verify_enabled: boolean;
+  /** TypeSafe API Key；为空时即使开关开启也不启用校验。 */
+  jev_api_key: string | null;
   // —— 开发者选项（仅测试账号可见）：对话框 Agent 模式开关，默认只开正式 Agent，
   //    关闭的模式不在创作板 / 会话编辑坞对话框渲染。
   agent_mode_enabled: boolean;

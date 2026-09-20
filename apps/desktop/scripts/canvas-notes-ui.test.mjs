@@ -121,28 +121,92 @@ try {
     await page.mouse.move(10, 10);
     await page.waitForFunction(label => getComputedStyle(document.querySelector(`[aria-label="${label}"]`)).opacity === "0", `在第 ${position} ${axis}位置插入`);
     assert.equal(await control.evaluate(e => getComputedStyle(e).opacity), "0");
-    await control.hover({ position: axis === "行" ? { x: 20, y: 6 } : { x: 6, y: 20 } });
+    // Aim at a clear point on the strip: the left/top rail hosts the plus icon and
+    // row/column remove buttons, and the resize grabbers cross the same boundary.
+    const box = await control.boundingBox();
+    const point = axis === "行"
+      ? { x: box.x + Math.min(40, box.width * 0.2), y: box.y + box.height / 2 }
+      : { x: box.x + box.width / 2, y: box.y + box.height - 6 };
+    await page.mouse.move(point.x, point.y);
     await page.waitForFunction(label => getComputedStyle(document.querySelector(`[aria-label="${label}"]`)).opacity === "1", `在第 ${position} ${axis}位置插入`);
     assert.equal(await control.evaluate(e => getComputedStyle(e).opacity), "1");
     assert.notEqual(await control.evaluate(e => getComputedStyle(e, "::before").backgroundColor), "rgba(0, 0, 0, 0)");
-    await control.locator("svg").click();
+    await page.mouse.click(point.x, point.y);
   }
   await insert("列", 2);
   await insert("行", 2);
   await page.getByRole("textbox", { name: "第 2 行第 2 列", exact: true }).fill("复制这一格");
+  const cellTextboxes = name => text.getByRole("textbox", { name, exact: true });
   const spacingBounds = await text.boundingBox();
-  const spacing = text.getByRole("group", { name: "文字行距", exact: true });
-  assert.equal(await spacing.getByRole("button").count(), 2);
+  const spacing = text.getByRole("group", { name: "文本工具", exact: true });
+  assert.equal(await spacing.getByRole("button").count(), 3);
   const spacingBox = await spacing.boundingBox();
   assert.ok(spacingBox.x > spacingBounds.x + spacingBounds.width / 2 && spacingBox.y < spacingBounds.y + 30);
   await spacing.getByRole("button", { name: "增大行距", exact: true }).click();
   assert.ok(Math.abs(await cell.evaluate(e => parseFloat(getComputedStyle(e).lineHeight)) - 21) < 0.01);
   await spacing.getByRole("button", { name: "减小行距", exact: true }).click();
   await spacing.getByRole("button", { name: "减小行距", exact: true }).click();
-  assert.ok((await text.getByRole("textbox").evaluateAll(elements => elements.map(e => parseFloat(getComputedStyle(e).lineHeight)))).every(height => Math.abs(height - 18.6) < 0.01));
+  assert.ok((await text.getByRole("textbox", { name: /第 \d+ 行第 \d+ 列/ }).evaluateAll(elements => elements.map(e => parseFloat(getComputedStyle(e).lineHeight)))).every(height => Math.abs(height - 18.6) < 0.01));
   assert.deepEqual(await text.boundingBox(), spacingBounds, "line spacing does not move or resize the card");
   await page.getByRole("button", { name: "复制第 2 行第 2 列", exact: true }).click();
   assert.equal(await page.evaluate(() => navigator.clipboard.readText()), "复制这一格");
+
+  // Title editing: the input sits right of the T icon and persists in the note payload.
+  const titleInput = text.getByRole("textbox", { name: "文本卡片标题", exact: true });
+  const typeIcon = await text.locator(".canvas-text-handle svg").nth(1).boundingBox();
+  const titleBox = await titleInput.boundingBox();
+  assert.ok(titleBox.x > typeIcon.x + typeIcon.width, "title input sits right of the T icon");
+  await titleInput.fill("配方表");
+  await saved();
+  assert.equal(JSON.parse((await page.evaluate(() => window.snapshot())).nodes.find(n => n.id === textId).payloadJson).title, "配方表");
+
+  // Whole-table copy serialises every cell as CSV, quoting commas/quotes/line breaks.
+  await page.getByRole("textbox", { name: "第 1 行第 2 列", exact: true }).fill("含\"引号\",逗号");
+  await page.getByRole("button", { name: "复制表格为 CSV", exact: true }).click();
+  const csv = await page.evaluate(() => navigator.clipboard.readText());
+  const cellValues = await text.getByRole("textbox", { name: /第 \d+ 行第 \d+ 列/ }).evaluateAll(elements => elements.map(e => e.value));
+  const quote = value => /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+  assert.equal(csv, [cellValues.slice(0, 2), cellValues.slice(2, 4)].map(row => row.map(quote).join(",")).join("\n"));
+  assert.ok(csv.includes("\"含\"\"引号\"\",逗号\""), "commas and quotes are CSV-escaped");
+
+  // Column width and row height drag freely inside a fixed card frame.
+  const columnCells = async () => Promise.all([1, 2].map(column => text.getByRole("textbox", { name: `第 1 行第 ${column} 列`, exact: true }).boundingBox()));
+  const [firstBefore, secondBefore] = await columnCells();
+  const columnHandle = text.getByRole("separator", { name: "调整第 1 列宽度", exact: true });
+  let handleBox = await columnHandle.boundingBox();
+  await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(handleBox.x + handleBox.width / 2 + 48, handleBox.y + handleBox.height / 2, { steps: 8 });
+  await page.mouse.up();
+  const [firstAfter, secondAfter] = await columnCells();
+  assert.ok(Math.abs(firstAfter.width - firstBefore.width - 48) < 2, `first column grows by the drag delta: ${firstBefore.width} -> ${firstAfter.width}`);
+  assert.ok(Math.abs(secondBefore.width - secondAfter.width - 48) < 2, "the neighbour column gives back the same space");
+  assert.deepEqual(await text.boundingBox(), spacingBounds, "column resize keeps the card frame");
+  await saved();
+  let notePayload = JSON.parse((await page.evaluate(() => window.snapshot())).nodes.find(n => n.id === textId).payloadJson);
+  assert.ok(notePayload.column_widths[0] > notePayload.column_widths[1], `dragged weights persist: ${notePayload.column_widths}`);
+  handleBox = await columnHandle.boundingBox();
+  await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(handleBox.x + handleBox.width / 2 - 60, handleBox.y + handleBox.height / 2, { steps: 6 });
+  await page.keyboard.press("Escape");
+  await page.mouse.up();
+  const [firstRestored] = await columnCells();
+  assert.ok(Math.abs(firstRestored.width - firstAfter.width) < 1, "Escape cancels an in-flight column resize");
+  const rowCells = async () => Promise.all([1, 2].map(row => text.getByRole("textbox", { name: `第 ${row} 行第 1 列`, exact: true }).boundingBox()));
+  const [rowOneBefore] = await rowCells();
+  const rowHandle = text.getByRole("separator", { name: "调整第 1 行高度", exact: true });
+  const rowHandleBox = await rowHandle.boundingBox();
+  await page.mouse.move(rowHandleBox.x + rowHandleBox.width / 2, rowHandleBox.y + rowHandleBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(rowHandleBox.x + rowHandleBox.width / 2, rowHandleBox.y + rowHandleBox.height / 2 + 36, { steps: 8 });
+  await page.mouse.up();
+  const [rowOneAfter] = await rowCells();
+  assert.ok(Math.abs(rowOneAfter.height - rowOneBefore.height - 36) < 2, "first row grows by the drag delta");
+  await saved();
+  notePayload = JSON.parse((await page.evaluate(() => window.snapshot())).nodes.find(n => n.id === textId).payloadJson);
+  assert.ok(notePayload.row_heights[0] > notePayload.row_heights[1], `dragged row weights persist: ${notePayload.row_heights}`);
+
   // Insertion in the middle preserves existing cells and their formatting.
   await insert("行", 2);
   assert.equal(await page.getByRole("textbox", { name: "第 3 行第 2 列", exact: true }).inputValue(), "复制这一格");
@@ -168,7 +232,7 @@ try {
   assert.equal(await page.getByRole("textbox", { name: "第 2 行第 2 列", exact: true }).inputValue(), "待删除的内容");
   await remove("行", 2);
   await remove("列", 2);
-  assert.equal(await text.getByRole("textbox").count(), 4);
+  assert.equal(await text.getByRole("textbox", { name: /第 \d+ 行第 \d+ 列/ }).count(), 4);
   assert.equal(await page.getByRole("textbox", { name: "第 2 行第 2 列", exact: true }).inputValue(), "复制这一格");
   await page.getByRole("button", { name: "右对齐", exact: true }).click();
   assert.equal(await page.getByRole("textbox", { name: "第 2 行第 2 列", exact: true }).evaluate(e => getComputedStyle(e).textAlign), "right", "active cell follows its content after deletion");
@@ -298,7 +362,7 @@ try {
   await remove("行", 2);
   await remove("列", 3);
   await remove("列", 2);
-  assert.equal(await text.getByRole("textbox").count(), 1);
+  assert.equal(await text.getByRole("textbox", { name: /第 \d+ 行第 \d+ 列/ }).count(), 1);
   assert.equal(await text.locator(".canvas-text-remove").count(), 0);
   await saved();
   const reduced = JSON.parse((await page.evaluate(() => window.snapshot())).nodes.find(n => n.id === textId).payloadJson);
@@ -313,7 +377,8 @@ try {
   await page.evaluate(() => window.save());
   await page.reload();
   await node(textId).waitFor();
-  assert.equal(await text.getByRole("textbox").count(), 1);
+  assert.equal(await text.getByRole("textbox", { name: "文本卡片标题", exact: true }).inputValue(), "配方表", "title survives reload");
+  assert.equal(await text.getByRole("textbox", { name: /第 \d+ 行第 \d+ 列/ }).count(), 1);
   assert.equal(await text.locator(".canvas-text-remove").count(), 0);
   assert.match(await page.locator(".canvas-zoom-controls").innerText(), /10%/);
   assert.equal((await page.evaluate(() => window.snapshot())).view.zoom, 0.1);

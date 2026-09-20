@@ -1,8 +1,10 @@
 //! Local classification has no Cloud/CLI fallback and never writes reverse-prompt captions.
 pub mod data;
+pub mod jev;
 pub mod runtime;
 #[cfg(test)]
 mod tests;
+pub mod vector;
 
 use serde::Serialize;
 use std::collections::hash_map::DefaultHasher;
@@ -31,6 +33,8 @@ pub struct Status {
     pub last_error: String,
     pub model: String,
     pub acceleration: String,
+    pub vector_supported: bool,
+    pub vector_installed: bool,
 }
 
 pub struct LocalClassifier {
@@ -56,6 +60,8 @@ impl LocalClassifier {
         result.installed = runtime::installed(&self.root);
         result.enabled = db.local_enabled().map_err(|e| e.to_string())?;
         result.model = data::MODEL_ID.into();
+        result.vector_supported = vector::vector_supported();
+        result.vector_installed = vector::vector_installed(&self.root);
         if result.download_total == 0 {
             result.download_total = runtime::download_bytes();
         }
@@ -82,6 +88,7 @@ impl LocalClassifier {
         library: Arc<LibraryPaths>,
         install: bool,
         tag: Option<String>,
+        jev_key: Option<String>,
         pending_only: bool,
     ) -> Result<(), String> {
         if !runtime::supported() {
@@ -131,7 +138,8 @@ impl LocalClassifier {
                 })
                 .await
             } else {
-                this.run(&app, &db, &library, tag, pending_only).await
+                this.run(&app, &db, &library, tag, jev_key, pending_only)
+                    .await
             };
             let cancelled = this.cancel.load(Ordering::Relaxed);
             this.update(&app, |s| {
@@ -174,14 +182,79 @@ impl LocalClassifier {
             .map_err(|e| e.to_string())?
     }
 
+    /// Installs the optional vector pack. The download shares the busy gate so
+    /// it cannot overlap a classification run.
+    pub fn start_vector(self: &Arc<Self>, app: AppHandle) -> Result<(), String> {
+        if !vector::vector_supported() {
+            return Err("此平台暂无固定的向量模型运行组件，将继续使用内置视觉模型判断".into());
+        }
+        let guard = self
+            .gate
+            .clone()
+            .try_lock_owned()
+            .map_err(|_| "已有本地分类或下载任务在运行")?;
+        self.cancel.store(false, Ordering::Relaxed);
+        self.update(&app, |s| {
+            *s = Status {
+                busy: true,
+                phase: "downloading".into(),
+                ..Status::default()
+            };
+        });
+        let this = self.clone();
+        tauri::async_runtime::spawn(async move {
+            let _guard = guard;
+            let result = vector::vector_install(&this.root, &this.cancel, |name, done, total| {
+                this.update(&app, |s| {
+                    s.message = match name {
+                        "model_int8.onnx" => "正在下载向量匹配模型（约 834 MB）",
+                        "tokenizer.json" => "正在下载向量分词器",
+                        _ => "正在下载向量运行组件",
+                    }
+                    .into();
+                    s.download_done = done;
+                    s.download_total = total;
+                });
+            })
+            .await;
+            let cancelled = this.cancel.load(Ordering::Relaxed);
+            this.update(&app, |s| {
+                s.busy = false;
+                s.phase = if cancelled {
+                    "stopped"
+                } else if result.is_err() {
+                    "error"
+                } else {
+                    "complete"
+                }
+                .into();
+                let installed = result.is_ok();
+                s.message = if cancelled {
+                    "已停止，已下载的文件会保留".into()
+                } else {
+                    result.err().unwrap_or_else(|| {
+                        "向量匹配模型已安装，重新扫描后将由向量模型判断标签".into()
+                    })
+                };
+                s.vector_installed = installed;
+            });
+        });
+        Ok(())
+    }
+
     async fn run(
         &self,
         app: &AppHandle,
         db: &Database,
         library: &LibraryPaths,
         tag: Option<String>,
+        jev_key: Option<String>,
         pending_only: bool,
     ) -> Result<(), String> {
+        let gate = match jev_key {
+            Some(key) => Some(jev::Gate::new(key)?),
+            None => None,
+        };
         let job_revision = db.local_revision().map_err(|e| e.to_string())?;
         let targets = db
             .local_targets(pending_only && tag.is_none())
@@ -235,6 +308,32 @@ impl LocalClassifier {
                 Ok(()) => server.acceleration.clone(),
             };
         });
+        // When the vector pack is installed its cosine judge replaces the VLM
+        // yes/no matching; a load failure falls back to VLM matching instead
+        // of failing the whole run.
+        let mut vector = if vector::vector_installed(&self.root) {
+            self.update(app, |s| {
+                s.message = "正在加载向量匹配模型".into();
+            });
+            let root = self.root.clone();
+            match tokio::task::spawn_blocking(move || vector::Matcher::load(&root)).await {
+                Ok(Ok(matcher)) => Some(matcher),
+                Ok(Err(error)) => {
+                    self.update(app, |s| {
+                        s.message = format!("向量模型加载失败，本轮回退内置视觉判断：{error}");
+                    });
+                    None
+                }
+                Err(error) => {
+                    self.update(app, |s| {
+                        s.message = format!("向量模型加载失败，本轮回退内置视觉判断：{error}");
+                    });
+                    None
+                }
+            }
+        } else {
+            None
+        };
         for (index, id) in targets.iter().enumerate() {
             if self.cancel.load(Ordering::Relaxed) {
                 break;
@@ -250,6 +349,8 @@ impl LocalClassifier {
                     library,
                     id,
                     tag.as_deref(),
+                    gate.as_ref(),
+                    vector.as_mut(),
                     tag.is_none() && !pending_only,
                 )
                 .await;
@@ -285,10 +386,12 @@ impl LocalClassifier {
         library: &LibraryPaths,
         id: &str,
         tag: Option<&str>,
+        gate: Option<&jev::Gate>,
+        mut vector: Option<&mut vector::Matcher>,
         rebuild: bool,
     ) -> Result<(), String> {
         let revision = db.local_revision().map_err(|e| e.to_string())?;
-        let mut labels: Vec<data::Label> = db
+        let labels: Vec<data::Label> = db
             .local_labels()
             .map_err(|e| e.to_string())?
             .into_iter()
@@ -306,9 +409,12 @@ impl LocalClassifier {
         let mut evaluated: Vec<String> = Vec::new();
         let mut exampleless: Vec<String> = Vec::new();
         if tag.is_none() {
-            discovery_sample(&mut labels, id);
+            // The sample only narrows the discovery vocabulary; matching still
+            // walks the full enabled label set.
+            let mut shortlist = labels.clone();
+            discovery_sample(&mut shortlist, id);
             combined = server
-                .predict(&image, &labels, true, &[], &self.cancel)
+                .predict(&image, &shortlist, true, &[], &self.cancel)
                 .await?;
             // A discovered name that already exists is grounded in this image and
             // attaches the existing label directly, without a second blind judgment.
@@ -319,6 +425,25 @@ impl LocalClassifier {
         // skip labels without examples instead of batch-voting them onto the image;
         // those labels are only judged in an explicit per-label run. A full re-scan
         // re-derives every automatic association, so stale ones are removed.
+        // With the vector pack installed the judge is cosine similarity against
+        // the label's text and example-image embeddings; the VLM only discovers
+        // and names. Embedding runs are CPU-bound and parked off the executor.
+        let asset_vector = if vector.is_some() {
+            let path = db
+                .local_image_path(id)
+                .map_err(|e| e.to_string())?
+                .ok_or("图片已删除或缺少缩略图")?;
+            let id = id.to_string();
+            tokio::task::block_in_place(|| {
+                vector
+                    .as_deref_mut()
+                    .unwrap()
+                    .embed_file(&id, std::path::Path::new(&path))
+            })?
+            .to_vec()
+        } else {
+            Vec::new()
+        };
         for label in &labels {
             let examples = db
                 .local_examples(&label.id, id)
@@ -327,18 +452,55 @@ impl LocalClassifier {
                 exampleless.push(label.id.clone());
                 continue;
             }
-            let mut images = Vec::new();
-            for (asset, positive) in examples {
-                images.push((Self::image(db, library, &asset).await?, positive));
+            if let Some(matcher) = vector.as_deref_mut() {
+                let mut positives = Vec::new();
+                let mut negatives = Vec::new();
+                for (asset, positive) in &examples {
+                    let path = db
+                        .local_image_path(asset)
+                        .map_err(|e| e.to_string())?
+                        .ok_or("示例素材已删除或缺少缩略图")?;
+                    tokio::task::block_in_place(|| {
+                        matcher.embed_file(asset, std::path::Path::new(&path))
+                    })?;
+                    if *positive {
+                        positives.push(asset.clone());
+                    } else {
+                        negatives.push(asset.clone());
+                    }
+                }
+                let matched = tokio::task::block_in_place(|| {
+                    matcher.judge(&asset_vector, label, &positives, &negatives)
+                })?;
+                if matched {
+                    combined.matches.push(label.id.clone());
+                }
+                evaluated.push(label.id.clone());
+            } else {
+                let mut images = Vec::new();
+                for (asset, positive) in examples {
+                    images.push((Self::image(db, library, &asset).await?, positive));
+                }
+                let prediction = server
+                    .predict(
+                        &image,
+                        std::slice::from_ref(label),
+                        false,
+                        &images,
+                        &self.cancel,
+                    )
+                    .await?;
+                combined.matches.extend(prediction.matches);
+                evaluated.push(label.id.clone());
             }
-            let prediction = server
-                .predict(&image, std::slice::from_ref(label), false, &images, &self.cancel)
-                .await?;
-            combined.matches.extend(prediction.matches);
-            evaluated.push(label.id.clone());
         }
         if rebuild {
             evaluated.extend(exampleless);
+        }
+        // The optional cloud gate re-checks every surviving candidate against the
+        // grounded description; with it enabled, a failed check fails the asset.
+        if let Some(gate) = gate {
+            gate.apply(&mut combined, &labels, &self.cancel).await?;
         }
         if self.cancel.load(Ordering::Relaxed) {
             return Err("已停止分类".into());
@@ -398,8 +560,25 @@ pub fn watch(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths>) {
             }
             let tag = db.pending_local_label().ok().flatten();
             if tag.is_some() || db.local_targets(true).is_ok_and(|ids| !ids.is_empty()) {
+                let jev_key = {
+                    let settings = app.state::<crate::core::settings::SettingsState>();
+                    let snapshot = settings.get();
+                    if snapshot.jev_verify_enabled {
+                        snapshot.jev_api_key.filter(|key| !key.trim().is_empty())
+                    } else {
+                        None
+                    }
+                };
                 if classifier
-                    .start(app.clone(), db.clone(), paths.clone(), false, tag, true)
+                    .start(
+                        app.clone(),
+                        db.clone(),
+                        paths.clone(),
+                        false,
+                        tag,
+                        jev_key,
+                        true,
+                    )
                     .is_err()
                 {
                     continue;

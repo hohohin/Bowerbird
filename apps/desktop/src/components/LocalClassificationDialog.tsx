@@ -13,6 +13,9 @@ export function LocalClassificationDialog({ onClose }: { onClose: () => void }) 
   const [enabled, setEnabled] = useState(true);
   const [error, setError] = useState("");
   const [working, setWorking] = useState(false);
+  const [jevEnabled, setJevEnabled] = useState(false);
+  const [jevKey, setJevKey] = useState("");
+  const [jevLoaded, setJevLoaded] = useState(false);
   const lock = useRef(false);
   const selected = useStore((s) => s.selectedIds);
   const setSmartFilter = useStore((s) => s.setSmartFilter);
@@ -39,6 +42,16 @@ export function LocalClassificationDialog({ onClose }: { onClose: () => void }) 
     return () => { active = false; window.clearInterval(timer); };
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    void local.jevConfig().then((config) => {
+      if (!active) return;
+      setJevEnabled(config.enabled);
+      setJevKey(config.apiKey);
+      setJevLoaded(true);
+    }).catch(() => {});
+    return () => { active = false; };
+  }, []);
   async function action(fn: () => Promise<unknown>) {
     if (lock.current) return;
     lock.current = true; setWorking(true); setError("");
@@ -84,6 +97,34 @@ export function LocalClassificationDialog({ onClose }: { onClose: () => void }) 
           <p className="text-xs text-muted">{Math.round(status.download_done / 1048576)} / {Math.round(status.download_total / 1048576)} MiB · 可关闭面板，下载继续</p>
         </>}
         {status?.total ? <p className="text-xs text-muted">已处理 {status.done} / {status.total} · 未完成 {status.failed}</p> : null}
+      </section>
+
+      <section className="rounded border border-edge bg-panel2 p-3 space-y-2">
+        <div className="flex items-center justify-between">
+          <span>向量精确匹配（jina-clip-v2）</span>
+          <span className="text-xs text-muted">
+            {status?.vector_installed ? "已安装" : status?.vector_supported ? "未安装" : "此平台暂不支持"}
+          </span>
+        </div>
+        <p className="text-xs text-muted">安装后标签匹配改用图像与文本的向量相似度判断（SigLIP2 系模型，int8 量化约 834 MB，含运行组件共约 881 MB，经国内镜像下载）；内置视觉模型只负责发现和命名，不再逐标签「看图打勾」。未安装时沿用内置视觉模型判断。</p>
+        {status?.vector_supported && !status.vector_installed &&
+          <button className="app-modal-button" disabled={busy} onClick={() => void action(() => local.vectorInstall())}>下载向量匹配模型</button>}
+        {status?.vector_installed && <p className="text-xs text-muted">安装或升级后运行一次「重新扫描全部图片」，全部自动标签将按向量判断重建。</p>}
+      </section>
+
+      <section className="rounded border border-edge bg-panel2 p-3 space-y-2">
+        <label className="flex items-center gap-2">
+          <input type="checkbox" checked={jevEnabled} disabled={!jevLoaded} onChange={(e) => setJevEnabled(e.target.checked)} />
+          云端最终校验（Jev）
+        </label>
+        <input type="password" aria-label="Jev API Key" className="w-full rounded border border-edge bg-panel2 px-3 py-2"
+          placeholder="console.typesafe.ai 申请的 API Key" value={jevKey} disabled={!jevLoaded}
+          onChange={(e) => setJevKey(e.target.value)} />
+        <div>
+          <button className="app-modal-button" disabled={!jevLoaded || working}
+            onClick={() => void action(async () => { await local.saveJevConfig(jevEnabled, jevKey); })}>保存云端校验设置</button>
+        </div>
+        <p className="text-xs text-muted">启用后，本地识别的候选标签会连同图片的文字描述与标签文本发送到 TypeSafe（Jev）做最终复核，低于阈值的标签不写入；图片本身永不离开本机，未启用时分类完全离线。校验失败会暂停自动处理，可停用后重试。</p>
       </section>
 
       <section className="space-y-2">

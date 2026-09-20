@@ -7,18 +7,24 @@ import "../../../src/styles.css";
 const w = window as any;
 w.calls = [];
 w.failure = null;
-w.classificationStatus = { supported: true, installed: false, enabled: false, busy: false, phase: "", done: 0, total: 0, failed: 0, download_done: 0, download_total: 1401293979, message: "", model: "local-test", acceleration: "" };
+w.classificationStatus = { supported: true, installed: false, enabled: false, busy: false, phase: "", done: 0, total: 0, failed: 0, download_done: 0, download_total: 1401293979, message: "", model: "local-test", acceleration: "", vector_supported: true, vector_installed: false };
 w.labels = [];
+w.settings = { jev_verify_enabled: false, jev_api_key: null };
 w.__TAURI_INTERNALS__ = { invoke: async (command: string, args: any) => {
   w.calls.push({ command, args });
   if (w.failure === command) throw new Error("合成错误：请重试");
   switch (command) {
     case "local_classification_status": return structuredClone(w.classificationStatus);
     case "local_classification_labels": return structuredClone(w.labels);
+    case "get_settings": return structuredClone(w.settings);
+    case "update_settings": w.settings = { ...w.settings, ...args.settings }; return;
     case "local_classification_start":
       w.classificationStatus.busy = true; w.classificationStatus.phase = args.install ? "downloading" : "classifying";
       w.classificationStatus.message = args.install ? "正在下载 model.gguf" : "正在识别素材"; return;
     case "local_classification_stop": w.classificationStatus.busy = false; w.classificationStatus.enabled = false; w.classificationStatus.message = "已停止"; return;
+    case "local_classification_vector_install":
+      w.classificationStatus.busy = true; w.classificationStatus.phase = "downloading";
+      w.classificationStatus.message = "正在下载向量匹配模型（约 834 MB）"; return;
     case "local_classification_enable": w.classificationStatus.enabled = args.enabled; return;
     case "local_classification_save_label": {
       const id = args.id ?? `label-${w.labels.length}`;

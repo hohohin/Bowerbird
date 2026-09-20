@@ -38,6 +38,15 @@ try {
   assert.equal(await page.evaluate(() => window.calls.filter(c => c.command === "local_classification_example").at(-1).args.positive), true);
   await dialog.getByRole("button", { name: "排除所选素材", exact: true }).click();
   assert.equal(await page.evaluate(() => window.calls.filter(c => c.command === "local_classification_example").at(-1).args.positive), false);
+  await dialog.getByLabel("Jev API Key").fill("tsk-test");
+  await dialog.getByRole("button", { name: "保存云端校验设置" }).click();
+  assert.equal(await page.evaluate(() => window.calls.filter(c => c.command === "update_settings").at(-1).args.settings.jev_api_key), "tsk-test");
+  assert.equal(await page.evaluate(() => window.calls.filter(c => c.command === "update_settings").at(-1).args.settings.jev_verify_enabled), false);
+  await dialog.getByText("向量精确匹配（jina-clip-v2）", { exact: true }).waitFor();
+  await dialog.getByRole("button", { name: "下载向量匹配模型" }).click();
+  assert.equal(await page.evaluate(() => window.calls.filter(c => c.command === "local_classification_vector_install").length), 1);
+  await page.evaluate(() => { window.classificationStatus.vector_installed = true; window.classificationStatus.busy = false; });
+  await dialog.getByText("安装后标签匹配改用图像与文本的向量相似度判断", { exact: false }).waitFor();
   await page.evaluate(() => window.failure = "local_classification_start");
   await dialog.getByRole("button", { name: "寻找匹配", exact: true }).click();
   await dialog.getByRole("alert").waitFor();

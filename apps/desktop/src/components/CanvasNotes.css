@@ -5,7 +5,8 @@
 .canvas-assist-tools { display:flex; flex-direction:column; align-items:center; gap:4px; }
 .canvas-assist-tools > span { color:var(--bb-muted); font-size:9px; line-height:14px; }
 .canvas-stage.is-drawing, .canvas-stage.is-drawing * { cursor:crosshair !important; }
-.canvas-note { position:absolute; left:0; top:0; overflow:visible; border:1px solid var(--bb-line); border-radius:10px; color:var(--bb-ink); background:var(--bb-surface); box-shadow:0 3px 12px #0001; }
+/* 拖动便签/文本卡时禁止原生文字蓝底选区；单元格 textarea 不受祖先 user-select 影响，编辑选字照常 */
+.canvas-note { position:absolute; left:0; top:0; overflow:visible; border:1px solid var(--bb-line); border-radius:10px; color:var(--bb-ink); background:var(--bb-surface); box-shadow:0 3px 12px #0001; user-select:none; }
 .canvas-note.is-selected { outline:2px solid var(--bb-blue); }
 .canvas-note.is-section { background:rgba(106,143,221,.09); border:2px solid rgba(106,143,221,.4); box-shadow:none; pointer-events:none; }
 .canvas-section-heading { position:absolute; bottom:100%; left:-2px; display:flex; align-items:center; gap:6px; padding:7px 4px; pointer-events:auto; cursor:grab; color:var(--bb-ink); }
@@ -18,6 +19,18 @@
 .canvas-section-edge.left { left:-4px; } .canvas-section-edge.right { right:-4px; }
 .canvas-section-preview { position:absolute; background:rgba(106,143,221,.12); border:2px solid var(--bb-blue); pointer-events:none; }
 .canvas-text-handle { height:30px; display:flex; align-items:center; gap:7px; padding:0 10px; cursor:grab; font-size:11px; color:var(--bb-muted); }
+.canvas-text-title { flex:1; min-width:0; background:transparent; border:0; outline:none; font-size:11px; font-weight:600; color:var(--bb-ink); cursor:text; }
+.canvas-text-title::placeholder { color:var(--bb-faint); font-weight:400; }
+.canvas-text-title:focus { box-shadow:0 1px var(--bb-blue); }
+.canvas-text-resize { position:absolute; display:grid; place-items:center; padding:0; opacity:0; touch-action:none; color:var(--bb-blue); }
+.canvas-text-grid:hover .canvas-text-resize, .canvas-text-resize:focus-visible, .canvas-text-resize:active { opacity:1; }
+.canvas-text-resize:focus-visible { outline:2px solid var(--bb-blue); outline-offset:1px; }
+/* The two axes sit at different offsets so their hit zones never cover each
+   other where a row and a column boundary cross. */
+.canvas-text-resize.is-column { z-index:5; top:40%; width:10px; height:28px; transform:translate(-50%,-50%); cursor:col-resize; }
+.canvas-text-resize.is-row { z-index:4; left:60%; width:28px; height:10px; transform:translate(-50%,-50%); cursor:row-resize; }
+.canvas-text-resize.is-column::after { content:""; width:2px; height:100%; border-radius:2px; background:var(--bb-blue); box-shadow:0 0 0 2px var(--bb-surface); }
+.canvas-text-resize.is-row::after { content:""; height:2px; width:100%; border-radius:2px; background:var(--bb-blue); box-shadow:0 0 0 2px var(--bb-surface); }
 .canvas-text-spacing { position:absolute; top:3px; right:6px; display:flex; gap:2px; }
 .canvas-text-spacing button { display:grid; place-items:center; width:24px; height:24px; border-radius:5px; color:var(--bb-muted); }
 .canvas-text-spacing button:hover:not(:disabled) { background:var(--bb-surface-2); color:var(--bb-blue); }

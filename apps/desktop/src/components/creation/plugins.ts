@@ -83,6 +83,14 @@ function smartPunct(punct: string, deps: PluginDeps): Command {
   };
 }
 
+// macOS WKWebView：方向键 / Home / End 等功能键会派发携带 charCode 的 keypress，值是
+// 旧 Mac 功能键私用区映射（U+F700–U+F8FF，右方向键 = U+F703）。光标已在文本末尾、原生
+// 移动无效时，WebKit 把该字符当文本插进 contentEditable，界面显示为方框乱码。keypress
+// 的默认行为只有插字，preventDefault 不影响 keydown 的光标移动；handleTextInput 兜底
+// 过滤同类字符（ProseMirror 自身 keypress 分支在非普通文本选区时会直接插字）。
+const PUA_KEY_CHARS = /[\uF700-\uF8FF]/;
+const PUA_KEY_CHARS_ALL = /[\uF700-\uF8FF]/g;
+
 export function buildPlugins(deps: PluginDeps) {
   const punctKeys: Record<string, Command> = {
     Space: smartPunct(" ", deps),
@@ -97,6 +105,22 @@ export function buildPlugins(deps: PluginDeps) {
     keymap({ "Mod-z": undo, "Mod-y": redo, "Mod-Shift-z": redo }),
     keymap(punctKeys),
     keymap(baseKeymap),
+    new Plugin({
+      props: {
+        handleDOMEvents: {
+          keypress: (_view, event) => {
+            if (event.charCode >= 0xf700 && event.charCode <= 0xf8ff) event.preventDefault();
+            return false;
+          },
+        },
+        handleTextInput: (view, from, to, text) => {
+          if (!PUA_KEY_CHARS.test(text)) return false;
+          const cleaned = text.replace(PUA_KEY_CHARS_ALL, "");
+          if (cleaned || from !== to) view.dispatch(view.state.tr.insertText(cleaned, from, to));
+          return true;
+        },
+      },
+    }),
     // 空编辑框占位：doc 只剩一个空段落时给 ProseMirror 根打 is-empty class（随每次
     // state 更新重算），CSS 据此显示「描述你的意图，开始创作吧」占位提示。
     new Plugin({

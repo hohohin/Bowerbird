@@ -49,6 +49,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   PenTool,
+  Play,
   Plus,
   Sparkles,
   Trash2,
@@ -2642,8 +2643,7 @@ export function CanvasWorkspace({
           markViewDirty();
         }
         if (!event.shiftKey && !event.ctrlKey && !event.metaKey) setSelectedCanvasNodeIds(new Set());
-        const state = useStore.getState();
-        if (canStartCanvasMarquee(event.button, state.boardOpen, !!state.genEditing, targetIsCanvasNode)) {
+        if (canStartCanvasMarquee(event.button, targetIsCanvasNode)) {
           event.preventDefault();
           event.currentTarget.focus({ preventScroll: true });
           const stageRect = event.currentTarget.getBoundingClientRect();
@@ -3180,7 +3180,9 @@ export function CanvasWorkspace({
         persistGraphNodeGeometry(moved);
       }
     }
-    const next = canvasViewForNewCard({ ...measuredCard, ...(placement ?? {}) }, viewport, panRef.current, zoomRef.current, true);
+    // The card is anchored inside the current viewport; only refit the view when
+    // placement failed and the provisional (reference-derived) position is off-screen.
+    const next = canvasViewForNewCard({ ...measuredCard, ...(placement ?? {}) }, viewport, panRef.current, zoomRef.current);
     if (next) {
       panRef.current = next.pan;
       zoomRef.current = next.zoom;
@@ -3867,7 +3869,7 @@ export function CanvasWorkspace({
                   tabIndex={0}
                   aria-label={`${node.kind === "asset" ? `${node.asset.name}，${boardOpen || genEditing ? "点击加入创作" : "点击放大"}` : `素材组，${node.assets.length} 个素材，${expanded ? "已展开" : "点击展开"}`}${selectedCanvasNodeIds.has(node.id) ? "，已选中" : ""}`}
                   aria-expanded={node.kind === "folder" ? expanded : undefined}
-                  className={`canvas-node is-${node.kind} ${expanded ? "is-expanded" : ""} ${!showAssetNames ? "is-name-hidden" : ""} ${focusedNodeId === node.id ? "is-focused" : ""} ${selectedCanvasNodeIds.has(node.id) ? "is-selected" : ""} ${movingWithSelection ? "is-moving" : ""} ${holding ? "is-folder-target" : ""} ${directFolderTarget ? "is-folder-drop-target" : ""} `}
+                  className={`canvas-node is-${node.kind} ${node.kind === "asset" && isVideoPath(node.asset.storePath) ? "is-video" : ""} ${expanded ? "is-expanded" : ""} ${!showAssetNames ? "is-name-hidden" : ""} ${focusedNodeId === node.id ? "is-focused" : ""} ${selectedCanvasNodeIds.has(node.id) ? "is-selected" : ""} ${movingWithSelection ? "is-moving" : ""} ${holding ? "is-folder-target" : ""} ${directFolderTarget ? "is-folder-drop-target" : ""} `}
                   style={{
                     width: nodeRect(node).width,
                     height: nodeRect(node).height,
@@ -3907,7 +3909,7 @@ export function CanvasWorkspace({
                       ) : (
                         <div className="canvas-node-placeholder">{node.asset.name.slice(0, 1)}</div>
                       )}
-                      {isVideoPath(node.asset.storePath) && <span className="pointer-events-none absolute right-2 top-2 rounded bg-black/60 px-1.5 text-xs text-white" aria-label="视频">▶ 视频</span>}
+                      {isVideoPath(node.asset.storePath) && <span className="canvas-video-badge" aria-label="视频"><Play size={11} />视频</span>}
                       <div className="pointer-events-none absolute left-1 top-1 z-10 flex items-center gap-1">
                         {node.asset.assetId && layerWorkspaceIds.has(node.asset.assetId) && <span className="rounded-full bg-black/70 px-1.5 py-1 text-white backdrop-blur" title="有分层工程" aria-label="有分层工程"><Layers size={12} /></span>}
                         {node.asset.assetId && captionedIds.has(node.asset.assetId) && (

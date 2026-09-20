@@ -37,15 +37,21 @@ try {
     assert.equal(snapshot.view.zoom, 0.9);
     assert.equal(snapshot.view.focusedThreadId, 't');
     assert.equal(snapshot.view.viewMode, 'canvas');
-    const centered = await page.evaluate(id => {
+    // New cards anchor at the visible top-left (viewport x:24 y:72) instead of
+    // following the reference-derived provisional position or re-centering the
+    // view. In the agent flow the launch prompt is absorbed by its Run card, so
+    // the focused card is the one that carries the anchor.
+    const anchored = await page.evaluate(id => {
       const stage = document.querySelector('[data-canvas-stage]').getBoundingClientRect();
       const card = document.querySelector(`[data-canvas-node-id="${id}"]`).getBoundingClientRect();
-      const composer = document.querySelector('.canvas-composer-host').getBoundingClientRect();
-      const bottom = Math.min(stage.height, composer.top - stage.top);
-      return [card.x + card.width / 2 - (stage.x + stage.width / 2),
-        card.y + card.height / 2 - (stage.y + 72 + (bottom - 96) / 2)];
+      return [card.x - stage.x, card.y - stage.y];
     }, card.id);
-    assert.ok(centered.every(offset => Math.abs(offset) < 2), `card is centered: ${centered}`);
+    assert.ok(Math.abs(anchored[0] - 24) < 2 && Math.abs(anchored[1] - 72) < 2, `focused new card anchors at the visible top-left: ${anchored}`);
+    if (agent) {
+      const stageBox = await page.evaluate(() => document.querySelector('[data-canvas-stage]').getBoundingClientRect());
+      const refsBox = await page.locator('[data-canvas-node-id="agent-reference:launch:0:0"]').boundingBox();
+      assert.ok(refsBox && refsBox.y > anchored[1] && refsBox.x >= stageBox.x, "agent references follow below the anchored card");
+    }
     evidence.push({ agent, withReferences, card, references: refs, view: snapshot.view });
     await page.screenshot({ path: `.tmp/reference-placement/${agent ? "agent" : withReferences ? "ordinary" : "no-references"}.png` });
     const writes = await page.evaluate(() => window.calls.filter(c => c.command === "project_canvas_node_update").length);
@@ -63,7 +69,7 @@ try {
   }
   assert.deepEqual(errors, []);
   await writeFile(".tmp/reference-placement/coordinates.json", JSON.stringify(evidence, null, 2));
-  console.log("PASS real CanvasWorkspace: ordinary + staged Agent card focus, centered view, timeline return, unchanged old nodes, repeat and reload, persisted coordinates");
+  console.log("PASS real CanvasWorkspace: ordinary + staged Agent card focus, visible top-left anchor, timeline return, unchanged old nodes, repeat and reload, persisted coordinates");
 } finally {
   await browser.close();
   await server.close();

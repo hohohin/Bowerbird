@@ -16,6 +16,9 @@ export interface CanvasNotePayload {
   member_ids: string[];
   line_height_percent?: number;
   bubble_tail?: CanvasBubbleTail;
+  title?: string;
+  column_widths?: number[];
+  row_heights?: number[];
 }
 
 export interface CanvasBubbleTail {
@@ -42,6 +45,18 @@ export function canvasTextMinSize(cells: CanvasTextCell[][]) {
   return { width: Math.max(200, cells[0].length * 120 + 16), height: (cells.length * 64 + 40) * 0.8 };
 }
 
+/** Fall back to equal weights unless the saved vector matches the grid and stays positive. */
+export function canvasGridWeights(saved: number[] | undefined, count: number): number[] {
+  if (!saved || saved.length !== count || saved.some(weight => !(weight > 0))) return Array.from({ length: count }, () => 1);
+  return saved;
+}
+
+/** RFC-4180-style CSV: quote fields containing commas, quotes or line breaks. */
+export function canvasTextCsv(cells: CanvasTextCell[][]): string {
+  return cells.map(row => row.map(({ text }) =>
+    /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text).join(",")).join("\n");
+}
+
 export function readCanvasNote(node: Pick<CanvasNode, "payloadJson">): CanvasNotePayload {
   const value = JSON.parse(node.payloadJson);
   return {
@@ -51,6 +66,9 @@ export function readCanvasNote(node: Pick<CanvasNode, "payloadJson">): CanvasNot
     cells: value.note_type === "section" ? [] : value.cells?.length ? value.cells : [[{ ...emptyCanvasCell(), text: value.text ?? "" }]],
     member_ids: value.member_ids ?? [],
     line_height_percent: value.line_height_percent ?? 165,
+    ...(typeof value.title === "string" ? { title: value.title } : {}),
+    ...(Array.isArray(value.column_widths) ? { column_widths: value.column_widths } : {}),
+    ...(Array.isArray(value.row_heights) ? { row_heights: value.row_heights } : {}),
     ...(value.note_type === "bubble" ? { bubble_tail: value.bubble_tail ?? { side: "bottom", position: 25 } } : {}),
   };
 }

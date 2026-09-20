@@ -38,12 +38,13 @@
 - 反推旧清单的结果管理、取消/耗时、复制及维度复用已实现；单图指令记忆、视频反推支持与流式结果显示仍未形成验收闭环。当前提交反推还会保存全局默认指令，与“保存为默认”提示存在差异，需单独修正。PSD 导入预览仍未实现，已有图层 PSD 导出不等于支持 PSD 素材预览。OCR/版式/灵感卡等保持延后。
 
 **近期里程碑（仅保留最近 3 条；历史详见 [进展归档](dev-doc/进展归档.md)）**
+> **本地分类匹配判断切换为 SigLIP2 系向量匹配（2026-09-19，本机实现+真实模型验证）：** 应用户澄清，引入 jina-clip-v2（SigLIP2 视觉塔 + jina-embeddings-v3 文本塔，ONNX int8 874MB）作为匹配阶段判官：安装向量包后逐标签判断改为「图像嵌入 × 标签文本/示例图嵌入」余弦相似度（≥0.27 且不低于排除示例），VLM 只负责发现与命名；未安装/加载失败/平台无运行库（Intel Mac）时回退原 VLM 判断。`ort` 2.0.0-rc.13 load-dynamic，onnxruntime 1.28.0 运行库随包经 SHA-256 固定下载（hf-mirror 优先），全链路本机完成不出机。21 张引导素材实测：矿泉水瓶产品图 top-1 即「矿泉水瓶」0.289（「女孩」跌出前五），真负例 <0.22，阈值 0.27 由此标定；生产代码真实模型测试 8.0s 通过。Rust **378 passed / 6 ignored**、TypeScript 与面板 UI 回归通过。Windows x64 清单已钉定未实机验证；int8 未与 fp16 对照、UI 截图对「产品图」0.328 为已知误报面，真实库观察待续。详见 [LOCAL-CLASSIFICATION.md](dev-doc/LOCAL-CLASSIFICATION.md)。
+
+
+> **本地分类引入可选云端最终校验 Jev（2026-09-19，源码更新未打包）：** 落地前一日调研决策：TypeSafe Jev（System One Model）作为 opt-in 最终闸门加入本地分类——识图始终本地（llama.cpp + 固定 Qwen3.5-0.8B 不变），出机仅图片文字描述与标签文本，默认关闭、面板配置 API Key；一次请求并行复核全部候选（noul 概率 ≥0.6 才写入），校验失败按资产失败处理、不写部分结果。附带修复发现抽样就地截断标签集导致示例匹配只遍历前八个的问题。本地分类回归 **24 passed / 4 ignored**（新增 Jev 阈值过滤/错误不放行/空描述跳过三测）、settings 回归 9 passed、TypeScript 与面板 UI 脚本（含云端校验保存断言）通过；未启用时行为与上版一致，阈值待真实 key + 引导素材标注集调优。详见 [LOCAL-CLASSIFICATION.md](dev-doc/LOCAL-CLASSIFICATION.md)。
 
 > **Mac 26.9.1901 更新包（2026-09-19，本机构建待发布）：** mac 合入远端 dev `3f089bf`（Windows 26.9.1803 的启动静默检查更新与可跳过提醒、仅开放设计师路线、账号升级直达权益/兑换面板及官网快照对齐），连同本地分类误标根治一并出包；按同日 patch 序号规范定为 **26.9.1901**（19 日第 1 包，> 线上 darwin-aarch64 26.9.1802，护栏通过）。合并后 Rust 全量 **371 passed / 5 ignored**、TypeScript、app-updater/引导/本地分类三组 UI 回归通过；`release.sh`（R2_SKIP_UPLOAD=1）完成签名构建，arm64 二进制内嵌 Mac 公钥、DMG `hdiutil verify` 通过。产物在 `macOS/dist/`：更新包 `Bowerbird_26.9.1901_aarch64.app.tar.gz` **85,893,526 bytes**，SHA-256 `af077004a66804fe9f16c79ecf35828b3acdfd5b00df48c64090b29b5c3ec06f`；手动 DMG **86,439,465 bytes**，`f1d59df9ed63c6c9ff7a7eb15fb922a037e960103e863cf178247cc3af2035bf`；清单 `darwin-aarch64.json`（指向 R2 直下）。产物已上传 R2 并完成发布侧核验（完整下载哈希、minisign 主/全局签名、篡改拒绝、公钥与 26.9.1802 连续、清单与 `.sig` 一致）；**官网清单尚未原子替换，线上仍为 26.9.1802**，交接脚本与回滚见 DESKTOP-UPDATES.md「Mac 26.9.1901 发布侧核验」。细节见 `macOS/README.md`。
 
-> **本地分类误标根治：切断反馈回路与无示例盲匹配（2026-09-18，已纳入 Mac 26.9.1901 本机构建）：** 用户矿泉水瓶产品图被误标 #女孩 #梅花 等；全库核查证实 0.8B 模型误判被管线放大——发现阶段按引用次数注入前八标签且提示「优先复用」，误标抬高排名形成滚雪球；无示例标签逐批盲判被成片打 true（另一水瓶图命中 8 个标签，含 猫/中秋/月饼）。本轮不动模型：发现参考改为按素材确定性哈希抽样；发现提出的已有标签名直接落地；自动处理只对有人工示例（正例/排除）的标签做匹配，无示例标签仅在用户显式「寻找匹配」时判断；「重新扫描全部图片」升级为按新规则重建全部自动归属并清退不再成立的自动标签；提示词改为先看图后命名、证据须可见。本地分类回归 **21 passed / 4 ignored**（新增抽样/落地/示例标记 3 项）、TypeScript 与面板 UI 脚本通过。既有库的错误自动标签需在新版点一次「重新扫描全部图片」清退；模型能力边界未变，更大模型对照仍按原计划后续进行。详见 [LOCAL-CLASSIFICATION.md](dev-doc/LOCAL-CLASSIFICATION.md)。
-
-> **Windows 26.9.1803 打包与官网更新（2026-09-18）：** 存档启动时静默检查更新及可跳过提醒、仅开放设计师路线、账号升级进入应用内权益/兑换面板与官网地址修正；此前 26.9.1802 双端发布和首页下载变更一并入库。Windows 签名包 83175110 bytes，SHA-256 f5477cdefaa4d224f8c734ea46af2c7fe7cfb3f81eddae8f27f8d83135670f46。529 项构建输入、43 个引导资源、解包 x64/版本/安装钩子、签名与篡改拒绝通过；引导 14/14、更新/引导/兑换及账号入口 UI、TypeScript/Vite 和官网构建通过。Rust 合计 361 passed / 8 ignored / 11 filtered；假 CLI 测试补齐临时 APPDATA 的版本专属启动器后通过，未改生产代码。官网候选/正式服务、公网完整下载和验签通过，Windows 通道及首页为 26.9.1803，Mac 保持 26.9.1802，旧包保留；现役 20260918-26.9.1803，回滚 20260918-26.9.1802-download-copy。发布证据见 .tmp/release-20260918-1803/。构建后并行出现的官网视频懒加载及缓存版本号改动未纳入本次部署，保留于工作区。未执行真实用户安装，Mac 新功能包、Intel、公证与双端原生升级仍待验收；Worker/数据库未变。
 
 
 **26.9.17 本地分类 GPU/重复标签修复重包复核（2026-09-17，历史本地交付）：** Rust **361 passed / 8 ignored / 11 filtered**（媒体工具组沿用过滤）；ignored 的真实 GPU 批量、CPU 回退与分类正负例专项各自通过。六轮八标签耗时约 15.16 秒（不含安装/加载），只代表结构恢复和样本连通，不代表整库准确率。正式下载器获取 CUDA 两个归档 **645,382,170 bytes** 并校验固定 SHA-256，原权重/视觉投影保持。实际日志确认 RTX 4070 Ti SUPER 上 25/25 层与 CLIP CUDA0；CPU 回退覆盖无组件、损坏组件和停止保护。GPU/CPU 提示的分类界面、TypeScript/Vite 与 release/NSIS 通过。交付 `Windows/dist/Bowerbird_26.9.17_x64-setup.exe`，**83061684 bytes**，SHA-256 **04A94AE3571833BC2D060B9E93BD8F8EC33EC42AA510E72E0CFE26377302FD68**；校验文件同目录。旧下载修复包备份至 `Windows/dist/archive/20260917-before-local-gpu-fix/`（3C8C042F95611881104018E372B8C47E513DBE51357B85FB77DFCF9173C171E3）。523 个输入指纹、43 个引导资源、x64 与安装清登录钩子复核通过。相对上一包仅九个分类相关源/测试文件变化，既有未提交的视频等修改保持；本次源码与文档未提交。未安装/重装、未访问真实用户库或账号、未更新官网/云端。证据在本地 `.tmp/local-gpu-fix-20260917/`。
@@ -51,6 +52,14 @@
 ---
 
 ## 关键约定
+
+**2026-09-20 画板新卡左上角锚定、视频卡独立样式与文本卡片表格增强：** ①新生成卡片（普通生成指令卡/Agent 卡）不再按引用图位置落位：前端测量挂载后将卡片锚定到当前可视区域左上角（屏幕 x24/y72，被占时按视口/障碍边扫描就近避让），仅在视口放不下时才沿用后端临时位置并缩放聚焦，不再强制居中改视角；参考图仍随卡排在卡下方、输出图在指令卡右侧。`canvasPlacementForNewCard` 契约改为左上角优先，引用落位 UI 回归同步改判锚定。②视频卡片与图片卡样式区分：asset 节点按 storePath 判视频加 `is-video`，紫色 2px 描边、深色底、专属 ▶ 徽标与名称栏渐变，素材组内视频缩略图同紫调（media 回归断言类与徽标）。③文本卡表格整表复制为 CSV（RFC 4180 转义），按钮并入原行距工具组（组名改「文本工具」，气泡不显示）。④表格行高/列宽拖拽自由调节：note payload 新增可选 `column_widths`/`row_heights` 正数权重（schema 仍为 1，Rust 契约校验维度一致且为正、非法拒收），插删行列同步维护权重，边界手柄与插删控件按权重定位且两轴手柄错位避让命中冲突，Escape 取消拖拽不落盘。⑤文本卡标题可编辑（T 图标右侧输入框，payload 可选 `title`，重开保留；气泡不显示标题）。验证：画板纯逻辑 127/127（新增 CSV/权重两测）、reference/notes/bubble/section/marquee/media/transparency/snap/layers/draft UI 回归、Rust 379 passed / 6 ignored（新增 note 契约一测）、TypeScript 与 production build 通过；`canvas-arrangement-ui` 与 `canvas-selection-to-board-ui` 在改动前 HEAD 即因「整理」菜单等待失败，属既有问题未处理。
+
+**2026-09-19 创作模式允许画板框选并去除文字蓝底：** 画板空白拖动框选不再限于浏览模式，创作模式（主对话框或会话编辑坞激活）同样生效，Shift 追加、普通空白点击清空等语义与浏览模式一致；框选或拖动卡片（含文本便签）期间不得出现原生文字蓝底选区——便签容器 `user-select` 关闭（单元格 textarea 编辑选字不受影响），框选起点的 preventDefault 双模式生效。图片卡/生成卡/Agent 卡原本已禁选字。验收见 `pnpm test:canvas:creation-marquee` 与画板专项验收第 17 条更新。
+
+**2026-09-19 本地分类匹配判断优先向量模型：** 安装向量包（jina-clip-v2 ONNX int8 + onnxruntime 1.28.0，SHA-256 钉定，hf-mirror 优先下载）后，逐标签匹配判断 = 图像嵌入与标签文本/正例示例嵌入的余弦 ≥0.27 且不低于排除示例；VLM 只负责发现与命名。未安装/加载失败/Intel Mac（无 1.28.0 x86_64 运行库）一律回退 VLM 判断；向量判断与 Jev 云端校验正交叠加。阈值 0.27 为 21 张引导素材标定初值，真实库持续观察。详见 [LOCAL-CLASSIFICATION.md](dev-doc/LOCAL-CLASSIFICATION.md)。
+
+**2026-09-19 本地分类可选云端最终校验（Jev）：** TypeSafe Jev（System One Model，仅文本/JSON 输入）作为 opt-in 最终闸门：识图始终本地，出机内容限于图片的本地文字描述与标签名/说明，图片本身永不出机。默认关闭，面板配置 API Key（settings.json `jev_verify_enabled`/`jev_api_key`）；启用后全部存活候选一次请求并行复核，noul 概率 ≥0.6 才写入，校验失败按资产失败处理、不写部分结果，自动处理暂停；单标签显式匹配与无描述路径不经过云端。阈值 0.6 为工程初值，Jev 无公开基准，质量结论以真实 key + 标注集验收为准。详见 [LOCAL-CLASSIFICATION.md](dev-doc/LOCAL-CLASSIFICATION.md)。
 
 **2026-09-18 本地分类自动匹配需示例背书（已纳入 Mac 26.9.1901）：** 自动处理只对设过人工示例（手动正例或排除记录）的标签做自动匹配；无示例标签仅在发现阶段用于统一命名，用户显式「保存并寻找匹配素材 / 寻找匹配」仍可单独判断整库。发现阶段的参考标签按素材确定性哈希抽样注入，不再按引用次数排序，自动归属不得反馈抬高标签排名。发现提出的已有标签名直接落地，不再经盲匹配补挂。「重新扫描全部图片」按当前规则重建全部自动归属：不再成立的自动标签被移除，人工归属与排除记录不动。提示词要求标签来自图中可见内容、判断须指出可见证据。模型仍为 Qwen3.5-0.8B Q4_K_M，准确率验收与更大模型对照按 [LOCAL-CLASSIFICATION.md](dev-doc/LOCAL-CLASSIFICATION.md) 原计划另行进行。
 
@@ -310,6 +319,14 @@ DSH 当前执行遵循约定 50/51：按需加载领域 Skill，由 Agent 决定
 **画板选择与主动整理（2026-09-06）**：Ctrl/Command + 点击可追加或取消节点选择，Ctrl/Command 框选保留已有选择。节点右键“整理”以当前所选节点为起点（右键未选节点则只取该节点），沿连接方向收集当前可见的后续卡片；素材组成员和 Agent 隐藏提示卡映射到可见容器。按连接层级对齐、留出间距，并整体避开未参与整理的卡片；不移动上游或无关卡片。整理后整组选中，节点/素材组坐标沿用现有画板写入队列持久化；不更改线程、连接、素材归属或执行记录。
 
 ## 踩坑记录
+
+### mac「打开所在文件夹」不选中素材文件（2026-09-19）
+
+右键素材「打开所在文件夹」的 `reveal_asset_folder` 自带一份 `reveal_in_file_manager`：Windows 用 `explorer /select,` 会选中文件，但 macOS 只 `open <目录>` 打开父目录不选中；素材库内文件又是纯 ID 命名，用户在打开的文件夹里找不到自己右键的那张图。而画板节点「在资源管理器中定位」走的 `spawn_locate_or_open` 早已正确（macOS `open -R` 在 Finder 中选中）。修复即删除重复实现，`reveal_asset_folder` 复用 `spawn_locate_or_open(reveal=true)`，双端入口行为一致；失败从静默 tracing 变为前端明确报错。Linux 无统一「定位选中」协议，维持打开所在目录。素材库文件命名方案（纯 ID）未改，选中高亮已可直接定位；若要人读文件名需另立迁移专项。
+
+### mac 对话框末尾按右方向键插入方框乱码（2026-09-19）
+
+macOS WKWebView 里方向键 / Home / End 等功能键会派发携带 charCode 的 keypress，值是旧 Mac 功能键私用区映射（U+F700–U+F8FF，右方向键 = U+F703）。创作对话框（ProseMirror contentEditable）光标已在文本末尾、原生移动无效时，WebKit 把该字符当文本插入，显示为方框乱码并可随草稿持久化。修复在 `creation/plugins.ts`：插件对私用区 keypress preventDefault（keypress 默认行为只有插字，不影响 keydown 的光标移动），`handleTextInput` 再兜底过滤同类字符（ProseMirror 自身 keypress 分支在非普通文本选区时会直接插字）。Chromium 无法原生复现，`scripts/creation-editor-ui.test.mjs` 用合成 keypress 验证拦截与正常输入不受影响；Windows WebView2 未见此行为。
 
 ### 升版后的假 CLI 测试缺少启动器（2026-09-18）
 

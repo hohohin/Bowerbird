@@ -128,14 +128,13 @@ test("canvas pans only with middle button or space plus left button", () => {
   assert.equal(isCanvasPanGesture(2, true), false);
 });
 
-test("canvas primary click follows creation mode and marquee stays browse-only", () => {
+test("canvas primary click follows creation mode and marquee works in both modes", () => {
   assert.equal(canvasPrimaryMaterialAction(false, false), "preview");
   assert.equal(canvasPrimaryMaterialAction(true, false), "compose");
   assert.equal(canvasPrimaryMaterialAction(false, true), "compose");
-  assert.equal(canStartCanvasMarquee(0, false, false, false), true);
-  assert.equal(canStartCanvasMarquee(0, true, false, false), false);
-  assert.equal(canStartCanvasMarquee(0, false, false, true), false);
-  assert.equal(canStartCanvasMarquee(1, false, false, false), false);
+  assert.equal(canStartCanvasMarquee(0, false), true);
+  assert.equal(canStartCanvasMarquee(0, true), false);
+  assert.equal(canStartCanvasMarquee(1, false), false);
 });
 
 test("a small pointer wobble remains a click instead of moving the node", () => {
@@ -280,11 +279,11 @@ test("new cards prefer the current viewport without changing pan or zoom", () =>
   }
 });
 
-test("new cards preserve an available visible position and avoid existing cards", () => {
+test("new cards anchor at the visible top-left and avoid existing cards", () => {
   const viewport = { x: 0, y: 0, width: 600, height: 400 };
   const pan = { x: 0, y: 0 };
   const card = { x: 24, y: 24, width: 100, height: 100 };
-  assert.deepEqual(canvasPlacementForNewCard(card, viewport, pan, 1, []), { x: 24, y: 24 });
+  assert.deepEqual(canvasPlacementForNewCard(card, viewport, pan, 1, []), { x: 0, y: 0 }, "the provisional visible position is not kept");
   const obstacle = { x: 0, y: 0, width: 350, height: 400 };
   const position = canvasPlacementForNewCard(card, viewport, pan, 1, [obstacle]);
   assert.ok(position.x >= 366);
