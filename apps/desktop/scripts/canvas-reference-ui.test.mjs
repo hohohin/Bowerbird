@@ -30,27 +30,30 @@ try {
     const card = snapshot.nodes.find(n => agent ? n.kind === "agent_group" : n.kind === "prompt");
     const refs = snapshot.nodes.filter(n => n.id.includes("reference:"));
     assert.equal(refs.length, withReferences ? 4 : 0);
-    assert.ok(card.x < 10000, "the real component brings the new card into view");
+    // 脑图式落位：新卡保留参考图旁的临时位置（fixture 中 gen 20264/70、agent 20300/88），
+    // 不再锚定到可视区左上角；随后视图聚焦居中该卡。
+    assert.deepEqual([card.x, card.y], agent ? [20300, 88] : [20264, 70], "card keeps its reference-derived provisional position");
     if (withReferences) assert.equal(refs[0].x, card.x);
     assert.ok(refs.every(n => n.x >= card.x && n.x <= card.x + 500 && n.y > card.y && n.y < card.y + 1200));
     for (const old of initial.nodes) assert.deepEqual(snapshot.nodes.find(n => n.id === old.id), old);
     assert.equal(snapshot.view.zoom, 0.9);
     assert.equal(snapshot.view.focusedThreadId, 't');
     assert.equal(snapshot.view.viewMode, 'canvas');
-    // New cards anchor at the visible top-left (viewport x:24 y:72) instead of
-    // following the reference-derived provisional position or re-centering the
-    // view. In the agent flow the launch prompt is absorbed by its Run card, so
-    // the focused card is the one that carries the anchor.
-    const anchored = await page.evaluate(id => {
+    // The card keeps its provisional spot beside the references (mind-map
+    // layout) and the view refits to center it. In the agent flow the launch
+    // prompt is absorbed by its Run card, so the focused card is the group.
+    const centered = await page.evaluate(id => {
       const stage = document.querySelector('[data-canvas-stage]').getBoundingClientRect();
       const card = document.querySelector(`[data-canvas-node-id="${id}"]`).getBoundingClientRect();
-      return [card.x - stage.x, card.y - stage.y];
+      const composer = document.querySelector('.canvas-composer-host').getBoundingClientRect();
+      const bottom = Math.min(stage.height, composer.top - stage.top);
+      return [card.x + card.width / 2 - (stage.x + stage.width / 2),
+        card.y + card.height / 2 - (stage.y + 72 + (bottom - 96) / 2)];
     }, card.id);
-    assert.ok(Math.abs(anchored[0] - 24) < 2 && Math.abs(anchored[1] - 72) < 2, `focused new card anchors at the visible top-left: ${anchored}`);
+    assert.ok(centered.every(offset => Math.abs(offset) < 2), `focused card is centered: ${centered}`);
     if (agent) {
-      const stageBox = await page.evaluate(() => document.querySelector('[data-canvas-stage]').getBoundingClientRect());
       const refsBox = await page.locator('[data-canvas-node-id="agent-reference:launch:0:0"]').boundingBox();
-      assert.ok(refsBox && refsBox.y > anchored[1] && refsBox.x >= stageBox.x, "agent references follow below the anchored card");
+      assert.ok(refsBox && refsBox.y > card.y, "agent references follow below the focused card");
     }
     evidence.push({ agent, withReferences, card, references: refs, view: snapshot.view });
     await page.screenshot({ path: `.tmp/reference-placement/${agent ? "agent" : withReferences ? "ordinary" : "no-references"}.png` });
@@ -69,7 +72,7 @@ try {
   }
   assert.deepEqual(errors, []);
   await writeFile(".tmp/reference-placement/coordinates.json", JSON.stringify(evidence, null, 2));
-  console.log("PASS real CanvasWorkspace: ordinary + staged Agent card focus, visible top-left anchor, timeline return, unchanged old nodes, repeat and reload, persisted coordinates");
+  console.log("PASS real CanvasWorkspace: ordinary + staged Agent card focus, mind-map placement beside references, timeline return, unchanged old nodes, repeat and reload, persisted coordinates");
 } finally {
   await browser.close();
   await server.close();

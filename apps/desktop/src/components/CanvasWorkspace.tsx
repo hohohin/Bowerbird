@@ -3277,9 +3277,8 @@ export function CanvasWorkspace({
         persistGraphNodeGeometry(moved);
       }
     }
-    // The card is anchored inside the current viewport; only refit the view when
-    // placement failed and the provisional (reference-derived) position is off-screen.
-    const next = canvasViewForNewCard({ ...measuredCard, ...(placement ?? {}) }, viewport, panRef.current, zoomRef.current);
+    // 脑图式落位：卡片保留参考图旁的临时位置（可能在当前视口外），生成后聚焦居中该卡。
+    const next = canvasViewForNewCard({ ...measuredCard, ...(placement ?? {}) }, viewport, panRef.current, zoomRef.current, true);
     if (next) {
       panRef.current = next.pan;
       zoomRef.current = next.zoom;

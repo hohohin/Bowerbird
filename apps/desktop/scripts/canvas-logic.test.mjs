@@ -268,33 +268,38 @@ test("large control cards zoom out to fit and respect the canvas zoom minimum", 
   assert.equal(canvasViewForNewCard(card, { ...viewport, width: 0 }, { x: 0, y: 0 }, 1), null);
 });
 
-test("new cards prefer the current viewport without changing pan or zoom", () => {
+test("new cards keep the provisional mind-map position and the view focuses on them", () => {
   const card = { x: 9000, y: 40, width: 260, height: 148 };
   const viewport = { x: 24, y: 72, width: 752, height: 504 };
   const pan = { x: -500, y: 150 };
   for (const zoom of [0.5, 1, 2]) {
     const position = canvasPlacementForNewCard(card, viewport, pan, zoom, []);
-    assert.ok(position);
-    assert.equal(canvasViewForNewCard({ ...card, ...position }, viewport, pan, zoom), null);
+    assert.deepEqual(position, { x: 9000, y: 40 }, "the reference-derived provisional position is kept when free");
+    const next = canvasViewForNewCard({ ...card, ...position }, viewport, pan, zoom, true);
+    assert.ok(next, "the view refits to focus the card");
+    assert.equal(next.zoom, zoom);
+    assert.equal(next.pan.x + (card.x + card.width / 2) * next.zoom, 400);
+    assert.equal(next.pan.y + (card.y + card.height / 2) * next.zoom, 324);
   }
 });
 
-test("new cards anchor at the visible top-left and avoid existing cards", () => {
+test("a blocked provisional spot falls back to the visible canvas without overlaps", () => {
   const viewport = { x: 0, y: 0, width: 600, height: 400 };
   const pan = { x: 0, y: 0 };
   const card = { x: 24, y: 24, width: 100, height: 100 };
-  assert.deepEqual(canvasPlacementForNewCard(card, viewport, pan, 1, []), { x: 0, y: 0 }, "the provisional visible position is not kept");
+  assert.deepEqual(canvasPlacementForNewCard(card, viewport, pan, 1, []), { x: 24, y: 24 }, "the free provisional position is kept");
   const obstacle = { x: 0, y: 0, width: 350, height: 400 };
   const position = canvasPlacementForNewCard(card, viewport, pan, 1, [obstacle]);
   assert.ok(position.x >= 366);
   assert.equal(canvasViewForNewCard({ ...card, ...position }, viewport, pan, 1), null);
 });
 
-test("repeated generation uses separate visible spaces before falling back to focus", () => {
+test("repeated generation packs the visible canvas without overlaps before giving up", () => {
   const viewport = { x: 24, y: 72, width: 600, height: 350 };
   const pan = { x: 0, y: 0 };
   const card = { x: 10000, y: 10000, width: 200, height: 120 };
-  const occupied = [];
+  // 前一张卡已占住参考图旁的临时位置，后续同位新卡只能在可视区内避让。
+  const occupied = [{ ...card }];
   for (let i = 0; i < 20; i++) {
     const position = canvasPlacementForNewCard(card, viewport, pan, 1, occupied);
     if (!position) break;

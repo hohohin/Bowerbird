@@ -8,8 +8,8 @@ export interface CanvasRect extends CanvasPoint {
   height: number;
 }
 
-/** Anchor new cards at the visible top-left instead of their provisional spot;
- * never push a new card beyond the viewport. */
+/** New cards keep their provisional spot beside their reference images, like a
+ * mind-map branch; only a collision there falls back to the visible-canvas search. */
 export function canvasPlacementForNewCard(
   card: CanvasRect, viewport: CanvasRect, pan: CanvasPoint, zoom: number, obstacles: CanvasRect[],
 ): CanvasPoint | null {
@@ -22,6 +22,11 @@ export function canvasPlacementForNewCard(
   const visible = obstacles.filter((other) => other.x + other.width + gap > left
     && other.x - gap < right + card.width && other.y + other.height + gap > top
     && other.y - gap < bottom + card.height);
+  // 临时位置由后端按参考图派生，只要不被占就原样保留（脑图式落位），视口是否可见交给聚焦处理。
+  if (!obstacles.some((other) => card.x < other.x + other.width + gap && card.x + card.width + gap > other.x
+    && card.y < other.y + other.height + gap && card.y + card.height + gap > other.y)) {
+    return { x: card.x, y: card.y };
+  }
   const fits = (x: number, y: number) => x >= left && x <= right && y >= top && y <= bottom
     && !visible.some((other) => x < other.x + other.width + gap && x + card.width + gap > other.x
       && y < other.y + other.height + gap && y + card.height + gap > other.y);
