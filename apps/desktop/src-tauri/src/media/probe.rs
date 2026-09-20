@@ -1,5 +1,7 @@
 //! 探测媒体元数据（尺寸 / 大小 / 扩展名 / 时长）。
 //! Phase 2：图片走 image crate；视频走 ffprobe；SVG/PSD 暂不取尺寸（前端/占位渲染）。
+//! 视频探测已改为无外部依赖：mp4/mov/m4v 进程内解析 ISO BMFF（创作提交、生成入库
+//! 不再要求本机装有 ffprobe），解析不了的罕见变体及 webm/mkv/avi 仍回退 ffprobe。
 
 use std::path::Path;
 use super::tools::{self, Tool};
@@ -7,8 +9,6 @@ use super::tools::{self, Tool};
 use image::ImageReader;
 
 use crate::error::{AppError, AppResult};
-
-pub(crate) use super::tools::ensure_video_tools;
 
 #[derive(Debug, Clone)]
 pub struct ProbeMeta {
@@ -53,6 +53,59 @@ pub fn probe(path: &Path) -> AppResult<ProbeMeta> {
 }
 
 fn probe_video(path: &Path, ext: String, size: u64) -> AppResult<ProbeMeta> {
+    if matches!(ext.as_str(), "mp4" | "mov" | "m4v") {
+        match probe_iso_native(path, &ext, size) {
+            Ok(meta) => return Ok(meta),
+            Err(error) => tracing::debug!(
+                "native mp4 probe failed for {}: {error}; falling back to ffprobe",
+                path.display()
+            ),
+        }
+    }
+    probe_video_ffprobe(path, ext, size)
+}
+
+/// 纯 Rust 解析 ISO BMFF（mp4/mov/m4v）：mvhd 取时长，视频轨取宽高。
+fn probe_iso_native(path: &Path, ext: &str, size: u64) -> AppResult<ProbeMeta> {
+    let file = std::fs::File::open(path)?;
+    let len = file.metadata()?.len();
+    let reader = mp4::Mp4Reader::read_header(file, len)
+        .map_err(|e| AppError::Media(format!("mp4 解析失败：{e}")))?;
+    let track = reader
+        .tracks()
+        .values()
+        .filter(|t| matches!(t.track_type(), Ok(mp4::TrackType::Video)))
+        .max_by_key(|t| (t.width() as u64) * (t.height() as u64))
+        .or_else(|| {
+            reader
+                .tracks()
+                .values()
+                .find(|t| t.width() > 0 && t.height() > 0)
+        });
+    let mvhd = &reader.moov.mvhd;
+    // 版本 0 里「未知时长」记为全 1（u32::MAX），不能当有效值。
+    let raw_duration = if mvhd.duration >= u64::from(u32::MAX) {
+        0
+    } else {
+        mvhd.duration
+    };
+    let duration = raw_duration as f64 / mvhd.timescale as f64;
+    let (width, height) = track
+        .map(|t| (u32::from(t.width()), u32::from(t.height())))
+        .unwrap_or((0, 0));
+    if width == 0 || height == 0 || !duration.is_finite() || duration <= 0.0 {
+        return Err(AppError::Media("视频没有有效尺寸或时长".into()));
+    }
+    Ok(ProbeMeta {
+        ext: ext.to_string(),
+        width,
+        height,
+        size,
+        duration,
+    })
+}
+
+fn probe_video_ffprobe(path: &Path, ext: String, size: u64) -> AppResult<ProbeMeta> {
     let binary = tools::resolve(Tool::Ffprobe)?;
     let out = tools::command(binary)
         .args([
@@ -106,3 +159,7 @@ fn probe_video(path: &Path, ext: String, size: u64) -> AppResult<ProbeMeta> {
         duration,
     })
 }
+
+#[cfg(test)]
+#[path = "probe_tests.rs"]
+mod tests;

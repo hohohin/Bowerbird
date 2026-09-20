@@ -61,6 +61,8 @@ fast_image_resize = "3"
 # 注：img_hash 3.2 绑定 image 0.23，与本项目 0.25 冲突 —— 改自实现 dHash（media/phash.rs），去重够用。
 # 颜色提取（Phase 2 K-Means 提色，LAB 空间）
 palette = "0.7"
+# 视频元数据（宽高/时长）进程内解析 ISO BMFF：创作/入库不要求本机 ffprobe，webm/mkv/avi 等罕见格式仍回退 ffprobe
+mp4 = "0.14.0"
 
 # 网络（Phase 1 扩展采集下载用；rustls 避免系统 openssl 链接）
 #   multipart：OpenAI Images /v1/images/edits 带参考图生图（spike）需要。

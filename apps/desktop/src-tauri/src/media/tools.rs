@@ -307,29 +307,6 @@ pub(crate) fn resolve(tool: Tool) -> AppResult<&'static Path> {
         .as_path())
 }
 
-pub(crate) fn ensure_video_tools() -> AppResult<()> {
-    // Check both independently so a missing ffprobe does not imply ffmpeg is missing too.
-    let mut errors = Vec::new();
-    let mut found = Vec::new();
-    for tool in [Tool::Ffmpeg, Tool::Ffprobe] {
-        match resolve(tool).and_then(|path| {
-            validate(tool, path)?;
-            Ok(path)
-        }) {
-            Ok(path) => found.push(format!("{}：{}", tool.name(), path.display())),
-            Err(AppError::Media(message)) => errors.push(message),
-            Err(error) => errors.push(error.to_string()),
-        }
-    }
-    if errors.is_empty() {
-        return Ok(());
-    }
-    if !found.is_empty() {
-        errors.push(format!("已确认可用：{}", found.join("；")));
-    }
-    Err(AppError::Media(errors.join("；")))
-}
-
 #[cfg(test)]
 #[path = "tools_tests.rs"]
 mod tests;

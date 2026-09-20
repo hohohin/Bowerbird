@@ -38,12 +38,11 @@
 - 反推旧清单的结果管理、取消/耗时、复制及维度复用已实现；单图指令记忆、视频反推支持与流式结果显示仍未形成验收闭环。当前提交反推还会保存全局默认指令，与“保存为默认”提示存在差异，需单独修正。PSD 导入预览仍未实现，已有图层 PSD 导出不等于支持 PSD 素材预览。OCR/版式/灵感卡等保持延后。
 
 **近期里程碑（仅保留最近 3 条；历史详见 [进展归档](dev-doc/进展归档.md)）**
+> **视频创作链路去除本机 ffmpeg 硬依赖（2026-09-20，源码更新未打包）：** 修复“创作视频要求本机装有 ffmpeg/ffprobe”的体验问题：提交预检与孤儿任务取回不再做工具硬门禁（`ensure_video_tools` 已删除），mp4/mov/m4v 的宽高/时长改由纯 Rust `mp4` crate 进程内解析（`media/probe.rs`：mvhd 取时长、视频轨取宽高，解析失败或 webm/mkv/avi 罕见格式回退本机 ffprobe），参考视频 2–30 秒校验与生成/导入入库在干净机器全链路可用；缩略图失败时导入路径与生成路径统一落 `thumb_path: None`，库网格（MasonryGrid）对无缩略图视频渲染 `<video preload="metadata">` 首帧（与画板一致），非视频缺缩略图维持格式占位，已装 ffmpeg 的机器行为不变（缩略图照常抽取）。新增依赖 `mp4 0.14.0`（纯 Rust，传递仅 num-rational/num-bigint；Windows 离线构建需同步 Cargo.lock）。验证：Rust 全量 **384 passed / 0 failed / 6 ignored**（新增原生解析两测与 `generated_video_ingests_without_local_ffmpeg` 干净机器入库回归——显式失效 `BOWERBIRD_*_BINARY` 禁止回退搜索，夹具由 mp4 writer 离线生成）、TypeScript、explorer/layer-editor/layer-viewport/annotation-tools 与 explorer 逻辑回归通过；既有 ignored PATH 测试改为仅要求 ffmpeg。集合面板/生成参考条等对缺缩略图素材回退 store_path 的 `<img>` 行为未动（视频可能破图，预存边缘）。
+
 > **Mac 26.9.2001 更新包（2026-09-20，本机构建待上传）：** 收录 9 月 19/20 存档工作——本地分类向量精确匹配判官（jina-clip-v2 int8 可选安装）与可选云端最终校验 Jev、画板新卡锚定可视区左上角、视频卡独立样式、文本卡表格增强（标题编辑/整表 CSV 复制/行列尺寸拖拽）、创作模式框选、mac「打开所在文件夹」选中与方向键乱码修复；按同日序号规范定为 **26.9.2001**（> 线上 26.9.1901——1901 清单已由发布侧替换上线，2026-09-20 确认，护栏通过）。构建前 Rust 全量 **379 passed / 6 ignored**、画板纯逻辑 **127/127**、creation-editor/creation-marquee/notes/media/reference/local-classification 六组 UI 回归与 TypeScript 通过。`release.sh`（R2_SKIP_UPLOAD=1，本机缺 r2.env 凭据）完成签名构建，产物在 `macOS/dist/`：更新包 `Bowerbird_26.9.2001_aarch64.app.tar.gz` **86,344,811 bytes**，SHA-256 `de431a5fdc9da85cda13df2901df3ab54b1e075c2b793bb5fe077179d19931e0`；手动 DMG **86,881,253 bytes**，`852fe0edd1d2304c4761a583bf3f75f43f2f049c1b537acf6e0f139f7220cfa5`；清单 `darwin-aarch64.json`（R2 直下，SHA-256 `ed68d36aecf2f6c5ae3d2c18c670a4e71ff238af2e06ebd9f9f80ef8b27de46a`）。本机核验：包内版本/架构/arm64、内嵌 Mac 公钥与已发布 1802/1901 逐字节一致（key id `0b5a2efc4865664f`）、DMG `hdiutil verify`、minisign 主签名与全局签名、篡改字节拒绝、清单 signature 与 `.sig` 逐字节一致全部通过。**待恢复 R2 凭据后上传并替换官网清单**（交接件 `/tmp/bowerbird-release-26.9.2001/`：upload-r2.sh → 服务器 swap-manifest.sh，备份 26.9.1901）；本轮未运行真实应用内更新。细节见 `macOS/README.md` 与 DESKTOP-UPDATES.md「Mac 26.9.2001 发布侧核验」。
 
 > **本地分类匹配判断切换为 SigLIP2 系向量匹配（2026-09-19，本机实现+真实模型验证）：** 应用户澄清，引入 jina-clip-v2（SigLIP2 视觉塔 + jina-embeddings-v3 文本塔，ONNX int8 874MB）作为匹配阶段判官：安装向量包后逐标签判断改为「图像嵌入 × 标签文本/示例图嵌入」余弦相似度（≥0.27 且不低于排除示例），VLM 只负责发现与命名；未安装/加载失败/平台无运行库（Intel Mac）时回退原 VLM 判断。`ort` 2.0.0-rc.13 load-dynamic，onnxruntime 1.28.0 运行库随包经 SHA-256 固定下载（hf-mirror 优先），全链路本机完成不出机。21 张引导素材实测：矿泉水瓶产品图 top-1 即「矿泉水瓶」0.289（「女孩」跌出前五），真负例 <0.22，阈值 0.27 由此标定；生产代码真实模型测试 8.0s 通过。Rust **378 passed / 6 ignored**、TypeScript 与面板 UI 回归通过。Windows x64 清单已钉定未实机验证；int8 未与 fp16 对照、UI 截图对「产品图」0.328 为已知误报面，真实库观察待续。详见 [LOCAL-CLASSIFICATION.md](dev-doc/LOCAL-CLASSIFICATION.md)。
-
-
-> **本地分类引入可选云端最终校验 Jev（2026-09-19，源码更新未打包）：** 落地前一日调研决策：TypeSafe Jev（System One Model）作为 opt-in 最终闸门加入本地分类——识图始终本地（llama.cpp + 固定 Qwen3.5-0.8B 不变），出机仅图片文字描述与标签文本，默认关闭、面板配置 API Key；一次请求并行复核全部候选（noul 概率 ≥0.6 才写入），校验失败按资产失败处理、不写部分结果。附带修复发现抽样就地截断标签集导致示例匹配只遍历前八个的问题。本地分类回归 **24 passed / 4 ignored**（新增 Jev 阈值过滤/错误不放行/空描述跳过三测）、settings 回归 9 passed、TypeScript 与面板 UI 脚本（含云端校验保存断言）通过；未启用时行为与上版一致，阈值待真实 key + 引导素材标注集调优。详见 [LOCAL-CLASSIFICATION.md](dev-doc/LOCAL-CLASSIFICATION.md)。
 
 
 
@@ -52,6 +51,8 @@
 ---
 
 ## 关键约定
+
+**2026-09-20 视频创作零 ffmpeg 依赖：** 桌面创作视频（即梦/Cloud 提交、参考校验、生成入库、画板与库内展示）不要求本机安装 ffmpeg/ffprobe——mp4/mov/m4v 元数据由 `mp4` crate 进程内解析，ffprobe 仅作罕见格式（webm/mkv/avi）与解析失败时的回退，缺失时报既有引导错误；ffmpeg 降级为可选增强（视频缩略图抽帧，失败落 `thumb_path: None`，前端视频素材渲染 `<video preload="metadata">` 首帧）。不随安装包内置、不按需下载 ffmpeg（sidecar 方案因体积与 LGPL/GPL 合规否决，首用下载方案留作后续罕见格式导入的备选）。
 
 **2026-09-20 画板新卡左上角锚定、视频卡独立样式与文本卡片表格增强：** ①新生成卡片（普通生成指令卡/Agent 卡）不再按引用图位置落位：前端测量挂载后将卡片锚定到当前可视区域左上角（屏幕 x24/y72，被占时按视口/障碍边扫描就近避让），仅在视口放不下时才沿用后端临时位置并缩放聚焦，不再强制居中改视角；参考图仍随卡排在卡下方、输出图在指令卡右侧。`canvasPlacementForNewCard` 契约改为左上角优先，引用落位 UI 回归同步改判锚定。②视频卡片与图片卡样式区分：asset 节点按 storePath 判视频加 `is-video`，紫色 2px 描边、深色底、专属 ▶ 徽标与名称栏渐变，素材组内视频缩略图同紫调（media 回归断言类与徽标）。③文本卡表格整表复制为 CSV（RFC 4180 转义），按钮并入原行距工具组（组名改「文本工具」，气泡不显示）。④表格行高/列宽拖拽自由调节：note payload 新增可选 `column_widths`/`row_heights` 正数权重（schema 仍为 1，Rust 契约校验维度一致且为正、非法拒收），插删行列同步维护权重，边界手柄与插删控件按权重定位且两轴手柄错位避让命中冲突，Escape 取消拖拽不落盘。⑤文本卡标题可编辑（T 图标右侧输入框，payload 可选 `title`，重开保留；气泡不显示标题）。验证：画板纯逻辑 127/127（新增 CSV/权重两测）、reference/notes/bubble/section/marquee/media/transparency/snap/layers/draft UI 回归、Rust 379 passed / 6 ignored（新增 note 契约一测）、TypeScript 与 production build 通过；`canvas-arrangement-ui` 与 `canvas-selection-to-board-ui` 在改动前 HEAD 即因「整理」菜单等待失败，属既有问题未处理。
 
@@ -319,6 +320,10 @@ DSH 当前执行遵循约定 50/51：按需加载领域 Skill，由 Agent 决定
 **画板选择与主动整理（2026-09-06）**：Ctrl/Command + 点击可追加或取消节点选择，Ctrl/Command 框选保留已有选择。节点右键“整理”以当前所选节点为起点（右键未选节点则只取该节点），沿连接方向收集当前可见的后续卡片；素材组成员和 Agent 隐藏提示卡映射到可见容器。按连接层级对齐、留出间距，并整体避开未参与整理的卡片；不移动上游或无关卡片。整理后整组选中，节点/素材组坐标沿用现有画板写入队列持久化；不更改线程、连接、素材归属或执行记录。
 
 ## 踩坑记录
+
+### mp4 crate 测试夹具空 SPS 触发 AvcCBox 越界 panic（2026-09-20）
+
+用 `Mp4Writer` 离线造 MP4 测试夹具时，`AvcConfig::default()` 的空 `seq_param_set` 会让 `AvcCBox::new` 读 `sps[1..=3]` 直接 index out of bounds panic（mp4 0.14.0），与被测逻辑无关且发生在 crate 内部。夹具需给 ≥4 字节占位 SPS（如 `0x67,0x42,0x00,0x1e`）与 ≥1 字节 PPS（`0x68`）。
 
 ### mac「打开所在文件夹」不选中素材文件（2026-09-19）
 

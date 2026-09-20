@@ -1378,7 +1378,6 @@ pub async fn jimeng_retrieve_orphan(
         if !matches!(task.status.as_str(), "failed" | "cancelled") {
             return Err(AppError::Other("该视频正在查询或已经入库，无需重复取回".into()));
         }
-        crate::media::probe::ensure_video_tools()?;
         job.status = "querying".into();
         job.error = None;
         if !crate::core::task_queue::Task::claim_video_retrieval(&db, &job)? {

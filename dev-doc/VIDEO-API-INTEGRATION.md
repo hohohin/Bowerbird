@@ -108,7 +108,7 @@ node apps/cloud/scripts/video-generation-db.test.mjs <isolated-PGlite-module-pat
 cargo test --lib --manifest-path apps/desktop/src-tauri/Cargo.toml
 ~~~
 
-Windows 内存不足时仅构建测试目标并关闭该目标 debug info：cargo rustc --lib --profile test --offline -j 1 --manifest-path apps/desktop/src-tauri/Cargo.toml -- -C debuginfo=0，再执行产物。真实 MP4 测试需 ffmpeg/ffprobe 可用。新增测试依赖不进入应用 package.json/lock。
+Windows 内存不足时仅构建测试目标并关闭该目标 debug info：cargo rustc --lib --profile test --offline -j 1 --manifest-path apps/desktop/src-tauri/Cargo.toml -- -C debuginfo=0，再执行产物。真实 MP4 入库/海报抽取的 ignored 测试仅需 ffmpeg（生成夹具与抽帧）。ffprobe 自 2026-09-20 起不再是桌面链路依赖：mp4/mov/m4v 的宽高/时长由 `mp4` crate 进程内解析（`media/probe.rs`），提交预检/入库不再做工具门禁，仅 webm/mkv/avi 等罕见格式或解析失败时回退本机 ffprobe。新增测试依赖不进入应用 package.json/lock。
 
 ## 7. 真实调用记录与未完成项
 

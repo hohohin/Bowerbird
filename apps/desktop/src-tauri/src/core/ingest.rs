@@ -143,7 +143,9 @@ fn ingest_file_with_dedup(paths: &LibraryPaths, db: &Database, source: &Path, ap
         ext: Some(meta.ext),
         origin_path: Some(source.to_string_lossy().into_owned()),
         store_path: Some(store_path.to_string_lossy().into_owned()),
-        thumb_path: Some(thumb_path.to_string_lossy().into_owned()),
+        // 与 ingest_generated 一致：缩略图生成失败（如本机无 ffmpeg）时落 None，
+        // 前端按缺失处理（视频渲染首帧）而不是指向不存在的文件。
+        thumb_path: thumb_path.is_file().then(|| thumb_path.to_string_lossy().into_owned()),
         size: Some(meta.size as i64),
         width: Some(meta.width as i64),
         height: Some(meta.height as i64),
@@ -693,7 +695,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires ffmpeg and ffprobe on PATH; uses generated local fixture, no provider"]
+    #[ignore = "requires ffmpeg on PATH (fixture generation + poster extraction); no provider"]
     fn generated_video_ingest_probes_short_clip_and_real_poster() {
         let (_tmp, paths, db) = setup();
         let source = paths.root.join("short.mp4");
@@ -716,6 +718,62 @@ mod tests {
         std::fs::write(&bad, b"not a video").unwrap();
         assert!(ingest_generated(&paths, &db, &bad, Some("video-session"), "jimeng").is_err());
         assert_eq!(db.count_assets(None).unwrap(), 1);
+    }
+
+    /// 干净机器回归：本机没有 ffmpeg/ffprobe（显式指向不存在路径，禁止回退搜索）时，
+    /// 生成视频仍能完成入库——宽高/时长来自进程内 mp4 解析，缩略图缺失落 None。
+    #[test]
+    fn generated_video_ingests_without_local_ffmpeg() {
+        std::env::set_var("BOWERBIRD_FFMPEG_BINARY", "/nonexistent/bb-test-ffmpeg");
+        std::env::set_var("BOWERBIRD_FFPROBE_BINARY", "/nonexistent/bb-test-ffprobe");
+        let (_tmp, paths, db) = setup();
+        let source = paths.root.join("clean-machine.mp4");
+        let file = std::fs::File::create(&source).unwrap();
+        let mut writer = mp4::Mp4Writer::write_start(
+            file,
+            &mp4::Mp4Config {
+                major_brand: (*b"isom").into(),
+                minor_version: 512,
+                compatible_brands: vec![(*b"isom").into(), (*b"mp41").into()],
+                timescale: 1000,
+            },
+        )
+        .unwrap();
+        writer
+            .add_track(&mp4::TrackConfig {
+                track_type: mp4::TrackType::Video,
+                timescale: 1000,
+                language: "und".to_string(),
+                media_conf: mp4::MediaConfig::AvcConfig(mp4::AvcConfig {
+                    width: 320,
+                    height: 180,
+                    seq_param_set: vec![0x67, 0x42, 0x00, 0x1e],
+                    pic_param_set: vec![0x68],
+                }),
+            })
+            .unwrap();
+        writer
+            .write_sample(
+                1,
+                &mp4::Mp4Sample {
+                    start_time: 0,
+                    duration: 5000,
+                    rendering_offset: 0,
+                    is_sync: true,
+                    bytes: mp4::Bytes::new(),
+                },
+            )
+            .unwrap();
+        writer.write_end().unwrap();
+
+        let asset = ingest_generated(&paths, &db, &source, Some("video-session"), "jimeng").unwrap();
+        assert_eq!((asset.width, asset.height), (Some(320), Some(180)));
+        assert!((asset.duration.unwrap() - 5.0).abs() < 1e-6);
+        assert_eq!(asset.thumb_path, None);
+        assert_eq!(db.count_assets(None).unwrap(), 1);
+
+        std::env::remove_var("BOWERBIRD_FFMPEG_BINARY");
+        std::env::remove_var("BOWERBIRD_FFPROBE_BINARY");
     }
 
     #[test]

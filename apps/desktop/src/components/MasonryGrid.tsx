@@ -4,6 +4,7 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { Check, ImagePlus, Layers, SearchX } from "lucide-react";
 import { useStore } from "../store";
 import { api } from "../lib/api";
+import { isVideoPath } from "../lib/videoGeneration";
 import { setDragAssets } from "../lib/dragPayload";
 import type { Asset } from "../lib/types";
 import type { LibraryProjectGroup } from "../lib/libraryView";
@@ -150,8 +151,15 @@ const Thumb = memo(function Thumb({
     return () => obs.disconnect();
   }, [shown.thumb_path]);
 
+  // 没有缩略图的视频直接渲染原视频首帧（本机没有 ffmpeg 也能生成/导入视频并看到画面，
+  // 与画板节点的视频渲染一致）；其余无缩略图格式（SVG 之外解码失败等）维持占位。
+  const videoSrc =
+    !shown.thumb_path && shown.store_path && isVideoPath(shown.store_path)
+      ? convertFileSrc(shown.store_path)
+      : null;
+
   // 没有缩略图的占位（非图片格式或解码失败）。
-  if (!shown.thumb_path) {
+  if (!shown.thumb_path && !videoSrc) {
     if (addingToCollection) return <button type="button" data-asset-id={shown.id}
       aria-label={`${shown.name}${selected ? "，已选中" : ""}`} aria-pressed={selected}
       className={`mb-2 flex h-32 w-full items-center justify-center rounded-md border-2 bg-panel2 text-xs ${selected ? "collection-add-selected" : "border-transparent text-muted"}`}
@@ -499,14 +507,26 @@ const Thumb = memo(function Thumb({
           </button>
         </>
       )}
-      <img
-        ref={imgRef}
-        className="block w-full bg-panel2"
-        style={{ aspectRatio: ratio }}
-        loading="lazy"
-        alt={shown.name}
-        draggable={false}
-      />
+      {videoSrc ? (
+        <video
+          src={videoSrc}
+          className="block w-full bg-panel2"
+          style={{ aspectRatio: ratio }}
+          preload="metadata"
+          muted
+          playsInline
+          aria-label={shown.name}
+        />
+      ) : (
+        <img
+          ref={imgRef}
+          className="block w-full bg-panel2"
+          style={{ aspectRatio: ratio }}
+          loading="lazy"
+          alt={shown.name}
+          draggable={false}
+        />
+      )}
       {colors.length > 0 && (
         <div className="flex h-2 w-full">
           {colors.map((c, i) => (

@@ -94,10 +94,10 @@ pub(crate) fn arguments(req: &CodexRequest, options: &VideoOptions) -> AppResult
     Ok(args)
 }
 
-/// 在有计费副作用的提交前发现本机依赖/失效引用，避免生成后才无法入库。
+/// 在有计费副作用的提交前发现失效引用，避免生成后才无法入库。
+/// 视频元数据（宽高/时长）由进程内 mp4 解析提供，不再要求本机装有 ffmpeg/ffprobe。
 pub(crate) fn preflight(req: &CodexRequest, options: &VideoOptions) -> AppResult<()> {
     arguments(req, options)?;
-    crate::media::probe::ensure_video_tools()?;
     let mut video_duration = 0.0;
     for path in &req.reference_images {
         if !path.is_file() {
