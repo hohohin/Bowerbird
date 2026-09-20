@@ -1905,6 +1905,10 @@ export const useStore = create<State>((set, get) => {
       if (error) throw new Error(error);
     }
     const sentRatio = videoOptions ? videoRatio(videoOptions, ratio) : ratio?.trim() ? ratio : autoRatioFromReferences(references);
+    // 生成数量（1–4）：仅即梦 / Cloud 生图引擎；其余 provider 固定 1（后端同样校验）。
+    const count = media === "image" && (prov === "jimeng" || prov === "dreamina" || prov.startsWith("bowerbird-cloud"))
+      ? Math.min(4, Math.max(1, Math.round(generation?.count ?? 1)))
+      : 1;
     const selectedVisualProfileId = visualProfileId === undefined
       ? get().activeVisualProfileId
       : visualProfileId;
@@ -1954,7 +1958,7 @@ export const useStore = create<State>((set, get) => {
       await api.codexCreateImage({
         jobId,
         prompt: sentPrompt,
-        media, videoOptions,
+        media, videoOptions, count,
         promptRaw: rawPrompt,
         // 借用维度源图 id（图 chip 被删、只借维度）：随 generation_meta 落库，复用时回绑车牌。
         dimensionSources: dimensionSources?.map((a) => a.id) ?? [],
@@ -2013,6 +2017,10 @@ export const useStore = create<State>((set, get) => {
     const media = opts?.generation?.media ?? job.media ?? "image";
     const videoOptions = media === "video" ? opts?.generation?.videoOptions ?? job.videoOptions : null;
     const sentRatio = videoOptions ? videoRatio(videoOptions, opts?.ratio ?? job.lastRatio) : opts?.ratio?.trim() ? opts.ratio : null;
+    // 生成数量（1–4）：仅即梦 / Cloud 生图引擎；其余 provider 固定 1（后端同样校验）。
+    const count = media === "image" && (prov === "jimeng" || prov === "dreamina" || prov.startsWith("bowerbird-cloud"))
+      ? Math.min(4, Math.max(1, Math.round(opts?.generation?.count ?? 1)))
+      : 1;
     if (media === "video") {
       if ((prov !== "jimeng" && !prov.startsWith("bowerbird-cloud-video_seedance25_")) || !videoOptions) throw new Error("请选择方舟或即梦 Seedance 2.5 视频参数");
       const error = videoInputError(videoOptions, (exactRefs ?? reviseRefs).map((store_path) => ({ store_path, duration: null })), sentRatio, prov);
@@ -2053,7 +2061,7 @@ export const useStore = create<State>((set, get) => {
       await api.codexCreateImage({
         jobId,
         prompt: sentText,
-        media, videoOptions,
+        media, videoOptions, count,
         promptRaw: opts?.rawPrompt ?? null,
         referenceImages: exactRefs ?? reviseRefs,
         referenceNodeIds: opts?.referenceNodeIds,

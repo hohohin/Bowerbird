@@ -30,6 +30,10 @@ pub struct CodexRequest {
     /// 续轮（resume）加 ULID 后缀区分（见 BowerbirdCloudProvider::generate_image）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub job_id: Option<String>,
+    /// 图片生成张数（1–4）：即梦映射 `--generate_num`；Cloud 逐张提交独立幂等键
+    /// 的云任务并合并结果；codex / 反推 / 视频不读此字段（None = 单张）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generate_num: Option<u32>,
 }
 
 /// 单次调用结果。

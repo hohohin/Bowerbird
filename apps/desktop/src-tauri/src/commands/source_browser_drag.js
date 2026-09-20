@@ -12,13 +12,24 @@
     }
     pressed = null;
   }
+  function visibleImage(element) {
+    if (!(element instanceof HTMLImageElement)) return false;
+    const style = window.getComputedStyle(element);
+    if (style.visibility === "hidden" || parseFloat(style.opacity) <= 0) return false;
+    const rect = element.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  }
   function imageAtPointer(event) {
     const direct = event.composedPath().find(node => node?.tagName === "IMG");
     if (direct) return direct;
-    // Cards often put a link or transparent div above the image. Resolve only
-    // an image under the pointer in that card, never the first image on the page.
     const target = event.target;
     if (!(target instanceof Element) || target.closest("button,input,textarea,select,[contenteditable=true]")) return null;
+    // Note pages with stacked carousels (e.g. Xiaohongshu) keep every slide
+    // under the pointer; pick the topmost visible image instead of giving up.
+    const topImage = document.elementsFromPoint(event.clientX, event.clientY).find(visibleImage);
+    if (topImage) return topImage;
+    // Cards often put a link or transparent div above the image. Resolve only
+    // an image under the pointer in that card, never the first image on the page.
     for (let card = target, depth = 0; card && card !== document.body && depth < 4; card = card.parentElement, depth++) {
       const images = [...card.querySelectorAll("img")].filter(image => {
         const rect = image.getBoundingClientRect();
@@ -26,7 +37,7 @@
           && event.clientY >= rect.top && event.clientY < rect.bottom;
       });
       if (images.length === 1) return images[0];
-      if (images.length > 1) return null;
+      if (images.length > 1) return images.filter(visibleImage).pop() || null;
     }
     return null;
   }

@@ -300,6 +300,7 @@ mod tests {
             context_prompts: vec![],
             ratio: Some("16:9".into()),
             job_id: None,
+            generate_num: None,
         }
     }
     fn options(kind: &str) -> VideoOptions {

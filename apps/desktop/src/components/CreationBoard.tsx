@@ -28,6 +28,7 @@ import {
 import type { CreativePromptLoadRequest } from "../lib/creativeLaunch";
 import { RATIOS } from "./creation/ratios";
 import { RatioSelect } from "./creation/RatioSelect";
+import { CountSelect } from "./creation/CountSelect";
 import { ProviderSelect } from "./creation/ProviderSelect";
 import { VisualProfileSelect } from "./creation/VisualProfileSelect";
 import { BoardChipPreview } from "./creation/BoardChipPreview";
@@ -223,6 +224,12 @@ export function CreationBoard({
     setGeneration((current) => ({ ...current, ratio: v }));
     saveBoardRatio(v);
   };
+  // 生成数量（1–4）：仅即梦 / Cloud 生图引擎支持并显示；codex 沿用提示词驱动张数。
+  const [genCount, setGenCount] = useState<number>(() => initialDraft?.generation?.count ?? 1);
+  const selectGenCount = (v: number) => {
+    setGenCount(v);
+    setGeneration((current) => ({ ...current, count: v }));
+  };
   // 创作板「用途」（preset）登记：只需用途名，body 取当前编辑框内容
   const [creatingPreset, setCreatingPreset] = useState(false);
   const [newName, setNewName] = useState("");
@@ -260,6 +267,9 @@ export function CreationBoard({
   const agentZOn = !isVideo && (settings?.agent_z_mode_enabled ?? false);
   const agentGOn = !isVideo && (settings?.agent_g_mode_enabled ?? false);
   const agentDsOn = !isVideo && (settings?.agent_ds_mode_enabled ?? false);
+  // 数量选择器只在即梦 / Cloud 生图（且非 Agent 模式）下显示。
+  const countSupported = !isVideo && !cloudAgentMode
+    && (activeGenProvider === "jimeng" || isCloudProvider(activeGenProvider));
   const activePreset = useMemo(
     () => presets.find((p) => p.id === activePresetId) ?? null,
     [presets, activePresetId]
@@ -730,7 +740,8 @@ export function CreationBoard({
         relation: parentAsset ? "continued" : null,
       } : undefined,
       true,
-      isVideo ? { media: "video", videoOptions: { ...videoOptions }, videoChannel: generation.videoChannel } : { media: "image" },
+      isVideo ? { media: "video", videoOptions: { ...videoOptions }, videoChannel: generation.videoChannel }
+        : { media: "image", ...(countSupported && genCount > 1 ? { count: genCount } : {}) },
     );
     if (!startedGeneration.accepted) {
       if (isCurrentSubmission()) notifyError(startedGeneration.error, "生成任务启动失败，请重试");
@@ -1034,6 +1045,7 @@ export function CreationBoard({
           {/* Cloud Agent 仍接受显式比例；仅终端型 Agent 不走 Bowerbird 生图参数。 */}
           <div className={`${agentZMode || agentGMode || agentDsMode ? "pointer-events-none opacity-40" : ""}`}>
             {!isVideo && <RatioSelect value={ratio} onChange={selectRatio} />}
+            {countSupported && <CountSelect value={genCount} onChange={selectGenCount} />}
           </div>
           <VisualProfileSelect
             value={activeVisualProfileId}

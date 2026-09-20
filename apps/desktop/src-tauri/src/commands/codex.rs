@@ -233,6 +233,7 @@ pub async fn codex_generate_prompt_for_asset(
         context_prompts: vec![],
         ratio: None,
         job_id: None,
+        generate_num: None,
     };
     let p = resolve_entitled_understand_provider(
         &entitlement,
@@ -291,6 +292,7 @@ pub async fn codex_describe_asset(
         context_prompts: vec![],
         ratio: None,
         job_id: None,
+        generate_num: None,
     };
     let p = resolve_understand_provider_with_choice(
         &entitlement,
@@ -500,6 +502,8 @@ pub async fn codex_create_image(
     exact_references: Option<bool>,
     media: Option<String>,
     video_options: Option<crate::codex::types::VideoOptions>,
+    // 图片生成张数（1–4）；仅即梦 / Cloud 生图引擎支持，视频与其余 provider 固定 1。
+    count: Option<u32>,
     session_id: Option<String>,
     ratio: Option<String>,
     provider: Option<String>,
@@ -526,6 +530,18 @@ pub async fn codex_create_image(
     }
     if !is_video && video_options.is_some() {
         return Err(AppError::Other("图片生成不能携带视频参数".into()));
+    }
+    let count = count.unwrap_or(1);
+    let multi_image_provider = matches!(provider.as_deref(), Some("jimeng" | "dreamina"))
+        || (!is_video && crate::codex::is_cloud_generation_provider(provider.as_deref()));
+    if is_video && count > 1 {
+        return Err(AppError::Other("视频生成暂不支持一次多张".into()));
+    }
+    if count > 4 {
+        return Err(AppError::Other("每次最多生成 4 张图片".into()));
+    }
+    if count > 1 && !multi_image_provider {
+        return Err(AppError::Other("当前生成引擎不支持多张，请改用即梦或 Bowerbird Cloud".into()));
     }
     if project_id.is_none() || thread_id.is_none() {
         return Err(AppError::Other(
@@ -716,6 +732,7 @@ pub async fn codex_create_image(
         context_prompts: vec![],
         ratio: ratio.clone(),
         job_id: Some(if cloud_video { crate::codex::bowerbird_cloud::video_idempotency_key(&job_id, &turn_key) } else { job_id.clone() }),
+        generate_num: if count > 1 { Some(count) } else { None },
     };
 
     if let Some(options) = &video_options {

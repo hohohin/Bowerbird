@@ -462,6 +462,8 @@ export const api = {
   codexCreateImage: (req: {
     media?: import("./videoGeneration").GenerationMedia;
     videoOptions?: import("./videoGeneration").VideoOptions | null;
+    /** 图片生成张数（1–4）；仅即梦 / Cloud 生图引擎支持。 */
+    count?: number;
     prompt: string;
     referenceImages: string[];
     referenceNodeIds?: Array<string | null>;
@@ -488,6 +490,7 @@ export const api = {
     invoke<string>("codex_create_image", {
       media: req.media ?? "image",
       videoOptions: req.videoOptions ?? null,
+      count: req.count ?? 1,
       prompt: req.prompt,
       referenceImages: req.referenceImages,
       referenceNodeIds: req.referenceNodeIds ?? [],

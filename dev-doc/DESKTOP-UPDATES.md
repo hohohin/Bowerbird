@@ -4,17 +4,34 @@
 
 ## 当前基线
 
-最近公网验收：**2026-09-18 23:57:06（北京时间）**。Windows 已更新至 26.9.1803；M 系列 Mac 保持 26.9.1802。
+最近公网验收：**2026-09-19 23:08:25（北京时间）**。Windows 为 26.9.1803；M 系列 Mac 已更新至 26.9.1901。
 
 | 平台 | channel | 已发布版本 | 更新入口 / 清单 / 签名包 | 尚未完成 |
 |---|---|---|---|---|
 | Windows x64 | `windows-x86_64` | 26.9.1803 | 307 / 200 / 完整下载与验签通过 | 真实旧版到新版的安装、重启、登录重置和素材保留验收 |
-| Apple Silicon（M 系列）Mac | `darwin-aarch64` | 26.9.1802 | 307 / 200 / 完整下载与验签通过 | 原生替换与重启验收；Developer ID 签名及 Apple 公证 |
+| Apple Silicon（M 系列）Mac | `darwin-aarch64` | 26.9.1901 | 307 / 200 / 完整下载与验签通过 | 原生替换与重启验收；Developer ID 签名及 Apple 公证 |
 | Intel Mac | `darwin-x86_64` | 未发布 | 307 / 404 / 无对应包 | 构建、签名、上传清单和安装包，再做实机验收 |
 
 用户已确认本次只提供 M 系列 Mac 包。不能把 ARM64 包放进 Intel 清单，也不能把 Mac 更新签名当成 Apple 公证。2026-09-18 16:55 官网首页已按用户要求开放 M 系列 Mac 26.9.1802 DMG 下载；Windows 下载同步显示 26.9.1802。后续按用户要求移除首页下载区及 FAQ 的签名、公证及测试版提示，包的技术验收状态仍按本页记录。
 
-**Windows 26.9.18 / 26.9.1802 可通过设置发现 26.9.1803；Mac 最新仍为 26.9.1802。** 已上线的旧客户端需先手动检查或下载安装含启动检测的新包；仅更改服务器清单不会给旧客户端增加启动行为。同版本检查显示“当前已是最新版本”，后续更新须提高实际包版本。
+**Windows 26.9.18 / 26.9.1802 可通过设置发现 26.9.1803；Mac 旧版可通过设置发现 26.9.1901。** 已上线的旧客户端需先手动检查或下载安装含启动检测的新包；仅更改服务器清单不会给旧客户端增加启动行为。同版本检查显示“当前已是最新版本”，后续更新须提高实际包版本。
+
+## Mac 26.9.1901 发布记录
+
+2026-09-19 23:08:25（北京时间）完成公网验收。用户已将新包、签名和清单上传至 R2；本次将官网 Mac 清单及两份首页的 DMG 链接/版本同步为 26.9.1901。发布说明包含启动检查更新、账号升级直达权益/兑换、仅开放设计师路线，以及本地分类人工示例匹配与重新扫描改进。本轮验证发布产物及链路，未在 Mac 原生执行这些功能。
+
+| 产物 | 大小（bytes） | SHA-256 |
+|---|---:|---|
+| Bowerbird_26.9.1901_aarch64.app.tar.gz | 85,893,526 | af077004a66804fe9f16c79ecf35828b3acdfd5b00df48c64090b29b5c3ec06f |
+| Bowerbird_26.9.1901_aarch64-updater-installer.dmg | 86,439,465 | f1d59df9ed63c6c9ff7a7eb15fb922a037e960103e863cf178247cc3af2035bf |
+
+两个文件继续由 R2 mac_package/ 托管；本次未新增官网大文件镜像，旧镜像仍保留。已核对完整下载与上传方 SHA-256、清单签名与 .sig 一致、旧 Mac 公钥验签和篡改拒绝；包内 Info.plist 为 26.9.1901、可执行文件为 ARM64，嵌入原 Mac 公钥及官网更新入口，未混入 Windows 公钥。官网服务器独立完整下载更新包的哈希一致。本机首次更新包下载在 300 秒达到超时，收到 65,238,528 bytes 后续传完成；当前客户端下载超时仍为 300 秒，慢网络下载失败重试的风险仍在，不能据验签通过声称所有网络均可一次更新成功。
+
+现役目录：/opt/bowerbird/website-releases/20260919-mac-26.9.1901；回滚目录：/opt/bowerbird/website-releases/20260918-26.9.1803。从现役站点复制候选，仅替换 Mac 清单和两个 HTML 的三处 Mac 版本引用，候选验收后原子切换。server.mjs、环境配置和 Windows 清单逐字节保持；Windows 清单 SHA-256 为 f090fa3f7dbf9908c13cad6c58bcfb44e7671a539772f27337898798919ba2fd。未部署工作区其他官网、桌面、Worker 或数据库修改。回滚会将 Mac 检查与首页恢复至 26.9.1802，不影响 Windows 26.9.1803，亦不会降级已升级客户端。
+
+候选、正式服务及公网 GET/HEAD、307/no-store、Mac 200 清单、首页链接/静态资源、健康、Windows 清单不变和旧包保留验证通过。Intel 清单仍为 404。本轮 git fetch origin mac 仍停留 13c7280，该分支旧文档不能作为新版构建证据；版本、公钥和签名以实际产物核验为准，Mac 同事仍需补齐 26.9.1901 源码提交/构建记录，以及旧版替换、重启、启动提示和数据保留实机验收。Apple 签名/公证本轮未复验，不把 updater 验签当成公证。
+
+本地证据：.tmp/release-mac-26.9.1901/ 的 artifact-report.json、package-inspection.json、public-report.json、清单、签名、包、部署/回滚与验证脚本；服务器交接目录：/tmp/bowerbird-release-mac-26.9.1901/，包含候选与正式验证报告。首次候选检查将健康端点正常的 204 误期望为 200，修正为接受 HTTP 成功状态后通过；失败发生在生产切换前。
 
 ## Windows 26.9.1803 发布记录
 
@@ -43,7 +60,7 @@
 
 ## 客户端行为与代码入口
 
-**2026-09-18 启动检测（Windows 26.9.1803 已发布，Mac 新包待构建）：** 应用初始化完成后，每次启动在后台检查一次。只有发现更高版本才弹出“发现新版本”，提供“立即更新”和“暂不更新”；前者开始下载，下载与验签完成后由用户确认“安装并重启”。跳过、关闭或 Esc 只影响本次运行，下次启动重新检查；已是最新版或自动检查失败时不弹窗，手动检查失败仍显示原因。不定时轮询、不自动下载或强制安装。
+**启动检测（Windows 26.9.1803 已发布；Mac 26.9.1901 发布说明包含此功能，原生验收待补）：** 应用初始化完成后，每次启动在后台检查一次。只有发现更高版本才弹出“发现新版本”，提供“立即更新”和“暂不更新”；前者开始下载，下载与验签完成后由用户确认“安装并重启”。跳过、关闭或 Esc 只影响本次运行，下次启动重新检查；已是最新版或自动检查失败时不弹窗，手动检查失败仍显示原因。不定时轮询、不自动下载或强制安装。
 
 检查与提醒状态只保存在本次会话，避免 React StrictMode、组件重挂载触发重复请求。若设置、素材库迁移、引导等对话框已打开，先静默检查并等待它们关闭后提醒。提醒内复用 `AppUpdateCard` 的进度、验签、任务与保存保护；关闭提醒后可在设置继续处理。
 
@@ -83,9 +100,9 @@ Mac 专属文件当前不在 dev 工作树；应从 Mac 分支接续，不能因
 清单包含 `version`、`notes`、`pub_date`、`platforms[channel].url` 和 `platforms[channel].signature`。`signature` 是 `.sig` 文件的文本内容，不是签名文件 URL。包必须是带版本及架构的不可变 HTTPS 文件，不能覆盖已发布的同名包。
 
 - Windows 当前包：[Bowerbird_26.9.1803_x64-setup.exe](https://bowerbird.cn/downloads/Bowerbird_26.9.1803_x64-setup.exe)。官网手动下载和更新清单已同步，后续仍须分别发布及核验。
-- Mac 当前更新包：[R2 ARM64 .app.tar.gz](https://pub-5e4c00c218cd4682b622cbab5e58563e.r2.dev/mac_package/Bowerbird_26.9.1802_aarch64.app.tar.gz)。这是线上清单的实际下载地址，必须持续保留；R2 的 `mac_package/` 目录首页不提供可靠文件列表，核验具体文件 URL。
-- Mac 官网镜像：[ARM64 .app.tar.gz](https://bowerbird.cn/downloads/Bowerbird_26.9.1802_aarch64.app.tar.gz)，同目录提供 `.sig`；各版本 SHA-256 见发布记录。
-- Mac 当前首页手动安装包：[26.9.1802 ARM64 DMG](https://pub-5e4c00c218cd4682b622cbab5e58563e.r2.dev/mac_package/Bowerbird_26.9.1802_aarch64-updater-installer.dmg)，未签名、未公证测试版；DMG 不作为 updater 安装包。
+- Mac 当前更新包：[R2 ARM64 .app.tar.gz](https://pub-5e4c00c218cd4682b622cbab5e58563e.r2.dev/mac_package/Bowerbird_26.9.1901_aarch64.app.tar.gz)。这是线上清单的实际下载地址，必须持续保留；R2 的 `mac_package/` 目录首页不提供可靠文件列表，核验具体文件 URL。
+- Mac 旧版官网镜像（26.9.1802）：[ARM64 .app.tar.gz](https://bowerbird.cn/downloads/Bowerbird_26.9.1802_aarch64.app.tar.gz)，同目录提供 `.sig`；各版本 SHA-256 见发布记录。
+- Mac 当前首页手动安装包：[26.9.1901 ARM64 DMG](https://pub-5e4c00c218cd4682b622cbab5e58563e.r2.dev/mac_package/Bowerbird_26.9.1901_aarch64-updater-installer.dmg)，本轮未复验 Apple 签名与公证；DMG 不作为 updater 安装包。
 - Mac 旧版手动初装测试包（26.9.18，之后可应用内升级）：[ARM64 DMG](https://bowerbird.cn/downloads/Bowerbird_26.9.18_aarch64-updater-installer.dmg)。DMG 不作为 updater 安装包。
 
 ## 密钥与发布流程

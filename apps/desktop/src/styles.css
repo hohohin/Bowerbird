@@ -2239,6 +2239,19 @@ html[data-theme="light"] .settings-card [role="radio"][aria-checked="true"] {
     border-top: 1px solid var(--bb-line-strong);
   }
 }
+/* 多选右键菜单：单列窄卡；溢出可见，让「移入已有集合」的二级子菜单能飞出外层。 */
+.asset-context-menu.is-multi {
+  grid-template-columns: minmax(0, 1fr);
+  width: 248px;
+  overflow: visible;
+}
+.asset-context-submenu {
+  position: absolute;
+  top: 0;
+  z-index: 1;
+  min-width: 9rem;
+  max-height: 16rem;
+}
 .app-context-item.is-danger { color: var(--bb-danger); }
 .app-context-item.is-danger:hover:not(:disabled),
 .app-context-item.is-danger:focus-visible { background: rgb(244 63 94 / 15%); color: var(--bb-danger); }

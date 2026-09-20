@@ -36,6 +36,100 @@ impl BowerbirdCloudProvider {
             service,
         }
     }
+
+    /// 单张云生成：提交 →（异步任务）轮询下载 /（同步响应）直接取产物。
+    /// 返回（图片文件, 下载临时目录, 会话 id 提示——异步路径为远端任务 id）。
+    async fn generate_image_once(
+        &self,
+        endpoint: &str,
+        idempotency_key: &str,
+        instruction: &str,
+        references: &[serde_json::Value],
+        ratio: Option<&str>,
+        tx: &mpsc::Sender<Chunk>,
+    ) -> Result<(Vec<PathBuf>, PathBuf, Option<String>), AppError> {
+        let response = self
+            .auth
+            .send_authorized(
+                self.cloud.http().post(endpoint).json(&serde_json::json!({
+                    "idempotency_key": idempotency_key,
+                    "media": "image",
+                    "prompt": instruction,
+                    "reference_images": references,
+                    "ratio": ratio,
+                    "service": self.service,
+                })),
+                "云生成请求失败",
+            )
+            .await?;
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .map_err(|error| AppError::Cloud(format!("读取云生成响应失败: {error}")))?;
+        if !status.is_success() {
+            let message = serde_json::from_str::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|value| {
+                    value
+                        .pointer("/error/message")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string)
+                })
+                .unwrap_or_else(|| format!("云生成失败（HTTP {}）", status.as_u16()));
+            return Err(AppError::Cloud(message));
+        }
+        let result: GenerateResponse = serde_json::from_str(&body)
+            .map_err(|error| AppError::Cloud(format!("解析云生成响应失败: {error}")))?;
+        if matches!(
+            result.status.as_str(),
+            "uploading" | "queued" | "leased" | "running" | "cancel_requested"
+        ) {
+            let remote = result
+                .remote_task_id
+                .ok_or_else(|| AppError::Cloud("异步云任务缺少 remote_task_id".into()))?;
+            let _ = tx
+                .send(Chunk::Submit {
+                    submit_id: remote.clone(),
+                })
+                .await;
+            let (paths, temp_dir) =
+                wait_for_cloud_job(&self.cloud, &self.auth, endpoint, &remote).await?;
+            return Ok((paths, temp_dir, Some(remote)));
+        }
+        if result.status == "succeeded" {
+            if let Some(artifact) = result.artifact {
+                let remote = result.remote_task_id.unwrap_or_else(|| idempotency_key.to_string());
+                let (paths, temp_dir) = download_artifact(&self.cloud, &remote, artifact).await?;
+                acknowledge_artifact(&self.auth, &self.cloud, endpoint, &remote).await;
+                return Ok((paths, temp_dir, Some(remote)));
+            }
+        } else if let Some(error) = result.error {
+            return Err(AppError::Cloud(error.message));
+        }
+        let inline_images = result.images;
+
+        let temp_dir = std::env::temp_dir().join(format!("bowerbird-cloud-{}", Ulid::new()));
+        tokio::fs::create_dir_all(&temp_dir).await?;
+        let mut paths = Vec::with_capacity(inline_images.len());
+        for (index, image) in inline_images.into_iter().enumerate() {
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(image.base64)
+                .map_err(|error| AppError::Cloud(format!("云图片 base64 无效: {error}")))?;
+            let extension = match image.mime.as_str() {
+                "image/jpeg" => "jpg",
+                "image/webp" => "webp",
+                _ => "png",
+            };
+            let path = temp_dir.join(format!("result-{}.{}", index + 1, extension));
+            tokio::fs::write(&path, bytes).await?;
+            paths.push(path);
+        }
+        if paths.is_empty() {
+            return Err(AppError::Cloud("云生成未返回图片".into()));
+        }
+        Ok((paths, temp_dir, None))
+    }
 }
 
 /// cloud provider key → generate-proxy 的计费/路由 service。
@@ -197,122 +291,77 @@ impl GenProvider for BowerbirdCloudProvider {
             .job_id
             .clone()
             .ok_or_else(|| AppError::Cloud("云生成缺少 job id".into()))?;
-        // 幂等键按轮次区分：首轮（无 resume）= job_id 原样，同键同内容可幂等重放；续轮
-        // （resume）对云端是一次全新生成（prompt/参考图都不同），沿用 job_id 会撞
-        // manifest hash 校验（409 幂等键已用于不同的生成内容），故每次续轮提交带 ULID
-        // 后缀——与即梦每次续轮全新 submit 的语义一致。
-        let idempotency_key = match resume_session.as_deref() {
-            Some(_) => format!("{job_id}-{}", Ulid::new()),
-            None => job_id.clone(),
-        };
-
+        let count = req.generate_num.unwrap_or(1).clamp(1, 4) as usize;
         let mut references = Vec::with_capacity(req.reference_images.len());
         for path in &req.reference_images {
             references.push(read_cloud_jpeg(path, true).await?);
         }
-
-        let response = self
-            .auth
-            .send_authorized(
-                self.cloud.http().post(&endpoint).json(&serde_json::json!({
-                    "idempotency_key": idempotency_key,
-                    "media": "image",
-                    "prompt": req.instruction,
-                    "reference_images": references,
-                    "ratio": req.ratio,
-                    "service": self.service,
-                })),
-                "云生成请求失败",
-            )
-            .await?;
-        let status = response.status();
-        let body = response
-            .text()
-            .await
-            .map_err(|error| AppError::Cloud(format!("读取云生成响应失败: {error}")))?;
-        if !status.is_success() {
-            let message = serde_json::from_str::<serde_json::Value>(&body)
-                .ok()
-                .and_then(|value| {
-                    value
-                        .pointer("/error/message")
-                        .and_then(|v| v.as_str())
-                        .map(str::to_string)
-                })
-                .unwrap_or_else(|| format!("云生成失败（HTTP {}）", status.as_u16()));
-            return Err(AppError::Cloud(message));
-        }
-        let result: GenerateResponse = serde_json::from_str(&body)
-            .map_err(|error| AppError::Cloud(format!("解析云生成响应失败: {error}")))?;
-        if matches!(
-            result.status.as_str(),
-            "uploading" | "queued" | "leased" | "running" | "cancel_requested"
-        ) {
-            let remote = result
-                .remote_task_id
-                .ok_or_else(|| AppError::Cloud("异步云任务缺少 remote_task_id".into()))?;
-            let _ = tx
-                .send(Chunk::Submit {
-                    submit_id: remote.clone(),
-                })
-                .await;
-            let (paths, temp_dir) =
-                wait_for_cloud_job(&self.cloud, &self.auth, &endpoint, &remote).await?;
-            return Ok(GenOutcome {
-                text: String::new(),
-                session_id: Some(remote.clone()),
-                submit_id: Some(remote),
-                elapsed_ms: started.elapsed().as_millis() as u64,
-                source_images: paths,
-                temp_dir: Some(temp_dir),
-            });
-        }
-        if result.status == "succeeded" {
-            if let Some(artifact) = result.artifact {
-                let remote = result.remote_task_id.unwrap_or_else(|| job_id.clone());
-                let (paths, temp_dir) = download_artifact(&self.cloud, &remote, artifact).await?;
-                acknowledge_artifact(&self.auth, &self.cloud, &endpoint, &remote).await;
-                return Ok(GenOutcome {
-                    text: String::new(),
-                    session_id: Some(remote.clone()),
-                    submit_id: Some(remote),
-                    elapsed_ms: started.elapsed().as_millis() as u64,
-                    source_images: paths,
-                    temp_dir: Some(temp_dir),
-                });
-            }
-        } else if let Some(error) = result.error {
-            return Err(AppError::Cloud(error.message));
-        }
-        let session_id = Some(job_id);
-        let source_images = result.images;
-
-        let temp_dir = std::env::temp_dir().join(format!("bowerbird-cloud-{}", Ulid::new()));
-        tokio::fs::create_dir_all(&temp_dir).await?;
-        let mut paths = Vec::with_capacity(source_images.len());
-        for (index, image) in source_images.into_iter().enumerate() {
-            let bytes = base64::engine::general_purpose::STANDARD
-                .decode(image.base64)
-                .map_err(|error| AppError::Cloud(format!("云图片 base64 无效: {error}")))?;
-            let extension = match image.mime.as_str() {
-                "image/jpeg" => "jpg",
-                "image/webp" => "webp",
-                _ => "png",
+        // 幂等键按轮次区分：首轮（无 resume）= job_id 原样，同键同内容可幂等重放；续轮
+        // （resume）对云端是一次全新生成（prompt/参考图都不同），沿用 job_id 会撞
+        // manifest hash 校验（409 幂等键已用于不同的生成内容），故每次续轮提交带 ULID
+        // 后缀——与即梦每次续轮全新 submit 的语义一致。
+        let base_key = match resume_session.as_deref() {
+            Some(_) => format!("{job_id}-{}", Ulid::new()),
+            None => job_id.clone(),
+        };
+        // 多张（count>1）：云端单任务即单张，逐张以独立后缀 `-nN` 提交、按张预授权积分；
+        // 顺序等待前一张落地再发下一张——任一时刻至多一个在途任务，每次提交即回填 Submit
+        // 的 submit_id，中断恢复仍只面对一个远端任务。任一张失败整轮失败。
+        let mut source_images: Vec<PathBuf> = Vec::with_capacity(count);
+        let mut temp_dir: Option<PathBuf> = None;
+        let mut session: Option<String> = None;
+        for index in 0..count {
+            let idempotency_key = if index == 0 {
+                base_key.clone()
+            } else {
+                format!("{base_key}-n{}", index + 1)
             };
-            let path = temp_dir.join(format!("result-{}.{}", index + 1, extension));
-            tokio::fs::write(&path, bytes).await?;
-            paths.push(path);
+            let (paths, one_dir, remote) = self
+                .generate_image_once(
+                    &endpoint,
+                    &idempotency_key,
+                    &req.instruction,
+                    &references,
+                    req.ratio.as_deref(),
+                    tx,
+                )
+                .await?;
+            session = remote.or(session);
+            if count == 1 {
+                source_images = paths;
+                temp_dir = Some(one_dir);
+                continue;
+            }
+            // 多张：把各次下载汇入同一临时目录，入库后由 command 层统一清理。
+            if temp_dir.is_none() {
+                let dir = std::env::temp_dir().join(format!("bowerbird-cloud-{}", Ulid::new()));
+                tokio::fs::create_dir_all(&dir).await?;
+                temp_dir = Some(dir);
+            }
+            let dir = temp_dir
+                .as_ref()
+                .ok_or_else(|| AppError::Cloud("云图片临时目录缺失".into()))?;
+            for path in paths {
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .ok_or_else(|| AppError::Cloud("云图片路径无效".into()))?;
+                let target = dir.join(format!("{}-{name}", index + 1));
+                tokio::fs::rename(&path, &target)
+                    .await
+                    .map_err(|error| AppError::Cloud(format!("汇拢云图片失败: {error}")))?;
+                source_images.push(target);
+            }
+            let _ = tokio::fs::remove_dir(&one_dir).await;
         }
-        if paths.is_empty() {
-            return Err(AppError::Cloud("云生成未返回图片".into()));
-        }
+        let session = session.unwrap_or_else(|| job_id.clone());
         Ok(GenOutcome {
             text: String::new(),
-            session_id: session_id.clone(),
-            submit_id: session_id,
+            session_id: Some(session.clone()),
+            submit_id: Some(session),
             elapsed_ms: started.elapsed().as_millis() as u64,
-            source_images: paths,
-            temp_dir: Some(temp_dir),
+            source_images,
+            temp_dir,
         })
     }
 }

@@ -191,15 +191,12 @@ export function canvasPrimaryMaterialAction(
   return creationModeOpen || generationEditorOpen ? "compose" : "preview";
 }
 
+/** 框选在浏览与创作模式下均可用；创作模式的单击挑图只作用于素材本体，与空白处框选不冲突。 */
 export function canStartCanvasMarquee(
   button: number,
-  creationModeOpen: boolean,
-  generationEditorOpen: boolean,
   targetIsCanvasNode: boolean,
 ): boolean {
-  return button === 0
-    && canvasPrimaryMaterialAction(creationModeOpen, generationEditorOpen) === "preview"
-    && !targetIsCanvasNode;
+  return button === 0 && !targetIsCanvasNode;
 }
 
 /** 给单击选择留出手部抖动容差，超过阈值后才进入节点拖动。 */

@@ -1,11 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { CanvasLayerMenuItem } from "./CanvasLayerMenuItem";
 import { createPortal } from "react-dom";
-import { ClipboardCopy, Layers, LayoutDashboard, MessageSquare, PenTool, ScanSearch, Trash2, Ungroup } from "lucide-react";
+import { ChevronRight, ClipboardCopy, FolderInput, FolderPlus, FolderTree, Layers, LayoutDashboard, MessageSquare, PenTool, ScanSearch, Trash2, Ungroup } from "lucide-react";
 import { useStore } from "../store";
 import { api } from "../lib/api";
 import { loadDescribePrompt } from "../lib/describePrompt";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { ModalShell } from "./ModalShell";
 import { RenameDialog } from "./RenameDialog";
 import { understandProvider } from "../lib/entitlement";
 import { notifyError, notifySuccess } from "../lib/notify";
@@ -58,6 +59,12 @@ export function AssetContextMenu() {
   const mode = useStore((s) => s.mode);
   const enterManage = useStore((s) => s.enterManage);
   const toggleSelect = useStore((s) => s.toggleSelect);
+  const selectedIds = useStore((s) => s.selectedIds);
+  const folders = useStore((s) => s.folders);
+  const projects = useStore((s) => s.projects);
+  const reloadFolders = useStore((s) => s.reloadFolders);
+  const clearSelect = useStore((s) => s.clearSelect);
+  const exitManage = useStore((s) => s.exitManage);
   const cloudAuth = useStore((s) => s.cloudAuth);
   const cloudEntitlement = useStore((s) => s.cloudEntitlement);
   const cloudAvailable = cloudAuth?.cloud_available ?? false;
@@ -70,6 +77,12 @@ export function AssetContextMenu() {
   const [groupIds, setGroupIds] = useState<string[] | null>(null);
   const [pendingGroupDelete, setPendingGroupDelete] = useState<string[] | null>(null);
   const [renameTarget, setRenameTarget] = useState<{ id: string; name: string } | null>(null);
+  // 多选菜单的「移入已有集合」二级子菜单开关。
+  const [folderSubOpen, setFolderSubOpen] = useState(false);
+  // 多选菜单点击后弹出的批量面板（菜单先收，再由 !menu 分支挂载）。
+  const [newCollectionIds, setNewCollectionIds] = useState<string[] | null>(null);
+  const [projectPickIds, setProjectPickIds] = useState<string[] | null>(null);
+  const [pendingBatchDelete, setPendingBatchDelete] = useState<string[] | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -102,11 +115,12 @@ export function AssetContextMenu() {
   }, [menu]);
 
   // 每次打开重置子状态。
-  // （pendingDeleteId / pendingGroupDelete / renameTarget 不在此重置——「物理删除」/「物理删除
-  //   整组」/「重命名」点击会先 closeContextMenu 再弹 dialog，menu=null 触发本 effect，重置会把
-  //   尚需显示的 dialog 一起清掉；它们由自身回调清理。）
+  // （pendingDeleteId / pendingGroupDelete / pendingBatchDelete / renameTarget /
+  //   newCollectionIds / projectPickIds 不在此重置——对应按钮点击会先 closeContextMenu 再弹
+  //   dialog，menu=null 触发本 effect，重置会把尚需显示的 dialog 一起清掉；它们由自身回调清理。）
   useEffect(() => {
     setBusy(false);
+    setFolderSubOpen(false);
   }, [menu]);
 
   // 菜单打开且为生成图时取同组图（与瀑布流轮播同一查询、同 project scope）；
@@ -213,6 +227,19 @@ export function AssetContextMenu() {
           }}
           onCancel={() => setPendingGroupDelete(null)}
         />
+        <ConfirmDialog
+          open={pendingBatchDelete !== null}
+          danger
+          title={`物理删除 ${pendingBatchDelete?.length ?? 0} 张素材`}
+          message={<>这些素材将从全局及所有项目物理删除，<strong>不可恢复</strong>。</>}
+          confirmLabel="物理删除"
+          onConfirm={() => {
+            const ids = pendingBatchDelete;
+            setPendingBatchDelete(null);
+            if (ids && ids.length > 0) void runBatchDelete(ids, "delete");
+          }}
+          onCancel={() => setPendingBatchDelete(null)}
+        />
         {renameTarget && (
           <RenameDialog
             open
@@ -221,6 +248,12 @@ export function AssetContextMenu() {
             onClose={() => setRenameTarget(null)}
           />
         )}
+        {newCollectionIds && (
+          <BatchNewCollectionDialog ids={newCollectionIds} onClose={() => setNewCollectionIds(null)} />
+        )}
+        {projectPickIds && (
+          <BatchAddToProjectsDialog ids={projectPickIds} onClose={() => setProjectPickIds(null)} />
+        )}
       </>
     );
   }
@@ -228,6 +261,16 @@ export function AssetContextMenu() {
   // 守卫后捕获，闭包里直接用（TS 不会把守卫的收窄带进嵌套函数）。
   const assetId = menu.assetId;
   const asset = menu.asset ?? assets.find((a) => a.id === assetId);
+  // 多选右键（manage 模式、选区 >1 且右键图在选区内）→ 专属批量菜单：
+  // 单图操作（详情 / 重命名 / 标注 / 分层 / 文件类）不适用，换成集合 / 项目 / 批量反推 / 批量删除。
+  const multiIds = mode === "manage" && selectedIds.size > 1 && selectedIds.has(assetId)
+    ? Array.from(selectedIds)
+    : null;
+  // 移入已有只列普通集合（排除 root、智能夹与收藏夹），与 BatchBar 一致。
+  const existingFolders = folders.filter((f) => f.id !== "root" && (f.kind ?? "folder") === "folder");
+  const batchHasNonMovable = multiIds?.some((id) => !canMoveAssetOut(assets.find((a) => a.id === id))) ?? false;
+  // 二级集合子菜单默认向右飞出，靠右时翻到左侧。
+  const subOnLeft = menu.x > window.innerWidth - 340;
   const storePath = asset?.store_path ?? null;
   const moveOutAvailable = canMoveAssetOut(asset);
   const canvasLibraryAvailable = canvasLibraryCheck?.menu === menu && canvasLibraryCheck.available;
@@ -405,6 +448,70 @@ export function AssetContextMenu() {
     }
   }
 
+  /** 多选右键「移入已有集合」：与 BatchBar 移入已有同链路，成功后跳转到该集合。 */
+  async function runBatchMoveToExisting(ids: string[], folderId: string) {
+    setBusy(true);
+    try {
+      await api.moveAssetsToFolder(ids, folderId);
+      clearSelect();
+      exitManage();
+      useStore.getState().setCurrentFolder(folderId);
+      await reloadFolders();
+      notifySuccess("素材已移入集合");
+      closeContextMenu();
+    } catch (e) {
+      notifyError(e, "移入失败");
+      setBusy(false);
+    }
+  }
+
+  /** 多选右键批量删除：与 BatchBar 同模式——keep 数组一次；move_out/delete 循环单条，
+   *  move_out 的文件恢复失败是结构化结果而非 rejected promise；有失败留在原地反馈，全成功退出管理。 */
+  async function runBatchDelete(ids: string[], deleteMode: AssetDeleteMode) {
+    setBusy(true);
+    let failedCount = 0;
+    try {
+      if (deleteMode === "keep") {
+        if (activeProjectId) await api.removeAssetsFromProject(activeProjectId, ids);
+      } else {
+        for (const id of ids) {
+          try {
+            const result = await api.deleteAssetWithMode(id, deleteMode, activeProjectId);
+            if (
+              result.failed_moves.length > 0
+              || (deleteMode === "move_out" && !activeProjectId && result.deleted_assets === 0)
+            ) {
+              failedCount += 1;
+            }
+          } catch (e) {
+            failedCount += 1;
+            console.error("delete one failed", e);
+          }
+        }
+      }
+      await reloadProjects();
+      if (failedCount > 0) {
+        notifyError(null, `${failedCount} 张删除失败，已保留在全局`);
+        setBusy(false);
+        return;
+      }
+      notifySuccess(
+        deleteMode === "keep"
+          ? "素材已移出当前项目"
+          : deleteMode === "move_out"
+            ? "素材已移出园丁鸟"
+            : `已物理删除 ${ids.length} 张素材`
+      );
+      exitManage();
+      closeContextMenu();
+    } catch (e) {
+      notifyError(e, "删除失败");
+      setBusy(false);
+    } finally {
+      setPendingBatchDelete(null);
+    }
+  }
+
   const menuStyle: React.CSSProperties = {
     position: "fixed",
     left: menu.x,
@@ -426,6 +533,159 @@ export function AssetContextMenu() {
     } catch (error) {
       notifyError(error, "无法打开图片详情，当前画板保持不变");
     }
+  }
+
+  // 多选专属菜单：单列窄卡，只保留对整批有意义的操作（集合 / 项目 / 批量反推 / 批量删除）。
+  if (multiIds) {
+    return createPortal(
+      <div
+        ref={menuRef}
+        style={menuStyle}
+        onContextMenu={(e) => e.preventDefault()}
+        className="app-context-menu asset-context-menu is-multi p-1.5 text-xs"
+        role="menu"
+        aria-label={`已选 ${multiIds.length} 张素材的操作`}
+      >
+        <div className="asset-context-column">
+          <div className="app-context-label">已选 {multiIds.length} 张素材</div>
+          <button
+            type="button"
+            role="menuitem"
+            disabled={busy}
+            title="创建新集合，并把选中的素材移入"
+            className="app-context-item px-2 py-1.5"
+            onClick={() => {
+              // 先收菜单再弹命名弹窗，避免两个浮层同时存在。
+              setNewCollectionIds(multiIds);
+              closeContextMenu();
+            }}
+          >
+            <FolderPlus size={13} className="shrink-0" /> 用选中的内容新建集合
+          </button>
+          <div
+            className="relative"
+            onMouseEnter={() => setFolderSubOpen(true)}
+            onMouseLeave={() => setFolderSubOpen(false)}
+          >
+            <button
+              type="button"
+              role="menuitem"
+              aria-haspopup="menu"
+              aria-expanded={folderSubOpen}
+              disabled={busy || existingFolders.length === 0}
+              title={existingFolders.length === 0 ? "还没有集合，可先「用选中的内容新建集合」" : "移入已有集合"}
+              className="app-context-item px-2 py-1.5"
+              onClick={() => setFolderSubOpen((open) => !open)}
+            >
+              <FolderInput size={13} className="shrink-0" />
+              <span className="flex-1 text-left">移入已有集合</span>
+              <ChevronRight size={13} className="shrink-0" aria-hidden="true" />
+            </button>
+            {folderSubOpen && existingFolders.length > 0 && (
+              <div
+                className={`app-context-menu asset-context-submenu p-1.5 text-xs ${subOnLeft ? "right-full mr-0.5" : "left-full ml-0.5"}`}
+                role="menu"
+                aria-label="选择要移入的集合"
+              >
+                {existingFolders.map((f) => (
+                  <button
+                    key={f.id}
+                    type="button"
+                    role="menuitem"
+                    disabled={busy}
+                    title={`移入「${f.name}」`}
+                    className="app-context-item px-2 py-1.5"
+                    onClick={() => void runBatchMoveToExisting(multiIds, f.id)}
+                  >
+                    <span className="min-w-0 flex-1 truncate">{f.name}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          {!activeProjectId && projects.length > 0 && (
+            <button
+              type="button"
+              role="menuitem"
+              disabled={busy}
+              title="勾选一个或多个项目，把选中的素材加进去"
+              className="app-context-item px-2 py-1.5"
+              onClick={() => {
+                // 先收菜单再弹项目勾选面板，避免两个浮层同时存在。
+                setProjectPickIds(multiIds);
+                closeContextMenu();
+              }}
+            >
+              <FolderTree size={13} className="shrink-0" /> 加入项目
+            </button>
+          )}
+
+          <div className="app-context-divider" />
+          <div className="app-context-label">再创作</div>
+          <button
+            type="button"
+            role="menuitem"
+            disabled={busy}
+            title="选择反推引擎（Bowerbird Cloud / 本机 codex）"
+            className="app-context-item px-2 py-1.5"
+            onClick={(e) => {
+              const r = e.currentTarget.getBoundingClientRect();
+              openDescribePicker(
+                { kind: "batch", ids: multiIds, instruction: loadDescribePrompt() },
+                { x: r.left, y: r.bottom },
+              );
+              closeContextMenu();
+            }}
+          >
+            <ScanSearch size={13} className="shrink-0" /> 批量反推
+          </button>
+
+          <div className="app-context-divider" />
+          <div className="app-context-label asset-context-label-with-icon">
+            <Trash2 size={12} aria-hidden="true" />
+            移出与删除
+          </div>
+          {activeProjectId && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => void runBatchDelete(multiIds, "keep")}
+              disabled={busy}
+              title="仅移出当前项目 · 素材留在全局"
+              className="app-context-item px-2 py-1.5"
+            >
+              移出当前项目
+            </button>
+          )}
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => void runBatchDelete(multiIds, "move_out")}
+            disabled={busy || batchHasNonMovable}
+            title={batchHasNonMovable
+              ? "所选内容包含没有可恢复原始位置的素材，只能物理删除"
+              : "不会删除文件，文件回到原始位置"}
+            className="app-context-item px-2 py-1.5"
+          >
+            移出园丁鸟
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              // 先收菜单再弹批量删除确认，避免两个浮层同时存在。
+              setPendingBatchDelete(multiIds);
+              closeContextMenu();
+            }}
+            disabled={busy}
+            className="app-context-item is-danger px-2 py-1.5"
+          >
+            物理删除
+          </button>
+        </div>
+      </div>,
+      document.body
+    );
   }
 
   return createPortal(
@@ -755,5 +1015,166 @@ export function AssetContextMenu() {
       </div>
     </div>,
     document.body
+  );
+}
+
+/** 多选右键「用选中的内容新建集合」弹窗：命名 → 建集合 + 移入 + 跳转，
+ *  与 BatchBar「移入新文件夹」同链路（照 RenameDialog 的单 input Modal 范式）。 */
+function BatchNewCollectionDialog({ ids, onClose }: { ids: string[]; onClose: () => void }) {
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const trimmed = name.trim();
+
+  async function submit() {
+    if (!trimmed || busy) return;
+    setBusy(true);
+    try {
+      const folderId = await api.createFolder(trimmed);
+      await api.moveAssetsToFolder(ids, folderId);
+      const st = useStore.getState();
+      st.clearSelect();
+      st.exitManage();
+      st.setCurrentFolder(folderId);
+      await st.reloadFolders();
+      notifySuccess("已新建集合并移入选中素材");
+      onClose();
+    } catch (e) {
+      console.error("create collection failed", e);
+      notifyError(e, "新建集合失败");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <ModalShell
+      title="用选中的内容新建集合"
+      eyebrow="New collection"
+      description={`将创建新集合，并把选中的 ${ids.length} 张素材移入。`}
+      onClose={onClose}
+      preventClose={busy}
+      footer={
+        <>
+          <button onClick={onClose} disabled={busy} className="app-modal-button">
+            取消
+          </button>
+          <button
+            onClick={() => void submit()}
+            disabled={!trimmed || busy}
+            className="app-modal-button is-primary"
+          >
+            {busy && <span className="app-spinner" aria-hidden />}
+            {busy ? "创建中…" : "创建集合并移入"}
+          </button>
+        </>
+      }
+    >
+      <label className="block text-[11px] font-medium text-muted" htmlFor="batch-new-collection-input">
+        集合名称
+      </label>
+      <input
+        id="batch-new-collection-input"
+        data-modal-autofocus
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") void submit();
+          if (e.key === "Escape" && !busy) onClose();
+        }}
+        maxLength={64}
+        placeholder="输入新集合名称"
+        className="app-form-input mt-2 px-3 text-sm"
+      />
+      <div className="mt-2 flex items-center justify-between gap-3 text-[10px] text-faint">
+        <span>最多 64 个字符</span>
+        <span>{name.length}/64</span>
+      </div>
+    </ModalShell>
+  );
+}
+
+/** 多选右键「加入项目」小面板：勾选（可多选）目标项目后批量加入；
+ *  全部失败留在面板反馈，至少一个成功才退出管理。 */
+function BatchAddToProjectsDialog({ ids, onClose }: { ids: string[]; onClose: () => void }) {
+  const projects = useStore((s) => s.projects);
+  const [checked, setChecked] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState(false);
+
+  function toggle(id: string) {
+    setChecked((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function submit() {
+    if (checked.size === 0 || busy) return;
+    setBusy(true);
+    let failed = 0;
+    for (const projectId of checked) {
+      try {
+        await api.addAssetsToProject(projectId, ids);
+      } catch (e) {
+        failed += 1;
+        console.error("add to project failed", e);
+      }
+    }
+    await useStore.getState().reloadProjects();
+    if (failed === checked.size) {
+      notifyError(null, "加入项目失败");
+      setBusy(false);
+      return;
+    }
+    if (failed > 0) notifyError(null, `${failed} 个项目加入失败`);
+    notifySuccess(`素材已加入 ${checked.size - failed} 个项目`);
+    useStore.getState().exitManage();
+    onClose();
+  }
+
+  return (
+    <ModalShell
+      title="加入项目"
+      eyebrow="Add to projects"
+      description={`勾选要放入所选 ${ids.length} 张素材的项目（可多选）。`}
+      onClose={onClose}
+      preventClose={busy}
+      footer={
+        <>
+          <button onClick={onClose} disabled={busy} className="app-modal-button">
+            取消
+          </button>
+          <button
+            onClick={() => void submit()}
+            disabled={checked.size === 0 || busy}
+            className="app-modal-button is-primary"
+          >
+            {busy && <span className="app-spinner" aria-hidden />}
+            {busy ? "加入中…" : checked.size > 0 ? `加入所选 ${checked.size} 个项目` : "加入项目"}
+          </button>
+        </>
+      }
+    >
+      <div className="max-h-64 space-y-1 overflow-y-auto">
+        {projects.map((p) => (
+          <label
+            key={p.id}
+            className={`flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm ${busy ? "" : "cursor-pointer hover:bg-edge"}`}
+          >
+            <input
+              type="checkbox"
+              checked={checked.has(p.id)}
+              disabled={busy}
+              onChange={() => toggle(p.id)}
+              className="size-4"
+            />
+            <span className="min-w-0 flex-1 truncate" title={p.name}>{p.name}</span>
+          </label>
+        ))}
+        {projects.length === 0 && (
+          <p className="px-2.5 py-4 text-center text-xs text-muted">还没有项目</p>
+        )}
+      </div>
+    </ModalShell>
   );
 }

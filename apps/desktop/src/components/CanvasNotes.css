@@ -1,6 +1,18 @@
 .canvas-drawing-tools { position:absolute; left:14px; top:50%; transform:translateY(-50%); z-index:30; display:flex; flex-direction:column; gap:5px; padding:6px; border:1px solid var(--bb-line); border-radius:12px; background:var(--bb-surface); box-shadow:0 4px 16px #0001; }
 .canvas-drawing-tools button { width:34px; height:34px; display:grid; place-items:center; border-radius:7px; color:var(--bb-muted); }
 .canvas-drawing-tools button:hover, .canvas-drawing-tools button[aria-pressed=true] { background:var(--bb-blue); color:white; }
+/* 原生 title 提示延迟由系统控制且过长，改用即时可控的自定义提示。 */
+.canvas-drawing-tools button[data-tip] { position:relative; }
+.canvas-drawing-tools button[data-tip]::after {
+  content: attr(data-tip);
+  position:absolute; left:calc(100% + 10px); top:50%; transform:translateY(-50%);
+  padding:5px 8px; border-radius:6px; background:#20242c; color:#fff;
+  font-size:11px; line-height:1.4; white-space:nowrap; box-shadow:0 3px 10px #0003;
+  opacity:0; pointer-events:none; z-index:5;
+  transition:opacity .12s ease .3s;
+}
+.canvas-drawing-tools button[data-tip]:hover::after,
+.canvas-drawing-tools button[data-tip]:focus-visible::after { opacity:1; }
 .canvas-drawing-tools hr { border:0; border-top:1px solid var(--bb-line); margin:2px 3px; }
 .canvas-assist-tools { display:flex; flex-direction:column; align-items:center; gap:4px; }
 .canvas-assist-tools > span { color:var(--bb-muted); font-size:9px; line-height:14px; }

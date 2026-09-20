@@ -281,6 +281,23 @@ try {
   await page.keyboard.press("Control+z");
   await node(textSectionId).waitFor();
 
+  // Right-clicking the blank area inside a section removes the section frame,
+  // keeps members and stays undoable — the section body itself ignores pointers.
+  const blankSection = await textSection.boundingBox();
+  const memberBounds = await node(textId).boundingBox();
+  const insideX = blankSection.x + blankSection.width - 8;
+  const insideY = blankSection.y + blankSection.height - 8;
+  assert.ok(insideX > memberBounds.x + memberBounds.width || insideY > memberBounds.y + memberBounds.height,
+    "右键落点在分区内且避开成员卡片");
+  await page.mouse.click(insideX, insideY, { button: "right" });
+  await page.getByRole("menuitem", { name: /移除分区/ }).click();
+  assert.equal(await node(textId).count(), 1);
+  assert.equal(await node(textSectionId).count(), 0);
+  await stage.click({ position: { x: 1200, y: 450 } });
+  await page.keyboard.press("Control+z");
+  await node(textSectionId).waitFor();
+  await saved();
+
   // Arrangement treats a region as one unit, preserving its internal layout too.
   const beforeArrange = await page.evaluate(() => window.snapshot());
   await node(sectionId).locator(".canvas-section-heading svg").click({ button: "right" });

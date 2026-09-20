@@ -192,6 +192,10 @@ interface CanvasMarqueePress extends CanvasMarquee {
   baseSelection: Set<string>;
 }
 
+type CanvasUndoEntry =
+  | { kind: "removal"; projectId: string; materials: CanvasNode[]; graph: ProjectGraphNode[]; groups: Map<string, CanvasGroup> }
+  | { kind: "geometry"; projectId: string; materials: CanvasNode[]; graph: ProjectGraphNode[] };
+
 interface ActiveCanvasState {
   id: string;
   title: string;
@@ -567,7 +571,7 @@ export function CanvasWorkspace({
   const [canvasMarquee, setCanvasMarquee] = useState<CanvasMarquee | null>(null);
   const [selectedCanvasNodeIds, setSelectedCanvasNodeIds] = useState<Set<string>>(() => new Set());
   const [canvasLightbox, setCanvasLightbox] = useState<{ images: string[]; index: number } | null>(null);
-  const [promptMenu, setPromptMenu] = useState<{ node: ProjectGraphNode | null; nodeIds: string[]; folder?: CanvasFolderNode; x: number; y: number; point: CanvasPoint | null } | null>(null);
+  const [promptMenu, setPromptMenu] = useState<{ node: ProjectGraphNode | null; nodeIds: string[]; folder?: CanvasFolderNode; section?: { id: string; name: string } | null; x: number; y: number; point: CanvasPoint | null } | null>(null);
   const promptMenuRef = useRef<HTMLDivElement>(null);
   useEffect(() => { setPromptMenu(null); }, [projectId, viewMode]);
   useEffect(() => {
@@ -630,7 +634,8 @@ export function CanvasWorkspace({
   const sourceWidthRef = useRef(sourceWidth);
   const activeCanvasRef = useRef(activeCanvas);
   const groupsRef = useRef(new Map<string, CanvasGroup>());
-  const removalHistoryRef = useRef<Array<{ projectId: string; materials: CanvasNode[]; graph: ProjectGraphNode[]; groups: Map<string, CanvasGroup> }>>([]);
+  const undoHistoryRef = useRef<CanvasUndoEntry[]>([]);
+  const resizeBaselineRef = useRef<Map<string, { material?: CanvasNode; graph?: ProjectGraphNode }>>(new Map());
   const titleBaselineRef = useRef(activeCanvas.title);
   const sourceWidthWasStored = useRef(false);
   const viewDirtyRef = useRef(false);
@@ -705,7 +710,8 @@ export function CanvasWorkspace({
     setSectionPreview(null);
     sectionDrawRef.current = null;
     setCanvasLightbox(null);
-    removalHistoryRef.current = [];
+    undoHistoryRef.current = [];
+    resizeBaselineRef.current.clear();
     setCanvasMarquee(null);
     marqueePressRef.current = null;
   }, [projectId]);
@@ -750,11 +756,14 @@ export function CanvasWorkspace({
         .flatMap(element => anchors.has(element.dataset.canvasNodeId!) ? [anchors.get(element.dataset.canvasNodeId!)!] : []);
       const orders = stepCanvasLayers(cards, new Set(detail.nodeIds), detail.direction);
       if (!orders.size) return;
+      const preMaterials = nodesRef.current.filter((node) => orders.has(node.id));
+      const preGraph = graphNodesRef.current.filter((node) => orders.has(node.id));
       const materials = nodesRef.current.map(node => orders.has(node.id) ? { ...node, order: orders.get(node.id)! } : node);
       const graph = graphNodesRef.current.map(node => orders.has(node.id) ? { ...node, zIndex: orders.get(node.id)! } : node);
       commitNodes(materials);
       graphNodesRef.current = graph;
       setGraphNodes(graph);
+      pushGeometryUndo(preMaterials, preGraph);
       persistGeometries(materials.filter(node => orders.has(node.id)));
       for (const node of graph) if (node.kind !== "asset" && orders.has(node.id)) persistGraphNodeGeometry(node);
     }
@@ -1625,9 +1634,9 @@ export function CanvasWorkspace({
       if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "z"
         && !editing && !event.defaultPrevented && !scopedInspectorOpen && viewModeRef.current === "canvas"
         && !nodeDragRef.current && !graphNodeDragRef.current
-        && !document.querySelector('[role="dialog"][aria-modal="true"]') && removalHistoryRef.current.length > 0) {
+        && !document.querySelector('[role="dialog"][aria-modal="true"]') && undoHistoryRef.current.length > 0) {
         event.preventDefault();
-        undoRemoval();
+        undoCanvasAction();
         return;
       }
       if (event.code === "Space") {
@@ -2326,6 +2335,8 @@ export function CanvasWorkspace({
       commitNodes(drag.initialMaterialNodes);
     } else if (drag.moved && node) {
       suppressNodeClickRef.current = true;
+      pushGeometryUndo(drag.initialMaterialNodes.filter((candidate) => drag.selectedIds.has(candidate.id)),
+        drag.initialNodes.filter((candidate) => drag.selectedIds.has(candidate.id)));
       for (const selected of graphNodesRef.current.filter((candidate) => drag.selectedIds.has(candidate.id) && candidate.kind !== "asset" && candidate.hiddenAt == null)) persistGraphNodeGeometry(selected);
       persistGeometries(nodesRef.current.filter((candidate) => drag.selectedIds.has(candidate.id)));
     }
@@ -2530,6 +2541,8 @@ export function CanvasWorkspace({
         else if (group) persistCreatedGroup(group, [], moving);
       }
     } else if (moving && drag.moved) {
+      pushGeometryUndo(drag.initialNodes.filter((candidate) => drag.selectedIds.has(candidate.id)),
+        drag.initialGraphNodes.filter((candidate) => drag.selectedIds.has(candidate.id)));
       persistGeometries(nodesRef.current.filter((node) => drag.selectedIds.has(node.id)));
       for (const selected of graphNodesRef.current.filter((node) => drag.selectedIds.has(node.id) && node.kind !== "asset" && node.hiddenAt == null)) persistGraphNodeGeometry(selected);
     }
@@ -2558,24 +2571,38 @@ export function CanvasWorkspace({
   function resizeCanvasNote(nodeId: string, size: { width: number; height: number; x?: number; y?: number }, finished: boolean, cancelled = false) {
     const node = graphNodesRef.current.find(candidate => candidate.id === nodeId);
     if (!node) return;
+    if (!resizeBaselineRef.current.has(nodeId)) resizeBaselineRef.current.set(nodeId, { graph: node });
     const updated = { ...node, ...size };
     graphNodesRef.current = graphNodesRef.current.map(candidate => candidate.id === nodeId ? updated : candidate);
     setGraphNodes(graphNodesRef.current);
     setActiveDragId(finished ? null : nodeId);
-    if (finished && !cancelled) {
-      persistGraphNodeGeometry(updated);
-      const value = readCanvasNote(updated);
-      if (value.note_type === "section") updateCanvasNote(nodeId, { ...value, member_ids: claimSectionMembers(updated, nodeId) });
+    if (finished) {
+      const baseline = resizeBaselineRef.current.get(nodeId)?.graph;
+      resizeBaselineRef.current.delete(nodeId);
+      if (!cancelled) {
+        if (baseline) pushGeometryUndo([], [baseline]);
+        persistGraphNodeGeometry(updated);
+        const value = readCanvasNote(updated);
+        if (value.note_type === "section") updateCanvasNote(nodeId, { ...value, member_ids: claimSectionMembers(updated, nodeId) });
+      }
     }
   }
 
   function resizeCanvasMaterial(nodeId: string, size: { width: number; height: number }, finished: boolean, cancelled = false) {
     const node = nodesRef.current.find(candidate => candidate.id === nodeId);
     if (!node) return;
+    if (!resizeBaselineRef.current.has(nodeId)) resizeBaselineRef.current.set(nodeId, { material: node });
     const updated = { ...node, ...size };
     commitNodes(nodesRef.current.map(candidate => candidate.id === nodeId ? updated : candidate));
     setActiveDragId(finished ? null : nodeId);
-    if (finished && !cancelled) persistGeometries([updated]);
+    if (finished) {
+      const baseline = resizeBaselineRef.current.get(nodeId)?.material;
+      resizeBaselineRef.current.delete(nodeId);
+      if (!cancelled) {
+        if (baseline) pushGeometryUndo([baseline], []);
+        persistGeometries([updated]);
+      }
+    }
   }
 
   function claimSectionMembers(rect: CanvasRect, sectionId?: string) {
@@ -2595,6 +2622,16 @@ export function CanvasWorkspace({
       if (value.member_ids.some(id => members.includes(id))) updateCanvasNote(node.id, { ...value, member_ids: value.member_ids.filter(id => !members.includes(id)) });
     }
     return members;
+  }
+
+  /** 命中光标所在分区；多个分区重叠时取最新创建的那个。 */
+  function sectionUnderPoint(point: CanvasPoint): ProjectGraphNode | null {
+    let found: ProjectGraphNode | null = null;
+    for (const node of graphNodesRef.current) {
+      if (node.kind !== "note" || node.hiddenAt != null || readCanvasNote(node).note_type !== "section") continue;
+      if (point.x >= node.x && point.x <= node.x + node.width && point.y >= node.y && point.y <= node.y + node.height) found = node;
+    }
+    return found;
   }
 
   function createCanvasNote(rect: CanvasRect, noteType: "text" | "section" | "bubble") {
@@ -2642,8 +2679,7 @@ export function CanvasWorkspace({
           markViewDirty();
         }
         if (!event.shiftKey && !event.ctrlKey && !event.metaKey) setSelectedCanvasNodeIds(new Set());
-        const state = useStore.getState();
-        if (canStartCanvasMarquee(event.button, state.boardOpen, !!state.genEditing, targetIsCanvasNode)) {
+        if (canStartCanvasMarquee(event.button, targetIsCanvasNode)) {
           event.preventDefault();
           event.currentTarget.focus({ preventScroll: true });
           const stageRect = event.currentTarget.getBoundingClientRect();
@@ -2846,7 +2882,7 @@ export function CanvasWorkspace({
     const graph = graphNodesRef.current.filter((node) => ids.has(node.id) && node.hiddenAt == null);
     if (materials.length === 0 && graph.length === 0) return;
     const draft = activeCanvasRef.current;
-    removalHistoryRef.current.push({ projectId: draft.id, materials, graph, groups: new Map(groupsRef.current) });
+    undoHistoryRef.current.push({ kind: "removal", projectId: draft.id, materials, graph, groups: new Map(groupsRef.current) });
     commitNodes(nodesRef.current.filter((node) => !ids.has(node.id)));
     const next = graphNodesRef.current.map((node) => ids.has(node.id) ? { ...node, hiddenAt: Date.now() } : node);
     graphNodesRef.current = next;
@@ -2950,10 +2986,70 @@ export function CanvasWorkspace({
     setPromptMenu(null);
   }
 
-  function undoRemoval() {
-    const entry = removalHistoryRef.current[removalHistoryRef.current.length - 1];
+  /** 画板几何是否发生变化（层级/顺序调整不算几何位移，用于合并连续微调）。 */
+  function canvasGeometryDiffers(
+    before: { x: number; y: number; width: number; height: number },
+    after: { x: number; y: number; width: number; height: number } | undefined,
+  ) {
+    if (!after) return false;
+    return before.x !== after.x || before.y !== after.y || before.width !== after.width || before.height !== after.height;
+  }
+
+  /** 记录一次移动/层级/缩放前的快照；连续层级微调合并为一条撤销记录。 */
+  function pushGeometryUndo(materials: readonly CanvasNode[], graph: readonly ProjectGraphNode[]) {
+    const draft = activeCanvasRef.current;
+    const materialBefore = materials.filter((before) => {
+      const after = nodesRef.current.find((node) => node.id === before.id);
+      return !!after && (canvasGeometryDiffers(before, after) || before.order !== after.order);
+    });
+    const graphBefore = graph.filter((before) => {
+      if (before.hiddenAt != null) return false;
+      const after = graphNodesRef.current.find((node) => node.id === before.id);
+      return !!after && (canvasGeometryDiffers(before, after) || before.zIndex !== after.zIndex);
+    });
+    if (materialBefore.length === 0 && graphBefore.length === 0) return;
+    const ids = new Set([...materialBefore, ...graphBefore].map((node) => node.id));
+    const top = undoHistoryRef.current[undoHistoryRef.current.length - 1];
+    if (top?.kind === "geometry" && top.projectId === draft.id
+      && top.materials.length === materialBefore.length && top.graph.length === graphBefore.length
+      && top.materials.every((node) => ids.has(node.id)) && top.graph.every((node) => ids.has(node.id))
+      && top.materials.every((node) => !canvasGeometryDiffers(node, nodesRef.current.find((live) => live.id === node.id)))
+      && top.graph.every((node) => !canvasGeometryDiffers(node, graphNodesRef.current.find((live) => live.id === node.id)))) {
+      return;
+    }
+    undoHistoryRef.current.push({ kind: "geometry", projectId: draft.id, materials: materialBefore, graph: graphBefore });
+  }
+
+  function undoCanvasAction() {
+    const entry = undoHistoryRef.current[undoHistoryRef.current.length - 1];
     if (!entry || entry.projectId !== activeCanvasRef.current.id) return;
-    removalHistoryRef.current.pop();
+    undoHistoryRef.current.pop();
+    if (entry.kind === "geometry") {
+      const materialBefore = new Map(entry.materials.map((node) => [node.id, node]));
+      commitNodes(nodesRef.current.map((node) => {
+        const before = materialBefore.get(node.id);
+        return before ? { ...node, x: before.x, y: before.y, width: before.width, height: before.height, order: before.order } : node;
+      }));
+      const graphBefore = new Map(entry.graph.map((node) => [node.id, node]));
+      const next = graphNodesRef.current.map((node) => {
+        const before = graphBefore.get(node.id);
+        return before ? { ...node, x: before.x, y: before.y, width: before.width, height: before.height, zIndex: before.zIndex } : node;
+      });
+      graphNodesRef.current = next;
+      setGraphNodes(next);
+      persistGeometries(nodesRef.current.filter((node) => materialBefore.has(node.id)));
+      for (const node of next) if (node.kind !== "asset" && graphBefore.has(node.id)) persistGraphNodeGeometry(node);
+      // 分区几何恢复后按还原范围重新圈定成员；等 DOM 提交后再取实际显示尺寸。
+      window.requestAnimationFrame(() => {
+        if (activeCanvasRef.current.id !== entry.projectId) return;
+        for (const node of graphNodesRef.current) {
+          if (node.kind !== "note" || node.hiddenAt != null || !graphBefore.has(node.id)) continue;
+          const value = readCanvasNote(node);
+          if (value.note_type === "section") updateCanvasNote(node.id, { ...value, member_ids: claimSectionMembers(node, node.id) });
+        }
+      });
+      return;
+    }
     const ids = new Set(entry.graph.map((node) => node.id));
     const currentIds = new Set(nodesRef.current.map((node) => node.id));
     commitNodes([...nodesRef.current, ...entry.materials.filter((node) => !currentIds.has(node.id))]);
@@ -3513,6 +3609,7 @@ export function CanvasWorkspace({
                 aria-label="项目名称"
                 title="点击重命名项目"
                 value={activeCanvas.title}
+                onFocus={(event) => event.currentTarget.select()}
                 onChange={(event) => {
                   const draft = activeCanvasRef.current;
                   draft.title = event.target.value;
@@ -3661,7 +3758,13 @@ export function CanvasWorkspace({
             event.preventDefault();
             if (loadingRef.current || useStore.getState().projectRoutePending) return;
             useStore.getState().closeContextMenu();
-            setPromptMenu({ node: null, nodeIds: [...selectedCanvasNodeIdsRef.current], x: event.clientX, y: event.clientY, point: toBoardPoint(event.clientX, event.clientY) });
+            // 分区主体不响应指针事件，右键会落到画板空白处；此处补拾光标所在分区，
+            // 让「移除分区」在分区内部也可用，而不必精确点中标题条或窄边。
+            const point = toBoardPoint(event.clientX, event.clientY);
+            const section = sectionUnderPoint(point);
+            setPromptMenu({ node: null, nodeIds: [...selectedCanvasNodeIdsRef.current],
+              section: section ? { id: section.id, name: readCanvasNote(section).text.trim() || "分区" } : null,
+              x: event.clientX, y: event.clientY, point });
           }}
           onPointerMove={movePan}
           onPointerUp={endPan}
@@ -3674,15 +3777,15 @@ export function CanvasWorkspace({
           onDrop={onCanvasDrop}
         >
           <div className="canvas-drawing-tools" role="toolbar" aria-label="画板工具" onPointerDown={event => event.stopPropagation()}>
-            <button title="选择" aria-label="选择工具" aria-pressed={drawingTool === "select"} onClick={() => setDrawingTool("select")}><MousePointer2 size={18} /></button>
+            <button data-tip="选择" aria-label="选择工具" aria-pressed={drawingTool === "select"} onClick={() => setDrawingTool("select")}><MousePointer2 size={18} /></button>
             <hr />
-            <button title="分区 · 拖拽画框" aria-label="分区工具" aria-pressed={drawingTool === "section"} onClick={() => setDrawingTool("section")}><Frame size={18} /></button>
-            <button title="文本卡片 · 点击放置" aria-label="文本卡片工具" aria-pressed={drawingTool === "text"} onClick={() => setDrawingTool("text")}><Type size={18} /></button>
-            <button title="气泡便签 · 点击放置" aria-label="气泡便签工具" aria-pressed={drawingTool === "bubble"} onClick={() => setDrawingTool("bubble")}><MessageCircle size={18} /></button>
+            <button data-tip="分区 · 拖拽画框" aria-label="分区工具" aria-pressed={drawingTool === "section"} onClick={() => setDrawingTool("section")}><Frame size={18} /></button>
+            <button data-tip="文本卡片 · 点击放置" aria-label="文本卡片工具" aria-pressed={drawingTool === "text"} onClick={() => setDrawingTool("text")}><Type size={18} /></button>
+            <button data-tip="气泡便签 · 点击放置" aria-label="气泡便签工具" aria-pressed={drawingTool === "bubble"} onClick={() => setDrawingTool("bubble")}><MessageCircle size={18} /></button>
             <hr />
             <div className="canvas-assist-tools" role="group" aria-label="辅助">
               <span>辅助</span>
-              <button type="button" title={snapEnabled ? "关闭吸附对齐" : "开启吸附对齐"} aria-label="吸附对齐" aria-pressed={snapEnabled} onClick={() => {
+              <button type="button" data-tip={snapEnabled ? "关闭吸附对齐" : "开启吸附对齐"} aria-label="吸附对齐" aria-pressed={snapEnabled} onClick={() => {
                 const next = !snapEnabled;
                 snapEnabledRef.current = next;
                 setSnapEnabled(next);
@@ -4061,6 +4164,12 @@ export function CanvasWorkspace({
           >
             {promptMenu.point && <button type="button" role="menuitem" className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs hover:bg-panel2" onClick={() => newDraftAt(promptMenu.point!)}>
               <PenTool size={14} /> 新建草稿
+            </button>}
+            {promptMenu.section && <button type="button" role="menuitem" title="移除分区框，保留其中的卡片" className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs text-red-400 hover:bg-panel2" onClick={() => {
+              removeNodes([promptMenu.section!.id]);
+              setPromptMenu(null);
+            }}>
+              <Trash2 size={14} className="shrink-0" /> 移除分区「{promptMenu.section.name}」
             </button>}
             {promptMenu.nodeIds.length > 0 && <CanvasLayerMenuItem projectId={activeCanvasRef.current.id} nodeIds={promptMenu.nodeIds}
               className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs hover:bg-panel2" />}

@@ -124,6 +124,7 @@ async fn auto_analyze(app: &AppHandle, db: &Arc<Database>, asset: Asset) -> Resu
         context_prompts: vec![],
         ratio: None,
         job_id: None,
+        generate_num: None,
     };
     let cloud = app.state::<CloudClient>().inner().clone();
     let auth = app.state::<AuthClient>().inner().clone();
@@ -301,6 +302,7 @@ async fn name_from_text(
         context_prompts: vec![],
         ratio: None,
         job_id: None,
+        generate_num: None,
     };
     let result = provider
         .understand(UnderstandOperation::Autoname, req)

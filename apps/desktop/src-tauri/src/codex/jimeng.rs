@@ -116,8 +116,9 @@ impl GenProvider for DreaminaCliProvider {
         submit
             .arg("--resolution_type")
             .arg("2k")
+            // 生成张数（CLI 原生 1–10；UI 上限 4，这里防御性 clamp）。
             .arg("--generate_num")
-            .arg("1")
+            .arg(req.generate_num.map(|n| n.clamp(1, 10)).unwrap_or(1).to_string())
             .arg("--poll")
             .arg(POLL_SECS.to_string());
         submit

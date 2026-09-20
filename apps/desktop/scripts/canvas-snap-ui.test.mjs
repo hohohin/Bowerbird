@@ -69,11 +69,16 @@ try {
     assert.ok(Math.abs(free[axis] - raw[axis]) < 0.01);
     assert.equal(await page.locator(".canvas-snap-guide").count(), 0);
     await page.mouse.up();
+    // Ctrl+Z restores the card to where it was before the drag (the aligned position).
+    await page.keyboard.press("Control+z");
+    const undone = await node("moving").boundingBox();
+    assert.ok(Math.abs(undone.x - aligned.x) < 0.01 && Math.abs(undone.y - aligned.y) < 0.01,
+      "undo restores the pre-drag position");
     await page.reload(); await node("moving").waitFor();
     assert.equal(await toggle.getAttribute("aria-pressed"), "false", "remember the switch after reload");
     await toggle.click();
     assert.equal(await toggle.getAttribute("aria-pressed"), "true");
   }
   assert.deepEqual(errors, []);
-  console.log("PASS left toolbar snap toggle, remembered state, spaced horizontal/vertical alignment, paired dashed guides at 100%/50%, free placement and stationary anchors.");
+  console.log("PASS left toolbar snap toggle, remembered state, spaced horizontal/vertical alignment, paired dashed guides at 100%/50%, free placement, stationary anchors and Ctrl+Z move undo.");
 } finally { await browser.close(); await server.close(); }

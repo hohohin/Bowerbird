@@ -131,13 +131,29 @@ try {
     const after = final.nodes.find(n => n.id === before.id);
     for (const key of ["x", "y", "width", "height", "payloadJson", "threadId", "assetId"]) assert.equal(after[key], before[key]);
   }
+  // Ctrl+Z rewinds the held layer gestures — one undo entry per gesture, including the
+  // neighbors its crossing displaced — back to the loaded stacking. A blank click first
+  // dismisses the layer menu, which keeps Ctrl+Z for itself while open.
+  await page.locator(".canvas-stage").click({ position: { x: 700, y: 800 } });
+  await page.keyboard.press("Control+z");
+  await page.keyboard.press("Control+z");
+  await page.keyboard.press("Control+z");
+  assert.equal(await z("a"), initial.nodes.find(n => n.id === "a").zIndex, "three undos rewind every layer gesture");
+  assert.equal(await z("note"), initial.nodes.find(n => n.id === "note").zIndex);
+  assert.equal(await z("folder"), initial.groups[0].zIndex);
+  const undone = await saved();
+  for (const before of initial.nodes) {
+    const after = undone.nodes.find(n => n.id === before.id);
+    assert.equal(after.zIndex, before.zIndex, `undo restores ${before.id} stacking`);
+  }
+  assert.equal(undone.groups[0].zIndex, initial.groups[0].zIndex);
   await page.evaluate(() => window.save());
   await page.reload();
   await node("a").waitFor();
-  assert.equal(await z("a"), 3);
-  assert.equal(await z("note"), 2);
-  assert.equal(await z("folder"), 4);
+  assert.equal(await z("a"), initial.nodes.find(n => n.id === "a").zIndex);
+  assert.equal(await z("note"), initial.nodes.find(n => n.id === "note").zIndex);
+  assert.equal(await z("folder"), initial.groups[0].zIndex);
   assert.equal(await page.locator(".canvas-node-name").count(), 0);
   assert.deepEqual(errors, []);
-  console.log("PASS layer timing, direction, pointer capture, stopping, cross-card ordering and settings/reload.");
+  console.log("PASS layer timing, direction, pointer capture, stopping, cross-card ordering, Ctrl+Z undo and settings/reload.");
 } finally { await browser.close(); await server.close(); }

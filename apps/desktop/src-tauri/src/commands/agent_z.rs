@@ -527,6 +527,7 @@ rl.on("line", (line) => { void handleLine(line); });
             context_prompts: vec![],
             ratio,
             job_id: None,
+            generate_num: None,
         };
         // 桥不需要流式进度：开一个通道丢弃 chunk 即可（Chunk::Submit 的 task_queue 落库只在
         // codex_create_image 命令层做，这里不建 job）。
@@ -685,6 +686,7 @@ rl.on("line", (line) => { void handleLine(line); });
             context_prompts: vec![],
             ratio: None,
             job_id: None,
+            generate_num: None,
         };
         // MCP 反推固定走 Bowerbird Cloud（方舟），不按权益路由到本机 codex CLI：
         // 宿主 TUI 内再拉 codex exec 子进程一次要 2–3 分钟，且与宿主抢同一账号额度。
