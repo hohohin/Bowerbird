@@ -37,6 +37,28 @@ const RUNTIME_HASH: &str = "abef733dacbe2f571547a7150b479b5cb9cc0df22f96c24983a4
 const RUNTIME_ARCHIVE: &str = "onnxruntime-win-x64-1.28.0.zip";
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 const RUNTIME_MEMBER: &str = "lib/onnxruntime.dll";
+// 无钉定运行库的平台（Intel Mac、Linux）也要编译本模块：install() 的
+// vector_supported 护栏保证这些占位值永远不会被读取。
+#[cfg(not(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "windows", target_arch = "x86_64")
+)))]
+const RUNTIME_BYTES: u64 = 0;
+#[cfg(not(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "windows", target_arch = "x86_64")
+)))]
+const RUNTIME_HASH: &str = "";
+#[cfg(not(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "windows", target_arch = "x86_64")
+)))]
+const RUNTIME_ARCHIVE: &str = "";
+#[cfg(not(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "windows", target_arch = "x86_64")
+)))]
+const RUNTIME_MEMBER: &str = "";
 pub const VECTOR_PACK_ID: &str = "jina-clip-v2-int8-onnxruntime128-v1";
 
 /// Calibrated 2026-09-19 on the 21 onboarding assets: true pairs scored

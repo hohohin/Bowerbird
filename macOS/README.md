@@ -2,19 +2,18 @@
 
 本目录记录 Mac 上的本地开发、运行和未签名构建流程。Bowerbird 使用 canonical Tauri / React / Rust 源码，不维护 macOS override。构建架构以 `rustc -vV` 的 host 为准；Intel 为 `x86_64-apple-darwin`，Apple Silicon 原生工具链为 `aarch64-apple-darwin`。
 
-## 2026-09-20 Mac 26.9.2001 更新包（本机构建待上传）
+## 2026-09-20 Mac 26.9.2002 双架构更新包（本机构建待上传；Intel 通道首发）
 
-收录 9 月 19/20 存档工作：本地分类向量精确匹配判官（jina-clip-v2 int8，可选安装、未装回退 VLM）与可选云端最终校验 Jev、画板新卡锚定当前可视区左上角、视频卡独立样式与 ▶ 徽标、文本卡表格增强（标题编辑/整表复制 CSV/行高列宽拖拽）、创作模式空白框选、mac「打开所在文件夹」Finder 选中与对话框方向键乱码修复。版本按同日序号规范定为 **26.9.2001**（20 日第 1 包，> 线上 26.9.1901，护栏通过；1901 清单已由发布侧替换上线，2026-09-20 确认）。构建前验证：Rust 全量 **379 passed / 6 ignored**、画板纯逻辑 **127/127**、creation-editor/creation-marquee/notes/media/reference/local-classification 六组 UI 回归与 `tsc --noEmit` 通过（`canvas-arrangement-ui`、`canvas-selection-to-board-ui` 的既有等待失败维持不处理）。
+收录 9 月 19/20 全部工作：本地分类向量精确匹配判官（jina-clip-v2 int8，可选安装/面板卸载、未装回退 VLM）与可选云端最终校验 Jev、画板新卡锚定当前可视区左上角、视频卡独立样式与 ▶ 徽标、文本卡表格增强（标题编辑/整表复制 CSV/行高列宽拖拽）、创作模式空白框选、视频创作免本地 FFmpeg（原生 MP4 探针）、mac「打开所在文件夹」Finder 选中与对话框方向键乱码修复、钥匙串弹窗根治（refresh token 内存缓存 + 稳定本地签名身份）。**26.9.2001（20 日第 1 包）在本机核验后、上传前被同日第 2 包取代**：工作区随后新增钥匙串修复等改动且分发迁移 COS，为使发布包包含这些修复并统一双架构版本，按同日序号规范升为 **26.9.2002**（> 线上 26.9.1901，护栏通过）；2001 产物从未上传任何存储，本地产物与发布说明已删除，勿再使用 `/tmp/bowerbird-release-26.9.2001/` 的交接脚本。构建前验证：Rust 全量 **384 passed / 6 ignored**、画板纯逻辑 **127/127**、local-classification UI 回归与 `tsc --noEmit` 通过。
 
-本机缺失 `macOS/.signing/r2.env`（R2 凭据），本轮 `R2_SKIP_UPLOAD=1 bash macOS/release.sh macOS/dist/release-notes-26.9.2001.txt` 仅本地产出（产物在 `macOS/dist/`，不入 Git）：
+双架构构建（产物在 `macOS/dist/`，不入 Git）：aarch64 用 `COS_SKIP_UPLOAD=1 bash macOS/release.sh macOS/dist/release-notes-26.9.2002.txt`（自动检测并使用钥匙串内 `Bowerbird Local Code Signing` 稳定签名身份）；Intel 在同一台 Apple Silicon 本机交叉编译——`rustup target add x86_64-apple-darwin` 后以 `APPLE_SIGNING_IDENTITY="Bowerbird Local Code Signing" pnpm tauri build --target x86_64-apple-darwin --bundles app,dmg` 构建，再按 release.sh 同样步骤归档/校验/生成清单（交叉编译首个坑见 PROJECT.md 踩坑：vector.rs 平台常量在未支持目标缺失导致编译失败，已补占位定义，install 入口护栏保证占位值不可达）。
 
-- 更新器安装包：`Bowerbird_26.9.2001_aarch64.app.tar.gz`，**86,344,811 bytes**，SHA-256 `de431a5fdc9da85cda13df2901df3ab54b1e075c2b793bb5fe077179d19931e0`；同名 `.sig`/`.sha256` 附带。
-- 手动安装 DMG：`Bowerbird_26.9.2001_aarch64-updater-installer.dmg`，**86,881,253 bytes**，SHA-256 `852fe0edd1d2304c4761a583bf3f75f43f2f049c1b537acf6e0f139f7220cfa5`；未签名/未公证。
-- 更新清单：`darwin-aarch64.json`（version 26.9.2001，SHA-256 `9114ec34faacf8d6ddc937d9f697be7f52528d4f219977be1dac2b1cb34e68fc`，URL 指向 cdn.bowerbird.cn 直下 `mac_package/Bowerbird_26.9.2001_aarch64.app.tar.gz`；2026-09-20 分发迁移腾讯 COS+CDN 后重新生成，原 R2 版清单哈希 `ed68d36a…` 作废）。
+- **aarch64（M 系列）** 更新包：`Bowerbird_26.9.2002_aarch64.app.tar.gz`，**86,394,528 bytes**，SHA-256 `03ef60428b9118efe7812ea8d3c57dcb255723ae63422c7e9f70dcc8c7b32ee3`；手动 DMG `Bowerbird_26.9.2002_aarch64-updater-installer.dmg`，**86,875,629 bytes**，`5fd72b14205ba8600cd0f8f43470d70377c360de96ec7b8ab07ab1ae5b4354df`；清单 `darwin-aarch64.json`（SHA-256 `490acc94df962972ab21dde36d3b95e9b812b833b5b7544cd6acb8169953384a`）。
+- **x86_64（Intel）** 更新包：`Bowerbird_26.9.2002_x86_64.app.tar.gz`，**86,851,474 bytes**，SHA-256 `80f4c2f023e745f4315189f61407b5b9ef987e15143432e0aba46492fd592e9d`；手动 DMG `Bowerbird_26.9.2002_x86_64-updater-installer.dmg`，**87,370,482 bytes**，`725073a0ef04691155cafe78dcfd599aae1c9a33d6347f6b25fcfa2e5ca5b621`；清单 `darwin-x86_64.json`（SHA-256 `32b57b504bddf7b18c0c96b31e498f444315639f99348c19e15ff2ef2d46be34`）。两份清单 URL 均指向 `cdn.bowerbird.cn/mac_package/` 直下。DMG 未 Developer ID 公证；Intel 的向量精确匹配包暂不可用（onnxruntime 1.28.0 无 macOS x86_64 资产），面板显示不支持并回退 VLM 判断。
 
-本机核验：`CFBundleShortVersionString` = 26.9.2001、arm64 二进制内嵌 Mac 公钥与 `tauri.macos.conf.json` 及已发布 26.9.1802/1901 逐字节一致（key id `0b5a2efc4865664f`）、DMG `hdiutil verify` 通过、minisign 主签名与全局签名通过（`minisign-verify` 0.2.5 同构造）、篡改字节被拒、清单 signature 与 `.sig` 逐字节一致。
+双架构本机核验均通过：`CFBundleShortVersionString` = 26.9.2002、Mach-O 架构分别为 arm64/x86_64、二进制内嵌 Mac 公钥与 `tauri.macos.conf.json` 及已发布 26.9.1802/1901 逐字节一致（key id `0b5a2efc4865664f`）、`codesign -dvv` Authority = `Bowerbird Local Code Signing` 且 `--verify --deep` 通过（首个带稳定签名身份的发布包）、DMG `hdiutil verify`、minisign 主签名与全局签名（`minisign-verify` 0.2.5 同构造）、篡改字节拒绝、清单 signature 与 `.sig` 逐字节一致。Intel 包未在真实 Intel 机器运行验收（本机为 Apple Silicon），属发布后待补项。
 
-**发布进度（2026-09-20，分发迁移腾讯 COS+CDN）**：Mac 分发自本版起从 R2 r2.dev（Cloudflare 声明仅限开发且有速率限制）迁移至腾讯 COS + CDN 域名 `cdn.bowerbird.cn`（bowerbird.cn 已有粤 ICP 备案，DNS 在火山引擎）。前置：腾讯云控制台建桶（大陆地域，建议 ap-guangzhou 与官网服务器同地域）、CDN 域名 cdn.bowerbird.cn（COS 源站 + HTTPS 证书 + 一键授权）、火山 DNS 加 CNAME；随后 `cp macOS/cos.env.example macOS/.signing/cos.env` 填入密钥，在仓库根执行 `/tmp/bowerbird-release-26.9.2001/upload-cos.sh`（上传 26.9.2001 六件 + 镜像 26.9.18/1802/1901 历史包 + 公网完整下载哈希 + minisign 复核），再在服务器 106.55.44.143 执行 `/tmp/bowerbird-release-26.9.2001/swap-manifest.sh`（备份 26.9.1901 清单 → 哈希断言 `9114ec34…` → rename 原子替换 → 公网复核）。R2 桶与旧 r2.dev URL 原样保留（已发布历史清单仍指向它），不再作为新发布通道。回滚：把备份清单 rename 回原名。交接值与协议见 [DESKTOP-UPDATES.md](../dev-doc/DESKTOP-UPDATES.md)「Mac 26.9.2001 发布侧核验」。本轮未运行真实应用内更新。
+**发布进度（2026-09-20，分发迁移腾讯 COS+CDN，双通道）**：Mac 分发自本版起从 R2 r2.dev（Cloudflare 声明仅限开发且有速率限制）迁移至腾讯 COS + CDN 域名 `cdn.bowerbird.cn`（bowerbird.cn 已有粤 ICP 备案，DNS 在火山引擎）。前置：腾讯云控制台建桶（大陆地域，建议 ap-guangzhou 与官网服务器同地域）、CDN 域名 cdn.bowerbird.cn（COS 源站 + HTTPS 证书 + 一键授权）、火山 DNS 加 CNAME；随后 `cp macOS/cos.env.example macOS/.signing/cos.env` 填入密钥，在仓库根执行 `/tmp/bowerbird-release-26.9.2002/upload-cos.sh`（上传双架构各六件 + 镜像 26.9.18/1802/1901 历史包 + 公网完整下载哈希 + minisign 复核），再在服务器 106.55.44.143 依次执行 `/tmp/bowerbird-release-26.9.2002/swap-manifest-aarch64.sh`（备份 26.9.1901 清单 → 哈希断言 `490acc94…` → rename 原子替换 → 公网复核）与 `/tmp/bowerbird-release-26.9.2002/swap-manifest-x86_64.sh`（Intel 通道首次上线：核验 `32b57b50…` 后新建清单，回滚即删文件回到 404）。首页 Mac DMG 按钮已指向 `cdn.bowerbird.cn/mac_package/Bowerbird_26.9.2002_aarch64-updater-installer.dmg`（仓库两份首页已改，随候选→原子切换发布）。R2 桶与旧 r2.dev URL 原样保留（已发布历史清单仍指向它），不再作为新发布通道。交接值与协议见 [DESKTOP-UPDATES.md](../dev-doc/DESKTOP-UPDATES.md)「Mac 26.9.2002 双架构发布侧核验」。本轮未运行真实应用内更新。
 
 ## 2026-09-19 Mac 26.9.1901 更新包（已发布）
 
@@ -26,7 +25,7 @@
 - 手动安装 DMG：`Bowerbird_26.9.1901_aarch64-updater-installer.dmg`，**86,439,465 bytes**，SHA-256 `f1d59df9ed63c6c9ff7a7eb15fb922a037e960103e863cf178247cc3af2035bf`；未签名/未公证。
 - 更新清单：`darwin-aarch64.json`（version 26.9.1901，notes 为本地分类防误标与启动检查更新说明，URL 指向 R2 直下 `mac_package/Bowerbird_26.9.1901_aarch64.app.tar.gz`）。
 
-**已发布（2026-09-19/20 交接确认）：** 上述 26.9.1901 产物已经发布侧执行清单原子替换上线，2026-09-20 公网复核线上 darwin-aarch64 清单为 26.9.1901；26.9.1802 客户端经设置手动检查升级，启动静默检查自本版本起在 Mac 生效。后续 26.9.2001 见上节。
+**已发布（2026-09-19/20 交接确认）：** 上述 26.9.1901 产物已经发布侧执行清单原子替换上线，2026-09-20 公网复核线上 darwin-aarch64 清单为 26.9.1901；26.9.1802 客户端经设置手动检查升级，启动静默检查自本版本起在 Mac 生效。后续 26.9.2002 见上节。
 
 ## 2026-09-18 Mac 26.9.1802 引导更新包（已发布）
 
