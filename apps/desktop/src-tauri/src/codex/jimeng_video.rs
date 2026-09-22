@@ -301,6 +301,7 @@ mod tests {
             ratio: Some("16:9".into()),
             job_id: None,
             generate_num: None,
+            transparent_background: None,
         }
     }
     fn options(kind: &str) -> VideoOptions {

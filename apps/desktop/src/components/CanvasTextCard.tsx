@@ -7,7 +7,8 @@ import { notifyError } from "../lib/notify";
 
 const MIN_GRID_WEIGHT_SHARE = 0.04;
 
-export function CanvasTextCard({ value, selected, width, height, zoom, onChange, onSelect, onResize }: {
+export function CanvasTextCard({ value, selected, width, height, zoom, onChange, onSelect, onResize, onConnectCell }: {
+  onConnectCell?: (cellId: string, clientX: number, clientY: number) => void;
   value: CanvasNotePayload;
   selected: boolean;
   width: number;
@@ -46,8 +47,8 @@ export function CanvasTextCard({ value, selected, width, height, zoom, onChange,
     setRemoved(null);
     setCopied(null);
     const cells = axis === "row"
-      ? [...value.cells.slice(0, index), value.cells[0].map(() => emptyCanvasCell()), ...value.cells.slice(index)]
-      : value.cells.map(line => [...line.slice(0, index), emptyCanvasCell(), ...line.slice(index)]);
+      ? [...value.cells.slice(0, index), value.cells[0].map(() => ({ ...emptyCanvasCell(), id: crypto.randomUUID() })), ...value.cells.slice(index)]
+      : value.cells.map(line => [...line.slice(0, index), { ...emptyCanvasCell(), id: crypto.randomUUID() }, ...line.slice(index)]);
     const weights = [...(axis === "row" ? rowWeights : columnWeights)];
     weights.splice(index, 0, 1);
     setActive(axis === "row" ? [index, active[1]] : [active[0], index]);
@@ -173,6 +174,9 @@ export function CanvasTextCard({ value, selected, width, height, zoom, onChange,
       onWheel={event => { if (!event.ctrlKey && !event.metaKey) event.stopPropagation(); }}>
       {value.cells.map((line, row) => <div role={bubble ? undefined : "row"} className="canvas-text-row" key={row} style={{ flexGrow: rowWeights[row] }}>
         {line.map((item, column) => <div role={bubble ? undefined : "cell"} className={`canvas-text-cell ${removing && (removing.axis === "row" ? removing.index === row : removing.index === column) ? "is-removing" : ""}`} key={column} style={{ flexGrow: columnWeights[column] }}>
+          {onConnectCell && <button className="workflow-cell-port" data-workflow-cell={item.id} aria-label={`输出第 ${row + 1} 行第 ${column + 1} 列文本`}
+            title="拖动连接文本输入" onPointerDown={event => { event.preventDefault(); event.stopPropagation(); onConnectCell(item.id!, event.clientX, event.clientY); }}
+            onClick={event => { if (event.detail === 0) onConnectCell(item.id!, event.clientX, event.clientY); }} />}
           <textarea aria-label={bubble ? "气泡便签内容" : `第 ${row + 1} 行第 ${column + 1} 列`} placeholder={bubble ? "添加说明或标签…" : "输入文本…"} value={item.text}
             style={{ fontWeight: item.bold ? 700 : 400, fontStyle: item.italic ? "italic" : "normal", textAlign: item.align, lineHeight: lineHeight / 100 }}
             onFocus={() => { setActive([row, column]); onSelect(); }}

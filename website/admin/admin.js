@@ -1,6 +1,26 @@
 const $ = (id) => document.getElementById(id);
 const statusLabels = { unused: "可发放", redeemed: "已兑换", disabled: "已停用", expired: "已过期" };
-let client, config, session, inventory, busy = false, page = 0, exportRows = [], disableTarget = null;
+// Kernel 技能目录快照：与 Worker 镜像内 BuiltinSkillRegistry 和统一 Agent 领域方法
+// （apps/agent-worker/src/skills/）同步；镜像更新后需同步此表。
+const KERNEL_SKILLS = {
+  runners: [
+    { id: "bowerbird-controlled-image-edit", version: "0.1.2", title: "Bowerbird 受控图片编辑", description: "纯文本意图分析与动态受控图片计划；批准后按计划执行，反馈后才允许视觉诊断。" },
+    { id: "bowerbird-html-layout-render", version: "0.1.0", title: "Bowerbird HTML 离线排版", description: "生成受限 HTML/CSS 并离线截图一次；不访问网页、不调用 Vision、不自动修订。" },
+    { id: "bowerbird-unified-agent", version: "0.1.0", title: "Bowerbird 通用云端 Agent", description: "一个 Agent 按需读取方法，在授权范围内根据工具结果继续执行；旧 Run 保持原步骤审批。" },
+  ],
+  domainMethods: {
+    owner: "bowerbird-unified-agent",
+    version: "0.1.0",
+    instructionHash: "82cbe0f3…d6a22e",
+    entries: [
+      { id: "bowerbird-controlled-image-edit", description: "图片编辑中的主体保持、参考图职责与属性迁移方法。", file: "references/image-edit.md" },
+      { id: "bowerbird-html-layout-render", description: "HTML/CSS 图文排版与离线截图方法。", file: "references/html-layout.md" },
+      { id: "bowerbird-xiaohongshu", description: "小红书图文草稿的内容组织方法。", file: "references/xiaohongshu.md" },
+      { id: "bowerbird-wechat-article-layout", description: "公众号图文排版与可粘贴文章子树方法。", file: "references/wechat-article-layout.md" },
+    ],
+  },
+};
+let client, config, session, inventory, busy = false, page = 0, exportRows = [], disableTarget = null, view = "codes";
 let pendingIssue = null;
 const pendingKey = "bowerbird.admin.pending-issue";
 const date = (value) => value ? new Date(value).toLocaleString("zh-CN", { hour12: false, timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—";
@@ -16,7 +36,7 @@ function clearCodes() {
 }
 function showLogin(message) {
   clearCodes(); inventory = null; $("code-rows").replaceChildren();
-  $("console").hidden = true; $("login-panel").hidden = false;
+  $("console").hidden = true; $("skills-console").hidden = true; $("login-panel").hidden = false;
   $("login-form").hidden = Boolean(session);
   $("login-status").textContent = message;
 }
@@ -63,6 +83,48 @@ function cell(text, small) {
   const td = document.createElement("td"); td.textContent = text;
   if (small) { const extra = document.createElement("small"); extra.textContent = small; td.append(extra); }
   return td;
+}
+function syncConsoleVisibility() {
+  const authorized = Boolean(session);
+  $("console").hidden = !(authorized && view === "codes");
+  $("skills-console").hidden = !(authorized && view === "skills");
+  $("login-panel").hidden = authorized;
+}
+function switchView(next) {
+  if (view === next) return;
+  view = next;
+  for (const item of document.querySelectorAll(".nav-item")) {
+    const active = item.dataset.view === next;
+    item.classList.toggle("active", active);
+    if (active) item.setAttribute("aria-current", "page"); else item.removeAttribute("aria-current");
+  }
+  $("topbar-crumb").textContent = next === "skills" ? "Kernel 技能" : "兑换码";
+  syncConsoleVisibility();
+}
+for (const item of document.querySelectorAll(".nav-item")) item.addEventListener("click", () => switchView(item.dataset.view));
+function renderKernelSkills() {
+  $("skills-runner-count").textContent = `${KERNEL_SKILLS.runners.length} 项 · 随 Worker 镜像发布`;
+  const methods = KERNEL_SKILLS.domainMethods;
+  $("skills-method-count").textContent = `${methods.entries.length} 项 · ${methods.owner} v${methods.version} · 指令哈希 ${methods.instructionHash}`;
+  $("skills-runner-rows").replaceChildren(...KERNEL_SKILLS.runners.map((skill) => {
+    const tr = document.createElement("tr");
+    const name = cell(skill.id, skill.title);
+    name.firstChild.replaceWith(Object.assign(document.createElement("span"), { className: "code", textContent: skill.id }));
+    const version = cell(""); version.append(Object.assign(document.createElement("span"), { className: "chip", textContent: `v${skill.version}` }));
+    const description = cell(skill.description); description.classList.add("wrap");
+    tr.append(name, version, description);
+    return tr;
+  }));
+  $("skills-method-rows").replaceChildren(...methods.entries.map((entry) => {
+    const tr = document.createElement("tr");
+    const name = cell(entry.id);
+    name.firstChild.replaceWith(Object.assign(document.createElement("span"), { className: "code", textContent: entry.id }));
+    const description = cell(entry.description); description.classList.add("wrap");
+    const file = cell(entry.file); file.classList.add("wrap");
+    file.firstChild.replaceWith(Object.assign(document.createElement("span"), { className: "code", textContent: entry.file }));
+    tr.append(name, description, file);
+    return tr;
+  }));
 }
 function render() {
   const { stats, rows, total, batches } = inventory;
@@ -115,7 +177,7 @@ function selectBatch(id, label) {
 }
 async function loadList() {
   inventory = await api("list", { status: $("status-filter").value, search: $("search").value.trim(), batch_id: $("batch-filter").value || null, page });
-  render(); $("login-panel").hidden = true; $("console").hidden = false;
+  render(); syncConsoleVisibility();
 }
 function showCodes(rows, label) {
   if (!rows.length) { notice("没有可导出的兑换码：可能已兑换、停用、过期，或来自旧版离线脚本。"); return; }
@@ -198,6 +260,7 @@ async function accountChanged(next) {
 }
 async function init() {
   $("login-submit").disabled = true;
+  renderKernelSkills();
   const expiry = new Date(Date.now() + 90 * 86400000);
   expiry.setMinutes(expiry.getMinutes() - expiry.getTimezoneOffset()); $("batch-expiry").value = expiry.toISOString().slice(0, 16);
   try {

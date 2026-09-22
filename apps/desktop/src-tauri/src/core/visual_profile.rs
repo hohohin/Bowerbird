@@ -569,6 +569,7 @@ pub struct VisualProfileDetail {
     pub summary: VisualProfileSummary,
     pub source_scope_hash: String,
     pub source_asset_ids: Vec<String>,
+    pub source_requirements: Option<String>,
     pub rules: Vec<DraftRule>,
     pub content_themes: Vec<ContentTheme>,
     pub conflicts: Vec<EvidenceConflict>,
@@ -737,6 +738,10 @@ fn load_folder_assets(
     conn: &Connection,
     folder_id: &str,
 ) -> AppResult<Vec<FolderAssetRow>> {
+    load_visual_source_assets(conn, Some(folder_id), &[])
+}
+
+fn load_visual_source_assets(conn: &Connection, folder_id: Option<&str>, asset_ids: &[String]) -> AppResult<Vec<FolderAssetRow>> {
     // Source images and saved profiles belong to the central library.
     // Do not intersect the source selection with canvas membership.
     // 最新 caption 按 created_at DESC, rowid DESC 决胜（同秒多行约定，core/library.rs）。
@@ -749,11 +754,11 @@ fn load_folder_assets(
                  WHERE ca.asset_id = a.id AND ca.kind = 'caption'
                  ORDER BY ca.created_at DESC, ca.rowid DESC LIMIT 1)
         FROM assets a
-        WHERE a.folder_id = ?1
+        WHERE (?1 IS NOT NULL AND a.folder_id = ?1) OR (?1 IS NULL AND a.id IN (SELECT value FROM json_each(?2)))
         ORDER BY a.id
     "#;
     let mut stmt = conn.prepare(sql)?;
-    let rows = stmt.query_map(rusqlite::params![folder_id], |row| {
+    let rows = stmt.query_map(rusqlite::params![folder_id, serde_json::to_string(asset_ids)?], |row| {
         Ok(FolderAssetRow {
             asset_id: row.get(0)?,
             name: row.get(1)?,
@@ -871,7 +876,8 @@ fn validate_rule_shape(category: &str, value: &str, polarity: &str) -> AppResult
 
 /// 从冻结证据卡 JSON 提取 asset id 集合（source 关联行用）。
 fn draft_asset_ids(cards_json: &str) -> Vec<String> {
-    serde_json::from_str::<Vec<VisualEvidenceCard>>(cards_json)
+    let value: serde_json::Value = serde_json::from_str(cards_json).unwrap_or_default();
+    serde_json::from_value::<Vec<VisualEvidenceCard>>(value.get("cards").unwrap_or(&value).clone())
         .map(|cards| cards.into_iter().map(|c| c.asset_id).collect())
         .unwrap_or_default()
 }
@@ -883,6 +889,7 @@ fn parse_cloud_draft(
     cards: &[VisualEvidenceCard],
     project_id: &str,
     folder_id: &str,
+    allow_text_rules: bool,
 ) -> AppResult<VisualProfileDraft> {
     // worker 聚合输出为 camelCase（apps/agent-worker cloud-visual CloudVisualDraft）。
     #[derive(Deserialize)]
@@ -967,7 +974,7 @@ fn parse_cloud_draft(
     let mut visual_rules = Vec::new();
     for rule in parsed.visual_rules.into_iter().take(64) {
         let supporting = filter_ids(&rule.supporting_asset_ids);
-        if supporting.is_empty() {
+        if supporting.is_empty() && !allow_text_rules {
             continue;
         }
         validate_rule_shape(&rule.category, &rule.value, &rule.polarity)?;
@@ -1047,6 +1054,39 @@ fn parse_cloud_draft(
 // ---------------------------------------------------------------------------
 
 impl crate::db::Database {
+    /// Workflow sources are explicit assets, never a synthetic folder or project-owned profile.
+    pub fn visual_profile_input_cards(&self, asset_ids: &[String], require_complete: bool) -> AppResult<(Vec<VisualEvidenceCard>, Vec<String>)> {
+        let unique: std::collections::BTreeSet<_> = asset_ids.iter().collect();
+        if unique.len() != asset_ids.len() || asset_ids.len() > 500 { return Err(AppError::Other("图片范围无效，最多 500 张".into())); }
+        let conn = self.conn.lock().unwrap();
+        let rows = load_visual_source_assets(&conn, None, asset_ids)?;
+        if rows.len() != asset_ids.len() { return Err(AppError::Other("输入图片已丢失，请重新选择".into())); }
+        let mut cards = Vec::new();
+        let mut missing = Vec::new();
+        for row in &rows {
+            let parsed = row.caption_payload.as_deref().and_then(|raw| serde_json::from_str::<CaptionPayload>(raw).ok());
+            let card = row.caption_id.as_deref().zip(row.caption_payload.as_deref())
+                .map(|(id, payload)| to_evidence_card(&row.asset_id, id, payload, &row.source));
+            if parsed.and_then(|p| p.instruction).as_deref() == Some(BRAND_OBSERVATION_TASK) && card.as_ref().is_some_and(card_is_effective) {
+                cards.push(card.unwrap());
+            } else { missing.push(row.asset_id.clone()); }
+        }
+        if require_complete && !missing.is_empty() { return Err(AppError::Other("请先完成所有输入图片的品牌观察".into())); }
+        assert_payload_clean(&cards, &rows)?;
+        Ok((cards, missing))
+    }
+
+    pub fn persist_workflow_visual_profile(&self, scope_key: &str, name: &str, cards: &[VisualEvidenceCard], requirements: &str, raw: &str) -> AppResult<VisualProfileDetail> {
+        let scope = format!("workflow:{scope_key}");
+        let mut draft = parse_cloud_draft(raw, cards, "", &scope, !requirements.trim().is_empty())?;
+        if draft.visual_rules.is_empty() { return Err(AppError::Other("未提炼出可用的视觉规则，请补充图片或文字".into())); }
+        draft.source_scope_hash = hex_digest(format!("{}\n{}", draft.source_scope_hash, requirements));
+        let payload = serde_json::json!({"schemaVersion":2,"cards":cards,"requirements":requirements}).to_string();
+        let mut conn = self.conn.lock().unwrap();
+        let id = Self::insert_draft_row(&mut conn, "", &scope, name, &draft, &payload, cards.len() as i64, "cloud_model")?;
+        Self::visual_profile_detail(&conn, &id)
+    }
+
     /// 覆盖率预览（只读，不产生任何副作用；§8.3「启动前本地检查」）。
     pub fn visual_profile_preview(
         &self,
@@ -1287,7 +1327,7 @@ impl crate::db::Database {
     ) -> AppResult<VisualProfileDetail> {
         let mut conn = self.conn.lock().unwrap();
         let folder_name = assert_source_folder(&conn, project_id, folder_id)?;
-        let draft = parse_cloud_draft(cloud_draft_json, cards, project_id, folder_id)?;
+        let draft = parse_cloud_draft(cloud_draft_json, cards, project_id, folder_id, false)?;
         let effective_count = cards.iter().filter(|c| card_is_effective(c)).count() as i64;
         let cards_json = serde_json::to_string(cards).unwrap_or_else(|_| "[]".into());
         let profile_id = Self::insert_draft_row(
@@ -1558,6 +1598,9 @@ impl crate::db::Database {
             source_asset_ids: draft_asset_ids(&parse_json_column(
                 "SELECT source_payload FROM project_visual_profiles WHERE id = ?1",
             )?),
+            source_requirements: serde_json::from_str::<serde_json::Value>(&parse_json_column(
+                "SELECT source_payload FROM project_visual_profiles WHERE id = ?1",
+            )?).ok().and_then(|v| v.get("requirements").and_then(|s| s.as_str()).map(str::to_owned)),
             rules,
             content_themes,
             conflicts,
@@ -1793,6 +1836,29 @@ mod tests {
         .unwrap();
         drop(conn);
         db
+    }
+
+    #[test]
+    fn workflow_visual_profile_accepts_explicit_sources_and_freezes_text() {
+        let db = seeded_db();
+        let ids = vec!["asset-0".to_string()];
+        let (cards, missing) = db.visual_profile_input_cards(&ids, true).unwrap();
+        assert!(missing.is_empty());
+        assert_eq!(cards.len(), 1);
+        assert!(db.visual_profile_input_cards(&["missing".into()], true).is_err());
+        assert!(db.visual_profile_input_cards(&["asset-none".into()], true).is_err());
+        let raw = serde_json::json!({"schemaVersion":1,"summary":"蓝色留白","visualRules":[{"category":"palette","value":"使用蓝色","polarity":"must","supportingAssetIds":[]}]}).to_string();
+        let first = db.persist_workflow_visual_profile("p:node", "画板规范", &cards, "使用蓝色", &raw).unwrap();
+        assert_eq!(first.source_asset_ids, ids);
+        assert_eq!(first.source_requirements.as_deref(), Some("使用蓝色"));
+        assert!(db.visual_profile_capsule(&first.summary.id).is_err());
+        db.confirm_visual_profile(&first.summary.id).unwrap();
+        assert_eq!(db.visual_profile_capsule(&first.summary.id).unwrap().must[0].value, "使用蓝色");
+        let second = db.persist_workflow_visual_profile("p:node", "画板规范", &[], "蓝色且留白", &raw).unwrap();
+        assert_eq!(second.summary.version, 2);
+        assert!(second.source_asset_ids.is_empty());
+        assert_ne!(first.source_scope_hash, second.source_scope_hash);
+        assert!(db.update_visual_profile_rules(&first.summary.id, &[]).is_err());
     }
 
     #[test]

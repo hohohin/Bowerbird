@@ -268,6 +268,8 @@ pub enum CanvasTextAlign {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CanvasTextCell {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     pub text: String,
     pub bold: bool,
     pub italic: bool,

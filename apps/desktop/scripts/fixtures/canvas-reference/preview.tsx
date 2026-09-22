@@ -6,6 +6,7 @@ import { ImageAnnotator } from "../../../src/components/ImageAnnotator";
 import { useStore } from "../../../src/store";
 import { ExploreWorkspace } from "../../../src/components/ExploreWorkspace";
 import { ToastViewport } from "../../../src/components/ToastViewport";
+import { VisualProfileDialog } from "../../../src/components/VisualProfileDialog";
 import { Toolbar } from "../../../src/components/Toolbar";
 import { SettingsDialog } from "../../../src/components/SettingsDialog";
 import "../../../src/styles.css";
@@ -84,9 +85,21 @@ w.__TAURI_INTERNALS__ = {
   metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main" } },
   invoke: async (command: string, args: any) => {
     w.calls.push({ command, args });
+    if (command === "canvas_workflow_get") return JSON.parse(sessionStorage.getItem(`workflow-${args.projectId}`) || '{"revision":0,"document":{"schema_version":1,"nodes":[],"run":null}}');
+    if (command === "canvas_workflow_save") {
+      if (w.failWorkflowSave) throw "模拟工作流保存失败";
+      const revision = args.revision + 1;
+      sessionStorage.setItem(`workflow-${args.projectId}`, JSON.stringify({ revision, document: args.document })); return revision;
+    }
+    if (command === "generation_history") return { turns: [{ prompt: "保持产品主体，生成清晨场景" }], references: [assets[0]] };
+    if (command === "project_thread_create") return args.value;
     if (command === "get_settings") return JSON.parse(sessionStorage.getItem("canvas-settings") || "{}");
     if (command === "update_settings") { sessionStorage.setItem("canvas-settings", JSON.stringify(args.settings)); return null; }
     if (command === "plugin:event|listen") { listeners.set(args.handler, args.event); return args.handler; }
+    if (command === "plugin:event|emit") {
+      for (const [handler, event] of listeners) if (event === args.event) callbacks.get(handler)?.({ event, id: handler, payload: args.payload });
+      return null;
+    }
     if (command === "list_projects") return explorer ? [project, { ...project, id: "q", name: "另一个项目" }] : [project];
     if (command === "project_canvas_get") return args.projectId === "q"
       ? { ...structuredClone(snapshot), canvas: { ...canvas, projectId: "q" }, nodes: [], edges: [], groups: [], groupItems: [], threads: [], view: null }
@@ -208,7 +221,7 @@ function Fixture() {
       <Toolbar canvasMode={toolbarCanvasMode} onCanvasModeChange={setToolbarCanvasMode} onCreateCreative={() => {}} onRefresh={async () => {}} />
       <div className="flex min-h-0 flex-1">{canvas}</div>
     </div> : explorer ? <ExploreWorkspace url="https://www.pinterest.com/" open={exploring} onClose={() => setExploring(false)}>{canvas}</ExploreWorkspace> : canvas}
-    <AssetContextMenu /><ImageAnnotator /><ToastViewport />{settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
+    <AssetContextMenu /><ImageAnnotator /><ToastViewport /><VisualProfileDialog />{settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
   </div>;
 }
 createRoot(document.getElementById("root")!).render(<Fixture />);

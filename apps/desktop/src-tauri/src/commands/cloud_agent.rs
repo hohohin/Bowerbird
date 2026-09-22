@@ -3409,6 +3409,7 @@ pub async fn cloud_agent_execute_local_task(
             ratio: ratio.clone(),
             job_id: None,
             generate_num: None,
+            transparent_background: None,
         };
         // 进度不需要回流（云端时间线由 Worker 补事件）：开通道丢弃 chunk 即可。
         let (chunk_tx, mut chunk_rx) = tokio::sync::mpsc::channel(64);

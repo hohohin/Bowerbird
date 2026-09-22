@@ -17,6 +17,7 @@ pub mod layer_export;
 pub mod local_classification;
 pub mod preset;
 pub mod project_canvas;
+pub mod canvas_workflow;
 pub mod projects;
 pub mod prompt;
 pub mod settings;

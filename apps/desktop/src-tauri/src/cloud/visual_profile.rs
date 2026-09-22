@@ -11,6 +11,8 @@ use crate::error::{AppError, AppResult};
 struct VisualProfileJobResponse {
     status: String,
     #[serde(default)]
+    input_schema_version: Option<u32>,
+    #[serde(default)]
     job_id: Option<String>,
     #[serde(default)]
     draft: Option<serde_json::Value>,
@@ -27,6 +29,35 @@ struct CloudJobError {
 pub struct VisualProfileCloudClient {
     cloud: CloudClient,
     auth: AuthClient,
+}
+
+// Image-only cards use the deployed collection extraction protocol unchanged.
+fn workflow_requirements(requirements: Option<&str>) -> Option<&str> {
+    requirements.map(str::trim).filter(|text| !text.is_empty())
+}
+
+fn workflow_capability_error(error: AppError) -> AppError {
+    match error {
+        AppError::Cloud(message) if message.contains("未知 action") || message.to_ascii_lowercase().contains("unknown action") =>
+            AppError::Cloud("当前云服务尚不支持文字视觉要求；请先使用纯图片输入或选择已有规范，文字提炼需更新云服务后使用".into()),
+        other => other,
+    }
+}
+
+#[cfg(test)]
+mod workflow_compatibility_tests {
+    use super::*;
+    #[test]
+    fn image_only_uses_legacy_protocol_but_text_is_never_dropped() {
+        assert_eq!(workflow_requirements(None), None);
+        assert_eq!(workflow_requirements(Some(" \n ")), None);
+        assert_eq!(workflow_requirements(Some(" 使用蓝色 ")), Some("使用蓝色"));
+    }
+    #[test]
+    fn only_unsupported_action_is_mapped_to_version_guidance() {
+        assert!(workflow_capability_error(AppError::Cloud("未知 action".into())).to_string().contains("尚不支持文字视觉要求"));
+        assert!(workflow_capability_error(AppError::Cloud("登录已过期".into())).to_string().contains("登录已过期"));
+    }
 }
 
 impl VisualProfileCloudClient {
@@ -67,20 +98,33 @@ impl VisualProfileCloudClient {
 
     /// 提交 + 轮询直到终态；成功返回 draft JSON 字符串。瞬时失败指数退避（对齐 understand）。
     pub async fn extract(&self, cards: &serde_json::Value) -> AppResult<String> {
+        self.extract_request(cards, None).await
+    }
+
+    pub async fn check_workflow_support(&self) -> AppResult<()> {
+        let endpoint = self.cloud.config().endpoint("visual-profile").ok_or_else(|| AppError::Cloud("当前构建未配置 Bowerbird Cloud".into()))?;
+        let response = self.post(&endpoint, serde_json::json!({"action":"capabilities"}), "视觉规范卡片需要新版云服务").await.map_err(workflow_capability_error)?;
+        if response.input_schema_version != Some(2) { return Err(AppError::Cloud("视觉规范卡片需要新版云服务，请更新服务后重试".into())); }
+        Ok(())
+    }
+
+    pub async fn extract_request(&self, cards: &serde_json::Value, requirements: Option<&str>) -> AppResult<String> {
         let endpoint = self
             .cloud
             .config()
             .endpoint("visual-profile")
             .ok_or_else(|| AppError::Cloud("当前构建未配置 Bowerbird Cloud".into()))?;
         let idempotency_key = Ulid::new().to_string();
+        let mut body = serde_json::json!({"action":"create","idempotencyKey":idempotency_key,"cards":cards});
+        if let Some(text) = workflow_requirements(requirements) {
+            self.check_workflow_support().await?;
+            body["inputSchemaVersion"] = serde_json::json!(2);
+            body["requirements"] = serde_json::json!(text);
+        }
         let mut result = self
             .post(
                 &endpoint,
-                serde_json::json!({
-                    "action": "create",
-                    "idempotencyKey": idempotency_key,
-                    "cards": cards,
-                }),
+                body,
                 "云端提炼请求失败",
             )
             .await?;

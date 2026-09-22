@@ -123,6 +123,9 @@ pub struct ProjectGenerationTurnInput {
     pub parent_node_id: Option<String>,
     pub parent_asset_path: Option<String>,
     pub relation: Option<crate::core::creative_session_contract::CreativeGenerationRelation>,
+    /// 失败重试的叠放锚点：被重试失败轮的 prompt 节点。新卡原样落在它的位置（原卡保留），
+    /// 不再按参考图脑图式落位。纯展示约定：锚点不存在/已隐藏时静默回退常规落位。
+    pub retry_anchor_node_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1916,9 +1919,49 @@ impl Database {
             [&value.project_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
-        let prompt_x = max_right + 72.0;
-        let prompt_y = 88.0;
         let prompt_node_id = projection_id("gen-prompt", &value.job_id, &value.turn_key, "0");
+        // Workflow runs persist this binding before submitting the provider job.
+        // Anchor at creation, including when the owning canvas is not mounted.
+        let workflow_json: Option<String> = tx.query_row(
+            "SELECT document_json FROM canvas_workflows WHERE project_id=?1", [&value.project_id], |row| row.get(0),
+        ).optional()?;
+        let workflow: serde_json::Value = workflow_json.as_deref().map(serde_json::from_str).transpose()?.unwrap_or_default();
+        let workflow_nodes = workflow["nodes"].as_array();
+        let owner = workflow_nodes.and_then(|nodes| nodes.iter().find(|node| node["sessionNodeIds"].as_array()
+            .is_some_and(|ids| ids.iter().any(|id| id.as_str() == Some(prompt_node_id.as_str())))));
+        // 失败重试锚点：同线程内可见的 prompt 卡才可作为叠放目标，否则回退常规落位。
+        let retry_anchor = match value.retry_anchor_node_id.as_deref() {
+            Some(node_id) => get_node_tx(&tx, node_id)?.filter(|node| {
+                node.kind == CreativeNodeKind::Prompt
+                    && node.project_id == value.project_id
+                    && node.thread_id.as_deref() == Some(value.thread_id.as_str())
+                    && node.hidden_at.is_none()
+            }),
+            None => None,
+        };
+        let prompt_x = owner
+            .and_then(|node| node["x"].as_f64())
+            .map(|x| x + 420.0)
+            .or_else(|| retry_anchor.as_ref().map(|anchor| anchor.x))
+            .unwrap_or(max_right + 72.0);
+        let mut prompt_y = owner
+            .and_then(|node| node["y"].as_f64())
+            .or_else(|| retry_anchor.as_ref().map(|anchor| anchor.y))
+            .unwrap_or(88.0);
+        if owner.is_some() {
+            loop {
+                let native_collision: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM canvas_nodes WHERE project_id=?1 AND hidden_at IS NULL AND id<>?2 AND x<?3+300 AND x+width>?3-24 AND y<?4+220 AND y+height>?4-24)",
+                    params![value.project_id, prompt_node_id, prompt_x, prompt_y], |row| row.get(0),
+                )?;
+                let workflow_collision = workflow_nodes.is_some_and(|nodes| nodes.iter().any(|node| {
+                    let x = node["x"].as_f64().unwrap_or(0.0); let y = node["y"].as_f64().unwrap_or(0.0);
+                    x < prompt_x + 300.0 && x + 344.0 > prompt_x && y < prompt_y + 220.0 && y + 400.0 > prompt_y
+                }));
+                if !native_collision && !workflow_collision { break; }
+                prompt_y += 420.0;
+            }
+        }
         let new_prompt = get_node_tx(&tx, &prompt_node_id)?.is_none();
         let prompt_payload = serde_json::to_string(&PromptNodePayloadV1 {
             schema_version: 1,
@@ -1947,7 +1990,7 @@ impl Database {
                 width: 260.0,
                 height: 148.0,
                 z_index: max_z + 1,
-                position_locked: false,
+                position_locked: owner.is_some() || retry_anchor.is_some(),
             },
             now,
         )?;
@@ -2170,7 +2213,7 @@ impl Database {
             )?;
             reference_node_ids.push(node_id);
         }
-        if new_prompt {
+        if new_prompt && owner.is_none() && retry_anchor.is_none() {
             place_prompt_near_inputs_tx(
                 &tx,
                 &value.project_id,
@@ -2978,7 +3021,7 @@ fn upsert_view_tx(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::creative_session_contract::{AssetNodePayloadV1, AssetSnapshotV1};
+    use crate::core::creative_session_contract::{AssetNodePayloadV1, AssetSnapshotV1, CreativeGenerationRelation};
 
     fn db() -> Database {
         let db = Database::open_in_memory().unwrap();
@@ -3095,6 +3138,10 @@ mod tests {
         let payload = r#"{"schema_version":1,"text":"hello","note_type":"text","cells":[[{"text":"hello","bold":true,"italic":true,"align":"center"}]],"member_ids":[]}"#;
         let updated = db.update_canvas_note_payload("text", payload).unwrap();
         assert_eq!(updated.payload_json, payload);
+        let mut with_cell_id: serde_json::Value = serde_json::from_str(payload).unwrap();
+        with_cell_id["cells"][0][0]["id"] = serde_json::json!("stable-cell");
+        let saved_cell = db.update_canvas_note_payload("text", &with_cell_id.to_string()).unwrap();
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&saved_cell.payload_json).unwrap()["cells"][0][0]["id"], "stable-cell");
         assert_eq!((updated.x, updated.y, updated.width), (original.x, original.y, original.width));
         assert_eq!(updated.thread_id, None);
         for height in [100, 155, 300] {
@@ -3127,6 +3174,64 @@ mod tests {
         assert!(db.update_canvas_note_payload("execution", payload).is_err());
         db.remove_canvas_node("text").unwrap();
         assert!(db.update_canvas_note_payload("text", payload).is_err());
+    }
+
+    #[test]
+    fn workflow_generation_stays_anchored_and_recovery_preserves_layout() {
+        let db = db(); materialize(&db, "p1");
+        db.create_creative_thread(&NewCreativeThread { id: "t1".into(), project_id: "p1".into(), title: "workflow".into(), origin: CreativeThreadOrigin::Direct }).unwrap();
+        db.conn.lock().unwrap().execute("INSERT INTO assets(id,name,store_path,created_at) VALUES('a','a','/a.png',1)", []).unwrap();
+        let mut reference = output("p1", "t1", "reference", "a");
+        reference.x = -900.0; reference.y = -400.0; reference.role = Some(CreativeNodeRole::Reference);
+        db.create_canvas_node(&reference).unwrap();
+        let doc = serde_json::json!({"schema_version":1,"nodes":[{"id":"w","x":100,"y":200,"sessionNodeIds":["gen-prompt:job:turn:0"]}],"run":null});
+        db.conn.lock().unwrap().execute("INSERT INTO canvas_workflows(project_id,revision,document_json) VALUES('p1',1,?1)", [doc.to_string()]).unwrap();
+        let input = ProjectGenerationTurnInput {
+            project_id:"p1".into(), thread_id:"t1".into(), generation_conversation_id:"conversation".into(), job_id:"job".into(), turn_key:"turn".into(),
+            prompt:"test".into(), applied_prompt:"test".into(), provider:"test".into(), provider_session_id:None, ratio:None, visual_profile:None,
+            references:vec!["/a.png".into()], reference_node_ids:vec![Some("reference".into())], parent_node_id:None, parent_asset_path:None, relation:None, retry_anchor_node_id:None,
+        };
+        let graph = db.begin_project_generation_turn(&input).unwrap();
+        let first = db.get_canvas_node(&graph.prompt_node_id).unwrap().unwrap();
+        assert_eq!((first.x, first.y, first.position_locked), (520.0, 200.0, true));
+        db.begin_project_generation_turn(&input).unwrap();
+        let recovered = db.get_canvas_node(&graph.prompt_node_id).unwrap().unwrap();
+        assert_eq!((recovered.x,recovered.y),(first.x,first.y));
+    }
+
+    #[test]
+    fn failed_retry_turn_stacks_on_anchor_card() {
+        let db = db(); materialize(&db, "p1");
+        db.create_creative_thread(&NewCreativeThread { id: "t1".into(), project_id: "p1".into(), title: "retry".into(), origin: CreativeThreadOrigin::Direct }).unwrap();
+        let failed = db.begin_project_generation_turn(&ProjectGenerationTurnInput {
+            project_id:"p1".into(), thread_id:"t1".into(), generation_conversation_id:"conversation".into(), job_id:"job1".into(), turn_key:"turn1".into(),
+            prompt:"test".into(), applied_prompt:"test".into(), provider:"test".into(), provider_session_id:None, ratio:None, visual_profile:None,
+            references:vec![], reference_node_ids:vec![], parent_node_id:None, parent_asset_path:None, relation:None, retry_anchor_node_id:None,
+        }).unwrap();
+        // 原失败卡被用户挪到画布左上角；失败只改状态、不动位置。
+        db.conn.lock().unwrap().execute("UPDATE canvas_nodes SET x=-420.0,y=-180.0 WHERE id=?1", [&failed.prompt_node_id]).unwrap();
+        db.update_project_generation_turn_status("p1", "t1", "job1", "turn1", "failed", None).unwrap();
+        let retry = db.begin_project_generation_turn(&ProjectGenerationTurnInput {
+            project_id:"p1".into(), thread_id:"t1".into(), generation_conversation_id:"conversation".into(), job_id:"job2".into(), turn_key:"turn2".into(),
+            prompt:"test".into(), applied_prompt:"test".into(), provider:"test".into(), provider_session_id:None, ratio:None, visual_profile:None,
+            references:vec![], reference_node_ids:vec![], parent_node_id:None, parent_asset_path:None,
+            relation:Some(CreativeGenerationRelation::Retry), retry_anchor_node_id:Some(failed.prompt_node_id.clone()),
+        }).unwrap();
+        let anchor = db.get_canvas_node(&failed.prompt_node_id).unwrap().unwrap();
+        let stacked = db.get_canvas_node(&retry.prompt_node_id).unwrap().unwrap();
+        assert_eq!((stacked.x, stacked.y), (anchor.x, anchor.y));
+        assert!(stacked.position_locked);
+        assert!(stacked.z_index > anchor.z_index);
+        // 锚点被删/隐藏后静默回退常规落位，重试本身不能失败。
+        db.remove_canvas_node(&failed.prompt_node_id).unwrap();
+        let fallback = db.begin_project_generation_turn(&ProjectGenerationTurnInput {
+            project_id:"p1".into(), thread_id:"t1".into(), generation_conversation_id:"conversation".into(), job_id:"job3".into(), turn_key:"turn3".into(),
+            prompt:"test".into(), applied_prompt:"test".into(), provider:"test".into(), provider_session_id:None, ratio:None, visual_profile:None,
+            references:vec![], reference_node_ids:vec![], parent_node_id:None, parent_asset_path:None,
+            relation:Some(CreativeGenerationRelation::Retry), retry_anchor_node_id:Some(failed.prompt_node_id.clone()),
+        }).unwrap();
+        let card = db.get_canvas_node(&fallback.prompt_node_id).unwrap().unwrap();
+        assert!(!card.position_locked);
     }
 
     #[test]
@@ -3231,6 +3336,7 @@ mod tests {
             parent_node_id: None,
             parent_asset_path: None,
             relation: None,
+            retry_anchor_node_id: None,
         };
         let graph = db.begin_project_generation_turn(&turn).unwrap();
         let initial_asset = db.get_asset("asset-1").unwrap().unwrap();
@@ -3831,6 +3937,7 @@ mod tests {
                 relation: Some(
                     crate::core::creative_session_contract::CreativeGenerationRelation::Continued,
                 ),
+                retry_anchor_node_id: None,
             }
         };
 
@@ -4290,6 +4397,7 @@ mod tests {
                 relation: parent.then_some(
                     crate::core::creative_session_contract::CreativeGenerationRelation::Continued,
                 ),
+                retry_anchor_node_id: None,
             })
             .unwrap()
         }
@@ -4611,6 +4719,7 @@ mod tests {
             parent_node_id: None,
             parent_asset_path: None,
             relation: None,
+            retry_anchor_node_id: None,
         };
         let graph = db.begin_project_generation_turn(&input).unwrap();
 

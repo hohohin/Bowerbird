@@ -115,6 +115,19 @@ try {
   await page.locator("#codes-dialog[open]").waitFor();
   assert.equal(await page.locator("#codes-output").inputValue(), plain, "export excludes disabled codes");
   await page.getByRole("button", { name: "关闭", exact: true }).click();
+  await page.getByRole("button", { name: "Kernel 技能" }).click();
+  await page.locator("#skills-console").waitFor({ state: "visible" });
+  assert.equal(await page.locator("#console").isHidden(), true);
+  assert.equal(await page.locator("#skills-runner-rows tr").count(), 3);
+  assert.equal(await page.locator("#skills-method-rows tr").count(), 4);
+  assert.equal((await page.locator("#skills-method-rows").textContent()).includes("bowerbird-wechat-article-layout"), true);
+  assert.equal((await page.locator("#skills-method-count").textContent()).includes("82cbe0f3"), true);
+  assert.equal(await page.locator("#topbar-crumb").textContent(), "Kernel 技能");
+  await page.screenshot({ path: ".tmp/pro-code-admin/kernel-skills.png", fullPage: true });
+  await page.getByRole("button", { name: "兑换码管理" }).click();
+  await page.locator("#console").waitFor({ state: "visible" });
+  assert.equal(await page.locator("#skills-console").isHidden(), true);
+  assert.equal(await page.locator("#topbar-crumb").textContent(), "兑换码");
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   await page.screenshot({ path: ".tmp/pro-code-admin/mobile.png", fullPage: true });
@@ -130,5 +143,5 @@ try {
   await page.locator("#login-submit").click();
   await page.locator("#login-status").filter({ hasText: "已发送" }).waitFor();
   assert.equal(exports >= 2, true); assert.deepEqual(errors, []);
-  console.log("PASS: /admin redirect, list/filter, issue retry, cipher reveal/export, CSV safety, disable confirmation, mobile layout, revocation and logout clearing");
+  console.log("PASS: /admin redirect, list/filter, issue retry, cipher reveal/export, CSV safety, disable confirmation, kernel skills view, mobile layout, revocation and logout clearing");
 } finally { await browser.close(); await new Promise((resolve) => server.close(resolve)); }

@@ -128,6 +128,13 @@ test("canvas pans only with middle button or space plus left button", () => {
   assert.equal(isCanvasPanGesture(2, true), false);
 });
 
+test("hand tool pans with left button and does not affect other buttons", () => {
+  assert.equal(isCanvasPanGesture(0, false, true), true);
+  assert.equal(isCanvasPanGesture(1, false, true), true);
+  assert.equal(isCanvasPanGesture(2, false, true), false);
+  assert.equal(isCanvasPanGesture(0, false, false), false);
+});
+
 test("canvas primary click follows creation mode and marquee works in both modes", () => {
   assert.equal(canvasPrimaryMaterialAction(false, false), "preview");
   assert.equal(canvasPrimaryMaterialAction(true, false), "compose");

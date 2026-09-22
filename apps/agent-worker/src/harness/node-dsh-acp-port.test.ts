@@ -189,3 +189,73 @@ test("formal Node DSH port rejects an incomplete immutable profile before spawni
   }, dependencies), /dsh_profile_template_incomplete/);
   equal(spawned, 0);
 });
+
+test("formal Node DSH port selects the agent-ds patch only from a complete optional group", async () => {
+  let spawned = 0;
+  const rejecting = {
+    async loadAcp() { return {}; },
+    spawnProcess() { spawned += 1; throw new Error("should_not_spawn"); },
+  } as unknown as NodeDshAcpPortDependencies;
+  const fixture = root("node-dsh-port-agent-ds");
+  const profile = join(fixture, "template");
+  template(profile);
+  try {
+    await rejects(() => NodeDshAcpPort.create({
+      profileTemplateDir: profile,
+      runtimeRoot: join(fixture, "runtime"),
+      childEnvironment: bridgeEnvironment(),
+      profileMode: "agent-ds",
+    }, rejecting), /dsh_profile_template_incomplete/);
+    equal(spawned, 0);
+
+    writeFileSync(join(profile, "cordis.agent-ds.patch.yml"), "agent-ds", "utf8");
+    writeFileSync(join(profile, "plugins", "bowerbird-agent-ds-tools.mjs"), "tools", "utf8");
+    let spawnArguments: string[] = [];
+    const child = {
+      exitCode: 0,
+      signalCode: null,
+      stdin: new PassThrough(),
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      once() {},
+      kill() { return true; },
+    };
+    class FakeConnection {
+      async initialize(args: { protocolVersion: number }) {
+        return { protocolVersion: args.protocolVersion };
+      }
+      async newSession() {
+        return { sessionId: "session-agent-ds" };
+      }
+      async prompt() {
+        return { stopReason: "end_turn" };
+      }
+    }
+    const accepting = {
+      async loadAcp() {
+        return {
+          PROTOCOL_VERSION: 1,
+          ndJsonStream() { return {}; },
+          ClientSideConnection: FakeConnection,
+        };
+      },
+      spawnProcess(_command: string, args: string[]) {
+        spawnArguments = args;
+        return child;
+      },
+    } as unknown as NodeDshAcpPortDependencies;
+    const port = await NodeDshAcpPort.create({
+      profileTemplateDir: profile,
+      runtimeRoot: join(fixture, "runtime-2"),
+      childEnvironment: bridgeEnvironment(),
+      profileMode: "agent-ds",
+    }, accepting);
+    equal(
+      spawnArguments.at(-1),
+      "profiles\\bowerbird-u1\\cordis.agent-ds.patch.yml".replaceAll("\\", process.platform === "win32" ? "\\" : "/"),
+    );
+    await port.dispose();
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});

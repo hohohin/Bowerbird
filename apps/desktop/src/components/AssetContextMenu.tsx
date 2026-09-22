@@ -2,13 +2,13 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { CanvasLayerMenuItem } from "./CanvasLayerMenuItem";
 import { createPortal } from "react-dom";
 import { ChevronRight, ClipboardCopy, FolderInput, FolderPlus, FolderTree, Layers, LayoutDashboard, MessageSquare, PenTool, ScanSearch, Trash2, Ungroup } from "lucide-react";
-import { useStore } from "../store";
+import { understandEngineUsable, useStore } from "../store";
 import { api } from "../lib/api";
 import { loadDescribePrompt } from "../lib/describePrompt";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ModalShell } from "./ModalShell";
 import { RenameDialog } from "./RenameDialog";
-import { understandProvider } from "../lib/entitlement";
+import { canUseByo } from "../lib/entitlement";
 import { notifyError, notifySuccess } from "../lib/notify";
 import { isWorkspaceOperationCurrent } from "../lib/workspaceRoute";
 import type { AssetDeleteMode, AssetDeleteResult } from "../lib/types";
@@ -36,6 +36,48 @@ function resultMessage(mode: AssetDeleteMode, result: AssetDeleteResult): string
   return `已物理删除 ${result.deleted_assets} 张素材`;
 }
 
+/** 右键「反推」二级菜单的引擎选项；reason 为空表示该引擎当前可用。 */
+interface DescribeEngineOption {
+  key: "bowerbird-cloud" | "codex";
+  label: string;
+  reason: string | null;
+}
+
+/** 反推引擎二级子菜单：不可用引擎置灰 + 原因在 tooltip，选定后直接执行（onPick）。 */
+function DescribeEngineSubmenu({ engines, busy, onLeft, pickTitle, onPick }: {
+  engines: DescribeEngineOption[];
+  busy: boolean;
+  onLeft: boolean;
+  pickTitle: (engine: DescribeEngineOption) => string;
+  onPick: (key: DescribeEngineOption["key"]) => void;
+}) {
+  return (
+    <div
+      className={`app-context-menu asset-context-submenu p-1.5 text-xs ${onLeft ? "right-full mr-0.5" : "left-full ml-0.5"}`}
+      role="menu"
+      aria-label="选择反推引擎"
+    >
+      {engines.map((engine) => {
+        const usable = engine.reason === null;
+        return (
+          <button
+            key={engine.key}
+            type="button"
+            role="menuitem"
+            disabled={busy || !usable}
+            title={usable ? pickTitle(engine) : engine.reason ?? undefined}
+            className="app-context-item px-2 py-1.5"
+            onClick={() => onPick(engine.key)}
+          >
+            <span className={`app-status-dot ${usable ? "is-ready" : ""}`} aria-hidden="true" />
+            <span className="min-w-0 flex-1 truncate">{engine.label}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 /**
  * 图片右键菜单：常用 / 再创作、文件 / 移出与删除 两列。
  * 全局只有一个实例（store.contextMenu 状态驱动），挂在 App 最外层；
@@ -51,7 +93,6 @@ export function AssetContextMenu() {
   const activeProjectId = useStore((s) => s.activeProjectId);
   const reloadProjects = useStore((s) => s.reloadProjects);
   const assets = useStore((s) => s.assets);
-  const openDescribePicker = useStore((s) => s.openDescribePicker);
   const reusePromptToBoard = useStore((s) => s.reusePromptToBoard);
   const codexHealth = useStore((s) => s.codexHealth);
   const openAnnotator = useStore((s) => s.openAnnotator);
@@ -79,6 +120,8 @@ export function AssetContextMenu() {
   const [renameTarget, setRenameTarget] = useState<{ id: string; name: string } | null>(null);
   // 多选菜单的「移入已有集合」二级子菜单开关。
   const [folderSubOpen, setFolderSubOpen] = useState(false);
+  // 「反推」二级子菜单开关（单图 / 多选菜单共用一个状态，两种菜单不会同时出现）。
+  const [describeSubOpen, setDescribeSubOpen] = useState(false);
   // 多选菜单点击后弹出的批量面板（菜单先收，再由 !menu 分支挂载）。
   const [newCollectionIds, setNewCollectionIds] = useState<string[] | null>(null);
   const [projectPickIds, setProjectPickIds] = useState<string[] | null>(null);
@@ -121,6 +164,7 @@ export function AssetContextMenu() {
   useEffect(() => {
     setBusy(false);
     setFolderSubOpen(false);
+    setDescribeSubOpen(false);
   }, [menu]);
 
   // 菜单打开且为生成图时取同组图（与瀑布流轮播同一查询、同 project scope）；
@@ -284,17 +328,31 @@ export function AssetContextMenu() {
   const describing =
     useStore.getState().describingId === assetId ||
     useStore.getState().describeQueue.some((q) => q.assetId === assetId);
-  const understandRoute = understandProvider(cloudEntitlement);
-  const understandReady = understandRoute === "codex"
-    ? !!codexHealth?.ok
-    : understandRoute === "bowerbird-cloud"
-      ? cloudAvailable && !!cloudAuth?.logged_in
-      : false;
-  const understandReason = understandRoute === "codex"
-    ? codexHealth?.reason || "codex 不可用"
-    : !cloudAuth?.logged_in
-      ? "免费版反推需要先登录 Bowerbird Cloud（每日 10 次）"
-      : "Bowerbird Cloud 不可用";
+  // 反推引擎选项（右键二级菜单）：门控与 DescribeProviderPicker 一致，但不按账号档位自动路由——
+  // Pro 未就绪 codex 仍可显式选 Cloud；reason 为空即该引擎当前可用。
+  const describeEngines: DescribeEngineOption[] = [
+    {
+      key: "bowerbird-cloud",
+      label: "Bowerbird Cloud",
+      reason: understandEngineUsable({ cloudAuth, cloudEntitlement, codexHealth }, "bowerbird-cloud")
+        ? null
+        : !cloudAvailable
+          ? "当前版本未配置 Bowerbird Cloud"
+          : !cloudAuth?.logged_in
+            ? "请先登录 Bowerbird 账号"
+            : "积分不足",
+    },
+    {
+      key: "codex",
+      label: "本机 codex",
+      reason: understandEngineUsable({ cloudAuth, cloudEntitlement, codexHealth }, "codex")
+        ? null
+        : !canUseByo(cloudEntitlement)
+          ? "升级 Pro 解锁本机 codex"
+          : codexHealth?.reason || "codex 不可用",
+    },
+  ];
+  const anyDescribeEngine = describeEngines.some((engine) => engine.reason === null);
 
   async function reveal() {
     setBusy(true);
@@ -465,6 +523,19 @@ export function AssetContextMenu() {
     }
   }
 
+  /** 反推二级菜单选定引擎后直接入队（单图 / 多选批量同链路，批量与选择浮层一致退出管理态）。 */
+  function runDescribeWith(engine: DescribeEngineOption["key"]) {
+    const instruction = loadDescribePrompt();
+    const st = useStore.getState();
+    if (multiIds) {
+      for (const id of multiIds) st.runDescribe(id, instruction, engine);
+      st.exitManage();
+    } else {
+      st.runDescribe(assetId, instruction, engine);
+    }
+    closeContextMenu();
+  }
+
   /** 多选右键批量删除：与 BatchBar 同模式——keep 数组一次；move_out/delete 循环单条，
    *  move_out 的文件恢复失败是结构化结果而非 rejected promise；有失败留在原地反馈，全成功退出管理。 */
   async function runBatchDelete(ids: string[], deleteMode: AssetDeleteMode) {
@@ -622,23 +693,35 @@ export function AssetContextMenu() {
 
           <div className="app-context-divider" />
           <div className="app-context-label">再创作</div>
-          <button
-            type="button"
-            role="menuitem"
-            disabled={busy}
-            title="选择反推引擎（Bowerbird Cloud / 本机 codex）"
-            className="app-context-item px-2 py-1.5"
-            onClick={(e) => {
-              const r = e.currentTarget.getBoundingClientRect();
-              openDescribePicker(
-                { kind: "batch", ids: multiIds, instruction: loadDescribePrompt() },
-                { x: r.left, y: r.bottom },
-              );
-              closeContextMenu();
-            }}
+          <div
+            className="relative"
+            onMouseEnter={() => setDescribeSubOpen(true)}
+            onMouseLeave={() => setDescribeSubOpen(false)}
           >
-            <ScanSearch size={13} className="shrink-0" /> 批量反推
-          </button>
+            <button
+              type="button"
+              role="menuitem"
+              aria-haspopup="menu"
+              aria-expanded={describeSubOpen}
+              disabled={busy}
+              title="展开选择反推引擎（Bowerbird Cloud / 本机 codex）"
+              className="app-context-item px-2 py-1.5"
+              onClick={() => setDescribeSubOpen((open) => !open)}
+            >
+              <ScanSearch size={13} className="shrink-0" />
+              <span className="flex-1 text-left">批量反推</span>
+              <ChevronRight size={13} className="shrink-0" aria-hidden="true" />
+            </button>
+            {describeSubOpen && (
+              <DescribeEngineSubmenu
+                engines={describeEngines}
+                busy={busy}
+                onLeft={subOnLeft}
+                pickTitle={(engine) => `用 ${engine.label} 反推 ${multiIds.length} 张`}
+                onPick={runDescribeWith}
+              />
+            )}
+          </div>
 
           <div className="app-context-divider" />
           <div className="app-context-label asset-context-label-with-icon">
@@ -693,7 +776,8 @@ export function AssetContextMenu() {
       ref={menuRef}
       style={menuStyle}
       onContextMenu={(e) => e.preventDefault()}
-      className="app-context-menu asset-context-menu p-1.5 text-xs"
+      // 子菜单展开时放开滚动裁剪，让二级菜单能飞出菜单外（收起后恢复可滚动）。
+      className={`app-context-menu asset-context-menu p-1.5 text-xs${describeSubOpen ? " submenu-open" : ""}`}
       role="menu"
       aria-label="素材操作"
     >
@@ -786,24 +870,41 @@ export function AssetContextMenu() {
         </button>
         <div className="app-context-divider" />
         <div className="app-context-label">再创作</div>
-        <button
-          type="button"
-          role="menuitem"
-          onClick={(e) => {
-            const r = e.currentTarget.getBoundingClientRect();
-            openDescribePicker(
-              { kind: "single", assetId, instruction: loadDescribePrompt() },
-              { x: r.left, y: r.bottom },
-            );
-            closeContextMenu();
-          }}
-          disabled={busy || describing || !understandReady}
-          title={understandReady ? "反推提示词" : understandReason}
-          className="app-context-item px-2 py-1.5"
+        <div
+          className="relative"
+          onMouseEnter={() => setDescribeSubOpen(true)}
+          onMouseLeave={() => setDescribeSubOpen(false)}
         >
-          <ScanSearch size={13} className="shrink-0" />
-          反推提示词
-        </button>
+          <button
+            type="button"
+            role="menuitem"
+            aria-haspopup="menu"
+            aria-expanded={describeSubOpen}
+            onClick={() => setDescribeSubOpen((open) => !open)}
+            disabled={busy || describing}
+            title={
+              describing
+                ? "这张图片正在反推或已排队"
+                : anyDescribeEngine
+                  ? "展开选择反推引擎（Bowerbird Cloud / 本机 codex）"
+                  : "反推引擎均不可用：Bowerbird Cloud 需登录且有积分；本机 codex 需 Pro 且本机就绪"
+            }
+            className="app-context-item px-2 py-1.5"
+          >
+            <ScanSearch size={13} className="shrink-0" />
+            <span className="flex-1 text-left">反推提示词</span>
+            <ChevronRight size={13} className="shrink-0" aria-hidden="true" />
+          </button>
+          {describeSubOpen && !describing && (
+            <DescribeEngineSubmenu
+              engines={describeEngines}
+              busy={busy}
+              onLeft={subOnLeft}
+              pickTitle={(engine) => `用 ${engine.label} 反推`}
+              onPick={runDescribeWith}
+            />
+          )}
+        </div>
         {isGenerated && (
           <button
             type="button"

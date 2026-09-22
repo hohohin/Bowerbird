@@ -84,7 +84,7 @@ test("planning bridge persists observations before returning and reuses them acr
 test("skill discovery returns metadata and reads only the selected method without legacy Runner rules", async () => {
   const { bridge } = fixture();
   const catalog = (await bridge.dispatch({ toolName: "list_skills", arguments: {} })).value as Array<{ id: string; description: string }>;
-  equal(catalog.length, 3);
+  equal(catalog.length, 4);
   for (const entry of catalog) {
     deepEqual(Object.keys(entry).sort(), ["description", "id"]);
     ok(entry.description.length > 0);

@@ -28,7 +28,7 @@ import {
 import type { CreativePromptLoadRequest } from "../lib/creativeLaunch";
 import { RATIOS } from "./creation/ratios";
 import { RatioSelect } from "./creation/RatioSelect";
-import { CountSelect } from "./creation/CountSelect";
+import { ImageGenOptions } from "./creation/ImageGenOptions";
 import { ProviderSelect } from "./creation/ProviderSelect";
 import { VisualProfileSelect } from "./creation/VisualProfileSelect";
 import { BoardChipPreview } from "./creation/BoardChipPreview";
@@ -123,6 +123,17 @@ export function CreationBoard({
   const cloudAvailable = cloudAuth?.cloud_available ?? false;
   const isTestAccount = cloudEntitlement?.is_test_account === true;
   const runningJobCount = useStore((s) => Object.values(s.genJobs).filter((j) => j.running).length);
+  // 会话卡片生成成功 → 自动退出创作模式的观察目标（普通生成路径提交时登记，
+  // 见 send()；成功/失败结算时清除，详见下方 useEffect）。按值选择器只暴露
+  // 结算结果，避免生成期间流式 delta 触发对话框整树重渲染。
+  const [successExitJobId, setSuccessExitJobId] = useState<string | null>(null);
+  const successExitOutcome = useStore((s): "idle" | "pending" | "succeeded" | "failed" => {
+    if (!successExitJobId) return "idle";
+    const job = s.genJobs[successExitJobId];
+    if (!job || job.running) return "pending";
+    const last = job.turns[job.turns.length - 1];
+    return last && last.images.length > 0 ? "succeeded" : "failed";
+  });
   const selectedImageProvider = useStore((s) => s.activeGenProvider);
   const [generation, setGeneration] = useState<GenerationSettings>(() => initialDraft?.generation ?? { media: "image" });
   const isVideo = generation.media === "video";
@@ -224,11 +235,18 @@ export function CreationBoard({
     setGeneration((current) => ({ ...current, ratio: v }));
     saveBoardRatio(v);
   };
-  // 生成数量（1–4）：仅即梦 / Cloud 生图引擎支持并显示；codex 沿用提示词驱动张数。
+  // 生成选项（仅即梦 / Cloud 生图引擎）：张数（1–4）与透明图层（background:
+  // transparent）都不再常驻工具条，统一收进「生成选项」弹层（ImageGenOptions）；
+  // codex 沿用提示词驱动张数、不支持透明参数。
   const [genCount, setGenCount] = useState<number>(() => initialDraft?.generation?.count ?? 1);
+  const [transparentLayer, setTransparentLayer] = useState<boolean>(() => initialDraft?.generation?.transparent ?? false);
   const selectGenCount = (v: number) => {
     setGenCount(v);
     setGeneration((current) => ({ ...current, count: v }));
+  };
+  const selectTransparentLayer = (v: boolean) => {
+    setTransparentLayer(v);
+    setGeneration((current) => ({ ...current, transparent: v }));
   };
   // 创作板「用途」（preset）登记：只需用途名，body 取当前编辑框内容
   const [creatingPreset, setCreatingPreset] = useState(false);
@@ -254,8 +272,9 @@ export function CreationBoard({
   // busy 与 Z 共用（同一后端命令通路）。可用性 = Z 通道探活（release 构建后端拒绝 → 不渲染，
   // 约定 30/36 同款门控）+ codexHealth（codex CLI 安装 + 登录态）。
   const [agentGMode, setAgentGMode] = useState(false);
-  // Agent DS（dev-only）：DeepSeek 对话 harness，对话发生在创作板内（回复追加进编辑器）；
-  // 与 A/B/Z 互斥。可用性与 Agent A/B 同源（agent-worker + cloud/.env）。
+  // Agent DS（dev-only）：把编辑器内容 + 参考图投递到本机 DSH 队列（.agent-z/ds-inbox/pending/），
+  // 由用户自己那条 DSH 会话接住（借用其全量工具与既有上下文）；回传不回流创作板，故投递成功即
+  // 立即解除 busy。与 A/B/Z/G 互斥；可用性仍沿用 A/B 同源的 agent-worker 探活。
   const agentDsAvailable = agentAvailable && AGENT_DS_ENABLED;
   const [agentDsMode, setAgentDsMode] = useState(false);
   const [agentDsBusy, setAgentDsBusy] = useState(false);
@@ -267,7 +286,7 @@ export function CreationBoard({
   const agentZOn = !isVideo && (settings?.agent_z_mode_enabled ?? false);
   const agentGOn = !isVideo && (settings?.agent_g_mode_enabled ?? false);
   const agentDsOn = !isVideo && (settings?.agent_ds_mode_enabled ?? false);
-  // 数量选择器只在即梦 / Cloud 生图（且非 Agent 模式）下显示。
+  // 生成选项（张数 + 透明图层）只在即梦 / Cloud 生图（且非 Agent 模式）下显示。
   const countSupported = !isVideo && !cloudAgentMode
     && (activeGenProvider === "jimeng" || isCloudProvider(activeGenProvider));
   const activePreset = useMemo(
@@ -339,6 +358,19 @@ export function CreationBoard({
 
   const exitCreationModeRef = useRef(exitCreationMode);
   exitCreationModeRef.current = exitCreationMode;
+
+  // 会话卡片生成成功 → 自动退出创作模式：普通生成（生成图像/生成视频按钮）提交后
+  // 创作模式保持激活（生成期间可继续挑图组下一轮稿），job 结算时成功（末轮有产出
+  // 图）才退出，回普通浏览；失败/被拒则保持创作模式继续组稿或重试。只跟踪最近一次
+  // 提交的 job：更早的 job 成功时用户多半已在组新稿，不再打断。
+  useEffect(() => {
+    if (successExitOutcome !== "succeeded" && successExitOutcome !== "failed") return;
+    setSuccessExitJobId(null);
+    if (successExitOutcome === "succeeded" && useStore.getState().boardOpen) {
+      exitCreationModeRef.current();
+    }
+  }, [successExitOutcome]);
+
   useEffect(() => {
     let composing = false;
     let escapeBlocked = false;
@@ -445,7 +477,7 @@ export function CreationBoard({
     : agentZBusy
       ? "正在投递到 Agent 终端，请等待投递完成。"
       : agentDsBusy
-        ? "Agent DS 正在处理，请等待本轮完成。"
+        ? "正在投递到 DSH 队列，请等待投递完成。"
         : cloudAgentBusy
           ? "正在创建 Agent 会话，请稍候。"
           : cloudAgentMode
@@ -479,8 +511,9 @@ export function CreationBoard({
   // 把当前组稿发 provider 生成。生成期间编辑器仍可继续组下一轮稿（prompt 在此快照进 store）。
   // provider / visual profile 与 prompt、refs 一样在点击时冻结；异步 Agent
   // 整理或画板准备期间的 UI 切换只影响下一次发送。
-  // 发送成功即退出创作模式（同「退出创作模式」页签：回普通浏览，左键恢复开详情；
-  // 校验不过/发送失败则保持创作模式继续组稿）。
+  // 普通生成（生成图像/生成视频）提交后创作模式保持激活，会话卡片生成成功时自动退出
+  // （同「退出创作模式」页签：回普通浏览，左键恢复开详情）；校验不过/提交失败/生成失败
+  // 则保持创作模式继续组稿或重试。终端型 / Cloud Agent 路径完成即退出（无生成会话卡片）。
   async function send() {
     const originRoute = useStore.getState();
     const originProjectId = projectId ?? originRoute.activeProjectId;
@@ -654,13 +687,28 @@ export function CreationBoard({
       if (!body || agentDsBusy) return;
       setAgentDsBusy(true);
       try {
-        const refPaths = references.map((r) => r.store_path).filter((p): p is string => !!p);
-        await api.agentDsChat(body, refPaths, submissionAuthority.visualProfileId);
+        const refPairs = references
+          .map((reference) => ({
+            path: reference.store_path,
+            name: agentPromptReferences.find((item) => item.assetId === reference.id)?.name ?? reference.name,
+          }))
+          .filter((pair): pair is { path: string; name: string } => !!pair.path);
+        const outcome = await api.agentDsChat(
+          body,
+          refPairs.map((pair) => pair.path),
+          refPairs.map((pair) => pair.name),
+          submissionAuthority.visualProfileId,
+        );
         if (!isCurrentSubmission()) return;
-        notifySuccess("Agent DS 正在思考，回复将追加到创作板");
+        setAgentDsBusy(false);
+        notifySuccess(
+          outcome.autoDelivered
+            ? `已送达 DSH 会话${outcome.sessionTitle ? `「${outcome.sessionTitle}」` : ""}`
+            : `已投递到 DSH 队列（未自动送达：${outcome.notice ?? "未知原因"}）；可在 DSH 里说「看队列」`,
+        );
         exitCreationMode();
       } catch (error) {
-        if (isCurrentSubmission()) notifyError(error, "发送到 Agent DS 失败");
+        if (isCurrentSubmission()) notifyError(error, "投递到 DSH 队列失败");
         setAgentDsBusy(false);
       }
       return;
@@ -741,7 +789,7 @@ export function CreationBoard({
       } : undefined,
       true,
       isVideo ? { media: "video", videoOptions: { ...videoOptions }, videoChannel: generation.videoChannel }
-        : { media: "image", ...(countSupported && genCount > 1 ? { count: genCount } : {}) },
+        : { media: "image", ...(countSupported && genCount > 1 ? { count: genCount } : {}), ...(countSupported && transparentLayer ? { transparent: true } : {}) },
     );
     if (!startedGeneration.accepted) {
       if (isCurrentSubmission()) notifyError(startedGeneration.error, "生成任务启动失败，请重试");
@@ -750,7 +798,9 @@ export function CreationBoard({
     if (continuation?.continuationRequestId) {
       ackPendingCreativeContinuation(continuation.continuationRequestId);
     }
-    if (isCurrentSubmission()) exitCreationMode();
+    // 提交成功不立即退出创作模式：登记本次 job，会话卡片生成成功（末轮有产出图）
+    // 时由上方 effect 自动退出；失败/被拒则保持创作模式继续组稿或重试。
+    if (isCurrentSubmission()) setSuccessExitJobId(startedGeneration.jobId);
     } catch (error) {
       if (submissionClaim.isCurrent()) notifyError(error, "无法提交生成任务");
     } finally {
@@ -998,7 +1048,12 @@ export function CreationBoard({
             获得焦点（contenteditable 冒泡）= 激活创作模式（等同旧「创作板」按钮）。 */}
         <div
           ref={hostRef}
-          onClick={focus}
+          onClick={(event) => {
+            // 正文点击完全交给 ProseMirror 原生定位：冒泡后再 focus() 会把编辑器
+            // 旧选区写回 DOM、覆盖点击落点（光标跳到别行，同官网 2026-08-02 踩坑）。
+            // 只有点到内容区外的宿主空白（内边距）才手动聚焦。
+            if (!(event.target instanceof Element && event.target.closest(".ProseMirror"))) focus();
+          }}
           onFocus={() => { setBoardActive(true); beginOnboardingOperation("activate-composer", useStore.getState().activeProjectId)(); }}
           onKeyDown={(event) => {
             if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
@@ -1042,10 +1097,19 @@ export function CreationBoard({
               if (media === "video") { setCloudAgentMode(false); setAgentMode("off"); setAgentZMode(false); setAgentGMode(false); setAgentDsMode(false); }
             }}><option value="image">图片</option><option value="video">视频</option></select>
           {isVideo && <VideoControls channel={generation.videoChannel} onChannelChange={(videoChannel) => setGeneration({ ...generation, videoChannel, videoOptions: videoChannel === "jimeng" && videoOptions.video_resolution === "1080p" ? { ...videoOptions, video_resolution: "720p" } : videoOptions })} options={videoOptions} onChange={(options) => setGeneration({ ...generation, media: "video", videoOptions: options, ratio })} ratio={ratio} onRatioChange={selectRatio} />}
-          {/* Cloud Agent 仍接受显式比例；仅终端型 Agent 不走 Bowerbird 生图参数。 */}
-          <div className={`${agentZMode || agentGMode || agentDsMode ? "pointer-events-none opacity-40" : ""}`}>
+          {/* Cloud Agent 仍接受显式比例；仅终端型 Agent 不走 Bowerbird 生图参数。
+              flex：比例 / 生成选项两个选择器水平并排（外层缺 flex 时 block 根会竖着叠成
+              两行，按钮挤在同一列）。 */}
+          <div className={`flex shrink-0 items-center gap-2 ${agentZMode || agentGMode || agentDsMode ? "pointer-events-none opacity-40" : ""}`}>
             {!isVideo && <RatioSelect value={ratio} onChange={selectRatio} />}
-            {countSupported && <CountSelect value={genCount} onChange={selectGenCount} />}
+            {countSupported && (
+              <ImageGenOptions
+                count={genCount}
+                onCountChange={selectGenCount}
+                transparent={transparentLayer}
+                onTransparentChange={selectTransparentLayer}
+              />
+            )}
           </div>
           <VisualProfileSelect
             value={activeVisualProfileId}
@@ -1205,7 +1269,7 @@ export function CreationBoard({
                 setAgentZMode(false);
                 setAgentGMode(false);
               }}
-              title="Agent DS（dev）：编辑器内容 + 参考图发给 DeepSeek 对话助手，回复追加到创作板；生图/反推由它调用 Bowerbird 即梦/反推链路，不占生成会话"
+              title="Agent DS（dev）：把编辑器内容 + 参考图投递到本机 DSH 队列（.agent-z/ds-inbox/pending/），由你自己开着的 DSH 会话接住（参考图给绝对路径与素材名，能否直接看图取决于该会话模型）；不占生成会话、不经 DeepSeek key"
               className={`generation-mode-button flex h-7 items-center rounded-[3px] px-2.5 text-xs font-medium disabled:opacity-40 ${
                 agentDsMode ? "" : "is-off"
               }`}
@@ -1238,7 +1302,7 @@ export function CreationBoard({
                   : agentGMode
                     ? "发送到 Agent G 终端（Codex TUI）"
                     : agentDsMode
-                      ? "发送给 Agent DS（DeepSeek 对话助手）"
+                      ? "投递到 DSH 队列（本机 harness 会话接住）"
                       : agentMode !== "off"
                         ? `先由 Agent（${agentMode === "a" ? "方案A" : "方案B"}）整理意图，再发 ${targetProviderLabel} 生成${isVideo ? "视频" : "图像"}`
                         : `把当前 prompt + 参考图发 ${targetProviderLabel} 生成${isVideo ? "视频" : "图像"}`}
@@ -1259,9 +1323,9 @@ export function CreationBoard({
                     : agentGMode
                       ? "发送到 Agent G"
                       : agentDsBusy
-                        ? "Agent DS 处理中…"
+                        ? "正在投递…"
                         : agentDsMode
-                          ? "发送给 Agent DS"
+                          ? "投递到 DSH"
                           : agentBusy
                             ? "Agent 正在整理意图…"
                             : isVideo ? "生成视频" : "生成图像"}

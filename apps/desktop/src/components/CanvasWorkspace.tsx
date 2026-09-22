@@ -1,5 +1,7 @@
 import { LearningHint } from "./OnboardingTour";
 import { CanvasTextCard } from "./CanvasTextCard";
+import { CanvasWorkflowLayer, WindingKey, type WorkflowLayerHandle, type WorkflowGeometry, type MaterialAnchor } from "./CanvasWorkflowLayer";
+import { canvasWorkflowController } from "../lib/canvasWorkflowRuntime";
 import { CanvasResizeHandle } from "./CanvasResizeHandle";
 import { CanvasLayerMenuItem } from "./CanvasLayerMenuItem";
 import { CANVAS_LAYER_STEP_EVENT, stepCanvasLayers, type CanvasLayerStepDetail } from "../lib/canvasLayers";
@@ -46,9 +48,11 @@ import {
   Frame,
   Type,
   GripHorizontal,
+  Hand,
   PanelLeftClose,
   PanelLeftOpen,
   PenTool,
+  Palette,
   Play,
   Plus,
   Sparkles,
@@ -195,7 +199,7 @@ interface CanvasMarqueePress extends CanvasMarquee {
 
 type CanvasUndoEntry =
   | { kind: "removal"; projectId: string; materials: CanvasNode[]; graph: ProjectGraphNode[]; groups: Map<string, CanvasGroup> }
-  | { kind: "geometry"; projectId: string; materials: CanvasNode[]; graph: ProjectGraphNode[] };
+  | { kind: "geometry"; projectId: string; materials: CanvasNode[]; graph: ProjectGraphNode[]; workflow: WorkflowGeometry[] };
 
 interface ActiveCanvasState {
   id: string;
@@ -658,6 +662,7 @@ export function CanvasWorkspace({
     selectedIds: Set<string>;
     initialNodes: CanvasNode[];
     initialGraphNodes: ProjectGraphNode[];
+    initialWorkflow: WorkflowGeometry[];
     pointerId: number;
     offsetX: number;
     offsetY: number;
@@ -670,6 +675,7 @@ export function CanvasWorkspace({
     toggleSelection: boolean;
     initialNodes: ProjectGraphNode[];
     initialMaterialNodes: CanvasNode[];
+    initialWorkflow: WorkflowGeometry[];
     selectedIds: Set<string>;
     pointerId: number;
     offsetX: number;
@@ -689,7 +695,16 @@ export function CanvasWorkspace({
   const resizeRef = useRef<{ pointerId: number; startX: number; width: number; moved: boolean } | null>(null);
   const marqueePressRef = useRef<CanvasMarqueePress | null>(null);
   const selectedCanvasNodeIdsRef = useRef(selectedCanvasNodeIds);
-  const [drawingTool, setDrawingTool] = useState<"select" | "section" | "text" | "bubble">("select");
+  const [drawingTool, setDrawingTool] = useState<"select" | "pan" | "section" | "text" | "bubble">("select");
+  const workflowRef = useRef<WorkflowLayerHandle>(null);
+  const [workflowRevision, setWorkflowRevision] = useState(0);
+  function addWorkflowCard(kind: "instruction" | "generation" | "skill" | "visual-profile") {
+    const bounds = stageRef.current?.getBoundingClientRect();
+    if (!bounds || loadingRef.current) return;
+    setDrawingTool("select");
+    const point = toBoardPoint(bounds.left + Math.max(100, bounds.width / 2 - 160), bounds.top + 100);
+    workflowRef.current?.add(kind, point.x, point.y);
+  }
   const [sectionPreview, setSectionPreview] = useState<CanvasRect | null>(null);
   const sectionDrawRef = useRef<{ pointerId: number; start: CanvasPoint } | null>(null);
 
@@ -733,7 +748,7 @@ export function CanvasWorkspace({
       const next = new Set([...current].filter((id) => liveIds.has(id)));
       return next.size === current.size ? current : next;
     });
-  }, [nodes, graphNodes, threads]);
+  }, [nodes, graphNodes, threads, workflowRevision]);
 
   useEffect(() => {
     function arrangeRequestedNodes(event: Event) {
@@ -1671,6 +1686,7 @@ export function CanvasWorkspace({
       }
       if (nodeDragRef.current) {
         if (nodeDragRef.current.moved) {
+          translateWorkflowSelection(nodeDragRef.current.initialWorkflow, nodeDragRef.current.selectedIds, 0, 0);
           commitNodes(nodeDragRef.current.initialNodes);
           translateGraphSelection(nodeDragRef.current.initialGraphNodes, nodeDragRef.current.selectedIds, 0, 0);
         }
@@ -1683,6 +1699,7 @@ export function CanvasWorkspace({
       if (graphNodeDragRef.current) {
         if (graphNodeDragRef.current.moved) {
           translateGraphSelection(graphNodeDragRef.current.initialNodes, graphNodeDragRef.current.selectedIds, 0, 0);
+          translateWorkflowSelection(graphNodeDragRef.current.initialWorkflow, graphNodeDragRef.current.selectedIds, 0, 0);
           commitNodes(graphNodeDragRef.current.initialMaterialNodes);
         }
         graphNodeDragRef.current = null;
@@ -2066,12 +2083,17 @@ export function CanvasWorkspace({
     const archived = new Set(threads.filter((thread) => thread.archivedAt != null).map((thread) => thread.id));
     const agentPrompts = agentPromptGroupMap(graph, graphEdges);
     return [
+      ...(workflowRef.current?.bounds() ?? []).map(node => ({ id: node.id, order: 9000, rect: node })),
       ...materials.map((node) => ({ id: node.id, order: node.order, rect: nodeRect(node) })),
       ...graph.filter((node) => (node.kind === "prompt" || node.kind === "agent_group" || node.kind === "note")
         && !agentPrompts.has(node.id)
         && node.hiddenAt == null && (!node.threadId || !archived.has(node.threadId)))
         .map((node) => ({ id: node.id, order: node.zIndex, rect: nodeRect(node) })),
     ];
+  }
+
+  function translateWorkflowSelection(initial: WorkflowGeometry[], ids: Set<string>, dx: number, dy: number) {
+    workflowRef.current?.position(new Map(initial.filter(node => ids.has(node.id)).map(node => [node.id, { x: node.x + dx, y: node.y + dy }])));
   }
 
   function translateGraphSelection(initial: ProjectGraphNode[], selectedIds: Set<string>, dx: number, dy: number) {
@@ -2092,7 +2114,7 @@ export function CanvasWorkspace({
     for (const [id, group] of agentPromptGroupMap(graphNodesRef.current, graphEdges)) aliases.set(id, group.id);
     const sections = graphNodesRef.current.filter(node => node.kind === "note" && node.hiddenAt == null && readCanvasNote(node).note_type === "section");
     const sectionOwners = new Map(sections.flatMap(section => readCanvasNote(section).member_ids.map(id => [id, section.id] as const)));
-    const allAnchors = selectionAnchors();
+    const allAnchors = selectionAnchors().filter(node => !workflowRef.current?.isLocked(node.id));
     const anchors = allAnchors.filter(anchor => !sectionOwners.has(anchor.id));
     const resolveAnchor = (id: string) => sectionOwners.get(aliases.get(id) ?? id) ?? aliases.get(id) ?? id;
     const elements = new Map(Array.from(stageRef.current?.querySelectorAll<HTMLElement>("[data-canvas-node-id]") ?? [])
@@ -2116,11 +2138,14 @@ export function CanvasWorkspace({
         positions.set(member.id, { x: member.rect.x + position.x - section.x, y: member.rect.y + position.y - section.y });
       }
     }
+    const beforeMaterials = nodesRef.current, beforeGraph = graphNodesRef.current, beforeWorkflow = workflowRef.current?.bounds() ?? [];
+    workflowRef.current?.position(positions, true);
     const next = nodesRef.current.map((node) => positions.has(node.id) ? { ...node, ...positions.get(node.id)! } : node);
     const graph = graphNodesRef.current.map((node) => positions.has(node.id) ? { ...node, ...positions.get(node.id)! } : node);
     commitNodes(next);
     graphNodesRef.current = graph;
     setGraphNodes(graph);
+    pushGeometryUndo(beforeMaterials, beforeGraph, beforeWorkflow);
     setSelectedCanvasNodeIds(new Set(positions.keys()));
     persistGeometries(next.filter((node) => positions.has(node.id)));
     for (const node of graph) {
@@ -2224,7 +2249,7 @@ export function CanvasWorkspace({
   }
 
   function beginNodeDrag(event: PointerEvent<HTMLDivElement>, node: CanvasNode) {
-    if (isCanvasPanGesture(event.button, spacePressedRef.current) || event.button !== 0) return;
+    if (isCanvasPanGesture(event.button, spacePressedRef.current, drawingTool === "pan") || event.button !== 0) return;
     event.stopPropagation();
     const point = toBoardPoint(event.clientX, event.clientY);
     const toggleSelection = event.ctrlKey || event.metaKey;
@@ -2237,6 +2262,7 @@ export function CanvasWorkspace({
       selectedIds,
       initialNodes: nodesRef.current,
       initialGraphNodes: graphNodesRef.current,
+      initialWorkflow: workflowRef.current?.bounds() ?? [],
       pointerId: event.pointerId,
       offsetX: point.x - node.x,
       offsetY: point.y - node.y,
@@ -2251,16 +2277,19 @@ export function CanvasWorkspace({
     event.currentTarget.setPointerCapture(event.pointerId);
   }
 
-  function beginGraphNodeDrag(event: PointerEvent<HTMLElement>, node: ProjectGraphNode) {
-    if (isCanvasPanGesture(event.button, spacePressedRef.current) || event.button !== 0) return;
+  function beginGraphNodeDrag(event: PointerEvent<HTMLElement>, node: { id: string; x: number; y: number; kind: string }) {
+    if (isCanvasPanGesture(event.button, spacePressedRef.current, drawingTool === "pan") || event.button !== 0) return;
     event.stopPropagation();
     const point = toBoardPoint(event.clientX, event.clientY);
     const toggleSelection = event.ctrlKey || event.metaKey;
+    const isWorkflow = workflowRef.current?.bounds().some(item => item.id === node.id);
+    if (isWorkflow) stageRef.current?.focus({ preventScroll: true });
     graphNodeDragRef.current = {
       nodeId: node.id,
       toggleSelection,
       initialNodes: graphNodesRef.current,
       initialMaterialNodes: nodesRef.current,
+      initialWorkflow: workflowRef.current?.bounds() ?? [],
       selectedIds: expandCanvasSections(toggleSelection || selectedCanvasNodeIdsRef.current.has(node.id)
         ? new Set([...selectedCanvasNodeIdsRef.current, node.id]) : new Set([node.id]), graphNodesRef.current),
       pointerId: event.pointerId,
@@ -2271,8 +2300,8 @@ export function CanvasWorkspace({
       moved: false,
     };
     if (!toggleSelection) {
-      focusGraphNode(node.id);
-      if (!selectedCanvasNodeIdsRef.current.has(node.id)) setSelectedCanvasNodeIds(new Set(node.kind === "note" ? [node.id] : []));
+      if (!isWorkflow) focusGraphNode(node.id);
+      if (!selectedCanvasNodeIdsRef.current.has(node.id)) setSelectedCanvasNodeIds(new Set(node.kind === "note" || isWorkflow ? [node.id] : []));
     }
     event.currentTarget.setPointerCapture(event.pointerId);
   }
@@ -2289,7 +2318,7 @@ export function CanvasWorkspace({
       if (drag.toggleSelection) setSelectedCanvasNodeIds(drag.selectedIds);
       setActiveDragId(drag.nodeId);
     }
-    const origin = drag.initialNodes.find((node) => node.id === drag.nodeId);
+    const origin = drag.initialNodes.find((node) => node.id === drag.nodeId) ?? drag.initialWorkflow.find(node => node.id === drag.nodeId);
     if (!origin) return;
     const point = toBoardPoint(event.clientX, event.clientY);
     const snapped = snapCanvasRect(
@@ -2304,6 +2333,7 @@ export function CanvasWorkspace({
     );
     setGuides(snapped.guides);
     translateGraphSelection(drag.initialNodes, drag.selectedIds, snapped.x - origin.x, snapped.y - origin.y);
+    translateWorkflowSelection(drag.initialWorkflow, drag.selectedIds, snapped.x - origin.x, snapped.y - origin.y);
     commitNodes(translateCanvasSelection(drag.initialMaterialNodes, drag.selectedIds, snapped.x - origin.x, snapped.y - origin.y));
   }
 
@@ -2325,19 +2355,22 @@ export function CanvasWorkspace({
   function endGraphNodeDrag(event: PointerEvent<HTMLElement>, cancelled = false) {
     const drag = graphNodeDragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
-    if (cancelled) suppressNodeClickRef.current = true;
-    const node = graphNodesRef.current.find((candidate) => candidate.id === drag.nodeId);
+    const isWorkflow = drag.initialWorkflow.some(node => node.id === drag.nodeId);
+    if (cancelled && !isWorkflow) suppressNodeClickRef.current = true;
+    const node = graphNodesRef.current.find((candidate) => candidate.id === drag.nodeId) ?? drag.initialWorkflow.find(candidate => candidate.id === drag.nodeId);
     if (!cancelled && !drag.moved && drag.toggleSelection) {
       toggleCanvasNodeSelection(drag.nodeId);
-      suppressNodeClickRef.current = true;
+      if (!isWorkflow) suppressNodeClickRef.current = true;
     }
     if (cancelled && drag.moved) {
       translateGraphSelection(drag.initialNodes, drag.selectedIds, 0, 0);
+      translateWorkflowSelection(drag.initialWorkflow, drag.selectedIds, 0, 0);
       commitNodes(drag.initialMaterialNodes);
     } else if (drag.moved && node) {
       suppressNodeClickRef.current = true;
       pushGeometryUndo(drag.initialMaterialNodes.filter((candidate) => drag.selectedIds.has(candidate.id)),
-        drag.initialNodes.filter((candidate) => drag.selectedIds.has(candidate.id)));
+        drag.initialNodes.filter((candidate) => drag.selectedIds.has(candidate.id)), drag.initialWorkflow.filter(node => drag.selectedIds.has(node.id)));
+      workflowRef.current?.position(new Map((workflowRef.current.bounds() ?? []).filter(node => drag.selectedIds.has(node.id)).map(node => [node.id, node])), true);
       for (const selected of graphNodesRef.current.filter((candidate) => drag.selectedIds.has(candidate.id) && candidate.kind !== "asset" && candidate.hiddenAt == null)) persistGraphNodeGeometry(selected);
       persistGeometries(nodesRef.current.filter((candidate) => drag.selectedIds.has(candidate.id)));
     }
@@ -2483,6 +2516,7 @@ export function CanvasWorkspace({
     );
     commitNodes(next);
     translateGraphSelection(drag.initialGraphNodes, drag.selectedIds, snapped.x - originMoving.x, snapped.y - originMoving.y);
+    translateWorkflowSelection(drag.initialWorkflow, drag.selectedIds, snapped.x - originMoving.x, snapped.y - originMoving.y);
     const moving = next.find((node) => node.id === drag.nodeId);
     if (drag.selectedIds.size > 1 || moving?.kind !== "asset") {
       setHover(null);
@@ -2520,6 +2554,7 @@ export function CanvasWorkspace({
     if (cancelled && drag.moved) {
       commitNodes(drag.initialNodes);
       translateGraphSelection(drag.initialGraphNodes, drag.selectedIds, 0, 0);
+      translateWorkflowSelection(drag.initialWorkflow, drag.selectedIds, 0, 0);
     } else if (!cancelled && !drag.moved && moving) {
       if (drag.toggleSelection) toggleCanvasNodeSelection(moving.id);
       else activateCanvasMaterial(moving);
@@ -2543,7 +2578,8 @@ export function CanvasWorkspace({
       }
     } else if (moving && drag.moved) {
       pushGeometryUndo(drag.initialNodes.filter((candidate) => drag.selectedIds.has(candidate.id)),
-        drag.initialGraphNodes.filter((candidate) => drag.selectedIds.has(candidate.id)));
+        drag.initialGraphNodes.filter((candidate) => drag.selectedIds.has(candidate.id)), drag.initialWorkflow.filter(node => drag.selectedIds.has(node.id)));
+      workflowRef.current?.position(new Map((workflowRef.current.bounds() ?? []).filter(node => drag.selectedIds.has(node.id)).map(node => [node.id, node])), true);
       persistGeometries(nodesRef.current.filter((node) => drag.selectedIds.has(node.id)));
       for (const selected of graphNodesRef.current.filter((node) => drag.selectedIds.has(node.id) && node.kind !== "asset" && node.hiddenAt == null)) persistGraphNodeGeometry(selected);
     }
@@ -2655,7 +2691,7 @@ export function CanvasWorkspace({
   }
 
   function beginDrawing(event: PointerEvent<HTMLDivElement>) {
-    if (drawingTool === "select" || event.button !== 0 || spacePressedRef.current
+    if (drawingTool === "select" || drawingTool === "pan" || event.button !== 0 || spacePressedRef.current
       || (event.target as HTMLElement).closest(".canvas-drawing-tools") || loadingRef.current) return;
     event.preventDefault();
     event.stopPropagation();
@@ -2672,7 +2708,7 @@ export function CanvasWorkspace({
   }
 
   function beginPan(event: PointerEvent<HTMLDivElement>) {
-    if (!isCanvasPanGesture(event.button, spacePressedRef.current)) {
+    if (!isCanvasPanGesture(event.button, spacePressedRef.current, drawingTool === "pan")) {
       const targetIsCanvasNode = !!(event.target as HTMLElement).closest("[data-canvas-node]");
       if (event.button === 0 && !targetIsCanvasNode) {
         if (focusedNodeIdRef.current != null) {
@@ -2841,7 +2877,7 @@ export function CanvasWorkspace({
 
   function fitCanvas() {
     const stage = stageRef.current;
-    const content = selectionAnchors().map(anchor => anchor.rect);
+    const content = [...selectionAnchors().map(anchor => anchor.rect), ...(workflowRef.current?.bounds() ?? []).map(rect => ({ ...rect, y: rect.y - 45, height: rect.height + 45 }))];
     if (!stage || content.length === 0) {
       panRef.current = { x: 0, y: 0 };
       zoomRef.current = 1;
@@ -2997,7 +3033,7 @@ export function CanvasWorkspace({
   }
 
   /** 记录一次移动/层级/缩放前的快照；连续层级微调合并为一条撤销记录。 */
-  function pushGeometryUndo(materials: readonly CanvasNode[], graph: readonly ProjectGraphNode[]) {
+  function pushGeometryUndo(materials: readonly CanvasNode[], graph: readonly ProjectGraphNode[], workflow: WorkflowGeometry[] = []) {
     const draft = activeCanvasRef.current;
     const materialBefore = materials.filter((before) => {
       const after = nodesRef.current.find((node) => node.id === before.id);
@@ -3008,24 +3044,27 @@ export function CanvasWorkspace({
       const after = graphNodesRef.current.find((node) => node.id === before.id);
       return !!after && (canvasGeometryDiffers(before, after) || before.zIndex !== after.zIndex);
     });
-    if (materialBefore.length === 0 && graphBefore.length === 0) return;
+    const workflowBefore = workflow.filter(before => { const after = workflowRef.current?.bounds().find(node => node.id === before.id); return after && (before.x !== after.x || before.y !== after.y); });
+    if (materialBefore.length === 0 && graphBefore.length === 0 && workflowBefore.length === 0) return;
     const ids = new Set([...materialBefore, ...graphBefore].map((node) => node.id));
     const top = undoHistoryRef.current[undoHistoryRef.current.length - 1];
-    if (top?.kind === "geometry" && top.projectId === draft.id
+    if (top?.kind === "geometry" && !workflowBefore.length && !top.workflow.length && top.projectId === draft.id
       && top.materials.length === materialBefore.length && top.graph.length === graphBefore.length
       && top.materials.every((node) => ids.has(node.id)) && top.graph.every((node) => ids.has(node.id))
       && top.materials.every((node) => !canvasGeometryDiffers(node, nodesRef.current.find((live) => live.id === node.id)))
       && top.graph.every((node) => !canvasGeometryDiffers(node, graphNodesRef.current.find((live) => live.id === node.id)))) {
       return;
     }
-    undoHistoryRef.current.push({ kind: "geometry", projectId: draft.id, materials: materialBefore, graph: graphBefore });
+    undoHistoryRef.current.push({ kind: "geometry", projectId: draft.id, materials: materialBefore, graph: graphBefore, workflow: workflowBefore });
   }
 
   function undoCanvasAction() {
     const entry = undoHistoryRef.current[undoHistoryRef.current.length - 1];
     if (!entry || entry.projectId !== activeCanvasRef.current.id) return;
+    if (entry.kind === "geometry" && entry.workflow.some(node => workflowRef.current?.isLocked(node.id))) return;
     undoHistoryRef.current.pop();
     if (entry.kind === "geometry") {
+      workflowRef.current?.position(new Map(entry.workflow.map(node => [node.id, node])), true);
       const materialBefore = new Map(entry.materials.map((node) => [node.id, node]));
       commitNodes(nodesRef.current.map((node) => {
         const before = materialBefore.get(node.id);
@@ -3220,6 +3259,10 @@ export function CanvasWorkspace({
       return;
     }
     const target = [...promptGraphNodes, ...agentGraphNodes].find((node) => node.id === nodeId);
+    if (projectId && canvasWorkflowController(projectId).document.nodes.some(node => node.sessionNodeIds?.includes(nodeId))) {
+      pendingNewCardRef.current = null;
+      return;
+    }
     const stage = stageRef.current;
     if (!target || !stage) {
       pendingNewCardRef.current = null;
@@ -3735,7 +3778,7 @@ export function CanvasWorkspace({
           ref={stageRef}
           tabIndex={-1}
           data-canvas-stage
-          className={`canvas-stage ${drawingTool !== "select" ? "is-drawing" : ""} ${externalDragOver ? "is-drag-over" : ""} ${spacePanReady ? "is-pan-ready" : ""} ${panning ? "is-panning" : ""} ${boardOpen || genEditing ? "is-creation-mode" : ""} ${viewMode !== "canvas" ? "is-view-hidden" : ""}`}
+          className={`canvas-stage ${drawingTool !== "select" && drawingTool !== "pan" ? "is-drawing" : ""} ${drawingTool === "pan" ? "is-hand" : ""} ${externalDragOver ? "is-drag-over" : ""} ${spacePanReady ? "is-pan-ready" : ""} ${panning ? "is-panning" : ""} ${boardOpen || genEditing ? "is-creation-mode" : ""} ${viewMode !== "canvas" ? "is-view-hidden" : ""}`}
           style={{
             backgroundPosition: `${pan.x}px ${pan.y}px`,
             backgroundSize: `${24 * zoom}px ${24 * zoom}px`,
@@ -3754,6 +3797,7 @@ export function CanvasWorkspace({
               || selectedCanvasNodeIdsRef.current.size === 0) return;
             event.preventDefault();
             event.stopPropagation();
+            if (workflowRef.current?.bounds().some(node => selectedCanvasNodeIdsRef.current.has(node.id))) return;
             removeNodes(selectedCanvasNodeIdsRef.current);
           }}
           onContextMenu={(event) => {
@@ -3780,10 +3824,17 @@ export function CanvasWorkspace({
         >
           <div className="canvas-drawing-tools" role="toolbar" aria-label="画板工具" onPointerDown={event => event.stopPropagation()}>
             <button data-tip="选择" aria-label="选择工具" aria-pressed={drawingTool === "select"} onClick={() => setDrawingTool("select")}><MousePointer2 size={18} /></button>
+            <button data-tip="抓手 · 按住左键平移视图（Esc 退出）" aria-label="抓手工具" aria-pressed={drawingTool === "pan"} onClick={() => setDrawingTool("pan")}><Hand size={18} /></button>
             <hr />
             <button data-tip="分区 · 拖拽画框" aria-label="分区工具" aria-pressed={drawingTool === "section"} onClick={() => setDrawingTool("section")}><Frame size={18} /></button>
             <button data-tip="文本卡片 · 点击放置" aria-label="文本卡片工具" aria-pressed={drawingTool === "text"} onClick={() => setDrawingTool("text")}><Type size={18} /></button>
             <button data-tip="气泡便签 · 点击放置" aria-label="气泡便签工具" aria-pressed={drawingTool === "bubble"} onClick={() => setDrawingTool("bubble")}><MessageCircle size={18} /></button>
+            <hr />
+            <button data-tip="指令卡片" aria-label="新增指令卡片" onClick={() => addWorkflowCard("instruction")}><List size={18} /></button>
+            <button data-tip="生成卡片" aria-label="新增生成卡片" onClick={() => addWorkflowCard("generation")}><Images size={18} /></button>
+            <button data-tip="技能卡片" aria-label="新增技能卡片" onClick={() => addWorkflowCard("skill")}><Sparkles size={18} /></button>
+            <button data-tip="视觉规范卡片" aria-label="新增视觉规范卡片" onClick={() => addWorkflowCard("visual-profile")}><Palette size={18} /></button>
+            <button data-tip="发条触发器 · 点击卡片吸附" aria-label="发条触发器" onClick={() => { setDrawingTool("select"); workflowRef.current?.arm(); }}><WindingKey size={21} /></button>
             <hr />
             <div className="canvas-assist-tools" role="group" aria-label="辅助">
               <span>辅助</span>
@@ -3800,6 +3851,21 @@ export function CanvasWorkspace({
             className="canvas-plane"
             style={{ transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})` }}
           >
+            {projectId && <CanvasWorkflowLayer key={projectId} ref={workflowRef} projectId={projectId} zoom={zoom} toBoardPoint={toBoardPoint} graphNodes={graphNodes}
+              selectedIds={selectedCanvasNodeIds} panReady={spacePanReady || drawingTool === "pan"} onSelect={(id, additive) => { if (additive) toggleCanvasNodeSelection(id); else setSelectedCanvasNodeIds(new Set([id])); }}
+              onNodesChanged={() => setWorkflowRevision(value => value + 1)}
+              onDragStart={beginGraphNodeDrag} onDragMove={moveGraphNode} onDragEnd={endGraphNodeDrag} onNodeMenu={openCanvasNodeMenu}
+              onPlaced={card => {
+                const stage = stageRef.current; if (!stage || useStore.getState().activeProjectId !== projectId) return;
+                const bounds = stage.getBoundingClientRect();
+                const next = canvasViewForNewCard(card, { x: 80, y: 60, width: Math.max(200, bounds.width - 120), height: Math.max(200, bounds.height - 270) }, panRef.current, zoomRef.current, true);
+                if (!next) return;
+                panRef.current = next.pan; zoomRef.current = next.zoom; setPan(next.pan); setZoom(next.zoom); markViewDirty();
+              }}
+              ensureMaterialized={async () => { const draft = activeCanvasRef.current; if (!draft) throw new Error("项目尚未就绪"); await ensureMaterialized(draft); }}
+              materials={nodes.flatMap<MaterialAnchor>(node => node.kind === "folder"
+                ? [{ id: node.id, groupId: node.id, assetIds: [...new Set(node.assets.filter(asset => !isVideoPath(asset.storePath)).flatMap(asset => asset.assetId ? [asset.assetId] : []))], ...nodeRect(node) }]
+                : node.kind === "asset" && node.asset.assetId ? [{ id: node.id, assetId: node.asset.assetId, ...nodeRect(node) }] : [])} />}
             {graphNodes.filter(node => node.kind === "note" && node.hiddenAt == null).map(node => {
               const value = readCanvasNote(node);
               const section = value.note_type === "section";
@@ -3825,6 +3891,7 @@ export function CanvasWorkspace({
                       minimum={{ width: 120, height: 80 }} onResize={(size, finished, cancelled) => resizeCanvasNote(node.id, size, finished, cancelled)} />
                   ))}
                 </> : <CanvasTextCard value={value} selected={selected} width={node.width} height={node.height} zoom={zoom}
+                  onConnectCell={(cellId, x, y) => workflowRef.current?.connectCell(node.id, cellId, x, y)}
                   onResize={(size, finished, cancelled) => resizeCanvasNote(node.id, size, finished, cancelled)} onSelect={() => setSelectedCanvasNodeIds(new Set([node.id]))}
                   onChange={next => updateCanvasNote(node.id, next)} />}
               </div>;
@@ -4040,7 +4107,7 @@ export function CanvasWorkspace({
                             const assetPath = canvasAssetMediaPath(asset);
                             return <button type="button" key={asset.id} data-canvas-folder-asset-id={asset.id}
                               className="canvas-folder-asset" aria-label={asset.name}
-                              onPointerDown={(event) => { if (!isCanvasPanGesture(event.button, spacePressedRef.current)) event.stopPropagation(); }}
+                              onPointerDown={(event) => { if (!isCanvasPanGesture(event.button, spacePressedRef.current, drawingTool === "pan")) event.stopPropagation(); }}
                               onKeyDown={(event) => { if (event.key === "Enter" || event.key === " " || event.key.startsWith("Arrow")) event.stopPropagation(); }}
                               onClick={(event) => { if (!consumeSuppressedNodeClick()) activateCanvasMaterial(groupedAssetNode(asset, node, index), event.currentTarget); }}
                               onContextMenu={(event) => openCanvasAssetContextMenu(event, node, asset)}>
@@ -4173,7 +4240,7 @@ export function CanvasWorkspace({
             }}>
               <Trash2 size={14} className="shrink-0" /> 移除分区「{promptMenu.section.name}」
             </button>}
-            {promptMenu.nodeIds.length > 0 && <CanvasLayerMenuItem projectId={activeCanvasRef.current.id} nodeIds={promptMenu.nodeIds}
+            {promptMenu.nodeIds.length > 0 && !promptMenu.nodeIds.some(id => workflowRef.current?.bounds().some(node => node.id === id)) && <CanvasLayerMenuItem projectId={activeCanvasRef.current.id} nodeIds={promptMenu.nodeIds}
               className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs hover:bg-panel2" />}
             {canvasImagesForSelection(promptMenu.nodeIds).length > 0 && <button type="button" role="menuitem" className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs hover:bg-panel2" onClick={() => addCanvasImagesToBoard(promptMenu.nodeIds)}>
               <Images size={14} className="shrink-0" /> {canvasImagesForSelection(promptMenu.nodeIds).length > 1
@@ -4195,7 +4262,7 @@ export function CanvasWorkspace({
             }}>
               <Ungroup size={14} /> 解散素材组
             </button>}
-            {promptMenu.nodeIds.length > 0 && <button type="button" role="menuitem" className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs text-red-400 hover:bg-panel2" onClick={() => {
+            {promptMenu.nodeIds.length > 0 && !promptMenu.nodeIds.some(id => workflowRef.current?.bounds().some(node => node.id === id)) && <button type="button" role="menuitem" className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs text-red-400 hover:bg-panel2" onClick={() => {
               removeNodes(promptMenu.nodeIds);
               setPromptMenu(null);
             }}>

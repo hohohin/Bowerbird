@@ -234,6 +234,7 @@ pub async fn codex_generate_prompt_for_asset(
         ratio: None,
         job_id: None,
         generate_num: None,
+        transparent_background: None,
     };
     let p = resolve_entitled_understand_provider(
         &entitlement,
@@ -260,11 +261,49 @@ pub async fn codex_generate_prompt_for_asset(
     Ok(prompt_id)
 }
 
-/// 当前反推任务的取消信号。同一时刻只支持一个反推任务（前端反推按钮 disabled 保证）；
-/// 取消时往 sender 发信号，select 命中后 future 被 drop，本机 CLI 子进程靠
-/// `kill_on_drop` 自动终止（见 codex_cli.rs）；Cloud 路由无子进程，drop future 即止。
-static DESCRIBE_CANCEL: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>> =
-    std::sync::Mutex::new(None);
+/// Workflow descriptions have independent cancellation handles. The ordinary UI queue
+/// keeps its legacy slot, so cancelling it cannot interrupt a workflow batch.
+static DESCRIBE_CANCEL: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, Option<tokio::sync::oneshot::Sender<()>>>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+struct DescribeGuard(String);
+impl DescribeGuard {
+    fn register(id: String) -> Result<(Self, tokio::sync::oneshot::Receiver<()>), AppError> {
+        let mut handles = DESCRIBE_CANCEL.lock().unwrap();
+        if handles.contains_key(&id) {
+            return Err(AppError::Codex("反推任务正在执行".into()));
+        }
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        handles.insert(id.clone(), Some(tx));
+        Ok((Self(id), rx))
+    }
+}
+impl Drop for DescribeGuard {
+    fn drop(&mut self) { DESCRIBE_CANCEL.lock().unwrap().remove(&self.0); }
+}
+
+#[cfg(test)]
+mod describe_parallel_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn cancellation_is_scoped_and_slots_are_released() {
+        let (first, mut first_rx) = DescribeGuard::register("test-describe-first".into()).unwrap();
+        let (second, mut second_rx) = DescribeGuard::register("test-describe-second".into()).unwrap();
+        assert!(DescribeGuard::register(first.0.clone()).is_err());
+        cancel_codex_describe(Some(first.0.clone())).await.unwrap();
+        assert!(first_rx.try_recv().is_ok());
+        assert!(matches!(second_rx.try_recv(), Err(tokio::sync::oneshot::error::TryRecvError::Empty)));
+        // A cancelled operation owns its identity until its future exits.
+        assert!(DescribeGuard::register(first.0.clone()).is_err());
+        drop(first);
+        let (replacement, _) = DescribeGuard::register("test-describe-first".into()).unwrap();
+        drop(replacement);
+        drop(second);
+        assert!(!DESCRIBE_CANCEL.lock().unwrap().contains_key("test-describe-second"));
+    }
+}
 
 /// 「反推」：让理解 provider 描述指定资产（按权益路由 codex CLI / Bowerbird Cloud），结果落 analyses(kind=caption)。
 /// payload 同时存 session_id（codex 路由才有，Cloud 无），前端「在 codex 中打开」按钮据此唤起 `codex resume`。
@@ -279,7 +318,9 @@ pub async fn codex_describe_asset(
     asset_id: String,
     instruction: Option<String>,
     provider: Option<String>,
+    job_id: Option<String>,
 ) -> Result<String, AppError> {
+    let (_guard, mut cancel_rx) = DescribeGuard::register(job_id.unwrap_or_else(|| "legacy".into()))?;
     let store_path = get_asset_store_path(&db, &asset_id).await?;
     let instruction = instruction
         .map(|s| s.trim().to_string())
@@ -293,6 +334,7 @@ pub async fn codex_describe_asset(
         ratio: None,
         job_id: None,
         generate_num: None,
+        transparent_background: None,
     };
     let p = resolve_understand_provider_with_choice(
         &entitlement,
@@ -305,17 +347,15 @@ pub async fn codex_describe_asset(
 
     // 可取消：select codex 执行 与 取消信号。取消时 run future 被 drop，
     // codex 子进程靠 kill_on_drop 自动 kill。
-    let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
-    DESCRIBE_CANCEL.lock().unwrap().replace(cancel_tx);
     let run_fut = p.understand(UnderstandOperation::Caption, req);
     tokio::pin!(run_fut);
     let result = tokio::select! {
-        r = &mut run_fut => r,
+        biased;
         _ = &mut cancel_rx => {
             return Err(AppError::Codex("已取消".into()));
-        }
+        },
+        r = &mut run_fut => r,
     };
-    DESCRIBE_CANCEL.lock().unwrap().take();
     let result = result?;
     let analysis_parsed = caption::parse(&result.text);
     let payload = caption::build_payload(
@@ -368,8 +408,8 @@ pub async fn codex_describe_asset(
 
 /// 取消正在进行的反推（`codex_describe_asset`）。无任务在跑则空操作。
 #[tauri::command]
-pub async fn cancel_codex_describe() -> Result<(), AppError> {
-    if let Some(tx) = DESCRIBE_CANCEL.lock().unwrap().take() {
+pub async fn cancel_codex_describe(job_id: Option<String>) -> Result<(), AppError> {
+    if let Some(tx) = DESCRIBE_CANCEL.lock().unwrap().get_mut(job_id.as_deref().unwrap_or("legacy")).and_then(Option::take) {
         let _ = tx.send(());
     }
     Ok(())
@@ -504,6 +544,8 @@ pub async fn codex_create_image(
     video_options: Option<crate::codex::types::VideoOptions>,
     // 图片生成张数（1–4）；仅即梦 / Cloud 生图引擎支持，视频与其余 provider 固定 1。
     count: Option<u32>,
+    // 透明图层（background: transparent 出图）；仅即梦 / Cloud 生图引擎支持。
+    transparent: Option<bool>,
     session_id: Option<String>,
     ratio: Option<String>,
     provider: Option<String>,
@@ -518,6 +560,8 @@ pub async fn codex_create_image(
     parent_node_id: Option<String>,
     parent_asset_path: Option<String>,
     creative_relation: Option<crate::core::creative_session_contract::CreativeGenerationRelation>,
+    // 失败重试的叠放锚点（被重试失败轮的 prompt 节点 id）：新卡原样落它的位置。
+    retry_anchor_node_id: Option<String>,
 ) -> Result<String, AppError> {
     let media = media.unwrap_or_else(|| "image".into());
     if !matches!(media.as_str(), "image" | "video") {
@@ -542,6 +586,10 @@ pub async fn codex_create_image(
     }
     if count > 1 && !multi_image_provider {
         return Err(AppError::Other("当前生成引擎不支持多张，请改用即梦或 Bowerbird Cloud".into()));
+    }
+    let transparent = transparent.unwrap_or(false);
+    if transparent && (is_video || !multi_image_provider) {
+        return Err(AppError::Other("透明图层仅即梦或 Bowerbird Cloud 生图支持".into()));
     }
     if project_id.is_none() || thread_id.is_none() {
         return Err(AppError::Other(
@@ -733,6 +781,7 @@ pub async fn codex_create_image(
         ratio: ratio.clone(),
         job_id: Some(if cloud_video { crate::codex::bowerbird_cloud::video_idempotency_key(&job_id, &turn_key) } else { job_id.clone() }),
         generate_num: if count > 1 { Some(count) } else { None },
+        transparent_background: transparent.then_some(true),
     };
 
     if let Some(options) = &video_options {
@@ -933,6 +982,7 @@ pub async fn codex_create_image(
                 parent_node_id: parent_node_id.clone(),
                 parent_asset_path: parent_asset_path.clone(),
                 relation: creative_relation,
+                retry_anchor_node_id: retry_anchor_node_id.clone(),
             },
         ) {
             let _ =

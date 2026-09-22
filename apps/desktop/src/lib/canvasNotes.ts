@@ -2,6 +2,7 @@ import type { CanvasNode } from "./types";
 import type { CanvasRect } from "./canvasLogic";
 
 export interface CanvasTextCell {
+  id?: string;
   text: string;
   bold: boolean;
   italic: boolean;
@@ -63,7 +64,8 @@ export function readCanvasNote(node: Pick<CanvasNode, "payloadJson">): CanvasNot
     schema_version: 1,
     text: value.text ?? "",
     note_type: value.note_type === "section" ? "section" : value.note_type === "bubble" ? "bubble" : "text",
-    cells: value.note_type === "section" ? [] : value.cells?.length ? value.cells : [[{ ...emptyCanvasCell(), text: value.text ?? "" }]],
+    cells: (value.note_type === "section" ? [] : value.cells?.length ? value.cells : [[{ ...emptyCanvasCell(), text: value.text ?? "" }]])
+      .map((row: CanvasTextCell[], r: number) => row.map((cell, c) => ({ ...cell, id: cell.id ?? `cell-${r}-${c}` }))),
     member_ids: value.member_ids ?? [],
     line_height_percent: value.line_height_percent ?? 165,
     ...(typeof value.title === "string" ? { title: value.title } : {}),

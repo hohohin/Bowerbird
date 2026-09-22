@@ -51,6 +51,7 @@ dev-doc/*
 !dev-doc/HTML-RENDER-PLAN.md
 !dev-doc/UNIFIED-AGENT-HARNESS-PLAN.md
 !dev-doc/PROJECT-CANVAS-PLAN.md
+!dev-doc/CANVAS-WORKFLOW.md
 !dev-doc/LOCAL-CLASSIFICATION.md
 !dev-doc/EMBEDDED-BROWSER.md
 !dev-doc/ONBOARDING.md

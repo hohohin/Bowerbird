@@ -46,6 +46,7 @@ impl BowerbirdCloudProvider {
         instruction: &str,
         references: &[serde_json::Value],
         ratio: Option<&str>,
+        transparent: bool,
         tx: &mpsc::Sender<Chunk>,
     ) -> Result<(Vec<PathBuf>, PathBuf, Option<String>), AppError> {
         let response = self
@@ -58,6 +59,7 @@ impl BowerbirdCloudProvider {
                     "reference_images": references,
                     "ratio": ratio,
                     "service": self.service,
+                    "transparent": transparent,
                 })),
                 "云生成请求失败",
             )
@@ -323,6 +325,7 @@ impl GenProvider for BowerbirdCloudProvider {
                     &req.instruction,
                     &references,
                     req.ratio.as_deref(),
+                    req.transparent_background == Some(true),
                     tx,
                 )
                 .await?;

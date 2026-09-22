@@ -14,6 +14,8 @@ export interface GenerationSettings {
   ratio?: string | null;
   /** 图片生成张数（仅即梦 / Cloud 生图引擎支持；1–4）。 */
   count?: number;
+  /** 透明图层：生图请求带 background: transparent（仅即梦 / Cloud 生图引擎支持）。 */
+  transparent?: boolean;
 }
 export function videoProvider(channel: "jimeng" | "cloud" | undefined, options: VideoOptions): string {
   return channel === "cloud" ? `bowerbird-cloud-video_seedance25_${options.video_resolution}` : "jimeng";

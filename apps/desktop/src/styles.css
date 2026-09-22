@@ -2186,6 +2186,19 @@ html[data-theme="light"] .settings-card [role="radio"][aria-checked="true"] {
 
 .app-popover-option { min-height: 48px; padding: 7px 8px; }
 .app-popover-option.provider-select-option { min-height: 34px; padding-block: 5px; }
+/* 生成选项里的张数分段格（ImageGenOptions）：单行紧凑小格，选中态走底部蓝条（方格上比列表式
+   左贴边竖条更对称），字号与工具栏其余控件一致（12px，不继承 14px 正文）。 */
+.app-popover-option.count-select-option {
+  width: 44px;
+  min-height: 0;
+  padding: 6px 0;
+  justify-content: center;
+  text-align: center;
+  font-size: 12px;
+}
+.app-popover-option.count-select-option[aria-selected="true"] {
+  box-shadow: inset 0 -2px 0 var(--bb-blue);
+}
 .app-popover-option:hover:not(:disabled),
 .app-popover-option:focus-visible,
 .app-context-item:hover:not(:disabled),
@@ -2245,6 +2258,8 @@ html[data-theme="light"] .settings-card [role="radio"][aria-checked="true"] {
   width: 248px;
   overflow: visible;
 }
+/* 两列右键菜单平时可滚动；「反推」二级子菜单展开时放开裁剪让它飞出（收起后恢复滚动）。 */
+.asset-context-menu.submenu-open { overflow: visible; }
 .asset-context-submenu {
   position: absolute;
   top: 0;
@@ -3460,6 +3475,8 @@ html[data-theme="light"] .app-form-input:focus {
 
 .canvas-stage.is-pan-ready { cursor: grab; }
 .canvas-stage.is-panning { cursor: grabbing; }
+.canvas-stage.is-hand, .canvas-stage.is-hand * { cursor: grab !important; }
+.canvas-stage.is-hand.is-panning, .canvas-stage.is-hand.is-panning * { cursor: grabbing !important; }
 
 .canvas-stage.is-drag-over {
   box-shadow: inset 0 0 0 2px rgb(var(--bb-blue-rgb) / 70%);

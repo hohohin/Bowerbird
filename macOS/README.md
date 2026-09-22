@@ -2,7 +2,11 @@
 
 本目录记录 Mac 上的本地开发、运行和未签名构建流程。Bowerbird 使用 canonical Tauri / React / Rust 源码，不维护 macOS override。构建架构以 `rustc -vV` 的 host 为准；Intel 为 `x86_64-apple-darwin`，Apple Silicon 原生工具链为 `aarch64-apple-darwin`。
 
-## 2026-09-20 Mac 26.9.2001 更新包（本机构建待上传）
+## 2026-09-21 Mac 26.9.2002 已发布
+
+发布侧核验 R2 上现成 26.9.2002 更新包及 DMG 后，已同步官网 Mac 清单与两份首页入口。完整下载哈希、旧公钥签名/篡改拒绝、ARM64/包内版本及公网链路通过；Windows 保持 26.9.1803。2002 接替下述 2001 历史构建，不再按旧交接发布 2001。产物、回滚及验收边界见 [DESKTOP-UPDATES.md](../dev-doc/DESKTOP-UPDATES.md)「Mac 26.9.2002 发布记录」。原生更新/重启及 Apple 公证仍待验收。
+
+## 2026-09-20 Mac 26.9.2001 更新包（历史构建，已由 2002 接替）
 
 收录 9 月 19/20 存档工作：本地分类向量精确匹配判官（jina-clip-v2 int8，可选安装、未装回退 VLM）与可选云端最终校验 Jev、画板新卡锚定当前可视区左上角、视频卡独立样式与 ▶ 徽标、文本卡表格增强（标题编辑/整表复制 CSV/行高列宽拖拽）、创作模式空白框选、mac「打开所在文件夹」Finder 选中与对话框方向键乱码修复。版本按同日序号规范定为 **26.9.2001**（20 日第 1 包，> 线上 26.9.1901，护栏通过；1901 清单已由发布侧替换上线，2026-09-20 确认）。构建前验证：Rust 全量 **379 passed / 6 ignored**、画板纯逻辑 **127/127**、creation-editor/creation-marquee/notes/media/reference/local-classification 六组 UI 回归与 `tsc --noEmit` 通过（`canvas-arrangement-ui`、`canvas-selection-to-board-ui` 的既有等待失败维持不处理）。
 

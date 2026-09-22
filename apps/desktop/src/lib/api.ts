@@ -69,6 +69,8 @@ export interface SourceBrowserBounds {
 }
 
 export const api = {
+  canvasWorkflowGet: (projectId: string) => invoke<import("./canvasWorkflow").WorkflowSnapshot>("canvas_workflow_get", { projectId }),
+  canvasWorkflowSave: (projectId: string, revision: number, document: import("./canvasWorkflow").CanvasWorkflow) => invoke<number>("canvas_workflow_save", { projectId, revision, document }),
   // 健康检查
   ping: (name: string) => invoke<string>("ping", { name }),
   dbHealth: () => invoke<string>("db_health"),
@@ -134,10 +136,17 @@ export const api = {
   agentZSend: (text: string, images: string[], imageNames?: string[], engine?: "z" | "g", visualProfileId?: string | null) =>
     invoke<void>("agent_z_send", { text, images, imageNames, engine, visualProfileId }),
 
-  // Agent DS（dev-only）：创作板消息发给 DeepSeek 对话 harness（detached Node 子进程），
-  // 回复经事件链路追加进创作板；可用性与 Agent A/B 同源（localAgentHealth）。
-  agentDsChat: (text: string, images: string[], visualProfileId?: string | null) =>
-    invoke<void>("agent_ds_chat", { text, images, visualProfileId }),
+  // Agent DS（dev-only）：把创作板内容投递到本机 DSH 队列（.agent-z/ds-inbox/pending/），并自动
+  // 送达 cwd 为本仓库的活 DSH 会话（POST /api/session.prompt，host 复用活 Agent）；返回投递路径、
+  // 目标会话与送达结果。文件是权威，HTTP 那一腿失败只降级为「留在队列等人工 drain」。
+  agentDsChat: (text: string, images: string[], imageNames?: string[], visualProfileId?: string | null) =>
+    invoke<{
+      path: string;
+      sessionId?: string | null;
+      sessionTitle?: string | null;
+      autoDelivered: boolean;
+      notice?: string | null;
+    }>("agent_ds_chat", { text, images, imageNames, visualProfileId }),
 
   // 项目 workspace
   createProject: (workspacePath: string) =>
@@ -270,7 +279,7 @@ export const api = {
   layerFonts: () => invoke<string[]>("layer_fonts"),
   layerTextRequest: (request: { action: "get_by_key" | "create"; idempotency_key: string; image?: import("./layerDocument").TextRecognitionPending["image"] }) => invoke<{ status: string; text?: string; error?: { message?: string } }>("layer_text_request", { request }),
   layerWorkspaceSave: (assetId: string, workspace: import("./layerDocument").LayerWorkspace) => invoke<void>("layer_workspace_save", { assetId, workspace }),
-  layerExport: (assetId: string, document: import("./layerDocument").LayerDocument, dataUrl: string, projectId: string | null) => invoke<Asset>("layer_export", { assetId, document, dataUrl, projectId }),
+  layerExport: (assetId: string, document: import("./layerDocument").LayerDocument, dataUrl: string, projectId: string | null, workflow = false) => invoke<Asset>("layer_export", { assetId, document, dataUrl, projectId, workflow }),
   layerCloudRequest: (request: import("./layerDocument").LayerRequest | { action: string; idempotency_key?: string; job_id?: string }) => invoke<{ status: string; progress?: number; services?: { service: string; available: boolean; credits: number | null }[]; error?: { message: string }; layer_result?: { document?: import("./layerDocument").LayerDocument; image?: string } }>("layer_cloud_request", { request }),
 
   // 浏览
@@ -417,8 +426,8 @@ export const api = {
   codexGeneratePromptForAsset: (assetId: string, role: string) =>
     invoke<string>("codex_generate_prompt_for_asset", { assetId, role }),
   // Phase 5：反推（codex CLI 描述图片）+ 分析结果
-  describeAsset: (assetId: string, instruction?: string, provider?: string) =>
-    invoke<string>("codex_describe_asset", { assetId, instruction, provider: provider ?? null }),
+  describeAsset: (assetId: string, instruction?: string, provider?: string, jobId?: string) =>
+    invoke<string>("codex_describe_asset", { assetId, instruction, provider: provider ?? null, jobId }),
   listAnalysesByAsset: (assetId: string) =>
     invoke<Analysis[]>("list_analyses_by_asset", { assetId }),
   openCodexSession: (sessionId: string) =>
@@ -432,7 +441,7 @@ export const api = {
   /** 编辑反推维度内容：sections 整体替换，后端重算 text/dimensions 落库并广播 analyses://changed。 */
   updateCaptionSections: (id: string, sections: CaptionSection[]) =>
     invoke<void>("update_caption_sections", { id, sections }),
-  cancelCodexDescribe: () => invoke<void>("cancel_codex_describe"),
+  cancelCodexDescribe: (jobId?: string) => invoke<void>("cancel_codex_describe", { jobId }),
   codexHealth: () => invoke<CodexHealth>("codex_health"),
   // 一键安装 codex CLI / OAuth 登录（让 CLI 对用户隐形，B 升级）。
   // 进度经 codex://setup-progress {stage:"install"|"login", line} 推；成功后端 emit codex://health-changed。
@@ -464,6 +473,8 @@ export const api = {
     videoOptions?: import("./videoGeneration").VideoOptions | null;
     /** 图片生成张数（1–4）；仅即梦 / Cloud 生图引擎支持。 */
     count?: number;
+    /** 透明图层（background: transparent）；仅即梦 / Cloud 生图引擎支持。 */
+    transparent?: boolean;
     prompt: string;
     referenceImages: string[];
     referenceNodeIds?: Array<string | null>;
@@ -486,11 +497,14 @@ export const api = {
     parentNodeId?: string | null;
     parentAssetPath?: string | null;
     creativeRelation?: "continued" | "retry" | "branch" | null;
+    /** 失败重试叠放锚点：被重试失败轮的 prompt 节点 id，新卡原样落它的位置。 */
+    retryAnchorNodeId?: string | null;
   }) =>
     invoke<string>("codex_create_image", {
       media: req.media ?? "image",
       videoOptions: req.videoOptions ?? null,
       count: req.count ?? 1,
+      transparent: req.transparent ?? false,
       prompt: req.prompt,
       referenceImages: req.referenceImages,
       referenceNodeIds: req.referenceNodeIds ?? [],
@@ -510,6 +524,7 @@ export const api = {
       parentNodeId: req.parentNodeId ?? null,
       parentAssetPath: req.parentAssetPath ?? null,
       creativeRelation: req.creativeRelation ?? null,
+      retryAnchorNodeId: req.retryAnchorNodeId ?? null,
     }),
   cancelCodexCreate: (jobId: string) => invoke<void>("cancel_codex_create", { jobId }),
   // 启动恢复（Task 5）：列出未完成生成 job，前端挂载时拉取重建 genJobs（恢复中 job 可见）。
@@ -559,6 +574,9 @@ export const api = {
     invoke<VisualProfileSummary[]>("visual_profile_list", { folderId: folderId ?? null }),
   visualProfileCloudExtract: (folderId: string, expectedAssetIds?: string[]) =>
     invoke<VisualProfileDetail>("visual_profile_cloud_extract", { folderId, expectedAssetIds: expectedAssetIds ?? null }),
+  visualProfileInputPreview: (assetIds: string[], requirements = "") => invoke<string[]>("visual_profile_input_preview", { assetIds, requirements }),
+  visualProfileExtractInputs: (scopeKey: string, name: string, assetIds: string[], requirements: string) =>
+    invoke<VisualProfileDetail>("visual_profile_extract_inputs", { scopeKey, name, assetIds, requirements }),
   visualProfileUpdateDraft: (profileId: string, rules: VisualProfileRuleEdit[]) =>
     invoke<VisualProfileDetail>("visual_profile_update_draft", { profileId, rules }),
   visualProfileGenerateValidation: (profileId: string, theme: string) =>

@@ -184,9 +184,9 @@ export function clampCanvasZoom(value: number) {
   return Math.min(2.4, Math.max(0.1, value));
 }
 
-/** 画板平移只接受中键，或按住空格时的左键。 */
-export function isCanvasPanGesture(button: number, spacePressed: boolean) {
-  return button === 1 || (button === 0 && spacePressed);
+/** 画板平移接受中键、按住空格时的左键，或抓手工具激活时的左键。 */
+export function isCanvasPanGesture(button: number, spacePressed: boolean, handToolActive = false) {
+  return button === 1 || (button === 0 && (spacePressed || handToolActive));
 }
 
 export function canvasPrimaryMaterialAction(

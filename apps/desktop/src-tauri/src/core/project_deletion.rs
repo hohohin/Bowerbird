@@ -77,6 +77,7 @@ fn protected(conn: &Connection, project: &str, id: &str, store: Option<&str>) ->
     let json_sources = [
         "SELECT payload_json FROM canvas_nodes WHERE project_id<>?1",
         "SELECT draft_json FROM project_canvases WHERE project_id<>?1",
+        "SELECT document_json FROM canvas_workflows WHERE project_id<>?1",
         "SELECT source_payload FROM project_visual_profiles WHERE ?1 IS NOT NULL",
         "SELECT supporting_asset_ids FROM visual_profile_rules v JOIN project_visual_profiles p ON p.id=v.profile_id WHERE ?1 IS NOT NULL",
         "SELECT opposing_asset_ids FROM visual_profile_rules v JOIN project_visual_profiles p ON p.id=v.profile_id WHERE ?1 IS NOT NULL",
@@ -481,6 +482,21 @@ mod tests {
     fn node(db: &Database, project: &str, id: &str, asset: &str) {
         db.conn.lock().unwrap().execute("INSERT INTO canvas_nodes(id,project_id,kind,asset_id,role,payload_json,x,y,width,height,created_at,updated_at) VALUES(?1,?2,'asset',?3,'reference','{\"schema_version\":1,\"snapshot\":{}}',0,0,100,100,1,1)",params![id,project,asset]).unwrap();
     }
+    #[test]
+    fn workflow_references_in_other_projects_protect_assets_without_membership() {
+        let (db, paths) = fixture();
+        let file = asset(&db, &paths, "workflow-input");
+        db.conn.lock().unwrap().execute(
+            "INSERT INTO canvas_workflows(project_id,revision,document_json) VALUES ('other',1,?1)",
+            [r#"{"schema_version":1,"nodes":[{"inputs":{"image":[{"assetId":"workflow-input"}]}}],"run":null}"#],
+        ).unwrap();
+        let impact = db.project_exclusive_impact(&paths, "p").unwrap();
+        assert_eq!(impact.exclusive_asset_count, 0);
+        assert_eq!(impact.preserved_shared_count, 1);
+        delete(&db, &paths).unwrap();
+        assert!(file.exists());
+    }
+
     #[test]
     fn exclusive_files_deleted_shared_hidden_and_duplicate_nodes_preserved() {
         let (db, paths) = fixture();

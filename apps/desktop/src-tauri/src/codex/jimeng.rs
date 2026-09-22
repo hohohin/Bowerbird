@@ -105,7 +105,15 @@ impl GenProvider for DreaminaCliProvider {
                 submit.arg("--images").arg(img);
             }
         }
-        submit.arg("--prompt").arg(&req.instruction);
+        // 透明图层：dreamina CLI 的 text2image/image2image 均未暴露背景参数
+        // （--background 实测 unknown flag），用「透明背景」提示词注入近似请求
+        // （Seedream 系模型对该提示词有较好遵循）；Cloud 路径才走结构化
+        // background: transparent 参数。
+        let prompt = match req.transparent_background {
+            Some(true) => format!("{}\n（透明背景）", req.instruction),
+            _ => req.instruction.clone(),
+        };
+        submit.arg("--prompt").arg(&prompt);
         submit.arg("--model_version").arg(&self.model_version);
         if let Some(r) = req.ratio.as_deref() {
             let r = r.trim();

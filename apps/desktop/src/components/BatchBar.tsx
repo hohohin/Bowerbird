@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useStore } from "../store";
 import { api } from "../lib/api";
-import { understandProvider } from "../lib/entitlement";
+import { canUseByo } from "../lib/entitlement";
 import { loadDescribePrompt } from "../lib/describePrompt";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { notifyError, notifySuccess } from "../lib/notify";
@@ -50,20 +50,18 @@ export function BatchBar() {
   const hasNonMovableAsset = ids.some(
     (id) => !canMoveAssetOut(assets.find((asset) => asset.id === id)),
   );
-  const understandRoute = understandProvider(cloudEntitlement);
-  const understandReady = understandRoute === "codex"
-    ? !!codexHealth?.ok
-    : understandRoute === "bowerbird-cloud"
-      ? cloudAvailable && !!cloudAuth?.logged_in
-      : false;
-  const understandLabel = understandRoute === "codex" ? "codex CLI" : "Bowerbird Cloud";
+  // 反推就绪 = 任一引擎可用（Cloud 已登录 / 本机 codex Pro 且就绪），不再按档位自动路由置灰；
+  // 具体引擎由点击后的选择浮层决定（Pro 也能显式选 Cloud）。
+  const understandReady =
+    (cloudAvailable && !!cloudAuth?.logged_in) ||
+    (canUseByo(cloudEntitlement) && !!codexHealth?.ok);
   const describeTitle = !understandReady
-    ? understandRoute === "bowerbird-cloud"
-      ? "免费版反推需要先登录 Bowerbird Cloud（每日 10 次）"
-      : "当前账号没有可用的理解引擎"
-    : understandRoute === "bowerbird-cloud" && ids.length > 10
-      ? `已选 ${ids.length} 张，免费档每日仅 10 次，超出将失败`
-      : `${understandLabel} 看图反推，结果进创作板 @ 池`;
+    ? !cloudAvailable
+      ? "当前版本未配置 Bowerbird Cloud，且本机 codex 不可用"
+      : "请先登录 Bowerbird Cloud，或就绪本机 codex（Pro）后再反推"
+    : !canUseByo(cloudEntitlement) && ids.length > 10
+      ? `已选 ${ids.length} 张，Cloud 反推每日 10 次，超出将失败`
+      : "选择反推引擎（Bowerbird Cloud / 本机 codex）看图反推，结果进创作板 @ 池";
 
   async function addToProject() {
     if (!targetProjectId) return;

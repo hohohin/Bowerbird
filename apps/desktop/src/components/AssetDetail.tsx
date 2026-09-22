@@ -18,7 +18,7 @@ import {
   X,
 } from "lucide-react";
 import { useStore } from "../store";
-import { understandProvider } from "../lib/entitlement";
+import { canUseByo } from "../lib/entitlement";
 import { api } from "../lib/api";
 import { SMART_REFINE_ENABLED } from "../lib/featureFlags";
 import { sourceDiscoveryFor } from "../lib/sourceDiscovery";
@@ -615,20 +615,14 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
     genMeta?.prompt?.trim() ||
     "";
   const promptEmpty = describePrompt.trim().length === 0;
-  const understandRoute = understandProvider(cloudEntitlement);
-  const understandReady = understandRoute === "codex"
-    ? !!codexHealth?.ok
-    : understandRoute === "bowerbird-cloud"
-      ? cloudAvailable && !!cloudAuth?.logged_in
-      : false;
-  const understandReason = understandRoute === "codex"
-    ? codexHealth?.reason || "codex 不可用"
-    : !cloudAvailable
-      ? "当前版本未配置 Bowerbird Cloud"
-      : !cloudAuth?.logged_in
-        ? "免费版反推需要先登录 Bowerbird Cloud（每日 10 次）"
-        : "当前账号没有可用的理解引擎";
-  const understandLabel = understandRoute === "codex" ? "codex CLI" : "Bowerbird Cloud";
+  // 反推就绪 = 任一引擎可用（Cloud 已登录 / 本机 codex Pro 且就绪），不再按档位自动路由置灰；
+  // 具体引擎由点击后的选择浮层决定（Pro 也能显式选 Cloud）。
+  const understandReady =
+    (cloudAvailable && !!cloudAuth?.logged_in) ||
+    (canUseByo(cloudEntitlement) && !!codexHealth?.ok);
+  const understandReason = !cloudAvailable
+    ? "当前版本未配置 Bowerbird Cloud，且本机 codex 不可用"
+    : "请先登录 Bowerbird Cloud，或就绪本机 codex（Pro）后再反推";
   const collections = folders.filter((f) => f.kind === "collection");
   const collectedIds = new Set(assetCollections.map((f) => f.id));
   const availableCollections = collections.filter((f) => !collectedIds.has(f.id));
@@ -983,7 +977,7 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
 
           {detailTab === "info" && (
             <>
-          {/* 反推：免费档走 Cloud，Pro/Studio 走本机 CLI；当前路由不可用时置灰。 */}
+          {/* 反推：点击后选引擎（Bowerbird Cloud / 本机 codex）；全部引擎不可用时置灰。 */}
           <div className="asset-detail-card space-y-2">
             <div className="flex items-center justify-between gap-2">
               <div className="text-xs font-medium uppercase tracking-wide text-muted">
@@ -1019,7 +1013,7 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
                   title={
                     !understandReady
                       ? understandReason
-                      : `发 ${understandLabel}：按当前反推指令分析这张图片`
+                      : "选择反推引擎（Bowerbird Cloud / 本机 codex）按当前反推指令分析这张图片"
                   }
                 >
                   {describing ? "反推中…" : queued ? "排队中…" : "反推"}
@@ -1094,7 +1088,7 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
               <div className="text-xs text-muted">
                 {!understandReady
                   ? understandReason
-                  : `点「反推」让 ${understandLabel} 按当前指令分析这张图。`}
+                  : "点「反推」选择引擎（Bowerbird Cloud / 本机 codex）按当前指令分析这张图。"}
               </div>
             ) : (
               captions.map((a) => {

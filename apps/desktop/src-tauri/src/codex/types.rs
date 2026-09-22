@@ -34,6 +34,12 @@ pub struct CodexRequest {
     /// 的云任务并合并结果；codex / 反推 / 视频不读此字段（None = 单张）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generate_num: Option<u32>,
+    /// 透明图层（background: transparent 出图）：Cloud 随 generate-proxy 请求下发
+    /// `transparent`，云端映射 Ark `/images/generations` 的 `background:
+    /// "transparent"`；即梦 CLI 无对应 flag，改为在 instruction 末尾注入「透明背景」
+    /// 提示词（见 jimeng.rs）；codex / 反推 / 视频不读此字段。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transparent_background: Option<bool>,
 }
 
 /// 单次调用结果。

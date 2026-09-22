@@ -9,8 +9,27 @@ use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
 use ulid::Ulid;
+use rusqlite::OptionalExtension;
 
 const MAX_WORKSPACE: usize = 256 * 1024 * 1024;
+static WORKFLOW_EXPORT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn workflow_export_key(source: &str, document: &Value) -> String {
+    let mut hash = Sha256::new();
+    hash.update(source.as_bytes());
+    hash.update([0]);
+    hash.update(document.to_string().as_bytes());
+    format!("{:x}", hash.finalize())
+}
+
+fn cached_workflow_export(db: &Database, key: &str) -> Result<Option<Asset>, AppError> {
+    let id: Option<String> = db.conn.lock().unwrap().query_row(
+        "SELECT asset_id FROM analyses WHERE kind='workflow_layer_product' AND payload=?1 ORDER BY created_at DESC LIMIT 1",
+        [key], |row| row.get(0),
+    ).optional()?;
+    Ok(id.map(|id| db.get_asset(&id)).transpose()?.flatten().filter(|asset|
+        asset.store_path.as_ref().is_some_and(|path| std::path::Path::new(path).is_file())))
+}
 
 fn invalid() -> AppError {
     AppError::Other("分层工程数据无效或超出大小限制".into())
@@ -326,10 +345,18 @@ pub async fn layer_export(
     document: Value,
     data_url: String,
     project_id: Option<String>,
+    workflow: Option<bool>,
 ) -> Result<Asset, AppError> {
     let paths = paths.inner().clone();
     let db = db.inner().clone();
-    let asset = tokio::task::spawn_blocking(move || {
+    let asset = tokio::task::spawn_blocking(move || export_layer_asset(&paths, &db, asset_id, document, data_url, project_id, workflow.unwrap_or(false)))
+        .await.map_err(|error| AppError::Other(error.to_string()))??;
+    let _ = app.emit("library://assets-changed", ());
+    Ok(asset)
+}
+
+fn export_layer_asset(paths: &LibraryPaths, db: &Database, asset_id: String, document: Value, data_url: String, project_id: Option<String>, workflow: bool) -> Result<Asset, AppError> {
+        let _export_lock = if workflow { Some(WORKFLOW_EXPORT_LOCK.lock().unwrap()) } else { None };
         let source = db
             .get_asset(&asset_id)?
             .ok_or_else(|| AppError::Other("原素材已不存在".into()))?;
@@ -340,34 +367,42 @@ pub async fn layer_export(
         }
         let workspace = json!({ "document": document, "pending": null });
         validate_workspace(&workspace)?;
+        let export_key = workflow.then(|| workflow_export_key(&asset_id, &workspace["document"]));
+        if let Some(key) = &export_key {
+            let project = project_id.as_ref().ok_or_else(|| AppError::Other("工作流产物必须归属画板".into()))?;
+            if let Some(asset) = cached_workflow_export(&db, key)? {
+                db.add_assets_to_project(project, std::slice::from_ref(&asset.id))?;
+                return Ok(asset);
+            }
+        }
         let bytes = image_bytes(&data_url)?;
-        let name = format!("{}-分层编辑", source.name);
+        let suffix = if workflow { workspace["document"]["layers"].as_array().and_then(|layers| layers.iter().find(|layer| layer["visible"] == true)).and_then(|layer| layer["name"].as_str()).unwrap_or("分层产物") } else { "分层编辑" };
+        let name = format!("{}-{}", source.name, suffix);
         let temporary = paths
             .root
             .join("layers")
             .join(format!("{}.png", Ulid::new()));
         std::fs::create_dir_all(temporary.parent().unwrap())?;
         std::fs::write(&temporary, &bytes)?;
-        // Always produce a new result, even when the composite pixels equal the source.
+        // Manual exports remain independent; workflow exports are keyed above.
         let result = ingest::ingest_generated(&paths, &db, &temporary, None, "layer-edit");
         let _ = std::fs::remove_file(&temporary);
         let mut asset = result?;
         db.conn.lock().unwrap().execute(
-            "UPDATE assets SET name=?1,origin_path=NULL WHERE id=?2",
-            rusqlite::params![name, asset.id],
+            "UPDATE assets SET name=?1,origin_path=NULL,library_hidden=?3 WHERE id=?2",
+            rusqlite::params![name, asset.id, workflow],
         )?;
         asset.name = name;
         asset.origin_path = None;
+        asset.library_hidden = workflow;
         save_workspace(&paths, &db, &asset.id, &workspace)?;
+        if let Some(key) = export_key {
+            db.insert_analysis(&crate::core::library::Analysis { id: Ulid::new().to_string(), asset_id: asset.id.clone(), kind: "workflow_layer_product".into(), payload: key, provider: None, created_at: None })?;
+        }
         if let Some(id) = project_id {
             db.add_assets_to_project(&id, std::slice::from_ref(&asset.id))?;
         }
         Ok::<_, AppError>(asset)
-    })
-    .await
-    .map_err(|error| AppError::Other(error.to_string()))??;
-    let _ = app.emit("library://assets-changed", ());
-    Ok(asset)
 }
 
 #[tauri::command]
@@ -478,6 +513,13 @@ mod tests {
         layer["text"] = json!({"content":"可编辑\nBowerbird","fontFamily":"SimSun","fontSize":20,"color":"#ff0000","bold":false,"align":"left","lineHeight":1.2,"letterSpacing":0,"boxWidth":100,"boxHeight":100});
         let workspace = json!({"document":{"schemaVersion":1,"width":100,"height":100,"layers":[base,layer]},"pending":null});
         assert!(validate_workspace(&workspace).is_ok());
+        // Workflow layer export must keep a background in slot zero, even when hidden.
+        let mut foreground_export = workspace.clone();
+        foreground_export["document"]["layers"][0]["visible"] = json!(false);
+        assert!(validate_workspace(&foreground_export).is_ok());
+        let mut broken_export = foreground_export.clone();
+        broken_export["document"]["layers"] = json!([workspace["document"]["layers"][1]]);
+        assert!(validate_workspace(&broken_export).is_err());
         let encoded = serde_json::to_vec(&workspace).unwrap();
         let decoded: Value = serde_json::from_slice(&encoded).unwrap();
         assert_eq!(decoded, workspace);
@@ -535,6 +577,28 @@ mod tests {
         .is_err());
         assert!(validate_workspace(&json!({"document":null,"pending":null})).is_ok());
         assert!(image_bytes("data:image/svg+xml;base64,AAAA").is_err());
+    }
+    #[test]
+    fn workflow_exports_reuse_assets_and_stay_out_of_central_library() {
+        let root = std::env::temp_dir().join(format!("bowerbird-product-test-{}", Ulid::new()));
+        let paths = LibraryPaths::init(root.clone()).unwrap();
+        let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();
+        db.conn.lock().unwrap().execute("INSERT INTO assets(id,name) VALUES('source','source')", []).unwrap();
+        db.conn.lock().unwrap().execute("INSERT INTO projects(id,name,workspace_path,workspace_key,created_at,updated_at,last_opened_at) VALUES('p','p','p','p',1,1,1)", []).unwrap();
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgba8(8,8).write_to(&mut png, image::ImageFormat::Png).unwrap();
+        let url = format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(png.into_inner()));
+        let doc = json!({"schemaVersion":1,"width":8,"height":8,"layers":[{"id":"base","name":"底图","description":"","dataUrl":url,"background":true,"visible":true,"opacity":1,"x":0,"y":0,"width":8,"height":8}]});
+        let first = export_layer_asset(&paths,&db,"source".into(),doc.clone(),url.clone(),Some("p".into()),true).unwrap();
+        let second = export_layer_asset(&paths,&db,"source".into(),doc.clone(),url.clone(),Some("p".into()),true).unwrap();
+        assert_eq!(first.id,second.id); assert!(second.library_hidden);
+        assert_eq!(db.conn.lock().unwrap().query_row("SELECT count(*) FROM assets",[],|r|r.get::<_,i64>(0)).unwrap(),2);
+        let mut changed=doc.clone();changed["layers"][0]["opacity"]=json!(0.5);
+        let edited=export_layer_asset(&paths,&db,"source".into(),changed,url.clone(),Some("p".into()),true).unwrap();
+        assert_ne!(edited.id,first.id);
+        let manual=export_layer_asset(&paths,&db,"source".into(),doc,url,Some("p".into()),false).unwrap();
+        assert_ne!(manual.id,first.id);assert!(!manual.library_hidden);
+        drop(db);std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn saves_revisions_and_preserves_last_good_workspace() {

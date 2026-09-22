@@ -5,6 +5,7 @@ import { videoInputError, videoRatio, type GenerationSettings } from "./lib/vide
 import { api } from "./lib/api";
 import { loadProjectOrder, reconcileProjectOrder, saveProjectOrder } from "./lib/projectOrder";
 import { acknowledgeCreativeContinuation, generationParentLocator } from "./lib/creativeGeneration";
+import { generationPromptNodeId } from "./lib/projectNodeIds";
 import {
   canStartAnotherJob,
   canUseByo,
@@ -147,6 +148,8 @@ export interface CreativeGenerationContext {
   /** 与本次 references 同序；用于把生成输入边连回原画板素材实例。 */
   referenceNodeIds?: Array<string | null>;
   relation?: "continued" | "retry" | "branch" | null;
+  /** 失败重试叠放锚点（被重试失败轮的 prompt 节点 id）：新卡叠放在原失败卡位置，不乱飞。 */
+  retryAnchorNodeId?: string | null;
 }
 
 export interface GenerationStartResult {
@@ -308,10 +311,10 @@ interface State {
   // 单槽 + 前端排队：同一时刻只调一次 codex_describe_asset（后端 DESCRIBE_CANCEL 单例）。
   describingId: string | null;
   describingName: string | null; // 反推中素材名（随队列捕获，切视图仍可显示）
-  describeQueue: { assetId: string; instruction: string; name: string; provider?: string; onTutorialComplete?: () => void }[];
+  describeQueue: { assetId: string; instruction: string; name: string; provider?: string; onTutorialComplete?: () => void; onComplete?: (analysisId: string | null, error?: string) => void }[];
   describeFailures: DescribeFailure[]; // 当前会话失败记录，供右上角 AI 任务清单展示/重试
   describeStartedAt: number | null; // 当前任务开始时间戳；跨组件已耗时显示用
-  runDescribe: (assetId: string, instruction: string, provider?: string) => void;
+  runDescribe: (assetId: string, instruction: string, provider?: string, onComplete?: (analysisId: string | null, error?: string) => void) => void;
   cancelDescribe: (assetId: string) => Promise<void>;
   retryDescribeFailure: (assetId: string) => void;
   dismissDescribeFailure: (assetId: string) => void;
@@ -411,7 +414,7 @@ interface State {
   // 删除生成任务记录（仅前端 genJobs 记录；不取消后端任务、不删已入库图片）。
   removeGenJob: (id: string) => void;
   setGenPanelOpen: (open: boolean) => void;
-  startGeneration: (prompt: string, references: Asset[], ratio?: string | null, provider?: string | null, rawPrompt?: string, conversationId?: string, anchorSessionId?: string, dimensionSources?: PromptedAsset[], visualProfileId?: string | null, creativeContext?: CreativeGenerationContext, returnOnStarted?: boolean, generation?: GenerationSettings) => Promise<GenerationStartResult>;
+  startGeneration: (prompt: string, references: Asset[], ratio?: string | null, provider?: string | null, rawPrompt?: string, conversationId?: string, anchorSessionId?: string, dimensionSources?: PromptedAsset[], visualProfileId?: string | null, creativeContext?: CreativeGenerationContext, returnOnStarted?: boolean, generation?: GenerationSettings, identity?: { jobId: string; turnKey: string }) => Promise<GenerationStartResult>;
   // 续轮（底部对话框发送）：instruction = 铺开后实际发送的 prompt；opts 携带编辑框原文
   // （气泡展示）、新挑参考图与比例（jimeng/Cloud 的上一轮产出图由后端权威合并下发）；
   // exactReferences = 轮级重试/编辑的精确重放（该轮当时实际下发的完整参考图，后端跳过合并）。
@@ -429,6 +432,8 @@ interface State {
       parentNodeId?: string | null;
       parentAssetPath?: string | null;
       creativeRelation?: "continued" | "retry" | "branch" | null;
+      /** 失败重试叠放锚点（被重试失败轮的 prompt 节点 id）。 */
+      retryAnchorNodeId?: string | null;
     },
   ) => Promise<void>;
   cancelGeneration: (jobId?: string) => void; // 默认取消 activeJob
@@ -558,7 +563,7 @@ export const useStore = create<State>((set, get) => {
     }
   }
 
-  // 反推队列的串行推进：同一时刻只跑一个 codex_describe_asset（后端单槽）。
+  // 普通入口保留串行队列和 legacy 取消句柄；工作流使用独立任务 ID 并行执行。
   // runDescribe 入队后调一次；任务结束（成功/取消/失败）的 finally 再调一次推下一张。
   // 放在 create 闭包里而非 state 上，避免被组件意外调用。
   async function pumpDescribe() {
@@ -573,10 +578,12 @@ export const useStore = create<State>((set, get) => {
       describeStartedAt: Date.now(),
     });
     try {
-      await api.describeAsset(next.assetId, next.instruction, next.provider);
+      const analysisId = await api.describeAsset(next.assetId, next.instruction, next.provider);
+      next.onComplete?.(analysisId);
       next.onTutorialComplete?.();
     } catch (e) {
       const msg = taskErrorMessage(e);
+      next.onComplete?.(null, msg);
       await reconcileRejectedCloudSession(msg);
       // 「已取消」是用户主动中断，静默；其它错误留在 AI 任务清单，便于看原因和重试。
       if (!msg.includes("已取消")) {
@@ -1302,9 +1309,9 @@ export const useStore = create<State>((set, get) => {
   describeQueue: [],
   describeFailures: [],
   describeStartedAt: null,
-  runDescribe: (assetId, instruction, provider) => {
+  runDescribe: (assetId, instruction, provider, onComplete) => {
     const trimmed = instruction.trim();
-    if (!trimmed) return;
+    if (!trimmed) { onComplete?.(null, "反推要求不能为空"); return; }
     const s = get();
     // provider 省略时沿用自动路由（Pro→codex、免费→Cloud）；显式指定时仍按权益门控（免费不能选 codex）。
     const route = provider ?? understandProvider(s.cloudEntitlement);
@@ -1322,6 +1329,7 @@ export const useStore = create<State>((set, get) => {
             : null;
     if (denyReason) {
       set({ cloudError: denyReason });
+      onComplete?.(null, denyReason);
       return;
     }
     // 同一张图不重复入队（正在跑或已排队）。
@@ -1329,6 +1337,7 @@ export const useStore = create<State>((set, get) => {
       s.describingId === assetId ||
       s.describeQueue.some((q) => q.assetId === assetId)
     ) {
+      onComplete?.(null, "这张图片正在反推，请等待完成");
       return;
     }
     set({
@@ -1339,6 +1348,7 @@ export const useStore = create<State>((set, get) => {
           instruction: trimmed,
           name: s.assets.find((a) => a.id === assetId)?.name ?? "未知素材",
           provider: route ?? undefined,
+          onComplete,
           onTutorialComplete: (() => {
             const complete = beginOnboardingOperation("analyse", s.activeProjectId);
             return () => complete({ analysisAssetId: assetId });
@@ -1365,6 +1375,7 @@ export const useStore = create<State>((set, get) => {
     const idx = s.describeQueue.findIndex((q) => q.assetId === assetId);
     if (idx >= 0) {
       const q = [...s.describeQueue];
+      q[idx].onComplete?.(null, "已取消");
       q.splice(idx, 1);
       set({ describeQueue: q });
     }
@@ -1871,7 +1882,7 @@ export const useStore = create<State>((set, get) => {
       console.error("loadGenJobs failed", e);
     }
   },
-  startGeneration: async (prompt, references, ratio, provider, rawPrompt, conversationId, anchorSessionId, dimensionSources, visualProfileId, creativeContext, returnOnStarted = false, generation) => {
+  startGeneration: async (prompt, references, ratio, provider, rawPrompt, conversationId, anchorSessionId, dimensionSources, visualProfileId, creativeContext, returnOnStarted = false, generation, identity) => {
     // 多 job：不再因 generating 阻塞（并发发起多个生成，各自独立流转）。
     // provider 兜底：调用点没传（CreationBoard send / retry）→ 当前选择 → 全局默认。
     const prov = normalizeGenerationProvider(
@@ -1881,7 +1892,7 @@ export const useStore = create<State>((set, get) => {
     if (gateError) throw new Error(gateError);
     // 用途（preset）注入：选中用途时，其 body 作为基底拼在用户组稿前（类 CLAUDE.md 上下文，
     // 不进编辑器）。续轮 sendGenRevise 不注入——用途是首轮基底，续轮是修改意见。
-    const pid = get().activePresetId;
+    const pid = identity ? null : get().activePresetId;
     const preset = pid ? get().presets.find((p) => p.id === pid) : null;
     const combinedPrompt = preset ? `${preset.body}\n\n${prompt}` : prompt;
     // 标注参数按 provider 能力改写；仅改写实际发送文本，编辑器原文不变。
@@ -1909,12 +1920,16 @@ export const useStore = create<State>((set, get) => {
     const count = media === "image" && (prov === "jimeng" || prov === "dreamina" || prov.startsWith("bowerbird-cloud"))
       ? Math.min(4, Math.max(1, Math.round(generation?.count ?? 1)))
       : 1;
+    // 透明图层（background: transparent）：同样仅即梦 / Cloud 生图引擎，其余忽略。
+    const transparent = media === "image" && (prov === "jimeng" || prov === "dreamina" || prov.startsWith("bowerbird-cloud"))
+      ? generation?.transparent === true
+      : false;
     const selectedVisualProfileId = visualProfileId === undefined
       ? get().activeVisualProfileId
       : visualProfileId;
     // 前端生成 jobId：创建 GenJob 即知 id，chunk 按 id 路由无 race；后端 task_queue upsert。
-    const jobId = crypto.randomUUID();
-    const turnKey = crypto.randomUUID();
+    const jobId = identity?.jobId ?? crypto.randomUUID();
+    const turnKey = identity?.turnKey ?? crypto.randomUUID();
     // 会话级分组（含普通 job：conversationId 兜底 jobId）——后端 done 入库时落
     // generation_conversations（session → conversation），重启后瀑布流分组不丢。
     const conv = conversationId ?? jobId;
@@ -1958,7 +1973,7 @@ export const useStore = create<State>((set, get) => {
       await api.codexCreateImage({
         jobId,
         prompt: sentPrompt,
-        media, videoOptions, count,
+        media, videoOptions, count, transparent,
         promptRaw: rawPrompt,
         // 借用维度源图 id（图 chip 被删、只借维度）：随 generation_meta 落库，复用时回绑车牌。
         dimensionSources: dimensionSources?.map((a) => a.id) ?? [],
@@ -1976,6 +1991,7 @@ export const useStore = create<State>((set, get) => {
         parentNodeId: creativeContext?.parentNodeId ?? null,
         parentAssetPath: creativeContext?.parentAssetPath ?? null,
         creativeRelation: creativeContext?.relation ?? null,
+        retryAnchorNodeId: creativeContext?.retryAnchorNodeId ?? null,
       });
     } catch (e) {
       accepted = false;
@@ -2021,6 +2037,10 @@ export const useStore = create<State>((set, get) => {
     const count = media === "image" && (prov === "jimeng" || prov === "dreamina" || prov.startsWith("bowerbird-cloud"))
       ? Math.min(4, Math.max(1, Math.round(opts?.generation?.count ?? 1)))
       : 1;
+    // 透明图层（background: transparent）：同样仅即梦 / Cloud 生图引擎，其余忽略。
+    const transparent = media === "image" && (prov === "jimeng" || prov === "dreamina" || prov.startsWith("bowerbird-cloud"))
+      ? opts?.generation?.transparent === true
+      : false;
     if (media === "video") {
       if ((prov !== "jimeng" && !prov.startsWith("bowerbird-cloud-video_seedance25_")) || !videoOptions) throw new Error("请选择方舟或即梦 Seedance 2.5 视频参数");
       const error = videoInputError(videoOptions, (exactRefs ?? reviseRefs).map((store_path) => ({ store_path, duration: null })), sentRatio, prov);
@@ -2061,7 +2081,7 @@ export const useStore = create<State>((set, get) => {
       await api.codexCreateImage({
         jobId,
         prompt: sentText,
-        media, videoOptions, count,
+        media, videoOptions, count, transparent,
         promptRaw: opts?.rawPrompt ?? null,
         referenceImages: exactRefs ?? reviseRefs,
         referenceNodeIds: opts?.referenceNodeIds,
@@ -2081,6 +2101,7 @@ export const useStore = create<State>((set, get) => {
         parentNodeId,
         parentAssetPath,
         creativeRelation: opts?.creativeRelation ?? (parentAssetPath ? "continued" : null),
+        retryAnchorNodeId: opts?.retryAnchorNodeId ?? null,
       });
     } catch (e) {
       const message = taskErrorMessage(e);
@@ -2134,6 +2155,8 @@ export const useStore = create<State>((set, get) => {
         parentNodeId: parent.nodeId,
         parentAssetPath: parent.storePath,
         creativeRelation: "retry",
+        // 重试轮的新卡叠放在被重试失败轮的原卡位置（原卡保留在下方）。
+        retryAnchorNodeId: last.turnKey ? generationPromptNodeId(id, last.turnKey) : null,
       });
     } else {
       // 首轮失败：startGeneration 新建 job 重发（旧失败 job 保留可切回查看）。
@@ -2153,6 +2176,8 @@ export const useStore = create<State>((set, get) => {
               threadId: job.threadId,
               relation: "retry",
               referenceNodeIds: job.turns[0]?.referenceNodeIds,
+              // 新建 job 的重试卡同样叠放在原失败卡位置，不按参考图重新落位。
+              retryAnchorNodeId: last.turnKey ? generationPromptNodeId(job.id, last.turnKey) : null,
             }
           : undefined,
         false,
