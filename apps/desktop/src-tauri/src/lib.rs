@@ -415,6 +415,8 @@ pub fn run() {
             commands::agent_z::agent_z_health,
             commands::agent_z::agent_z_send,
             commands::agent_ds::agent_ds_chat,
+            commands::agent_ds::agent_ds_workflow_start,
+            commands::agent_ds::agent_ds_workflow_result,
             commands::cloud::cloud_auth_snapshot,
             commands::cloud::cloud_start_email_login,
             commands::cloud::cloud_start_wechat_login,

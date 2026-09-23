@@ -94,6 +94,7 @@ export const api = {
     invoke<string | null>("local_agent_find_asset_id", { storePath }),
   cloudAgentStart: (input: {
     intentPrompt: string;
+    textRewrite?: { source: string };
     references: Array<{ assetId: string; nodeId?: string | null; promptToken?: string | null }>;
     ratio?: string | null;
     projectId?: string | null;
@@ -147,6 +148,10 @@ export const api = {
       autoDelivered: boolean;
       notice?: string | null;
     }>("agent_ds_chat", { text, images, imageNames, visualProfileId }),
+  agentDsWorkflowStart: (requestId: string, instruction: string, source: string) =>
+    invoke<{ path: string; sessionTitle?: string | null; autoDelivered: boolean; notice?: string | null }>("agent_ds_workflow_start", { requestId, instruction, source }),
+  agentDsWorkflowResult: (requestId: string) =>
+    invoke<{ schemaVersion: 1; requestId: string; text?: string; error?: string } | null>("agent_ds_workflow_result", { requestId }),
 
   // 项目 workspace
   createProject: (workspacePath: string) =>

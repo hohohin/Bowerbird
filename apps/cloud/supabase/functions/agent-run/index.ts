@@ -279,6 +279,12 @@ async function parseUnifiedAgentManifest(
   }
   const manifest = value as Record<string, unknown>;
   const htmlOutput = manifest.htmlOutput;
+  if (manifest.textRewrite !== undefined) {
+    const rewrite = manifest.textRewrite as Record<string, unknown>;
+    if (!rewrite || typeof rewrite !== "object" || Array.isArray(rewrite) || Object.keys(rewrite).some(key => key !== "source") ||
+        typeof rewrite.source !== "string" || !rewrite.source.trim() || rewrite.source.length > 16000 ||
+        expectedCount !== 0 || manifest.visualProfileCapsule !== undefined) throw new ApiError("invalid_request", "文本改写原文无效，或混入了图片输入");
+  }
   if (!htmlOutput || typeof htmlOutput !== "object" || Array.isArray(htmlOutput)) {
     throw new ApiError("invalid_request", "统一 Agent HTML 输出参数无效");
   }

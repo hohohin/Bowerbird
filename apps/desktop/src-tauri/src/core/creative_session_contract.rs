@@ -253,6 +253,7 @@ pub enum CanvasBubbleSide { Top, Right, Bottom, Left }
 #[serde(rename_all = "snake_case")]
 pub enum CanvasNoteType {
     Text,
+    Images,
     Section,
     Bubble,
 }
@@ -269,11 +270,26 @@ pub enum CanvasTextAlign {
 #[serde(deny_unknown_fields)]
 pub struct CanvasTextCell {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_type: Option<CanvasCellContentType>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
     pub text: String,
     pub bold: bool,
     pub italic: bool,
     pub align: CanvasTextAlign,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub image_refs: Vec<CanvasCellImageRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CanvasCellContentType { Text, Image }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CanvasCellImageRef {
+    pub asset_id: String,
+    pub token: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -608,6 +624,12 @@ fn parse_node_payload_value(
         }
         CreativeNodeKind::Note => {
             let note: NoteNodePayloadV1 = serde_json::from_value(value)?;
+            if note.note_type == Some(CanvasNoteType::Images) && note.cells.is_empty() {
+                return Err(CreativeContractError::InvalidNoteGrid);
+            }
+            if note.cells.iter().flatten().any(|cell| cell.image_refs.iter().any(|image| image.asset_id.is_empty() || image.token.is_empty())) {
+                return Err(CreativeContractError::InvalidNoteGrid);
+            }
             if note.line_height_percent.is_some_and(|height| !(100..=300).contains(&height)) {
                 return Err(CreativeContractError::InvalidNoteLineHeight);
             }

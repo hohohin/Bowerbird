@@ -1,0 +1,113 @@
+import assert from 'node:assert/strict';
+import { createServer } from 'vite';
+import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
+const server = await createServer({ configFile:false, root:process.cwd(), server:{host:'127.0.0.1',port:1593,strictPort:true,hmr:false,watch:null} });
+await server.listen();
+const browser = await chromium.launch({channel:'chrome',headless:true});
+const page = await browser.newPage({viewport:{width:1600,height:1000}});
+try {
+  await page.goto('http://127.0.0.1:1593/scripts/fixtures/canvas-reference/preview.html');
+  await page.locator('[data-canvas-node-id="old"]').waitFor();
+  await page.evaluate(()=>{const s=window.snapshot();s.nodes=s.nodes.filter(n=>n.id!=='far');sessionStorage.setItem('reference-fixture',JSON.stringify(s));});
+  await page.reload(); await page.locator('[data-canvas-node-id="old"]').waitFor();
+  await page.getByRole('button',{name:'内容卡片工具',exact:true}).click();
+  await page.locator('.canvas-stage').click({position:{x:650,y:260}});
+  const card=page.locator('.is-content-card').first();await card.waitFor();
+  assert.equal(await card.locator('textarea').count(),1);
+  await card.getByRole('button',{name:'在第 2 列位置插入',exact:true}).click();
+  assert.equal(await card.getByRole('cell').count(),2);
+  await page.evaluate(async()=>{
+    const {api}=await import('/src/lib/api.ts');
+    const {canvasWorkflowController}=await import('/src/lib/canvasWorkflowRuntime.ts');
+    const {newWorkflowNode}=await import('/src/lib/canvasWorkflow.ts');
+    const {useStore}=await import('/src/store.ts');
+    const container=window.snapshot().nodes.find(n=>JSON.parse(n.payloadJson).note_type==='text');
+    const note=JSON.parse(container.payloadJson);window.containerId=container.id;window.firstCell=note.cells[0][0].id;
+    const c=canvasWorkflowController('p');await c.load();window.c=c;
+    await c.edit([{...newWorkflowNode('skill',0,0,'codex'),id:'source',outputs:{image:{type:'image',assetIds:['a','b']}}}]);
+    await c.bindTextInput(container.id,undefined,{nodeId:'source',portId:'image'},'image');
+    await c.bindTextInput(container.id,note.cells[0][0].id,{assetId:'existing'},'image');
+    useStore.setState({defaultUnderstandProvider:'codex'});window.described=[];
+    api.describeAsset=async id=>{window.described.push(id);return 'result-'+id;};
+    api.listAnalysesByAsset=async id=>[{id:'result-'+id,payload:JSON.stringify({sections:[{title:'内容',body:id}]})}];
+    await c.edit([...c.document.nodes,{...newWorkflowNode('instruction',1000,60,'codex'),id:'describe',action:'describe',inputs:{image:[{canvasNodeId:container.id,cellId:'*'}]}}]);
+    await c.start(c.document.nodes.find(n=>n.textTarget?.append).id);
+    if(c.document.run.status!=='done')throw new Error(JSON.stringify(c.document.run));
+    let cycle=false;try{await c.bindTextInput(container.id,note.cells[0][0].id,{canvasNodeId:container.id,cellId:'*'},'image');}catch{cycle=true;}if(!cycle)throw new Error('container cycle must be rejected');
+  });
+  assert.deepEqual(await page.evaluate(()=>window.described),['existing','a','b']);
+  await page.waitForFunction(()=>document.querySelector('.is-content-card')?.querySelectorAll('.canvas-image-content img').length===3);
+  assert.equal(await card.getByRole('row').count(),2);
+  await page.getByRole('button',{name:'适应内容',exact:true}).click();
+  await card.hover();
+  assert.equal(await card.getByRole('button',{name:'输出容器图片',exact:true}).isVisible(),true);
+  await page.screenshot({path:'.tmp/workflow/image-container.png'});
+  await page.evaluate(()=>window.save());await page.reload();await card.waitFor();
+  await page.waitForFunction(()=>document.querySelector('.is-content-card')?.querySelectorAll('.canvas-image-content img').length===3);
+  await card.getByRole('cell').first().hover();
+  await card.getByRole('button',{name:'输入第 1 行第 1 列',exact:true}).click({button:'right'});
+  await page.waitForFunction(()=>!JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.some(n=>n.textTarget?.cellId===JSON.parse(window.snapshot().nodes.find(n=>JSON.parse(n.payloadJson).note_type==='text').payloadJson).cells[0][0].id));
+  assert.equal(await card.locator('.canvas-image-content img').count(),3);
+  await card.getByRole('button',{name:'在第 3 行位置插入',exact:true}).click({position:{x:30,y:6}});
+  assert.equal(await card.getByRole('row').count(),3);
+  await card.getByRole('button',{name:'删除第 3 行',exact:true}).click();
+  assert.equal(await card.getByRole('row').count(),2);
+  await page.locator('[data-workflow-card="source"]').getByRole('button',{name:'输出：图片',exact:true}).click();
+  await card.hover(); await card.getByRole('button',{name:'内容卡片输入',exact:true}).click();
+  await page.waitForFunction(()=>JSON.parse(window.snapshot().nodes.find(n=>JSON.parse(n.payloadJson).note_type==='text').payloadJson).cells.length===3);
+  await page.getByRole('button',{name:'新增生成卡片',exact:true}).click();
+  const gen=page.locator('.workflow-card.is-generation');await gen.waitFor();
+  await page.getByRole('button',{name:'适应内容',exact:true}).click();
+  await card.hover();await card.getByRole('button',{name:'输出容器图片',exact:true}).click();
+  await gen.getByRole('button',{name:'输入：图片',exact:true}).click();
+  const editor=gen.getByRole('textbox',{name:'卡片指令',exact:true});await editor.fill('@');
+  await page.getByRole('listbox',{name:'收到的内容'}).waitFor();
+  assert.equal(await page.getByRole('listbox',{name:'收到的内容'}).getByRole('option').count(),1);
+  await page.getByRole('listbox',{name:'收到的内容'}).getByRole('option').click();
+  await editor.locator('[data-reference-id] img').waitFor();
+  const originalThumb=await editor.locator('[data-reference-id] img').getAttribute('src');
+  await page.evaluate(async()=>{
+    const {canvasWorkflowController}=await import('/src/lib/canvasWorkflowRuntime.ts');
+    const {useStore}=await import('/src/store.ts');
+    const c=canvasWorkflowController('p'),gen=c.document.nodes.find(n=>n.kind==='generation');
+    window.savedPrompt=gen.prompt;
+    if(gen.promptReferences[0].assetId)throw new Error('reference must persist container identity only');
+    window.submissions=[];
+    const {api}=await import('/src/lib/api.ts');api.localAgentFindAssetId=async()=> 'existing';
+    useStore.setState({startGeneration:async(...args)=>{
+      window.submissions.push({prompt:args[0],ids:args[1].map(a=>a.id)});
+      const identity=args[12];
+      useStore.setState(s=>({genJobs:{...s.genJobs,[identity.jobId]:{turns:[{turnKey:identity.turnKey,images:['existing.png']}]}}}));
+      return {accepted:true};
+    }});
+    await c.start(gen.id,true);
+  });
+  assert.deepEqual(await page.evaluate(()=>window.submissions[0].ids),['existing','a','b']);
+  await page.evaluate(async()=>{
+    const {api}=await import('/src/lib/api.ts');
+    const container=window.snapshot().nodes.find(n=>JSON.parse(n.payloadJson).note_type==='text');
+    const note=JSON.parse(container.payloadJson);
+    for(const row of note.cells)for(const cell of row){cell.image_refs=[];cell.text='';}
+    note.cells[0][0].image_refs=[{asset_id:'d',token:'@图片1'}];note.cells[0][0].text='@图片1';
+    await api.projectCanvasNoteUpdate(container.id,JSON.stringify(note));window.emitChange();
+    const {canvasWorkflowController}=await import('/src/lib/canvasWorkflowRuntime.ts');
+    const c=canvasWorkflowController('p'),gen=c.document.nodes.find(n=>n.kind==='generation');
+    if(gen.prompt!==window.savedPrompt)throw new Error('prompt changed on image replacement');
+    await c.start(gen.id,true);
+  });
+  assert.deepEqual(await page.evaluate(()=>window.submissions[1].ids),['d']);
+  await page.waitForFunction(old=>document.querySelector('.workflow-prompt-reference img')?.getAttribute('src')!==old,originalThumb);
+  await page.evaluate(async()=>{
+    const {canvasWorkflowController}=await import('/src/lib/canvasWorkflowRuntime.ts');
+    const c=canvasWorkflowController('p'),gen=c.document.nodes.find(n=>n.kind==='generation');
+    // Simulate an older prompt that persisted the previous image ID.
+    gen.promptReferences[0].assetId='existing';await c.save();window.save();
+  });await page.reload();await editor.waitFor();
+  await editor.locator('[data-reference-id] img').waitFor();
+  assert.notEqual(await editor.locator('[data-reference-id] img').getAttribute('src'),originalThumb);
+  assert.equal(await page.evaluate(async()=>{
+    const {canvasWorkflowController}=await import('/src/lib/canvasWorkflowRuntime.ts');
+    return canvasWorkflowController('p').document.nodes.find(n=>n.kind==='generation').promptReferences[0].assetId;
+  }),undefined);
+  console.log('image container: toolbar, row/column edits, main append, cell replacement, multi-image display, aggregate relay, input type/cycle rejection, disconnect and reload passed');
+}finally{await browser.close();await server.close();}

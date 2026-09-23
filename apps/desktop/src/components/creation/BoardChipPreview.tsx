@@ -27,10 +27,12 @@ export function BoardChipPreview({
   hostRef,
   clickToFocus = true,
   extraAssets,
+  zIndex,
 }: {
   hostRef: RefObject<HTMLDivElement>;
   clickToFocus?: boolean;
   extraAssets?: Asset[];
+  zIndex?: number;
 }) {
   const assets = useStore((s) => s.assets);
   const promptedAssets = useStore((s) => s.promptedAssets);
@@ -145,7 +147,7 @@ export function BoardChipPreview({
           alt=""
           draggable={false}
           className="pointer-events-none fixed z-30 rounded-md border border-edge bg-panel object-contain shadow-xl"
-          style={{ left, top, width: w, height: h }}
+          style={{ left, top, width: w, height: h, zIndex }}
         />,
         document.body
       );
@@ -166,7 +168,7 @@ export function BoardChipPreview({
     kwPortal = createPortal(
       <div
         className="pointer-events-none fixed z-40 max-h-72 w-80 overflow-auto whitespace-pre-wrap rounded-md border border-edge bg-panel p-2 text-xs leading-5 text-ink shadow-xl"
-        style={{ left, top }}
+        style={{ left, top, zIndex }}
       >
         {hover.body}
       </div>,

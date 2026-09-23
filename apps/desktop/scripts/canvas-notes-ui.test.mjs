@@ -96,7 +96,7 @@ try {
   assert.equal(await node("old").evaluate(element => element.classList.contains("is-selected")), true);
   await stage.click({ position: { x: 1200, y: 450 } });
 
-  await page.getByRole("button", { name: "文本卡片工具", exact: true }).click();
+  await page.getByRole("button", { name: "内容卡片工具", exact: true }).click();
   await stage.click({ position: { x: 160, y: 520 } });
   const text = page.locator(".canvas-note.is-text");
   await text.waitFor();
@@ -104,7 +104,7 @@ try {
   const cell = page.getByRole("textbox", { name: "第 1 行第 1 列", exact: true });
   assert.equal(await text.locator(".canvas-text-handle").innerText(), "");
   assert.equal(await text.locator(".canvas-text-handle svg").count(), 2);
-  assert.ok(Math.abs((await text.boundingBox()).height - 104 * 0.8) < 0.1);
+  assert.ok(Math.abs((await text.boundingBox()).height - 110) < 0.1);
   assert.equal(await cell.evaluate(e => getComputedStyle(e).fontSize),
     await node("prompt").locator(".ProseMirror").evaluate(e => getComputedStyle(e).fontSize));
   await cell.fill("中文方案\n保留换行");
@@ -119,7 +119,6 @@ try {
   async function insert(axis, position) {
     const control = page.getByRole("button", { name: `在第 ${position} ${axis}位置插入`, exact: true });
     await page.mouse.move(10, 10);
-    await page.waitForFunction(label => getComputedStyle(document.querySelector(`[aria-label="${label}"]`)).opacity === "0", `在第 ${position} ${axis}位置插入`);
     assert.equal(await control.evaluate(e => getComputedStyle(e).opacity), "0");
     // Aim at a clear point on the strip: the left/top rail hosts the plus icon and
     // row/column remove buttons, and the resize grabbers cross the same boundary.
@@ -152,7 +151,7 @@ try {
   assert.equal(await page.evaluate(() => navigator.clipboard.readText()), "复制这一格");
 
   // Title editing: the input sits right of the T icon and persists in the note payload.
-  const titleInput = text.getByRole("textbox", { name: "文本卡片标题", exact: true });
+  const titleInput = text.getByRole("textbox", { name: "内容卡片标题", exact: true });
   const typeIcon = await text.locator(".canvas-text-handle svg").nth(1).boundingBox();
   const titleBox = await titleInput.boundingBox();
   assert.ok(titleBox.x > typeIcon.x + typeIcon.width, "title input sits right of the T icon");
@@ -243,7 +242,7 @@ try {
   await insert("行", 2);
   await insert("列", 2);
   const beforeResize = await text.boundingBox();
-  const resize = text.getByRole("button", { name: "调整文本卡片大小" });
+  const resize = text.getByRole("button", { name: "调整内容卡片大小" });
   const resizeHandle = await resize.boundingBox();
   await page.mouse.move(resizeHandle.x + 7, resizeHandle.y + 7);
   await page.mouse.down();
@@ -260,7 +259,7 @@ try {
   await page.mouse.down();
   await page.mouse.move(shrinkHandle.x - 600, shrinkHandle.y - 500, { steps: 6 });
   const minimumSize = await text.boundingBox();
-  assert.ok(minimumSize.width >= 376 && Math.abs(minimumSize.height - 232 * 0.8) < 0.1);
+  assert.ok(minimumSize.width >= 433.5 && Math.abs(minimumSize.height - 238) < 0.1);
   await page.keyboard.press("Escape");
   await page.mouse.up();
   assert.deepEqual(await text.boundingBox(), afterResize);
@@ -305,7 +304,7 @@ try {
   assert.equal(JSON.parse((await page.evaluate(() => window.snapshot())).nodes.find(n => n.id === textId).payloadJson).cells[1][0].text, "继续编辑后的内容");
   await mkdir(".tmp/canvas-notes", { recursive: true });
   await page.screenshot({ path: ".tmp/canvas-notes/preview.png" });
-  await page.getByRole("button", { name: "在第 2 行位置插入", exact: true }).hover({ position: { x: 20, y: 6 } });
+  await page.getByRole("button", { name: "在第 2 行位置插入", exact: true }).hover({ position: { x: 10, y: 10 } });
   await page.waitForFunction(() => getComputedStyle(document.querySelector('[aria-label="在第 2 行位置插入"]')).opacity === "1");
   await page.screenshot({ path: ".tmp/canvas-notes/insert-preview.png" });
 
@@ -395,7 +394,7 @@ try {
   await page.evaluate(() => window.save());
   await page.reload();
   await node(textId).waitFor();
-  assert.equal(await text.getByRole("textbox", { name: "文本卡片标题", exact: true }).inputValue(), "配方表", "title survives reload");
+  assert.equal(await text.getByRole("textbox", { name: "内容卡片标题", exact: true }).inputValue(), "配方表", "title survives reload");
   assert.equal(await text.getByRole("textbox", { name: /第 \d+ 行第 \d+ 列/ }).count(), 1);
   assert.equal(await text.locator(".canvas-text-remove").count(), 0);
   assert.match(await page.locator(".canvas-zoom-controls").innerText(), /10%/);

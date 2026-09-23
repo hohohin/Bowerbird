@@ -26,6 +26,21 @@ pub const PROJECT_CANVAS_DRAFT_SCHEMA_VERSION: u64 = 1;
 pub const MIN_PROJECT_CANVAS_ZOOM: f64 = 0.1;
 pub const MAX_PROJECT_CANVAS_ZOOM: f64 = 2.4;
 
+fn record_image_container_assets(tx: &Transaction<'_>, project_id: &str, payload: &str, now: i64) -> AppResult<()> {
+    let value: serde_json::Value = serde_json::from_str(payload)?;
+    if value["note_type"] != "images" && value["note_type"] != "text" { return Ok(()); }
+    for row in value["cells"].as_array().into_iter().flatten() {
+        for cell in row.as_array().into_iter().flatten() {
+            for image in cell["image_refs"].as_array().into_iter().flatten() {
+                if let Some(id) = image["asset_id"].as_str() {
+                    tx.execute("INSERT OR IGNORE INTO project_assets(project_id,asset_id,created_at) SELECT ?1,id,?3 FROM assets WHERE id=?2", params![project_id,id,now])?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Hide every instance of a removed asset, retaining graph/history identities.
 /// Call inside the same transaction that removes the asset or project membership.
 pub(crate) fn hide_asset_canvas_nodes(
@@ -678,6 +693,7 @@ fn insert_node_tx(tx: &Transaction<'_>, value: &NewCanvasNode, now: i64) -> AppR
             params![value.project_id, asset_id, now],
         )?;
     }
+    if value.kind == CreativeNodeKind::Note { record_image_container_assets(tx, &value.project_id, &value.payload_json, now)?; }
     tx.execute(
         "INSERT INTO canvas_nodes (id,project_id,thread_id,kind,asset_id,role,payload_json,x,y,width,height,z_index,position_locked,hidden_at,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,NULL,?14,?14)",
         params![value.id, value.project_id, value.thread_id, node_kind_sql(value.kind), value.asset_id, value.role.map(node_role_sql), value.payload_json, value.x, value.y, value.width, value.height, value.z_index, i64::from(value.position_locked), now],
@@ -1548,6 +1564,7 @@ impl Database {
         if existing.kind != CreativeNodeKind::Note || existing.hidden_at.is_some() {
             return Err(invalid("only visible notes can be edited"));
         }
+        record_image_container_assets(&tx, &existing.project_id, payload_json, now)?;
         tx.execute(
             "UPDATE canvas_nodes SET payload_json=?2,updated_at=?3 WHERE id=?1",
             params![node_id, payload_json, now],
@@ -1939,9 +1956,13 @@ impl Database {
             }),
             None => None,
         };
-        let prompt_x = owner
+        let downstream = owner.and_then(|source| workflow_nodes.and_then(|nodes| nodes.iter().find(|node| {
+            node["inputs"]["image"].as_array().is_some_and(|inputs| inputs.iter().any(|input| input["nodeId"] == source["id"] && input["portId"] == "image"))
+                && node["x"].as_f64().unwrap_or(0.0) >= source["x"].as_f64().unwrap_or(0.0) + 720.0
+        })));
+        let prompt_x = owner.zip(downstream).map(|(source, target)| (source["x"].as_f64().unwrap_or(0.0) + 320.0 + target["x"].as_f64().unwrap_or(0.0) - 300.0) / 2.0).or_else(|| owner
             .and_then(|node| node["x"].as_f64())
-            .map(|x| x + 420.0)
+            .map(|x| x + 420.0))
             .or_else(|| retry_anchor.as_ref().map(|anchor| anchor.x))
             .unwrap_or(max_right + 72.0);
         let mut prompt_y = owner
@@ -3140,8 +3161,26 @@ mod tests {
         assert_eq!(updated.payload_json, payload);
         let mut with_cell_id: serde_json::Value = serde_json::from_str(payload).unwrap();
         with_cell_id["cells"][0][0]["id"] = serde_json::json!("stable-cell");
+        with_cell_id["cells"][0][0]["image_refs"] = serde_json::json!([{"asset_id":"reference-image","token":"@图片1"}]);
         let saved_cell = db.update_canvas_note_payload("text", &with_cell_id.to_string()).unwrap();
         assert_eq!(serde_json::from_str::<serde_json::Value>(&saved_cell.payload_json).unwrap()["cells"][0][0]["id"], "stable-cell");
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&saved_cell.payload_json).unwrap()["cells"][0][0]["image_refs"][0]["asset_id"], "reference-image");
+        db.conn.lock().unwrap().execute("INSERT INTO assets(id,name,created_at) VALUES('container-image','image',1)", []).unwrap();
+        let mut image_grid = with_cell_id.clone();
+        image_grid["note_type"] = serde_json::json!("images");
+        image_grid["cells"][0][0]["image_refs"][0]["asset_id"] = serde_json::json!("container-image");
+        let saved_grid = db.update_canvas_note_payload("text", &image_grid.to_string()).unwrap();
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&saved_grid.payload_json).unwrap()["note_type"], "images");
+        assert_eq!(db.conn.lock().unwrap().query_row("SELECT COUNT(*) FROM project_assets WHERE project_id='p1' AND asset_id='container-image'", [], |row| row.get::<_,i64>(0)).unwrap(), 1);
+        image_grid["note_type"] = serde_json::json!("text");
+        image_grid["cells"][0][0]["content_type"] = serde_json::json!("image");
+        image_grid["cells"][0].as_array_mut().unwrap().push(serde_json::json!({"id":"text-cell","text":"原样文本","content_type":"text","bold":false,"italic":false,"align":"left"}));
+        db.conn.lock().unwrap().execute("DELETE FROM project_assets WHERE project_id='p1' AND asset_id='container-image'", []).unwrap();
+        let mixed = db.update_canvas_note_payload("text", &image_grid.to_string()).unwrap();
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&mixed.payload_json).unwrap()["cells"][0][0]["content_type"], "image");
+        assert_eq!(db.conn.lock().unwrap().query_row("SELECT COUNT(*) FROM project_assets WHERE project_id='p1' AND asset_id='container-image'", [], |row| row.get::<_,i64>(0)).unwrap(), 1);
+        image_grid["cells"][0][0]["content_type"] = serde_json::json!("invalid");
+        assert!(db.update_canvas_note_payload("text", &image_grid.to_string()).is_err());
         assert_eq!((updated.x, updated.y, updated.width), (original.x, original.y, original.width));
         assert_eq!(updated.thread_id, None);
         for height in [100, 155, 300] {
@@ -3197,6 +3236,18 @@ mod tests {
         db.begin_project_generation_turn(&input).unwrap();
         let recovered = db.get_canvas_node(&graph.prompt_node_id).unwrap().unwrap();
         assert_eq!((recovered.x,recovered.y),(first.x,first.y));
+        let doc = serde_json::json!({"schema_version":1,"nodes":[
+            {"id":"w","x":100,"y":200,"sessionNodeIds":["gen-prompt:job:turn:0","gen-prompt:job2:turn2:0"]},
+            {"id":"downstream","x":1100,"y":200,"inputs":{"image":[{"nodeId":"w","portId":"image"}]}}
+        ],"run":null});
+        db.conn.lock().unwrap().execute("UPDATE canvas_workflows SET document_json=?1 WHERE project_id='p1'", [doc.to_string()]).unwrap();
+        let next_input = ProjectGenerationTurnInput { job_id:"job2".into(), turn_key:"turn2".into(), ..input };
+        let next = db.begin_project_generation_turn(&next_input).unwrap();
+        let next_card = db.get_canvas_node(&next.prompt_node_id).unwrap().unwrap();
+        assert_eq!(next_card.x, 610.0); // Between source output (420) and downstream input (1100).
+        assert!(next_card.y > first.y); // Retained history occupies the first placement.
+        let old = db.get_canvas_node(&graph.prompt_node_id).unwrap().unwrap();
+        assert_eq!((old.x,old.y),(first.x,first.y));
     }
 
     #[test]

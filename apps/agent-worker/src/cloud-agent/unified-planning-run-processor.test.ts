@@ -52,6 +52,42 @@ function claimed(
   };
 }
 
+test("text rewrite uses unified DSH, denies tools and recovers saved text without another model turn", async () => {
+  const runClaim = claimed(); runClaim.artifactUrls = [];
+  let raw: Uint8Array | undefined, turns = 0, finished = 0, failEvent = true;
+  const events: Array<{type:string;displayPayload?:Record<string, unknown>}> = [];
+  const control = {
+    async loadRawCheckpoint() { return raw; },
+    async downloadVerifiedJson() { return {schemaVersion:1,goal:"将朱砂痣替换成春山可望",textRewrite:{source:"朱砂痣，左上竖排"}}; },
+    async saveRawCheckpoint(args: {bytes:Uint8Array;sha256:string}) { raw = args.bytes; runClaim.run.checkpointHash = args.sha256; runClaim.run.snapshotSchemaVersion = 1; },
+    async appendEvents(_run: string, _lease: string, batch: typeof events) {
+      if (batch.some(event => event.type === "text.result") && failEvent) { failEvent = false; throw new Error("simulated_event_failure"); }
+      events.push(...batch);
+    },
+    async finish() { finished++; },
+  } as unknown as AgentControlClient;
+  const processor = new UnifiedPlanningRunProcessor({
+    workspaceRoot: join(process.env.TEMP ?? ".", "bowerbird-text-tests"),
+    vision: { apiKey:"unused",baseUrl:"https://unused.invalid",model:"unused",mock:true },
+    createAdapter(environment) { return { id: "dsh", async open() { return {
+      runId:runClaim.run.id,sessionId:"text-session",async turn(prompt) {
+        turns++; ok(JSON.stringify(prompt).includes("untrustedSource"));
+        const response = await fetch(environment.BOWERBIRD_TOOL_BRIDGE_ENDPOINT, { method:"POST",
+          headers:{authorization:`Bearer ${environment.BOWERBIRD_TOOL_BRIDGE_CAPABILITY}`,"content-type":"application/json"},
+          body:JSON.stringify({toolName:"generate_image",arguments:{prompt:"forbidden"}}) });
+        equal(response.status,409);
+        return {stopReason:"end_turn",committedContent:[{type:"text" as const,text:'{"schemaVersion":1,"text":"春山可望，左上竖排"}'}]};
+      }, async close() {}, async cancel() {},
+    }; } }; },
+  });
+  const context = {claimed:runClaim,control,signal:{aborted:false,cancelRequested:false,leaseLost:false,stopRequested:false}} as AgentRunContext;
+  await rejects(() => processor.process(context), /simulated_event_failure/);
+  equal(turns,1); equal(finished,0);
+  await processor.process(context);
+  equal(turns,1); equal(finished,1);
+  equal(events.find(event=>event.type==="text.result")?.displayPayload?.text,"春山可望，左上竖排");
+});
+
 for (const scenario of ["images", "html", "no-references"]) test(`v3 ${scenario} recovers invalid input and preserves crash-safe final selection`, async () => {
   const htmlCase = scenario === "html", noReferences = scenario === "no-references";
   const proposal = { schemaVersion: 3, title: "产品场景", summary: "交付产品场景图", assetIds: noReferences ? [] : ["asset-product"],

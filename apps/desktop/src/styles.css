@@ -3751,6 +3751,38 @@ html[data-theme="light"] .app-form-input:focus {
 }
 
 .canvas-prompt-node.is-failed { border-color: rgb(239 68 68 / 64%); }
+
+/* A masked border keeps the running indicator clear of content and sockets. */
+@property --canvas-running-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+.canvas-card-running::after, .canvas-card-error::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  border-radius: inherit;
+  padding: var(--canvas-running-width, 4px);
+  pointer-events: none;
+  background: conic-gradient(from var(--canvas-running-angle),
+    rgb(34 197 94 / 14%) 0deg,
+    rgb(34 197 94 / 14%) 230deg,
+    rgb(34 197 94) 310deg,
+    rgb(34 197 94 / 14%) 360deg);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  animation: canvas-running-border 2.4s linear infinite;
+}
+@keyframes canvas-running-border { to { --canvas-running-angle: 360deg; } }
+.canvas-card-error::after { background:rgb(239 68 68); animation:none; }
+@media (prefers-reduced-motion: reduce) {
+  .canvas-card-running::after { animation: none; background: rgb(34 197 94); }
+}
+
 .canvas-prompt-content { margin-top: 10px; max-height: 160px; overflow: hidden; }
 .canvas-prompt-content .creation-editor-readonly { padding: 0; border: 0; background: transparent; }
 .canvas-prompt-content .ProseMirror { min-height: 0; padding: 0; font-size: 12px; line-height: 1.65; }

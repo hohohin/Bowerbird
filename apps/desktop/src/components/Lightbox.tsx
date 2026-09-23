@@ -24,6 +24,7 @@ export function Lightbox({
 }) {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      if (["Escape", "ArrowLeft", "ArrowRight"].includes(e.key)) e.stopPropagation();
       if (e.key === "Escape") {
         e.preventDefault();
         onClose();
@@ -35,8 +36,8 @@ export function Lightbox({
         onIndexChange(Math.min(images.length - 1, index + 1));
       }
     }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, [images.length, index, onClose, onIndexChange]);
 
   const zoom = useImageZoom(images[index]);

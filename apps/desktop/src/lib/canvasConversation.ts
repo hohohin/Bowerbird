@@ -2,11 +2,11 @@ import { canvasPromptReferences } from "./creativeCanvas.ts";
 import type { Asset, CanvasEdge, CanvasNode } from "./types";
 
 /** Imported conversations retain their graph, but never the author's executable job/session. */
-export function canvasConversationTurn(node: CanvasNode, nodes: readonly CanvasNode[], edges: readonly CanvasEdge[], assets: Map<string, Asset>) {
+export function canvasConversationTurn(node: CanvasNode, nodes: readonly CanvasNode[], edges: readonly CanvasEdge[], assets: Map<string, Asset>, generationJobId?: string) {
   if (node.kind !== "prompt") return null;
   let payload;
   try { payload = JSON.parse(node.payloadJson); } catch { return null; }
-  if (!payload || payload.job_id || typeof payload.text !== "string") return null;
+  if (!payload || (generationJobId ? payload.job_id !== generationJobId : payload.job_id) || typeof payload.text !== "string") return null;
   const scopedNodes = nodes.filter(candidate => candidate.projectId === node.projectId);
   const scopedEdges = edges.filter(edge => edge.projectId === node.projectId);
   const references = canvasPromptReferences(node.id, scopedNodes, scopedEdges, assets);
@@ -27,14 +27,14 @@ export function canvasConversationTurn(node: CanvasNode, nodes: readonly CanvasN
     references, referenceNodeIds, outputs };
 }
 
-export function canvasConversationTurns(selected: CanvasNode, nodes: readonly CanvasNode[], edges: readonly CanvasEdge[], assets: Map<string, Asset>) {
+export function canvasConversationTurns(selected: CanvasNode, nodes: readonly CanvasNode[], edges: readonly CanvasEdge[], assets: Map<string, Asset>, generationJobId?: string) {
   return nodes.filter(node => node.projectId === selected.projectId
     && (selected.threadId ? node.threadId === selected.threadId : node.id === selected.id))
     .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
     // The shipped example includes removed early drafts whose source image was deleted before export.
     // Keep graph/data intact, but do not teach from an incomplete, already-hidden draft.
     .flatMap(node => {
-      const turn = canvasConversationTurn(node, nodes, edges, assets);
+      const turn = canvasConversationTurn(node, nodes, edges, assets, generationJobId);
       return turn && !(node.hiddenAt != null && turn.references.some(asset => !asset.store_path)) ? [turn] : [];
     });
 }

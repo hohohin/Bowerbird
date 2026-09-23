@@ -18,6 +18,7 @@ try {
     const input={assetId:'existing'};
     const a={...newWorkflowNode('instruction',0,0,'codex'),id:'a',action:'reuse',inputs:{image:[input]}};
     const b={...newWorkflowNode('generation',400,0,'codex'),id:'b',prompt:'柔和光线',inputs:{text:[{nodeId:'a',portId:'text'}],image:[{nodeId:'a',portId:'image'}]}};
+    b.prompt='@[text]\n\n柔和光线 @[image]'; b.promptReferences=[{id:'text',type:'text',input:b.inputs.text[0],label:'文本'},{id:'image',type:'image',input:b.inputs.image[0],assetId:'existing',label:'图片'}];
     let submissions=0,release,started;
     const submitted=new Promise(resolve=>{started=resolve;});
     const finished=new Promise(resolve=>{release=resolve;});
@@ -26,7 +27,7 @@ try {
       const identity=args[12];
       const persisted=JSON.parse(sessionStorage.getItem('workflow-runtime-chain')).document;
       check(persisted.run.steps.b.jobId===identity.jobId,'job identity must persist before provider call');
-      check(args[0]==='保持产品主体，生成清晨场景\n\n柔和光线','upstream text and local prompt must combine');
+      check(args[0]==='保持产品主体，生成清晨场景\n\n柔和光线 @图片1','explicit references expand at their positions');
       check(args[1][0].id==='existing','upstream references must bind');
       check(args[9].projectId==='runtime-chain','project is frozen');
       started();await finished;
@@ -42,7 +43,7 @@ try {
     useStore.setState({activeProjectId:'different-project'});
     release();await running;
     check(controller.document.run.status==='done','chain completes');
-    check(controller.document.nodes[1].outputs.session.nodeIds[0]===controller.document.nodes[1].sessionNodeIds[0],'generation returns its session');
+    check(controller.document.nodes[1].outputs.image.assetIds[0]==='output'&&controller.document.nodes[1].activeSessionNodeId===controller.document.nodes[1].sessionNodeIds[0],'generation returns images and tracks its current session');
     check(controller.document.nodes[1].sessionNodeIds[0].startsWith('gen-prompt:'),'session binding is persisted');
     const single=await create('runtime-single',[a,b]);await single.start('a',true);
     check(single.document.run.order.join(',')==='a'&&submissions===1,'single card does not run descendants or require a key');
@@ -57,7 +58,7 @@ try {
     const persisted=structuredClone(controller.document);
     persisted.run.status='running';persisted.run.steps.b.status='running';persisted.nodes[1].outputs={};
     sessionStorage.setItem('workflow-runtime-resume',JSON.stringify({revision:1,document:persisted}));
-    api.recentGenSessions=async()=>[{id:persisted.run.steps.b.jobId,status:'done',turns:[{images:['output.png']}]}];
+    api.recentGenSessions=async()=>[{id:persisted.run.steps.b.jobId,status:'done',turns:[{turn_key:persisted.run.steps.b.turnKey,images:['output.png']}]}];
     const resumed=new CanvasWorkflowController('runtime-resume');await resumed.load();await resumed.continue();
     check(resumed.document.run.status==='done'&&submissions===1,'recovery must not generate again');
 
@@ -67,12 +68,50 @@ try {
     try {await failed.start('b');}catch {rejected=true;}
     check(rejected&&submissions===1,'failed save must block provider');window.failWorkflowSave=false;
 
-    // Describe produces individually typed dimensions; reordering does not change port identity.
+    // Describe aggregates every dimension and always materializes a text card.
     useStore.setState({defaultUnderstandProvider:'bowerbird-cloud',cloudAuth:{logged_in:true,cloud_available:true,user_id:'test'}});
     api.describeAsset=async()=> 'analysis';
     api.listAnalysesByAsset=async()=>[{id:'analysis',payload:JSON.stringify({sections:[{title:'颜色',body:'蓝色'},{title:'构图',body:'居中'}]})}];
     const describe=await create('runtime-describe',[{...a,action:'describe'}]);await describe.start('a');
-    check(describe.document.nodes[0].outputs['dimension-'+encodeURIComponent('颜色')].text==='蓝色','dimensions are independent');
+    check(describe.document.nodes[0].outputs.text.text.includes('颜色：蓝色') && describe.document.nodes[0].outputPorts.length === 0 && Object.keys(describe.document.nodes[0].outputs).join(',') === 'text','dimensions use only the aggregate prompt');
+    const singleTableId = describe.document.nodes[0].resultNodeIds[0];
+    const singleTable = (await api.projectCanvasGet('runtime-describe')).nodes.find(n => n.id === singleTableId);
+    check(JSON.parse(singleTable.payloadJson).cells[1][1].text.includes('颜色：蓝色'), 'one image creates a visible prompt table');
+    await describe.start('a');
+    check(describe.document.nodes[0].resultNodeIds[0] === singleTableId, 'rerun reuses the text card');
+    // Explicitly reconnect the source to its auto-created table's main input.
+    const beforeAppend = JSON.parse((await api.projectCanvasGet('runtime-describe')).nodes.find(n=>n.id===singleTableId).payloadJson).cells;
+    await describe.bindTextInput(singleTableId, undefined, {nodeId:'a',portId:'text'}, 'text');
+    const appendWriter = describe.document.nodes.find(n=>n.textTarget?.nodeId===singleTableId && n.textTarget.append);
+    check(appendWriter && !beforeAppend.flat().some(c=>c.id===appendWriter.textTarget.cellId), 'main input allocates a new cell');
+    await describe.start('a');
+    const afterAppend = JSON.parse((await api.projectCanvasGet('runtime-describe')).nodes.find(n=>n.id===singleTableId).payloadJson).cells;
+    check(describe.document.run.status==='done' && afterAppend.length===beforeAppend.length+1,'auto result refresh must not erase the main-input appended row');
+    check(JSON.stringify(afterAppend.slice(0,beforeAppend.length))===JSON.stringify(beforeAppend),'main input preserves every existing cell');
+    check(afterAppend.at(-1)[0].id===appendWriter.textTarget.cellId && afterAppend.at(-1)[0].text.includes('颜色：蓝色'),'main input writes the allocated first-column cell');
+    await describe.start('a');
+    check(JSON.parse((await api.projectCanvasGet('runtime-describe')).nodes.find(n=>n.id===singleTableId).payloadJson).cells.length===afterAppend.length,'rerun updates only the allocated row without appending again');
+    // Previously saved graphs can retain both the automatic ownership and an explicit writer.
+    await describe.save({...describe.document,nodes:describe.document.nodes.map(n=>n.id==='a'?{...n,resultNodeIds:[singleTableId]}:n)});
+    const reloadAppend = new CanvasWorkflowController('runtime-describe'); await reloadAppend.load();
+    check(!reloadAppend.document.nodes[0].resultNodeIds.length,'reload removes stale whole-table ownership from explicitly wired targets');
+    await reloadAppend.start('a');
+    check(reloadAppend.document.run.status==='done' && JSON.parse((await api.projectCanvasGet('runtime-describe')).nodes.find(n=>n.id===singleTableId).payloadJson).cells.length===afterAppend.length,'legacy saved main-input wiring survives rerun');
+    const targetCell = JSON.parse(singleTable.payloadJson).cells[1][1].id;
+    const writer = { ...newWorkflowNode('text',0,0,'codex'), id:'prompt-writer', textTarget:{nodeId:singleTableId,cellId:targetCell}, inputs:{text:[{nodeId:'a',portId:'text'}]} };
+    const linked = await create('runtime-linked-describe',[{...a,action:'describe'},writer]);
+    const notesBefore = (await api.projectCanvasGet('runtime-linked-describe')).nodes.filter(n=>n.kind==='note').length;
+    await linked.start('a',true);
+    check(linked.document.run.status==='done' && !linked.document.nodes[0].resultNodeIds?.length,'single-card execution uses explicitly connected text card');
+    const linkedCanvas = await api.projectCanvasGet('runtime-linked-describe');
+    check(linkedCanvas.nodes.filter(n=>n.kind==='note').length===notesBefore,'explicit text target prevents extra result card');
+    const written = JSON.parse(linkedCanvas.nodes.find(n=>n.id===singleTableId).payloadJson).cells.flat().find(c=>c.id===targetCell);
+    check(written.text==='颜色：蓝色\n\n构图：居中','all dimensions enter the connected cell');
+    await linked.start('a');
+    check(linked.document.run.status==='done' && linked.document.run.steps['prompt-writer'].status==='done','normal workflow still advances through the text writer');
+    const legacy = await create('runtime-legacy-dimensions', [{...a,action:'describe',outputPorts:[{id:'dimension-old',label:'旧维度',type:'text'}],outputs:{'dimension-old':{type:'text',text:'旧维度'},text:{type:'text',text:'完整提示词'}}}, {...writer,inputs:{text:[{nodeId:'a',portId:'dimension-old'}]}}]);
+    const reloaded = new CanvasWorkflowController('runtime-legacy-dimensions'); await reloaded.load();
+    check(reloaded.document.nodes[0].outputPorts.length===0 && Object.keys(reloaded.document.nodes[0].outputs).join(',')==='text' && reloaded.document.nodes[1].inputs.text[0].portId==='text','legacy dimension wires route through aggregate prompt after reload');
     check(describe.document.nodes[0].outputs.text.text.includes('颜色：蓝色'),'aggregate prompt is forwarded');
 
     // Decomposition runs directly and marks the original asset only after result persistence.
@@ -111,12 +150,13 @@ try {
     const layers=await create('runtime-layers',[{...a,action:'layers'},downstream]);await layers.start('a');
     check(layers.document.run.status==='done'&&layerStarts===1&&!useStore.getState().layerEditor,'direct split without modal');
     check(useStore.getState().layerWorkspaceIds.has('existing')&&workspace.document&&!workspace.pending,'source badge after save');
-    check(layers.document.nodes[0].outputs['layer-l1'].assetIds[0]==='b','layer images are forwarded');
+    check(Object.keys(layers.document.nodes[0].outputs).join(',')==='image'&&layers.document.nodes[0].outputPorts.length===0,'only aggregate layer images are forwarded');
     check(layers.document.nodes[0].outputs.image.assetIds.join(',')==='a,b','all layers available on product output');
-    const productGroupId=layers.document.nodes[0].resultGroupId;
+    const productContainerId=layers.document.nodes[0].resultNodeIds[0];
     const productCanvas=await api.projectCanvasGet('runtime-layers');
-    check(productCanvas.groups.some(group=>group.id===productGroupId),'products have a visible canvas folder');
-    check(productCanvas.groupItems.filter(item=>item.groupId===productGroupId).length===2,'folder contains every product');
+    const productContainer=productCanvas.nodes.find(node=>node.id===productContainerId);
+    check(JSON.parse(productContainer.payloadJson).note_type==='text'&&JSON.parse(productContainer.payloadJson).cells[0][0].content_type==='image','products have a visible image container');
+    check(JSON.parse(productContainer.payloadJson).cells.flat().flatMap(cell=>cell.image_refs??[]).length===2,'container contains every product');
     check(described.join(',')==='a,b','layer outputs described individually in order');
     check(completedDescriptions.join(',')==='b,a','second description finishes while first is pending');
     const tableId=layers.document.nodes[1].resultNodeIds[0];
@@ -141,7 +181,8 @@ try {
     api.visualProfileInputPreview=async()=>[];
     api.visualProfileExtractInputs=async()=>{profileExtractions++;return {id:'side-profile-result'};};
     api.visualProfileGet=async()=>({id:'side-profile-result',status:profileStatus,version:1,summary:'统一色彩'});
-    await layers.edit([...layers.document.nodes,sideProfile,{...b,id:'table-generation',prompt:'',inputs:{text:[{canvasNodeId:tableId,cellId:tableData.cells[1][1].id}],'visual-profile':[{nodeId:'side-profile',portId:'visual-profile'}]}}]);
+    const tableInput={canvasNodeId:tableId,cellId:tableData.cells[1][1].id};
+    await layers.edit([...layers.document.nodes,sideProfile,{...b,id:'table-generation',prompt:'@[table]',promptReferences:[{id:'table',type:'text',input:tableInput,label:'文本'}],inputs:{text:[tableInput],'visual-profile':[{nodeId:'side-profile',portId:'visual-profile'}]}}]);
     exported=0;
     await layers.start('a');
     check(layers.document.run.status==='waiting'&&layers.document.run.steps['side-profile'].status==='waiting'&&relayed==='','missing side profile joins run and pauses for confirmation');
@@ -150,7 +191,7 @@ try {
     check(relayed.includes('本次更新 a')&&!relayed.includes('素材 a 的描述'),'generation reads this run rather than frozen old table');
     check(layers.document.nodes[1].resultNodeIds.length===1,'rerun updates original result table without breaking wires');
     const rerunCanvas=await api.projectCanvasGet('runtime-layers');
-    check(rerunCanvas.groups.filter(group=>group.id===productGroupId).length===1&&rerunCanvas.groupItems.filter(item=>item.groupId===productGroupId).length===2,'rerun reuses folder and members');
+    check(rerunCanvas.nodes.filter(node=>node.id===productContainerId).length===1&&JSON.parse(rerunCanvas.nodes.find(node=>node.id===productContainerId).payloadJson).cells.flat().flatMap(cell=>cell.image_refs??[]).length===2,'rerun reuses container without duplicate nodes');
     api.layerCloudRequest=cloudBefore;
     api.listAnalysesByAsset=async id=>[{id:'analysis-'+id,payload:JSON.stringify({sections:[{title:'提示词',body:'素材 '+id+' 的描述'}]})}];
     // Failure cancels this batch; stopping another batch does not cancel a concurrent workflow.
@@ -178,7 +219,7 @@ try {
     api.describeAsset=(asset,instruction,provider,job)=>new Promise((resolve,reject)=>{
       held.set(job,{asset,resolve,reject});if(held.size===2)allStarted();
     });
-    const failBatch=await create('runtime-batch-fail',[batch,{...b,inputs:{text:[{nodeId:'a',portId:'text'}]}}]);
+    const failBatch=await create('runtime-batch-fail',[batch,{...b,prompt:'@[text]',promptReferences:[b.promptReferences[0]],inputs:{text:[{nodeId:'a',portId:'text'}]}}]);
     const failWork=failBatch.start('a');await startedBatch;
     const failedJobs=failBatch.document.run.steps.a.describeJobIds;
     held.get(failedJobs[0]).reject(new Error('模拟第一张反推失败'));
@@ -228,7 +269,7 @@ try {
     check(locked,'running card cannot be deleted');
     const runOne=parallel.document.runs.find(r=>r.startId==='one'),runTwo=parallel.document.runs.find(r=>r.startId==='two');
     const beforeStop=structuredClone(parallel.document);
-    const cancelled=[];api.cancelCodexCreate=async id=>{cancelled.push(id);};
+    const cancelled=[];api.cancelCodexCreate=async id=>{cancelled.push(id);[...pending.values()].find(item=>item.identity.jobId===id)?.resolve();};
     await parallel.stop(runOne.id);
     check(cancelled.join()===pending.get('one').identity.jobId&&parallel.run(runTwo.id).status==='running','stop targets only its own provider');
     await parallel.edit(parallel.document.nodes.map(n=>n.id==='one'?{...n,prompt:'new definition'}:n));
@@ -240,7 +281,7 @@ try {
     sessionStorage.setItem('workflow-parallel-recovery',JSON.stringify({revision:1,document:beforeStop}));
     const recovery=new CanvasWorkflowController('parallel-recovery');await recovery.load();
     check(recovery.document.runs.every(r=>r.status==='waiting'),'all interrupted runs restore as waiting');
-    api.recentGenSessions=async()=>[...pending.values()].map(p=>({id:p.identity.jobId,status:'done',turns:[{images:['output.png']}]}));
+    api.recentGenSessions=async()=>[...pending.values()].map(p=>({id:p.identity.jobId,status:'done',turns:[{turn_key:p.identity.turnKey,images:['output.png']}]}));
     await recovery.continue(runTwo.id);
     check(recovery.document.runs.find(r=>r.id===runOne.id).status==='waiting','continue does not resume another run');
     await recovery.continue(runOne.id);
@@ -253,6 +294,29 @@ try {
     let overlap=false;try {await upstream.start('a',true);}catch {overlap=true;}
     check(overlap,'overlapping run rejected');releaseUpstream();await upstreamRun;
     check(!upstream.isLocked('a'),'failure releases only its locks');
+    // A saved visual profile is shared read access, not exclusive execution.
+    const profile={...newWorkflowNode('visual-profile',0,0,'codex'),id:'profile',outputs:{'visual-profile':{type:'visual-profile',profileId:'confirmed',version:1}}};
+    const reader=id=>({...gen(id),inputs:{'visual-profile':[{nodeId:'profile',portId:'visual-profile'}]}});
+    const shared=await create('shared-profile-readers',[profile,reader('r1'),reader('r2')]);
+    api.visualProfileGet=async()=>({id:'confirmed',status:'confirmed',version:1});
+    const completions=[];let notifyBoth;const both=new Promise(resolve=>{notifyBoth=resolve;});
+    useStore.setState({startGeneration:async(...args)=>{
+      check(args[8]==='confirmed','each reader receives the same confirmed profile');
+      await new Promise(resolve=>{completions.push(resolve);if(completions.length===2)notifyBoth();});
+      throw new Error('finish isolated reader');
+    }});
+    const first=shared.start('r1',true),second=shared.start('r2',true);await both;
+    check(shared.document.runs.every(run=>run.status==='running'),'readers run concurrently, including startup reservations');
+    let refused=false;try{await shared.edit(shared.document.nodes.map(n=>n.id==='profile'?{...n,profileId:'changed'}:n));}catch{refused=true;}
+    check(refused,'shared source cannot be changed during consumption');
+    let rerun=false;try{await shared.start('profile',true);}catch{rerun=true;}
+    check(rerun,'source recomputation conflicts with active readers');
+    const snapshot=structuredClone(shared.document);
+    sessionStorage.setItem('workflow-shared-reload',JSON.stringify({revision:1,document:snapshot}));
+    const sharedReloaded=new CanvasWorkflowController('shared-reload');await sharedReloaded.load();
+    check(sharedReloaded.document.runs.every(run=>run.writeNodeIds.length===1)&&sharedReloaded.isLocked('profile'),'shared access survives reload');
+    completions[0]();await first;check(shared.isLocked('profile'),'other reader still protects shared source');
+    completions[1]();await second;check(!shared.isLocked('profile'),'last reader releases protection');
     return {submissions,skillStarts,checks:8};
   });
   assert.deepEqual(result,{submissions:1,skillStarts:1,checks:8});

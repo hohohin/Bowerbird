@@ -40,8 +40,8 @@ try {
   await page.getByRole('button',{name:'新增生成卡片',exact:true}).click();
   await page.getByRole('button',{name:'适应内容',exact:true}).click();
   const generation=page.locator('.workflow-card.is-generation'); await generation.waitFor();
-  assert.equal(await generation.getByRole('button',{name:'输出：会话',exact:true}).count(),1);
-  assert.equal(await generation.getByRole('button',{name:'输出：图片',exact:true}).count(),0);
+  assert.equal(await generation.getByRole('button',{name:'输出：会话',exact:true}).count(),0);
+  assert.equal(await generation.getByRole('button',{name:'输出：图片',exact:true}).count(),1);
   await generation.getByLabel('卡片指令',{exact:true}).fill('使用柔和自然光');
   // Connect typed outputs to a single text socket and image socket.
   await instruction.getByRole('button',{name:'输出：生成提示词',exact:true}).click();
@@ -58,7 +58,7 @@ try {
   await page.mouse.move(bounds.x+170,bounds.y-100,{steps:8}); await page.mouse.up();
   await page.waitForFunction(x=>JSON.parse(sessionStorage.getItem('workflow-p'))?.document.nodes[1].x>x,before.nodes[1].x);
   await page.reload(); await page.locator('.workflow-card.is-generation').waitFor();
-  assert.equal(await generation.getByLabel('卡片指令',{exact:true}).inputValue(),'使用柔和自然光');
+  assert.equal(await generation.getByLabel('卡片指令',{exact:true}).innerText(),'使用柔和自然光');
   assert.equal((await snapshot()).nodes[1].inputs.text.length,1);
   await page.getByRole('button',{name:'新增技能卡片',exact:true}).click();
   await page.locator('.workflow-card.is-skill').getByLabel('选择技能').selectOption('html-layout');
@@ -100,7 +100,10 @@ try {
   await page.waitForFunction(()=>JSON.parse(window.snapshot().nodes.find(n=>n.id==='text-source').payloadJson).cells.length===2);
   const cells=await page.evaluate(()=>JSON.parse(window.snapshot().nodes.find(n=>n.id==='text-source').payloadJson).cells);
   assert.equal(cells[1][0].id,binding.cellId);assert.equal(cells[1][0].text,'单元格内容');
-  assert.equal(await page.locator('[data-workflow-session-link="workflow-session"]').count(),1);
+  assert.equal(await page.locator('[data-workflow-session-link="workflow-session"],[data-canvas-node-id="workflow-session"]').count(),0);
+  await generation.getByRole('button',{name:'生成历史',exact:true}).click();
+  await page.locator('[data-workflow-history-session="workflow-session"]').waitFor();
+  await page.keyboard.press('Escape');
   // Multi-image description creates a real table and refreshes the canvas without a reload.
   const resultTable = await page.evaluate(async()=>{
     const {api}=await import('/src/lib/api.ts');
@@ -127,7 +130,7 @@ try {
   await page.screenshot({path:'.tmp/workflow/batch-description.png'});
   const textBefore=await resultCard.getByLabel('第 2 行第 2 列',{exact:true}).inputValue();
   await resultCard.hover();
-  await page.getByRole('button',{name:'断开文本卡片输入',exact:true}).click({button:'right'});
+  await resultCard.getByRole('button',{name:'内容卡片输入',exact:true}).click({button:'right'});
   await page.waitForFunction(id=>!document.querySelector(`[data-workflow-result-link="${id}"]`),resultTable);
   assert.equal(await resultCard.getByLabel('第 2 行第 2 列',{exact:true}).inputValue(),textBefore);
   await page.evaluate(()=>window.save());
@@ -151,13 +154,21 @@ try {
     const {newWorkflowNode}=await import('/src/lib/canvasWorkflow.ts');
     const {useStore}=await import('/src/store.ts');
     const controller=canvasWorkflowController('p');
-    await controller.edit(['left','right','editable'].map((id,i)=>({...newWorkflowNode('generation',100+i*390,100,'codex'),id,prompt:id,trigger:id==='left'})));
+    const {api}=await import('/src/lib/api.ts');
+    api.visualProfileGet=async()=>({id:'shared-profile',status:'confirmed',version:1});
+    await controller.edit([{...newWorkflowNode('visual-profile',100,560,'codex'),id:'shared',profileId:'shared-profile',outputs:{'visual-profile':{type:'visual-profile',profileId:'shared-profile',version:1}}},
+      ...['left','right','editable'].map((id,i)=>({...newWorkflowNode('generation',100+i*390,100,'codex'),id,prompt:id,trigger:id==='left',inputs:id==='left'?{'visual-profile':[{nodeId:'shared',portId:'visual-profile'}]}:{}}))]);
     window.workflowReleases=[];
     useStore.setState({startGeneration:async()=>{await new Promise(resolve=>window.workflowReleases.push(resolve));return {accepted:false,error:'stopped'};}});
   });
   await page.getByRole('button',{name:'适应内容',exact:true}).click();
   const left=page.locator('[data-workflow-card="left"]'),right=page.locator('[data-workflow-card="right"]'),editable=page.locator('[data-workflow-card="editable"]');
   await left.getByRole('button',{name:'运行此卡片',exact:true}).click();
+  // Adding another reader must stay possible while the source is in use.
+  const shared=page.locator('[data-workflow-card="shared"]');
+  await shared.getByRole('button',{name:'输出：视觉规范',exact:true}).click();
+  await right.getByRole('button',{name:'输入：视觉规范',exact:true}).click();
+  await page.waitForFunction(()=>JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.find(n=>n.id==='right').inputs['visual-profile']?.length===1);
   await right.getByRole('button',{name:'运行此卡片',exact:true}).click();
   await page.waitForFunction(()=>window.workflowReleases.length===2);
   await left.getByRole('button',{name:'上发条，运行工作流',exact:true}).hover();
@@ -165,19 +176,22 @@ try {
   assert.match(await page.getByRole('tooltip').innerText(),/工作流运行中.*0\/1/);
   assert.match(await page.getByRole('tooltip').innerText(),/生成图片，等待会话结果/);
   assert.equal(await left.locator('.workflow-key svg').evaluate(el=>getComputedStyle(el).animationName),'workflow-wind');
-  assert.equal(await left.getByLabel('卡片指令',{exact:true}).isDisabled(),true);
-  assert.equal(await right.getByLabel('卡片指令',{exact:true}).isDisabled(),true);
+  assert.equal(await left.getByLabel('卡片指令',{exact:true}).getAttribute('contenteditable'),'false');
+  assert.equal(await shared.getByLabel('视觉规范来源').isDisabled(),true);
+  assert.equal(await right.getByLabel('卡片指令',{exact:true}).getAttribute('contenteditable'),'false');
   await editable.getByLabel('卡片指令',{exact:true}).fill('并发时仍可编辑');
   await page.getByRole('button',{name:'新增指令卡片',exact:true}).click();
   await page.locator('.workflow-card.is-instruction').waitFor();
   assert.equal((await snapshot()).runs.filter(r=>r.status==='running').length,2);
   await page.getByRole('button',{name:'适应内容',exact:true}).click();
   await right.getByRole('button',{name:'停止工作流',exact:true}).click();
-  await page.waitForFunction(()=>!document.querySelector('[data-workflow-card="right"] textarea').disabled);
-  assert.equal(await left.getByLabel('卡片指令',{exact:true}).isDisabled(),true);
+  await page.evaluate(()=>window.workflowReleases[1]());
+  await page.waitForFunction(()=>document.querySelector('[data-workflow-card="right"] [contenteditable]').getAttribute("contenteditable")==="true");
+  assert.equal(await left.getByLabel('卡片指令',{exact:true}).getAttribute('contenteditable'),'false');
   await left.getByRole('button',{name:'停止工作流',exact:true}).click();
   await page.evaluate(()=>window.workflowReleases.forEach(resolve=>resolve()));
-  await page.waitForFunction(()=>!document.querySelector('[data-workflow-card="left"] textarea').disabled);
+  await page.waitForFunction(()=>document.querySelector('[data-workflow-card="left"] [contenteditable]').getAttribute("contenteditable")==="true");
+  assert.equal(await shared.getByLabel('视觉规范来源').isDisabled(),false);
   assert.deepEqual(errors,[]);
   console.log('workflow UI: creation, asset/text/image wiring, key, reuse execution, drag, reload, skill ports, failed-save retry passed');
 } finally { await browser.close(); await server.close(); }

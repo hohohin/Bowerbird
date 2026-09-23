@@ -29,3 +29,11 @@ test('snapshot reconstruction stays in the owning project and preserves unavaila
   assert.ok(turn.references.every(a=>a.store_path===null));
   assert.deepEqual(turn.outputs,[]);
 });
+
+test('workflow history can view a persisted job without mixing runs in the same thread',()=>{
+  const turn=(id,job)=>({...selected,id,payloadJson:JSON.stringify({job_id:job,text:id})});
+  const first=turn('first','job-one'),later=turn('later','job-one'),other=turn('other','job-two');
+  const turns=canvasConversationTurns(first,[first,later,other,...nodes],edges,assets,'job-one');
+  assert.deepEqual(turns.map(t=>t.node.id),['first','later']);
+  assert.equal(canvasConversationTurn(first,[first],[],assets),null,'live jobs remain excluded from imported-only callers');
+});

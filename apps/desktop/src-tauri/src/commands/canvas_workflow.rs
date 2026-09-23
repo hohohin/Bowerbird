@@ -20,17 +20,44 @@ fn validate(document: &Value) -> AppResult<HashSet<String>> {
     let mut dependencies: HashMap<&str, Vec<&str>> = HashMap::new();
     for node in nodes {
         let id = node["id"].as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?;
-        if !ids.insert(id) || !matches!(node["kind"].as_str(), Some("instruction" | "generation" | "skill" | "visual-profile"))
+        if !ids.insert(id) || !matches!(node["kind"].as_str(), Some("instruction" | "generation" | "skill" | "agent" | "visual-profile" | "text" | "trigger"))
             || !matches!(node["action"].as_str(), Some("describe" | "reuse" | "layers"))
             || node["x"].as_f64().filter(|v| v.is_finite()).is_none()
             || node["y"].as_f64().filter(|v| v.is_finite()).is_none()
             || !node["prompt"].is_string() || !node["provider"].is_string()
             || !node["trigger"].is_boolean() || !node["outputPorts"].is_array() { return Err(invalid()); }
         let inputs = node["inputs"].as_object().ok_or_else(invalid)?;
+        if node["kind"] == "trigger" && !inputs.is_empty() { return Err(invalid()); }
+        if node["kind"] == "text" && node["textSource"].is_string() {
+            if node["textSource"].as_str().is_none_or(str::is_empty) || inputs.keys().any(|key| key != "signal") || node.get("textTarget").is_some() { return Err(invalid()); }
+            if nodes.iter().any(|other| other["id"] != node["id"] && other["textSource"] == node["textSource"]) { return Err(invalid()); }
+        } else if node["kind"] == "text" {
+            if node["textTarget"]["nodeId"].as_str().is_none_or(str::is_empty)
+                || node["textTarget"]["cellId"].as_str().is_none_or(str::is_empty)
+                || inputs.values().filter_map(Value::as_array).map(Vec::len).sum::<usize>() != 1
+                || inputs.keys().any(|key| key != "text" && key != "image") { return Err(invalid()); }
+            if nodes.iter().any(|other| other["id"] != node["id"] && other["kind"] == "text" && other["textTarget"]["nodeId"] == node["textTarget"]["nodeId"] && other["textTarget"]["cellId"] == node["textTarget"]["cellId"]) { return Err(invalid()); }
+            if let Some(value) = node["textTarget"].get("cellIds") {
+                let cells = value.as_array().ok_or_else(invalid)?;
+                let mut unique = HashSet::new();
+                for cell in cells {
+                    let id = cell.as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?;
+                    if !unique.insert(id) || nodes.iter().any(|other| other["id"] != node["id"] && other["textTarget"]["nodeId"] == node["textTarget"]["nodeId"]
+                        && (other["textTarget"]["cellId"] == *cell || other["textTarget"]["cellIds"].as_array().is_some_and(|ids| ids.contains(cell)))) { return Err(invalid()); }
+                }
+            }
+        }
         let mut deps = Vec::new();
         for (port, bindings) in inputs {
-            if !matches!(port.as_str(), "text" | "image" | "visual-profile") { return Err(invalid()); }
+            if !matches!(port.as_str(), "text" | "image" | "visual-profile" | "signal") { return Err(invalid()); }
             for binding in bindings.as_array().ok_or_else(invalid)? {
+                if port == "signal" {
+                    let producer = nodes.iter().find(|node| node["id"] == binding["nodeId"]).ok_or_else(invalid)?;
+                    if producer["kind"] != "trigger" || binding["portId"] != "signal" || binding.as_object().is_none_or(|value| value.len() != 2) { return Err(invalid()); }
+                    deps.push(producer["id"].as_str().ok_or_else(invalid)?);
+                    continue;
+                }
+                if binding["portId"] == "signal" { return Err(invalid()); }
                 if binding["groupId"].is_string() {
                     if port != "image" || binding.get("nodeId").is_some() || binding.get("assetId").is_some() || binding.get("canvasNodeId").is_some() { return Err(invalid()); }
                     for asset in binding["assetIds"].as_array().ok_or_else(invalid)? {
@@ -40,8 +67,15 @@ fn validate(document: &Value) -> AppResult<HashSet<String>> {
                     if port != "image" || binding.get("nodeId").is_some() { return Err(invalid()); }
                     assets.insert(asset.to_owned());
                 } else if binding["canvasNodeId"].is_string() {
-                    if port != "text" || !binding["cellId"].is_string() || binding.get("nodeId").is_some() { return Err(invalid()); }
-                    if let Some(producer) = nodes.iter().find(|node| node["resultNodeIds"].as_array().is_some_and(|ids| ids.contains(&binding["canvasNodeId"]))) {
+                    if (port != "text" && port != "image") || !binding["cellId"].is_string() || binding.get("nodeId").is_some() { return Err(invalid()); }
+                    if binding["cellId"] == "*" || binding["cellId"] == "*text" {
+                        if (binding["cellId"] == "*" && port != "image") || (binding["cellId"] == "*text" && port != "text") { return Err(invalid()); }
+                        for producer in nodes.iter().filter(|node| node["kind"] == "text" && node["textTarget"]["nodeId"] == binding["canvasNodeId"]) {
+                            deps.push(producer["id"].as_str().ok_or_else(invalid)?);
+                        }
+                    }
+                    if let Some(producer) = nodes.iter().find(|node| node["kind"] == "text" && node["textTarget"]["nodeId"] == binding["canvasNodeId"] && (node["textTarget"]["cellId"] == binding["cellId"] || node["textTarget"]["cellIds"].as_array().is_some_and(|ids| ids.contains(&binding["cellId"]))))
+                        .or_else(|| nodes.iter().find(|node| node["resultNodeIds"].as_array().is_some_and(|ids| ids.contains(&binding["canvasNodeId"])))) {
                         deps.push(producer["id"].as_str().ok_or_else(invalid)?);
                     }
                 } else {
@@ -57,7 +91,13 @@ fn validate(document: &Value) -> AppResult<HashSet<String>> {
                 Some("image") => for asset in value["assetIds"].as_array().ok_or_else(invalid)? {
                     assets.insert(asset.as_str().ok_or_else(invalid)?.to_owned());
                 },
-                Some("text") if value["text"].is_string() => {},
+                Some("text") if value["text"].is_string() => {
+                    if let Some(ids) = value.get("assetIds") {
+                        for asset in ids.as_array().ok_or_else(invalid)? {
+                            assets.insert(asset.as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?.to_owned());
+                        }
+                    }
+                },
                 Some("visual-profile") if value["profileId"].as_str().is_some_and(|id| !id.is_empty()) && value["version"].as_i64().is_some_and(|v| v > 0) => {},
                 _ => return Err(invalid()),
             }
@@ -77,7 +117,7 @@ fn validate(document: &Value) -> AppResult<HashSet<String>> {
         None => if document["run"].is_null() { vec![] } else { vec![&document["run"]] },
     };
     let mut run_ids = HashSet::new();
-    let mut locks = HashSet::new();
+    let mut accesses: Vec<(HashSet<&str>, HashSet<&str>)> = Vec::new();
     for run in runs {
         if !matches!(run["status"].as_str(), Some("running" | "waiting" | "done" | "failed" | "stopped"))
             || !run["id"].is_string() || !run["threadId"].is_string()
@@ -86,10 +126,19 @@ fn validate(document: &Value) -> AppResult<HashSet<String>> {
         if !run_ids.insert(run["id"].as_str().ok_or_else(invalid)?) { return Err(invalid()); }
         if matches!(run["status"].as_str(), Some("running" | "waiting")) {
             let locked = run.get("lockedNodeIds").unwrap_or(&run["order"]).as_array().ok_or_else(invalid)?;
+            let mut reads_and_writes = HashSet::new();
             for id in locked {
                 let id = id.as_str().ok_or_else(invalid)?;
-                if !ids.contains(id) || !locks.insert(id) { return Err(invalid()); }
+                if !ids.contains(id) || !reads_and_writes.insert(id) { return Err(invalid()); }
             }
+            let mut writes = HashSet::new();
+            for id in run.get("writeNodeIds").unwrap_or(&run["order"]).as_array().ok_or_else(invalid)? {
+                let id = id.as_str().ok_or_else(invalid)?;
+                if !reads_and_writes.contains(id) || !writes.insert(id) { return Err(invalid()); }
+            }
+            if run["order"].as_array().ok_or_else(invalid)?.iter().any(|id| !writes.contains(id.as_str().unwrap()))
+                || accesses.iter().any(|(other_access, other_writes)| !writes.is_disjoint(other_access) || !other_writes.is_disjoint(&reads_and_writes)) { return Err(invalid()); }
+            accesses.push((reads_and_writes, writes));
         }
     }
     Ok(assets)
@@ -139,12 +188,86 @@ mod tests {
         assert!(validate(&doc).is_err());
     }
     #[test]
+    fn trigger_signal_targets_cards_without_data_ports() {
+        let mut switch = node("switch", json!({}));
+        switch["kind"] = json!("trigger");
+        let target = node("target", json!({"signal":[{"nodeId":"switch","portId":"signal"}]}));
+        let mut doc = json!({"schema_version":1,"nodes":[switch,target],"run":null});
+        assert!(validate(&doc).is_ok());
+        doc["nodes"][1]["kind"] = json!("text");
+        doc["nodes"][1]["textSource"] = json!("table");
+        assert!(validate(&doc).is_ok());
+        doc["nodes"][0]["kind"] = json!("generation");
+        assert!(validate(&doc).is_err());
+        doc["nodes"][0]["kind"] = json!("trigger");
+        doc["nodes"][0]["inputs"] = json!({"signal":[{"nodeId":"switch","portId":"signal"}]});
+        assert!(validate(&doc).is_err());
+    }
+    #[test]
+    fn text_cell_writers_validate_dependencies_and_unique_targets() {
+        let mut source = node("source", json!({}));
+        source["kind"] = json!("text");
+        source["textSource"] = json!("table");
+        let mut source_doc = json!({"schema_version":1,"nodes":[source],"run":null});
+        assert!(validate(&source_doc).is_ok());
+        source_doc["nodes"][0]["inputs"] = json!({"image":[{"assetId":"a"}]});
+        assert!(validate(&source_doc).is_err());
+        let mut writer = node("writer", json!({"image":[{"assetId":"image"}]}));
+        writer["kind"] = json!("text");
+        writer["textTarget"] = json!({"nodeId":"table","cellId":"cell"});
+        let consumer = node("consumer", json!({"text":[{"canvasNodeId":"table","cellId":"cell"}]}));
+        let mut doc = json!({"schema_version":1,"nodes":[writer,consumer],"run":null});
+        assert!(validate(&doc).is_ok());
+        doc["nodes"][0]["inputs"] = json!({"text":[{"nodeId":"consumer","portId":"text"}]});
+        assert!(validate(&doc).is_err());
+        doc["nodes"][0]["inputs"] = json!({"image":[{"assetId":"image"}]});
+        let mut duplicate = doc["nodes"][0].clone();
+        duplicate["id"] = json!("duplicate");
+        doc["nodes"].as_array_mut().unwrap().push(duplicate);
+        assert!(validate(&doc).is_err());
+    }
+    #[test]
     fn rejects_cycles_and_missing_dependencies() {
         let mut doc = json!({"schema_version":1,"nodes":[node("a",json!({"image":[{"nodeId":"b","portId":"image"}]})),node("b",json!({}))],"run":null});
         assert!(validate(&doc).is_ok());
         doc["nodes"][1]["inputs"] = json!({"image":[{"nodeId":"a","portId":"image"}]});
         assert!(validate(&doc).is_err());
         doc["nodes"][1]["inputs"] = json!({"image":[{"nodeId":"missing","portId":"image"}]});
+        assert!(validate(&doc).is_err());
+    }
+    #[test]
+    fn main_image_input_secondary_slots_are_owned_dependencies() {
+        let mut writer = node("writer", json!({"image":[{"assetId":"a"}]}));
+        writer["kind"] = json!("text");
+        writer["textTarget"] = json!({"nodeId":"table","cellId":"first","cellIds":["first","second"],"append":true,"image":true});
+        let consumer = node("consumer", json!({"image":[{"canvasNodeId":"table","cellId":"second"}]}));
+        let mut doc = json!({"schema_version":1,"nodes":[writer.clone(),consumer]});
+        assert!(validate(&doc).is_ok());
+        doc["nodes"][0]["inputs"] = json!({"image":[{"nodeId":"consumer","portId":"image"}]});
+        assert!(validate(&doc).is_err());
+        let mut other = writer.clone(); other["id"] = json!("other"); other["textTarget"] = json!({"nodeId":"table","cellId":"second"});
+        doc["nodes"] = json!([writer,other]);
+        assert!(validate(&doc).is_err());
+    }
+    #[test]
+    fn content_text_aggregate_tracks_writers_and_rejects_cycles() {
+        let mut writer = node("writer", json!({"text":[{"canvasNodeId":"source","cellId":"cell"}]}));
+        writer["kind"] = json!("text"); writer["textTarget"] = json!({"nodeId":"content","cellId":"one"});
+        let consumer = node("consumer", json!({"text":[{"canvasNodeId":"content","cellId":"*text"}]}));
+        let mut doc = json!({"schema_version":1,"nodes":[writer,consumer]});
+        assert!(validate(&doc).is_ok());
+        doc["nodes"][0]["inputs"] = json!({"text":[{"nodeId":"consumer","portId":"text"}]});
+        assert!(validate(&doc).is_err());
+    }
+    #[test]
+    fn image_container_aggregate_tracks_all_cell_writers() {
+        let mut first = node("first", json!({"image":[{"assetId":"a"}]}));
+        first["kind"] = json!("text"); first["textTarget"] = json!({"nodeId":"container","cellId":"one","image":true});
+        let mut second = first.clone(); second["id"] = json!("second"); second["textTarget"]["cellId"] = json!("two");
+        let consumer = node("consumer", json!({"image":[{"canvasNodeId":"container","cellId":"*"}]}));
+        let mut doc = json!({"schema_version":1,"nodes":[first,second,consumer],"run":null});
+        assert!(validate(&doc).is_ok());
+        doc["nodes"][1]["inputs"] = json!({"image":[{"nodeId":"consumer","portId":"image"}]});
         assert!(validate(&doc).is_err());
     }
     #[test]
@@ -186,5 +309,19 @@ mod tests {
         doc["runs"][1]["status"] = json!("done");
         db.workflow_save("p", 1, doc).unwrap();
         db.conn.lock().unwrap().execute("DELETE FROM projects WHERE id='p'", []).unwrap();
+    }
+    #[test]
+    fn parallel_readers_share_dependencies_but_reject_writes() {
+        let mut doc = json!({"schema_version":1,"nodes":[node("profile",json!({})),node("a",json!({})),node("b",json!({}))],"run":null,
+            "runs":[{"id":"one","threadId":"t1","status":"running","steps":{},"order":["a"],"lockedNodeIds":["a","profile"],"writeNodeIds":["a"]},
+                {"id":"two","threadId":"t2","status":"waiting","steps":{},"order":["b"],"lockedNodeIds":["b","profile"],"writeNodeIds":["b"]}]});
+        assert!(validate(&doc).is_ok());
+        // Also allow pre-upgrade records whose execution order identifies their writes.
+        doc["runs"][0].as_object_mut().unwrap().remove("writeNodeIds");
+        assert!(validate(&doc).is_ok());
+        doc["runs"][1]["writeNodeIds"] = json!(["b","profile"]);
+        assert!(validate(&doc).is_err());
+        doc["runs"][1]["writeNodeIds"] = json!([]);
+        assert!(validate(&doc).is_err());
     }
 }

@@ -64,6 +64,12 @@ pub struct HtmlLayoutOptions {
     pub background: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentTextRewrite {
+    pub source: String,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct HtmlLayoutReference {
@@ -109,6 +115,8 @@ struct HtmlLayoutCapture {
 struct UnifiedAgentManifest<'a> {
     schema_version: u8,
     goal: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    text_rewrite: Option<&'a AgentTextRewrite>,
     references: &'a [HtmlLayoutReference],
     #[serde(skip_serializing_if = "Option::is_none")]
     ratio: Option<&'a str>,
@@ -1707,11 +1715,17 @@ async fn start_unified_agent_run(
     project_id: Option<String>,
     visual_profile_id: Option<String>,
     options: HtmlLayoutOptions,
+    text_rewrite: Option<AgentTextRewrite>,
     thread_id: Option<String>,
     parent_node_id: Option<String>,
     parent_asset_id: Option<String>,
 ) -> Result<CloudAgentRunRecord, AppError> {
     let options = validate_html_layout_options(options)?;
+    if let Some(rewrite) = &text_rewrite {
+        if rewrite.source.trim().is_empty() || rewrite.source.encode_utf16().count() > 16000 || !references.is_empty() || visual_profile_id.is_some() {
+            return Err(AppError::Other("文本改写需要 1–16000 字原文，不支持图片或视觉规范输入".into()));
+        }
+    }
     let entitlement_snapshot = entitlement.current_or_sync(auth).await;
     if !entitlement_snapshot.is_test_account
         || !entitlement_snapshot
@@ -1764,6 +1778,7 @@ async fn start_unified_agent_run(
     let manifest = serde_json::to_vec(&UnifiedAgentManifest {
         schema_version: 1,
         goal: &normalized_prompt,
+        text_rewrite: text_rewrite.as_ref(),
         references: &manifest_references,
         ratio: resolved_ratio.as_deref(),
         html_output: UnifiedHtmlOutput {
@@ -2015,6 +2030,7 @@ pub async fn cloud_agent_start(
     skill_id: Option<String>,
     agent_runtime: Option<String>,
     html_options: Option<HtmlLayoutOptions>,
+    text_rewrite: Option<AgentTextRewrite>,
     thread_id: Option<String>,
     parent_node_id: Option<String>,
     parent_asset_id: Option<String>,
@@ -2037,8 +2053,10 @@ pub async fn cloud_agent_start(
         if agent_runtime.as_deref() != Some(DSH_AGENT_RUNTIME) {
             return Err(AppError::Other("统一 Agent 必须使用 DSH runtime".into()));
         }
-        let options =
-            html_options.ok_or_else(|| AppError::Other("统一 Agent HTML 输出参数缺失".into()))?;
+        let options = html_options.or_else(|| text_rewrite.as_ref().map(|_| HtmlLayoutOptions {
+            viewport_width: 900, viewport_height: 700, device_scale_factor: 1,
+            capture_mode: "full_page".into(), slice_height: None, overlap: None, background: "opaque".into(),
+        })).ok_or_else(|| AppError::Other("统一 Agent HTML 输出参数缺失".into()))?;
         return start_unified_agent_run(
             &app,
             &db,
@@ -2051,6 +2069,7 @@ pub async fn cloud_agent_start(
             project_id,
             visual_profile_id,
             options,
+            text_rewrite,
             thread_id,
             parent_node_id,
             parent_asset_id,
