@@ -16,6 +16,33 @@ try {
   await page.mouse.move(1400, 300, { steps: 12 }); await page.mouse.up();
   const trigger = page.locator('.workflow-card.is-trigger'); await trigger.waitFor();
   assert.equal(await trigger.locator('textarea,.workflow-port.is-input').count(), 0);
+  const progress = page.getByRole('tooltip');
+  const hoverTrigger = async () => {
+    await page.mouse.move(5, 5);
+    await trigger.locator('header strong').hover();
+    await progress.waitFor({ state: 'visible' });
+  };
+  await hoverTrigger();
+  await page.mouse.move(5, 5); await progress.waitFor({ state: 'hidden' });
+  await hoverTrigger();
+  await page.keyboard.press('Escape'); await progress.waitFor({ state: 'hidden', timeout: 1500 });
+  await hoverTrigger();
+  await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+  await progress.waitFor({ state: 'hidden' });
+  await hoverTrigger();
+  await page.mouse.down(); await progress.waitFor({ state: 'hidden' });
+  await page.mouse.move(1300, 350, { steps: 5 }); await page.mouse.up();
+  await progress.waitFor({ state: 'hidden' });
+  await hoverTrigger();
+  // Canvas transforms can move the anchor without delivering mouseleave.
+  await trigger.evaluate(el => { el.style.transform = 'translateX(30px)'; });
+  await progress.waitFor({ state: 'hidden' });
+  await trigger.evaluate(el => { el.style.transform = ''; });
+  await hoverTrigger();
+  await page.mouse.wheel(0, 40); await progress.waitFor({ state: 'hidden' });
+  await hoverTrigger();
+  await page.evaluate(() => document.dispatchEvent(new PointerEvent('pointerleave')));
+  await progress.waitFor({ state: 'hidden' });
   await page.getByRole('button', { name: '新增指令卡片', exact: true }).click();
   const instruction = page.locator('.workflow-card.is-instruction'); await instruction.getByLabel('指令功能').selectOption('reuse');
   await page.evaluate(async () => {
@@ -47,6 +74,30 @@ try {
   await page.mouse.move(keyTool.x + 10, keyTool.y + 10); await page.mouse.down();
   await page.mouse.move(cardHeader.x + 10, cardHeader.y + 10, { steps: 12 }); await page.mouse.up();
   await instruction.getByRole('button', { name: '上发条，运行工作流', exact: true }).waitFor();
+  const attachedKey = instruction.getByRole('button', { name: '上发条，运行工作流', exact: true });
+  await attachedKey.hover(); await progress.waitFor({ state: 'visible' });
+  // Removing an anchor under the pointer must also remove its portal.
+  await page.evaluate(async () => {
+    const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+    const c = canvasWorkflowController('p');
+    await c.edit(c.document.nodes.map(n => n.kind === 'instruction' ? { ...n, trigger: false } : n));
+  });
+  await progress.waitFor({ state: 'hidden' });
+  await page.evaluate(async () => {
+    const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+    const c = canvasWorkflowController('p');
+    await c.edit(c.document.nodes.map(n => n.kind === 'instruction' ? { ...n, trigger: true } : n));
+  });
+  await page.mouse.move(5, 5);
+  await page.keyboard.press('Tab');
+  await attachedKey.focus(); await progress.waitFor({ state: 'visible' });
+  await page.keyboard.press('Escape'); await progress.waitFor({ state: 'hidden' });
+  await attachedKey.blur();
+  await attachedKey.focus(); await progress.waitFor({ state: 'visible' });
+  await attachedKey.blur(); await progress.waitFor({ state: 'hidden' });
+  await attachedKey.hover(); await progress.waitFor({ state: 'visible' });
+  await attachedKey.click(); await progress.waitFor({ state: 'hidden' });
+  await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.run?.status === 'done');
   await trigger.getByRole('button', { name: '输出：触发', exact: true }).click(); await instruction.locator('header strong').click();
   await instruction.getByRole('button', { name: '断开触发器连接', exact: true }).waitFor();
   assert.equal(await instruction.getByRole('button', { name: '上发条，运行工作流', exact: true }).count(), 0);
@@ -82,5 +133,5 @@ try {
     await c.edit([sw, text, gen]); await c.start('switch');
     if (c.document.run.status !== 'done' || c.document.run.order.join(',') !== 'switch,text,gen') throw new Error('switch must relay native text card');
   });
-  console.log('trigger: creation, direct card attachment, dedup, execution, persistence, disconnect, fanout ordering, failure, independent runs and native text relay passed');
+  console.log('trigger: hover/focus dismissal, drag/removal/viewport cleanup, creation, direct card attachment, dedup, execution, persistence, disconnect, fanout ordering, failure, independent runs and native text relay passed');
 } finally { await browser.close(); await server.close(); }

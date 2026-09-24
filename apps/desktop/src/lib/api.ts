@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { LibraryView } from "./libraryView";
+import type { WorkflowTemplate } from "./workflowTemplates";
 import { open } from "@tauri-apps/plugin-dialog";
 import type {
   Analysis,
@@ -70,6 +71,10 @@ export interface SourceBrowserBounds {
 
 export const api = {
   canvasWorkflowGet: (projectId: string) => invoke<import("./canvasWorkflow").WorkflowSnapshot>("canvas_workflow_get", { projectId }),
+  workflowTemplatesList: () => invoke<WorkflowTemplate[]>("workflow_templates_list"),
+  workflowTemplateSave: (document: WorkflowTemplate) => invoke<WorkflowTemplate>("workflow_template_save", { document, expectedRevision: document.revision }),
+  workflowTemplateDelete: (id: string, expectedRevision: number) => invoke<void>("workflow_template_delete", { id, expectedRevision }),
+  workflowTemplateExport: (id: string, path: string) => invoke<void>("workflow_template_export", { id, path }),
   canvasWorkflowSave: (projectId: string, revision: number, document: import("./canvasWorkflow").CanvasWorkflow) => invoke<number>("canvas_workflow_save", { projectId, revision, document }),
   // 健康检查
   ping: (name: string) => invoke<string>("ping", { name }),
@@ -148,10 +153,12 @@ export const api = {
       autoDelivered: boolean;
       notice?: string | null;
     }>("agent_ds_chat", { text, images, imageNames, visualProfileId }),
-  agentDsWorkflowStart: (requestId: string, instruction: string, source: string) =>
-    invoke<{ path: string; sessionTitle?: string | null; autoDelivered: boolean; notice?: string | null }>("agent_ds_workflow_start", { requestId, instruction, source }),
+  agentDsWorkflowStart: (requestId: string, instruction: string, source: string, purpose?: "planning" | "planning-v2") =>
+    invoke<{ path: string; sessionTitle?: string | null; autoDelivered: boolean; notice?: string | null }>("agent_ds_workflow_start", { requestId, instruction, source, purpose }),
   agentDsWorkflowResult: (requestId: string) =>
-    invoke<{ schemaVersion: 1; requestId: string; text?: string; error?: string } | null>("agent_ds_workflow_result", { requestId }),
+    invoke<{ schemaVersion: 1 | 2; requestId: string; text?: string; error?: string; phase?: "proposal" | "commit"; revision?: number; digest?: string } | null>("agent_ds_workflow_result", { requestId }),
+  agentDsWorkflowFeedback: (requestId: string, revision: number, text: string, error?: string) =>
+    invoke<string>("agent_ds_workflow_feedback", { requestId, revision, text, error }),
 
   // 项目 workspace
   createProject: (workspacePath: string) =>

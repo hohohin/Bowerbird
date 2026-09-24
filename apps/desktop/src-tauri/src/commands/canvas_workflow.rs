@@ -20,13 +20,15 @@ fn validate(document: &Value) -> AppResult<HashSet<String>> {
     let mut dependencies: HashMap<&str, Vec<&str>> = HashMap::new();
     for node in nodes {
         let id = node["id"].as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?;
-        if !ids.insert(id) || !matches!(node["kind"].as_str(), Some("instruction" | "generation" | "skill" | "agent" | "visual-profile" | "text" | "trigger"))
+        if !ids.insert(id) || !matches!(node["kind"].as_str(), Some("instruction" | "generation" | "skill" | "agent" | "visual-profile" | "text" | "trigger" | "planner"))
             || !matches!(node["action"].as_str(), Some("describe" | "reuse" | "layers"))
             || node["x"].as_f64().filter(|v| v.is_finite()).is_none()
             || node["y"].as_f64().filter(|v| v.is_finite()).is_none()
             || !node["prompt"].is_string() || !node["provider"].is_string()
             || !node["trigger"].is_boolean() || !node["outputPorts"].is_array() { return Err(invalid()); }
         let inputs = node["inputs"].as_object().ok_or_else(invalid)?;
+        if node["kind"] == "planner" && (node["trigger"] != false || inputs.keys().any(|key| key != "text" && key != "image")
+            || node["outputs"].as_object().is_none_or(|outputs| !outputs.is_empty()) || node["outputPorts"].as_array().is_none_or(|ports| !ports.is_empty())) { return Err(invalid()); }
         if node["kind"] == "trigger" && !inputs.is_empty() { return Err(invalid()); }
         if node["kind"] == "text" && node["textSource"].is_string() {
             if node["textSource"].as_str().is_none_or(str::is_empty) || inputs.keys().any(|key| key != "signal") || node.get("textTarget").is_some() { return Err(invalid()); }
@@ -79,6 +81,7 @@ fn validate(document: &Value) -> AppResult<HashSet<String>> {
                         deps.push(producer["id"].as_str().ok_or_else(invalid)?);
                     }
                 } else {
+                    if nodes.iter().any(|node| node["id"] == binding["nodeId"] && node["kind"] == "planner") { return Err(invalid()); }
                     deps.push(binding["nodeId"].as_str().ok_or_else(invalid)?);
                     if !binding["portId"].is_string() { return Err(invalid()); }
                 }
@@ -119,6 +122,7 @@ fn validate(document: &Value) -> AppResult<HashSet<String>> {
     let mut run_ids = HashSet::new();
     let mut accesses: Vec<(HashSet<&str>, HashSet<&str>)> = Vec::new();
     for run in runs {
+        if run["order"].as_array().is_some_and(|order| order.iter().any(|id| nodes.iter().any(|node| node["id"] == *id && node["kind"] == "planner"))) { return Err(invalid()); }
         if !matches!(run["status"].as_str(), Some("running" | "waiting" | "done" | "failed" | "stopped"))
             || !run["id"].is_string() || !run["threadId"].is_string()
             || !run["steps"].is_object()
@@ -178,6 +182,30 @@ pub async fn canvas_workflow_save(db: State<'_, Arc<Database>>, project_id: Stri
 mod tests {
     use super::*;
     fn node(id: &str, inputs: Value) -> Value { json!({"id":id,"kind":"generation","action":"describe","x":0,"y":0,"prompt":"test","provider":"codex","trigger":false,"inputs":inputs,"outputs":{},"outputPorts":[]}) }
+    #[test]
+    fn template_instance_snapshot_survives_workflow_storage() {
+        let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();
+        db.conn.lock().unwrap().execute("INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1)", []).unwrap();
+        let mut root = node("start", json!({})); root["kind"] = json!("trigger");
+        root["templateInstance"] = json!({"template":{"id":"template","revision":2,"name":"海报"},"nodeIds":["start","draw"],"bindings":{},"values":{"brief":"白色背景"},"definitions":["root","draw"]});
+        let doc = json!({"schema_version":1,"nodes":[root,node("draw",json!({"signal":[{"nodeId":"start","portId":"signal"}]}))],"run":null});
+        db.workflow_save("p", 0, doc.clone()).unwrap();
+        assert_eq!(db.workflow_get("p").unwrap().document, doc);
+    }
+    #[test]
+    fn planner_is_persisted_but_never_an_execution_or_output_node() {
+        let mut planner = node("assistant", json!({"image":[{"assetId":"photo"}]}));
+        planner["kind"] = json!("planner");
+        planner["planning"] = json!({"status":"waiting","requestId":"request"});
+        let doc = json!({"schema_version":1,"nodes":[planner],"run":null});
+        assert!(validate(&doc).is_ok());
+        let mut triggered = doc.clone(); triggered["nodes"][0]["trigger"] = json!(true);
+        assert!(validate(&triggered).is_err());
+        let mut downstream = doc.clone(); downstream["nodes"].as_array_mut().unwrap().push(node("draw", json!({"text":[{"nodeId":"assistant","portId":"text"}]})));
+        assert!(validate(&downstream).is_err());
+        let mut running = doc.clone(); running["run"] = json!({"id":"r","threadId":"t","status":"done","order":["assistant"],"steps":{}});
+        assert!(validate(&running).is_err());
+    }
     #[test]
     fn folder_image_bindings_collect_references_and_reject_wrong_ports() {
         let mut doc = json!({"schema_version":1,"nodes":[node("a",json!({"image":[{"groupId":"folder","assetIds":["first","second"]}]}))],"run":null});

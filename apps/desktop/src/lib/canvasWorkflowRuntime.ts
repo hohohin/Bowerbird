@@ -1,4 +1,5 @@
 import { api } from "./api";
+import { WorkflowPlannerRuntime } from "./workflowPlannerRuntime";
 import { notify } from "./notify";
 import { emit } from "@tauri-apps/api/event";
 import { useStore } from "../store";
@@ -26,6 +27,7 @@ export function canvasWorkflowController(projectId: string) {
 
 /** Lives outside React: changing projects never redirects or repeats a provider submission. */
 export class CanvasWorkflowController {
+  readonly planner = new WorkflowPlannerRuntime(this);
   document = emptyWorkflow();
   ready = false;
   error = "";
@@ -59,7 +61,15 @@ export class CanvasWorkflowController {
   constructor(readonly projectId: string) {}
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   private emit() { for (const listener of this.listeners) listener(); }
-  load() {
+  load(provisional = false) {
+    // Untouched canvases have no database row. Their first edit materializes
+    // the project before saving this empty, revision-zero workflow.
+    if (provisional && !this.loading) {
+      this.loading = Promise.resolve();
+      this.ready = true;
+      this.error = "";
+      this.emit();
+    }
     if (!this.loading) this.loading = (async () => {
       try {
         const snapshot = await api.canvasWorkflowGet(this.projectId);
@@ -93,6 +103,7 @@ export class CanvasWorkflowController {
         const latest = runs[runs.length - 1];
         this.issue = latest?.status === "failed" ? Object.values(latest.steps).find(step => step.diagnostic)?.diagnostic ?? null : null;
         this.ready = true;
+        this.error = "";
       } catch (error) { this.error = String(error); }
       this.emit();
     })();
@@ -224,6 +235,7 @@ export class CanvasWorkflowController {
   }
   private async startRun(startId: string, single = false) {
     if (!this.ready) throw new Error("工作流尚未载入");
+    if (this.document.nodes.find(node => node.id === startId)?.kind === "planner") throw new Error("请使用助手的编排按钮；助手不参与工作流执行");
     // A deleted result table may still be used as a relay by downstream cards.
     // Recover whole-output references before removing its writer/provenance.
     const snapshot = await api.projectCanvasGet(this.projectId);

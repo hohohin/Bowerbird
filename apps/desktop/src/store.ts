@@ -473,7 +473,9 @@ interface State {
   // 该图有维度数据则同时呼出维度环（环点扇区继续挑维度）。
   addAssetToBoardFromDetail: (assetId: string) => void;
   // —— 图片标注面板（右键菜单唤起，全局单实例）——
-  annotator: { assetId: string | null; saveDraft?: (dataUrl: string, meta: AnnotationMeta) => Promise<void> } | null;
+  prepareCanvasAnnotation: (() => ((dataUrl: string, meta: AnnotationMeta, fileName: string) => Promise<void>) | null) | null;
+  annotator: { assetId: string | null; saveDraft?: (dataUrl: string, meta: AnnotationMeta) => Promise<void>;
+    saveToCanvas?: (dataUrl: string, meta: AnnotationMeta, fileName: string) => Promise<void> } | null;
   openAnnotator: (assetId: string) => void;
   openDraftAnnotator: (saveDraft: (dataUrl: string, meta: AnnotationMeta) => Promise<void>) => void;
   closeAnnotator: () => void;
@@ -2492,7 +2494,8 @@ export const useStore = create<State>((set, get) => {
   },
   // —— 图片标注面板 ——
   annotator: null,
-  openAnnotator: (assetId) => set({ annotator: { assetId } }),
+  prepareCanvasAnnotation: null,
+  openAnnotator: (assetId) => set({ annotator: { assetId, saveToCanvas: get().prepareCanvasAnnotation?.() ?? undefined } }),
   openDraftAnnotator: (saveDraft) => set({ annotator: { assetId: null, saveDraft }, contextMenu: null }),
   closeAnnotator: () => set({ annotator: null }),
   layerEditor: null,

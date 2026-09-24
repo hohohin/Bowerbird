@@ -16,6 +16,8 @@ const w = window as any;
 const explorer = new URLSearchParams(location.search).has("explorer");
 const sourceLibrary = new URLSearchParams(location.search).has("source-library");
 const canvasLibrary = new URLSearchParams(location.search).has("canvas-library");
+const strictCanvas = new URLSearchParams(location.search).has("strict-canvas");
+let canvasExists = !strictCanvas;
 w.store = useStore;
 const callbacks = new Map();
 const listeners = new Map();
@@ -85,7 +87,36 @@ w.__TAURI_INTERNALS__ = {
   metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main" } },
   invoke: async (command: string, args: any) => {
     w.calls.push({ command, args });
+    if (command === "project_canvas_materialize") {
+      canvasExists = true;
+      Object.assign(project, { provisional: false });
+      return canvas;
+    }
+    if (strictCanvas && command === "project_canvas_get" && !canvasExists) {
+      w.earlyCanvasReads = (w.earlyCanvasReads ?? 0) + 1;
+      throw `not found: project canvas ${args.projectId}`;
+    }
+    if (strictCanvas && command === "canvas_workflow_save" && !canvasExists) throw "project not materialized";
     if (command === "canvas_workflow_get") return JSON.parse(sessionStorage.getItem(`workflow-${args.projectId}`) || '{"revision":0,"document":{"schema_version":1,"nodes":[],"run":null}}');
+    if (command === "workflow_templates_list") return JSON.parse(sessionStorage.getItem('workflow-template-library') || '[]');
+    if (command === "workflow_template_save") {
+      if (w.failTemplateSave) throw '模拟模板保存失败';
+      const library = JSON.parse(sessionStorage.getItem('workflow-template-library') || '[]');
+      const old = library.find((item: any) => item.id === args.document.id);
+      if ((old?.revision ?? 0) !== args.expectedRevision) throw 'template revision conflict';
+      const saved = { ...args.document, revision: args.expectedRevision + 1 };
+      sessionStorage.setItem('workflow-template-library', JSON.stringify([...library.filter((item: any) => item.id !== saved.id), saved])); return saved;
+    }
+    if (command === "workflow_template_delete") {
+      const library = JSON.parse(sessionStorage.getItem('workflow-template-library') || '[]');
+      if (!library.some((item: any) => item.id === args.id && item.revision === args.expectedRevision)) throw 'template revision conflict';
+      sessionStorage.setItem('workflow-template-library', JSON.stringify(library.filter((item: any) => item.id !== args.id))); return;
+    }
+    if (command === "plugin:dialog|save" && String(args.options?.defaultPath ?? '').endsWith('.bbworkflow.json')) return 'isolated-share.bbworkflow.json';
+    if (command === "workflow_template_export") {
+      const library = JSON.parse(sessionStorage.getItem('workflow-template-library') || '[]');
+      sessionStorage.setItem('workflow-template-export', JSON.stringify(library.find((item: any) => item.id === args.id))); return;
+    }
     if (command === "canvas_workflow_save") {
       if (w.failWorkflowSave) throw "模拟工作流保存失败";
       const revision = args.revision + 1;
@@ -193,8 +224,16 @@ w.__TAURI_INTERNALS__ = {
       assets.push(asset);
       return asset;
     }
-    if (command === "read_image_data_url") return args.path;
-    if (command === "project_canvas_ensure") return canvas;
+    if (command === "import_image_bytes" && args.source === "workflow-template") {
+      const asset = { ...assets[0], id: `template-${assets.length}`, name: args.fileName, store_path: args.dataUrl, source: args.source };
+      assets.push(asset); return asset;
+    }
+    if (command === "read_image_data_url") return w.templateImageData ?? args.path;
+    if (command === "project_canvas_ensure") {
+      if (strictCanvas) await new Promise(resolve => setTimeout(resolve, 150));
+      canvasExists = true;
+      return canvas;
+    }
     if (command === "list_generation_groups") return {};
     if (canvasLibrary && command === "list_projects") return [{ ...project, asset_count: assets.filter((asset: any) => !asset.library_hidden).length }];
     if (sourceLibrary && command === "list_assets") return assets.filter((asset: any) => !asset.library_hidden);

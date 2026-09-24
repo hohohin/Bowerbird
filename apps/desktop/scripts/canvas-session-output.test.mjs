@@ -96,6 +96,8 @@ try {
   });
   await page.locator('[data-canvas-node-id="output-a"]').waitFor();
   assert.equal(await page.locator('[data-canvas-node-id="output-b"]').count(),1);
+  await page.locator('[data-workflow-generated-link="output-a"]').waitFor({state:'attached'});
+  assert.equal(await page.locator('[data-workflow-generated-link="output-b"]').count(),1);
   assert.equal(await page.locator('.canvas-graph-edges .is-produced').count(),1);
   await page.evaluate(async()=>{
     const {canvasWorkflowController}=await import('/src/lib/canvasWorkflowRuntime.ts');const {api}=await import('/src/lib/api.ts');const c=canvasWorkflowController('p');
@@ -108,6 +110,10 @@ try {
     await api.projectCanvasNoteUpdate(table.id,JSON.stringify(note));window.emitChange();window.save();
   });
   await page.locator('[data-canvas-node-id="output-c"]').waitFor({state:'detached'});
+  assert.equal(await page.locator('[data-workflow-generated-link="output-c"]').count(),0);
+  assert.equal(await page.locator('[data-workflow-generated-link="output-a"]').count(),1);
+  assert.equal(await page.locator('[data-workflow-generated-link="output-b"]').count(),1);
+  assert.ok(await page.locator('path[data-workflow-text-link].is-image').count()>0);
   assert.equal(await page.locator('[data-canvas-node-id="output-a"]').count(),1);
   assert.equal(await page.locator('[data-canvas-node-id="output-b"]').count(),1);
   assert.equal(await page.locator('.canvas-graph-edges .is-produced').count(),0);
@@ -122,6 +128,7 @@ try {
     const {canvasWorkflowController}=await import('/src/lib/canvasWorkflowRuntime.ts');const c=canvasWorkflowController('p');await c.edit(c.document.nodes.filter(n=>!n.textTarget));
   });
   await page.locator('[data-canvas-node-id="output-c"]').waitFor();
+  await page.locator('[data-workflow-generated-link="output-c"]').waitFor({state:'attached'});
   assert.equal(await page.locator('.canvas-graph-edges .is-produced').count(),0);
   assert.deepEqual(errors,[]);
   console.log('session outputs: socket, container suppression, exact-turn downstream, clear/restore, rerun history images/edges, new-session isolation, disconnect and reload passed');

@@ -5,13 +5,14 @@ import { GripHorizontal, Play, Square, X, Copy, ImagePlus } from "lucide-react";
 import { api } from "../lib/api";
 import { canvasAssetMediaPath } from "../lib/creativeCanvas";
 import { readCanvasNote } from "../lib/canvasNotes";
-import { canvasInputValue, workflowSessionIds } from "../lib/canvasSessionOutputs";
+import { canvasInputValue, canvasSessionImages, workflowSessionIds } from "../lib/canvasSessionOutputs";
 import { useStore } from "../store";
 import { getDragAssets } from "../lib/dragPayload";
 import { notifyError, notifySuccess } from "../lib/notify";
 import { canvasWorkflowController } from "../lib/canvasWorkflowRuntime";
 import { workflowDiagnosticReport } from "../lib/workflowDiagnostics";
-import { workflowBindingKey } from "../lib/canvasWorkflow";
+import { removeWorkflowNodes, retryWorkflowSave } from "../lib/workflowRemoval";
+import { WORKFLOW_CARD_DRAG_TYPE, workflowBindingKey } from "../lib/canvasWorkflow";
 import { invalidateWorkflow, newWorkflowNode, workflowNodeRun, workflowRuns, workflowInputProducers, workflowConnectionError, workflowInputs, workflowOutputs,
   workflowPortY, workflowTitle, WORKFLOW_CARD_WIDTH, WORKFLOW_SKILLS, type WorkflowInput, type WorkflowKind, type WorkflowNode, type WorkflowPort } from "../lib/canvasWorkflow";
 import type { Asset, CanvasNode, VisualProfileSummary } from "../lib/types";
@@ -22,6 +23,9 @@ import { ModalShell } from "./ModalShell";
 import { WorkflowPromptEditor } from "./WorkflowPromptEditor";
 import { WorkflowDescribeOption } from "./WorkflowDescribeOption";
 import { WorkflowGenerationHistory } from "./WorkflowGenerationHistory";
+import { WorkflowPlannerCard } from "./WorkflowPlannerCard";
+import { WorkflowTemplateLibrary } from "./WorkflowTemplateLibrary";
+import { SaveWorkflowTemplateDialog } from "./SaveWorkflowTemplateDialog";
 import "./CanvasWorkflow.css";
 
 export function WindingKey({ size = 20 }: { size?: number }) {
@@ -31,6 +35,8 @@ export function WindingKey({ size = 20 }: { size?: number }) {
 }
 export interface WorkflowGeometry { id: string; x: number; y: number; width: number; height: number }
 export interface WorkflowLayerHandle {
+  templates: () => void;
+  saveTemplate: (ids: string[]) => void;
   inputText: (nodeId: string, cellId?: string, disconnect?: boolean, type?: "text" | "image") => void;
   connectCell: (nodeId: string, cellId: string, clientX: number, clientY: number) => void;
   add: (kind: WorkflowKind, x: number, y: number) => void; arm: (x?: number, y?: number) => void;
@@ -40,6 +46,7 @@ export interface WorkflowLayerHandle {
 }
 export interface MaterialAnchor { id: string; assetId?: string; groupId?: string; assetIds?: string[]; x: number; y: number; width: number; height: number }
 interface Props {
+  provisional?: boolean;
   graphNodes: CanvasNode[];
   selectedIds: Set<string>;
   panReady: boolean;
@@ -56,7 +63,7 @@ interface Props {
   onPlaced: (rect: { x: number; y: number; width: number; height: number }) => void;
 }
 type Connection = WorkflowInput & { type: WorkflowPort["type"] };
-export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(function CanvasWorkflowLayer({ projectId, zoom, materials, graphNodes, ensureMaterialized, toBoardPoint, onPlaced, selectedIds, panReady, onSelect, onNodesChanged, onOpenGeneration, onDragStart, onDragMove, onDragEnd, onNodeMenu }, ref) {
+export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(function CanvasWorkflowLayer({ projectId, provisional = false, zoom, materials, graphNodes, ensureMaterialized, toBoardPoint, onPlaced, selectedIds, panReady, onSelect, onNodesChanged, onOpenGeneration, onDragStart, onDragMove, onDragEnd, onNodeMenu }, ref) {
   const controller = useMemo(() => canvasWorkflowController(projectId), [projectId]);
   const [, redraw] = useState(0);
   // Cell sockets are measured from the committed table layout, including row/column resizing.
@@ -69,7 +76,9 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
   const connectionRef = useRef(connection); connectionRef.current = connection;
   const [assets, setAssets] = useState<Asset[]>([]);
   const [agentOpen, setAgentOpen] = useState(false);
-  const [keyHover, setKeyHover] = useState<{ id: string; x: number; y: number } | null>(null);
+  const [templateLibrary, setTemplateLibrary] = useState<{ instanceRoot?: string } | null>(null);
+  const [templateSelection, setTemplateSelection] = useState<{ projectId: string; ids: string[]; nodes: WorkflowNode[]; canvas: CanvasNode[] } | null>(null);
+  const [keyHover, setKeyHover] = useState<{ id: string; x: number; y: number; anchor: HTMLElement; rect: DOMRect; focus: boolean } | null>(null);
   const [profiles, setProfiles] = useState<VisualProfileSummary[]>([]);
   const [hoveredMaterial, setHoveredMaterial] = useState<string | null>(null);
   const state = useStore();
@@ -113,9 +122,37 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
   };
 
   const handle = (promise: Promise<unknown>) => { void promise.catch(error => notifyError(error, "工作流操作未完成")); };
-  useEffect(() => { const unsubscribe = controller.subscribe(() => { redraw(value => value + 1); nodesChanged.current(); }); void controller.load(); return unsubscribe; }, [controller]);
-  useEffect(() => { handle(controller.load().then(() => controller.syncCanvasReferences(graphNodes))); }, [controller, graphNodes]);
-  useEffect(() => { setConnection(null); setArmed(false); setAgentOpen(false); }, [projectId]);
+  useEffect(() => controller.subscribe(() => { redraw(value => value + 1); nodesChanged.current(); }), [controller]);
+  useEffect(() => { handle(controller.load(provisional).then(() => controller.syncCanvasReferences(graphNodes))); }, [controller, provisional, graphNodes]);
+  useEffect(() => { setConnection(null); setArmed(false); setAgentOpen(false); setKeyHover(null); setTemplateLibrary(null); setTemplateSelection(null); }, [projectId]);
+  useEffect(() => {
+    if (!keyHover) return;
+    const close = () => setKeyHover(null);
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") close(); };
+    // A captured pointer, removed key, or canvas transform need not emit mouseleave.
+    // Keep the portal tied to the actual anchor for its entire visible lifetime.
+    const { anchor, rect, focus } = keyHover;
+    let frame = 0;
+    const checkAnchor = () => {
+      const current = anchor.getBoundingClientRect();
+      if (!anchor.isConnected || !anchor.matches(focus ? ":focus-visible" : ":hover")
+        || current.x !== rect.x || current.y !== rect.y || current.width !== rect.width || current.height !== rect.height) {
+        close(); return;
+      }
+      frame = requestAnimationFrame(checkAnchor);
+    };
+    frame = requestAnimationFrame(checkAnchor);
+    const dismissEvents = ["pointerdown", "pointercancel", "dragstart", "wheel", "scroll", "resize", "blur"] as const;
+    dismissEvents.forEach(type => window.addEventListener(type, close, true));
+    window.addEventListener("keydown", escape, true);
+    window.document.addEventListener("pointerleave", close);
+    return () => {
+      cancelAnimationFrame(frame);
+      dismissEvents.forEach(type => window.removeEventListener(type, close, true));
+      window.removeEventListener("keydown", escape, true);
+      window.document.removeEventListener("pointerleave", close);
+    };
+  }, [keyHover]);
   useEffect(() => {
     let alive = true;
     void api.visualProfileList(null).then(list => { if (alive) setProfiles(list.filter(p => p.status === "confirmed")); }).catch(() => {});
@@ -229,7 +266,7 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
         if (workflowId || native) {
           const node = controller.document.nodes.find(node => workflowId ? node.id === workflowId : node.textSource === native!.id)
             ?? (native ? { ...newWorkflowNode("text", native.x, native.y, ""), textSource: native.id } : null);
-          if (node && !controller.isLocked(node.id)) {
+          if (node && node.kind !== "planner" && !controller.isLocked(node.id)) {
             setArmed(false);
             handle(controller.edit([...controller.document.nodes.filter(item => item.id !== node.id), { ...node, trigger: true, inputs: { ...node.inputs, signal: [] } }]));
           }
@@ -256,6 +293,8 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
     return () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", end); window.removeEventListener("keydown", key); };
   }, [armed, controller, document, graphNodes]);
   useImperativeHandle(ref, () => ({
+    templates() { setTemplateLibrary({}); },
+    saveTemplate(ids) { setTemplateSelection({ projectId, ids: [...ids], nodes: structuredClone(controller.document.nodes), canvas: structuredClone(graphNodes) }); },
     inputText,
     connectCell(nodeId, cellId, clientX, clientY) {
       const card = graphNodes.find(node => node.id === nodeId);
@@ -329,14 +368,18 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
       <i /><span>{port.label}</span>
     </button>;
   }
+  function showProgress(id: string, anchor: HTMLElement, beside = false, focus = false) {
+    const rect = anchor.getBoundingClientRect();
+    setKeyHover({ id, x: beside ? rect.right : rect.left, y: beside ? rect.top : rect.bottom, anchor, rect, focus });
+  }
   function keyButton(node: WorkflowNode) {
     const busy = controller.isLocked(node.id);
     return <button className={`workflow-key ${workflowRuns(document).some(item => item.startId === node.id && item.status === "running") ? "is-running" : ""}`} draggable={!busy}
           onPointerDown={event => event.stopPropagation()}
           aria-label="上发条，运行工作流" aria-describedby={keyHover?.id === node.id ? "workflow-progress" : undefined}
-          onMouseEnter={event => { const rect = event.currentTarget.getBoundingClientRect(); setKeyHover({ id: node.id, x: rect.left, y: rect.bottom }); }}
+          onMouseEnter={event => { if (!event.buttons) showProgress(node.id, event.currentTarget); }}
           onMouseLeave={() => setKeyHover(null)}
-          onFocus={event => { const rect = event.currentTarget.getBoundingClientRect(); setKeyHover({ id: node.id, x: rect.left, y: rect.bottom }); }} onBlur={() => setKeyHover(null)}
+          onFocus={event => { if (event.currentTarget.matches(":focus-visible")) showProgress(node.id, event.currentTarget, false, true); }} onBlur={() => setKeyHover(null)}
           onDragStart={event => { event.stopPropagation(); event.dataTransfer.setData("text/plain", `bowerbird-winding-key:${node.id}`); }}
           onClick={() => { if (!busy) handle(controller.start(node.id)); }}
           onContextMenu={event => { event.preventDefault(); event.stopPropagation(); if (!busy) patch(node.id, { trigger: false }, false); }}><WindingKey size={32} /></button>;
@@ -355,6 +398,15 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
   const statusLabels = { pending: "等待上游", running: "执行中", waiting: "等待继续", done: "已完成", failed: "失败" };
   return <>
     <svg className="workflow-wires">
+      {document.nodes.filter(node => node.kind === "generation").flatMap(node =>
+        graphNodes.filter(session => workflowSessionIds([node]).has(session.id)).flatMap(session =>
+          canvasSessionImages(session, graphNodes).flatMap(output => {
+            const visible = materials.find(material => material.id === output.id);
+            if (!visible) return [];
+            return <path key={`generated-${node.id}-${output.id}`} className="is-image" data-workflow-generated-link={output.id}
+              data-workflow-generator={node.id} d={path({ x: node.x + WORKFLOW_CARD_WIDTH, y: workflowPortY(node, "output", "image") },
+                { x: visible.x, y: visible.y + visible.height / 2 })} />;
+          }))) }
       {document.nodes.map(node => {
         const group = materials.find(item => item.groupId === node.resultGroupId && !!node.resultGroupId);
         return group && <path key={`group-${node.id}`} className="is-image" data-workflow-product-link={group.id} d={path({ x: node.x + WORKFLOW_CARD_WIDTH, y: workflowPortY(node, "output", "image") }, { x: group.x, y: group.y + group.height / 2 })} />;
@@ -416,21 +468,22 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
       const inputIds = Object.values(node.inputs).flat().flatMap(inputImages);
       const selectedImages = [...new Set(images.length ? images : inputIds)].map(id => assets.find(asset => asset.id === id)).filter((asset): asset is Asset => !!asset);
       return <article key={node.id} data-canvas-node data-workflow-card={node.id} ref={element => { if (element) cardElements.current.set(node.id, element); else cardElements.current.delete(node.id); }} aria-busy={run?.status === "running" && step?.status === "running"} className={`workflow-card ${run?.status === "running" && step?.status === "running" ? "canvas-card-running" : step?.status === "failed" || nodeDiagnostic(node.id) ? "canvas-card-error" : ""} is-${node.kind} ${selectedIds.has(node.id) ? "is-selected" : ""} ${armed ? "is-key-target" : ""}`}
-        onMouseEnter={event => { if (node.kind === "trigger") { const rect = event.currentTarget.getBoundingClientRect(); setKeyHover({ id: node.id, x: rect.right, y: rect.top }); } }}
+        onMouseEnter={event => { if (node.kind === "trigger" && !event.buttons) showProgress(node.id, event.currentTarget, true); }}
         onMouseLeave={() => { if (node.kind === "trigger") setKeyHover(null); }}
         style={{ left: node.x, top: node.y, width: WORKFLOW_CARD_WIDTH, minHeight: height, zIndex: selectedIds.has(node.id) ? 11000 : 9000 }}
         onPointerDownCapture={event => {
-          if (armed && !busy) { event.stopPropagation(); event.preventDefault(); patch(node.id, { trigger: true, inputs: { ...node.inputs, signal: [] } }, false); setArmed(false); }
+          if (armed && !busy && node.kind !== "planner") { event.stopPropagation(); event.preventDefault(); patch(node.id, { trigger: true, inputs: { ...node.inputs, signal: [] } }, false); setArmed(false); }
         }}
         onPointerDown={event => { if (event.button === 1 || (event.button === 0 && panReady)) return; event.stopPropagation(); if (!selectedIds.has(node.id) || event.ctrlKey || event.metaKey) onSelect(node.id, event.ctrlKey || event.metaKey); }} onDoubleClick={event => event.stopPropagation()}
         onKeyDown={event => { if (event.key !== "Escape") event.stopPropagation(); }}
         onContextMenu={event => onNodeMenu(event, node.id)} onWheel={event => { if ((event.target as HTMLElement).closest("textarea,.workflow-prompt-editor,.workflow-preview,.workflow-text-result")) event.stopPropagation(); }}
         onDragOver={event => { if (getDragAssets() || event.dataTransfer.types.includes("text/plain")) { event.preventDefault(); event.stopPropagation(); } }}
         onDrop={event => {
+          if (event.dataTransfer.types.includes(WORKFLOW_CARD_DRAG_TYPE)) return;
           event.preventDefault(); event.stopPropagation(); if (busy) return;
           const keyText = event.dataTransfer.getData("text/plain");
           const previousKey = keyText.startsWith("bowerbird-winding-key:") ? keyText.slice(22) : "";
-          if (previousKey && document.nodes.some(node => node.id === previousKey && node.trigger)) {
+          if (node.kind !== "planner" && previousKey && document.nodes.some(node => node.id === previousKey && node.trigger)) {
             handle(controller.edit(document.nodes.map(candidate => ({ ...candidate, trigger: candidate.id === node.id || (candidate.id !== previousKey && candidate.trigger),
               ...(candidate.id === node.id ? { inputs: { ...candidate.inputs, signal: [] } } : {}) })))); return;
           }
@@ -446,12 +499,11 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
         }} onPointerMove={onDragMove} onPointerUp={event => onDragEnd(event)} onPointerCancel={event => onDragEnd(event, true)}>
           <GripHorizontal size={15} /><strong>{workflowTitle(node)}</strong>
           <button aria-label="复制卡片" disabled={busy} onClick={() => {
-            const copy = { ...structuredClone(node), id: crypto.randomUUID(), x: node.x + 350, outputs: {}, activeSessionNodeId: null, sessionNodeIds: [], resultNodeIds: [], resultGroupId: undefined, trigger: false };
+            const copy = { ...structuredClone(node), id: crypto.randomUUID(), x: node.x + 350, outputs: {}, activeSessionNodeId: null, sessionNodeIds: [], resultNodeIds: [], resultGroupId: undefined, planning: undefined, templateInstance: undefined, trigger: false };
             handle(controller.edit([...document.nodes, copy])); onSelect(copy.id);
           }}><Copy size={13} /></button>
           <button aria-label="删除卡片" disabled={busy} onClick={() => {
-            const remaining = invalidateWorkflow(document.nodes, node.id).filter(candidate => candidate.id !== node.id).map(candidate => ({ ...candidate,
-              inputs: Object.fromEntries(Object.entries(candidate.inputs).map(([port, bindings]) => [port, bindings.filter(binding => binding.nodeId !== node.id)])) }));
+            const remaining = removeWorkflowNodes(controller.document.nodes, [node.id]);
             handle(controller.edit(remaining));
           }}><X size={15} /></button>
         </header>
@@ -461,6 +513,18 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
               cloudAvailable={!!state.cloudAuth?.cloud_available} cloudAuth={state.cloudAuth} cloudEntitlement={state.cloudEntitlement} /></fieldset>
         </div>}
         <div className="workflow-card-body">
+          {node.templateInstance && <section className="workflow-template-instance" aria-label="子流程接口">
+            <p>模板 v{node.templateInstance.template.revision} · {node.templateInstance.nodeIds.length - 1} 个步骤</p>
+            <button disabled={busy} onClick={() => setTemplateLibrary({ instanceRoot: node.id })}>配置子流程参数</button>
+            <details><summary>步骤与公开输出</summary>
+              {node.templateInstance.nodeIds.slice(1).map((id, index) => <button key={id} onClick={() => locateIssue(id)}>步骤 {index + 1}</button>)}
+              {node.templateInstance.template.outputs.map(output => <button key={output.id} onClick={() => {
+                const index = node.templateInstance!.template.plan.nodes.findIndex(spec => spec.id === output.node); locateIssue(node.templateInstance!.nodeIds[index]);
+              }}>输出 · {output.label}</button>)}
+            </details>
+            <button disabled={busy || node.templateInstance.nodeIds.some(id => controller.isLocked(id))} onClick={() => handle(controller.edit(removeWorkflowNodes(controller.document.nodes, node.templateInstance!.nodeIds)))}>移除整个子流程</button>
+          </section>}
+          {node.kind === "planner" && <WorkflowPlannerCard node={{ ...node, inputs: { ...node.inputs, image: node.inputs.image?.map(input => input.groupId ? { ...input, assetIds: materials.find(item => item.groupId === input.groupId)?.assetIds ?? [] } : input) ?? [] } }} nodes={document.nodes} graphNodes={graphNodes} runtime={controller.planner} onChange={(prompt, promptReferences) => patch(node.id, { prompt, promptReferences })} onLocate={() => { const first = node.planning?.appliedNodes?.[0]; if (first) locateIssue(first.id); }} />}
           {node.kind === "instruction" && <select aria-label="指令功能" disabled={busy} value={node.action} onChange={event => {
             const action = event.target.value as WorkflowNode["action"];
             const nodes = invalidateWorkflow(document.nodes, node.id).map(candidate => candidate.id === node.id ? { ...candidate, action, outputPorts: [] } : { ...candidate,
@@ -482,14 +546,14 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
           {node.kind === "instruction" && node.action === "describe" && <WorkflowDescribeOption assetIds={inputIds} checked={!!node.overwriteDescribe} disabled={busy} onChange={overwriteDescribe => patch(node.id, { overwriteDescribe })} />}
           {node.kind === "visual-profile" && !node.profileId && <input className="workflow-profile-name" aria-label="规范名称" disabled={busy} maxLength={80} placeholder="画板视觉规范" value={node.profileName ?? ""} onChange={event => patch(node.id, { profileName: event.target.value }, false)} />}
           {(node.kind === "generation" || node.kind === "agent") && <WorkflowPromptEditor node={{ ...node, inputs: { ...node.inputs, image: node.inputs.image?.map(input => input.groupId ? { ...input, assetIds: materials.find(item => item.groupId === input.groupId)?.assetIds ?? [] } : input) ?? [] } }} nodes={document.nodes} graphNodes={graphNodes} disabled={busy} onChange={(prompt, promptReferences) => patch(node.id, { prompt, promptReferences })} />}
-          {node.kind !== "trigger" && node.kind !== "generation" && node.kind !== "agent" && !(node.kind === "instruction" && node.action !== "describe") && !(node.kind === "visual-profile" && node.profileId) && <textarea aria-label={node.kind === "instruction" ? "反推要求" : node.kind === "visual-profile" ? "视觉要求" : "卡片指令"}
+          {node.kind !== "planner" && node.kind !== "trigger" && node.kind !== "generation" && node.kind !== "agent" && !(node.kind === "instruction" && node.action !== "describe") && !(node.kind === "visual-profile" && node.profileId) && <textarea aria-label={node.kind === "instruction" ? "反推要求" : node.kind === "visual-profile" ? "视觉要求" : "卡片指令"}
             disabled={busy} maxLength={node.kind === "visual-profile" ? 4000 : undefined} placeholder={node.kind === "instruction" ? "留空使用当前反推要求" : node.kind === "visual-profile" ? "描述配色、构图、光线等要求；可只接图片或只填文字…" : "输入创作要求，也可从文本端口接入…"}
             value={node.prompt} onChange={event => patch(node.id, { prompt: event.target.value })} />}
           {selectedImages.length > 0 ? <div className="workflow-preview">{selectedImages.map(asset => {
             const path = canvasAssetMediaPath({ thumbPath: asset.thumb_path ?? null, storePath: asset.store_path ?? null }) ?? "";
             return <img key={asset.id} title={asset.name} alt={asset.name} src={path.startsWith("data:") ? path : convertFileSrc(path)} />;
           })}</div>
-            : <p className="workflow-hint">{node.kind === "agent" ? `${import.meta.env.DEV && node.agentTransport !== "cloud" ? "本机 Agent DS" : "Cloud DSH"} · 按 @ 引用原文，再描述修改要求` : node.kind === "trigger" ? <><WindingKey size={28} />将触发连线拖到下游卡片上</> : <><ImagePlus size={14} />{node.kind === "visual-profile" ? "图片可选 · 规范只影响连接的下游" : "拖入图片，或连接左侧端口"}</>}</p>}
+            : node.kind !== "planner" && <p className="workflow-hint">{node.kind === "agent" ? `${import.meta.env.DEV && node.agentTransport !== "cloud" ? "本机 Agent DS" : "Cloud DSH"} · 按 @ 引用原文，再描述修改要求` : node.kind === "trigger" ? <><WindingKey size={28} />将触发连线拖到下游卡片上</> : <><ImagePlus size={14} />{node.kind === "visual-profile" ? "图片可选 · 规范只影响连接的下游" : "拖入图片，或连接左侧端口"}</>}</p>}
           {node.kind === "visual-profile" && <>
             {!node.profileId && <p className="workflow-hint">提炼 2 积分 · 图片分析另用账号额度 · 保存后继续</p>}
             {node.outputs["visual-profile"] && <p className="workflow-profile-summary">v{node.outputs["visual-profile"].version} · {node.outputs["visual-profile"].summary}</p>}
@@ -507,14 +571,14 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
           {step?.error && <p className={step.status === "failed" ? "workflow-error" : "workflow-waiting"} role={step.status === "failed" ? "alert" : "status"}>{step.error}
             {step.diagnostic && <button onClick={() => controller.showIssue(step.diagnostic!)}>查看问题</button>}
           </p>}
-          <footer>
+          {node.kind !== "planner" && <footer>
             <span>{node.kind === "trigger" && busy ? run?.status === "waiting" ? "等待继续" : "运行中" : step?.status === "pending" && run?.status === "failed" ? "因上游失败未执行" : step?.status === "pending" && run?.status === "stopped" ? "已停止，未执行" : step ? statusLabels[step.status] : node.trigger ? "工作流起点" : "未运行"}</span>
             {busy && run?.order.includes(node.id) ? <>
               {run?.status === "waiting" && step?.status !== "done" && run.order.find(id => run!.steps[id].status !== "done") === node.id
                 && <button aria-label="继续工作流" onClick={() => handle(controller.continue(run?.id))}><Play size={13} />继续</button>}
               <button aria-label="停止工作流" onClick={() => handle(controller.stop(run?.id))}><Square size={12} /></button>
             </> : <button disabled={busy} aria-label={node.kind === "trigger" ? "触发下游" : "运行此卡片"} onClick={() => handle(controller.start(node.id, node.kind !== "trigger"))}><Play size={13} />{node.kind === "trigger" ? "触发下游" : "运行此卡片"}</button>}
-          </footer>
+          </footer>}
           {step?.agentRunId && node.kind !== "agent" && <button className="workflow-detail" onClick={() => handle((async () => {
             const run = await api.cloudAgentGet(step.agentRunId!); useStore.getState().openCloudAgentRun(run, { navigate: false }); setAgentOpen(true);
           })())}>查看技能执行 / 审批</button>}
@@ -555,7 +619,11 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
       </div>
       <details><summary>诊断详情</summary><pre>{workflowDiagnosticReport(issue)}</pre></details>
     </section>, window.document.body)}
-    {controller.error && createPortal(<div className="workflow-save-error" role="alert" onPointerDown={event => event.stopPropagation()}>{controller.error}<button onClick={() => handle(controller.retrySave())}>重试保存</button></div>, window.document.body)}
+    {controller.error && createPortal(<div className="workflow-save-error" role="alert" onPointerDown={event => event.stopPropagation()}>{controller.error}<button onClick={() => handle(retryWorkflowSave(controller))}>重试保存</button></div>, window.document.body)}
     {agentOpen && <ModalShell title="技能执行" width="lg" onClose={() => setAgentOpen(false)}><CloudAgentSession embedded /></ModalShell>}
+    {templateLibrary && <WorkflowTemplateLibrary controller={controller} selectedIds={selectedIds} graphNodes={graphNodes} provider={state.activeGenProvider || state.defaultProvider}
+      instanceRoot={templateLibrary.instanceRoot} ensureMaterialized={ensureMaterialized} onClose={() => setTemplateLibrary(null)} onLocate={locateIssue} />}
+    {templateSelection?.projectId === projectId && <SaveWorkflowTemplateDialog nodes={templateSelection.nodes} selectedIds={templateSelection.ids} graphNodes={templateSelection.canvas}
+      onClose={() => setTemplateSelection(null)} onSaved={() => notifySuccess("已存为模板，可在工作流模板库使用")} />}
   </>;
 });

@@ -70,7 +70,7 @@ export function cloneCanvasClipboard(value: CanvasClipboard, projectId: string, 
   });
   const groups: NewCanvasGroup[] = value.groups.map(({ createdAt: _c, updatedAt: _u, ...group }) => ({ ...group, id: ids.get(group.id)!, projectId, x: group.x + dx, y: group.y + dy }));
   const workflow = value.workflow.map(node => ({ ...structuredClone(node), id: ids.get(node.id)!, x: node.x + dx, y: node.y + dy,
-    outputs: {}, outputPorts: [], activeSessionNodeId: null, sessionNodeIds: [], resultGroupId: undefined, profileCache: undefined,
+    outputs: {}, outputPorts: [], activeSessionNodeId: null, sessionNodeIds: [], resultGroupId: undefined, profileCache: undefined, planning: undefined, templateInstance: undefined,
     resultNodeIds: node.resultNodeIds?.flatMap(id => ids.has(id) ? [ids.get(id)!] : []) ?? [],
     textSource: node.textSource ? ids.get(node.textSource) : undefined,
     textTarget: node.textTarget ? { ...node.textTarget, nodeId: ids.get(node.textTarget.nodeId)! } : undefined,

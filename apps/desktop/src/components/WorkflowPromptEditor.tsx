@@ -86,7 +86,7 @@ export function WorkflowPromptEditor({ node, nodes, graphNodes, disabled, onChan
   useEffect(() => {
     const editor = new EditorView(host.current!, {
       state: EditorState.create({ schema, doc: toDoc(), plugins: [history(), keymap({ "Mod-z": undo, "Mod-y": redo, "Mod-Shift-z": redo }), keymap(baseKeymap)] }),
-      attributes: { role: "textbox", "aria-label": node.kind === "agent" ? "文本修改要求" : "卡片指令", "aria-multiline": "true", "data-placeholder": node.kind === "agent" ? "按 @ 引入文本，再描述替换、改写或简写要求…" : "输入创作要求，按 @ 引入收到的图片或文字…" },
+      attributes: { role: "textbox", "aria-label": node.kind === "planner" ? "工作流需求" : node.kind === "agent" ? "文本修改要求" : "卡片指令", "aria-multiline": "true", "data-placeholder": node.kind === "planner" ? "按 @ 引用输入，例如：保留 @原图 的版式，将产品替换为 @产品参考…" : node.kind === "agent" ? "按 @ 引入文本，再描述替换、改写或简写要求…" : "输入创作要求，按 @ 引入收到的图片或文字…" },
       editable: () => !latest.current.disabled,
       dispatchTransaction(tr) {
         editor.updateState(editor.state.apply(tr));

@@ -1,5 +1,7 @@
 # Bowerbird 通用云端 Agent Harness 专项计划
 
+> 2026-09-23 工作流编排采用 `planning-v2` 两阶段协议：本机 DSH 提交声明式草稿，桌面编译卡片/连线并写回有 requestId、revision 与 SHA-256 的校验反馈，DSH 最多修订三版，再提交同一已校验内容。复用原 pending/results 队列，新增 feedback 文件，不增加模型 Runner；文本改写 v1 不变。详见 [工作流协议与编译器](CANVAS-WORKFLOW.md)。当前仅源码与隔离验证，未宣称真实 DSH v2 往返或生成质量已验收。
+
 > 当前状态（2026-09-17）：U0–U5 实现与既有验收完成，U6 保持 test-only。新任务统一为 `bowerbird-unified-agent + dsh`；按需 Skill、目标授权、动态工具执行、多 final 与恢复链路已部署，真实 HTML 纵切与旧基线盲评已通过。
 > 9 月 14 日已部署漏参纠正与独立 DSH 模型 `deepseek-flash`；后续分层 Worker 保留这些变更。当前镜像/回滚入口见 [收费化进度](ARCH-ADJUST-PROGRESS.md)，不再使用本文早期候选摘要指代现役镜像。
 > 剩余：自然小名单/人工质量样本、基础层漏洞修复或明确责任人风险接受。上次扫描 4 CRITICAL / 18 HIGH 尚无后续收口证据；不扩大开放、不改公开档位或计费。小红书只验证工具复用，没有登录/发布产品。
@@ -8,6 +10,8 @@
 ---
 
 ## 2026-09-22 本机 Agent DS 改为投递 DSH 队列 + 自动送达活会话（dev-only）
+
+**9 月 23 日工作流扩展（开发版源码）：** 工作流文本 Agent 与新增「工作流助手」共用此投递通道，显式请求结果文件；助手使用 `purpose: planning` 返回受限卡片编排 JSON，由桌面校验后一次保存，不执行生成任务。不是新的 Agent Runner，也不改变下述普通创作板 Agent DS 的交互。具体协议与验收边界见 [工作流卡片](CANVAS-WORKFLOW.md)。
 
 > 本节覆盖下方 2026-09-21「拉起本地 DSH」的入口链路；ACP 拉起路径保留未接线（见末条）。
 

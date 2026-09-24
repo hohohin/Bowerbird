@@ -11,7 +11,8 @@ export class WorkflowInputError extends WorkflowNodeError {
 }
 
 /** Editable workflow wiring is independent from immutable generation history edges. */
-export type WorkflowKind = "instruction" | "generation" | "skill" | "agent" | "visual-profile" | "text" | "trigger";
+export type WorkflowKind = "instruction" | "generation" | "skill" | "agent" | "visual-profile" | "text" | "trigger" | "planner";
+export const WORKFLOW_CARD_DRAG_TYPE = "application/x-bowerbird-workflow-card";
 export type WorkflowAction = "describe" | "reuse" | "layers";
 export type WorkflowPortType = "text" | "image" | "visual-profile" | "session" | "signal";
 export interface WorkflowValue { type: WorkflowPortType; text?: string; assetIds?: string[]; imageRefs?: { asset_id: string; token: string }[]; profileId?: string; version?: number; summary?: string; nodeIds?: string[] }
@@ -24,6 +25,8 @@ export interface WorkflowNode {
   promptReferences?: WorkflowPromptReference[];
   overwriteDescribe?: boolean;
   agentTransport?: "local-ds" | "cloud";
+  planning?: import("./workflowPlanner").WorkflowPlanningState;
+  templateInstance?: import("./workflowTemplates").TemplateInstance;
   inputs: Record<string, WorkflowInput[]>;
   outputs: Record<string, WorkflowValue>;
   outputPorts: WorkflowPort[];
@@ -76,6 +79,7 @@ export function workflowInputs(node: WorkflowNode): WorkflowPort[] {
   return ports;
 }
 export function workflowOutputs(node: WorkflowNode): WorkflowPort[] {
+  if (node.kind === "planner") return [];
   if (node.kind === "agent") return [{ id: "text", label: "改写文本", type: "text" }];
   if (node.kind === "trigger") return [{ id: "signal", label: "触发", type: "signal" }];
   if (node.kind === "text") return node.textTarget?.image ? [{ id: "image", label: "图片", type: "image" }] : [{ id: "text", label: "文本", type: "text" }];
@@ -87,6 +91,8 @@ export function workflowOutputs(node: WorkflowNode): WorkflowPort[] {
   return [{ id: "image", label: "产物", type: "image" }];
 }
 export function workflowTitle(node: WorkflowNode): string {
+  if (node.templateInstance) return `子流程 · ${node.templateInstance.template.name}`;
+  if (node.kind === "planner") return "工作流助手";
   if (node.kind === "agent") return "Agent 卡片";
   if (node.textSource) return "文本卡片";
   if (node.kind === "text") return "写入文本单元格";
@@ -103,7 +109,7 @@ export function workflowConnectionError(nodes: WorkflowNode[], fromId: string, p
   if (!from || !to) return "连接的卡片已不存在";
   if (fromId === toId) return "不能连接卡片自身";
   const output = workflowOutputs(from).find(port => port.id === portId);
-  const input = inputId === "signal" && to.kind !== "trigger" ? { type: "signal" } : workflowInputs(to).find(port => port.id === inputId);
+  const input = inputId === "signal" && to.kind !== "trigger" && to.kind !== "planner" ? { type: "signal" } : workflowInputs(to).find(port => port.id === inputId);
   if (!output || !input || input.type !== output.type) return "只能连接相同类型的端口";
   const visited = new Set<string>();
   const visit = (id: string): boolean => {
@@ -189,6 +195,7 @@ export function workflowOrder(nodes: WorkflowNode[], startId: string): string[] 
 
 /** A text-card start reads current cells without rerunning their producers. */
 export function workflowExecutionNodes(nodes: WorkflowNode[], startId: string): WorkflowNode[] {
+  nodes = nodes.filter(node => node.kind !== "planner");
   nodes = nodes.map(generationInputNode);
   const start = nodes.find(node => node.id === startId);
   const sources = nodes.filter(node => node.textSource && (node.id === startId || (start?.kind === "trigger" && node.inputs.signal?.some(input => input.nodeId === startId))));
