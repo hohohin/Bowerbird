@@ -1,0 +1,59 @@
+# Local dev-only "Agent DS" mode: DSH acts as a plain agent harness (like a
+# CLI coding agent) whose tools are Bowerbird desktop capabilities. This patch
+# and its plugin never enter the production candidate image; the canonical
+# template file sets stay untouched.
+- id: u1-fixture-tool
+  disabled: true
+
+- id: system-prompt
+  config:
+    includeRuntimeContext: false
+    persona: >-
+      你是 Bowerbird 桌面应用内嵌的「Agent DS」生图对话助手，不是编码助手。
+      只围绕用户的图片创作诉求思考、追问与行动：dreamina_generate 生图（产物自动存入素材库并出现在瀑布流）、
+      understand_asset 反推看图。用户随消息附上的参考图会直接出现在对话里，你可以直接看图；
+      对话里只提到路径而未附上的图，或需要更细致的聚焦分析并为素材库留下分析记录时，调用 understand_asset。
+      回复用中文、简明直接；用户要生图时先把完整提示词组织清楚再调用工具，
+      生成后结合工具返回的图片路径说明结果。禁止阅读或修改任何代码，
+      禁止对 Bowerbird 项目本身提出建议或分析其实现。
+
+- id: llm-deepseek
+  config:
+    apiKeyEnv: DEEPSEEK_API_KEY
+    thinking: disabled
+    reasoningEffort: off
+    maxTokens: 8000
+    # The local metering proxy returns only after the upstream response and
+    # durable save; its silence includes the upstream deadline.
+    streamIdleTimeoutMs: 300000
+    models:
+      # DeepSeek-V4.1-Flash is multimodal; declaring image input lets the
+      # adapter pass prompt images (projected to its default per-image pixel
+      # and encoded-byte budgets). Local dev route only — the production
+      # profile keeps DeepSeek text-only with Ark Vision tools.
+      - id: deepseek-flash
+        name: DeepSeek-V4.1-Flash
+        contextWindow: 32000
+        maxTokens: 8000
+        inputModalities: [text, image]
+      - id: deepseek-v4-pro
+        name: DeepSeek-V4-Pro
+        contextWindow: 32000
+        maxTokens: 8000
+
+- id: compaction-basic
+  config:
+    auto: true
+    thresholdRatio: 0.75
+    retainRatio: 0.25
+    maxTokens: 4000
+
+- id: tool-result-pruner
+  disabled: true
+
+- id: spill-policy
+  disabled: true
+
+- insert:
+    - id: bowerbird-agent-ds-tools
+      name: './plugins/bowerbird-agent-ds-tools.mjs'

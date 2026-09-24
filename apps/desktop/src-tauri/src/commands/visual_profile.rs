@@ -177,6 +177,35 @@ pub async fn visual_profile_cloud_extract(
 }
 
 #[tauri::command]
+pub async fn visual_profile_input_preview(
+    db: State<'_, std::sync::Arc<Database>>, cloud: State<'_, CloudClient>,
+    auth: State<'_, AuthClient>, entitlement: State<'_, EntitlementService>, asset_ids: Vec<String>, requirements: Option<String>,
+) -> Result<Vec<String>, AppError> {
+    if !entitlement.current_or_sync(&auth).await.policy.can_use_visual_profiles { return Err(AppError::Cloud("当前权益不支持视觉规范提炼".into())); }
+    if requirements.as_deref().is_some_and(|text| !text.trim().is_empty()) {
+        crate::cloud::visual_profile::VisualProfileCloudClient::new(cloud.inner().clone(), auth.inner().clone()).check_workflow_support().await?;
+    }
+    Ok(db.visual_profile_input_cards(&asset_ids, false)?.1)
+}
+
+#[tauri::command]
+pub async fn visual_profile_extract_inputs(
+    db: State<'_, std::sync::Arc<Database>>, cloud: State<'_, CloudClient>,
+    auth: State<'_, AuthClient>, entitlement: State<'_, EntitlementService>,
+    scope_key: String, name: String, asset_ids: Vec<String>, requirements: String,
+) -> Result<VisualProfileDetail, AppError> {
+    if scope_key.is_empty() || scope_key.len() > 200 || name.trim().is_empty() || name.chars().count() > 80
+        || requirements.chars().count() > 4000 || (asset_ids.is_empty() && requirements.trim().is_empty()) {
+        return Err(AppError::Other("请提供图片或 4000 字以内的视觉要求".into()));
+    }
+    if !entitlement.current_or_sync(&auth).await.policy.can_use_visual_profiles { return Err(AppError::Cloud("当前权益不支持视觉规范提炼".into())); }
+    let (cards, _) = db.visual_profile_input_cards(&asset_ids, true)?;
+    let client = crate::cloud::visual_profile::VisualProfileCloudClient::new(cloud.inner().clone(), auth.inner().clone());
+    let raw = client.extract_request(&serde_json::to_value(&cards)?, Some(requirements.trim())).await?;
+    db.persist_workflow_visual_profile(&scope_key, name.trim(), &cards, requirements.trim(), &raw)
+}
+
+#[tauri::command]
 pub async fn visual_profile_update_draft(
     db: State<'_, std::sync::Arc<Database>>,
     profile_id: String,

@@ -47,7 +47,7 @@ export type NodeDshAcpPortOptions = {
   parentEnvironment?: Record<string, string | undefined>;
   timeoutMs?: number;
   activity?: ToolActivity;
-  profileMode?: "planning" | "controlled-model" | "html-execution" | "content-execution";
+  profileMode?: "planning" | "controlled-model" | "html-execution" | "content-execution" | "agent-ds";
 };
 
 export type NodeDshAcpPortDependencies = {
@@ -94,6 +94,19 @@ function exactProviderEnvironment(value: Readonly<Record<string, string>>): Reco
     throw new Error("dsh_model_proxy_environment_invalid");
   }
   return { DEEPSEEK_API_KEY: capability, DEEPSEEK_BASE_URL: baseUrl };
+}
+
+function resolvePatch(runtime: DshRuntimeHome, mode?: NodeDshAcpPortOptions["profileMode"]): string {
+  if (mode === "content-execution") return runtime.contentExecutionPatch;
+  if (mode === "html-execution") return runtime.htmlExecutionPatch;
+  if (mode === "controlled-model") return runtime.controlledModelPatch;
+  if (mode === "agent-ds") {
+    // Optional local dev files: a template without them must fail closed
+    // instead of silently falling back to another mode's patch.
+    if (!runtime.agentDsPatch) throw new Error("dsh_profile_template_incomplete");
+    return runtime.agentDsPatch;
+  }
+  return runtime.bridgePatch;
 }
 
 export function buildDshChildEnvironment(
@@ -195,13 +208,7 @@ export class NodeDshAcpPort implements DshAcpPort {
         "--profile",
         runtime.profileName,
         "--patch",
-        options.profileMode === "content-execution"
-          ? runtime.contentExecutionPatch
-          : options.profileMode === "html-execution"
-          ? runtime.htmlExecutionPatch
-          : options.profileMode === "controlled-model"
-            ? runtime.controlledModelPatch
-            : runtime.bridgePatch,
+        resolvePatch(runtime, options.profileMode),
       ], {
         cwd: runtime.home,
         env: buildDshChildEnvironment(runtime, options),

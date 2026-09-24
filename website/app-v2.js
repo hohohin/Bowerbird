@@ -1126,6 +1126,22 @@ const revealObserver = new IntersectionObserver(
 );
 document.querySelectorAll(".reveal").forEach((element) => revealObserver.observe(element));
 
+// 视频 data-src 懒加载：进入视口前不下载；muted+playsinline 下 play() 仍可能被拒，静默忽略。
+const lazyVideoObserver = new IntersectionObserver(
+  (entries) => {
+    entries.forEach((entry) => {
+      if (!entry.isIntersecting) return;
+      const video = entry.target;
+      lazyVideoObserver.unobserve(video);
+      if (video.src) return;
+      video.src = video.dataset.src;
+      video.play().catch(() => {});
+    });
+  },
+  { rootMargin: "200px" },
+);
+document.querySelectorAll("video[data-src]").forEach((video) => lazyVideoObserver.observe(video));
+
 window.addEventListener("resize", scheduleGraphConnections);
 
 updateDerivedUI();

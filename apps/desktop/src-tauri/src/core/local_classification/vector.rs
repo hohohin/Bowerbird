@@ -20,7 +20,9 @@ const MODEL_BYTES: u64 = 874_350_932;
 const MODEL_HASH: &str = "21b8b77a009865faecaa29f076ee55d6334ea42699a9efa14d542ce8d3938a3f";
 const TOKENIZER_BYTES: u64 = 17_082_997;
 const TOKENIZER_HASH: &str = "6601c4120779a1a3863897ba332fe3481d548e363bec2c91eba10ef8640a5e93";
-const REV: &str = "21b8b77a";
+// Commit whose LFS oids match the hashes above. The earlier value was the
+// model hash prefix, which is not a revision and 404s on resolve.
+const REV: &str = "e10d47f5691d0454a0fb5d13f46f2199b74cb436";
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 const RUNTIME_BYTES: u64 = 32_396_562;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]

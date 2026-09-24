@@ -25,6 +25,11 @@ export const DSH_PROFILE_PLUGIN_FILES = [
   "bowerbird-html-execution-tools.mjs",
   "bowerbird-content-execution-tools.mjs",
 ] as const;
+// Local dev-only "Agent DS" mode files. Optional by design: absent from the
+// canonical sets above so they never enter the production candidate image;
+// present templates expose runtime.agentDsPatch for profileMode "agent-ds".
+const DSH_PROFILE_AGENT_DS_FILES = ["cordis.agent-ds.patch.yml"] as const;
+const DSH_PROFILE_AGENT_DS_PLUGIN_FILES = ["bowerbird-agent-ds-tools.mjs"] as const;
 
 export type DshRuntimeHome = {
   home: string;
@@ -34,6 +39,7 @@ export type DshRuntimeHome = {
   controlledModelPatch: string;
   htmlExecutionPatch: string;
   contentExecutionPatch: string;
+  agentDsPatch?: string;
   dispose(): void;
 };
 
@@ -71,6 +77,24 @@ export function createDshRuntimeHome(options: {
   for (const file of DSH_PROFILE_PLUGIN_FILES) copyFileSync(join(templateDir, "plugins", file), join(pluginDir, file));
   symlinkSync(templateModules, join(profileDir, "node_modules"), process.platform === "win32" ? "junction" : "dir");
 
+  // Optional agent-ds group: all-or-nothing. A half-present group is a broken
+  // template; a fully absent group simply leaves profileMode "agent-ds" unusable.
+  const agentDsTemplatePaths = [
+    join(templateDir, DSH_PROFILE_AGENT_DS_FILES[0]),
+    join(templateDir, "plugins", DSH_PROFILE_AGENT_DS_PLUGIN_FILES[0]),
+  ];
+  const agentDsPresent = agentDsTemplatePaths.map((path) => existsSync(path));
+  let agentDsPatch: string | undefined;
+  if (agentDsPresent.some(Boolean)) {
+    if (!agentDsPresent.every(Boolean)) throw new Error("dsh_profile_template_incomplete");
+    copyFileSync(agentDsTemplatePaths[0], join(profileDir, DSH_PROFILE_AGENT_DS_FILES[0]));
+    copyFileSync(
+      agentDsTemplatePaths[1],
+      join(pluginDir, DSH_PROFILE_AGENT_DS_PLUGIN_FILES[0]),
+    );
+    agentDsPatch = join("profiles", PROFILE_NAME, DSH_PROFILE_AGENT_DS_FILES[0]);
+  }
+
   const bridgePatch = join("profiles", PROFILE_NAME, "cordis.bridge.patch.yml");
   const controlledModelPatch = join("profiles", PROFILE_NAME, "cordis.controlled-model.patch.yml");
   const htmlExecutionPatch = join("profiles", PROFILE_NAME, "cordis.html-execution.patch.yml");
@@ -84,6 +108,7 @@ export function createDshRuntimeHome(options: {
     controlledModelPatch,
     htmlExecutionPatch,
     contentExecutionPatch,
+    agentDsPatch,
     dispose() {
       if (disposed) return;
       disposed = true;

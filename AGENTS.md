@@ -24,9 +24,10 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 | `dev-doc/AGENT-RUNTIME-PLAN.md` | Bowerbird 内置 Skill Agent Runtime 开发计划（Agent Kernel / 有限澄清 / 独立视觉规范 / VPS Worker / Supabase / 方舟，A0–A8 + V0–V4） | Agent loop / 内置 Skill / 独立视觉规范 / VPS Worker / Agent 临时云工作区实现前必读 |
 | `apps/agent-worker/src/prompts/brand-visual/README.md` | 品牌图片观察/文本提炼提示词、VPS 维护目录及标注保留格式 | 修改品牌视觉提示词、色号提取或维护 VPS 提示词文件前必读 |
 | `dev-doc/CREATIVE-MEMORY-PLAN.md` | 创作记忆与常用提示词库开发计划（复用记录、候选提炼、用户确认、只读注入，CM0–CM7） | 提示词复用统计、常用库、个人偏好学习、记忆设置或生成偏好注入工作前必读 |
-| `dev-doc/UNIFIED-AGENT-HARNESS-PLAN.md` | **通用云端 Agent Harness 新专项**（一个 Agent + 多种受控工具；DSH + DeepSeek API Spike；Tool Gateway；HTML/小红书复用边界，U0–U6） | 新 Agent 能力、DSH/ACP、通用 Tool Gateway、HTML 智能编排、小红书或任何可能新增 Agent Runner 的工作前必读 |
+| `dev-doc/UNIFIED-AGENT-HARNESS-PLAN.md` | **通用云端 Agent Harness 新专项**（一个 Agent + 多种受控工具；DSH + DeepSeek API Spike；Tool Gateway；HTML/小红书复用边界，U0–U6；含桌面 Agent DS → 本机 DSH 队列投递契约） | 新 Agent 能力、DSH/ACP、通用 Tool Gateway、HTML 智能编排、小红书、桌面 Agent DS 投递（`.agent-z/ds-inbox/`）或任何可能新增 Agent Runner 的工作前必读 |
 | `dev-doc/HTML-RENDER-PLAN.md` | 受限 HTML 离线排版、整页/切片截图、独立 renderer 容器与内置 Skill 接入开发计划（H0–H6） | HTML 排版/截图、Chromium/Playwright renderer、`render_html` 工具或第二个官方 Skill 实现前必读 |
 | `dev-doc/PROJECT-CANVAS-PLAN.md` | **项目即画板当前专项**（一项目一块无限画板 / 项目内多创作线程 / 普通生成与 Agent Run 归属 / 历史合并，PB0–PB7） | 画板、项目、创作入口、生成时间线、版本分支、历史迁移或相关 SQLite 模型实现前必读；当前执行权威 |
+| `dev-doc/CANVAS-WORKFLOW.md` | 画板工作流卡片、发条起点、端口、持久化与执行恢复契约及验收边界 | 指令/生成/技能卡片、工作流编排或运行恢复相关工作前必读 |
 | `dev-doc/进展归档.md` | PROJECT.md「目前进展」历史里程碑全量归档（append-only 只进不改；PROJECT.md 只留最近 3 条） | 追溯旧里程碑 / 查历史实现细节时 |
 | `dev-doc/研究报告-服务器化CLI与API化改造可行性.md` | 服务器套壳 CLI vs 官方 API 可行性结论（推荐火山方舟官方 API） | 托管算力 / 远程化方向决策前必读 |
 | `dev-doc/LAYER-EDITING.md` | Seedream 5.0 Pro 分层编辑、独立面板、本地工程、Cloud 图层包与隔离验证 | 分层拆分、透明图层修改、图层工程保存或分层服务启价前必读 |

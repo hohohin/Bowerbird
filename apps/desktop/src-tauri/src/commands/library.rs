@@ -167,6 +167,7 @@ pub async fn import_image_bytes(
     source: String,
 ) -> Result<Asset, AppError> {
     let bytes = decode_data_url_bytes(&data_url)?;
+    let template_import = source == "workflow-template";
     let paths = paths.inner().clone();
     let db = db.inner().clone();
     let db_for_ingest = db.clone();
@@ -195,7 +196,9 @@ pub async fn import_image_bytes(
             )));
         }
     }
-    crate::core::autoname::spawn_auto_analyze(app.clone(), db.clone(), asset.clone());
+    if !template_import {
+        crate::core::autoname::spawn_auto_analyze(app.clone(), db.clone(), asset.clone());
+    }
     let _ = app.emit("library://assets-changed", ());
     Ok(asset)
 }

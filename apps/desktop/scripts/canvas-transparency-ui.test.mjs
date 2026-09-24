@@ -30,7 +30,11 @@ async function verifyAlpha(image) {
 try {
   await page.goto("http://127.0.0.1:1577/scripts/fixtures/canvas-reference/preview.html");
   await node("old").waitFor();
-  await page.evaluate(() => {
+  await page.evaluate(async () => {
+    const {newWorkflowNode}=await import('/src/lib/canvasWorkflow.ts');
+    sessionStorage.setItem('workflow-p',JSON.stringify({revision:0,document:{schema_version:1,run:null,nodes:[{
+      ...newWorkflowNode('instruction',800,400,'codex'),id:'alpha-preview',action:'describe',inputs:{image:[{assetId:'alpha'}]},
+    }]}}));
     const canvas = document.createElement("canvas");
     canvas.width = canvas.height = 150;
     const ctx = canvas.getContext("2d");
@@ -62,6 +66,16 @@ try {
     sessionStorage.setItem("reference-fixture", JSON.stringify(snapshot));
   });
   await page.reload();
+  const workflowImage=page.locator('[data-workflow-card="alpha-preview"] .workflow-preview img');
+  await workflowImage.waitFor();
+  const workflowPixels=await workflowImage.evaluate(async image=>{
+    await image.decode();
+    const canvas=document.createElement('canvas');canvas.width=canvas.height=150;
+    const ctx=canvas.getContext('2d');ctx.drawImage(image,0,0);
+    return [10,65,110].map(x=>Array.from(ctx.getImageData(x,75,1,1).data));
+  });
+  assert.deepEqual(workflowPixels.map(pixel=>pixel[3]),[0,128,255],'workflow preview retains alpha despite black JPEG thumbnail');
+  assert.deepEqual(workflowPixels[2],[0,150,255,255],'opaque foreground retains its original colour');
   for (const id of ["image-0", "image-1"]) await verifyAlpha(node(id).locator(":scope > img"));
   assert.match(await node("image-2").locator(":scope > img").getAttribute("src"), /^data:image\/jpeg/);
   await verifyAlpha(node("folder").locator(".canvas-folder-grid img"));

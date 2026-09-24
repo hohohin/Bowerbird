@@ -5,7 +5,8 @@ import { startBrowserDrag, finishBrowserDrag } from "./fixtures/explorer/native-
 
 const browser = await chromium.launch({ channel: "chrome", headless: true });
 try {
-  for (const kind of ["image", "link-overlay", "card-overlay", "css-disabled", "site-cancel"]) {
+  for (const kind of ["image", "link-overlay", "card-overlay", "css-disabled", "site-cancel", "carousel", "carousel-flip"]) {
+    const carousel = kind === "carousel" || kind === "carousel-flip";
     const page = await browser.newPage();
     await page.addInitScript(await readFile("../extension/candidate-utils.js", "utf8"));
     await page.addInitScript(await readFile("src-tauri/src/commands/source_browser_drag.js", "utf8"));
@@ -15,9 +16,16 @@ try {
         #card {position:relative;width:200px;height:200px} img {width:200px;height:200px}
         #overlay {position:absolute;inset:0} #drop {position:absolute;left:350px;top:0;width:300px;height:300px}
         ${kind === "css-disabled" ? "img {-webkit-user-drag:none}" : ""}
-        </style><div id="card"><img draggable="false" src="/small.png" srcset="/small.png 1x, /large.png 2x">
+        </style>${carousel
+          ? // Stacked carousel slides under a swipe mask, like a Xiaohongshu note page.
+            `<div id="card"><div id="slider" style="position:relative;width:200px;height:200px">
+            <img draggable="false" src="/small.png" srcset="/small.png 1x, /large.png 2x" style="position:absolute;inset:0;${kind === "carousel-flip" ? "" : "opacity:0"}">
+            <img draggable="false" src="/other.png" srcset="/other.png 1x, /other-large.png 2x" style="position:absolute;inset:0;${kind === "carousel-flip" ? "opacity:0" : ""}">
+            <div id="swipe" style="position:absolute;inset:0"></div>
+            </div></div>`
+          : `<div id="card"><img draggable="false" src="/small.png" srcset="/small.png 1x, /large.png 2x">
         ${kind === "link-overlay" ? '<a id="overlay" href="/pin/1"></a>' : kind === "card-overlay" ? '<div id="overlay"></div>' : ""}
-        </div><div id="drop">Drop</div>${kind === "site-cancel" ? '<script>window.addEventListener("dragstart", event => event.preventDefault(), true)</script>' : ""}` }));
+        </div>`}<div id="drop">Drop</div>${kind === "site-cancel" ? '<script>window.addEventListener("dragstart", event => event.preventDefault(), true)</script>' : ""}` }));
     await page.goto("https://fixture.example/");
     await page.evaluate(() => {
       window.events = [];
@@ -35,7 +43,7 @@ try {
     const result = await page.evaluate(() => ({ dropped: window.dropped, events: window.events }));
     assert.ok(result.dropped?.payload, `${kind}: ${JSON.stringify(result)}`);
     const payload = JSON.parse(result.dropped.payload);
-    assert.equal(payload.imageUrl, "https://fixture.example/large.png");
+    assert.equal(payload.imageUrl, kind === "carousel" ? "https://fixture.example/other-large.png" : "https://fixture.example/large.png");
     assert.equal(payload.pageUrl, kind === "link-overlay" ? "https://fixture.example/pin/1" : "https://fixture.example/");
     console.log(`${kind}: passed`);
     await page.close();

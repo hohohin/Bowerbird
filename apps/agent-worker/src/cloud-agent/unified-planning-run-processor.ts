@@ -1,4 +1,6 @@
 import { AdaptiveToolGateway, type AdaptiveJournal } from "../harness/adaptive-tool-gateway.ts";
+import { textRewritePrompt, parseTextRewriteResult } from "../skills/bowerbird-unified-agent/text-rewrite.ts";
+import { ToolGatewayError } from "../harness/scoped-tool-gateway.ts";
 import { AdaptiveRunTools } from "../harness/adaptive-run-tools.ts";
 import { ADAPTIVE_TOOL_INPUTS, adaptiveInputContract } from "../harness/adaptive-tool-inputs.ts";
 import { taskAuthorizationCallCount, type TaskAuthorization } from "../contracts/task-authorization.ts";
@@ -70,6 +72,7 @@ async function downloadUserResponse(context: AgentRunContext, url: string): Prom
 }
 
 type UnifiedPlanningCheckpoint = HarnessCheckpointSeed & {
+  textResult?: string;
   adaptiveJournal?: AdaptiveJournal;
   visualObservations?: VisualObservationReference[];
   revision?: number;
@@ -149,6 +152,8 @@ function decodeCheckpoint(
     throw new Error("unified_agent_checkpoint_invalid");
   }
   checkpoint.input = validateUnifiedAgentPlanningInput(checkpoint.input);
+  if (checkpoint.textResult !== undefined && (!checkpoint.input.textRewrite || checkpoint.phase !== "succeeded" ||
+      typeof checkpoint.textResult !== "string" || !checkpoint.textResult.trim() || checkpoint.textResult.length > 16000)) throw new Error("unified_agent_checkpoint_invalid");
   // Explicit migration of the known previous instruction bundle; approved plan
   // contents/hash and completed durable calls are preserved.
   checkpoint.skillHash = expected.skillHash;
@@ -345,6 +350,10 @@ export class UnifiedPlanningRunProcessor implements AgentRunProcessor {
       needsSave = true;
     }
 
+    if (checkpoint.input.textRewrite) {
+      await this.executeTextRewrite(context, checkpoint);
+      return;
+    }
     const answer = context.claimed.clarificationAnswer;
     if (answer && !(checkpoint.answeredQuestions ?? []).includes(answer.questionKey)) {
       const pending = checkpoint.pendingQuestion;
@@ -496,6 +505,34 @@ export class UnifiedPlanningRunProcessor implements AgentRunProcessor {
       await modelProxy?.close();
       workspace.cleanup();
     }
+  }
+
+  private async executeTextRewrite(context: AgentRunContext, checkpoint: UnifiedPlanningCheckpoint): Promise<void> {
+    const { run, lease } = context.claimed;
+    if (run.approvedPlanHash) throw new Error("unified_agent_text_input_invalid");
+    if (!checkpoint.textResult) {
+      await this.saveCheckpoint(context, checkpoint, "compose_plan", 10, [{ seq: 10, type: "text.rewrite.started", progress: 10, displayPayload: {} }]);
+      let proxy: Awaited<ReturnType<typeof startMeteredDeepSeekProxy>> | undefined;
+      try {
+        if (this.options.modelProxy) proxy = await startMeteredDeepSeekProxy({ ...this.options.modelProxy,
+          runId: run.id, leaseId: lease.leaseId, phase: "compose_plan", control: context.control, maxModelTurns: 3, allowedToolNames: [] });
+        const runner = new UnifiedPlanningHarnessRunner({ runId: run.id,
+          dispatch: async () => { throw new ToolGatewayError("tool_not_allowed"); },
+        }, (environment, _provider, activity) => this.options.createAdapter(environment, proxy?.childEnvironment(), activity));
+        const result = await runner.run(checkpoint, [{ type: "text", text: textRewritePrompt(checkpoint.input.goal, checkpoint.input.textRewrite!.source) }]);
+        if (context.signal.aborted) throw new Error("unified_agent_run_cancelled");
+        checkpoint = { ...checkpoint, textResult: parseTextRewriteResult(result), phase: "succeeded", checkpointVersion: checkpoint.checkpointVersion + 1 };
+        // Persist the result before publishing it; lease recovery never repeats a completed edit.
+        await this.saveCheckpoint(context, checkpoint, "succeeded", 100, []);
+      } catch (error) {
+        if (proxy?.lastErrorCode) throw new Error(proxy.lastErrorCode);
+        throw error;
+      } finally { await proxy?.close(); }
+    }
+    if (context.signal.aborted) throw new Error("unified_agent_run_cancelled");
+    await context.control.appendEvents(run.id, lease.leaseId, [{ seq: 90, type: "text.result", progress: 100,
+      displayPayload: { schemaVersion: 1, text: checkpoint.textResult } }]);
+    await context.control.finish(run.id, lease.leaseId);
   }
 
   private async executeApprovedPlan(

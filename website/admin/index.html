@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="robots" content="noindex,nofollow">
   <meta name="referrer" content="no-referrer">
-  <title>兑换码管理 · Bowerbird</title>
+  <title>管理后台 · Bowerbird</title>
   <link rel="stylesheet" href="./admin.css">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" defer></script>
   <script src="./admin.js" type="module"></script>
@@ -14,11 +14,14 @@
   <aside class="sidebar">
     <a class="brand" href="/" aria-label="Bowerbird 官网"><span class="brand-mark">b.</span><span>Bowerbird<small>园丁鸟 · 管理后台</small></span></a>
     <div class="nav-label">工作台</div>
-    <div class="nav-current"><span>▦</span> 兑换码管理 <span class="nav-dot"></span></div>
+    <nav class="nav">
+      <button type="button" class="nav-item active" data-view="codes" aria-current="page"><span>▦</span> 兑换码管理 <span class="nav-dot"></span></button>
+      <button type="button" class="nav-item" data-view="skills"><span>⌘</span> Kernel 技能 <span class="nav-dot"></span></button>
+    </nav>
     <div class="sidebar-bottom"><span class="live-dot"></span> 账号与权益管理<p>让每一次创作，从这里开始。</p></div>
   </aside>
   <main>
-    <header class="topbar"><span>运营管理 <span class="slash">/</span> 兑换码</span><div class="account"><span id="account-email">管理员入口</span><button id="logout" class="text-button" hidden>退出登录</button></div></header>
+    <header class="topbar"><span>运营管理 <span class="slash">/</span> <span id="topbar-crumb">兑换码</span></span><div class="account"><span id="account-email">管理员入口</span><button id="logout" class="text-button" hidden>退出登录</button></div></header>
     <section id="login-panel" class="login-panel">
       <div class="eyebrow">BOWERBIRD CONSOLE</div><h1>管理创作的通行证。</h1>
       <p>使用你的 Bowerbird 管理员账号登录，创建、发放并跟踪 Pro 兑换码。</p>
@@ -46,6 +49,18 @@
         <div class="pagination"><span id="page-label">每页 50 条</span><div><button id="previous" class="secondary" disabled>← 上一页</button><button id="next" class="secondary" disabled>下一页 →</button></div></div>
       </section>
       <footer>兑换码开通权益与积分，用户素材仍保存在本地。<span>BOWERBIRD · ADMIN</span></footer>
+    </section>
+    <section id="skills-console" hidden>
+      <div class="page-heading"><div><div class="eyebrow">KERNEL RUNTIME</div><h1>Kernel 技能<span class="heading-dot">.</span></h1><p>当前云端 Kernel 内置的官方技能与统一 Agent 领域方法。全部随 Worker 镜像发布、版本钉死，不开放用户上传。</p></div></div>
+      <section class="inventory">
+        <div class="inventory-heading"><div><h2>内置技能 · Runner</h2><span id="skills-runner-count" class="chip">—</span></div></div>
+        <div class="table-wrap"><table><thead><tr><th>技能 ID / 标题</th><th>版本</th><th>说明</th></tr></thead><tbody id="skills-runner-rows"></tbody></table></div>
+      </section>
+      <section class="inventory">
+        <div class="inventory-heading"><div><h2>统一 Agent 领域方法</h2><span id="skills-method-count" class="chip">—</span></div></div>
+        <div class="table-wrap"><table><thead><tr><th>方法 ID</th><th>说明</th><th>注册文件</th></tr></thead><tbody id="skills-method-rows"></tbody></table></div>
+      </section>
+      <footer>清单与 apps/agent-worker 镜像内的 BuiltinSkillRegistry 和领域方法目录同步；镜像更新后需同步本页数据。<span>BOWERBIRD · ADMIN</span></footer>
     </section>
   </main>
   <dialog id="disable-dialog"><form method="dialog"><div class="eyebrow">停用兑换码</div><h2>停止这张码的兑换？</h2><p id="disable-description"></p><p>停用后不可恢复。已兑换用户的权益不受影响。</p><div class="dialog-actions"><button class="secondary" value="cancel">取消</button><button id="confirm-disable" class="danger" value="confirm">确认停用</button></div></form></dialog>

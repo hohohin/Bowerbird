@@ -7,6 +7,7 @@ import { MediaPreview } from "./MediaPreview";
 import { useStore, type GenEditingMode } from "../store";
 import { api } from "../lib/api";
 import { generationParentLocator } from "../lib/creativeGeneration";
+import { generationPromptNodeId } from "../lib/projectNodeIds";
 import {
   awaitGenerationComposerIntent,
   isGenerationComposerIntentCurrent,
@@ -257,6 +258,10 @@ export function GenerationPanel({
       parentNodeId: parent.nodeId,
       parentAssetPath: parent.storePath,
       creativeRelation: "retry",
+      // 失败轮的追加重发同样叠放在原失败卡位置；成功轮重发保持脑图式落位。
+      retryAnchorNodeId: turn.error && turn.turnKey
+        ? generationPromptNodeId(activeJob.id, turn.turnKey)
+        : null,
     }).catch(console.error);
   }
 
@@ -299,6 +304,11 @@ export function GenerationPanel({
             parentAssetPath: parent.storePath,
             relation: "retry",
             referenceNodeIds: first?.referenceNodeIds,
+            // 首轮失败的重试：新卡叠放在原失败卡位置（原卡保留）；首轮成功的版本分支
+            // 仍走参考图旁的脑图式落位。
+            retryAnchorNodeId: first?.error && first.turnKey
+              ? generationPromptNodeId(activeJob.id, first.turnKey)
+              : null,
           }
         : undefined,
       false,
@@ -1455,7 +1465,11 @@ function GenEditComposer({
       </div>}
       <div
         ref={hostRef}
-        onClick={focus}
+        onClick={(event) => {
+          // 同 CreationBoard：正文点击交给 ProseMirror 原生定位，冒泡 focus() 会用
+          // 旧选区覆盖点击落点（光标跳行）；仅内容区外的宿主空白手动聚焦。
+          if (!(event.target instanceof Element && event.target.closest(".ProseMirror"))) focus();
+        }}
         data-tour="creation-editor"
         className="creation-editor generation-input min-h-16 max-h-56 cursor-text overflow-y-auto px-3 py-2 text-sm leading-8 text-ink"
       />

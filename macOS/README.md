@@ -2,7 +2,30 @@
 
 本目录记录 Mac 上的本地开发、运行和未签名构建流程。Bowerbird 使用 canonical Tauri / React / Rust 源码，不维护 macOS override。构建架构以 `rustc -vV` 的 host 为准；Intel 为 `x86_64-apple-darwin`，Apple Silicon 原生工具链为 `aarch64-apple-darwin`。
 
-## 2026-09-20 Mac 26.9.2002 双架构更新包（本机构建待上传；Intel 通道首发）
+
+## 2026-09-24 同步 dev 工作流与模板（源码未发布）
+
+`mac` 从 `e63841a` 合入 `origin/dev@f196d6c`：画板工作流、内容卡、模板库与 `.bbworkflow.json` 分享、planning-v2 编排、并行调度及 SQLite `0031`–`0033` 均使用正典实现。保留 Mac `26.9.2002` 版本与 updater 公钥、原生标题栏/WKWebView、稳定签名配置、refresh token 缓存、原生 MP4 探针及 Intel 向量模型回退。版本号未提升，本轮没有生成或发布新版安装包。
+
+Mac 接缝修正：Agent DS 比较会话 cwd 时两侧均解析符号链接和 `..`；Unix 不再错误套用 Windows 小写/反斜杠归一化。隔离目录回归先复现旧逻辑失败，再确认修复；Windows 路径用例继续通过。工作流框选/剪贴板测试按平台使用 Command 或 Control，旧画板抽取式测试补齐工作流和生成状态夹具。
+
+本机构建环境：Apple Silicon，Rust 1.97.1，Node 22.22.1；使用仓库现有依赖和锁文件。验证：
+
+- TypeScript 与 Vite production build 通过，保留既有大 chunk 提示。
+- 画板/工作流/生成恢复/路由纯逻辑 **150/150**。
+- **12 组 Chrome 合成 IPC 回归**：工作流 UI、运行/调度、模板库（34 项）、编排协议（50 项）、助手（48 项）、来源引用、初始化、Command 混合框选/复制/粘贴/撤销、标注添加画板、双平台标题栏。
+- Rust 全量 **417 passed / 0 failed / 6 ignored**；Agent DS 专项 11/11（包含在全量内），既有依赖真实模型/外部工具的 ignored 测试未启用。
+- `cargo build --offline --locked --release` 通过，输出为 arm64；这是编译检查，没有封装 `.app`/DMG。
+- `cargo check --offline --locked --target x86_64-apple-darwin` 通过。
+- 隐藏原生 AppKit 窗口验证红黄绿按钮、装饰与浅深主题通过。
+
+保留既有 Rust 警告。相对 `origin/dev` 的增量 diff 空白检查通过；全合并检查中的 `logo1.ai` 空白与 profile 测试末尾空行已核对和 dev 完全同字节，未改写上游素材。日志证据保存在本机 `macOS/dist/verification/sync-dev-20260924/`。测试使用临时数据库和模拟 IPC；未启动生产应用、改写真实素材库或账号、调用付费模型、执行真实 DSH 投递、构建安装包或部署。完整 WKWebView 工作流、原生文件对话框、Intel 实机及更新安装仍未验收。开发版 Agent DS/工作流助手保持 debug/dev 门控，release 隐藏入口。
+
+## 2026-09-21 Mac 26.9.2002 已发布
+
+发布侧核验 R2 上现成 26.9.2002 更新包及 DMG 后，已同步官网 Mac 清单与两份首页入口。完整下载哈希、旧公钥签名/篡改拒绝、ARM64/包内版本及公网链路通过；Windows 保持 26.9.1803。2002 接替 2001 历史构建，不再按旧交接发布 2001。产物、回滚及验收边界见 [DESKTOP-UPDATES.md](../dev-doc/DESKTOP-UPDATES.md)「Mac 26.9.2002 发布记录」。原生更新/重启及 Apple 公证仍待验收。
+
+## 2026-09-20 Mac 26.9.2002 双架构更新包（双架构构建与上传记录）
 
 收录 9 月 19/20 全部工作：本地分类向量精确匹配判官（jina-clip-v2 int8，可选安装/面板卸载、未装回退 VLM）与可选云端最终校验 Jev、画板新卡锚定当前可视区左上角、视频卡独立样式与 ▶ 徽标、文本卡表格增强（标题编辑/整表复制 CSV/行高列宽拖拽）、创作模式空白框选、视频创作免本地 FFmpeg（原生 MP4 探针）、mac「打开所在文件夹」Finder 选中与对话框方向键乱码修复、钥匙串弹窗根治（refresh token 内存缓存 + 稳定本地签名身份）。**26.9.2001（20 日第 1 包）在本机核验后、上传前被同日第 2 包取代**：工作区随后新增钥匙串修复等改动且分发迁移 COS，为使发布包包含这些修复并统一双架构版本，按同日序号规范升为 **26.9.2002**（> 线上 26.9.1901，护栏通过）；2001 产物从未上传任何存储，本地产物与发布说明已删除，勿再使用 `/tmp/bowerbird-release-26.9.2001/` 的交接脚本。构建前验证：Rust 全量 **384 passed / 6 ignored**、画板纯逻辑 **127/127**、local-classification UI 回归与 `tsc --noEmit` 通过。
 
@@ -13,7 +36,7 @@
 
 双架构本机核验均通过：`CFBundleShortVersionString` = 26.9.2002、Mach-O 架构分别为 arm64/x86_64、二进制内嵌 Mac 公钥与 `tauri.macos.conf.json` 及已发布 26.9.1802/1901 逐字节一致（key id `0b5a2efc4865664f`）、`codesign -dvv` Authority = `Bowerbird Local Code Signing` 且 `--verify --deep` 通过（首个带稳定签名身份的发布包）、DMG `hdiutil verify`、minisign 主签名与全局签名（`minisign-verify` 0.2.5 同构造）、篡改字节拒绝、清单 signature 与 `.sig` 逐字节一致。Intel 包未在真实 Intel 机器运行验收（本机为 Apple Silicon），属发布后待补项。
 
-**发布进度（2026-09-21，应急走 R2；上传与公网核验已完成）：** 原计划自本版起迁移腾讯 COS + CDN（`cdn.bowerbird.cn`），但控制台前置（建桶/CDN 域名/证书/CNAME）尚未完成、`cdn.bowerbird.cn` 不可达，按用户决策 26.9.2002 **先走 R2 应急首发**：两份清单包 URL 回指 r2.dev 直下。**2026-09-21 01:31–01:45 已上传并核验**：`upload-r2.sh`（`macOS/.signing/r2.env` 四行凭据）上传双架构 12 件，本地哈希断言、公网完整下载哈希、minisign 主/全局签名、双清单公网哈希、四个大文件 HEAD 大小、26.9.18/1802/1901 历史包仍在全部通过；当晚 r2.dev 下载速度波动大（一次 300 秒仅 66MB、一次中断后续传完成），慢路由用户可能触发客户端 300 秒下载超时需重试——印证迁 COS 的必要性。剩余待执行：①服务器 106.55.44.143 依次跑 `swap-manifest-aarch64.sh`（备份 26.9.1901 清单 → 哈希断言 `2c6b6158…` → 原子替换 → 公网复核）与 `swap-manifest-x86_64.sh`（Intel 通道首次上线：核验 `16f35772…` 后新建清单，回滚即删文件）；②首页 Mac DMG 按钮（仓库两份首页已指向 R2 的 26.9.2002 DMG）随候选→原子切换发布。COS 就绪后的迁移不变：届时用 cdn URL 重新生成双架构清单、镜像历史包再各自切换一次。本轮未运行真实应用内更新。
+**发布进度（2026-09-21，应急走 R2；上传与公网核验已完成）：** 原计划自本版起迁移腾讯 COS + CDN（`cdn.bowerbird.cn`），但控制台前置（建桶/CDN 域名/证书/CNAME）尚未完成、`cdn.bowerbird.cn` 不可达，按用户决策 26.9.2002 **先走 R2 应急首发**：两份清单包 URL 回指 r2.dev 直下。**2026-09-21 01:31–01:45 已上传并核验**：`upload-r2.sh`（`macOS/.signing/r2.env` 四行凭据）上传双架构 12 件，本地哈希断言、公网完整下载哈希、minisign 主/全局签名、双清单公网哈希、四个大文件 HEAD 大小、26.9.18/1802/1901 历史包仍在全部通过；当晚 r2.dev 下载速度波动大（一次 300 秒仅 66MB、一次中断后续传完成），慢路由用户可能触发客户端 300 秒下载超时需重试——印证迁 COS 的必要性。历史交接步骤（aarch64 与首页已由上节发布记录确认完成，Intel 仍待上线）：①服务器 106.55.44.143 依次跑 `swap-manifest-aarch64.sh`（备份 26.9.1901 清单 → 哈希断言 `2c6b6158…` → 原子替换 → 公网复核）与 `swap-manifest-x86_64.sh`（Intel 通道首次上线：核验 `16f35772…` 后新建清单，回滚即删文件）；②首页 Mac DMG 按钮（仓库两份首页已指向 R2 的 26.9.2002 DMG）随候选→原子切换发布。COS 就绪后的迁移不变：届时用 cdn URL 重新生成双架构清单、镜像历史包再各自切换一次。本轮未运行真实应用内更新。
 
 ## 2026-09-19 Mac 26.9.1901 更新包（已发布）
 

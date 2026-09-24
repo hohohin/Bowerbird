@@ -59,6 +59,8 @@ interface GenerationInput {
   prompt: string;
   reference_images: Array<{ mime: "image/jpeg" | "image/png" | "image/webp"; base64: string }>;
   ratio?: string | null;
+  /** 透明图层：映射 Ark `/images/generations` 的 `background: "transparent"`。 */
+  transparent?: boolean;
   mock_scenario?: string | null;
   layer_options?: LayerOptions;
 }
@@ -234,6 +236,30 @@ class ControlClient {
   }
 }
 
+/** `/images/generations` 请求体：分层任务走 layerPayload；透明图层映射官方
+ *  `background: "transparent"`（仅 alpha 通道格式有效，此处恒为 b64_json PNG）。 */
+export function arkImageRequestBody(
+  input: GenerationInput,
+  choice: ServiceModelChoice,
+  config: Pick<GenerationWorkerConfig, "arkImageSize">,
+): JsonRecord {
+  if (input.layer_options) return layerPayload(input, input.layer_options);
+  return {
+    model: choice.model,
+    prompt: input.prompt,
+    ...(input.reference_images.length
+      ? { image: input.reference_images.map((image) => `data:${image.mime};base64,${image.base64}`) }
+      : {}),
+    ...(choice.optimizePromptMode
+      ? { optimize_prompt_options: { mode: choice.optimizePromptMode } }
+      : {}),
+    ...(input.transparent ? { background: "transparent" } : {}),
+    size: config.arkImageSize,
+    response_format: "b64_json",
+    watermark: false,
+  };
+}
+
 class ArkImageClient {
   private readonly config: GenerationWorkerConfig;
   private readonly fetch: WorkerFetch;
@@ -251,19 +277,7 @@ class ArkImageClient {
         authorization: `Bearer ${this.config.arkApiKey}`,
         "content-type": "application/json",
       },
-      body: JSON.stringify(input.layer_options ? layerPayload(input, input.layer_options) : {
-        model: choice.model,
-        prompt: input.prompt,
-        ...(input.reference_images.length
-          ? { image: input.reference_images.map((image) => `data:${image.mime};base64,${image.base64}`) }
-          : {}),
-        ...(choice.optimizePromptMode
-          ? { optimize_prompt_options: { mode: choice.optimizePromptMode } }
-          : {}),
-        size: this.config.arkImageSize,
-        response_format: "b64_json",
-        watermark: false,
-      }),
+      body: JSON.stringify(arkImageRequestBody(input, choice, this.config)),
       // Deliberately no AbortSignal timeout. The durable lease heartbeat, not
       // an Edge wall-clock deadline, owns liveness while Ark is still waiting.
     });

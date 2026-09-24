@@ -125,7 +125,7 @@ fn project_unfinished_work_counts(
     conn: &rusqlite::Connection,
     project_id: &str,
 ) -> AppResult<(i64, i64)> {
-    let running_generation_count =
+    let running_generation_count: i64 =
         conn.query_row(PROJECT_RUNNING_GENERATION_COUNT_SQL, [project_id], |row| {
             row.get(0)
         })?;
@@ -137,8 +137,12 @@ fn project_unfinished_work_counts(
         "SELECT COUNT(*) FROM local_agent_runs WHERE project_id=?1 AND status NOT IN ('succeeded','failed','cancelled')",
         [project_id], |row| row.get(0),
     )?;
+    let workflow_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM canvas_workflows WHERE project_id=?1 AND (json_extract(document_json,'$.run.status') IN ('running','waiting') OR EXISTS (SELECT 1 FROM json_each(document_json,'$.runs') WHERE json_extract(value,'$.status') IN ('running','waiting')))",
+        [project_id], |row| row.get(0),
+    )?;
     Ok((
-        running_generation_count,
+        running_generation_count + workflow_count,
         running_agent_count + local_agent_count,
     ))
 }

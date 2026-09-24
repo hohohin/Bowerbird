@@ -4,6 +4,7 @@
 
 - `observation.md`：看图，区分原图明确标注的品牌标准与观察所得风格，完整转录色号。
 - `extraction.md`：跨图归纳普通风格。明确标注由程序从「品牌规范」节原样保留，不受多数支持率影响。
+- `workflow.md`：画板卡片的文字要求归纳；可纯文字，也可合并图片风格草稿。明确品牌标注仍由程序保留，最终仅输出待用户确认的草稿。此扩展尚待发布；更新 Worker 与此文件后才可部署声明 schema 2 的 Edge。
 
 生产维护目录为 `/opt/bowerbird/agent-worker/src/prompts/brand-visual/`，以只读目录挂载到容器 `/app/brand-prompts/`，由 `BOWERBIRD_BRAND_PROMPT_DIR` 指定。未设置时读取代码旁同名目录；设置后缺失、空文件或超过 20000 字符均报错，不偷偷回退到旧提示词。
 

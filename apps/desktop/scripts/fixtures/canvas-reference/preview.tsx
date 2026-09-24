@@ -6,6 +6,7 @@ import { ImageAnnotator } from "../../../src/components/ImageAnnotator";
 import { useStore } from "../../../src/store";
 import { ExploreWorkspace } from "../../../src/components/ExploreWorkspace";
 import { ToastViewport } from "../../../src/components/ToastViewport";
+import { VisualProfileDialog } from "../../../src/components/VisualProfileDialog";
 import { Toolbar } from "../../../src/components/Toolbar";
 import { SettingsDialog } from "../../../src/components/SettingsDialog";
 import "../../../src/styles.css";
@@ -15,6 +16,8 @@ const w = window as any;
 const explorer = new URLSearchParams(location.search).has("explorer");
 const sourceLibrary = new URLSearchParams(location.search).has("source-library");
 const canvasLibrary = new URLSearchParams(location.search).has("canvas-library");
+const strictCanvas = new URLSearchParams(location.search).has("strict-canvas");
+let canvasExists = !strictCanvas;
 w.store = useStore;
 const callbacks = new Map();
 const listeners = new Map();
@@ -84,9 +87,50 @@ w.__TAURI_INTERNALS__ = {
   metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main" } },
   invoke: async (command: string, args: any) => {
     w.calls.push({ command, args });
+    if (command === "project_canvas_materialize") {
+      canvasExists = true;
+      Object.assign(project, { provisional: false });
+      return canvas;
+    }
+    if (strictCanvas && command === "project_canvas_get" && !canvasExists) {
+      w.earlyCanvasReads = (w.earlyCanvasReads ?? 0) + 1;
+      throw `not found: project canvas ${args.projectId}`;
+    }
+    if (strictCanvas && command === "canvas_workflow_save" && !canvasExists) throw "project not materialized";
+    if (command === "canvas_workflow_get") return JSON.parse(sessionStorage.getItem(`workflow-${args.projectId}`) || '{"revision":0,"document":{"schema_version":1,"nodes":[],"run":null}}');
+    if (command === "workflow_templates_list") return JSON.parse(sessionStorage.getItem('workflow-template-library') || '[]');
+    if (command === "workflow_template_save") {
+      if (w.failTemplateSave) throw '模拟模板保存失败';
+      const library = JSON.parse(sessionStorage.getItem('workflow-template-library') || '[]');
+      const old = library.find((item: any) => item.id === args.document.id);
+      if ((old?.revision ?? 0) !== args.expectedRevision) throw 'template revision conflict';
+      const saved = { ...args.document, revision: args.expectedRevision + 1 };
+      sessionStorage.setItem('workflow-template-library', JSON.stringify([...library.filter((item: any) => item.id !== saved.id), saved])); return saved;
+    }
+    if (command === "workflow_template_delete") {
+      const library = JSON.parse(sessionStorage.getItem('workflow-template-library') || '[]');
+      if (!library.some((item: any) => item.id === args.id && item.revision === args.expectedRevision)) throw 'template revision conflict';
+      sessionStorage.setItem('workflow-template-library', JSON.stringify(library.filter((item: any) => item.id !== args.id))); return;
+    }
+    if (command === "plugin:dialog|save" && String(args.options?.defaultPath ?? '').endsWith('.bbworkflow.json')) return 'isolated-share.bbworkflow.json';
+    if (command === "workflow_template_export") {
+      const library = JSON.parse(sessionStorage.getItem('workflow-template-library') || '[]');
+      sessionStorage.setItem('workflow-template-export', JSON.stringify(library.find((item: any) => item.id === args.id))); return;
+    }
+    if (command === "canvas_workflow_save") {
+      if (w.failWorkflowSave) throw "模拟工作流保存失败";
+      const revision = args.revision + 1;
+      sessionStorage.setItem(`workflow-${args.projectId}`, JSON.stringify({ revision, document: args.document })); return revision;
+    }
+    if (command === "generation_history") return { turns: [{ prompt: "保持产品主体，生成清晨场景" }], references: [assets[0]] };
+    if (command === "project_thread_create") return args.value;
     if (command === "get_settings") return JSON.parse(sessionStorage.getItem("canvas-settings") || "{}");
     if (command === "update_settings") { sessionStorage.setItem("canvas-settings", JSON.stringify(args.settings)); return null; }
     if (command === "plugin:event|listen") { listeners.set(args.handler, args.event); return args.handler; }
+    if (command === "plugin:event|emit") {
+      for (const [handler, event] of listeners) if (event === args.event) callbacks.get(handler)?.({ event, id: handler, payload: args.payload });
+      return null;
+    }
     if (command === "list_projects") return explorer ? [project, { ...project, id: "q", name: "另一个项目" }] : [project];
     if (command === "project_canvas_get") return args.projectId === "q"
       ? { ...structuredClone(snapshot), canvas: { ...canvas, projectId: "q" }, nodes: [], edges: [], groups: [], groupItems: [], threads: [], view: null }
@@ -180,8 +224,16 @@ w.__TAURI_INTERNALS__ = {
       assets.push(asset);
       return asset;
     }
-    if (command === "read_image_data_url") return args.path;
-    if (command === "project_canvas_ensure") return canvas;
+    if (command === "import_image_bytes" && args.source === "workflow-template") {
+      const asset = { ...assets[0], id: `template-${assets.length}`, name: args.fileName, store_path: args.dataUrl, source: args.source };
+      assets.push(asset); return asset;
+    }
+    if (command === "read_image_data_url") return w.templateImageData ?? args.path;
+    if (command === "project_canvas_ensure") {
+      if (strictCanvas) await new Promise(resolve => setTimeout(resolve, 150));
+      canvasExists = true;
+      return canvas;
+    }
     if (command === "list_generation_groups") return {};
     if (canvasLibrary && command === "list_projects") return [{ ...project, asset_count: assets.filter((asset: any) => !asset.library_hidden).length }];
     if (sourceLibrary && command === "list_assets") return assets.filter((asset: any) => !asset.library_hidden);
@@ -208,7 +260,7 @@ function Fixture() {
       <Toolbar canvasMode={toolbarCanvasMode} onCanvasModeChange={setToolbarCanvasMode} onCreateCreative={() => {}} onRefresh={async () => {}} />
       <div className="flex min-h-0 flex-1">{canvas}</div>
     </div> : explorer ? <ExploreWorkspace url="https://www.pinterest.com/" open={exploring} onClose={() => setExploring(false)}>{canvas}</ExploreWorkspace> : canvas}
-    <AssetContextMenu /><ImageAnnotator /><ToastViewport />{settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
+    <AssetContextMenu /><ImageAnnotator /><ToastViewport /><VisualProfileDialog />{settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
   </div>;
 }
 createRoot(document.getElementById("root")!).render(<Fixture />);

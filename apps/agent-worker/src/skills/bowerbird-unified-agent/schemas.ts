@@ -13,6 +13,8 @@ import { canonicalJson, sha256Hex } from "../../kernel/tool-ledger.ts";
 export type UnifiedAgentPlanningInput = {
   schemaVersion: 1;
   goal: string;
+  /** Bounded text transformation; no image/tool authorization is implied. */
+  textRewrite?: { source: string };
   references?: UnifiedAgentReference[];
   ratio?: string;
   /** 始终规范化并冻结进 checkpoint；旧请求缺失时使用安全默认。 */
@@ -43,6 +45,7 @@ export const UNIFIED_AGENT_PLANNING_INPUT_SCHEMA = {
   properties: {
     schemaVersion: { const: 1 },
     goal: { type: "string", minLength: 1, maxLength: 4_000 },
+    textRewrite: { type: "object", properties: { source: { type: "string", minLength: 1, maxLength: 16000 } }, required: ["source"], additionalProperties: false },
     references: {
       type: "array",
       maxItems: 8,
@@ -73,7 +76,7 @@ export function validateUnifiedAgentPlanningInput(value: unknown): UnifiedAgentP
     throw new Error("unified_agent_input_invalid");
   }
   const record = value as Record<string, unknown>;
-  const allowedKeys = new Set(["schemaVersion", "goal", "references", "ratio", "htmlOutput", "visualProfileCapsule"]);
+  const allowedKeys = new Set(["schemaVersion", "goal", "textRewrite", "references", "ratio", "htmlOutput", "visualProfileCapsule"]);
   if (Object.keys(record).some((key) => !allowedKeys.has(key)) || record.schemaVersion !== 1 ||
       typeof record.goal !== "string" || !record.goal.trim() || record.goal.length > 4_000 ||
       record.references !== undefined && (!Array.isArray(record.references) || record.references.length > 8)) {
@@ -83,6 +86,12 @@ export function validateUnifiedAgentPlanningInput(value: unknown): UnifiedAgentP
     throw new Error("unified_agent_input_invalid");
   }
   const ids = new Set<string>();
+  if (record.textRewrite !== undefined) {
+    const rewrite = record.textRewrite as Record<string, unknown>;
+    if (!rewrite || typeof rewrite !== "object" || Array.isArray(rewrite) || Object.keys(rewrite).some(key => key !== "source") ||
+        typeof rewrite.source !== "string" || !rewrite.source.trim() || rewrite.source.length > 16000 ||
+        (record.references as unknown[] | undefined)?.length || record.visualProfileCapsule !== undefined) throw new Error("unified_agent_text_input_invalid");
+  }
   const references = (record.references as unknown[] | undefined)?.map((raw, index) => {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("unified_agent_input_invalid");
     const item = raw as Record<string, unknown>;
@@ -124,6 +133,7 @@ export function validateUnifiedAgentPlanningInput(value: unknown): UnifiedAgentP
   return {
     schemaVersion: 1,
     goal: record.goal.trim(),
+    ...(record.textRewrite ? { textRewrite: { source: (record.textRewrite as { source: string }).source } } : {}),
     ...(references ? { references } : {}),
     ...(record.ratio ? { ratio: String(record.ratio) } : {}),
     htmlOutput: {

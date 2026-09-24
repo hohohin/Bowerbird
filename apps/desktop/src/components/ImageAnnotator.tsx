@@ -5,6 +5,7 @@ import {
   Circle,
   Crop,
   Eraser,
+  LayoutDashboard,
   MoveUpRight,
   Pencil,
   RotateCcw,
@@ -42,7 +43,8 @@ import type {
  * 参考图。rect → `<bbox>x1 y1 x2 y2</bbox>`，arrow → 起终点两个 `<point>`。
  *
  * 底图经 Rust 读为 data URL（asset 协议的 convertFileSrc 是跨域源，画进 canvas 会污染
- * 画布、toDataURL 抛 SecurityError）。导出 = 最终底图烧录标注 → 双出口：
+ * 画布、toDataURL 抛 SecurityError）。导出 = 最终底图烧录标注 → 三个出口：
+ * 添加到画板（保存素材与标注元数据，再创建独立图片卡片）；
  * 保存到素材库（analyses kind=annotation 记坐标）；插入创作板（临时文件 + sidecar 不入库，
  * 「标注」维度随 chip 自动注入，serialize 时展开为 `@图名 的【标注】：<bbox>…`）。
  * 撤销 = 快照栈（形状 + ops 全量快照），画形状/裁剪/旋转/清空皆可撤销。
@@ -769,6 +771,22 @@ export function ImageAnnotator() {
     }
   }
 
+  async function addToCanvas() {
+    if (busy || !annotator?.saveToCanvas) return;
+    setBusy(true);
+    try {
+      const out = await buildOutput();
+      if (!out) return;
+      await annotator.saveToCanvas(out.dataUrl, out.meta, `${chipName(asset!)}-标注`);
+      notifySuccess("标注图已添加到画板");
+      closeAnnotator();
+    } catch (e) {
+      notifyError(e, "添加到画板失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function insertToBoard() {
     if (busy) return;
     const onboardingProjectId = useStore.getState().activeProjectId;
@@ -1069,6 +1087,15 @@ export function ImageAnnotator() {
         </button>
 
         <div className="ml-auto flex items-center gap-2">
+          {!isDraft && <button
+            type="button"
+            disabled={!hasEdits || busy || !annotator.saveToCanvas}
+            onClick={addToCanvas}
+            title={!annotator.saveToCanvas ? "请先打开项目画板" : hasEdits ? "将标注图添加到当前画板，同时保存到素材库" : "请先画标注或裁剪/旋转"}
+            className="flex items-center gap-1.5 rounded border border-white/25 px-3 py-1.5 text-white transition-colors hover:bg-white/10 disabled:opacity-40"
+          >
+            <LayoutDashboard size={14} /> 添加到画板
+          </button>}
           <button
             type="button"
             disabled={!hasEdits || busy}

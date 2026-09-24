@@ -159,6 +159,7 @@ function BrandVisualSession({ folder }: { folder: { id: string; name: string; pr
   }, [deleting]);
 
   function backToCollection() {
+    if (folder.id.startsWith("workflow:")) { close(); return; }
     clearValidation(); setDetail(null); setRules([]); setDirection(null); setEditing(false);
     setTaskId(undefined); setHistoryExpanded(true); setError(null); setNotice(null);
   }
@@ -313,6 +314,7 @@ function BrandVisualSession({ folder }: { folder: { id: string; name: string; pr
     {error && <div className="bv-message is-error" role="alert"><span>{error}</span>{!detail && !busy && !deleting && <button onClick={() => void perform("正在重新读取…", async () => { await readSource(); })}>重新读取图片</button>}</div>}
     {deleting && <div ref={deleteMessage} className="bv-message" role="alert"><span>删除「{deleting.name} · v{deleting.version}」？删除后将无法在创作中选用；原素材和已生成内容会保留。</span></div>}
     {notice && <div className="bv-message" role="status">{notice}</div>}
+    {detail?.sourceRequirements && <details className="bv-secondary"><summary>提炼时的文字要求</summary><p style={{ whiteSpace: "pre-wrap" }}>{detail.sourceRequirements}</p></details>}
     {busy && <div className="bv-working" role="status"><span className="app-spinner" /><div><strong>{busy}</strong><span>{taskRunning ? "可关闭面板，在任务中心查看进度；完成后会提醒你。" : "交给 Bowerbird，稍等片刻。"}</span></div></div>}
     <fieldset className="bv-fields" disabled={!!busy || !!leave || !!deleting}>
     {!detail ? <section className="bv-source">

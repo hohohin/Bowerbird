@@ -19,6 +19,8 @@ interface GenerateRequest {
   reference_images?: ImageInput[];
   ratio?: string;
   service?: string;
+  /** 透明图层：映射 Ark `/images/generations` 的 `background: "transparent"`（仅图片）。 */
+  transparent?: boolean;
   mock_scenario?: MockScenario;
   video_options?: CloudVideoOptions;
   reference_videos?: VideoReference[];
@@ -67,6 +69,9 @@ function validate(body: unknown): GenerateRequest {
     catch { throw new ApiError("invalid_request", "视频参数或参考素材无效，请检查模式、时长和比例"); }
   } else if (value.video_options || (Array.isArray(value.reference_videos) && value.reference_videos.length)) {
     throw new ApiError("invalid_request", "图片生成不能携带视频参数");
+  }
+  if (value.transparent !== undefined && (typeof value.transparent !== "boolean" || value.media !== "image")) {
+    throw new ApiError("invalid_request", "透明图层仅图片生成支持");
   }
   return value as unknown as GenerateRequest;
 }
@@ -210,6 +215,7 @@ async function createJob(
     ratio: body.ratio ?? null,
     mock_scenario: body.mock_scenario ?? null,
     ...(body.media === "video" ? { video_options: body.video_options, reference_videos: videoReferences } : {}),
+    ...(body.media === "image" ? { transparent: body.transparent === true } : {}),
     ...(body.layer_options ? { layer_options: body.layer_options } : {}),
   });
   const manifestHash = await sha256Hex(requestPayload);

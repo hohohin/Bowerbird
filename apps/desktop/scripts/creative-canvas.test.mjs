@@ -590,7 +590,7 @@ for (const collection of ["promptGraphNodes", "agentGraphNodes"]) {
       const removed = [];
       const summary = () => ({ status, jobId: "job", runId: "run" });
       const bindings = { React, X: () => null, selectCloudAgentResultArtifacts, promptNodeSummary: summary, agentGroupSummary: summary,
-        cloudAgentRuns: {}, focusedNodeId: null, activeDragId: null, focusedThreadId: null,
+        cloudAgentRuns: {}, genJobs: {}, focusedNodeId: null, activeDragId: null, focusedThreadId: null,
         supersededTaskIds: new Set(), ReadonlyPrompt: () => null, CanvasResizeHandle: () => null, promptReferences: new Map(), graphNodes: [], agentPromptGroups: new Map(),
         selectedCanvasNodeIds: new Set(), selectedCanvasNodeIdsRef: { current: new Set() },
         removeNodes: (ids) => removed.push(...ids),
@@ -621,7 +621,7 @@ for (const dragKind of ["material", "execution"]) {
     test("mixed marquee drag from " + dragKind + (cancel ? " cancels both layouts" : " persists both layouts"), async () => {
       const source = readFileSync(new URL("../src/components/CanvasWorkspace.tsx", import.meta.url), "utf8");
       const file = ts.createSourceFile("canvas.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-      const names = ["selectionAnchors", "translateGraphSelection", "beginNodeDrag", "beginGraphNodeDrag", "moveNode", "moveGraphNode", "endNodeDrag", "endGraphNodeDrag", "persistGraphNodeGeometry"];
+      const names = ["selectionAnchors", "translateGraphSelection", "translateWorkflowSelection", "beginNodeDrag", "beginGraphNodeDrag", "moveNode", "moveGraphNode", "endNodeDrag", "endGraphNodeDrag", "persistGraphNodeGeometry"];
       const declarations = [];
       function visit(node) {
         if (ts.isFunctionDeclaration(node) && names.includes(node.name?.text)) declarations.push(node.getText(file));
@@ -642,6 +642,9 @@ for (const dragKind of ["material", "execution"]) {
       let activated = 0;
       const bindings = {
         agentPromptGroupMap, expandCanvasSections, graphEdges: [],
+        containedSessionOutputIds: () => new Set(), workflowSessionIds: () => new Set(),
+        canvasWorkflowController: () => ({ document: { nodes: [] } }),
+        workflowRef: { current: null }, drawingTool: "select",
         activateCanvasMaterial: () => activated++, hitNode: () => null,
         hoverRef: { current: null },
         snapEnabledRef: { current: true }, zoomRef: { current: 1 },
@@ -652,6 +655,7 @@ for (const dragKind of ["material", "execution"]) {
         toBoardPoint: (x, y) => ({ x, y }), snapCanvasRect, translateCanvasSelection, exceedsCanvasDragThreshold, isCanvasPanGesture,
         commitNodes: (nodes) => { nodesRef.current = nodes; }, setGraphNodes() {}, focusGraphNode() {}, setSelectedCanvasNodeIds() {},
         setActiveDragId() {}, setGuides() {}, setHover() {}, setFolderDropTargetId() {},
+        pushGeometryUndo() {},
         persistGeometries: (nodes) => persisted.push(...nodes.map((node) => ({ id: node.id, x: node.x, y: node.y }))),
         enqueueWrite: (write) => { writes.push(write()); }, ensureMaterialized: async () => {},
         api: { projectCanvasNodeUpdate: async (id, layout) => { persisted.push({ id, ...layout }); } },
@@ -695,7 +699,7 @@ for (const grouped of [false, true]) {
 test("one undo restores " + (grouped ? "grouped" : "mixed") + " removal without replacing updated execution state", async () => {
   const source = readFileSync(new URL("../src/components/CanvasWorkspace.tsx", import.meta.url), "utf8");
   const file = ts.createSourceFile("canvas.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-  const names = ["removeNodes", "undoRemoval"];
+  const names = ["removeNodes", "undoCanvasAction"];
   const declarations = [];
   function visit(node) {
     if (ts.isFunctionDeclaration(node) && names.includes(node.name?.text)) declarations.push(node.getText(file));
@@ -714,7 +718,7 @@ test("one undo restores " + (grouped ? "grouped" : "mixed") + " removal without 
   const stored = new Map([[original.id, original], [prompt.id, prompt]]);
   const writes = [];
   const bindings = {
-    nodesRef, graphNodesRef, removalHistoryRef: history, groupsRef: { current: new Map([["group", { id: "group", name: "my group", role: "composition" }]]) },
+    nodesRef, graphNodesRef, undoHistoryRef: history, groupsRef: { current: new Map([["group", { id: "group", name: "my group", role: "composition" }]]) },
     groupedAssetNode: (snapshot) => ({ ...asset, asset: snapshot }),
     projectCanvasGroupUpdate: (original, node) => ({ ...original, x: node.x, y: node.y }),
     activeCanvasRef: { current: { id: "project" } }, focusedNodeIdRef: { current: "prompt" },
@@ -743,7 +747,7 @@ test("one undo restores " + (grouped ? "grouped" : "mixed") + " removal without 
   assert.equal(nodesRef.current.length, 0);
   assert.ok(graphNodesRef.current.every((node) => node.hiddenAt != null));
   assert.equal(history.current.length, 1, "mixed removal is one undo step");
-  handlers.undoRemoval();
+  handlers.undoCanvasAction();
   assert.deepEqual(nodesRef.current, [material]);
   assert.ok(graphNodesRef.current.every((node) => node.hiddenAt == null));
   assert.equal(history.current.length, 0);
@@ -780,8 +784,8 @@ test("canvas Ctrl+Z undoes removal without taking over text editing or adding to
     let undone = 0;
     let prevented = 0;
     const bindings = { promptMenuRef: { current: null }, scopedInspectorOpen: false, viewModeRef: { current: "canvas" },
-      nodeDragRef: { current: null }, graphNodeDragRef: { current: null }, removalHistoryRef: { current: [{}] },
-      document: { querySelector: () => null }, undoRemoval: () => undone++ };
+      nodeDragRef: { current: null }, graphNodeDragRef: { current: null }, undoHistoryRef: { current: [{}] },
+      document: { querySelector: () => null }, undoCanvasAction: () => undone++ };
     const onKeyDown = new Function(...Object.keys(bindings), code + ";return onKeyDown;")(...Object.values(bindings));
     onKeyDown({ target, key: "z", code: "KeyZ", ...modifier, preventDefault() { prevented++; } });
     assert.equal(undone, expected);

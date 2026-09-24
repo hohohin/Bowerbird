@@ -250,3 +250,20 @@ test("worker loop fails before submit when the input manifest hash mismatches", 
   ok(!recorded.controlActions.includes("submitted"));
   ok(!recorded.controlActions.includes("finish"));
 });
+
+test("worker consumes v2 text-only inputs without image batches", async () => {
+  const { fetch, recorded } = makeFetch(JSON.stringify({ schema_version: 2, cards: [], requirements: "蓝色，禁止渐变" }));
+  let calls = 0;
+  const stop = { requested: false };
+  const worker = runVisualProfileWorker(baseConfig({ heartbeatIntervalMs: 100 }), async content => {
+    calls++;
+    equal(JSON.parse(content).requirements, "蓝色，禁止渐变");
+    return JSON.stringify({ summary: "蓝色平涂", visualRules: [{ category: "palette", value: "禁止渐变", polarity: "avoid", supportingAssetIds: [] }] });
+  }, fetch, stop);
+  await new Promise<void>(resolve => { setTimeout(resolve, 50); });
+  stop.requested = true; await worker;
+  equal(calls, 1);
+  ok(recorded.controlActions.includes("finish"));
+  const draft = JSON.parse(String(recorded.finishBody?.resultText));
+  equal(draft.visualRules[0].polarity, "avoid");
+});

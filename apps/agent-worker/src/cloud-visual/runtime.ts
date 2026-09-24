@@ -61,7 +61,7 @@ export interface CloudVisualDraft {
   visualRules: Array<{
     category: string;
     value: string;
-    polarity: "must" | "prefer";
+    polarity: "must" | "prefer" | "avoid";
     confidence: number;
     supportingAssetIds: string[];
     opposingAssetIds: string[];
@@ -324,20 +324,40 @@ export async function extractVisualDraft(
   return json;
 }
 
-function parseCards(value: unknown): VisualEvidenceCard[] {
-  if (!isRecord(value) || value.schema_version !== 1 || !Array.isArray(value.cards) || !value.cards.length) {
-    throw new Error("invalid_visual_input");
-  }
-  return value.cards as VisualEvidenceCard[];
+export async function applyVisualRequirements(cards: VisualEvidenceCard[], imageDraft: CloudVisualDraft, requirements: string, chat: ModelChat): Promise<CloudVisualDraft> {
+  const raw = parseJsonLoose(await chat(JSON.stringify({ requirements, imageDraft })));
+  if (!isRecord(raw) || typeof raw.summary !== "string" || !Array.isArray(raw.visualRules) || raw.visualRules.length > 64) throw new Error("visual_requirements_invalid");
+  const known = new Set(cards.map(card => card.assetId));
+  const standards = declaredStandards(cards);
+  const rules: CloudVisualDraft["visualRules"] = raw.visualRules.map(rule => {
+    if (!isRecord(rule) || typeof rule.category !== "string" || !VISUAL_CATEGORIES.has(rule.category)
+      || typeof rule.value !== "string" || !rule.value.trim() || [...rule.value].length > 200
+      || !["must", "prefer", "avoid"].includes(String(rule.polarity)) || !Array.isArray(rule.supportingAssetIds)
+      || rule.supportingAssetIds.some(id => typeof id !== "string" || !known.has(id))) throw new Error("visual_requirements_rule_invalid");
+    return { category: rule.category, value: rule.value.trim(), polarity: rule.polarity as "must" | "prefer" | "avoid",
+      supportingAssetIds: rule.supportingAssetIds as string[], opposingAssetIds: [], confidence: 0, confirmedByUser: false };
+  });
+  const combined = [...standards, ...rules.filter(rule => !rule.value.startsWith("原图明确标注：") && !rule.value.startsWith("待核对的原图标注："))];
+  if (!combined.length || combined.length > 64 || raw.summary.length > 2000) throw new Error("visual_requirements_empty_or_large");
+  return { ...imageDraft, summary: raw.summary, visualRules: combined, candidateDirections: [] };
 }
 
-async function fetchInput(fetchImpl: WorkerFetch, url: string, expectedHash: string): Promise<VisualEvidenceCard[]> {
+function parseInput(value: unknown): { cards: VisualEvidenceCard[]; requirements: string } {
+  if (!isRecord(value) || ![1, 2].includes(Number(value.schema_version)) || !Array.isArray(value.cards)
+    || (value.schema_version === 2 && (typeof value.requirements !== "string" || [...value.requirements].length > 4000))
+    || (!value.cards.length && (value.schema_version !== 2 || !(value.requirements as string).trim()))) {
+    throw new Error("invalid_visual_input");
+  }
+  return { cards: value.cards as VisualEvidenceCard[], requirements: value.schema_version === 2 ? (value.requirements as string).trim() : "" };
+}
+
+async function fetchInput(fetchImpl: WorkerFetch, url: string, expectedHash: string): Promise<{ cards: VisualEvidenceCard[]; requirements: string }> {
   const response = await fetchImpl(url, { method: "GET" });
   if (!response.ok) throw new Error(`input_http_${response.status}`);
   const text = await response.text();
   const actualHash = createHash("sha256").update(text).digest("hex");
   if (actualHash !== expectedHash) throw new Error("input_manifest_hash_mismatch");
-  return parseCards(JSON.parse(text));
+  return parseInput(JSON.parse(text));
 }
 
 class ControlClient {
@@ -397,12 +417,15 @@ async function executeClaim(
   void heartbeatLoop(control, jobId, leaseId, config.heartbeatIntervalMs, heartbeatState);
   let submitted = false;
   try {
-    const cards = await fetchInput(fetchImpl, claimed.inputUrl, claimed.job.inputManifestHash);
+    const { cards, requirements } = await fetchInput(fetchImpl, claimed.inputUrl, claimed.job.inputManifestHash);
     declaredStandards(cards); // Validate before charging/submitting a model request.
     const jobChat = chat ?? createVisualChat(config);
+    const workflowChat = requirements ? chat ?? createVisualChat(config, "workflow") : null;
     await control.post({ action: "submitted", jobId, leaseId });
     submitted = true;
-    const resultText = await extractVisualDraft(cards, jobChat, config.maxCharsPerBatch);
+    const imageDraft = cards.length ? JSON.parse(await extractVisualDraft(cards, jobChat, config.maxCharsPerBatch)) as CloudVisualDraft : aggregateDraft([], []);
+    const resultText = JSON.stringify(workflowChat ? await applyVisualRequirements(cards, imageDraft, requirements, workflowChat) : imageDraft);
+    if (resultText.length > MAX_RESULT_CHARS) throw new Error("visual_draft_too_large");
     await control.post({ action: "finish", jobId, leaseId, resultText });
     console.log(JSON.stringify({ event: "visual_succeeded", job_id: jobId, cards: cards.length, chars: resultText.length }));
   } catch (error) {
@@ -423,8 +446,8 @@ async function executeClaim(
   }
 }
 
-function createVisualChat(config: VisualWorkerConfig): ModelChat {
-  const prompt = loadBrandPrompt("extraction");
+function createVisualChat(config: VisualWorkerConfig, kind: "extraction" | "workflow" = "extraction"): ModelChat {
+  const prompt = loadBrandPrompt(kind);
   const backend = new DeepSeekBackend({
     apiKey: config.deepseekApiKey,
     baseUrl: config.deepseekBaseUrl,

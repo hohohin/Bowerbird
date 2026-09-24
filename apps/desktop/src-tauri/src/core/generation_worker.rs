@@ -140,6 +140,7 @@ pub(crate) fn recover_project_generation_projection(
         parent_node_id: job.parent_node_id.clone(),
         parent_asset_path: job.parent_asset_path.clone(),
         relation: job.creative_relation,
+        retry_anchor_node_id: None,
     })?;
 
     let asset_ids = {

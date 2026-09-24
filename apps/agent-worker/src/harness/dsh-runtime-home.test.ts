@@ -50,3 +50,48 @@ test("DSH runtime home rejects the filesystem root", () => {
     /dsh_runtime_root_unsafe/,
   );
 });
+
+function canonicalTemplate(template: string): void {
+  mkdirSync(join(template, "plugins"), { recursive: true });
+  mkdirSync(join(template, "node_modules", "@deepseek-ai", "dsh", "lib"), { recursive: true });
+  for (const file of ["package.json", "cordis.yml", "cordis.patch.yml", "cordis.bridge.patch.yml", "cordis.controlled-model.patch.yml", "cordis.html-execution.patch.yml", "cordis.content-execution.patch.yml"]) {
+    writeFileSync(join(template, file), file, "utf8");
+  }
+  for (const file of ["bowerbird-planning-rpc.mjs", "bowerbird-planning-tools.mjs", "bowerbird-controlled-model-tools.mjs", "bowerbird-html-execution-tools.mjs", "bowerbird-content-execution-tools.mjs"]) {
+    writeFileSync(join(template, "plugins", file), file, "utf8");
+  }
+  writeFileSync(join(template, "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js"), "bin", "utf8");
+}
+
+test("DSH runtime home copies the optional agent-ds group only when fully present", () => {
+  const root = fixtureRoot("dsh-home-agent-ds");
+  try {
+    const withGroup = join(root, "with-group");
+    canonicalTemplate(withGroup);
+    writeFileSync(join(withGroup, "cordis.agent-ds.patch.yml"), "agent-ds", "utf8");
+    writeFileSync(join(withGroup, "plugins", "bowerbird-agent-ds-tools.mjs"), "tools", "utf8");
+    const home = createDshRuntimeHome({ templateDir: withGroup, runtimeRoot: join(root, "runtime") });
+    const profile = join(home.home, "profiles", home.profileName);
+    assert.equal(readFileSync(join(profile, "cordis.agent-ds.patch.yml"), "utf8"), "agent-ds");
+    assert.equal(readFileSync(join(profile, "plugins", "bowerbird-agent-ds-tools.mjs"), "utf8"), "tools");
+    assert.equal(home.agentDsPatch, "profiles\\bowerbird-u1\\cordis.agent-ds.patch.yml".replaceAll("\\", process.platform === "win32" ? "\\" : "/"));
+    home.dispose();
+
+    const withoutGroup = join(root, "without-group");
+    canonicalTemplate(withoutGroup);
+    const plain = createDshRuntimeHome({ templateDir: withoutGroup, runtimeRoot: join(root, "runtime-2") });
+    assert.equal(plain.agentDsPatch, undefined);
+    assert.equal(existsSync(join(plain.home, "profiles", plain.profileName, "cordis.agent-ds.patch.yml")), false);
+    plain.dispose();
+
+    const halfGroup = join(root, "half-group");
+    canonicalTemplate(halfGroup);
+    writeFileSync(join(halfGroup, "cordis.agent-ds.patch.yml"), "agent-ds", "utf8");
+    assert.throws(
+      () => createDshRuntimeHome({ templateDir: halfGroup, runtimeRoot: join(root, "runtime-3") }),
+      /dsh_profile_template_incomplete/,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

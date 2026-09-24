@@ -53,8 +53,8 @@ function cleanString(value: unknown, max: number): string {
 }
 
 /** 白名单深选：只保留契约已知字段；任何图片字节、路径、URL、未知字段都进不了云端。 */
-function sanitizeCards(raw: unknown): SanitizedCard[] {
-  if (!Array.isArray(raw) || raw.length < MIN_CARDS || raw.length > MAX_CARDS) {
+function sanitizeCards(raw: unknown, allowEmpty = false): SanitizedCard[] {
+  if (!Array.isArray(raw) || raw.length < (allowEmpty ? 0 : MIN_CARDS) || raw.length > MAX_CARDS) {
     throw new ApiError("invalid_request", `反推卡数量需在 ${MIN_CARDS}–${MAX_CARDS} 之间`);
   }
   return raw.map((item) => {
@@ -158,8 +158,12 @@ async function actionCreate(
     ? body.idempotencyKey.slice(0, 200)
     : "";
   if (!idempotencyKey) throw new ApiError("invalid_request", "缺少幂等键");
-  const cards = sanitizeCards(body.cards);
-  const payload = JSON.stringify({ schema_version: 1, cards });
+  const workflow = body.inputSchemaVersion === 2;
+  if (body.inputSchemaVersion !== undefined && !workflow) throw new ApiError("invalid_request", "不支持的输入版本");
+  if (workflow && (typeof body.requirements !== "string" || [...body.requirements].length > 4000)) throw new ApiError("invalid_request", "视觉要求需在 4000 字以内");
+  const requirements = workflow ? (body.requirements as string).trim() : "";
+  const cards = sanitizeCards(body.cards, workflow && !!requirements);
+  const payload = JSON.stringify(workflow ? { schema_version: 2, cards, requirements } : { schema_version: 1, cards });
   if (payload.length > 2 * 1024 * 1024) throw new ApiError("invalid_request", "反推快照过大");
   const manifestHash = await sha256Hex(payload);
 
@@ -241,6 +245,7 @@ Deno.serve(async (request) => {
     userId = user.id;
     const body = await request.json().catch(() => ({})) as Record<string, unknown>;
     const action = typeof body.action === "string" ? body.action : "";
+    if (action === "capabilities") return jsonResponse({ status: "ready", input_schema_version: 2 }, 200, cors);
     if (action === "get" || (!action && typeof body.job_id === "string")) {
       const jobId = typeof body.job_id === "string" ? body.job_id : "";
       if (!jobId) throw new ApiError("invalid_request", "缺少 job_id");

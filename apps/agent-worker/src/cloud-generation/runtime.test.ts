@@ -1,7 +1,7 @@
 import { deepEqual, equal, ok, throws } from "node:assert/strict";
 import { test } from "node:test";
 
-import { configFromEnv, mapArkHttpError, modelForService, KnownProviderError } from "./runtime.ts";
+import { configFromEnv, mapArkHttpError, modelForService, arkImageRequestBody, KnownProviderError } from "./runtime.ts";
 
 test("config requires dedicated control credentials", () => {
   const config = configFromEnv({
@@ -77,4 +77,18 @@ test("Ark invalid image error explains the actionable cause", () => {
   equal(error.safeCode, "invalid_reference_image");
   ok(error.safeMessage.includes("格式、尺寸与宽高比"));
   ok(error.safeMessage.includes("req-2"));
+});
+
+test("arkImageRequestBody maps transparent input to background: transparent", () => {
+  const config = { arkImageSize: "2K" };
+  const base = { schema_version: 1, media: "image" as const, prompt: "一只猫", reference_images: [] };
+  const plain = arkImageRequestBody({ ...base }, { model: "pro-model", optimizePromptMode: null }, config);
+  equal(plain.background, undefined);
+  const transparent = arkImageRequestBody(
+    { ...base, transparent: true },
+    { model: "pro-model", optimizePromptMode: "fast" },
+    config,
+  );
+  equal(transparent.background, "transparent");
+  deepEqual(transparent.optimize_prompt_options, { mode: "fast" });
 });

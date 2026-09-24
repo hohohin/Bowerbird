@@ -1158,6 +1158,7 @@ impl Database {
                 parent_node_id: None,
                 parent_asset_path,
                 relation: Some(CreativeGenerationRelation::Continued),
+                retry_anchor_node_id: None,
             })?;
             node_ids.push(graph.prompt_node_id);
             node_ids.extend(graph.reference_node_ids);

@@ -1147,6 +1147,7 @@ export interface VisualProfileSummary {
 }
 
 export interface VisualProfileDetail extends VisualProfileSummary {
+  sourceRequirements?: string | null;
   sourceScopeHash: string;
   sourceAssetIds: string[];
   rules: VisualProfileDraftRule[];
