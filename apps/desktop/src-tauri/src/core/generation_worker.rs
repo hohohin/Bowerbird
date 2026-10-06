@@ -69,7 +69,7 @@ fn update_creative_job_status(
 ) {
     let (Some(project_id), Some(thread_id), Some(turn_key)) = (
         job.project_id.as_deref(),
-        job.thread_id.as_deref(),
+        job.thread_id.as_deref().filter(|_| !job.internal_agent),
         job.turn_key.as_deref(),
     ) else {
         return;
@@ -106,6 +106,9 @@ pub(crate) fn recover_project_generation_projection(
     job: &GenJob,
     task_status: &str,
 ) -> AppResult<bool> {
+    if job.internal_agent {
+        return Ok(false);
+    }
     let (Some(project_id), Some(thread_id), Some(turn_key)) = (
         job.project_id.as_deref(),
         job.thread_id.as_deref(),
@@ -456,24 +459,26 @@ pub(crate) async fn recover_one_cloud_job(
     mut job: GenJob,
     submit_id: String,
 ) {
-    let _ = app.emit(
-        "codex://chunk",
-        serde_json::json!({
-            "kind": "recover_started",
-            "job_id": job.id,
-            "prompt": job.prompt,
-            "provider": job.provider,
-            "project_id": job.project_id,
-            "thread_id": job.thread_id,
-            "turn_key": job.turn_key,
-            "media": job.media,
-            "video_options": job.video_options,
-            "references": job.references,
-            "reference_node_ids": job.reference_node_ids,
-            "ratio": job.ratio,
-            "submit_id": submit_id,
-        }),
-    );
+    if !job.internal_agent {
+        let _ = app.emit(
+            "codex://chunk",
+            serde_json::json!({
+                "kind": "recover_started",
+                "job_id": job.id,
+                "prompt": job.prompt,
+                "provider": job.provider,
+                "project_id": job.project_id,
+                "thread_id": job.thread_id,
+                "turn_key": job.turn_key,
+                "media": job.media,
+                "video_options": job.video_options,
+                "references": job.references,
+                "reference_node_ids": job.reference_node_ids,
+                "ratio": job.ratio,
+                "submit_id": submit_id,
+            }),
+        );
+    }
     job.status = "querying".into();
     let _ = Task::upsert_gen_job(&db, &job);
     update_creative_job_status(&app, &db, &job, "querying", Some(&submit_id));
@@ -522,7 +527,7 @@ pub(crate) async fn recover_one_cloud_job(
                 Ok(assets) => {
                     if let (Some(project_id), Some(thread_id), Some(turn_key)) = (
                         job.project_id.as_deref(),
-                        job.thread_id.as_deref(),
+                        job.thread_id.as_deref().filter(|_| !job.internal_agent),
                         job.turn_key.as_deref(),
                     ) {
                         let _ = db.complete_project_generation_turn(
@@ -608,23 +613,25 @@ async fn recover_one_jimeng_job_inner(
     mut cancel_rx: Option<tokio::sync::oneshot::Receiver<()>>,
 ) {
     // ① recover_started 自包含事件：前端据此 upsert 占位 job，防 done 早于 loadGenJobs 丢事件。
-    let _ = app.emit(
-        "codex://chunk",
-        serde_json::json!({
-            "kind": "recover_started",
-            "job_id": job.id,
-            "prompt": job.prompt,
-            "provider": job.provider,
-            "project_id": job.project_id,
-            "thread_id": job.thread_id,
-            "turn_key": job.turn_key,
-            "media": job.media,
-            "video_options": job.video_options,
-            "ratio": job.ratio,
-            "references": job.references,
-            "submit_id": job.submit_id,
-        }),
-    );
+    if !job.internal_agent {
+        let _ = app.emit(
+            "codex://chunk",
+            serde_json::json!({
+                "kind": "recover_started",
+                "job_id": job.id,
+                "prompt": job.prompt,
+                "provider": job.provider,
+                "project_id": job.project_id,
+                "thread_id": job.thread_id,
+                "turn_key": job.turn_key,
+                "media": job.media,
+                "video_options": job.video_options,
+                "ratio": job.ratio,
+                "references": job.references,
+                "submit_id": job.submit_id,
+            }),
+        );
+    }
     // ② 拿 permit（FIFO 公平，与正常即梦生成串行）。
     // ③ status=querying 落库（前端 loadGenJobs 拉到时显示「续查中」）。
     job.status = "querying".into();
@@ -690,7 +697,7 @@ async fn recover_one_jimeng_job_inner(
                 Ok(assets) => {
                     if let (Some(project_id), Some(thread_id), Some(turn_key)) = (
                         job.project_id.as_deref(),
-                        job.thread_id.as_deref(),
+                        job.thread_id.as_deref().filter(|_| !job.internal_agent),
                         job.turn_key.as_deref(),
                     ) {
                         let _ = db.complete_project_generation_turn(
@@ -886,6 +893,7 @@ mod tests {
         db.migrate().unwrap();
         // task_queue：全状态 GenJob 的 submit_id 都算已知（含 failed）。
         let failed_job = GenJob {
+            internal_agent: false,
             id: "job-1".into(),
             media: "image".into(),
             provider: "jimeng".into(),
@@ -959,6 +967,7 @@ mod tests {
         })
         .unwrap();
         let job = GenJob {
+            internal_agent: false,
             id: "job-1".into(),
             media: "image".into(),
             provider: "bowerbird-cloud".into(),
@@ -1006,6 +1015,17 @@ mod tests {
             .thread_for_generation("conversation-1")
             .unwrap()
             .is_none());
+        // An Agent's persisted provider job must never become a conversation card on restart.
+        let mut internal = job.clone();
+        internal.internal_agent = true;
+        Task::upsert_gen_job(&db, &internal).unwrap();
+        let restored = Task::by_id(&db, &job.id).unwrap().unwrap().gen_job().unwrap();
+        assert!(restored.internal_agent);
+        assert!(!recover_project_generation_projection(&db, &restored, "done").unwrap());
+        assert!(db.project_canvas_snapshot("project-1").unwrap().nodes.is_empty());
+        assert!(db.thread_for_generation("conversation-1").unwrap().is_none());
+
+        Task::upsert_gen_job(&db, &job).unwrap();
         assert!(recover_project_generation_projection(&db, &job, "done").unwrap());
         assert_eq!(
             db.thread_for_generation("conversation-1")
@@ -1121,6 +1141,7 @@ mod tests {
             .unwrap();
         }
         let job = GenJob {
+            internal_agent: false,
             id: "job-exact-parent".into(),
             media: "image".into(),
             provider: "bowerbird-cloud".into(),
@@ -1187,6 +1208,7 @@ mod tests {
         })
         .unwrap();
         let job = GenJob {
+            internal_agent: false,
             id: "job-1".into(),
             media: "image".into(),
             provider: "codex".into(),

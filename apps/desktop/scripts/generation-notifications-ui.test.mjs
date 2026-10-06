@@ -35,10 +35,14 @@ try {
     api.codexHealth = async () => null;
     api.dreaminaHealth = async () => null;
     useStore.setState({ settings:window.saved, genJobs:{}, genJobOrder:[], activeProjectId:'different-project', genPanelOpen:false });
-    notifications.prepareGenerationSound();
+    function SoundLifecycle() {
+      const enabled = useStore(s => s.settings != null && (s.settings.generation_completion_sound ?? true));
+      React.useEffect(() => notifications.prepareGenerationSound(enabled), [enabled]);
+      return null;
+    }
     document.body.innerHTML = '<div id="notification-test"></div>';
     createRoot(document.getElementById('notification-test')).render(React.createElement(React.Fragment, null,
-      React.createElement(ToastViewport), React.createElement(SettingsDialog, {onClose:()=>{}})));
+      React.createElement(SoundLifecycle), React.createElement(ToastViewport), React.createElement(SettingsDialog, {onClose:()=>{}})));
     window.complete = (id, media='image') => {
       const job = { id, media, running:true, turns:[{id:1, prompt:'test', images:[]}], streaming:'', sessionId:null, projectId:'original-project' };
       useStore.setState(s => ({ genJobs:{...s.genJobs,[id]:job},genJobOrder:[...s.genJobOrder,id] }));
@@ -76,6 +80,8 @@ try {
   });
   assert.equal(await page.evaluate(() => window.notices.length), 3);
   await page.getByRole('switch', {name:'提示音',exact:true}).click();
+  // Re-enabling arms audio for the next gesture; disabling released the old context.
+  await page.getByText('生成完成提醒', {exact:true}).click();
   await page.waitForTimeout(1100);
   await page.evaluate(() => window.complete('sound-only'));
   assert.equal(await page.evaluate(() => window.notices.length), 3);

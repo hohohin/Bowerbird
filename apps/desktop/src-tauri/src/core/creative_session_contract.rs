@@ -13,6 +13,9 @@ use thiserror::Error;
 
 pub const CREATIVE_NODE_PAYLOAD_SCHEMA_VERSION: u8 = 1;
 pub const MAX_CREATIVE_NODE_PAYLOAD_BYTES: usize = 64 * 1024;
+// Content cards accumulate tables across deliveries and store both cells and a
+// plain-text projection. They need a separate bound from execution metadata.
+pub const MAX_NOTE_NODE_PAYLOAD_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -302,8 +305,8 @@ pub enum CreativeNodePayload {
 
 #[derive(Debug, Error)]
 pub enum CreativeContractError {
-    #[error("creative node payload exceeds {MAX_CREATIVE_NODE_PAYLOAD_BYTES} bytes")]
-    PayloadTooLarge,
+    #[error("creative node payload exceeds {limit} bytes")]
+    PayloadTooLarge { limit: usize },
     #[error("text card rows must have the same nonzero number of columns")]
     InvalidNoteGrid,
     #[error("text card line height must be between 100 and 300 percent")]
@@ -598,8 +601,13 @@ pub fn parse_node_payload(
     kind: CreativeNodeKind,
     payload_json: &str,
 ) -> Result<CreativeNodePayload, CreativeContractError> {
-    if payload_json.len() > MAX_CREATIVE_NODE_PAYLOAD_BYTES {
-        return Err(CreativeContractError::PayloadTooLarge);
+    let limit = if kind == CreativeNodeKind::Note {
+        MAX_NOTE_NODE_PAYLOAD_BYTES
+    } else {
+        MAX_CREATIVE_NODE_PAYLOAD_BYTES
+    };
+    if payload_json.len() > limit {
+        return Err(CreativeContractError::PayloadTooLarge { limit });
     }
     let value = serde_json::from_str(payload_json)?;
     parse_node_payload_value(kind, value)
@@ -1042,12 +1050,36 @@ mod tests {
 
         let oversized = format!(
             r#"{{"schema_version":1,"text":"{}"}}"#,
-            "x".repeat(MAX_CREATIVE_NODE_PAYLOAD_BYTES)
+            "x".repeat(MAX_NOTE_NODE_PAYLOAD_BYTES)
         );
         assert!(matches!(
             parse_node_payload(CreativeNodeKind::Note, &oversized),
-            Err(CreativeContractError::PayloadTooLarge)
+            Err(CreativeContractError::PayloadTooLarge { limit: MAX_NOTE_NODE_PAYLOAD_BYTES })
         ));
+    }
+
+    #[test]
+    fn payload_byte_limits_are_specific_to_node_kind() {
+        for (kind, limit, base) in [
+            (CreativeNodeKind::Note, MAX_NOTE_NODE_PAYLOAD_BYTES, r#"{"schema_version":1,"text":""}"#),
+            (CreativeNodeKind::Prompt, MAX_CREATIVE_NODE_PAYLOAD_BYTES, r#"{"schema_version":1,"text":""}"#),
+        ] {
+            let mut value: Value = serde_json::from_str(base).unwrap();
+            let remaining = limit - base.len();
+            value["text"] = Value::String("文".repeat(remaining / 3) + &"x".repeat(remaining % 3));
+            let json = serde_json::to_string(&value).unwrap();
+            assert_eq!(json.len(), limit);
+            assert!(parse_node_payload(kind, &json).is_ok());
+            let over = format!("{json} ");
+            let error = parse_node_payload(kind, &over).unwrap_err();
+            assert_eq!(error.to_string(), format!("creative node payload exceeds {limit} bytes"));
+        }
+        for kind in [CreativeNodeKind::Asset, CreativeNodeKind::Prompt, CreativeNodeKind::AgentGroup] {
+            assert!(matches!(
+                parse_node_payload(kind, &" ".repeat(MAX_CREATIVE_NODE_PAYLOAD_BYTES + 1)),
+                Err(CreativeContractError::PayloadTooLarge { limit: MAX_CREATIVE_NODE_PAYLOAD_BYTES })
+            ));
+        }
     }
 
     #[test]

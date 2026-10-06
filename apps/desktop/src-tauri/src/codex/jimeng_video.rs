@@ -1,4 +1,4 @@
-//! Seedance 2.5 CLI：显式模型、四模式、提交一次后持续查询。
+//! Seedance CLI：显式模型、四模式、提交一次后持续查询。
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -22,15 +22,23 @@ fn reference_is_video(path: &Path) -> bool {
 /// 参数验证与命令编译共用，调用前端不能绕过模型、引用数及比例约束。
 pub(crate) fn arguments(req: &CodexRequest, options: &VideoOptions) -> AppResult<Vec<OsString>> {
     let error = |message: &str| AppError::Jimeng(message.into());
-    if options.model_version != "seedance2.5" {
-        return Err(error("视频模型必须为 seedance2.5，不会自动切换其他模型"));
+    let (min, max) = match options.model_version.as_str() {
+        "seedance2.5" => (4, 30),
+        "seedance2.0" | "seedance2.0fast" | "seedance2.0_vip" | "seedance2.0fast_vip" | "seedance2.0mini" => (4, 15),
+        "seedance1.5pro" if matches!(options.kind.as_str(), "image2video" | "frames2video") => (5, 12),
+        "seedance1.0fast" if options.kind == "image2video" => (5, 10),
+        _ => return Err(error("当前视频模式不支持此模型")),
+    };
+    if !(min..=max).contains(&options.duration) {
+        return Err(error(&format!("当前视频模型时长须为 {min}–{max} 秒")));
     }
-    if !(4..=30).contains(&options.duration) {
-        return Err(error("Seedance 2.5 视频时长须为 4–30 秒"));
-    }
-    if !matches!(options.video_resolution.as_str(), "480p" | "720p") {
-        return Err(error("Seedance 2.5 仅支持 480p / 720p"));
-    }
+    let valid_resolution = match options.model_version.as_str() {
+        "seedance2.5" => matches!(options.video_resolution.as_str(), "480p" | "720p" | "1080p"),
+        "seedance2.0_vip" => matches!(options.video_resolution.as_str(), "720p" | "1080p" | "4k"),
+        _ => options.video_resolution == "720p",
+    };
+    if !valid_resolution { return Err(error("当前视频模型不支持此分辨率")); }
+    let (max_images, max_videos) = if options.model_version == "seedance2.5" { (30, 10) } else { (9, 3) };
     let refs = &req.reference_images;
     let videos = refs.iter().filter(|p| reference_is_video(p)).count();
     let images = refs.len() - videos;
@@ -55,12 +63,12 @@ pub(crate) fn arguments(req: &CodexRequest, options: &VideoOptions) -> AppResult
         "frames2video" if images == 2 && videos == 0 => {
             args.extend(["--first".into(), refs[0].as_os_str().to_owned(), "--last".into(), refs[1].as_os_str().to_owned()]);
         }
-        "multimodal2video" if !refs.is_empty() && images <= 30 && videos <= 10 && refs.len() <= 50 => {
+        "multimodal2video" if !refs.is_empty() && images <= max_images && videos <= max_videos => {
             for path in refs {
                 args.extend([if reference_is_video(path) { "--video" } else { "--image" }.into(), path.as_os_str().to_owned()]);
             }
         }
-        _ => return Err(error("视频模式与参考素材不匹配：文生无参考，图生一图，首尾帧两图，多模态最多 30 图 / 10 视频")),
+        _ => return Err(error(&format!("视频模式与参考素材不匹配：文生无参考，图生一图，首尾帧两图，多参考最多 {max_images} 图 / {max_videos} 视频"))),
     }
     if req.instruction.trim().is_empty()
         && matches!(options.kind.as_str(), "text2video" | "image2video")
@@ -98,6 +106,7 @@ pub(crate) fn arguments(req: &CodexRequest, options: &VideoOptions) -> AppResult
 /// 视频元数据（宽高/时长）由进程内 mp4 解析提供，不再要求本机装有 ffmpeg/ffprobe。
 pub(crate) fn preflight(req: &CodexRequest, options: &VideoOptions) -> AppResult<()> {
     arguments(req, options)?;
+    let max_duration = if options.model_version == "seedance2.5" { 30.0 } else { 15.0 };
     let mut video_duration = 0.0;
     for path in &req.reference_images {
         if !path.is_file() {
@@ -108,14 +117,14 @@ pub(crate) fn preflight(req: &CodexRequest, options: &VideoOptions) -> AppResult
         }
         if reference_is_video(path) {
             let meta = crate::media::probe::probe(path)?;
-            if !(2.0..=30.0).contains(&meta.duration) {
-                return Err(AppError::Jimeng("每条参考视频须为 2–30 秒".into()));
+            if !(2.0..=max_duration).contains(&meta.duration) {
+                return Err(AppError::Jimeng(format!("每条参考视频须为 2–{max_duration} 秒")));
             }
             video_duration += meta.duration;
         }
     }
-    if video_duration > 30.0 {
-        return Err(AppError::Jimeng("参考视频总时长不得超过 30 秒".into()));
+    if video_duration > max_duration {
+        return Err(AppError::Jimeng(format!("参考视频总时长不得超过 {max_duration} 秒")));
     }
     Ok(())
 }
@@ -145,7 +154,7 @@ fn remote_failure(value: &serde_json::Value) -> AppError {
         ""
     };
     AppError::Jimeng(format!(
-        "Seedance 2.5 生成失败：{reason}{hint}（不会切换模型）"
+        "即梦视频生成失败：{reason}{hint}（不会切换模型）"
     ))
 }
 
@@ -205,7 +214,7 @@ pub(crate) async fn generate(
     .map_err(|_| AppError::Jimeng("视频任务状态通道已关闭".into()))?;
     let (source_images, temp_dir) = poll_video(binary, &submit_id).await?;
     Ok(GenOutcome {
-        text: format!("[即梦 Seedance 2.5] 已生成 {} 个视频", source_images.len()),
+        text: format!("[即梦 {}] 已生成 {} 个视频", options.model_version, source_images.len()),
         session_id: resume_session.or_else(|| Some(submit_id.clone())),
         submit_id: Some(submit_id),
         elapsed_ms: start.elapsed().as_millis() as u64,
@@ -365,14 +374,14 @@ mod tests {
             assert!(arguments(&req(&[]), &opts).is_err());
         }
         opts.duration = 5;
-        for resolution in ["480p", "720p"] {
+        for resolution in ["480p", "720p", "1080p"] {
             opts.video_resolution = resolution.into();
             assert!(arguments(&req(&[]), &opts).is_ok());
         }
-        opts.video_resolution = "1080p".into();
+        opts.video_resolution = "4k".into();
         assert!(arguments(&req(&[]), &opts).is_err());
         opts = options("text2video");
-        opts.model_version = "seedance2.0fast".into();
+        opts.model_version = "unknown-model".into();
         assert!(arguments(&req(&[]), &opts).is_err());
         assert!(arguments(&req(&["a.png", "b.png"]), &options("multiframe2video")).is_err());
         assert!(arguments(&req(&["a.mp4"]), &options("image2video")).is_err());
@@ -382,6 +391,36 @@ mod tests {
         let mut request = req(&[]);
         request.ratio = Some("2:3".into());
         assert!(arguments(&request, &options("text2video")).is_err());
+    }
+
+    #[test]
+    fn selected_models_have_exact_arguments_and_distinct_limits() {
+        for model in ["seedance2.0", "seedance2.0fast", "seedance2.0_vip", "seedance2.0fast_vip", "seedance2.0mini"] {
+            let mut opts = options("text2video");
+            opts.model_version = model.into();
+            opts.duration = 15;
+            let args = arguments(&req(&[]), &opts).unwrap();
+            assert!(args.windows(2).any(|pair| pair == ["--model_version", model]));
+            opts.duration = 16;
+            assert!(arguments(&req(&[]), &opts).is_err());
+            opts.duration = 5;
+            opts.video_resolution = "4k".into();
+            assert_eq!(arguments(&req(&[]), &opts).is_ok(), model == "seedance2.0_vip");
+            opts.video_resolution = "720p".into();
+            opts.kind = "multimodal2video".into();
+            assert!(arguments(&req(&["a.png"; 9]), &opts).is_ok());
+            assert!(arguments(&req(&["a.png"; 10]), &opts).is_err());
+            assert!(arguments(&req(&["a.mp4"; 4]), &opts).is_err());
+        }
+        let mut opts = options("image2video");
+        opts.model_version = "seedance1.0fast".into();
+        opts.duration = 10;
+        assert!(arguments(&req(&["a.png"]), &opts).is_ok());
+        opts.duration = 11;
+        assert!(arguments(&req(&["a.png"]), &opts).is_err());
+        opts.model_version = "seedance1.5pro".into();
+        opts.kind = "frames2video".into();
+        assert!(arguments(&req(&["a.png", "b.png"]), &opts).is_ok());
     }
 
     #[test]

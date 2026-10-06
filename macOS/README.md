@@ -3,6 +3,10 @@
 本目录记录 Mac 上的本地开发、运行和未签名构建流程。Bowerbird 使用 canonical Tauri / React / Rust 源码，不维护 macOS override。构建架构以 `rustc -vV` 的 host 为准；Intel 为 `x86_64-apple-darwin`，Apple Silicon 原生工具链为 `aarch64-apple-darwin`。
 
 
+## 2026-10-07 源码存档与 Windows 同步
+
+自上次 mac 推送 `e63841a` 以来的完整增量、共享代码与 Mac 专属实现、迁移及 Windows 验收清单见 [Windows 同步说明](WINDOWS-SYNC-2026-10-07.md)。本轮仍为源码交接，未生成或发布新版安装包；项目当前状态以 `PROJECT.md` 为准。
+
 ## 2026-09-24 同步 dev 工作流与模板（源码未发布）
 
 `mac` 从 `e63841a` 合入 `origin/dev@f196d6c`：画板工作流、内容卡、模板库与 `.bbworkflow.json` 分享、planning-v2 编排、并行调度及 SQLite `0031`–`0033` 均使用正典实现。保留 Mac `26.9.2002` 版本与 updater 公钥、原生标题栏/WKWebView、稳定签名配置、refresh token 缓存、原生 MP4 探针及 Intel 向量模型回退。版本号未提升，本轮没有生成或发布新版安装包。
@@ -79,7 +83,13 @@ COS_SKIP_BUILD=1 COS_SKIP_UPLOAD=1 bash macOS/release.sh   # 本地演练：复�
 
 上传 ≠ 发布：官网 `downloads/updates/darwin-<arch>.json` 仍由发布侧**核验完整下载、SHA-256、公钥验签后原子替换**；上传后本机公网核对只验证了可达与大小。上传前请确认版本号已按规范提升（脚本护栏会拦同版本/降版本）。
 
-## 钥匙串授权弹窗与本地稳定签名（2026-09-20）
+## 钥匙串授权弹窗与本地稳定签名（2026-09-25 更正）
+
+**当前结论：稳定自签名不足以解决跨构建授权。** 9 月 25 日 securityd 日志确认用户已多次点“始终允许”，但下一次构建仍出现 `ACL partition mismatch: client cdhash:…`。macOS 除 designated requirement 外，还校验钥匙串 partition；本地自签名没有 Apple 验证的 Team ID，分区按 CDHash 划分。两份同证书、同标识程序的真实钥匙串隔离实验已复现第二份读取失败（`-25293`）。下文 9 月 20/24 日措施只稳定了签名身份，不能作为“根治”证据；发布包同样不能靠自签名承诺跨版本免授权。
+
+**开发版当前修复：** `macOS/run-signed.sh` 在桌面可执行文件旁准备 `bowerbird-dev-keychain`，只在辅助程序源码、证书或架构变化时重建；业务代码重编译保留它的字节与 CDHash。macOS debug 构建通过 `cloud/dev_keychain.rs` 调用该程序，release/其他平台继续使用原生 keyring 后端。辅助程序只操作既有 `com.bowerbird.desktop` / `supabase-refresh-token` 条目，通过 Security API 校验实时父进程必须为同证书签名的 Bowerbird；桌面发送 token 前也核验辅助程序签名与标识。token 仅走匿名管道和系统钥匙串，不进入 argv、环境变量或文件；辅助程序失败不会回退到反复触发授权的直接访问。旧条目首次改由辅助程序访问可能需一次“始终允许”，以后普通业务重编译不改变此授权主体；辅助程序本身更新、证书变化或钥匙串策略变化仍可能再次要求授权。
+
+验证：`bash macOS/test-dev-keychain.sh` 使用实际 Rust 凭据后端与辅助程序、随机测试条目和假 token，禁用所有系统授权交互，两次不同 CDHash 的主程序之间读取、轮换写回、删除/不存在映射通过；未授权父进程和被替换的辅助程序均拒绝。`bash macOS/test-dev-signing.sh` 验证 Cargo 启动、参数、测试透传与两次主程序重编译后辅助程序哈希不变。测试不读取真实登录 token。首次旧条目授权与实际开发应用体验仍需用户侧确认。
 
 **现象**：使用应用时系统反复弹「bowerbird-desktop 想要使用你储存在钥匙串中的 com.bowerbird.desktop 中的机密信息」，输密码后还会再弹 2-3 次。
 
@@ -91,9 +101,13 @@ COS_SKIP_BUILD=1 COS_SKIP_UPLOAD=1 bash macOS/release.sh   # 本地演练：复�
 2. `macOS/setup-codesign-cert.sh`：一次性生成自签名 codeSigning 证书 `Bowerbird Local Code Signing`（10 年有效期，保存在 Git 忽略的 `macOS/.signing/codesign.crt` / `codesign.key`）并导入 login 钥匙串。已在本机完成导入；证书/私钥请像 `updater.key` 一样保管，换机构建机需带走这两个文件并重跑脚本。
 3. `macOS/release.sh`：检测到该身份时导出 `APPLE_SIGNING_IDENTITY`，Tauri 自动以它签名 `.app`（与 DMG），签名身份跨版本稳定。同时 `tauri.macos.conf.json` 显式设 `hardenedRuntime: false`——Tauri 默认 true，但 hardened runtime 会让无 Apple Events 授权的 AppleScript（Dreamina 登录拉 Terminal）被系统拒绝；本地自签名不做公证，无需 hardened runtime。
 
-**用户侧效果**：升级到带稳定签名的版本后，第一次弹钥匙串授权框时输入密码并点**「始终允许」**（不是「允许」）即长期生效，后续版本更新与每小时 token 轮换都不再弹。存量老版本仍会弹，属预期。
+**开发版遗漏补齐（2026-09-24）**：上述 9 月 20 日签名仅接入 `release.sh`，`pnpm tauri dev` / `cargo run` 仍运行 linker ad-hoc 签名的二进制，每次 Rust 重编译后 CDHash 和默认标识变化，内存 token 缓存也随重启清空，所以开发期间仍反复授权。仓库 `.cargo/config.toml` 现为 macOS 配置 `macOS/run-signed.sh`：Cargo 每次运行桌面二进制前，用已有证书与固定 `com.bowerbird.desktop` 标识签名并验证，再 `exec` 原程序、原样传参；证书缺失或签名失败直接报错，不降级临时签名。测试/示例程序直接运行，Windows/Linux 不受影响。`cargo build` 后手工直接执行二进制会绕过 runner，开发启动应使用上述两种入口。现有进程需下次重启才生效。
 
-**边界与坑**：本地自签名只解决钥匙串信任的稳定性，不等于 Developer ID 签名/公证，Gatekeeper 首次打开仍需右键打开；updater 完整性仍由 minisign 签名保证，与代码签名互不影响。首次用该身份签名（或跑 setup 脚本试签）时系统可能弹「codesign 想要使用私钥」，点“始终允许”一次即可。macOS 自带 LibreSSL 生成的 pkcs12 会被 `security import` 报 MAC 校验失败，脚本因此直接导入 PEM 私钥与证书；自签名证书不出现在 `security find-identity -v` 输出属正常，脚本用试签验证。
+隔离回归：`bash macOS/test-dev-signing.sh`（需本机已有证书），两次构建不同内容的小程序，分别从仓库根目录与 `src-tauri` 启动，验证 CDHash 不同但 designated requirement 完全一致、签名有效、带空格参数与普通 Cargo 测试通过；不访问真实登录 token/素材库。系统钥匙串弹窗仍需开发版首次切换后实机确认。
+
+**用户侧效果（以 9 月 25 日修复为准）**：开发版首次出现 `bowerbird-dev-keychain` 访问旧条目的提示时，可能需输入密码并点一次**「始终允许」**。只有辅助程序保持不变时，业务代码重编译才不再更换钥匙串分区；单纯保持自签名证书和应用标识一致并不足够。
+
+**边界与坑**：本地自签名只稳定代码签名 requirement，不能稳定钥匙串 CDHash 分区，也不等于 Developer ID 签名/公证；Gatekeeper 首次打开仍需右键打开。updater 完整性仍由 minisign 签名保证，与代码签名互不影响。首次用该身份签名（或跑 setup 脚本试签）时系统可能弹「codesign 想要使用私钥」，点“始终允许”一次即可。macOS 自带 LibreSSL 生成的 pkcs12 会被 `security import` 报 MAC 校验失败，脚本因此直接导入 PEM 私钥与证书；自签名证书不出现在 `security find-identity -v` 输出属正常，脚本用试签验证。
 
 ## Mac 应用内更新（darwin 通道，2026-09-18 配置）
 
@@ -428,3 +442,20 @@ Dreamina 默认检查 `~/.local/bin/dreamina` 与 PATH。登录操作会拉起 T
 - 失败命令和完整 stderr；
 - 是从 `pnpm tauri dev` 运行，还是 Finder 双击 `.app`；
 - Codex / Dreamina / ffmpeg 是否安装及 `which` 输出。
+
+
+## 视频封面隔离验证（2026-10-02）
+
+当前封面取帧与缓存契约见 `PROJECT.md`「Mac 视频预览释放阻塞牵连整个界面」。Mac helper 由 `build.rs` 编译并静态链接，主程序 `--video-thumbnail-worker` 在任何应用初始化之前处理，无需额外 sidecar 或 FFmpeg。以下均使用合成素材/独立 WebKit 资料，不打开正式素材库：
+
+```sh
+# 仓库根；输出文件必须尚不存在
+swift macOS/video-poster-fixture.swift '/tmp/bowerbird poster fixture.mov'
+cd apps/desktop/src-tauri
+cargo run --offline --example video_poster_smoke -- '/tmp/bowerbird poster fixture.mov' '/tmp/bowerbird poster fixture.jpg'
+cargo test --offline --lib video_
+cd ..
+node scripts/media-previews-ui.test.mjs --native
+```
+
+合成短视频校验真实 H.264 解码、旋转后的尺寸与像素、坏文件回退；原生 UI 校验静态封面实际加载、去重/串行/过期结果、30 轮项目与素材列表挂载卸载和 5 轮主动播放器打开关闭。宿主会短暂显示隔离测试窗口，结束后恢复原应用焦点。无激活窗口可能延迟 IntersectionObserver/懒加载，系统将页面标记为隐藏时也会降速计时器；宿主保留每秒只读自动化查询、最多等待 150 秒，每 15 秒输出轮次，不要仅凭 90 秒超时判定媒体死锁。未覆盖真实项目长时间运行或播放后系统解码器释放。

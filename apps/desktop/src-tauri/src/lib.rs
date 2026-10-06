@@ -12,6 +12,8 @@ mod installation;
 mod media;
 mod prompt;
 
+pub use media::thumb::video_thumbnail_worker;
+
 use std::sync::Arc;
 use std::{path::Path, path::PathBuf};
 
@@ -220,6 +222,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             // Windows/Linux 开发态不会像安装包那样自动注册自定义协议。
             // 仅在这些环境运行时注册 tauri.conf.json 中已有的 bowerbird scheme。
@@ -346,6 +349,7 @@ pub fn run() {
             app.manage(extension_status);
             app.manage(active_project);
             app.manage(settings_state);
+            commands::screenshot::initialize(app.handle());
             app.manage(cloud_client);
             app.manage(auth_client);
             app.manage(entitlement_service);
@@ -377,6 +381,14 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::screenshot::screenshot_start,
+            commands::screenshot::screenshot_record_shortcut,
+            commands::screenshot::screenshot_cancel,
+            commands::screenshot::screenshot_image,
+            commands::screenshot::screenshot_output,
+            commands::screenshot::screenshot_paste,
+            commands::screenshot::screenshot_set_shortcuts,
+            commands::screenshot::screenshot_shortcut_status,
             commands::ping,
             commands::db_health,
             commands::project_canvas::project_canvas_materialize,
@@ -421,6 +433,10 @@ pub fn run() {
             commands::agent_ds::agent_ds_chat,
             commands::agent_ds::agent_ds_workflow_start,
             commands::agent_ds::agent_ds_workflow_result,
+            commands::agent_ds::agent_ds_workflow_ingest_images,
+            commands::agent_ds::agent_ds_workflow_generation_request,
+            commands::agent_ds::agent_ds_workflow_generation_job,
+            commands::agent_ds::agent_ds_workflow_generation_response,
             commands::agent_ds::agent_ds_workflow_feedback,
             commands::cloud::cloud_auth_snapshot,
             commands::cloud::cloud_start_email_login,
@@ -486,6 +502,7 @@ pub fn run() {
             commands::library::list_assets,
             commands::library::list_library_view,
             commands::library::get_assets_by_ids,
+            commands::video_poster::video_poster,
             commands::library::count_assets,
             commands::library::list_folders,
             commands::library::create_folder,
@@ -575,6 +592,9 @@ pub fn run() {
             commands::source_browser::reload_source_browser,
             commands::source_browser::hide_source_browser,
             commands::source_browser_capture::capture_source_browser_image,
+            commands::dreamina_account::dreamina_credit_balance,
+            commands::dreamina_account::dreamina_task_credit,
+            commands::dreamina_account::dreamina_video_models,
             commands::jimeng::dreamina_health,
             commands::jimeng::dreamina_login,
             commands::jimeng::dreamina_check_login,

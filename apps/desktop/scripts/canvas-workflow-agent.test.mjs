@@ -9,15 +9,15 @@ try {
   await page.goto('http://127.0.0.1:1599/scripts/fixtures/canvas-reference/preview.html');
   await page.locator('[data-canvas-node-id="old"]').waitFor();
   await page.getByRole('button',{name:'新增 Agent 卡片',exact:true}).click();
-  await page.getByRole('textbox',{name:'文本修改要求'}).waitFor();
-  await page.getByRole('textbox',{name:'文本修改要求'}).fill('将「朱砂痣」替换为「春山可望」，保留文字的排布关系。');
+  await page.getByRole('textbox',{name:'Agent 要求'}).waitFor();
+  await page.getByRole('textbox',{name:'Agent 要求'}).fill('将「朱砂痣」替换为「春山可望」，保留文字的排布关系。');
   await page.evaluate(async()=>{
     const {canvasWorkflowController}=await import('/src/lib/canvasWorkflowRuntime.ts');
     const {newWorkflowNode}=await import('/src/lib/canvasWorkflow.ts');
     const c=canvasWorkflowController('p'), agent=c.document.nodes.find(node=>node.kind==='agent');
     await c.edit([{...newWorkflowNode('instruction',0,0,''),id:'pending-text'}, {...agent,inputs:{text:[{nodeId:'pending-text',portId:'text'}]}}]);
   });
-  const editor=page.getByRole('textbox',{name:'文本修改要求'});
+  const editor=page.getByRole('textbox',{name:'Agent 要求'});
   await editor.press('End');await editor.pressSequentially('@');
   const menu=page.getByRole('listbox',{name:'收到的内容'});await menu.waitFor();
   assert.equal(await menu.getByRole('option').count(),1);
@@ -47,7 +47,7 @@ try {
     const upstream={...newWorkflowNode('instruction',0,0,'codex'),id:'upstream',action:'reuse',inputs:{image:[{assetId:'existing'}]}};
     const input={nodeId:'upstream',portId:'text'};
     const agent={...newWorkflowNode('agent',420,0,''),id:'agent',agentTransport:'cloud',prompt:'将 @[original] 中的朱砂痣替换为春山可望，其余保持',inputs:{text:[input]},promptReferences:[{id:'original',type:'text',input,label:'文本 1'}]};
-    check(workflowInputs(agent).length===1&&workflowInputs(agent)[0].type==='text','agent accepts source text');
+    check(workflowInputs(agent).length===2&&workflowInputs(agent)[0].type==='text'&&workflowInputs(agent)[1].type==='image','agent accepts source text');
     check(workflowOutputs(agent)[0].type==='text','agent outputs text');
     const binding={nodeId:'agent',portId:'text'};
     const gen={...newWorkflowNode('generation',840,0,'codex'),id:'gen',prompt:'新海报：@[edited]',inputs:{text:[binding]},promptReferences:[{id:'edited',type:'text',input:binding,label:'改写文本'}]};
@@ -125,6 +125,26 @@ try {
     check(repaired.document.run.status==='done'&&rewiredCalls===2,'single-card execution reads the replacement without replaying upstream');
     const persisted=JSON.parse(sessionStorage.getItem('workflow-agent-rewired-cells')).document;
     check(persisted.nodes[2].prompt===multi.prompt&&persisted.nodes[2].promptReferences[0].input.canvasNodeId==='rules-table'&&persisted.nodes[2].promptReferences[1].input.cellId==='next-cell','save preserves both the prompt token and repaired identities');
+    const multimodal=new CanvasWorkflowController('agent-multimodal');await multimodal.load();
+    const imageInput={assetId:'photo'};
+    const imageAgent={...newWorkflowNode('agent',0,0,''),id:'multimodal',prompt:'描述图片',inputs:{image:[imageInput]},promptReferences:[]};
+    api.getAssetsByIds=async ids=>ids.map(id=>({id,store_path:`/tmp/${id}.png`,name:id}));
+    let multimodalCalls=[];
+    api.agentDsWorkflowStart=async(...args)=>{multimodalCalls.push(args);return {path:'test',autoDelivered:true};};
+    api.agentDsWorkflowResult=async requestId=>({schemaVersion:1,requestId,text:'自由分析结果'});
+    await multimodal.edit([imageAgent]);await multimodal.start(imageAgent.id,true);
+    check(multimodal.document.run.status==='done','image-only input completes');
+    check(multimodalCalls[0][1]==='描述图片'&&multimodalCalls[0][2]==='{}'&&multimodalCalls[0][3]==='agent-text'&&multimodalCalls[0][4][0]==='/tmp/photo.png','connected image is delivered even without @');
+    check(multimodalCalls[0][5].projectId==='agent-multimodal'&&multimodalCalls[0][5].nodeId==='multimodal','delivery carries durable project/card scope');
+    await multimodal.edit([{...imageAgent,prompt:'写一首春日短诗',inputs:{},promptReferences:[]}]);await multimodal.start(imageAgent.id,true);
+    check(multimodal.document.run.status==='done'&&multimodalCalls[1][4].length===0,'free writing requires no source');
+    check(JSON.stringify(multimodalCalls[0][5])===JSON.stringify(multimodalCalls[1][5]),'same card retains session scope across runs');
+    await multimodal.edit([{...imageAgent,agentTransport:'cloud'}]);try{await multimodal.start(imageAgent.id,true);}catch{}
+    check(multimodalCalls.length===2&&multimodal.issue.message.includes('Cloud'),'Cloud never silently discards image input');
+    const manyImages=Array.from({length:24},(_,index)=>({assetId:`photo-${index+1}`}));
+    await multimodal.edit([{...imageAgent,inputs:{image:manyImages}}]);await multimodal.start(imageAgent.id,true);
+    check(multimodal.document.run.status==='done'&&multimodalCalls.length===3,'more than ten images complete in one local Agent request');
+    check(JSON.stringify(multimodalCalls[2][4])===JSON.stringify(manyImages.map(input=>`/tmp/${input.assetId}.png`)),'all 24 attachments reach IPC in source order without truncation');
     return {submitted,generated,polls};
   });
   assert.equal(result.submitted,3);assert.equal(result.generated,5);

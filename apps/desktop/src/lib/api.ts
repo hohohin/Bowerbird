@@ -70,6 +70,7 @@ export interface SourceBrowserBounds {
 }
 
 export const api = {
+  videoPoster: (sourcePath: string) => invoke<string | null>("video_poster", { sourcePath }),
   canvasWorkflowGet: (projectId: string) => invoke<import("./canvasWorkflow").WorkflowSnapshot>("canvas_workflow_get", { projectId }),
   workflowTemplatesList: () => invoke<WorkflowTemplate[]>("workflow_templates_list"),
   workflowTemplateSave: (document: WorkflowTemplate) => invoke<WorkflowTemplate>("workflow_template_save", { document, expectedRevision: document.revision }),
@@ -153,10 +154,18 @@ export const api = {
       autoDelivered: boolean;
       notice?: string | null;
     }>("agent_ds_chat", { text, images, imageNames, visualProfileId }),
-  agentDsWorkflowStart: (requestId: string, instruction: string, source: string, purpose?: "planning" | "planning-v2") =>
-    invoke<{ path: string; sessionTitle?: string | null; autoDelivered: boolean; notice?: string | null }>("agent_ds_workflow_start", { requestId, instruction, source, purpose }),
+  agentDsWorkflowStart: (requestId: string, instruction: string, source: string, purpose?: "planning" | "planning-v2" | "agent-text", images?: string[], sessionScope?: { projectId: string; nodeId: string }, imageProvider?: string) =>
+    invoke<{ path: string; sessionId?: string | null; sessionTitle?: string | null; autoDelivered: boolean; notice?: string | null }>("agent_ds_workflow_start", { requestId, instruction, source, purpose, images, sessionScope, imageProvider }),
+  agentDsWorkflowGenerationRequest: (requestId: string) =>
+    invoke<import("./canvasWorkflow").WorkflowAgentGenerationRequest | null>("agent_ds_workflow_generation_request", { requestId }),
+  agentDsWorkflowGenerationResponse: (requestId: string, generation: import("./canvasWorkflow").WorkflowAgentGenerationRequest, response: import("./canvasWorkflow").WorkflowAgentGenerationResponse) =>
+    invoke<void>("agent_ds_workflow_generation_response", { requestId, generation, response }),
+  agentDsWorkflowGenerationJob: (jobId: string, turnKey: string) =>
+    invoke<{ status: string; images: string[]; error?: string | null } | null>("agent_ds_workflow_generation_job", { jobId, turnKey }),
   agentDsWorkflowResult: (requestId: string) =>
-    invoke<{ schemaVersion: 1 | 2; requestId: string; text?: string; error?: string; phase?: "proposal" | "commit"; revision?: number; digest?: string } | null>("agent_ds_workflow_result", { requestId }),
+    invoke<{ schemaVersion: 1 | 2; requestId: string; text?: string; images?: string[]; error?: string; phase?: "proposal" | "commit"; revision?: number; digest?: string } | null>("agent_ds_workflow_result", { requestId }),
+  agentDsWorkflowIngestImages: (requestId: string) =>
+    invoke<Asset[]>("agent_ds_workflow_ingest_images", { requestId }),
   agentDsWorkflowFeedback: (requestId: string, revision: number, text: string, error?: string) =>
     invoke<string>("agent_ds_workflow_feedback", { requestId, revision, text, error }),
 
@@ -461,6 +470,9 @@ export const api = {
   codexLogin: () => invoke<CodexHealth>("codex_login"),
   cancelCodexSetup: () => invoke<void>("cancel_codex_setup"),
   // force=true 跳过后端 120s TTL 缓存强制重检（重新检测 / 安装 / 登录 / 登出后）。
+  dreaminaCreditBalance: () => invoke<number>("dreamina_credit_balance"),
+  dreaminaTaskCredit: (submitId: string) => invoke<number | null>("dreamina_task_credit", { submitId }),
+  dreaminaVideoModels: (kind: string) => invoke<import("./videoGeneration").VideoModelCapability[]>("dreamina_video_models", { kind }),
   dreaminaHealth: (force = false) => invoke<CodexHealth>("dreamina_health", { force }),
   dreaminaLogin: () => invoke<void>("dreamina_login"),
   dreaminaCheckLogin: (deviceCode: string) =>
@@ -481,6 +493,7 @@ export const api = {
   // conversationId：会话级分组（「重新编辑 / 重试」版本分支归组），后端 done 入库时落
   // generation_conversations；anchorSessionId：源会话 session（根 session 补映射用）。
   codexCreateImage: (req: {
+    internalAgent?: boolean;
     media?: import("./videoGeneration").GenerationMedia;
     videoOptions?: import("./videoGeneration").VideoOptions | null;
     /** 图片生成张数（1–4）；仅即梦 / Cloud 生图引擎支持。 */
@@ -513,6 +526,7 @@ export const api = {
     retryAnchorNodeId?: string | null;
   }) =>
     invoke<string>("codex_create_image", {
+      internalAgent: req.internalAgent ?? false,
       media: req.media ?? "image",
       videoOptions: req.videoOptions ?? null,
       count: req.count ?? 1,

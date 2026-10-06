@@ -6,6 +6,7 @@ const server = await createServer({ server: { host: "127.0.0.1", port: 1456, str
 await server.listen();
 const browser = await chromium.launch({ channel: "chrome", headless: true });
 const page = await browser.newPage({ viewport: { width: 1800, height: 1200 } });
+const primaryModifier = process.platform === "darwin" ? "Meta" : "Control";
 const errors = [];
 page.on("pageerror", error => errors.push(error.message));
 const node = id => page.locator(`[data-canvas-node-id="${id}"]`);
@@ -111,7 +112,7 @@ try {
     await page.waitForFunction(ids => ids.filter(id => id !== "folder").every(id =>
       window.calls.some(call => call.command === "project_canvas_node_remove" && call.args.nodeId === id)), ids);
     assert.equal(await page.evaluate(() => window.calls.some(call => /delete_asset|generation.*delete/.test(call.command))), false);
-    await page.keyboard.press("Control+z");
+    await page.keyboard.press(`${primaryModifier}+z`);
     for (const id of ids) await node(id).waitFor();
   }
 
@@ -119,7 +120,7 @@ try {
   await reset();
   await marquee();
   await editor.fill("文字编辑保护");
-  await page.keyboard.press("Control+a");
+  await page.keyboard.press(`${primaryModifier}+a`);
   await page.keyboard.press("Delete");
   assert.equal((await editor.innerText()).trim(), "");
   assert.equal(await page.locator("[data-canvas-node-id]").count(), 7);
@@ -156,7 +157,7 @@ try {
     await node(id).click({ button: "right", position: { x: 30, y: 30 } });
     await page.getByRole("menuitem", { name: "从画布移出", exact: true }).click();
     await node(id).waitFor({ state: "detached" });
-    await page.keyboard.press("Control+z");
+    await page.keyboard.press(`${primaryModifier}+z`);
     await node(id).waitFor();
   }
   await reset();

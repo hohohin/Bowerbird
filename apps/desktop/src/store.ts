@@ -1790,6 +1790,7 @@ export const useStore = create<State>((set, get) => {
           const turns: GenTurn[] = r.turns.map((t) => ({
             id: nextGenTurnId(),
             turnKey: t.turn_key ?? undefined,
+            submitId: t.submit_id,
             prompt: t.prompt,
             media: t.media, videoOptions: t.video_options, ratio: t.ratio,
             appliedPrompt: t.applied_prompt ?? null,
@@ -1801,7 +1802,7 @@ export const useStore = create<State>((set, get) => {
           }));
           // 已有任务但产物被移除或历史读取失败时，仍显示真实提交，不能当作未开始。
           if (turns.length === 0) {
-            turns.push({ id: nextGenTurnId(), turnKey: r.turn_key ?? undefined, prompt: r.prompt, promptRaw: null, images: [], provider: r.provider, media: r.media, videoOptions: r.video_options, ratio: r.ratio, refs: r.references, referenceNodeIds: r.reference_node_ids, refAssets: r.ref_assets });
+            turns.push({ id: nextGenTurnId(), turnKey: r.turn_key ?? undefined, submitId: r.submit_id, prompt: r.prompt, promptRaw: null, images: [], provider: r.provider, media: r.media, videoOptions: r.video_options, ratio: r.ratio, refs: r.references, referenceNodeIds: r.reference_node_ids, refAssets: r.ref_assets });
           }
           if (failed) {
             // 失败态标记在最后一轮：面板 ❌ + 生成面板重试入口（错误文本只活在内存，不入库）。
@@ -1844,6 +1845,7 @@ export const useStore = create<State>((set, get) => {
             turns: [{
               id: nextGenTurnId(),
               turnKey: j.turn_key ?? undefined,
+              submitId: j.submit_id,
               prompt: j.prompt,
               appliedPrompt: j.applied_prompt ?? null,
               images: [],
@@ -2223,7 +2225,7 @@ export const useStore = create<State>((set, get) => {
     if (c.kind === "submit") {
       // 即梦 submit_id 到（Chunk::Submit 回填）：记录到 job，纯展示（恢复续查用）。
       const sid = c.job_id;
-      if (sid) updateJob(sid, (j) => ({ ...j, submitId: c.submit_id, remoteStatus: "querying" }));
+      if (sid) updateJob(sid, (j) => ({ ...j, submitId: c.submit_id, remoteStatus: "querying", turns: j.turns.map((turn, index) => index === j.turns.length - 1 ? { ...turn, submitId: c.submit_id } : turn) }));
       return;
     }
     if (c.kind === "recover_started") {
@@ -2236,13 +2238,13 @@ export const useStore = create<State>((set, get) => {
           return { genJobs: { ...s.genJobs, [rid]: { ...existing, running: true, streaming: "",
             media: c.media ?? existing.media, videoOptions: c.video_options ?? existing.videoOptions,
             submitId: c.submit_id ?? existing.submitId, remoteStatus: "querying" as const,
-            turns: existing.turns.map((turn, index) => index === existing.turns.length - 1 ? { ...turn, error: null } : turn),
+            turns: existing.turns.map((turn, index) => index === existing.turns.length - 1 ? { ...turn, submitId: c.submit_id ?? turn.submitId, error: null } : turn),
           } }, generating: true };
         }
         const job: GenJob = {
           id: rid,
           media: c.media, videoOptions: c.video_options, submitId: c.submit_id,
-          turns: [{ id: nextGenTurnId(), turnKey: c.turn_key ?? undefined, prompt: c.prompt, images: [], provider: c.provider, media: c.media, videoOptions: c.video_options, ratio: c.ratio, refs: c.references, referenceNodeIds: c.reference_node_ids }],
+          turns: [{ id: nextGenTurnId(), turnKey: c.turn_key ?? undefined, submitId: c.submit_id, prompt: c.prompt, images: [], provider: c.provider, media: c.media, videoOptions: c.video_options, ratio: c.ratio, refs: c.references, referenceNodeIds: c.reference_node_ids }],
           sessionId: null,
           threadId: c.thread_id ?? null,
           creativeSessionId: c.creative_session_id ?? null,
@@ -2382,6 +2384,7 @@ export const useStore = create<State>((set, get) => {
         media: hist.media, videoOptions: hist.video_options,
         turns: hist.turns.map((t) => ({
           id: nextGenTurnId(),
+          submitId: t.submit_id,
           prompt: t.prompt,
           media: t.media, videoOptions: t.video_options, ratio: t.ratio,
           appliedPrompt: t.applied_prompt ?? null,

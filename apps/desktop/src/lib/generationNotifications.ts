@@ -6,17 +6,20 @@ const notified = new Set<string>();
 let audioContext: AudioContext | undefined;
 let lastSoundAt = -Infinity;
 
-function getAudioContext() {
-  if (!audioContext || audioContext.state === "closed") audioContext = new AudioContext();
-  return audioContext;
-}
-
 // Unlock audio during a user gesture so a long-running background task can chime later.
-export function prepareGenerationSound() {
+export function prepareGenerationSound(enabled: boolean) {
+  if (!enabled) return;
+  let resuming = false;
   const unlock = () => {
     try {
-      const context = getAudioContext();
-      if (context.state === "suspended") void context.resume().catch(() => {});
+      if (!audioContext || audioContext.state === "closed") {
+        audioContext = new AudioContext();
+        lastSoundAt = -Infinity;
+      }
+      if (audioContext.state === "suspended" && !resuming) {
+        resuming = true;
+        void audioContext.resume().catch(() => {}).finally(() => { resuming = false; });
+      }
     } catch { /* Audio may be unavailable; visual reminders still work. */ }
   };
   window.addEventListener("pointerdown", unlock);
@@ -24,13 +27,16 @@ export function prepareGenerationSound() {
   return () => {
     window.removeEventListener("pointerdown", unlock);
     window.removeEventListener("keydown", unlock);
+    const context = audioContext;
+    audioContext = undefined;
+    if (context && context.state !== "closed") void context.close().catch(() => {});
   };
 }
 
 async function playCompletionSound() {
-  const context = getAudioContext();
+  const context = audioContext;
   // Do not queue a stale chime until the next click if autoplay is blocked.
-  if (context.state !== "running") return;
+  if (!context || context.state !== "running") return;
   if (context.currentTime - lastSoundAt < 0.6) return;
   lastSoundAt = context.currentTime;
   for (const [offset, frequency] of [[0, 660], [0.16, 880]]) {

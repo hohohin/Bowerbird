@@ -47,8 +47,8 @@ try {
   await saved();
   let snapshot = await page.evaluate(() => window.snapshot());
   assert.deepEqual(JSON.parse(snapshot.nodes.find(n => n.id === sectionId).payloadJson).member_ids.sort(), ["old", "prompt"]);
-  await page.getByRole("textbox", { name: "分区名称", exact: true }).fill("方案 A");
-  await page.getByRole("textbox", { name: "分区名称", exact: true }).blur();
+  await page.locator(`[data-card-name="${sectionId}"] input`).fill("方案 A");
+  await page.locator(`[data-card-name="${sectionId}"] input`).blur();
   const before = await page.evaluate(() => window.snapshot());
   const handle = await section.locator(".canvas-section-heading svg").boundingBox();
   await page.mouse.move(handle.x + 5, handle.y + 5);
@@ -150,14 +150,13 @@ try {
   await page.getByRole("button", { name: "复制第 2 行第 2 列", exact: true }).click();
   assert.equal(await page.evaluate(() => navigator.clipboard.readText()), "复制这一格");
 
-  // Title editing: the input sits right of the T icon and persists in the note payload.
-  const titleInput = text.getByRole("textbox", { name: "内容卡片标题", exact: true });
-  const typeIcon = await text.locator(".canvas-text-handle svg").nth(1).boundingBox();
-  const titleBox = await titleInput.boundingBox();
-  assert.ok(titleBox.x > typeIcon.x + typeIcon.width, "title input sits right of the T icon");
-  await titleInput.fill("配方表");
-  await saved();
-  assert.equal(JSON.parse((await page.evaluate(() => window.snapshot())).nodes.find(n => n.id === textId).payloadJson).title, "配方表");
+  // Naming uses the shared editor above the card, with workflow persistence.
+  const titleInput = page.locator(`[data-card-name="${textId}"] input`);
+  assert.equal(await text.getByRole("textbox", { name: "内容卡片标题", exact: true }).count(), 0);
+  const titleBox = await titleInput.boundingBox(), textBox = await text.boundingBox();
+  assert.ok(titleBox.y + titleBox.height <= textBox.y, "name editor sits above the card");
+  await titleInput.fill("配方表"); await titleInput.press("Enter");
+  await page.waitForFunction(id => JSON.parse(sessionStorage.getItem('workflow-p')).document.cardNames[id] === '配方表', textId);
 
   // Whole-table copy serialises every cell as CSV, quoting commas/quotes/line breaks.
   await page.getByRole("textbox", { name: "第 1 行第 2 列", exact: true }).fill("含\"引号\",逗号");
@@ -269,7 +268,7 @@ try {
   await page.evaluate(() => window.save());
   await page.reload();
   await node(textId).waitFor();
-  assert.equal(await page.getByRole("textbox", { name: "分区名称", exact: true }).inputValue(), "方案 A");
+  assert.equal(await page.locator(`[data-card-name="${sectionId}"] input`).inputValue(), "方案 A");
   assert.equal(await page.getByRole("textbox", { name: "第 3 行第 3 列", exact: true }).inputValue(), "复制这一格");
   assert.deepEqual(await text.boundingBox(), afterResize, "resized geometry survives reload");
   assert.ok(Math.abs(await cell.evaluate(e => parseFloat(getComputedStyle(e).lineHeight)) - 18.6) < 0.01, "line spacing survives reload");
@@ -394,7 +393,7 @@ try {
   await page.evaluate(() => window.save());
   await page.reload();
   await node(textId).waitFor();
-  assert.equal(await text.getByRole("textbox", { name: "内容卡片标题", exact: true }).inputValue(), "配方表", "title survives reload");
+  assert.equal(await page.locator(`[data-card-name="${textId}"] input`).inputValue(), "配方表", "title survives reload");
   assert.equal(await text.getByRole("textbox", { name: /第 \d+ 行第 \d+ 列/ }).count(), 1);
   assert.equal(await text.locator(".canvas-text-remove").count(), 0);
   assert.match(await page.locator(".canvas-zoom-controls").innerText(), /10%/);

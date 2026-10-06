@@ -37,6 +37,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 | `dev-doc/桌面端UI设计.html` | 早期三区外壳与创作板设计稿 | 仅作设计背景；当前 UI 契约读 PROJECT.md 与对应专项 |
 | `Windows/README.md` | Windows x64 开发、构建 NSIS 安装包与环境要求 | Windows 运行 / 打包前 |
 | `Windows/Windows-edited.md` | Windows 适配修改清单、交付产物与升级注意事项 | 维护 Windows override / 排查平台差异时 |
+| `macOS/WINDOWS-SYNC-2026-10-07.md` | 自上次 mac 推送以来的增量、Windows 同步步骤、平台边界与本轮验证 | 接收本轮 Mac 源码到 Windows、核对迁移与原生验收时 |
 | `macOS/README.md` | Intel / Apple Silicon 开发运行、DMG 固定拖动安装规范、重打包脚本与交付检查 | macOS 开发 / 构建 / 重打包 / 交付 / 排障前必读 |
 
 ## 文档维护规则

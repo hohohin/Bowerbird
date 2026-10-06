@@ -58,6 +58,9 @@ pub struct Task {
 /// 映射见 [`GenJob::coarse_status`]。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenJob {
+    /// Provider execution owned by a workflow Agent; never projects a generation conversation.
+    #[serde(default)]
+    pub internal_agent: bool,
     pub id: String,
     #[serde(default = "default_generation_media")]
     pub media: String,    // "image" | "video"
@@ -427,6 +430,7 @@ mod tests {
 
     fn job(provider: &str, status: &str) -> GenJob {
         GenJob {
+            internal_agent: false,
             id: Ulid::new().to_string(),
             media: "image".into(),
             provider: provider.into(),
@@ -481,6 +485,7 @@ mod tests {
         object.remove("parent_node_id");
         object.remove("parent_asset_path");
         object.remove("creative_relation");
+        object.remove("internal_agent");
         let restored: GenJob = serde_json::from_value(value).unwrap();
         assert!(restored.creative_session_id.is_none());
         assert!(restored.reference_node_ids.is_empty());
@@ -489,6 +494,7 @@ mod tests {
         assert!(restored.parent_node_id.is_none());
         assert!(restored.parent_asset_path.is_none());
         assert!(restored.creative_relation.is_none());
+        assert!(!restored.internal_agent);
     }
 
     #[test]

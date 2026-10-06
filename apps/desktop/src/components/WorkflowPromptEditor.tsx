@@ -10,7 +10,7 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { api } from "../lib/api";
 import { canvasInputValue, canvasWorkflowInputState } from "../lib/canvasSessionOutputs";
 import { canvasAssetMediaPath } from "../lib/creativeCanvas";
-import { workflowBindingKey, workflowImageContainer, workflowInputValues, workflowReferenceToken, type WorkflowNode, type WorkflowPromptReference } from "../lib/canvasWorkflow";
+import { workflowBindingKey, workflowImageContainer, workflowInputValues, workflowReferenceToken, rebindGenerationReferences, type WorkflowNode, type WorkflowPromptReference } from "../lib/canvasWorkflow";
 import type { Asset, CanvasNode } from "../lib/types";
 
 const schema = new Schema({ nodes: {
@@ -27,34 +27,38 @@ export function WorkflowPromptEditor({ node, nodes, graphNodes, disabled, onChan
   node: WorkflowNode; nodes: WorkflowNode[]; graphNodes: CanvasNode[]; disabled: boolean;
   onChange: (prompt: string, references: WorkflowPromptReference[]) => void;
 }) {
+  node = rebindGenerationReferences(node);
+  const usesPipes = node.kind === "generation" || node.kind === "agent";
   const host = useRef<HTMLDivElement>(null), view = useRef<EditorView | null>(null);
   const [menu, setMenu] = useState<{ pos: number; left: number; top: number } | null>(null);
   const [assets, setAssets] = useState<Asset[]>([]);
   const candidates = useMemo(() => (["text", "image"] as const).flatMap(type => (node.inputs[type] ?? []).flatMap((input, index): Candidate[] => {
+    const slot = usesPipes ? input.slot : undefined;
+    const number = slot ?? index + 1;
     if (canvasWorkflowInputState(input, graphNodes, nodes) === "missing") return [{
-      reference: { type, input, label: `${type === "text" ? "文本" : "图片来源"} ${index + 1}` },
+      reference: { type, input, slot, label: `${type === "text" ? "文本" : "图片来源"} ${number}` },
       preview: "来源卡片或单元格已删除，请重新连接", unavailable: true,
     }];
     const source = nodes.find(node => node.id === input.nodeId);
     if (type === "image" && input.portId === "image" && source?.kind === "generation") {
       const count = source.outputs.image?.assetIds?.length ?? 0;
-      return [{ reference: { type, input, label: `生成结果 ${index + 1}` }, assetIds: source.outputs.image?.assetIds, preview: count ? `本次 ${count} 张图片 · 重跑自动更新` : "本次生成图片 · 运行时等待上游" }];
+      return [{ reference: { type, input, slot, label: usesPipes ? `图片来源 ${number}` : `生成结果 ${number}` }, assetIds: source.outputs.image?.assetIds, preview: count ? `本次 ${count} 张图片 · 重跑自动更新` : "本次生成图片 · 运行时等待上游" }];
     }
     try {
       const value = workflowInputValues(nodes, { ...node, inputs: { [type]: [input] } }, (id, cellId) => {
         const table = graphNodes.find(node => node.id === id && node.hiddenAt == null);
         return table ? canvasInputValue(table, cellId, graphNodes) : undefined;
       })[type][0];
-      return type === "text" ? [{ reference: { type, input, label: `文本 ${index + 1}` }, preview: value.text || "（空文本）" }]
-        : workflowImageContainer(input)
-          ? [{ reference: { type, input, label: `图片来源 ${index + 1}` }, assetIds: value.assetIds, preview: `当前 ${value.assetIds?.length ?? 0} 张图片 · 随来源自动更新` }]
-          : (value.assetIds ?? []).map((assetId, i) => ({ reference: { type, input, assetId, label: `图片 ${index + 1}.${i + 1}` }, preview: "" }));
+      return type === "text" ? [{ reference: { type, input, slot, label: `文本 ${number}` }, preview: value.text || "（空文本）" }]
+        : usesPipes || workflowImageContainer(input)
+          ? [{ reference: { type, input, slot, label: `图片来源 ${number}` }, assetIds: value.assetIds, preview: `当前 ${value.assetIds?.length ?? 0} 张图片 · 随来源自动更新` }]
+          : (value.assetIds ?? []).map((assetId, i) => ({ reference: { type, input, slot, assetId, label: `图片 ${number}.${i + 1}` }, preview: "" }));
     } catch {
       const pendingSource = type === "text" && (source || graphNodes.some(card => card.id === input.canvasNodeId && card.hiddenAt == null));
-      return [{ reference: { type, input, label: `${type === "text" ? "文本" : "图片来源"} ${index + 1}` }, preview: "等待上游内容", unavailable: !(pendingSource || (type === "image" && workflowImageContainer(input))) }];
+      return [{ reference: { type, input, slot, label: `${type === "text" ? "文本" : "图片来源"} ${number}` }, preview: "等待上游内容", unavailable: !(pendingSource || (type === "image" && workflowImageContainer(input))) }];
     }
-  })), [node.inputs, nodes, graphNodes]);
-  const referenceAssetId = (ref?: Omit<WorkflowPromptReference, "id">) => ref && workflowImageContainer(ref.input)
+  })), [node.inputs, nodes, graphNodes, usesPipes]);
+  const referenceAssetId = (ref?: Omit<WorkflowPromptReference, "id">) => ref && (ref.slot !== undefined || workflowImageContainer(ref.input))
     ? candidates.find(candidate => candidate.reference.type === ref.type && workflowBindingKey(candidate.reference.input) === workflowBindingKey(ref.input))?.assetIds?.[0]
     : ref?.assetId;
   const assetKey = [...new Set([...candidates.flatMap(c => c.assetIds ?? (c.reference.assetId ? [c.reference.assetId] : [])), ...(node.promptReferences ?? []).map(referenceAssetId)].filter((id): id is string => !!id))].sort().join("|");
@@ -86,7 +90,7 @@ export function WorkflowPromptEditor({ node, nodes, graphNodes, disabled, onChan
   useEffect(() => {
     const editor = new EditorView(host.current!, {
       state: EditorState.create({ schema, doc: toDoc(), plugins: [history(), keymap({ "Mod-z": undo, "Mod-y": redo, "Mod-Shift-z": redo }), keymap(baseKeymap)] }),
-      attributes: { role: "textbox", "aria-label": node.kind === "planner" ? "工作流需求" : node.kind === "agent" ? "文本修改要求" : "卡片指令", "aria-multiline": "true", "data-placeholder": node.kind === "planner" ? "按 @ 引用输入，例如：保留 @原图 的版式，将产品替换为 @产品参考…" : node.kind === "agent" ? "按 @ 引入文本，再描述替换、改写或简写要求…" : "输入创作要求，按 @ 引入收到的图片或文字…" },
+      attributes: { role: "textbox", "aria-label": node.kind === "planner" ? "工作流需求" : node.kind === "agent" ? "Agent 要求" : "卡片指令", "aria-multiline": "true", "data-placeholder": node.kind === "planner" ? "按 @ 引用输入，例如：保留 @原图 的版式，将产品替换为 @产品参考…" : node.kind === "agent" ? "填写要求，已连接图文会自动发送；可按 @ 指定用途…" : "输入创作要求，按 @ 引入收到的图片或文字…" },
       editable: () => !latest.current.disabled,
       dispatchTransaction(tr) {
         editor.updateState(editor.state.apply(tr));
@@ -116,7 +120,8 @@ export function WorkflowPromptEditor({ node, nodes, graphNodes, disabled, onChan
       if (item.type.name !== "reference") return;
       const reference = node.promptReferences?.find(ref => ref.id === item.attrs.id);
       const thumb = imageSrc(referenceAssetId(reference));
-      if (thumb !== item.attrs.thumb) tr.setNodeMarkup(pos, undefined, { ...item.attrs, thumb });
+      const label = reference?.label ?? item.attrs.label;
+      if (thumb !== item.attrs.thumb || label !== item.attrs.label) tr.setNodeMarkup(pos, undefined, { ...item.attrs, thumb, label });
     });
     if (tr.docChanged) editor.updateState(editor.state.apply(tr.setMeta("addToHistory", false)));
   }, [assets, candidates, node.promptReferences]);

@@ -41,6 +41,8 @@ export function canvasWorkflowInputState(input: WorkflowInput, canvas: readonly 
 export function reconcileCanvasWorkflowReferences(nodes: WorkflowNode[], canvas: readonly CanvasNode[]) {
   return nodes.map(node => {
     if (node.kind !== "generation" && node.kind !== "agent") return node;
+    // Source-based repair is only for legacy saves; numbered pipes never merge.
+    if (Object.values(node.inputs).flat().some(input => input.slot !== undefined) || node.promptReferences?.some(ref => ref.slot !== undefined)) return node;
     const active = activePromptReferences(node);
     const replacements = new Map<string, WorkflowInput>();
     for (const type of ["text", "image"] as const) {

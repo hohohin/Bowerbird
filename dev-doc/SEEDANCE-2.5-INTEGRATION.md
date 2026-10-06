@@ -1,5 +1,20 @@
 # Seedance 2.5 视频接入与验收记录
 
+## 2026-09-30：官方模型与积分查询（源码未发布）
+
+本节补充当前接口与验收；下方 9 月 6 日的固定 2.5 / 480p–720p 记录保留为历史，不再是当前即梦 UI 范围。
+
+- 本机官方 CLI `ec1b9fa-dirty`，commit `ec1b9fa`，build time `2026-09-09T09:09:35Z`。四模式 `--help` 已只读核对：共通 `seedance2.5`、`seedance2.0`、`seedance2.0fast`、`seedance2.0_vip`、`seedance2.0fast_vip`、`seedance2.0mini`；单图另含 `seedance1.0fast` / `seedance1.5pro`，首尾帧另含 `seedance1.5pro`。账号权限和运行时可用性仍由官方决定。
+- 2.5 支持 480p/720p/1080p、4–30 秒；2.0 VIP 支持 720p/1080p/4k、4–15 秒；其他 2.0 为 720p、4–15 秒；1.5 Pro 为 720p、5–12 秒，1.0 Fast 为 720p、5–10 秒。2.0 多参考限制为 9 图/3 视频，参考视频每条及总时长 2–15 秒；2.5 保留 30 图/10 视频和 2–30 秒。应用不暴露音频输入。
+- `user_credit` 真实返回数值 `total_credit`；本轮只读快照为 9434，非固定 UI 数据。`list_task --limit 1` 真实返回 `commerce_info.credit_count=240`；用该记录的精确 `--submit_id` 再查询，只核验编号匹配及积分字段，不保存提示词、用户信息、任务编号或产物链接。未发起生成、下载素材或改账号状态。
+- 新增三个只读 IPC：`dreamina_video_models` / `dreamina_credit_balance` / `dreamina_task_credit`，复用应用当前平台的官方 CLI 启动及登录环境。模型选项从对应模式的官方帮助解析；余额/任务费用只返回必要数字。查询 30 秒超时并关闭子进程，失败提示检查网络/登录，缺失字段不当作零。
+- 当前 CLI 没有生成前报价命令，界面标注「暂无官方生成前报价；提交后显示任务消耗」。任务费用按准确 submit_id 匹配官方字段；不以账户余额差、方舟 token 单价或历史样例估价。提交和结束触发余额刷新，任务消耗可手动重新查询。费用没有写入 Bowerbird 积分账本，也没有新增数据库迁移。
+- 每轮历史从既有 `generation_meta.submit_id` 恢复，实时提交/任务恢复填入对应轮；旧无 turn_key 的同文案记录也按 submit_id 区分，防止多个官方任务被合并导致费用错配。Cloud 仍只支持 2.5，切换渠道时恢复其合法模型/分辨率，不变更云端计费。
+
+验证：前端视频/引用/恢复 22 项；Rust 官方字段解析 2 项、视频命令/离线子进程 6 项、历史 2 项；`scripts/video-controls-ui.test.mjs` 覆盖模型切换、限制、Cloud 切换、余额提交/结束刷新、失败/缺失/零值、迟到响应及真实画板创作器和双轮检查器。380/560/900 宽度回归及 TypeScript/Vite 构建通过。浏览器使用合成 IPC，不冒充 Tauri 原生全链路；未验证新的付费生成或发布安装包。
+
+---
+
 > 日期：2026-09-06。状态：本地接入、自动回归与合成媒体验收完成；真实即梦生成及 Tauri 原生 UI 待验。
 > 本文负责即梦官方 Dreamina CLI；并行的 Cloud 国内方舟接入见 [VIDEO-API-INTEGRATION.md](VIDEO-API-INTEGRATION.md)。两者均已纳入当前桌面源码，CLI 真实生成验收仍待完成。
 > 本文记录本专项的接口核验与验收证据；项目全局决策仍以 [PROJECT.md](../PROJECT.md) 为准。

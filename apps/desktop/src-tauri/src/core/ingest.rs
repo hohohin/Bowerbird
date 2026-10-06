@@ -78,7 +78,7 @@ fn ingest_file_with_dedup(paths: &LibraryPaths, db: &Database, source: &Path, ap
     fs::create_dir_all(store_path.parent().unwrap())?;
     fs::copy(source, &store_path)?;
 
-    // 缩略图：图片用 image resize；视频用 ffmpeg 抽帧；SVG 用原文件（前端直渲染）。
+    // 缩略图：图片用 image resize；视频由独立进程限时抽帧；SVG 用原文件（前端直渲染）。
     let thumb_path = if media::probe::is_video(&meta.ext) {
         let p = paths.thumb_path(&id);
         if let Err(e) = media::thumb::generate_video(&store_path, &p, 480) {
@@ -143,8 +143,8 @@ fn ingest_file_with_dedup(paths: &LibraryPaths, db: &Database, source: &Path, ap
         ext: Some(meta.ext),
         origin_path: Some(source.to_string_lossy().into_owned()),
         store_path: Some(store_path.to_string_lossy().into_owned()),
-        // 与 ingest_generated 一致：缩略图生成失败（如本机无 ffmpeg）时落 None，
-        // 前端按缺失处理（视频渲染首帧）而不是指向不存在的文件。
+        // 与 ingest_generated 一致：缩略图生成失败时落 None，
+        // 前端异步补封面，失败保留静态占位，不创建视频播放器。
         thumb_path: thumb_path.is_file().then(|| thumb_path.to_string_lossy().into_owned()),
         size: Some(meta.size as i64),
         width: Some(meta.width as i64),

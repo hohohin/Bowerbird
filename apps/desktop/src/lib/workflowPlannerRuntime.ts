@@ -97,7 +97,7 @@ export class WorkflowPlannerRuntime {
       const planning: WorkflowPlanningState = { requestId: `${Date.now()}-${crypto.randomUUID()}`, protocolVersion: 2, status: "waiting", contextKey, sources };
       await this.update(id, planning); // Save identity before delivery; reload never resubmits.
       try {
-        const receipt = await api.agentDsWorkflowStart(planning.requestId, instruction, context, "planning-v2");
+        const receipt = await api.agentDsWorkflowStart(planning.requestId, instruction, context, "planning-v2", [], { projectId: this.host.projectId, nodeId: owner.id });
         if (this.node(id).planning?.requestId !== planning.requestId || this.node(id).planning?.status !== "waiting") return;
         const current = this.node(id).planning!;
         await this.update(id, { ...current, error: current.proposal ? current.error : receipt.notice ?? undefined });

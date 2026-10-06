@@ -54,10 +54,21 @@ try {
     assert.ok(id === "wide" ? after.width > before.width : after.width < before.width);
   }
   assert.deepEqual(await node("duplicate").boundingBox(), duplicateBefore, "resizing affects only this instance");
-  // Video cards carry their own identity: dedicated class, badge and video element.
+  // Video cards keep their identity without mounting a decoder for a missing poster.
   assert.equal(await node("clip").evaluate(e => e.classList.contains("is-video")), true, "video asset node gets the is-video class");
-  assert.equal(await node("clip").locator(":scope > video").count(), 1);
+  assert.equal(await node("clip").locator("video").count(), 0);
+  assert.match(await node("clip").locator(":scope > img").getAttribute("src"), /^data:image/);
   assert.equal(await node("clip").locator(".canvas-video-badge").count(), 1);
+  // Explicitly opening the card still loads the original video with playback controls.
+  await node("clip").focus();
+  await page.keyboard.press("Enter");
+  const videoPreview = page.getByRole("dialog", { name: /媒体预览/ });
+  await videoPreview.waitFor();
+  assert.equal(await videoPreview.locator("video").getAttribute("src"), "demo-clip.mp4");
+  assert.equal(await videoPreview.locator("video").evaluate(video => video.controls), true);
+  await page.keyboard.press("Escape");
+  await videoPreview.waitFor({ state: "detached" });
+  assert.equal(await node("clip").locator("video").count(), 0);
   assert.equal(await node("wide").evaluate(e => e.classList.contains("is-video")), false, "image nodes keep the plain asset style");
   assert.equal(await node("wide").locator(".canvas-video-badge").count(), 0);
   const resized = await node("wide").boundingBox();

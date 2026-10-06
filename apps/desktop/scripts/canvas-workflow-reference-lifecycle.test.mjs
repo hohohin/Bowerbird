@@ -33,6 +33,7 @@ try{
   const add=card.getByRole('button',{name:'在第 1 列位置插入',exact:true});await add.locator('svg').hover();await add.locator('svg').click();
   assert.equal(await card.getByRole('cell').nth(1).getAttribute('data-canvas-cell'),'deleted-cell','inserting before it retains identity');
   const remove=card.getByRole('button',{name:'删除第 2 列',exact:true});await remove.hover();await remove.click();
+  await page.waitForFunction(()=>!document.querySelector('[data-canvas-cell="deleted-cell"]')&&document.activeElement?.tagName==='TEXTAREA');
   await editor.press('End');await editor.pressSequentially('@');await menu.waitFor();
   assert.equal(await menu.getByRole('option').first().isDisabled(),true,'deleted cell must not be offered as pending content');
   assert.match(await menu.innerText(),/已删除/);await editor.press('Escape');await editor.press('Backspace');
@@ -61,7 +62,7 @@ try{
     if(c.document.run.status!=='done'||calls!==1)throw Error('reconnected source must execute successfully');
     const {CanvasWorkflowController}=await import('/src/lib/canvasWorkflowRuntime.ts');
     const original=c.document.nodes.find(n=>n.id==='consumer'),old={canvasNodeId:'source-table',cellId:'deleted-cell'};
-    const ghost={...original,inputs:{text:[old,...original.inputs.text]},promptReferences:original.promptReferences.map(ref=>({...ref,input:old}))};
+    const ghost={...original,inputs:{text:[old,...original.inputs.text.map(({slot,...input})=>input)]},promptReferences:original.promptReferences.map(({slot,...ref})=>({...ref,input:old}))};
     const legacy=new CanvasWorkflowController('reference-legacy');await legacy.load();await legacy.save({...legacy.document,nodes:[ghost]});
     const restored=new CanvasWorkflowController('reference-legacy');await restored.load();await restored.start('consumer',true);
     if(restored.document.run.status!=='done'||calls!==2||restored.document.nodes[0].inputs.text.length!==1)throw Error('old and new saved wires must reconcile together on load');

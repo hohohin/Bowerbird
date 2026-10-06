@@ -40,6 +40,14 @@ test("canvas images retain native aspect ratios without clamping wide or tall ca
   }
 });
 
+test("canvas video previews never fall back to loading a media player", () => {
+  for (const storePath of ["clip.mp4", "clip.MOV", "clip.webm?rev=1", "clip.m4v", "clip.avi", "clip.mkv"]) {
+    assert.equal(canvasAssetMediaPath({ storePath, thumbPath: "poster.jpg" }), "poster.jpg");
+    assert.equal(canvasAssetMediaPath({ storePath, thumbPath: null }), null);
+    assert.equal(canvasAssetMediaPath({ storePath, thumbPath: storePath }), null);
+  }
+});
+
 test("card thumbnails follow exact ordered input edges, including hidden references and frozen names", () => {
   const a = { ...node("a", "asset-a"), hiddenAt: 10, payloadJson: JSON.stringify({ schema_version: 1, snapshot: { name: "原名称" } }) };
   const b = { ...node("b", "asset-b"), payloadJson: JSON.stringify({ schema_version: 1, snapshot: { name: "另一张图" } }) };
@@ -590,6 +598,7 @@ for (const collection of ["promptGraphNodes", "agentGraphNodes"]) {
       const removed = [];
       const summary = () => ({ status, jobId: "job", runId: "run" });
       const bindings = { React, X: () => null, selectCloudAgentResultArtifacts, promptNodeSummary: summary, agentGroupSummary: summary,
+        conversationCards: { cards: new Map() }, nodeRect: (node) => node,
         cloudAgentRuns: {}, genJobs: {}, focusedNodeId: null, activeDragId: null, focusedThreadId: null,
         supersededTaskIds: new Set(), ReadonlyPrompt: () => null, CanvasResizeHandle: () => null, promptReferences: new Map(), graphNodes: [], agentPromptGroups: new Map(),
         selectedCanvasNodeIds: new Set(), selectedCanvasNodeIdsRef: { current: new Set() },
@@ -641,6 +650,8 @@ for (const dragKind of ["material", "execution"]) {
       const persisted = [];
       let activated = 0;
       const bindings = {
+        conversationCardsRef: { current: { cards: new Map(), hiddenIds: new Set() } },
+        window: { getSelection: () => null },
         agentPromptGroupMap, expandCanvasSections, graphEdges: [],
         containedSessionOutputIds: () => new Set(), workflowSessionIds: () => new Set(),
         canvasWorkflowController: () => ({ document: { nodes: [] } }),
@@ -664,9 +675,9 @@ for (const dragKind of ["material", "execution"]) {
       const handlers = new Function(...Object.keys(bindings), code + ";return { " + names.join(",") + " };")(...Object.values(bindings));
       const anchors = handlers.selectionAnchors();
       assert.deepEqual(canvasNodeIdsInRect({ x: -10, y: -10, width: 520, height: 120 }, anchors), [...selectedIds]);
-      const target = { isConnected: true, setPointerCapture() {}, hasPointerCapture: () => true, releasePointerCapture() {} };
+      const target = { isConnected: true, focus() {}, setPointerCapture() {}, hasPointerCapture: () => true, releasePointerCapture() {} };
       const origin = dragKind === "material" ? material : prompt;
-      const down = { button: 0, pointerId: 1, timeStamp: 0, clientX: origin.x + 10, clientY: 10, currentTarget: target, stopPropagation() {} };
+      const down = { button: 0, pointerId: 1, timeStamp: 0, clientX: origin.x + 10, clientY: 10, currentTarget: target, preventDefault() {}, stopPropagation() {} };
       const move = { ...down, timeStamp: 10, clientX: down.clientX + 37, clientY: down.clientY + 53 };
       const prefix = dragKind === "material" ? "Node" : "GraphNode";
       handlers["begin" + prefix + "Drag"](down, origin);
@@ -719,6 +730,7 @@ test("one undo restores " + (grouped ? "grouped" : "mixed") + " removal without 
   const writes = [];
   const bindings = {
     nodesRef, graphNodesRef, undoHistoryRef: history, groupsRef: { current: new Map([["group", { id: "group", name: "my group", role: "composition" }]]) },
+    conversationCardsRef: { current: { cards: new Map() } },
     groupedAssetNode: (snapshot) => ({ ...asset, asset: snapshot }),
     projectCanvasGroupUpdate: (original, node) => ({ ...original, x: node.x, y: node.y }),
     activeCanvasRef: { current: { id: "project" } }, focusedNodeIdRef: { current: "prompt" },

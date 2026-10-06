@@ -63,6 +63,10 @@ try {
     check(['缺少图片来源', '移除重复 inputs', '原图', '不支持占位符', '未用于任何最终交付'].every(issue => diagnostics.includes(issue)), 'independent card errors are returned together instead of using one repair revision each');
 
     const simple = { schemaVersion: 2, summary: '一张海报', sourceUses: [], nodes: [{ id: 'draw', kind: 'generation', prompt: '春日海报' }], outputs: [{ node: 'draw', label: '海报' }] };
+    const freeText = {schemaVersion:2,summary:'写文案',sourceUses:[],nodes:[{id:'write',kind:'agent',prompt:'写一首春日短诗'}],outputs:[{node:'write',label:'诗'}]};
+    check(buildWorkflowPlan(JSON.stringify(freeText),owner,[],[owner]).nodes[1].kind==='agent','planner can create source-free text Agent');
+    const imageText={...freeText,sourceUses:[{source:'photo',role:'reference',mode:'shared'}],nodes:[{id:'write',kind:'agent',prompt:'描述 {{photo.image}}'}]};
+    check(buildWorkflowPlan(JSON.stringify(imageText),owner,[source('photo')],[owner]).nodes[1].inputs.image.length===1,'planner can wire image input into text Agent');
     const text = JSON.stringify(simple);
     let reply = null, feedback = [], sent = 0, failFeedback = false;
     api.agentDsWorkflowStart = async () => { sent++; return { path: 'pending', autoDelivered: false }; };

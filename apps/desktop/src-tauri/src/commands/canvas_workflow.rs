@@ -11,6 +11,51 @@ pub struct WorkflowSnapshot { revision: i64, document: Value }
 
 fn invalid() -> AppError { AppError::Other("工作流数据无效".into()) }
 
+fn validate_loop(run: &Value, nodes: &[Value], assets: &mut HashSet<String>) -> AppResult<()> {
+    let Some(state) = run.get("loop") else { return Ok(()); };
+    let owner = state["nodeId"].as_str().ok_or_else(invalid)?;
+    if !nodes.iter().any(|node| node["id"] == owner && node["kind"] == "loop") { return Err(invalid()); }
+    let order = run["order"].as_array().ok_or_else(invalid)?;
+    if !order.contains(&json!(owner)) { return Err(invalid()); }
+    let body = state["bodyIds"].as_array().filter(|body| !body.is_empty()).ok_or_else(invalid)?;
+    let mut ids = HashSet::new();
+    for id in body {
+        let key = id.as_str().ok_or_else(invalid)?;
+        if key == owner || !order.contains(id) || !ids.insert(key) { return Err(invalid()); }
+    }
+    let index = state["index"].as_u64().ok_or_else(invalid)? as usize;
+    let completed = state["completed"].as_array().ok_or_else(invalid)?;
+    if let Some(items) = state.get("items") {
+        let items = items.as_array().filter(|items| !items.is_empty() && items.len() <= 100).ok_or_else(invalid)?;
+        if index >= items.len() || !(completed.len() == index || completed.len() == items.len() && index + 1 == items.len()) { return Err(invalid()); }
+        if run["status"] == "done" && completed.len() != items.len() { return Err(invalid()); }
+        for item in items {
+            if !item["text"].is_string() { return Err(invalid()); }
+            for asset in item["assetIds"].as_array().ok_or_else(invalid)? {
+                assets.insert(asset.as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?.to_owned());
+            }
+        }
+    } else if index != 0 || !completed.is_empty() || run["status"] == "done" { return Err(invalid()); }
+    for item in completed {
+        let outputs = item["outputs"].as_object().ok_or_else(invalid)?;
+        let steps = item["steps"].as_object().ok_or_else(invalid)?;
+        if outputs.len() != ids.len() || steps.len() != ids.len()
+            || outputs.keys().any(|id| !ids.contains(id.as_str()))
+            || steps.iter().any(|(id, step)| !ids.contains(id.as_str()) || step["status"] != "done") { return Err(invalid()); }
+        for ports in outputs.values() {
+            for value in ports.as_object().ok_or_else(invalid)?.values() {
+                if !matches!(value["type"].as_str(), Some("text" | "image" | "visual-profile" | "session")) { return Err(invalid()); }
+                if let Some(list) = value.get("assetIds") {
+                    for asset in list.as_array().ok_or_else(invalid)? {
+                        assets.insert(asset.as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?.to_owned());
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn validate(document: &Value) -> AppResult<HashSet<String>> {
     if document["schema_version"] != 1 || document.to_string().len() > 2_000_000 { return Err(invalid()); }
     let nodes = document["nodes"].as_array().ok_or_else(invalid)?;
@@ -20,7 +65,7 @@ fn validate(document: &Value) -> AppResult<HashSet<String>> {
     let mut dependencies: HashMap<&str, Vec<&str>> = HashMap::new();
     for node in nodes {
         let id = node["id"].as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?;
-        if !ids.insert(id) || !matches!(node["kind"].as_str(), Some("instruction" | "generation" | "skill" | "agent" | "visual-profile" | "text" | "trigger" | "planner"))
+        if !ids.insert(id) || !matches!(node["kind"].as_str(), Some("instruction" | "generation" | "skill" | "agent" | "visual-profile" | "text" | "trigger" | "planner" | "loop"))
             || !matches!(node["action"].as_str(), Some("describe" | "reuse" | "layers"))
             || node["x"].as_f64().filter(|v| v.is_finite()).is_none()
             || node["y"].as_f64().filter(|v| v.is_finite()).is_none()
@@ -30,6 +75,11 @@ fn validate(document: &Value) -> AppResult<HashSet<String>> {
         if node["kind"] == "planner" && (node["trigger"] != false || inputs.keys().any(|key| key != "text" && key != "image")
             || node["outputs"].as_object().is_none_or(|outputs| !outputs.is_empty()) || node["outputPorts"].as_array().is_none_or(|ports| !ports.is_empty())) { return Err(invalid()); }
         if node["kind"] == "trigger" && !inputs.is_empty() { return Err(invalid()); }
+        if node["kind"] == "loop" {
+            if node.get("loopMode").is_some_and(|mode| !matches!(mode.as_str(), Some("images" | "rows"))) { return Err(invalid()); }
+            let port = if node["loopMode"] == "rows" { "text" } else { "image" };
+            if inputs.keys().any(|key| key != port && key != "signal") { return Err(invalid()); }
+        }
         if node["kind"] == "text" && node["textSource"].is_string() {
             if node["textSource"].as_str().is_none_or(str::is_empty) || inputs.keys().any(|key| key != "signal") || node.get("textTarget").is_some() { return Err(invalid()); }
             if nodes.iter().any(|other| other["id"] != node["id"] && other["textSource"] == node["textSource"]) { return Err(invalid()); }
@@ -122,6 +172,7 @@ fn validate(document: &Value) -> AppResult<HashSet<String>> {
     let mut run_ids = HashSet::new();
     let mut accesses: Vec<(HashSet<&str>, HashSet<&str>)> = Vec::new();
     for run in runs {
+        validate_loop(run, nodes, &mut assets)?;
         if run["order"].as_array().is_some_and(|order| order.iter().any(|id| nodes.iter().any(|node| node["id"] == *id && node["kind"] == "planner"))) { return Err(invalid()); }
         if !matches!(run["status"].as_str(), Some("running" | "waiting" | "done" | "failed" | "stopped"))
             || !run["id"].is_string() || !run["threadId"].is_string()
@@ -182,6 +233,69 @@ pub async fn canvas_workflow_save(db: State<'_, Arc<Database>>, project_id: Stri
 mod tests {
     use super::*;
     fn node(id: &str, inputs: Value) -> Value { json!({"id":id,"kind":"generation","action":"describe","x":0,"y":0,"prompt":"test","provider":"codex","trigger":false,"inputs":inputs,"outputs":{},"outputPorts":[]}) }
+    #[test]
+    fn loop_checkpoint_roundtrip_and_completed_asset_references() {
+        let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();
+        db.conn.lock().unwrap().execute("INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1)", []).unwrap();
+        let mut owner = node("loop", json!({"image":[{"assetId":"input"}]})); owner["kind"] = json!("loop");
+        let run = json!({"id":"run","startId":"loop","threadId":"thread","status":"waiting","order":["loop","draw"],
+            "steps":{"loop":{"status":"done"},"draw":{"status":"waiting","jobId":"original-job"}},
+            "loop":{"nodeId":"loop","bodyIds":["draw"],"index":1,"items":[{"text":"","assetIds":["input"]},{"text":"","assetIds":["second"]}],
+                "completed":[{"outputs":{"draw":{"image":{"type":"image","assetIds":["first-output"]}}},"steps":{"draw":{"status":"done","jobId":"first-job"}}}]}});
+        let doc = json!({"schema_version":1,"nodes":[owner,node("draw",json!({"image":[{"nodeId":"loop","portId":"image"}]}))],"run":run.clone(),"runs":[run]});
+        assert_eq!(validate(&doc).unwrap(), HashSet::from(["input".to_owned(),"second".to_owned(),"first-output".to_owned()]));
+        db.workflow_save("p", 0, doc.clone()).unwrap();
+        assert_eq!(db.workflow_get("p").unwrap().document, doc);
+        assert!(db.conn.lock().unwrap().execute("DELETE FROM projects WHERE id='p'", []).is_err());
+        for patch in [json!({"index":2}),json!({"completed":[]}),json!({"bodyIds":["loop"]}),json!({"bodyIds":["missing"]}),json!({"bodyIds":["draw","draw"]})] {
+            let mut invalid_doc = doc.clone();
+            for (key, value) in patch.as_object().unwrap() { invalid_doc["runs"][0]["loop"][key] = value.clone(); }
+            assert!(validate(&invalid_doc).is_err(), "{patch}");
+        }
+        let mut done = doc.clone();
+        done["runs"][0]["loop"]["completed"].as_array_mut().unwrap().push(doc["runs"][0]["loop"]["completed"][0].clone());
+        done["runs"][0]["status"] = json!("done");
+        assert!(validate(&done).is_ok());
+    }
+    #[test]
+    fn loop_modes_and_unprepared_checkpoint_are_validated() {
+        let mut owner = node("loop", json!({})); owner["kind"] = json!("loop");
+        let mut doc = json!({"schema_version":1,"nodes":[owner,node("draw",json!({"image":[{"nodeId":"loop","portId":"image"}]}))],"run":null});
+        assert!(validate(&doc).is_ok());
+        doc["nodes"][0]["loopMode"] = json!("unknown"); assert!(validate(&doc).is_err());
+        doc["nodes"][0]["loopMode"] = json!("rows");
+        doc["nodes"][0]["inputs"] = json!({"image":[{"assetId":"a"}]}); assert!(validate(&doc).is_err());
+        doc["nodes"][0]["inputs"] = json!({"text":[{"canvasNodeId":"table","cellId":"*text"}]});
+        doc["run"] = json!({"id":"r","threadId":"t","status":"waiting","order":["loop","draw"],"steps":{},"loop":{"nodeId":"loop","bodyIds":["draw"],"index":0,"completed":[]}});
+        assert!(validate(&doc).is_ok());
+        doc["run"]["loop"]["index"] = json!(1); assert!(validate(&doc).is_err());
+    }
+    #[test]
+    fn agent_table_and_owned_cells_survive_storage() {
+        let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();
+        db.conn.lock().unwrap().execute("INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1)", []).unwrap();
+        let mut agent = node("agent", json!({})); agent["kind"] = json!("agent");
+        agent["outputs"] = json!({"text":{"type":"text","text":"模块\t文案\n写螺\t紫心宝螺", "table":{"columns":["模块","文案"],"rows":[["写螺","紫心宝螺"]]}}});
+        let mut writer = node("writer", json!({"text":[{"nodeId":"agent","portId":"text"}]})); writer["kind"] = json!("text");
+        writer["textTarget"] = json!({"nodeId":"table","cellId":"a","cellIds":["a","b","c","d"],"tableCellIds":[["a","b"],["c","d"]],"append":true});
+        let doc = json!({"schema_version":1,"nodes":[agent,writer],"run":null});
+        db.workflow_save("p", 0, doc.clone()).unwrap();
+        assert_eq!(db.workflow_get("p").unwrap().document, doc);
+    }
+    #[test]
+    fn describe_card_caches_survive_storage_independently() {
+        let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();
+        db.conn.lock().unwrap().execute("INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1)", []).unwrap();
+        let cards: Vec<Value> = ["composition", "palette"].into_iter().map(|instruction| {
+            let mut card = node(instruction, json!({})); card["kind"] = json!("instruction");
+            card["prompt"] = json!(instruction);
+            card["describeCache"] = json!({"instruction":instruction,"results":[{"assetId":"same-image","sections":[{"title":"result","body":instruction}]}]});
+            card
+        }).collect();
+        let doc = json!({"schema_version":1,"nodes":cards,"run":null});
+        db.workflow_save("p", 0, doc.clone()).unwrap();
+        assert_eq!(db.workflow_get("p").unwrap().document, doc);
+    }
     #[test]
     fn template_instance_snapshot_survives_workflow_storage() {
         let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();

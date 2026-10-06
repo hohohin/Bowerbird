@@ -143,7 +143,7 @@ try {
   assert.equal(await page.getByRole("dialog").count(), 0);
   assert.equal(await page.locator("[data-source-browser-viewport]").count(), 1, "Escape closes only the preview");
   await page.waitForFunction(() => window.calls.filter(c => c.command === "resize_source_browser").at(-1)?.args.visible === true);
-  // 干净机器（无 ffmpeg）：视频无缩略图时素材卡直接渲染原视频首帧，非视频缺缩略图维持格式占位。
+  // 无 ffmpeg 的缺封面视频保留可操作的静态占位，不为素材列表创建播放器。
   await page.evaluate(() => {
     window.store.setState({
       assets: [
@@ -154,11 +154,9 @@ try {
     });
   });
   const clipCard = page.locator('[data-asset-id="clip"]');
-  await clipCard.locator("video").waitFor();
-  assert.equal(await clipCard.locator("video").getAttribute("preload"), "metadata");
-  assert.equal(await clipCard.locator("video").getAttribute("src"), "demo-clip.mp4");
+  await clipCard.getByText("视频 · 暂无封面", { exact: true }).waitFor();
   assert.equal(await clipCard.locator("img").count(), 0, "missing video poster must not render a broken <img>");
-  assert.equal(await page.locator('[aria-label="探索采集素材"] video').count(), 1, "only the video asset renders a first-frame element");
+  assert.equal(await page.locator('[aria-label="探索采集素材"] video').count(), 0, "passive collection previews must not initialize video decoders");
   await page.getByText("PSD", { exact: true }).waitFor();
   await page.evaluate(() => { window.fail = true; }); await drop();
   await page.getByText("模拟网站拒绝图片", { exact: true }).waitFor();

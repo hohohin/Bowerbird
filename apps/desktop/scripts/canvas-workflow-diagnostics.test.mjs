@@ -51,6 +51,7 @@ try {
     window.emitChange();
     const input={canvasNodeId:'empty-source',cellId:'empty-cell'};
     await c.edit(c.document.nodes.map(node=>({...node,inputs:{image:[input]},promptReferences:[{id:'ref',type:'image',input,label:'图片来源 1'}]})));
+    await c.save({...c.document,cardNames:{...c.document.cardNames,'empty-source':'素材输入'}});
     await c.start('broken-generation',true);
   });
   await panel.getByText('来源：素材输入 · 第 1 行，第 1 列',{exact:true}).waitFor();

@@ -412,6 +412,7 @@ export interface Preset {
 
 /** 生成对话一轮：用户输入（首轮=编辑器组稿，后续=修改意见）+ 本轮产出图（asset 路径）。 */
 export interface GenTurn {
+  submitId?: string | null;
   referenceNodeIds?: Array<string | null>;
   media?: GenerationMedia;
   videoOptions?: VideoOptions | null;
@@ -493,6 +494,7 @@ export interface JimengOrphanTask {
 
 /** 「回看生成对话」：某生成图所在 codex 会话的完整时间线（后端 generation_history 返回）。 */
 export interface GenerationHistoryTurn {
+  submit_id?: string | null;
   project_id?: string | null;
   provider?: string | null;
   media?: GenerationMedia;
@@ -533,6 +535,7 @@ export type AppTheme = "light" | "dark";
 
 /** 应用设置（后端 settings.json 持久化） */
 export interface AppSettings {
+  screenshot_shortcuts?: { capture: string; paste: string };
   /** 应用外观；现有黑色界面为 dark。 */
   theme: AppTheme;
   auto_analyze_on_ingest: boolean;

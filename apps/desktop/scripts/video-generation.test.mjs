@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import ts from "typescript";
+import { generationPromptNodeId } from "../src/lib/projectNodeIds.ts";
 import { DEFAULT_VIDEO_OPTIONS, videoInputError, videoRatio, isVideoPath } from "../src/lib/videoGeneration.ts";
 import { mergeRecoveredGenJobs } from "../src/lib/generationRecovery.ts";
 import { parseCreativeComposerDraft, serializeCreativeComposerDraft } from "../src/lib/creativeDraft.ts";
@@ -22,7 +23,7 @@ test("Seedance 2.5 validates all four explicit modes without silently dropping r
   assert.match(videoInputError(options("multimodal2video"), [video(20), video(20)]), /总时长/);
   assert.match(videoInputError(options("multimodal2video"), Array.from({ length: 31 }, (_, i) => image(i))), /30 张/);
   assert.match(videoInputError(options("multiframe2video"), []), /不支持/);
-  assert.match(videoInputError({ ...DEFAULT_VIDEO_OPTIONS, model_version: "seedance2.0" }, []), /2.5/);
+  assert.match(videoInputError({ ...DEFAULT_VIDEO_OPTIONS, model_version: "unknown" }, []), /不支持/);
   assert.match(videoInputError({ ...DEFAULT_VIDEO_OPTIONS, duration: 3 }, []), /4–30/);
   assert.match(videoInputError({ ...DEFAULT_VIDEO_OPTIONS, duration: 4.5 }, []), /整数/);
   assert.match(videoInputError(DEFAULT_VIDEO_OPTIONS, [], "2:3"), /比例/);
@@ -52,7 +53,7 @@ function harness() {
     taskErrorMessage: String, reconcileRejectedCloudSession: async () => {},
     genHandleError: (jobId, message) => errors.push({ jobId, message }),
     updateJob: (jobId, update) => { state.genJobs[jobId] = update(state.genJobs[jobId]); },
-    videoInputError, videoRatio, isCloudProvider: value => value?.startsWith("bowerbird-cloud"),
+    videoInputError, videoRatio, generationPromptNodeId, isCloudProvider: value => value?.startsWith("bowerbird-cloud"),
     generationParentLocator: () => ({ storePath: "C:/assets/previous.mp4", nodeId: "parent-node" }),
     mergeRecoveredGenJobs, taskCenterGenerationJobs: () => [],
   };
@@ -114,9 +115,9 @@ test("video revision uses explicit references and never borrows the preceding MP
   assert.equal(h.requests[1].parentAssetPath, "C:/assets/previous.mp4");
 });
 
-test("Cloud route accepts 1080p while CLI keeps its supported resolutions", async () => {
+test("Cloud and current official CLI both support Seedance 2.5 at 1080p", async () => {
   const o = { ...options("text2video"), video_resolution: "1080p" };
-  assert.ok(videoInputError(o, [], "16:9", "jimeng"));
+  assert.equal(videoInputError(o, [], "16:9", "jimeng"), null);
   assert.equal(videoInputError(o, [], "16:9", "bowerbird-cloud-video_seedance25_1080p"), null);
   const h = harness();
   await h.start("text2video", [], "16:9", "bowerbird-cloud-video_seedance25_720p");
@@ -222,4 +223,31 @@ test("a video mode change updates the next composer defaults but preserves the f
   assert.equal(current.lastRatio, null);
   assert.equal(current.turns[0].videoOptions.kind, "text2video");
   assert.equal(current.turns[0].ratio, "9:16");
+});
+
+
+test("official Seedance families keep model-specific limits and reject Cloud mismatches", () => {
+  for (const model of ["seedance2.0", "seedance2.0fast", "seedance2.0_vip", "seedance2.0fast_vip", "seedance2.0mini"]) {
+    const value = { ...DEFAULT_VIDEO_OPTIONS, model_version: model, duration: 15 };
+    assert.equal(videoInputError(value, []), null);
+    assert.match(videoInputError({ ...value, duration: 16 }, []), /4–15/);
+    assert.match(videoInputError(value, [], null, "bowerbird-cloud-video_seedance25_720p"), /模型/);
+    assert.equal(videoInputError({ ...value, video_resolution: "4k" }, []) === null, model === "seedance2.0_vip");
+    assert.match(videoInputError({ ...value, kind: "multimodal2video" }, Array.from({ length: 10 }, (_, i) => image(i))), /9 张/);
+    assert.match(videoInputError({ ...value, kind: "multimodal2video" }, [video(10), video(10)]), /总时长/);
+  }
+  assert.equal(videoInputError({ ...options("image2video"), model_version: "seedance1.0fast", duration: 10 }, [image("a")]), null);
+  assert.match(videoInputError({ ...options("text2video"), model_version: "seedance1.5pro" }, []), /模式/);
+});
+
+test("submit IDs belong to their exact video turns and hydrate after recovery", async () => {
+  const h = harness();
+  await h.start("text2video", []);
+  const job = Object.values(h.state.genJobs)[0];
+  h.state.applyGenChunk({ kind: "submit", job_id: job.id, submit_id: "first-task" });
+  h.state.genJobs[job.id].running = false;
+  h.state.genJobs[job.id].sessionId = "session";
+  await h.state.sendGenRevise(job.id, "next", "jimeng", { references: [], generation: { media: "video", videoOptions: options("text2video") } });
+  h.state.applyGenChunk({ kind: "submit", job_id: job.id, submit_id: "second-task" });
+  assert.deepEqual(h.state.genJobs[job.id].turns.map(turn => turn.submitId), ["first-task", "second-task"]);
 });

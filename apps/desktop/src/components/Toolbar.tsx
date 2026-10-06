@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, ChevronDown, Compass, FolderOpen, LayoutDashboard, LoaderCircle, Search, Upload, X } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
+import { ArrowLeft, Camera, ChevronDown, Compass, FolderOpen, LayoutDashboard, LoaderCircle, Search, Upload, X } from "lucide-react";
 import { SidebarStatus } from "./SidebarStatus";
 import { GeneratedImageFilter } from "./GeneratedImageFilter";
 import { useStore } from "../store";
@@ -249,6 +250,9 @@ export function Toolbar({
             </div>
           )}
         </div>
+        <button type="button" aria-label="截图" title="区域截图（可在设置 → 个性化与记忆中修改快捷键）"
+          className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted hover:bg-panel2 hover:text-ink"
+          onClick={() => { void invoke("screenshot_start").catch(error => notifyError(error, "截图失败")); }}><Camera size={16} /></button>
         <SidebarStatus />
       </div>
       {collectedNotice && (

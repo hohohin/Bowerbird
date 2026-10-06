@@ -1,4 +1,5 @@
 import type { CanvasGroupNode, CanvasPoint } from "./canvasLogic";
+import { isVideoPath } from "./videoGeneration.ts";
 import type {
   Asset,
   CanvasGroup,
@@ -41,9 +42,10 @@ export interface CanvasRemoveNodesEventDetail {
 
 export type ProjectCanvasUiNode = CanvasGroupNode<CanvasAssetSnapshot>;
 
-/** Legacy JPEG thumbnails discard alpha; use browser-renderable originals on the canvas. */
+/** Static canvas previews: preserve image alpha, but never load a video decoder for a card. */
 export function canvasAssetMediaPath(asset: Pick<CanvasAssetSnapshot, "thumbPath" | "storePath">): string | null {
   const original = asset.storePath;
+  if (isVideoPath(original)) return asset.thumbPath && !isVideoPath(asset.thumbPath) ? asset.thumbPath : null;
   if (original && (/\.(png|webp|gif|avif|svg|ico|bmp)(?:[?#].*)?$/i.test(original)
     || /^data:image\/(png|webp|gif|avif|svg\+xml|x-icon|bmp)[;,]/i.test(original))) {
     return original;

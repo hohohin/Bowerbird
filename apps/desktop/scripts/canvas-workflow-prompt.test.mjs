@@ -43,7 +43,7 @@ try {
   await list.getByRole('option').filter({ hasText: '柔和光线' }).click();
   assert.equal(await editor.locator('[data-reference-id]').count(), 1);
   await editor.pressSequentially('；参考'); await editor.pressSequentially('@');
-  await list.getByRole('option').filter({ hasText: '图片 2.1' }).click();
+  await list.getByRole('option').filter({ hasText: '图片来源 2' }).click();
   assert.equal(await editor.locator('[data-reference-id]').count(), 2);
   await page.screenshot({ path: '.tmp/workflow/prompt-references.png' });
   await page.evaluate(async () => { const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts'); await canvasWorkflowController('p').start('gen', true); });
@@ -78,6 +78,7 @@ try {
     await api.projectCanvasNoteUpdate(table.id,JSON.stringify(payload));window.emitChange();
     const c=canvasWorkflowController('p');await c.edit(c.document.nodes.map(n=>({...n,prompt:'',promptReferences:[],inputs:{text:[{canvasNodeId:table.id,cellId:'empty-text'}],image:[{canvasNodeId:table.id,cellId:'empty-image'}]}})));
   });
+  await page.locator('[data-canvas-cell="empty-text"]').waitFor();
   await editor.fill('引用空格：');await editor.press('End');await editor.pressSequentially('@');
   await list.waitFor();
   const textOption=list.getByRole('option').filter({hasText:'文本 1'});

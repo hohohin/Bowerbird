@@ -23,7 +23,8 @@ try {
   });
   await page.reload();
   const session=page.locator('[data-canvas-node-id="session"]');await session.waitFor();
-  assert.equal(await page.locator('[data-canvas-node-id="output-a"]').count(),1);
+  assert.equal(await page.locator('[data-canvas-node-id="output-a"]').count(),0);
+  await page.locator('[data-conversation-image="b"]').waitFor();
   await session.hover();
   const output=page.locator('[data-workflow-session-output="session"]');
   await output.click();
@@ -59,14 +60,14 @@ try {
   await session.hover();
   await mkdir('.tmp/workflow',{recursive:true});
   await page.screenshot({path:'.tmp/workflow/session-container-output.png'});
-  // Clearing the container restores the independent results without recreating assets.
+  // Clearing the container restores the session carousel without recreating assets.
   await page.evaluate(async()=>{
     const {api}=await import('/src/lib/api.ts');const card=window.snapshot().nodes.find(n=>n.id==='container'),note=JSON.parse(card.payloadJson);
     for(const cell of note.cells.flat()){cell.image_refs=[];cell.text='';}
     await api.projectCanvasNoteUpdate(card.id,JSON.stringify(note));window.emitChange();
   });
-  await page.locator('[data-canvas-node-id="output-a"]').waitFor();
-  await page.locator('[data-canvas-node-id="output-b"]').waitFor();
+  await page.locator('[data-conversation-image="b"]').waitFor();
+  assert.equal(await page.locator('[data-canvas-node-id="output-a"]').count(),0);
   // A workflow-owned session moves into history; the generator socket carries reruns.
   await page.evaluate(async()=>{
     const {canvasWorkflowController}=await import('/src/lib/canvasWorkflowRuntime.ts');const {newWorkflowNode}=await import('/src/lib/canvasWorkflow.ts');const c=canvasWorkflowController('p');
@@ -89,7 +90,7 @@ try {
   });
   await page.reload();await page.locator('[data-workflow-card="owner"]').waitFor();
   await page.locator('[data-canvas-node-id="output-a"]').waitFor({state:'detached'});
-  assert.equal(await page.locator('.canvas-graph-edges .is-produced').count(),1);
+  assert.equal(await page.locator('.canvas-graph-edges .is-produced').count(),0);
   await page.evaluate(async()=>{
     const {canvasWorkflowController}=await import('/src/lib/canvasWorkflowRuntime.ts');const c=canvasWorkflowController('p');
     await c.edit(c.document.nodes.map(n=>n.id==='owner'?{...n,activeSessionNodeId:null,outputs:{}}:n));
@@ -98,7 +99,7 @@ try {
   assert.equal(await page.locator('[data-canvas-node-id="output-b"]').count(),1);
   await page.locator('[data-workflow-generated-link="output-a"]').waitFor({state:'attached'});
   assert.equal(await page.locator('[data-workflow-generated-link="output-b"]').count(),1);
-  assert.equal(await page.locator('.canvas-graph-edges .is-produced').count(),1);
+  assert.equal(await page.locator('.canvas-graph-edges .is-produced').count(),0);
   await page.evaluate(async()=>{
     const {canvasWorkflowController}=await import('/src/lib/canvasWorkflowRuntime.ts');const {api}=await import('/src/lib/api.ts');const c=canvasWorkflowController('p');
     await c.edit(c.document.nodes.map(n=>n.id==='owner'?{...n,activeSessionNodeId:'session-two',sessionNodeIds:['session','session-two'],outputs:{image:{type:'image',assetIds:['c']}}}:n));

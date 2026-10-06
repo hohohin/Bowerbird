@@ -3152,6 +3152,36 @@ mod tests {
     }
 
     #[test]
+    fn large_content_card_round_trips_without_losing_cells() {
+        let db = db();
+        materialize(&db, "p1");
+        let cells: Vec<Vec<serde_json::Value>> = (0..51).map(|r| (0..9).map(|c| {
+            serde_json::json!({
+                "id": format!("cell-{r}-{c}"), "text": "保留表格正文与换行\n".repeat(5),
+                "bold": r == 0, "italic": false, "align": "left", "content_type": "text"
+            })
+        }).collect()).collect();
+        let text = cells.iter().map(|row| row.iter().map(|cell| cell["text"].as_str().unwrap())
+            .collect::<Vec<_>>().join("\t")).collect::<Vec<_>>().join("\n");
+        let payload = serde_json::json!({
+            "schema_version": 1, "note_type": "text", "text": text, "cells": cells
+        }).to_string();
+        assert!(payload.len() > 64 * 1024);
+        db.create_canvas_node(&NewCanvasNode { payload_json: payload.clone(), ..note("p1", "large") }).unwrap();
+        db.create_canvas_node(&note("p1", "receiver")).unwrap();
+        db.update_canvas_note_payload("receiver", &payload).unwrap();
+        for node in db.project_canvas_snapshot("p1").unwrap().nodes {
+            assert_eq!(node.payload_json, payload);
+        }
+        let oversized = serde_json::json!({"schema_version": 1, "text": "x".repeat(4 * 1024 * 1024)}).to_string();
+        assert!(db.update_canvas_note_payload("receiver", &oversized).is_err());
+        assert!(db.create_canvas_node(&NewCanvasNode { payload_json: oversized, ..note("p1", "too-large") }).is_err());
+        let snapshot = db.project_canvas_snapshot("p1").unwrap();
+        assert_eq!(snapshot.nodes.len(), 2);
+        assert!(snapshot.nodes.iter().all(|node| node.payload_json == payload));
+    }
+
+    #[test]
     fn note_editing_preserves_layout_and_rejects_execution_nodes() {
         let db = db();
         materialize(&db, "p1");

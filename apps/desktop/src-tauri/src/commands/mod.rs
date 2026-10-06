@@ -22,6 +22,7 @@ pub mod workflow_templates;
 pub mod projects;
 pub mod prompt;
 pub mod settings;
+pub mod screenshot;
 pub mod source_browser;
 pub mod source_browser_capture;
 pub mod source_browser_network;
@@ -58,3 +59,7 @@ pub async fn db_health(db: State<'_, Arc<Database>>) -> Result<String, AppError>
         "tables={tables} | fts5={fts5} | queued_tasks={queued}"
     ))
 }
+
+pub mod dreamina_account;
+
+pub mod video_poster;

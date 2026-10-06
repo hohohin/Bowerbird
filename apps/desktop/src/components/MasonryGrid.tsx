@@ -1,10 +1,11 @@
 import { memo, useEffect, useId, useMemo, useRef, useState, type MouseEvent } from "react";
 import { createPortal } from "react-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { Check, ImagePlus, Layers, SearchX } from "lucide-react";
+import { Check, ImagePlus, Layers, Play, SearchX } from "lucide-react";
 import { useStore } from "../store";
 import { api } from "../lib/api";
 import { isVideoPath } from "../lib/videoGeneration";
+import { useVideoPoster } from "../lib/videoPoster";
 import { setDragAssets } from "../lib/dragPayload";
 import type { Asset } from "../lib/types";
 import type { LibraryProjectGroup } from "../lib/libraryView";
@@ -117,6 +118,7 @@ const Thumb = memo(function Thumb({
     setIdx(groupLen > 0 ? groupLen - 1 : 0);
   }, [groupLen]);
   const shown: Asset = groupLen > 0 ? group![idx] ?? asset : asset;
+  const thumbnailPath = useVideoPoster(shown.store_path, shown.thumb_path);
   const selected = useStore((s) => s.mode === "manage" && s.selectedIds.has(shown.id));
   const colors = useMemo(() => parseColors(shown.colors), [shown.colors]);
   // 有反推（caption）→ 左上角 🏷️ 标记（生成图同时在标时，🏷️ 排在 ✨ 右侧）。
@@ -134,8 +136,8 @@ const Thumb = memo(function Thumb({
   // 轮播切过程图时若仍在视口，observer 立即触发设 src。
   useEffect(() => {
     const img = imgRef.current;
-    if (!img || !shown.thumb_path) return;
-    const path = shown.thumb_path;
+    if (!img || !thumbnailPath) return;
+    const path = thumbnailPath;
     const obs = new IntersectionObserver(
       (entries) => {
         for (const e of entries) {
@@ -149,17 +151,13 @@ const Thumb = memo(function Thumb({
     );
     obs.observe(img);
     return () => obs.disconnect();
-  }, [shown.thumb_path]);
+  }, [thumbnailPath]);
 
-  // 没有缩略图的视频直接渲染原视频首帧（本机没有 ffmpeg 也能生成/导入视频并看到画面，
-  // 与画板节点的视频渲染一致）；其余无缩略图格式（SVG 之外解码失败等）维持占位。
-  const videoSrc =
-    !shown.thumb_path && shown.store_path && isVideoPath(shown.store_path)
-      ? convertFileSrc(shown.store_path)
-      : null;
+  // 列表不创建视频解码器；缺封面仍保留卡片选择、拖动及主动打开原视频的入口。
+  const video = isVideoPath(shown.store_path);
 
   // 没有缩略图的占位（非图片格式或解码失败）。
-  if (!shown.thumb_path && !videoSrc) {
+  if (!thumbnailPath && !video) {
     if (addingToCollection) return <button type="button" data-asset-id={shown.id}
       aria-label={`${shown.name}${selected ? "，已选中" : ""}`} aria-pressed={selected}
       className={`mb-2 flex h-32 w-full items-center justify-center rounded-md border-2 bg-panel2 text-xs ${selected ? "collection-add-selected" : "border-transparent text-muted"}`}
@@ -182,7 +180,7 @@ const Thumb = memo(function Thumb({
   // hover 放大预览：鼠标悬浮缩略图 2.8s 后弹出放大图（portal 到 body，避开外层 overflow 裁剪），
   // 移走即消失。放大尺寸 = 缩略图当前渲染尺寸 × 200%（放大镜式，随列宽变化）。视频/无原图时不启用。
   const previewSrc =
-    shown.store_path && !shown.duration ? convertFileSrc(shown.store_path) : null;
+    shown.store_path && !video && !shown.duration ? convertFileSrc(shown.store_path) : null;
   const [preview, setPreview] = useState<{
     x: number;
     y: number;
@@ -507,16 +505,12 @@ const Thumb = memo(function Thumb({
           </button>
         </>
       )}
-      {videoSrc ? (
-        <video
-          src={videoSrc}
-          className="block w-full bg-panel2"
+      {video && !thumbnailPath ? (
+        <div
+          className="flex min-h-24 w-full items-center justify-center gap-2 bg-panel2 text-xs text-muted"
           style={{ aspectRatio: ratio }}
-          preload="metadata"
-          muted
-          playsInline
           aria-label={shown.name}
-        />
+        ><Play size={20} />视频 · 暂无封面</div>
       ) : (
         <img
           ref={imgRef}

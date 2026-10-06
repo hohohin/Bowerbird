@@ -14,7 +14,7 @@ const MIN_GRID_WEIGHT_SHARE = 0.04;
 
 export function CanvasTextCard({ value, selected, width, height, zoom, onChange, onSelect, onResize, onConnectCell, onInput, inputLocked, onOpenPreview }: {
   onOpenPreview?: (asset: Asset, group?: Asset[]) => void;
-  onInput?: (cellId?: string, disconnect?: boolean, type?: "text" | "image") => void;
+  onInput?: (cellId?: string, disconnect?: boolean, type?: "text" | "image", point?: { x: number; y: number }) => void;
   inputLocked?: boolean;
   onConnectCell?: (cellId: string, clientX: number, clientY: number) => void;
   value: CanvasNotePayload;
@@ -170,12 +170,12 @@ export function CanvasTextCard({ value, selected, width, height, zoom, onChange,
       disabled={inputLocked} title="输入到第一列的新行；右键断开整体输入"
       onPointerDown={event => { event.stopPropagation(); event.preventDefault(); }}
       onClick={event => { event.stopPropagation(); if (event.detail === 0) onInput(); }}
-      onContextMenu={event => { event.preventDefault(); event.stopPropagation(); onInput(undefined, true); }} />}
+      onContextMenu={event => { event.preventDefault(); event.stopPropagation(); onInput(undefined, true, undefined, { x: event.clientX, y: event.clientY }); }} />}
     {!bubble && onInput && <button className="workflow-cell-port workflow-text-input workflow-content-image-input is-image-output" data-workflow-text-input="" data-content-input-type="image" aria-label="内容卡片图片输入"
       disabled={inputLocked} title="输入图片，每张图片新建一行；右键断开图片输入"
       onPointerDown={event => { event.stopPropagation(); event.preventDefault(); }}
       onClick={event => { event.stopPropagation(); if (event.detail === 0) onInput(undefined, false, "image"); }}
-      onContextMenu={event => { event.preventDefault(); event.stopPropagation(); onInput(undefined, true, "image"); }} />}
+      onContextMenu={event => { event.preventDefault(); event.stopPropagation(); onInput(undefined, true, "image", { x: event.clientX, y: event.clientY }); }} />}
     {selected && !images && <div className="canvas-text-stylebar" role="toolbar" aria-label="文本样式（当前单元格）"
       onPointerDown={event => { event.stopPropagation(); event.preventDefault(); }}>
       <button title="加粗" aria-label="加粗" aria-pressed={cell.bold} onClick={() => updateCell(...active, { bold: !cell.bold })}><Bold size={16} /></button>
@@ -189,11 +189,7 @@ export function CanvasTextCard({ value, selected, width, height, zoom, onChange,
         setRemoved(null);
       }}><Undo2 size={16} /></button></>}
     </div>}
-    <div className="canvas-text-handle" title="拖动内容卡片"><GripHorizontal size={15} />{images ? <Images size={14} /> : <Type size={14} />}
-      {!bubble && <input className="canvas-text-title" aria-label="内容卡片标题" placeholder="内容卡片" value={value.title ?? ""}
-        onPointerDown={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()} onFocus={onSelect}
-        onChange={event => onChange({ ...value, title: event.target.value })} />}
-    </div>
+    <div className="canvas-text-handle" title="拖动内容卡片"><GripHorizontal size={15} />{images ? <Images size={14} /> : <Type size={14} />}</div>
     {!bubble && onConnectCell && <button className="workflow-cell-port workflow-image-output" data-workflow-cell="*" aria-label="输出容器图片" title="输出全部图片"
       onPointerDown={event => { event.preventDefault(); event.stopPropagation(); onConnectCell("*", event.clientX, event.clientY); }}
       onClick={event => { if (event.detail === 0) onConnectCell("*", event.clientX, event.clientY); }} />}
@@ -215,12 +211,12 @@ export function CanvasTextCard({ value, selected, width, height, zoom, onChange,
             disabled={inputLocked} title="输入文本或图片，替换此单元格；右键断开输入"
             onPointerDown={event => { event.stopPropagation(); event.preventDefault(); }}
             onClick={event => { event.stopPropagation(); if (event.detail === 0) onInput(item.id); }}
-            onContextMenu={event => { event.preventDefault(); event.stopPropagation(); onInput(item.id, true); }} />}
+            onContextMenu={event => { event.preventDefault(); event.stopPropagation(); onInput(item.id, true, undefined, { x: event.clientX, y: event.clientY }); }} />}
           {!bubble && onInput && <button className="workflow-cell-port is-input is-image-output workflow-cell-image-input" data-workflow-text-input={item.id} data-content-input-type="image" aria-label={`输入第 ${row + 1} 行第 ${column + 1} 列图片`}
             disabled={inputLocked} title="输入图片，替换此单元格；右键断开图片输入"
             onPointerDown={event => { event.stopPropagation(); event.preventDefault(); }}
             onClick={event => { event.stopPropagation(); if (event.detail === 0) onInput(item.id, false, "image"); }}
-            onContextMenu={event => { event.preventDefault(); event.stopPropagation(); onInput(item.id, true, "image"); }} />}
+            onContextMenu={event => { event.preventDefault(); event.stopPropagation(); onInput(item.id, true, "image", { x: event.clientX, y: event.clientY }); }} />}
           {onConnectCell && <button className={`workflow-cell-port ${images ? "is-image-output" : ""}`} data-workflow-cell={item.id} aria-label={`输出第 ${row + 1} 行第 ${column + 1} 列${images ? "图片" : "文本"}`}
             title={images ? "拖动连接图片输入" : "拖动连接文本输入"} onPointerDown={event => { event.preventDefault(); event.stopPropagation(); onConnectCell(item.id!, event.clientX, event.clientY); }}
             onClick={event => { if (event.detail === 0) onConnectCell(item.id!, event.clientX, event.clientY); }} />}

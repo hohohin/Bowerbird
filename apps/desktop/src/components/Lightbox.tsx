@@ -53,7 +53,7 @@ export function Lightbox({
       aria-modal="true"
       aria-label={`媒体预览，${index + 1} / ${images.length}`}
     >
-      {isVideoPath(images[index]) ? <video key={images[index]} src={convertFileSrc(images[index])} controls preload="metadata"
+      {isVideoPath(images[index]) ? <video key={images[index]} src={convertFileSrc(images[index])} controls preload="none"
         onClick={(event) => event.stopPropagation()} className="max-h-[92vh] max-w-[92vw]" /> : <img
         ref={zoom.imgRef}
         src={convertFileSrc(images[index])}

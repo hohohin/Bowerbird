@@ -40,6 +40,9 @@ pub enum AppTheme {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
+    #[serde(default)]
+    pub screenshot_shortcuts: crate::commands::screenshot::ScreenshotShortcuts,
+
     /// 应用外观。新配置及未设置主题的旧配置默认日间；保留已保存的主题选择。
     #[serde(default)]
     pub theme: AppTheme,
@@ -123,6 +126,7 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             theme: AppTheme::Light,
+            screenshot_shortcuts: Default::default(),
             auto_analyze_on_ingest: false,
             auto_analyze_prompt: DEFAULT_AUTO_ANALYZE_PROMPT.to_string(),
             library_root: None,
@@ -192,15 +196,25 @@ impl SettingsState {
 
     /// 全量覆盖设置并持久化到文件。
     pub fn update(&self, new_settings: AppSettings) -> AppResult<()> {
-        {
-            let mut s = self.settings.write().unwrap();
-            *s = new_settings;
-            let json = serde_json::to_string_pretty(&*s)?;
-            if let Some(parent) = self.path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            std::fs::write(&self.path, &json)?;
+        self.update_with(|settings| *settings = new_settings)
+    }
+
+    /// Serialize read-modify-write and publish memory only after replacing the file.
+    pub fn update_with(&self, change: impl FnOnce(&mut AppSettings)) -> AppResult<()> {
+        let mut current = self.settings.write().unwrap();
+        let mut next = current.clone();
+        change(&mut next);
+        let json = serde_json::to_string_pretty(&next)?;
+        if let Some(parent) = self.path.parent() {
+            std::fs::create_dir_all(parent)?;
         }
+        let temp = self.path.with_extension("json.tmp");
+        std::fs::write(&temp, json)?;
+        if let Err(error) = std::fs::rename(&temp, &self.path) {
+            let _ = std::fs::remove_file(temp);
+            return Err(error.into());
+        }
+        *current = next;
         Ok(())
     }
 }
@@ -208,6 +222,38 @@ impl SettingsState {
 #[cfg(test)]
 mod tests {
     use super::{AppSettings, AppTheme, SettingsState};
+
+    #[test]
+    fn screenshot_shortcuts_default_persist_and_failed_write_keeps_memory() {
+        let old: AppSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.screenshot_shortcuts.capture, "F1");
+        assert_eq!(old.screenshot_shortcuts.paste, "F3");
+        let dir = std::env::temp_dir().join(format!("bb-shortcut-settings-{}", ulid::Ulid::new()));
+        let path = dir.join("settings.json");
+        let state = SettingsState::init(path.clone()).unwrap();
+        state
+            .update_with(|settings| {
+                settings.screenshot_shortcuts.capture = "Control+Shift+KeyS".into();
+                settings.screenshot_shortcuts.paste.clear();
+            })
+            .unwrap();
+        let restored = SettingsState::init(path.clone()).unwrap().get();
+        assert_eq!(
+            restored.screenshot_shortcuts,
+            state.get().screenshot_shortcuts
+        );
+        assert!(restored.screenshot_shortcuts.paste.is_empty());
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        assert!(state
+            .update_with(|settings| settings.screenshot_shortcuts.capture = "F8".into())
+            .is_err());
+        assert_eq!(
+            state.get().screenshot_shortcuts.capture,
+            "Control+Shift+KeyS"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn canvas_names_default_hidden_and_persist_choice() {

@@ -95,6 +95,8 @@ pub struct Analysis {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenerationHistoryTurn {
     #[serde(default)]
+    pub submit_id: Option<String>,
+    #[serde(default)]
     pub project_id: Option<String>,
     #[serde(default)]
     pub provider: Option<String>,
@@ -1702,6 +1704,8 @@ impl Database {
                 .and_then(|v| v.get("turn_key"))
                 .and_then(|x| x.as_str())
                 .map(String::from);
+            let row_submit_id = payload_value.as_ref().and_then(|v| v.get("submit_id"))
+                .and_then(|v| v.as_str()).map(String::from);
             // 本轮实际下发的参考图（同轮多行的 payload 相同；相邻同 prompt 跨轮合并时保留首行）。
             let row_refs: Vec<String> = payload_value
                 .as_ref()
@@ -1720,6 +1724,7 @@ impl Database {
                     (Some(left), Some(right)) => left == right,
                     (None, None) => {
                         turn.prompt == prompt && turn.applied_prompt == row_applied_prompt
+                            && turn.submit_id == row_submit_id
                     }
                     _ => false,
                 })
@@ -1727,6 +1732,7 @@ impl Database {
                 turns.last_mut().unwrap().images.push(path);
             } else {
                 turns.push(GenerationHistoryTurn {
+                    submit_id: row_submit_id,
                     project_id: payload_value.as_ref().and_then(|v| v.get("project_id")).and_then(|v| v.as_str()).map(String::from),
                     provider: payload_value.as_ref().and_then(|v| v.get("provider")).and_then(|v| v.as_str()).map(String::from),
                     reference_node_ids: payload_value.as_ref().and_then(|v| v.get("reference_node_ids")).cloned().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default(),
@@ -3164,16 +3170,36 @@ mod tests {
             let id = put_asset(&db, &format!("video-{index}"));
             db.insert_analysis(&Analysis { id:format!("video-meta-{index}"), asset_id:id,
                 kind:"generation_meta".into(), provider:Some("jimeng".into()), created_at:Some(index),
-                payload:serde_json::json!({"prompt":"bird", "turn_key":format!("turn-{index}"), "session_id":"video-session", "media":"video", "provider":"jimeng", "video_options":options, "ratio":ratio, "references":[]}).to_string() }).unwrap();
+                payload:serde_json::json!({"prompt":"bird", "submit_id":format!("submit-{index}"), "turn_key":format!("turn-{index}"), "session_id":"video-session", "media":"video", "provider":"jimeng", "video_options":options, "ratio":ratio, "references":[]}).to_string() }).unwrap();
         }
         let history = db.generation_history_by_session("video-session", None).unwrap();
         assert_eq!(history.media, "video");
         assert_eq!(history.video_options, Some(options.clone()));
         assert_eq!(history.ratio.as_deref(), Some("9:16"));
         assert_eq!(history.turns.len(), 2);
+        assert_eq!(history.turns[0].submit_id.as_deref(), Some("submit-1"));
+        assert_eq!(history.turns[1].submit_id.as_deref(), Some("submit-2"));
         assert_eq!(history.turns[1].ratio.as_deref(), Some("21:9"));
         assert_eq!(history.turns[1].video_options, Some(options));
         assert!(history.turns.iter().all(|turn| turn.references.is_empty()));
+    }
+
+    #[test]
+    fn legacy_video_history_does_not_merge_different_official_tasks() {
+        let db = db();
+        for index in [1, 2] {
+            let id = put_asset(&db, &format!("legacy-video-{index}"));
+            db.insert_analysis(&Analysis {
+                id: format!("legacy-video-meta-{index}"), asset_id: id,
+                kind: "generation_meta".into(), provider: Some("jimeng".into()), created_at: Some(index),
+                payload: serde_json::json!({"prompt":"same", "submit_id":format!("submit-{index}"),
+                    "session_id":"legacy-video-session", "media":"video", "provider":"jimeng"}).to_string(),
+            }).unwrap();
+        }
+        let history = db.generation_history_by_session("legacy-video-session", None).unwrap();
+        assert_eq!(history.turns.len(), 2);
+        assert_eq!(history.turns[0].submit_id.as_deref(), Some("submit-1"));
+        assert_eq!(history.turns[1].submit_id.as_deref(), Some("submit-2"));
     }
 
     #[test]

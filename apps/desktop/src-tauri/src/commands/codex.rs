@@ -562,7 +562,9 @@ pub async fn codex_create_image(
     creative_relation: Option<crate::core::creative_session_contract::CreativeGenerationRelation>,
     // 失败重试的叠放锚点（被重试失败轮的 prompt 节点 id）：新卡原样落它的位置。
     retry_anchor_node_id: Option<String>,
+    internal_agent: Option<bool>,
 ) -> Result<String, AppError> {
+    let internal_agent = internal_agent.unwrap_or(false);
     let media = media.unwrap_or_else(|| "image".into());
     if !matches!(media.as_str(), "image" | "video") {
         return Err(AppError::Other("不支持的生成媒体类型".into()));
@@ -595,6 +597,13 @@ pub async fn codex_create_image(
         return Err(AppError::Other(
             "新生成任务必须归属于项目画板中的创作线程".into(),
         ));
+    }
+    if internal_agent {
+        let thread = db.get_creative_thread(thread_id.as_deref().unwrap())?
+            .ok_or_else(|| AppError::Other("Agent 所属创作线程不存在".into()))?;
+        if Some(thread.project_id.as_str()) != project_id.as_deref() {
+            return Err(AppError::Other("Agent 生图项目与线程不匹配".into()));
+        }
     }
     // 旧 payload 字段只保留在读取模型中；项目画板上线后的新任务不再写 creative_session_id。
     let _ = creative_session_id;
@@ -898,7 +907,7 @@ pub async fn codex_create_image(
                     serde_json::Value::String(job_id_for_emit.clone()),
                 );
             }
-            let _ = app_clone.emit("codex://chunk", v);
+            if !internal_agent { let _ = app_clone.emit("codex://chunk", v); }
         }
     });
 
@@ -915,6 +924,7 @@ pub async fn codex_create_image(
     let now_ts = chrono::Utc::now().timestamp();
     {
         let job = crate::core::task_queue::GenJob {
+            internal_agent,
             id: job_id.clone(),
             media: media.clone(),
             provider: provider_name.clone(),
@@ -956,7 +966,7 @@ pub async fn codex_create_image(
         }
     }
 
-    if let (Some(project_id), Some(thread_id)) = (project_id.as_deref(), thread_id.as_deref()) {
+    if let (Some(project_id), Some(thread_id)) = (project_id.as_deref(), thread_id.as_deref().filter(|_| !internal_agent)) {
         let conversation = conversation_id.as_deref().unwrap_or(&job_id);
         if let Err(error) = db.inner().begin_project_generation_turn(
             &crate::core::project_canvas::ProjectGenerationTurnInput {
@@ -1007,20 +1017,22 @@ pub async fn codex_create_image(
     // GenTurn.refs，气泡上方画「附件」缩略图（续轮看不到合并结果曾是用户投诉点）。
     // ratio = 本轮最终比例（自动档已按第一参考图吸附）——前端更新 job.lastRatio，
     // 续轮坞比例初值与实际下发保持一致。
-    let _ = app.emit(
-        "codex://chunk",
-        serde_json::json!({
-            "kind": "started",
-            "job_id": &job_id,
-            "references": refs_for_meta.clone(),
-            "reference_node_ids": reference_node_ids_for_meta.clone(),
-            "ratio": ratio.clone(),
-            "applied_prompt": &applied_prompt,
-            "visual_profile": &visual_profile,
-            "media": &media,
-            "video_options": &video_options,
-        }),
-    );
+    if !internal_agent {
+        let _ = app.emit(
+            "codex://chunk",
+            serde_json::json!({
+                "kind": "started",
+                "job_id": &job_id,
+                "references": refs_for_meta.clone(),
+                "reference_node_ids": reference_node_ids_for_meta.clone(),
+                "ratio": ratio.clone(),
+                "applied_prompt": &applied_prompt,
+                "visual_profile": &visual_profile,
+                "media": &media,
+                "video_options": &video_options,
+            }),
+        );
+    }
 
     let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
     GENERATE_CANCEL
@@ -1089,7 +1101,7 @@ pub async fn codex_create_image(
         )
         .await?;
 
-        if let (Some(project_id), Some(thread_id)) = (project_id.as_deref(), thread_id.as_deref()) {
+        if let (Some(project_id), Some(thread_id)) = (project_id.as_deref(), thread_id.as_deref().filter(|_| !internal_agent)) {
             db.inner().complete_project_generation_turn(
                 project_id,
                 thread_id,
@@ -1132,7 +1144,7 @@ pub async fn codex_create_image(
     if let (Err(error), Some(project_id), Some(thread_id)) = (
         &generation_result,
         project_id.as_deref(),
-        thread_id.as_deref(),
+        thread_id.as_deref().filter(|_| !internal_agent),
     ) {
         let status = if matches!(error, AppError::Codex(message) if message == "已取消") {
             "cancelled"
@@ -1176,7 +1188,7 @@ pub async fn cancel_codex_create(
     {
         if let (Some(project_id), Some(thread_id), Some(turn_key)) = (
             job.project_id.as_deref(),
-            job.thread_id.as_deref(),
+            job.thread_id.as_deref().filter(|_| !job.internal_agent),
             job.turn_key.as_deref(),
         ) {
             let _ = db.inner().update_project_generation_turn_status(
@@ -1266,6 +1278,7 @@ pub async fn list_gen_jobs(db: State<'_, Arc<Database>>) -> Result<Vec<GenJobSum
         Ok(tasks
             .into_iter()
             .filter_map(|t| t.gen_job())
+            .filter(|j| !j.internal_agent)
             .map(|j| GenJobSummary {
                 running: matches!(
                     j.status.as_str(),
@@ -1356,7 +1369,7 @@ pub async fn recent_gen_sessions(
             let Some(j) = t.gen_job() else {
                 continue;
             };
-            if t.status == "cancelled" && j.media != "video" { continue; }
+            if j.internal_agent || (t.status == "cancelled" && j.media != "video") { continue; }
             // 首轮 payload 保存于 provider 返回前，session_id 可能为空；按 job_id
             // 从产物元数据找回会话，兼容已安装版本写出的历史任务。
             let history = match &j.session_id {
@@ -1457,6 +1470,7 @@ pub async fn jimeng_retrieve_orphan(
     }
     let now = chrono::Utc::now().timestamp();
     let job = crate::core::task_queue::GenJob {
+        internal_agent: false,
         id: format!("orphan-{submit_id}"),
         media: "image".into(),
         provider: "jimeng".into(),
@@ -1632,6 +1646,7 @@ mod generation_task_tests {
     fn running_job(id: &str) -> GenJob {
         let now = Utc::now().timestamp();
         GenJob {
+            internal_agent: false,
             id: id.into(),
             media: "image".into(),
             provider: "bowerbird-cloud".into(),

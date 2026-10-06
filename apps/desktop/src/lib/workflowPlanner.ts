@@ -1,4 +1,4 @@
-import { activePromptReferences, assertWorkflowAcyclic, newWorkflowNode, workflowBindingKey, workflowImageContainer, workflowInputs, workflowOutputs, WORKFLOW_SKILLS,
+import { activePromptReferences, normalizeWorkflowInputSlots, assertWorkflowAcyclic, newWorkflowNode, workflowBindingKey, workflowImageContainer, workflowInputs, workflowOutputs, WORKFLOW_SKILLS,
   type WorkflowInput, type WorkflowNode, type WorkflowPortType } from "./canvasWorkflow";
 
 export interface PlanningSource { id: string; type: "text" | "image"; input: WorkflowInput; label: string; preview?: string; contentKey?: string; parentId?: string }
@@ -57,7 +57,7 @@ export const planningContract = {
     nodes: [{ id: "draw", kind: "generation", prompt: "一只猫", ratio: "1:1" }], outputs: [{ node: "draw", label: "海报" }] },
   nodes: "最多 23 张工作卡，id 为字母开头的英文数字下划线，最长32字，不能与来源别名或 workflow_start 重复。字段仅 id/kind/action/skill/prompt/ratio/inputs。不填写 trigger、edges、坐标、provider 或真实 ID；应用自动创建触发器、检查依赖并排版，编译后最多64条线。",
   inputs: "generation/agent 的 text/image 输入只由 prompt 的 {{source1.image}}、{{describe.text}} 引用推导，不要再填写 inputs.text/image。其他卡用 inputs:{image:['source1.image'],text:['rewrite.text']}。visual-profile 端口可用 inputs:{'visual-profile':['style.visual-profile']}。同一来源只声明一次，不填 signal。",
-  prompts: "只有 generation/agent 使用 {{别名.端口}}；其余卡片自动读取 inputs，用普通要求。禁止 @[]。每张卡必须通往 outputs 中的最终交付，禁止没有用途的分析步骤。agent 是文本改写，需要原文引用；用户只要求填入文案时，不额外改写文案。保持产品身份；不要从共享会话旧消息借用本次未给出的名字或要求。",
+  prompts: "只有 generation/agent 使用 {{别名.端口}}；其余卡片自动读取 inputs，用普通要求。禁止 @[]。每张卡必须通往 outputs 中的最终交付，禁止没有用途的分析步骤。agent 使用本机 harness 接收文字和图片，可返回文字、表格和图片（text/image 端口），可分析、问答、写作、改写或按用户要求处理图片，也可仅填写要求而无来源；用户只要求填入文案时，不额外改写文案。保持产品身份；不要从共享会话旧消息借用本次未给出的名字或要求。",
   sourceUses: "每个顶层来源必须声明 {source:'source1',role:'layout'|'subject'|'copy'|'reference',mode:'each'|'shared'} 并实际用于交付。多图 layout 默认 each（逐张改图）；只有用户明确要合成或只取整体风格才 shared。each 必须用 parentId 对应的每个子来源各出一份独立交付，不可用整组替代或把多页合一。",
   outputs: "声明最终交付 [{node:'draw',label:'第1页',forSource:'source1_cell1'}]。forSource 在 each 模式必填，每个子来源恰好对应一张不同的最终卡，且 layout 必须直接接到对应 generation 的图片输入。共享产品/文案应连到每一份 each 交付的依赖路径。输出数量与来源用途会显示给用户，不能仅在 summary 宣称完成。",
   execution: "只编排，不执行。应用由数据依赖自动连接触发器。prompt 最多4000字，整个方案最多16000字；ratio 仅 generation 可用 null 或 1:1/3:4/4:3/2:3/3:2/16:9/9:16。图片只有元数据，需要读文案时安排 describe 提取原文；需要保留版式时将原图直接用于生成。缺材料/能力返回 error。",
@@ -206,7 +206,6 @@ export function buildWorkflowPlan(text: string, owner: WorkflowNode, sources: Pl
     if (node.kind === "instruction" && !node.inputs.image?.length) throw new Error("指令卡片缺少图片来源");
     if (node.kind === "instruction" && node.action !== "describe" && node.inputs.image.length !== 1) throw new Error("复用和分层只接收一个图片来源");
     if (node.kind === "visual-profile" && !node.prompt.trim() && !node.inputs.image?.length && !node.inputs.text?.length) throw new Error("视觉规范缺少要求或来源");
-    if (node.kind === "agent" && !node.inputs.text?.length) throw new Error("文本 Agent 缺少原文");
     if (node.prompt.includes("@[")) throw new Error("方案使用了内部引用标识");
     const bindings = referenceBindings.get(alias) ?? new Map(), used = new Set<string>();
     node.prompt = node.prompt.replace(/\{\{([^{}]+)\}\}/g, (_match, key: string) => {
@@ -250,7 +249,7 @@ export function canUndoWorkflowPlan(owner: WorkflowNode, nodes: WorkflowNode[], 
   const applied = owner.planning?.appliedNodes;
   if (!applied?.length) return false;
   const ids = new Set(applied.map(node => node.id));
-  const definition = ({ x: _x, y: _y, ...node }: WorkflowNode) => JSON.stringify(node);
+  const definition = ({ x: _x, y: _y, ...node }: WorkflowNode) => planningSnapshotKey(normalizeWorkflowInputSlots(node as WorkflowNode));
   return applied.every(before => { const now = nodes.find(node => node.id === before.id); return now && !locked(now.id) && definition(now) === definition(before); })
     && !nodes.some(node => !ids.has(node.id) && Object.values(node.inputs).flat().some(input => input.nodeId && ids.has(input.nodeId)));
 }

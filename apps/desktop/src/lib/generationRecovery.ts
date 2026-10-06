@@ -16,6 +16,7 @@ function hydrateMatchingTurn(live: GenTurn, persisted: GenTurn): GenTurn {
     ...persisted,
     ...live,
     turnKey: preferText(live.turnKey, persisted.turnKey),
+    submitId: preferText(live.submitId, persisted.submitId),
     prompt: preferText(live.prompt, persisted.prompt),
     appliedPrompt: preferText(live.appliedPrompt, persisted.appliedPrompt),
     promptRaw: preferText(live.promptRaw, persisted.promptRaw),

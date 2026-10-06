@@ -63,7 +63,6 @@ function LibraryLoadingState() {
 }
 
 function App() {
-  useEffect(prepareGenerationSound, []);
   const [initializing, setInitializing] = useState(true);
   const [creativeLaunch, setCreativeLaunch] = useState<CreativeLaunchRequest | null>(null);
   const [creativeTarget, setCreativeTarget] = useState<{
@@ -103,6 +102,8 @@ function App() {
   const genEditing = useStore((s) => s.genEditing);
   // 「隐藏项目素材」等设置在后端命令层生效；订阅 settings 让设置变化后重拉瀑布流。
   const settings = useStore((s) => s.settings);
+  const generationSoundEnabled = settings != null && (settings.generation_completion_sound ?? true);
+  useEffect(() => prepareGenerationSound(generationSoundEnabled), [generationSoundEnabled]);
   const genPanelOpen = useStore((s) => s.genPanelOpen);
   const activeSessionKind = useStore((s) => s.activeSessionKind);
   const genJobs = useStore((s) => s.genJobs);

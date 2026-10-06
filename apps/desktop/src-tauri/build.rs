@@ -66,6 +66,12 @@ fn main() {
             .compile("bowerbird_browser_capture");
         println!("cargo:rustc-link-lib=framework=WebKit");
         println!("cargo:rustc-link-lib=framework=Foundation");
+        println!("cargo:rerun-if-changed=macos/video_thumbnail.m");
+        cc::Build::new().file("macos/video_thumbnail.m").flag("-fobjc-arc")
+            .compile("bowerbird_video_thumbnail");
+        for framework in ["AVFoundation", "CoreMedia", "CoreGraphics", "ImageIO"] {
+            println!("cargo:rustc-link-lib=framework={framework}");
+        }
         // @available needs Clang's version-check helper when Tauri targets older macOS.
         // Rust links with -nodefaultlibs, so Clang does not add this runtime itself.
         let runtime = cc::Build::new().get_compiler().to_command()

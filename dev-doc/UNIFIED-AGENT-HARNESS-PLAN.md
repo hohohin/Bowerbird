@@ -1,5 +1,7 @@
 # Bowerbird 通用云端 Agent Harness 专项计划
 
+> **2026-09-25 本机工作流会话范围更新：** 工作流文字 Agent 与编排助手按“仓库＋项目＋卡片”使用稳定独立 DSH 会话，通过 `session.create` 创建或幂等接续；不再投递最近共享会话。文字 Agent 自动发送已连接图文，图片使用原生附件。普通创作板 Agent DS 仍走原共享通道，但排除这些专属会话。本条覆盖下述历史共享会话说明在工作流卡片上的适用范围，详见 [工作流文档](CANVAS-WORKFLOW.md)。
+
 > 2026-09-23 工作流编排采用 `planning-v2` 两阶段协议：本机 DSH 提交声明式草稿，桌面编译卡片/连线并写回有 requestId、revision 与 SHA-256 的校验反馈，DSH 最多修订三版，再提交同一已校验内容。复用原 pending/results 队列，新增 feedback 文件，不增加模型 Runner；文本改写 v1 不变。详见 [工作流协议与编译器](CANVAS-WORKFLOW.md)。当前仅源码与隔离验证，未宣称真实 DSH v2 往返或生成质量已验收。
 
 > 当前状态（2026-09-17）：U0–U5 实现与既有验收完成，U6 保持 test-only。新任务统一为 `bowerbird-unified-agent + dsh`；按需 Skill、目标授权、动态工具执行、多 final 与恢复链路已部署，真实 HTML 纵切与旧基线盲评已通过。
@@ -10,6 +12,8 @@
 ---
 
 ## 2026-09-22 本机 Agent DS 改为投递 DSH 队列 + 自动送达活会话（dev-only）
+
+> **2026-09-24 认证补充：** 本机新版 DSH 已要求 Cookie，以下“无鉴权”描述仅适用于 9 月 22 日历史版本。桌面通过 `.agent-z/dsh-web-auth-url.txt` 中的同源 loopback 启动链接交换 Cookie；登录凭据不入队列、不走代理、不跟随重定向。配置与只读诊断见 [工作流文档](CANVAS-WORKFLOW.md)。
 
 **9 月 23 日工作流扩展（开发版源码）：** 工作流文本 Agent 与新增「工作流助手」共用此投递通道，显式请求结果文件；助手使用 `purpose: planning` 返回受限卡片编排 JSON，由桌面校验后一次保存，不执行生成任务。不是新的 Agent Runner，也不改变下述普通创作板 Agent DS 的交互。具体协议与验收边界见 [工作流卡片](CANVAS-WORKFLOW.md)。
 

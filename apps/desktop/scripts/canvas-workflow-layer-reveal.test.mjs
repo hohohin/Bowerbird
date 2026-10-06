@@ -52,6 +52,7 @@ try {
     // Auto-container outputs participate in ordering and read this run, not the previous contents.
     const {newWorkflowNode}=await import('/src/lib/canvasWorkflow.ts');
     const next={...newWorkflowNode('instruction',2100,1000,'codex'),id:'relay',action:'describe',inputs:{image:[{canvasNodeId:before.id,cellId:'*'}]}};
+    api.describeAsset=async id=>'caption-'+id;
     api.listAnalysesByAsset=async id=>[{id:'caption-'+id,kind:'caption',created_at:1,payload:JSON.stringify({sections:[{title:'图',body:id}]})}];
     await c.edit([...c.document.nodes,next]);await c.start('terminal-split');
     if(c.document.run.status!=='done'||!c.document.run.order.includes('relay'))throw Error('auto container relays downstream: '+JSON.stringify(c.document.run));
@@ -108,6 +109,8 @@ try {
     await api.projectCanvasNoteUpdate('deferred-images',JSON.stringify(blank));
     const dangling={...newWorkflowNode('generation',0,0,'codex'),id:'dangling-prompt',prompt:'参考 @[lost]',inputs:{image:[lost,{canvasNodeId:'deferred-images',cellId:'*'}]},promptReferences:[{id:'lost',type:'image',input:lost,label:'图片来源 1'}]};
     await c.edit([...c.document.nodes,dangling]);
+    // Numbered input pipes require an explicit replacement; preserve pipe 1 and its prompt token.
+    await c.edit(c.document.nodes.map(node=>node.id===dangling.id?{...node,inputs:{image:[{canvasNodeId:'deferred-images',cellId:'*',slot:1}]}}:node));
     const {useStore}=await import('/src/store.ts');window.deferredSent=[];
     api.localAgentFindAssetId=async()=> 'existing';
     useStore.setState({startGeneration:async(...args)=>{window.deferredSent.push(args[1].map(asset=>asset.id));const identity=args[12];useStore.setState(state=>({genJobs:{...state.genJobs,[identity.jobId]:{turns:[{turnKey:identity.turnKey,images:['existing.png']}]}}}));return {accepted:true};}});

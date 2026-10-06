@@ -1,0 +1,21 @@
+.snip-root, .snip-pin { position: fixed; inset: 0; overflow: hidden; color: #f4f4f5; font: 13px system-ui, sans-serif; background: #17191e; user-select: none; }
+.snip-stage { position: absolute; inset: 0; cursor: crosshair; touch-action: none; }
+.snip-stage > canvas { width: 100%; height: 100%; display: block; }
+.snip-shade { position: absolute; inset: 0; background: #0007; pointer-events: none; }
+.snip-selection { position: absolute; border: 1px solid #70b8ff; box-shadow: 0 0 0 100000px #0008; pointer-events: none; }
+.snip-dimensions { position: absolute; left: 0; top: 4px; padding: 3px 6px; background: #17191ee8; border-radius: 3px; font-size: 11px; white-space: nowrap; }
+.snip-handle { position: absolute; width: 9px; height: 9px; border: 1px solid #347ed9; background: white; pointer-events: auto; }
+.snip-handle.nw { left: -5px; top: -5px; cursor: nwse-resize; }.snip-handle.ne { right: -5px; top: -5px; cursor: nesw-resize; }.snip-handle.sw { left: -5px; bottom: -5px; cursor: nesw-resize; }.snip-handle.se { right: -5px; bottom: -5px; cursor: nwse-resize; }
+.snip-toolbar { width: max-content; position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%); max-width: calc(100% - 24px); padding: 8px; border: 1px solid #ffffff25; border-radius: 10px; background: #24272df7; box-shadow: 0 8px 30px #0005; }
+.snip-tools, .snip-options { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.snip-tools button, .snip-pin-bar button, .snip-hint button { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; border: 0; border-radius: 5px; width: 32px; height: 32px; color: #e4e7ed; background: transparent; cursor: pointer; }
+.snip-tools button:hover, .snip-pin-bar button:hover { background: #ffffff18; }.snip-tools button.active { background: #367bc5; color: white; }.snip-tools button.snip-confirm { color: #83dba2; }.snip-tools button:disabled, .snip-pin-bar button:disabled { opacity: .3; cursor: default; }
+.snip-divider { height: 20px; width: 1px; background: #ffffff25; margin: 0 5px; }
+.snip-options { border-top: 1px solid #ffffff18; margin-top: 6px; padding: 8px 4px 0; gap: 7px; }
+.snip-options > button { width: 16px; height: 16px; border-radius: 50%; border: 1px solid #ffffff40; }.snip-options > button.selected { outline: 2px solid #69b3ff; outline-offset: 2px; }
+.snip-options input[type=color] { width: 23px; height: 23px; background: transparent; border: 0; padding: 0; }.snip-options label { display: flex; align-items: center; gap: 5px; margin-left: 5px; font-size: 11px; }.snip-options input[type=range] { width: 75px; }.snip-options textarea { width: 210px; color: white; background: #17191e; border: 1px solid #ffffff30; border-radius: 4px; padding: 4px 7px; resize: none; user-select: text; }
+.snip-tip { margin: 5px 4px 0; color: #adb3bd; font-size: 11px; }
+.snip-hint { position: absolute; top: 24px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; white-space: nowrap; background: #24272de8; border-radius: 7px; padding: 5px 10px; }
+.snip-loupe { position: absolute; width: 116px; padding: 4px; background: #24272d; border: 1px solid #ffffff50; border-radius: 5px; pointer-events: none; }.snip-loupe canvas { display: block; width: 108px; height: 108px; }.snip-loupe span { display: block; text-align: center; font-size: 10px; padding-top: 3px; }
+.snip-error { position: absolute; z-index: 10; top: 64px; left: 50%; transform: translateX(-50%); max-width: 90%; padding: 10px 16px; background: #6e2525; color: white; border-radius: 7px; white-space: pre-wrap; }
+.snip-pin { display: flex; flex-direction: column; border: 1px solid #ffffff30; }.snip-pin-bar { height: 40px; flex-shrink: 0; display: flex; align-items: center; background: #24272d; padding: 0 4px; overflow-x: auto; }.snip-pin-bar span { flex: 1; min-width: 24px; padding-left: 6px; cursor: move; font-size: 11px; }.snip-pin-bar button { width: 27px; }.snip-pin > img { display: block; width: 100%; height: calc(100% - 40px); object-fit: contain; cursor: move; }

@@ -1,4 +1,5 @@
-import { api } from "./api";
+import type { WorkflowNode } from "./canvasWorkflow";
+import { loadDescribePrompt } from "./describePrompt";
 import type { CaptionSection } from "./types";
 
 export function workflowCaptionSections(payload: string): CaptionSection[] {
@@ -12,8 +13,13 @@ export function workflowCaptionSections(payload: string): CaptionSection[] {
   } catch { return []; }
 }
 
-export async function existingWorkflowCaption(assetId: string) {
-  // The API returns newest first, matching the asset detail panel's current caption.
-  const latest = (await api.listAnalysesByAsset(assetId)).find(item => item.kind === "caption");
-  return latest ? workflowCaptionSections(latest.payload) : [];
+export function workflowDescribeInstruction(node: WorkflowNode) {
+  return node.prompt.trim() || loadDescribePrompt();
+}
+
+export function existingWorkflowCaption(node: WorkflowNode, assetId: string, instruction = workflowDescribeInstruction(node)) {
+  const cache = node.describeCache;
+  if (cache?.instruction !== instruction || !Array.isArray(cache.results)) return [];
+  const sections = cache.results.find(result => result?.assetId === assetId)?.sections;
+  return Array.isArray(sections) ? sections.filter(part => part && typeof part.title === "string" && typeof part.body === "string" && part.body.trim()) : [];
 }

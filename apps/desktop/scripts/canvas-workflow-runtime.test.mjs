@@ -182,7 +182,7 @@ try {
     api.visualProfileExtractInputs=async()=>{profileExtractions++;return {id:'side-profile-result'};};
     api.visualProfileGet=async()=>({id:'side-profile-result',status:profileStatus,version:1,summary:'统一色彩'});
     const tableInput={canvasNodeId:tableId,cellId:tableData.cells[1][1].id};
-    await layers.edit([...layers.document.nodes,sideProfile,{...b,id:'table-generation',prompt:'@[table]',promptReferences:[{id:'table',type:'text',input:tableInput,label:'文本'}],inputs:{text:[tableInput],'visual-profile':[{nodeId:'side-profile',portId:'visual-profile'}]}}]);
+    await layers.edit([...layers.document.nodes.map(node=>node.id==='describe-layers'?{...node,overwriteDescribe:true}:node),sideProfile,{...b,id:'table-generation',prompt:'@[table]',promptReferences:[{id:'table',type:'text',input:tableInput,label:'文本'}],inputs:{text:[tableInput],'visual-profile':[{nodeId:'side-profile',portId:'visual-profile'}]}}]);
     exported=0;
     await layers.start('a');
     check(layers.document.run.status==='waiting'&&layers.document.run.steps['side-profile'].status==='waiting'&&relayed==='','missing side profile joins run and pauses for confirmation');
@@ -214,6 +214,7 @@ try {
     await otherWork;
     check(stopBatch.document.run.status==='stopped'&&otherBatch.document.run.status==='done','stop isolation');
     check(!stopBatch.document.nodes[0].resultNodeIds,'stopped batch creates no result table');
+    check(!stopBatch.document.nodes[0].describeCache,'stopped batch saves no card cache');
     held.clear();cancelledDescriptions.length=0;
     startedBatch=new Promise(resolve=>{allStarted=resolve;});
     api.describeAsset=(asset,instruction,provider,job)=>new Promise((resolve,reject)=>{
@@ -226,6 +227,7 @@ try {
     await failWork;
     check(failBatch.document.run.status==='failed'&&failBatch.document.run.steps.b.status==='pending','failure blocks downstream');
     check(cancelledDescriptions.includes(failedJobs[1])&&!failBatch.document.nodes[0].resultNodeIds,'failure cancels remaining requests and produces no partial table');
+    check(!failBatch.document.nodes[0].describeCache,'failed batch saves no partial card cache');
     const {workflowLayerDecompose}=await import('/src/lib/workflowLayerDecompose.ts');
     await workflowLayerDecompose('existing','source.png','',layers.document.run.steps.a.layerRequestKey,false,()=>false);
     check(layerStarts===1,'recovery queries original split instead of creating again');

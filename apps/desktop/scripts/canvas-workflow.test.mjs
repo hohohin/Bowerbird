@@ -1,22 +1,72 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { newWorkflowNode, workflowConnectionError, workflowOrder, workflowInputValues, workflowOutputs, invalidateWorkflow, generationInputNode, compileGenerationPrompt, compileAgentPrompt } from '../src/lib/canvasWorkflow.ts';
+import { newWorkflowNode, workflowConnectionError, workflowOrder, workflowInputValues, workflowOutputs, invalidateWorkflow, generationInputNode, compileGenerationPrompt, compileAgentPrompt, normalizeWorkflowInputSlots } from '../src/lib/canvasWorkflow.ts';
 const node = (id, kind = 'skill') => ({ ...newWorkflowNode(kind, 0, 0, 'codex'), id });
 const mentionText = node => { node.prompt = '@[text]'; node.promptReferences = [{ id: 'text', type: 'text', input: node.inputs.text[0], label: '文本' }]; };
+
+test('single-card execution includes receivers and content relays but no other executable cards', () => {
+  const source = { ...node('source', 'generation'), inputs: { signal: [{ nodeId: 'key', portId: 'signal' }] } };
+  const writer = { ...node('writer', 'text'), textTarget: { nodeId: 'table', cellId: 'cell', image: true }, inputs: { image: [{ nodeId: 'source', portId: 'image' }] } };
+  const relay = { ...node('relay', 'text'), textTarget: { nodeId: 'copy', cellId: 'cell', image: true }, inputs: { image: [{ canvasNodeId: 'table', cellId: '*' }] } };
+  const consumer = { ...node('consumer'), inputs: { image: [{ canvasNodeId: 'copy', cellId: '*' }] } };
+  const unrelated = { ...node('unrelated', 'text'), textTarget: { nodeId: 'table', cellId: 'other' }, inputs: { text: [{ nodeId: 'agent', portId: 'text' }] } };
+  const nodes = [consumer, relay, writer, source, node('key', 'trigger'), unrelated, node('agent', 'agent')];
+  assert.deepEqual(workflowOrder(nodes, 'source', true), ['source', 'writer', 'relay']);
+  assert.deepEqual(workflowOrder(nodes, 'writer', true), ['writer', 'relay']);
+});
+
+test('required upstream cards also deliver outputs without starting unrelated paid branches', () => {
+  const source = node('source', 'agent');
+  const consumer = { ...node('consumer', 'agent'), inputs: { text: [{ nodeId: 'source', portId: 'text' }] } };
+  const writer = { ...node('writer', 'text'), textTarget: { nodeId: 'table', cellId: 'cell' }, inputs: { text: [{ nodeId: 'source', portId: 'text' }] } };
+  const other = { ...node('other', 'agent'), inputs: { text: [{ nodeId: 'source', portId: 'text' }] } };
+  const nodes = [consumer, writer, source, other];
+  assert.deepEqual(new Set(workflowOrder(nodes, 'consumer')), new Set(['source', 'consumer', 'writer']));
+  assert.deepEqual(workflowOrder(nodes, 'consumer', true), ['consumer']);
+});
 
 test('Agent references select inputs, preserve positions and follow current source without injecting unused text',()=>{
   const a={...node('a','instruction'),outputs:{text:{type:'text',text:'原文A'}}};
   const b={...node('b','instruction'),outputs:{text:{type:'text',text:'原文B'}}};
-  const agent={...node('agent','agent'),inputs:{text:[{nodeId:'a',portId:'text'},{nodeId:'b',portId:'text'}]}};
+  const agent={...node('agent','agent'),agentTransport:'cloud',inputs:{text:[{nodeId:'a',portId:'text'},{nodeId:'b',portId:'text'}]}};
   agent.prompt='将 @[selected] 简写，再润色 @[selected]';
   agent.promptReferences=[{id:'selected',type:'text',input:agent.inputs.text[1],label:'文本 2'}];
   const compile=()=>compileAgentPrompt(agent,workflowInputValues([a,b,agent],generationInputNode(agent)));
-  assert.deepEqual(generationInputNode(agent).inputs.text,[agent.inputs.text[1]]);
-  assert.deepEqual(compile(),{prompt:'将 【引用文本 1】 简写，再润色 【引用文本 1】',source:JSON.stringify({'引用文本 1':'原文B'})});
+  assert.deepEqual(generationInputNode(agent).inputs.text,[{...agent.inputs.text[1],slot:2}]);
+  assert.deepEqual(compile(),{prompt:'将 【引用文本 1】 简写，再润色 【引用文本 1】',source:JSON.stringify({'引用文本 1':'原文B'}),assetIds:[]});
   b.outputs.text.text='更新B';assert.equal(JSON.parse(compile().source)['引用文本 1'],'更新B');
-  agent.inputs.text=[{nodeId:'a',portId:'text'}];assert.equal(JSON.parse(compile().source)['引用文本 1'],'原文A');
+  agent.inputs.text=[{nodeId:'a',portId:'text',slot:2}];assert.equal(JSON.parse(compile().source)['引用文本 1'],'原文A');
   agent.inputs.text=[];assert.throws(compile,/已断开/);
-  agent.prompt='删除引用';assert.throws(compile,/按 @/);
+  agent.prompt='自由写一首诗';assert.deepEqual(compile(),{prompt:agent.prompt,source:'{}',assetIds:[]});
+});
+
+test('Agent accepts image-only and mixed references in prompt order, rejecting missing images', () => {
+  const input={canvasNodeId:'photos',cellId:'*'};
+  const textInput={nodeId:'copy',portId:'text'};
+  const agent={...node('agent','agent'),prompt:'比较 @[photo]，结合 @[copy]，再看 @[photo]',inputs:{image:[input],text:[textInput]},promptReferences:[
+    {id:'photo',type:'image',input,label:'图片组'}, {id:'copy',type:'text',input:textInput,label:'文案'}]};
+  const values={image:[{type:'image',assetIds:['b','a','b']}],text:[{type:'text',text:'完整原文'}]};
+  assert.deepEqual(compileAgentPrompt(agent,values),{prompt:'比较 【图片 1、图片 2】，结合 【引用文本 1】，再看 【图片 1、图片 2】',source:'{"引用文本 1":"完整原文"}',assetIds:['b','a']});
+  agent.prompt='描述 @[photo]';
+  assert.equal(compileAgentPrompt(agent,values).source,'{"引用文本 1":"完整原文"}');
+  assert.throws(()=>compileAgentPrompt(agent,{image:[{type:'image',assetIds:[]}]}),/没有可用图片/);
+  agent.prompt='处理 @[missing]';assert.throws(()=>compileAgentPrompt(agent,values),/无效引用/);
+});
+
+test('local Agent includes connected inputs without mentions, schedules producers and rejects empty inputs', () => {
+  const producer={...node('source','instruction'),outputs:{}};
+  const image={nodeId:'source',portId:'image'};
+  const text={canvasNodeId:'copy',cellId:'a'};
+  const agent={...node('agent','agent'),prompt:'将图中文字转成表格',inputs:{image:[image],text:[text]},promptReferences:[]};
+  assert.deepEqual(generationInputNode(agent).inputs,{image:[{...image,slot:1}],text:[{...text,slot:1}]});
+  assert.deepEqual(workflowOrder([producer,agent],'agent'),['source','agent']);
+  const values={image:[{type:'image',assetIds:['photo']}],text:[{type:'text',text:'补充要求'}]};
+  assert.deepEqual(compileAgentPrompt(agent,values),{prompt:agent.prompt,source:'{"引用文本 1":"补充要求"}',assetIds:['photo']});
+  assert.throws(()=>compileAgentPrompt(agent,{...values,image:[]}),/没有可用图片/);
+  assert.throws(()=>compileAgentPrompt(agent,{...values,text:[{type:'text',text:''}]}),/没有可用文字/);
+  agent.prompt='按照 @[copy] 分析图片';agent.promptReferences=[{id:'copy',type:'text',input:text,label:'补充'}];
+  assert.deepEqual(compileAgentPrompt(agent,values).assetIds,['photo']);
+  assert.equal(Object.keys(JSON.parse(compileAgentPrompt(agent,values).source)).length,1);
 });
 
 test('split exposes one product port and automatic image container preserves dependency and cycle checks', () => {
@@ -44,16 +94,16 @@ test('image-container reads stored cells, waits for active writers and rejects a
 
 test('generation references retain binding identity through reordering and reject removed selections', () => {
   const gen = node('gen', 'generation');
-  const first = { assetId: 'a' }, second = { assetId: 'b' };
+  const first = { assetId: 'a',slot:1 }, second = { assetId: 'b',slot:2 };
   gen.inputs = { image: [first, second] }; gen.prompt = '只参考 @[chosen]';
-  gen.promptReferences = [{ id: 'chosen', type: 'image', input: second, assetId: 'b', label: '图片 B' }];
+  gen.promptReferences = [{ id: 'chosen', type: 'image', input: second, assetId: 'b', slot:2, label: '图片来源 2' }];
   const compile = () => compileGenerationPrompt(gen, workflowInputValues([gen], generationInputNode(gen)));
   assert.deepEqual(compile(), { prompt: '只参考 @图片1', assetIds: ['b'] });
   gen.inputs.image.reverse();
   assert.deepEqual(compile(), { prompt: '只参考 @图片1', assetIds: ['b'] });
   gen.inputs.image = [first];
-  assert.throws(compile, /已断开或素材已移除/);
-  gen.inputs.image = [{ groupId: 'folder', assetIds: ['a'] }];
+  assert.throws(compile, /已断开/);
+  gen.inputs.image = [{ groupId: 'folder', assetIds: ['a'],slot:2 }];
   gen.promptReferences[0].input = { groupId: 'folder', assetIds: ['a', 'b'] };
   assert.deepEqual(compile(), { prompt: '只参考 @图片1', assetIds: ['a'] });
   gen.inputs.image[0].assetIds = ['c', 'd'];
@@ -72,8 +122,8 @@ test('rewired text reference waits for the currently connected describe and writ
   assert.equal(compileGenerationPrompt(gen,values).prompt,'沿用 本轮反推');
   assert.equal(gen.prompt,'沿用 @[text]');
   gen.inputs.text.push({canvasNodeId:'another-table',cellId:'*text'});
-  assert.deepEqual(workflowOrder(nodes,'gen'),['gen']);
-  assert.throws(()=>compileGenerationPrompt(gen,workflowInputValues(nodes,generationInputNode(gen))),error=>error.node.id==='gen'&&/已断开/.test(error.message));
+  assert.deepEqual(workflowOrder(nodes,'gen'),['describe','writer','gen']);
+  assert.equal(compileGenerationPrompt(gen,workflowInputValues(nodes,generationInputNode(gen),()=> '管道一的当前内容')).prompt,'沿用 管道一的当前内容');
 });
 
 test('rewiring one cell among multiple text references retains other identities and waits for its current writer', () => {
@@ -88,7 +138,7 @@ test('rewiring one cell among multiple text references retains other identities 
     ]};
     assert.deepEqual(workflowOrder([upstream,consumer,writer],'upstream'),['upstream','writer','consumer']);
     const effective=generationInputNode(consumer);
-    assert.deepEqual(effective.promptReferences.map(ref=>ref.input),[first,current]);
+    assert.deepEqual(effective.promptReferences.map(ref=>ref.input),[{...first,slot:1},{...current,slot:2}]);
     const values=workflowInputValues([consumer],effective,(_,cell)=>cell==='*text'?'规则':'新单元格内容');
     if(kind==='agent') assert.deepEqual(JSON.parse(compileAgentPrompt(consumer,values).source),{'引用文本 1':'规则','引用文本 2':'新单元格内容'});
     else assert.equal(compileGenerationPrompt(consumer,values).prompt,'根据 规则 改写 新单元格内容');
@@ -96,7 +146,7 @@ test('rewiring one cell among multiple text references retains other identities 
     assert.deepEqual(generationInputNode(consumer).promptReferences[1].input,stale,'never steal the first reference');
     assert.throws(()=>compileAgentPrompt(consumer,{text:[{type:'text',text:'规则'}]}),error=>error.referenceLabel==='文本 2'&&/已断开/.test(error.message));
     consumer.inputs.text=[first,current,{canvasNodeId:'second-table',cellId:'another-cell'}];
-    assert.deepEqual(generationInputNode(consumer).promptReferences[1].input,stale,'multiple replacement cells remain ambiguous');
+    assert.deepEqual(generationInputNode(consumer).promptReferences[1].input,{...current,slot:2},'pipe 2 is independent of other candidates');
   }
 });
 
@@ -230,4 +280,49 @@ test('a deleted dynamic dimension never resolves to another output', () => {
   a.outputs['dimension-colour'] = { type:'text', text:'blue' };
   b.inputs.text = [{ nodeId:'a', portId:'dimension-layout' }];
   assert.throws(() => workflowInputValues([a,b],b), /有效结果/);
+});
+
+test('numbered pipes migrate stale cells on different cards and read current sources for Agent and generation', () => {
+  for (const kind of ['agent','generation']) {
+    const n={...node('consumer',kind),prompt:'@[one] / @[two]',inputs:{text:[{canvasNodeId:'new-a',cellId:'a'},{canvasNodeId:'new-b',cellId:'b'}]},promptReferences:[
+      {id:'one',type:'text',label:'文本 1',input:{nodeId:'deleted-agent',portId:'text'}},
+      {id:'two',type:'text',label:'文本 2',input:{canvasNodeId:'unrelated-old-table',cellId:'old'}},
+    ]};
+    const migrated=normalizeWorkflowInputSlots(n);
+    assert.deepEqual(migrated.promptReferences.map(r=>r.slot),[1,2]);
+    const values=workflowInputValues([],generationInputNode(migrated),id=>id==='new-a'?'当前甲':'当前乙');
+    if(kind==='generation')assert.equal(compileGenerationPrompt(migrated,values).prompt,'当前甲 / 当前乙');
+    else assert.deepEqual(JSON.parse(compileAgentPrompt(migrated,values).source),{'引用文本 1':'当前甲','引用文本 2':'当前乙'});
+  }
+});
+
+test('disconnect never renumbers another pipe; reconnect fills the empty pipe across reload and reordering', () => {
+  let n=normalizeWorkflowInputSlots({...node('gen','generation'),prompt:'@[one] / @[two]',inputs:{text:[{nodeId:'a',portId:'text'},{nodeId:'b',portId:'text'}]},promptReferences:[
+    {id:'one',type:'text',label:'文本 1',input:{}},{id:'two',type:'text',label:'文本 2',input:{}},
+  ]});
+  n=normalizeWorkflowInputSlots({...n,inputs:{text:[n.inputs.text[1]]}},n);
+  assert.deepEqual(n.inputs.text.map(i=>i.slot),[2]);
+  assert.throws(()=>compileGenerationPrompt(n,{text:[{type:'text',text:'乙'}]}),/已断开/);
+  n=JSON.parse(JSON.stringify(n));
+  n=normalizeWorkflowInputSlots({...n,inputs:{text:[...n.inputs.text,{nodeId:'c',portId:'text'}]}},n);
+  assert.deepEqual(n.inputs.text.map(i=>i.slot),[2,1]);
+  assert.equal(compileGenerationPrompt(n,{text:[{type:'text',text:'乙'},{type:'text',text:'新甲'}]}).prompt,'新甲 / 乙');
+  n=normalizeWorkflowInputSlots({...n,inputs:{text:[...n.inputs.text].reverse()}},n);
+  assert.equal(compileGenerationPrompt(n,{text:[{type:'text',text:'新甲'},{type:'text',text:'乙'}]}).prompt,'新甲 / 乙');
+});
+
+test('image pipes carry current upstream images and do not pin a selected asset', () => {
+  for(const kind of ['generation','agent']) {
+    let n=normalizeWorkflowInputSlots({...node('images',kind),prompt:'使用 @[photo]',inputs:{image:[{assetId:'old'}]},promptReferences:[{id:'photo',type:'image',label:'图片 1.1',assetId:'old',input:{assetId:'old'}}]});
+    n=normalizeWorkflowInputSlots({...n,inputs:{image:[{groupId:'new-folder',assetIds:['new-a','new-b'],slot:1}]}},n);
+    const values=workflowInputValues([],generationInputNode(n));
+    const result=kind==='agent'?compileAgentPrompt(n,values):compileGenerationPrompt(n,values);
+    assert.deepEqual(result.assetIds,['new-a','new-b']);
+    assert.equal(n.prompt,'使用 @[photo]');
+  }
+});
+
+test('execution reports the current pipe source when its upstream has no content', () => {
+  const n=normalizeWorkflowInputSlots({...node('consumer','agent'),prompt:'@[one]',inputs:{text:[{canvasNodeId:'new',cellId:'empty'}]},promptReferences:[{id:'one',type:'text',label:'文本 1',input:{nodeId:'old',portId:'text'}}]});
+  assert.throws(()=>workflowInputValues([],n,()=>''),error=>error.source.canvasNodeId==='new'&&error.source.slot===1&&error.referenceLabel==='文本 1');
 });

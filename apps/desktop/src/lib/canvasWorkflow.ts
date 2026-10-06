@@ -11,20 +11,22 @@ export class WorkflowInputError extends WorkflowNodeError {
 }
 
 /** Editable workflow wiring is independent from immutable generation history edges. */
-export type WorkflowKind = "instruction" | "generation" | "skill" | "agent" | "visual-profile" | "text" | "trigger" | "planner";
+export type WorkflowKind = "instruction" | "generation" | "skill" | "agent" | "visual-profile" | "text" | "trigger" | "planner" | "loop";
 export const WORKFLOW_CARD_DRAG_TYPE = "application/x-bowerbird-workflow-card";
 export type WorkflowAction = "describe" | "reuse" | "layers";
 export type WorkflowPortType = "text" | "image" | "visual-profile" | "session" | "signal";
-export interface WorkflowValue { type: WorkflowPortType; text?: string; assetIds?: string[]; imageRefs?: { asset_id: string; token: string }[]; profileId?: string; version?: number; summary?: string; nodeIds?: string[] }
+export interface WorkflowValue { type: WorkflowPortType; text?: string; table?: import("./workflowAgentResult").AgentTable; assetIds?: string[]; imageRefs?: { asset_id: string; token: string }[]; profileId?: string; version?: number; summary?: string; nodeIds?: string[] }
 export interface WorkflowPort { id: string; label: string; type: WorkflowPortType }
-export interface WorkflowInput { nodeId?: string; portId?: string; assetId?: string; assetNodeId?: string; groupId?: string; assetIds?: string[]; canvasNodeId?: string; cellId?: string }
-export interface WorkflowPromptReference { id: string; type: "text" | "image"; input: WorkflowInput; assetId?: string; label: string }
+export interface WorkflowInput { slot?: number; nodeId?: string; portId?: string; assetId?: string; assetNodeId?: string; groupId?: string; assetIds?: string[]; canvasNodeId?: string; cellId?: string }
+export interface WorkflowPromptReference { slot?: number; id: string; type: "text" | "image"; input: WorkflowInput; assetId?: string; label: string }
 export interface WorkflowNode {
   id: string; kind: WorkflowKind; x: number; y: number;
   action: WorkflowAction; skill: string; prompt: string; ratio: string | null; provider: string;
   promptReferences?: WorkflowPromptReference[];
   overwriteDescribe?: boolean;
+  describeCache?: { instruction: string; results: { assetId: string; sections: { title: string; body: string }[] }[] };
   agentTransport?: "local-ds" | "cloud";
+  loopMode?: "images" | "rows";
   planning?: import("./workflowPlanner").WorkflowPlanningState;
   templateInstance?: import("./workflowTemplates").TemplateInstance;
   inputs: Record<string, WorkflowInput[]>;
@@ -35,14 +37,18 @@ export interface WorkflowNode {
   activeSessionNodeId?: string | null;
   resultNodeIds?: string[];
   resultGroupId?: string;
-  textTarget?: { nodeId: string; cellId: string; cellIds?: string[]; append?: boolean; image?: boolean };
+  textTarget?: { nodeId: string; cellId: string; cellIds?: string[]; tableCellIds?: string[][]; append?: boolean; image?: boolean };
   textSource?: string;
   profileId?: string;
   profileName?: string;
   profileCache?: { inputKey: string; profileId: string };
 }
 export interface WorkflowStep {
+  contentTarget?: WorkflowNode["textTarget"];
+  retrySafe?: boolean;
   localDsRequestId?: string;
+  localDsImageProvider?: string;
+  localDsGenerations?: Record<string, { request: WorkflowAgentGenerationRequest; jobId: string; turnKey: string; response?: WorkflowAgentGenerationResponse }>;
   diagnostic?: import("./workflowDiagnostics").WorkflowDiagnostic;
   describeJobIds?: string[];
   turnKey?: string;
@@ -50,6 +56,8 @@ export interface WorkflowStep {
   status: "pending" | "running" | "waiting" | "done" | "failed";
   error?: string; jobId?: string; agentRunId?: string; assetId?: string; profileId?: string; layerRequestKey?: string;
 }
+export interface WorkflowAgentGenerationRequest { id: string; prompt: string; images: string[]; ratio: string | null }
+export interface WorkflowAgentGenerationResponse { images?: string[]; error?: string }
 export interface WorkflowRun {
   id: string; startId: string; threadId: string; order: string[];
   accountId?: string | null;
@@ -59,8 +67,15 @@ export interface WorkflowRun {
   writeNodeIds?: string[];
   cellTexts?: Record<string, string>;
   cellValues?: Record<string, WorkflowValue>;
+  loop?: WorkflowLoop;
 }
-export interface CanvasWorkflow { schema_version: 1; nodes: WorkflowNode[]; run: WorkflowRun | null; runs?: WorkflowRun[] }
+export interface WorkflowLoopItem { text: string; assetIds: string[] }
+export interface WorkflowLoop {
+  nodeId: string; bodyIds: string[]; index: number;
+  items?: WorkflowLoopItem[];
+  completed: { outputs: Record<string, Record<string, WorkflowValue>>; steps: Record<string, WorkflowStep> }[];
+}
+export interface CanvasWorkflow { cardNames?: Record<string, string>; schema_version: 1; nodes: WorkflowNode[]; run: WorkflowRun | null; runs?: WorkflowRun[] }
 export interface WorkflowSnapshot { revision: number; document: CanvasWorkflow }
 export const emptyWorkflow = (): CanvasWorkflow => ({ schema_version: 1, nodes: [], run: null });
 
@@ -72,15 +87,19 @@ export const WORKFLOW_SKILLS = [
 
 export function workflowInputs(node: WorkflowNode): WorkflowPort[] {
   if (node.kind === "trigger" || node.textSource) return [];
+  if (node.kind === "loop") return node.loopMode === "rows" ? [{ id: "text", label: "内容行", type: "text" }] : [{ id: "image", label: "图片列表", type: "image" }];
   if (node.kind === "instruction") return [{ id: "image", label: "图片", type: "image" }];
-  if (node.kind === "agent") return [{ id: "text", label: "原文", type: "text" }];
   const ports: WorkflowPort[] = [{ id: "text", label: "文本", type: "text" }, { id: "image", label: "图片", type: "image" }];
   if (node.kind === "generation" || node.kind === "skill") ports.push({ id: "visual-profile", label: "视觉规范", type: "visual-profile" });
   return ports;
 }
 export function workflowOutputs(node: WorkflowNode): WorkflowPort[] {
   if (node.kind === "planner") return [];
-  if (node.kind === "agent") return [{ id: "text", label: "改写文本", type: "text" }];
+  if (node.kind === "loop") return node.loopMode === "rows"
+    ? [{ id: "text", label: "当前行文字", type: "text" }, { id: "image", label: "当前行图片", type: "image" }]
+    : [{ id: "image", label: "当前图片", type: "image" }];
+  if (node.kind === "agent") return [{ id: "text", label: "返回文字", type: "text" },
+    ...(usesConnectedAgentInputs(node) ? [{ id: "image", label: "返回图片", type: "image" as const }] : [])];
   if (node.kind === "trigger") return [{ id: "signal", label: "触发", type: "signal" }];
   if (node.kind === "text") return node.textTarget?.image ? [{ id: "image", label: "图片", type: "image" }] : [{ id: "text", label: "文本", type: "text" }];
   if (node.kind === "generation") return [{ id: "image", label: "图片", type: "image" }];
@@ -93,6 +112,7 @@ export function workflowOutputs(node: WorkflowNode): WorkflowPort[] {
 export function workflowTitle(node: WorkflowNode): string {
   if (node.templateInstance) return `子流程 · ${node.templateInstance.template.name}`;
   if (node.kind === "planner") return "工作流助手";
+  if (node.kind === "loop") return "循环卡片";
   if (node.kind === "agent") return "Agent 卡片";
   if (node.textSource) return "文本卡片";
   if (node.kind === "text") return "写入文本单元格";
@@ -163,25 +183,32 @@ export function invalidateWorkflow(nodes: WorkflowNode[], changedId: string): Wo
 }
 
 /** Run downstream of the key plus missing prerequisites, without starting their unrelated branches. */
-export function workflowOrder(nodes: WorkflowNode[], startId: string): string[] {
+export function workflowOrder(nodes: WorkflowNode[], startId: string, single = false): string[] {
   nodes = workflowExecutionNodes(nodes, startId);
   const byId = new Map(nodes.map(node => [node.id, node]));
   if (!byId.has(startId)) throw new Error("起点卡片不存在");
   const reachable = new Set([startId]);
   for (const id of reachable) for (const node of nodes) {
+    // Receiving content is part of delivering this card's output, even for a single-card run.
+    if (single && !node.textTarget) continue;
     if (Object.values(node.inputs).flat().some(input => workflowInputProducers(nodes, input).includes(id))) reachable.add(node.id);
   }
-  for (const id of reachable) for (const input of Object.values(byId.get(id)!.inputs).flat()) {
-    // A signal wire starts flows from the switch; it never pulls that trigger into another flow's execution.
-    if (input.portId === "signal") continue;
-    for (const producer of workflowInputProducers(nodes, input)) {
-      if (!input.nodeId && !nodes.some(node => node.id === producer && node.kind === "text")) continue;
-      const source = byId.get(producer);
-      if (!source) throw new Error("连接的上游卡片已删除，请重新连接");
-      // Image cells store their own value. Reading one does not replay an idle
-      // input writer; writers reached by this run still execute before consumers.
-      if (input.canvasNodeId && source.textTarget?.image && !reachable.has(producer)) continue;
-      if (source.kind === "text" || !source.outputs[input.portId ?? "text"]) reachable.add(source.id);
+  for (const id of reachable) {
+    // Missing prerequisites added below also deliver to their receivers, without running other branches.
+    for (const node of nodes) if (node.textTarget && Object.values(node.inputs).flat().some(input => workflowInputProducers(nodes, input).includes(id))) reachable.add(node.id);
+    if (single) continue;
+    for (const input of Object.values(byId.get(id)!.inputs).flat()) {
+      // A signal wire starts flows from the switch; it never pulls that trigger into another flow's execution.
+      if (input.portId === "signal") continue;
+      for (const producer of workflowInputProducers(nodes, input)) {
+        if (!input.nodeId && !nodes.some(node => node.id === producer && node.kind === "text")) continue;
+        const source = byId.get(producer);
+        if (!source) throw new Error("连接的上游卡片已删除，请重新连接");
+        // Image cells store their own value. Reading one does not replay an idle
+        // input writer; writers reached by this run still execute before consumers.
+        if (input.canvasNodeId && source.textTarget?.image && !reachable.has(producer)) continue;
+        if (source.kind === "text" || !source.outputs[input.portId ?? "text"]) reachable.add(source.id);
+      }
     }
   }
   const order: string[] = [], pending = new Set(reachable);
@@ -201,7 +228,7 @@ export function workflowExecutionNodes(nodes: WorkflowNode[], startId: string): 
   const sources = nodes.filter(node => node.textSource && (node.id === startId || (start?.kind === "trigger" && node.inputs.signal?.some(input => input.nodeId === startId))));
   if (!sources.length) return nodes;
   return nodes.map(node => ({ ...node, inputs: Object.fromEntries(Object.entries(node.inputs).map(([port, inputs]) =>
-    [port, inputs.map(input => { const source = sources.find(source => source.textSource === input.canvasNodeId); return source ? { nodeId: source.id, portId: input.cellId } : input; })])) }));
+    [port, inputs.map(input => { const source = sources.find(source => source.textSource === input.canvasNodeId); return source ? { ...input, canvasNodeId: undefined, cellId: undefined, nodeId: source.id, portId: input.cellId } : input; })])) }));
 }
 
 export const workflowReferenceToken = (id: string) => `@[${id}]`;
@@ -211,41 +238,63 @@ export const workflowImageContainer = (input: WorkflowInput) => !!(input.nodeId 
 export function activePromptReferences(node: WorkflowNode) {
   return (node.promptReferences ?? []).filter(ref => node.prompt.includes(workflowReferenceToken(ref.id)));
 }
-/** Reconnect identifiable dynamic sources without changing prompt tokens or other references. */
-export function rebindGenerationReferences(node: WorkflowNode): WorkflowNode {
-  if ((node.kind !== "generation" && node.kind !== "agent") || !node.promptReferences) return node;
-  const active = activePromptReferences(node);
-  const promptReferences = node.promptReferences.map(ref => {
-    const inputs = node.inputs[ref.type] ?? [];
-    if (!workflowImageContainer(ref.input) || inputs.some(input => workflowBindingKey(input) === workflowBindingKey(ref.input))) return ref;
-    // A cell reconnected within the same card has an identifiable replacement,
-    // even when other references of this type remain connected.
-    const unmatched = active.filter(other => other.type === ref.type && !inputs.some(input => workflowBindingKey(input) === workflowBindingKey(other.input)));
-    const replacements = inputs.filter(input => ref.input.canvasNodeId && input.canvasNodeId === ref.input.canvasNodeId
-      && !active.some(other => other.type === ref.type && workflowBindingKey(other.input) === workflowBindingKey(input)));
-    if (unmatched.length === 1 && unmatched[0].id === ref.id && replacements.length === 1) return { ...ref, input: replacements[0], assetId: undefined };
-    // Multiple selected sources are distinct identities, not interchangeable input slots.
-    if (inputs.length !== 1 || active.some(other => other.id !== ref.id && other.type === ref.type)) return ref;
-    return { ...ref, input: inputs[0], assetId: undefined };
+/** Input slots belong to the receiving card, independently of their current sources. */
+export function normalizeWorkflowInputSlots(node: WorkflowNode, previous?: WorkflowNode): WorkflowNode {
+  if (node.kind !== "generation" && node.kind !== "agent") return node;
+  const inputs = { ...node.inputs };
+  for (const type of ["text", "image"] as const) {
+    if (!inputs[type]) continue;
+    const used = new Set<number>();
+    const numbered = inputs[type].map(input => {
+      const slot = input.slot ?? previous?.inputs[type]?.find(old => workflowBindingKey(old) === workflowBindingKey(input))?.slot;
+      if (!slot || used.has(slot)) return input.slot === undefined ? input : { ...input, slot: undefined };
+      used.add(slot); return input.slot === slot ? input : { ...input, slot };
+    });
+    inputs[type] = numbered.map(input => {
+      if (input.slot) return input;
+      let slot = 1; while (used.has(slot)) slot++;
+      used.add(slot); return { ...input, slot };
+    });
+  }
+  const promptReferences = node.promptReferences?.map(ref => {
+    // Old saves have source snapshots and numbered labels. Migrate the number,
+    // never require the old cell/card to match the current end of that pipe.
+    const labelSlot = /^(?:文本|图片来源|生成结果|图片)\s*(\d+)(?:\.\d+)?$/.exec(ref.label)?.[1];
+    const bindings = inputs[ref.type] ?? [];
+    const slot = ref.slot ?? (labelSlot ? Number(labelSlot) : undefined)
+      ?? bindings.find(input => workflowReferenceMatchesInput(ref, input))?.slot
+      ?? (bindings.length === 1 ? bindings[0].slot : undefined);
+    const input = bindings.find(input => input.slot === slot);
+    return { ...ref, slot, input: input ?? ref.input, assetId: undefined,
+      label: slot ? `${ref.type === "text" ? "文本" : "图片来源"} ${slot}` : ref.label };
   });
-  return { ...node, promptReferences };
+  return { ...node, inputs, ...(promptReferences ? { promptReferences } : {}) };
 }
+export function rebindGenerationReferences(node: WorkflowNode): WorkflowNode {
+  return normalizeWorkflowInputSlots(node);
+}
+export const workflowReferenceMatchesInput = (ref: WorkflowPromptReference, input: WorkflowInput) =>
+  ref.slot !== undefined ? ref.slot === input.slot : workflowBindingKey(ref.input) === workflowBindingKey(input);
 export function generationInputNode(node: WorkflowNode): WorkflowNode {
   if (node.kind !== "generation" && node.kind !== "agent") return node;
   node = rebindGenerationReferences(node);
+  if (usesConnectedAgentInputs(node)) return node;
   const refs = activePromptReferences(node);
   return { ...node, inputs: { ...node.inputs, ...Object.fromEntries((["text", "image"] as const).map(type =>
-    [type, (node.inputs[type] ?? []).filter(input => refs.some(ref => ref.type === type && workflowBindingKey(ref.input) === workflowBindingKey(input)))])) } };
+    [type, (node.inputs[type] ?? []).filter(input => refs.some(ref => ref.type === type && workflowReferenceMatchesInput(ref, input)))])) } };
+}
+function usesConnectedAgentInputs(node: WorkflowNode) {
+  return node.kind === "agent" && import.meta.env?.DEV !== false && node.agentTransport !== "cloud";
 }
 export function compileGenerationPrompt(node: WorkflowNode, values: Record<string, WorkflowValue[]>) {
   node = rebindGenerationReferences(node);
   const refs = activePromptReferences(node), inputs = generationInputNode(node).inputs;
   const resolved = new Map<string, WorkflowValue>();
   for (const ref of refs) {
-    const index = (inputs[ref.type] ?? []).findIndex(input => workflowBindingKey(input) === workflowBindingKey(ref.input));
+    const index = (inputs[ref.type] ?? []).findIndex(input => workflowReferenceMatchesInput(ref, input));
     const value = values[ref.type]?.[index];
-    const dynamic = ref.type === "image" && workflowImageContainer(ref.input);
-    if (!value || (ref.assetId && !dynamic && !value.assetIds?.includes(ref.assetId))) throw new WorkflowInputError(`引用「${ref.label}」已断开或素材已移除，请重新 @ 选择`, node, ref.input, ref.label);
+    const dynamic = ref.type === "image" && (ref.slot !== undefined || workflowImageContainer(ref.input));
+    if (!value || (ref.assetId && !dynamic && !value.assetIds?.includes(ref.assetId))) throw new WorkflowInputError(`输入管道「${ref.label}」已断开或没有可用输出，请检查当前上游连接`, node, ref.input, ref.label);
     if (ref.type === "text" && !value.text?.trim()) throw new WorkflowInputError(`上游处理结束后，引用「${ref.label}」仍没有可用文本，请检查来源输出`, node, ref.input, ref.label);
     if (dynamic && !value.assetIds?.length) throw new WorkflowInputError(`上游处理结束后，引用「${ref.label}」仍没有可用图片，请检查来源卡片的输出`, node, ref.input, ref.label);
     resolved.set(ref.id, ref.type === "image" && ref.assetId && !dynamic ? { ...value, assetIds: [ref.assetId] } : value);
@@ -265,24 +314,46 @@ export function compileGenerationPrompt(node: WorkflowNode, values: Record<strin
 /** Keep instructions separate from referenced material, including long reverse prompts. */
 export function compileAgentPrompt(node: WorkflowNode, values: Record<string, WorkflowValue[]>) {
   node = rebindGenerationReferences(node);
-  const inputs = generationInputNode(node).inputs.text ?? [];
+  const inputs = generationInputNode(node).inputs;
+  const assetIds: string[] = [];
   const sources: Record<string, string> = {};
   const labels = new Map<string, string>();
   for (const match of node.prompt.matchAll(/@\[([^\]]+)\]/g)) {
     const ref = activePromptReferences(node).find(ref => ref.id === match[1]);
-    if (!ref || ref.type !== "text") throw new WorkflowNodeError("Agent 卡片包含无效引用，请重新按 @ 选择文本", node);
+    if (!ref) throw new WorkflowNodeError("Agent 卡片包含无效引用，请重新按 @ 选择文字或图片", node);
     if (labels.has(ref.id)) continue;
-    const index = inputs.findIndex(input => workflowBindingKey(input) === workflowBindingKey(ref.input));
-    if (index < 0) throw new WorkflowInputError(`引用「${ref.label}」已断开，尚未匹配到当前输入连线，请重新 @ 选择`, node, ref.input, ref.label);
-    const value = values.text?.[index];
+    const index = (inputs[ref.type] ?? []).findIndex(input => workflowReferenceMatchesInput(ref, input));
+    if (index < 0) throw new WorkflowInputError(`输入管道「${ref.label}」已断开，请重新连接上游`, node, ref.input, ref.label);
+    const value = values[ref.type]?.[index];
+    if (ref.type === "image") {
+      const dynamic = ref.slot !== undefined || workflowImageContainer(ref.input);
+      const ids = [...new Set(ref.assetId && !dynamic ? [ref.assetId] : value?.assetIds ?? [])];
+      if (!ids.length || ids.some(id => !value?.assetIds?.includes(id))) throw new WorkflowInputError(`引用「${ref.label}」没有可用图片，请检查来源输出`, node, ref.input, ref.label);
+      for (const id of ids) if (!assetIds.includes(id)) assetIds.push(id);
+      labels.set(ref.id, ids.map(id => `图片 ${assetIds.indexOf(id) + 1}`).join("、"));
+      continue;
+    }
     if (!value?.text?.trim()) throw new WorkflowInputError(`上游处理结束后，引用「${ref.label}」仍没有可用文本，请检查来源输出`, node, ref.input, ref.label);
-    const label = `引用文本 ${labels.size + 1}`;
+    const label = `引用文本 ${Object.keys(sources).length + 1}`;
     labels.set(ref.id, label); sources[label] = value.text;
   }
-  if (!labels.size) throw new WorkflowNodeError("请在 Agent 卡片中按 @ 引入要处理的文本", node);
+  if (usesConnectedAgentInputs(node)) {
+    for (const type of ["text", "image"] as const) for (const [index, input] of (inputs[type] ?? []).entries()) {
+      const value = values[type]?.[index];
+      const label = `${type === "text" ? "文字" : "图片"}输入 ${index + 1}`;
+      if (type === "image") {
+        if (!value?.assetIds?.length) throw new WorkflowInputError(`已连接的${label}没有可用图片，请检查来源输出`, node, input, label);
+        for (const id of value.assetIds) if (!assetIds.includes(id)) assetIds.push(id);
+      } else {
+        if (!value?.text?.trim()) throw new WorkflowInputError(`已连接的${label}没有可用文字，请检查来源输出`, node, input, label);
+        if (!activePromptReferences(node).some(ref => ref.type === type && workflowReferenceMatchesInput(ref, input))) sources[`引用文本 ${Object.keys(sources).length + 1}`] = value.text;
+      }
+    }
+  }
   return {
     prompt: node.prompt.replace(/@\[([^\]]+)\]/g, (_, id: string) => `【${labels.get(id)}】`),
     source: JSON.stringify(sources),
+    assetIds,
   };
 }
 
@@ -310,7 +381,7 @@ export function workflowInputValues(nodes: WorkflowNode[], node: WorkflowNode, c
       if (!value || value.type !== port.type) throw new Error(`${port.label}输入尚无有效结果，请先运行上游`);
       return value;
       } catch (error) {
-        const ref = activePromptReferences(node).find(ref => ref.type === port.type && workflowBindingKey(ref.input) === workflowBindingKey(input));
+        const ref = activePromptReferences(node).find(ref => ref.type === port.type && workflowReferenceMatchesInput(ref, input));
         throw new WorkflowInputError(`${ref ? `@${ref.label}：` : `${port.label}输入：`}${error instanceof Error ? error.message : String(error)}`, node, input, ref?.label);
       }
     });

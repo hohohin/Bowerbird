@@ -1,3 +1,5 @@
+import { cloudVideoOptions } from "../lib/videoGeneration";
+import { DreaminaTaskCredit } from "./creation/DreaminaCredits";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { ChevronLeft, ChevronRight } from "lucide-react";
@@ -801,7 +803,7 @@ function TurnView({
                 aria-label={`放大参考图 ${j + 1}`}
               >
                 <MediaPreview
-                  src={convertFileSrc(t.src)}
+                  src={convertFileSrc(t.src)} videoPath={t.src}
                   alt={t.name}
                   draggable={false}
                   className="h-12 w-12 rounded border border-edge object-cover hover:border-accent/60"
@@ -905,10 +907,11 @@ function TurnView({
         <div className="min-w-0 flex-1 space-y-2">
           {(viaLabel || durationLabel) && (
             <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-muted">
-              {viaLabel && <span>via {viaLabel}</span>}
+              {viaLabel && <span>via {viaLabel}{turn.media === "video" && turn.videoOptions ? ` · ${turn.videoOptions.model_version}` : ""}</span>}
               {durationLabel && <span>{viaLabel ? "· " : ""}用时 {durationLabel}</span>}
             </div>
           )}
+          {turn.media === "video" && turn.provider === "jimeng" && <DreaminaTaskCredit submitId={turn.submitId} busy={busy} />}
           {turn.images.length > 0 ? (
             <>
               <div className={`grid gap-1.5 ${turn.images.length > 1 ? "grid-cols-2" : "grid-cols-1"}`}>
@@ -922,7 +925,7 @@ function TurnView({
                     title="点击放大"
                   >
                     <MediaPreview
-                      src={convertFileSrc(p)}
+                      src={convertFileSrc(p)} videoPath={p}
                       alt=""
                       draggable={false}
                       className={
@@ -1424,7 +1427,7 @@ function GenEditComposer({
                 aria-label={`放大上次结果 ${k + 1}`}
               >
                 <MediaPreview
-                  src={convertFileSrc(p)}
+                  src={convertFileSrc(p)} videoPath={p}
                   alt=""
                   draggable={false}
                   className="w-full rounded border border-edge hover:border-accent/60"
@@ -1476,7 +1479,7 @@ function GenEditComposer({
       {/* 编辑框内 chip 的交互浮层（hover 放大图/维度正文 + 点击定位瀑布流） */}
       <BoardChipPreview hostRef={hostRef} />
       <div className="generation-toolbar flex flex-wrap items-center gap-2">
-          {isVideo ? <VideoControls channel={videoChannel} onChannelChange={channel => { setVideoChannel(channel); if (channel === "jimeng" && videoOptions.video_resolution === "1080p") setVideoOptions({ ...videoOptions, video_resolution: "720p" }); }} options={videoOptions} onChange={setVideoOptions} ratio={ratio} onRatioChange={setRatio} /> : <>
+          {isVideo ? <VideoControls channel={videoChannel} onChannelChange={channel => { setVideoChannel(channel); if (channel === "cloud") setVideoOptions(cloudVideoOptions(videoOptions)); }} options={videoOptions} onChange={setVideoOptions} ratio={ratio} onRatioChange={setRatio} /> : <>
           <RatioSelect value={ratio} onChange={setRatio} />
           {!isRevise && <ProviderSelect
             value={activeGenProvider}

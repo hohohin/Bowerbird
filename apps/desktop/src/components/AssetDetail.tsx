@@ -700,7 +700,7 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
           <div className="flex flex-1 items-center justify-center overflow-hidden p-4">
             {src &&
               (isVideo(asset.ext) ? (
-                <video src={src} controls className="max-h-full max-w-full" />
+                <video src={src} controls preload="none" className="max-h-full max-w-full" />
               ) : (
                 <img
                   ref={zoom.imgRef}

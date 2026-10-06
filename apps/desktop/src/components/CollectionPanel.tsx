@@ -158,7 +158,7 @@ export function CollectionPanel({ folder, onClose }: { folder: Folder; onClose: 
         <button type="button" className="mb-3 flex items-center gap-2 text-sm text-muted" onClick={() => setPreviewId(null)}>
           <ArrowLeft size={14} />返回集合
         </button>
-        <MediaPreview src={convertFileSrc(preview.store_path ?? preview.thumb_path ?? "")} alt={preview.name}
+        <MediaPreview playback src={convertFileSrc(preview.store_path ?? preview.thumb_path ?? "")} alt={preview.name}
           className="mx-auto max-h-[58vh] max-w-full object-contain" />
         <p className="mt-3 break-words text-center text-sm">{preview.name}</p>
       </div>

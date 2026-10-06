@@ -1,4 +1,4 @@
-import { activePromptReferences, assertWorkflowAcyclic, invalidateWorkflow, newWorkflowNode, workflowBindingKey, workflowOutputs, workflowTitle, type WorkflowInput, type WorkflowNode } from "./canvasWorkflow";
+import { activePromptReferences, normalizeWorkflowInputSlots, workflowReferenceMatchesInput, assertWorkflowAcyclic, invalidateWorkflow, newWorkflowNode, workflowBindingKey, workflowOutputs, workflowTitle, type WorkflowInput, type WorkflowNode } from "./canvasWorkflow";
 import { buildWorkflowPlan, planningSnapshotKey, type PlanningSource } from "./workflowPlanner";
 
 type CardKind = "trigger" | "instruction" | "agent" | "generation" | "skill" | "visual-profile";
@@ -91,8 +91,9 @@ export function parseWorkflowTemplate(raw: string): WorkflowTemplate {
 
 /** Extract any selected subgraph. Boundary materials become required public inputs. */
 export function captureWorkflowTemplate(nodes: WorkflowNode[], selected: Set<string>, name: string, boundaryBindings?: Record<string, WorkflowInput>): WorkflowTemplate {
-  const cards = nodes.filter(node => selected.has(node.id));
+  const cards = nodes.filter(node => selected.has(node.id)).map(node => normalizeWorkflowInputSlots(node));
   if (!cards.length || cards.filter(node => node.kind !== "trigger").length > 23 || cards.some(node => node.kind === "text" || node.kind === "planner")) fail("请选择 1–23 张执行卡片，可包含触发器；内容卡作为外部输入接入");
+  if (cards.some(node => node.kind === "loop")) fail("循环卡片暂不支持存为模板，请在画板上复制循环流程");
   if (cards.some(node => node.profileId)) fail("已绑定的个人视觉规范不能分享，请改成从输入提炼后保存");
   const work = cards.filter(node => node.kind !== "trigger");
   if (!work.length) fail("模板需要至少一张执行卡片");
@@ -110,7 +111,11 @@ export function captureWorkflowTemplate(nodes: WorkflowNode[], selected: Set<str
   for (const node of work) {
     const id = aliases.get(node.id)!;
     let prompt = node.prompt;
-    for (const ref of activePromptReferences(node)) prompt = prompt.replaceAll(`@[${ref.id}]`, `{{${bindingAlias(ref.input, ref.type)}}}`);
+    for (const ref of activePromptReferences(node)) {
+      const input = node.inputs[ref.type]?.find(input => workflowReferenceMatchesInput(ref, input));
+      if (!input) fail(`输入管道「${ref.label}」尚未连接，请先连接后保存模板`);
+      prompt = prompt.replaceAll(`@[${ref.id}]`, `{{${bindingAlias(input, ref.type)}}}`);
+    }
     if (prompt.includes("@[")) fail("卡片存在失效引用，请先重新选择输入");
     for (const [port, bindings] of Object.entries(node.inputs)) if (port !== "signal") for (const binding of bindings) {
       const [from, output] = bindingAlias(binding, port).split(".");
@@ -125,8 +130,11 @@ export function captureWorkflowTemplate(nodes: WorkflowNode[], selected: Set<str
     plan: { summary: name, nodes: specs, edges }, inputs, parameters: [], outputs }));
 }
 
-export const templateDefinition = (node: WorkflowNode) => planningSnapshotKey({ kind: node.kind, action: node.action, skill: node.skill, prompt: node.prompt, ratio: node.ratio,
+export const templateDefinition = (node: WorkflowNode) => {
+  node = normalizeWorkflowInputSlots(node);
+  return planningSnapshotKey({ kind: node.kind, action: node.action, skill: node.skill, prompt: node.prompt, ratio: node.ratio,
   provider: node.provider, inputs: node.inputs, promptReferences: node.promptReferences, agentTransport: node.agentTransport, profileId: node.profileId, overwriteDescribe: !!node.overwriteDescribe });
+};
 
 export function instantiateWorkflowTemplate(template: WorkflowTemplate, bindings: Record<string, WorkflowInput>, values: Record<string, string>, provider: string,
   existing: WorkflowNode[], x: number, y: number): WorkflowNode[] {
@@ -160,7 +168,7 @@ export function reconfigureTemplateInstance(nodes: WorkflowNode[], rootId: strin
   const root = nodes.find(node => node.id === rootId), instance = root?.templateInstance;
   if (!root || !instance) fail("子流程实例已不存在");
   const members = instance.nodeIds.map(id => nodes.find(node => node.id === id));
-  if (members.some((node, i) => !node || locked(node.id) || templateDefinition(node) !== instance.definitions[i])) fail("内部步骤已编辑、删除或正在运行，请直接编辑步骤，或从模板新建实例");
+  if (members.some((node, i) => !node || locked(node.id) || templateDefinition(node) !== templateDefinition(JSON.parse(instance.definitions[i])))) fail("内部步骤已编辑、删除或正在运行，请直接编辑步骤，或从模板新建实例");
   if (Object.values(bindings).some(input => input.nodeId && instance.nodeIds.includes(input.nodeId))) fail("子流程不能把自己的输出接回输入");
   const others = nodes.filter(node => !instance.nodeIds.includes(node.id));
   const fresh = instantiateWorkflowTemplate(instance.template, bindings, values, root.provider, others, root.x, root.y);

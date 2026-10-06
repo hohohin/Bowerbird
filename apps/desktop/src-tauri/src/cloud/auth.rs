@@ -11,7 +11,9 @@ use ulid::Ulid;
 use crate::cloud::CloudClient;
 use crate::error::{AppError, AppResult};
 
+#[cfg(not(all(target_os = "macos", debug_assertions)))]
 const KEYRING_SERVICE: &str = "com.bowerbird.desktop";
+#[cfg(not(all(target_os = "macos", debug_assertions)))]
 const KEYRING_USER: &str = "supabase-refresh-token";
 const CALLBACK_PREFIX: &str = "bowerbird://auth/callback";
 const WECHAT_CALLBACK_PREFIX: &str = "bowerbird://wechat/callback";
@@ -755,6 +757,11 @@ impl AuthClient {
     }
 
     fn keyring_entry() -> AppResult<Entry> {
+        #[cfg(all(target_os = "macos", debug_assertions))]
+        return Ok(Entry::new_with_credential(Box::new(
+            super::dev_keychain::DevKeychain,
+        )));
+        #[cfg(not(all(target_os = "macos", debug_assertions)))]
         Entry::new(KEYRING_SERVICE, KEYRING_USER)
             .map_err(|error| AppError::Cloud(format!("打开系统凭据库失败: {error}")))
     }

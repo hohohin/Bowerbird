@@ -143,7 +143,7 @@ export function BoardChipPreview({
       top = Math.max(pad, top);
       imgPortal = createPortal(
         <MediaPreview
-          src={src}
+          src={src} videoPath={asset.store_path}
           alt=""
           draggable={false}
           className="pointer-events-none fixed z-30 rounded-md border border-edge bg-panel object-contain shadow-xl"

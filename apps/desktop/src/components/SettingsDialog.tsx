@@ -11,6 +11,7 @@ import type { MigrateProgress } from "../lib/types";
 import { useOnboarding } from "../lib/onboardingStore";
 import { ModalShell } from "./ModalShell";
 import { RedeemCodeCard } from "./RedeemCodeCard";
+import { ScreenshotSettings } from "./ScreenshotSettings";
 import { AppUpdateCard } from "./AppUpdateCard";
 
 const STAGE_LABEL: Record<string, string> = {
@@ -989,6 +990,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
 
           {section === "personalization" && (
             <>
+              <ScreenshotSettings />
               <div className="settings-card px-3 py-2.5">
                 <label className="flex items-center justify-between gap-3">
                   <span className="text-ink">显示画板素材名称</span>

@@ -22,7 +22,12 @@ pub async fn update_settings(
     state: State<'_, SettingsState>,
     settings: AppSettings,
 ) -> Result<(), AppError> {
-    state.update(settings)?;
+    let mut settings = settings;
+    // Shortcut bindings are changed atomically through screenshot_set_shortcuts.
+    state.update_with(|current| {
+        settings.screenshot_shortcuts = current.screenshot_shortcuts.clone();
+        *current = settings;
+    })?;
     Ok(())
 }
 

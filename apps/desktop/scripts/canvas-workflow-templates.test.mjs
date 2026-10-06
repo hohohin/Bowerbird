@@ -25,6 +25,7 @@ try {
     original[2].sessionNodeIds = ['private-session']; original[2].outputs.image = { type: 'image', assetIds: ['private-result'] };
     original[2].planning = { requestId: 'private-request' };
     original[1].overwriteDescribe = true;
+    original[1].describeCache = { instruction: 'private-instruction', results: [{ assetId: 'private-asset', sections: [{ title: 'result', body: 'private-result' }] }] };
     const template = captureWorkflowTemplate(original, new Set(original.map(node => node.id)), '商品海报');
     template.parameters = [{ id: 'brief', label: '场景要求', node: 'card2', field: 'suffix', defaultValue: '' }, { id: 'ratio', label: '成品比例', node: 'card2', field: 'ratio', defaultValue: '3:4' }];
     const raw = JSON.stringify(template);
@@ -153,7 +154,7 @@ try {
   await page.getByRole('button', { name: '取消', exact: true }).click();
   assert.equal(await page.evaluate(() => sessionStorage.getItem('workflow-template-library')), beforeCancel);
   for (const [images, text] of [[true, true], [false, true], [true, false], [false, false]]) {
-    await page.locator('.workflow-card.is-generation header strong').click({ button: 'right' });
+    await page.locator('.workflow-card.is-generation header').click({ button: 'right' });
     await page.getByRole('menuitem', { name: '存为模板', exact: true }).click();
     await page.getByRole('dialog', { name: '存为模板', exact: true }).waitFor();
     await page.getByRole('textbox', { name: '模板名称', exact: true }).fill(`选区-${images}-${text}`);

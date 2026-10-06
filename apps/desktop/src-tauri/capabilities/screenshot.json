@@ -1,0 +1,6 @@
+{
+  "identifier": "screenshot",
+  "description": "Local screenshot and pinned image windows",
+  "webviews": ["snip-*", "pin-*"],
+  "permissions": ["core:default", "core:window:allow-show", "core:window:allow-set-focus", "core:window:allow-close", "core:window:allow-start-dragging", "core:window:allow-set-size"]
+}

@@ -99,13 +99,48 @@ fn list_new_generated(
     new_files
 }
 
+#[derive(Default)]
+struct CodexFailure {
+    message: Option<String>,
+    terminal: bool,
+}
+
+impl CodexFailure {
+    fn observe(&mut self, event: &serde_json::Value) {
+        let message = match event.get("type").and_then(|value| value.as_str()) {
+            Some("turn.failed") => {
+                self.terminal = true;
+                event.pointer("/error/message").and_then(|value| value.as_str())
+                    .or(Some("Codex turn.failed（未提供错误详情）"))
+            }
+            Some("error") if !self.terminal => event.get("message").and_then(|value| value.as_str()),
+            Some("turn.completed") if !self.terminal => { self.message = None; None }
+            _ => None,
+        };
+        if let Some(message) = message.filter(|message| !message.trim().is_empty()) {
+            self.message = Some(message.trim().chars().take(500).collect());
+        }
+    }
+
+    fn detail(&self, success: bool, has_answer: bool, stderr: &str) -> Option<String> {
+        if !self.terminal && (has_answer || success && self.message.is_none()) {
+            return None;
+        }
+        Some(match &self.message {
+            Some(message) => format!("error: {message}"),
+            None => format!("stderr: {}", stderr.trim().chars().take(500).collect::<String>()),
+        })
+    }
+}
+
 /// 解析 `codex exec --json` 的 JSONL 事件流：
 /// - `thread.started` → `thread_id`（session id，用于 `codex resume <id>`）
 /// - `item.completed`(item.type=agent_message) → `text`（最终答案，可能多段）
 /// 跳过非 JSON 行（codex 的提示信息、stderr 误并等）。
-fn parse_jsonl(stdout: &str) -> (Option<String>, String) {
+fn parse_jsonl(stdout: &str) -> (Option<String>, String, CodexFailure) {
     let mut session_id = None;
     let mut texts: Vec<String> = Vec::new();
+    let mut failure = CodexFailure::default();
     for line in stdout.lines() {
         let line = line.trim();
         if line.is_empty() || !line.starts_with('{') {
@@ -114,6 +149,7 @@ fn parse_jsonl(stdout: &str) -> (Option<String>, String) {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
         };
+        failure.observe(&v);
         match v.get("type").and_then(|t| t.as_str()) {
             Some("thread.started") => {
                 if let Some(id) = v.get("thread_id").and_then(|i| i.as_str()) {
@@ -132,7 +168,7 @@ fn parse_jsonl(stdout: &str) -> (Option<String>, String) {
             _ => {}
         }
     }
-    (session_id, texts.join("\n"))
+    (session_id, texts.join("\n"), failure)
 }
 
 /// 兜底：解析非 `--json` 的文本输出（答案在 "\ncodex\n" 之后、"\ntokens used" 之前）。
@@ -202,19 +238,16 @@ impl GenProvider for CodexCliProvider {
             .map_err(|e| AppError::Codex(format!("等待 codex 失败: {e}")))?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let (session_id, json_text) = parse_jsonl(&stdout);
+        let (session_id, json_text, failure) = parse_jsonl(&stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if let Some(detail) = failure.detail(output.status.success(), !json_text.is_empty(), &stderr) {
+            return Err(AppError::Codex(format!("codex 执行失败（{}） | {detail}", output.status)));
+        }
 
-        // JSONL 解析出 agent_message → 直接用（含退出码非 0 但已回退 HTTPS 拿到答案的情形）；
-        // 否则：退出码非 0 报错；退出码 0 回退旧文本解析（兼容旧版 codex）。
+        // Explicit turn.failed is never an answer. Transient reconnect errors
+        // followed by a usable answer still retain the legacy HTTPS fallback.
         let text = if !json_text.is_empty() {
             json_text
-        } else if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let stderr_head: String = stderr.trim().chars().take(500).collect();
-            return Err(AppError::Codex(format!(
-                "codex 退出 {} | stderr: {stderr_head}",
-                output.status
-            )));
         } else {
             parse_answer(&stdout)
         };
@@ -313,10 +346,11 @@ impl GenProvider for CodexCliProvider {
 
         // 读行 + 等退出整体套 600s 超时（防 codex 挂住不关 stdout 时无限阻塞）。
         // 多张图串行生成耗时翻倍（每张数十秒），故比反推的 180s 宽松；覆盖典型 4–6 张。
-        let (status, session_id, texts) =
+        let (status, session_id, texts, failure) =
             match tokio::time::timeout(Duration::from_secs(600), async {
                 let mut session_id: Option<String> = None;
                 let mut texts: Vec<String> = Vec::new();
+                let mut failure = CodexFailure::default();
                 let mut line_bytes = Vec::new();
                 loop {
                     line_bytes.clear();
@@ -338,6 +372,7 @@ impl GenProvider for CodexCliProvider {
                     let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
                         continue;
                     };
+                    failure.observe(&v);
                     match v.get("type").and_then(|t| t.as_str()) {
                         Some("thread.started") => {
                             if let Some(id) = v.get("thread_id").and_then(|i| i.as_str()) {
@@ -367,7 +402,7 @@ impl GenProvider for CodexCliProvider {
                     .wait()
                     .await
                     .map_err(|e| AppError::Codex(format!("等待 codex 失败: {e}")))?;
-                Ok::<_, AppError>((status, session_id, texts))
+                Ok::<_, AppError>((status, session_id, texts, failure))
             })
             .await
             {
@@ -390,12 +425,8 @@ impl GenProvider for CodexCliProvider {
             };
 
         let stderr_str = stderr_task.await.unwrap_or_default();
-        if !status.success() && texts.is_empty() {
-            let stderr_head: String = stderr_str.trim().chars().take(500).collect();
-            return Err(AppError::Codex(format!(
-                "codex 退出 {} | stderr: {stderr_head}",
-                status
-            )));
+        if let Some(detail) = failure.detail(status.success(), !texts.is_empty(), &stderr_str) {
+            return Err(AppError::Codex(format!("codex 执行失败（{status}） | {detail}")));
         }
 
         // 扫 codex generated_images，取「跑前快照之后新增」的源图路径（在 ~/.codex/，
@@ -722,6 +753,78 @@ mod tests {
     use super::*;
     use std::fs;
     use ulid::Ulid;
+
+    #[test]
+    fn terminal_jsonl_failure_rejects_partial_answer_even_with_zero_exit() {
+        let (_, answer, failure) = parse_jsonl(r#"not JSON
+{"type":"item.completed","item":{"type":"agent_message","text":"partial"}}
+{"type":"turn.failed","error":{"message":"You've hit your usage limit."}}
+{"type":"error","message":"later noise"}
+"#);
+        for success in [false, true] {
+            assert_eq!(failure.detail(success, !answer.is_empty(), "stdin notice").as_deref(),
+                Some("error: You've hit your usage limit."));
+        }
+    }
+
+    #[test]
+    fn jsonl_reconnect_then_answer_preserves_session_and_success() {
+        let (session, answer, failure) = parse_jsonl(r#"{"type":"thread.started","thread_id":"test-session"}
+{"type":"error","message":"Reconnecting..."}
+{"type":"item.completed","item":{"type":"agent_message","text":"完整答案"}}
+{"type":"turn.completed"}
+"#);
+        assert_eq!(session.as_deref(), Some("test-session"));
+        assert_eq!(answer, "完整答案");
+        for success in [false, true] {
+            assert!(failure.detail(success, true, "connection reset").is_none());
+        }
+        assert_eq!(parse_answer("legacy plain answer"), "legacy plain answer");
+    }
+
+    #[test]
+    fn jsonl_error_only_and_stderr_fallback_are_bounded() {
+        let event = serde_json::json!({"type":"error", "message":"额度".repeat(600)}).to_string();
+        let (_, _, failure) = parse_jsonl(&event);
+        for success in [false, true] {
+            assert_eq!(failure.detail(success, false, "Reading prompt from stdin...").unwrap(),
+                format!("error: {}", "额度".repeat(250)));
+        }
+        let (_, _, failure) = parse_jsonl("{broken JSON\n{}");
+        assert_eq!(failure.detail(false, false, " invalid argument ").as_deref(), Some("stderr: invalid argument"));
+        let (_, _, failure) = parse_jsonl(r#"{"type":"turn.failed","error":{}}"#);
+        assert!(failure.detail(true, false, "").unwrap().contains("turn.failed"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cli_failure_reports_jsonl_cause_instead_of_stdin_notice() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("bb-codex-error-{}", Ulid::new()));
+        fs::create_dir_all(&root).unwrap();
+        let binary = root.join("codex");
+        fs::write(&binary, r#"#!/bin/sh
+cat >/dev/null
+echo 'Reading prompt from stdin...' >&2
+cat <<'EVENTS'
+{"type":"thread.started","thread_id":"isolated-test"}
+{"type":"error","message":"Reconnecting..."}
+{"type":"turn.failed","error":{"message":"You've hit your usage limit. Try again later."}}
+EVENTS
+exit 1
+"#).unwrap();
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
+        let provider = CodexCliProvider { binary: binary.to_string_lossy().into_owned(), model: String::new(), enabled: true };
+        let request: CodexRequest = serde_json::from_str(r#"{"instruction":"isolated test"}"#).unwrap();
+        let error = provider.run(request.clone()).await.unwrap_err().to_string();
+        let (tx, _rx) = mpsc::channel(8);
+        let image_error = provider.generate_image(request, &tx, None).await.unwrap_err().to_string();
+        fs::remove_dir_all(root).unwrap();
+        for message in [error, image_error] {
+            assert!(message.contains("You've hit your usage limit"), "{message}");
+            assert!(!message.contains("Reading prompt from stdin"), "{message}");
+        }
+    }
 
     #[cfg(target_os = "macos")]
     #[test]

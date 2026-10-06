@@ -1,17 +1,22 @@
+import { assignCanvasCardNames } from "./canvasCardNames";
+import { workflowTitle } from "./canvasWorkflow";
 import { api } from "./api";
+import { autoRatioFromReferences } from "../components/creation/ratios";
+import { canonicalProviderKey } from "./genProviders";
+import { workflowLoopScope, workflowLoopRows, workflowLoopOutputs, validateLoopItems } from "./workflowLoop";
 import { WorkflowPlannerRuntime } from "./workflowPlannerRuntime";
 import { notify } from "./notify";
 import { emit } from "@tauri-apps/api/event";
 import { useStore } from "../store";
-import { loadDescribePrompt } from "./describePrompt";
-import { existingWorkflowCaption, workflowCaptionSections } from "./workflowDescribe";
+import { existingWorkflowCaption, workflowCaptionSections, workflowDescribeInstruction } from "./workflowDescribe";
 import { canStartAnotherAgentRun, canUseAgentRun, understandProvider } from "./entitlement";
 import { renderLayerDocument } from "./layerDocument";
 import { workflowLayerDecompose } from "./workflowLayerDecompose";
 import { readCanvasNote, emptyCanvasCell, canvasGridWeights, canvasTextMinSize } from "./canvasNotes";
 import { canvasInputValue, reconcileCanvasWorkflowReferences } from "./canvasSessionOutputs";
 import { canvasContentInput } from "./canvasContentInput";
-import { assertWorkflowAcyclic, rebindGenerationReferences } from "./canvasWorkflow";
+import { agentResultValue } from "./workflowAgentResult";
+import { assertWorkflowAcyclic, rebindGenerationReferences, normalizeWorkflowInputSlots } from "./canvasWorkflow";
 import { WorkflowNodeError, workflowDiagnostic, type WorkflowDiagnostic } from "./workflowDiagnostics";
 import { enqueueCloudAgentRunOperation } from "./cloudAgentRuntime";
 import { describeBrandImage } from "./describeBrandImage";
@@ -42,6 +47,7 @@ export class CanvasWorkflowController {
   private reservations = new Map<string, { access: string[]; writes: string[] }>();
   private stopped = new Set<string>();
   private stopping = new Set<string>();
+  private retryingLoops = new Set<string>();
   private profileAbort = new Map<string, Set<AbortController>>();
   private executionDrains = new Map<string, Promise<void>>();
   private resources = new Map<string, Promise<unknown>>();
@@ -101,7 +107,7 @@ export class CanvasWorkflowController {
         const canvas = await api.projectCanvasGet(this.projectId);
         this.document = { ...this.document, nodes: reconcileCanvasWorkflowReferences(this.document.nodes, canvas.nodes).map(rebindGenerationReferences), runs, run: runs[runs.length - 1] ?? null };
         const latest = runs[runs.length - 1];
-        this.issue = latest?.status === "failed" ? Object.values(latest.steps).find(step => step.diagnostic)?.diagnostic ?? null : null;
+        this.issue = latest && ["failed", "waiting"].includes(latest.status) ? Object.values(latest.steps).find(step => step.status === "failed" && step.diagnostic)?.diagnostic ?? null : null;
         this.ready = true;
         this.error = "";
       } catch (error) { this.error = String(error); }
@@ -110,6 +116,7 @@ export class CanvasWorkflowController {
     return this.loading;
   }
   async save(document = this.document) {
+    document = { ...document, cardNames: assignCanvasCardNames(document.cardNames, document.nodes.filter(node => !node.textTarget && !node.textSource).map(node => ({ id: node.id, title: workflowTitle(node) }))) };
     this.document = document; this.emit();
     const snapshot = structuredClone(document);
     const write = this.writing.then(async () => {
@@ -127,7 +134,7 @@ export class CanvasWorkflowController {
   }
   async edit(nodes: WorkflowNode[]) {
     if (!this.ready) throw new Error("工作流尚未载入");
-    nodes = nodes.map(node => this.isLocked(node.id) ? node : rebindGenerationReferences(node));
+    nodes = nodes.map(node => this.isLocked(node.id) ? node : normalizeWorkflowInputSlots(node, this.document.nodes.find(previous => previous.id === node.id)));
     for (const node of this.document.nodes) if (this.isLocked(node.id) && JSON.stringify(node) !== JSON.stringify(nodes.find(next => next.id === node.id))) {
       throw new Error("此卡片关联的工作流正在运行，请先停止对应流程");
     }
@@ -148,12 +155,13 @@ export class CanvasWorkflowController {
     const previous = cellId ? this.document.nodes.find(node => node.textTarget?.nodeId === nodeId && node.textTarget.cellId === cellId) : undefined;
     if (this.document.nodes.some(node => (node.textTarget?.nodeId === nodeId || node.resultNodeIds?.includes(nodeId)) && this.isLocked(node.id))) throw new Error("关联工作流正在运行，请先停止");
     if (cellId && !note.cells.flat().some(cell => cell.id === cellId)) throw new Error("单元格已删除");
-    const reuseEmptyImageCard = !cellId && type === "image" && note.cells.length === 1 && note.cells[0].length === 1
+    const producer = this.document.nodes.find(node => node.id === source.nodeId);
+    const reuseEmptyCard = !cellId && (type === "image" || producer?.kind === "agent" || !!producer?.outputs[source.portId ?? ""]?.table) && note.cells.length === 1 && note.cells[0].length === 1
       && !note.cells[0][0].text && !note.cells[0][0].image_refs?.length
       && !this.document.nodes.some(node => node.textTarget?.nodeId === nodeId);
-    const targetCellId = cellId ?? (reuseEmptyImageCard ? note.cells[0][0].id! : crypto.randomUUID());
+    const targetCellId = cellId ?? (reuseEmptyCard ? note.cells[0][0].id! : crypto.randomUUID());
     const writer: WorkflowNode = { ...(previous || newWorkflowNode("text", target.x, target.y, "")),
-      textTarget: { ...previous?.textTarget, nodeId, cellId: targetCellId, append: !cellId || !!previous && previous.textTarget?.append, image: type === "image" }, inputs: { [type]: [source] } };
+      textTarget: { nodeId, cellId: targetCellId, append: !cellId, image: type === "image" }, inputs: { [type]: [source] } };
     // Once explicitly wired, this table is edited by cell writers, never rebuilt as an automatic result.
     const nodes = [...this.document.nodes.filter(node => node.id !== writer.id).map(node => ({ ...node,
       ...(node.resultNodeIds?.includes(nodeId) ? { resultNodeIds: node.resultNodeIds.filter(id => id !== nodeId) } : {}),
@@ -164,8 +172,8 @@ export class CanvasWorkflowController {
     await this.edit(invalidateWorkflow(nodes, writer.id));
     {
       const row = note.cells[0].map((_, column) => ({ ...emptyCanvasCell(), id: column === 0 ? targetCellId : crypto.randomUUID(), content_type: column === 0 ? type : "text" as const }));
-      const cells = cellId || reuseEmptyImageCard ? note.cells.map(row => row.map(cell => cell.id === targetCellId ? { ...cell, content_type: type } : cell)) : [...note.cells, row];
-      await api.projectCanvasNoteUpdate(nodeId, JSON.stringify({ ...note, note_type: "text", cells, row_heights: cellId || reuseEmptyImageCard ? note.row_heights : [...canvasGridWeights(note.row_heights, note.cells.length), 1], text: cells.map(row => row.map(cell => cell.text).join("\t")).join("\n") }));
+      const cells = cellId || reuseEmptyCard ? note.cells.map(row => row.map(cell => cell.id === targetCellId ? { ...cell, content_type: type } : cell)) : [...note.cells, row];
+      await api.projectCanvasNoteUpdate(nodeId, JSON.stringify({ ...note, note_type: "text", cells, row_heights: cellId || reuseEmptyCard ? note.row_heights : [...canvasGridWeights(note.row_heights, note.cells.length), 1], text: cells.map(row => row.map(cell => cell.text).join("\t")).join("\n") }));
       if (type === "image" || !cellId) {
         const minimum = canvasTextMinSize(cells);
         await api.projectCanvasNodeUpdate(nodeId, { x: target.x, y: target.y, width: Math.max(target.width, minimum.width), height: Math.max(target.height, minimum.height), zIndex: target.zIndex, positionLocked: target.positionLocked });
@@ -203,20 +211,42 @@ export class CanvasWorkflowController {
     });
   }
 
-  private writeContentInput(writer: WorkflowNode, value: WorkflowValue) {
-    return this.withResource("canvas", () => this.writeContentInputUnlocked(writer, value));
+  private writeContentInput(runId: string, writer: WorkflowNode, value: WorkflowValue, halted: () => boolean) {
+    return this.withResource("canvas", () => this.writeContentInputUnlocked(runId, writer, value, halted));
   }
-  private async writeContentInputUnlocked(writer: WorkflowNode, value: WorkflowValue) {
-    const target = this.document.nodes.find(node => node.id === writer.id)?.textTarget ?? writer.textTarget!;
+  private async writeContentInputUnlocked(runId: string, writer: WorkflowNode, value: WorkflowValue, halted: () => boolean) {
+    if (halted()) return;
+    const savedTarget = this.run(runId).steps[writer.id].contentTarget;
+    let target = savedTarget ?? this.document.nodes.find(node => node.id === writer.id)?.textTarget ?? writer.textTarget!;
     const canvas = await api.projectCanvasGet(this.projectId);
+    if (halted()) return;
     const table = canvas.nodes.find(node => node.id === target.nodeId && node.kind === "note" && node.hiddenAt == null);
     if (!table) throw new Error("输入的内容卡片已删除");
-    const note = readCanvasNote(table);
+    let note = readCanvasNote(table);
+    if (target.append) {
+      if (!savedTarget) {
+        // Only a newly connected, still-empty placeholder can be reused. Each
+        // subsequent delivery owns a fresh region, including each loop item.
+        const anchor = note.cells.flat().find(cell => cell.id === target.cellId);
+        const unused = !target.cellIds?.length && !target.tableCellIds && anchor && !anchor.text && !anchor.image_refs?.length;
+        if (!unused) target = { nodeId: target.nodeId, cellId: crypto.randomUUID(), append: true, image: target.image };
+      }
+      if (!note.cells.flat().some(cell => cell.id === target.cellId)) {
+        const row = note.cells[0].map((_, column) => ({ ...emptyCanvasCell(), id: column === 0 ? target.cellId : crypto.randomUUID() }));
+        note = { ...note, cells: [...note.cells, row], row_heights: [...canvasGridWeights(note.row_heights, note.cells.length), 1] };
+      }
+    }
     if (!note.cells.flat().some(cell => cell.id === target.cellId)) throw new Error("输入的单元格已删除，请重新连接");
-    const result = canvasContentInput(note, target, value);
-    // Save ownership before the table so a resumed run reuses the same slots.
-    await this.save({ ...this.document, nodes: this.document.nodes.map(node => node.id === writer.id
-      ? { ...node, textTarget: { ...target, cellIds: result.cellIds } } : node) });
+    const reserved = this.document.nodes.filter(node => node.id !== writer.id && node.textTarget?.nodeId === target.nodeId)
+      .flatMap(node => [node.textTarget!.cellId, ...(node.textTarget!.cellIds ?? [])]);
+    const result = canvasContentInput(note, target, value, reserved);
+    // Persist the destination on this execution step before writing the table.
+    // Retries reuse it; a new run/loop item has a new step and appends again.
+    const contentTarget = { ...target, cellIds: result.cellIds, tableCellIds: result.tableCellIds };
+    const run = this.run(runId);
+    await this.saveRun({ ...run, steps: { ...run.steps, [writer.id]: { ...run.steps[writer.id], contentTarget } } },
+      this.document.nodes.map(node => node.id === writer.id ? { ...node, textTarget: contentTarget } : node));
+    if (halted()) return;
     await api.projectCanvasNoteUpdate(table.id, JSON.stringify(result.note));
     const minimum = canvasTextMinSize(result.note.cells);
     if (table.height < minimum.height || table.width < minimum.width) await api.projectCanvasNodeUpdate(table.id, {
@@ -235,24 +265,25 @@ export class CanvasWorkflowController {
   }
   private async startRun(startId: string, single = false) {
     if (!this.ready) throw new Error("工作流尚未载入");
+    if (this.document.nodes.find(node => node.id === startId)?.kind === "loop") single = false;
     if (this.document.nodes.find(node => node.id === startId)?.kind === "planner") throw new Error("请使用助手的编排按钮；助手不参与工作流执行");
     // A deleted result table may still be used as a relay by downstream cards.
     // Recover whole-output references before removing its writer/provenance.
     const snapshot = await api.projectCanvasGet(this.projectId);
     await this.syncCanvasReferences(snapshot.nodes);
     const liveTables = new Set(snapshot.nodes.filter(node => node.kind === "note" && node.hiddenAt == null).map(node => node.id));
-    const recoveryScope = new Set(single ? [startId] : workflowOrder(this.document.nodes, startId));
+    const recoveryScope = new Set(workflowOrder(this.document.nodes, startId, single));
     const forwardResult = (input: WorkflowInput): WorkflowInput => {
       if (!input.canvasNodeId || liveTables.has(input.canvasNodeId)) return input;
       const automatic = this.document.nodes.find(node => recoveryScope.has(node.id) && node.kind === "instruction" && node.action === "layers"
         && (node.resultNodeIds?.includes(input.canvasNodeId!) || input.canvasNodeId!.startsWith("workflow-layers:") && input.canvasNodeId!.endsWith(`:${node.id}`)));
-      if (automatic && input.cellId === "*") return { nodeId: automatic.id, portId: "image" };
+      if (automatic && input.cellId === "*") return { nodeId: automatic.id, portId: "image", slot: input.slot };
       const writers = this.document.nodes.filter(node => node.textTarget?.nodeId === input.canvasNodeId);
       if (writers.length !== 1) return input;
       const writer = writers[0], target = writer.textTarget!;
       const bindings = writer.inputs.image ?? [];
       if (bindings.length !== 1 || !this.document.nodes.some(node => recoveryScope.has(node.id) && node.id === bindings[0].nodeId && node.action === "layers")) return input;
-      if (input.cellId === "*" || input.cellId === target.cellId && !target.append) return bindings[0];
+      if (input.cellId === "*" || input.cellId === target.cellId && !target.append) return { ...bindings[0], slot: input.slot };
       return input;
     };
     const forwarded = this.document.nodes.map(node => ({ ...node,
@@ -275,20 +306,21 @@ export class CanvasWorkflowController {
     if (JSON.stringify(rebound) !== JSON.stringify(this.document.nodes)) await this.edit(rebound);
     // Output writers can survive deletion of a table or an individual cell.
     // Include sibling writers covered by the table's write lock, not just direct image wires.
-    const plannedOrder = single ? [startId] : workflowOrder(this.document.nodes, startId);
+    const plannedOrder = workflowOrder(this.document.nodes, startId, single);
     const plannedWrites = new Set(workflowWriteNodes(workflowExecutionNodes(this.document.nodes, startId), plannedOrder));
     const writers = this.document.nodes.filter(node => node.id !== startId && plannedWrites.has(node.id) && node.textTarget);
     if (writers.length) {
       const canvas = await api.projectCanvasGet(this.projectId);
       const deleted = new Set(writers.filter(writer => {
         const table = canvas.nodes.find(node => node.id === writer.textTarget!.nodeId && node.kind === "note" && node.hiddenAt == null);
-        return !table || !readCanvasNote(table).cells.flat().some(cell => cell.id === writer.textTarget!.cellId);
+        return !table || !writer.textTarget!.append && !readCanvasNote(table).cells.flat().some(cell => cell.id === writer.textTarget!.cellId);
       }).map(writer => writer.id));
       if (deleted.size) await this.edit(this.document.nodes.filter(node => !deleted.has(node.id)));
     }
-    const order = single ? [startId] : workflowOrder(this.document.nodes, startId);
+    const order = workflowOrder(this.document.nodes, startId, single);
     if (!this.document.nodes.some(node => node.id === startId)) throw new Error("卡片不存在");
     const executionNodes = workflowExecutionNodes(this.document.nodes, startId);
+    const loop = workflowLoopScope(executionNodes, order);
     const textSources = this.document.nodes.filter(node => node.textSource && order.includes(node.id)).map(node => node.textSource!);
     const lockedNodeIds = workflowDependencies(executionNodes, order);
     const writeNodeIds = workflowWriteNodes(executionNodes, order);
@@ -313,19 +345,23 @@ export class CanvasWorkflowController {
       const canvas = await api.projectCanvasGet(this.projectId);
       for (const writer of textTargets) {
         const table = canvas.nodes.find(node => node.id === writer.textTarget?.nodeId && node.kind === "note" && node.hiddenAt == null);
-        if (!table || !readCanvasNote(table).cells.flat().some(cell => cell.id === writer.textTarget?.cellId)) throw new Error("接收产物的内容卡片或单元格已删除，请重新连接输出");
+        if (!table || !writer.textTarget?.append && !readCanvasNote(table).cells.flat().some(cell => cell.id === writer.textTarget?.cellId)) throw new Error("接收产物的内容卡片或单元格已删除，请重新连接输出");
       }
     }
     for (const id of order) {
       const node = this.document.nodes.find(node => node.id === id)!;
+      if (node.kind === "loop") {
+        if (!(node.inputs[node.loopMode === "rows" ? "text" : "image"]?.length)) throw new WorkflowNodeError("请先连接循环的待处理内容", node);
+        continue;
+      }
       if (node.kind === "trigger") {
         if (!this.document.nodes.some(node => (node.inputs.signal ?? []).some(input => input.nodeId === startId))) throw new WorkflowNodeError("触发器还没有连接下游卡片，请从「触发」端口连接", node);
         continue;
       }
       if (node.kind === "generation" && !node.prompt.trim()) throw new WorkflowNodeError("请在生成卡片文本框中填写指令，或通过 @ 引入内容", node);
-      if (node.kind === "agent" && !node.prompt.trim()) throw new WorkflowNodeError("请连接待修改的原文，并在 Agent 卡片中填写修改要求", node);
-      if (node.kind === "agent" && !activePromptReferences(node).length) throw new WorkflowNodeError("请在 Agent 卡片中按 @ 引入要处理的文本；仅连接输入不会自动注入", node);
-      if (node.kind === "agent" && node.prompt.length > 4000) throw new WorkflowNodeError("Agent 修改要求不能超过 4000 字", node);
+      if (node.kind === "agent" && !node.prompt.trim()) throw new WorkflowNodeError("请在 Agent 卡片中填写要求，可按 @ 引用文字或图片", node);
+      if (node.kind === "agent" && (!import.meta.env.DEV || node.agentTransport === "cloud") && (!activePromptReferences(node).some(ref => ref.type === "text") || activePromptReferences(node).some(ref => ref.type === "image"))) throw new WorkflowNodeError("Cloud 通道目前仅支持文本改写，请按 @ 引用文本；图文自由处理请使用本机 Agent DS", node);
+      if (node.kind === "agent" && node.prompt.length > 4000) throw new WorkflowNodeError("Agent 要求不能超过 4000 字", node);
       if (node.kind === "instruction" && !(node.inputs.image?.length)) throw new WorkflowNodeError("请先连接指令卡片的图片输入", node);
       if (node.kind === "visual-profile") {
         if (!node.profileId && !node.prompt.trim() && !node.inputs.text?.length && !node.inputs.image?.length) throw new WorkflowNodeError("请给视觉规范卡片连接图片、填写文字，或选用已有规范", node);
@@ -369,12 +405,20 @@ export class CanvasWorkflowController {
         cellValues[JSON.stringify([input.canvasNodeId, input.cellId])] = value;
       }
     }
+    if (loop) {
+      const owner = this.document.nodes.find(node => node.id === loop.nodeId)!;
+      if (owner.loopMode === "rows" && (owner.inputs.text ?? []).every(input => textSources.includes(input.canvasNodeId ?? "")
+        || !workflowInputProducers(executionNodes, input).some(id => order.includes(id)))) {
+        loop.items = workflowLoopRows(owner, this.document.nodes, (await api.projectCanvasGet(this.projectId)).nodes);
+      }
+    }
     await api.projectThreadCreate({ id: threadId, projectId: this.projectId, title: "工作流", origin: "direct" });
     const invalidated = new Set(invalidateWorkflow(executionNodes, startId).filter(node => !Object.keys(node.outputs).length).map(node => node.id));
     const nodes = this.document.nodes.map(node => invalidated.has(node.id) ? { ...node, outputs: {} } : node).map(node => this.isLocked(node.id) && !writeNodeIds.includes(node.id) ? this.document.nodes.find(item => item.id === node.id)! : order.includes(node.id) ? {
       ...node, ...(node.kind === "generation" ? { activeSessionNodeId: null } : {}), inputs: Object.fromEntries(Object.entries(node.inputs).map(([port, bindings]) => [port, bindings.map(input => input.groupId && groupAssets.has(input.groupId) ? { ...input, assetIds: groupAssets.get(input.groupId)! } : input)])),
     } : node);
     await this.saveRun({ id: runId, startId, threadId, order, lockedNodeIds, writeNodeIds, cellTexts, cellValues, status: "running",
+      ...(loop ? { loop } : {}),
       accountId: useStore.getState().cloudAuth?.user_id ?? null,
       steps: Object.fromEntries(order.map(id => [id, { status: "pending" as const }])) }, nodes);
     } finally { this.reservations.delete(runId); this.emit(); }
@@ -393,6 +437,9 @@ export class CanvasWorkflowController {
     // Keep the definition locked until cancellation requests have completed.
     await Promise.all(active.map(async step => {
       if (step.jobId) await api.cancelCodexCreate(step.jobId);
+      for (const generation of Object.values(step.localDsGenerations ?? {})) {
+        if (!generation.response) await api.cancelCodexCreate(generation.jobId);
+      }
       if (step.agentRunId) await api.cloudAgentCancel(step.agentRunId);
       if (step.describeJobIds) await Promise.all(step.describeJobIds.map(jobId => api.cancelCodexDescribe(jobId)));
       if (step.assetId && !step.agentRunId && !step.jobId) {
@@ -410,6 +457,38 @@ export class CanvasWorkflowController {
     await this.saveRun({ ...run, steps: { ...run.steps, [id]: { ...run.steps[id], ...patch } } });
     if (this.stopped.has(runId)) throw new Error("工作流已停止");
   }
+  async retryLoop(runId: string) {
+    if (this.retryingLoops.has(runId)) return;
+    this.retryingLoops.add(runId);
+    try {
+    await this.writing;
+    const run = this.run(runId);
+    if (!run?.loop || run.status !== "waiting" || this.executing.has(runId) || this.stopping.has(runId)) return;
+    const steps = { ...run.steps };
+    for (const [id, step] of Object.entries(steps)) {
+      if (step.status !== "failed") continue;
+      let retry = step.retrySafe === true;
+      if (step.jobId) {
+        const job = (await api.recentGenSessions(500)).find(job => job.id === step.jobId);
+        if (!job) throw new Error("无法确认原生成任务状态，请检查任务中心；停止循环后才能重新提交");
+        retry = job.status === "failed";
+      } else if (step.localDsRequestId) {
+        const result = await api.agentDsWorkflowResult(step.localDsRequestId);
+        retry = !!result?.error;
+      } else if (step.agentRunId) {
+        const result = await api.cloudAgentGet(step.agentRunId);
+        retry = ["failed", "cancelled"].includes(result.status);
+      } else if (!retry) {
+        throw new Error("此步骤的提交结果尚需核对，请检查原任务；停止循环后才能重新提交，已完成结果会保留");
+      }
+      steps[id] = retry ? { status: "pending", ...(step.contentTarget ? { contentTarget: step.contentTarget } : {}) } : { ...step, status: "waiting", error: undefined, diagnostic: undefined };
+    }
+    if (this.run(runId).status !== "waiting" || this.stopping.has(runId) || this.executing.has(runId)) return;
+    this.issue = null;
+    await this.saveRun({ ...run, steps });
+    await this.continue(runId);
+    } finally { this.retryingLoops.delete(runId); }
+  }
   private progress(runId: string, id: string, detail: string) {
     if (this.stopped.has(runId)) return;
     const run = this.run(runId);
@@ -420,31 +499,42 @@ export class CanvasWorkflowController {
   private async finish(runId: string, node: WorkflowNode, outputs: Record<string, WorkflowValue>, ports = node.outputPorts) {
     if (this.stopped.has(runId)) return;
     const run = this.run(runId);
-    await this.saveRun({ ...run, steps: { ...run.steps, [node.id]: { ...run.steps[node.id], status: "done", error: undefined } } },
+    await this.saveRun({ ...run, steps: { ...run.steps, [node.id]: { ...run.steps[node.id], status: "done", error: undefined, diagnostic: undefined } } },
       this.document.nodes.map(candidate => candidate.id === node.id ? { ...candidate, outputs, outputPorts: ports } : candidate));
   }
 
-  private async localDsText(runId: string, node: WorkflowNode, step: WorkflowStep, instruction: string, source: string, halted: () => boolean): Promise<WorkflowValue | null> {
+  private async localDsResult(runId: string, node: WorkflowNode, step: WorkflowStep, instruction: string, source: string, images: string[], halted: () => boolean): Promise<Record<string, WorkflowValue> | null> {
     let requestId = step.localDsRequestId;
     if (!requestId) {
       if (step.status !== "pending") throw new Error("本机 Agent DS 提交状态未知，请先检查投递队列");
       requestId = `${Date.now()}-${crypto.randomUUID()}`;
-      await this.step(runId, node.id, { status: "running", localDsRequestId: requestId, detail: "正在投递到本机 Agent DS" });
-      const delivery = await api.agentDsWorkflowStart(requestId, instruction, source);
+      const imageProvider = canonicalProviderKey(useStore.getState().defaultProvider);
+      await this.step(runId, node.id, { status: "running", localDsRequestId: requestId, localDsImageProvider: imageProvider, detail: "正在投递到本机 Agent DS" });
+      const delivery = await api.agentDsWorkflowStart(requestId, instruction, source, "agent-text", images, { projectId: this.projectId, nodeId: node.id }, imageProvider);
       if (halted()) return null;
-      const notice = delivery.autoDelivered ? `已送达 DSH 会话「${delivery.sessionTitle || "未命名"}」，等待改写结果` : `已投递到 DSH 队列（未自动送达：${delivery.notice || "未知原因"}）；可在 DSH 里说「看队列」`;
+      const notice = delivery.autoDelivered ? `已送达 DSH 会话「${delivery.sessionTitle || "未命名"}」，等待结果` : `已投递到 DSH 队列（未自动送达：${delivery.notice || "未知原因"}）；可在 DSH 里说「看队列」`;
       notify(notice, delivery.autoDelivered ? "success" : "info");
       await this.step(runId, node.id, { detail: notice, ...(delivery.autoDelivered ? {} : { status: "waiting", error: notice }) });
       if (!delivery.autoDelivered) return null;
     }
     while (!halted()) {
+      if (!await this.localDsGenerate(runId, node, requestId, images, halted)) return null;
       const result = await api.agentDsWorkflowResult(requestId);
       if (halted()) return null;
       if (result) {
         if (result.schemaVersion !== 1 || result.requestId !== requestId) throw new Error("Agent DS 返回了其他请求的结果");
-        if (result.error) throw new Error(`Agent DS 改写失败：${result.error}（请求 ${requestId}）`);
-        if (!result.text?.trim() || result.text.length > 16000) throw new Error("Agent DS 未返回有效的完整改写文本");
-        return { type: "text", text: result.text };
+        if (result.error) throw new Error(`Agent DS 处理失败：${result.error}（请求 ${requestId}）`);
+        const outputs: Record<string, WorkflowValue> = {};
+        if (result.text !== undefined) outputs.text = agentResultValue(result.text);
+        if (result.images !== undefined && (!Array.isArray(result.images) || !result.images.length || result.images.some(path => typeof path !== "string" || !path.trim()))) throw new Error("Agent DS 返回图片格式无效");
+        if (result.images?.length) {
+          const assets = await api.agentDsWorkflowIngestImages(requestId);
+          if (halted()) return null;
+          if (assets.length !== result.images.length) throw new Error("Agent DS 图片未完整入库，请继续取回原请求");
+          outputs.image = { type: "image", assetIds: [...new Set(assets.map(asset => asset.id))] };
+        }
+        if (!Object.keys(outputs).length) throw new Error("Agent DS 未返回文字或图片");
+        return outputs;
       }
       // After a reload or failed delivery, Continue only checks the existing request.
       if (step.status === "waiting") {
@@ -456,8 +546,106 @@ export class CanvasWorkflowController {
     return null;
   }
 
+  private async localDsGenerate(runId: string, node: WorkflowNode, requestId: string, inputImages: string[], halted: () => boolean): Promise<boolean> {
+    const request = await api.agentDsWorkflowGenerationRequest(requestId);
+    if (halted()) return false;
+    if (!request) return true;
+    const step = this.run(runId).steps[node.id];
+    if (!step.localDsImageProvider) throw new Error("此旧 Agent 请求没有默认生图配置，请停止后重新运行卡片");
+    let call = step.localDsGenerations?.[request.id];
+    if (call && JSON.stringify(call.request) !== JSON.stringify(request)) throw new Error("Agent 生图请求使用相同 id 修改了参数");
+    if (!call) {
+      const allowed = new Set([...inputImages, ...Object.values(step.localDsGenerations ?? {}).flatMap(call => call.response?.images ?? [])]);
+      if (request.images.some(path => !allowed.has(path))) throw new Error("Agent 生图只能引用本卡片输入或本次已生成的图片");
+      const ids = await Promise.all(request.images.map(path => api.localAgentFindAssetId(path)));
+      if (ids.some(id => !id)) throw new Error("Agent 生图参考图片已失效");
+      const assets = await api.getAssetsByIds(ids as string[]);
+      const references = ids.map(id => assets.find(asset => asset.id === id));
+      if (references.some(asset => !asset?.store_path)) throw new Error("Agent 生图参考图片已失效");
+      if (halted()) return false;
+      call = { request, jobId: crypto.randomUUID(), turnKey: crypto.randomUUID() };
+      await this.step(runId, node.id, { localDsGenerations: { ...step.localDsGenerations, [request.id]: call }, detail: `Agent 正在使用默认生图引擎 ${step.localDsImageProvider}` });
+      // Persist identity before submission. Recovery only queries this job, never submits again.
+      try {
+        await api.codexCreateImage({
+          jobId: call.jobId, turnKey: call.turnKey, internalAgent: true,
+          prompt: request.prompt, promptRaw: request.prompt, referenceImages: request.images,
+          ratio: request.ratio ?? autoRatioFromReferences(references as NonNullable<typeof references[number]>[]), provider: step.localDsImageProvider,
+          projectId: this.projectId, threadId: this.run(runId).threadId,
+        });
+      } catch (error) {
+        call = { ...call, response: { error: String(error) } };
+      }
+    }
+    if (halted()) return false;
+    if (!call.response) {
+      const previous = await api.agentDsWorkflowGenerationJob(call.jobId, call.turnKey);
+      if (halted()) return false;
+      if (previous && ["failed", "cancelled"].includes(previous.status)) call = { ...call, response: { error: previous.error || "默认引擎生图失败" } };
+      else if (previous?.status === "done") {
+        const images = previous.images;
+        if (images.length) call = { ...call, response: { images } };
+      }
+    }
+    if (!call.response) {
+      await this.step(runId, node.id, { status: "waiting", error: "Agent 的原生图任务尚未完成，请稍后继续取回；不会重复提交" });
+      return false;
+    }
+    await this.step(runId, node.id, { localDsGenerations: { ...this.run(runId).steps[node.id].localDsGenerations, [request.id]: call } });
+    if (halted()) return false;
+    try {
+      await api.agentDsWorkflowGenerationResponse(requestId, request, call.response);
+    } catch (error) {
+      if (halted()) return false;
+      await this.step(runId, node.id, { status: "waiting", error: `生图结果回传未完成，请继续重试回传：${String(error)}` });
+      return false;
+    }
+    return !halted();
+  }
+
+  private async writeAgentResult(runId: string, node: WorkflowNode, value: WorkflowValue, hasWriters: boolean, halted: () => boolean) {
+    if (!node.resultNodeIds?.length && (hasWriters || !value.table)) return;
+    await this.withResource("canvas", async () => {
+      if (halted()) return;
+      const canvas = await api.projectCanvasGet(this.projectId);
+      const table = canvas.nodes.find(item => node.resultNodeIds?.includes(item.id) && item.kind === "note" && item.hiddenAt == null);
+      if (!table && (hasWriters || !value.table)) return;
+      const id = table?.id ?? `workflow-agent:${runId}:${node.id}`;
+      // Persist a stable destination before creating it; recovery can find the same node.
+      if (!table) await this.save({ ...this.document, nodes: this.document.nodes.map(item => item.id === node.id ? { ...item, resultNodeIds: [id] } : item) });
+      if (halted()) return;
+      const previous = table ? readCanvasNote(table) : null;
+      const data = value.table ? [value.table.columns, ...value.table.rows] : [[value.text ?? ""]];
+      const width = Math.max(data[0].length, previous?.cells[0]?.length ?? 0);
+      const height = Math.max(data.length, previous?.cells.length ?? 0);
+      const cells = Array.from({ length: height }, (_, r) => Array.from({ length: width }, (_, c) => ({
+        ...emptyCanvasCell(), ...previous?.cells[r]?.[c], id: previous?.cells[r]?.[c]?.id ?? crypto.randomUUID(),
+        content_type: "text" as const, text: data[r]?.[c] ?? "", image_refs: [], bold: !!value.table && r === 0,
+      })));
+      const payload = { ...previous, schema_version: 1, note_type: "text", member_ids: [], title: value.table?.title || "Agent 结果",
+        cells, text: cells.map(row => row.map(cell => cell.text).join("\t")).join("\n"),
+        column_widths: canvasGridWeights(previous?.column_widths, width), row_heights: canvasGridWeights(previous?.row_heights, height) };
+      const minimum = canvasTextMinSize(cells);
+      if (table) {
+        await api.projectCanvasNoteUpdate(table.id, JSON.stringify(payload));
+        if (table.width < minimum.width || table.height < minimum.height) await api.projectCanvasNodeUpdate(table.id, {
+          x: table.x, y: table.y, width: Math.max(table.width, minimum.width), height: Math.max(table.height, minimum.height), zIndex: table.zIndex, positionLocked: table.positionLocked,
+        });
+      } else {
+        const x = node.x + 420;
+        let y = node.y;
+        const obstacles = [...canvas.nodes.filter(item => item.hiddenAt == null), ...this.document.nodes.map(item => ({ ...item, width: 320, height: 400 }))];
+        while (obstacles.some(item => x < item.x + item.width + 24 && x + minimum.width + 24 > item.x && y < item.y + item.height + 24 && y + minimum.height + 24 > item.y)) y += minimum.height + 40;
+        await api.projectCanvasNodeCreate({ id, projectId: this.projectId, threadId: this.run(runId).threadId, kind: "note", assetId: null, role: null,
+          payloadJson: JSON.stringify(payload), x, y, ...minimum, zIndex: Math.max(0, ...canvas.nodes.map(item => item.zIndex)) + 1, positionLocked: true });
+      }
+      await emit("creative://changed", { projectId: this.projectId });
+    });
+  }
+
   async continue(runId = this.document.run?.id) {
     if (!runId || this.executing.has(runId) || this.stopping.has(runId) || !this.run(runId) || !workflowRunActive(this.run(runId))) return;
+    if (this.issue?.runId === runId) this.issue = null;
     this.executing.add(runId); this.stopped.delete(runId);
     let currentId = "";
     let drained!: () => void;
@@ -476,16 +664,29 @@ export class CanvasWorkflowController {
       const hasCells = Object.values(node.inputs).flat().some(input => input.canvasNodeId);
       const cellTexts = this.run(runId).cellTexts;
       const canvas = hasCells ? await api.projectCanvasGet(this.projectId) : null;
-      const values = workflowInputValues(this.document.nodes, generationInputNode(node), (nodeId, cellId) => {
+      const readCell = (nodeId: string, cellId: string) => {
         const frozenSource = this.document.nodes.some(node => node.textSource === nodeId && this.run(runId).order.includes(node.id));
         const producedThisRun = !frozenSource && workflowInputProducers(this.document.nodes, { canvasNodeId: nodeId, cellId }).some(id => this.run(runId).order.includes(id));
         const frozen = this.run(runId).cellValues?.[JSON.stringify([nodeId, cellId])] ?? cellTexts?.[JSON.stringify([nodeId, cellId])];
         if (cellTexts && !producedThisRun && frozen !== undefined) return frozen;
         const source = canvas?.nodes.find(candidate => candidate.id === nodeId && candidate.hiddenAt == null);
         return source ? canvasInputValue(source, cellId, canvas!.nodes) : undefined;
-      });
+      };
+      if (node.kind === "loop") {
+        const run = this.run(runId), loop = run.loop;
+        if (!loop || loop.nodeId !== id) throw new WorkflowNodeError("请从循环卡片启动完整流程", node);
+        const items = loop.items ?? (node.loopMode === "rows"
+          ? workflowLoopRows(node, this.document.nodes, canvas?.nodes ?? [])
+          : validateLoopItems(workflowInputValues(this.document.nodes, node, readCell).image.flatMap(value => value.assetIds ?? [])
+            .map(assetId => ({ text: "", assetIds: [assetId] })), node));
+        await this.saveRun({ ...run, loop: { ...loop, items }, steps: { ...run.steps, [id]: { status: "done", detail: `第 ${loop.index + 1} / ${items.length} 项` } } },
+          this.document.nodes.map(candidate => candidate.id === id ? { ...candidate, outputs: workflowLoopOutputs(items[loop.index]) } : candidate));
+        return;
+      }
+      const values = workflowInputValues(this.document.nodes, generationInputNode(node), readCell);
       const generated = node.kind === "generation" ? compileGenerationPrompt(node, values) : null;
-      const assetIds = generated?.assetIds ?? [...new Set([...(values.image ?? []), ...(values.text ?? [])].flatMap(value => value.assetIds ?? []))];
+      const agentInput = node.kind === "agent" ? compileAgentPrompt(node, values) : null;
+      const assetIds = generated?.assetIds ?? agentInput?.assetIds ?? [...new Set([...(values.image ?? []), ...(values.text ?? [])].flatMap(value => value.assetIds ?? []))];
       const assets = await api.getAssetsByIds(assetIds);
       if (assets.length !== assetIds.length || assets.some(asset => !asset.store_path || asset.duration)) throw new Error("输入图片已丢失或不是静态图片，请重新选择");
       const orderedAssets = assetIds.map(id => assets.find(asset => asset.id === id)!);
@@ -505,7 +706,8 @@ export class CanvasWorkflowController {
         const textValue = values.text?.[0];
         const value: WorkflowValue = textValue ?? { type: "image", assetIds };
         await this.step(runId, id, { status: "running", detail: textValue ? "写入文本单元格" : "写入图片单元格" });
-        await this.writeContentInput(node, value);
+        await this.writeContentInput(runId, node, value, halted);
+        if (halted()) return;
         await this.finish(runId, node, { [value.type]: value });
         await emit("creative://changed", { projectId: this.projectId });
       } else if (node.kind === "visual-profile") {
@@ -550,7 +752,8 @@ export class CanvasWorkflowController {
       } else if (node.kind === "instruction" && node.action === "describe") {
         if (step.status !== "pending") throw new Error("上次反推的结果未知。请检查该图反推记录，停止流程后显式重试。");
         const state = useStore.getState();
-        const cached = await Promise.all(assetIds.map(assetId => node.overwriteDescribe ? Promise.resolve([]) : existingWorkflowCaption(assetId)));
+        const instruction = workflowDescribeInstruction(node);
+        const cached = assetIds.map(assetId => node.overwriteDescribe ? [] : existingWorkflowCaption(node, assetId, instruction));
         if (this.stopped.has(runId)) return;
         const provider = state.defaultUnderstandProvider === "auto" ? understandProvider(state.cloudEntitlement) : state.defaultUnderstandProvider;
         if (!provider && cached.some(parts => !parts.length)) throw new Error("当前没有可用的反推引擎");
@@ -567,7 +770,7 @@ export class CanvasWorkflowController {
         const results = await Promise.allSettled(assetIds.map(async (assetId, index) => {
           try {
             if (cached[index].length) return cached[index];
-            const analysisId = await api.describeAsset(assetId, node.prompt.trim() || loadDescribePrompt(), provider!, jobs[index]!);
+            const analysisId = await api.describeAsset(assetId, instruction, provider!, jobs[index]!);
             const analysis = (await api.listAnalysesByAsset(assetId)).find(item => item.id === analysisId);
             const parts = analysis ? workflowCaptionSections(analysis.payload) : [];
             if (!parts?.length) throw new Error(`第 ${index + 1} 张图片反推未返回可用维度`);
@@ -585,6 +788,14 @@ export class CanvasWorkflowController {
         }));
         if (this.stopped.has(runId)) return;
         if (failed) throw firstError;
+        // Keep this card's successful batch independently of image history and transient outputs.
+        const describeCache = { instruction, results: assetIds.map((assetId, index) => {
+          const result = results[index];
+          if (result.status !== "fulfilled") throw result.reason;
+          return { assetId, sections: result.value };
+        }) };
+        await this.save({ ...this.document, nodes: this.document.nodes.map(candidate => candidate.id === id ? { ...candidate, describeCache } : candidate) });
+        if (halted()) return;
         for (const [index, assetId] of assetIds.entries()) {
           const result = results[index];
           if (result.status !== "fulfilled") throw result.reason;
@@ -606,16 +817,6 @@ export class CanvasWorkflowController {
             ...rows.map(row => [{ ...cell("@图片1", `${row.assetId}-asset`), content_type: "image", image_refs: [{ asset_id: row.assetId, token: "@图片1" }] }, cell(row.prompt, `${row.assetId}-prompt`)])];
           const canvas = await api.projectCanvasGet(this.projectId);
           const writers = this.document.nodes.filter(candidate => candidate.textTarget && candidate.inputs.text?.some(input => input.nodeId === id && input.portId === "text"));
-          // Explicit whole-card/cell bindings keep the text card's existing structure and cell identity.
-          for (const tableId of new Set(writers.map(writer => writer.textTarget!.nodeId))) {
-            const table = canvas.nodes.find(item => item.id === tableId && item.kind === "note" && item.hiddenAt == null);
-            if (!table) throw new Error("连接的文本卡片已删除，请重新连接");
-            const previous = readCanvasNote(table);
-            const targets = writers.filter(writer => writer.textTarget!.nodeId === tableId).map(writer => writer.textTarget!.cellId);
-            if (targets.some(target => !previous.cells.flat().some(cell => cell.id === target))) throw new Error("连接的文本单元格已删除，请重新连接");
-            const updatedCells = previous.cells.map(row => row.map(cell => targets.includes(cell.id ?? "") ? { ...cell, content_type: "text", text: promptText, image_refs: [] } : cell));
-            await api.projectCanvasNoteUpdate(tableId, JSON.stringify({ ...previous, cells: updatedCells, text: updatedCells.map(row => row.map(cell => cell.text).join("\t")).join("\n") }));
-          }
           const x = node.x + 420, width = 640, height = 40 + 100 * cells.length;
           let y = node.y;
           const obstacles = [...canvas.nodes.filter(item => item.hiddenAt == null && item.id !== tableId),
@@ -662,11 +863,6 @@ export class CanvasWorkflowController {
             if (halted()) return;
             const canvas = await api.projectCanvasGet(this.projectId);
             const writers = this.document.nodes.filter(candidate => candidate.textTarget?.image && candidate.inputs.image?.some(input => input.nodeId === id && input.portId === "image"));
-            // Fill explicit targets even for a single-card run, preserving all other cells.
-            for (const writer of writers) {
-              if (this.stopped.has(runId)) return;
-              await this.writeContentInputUnlocked(writer, { type: "image", assetIds: products });
-            }
             let resultId: string | undefined;
             if (!writers.length) {
               const previousTable = canvas.nodes.find(item => node.resultNodeIds?.includes(item.id) && item.kind === "note" && item.hiddenAt == null);
@@ -702,14 +898,14 @@ export class CanvasWorkflowController {
           await this.finish(runId, node, { image: { type: "image", assetIds: products } }, []);
         });
       } else if (node.kind === "agent") {
-        const { source, prompt: agentPrompt } = compileAgentPrompt(node, values);
-        if (!source.trim() || source.length > 16000) throw new WorkflowNodeError("Agent 原文必须为 1–16000 字，请检查上游文本输出", node);
-        if (!node.prompt.trim() || node.prompt.length > 4000) throw new WorkflowNodeError("Agent 修改要求必须为 1–4000 字", node);
-        let value: WorkflowValue;
+        const { source, prompt: agentPrompt } = agentInput!;
+        if (source.length > 16000) throw new WorkflowNodeError("Agent 引用文字不能超过 16000 字", node);
+        if (!node.prompt.trim() || node.prompt.length > 4000) throw new WorkflowNodeError("Agent 要求必须为 1–4000 字", node);
+        let outputs: Record<string, WorkflowValue>;
         if (step.localDsRequestId || (!step.agentRunId && import.meta.env.DEV && node.agentTransport !== "cloud")) {
-          const result = await this.localDsText(runId, node, step, agentPrompt, source, halted);
+          const result = await this.localDsResult(runId, node, step, agentPrompt, source, orderedAssets.map(asset => asset.store_path!), halted);
           if (!result) return;
-          value = result;
+          outputs = result;
         } else {
         let agentRunId = step.agentRunId;
         if (!agentRunId) {
@@ -743,12 +939,12 @@ export class CanvasWorkflowController {
         if (this.stopped.has(runId) || !result) return;
         const payload = result.snapshot.events.find(event => event.type === "text.result")?.display_payload;
         if (payload?.schemaVersion !== 1 || typeof payload.text !== "string" || !payload.text.trim() || payload.text.length > 16000) throw new Error("Cloud DSH 未返回有效的改写文本，请检查任务结果或服务版本");
-        value = { type: "text", text: payload.text };
+        outputs = { text: agentResultValue(payload.text) };
         }
         const writers = this.document.nodes.filter(item => item.textTarget && item.inputs.text?.some(input => input.nodeId === id && input.portId === "text"));
-        // A single-card run also updates explicitly connected content cells.
-        for (const writer of writers) await this.writeContentInput(writer, value);
-        await this.finish(runId, node, { text: value });
+        await this.writeAgentResult(runId, node, outputs.text ?? { type: "text", text: "" }, writers.length > 0, halted);
+        if (halted()) return;
+        await this.finish(runId, node, outputs);
         await emit("creative://changed", { projectId: this.projectId });
       } else if (node.kind === "generation") {
         let paths: string[] = [];
@@ -816,6 +1012,24 @@ export class CanvasWorkflowController {
       const dependencies = new Map(run.order.map(id => [id, Object.values(nodes.find(node => node.id === id)!.inputs).flat()
         .flatMap(input => workflowInputProducers(nodes, input)).filter(producer => run.order.includes(producer))]));
       while (!halted()) {
+        const current = this.run(runId), loop = current.loop;
+        if (loop?.items && loop.completed.length === loop.index
+          && loop.bodyIds.every(id => current.steps[id].status === "done" && !active.has(id))) {
+          const completed = [...loop.completed, {
+            outputs: Object.fromEntries(loop.bodyIds.map(id => [id, structuredClone(this.document.nodes.find(node => node.id === id)!.outputs)])),
+            steps: Object.fromEntries(loop.bodyIds.map(id => [id, structuredClone(current.steps[id])])),
+          }];
+          const next = loop.index + 1 < loop.items.length;
+          const index = next ? loop.index + 1 : loop.index;
+          const steps = { ...current.steps, [loop.nodeId]: { status: "done" as const, detail: next ? `第 ${index + 1} / ${loop.items.length} 项` : `已完成 ${completed.length} / ${loop.items.length} 项` } };
+          if (next) for (const id of loop.bodyIds) steps[id] = { status: "pending" };
+          // Persist the completed item and the next cursor together, before any new submission.
+          await this.saveRun({ ...current, loop: { ...loop, index, completed }, steps }, this.document.nodes.map(node =>
+            node.id === loop.nodeId ? { ...node, outputs: workflowLoopOutputs(loop.items![index]) }
+              : next && loop.bodyIds.includes(node.id) ? { ...node, outputs: {}, ...(node.kind === "generation" ? { activeSessionNodeId: null } : {}) } : node));
+          if (next) for (const id of loop.bodyIds) attempted.delete(id);
+          if (halted()) break;
+        }
         for (const id of run.order) {
           if (attempted.has(id) || this.run(runId).steps[id].status === "done"
             || !dependencies.get(id)!.every(producer => this.run(runId).steps[producer].status === "done")) continue;
@@ -848,10 +1062,11 @@ export class CanvasWorkflowController {
         for (const [id, reason] of failures) {
           const node = this.document.nodes.find(node => node.id === id);
           const diagnostic = node && workflowDiagnostic(reason, node, "execution", runId, run.order.indexOf(id) + 1);
-          steps[id] = { ...steps[id], status: "failed", error: String(reason), ...(diagnostic ? { diagnostic } : {}) };
+          steps[id] = { ...steps[id], status: "failed", error: String(reason), ...(run.loop ? { retrySafe: steps[id].status === "pending" || node?.kind === "text" || node?.kind === "loop" } : {}), ...(diagnostic ? { diagnostic } : {}) };
         }
         this.stopped.add(runId);
-        await this.saveRun({ ...run, status: "failed", steps }).catch(() => {});
+        const deliveryFailure = failures.size > 0 && [...failures.keys()].every(id => this.document.nodes.some(node => node.id === id && node.textTarget));
+        await this.saveRun({ ...run, status: run.loop || deliveryFailure ? "waiting" : "failed", steps }).catch(() => {});
       }
     } finally {
       await Promise.all(active.values());

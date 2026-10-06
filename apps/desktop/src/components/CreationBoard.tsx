@@ -1,3 +1,4 @@
+import { cloudVideoOptions } from "../lib/videoGeneration";
 import { beginOnboardingOperation } from "../lib/onboardingStore";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { DEFAULT_VIDEO_OPTIONS, VIDEO_RATIOS, videoInputError, videoProvider, type GenerationSettings } from "../lib/videoGeneration";
@@ -1079,7 +1080,7 @@ export function CreationBoard({
             </button>
             <div className="pointer-events-none absolute bottom-full left-0 z-10 mb-1.5 hidden w-60 rounded-lg bg-panel2 p-2 text-[11px] leading-4 text-muted ring-1 ring-edge group-hover:block group-focus-within:block">
               像跟 AI 输入 prompt 一样书写；<span className="text-accent">点瀑布流图片</span>，有维度数据时打开维度环，仅添加所选维度，不自动插入参考图；无维度数据时插入参考图。也可输入 <span className="text-accent">@图名</span> 插入参考图（空格/标点后自动识别）。<span className="text-accent">长按任意图片</span>四周会出现<span className="text-accent">维度环</span>，点环上扇区即可把该维度加入创作板（创作板未打开会自动打开）；无维度数据的图会提示先右键反推。
-              {isVideo && <p className="mt-2 text-[11px] leading-4 text-muted">{videoOptions.kind === "frames2video" ? "按编辑框中的参考顺序：第 1 张为首帧，第 2 张为尾帧。" : videoOptions.kind === "multimodal2video" ? "支持图片与视频参考；参考视频每段及总时长均须为 2–30 秒。" : ""}{generation.videoChannel === "cloud" ? "使用 Bowerbird 积分，按成功任务实际用量结算。" : "使用即梦 VIP 及即梦会员积分。"}提交后停止等待，远端任务仍可能完成并计费。</p>}
+              {isVideo && <p className="mt-2 text-[11px] leading-4 text-muted">{videoOptions.kind === "frames2video" ? "按编辑框中的参考顺序：第 1 张为首帧，第 2 张为尾帧。" : videoOptions.kind === "multimodal2video" ? `支持图片与视频参考；参考视频每段及总时长均须为 2–${videoOptions.model_version === "seedance2.5" ? 30 : 15} 秒。` : ""}{generation.videoChannel === "cloud" ? "使用 Bowerbird 积分，按成功任务实际用量结算。" : "使用即梦积分，模型权限以官方账号为准。"}提交后停止等待，远端任务仍可能完成并计费。</p>}
               {cloudAgentMode && (
                 <p className="mt-2 text-[10px] leading-4 text-muted">
                   隐私说明：本次文字和所选参考图会加密上传至 Bowerbird Cloud，仅用于规划与执行。输入和过程内容通常最长保留 24 小时，最终结果最长保留 7 天；取消会停止后续调用，已上传副本仍按上述期限清理。接受后的图片保存到本地素材库，其余素材和本地数据库不会上传。
@@ -1096,7 +1097,7 @@ export function CreationBoard({
               setGeneration({ ...generation, media, videoOptions, ratio: nextRatio });
               if (media === "video") { setCloudAgentMode(false); setAgentMode("off"); setAgentZMode(false); setAgentGMode(false); setAgentDsMode(false); }
             }}><option value="image">图片</option><option value="video">视频</option></select>
-          {isVideo && <VideoControls channel={generation.videoChannel} onChannelChange={(videoChannel) => setGeneration({ ...generation, videoChannel, videoOptions: videoChannel === "jimeng" && videoOptions.video_resolution === "1080p" ? { ...videoOptions, video_resolution: "720p" } : videoOptions })} options={videoOptions} onChange={(options) => setGeneration({ ...generation, media: "video", videoOptions: options, ratio })} ratio={ratio} onRatioChange={selectRatio} />}
+          {isVideo && <VideoControls channel={generation.videoChannel} onChannelChange={(videoChannel) => setGeneration({ ...generation, videoChannel, videoOptions: videoChannel === "cloud" ? cloudVideoOptions(videoOptions) : videoOptions })} options={videoOptions} onChange={(options) => setGeneration({ ...generation, media: "video", videoOptions: options, ratio })} ratio={ratio} onRatioChange={selectRatio} />}
           {/* Cloud Agent 仍接受显式比例；仅终端型 Agent 不走 Bowerbird 生图参数。
               flex：比例 / 生成选项两个选择器水平并排（外层缺 flex 时 block 根会竖着叠成
               两行，按钮挤在同一列）。 */}
