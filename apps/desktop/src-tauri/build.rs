@@ -129,5 +129,11 @@ fn main() {
         println!("cargo:rustc-env=BOWERBIRD_ENTITLEMENT_PUBKEY={pubkey}");
     }
 
-    tauri_build::build()
+    tauri_build::build();
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        // Native examples also use Tauri dialogs, which require Common Controls v6.
+        // tauri-build embeds its manifest in binaries, but not Cargo examples.
+        let resource = PathBuf::from(std::env::var_os("OUT_DIR").unwrap()).join("resource.lib");
+        println!("cargo:rustc-link-arg-examples={}", resource.display());
+    }
 }

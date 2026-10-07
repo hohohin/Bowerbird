@@ -2,6 +2,25 @@
 
 这里存放 Bowerbird 的 Windows 开发、构建与独立扩展加载工具。平台兼容行为已经并入项目主源码；脚本只把 canonical 项目复制到 `Windows/.work/`，不再用整文件 override 替换源码。`Windows/overrides/` 仅保留退役说明，不参与构建。
 
+## 2026-10-07 同步 Mac 源码
+
+`dev` 从 `f196d6c` 快进合入 `origin/mac@d537a66`。完整功能与平台边界见 [Mac → Windows 交接](../macOS/WINDOWS-SYNC-2026-10-07.md)，当前项目状态见 [PROJECT.md](../PROJECT.md)。本地既有模板封装改动已恢复并保持未提交；以下验证针对包含该增量的 Windows 工作区。共享源码版本为 26.9.2002，Windows 最近记录的已发布版本仍为 26.9.1803；本轮未打包、发布或部署云服务。
+
+- 工作流循环、稳定输入管道、主输入追加/单格覆盖、内容交付恢复、本机 Agent 图文/表格、默认生图 provider、截图/贴图、会话组图、官方视频模型/积分与静态封面已同步。SQLite 0031–0033 沿原迁移链，不重复编号；循环等字段继续由 JSON 保存，无新增 SQL。
+- Mac 原生标题栏、WKWebView、AVFoundation、debug 钥匙串辅助程序和签名 runner 保留平台条件；Windows 封面提取仍使用 FFmpeg，凭据隔离及 NSIS 安装清登录钩子保留。
+- Windows 原生 examples 链接 Tauri 已生成的 Common Controls v6 资源，解决截图隔离夹具启动时报 `0xc0000139`。视频 UI 测试使用独立 Vite 配置，避免已有开发服务端口冲突。
+- 验证通过：Rust 库 **457 passed / 10 ignored**、全部目标编译检查、前端逻辑 **153/153**、模板 **34 项**及 **21 组 Chromium 合成 IPC**（含封装）；canonical 与 `Windows/.work` TypeScript/Vite 构建、隐藏 WebView2 快捷键/贴图窗口、真实 FFmpeg 合成短视频入库及封面通过。视频 UI 首轮端口失败已修复并单独复跑通过；原生窗口关闭时有 WebView2 类注销 1412 日志，夹具断言通过且退出码为 0。
+- 追加主程序 debug 构建在替换 `target/debug/bowerbird-desktop.exe` 时因现有开发实例占用失败；未终止用户应用，也不将这次构建记为通过。需要退出该实例后才能覆盖这个输出路径；源码同步与上述隔离验证已完成。
+- 仍待验收：真实 F1/F3 屏幕与剪贴板操作、混合 DPI/多显示器、素材库升级副本及安装包、真实登录/付费任务恢复。当前隔离测试不操作用户库或模型，不等于这些项目已通过。证据在本机 `.tmp/mac-sync-20261007/`；同步前源码另有逐文件备份与保留的 stash。
+
+原生及媒体复核命令（使用临时设置/测试库，不初始化生产应用）：
+
+```powershell
+cargo check --locked --offline --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets
+cargo run --locked --offline --manifest-path apps/desktop/src-tauri/Cargo.toml --example screenshot_smoke
+cargo test --locked --offline --manifest-path apps/desktop/src-tauri/Cargo.toml --lib generated_video_ingest_probes_short_clip_and_real_poster -- --ignored
+```
+
 ## 已适配
 
 - 构建 Windows x64 桌面应用与 NSIS `.exe` 安装包。
@@ -19,7 +38,7 @@
 3. Rust MSVC 工具链：`rustup default stable-x86_64-pc-windows-msvc`。
 4. Visual Studio 2022 Build Tools，勾选“使用 C++ 的桌面开发”和 Windows 10/11 SDK。
 5. AI 功能可在应用内一键安装 codex CLI（自动下载独立版，无需 Node.js）并登录 ChatGPT；不安装时素材库仍可用，AI 按项目约定降级置灰。
-6. 视频预览另需 `ffmpeg` 与 `ffprobe`；应用会检查随附工具、PATH、Windows 注册表 Path 及常见 WinGet/Scoop/Chocolatey 安装位置。特殊安装可用 `BOWERBIRD_FFMPEG_BINARY` / `BOWERBIRD_FFPROBE_BINARY` 指定绝对路径。图片功能不依赖它们。
+6. Windows 视频封面提取仍需 `ffmpeg`；MP4/MOV/M4V 的尺寸/时长优先用内置解析器，失败及其他格式回退 `ffprobe`。应用会检查随附工具、PATH、Windows 注册表 Path 及常见 WinGet/Scoop/Chocolatey 安装位置。特殊安装可用 `BOWERBIRD_FFMPEG_BINARY` / `BOWERBIRD_FFPROBE_BINARY` 指定绝对路径；缺少封面工具不阻止原生解析成功的 MP4 入库。图片功能不依赖它们。
 
 ## 开发运行
 

@@ -3,7 +3,7 @@ import { mkdirSync } from "node:fs";
 import { createServer } from "vite";
 import { chromium } from "../../html-renderer/node_modules/playwright/index.mjs";
 
-const server = await createServer({ server: { host: "127.0.0.1", port: 0, hmr: false, watch: null } });
+const server = await createServer({ configFile: false, root: process.cwd(), server: { host: "127.0.0.1", port: 0, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: "chrome", headless: true });
 const page = await browser.newPage({ viewport: { width: 560, height: 400 } });
