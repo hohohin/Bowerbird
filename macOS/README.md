@@ -3,9 +3,9 @@
 本目录记录 Mac 上的本地开发、运行和未签名构建流程。Bowerbird 使用 canonical Tauri / React / Rust 源码，不维护 macOS override。构建架构以 `rustc -vV` 的 host 为准；Intel 为 `x86_64-apple-darwin`，Apple Silicon 原生工具链为 `aarch64-apple-darwin`。
 
 
-## 2026-10-08 Mac 26.10.801 发布准备
+## 2026-10-08 Mac 26.10.801 打包上传（官网待切换）
 
-暂隐技能、工作流助手与模板库入口，纳入当前工作区已验证的循环/数据包/Codex 登录增量。版本提升至 26.10.801，本轮沿现役官网只发布 Apple Silicon，复用旧 Mac updater 私钥与稳定本地签名身份。Rust 458/0/7、画板逻辑 133/133、TypeScript/Vite 与相关隔离 UI 通过。构建与上线证据统一记录于 [DESKTOP-UPDATES.md](../dev-doc/DESKTOP-UPDATES.md)。
+暂隐技能、工作流助手与模板库入口，纳入当前工作区已验证的循环/数据包/Codex 登录增量。版本提升至 26.10.801，本轮沿现役官网只发布 Apple Silicon，复用旧 Mac updater 私钥与稳定本地签名身份。Rust 458/0/7、画板逻辑 133/133、TypeScript/Vite 与相关隔离 UI 通过。源码先存档 `08ada63`，再以 `COS_SKIP_UPLOAD=1 COS_PUBLIC_BASE=<现役 R2 域名>` 调用 `release.sh`；使用本机现有 pnpm 11.10.0（临时 PATH shim），避免 registry 自动下载。签名 .app/更新包与固定拖动 DMG 构建完成、上传 R2，公网完整包/DMG 哈希与清单/签名一致性通过；官网清单/双首页尚缺 SSH 部署凭据，仍为 26.9.2002。构建与发布进度统一记录于 [DESKTOP-UPDATES.md](../dev-doc/DESKTOP-UPDATES.md)。
 
 ## 2026-10-07 源码存档与 Windows 同步
 
