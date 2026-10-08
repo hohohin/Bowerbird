@@ -25,8 +25,9 @@ export interface WorkflowNode {
   promptReferences?: WorkflowPromptReference[];
   overwriteDescribe?: boolean;
   describeCache?: { instruction: string; results: { assetId: string; sections: { title: string; body: string }[] }[] };
-  agentTransport?: "local-ds" | "cloud";
+  agentTransport?: "local-ds" | "codex-cli" | "cloud";
   loopMode?: "images" | "rows";
+  loopStartItem?: number;
   planning?: import("./workflowPlanner").WorkflowPlanningState;
   templateInstance?: import("./workflowTemplates").TemplateInstance;
   inputs: Record<string, WorkflowInput[]>;
@@ -47,6 +48,7 @@ export interface WorkflowStep {
   contentTarget?: WorkflowNode["textTarget"];
   retrySafe?: boolean;
   localDsRequestId?: string;
+  localAgentTransport?: "local-ds" | "codex-cli";
   localDsImageProvider?: string;
   localDsGenerations?: Record<string, { request: WorkflowAgentGenerationRequest; jobId: string; turnKey: string; response?: WorkflowAgentGenerationResponse }>;
   diagnostic?: import("./workflowDiagnostics").WorkflowDiagnostic;
@@ -72,6 +74,7 @@ export interface WorkflowRun {
 export interface WorkflowLoopItem { text: string; assetIds: string[] }
 export interface WorkflowLoop {
   nodeId: string; bodyIds: string[]; index: number;
+  startIndex?: number;
   items?: WorkflowLoopItem[];
   completed: { outputs: Record<string, Record<string, WorkflowValue>>; steps: Record<string, WorkflowStep> }[];
 }

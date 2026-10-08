@@ -14,12 +14,19 @@ export function workflowLoopScope(nodes: WorkflowNode[], order: string[]): Workf
   body.delete(owner.id);
   if (!body.size) throw new WorkflowNodeError("请把循环的当前项连接到需要逐项执行的下游卡片", owner);
   if ([...body].some(id => !order.includes(id))) throw new WorkflowNodeError("请从循环卡片或它的上游触发器启动完整循环", owner);
-  return { nodeId: owner.id, bodyIds: order.filter(id => body.has(id)), index: 0, completed: [] };
+  const startItem = owner.loopStartItem ?? 1;
+  if (!Number.isInteger(startItem) || startItem < 1 || startItem > 100) throw new WorkflowNodeError("循环起始项须为 1–100 的整数", owner);
+  return { nodeId: owner.id, bodyIds: order.filter(id => body.has(id)), startIndex: startItem - 1, index: startItem - 1, completed: [] };
 }
 
 export function validateLoopItems(items: WorkflowLoopItem[], node: WorkflowNode) {
   if (!items.length) throw new WorkflowNodeError("循环输入为空，请先添加待处理内容", node);
   if (items.length > 100) throw new WorkflowNodeError("一次循环最多处理 100 项，请减少输入", node);
+  return items;
+}
+
+export function validateLoopStart(items: WorkflowLoopItem[], index: number, node: WorkflowNode) {
+  if (index >= items.length) throw new WorkflowNodeError(`循环只有 ${items.length} 项，不能从第 ${index + 1} 项开始`, node);
   return items;
 }
 

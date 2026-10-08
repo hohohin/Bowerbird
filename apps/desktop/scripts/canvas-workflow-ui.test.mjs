@@ -18,6 +18,9 @@ try {
   await page.evaluate(()=>{const canvas=window.snapshot();canvas.nodes=canvas.nodes.filter(node=>node.id!=='far');sessionStorage.setItem('reference-fixture',JSON.stringify(canvas));});
   await page.reload(); await page.locator('[data-canvas-node-id="old"]').waitFor();
   console.log('Canvas loaded');
+  for (const name of ['新增技能卡片', '新增工作流助手', '工作流模板库']) {
+    assert.equal(await page.getByRole('button', { name, exact: true }).count(), 0);
+  }
   await page.getByRole('button',{name:'新增指令卡片',exact:true}).click();
   const instruction=page.locator('.workflow-card.is-instruction'); await instruction.waitFor();
   await instruction.getByLabel('指令功能').selectOption('reuse');
@@ -40,6 +43,11 @@ try {
   await page.getByRole('button',{name:'新增生成卡片',exact:true}).click();
   await page.getByRole('button',{name:'适应内容',exact:true}).click();
   const generation=page.locator('.workflow-card.is-generation'); await generation.waitFor();
+  await generation.locator('header').click({button:'right'});
+  assert.equal(await page.getByRole('menuitem',{name:'存为模板',exact:true}).count(),0);
+  assert.equal(await page.getByRole('menuitem',{name:'导出工作流数据包',exact:true}).count(),1);
+  assert.equal(await page.getByRole('menuitem',{name:'导入工作流数据包',exact:true}).count(),1);
+  await page.keyboard.press('Escape');
   assert.equal(await generation.getByRole('button',{name:'输出：会话',exact:true}).count(),0);
   assert.equal(await generation.getByRole('button',{name:'输出：图片',exact:true}).count(),1);
   await generation.getByLabel('卡片指令',{exact:true}).fill('使用柔和自然光');
@@ -60,7 +68,13 @@ try {
   await page.reload(); await page.locator('.workflow-card.is-generation').waitFor();
   assert.equal(await generation.getByLabel('卡片指令',{exact:true}).innerText(),'使用柔和自然光');
   assert.equal((await snapshot()).nodes[1].inputs.text.length,1);
-  await page.getByRole('button',{name:'新增技能卡片',exact:true}).click();
+  // Existing skill cards still load after their creation entry is hidden.
+  await page.evaluate(async () => {
+    const {canvasWorkflowController}=await import('/src/lib/canvasWorkflowRuntime.ts');
+    const {newWorkflowNode}=await import('/src/lib/canvasWorkflow.ts');
+    const controller=canvasWorkflowController('p');
+    await controller.edit([...controller.document.nodes,newWorkflowNode('skill',900,100,'codex')]);
+  });
   await page.locator('.workflow-card.is-skill').getByLabel('选择技能').selectOption('html-layout');
   assert.equal(await page.getByRole('button',{name:'输出：排版截图',exact:true}).count(),1);
   await page.getByRole('button',{name:'适应内容',exact:true}).click();

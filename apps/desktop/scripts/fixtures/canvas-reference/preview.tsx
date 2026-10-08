@@ -112,10 +112,11 @@ w.__TAURI_INTERNALS__ = {
       if (!library.some((item: any) => item.id === args.id && item.revision === args.expectedRevision)) throw 'template revision conflict';
       sessionStorage.setItem('workflow-template-library', JSON.stringify(library.filter((item: any) => item.id !== args.id))); return;
     }
-    if (command === "plugin:dialog|save" && String(args.options?.defaultPath ?? '').endsWith('.bbworkflow.json')) return 'isolated-share.bbworkflow.json';
+    if (command === "plugin:dialog|save" && String(args.options?.defaultPath ?? '').endsWith('.bbworkflow.json')) return w.cancelTemplateExport ? null : 'isolated-share.bbworkflow.json';
     if (command === "workflow_template_export") {
+      if (w.failTemplateExport) throw '模拟数据包导出失败';
       const library = JSON.parse(sessionStorage.getItem('workflow-template-library') || '[]');
-      sessionStorage.setItem('workflow-template-export', JSON.stringify(library.find((item: any) => item.id === args.id))); return;
+      sessionStorage.setItem('workflow-template-export', JSON.stringify(args.document ?? library.find((item: any) => item.id === args.id))); return;
     }
     if (command === "canvas_workflow_save") {
       if (w.failWorkflowSave) throw "模拟工作流保存失败";

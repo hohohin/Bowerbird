@@ -103,11 +103,23 @@ pub fn workflow_template_delete(db: State<'_, Arc<Database>>, id: String, expect
     if count != 1 { return Err(AppError::Other("模板已被修改或移除，请刷新模板库".into())); } Ok(())
 }
 #[tauri::command]
-pub fn workflow_template_export(db: State<'_, Arc<Database>>, id: String, path: String) -> AppResult<()> {
+pub fn workflow_template_export(db: State<'_, Arc<Database>>, id: Option<String>, document: Option<Value>, path: String) -> AppResult<()> {
+    let document = match (id, document) {
+        (Some(id), None) => {
+            let raw: String = db.conn.lock().unwrap().query_row("SELECT document_json FROM workflow_templates WHERE id=?1", [id], |r| r.get(0))?;
+            serde_json::from_str(&raw)?
+        }
+        (None, Some(document)) => document,
+        _ => return Err(invalid()),
+    };
+    export_document(&document, &path)
+}
+fn export_document(document: &Value, path: &str) -> AppResult<()> {
     if !path.to_ascii_lowercase().ends_with(".json") { return Err(AppError::Other("请选择 .json 流程文件".into())); }
-    let raw: String = db.conn.lock().unwrap().query_row("SELECT document_json FROM workflow_templates WHERE id=?1", [id], |r| r.get(0))?;
-    let document: Value = serde_json::from_str(&raw)?; validate(&document)?;
-    std::fs::write(path, serde_json::to_vec_pretty(&document)?)?; Ok(())
+    validate(document)?;
+    let bytes = serde_json::to_vec_pretty(document)?;
+    if bytes.len() > 32_000_000 { return Err(AppError::Other("流程数据包超过 32 MB，请减少携带的素材".into())); }
+    std::fs::write(path, bytes)?; Ok(())
 }
 
 #[cfg(test)]
@@ -126,6 +138,23 @@ mod tests {
             let mut bad = original.clone(); bad["plan"]["nodes"][1][field] = json!("private"); assert!(validate(&bad).is_err());
         }
         let mut bad = original; bad["inputs"] = json!([{"id":"source1","label":"素材","type":"image","assetId":"private"}]); assert!(validate(&bad).is_err());
+    }
+    #[test]
+    fn selection_exports_without_saving_a_library_template() {
+        let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();
+        let dir = std::env::temp_dir().join(format!("bowerbird-workflow-export-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("分享工作流.bbworkflow.json");
+        let document = template();
+        export_document(&document, path.to_str().unwrap()).unwrap();
+        let imported: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(imported, document);
+        assert!(db.workflow_templates_list().unwrap().is_empty());
+        assert!(export_document(&document, dir.join("wrong.txt").to_str().unwrap()).is_err());
+        let mut bad = document; bad["provider"] = json!("private");
+        assert!(export_document(&bad, path.to_str().unwrap()).is_err());
+        assert_eq!(serde_json::from_slice::<Value>(&std::fs::read(path).unwrap()).unwrap(), imported);
+        std::fs::remove_dir_all(dir).unwrap();
     }
     #[test]
     fn carried_content_round_trips_without_source_identities() {

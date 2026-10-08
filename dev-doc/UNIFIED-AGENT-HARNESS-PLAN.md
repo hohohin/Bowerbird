@@ -11,6 +11,10 @@
 
 ---
 
+## 2026-10-08 本机 Agent 卡片新增 Codex CLI 适配（dev-only）
+
+用户明确要求为 Agent 卡片增加 Codex CLI 途径。卡片直接选择 Codex 或原 DSH harness，复用既有本机任务/输出及生图文件协议，不让 DSH 调 Codex 做同层规划，不改变云端统一 Agent。Codex 复用应用私有 CLI 认证，普通卡片保持独立 session，循环体内各项改用请求独立 session 以避免历史累积；生图结果由桌面二进制的只读等待命令返回，沿既有 provider 桥，不增加模型 Runner。执行在请求独立目录中；提交、恢复、取消和结果交付由桌面负责。产品约定以 PROJECT.md 为准，实现与隔离验收见 [工作流文档](CANVAS-WORKFLOW.md)。原工作流助手仍走 DSH，Cloud 保持现有开放策略。
+
 ## 2026-09-22 本机 Agent DS 改为投递 DSH 队列 + 自动送达活会话（dev-only）
 
 > **2026-09-24 认证补充：** 本机新版 DSH 已要求 Cookie，以下“无鉴权”描述仅适用于 9 月 22 日历史版本。桌面通过 `.agent-z/dsh-web-auth-url.txt` 中的同源 loopback 启动链接交换 Cookie；登录凭据不入队列、不走代理、不跟随重定向。配置与只读诊断见 [工作流文档](CANVAS-WORKFLOW.md)。

@@ -1,6 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
+    if let Some(code) = bowerbird_desktop_lib::agent_generation_wait_worker() {
+        std::process::exit(code);
+    }
     if let Some(code) = bowerbird_desktop_lib::video_thumbnail_worker() {
         std::process::exit(code);
     }

@@ -24,18 +24,23 @@ fn validate_loop(run: &Value, nodes: &[Value], assets: &mut HashSet<String>) -> 
         if key == owner || !order.contains(id) || !ids.insert(key) { return Err(invalid()); }
     }
     let index = state["index"].as_u64().ok_or_else(invalid)? as usize;
+    let start_index = match state.get("startIndex") {
+        Some(value) => value.as_u64().filter(|index| *index < 100).ok_or_else(invalid)? as usize,
+        None => 0,
+    };
     let completed = state["completed"].as_array().ok_or_else(invalid)?;
     if let Some(items) = state.get("items") {
         let items = items.as_array().filter(|items| !items.is_empty() && items.len() <= 100).ok_or_else(invalid)?;
-        if index >= items.len() || !(completed.len() == index || completed.len() == items.len() && index + 1 == items.len()) { return Err(invalid()); }
-        if run["status"] == "done" && completed.len() != items.len() { return Err(invalid()); }
+        let processed = start_index + completed.len();
+        if start_index >= items.len() || index >= items.len() || !(processed == index || processed == items.len() && index + 1 == items.len()) { return Err(invalid()); }
+        if run["status"] == "done" && processed != items.len() { return Err(invalid()); }
         for item in items {
             if !item["text"].is_string() { return Err(invalid()); }
             for asset in item["assetIds"].as_array().ok_or_else(invalid)? {
                 assets.insert(asset.as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?.to_owned());
             }
         }
-    } else if index != 0 || !completed.is_empty() || run["status"] == "done" { return Err(invalid()); }
+    } else if index != start_index || !completed.is_empty() || run["status"] == "done" { return Err(invalid()); }
     for item in completed {
         let outputs = item["outputs"].as_object().ok_or_else(invalid)?;
         let steps = item["steps"].as_object().ok_or_else(invalid)?;
@@ -77,6 +82,7 @@ fn validate(document: &Value) -> AppResult<HashSet<String>> {
         if node["kind"] == "trigger" && !inputs.is_empty() { return Err(invalid()); }
         if node["kind"] == "loop" {
             if node.get("loopMode").is_some_and(|mode| !matches!(mode.as_str(), Some("images" | "rows"))) { return Err(invalid()); }
+            if node.get("loopStartItem").is_some_and(|value| value.as_u64().is_none_or(|item| !(1..=100).contains(&item))) { return Err(invalid()); }
             let port = if node["loopMode"] == "rows" { "text" } else { "image" };
             if inputs.keys().any(|key| key != port && key != "signal") { return Err(invalid()); }
         }
@@ -269,6 +275,27 @@ mod tests {
         doc["run"] = json!({"id":"r","threadId":"t","status":"waiting","order":["loop","draw"],"steps":{},"loop":{"nodeId":"loop","bodyIds":["draw"],"index":0,"completed":[]}});
         assert!(validate(&doc).is_ok());
         doc["run"]["loop"]["index"] = json!(1); assert!(validate(&doc).is_err());
+    }
+    #[test]
+    fn loop_selected_start_and_offset_completion_are_validated() {
+        let mut owner = node("loop", json!({"image":[{"assetId":"a"}]})); owner["kind"] = json!("loop");
+        owner["loopStartItem"] = json!(2);
+        let run = json!({"id":"r","threadId":"t","status":"waiting","order":["loop","draw"],"steps":{},
+            "loop":{"nodeId":"loop","bodyIds":["draw"],"startIndex":1,"index":1,"completed":[]}});
+        let mut doc = json!({"schema_version":1,"nodes":[owner,node("draw",json!({"image":[{"nodeId":"loop","portId":"image"}]}))],"run":run});
+        assert!(validate(&doc).is_ok());
+        for invalid_item in [json!(0), json!(101), json!(1.5), json!("2"), Value::Null] {
+            doc["nodes"][0]["loopStartItem"] = invalid_item; assert!(validate(&doc).is_err());
+        }
+        doc["nodes"][0]["loopStartItem"] = json!(2);
+        doc["run"]["loop"]["items"] = json!([{"text":"甲","assetIds":["a"]},{"text":"乙","assetIds":["b"]}]);
+        assert!(validate(&doc).is_ok());
+        doc["run"]["status"] = json!("done"); assert!(validate(&doc).is_err());
+        doc["run"]["loop"]["completed"] = json!([{"outputs":{"draw":{"image":{"type":"image","assetIds":["result"]}}},"steps":{"draw":{"status":"done"}}}]);
+        let assets = validate(&doc).unwrap(); assert!(assets.contains("a") && assets.contains("b") && assets.contains("result"));
+        for invalid_start in [json!(0), json!(2), json!(100), json!(-1), json!(0.5)] {
+            doc["run"]["loop"]["startIndex"] = invalid_start; assert!(validate(&doc).is_err());
+        }
     }
     #[test]
     fn agent_table_and_owned_cells_survive_storage() {

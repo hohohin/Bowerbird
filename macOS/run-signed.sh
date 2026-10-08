@@ -38,6 +38,37 @@ if [ "$(basename "$BINARY")" = "bowerbird-desktop" ]; then
     printf '%s' "$STAMP" > "$HELPER.stamp"
     trap - EXIT
   fi
+
+  # A bare `target/debug/bowerbird-desktop` cannot receive browser URL opens.
+  # Launch Services otherwise starts /Applications/Bowerbird.app; that process
+  # exits through single-instance before macOS delivers its Opened event.
+  # Keep Cargo's exec/PID/arguments, but execute a real bundle with the same ID.
+  BUILD_DIR="$(cd "$(dirname "$BINARY")" && pwd)"
+  MAC_DIR="$(cd "$(dirname "$0")" && pwd)"
+  BUNDLE="$BUILD_DIR/Bowerbird Dev.app"
+  rm -rf "$BUNDLE"
+  mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
+  cp -p "$BINARY" "$BUNDLE/Contents/MacOS/bowerbird-desktop"
+  cp -p "$HELPER" "$BUNDLE/Contents/MacOS/bowerbird-dev-keychain"
+  cp "$MAC_DIR/dev-Info.plist" "$BUNDLE/Contents/Info.plist"
+  VERSION=$(/usr/bin/plutil -extract version raw "$MAC_DIR/../apps/desktop/src-tauri/tauri.conf.json")
+  /usr/bin/plutil -replace CFBundleShortVersionString -string "$VERSION" "$BUNDLE/Contents/Info.plist"
+  /usr/bin/plutil -replace CFBundleVersion -string "$VERSION" "$BUNDLE/Contents/Info.plist"
+  # Preserve the resource_dir contract of the bare Cargo executable.
+  for RESOURCE in extension samples onboarding-v0917; do
+    if [ -d "$BUILD_DIR/$RESOURCE" ]; then
+      cp -R "$BUILD_DIR/$RESOURCE" "$BUNDLE/Contents/Resources/$RESOURCE"
+    fi
+  done
+  cp "$MAC_DIR/../apps/desktop/src-tauri/icons/icon.icns" "$BUNDLE/Contents/Resources/icon.icns"
+  /usr/bin/codesign --force --sign "$IDENTITY" \
+    --identifier com.bowerbird.desktop --timestamp=none "$BUNDLE"
+  /usr/bin/codesign --verify --strict "$BUNDLE"
+  # Native fixture tests disable registration so they cannot hijack real login.
+  if [ "${BOWERBIRD_DEV_REGISTER_URLS:-1}" != 0 ]; then
+    /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$BUNDLE"
+  fi
+  BINARY="$BUNDLE/Contents/MacOS/bowerbird-desktop"
 fi
 
 exec "$BINARY" "$@"

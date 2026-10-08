@@ -15,6 +15,10 @@ try {
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.some(node => node.kind === 'loop' && node.loopMode === 'rows'));
   await page.reload(); await card.waitFor();
   assert.equal(await card.getByRole('combobox', { name: '循环方式' }).inputValue(), 'rows');
+  await card.getByRole('spinbutton', { name: '循环起始项' }).fill('2');
+  await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.some(node => node.kind === 'loop' && node.loopStartItem === 2));
+  await page.reload(); await card.waitFor();
+  assert.equal(await card.getByRole('spinbutton', { name: '循环起始项' }).inputValue(), '2');
   assert.equal(await card.locator('textarea').count(), 0);
   await page.evaluate(async () => { const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts'); const c = canvasWorkflowController('p'); await c.edit(c.document.nodes.map(node => ({ ...node, x: node.x - 180, y: node.y - 600 }))); });
   await page.screenshot({ path: '.tmp/workflow/loop-card.png' });
@@ -40,7 +44,7 @@ try {
       const name = args[0].split(' ')[0];
       check(persisted.steps[name].jobId === identity.jobId, 'identity saved before generation');
       check(persisted.loop.items.length === 2, 'input snapshot persisted before generation');
-      check(persisted.loop.completed.length === persisted.loop.index, 'previous item durable before submit');
+      check((persisted.loop.startIndex ?? 0) + persisted.loop.completed.length === persisted.loop.index, 'previous item durable before submit');
       const submission = { name, asset: args[1][0].id, identity }; submissions.push(submission);
       await new Promise(resolve => { submission.release = resolve; });
       useStore.setState(state => ({ genJobs: { ...state.genJobs, [identity.jobId]: { turns: [{ turnKey: identity.turnKey, images: [submission.asset + '.png'] }] } } }));
@@ -64,6 +68,44 @@ try {
     check(c.document.run.loop.completed[0].outputs.A.image.assetIds[0] === 'a' && c.document.run.loop.completed[1].outputs.A.image.assetIds[0] === 'b', 'separate results retained');
     await c.continue(); check(submissions.length === 6, 'completed loop never repeats');
     const completedExample = structuredClone(c.document);
+    await create('loop-offset', [{ ...loop(), loopStartItem: 2 }, gen('A')]);
+    running = c.start('loop');
+    await until(() => submissions.length === 1, 'selected item starts');
+    check(submissions[0].asset === 'b' && c.document.run.loop.index === 1, 'start at second image, not first');
+    submissions[0].release(); await running;
+    check(c.document.run.status === 'done' && c.document.run.loop.startIndex === 1 && c.document.run.loop.completed.length === 1, 'offset loop finishes without fake completed items');
+    const offsetExample = structuredClone(c.document);
+    c = new CanvasWorkflowController('loop-offset'); await c.load(); await c.continue();
+    check(submissions.length === 1 && c.document.run.status === 'done', 'completed offset reload never replays');
+    for (const startItem of [0, 1.5, 101, 3]) {
+      await create(`loop-invalid-${startItem}`, [{ ...loop(), loopStartItem: startItem }, gen('A')]);
+      let rejected = false; try { await c.start('loop'); } catch { rejected = true; }
+      check((rejected || c.document.run?.status === 'waiting') && !submissions.length, 'invalid/overrun start never submits');
+    }
+    await create('loop-restart-stopped', [loop(), gen('A')]); running = c.start('loop');
+    await until(() => submissions.length === 1, 'restart first item'); submissions[0].release();
+    await until(() => submissions.length === 2, 'restart interrupted item');
+    const cancelledIdentity = submissions[1].identity.jobId;
+    let stopRestart = c.stop(); await until(() => cancelled.length === 1, 'restart cancellation'); submissions[1].release();
+    await Promise.all([running, stopRestart]);
+    const stoppedExample = structuredClone(c.document);
+    c = new CanvasWorkflowController('loop-restart-stopped'); await c.load();
+    await c.edit(c.document.nodes.map(node => node.id === 'loop' ? { ...node, inputs: { image: [{ assetId: 'b' }, { assetId: 'a' }] } } : node));
+    running = c.restartLoop(c.document.run.id);
+    await until(() => submissions.length === 3, 'stopped loop restarts current item');
+    check(submissions[2].asset === 'b' && submissions[2].identity.jobId !== cancelledIdentity, 'restart frozen interrupted item with fresh identity');
+    check(c.document.run.loop.completed.length === 1 && c.document.run.loop.completed[0].outputs.A.image.assetIds[0] === 'a', 'previous completed output retained');
+    submissions[2].release(); await running;
+    check(c.document.run.status === 'done' && submissions.length === 3, 'restart never repeats first item');
+    await create('loop-restart-conflict', stoppedExample.nodes);
+    const blocker = { ...structuredClone(stoppedExample.run), id: 'blocking-run', status: 'waiting' };
+    await c.save({ ...stoppedExample, runs: [stoppedExample.run, blocker], run: blocker });
+    let conflictRejected = false; try { await c.restartLoop(stoppedExample.run.id); } catch { conflictRejected = true; }
+    check(conflictRejected && !submissions.length, 'stopped restart cannot steal another active run locks');
+    await create('loop-restart-rewired', stoppedExample.nodes);
+    await c.save(stoppedExample); await c.edit([...c.document.nodes, gen('added-branch')]);
+    let wiringRejected = false; try { await c.restartLoop(stoppedExample.run.id); } catch { wiringRejected = true; }
+    check(wiringRejected && !submissions.length, 'changed execution wiring requires a fresh loop');
     await create('loop-recover', [loop(), gen('A')]); running = c.start('loop');
     await until(() => submissions.length === 1, 'recovery item one'); submissions[0].release();
     await until(() => submissions.length === 2, 'recovery item two');
@@ -96,6 +138,12 @@ try {
     c = new CanvasWorkflowController('loop-rows'); await c.load(); failSecond = false; await c.retryLoop(c.document.run.id);
     check(c.document.run.status === 'done' && requests.length === 3 && savedInputs[2]['引用文本 1'] === '产品乙', 'retry frozen failed row only');
     check(c.document.run.loop.completed[0].outputs.agent.text.text.includes('产品甲'), 'first result retained');
+    await api.projectCanvasNoteUpdate('loop-table', table.payloadJson);
+    failSecond = true; const beforeOffsetRetry = requests.length;
+    await create('loop-row-offset-retry', [{ ...rows, loopStartItem: 2 }, agent]); await c.start('loop');
+    check(c.document.run.status === 'waiting' && c.document.run.loop.index === 1 && !c.document.run.loop.completed.length, 'selected failed row pauses with offset');
+    failSecond = false; c = new CanvasWorkflowController('loop-row-offset-retry'); await c.load(); await c.retryLoop(c.document.run.id);
+    check(c.document.run.status === 'done' && c.document.run.loop.completed.length === 1 && requests.length === beforeOffsetRetry + 2, 'offset retry reload never runs skipped row');
     // A produced table is resolved once, after its producer; loop iterations do not replay it.
     let sourceCalls = 0, bodyCalls = 0;
     api.agentDsWorkflowStart = async (requestId, instruction, source) => {
@@ -110,6 +158,9 @@ try {
     await create('loop-produced-rows', [sourceAgent, producedRows, textAgent]); await c.start('source');
     check(c.document.run.status === 'done' && sourceCalls === 1 && bodyCalls === 2, 'upstream runs once, body repeats for each produced row');
     check(c.document.run.loop.items[1].text === '产品：乙', 'structured table preserves column labels');
+    sourceCalls = 0; bodyCalls = 0;
+    await create('loop-produced-offset', [sourceAgent, { ...producedRows, loopStartItem: 2 }, textAgent]); await c.start('source');
+    check(c.document.run.status === 'done' && sourceCalls === 1 && bodyCalls === 1 && c.document.run.loop.completed.length === 1, 'trigger/upstream start respects selected row');
     // Human confirmation halts advancement to the next item.
     let confirmed = false;
     api.visualProfileGet = async () => ({ id: 'profile', status: confirmed ? 'confirmed' : 'draft', version: 1, summary: '规范' });
@@ -132,10 +183,26 @@ try {
     check(copied.workflow[1].inputs.image[0].nodeId === copied.workflow[0].id && copied.workflow[0].id !== 'loop', 'copy remaps loop wiring');
     const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
     const host = canvasWorkflowController('p'), position = host.document.nodes[0];
-    await host.save({ ...completedExample, nodes: completedExample.nodes.map((node, index) => ({ ...node, x: position.x + index * 400, y: position.y })) });
-    return 'loop: UI/reload, sequential items, parallel branches, task identities, separate results, stop, recovery, paired rows, failed-row retry, frozen inputs, invalid/nested rejection and copy passed';
+    await host.save({ ...offsetExample, nodes: offsetExample.nodes.map((node, index) => ({ ...node, x: position.x + index * 400, y: position.y })) });
+    window.loopCompletedExample = completedExample; window.loopStoppedExample = stoppedExample; window.loopResultPosition = position;
+    return 'loop: selected start/reload, offset numbering, invalid ranges, stopped restart with frozen input, sequential items, parallel branches, recovery, failed-row retry and produced-table offsets passed';
   }));
   await page.locator('.workflow-loop-results > summary').click();
+  assert.equal(await page.locator('.workflow-loop-results > details > summary').first().textContent(), '第 2 项');
+  assert.match(await page.locator('.workflow-loop [role="status"]').textContent(), /已完成 1 \/ 1 项 · 从第 2 项起/);
+  await page.evaluate(async () => {
+    const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+    const example = window.loopStoppedExample, position = window.loopResultPosition;
+    await canvasWorkflowController('p').save({ ...example, nodes: example.nodes.map((node, index) => ({ ...node, x: position.x + index * 400, y: position.y })) });
+  });
+  await page.getByRole('button', { name: '从中断处开始 · 第 2 项', exact: true }).waitFor();
+  await page.screenshot({ path: '.tmp/workflow/loop-resume.png' });
+  await page.evaluate(async () => {
+    const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+    const example = window.loopCompletedExample, position = window.loopResultPosition;
+    await canvasWorkflowController('p').save({ ...example, nodes: example.nodes.map((node, index) => ({ ...node, x: position.x + index * 400, y: position.y })) });
+  });
+  if (await page.locator('.workflow-loop-results').getAttribute('open') === null) await page.locator('.workflow-loop-results > summary').click();
   await page.locator('.workflow-loop-results > details > summary').first().click();
   await page.locator('.workflow-loop-results img').first().waitFor();
   assert.equal(await page.locator('.workflow-loop-results > details').count(), 2);

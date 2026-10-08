@@ -1,5 +1,6 @@
 //! Bowerbird 桌面应用入口。
 
+mod agent_generation_wait;
 mod cli_credentials;
 mod cloud;
 mod codex;
@@ -13,6 +14,7 @@ mod media;
 mod prompt;
 
 pub use media::thumb::video_thumbnail_worker;
+pub use agent_generation_wait::agent_generation_wait_worker;
 
 use std::sync::Arc;
 use std::{path::Path, path::PathBuf};
@@ -432,6 +434,7 @@ pub fn run() {
             commands::agent_z::agent_z_send,
             commands::agent_ds::agent_ds_chat,
             commands::agent_ds::agent_ds_workflow_start,
+            commands::agent_ds::agent_ds_workflow_cancel,
             commands::agent_ds::agent_ds_workflow_result,
             commands::agent_ds::agent_ds_workflow_ingest_images,
             commands::agent_ds::agent_ds_workflow_generation_request,
@@ -576,6 +579,7 @@ pub fn run() {
             commands::codex::openai_spike_generate_image,
             commands::codex::codex_install,
             commands::codex::codex_login,
+            commands::codex::codex_logout,
             commands::codex::cancel_codex_setup,
             commands::collect::extension_status,
             commands::collect::extension_folder_path,

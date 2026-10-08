@@ -3,6 +3,10 @@
 本目录记录 Mac 上的本地开发、运行和未签名构建流程。Bowerbird 使用 canonical Tauri / React / Rust 源码，不维护 macOS override。构建架构以 `rustc -vV` 的 host 为准；Intel 为 `x86_64-apple-darwin`，Apple Silicon 原生工具链为 `aarch64-apple-darwin`。
 
 
+## 2026-10-08 Mac 26.10.801 发布准备
+
+暂隐技能、工作流助手与模板库入口，纳入当前工作区已验证的循环/数据包/Codex 登录增量。版本提升至 26.10.801，本轮沿现役官网只发布 Apple Silicon，复用旧 Mac updater 私钥与稳定本地签名身份。Rust 458/0/7、画板逻辑 133/133、TypeScript/Vite 与相关隔离 UI 通过。构建与上线证据统一记录于 [DESKTOP-UPDATES.md](../dev-doc/DESKTOP-UPDATES.md)。
+
 ## 2026-10-07 源码存档与 Windows 同步
 
 自上次 mac 推送 `e63841a` 以来的完整增量、共享代码与 Mac 专属实现、迁移及 Windows 验收清单见 [Windows 同步说明](WINDOWS-SYNC-2026-10-07.md)。本轮仍为源码交接，未生成或发布新版安装包；项目当前状态以 `PROJECT.md` 为准。
@@ -342,6 +346,10 @@ Cloud 构建需在被 Git 忽略的 `apps/cloud/.env.local` 配置 `BOWERBIRD_SU
 ```bash
 pnpm tauri dev
 ```
+
+**微信/邮箱登录回流（2026-10-07 修复，需重启开发进程）：** Cargo runner 现在将已签名程序、同字节的稳定凭据辅助程序和资源放入 `target/debug/Bowerbird Dev.app`，注册包内 `bowerbird://` 协议后，直接 `exec` 包内程序；保留 Cargo 的进程管理、启动参数、账号/素材库标识。此前运行裸 `target/debug/bowerbird-desktop`，浏览器把回调交给 `/Applications/Bowerbird.app`；安装版可能在 single-instance 检查时退出，尚未收到 macOS 随后投递的 URL，开发版因而一直未登录且没有错误。已有 `RunEvent::Opened` 处理本身不够，运行进程还必须有可识别的应用包身份。
+
+更新后先在原开发终端停止并重新运行上述命令，再从应用重新发起扫码；旧页面绑定的是重启前的登录请求，不能复用。无需重装正式版或部署网页/云服务。辅助程序首次改从包内路径访问旧钥匙串条目时，系统可能要求一次授权；其字节与 CDHash 仍跨普通业务重编译保持一致。测试 `bash macOS/test-dev-signing.sh` 使用临时程序并禁用协议注册（`BOWERBIRD_DEV_REGISTER_URLS=0` 仅用于隔离测试），覆盖两次重编译、Tauri 同款内嵌 plist 与包身份、资源、参数、签名和 helper 稳定性；`bash macOS/test-dev-keychain.sh` 禁止交互、仅使用随机假凭据条目。真实浏览器回流及扫码入账状态仍需用户重启后验收。
 
 至少验证：
 

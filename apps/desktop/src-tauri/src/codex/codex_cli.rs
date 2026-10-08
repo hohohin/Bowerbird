@@ -100,13 +100,13 @@ fn list_new_generated(
 }
 
 #[derive(Default)]
-struct CodexFailure {
+pub(crate) struct CodexFailure {
     message: Option<String>,
     terminal: bool,
 }
 
 impl CodexFailure {
-    fn observe(&mut self, event: &serde_json::Value) {
+    pub(crate) fn observe(&mut self, event: &serde_json::Value) {
         let message = match event.get("type").and_then(|value| value.as_str()) {
             Some("turn.failed") => {
                 self.terminal = true;
@@ -122,7 +122,7 @@ impl CodexFailure {
         }
     }
 
-    fn detail(&self, success: bool, has_answer: bool, stderr: &str) -> Option<String> {
+    pub(crate) fn detail(&self, success: bool, has_answer: bool, stderr: &str) -> Option<String> {
         if !self.terminal && (has_answer || success && self.message.is_none()) {
             return None;
         }

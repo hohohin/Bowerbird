@@ -13,10 +13,10 @@ import { ModalShell } from "./ModalShell";
 
 interface Props {
   controller: CanvasWorkflowController; selectedIds: Set<string>; graphNodes: CanvasNode[]; provider: string;
-  instanceRoot?: string; ensureMaterialized: () => Promise<unknown>; onClose: () => void;
+  instanceRoot?: string; importPackage?: boolean; ensureMaterialized: () => Promise<unknown>; onClose: () => void;
   onLocate: (id: string) => void;
 }
-export function WorkflowTemplateLibrary({ controller, selectedIds, graphNodes, provider, instanceRoot, ensureMaterialized, onClose, onLocate }: Props) {
+export function WorkflowTemplateLibrary({ controller, selectedIds, graphNodes, provider, instanceRoot, importPackage, ensureMaterialized, onClose, onLocate }: Props) {
   const instance = controller.document.nodes.find(node => node.id === instanceRoot)?.templateInstance;
   const [templates, setTemplates] = useState<WorkflowTemplate[]>([]), [search, setSearch] = useState("");
   const [active, setActive] = useState<WorkflowTemplate | null>(instance?.template ?? null);
@@ -79,13 +79,14 @@ export function WorkflowTemplateLibrary({ controller, selectedIds, graphNodes, p
     })}>{instanceRoot ? "保存子流程参数" : "添加子流程到画板"}</button>
     <p className="workflow-hint">添加和配置不会自动运行。内部步骤可单独编辑；手动编辑后统一参数配置会停止覆盖这些步骤。</p>
   </div>;
-  return <ModalShell title={instanceRoot ? "配置子流程" : "工作流模板库"} width="lg" preventClose={busy} onClose={onClose}
+  return <ModalShell title={instanceRoot ? "配置子流程" : importPackage ? "导入工作流数据包" : "工作流模板库"} width="lg" preventClose={busy} onClose={onClose}
     panelProps={{ onPointerDown: event => event.stopPropagation(), onWheel: event => event.stopPropagation(), onKeyDown: event => { if (event.key !== "Escape" && event.key !== "Tab") event.stopPropagation(); } }}>
     <div className="workflow-template-library">
       {error && <p role="alert" className="workflow-error">{error}</p>}{notice && <p role="status">{notice}</p>}
       {instanceRoot ? configure : <>
+        {importPackage && <p>选择对方发送的 .bbworkflow.json 数据包，查看步骤并确认输入，再添加到当前画板。导入不会自动运行。</p>}
         <div className="workflow-template-actions"><input aria-label="搜索工作流模板" placeholder="搜索名称或说明" value={search} onChange={event => setSearch(event.target.value)} />
-          <label className="workflow-template-import">导入流程文件<input type="file" accept=".json" disabled={busy} onChange={event => {
+          <label className="workflow-template-import">导入流程文件<input aria-label="选择工作流数据包" data-modal-autofocus={importPackage || undefined} type="file" accept=".bbworkflow.json,.json,application/json" disabled={busy} onChange={event => {
             const file = event.target.files?.[0]; event.target.value = "";
             if (file) void perform(async () => { if (file.size > TEMPLATE_MAX_BYTES) throw new Error("模板文件超过 32 MB"); const imported = parseWorkflowTemplate(await file.text());
               const saved = await api.workflowTemplateSave({ ...imported, id: crypto.randomUUID(), revision: 0 }); await load(); select(saved); setNotice("已导入模板，请配置当前画板的输入素材。"); });

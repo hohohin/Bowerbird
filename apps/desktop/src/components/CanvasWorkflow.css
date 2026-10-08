@@ -158,6 +158,8 @@
 .workflow-loop-results { max-height: 260px; overflow: auto; font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
 .workflow-loop-results details { margin: 6px 0; }
 .workflow-loop-results summary { cursor: pointer; }
+.workflow-loop-start { display: flex; align-items: center; gap: 6px; margin: 8px 0; font-size: 12px; }
+.workflow-loop-start input { width: 58px; padding: 4px 6px; border: 1px solid var(--bb-line); border-radius: 5px; background: var(--bb-surface-2); color: var(--bb-ink); }
 
 .workflow-disconnect-menu { position:fixed; z-index:100000; width:300px; max-width:calc(100vw - 16px); max-height:min(360px, calc(100vh - 16px)); overflow:auto; padding:8px; border:1px solid var(--bb-line); border-radius:12px; background:var(--bb-surface); color:var(--bb-ink); box-shadow:0 8px 28px #0003; font-size:12px; }
 .workflow-disconnect-menu > strong { display:block; padding:6px 8px 10px; }

@@ -132,7 +132,8 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
 
   const [section, setSection] = useState<SectionKey>(initialSection);
   const [appVersion, setAppVersion] = useState<string | null>(null);
-  const [checkingCodex, setCheckingCodex] = useState(false);
+  const [checkingCodex, setCheckingCodex] = useState(true);
+  const [codexLogoutBusy, setCodexLogoutBusy] = useState(false);
   const [checkingDreamina, setCheckingDreamina] = useState(false);
 
   // —— codex「登录授权」一键流程（检测 → 安装 → 浏览器登录）——
@@ -197,6 +198,9 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
       })
       .catch(() => {
         if (alive) setCodexHealth({ ok: false, reason: "codex 状态检测失败" });
+      })
+      .finally(() => {
+        if (alive) setCheckingCodex(false);
       });
     return () => {
       alive = false;
@@ -286,6 +290,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
   }
 
   async function recheckCodex() {
+    if (checkingCodex || codexAuthBusy || codexLogoutBusy) return;
     setCheckingCodex(true);
     try {
       setCodexHealth(await api.codexHealth());
@@ -299,6 +304,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
   /** 「登录授权」一键流程：检测 → 缺 CLI 则自动安装（进度接管小字）→ codex login 开浏览器
    *  走 ChatGPT OAuth。进行中再点为取消（复用 CodexOnboarding 的交互约定）。 */
   async function startCodexAuth() {
+    if (checkingCodex || codexLogoutBusy) return;
     if (codexAuthBusy) {
       void api.cancelCodexSetup();
       return;
@@ -324,7 +330,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
         setCodexHealth(h);
       }
       if (h.ok) {
-        setCodexAuthLine("已就绪，无需授权");
+        setCodexAuthLine("已登录，可先退出登录以更换账号");
         return;
       }
       // 已装未登录 → codex login（自己开系统浏览器）。
@@ -342,6 +348,22 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
     } finally {
       codexAuthRunningRef.current = false;
       setCodexAuthBusy(false);
+    }
+  }
+
+  async function logoutCodex() {
+    if (checkingCodex || codexAuthBusy || codexLogoutBusy) return;
+    setCodexLogoutBusy(true);
+    setCodexAuthFailed(false);
+    setCodexAuthLine("正在退出登录…");
+    try {
+      setCodexHealth(await api.codexLogout());
+      setCodexAuthLine("已退出登录，可以重新授权或更换账号");
+    } catch (error) {
+      setCodexAuthFailed(true);
+      setCodexAuthLine(String(error));
+    } finally {
+      setCodexLogoutBusy(false);
     }
   }
 
@@ -766,12 +788,12 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
                       }`}
                       title={codexHealth?.reason}
                     >
-                      {codexHealth?.ok ? "✓ 就绪" : "✗ 未就绪"}
+                      {codexHealth?.ok ? "✓ 已登录" : "✗ 未就绪"}
                     </span>
                     <button
                       type="button"
                       onClick={() => void recheckCodex()}
-                      disabled={checkingCodex}
+                      disabled={checkingCodex || codexAuthBusy || codexLogoutBusy}
                       title="重新检测"
                       aria-label="重新检测 codex 状态"
                       className="flex size-6 shrink-0 items-center justify-center rounded text-muted hover:bg-edge hover:text-ink disabled:opacity-50"
@@ -782,14 +804,25 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
                 </div>
                 <p className="mt-1 text-xs text-muted">
                   用 ChatGPT 订阅反推 / 生成 / 命名；仅 Pro / Studio 可用，不配置也不影响本地素材库。
+                  已登录不代表剩余额度充足；额度不足时可退出并更换账号。
                 </p>
                 <div className="mt-2 flex items-center gap-2">
                   <button
                     onClick={() => void startCodexAuth()}
+                    disabled={checkingCodex || codexLogoutBusy}
                     title={codexAuthBusy ? "点击取消当前授权流程" : "自动检测并安装必要配置，随后打开浏览器登录"}
-                    className="shrink-0 rounded-md bg-accent px-3 py-1 text-[12px] font-medium text-black hover:opacity-90"
+                    className="shrink-0 rounded-md bg-accent px-3 py-1 text-[12px] font-medium text-black hover:opacity-90 disabled:opacity-50"
                   >
                     {codexAuthBusy ? "取消" : "登录授权"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void logoutCodex()}
+                    disabled={checkingCodex || codexAuthBusy || codexLogoutBusy}
+                    title="退出园丁鸟中的 Codex 账号，以便重新登录或更换账号"
+                    className="shrink-0 rounded border border-edge px-3 py-1 text-[12px] text-ink hover:bg-edge disabled:opacity-50"
+                  >
+                    {codexLogoutBusy ? "退出中…" : "退出登录"}
                   </button>
                   {codexAuthLine && (
                     <span
