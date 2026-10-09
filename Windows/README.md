@@ -2,6 +2,10 @@
 
 这里存放 Bowerbird 的 Windows 开发、构建与独立扩展加载工具。平台兼容行为已经并入项目主源码；脚本只把 canonical 项目复制到 Windows/.work，不再用整文件 override 替换源码。Windows/overrides/ 仅保留退役说明，不参与构建。
 
+## 2026-10-09 Windows 26.10.904 已发布
+
+应用内更新现在保留 Bowerbird 账号、权益缓存及 Codex/Dreamina 私有登录；普通手动安装/重装仍重置。实际 NSIS 隔离夹具、新包/资源/签名与完整公网下载验证通过，官网及自动更新已切换。旧客户端通过应用内更新到本版即可保留正常登录；真实账号升级仍待实机验收。产物在 `Windows/dist/Bowerbird_26.10.904_x64-setup.exe`，详见 [桌面自动更新](../dev-doc/DESKTOP-UPDATES.md)。
+
 ## 2026-10-09 Windows 26.10.903 已发布
 
 当前 Windows 改动已签名发布至官网与自动更新：生成卡片可选视频，即梦/方舟参数独立保存，结果沿现有连线交付；视频查询临时超时续查原任务，不重复提交生成。Rust 465 passed / 10 ignored、49 项前端逻辑及相关 UI、构建/资源/签名与完整公网下载核验通过。包在 `Windows/dist/Bowerbird_26.10.903_x64-setup.exe`；发布与回滚证据见 [桌面自动更新](../dev-doc/DESKTOP-UPDATES.md)。Mac 保持 26.10.801，真实安装升级及付费生成未在本轮验收。
@@ -66,7 +70,7 @@ powershell -ExecutionPolicy Bypass -File .\Windows\dev.ps1
 
 ## 构建安装包
 
-后续 NSIS 安装包必须保留 `src-tauri/windows/installer-hooks.nsh`：每次安装（包括同版本重装、升级及静默安装）都清除 Bowerbird 账号 refresh token、权益缓存及独立 CLI 登录。重置失败时安装报错并保留待重置标记；下次启动在恢复账号和启动后台任务前重试。首次升级到独立凭据版本需要在 Bowerbird 设置中重新登录，系统 Codex/Dreamina 原登录保留。
+后续 NSIS 安装包必须保留 `src-tauri/windows/installer-hooks.nsh`。2026-10-09 新约定：应用内 `/UPDATE` 保留 Bowerbird 账号、权益缓存及独立 CLI 登录；普通手动安装/同版本重装（含静默安装）仍重置。重置失败时安装报错并保留待重置标记；更新不删除此前失败标记，下次启动在恢复账号和启动后台任务前重试。系统 Codex/Dreamina 原登录保留。此调整已通过隔离 NSIS 夹具并随 26.10.904 签名包发布；应用内更新到本版即可生效。
 
 Dreamina Windows 凭据保存在其进程的私有注册表空间 `HKCU\Software\Bowerbird\CliAuth\Dreamina`。启动器仅对自己创建的 CLI 子进程重映射 HKCU，使用 Job Object 管理生命周期；隔离失败即拒绝执行，不回退共享凭据。重装先结束应用私有运行目录中的 CLI 启动器，避免旧 OAuth 进程迟到写回登录。只重置登录及权益缓存，素材、项目、settings 与 CLI 历史文件保留。此注册表适配与安装钩子针对 Windows x64；不能把设置 HOME 等同于其他平台的原生凭据隔离。
 

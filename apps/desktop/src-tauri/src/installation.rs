@@ -1,4 +1,4 @@
-//! The installer writes a fresh pending marker on every install, including same-version reinstalls.
+//! Ordinary installs/reinstalls request a reset; in-app updates preserve login and any earlier pending reset.
 use std::path::Path;
 use crate::error::AppResult;
 
