@@ -8,7 +8,7 @@ import { assignCanvasCardNames, canvasCardNameError } from "../lib/canvasCardNam
 import { CanvasCardName } from "./CanvasCardName";
 import { WorkflowDisconnectMenu, type DisconnectChoice } from "./WorkflowDisconnectMenu";
 import { canvasAssetMediaPath } from "../lib/creativeCanvas";
-import { readCanvasNote } from "../lib/canvasNotes";
+import { expandCanvasSections, readCanvasNote } from "../lib/canvasNotes";
 import { canvasInputValue, canvasWorkflowInputState, canvasSessionImages, workflowSessionIds } from "../lib/canvasSessionOutputs";
 import { useStore } from "../store";
 import { getDragAssets } from "../lib/dragPayload";
@@ -40,7 +40,7 @@ export function WindingKey({ size = 20 }: { size?: number }) {
 export interface WorkflowGeometry { id: string; x: number; y: number; width: number; height: number }
 export interface WorkflowLayerHandle {
   templates: () => void;
-  saveTemplate: (ids: string[]) => void;
+  saveTemplate: (ids: string[], mode?: "template" | "container") => void;
   inputText: (nodeId: string, cellId?: string, disconnect?: boolean, type?: "text" | "image", point?: { x: number; y: number }) => void;
   connectCell: (nodeId: string, cellId: string, clientX: number, clientY: number) => void;
   add: (kind: WorkflowKind, x: number, y: number) => void; arm: (x?: number, y?: number) => void;
@@ -83,7 +83,7 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
   const [agentOpen, setAgentOpen] = useState(false);
   const [agentImage, setAgentImage] = useState<Asset | null>(null);
   const [templateLibrary, setTemplateLibrary] = useState<{ instanceRoot?: string } | null>(null);
-  const [templateSelection, setTemplateSelection] = useState<{ projectId: string; ids: string[]; nodes: WorkflowNode[]; canvas: CanvasNode[] } | null>(null);
+  const [templateSelection, setTemplateSelection] = useState<{ projectId: string; ids: string[]; nodes: WorkflowNode[]; canvas: CanvasNode[]; bounds: WorkflowGeometry[]; mode: "template" | "container" } | null>(null);
   const [keyHover, setKeyHover] = useState<{ id: string; x: number; y: number; anchor: HTMLElement; rect: DOMRect; focus: boolean } | null>(null);
   const [disconnectMenu, setDisconnectMenu] = useState<{ x: number; y: number; choices: DisconnectChoice[] } | null>(null);
   const [profiles, setProfiles] = useState<VisualProfileSummary[]>([]);
@@ -384,7 +384,8 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
   }, [armed, controller, document, graphNodes]);
   useImperativeHandle(ref, () => ({
     templates() { setTemplateLibrary({}); },
-    saveTemplate(ids) { setTemplateSelection({ projectId, ids: [...ids], nodes: structuredClone(controller.document.nodes), canvas: structuredClone(graphNodes) }); },
+    saveTemplate(ids, mode = "template") { setTemplateSelection({ projectId, ids: [...expandCanvasSections(new Set(ids), graphNodes)], nodes: structuredClone(controller.document.nodes), canvas: structuredClone(graphNodes), mode,
+      bounds: [...materials, ...graphNodes.filter(node => node.hiddenAt == null), ...controller.document.nodes.map(node => ({ id: node.id, x: node.x, y: node.y, width: WORKFLOW_CARD_WIDTH, height: cardElements.current.get(node.id)?.offsetHeight ?? 330 }))] }); },
     inputText,
     connectCell(nodeId, cellId, clientX, clientY) {
       const card = graphNodes.find(node => node.id === nodeId);
@@ -768,7 +769,8 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
     </ModalShell>}
     {templateLibrary && <WorkflowTemplateLibrary controller={controller} selectedIds={selectedIds} graphNodes={graphNodes} provider={state.activeGenProvider || state.defaultProvider}
       instanceRoot={templateLibrary.instanceRoot} ensureMaterialized={ensureMaterialized} onClose={() => setTemplateLibrary(null)} onLocate={locateIssue} />}
-    {templateSelection?.projectId === projectId && <SaveWorkflowTemplateDialog nodes={templateSelection.nodes} selectedIds={templateSelection.ids} graphNodes={templateSelection.canvas}
-      onClose={() => setTemplateSelection(null)} onSaved={() => notifySuccess("已存为模板，可在工作流模板库使用")} />}
+    {templateSelection?.projectId === projectId && <SaveWorkflowTemplateDialog nodes={templateSelection.nodes} selectedIds={templateSelection.ids} graphNodes={templateSelection.canvas} bounds={templateSelection.bounds} mode={templateSelection.mode}
+      onEncapsulate={async (name, members, template) => { await ensureMaterialized(); const result = await controller.encapsulate(name, members, templateSelection.bounds, template); onPlaced(result.bounds); return result; }}
+      onClose={() => setTemplateSelection(null)} onSaved={() => notifySuccess(templateSelection.mode === "template" ? "已存为模板，并保留封装布局" : "已封装为容器")} />}
   </>;
 });

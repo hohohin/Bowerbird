@@ -410,6 +410,7 @@ pub fn run() {
             commands::workflow_templates::workflow_template_save,
             commands::workflow_templates::workflow_template_delete,
             commands::workflow_templates::workflow_template_export,
+            commands::workflow_templates::workflow_encapsulate,
             commands::project_canvas::project_canvas_node_remove,
             commands::project_canvas::project_canvas_node_restore,
             commands::project_canvas::project_canvas_group_create,

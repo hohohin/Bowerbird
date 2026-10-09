@@ -2323,7 +2323,9 @@ export function CanvasWorkspace({
     const nodeIds = selectedCanvasNodeIdsRef.current.has(nodeId) ? [...selectedCanvasNodeIdsRef.current] : [nodeId];
     setSelectedCanvasNodeIds(new Set(nodeIds));
     const folder = nodesRef.current.find((candidate): candidate is CanvasFolderNode => candidate.id === nodeId && candidate.kind === "folder");
-    setPromptMenu({ node, nodeIds, folder, x: event.clientX, y: event.clientY, point: null });
+    const section = graphNodesRef.current.find(candidate => candidate.id === nodeId && candidate.kind === "note" && readCanvasNote(candidate).note_type === "section");
+    setPromptMenu({ node, nodeIds, folder, x: event.clientX, y: event.clientY, point: null,
+      ...(section ? { section: { id: section.id, name: readCanvasNote(section).text } } : {}) });
   }
 
   useEffect(() => {
@@ -2788,7 +2790,7 @@ export function CanvasWorkspace({
         if (baseline) pushGeometryUndo([], [baseline]);
         persistGraphNodeGeometry(updated);
         const value = readCanvasNote(updated);
-        if (value.note_type === "section") updateCanvasNote(nodeId, { ...value, member_ids: claimSectionMembers(updated, nodeId) });
+        if (value.note_type === "section" && !value.workflow_container) updateCanvasNote(nodeId, { ...value, member_ids: claimSectionMembers(updated, nodeId) });
       }
     }
   }
@@ -2812,7 +2814,8 @@ export function CanvasWorkspace({
 
   function claimSectionMembers(rect: CanvasRect, sectionId?: string) {
     const otherSections = new Set(graphNodesRef.current.filter(node => node.kind === "note" && readCanvasNote(node).note_type === "section").map(node => node.id));
-    const anchors = selectionAnchors().filter(anchor => !otherSections.has(anchor.id));
+    const enclosedMembers = new Set(graphNodesRef.current.filter(node => node.kind === "note" && node.hiddenAt == null && node.id !== sectionId && readCanvasNote(node).workflow_container).flatMap(node => readCanvasNote(node).member_ids));
+    const anchors = selectionAnchors().filter(anchor => !otherSections.has(anchor.id) && !enclosedMembers.has(anchor.id));
     const elements = new Map(Array.from(stageRef.current?.querySelectorAll<HTMLElement>("[data-canvas-node-id]") ?? [])
       .map(element => [element.dataset.canvasNodeId, element]));
     for (const anchor of anchors) {
@@ -3377,7 +3380,7 @@ export function CanvasWorkspace({
         for (const node of graphNodesRef.current) {
           if (node.kind !== "note" || node.hiddenAt != null || !graphBefore.has(node.id)) continue;
           const value = readCanvasNote(node);
-          if (value.note_type === "section") updateCanvasNote(node.id, { ...value, member_ids: claimSectionMembers(node, node.id) });
+          if (value.note_type === "section" && !value.workflow_container) updateCanvasNote(node.id, { ...value, member_ids: claimSectionMembers(node, node.id) });
         }
       });
       return;
@@ -4190,7 +4193,7 @@ export function CanvasWorkspace({
                 if (!next) return;
                 panRef.current = next.pan; zoomRef.current = next.zoom; setPan(next.pan); setZoom(next.zoom); markViewDirty();
               }}
-              ensureMaterialized={async () => { const draft = activeCanvasRef.current; if (!draft) throw new Error("项目尚未就绪"); await ensureMaterialized(draft); }}
+              ensureMaterialized={async () => { const draft = activeCanvasRef.current; if (!draft) throw new Error("项目尚未就绪"); await ensureMaterialized(draft); await flushCanvasWrites(false); }}
               materials={visibleMaterials.flatMap<MaterialAnchor>(node => node.kind === "folder"
                 ? [{ id: node.id, groupId: node.id, assetIds: [...new Set(node.assets.filter(asset => !isVideoPath(asset.storePath)).flatMap(asset => asset.assetId ? [asset.assetId] : []))], ...nodeRect(node) }]
                 : node.kind === "asset" && node.asset.assetId ? [{ id: node.id, assetId: node.asset.assetId, ...nodeRect(node) }] : [])} />}
@@ -4203,7 +4206,7 @@ export function CanvasWorkspace({
               const workflowController = projectId ? canvasWorkflowController(projectId) : null;
               const failedWriter = workflowController?.document.nodes.some(writer => (writer.textTarget?.nodeId === node.id || writer.textSource === node.id)
                 && (workflowController.issue?.nodeId === writer.id || workflowNodeRun(workflowController.document, writer.id)?.steps[writer.id]?.status === "failed"));
-              return <div key={node.id} data-canvas-node data-canvas-node-id={node.id} tabIndex={0}
+              return <div key={node.id} data-canvas-node data-canvas-node-id={node.id} data-workflow-container={value.workflow_container ? node.id : undefined} tabIndex={0}
                 className={`canvas-note ${section ? "is-section" : value.note_type === "bubble" ? "is-bubble" : "is-text is-content-card"} ${selected ? "is-selected" : ""} ${failedWriter ? "canvas-card-error" : ""}`}
                 style={{ width: node.width, height: node.height, transform: `translate3d(${node.x}px, ${node.y}px, 0)`, zIndex: section ? 0 : activeDragId === node.id || (activeDragId != null && selected) ? 10000 + node.zIndex : node.zIndex }}
                 onPointerDown={event => beginGraphNodeDrag(event, node)} onPointerMove={moveGraphNode}
@@ -4211,9 +4214,11 @@ export function CanvasWorkspace({
                 onLostPointerCapture={event => endGraphNodeDrag(event, true)}
                 onContextMenu={event => openCanvasNodeMenu(event, node.id)}>
                 {section ? <>
-                  <div className="canvas-section-heading" title="拖动分区"><GripHorizontal size={17} /></div>
+                  <div className="canvas-section-heading" title="拖动分区"><GripHorizontal size={17} />
+                    {value.workflow_container && <span className="canvas-workflow-container-badge">封装 · {value.member_ids.length}</span>}
+                  </div>
                   {["top", "bottom", "left", "right"].map(edge => <div key={edge} className={`canvas-section-edge ${edge}`} />)}
-                  {selected && ([["nw", "左上角"], ["ne", "右上角"], ["sw", "左下角"], ["se", "右下角"]] as const).map(([corner, label]) => (
+                  {selected && !value.workflow_container && ([["nw", "左上角"], ["ne", "右上角"], ["sw", "左下角"], ["se", "右下角"]] as const).map(([corner, label]) => (
                     <CanvasResizeHandle key={corner} label={`调整分区大小（${label}）`} corner={corner} size={node} position={{ x: node.x, y: node.y }} zoom={zoom}
                       minimum={{ width: 120, height: 80 }} onResize={(size, finished, cancelled) => resizeCanvasNote(node.id, size, finished, cancelled)} />
                   ))}
@@ -4581,7 +4586,10 @@ export function CanvasWorkspace({
             {promptMenu.nodeIds.length > 0 && <button type="button" role="menuitem" className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs hover:bg-panel2" onClick={() => {
               void copyCanvasSelection(promptMenu.nodeIds); setPromptMenu(null);
             }}><Copy size={14} /> 复制所选卡片</button>}
-            {promptMenu.nodeIds.some(id => canvasWorkflowController(activeCanvasRef.current.id).document.nodes.some(node => node.id === id && !["trigger", "text", "planner"].includes(node.kind))) &&
+            {promptMenu.nodeIds.length > 0 && <button type="button" role="menuitem" className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs hover:bg-panel2" onClick={() => {
+              workflowRef.current?.saveTemplate(promptMenu.nodeIds, "container"); setPromptMenu(null);
+            }}><Frame size={14} /> 封装为容器</button>}
+            {[...expandCanvasSections(new Set(promptMenu.nodeIds), graphNodes)].some(id => canvasWorkflowController(activeCanvasRef.current.id).document.nodes.some(node => node.id === id && !["trigger", "text", "planner"].includes(node.kind))) &&
               <button type="button" role="menuitem" className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs hover:bg-panel2" onClick={() => {
                 workflowRef.current?.saveTemplate(promptMenu.nodeIds); setPromptMenu(null);
               }}><Copy size={14} /> 存为模板</button>}
@@ -4597,7 +4605,7 @@ export function CanvasWorkspace({
               removeNodes([promptMenu.section!.id]);
               setPromptMenu(null);
             }}>
-              <Trash2 size={14} className="shrink-0" /> 移除分区「{promptMenu.section.name}」
+              <Trash2 size={14} className="shrink-0" /> {graphNodes.some(node => node.id === promptMenu.section!.id && readCanvasNote(node).workflow_container) ? "解封容器" : "移除分区"}「{promptMenu.section.name}」
             </button>}
             {promptMenu.nodeIds.length > 0 && !promptMenu.nodeIds.some(id => workflowRef.current?.bounds().some(node => node.id === id)) && <CanvasLayerMenuItem projectId={activeCanvasRef.current.id} nodeIds={promptMenu.nodeIds}
               className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs hover:bg-panel2" />}

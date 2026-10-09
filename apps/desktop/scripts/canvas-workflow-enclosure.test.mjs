@@ -1,0 +1,71 @@
+import assert from 'node:assert/strict';
+import { createServer } from 'vite';
+import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
+
+const server = await createServer({ configFile: false, root: process.cwd(), server: { host: '127.0.0.1', port: 1611, strictPort: true, hmr: false, watch: null } });
+await server.listen();
+const browser = await chromium.launch({ channel: 'chrome', headless: true });
+const page = await browser.newPage({ viewport: { width: 1800, height: 1200 } });
+page.setDefaultTimeout(10000);
+const errors = []; page.on('pageerror', error => errors.push(error.message));
+const state = () => page.evaluate(() => ({ canvas: window.snapshot(), workflow: JSON.parse(sessionStorage.getItem('workflow-p')).document }));
+try {
+  await page.goto('http://127.0.0.1:1611/scripts/fixtures/canvas-reference/preview.html');
+  await page.locator('[data-canvas-node-id="old"]').waitFor();
+  await page.evaluate(async () => {
+    const snapshot = window.snapshot(); snapshot.nodes = snapshot.nodes.filter(n => n.id === 'old');
+    Object.assign(snapshot.nodes[0], { x: 100, y: 100 });
+    snapshot.nodes.push({ ...snapshot.nodes[0], id: 'outside', kind: 'note', assetId: null, role: null, x: 100, y: 310, width: 220, height: 160,
+      payloadJson: JSON.stringify({ schema_version: 1, note_type: 'text', text: '外部文案', member_ids: [] }) });
+    snapshot.view = { ...snapshot.view, zoom: 1, panX: 50, panY: 70 };
+    sessionStorage.setItem('reference-fixture', JSON.stringify(snapshot));
+    const { newWorkflowNode, emptyWorkflow } = await import('/src/lib/canvasWorkflow.ts');
+    const doc = emptyWorkflow();
+    doc.nodes = [{ ...newWorkflowNode('instruction', 450, 100, 'codex'), id: 'one' }, { ...newWorkflowNode('generation', 850, 100, 'codex'), id: 'two' }];
+    doc.nodes[1].inputs.text = [{ canvasNodeId: 'outside', cellId: 'cell-0-0' }];
+    sessionStorage.setItem('workflow-p', JSON.stringify({ revision: 0, document: doc }));
+    localStorage.setItem('bowerbird.canvasSnapEnabled', 'false');
+  });
+  await page.reload(); await page.locator('[data-workflow-card="two"]').waitFor();
+  const first = await page.locator('[data-canvas-node-id="old"]').boundingBox(), last = await page.locator('[data-workflow-card="two"]').boundingBox();
+  await page.mouse.move(first.x - 15, first.y - 15); await page.mouse.down();
+  await page.mouse.move(last.x + last.width + 15, Math.max(last.y + last.height, first.y + 400) + 15, { steps: 10 }); await page.mouse.up();
+  await page.locator('[data-workflow-card="one"] header strong').click({ button: 'right' });
+  await page.getByRole('menuitem', { name: '封装为容器', exact: true }).click();
+  await page.getByRole('textbox', { name: '容器名称', exact: true }).fill('测试子流程');
+  assert.equal(await page.locator('[data-preview-card]').count(), 4);
+  const positions = await page.locator('[data-preview-card]').evaluateAll(cards => cards.map(card => ({ id: card.dataset.previewCard, x: parseFloat(card.style.left), y: parseFloat(card.style.top) })));
+  assert.equal(positions.find(c => c.id === 'two').x - positions.find(c => c.id === 'one').x, 400, 'preview keeps original relative layout');
+  await page.locator('[data-preview-card="outside"] input').uncheck();
+  await page.getByRole('button', { name: '适应选区', exact: true }).click();
+  await page.screenshot({ path: '../../.tmp/workflow-enclosure-preview.png' });
+  await page.getByRole('button', { name: '封装', exact: true }).click();
+  await page.getByRole('dialog').waitFor({ state: 'hidden' });
+  await page.locator('[data-workflow-container]').waitFor();
+  const before = await state(), container = before.canvas.nodes.find(n => JSON.parse(n.payloadJson).workflow_container);
+  assert.deepEqual(new Set(JSON.parse(container.payloadJson).member_ids), new Set(['old', 'one', 'two']));
+  assert.ok(container.x > 320, 'external card is not visually swallowed');
+  assert.equal(before.canvas.nodes.find(n => n.id === 'outside').x, 100);
+  assert.equal(before.workflow.nodes[1].inputs.text[0].canvasNodeId, 'outside');
+  const grip = await page.locator('[data-workflow-container] .canvas-section-heading > svg').boundingBox();
+  await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2); await page.mouse.down();
+  await page.mouse.move(grip.x + grip.width / 2 + 60, grip.y + grip.height / 2 + 45, { steps: 8 }); await page.mouse.up();
+  await page.waitForFunction(x => window.snapshot().nodes.find(n => n.id === 'old').x !== x, before.canvas.nodes.find(n => n.id === 'old').x);
+  const moved = await state(), delta = moved.canvas.nodes.find(n => n.id === container.id).x - container.x;
+  assert.ok(delta > 0);
+  for (const node of moved.workflow.nodes) assert.ok(Math.abs(node.x - before.workflow.nodes.find(n => n.id === node.id).x - delta) < .1);
+  assert.equal(moved.canvas.nodes.find(n => n.id === 'outside').x, 100, 'unchecked content is not moved with enclosure');
+  await page.keyboard.press('Control+z');
+  await page.waitForFunction(x => window.snapshot().nodes.find(n => n.id === 'old').x === x, before.canvas.nodes.find(n => n.id === 'old').x);
+  assert.deepEqual((await state()).workflow.nodes.map(n => [n.x, n.y]), before.workflow.nodes.map(n => [n.x, n.y]));
+  await page.evaluate(() => window.save()); await page.reload(); await page.locator('[data-workflow-container]').waitFor();
+  assert.deepEqual(JSON.parse((await state()).canvas.nodes.find(n => n.id === container.id).payloadJson).member_ids, JSON.parse(container.payloadJson).member_ids);
+  await page.locator('[data-workflow-container] .canvas-section-heading > svg').click({ button: 'right' });
+  await page.getByRole('menuitem', { name: '解封容器「测试子流程」', exact: true }).click();
+  await page.locator('[data-workflow-container]').waitFor({ state: 'hidden' });
+  assert.equal((await state()).workflow.nodes.length, 2, 'ungroup preserves workflow cards');
+  assert.equal(await page.locator('[data-canvas-node-id="old"]').count(), 1);
+  assert.deepEqual(errors, []);
+  console.log('PASS enclosure preview, partial membership, collision placement, mixed drag, undo, reload and ungroup.');
+} catch (error) { await page.screenshot({ path: '../../.tmp/workflow-enclosure-failure.png' }); console.error(await state()); throw error; }
+finally { await browser.close(); await server.close(); }

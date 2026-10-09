@@ -3,6 +3,10 @@
 本目录记录 Mac 上的本地开发、运行和未签名构建流程。Bowerbird 使用 canonical Tauri / React / Rust 源码，不维护 macOS override。构建架构以 `rustc -vV` 的 host 为准；Intel 为 `x86_64-apple-darwin`，Apple Silicon 原生工具链为 `aarch64-apple-darwin`。
 
 
+## 2026-10-08 Mac 26.10.801 已同步 VPS
+
+构建交接来自 origin/mac@d6027fb（源码 08ada63），Apple Silicon 新包及版本化清单已完整下载、哈希和旧公钥验签通过。官网 Mac 更新清单与双首页现为 26.10.801；Windows 保持 26.9.1803，Intel 通道未发布。Mac 侧“缺 SSH、官网待切换”状态已解除。本轮只发布已有产物，不合并该分支源码；真实安装/重启、升级数据与 Apple 公证仍待验收。详细产物、发布/回滚目录见 [DESKTOP-UPDATES.md](../dev-doc/DESKTOP-UPDATES.md)「Mac 26.10.801 VPS 发布」。
+
 ## 2026-10-07 源码存档与 Windows 同步
 
 自上次 mac 推送 `e63841a` 以来的完整增量、共享代码与 Mac 专属实现、迁移及 Windows 验收清单见 [Windows 同步说明](WINDOWS-SYNC-2026-10-07.md)。本轮仍为源码交接，未生成或发布新版安装包；项目当前状态以 `PROJECT.md` 为准。

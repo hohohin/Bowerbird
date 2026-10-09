@@ -73,6 +73,8 @@ export const api = {
   videoPoster: (sourcePath: string) => invoke<string | null>("video_poster", { sourcePath }),
   canvasWorkflowGet: (projectId: string) => invoke<import("./canvasWorkflow").WorkflowSnapshot>("canvas_workflow_get", { projectId }),
   workflowTemplatesList: () => invoke<WorkflowTemplate[]>("workflow_templates_list"),
+  workflowEncapsulate: (projectId: string, revision: number, name: string, members: string[], bounds: { id: string; x: number; y: number; width: number; height: number }[], template: WorkflowTemplate | null) =>
+    invoke<import("./canvasWorkflow").WorkflowSnapshot & { containerId: string; bounds: { x: number; y: number; width: number; height: number }; template: WorkflowTemplate | null }>("workflow_encapsulate", { projectId, revision, name, members, bounds, template }),
   workflowTemplateSave: (document: WorkflowTemplate) => invoke<WorkflowTemplate>("workflow_template_save", { document, expectedRevision: document.revision }),
   workflowTemplateDelete: (id: string, expectedRevision: number) => invoke<void>("workflow_template_delete", { id, expectedRevision }),
   workflowTemplateExport: (id: string, path: string) => invoke<void>("workflow_template_export", { id, path }),

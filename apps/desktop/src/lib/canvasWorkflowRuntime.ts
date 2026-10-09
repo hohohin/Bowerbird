@@ -43,6 +43,7 @@ export class CanvasWorkflowController {
   private listeners = new Set<() => void>();
   private loading: Promise<void> | null = null;
   private writing: Promise<void> = Promise.resolve();
+  private encapsulating = false;
   private executing = new Set<string>();
   private reservations = new Map<string, { access: string[]; writes: string[] }>();
   private stopped = new Set<string>();
@@ -133,6 +134,7 @@ export class CanvasWorkflowController {
     await this.writing.catch(() => {}); this.writing = Promise.resolve(); await this.save();
   }
   async edit(nodes: WorkflowNode[]) {
+    if (this.encapsulating) throw new Error("正在封装卡片，请稍后再编辑");
     if (!this.ready) throw new Error("工作流尚未载入");
     nodes = nodes.map(node => this.isLocked(node.id) ? node : normalizeWorkflowInputSlots(node, this.document.nodes.find(previous => previous.id === node.id)));
     for (const node of this.document.nodes) if (this.isLocked(node.id) && JSON.stringify(node) !== JSON.stringify(nodes.find(next => next.id === node.id))) {
@@ -140,6 +142,18 @@ export class CanvasWorkflowController {
     }
     const runs = workflowRuns(this.document).filter(run => workflowRunActive(run) || run.order.every(id => nodes.some(node => node.id === id)));
     await this.save({ ...this.document, nodes, runs, run: runs[runs.length - 1] ?? null });
+  }
+  async encapsulate(name: string, members: string[], bounds: Parameters<typeof api.workflowEncapsulate>[4], template: Parameters<typeof api.workflowEncapsulate>[5]) {
+    if (this.encapsulating || !this.ready || this.error) throw new Error("请先完成当前工作流保存");
+    if (this.reservations.size || this.executing.size || workflowRuns(this.document).some(workflowRunActive)) throw new Error("请先停止当前运行的工作流再封装");
+    this.encapsulating = true;
+    try {
+      await this.writing;
+      const result = await api.workflowEncapsulate(this.projectId, this.revision, name, members, bounds, template);
+      this.document = result.document; this.revision = result.revision; this.emit();
+      await emit("creative://changed", { projectId: this.projectId }).catch(() => {});
+      return result;
+    } finally { this.encapsulating = false; }
   }
   async syncCanvasReferences(canvas: Parameters<typeof reconcileCanvasWorkflowReferences>[1]) {
     if (!this.ready) return;
@@ -264,6 +278,7 @@ export class CanvasWorkflowController {
     }
   }
   private async startRun(startId: string, single = false) {
+    if (this.encapsulating) throw new Error("正在封装卡片，请稍后再运行");
     if (!this.ready) throw new Error("工作流尚未载入");
     if (this.document.nodes.find(node => node.id === startId)?.kind === "loop") single = false;
     if (this.document.nodes.find(node => node.id === startId)?.kind === "planner") throw new Error("请使用助手的编排按钮；助手不参与工作流执行");

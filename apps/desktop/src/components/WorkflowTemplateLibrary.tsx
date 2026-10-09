@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { emit } from "@tauri-apps/api/event";
 import { api } from "../lib/api";
@@ -25,10 +25,12 @@ export function WorkflowTemplateLibrary({ controller, selectedIds, graphNodes, p
   const [values, setValues] = useState<Record<string, string>>(instance?.values ?? {});
   const [error, setError] = useState(""), [notice, setNotice] = useState(""), [busy, setBusy] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const layoutIds = useRef<Record<string, string>>({});
+  const pendingContainer = useRef<{ root: string; members: string[]; bounds: { id: string; x: number; y: number; width: number; height: number }[] } | null>(null);
   const perform = async (work: () => Promise<void>) => { setBusy(true); setError(""); setNotice(""); try { await work(); } catch (reason) { setError(String(reason)); } finally { setBusy(false); } };
   const load = async () => setTemplates(await api.workflowTemplatesList());
   useEffect(() => { if (!instanceRoot) void load().catch(reason => setError(String(reason))); }, [instanceRoot]);
-  const select = (template: WorkflowTemplate) => { setActive(template); setDraft(null); setBindings({}); setValues({}); setError(""); setDeleteId(null); };
+  const select = (template: WorkflowTemplate) => { layoutIds.current = {}; pendingContainer.current = null; setActive(template); setDraft(null); setBindings({}); setValues({}); setError(""); setDeleteId(null); };
   const options: { label: string; type: string; input: WorkflowInput }[] = [];
   for (const [index, node] of graphNodes.filter(node => node.hiddenAt == null).entries()) {
     if (node.kind === "asset" && node.assetId) options.push({ label: `画板图片 ${index + 1}`, type: "image", input: { assetId: node.assetId, assetNodeId: node.id } });
@@ -60,23 +62,36 @@ export function WorkflowTemplateLibrary({ controller, selectedIds, graphNodes, p
     <details><summary>查看内部步骤与输出</summary><ol>{active.plan.nodes.filter(node => node.kind !== "trigger").map(node => <li key={node.id}>{{ instruction: "指令", agent: "文本改写", generation: "生成", skill: "技能", "visual-profile": "视觉规范", trigger: "触发器" }[node.kind]} · {node.prompt?.replace(/\{\{[^}]+\}\}/g, "【输入内容】").slice(0, 180)}</li>)}</ol>
       <p>公开输出：{active.outputs.map(output => output.label).join("、")}</p></details>
     <button disabled={busy || !!controller.error} onClick={() => void perform(async () => {
+      if (pendingContainer.current) {
+        const pending = pendingContainer.current;
+        await controller.encapsulate(active.name, pending.members, pending.bounds, null);
+        pendingContainer.current = null; onClose(); onLocate(pending.root); return;
+      }
       for (const input of active.inputs) if (!(input.content && !bindings[input.id]) && !uniqueOptions.some(option => option.type === input.type && workflowBindingKey(option.input) === workflowBindingKey(bindings[input.id] ?? {}))) throw new Error(`请重新选择「${input.label}」`);
       await ensureMaterialized();
       if (instanceRoot) {
         const next = reconfigureTemplateInstance(controller.document.nodes, instanceRoot, bindings, values, id => controller.isLocked(id));
         await controller.edit(next); onClose(); onLocate(instanceRoot);
       } else {
-        const x = Math.max(0, ...controller.document.nodes.map(node => node.x + 400), ...graphNodes.filter(node => node.hiddenAt == null).map(node => node.x + node.width + 40));
+        const x = Math.max(0, ...controller.document.nodes.map(node => node.x + 400), ...graphNodes.filter(node => node.hiddenAt == null).map(node => node.x + node.width + 40)) + (active.layout ? 420 : 0);
         const prepared = { ...bindings };
         // Validate the whole graph/parameters before writing any carried content.
         const placeholders = Object.fromEntries(active.inputs.map(input => [input.id, prepared[input.id] ?? { canvasNodeId: input.id, cellId: "template-content" }]));
         instantiateWorkflowTemplate(active, placeholders, values, provider, controller.document.nodes, x + 380, 80);
-        try { await materializeTemplateContent(active, prepared, controller.projectId, x, 80); }
+        try { await materializeTemplateContent(active, prepared, controller.projectId, x, 80, layoutIds.current); }
         finally { setBindings({ ...prepared }); await emit("creative://changed", { projectId: controller.projectId }); }
-        const nodes = instantiateWorkflowTemplate(active, prepared, values, provider, controller.document.nodes, x + (active.inputs.some(input => input.content) ? 380 : 0), 80);
-        await controller.edit([...controller.document.nodes, ...nodes]); onClose(); onLocate(nodes[0].id);
+        const nodes = instantiateWorkflowTemplate(active, prepared, values, provider, controller.document.nodes, x + (!active.layout && active.inputs.some(input => input.content) ? 380 : 0), 80);
+        await controller.edit([...controller.document.nodes, ...nodes]);
+        const bounds = (active.layout ?? []).map(card => ({ ...card, id: card.node ? nodes[active.plan.nodes.findIndex(node => node.id === card.node)].id : layoutIds.current[card.id], x: x + card.x, y: 80 + card.y })).filter(card => !!card.id);
+        const members = [...new Set(bounds.filter(card => card.enclosed).map(card => card.id))];
+        if (members.length) {
+          pendingContainer.current = { root: nodes[0].id, members, bounds };
+          await controller.encapsulate(active.name, members, bounds, null);
+          pendingContainer.current = null;
+        }
+        onClose(); onLocate(nodes[0].id);
       }
-    })}>{instanceRoot ? "保存子流程参数" : "添加子流程到画板"}</button>
+    })}>{instanceRoot ? "保存子流程参数" : pendingContainer.current ? "完成子流程封装" : "添加子流程到画板"}</button>
     <p className="workflow-hint">添加和配置不会自动运行。内部步骤可单独编辑；手动编辑后统一参数配置会停止覆盖这些步骤。</p>
   </div>;
   return <ModalShell title={instanceRoot ? "配置子流程" : "工作流模板库"} width="lg" preventClose={busy} onClose={onClose}

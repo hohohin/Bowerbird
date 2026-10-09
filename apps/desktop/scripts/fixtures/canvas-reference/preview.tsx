@@ -99,6 +99,36 @@ w.__TAURI_INTERNALS__ = {
     if (strictCanvas && command === "canvas_workflow_save" && !canvasExists) throw "project not materialized";
     if (command === "canvas_workflow_get") return JSON.parse(sessionStorage.getItem(`workflow-${args.projectId}`) || '{"revision":0,"document":{"schema_version":1,"nodes":[],"run":null}}');
     if (command === "workflow_templates_list") return JSON.parse(sessionStorage.getItem('workflow-template-library') || '[]');
+    if (command === "workflow_encapsulate") {
+      if (w.failEncapsulate) throw '模拟封装失败';
+      if (args.template && w.failTemplateSave) throw '模拟模板保存失败';
+      const saved = JSON.parse(sessionStorage.getItem(`workflow-${args.projectId}`) || '{"revision":0,"document":{"schema_version":1,"nodes":[],"run":null}}');
+      if (saved.revision !== args.revision) throw 'workflow revision conflict';
+      const library = JSON.parse(sessionStorage.getItem('workflow-template-library') || '[]');
+      if (args.template && (library.find((t: any) => t.id === args.template.id)?.revision ?? 0) !== args.template.revision) throw 'template revision conflict';
+      const wanted = new Set(args.members);
+      const rectangles = [...snapshot.nodes.filter((n: any) => n.hiddenAt == null && JSON.parse(n.payloadJson).note_type !== 'section'), ...snapshot.groups,
+        ...saved.document.nodes.filter((n: any) => n.kind !== 'text').map((n: any) => ({ width: 320, height: 400, ...args.bounds.find((b: any) => b.id === n.id), ...n }))];
+      const members = rectangles.filter((n: any) => wanted.has(n.id));
+      if (members.length !== wanted.size) throw 'missing member';
+      const left = Math.min(...members.map((n: any) => n.x)) - 32, top = Math.min(...members.map((n: any) => n.y)) - 64;
+      const right = Math.max(...members.map((n: any) => n.x + n.width)) + 32, bottom = Math.max(...members.map((n: any) => n.y + n.height)) + 32;
+      const collision = rectangles.some((n: any) => !wanted.has(n.id) && n.x < right && n.x + n.width > left && n.y < bottom && n.y + n.height > top);
+      const dx = collision ? Math.max(right, ...rectangles.map((n: any) => n.x + n.width)) + 80 - left : 0;
+      for (const n of [...snapshot.nodes, ...snapshot.groups, ...saved.document.nodes]) if (wanted.has(n.id)) n.x += dx;
+      for (const n of snapshot.nodes) if (n.kind === 'note') {
+        const note = JSON.parse(n.payloadJson);
+        if (note.note_type === 'section') { note.member_ids = note.member_ids.filter((id: string) => !wanted.has(id)); n.payloadJson = JSON.stringify(note); if (note.workflow_container && !note.member_ids.length) n.hiddenAt = 20; }
+      }
+      const containerId = crypto.randomUUID();
+      snapshot.nodes.push({ id: containerId, projectId: args.projectId, threadId: null, kind: 'note', assetId: null, role: null, x: left + dx, y: top, width: right - left, height: bottom - top,
+        zIndex: 0, positionLocked: false, hiddenAt: null, createdAt: 10, updatedAt: 10, payloadJson: JSON.stringify({ schema_version: 1, note_type: 'section', workflow_container: true, text: args.name, cells: [], member_ids: args.members }) });
+      saved.revision++;
+      sessionStorage.setItem(`workflow-${args.projectId}`, JSON.stringify(saved));
+      const template = args.template ? { ...args.template, revision: args.template.revision + 1 } : null;
+      if (template) sessionStorage.setItem('workflow-template-library', JSON.stringify([...library.filter((t: any) => t.id !== template.id), template]));
+      return { ...saved, containerId, bounds: { x: left + dx, y: top, width: right - left, height: bottom - top }, template };
+    }
     if (command === "workflow_template_save") {
       if (w.failTemplateSave) throw '模拟模板保存失败';
       const library = JSON.parse(sessionStorage.getItem('workflow-template-library') || '[]');

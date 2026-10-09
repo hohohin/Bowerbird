@@ -8,11 +8,13 @@ export interface TemplateContent { text?: string; images?: { dataUrl: string; to
 export interface TemplateInput { id: string; label: string; type: "text" | "image"; content?: TemplateContent }
 export interface TemplateParameter { id: string; label: string; node: string; field: "suffix" | "ratio"; defaultValue: string }
 export interface TemplateOutput { id: string; label: string; node: string; port: string }
+export interface TemplateLayoutCard { id: string; node?: string; inputs?: string[]; type?: "text" | "image"; content?: TemplateContent; x: number; y: number; width: number; height: number; enclosed: boolean }
 export interface WorkflowTemplate {
-  format: "bowerbird-workflow-template"; schemaVersion: 1 | 2; id: string; revision: number;
+  format: "bowerbird-workflow-template"; schemaVersion: 1 | 2 | 3; id: string; revision: number;
   name: string; description: string;
   plan: { summary: string; nodes: CardSpec[]; edges: EdgeSpec[] };
   inputs: TemplateInput[]; parameters: TemplateParameter[]; outputs: TemplateOutput[];
+  layout?: TemplateLayoutCard[];
 }
 export interface TemplateInstance {
   template: WorkflowTemplate; nodeIds: string[]; values: Record<string, string>; bindings: Record<string, WorkflowInput>;
@@ -32,21 +34,7 @@ function dummySources(template: WorkflowTemplate): PlanningSource[] {
   return template.inputs.map(input => ({ ...input, input: input.type === "image" ? { assetId: input.id } : { canvasNodeId: input.id, cellId: "text" } }));
 }
 const executablePlan = (plan: WorkflowTemplate["plan"]) => ({ ...plan, nodes: plan.nodes.map(({ overwriteDescribe: _, ...node }) => node) });
-
-/** Whitelist-only portable definitions: never deserialize a canvas or provider execution record. */
-export function parseWorkflowTemplate(raw: string): WorkflowTemplate {
-  if (new TextEncoder().encode(raw).length > TEMPLATE_MAX_BYTES) fail("模板超过 32 MB，请减少携带的素材");
-  const value = JSON.parse(raw) as WorkflowTemplate;
-  keys(value, ["format", "schemaVersion", "id", "revision", "name", "description", "plan", "inputs", "parameters", "outputs"]);
-  if (value.format !== "bowerbird-workflow-template" || ![1, 2].includes(value.schemaVersion) || !label(value.id, 80) || !Number.isSafeInteger(value.revision) || value.revision < 0
-    || !label(value.name) || typeof value.description !== "string" || value.description.length > 2000) fail("模板版本或基本信息无效");
-  if (!Array.isArray(value.inputs) || value.inputs.length > 48 || !Array.isArray(value.parameters) || value.parameters.length > 48 || !Array.isArray(value.outputs) || !value.outputs.length || value.outputs.length > 48) fail("模板接口数量无效");
-  keys(value.plan, ["summary", "nodes", "edges"]);
-  const ids = new Set<string>();
-  for (const input of value.inputs) {
-    keys(input, ["id", "label", "type", ...(value.schemaVersion === 2 ? ["content"] : [])]);
-    if (!alias(input.id) || ids.has(input.id) || !label(input.label) || !["text", "image"].includes(input.type)) fail("模板输入无效或重复");
-    ids.add(input.id);
+function validateTemplateContent(input: Pick<TemplateInput, "type" | "content">) {
     if (input.content !== undefined) {
       keys(input.content, ["text", "images"]);
       if (input.type === "text" ? typeof input.content.text !== "string" || input.content.text.length > 32_000 : input.content.text !== undefined) fail("模板携带文本无效");
@@ -61,6 +49,23 @@ export function parseWorkflowTemplate(raw: string): WorkflowTemplate {
         if (picture.token) tokens.add(picture.token);
       }
     }
+}
+
+/** Whitelist-only portable definitions: never deserialize a canvas or provider execution record. */
+export function parseWorkflowTemplate(raw: string): WorkflowTemplate {
+  if (new TextEncoder().encode(raw).length > TEMPLATE_MAX_BYTES) fail("模板超过 32 MB，请减少携带的素材");
+  const value = JSON.parse(raw) as WorkflowTemplate;
+  keys(value, ["format", "schemaVersion", "id", "revision", "name", "description", "plan", "inputs", "parameters", "outputs", ...(value.schemaVersion === 3 ? ["layout"] : [])]);
+  if (value.format !== "bowerbird-workflow-template" || ![1, 2, 3].includes(value.schemaVersion) || !label(value.id, 80) || !Number.isSafeInteger(value.revision) || value.revision < 0
+    || !label(value.name) || typeof value.description !== "string" || value.description.length > 2000) fail("模板版本或基本信息无效");
+  if (!Array.isArray(value.inputs) || value.inputs.length > 48 || !Array.isArray(value.parameters) || value.parameters.length > 48 || !Array.isArray(value.outputs) || !value.outputs.length || value.outputs.length > 48) fail("模板接口数量无效");
+  keys(value.plan, ["summary", "nodes", "edges"]);
+  const ids = new Set<string>();
+  for (const input of value.inputs) {
+    keys(input, ["id", "label", "type", ...(value.schemaVersion >= 2 ? ["content"] : [])]);
+    if (!alias(input.id) || ids.has(input.id) || !label(input.label) || !["text", "image"].includes(input.type)) fail("模板输入无效或重复");
+    ids.add(input.id);
+    validateTemplateContent(input);
   }
   if (!Array.isArray(value.plan.nodes)) fail("模板步骤无效");
   for (const node of value.plan.nodes) {
@@ -86,11 +91,31 @@ export function parseWorkflowTemplate(raw: string): WorkflowTemplate {
     ids.add(output.id);
   }
   for (const input of value.inputs) if (!value.plan.edges.some(edge => edge.from === input.id)) fail(`输入「${input.label}」没有连接内部步骤`);
+  if (value.layout !== undefined) {
+    if (!Array.isArray(value.layout) || value.layout.length > 500) fail("模板布局无效");
+    const layoutIds = new Set<string>(), nodeIds = new Set<string>(), inputIds = new Set<string>();
+    for (const card of value.layout) {
+      keys(card, ["id", "node", "inputs", "type", "content", "x", "y", "width", "height", "enclosed"]);
+      if (!alias(card.id) || layoutIds.has(card.id) || typeof card.enclosed !== "boolean" || ![card.x,card.y,card.width,card.height].every(n => typeof n === "number" && Number.isFinite(n) && Math.abs(n) < 10_000_000) || card.width <= 0 || card.height <= 0) fail("模板卡片布局无效");
+      layoutIds.add(card.id);
+      if (card.node) {
+        if (!value.plan.nodes.some(node => node.id === card.node) || nodeIds.has(card.node) || card.inputs || card.content || card.type) fail("模板步骤布局重复或无效");
+        nodeIds.add(card.node);
+      } else {
+        if (!["text", "image"].includes(card.type ?? "") || !Array.isArray(card.inputs)) fail("模板内容卡布局无效");
+        for (const id of card.inputs) { if (!value.inputs.some(input => input.id === id) || inputIds.has(id)) fail("模板输入布局重复或无效"); inputIds.add(id); }
+        if (card.content) {
+          validateTemplateContent({ type: card.type!, content: card.content });
+        }
+      }
+    }
+  }
   return value;
 }
 
 /** Extract any selected subgraph. Boundary materials become required public inputs. */
 export function captureWorkflowTemplate(nodes: WorkflowNode[], selected: Set<string>, name: string, boundaryBindings?: Record<string, WorkflowInput>): WorkflowTemplate {
+  if (nodes.filter(node => selected.has(node.id) && node.kind === "trigger").length > 1) fail("一个模板暂时只能包含一个触发器，请分别保存这些流程");
   const cards = nodes.filter(node => selected.has(node.id)).map(node => normalizeWorkflowInputSlots(node));
   if (!cards.length || cards.filter(node => node.kind !== "trigger").length > 23 || cards.some(node => node.kind === "text" || node.kind === "planner")) fail("请选择 1–23 张执行卡片，可包含触发器；内容卡作为外部输入接入");
   if (cards.some(node => node.kind === "loop")) fail("循环卡片暂不支持存为模板，请在画板上复制循环流程");
@@ -158,8 +183,13 @@ export function instantiateWorkflowTemplate(template: WorkflowTemplate, bindings
   const result = buildWorkflowPlan(JSON.stringify(executablePlan(plan)), owner, sources, existing).nodes;
   result.forEach((node, i) => { if (plan.nodes[i].overwriteDescribe !== undefined) node.overwriteDescribe = plan.nodes[i].overwriteDescribe; });
   const dx = x - Math.min(...result.map(node => node.x)); result.forEach(node => { node.x += dx; if (node.kind === "agent") node.agentTransport = "cloud"; });
+  for (const card of template.layout ?? []) if (card.node) {
+    const node = result[plan.nodes.findIndex(node => node.id === card.node)];
+    node.x = x + card.x; node.y = y + card.y;
+  }
+  if (template.layout && !template.layout.some(card => card.node === plan.nodes[0].id)) { result[0].x = x - 380; result[0].y = y; }
   // Embedded files belong to the library, not every canvas save/run snapshot.
-  const snapshot = { ...structuredClone(template), inputs: template.inputs.map(({ content: _, ...input }) => input) };
+  const snapshot = { ...structuredClone(template), inputs: template.inputs.map(({ content: _, ...input }) => input), ...(template.layout ? { layout: template.layout.map(({ content: _, ...card }) => card) } : {}) };
   result[0].templateInstance = { template: snapshot, nodeIds: result.map(node => node.id), bindings: structuredClone(bindings), values: structuredClone(values), definitions: result.map(templateDefinition) };
   return result;
 }
