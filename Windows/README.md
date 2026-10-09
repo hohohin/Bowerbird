@@ -1,10 +1,10 @@
 # Bowerbird Windows 版
 
-## 2026-10-09 Windows 26.10.901 发布准备
+这里存放 Bowerbird 的 Windows 开发、构建与独立扩展加载工具。平台兼容行为已经并入项目主源码；脚本只把 canonical 项目复制到 Windows/.work，不再用整文件 override 替换源码。Windows/overrides/ 仅保留退役说明，不参与构建。
 
-包含 10 月 7 日同步的 Mac 增量与模板封装、预览和布局复用。完整 Rust 457 passed / 10 ignored、前端逻辑 153/153、模板 34 项、更新 UI、隔离 CLI 和实际 NSIS 登录重置钩子通过；离线视频测试需在临时 APPDATA 中提供应用正常启动会生成的本版 launcher。签名包正在构建，线上尚为 26.9.1803。发布/回滚及剩余实机边界见 [桌面自动更新](../dev-doc/DESKTOP-UPDATES.md)。
+## 2026-10-09 Windows 26.10.901 已发布
 
-这里存放 Bowerbird 的 Windows 开发、构建与独立扩展加载工具。平台兼容行为已经并入项目主源码；脚本只把 canonical 项目复制到 `Windows/.work/`，不再用整文件 override 替换源码。`Windows/overrides/` 仅保留退役说明，不参与构建。
+源码 dev@45d5652，包含 10 月 7 日同步的 Mac 增量与模板封装、预览和布局复用。完整 Rust 457 passed / 10 ignored、前端逻辑 153/153、模板 34 项、封装/更新 UI、隔离 CLI 和实际 NSIS 登录重置钩子通过；离线视频单测在临时 APPDATA 补齐正常启动生成的本版 launcher 后通过。安装包构建、旧公钥签名/篡改拒绝、x64/版本/资源/安装钩子及完整公网下载哈希核对通过，官网 Windows 更新清单、双首页和下载配置已切换。真实用户环境升级、登录重置与素材保留仍待专项验收；发布值、证据和回滚入口见 [桌面自动更新](../dev-doc/DESKTOP-UPDATES.md)。
 
 ## 2026-10-07 同步 Mac 源码
 
