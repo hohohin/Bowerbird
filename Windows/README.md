@@ -2,6 +2,10 @@
 
 这里存放 Bowerbird 的 Windows 开发、构建与独立扩展加载工具。平台兼容行为已经并入项目主源码；脚本只把 canonical 项目复制到 Windows/.work，不再用整文件 override 替换源码。Windows/overrides/ 仅保留退役说明，不参与构建。
 
+## 2026-10-09 Windows 26.10.903 已发布
+
+当前 Windows 改动已签名发布至官网与自动更新：生成卡片可选视频，即梦/方舟参数独立保存，结果沿现有连线交付；视频查询临时超时续查原任务，不重复提交生成。Rust 465 passed / 10 ignored、49 项前端逻辑及相关 UI、构建/资源/签名与完整公网下载核验通过。包在 `Windows/dist/Bowerbird_26.10.903_x64-setup.exe`；发布与回滚证据见 [桌面自动更新](../dev-doc/DESKTOP-UPDATES.md)。Mac 保持 26.10.801，真实安装升级及付费生成未在本轮验收。
+
 ## 2026-10-09 Windows 26.10.902 正式版修正
 
 用户已授权正式版隐藏技能/模板库入口、开放 Agent 图文输出与 Codex CLI。UI、端口、输入及运行时解除 DEV 限制；工作流后端保留 BYO 权益检查，旧聊天/编排保持开发限制。生产请求改存 `%APPDATA%/com.bowerbird.desktop/.agent-z/`，不再引用打包机源码路径。26.10.902 已构建、签名并替换官网和自动更新中的 26.10.901，保留旧包与回滚目录。安装包位于 `Windows/dist/Bowerbird_26.10.902_x64-setup.exe`，完整公网下载验签、67 个资源及原生等待 6 项检查通过；发布证据见 [桌面自动更新](../dev-doc/DESKTOP-UPDATES.md)。

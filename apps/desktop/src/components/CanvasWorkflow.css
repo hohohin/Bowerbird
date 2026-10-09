@@ -33,6 +33,9 @@
 .workflow-floating-tools { position:absolute; left:0; bottom:calc(100% + 40px); padding:6px; border:1px solid var(--bb-line); border-radius:9px; background:var(--bb-surface); box-shadow:0 4px 12px #0002; opacity:0; pointer-events:none; }
 .workflow-card:hover .workflow-floating-tools,.workflow-card.is-selected .workflow-floating-tools,.workflow-floating-tools:focus-within { opacity:1; pointer-events:auto; }
 .workflow-floating-tools fieldset { display:flex; gap:5px; }
+.workflow-video-controls { display:flex; flex-wrap:wrap; gap:8px; min-width:0; margin-bottom:12px; }
+.workflow-video-controls select { width:auto; max-width:100%; }
+.workflow-video-controls p { font-size:11px; color:var(--bb-muted); line-height:1.5; }
 .workflow-port { position:absolute; height:20px; padding:0; font-size:11px; color:var(--bb-muted); }
 .workflow-port.is-input { left:-7px; flex-direction:row; }
 .workflow-port.is-output { right:-7px; flex-direction:row-reverse; }

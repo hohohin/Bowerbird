@@ -1,6 +1,7 @@
 import { assignCanvasCardNames } from "./canvasCardNames";
 import { workflowTitle } from "./canvasWorkflow";
 import { api } from "./api";
+import { DEFAULT_VIDEO_OPTIONS, isVideoPath, videoInputError, videoProvider } from "./videoGeneration";
 import { autoRatioFromReferences } from "../components/creation/ratios";
 import { canonicalProviderKey } from "./genProviders";
 import { workflowLoopScope, workflowLoopRows, workflowLoopOutputs, validateLoopItems, validateLoopStart } from "./workflowLoop";
@@ -713,7 +714,7 @@ export class CanvasWorkflowController {
       const node = this.document.nodes.find(node => node.id === id)!;
       const step = this.run(runId).steps[id];
       if (step.status === "done" || halted()) return;
-      this.progress(runId, id, node.kind === "generation" ? "生成图片，等待会话结果" : node.kind === "skill" ? "执行技能，等待任务结果或审批" : node.kind === "visual-profile" ? "处理视觉规范" : node.kind === "trigger" ? "触发下游流程" : "读取输入素材");
+      this.progress(runId, id, node.kind === "generation" ? `生成${node.generation?.media === "video" ? "视频" : "图片"}，等待会话结果` : node.kind === "skill" ? "执行技能，等待任务结果或审批" : node.kind === "visual-profile" ? "处理视觉规范" : node.kind === "trigger" ? "触发下游流程" : "读取输入素材");
       const hasCells = Object.values(node.inputs).flat().some(input => input.canvasNodeId);
       const cellTexts = this.run(runId).cellTexts;
       const canvas = hasCells ? await api.projectCanvasGet(this.projectId) : null;
@@ -741,7 +742,9 @@ export class CanvasWorkflowController {
       const agentInput = node.kind === "agent" ? compileAgentPrompt(node, values) : null;
       const assetIds = generated?.assetIds ?? agentInput?.assetIds ?? [...new Set([...(values.image ?? []), ...(values.text ?? [])].flatMap(value => value.assetIds ?? []))];
       const assets = await api.getAssetsByIds(assetIds);
-      if (assets.length !== assetIds.length || assets.some(asset => !asset.store_path || asset.duration)) throw new Error("输入图片已丢失或不是静态图片，请重新选择");
+      const video = node.kind === "generation" && node.generation?.media === "video";
+      const acceptsVideo = video || node.kind === "text" && node.textTarget?.image;
+      if (assets.length !== assetIds.length || assets.some(asset => !asset.store_path || !acceptsVideo && (asset.duration || isVideoPath(asset.store_path)))) throw new Error("输入素材已丢失或当前卡片仅支持静态图片，请重新选择");
       const orderedAssets = assetIds.map(id => assets.find(asset => asset.id === id)!);
       const prompt = generated?.prompt ?? [...(values.text ?? []).map(value => value.text?.replace(/@图片\d+/g, token => {
         const ref = value.imageRefs?.find(ref => ref.token === token);
@@ -1000,6 +1003,9 @@ export class CanvasWorkflowController {
         await this.finish(runId, node, outputs);
         await emit("creative://changed", { projectId: this.projectId });
       } else if (node.kind === "generation") {
+        const generation = video ? { ...node.generation, media: "video" as const, videoOptions: node.generation?.videoOptions ?? DEFAULT_VIDEO_OPTIONS } : undefined;
+        const provider = generation ? videoProvider(generation.videoChannel, generation.videoOptions) : node.provider;
+        const ratio = generation ? generation.ratio ?? "16:9" : node.ratio;
         let paths: string[] = [];
         if (step.jobId) {
           const previous = (await api.recentGenSessions(500)).find(job => job.id === step.jobId);
@@ -1011,13 +1017,17 @@ export class CanvasWorkflowController {
           paths = turn?.images ?? [];
         } else {
           if (step.status !== "pending") throw new Error("无法确认上次提交状态，请检查任务中心");
+          if (generation) {
+            const error = videoInputError(generation.videoOptions, orderedAssets, ratio, provider);
+            if (error) throw new Error(error);
+          }
           const identity = { jobId: crypto.randomUUID(), turnKey: crypto.randomUUID() };
           const sessionNodeId = `gen-prompt:${identity.jobId}:${identity.turnKey}:0`;
           await this.save({ ...this.document, nodes: this.document.nodes.map(candidate => candidate.id === id
             ? { ...candidate, activeSessionNodeId: sessionNodeId, sessionNodeIds: [...(candidate.sessionNodeIds ?? []), sessionNodeId] } : candidate) });
           await this.step(runId, id, { status: "running", jobId: identity.jobId, turnKey: identity.turnKey });
-          const result = await useStore.getState().startGeneration(prompt, orderedAssets, node.ratio, node.provider, prompt,
-            undefined, undefined, undefined, visualProfileId, { projectId: this.projectId, threadId: this.run(runId).threadId }, false, undefined, identity);
+          const result = await useStore.getState().startGeneration(prompt, orderedAssets, ratio, provider, prompt,
+            undefined, undefined, undefined, visualProfileId, { projectId: this.projectId, threadId: this.run(runId).threadId }, false, generation, identity);
           if (!result.accepted) throw new Error(result.error || "生成未完成");
           const turns = useStore.getState().genJobs[identity.jobId]?.turns ?? [];
           paths = (turns.find(turn => turn.turnKey === identity.turnKey) ?? (turns.length === 1 && !turns[0].turnKey ? turns[0] : undefined))?.images ?? [];
@@ -1025,7 +1035,7 @@ export class CanvasWorkflowController {
         if (this.stopped.has(runId)) return;
         const assetIds = await Promise.all(paths.map(path => api.localAgentFindAssetId(path)));
         if (!assetIds.length || assetIds.some(id => !id)) {
-          await this.step(runId, id, { status: "waiting", error: "本次生成图片尚未入库，请稍后继续取回" }); return;
+          await this.step(runId, id, { status: "waiting", error: "本次生成产物尚未入库，请稍后继续取回" }); return;
         }
         await this.finish(runId, node, { image: { type: "image", assetIds: [...new Set(assetIds as string[])] } });
       } else {

@@ -22,6 +22,9 @@ import { invalidateWorkflow, newWorkflowNode, workflowNodeRun, workflowRuns, wor
 import type { Asset, CanvasNode, VisualProfileSummary } from "../lib/types";
 import { ProviderSelect } from "./creation/ProviderSelect";
 import { RatioSelect } from "./creation/RatioSelect";
+import { VideoControls } from "./creation/VideoControls";
+import { cloudVideoOptions, DEFAULT_VIDEO_OPTIONS, isVideoPath } from "../lib/videoGeneration";
+import { VideoPoster } from "./VideoPoster";
 import { CloudAgentSession } from "./CloudAgentPanel";
 import { ModalShell } from "./ModalShell";
 import { WorkflowPromptEditor } from "./WorkflowPromptEditor";
@@ -614,9 +617,11 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
           }}><X size={15} /></button>
         </header>
         {node.kind === "generation" && <div className="workflow-floating-tools" role="toolbar" aria-label="生成参数" onPointerDown={event => event.stopPropagation()}>
-          <fieldset disabled={busy}><RatioSelect value={node.ratio} onChange={ratio => patch(node.id, { ratio })} />
+          <fieldset disabled={busy}><select aria-label="生成类型" value={node.generation?.media ?? "image"} onChange={event => patch(node.id, { generation: { ...node.generation, media: event.target.value as "image" | "video" } })}>
+            <option value="image">图片</option><option value="video">视频</option>
+          </select>{node.generation?.media !== "video" && <><RatioSelect value={node.ratio} onChange={ratio => patch(node.id, { ratio })} />
             <ProviderSelect value={node.provider} onChange={provider => patch(node.id, { provider })} codexHealth={state.codexHealth} dreaminaHealth={state.dreaminaHealth}
-              cloudAvailable={!!state.cloudAuth?.cloud_available} cloudAuth={state.cloudAuth} cloudEntitlement={state.cloudEntitlement} /></fieldset>
+              cloudAvailable={!!state.cloudAuth?.cloud_available} cloudAuth={state.cloudAuth} cloudEntitlement={state.cloudEntitlement} /></>}</fieldset>
         </div>}
         <div className="workflow-card-body">
           {node.templateInstance && <section className="workflow-template-instance" aria-label="子流程接口">
@@ -676,11 +681,19 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
           </section>}
           {node.kind === "instruction" && node.action === "describe" && <WorkflowDescribeOption node={node} assetIds={inputIds} checked={!!node.overwriteDescribe} disabled={busy} onChange={overwriteDescribe => patch(node.id, { overwriteDescribe })} />}
           {node.kind === "visual-profile" && !node.profileId && <input className="workflow-profile-name" aria-label="规范名称" disabled={busy} maxLength={80} placeholder="画板视觉规范" value={node.profileName ?? ""} onChange={event => patch(node.id, { profileName: event.target.value }, false)} />}
+          {node.kind === "generation" && node.generation?.media === "video" && <fieldset className="workflow-video-controls" disabled={busy} onPointerDown={event => event.stopPropagation()}>
+            <VideoControls options={node.generation.videoOptions ?? DEFAULT_VIDEO_OPTIONS} channel={node.generation.videoChannel ?? "jimeng"}
+              onChange={videoOptions => patch(node.id, { generation: { ...node.generation, videoOptions } })}
+              onChannelChange={videoChannel => patch(node.id, { generation: { ...node.generation, videoChannel, videoOptions: videoChannel === "cloud" ? cloudVideoOptions(node.generation?.videoOptions ?? DEFAULT_VIDEO_OPTIONS) : node.generation?.videoOptions } })}
+              ratio={node.generation.ratio ?? "16:9"} onRatioChange={ratio => patch(node.id, { generation: { ...node.generation, ratio } })} />
+            <p>按 @ 引用顺序传入素材；首尾帧模式依次为首帧、尾帧。</p>
+          </fieldset>}
           {(node.kind === "generation" || node.kind === "agent") && <WorkflowPromptEditor node={{ ...node, inputs: { ...node.inputs, image: node.inputs.image?.map(input => input.groupId ? { ...input, assetIds: materials.find(item => item.groupId === input.groupId)?.assetIds ?? [] } : input) ?? [] } }} nodes={document.nodes} graphNodes={graphNodes} disabled={busy} onChange={(prompt, promptReferences) => patch(node.id, { prompt, promptReferences })} />}
           {node.kind !== "planner" && node.kind !== "trigger" && node.kind !== "loop" && node.kind !== "generation" && node.kind !== "agent" && !(node.kind === "instruction" && node.action !== "describe") && !(node.kind === "visual-profile" && node.profileId) && <textarea aria-label={node.kind === "instruction" ? "反推要求" : node.kind === "visual-profile" ? "视觉要求" : "卡片指令"}
             disabled={busy} maxLength={node.kind === "visual-profile" ? 4000 : undefined} placeholder={node.kind === "instruction" ? "留空使用当前反推要求" : node.kind === "visual-profile" ? "描述配色、构图、光线等要求；可只接图片或只填文字…" : "输入创作要求，也可从文本端口接入…"}
             value={node.prompt} onChange={event => patch(node.id, { prompt: event.target.value })} />}
           {selectedImages.length > 0 ? <div className="workflow-preview">{selectedImages.map(asset => {
+            if (isVideoPath(asset.store_path)) return <VideoPoster key={asset.id} path={asset.store_path} poster={asset.thumb_path} title={asset.name} alt={asset.name} />;
             const path = canvasAssetMediaPath({ thumbPath: asset.thumb_path ?? null, storePath: asset.store_path ?? null }) ?? "";
             return <img key={asset.id} title={asset.name} alt={asset.name} src={path.startsWith("data:") ? path : convertFileSrc(path)} />;
           })}</div>

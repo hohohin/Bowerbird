@@ -12,6 +12,7 @@ use super::types::{Chunk, CodexRequest, GenOutcome, VideoOptions};
 use crate::error::{AppError, AppResult};
 
 const RATIOS: &[&str] = &["1:1", "3:4", "16:9", "4:3", "9:16", "21:9"];
+const QUERY_ERROR_RETRIES: usize = 3;
 
 fn reference_is_video(path: &Path) -> bool {
     path.extension()
@@ -232,14 +233,39 @@ impl Drop for DownloadDir {
     }
 }
 
-/// 仅明确 querying 时继续，没有视频总截止时间；外层取消会 drop 正在查询的子进程。
+/// 只识别命令层的临时传输错误，远端 fail（即使原因含 timeout）仍立即返回。
+fn retryable_query_error(error: &AppError) -> bool {
+    let AppError::Jimeng(message) = error else { return false };
+    if message.starts_with("dreamina 单次命令超时") {
+        return true;
+    }
+    message.starts_with("dreamina 退出 ")
+        && [
+            "context deadline exceeded",
+            "Client.Timeout exceeded",
+            "i/o timeout",
+            "TLS handshake timeout",
+            "connection reset by peer",
+        ].iter().any(|reason| message.contains(reason))
+}
+
+/// querying 持续等待，临时查询错误有限重试；外层取消会 drop 子进程及等待。
 pub(crate) async fn poll_video(
     binary: &str,
     submit_id: &str,
 ) -> AppResult<(Vec<PathBuf>, PathBuf)> {
+    poll_video_with_interval(binary, submit_id, Duration::from_secs(10)).await
+}
+
+async fn poll_video_with_interval(
+    binary: &str,
+    submit_id: &str,
+    interval: Duration,
+) -> AppResult<(Vec<PathBuf>, PathBuf)> {
     let mut dir =
         DownloadDir(std::env::temp_dir().join(format!("bowerbird-video-{}", Ulid::new())));
     std::fs::create_dir_all(&dir.0)?;
+    let mut consecutive_errors = 0;
     loop {
         let value = run(
             binary,
@@ -251,9 +277,27 @@ pub(crate) async fn poll_video(
                 dir.0.as_os_str().to_owned(),
             ],
         )
-        .await?;
+        .await;
+        let value = match value {
+            Ok(value) => {
+                consecutive_errors = 0;
+                value
+            }
+            Err(error) if retryable_query_error(&error) => {
+                if consecutive_errors >= QUERY_ERROR_RETRIES {
+                    return Err(AppError::Jimeng(format!(
+                        "视频结果查询暂时中断，已重试 {QUERY_ERROR_RETRIES} 次；远端生成状态尚未确认。任务编号已保留，可稍后取回原任务，无需重新生成。最后错误：{error}"
+                    )));
+                }
+                consecutive_errors += 1;
+                tracing::info!(retry = consecutive_errors, "即梦视频查询暂时中断，稍后续查原任务");
+                tokio::time::sleep(interval).await;
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
         match value.get("gen_status").and_then(|v| v.as_str()) {
-            Some("querying") => tokio::time::sleep(Duration::from_secs(10)).await,
+            Some("querying") => tokio::time::sleep(interval).await,
             Some("success") => {
                 let videos = walk_videos(&dir.0);
                 if videos.is_empty() {
@@ -446,6 +490,20 @@ mod tests {
         assert!(response(b"not json").is_err());
     }
 
+    #[test]
+    fn only_command_transport_errors_are_retryable() {
+        for reason in ["context deadline exceeded", "Client.Timeout exceeded", "i/o timeout",
+            "TLS handshake timeout", "connection reset by peer"] {
+            assert!(retryable_query_error(&AppError::Jimeng(format!("dreamina 退出 exit code: 1：{reason}"))));
+            assert!(!retryable_query_error(&remote_failure(&serde_json::json!({"fail_reason": reason}))));
+        }
+        assert!(retryable_query_error(&AppError::Jimeng("dreamina 单次命令超时；已提交任务可重新取回".into())));
+        for reason in ["dreamina 退出 exit code: 1：unauthorized", "启动 dreamina 失败：file not found",
+            "dreamina 任务 JSON 无法解析", "视频查询返回未知状态"] {
+            assert!(!retryable_query_error(&AppError::Jimeng(reason.into())));
+        }
+    }
+
     #[tokio::test]
     async fn offline_cli_submit_download_recovery_and_cancel_protocol() {
         let dir = DownloadDir(std::env::temp_dir().join(format!("bb-video-cli-test-{}", Ulid::new())));
@@ -472,7 +530,31 @@ mod tests {
         assert!(poll_video(binary, "failed").await.unwrap_err().to_string().contains("VIP required"));
         assert!(poll_video(binary, "unknown").await.unwrap_err().to_string().contains("未知状态"));
         assert!(tokio::time::timeout(Duration::from_millis(500), poll_video(binary, "pending")).await.is_err());
+        // Three transient failures on either side of a valid querying response reset the budget.
+        let (restored, root) = poll_video_with_interval(binary, "transient", Duration::from_millis(1)).await.unwrap();
+        assert_eq!(restored.len(), 1);
+        std::fs::remove_dir_all(root).unwrap();
+        let error = poll_video_with_interval(binary, "timeout", Duration::from_millis(1)).await.unwrap_err().to_string();
+        assert!(error.contains("已重试 3 次"));
+        assert!(error.contains("远端生成状态尚未确认"));
+        assert!(error.contains("取回原任务"));
+        assert!(poll_video(binary, "unauthorized").await.unwrap_err().to_string().contains("please login"));
+        assert!(poll_video(binary, "remote-timeout").await.unwrap_err().to_string().contains("即梦视频生成失败"));
+        // Cancellation also interrupts retry backoff, without another query or submission.
+        assert!(tokio::time::timeout(Duration::from_millis(500), poll_video(binary, "timeout")).await.is_err());
+        let mut request = req(&[]);
+        request.instruction = "submit timeout".into();
+        assert!(generate(binary, request, options("text2video"), &tx, None).await.is_err());
         let log = std::fs::read_to_string(dir.0.join("calls.txt")).unwrap();
-        assert_eq!(log.lines().filter(|line| line.starts_with("text2video|")).count(), 1, "recovery and querying must never resubmit generation");
+        assert_eq!(log.lines().filter(|line| line.starts_with("text2video|")).count(), 2, "one normal submission and one explicitly requested submission timeout; never auto-resubmit");
+        for (id, expected) in [("offline-video-submit", 3), ("transient", 8), ("timeout", 5), ("unauthorized", 1), ("remote-timeout", 1)] {
+            let calls: Vec<_> = log.lines().filter(|line| line.contains(&format!("query_result|--submit_id|{id}|"))).collect();
+            assert_eq!(calls.len(), expected, "query count for {id}");
+            // Failed/cancelled polls clean up the same directory used across retries.
+            for call in calls {
+                let path = call.split("|--download_dir|").nth(1).unwrap();
+                assert!(!Path::new(path).exists(), "download directory leaked: {path}");
+            }
+        }
     }
 }

@@ -22,6 +22,7 @@ export interface WorkflowPromptReference { slot?: number; id: string; type: "tex
 export interface WorkflowNode {
   id: string; kind: WorkflowKind; x: number; y: number;
   action: WorkflowAction; skill: string; prompt: string; ratio: string | null; provider: string;
+  generation?: import("./videoGeneration").GenerationSettings;
   promptReferences?: WorkflowPromptReference[];
   overwriteDescribe?: boolean;
   describeCache?: { instruction: string; results: { assetId: string; sections: { title: string; body: string }[] }[] };
@@ -92,7 +93,7 @@ export function workflowInputs(node: WorkflowNode): WorkflowPort[] {
   if (node.kind === "trigger" || node.textSource) return [];
   if (node.kind === "loop") return node.loopMode === "rows" ? [{ id: "text", label: "内容行", type: "text" }] : [{ id: "image", label: "图片列表", type: "image" }];
   if (node.kind === "instruction") return [{ id: "image", label: "图片", type: "image" }];
-  const ports: WorkflowPort[] = [{ id: "text", label: "文本", type: "text" }, { id: "image", label: "图片", type: "image" }];
+  const ports: WorkflowPort[] = [{ id: "text", label: "文本", type: "text" }, { id: "image", label: node.kind === "generation" && node.generation?.media === "video" ? "参考素材" : "图片", type: "image" }];
   if (node.kind === "generation" || node.kind === "skill") ports.push({ id: "visual-profile", label: "视觉规范", type: "visual-profile" });
   return ports;
 }
@@ -105,7 +106,7 @@ export function workflowOutputs(node: WorkflowNode): WorkflowPort[] {
     ...(usesConnectedAgentInputs(node) ? [{ id: "image", label: "返回图片", type: "image" as const }] : [])];
   if (node.kind === "trigger") return [{ id: "signal", label: "触发", type: "signal" }];
   if (node.kind === "text") return node.textTarget?.image ? [{ id: "image", label: "图片", type: "image" }] : [{ id: "text", label: "文本", type: "text" }];
-  if (node.kind === "generation") return [{ id: "image", label: "图片", type: "image" }];
+  if (node.kind === "generation") return [{ id: "image", label: node.generation?.media === "video" ? "视频" : "图片", type: "image" }];
   if (node.kind === "visual-profile") return [{ id: "visual-profile", label: "视觉规范", type: "visual-profile" }];
   if (node.kind !== "instruction") return [{ id: "image", label: node.kind === "skill" && node.skill === "html-layout" ? "排版截图" : "图片", type: "image" }];
   if (node.action === "reuse") return [{ id: "text", label: "生成提示词", type: "text" }, { id: "image", label: "参考图片", type: "image" }];

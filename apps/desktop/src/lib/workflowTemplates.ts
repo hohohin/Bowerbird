@@ -119,6 +119,7 @@ export function captureWorkflowTemplate(nodes: WorkflowNode[], selected: Set<str
   const cards = nodes.filter(node => selected.has(node.id)).map(node => normalizeWorkflowInputSlots(node));
   if (!cards.length || cards.filter(node => node.kind !== "trigger").length > 23 || cards.some(node => node.kind === "text" || node.kind === "planner")) fail("请选择 1–23 张执行卡片，可包含触发器；内容卡作为外部输入接入");
   if (cards.some(node => node.kind === "loop")) fail("循环卡片暂不支持存为模板，请在画板上复制循环流程");
+  if (cards.some(node => node.kind === "generation" && node.generation?.media === "video")) fail("视频生成卡片暂不支持存为模板或导出，请在画板上复制卡片");
   if (cards.some(node => node.profileId)) fail("已绑定的个人视觉规范不能分享，请改成从输入提炼后保存");
   const work = cards.filter(node => node.kind !== "trigger");
   if (!work.length) fail("模板需要至少一张执行卡片");
@@ -158,7 +159,7 @@ export function captureWorkflowTemplate(nodes: WorkflowNode[], selected: Set<str
 export const templateDefinition = (node: WorkflowNode) => {
   node = normalizeWorkflowInputSlots(node);
   return planningSnapshotKey({ kind: node.kind, action: node.action, skill: node.skill, prompt: node.prompt, ratio: node.ratio,
-  provider: node.provider, inputs: node.inputs, promptReferences: node.promptReferences, agentTransport: node.agentTransport, profileId: node.profileId, overwriteDescribe: !!node.overwriteDescribe });
+  provider: node.provider, generation: node.generation, inputs: node.inputs, promptReferences: node.promptReferences, agentTransport: node.agentTransport, profileId: node.profileId, overwriteDescribe: !!node.overwriteDescribe });
 };
 
 export function instantiateWorkflowTemplate(template: WorkflowTemplate, bindings: Record<string, WorkflowInput>, values: Record<string, string>, provider: string,

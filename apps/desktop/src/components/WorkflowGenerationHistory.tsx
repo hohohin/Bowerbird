@@ -7,6 +7,8 @@ import { canvasSessionImages, workflowSessionIds } from "../lib/canvasSessionOut
 import type { WorkflowNode } from "../lib/canvasWorkflow";
 import type { Asset, CanvasNode } from "../lib/types";
 import { BoardChipPreview } from "./creation/BoardChipPreview";
+import { VideoPoster } from "./VideoPoster";
+import { isVideoPath } from "../lib/videoGeneration";
 
 export function WorkflowGenerationHistory({ node, graphNodes, onOpen }: {
   node: WorkflowNode; graphNodes: CanvasNode[]; onOpen: (node: CanvasNode) => void;
@@ -79,7 +81,7 @@ export function WorkflowGenerationHistory({ node, graphNodes, onOpen }: {
         const thumbnail = cover?.thumb_path || cover?.store_path;
         return <li key={card.id}><button type="button" data-workflow-history-session={card.id} onClick={() => { setOpen(false); onOpen(card); }}>
           <span className="workflow-history-thumbnail" data-asset-id={thumbnail ? cover?.id : undefined}>
-            {thumbnail ? <img src={convertFileSrc(thumbnail)} alt="会话产物" draggable={false} /> : <ImageIcon size={18} aria-label={products.length ? "产物暂不可用" : "暂无产物"} />}
+            {cover && isVideoPath(cover.store_path) ? <VideoPoster path={cover.store_path} poster={cover.thumb_path} alt="视频产物" /> : thumbnail ? <img src={convertFileSrc(thumbnail)} alt="会话产物" draggable={false} /> : <ImageIcon size={18} aria-label={products.length ? "产物暂不可用" : "暂无产物"} />}
             {products.length > 1 && <span className="workflow-history-image-count">{products.length} 张</span>}
           </span>
           <span className="workflow-history-summary">
