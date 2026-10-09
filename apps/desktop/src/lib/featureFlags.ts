@@ -15,3 +15,8 @@ export const AGENT_DS_ENABLED = true;
 // CS6/CS7：只显示尚未回填到 creative session 的旧会话，并强制只读。真实用户库副本
 // 迁移与真机验收通过后改为 false；不得再允许这条回退路径产生平行会话写入。
 export const LEGACY_CREATIVE_SESSION_FALLBACK_ENABLED = true;
+
+// 暂时隐藏画板技能卡片、工作流助手和模板库入口，保留已有数据与数据包交换。
+export const WORKFLOW_SKILL_ENABLED = false;
+export const WORKFLOW_PLANNER_ENABLED = false;
+export const WORKFLOW_TEMPLATE_LIBRARY_ENABLED = false;

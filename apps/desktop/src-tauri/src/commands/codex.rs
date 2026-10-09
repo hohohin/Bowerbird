@@ -93,6 +93,21 @@ pub async fn codex_health() -> Result<CodexHealth, AppError> {
     })
 }
 
+/// File-backed credentials belong to Bowerbird; logout must also work when the CLI is missing.
+#[tauri::command]
+pub async fn codex_logout(app: AppHandle) -> Result<CodexHealth, AppError> {
+    let setup = SETUP_CANCEL.lock().unwrap();
+    if setup.as_ref().is_some_and(|sender| !sender.is_closed()) {
+        return Err(AppError::Codex("请先取消正在进行的 Codex 安装或登录，再退出登录".into()));
+    }
+    let app_dir = crate::codex::codex_cli::app_data_dir()
+        .ok_or_else(|| AppError::Codex("无法定位园丁鸟的 Codex 登录目录".into()))?;
+    crate::cli_credentials::clear_codex_auth(&app_dir)
+        .map_err(|error| AppError::Codex(format!("退出 Codex 登录失败：{error}")))?;
+    let _ = app.emit("codex://health-changed", ());
+    Ok(CodexHealth { ok: false, reason: "Bowerbird 的 Codex 未登录，请在设置中登录".into() })
+}
+
 /// 当前安装/登录引导的取消信号（与反推 `DESCRIBE_CANCEL` / 生成 `GENERATE_CANCEL` 独立；
 /// onboarding 顺序执行，不会并发）。
 static SETUP_CANCEL: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>> =

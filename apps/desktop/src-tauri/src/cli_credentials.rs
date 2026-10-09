@@ -85,9 +85,13 @@ fn check_private_paths(app_dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-pub(crate) fn clear_files(app_dir: &Path) -> std::io::Result<()> {
+pub(crate) fn clear_codex_auth(app_dir: &Path) -> std::io::Result<()> {
     check_private_paths(app_dir)?;
-    remove_file_if_present(&app_dir.join("cli-profiles/codex/auth.json"))?;
+    remove_file_if_present(&app_dir.join("cli-profiles/codex/auth.json"))
+}
+
+pub(crate) fn clear_files(app_dir: &Path) -> std::io::Result<()> {
+    clear_codex_auth(app_dir)?;
     remove_file_if_present(&app_dir.join("entitlement.json"))
 }
 
@@ -139,6 +143,37 @@ pub(crate) fn stop_owned_cli(app_dir: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn codex_logout_only_removes_private_auth_and_is_idempotent() {
+        let temp = std::env::temp_dir().join(format!("bb-codex-logout-{}", ulid::Ulid::new()));
+        std::fs::create_dir_all(temp.join("cli-profiles/codex/sessions")).unwrap();
+        std::fs::create_dir_all(temp.join("cli-profiles/dreamina")).unwrap();
+        let kept = ["entitlement.json", "library.db", "settings.json", "cli-profiles/codex/config.toml",
+            "cli-profiles/codex/sessions/history.jsonl", "cli-profiles/dreamina/auth.json"];
+        for file in kept { std::fs::write(temp.join(file), b"keep").unwrap(); }
+        std::fs::write(temp.join("cli-profiles/codex/auth.json"), b"test-token").unwrap();
+        clear_codex_auth(&temp).unwrap();
+        clear_codex_auth(&temp).unwrap();
+        assert!(!temp.join("cli-profiles/codex/auth.json").exists());
+        for file in kept { assert_eq!(std::fs::read(temp.join(file)).unwrap(), b"keep"); }
+        std::fs::create_dir(temp.join("cli-profiles/codex/auth.json")).unwrap();
+        assert!(clear_codex_auth(&temp).is_err());
+        std::fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_logout_rejects_shared_profile_symlink() {
+        let temp = std::env::temp_dir().join(format!("bb-codex-logout-link-{}", ulid::Ulid::new()));
+        std::fs::create_dir_all(temp.join("app/cli-profiles")).unwrap();
+        std::fs::create_dir_all(temp.join("shared")).unwrap();
+        std::fs::write(temp.join("shared/auth.json"), b"keep").unwrap();
+        std::os::unix::fs::symlink(temp.join("shared"), temp.join("app/cli-profiles/codex")).unwrap();
+        assert!(clear_codex_auth(&temp.join("app")).is_err());
+        assert_eq!(std::fs::read(temp.join("shared/auth.json")).unwrap(), b"keep");
+        std::fs::remove_dir_all(temp).unwrap();
+    }
+
     #[test]
     fn reset_preserves_library_settings_and_cli_history() {
         let temp = std::env::temp_dir().join(format!("bb-auth-test-{}", ulid::Ulid::new()));

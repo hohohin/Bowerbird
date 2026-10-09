@@ -39,8 +39,8 @@ export function WindingKey({ size = 20 }: { size?: number }) {
 }
 export interface WorkflowGeometry { id: string; x: number; y: number; width: number; height: number }
 export interface WorkflowLayerHandle {
-  templates: () => void;
-  saveTemplate: (ids: string[], mode?: "template" | "container") => void;
+  templates: (importPackage?: boolean) => void;
+  saveTemplate: (ids: string[], mode?: "template" | "package" | "container") => void;
   inputText: (nodeId: string, cellId?: string, disconnect?: boolean, type?: "text" | "image", point?: { x: number; y: number }) => void;
   connectCell: (nodeId: string, cellId: string, clientX: number, clientY: number) => void;
   add: (kind: WorkflowKind, x: number, y: number) => void; arm: (x?: number, y?: number) => void;
@@ -82,8 +82,8 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
   const [assets, setAssets] = useState<Asset[]>([]);
   const [agentOpen, setAgentOpen] = useState(false);
   const [agentImage, setAgentImage] = useState<Asset | null>(null);
-  const [templateLibrary, setTemplateLibrary] = useState<{ instanceRoot?: string } | null>(null);
-  const [templateSelection, setTemplateSelection] = useState<{ projectId: string; ids: string[]; nodes: WorkflowNode[]; canvas: CanvasNode[]; bounds: WorkflowGeometry[]; mode: "template" | "container" } | null>(null);
+  const [templateLibrary, setTemplateLibrary] = useState<{ instanceRoot?: string; importPackage?: boolean } | null>(null);
+  const [templateSelection, setTemplateSelection] = useState<{ projectId: string; ids: string[]; nodes: WorkflowNode[]; canvas: CanvasNode[]; bounds: WorkflowGeometry[]; mode: "template" | "container" | "package" } | null>(null);
   const [keyHover, setKeyHover] = useState<{ id: string; x: number; y: number; anchor: HTMLElement; rect: DOMRect; focus: boolean } | null>(null);
   const [disconnectMenu, setDisconnectMenu] = useState<{ x: number; y: number; choices: DisconnectChoice[] } | null>(null);
   const [profiles, setProfiles] = useState<VisualProfileSummary[]>([]);
@@ -383,7 +383,7 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
     return () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", end); window.removeEventListener("keydown", key); };
   }, [armed, controller, document, graphNodes]);
   useImperativeHandle(ref, () => ({
-    templates() { setTemplateLibrary({}); },
+    templates(importPackage = false) { setTemplateLibrary({ importPackage }); },
     saveTemplate(ids, mode = "template") { setTemplateSelection({ projectId, ids: [...expandCanvasSections(new Set(ids), graphNodes)], nodes: structuredClone(controller.document.nodes), canvas: structuredClone(graphNodes), mode,
       bounds: [...materials, ...graphNodes.filter(node => node.hiddenAt == null), ...controller.document.nodes.map(node => ({ id: node.id, x: node.x, y: node.y, width: WORKFLOW_CARD_WIDTH, height: cardElements.current.get(node.id)?.offsetHeight ?? 330 }))] }); },
     inputText,
@@ -647,8 +647,8 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
           {node.kind === "skill" && <select aria-label="选择技能" disabled={busy} value={node.skill} onChange={event => patch(node.id, { skill: event.target.value })}>
             {WORKFLOW_SKILLS.map(skill => <option key={skill.id} value={skill.id}>{skill.label}</option>)}
           </select>}
-          {node.kind === "agent" && import.meta.env.DEV && <select aria-label="Agent 测试通道" disabled={busy} value={node.agentTransport ?? "local-ds"} onChange={event => patch(node.id, { agentTransport: event.target.value as "local-ds" | "cloud" })}>
-            <option value="local-ds">本机 Agent DS · 图文处理</option><option value="cloud">Cloud DSH · 文本改写</option>
+          {node.kind === "agent" && import.meta.env.DEV && <select aria-label="Agent 测试通道" disabled={busy} value={node.agentTransport ?? "local-ds"} onChange={event => patch(node.id, { agentTransport: event.target.value as "local-ds" | "codex-cli" | "cloud" })}>
+            <option value="local-ds">本机 Agent DS · 图文处理</option><option value="codex-cli">Codex CLI · 图文处理</option><option value="cloud">Cloud DSH · 文本改写</option>
           </select>}
           {node.kind === "visual-profile" && <select aria-label="视觉规范来源" disabled={busy} value={node.profileId ?? ""} onChange={event => patch(node.id, { profileId: event.target.value || undefined, profileCache: undefined, inputs: {}, prompt: "" })}>
             <option value="">从图片 / 文字提炼</option>
@@ -658,10 +658,15 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
           <div className="workflow-port-space" style={{ height: Math.max(inputPorts.length, outputPorts.length, 2) * 30 + (node.kind === "generation" ? 32 : 0) }} />
           {node.kind === "loop" && <section className="workflow-loop" aria-label="循环设置">
             <p className="workflow-hint">{node.loopMode === "rows" ? "连接内容卡整体文本输出，每行的文字和图片一起处理；空行跳过。" : "按输入顺序逐张处理图片。"}全部下游完成后再进入下一项，最多 100 项。</p>
-            {loop && <p role="status">{loop.items ? `已完成 ${loop.completed.length} / ${loop.items.length} 项${loop.completed.length < loop.items.length ? ` · 当前第 ${loop.index + 1} 项` : ""}` : "等待上游准备输入"}</p>}
+            <label className="workflow-loop-start">从第 <input type="number" aria-label="循环起始项" min={1} max={100} step={1} disabled={busy} value={node.loopStartItem ?? 1} onChange={event => {
+              const loopStartItem = event.target.valueAsNumber;
+              if (Number.isInteger(loopStartItem) && loopStartItem >= 1 && loopStartItem <= 100) patch(node.id, { loopStartItem }, false);
+            }} /> 项开始</label>
+            {loop && <p role="status">{loop.items ? `已完成 ${loop.completed.length} / ${loop.items.length - (loop.startIndex ?? 0)} 项${loop.startIndex ? ` · 从第 ${loop.startIndex + 1} 项起` : ""}${(loop.startIndex ?? 0) + loop.completed.length < loop.items.length ? ` · 当前第 ${loop.index + 1} 项` : ""}` : "等待上游准备输入"}</p>}
             {loop && run?.status === "waiting" && <button onClick={() => handle(Object.values(run.steps).some(step => step.status === "failed") ? controller.retryLoop(run.id) : controller.continue(run.id))}>{Object.values(run.steps).some(step => step.status === "failed") ? "重试失败步骤" : "继续循环"}</button>}
+            {loop && run?.status === "stopped" && (!loop.items || (loop.startIndex ?? 0) + loop.completed.length < loop.items.length) && <button disabled={busy} title="保留已完成结果与当轮输入，重新执行当前未完成项" onClick={() => handle(controller.restartLoop(run.id))}>从中断处开始 · 第 {loop.index + 1} 项</button>}
             {!!loop?.completed.length && <details className="workflow-loop-results"><summary>已完成结果 · {loop.completed.length} 项</summary>{loop.completed.map((item, index) => <details key={index}>
-              <summary>第 {index + 1} 项</summary>{Object.entries(item.outputs).map(([id, outputs]) => <div key={id}>
+              <summary>第 {(loop.startIndex ?? 0) + index + 1} 项</summary>{Object.entries(item.outputs).map(([id, outputs]) => <div key={id}>
                 <strong>{workflowTitle(document.nodes.find(node => node.id === id)!)}</strong>
                 {Object.values(outputs).map((value, outputIndex) => <div key={outputIndex}>{value.text && <p style={{ whiteSpace: "pre-wrap" }}>{value.text}</p>}{value.assetIds?.map(assetId => {
                   const asset = assets.find(asset => asset.id === assetId); const path = asset && canvasAssetMediaPath({ thumbPath: asset.thumb_path ?? null, storePath: asset.store_path ?? null });
@@ -679,7 +684,7 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
             const path = canvasAssetMediaPath({ thumbPath: asset.thumb_path ?? null, storePath: asset.store_path ?? null }) ?? "";
             return <img key={asset.id} title={asset.name} alt={asset.name} src={path.startsWith("data:") ? path : convertFileSrc(path)} />;
           })}</div>
-            : node.kind !== "planner" && node.kind !== "loop" && <p className="workflow-hint">{node.kind === "agent" ? (import.meta.env.DEV && node.agentTransport !== "cloud" ? "本机 Agent DS · 自动接收已连接图文，@ 指定用途 · 每卡独立会话" : "Cloud DSH · 按 @ 引用原文，再描述修改要求") : node.kind === "trigger" ? <><WindingKey size={28} />将触发连线拖到下游卡片上</> : <><ImagePlus size={14} />{node.kind === "visual-profile" ? "图片可选 · 规范只影响连接的下游" : "拖入图片，或连接左侧端口"}</>}</p>}
+            : node.kind !== "planner" && node.kind !== "loop" && <p className="workflow-hint">{node.kind === "agent" ? (import.meta.env.DEV && node.agentTransport !== "cloud" ? `${node.agentTransport === "codex-cli" ? "Codex CLI" : "本机 Agent DS"} · 自动接收已连接图文，@ 指定用途 · 每卡独立会话` : "Cloud DSH · 按 @ 引用原文，再描述修改要求") : node.kind === "trigger" ? <><WindingKey size={28} />将触发连线拖到下游卡片上</> : <><ImagePlus size={14} />{node.kind === "visual-profile" ? "图片可选 · 规范只影响连接的下游" : "拖入图片，或连接左侧端口"}</>}</p>}
           {node.kind === "visual-profile" && <>
             {!node.profileId && <p className="workflow-hint">提炼 2 积分 · 图片分析另用账号额度 · 保存后继续</p>}
             {node.outputs["visual-profile"] && <p className="workflow-profile-summary">v{node.outputs["visual-profile"].version} · {node.outputs["visual-profile"].summary}</p>}
@@ -768,9 +773,9 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
       <img className="workflow-image-preview" src={convertFileSrc(agentImage.store_path || agentImage.thumb_path || "")} alt={agentImage.name} />
     </ModalShell>}
     {templateLibrary && <WorkflowTemplateLibrary controller={controller} selectedIds={selectedIds} graphNodes={graphNodes} provider={state.activeGenProvider || state.defaultProvider}
-      instanceRoot={templateLibrary.instanceRoot} ensureMaterialized={ensureMaterialized} onClose={() => setTemplateLibrary(null)} onLocate={locateIssue} />}
+      instanceRoot={templateLibrary.instanceRoot} importPackage={templateLibrary.importPackage} ensureMaterialized={ensureMaterialized} onClose={() => setTemplateLibrary(null)} onLocate={locateIssue} />}
     {templateSelection?.projectId === projectId && <SaveWorkflowTemplateDialog nodes={templateSelection.nodes} selectedIds={templateSelection.ids} graphNodes={templateSelection.canvas} bounds={templateSelection.bounds} mode={templateSelection.mode}
       onEncapsulate={async (name, members, template) => { await ensureMaterialized(); const result = await controller.encapsulate(name, members, templateSelection.bounds, template); onPlaced(result.bounds); return result; }}
-      onClose={() => setTemplateSelection(null)} onSaved={() => notifySuccess(templateSelection.mode === "template" ? "已存为模板，并保留封装布局" : "已封装为容器")} />}
+      onClose={() => setTemplateSelection(null)} onSaved={() => notifySuccess(templateSelection.mode === "package" ? "工作流数据包已导出，可发送给对方导入" : templateSelection.mode === "template" ? "已存为模板，并保留封装布局" : "已封装为容器")} />}
   </>;
 });

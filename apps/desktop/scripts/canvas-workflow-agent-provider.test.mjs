@@ -18,7 +18,8 @@ try {
     api.agentDsWorkflowGenerationJob = async id => jobs.get(id) ?? null;
     const originalNodes = window.snapshot().nodes.length;
     useStore.setState({ activeJobId: null, startGeneration: async () => { throw Error("Agent must not create an ordinary generation conversation"); } });
-    api.agentDsWorkflowStart = async (id, _prompt, _source, _purpose, _images, _scope, provider) => {
+    api.agentDsWorkflowStart = async (id, _prompt, _source, _purpose, _images, _scope, provider, transport) => {
+      check(transport === active.document.nodes[0].agentTransport, "Agent transport is independent of image provider");
       deliveries++; check(provider === useStore.getState().defaultProvider, 'delivery takes starred default, not active or card provider');
       requests.set(id, { id: crypto.randomUUID(), prompt: '一只猫', images: _images, ratio: '1:1' });
       pending = id; return { autoDelivered: true, path: 'isolated' };
@@ -43,13 +44,13 @@ try {
       if (!loseResult) jobs.set(args.jobId, { status: 'done', images: ['/tmp/generated.png'] });
       return 'provider-session';
     };
-    const setup = async provider => {
+    const setup = async (provider, transport = "local-ds") => {
       useStore.setState({ defaultProvider: provider, activeGenProvider: provider === 'codex' ? 'jimeng' : 'codex' });
       active = new CanvasWorkflowController(`provider-${crypto.randomUUID()}`); await active.load();
-      await active.edit([{ ...newWorkflowNode('agent', 0, 0, 'ignored-provider'), id: 'agent', prompt: '画一只猫', inputs: { image: [{ assetId: 'a' }] } }]);
+      await active.edit([{ ...newWorkflowNode('agent', 0, 0, 'ignored-provider'), id: 'agent', agentTransport: transport, prompt: '画一只猫', inputs: { image: [{ assetId: 'a' }] } }]);
     };
-    for (const provider of ['jimeng', 'codex', 'bowerbird-cloud-image_hd']) {
-      await setup(provider); await active.start('agent', true);
+    for (const transport of ['local-ds', 'codex-cli']) for (const provider of ['jimeng', 'codex', 'bowerbird-cloud-image_hd']) {
+      await setup(provider, transport); await active.start('agent', true);
       check(active.document.run.status === 'done', JSON.stringify(active.issue));
       check(providers.at(-1) === provider && active.document.nodes[0].outputs.image.assetIds[0] === 'a', 'default provider returns through original Agent image port');
     }

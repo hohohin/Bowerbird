@@ -2,6 +2,22 @@
 
 本页集中维护自动更新的技术约定、发布操作和部署证据；[PROJECT.md](../PROJECT.md) 只保留项目级摘要及入口。更新代码、构建签名包、发布清单、排查双端差异前先读本页。
 
+## Mac 26.10.801 构建与 R2 上传（2026-10-08，官网待切换）
+
+源码先存档提交 `08ada63c19b23f715942dcbe0f9f68e3ff971c60`，再构建 Apple Silicon 发布包；本轮不构建 Windows/Intel。内容包含画板工作流、循环/内容交付恢复、工作流数据包交换、会话组图、截图贴图、即梦视频型号/积分及 Codex 退出登录。技能卡片、工作流助手、模板库及右键「存为模板」入口暂隐；数据与既有卡片保留，Codex CLI Agent 测试通道仍受原 debug/dev 边界约束。无新云部署或云数据库迁移；桌面相对旧安装包包含 SQLite `0031`–`0033`。
+
+| 产物 | 大小（bytes） | SHA-256 |
+|---|---:|---|
+| Bowerbird_26.10.801_aarch64.app.tar.gz | 86,929,378 | 25f070734bb27ea22cf445372f97f6ae9dac4c04f68a174f28a2489cd89140c4 |
+| Bowerbird_26.10.801_aarch64-updater-installer.dmg | 87,399,514 | c742cf36a583e990aa9e49b0f5f862b2f2390708f7c3f10c75d0cc13dafc2537 |
+| darwin-aarch64.json | 1,045 | 06f74a3ebf68ed197dd0ceba186ebc33903eaaba8115b082dc5c1ebe35f7db76 |
+
+本地验证：Rust **458 passed / 0 failed / 7 ignored**、画板逻辑 **133/133**、TypeScript/Vite、工作流默认隐藏入口/已有技能卡、循环、Codex Agent、退出登录、模板（34）、助手（48）、协议（52）、引用（8）与 Mac 开发签名专项通过。包内版本/arm64、Mac 旧公钥（key id `0b5a2efc4865664f`）、minisign 主/全局签名及篡改拒绝、稳定 `Bowerbird Local Code Signing` 签名通过。DMG 完整性、只读挂载的 Applications → `/Applications`、背景/.DS_Store 及包内应用逐文件一致性通过。未执行真实素材库升级、模型调用、原生旧版安装重启或 Apple 公证。
+
+2026-10-08 完成 R2 上传及公网验证：更新包、DMG 完整下载 SHA-256 与上表一致；版本化清单及签名与本地逐字节一致。首轮 Node fetch 下载核对超时，随后 curl 完整下载成功；未据单次工具结果判断客户端更新性能。安装包可从 R2 直接下载，官网入口与自动更新仍待切换。完整本机报告与脚本在 `.tmp/release-26.10.801/`。
+
+分发沿现役 R2 `mac_package/`，不可变新包与版本化清单 `darwin-aarch64-26.10.801.json` 先上传；官网 `/downloads/updates/darwin-aarch64.json` 与两份首页须另行切换。部署材料在 `.tmp/release-26.10.801/`，候选流程复制现役目录，仅替换 Mac 清单与首页 Mac 版本/链接，保留现役 server/env/Windows 清单，验证后原子切换；保留原目录回滚。**当前官网仍为 26.9.2002，新版官网切换尚未完成**：本机无可用 VPS SSH 登录方式；`apps/cloud/.env.local` 仅 Supabase URL/publishable key，`macOS/.signing/r2.env` 仅 R2 对象存储凭据，均不能用于 VPS 部署。待补充服务器授权后再执行，不能将 R2 上传视作官网已更新。
+
 ## 当前基线
 
 最近公网复核：**2026-10-09 13:55:48（北京时间）**。Windows 已发布 **26.10.901**；M 系列 Mac 为 **26.10.801**。

@@ -78,6 +78,7 @@ export const api = {
   workflowTemplateSave: (document: WorkflowTemplate) => invoke<WorkflowTemplate>("workflow_template_save", { document, expectedRevision: document.revision }),
   workflowTemplateDelete: (id: string, expectedRevision: number) => invoke<void>("workflow_template_delete", { id, expectedRevision }),
   workflowTemplateExport: (id: string, path: string) => invoke<void>("workflow_template_export", { id, path }),
+  workflowTemplateExportDocument: (document: WorkflowTemplate, path: string) => invoke<void>("workflow_template_export", { document, path }),
   canvasWorkflowSave: (projectId: string, revision: number, document: import("./canvasWorkflow").CanvasWorkflow) => invoke<number>("canvas_workflow_save", { projectId, revision, document }),
   // 健康检查
   ping: (name: string) => invoke<string>("ping", { name }),
@@ -156,8 +157,9 @@ export const api = {
       autoDelivered: boolean;
       notice?: string | null;
     }>("agent_ds_chat", { text, images, imageNames, visualProfileId }),
-  agentDsWorkflowStart: (requestId: string, instruction: string, source: string, purpose?: "planning" | "planning-v2" | "agent-text", images?: string[], sessionScope?: { projectId: string; nodeId: string }, imageProvider?: string) =>
-    invoke<{ path: string; sessionId?: string | null; sessionTitle?: string | null; autoDelivered: boolean; notice?: string | null }>("agent_ds_workflow_start", { requestId, instruction, source, purpose, images, sessionScope, imageProvider }),
+  agentDsWorkflowStart: (requestId: string, instruction: string, source: string, purpose?: "planning" | "planning-v2" | "agent-text", images?: string[], sessionScope?: { projectId: string; nodeId: string }, imageProvider?: string, transport?: "local-ds" | "codex-cli", isolatedSession?: boolean) =>
+    invoke<{ path: string; sessionId?: string | null; sessionTitle?: string | null; autoDelivered: boolean; notice?: string | null }>("agent_ds_workflow_start", { requestId, instruction, source, purpose, images, sessionScope, imageProvider, transport, isolatedSession }),
+  agentDsWorkflowCancel: (requestId: string) => invoke<void>("agent_ds_workflow_cancel", { requestId }),
   agentDsWorkflowGenerationRequest: (requestId: string) =>
     invoke<import("./canvasWorkflow").WorkflowAgentGenerationRequest | null>("agent_ds_workflow_generation_request", { requestId }),
   agentDsWorkflowGenerationResponse: (requestId: string, generation: import("./canvasWorkflow").WorkflowAgentGenerationRequest, response: import("./canvasWorkflow").WorkflowAgentGenerationResponse) =>
@@ -165,7 +167,7 @@ export const api = {
   agentDsWorkflowGenerationJob: (jobId: string, turnKey: string) =>
     invoke<{ status: string; images: string[]; error?: string | null } | null>("agent_ds_workflow_generation_job", { jobId, turnKey }),
   agentDsWorkflowResult: (requestId: string) =>
-    invoke<{ schemaVersion: 1 | 2; requestId: string; text?: string; images?: string[]; error?: string; phase?: "proposal" | "commit"; revision?: number; digest?: string } | null>("agent_ds_workflow_result", { requestId }),
+    invoke<{ schemaVersion: 1 | 2; requestId: string; text?: string; images?: string[]; error?: string; submissionUnknown?: boolean; phase?: "proposal" | "commit"; revision?: number; digest?: string } | null>("agent_ds_workflow_result", { requestId }),
   agentDsWorkflowIngestImages: (requestId: string) =>
     invoke<Asset[]>("agent_ds_workflow_ingest_images", { requestId }),
   agentDsWorkflowFeedback: (requestId: string, revision: number, text: string, error?: string) =>
@@ -470,6 +472,7 @@ export const api = {
   // 进度经 codex://setup-progress {stage:"install"|"login", line} 推；成功后端 emit codex://health-changed。
   codexInstall: () => invoke<CodexHealth>("codex_install"),
   codexLogin: () => invoke<CodexHealth>("codex_login"),
+  codexLogout: () => invoke<CodexHealth>("codex_logout"),
   cancelCodexSetup: () => invoke<void>("cancel_codex_setup"),
   // force=true 跳过后端 120s TTL 缓存强制重检（重新检测 / 安装 / 登录 / 登出后）。
   dreaminaCreditBalance: () => invoke<number>("dreamina_credit_balance"),

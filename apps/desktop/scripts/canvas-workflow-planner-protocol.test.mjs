@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
 
-const server = await createServer({ configFile: false, root: process.cwd(), server: { host: '127.0.0.1', port: 1607, strictPort: true, hmr: false, watch: null } });
+const server = await createServer({plugins: [{ name: 'enable-hidden-workflow-test', transform(code, id) { if (id.endsWith('/src/lib/featureFlags.ts')) return code.replace('export const WORKFLOW_PLANNER_ENABLED = false;', 'export const WORKFLOW_PLANNER_ENABLED = true;'); } }],  configFile: false, root: process.cwd(), server: { host: '127.0.0.1', port: 1607, strictPort: true, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 try {

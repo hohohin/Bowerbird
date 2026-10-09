@@ -3,7 +3,7 @@ import { workflowTitle } from "./canvasWorkflow";
 import { api } from "./api";
 import { autoRatioFromReferences } from "../components/creation/ratios";
 import { canonicalProviderKey } from "./genProviders";
-import { workflowLoopScope, workflowLoopRows, workflowLoopOutputs, validateLoopItems } from "./workflowLoop";
+import { workflowLoopScope, workflowLoopRows, workflowLoopOutputs, validateLoopItems, validateLoopStart } from "./workflowLoop";
 import { WorkflowPlannerRuntime } from "./workflowPlannerRuntime";
 import { notify } from "./notify";
 import { emit } from "@tauri-apps/api/event";
@@ -424,7 +424,7 @@ export class CanvasWorkflowController {
       const owner = this.document.nodes.find(node => node.id === loop.nodeId)!;
       if (owner.loopMode === "rows" && (owner.inputs.text ?? []).every(input => textSources.includes(input.canvasNodeId ?? "")
         || !workflowInputProducers(executionNodes, input).some(id => order.includes(id)))) {
-        loop.items = workflowLoopRows(owner, this.document.nodes, (await api.projectCanvasGet(this.projectId)).nodes);
+        loop.items = validateLoopStart(workflowLoopRows(owner, this.document.nodes, (await api.projectCanvasGet(this.projectId)).nodes), loop.index, owner);
       }
     }
     await api.projectThreadCreate({ id: threadId, projectId: this.projectId, title: "工作流", origin: "direct" });
@@ -455,6 +455,7 @@ export class CanvasWorkflowController {
       for (const generation of Object.values(step.localDsGenerations ?? {})) {
         if (!generation.response) await api.cancelCodexCreate(generation.jobId);
       }
+      if (step.localDsRequestId && step.localAgentTransport === "codex-cli") await api.agentDsWorkflowCancel(step.localDsRequestId);
       if (step.agentRunId) await api.cloudAgentCancel(step.agentRunId);
       if (step.describeJobIds) await Promise.all(step.describeJobIds.map(jobId => api.cancelCodexDescribe(jobId)));
       if (step.assetId && !step.agentRunId && !step.jobId) {
@@ -465,6 +466,33 @@ export class CanvasWorkflowController {
     await this.executionDrains.get(runId);
     await this.saveRun({ ...this.run(runId), status: "stopped" });
     } finally { this.stopping.delete(runId); }
+  }
+  async restartLoop(runId: string) {
+    await this.writing;
+    const run = this.run(runId), loop = run?.loop;
+    if (!loop || run.status !== "stopped" || this.stopping.has(runId) || this.executing.has(runId)) return;
+    if (loop.items && (loop.startIndex ?? 0) + loop.completed.length === loop.items.length) return;
+    const nodes = workflowExecutionNodes(this.document.nodes, run.startId);
+    const order = workflowOrder(this.document.nodes, run.startId);
+    const scope = workflowLoopScope(nodes, order);
+    if (JSON.stringify(order) !== JSON.stringify(run.order) || JSON.stringify(scope?.bodyIds) !== JSON.stringify(loop.bodyIds)) {
+      throw new Error("循环连接已变化，请选择起始项后开始新循环");
+    }
+    const access = workflowDependencies(nodes, order), writes = workflowWriteNodes(nodes, order);
+    if (workflowRuns(this.document).filter(workflowRunActive).some(other => workflowAccessConflict(access, writes,
+      other.lockedNodeIds ?? workflowDependencies(this.document.nodes, other.order), other.writeNodeIds ?? workflowWriteNodes(this.document.nodes, other.order)))
+      || [...this.reservations.values()].some(other => workflowAccessConflict(access, writes, other.access, other.writes))) {
+      throw new Error("此运行会修改其他工作流正在使用的卡片，请等待对应流程完成");
+    }
+    // Explicitly restart the interrupted item, keeping frozen input and completed items.
+    const steps = { ...run.steps };
+    for (const id of loop.bodyIds) steps[id] = { status: "pending" };
+    if (!loop.items) steps[loop.nodeId] = { status: "pending" };
+    this.stopped.delete(runId);
+    await this.saveRun({ ...run, status: "waiting", steps, lockedNodeIds: access, writeNodeIds: writes }, this.document.nodes.map(node =>
+      loop.bodyIds.includes(node.id) ? { ...node, outputs: {}, ...(node.kind === "generation" ? { activeSessionNodeId: null } : {}) }
+        : node.id === loop.nodeId && loop.items ? { ...node, outputs: workflowLoopOutputs(loop.items[loop.index]) } : node));
+    await this.continue(runId);
   }
   private async step(runId: string, id: string, patch: Partial<WorkflowStep>) {
     if (this.stopped.has(runId)) throw new Error("工作流已停止");
@@ -489,6 +517,7 @@ export class CanvasWorkflowController {
         retry = job.status === "failed";
       } else if (step.localDsRequestId) {
         const result = await api.agentDsWorkflowResult(step.localDsRequestId);
+        if (result?.submissionUnknown) throw new Error("Codex CLI 原请求状态未知，请检查原任务；停止循环后才能重新提交");
         retry = !!result?.error;
       } else if (step.agentRunId) {
         const result = await api.cloudAgentGet(step.agentRunId);
@@ -520,16 +549,24 @@ export class CanvasWorkflowController {
 
   private async localDsResult(runId: string, node: WorkflowNode, step: WorkflowStep, instruction: string, source: string, images: string[], halted: () => boolean): Promise<Record<string, WorkflowValue> | null> {
     let requestId = step.localDsRequestId;
+    const transport = step.localAgentTransport ?? (requestId ? "local-ds" : node.agentTransport === "codex-cli" ? "codex-cli" : "local-ds");
+    const agentName = transport === "codex-cli" ? "Codex CLI" : "Agent DS";
     if (!requestId) {
-      if (step.status !== "pending") throw new Error("本机 Agent DS 提交状态未知，请先检查投递队列");
+      if (step.status !== "pending") throw new Error(`${agentName} 提交状态未知，请先检查原请求`);
       requestId = `${Date.now()}-${crypto.randomUUID()}`;
       const imageProvider = canonicalProviderKey(useStore.getState().defaultProvider);
-      await this.step(runId, node.id, { status: "running", localDsRequestId: requestId, localDsImageProvider: imageProvider, detail: "正在投递到本机 Agent DS" });
-      const delivery = await api.agentDsWorkflowStart(requestId, instruction, source, "agent-text", images, { projectId: this.projectId, nodeId: node.id }, imageProvider);
-      if (halted()) return null;
-      const notice = delivery.autoDelivered ? `已送达 DSH 会话「${delivery.sessionTitle || "未命名"}」，等待结果` : `已投递到 DSH 队列（未自动送达：${delivery.notice || "未知原因"}）；可在 DSH 里说「看队列」`;
+      // Loop items are independent inputs; carrying every prior item's tools/images grows
+      // the CLI context indefinitely. Ordinary card follow-ups still resume their session.
+      const isolatedSession = transport === "codex-cli" && !!this.run(runId).loop?.bodyIds.includes(node.id);
+      await this.step(runId, node.id, { status: "running", localDsRequestId: requestId, localAgentTransport: transport, localDsImageProvider: imageProvider, detail: `正在启动 ${agentName}` });
+      const delivery = await api.agentDsWorkflowStart(requestId, instruction, source, "agent-text", images, { projectId: this.projectId, nodeId: node.id }, imageProvider, transport, isolatedSession);
+      if (halted()) {
+        if (transport === "codex-cli") await api.agentDsWorkflowCancel(requestId);
+        return null;
+      }
+      const notice = transport === "codex-cli" ? (delivery.autoDelivered ? "Codex CLI 已启动，等待结果" : delivery.notice || "等待原 Codex CLI 请求") : delivery.autoDelivered ? `已送达 DSH 会话「${delivery.sessionTitle || "未命名"}」，等待结果` : `已投递到 DSH 队列（未自动送达：${delivery.notice || "未知原因"}）；可在 DSH 里说「看队列」`;
       notify(notice, delivery.autoDelivered ? "success" : "info");
-      await this.step(runId, node.id, { detail: notice, ...(delivery.autoDelivered ? {} : { status: "waiting", error: notice }) });
+      await this.step(runId, node.id, { detail: transport === "codex-cli" && delivery.autoDelivered ? "Agent 正在分析输入" : notice, ...(delivery.autoDelivered ? {} : { status: "waiting", error: notice }) });
       if (!delivery.autoDelivered) return null;
     }
     while (!halted()) {
@@ -537,23 +574,23 @@ export class CanvasWorkflowController {
       const result = await api.agentDsWorkflowResult(requestId);
       if (halted()) return null;
       if (result) {
-        if (result.schemaVersion !== 1 || result.requestId !== requestId) throw new Error("Agent DS 返回了其他请求的结果");
-        if (result.error) throw new Error(`Agent DS 处理失败：${result.error}（请求 ${requestId}）`);
+        if (result.schemaVersion !== 1 || result.requestId !== requestId) throw new Error(`${agentName} 返回了其他请求的结果`);
+        if (result.error) throw new Error(`${agentName} 处理失败：${result.error}（请求 ${requestId}）`);
         const outputs: Record<string, WorkflowValue> = {};
         if (result.text !== undefined) outputs.text = agentResultValue(result.text);
-        if (result.images !== undefined && (!Array.isArray(result.images) || !result.images.length || result.images.some(path => typeof path !== "string" || !path.trim()))) throw new Error("Agent DS 返回图片格式无效");
+        if (result.images !== undefined && (!Array.isArray(result.images) || !result.images.length || result.images.some(path => typeof path !== "string" || !path.trim()))) throw new Error(`${agentName} 返回图片格式无效`);
         if (result.images?.length) {
           const assets = await api.agentDsWorkflowIngestImages(requestId);
           if (halted()) return null;
-          if (assets.length !== result.images.length) throw new Error("Agent DS 图片未完整入库，请继续取回原请求");
+          if (assets.length !== result.images.length) throw new Error(`${agentName} 图片未完整入库，请继续取回原请求`);
           outputs.image = { type: "image", assetIds: [...new Set(assets.map(asset => asset.id))] };
         }
-        if (!Object.keys(outputs).length) throw new Error("Agent DS 未返回文字或图片");
+        if (!Object.keys(outputs).length) throw new Error(`${agentName} 未返回文字或图片`);
         return outputs;
       }
       // After a reload or failed delivery, Continue only checks the existing request.
       if (step.status === "waiting") {
-        await this.step(runId, node.id, { status: "waiting", error: "Agent DS 尚未写回结果；请在 DSH 会话处理队列后继续", detail: `等待本机请求 ${requestId}` });
+        await this.step(runId, node.id, { status: "waiting", error: transport === "codex-cli" ? "Codex CLI 尚在处理，请稍后继续取回" : "Agent DS 尚未写回结果；请在 DSH 会话处理队列后继续", detail: `等待本机请求 ${requestId}` });
         return null;
       }
       await new Promise(resolve => setTimeout(resolve, 1500));
@@ -615,6 +652,7 @@ export class CanvasWorkflowController {
       await this.step(runId, node.id, { status: "waiting", error: `生图结果回传未完成，请继续重试回传：${String(error)}` });
       return false;
     }
+    if (!halted()) await this.step(runId, node.id, { detail: call.response.error ? "生图失败，Agent 正在处理反馈" : "生图完成，Agent 正在检查和整理结果" });
     return !halted();
   }
 
@@ -690,10 +728,10 @@ export class CanvasWorkflowController {
       if (node.kind === "loop") {
         const run = this.run(runId), loop = run.loop;
         if (!loop || loop.nodeId !== id) throw new WorkflowNodeError("请从循环卡片启动完整流程", node);
-        const items = loop.items ?? (node.loopMode === "rows"
+        const items = validateLoopStart(loop.items ?? (node.loopMode === "rows"
           ? workflowLoopRows(node, this.document.nodes, canvas?.nodes ?? [])
           : validateLoopItems(workflowInputValues(this.document.nodes, node, readCell).image.flatMap(value => value.assetIds ?? [])
-            .map(assetId => ({ text: "", assetIds: [assetId] })), node));
+            .map(assetId => ({ text: "", assetIds: [assetId] })), node)), loop.index, node);
         await this.saveRun({ ...run, loop: { ...loop, items }, steps: { ...run.steps, [id]: { status: "done", detail: `第 ${loop.index + 1} / ${items.length} 项` } } },
           this.document.nodes.map(candidate => candidate.id === id ? { ...candidate, outputs: workflowLoopOutputs(items[loop.index]) } : candidate));
         return;
@@ -1028,7 +1066,7 @@ export class CanvasWorkflowController {
         .flatMap(input => workflowInputProducers(nodes, input)).filter(producer => run.order.includes(producer))]));
       while (!halted()) {
         const current = this.run(runId), loop = current.loop;
-        if (loop?.items && loop.completed.length === loop.index
+        if (loop?.items && (loop.startIndex ?? 0) + loop.completed.length === loop.index
           && loop.bodyIds.every(id => current.steps[id].status === "done" && !active.has(id))) {
           const completed = [...loop.completed, {
             outputs: Object.fromEntries(loop.bodyIds.map(id => [id, structuredClone(this.document.nodes.find(node => node.id === id)!.outputs)])),
@@ -1036,7 +1074,7 @@ export class CanvasWorkflowController {
           }];
           const next = loop.index + 1 < loop.items.length;
           const index = next ? loop.index + 1 : loop.index;
-          const steps = { ...current.steps, [loop.nodeId]: { status: "done" as const, detail: next ? `第 ${index + 1} / ${loop.items.length} 项` : `已完成 ${completed.length} / ${loop.items.length} 项` } };
+          const steps = { ...current.steps, [loop.nodeId]: { status: "done" as const, detail: next ? `第 ${index + 1} / ${loop.items.length} 项` : `已完成 ${completed.length} / ${loop.items.length - (loop.startIndex ?? 0)} 项` } };
           if (next) for (const id of loop.bodyIds) steps[id] = { status: "pending" };
           // Persist the completed item and the next cursor together, before any new submission.
           await this.saveRun({ ...current, loop: { ...loop, index, completed }, steps }, this.document.nodes.map(node =>

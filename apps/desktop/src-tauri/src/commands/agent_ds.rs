@@ -28,6 +28,8 @@
 // understand_asset 两个工具，每轮 fresh session + transcript 注入）；该路径及其
 // `ds-session.json` 已不参与投递，代码保留待必要时回收。
 
+mod codex;
+
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -546,15 +548,20 @@ fn workflow_file(root: &Path, request_id: &str, folder: &str) -> Result<PathBuf,
 
 /// Workflow test transport: same pending queue and session discovery, with an explicit reply file.
 #[tauri::command]
-pub async fn agent_ds_workflow_start(request_id: String, instruction: String, source: String, purpose: Option<String>, images: Option<Vec<String>>, session_scope: Option<WorkflowSessionScope>, image_provider: Option<String>) -> Result<DeliveryOutcome, AppError> {
+pub async fn agent_ds_workflow_start(request_id: String, instruction: String, source: String, purpose: Option<String>, images: Option<Vec<String>>, session_scope: Option<WorkflowSessionScope>, image_provider: Option<String>, transport: Option<String>, isolated_session: Option<bool>) -> Result<DeliveryOutcome, AppError> {
     ensure_preview_enabled()?;
+    let use_codex = match transport.as_deref() {
+        None | Some("local-ds") => false,
+        Some("codex-cli") if purpose.as_deref() == Some("agent-text") => true,
+        _ => return Err(AppError::Other("不支持的本机 Agent 通道".into())),
+    };
     let task = workflow_task(purpose.as_deref())?;
     let images = images.unwrap_or_default();
     let native_images = purpose.as_deref() == Some("agent-text");
     if !native_images && !images.is_empty() {
         return Err(AppError::Other("仅本机文字 Agent 支持图片附件".into()));
     }
-    let root = delivery_root();
+    let root = if use_codex { codex::request_root(&request_id)? } else { delivery_root() };
     let path = workflow_file(&root, &request_id, "pending")?;
     let archived = workflow_file(&root, &request_id, "archive")?;
     let reply = workflow_file(&root, &request_id, "results")?;
@@ -581,9 +588,12 @@ pub async fn agent_ds_workflow_start(request_id: String, instruction: String, so
     } else {
         format!("JSON 格式：{{\"schemaVersion\":1,\"requestId\":\"{request_id}\",\"text\":\"结果文本\"}}。失败则用 error 字段说明原因，不要填写 text。")
     };
-    let generation_protocol = if native_images {
-        workflow_generation_protocol(&root, &request_id, image_provider.as_deref())?
+    let mut generation_protocol = if native_images {
+        workflow_generation_protocol(&root, &request_id, image_provider.as_deref(), use_codex)?
     } else { String::new() };
+    if use_codex {
+        generation_protocol.push_str("\n最终图片和结果 JSON 写完即结束本轮，仅回复‘已完成’；不要重复输出报告或在提交后追加检查。需要的质量检查须在写最终结果前完成。");
+    }
     let boundary = if native_images {
         "按用户要求使用当前 harness 已有的工具与权限。最终可返回文字、表格、图片或图文组合，并按上述约定写回结果文件；不要仅在会话中回复。"
     } else {
@@ -598,6 +608,9 @@ pub async fn agent_ds_workflow_start(request_id: String, instruction: String, so
     let mut payload = build_delivery_payload(&message, &message, &images, &names, None, chrono::Local::now().to_rfc3339());
     let scope = session_scope.as_ref().ok_or_else(|| AppError::Other("缺少工作流卡片会话身份，请刷新开发桌面后重新运行".into()))?;
     payload.target_session_id = Some(workflow_session_id(&normalized_local_path(&repo_root()), scope)?);
+    if use_codex {
+        return codex::start(root, request_id, payload, isolated_session.unwrap_or(false));
+    }
     write_json_atomic(&path, &payload)?;
     let (session_id, session_title, notice) = match deliver_to_dsh(&payload, &normalized_local_path(&repo_root()), native_images).await {
         Ok((id, title)) => (Some(id), title, None),
@@ -621,16 +634,18 @@ fn workflow_task(purpose: Option<&str>) -> Result<&'static str, AppError> {
     }
 }
 
-fn workflow_generation_protocol(root: &Path, request_id: &str, provider: Option<&str>) -> Result<String, AppError> {
+fn workflow_generation_protocol(root: &Path, request_id: &str, provider: Option<&str>, native_wait: bool) -> Result<String, AppError> {
     let provider = provider.filter(|p| matches!(*p, "codex" | "jimeng") || p.starts_with("bowerbird-cloud-image_"))
         .ok_or_else(|| AppError::Other("Agent 卡片缺少有效的默认生图 provider，请重新运行卡片".into()))?;
     for folder in ["generation-requests", "generation-responses"] { std::fs::create_dir_all(root.join(folder))?; }
     let root = std::fs::canonicalize(root)?;
     let request = workflow_file(&root, request_id, "generation-requests")?;
     let response = workflow_file(&root, request_id, "generation-responses")?;
+    let wait = if native_wait { crate::agent_generation_wait::instruction(&root)? }
+        else { format!("每隔2秒读取 {}，", response.display()) };
     Ok(format!(r#"生图工具 generate_image：本次使用用户标星的默认 provider「{provider}」，由桌面应用执行，不能改用 dreamina_generate、其他 CLI 或其他生图 provider。仅在用户任务需要生图/改图时调用；普通问答不调用。
 调用方式：把 {{"id":"本次工具调用的新UUID","prompt":"完整生图要求","images":["参考图片绝对路径"],"ratio":null}} 原子写到 {}。images 无参考时用 []，ratio 可为 null 或常见宽高比。不要传 provider；桌面已锁定默认选项，沿现有权限、登录和积分检查执行。
-每隔2秒读取 {}，仅接受 generation.id 与当前调用 id 完全一致的响应；response.images 是成功产物的绝对路径，response.error 是失败原因。同一时间只提交一个生图请求；等响应后才提交下一次，重查不得换 id 重复生图。未收到响应时保持等待，不假称完成。不要改写响应文件。成功后按最终图片返回协议将需要交付的图片复制到本次 artifacts 目录；失败应报告原因，不能自动切换 provider。"#, request.display(), response.display()))
+{wait}仅接受 generation.id 与当前调用 id 完全一致的响应；response.images 是成功产物的绝对路径，response.error 是失败原因。同一时间只提交一个生图请求；等响应后才提交下一次，重查不得换 id 重复生图。未收到响应时保持等待，不假称完成。不要改写响应文件。成功后按最终图片返回协议将需要交付的图片复制到本次 artifacts 目录；失败应报告原因，不能自动切换 provider。"#, request.display()))
 }
 
 #[derive(Debug, Clone, serde::Deserialize, Serialize, PartialEq)]
@@ -666,7 +681,9 @@ fn read_generation_request(root: &Path, request_id: &str) -> Result<Option<Workf
 #[tauri::command]
 pub fn agent_ds_workflow_generation_request(request_id: String) -> Result<Option<WorkflowGenerationRequest>, AppError> {
     ensure_preview_enabled()?;
-    read_generation_request(&delivery_root(), &request_id)
+    let root = workflow_root(&request_id)?;
+    if codex::is_request(&root) && !codex::is_active(&request_id) { return Ok(None); }
+    read_generation_request(&root, &request_id)
 }
 
 fn write_generation_response(root: &Path, request_id: &str, generation: &WorkflowGenerationRequest, response: &Value) -> Result<(), AppError> {
@@ -685,7 +702,7 @@ fn write_generation_response(root: &Path, request_id: &str, generation: &Workflo
 #[tauri::command]
 pub fn agent_ds_workflow_generation_response(request_id: String, generation: WorkflowGenerationRequest, response: Value) -> Result<(), AppError> {
     ensure_preview_enabled()?;
-    write_generation_response(&delivery_root(), &request_id, &generation, &response)
+    write_generation_response(&workflow_root(&request_id)?, &request_id, &generation, &response)
 }
 
 #[tauri::command]
@@ -757,7 +774,7 @@ pub async fn agent_ds_workflow_ingest_images(
     let db = db.inner().clone();
     let paths = paths.inner().clone();
     tokio::task::spawn_blocking(move || {
-        ingest_workflow_images(&delivery_root(), &request_id, &paths, &db)
+        ingest_workflow_images(&workflow_root(&request_id)?, &request_id, &paths, &db)
     }).await.map_err(|e| AppError::Other(e.to_string()))?
 }
 
@@ -795,7 +812,22 @@ fn read_workflow_result(root: &Path, request_id: &str) -> Result<Option<Value>, 
 #[tauri::command]
 pub fn agent_ds_workflow_result(request_id: String) -> Result<Option<Value>, AppError> {
     ensure_preview_enabled()?;
-    read_workflow_result(&delivery_root(), &request_id)
+    let root = workflow_root(&request_id)?;
+    if codex::is_request(&root) { return codex::result(&root, &request_id); }
+    read_workflow_result(&root, &request_id)
+}
+
+fn workflow_root(request_id: &str) -> Result<PathBuf, AppError> {
+    let root = codex::request_root(request_id)?;
+    Ok(if root.exists() { root } else { delivery_root() })
+}
+
+#[tauri::command]
+pub async fn agent_ds_workflow_cancel(request_id: String) -> Result<(), AppError> {
+    ensure_preview_enabled()?;
+    codex::request_root(&request_id)?;
+    codex::cancel(&request_id).await;
+    Ok(())
 }
 
 fn write_workflow_feedback(root: &Path, request_id: &str, revision: u32, text: &str, error: Option<&str>) -> Result<String, AppError> {
@@ -1049,11 +1081,11 @@ mod tests {
             // An invalid request ID stops before filesystem writes or DSH calls.
             let images = vec!["/tmp/test.png".to_string(); count];
             let error = agent_ds_workflow_start("invalid".into(), "分析图片".into(), "{}".into(),
-                Some("agent-text".into()), Some(images.clone()), None, None).await.unwrap_err();
+                Some("agent-text".into()), Some(images.clone()), None, None, None, None).await.unwrap_err();
             assert!(error.to_string().contains("请求标识无效"), "{error}");
             for purpose in [None, Some("planning"), Some("planning-v2")] {
                 let error = agent_ds_workflow_start("invalid".into(), "分析图片".into(), "{}".into(),
-                    purpose.map(str::to_string), Some(images.clone()), None, None).await.unwrap_err();
+                    purpose.map(str::to_string), Some(images.clone()), None, None, None, None).await.unwrap_err();
                 assert!(error.to_string().contains("仅本机文字 Agent 支持图片附件"), "{error}");
             }
         }
@@ -1085,12 +1117,16 @@ mod tests {
         let root = temp_root("generation-bridge");
         let id = "1758598261835-1d7379aa-3333-445d-9d44-c8b77d75329b";
         for provider in ["codex", "jimeng", "bowerbird-cloud-image_hd", "bowerbird-cloud-image_fast"] {
-            let protocol = workflow_generation_protocol(&root, id, Some(provider)).unwrap();
+            let protocol = workflow_generation_protocol(&root, id, Some(provider), false).unwrap();
             assert!(protocol.contains(&format!("默认 provider「{provider}」")));
             assert!(protocol.contains("不要传 provider") && protocol.contains("不能自动切换 provider"));
+            assert!(protocol.contains("每隔2秒读取"));
+            let native = workflow_generation_protocol(&root, id, Some(provider), true).unwrap();
+            assert!(native.contains("--agent-wait-generation") && !native.contains("每隔2秒读取"));
+            assert!(native.contains("不能自动切换 provider"));
         }
-        assert!(workflow_generation_protocol(&root, id, None).is_err());
-        assert!(workflow_generation_protocol(&root, id, Some("unknown")).is_err());
+        assert!(workflow_generation_protocol(&root, id, None, false).is_err());
+        assert!(workflow_generation_protocol(&root, id, Some("unknown"), false).is_err());
         assert!(read_generation_request(&root, id).unwrap().is_none());
         let path = workflow_file(&root, id, "generation-requests").unwrap();
         let request = json!({"id":"1d7379aa-3333-445d-9d44-c8b77d75329b","prompt":"一只猫","images":[],"ratio":"1:1"});
