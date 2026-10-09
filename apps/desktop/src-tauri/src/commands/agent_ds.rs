@@ -1,4 +1,5 @@
-// Agent DS（dev-only）：创作板 → 投递「本机 DSH 队列」+ 自动送达本机 DSH 会话。
+// 旧 Agent DS 聊天（dev-only）；工作流图文 Agent 另有正式版 BYO 门控。
+// Agent DS：创作板 → 投递「本机 DSH 队列」+ 自动送达本机 DSH 会话。
 //
 // 定位与 Agent Z/G 同类（harness 拥有模型多回合、上下文与工具选择），区别在**不在此拉起
 // harness**：Bowerbird 只把「本条消息 + 参考图绝对路径」写成一份 payload 落到
@@ -90,7 +91,7 @@ async fn dsh_client(base: &str, auth_text: Option<&str>) -> Result<reqwest::Clie
     let response = client.get(auth_url).send().await
         .map_err(|_| "连接 DSH 登录入口失败，请确认本机服务已启动".to_string())?;
     if response.status() != reqwest::StatusCode::SEE_OTHER {
-        return Err("DSH 登录链接失效，请将当前 dsh web 打印的完整链接更新到 .agent-z/dsh-web-auth-url.txt".into());
+        return Err(format!("DSH 登录链接失效，请将当前 dsh web 打印的完整链接更新到 {}", agent_root().join(DSH_AUTH_FILE).display()));
     }
     let cookies: Vec<_> = response.headers().get_all(reqwest::header::SET_COOKIE).iter()
         .filter_map(|header| header.to_str().ok())
@@ -117,6 +118,10 @@ fn ensure_preview_enabled() -> Result<(), AppError> {
 /// Agent 互通实验资产目录（与 agent_z.rs 的 agent_z_root 同式：目录名 `.agent-z` 为历史，
 /// 语义 = Agent 互通实验资产）。
 fn agent_root() -> PathBuf {
+    if !cfg!(debug_assertions) {
+        return crate::codex::codex_cli::app_data_dir()
+            .expect("Bowerbird app data directory unavailable").join(".agent-z");
+    }
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../..")
         .join(".agent-z")
@@ -129,7 +134,8 @@ fn delivery_root() -> PathBuf {
 
 /// 仓库根：目标会话的 cwd 过滤条件（DSH 会话跑在本仓库里才拿得到项目上下文）。
 fn repo_root() -> PathBuf {
-    agent_root().join("..")
+    if cfg!(debug_assertions) { agent_root().join("..") }
+    else { agent_root().join("workspace") }
 }
 
 /// 一条投递里的一张参考图：绝对路径 + 素材名（名字用于把正文里的 `@素材名` 与
@@ -381,7 +387,7 @@ async fn dsh_rpc(
     }
     let status = response.status();
     if status == reqwest::StatusCode::UNAUTHORIZED {
-        return Err("本机 DSH 需要认证：请将 dsh web 打印的完整登录链接保存到 .agent-z/dsh-web-auth-url.txt 后重试".into());
+        return Err(format!("本机 DSH 需要认证：请将 dsh web 打印的完整登录链接保存到 {} 后重试", agent_root().join(DSH_AUTH_FILE).display()));
     }
     if !status.is_success() {
         return Err(format!("本机 DSH 返回 HTTP {}", status.as_u16()));
@@ -443,7 +449,7 @@ async fn deliver_to_dsh(
     let auth_text = match std::fs::read_to_string(agent_root().join(DSH_AUTH_FILE)) {
         Ok(text) => Some(text),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(_) => return Err("无法读取 .agent-z/dsh-web-auth-url.txt".into()),
+        Err(_) => return Err(format!("无法读取 {}", agent_root().join(DSH_AUTH_FILE).display())),
     };
     let client = dsh_client(&base, auth_text.as_deref()).await?;
     let (session_id, title) = if let Some(session_id) = &payload.target_session_id {
@@ -546,10 +552,19 @@ fn workflow_file(root: &Path, request_id: &str, folder: &str) -> Result<PathBuf,
     Ok(root.join(folder).join(format!("{request_id}.json")))
 }
 
-/// Workflow test transport: same pending queue and session discovery, with an explicit reply file.
+/// Local workflow transport: BYO entitlement in release, explicit persisted replies.
 #[tauri::command]
-pub async fn agent_ds_workflow_start(request_id: String, instruction: String, source: String, purpose: Option<String>, images: Option<Vec<String>>, session_scope: Option<WorkflowSessionScope>, image_provider: Option<String>, transport: Option<String>, isolated_session: Option<bool>) -> Result<DeliveryOutcome, AppError> {
-    ensure_preview_enabled()?;
+pub async fn agent_ds_workflow_start(
+    auth_client: tauri::State<'_, crate::cloud::AuthClient>,
+    entitlement: tauri::State<'_, crate::cloud::EntitlementService>,
+    request_id: String, instruction: String, source: String, purpose: Option<String>, images: Option<Vec<String>>, session_scope: Option<WorkflowSessionScope>, image_provider: Option<String>, transport: Option<String>, isolated_session: Option<bool>,
+) -> Result<DeliveryOutcome, AppError> {
+    if !cfg!(debug_assertions) { super::codex::require_byo(&entitlement, &auth_client).await?; }
+    workflow_start(request_id, instruction, source, purpose, images, session_scope, image_provider, transport, isolated_session).await
+}
+
+async fn workflow_start(request_id: String, instruction: String, source: String, purpose: Option<String>, images: Option<Vec<String>>, session_scope: Option<WorkflowSessionScope>, image_provider: Option<String>, transport: Option<String>, isolated_session: Option<bool>) -> Result<DeliveryOutcome, AppError> {
+    if purpose.as_deref() != Some("agent-text") { ensure_preview_enabled()?; }
     let use_codex = match transport.as_deref() {
         None | Some("local-ds") => false,
         Some("codex-cli") if purpose.as_deref() == Some("agent-text") => true,
@@ -606,7 +621,8 @@ pub async fn agent_ds_workflow_start(request_id: String, instruction: String, so
     );
     let names: Vec<_> = (1..=images.len()).map(|index| format!("图片 {index}")).collect();
     let mut payload = build_delivery_payload(&message, &message, &images, &names, None, chrono::Local::now().to_rfc3339());
-    let scope = session_scope.as_ref().ok_or_else(|| AppError::Other("缺少工作流卡片会话身份，请刷新开发桌面后重新运行".into()))?;
+    let scope = session_scope.as_ref().ok_or_else(|| AppError::Other("缺少工作流卡片会话身份，请刷新桌面后重新运行".into()))?;
+    std::fs::create_dir_all(repo_root())?;
     payload.target_session_id = Some(workflow_session_id(&normalized_local_path(&repo_root()), scope)?);
     if use_codex {
         return codex::start(root, request_id, payload, isolated_session.unwrap_or(false));
@@ -680,7 +696,6 @@ fn read_generation_request(root: &Path, request_id: &str) -> Result<Option<Workf
 
 #[tauri::command]
 pub fn agent_ds_workflow_generation_request(request_id: String) -> Result<Option<WorkflowGenerationRequest>, AppError> {
-    ensure_preview_enabled()?;
     let root = workflow_root(&request_id)?;
     if codex::is_request(&root) && !codex::is_active(&request_id) { return Ok(None); }
     read_generation_request(&root, &request_id)
@@ -701,7 +716,6 @@ fn write_generation_response(root: &Path, request_id: &str, generation: &Workflo
 
 #[tauri::command]
 pub fn agent_ds_workflow_generation_response(request_id: String, generation: WorkflowGenerationRequest, response: Value) -> Result<(), AppError> {
-    ensure_preview_enabled()?;
     write_generation_response(&workflow_root(&request_id)?, &request_id, &generation, &response)
 }
 
@@ -710,7 +724,6 @@ pub fn agent_ds_workflow_generation_job(
     job_id: String, turn_key: String,
     db: tauri::State<'_, std::sync::Arc<crate::db::Database>>,
 ) -> Result<Option<Value>, AppError> {
-    ensure_preview_enabled()?;
     let Some(task) = crate::core::task_queue::Task::by_id(&db, &job_id)? else { return Ok(None); };
     let job = task.gen_job().ok_or_else(|| AppError::Other("Agent 生图任务类型无效".into()))?;
     if job.turn_key.as_deref() != Some(&turn_key) { return Err(AppError::Other("Agent 生图任务轮次不匹配".into())); }
@@ -770,7 +783,6 @@ pub async fn agent_ds_workflow_ingest_images(
     db: tauri::State<'_, std::sync::Arc<crate::db::Database>>,
     paths: tauri::State<'_, std::sync::Arc<crate::core::paths::LibraryPaths>>,
 ) -> Result<Vec<crate::core::library::Asset>, AppError> {
-    ensure_preview_enabled()?;
     let db = db.inner().clone();
     let paths = paths.inner().clone();
     tokio::task::spawn_blocking(move || {
@@ -811,7 +823,6 @@ fn read_workflow_result(root: &Path, request_id: &str) -> Result<Option<Value>, 
 
 #[tauri::command]
 pub fn agent_ds_workflow_result(request_id: String) -> Result<Option<Value>, AppError> {
-    ensure_preview_enabled()?;
     let root = workflow_root(&request_id)?;
     if codex::is_request(&root) { return codex::result(&root, &request_id); }
     read_workflow_result(&root, &request_id)
@@ -824,7 +835,6 @@ fn workflow_root(request_id: &str) -> Result<PathBuf, AppError> {
 
 #[tauri::command]
 pub async fn agent_ds_workflow_cancel(request_id: String) -> Result<(), AppError> {
-    ensure_preview_enabled()?;
     codex::request_root(&request_id)?;
     codex::cancel(&request_id).await;
     Ok(())
@@ -864,6 +874,21 @@ pub fn agent_ds_workflow_feedback(request_id: String, revision: u32, text: Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(debug_assertions))]
+    #[tokio::test]
+    async fn installed_agent_uses_appdata_and_keeps_legacy_planner_private() {
+        let data = crate::codex::codex_cli::app_data_dir().unwrap();
+        assert_eq!(agent_root(), data.join(".agent-z"));
+        assert_eq!(repo_root(), data.join(".agent-z/workspace"));
+        assert!(ensure_preview_enabled().is_err());
+        let error = workflow_start("invalid".into(), "分析图片".into(), "{}".into(),
+            Some("agent-text".into()), None, None, Some("codex".into()), Some("codex-cli".into()), None).await.unwrap_err();
+        assert!(error.to_string().contains("请求标识无效"));
+        let error = workflow_start("invalid".into(), "编排".into(), "{}".into(),
+            Some("planning-v2".into()), None, None, None, None, None).await.unwrap_err();
+        assert!(error.to_string().contains("仅在开发构建"));
+    }
 
     #[test]
     fn workflow_generation_images_use_exact_job_and_turn_without_session_cards() {
@@ -1080,11 +1105,11 @@ mod tests {
         for count in [11, 24] {
             // An invalid request ID stops before filesystem writes or DSH calls.
             let images = vec!["/tmp/test.png".to_string(); count];
-            let error = agent_ds_workflow_start("invalid".into(), "分析图片".into(), "{}".into(),
+            let error = workflow_start("invalid".into(), "分析图片".into(), "{}".into(),
                 Some("agent-text".into()), Some(images.clone()), None, None, None, None).await.unwrap_err();
             assert!(error.to_string().contains("请求标识无效"), "{error}");
             for purpose in [None, Some("planning"), Some("planning-v2")] {
-                let error = agent_ds_workflow_start("invalid".into(), "分析图片".into(), "{}".into(),
+                let error = workflow_start("invalid".into(), "分析图片".into(), "{}".into(),
                     purpose.map(str::to_string), Some(images.clone()), None, None, None, None).await.unwrap_err();
                 assert!(error.to_string().contains("仅本机文字 Agent 支持图片附件"), "{error}");
             }

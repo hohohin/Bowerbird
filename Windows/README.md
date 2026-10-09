@@ -2,6 +2,10 @@
 
 这里存放 Bowerbird 的 Windows 开发、构建与独立扩展加载工具。平台兼容行为已经并入项目主源码；脚本只把 canonical 项目复制到 Windows/.work，不再用整文件 override 替换源码。Windows/overrides/ 仅保留退役说明，不参与构建。
 
+## 2026-10-09 Windows 26.10.902 正式版修正
+
+用户已授权正式版隐藏技能/模板库入口、开放 Agent 图文输出与 Codex CLI。UI、端口、输入及运行时解除 DEV 限制；工作流后端保留 BYO 权益检查，旧聊天/编排保持开发限制。生产请求改存 `%APPDATA%/com.bowerbird.desktop/.agent-z/`，不再引用打包机源码路径。现役 26.10.901 将由版本递增的 26.10.902 替换，保留旧包与回滚目录。签名包正在构建，发布证据见 [桌面自动更新](../dev-doc/DESKTOP-UPDATES.md)。
+
 ## 2026-10-09 重新核对 Mac 共享源码
 
 补合 `origin/mac@d6027fb` 中先前遗漏的 Codex CLI Agent、循环起点/恢复、数据包交换、Codex 退出登录与入口开关，保留 Windows 封装/v3 布局。逐项源码与验证见 [Mac 增量审计](MAC-SYNC-AUDIT-2026-10-09.md)。公共安装包仍为 26.10.901；Mac 本身的 DEV/debug 限制与正式包请求目录问题需要另行确认开放，不能把源码同步当作正式版图文 Agent 已交付。候选源码版本 26.10.902。

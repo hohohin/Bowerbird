@@ -1,4 +1,4 @@
-//! Codex CLI adapter for the existing local workflow protocol (development only).
+//! Codex CLI adapter for the existing local workflow protocol (development and installed desktop).
 //! The CLI owns reasoning; the desktop owns request identity, tools and delivery.
 use super::*;
 use std::collections::HashMap;

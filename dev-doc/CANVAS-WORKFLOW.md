@@ -2,6 +2,14 @@
 
 产品范围以 `PROJECT.md`「画板工作流」约定为准。本文记录首版实现契约，不代表安装包或线上发布。
 
+## Windows 正式版开放范围（2026-10-09）
+
+用户已明确授权正式版隐藏技能卡片/模板库入口，开放 Agent 图文输出和 Codex CLI。Windows 候选 26.10.902 显示本机 DSH、Codex CLI、Cloud 三项引擎，本机两项接收全部已连接图文并支持文字/表格/图片交付。DEV 不再决定选择器、输入解析、图片端口或本机执行分支。技能/助手/模板库 feature flags 保持关闭；原数据、子流程配置与数据包交换保留。
+
+正式版 `agent_ds_workflow_start` 沿已有 BYO 权益检查，仅 `agent-text` 可通过非 debug 构建；旧开发聊天、规划任务和规划反馈保留原限制。读取原结果、原生生图任务、回传和图片入库支持恢复，不再次提交模型。请求位于 `%APPDATA%/com.bowerbird.desktop/.agent-z/ds-inbox/`，Codex 的每卡会话和每请求目录仍独立，DSH cwd 为应用 `.agent-z/workspace`。本机 DSH 服务仍须由用户启动，登录链接保存至应用 `.agent-z/dsh-web-auth-url.txt`；不把 DSH 服务或账号打入安装包。Codex 使用设置中的官方 CLI 与 Bowerbird 私有认证。
+
+默认生图 provider、现有登录/权限/积分、终态校验、取消/去重与未知结果规则保持。无新迁移或云部署；现役 Mac 26.10.801 仍按其包内开发限制运行。此节覆盖下列 Mac 开发记录中的 debug/dev 范围，历史测试数字保留。
+
 ## 操作
 
 ### 技能、工作流助手与模板库入口暂隐（2026-10-08）

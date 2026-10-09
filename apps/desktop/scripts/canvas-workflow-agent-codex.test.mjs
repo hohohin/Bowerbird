@@ -1,17 +1,24 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
-const server = await createServer({ configFile: false, root: process.cwd(), server: { host: '127.0.0.1', port: 1642, strictPort: true, hmr: false, watch: null } });
+const production = process.env.BOWERBIRD_WORKFLOW_PRODUCTION === '1';
+const server = await createServer({ cacheDir: production ? '.tmp/workflow-agent-production-'+'canvas-workflow-agent-codex.test.mjs' : undefined, define: production ? { 'import.meta.env.DEV': 'false', 'import.meta.env.PROD': 'true' } : undefined, configFile: false, root: process.cwd(), server: { host: '127.0.0.1', port: 1642, strictPort: true, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
 try {
   await page.goto('http://127.0.0.1:1642/scripts/fixtures/canvas-reference/preview.html');
   await page.locator('[data-canvas-node-id="old"]').waitFor();
+  for (const name of ['新增技能卡片', '工作流模板库', '新增工作流助手']) assert.equal(await page.getByRole('button', { name, exact: true }).count(), 0);
   await page.getByRole('button', { name: '新增 Agent 卡片', exact: true }).click();
-  await page.getByRole('combobox', { name: 'Agent 测试通道' }).selectOption('codex-cli');
+  const agent = page.locator('.workflow-card.is-agent');
+  await agent.getByRole('button', { name: '输出：返回图片', exact: true }).waitFor();
+  await page.getByRole('combobox', { name: 'Agent 执行引擎' }).selectOption('cloud');
+  assert.equal(await agent.getByRole('button', { name: '输出：返回图片', exact: true }).count(), 0);
+  await page.getByRole('combobox', { name: 'Agent 执行引擎' }).selectOption('codex-cli');
+  await agent.getByRole('button', { name: '输出：返回图片', exact: true }).waitFor();
   await page.reload();
-  const selector = page.getByRole('combobox', { name: 'Agent 测试通道' });
+  const selector = page.getByRole('combobox', { name: 'Agent 执行引擎' });
   await selector.waitFor();
   assert.equal(await selector.inputValue(), 'codex-cli');
   await page.evaluate(async () => {
@@ -104,5 +111,6 @@ try {
     const loopRecovery = new CanvasWorkflowController('codex-loop-recovery'); await loopRecovery.load(); await loopRecovery.continue();
     check(loopRecovery.document.run.status === 'done' && calls.length === beforeLoop + 2, 'isolated loop recovery fetches the same request without a fresh model call');
   });
+  console.log(production ? 'PRODUCTION' : 'DEV');
   console.log('PASS Codex Agent selector, image/table delivery, frozen transport, isolated loop sessions/recovery, errors and cancellation');
 } finally { await browser.close(); await server.close(); }

@@ -375,7 +375,7 @@ export class CanvasWorkflowController {
       }
       if (node.kind === "generation" && !node.prompt.trim()) throw new WorkflowNodeError("请在生成卡片文本框中填写指令，或通过 @ 引入内容", node);
       if (node.kind === "agent" && !node.prompt.trim()) throw new WorkflowNodeError("请在 Agent 卡片中填写要求，可按 @ 引用文字或图片", node);
-      if (node.kind === "agent" && (!import.meta.env.DEV || node.agentTransport === "cloud") && (!activePromptReferences(node).some(ref => ref.type === "text") || activePromptReferences(node).some(ref => ref.type === "image"))) throw new WorkflowNodeError("Cloud 通道目前仅支持文本改写，请按 @ 引用文本；图文自由处理请使用本机 Agent DS", node);
+      if (node.kind === "agent" && node.agentTransport === "cloud" && (!activePromptReferences(node).some(ref => ref.type === "text") || activePromptReferences(node).some(ref => ref.type === "image"))) throw new WorkflowNodeError("Cloud 通道目前仅支持文本改写，请按 @ 引用文本；图文自由处理请使用本机 Agent DS 或 Codex CLI", node);
       if (node.kind === "agent" && node.prompt.length > 4000) throw new WorkflowNodeError("Agent 要求不能超过 4000 字", node);
       if (node.kind === "instruction" && !(node.inputs.image?.length)) throw new WorkflowNodeError("请先连接指令卡片的图片输入", node);
       if (node.kind === "visual-profile") {
@@ -955,7 +955,7 @@ export class CanvasWorkflowController {
         if (source.length > 16000) throw new WorkflowNodeError("Agent 引用文字不能超过 16000 字", node);
         if (!node.prompt.trim() || node.prompt.length > 4000) throw new WorkflowNodeError("Agent 要求必须为 1–4000 字", node);
         let outputs: Record<string, WorkflowValue>;
-        if (step.localDsRequestId || (!step.agentRunId && import.meta.env.DEV && node.agentTransport !== "cloud")) {
+        if (step.localDsRequestId || (!step.agentRunId && node.agentTransport !== "cloud")) {
           const result = await this.localDsResult(runId, node, step, agentPrompt, source, orderedAssets.map(asset => asset.store_path!), halted);
           if (!result) return;
           outputs = result;

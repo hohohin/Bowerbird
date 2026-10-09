@@ -32,7 +32,7 @@ use crate::error::AppError;
 
 pub(crate) const DEFAULT_DESCRIBE_INSTRUCTION: &str = "请描述这张图片";
 
-async fn require_byo(
+pub(super) async fn require_byo(
     entitlement: &EntitlementService,
     auth: &crate::cloud::AuthClient,
 ) -> Result<(), AppError> {

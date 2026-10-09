@@ -1,6 +1,7 @@
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
-const server = await createServer({ configFile: false, root: process.cwd(), server: { host: '127.0.0.1', port: 1631, strictPort: true, hmr: false, watch: null } });
+const production = process.env.BOWERBIRD_WORKFLOW_PRODUCTION === '1';
+const server = await createServer({ cacheDir: production ? '.tmp/workflow-agent-production-'+'canvas-workflow-agent-provider.test.mjs' : undefined, define: production ? { 'import.meta.env.DEV': 'false', 'import.meta.env.PROD': 'true' } : undefined, configFile: false, root: process.cwd(), server: { host: '127.0.0.1', port: 1631, strictPort: true, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage();

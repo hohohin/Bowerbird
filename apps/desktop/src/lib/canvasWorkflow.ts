@@ -287,7 +287,7 @@ export function generationInputNode(node: WorkflowNode): WorkflowNode {
     [type, (node.inputs[type] ?? []).filter(input => refs.some(ref => ref.type === type && workflowReferenceMatchesInput(ref, input)))])) } };
 }
 function usesConnectedAgentInputs(node: WorkflowNode) {
-  return node.kind === "agent" && import.meta.env?.DEV !== false && node.agentTransport !== "cloud";
+  return node.kind === "agent" && node.agentTransport !== "cloud";
 }
 export function compileGenerationPrompt(node: WorkflowNode, values: Record<string, WorkflowValue[]>) {
   node = rebindGenerationReferences(node);
