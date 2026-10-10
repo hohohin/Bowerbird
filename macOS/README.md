@@ -5,7 +5,11 @@
 
 ## 2026-10-10 接收 Windows dev 更新
 
-相对上次完整 Mac 基线 `d6027fb`，Windows 本地 `dev@78eb8e6` 已加入容器/v3 布局、正式版图文/Codex Agent、视频生成卡及查询恢复，Windows 已发布 26.10.904。共享改动、Windows 专属安装钩子、Mac 验收及存档推送状态见 [Windows → Mac 更新交接](DEV-SYNC-2026-10-10.md)。本次已存档并推送 dev 交接；Mac 公开版本仍为 26.10.801，最新项目状态见 `PROJECT.md`。
+`mac` 已从 `d6027fb` 快进接收 `origin/dev@cf6d43d`，包括容器/v3 布局、正式版图文/Codex Agent、视频生成卡与查询超时恢复。Cargo/Tauri/锁文件保持 Mac **26.10.801**，Mac updater 公钥、稳定签名、标题栏/WKWebView/钥匙串/媒体实现与三个暂隐开关保持。容器测试撤销改按平台使用 Cmd/Ctrl+Z；Windows NSIS 登录保留钩子仅由 Windows 执行。
+
+验证：TypeScript/Vite、画板逻辑 133/133、Rust 全量 462 passed / 0 failed / 7 ignored、Rust release 专项 5/5、8 组工作流专项、三组 DEV=false/实际 production bundle Agent、三组系统 WKWebView production 图文交付/恢复及 Intel cargo check 通过。测试采用临时数据库、合成素材、假 CLI/模拟 IPC 和非持久化 WebView；日志在本机 `macOS/dist/verification/sync-dev-20261010/`。本机已有开发进程因源码合入自动重编，本轮未操作其界面或正式素材库。
+
+本轮未封装/发布新包，也未改官网或云端；现役 Mac 801 的旧行为仍由旧安装包决定。正式安装后的 BYO/私有 CLI/DSH 登录与会话、原生对话框、真实数据升级、视频任务及安装更新重启另行验收。完整范围和接收记录见 [Windows → Mac 更新交接](DEV-SYNC-2026-10-10.md)。
 
 ## 2026-10-08 Mac 26.10.801 已同步 VPS
 

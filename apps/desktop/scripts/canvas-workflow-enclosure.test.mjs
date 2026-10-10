@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
 
+const primaryModifier = process.platform === 'darwin' ? 'Meta' : 'Control';
+
 const server = await createServer({ configFile: false, root: process.cwd(), server: { host: '127.0.0.1', port: 1611, strictPort: true, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
@@ -55,7 +57,7 @@ try {
   assert.ok(delta > 0);
   for (const node of moved.workflow.nodes) assert.ok(Math.abs(node.x - before.workflow.nodes.find(n => n.id === node.id).x - delta) < .1);
   assert.equal(moved.canvas.nodes.find(n => n.id === 'outside').x, 100, 'unchecked content is not moved with enclosure');
-  await page.keyboard.press('Control+z');
+  await page.keyboard.press(`${primaryModifier}+z`);
   await page.waitForFunction(x => window.snapshot().nodes.find(n => n.id === 'old').x === x, before.canvas.nodes.find(n => n.id === 'old').x);
   assert.deepEqual((await state()).workflow.nodes.map(n => [n.x, n.y]), before.workflow.nodes.map(n => [n.x, n.y]));
   await page.evaluate(() => window.save()); await page.reload(); await page.locator('[data-workflow-container]').waitFor();
