@@ -541,13 +541,17 @@ test("generation parent locator binds duplicate paths to the selected turn key",
   );
 });
 
-test("multiple referenced outputs require an explicit causal parent", () => {
+test("multiple referenced outputs start a new creation unless a causal parent is selected", () => {
   const references = [{ id: "asset-a" }, { id: "asset-b" }, { id: "library-only" }];
   const candidates = [
     { assetId: "asset-a", nodeId: "node-a", threadId: "thread-a" },
     { assetId: "asset-b", nodeId: "node-b", threadId: "thread-b" },
   ];
-  assert.throws(() => resolveContinuationParent(references, candidates), /多个画板结果/);
+  assert.equal(resolveContinuationParent(references, candidates), null);
+  assert.equal(resolveContinuationParent([...references].reverse(), candidates), null);
+  assert.equal(resolveContinuationParent(references, candidates, { focusedNodeId: "unrelated", focusedThreadId: "unrelated" }), null);
+  const sameThread = candidates.map(candidate => ({ ...candidate, threadId: "thread-a" }));
+  assert.equal(resolveContinuationParent(references, sameThread, { focusedThreadId: "thread-a" }), null);
   assert.deepEqual(resolveContinuationParent(references, candidates, { focusedNodeId: "node-b" }), {
     asset: references[1],
     nodeId: "node-b",
@@ -566,6 +570,22 @@ test("multiple referenced outputs require an explicit causal parent", () => {
     nodeId: "node-b",
     threadId: "thread-b",
   });
+});
+
+test("repeated output assets are references until a precise continuation is requested", () => {
+  const references = [{ id: "shared" }];
+  const candidates = ["first", "second"].map(nodeId => ({ assetId: "shared", nodeId, threadId: "thread" }));
+  assert.equal(resolveContinuationParent(references, candidates), null);
+  assert.throws(() => resolveContinuationParent(references, candidates, {
+    sidecar: { parentAssetId: "shared", threadId: "thread" },
+  }), /同一素材在线程中出现多次/);
+  assert.deepEqual(resolveContinuationParent(references, candidates, {
+    sidecar: { parentAssetId: "shared", parentNodeId: "first", threadId: "thread" },
+  }), { asset: references[0], nodeId: "first", threadId: "thread" });
+  assert.deepEqual(resolveContinuationParent(references, candidates.slice(0, 1)), {
+    asset: references[0], nodeId: "first", threadId: "thread",
+  });
+  assert.equal(resolveContinuationParent([{ id: "imported" }], candidates), null);
 });
 
 test("continuation acknowledgement cannot consume a newer sidecar", () => {

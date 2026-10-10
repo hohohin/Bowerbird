@@ -151,8 +151,9 @@ export function generationParentLocator<T extends GenerationParentAssetInput>(
   };
 }
 
-/** Select one causal parent without treating unrelated reference images as an
- * ordered fallback. Ambiguity is user-visible and fail-closed. */
+/** Select a unique causal parent without using reference order as a fallback.
+ * Multiple ordinary references start a new creation; an explicit continuation
+ * still requires its exact parent when an asset has several output nodes. */
 export function resolveContinuationParent<T extends { id: string }>(
   references: readonly T[],
   candidates: readonly CreativeParentCandidate[],
@@ -197,10 +198,7 @@ export function resolveContinuationParent<T extends { id: string }>(
     ? eligible.filter((candidate) => candidate.threadId === options.focusedThreadId)
     : [];
   const pool = inFocusedThread.length > 0 ? inFocusedThread : eligible;
-  if (pool.length > 1) {
-    throw new Error("引用了多个画板结果，请先选择具体父结果后再发送");
-  }
-  const selected = pool[0];
+  const selected = pool.length === 1 ? pool[0] : null;
   return selected
     ? { asset: referencesById.get(selected.assetId)!, nodeId: selected.nodeId, threadId: selected.threadId }
     : null;
