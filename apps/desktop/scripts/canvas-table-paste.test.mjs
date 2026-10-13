@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
 
+const primaryModifier = process.platform === 'darwin' ? 'Meta' : 'Control';
+
 const server = await createServer({ configFile: false, root: process.cwd(), server: { host: '127.0.0.1', port: 1596, strictPort: true, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
@@ -19,7 +21,7 @@ async function paste(r, c, text, html) {
     if (html) data['text/html'] = new Blob([html], { type: 'text/html' });
     await navigator.clipboard.write([new ClipboardItem(data)]);
   }, { text, html });
-  await page.keyboard.press('Control+v');
+  await page.keyboard.press(`${primaryModifier}+v`);
 }
 async function saved(r, c, text) {
   await page.waitForFunction(({ r, c, text }) => {
@@ -71,7 +73,7 @@ try {
   assert.deepEqual(note.cells.flat().map(cell => cell.id), ids);
 
   // Plain multiline prose stays in the current textarea and uses normal selection replacement.
-  await cell(1, 1).focus(); await page.keyboard.press('Control+a');
+  await cell(1, 1).focus(); await page.keyboard.press(`${primaryModifier}+a`);
   await paste(1, 1, '普通文字\n第二段');
   await saved(1, 1, '普通文字\n第二段');
   assert.equal((await read()).cells.length, 4);

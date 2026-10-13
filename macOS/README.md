@@ -3,6 +3,12 @@
 本目录记录 Mac 上的本地开发、运行和未签名构建流程。Bowerbird 使用 canonical Tauri / React / Rust 源码，不维护 macOS override。构建架构以 `rustc -vV` 的 host 为准；Intel 为 `x86_64-apple-darwin`，Apple Silicon 原生工具链为 `aarch64-apple-darwin`。
 
 
+## 2026-10-13 接收 Windows dev 后续更新
+
+已从 `1775a81` 合入 `origin/dev@55f4d93`（合并 `c413250`），同步多结果引用、二维表格、循环轮次、Agent 普通会话生图和画板交互修复。保留 Mac 26.10.801、原生配置及本机未提交的撤销/定向输出/比例透传/起始项预览；「生成任务」与分类图片出口共同保留，新生图异步交给普通会话。
+
+组合工作区通过 TypeScript/Vite、前端逻辑 149/149、Rust 全量 463 passed / 7 ignored、release 专项 6/6、17 组合成 IPC、五组实际 production Agent、三组隔离系统 WKWebView 和 Intel 编译检查。原始备份/stash 与未提交状态保留，本轮未发布新包。完整范围、冲突处理和原生验收边界见 [10 月 13 日接收记录](DEV-SYNC-2026-10-13.md)。
+
 ## 2026-10-10 接收 Windows dev 更新
 
 `mac` 已从 `d6027fb` 快进接收 `origin/dev@cf6d43d`，包括容器/v3 布局、正式版图文/Codex Agent、视频生成卡与查询超时恢复。Cargo/Tauri/锁文件保持 Mac **26.10.801**，Mac updater 公钥、稳定签名、标题栏/WKWebView/钥匙串/媒体实现与三个暂隐开关保持。容器测试撤销改按平台使用 Cmd/Ctrl+Z；Windows NSIS 登录保留钩子仅由 Windows 执行。

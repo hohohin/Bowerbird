@@ -40,6 +40,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 | `Windows/Windows-edited.md` | Windows 适配修改清单、交付产物与升级注意事项 | 维护 Windows override / 排查平台差异时 |
 | `macOS/WINDOWS-SYNC-2026-10-07.md` | 自上次 mac 推送以来的增量、Windows 同步步骤、平台边界与本轮验证 | 接收本轮 Mac 源码到 Windows、核对迁移与原生验收时 |
 | `macOS/DEV-SYNC-2026-10-10.md` | Windows dev 相对 Mac d6027fb 的更新、存档推送状态、共享功能及 Mac 接收验收 | Mac 接收 Windows 26.10.901–26.10.1001 源码、核对正式 Agent/视频卡/v3 布局与发布边界时 |
+| `macOS/DEV-SYNC-2026-10-13.md` | Windows 1001 后续二维表格/Agent 会话生图增量、Mac 本机改动组合与验证 | 接续 10 月 13 日 Mac 接收、核对比例/分类输出兼容与发布边界时 |
 | `macOS/README.md` | Intel / Apple Silicon 开发运行、DMG 固定拖动安装规范、重打包脚本与交付检查 | macOS 开发 / 构建 / 重打包 / 交付 / 排障前必读 |
 
 ## 文档维护规则
