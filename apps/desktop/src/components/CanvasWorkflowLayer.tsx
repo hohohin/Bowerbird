@@ -9,6 +9,7 @@ import { CanvasCardName } from "./CanvasCardName";
 import { WorkflowDisconnectMenu, type DisconnectChoice } from "./WorkflowDisconnectMenu";
 import { canvasAssetMediaPath } from "../lib/creativeCanvas";
 import { expandCanvasSections, readCanvasNote } from "../lib/canvasNotes";
+import { contentTableRows } from "../lib/contentTable";
 import { canvasInputValue, canvasWorkflowInputState, canvasSessionImages, workflowSessionIds } from "../lib/canvasSessionOutputs";
 import { useStore } from "../store";
 import { getDragAssets } from "../lib/dragPayload";
@@ -504,6 +505,13 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
     {materials.filter(item => item.groupId).map(item => nameEditor(item.groupId!, { left: item.x, top: item.y - 28, maxWidth: item.width }))}
     {disconnectMenu && <WorkflowDisconnectMenu {...disconnectMenu} onClose={() => setDisconnectMenu(null)} />}
     <svg className="workflow-wires">
+      {document.nodes.filter(node => node.kind === "agent").flatMap(node => (node.sessionNodeIds ?? []).map(id => {
+        const anchorId = conversationCards?.aliases.get(id) ?? id;
+        const session = graphNodes.find(item => item.id === anchorId && item.hiddenAt == null);
+        return session && <path key={`agent-session-${node.id}-${id}`} className="is-session" data-workflow-session-link={id}
+          data-workflow-generator={node.id} d={path({ x: node.x + WORKFLOW_CARD_WIDTH, y: workflowPortY(node, "output", "session") },
+            { x: session.x, y: session.y + 40 })} />;
+      }))}
       {document.nodes.filter(node => node.kind === "generation").flatMap(node =>
         graphNodes.filter(session => workflowSessionIds([node]).has(session.id)).flatMap(session =>
           canvasSessionImages(session, graphNodes).flatMap(output => {
@@ -549,13 +557,17 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
       const card = graphNodes.find(card => card.id === node.textSource && card.hiddenAt == null);
       return card && <div key={node.id} className="workflow-material-hotspot workflow-text-key" data-workflow-text-key={card.id} style={{ left: card.x, top: card.y, width: card.width, height: card.height }}>{node.inputs.signal?.length ? gearButton(node) : keyButton(node)}</div>;
     })}
-    {graphNodes.filter(card => card.kind === "prompt" && card.hiddenAt == null && !sessionIds.has(card.id) && !conversationCards?.hiddenIds.has(card.id)).map(card => <div key={`session-${card.id}`} className={`workflow-material-hotspot ${hoveredMaterial === card.id ? "is-hovered" : ""}`} style={{ left: card.x, top: card.y, width: card.width, height: card.height }}>
-      <button data-workflow-session-output={card.id} data-workflow-material={card.id} className="workflow-asset-port" style={{ left: card.width - 6, top: 44 }}
-        aria-label="连接会话图片到工作流" title="输出本轮会话图片，拖动连接到图片输入" onPointerDown={event => {
+    {graphNodes.filter(card => card.kind === "prompt" && card.hiddenAt == null && !sessionIds.has(card.id) && !conversationCards?.hiddenIds.has(card.id)).map(card => <div key={`session-${card.id}`} className="workflow-material-hotspot" style={{ left: card.x, top: card.y, width: card.width, height: card.height }}>
+      <button data-workflow-session-output={card.id} data-workflow-material={card.id} className="workflow-port is-output is-image workflow-session-output" style={{ top: 40 }}
+        aria-label="输出：图片" title="拖到输入端口，或点击后选择输入端口" onPointerDown={event => {
           event.stopPropagation(); event.preventDefault();
           const value: Connection = { canvasNodeId: conversationCards?.cards.get(card.id)?.latest.id ?? card.id, cellId: "image", type: "image" };
           connectionRef.current = value; setConnection(value); setCursor({ x: event.clientX, y: event.clientY });
-        }} />
+        }} onClick={event => {
+          if (event.detail !== 0) return;
+          const value: Connection = { canvasNodeId: conversationCards?.cards.get(card.id)?.latest.id ?? card.id, cellId: "image", type: "image" };
+          connectionRef.current = value; setConnection(value);
+        }} onContextMenu={event => { event.preventDefault(); event.stopPropagation(); }}><i /><span>图片</span></button>
     </div>)}
     {materials.map(material => <div key={material.id} className={`workflow-material-hotspot ${hoveredMaterial === material.id ? "is-hovered" : ""}`} style={{ left: material.x, top: material.y, width: material.width, height: material.height }}><button data-workflow-material={material.id} className="workflow-asset-port" style={{ left: material.width - 6, top: material.height / 2 - 6 }}
       aria-label={material.groupId ? "连接文件夹图片到工作流" : "连接图片到工作流"} title={material.groupId ? `输出文件夹内 ${material.assetIds?.length ?? 0} 张图片` : "拖动连接到工作流图片输入"} onPointerDown={event => {
@@ -708,11 +720,10 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
           </>}
           {node.kind === "instruction" && !outputPorts.length && <p className="workflow-hint">{node.action === "describe" ? "反推后展开各维度输出" : "保存分层工程后展开图层输出"}</p>}
           {outputPorts.filter(port => port.type === "text" && node.outputs[port.id]?.text).map(port => <details key={port.id} className="workflow-text-result">
-            <summary>{node.outputs[port.id].table ? `表格 · ${node.outputs[port.id].table!.rows.length} 行 × ${node.outputs[port.id].table!.columns.length} 列` : port.label}</summary>
+            <summary>{node.outputs[port.id].table ? `表格 · ${contentTableRows(node.outputs[port.id].table!).length} 行 × ${contentTableRows(node.outputs[port.id].table!)[0].length} 列` : port.label}</summary>
             {node.outputs[port.id].table ? <div className="workflow-table-result"><table>
               {node.outputs[port.id].table!.title && <caption>{node.outputs[port.id].table!.title}</caption>}
-              <thead><tr>{node.outputs[port.id].table!.columns.map((text, index) => <th key={index}>{text}</th>)}</tr></thead>
-              <tbody>{node.outputs[port.id].table!.rows.map((row, r) => <tr key={r}>{row.map((text, c) => <td key={c}>{text}</td>)}</tr>)}</tbody>
+              <tbody>{contentTableRows(node.outputs[port.id].table!).map((row, r) => <tr key={r}>{row.map((text, c) => <td key={c}>{text}</td>)}</tr>)}</tbody>
             </table></div> : <p>{node.outputs[port.id].text}</p>}
           </details>)}
           {node.kind === "agent" && !!node.outputs.image?.assetIds?.length && <details open className="workflow-image-result">

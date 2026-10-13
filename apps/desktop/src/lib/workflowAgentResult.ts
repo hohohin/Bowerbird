@@ -1,4 +1,5 @@
 import type { WorkflowValue } from "./canvasWorkflow";
+import { contentTableText, parseTextTable, type ContentTable } from "./contentTable.ts";
 
 export interface AgentTable { title?: string; columns: string[]; rows: string[][] }
 
@@ -46,13 +47,19 @@ export function agentResultValue(text: string): WorkflowValue {
   const raw = text.trim().replace(/^```(?:json)?\s*\n([\s\S]*?)\n```$/, "$1");
   let parsed;
   try { parsed = JSON.parse(raw); } catch { /* Ordinary text, including legacy delimited tables. */ }
+  const result = (table: ContentTable): WorkflowValue => ({ type: "text", text: contentTableText(table), table });
   if (parsed?.format === "bowerbird-table") {
-    if (Object.keys(parsed).some(key => !["format", "title", "columns", "rows"].includes(key)) || !validTable(parsed)) {
+    const grid = parsed.columns === undefined && Array.isArray(parsed.rows) && parsed.rows.length > 0 && parsed.rows.length <= 101
+      && Array.isArray(parsed.rows[0]) && parsed.rows[0].length > 0 && parsed.rows[0].length <= 32
+      && parsed.rows.every((row: unknown) => Array.isArray(row) && row.length === parsed.rows[0].length && row.every(cell => typeof cell === "string"))
+      && (parsed.title === undefined || typeof parsed.title === "string" && parsed.title.length <= 120);
+    if (Object.keys(parsed).some(key => !["format", "title", "columns", "rows"].includes(key)) || !(grid || validTable(parsed))) {
       throw new Error("Agent 表格格式无效：需要等长的文字行列，最多 32 列、100 行数据及 120 字标题");
     }
-    const { format: _, ...table } = parsed as AgentTable & { format: string };
-    return { type: "text", text: [table.title, [table.columns, ...table.rows].map(row => row.join("\t")).join("\n")].filter(Boolean).join("\n"), table };
+    return result({ ...(parsed.title ? { title: parsed.title } : {}), rows: grid ? parsed.rows : [parsed.columns, ...parsed.rows] });
   }
+  const rows = parseTextTable(text);
+  if (rows && rows.length <= 101 && rows[0].length <= 32) return result({ rows });
   const table = inferTable(text);
-  return { type: "text", text, ...(table ? { table } : {}) };
+  return table ? result({ ...(table.title ? { title: table.title } : {}), rows: [table.columns, ...table.rows] }) : { type: "text", text };
 }

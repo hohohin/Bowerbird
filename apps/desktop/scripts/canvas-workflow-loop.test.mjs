@@ -11,10 +11,12 @@ try {
   await page.locator('[data-canvas-node-id="old"]').waitFor();
   await page.getByRole('button', { name: '新增循环卡片', exact: true }).click();
   const card = page.locator('.workflow-card.is-loop'); await card.waitFor();
+  assert.equal(await card.getByRole('button', { name: '输出：当前轮次', exact: true }).count(), 1);
   await card.getByRole('combobox', { name: '循环方式' }).selectOption('rows');
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.some(node => node.kind === 'loop' && node.loopMode === 'rows'));
   await page.reload(); await card.waitFor();
   assert.equal(await card.getByRole('combobox', { name: '循环方式' }).inputValue(), 'rows');
+  assert.equal(await card.getByRole('button', { name: '输出：当前轮次', exact: true }).count(), 1);
   await card.getByRole('spinbutton', { name: '循环起始项' }).fill('2');
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.some(node => node.kind === 'loop' && node.loopStartItem === 2));
   await page.reload(); await card.waitFor();
@@ -34,7 +36,10 @@ try {
     const loop = () => ({ ...newWorkflowNode('loop', 0, 0, 'codex'), id: 'loop', inputs: { image: [{ assetId: 'a' }, { assetId: 'b' }] } });
     const gen = (id, producer = 'loop') => {
       const input = { nodeId: producer, portId: 'image' };
-      return { ...newWorkflowNode('generation', 420, 0, 'codex'), id, prompt: `${id} @[image]`, inputs: { image: [input] }, promptReferences: [{ id: 'image', type: 'image', input, label: '当前项' }] };
+      const iteration = { nodeId: 'loop', portId: 'iteration' };
+      return { ...newWorkflowNode('generation', 420, 0, 'codex'), id, prompt: `${id} @[image]${producer === 'loop' ? ' 轮次=@[iteration]' : ''}`,
+        inputs: { image: [input], ...(producer === 'loop' ? { text: [iteration] } : {}) },
+        promptReferences: [{ id: 'image', type: 'image', input, label: '当前项' }, ...(producer === 'loop' ? [{ id: 'iteration', type: 'text', input: iteration, label: '当前轮次' }] : [])] };
     };
     let c, submissions = [], cancelled = [];
     api.localAgentFindAssetId = async path => path.replace('.png', '');
@@ -45,6 +50,9 @@ try {
       check(persisted.steps[name].jobId === identity.jobId, 'identity saved before generation');
       check(persisted.loop.items.length === 2, 'input snapshot persisted before generation');
       check((persisted.loop.startIndex ?? 0) + persisted.loop.completed.length === persisted.loop.index, 'previous item durable before submit');
+      const owner = JSON.parse(sessionStorage.getItem(`workflow-${c.projectId}`)).document.nodes.find(node => node.id === 'loop');
+      check(JSON.stringify(owner.outputs.iteration) === JSON.stringify({ type: 'text', text: String(persisted.loop.index + 1) }), 'pure numeric iteration saved before downstream submission');
+      if (name !== 'child') check(args[0].includes(`轮次=${persisted.loop.index + 1}`), 'generation prompt consumes current iteration');
       const submission = { name, asset: args[1][0].id, identity }; submissions.push(submission);
       await new Promise(resolve => { submission.release = resolve; });
       useStore.setState(state => ({ genJobs: { ...state.genJobs, [identity.jobId]: { turns: [{ turnKey: identity.turnKey, images: [submission.asset + '.png'] }] } } }));
@@ -76,6 +84,7 @@ try {
     check(c.document.run.status === 'done' && c.document.run.loop.startIndex === 1 && c.document.run.loop.completed.length === 1, 'offset loop finishes without fake completed items');
     const offsetExample = structuredClone(c.document);
     c = new CanvasWorkflowController('loop-offset'); await c.load(); await c.continue();
+    check(c.document.nodes.find(node => node.id === 'loop').outputs.iteration.text === '2', 'offset iteration survives reload');
     check(submissions.length === 1 && c.document.run.status === 'done', 'completed offset reload never replays');
     for (const startItem of [0, 1.5, 101, 3]) {
       await create(`loop-invalid-${startItem}`, [{ ...loop(), loopStartItem: startItem }, gen('A')]);
@@ -122,21 +131,30 @@ try {
     const cell = (id, text, image) => ({ id, text, bold: false, italic: false, align: 'left', ...(image ? { content_type: 'image', image_refs: [{ asset_id: image, token: '@图片1' }] } : {}) });
     const table = { ...base, id: 'loop-table', kind: 'note', assetId: null, role: null, threadId: null, payloadJson: JSON.stringify({ schema_version: 1, note_type: 'text', cells: [[cell('a1', '产品甲'), cell('a2', '', 'a')], [cell('b1', '产品乙'), cell('b2', '', 'b')]], text: '', member_ids: [] }) };
     await api.projectCanvasNodeCreate(table);
+    const receiver = { ...table, id: 'iteration-receiver', payloadJson: JSON.stringify({ schema_version: 1, note_type: 'text', cells: [[cell('iteration-cell', '')]], text: '', member_ids: [] }) };
+    await api.projectCanvasNodeCreate(receiver);
+    await create('loop-iteration-content', [loop()]);
+    await c.bindTextInput(receiver.id, undefined, { nodeId: 'loop', portId: 'iteration' }, 'text');
+    c = new CanvasWorkflowController('loop-iteration-content'); await c.load(); await c.start('loop');
+    const received = JSON.parse((await api.projectCanvasGet(c.projectId)).nodes.find(node => node.id === receiver.id).payloadJson);
+    check(c.document.run.status === 'done' && JSON.stringify(received.cells.flat().map(cell => cell.text).filter(Boolean)) === JSON.stringify(['1', '2']), 'iteration-only connection survives reload and writes one numeric text per item');
     const rows = { ...loop(), loopMode: 'rows', inputs: { text: [{ canvasNodeId: 'loop-table', cellId: '*text' }] } };
     const rowItems = workflowLoopRows(rows, [rows], [table]);
-    check(rowItems[0].text === '产品甲' && rowItems[0].assetIds[0] === 'a' && rowItems[1].text === '产品乙' && rowItems[1].assetIds[0] === 'b', 'paired rows');
+    check(rowItems[0].table.rows[0][0] === '产品甲' && rowItems[0].assetIds[0] === 'a' && rowItems[1].table.rows[0][0] === '产品乙' && rowItems[1].assetIds[0] === 'b', 'paired table rows');
     let failSecond = true, requests = [], savedInputs = [];
     const replies = new Map();
-    api.agentDsWorkflowStart = async (requestId, instruction, source) => { requests.push(requestId); const parsed = JSON.parse(source); savedInputs.push(parsed); replies.set(requestId, { schemaVersion: 1, requestId, ...(failSecond && parsed['引用文本 1'] === '产品乙' ? { error: '模拟失败' } : { text: `处理完成 ${parsed['引用文本 1']}` }) }); return { autoDelivered: true }; };
+    api.agentDsWorkflowStart = async (requestId, instruction, source) => { requests.push(requestId); const parsed = JSON.parse(source); savedInputs.push(parsed); replies.set(requestId, { schemaVersion: 1, requestId, ...(failSecond && parsed['引用文本 1'].rows[0][0] === '产品乙' ? { error: '模拟失败' } : { text: `处理完成 ${parsed['引用文本 1'].rows[0][0]}` }) }); return { autoDelivered: true }; };
     api.agentDsWorkflowResult = async requestId => replies.get(requestId);
-    const agent = { ...newWorkflowNode('agent', 420, 0, 'codex'), id: 'agent', prompt: '处理当前行', inputs: { text: [{ nodeId: 'loop', portId: 'text' }], image: [{ nodeId: 'loop', portId: 'image' }] } };
+    const agent = { ...newWorkflowNode('agent', 420, 0, 'codex'), id: 'agent', prompt: '处理当前行', inputs: { text: [{ nodeId: 'loop', portId: 'text' }, { nodeId: 'loop', portId: 'iteration' }], image: [{ nodeId: 'loop', portId: 'image' }] } };
     await create('loop-rows', [rows, agent]); await c.start('loop');
     check(c.document.run.status === 'waiting' && c.document.run.loop.completed.length === 1 && c.document.run.loop.index === 1, 'failure pauses current row');
     check(c.isLocked('agent'), 'failed loop retains lock');
-    check(savedInputs[0]['引用文本 1'] === '产品甲' && savedInputs[1]['引用文本 1'] === '产品乙', 'Agent receives one row');
+    check(savedInputs[0]['引用文本 1'].rows[0][0] === '产品甲' && savedInputs[1]['引用文本 1'].rows[0][0] === '产品乙', 'Agent receives one table row');
+    check(savedInputs[0]['引用文本 2'] === '1' && savedInputs[1]['引用文本 2'] === '2', 'row text and numeric iteration remain separate');
     await api.projectCanvasNoteUpdate('loop-table', JSON.stringify({ schema_version: 1, note_type: 'text', cells: [[cell('a1', 'changed')]], text: 'changed', member_ids: [] }));
     c = new CanvasWorkflowController('loop-rows'); await c.load(); failSecond = false; await c.retryLoop(c.document.run.id);
-    check(c.document.run.status === 'done' && requests.length === 3 && savedInputs[2]['引用文本 1'] === '产品乙', 'retry frozen failed row only');
+    check(c.document.run.status === 'done' && requests.length === 3 && savedInputs[2]['引用文本 1'].rows[0][0] === '产品乙', 'retry frozen failed row only');
+    check(savedInputs[2]['引用文本 2'] === '2', 'retry keeps interrupted iteration number');
     check(c.document.run.loop.completed[0].outputs.agent.text.text.includes('产品甲'), 'first result retained');
     await api.projectCanvasNoteUpdate('loop-table', table.payloadJson);
     failSecond = true; const beforeOffsetRetry = requests.length;
@@ -156,11 +174,11 @@ try {
     const producedRows = { ...rows, inputs: { text: [{ nodeId: 'source', portId: 'text' }] } };
     const textAgent = { ...agent, inputs: { text: [{ nodeId: 'loop', portId: 'text' }] } };
     await create('loop-produced-rows', [sourceAgent, producedRows, textAgent]); await c.start('source');
-    check(c.document.run.status === 'done' && sourceCalls === 1 && bodyCalls === 2, 'upstream runs once, body repeats for each produced row');
-    check(c.document.run.loop.items[1].text === '产品：乙', 'structured table preserves column labels');
+    check(c.document.run.status === 'done' && sourceCalls === 1 && bodyCalls === 3, 'all physical rows match content-card iteration, including the visible header');
+    check(c.document.run.loop.items[2].table.rows[0][0] === '乙', 'structured table preserves cell boundaries');
     sourceCalls = 0; bodyCalls = 0;
     await create('loop-produced-offset', [sourceAgent, { ...producedRows, loopStartItem: 2 }, textAgent]); await c.start('source');
-    check(c.document.run.status === 'done' && sourceCalls === 1 && bodyCalls === 1 && c.document.run.loop.completed.length === 1, 'trigger/upstream start respects selected row');
+    check(c.document.run.status === 'done' && sourceCalls === 1 && bodyCalls === 2 && c.document.run.loop.completed.length === 2, 'starting from row two skips the header consistently');
     // Human confirmation halts advancement to the next item.
     let confirmed = false;
     api.visualProfileGet = async () => ({ id: 'profile', status: confirmed ? 'confirmed' : 'draft', version: 1, summary: '规范' });

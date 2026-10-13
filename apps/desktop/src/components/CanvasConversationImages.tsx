@@ -1,12 +1,14 @@
-import { useEffect, useState, type MouseEvent } from "react";
+import { useEffect, useState, type MouseEvent, type PointerEvent } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { canvasAssetMediaPath, type CanvasAssetSnapshot } from "../lib/creativeCanvas";
 import { isVideoPath } from "../lib/videoGeneration";
 import { VideoPoster } from "./VideoPoster";
 import "./CanvasConversationImages.css";
 
-export function CanvasConversationImages({ images, onContextMenu }: {
+export function CanvasConversationImages({ images, onPointerDown, onClick, onContextMenu }: {
   images: CanvasAssetSnapshot[];
+  onPointerDown: (event: PointerEvent<HTMLElement>) => void;
+  onClick: (event: MouseEvent<HTMLElement>, asset: CanvasAssetSnapshot) => void;
   onContextMenu: (event: MouseEvent<HTMLElement>, asset: CanvasAssetSnapshot) => void;
 }) {
   const [selected, setSelected] = useState<string>();
@@ -17,6 +19,15 @@ export function CanvasConversationImages({ images, onContextMenu }: {
   const shown = images[index];
   const path = canvasAssetMediaPath(shown);
   return <section className="canvas-conversation-images" data-conversation-image={shown.assetId}
+    role="button" tabIndex={0} aria-label={shown.name}
+    onPointerDown={onPointerDown}
+    onClick={event => { event.stopPropagation(); onClick(event, shown); }}
+    onKeyDown={event => {
+      if (event.target !== event.currentTarget || event.key !== "Enter") return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.currentTarget.click();
+    }}
     onContextMenu={event => onContextMenu(event, shown)}>
     {isVideoPath(shown.storePath) ? <VideoPoster path={shown.storePath} poster={shown.thumbPath} alt={shown.name} draggable={false} />
       : path ? <img src={convertFileSrc(path)} alt={shown.name} draggable={false} />

@@ -1,9 +1,16 @@
 import { canvasGridWeights, emptyCanvasCell, type CanvasNotePayload } from "./canvasNotes";
 import type { WorkflowNode, WorkflowValue } from "./canvasWorkflow";
+import { contentTableRows, parseTextTable } from "./contentTable";
 
 /** Write one delivery into its reserved slots; the runtime allocates new slots for each main-port delivery. */
 export function canvasContentInput(note: CanvasNotePayload, target: NonNullable<WorkflowNode["textTarget"]>, value: WorkflowValue, reservedCellIds: string[] = []) {
-  if (target.append && value.type === "text" && (value.table || target.tableCellIds)) return tableContentInput(note, target, value, reservedCellIds);
+  if (value.type === "text") {
+    const rows = value.table ? contentTableRows(value.table) : parseTextTable(value.text ?? "") ?? [[value.text ?? ""]];
+    const table = { ...value.table, columns: undefined, rows };
+    if (target.append) return tableContentInput(note, target, { ...value, table }, reservedCellIds);
+    if (rows.length !== 1 || rows[0].length !== 1) throw new Error("多格表格请连接内容卡片的整体输入；指定单元格仅接收 1×1 子表，避免覆盖相邻内容");
+    value = { ...value, text: rows[0][0] };
+  }
   const separate = target.append && value.type === "image";
   const cellIds = separate ? [target.cellId, ...(target.cellIds ?? []).filter(id => id !== target.cellId)] : [target.cellId];
   const cells = note.cells.map(row => row.map(cell => ({ ...cell })));
@@ -103,7 +110,7 @@ function tableContentInput(note: CanvasNotePayload, target: NonNullable<Workflow
     throw new Error("表格接收区域已删除或改接其他输入，请重新连接内容卡片");
   }
   restoreTableGrid(cells, grid, columns, weights);
-  const data = value.table ? [value.table.columns, ...value.table.rows] : [[value.text ?? ""]];
+  const data = value.table ? contentTableRows(value.table) : [[value.text ?? ""]];
   const firstRow = cells.findIndex(row => row.some(cell => cell.id === target.cellId));
   const firstColumn = cells[firstRow].findIndex(cell => cell.id === target.cellId);
   const width = Math.max(data[0].length, ...grid.map(row => row.length));
@@ -128,7 +135,10 @@ function tableContentInput(note: CanvasNotePayload, target: NonNullable<Workflow
   }
   for (const [r, row] of grid.entries()) for (const [c, id] of row.entries()) {
     const cell = cells.flat().find(cell => cell.id === id)!;
-    Object.assign(cell, { content_type: "text", text: data[r]?.[c] ?? "", image_refs: [], bold: !!value.table && r === 0 });
+    const text = data[r]?.[c] ?? "";
+    const image = value.table?.imageCells?.some(([row, column]) => row === r && column === c);
+    const refs = value.imageRefs?.filter(ref => text.split(ref.token).slice(1).some(suffix => !/^\d/.test(suffix))) ?? [];
+    Object.assign(cell, { content_type: image ? "image" : "text", text, image_refs: refs, bold: !!value.table?.columns && r === 0 });
   }
   return { cellIds: grid.flat(), tableCellIds: grid, note: { ...note, note_type: "text" as const, cells, column_widths: columns, row_heights: weights,
     text: cells.map(row => row.map(cell => cell.text).join("\t")).join("\n") } };

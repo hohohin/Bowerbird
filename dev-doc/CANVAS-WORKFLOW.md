@@ -12,6 +12,30 @@
 
 ## 操作
 
+### Windows Codex Agent 写入权限预检（2026-10-13，源码未发布）
+
+- Windows Agent 显式传 `windows.sandbox="unelevated"`，与 `sandbox_mode="workspace-write"`、`-a never` 和请求 cwd 一同构建预检及执行命令。独立 profile 未初始化 Windows 沙箱时，已安装 CLI 0.153.4 原先会静默降为只读；修复不依赖用户全局配置或管理员设置，不启用无沙箱模式。Mac/Linux 启动策略保持。
+- 领取请求身份和同卡互斥后、`exec` 调用前，用真实 `codex sandbox` 执行唯一探针文件的写入/读取/删除；30 秒超时或取消会结束进程。检查失败时保存完成错误，不调用模型、生图或自动重投。探针沿实际命令配置解析权限，不另选独立 `--permission-profile`，避免探针可写而 Agent 只读的假通过。
+- CLI 成功退出但缺结果文件时，显示有界的最后一段 `agent_message`，帮助定位模型未交付原因；仍须通过结果信封校验后才能交付，不把普通对话回复当成功结果。
+- 回归：`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib commands::agent_ds`；离线真机门槛：`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib installed_codex_windows_sandbox_writes_protocol_files_without_a_model -- --ignored --nocapture`。后者不使用账号/模型，覆盖旧配置拒写、修复后的实际模型可见权限、原生启动器和中文/空格/单引号路径、请求/结果/产物原子写入；不得只以假 CLI 或参数断言替代此验收。正式版开关 `BOWERBIRD_WORKFLOW_PRODUCTION=1` 的 `canvas-workflow-agent-codex.test.mjs` 也已通过。可选 DSH 真实登录探针因本机缺少登录文件未具备条件，不属于本次 Codex 验收。未调用付费模型、重跑用户任务或发布安装包。
+
+### Agent 生成任务与非阻塞会话（2026-10-13，源码未发布）
+
+- 比例参数仅支持与对话框相同的七档或 null，工具说明与校验使用同一列表。实际请求 `3:5` 曾因笼统说明被误填，现于创建生成任务前回传同调用 ID 的 `response.errorCode: invalid_ratio`，Agent 可按原意修正后使用新调用 ID，无法满足精确比例则说明限制；不擅自吸附显式比例。重复读取保持原反馈，同 ID 参数漂移仍拒绝。原生回归覆盖 3:5 反馈、七档/null、更正与身份不变，未重跑实际请求。
+- 本机 DSH / Codex CLI 的新「生成任务」端口自动连接普通会话卡片。每次工具调用创建独立 job/turn/conversation；Agent 的 `sessionNodeIds` 保留各轮连接，普通会话展示、引用图片、失败提示与后续续作沿既有链路。生成卡片原有图片依赖调度不变，Cloud Agent 仍为文本改写。
+- 新投递先保存 `localDsGenerationMode: session`，并在本机 IPC 中传 `sessionGeneration: true`。工具桥调用 `store.startGeneration(..., returnOnStarted: true)`，收到后端持久化任务与画板会话后的 `started` 才回传 `response.submitted`（jobId/turnKey/sessionNodeId）；这表示提交成功，不表示图片已生成。提示协议要求 Agent 收到凭据后完成其余独立工作并写最终结果，不等待生成图片；因此循环末尾 Agent 完成后可马上进入下一项，生成由普通任务系统继续执行。
+- 默认 provider 在投递前冻结，参考图顺序/比例、登录、权益与普通生成并发上限保持。提交被拒向 Agent 返回原错误，不换 provider；已提交之后的生成失败在会话中显示。停止工作流仍取消尚未交付的调用及当前 Codex 请求，已收到提交凭据的会话任务独立继续，可从普通生成入口取消。
+- 调用身份、会话连接及凭据先落盘再回传；回传失败可继续补写。重载按原 job/turn 查询，正在生成也可补发提交凭据；查不到原任务时停车，不重交。没有新模式字段的旧请求维持内部任务/图片路径回传协议，不重新投递 Agent 或生成。旧图片文件结果仍可入库及完成已有 writer 交付，无数据库迁移。
+- 验证：`canvas-workflow-agent-session.test.mjs` 使用真实 store 与工作流运行时、模拟原生 IPC，覆盖两个 Agent 通道 × 三个生图 provider 的两轮循环，故意保持图片 IPC 未完成，确认两轮先结束；覆盖可见会话连线/重载、提交中断恢复、回传重试、未知状态、提交失败、停止后的独立会话及纯文本零生图。原默认 provider/旧协议、Codex、图片、文字、循环回归通过，Rust Agent 相关 58 passed / 3 ignored，Vite 候选构建通过。实现阶段 TypeScript 检查曾报 16 处既有 ProseMirror 类型错误；2026-10-13 存档复核在当前依赖下 `tsc --noEmit` 与 Vite 构建均通过；未操作正式素材库、调用真实模型、打包或部署。
+
+### 内容卡片统一二维表格（2026-10-13，源码未发布）
+
+- 卡片 `cells` 为唯一内容来源，普通文本是 1×1，整卡输出保留所有行列，空单元格不挤掉、格内换行不拆行。文本口仍用原端口 ID 保持接线；`WorkflowValue.table.rows` 和序列化的 `text` 表达同一二维结构。单格引用携带 1×1 table，普通生成使用该格原文；图片口是表内媒体的兼容投影。
+- 外部 HTML/TSV/Markdown/显式 `bowerbird-table` JSON 在输入边界转换为二维矩阵；旧 Agent `columns+rows` 在边界合并，首行不被擅自删除或推定为表头。合并单元格保留矩形占位、文字在左上格，Office 视觉格式不导入。新空卡接入复用首格，不添加前置空行；主输入保持逐次追加和持久化交付区域，单格输入只接受 1×1 子表，多格输入明确要求改接整体端口，保护邻格。
+- 本机 Agent DS / Codex CLI 与 Cloud 的结构化引用为 `{ "引用文本 1": { "format": "bowerbird-table", "rows": [["格1", "格2"], ["", "格内\\n换行"]] } }`；本机自动包含连接内容，Cloud 仍需显式 @。沿现有 source 字符串协议传完整 JSON，不创建新 Runner 或虚构 XLSX 附件，不重复 JSON 转义整份表格。纯文本通道既有 16000 字上限保持，超限阻止提交、不截断。图文表格保留图片格位置与引用编号，本机附带实际图片，Cloud 对含图表格明确拒绝并提示使用本机通道。
+- Agent 新表格结果归一为 rows；新协议可直接返回 rows，也接受既有 columns+rows。卡内预览及自动/连接结果卡显示相同行数，单格文字与图片独立接口保持。循环逐行读取同一二维表，对原生卡和 Agent 表格均包含可见首行；需要跳过表头时从第 2 项开始，当前轮次仍单独输出十进制数字。旧已投递请求和冻结输入不重解释、不重投。
+- 验证：`canvas-table-roundtrip.test.mjs` 使用用户 13 屏文案（含表头 14×6）覆盖实际 Markdown 剪贴板、重载、内容卡转接、模拟 Agent DS/Codex IPC、Cloud 引用、生成输入、循环子表、图片格映射及恢复不重投。既有 WPS HTML/TSV 粘贴、Agent 表格/普通文本/图片、循环、追加及失败补写回归通过。实现阶段前端类型检查曾报 16 处既有 ProseMirror 错误；2026-10-13 存档复核在当前依赖下 `tsc --noEmit` 已通过；没有真实模型或原生 WPS 联动验收、安装包发布及云端部署。
+
 ### 生成卡片视频选择（2026-10-09，Windows 26.10.903 已发布）
 
 - 卡片上方参数栏新增「图片 / 视频」。视频复用创作器的即梦/方舟渠道、官方模型查询、四种模式、分辨率、时长与比例控件；图片 provider/比例与视频设置分开保存，切换、复制和重载保留原值。

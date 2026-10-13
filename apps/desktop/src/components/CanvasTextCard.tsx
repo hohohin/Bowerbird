@@ -9,6 +9,7 @@ import { CanvasBubbleTail } from "./CanvasBubbleTail";
 import { AlignCenter, AlignLeft, AlignRight, Bold, Check, ChevronsDownUp, ChevronsUpDown, Copy, GripHorizontal, Images, Italic, Minus, Plus, Type, Undo2 } from "lucide-react";
 import { canvasCellValue, canvasGridWeights, canvasTextCsv, canvasTextMinSize, emptyCanvasCell, type CanvasNotePayload, type CanvasTextCell } from "../lib/canvasNotes";
 import { notifyError } from "../lib/notify";
+import { parseCanvasTableClipboard, pasteCanvasTable } from "../lib/canvasTablePaste";
 
 const MIN_GRID_WEIGHT_SHARE = 0.04;
 
@@ -167,7 +168,7 @@ export function CanvasTextCard({ value, selected, width, height, zoom, onChange,
   return <>
     <BoardChipPreview hostRef={grid} extraAssets={referenceAssets} clickToFocus={false} />
     {!bubble && onInput && <button className="workflow-cell-port workflow-text-input" data-workflow-text-input="" aria-label="内容卡片输入"
-      disabled={inputLocked} title="输入到第一列的新行；右键断开整体输入"
+      disabled={inputLocked} title="按行列追加表格；普通文字占一格；右键断开整体输入"
       onPointerDown={event => { event.stopPropagation(); event.preventDefault(); }}
       onClick={event => { event.stopPropagation(); if (event.detail === 0) onInput(); }}
       onContextMenu={event => { event.preventDefault(); event.stopPropagation(); onInput(undefined, true, undefined, { x: event.clientX, y: event.clientY }); }} />}
@@ -193,7 +194,7 @@ export function CanvasTextCard({ value, selected, width, height, zoom, onChange,
     {!bubble && onConnectCell && <button className="workflow-cell-port workflow-image-output" data-workflow-cell="*" aria-label="输出容器图片" title="输出全部图片"
       onPointerDown={event => { event.preventDefault(); event.stopPropagation(); onConnectCell("*", event.clientX, event.clientY); }}
       onClick={event => { if (event.detail === 0) onConnectCell("*", event.clientX, event.clientY); }} />}
-    {!bubble && onConnectCell && <button className="workflow-cell-port workflow-content-text-output" data-workflow-cell="*text" aria-label="输出全部文本" title="汇总文本单元格"
+    {!bubble && onConnectCell && <button className="workflow-cell-port workflow-content-text-output" data-workflow-cell="*text" aria-label="输出全部文本" title="输出完整表格，保留行列和空单元格"
       onPointerDown={event => { event.preventDefault(); event.stopPropagation(); onConnectCell("*text", event.clientX, event.clientY); }}
       onClick={event => { if (event.detail === 0) onConnectCell("*text", event.clientX, event.clientY); }} />}
     {images && removed && selected && <div className="canvas-text-spacing"><button aria-label="撤销删除行列" onClick={() => { onChange(removed.value); setActive(removed.active); setRemoved(null); }}><Undo2 size={14} /></button></div>}
@@ -224,6 +225,22 @@ export function CanvasTextCard({ value, selected, width, height, zoom, onChange,
             readOnly={inputLocked}
             style={{ fontWeight: item.bold ? 700 : 400, fontStyle: item.italic ? "italic" : "normal", textAlign: item.align, lineHeight: lineHeight / 100 }}
             onFocus={() => { setActive([row, column]); onSelect(); }}
+            onPaste={event => {
+              if (bubble || inputLocked) return;
+              try {
+                const table = parseCanvasTableClipboard(event.clipboardData.getData("text/html"), event.clipboardData.getData("text/plain"));
+                if (!table) return;
+                event.preventDefault();
+                event.stopPropagation();
+                const next = pasteCanvasTable(value, table, row, column);
+                setRemoved(null);
+                setCopied(null);
+                onChange(next);
+              } catch (error) {
+                event.preventDefault();
+                notifyError(error, "粘贴表格失败");
+              }
+            }}
             onChange={event => updateCell(row, column, { text: event.target.value })} />}
           {images && !item.image_refs?.length && <div className="canvas-image-empty">连接图片输入</div>}
           {!!canvasCellValue(item).imageRefs.length && <div className={images ? "canvas-image-content" : "canvas-cell-images"}>{canvasCellValue(item).imageRefs.map(ref => {

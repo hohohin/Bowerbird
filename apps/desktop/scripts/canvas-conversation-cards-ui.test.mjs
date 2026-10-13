@@ -24,9 +24,52 @@ try {
   assert.equal(await page.locator('.canvas-prompt-node').count(),1);
   assert.equal(await page.locator('[data-canvas-node-id="output-a"]').count(),0);
   assert.equal(await page.locator('.canvas-graph-edges path').count(),0);
+  await page.evaluate(()=>{
+    window.picks=[];
+    window.addEventListener('bowerbird://board-asset-picked',event=>window.picks.push(event.detail));
+    window.store.setState({boardOpen:true});
+  });
+  await card.locator('[data-conversation-image="b"]').click();
+  assert.deepEqual(await page.evaluate(()=>window.picks),[{assetId:'b',canvasNodeId:'output-b'}]);
+  assert.equal(await page.locator('[data-project-inspector]').count(),0,'image click must not open conversation details');
   await card.hover();await card.getByRole('button',{name:'上一张生成图片'}).click();
   await page.locator('[data-conversation-image="a"]').waitFor();
+  assert.equal(await page.evaluate(()=>window.picks.length),1,'carousel navigation must not add a reference');
+  await card.locator('[data-conversation-image="a"]').click();
+  assert.deepEqual(await page.evaluate(()=>window.picks),[
+    {assetId:'b',canvasNodeId:'output-b'},{assetId:'a',canvasNodeId:'output-a'},
+  ]);
   assert.equal(await page.locator('[data-project-inspector]').count(),0);
+  // Image gestures retain card dragging, multi-selection and canvas panning.
+  const image=card.locator('[data-conversation-image="a"]');
+  await image.click({modifiers:[process.platform==='darwin'?'Meta':'Control']});
+  assert.match(await card.getAttribute('class'),/is-selected/);
+  assert.equal(await page.evaluate(()=>window.picks.length),2);
+  const initial=await card.boundingBox(),imageBox=await image.boundingBox();
+  await page.mouse.move(imageBox.x+80,imageBox.y+80);await page.mouse.down();
+  await page.mouse.move(imageBox.x+120,imageBox.y+100,{steps:5});await page.mouse.up();
+  assert.notEqual((await card.boundingBox()).x,initial.x);
+  assert.equal(await page.evaluate(()=>window.picks.length),2,'dragging an image moves its card without adding a reference');
+  await page.keyboard.down('Space');await image.click();await page.keyboard.up('Space');
+  assert.equal(await page.evaluate(()=>window.picks.length),2,'pan gesture must not add a reference');
+  assert.equal(await page.locator('[data-project-inspector]').count(),0);
+  // The existing generation editing dock accepts the exact displayed output too.
+  await page.evaluate(()=>window.store.setState({boardOpen:false,genEditing:true}));
+  await image.click();
+  assert.deepEqual(await page.evaluate(()=>window.picks.at(-1)),{assetId:'a',canvasNodeId:'output-a'});
+  assert.equal(await page.evaluate(()=>window.picks.length),3);
+  assert.equal(await page.locator('[data-project-inspector]').count(),0);
+  await page.evaluate(()=>window.store.setState({boardOpen:true,genEditing:null}));
+  await card.locator('.canvas-prompt-content').click();
+  await page.locator('[data-project-inspector]').waitFor();
+  assert.equal(await page.evaluate(()=>window.picks.length),3,'card text opens details without adding an image');
+  await page.getByTitle('关闭详情（进行中的任务不会中断）').click();
+  await page.evaluate(()=>window.store.setState({boardOpen:false}));
+  await image.click();
+  await page.getByRole('dialog',{name:'媒体预览，1 / 1'}).waitFor();
+  assert.equal(await page.locator('[data-project-inspector]').count(),0);
+  assert.equal(await page.evaluate(()=>window.picks.length),3);
+  await page.keyboard.press('Escape');
   // Append a real-shaped continuation while mounted; the first card keeps its position.
   const before=await card.boundingBox();
   await page.evaluate(async()=>{
@@ -53,10 +96,23 @@ try {
     const {canvasWorkflowController}=await import('/src/lib/canvasWorkflowRuntime.ts');
     const {newWorkflowNode}=await import('/src/lib/canvasWorkflow.ts');
     const c=canvasWorkflowController('p');
-    await c.edit([...c.document.nodes,{...newWorkflowNode('generation',600,500,'codex'),id:'downstream',inputs:{image:[{canvasNodeId:'session',cellId:'image'},{assetId:'a',assetNodeId:'output-a'}]}}]);
+    await c.edit([...c.document.nodes,{...newWorkflowNode('generation',600,500,'codex'),id:'downstream',inputs:{image:[{canvasNodeId:'session',cellId:'image'},{assetId:'a',assetNodeId:'output-a'}]}},
+      {...newWorkflowNode('generation',1000,500,'codex'),id:'fresh-downstream'}]);
   });
   await page.locator('[data-workflow-target="downstream"]').first().waitFor({state:'attached'});
   assert.equal(await page.locator('[data-workflow-target="downstream"]').count(),2);
+  // New connections use the latest turn; existing exact-turn bindings stay unchanged.
+  await page.locator('[data-workflow-session-output="session"]').click();
+  await page.locator('[data-workflow-node="fresh-downstream"][data-workflow-input="image"]').click();
+  await page.waitForFunction(async()=>{
+    const {canvasWorkflowController}=await import('/src/lib/canvasWorkflowRuntime.ts');
+    return canvasWorkflowController('p').document.nodes.find(n=>n.id==='fresh-downstream').inputs.image?.[0]?.canvasNodeId==='next';
+  });
+  assert.deepEqual(await page.evaluate(async()=>{
+    const {canvasWorkflowController}=await import('/src/lib/canvasWorkflowRuntime.ts');
+    return canvasWorkflowController('p').document.nodes.find(n=>n.id==='downstream').inputs.image;
+  }),[{canvasNodeId:'session',cellId:'image',slot:1},{assetId:'a',assetNodeId:'output-a',slot:2}]);
+  assert.equal(await page.locator('[data-project-inspector]').count(),0);
   // Removing the group hides all its turns/results; undo restores one group.
   await card.click({button:'right',position:{x:10,y:10}});
   await page.getByRole('menuitem',{name:/从画布移出/}).click();
@@ -71,5 +127,5 @@ try {
   await page.reload();await card.waitFor();await page.locator('[data-conversation-image="c"]').waitFor();
   assert.equal(await page.locator('.canvas-prompt-node').count(),1);
   assert.deepEqual(errors,[]);
-  console.log('conversation cards: carousel, continuation, stable position, visibility, remove/undo and reload passed');
+  console.log('conversation cards: exact image reference, editing dock, details, preview, drag/selection/pan, carousel, continuation, stable position, visibility, remove/undo and reload passed');
 } finally {await browser.close();await server.close();}

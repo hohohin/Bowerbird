@@ -1,3 +1,5 @@
+import { contentTableRows, type ContentTable } from "./contentTable.ts";
+
 export class WorkflowNodeError extends Error {
   node: WorkflowNode;
   constructor(message: string, node: WorkflowNode) { super(message); this.node = node; }
@@ -15,7 +17,7 @@ export type WorkflowKind = "instruction" | "generation" | "skill" | "agent" | "v
 export const WORKFLOW_CARD_DRAG_TYPE = "application/x-bowerbird-workflow-card";
 export type WorkflowAction = "describe" | "reuse" | "layers";
 export type WorkflowPortType = "text" | "image" | "visual-profile" | "session" | "signal";
-export interface WorkflowValue { type: WorkflowPortType; text?: string; table?: import("./workflowAgentResult").AgentTable; assetIds?: string[]; imageRefs?: { asset_id: string; token: string }[]; profileId?: string; version?: number; summary?: string; nodeIds?: string[] }
+export interface WorkflowValue { type: WorkflowPortType; text?: string; table?: ContentTable; assetIds?: string[]; imageRefs?: { asset_id: string; token: string }[]; profileId?: string; version?: number; summary?: string; nodeIds?: string[] }
 export interface WorkflowPort { id: string; label: string; type: WorkflowPortType }
 export interface WorkflowInput { slot?: number; nodeId?: string; portId?: string; assetId?: string; assetNodeId?: string; groupId?: string; assetIds?: string[]; canvasNodeId?: string; cellId?: string }
 export interface WorkflowPromptReference { slot?: number; id: string; type: "text" | "image"; input: WorkflowInput; assetId?: string; label: string }
@@ -51,6 +53,7 @@ export interface WorkflowStep {
   localDsRequestId?: string;
   localAgentTransport?: "local-ds" | "codex-cli";
   localDsImageProvider?: string;
+  localDsGenerationMode?: "session";
   localDsGenerations?: Record<string, { request: WorkflowAgentGenerationRequest; jobId: string; turnKey: string; response?: WorkflowAgentGenerationResponse }>;
   diagnostic?: import("./workflowDiagnostics").WorkflowDiagnostic;
   describeJobIds?: string[];
@@ -60,7 +63,7 @@ export interface WorkflowStep {
   error?: string; jobId?: string; agentRunId?: string; assetId?: string; profileId?: string; layerRequestKey?: string;
 }
 export interface WorkflowAgentGenerationRequest { id: string; prompt: string; images: string[]; ratio: string | null }
-export interface WorkflowAgentGenerationResponse { images?: string[]; error?: string }
+export interface WorkflowAgentGenerationResponse { images?: string[]; error?: string; submitted?: { jobId: string; turnKey: string; sessionNodeId: string } }
 export interface WorkflowRun {
   id: string; startId: string; threadId: string; order: string[];
   accountId?: string | null;
@@ -72,7 +75,7 @@ export interface WorkflowRun {
   cellValues?: Record<string, WorkflowValue>;
   loop?: WorkflowLoop;
 }
-export interface WorkflowLoopItem { text: string; assetIds: string[] }
+export interface WorkflowLoopItem { text: string; assetIds: string[]; table?: ContentTable }
 export interface WorkflowLoop {
   nodeId: string; bodyIds: string[]; index: number;
   startIndex?: number;
@@ -100,10 +103,10 @@ export function workflowInputs(node: WorkflowNode): WorkflowPort[] {
 export function workflowOutputs(node: WorkflowNode): WorkflowPort[] {
   if (node.kind === "planner") return [];
   if (node.kind === "loop") return node.loopMode === "rows"
-    ? [{ id: "text", label: "当前行文字", type: "text" }, { id: "image", label: "当前行图片", type: "image" }]
-    : [{ id: "image", label: "当前图片", type: "image" }];
+    ? [{ id: "text", label: "当前行文字", type: "text" }, { id: "image", label: "当前行图片", type: "image" }, { id: "iteration", label: "当前轮次", type: "text" }]
+    : [{ id: "image", label: "当前图片", type: "image" }, { id: "iteration", label: "当前轮次", type: "text" }];
   if (node.kind === "agent") return [{ id: "text", label: "返回文字", type: "text" },
-    ...(usesConnectedAgentInputs(node) ? [{ id: "image", label: "返回图片", type: "image" as const }] : [])];
+    ...(usesConnectedAgentInputs(node) ? [{ id: "session", label: "生成任务", type: "session" as const }] : [])];
   if (node.kind === "trigger") return [{ id: "signal", label: "触发", type: "signal" }];
   if (node.kind === "text") return node.textTarget?.image ? [{ id: "image", label: "图片", type: "image" }] : [{ id: "text", label: "文本", type: "text" }];
   if (node.kind === "generation") return [{ id: "image", label: node.generation?.media === "video" ? "视频" : "图片", type: "image" }];
@@ -320,7 +323,18 @@ export function compileAgentPrompt(node: WorkflowNode, values: Record<string, Wo
   node = rebindGenerationReferences(node);
   const inputs = generationInputNode(node).inputs;
   const assetIds: string[] = [];
-  const sources: Record<string, string> = {};
+  const sources: Record<string, string | { format: "bowerbird-table"; rows: string[][] }> = {};
+  const sourceValue = (value: WorkflowValue) => {
+    if (!value.table) return value.text!;
+    if (!usesConnectedAgentInputs(node) && value.assetIds?.length) throw new WorkflowNodeError("表格包含图片，请使用本机 Agent DS 或 Codex CLI 读取完整图文表格", node);
+    // Table image tokens share the same attachment numbering as explicit image inputs.
+    if (usesConnectedAgentInputs(node)) for (const id of value.assetIds ?? []) if (!assetIds.includes(id)) assetIds.push(id);
+    return { format: "bowerbird-table" as const, rows: contentTableRows(value.table).map(row => row.map(text => text.replace(/@图片\d+/g, token => {
+      const ref = value.imageRefs?.find(ref => ref.token === token);
+      const index = ref ? assetIds.indexOf(ref.asset_id) : -1;
+      return index >= 0 ? `@图片${index + 1}` : token;
+    }))) };
+  };
   const labels = new Map<string, string>();
   for (const match of node.prompt.matchAll(/@\[([^\]]+)\]/g)) {
     const ref = activePromptReferences(node).find(ref => ref.id === match[1]);
@@ -339,7 +353,7 @@ export function compileAgentPrompt(node: WorkflowNode, values: Record<string, Wo
     }
     if (!value?.text?.trim()) throw new WorkflowInputError(`上游处理结束后，引用「${ref.label}」仍没有可用文本，请检查来源输出`, node, ref.input, ref.label);
     const label = `引用文本 ${Object.keys(sources).length + 1}`;
-    labels.set(ref.id, label); sources[label] = value.text;
+    labels.set(ref.id, label); sources[label] = sourceValue(value);
   }
   if (usesConnectedAgentInputs(node)) {
     for (const type of ["text", "image"] as const) for (const [index, input] of (inputs[type] ?? []).entries()) {
@@ -350,7 +364,7 @@ export function compileAgentPrompt(node: WorkflowNode, values: Record<string, Wo
         for (const id of value.assetIds) if (!assetIds.includes(id)) assetIds.push(id);
       } else {
         if (!value?.text?.trim()) throw new WorkflowInputError(`已连接的${label}没有可用文字，请检查来源输出`, node, input, label);
-        if (!activePromptReferences(node).some(ref => ref.type === type && workflowReferenceMatchesInput(ref, input))) sources[`引用文本 ${Object.keys(sources).length + 1}`] = value.text;
+        if (!activePromptReferences(node).some(ref => ref.type === type && workflowReferenceMatchesInput(ref, input))) sources[`引用文本 ${Object.keys(sources).length + 1}`] = sourceValue(value);
       }
     }
   }

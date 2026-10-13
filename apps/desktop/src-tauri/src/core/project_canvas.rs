@@ -832,10 +832,17 @@ fn exact_visible_reference_node_tx(
     project_id: &str,
     node_id: &str,
     store_path: &str,
-) -> AppResult<CanvasNode> {
+) -> AppResult<Option<CanvasNode>> {
     required(node_id, "reference node id")?;
-    let node = get_node_tx(tx, node_id)?
-        .ok_or_else(|| AppError::NotFound(format!("canvas reference node {node_id}")))?;
+    let Some(node) = get_node_tx(tx, node_id)? else {
+        // Draft chips can survive removal of an unconnected canvas instance.
+        // Retain the central image and let this turn create its own reference;
+        // do not bind the stale locator to a different visible instance.
+        if asset_snapshot_by_store_path_tx(tx, store_path)?.is_some() {
+            return Ok(None);
+        }
+        return Err(AppError::NotFound(format!("canvas reference node {node_id}")));
+    };
     if node.project_id != project_id {
         return Err(invalid(format!(
             "reference node {node_id} belongs to another project"
@@ -865,7 +872,7 @@ fn exact_visible_reference_node_tx(
             "reference node {node_id} does not match reference asset path"
         )));
     }
-    Ok(node)
+    Ok(Some(node))
 }
 
 fn first_visible_reference_node_for_path_tx(
@@ -2132,10 +2139,8 @@ impl Database {
                 .get(index)
                 .and_then(|node_id| node_id.as_deref());
             let existing_node_id = if let Some(node_id) = requested_node_id {
-                Some(
-                    exact_visible_reference_node_tx(&tx, &value.project_id, node_id, store_path)?
-                        .id,
-                )
+                exact_visible_reference_node_tx(&tx, &value.project_id, node_id, store_path)?
+                    .map(|node| node.id)
             } else {
                 // Once selected, replay retains this input even if another instance is added.
                 let source: Option<String> = tx.query_row(
@@ -4857,6 +4862,36 @@ mod tests {
             .contains("does not match"));
         input.references = vec!["/asset-1.png".into()];
         db.remove_canvas_node("original-reference").unwrap();
+        assert!(db.begin_project_generation_turn(&input).is_err());
+
+        // A draft can outlive an unconnected canvas instance removed by the user.
+        // Keep the original image, but do not guess another instance of that image.
+        let mut detached = original.clone();
+        detached.id = "removed-draft-reference".into();
+        detached.thread_id = None;
+        db.create_canvas_node(&detached).unwrap();
+        db.remove_canvas_node(&detached.id).unwrap();
+        assert!(db.get_canvas_node(&detached.id).unwrap().is_none());
+        input.job_id = "job-stale-draft".into();
+        input.turn_key = "turn-stale-draft".into();
+        input.reference_node_ids = vec![Some(detached.id.clone())];
+        let repaired = db.begin_project_generation_turn(&input).unwrap();
+        assert_eq!(repaired.reference_node_ids.len(), 1);
+        let reference = db.get_canvas_node(&repaired.reference_node_ids[0]).unwrap().unwrap();
+        assert_eq!(reference.asset_id.as_deref(), Some("asset-1"));
+        assert_eq!(reference.role, Some(CreativeNodeRole::Reference));
+        assert_ne!(reference.id, "generated-reference");
+        assert_ne!(reference.id, detached.id);
+        assert_eq!(db.begin_project_generation_turn(&input).unwrap(), repaired);
+
+        // A missing canvas locator does not permit a missing central asset.
+        input.job_id = "job-stale-missing-image".into();
+        input.references = vec!["/missing.png".into()];
+        assert!(db.begin_project_generation_turn(&input).is_err());
+        // An explicit continuation parent must never be replaced by a reference.
+        input.references = vec!["/asset-1.png".into()];
+        input.parent_node_id = Some(detached.id);
+        input.parent_asset_path = Some("/asset-1.png".into());
         assert!(db.begin_project_generation_turn(&input).is_err());
     }
 

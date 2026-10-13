@@ -13,8 +13,9 @@ test('mixed cards retain legacy identities and aggregate text/image references i
   assert.deepEqual(canvasNoteValue(note,'b'),{type:'image',assetIds:['b']});
   assert.deepEqual(canvasNoteValue(note,'*').assetIds,['b','c','d']);
   const aggregate=canvasNoteValue(note,'*text');
-  assert.equal(aggregate.text,'raw\n text\n参考 @图片1\n另一个 @图片2');
-  assert.deepEqual(aggregate.assetIds,['c','d']);
+  assert.deepEqual(JSON.parse(aggregate.text).rows,[['raw\n text','@图片1'],['参考 @图片2','另一个 @图片3']]);
+  assert.deepEqual(aggregate.table.rows,JSON.parse(aggregate.text).rows);
+  assert.deepEqual(aggregate.assetIds,['b','c','d']);
   const legacy=readCanvasNote({payloadJson:JSON.stringify({note_type:'images',cells:[[{...cell(''),id:'stable',image_refs:[{asset_id:'a',token:'@图片1'}]}]]})});
   assert.equal(legacy.cells[0][0].id,'stable');assert.equal(canvasNoteValue(legacy,'stable').type,'image');
   legacy.cells[0][0]={...legacy.cells[0][0],content_type:'text',text:'changed',image_refs:[]};
@@ -35,4 +36,14 @@ test("canvasGridWeights falls back to equal weights on malformed vectors", () =>
   assert.deepEqual(canvasGridWeights([2], 2), [1, 1]);
   assert.deepEqual(canvasGridWeights([2, 0], 2), [1, 1]);
   assert.deepEqual(canvasGridWeights([2, Number.NaN], 2), [1, 1]);
+});
+
+test('single-cell tables remap image references without losing their generation text', () => {
+  const note = readCanvasNote({ payloadJson: JSON.stringify({ note_type: 'text', cells: [[{
+    ...cell('查看 @图片3\n保持空行\n'), id: 'single', image_refs: [{ asset_id: 'photo', token: '@图片3' }],
+  }]] }) });
+  const value = canvasNoteValue(note, 'single');
+  assert.deepEqual(value.table.rows, [['查看 @图片1\n保持空行\n']]);
+  assert.equal(value.text, value.table.rows[0][0]);
+  assert.deepEqual(value.imageRefs, [{ asset_id: 'photo', token: '@图片1' }]);
 });

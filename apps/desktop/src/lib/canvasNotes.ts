@@ -1,5 +1,6 @@
 import type { CanvasNode } from "./types";
 import type { CanvasRect } from "./canvasLogic";
+import { contentTableText, type ContentTable } from "./contentTable.ts";
 
 export interface CanvasTextCell {
   content_type?: "text" | "image";
@@ -42,21 +43,35 @@ export function canvasNoteValue(note: CanvasNotePayload, cellId: string) {
     return { type: "image" as const, assetIds: [...new Set(cells.flatMap(cell => canvasCellValue(cell).assetIds))] };
   }
   if (cellId === "*text") {
-    const cells = note.cells.flat().filter(cell => cell.content_type !== "image");
-    const values = cells.map(canvasCellValue);
-    const assetIds = [...new Set(values.flatMap(value => value.assetIds))];
-    const text = values.map(value => value.text.replace(/@图片\d+/g, token => {
-      const ref = value.imageRefs.find(ref => ref.token === token);
-      return ref ? `@图片${assetIds.indexOf(ref.asset_id) + 1}` : token;
-    })).join("\n");
-    return { type: "text" as const, text, assetIds, imageRefs: assetIds.map((asset_id, i) => ({ asset_id, token: `@图片${i + 1}` })) };
+    return canvasTableValue(note.cells);
   }
   const cell = note.cells.flat().find(cell => cell.id === cellId);
   if (cell?.content_type === "image") {
     const cells = [cell];
     return cells.length ? { type: "image" as const, assetIds: [...new Set(cells.flatMap(cell => cell.image_refs?.map(ref => ref.asset_id) ?? []))] } : undefined;
   }
-  return cell ? canvasCellValue(cell) : undefined;
+  if (!cell) return undefined;
+  const value = canvasTableValue([[cell]]);
+  return { ...value, text: value.table.rows[0][0] };
+}
+
+/** A single table projection for whole-card reads, row reads and Agent delivery. */
+export function canvasTableValue(cells: CanvasTextCell[][]) {
+  const values = cells.map(row => row.map(canvasCellValue));
+  const assetIds = [...new Set(values.flat().flatMap(value => value.assetIds))];
+  const imageCells: [number, number][] = [];
+  const rows = cells.map((row, r) => row.map((cell, c) => {
+    if (cell.content_type === "image") imageCells.push([r, c]);
+    const value = values[r][c];
+    const text = cell.content_type === "image" ? value.imageRefs.map(ref => ref.token).join(" ") : value.text;
+    return text.replace(/@图片\d+/g, token => {
+      const ref = value.imageRefs.find(ref => ref.token === token);
+      return ref ? `@图片${assetIds.indexOf(ref.asset_id) + 1}` : token;
+    });
+  }));
+  const table: ContentTable = { rows, ...(imageCells.length ? { imageCells } : {}) };
+  return { type: "text" as const, text: rows.flat().some(text => text.trim()) ? contentTableText(table) : "", table, assetIds,
+    imageRefs: assetIds.map((asset_id, i) => ({ asset_id, token: `@图片${i + 1}` })) };
 }
 
 export function canvasBubbleTailAt(x: number, y: number, width: number, height: number): CanvasBubbleTail {

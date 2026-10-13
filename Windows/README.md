@@ -2,6 +2,10 @@
 
 这里存放 Bowerbird 的 Windows 开发、构建与独立扩展加载工具。平台兼容行为已经并入项目主源码；脚本只把 canonical 项目复制到 Windows/.work，不再用整文件 override 替换源码。Windows/overrides/ 仅保留退役说明，不参与构建。
 
+## 2026-10-10 Windows 26.10.1001 已发布
+
+修复多张画板结果作为普通引用时被要求选择父结果、无法发送的问题；全部引用及精确节点保持，明确继续/重试仍接回原结果。源码 3d46e3a，70 项逻辑、3 组画板合成 IPC、TypeScript/Vite/正式构建、666 个输入与 67 个资源、包内等待 6 项及签名/完整公网下载通过。沿用 904 的更新保留登录规则，Mac 保持 26.10.801；真实安装升级待验。产物 `Windows/dist/Bowerbird_26.10.1001_x64-setup.exe`，发布和回滚见 [桌面自动更新](../dev-doc/DESKTOP-UPDATES.md)。
+
 ## 2026-10-09 Windows 26.10.904 已发布
 
 应用内更新现在保留 Bowerbird 账号、权益缓存及 Codex/Dreamina 私有登录；普通手动安装/重装仍重置。实际 NSIS 隔离夹具、新包/资源/签名与完整公网下载验证通过，官网及自动更新已切换。旧客户端通过应用内更新到本版即可保留正常登录；真实账号升级仍待实机验收。产物在 `Windows/dist/Bowerbird_26.10.904_x64-setup.exe`，详见 [桌面自动更新](../dev-doc/DESKTOP-UPDATES.md)。

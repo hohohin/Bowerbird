@@ -30,7 +30,7 @@ try {
     };
     let c = canvasWorkflowController('p'); await c.load();
     const agent = { ...newWorkflowNode('agent', 40, 600, ''), id: 'image-agent', prompt: '返回两张图片，并附上说明' };
-    check(workflowOutputs(agent).some(port => port.id === 'image'), 'image port available before execution');
+    check(workflowOutputs(agent).some(port => port.id === 'session'), 'generation task port available before execution');
     check(!workflowOutputs({ ...agent, agentTransport: 'cloud' }).some(port => port.id === 'image'), 'Cloud advertises text only');
     await c.edit([agent]);
     answer = { text: JSON.stringify({ format: 'bowerbird-table', columns: ['项目'], rows: [['旧内容']] }) };

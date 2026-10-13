@@ -2588,7 +2588,7 @@ export function CanvasWorkspace({
         count: canvasImagesForSelection(selectedIds).length,
         run: () => addCanvasImagesToBoard(selectedIds),
       },
-      asset: canvasAssets.find((asset) => asset.id === selectedAsset.assetId),
+      asset: assetById.get(selectedAsset.assetId),
       canvasSelection: {
         projectId: activeCanvasRef.current.id,
         nodeIds: [...selectedIds],
@@ -4303,7 +4303,14 @@ export function CanvasWorkspace({
                   {conversation && <CanvasConversationImages images={conversation.outputs.flatMap(output => {
                     const material = nodes.find(item => item.kind === "asset" && item.id === output.id);
                     return material?.kind === "asset" ? [material.asset] : [];
-                  })} onContextMenu={(event, asset) => {
+                  })} onPointerDown={event => {
+                    // Capture on the image region so a click is not retargeted to the conversation card.
+                    beginGraphNodeDrag(event, node);
+                  }} onClick={(event, asset) => {
+                    if (consumeSuppressedNodeClick()) return;
+                    const material = nodes.find(item => item.kind === "asset" && item.asset.id === asset.id);
+                    if (material?.kind === "asset") activateCanvasMaterial(material, event.currentTarget);
+                  }} onContextMenu={(event, asset) => {
                     const material = nodes.find(item => item.kind === "asset" && item.asset.id === asset.id);
                     if (material?.kind === "asset") openCanvasAssetContextMenu(event, { ...material, id: node.id }, material.asset);
                   }} />}

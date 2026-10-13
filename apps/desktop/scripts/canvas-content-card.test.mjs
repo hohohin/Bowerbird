@@ -45,6 +45,7 @@ try {
     }});
     const writer=c.document.nodes.find(n=>n.textTarget?.append&&n.inputs.image);
     await c.start(writer.id);check(c.document.run.status==='done','aggregate consumers run after writers');
+    note=readCanvasNote(window.snapshot().nodes.find(n=>n.id==='content'));
     check(window.contentRequests[0].ids.join(',')==='a,b','aggregate images');
     check(window.contentRequests[0].prompt===canvasNoteValue(note,'*text').text+'\n参考 @图片1 @图片2','aggregate preserves text and reference indices');
     let cycle=false;try{await c.bindTextInput('content','replace',textInput,'text');}catch{cycle=true;}check(cycle,'text aggregate rejects self cycle');
@@ -63,6 +64,6 @@ try {
   await page.screenshot({path:'.tmp/workflow/content-card.png'});
   await page.reload();await card.waitFor();
   assert.equal(await card.getByRole('textbox',{name:'第 1 行第 2 列',exact:true}).inputValue(),'  原文\n第二行  ');
-  assert.equal(await card.locator('.canvas-image-preview').count(),2);
+  assert.equal(await card.locator('.canvas-image-preview').count(),3);
   console.log('content card: legacy migration, mixed cells, main append, type replacement, dual aggregates, downstream run, cycle rejection, preview and reload passed');
 }finally{await browser.close();await server.close();}

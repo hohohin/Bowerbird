@@ -21,6 +21,8 @@ try {
     useStore.setState({ activeJobId: null, startGeneration: async () => { throw Error("Agent must not create an ordinary generation conversation"); } });
     api.agentDsWorkflowStart = async (id, _prompt, _source, _purpose, _images, _scope, provider, transport) => {
       check(transport === active.document.nodes[0].agentTransport, "Agent transport is independent of image provider");
+      // Emulate a pre-upgrade request whose frozen protocol still returns image files.
+      active.document.run.steps.agent.localDsGenerationMode = undefined;
       deliveries++; check(provider === useStore.getState().defaultProvider, 'delivery takes starred default, not active or card provider');
       requests.set(id, { id: crypto.randomUUID(), prompt: '一只猫', images: _images, ratio: '1:1' });
       pending = id; return { autoDelivered: true, path: 'isolated' };
