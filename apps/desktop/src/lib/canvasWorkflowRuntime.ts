@@ -17,6 +17,7 @@ import { readCanvasNote, emptyCanvasCell, canvasGridWeights, canvasTextMinSize }
 import { canvasInputValue, reconcileCanvasWorkflowReferences } from "./canvasSessionOutputs";
 import { canvasContentInput } from "./canvasContentInput";
 import { agentResultValue } from "./workflowAgentResult";
+import { contentTableRows } from "./contentTable";
 import { assertWorkflowAcyclic, rebindGenerationReferences, normalizeWorkflowInputSlots } from "./canvasWorkflow";
 import { WorkflowNodeError, workflowDiagnostic, type WorkflowDiagnostic } from "./workflowDiagnostics";
 import { enqueueCloudAgentRunOperation } from "./cloudAgentRuntime";
@@ -170,8 +171,7 @@ export class CanvasWorkflowController {
     const previous = cellId ? this.document.nodes.find(node => node.textTarget?.nodeId === nodeId && node.textTarget.cellId === cellId) : undefined;
     if (this.document.nodes.some(node => (node.textTarget?.nodeId === nodeId || node.resultNodeIds?.includes(nodeId)) && this.isLocked(node.id))) throw new Error("关联工作流正在运行，请先停止");
     if (cellId && !note.cells.flat().some(cell => cell.id === cellId)) throw new Error("单元格已删除");
-    const producer = this.document.nodes.find(node => node.id === source.nodeId);
-    const reuseEmptyCard = !cellId && (type === "image" || producer?.kind === "agent" || !!producer?.outputs[source.portId ?? ""]?.table) && note.cells.length === 1 && note.cells[0].length === 1
+    const reuseEmptyCard = !cellId && note.cells.length === 1 && note.cells[0].length === 1
       && !note.cells[0][0].text && !note.cells[0][0].image_refs?.length
       && !this.document.nodes.some(node => node.textTarget?.nodeId === nodeId);
     const targetCellId = cellId ?? (reuseEmptyCard ? note.cells[0][0].id! : crypto.randomUUID());
@@ -492,7 +492,7 @@ export class CanvasWorkflowController {
     this.stopped.delete(runId);
     await this.saveRun({ ...run, status: "waiting", steps, lockedNodeIds: access, writeNodeIds: writes }, this.document.nodes.map(node =>
       loop.bodyIds.includes(node.id) ? { ...node, outputs: {}, ...(node.kind === "generation" ? { activeSessionNodeId: null } : {}) }
-        : node.id === loop.nodeId && loop.items ? { ...node, outputs: workflowLoopOutputs(loop.items[loop.index]) } : node));
+        : node.id === loop.nodeId && loop.items ? { ...node, outputs: workflowLoopOutputs(loop.items[loop.index], loop.index) } : node));
     await this.continue(runId);
   }
   private async step(runId: string, id: string, patch: Partial<WorkflowStep>) {
@@ -559,8 +559,8 @@ export class CanvasWorkflowController {
       // Loop items are independent inputs; carrying every prior item's tools/images grows
       // the CLI context indefinitely. Ordinary card follow-ups still resume their session.
       const isolatedSession = transport === "codex-cli" && !!this.run(runId).loop?.bodyIds.includes(node.id);
-      await this.step(runId, node.id, { status: "running", localDsRequestId: requestId, localAgentTransport: transport, localDsImageProvider: imageProvider, detail: `正在启动 ${agentName}` });
-      const delivery = await api.agentDsWorkflowStart(requestId, instruction, source, "agent-text", images, { projectId: this.projectId, nodeId: node.id }, imageProvider, transport, isolatedSession);
+      await this.step(runId, node.id, { status: "running", localDsRequestId: requestId, localAgentTransport: transport, localDsImageProvider: imageProvider, localDsGenerationMode: "session", detail: `正在启动 ${agentName}` });
+      const delivery = await api.agentDsWorkflowStart(requestId, instruction, source, "agent-text", images, { projectId: this.projectId, nodeId: node.id }, imageProvider, transport, isolatedSession, true);
       if (halted()) {
         if (transport === "codex-cli") await api.agentDsWorkflowCancel(requestId);
         return null;
@@ -578,6 +578,8 @@ export class CanvasWorkflowController {
         if (result.schemaVersion !== 1 || result.requestId !== requestId) throw new Error(`${agentName} 返回了其他请求的结果`);
         if (result.error) throw new Error(`${agentName} 处理失败：${result.error}（请求 ${requestId}）`);
         const outputs: Record<string, WorkflowValue> = {};
+        const sessions = Object.values(this.run(runId).steps[node.id].localDsGenerations ?? {}).flatMap(call => call.response?.submitted ? [call.response.submitted.sessionNodeId] : []);
+        if (sessions.length) outputs.session = { type: "session", nodeIds: sessions };
         if (result.text !== undefined) outputs.text = agentResultValue(result.text);
         if (result.images !== undefined && (!Array.isArray(result.images) || !result.images.length || result.images.some(path => typeof path !== "string" || !path.trim()))) throw new Error(`${agentName} 返回图片格式无效`);
         if (result.images?.length) {
@@ -619,13 +621,26 @@ export class CanvasWorkflowController {
       call = { request, jobId: crypto.randomUUID(), turnKey: crypto.randomUUID() };
       await this.step(runId, node.id, { localDsGenerations: { ...step.localDsGenerations, [request.id]: call }, detail: `Agent 正在使用默认生图引擎 ${step.localDsImageProvider}` });
       // Persist identity before submission. Recovery only queries this job, never submits again.
+      const sessionNodeId = `gen-prompt:${call.jobId}:${call.turnKey}:0`;
+      if (step.localDsGenerationMode === "session") {
+        await this.save({ ...this.document, nodes: this.document.nodes.map(candidate => candidate.id === node.id
+          ? { ...candidate, activeSessionNodeId: sessionNodeId, sessionNodeIds: [...(candidate.sessionNodeIds ?? []), sessionNodeId] } : candidate) });
+      }
       try {
-        await api.codexCreateImage({
-          jobId: call.jobId, turnKey: call.turnKey, internalAgent: true,
-          prompt: request.prompt, promptRaw: request.prompt, referenceImages: request.images,
-          ratio: request.ratio ?? autoRatioFromReferences(references as NonNullable<typeof references[number]>[]), provider: step.localDsImageProvider,
-          projectId: this.projectId, threadId: this.run(runId).threadId,
-        });
+        if (step.localDsGenerationMode === "session") {
+          const result = await useStore.getState().startGeneration(request.prompt, references as NonNullable<typeof references[number]>[], request.ratio,
+            step.localDsImageProvider, request.prompt, undefined, undefined, undefined, null,
+            { projectId: this.projectId, threadId: this.run(runId).threadId }, true, undefined, { jobId: call.jobId, turnKey: call.turnKey });
+          if (!result.accepted) throw new Error(result.error || "生成任务未提交");
+          call = { ...call, response: { submitted: { jobId: call.jobId, turnKey: call.turnKey, sessionNodeId } } };
+        } else {
+          await api.codexCreateImage({
+            jobId: call.jobId, turnKey: call.turnKey, internalAgent: true,
+            prompt: request.prompt, promptRaw: request.prompt, referenceImages: request.images,
+            ratio: request.ratio ?? autoRatioFromReferences(references as NonNullable<typeof references[number]>[]), provider: step.localDsImageProvider,
+            projectId: this.projectId, threadId: this.run(runId).threadId,
+          });
+        }
       } catch (error) {
         call = { ...call, response: { error: String(error) } };
       }
@@ -634,14 +649,16 @@ export class CanvasWorkflowController {
     if (!call.response) {
       const previous = await api.agentDsWorkflowGenerationJob(call.jobId, call.turnKey);
       if (halted()) return false;
-      if (previous && ["failed", "cancelled"].includes(previous.status)) call = { ...call, response: { error: previous.error || "默认引擎生图失败" } };
-      else if (previous?.status === "done") {
+      if (previous && ["failed", "cancelled", "cancelled_local"].includes(previous.status)) call = { ...call, response: { error: previous.error || "默认引擎生图失败" } };
+      else if (previous && step.localDsGenerationMode === "session") {
+        call = { ...call, response: { submitted: { jobId: call.jobId, turnKey: call.turnKey, sessionNodeId: `gen-prompt:${call.jobId}:${call.turnKey}:0` } } };
+      } else if (previous?.status === "done") {
         const images = previous.images;
         if (images.length) call = { ...call, response: { images } };
       }
     }
     if (!call.response) {
-      await this.step(runId, node.id, { status: "waiting", error: "Agent 的原生图任务尚未完成，请稍后继续取回；不会重复提交" });
+      await this.step(runId, node.id, { status: "waiting", error: step.localDsGenerationMode === "session" ? "无法确认原生成任务是否已提交，请检查任务中心后继续；不会重复提交" : "Agent 的原生图任务尚未完成，请稍后继续取回；不会重复提交" });
       return false;
     }
     await this.step(runId, node.id, { localDsGenerations: { ...this.run(runId).steps[node.id].localDsGenerations, [request.id]: call } });
@@ -653,7 +670,7 @@ export class CanvasWorkflowController {
       await this.step(runId, node.id, { status: "waiting", error: `生图结果回传未完成，请继续重试回传：${String(error)}` });
       return false;
     }
-    if (!halted()) await this.step(runId, node.id, { detail: call.response.error ? "生图失败，Agent 正在处理反馈" : "生图完成，Agent 正在检查和整理结果" });
+    if (!halted()) await this.step(runId, node.id, { detail: call.response.error ? "生图失败，Agent 正在处理反馈" : call.response.submitted ? "生成任务已提交，会话卡片正在生图" : "生图完成，Agent 正在检查和整理结果" });
     return !halted();
   }
 
@@ -669,12 +686,12 @@ export class CanvasWorkflowController {
       if (!table) await this.save({ ...this.document, nodes: this.document.nodes.map(item => item.id === node.id ? { ...item, resultNodeIds: [id] } : item) });
       if (halted()) return;
       const previous = table ? readCanvasNote(table) : null;
-      const data = value.table ? [value.table.columns, ...value.table.rows] : [[value.text ?? ""]];
+      const data = value.table ? contentTableRows(value.table) : [[value.text ?? ""]];
       const width = Math.max(data[0].length, previous?.cells[0]?.length ?? 0);
       const height = Math.max(data.length, previous?.cells.length ?? 0);
       const cells = Array.from({ length: height }, (_, r) => Array.from({ length: width }, (_, c) => ({
         ...emptyCanvasCell(), ...previous?.cells[r]?.[c], id: previous?.cells[r]?.[c]?.id ?? crypto.randomUUID(),
-        content_type: "text" as const, text: data[r]?.[c] ?? "", image_refs: [], bold: !!value.table && r === 0,
+        content_type: "text" as const, text: data[r]?.[c] ?? "", image_refs: [], bold: !!value.table?.columns && r === 0,
       })));
       const payload = { ...previous, schema_version: 1, note_type: "text", member_ids: [], title: value.table?.title || "Agent 结果",
         cells, text: cells.map(row => row.map(cell => cell.text).join("\t")).join("\n"),
@@ -734,7 +751,7 @@ export class CanvasWorkflowController {
           : validateLoopItems(workflowInputValues(this.document.nodes, node, readCell).image.flatMap(value => value.assetIds ?? [])
             .map(assetId => ({ text: "", assetIds: [assetId] })), node)), loop.index, node);
         await this.saveRun({ ...run, loop: { ...loop, items }, steps: { ...run.steps, [id]: { status: "done", detail: `第 ${loop.index + 1} / ${items.length} 项` } } },
-          this.document.nodes.map(candidate => candidate.id === id ? { ...candidate, outputs: workflowLoopOutputs(items[loop.index]) } : candidate));
+          this.document.nodes.map(candidate => candidate.id === id ? { ...candidate, outputs: workflowLoopOutputs(items[loop.index], loop.index) } : candidate));
         return;
       }
       const values = workflowInputValues(this.document.nodes, generationInputNode(node), readCell);
@@ -1088,7 +1105,7 @@ export class CanvasWorkflowController {
           if (next) for (const id of loop.bodyIds) steps[id] = { status: "pending" };
           // Persist the completed item and the next cursor together, before any new submission.
           await this.saveRun({ ...current, loop: { ...loop, index, completed }, steps }, this.document.nodes.map(node =>
-            node.id === loop.nodeId ? { ...node, outputs: workflowLoopOutputs(loop.items![index]) }
+            node.id === loop.nodeId ? { ...node, outputs: workflowLoopOutputs(loop.items![index], index) }
               : next && loop.bodyIds.includes(node.id) ? { ...node, outputs: {}, ...(node.kind === "generation" ? { activeSessionNodeId: null } : {}) } : node));
           if (next) for (const id of loop.bodyIds) attempted.delete(id);
           if (halted()) break;

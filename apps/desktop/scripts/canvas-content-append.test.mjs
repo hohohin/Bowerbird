@@ -54,6 +54,7 @@ try {
     api.projectCanvasNoteUpdate = update;
 
     // Structured tables are appended as independent blocks, then plain text keeps both tables.
+    await resumed.edit(resumed.document.nodes.filter(node => node.textTarget?.nodeId !== 'single'));
     answer = JSON.stringify({ format: 'bowerbird-table', columns: ['列'], rows: [['数据']] });
     await resumed.start('agent', true); await resumed.start('agent', true);
     answer = '表后文字'; await resumed.start('agent', true);

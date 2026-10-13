@@ -25,15 +25,25 @@ try {
   const session=page.locator('[data-canvas-node-id="session"]');await session.waitFor();
   assert.equal(await page.locator('[data-canvas-node-id="output-a"]').count(),0);
   await page.locator('[data-conversation-image="b"]').waitFor();
-  await session.hover();
   const output=page.locator('[data-workflow-session-output="session"]');
-  await output.click();
+  assert.equal(await output.getAttribute('aria-label'),'输出：图片');
+  assert.equal(await output.innerText(),'图片');
+  assert.equal(await output.evaluate(element=>getComputedStyle(element).opacity),'1','session output stays visible without hovering');
+  assert.equal(await output.evaluate(element=>getComputedStyle(element).pointerEvents),'auto');
+  await output.focus();await page.keyboard.press('Enter');
+  await page.locator('.workflow-wires .is-draft').waitFor({state:'attached'});
+  await page.keyboard.press('Escape');
+  await page.locator('.workflow-wires .is-draft').waitFor({state:'detached'});
+  const socket=await output.locator('i').boundingBox();
+  await page.mouse.move(socket.x+socket.width/2,socket.y+socket.height/2);await page.mouse.down();
   await page.locator('[data-canvas-node-id="container"]').hover();
-  await page.locator('[data-canvas-node-id="container"] [data-workflow-text-input=""][data-content-input-type="image"]').click();
+  await page.locator('[data-canvas-node-id="container"] [data-workflow-text-input=""][data-content-input-type="image"]').hover();
+  await page.mouse.up();
   await page.waitForFunction(()=>{
     const note=JSON.parse(window.snapshot().nodes.find(n=>n.id==='container').payloadJson);
     return note.cells.flat().filter(cell=>cell.image_refs?.length===1).length===2;
   });
+  assert.equal(await page.locator('[data-project-inspector]').count(),0,'output port must not open session details');
   await page.locator('[data-canvas-node-id="output-a"]').waitFor({state:'detached'});
   assert.equal(await page.locator('[data-canvas-node-id="output-b"]').count(),0);
   assert.equal(await page.locator('[data-canvas-node-id="output-c"]').count(),1);

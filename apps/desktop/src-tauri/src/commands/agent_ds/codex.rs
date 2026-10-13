@@ -15,6 +15,75 @@ struct Active {
 }
 static ACTIVE: LazyLock<Mutex<HashMap<String, Active>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
+fn workspace_command(binary: &str, root: &Path) -> tokio::process::Command {
+    let mut command = codex_command(binary);
+    command.current_dir(root).args(["-a", "never", "-c", "sandbox_mode=\"workspace-write\""]);
+    // An isolated Windows profile has no sandbox implementation selected. Codex
+    // silently downgrades workspace-write to read-only without this setting.
+    // Restricted-token mode needs no administrator setup; never bypass the sandbox.
+    #[cfg(windows)]
+    command.args(["-c", "windows.sandbox=\"unelevated\""]);
+    command.arg("-C").arg(root);
+    command
+}
+
+async fn read_tail(mut stream: impl tokio::io::AsyncRead + Unpin) -> std::io::Result<String> {
+    let mut tail = Vec::new();
+    let mut buffer = [0; 4096];
+    loop {
+        let count = stream.read(&mut buffer).await?;
+        if count == 0 { break; }
+        tail.extend_from_slice(&buffer[..count]);
+        if tail.len() > 8192 { tail.drain(..tail.len() - 8192); }
+    }
+    Ok(String::from_utf8_lossy(&tail).into_owned())
+}
+
+#[cfg(windows)]
+async fn check_workspace_write(mut command: tokio::process::Command, root: &Path, cancel: &mut watch::Receiver<bool>) -> Result<(), AppError> {
+    // Exercise the CLI's real sandbox, not the unrestricted desktop process. This
+    // runs no model and does not inherit or change the user's shared CLI settings.
+    let probe = format!(".bowerbird-write-probe-{}", uuid::Uuid::new_v4());
+    let script = format!("$ErrorActionPreference='Stop'; $probe=Join-Path (Get-Location) '{probe}'; \
+        try {{ Set-Content -LiteralPath $probe -Value 'BOWERBIRD_WRITE_OK' -NoNewline; \
+        if ((Get-Content -LiteralPath $probe -Raw) -ne 'BOWERBIRD_WRITE_OK') {{ throw 'write verification failed' }} \
+        }} finally {{ if (Test-Path -LiteralPath $probe) {{ Remove-Item -LiteralPath $probe }} }}; \
+        Write-Output 'BOWERBIRD_WRITE_OK'");
+    // Do not select a separate sandbox --permission-profile here: that can grant
+    // writes for the probe even while exec's effective policy has become read-only.
+    command.args(["sandbox", "--",
+        "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", &script])
+        .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+    let mut child = command.spawn().map_err(|error| AppError::Other(format!("Codex CLI 写入检查无法启动，尚未调用模型：{error}")))?;
+    let stdout = child.stdout.take().unwrap();
+    let stderr = child.stderr.take().unwrap();
+    let checked = {
+        let execution = async {
+            let (stdout, stderr, status) = tokio::try_join!(read_tail(stdout), read_tail(stderr), child.wait())
+                .map_err(|error| AppError::Other(format!("Codex CLI 写入检查异常，尚未调用模型：{error}")))?;
+            if !status.success() || !stdout.lines().any(|line| line.trim() == "BOWERBIRD_WRITE_OK") {
+                let detail = if !stderr.trim().is_empty() { error_text(&stderr) }
+                    else if !stdout.trim().is_empty() { error_text(&stdout) }
+                    else { format!("未返回写入成功确认（{status}）") };
+                return Err(AppError::Other(format!("Codex CLI 工作目录写入检查失败，尚未调用模型；请检查任务目录权限及设置中的 CLI 安装：{detail}")));
+            }
+            Ok(())
+        };
+        tokio::select! {
+            _ = cancel.changed() => Err(AppError::Other("Codex CLI 已停止".into())),
+            result = tokio::time::timeout(Duration::from_secs(30), execution) =>
+                result.unwrap_or_else(|_| Err(AppError::Other("Codex CLI 工作目录写入检查超时，尚未调用模型".into()))),
+        }
+    };
+    if checked.is_err() {
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+    }
+    // Also clean up if the check was cancelled between its write and finally block.
+    let _ = std::fs::remove_file(root.join(probe));
+    checked
+}
+
 pub(super) fn request_root(id: &str) -> Result<PathBuf, AppError> {
     workflow_file(&delivery_root(), id, "results")?;
     Ok(delivery_root().join("codex").join(id))
@@ -50,39 +119,44 @@ fn start_with_binary(root: PathBuf, id: String, payload: DeliveryPayload, binary
         uuid::Uuid::parse_str(&session).map_err(|_| AppError::Other("Codex 卡片会话记录无效".into()))?;
         Some(session)
     } else { None };
-    let mut command = codex_command(binary);
-    command.current_dir(&root).args(["-a", "never", "-c", "sandbox_mode=\"workspace-write\""])
-        .arg("-C").arg(&root).args(["exec", "--skip-git-repo-check", "--json"]);
+    let mut command = workspace_command(binary, &root);
+    command.args(["exec", "--skip-git-repo-check", "--json"]);
     if let Some(session) = &session { command.arg("resume").arg(session); }
     for image in &payload.images { command.arg("--image").arg(&image.path); }
     command.args(["--", "-"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
     // Claim before spawn: an interrupted/duplicate IPC must never call the model again.
     let receipt = std::fs::OpenOptions::new().write(true).create_new(true).open(root.join("request.json"))?;
     serde_json::to_writer(receipt, &payload)?;
-    let mut child = match command.spawn() {
-        Ok(child) => child,
-        Err(error) => {
-            write_json_atomic(&root.join("completion.json"), &json!({"error":format!("启动 Codex CLI 失败：{error}；请检查设置中的安装与登录")}))?;
-            return Ok(outcome);
-        }
-    };
+    #[cfg(windows)]
+    let probe_command = workspace_command(binary, &root);
     let (cancel_tx, mut cancel_rx) = watch::channel(false);
     let (finished_tx, finished_rx) = watch::channel(false);
     active.insert(id.clone(), Active { scope, cancel: cancel_tx, finished: finished_rx });
     tokio::spawn(async move {
-        let completed = {
-            let execution = tokio::time::timeout(Duration::from_secs(1800), execute(&mut child, &payload, &session_path));
-            tokio::select! {
-                _ = cancel_rx.changed() => Err(AppError::Other("Codex CLI 已停止".into())),
-                result = execution => result.unwrap_or_else(|_| Err(AppError::Other("Codex CLI 执行超时（30 分钟）".into()))),
+        let completed = async {
+            #[cfg(windows)]
+            check_workspace_write(probe_command, &root, &mut cancel_rx).await?;
+            if *cancel_rx.borrow() { return Err(AppError::Other("Codex CLI 已停止".into())); }
+            let mut child = command.spawn().map_err(|error| AppError::Other(format!("启动 Codex CLI 失败：{error}；请检查设置中的安装与登录")))?;
+            let completed = {
+                let execution = tokio::time::timeout(Duration::from_secs(1800), execute(&mut child, &payload, &session_path));
+                tokio::select! {
+                    _ = cancel_rx.changed() => Err(AppError::Other("Codex CLI 已停止".into())),
+                    result = execution => result.unwrap_or_else(|_| Err(AppError::Other("Codex CLI 执行超时（30 分钟）".into()))),
+                }
+            };
+            if completed.is_err() {
+                let _ = child.kill().await;
+                let _ = child.wait().await;
             }
-        };
-        if completed.is_err() {
-            let _ = child.kill().await;
-            let _ = child.wait().await;
-        }
-        let completed = completed.and_then(|_| {
-            let result = read_workflow_result(&root, &id)?.ok_or_else(|| AppError::Other("Codex CLI 未写回结果文件".into()))?;
+            completed
+        }.await;
+        let completed = completed.and_then(|last_message| {
+            let result = read_workflow_result(&root, &id)?.ok_or_else(|| {
+                let detail = if last_message.is_empty() { "；Agent 未提供失败说明".into() }
+                    else { format!("；Agent 说明：{last_message}") };
+                AppError::Other(format!("Codex CLI 未写回结果文件{detail}"))
+            })?;
             if result["schemaVersion"] != 1 { return Err(AppError::Other("Codex CLI 返回协议版本无效".into())); }
             Ok(())
         });
@@ -96,10 +170,10 @@ fn start_with_binary(root: PathBuf, id: String, payload: DeliveryPayload, binary
     Ok(outcome)
 }
 
-async fn execute(child: &mut tokio::process::Child, payload: &DeliveryPayload, session_path: &Path) -> Result<(), AppError> {
+async fn execute(child: &mut tokio::process::Child, payload: &DeliveryPayload, session_path: &Path) -> Result<String, AppError> {
     let mut stdin = child.stdin.take().unwrap();
     let stdout = child.stdout.take().unwrap();
-    let mut stderr = child.stderr.take().unwrap();
+    let stderr = child.stderr.take().unwrap();
     let prompt = format!("{}\n{}\n本次仅处理本卡要求；不要读取或修改素材库、源代码或其他任务目录。", payload.text,
         payload.images.iter().enumerate().map(|(i, image)| format!("图片 {}：{}", i + 1, image.path)).collect::<Vec<_>>().join("\n"));
     let input = async move { stdin.write_all(prompt.as_bytes()).await?; stdin.shutdown().await };
@@ -107,6 +181,7 @@ async fn execute(child: &mut tokio::process::Child, payload: &DeliveryPayload, s
         let mut lines = BufReader::new(stdout).lines();
         let mut failure = CodexFailure::default();
         let mut completed = false;
+        let mut last_message = String::new();
         while let Some(line) = lines.next_line().await? {
             if let Ok(event) = serde_json::from_str::<Value>(&line) {
                 failure.observe(&event);
@@ -117,31 +192,25 @@ async fn execute(child: &mut tokio::process::Child, payload: &DeliveryPayload, s
                     write_json_atomic(session_path, &session)?;
                 }
                 if event["type"] == "turn.completed" { completed = true; }
+                if event["type"] == "item.completed" && event["item"]["type"] == "agent_message" {
+                    if let Some(text) = event["item"]["text"].as_str().filter(|text| !text.trim().is_empty()) {
+                        last_message = text.trim().chars().take(1200).collect();
+                    }
+                }
             }
         }
-        Ok::<_, AppError>((completed, failure))
+        Ok::<_, AppError>((completed, failure, last_message))
     };
     // Drain stderr concurrently without retaining unbounded CLI diagnostics.
-    let diagnostics = async {
-        let mut tail = Vec::new();
-        let mut buffer = [0; 4096];
-        loop {
-            let count = stderr.read(&mut buffer).await?;
-            if count == 0 { break; }
-            tail.extend_from_slice(&buffer[..count]);
-            if tail.len() > 8192 { tail.drain(..tail.len() - 8192); }
-        }
-        Ok::<_, std::io::Error>(String::from_utf8_lossy(&tail).into_owned())
-    };
-    let (_, (completed, failure), stderr, status) = tokio::try_join!(
+    let (_, (completed, failure, last_message), stderr, status) = tokio::try_join!(
         async { input.await.map_err(AppError::from) }, events,
-        async { diagnostics.await.map_err(AppError::from) }, async { child.wait().await.map_err(AppError::from) }
+        async { read_tail(stderr).await.map_err(AppError::from) }, async { child.wait().await.map_err(AppError::from) }
     )?;
     if let Some(detail) = failure.detail(status.success(), completed, &stderr) {
         return Err(AppError::Other(format!("Codex CLI 执行失败：{detail}")));
     }
     if !status.success() || !completed { return Err(AppError::Other(format!("Codex CLI 未完成（{status}）：{}", error_text(&stderr)))); }
-    Ok(())
+    Ok(last_message)
 }
 
 pub(super) fn result(root: &Path, id: &str) -> Result<Option<Value>, AppError> {
@@ -194,6 +263,8 @@ if mode != 'missing':
     if mode == 'wrong': result['requestId'] = 'other'
     (root / 'results').mkdir(exist_ok=True)
     (root / 'results' / (root.name + '.json')).write_text(json.dumps(result))
+else:
+    print(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':'当前环境仅允许读取文件，无法写入结果 JSON'}}), flush=True)
 if mode == 'failed':
     print(json.dumps({'type':'turn.failed','error':{'message':'model unavailable'}}), flush=True)
 else:
@@ -225,10 +296,19 @@ fn quote(s: &str) -> String {
 fn main() {
     let root = std::env::current_dir().unwrap();
     let args: Vec<String> = std::env::args().skip(1).collect();
+    let mode = fs::read_to_string(root.join("mode")).unwrap_or_default();
+    if args.iter().any(|arg| arg == "sandbox") {
+        fs::write(root.join("preflight.json"), format!("[{}]", args.iter().map(|s|quote(s)).collect::<Vec<_>>().join(","))).unwrap();
+        if mode == "preflight-slow" { std::thread::sleep(Duration::from_secs(30)); }
+        if mode == "preflight-denied" || !args.iter().any(|arg| arg == "windows.sandbox=\"unelevated\"") {
+            eprintln!("Access is denied (os error 5)"); std::process::exit(1);
+        }
+        if mode != "preflight-empty" { println!("BOWERBIRD_WRITE_OK"); }
+        return;
+    }
     fs::write(root.join("args.json"), format!("[{}]", args.iter().map(|s|quote(s)).collect::<Vec<_>>().join(","))).unwrap();
     let mut input = String::new(); io::stdin().read_to_string(&mut input).unwrap();
     fs::write(root.join("stdin.txt"), input).unwrap();
-    let mode = fs::read_to_string(root.join("mode")).unwrap_or_default();
     let session = args.iter().position(|s| s == "resume").map(|i| args[i+1].clone())
         .unwrap_or_else(|| format!("{:08x}-1111-4111-8111-111111111111", std::process::id()));
     println!("{{\"type\":\"thread.started\",\"thread_id\":{}}}", quote(&session)); io::stdout().flush().unwrap();
@@ -238,7 +318,7 @@ fn main() {
         fs::create_dir_all(root.join("results")).unwrap();
         fs::write(root.join("results").join(format!("{}.json", root.file_name().unwrap().to_string_lossy())),
             format!("{{\"schemaVersion\":1,\"requestId\":{},\"text\":\"completed\"}}", quote(&id))).unwrap();
-    }
+    } else { println!("{{\"type\":\"item.completed\",\"item\":{{\"type\":\"agent_message\",\"text\":\"当前环境仅允许读取文件，无法写入结果 JSON\"}}}}"); }
     if mode == "failed" { println!("{{\"type\":\"turn.failed\",\"error\":{{\"message\":\"model unavailable\"}}}}"); }
     else { println!("{{\"type\":\"turn.completed\"}}"); }
 }
@@ -279,9 +359,18 @@ fn main() {
         let args: Vec<String> = serde_json::from_slice(&std::fs::read(root.join("args.json")).unwrap()).unwrap();
         assert!(args.windows(2).any(|args| args == ["--image", image.to_str().unwrap()]));
         assert!(args.contains(&"sandbox_mode=\"workspace-write\"".into()));
+        #[cfg(windows)]
+        assert!(args.contains(&"windows.sandbox=\"unelevated\"".into()));
         assert!(!args.contains(&"resume".into()));
         assert_eq!(args.last().unwrap(), "-");
         assert!(std::fs::read_to_string(root.join("stdin.txt")).unwrap().contains("instruction"));
+        #[cfg(windows)]
+        {
+            let probe: Vec<String> = serde_json::from_slice(&std::fs::read(root.join("preflight.json")).unwrap()).unwrap();
+            assert!(!probe.contains(&"--permission-profile".into()));
+            assert!(probe.contains(&"windows.sandbox=\"unelevated\"".into()));
+            assert!(!probe.contains(&"exec".into()));
+        }
         let first = std::fs::read(base.join("sessions/card-a.json")).unwrap();
         start_with_binary(root.clone(), id.clone(), payload, "/missing/cli", false).unwrap();
         assert_eq!(finish(&root, &id).await["text"], "completed");
@@ -319,7 +408,7 @@ fn main() {
     #[tokio::test]
     async fn codex_failures_partial_results_and_interrupted_requests_are_not_success() {
         let (base, binary) = fixture();
-        for (mode, expected) in [("failed", "model unavailable"), ("wrong", "格式无效"), ("missing", "未写回")] {
+        for (mode, expected) in [("failed", "model unavailable"), ("wrong", "格式无效"), ("missing", "当前环境仅允许读取文件")] {
             let (root, id, payload) = request(&base, mode, mode);
             start_with_binary(root.clone(), id.clone(), payload, &binary, false).unwrap();
             let reply = finish(&root, &id).await;
@@ -334,6 +423,91 @@ fn main() {
         std::fs::remove_dir_all(base).unwrap();
     }
 
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn codex_write_check_failure_and_cancellation_never_start_the_model() {
+        let (base, binary) = fixture();
+        for mode in ["preflight-denied", "preflight-empty"] {
+            let (root, id, payload) = request(&base, mode, mode);
+            start_with_binary(root.clone(), id.clone(), payload.clone(), &binary, false).unwrap();
+            let reply = finish(&root, &id).await;
+            assert!(reply["error"].as_str().unwrap().contains("写入检查失败"), "{reply}");
+            assert!(reply["error"].as_str().unwrap().contains("尚未调用模型"));
+            if mode == "preflight-denied" { assert!(reply["error"].as_str().unwrap().contains("Access is denied")); }
+            if mode == "preflight-empty" { assert!(reply["error"].as_str().unwrap().contains("未返回写入成功确认")); }
+            assert!(!root.join("args.json").exists());
+            assert!(!root.join("stdin.txt").exists());
+            assert!(!base.join("sessions").exists());
+            start_with_binary(root.clone(), id.clone(), payload, "/missing/cli", false).unwrap();
+            assert_eq!(finish(&root, &id).await, reply);
+        }
+        let (root, id, payload) = request(&base, "preflight-stop", "preflight-slow");
+        start_with_binary(root.clone(), id.clone(), payload, &binary, true).unwrap();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while !root.join("preflight.json").exists() { tokio::time::sleep(Duration::from_millis(20)).await; }
+        }).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(3), cancel(&id)).await.unwrap();
+        assert!(finish(&root, &id).await["error"].as_str().unwrap().contains("已停止"));
+        assert!(!root.join("args.json").exists());
+        assert!(!is_active(&id));
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    #[ignore = "requires installed Codex CLI and Bowerbird launcher; offline, no model or credentials"]
+    async fn installed_codex_windows_sandbox_writes_protocol_files_without_a_model() {
+        let binary = resolve_codex_binary().expect("installed Codex CLI");
+        let base = std::env::temp_dir().join(format!("bowerbird sandbox 中文 '{}'", uuid::Uuid::new_v4()));
+        let root = base.join("task");
+        let home = base.join("isolated-profile");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        let root = std::fs::canonicalize(root).unwrap();
+        std::fs::write(home.join("config.toml"), "cli_auth_credentials_store = \"file\"\n").unwrap();
+
+        // Read Codex's actual model-visible permissions without making a model call.
+        let mut debug = workspace_command(&binary, &root);
+        debug.env("CODEX_HOME", &home).args(["debug", "prompt-input", "offline permission check"]).kill_on_drop(true);
+        let output = tokio::time::timeout(Duration::from_secs(30), debug.output()).await.unwrap().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        let input: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let prompt = input.to_string();
+        assert!(prompt.contains("`sandbox_mode` is `workspace-write`"), "workspace-write was not effective");
+        assert!(!prompt.contains("`sandbox_mode` is `read-only`"));
+
+        let (_tx, mut cancel) = watch::channel(false);
+        let mut old = codex_command(&binary);
+        old.env("CODEX_HOME", &home).current_dir(&root)
+            .args(["-a", "never", "-c", "sandbox_mode=\"workspace-write\"", "-C"]).arg(&root);
+        let error = check_workspace_write(old, &root, &mut cancel).await.unwrap_err();
+        assert!(error.to_string().contains("写入检查失败"), "{error}");
+        let mut probe = workspace_command(&binary, &root);
+        probe.env("CODEX_HOME", &home);
+        check_workspace_write(probe, &root, &mut cancel).await.unwrap();
+        assert!(std::fs::read_dir(&root).unwrap().all(|entry| !entry.unwrap().file_name().to_string_lossy().starts_with(".bowerbird-write-probe-")));
+
+        // Real sandbox process: write/rename/read both protocol files and an artifact.
+        let mut protocol = workspace_command(&binary, &root);
+        protocol.env("CODEX_HOME", &home).args(["sandbox", "--",
+            "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", r#"$ErrorActionPreference='Stop';
+            foreach ($folder in @('generation-requests','results','artifacts')) {
+                New-Item -ItemType Directory -Path $folder -Force | Out-Null;
+                Set-Content -LiteralPath (Join-Path $folder 'native-check.tmp') -Value '{"schemaVersion":1,"requestId":"native-check","text":"ok"}';
+                Move-Item -LiteralPath (Join-Path $folder 'native-check.tmp') -Destination (Join-Path $folder 'native-check.json');
+                if ((Get-Content -LiteralPath (Join-Path $folder 'native-check.json') -Raw | ConvertFrom-Json).text -ne 'ok') { throw 'protocol roundtrip failed' }
+            }"#]).kill_on_drop(true);
+        let output = tokio::time::timeout(Duration::from_secs(30), protocol.output()).await.unwrap().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        for folder in ["generation-requests", "results", "artifacts"] {
+            let value: Value = serde_json::from_slice(&std::fs::read(root.join(folder).join("native-check.json")).unwrap()).unwrap();
+            assert_eq!(value["text"], "ok");
+            assert!(!root.join(folder).join("native-check.tmp").exists());
+        }
+        assert!(!home.join("auth.json").exists());
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
     #[tokio::test]
     async fn codex_cancel_waits_for_exit_and_releases_only_that_card() {
         let (base, binary) = fixture();
@@ -342,6 +516,9 @@ fn main() {
         let (next, next_id, next_payload) = request(&base, "cancel-card", "success");
         assert!(start_with_binary(next.clone(), next_id.clone(), next_payload.clone(), &binary, true).is_err());
         assert!(result(&root, &id).unwrap().is_none());
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while !root.join("args.json").exists() { tokio::time::sleep(Duration::from_millis(20)).await; }
+        }).await.unwrap();
         tokio::time::timeout(Duration::from_secs(3), cancel(&id)).await.unwrap();
         assert!(finish(&root, &id).await["error"].as_str().unwrap().contains("已停止"));
         assert!(!is_active(&id));

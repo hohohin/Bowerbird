@@ -31,9 +31,9 @@ try {
     const tableId = c.document.nodes[0].resultNodeIds[0];
     const read = id => JSON.parse(window.snapshot().nodes.find(n => n.id === id).payloadJson);
     const initial = read(tableId), ids = initial.cells.map(row => row.map(cell => cell.id));
-    check(initial.cells.length === 3 && initial.cells[0].length === 3 && initial.cells[0].every(cell => cell.bold), 'real grid with bold headers');
+    check(initial.cells.length === 3 && initial.cells[0].length === 3 && initial.cells[0][0].text === '屏次', 'real grid includes the original heading row');
     check(initial.cells[2][2].text === table.rows[1][2], 'cell text is exact');
-    check(c.document.nodes[0].outputs.text.table.rows.length === 2, 'structured output persists alongside text fallback');
+    check(c.document.nodes[0].outputs.text.table.rows.length === 3, 'structured output contains every visible row');
 
     const input = { canvasNodeId: tableId, cellId: ids[1][2] };
     const gen = { ...newWorkflowNode('generation', 1600, 600, 'codex'), id: 'table-consumer', prompt: '@[copy]', inputs: { text: [input] }, promptReferences: [{ id: 'copy', type: 'text', input, label: '主标题' }] };
@@ -67,11 +67,13 @@ try {
     }
     const source = { nodeId: agent.id, portId: 'text' };
     await recovered.bindTextInput('target-table', undefined, source, 'text');
-    await recovered.bindTextInput('target-cell', 'single', source, 'text');
+    const singleSource = { canvasNodeId: tableId, cellId: ids[2][2] };
+    await recovered.bindTextInput('target-cell', 'single', singleSource, 'text');
     let connected = read('target-table');
     check(connected.cells.length === 4 && connected.cells[1][0].text === '屏次' && connected.cells[3][2].text === table.rows[1][2], 'whole-card input expands into actual rows');
     check(connected.cells[0][0].text === '手写内容' && connected.cells[0][1].text === '不覆盖', 'other rows are preserved');
-    check(read('target-cell').cells[0][0].text.includes('万贝过眼') && read('target-cell').cells[0][1].text === '相邻保留', 'explicit single-cell connection stays text');
+    check(read('target-cell').cells[0][0].text.includes('万贝过眼') && read('target-cell').cells[0][1].text === '相邻保留', '1x1 subtable connection preserves adjacent cells');
+    await recovered.edit(recovered.document.nodes.filter(node => node.textTarget?.nodeId !== 'target-cell'));
     const writer = recovered.document.nodes.find(n => n.textTarget?.nodeId === 'target-table');
     const writerIds = [...writer.textTarget.cellIds];
     expected = table.rows[0][2];
@@ -118,9 +120,9 @@ try {
   assert.equal(await card.getByRole('cell').count(), 12); // Growth preserves old cells, even after shrinking.
   await card.getByRole('textbox', { name: '第 2 行第 2 列', exact: true }).fill('手动编辑模块');
   await page.waitForFunction(id => JSON.parse(window.snapshot().nodes.find(n => n.id === id).payloadJson).cells[1][1].text === '手动编辑模块', result.tableId);
-  const preview = page.locator('.workflow-text-result').filter({ hasText: '表格 · 2 行 × 3 列' });
+  const preview = page.locator('.workflow-text-result').filter({ hasText: '表格 · 3 行 × 3 列' });
   await preview.locator('summary').first().click();
-  assert.equal(await preview.locator('table th').count(), 3);
+  assert.equal(await preview.locator('table td').count(), 9);
   await page.getByRole('button', { name: '适应内容', exact: true }).click();
   await card.screenshot({ path: '.tmp/workflow/agent-table.png' });
   console.log('PASS Agent table parsing, real cells, stable reruns, single-cell consumer, recovery, connected targets, isolation and rendered reload', result);

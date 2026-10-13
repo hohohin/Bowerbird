@@ -557,13 +557,13 @@ fn workflow_file(root: &Path, request_id: &str, folder: &str) -> Result<PathBuf,
 pub async fn agent_ds_workflow_start(
     auth_client: tauri::State<'_, crate::cloud::AuthClient>,
     entitlement: tauri::State<'_, crate::cloud::EntitlementService>,
-    request_id: String, instruction: String, source: String, purpose: Option<String>, images: Option<Vec<String>>, session_scope: Option<WorkflowSessionScope>, image_provider: Option<String>, transport: Option<String>, isolated_session: Option<bool>,
+    request_id: String, instruction: String, source: String, purpose: Option<String>, images: Option<Vec<String>>, session_scope: Option<WorkflowSessionScope>, image_provider: Option<String>, transport: Option<String>, isolated_session: Option<bool>, session_generation: Option<bool>,
 ) -> Result<DeliveryOutcome, AppError> {
     if !cfg!(debug_assertions) { super::codex::require_byo(&entitlement, &auth_client).await?; }
-    workflow_start(request_id, instruction, source, purpose, images, session_scope, image_provider, transport, isolated_session).await
+    workflow_start(request_id, instruction, source, purpose, images, session_scope, image_provider, transport, isolated_session, session_generation).await
 }
 
-async fn workflow_start(request_id: String, instruction: String, source: String, purpose: Option<String>, images: Option<Vec<String>>, session_scope: Option<WorkflowSessionScope>, image_provider: Option<String>, transport: Option<String>, isolated_session: Option<bool>) -> Result<DeliveryOutcome, AppError> {
+async fn workflow_start(request_id: String, instruction: String, source: String, purpose: Option<String>, images: Option<Vec<String>>, session_scope: Option<WorkflowSessionScope>, image_provider: Option<String>, transport: Option<String>, isolated_session: Option<bool>, session_generation: Option<bool>) -> Result<DeliveryOutcome, AppError> {
     if purpose.as_deref() != Some("agent-text") { ensure_preview_enabled()?; }
     let use_codex = match transport.as_deref() {
         None | Some("local-ds") => false,
@@ -604,7 +604,7 @@ async fn workflow_start(request_id: String, instruction: String, source: String,
         format!("JSON 格式：{{\"schemaVersion\":1,\"requestId\":\"{request_id}\",\"text\":\"结果文本\"}}。失败则用 error 字段说明原因，不要填写 text。")
     };
     let mut generation_protocol = if native_images {
-        workflow_generation_protocol(&root, &request_id, image_provider.as_deref(), use_codex)?
+        workflow_generation_protocol(&root, &request_id, image_provider.as_deref(), use_codex, session_generation.unwrap_or(false))?
     } else { String::new() };
     if use_codex {
         generation_protocol.push_str("\n最终图片和结果 JSON 写完即结束本轮，仅回复‘已完成’；不要重复输出报告或在提交后追加检查。需要的质量检查须在写最终结果前完成。");
@@ -650,7 +650,9 @@ fn workflow_task(purpose: Option<&str>) -> Result<&'static str, AppError> {
     }
 }
 
-fn workflow_generation_protocol(root: &Path, request_id: &str, provider: Option<&str>, native_wait: bool) -> Result<String, AppError> {
+const WORKFLOW_IMAGE_RATIOS: &[&str] = &["1:1", "3:4", "4:3", "2:3", "3:2", "16:9", "9:16"];
+
+fn workflow_generation_protocol(root: &Path, request_id: &str, provider: Option<&str>, native_wait: bool, session_generation: bool) -> Result<String, AppError> {
     let provider = provider.filter(|p| matches!(*p, "codex" | "jimeng") || p.starts_with("bowerbird-cloud-image_"))
         .ok_or_else(|| AppError::Other("Agent 卡片缺少有效的默认生图 provider，请重新运行卡片".into()))?;
     for folder in ["generation-requests", "generation-responses"] { std::fs::create_dir_all(root.join(folder))?; }
@@ -659,9 +661,15 @@ fn workflow_generation_protocol(root: &Path, request_id: &str, provider: Option<
     let response = workflow_file(&root, request_id, "generation-responses")?;
     let wait = if native_wait { crate::agent_generation_wait::instruction(&root)? }
         else { format!("每隔2秒读取 {}，", response.display()) };
+    let result_protocol = if session_generation {
+        "response.submitted 是桌面已持久化接收的生成任务凭据（jobId/turnKey/sessionNodeId），并非图片已完成。收到凭据后立即继续处理其他独立要求；全部任务提交后用 text 简短说明已提交生成，并写最终结果结束本轮。图片由普通会话卡片异步展示，不等待、轮询、读取或复制这些任务的图片，不为获取图片重新提交。同一时间只提交一个请求，收到提交凭据后可提交下一个独立任务；不能把尚未完成的生成任务当作参考图片。response.error 表示提交失败，应报告原因，不能自动切换 provider。"
+    } else {
+        "response.images 是成功产物的绝对路径，response.error 是失败原因。同一时间只提交一个生图请求；等响应后才提交下一次，重查不得换 id 重复生图。成功后按最终图片返回协议将需要交付的图片复制到本次 artifacts 目录；失败应报告原因，不能自动切换 provider。"
+    };
+    let ratios = WORKFLOW_IMAGE_RATIOS.join("、");
     Ok(format!(r#"生图工具 generate_image：本次使用用户标星的默认 provider「{provider}」，由桌面应用执行，不能改用 dreamina_generate、其他 CLI 或其他生图 provider。仅在用户任务需要生图/改图时调用；普通问答不调用。
-调用方式：把 {{"id":"本次工具调用的新UUID","prompt":"完整生图要求","images":["参考图片绝对路径"],"ratio":null}} 原子写到 {}。images 无参考时用 []，ratio 可为 null 或常见宽高比。不要传 provider；桌面已锁定默认选项，沿现有权限、登录和积分检查执行。
-{wait}仅接受 generation.id 与当前调用 id 完全一致的响应；response.images 是成功产物的绝对路径，response.error 是失败原因。同一时间只提交一个生图请求；等响应后才提交下一次，重查不得换 id 重复生图。未收到响应时保持等待，不假称完成。不要改写响应文件。成功后按最终图片返回协议将需要交付的图片复制到本次 artifacts 目录；失败应报告原因，不能自动切换 provider。"#, request.display()))
+调用方式：把 {{"id":"本次工具调用的新UUID","prompt":"完整生图要求","images":["参考图片绝对路径"],"ratio":null}} 原子写到 {}。images 无参考时用 []；ratio 仅允许 null（跟随参考图吸附到支持档位，无参考时由引擎决定）或以下字符串：{ratios}，不支持自定义比例。不要从图片尺寸推导其他比例值；用户明确要求不支持的精确比例时说明限制，不擅自改画幅。如果收到 response.errorCode="invalid_ratio"，表示尚未创建生成任务，可以按原用户要求修正参数后用新调用 UUID 重试；不能满足要求则写最终 error。其他未知提交状态不得重试。不要传 provider；桌面已锁定默认选项，沿现有权限、登录和积分检查执行。
+{wait}仅接受 generation.id 与当前调用 id 完全一致的响应；{result_protocol}未收到响应时保持等待，不假称完成。不要改写响应文件。"#, request.display()))
 }
 
 #[derive(Debug, Clone, serde::Deserialize, Serialize, PartialEq)]
@@ -678,18 +686,25 @@ fn read_generation_request(root: &Path, request_id: &str) -> Result<Option<Workf
     if !path.exists() { return Ok(None); }
     if std::fs::metadata(&path)?.len() > 128_000 { return Err(AppError::Other("Agent 生图请求过大".into())); }
     let request: WorkflowGenerationRequest = serde_json::from_slice(&std::fs::read(path)?)?;
-    if uuid::Uuid::parse_str(&request.id).is_err() || request.prompt.trim().is_empty() || request.prompt.encode_utf16().count() > 12000
-        || request.images.iter().any(|path| !Path::new(path).is_absolute())
-        || request.ratio.as_deref().is_some_and(|ratio| !matches!(ratio, "1:1" | "3:4" | "4:3" | "2:3" | "3:2" | "16:9" | "9:16")) {
-        return Err(AppError::Other("Agent 生图请求格式无效".into()));
-    }
+    if uuid::Uuid::parse_str(&request.id).is_err() { return Err(AppError::Other("Agent 生图请求 id 必须是 UUID".into())); }
+    if request.prompt.trim().is_empty() || request.prompt.encode_utf16().count() > 12000 { return Err(AppError::Other("Agent 生图 prompt 必须为 1–12000 字".into())); }
+    if request.images.iter().any(|path| !Path::new(path).is_absolute()) { return Err(AppError::Other("Agent 生图 images 必须使用绝对路径".into())); }
     let response = workflow_file(root, request_id, "generation-responses")?;
     if response.exists() {
-        let value: Value = serde_json::from_slice(&std::fs::read(response)?)?;
+        let value: Value = serde_json::from_slice(&std::fs::read(&response)?)?;
         if value["generation"]["id"] == request.id {
             if value["generation"] != serde_json::to_value(&request)? { return Err(AppError::Other("Agent 生图请求使用相同 id 修改了参数".into())); }
             return Ok(None);
         }
+    }
+    if let Some(ratio) = request.ratio.as_deref().filter(|ratio| !WORKFLOW_IMAGE_RATIOS.contains(ratio)) {
+        // This rejection precedes any provider submission. Give the harness a correlated
+        // tool error so it can correct its arguments instead of waiting behind a failed step.
+        write_json_atomic(&response, &json!({ "generation": request, "response": {
+            "errorCode": "invalid_ratio",
+            "error": format!("不支持生图比例 {ratio:?}；ratio 仅允许 null 或 {}。本次未创建生成任务；请按原用户要求修正后使用新调用 UUID，不能满足精确画幅时说明限制。", WORKFLOW_IMAGE_RATIOS.join("、"))
+        } }))?;
+        return Ok(None);
     }
     Ok(Some(request))
 }
@@ -883,10 +898,10 @@ mod tests {
         assert_eq!(repo_root(), data.join(".agent-z/workspace"));
         assert!(ensure_preview_enabled().is_err());
         let error = workflow_start("invalid".into(), "分析图片".into(), "{}".into(),
-            Some("agent-text".into()), None, None, Some("codex".into()), Some("codex-cli".into()), None).await.unwrap_err();
+            Some("agent-text".into()), None, None, Some("codex".into()), Some("codex-cli".into()), None, None).await.unwrap_err();
         assert!(error.to_string().contains("请求标识无效"));
         let error = workflow_start("invalid".into(), "编排".into(), "{}".into(),
-            Some("planning-v2".into()), None, None, None, None, None).await.unwrap_err();
+            Some("planning-v2".into()), None, None, None, None, None, None).await.unwrap_err();
         assert!(error.to_string().contains("仅在开发构建"));
     }
 
@@ -1106,11 +1121,11 @@ mod tests {
             // An invalid request ID stops before filesystem writes or DSH calls.
             let images = vec!["/tmp/test.png".to_string(); count];
             let error = workflow_start("invalid".into(), "分析图片".into(), "{}".into(),
-                Some("agent-text".into()), Some(images.clone()), None, None, None, None).await.unwrap_err();
+                Some("agent-text".into()), Some(images.clone()), None, None, None, None, None).await.unwrap_err();
             assert!(error.to_string().contains("请求标识无效"), "{error}");
             for purpose in [None, Some("planning"), Some("planning-v2")] {
                 let error = workflow_start("invalid".into(), "分析图片".into(), "{}".into(),
-                    purpose.map(str::to_string), Some(images.clone()), None, None, None, None).await.unwrap_err();
+                    purpose.map(str::to_string), Some(images.clone()), None, None, None, None, None).await.unwrap_err();
                 assert!(error.to_string().contains("仅本机文字 Agent 支持图片附件"), "{error}");
             }
         }
@@ -1142,16 +1157,21 @@ mod tests {
         let root = temp_root("generation-bridge");
         let id = "1758598261835-1d7379aa-3333-445d-9d44-c8b77d75329b";
         for provider in ["codex", "jimeng", "bowerbird-cloud-image_hd", "bowerbird-cloud-image_fast"] {
-            let protocol = workflow_generation_protocol(&root, id, Some(provider), false).unwrap();
+            let protocol = workflow_generation_protocol(&root, id, Some(provider), false, false).unwrap();
             assert!(protocol.contains(&format!("默认 provider「{provider}」")));
             assert!(protocol.contains("不要传 provider") && protocol.contains("不能自动切换 provider"));
             assert!(protocol.contains("每隔2秒读取"));
-            let native = workflow_generation_protocol(&root, id, Some(provider), true).unwrap();
+            let native = workflow_generation_protocol(&root, id, Some(provider), true, false).unwrap();
             assert!(native.contains("--agent-wait-generation") && !native.contains("每隔2秒读取"));
             assert!(native.contains("不能自动切换 provider"));
+            let submitted = workflow_generation_protocol(&root, id, Some(provider), true, true).unwrap();
+            assert!(submitted.contains("response.submitted") && submitted.contains("不等待、轮询"));
+            assert!(!submitted.contains("response.images 是成功产物"));
+            for ratio in WORKFLOW_IMAGE_RATIOS { assert!(submitted.contains(ratio)); }
+            assert!(submitted.contains("invalid_ratio") && submitted.contains("不支持自定义比例"));
         }
-        assert!(workflow_generation_protocol(&root, id, None, false).is_err());
-        assert!(workflow_generation_protocol(&root, id, Some("unknown"), false).is_err());
+        assert!(workflow_generation_protocol(&root, id, None, false, false).is_err());
+        assert!(workflow_generation_protocol(&root, id, Some("unknown"), false, false).is_err());
         assert!(read_generation_request(&root, id).unwrap().is_none());
         let path = workflow_file(&root, id, "generation-requests").unwrap();
         let request = json!({"id":"1d7379aa-3333-445d-9d44-c8b77d75329b","prompt":"一只猫","images":[],"ratio":"1:1"});
@@ -1174,6 +1194,38 @@ mod tests {
         let mut next = request; next["id"] = json!(uuid::Uuid::new_v4().to_string());
         std::fs::write(&path, next.to_string()).unwrap();
         assert!(read_generation_request(&root, id).unwrap().is_some());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn workflow_invalid_ratio_returns_feedback_before_submission_and_accepts_correction() {
+        let root = temp_root("generation-ratio-feedback");
+        let request_id = "1758598261835-1d7379aa-3333-445d-9d44-c8b77d75329b";
+        workflow_generation_protocol(&root, request_id, Some("jimeng"), false, true).unwrap();
+        let path = workflow_file(&root, request_id, "generation-requests").unwrap();
+        let response = workflow_file(&root, request_id, "generation-responses").unwrap();
+        // The actual failure used a valid UUID and prompt but a non-enumerated 3:5 ratio.
+        let mut request = json!({"id":uuid::Uuid::new_v4().to_string(),"prompt":"竖版海报","images":[],"ratio":"3:5"});
+        std::fs::write(&path, request.to_string()).unwrap();
+        assert!(read_generation_request(&root, request_id).unwrap().is_none());
+        let feedback: Value = serde_json::from_slice(&std::fs::read(&response).unwrap()).unwrap();
+        assert_eq!(feedback["generation"], request);
+        assert_eq!(feedback["response"]["errorCode"], "invalid_ratio");
+        assert!(feedback["response"]["error"].as_str().unwrap().contains("3:5"));
+        assert!(feedback["response"]["submitted"].is_null());
+        let persisted = std::fs::read(&response).unwrap();
+        assert!(read_generation_request(&root, request_id).unwrap().is_none());
+        assert_eq!(std::fs::read(&response).unwrap(), persisted);
+        request["ratio"] = json!("9:16");
+        std::fs::write(&path, request.to_string()).unwrap();
+        assert!(read_generation_request(&root, request_id).unwrap_err().to_string().contains("相同 id"));
+        for ratio in WORKFLOW_IMAGE_RATIOS.iter().map(|ratio| json!(ratio)).chain(std::iter::once(Value::Null)) {
+            request["id"] = json!(uuid::Uuid::new_v4().to_string());
+            request["ratio"] = ratio;
+            std::fs::write(&path, request.to_string()).unwrap();
+            let accepted = read_generation_request(&root, request_id).unwrap().unwrap();
+            assert_eq!(serde_json::to_value(accepted).unwrap(), request);
+        }
         std::fs::remove_dir_all(root).unwrap();
     }
 

@@ -111,7 +111,7 @@ try {
     let expectedSource=source,rewiredCalls=0;
     api.agentDsWorkflowStart=async(_id,_instruction,sourceText)=>{
       const values=JSON.parse(sourceText);rewiredCalls++;
-      check(values['引用文本 1']==='保留排布'&&values['引用文本 2']===expectedSource,'two references remain distinct and use the new cell value');
+      check(values['引用文本 1'].rows[0][0]==='保留排布'&&values['引用文本 2'].rows[0][0]===expectedSource,'two subtable references remain distinct and use the new cell value');
       check(repaired.document.run.steps['cell-writer']?.status==='done'||repaired.document.run.order.length===1,'Agent must wait for the replacement cell writer');
       return {path:'test-pending',autoDelivered:true};
     };

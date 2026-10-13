@@ -82,7 +82,7 @@ mod tests {
         let response_path = root.join("generation-responses").join(format!("{name}.json"));
         let request = json!({"id":id,"prompt":"test","images":[],"ratio":null});
         std::fs::write(&request_path, request.to_string()).unwrap();
-        for response in [json!({"images":["/image.png"]}), json!({"error":"provider failed"})] {
+        for response in [json!({"images":["/image.png"]}), json!({"error":"provider failed"}), json!({"submitted":{"jobId":"job","turnKey":"turn","sessionNodeId":"session"}})] {
             std::fs::write(&response_path, json!({"generation":{"id":"old"},"response":{}}).to_string()).unwrap();
             let expected = json!({"generation":request,"response":response});
             let path = response_path.clone(); let value = expected.clone();
