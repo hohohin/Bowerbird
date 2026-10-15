@@ -28,7 +28,7 @@ try {
     check(note.cells[1][1].text === '' && note.cells[0][1].text === '保留内容', 'other cells stay intact');
     const append = c.document.nodes.find(n => n.textTarget?.append);
     await c.start(append.id, true);
-    check(read().cells.length === 2, 'rerun updates the same row');
+    check(read().cells.length === 3 && read().cells[1][0].text === read().cells[2][0].text, 'rerun appends while retaining the earlier row');
     await c.bindTextInput('target', 'b', { assetId: 'existing' }, 'image');
     note = read();
     check(note.cells[0][1].text === '@图片1' && note.cells[0][1].image_refs[0].asset_id === 'existing', 'image input stores real reference identity');
@@ -75,9 +75,9 @@ try {
   await imageCell.locator('.canvas-image-preview').waitFor({ state: 'detached' });
   await source.getByRole('cell').first().hover();
   await source.getByRole('button', { name: '输出第 1 行第 1 列文本', exact: true }).click();
-  await target.hover(); await target.getByRole('button', { name: '内容卡片输入', exact: true }).click();
-  await page.waitForFunction(() => JSON.parse(window.snapshot().nodes.find(n => n.id === 'target').payloadJson).cells.length === 3);
-  await page.waitForFunction(() => document.querySelectorAll('[data-canvas-node-id="target"] [role="row"]').length === 3);
+  await target.hover(); await target.getByRole('button', { name: '第 1 列文字输入', exact: true }).click();
+  await page.waitForFunction(() => JSON.parse(window.snapshot().nodes.find(n => n.id === 'target').payloadJson).cells.length === 4);
+  await page.waitForFunction(() => document.querySelectorAll('[data-canvas-node-id="target"] [role="row"]').length === 4);
   await page.screenshot({ path: '.tmp/workflow/text-inputs.png' });
   await page.getByRole('button', { name: '发条触发器', exact: true }).click();
   await target.getByLabel('第 1 行第 1 列', { exact: true }).click();

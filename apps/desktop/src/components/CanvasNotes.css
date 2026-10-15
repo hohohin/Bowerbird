@@ -111,3 +111,9 @@
 .canvas-bubble-tail.is-right { left:calc(100% - 1px); transform:translateX(-50%) rotate(-90deg); }
 .canvas-bubble-tail svg { display:block; width:100%; height:100%; overflow:visible; fill:var(--bb-surface); }
 .canvas-bubble-tail:hover, .canvas-bubble-tail:focus-visible { filter:drop-shadow(0 0 2px #b69832); outline:none; }
+
+.canvas-cell-generation { position: relative; display: flex; flex-direction: column; gap: 12px; width: 100%; height: 100%; min-height: 90px; padding: 13px 14px; overflow: auto; border: 1px solid rgb(var(--bb-blue-rgb) / 42%); border-radius: 12px; background: color-mix(in srgb, var(--bb-surface-card) 92%, var(--bb-blue) 8%); color: var(--bb-ink); text-align: left; cursor: pointer; }
+.canvas-cell-generation > span { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; color: var(--bb-blue); font-size: 11px; }
+.canvas-cell-generation small { color: var(--bb-faint); }
+.canvas-cell-generation p { font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.canvas-cell-generation.is-failed { border-color: rgb(239 68 68 / 64%); }

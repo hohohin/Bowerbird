@@ -7,3 +7,22 @@
 .canvas-prompt-node:hover .canvas-conversation-images button, .canvas-prompt-node:focus-within .canvas-conversation-images button { opacity: 1; }
 .canvas-conversation-images button:disabled { visibility: hidden; }
 .canvas-prompt-node.has-conversation-images .canvas-prompt-content { max-height: 56px; }
+
+.canvas-prompt-node.is-image-only,
+.canvas-prompt-node.is-image-only.is-focused {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.canvas-prompt-node.is-image-only .canvas-conversation-images { margin: 0; height: 100%; }
+.canvas-prompt-node.is-image-only .canvas-conversation-count { opacity: 0; }
+.canvas-prompt-node.is-image-only:hover .canvas-conversation-count,
+.canvas-prompt-node.is-image-only:focus-within .canvas-conversation-count { opacity: 1; }
+.canvas-prompt-node.is-image-only.is-selected,
+.canvas-prompt-node.is-image-only:focus-visible { outline: 2px solid var(--bb-blue); outline-offset: 3px; }
+.workflow-material-hotspot.is-image-session .workflow-session-output { opacity: 0; }
+.workflow-material-hotspot.is-image-session.is-hovered .workflow-session-output,
+.workflow-material-hotspot.is-image-session:hover .workflow-session-output,
+.workflow-material-hotspot.is-image-session:focus-within .workflow-session-output { opacity: 1; }

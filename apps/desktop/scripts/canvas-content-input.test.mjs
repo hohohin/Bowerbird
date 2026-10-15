@@ -38,10 +38,10 @@ try {
   });
   await page.getByRole('button',{name:'适应内容',exact:true}).click();
   await page.locator('[data-workflow-card="source"]').getByRole('button',{name:'输出：图片',exact:true}).click();
-  await card.hover();await card.getByRole('button',{name:'内容卡片图片输入',exact:true}).click();
+  await card.hover();await card.getByRole('button',{name:'第 1 列图片输入',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('.is-content-card')?.querySelectorAll('.canvas-image-content img').length===3);
-  assert.equal(await card.getByRole('row').count(),2);
-  const inputs=await card.getByRole('button',{name:'内容卡片图片输入',exact:true}).evaluate(e=>({color:getComputedStyle(e).backgroundColor,hit:document.elementFromPoint(e.getBoundingClientRect().x+6,e.getBoundingClientRect().y+6)===e}));
+  assert.equal(await card.getByRole('row').count(),3);
+  const inputs=await card.getByRole('button',{name:'第 1 列图片输入',exact:true}).evaluate(e=>({color:getComputedStyle(e).backgroundColor,hit:document.elementFromPoint(e.getBoundingClientRect().x+6,e.getBoundingClientRect().y+6)===e}));
   assert.equal(inputs.color,'rgb(97, 184, 162)');assert.equal(inputs.hit,true);
   const add=card.getByRole('button',{name:'在第 2 列位置插入',exact:true});
   const addBox=await add.locator('svg').boundingBox(),gridBox=await card.getByRole('table').boundingBox();
@@ -53,15 +53,15 @@ try {
   await add.locator('svg').hover();
   await page.waitForFunction(()=>getComputedStyle(document.querySelector('[aria-label="在第 2 列位置插入"]')).opacity==='1');
   assert.equal(await add.evaluate(e=>getComputedStyle(e).opacity),'1','hovering the column insertion boundary reveals its control');
-  for(const label of ['内容卡片输入','内容卡片图片输入','输出全部文本','输出容器图片','输入第 1 行第 1 列','输入第 1 行第 1 列图片','输出第 1 行第 1 列图片']) {
+  for(const label of ['第 1 列文字输入','第 1 列图片输入','输出全部文本','输出容器图片','输入第 1 行第 1 列','输入第 1 行第 1 列图片','输出第 1 行第 1 列图片']) {
     if(label.includes('第 1 行')) await card.getByRole('cell').first().hover();
     const port=card.getByRole('button',{name:label,exact:true});await port.hover();
     assert.equal(await port.evaluate(e=>{const r=e.getBoundingClientRect();return document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)===e;}),true,label+' is not covered by insert controls');
   }
   const rowAdd=card.getByRole('button',{name:'在第 2 行位置插入',exact:true});await rowAdd.click();
-  assert.equal(await card.getByRole('row').count(),3);
+  assert.equal(await card.getByRole('row').count(),4);
   await card.getByRole('button',{name:'删除第 2 行',exact:true}).click();
-  assert.equal(await card.getByRole('row').count(),2);
+  assert.equal(await card.getByRole('row').count(),3);
   await add.locator('svg').click();assert.equal(await card.getByRole('cell').count(),6);
   await page.evaluate(async()=>{
     const {canvasWorkflowController}=await import('/src/lib/canvasWorkflowRuntime.ts');
@@ -77,7 +77,7 @@ try {
     useStore.setState({startGeneration:async(...args)=>{window.sent.push(args[1].map(a=>a.id));const identity=args[12];useStore.setState(s=>({genJobs:{...s.genJobs,[identity.jobId]:{turns:[{turnKey:identity.turnKey,images:['existing.png']}]}}}));return {accepted:true};}});
     await c.edit(c.document.nodes.map(n=>n.id==='source'?{...n,outputs:{image:{type:'image',assetIds:['c','d','a']}}}:n));
     await c.start(writer.id);check(c.document.run.status==='done'&&window.sent[0].join(',')==='b','explicit historical cell reference continues to read that cell');
-    check(read().cells.length===4,'rerun appends new rows');
+    check(read().cells.length===6,'rerun appends new rows');
     await c.edit(c.document.nodes.map(n=>n.id==='source'?{...n,outputs:{image:{type:'image',assetIds:['b']}}}:n));await c.start(writer.id,true);
     check(ids.map(id=>read().cells.flat().find(cell=>cell.id===id).image_refs[0].asset_id).join(',')==='a,b,c','smaller new delivery preserves all previous images');
     await c.edit(c.document.nodes.map(n=>n.id==='source'?{...n,outputs:{image:{type:'image',assetIds:['b','c','d','a']}}}:n));await c.start(writer.id,true);
@@ -89,8 +89,8 @@ try {
   });
   await page.reload();await card.waitFor();
   await page.waitForFunction(()=>document.querySelector('.is-content-card')?.querySelectorAll('.canvas-image-content img').length===11);
-  assert.equal(await card.getByRole('row').count(),7);
-  await card.hover();await card.getByRole('button',{name:'内容卡片图片输入',exact:true}).click({button:'right'});
+  assert.equal(await card.getByRole('row').count(),11);
+  await card.hover();await card.getByRole('button',{name:'第 1 列图片输入',exact:true}).click({button:'right'});
   await page.waitForFunction(()=>!JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.some(n=>n.textTarget));
   assert.equal(await card.locator('.canvas-image-content img').count(),11);
   await page.evaluate(async()=>{

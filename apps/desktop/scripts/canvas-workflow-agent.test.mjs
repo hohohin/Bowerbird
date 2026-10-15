@@ -47,7 +47,7 @@ try {
     const upstream={...newWorkflowNode('instruction',0,0,'codex'),id:'upstream',action:'reuse',inputs:{image:[{assetId:'existing'}]}};
     const input={nodeId:'upstream',portId:'text'};
     const agent={...newWorkflowNode('agent',420,0,''),id:'agent',agentTransport:'cloud',prompt:'将 @[original] 中的朱砂痣替换为春山可望，其余保持',inputs:{text:[input]},promptReferences:[{id:'original',type:'text',input,label:'文本 1'}]};
-    check(workflowInputs(agent).length===2&&workflowInputs(agent)[0].type==='text'&&workflowInputs(agent)[1].type==='image','agent accepts source text');
+    check(workflowInputs(agent).length===3&&workflowInputs(agent)[0].type==='text'&&workflowInputs(agent)[1].type==='image'&&workflowInputs(agent)[2].type==='visual-profile','agent accepts source text, images and visual profile');
     check(workflowOutputs(agent)[0].type==='text','agent outputs text');
     const binding={nodeId:'agent',portId:'text'};
     const gen={...newWorkflowNode('generation',840,0,'codex'),id:'gen',prompt:'新海报：@[edited]',inputs:{text:[binding]},promptReferences:[{id:'edited',type:'text',input:binding,label:'改写文本'}]};

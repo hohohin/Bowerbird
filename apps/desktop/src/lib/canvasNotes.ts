@@ -10,6 +10,7 @@ export interface CanvasTextCell {
   italic: boolean;
   align: "left" | "center" | "right";
   image_refs?: { asset_id: string; token: string }[];
+  generation_ref?: { session_node_id: string; output_node_id?: string };
 }
 
 /** Only references whose visible index remains in the cell are forwarded. */

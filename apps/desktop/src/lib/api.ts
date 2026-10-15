@@ -157,8 +157,8 @@ export const api = {
       autoDelivered: boolean;
       notice?: string | null;
     }>("agent_ds_chat", { text, images, imageNames, visualProfileId }),
-  agentDsWorkflowStart: (requestId: string, instruction: string, source: string, purpose?: "planning" | "planning-v2" | "agent-text", images?: string[], sessionScope?: { projectId: string; nodeId: string }, imageProvider?: string, transport?: "local-ds" | "codex-cli", isolatedSession?: boolean, sessionGeneration?: boolean) =>
-    invoke<{ path: string; sessionId?: string | null; sessionTitle?: string | null; autoDelivered: boolean; notice?: string | null }>("agent_ds_workflow_start", { requestId, instruction, source, purpose, images, sessionScope, imageProvider, transport, isolatedSession, sessionGeneration }),
+  agentDsWorkflowStart: (requestId: string, instruction: string, source: string, purpose?: "planning" | "planning-v2" | "agent-text", images?: string[], sessionScope?: { projectId: string; nodeId: string }, imageProvider?: string, transport?: "local-ds" | "codex-cli", isolatedSession?: boolean, sessionGeneration?: boolean, visualProfile?: { profileId: string; version: number }) =>
+    invoke<{ path: string; sessionId?: string | null; sessionTitle?: string | null; autoDelivered: boolean; notice?: string | null }>("agent_ds_workflow_start", { requestId, instruction, source, purpose, images, sessionScope, imageProvider, transport, isolatedSession, sessionGeneration, visualProfile }),
   agentDsWorkflowCancel: (requestId: string) => invoke<void>("agent_ds_workflow_cancel", { requestId }),
   agentDsWorkflowGenerationRequest: (requestId: string) =>
     invoke<import("./canvasWorkflow").WorkflowAgentGenerationRequest | null>("agent_ds_workflow_generation_request", { requestId }),
@@ -166,6 +166,7 @@ export const api = {
     invoke<void>("agent_ds_workflow_generation_response", { requestId, generation, response }),
   agentDsWorkflowGenerationJob: (jobId: string, turnKey: string) =>
     invoke<{ status: string; images: string[]; error?: string | null } | null>("agent_ds_workflow_generation_job", { jobId, turnKey }),
+  agentDsWorkflowProgress: (requestId: string) => invoke<import("./canvasWorkflow").WorkflowAgentEvent[]>("agent_ds_workflow_progress", { requestId }),
   agentDsWorkflowResult: (requestId: string) =>
     invoke<{ schemaVersion: 1 | 2; requestId: string; text?: string; images?: string[]; error?: string; submissionUnknown?: boolean; phase?: "proposal" | "commit"; revision?: number; digest?: string } | null>("agent_ds_workflow_result", { requestId }),
   agentDsWorkflowIngestImages: (requestId: string) =>

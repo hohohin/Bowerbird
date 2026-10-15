@@ -144,7 +144,7 @@ try {
   await page.screenshot({path:'.tmp/workflow/batch-description.png'});
   const textBefore=await resultCard.getByLabel('第 2 行第 2 列',{exact:true}).inputValue();
   await resultCard.hover();
-  await resultCard.getByRole('button',{name:'内容卡片输入',exact:true}).click({button:'right'});
+  await resultCard.getByRole('button',{name:'第 1 列文字输入',exact:true}).click({button:'right'});
   await page.waitForFunction(id=>!document.querySelector(`[data-workflow-result-link="${id}"]`),resultTable);
   assert.equal(await resultCard.getByLabel('第 2 行第 2 列',{exact:true}).inputValue(),textBefore);
   await page.evaluate(()=>window.save());

@@ -437,6 +437,7 @@ pub fn run() {
             commands::agent_ds::agent_ds_workflow_start,
             commands::agent_ds::agent_ds_workflow_cancel,
             commands::agent_ds::agent_ds_workflow_result,
+            commands::agent_ds::agent_ds_workflow_progress,
             commands::agent_ds::agent_ds_workflow_ingest_images,
             commands::agent_ds::agent_ds_workflow_generation_request,
             commands::agent_ds::agent_ds_workflow_generation_job,

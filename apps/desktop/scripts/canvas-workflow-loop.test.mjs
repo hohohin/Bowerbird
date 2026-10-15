@@ -17,12 +17,80 @@ try {
   await page.reload(); await card.waitFor();
   assert.equal(await card.getByRole('combobox', { name: '循环方式' }).inputValue(), 'rows');
   assert.equal(await card.getByRole('button', { name: '输出：当前轮次', exact: true }).count(), 1);
-  await card.getByRole('spinbutton', { name: '循环起始项' }).fill('2');
+  assert.equal(await card.getByRole('spinbutton').count(), 0);
+  assert.equal(await card.getByRole('button', { name: '循环起始项', exact: true }).isDisabled(), true);
+  await page.evaluate(async () => {
+    const { api } = await import('/src/lib/api.ts');
+    const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+    const c = canvasWorkflowController('p'), owner = c.document.nodes.find(node => node.kind === 'loop');
+    const cell = (id, text, image) => ({ id, text, bold: false, italic: false, align: 'left', ...(image ? { content_type: 'image', image_refs: [{ asset_id: image, token: '@图片1' }] } : {}) });
+    await api.projectCanvasNodeCreate({ ...window.snapshot().nodes[0], id: 'picker-table', kind: 'note', assetId: null, role: null, threadId: null, x: 2000, y: 0,
+      payloadJson: JSON.stringify({ schema_version: 1, note_type: 'text', cells: [[cell('p1', '产品甲'), cell('pi1', '', 'a')], [cell('blank', ''), cell('blank2', '')], [cell('p2', '产品乙'), cell('pi2', '', 'b')], [cell('p3', '产品丙'), cell('pi3', '')]], text: '', member_ids: [] }) });
+    window.save(); window.emitChange();
+    await c.edit(c.document.nodes.map(node => node.id === owner.id ? { ...node, x: 600, y: 150, inputs: { text: [{ canvasNodeId: 'picker-table', cellId: '*text' }] } } : node));
+  });
+  const picker = card.getByRole('button', { name: '循环起始项', exact: true });
+  await picker.click();
+  const menu = page.getByRole('listbox', { name: '选择循环起始项' });
+  assert.equal(await menu.getByRole('option').count(), 3);
+  await menu.getByRole('option', { name: /第 2 项.*产品乙/ }).getByRole('img', { name: '合成参考 b' }).waitFor();
+  await page.screenshot({ path: '.tmp/workflow/loop-start-rows.png' });
+  await menu.getByRole('option', { name: /第 2 项.*产品乙/ }).click();
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.some(node => node.kind === 'loop' && node.loopStartItem === 2));
   await page.reload(); await card.waitFor();
-  assert.equal(await card.getByRole('spinbutton', { name: '循环起始项' }).inputValue(), '2');
+  assert.match(await picker.textContent(), /从第 2 项开始.*产品乙/);
+  await page.evaluate(async () => {
+    const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+    const c = canvasWorkflowController('p');
+    await c.edit(c.document.nodes.map(node => node.kind === 'loop' ? { ...node, loopMode: 'images', inputs: { image: [{ assetId: 'a' }, { assetId: 'b' }, { assetId: 'c' }] } } : node));
+  });
+  await picker.click();
+  assert.equal(await menu.getByRole('option').count(), 3);
+  await menu.getByRole('option', { name: /第 2 项.*合成参考 b/ }).getByRole('img').waitFor();
+  await page.screenshot({ path: '.tmp/workflow/loop-start-images.png' });
+  await menu.getByRole('option', { name: /第 2 项/ }).press('ArrowDown');
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.some(node => node.kind === 'loop' && node.loopStartItem === 3));
+  await picker.click(); await page.keyboard.press('Escape');
+  assert.equal(await menu.count(), 0);
+  await picker.click(); await page.mouse.click(1400, 950);
+  assert.equal(await menu.count(), 0);
+  await page.evaluate(async () => {
+    const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+    const c = canvasWorkflowController('p');
+    await c.edit(c.document.nodes.map(node => node.kind === 'loop' ? { ...node, inputs: { image: [{ assetId: 'a' }] } } : node));
+  });
+  assert.match(await picker.textContent(), /选择起始项/);
+  assert.equal(await card.getByRole('button', { name: '开始循环', exact: true }).isDisabled(), true);
+  await picker.click(); assert.equal(await menu.getByRole('option').count(), 1);
+  await menu.getByRole('option').click();
+  assert.match(await picker.textContent(), /从第 1 项开始/);
+  assert.equal(await card.getByRole('button', { name: '开始循环', exact: true }).isDisabled(), false);
+  await page.evaluate(async () => {
+    const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+    const c = canvasWorkflowController('p');
+    await c.edit(c.document.nodes.map(node => node.kind === 'loop' ? { ...node, inputs: { image: [{ canvasNodeId: 'picker-table', cellId: '*' }] } } : node));
+  });
+  await picker.click(); assert.equal(await menu.getByRole('option').count(), 2);
+  await menu.getByRole('option', { name: /第 2 项.*合成参考 b/ }).click();
+  await page.evaluate(async () => {
+    const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+    const { newWorkflowNode } = await import('/src/lib/canvasWorkflow.ts');
+    const c = canvasWorkflowController('p');
+    const source = { ...newWorkflowNode('agent', 1200, 150, 'codex'), id: 'picker-source', outputs: { text: { type: 'text', table: { columns: ['产品'], rows: [['甲'], ['乙']] } } } };
+    await c.edit([...c.document.nodes.map(node => node.kind === 'loop' ? { ...node, loopMode: 'rows', inputs: { text: [{ nodeId: source.id, portId: 'text' }] } } : node), source]);
+  });
+  await picker.click(); assert.equal(await menu.getByRole('option').count(), 3);
+  await menu.getByRole('option', { name: /第 3 项.*乙/ }).click();
+  await page.evaluate(async () => {
+    const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+    const c = canvasWorkflowController('p');
+    await c.edit(c.document.nodes.map(node => node.id === 'picker-source' ? { ...node, outputs: {} } : node));
+  });
+  assert.equal(await picker.isDisabled(), true);
+  assert.match(await card.locator('.workflow-loop-start').textContent(), /先让上游输出表格/);
   assert.equal(await card.locator('textarea').count(), 0);
-  await page.evaluate(async () => { const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts'); const c = canvasWorkflowController('p'); await c.edit(c.document.nodes.map(node => ({ ...node, x: node.x - 180, y: node.y - 600 }))); });
+  await page.evaluate(async () => { const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts'); const c = canvasWorkflowController('p'); await c.edit(c.document.nodes.filter(node => node.kind === 'loop').map(node => ({ ...node, x: 600, y: 150, loopMode: 'images', loopStartItem: 1, inputs: { image: [{ assetId: 'a' }] } }))); });
   await page.screenshot({ path: '.tmp/workflow/loop-card.png' });
   console.log(await page.evaluate(async () => {
     const { api } = await import('/src/lib/api.ts');

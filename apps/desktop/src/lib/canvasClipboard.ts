@@ -58,7 +58,7 @@ export function cloneCanvasClipboard(value: CanvasClipboard, projectId: string, 
     let payloadJson = node.payloadJson;
     if (node.kind === "note") {
       const note = readCanvasNote(node);
-      payloadJson = JSON.stringify({ ...note, member_ids: note.member_ids.flatMap(id => ids.has(id) ? [ids.get(id)!] : []) });
+      payloadJson = JSON.stringify({ ...note, cells: note.cells.map(row => row.map(({ generation_ref: _generation, ...cell }) => cell)), member_ids: note.member_ids.flatMap(id => ids.has(id) ? [ids.get(id)!] : []) });
     } else {
       const payload = JSON.parse(payloadJson);
       delete payload.execution;

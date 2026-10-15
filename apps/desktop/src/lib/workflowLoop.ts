@@ -1,6 +1,7 @@
-import { workflowInputProducers, WorkflowNodeError, type WorkflowNode, type WorkflowLoop, type WorkflowLoopItem, type WorkflowValue } from "./canvasWorkflow";
+import { workflowInputProducers, workflowInputValues, WorkflowNodeError, type WorkflowNode, type WorkflowLoop, type WorkflowLoopItem, type WorkflowValue } from "./canvasWorkflow";
 import { canvasTableValue, emptyCanvasCell, readCanvasNote } from "./canvasNotes";
 import { contentTableRows } from "./contentTable";
+import { canvasInputValue, canvasSessionImages } from "./canvasSessionOutputs";
 import type { CanvasNode } from "./types";
 
 /** The loop owns every effective descendant, including native content writers. */
@@ -29,6 +30,22 @@ export function validateLoopItems(items: WorkflowLoopItem[], node: WorkflowNode)
 export function validateLoopStart(items: WorkflowLoopItem[], index: number, node: WorkflowNode) {
   if (index >= items.length) throw new WorkflowNodeError(`循环只有 ${items.length} 项，不能从第 ${index + 1} 项开始`, node);
   return items;
+}
+
+/** The selector and executor must use the same input order and empty-row rules. */
+export function workflowLoopItems(node: WorkflowNode, nodes: WorkflowNode[], canvas: CanvasNode[], readCell?: (nodeId: string, cellId: string) => string | WorkflowValue | undefined): WorkflowLoopItem[] {
+  if (node.loopMode === "rows") return workflowLoopRows(node, nodes, canvas);
+  const values = workflowInputValues(nodes, node, readCell ?? ((id, cellId) => {
+    const source = canvas.find(card => card.id === id && card.hiddenAt == null);
+    return source ? canvasInputValue(source, cellId, canvas) : undefined;
+  }));
+  const images = values.image.flatMap(value => [...(value.assetIds ?? []), ...(value.nodeIds ?? []).flatMap(id => {
+    const session = canvas.find(item => item.id === id && item.kind === "prompt" && item.hiddenAt == null);
+    if (!session || JSON.parse(session.payloadJson).status !== "done") throw new WorkflowNodeError("上游图片尚未生成完成，请等待原生成任务", node);
+    const outputs = canvasSessionImages(session, canvas).filter(item => item.hiddenAt == null);
+    return outputs.slice(-1).map(item => item.assetId!);
+  })]);
+  return validateLoopItems(images.map(assetId => ({ text: "", assetIds: [assetId] })), node);
 }
 
 /** Native rows retain text/image pairing; never zip independently flattened columns. */

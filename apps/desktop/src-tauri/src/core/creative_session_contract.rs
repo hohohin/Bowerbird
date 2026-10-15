@@ -282,6 +282,16 @@ pub struct CanvasTextCell {
     pub align: CanvasTextAlign,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub image_refs: Vec<CanvasCellImageRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation_ref: Option<CanvasCellGenerationRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CanvasCellGenerationRef {
+    pub session_node_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_node_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -636,6 +646,11 @@ fn parse_node_payload_value(
                 return Err(CreativeContractError::InvalidNoteGrid);
             }
             if note.cells.iter().flatten().any(|cell| cell.image_refs.iter().any(|image| image.asset_id.is_empty() || image.token.is_empty())) {
+                return Err(CreativeContractError::InvalidNoteGrid);
+            }
+            if note.cells.iter().flatten().any(|cell| cell.generation_ref.as_ref().is_some_and(|reference|
+                cell.content_type != Some(CanvasCellContentType::Image) || reference.session_node_id.is_empty()
+                    || reference.output_node_id.as_ref().is_some_and(|id| id.is_empty()))) {
                 return Err(CreativeContractError::InvalidNoteGrid);
             }
             if note.line_height_percent.is_some_and(|height| !(100..=300).contains(&height)) {

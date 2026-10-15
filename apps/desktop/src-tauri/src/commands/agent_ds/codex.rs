@@ -15,6 +15,47 @@ struct Active {
 }
 static ACTIVE: LazyLock<Mutex<HashMap<String, Active>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
+// Persist only public messages and tool lifecycle labels, never reasoning, raw
+// commands, tool arguments or stdout/stderr. This journal is read-only UI data.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct PublicEvent { id: String, kind: String, text: String, status: String, at: u64 }
+
+fn public_event(event: &Value) -> Option<PublicEvent> {
+    let phase = event["type"].as_str()?;
+    if !matches!(phase, "item.started" | "item.completed") { return None; }
+    let item = &event["item"];
+    let item_type = item["type"].as_str()?;
+    let (kind, text) = match item_type {
+        "agent_message" if phase == "item.completed" => ("message", item["text"].as_str()?.trim().chars().take(4000).collect::<String>()),
+        "command_execution" => ("tool", "执行本机命令".into()),
+        "mcp_tool_call" => ("tool", "调用工具".into()),
+        "web_search" => ("tool", "搜索网页".into()),
+        "file_change" => ("tool", "写入文件".into()),
+        _ => return None,
+    };
+    if text.is_empty() { return None; }
+    let status = if phase == "item.started" { "running" } else if item["status"] == "failed" || item["exit_code"].as_i64().is_some_and(|code| code != 0) { "failed" } else { "done" };
+    Some(PublicEvent {
+        id: item["id"].as_str().unwrap_or("").chars().take(100).collect(), kind: kind.into(), text, status: status.into(),
+        at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64,
+    })
+}
+
+fn record_public_event(events: &mut Vec<PublicEvent>, event: PublicEvent) {
+    if !event.id.is_empty() {
+        if let Some(previous) = events.iter_mut().find(|previous| previous.id == event.id) { *previous = event; return; }
+    }
+    events.push(event);
+    if events.len() > 200 { events.remove(0); }
+}
+
+pub(super) fn progress(root: &Path) -> Result<Vec<PublicEvent>, AppError> {
+    let path = root.join("public-progress.json");
+    if !path.exists() { return Ok(vec![]); }
+    if std::fs::metadata(&path)?.len() > 4_000_000 { return Err(AppError::Other("Agent 过程记录过大".into())); }
+    Ok(serde_json::from_slice(&std::fs::read(path)?)?)
+}
+
 fn workspace_command(binary: &str, root: &Path) -> tokio::process::Command {
     let mut command = codex_command(binary);
     command.current_dir(root).args(["-a", "never", "-c", "sandbox_mode=\"workspace-write\""]);
@@ -139,7 +180,7 @@ fn start_with_binary(root: PathBuf, id: String, payload: DeliveryPayload, binary
             if *cancel_rx.borrow() { return Err(AppError::Other("Codex CLI 已停止".into())); }
             let mut child = command.spawn().map_err(|error| AppError::Other(format!("启动 Codex CLI 失败：{error}；请检查设置中的安装与登录")))?;
             let completed = {
-                let execution = tokio::time::timeout(Duration::from_secs(1800), execute(&mut child, &payload, &session_path));
+                let execution = tokio::time::timeout(Duration::from_secs(1800), execute(&mut child, &payload, &session_path, &root));
                 tokio::select! {
                     _ = cancel_rx.changed() => Err(AppError::Other("Codex CLI 已停止".into())),
                     result = execution => result.unwrap_or_else(|_| Err(AppError::Other("Codex CLI 执行超时（30 分钟）".into()))),
@@ -170,7 +211,7 @@ fn start_with_binary(root: PathBuf, id: String, payload: DeliveryPayload, binary
     Ok(outcome)
 }
 
-async fn execute(child: &mut tokio::process::Child, payload: &DeliveryPayload, session_path: &Path) -> Result<String, AppError> {
+async fn execute(child: &mut tokio::process::Child, payload: &DeliveryPayload, session_path: &Path, root: &Path) -> Result<String, AppError> {
     let mut stdin = child.stdin.take().unwrap();
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
@@ -181,10 +222,18 @@ async fn execute(child: &mut tokio::process::Child, payload: &DeliveryPayload, s
         let mut lines = BufReader::new(stdout).lines();
         let mut failure = CodexFailure::default();
         let mut completed = false;
+        let mut public_events = Vec::new();
         let mut last_message = String::new();
         while let Some(line) = lines.next_line().await? {
             if let Ok(event) = serde_json::from_str::<Value>(&line) {
                 failure.observe(&event);
+                if let Some(public) = public_event(&event) {
+                    record_public_event(&mut public_events, public);
+                    // A UI journal failure must not fail or restart a paid request.
+                    if let Err(error) = write_json_atomic(&root.join("public-progress.json"), &public_events) {
+                        tracing::warn!("保存 Agent 公开过程失败: {error}");
+                    }
+                }
                 if event["type"] == "thread.started" {
                     let session = event["thread_id"].as_str().filter(|id| uuid::Uuid::parse_str(id).is_ok())
                         .ok_or_else(|| AppError::Other("Codex CLI 返回会话身份无效".into()))?;
@@ -238,6 +287,33 @@ pub(super) async fn cancel(id: &str) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn public_progress_excludes_reasoning_and_raw_tool_data() {
+        use super::*;
+        for kind in ["reasoning", "unknown", "todo_list"] {
+            assert!(public_event(&json!({"type":"item.completed","item":{"type":kind,"text":"private"}})).is_none());
+        }
+        assert!(public_event(&json!({"type":"item.updated","item":{"type":"agent_message","text":"partial"}})).is_none());
+        let mut events = Vec::new();
+        for phase in ["item.started", "item.completed"] {
+            record_public_event(&mut events, public_event(&json!({"type":phase,"item":{"id":"tool1","type":"command_execution","command":"secret-command","aggregated_output":"secret-output","exit_code":1}})).unwrap());
+        }
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].status, "failed");
+        let text = serde_json::to_string(&events).unwrap();
+        assert!(!text.contains("secret"));
+        let message = public_event(&json!({"type":"item.completed","item":{"id":"message","type":"agent_message","text":"公开进度"}})).unwrap();
+        assert_eq!(message.text, "公开进度");
+        let root = std::env::temp_dir().join(format!("bowerbird-public-progress-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        assert!(progress(&root).unwrap().is_empty());
+        for _ in 0..250 { let mut next = message.clone(); next.id.clear(); record_public_event(&mut events, next); }
+        assert_eq!(events.len(), 200);
+        write_json_atomic(&root.join("public-progress.json"), &events).unwrap();
+        assert_eq!(progress(&root).unwrap().len(), 200);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     use super::*;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
@@ -257,6 +333,8 @@ args = sys.argv[1:]
 mode = (root / 'mode').read_text() if (root / 'mode').exists() else 'success'
 session = args[args.index('resume') + 1] if 'resume' in args else str(uuid.uuid4())
 print(json.dumps({'type':'thread.started','thread_id':session}), flush=True)
+print(json.dumps({'type':'item.completed','item':{'id':'public','type':'agent_message','text':'public progress'}}), flush=True)
+print(json.dumps({'type':'item.completed','item':{'id':'private','type':'reasoning','text':'private reasoning'}}), flush=True)
 if mode == 'slow': time.sleep(30)
 if mode != 'missing':
     result = {'schemaVersion':1,'requestId':root.name,'text':'completed'}
@@ -356,6 +434,12 @@ fn main() {
         payload.images.push(DeliveryImage { path: image.to_string_lossy().into_owned(), name: Some("image 1".into()) });
         start_with_binary(root.clone(), id.clone(), payload.clone(), &binary, false).unwrap();
         assert_eq!(finish(&root, &id).await["text"], "completed");
+        #[cfg(unix)] {
+            let journal = progress(&root).unwrap();
+            assert_eq!(journal.len(), 1);
+            assert_eq!(journal[0].text, "public progress");
+            assert!(!std::fs::read_to_string(root.join("public-progress.json")).unwrap().contains("private reasoning"));
+        }
         let args: Vec<String> = serde_json::from_slice(&std::fs::read(root.join("args.json")).unwrap()).unwrap();
         assert!(args.windows(2).any(|args| args == ["--image", image.to_str().unwrap()]));
         assert!(args.contains(&"sandbox_mode=\"workspace-write\"".into()));

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type PointerEvent } from "react";
+import { useEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { api } from "../lib/api";
 import type { Asset } from "../lib/types";
@@ -13,7 +13,9 @@ import { parseCanvasTableClipboard, pasteCanvasTable } from "../lib/canvasTableP
 
 const MIN_GRID_WEIGHT_SHARE = 0.04;
 
-export function CanvasTextCard({ value, selected, width, height, zoom, onChange, onSelect, onResize, onConnectCell, onInput, inputLocked, onOpenPreview }: {
+export function CanvasTextCard({ value, selected, width, height, zoom, onChange, onSelect, onResize, onConnectCell, onInput, inputLocked, onOpenPreview, onOpenGeneration, renderGeneration }: {
+  renderGeneration?: (cell: CanvasTextCell) => ReactNode;
+  onOpenGeneration?: (cell: CanvasTextCell) => void;
   onOpenPreview?: (asset: Asset, group?: Asset[]) => void;
   onInput?: (cellId?: string, disconnect?: boolean, type?: "text" | "image", point?: { x: number; y: number }) => void;
   inputLocked?: boolean;
@@ -35,7 +37,16 @@ export function CanvasTextCard({ value, selected, width, height, zoom, onChange,
   const resizeDrag = useRef<{ axis: "row" | "column"; boundary: number; start: number; base: number; original: number[]; latest: number[]; pointerId: number } | null>(null);
   const grid = useRef<HTMLDivElement>(null);
   const [referenceAssets, setReferenceAssets] = useState<Asset[]>([]);
+  const imageClickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelImageClick = () => { if (imageClickTimer.current !== null) clearTimeout(imageClickTimer.current); imageClickTimer.current = null; };
   const referenceKey = [...new Set(value.cells.flat().flatMap(cell => canvasCellValue(cell).assetIds))].sort().join("|");
+  const generationKey = value.cells.flat().map(cell => `${cell.id}:${cell.generation_ref?.session_node_id ?? ""}`).join("|");
+  useEffect(() => cancelImageClick, [referenceKey, generationKey]);
+  function previewImage(asset: Asset) {
+    onOpenPreview?.(asset, value.cells.flat().flatMap(cell => canvasCellValue(cell).assetIds)
+      .filter((id, index, ids) => ids.indexOf(id) === index)
+      .flatMap(id => { const image = referenceAssets.find(candidate => candidate.id === id); return image ? [image] : []; }));
+  }
   useEffect(() => {
     let current = true;
     if (!referenceKey) { setReferenceAssets([]); return; }
@@ -58,7 +69,7 @@ export function CanvasTextCard({ value, selected, width, height, zoom, onChange,
   }
   function updateCell(row: number, column: number, change: Partial<CanvasTextCell>) {
     setRemoved(null);
-    const cells = value.cells.map((line, r) => line.map((item, c) => r === row && c === column ? { ...item, ...change } : item));
+    const cells = value.cells.map((line, r) => line.map((item, c) => r === row && c === column ? { ...item, ...(change.content_type !== undefined || change.text !== undefined || change.image_refs !== undefined ? { generation_ref: undefined } : {}), ...change } : item));
     onChange({ ...value, cells, text: cells.map(line => line.map(item => item.text).join("\t")).join("\n") });
   }
   function insert(axis: "row" | "column", index: number) {
@@ -167,16 +178,6 @@ export function CanvasTextCard({ value, selected, width, height, zoom, onChange,
   }
   return <>
     <BoardChipPreview hostRef={grid} extraAssets={referenceAssets} clickToFocus={false} />
-    {!bubble && onInput && <button className="workflow-cell-port workflow-text-input" data-workflow-text-input="" aria-label="内容卡片输入"
-      disabled={inputLocked} title="按行列追加表格；普通文字占一格；右键断开整体输入"
-      onPointerDown={event => { event.stopPropagation(); event.preventDefault(); }}
-      onClick={event => { event.stopPropagation(); if (event.detail === 0) onInput(); }}
-      onContextMenu={event => { event.preventDefault(); event.stopPropagation(); onInput(undefined, true, undefined, { x: event.clientX, y: event.clientY }); }} />}
-    {!bubble && onInput && <button className="workflow-cell-port workflow-text-input workflow-content-image-input is-image-output" data-workflow-text-input="" data-content-input-type="image" aria-label="内容卡片图片输入"
-      disabled={inputLocked} title="输入图片，每张图片新建一行；右键断开图片输入"
-      onPointerDown={event => { event.stopPropagation(); event.preventDefault(); }}
-      onClick={event => { event.stopPropagation(); if (event.detail === 0) onInput(undefined, false, "image"); }}
-      onContextMenu={event => { event.preventDefault(); event.stopPropagation(); onInput(undefined, true, "image", { x: event.clientX, y: event.clientY }); }} />}
     {selected && !images && <div className="canvas-text-stylebar" role="toolbar" aria-label="文本样式（当前单元格）"
       onPointerDown={event => { event.stopPropagation(); event.preventDefault(); }}>
       <button title="加粗" aria-label="加粗" aria-pressed={cell.bold} onClick={() => updateCell(...active, { bold: !cell.bold })}><Bold size={16} /></button>
@@ -206,6 +207,21 @@ export function CanvasTextCard({ value, selected, width, height, zoom, onChange,
     </div>}
     <div ref={grid} className="canvas-text-grid" role={bubble ? "group" : "table"} aria-label={bubble ? "气泡便签" : "内容卡片"} onPointerDown={event => { event.stopPropagation(); onSelect(); }} onKeyDown={event => event.stopPropagation()}
       onWheel={event => { if (!event.ctrlKey && !event.metaKey) event.stopPropagation(); }}>
+      {!bubble && onInput && (["row", "column"] as const).flatMap(axis => {
+        const weights = axis === "row" ? rowWeights : columnWeights;
+        return weights.flatMap((_, index) => (["text", "image"] as const).map(type => {
+          const id = `${axis}:${axis === "row" ? value.cells[index][0].id : value.cells[0][index].id}`;
+          const middle = (boundaryFraction(weights, index) + boundaryFraction(weights, index + 1)) * 50;
+          const label = `第 ${index + 1} ${axis === "row" ? "行" : "列"}${type === "image" ? "图片" : "文字"}输入`;
+          return <button key={`${id}:${type}`} className={`workflow-cell-port workflow-axis-input is-${axis}${type === "image" ? " is-image-output" : ""}`}
+            style={axis === "row" ? { top: `calc(${middle}% + ${type === "image" ? 9 : -9}px)` } : { left: `calc(${middle}% + ${type === "image" ? 9 : -9}px)` }}
+            data-workflow-text-input={id} data-content-input-type={type} aria-label={label} disabled={inputLocked}
+            title={`${label}，${axis === "row" ? "向右" : "向下"}逐格追加；右键断开`}
+            onPointerDown={event => { event.stopPropagation(); event.preventDefault(); }}
+            onClick={event => { event.stopPropagation(); if (event.detail === 0) onInput(id, false, type); }}
+            onContextMenu={event => { event.preventDefault(); event.stopPropagation(); onInput(id, true, type, { x: event.clientX, y: event.clientY }); }} />;
+        }));
+      })}
       {value.cells.map((line, row) => <div role={bubble ? undefined : "row"} className="canvas-text-row" key={row} style={{ flexGrow: rowWeights[row] }}>
         {line.map((item, column) => { const images = item.content_type === "image"; return <div role={bubble ? undefined : "cell"} data-canvas-cell={bubble ? undefined : item.id} className={`canvas-text-cell ${images ? "is-image-cell" : ""} ${canvasCellValue(item).imageRefs.length ? "has-image-refs" : ""} ${removing && (removing.axis === "row" ? removing.index === row : removing.index === column) ? "is-removing" : ""}`} key={column} style={{ flexGrow: columnWeights[column] }} onPointerDown={() => setActive([row, column])}>
           {!bubble && onInput && <button className="workflow-cell-port is-input" data-workflow-text-input={item.id} aria-label={`输入第 ${row + 1} 行第 ${column + 1} 列`}
@@ -242,17 +258,22 @@ export function CanvasTextCard({ value, selected, width, height, zoom, onChange,
               }
             }}
             onChange={event => updateCell(row, column, { text: event.target.value })} />}
-          {images && !item.image_refs?.length && <div className="canvas-image-empty">连接图片输入</div>}
+          {images && !item.image_refs?.length && (item.generation_ref && renderGeneration ? renderGeneration(item) : <div className="canvas-image-empty">连接图片输入</div>)}
           {!!canvasCellValue(item).imageRefs.length && <div className={images ? "canvas-image-content" : "canvas-cell-images"}>{canvasCellValue(item).imageRefs.map(ref => {
             const asset = referenceAssets.find(asset => asset.id === ref.asset_id);
             const path = asset && canvasAssetMediaPath({ storePath: asset.store_path ?? null, thumbPath: asset.thumb_path ?? null });
             if (images) return <button type="button" className="canvas-image-preview" key={ref.token} disabled={!path || !onOpenPreview}
-              title={path ? "点击放大" : "图片已不可用"} aria-label={`放大图片：${asset?.name ?? "图片已不可用"}`}
+              title={path ? item.generation_ref ? "单击打开会话，双击放大" : "双击放大" : "图片已不可用"} aria-label={`${item.generation_ref ? "查看生成会话" : "放大图片"}：${asset?.name ?? "图片已不可用"}`}
               onClick={event => {
                 event.stopPropagation();
-                if (asset) onOpenPreview?.(asset, value.cells.flat().flatMap(cell => canvasCellValue(cell).assetIds)
-                  .filter((id, index, ids) => ids.indexOf(id) === index)
-                  .flatMap(id => { const image = referenceAssets.find(candidate => candidate.id === id); return image ? [image] : []; }));
+                cancelImageClick();
+                if (event.detail === 0) { if (item.generation_ref) onOpenGeneration?.(item); else if (asset) previewImage(asset); }
+                else if (event.detail === 1 && item.generation_ref && onOpenGeneration) imageClickTimer.current = setTimeout(() => { imageClickTimer.current = null; onOpenGeneration(item); }, 350);
+              }}
+              onDoubleClick={event => {
+                event.stopPropagation();
+                cancelImageClick();
+                if (asset) previewImage(asset);
               }}>
               {path && <img draggable={false} src={path.startsWith("data:") ? path : convertFileSrc(path)} alt={asset?.name ?? "图片"} />}
             </button>;
@@ -260,7 +281,7 @@ export function CanvasTextCard({ value, selected, width, height, zoom, onChange,
               {path && <img src={path.startsWith("data:") ? path : convertFileSrc(path)} alt={images ? asset?.name ?? "图片" : ""} />}{!images && ref.token}
             </span>;
           })}</div>}
-          {images && !!item.image_refs?.length && <button className="canvas-cell-copy" title="清空图片" aria-label={`清空第 ${row + 1} 行第 ${column + 1} 列图片`} disabled={inputLocked} onClick={() => updateCell(row, column, { content_type: "text", text: "", image_refs: [] })}><Minus size={13} /></button>}
+          {images && (!!item.image_refs?.length || !!item.generation_ref) && <button className="canvas-cell-copy" title="清空图片" aria-label={`清空第 ${row + 1} 行第 ${column + 1} 列图片`} disabled={inputLocked} onClick={() => updateCell(row, column, { content_type: "text", text: "", image_refs: [] })}><Minus size={13} /></button>}
           {!images && <button className="canvas-cell-copy" title="复制文本" aria-label={`复制第 ${row + 1} 行第 ${column + 1} 列`}
             onClick={async () => {
               try {

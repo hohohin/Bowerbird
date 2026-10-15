@@ -63,7 +63,7 @@ export function pasteCanvasTable(note: CanvasNotePayload, table: string[][], row
   const cells = Array.from({ length: rows }, (_, r) => Array.from({ length: columns }, (_, c) => {
     const cell = note.cells[r]?.[c] ?? { ...emptyCanvasCell(), id: crypto.randomUUID() };
     const text = table[r - row]?.[c - column];
-    return text === undefined ? cell : { ...cell, content_type: "text" as const, text, image_refs: [] };
+    return text === undefined ? cell : { ...cell, content_type: "text" as const, text, image_refs: [], generation_ref: undefined };
   }));
   const rowHeights = canvasGridWeights(note.row_heights, note.cells.length);
   const columnWidths = canvasGridWeights(note.column_widths, note.cells[0].length);

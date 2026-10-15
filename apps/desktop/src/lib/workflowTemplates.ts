@@ -138,6 +138,7 @@ export function captureWorkflowTemplate(nodes: WorkflowNode[], selected: Set<str
     const id = aliases.get(node.id)!;
     let prompt = node.prompt;
     for (const ref of activePromptReferences(node)) {
+      if (ref.direction === "output") fail("当前数据包格式尚不支持 Agent 输出位置引用，请先移除这些引用再导出");
       const input = node.inputs[ref.type]?.find(input => workflowReferenceMatchesInput(ref, input));
       if (!input) fail(`输入管道「${ref.label}」尚未连接，请先连接后保存模板`);
       prompt = prompt.replaceAll(`@[${ref.id}]`, `{{${bindingAlias(input, ref.type)}}}`);

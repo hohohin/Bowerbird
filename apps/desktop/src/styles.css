@@ -3709,6 +3709,7 @@ html[data-theme="light"] .app-form-input:focus {
 .canvas-graph-edges path.is-retry { stroke-dasharray: 6 5; }
 .canvas-graph-edges path.is-branch { stroke: rgb(167 139 250 / 72%); }
 .canvas-graph-edges path.is-continued { stroke: rgb(34 197 94 / 62%); }
+.canvas-graph-edges path:not(.is-selected) { stroke: var(--bb-line-strong); }
 
 .canvas-prompt-node {
   position: absolute;

@@ -7,8 +7,11 @@ import { api } from "../lib/api";
 import { assignCanvasCardNames, canvasCardNameError } from "../lib/canvasCardNames";
 import { CanvasCardName } from "./CanvasCardName";
 import { WorkflowDisconnectMenu, type DisconnectChoice } from "./WorkflowDisconnectMenu";
+import { WorkflowLoopStartSelect } from "./WorkflowLoopStartSelect";
+import { workflowLoopItems } from "../lib/workflowLoop";
 import { canvasAssetMediaPath } from "../lib/creativeCanvas";
 import { expandCanvasSections, readCanvasNote } from "../lib/canvasNotes";
+import { contentInputPort } from "../lib/canvasContentInput";
 import { contentTableRows } from "../lib/contentTable";
 import { canvasInputValue, canvasWorkflowInputState, canvasSessionImages, workflowSessionIds } from "../lib/canvasSessionOutputs";
 import { useStore } from "../store";
@@ -19,7 +22,7 @@ import { workflowDiagnosticReport } from "../lib/workflowDiagnostics";
 import { removeWorkflowNodes, retryWorkflowSave } from "../lib/workflowRemoval";
 import { WORKFLOW_CARD_DRAG_TYPE, workflowBindingKey } from "../lib/canvasWorkflow";
 import { invalidateWorkflow, newWorkflowNode, workflowNodeRun, workflowRuns, workflowInputProducers, workflowConnectionError, workflowInputs, workflowOutputs,
-  workflowPortY, workflowTitle, WORKFLOW_CARD_WIDTH, WORKFLOW_SKILLS, type WorkflowInput, type WorkflowKind, type WorkflowNode, type WorkflowPort } from "../lib/canvasWorkflow";
+  workflowPortY, workflowTitle, WORKFLOW_CARD_WIDTH, WORKFLOW_SKILLS, type CanvasWorkflow, type WorkflowInput, type WorkflowKind, type WorkflowLoopItem, type WorkflowNode, type WorkflowPort } from "../lib/canvasWorkflow";
 import type { Asset, CanvasNode, VisualProfileSummary } from "../lib/types";
 import { ProviderSelect } from "./creation/ProviderSelect";
 import { RatioSelect } from "./creation/RatioSelect";
@@ -57,11 +60,14 @@ interface Props {
   provisional?: boolean;
   graphNodes: CanvasNode[];
   conversationCards?: ReturnType<typeof canvasConversationCards>;
+  imageOnlyConversationIds?: ReadonlySet<string>;
   selectedIds: Set<string>;
   panReady: boolean;
   onSelect: (id: string, additive?: boolean) => void;
   onNodesChanged: () => void;
+  onEdited: (before: CanvasWorkflow, after: CanvasWorkflow) => void;
   onOpenGeneration: (node: CanvasNode) => void;
+  onOpenAgent: (nodeId: string) => void;
   onDragStart: (event: React.PointerEvent<HTMLElement>, node: WorkflowNode) => void;
   onDragMove: (event: React.PointerEvent<HTMLElement>) => void;
   onDragEnd: (event: React.PointerEvent<HTMLElement>, cancelled?: boolean) => void;
@@ -72,7 +78,7 @@ interface Props {
   onPlaced: (rect: { x: number; y: number; width: number; height: number }) => void;
 }
 type Connection = WorkflowInput & { type: WorkflowPort["type"] };
-export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(function CanvasWorkflowLayer({ projectId, provisional = false, zoom, materials, graphNodes, conversationCards, ensureMaterialized, toBoardPoint, onPlaced, selectedIds, panReady, onSelect, onNodesChanged, onOpenGeneration, onDragStart, onDragMove, onDragEnd, onNodeMenu }, ref) {
+export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(function CanvasWorkflowLayer({ projectId, provisional = false, zoom, materials, graphNodes, conversationCards, imageOnlyConversationIds, ensureMaterialized, toBoardPoint, onPlaced, selectedIds, panReady, onSelect, onNodesChanged, onEdited, onOpenGeneration, onOpenAgent, onDragStart, onDragMove, onDragEnd, onNodeMenu }, ref) {
   const controller = useMemo(() => canvasWorkflowController(projectId), [projectId]);
   const [, redraw] = useState(0);
   // Cell sockets are measured from the committed table layout, including row/column resizing.
@@ -161,6 +167,15 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
     }
     return document.nodes.find(node => node.id === input.nodeId)?.outputs[input.portId ?? ""]?.assetIds ?? [];
   };
+  const loopPreviews = new Map<string, { items?: WorkflowLoopItem[]; notice: string }>();
+  for (const node of document.nodes.filter(node => node.kind === "loop")) {
+    try {
+      const items = workflowLoopItems({ ...node, inputs: { ...node.inputs,
+        image: node.inputs.image?.map(input => input.groupId ? { ...input, assetIds: inputImages(input) } : input) ?? [],
+      } }, document.nodes, graphNodes);
+      loopPreviews.set(node.id, { items, notice: "" });
+    } catch (error) { loopPreviews.set(node.id, { notice: error instanceof Error ? error.message : String(error) }); }
+  }
 
   const handle = (promise: Promise<unknown>) => { void promise.catch(error => notifyError(error, "工作流操作未完成")); };
   useEffect(() => controller.subscribe(() => { redraw(value => value + 1); nodesChanged.current(); }), [controller]);
@@ -199,7 +214,7 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
     void api.visualProfileList(null).then(list => { if (alive) setProfiles(list.filter(p => p.status === "confirmed")); }).catch(() => {});
     return () => { alive = false; };
   }, [state.visualProfiles, projectId]);
-  const assetKey = [...new Set([...workflowRuns(document).flatMap(run => run.loop?.completed.flatMap(item => Object.values(item.outputs).flatMap(outputs => Object.values(outputs).flatMap(value => value.assetIds ?? []))) ?? []), ...document.nodes.flatMap(node => [
+  const assetKey = [...new Set([...[...loopPreviews.values()].flatMap(preview => preview.items?.flatMap(item => item.assetIds) ?? []), ...workflowRuns(document).flatMap(run => [...(run.loop?.items?.flatMap(item => item.assetIds) ?? []), ...(run.loop?.completed.flatMap(item => Object.values(item.outputs).flatMap(outputs => Object.values(outputs).flatMap(value => value.assetIds ?? []))) ?? [])]), ...document.nodes.flatMap(node => [
     ...Object.values(node.inputs).flat().flatMap(inputImages),
     ...Object.values(node.outputs).flatMap(output => output.assetIds ?? []),
   ])])].sort().join("|");
@@ -209,9 +224,16 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
     return () => { current = false; };
   }, [assetKey]);
 
+  function edit(nodes: WorkflowNode[]) {
+    const before = controller.document;
+    const pending = controller.edit(nodes);
+    // edit validates locks before synchronously applying its optimistic snapshot.
+    if (controller.document !== before) onEdited(before, controller.document);
+    return pending;
+  }
   function patch(id: string, update: Partial<WorkflowNode>, invalidate = true) {
     const nodes = controller.document.nodes.map(node => node.id === id ? { ...node, ...update } : node);
-    handle(controller.edit(invalidate ? invalidateWorkflow(nodes, id) : nodes).then(() => controller.syncCanvasReferences(graphNodes)));
+    handle(edit(invalidate ? invalidateWorkflow(nodes, id) : nodes).then(() => controller.syncCanvasReferences(graphNodes)));
   }
   function sourceLabel(binding: WorkflowInput) {
     const workflow = document.nodes.find(node => node.id === binding.nodeId);
@@ -279,13 +301,13 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
     const error = workflowConnectionError(candidates, source.nodeId, "signal", target.id, "signal");
     if (error) { notifyError(null, error); return; }
     const inputs = target.inputs.signal ?? [];
-    if (!inputs.some(input => input.nodeId === source.nodeId)) handle(controller.edit(candidates.map(node => node.id === target.id ? { ...node, trigger: false, inputs: { ...node.inputs, signal: [...inputs, { nodeId: source.nodeId, portId: "signal" }] } } : node)));
+    if (!inputs.some(input => input.nodeId === source.nodeId)) handle(edit(candidates.map(node => node.id === target.id ? { ...node, trigger: false, inputs: { ...node.inputs, signal: [...inputs, { nodeId: source.nodeId, portId: "signal" }] } } : node)));
     setConnection(null); connectionRef.current = null;
   }
   function inputText(nodeId: string, cellId?: string, disconnect = false, inputType?: "text" | "image", point = cursor) {
     const source = connectionRef.current;
     if (!disconnect && source) {
-      if (inputType && source.type !== inputType) { notifyError(null, "此端口接收图片"); return; }
+      if (inputType && source.type !== inputType) { notifyError(null, inputType === "image" ? "此端口接收图片" : "此端口接收文字"); return; }
       if (source.type !== "image" && source.type !== "text") { notifyError(null, "文本卡片只接收文本或图片"); return; }
       const { type, ...binding } = source;
       setConnection(null); connectionRef.current = null;
@@ -293,8 +315,12 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
       return;
     }
     if (!disconnect) return;
-    const writers = document.nodes.filter(node => node.textTarget?.nodeId === nodeId && (cellId ? node.textTarget.cellId === cellId || node.textTarget.cellIds?.includes(cellId) : node.textTarget.append) && (!inputType || !!node.inputs[inputType]?.length));
-    const producers = !cellId ? document.nodes.filter(node => node.resultNodeIds?.includes(nodeId) && (!inputType || workflowOutputs(node).some(port => port.type === inputType))) : [];
+    const card = graphNodes.find(node => node.id === nodeId);
+    const axisPort = /^(row|column):/.test(cellId ?? "");
+    const writers = document.nodes.filter(node => node.textTarget?.nodeId === nodeId && (axisPort ? card && contentInputPort(readCanvasNote(card), node.textTarget) === cellId
+      : cellId ? node.textTarget.cellId === cellId || node.textTarget.cellIds?.includes(cellId) : node.textTarget.append) && (!inputType || !!node.inputs[inputType]?.length));
+    const legacyRoot = !cellId || card && cellId === `column:${readCanvasNote(card).cells[0][0].id}`;
+    const producers = legacyRoot ? document.nodes.filter(node => node.resultNodeIds?.includes(nodeId) && (!inputType || workflowOutputs(node).some(port => port.type === inputType))) : [];
     const choices: DisconnectChoice[] = writers.flatMap(writer => Object.values(writer.inputs).flat().filter(binding => binding.portId !== "signal").map(binding => ({
       key: writer.id, ...sourceLabel(binding), detail: `${sourceLabel(binding).detail} → ${(() => {
         const card = graphNodes.find(node => node.id === nodeId);
@@ -305,13 +331,13 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
       })()}`, disabled: controller.isLocked(writer.id),
       disconnect: () => {
         if (controller.isLocked(writer.id) || !controller.document.nodes.some(node => node.id === writer.id)) return;
-        handle(controller.edit(invalidateWorkflow(controller.document.nodes, writer.id).filter(node => node.id !== writer.id)));
+        handle(edit(invalidateWorkflow(controller.document.nodes, writer.id).filter(node => node.id !== writer.id)));
       },
     })));
     choices.push(...producers.map(producer => ({ key: producer.id, ...sourceLabel({ nodeId: producer.id, portId: producer.action === "layers" ? "image" : "text" }), disabled: controller.isLocked(producer.id),
       disconnect: () => {
         if (controller.isLocked(producer.id)) return;
-        handle(controller.edit(invalidateWorkflow(controller.document.nodes, producer.id).map(node => node.id === producer.id ? { ...node, resultNodeIds: node.resultNodeIds?.filter(id => id !== nodeId) } : node)));
+        handle(edit(invalidateWorkflow(controller.document.nodes, producer.id).map(node => node.id === producer.id ? { ...node, resultNodeIds: node.resultNodeIds?.filter(id => id !== nodeId) } : node)));
       },
     })));
     chooseDisconnect(choices, point);
@@ -326,7 +352,7 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
       const existing = nodes.find(node => node.textSource === card.id);
       if ((existing && controller.isLocked(existing.id)) || (previousKey && controller.isLocked(previousKey))) return;
       const node = existing ?? { ...newWorkflowNode("text", card.x, card.y, ""), textSource: card.id };
-      handle(controller.edit([...nodes.filter(item => item.id !== node.id).map(item => item.id === previousKey ? { ...item, trigger: false } : item), { ...node, trigger: true, inputs: { ...node.inputs, signal: [] } }]));
+      handle(edit([...nodes.filter(item => item.id !== node.id).map(item => item.id === previousKey ? { ...item, trigger: false } : item), { ...node, trigger: true, inputs: { ...node.inputs, signal: [] } }]));
       setArmed(false);
     };
     const down = (event: globalThis.PointerEvent) => {
@@ -362,12 +388,12 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
             ?? (native ? { ...newWorkflowNode("text", native.x, native.y, ""), textSource: native.id } : null);
           if (node && node.kind !== "planner" && !controller.isLocked(node.id)) {
             setArmed(false);
-            handle(controller.edit([...controller.document.nodes.filter(item => item.id !== node.id), { ...node, trigger: true, inputs: { ...node.inputs, signal: [] } }]));
+            handle(edit([...controller.document.nodes.filter(item => item.id !== node.id), { ...node, trigger: true, inputs: { ...node.inputs, signal: [] } }]));
           }
         } else if (element?.closest(".canvas-stage") && !element.closest("button,input,textarea,[data-canvas-node],.canvas-toolbar,.canvas-creation-dock")) {
           setArmed(false);
           const point = toBoardPoint(event.clientX, event.clientY);
-          handle((async () => { await ensureMaterialized(); const node = newWorkflowNode("trigger", point.x, point.y, ""); await controller.edit([...controller.document.nodes, node]); onSelect(node.id); })());
+          handle((async () => { await ensureMaterialized(); const node = newWorkflowNode("trigger", point.x, point.y, ""); await edit([...controller.document.nodes, node]); onSelect(node.id); })());
         }
         return;
       }
@@ -405,7 +431,7 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
         while (nodes.some(node => Math.abs(node.x - x) < WORKFLOW_CARD_WIDTH + 24 && Math.abs(node.y - nextY) < 350)
           || materials.some(node => x < node.x + node.width + 20 && x + WORKFLOW_CARD_WIDTH + 20 > node.x && nextY < node.y + node.height + 20 && nextY + 350 > node.y)) nextY += 370;
         const node = newWorkflowNode(kind, x, nextY, state.activeGenProvider || state.defaultProvider);
-        await controller.edit([...nodes, node]); onSelect(node.id);
+        await edit([...nodes, node]); onSelect(node.id);
         onPlaced({ x: node.x, y: node.y, width: WORKFLOW_CARD_WIDTH, height: 370 });
       })());
     },
@@ -424,30 +450,51 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
     },
   }));
 
+  function wireSelected(id: string | undefined) {
+    if (!id) return false;
+    const node = document.nodes.find(node => node.id === id);
+    return selectedIds.has(id) || selectedIds.has(conversationCards?.aliases.get(id) ?? id)
+      || !!node?.textSource && selectedIds.has(node.textSource)
+      || !!node?.textTarget && selectedIds.has(node.textTarget.nodeId);
+  }
   function sourcePoint(binding: WorkflowInput) {
+    const contained = embeddedPoint(binding.canvasNodeId ?? binding.assetNodeId ?? "");
+    if (contained) return contained;
     if (binding.canvasNodeId) {
       const owner = document.nodes.find(node => workflowSessionIds([node]).has(binding.canvasNodeId!));
-      if (owner) return { x: owner.x + WORKFLOW_CARD_WIDTH, y: workflowPortY(owner, "output", "image") };
+      if (owner) return { x: owner.x + WORKFLOW_CARD_WIDTH, y: workflowPortY(owner, "output", "image"), selected: wireSelected(owner.id) };
       const session = graphNodes.find(node => node.id === binding.canvasNodeId && node.kind === "prompt" && node.hiddenAt == null);
       if (session) {
         const anchor = conversationCards?.cards.get(conversationCards.aliases.get(session.id) ?? session.id)?.anchor ?? session;
-        return { x: anchor.x + anchor.width, y: anchor.y + 50 };
+        return { x: anchor.x + anchor.width, y: anchor.y + 50, selected: wireSelected(anchor.id) };
       }
       const card = Array.from(window.document.querySelectorAll<HTMLElement>("[data-canvas-node-id]")).find(element => element.dataset.canvasNodeId === binding.canvasNodeId);
       const port = Array.from(card?.querySelectorAll<HTMLElement>("[data-workflow-cell]") ?? []).find(element => element.dataset.workflowCell === binding.cellId);
       if (!port) return null;
-      const rect = port.getBoundingClientRect(); return toBoardPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      const rect = port.getBoundingClientRect(); return { ...toBoardPoint(rect.left + rect.width / 2, rect.top + rect.height / 2), selected: wireSelected(binding.canvasNodeId) };
     }
     const node = document.nodes.find(node => node.id === binding.nodeId);
-    if (node) return { x: node.x + WORKFLOW_CARD_WIDTH, y: workflowPortY(node, "output", binding.portId!) };
+    if (node) return { x: node.x + WORKFLOW_CARD_WIDTH, y: workflowPortY(node, "output", binding.portId!), selected: wireSelected(node.id) };
     const material = materials.find(material => binding.groupId ? material.groupId === binding.groupId
       : !!binding.assetId && material.assetId === binding.assetId && (!binding.assetNodeId || material.id === binding.assetNodeId));
-    if (material) return { x: material.x + material.width, y: material.y + material.height / 2 };
+    if (material) return { x: material.x + material.width, y: material.y + material.height / 2, selected: wireSelected(material.id) };
     // Existing single-image connections keep their exact source after its card is folded.
     const output = binding.assetId && graphNodes.find(item => item.assetId === binding.assetId
       && (!binding.assetNodeId || item.id === binding.assetNodeId) && conversationCards?.aliases.has(item.id));
     const anchor = output && conversationCards?.cards.get(conversationCards.aliases.get(output.id)!)?.anchor;
-    return anchor ? { x: anchor.x + anchor.width, y: anchor.y + 50 } : null;
+    return (output && embeddedPoint(output.id)) || (anchor ? { x: anchor.x + anchor.width, y: anchor.y + 50, selected: wireSelected(anchor.id) } : null);
+  }
+  function embeddedPoint(id: string, input = false) {
+    const target = conversationCards?.embedded.get(id);
+    if (!target) return null;
+    const card = Array.from(window.document.querySelectorAll<HTMLElement>("[data-canvas-node-id]")).find(element => element.dataset.canvasNodeId === target.nodeId);
+    const cell = Array.from(card?.querySelectorAll<HTMLElement>("[data-canvas-cell]") ?? []).find(element => element.dataset.canvasCell === target.cellId);
+    if (cell) {
+      const rect = cell.getBoundingClientRect();
+      return { ...toBoardPoint(input ? rect.left : rect.right, rect.top + rect.height / 2), selected: selectedIds.has(target.nodeId) };
+    }
+    const table = graphNodes.find(node => node.id === target.nodeId);
+    return table ? { x: table.x + (input ? 0 : table.width), y: table.y + table.height / 2, selected: selectedIds.has(table.id) } : null;
   }
   function path(from: { x: number; y: number }, to: { x: number; y: number }) {
     const bend = Math.max(50, Math.abs(to.x - from.x) * .45);
@@ -508,27 +555,27 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
       {document.nodes.filter(node => node.kind === "agent").flatMap(node => (node.sessionNodeIds ?? []).map(id => {
         const anchorId = conversationCards?.aliases.get(id) ?? id;
         const session = graphNodes.find(item => item.id === anchorId && item.hiddenAt == null);
-        return session && <path key={`agent-session-${node.id}-${id}`} className="is-session" data-workflow-session-link={id}
-          data-workflow-generator={node.id} d={path({ x: node.x + WORKFLOW_CARD_WIDTH, y: workflowPortY(node, "output", "session") },
-            { x: session.x, y: session.y + 40 })} />;
+        return session && <path key={`agent-session-${node.id}-${id}`} className={`is-image${wireSelected(node.id) || wireSelected(anchorId) ? " is-selected" : ""}`} data-workflow-session-link={id}
+          data-workflow-generator={node.id} d={path({ x: node.x + WORKFLOW_CARD_WIDTH, y: workflowPortY(node, "output", "image") },
+            embeddedPoint(id, true) ?? { x: session.x, y: session.y + 40 })} />;
       }))}
       {document.nodes.filter(node => node.kind === "generation").flatMap(node =>
         graphNodes.filter(session => workflowSessionIds([node]).has(session.id)).flatMap(session =>
           canvasSessionImages(session, graphNodes).flatMap(output => {
             const visible = materials.find(material => material.id === output.id);
             if (!visible) return [];
-            return <path key={`generated-${node.id}-${output.id}`} className="is-image" data-workflow-generated-link={output.id}
+            return <path key={`generated-${node.id}-${output.id}`} className={`is-image${wireSelected(node.id) || wireSelected(visible.id) ? " is-selected" : ""}`} data-workflow-generated-link={output.id}
               data-workflow-generator={node.id} d={path({ x: node.x + WORKFLOW_CARD_WIDTH, y: workflowPortY(node, "output", "image") },
                 { x: visible.x, y: visible.y + visible.height / 2 })} />;
           }))) }
       {document.nodes.map(node => {
         const group = materials.find(item => item.groupId === node.resultGroupId && !!node.resultGroupId);
-        return group && <path key={`group-${node.id}`} className="is-image" data-workflow-product-link={group.id} d={path({ x: node.x + WORKFLOW_CARD_WIDTH, y: workflowPortY(node, "output", "image") }, { x: group.x, y: group.y + group.height / 2 })} />;
+        return group && <path key={`group-${node.id}`} className={`is-image${wireSelected(node.id) || wireSelected(group.id) ? " is-selected" : ""}`} data-workflow-product-link={group.id} d={path({ x: node.x + WORKFLOW_CARD_WIDTH, y: workflowPortY(node, "output", "image") }, { x: group.x, y: group.y + group.height / 2 })} />;
       })}
       {document.nodes.flatMap(node => (node.resultNodeIds ?? []).map(id => {
         const result = graphNodes.find(item => item.id === id && item.hiddenAt == null);
         const type = node.action === "layers" ? "image" : "text";
-        return result && <path key={id} className={`is-${type}`} data-workflow-result-link={id} d={path({ x: node.x + WORKFLOW_CARD_WIDTH, y: workflowPortY(node, "output", type) }, { x: result.x, y: result.y + 24 })} />;
+        return result && <path key={id} className={`is-${type}${wireSelected(node.id) || wireSelected(id) ? " is-selected" : ""}`} data-workflow-result-link={id} d={path({ x: node.x + WORKFLOW_CARD_WIDTH, y: workflowPortY(node, "output", type) }, { x: result.x, y: result.y + 24 })} />;
       }))}
       {document.nodes.flatMap(node => Object.entries(node.inputs).flatMap(([port, inputs]) => inputs.map((binding, index) => {
         const from = sourcePoint(binding); if (!from) return null;
@@ -541,14 +588,16 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
         if (node.textTarget) {
           const target = node.textTarget;
           const card = Array.from(window.document.querySelectorAll<HTMLElement>("[data-canvas-node-id]")).find(item => item.dataset.canvasNodeId === target.nodeId);
-          const socket = Array.from(card?.querySelectorAll<HTMLElement>("[data-workflow-text-input]") ?? []).find(item => item.dataset.workflowTextInput === (target.append ? "" : target.cellId) && (item.dataset.contentInputType === "image") === (port === "image"));
+          const nativeCard = graphNodes.find(item => item.id === target.nodeId);
+          const inputPort = nativeCard ? contentInputPort(readCanvasNote(nativeCard), target) : undefined;
+          const socket = Array.from(card?.querySelectorAll<HTMLElement>("[data-workflow-text-input]") ?? []).find(item => inputPort !== undefined && item.dataset.workflowTextInput === inputPort && (item.dataset.contentInputType === "image") === (port === "image"));
           if (!socket) return null;
           const rect = socket.getBoundingClientRect(); to = toBoardPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
         }
         const diagnostic = nodeDiagnostic(node.id);
         const failedWire = diagnostic?.source && (workflowBindingKey(diagnostic.source) === workflowBindingKey(binding)
           || inputs.length === 1 && node.promptReferences?.some(ref => ref.type === port && ref.label === diagnostic.referenceLabel));
-        return <path key={`${node.id}-${port}-${index}`} data-workflow-target={node.id} data-workflow-signal-link={port === "signal" ? node.id : undefined} data-workflow-text-link={node.textTarget?.cellId} className={`is-${port}${failedWire ? " is-error" : ""}`} d={path(from, to)}
+        return <path key={`${node.id}-${port}-${index}`} data-workflow-target={node.id} data-workflow-signal-link={port === "signal" ? node.id : undefined} data-workflow-text-link={node.textTarget?.cellId} className={`is-${port}${failedWire ? " is-error" : ""}${from.selected || wireSelected(node.id) ? " is-selected" : ""}`} d={path(from, to)}
           onContextMenu={event => { if (port !== "signal") return; event.preventDefault(); event.stopPropagation(); if (!controller.isLocked(node.id) && !controller.isLocked(binding.nodeId!)) patch(node.id, { inputs: { ...node.inputs, signal: inputs.filter((_, i) => i !== index) } }, false); }} />;
       })))}
       {connection && (() => { const from = sourcePoint(connection); return from && <path className="is-draft" d={path(from, toBoardPoint(cursor.x, cursor.y))} />; })()}
@@ -557,7 +606,7 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
       const card = graphNodes.find(card => card.id === node.textSource && card.hiddenAt == null);
       return card && <div key={node.id} className="workflow-material-hotspot workflow-text-key" data-workflow-text-key={card.id} style={{ left: card.x, top: card.y, width: card.width, height: card.height }}>{node.inputs.signal?.length ? gearButton(node) : keyButton(node)}</div>;
     })}
-    {graphNodes.filter(card => card.kind === "prompt" && card.hiddenAt == null && !sessionIds.has(card.id) && !conversationCards?.hiddenIds.has(card.id)).map(card => <div key={`session-${card.id}`} className="workflow-material-hotspot" style={{ left: card.x, top: card.y, width: card.width, height: card.height }}>
+    {graphNodes.filter(card => card.kind === "prompt" && card.hiddenAt == null && !sessionIds.has(card.id) && !conversationCards?.hiddenIds.has(card.id)).map(card => <div key={`session-${card.id}`} className={`workflow-material-hotspot ${imageOnlyConversationIds?.has(card.id) ? "is-image-session" : ""} ${hoveredMaterial === card.id ? "is-hovered" : ""}`} style={{ left: card.x, top: card.y, width: card.width, height: card.height }}>
       <button data-workflow-session-output={card.id} data-workflow-material={card.id} className="workflow-port is-output is-image workflow-session-output" style={{ top: 40 }}
         aria-label="输出：图片" title="拖到输入端口，或点击后选择输入端口" onPointerDown={event => {
           event.stopPropagation(); event.preventDefault();
@@ -580,6 +629,9 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
       const step = run?.steps[node.id];
       const loop = run?.loop?.nodeId === node.id ? run.loop : undefined;
       const busy = controller.isLocked(node.id);
+      const loopItems = loopPreviews.get(node.id)?.items, loopInputNotice = loopPreviews.get(node.id)?.notice ?? "";
+      const loopStartInvalid = !busy && !!loopItems && (node.loopStartItem ?? 1) > loopItems.length;
+      const loopInputChanged = !!loop?.items && !!loopItems && JSON.stringify(loop.items) !== JSON.stringify(loopItems);
       const inputPorts = workflowInputs(node), outputPorts = workflowOutputs(node);
       const height = node.kind === "trigger" ? 220 : node.kind === "loop" ? 260 : Math.max(330, 130 + Math.max(inputPorts.length, outputPorts.length) * 30);
       const images = Object.values(node.outputs).flatMap(value => value.assetIds ?? []);
@@ -594,7 +646,11 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
           if (armed && !busy && node.kind !== "planner" && !(event.target as HTMLElement).closest(".canvas-card-name")) { event.stopPropagation(); event.preventDefault(); patch(node.id, { trigger: true, inputs: { ...node.inputs, signal: [] } }, false); setArmed(false); }
         }}
         onPointerDown={event => { if (event.button === 1 || (event.button === 0 && panReady)) return; event.stopPropagation(); if (!selectedIds.has(node.id) || event.ctrlKey || event.metaKey) onSelect(node.id, event.ctrlKey || event.metaKey); }} onDoubleClick={event => event.stopPropagation()}
-        onKeyDown={event => { if (event.key !== "Escape") event.stopPropagation(); }}
+        onClick={event => {
+          if (node.kind === "agent" && busy && !panReady && !armed && !event.ctrlKey && !event.metaKey
+              && !(event.target as HTMLElement).closest("button,input,select,textarea,[contenteditable=true],.canvas-card-name")) onOpenAgent(node.id);
+        }}
+        onKeyDown={event => { if (event.key !== "Escape" && !((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z")) event.stopPropagation(); }}
         onContextMenu={event => onNodeMenu(event, node.id)} onWheel={event => { if ((event.target as HTMLElement).closest("textarea,.workflow-prompt-editor,.workflow-preview,.workflow-text-result")) event.stopPropagation(); }}
         onDragOver={event => { if (getDragAssets() || event.dataTransfer.types.includes("text/plain")) { event.preventDefault(); event.stopPropagation(); } }}
         onDrop={event => {
@@ -603,7 +659,7 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
           const keyText = event.dataTransfer.getData("text/plain");
           const previousKey = keyText.startsWith("bowerbird-winding-key:") ? keyText.slice(22) : "";
           if (node.kind !== "planner" && previousKey && document.nodes.some(node => node.id === previousKey && node.trigger)) {
-            handle(controller.edit(document.nodes.map(candidate => ({ ...candidate, trigger: candidate.id === node.id || (candidate.id !== previousKey && candidate.trigger),
+            handle(edit(document.nodes.map(candidate => ({ ...candidate, trigger: candidate.id === node.id || (candidate.id !== previousKey && candidate.trigger),
               ...(candidate.id === node.id ? { inputs: { ...candidate.inputs, signal: [] } } : {}) })))); return;
           }
           const ids = getDragAssets(); if (!ids?.length || node.kind === "trigger" || node.kind === "agent") return;
@@ -621,11 +677,11 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
           <GripHorizontal size={15} /><strong aria-label="拖动卡片" />
           <button aria-label="复制卡片" disabled={busy} onClick={() => {
             const copy = { ...structuredClone(node), id: crypto.randomUUID(), x: node.x + 350, outputs: {}, activeSessionNodeId: null, sessionNodeIds: [], resultNodeIds: [], resultGroupId: undefined, planning: undefined, templateInstance: undefined, trigger: false };
-            handle(controller.edit([...document.nodes, copy])); onSelect(copy.id);
+            handle(edit([...document.nodes, copy])); onSelect(copy.id);
           }}><Copy size={13} /></button>
           <button aria-label="删除卡片" disabled={busy} onClick={() => {
             const remaining = removeWorkflowNodes(controller.document.nodes, [node.id]);
-            handle(controller.edit(remaining));
+            handle(edit(remaining));
           }}><X size={15} /></button>
         </header>
         {node.kind === "generation" && <div className="workflow-floating-tools" role="toolbar" aria-label="生成参数" onPointerDown={event => event.stopPropagation()}>
@@ -645,21 +701,21 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
                 const index = node.templateInstance!.template.plan.nodes.findIndex(spec => spec.id === output.node); locateIssue(node.templateInstance!.nodeIds[index]);
               }}>输出 · {output.label}</button>)}
             </details>
-            <button disabled={busy || node.templateInstance.nodeIds.some(id => controller.isLocked(id))} onClick={() => handle(controller.edit(removeWorkflowNodes(controller.document.nodes, node.templateInstance!.nodeIds)))}>移除整个子流程</button>
+            <button disabled={busy || node.templateInstance.nodeIds.some(id => controller.isLocked(id))} onClick={() => handle(edit(removeWorkflowNodes(controller.document.nodes, node.templateInstance!.nodeIds)))}>移除整个子流程</button>
           </section>}
           {node.kind === "loop" && <select aria-label="循环方式" disabled={busy} value={node.loopMode ?? "images"} onChange={event => {
               const loopMode = event.target.value as "images" | "rows";
               const nodes = invalidateWorkflow(document.nodes, node.id).map(candidate => candidate.id === node.id
                 ? { ...candidate, loopMode, inputs: { ...(node.inputs.signal ? { signal: node.inputs.signal } : {}) } }
                 : loopMode === "images" ? { ...candidate, inputs: Object.fromEntries(Object.entries(candidate.inputs).map(([port, bindings]) => [port, bindings.filter(input => input.nodeId !== node.id || input.portId !== "text")])) } : candidate);
-              handle(controller.edit(nodes));
+              handle(edit(nodes));
             }}><option value="images">逐张图片</option><option value="rows">内容卡逐行</option></select>}
           {node.kind === "planner" && <WorkflowPlannerCard node={{ ...node, inputs: { ...node.inputs, image: node.inputs.image?.map(input => input.groupId ? { ...input, assetIds: materials.find(item => item.groupId === input.groupId)?.assetIds ?? [] } : input) ?? [] } }} nodes={document.nodes} graphNodes={graphNodes} runtime={controller.planner} onChange={(prompt, promptReferences) => patch(node.id, { prompt, promptReferences })} onLocate={() => { const first = node.planning?.appliedNodes?.[0]; if (first) locateIssue(first.id); }} />}
           {node.kind === "instruction" && <select aria-label="指令功能" disabled={busy} value={node.action} onChange={event => {
             const action = event.target.value as WorkflowNode["action"];
             const nodes = invalidateWorkflow(document.nodes, node.id).map(candidate => candidate.id === node.id ? { ...candidate, action, outputPorts: [] } : { ...candidate,
               inputs: Object.fromEntries(Object.entries(candidate.inputs).map(([port, bindings]) => [port, bindings.filter(binding => binding.nodeId !== node.id)])) });
-            handle(controller.edit(nodes));
+            handle(edit(nodes));
           }}><option value="describe">反推</option><option value="reuse">复用生成提示词</option><option value="layers">分层编辑</option></select>}
           {node.kind === "skill" && <select aria-label="选择技能" disabled={busy} value={node.skill} onChange={event => patch(node.id, { skill: event.target.value })}>
             {WORKFLOW_SKILLS.map(skill => <option key={skill.id} value={skill.id}>{skill.label}</option>)}
@@ -675,10 +731,9 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
           <div className="workflow-port-space" style={{ height: Math.max(inputPorts.length, outputPorts.length, 2) * 30 + (node.kind === "generation" ? 32 : 0) }} />
           {node.kind === "loop" && <section className="workflow-loop" aria-label="循环设置">
             <p className="workflow-hint">{node.loopMode === "rows" ? "连接内容卡整体文本输出，每行的文字和图片一起处理；空行跳过。" : "按输入顺序逐张处理图片。"}全部下游完成后再进入下一项，最多 100 项。</p>
-            <label className="workflow-loop-start">从第 <input type="number" aria-label="循环起始项" min={1} max={100} step={1} disabled={busy} value={node.loopStartItem ?? 1} onChange={event => {
-              const loopStartItem = event.target.valueAsNumber;
-              if (Number.isInteger(loopStartItem) && loopStartItem >= 1 && loopStartItem <= 100) patch(node.id, { loopStartItem }, false);
-            }} /> 项开始</label>
+            <WorkflowLoopStartSelect id={node.id} items={loopItems ?? []} assets={assets} value={node.loopStartItem ?? 1} disabled={busy} notice={loopInputNotice} onChange={loopStartItem => patch(node.id, { loopStartItem }, false)} />
+            {loopStartInvalid && <p className="workflow-hint">原起始项已超出输入范围，请重新选择。</p>}
+            {loopInputChanged && <p className="workflow-hint">输入内容已更新为 {loopItems!.length} 项。{busy ? `当前循环仍按启动时的 ${loop!.items!.length} 项执行，新循环使用最新内容。` : "开始新循环时使用最新内容；此前运行记录保留。"}</p>}
             {loop && <p role="status">{loop.items ? `已完成 ${loop.completed.length} / ${loop.items.length - (loop.startIndex ?? 0)} 项${loop.startIndex ? ` · 从第 ${loop.startIndex + 1} 项起` : ""}${(loop.startIndex ?? 0) + loop.completed.length < loop.items.length ? ` · 当前第 ${loop.index + 1} 项` : ""}` : "等待上游准备输入"}</p>}
             {loop && run?.status === "waiting" && <button onClick={() => handle(Object.values(run.steps).some(step => step.status === "failed") ? controller.retryLoop(run.id) : controller.continue(run.id))}>{Object.values(run.steps).some(step => step.status === "failed") ? "重试失败步骤" : "继续循环"}</button>}
             {loop && run?.status === "stopped" && (!loop.items || (loop.startIndex ?? 0) + loop.completed.length < loop.items.length) && <button disabled={busy} title="保留已完成结果与当轮输入，重新执行当前未完成项" onClick={() => handle(controller.restartLoop(run.id))}>从中断处开始 · 第 {loop.index + 1} 项</button>}
@@ -700,7 +755,7 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
               ratio={node.generation.ratio ?? "16:9"} onRatioChange={ratio => patch(node.id, { generation: { ...node.generation, ratio } })} />
             <p>按 @ 引用顺序传入素材；首尾帧模式依次为首帧、尾帧。</p>
           </fieldset>}
-          {(node.kind === "generation" || node.kind === "agent") && <WorkflowPromptEditor node={{ ...node, inputs: { ...node.inputs, image: node.inputs.image?.map(input => input.groupId ? { ...input, assetIds: materials.find(item => item.groupId === input.groupId)?.assetIds ?? [] } : input) ?? [] } }} nodes={document.nodes} graphNodes={graphNodes} disabled={busy} onChange={(prompt, promptReferences) => patch(node.id, { prompt, promptReferences })} />}
+          {(node.kind === "generation" || node.kind === "agent") && <WorkflowPromptEditor cardNames={cardNames} node={{ ...node, inputs: { ...node.inputs, image: node.inputs.image?.map(input => input.groupId ? { ...input, assetIds: materials.find(item => item.groupId === input.groupId)?.assetIds ?? [] } : input) ?? [] } }} nodes={document.nodes} graphNodes={graphNodes} disabled={busy} onChange={(prompt, promptReferences) => patch(node.id, { prompt, promptReferences })} />}
           {node.kind !== "planner" && node.kind !== "trigger" && node.kind !== "loop" && node.kind !== "generation" && node.kind !== "agent" && !(node.kind === "instruction" && node.action !== "describe") && !(node.kind === "visual-profile" && node.profileId) && <textarea aria-label={node.kind === "instruction" ? "反推要求" : node.kind === "visual-profile" ? "视觉要求" : "卡片指令"}
             disabled={busy} maxLength={node.kind === "visual-profile" ? 4000 : undefined} placeholder={node.kind === "instruction" ? "留空使用当前反推要求" : node.kind === "visual-profile" ? "描述配色、构图、光线等要求；可只接图片或只填文字…" : "输入创作要求，也可从文本端口接入…"}
             value={node.prompt} onChange={event => patch(node.id, { prompt: event.target.value })} />}
@@ -748,8 +803,9 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
               {run?.status === "waiting" && !Object.values(run.steps).some(step => step.status === "failed") && step?.status !== "done" && run.order.find(id => run!.steps[id].status !== "done") === node.id
                 && <button aria-label="继续工作流" onClick={() => handle(controller.continue(run?.id))}><Play size={13} />继续</button>}
               <button aria-label="停止工作流" onClick={() => handle(controller.stop(run?.id))}><Square size={12} /></button>
-            </> : <button disabled={busy} aria-label={node.kind === "loop" ? "开始循环" : node.kind === "trigger" ? "触发下游" : "运行此卡片"} onClick={() => handle(controller.start(node.id, node.kind !== "trigger" && node.kind !== "loop"))}><Play size={13} />{node.kind === "loop" ? "开始循环" : node.kind === "trigger" ? "触发下游" : "运行此卡片"}</button>}
+            </> : <button disabled={busy || loopStartInvalid} aria-label={node.kind === "loop" ? "开始循环" : node.kind === "trigger" ? "触发下游" : "运行此卡片"} onClick={() => handle(controller.start(node.id, node.kind !== "trigger" && node.kind !== "loop"))}><Play size={13} />{node.kind === "loop" ? "开始循环" : node.kind === "trigger" ? "触发下游" : "运行此卡片"}</button>}
           </footer>}
+          {node.kind === "agent" && step && <button className="workflow-detail" onClick={() => onOpenAgent(node.id)}>查看 Agent 详情</button>}
           {step?.agentRunId && node.kind !== "agent" && <button className="workflow-detail" onClick={() => handle((async () => {
             const run = await api.cloudAgentGet(step.agentRunId!); useStore.getState().openCloudAgentRun(run, { navigate: false }); setAgentOpen(true);
           })())}>查看技能执行 / 审批</button>}

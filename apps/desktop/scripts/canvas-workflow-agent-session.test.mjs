@@ -18,7 +18,7 @@ try {
     const check = (ok, message) => { if (!ok) throw Error(message); };
     const requests = new Map(), responses = new Map(), jobs = new Map(), pending = [];
     let c, deliveries = 0, submissions = 0, failReply = false, rejectSubmit = false, textOnly = false;
-    useStore.setState({ cloudEntitlement: { policy: { can_use_byo: true, can_use_cloud: true, max_parallel_jobs: 100 } } });
+    useStore.setState({ cloudEntitlement: { balances: { daily: 0, sub: 0, topup: 0 }, policy: { can_use_byo: true, can_use_cloud: true, max_parallel_jobs: 100 } } });
     api.agentDsWorkflowStart = async (id, prompt, source, purpose, images, scope, provider, transport, isolated, sessionGeneration) => {
       deliveries++;
       check(sessionGeneration === true && c.document.run.steps.agent.localDsGenerationMode === 'session', 'new protocol frozen before delivery');
@@ -115,8 +115,8 @@ try {
   }));
   await page.reload();
   const card = page.locator('.workflow-card.is-agent');
-  await card.getByRole('button', { name: '输出：生成任务', exact: true }).waitFor();
-  assert.equal(await card.getByRole('button', { name: '输出：返回图片', exact: true }).count(), 0);
+  assert.equal(await card.getByRole('button', { name: '输出：生成任务', exact: true }).count(), 0);
+  assert.equal(await card.getByRole('button', { name: '输出：返回图片', exact: true }).count(), 1, 'one image port serves classification and asynchronous generation tasks');
   await page.locator('[data-workflow-session-link]').waitFor({ state: 'attached' });
   await page.reload();
   await page.locator('[data-workflow-session-link]').waitFor({ state: 'attached' });

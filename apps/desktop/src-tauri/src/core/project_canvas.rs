@@ -3187,6 +3187,30 @@ mod tests {
     }
 
     #[test]
+    fn generation_cell_reference_survives_note_save_and_result_resolution() {
+        let db = db();
+        materialize(&db, "p1");
+        db.create_canvas_node(&note("p1", "table")).unwrap();
+        let mut payload = serde_json::json!({"schema_version":1,"note_type":"text","text":"","member_ids":[],
+            "cells":[[{"id":"cell","content_type":"image","text":"","bold":false,"italic":false,"align":"left",
+                "generation_ref":{"session_node_id":"saved-session"}}]]});
+        db.update_canvas_note_payload("table", &payload.to_string()).unwrap();
+        let snapshot = db.project_canvas_snapshot("p1").unwrap();
+        let saved = snapshot.nodes.iter().find(|node| node.id == "table").unwrap();
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&saved.payload_json).unwrap()["cells"][0][0]["generation_ref"]["session_node_id"], "saved-session");
+        db.conn.lock().unwrap().execute("INSERT INTO assets(id,name,created_at) VALUES('generated-image','result',1)", []).unwrap();
+        payload["cells"][0][0]["generation_ref"]["output_node_id"] = serde_json::json!("result-node");
+        payload["cells"][0][0]["image_refs"] = serde_json::json!([{"asset_id":"generated-image","token":"@图片1"}]);
+        db.update_canvas_note_payload("table", &payload.to_string()).unwrap();
+        assert_eq!(db.conn.lock().unwrap().query_row("SELECT COUNT(*) FROM project_assets WHERE project_id='p1' AND asset_id='generated-image'", [], |row| row.get::<_,i64>(0)).unwrap(), 1);
+        payload["cells"][0][0]["generation_ref"]["session_node_id"] = serde_json::json!("");
+        assert!(db.update_canvas_note_payload("table", &payload.to_string()).is_err());
+        payload["cells"][0][0]["generation_ref"]["session_node_id"] = serde_json::json!("saved-session");
+        payload["cells"][0][0]["content_type"] = serde_json::json!("text");
+        assert!(db.update_canvas_note_payload("table", &payload.to_string()).is_err());
+    }
+
+    #[test]
     fn note_editing_preserves_layout_and_rejects_execution_nodes() {
         let db = db();
         materialize(&db, "p1");

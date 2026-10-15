@@ -1,3 +1,4 @@
+import { readCanvasNote } from "./canvasNotes.ts";
 import type { CanvasNode, GenJob } from "./types";
 
 function payload(node: CanvasNode) {
@@ -38,6 +39,14 @@ export function canvasConversationCards(nodes: readonly CanvasNode[], jobs: Reco
       aliases.set(node.id, card.anchor.id);
     }
   }
+  const embeddedSessions = new Map(nodes.filter(node => node.kind === "note" && node.hiddenAt == null)
+    .flatMap(node => readCanvasNote(node).cells.flatMap(row => row.flatMap(cell => cell.content_type === "image" && cell.generation_ref
+      ? [[cell.generation_ref.session_node_id, { nodeId: node.id, cellId: cell.id! }] as const] : []))));
+  const embedded = new Map<string, { nodeId: string; cellId: string }>();
+  for (const card of groups.values()) {
+    const target = card.sessions.map(session => embeddedSessions.get(session.id)).find(Boolean);
+    if (target) for (const node of [...card.sessions, ...card.outputs]) embedded.set(node.id, target);
+  }
   return { cards: new Map([...groups.values()].map(card => [card.anchor.id, card])), aliases,
-    hiddenIds: new Set([...aliases].filter(([id, anchor]) => id !== anchor).map(([id]) => id)) };
+    embedded, hiddenIds: new Set([...embedded.keys(), ...[...aliases].filter(([id, anchor]) => id !== anchor).map(([id]) => id)]) };
 }
