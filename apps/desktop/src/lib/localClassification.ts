@@ -14,6 +14,16 @@ export interface LocalClassificationStatus {
   download_total: number;
   message: string;
   last_error: string;
+  current_asset: { id: string; name: string; thumb_path: string | null; position: number } | null;
+  jev_progress: {
+    asset: NonNullable<LocalClassificationStatus["current_asset"]>;
+    message: string;
+    batches: {
+      batch: number; model: string; threshold: number;
+      labels: { name: string; description: string; probability: number | null }[];
+      no_match: number | null; error: string | null; response: unknown;
+    }[];
+  } | null;
   model: string;
   acceleration: string;
   vector_supported: boolean;
@@ -40,13 +50,14 @@ export const localClassification = {
     invoke<string>("local_classification_save_label", { id, name, description, enabled }),
   example: (tagId: string, assetIds: string[], positive: boolean) =>
     invoke<void>("local_classification_example", { tagId, assetIds, positive }),
+  deleteLabels: (tagIds: string[]) => invoke<void>("local_classification_delete_labels", { tagIds }),
   jevConfig: async (): Promise<{ enabled: boolean; apiKey: string }> => {
     const settings = await invoke<AppSettings>("get_settings");
-    return { enabled: settings.jev_verify_enabled, apiKey: settings.jev_api_key ?? "" };
+    return { enabled: settings.jev_image_classification_enabled, apiKey: settings.jev_api_key ?? "" };
   },
   saveJevConfig: async (enabled: boolean, apiKey: string) => {
     const settings = await invoke<AppSettings>("get_settings");
-    settings.jev_verify_enabled = enabled;
+    settings.jev_image_classification_enabled = enabled;
     settings.jev_api_key = apiKey.trim() ? apiKey.trim() : null;
     await invoke<void>("update_settings", { settings });
   },

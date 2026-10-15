@@ -1,6 +1,10 @@
 //! Local screen capture, global shortcuts and ephemeral always-on-top image windows.
 use crate::core::settings::SettingsState;
 use base64::{engine::general_purpose::STANDARD, Engine};
+use image::{
+    codecs::png::{CompressionType, FilterType, PngEncoder},
+    ImageEncoder,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     borrow::Cow,
@@ -12,7 +16,7 @@ use std::{
         Mutex,
     },
 };
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
@@ -34,10 +38,16 @@ impl Default for ScreenshotShortcuts {
 pub struct ScreenshotState {
     active: AtomicBool,
     recording: AtomicBool,
-    images: Mutex<HashMap<String, String>>,
+    images: Mutex<HashMap<String, ScreenshotFrame>>,
+    lifecycle: tokio::sync::Mutex<()>,
     shortcuts: Mutex<ShortcutStatus>,
     clipboard: Mutex<Option<arboard::Clipboard>>,
 }
+struct ScreenshotFrame {
+    session: String,
+    png: Vec<u8>,
+}
+
 #[derive(Clone, Default, Serialize)]
 pub struct ShortcutStatus {
     pub error: Option<String>,
@@ -120,7 +130,41 @@ pub fn initialize(app: &AppHandle) {
             .unwrap()
             .error = Some(error);
     }
+    // Cached windows must not keep the application alive after its main window closes.
+    if let Some(main) = app.get_webview_window("main") {
+        let app = app.clone();
+        main.on_window_event(move |event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = close_capture(&app, None).await;
+                });
+            }
+        });
+    }
+    // Warm only empty, hidden webviews. Never capture a screen or request permission at startup.
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<ScreenshotState>();
+        let _guard = state.lifecycle.lock().await;
+        let warm_app = app.clone();
+        let _ = tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+            if warm_app.get_webview_window("main").is_none() {
+                return Ok(());
+            }
+            let count = warm_app
+                .available_monitors()
+                .map_err(|e| e.to_string())?
+                .len();
+            for index in 0..count {
+                capture_window(&warm_app, index)?;
+            }
+            Ok(())
+        })
+        .await;
+    });
 }
+
 #[tauri::command]
 pub fn screenshot_record_shortcut(
     window: WebviewWindow,
@@ -192,15 +236,18 @@ pub async fn screenshot_set_shortcuts(
     status.error = None;
     Ok(())
 }
-fn encode(image: &image::RgbaImage) -> Result<String, String> {
-    let mut png = Cursor::new(Vec::new());
-    image
-        .write_to(&mut png, image::ImageFormat::Png)
+fn encode(image: &image::RgbaImage) -> Result<Vec<u8>, String> {
+    let mut png = Vec::new();
+    // A fixed PNG filter avoids evaluating five filters for every full-resolution row.
+    PngEncoder::new_with_quality(&mut png, CompressionType::Fast, FilterType::Sub)
+        .write_image(
+            image.as_raw(),
+            image.width(),
+            image.height(),
+            image::ExtendedColorType::Rgba8,
+        )
         .map_err(|e| e.to_string())?;
-    Ok(format!(
-        "data:image/png;base64,{}",
-        STANDARD.encode(png.into_inner())
-    ))
+    Ok(png)
 }
 fn decode(data: &str) -> Result<image::RgbaImage, String> {
     if data.len() > 90 * 1024 * 1024 {
@@ -259,14 +306,37 @@ fn screen_capture_permission() -> Result<(), String> {
     }
     Ok(())
 }
+fn capture_window(app: &AppHandle, index: usize) -> Result<WebviewWindow, String> {
+    let label = format!("snip-{index}");
+    if let Some(window) = app.get_webview_window(&label) {
+        return Ok(window);
+    }
+    let window = WebviewWindowBuilder::new(
+        app,
+        &label,
+        WebviewUrl::App("screenshot.html?screenshot=capture".into()),
+    )
+    .title("园丁鸟截图")
+    .decorations(false)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .resizable(false)
+    .focused(false)
+    .background_throttling(tauri::utils::config::BackgroundThrottlingPolicy::Disabled)
+    .visible(false)
+    .build()
+    .map_err(|e| e.to_string())?;
+    cleanup_on_close(app, &window);
+    Ok(window)
+}
+
 pub async fn start_capture(app: AppHandle) -> Result<(), String> {
-    if app
-        .state::<ScreenshotState>()
-        .active
-        .swap(true, Ordering::SeqCst)
-    {
+    let state = app.state::<ScreenshotState>();
+    if state.active.swap(true, Ordering::SeqCst) {
         return Ok(());
     }
+    // Serialize prewarming/capture/closing so an old close cannot hide a new session.
+    let _guard = state.lifecycle.lock().await;
     let capture_app = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         screen_capture_permission()?;
@@ -274,7 +344,7 @@ pub async fn start_capture(app: AppHandle) -> Result<(), String> {
         if monitors.is_empty() {
             return Err("没有可截图的屏幕".to_string());
         }
-        // Freeze all displays before showing any overlay.
+        // Freeze ALL displays before showing any overlay.
         let frames = monitors
             .into_iter()
             .map(|monitor| {
@@ -286,53 +356,23 @@ pub async fn start_capture(app: AppHandle) -> Result<(), String> {
                     monitor.y().map_err(|e| e.to_string())?,
                     monitor.width().map_err(|e| e.to_string())?,
                     monitor.height().map_err(|e| e.to_string())?,
-                    encode(&image)?,
+                    image,
                 ))
             })
             .collect::<Result<Vec<_>, String>>()?;
-        for (x, y, width, height, data) in frames {
-            if !capture_app
-                .state::<ScreenshotState>()
-                .active
-                .load(Ordering::SeqCst)
-            {
-                return Ok(());
-            }
-            let label = format!("snip-{}", ulid::Ulid::new());
-            capture_app
-                .state::<ScreenshotState>()
-                .images
-                .lock()
-                .unwrap()
-                .insert(label.clone(), data);
-            let window = WebviewWindowBuilder::new(
-                &capture_app,
-                &label,
-                WebviewUrl::App("index.html?screenshot=capture".into()),
-            )
-            .title("园丁鸟截图")
-            .decorations(false)
-            .always_on_top(true)
-            .skip_taskbar(true)
-            .resizable(false)
-            .visible(false)
-            .build()
-            .map_err(|e| e.to_string())?;
-            cleanup_on_close(&capture_app, &window);
-            if !capture_app
-                .state::<ScreenshotState>()
-                .active
-                .load(Ordering::SeqCst)
+        let session = ulid::Ulid::new().to_string();
+        // Remove spare warm windows when displays have been disconnected.
+        for (label, window) in capture_app.webview_windows() {
+            if label
+                .strip_prefix("snip-")
+                .and_then(|s| s.parse::<usize>().ok())
+                .is_some_and(|index| index >= frames.len())
             {
                 let _ = window.destroy();
-                capture_app
-                    .state::<ScreenshotState>()
-                    .images
-                    .lock()
-                    .unwrap()
-                    .remove(&label);
-                return Ok(());
             }
+        }
+        for (index, (x, y, width, height, image)) in frames.into_iter().enumerate() {
+            let window = capture_window(&capture_app, index)?;
             #[cfg(target_os = "macos")]
             {
                 window
@@ -351,7 +391,21 @@ pub async fn start_capture(app: AppHandle) -> Result<(), String> {
                     .set_size(tauri::PhysicalSize::new(width, height))
                     .map_err(|e| e.to_string())?;
             }
-            // The frontend shows the window only after the image has decoded.
+            capture_app
+                .state::<ScreenshotState>()
+                .images
+                .lock()
+                .unwrap()
+                .insert(
+                    window.label().to_string(),
+                    ScreenshotFrame {
+                        session: session.clone(),
+                        png: encode(&image)?,
+                    },
+                );
+            window
+                .emit_to(window.label(), "screenshot-session", Some(&session))
+                .map_err(|e| e.to_string())?;
         }
         Ok(())
     })
@@ -359,24 +413,50 @@ pub async fn start_capture(app: AppHandle) -> Result<(), String> {
     .map_err(|e| e.to_string())
     .and_then(|r| r);
     if result.is_err() {
-        close_capture(&app);
+        close_capture_windows(&app);
     }
     result
 }
-fn close_capture(app: &AppHandle) {
-    for (label, window) in app.webview_windows() {
-        if label.starts_with("snip-") {
-            let _ = window.destroy();
-        }
-    }
+fn close_capture_windows(app: &AppHandle) {
+    // Invalidate pending image loads before hiding; retain only empty webviews.
     app.state::<ScreenshotState>()
         .images
         .lock()
         .unwrap()
         .retain(|key, _| !key.starts_with("snip-"));
+    let keep_warm = app.get_webview_window("main").is_some();
+    for (label, window) in app.webview_windows() {
+        if label.starts_with("snip-") {
+            if !keep_warm || window.hide().is_err() {
+                let _ = window.destroy();
+            } else {
+                let _ =
+                    window.emit_to(window.label(), "screenshot-session", Option::<String>::None);
+            }
+        }
+    }
     app.state::<ScreenshotState>()
         .active
         .store(false, Ordering::SeqCst);
+}
+async fn close_capture(app: &AppHandle, session: Option<&str>) -> Result<(), String> {
+    let state = app.state::<ScreenshotState>();
+    let _guard = state.lifecycle.lock().await;
+    if let Some(session) = session {
+        if !state
+            .images
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(label, frame)| label.starts_with("snip-") && frame.session == session)
+        {
+            return Ok(());
+        }
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || close_capture_windows(&app))
+        .await
+        .map_err(|e| e.to_string())
 }
 #[tauri::command]
 pub async fn screenshot_start(window: WebviewWindow, app: AppHandle) -> Result<(), String> {
@@ -384,34 +464,77 @@ pub async fn screenshot_start(window: WebviewWindow, app: AppHandle) -> Result<(
     start_capture(app).await
 }
 #[tauri::command]
-pub fn screenshot_image(window: WebviewWindow, app: AppHandle) -> Result<String, String> {
+pub fn screenshot_session(window: WebviewWindow, app: AppHandle) -> Result<Option<String>, String> {
+    local_window(&window)?;
+    Ok(app
+        .state::<ScreenshotState>()
+        .images
+        .lock()
+        .unwrap()
+        .get(window.label())
+        .map(|frame| frame.session.clone()))
+}
+#[tauri::command]
+pub fn screenshot_image(
+    window: WebviewWindow,
+    app: AppHandle,
+    session: String,
+) -> Result<tauri::ipc::Response, String> {
     local_window(&window)?;
     app.state::<ScreenshotState>()
         .images
         .lock()
         .unwrap()
         .get(window.label())
-        .cloned()
+        .filter(|frame| frame.session == session)
+        .map(|frame| tauri::ipc::Response::new(frame.png.clone()))
         .ok_or("截图已结束".into())
 }
 #[tauri::command]
-pub fn screenshot_cancel(window: WebviewWindow, app: AppHandle) -> Result<(), String> {
+pub fn screenshot_show(
+    window: WebviewWindow,
+    app: AppHandle,
+    session: String,
+) -> Result<(), String> {
     local_window(&window)?;
-    close_capture(&app);
-    Ok(())
+    let state = app.state::<ScreenshotState>();
+    let images = state.images.lock().unwrap();
+    if !images
+        .get(window.label())
+        .is_some_and(|frame| frame.session == session)
+    {
+        return Ok(()); // A cancelled/replaced decode must never resurrect the overlay.
+    }
+    window.show().map_err(|e| e.to_string())?;
+    window.set_focus().map_err(|e| e.to_string())
 }
-fn pin(app: &AppHandle, data: String, width: u32, height: u32) -> Result<(), String> {
+#[tauri::command]
+pub async fn screenshot_cancel(
+    window: WebviewWindow,
+    app: AppHandle,
+    session: Option<String>,
+) -> Result<(), String> {
+    local_window(&window)?;
+    close_capture(&app, session.as_deref()).await
+}
+fn pin(app: &AppHandle, png: Vec<u8>, width: u32, height: u32) -> Result<(), String> {
     let label = format!("pin-{}", ulid::Ulid::new());
     let scale = (600.0 / width as f64).min(500.0 / height as f64).min(1.0);
     app.state::<ScreenshotState>()
         .images
         .lock()
         .unwrap()
-        .insert(label.clone(), data);
+        .insert(
+            label.clone(),
+            ScreenshotFrame {
+                session: ulid::Ulid::new().to_string(),
+                png,
+            },
+        );
     let result = WebviewWindowBuilder::new(
         app,
         &label,
-        WebviewUrl::App("index.html?screenshot=pin".into()),
+        WebviewUrl::App("screenshot.html?screenshot=pin".into()),
     )
     .title("园丁鸟贴图")
     .decorations(false)
@@ -474,9 +597,20 @@ pub async fn screenshot_output(
     app: AppHandle,
     data: String,
     action: String,
+    session: Option<String>,
 ) -> Result<bool, String> {
     local_window(&window)?;
-    tauri::async_runtime::spawn_blocking(move || {
+    if window.label().starts_with("snip-") || window.label().starts_with("pin-") {
+        let current = screenshot_session(window.clone(), app.clone())?;
+        if current.is_none() || current != session {
+            return Err("截图已结束".into());
+        }
+    }
+    let output_app = app.clone();
+    let output_window = window.clone();
+    let completed = tauri::async_runtime::spawn_blocking(move || -> Result<bool, String> {
+        let app = output_app;
+        let window = output_window;
         let image = decode(&data)?;
         match action.as_str() {
             "copy" => {
@@ -495,7 +629,7 @@ pub async fn screenshot_output(
                     })
                     .map_err(|e| e.to_string())?;
             }
-            "pin" => pin(&app, data, image.width(), image.height())?,
+            "pin" => pin(&app, encode(&image)?, image.width(), image.height())?,
             "save" => {
                 let path = app
                     .dialog()
@@ -517,13 +651,14 @@ pub async fn screenshot_output(
             }
             _ => return Err("未知截图操作".into()),
         }
-        if window.label().starts_with("snip-") {
-            close_capture(&app);
-        }
         Ok(true)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+    if completed && window.label().starts_with("snip-") {
+        close_capture(&app, session.as_deref()).await?;
+    }
+    Ok(completed)
 }
 #[cfg(test)]
 mod tests {
@@ -559,8 +694,31 @@ mod tests {
     #[test]
     fn png_roundtrip_and_reject_invalid_input() {
         let image = image::RgbaImage::from_pixel(7, 9, image::Rgba([1, 2, 3, 255]));
-        assert_eq!(decode(&encode(&image).unwrap()).unwrap(), image);
+        assert_eq!(
+            image::load_from_memory(&encode(&image).unwrap())
+                .unwrap()
+                .to_rgba8(),
+            image
+        );
         assert!(decode("data:image/png;base64,eA==").is_err());
         assert!(decode("file:///etc/passwd").is_err());
+    }
+
+    #[test]
+    #[ignore = "manual 4K encoding benchmark; synthetic pixels only"]
+    fn benchmark_capture_encoding() {
+        let image = image::RgbaImage::from_fn(3840, 2160, |x, y| {
+            image::Rgba([(x / 8) as u8, (y / 8) as u8, ((x + y) / 16) as u8, 255])
+        });
+        let start = std::time::Instant::now();
+        let mut old = Cursor::new(Vec::new());
+        image.write_to(&mut old, image::ImageFormat::Png).unwrap();
+        let old_data = STANDARD.encode(old.into_inner());
+        let before = start.elapsed();
+        let start = std::time::Instant::now();
+        let png = encode(&image).unwrap();
+        let after = start.elapsed();
+        assert_eq!(image::load_from_memory(&png).unwrap().to_rgba8(), image);
+        println!("4K encode: adaptive+base64={before:?} ({} bytes), fixed-filter+binary={after:?} ({} bytes)", old_data.len(), png.len());
     }
 }

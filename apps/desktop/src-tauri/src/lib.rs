@@ -292,6 +292,9 @@ pub fn run() {
             }
             let db = Arc::new(db::Database::open(&paths.db)?);
             db.migrate()?;
+            for path in db.external_paths()? {
+                app.asset_protocol_scope().allow_file(path)?;
+            }
             db.recover_project_deletions(&paths)?;
 
             // 用自定义根打开成功后，清理应用数据目录里的旧库残留（迁移不删，留到此步释放系统盘）。
@@ -383,10 +386,18 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::external_files::external_files_browse,
+            commands::external_files::external_files_preview,
+            commands::external_files::external_files_index,
+            commands::external_files::external_files_references,
+            commands::external_files::external_files_update,
+            commands::external_files::external_files_copy,
             commands::screenshot::screenshot_start,
             commands::screenshot::screenshot_record_shortcut,
             commands::screenshot::screenshot_cancel,
             commands::screenshot::screenshot_image,
+            commands::screenshot::screenshot_session,
+            commands::screenshot::screenshot_show,
             commands::screenshot::screenshot_output,
             commands::screenshot::screenshot_paste,
             commands::screenshot::screenshot_set_shortcuts,
@@ -553,6 +564,7 @@ pub fn run() {
             commands::local_classification::local_classification_enable,
             commands::local_classification::local_classification_labels,
             commands::local_classification::local_classification_save_label,
+            commands::local_classification::local_classification_delete_labels,
             commands::local_classification::local_classification_example,
             commands::library::palette_overview,
             commands::library::list_assets_by_color,

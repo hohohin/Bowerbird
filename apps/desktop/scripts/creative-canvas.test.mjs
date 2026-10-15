@@ -8,8 +8,6 @@ import {
   canvasAssetMediaPath,
   canvasPromptReferences,
   agentPromptGroupMap,
-  canvasSourceColumnCount,
-  clampCanvasSourceThumbnailScale,
   hydrateProjectCanvas,
   isCanvasAssetHydrationCurrent,
   newProjectCanvasAssetNode,
@@ -166,14 +164,6 @@ function snapshot(nodes, overrides = {}) {
     ...overrides,
   };
 }
-
-test("canvas source thumbnail scale maps large previews to fewer columns", () => {
-  assert.equal(canvasSourceColumnCount(1), 3);
-  assert.equal(canvasSourceColumnCount(2), 2);
-  assert.equal(canvasSourceColumnCount(3), 1);
-  assert.equal(canvasSourceColumnCount(99), 1);
-  assert.equal(clampCanvasSourceThumbnailScale(Number.NaN), 2);
-});
 
 test("execution graph edges project onto the live asset and group layout", () => {
   const direct = node("node-direct", "asset-direct", 1);
@@ -619,6 +609,7 @@ for (const collection of ["promptGraphNodes", "agentGraphNodes"]) {
       const summary = () => ({ status, jobId: "job", runId: "run" });
       const bindings = { React, X: () => null, selectCloudAgentResultArtifacts, promptNodeSummary: summary, agentGroupSummary: summary,
         conversationCards: { cards: new Map() }, nodeRect: (node) => node,
+        conversationImages: () => [], imageOnlyConversationIds: new Set(),
         cloudAgentRuns: {}, genJobs: {}, focusedNodeId: null, activeDragId: null, focusedThreadId: null,
         supersededTaskIds: new Set(), ReadonlyPrompt: () => null, CanvasResizeHandle: () => null, promptReferences: new Map(), graphNodes: [], agentPromptGroups: new Map(),
         selectedCanvasNodeIds: new Set(), selectedCanvasNodeIdsRef: { current: new Set() },
@@ -815,7 +806,7 @@ test("canvas Ctrl+Z undoes removal without taking over text editing or adding to
   ]) {
     let undone = 0;
     let prevented = 0;
-    const bindings = { promptMenuRef: { current: null }, scopedInspectorOpen: false, viewModeRef: { current: "canvas" },
+    const bindings = { promptMenuRef: { current: null }, workflowAgentDetail: null, scopedInspectorOpen: false, viewModeRef: { current: "canvas" },
       nodeDragRef: { current: null }, graphNodeDragRef: { current: null }, undoHistoryRef: { current: [{}] },
       document: { querySelector: () => null }, undoCanvasAction: () => undone++ };
     const onKeyDown = new Function(...Object.keys(bindings), code + ";return onKeyDown;")(...Object.values(bindings));

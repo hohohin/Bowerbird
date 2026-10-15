@@ -91,12 +91,12 @@ pub struct AppSettings {
     #[serde(default = "default_dreamina_model_version")]
     pub dreamina_model_version: String,
 
-    /// 本地分类的云端最终校验（TypeSafe Jev）。默认关闭；启用后仅发送图片的
-    /// 文字描述与标签文本，图片本身不出机。
+    /// Jev 图片 API 分类。默认关闭；启用后发送目标缩略图、人工示例与标签定义。
+    /// 与旧版文字校验开关分开，旧设置不能自动授权图片上传。
     #[serde(default)]
-    pub jev_verify_enabled: bool,
+    pub jev_image_classification_enabled: bool,
 
-    /// TypeSafe API Key（console.typesafe.ai 申请）；为空时即使开关开启也不启用校验。
+    /// TypeSafe API Key；图片分类开启而 Key 为空时拒绝运行。
     #[serde(default)]
     pub jev_api_key: Option<String>,
 
@@ -138,7 +138,7 @@ impl Default for AppSettings {
             generation_completion_sound: true,
             samples_seeded: false,
             dreamina_model_version: DEFAULT_DREAMINA_MODEL_VERSION.to_string(),
-            jev_verify_enabled: false,
+            jev_image_classification_enabled: false,
             jev_api_key: None,
             agent_mode_enabled: true,
             agent_a_mode_enabled: false,
@@ -334,10 +334,19 @@ mod tests {
     }
 
     #[test]
-    fn jev_gate_defaults_off_without_key() {
+    fn jev_images_default_off_without_key() {
         let settings: AppSettings = serde_json::from_str("{}").unwrap();
-        assert!(!settings.jev_verify_enabled);
+        assert!(!settings.jev_image_classification_enabled);
         assert!(settings.jev_api_key.is_none());
+    }
+
+    #[test]
+    fn old_text_verification_does_not_enable_image_uploads() {
+        let settings: AppSettings = serde_json::from_str(
+            r#"{"jev_verify_enabled":true,"jev_api_key":"old-key"}"#,
+        ).unwrap();
+        assert!(!settings.jev_image_classification_enabled);
+        assert_eq!(settings.jev_api_key.as_deref(), Some("old-key"));
     }
 
     #[test]

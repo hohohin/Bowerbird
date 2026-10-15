@@ -98,7 +98,7 @@ try {
     for (const line of [groupInput, groupOutput]) assert.equal(await stroke(line), 'rgb(101, 183, 164)', 'group highlights both input and product connections');
     assert.equal(await stroke(groupEdge), 'rgba(167, 139, 250, 0.72)', 'native edge follows its grouped material anchor');
     await select(native('session-one').locator('.canvas-prompt-content'));
-    assert.equal(await stroke(sessionLink), 'rgb(124, 156, 219)', 'session link follows the visible conversation anchor');
+    assert.equal(await stroke(sessionLink), 'rgb(101, 183, 164)', 'unified image output follows the visible conversation anchor');
     assert.equal(await stroke(sessionInput), 'rgb(101, 183, 164)', 'old turn input follows the same anchor');
     assert.notEqual(await stroke(nativeEdge), muted);
     await select(card('unrelated').locator('header strong'));

@@ -616,6 +616,10 @@ impl Database {
     /// 仅供用户手动改名调用——autoname 仍走 `update_asset_name_if_auto`（只改 DB，不跟随；
     /// 且写回置 name_manual=1，此后 autoname 条件写不再覆盖，手改名保护）。
     pub fn rename_asset_files(&self, id: &str, new_name: &str) -> AppResult<()> {
+        if self.is_external_asset(id)? {
+            self.conn.lock().unwrap().execute("UPDATE assets SET name=?2,name_manual=1 WHERE id=?1", rusqlite::params![id,new_name])?;
+            return Ok(());
+        }
         // 先取路径，drop conn 后再做文件 IO（delete_asset 同模式）。
         let (store_path, thumb_path) = {
             let conn = self.conn.lock().unwrap();
@@ -748,7 +752,7 @@ impl Database {
     pub fn list_origin_paths(&self) -> AppResult<std::collections::HashSet<String>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt =
-            conn.prepare("SELECT origin_path FROM assets WHERE origin_path IS NOT NULL")?;
+            conn.prepare("SELECT origin_path FROM assets WHERE origin_path IS NOT NULL AND id NOT IN (SELECT asset_id FROM external_assets)")?;
         let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
         let mut out = std::collections::HashSet::new();
         for row in rows {
@@ -761,6 +765,7 @@ impl Database {
         // 先取出磁盘路径（删 DB 后查不到）。asset_prompts/asset_tags/analyses
         // 由外键 ON DELETE CASCADE 自动清理（foreign_keys 在连接打开时已启用）。
         let conn = self.conn.lock().unwrap();
+        let external: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM external_assets WHERE asset_id=?1)", [id], |r| r.get(0))?;
         let (store_path, thumb_path): (Option<String>, Option<String>) = conn
             .query_row(
                 "SELECT store_path, thumb_path FROM assets WHERE id = ?1",
@@ -774,10 +779,10 @@ impl Database {
         tx.execute("DELETE FROM assets WHERE id = ?1", rusqlite::params![id])?;
         tx.commit()?;
         drop(conn); // 释放锁后再做文件 IO，避免阻塞其它 DB 操作。
-        delete_asset_files(
-            store_path.as_deref().map(Path::new),
-            thumb_path.as_deref().map(Path::new),
-        );
+        // External previews are shared cache files; neither they nor originals belong to this row.
+        if !external {
+            delete_asset_files(store_path.as_deref().map(Path::new), thumb_path.as_deref().map(Path::new));
+        }
         Ok(())
     }
 

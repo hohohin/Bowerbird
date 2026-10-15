@@ -19,11 +19,17 @@
 set -euo pipefail
 
 IDENTITY="Bowerbird Local Code Signing"
-SIGNING_DIR=$(cd "$(dirname "$0")/.signing" && pwd)
-CRT="$SIGNING_DIR/codesign.crt"
-KEY="$SIGNING_DIR/codesign.key"
+SIGNING_DIR="$(cd "$(dirname "$0")" && pwd)/.signing"
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
+umask 077
+if [ "${1:-}" = "--dry-run" ]; then
+  SIGNING_DIR="$WORK"
+else
+  mkdir -p "$SIGNING_DIR"
+fi
+CRT="$SIGNING_DIR/codesign.crt"
+KEY="$SIGNING_DIR/codesign.key"
 
 # shellcheck disable=SC2312
 identity_in_keychain() { security find-certificate -c "$IDENTITY" >/dev/null 2>&1; }
@@ -31,8 +37,13 @@ identity_in_keychain() { security find-certificate -c "$IDENTITY" >/dev/null 2>&
 if [ "${1:-}" != "--dry-run" ] && [ -f "$KEY" ] && [ -f "$CRT" ] && identity_in_keychain; then
   echo "==> 已配置：${CRT} 存在且钥匙串含“${IDENTITY}”，跳过生成，仅做试签验证"
 else
-  # 自签名证书需带 codeSigning EKU 才能被 codesign 接受；配置文件写法兼容 LibreSSL/macOS 自带 openssl。
-  cat > "$WORK/openssl.cnf" <<'EOF'
+  if { [ -f "$KEY" ] && [ ! -f "$CRT" ]; } || { [ -f "$CRT" ] && [ ! -f "$KEY" ]; }; then
+    echo "错误：本地证书或私钥缺失，已保留现有文件；请恢复配对文件后重试。" >&2
+    exit 1
+  fi
+  if [ ! -f "$KEY" ]; then
+    # 自签名证书需带 codeSigning EKU 才能被 codesign 接受；配置文件写法兼容 LibreSSL/macOS 自带 openssl。
+    cat > "$WORK/openssl.cnf" <<'EOF'
 [req]
 distinguished_name = dn
 x509_extensions = v3_codesign
@@ -46,11 +57,12 @@ keyUsage = critical,digitalSignature
 extendedKeyUsage = codeSigning
 subjectKeyIdentifier = hash
 EOF
-  openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
-    -keyout "$KEY" -out "$CRT" \
-    -config "$WORK/openssl.cnf"
-  openssl x509 -in "$CRT" -noout -subject
-  openssl x509 -in "$CRT" -noout -text | grep -A1 "Extended Key Usage"
+    openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+      -keyout "$KEY" -out "$CRT" \
+      -config "$WORK/openssl.cnf"
+    openssl x509 -in "$CRT" -noout -subject
+    openssl x509 -in "$CRT" -noout -text | grep -A1 "Extended Key Usage"
+  fi
 
   if [ "${1:-}" = "--dry-run" ]; then
     echo "==> dry-run：证书生成验证通过（${CRT}），未导入钥匙串"

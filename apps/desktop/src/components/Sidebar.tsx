@@ -461,7 +461,7 @@ export function Sidebar() {
               )}
               <button
                 onClick={() => setClassificationOpen(true)}
-                title="本地分类：识别图片、创建标签和寻找匹配"
+                title="自动分类：识别图片、创建标签和寻找匹配"
                 className="rounded px-1 text-cold hover:opacity-80 disabled:opacity-40"
               >
                 管理

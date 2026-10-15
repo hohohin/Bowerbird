@@ -1,6 +1,7 @@
 import { readFile, stat, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
+import { verifyUpdate } from "./verify-update.mjs";
 
 // Mirrors Windows/update-manifest.mjs for the darwin updater channels. The
 // artifact is the tar.gz the Tauri bundler signs, published under a versioned
@@ -22,6 +23,8 @@ export async function writeUpdateManifest(bundle, arch, downloadUrl, output, not
   if (!decoded.startsWith("untrusted comment:") || !decoded.includes("trusted comment:")) {
     throw new Error("Missing or malformed Tauri updater signature");
   }
+  const mac = JSON.parse(await readFile(new URL("../apps/desktop/src-tauri/tauri.macos.conf.json", import.meta.url), "utf8"));
+  verifyUpdate(await readFile(bundle), signature, mac.plugins.updater.pubkey);
   const manifest = {
     version: config.version,
     notes: notesFile ? (await readFile(notesFile, "utf8")).trim() : "改进与问题修复。更新在本机完成，素材、项目和登录状态保留。",

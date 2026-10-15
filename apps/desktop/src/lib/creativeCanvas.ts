@@ -97,18 +97,6 @@ export function agentPromptGroupMap(nodes: readonly CanvasNode[], edges: readonl
   return groups;
 }
 
-export const DEFAULT_CANVAS_SOURCE_THUMBNAIL_SCALE = 2;
-
-export function clampCanvasSourceThumbnailScale(value: number): number {
-  if (!Number.isFinite(value)) return DEFAULT_CANVAS_SOURCE_THUMBNAIL_SCALE;
-  return Math.min(3, Math.max(1, Math.round(value)));
-}
-
-/** A larger thumbnail scale intentionally means fewer masonry columns. */
-export function canvasSourceColumnCount(thumbnailScale: number): number {
-  return 4 - clampCanvasSourceThumbnailScale(thumbnailScale);
-}
-
 export interface HydratedProjectCanvas {
   nodes: ProjectCanvasUiNode[];
   pan: CanvasPoint;

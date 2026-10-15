@@ -77,4 +77,4 @@ w.__TAURI_INTERNALS__ = {
 };
 useStore.setState({ assets: [source], layerWorkspaceIds: new Set(saved ? [source.id] : []), activeProjectId: "project-original", cloudAuth: { logged_in: true, cloud_available: true, user_id: "user-original" } as any });
 const open = () => useStore.getState().openLayerEditor("source");
-createRoot(document.getElementById("root")!).render(<><button onClick={open}>打开分层编辑</button><button onClick={() => useStore.setState({ contextMenu: { assetId: "source", x: 120, y: 80, asset: source } as any })}>打开右键菜单</button><div style={{ width: 300 }}><MasonryGrid columnCount={1} assetsOverride={[source]} /></div><LayerEditor /><AssetContextMenu /></>);
+createRoot(document.getElementById("root")!).render(<><button onClick={open}>打开分层编辑</button><button onClick={() => useStore.setState({ contextMenu: { assetId: "source", x: 120, y: 80, asset: source } as any })}>打开右键菜单</button><div style={{ width: 300 }}><MasonryGrid assetsOverride={[source]} /></div><LayerEditor /><AssetContextMenu /></>);

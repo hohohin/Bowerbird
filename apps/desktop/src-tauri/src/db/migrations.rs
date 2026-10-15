@@ -82,6 +82,7 @@ pub fn migrations() -> Migrations<'static> {
         M::up(include_str!("../../sql/0031_canvas_workflows.sql")),
         M::up(include_str!("../../sql/0032_parallel_canvas_workflows.sql")),
         M::up(include_str!("../../sql/0033_workflow_templates.sql")),
+        M::up(include_str!("../../sql/0034_external_assets.sql")),
     ])
 }
 

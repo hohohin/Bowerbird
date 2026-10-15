@@ -93,7 +93,7 @@ try {
   assert.deepEqual(await selected(), ["b"], "Shift must select even with an active composer");
   assert.deepEqual(await page.evaluate(() => window.picked), ["a"]);
 
-  // Real resize control: all controls stay on one row without overlap at narrow/wide sizes.
+  // Real resize control: controls wrap at narrow widths without overlap.
   const resizer = page.getByRole("separator", { name: "调整素材面板宽度" });
   await mkdir(".tmp/canvas-source", { recursive: true });
   for (const [name, key, steps] of [["narrow", "ArrowLeft", 12], ["wide", "ArrowRight", 20]]) {
@@ -104,18 +104,21 @@ try {
         const { x, y, width, height } = header.querySelector(selector).getBoundingClientRect();
         return { x, y, width, height };
       };
-      return { tabs: rect(".canvas-source-tabs"), collapse: rect(".canvas-source-collapse"), scale: rect(".canvas-source-scale-dots"), overflow: header.scrollWidth > header.clientWidth };
+      return { tabs: rect(".canvas-source-tabs"), collapse: rect(".canvas-source-collapse"), scale: rect(".thumbnail-size-slider"), overflow: header.scrollWidth > header.clientWidth };
     });
     assert.equal(geometry.overflow, false);
     for (const control of Object.values(geometry).filter(value => typeof value === "object")) assert.equal(control.height, 28);
     assert.equal(geometry.tabs.y, geometry.collapse.y);
-    assert.equal(geometry.scale.y, geometry.tabs.y);
-    assert.ok(geometry.tabs.x + geometry.tabs.width <= geometry.scale.x);
+    if (name === "narrow") assert.ok(geometry.scale.y >= geometry.tabs.y + geometry.tabs.height);
+    else {
+      assert.equal(geometry.scale.y, geometry.tabs.y);
+      assert.ok(geometry.tabs.x + geometry.tabs.width <= geometry.scale.x);
+    }
     assert.ok(geometry.scale.x + geometry.scale.width <= geometry.collapse.x);
     await panel.locator(".canvas-source-header").screenshot({ path: `.tmp/canvas-source/${name}.png`, scale: "css" });
   }
-  await panel.getByRole("button", { name: "大缩略图", exact: true }).click();
-  assert.equal(await panel.getByRole("button", { name: "大缩略图", exact: true }).getAttribute("aria-pressed"), "true");
+  await panel.getByRole("slider", { name: "项目素材大小" }).fill("208");
+  assert.equal(await panel.getByRole("slider", { name: "项目素材大小" }).inputValue(), "208");
   await panel.getByRole("button", { name: "收起画板素材库" }).click();
   await panel.getByRole("button", { name: "展开画板素材库" }).click();
   await panel.getByRole("tab", { name: "项目素材" }).waitFor();

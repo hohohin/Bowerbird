@@ -7,6 +7,7 @@ await server.listen();
 const browser = await chromium.launch({ channel:'chrome', headless:true });
 const page = await browser.newPage({ viewport:{width:1600,height:1000} });
 page.setDefaultTimeout(10000);
+page.setDefaultNavigationTimeout(60000);
 const errors = [];
 page.on('pageerror', e => errors.push(e.message));
 const button = name => page.getByRole('button', {name,exact:true}).last();

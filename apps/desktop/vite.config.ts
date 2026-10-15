@@ -28,6 +28,9 @@ export default defineConfig({
   },
   envPrefix: ["VITE_", "TAURI_ENV_*"],
   build: {
+    rollupOptions: {
+      input: { main: resolve(__dirname, "index.html"), screenshot: resolve(__dirname, "screenshot.html") },
+    },
     target: "es2021",
     minify: "esbuild",
     sourcemap: false,
