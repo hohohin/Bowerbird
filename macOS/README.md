@@ -2,6 +2,10 @@
 
 本目录记录 Mac 上的本地开发、运行和未签名构建流程。Bowerbird 使用 canonical Tauri / React / Rust 源码，不维护 macOS override。构建架构以 `rustc -vV` 的 host 为准；Intel 为 `x86_64-apple-darwin`，Apple Silicon 原生工具链为 `aarch64-apple-darwin`。
 
+## 2026-10-15 原 Mac 签名机接续（Intel 官网待切换）
+
+在隔离工作树同步 `origin/mac@c718c0b`，保留开发机分叉历史及未提交增量。复用 Intel `ef6b6f0` 现成归档，以本机原 updater 私钥补签并生成有效 `darwin-x86_64-26.10.1501.json`；新增 `.sig`/清单已上传 R2，公网原包哈希与主/可信备注验签、文件一致性均通过。没有重新构建或改动原 tar/DMG。官网 Intel 仍为 404，候选入口已准备，缺签名机的 VPS SSH 登录凭据；Windows 26.10.1001 与 M 系列 26.10.801 保持。完整产物哈希、证据与发布边界见 [桌面自动更新](../dev-doc/DESKTOP-UPDATES.md)。
+
 ## 2026-10-15 Intel 26.10.1501 发版交接
 
 本轮按用户要求存档推送全部当前桌面增量，再构建 Intel 手动安装 DMG 与待签名 `.app.tar.gz` 并上传 R2，由另一台机器沿原 Mac updater 私钥签名。本机只在构建参数关闭 updater 产物自动签名，仓库更新公钥/入口/正式签名要求保持。包含 SQLite 0034；不部署云服务，不切官网更新清单。内容、测试、产物哈希和上传状态统一记录于 [桌面自动更新](../dev-doc/DESKTOP-UPDATES.md#intel-26101501-存档与-r2-交接2026-10-15)。本轮只读公网复核 M 系列已为 26.10.801、Intel 仍为 404。

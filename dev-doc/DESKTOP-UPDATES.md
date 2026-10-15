@@ -2,6 +2,20 @@
 
 本页集中维护自动更新的技术约定、发布操作和部署证据；[PROJECT.md](../PROJECT.md) 只保留项目级摘要及入口。更新代码、构建签名包、发布清单、排查双端差异前先读本页。
 
+## Intel 26.10.1501 原 Mac 密钥补签（2026-10-15，官网待切换）
+
+签名机经系统已配置的 `127.0.0.1:12000` 代理 fetch，隔离工作树同步 `origin/mac@c718c0b`。本机开发分支 `4cc1faf` 与远端已有分叉，未合并或移动其未提交工作；本轮仅接续 `ef6b6f0` 构建的现成 Intel 文件，不重编译、重压缩或重新 codesign 已有应用。下载交接 ZIP 后校验总哈希、CRC 和内部 SHA256SUMS；沿原 `macOS/.signing/updater.key` 给 tar 原字节补签，不替换更新密钥。交接脚本验证原公钥主签名、可信备注、原包哈希和篡改拒绝后生成版本化清单。
+
+| 文件 | SHA-256 |
+|---|---|
+| `Bowerbird_26.10.1501_x86_64.app.tar.gz`（原包保持） | `983a99d0695468ebcda36b0210e373f54bc82dd63f4ace23408507143069528d` |
+| `Bowerbird_26.10.1501_x86_64.app.tar.gz.sig`（新增） | `86af69dc05ef3de7d82e83fb2d5a169213ca02b4e2db94549245fe719d3a1e7d` |
+| `darwin-x86_64-26.10.1501.json`（新增） | `70b092e3fced6f4f598efd8948e229cdef80a2ac364ecbbd6ec24294abf01e4e` |
+
+新增签名和清单已上传同一 R2 `mac_package/`，包 URL 继续使用下节原 Intel tar；原 DMG 与 ZIP 保持。公网完整下载原包为 87,365,199 bytes、哈希符合上表，并用公网 `.sig` 复验原公钥主签名与可信备注；公网清单/签名与本地逐字节一致。包内 Info.plist 26.10.1501、Mach-O x86_64、`codesign --verify --deep --strict` 和 DMG `hdiutil verify` 通过；同步后的 `macOS/update-release.test.mjs` 通过。下节 482 项 Rust/界面/构建为 Intel 出包机已有证据，本轮没有重跑。未启动实际应用、写用户库、调用模型、执行原生升级或 Apple 公证。
+
+签名机本地产物 `macOS/dist/intel-26.10.1501-signed/`；证据与候选脚本 `.tmp/intel-sign-26.10.1501/`。已根据现役双首页准备 Intel DMG 按钮和平台说明，保留当前 Windows 26.10.1001、ARM 26.10.801 链接。**官网 Intel 通道仍为 404，尚未完成切换**：签名机 SSH agent 无身份，现有配置不含 VPS 登录方式，不能用 R2 凭据修改 VPS 文件。待提供可用 SSH 后，从现役网站复制候选，新增 `downloads/updates/darwin-x86_64.json` 与双首页 Intel 入口，验证后原子切换；不覆盖现役 server/env/Windows/ARM 清单，保留原目录回滚。R2 版本化清单可直接用于发布侧接续。
+
 ## Intel 26.10.1501 存档与 R2 交接（2026-10-15）
 
 本次用户明确交付范围：存档推送后构建 Intel 文件并上传 R2，另一台机器用既有 Mac updater 私钥签名。无需本机提供替代私钥，不切官网清单，不新建正式 `darwin-x86_64.json`。源码包含本机文件/外部图片引用（SQLite `0034`）、Jev 图片分类与 Cloud 补标签、分类管理、截图预热/像素微调、自适应素材缩略图/标签筛选与单行工具栏。无云端代码部署或云数据库迁移。
