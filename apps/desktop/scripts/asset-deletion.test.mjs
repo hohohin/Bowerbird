@@ -2,6 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { canMoveAssetOut } from "../src/lib/assetDeletion.ts";
 
+test("external originals cannot be moved out by library deletion", () => {
+  assert.equal(canMoveAssetOut({ source: "external", origin_path: "/Users/test/Pictures/original.png" }), false);
+});
+
 test("browser-collected assets cannot be moved back to a temporary origin", () => {
   assert.equal(canMoveAssetOut({ source: "extension", origin_path: "D:\\Pictures\\source.png" }), false);
 });

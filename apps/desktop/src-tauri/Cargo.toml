@@ -1,6 +1,6 @@
 [package]
 name = "bowerbird-desktop"
-version = "26.10.801"
+version = "26.10.1501"
 description = "Bowerbird desktop app"
 authors = ["Bowerbird"]
 edition = "2021"
@@ -131,3 +131,18 @@ strip = true
 # dev 下用更快编译
 [profile.dev]
 incremental = true
+
+# Full-screen pixel conversion/PNG loops otherwise take seconds in debug builds.
+# Keep application code debuggable while optimizing the capture hot path.
+[profile.dev.package.image]
+opt-level = 3
+[profile.dev.package.png]
+opt-level = 3
+[profile.dev.package.fdeflate]
+opt-level = 3
+[profile.dev.package.simd-adler32]
+opt-level = 3
+[profile.dev.package.crc32fast]
+opt-level = 3
+[profile.dev.package.xcap]
+opt-level = 3

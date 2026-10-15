@@ -25,8 +25,8 @@ pub async fn local_classification_start(
     pending_only: bool,
 ) -> Result<(), String> {
     let snapshot = settings.get();
-    let jev_key = if snapshot.jev_verify_enabled {
-        snapshot.jev_api_key.filter(|key| !key.trim().is_empty())
+    let jev_key = if snapshot.jev_image_classification_enabled {
+        Some(snapshot.jev_api_key.unwrap_or_default())
     } else {
         None
     };
@@ -95,6 +95,18 @@ pub async fn local_classification_save_label(
         .map_err(|e| e.to_string())?;
     let _ = app.emit("library://assets-changed", ());
     Ok(result)
+}
+
+#[tauri::command]
+pub async fn local_classification_delete_labels(
+    app: AppHandle,
+    classifier: State<'_, Arc<LocalClassifier>>,
+    db: State<'_, Arc<Database>>,
+    tag_ids: Vec<String>,
+) -> Result<(), String> {
+    classifier.delete_labels(&db, &tag_ids)?;
+    let _ = app.emit("library://assets-changed", ());
+    Ok(())
 }
 
 #[tauri::command]

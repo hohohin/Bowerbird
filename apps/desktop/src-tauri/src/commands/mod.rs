@@ -63,3 +63,5 @@ pub async fn db_health(db: State<'_, Arc<Database>>) -> Result<String, AppError>
 pub mod dreamina_account;
 
 pub mod video_poster;
+
+pub mod external_files;

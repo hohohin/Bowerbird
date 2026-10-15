@@ -71,6 +71,8 @@ import {
   X,
 } from "lucide-react";
 import { MasonryGrid } from "./MasonryGrid";
+import { CanvasSourceTags } from "./CanvasSourceTags";
+import { ThumbnailSizeSlider } from "./ThumbnailSizeSlider";
 import { Lightbox } from "./Lightbox";
 import { CreativeComposer } from "./CreativeComposer";
 import { CanvasConversation } from "./CanvasConversation";
@@ -126,7 +128,6 @@ import {
 } from "../lib/canvasLogic";
 import { BOARD_ASSET_PICK_EVENT } from "./creation/useCreationEditor";
 import {
-  canvasSourceColumnCount,
   canvasAssetNodeSize,
   canvasAssetMediaPath,
   canvasPromptReferences,
@@ -134,9 +135,7 @@ import {
   CANVAS_REMOVE_NODES_EVENT,
   CANVAS_ARRANGE_NODES_EVENT,
   type CanvasArrangeNodesEventDetail,
-  clampCanvasSourceThumbnailScale,
   createCanvasAssetSnapshot,
-  DEFAULT_CANVAS_SOURCE_THUMBNAIL_SCALE,
   hydrateProjectCanvas,
   newProjectCanvasAssetNode,
   newProjectCanvasGroup,
@@ -176,17 +175,7 @@ let canvasClipboardText = "";
 const FOLDER_WIDTH = 204;
 const FOLDER_HEIGHT = 178;
 const DEFAULT_TITLE = "未命名创作";
-const CANVAS_SOURCE_THUMBNAIL_SCALE_KEY = "bowerbird.canvasSourceThumbnailScale";
 const CANVAS_SNAP_ENABLED_KEY = "bowerbird.canvasSnapEnabled";
-
-function readCanvasSourceThumbnailScale(): number {
-  try {
-    const stored = Number(localStorage.getItem(CANVAS_SOURCE_THUMBNAIL_SCALE_KEY));
-    return stored ? clampCanvasSourceThumbnailScale(stored) : DEFAULT_CANVAS_SOURCE_THUMBNAIL_SCALE;
-  } catch {
-    return DEFAULT_CANVAS_SOURCE_THUMBNAIL_SCALE;
-  }
-}
 
 type CanvasNode = ProjectCanvasUiNode;
 type CanvasAssetNode = Extract<CanvasNode, { kind: "asset" }>;
@@ -551,7 +540,7 @@ export function CanvasWorkspace({
   const explainTutorialSources = useOnboarding(state => state.guide.status === "active" && state.guide.role === "designer"
     && state.guide.sessions.designer?.projectId === projectId && [2, 7, 8].includes(state.guide.sessions.designer.step));
   const sourcePanelId = useId();
-  const [sourceThumbnailScale, setSourceThumbnailScale] = useState(readCanvasSourceThumbnailScale);
+  const sourceItemWidth = useStore(s => s.canvasThumbnailWidth);
   const [sourceScope, setSourceScope] = useState<CanvasSourceScope>(() => project?.provisional ? "library" : "project");
   const [librarySourceAssets, setLibrarySourceAssets] = useState<Asset[]>([]);
   const [canvasAssets, setCanvasAssets] = useState<Asset[]>([]);
@@ -848,6 +837,7 @@ export function CanvasWorkspace({
     return scopedAssets.filter((asset) => (asset.generation_session_id != null) === (smartFilter === "source:generated"));
   }, [sourceScope, librarySourceAssets, assets, smartFilter]);
   const sourceTotal = sourceScope === "library" ? librarySourceTotal : assetTotal;
+  const libraryTagFilter = smartFilter?.startsWith("tag:") ? smartFilter : null;
   // 素材库 tab 顶部文件夹区域：仅普通文件夹（约定 12：collection/smart 不承载 folder_id 位置）。
   const libraryFolders = useMemo(
     () => folders.filter((folder) => folder.id !== "root" && (folder.kind ?? "folder") === "folder"),
@@ -1382,9 +1372,11 @@ export function CanvasWorkspace({
       setLibrarySourceLoading(true);
       try {
         const [nextAssets, nextTotal] = await Promise.all([
-          api.listAssets(librarySourceFolderId ?? undefined, null),
+          libraryTagFilter
+            ? api.listAssetsSmart(libraryTagFilter, null)
+            : api.listAssets(librarySourceFolderId ?? undefined, null),
           // 选定文件夹时 countAssets 无对应参数，直接用本页数量（总数仅驱动空态文案）。
-          librarySourceFolderId ? Promise.resolve(null) : api.countAssets(null),
+          librarySourceFolderId && !libraryTagFilter ? Promise.resolve(null) : api.countAssets(null),
         ]);
         if (!alive || version !== requestVersion) return;
         setLibrarySourceAssets(nextAssets);
@@ -1405,7 +1397,7 @@ export function CanvasWorkspace({
       alive = false;
       unlisten?.();
     };
-  }, [sourceScope, librarySourceFolderId]);
+  }, [sourceScope, librarySourceFolderId, libraryTagFilter]);
 
   useEffect(() => {
     const token = ++loadTokenRef.current;
@@ -2290,6 +2282,7 @@ export function CanvasWorkspace({
       if (loadingRef.current || viewModeRef.current !== "canvas"
         || detail.projectId !== activeCanvasRef.current.id || useStore.getState().projectRoutePending) return;
       const projectId = detail.projectId;
+      const frozenProject = activeCanvasRef.current;
       const point = toBoardPoint(detail.clientX, detail.clientY);
       const order = nodesRef.current.reduce((max, node) => Math.max(max, node.order), 0) + 1;
       detail.place = async (asset) => {
@@ -2300,13 +2293,14 @@ export function CanvasWorkspace({
           x: point.x - size.width / 2, y: point.y - size.height / 2,
           ...size, order,
         };
-        // Capture already materialized this project. Persist to the frozen ID
-        // even if another project is now visible, without moving the viewport.
+        // Persist to the frozen project even when indexing finishes after navigation.
         await enqueueWrite(async () => {
+          await ensureMaterialized(frozenProject);
           await api.projectCanvasNodeCreate(newProjectCanvasAssetNode(projectId, node));
           const route = useStore.getState();
           if (stage?.isConnected && activeCanvasRef.current.id === projectId
             && route.activeProjectId === projectId && !route.projectRoutePending) {
+            setCanvasAssets(current => [...current.filter(item => item.id !== asset.id), asset]);
             commitNodes([...nodesRef.current.filter(existing => existing.id !== node.id), node]);
           }
         });
@@ -2316,6 +2310,21 @@ export function CanvasWorkspace({
     stage.addEventListener(EXPLORER_CANVAS_DROP_EVENT, prepareDrop);
     return () => stage.removeEventListener(EXPLORER_CANVAS_DROP_EVENT, prepareDrop);
   }, []);
+
+  useEffect(() => {
+    let alive = true;
+    let cleanup: (() => void) | undefined;
+    if (!projectId) return;
+    const targetProjectId = projectId;
+    listen("external-files://changed", async () => {
+      try {
+        const snapshot = await api.projectCanvasGet(targetProjectId);
+        const exact = await api.getAssetsByIds(projectCanvasAssetIds(snapshot.nodes));
+        if (alive) setCanvasAssets(exact);
+      } catch (reason) { if (alive) reportError(reason); }
+    }).then(fn => { if (alive) cleanup = fn; else fn(); });
+    return () => { alive = false; cleanup?.(); };
+  }, [projectId]);
 
   function openCanvasNodeMenu(event: React.MouseEvent<HTMLElement>, nodeId: string, node: ProjectGraphNode | null = null) {
     event.preventDefault();
@@ -3510,7 +3519,6 @@ export function CanvasWorkspace({
   }
 
   const hoverTargetId = hoverIntent?.targetId ?? null;
-  const panelColumns = canvasSourceColumnCount(sourceThumbnailScale);
   const archivedThreadIds = useMemo(
     () => new Set(threads.filter((thread) => thread.archivedAt != null).map((thread) => thread.id)),
     [threads],
@@ -3823,47 +3831,25 @@ export function CanvasWorkspace({
             </div>
           </div>
           <div className="canvas-source-view-controls">
-            <div className="canvas-source-scale-control" title="调整素材缩略图大小">
-              <div className="canvas-source-scale-dots" role="group" aria-label="调整素材缩略图大小">
-                {[1, 2, 3].map((scale) => {
-                  const label = scale === 1 ? "小" : scale === 2 ? "中" : "大";
-                  return (
-                    <button
-                      key={scale}
-                      type="button"
-                      className={sourceThumbnailScale === scale ? "is-active" : ""}
-                      aria-label={`${label}缩略图`}
-                      aria-pressed={sourceThumbnailScale === scale}
-                      onClick={() => {
-                        const next = clampCanvasSourceThumbnailScale(scale);
-                        setSourceThumbnailScale(next);
-                        try {
-                          localStorage.setItem(CANVAS_SOURCE_THUMBNAIL_SCALE_KEY, String(next));
-                        } catch {
-                          // Storage can be unavailable in hardened WebViews; keep the in-memory preference.
-                        }
-                      }}
-                    >
-                      <span aria-hidden="true" />
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
+            <CanvasSourceTags />
+            <ThumbnailSizeSlider scope="canvas" />
           </div>
         </div>
         {sourceScope === "library" && libraryFolders.length > 0 && (
           <div className="canvas-source-folders" role="group" aria-label="中央素材文件夹">
             <button
               type="button"
-              className={librarySourceFolderId == null ? "is-active" : ""}
-              aria-pressed={librarySourceFolderId == null}
-              onClick={() => setLibrarySourceFolderId(null)}
+              className={librarySourceFolderId == null || libraryTagFilter ? "is-active" : ""}
+              aria-pressed={librarySourceFolderId == null || !!libraryTagFilter}
+              onClick={() => {
+                if (libraryTagFilter) useStore.getState().setSmartFilter(null);
+                setLibrarySourceFolderId(null);
+              }}
             >
               全部
             </button>
             {libraryFolders.map((folder) => {
-              const active = librarySourceFolderId === folder.id;
+              const active = !libraryTagFilter && librarySourceFolderId === folder.id;
               return (
                 <button
                   key={folder.id}
@@ -3871,7 +3857,10 @@ export function CanvasWorkspace({
                   className={active ? "is-active" : ""}
                   aria-pressed={active}
                   title={folder.name}
-                  onClick={() => setLibrarySourceFolderId(active ? null : folder.id)}
+                  onClick={() => {
+                    if (libraryTagFilter) useStore.getState().setSmartFilter(null);
+                    setLibrarySourceFolderId(active ? null : folder.id);
+                  }}
                 >
                   <Folder size={11} aria-hidden="true" />
                   <span>{folder.name}</span>
@@ -3888,7 +3877,7 @@ export function CanvasWorkspace({
           ) : (
             <MasonryGrid
               variant="canvas-source"
-              columnCount={panelColumns}
+              itemWidth={sourceItemWidth}
               assetsOverride={sourceAssets}
               totalOverride={sourceTotal}
               projectScopeId={sourceScope === "library" ? null : projectId}

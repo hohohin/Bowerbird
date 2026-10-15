@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { readThumbnailWidth, saveThumbnailWidth, type ThumbnailScope } from "./lib/thumbnailSize";
 import { beginOnboardingOperation } from "./lib/onboardingStore";
 import type { ProjectMembership } from "./lib/libraryView";
 import { videoInputError, videoRatio, type GenerationSettings } from "./lib/videoGeneration";
@@ -174,6 +175,9 @@ export type DescribeTask =
   | { kind: "single"; assetId: string; instruction: string };
 
 interface State {
+  libraryThumbnailWidth: number;
+  canvasThumbnailWidth: number;
+  setThumbnailWidth: (scope: ThumbnailScope, value: number) => void;
   assets: Asset[];
   libraryMemberships: ProjectMembership[];
   projectAssetsCollapsed: boolean;
@@ -672,6 +676,12 @@ export const useStore = create<State>((set, get) => {
   }
 
   return {
+  libraryThumbnailWidth: readThumbnailWidth("library"),
+  canvasThumbnailWidth: readThumbnailWidth("canvas"),
+  setThumbnailWidth: (scope, value) => {
+    const width = saveThumbnailWidth(scope, value);
+    set(scope === "library" ? { libraryThumbnailWidth: width } : { canvasThumbnailWidth: width });
+  },
   assets: [],
   libraryMemberships: [],
   projectAssetsCollapsed: (() => {

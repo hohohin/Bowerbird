@@ -7,6 +7,7 @@ import { useStore } from "../../../src/store";
 import { ExploreWorkspace } from "../../../src/components/ExploreWorkspace";
 import { ToastViewport } from "../../../src/components/ToastViewport";
 import { VisualProfileDialog } from "../../../src/components/VisualProfileDialog";
+import { LocalFileBrowser } from "../../../src/components/LocalFileBrowser";
 import { Toolbar } from "../../../src/components/Toolbar";
 import { SettingsDialog } from "../../../src/components/SettingsDialog";
 import "../../../src/styles.css";
@@ -14,6 +15,7 @@ import "../../../src/styles.css";
 // Closed synthetic IPC fixture: never reads a library or invokes a provider.
 const w = window as any;
 const explorer = new URLSearchParams(location.search).has("explorer");
+const localFiles = new URLSearchParams(location.search).has("local-files");
 const sourceLibrary = new URLSearchParams(location.search).has("source-library");
 const canvasLibrary = new URLSearchParams(location.search).has("canvas-library");
 const strictCanvas = new URLSearchParams(location.search).has("strict-canvas");
@@ -54,7 +56,7 @@ w.calls = [];
 w.snapshot = () => structuredClone(snapshot);
 w.save = () => {
   sessionStorage.setItem("reference-fixture", JSON.stringify(snapshot));
-  sessionStorage.setItem("reference-drafts", JSON.stringify(assets.filter(asset => asset.source === "annotation")));
+  sessionStorage.setItem("reference-drafts", JSON.stringify(assets.filter(asset => asset.source === "annotation" || asset.source === "external")));
 };
 w.emitChange = () => {
   for (const [handler, event] of listeners) if (event === "creative://changed") callbacks.get(handler)?.({ event, id: handler, payload: { projectId: "p" } });
@@ -87,6 +89,28 @@ w.__TAURI_INTERNALS__ = {
   metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main" } },
   invoke: async (command: string, args: any) => {
     w.calls.push({ command, args });
+    if (localFiles && command === "external_files_browse") {
+      if (args.path === "/missing") throw "目录不存在";
+      const path = args.path || "/pictures";
+      return { path, parent: path === "/" ? null : "/", total: 3, entries: [
+        { name: "旅行", path: "/pictures/travel", directory: true },
+        { name: "原图.png", path: `${path}/original.png`, directory: false },
+        { name: "另一张.png", path: `${path}/other.png`, directory: false },
+      ] };
+    }
+    if (localFiles && command === "external_files_preview") return image("#68a4b5");
+    if (localFiles && command === "external_files_index") {
+      if (w.holdIndex) await new Promise(resolve => { w.releaseIndex = resolve; });
+      if (w.failIndex) throw "原图片不可用";
+      const id = args.path.endsWith("other.png") ? "external-other" : "external-original";
+      let asset = assets.find(asset => asset.id === id);
+      if (!asset) { asset = { id, name: id, width: 190, height: 150, store_path: image("#68a4b5"), thumb_path: image("#68a4b5"), source: "external" }; assets.push(asset); }
+      Object.assign(asset, { library_hidden: true }); return asset;
+    }
+    if (localFiles && command === "external_files_references") return assets.filter(asset => asset.source === "external" && snapshot.nodes.some((node: any) => node.assetId === asset.id)).map(asset => ({ asset, status: w.referenceStatus || "available" }));
+    if (localFiles && command === "external_files_copy") { const asset = assets.find(asset => asset.id === args.assetId)!; Object.assign(asset, { source: "imported", library_hidden: false }); return asset; }
+    if (localFiles && command === "external_files_update") { w.referenceStatus = "available"; return assets.find(asset => asset.id === args.assetId); }
+    if (localFiles && command === "plugin:dialog|open") return w.dialogPath ?? null;
     if (command === "project_canvas_materialize") {
       canvasExists = true;
       Object.assign(project, { provisional: false });
@@ -237,15 +261,22 @@ w.__TAURI_INTERNALS__ = {
     }
     if (command === "list_generation_groups") return {};
     if (canvasLibrary && command === "list_projects") return [{ ...project, asset_count: assets.filter((asset: any) => !asset.library_hidden).length }];
-    if (sourceLibrary && command === "list_assets") return assets.filter((asset: any) => !asset.library_hidden);
+    if (sourceLibrary && command === "list_tags") {
+      if (w.failTags) throw "模拟标签加载失败";
+      return w.testTags ?? [{ id: "tag-a", name: "插画", count: 2 }, { id: "tag-b", name: "建筑", count: 0 }];
+    }
+    if (sourceLibrary && command === "list_assets_smart") return args.query === "tag:插画" ? assets.slice(0, 1) : [];
+    if (sourceLibrary && command === "list_assets") return assets.filter((asset: any) => !asset.library_hidden && (!args.folderId || asset.id === "existing"));
+    if (sourceLibrary && command === "count_assets") return assets.filter((asset: any) => !asset.library_hidden).length;
     if (command === "count_assets") return 0;
     if (command.startsWith("list_")) return [];
     return null;
   },
 };
 w.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
-useStore.setState({ projects: (explorer ? [project, { ...project, id: "q", name: "另一个项目" }] : [project]) as any, activeProjectId: "p", assets: assets.filter((asset: any) => !asset.library_hidden) as any, boardOpen: false, settings: JSON.parse(sessionStorage.getItem("canvas-settings") || "{}") });
+useStore.setState({ projects: (explorer ? [project, { ...project, id: "q", name: "另一个项目" }] : [project]) as any, activeProjectId: "p", folders: sourceLibrary ? [{ id: "source-folder", name: "测试文件夹", kind: "folder" }] as any : [], assets: assets.filter((asset: any) => !asset.library_hidden) as any, boardOpen: false, settings: JSON.parse(sessionStorage.getItem("canvas-settings") || "{}") });
 function Fixture() {
+  const [filesOpen, setFilesOpen] = React.useState(false);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
   w.openSettings = () => setSettingsOpen(true);
   const projectId = useStore(state => state.activeProjectId)!;
@@ -254,12 +285,12 @@ function Fixture() {
   w.setToolbarCanvasMode = setToolbarCanvasMode;
   w.setExploring = setExploring;
   const canvas = <React.Profiler id="canvas" onRender={() => { w.canvasCommits = (w.canvasCommits || 0) + 1; }}>
-    <CanvasWorkspace key={projectId} projectId={projectId} exploring={exploring} />
+    <CanvasWorkspace key={projectId} projectId={projectId} exploring={exploring || filesOpen} />
   </React.Profiler>;
   return <div className="app-shell" style={{ display: "flex", height: "100vh" }}>
-    {sourceLibrary ? <div className="flex min-w-0 flex-1 flex-col">
-      <Toolbar canvasMode={toolbarCanvasMode} onCanvasModeChange={setToolbarCanvasMode} onCreateCreative={() => {}} onRefresh={async () => {}} />
-      <div className="flex min-h-0 flex-1">{canvas}</div>
+    {sourceLibrary || localFiles ? <div className="flex min-w-0 flex-1 flex-col">
+      <Toolbar onLocalFiles={() => setFilesOpen(value => !value)} localFilesOpen={filesOpen} canvasMode={toolbarCanvasMode} onCanvasModeChange={setToolbarCanvasMode} onCreateCreative={() => {}} onRefresh={async () => {}} />
+      <div className="flex min-h-0 flex-1">{filesOpen && <LocalFileBrowser onClose={() => setFilesOpen(false)} onCreateProject={() => {}} />}{canvas}</div>
     </div> : explorer ? <ExploreWorkspace url="https://www.pinterest.com/" open={exploring} onClose={() => setExploring(false)}>{canvas}</ExploreWorkspace> : canvas}
     <AssetContextMenu /><ImageAnnotator /><ToastViewport /><VisualProfileDialog />{settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
   </div>;

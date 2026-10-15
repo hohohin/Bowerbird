@@ -1,4 +1,5 @@
-//! Local classification has no Cloud/CLI fallback and never writes reverse-prompt captions.
+//! Automatic classification supports local matching or explicit Jev image API judgment.
+mod cloud;
 pub mod data;
 pub mod jev;
 pub mod runtime;
@@ -17,6 +18,21 @@ use tauri::{AppHandle, Emitter, Manager};
 use super::paths::LibraryPaths;
 use crate::db::Database;
 
+#[derive(Clone, Serialize)]
+pub struct CurrentAsset {
+    pub id: String,
+    pub name: String,
+    pub thumb_path: Option<String>,
+    pub position: usize,
+}
+
+#[derive(Clone, Serialize)]
+pub struct JevProgress {
+    pub asset: CurrentAsset,
+    pub batches: Vec<jev::BatchReport>,
+    pub message: String,
+}
+
 #[derive(Clone, Default, Serialize)]
 pub struct Status {
     pub supported: bool,
@@ -31,6 +47,8 @@ pub struct Status {
     pub download_total: u64,
     pub message: String,
     pub last_error: String,
+    pub current_asset: Option<CurrentAsset>,
+    pub jev_progress: Option<JevProgress>,
     pub model: String,
     pub acceleration: String,
     pub vector_supported: bool,
@@ -59,7 +77,9 @@ impl LocalClassifier {
         result.supported = runtime::supported();
         result.installed = runtime::installed(&self.root);
         result.enabled = db.local_enabled().map_err(|e| e.to_string())?;
-        result.model = data::MODEL_ID.into();
+        if result.model.is_empty() {
+            result.model = data::MODEL_ID.into();
+        }
         result.vector_supported = vector::vector_supported();
         result.vector_installed = vector::vector_installed(&self.root);
         if result.download_total == 0 {
@@ -91,7 +111,8 @@ impl LocalClassifier {
         jev_key: Option<String>,
         pending_only: bool,
     ) -> Result<(), String> {
-        if !runtime::supported() {
+        let needs_local = install || jev_key.is_none();
+        if needs_local && !runtime::supported() {
             return Err(runtime::UNSUPPORTED_MESSAGE.into());
         }
         let guard = self
@@ -99,7 +120,7 @@ impl LocalClassifier {
             .clone()
             .try_lock_owned()
             .map_err(|_| "已有本地分类或下载任务在运行")?;
-        if !install && !runtime::installed(&self.root) {
+        if !install && needs_local && !runtime::installed(&self.root) {
             return Err("请先安装本地分类模型".into());
         }
         if let Some(id) = &tag {
@@ -116,6 +137,11 @@ impl LocalClassifier {
         self.update(&app, |s| {
             *s = Status {
                 busy: true,
+                model: if jev_key.is_some() && !install {
+                    jev::OBSERVATION_MODEL.into()
+                } else {
+                    data::MODEL_ID.into()
+                },
                 phase: if install { "downloading" } else { "loading" }.into(),
                 ..Status::default()
             };
@@ -144,6 +170,12 @@ impl LocalClassifier {
             let cancelled = this.cancel.load(Ordering::Relaxed);
             this.update(&app, |s| {
                 s.busy = false;
+                if cancelled && s.current_asset.is_some() {
+                    if let Some(progress) = s.jev_progress.as_mut() {
+                        progress.message = "已停止；此图未完成的结果未写入".into();
+                    }
+                }
+                s.current_asset = None;
                 s.phase = if cancelled {
                     "stopped"
                 } else if result.is_err() {
@@ -181,6 +213,15 @@ impl LocalClassifier {
             .try_lock_owned()
             .map_err(|_| "已有本地分类或下载任务在运行，请先停止再卸载")?;
         vector::uninstall(&self.root)
+    }
+
+    pub fn delete_labels(&self, db: &Database, ids: &[String]) -> Result<(), String> {
+        let _guard = self
+            .gate
+            .clone()
+            .try_lock_owned()
+            .map_err(|_| "已有本地分类或下载任务在运行，请先停止再删除标签")?;
+        db.delete_local_labels(ids).map_err(|e| e.to_string())
     }
 
     async fn image(db: &Database, library: &LibraryPaths, id: &str) -> Result<String, String> {
@@ -263,17 +304,27 @@ impl LocalClassifier {
         jev_key: Option<String>,
         pending_only: bool,
     ) -> Result<(), String> {
-        let gate = match jev_key {
-            Some(key) => Some(jev::Gate::new(key)?),
+        let judge = match jev_key {
+            Some(key) => Some(jev::Judge::new(key)?),
             None => None,
+        };
+        let observation_model = if judge.is_some() {
+            jev::OBSERVATION_MODEL
+        } else {
+            data::MODEL_ID
         };
         let job_revision = db.local_revision().map_err(|e| e.to_string())?;
         let targets = db
-            .local_targets(pending_only && tag.is_none())
+            .local_targets_for_model(pending_only && tag.is_none(), observation_model)
             .map_err(|e| e.to_string())?;
         self.update(app, |s| {
             s.total = targets.len();
-            s.message = "正在加载本地模型".into();
+            s.message = if judge.is_some() {
+                "正在准备 Jev 图片判断"
+            } else {
+                "正在加载标签发现模型"
+            }
+            .into();
         });
         if targets.is_empty() {
             if let Some(tag) = tag {
@@ -282,48 +333,53 @@ impl LocalClassifier {
             }
             return Ok(());
         }
-        // Existing CPU installations reuse their weights and fetch only the small GPU runtime.
-        let gpu_installed = runtime::gpu_installed(&self.root);
-        let gpu_available = gpu_installed || runtime::nvidia_available(&self.cancel).await;
-        if !gpu_installed && gpu_available {
-            self.update(app, |s| {
-                s.phase = "downloading".into();
-                s.message = "正在补充 NVIDIA GPU 加速组件（约 645 MB）".into();
-                s.download_done = 0;
-                s.download_total = runtime::GPU_DOWNLOAD_BYTES;
-            });
-        }
-        let gpu_install = if gpu_installed || !gpu_available {
-            Ok(())
+        let mut server = if judge.is_some() {
+            None
         } else {
-            runtime::install_gpu(&self.root, &self.cancel, |_, done, total| {
+            // Existing CPU installations reuse their weights and fetch only the small GPU runtime.
+            let gpu_installed = runtime::gpu_installed(&self.root);
+            let gpu_available = gpu_installed || runtime::nvidia_available(&self.cancel).await;
+            if !gpu_installed && gpu_available {
                 self.update(app, |s| {
                     s.phase = "downloading".into();
                     s.message = "正在补充 NVIDIA GPU 加速组件（约 645 MB）".into();
-                    s.download_done = done;
-                    s.download_total = total;
+                    s.download_done = 0;
+                    s.download_total = runtime::GPU_DOWNLOAD_BYTES;
                 });
-            })
-            .await
-        };
-        if self.cancel.load(Ordering::Relaxed) {
-            return Err("已停止分类".into());
-        }
-        self.update(app, |s| {
-            s.phase = "loading".into();
-            s.message = "正在加载本地模型".into();
-        });
-        let mut server = runtime::Server::start(&self.root, &self.cancel).await?;
-        self.update(app, |s| {
-            s.acceleration = match gpu_install {
-                Err(error) => format!("CPU · GPU 组件下载未完成，已回退 CPU：{error}"),
-                Ok(()) => server.acceleration.clone(),
+            }
+            let gpu_install = if gpu_installed || !gpu_available {
+                Ok(())
+            } else {
+                runtime::install_gpu(&self.root, &self.cancel, |_, done, total| {
+                    self.update(app, |s| {
+                        s.phase = "downloading".into();
+                        s.message = "正在补充 NVIDIA GPU 加速组件（约 645 MB）".into();
+                        s.download_done = done;
+                        s.download_total = total;
+                    });
+                })
+                .await
             };
-        });
+            if self.cancel.load(Ordering::Relaxed) {
+                return Err("已停止分类".into());
+            }
+            self.update(app, |s| {
+                s.phase = "loading".into();
+                s.message = "正在加载本地模型".into();
+            });
+            let server = runtime::Server::start(&self.root, &self.cancel).await?;
+            self.update(app, |s| {
+                s.acceleration = match gpu_install {
+                    Err(error) => format!("CPU · GPU 组件下载未完成，已回退 CPU：{error}"),
+                    Ok(()) => server.acceleration.clone(),
+                };
+            });
+            Some(server)
+        };
         // When the vector pack is installed its cosine judge replaces the VLM
         // yes/no matching; a load failure falls back to VLM matching instead
         // of failing the whole run.
-        let mut vector = if vector::vector_installed(&self.root) {
+        let mut vector = if judge.is_none() && vector::vector_installed(&self.root) {
             self.update(app, |s| {
                 s.message = "正在加载向量匹配模型".into();
             });
@@ -346,22 +402,46 @@ impl LocalClassifier {
         } else {
             None
         };
+        let cloud = crate::codex::understand::CloudUnderstandProvider::new(
+            app.state::<crate::cloud::CloudClient>().inner().clone(),
+            app.state::<crate::cloud::AuthClient>().inner().clone(),
+        );
         for (index, id) in targets.iter().enumerate() {
             if self.cancel.load(Ordering::Relaxed) {
                 break;
             }
+            let asset = db.get_asset(id).ok().flatten();
             self.update(app, |s| {
                 s.phase = "classifying".into();
                 s.message = "正在识别素材".into();
+                s.current_asset = Some(CurrentAsset {
+                    id: id.clone(),
+                    name: asset
+                        .as_ref()
+                        .map(|a| a.name.clone())
+                        .unwrap_or_else(|| "素材已移除".into()),
+                    thumb_path: asset.and_then(|a| a.thumb_path),
+                    position: index + 1,
+                });
+                s.jev_progress = if judge.is_some() {
+                    Some(JevProgress {
+                        asset: s.current_asset.clone().unwrap(),
+                        batches: vec![],
+                        message: "正在等待 Jev 返回结果…".into(),
+                    })
+                } else {
+                    None
+                };
             });
             let result = self
                 .classify_one(
-                    &server,
+                    server.as_ref(),
                     db,
                     library,
                     id,
                     tag.as_deref(),
-                    gate.as_ref(),
+                    judge.as_ref(),
+                    Some(&cloud),
                     vector.as_mut(),
                     tag.is_none() && !pending_only,
                 )
@@ -370,6 +450,16 @@ impl LocalClassifier {
                 break;
             }
             self.update(app, |s| {
+                s.current_asset = None;
+                if let Some(progress) = s.jev_progress.as_mut() {
+                    progress.message = match &result {
+                        Ok(()) if progress.batches.is_empty() => {
+                            "此图处理完成；无启用的已有标签，本图未调用 Jev".into()
+                        }
+                        Ok(()) => "此图处理完成".into(),
+                        Err(error) => format!("此图未写入结果：{error}"),
+                    };
+                }
                 s.done = index + 1;
                 if let Err(error) = &result {
                     s.failed += 1;
@@ -381,7 +471,9 @@ impl LocalClassifier {
                 let _ = app.emit("library://assets-changed", ());
             }
         }
-        server.stop().await;
+        if let Some(server) = server.as_mut() {
+            server.stop().await;
+        }
         if !self.cancel.load(Ordering::Relaxed) && self.status.lock().unwrap().failed == 0 {
             if let Some(tag) = tag {
                 db.finish_local_label(&tag, job_revision)
@@ -393,12 +485,13 @@ impl LocalClassifier {
 
     async fn classify_one(
         &self,
-        server: &runtime::Server,
+        server: Option<&runtime::Server>,
         db: &Database,
         library: &LibraryPaths,
         id: &str,
         tag: Option<&str>,
-        gate: Option<&jev::Gate>,
+        judge: Option<&jev::Judge>,
+        cloud: Option<&dyn crate::codex::understand::UnderstandProvider>,
         mut vector: Option<&mut vector::Matcher>,
         rebuild: bool,
     ) -> Result<(), String> {
@@ -411,6 +504,20 @@ impl LocalClassifier {
             .collect();
         if tag.is_some() && labels.is_empty() {
             return Err("标签已停用或删除".into());
+        }
+        if let Some(judge) = judge {
+            return self
+                .classify_with_jev(
+                    judge,
+                    cloud,
+                    db,
+                    library,
+                    id,
+                    revision,
+                    &labels,
+                    tag.is_none(),
+                )
+                .await;
         }
         let image = Self::image(db, library, id).await?;
         let mut combined = data::Prediction {
@@ -426,10 +533,10 @@ impl LocalClassifier {
             let mut shortlist = labels.clone();
             discovery_sample(&mut shortlist, id);
             combined = server
+                .ok_or("标签发现需要本地模型")?
                 .predict(&image, &shortlist, true, &[], &self.cancel)
                 .await?;
-            // A discovered name that already exists is grounded in this image and
-            // attaches the existing label directly, without a second blind judgment.
+            // Normalize discovered names for the local-only path.
             combined.matches.clear();
             ground_discovered_names(&labels, &mut combined);
         }
@@ -494,6 +601,7 @@ impl LocalClassifier {
                     images.push((Self::image(db, library, &asset).await?, positive));
                 }
                 let prediction = server
+                    .ok_or("本地模型未加载")?
                     .predict(
                         &image,
                         std::slice::from_ref(label),
@@ -509,16 +617,133 @@ impl LocalClassifier {
         if rebuild {
             evaluated.extend(exampleless);
         }
-        // The optional cloud gate re-checks every surviving candidate against the
-        // grounded description; with it enabled, a failed check fails the asset.
-        if let Some(gate) = gate {
-            gate.apply(&mut combined, &labels, &self.cancel).await?;
-        }
         if self.cancel.load(Ordering::Relaxed) {
             return Err("已停止分类".into());
         }
         if !db
             .apply_local_prediction(id, revision, &combined, tag.is_none(), &evaluated)
+            .map_err(|e| e.to_string())?
+        {
+            return Err("标签已被人工修改，已忽略旧结果；请重试此素材".into());
+        }
+        Ok(())
+    }
+    async fn jev_image(db: &Database, library: &LibraryPaths, id: &str) -> Result<Vec<u8>, String> {
+        let path = db
+            .local_image_path(id)
+            .map_err(|e| e.to_string())?
+            .ok_or("图片已删除或缺少缩略图")?;
+        let root = library.root.clone();
+        tokio::task::spawn_blocking(move || jev::image_data(std::path::Path::new(&path), &root))
+            .await
+            .map_err(|e| e.to_string())?
+    }
+
+    async fn classify_with_jev(
+        &self,
+        judge: &jev::Judge,
+        cloud: Option<&dyn crate::codex::understand::UnderstandProvider>,
+        db: &Database,
+        library: &LibraryPaths,
+        id: &str,
+        revision: i64,
+        labels: &[data::Label],
+        record_observation: bool,
+    ) -> Result<(), String> {
+        let image = Self::jev_image(db, library, id).await?;
+        let mut prediction = data::Prediction {
+            description: String::new(),
+            tags: vec![],
+            matches: vec![],
+        };
+        for (batch_index, batch) in labels.chunks(jev::BATCH_SIZE).enumerate() {
+            if self.cancel.load(Ordering::Relaxed) {
+                return Err("已停止分类".into());
+            }
+            let mut questions = Vec::new();
+            for label in batch {
+                let mut examples = Vec::new();
+                for (asset, positive) in db
+                    .local_examples(&label.id, id)
+                    .map_err(|e| e.to_string())?
+                {
+                    examples.push((Self::jev_image(db, library, &asset).await?, positive));
+                }
+                questions.push(jev::Candidate {
+                    name: label.name.clone(),
+                    description: label.description.clone(),
+                    examples,
+                });
+            }
+            // The explicit no-match answer must agree with all label answers.
+            let decisions = judge
+                .classify(&image, &questions, &self.cancel, |value, error| {
+                    let mut status = self.status.lock().unwrap();
+                    if let Some(progress) =
+                        status.jev_progress.as_mut().filter(|p| p.asset.id == id)
+                    {
+                        progress.batches.push(jev::BatchReport::from_response(
+                            batch_index + 1,
+                            &questions,
+                            value,
+                            error,
+                        ));
+                        progress.message =
+                            format!("Jev 已返回第 {} 批结果，等待此图处理完成", batch_index + 1);
+                    }
+                })
+                .await?;
+            for (label, matched) in batch.iter().zip(decisions) {
+                if matched {
+                    prediction.matches.push(label.id.clone());
+                }
+            }
+        }
+        let mut definitions = Vec::new();
+        // A per-label search only tests that label; it never creates unrelated labels.
+        // An empty enabled vocabulary also has no existing match and bootstraps via Cloud.
+        if record_observation && prediction.matches.is_empty() {
+            if db.local_revision().map_err(|e| e.to_string())? != revision {
+                return Err("标签已被人工修改，请重试此素材".into());
+            }
+            let provider = cloud.ok_or("Cloud 分类服务未就绪")?;
+            let path = db
+                .local_image_path(id)
+                .map_err(|e| e.to_string())?
+                .ok_or("图片已删除或缺少缩略图")?;
+            let all_labels = db.local_labels().map_err(|e| e.to_string())?;
+            {
+                let mut status = self.status.lock().unwrap();
+                if let Some(progress) = status.jev_progress.as_mut().filter(|p| p.asset.id == id) {
+                    progress.message = if labels.is_empty() {
+                        "没有启用的已有标签，未调用 Jev；正在通过 Cloud 补标签…"
+                    } else {
+                        "Jev 全部批次无已有匹配标签，正在通过 Cloud 补标签…"
+                    }
+                    .into();
+                }
+            }
+            let discovered =
+                cloud::discover(provider, PathBuf::from(path), &all_labels, &self.cancel).await?;
+            for label in discovered {
+                prediction.tags.push(label.name.clone());
+                definitions.push((label.name, label.definition));
+            }
+        }
+        if self.cancel.load(Ordering::Relaxed) {
+            return Err("已停止分类".into());
+        }
+        let evaluated: Vec<_> = labels.iter().map(|label| label.id.clone()).collect();
+        if !db
+            .apply_classification_with_definitions(
+                id,
+                revision,
+                &prediction,
+                record_observation,
+                &evaluated,
+                jev::OBSERVATION_MODEL,
+                &definitions,
+            )
             .map_err(|e| e.to_string())?
         {
             return Err("标签已被人工修改，已忽略旧结果；请重试此素材".into());
@@ -567,20 +792,32 @@ pub fn watch(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths>) {
         let classifier = app.state::<Arc<LocalClassifier>>().inner().clone();
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(15)).await;
-            if !db.local_enabled().unwrap_or(false) || !runtime::installed(&classifier.root) {
+            if !db.local_enabled().unwrap_or(false) {
                 continue;
             }
+            let jev_key = {
+                let settings = app.state::<crate::core::settings::SettingsState>();
+                let snapshot = settings.get();
+                if snapshot.jev_image_classification_enabled {
+                    Some(snapshot.jev_api_key.unwrap_or_default())
+                } else {
+                    None
+                }
+            };
+            if jev_key.is_none() && !runtime::installed(&classifier.root) {
+                continue;
+            }
+            let model = if jev_key.is_some() {
+                jev::OBSERVATION_MODEL
+            } else {
+                data::MODEL_ID
+            };
             let tag = db.pending_local_label().ok().flatten();
-            if tag.is_some() || db.local_targets(true).is_ok_and(|ids| !ids.is_empty()) {
-                let jev_key = {
-                    let settings = app.state::<crate::core::settings::SettingsState>();
-                    let snapshot = settings.get();
-                    if snapshot.jev_verify_enabled {
-                        snapshot.jev_api_key.filter(|key| !key.trim().is_empty())
-                    } else {
-                        None
-                    }
-                };
+            if tag.is_some()
+                || db
+                    .local_targets_for_model(true, model)
+                    .is_ok_and(|ids| !ids.is_empty())
+            {
                 if classifier
                     .start(
                         app.clone(),

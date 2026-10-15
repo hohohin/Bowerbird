@@ -667,7 +667,11 @@ pub async fn codex_create_image(
     //
     // exact_references=true（轮级重试/编辑）时跳过合并/附加：调用方已给该轮**当时实际下发**
     // 的完整参考图列表，精确重放（重试第 N 轮用当时的基图，而不是该轮自己产出的最新图）。
-    let mut reference_images = reference_images;
+    let mut reference_images = {
+        let db = db.inner().clone();
+        tokio::task::spawn_blocking(move || db.resolve_external_paths(&reference_images))
+            .await.map_err(|e| AppError::Other(e.to_string()))??
+    };
     let supplied_reference_node_ids = reference_node_ids.unwrap_or_default();
     if !supplied_reference_node_ids.is_empty()
         && supplied_reference_node_ids.len() != reference_images.len()
@@ -1641,9 +1645,10 @@ async fn get_asset_store_path(
         .await
         .map_err(|e| AppError::Other(e.to_string()))??
         .ok_or_else(|| AppError::NotFound(asset_id.to_string()))?;
-    asset
-        .store_path
-        .ok_or_else(|| AppError::Media(format!("asset {asset_id} has no store_path")))
+    let path = asset.store_path.ok_or_else(|| AppError::Media(format!("asset {asset_id} has no store_path")))?;
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || db.resolve_external_paths(&[path]).map(|paths| paths[0].clone()))
+        .await.map_err(|e| AppError::Other(e.to_string()))?
 }
 
 #[cfg(test)]

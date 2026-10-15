@@ -12,6 +12,7 @@ import { canUseByo } from "../lib/entitlement";
 import { notifyError, notifySuccess } from "../lib/notify";
 import { isWorkspaceOperationCurrent } from "../lib/workspaceRoute";
 import type { AssetDeleteMode, AssetDeleteResult } from "../lib/types";
+import { externalFiles, OPEN_LOCAL_FILES } from "../lib/externalFiles";
 import { canMoveAssetOut } from "../lib/assetDeletion";
 import {
   CANVAS_REMOVE_NODES_EVENT,
@@ -113,7 +114,7 @@ export function AssetContextMenu() {
 
   const [busy, setBusy] = useState(false);
   const [canvasLibraryCheck, setCanvasLibraryCheck] = useState<{ menu: typeof menu; available: boolean } | null>(null);
-  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const [pendingDeleteId, setPendingDeleteId] = useState<{ id: string; external: boolean } | null>(null);
   // 右键素材所在生成组的成员 id（菜单打开时取，>1 张才显示「物理删除整组」）。
   const [groupIds, setGroupIds] = useState<string[] | null>(null);
   const [pendingGroupDelete, setPendingGroupDelete] = useState<string[] | null>(null);
@@ -246,13 +247,13 @@ export function AssetContextMenu() {
         <ConfirmDialog
           open={pendingDeleteId !== null}
           danger
-          title="物理删除素材"
-          message={<>素材将从全局及所有项目物理删除，<strong>不可恢复</strong>。</>}
-          confirmLabel="物理删除"
+          title={pendingDeleteId?.external ? "移除外部引用记录" : "物理删除素材"}
+          message={pendingDeleteId?.external ? "从所有项目移除这张图片的引用记录，电脑中的原图片保留。" : <>素材将从全局及所有项目物理删除，<strong>不可恢复</strong>。</>}
+          confirmLabel={pendingDeleteId?.external ? "移除引用" : "物理删除"}
           onConfirm={() => {
             const id = pendingDeleteId;
             setPendingDeleteId(null);
-            if (id) void runDelete(id, "delete");
+            if (id) void runDelete(id.id, "delete", id.external);
           }}
           onCancel={() => setPendingDeleteId(null)}
         />
@@ -444,7 +445,7 @@ export function AssetContextMenu() {
     }
   }
 
-  async function runDelete(id: string, mode: AssetDeleteMode) {
+  async function runDelete(id: string, mode: AssetDeleteMode, external = false) {
     setBusy(true);
     try {
       const result = await api.deleteAssetWithMode(id, mode, activeProjectId);
@@ -454,7 +455,7 @@ export function AssetContextMenu() {
         setBusy(false);
         return;
       }
-      notifySuccess(resultMessage(mode, result));
+      notifySuccess(external ? "已移除引用，原图片保留" : resultMessage(mode, result));
       closeContextMenu();
     } catch (e) {
       notifyError(e, "删除失败");
@@ -468,7 +469,8 @@ export function AssetContextMenu() {
     const expectedMenu = menu;
     setBusy(true);
     try {
-      await api.setCanvasAssetLibraryVisibility(projectId, assetId, visible);
+      if (visible && asset?.source === "external") await externalFiles.copy(assetId);
+      else await api.setCanvasAssetLibraryVisibility(projectId, assetId, visible);
       notifySuccess(visible ? "已加入素材库" : "已从素材库移除，画布图片已保留");
       if (useStore.getState().contextMenu === expectedMenu) closeContextMenu();
       void reloadProjects();
@@ -1028,6 +1030,8 @@ export function AssetContextMenu() {
           移出与删除
         </div>
         <div className="space-y-0.5">
+            {asset?.source === "external" && <button type="button" role="menuitem" className="app-context-item px-2 py-1.5"
+              onClick={() => { closeContextMenu(); window.dispatchEvent(new Event(OPEN_LOCAL_FILES)); }}>管理外部引用 · 原图保留</button>}
             {menu.libraryProjectId && canChangeLibraryVisibility && !asset?.library_hidden && (
               <button type="button" role="menuitem" disabled={busy || !canvasLibraryAvailable}
                 className="app-context-item px-2 py-1.5"
@@ -1039,7 +1043,7 @@ export function AssetContextMenu() {
             {menu.canvasSelection && asset?.library_hidden && (
               <button type="button" role="menuitem" disabled={busy}
                 className="app-context-item px-2 py-1.5" onClick={() => void setLibraryVisibility(true)}>
-                加入素材库
+                {asset?.source === "external" ? "复制到素材库" : "加入素材库"}
               </button>
             )}
             {menu.canvasSelection && (
@@ -1089,13 +1093,13 @@ export function AssetContextMenu() {
               role="menuitem"
               onClick={() => {
                 // 先收菜单再弹确认，避免两个浮层同时存在。
-                setPendingDeleteId(assetId);
+                setPendingDeleteId({ id: assetId, external: asset?.source === "external" });
                 closeContextMenu();
               }}
               disabled={busy}
               className="app-context-item is-danger px-2 py-1.5"
             >
-              物理删除
+              {asset?.source === "external" ? "移除外部引用记录" : "物理删除"}
             </button>
             {groupIds && groupIds.length > 1 && (
               <button

@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ArrowLeft, Camera, ChevronDown, Compass, FolderOpen, LayoutDashboard, LoaderCircle, Search, Upload, X } from "lucide-react";
+import { ArrowLeft, Camera, ChevronDown, Compass, FolderOpen, LayoutDashboard, LoaderCircle, Monitor, Search, Upload, X } from "lucide-react";
 import { SidebarStatus } from "./SidebarStatus";
 import { GeneratedImageFilter } from "./GeneratedImageFilter";
+import { ThumbnailSizeSlider } from "./ThumbnailSizeSlider";
 import { useStore } from "../store";
 import { api } from "../lib/api";
 import { notifyError, notifySuccess } from "../lib/notify";
@@ -16,6 +17,8 @@ export function Toolbar({
   onCreateCreative,
   onExplore,
   exploring = false,
+  onLocalFiles,
+  localFilesOpen = false,
 }: {
   onRefresh: () => Promise<void>;
   canvasMode: boolean;
@@ -23,6 +26,8 @@ export function Toolbar({
   onCreateCreative: (blank: boolean) => void;
   onExplore?: () => void;
   exploring?: boolean;
+  onLocalFiles?: () => void;
+  localFilesOpen?: boolean;
 }) {
   const setLoading = useStore((s) => s.setLoading);
   const busy = useStore((s) => s.loading);
@@ -141,8 +146,12 @@ export function Toolbar({
   }
 
   return (
-    <header className="app-topbar" aria-busy={busy}>
+    <header className={`app-topbar${canvasMode ? "" : " is-library"}`} aria-busy={busy}>
       <div className="app-topbar-leading">
+        <button type="button" className="app-button-secondary local-files-trigger" title="打开本机文件资源管理器"
+          aria-label="打开本机文件资源管理器" aria-expanded={localFilesOpen} onClick={onLocalFiles}>
+          <Monitor size={17} aria-hidden="true" />
+        </button>
         <div ref={importRef} className="app-topbar-import relative">
           <button
             type="button"
@@ -152,9 +161,11 @@ export function Toolbar({
             className="app-button-dark disabled:opacity-50"
             aria-haspopup="menu"
             aria-expanded={importOpen}
+            aria-label={busy ? "导入中" : "导入"}
+            title={busy ? "导入中" : "导入"}
           >
             {busy ? <LoaderCircle size={15} className="animate-spin" /> : <Upload size={15} />}
-            {busy ? "导入中" : "导入"}
+            <span className="app-topbar-button-label">{busy ? "导入中" : "导入"}</span>
             <ChevronDown size={13} className={importOpen ? "rotate-180" : ""} />
           </button>
           {importOpen && (
@@ -189,16 +200,17 @@ export function Toolbar({
           )}
         </div>
         {onExplore && <button type="button" data-tour="explore" className="app-button-dark" aria-pressed={exploring}
-          onClick={onExplore} title="浏览灵感网站，拖图采集到素材库"><Compass size={15} />探索</button>}
+          onClick={onExplore} aria-label="探索" title="浏览灵感网站，拖图采集到素材库"><Compass size={15} /><span className="app-topbar-button-label">探索</span></button>}
         {canvasMode ? (
           <button
             type="button"
             className="app-button-dark canvas-mode-toggle is-active"
             title="返回素材库"
+            aria-label="返回素材库"
             onClick={() => onCanvasModeChange(false)}
           >
             <ArrowLeft size={15} />
-            返回素材库
+            <span className="app-topbar-button-label">返回素材库</span>
           </button>
         ) : (
           <button
@@ -206,10 +218,11 @@ export function Toolbar({
             className="app-button-accent"
             data-tour="new-creation"
             title="用当前明确选中的素材开始一项新创作"
+            aria-label="新建创作"
             onClick={() => onCreateCreative(false)}
           >
             <LayoutDashboard size={15} />
-            新建创作
+            <span className="app-topbar-button-label">新建创作</span>
           </button>
         )}
       </div>
@@ -240,6 +253,7 @@ export function Toolbar({
 
       <div className="app-topbar-actions" aria-label="视图与任务">
         <div className="app-topbar-view-controls" role="group" aria-label="素材视图">
+          {!canvasMode && <ThumbnailSizeSlider scope="library" />}
           <GeneratedImageFilter />
           {!canvasMode && (
             <div className="library-view-control">

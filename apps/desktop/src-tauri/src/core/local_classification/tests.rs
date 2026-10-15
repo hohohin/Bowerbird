@@ -9,6 +9,67 @@ fn db() -> Database {
 }
 
 #[test]
+fn deleting_labels_cleans_relations_but_preserves_assets_and_observations() {
+    let db = db();
+    let p = Prediction {
+        description: "植物包装".into(),
+        tags: vec!["植物".into(), "包装".into(), "保留".into()],
+        matches: vec![],
+    };
+    db.apply_local_prediction("a", 0, &p, true, &[]).unwrap();
+    let labels = db.local_labels().unwrap();
+    let ids: Vec<String> = labels
+        .iter()
+        .filter(|l| l.name != "保留")
+        .map(|l| l.id.clone())
+        .collect();
+    db.local_example(&ids[0], &["b".into()], true).unwrap();
+    db.local_example(&ids[1], &["b".into()], false).unwrap();
+    let revision = db.local_revision().unwrap();
+    let mut repeated = ids.clone();
+    repeated.push(ids[0].clone());
+    repeated.push("missing".into());
+    db.delete_local_labels(&repeated).unwrap();
+    assert_eq!(db.local_revision().unwrap(), revision + 1);
+    assert_eq!(db.local_labels().unwrap().len(), 1);
+    assert_eq!(db.list_asset_tags("a").unwrap()[0].name, "保留");
+    assert!(db.list_asset_tags("b").unwrap().is_empty());
+    assert!(db.pending_local_label().unwrap().is_none());
+    for id in &ids {
+        assert!(db.local_examples(id, "").unwrap().is_empty());
+    }
+    assert_eq!(db.local_targets(false).unwrap(), vec!["a", "b"]);
+    assert_eq!(db.local_targets(true).unwrap(), vec!["b"]);
+    assert!(!db
+        .apply_local_prediction("a", revision, &p, true, &[])
+        .unwrap());
+    db.delete_local_labels(&repeated).unwrap();
+    db.delete_local_labels(&[]).unwrap();
+    assert_eq!(db.local_revision().unwrap(), revision + 1);
+}
+
+#[test]
+fn deleting_labels_is_atomic_and_refused_during_classification() {
+    let db = db();
+    let first = db.save_local_label(None, "第一个", "", true).unwrap();
+    let second = db.save_local_label(None, "第二个", "", true).unwrap();
+    let revision = db.local_revision().unwrap();
+    db.conn.lock().unwrap().execute_batch(
+        "CREATE TRIGGER reject_label_delete BEFORE DELETE ON tags WHEN OLD.name='第二个' BEGIN SELECT RAISE(ABORT, 'test failure'); END;"
+    ).unwrap();
+    assert!(db.delete_local_labels(&[first.clone(), second]).is_err());
+    assert_eq!(db.local_labels().unwrap().len(), 2);
+    assert_eq!(db.local_revision().unwrap(), revision);
+    let classifier = super::LocalClassifier::new(std::path::PathBuf::new());
+    let guard = classifier.gate.clone().try_lock_owned().unwrap();
+    assert!(classifier.delete_labels(&db, &[first.clone()]).is_err());
+    assert_eq!(db.local_labels().unwrap().len(), 2);
+    drop(guard);
+    classifier.delete_labels(&db, &[first]).unwrap();
+    assert_eq!(db.local_labels().unwrap().len(), 1);
+}
+
+#[test]
 fn dynamic_labels_need_no_caption_or_preset_vocabulary() {
     let db = db();
     assert!(db.local_labels().unwrap().is_empty());
@@ -450,7 +511,7 @@ async fn real_local_model_batch_persists_completed_assets() {
             .unwrap();
         let count = db.local_labels().unwrap().len();
         classifier
-            .classify_one(&server, &db, &library, id, None, None, None, false)
+            .classify_one(Some(&server), &db, &library, id, None, None, None, None, false)
             .await
             .unwrap();
         assert!(!db.local_targets(true).unwrap().contains(&id.into()));

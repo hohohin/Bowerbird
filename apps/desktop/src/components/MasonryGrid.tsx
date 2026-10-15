@@ -583,35 +583,9 @@ const Thumb = memo(function Thumb({
 
 /** 瀑布流（行式 masonry：JS 按元数据分列 + 缩略图懒加载）。颜色筛选走后端（App refresh 按 colorFilter 分流），非前端过滤。 */
 
-/** 行式 masonry 列数：跟随窗口宽度断点（md/lg/xl，与旧 CSS columns 方案一致）。 */
-function readColumnCount(): number {
-  if (window.matchMedia("(min-width: 1280px)").matches) return 5;
-  if (window.matchMedia("(min-width: 1024px)").matches) return 4;
-  if (window.matchMedia("(min-width: 768px)").matches) return 3;
-  return 2;
-}
-
-function useColumnCount(): number {
-  const [count, setCount] = useState(readColumnCount);
-  useEffect(() => {
-    const mqls = [768, 1024, 1280].map((w) => window.matchMedia(`(min-width: ${w}px)`));
-    let timer = 0;
-    const onChange = () => {
-      window.clearTimeout(timer);
-      timer = window.setTimeout(() => setCount(readColumnCount()), 120);
-    };
-    mqls.forEach((q) => q.addEventListener("change", onChange));
-    return () => {
-      window.clearTimeout(timer);
-      mqls.forEach((q) => q.removeEventListener("change", onChange));
-    };
-  }, []);
-  return count;
-}
-
 export function MasonryGrid({
   variant = "library",
-  columnCount,
+  itemWidth,
   assetsOverride,
   totalOverride,
   projectScopeId,
@@ -626,7 +600,8 @@ export function MasonryGrid({
   embedded?: boolean;
   restrictGroupsToAssets?: boolean;
   variant?: "library" | "canvas-source";
-  columnCount?: number;
+  /** Target minimum width; columns share any remaining horizontal space. */
+  itemWidth?: number;
   /** Project workspace source switch can render a separately loaded library scope. */
   assetsOverride?: Asset[];
   totalOverride?: number;
@@ -636,31 +611,35 @@ export function MasonryGrid({
   onOpenPreview?: (asset: Asset, group?: Asset[]) => void;
 } = {}) {
   const storeAssets = useStore((s) => s.assets);
+  const libraryThumbnailWidth = useStore((s) => s.libraryThumbnailWidth);
+  const targetWidth = itemWidth ?? libraryThumbnailWidth;
   const gridRef = useRef<HTMLDivElement>(null);
-  const [containerColumns, setContainerColumns] = useState(Infinity);
+  const [layoutElement, setLayoutElement] = useState<HTMLDivElement | null>(null);
+  const [colCount, setColCount] = useState(1);
   useEffect(() => {
-    const element = gridRef.current;
-    if (!element) return;
+    if (!layoutElement) return;
     let timer = 0;
     let measured = false;
     const observer = new ResizeObserver(([entry]) => {
-      const next = Math.max(1, Math.floor(entry.contentRect.width / 160));
+      // Observe the layout inside its scroller: contentRect excludes padding and
+      // accounts for the vertical scrollbar. gap-2 is 8px between fluid columns.
+      if (entry.contentRect.width <= 0) return;
+      const next = Math.max(1, Math.floor((entry.contentRect.width + 8) / (targetWidth + 8)));
       window.clearTimeout(timer);
       if (!measured) {
         measured = true;
-        setContainerColumns(next);
+        setColCount(next);
       } else {
-        // Width follows CSS continuously; redistribute cards only after resizing
-        // settles, so crossing a column boundary does not remount the whole grid.
-        timer = window.setTimeout(() => setContainerColumns(next), 120);
+        // Keep cards stable while dragging; redistribute after the width settles.
+        timer = window.setTimeout(() => setColCount(next), 120);
       }
     });
-    observer.observe(element);
+    observer.observe(layoutElement);
     return () => {
       window.clearTimeout(timer);
       observer.disconnect();
     };
-  }, []);
+  }, [layoutElement, targetWidth]);
   const gridId = useId();
   const storeTotal = useStore((s) => s.total);
   const storeActiveProjectId = useStore((s) => s.activeProjectId);
@@ -738,9 +717,7 @@ export function MasonryGrid({
   // 行式分列（Eagle 式）：按列表顺序（最新在前）逐张放进当前累计最矮的列，阅读
   // 顺序近似从左到右、从上到下。高度用 DB width/height 估算（h/w 即相对高度，列宽
   // 是公共因子；无尺寸的按方形兜底）——元数据即最终布局，无需 DOM 测量；列数变化
-  // （窗口跨断点）时重新分列。
-  const responsiveColumnCount = useColumnCount();
-  const colCount = columnCount ?? Math.min(responsiveColumnCount, containerColumns);
+  // （容器能容纳的目标宽度卡片数量改变）时重新分列；列内均分剩余宽度。
   const columns = useMemo(() => {
     type Item = { kind: "asset"; asset: Asset } | { kind: "project"; group: LibraryProjectGroup };
     const cols: Item[][] = Array.from({ length: colCount }, () => []);
@@ -813,9 +790,9 @@ export function MasonryGrid({
         // 对话框 --board-dock-h，坞/板挂载时由各自 ResizeObserver 写入）——否则底部浮动
         // 坞会盖住最后一行素材，滚不到底。二者互斥，max() 只是兜底；无坞时变量为空归零。
         <div className={embedded ? "" : "library-scroller h-full overflow-y-auto"} style={embedded ? undefined : { paddingBottom: "max(var(--gen-dock-h, 0px), var(--board-dock-h, 0px))" }}>
-          {/* 外层固定高度竖向滚动，内层 flex 行式 masonry（各列 flex-1 等宽、纵向
+          {/* 外层固定高度竖向滚动，内层 flex 行式 masonry（各列均分宽度、纵向
               自然增长）——滚动容器与布局容器保持分离。 */}
-          <div className="flex w-full items-start gap-2 p-2" data-tour="masonry">
+          <div ref={setLayoutElement} className="flex w-full items-start gap-2 p-2" data-tour="masonry">
             {columns.map((col, i) => (
               <div key={i} className="flex min-w-0 flex-1 flex-col">
                 {col.map((item) => item.kind === "project" ? (

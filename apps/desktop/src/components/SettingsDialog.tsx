@@ -269,7 +269,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
       agent_z_mode_enabled: settings?.agent_z_mode_enabled ?? false,
       agent_g_mode_enabled: settings?.agent_g_mode_enabled ?? false,
       agent_ds_mode_enabled: settings?.agent_ds_mode_enabled ?? false,
-      jev_verify_enabled: settings?.jev_verify_enabled ?? false,
+      jev_image_classification_enabled: settings?.jev_image_classification_enabled ?? false,
       jev_api_key: settings?.jev_api_key ?? null,
     });
   };

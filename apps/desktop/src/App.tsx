@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { LocalFileBrowser } from "./components/LocalFileBrowser";
+import { OPEN_LOCAL_FILES } from "./lib/externalFiles";
 import { Toolbar } from "./components/Toolbar";
 import { WindowTitlebar } from "./components/WindowTitlebar";
 import { Sidebar } from "./components/Sidebar";
@@ -64,6 +66,12 @@ function LibraryLoadingState() {
 
 function App() {
   const [initializing, setInitializing] = useState(true);
+  const [localFilesOpen, setLocalFilesOpen] = useState(false);
+  useEffect(() => {
+    const show = () => { setLocalFilesOpen(true); setSourceBrowserOpen(false); };
+    window.addEventListener(OPEN_LOCAL_FILES, show);
+    return () => window.removeEventListener(OPEN_LOCAL_FILES, show);
+  }, []);
   const [creativeLaunch, setCreativeLaunch] = useState<CreativeLaunchRequest | null>(null);
   const [creativeTarget, setCreativeTarget] = useState<{
     projectId: string;
@@ -860,11 +868,14 @@ function App() {
       <WindowTitlebar />
       <Toolbar
         onRefresh={refresh}
+        localFilesOpen={localFilesOpen}
+        onLocalFiles={() => { setLocalFilesOpen(value => !value); setSourceBrowserOpen(false); }}
         canvasMode={projectWorkspaceActive}
         onCanvasModeChange={(active) => active ? createCreative(false) : exitCreative()}
         onCreateCreative={createCreative}
         exploring={sourceBrowserOpen}
         onExplore={() => {
+          setLocalFilesOpen(false);
           const guide = useOnboarding.getState().guide;
           const designerExplore = guide.status === "active" && guide.role === "designer" && guide.sessions.designer?.step === 3;
           if (!sourceBrowserUrl || designerExplore) {
@@ -877,6 +888,7 @@ function App() {
       <div className="app-shell-hatch" aria-hidden="true"><span /></div>
       <div className="relative flex flex-1 overflow-hidden">
         <Sidebar />
+        {localFilesOpen && <LocalFileBrowser onClose={() => { setLocalFilesOpen(false); document.querySelector<HTMLButtonElement>(".local-files-trigger")?.focus(); }} onCreateProject={() => void createCreative(true)} />}
         <main className="app-workspace relative flex flex-1 flex-col overflow-hidden bg-canvas">
           <ExploreWorkspace url={sourceBrowserUrl} navigationId={sourceBrowserNavigation} open={sourceBrowserOpen && !collectionAddTargetId} onClose={() => setSourceBrowserOpen(false)}>
           {projectWorkspaceActive ? (
@@ -884,7 +896,7 @@ function App() {
               <CanvasWorkspace
                 key={workspaceProjectId}
                 projectId={workspaceProjectId}
-                exploring={sourceBrowserOpen && !collectionAddTargetId}
+                exploring={(sourceBrowserOpen || localFilesOpen) && !collectionAddTargetId}
                 focusThreadId={creativeTarget?.projectId === workspaceProjectId ? creativeTarget.threadId : null}
                 focusNodeId={creativeTarget?.projectId === workspaceProjectId ? creativeTarget.nodeId : null}
                 focusRequestId={creativeTarget?.projectId === workspaceProjectId ? creativeTarget.requestId : null}

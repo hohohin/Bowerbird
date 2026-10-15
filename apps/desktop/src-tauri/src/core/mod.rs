@@ -22,3 +22,5 @@ pub mod task_queue;
 pub mod visual_profile;
 
 pub mod project_deletion;
+
+pub mod external_files;

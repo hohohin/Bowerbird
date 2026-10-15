@@ -8,8 +8,6 @@ import {
   canvasAssetMediaPath,
   canvasPromptReferences,
   agentPromptGroupMap,
-  canvasSourceColumnCount,
-  clampCanvasSourceThumbnailScale,
   hydrateProjectCanvas,
   isCanvasAssetHydrationCurrent,
   newProjectCanvasAssetNode,
@@ -166,14 +164,6 @@ function snapshot(nodes, overrides = {}) {
     ...overrides,
   };
 }
-
-test("canvas source thumbnail scale maps large previews to fewer columns", () => {
-  assert.equal(canvasSourceColumnCount(1), 3);
-  assert.equal(canvasSourceColumnCount(2), 2);
-  assert.equal(canvasSourceColumnCount(3), 1);
-  assert.equal(canvasSourceColumnCount(99), 1);
-  assert.equal(clampCanvasSourceThumbnailScale(Number.NaN), 2);
-});
 
 test("execution graph edges project onto the live asset and group layout", () => {
   const direct = node("node-direct", "asset-direct", 1);
