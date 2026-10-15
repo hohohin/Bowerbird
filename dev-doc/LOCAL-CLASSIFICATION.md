@@ -80,6 +80,8 @@ RTX 4070 Ti SUPER 上通过生产启动路径确认 `offloaded 25/25 layers to G
 
 ## 固定模型
 
+2026-09-20 Intel 同步修复：向量安装函数改用编译期平台条件，避免 Intel 构建引用仅在 ARM64/Windows 定义的运行库常量。Intel 分支返回既有不支持说明，回归覆盖不触发下载回调、不创建包目录；分类仍走原 VLM 路径，未扩展 Intel 向量运行库支持。
+
 - 模型：unsloth/Qwen3.5-0.8B-GGUF，revision `6ab461498e2023f6e3c1baea90a8f0fe38ab64d0`。
 - Q4_K_M：532,517,120 bytes；SHA256 `bd258782e35f7f458f8aced1adc053e6e92e89bc735ba3be89d38a06121dc517`。
 - mmproj-F16：204,987,232 bytes；SHA256 `56e4c6cfe73b0c82e3e82bc518d7591997e61d81f723fc41a586f4fa69ea2453`。
@@ -128,3 +130,35 @@ RTX 4070 Ti SUPER 上通过生产启动路径确认 `offloaded 25/25 layers to G
 - `node scripts/local-classification-ui.test.mjs`：安装/停止/重开、标签与示例、错误、深浅主题及窄窗通过，新增不支持系统提示与安装禁用检查。`node node_modules/typescript/bin/tsc --noEmit` 通过；pnpm 快捷入口触发依赖自动安装及网络失败，改用已安装的 TypeScript 执行检查，未修改依赖。
 - Intel macOS 26.6.2 真实测试：固定文件校验、正式安装器解压与安装状态、加载、五次本机图像推理及停止均完成，总计 111.84 秒；标签发现返回“产品、化妆品、护肤”，该次发现请求耗时 6.56 秒。自定义“东方诗意插画”正负例及视觉示例匹配结果符合既有断言。
 - **真实质量断言未全部通过**：产品图同时命中“产品海报”和“野生动物”，后者为误判，`real_local_model_smoke` 因该负例断言失败。保留原断言、权重与提示词，不为单个平台样本调参；这证明 Mac 安装/推理链路可用，不代表分类准确率验收完成，也不能沿用 Windows 旧记录宣称 Mac 真模型测试通过。
+
+## macOS 模型下载与系统代理（2026-09-17）
+
+用户在安装版中点击下载后收到 Hugging Face `error sending request`。本机复现：系统 HTTP/HTTPS 代理已启用，直连模型地址被 reset，经系统所配置代理可以获取文件。根因为 reqwest 配置 `default-features=false` 后遗漏 `system-proxy`，Finder 启动又不继承终端代理环境变量；之前手动 curl 下载缓存的测试未覆盖此入口。
+
+Mac target 现显式启用 reqwest `system-proxy`，因此该平台默认 HTTP 客户端读取系统 HTTP/HTTPS 代理；Windows 特性不变。本地分类推理客户端仍显式 `.no_proxy()`，图片请求只走回环地址。下载错误保留底层原因，移除错误 URL（避免显示 CDN 签名查询参数），提示检查网络与系统代理。未增加第三方镜像或固定代理端口，不改变固定版本、大小及 SHA256 校验。
+
+本机即时恢复：确认应用模型目录为空后，将前次隔离测试留存的模型、视觉投影和 Intel 运行时复制到临时目录，逐文件复核固定 SHA256，解压并实际运行 `llama-server --version`，最后写入安装标记。现有安装版可直接使用模型；未访问素材数据库、未开启自动分类。该恢复不等于现有二进制已包含新的代理修复。
+
+本轮证据位于 `.tmp/local-classification-download-fix/`；新增真实下载测试只读取公开模型文件头，须清除代理环境变量后显式运行 ignored 项，避免再次用终端代理掩盖 Finder 路径。
+
+验证结果：分类确定性回归 **14 passed / 2 ignored**；单独运行 `real_model_download_uses_system_proxy` **1/1 通过（5.33 秒）**。真实探针清除大小写 HTTP/HTTPS/ALL_PROXY 与 NO_PROXY 环境变量，复用生产 `download_client`，经官方重定向实际读到 `GGUF` 模型文件头；未重新下载整个模型，也未运行真实分类。该检查补上了前次缓存安装测试未覆盖的 Finder 网络路径。
+
+## 批量标签重复判断修复（2026-09-17）
+
+用户报告“已处理 10 / 69 · 未完成 10”，表示尝试 10 张、成功 0 张。旧匹配 JSON Schema 仅约束判断数组长度，每项 `name` 均可从整个标签枚举选择；模型重复选择同一名称仍满足生成语法，随后被应用的唯一性校验拒绝，整张图片不落分类结果。
+
+新匹配约束按标签顺序生成固定元组 `prefixItems`，每个位置的 `name` 绑定单个 `const`；保持每批 8 个标签、所有标签覆盖、人工示例及本地运行方式不变。重复/遗漏/未知名称/无效布尔值的应用侧校验继续保留，不做丢弃重复项后冒充成功的处理。遵循 [b10809 原生转换器](https://github.com/ggml-org/llama.cpp/blob/b10809/common/json-schema-to-grammar.cpp) 支持的元组语法，不同时设置会遮蔽 `prefixItems` 的 `items: false`，长度继续限定为标签数。
+
+分类面板改为“已尝试 X / 总数 · 成功 Y · 未完成 Z”。失败图片原本就未写入完成记录，更新后可通过“识别未处理素材”重试，无需清理数据库或删除人工标签。
+
+新增真实测试调用生产 `LocalClassifier::classify_one`，使用随包 3 张图片、至少 9 个已有标签（完整批次及尾批）、内存数据库和隔离文件目录，核验每张图片成功写入后退出待识别队列。证据保存在 `.tmp/local-classification-batch-fix/`；这项测试验证格式可靠性与保存流程，不代表真实素材准确率评测。
+
+本轮初步结果：确定性分类回归 **16 passed / 3 ignored**、分类面板 Chrome 合成 IPC（含 10/69 全失败及随后成功计数）、TypeScript/Vite 构建通过；真实生产分类函数批次测试 **3 张全部写入成功**，每张覆盖 9 个已有标签，耗时 **147.80 秒**。所有数据使用内存数据库与临时示例目录，未触碰用户这轮 69 张素材。旧版“模型重复判断”断言仍保留，并有重复、遗漏、未知名称和无效布尔值的拒绝回归。
+
+补充原有真实样本复验：标签发现、自定义“东方诗意插画”正负例和人工图片示例请求均正常完成，但产品图误命中“野生动物”的既有负例断言仍失败（120.90 秒）。本次没有放宽或删除该断言。批量格式与保存失败已修复，0.8B 模型的语义误判问题仍保留，不能把三张保存成功扩大为准确率达标。详见 `real-quality.log`。
+
+本轮修复已纳入 `macOS/dist/Bowerbird_26.9.17_x64-classification-fix-installer.dmg`，Intel x64、26.9.17，86,349,468 bytes，SHA-256 `2c00985884e1d5438d34d4d44b6d00cb2b5df1404ee583def2ec0c4c6a67dfac`。release/app/DMG、包内应用一致性、安装布局与镜像完整性检查通过，旧包保留；详情见 `macOS/README.md`。用户原有模型缓存与素材数据库保持不变，更新应用后重试未识别素材即可。
+
+## 2026-09-18 Intel 同步融合
+
+保留本机固定 `prefixItems` 元组及系统代理适配，同时融合远端 GPU/CPU 路径与重复/遗漏的逐项重判。请求序列化对每个固定位置恢复 name → evidence → match 顺序，不修改用户消息或 null 值；解析器仍拒绝未知标签和非布尔结果，重复/遗漏统一触发重判。固定元组、消息保持和逐项恢复回归随本次 Rust 库测试通过；未重跑真实模型准确率验收。交付及边界见 `macOS/README.md` 的 26.9.18 Intel 记录。

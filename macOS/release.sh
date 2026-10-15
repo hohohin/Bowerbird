@@ -28,7 +28,12 @@ if [ "${COS_SKIP_UPLOAD:-0}" != "1" ]; then
 fi
 
 VERSION=$(python3 -c "import json;print(json.load(open('apps/desktop/src-tauri/tauri.conf.json'))['version'])")
-ARCH=$(rustc -vV | awk '/^host/{print ($2=="x86_64-apple-darwin")?"x86_64":"aarch64"}')
+HOST=$(rustc -vV | awk '/^host/{print $2}')
+case "$HOST" in
+  x86_64-apple-darwin) ARCH=x86_64; DMG_ARCH=x64; MACHO=x86_64 ;;
+  aarch64-apple-darwin) ARCH=aarch64; DMG_ARCH=aarch64; MACHO=arm64 ;;
+  *) echo "不支持的 Mac 构建 host: $HOST"; exit 1 ;;
+esac
 TAR="Bowerbird_${VERSION}_${ARCH}.app.tar.gz"
 DMG="Bowerbird_${VERSION}_${ARCH}-updater-installer.dmg"
 URL="$COS_PUBLIC_BASE/mac_package/$TAR"
@@ -62,6 +67,7 @@ if [ "${COS_SKIP_BUILD:-0}" != "1" ]; then
     echo "==> 提示：钥匙串无 $IDENTITY，本次为 ad-hoc 签名，用户端钥匙串授权弹窗会复现"
     echo "    （一次性修复：bash macOS/setup-codesign-cert.sh）"
   fi
+  [ -s "$SIGNING/updater.key" ] || { echo "缺少原 Mac updater 私钥；请在原签名机完成签名，不要生成替代密钥。"; exit 1; }
   echo "==> 签名构建 app,dmg"
   (cd apps/desktop && \
     TAURI_SIGNING_PRIVATE_KEY="$(cat "$ROOT/$SIGNING/updater.key")" \
@@ -69,17 +75,16 @@ if [ "${COS_SKIP_BUILD:-0}" != "1" ]; then
     pnpm tauri build --bundles app,dmg)
 fi
 B="apps/desktop/src-tauri/target/release/bundle"
-[ -f "$B/macos/$TAR" ] || [ -f "$B/macos/Bowerbird.app.tar.gz" ] || { echo "找不到构建产物，先去掉 COS_SKIP_BUILD"; exit 1; }
+[ -s "$B/macos/Bowerbird.app.tar.gz" ] && [ -s "$B/macos/Bowerbird.app.tar.gz.sig" ] || { echo "找不到签名构建产物，先去掉 COS_SKIP_BUILD"; exit 1; }
 
 # 3) 版本与架构核对后归档到 dist（旧版本原样保留）。
 BUILT=$(plutil -extract CFBundleShortVersionString raw "$B/macos/Bowerbird.app/Contents/Info.plist")
 [ "$BUILT" = "$VERSION" ] || { echo "构建产物版本 $BUILT ≠ 配置 $VERSION"; exit 1; }
-MACHO=$( [ "$ARCH" = "aarch64" ] && echo "arm64" || echo "x86_64" )
 file "$B/macos/Bowerbird.app/Contents/MacOS/bowerbird-desktop" | grep -q "$MACHO" || { echo "构建架构不符"; exit 1; }
 mkdir -p "$DIST"
 cp "$B/macos/Bowerbird.app.tar.gz" "$DIST/$TAR"
 cp "$B/macos/Bowerbird.app.tar.gz.sig" "$DIST/$TAR.sig"
-cp "$B/dmg/Bowerbird_${VERSION}_${ARCH}.dmg" "$DIST/$DMG"
+cp "$B/dmg/Bowerbird_${VERSION}_${DMG_ARCH}.dmg" "$DIST/$DMG"
 (cd "$DIST" && shasum -a 256 "$TAR" > "$TAR.sha256" && shasum -a 256 "$DMG" > "$DMG.sha256")
 hdiutil verify "$DIST/$DMG" >/dev/null && echo "==> DMG 完整性通过"
 SHA=$(awk '{print $1}' "$DIST/$TAR.sha256")

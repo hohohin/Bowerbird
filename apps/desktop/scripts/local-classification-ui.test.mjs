@@ -61,6 +61,10 @@ try {
   await page.setViewportSize({ width: 540, height: 900 });
   await page.screenshot({ path: ".tmp/local-classification-light-narrow.png" });
   assert.equal(await dialog.evaluate(el => el.scrollWidth > el.clientWidth + 1), false);
+  await page.evaluate(() => Object.assign(window.classificationStatus, { done: 10, total: 69, failed: 10 }));
+  await dialog.getByText("已尝试 10 / 69 · 成功 0 · 未完成 10", { exact: true }).waitFor();
+  await page.evaluate(() => Object.assign(window.classificationStatus, { done: 12, failed: 10 }));
+  await dialog.getByText("已尝试 12 / 69 · 成功 2 · 未完成 10", { exact: true }).waitFor();
   await page.evaluate(() => {
     window.classificationStatus.installed = false;
     window.classificationStatus.supported = false;

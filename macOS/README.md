@@ -2,6 +2,33 @@
 
 本目录记录 Mac 上的本地开发、运行和未签名构建流程。Bowerbird 使用 canonical Tauri / React / Rust 源码，不维护 macOS override。构建架构以 `rustc -vV` 的 host 为准；Intel 为 `x86_64-apple-darwin`，Apple Silicon 原生工具链为 `aarch64-apple-darwin`。
 
+## 2026-10-14 Intel 同步远端 mac（源码已验证）
+
+通过 7890 代理获取远端 `mac`，本地快进至 `d6027fb`（26.10.801）。同步截图/贴图与全局快捷键、会话组图、Mac Cmd+Delete、静态视频封面及原生 MP4/AVFoundation、稳定签名/开发钥匙串辅助程序、工作流数据包与 SQLite 0031–0033；技能、工作流助手和模板库入口遵循远端关闭的 feature flags。
+
+合并保留本机未提交的分类固定元组/系统代理、Intel 向量安装编译期保护及更新验签工具，同时保留远端向量包卸载、正确模型 revision 与新版功能。删除被编译期保护替代的 Intel 空运行库占位常量。发布脚本保留 `x64` DMG / `x86_64` 通道区分，融合远端 COS 与稳定签名流程；对应回归切换为 COS 环境变量。合并前补丁及原 tracked 修改保存在 `/private/tmp/bowerbird-sync-20261014/` 与命名 stash，未跟踪模型缓存未纳入 stash。
+
+本机 Intel x86_64 验证：Rust 全量 **462 passed / 0 failed / 9 ignored**；画板纯逻辑 **133/133**；五组 Chrome 合成 IPC（截图、双平台删除快捷键、会话组图、分类、更新器）；TypeScript/Vite production build；Intel/ARM64 发布工具路径与签名/篡改检查通过。测试截图已保存到证据目录，并恢复仓库原有跟踪截图。保留既有 Rust 警告与 Vite 大 chunk 提示。架构说明索引中的 `dev-doc/Bowerbird开发计划.md` 当前工作树缺失，本轮依据 PROJECT.md、平台 README 与专项文档核对。
+
+本次为源码同步与 Intel 原生编译/测试验证，未重新构建 release 安装包、安装到 Applications、调用真实付费模型、修改用户素材库或发布线上服务；截图真实屏幕授权/混合 DPI、正式升级与钥匙串交互仍需独立实机验收。当前本地源码版本为 26.10.801，不代表本机已安装应用已升级。证据：`macOS/dist/verification/sync-mac-20261014-intel/`。
+
+## Intel 更新文件交接（2026-09-20）
+
+同步远端 `mac` 至 `9c6158c`（26.9.2001），保留本机未提交的分类/代理修改。Intel 与 Apple Silicon 共用启动检查、设置内更新和原 Mac 更新公钥；Intel 的 channel 固定为 `darwin-x86_64`。`release.sh` 已区分 Tauri 的 Intel DMG 文件名 `x64` 与更新清单/归档的 `x86_64`，并拒绝非 Mac host。清单生成器现在先核验包的 minisign 主签名与可信备注签名，错误签名或其他密钥不会生成正式清单。
+
+补齐远端向量下载器的编译条件：此前运行时 `vector_supported()` 检查无法阻止 Rust 在 Intel 上解析未定义的 ARM64/Windows 运行库常量，导致编译失败。现在只在有固定运行库的平台编译安装路径，Intel 明确返回原有不支持提示、不下载或创建向量目录，继续沿用 VLM 判断；没有新增或替换模型。并修复恢复本地测试时与新 `Label` 字段/分类方法参数的接缝。
+
+本机没有原 Mac updater 私钥；用户自行上传 R2，无需提供 R2 凭据。交付目录提供手动 DMG、待签名的 Intel `.app.tar.gz`、SHA-256、清单模板、原公钥、补齐清单工具及说明。待签名包可送到已有私钥的原 Mac 签名机签署，无需重新编译 Intel 应用；将生成的 `.sig` 返回交付目录后，执行附带脚本验签并生成正式 `darwin-x86_64.json`。模板不可直接发布，不重新生成密钥，不复用 ARM64 签名。
+
+2026-09-20 公网核对：Intel 入口返回 307，目标清单仍为 404。R2 上传后还须由发布侧将官网 `downloads/updates/darwin-x86_64.json` 替换为有效清单，或把 `BOWERBIRD_DARWIN_X86_64_UPDATE_MANIFEST_URL` 指向 R2 上的正式清单；仅上传安装包不会消除检查错误。当前不修改线上服务。
+
+发布工具回归：`node macOS/update-release.test.mjs`（Intel/ARM64 路径、原始 minisign 测试向量、篡改拒绝、缺签名及非 Mac host）；官网路由回归：`node website/scripts/app-updater.test.mjs`。
+
+本轮 Intel 验证：Rust **383 passed / 8 ignored**（无过滤）、前端契约 **141/141**、更新器/分类/引导三组 Chrome 合成 IPC 界面、发布工具与路由回归、TypeScript/Vite 和 release 构建通过。DMG `Bowerbird_26.9.2001_x86_64-updater-installer.dmg`，**86,892,417 bytes**，SHA-256 `52f75db9a10a7359c37c49b89cbb22d238c6dad679ae943da537fd734e7162fa`；镜像完整性、只读挂载后应用逐文件一致、Applications 链接、背景及 `.DS_Store` 通过。核对 **421 个构建输入、68 个内置资源**、26.9.2001/x86_64 与原公钥保持。旧镜像仍挂载，重包仅将固定脚本的挂载位置换为独立临时目录，不影响布局。
+
+合集：`macOS/dist/Bowerbird_26.9.2001_Intel_Update_Files.zip`（附 SHA-256）；更新归档、哈希、清单模板、验签/清单工具及相关源码在其中。证据：`macOS/dist/verification/intel-update-20260920/`。未运行真实模型质量测试、真实应用内升级、账号登录或用户库迁移；未做 Developer ID 签名及 Apple 公证，未上传或部署。
+
+## 2026-09-20 Mac 26.9.2001 更新包（本机构建待上传）
 
 ## 2026-10-08 Mac 26.10.801 打包上传（官网待切换）
 
@@ -113,6 +140,31 @@ COS_SKIP_BUILD=1 COS_SKIP_UPLOAD=1 bash macOS/release.sh   # 本地演练：复�
 
 **边界与坑**：本地自签名只稳定代码签名 requirement，不能稳定钥匙串 CDHash 分区，也不等于 Developer ID 签名/公证；Gatekeeper 首次打开仍需右键打开。updater 完整性仍由 minisign 签名保证，与代码签名互不影响。首次用该身份签名（或跑 setup 脚本试签）时系统可能弹「codesign 想要使用私钥」，点“始终允许”一次即可。macOS 自带 LibreSSL 生成的 pkcs12 会被 `security import` 报 MAC 校验失败，脚本因此直接导入 PEM 私钥与证书；自签名证书不出现在 `security find-identity -v` 输出属正常，脚本用试签验证。
 
+## 2026-09-18 Intel 安装包（26.9.18，本地交付）
+
+经 7890 代理同步远端：`dev` 为 `a7d5dae`，`mac` 快进至 `add14dd`，已包含该 dev 更新及 Mac darwin 更新通道配置。本机原有分类批量固定元组和系统代理修复恢复到工作区，继续保持未提交；保留远端 GPU/CPU 路径、标签先于证据的输出顺序和重复/遗漏后的逐项重判。原修改保存在同步前 stash，未跟踪截图与远端新增跟踪文件的冲突副本保存在 `.tmp/sync-20260918/untracked-before-sync/`。
+
+验证：Intel Rust 库 **371 passed / 7 ignored**（无过滤），核心契约 **150/150**，**8 组 Chrome 合成 IPC**（分类、更新器、禁用提示、引导快照/流程、标题栏、探索、创作框），TypeScript/Vite 和 release/app 构建通过。标准 DMG 命令成功但只读检查发现缺少 `.DS_Store`，因此复用同一应用，按固定 `package-dmg.sh` 重新封装，未重复编译。引导首次导航两次超过 10 秒，页面已正常渲染；将导航等待与现有快照测试统一为 60 秒后通过，操作断言仍为 10 秒。真实 Tauri/AppKit 隐藏窗口验证标准关闭、最小化、缩放按钮及主题通过。未运行真实模型质量验收、用户库迁移或真实 OAuth；既有误分类边界保留。
+
+本机缺少既有 Mac updater 私钥，因此仅本次以构建参数 `bundle.createUpdaterArtifacts=false` 生成手动安装包；仓库 updater 配置、公钥与应用内更新入口保持。本次**没有生成签名自动更新归档/清单**，没有新建或替换签名密钥，也未上传或部署官网通道。需要可发布的自动更新包时，须使用与现有 Mac 公钥匹配的私钥，按本文签名流程另行生成。
+
+- 手动安装：`macOS/dist/Bowerbird_26.9.18_x64-installer.dmg`，**86,543,066 bytes**。
+- SHA-256：`047700d7a8a1623b2b93bdb9590691bd248b524721add6ca7bd377053f97d98b`，同目录附 `.sha256`；旧安装包保留。
+- 版本 **26.9.18**、架构 **Intel x86_64**、bowerbird 协议、原生采集桥接及 Mac 更新公钥核验通过；**68 个资源文件**与源码匹配。
+- 构建开始记录 **535 个输入**；其中仅引导测试导航等待在构建期间修改并单独复跑，其余输入不变。最终指纹全部匹配。
+- DMG 完整性、只读挂载的应用逐文件一致性、`Applications -> /Applications`、固定背景及 `.DS_Store` 均通过，挂载已推出。打开镜像后将 Bowerbird 拖到 Applications。
+- 证据：`macOS/dist/verification/sync-dev-20260918-intel/`；未经 Developer ID 签名/公证，未替换 `/Applications` 的现有应用，未做截图/录屏验收。
+
+## 2026-09-18 Intel 更新检查排障
+
+公网已部署 Mac 路由，Apple Silicon 的 26.9.18 清单当前返回 200；Intel 路由重定向到尚不存在的 `darwin-x86_64.json`（404），因此客户端提示无有效 release JSON。下方此前“Mac 服务端待部署”的记录为当时状态。需要补发 Intel 签名更新归档及清单，无需重装当前手动安装包；不以 204 掩盖缺失发布。
+
+已准备 `macOS/dist/pending-intel-updater/Bowerbird_26.9.18_x86_64.app.tar.gz`（85,860,731 bytes，附 SHA-256），71 个应用文件及执行权限与已验证应用一致。该文件尚未签名/发布，等待与当前 Mac 公钥匹配的原私钥；不得当作正式自动更新产物使用。未修改官网或客户端代码。
+
+## 2026-09-18 R2 上传交付包
+
+用户要求自行上传 R2、不提供私钥，已整理 `macOS/dist/Bowerbird_26.9.18_Intel_R2.zip`（附 SHA-256）。解压后 `upload/` 包含 Intel DMG、更新 tar.gz 及两个校验文件；另有上传说明、文件清单与 `templates/darwin-x86_64.json.template`。模板包含待填签名/URL，不能直接作为正式清单发布。ZIP CRC 与两份产物 SHA-256 均校验通过；不含私钥、不修改客户端验签。R2 文件托管完成后，自动更新仍需对应签名及官网清单路由配置，本轮未上传或部署。
+
 ## Mac 应用内更新（darwin 通道，2026-09-18 配置）
 
 Mac 与 Windows 共用 Tauri 官方 updater 及同一入口 `https://bowerbird.cn/api/desktop-update/{{target}}-{{arch}}`；官网端点现接受 `darwin-aarch64` 与 `darwin-x86_64`，307 跳转到 `https://bowerbird.cn/downloads/updates/darwin-<arch>.json`（可用 `BOWERBIRD_DARWIN_AARCH64_UPDATE_MANIFEST_URL` / `BOWERBIRD_DARWIN_X86_64_UPDATE_MANIFEST_URL` 覆盖），其他平台仍返回 204。
@@ -167,6 +219,16 @@ pnpm tauri build --bundles app,dmg
 本机（Apple Silicon、rustc 1.97.1）验证：Rust 全量 **368 passed / 0 failed / 5 ignored**（无过滤，首次在此机器跑通含 examples 的全套）；画板/生成契约 **125/125**、引导 **14/14**；`local-classification-ui`、`app-updater-ui`、`composer-disabled-tooltip-ui`、`onboarding-pack-ui`、`onboarding-ui` 五组 Chrome 合成 IPC 回归、TypeScript `tsc --noEmit` 与 Vite production build 全部通过，保留既有 Rust 警告与大 chunk 提示。文档同批更新：PROJECT.md 新增同步里程碑并按「只保留 3 条」将旧条目移入进展归档，LOCAL-CLASSIFICATION/ONBOARDING 融合双平台记录。
 
 本轮仅本地合并与测试：未打包 DMG、未运行真实模型下载/GPU 推理（Mac 无 CUDA 路径）、未操作真实账号或素材库、未推送分支或部署服务。Mac 更新通道在同日另行配置（见上节）；官网服务端与清单未部署前，Mac 检查更新仍表现为无更新或失败，不代表自动更新已可用。
+
+## 2026-09-17 本地分类批量匹配与下载修复
+
+匹配输出使用固定顺序的标签元组，每个位置绑定一个名称，修复模型重复选择同一标签、导致整张图片无法保存的问题；面板区分“已尝试 / 成功 / 未完成”。同包纳入 Mac 系统代理下载和底层网络错误提示。已有模型无需重下，退出旧应用并覆盖安装后，可用“识别未处理素材”重试失败图片；本轮未替换 `/Applications` 中正在使用的应用。
+
+分类回归 **16 passed / 3 ignored**、分类 Chrome 合成 IPC、TypeScript/Vite 通过。真实生产分类函数在隔离库对 **3 张示例、每张 9 个已有标签全部完成保存**（147.80 秒）；原有质量 smoke 的产品图误命中“野生动物”仍导致断言失败，保留该已知问题，不能宣称准确率验收通过。系统代理真实下载探针沿用本次此前已通过的结果；完整说明见 `dev-doc/LOCAL-CLASSIFICATION.md`。
+
+标准 Tauri release/app/DMG 构建通过；**520 个构建输入未变化**，**68 个包内资源文件（含图标）**与上一份会话修复包一致。26.9.17、x86_64、协议注册、新匹配提示词与代理诊断标记核验通过；DMG 完整性、只读挂载的应用逐文件一致性、Applications 目标、背景资源及 `.DS_Store` 均通过，挂载已推出。保留既有编译警告，未做截图/录屏或 Apple Silicon 真机验收。
+
+本地未签名/未公证 x64 测试包：`macOS/dist/Bowerbird_26.9.17_x64-classification-fix-installer.dmg`，**86,349,468 bytes**；SHA-256 `2c00985884e1d5438d34d4d44b6d00cb2b5df1404ee583def2ec0c4c6a67dfac`，同目录附 `.sha256`，旧包保留。日志、构建指纹和检查结果位于 `.tmp/local-classification-batch-fix/`。未提交或推送代码，未部署服务端。
 
 ## 2026-09-17 引导快照会话与创作提示存档重包
 

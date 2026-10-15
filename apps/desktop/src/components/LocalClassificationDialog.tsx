@@ -96,7 +96,7 @@ export function LocalClassificationDialog({ onClose }: { onClose: () => void }) 
           <progress className="w-full" value={status.download_done} max={status.download_total || 1} />
           <p className="text-xs text-muted">{Math.round(status.download_done / 1048576)} / {Math.round(status.download_total / 1048576)} MiB · 可关闭面板，下载继续</p>
         </>}
-        {status?.total ? <p className="text-xs text-muted">已处理 {status.done} / {status.total} · 未完成 {status.failed}</p> : null}
+        {status?.total ? <p className="text-xs text-muted">已尝试 {status.done} / {status.total} · 成功 {Math.max(0, status.done - status.failed)} · 未完成 {status.failed}</p> : null}
       </section>
 
       <section className="rounded border border-edge bg-panel2 p-3 space-y-2">

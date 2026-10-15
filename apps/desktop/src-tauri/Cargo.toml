@@ -101,6 +101,10 @@ keyring = { version = "3", features = [
 # Entitlement 权益快照 Ed25519 验签（P9：7 天离线 Pro 宽限；公钥构建期内置）
 ed25519-dalek = "2"
 
+# Finder 启动不继承 shell 代理环境变量；恢复 reqwest 被 default-features=false 关闭的系统代理。
+[target.'cfg(target_os = "macos")'.dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["system-proxy"] }
+
 # Agent Z（dev-only）：向唤起的 zcode TUI 终端注入按键（AttachConsole + WriteConsoleInput）
 [target.'cfg(windows)'.dependencies]
 webview2-com = "0.38.2"

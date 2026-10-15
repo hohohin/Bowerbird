@@ -21,9 +21,15 @@
 
 ## 目前进展
 
+**当前版本存档（2026-10-15，北京时间）：** 本地分支 `mac`，桌面源码版本 **26.10.801**（以 `apps/desktop/src-tauri/tauri.conf.json` 为准）；存档前基线 commit 为 `d6027fb8280ce8ab9452fe06ad04bcbcde178bfe`。本次将保留的 Intel 分类/系统代理、向量安装平台保护、更新包验签及发布工具修复与文档一并提交，版本号不变。最终存档 commit 与核验结果保存在本机 `macOS/dist/verification/archive-20261015/result.json`，也可用 `git log -1 --format=%H --grep='chore(mac): archive Intel fixes and 26.10.801 status'` 查询。未重新打包、安装、推送或部署；26.10.801 Apple Silicon 包沿用 10 月 8 日已上传 R2 的记录，不能视为包含本轮 Intel 修改。最近记录的线上基线为 M 系列 Mac **26.9.2002**、Windows **26.9.1803**，Intel 清单仍待发布；本轮未重新查询线上状态。临时截图、模型缓存及本地构建产物不入 Git。
+
+**Intel 同步远端 mac（2026-10-14，源码已验证）：** 本地 `mac` 快进至 `d6027fb`（26.10.801），同步截图/贴图、会话组图、Mac 快捷键、视频/钥匙串与工作流数据包增量，按远端设置隐藏技能/助手/模板入口；保留本地分类/代理、Intel 向量回退与更新验签修复，发布工具兼容远端 COS 配置。Intel Rust 462 passed / 9 ignored、133 项前端契约、五组界面与 TypeScript/Vite、发布工具回归通过。原修改备份并恢复，未重新打包、安装或发布。详见 [Mac 同步记录](macOS/README.md#2026-10-14-intel-同步远端-mac源码已验证)。
+
 截至 2026-10-08，`mac` 在已合入 `origin/dev@f196d6c` 的基础上，完成工作流循环、输入管道、内容交付恢复、本机 Agent 图文/表格与默认生图 provider、截图贴图、会话组图、即梦视频模型/积分、静态视频封面和开发版钥匙串辅助程序的源码存档整理。上次本地记录的 mac 推送为 `e63841a96aa3c3fc36ce8b32ed6019b8f0e8e5d8`（2026-09-21）；Windows 同步清单、平台边界与本轮验证见 [Mac → Windows 同步说明](macOS/WINDOWS-SYNC-2026-10-07.md)。最近记录的发布版本仍为 Mac **26.9.2002**、Windows **26.9.1803**；本轮 Mac **26.10.801** 已完成签名打包并上传 R2，官网首页/自动更新通道待 VPS 登录后切换；云服务未变更。Worker、数据库及模型服务沿用下述 9 月 22 日部署记录。
 
 **自动更新：** Windows x64 已发布 **26.9.1803**，含启动时检查更新、设计师路线开放范围及应用内账号升级入口；M 系列 Mac 线上为 **26.9.2002**，发布说明包含钥匙串/视频依赖修复、向量匹配与 Jev 校验、画板/文本卡增强；本次发布已有 R2 包，不代表工作区最新未打包功能已上线。官网检查、完整包下载和验签已通过，Intel、Mac 公证及双端原生升级仍待验收。发布/回滚和双端交接见 [桌面自动更新](dev-doc/DESKTOP-UPDATES.md)。
+
+**Intel Mac 本地交接（2026-09-20）：** 同步 `mac` 至 `9c6158c`，完成 26.9.2001 Intel 构建，修复向量模块 Intel 编译条件与发布脚本架构命名，保留原 Mac 公钥。Rust 383 passed / 8 ignored、141 项前端契约、三组界面与更新发布工具检查通过；DMG/资源/源码指纹已核验。交付 `Bowerbird_26.9.2001_Intel_Update_Files.zip`；自动更新归档仍待原签名机补签并发布正式 Intel 清单，不等同于已上线。用户自行上传 R2，本机不需要 R2 凭据。文件及边界见 [macOS/README.md](macOS/README.md#intel-更新文件交接2026-09-20)。
 
 - **桌面**：当前 Windows 已发布 **26.9.1803**，M 系列 Mac 为 **26.9.2002**（SQLite 至 `0030`）。在此前 26.9.17 的项目画板、多线程、身份引导、素材仅画板可见、分层编辑、Mac 共用更新、本地分类代理/GPU 与标签恢复基础上，合并工作区既有改动及设置内自动更新；采用用户确认的整包发布范围。老版本仍需先手动安装一次 26.9.18，之后由设置检查后续新版。
 - **云端**：最近部署记录为 **9 月 22 日**：VPS Worker 以「现役镜像 + src 覆盖层」方式更新（视觉规范 schema 2 workflow 提炼、`workflow.md` 提示词、生成 transparent 透传、统一 Agent 新增公众号排版领域方法；镜像 `sha256:7f3813a80a52…`，回滚 `rollback-workflow-20260922`），Edge `visual-profile` v15（schema 2 + capabilities）、`generate-proxy` v37（transparent）。在 9 月 14 日的兑换码/后台（`0059/0060`）、分层（`0061`）与 DSH `deepseek-flash` 基线之上叠加，`0057` 仍为未集成预留；无新增云数据库迁移。既有观察：understand/visual 清理循环对控制面持续 500（先于本次部署存在，未定位）。版本与回滚入口见 [收费化进度](dev-doc/ARCH-ADJUST-PROGRESS.md)。
@@ -39,11 +45,13 @@
 
 **近期里程碑（仅保留最近 3 条；历史详见 [进展归档](dev-doc/进展归档.md)）**
 
+> **Intel 修复与 26.10.801 状态存档（2026-10-15，源码未发布）：** 在 `d6027fb` 上统一提交本机保留的分类固定标签元组、系统代理与下载诊断、尝试/成功/失败计数、Intel 向量安装编译期保护、Mac 更新包主签名及可信备注验签、双架构发布路径和证书文件保护。10 月 14 日证据记录 Rust 462 passed / 9 ignored、133 项前端契约、五组界面与 TypeScript/Vite 通过；本次分类专项 **33 passed / 0 failed / 7 ignored**，更新发布工具、官网路由与 shell 语法检查通过；首次沙箱限制回环监听导致的失败在获准监听后复跑通过，真实模型/网络 ignored 项未运行。旧真实模型语义误判仍未解决，不扩大准确率验收结论。代码与文档同次提交，桌面版本保持 26.10.801，未重新打包、安装、推送或部署。
+
 > **Mac 26.10.801 打包与入口收口（2026-10-08，R2 已上传、官网待切换）：** 暂时隐藏画板技能卡片、工作流助手、模板库及右键「存为模板」入口，开发/正式界面一致；保留已有卡片、模板数据与工作流数据包导入/导出。统一存档本轮 Codex CLI Agent/独立循环会话/生图等待、循环起始项与停止接续、工作流数据包直出、Codex 退出登录与 Mac 开发 URL 回流修复。Mac 版本由 26.9.2002 升为 26.10.801；Rust **458 passed / 0 failed / 7 ignored**、画板逻辑 **133/133**、TypeScript/Vite 构建及工作流 UI、循环、Codex Agent、退出登录、模板/助手/编排协议回归通过。测试使用临时库与模拟 IPC，未操作正式素材库或调用付费模型。按当前官网通道仅发布 Apple Silicon；Intel/Windows 新包不在本轮范围。签名构建及 R2 上传已完成，包内版本/arm64/旧公钥主与全局验签/篡改拒绝、稳定签名和 DMG 布局/应用一致性通过；R2 更新包/DMG 公网完整下载哈希、清单/签名字节一致性通过。官网仍为 26.9.2002，当前缺 VPS SSH 登录凭据，未执行官网切换。产物哈希与发布进度见 [自动更新](dev-doc/DESKTOP-UPDATES.md)。
 
 > **Mac 增量存档与 Windows 同步交接（2026-10-07，源码未发布）：** 汇总自 `e63841a` 以来的 8 个本地提交与后续桌面改动：工作流/模板与 planning-v2、独立循环及可恢复内容交付、Agent 图文/表格与默认 provider、截图/贴图、普通会话组图、即梦视频模型与官方积分、静态视频封面和 Mac debug 钥匙串辅助程序。补齐旧画板测试的会话组图与拖动事件夹具；本轮 TypeScript/Vite、前端 153 项及 20 组 Chromium 合成 IPC 回归通过，Rust 全量复跑 **450 passed / 0 failed / 7 ignored**（初跑的 11 项 loopback 监听权限失败已在允许本地监听后全部通过）。Windows 原生截图/混合 DPI、WebView2 媒体与升级副本仍待验收。仅整理源码及文档，未发布包或部署云端；完整差异、迁移 0031–0033、验证限制及同步步骤见 [交接说明](macOS/WINDOWS-SYNC-2026-10-07.md)。
 
-> **Mac 同步 dev 工作流与模板增量（2026-09-24，源码未发布）：** `mac` 合入 `origin/dev@f196d6c`，同步画板工作流、内容卡、模板库/文件分享、planning-v2 编排与 SQLite `0031`–`0033`；保留 Mac `26.9.2002` 版本、原生标题栏/WKWebView、稳定签名配置、钥匙串缓存、视频免本地 FFmpeg 及 Intel 分类回退。修复 Agent DS 会话路径匹配：两侧解析符号链接与 `..`，Unix 不再按 Windows 规则折叠大小写或改写反斜杠；新增隔离反例先失败后通过。工作流复制/框选回归在 macOS 使用 Command，补齐旧画板测试的新增状态夹具。Rust 全量 417 passed / 6 ignored、画板纯逻辑 150/150、12 组 Chrome 合成 IPC 回归、TypeScript/Vite、Apple Silicon release 编译、Intel cargo check 与隐藏 AppKit 标题栏测试通过。未操作真实素材库、调用付费模型、发布安装包或推送远端；完整 WKWebView 工作流、真实 DSH 与 Intel 实机仍待验收。
+
 
 
 
@@ -239,7 +247,7 @@
 
 **2026-09-17 Mac DMG 固定交付规范（后续打包必须遵守）：** 所有 Mac DMG，包括测试版、热修复版和同版本重包，统一提供拖动安装界面：左侧 `Bowerbird.app`、右侧指向 `/Applications` 的 `Applications` 快捷方式、中间箭头及中文安装提示。禁止交付仅包含 `.app`、缺少安装入口和提示的基础镜像。标准 Tauri 打包沿用 `tauri.macos.conf.json` 的布局；仅重封装已验证应用或标准打包失败时，使用 `macOS/installer/package-dmg.sh`，不得退回直接 `hdiutil -srcfolder .app` 的简包。保留旧交付物，标明真实架构/版本/签名状态，附 SHA-256；以镜像完整性、包内应用一致性、Applications 目标、背景资源及保存的布局为交付检查。**按用户要求，打包验收不需要截图或录屏，不因无法截图/录屏或 Finder 背景属性读取失败而反复重包、阻塞交付**；实际未验证的功能不宣称通过。操作步骤及命令统一见 [macOS/README.md](macOS/README.md#mac-dmg-固定打包与交付流程)。
 
-**2026-09-16 本地分类 Mac 适配：** 同一 Qwen3.5 模型包扩展到 macOS 13.3+ Intel / Apple Silicon，按应用进程架构选择固定版本及 SHA256 的 llama.cpp 运行时；Mac 下载约 749 MB，Windows 约 756 MB。两种 Mac 运行时分目录，权重共用，保留 Windows 安装缓存；沿用 CPU 推理、仅回环服务及原有人工纠正规则。13 项分类回归及界面/TypeScript 检查通过；Intel 真实安装与五次推理完成，但产品图误命中“野生动物”，原负例断言未通过。Apple Silicon 包已校验、原生推理待验。实现与验证边界见 [LOCAL-CLASSIFICATION.md](dev-doc/LOCAL-CLASSIFICATION.md)；源码适配尚未重新打包。
+**2026-09-16 本地分类 Mac 适配：** 同一 Qwen3.5 模型包扩展到 macOS 13.3+ Intel / Apple Silicon，按应用进程架构选择固定版本及 SHA256 的 llama.cpp 运行时；Mac 下载约 749 MB，Windows 约 756 MB。两种 Mac 运行时分目录，权重共用，保留 Windows 安装缓存；沿用 CPU 推理、仅回环服务及原有人工纠正规则。13 项分类回归及界面/TypeScript 检查通过；Intel 真实安装与五次推理完成，但产品图误命中“野生动物”，原负例断言未通过。Apple Silicon 包已校验、原生推理待验。实现与验证边界见 [LOCAL-CLASSIFICATION.md](dev-doc/LOCAL-CLASSIFICATION.md)；运行时适配已纳入 26.9.17，下载代理及批量标签修复的后续交付见 `macOS/README.md`。
 
 **2026-09-17 图片右键菜单（已纳入 26.9.17 本地安装包）：** 常用/再创作和文件/移出与删除分为两列，按实际菜单尺寸避让窗口边缘；窄窗降为单列，键盘左右切列、上下逐项移动，异步条目及缩放后重新定位。画布移除统一为「从画布移出」，项目移除简写为「移出当前项目」，保留原操作、确认及运行中保护。
 
@@ -576,6 +584,17 @@ macOS WKWebView 里方向键 / Home / End 等功能键会派发携带 charCode �
 ### Windows 构建复制误排除平台源码（2026-09-18）
 
 `Windows/prepare.ps1` 原用 Robocopy `/XD Windows` 按目录名排除构建目录；Windows 上不区分大小写，同时漏掉 `apps/desktop/src-tauri/windows`，造成 `cli-registry.cpp` 缺失和独立凭据组件编译失败。改为仅排除仓库根目录 `Windows` 的绝对路径；准备后逐一核对 528 个受 Git 跟踪的构建输入（含浏览器扩展），平台目录及安装清登录钩子完整保留。
+
+**2026-09-18 Intel Mac 检查更新返回无有效 JSON：** 公网实测 `/api/desktop-update/darwin-x86_64` 返回 307，目标 `/downloads/updates/darwin-x86_64.json` 返回 404；同期 Windows 与 darwin-aarch64 通道返回 200，后者已发布 26.9.18。根因为 Intel 签名更新包/清单尚未发布，并非手动 DMG 损坏。遵循既有发布契约，不将缺失清单或网络错误伪装成最新版。已在 `macOS/dist/pending-intel-updater/` 准备并逐文件校验 Intel 26.9.18 的未签名 `.app.tar.gz`；本机缺少匹配既有 Mac 公钥的签名私钥，须取得原私钥后验签并补发 Intel 清单，不能换公钥或借用 arm64 安装包。此轮未修改官网路由或部署，错误仍待签名发布解决。 随后按用户要求提供 `macOS/dist/Bowerbird_26.9.18_Intel_R2.zip`，包含手动 DMG、待签名更新归档、各自 SHA-256、上传说明及非发布清单模板；ZIP 和归档字节已校验。用户自行上传 R2，本轮不要求提供私钥；现有客户端验签与官网清单指向保持，未将文件托管等同于自动更新修复。
+
+### 本地分类批量输出重复标签导致整图失败（2026-09-17）
+
+旧 schema 的“固定长度数组 + 每项枚举全部标签”不能保证每个标签恰好判断一次；8 项可以全部选择同一名称，应用唯一性校验随后拒绝，表现为尝试数和未完成数同时增长。改为 `prefixItems` 为每个位置固定标签名称 `const`，保留应用侧严格校验、8 标签分批和人工保护。进度明确显示尝试/成功/未完成；失败图片不落完成记录，可原入口重试。16 项分类回归及界面/TypeScript/Vite 通过，真实生产流程 3 张 × 9 标签全部保存；原有语义负例误判仍保留。已构建并校验 `macOS/dist/Bowerbird_26.9.17_x64-classification-fix-installer.dmg`，旧包保留；专项及真实批次验证见 `dev-doc/LOCAL-CLASSIFICATION.md`，包指纹见 `macOS/README.md`。
+
+
+### Mac 本地分类下载忽略系统代理（2026-09-17）
+
+安装版直连 Hugging Face 被重置，而同机系统代理下载正常。reqwest 禁用默认特性后遗漏 `system-proxy`，Finder 不继承 shell 的代理环境变量；前次使用 curl 代理预下载缓存，未覆盖实际下载入口。Mac target 显式恢复系统代理支持，下载错误保留底层原因且隐藏 URL 查询串；本地推理继续 `.no_proxy()`。本机空模型目录已用固定 SHA256 校验缓存恢复，不写素材库；旧安装版可复用恢复的模型，代理源码修复已纳入本次 classification-fix 安装包。详细验证见 `dev-doc/LOCAL-CLASSIFICATION.md`。
 
 
 ### macOS 微信扫码成功但应用未登录（2026-09-17）

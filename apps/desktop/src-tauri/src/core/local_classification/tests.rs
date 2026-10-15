@@ -394,3 +394,69 @@ fn vector_uninstall_waits_for_the_busy_gate() {
     assert!(!dir.join("vector").exists());
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// Exercise full eight-label batches plus a final partial batch against the pinned runtime.
+#[tokio::test]
+#[ignore = "requires the pinned local model pack in BOWERBIRD_LOCAL_MODEL_TEST_DIR"]
+async fn real_local_model_batch_persists_completed_assets() {
+    use super::runtime::Server;
+    use std::sync::atomic::AtomicBool;
+    let root = std::path::PathBuf::from(std::env::var("BOWERBIRD_LOCAL_MODEL_TEST_DIR").unwrap());
+    let samples = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/samples");
+    let db = db();
+    db.conn
+        .lock()
+        .unwrap()
+        .execute(
+            "INSERT INTO assets(id,name,ext,thumb_path,created_at) VALUES('c','c','png','c.png',3)",
+            [],
+        )
+        .unwrap();
+    for name in [
+        "产品海报",
+        "野生动物",
+        "平面插画",
+        "人物",
+        "建筑",
+        "植物",
+        "食品",
+        "包装设计",
+        "风景",
+    ] {
+        db.save_local_label(None, name, "根据图中可见内容判断", true)
+            .unwrap();
+    }
+    let library = crate::core::paths::LibraryPaths::init(
+        std::env::temp_dir().join(format!("bowerbird-batch-{}", uuid::Uuid::new_v4())),
+    )
+    .unwrap();
+    let classifier = super::LocalClassifier::new(root.clone());
+    let cancel = AtomicBool::new(false);
+    let mut server = Server::start(&root, &cancel).await.unwrap();
+    for (id, sample) in [
+        ("a", "preset-01.webp"),
+        ("b", "preset-02.webp"),
+        ("c", "preset-03.webp"),
+    ] {
+        let path = library.root.join(sample);
+        std::fs::copy(samples.join(sample), &path).unwrap();
+        db.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE assets SET thumb_path=?1 WHERE id=?2",
+                rusqlite::params![path.to_string_lossy(), id],
+            )
+            .unwrap();
+        let count = db.local_labels().unwrap().len();
+        classifier
+            .classify_one(&server, &db, &library, id, None, None, None, false)
+            .await
+            .unwrap();
+        assert!(!db.local_targets(true).unwrap().contains(&id.into()));
+        println!("batch classification completed: {id}, {count} labels evaluated");
+    }
+    server.stop().await;
+    assert!(db.local_targets(true).unwrap().is_empty());
+    std::fs::remove_dir_all(library.root).unwrap();
+}

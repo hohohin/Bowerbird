@@ -39,28 +39,6 @@ const RUNTIME_HASH: &str = "abef733dacbe2f571547a7150b479b5cb9cc0df22f96c24983a4
 const RUNTIME_ARCHIVE: &str = "onnxruntime-win-x64-1.28.0.zip";
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 const RUNTIME_MEMBER: &str = "lib/onnxruntime.dll";
-// 无钉定运行库的平台（Intel Mac、Linux）也要编译本模块：install() 的
-// vector_supported 护栏保证这些占位值永远不会被读取。
-#[cfg(not(any(
-    all(target_os = "macos", target_arch = "aarch64"),
-    all(target_os = "windows", target_arch = "x86_64")
-)))]
-const RUNTIME_BYTES: u64 = 0;
-#[cfg(not(any(
-    all(target_os = "macos", target_arch = "aarch64"),
-    all(target_os = "windows", target_arch = "x86_64")
-)))]
-const RUNTIME_HASH: &str = "";
-#[cfg(not(any(
-    all(target_os = "macos", target_arch = "aarch64"),
-    all(target_os = "windows", target_arch = "x86_64")
-)))]
-const RUNTIME_ARCHIVE: &str = "";
-#[cfg(not(any(
-    all(target_os = "macos", target_arch = "aarch64"),
-    all(target_os = "windows", target_arch = "x86_64")
-)))]
-const RUNTIME_MEMBER: &str = "";
 pub const VECTOR_PACK_ID: &str = "jina-clip-v2-int8-onnxruntime128-v1";
 
 /// Calibrated 2026-09-19 on the 21 onboarding assets: true pairs scored
@@ -234,14 +212,15 @@ async fn download(
 /// Installs the vector pack: model, tokenizer and the platform onnxruntime
 /// library, each pinned by hash. The library is extracted from the verified
 /// archive with the system tar (bsdtar handles both tgz and zip on Windows).
+#[cfg(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "windows", target_arch = "x86_64")
+))]
 pub async fn vector_install(
     root: &Path,
     cancel: &AtomicBool,
     progress: impl Fn(&str, u64, u64),
 ) -> Result<(), String> {
-    if !vector_supported() {
-        return Err("此平台暂无固定的向量模型运行组件，继续使用内置视觉模型判断".into());
-    }
     let dir = root.join("vector");
     tokio::fs::create_dir_all(&dir)
         .await
@@ -314,6 +293,18 @@ pub async fn vector_install(
         .await
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[cfg(not(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "windows", target_arch = "x86_64")
+)))]
+pub async fn vector_install(
+    _root: &Path,
+    _cancel: &AtomicBool,
+    _progress: impl Fn(&str, u64, u64),
+) -> Result<(), String> {
+    Err("此平台暂无固定的向量模型运行组件，继续使用内置视觉模型判断".into())
 }
 
 /// Decision over embeddings. Pure so the threshold and counter-evidence rules
@@ -566,12 +557,36 @@ mod tests {
 
     #[test]
     fn pack_artifacts_are_pinned() {
-        for hash in [MODEL_HASH, TOKENIZER_HASH, RUNTIME_HASH] {
+        for hash in [MODEL_HASH, TOKENIZER_HASH] {
             assert_eq!(hash.len(), 64);
             assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
         }
         assert!(MODEL_BYTES > 800_000_000);
         assert!(TOKENIZER_BYTES > 1_000_000);
+        #[cfg(any(
+            all(target_os = "macos", target_arch = "aarch64"),
+            all(target_os = "windows", target_arch = "x86_64")
+        ))]
+        {
+            assert_eq!(RUNTIME_HASH.len(), 64);
+            assert!(RUNTIME_HASH.chars().all(|c| c.is_ascii_hexdigit()));
+        }
+    }
+
+    #[cfg(not(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    )))]
+    #[tokio::test]
+    async fn unsupported_platform_does_not_download_or_create_a_pack() {
+        let root = std::env::temp_dir().join(format!("bowerbird-no-vector-{}", uuid::Uuid::new_v4()));
+        assert!(!vector_supported());
+        assert!(!vector_installed(&root));
+        let error = vector_install(&root, &AtomicBool::new(false), |_, _, _| {
+            panic!("unsupported platforms must not start downloading")
+        }).await.unwrap_err();
+        assert!(error.contains("继续使用内置视觉模型判断"));
+        assert!(!root.exists());
     }
 
     /// Real-model smoke: set BOWERBIRD_VECTOR_PACK to a directory holding the
