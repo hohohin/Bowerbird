@@ -40,6 +40,10 @@ try {
   response = await channelUrl("darwin-aarch64");
   assert.equal(response.headers.get("location"), "https://example.com/mac.json");
   delete process.env.BOWERBIRD_DARWIN_AARCH64_UPDATE_MANIFEST_URL;
+  process.env.BOWERBIRD_DARWIN_X86_64_UPDATE_MANIFEST_URL = "https://example.com/mac_package/darwin-x86_64.json";
+  response = await channelUrl("darwin-x86_64");
+  assert.equal(response.headers.get("location"), "https://example.com/mac_package/darwin-x86_64.json");
+  delete process.env.BOWERBIRD_DARWIN_X86_64_UPDATE_MANIFEST_URL;
   response = await channelUrl("darwin-aarch64");
   assert.equal(response.headers.get("location"), "https://bowerbird.cn/downloads/updates/darwin-aarch64.json");
   assert.equal((await channelUrl("linux-x86_64")).status, 204);

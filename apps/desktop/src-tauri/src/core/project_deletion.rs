@@ -51,6 +51,7 @@ fn protected(conn: &Connection, project: &str, id: &str, store: Option<&str>) ->
     // local_agent_runs.target_asset_id CASCADE would destroy execution evidence: always protect.
     // Global collections and saved prompt bindings are independent uses, not project ownership.
     let linked: bool = conn.query_row("SELECT
+      EXISTS(SELECT 1 FROM external_assets WHERE asset_id=?2) OR
       EXISTS(SELECT 1 FROM project_assets WHERE asset_id=?2 AND project_id<>?1) OR
       EXISTS(SELECT 1 FROM canvas_nodes WHERE asset_id=?2 AND project_id<>?1) OR
       EXISTS(SELECT 1 FROM asset_collections WHERE asset_id=?2) OR

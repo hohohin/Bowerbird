@@ -26,3 +26,13 @@ test('hidden, workflow-owned, contained and reference instances keep their own v
   assert.deepEqual([...result.hiddenIds],['a']);
   assert.equal(result.cards.has('workflow'),false);
 });
+
+
+test('embedded session hides its whole conversation until the cell or container is removed', () => {
+  const first = prompt('first','job','one'), next = prompt('next','job','two',2);
+  const table = { id:'table', projectId:'p', kind:'note', hiddenAt:null, payloadJson:JSON.stringify({cells:[[{id:'cell',content_type:'image',text:'',generation_ref:{session_node_id:'first'}}]]}) };
+  const nodes = [first, output('a','job','one'), next, output('b','job','two',2), table];
+  assert.deepEqual([...canvasConversationCards(nodes, {}).hiddenIds].sort(),['a','b','first','next']);
+  assert.equal(canvasConversationCards(nodes.map(node=>node.id==='table'?{...table,hiddenAt:1}:node),{}).hiddenIds.has('first'),false);
+  assert.equal(canvasConversationCards(nodes.map(node=>node.id==='table'?{...table,payloadJson:JSON.stringify({cells:[[{id:'cell',content_type:'image',text:'',image_refs:[{asset_id:'a',token:'@图片1'}]}]]})}:node),{}).hiddenIds.has('first'),false);
+});

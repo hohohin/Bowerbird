@@ -68,14 +68,40 @@ fn main() {
                     let mut bytes = std::io::Cursor::new(Vec::new());
                     image.write_to(&mut bytes, image::ImageFormat::Png).unwrap();
                     let data = format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes.into_inner()));
-                    screenshot::screenshot_output(main.clone(), app.clone(), data.clone(), "pin".into()).await?;
+                    screenshot::screenshot_output(main.clone(), app.clone(), data.clone(), "pin".into(), None).await?;
                     let pinned = app.webview_windows().into_iter().find(|(label, _)| label.starts_with("pin-")).unwrap().1;
                     assert!(!pinned.is_decorated().unwrap()); assert!(pinned.is_always_on_top().unwrap()); assert!(!pinned.is_visible().unwrap());
-                    assert_eq!(screenshot::screenshot_image(pinned.clone(), app.clone())?, data);
-                    assert!(screenshot::screenshot_image(main.clone(), app.clone()).is_err());
+                    let session = screenshot::screenshot_session(pinned.clone(), app.clone())?.unwrap();
+                    use tauri::ipc::IpcResponse;
+                    let body = screenshot::screenshot_image(pinned.clone(), app.clone(), session.clone())?.body().unwrap();
+                    match body {
+                        tauri::ipc::InvokeResponseBody::Raw(bytes) => assert_eq!(image::load_from_memory(&bytes).unwrap().to_rgba8(), image),
+                        _ => panic!("screenshot must use binary IPC"),
+                    }
+                    assert!(screenshot::screenshot_image(pinned.clone(), app.clone(), "stale".into()).is_err());
+                    screenshot::screenshot_show(pinned.clone(), app.clone(), "stale".into())?;
+                    assert!(!pinned.is_visible().unwrap());
+                    assert!(screenshot::screenshot_image(main.clone(), app.clone(), "wrong-window".into()).is_err());
                     assert!(screenshot::screenshot_set_shortcuts(pinned.clone(), app.clone(), keys).await.is_err());
-                    pinned.destroy().map_err(|e| e.to_string())?;
-                    println!("PASS native pinned window flags, per-window image ownership and settings guard");
+                    screenshot::screenshot_cancel(main.clone(), app.clone(), None).await?;
+                    let overlays: Vec<_> = app.webview_windows().into_iter().filter(|(label, _)| label.starts_with("snip-")).collect();
+                    assert!(!overlays.is_empty(), "prewarming creates empty hidden overlays");
+                    for (_, overlay) in &overlays {
+                        assert!(!overlay.is_visible().unwrap());
+                        assert!(screenshot::screenshot_session(overlay.clone(), app.clone())?.is_none());
+                    }
+                    screenshot::screenshot_cancel(main.clone(), app.clone(), None).await?;
+                    for (label, _) in &overlays {
+                        assert!(app.get_webview_window(label).is_some(), "cancel reuses the warm window");
+                    }
+                    println!("PASS native hidden prewarm, cancel reuse, binary pixels and stale-session rejection");
+                    main.destroy().map_err(|e| e.to_string())?;
+                    for _ in 0..100 {
+                        if !app.webview_windows().keys().any(|label| label.starts_with("snip-")) { break; }
+                        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                    }
+                    assert!(!app.webview_windows().keys().any(|label| label.starts_with("snip-")), "warm windows must not keep a closed app alive");
+                    println!("PASS native main-close cleanup, pinned flags, image ownership and settings guard");
                     Ok(())
                 }.await;
                 let _ = std::fs::remove_dir_all(dir);

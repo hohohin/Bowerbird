@@ -1258,7 +1258,7 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
             <div className="flex flex-wrap items-center gap-1.5">
               {tags.length === 0 && !addingTag && (
                 <span className="text-xs text-muted">
-                  暂无标签，可手动添加或在侧栏开启本地分类
+                  暂无标签，可手动添加或在侧栏开启自动分类
                 </span>
               )}
               {tags.map((t) => (

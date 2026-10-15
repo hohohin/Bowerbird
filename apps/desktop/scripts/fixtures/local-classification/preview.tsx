@@ -5,12 +5,14 @@ import { useStore } from "../../../src/store";
 import "../../../src/styles.css";
 
 const w = window as any;
+w.getSmartFilter = () => useStore.getState().smartFilter;
 w.calls = [];
 w.failure = null;
-w.classificationStatus = { supported: true, installed: false, enabled: false, busy: false, phase: "", done: 0, total: 0, failed: 0, download_done: 0, download_total: 1401293979, message: "", model: "local-test", acceleration: "", vector_supported: true, vector_installed: false };
+w.classificationStatus = { supported: true, installed: false, enabled: false, busy: false, phase: "", done: 0, total: 0, failed: 0, jev_done: 0, cloud_running: 0, cloud_queued: 0, download_done: 0, download_total: 1401293979, message: "", model: "local-test", acceleration: "", vector_supported: true, vector_installed: false, current_asset: null, jev_progress: null };
+w.previewAsset = { id: "preview-a", name: "柔光羊羔.png", position: 1, thumb_path: "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="180" height="100"><rect width="180" height="100" fill="#95bd61"/><ellipse cx="90" cy="52" rx="40" ry="22" fill="#fff9df"/></svg>') };
 w.labels = [];
-w.settings = { jev_verify_enabled: false, jev_api_key: null };
-w.__TAURI_INTERNALS__ = { invoke: async (command: string, args: any) => {
+w.settings = { jev_image_classification_enabled: false, jev_api_key: null };
+w.__TAURI_INTERNALS__ = { convertFileSrc: (path: string) => path, invoke: async (command: string, args: any) => {
   w.calls.push({ command, args });
   if (w.failure === command) throw new Error("合成错误：请重试");
   switch (command) {
@@ -19,10 +21,17 @@ w.__TAURI_INTERNALS__ = { invoke: async (command: string, args: any) => {
     case "get_settings": return structuredClone(w.settings);
     case "update_settings": w.settings = { ...w.settings, ...args.settings }; return;
     case "local_classification_start":
+      w.classificationStatus.model = !args.install && w.settings.jev_image_classification_enabled ? "jev-choice-dimensions/cloud-discovery-v5" : "local-test";
+      w.classificationStatus.current_asset = args.install ? null : structuredClone(w.previewAsset);
+      if (!args.install) w.classificationStatus.total = 3;
+      w.classificationStatus.jev_progress = !args.install && w.settings.jev_image_classification_enabled ? { asset: structuredClone(w.previewAsset), report: null, message: "正在等待 Jev 返回结果…" } : null;
       w.classificationStatus.busy = true; w.classificationStatus.phase = args.install ? "downloading" : "classifying";
       w.classificationStatus.message = args.install ? "正在下载 model.gguf" : "正在识别素材"; return;
-    case "local_classification_stop": w.classificationStatus.busy = false; w.classificationStatus.enabled = false; w.classificationStatus.message = "已停止"; return;
+    case "local_classification_stop":
+      if (w.classificationStatus.jev_progress) w.classificationStatus.jev_progress.message = "已停止；此图未完成的结果未写入";
+      w.classificationStatus.current_asset = null; w.classificationStatus.busy = false; w.classificationStatus.enabled = false; w.classificationStatus.message = "已停止"; return;
     case "local_classification_vector_install":
+      w.classificationStatus.model = "local-test";
       w.classificationStatus.busy = true; w.classificationStatus.phase = "downloading";
       w.classificationStatus.message = "正在下载向量匹配模型（约 834 MB）"; return;
     case "local_classification_vector_uninstall":
@@ -34,12 +43,14 @@ w.__TAURI_INTERNALS__ = { invoke: async (command: string, args: any) => {
       w.labels = [...w.labels.filter((l: any) => l.id !== id), label]; return id;
     }
     case "local_classification_example": return;
+    case "local_classification_delete_labels":
+      w.labels = w.labels.filter((label: any) => !args.tagIds.includes(label.id)); return;
     default: throw new Error(`Unexpected IPC ${command}`);
   }
 } };
 useStore.setState({ selectedIds: new Set(["a", "b"]) });
 function App() {
   const [open, setOpen] = useState(true);
-  return <><button onClick={() => setOpen(true)}>打开本地分类</button>{open && <LocalClassificationDialog onClose={() => setOpen(false)} />}</>;
+  return <><button onClick={() => setOpen(true)}>打开自动分类</button>{open && <LocalClassificationDialog onClose={() => setOpen(false)} />}</>;
 }
 createRoot(document.getElementById("root")!).render(<React.StrictMode><App /></React.StrictMode>);

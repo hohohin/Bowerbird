@@ -10,6 +10,9 @@ impl Database {
         asset_id: &str,
         visible: bool,
     ) -> AppResult<()> {
+        if visible && self.is_external_asset(asset_id)? {
+            return Err(AppError::Other("外部引用请使用「复制到素材库」".into()));
+        }
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
         let image: Option<(Option<String>, Option<String>)> = tx

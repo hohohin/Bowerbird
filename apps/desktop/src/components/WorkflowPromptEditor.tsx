@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { contentInputAxisIndex } from "../lib/canvasContentInput";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Schema, type Node as PMNode } from "prosemirror-model";
 import { EditorState } from "prosemirror-state";
@@ -10,6 +11,8 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { api } from "../lib/api";
 import { canvasInputValue, canvasWorkflowInputState } from "../lib/canvasSessionOutputs";
 import { canvasAssetMediaPath } from "../lib/creativeCanvas";
+import { readCanvasNote } from "../lib/canvasNotes";
+import { agentOutputWriters } from "../lib/workflowAgentOutputs";
 import { workflowBindingKey, workflowImageContainer, workflowInputValues, workflowReferenceToken, rebindGenerationReferences, type WorkflowNode, type WorkflowPromptReference } from "../lib/canvasWorkflow";
 import type { Asset, CanvasNode } from "../lib/types";
 
@@ -23,8 +26,9 @@ const schema = new Schema({ nodes: {
 const serialize = (doc: PMNode) => doc.textBetween(0, doc.content.size, "\n", node => node.type.name === "reference" ? workflowReferenceToken(node.attrs.id) : "");
 interface Candidate { reference: Omit<WorkflowPromptReference, "id">; preview: string; assetIds?: string[]; unavailable?: boolean }
 
-export function WorkflowPromptEditor({ node, nodes, graphNodes, disabled, onChange }: {
+export function WorkflowPromptEditor({ node, nodes, graphNodes, cardNames, disabled, onChange }: {
   node: WorkflowNode; nodes: WorkflowNode[]; graphNodes: CanvasNode[]; disabled: boolean;
+  cardNames?: Record<string, string>;
   onChange: (prompt: string, references: WorkflowPromptReference[]) => void;
 }) {
   node = rebindGenerationReferences(node);
@@ -32,7 +36,7 @@ export function WorkflowPromptEditor({ node, nodes, graphNodes, disabled, onChan
   const host = useRef<HTMLDivElement>(null), view = useRef<EditorView | null>(null);
   const [menu, setMenu] = useState<{ pos: number; left: number; top: number } | null>(null);
   const [assets, setAssets] = useState<Asset[]>([]);
-  const candidates = useMemo(() => (["text", "image"] as const).flatMap(type => (node.inputs[type] ?? []).flatMap((input, index): Candidate[] => {
+  const inputCandidates = useMemo(() => (["text", "image"] as const).flatMap(type => (node.inputs[type] ?? []).flatMap((input, index): Candidate[] => {
     const slot = usesPipes ? input.slot : undefined;
     const number = slot ?? index + 1;
     if (canvasWorkflowInputState(input, graphNodes, nodes) === "missing") return [{
@@ -58,7 +62,21 @@ export function WorkflowPromptEditor({ node, nodes, graphNodes, disabled, onChan
       return [{ reference: { type, input, slot, label: `${type === "text" ? "文本" : "图片来源"} ${number}` }, preview: "等待上游内容", unavailable: !(pendingSource || (type === "image" && workflowImageContainer(input))) }];
     }
   })), [node.inputs, nodes, graphNodes, usesPipes]);
-  const referenceAssetId = (ref?: Omit<WorkflowPromptReference, "id">) => ref && (ref.slot !== undefined || workflowImageContainer(ref.input))
+  const outputCandidates: Candidate[] = node.kind === "agent" && node.agentTransport !== "cloud" ? agentOutputWriters(node, nodes).map(writer => {
+    const target = writer.textTarget!;
+    const card = graphNodes.find(card => card.id === target.nodeId && card.hiddenAt == null);
+    const note = card && readCanvasNote(card);
+    const row = note?.cells.findIndex(row => row.some(cell => cell.id === target.cellId)) ?? -1;
+    const column = row >= 0 ? note!.cells[row].findIndex(cell => cell.id === target.cellId) : -1;
+    const axisIndex = note && target.appendAxis ? contentInputAxisIndex(note, target) : -1;
+    const position = target.appendAxis ? axisIndex < 0 ? "位置已删除" : `第 ${axisIndex + 1} ${target.appendAxis === "row" ? "行 · 向右追加" : "列 · 向下追加"}` : target.append ? "追加区域" : row >= 0 ? `第 ${row + 1} 行 · 第 ${column + 1} 列` : "位置已删除";
+    return { reference: { direction: "output", type: target.image ? "image" : "text", input: { nodeId: writer.id }, label: `输出 · ${cardNames?.[target.nodeId] || note?.title || "内容卡片"} · ${position}` },
+      preview: `${target.image ? "图片" : "文字 / 图文"}输出 · ${target.append ? "每次追加" : "只写入此位置"}`, unavailable: !card || (target.appendAxis ? axisIndex < 0 : !target.append && row < 0) };
+  }) : [];
+  const candidates = [...inputCandidates, ...outputCandidates];
+  const referenceLabel = (ref: WorkflowPromptReference) => ref.direction === "output"
+    ? outputCandidates.find(candidate => candidate.reference.input.nodeId === ref.input.nodeId)?.reference.label ?? `${ref.label}（已断开）` : ref.label;
+  const referenceAssetId = (ref?: Omit<WorkflowPromptReference, "id">) => ref?.direction === "output" ? undefined : ref && (ref.slot !== undefined || workflowImageContainer(ref.input))
     ? candidates.find(candidate => candidate.reference.type === ref.type && workflowBindingKey(candidate.reference.input) === workflowBindingKey(ref.input))?.assetIds?.[0]
     : ref?.assetId;
   const assetKey = [...new Set([...candidates.flatMap(c => c.assetIds ?? (c.reference.assetId ? [c.reference.assetId] : [])), ...(node.promptReferences ?? []).map(referenceAssetId)].filter((id): id is string => !!id))].sort().join("|");
@@ -79,7 +97,7 @@ export function WorkflowPromptEditor({ node, nodes, graphNodes, disabled, onChan
         const reference = node.promptReferences?.find(ref => ref.id === match[1]);
         if (!reference) continue;
         if (match.index! > offset) children.push(schema.text(line.slice(offset, match.index)));
-        children.push(schema.node("reference", { id: reference.id, label: reference.label, thumb: imageSrc(referenceAssetId(reference)), kind: reference.type }));
+        children.push(schema.node("reference", { id: reference.id, label: referenceLabel(reference), thumb: imageSrc(referenceAssetId(reference)), kind: reference.direction ?? reference.type }));
         offset = match.index! + match[0].length;
       }
       if (offset < line.length) children.push(schema.text(line.slice(offset)));
@@ -120,7 +138,7 @@ export function WorkflowPromptEditor({ node, nodes, graphNodes, disabled, onChan
       if (item.type.name !== "reference") return;
       const reference = node.promptReferences?.find(ref => ref.id === item.attrs.id);
       const thumb = imageSrc(referenceAssetId(reference));
-      const label = reference?.label ?? item.attrs.label;
+      const label = reference ? referenceLabel(reference) : item.attrs.label;
       if (thumb !== item.attrs.thumb || label !== item.attrs.label) tr.setNodeMarkup(pos, undefined, { ...item.attrs, thumb, label });
     });
     if (tr.docChanged) editor.updateState(editor.state.apply(tr.setMeta("addToHistory", false)));
@@ -128,17 +146,19 @@ export function WorkflowPromptEditor({ node, nodes, graphNodes, disabled, onChan
   function insert(candidate: Candidate) {
     const editor = view.current; if (!editor || !menu || candidate.unavailable) return;
     const reference = { ...candidate.reference, id: crypto.randomUUID() };
-    const tr = editor.state.tr.replaceWith(menu.pos, menu.pos + 1, schema.node("reference", { id: reference.id, label: reference.label, thumb: imageSrc(referenceAssetId(reference)), kind: reference.type }));
+    const tr = editor.state.tr.replaceWith(menu.pos, menu.pos + 1, schema.node("reference", { id: reference.id, label: reference.label, thumb: imageSrc(referenceAssetId(reference)), kind: reference.direction ?? reference.type }));
     const state = editor.state.apply(tr); editor.updateState(state);
     onChange(serialize(state.doc), [...(node.promptReferences ?? []), reference]);
     setMenu(null); editor.focus();
   }
   return <><div ref={host} className="workflow-prompt-editor" onPointerDown={event => event.stopPropagation()} />
     {menu && !disabled && createPortal(<div className="workflow-reference-menu" role="listbox" aria-label="收到的内容" style={{ left: Math.max(8, Math.min(menu.left, window.innerWidth - 300)), top: Math.min(menu.top + 6, window.innerHeight - 280) }} onPointerDown={event => { event.preventDefault(); event.stopPropagation(); }}>
-      <strong>收到的内容</strong>{!candidates.length && <p>连接图片或文本输入后，可在这里引用</p>}
-      {candidates.map((candidate, index) => <button key={index} role="option" aria-selected={false} disabled={candidate.unavailable} onMouseDown={event => event.preventDefault()} onClick={() => insert(candidate)}>
+      <strong>收到的内容</strong>{!inputCandidates.length && <p>连接图片或文本输入后，可在这里引用</p>}
+      {candidates.map((candidate, index) => <Fragment key={index}>
+        {index === inputCandidates.length && outputCandidates.length > 0 && <strong>输出位置</strong>}
+        <button role="option" aria-selected={false} disabled={candidate.unavailable} onMouseDown={event => event.preventDefault()} onClick={() => insert(candidate)}>
         {candidate.reference.type === "image" && imageSrc(referenceAssetId(candidate.reference)) && <img src={imageSrc(referenceAssetId(candidate.reference))} alt="" />}
         <span><b>{candidate.reference.label}</b><small>{candidate.preview || assets.find(asset => asset.id === candidate.reference.assetId)?.name}</small></span>
-      </button>)}
+      </button></Fragment>)}
     </div>, window.document.body)}</>;
 }

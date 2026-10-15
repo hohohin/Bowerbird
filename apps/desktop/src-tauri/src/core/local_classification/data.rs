@@ -170,6 +170,24 @@ impl Database {
         Ok(result)
     }
 
+    /// Foreign keys remove assignments, examples and queued jobs, never assets.
+    pub fn delete_local_labels(&self, ids: &[String]) -> AppResult<()> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let mut deleted = 0;
+        for id in ids {
+            deleted += tx.execute("DELETE FROM tags WHERE id=?1", [id])?;
+        }
+        if deleted > 0 {
+            tx.execute(
+                "UPDATE local_classification_state SET revision=revision+1 WHERE id=1",
+                [],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Explicit edits are authoritative even if an inference is already in flight.
     pub fn edit_classification_tags(
         &self,
@@ -245,12 +263,20 @@ impl Database {
     }
 
     pub fn local_targets(&self, pending_only: bool) -> AppResult<Vec<String>> {
+        self.local_targets_for_model(pending_only, MODEL_ID)
+    }
+
+    pub fn local_targets_for_model(
+        &self,
+        pending_only: bool,
+        model: &str,
+    ) -> AppResult<Vec<String>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare("SELECT a.id FROM assets a WHERE a.thumb_path IS NOT NULL \
             AND lower(COALESCE(a.ext,'')) IN ('jpg','jpeg','png','webp','gif','bmp') \
             AND (?1=0 OR NOT EXISTS(SELECT 1 FROM local_visual_observations o WHERE o.asset_id=a.id AND o.model=?2)) \
             ORDER BY a.created_at,a.id")?;
-        let rows = stmt.query_map(params![pending_only, MODEL_ID], |r| r.get(0))?;
+        let rows = stmt.query_map(params![pending_only, model], |r| r.get(0))?;
         Ok(rows.collect::<Result<_, _>>()?)
     }
 
@@ -332,6 +358,27 @@ impl Database {
         record_observation: bool,
         evaluated: &[String],
     ) -> AppResult<bool> {
+        self.apply_classification_with_definitions(
+            asset,
+            revision,
+            prediction,
+            record_observation,
+            evaluated,
+            MODEL_ID,
+            &[],
+        )
+    }
+
+    pub fn apply_classification_with_definitions(
+        &self,
+        asset: &str,
+        revision: i64,
+        prediction: &Prediction,
+        record_observation: bool,
+        evaluated: &[String],
+        model: &str,
+        definitions: &[(String, String)],
+    ) -> AppResult<bool> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
         let current: i64 = tx.query_row(
@@ -376,8 +423,8 @@ impl Database {
                 None => {
                     let id = ulid::Ulid::new().to_string();
                     tx.execute(
-                        "INSERT INTO tags(id,name,source) VALUES(?1,?2,'auto')",
-                        params![id, name],
+                        "INSERT INTO tags(id,name,source,classification_description) VALUES(?1,?2,'auto',?3)",
+                        params![id, name, definitions.iter().find(|(n, _)| n == &name).map(|(_, d)| d.as_str()).unwrap_or("")],
                     )?;
                     ids.push(id);
                 }
@@ -394,7 +441,7 @@ impl Database {
         if record_observation {
             tx.execute("INSERT INTO local_visual_observations(asset_id,model,description,created_at) VALUES(?1,?2,?3,?4) \
                 ON CONFLICT(asset_id) DO UPDATE SET model=excluded.model,description=excluded.description,created_at=excluded.created_at",
-                params![asset,MODEL_ID,prediction.description,chrono::Utc::now().timestamp()])?;
+                params![asset,model,prediction.description,chrono::Utc::now().timestamp()])?;
         }
         tx.commit()?;
         Ok(true)

@@ -1,3 +1,4 @@
+import { placeWorkflowCard } from "./fixtures/canvas-reference/place-card.mjs";
 import assert from 'node:assert/strict';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
@@ -10,13 +11,13 @@ try {
   await page.goto('http://127.0.0.1:1642/scripts/fixtures/canvas-reference/preview.html');
   await page.locator('[data-canvas-node-id="old"]').waitFor();
   for (const name of ['新增技能卡片', '工作流模板库', '新增工作流助手']) assert.equal(await page.getByRole('button', { name, exact: true }).count(), 0);
-  await page.getByRole('button', { name: '新增 Agent 卡片', exact: true }).click();
+  await placeWorkflowCard(page, '新增 Agent 卡片');
   const agent = page.locator('.workflow-card.is-agent');
-  await agent.getByRole('button', { name: '输出：生成任务', exact: true }).waitFor();
+  await agent.getByRole('button', { name: '输出：返回图片', exact: true }).waitFor();
   await page.getByRole('combobox', { name: 'Agent 执行引擎' }).selectOption('cloud');
-  assert.equal(await agent.getByRole('button', { name: '输出：生成任务', exact: true }).count(), 0);
+  assert.equal(await agent.getByRole('button', { name: '输出：返回图片', exact: true }).count(), 0);
   await page.getByRole('combobox', { name: 'Agent 执行引擎' }).selectOption('codex-cli');
-  await agent.getByRole('button', { name: '输出：生成任务', exact: true }).waitFor();
+  await agent.getByRole('button', { name: '输出：返回图片', exact: true }).waitFor();
   await page.reload();
   const selector = page.getByRole('combobox', { name: 'Agent 执行引擎' });
   await selector.waitFor();
@@ -56,7 +57,7 @@ try {
     const writer = { ...newWorkflowNode('text', 0, 0, ''), id: 'image-writer', textTarget: { nodeId: 'codex-image-target', cellId: 'image-cell', image: true },
       inputs: { image: [{ nodeId: agent.id, portId: 'image' }] } };
     const targetCells = () => JSON.parse(window.snapshot().nodes.find(node => node.id === 'codex-image-target').payloadJson).cells;
-    check(workflowOutputs(agent).some(port => port.type === 'session'), 'CLI exposes generation task output');
+    check(workflowOutputs(agent).some(port => port.type === 'image'), 'CLI exposes the unified image output');
     await c.edit([agent, writer]); await c.start('agent', true);
     check(c.document.run.status === 'done' && calls.length === 1, 'CLI completes without cloud login');
     const output = c.document.nodes.find(node => node.id === 'agent').outputs;

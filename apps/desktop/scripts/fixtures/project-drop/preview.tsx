@@ -1,5 +1,6 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
+import { Toolbar } from "../../../src/components/Toolbar";
 import { LibraryHome } from "../../../src/components/LibraryHome";
 import { Sidebar } from "../../../src/components/Sidebar";
 import { ToastViewport } from "../../../src/components/ToastViewport";
@@ -49,5 +50,5 @@ useStore.setState({ assets: assets as any, total: assets.length, projects: proje
   projectAssetsCollapsed: true, boardOpen: false, settings: {} as any });
 w.store = useStore;
 createRoot(document.getElementById("root")!).render(<div className="app-shell" style={{ display: "flex", height: "100vh" }}>
-  <FileDropImport /><Sidebar /><main style={{ flex: 1, minWidth: 0, overflow: "hidden" }}><header data-test-topbar>测试工具栏 <input aria-label="测试搜索框" /></header><LibraryHome /></main><ToastViewport />
+  <FileDropImport /><Sidebar /><main style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0, overflow: "hidden" }}><header data-test-topbar>测试工具栏 <input aria-label="测试搜索框" /></header>{new URL(location.href).searchParams.has("layout") && <Toolbar canvasMode={new URL(location.href).searchParams.has("canvas-toolbar")} onExplore={() => {}} onCanvasModeChange={() => {}} onCreateCreative={() => {}} onRefresh={async () => {}} />}<LibraryHome /></main><ToastViewport />
 </div>);

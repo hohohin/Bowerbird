@@ -1,4 +1,4 @@
-.canvas-drawing-tools { position:absolute; left:14px; top:50%; transform:translateY(-50%); z-index:30; display:flex; flex-direction:column; gap:5px; padding:6px; border:1px solid var(--bb-line); border-radius:12px; background:var(--bb-surface); box-shadow:0 4px 16px #0001; }
+.canvas-drawing-tools { position:absolute; left:var(--canvas-chrome-inset); top:calc(var(--canvas-chrome-inset) + var(--canvas-chrome-height) + var(--canvas-chrome-gap)); z-index:30; display:flex; flex-direction:column; gap:5px; padding:6px; border:1px solid var(--bb-line-strong); border-radius:var(--canvas-chrome-radius); background:var(--bb-surface); box-shadow:var(--canvas-chrome-shadow); }
 .canvas-drawing-tools button { width:34px; height:34px; display:grid; place-items:center; border-radius:7px; color:var(--bb-muted); }
 .canvas-drawing-tools button:hover, .canvas-drawing-tools button[aria-pressed=true] { background:var(--bb-blue); color:white; }
 /* 原生 title 提示延迟由系统控制且过长，改用即时可控的自定义提示。 */
@@ -16,6 +16,10 @@
 .canvas-drawing-tools hr { border:0; border-top:1px solid var(--bb-line); margin:2px 3px; }
 .canvas-assist-tools { display:flex; flex-direction:column; align-items:center; gap:4px; }
 .canvas-assist-tools > span { color:var(--bb-muted); font-size:9px; line-height:14px; }
+@media (max-height: 700px) {
+  .canvas-drawing-tools { gap:3px; padding:5px; }
+  .canvas-drawing-tools button { width:28px; height:28px; }
+}
 .canvas-stage.is-drawing, .canvas-stage.is-drawing * { cursor:crosshair !important; }
 /* 拖动便签/文本卡时禁止原生文字蓝底选区；单元格 textarea 不受祖先 user-select 影响，编辑选字照常 */
 .canvas-note { position:absolute; left:0; top:0; overflow:visible; border:1px solid var(--bb-line); border-radius:10px; color:var(--bb-ink); background:var(--bb-surface); box-shadow:0 3px 12px #0001; user-select:none; }
@@ -111,3 +115,9 @@
 .canvas-bubble-tail.is-right { left:calc(100% - 1px); transform:translateX(-50%) rotate(-90deg); }
 .canvas-bubble-tail svg { display:block; width:100%; height:100%; overflow:visible; fill:var(--bb-surface); }
 .canvas-bubble-tail:hover, .canvas-bubble-tail:focus-visible { filter:drop-shadow(0 0 2px #b69832); outline:none; }
+
+.canvas-cell-generation { position: relative; display: flex; flex-direction: column; gap: 12px; width: 100%; height: 100%; min-height: 90px; padding: 13px 14px; overflow: auto; border: 1px solid rgb(var(--bb-blue-rgb) / 42%); border-radius: 12px; background: color-mix(in srgb, var(--bb-surface-card) 92%, var(--bb-blue) 8%); color: var(--bb-ink); text-align: left; cursor: pointer; }
+.canvas-cell-generation > span { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; color: var(--bb-blue); font-size: 11px; }
+.canvas-cell-generation small { color: var(--bb-faint); }
+.canvas-cell-generation p { font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.canvas-cell-generation.is-failed { border-color: rgb(239 68 68 / 64%); }

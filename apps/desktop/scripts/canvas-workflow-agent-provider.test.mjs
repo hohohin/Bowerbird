@@ -24,7 +24,7 @@ try {
       // Emulate a pre-upgrade request whose frozen protocol still returns image files.
       active.document.run.steps.agent.localDsGenerationMode = undefined;
       deliveries++; check(provider === useStore.getState().defaultProvider, 'delivery takes starred default, not active or card provider');
-      requests.set(id, { id: crypto.randomUUID(), prompt: '一只猫', images: _images, ratio: '1:1' });
+      requests.set(id, { id: crypto.randomUUID(), prompt: '一只猫', images: _images, ratio: '3:5' });
       pending = id; return { autoDelivered: true, path: 'isolated' };
     };
     api.agentDsWorkflowGenerationRequest = async id => responses.has(id) ? null : requests.get(id) ?? null;
@@ -40,7 +40,7 @@ try {
       generations++; providers.push(args.provider);
       check(args.internalAgent === true, 'native execution explicitly suppresses ordinary generation projection');
       check(args.provider === active.document.run.steps.agent.localDsImageProvider, 'provider is locked by application');
-      check(args.referenceImages.length === 1 && args.referenceImages[0] === requests.get(pending).images[0] && args.ratio === '1:1', 'reference image and ratio reach chosen provider');
+      check(args.referenceImages.length === 1 && args.referenceImages[0] === requests.get(pending).images[0] && args.ratio === '3:5', 'reference image and non-preset ratio reach chosen provider unchanged');
       check(active.document.run.steps.agent.localDsGenerations[requests.get(pending).id].jobId === args.jobId, 'job identity persisted before side effect');
       useStore.setState({ defaultProvider: 'codex', activeGenProvider: 'codex' });
       if (failGenerate) throw Error('引擎未登录');

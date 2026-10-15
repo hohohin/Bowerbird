@@ -16,6 +16,65 @@
 
 证据在本地 .tmp/release-intel-26.10.1501/（完整包/DMG/签名/清单、artifact-report.json、prepare.mjs 的 x86_64 URL 重建、候选/正式/公网报告、部署/回滚脚本）及 VPS /tmp/bowerbird-release-intel-26.10.1501/（清单、报告、部署/回滚文件）。
 
+## Apple Silicon 26.10.1502（2026-10-15，R2 已交付，官网待切换）
+
+本次按用户要求完成更新、存档、推送后发包。源码包含 `53c3c6a` 的双线合并及新增工作流分享 schema v4（循环起点/轮次/整表、个人视觉规范仅分享卡片结构、空白输入导入）；版本提升至 26.10.1502，SQLite 0034，沿用原 Mac updater 公钥和本机稳定代码签名。仅构建 Apple Silicon；其他平台接收源码后分别构建。存档后从固定提交快照构建，产物保留在 `macOS/dist/`，签名私钥与临时输出不入 Git。
+
+本轮追加验证：分享 27 项与真实 React 导入/导出/重载、模板 34 项、编排协议 52 项/22 次反馈、Rust 模板 7 项、TypeScript/Vite production、Mac 发布工具签名/篡改回归及 diff 检查通过；均使用临时库/合成 IPC，未调用真实模型。
+
+发布前通过本机 12000 代理重新核对：官网 ARM 26.10.801，Intel 404。后续记录实际构建、上传、验签与官网切换结果，不把上传等同于更新通道已发布。
+
+**本轮结果：** 源码及版本已存档并推送 `origin/mac@5fecb7c2c82641e636a5a4f86ef4d55c3c34ff34`；固定提交快照构建的签名 Apple Silicon 更新归档、DMG、签名/哈希与版本化清单共六件已上传 R2，完整公网下载哈希与本地一致，公网归档再次通过原 Mac 公钥验签。验证时间 `2026-10-15T14:31:26.741611+00:00`。后续文档提交不改变安装包代码基线。
+
+| 产物 | 字节数 | SHA-256 |
+|---|---:|---|
+| `Bowerbird_26.10.1502_aarch64.app.tar.gz` | 87,077,757 | `89aad2e8657931bb9acbb9658b6a97c605fa58b422ffa2e17a93b33a7a9a3e82` |
+| `Bowerbird_26.10.1502_aarch64-updater-installer.dmg` | 87,487,656 | `ee766d23293cb62347ffa13f0db91a979a2940a75b6d8e5b50ddc04024739dc8` |
+| `darwin-aarch64-26.10.1502.json` | 1,317 | `30744db09149c645b9bae544fad6973816663a514599fb392402a7a65d2f2b18` |
+
+本机核验：1,336 个存档文件与构建快照一致、67 个内置资源与源码一致、tar 内 72 个文件内容及执行权限一致；包内 26.10.1502/arm64/`bowerbird` 协议、Cloud 公共端点与发布 Key、原 Mac 公钥及 Windows 公钥缺席通过。原 updater key id `0b5a2efc4865664f`，主签名/可信备注及篡改拒绝通过；`Bowerbird Local Code Signing` 代码签名严格验证、DMG 完整性、只读挂载的 Applications 链接、背景、`.DS_Store` 与应用一致性通过。未做 Developer ID 公证，未替换本机安装或对正式用户库执行升级、真实账号/模型验收。此前 debug/合成 IPC 验证不能等同于本包原生升级全链路。
+
+构建配置：隔离快照只补入本机现有 Cloud 公共配置白名单；初次发现公共配置未进入 Git 快照即中止，最终产物已确认嵌入。共享依赖路径使 pnpm 自动安装检查误判，固定快照复用同锁文件依赖并将该检查设为 warn，未重装或改锁文件。私钥、上传凭据不入 Git/安装包。
+
+[Apple Silicon DMG](https://pub-5e4c00c218cd4682b622cbab5e58563e.r2.dev/mac_package/Bowerbird_26.10.1502_aarch64-updater-installer.dmg)；[版本化更新清单](https://pub-5e4c00c218cd4682b622cbab5e58563e.r2.dev/mac_package/darwin-aarch64-26.10.1502.json)。本地文件 `macOS/dist/Bowerbird_26.10.1502_aarch64-updater-installer.dmg`；证据 `macOS/dist/verification/release-26.10.1502/`，含固定提交、构建/回归/本地验证、R2 上传及公网报告。
+
+**官网尚未切换：** 本机没有 SSH 配置、私钥或 agent 身份，已向用户请求发布连接方式。发包后只读核验官网 ARM 仍为 **26.10.801**（清单 SHA-256 `06f74a3ebf68ed197dd0ceba186ebc33903eaaba8115b082dc5c1ebe35f7db76`）、Windows **26.10.1001**、Intel **404**。发布端取得本版已验签清单后，从现役站点复制候选，仅更新 ARM 清单与两份首页的 ARM 下载入口，候选核验后原子切换并保留旧目录回滚；不得用仓库旧首页整体覆盖现役 Windows，也不要替换 Intel 或 updater 公钥。R2 已交付不表示应用内更新已上线。
+
+## Intel 26.10.1501 原 Mac 密钥补签（2026-10-15，官网待切换）
+
+签名机经系统已配置的 `127.0.0.1:12000` 代理 fetch，隔离工作树同步 `origin/mac@c718c0b`。本机开发分支 `4cc1faf` 与远端已有分叉，未合并或移动其未提交工作；本轮仅接续 `ef6b6f0` 构建的现成 Intel 文件，不重编译、重压缩或重新 codesign 已有应用。下载交接 ZIP 后校验总哈希、CRC 和内部 SHA256SUMS；沿原 `macOS/.signing/updater.key` 给 tar 原字节补签，不替换更新密钥。交接脚本验证原公钥主签名、可信备注、原包哈希和篡改拒绝后生成版本化清单。
+
+| 文件 | SHA-256 |
+|---|---|
+| `Bowerbird_26.10.1501_x86_64.app.tar.gz`（原包保持） | `983a99d0695468ebcda36b0210e373f54bc82dd63f4ace23408507143069528d` |
+| `Bowerbird_26.10.1501_x86_64.app.tar.gz.sig`（新增） | `86af69dc05ef3de7d82e83fb2d5a169213ca02b4e2db94549245fe719d3a1e7d` |
+| `darwin-x86_64-26.10.1501.json`（新增） | `70b092e3fced6f4f598efd8948e229cdef80a2ac364ecbbd6ec24294abf01e4e` |
+
+新增签名和清单已上传同一 R2 `mac_package/`，包 URL 继续使用下节原 Intel tar；原 DMG 与 ZIP 保持。公网完整下载原包为 87,365,199 bytes、哈希符合上表，并用公网 `.sig` 复验原公钥主签名与可信备注；公网清单/签名与本地逐字节一致。包内 Info.plist 26.10.1501、Mach-O x86_64、`codesign --verify --deep --strict` 和 DMG `hdiutil verify` 通过；同步后的 `macOS/update-release.test.mjs` 通过。下节 482 项 Rust/界面/构建为 Intel 出包机已有证据，本轮没有重跑。未启动实际应用、写用户库、调用模型、执行原生升级或 Apple 公证。
+
+签名机本地产物 `macOS/dist/intel-26.10.1501-signed/`；证据与候选脚本 `.tmp/intel-sign-26.10.1501/`。已根据现役双首页准备 Intel DMG 按钮和平台说明，保留当前 Windows 26.10.1001、ARM 26.10.801 链接。**官网 Intel 通道仍为 404，尚未完成切换**：签名机 SSH agent 无身份，现有配置不含 VPS 登录方式，不能用 R2 凭据修改 VPS 文件。待提供可用 SSH 后，从现役网站复制候选，新增 `downloads/updates/darwin-x86_64.json` 与双首页 Intel 入口，验证后原子切换；不覆盖现役 server/env/Windows/ARM 清单，保留原目录回滚。R2 版本化清单可直接用于发布侧接续。
+
+## Intel 26.10.1501 存档与 R2 交接（2026-10-15）
+
+本次用户明确交付范围：存档推送后构建 Intel 文件并上传 R2，另一台机器用既有 Mac updater 私钥签名。无需本机提供替代私钥，不切官网清单，不新建正式 `darwin-x86_64.json`。源码包含本机文件/外部图片引用（SQLite `0034`）、Jev 图片分类与 Cloud 补标签、分类管理、截图预热/像素微调、自适应素材缩略图/标签筛选与单行工具栏。无云端代码部署或云数据库迁移。
+
+2026-10-15 只读公网复核：`darwin-aarch64` 最终 GET 200、version **26.10.801**；`darwin-x86_64` 最终 GET 404。本页 10 月 8 日“官网待切换”是历史记录，现已被公网事实取代。Windows 本轮未重新核验。
+
+Rust 全量 **482 passed / 0 failed / 10 ignored**；画板逻辑 **132/132**、删除契约 **5/5**、六组隔离 Chrome UI（本机文件、素材库布局、工具栏、分类、截图、画板素材栏）、TypeScript/Vite、Mac 更新签名/篡改工具与官网更新路由全部通过。首次沙箱运行的 14 项回环监听权限失败在获准监听后全量复跑通过；真实模型/下载等 ignored 项未启用。保留既有 Rust 警告和 Vite 大 chunk 提示。源码先存档并推送 `ef6b6f0`，再从该提交的隔离快照构建，防止混入并行修改。本地证据 `macOS/dist/verification/release-26.10.1501/`。本机既有 `Bowerbird Local Code Signing` 试签及严格校验通过；它与 updater 签名/Apple 公证不同。真实付费模型、跨屏 DPI、原生旧版升级及 Windows/ARM64 不在本轮验收范围。
+
+
+**本轮结果：** 源码 `ef6b6f00a12e8d535a02e6733857f3c3b623936d` 已推送 `origin/mac`；Intel 26.10.1501 DMG、待签名更新归档与签名交接 ZIP 已构建并校验。R2 **已上传并公网核验**：使用用户补充的目标桶 S3 凭据上传更新归档、DMG、签名交接 ZIP 及各自 `.sha256`，共六件；远端大小/哈希元数据及公网完整下载 SHA-256 全部与本地一致。此前登录阻塞已解决，未申请 Workers 管理权限。官网清单未改。构建使用该提交隔离快照；构建期间新出现的 Jev score / 三维标签等并行修改保留在原工作区，不包含在本包。
+
+| 产物 | 大小（bytes） | SHA-256 |
+|---|---:|---|
+| Bowerbird_26.10.1501_x86_64.app.tar.gz | 87,365,199 | `983a99d0695468ebcda36b0210e373f54bc82dd63f4ace23408507143069528d` |
+| Bowerbird_26.10.1501_x86_64-updater-installer.dmg | 88,167,708 | `43795d39867adeb133460bf588fd492854846e775f3f052baafd197667a69740` |
+| Bowerbird_26.10.1501_Intel_Signing.zip | 175,545,282 | `dace40631613edd84515692948ec624bade7b9846e7eff9248159fcd1c722cd9` |
+
+发布侧检查：461 个源码输入指纹、67 个内置资源、包内 26.10.1501/x86_64/协议注册、原 Mac 公钥且无 Windows 公钥、代码签名 `--deep --strict`、DMG 完整性与固定布局/Applications 链接/应用一致性、tar 内 72 文件字节及执行权限、交接 ZIP CRC 与 SHA256SUMS 均通过。更新入口核验到冻结配置，未声称可在优化后二进制中直接搜索完整 URL。交接目录附原公钥、说明、发行说明及离线验签/生成版本化清单工具；没有正式 `.sig` 或更新清单。
+
+上传完成时间：**2026-10-15 19:41:03 CST**。签名机可下载 [Intel 签名交接 ZIP](https://pub-5e4c00c218cd4682b622cbab5e58563e.r2.dev/mac_package/Bowerbird_26.10.1501_Intel_Signing.zip)，先校验 SHA256SUMS，再使用原 Mac updater 私钥给归档补签，按附带 README 生成版本化 Intel 清单。原始更新包与 DMG 同在 `mac_package/`；本轮没有 `.sig`、未发布官网自动更新清单。上传/公网逐文件证据见本地 `r2-upload-report.json`、`r2-public-report.json`。
+
 ## Windows 26.10.1001 多张画板结果引用修复已发布（2026-10-10）
 
 2026-10-10 18:25:08（北京时间）完成公网验收。用户明确要求存档并发布。修复创作器把多张正常引用的生成结果误判为必须唯一选择的续作父结果：无唯一父结果时新建线程，保留全部参考图和精确节点；显式继续/重试保持原线程。代码、测试、版本与项目文档统一存档为 3d46e3a20ea439c971edf813e2330978e808e397，已推送 dev，发布证据在本节补充。Windows 从 26.10.904 升至 26.10.1001，沿用原签名密钥与应用内更新保留登录规则；Mac 26.10.801 保持。

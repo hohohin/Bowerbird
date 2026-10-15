@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
 
+const primaryModifier = process.platform === 'darwin' ? 'Meta' : 'Control';
+
 const rows = [
   ['第N屏', '/', '篇章标题', '文案/二级标题', '收束', '小字点缀'],
   ['1', '品牌海报', '留贝shellike', 'KEEPTHE SEACRET 藏一片海', '东方雅韵 | 原创贝壳礼 | 独一无二', ''],
@@ -37,7 +39,7 @@ try {
   await page.reload();
   await page.getByRole('textbox', { name: '第 1 行第 1 列', exact: true }).focus();
   await page.evaluate(text => navigator.clipboard.writeText(text), markdown);
-  await page.keyboard.press('Control+v');
+  await page.keyboard.press(`${primaryModifier}+v`);
   await page.waitForFunction(() => JSON.parse(window.snapshot().nodes[0].payloadJson).cells.length === 14);
   assert.deepEqual(await page.evaluate(() => JSON.parse(window.snapshot().nodes[0].payloadJson).cells.map(row => row.map(cell => cell.text))), rows);
   await page.evaluate(() => window.save()); await page.reload();

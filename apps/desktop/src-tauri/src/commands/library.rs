@@ -324,14 +324,15 @@ pub async fn save_annotation_temp(
 
 /// 读本地图片为 data URL。标注面板导出用：convertFileSrc 的 asset 协议图属跨域源，
 /// 画进 canvas 会污染画布、toDataURL 抛 SecurityError；data URL 同源不污染。
-/// 只放行库根内文件（asset 协议 scope 同款限制）——store_path 都在库内，不设防会把
-/// 任意本地图片读成 data URL 泄进 webview。
+/// 只放行库根内文件或已登记且指纹一致的外部引用，避免读取任意本地图片。
 #[tauri::command]
 pub async fn read_image_data_url(
     paths: State<'_, Arc<LibraryPaths>>,
+    db: State<'_, Arc<Database>>,
     path: String,
 ) -> Result<String, AppError> {
     let root = paths.inner().root.clone();
+    let db = db.inner().clone();
     tokio::task::spawn_blocking(move || {
         let p = PathBuf::from(&path);
         if !p.is_file() {
@@ -345,7 +346,11 @@ pub async fn read_image_data_url(
             .canonicalize()
             .map_err(|e| AppError::Other(format!("素材库根不可用: {e}")))?;
         if !canonical.starts_with(&root) {
-            return Err(AppError::Other(format!("只允许读取素材库内的文件: {path}")));
+            let key = canonical.to_string_lossy().into_owned();
+            if !db.external_paths()?.contains(&key) {
+                return Err(AppError::Other(format!("只允许读取库内图片或已登记的外部引用: {path}")));
+            }
+            db.resolve_external_paths(&[key])?;
         }
         let bytes = std::fs::read(&canonical)?;
         let ext = canonical
@@ -1057,8 +1062,8 @@ pub async fn reclassify_all(app: AppHandle, db: State<'_, Arc<Database>>) -> Res
     let jev_key = {
         let settings = app.state::<crate::core::settings::SettingsState>();
         let snapshot = settings.get();
-        if snapshot.jev_verify_enabled {
-            snapshot.jev_api_key.filter(|key| !key.trim().is_empty())
+        if snapshot.jev_image_classification_enabled {
+            Some(snapshot.jev_api_key.unwrap_or_default())
         } else {
             None
         }

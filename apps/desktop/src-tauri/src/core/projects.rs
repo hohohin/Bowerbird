@@ -419,7 +419,7 @@ impl Database {
                    WHERE other.asset_id = a.id AND other.project_id != ?1\
                  ) AS shared \
                  FROM project_assets current JOIN assets a ON a.id = current.asset_id \
-                 WHERE current.project_id = ?1",
+                 WHERE current.project_id = ?1 AND a.id NOT IN (SELECT asset_id FROM external_assets)",
             )?;
             let rows = stmt.query_map(rusqlite::params![project_id], |row| {
                 Ok((
@@ -545,6 +545,9 @@ impl Database {
             .optional()?
             .ok_or_else(|| AppError::NotFound(format!("asset {asset_id}")))?;
 
+        if mode == AssetDeleteMode::MoveOut && conn.query_row("SELECT EXISTS(SELECT 1 FROM external_assets WHERE asset_id=?1)", [asset_id], |r| r.get::<_,bool>(0))? {
+            return Err(AppError::Other("外部原图不由园丁鸟管理，请移除引用".into()));
+        }
         if mode == AssetDeleteMode::MoveOut
             && !asset_can_move_out(source.as_deref(), origin_path.as_deref())
         {

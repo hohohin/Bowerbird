@@ -30,12 +30,14 @@ try {
     window.store.setState({boardOpen:true});
   });
   await card.locator('[data-conversation-image="b"]').click();
+  await page.waitForFunction(()=>window.picks.length===1);
   assert.deepEqual(await page.evaluate(()=>window.picks),[{assetId:'b',canvasNodeId:'output-b'}]);
   assert.equal(await page.locator('[data-project-inspector]').count(),0,'image click must not open conversation details');
   await card.hover();await card.getByRole('button',{name:'上一张生成图片'}).click();
   await page.locator('[data-conversation-image="a"]').waitFor();
   assert.equal(await page.evaluate(()=>window.picks.length),1,'carousel navigation must not add a reference');
   await card.locator('[data-conversation-image="a"]').click();
+  await page.waitForFunction(()=>window.picks.length===2);
   assert.deepEqual(await page.evaluate(()=>window.picks),[
     {assetId:'b',canvasNodeId:'output-b'},{assetId:'a',canvasNodeId:'output-a'},
   ]);
@@ -56,20 +58,36 @@ try {
   // The existing generation editing dock accepts the exact displayed output too.
   await page.evaluate(()=>window.store.setState({boardOpen:false,genEditing:true}));
   await image.click();
+  await page.waitForFunction(()=>window.picks.length===3);
   assert.deepEqual(await page.evaluate(()=>window.picks.at(-1)),{assetId:'a',canvasNodeId:'output-a'});
   assert.equal(await page.evaluate(()=>window.picks.length),3);
   assert.equal(await page.locator('[data-project-inspector]').count(),0);
-  await page.evaluate(()=>window.store.setState({boardOpen:true,genEditing:null}));
-  await card.locator('.canvas-prompt-content').click();
-  await page.locator('[data-project-inspector]').waitFor();
-  assert.equal(await page.evaluate(()=>window.picks.length),3,'card text opens details without adding an image');
-  await page.getByTitle('关闭详情（进行中的任务不会中断）').click();
-  await page.evaluate(()=>window.store.setState({boardOpen:false}));
-  await image.click();
+  // Completed cards are just the image, preserving its aspect ratio.
+  assert.equal(await card.locator('.canvas-prompt-content').count(),0);
+  const appearance=await card.evaluate(el=>({padding:getComputedStyle(el).padding,border:getComputedStyle(el).borderWidth,background:getComputedStyle(el).backgroundColor,shadow:getComputedStyle(el).boxShadow}));
+  assert.deepEqual(appearance,{padding:'0px',border:'0px',background:'rgba(0, 0, 0, 0)',shadow:'none'});
+  const bounds=await card.boundingBox();assert.ok(Math.abs(bounds.height/bounds.width-150/190)<0.01);
+  // Double click in creation mode previews without adding a reference.
+  await image.dblclick();
   await page.getByRole('dialog',{name:'媒体预览，1 / 1'}).waitFor();
+  await page.waitForTimeout(450);
+  assert.equal(await page.evaluate(()=>window.picks.length),3);
   assert.equal(await page.locator('[data-project-inspector]').count(),0);
+  await page.keyboard.press('Escape');
+  await page.evaluate(()=>window.store.setState({boardOpen:false,genEditing:null}));
+  await image.click();
+  await page.locator('[data-project-inspector]').waitFor();
+  assert.equal(await page.getByRole('dialog',{name:'媒体预览，1 / 1'}).count(),0);
+  await page.getByTitle('关闭详情（进行中的任务不会中断）').click();
+  await image.dblclick();
+  await page.getByRole('dialog',{name:'媒体预览，1 / 1'}).waitFor();
+  await page.waitForTimeout(450);
+  assert.equal(await page.locator('[data-project-inspector]').count(),0,'double click must cancel the pending conversation open');
   assert.equal(await page.evaluate(()=>window.picks.length),3);
   await page.keyboard.press('Escape');
+  await image.focus();await page.keyboard.press('Enter');
+  await page.locator('[data-project-inspector]').waitFor();
+  await page.getByTitle('关闭详情（进行中的任务不会中断）').click();
   // Append a real-shaped continuation while mounted; the first card keeps its position.
   const before=await card.boundingBox();
   await page.evaluate(async()=>{
@@ -126,6 +144,31 @@ try {
   await page.evaluate(()=>window.save());
   await page.reload();await card.waitFor();await page.locator('[data-conversation-image="c"]').waitFor();
   assert.equal(await page.locator('.canvas-prompt-node').count(),1);
+  // The visible bounds follow each selected image, including wide and tall results.
+  await page.evaluate(()=>sessionStorage.setItem('canvas-media-dimensions','1'));
+  await page.reload();await card.waitFor();
+  await card.hover();await card.getByRole('button',{name:'上一张生成图片'}).click();
+  let ratio=await card.evaluate(el=>el.getBoundingClientRect().height/el.getBoundingClientRect().width);
+  assert.ok(Math.abs(ratio-4)<0.01,'portrait result uses its full image aspect ratio');
+  await card.getByRole('button',{name:'上一张生成图片'}).click();
+  ratio=await card.evaluate(el=>el.getBoundingClientRect().height/el.getBoundingClientRect().width);
+  assert.ok(Math.abs(ratio-0.25)<0.01,'landscape result has no card padding');
+  await page.mouse.click(1400,100);
+  await page.mouse.move(1400,100);
+  assert.equal(await card.locator('.canvas-conversation-count').evaluate(el=>getComputedStyle(el).opacity),'0');
+  await page.waitForFunction(()=>getComputedStyle(document.querySelector('[data-workflow-session-output="session"]')).opacity==='0');
+  await card.hover();
+  await page.waitForFunction(()=>getComputedStyle(document.querySelector('[data-workflow-session-output="session"]')).opacity==='1');
+  // A running continuation still exposes its status and prompt above the old result.
+  await page.evaluate(()=>{
+    const s=window.snapshot(),n=s.nodes.find(n=>n.id==='next');
+    n.payloadJson=JSON.stringify({...JSON.parse(n.payloadJson),status:'running'});
+    sessionStorage.setItem('reference-fixture',JSON.stringify(s));
+  });
+  await page.reload();await card.waitFor();
+  assert.equal(await card.getAttribute('aria-busy'),'true');
+  assert.equal(await card.locator('.canvas-prompt-content').count(),1);
+  assert.doesNotMatch(await card.getAttribute('class'),/is-image-only/);
   assert.deepEqual(errors,[]);
-  console.log('conversation cards: exact image reference, editing dock, details, preview, drag/selection/pan, carousel, continuation, stable position, visibility, remove/undo and reload passed');
+  console.log('conversation cards: image-only appearance, click/double-click separation, exact image reference, editing dock, details, preview, drag/selection/pan, carousel, continuation, stable position, visibility, remove/undo and reload passed');
 } finally {await browser.close();await server.close();}

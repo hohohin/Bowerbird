@@ -1,3 +1,4 @@
+import { placeWorkflowCard } from "./fixtures/canvas-reference/place-card.mjs";
 import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
 import { createServer } from 'vite';
@@ -18,7 +19,7 @@ try {
     api.dreaminaCreditBalance = async () => ({ total_credit: 10 });
   });
   await mockCatalog();
-  await page.getByRole('button', { name: '新增生成卡片', exact: true }).click();
+  await placeWorkflowCard(page, '新增生成卡片');
   await page.getByRole('button', { name: '适应内容', exact: true }).click();
   const card = page.locator('.workflow-card.is-generation').first();
   await card.hover();

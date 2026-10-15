@@ -27,7 +27,7 @@ fn exact_duplicate(db: &Database, source: &Path, size: u64) -> AppResult<Option<
     use std::io::Read;
     let candidates = {
         let conn = db.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT id, store_path FROM assets WHERE size=?1 AND store_path IS NOT NULL")?;
+        let mut stmt = conn.prepare("SELECT id, store_path FROM assets WHERE size=?1 AND store_path IS NOT NULL AND id NOT IN (SELECT asset_id FROM external_assets)")?;
         let rows = stmt.query_map([size as i64], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
         rows.collect::<Result<Vec<_>, _>>()?
     };

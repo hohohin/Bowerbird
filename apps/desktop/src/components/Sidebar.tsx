@@ -461,7 +461,7 @@ export function Sidebar() {
               )}
               <button
                 onClick={() => setClassificationOpen(true)}
-                title="本地分类：识别图片、创建标签和寻找匹配"
+                title="自动分类：识别图片、创建标签和寻找匹配"
                 className="rounded px-1 text-cold hover:opacity-80 disabled:opacity-40"
               >
                 管理
@@ -482,8 +482,7 @@ export function Sidebar() {
                   title={`tag:${t.name}`}
                 >
                   <span className="text-muted">#</span>
-                  <span className="flex-1 truncate">{t.name}</span>
-                  <span className="text-[10px] tabular-nums text-muted">{t.count}</span>
+                  <span className="flex-1 truncate text-[10px]">{t.name}</span>
                 </div>
               );
             })}

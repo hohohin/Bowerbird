@@ -9,6 +9,67 @@ fn db() -> Database {
 }
 
 #[test]
+fn deleting_labels_cleans_relations_but_preserves_assets_and_observations() {
+    let db = db();
+    let p = Prediction {
+        description: "植物包装".into(),
+        tags: vec!["植物".into(), "包装".into(), "保留".into()],
+        matches: vec![],
+    };
+    db.apply_local_prediction("a", 0, &p, true, &[]).unwrap();
+    let labels = db.local_labels().unwrap();
+    let ids: Vec<String> = labels
+        .iter()
+        .filter(|l| l.name != "保留")
+        .map(|l| l.id.clone())
+        .collect();
+    db.local_example(&ids[0], &["b".into()], true).unwrap();
+    db.local_example(&ids[1], &["b".into()], false).unwrap();
+    let revision = db.local_revision().unwrap();
+    let mut repeated = ids.clone();
+    repeated.push(ids[0].clone());
+    repeated.push("missing".into());
+    db.delete_local_labels(&repeated).unwrap();
+    assert_eq!(db.local_revision().unwrap(), revision + 1);
+    assert_eq!(db.local_labels().unwrap().len(), 1);
+    assert_eq!(db.list_asset_tags("a").unwrap()[0].name, "保留");
+    assert!(db.list_asset_tags("b").unwrap().is_empty());
+    assert!(db.pending_local_label().unwrap().is_none());
+    for id in &ids {
+        assert!(db.local_examples(id, "").unwrap().is_empty());
+    }
+    assert_eq!(db.local_targets(false).unwrap(), vec!["a", "b"]);
+    assert_eq!(db.local_targets(true).unwrap(), vec!["b"]);
+    assert!(!db
+        .apply_local_prediction("a", revision, &p, true, &[])
+        .unwrap());
+    db.delete_local_labels(&repeated).unwrap();
+    db.delete_local_labels(&[]).unwrap();
+    assert_eq!(db.local_revision().unwrap(), revision + 1);
+}
+
+#[test]
+fn deleting_labels_is_atomic_and_refused_during_classification() {
+    let db = db();
+    let first = db.save_local_label(None, "第一个", "", true).unwrap();
+    let second = db.save_local_label(None, "第二个", "", true).unwrap();
+    let revision = db.local_revision().unwrap();
+    db.conn.lock().unwrap().execute_batch(
+        "CREATE TRIGGER reject_label_delete BEFORE DELETE ON tags WHEN OLD.name='第二个' BEGIN SELECT RAISE(ABORT, 'test failure'); END;"
+    ).unwrap();
+    assert!(db.delete_local_labels(&[first.clone(), second]).is_err());
+    assert_eq!(db.local_labels().unwrap().len(), 2);
+    assert_eq!(db.local_revision().unwrap(), revision);
+    let classifier = super::LocalClassifier::new(std::path::PathBuf::new());
+    let guard = classifier.gate.clone().try_lock_owned().unwrap();
+    assert!(classifier.delete_labels(&db, &[first.clone()]).is_err());
+    assert_eq!(db.local_labels().unwrap().len(), 2);
+    drop(guard);
+    classifier.delete_labels(&db, &[first]).unwrap();
+    assert_eq!(db.local_labels().unwrap().len(), 1);
+}
+
+#[test]
 fn dynamic_labels_need_no_caption_or_preset_vocabulary() {
     let db = db();
     assert!(db.local_labels().unwrap().is_empty());
@@ -393,4 +454,70 @@ fn vector_uninstall_waits_for_the_busy_gate() {
     classifier.uninstall_vector().unwrap();
     assert!(!dir.join("vector").exists());
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Exercise full eight-label batches plus a final partial batch against the pinned runtime.
+#[tokio::test]
+#[ignore = "requires the pinned local model pack in BOWERBIRD_LOCAL_MODEL_TEST_DIR"]
+async fn real_local_model_batch_persists_completed_assets() {
+    use super::runtime::Server;
+    use std::sync::atomic::AtomicBool;
+    let root = std::path::PathBuf::from(std::env::var("BOWERBIRD_LOCAL_MODEL_TEST_DIR").unwrap());
+    let samples = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/samples");
+    let db = db();
+    db.conn
+        .lock()
+        .unwrap()
+        .execute(
+            "INSERT INTO assets(id,name,ext,thumb_path,created_at) VALUES('c','c','png','c.png',3)",
+            [],
+        )
+        .unwrap();
+    for name in [
+        "产品海报",
+        "野生动物",
+        "平面插画",
+        "人物",
+        "建筑",
+        "植物",
+        "食品",
+        "包装设计",
+        "风景",
+    ] {
+        db.save_local_label(None, name, "根据图中可见内容判断", true)
+            .unwrap();
+    }
+    let library = crate::core::paths::LibraryPaths::init(
+        std::env::temp_dir().join(format!("bowerbird-batch-{}", uuid::Uuid::new_v4())),
+    )
+    .unwrap();
+    let classifier = super::LocalClassifier::new(root.clone());
+    let cancel = AtomicBool::new(false);
+    let mut server = Server::start(&root, &cancel).await.unwrap();
+    for (id, sample) in [
+        ("a", "preset-01.webp"),
+        ("b", "preset-02.webp"),
+        ("c", "preset-03.webp"),
+    ] {
+        let path = library.root.join(sample);
+        std::fs::copy(samples.join(sample), &path).unwrap();
+        db.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE assets SET thumb_path=?1 WHERE id=?2",
+                rusqlite::params![path.to_string_lossy(), id],
+            )
+            .unwrap();
+        let count = db.local_labels().unwrap().len();
+        classifier
+            .classify_one(Some(&server), &db, &library, id, None, None, None, None, false)
+            .await
+            .unwrap();
+        assert!(!db.local_targets(true).unwrap().contains(&id.into()));
+        println!("batch classification completed: {id}, {count} labels evaluated");
+    }
+    server.stop().await;
+    assert!(db.local_targets(true).unwrap().is_empty());
+    std::fs::remove_dir_all(library.root).unwrap();
 }

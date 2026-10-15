@@ -13,6 +13,6 @@ function isBowerbirdTemporaryOrigin(path: string): boolean {
 export function canMoveAssetOut(
   asset: Pick<Asset, "source" | "origin_path"> | null | undefined,
 ): boolean {
-  if (!asset?.origin_path || asset.source === "extension") return false;
+  if (!asset?.origin_path || (asset.source === "extension" || asset.source === "external")) return false;
   return !isBowerbirdTemporaryOrigin(asset.origin_path);
 }

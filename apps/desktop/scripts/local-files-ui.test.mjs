@@ -1,0 +1,74 @@
+import assert from "node:assert/strict";
+import { mkdir } from "node:fs/promises";
+import { createServer } from "vite";
+import { chromium } from "../../html-renderer/node_modules/playwright/index.mjs";
+const server = await createServer({ server: { host: "127.0.0.1", port: 1579, strictPort: true, hmr: false, watch: null } });
+await server.listen();
+const browser = await chromium.launch({ channel: "chrome", headless: true });
+const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+const errors = []; page.on("pageerror", error => errors.push(error.message));
+const panel = page.getByRole("complementary", { name: "本机文件资源管理器" });
+const trigger = page.getByRole("button", { name: "打开本机文件资源管理器", exact: true });
+try {
+  await page.goto("http://127.0.0.1:1579/scripts/fixtures/canvas-reference/preview.html?local-files&strict-canvas&provisional");
+  await page.locator(".canvas-stage").waitFor();
+  assert.equal(await trigger.getAttribute("title"), "打开本机文件资源管理器");
+  assert.equal(await page.evaluate(() => document.querySelector('.local-files-trigger').compareDocumentPosition(document.querySelector('[data-import-trigger]')) & Node.DOCUMENT_POSITION_FOLLOWING), 4);
+  await trigger.click(); await panel.getByRole("button", { name: "原图.png", exact: true }).waitFor();
+  await page.waitForFunction(() => window.calls.some(c => c.command === "external_files_preview"));
+  const previewsBeforeRefresh = await page.evaluate(() => window.calls.filter(c => c.command === "external_files_preview").length);
+  await panel.getByRole("button", { name: "刷新文件夹" }).click();
+  await page.waitForFunction(before => window.calls.filter(c => c.command === "external_files_preview").length > before, previewsBeforeRefresh);
+  await panel.getByRole("button", { name: "打开文件夹 旅行" }).click();
+  await page.waitForFunction(() => localStorage.getItem("bowerbird.localFiles.lastDirectory") === "/pictures/travel");
+  await panel.getByRole("button", { name: "关闭本机文件资源管理器" }).click(); await trigger.click();
+  await page.waitForFunction(() => document.querySelector('[aria-label="文件夹路径"]').value === "/pictures/travel");
+  assert.equal(await page.evaluate(() => window.calls.filter(c => c.command === "external_files_index").length), 0);
+  await panel.getByRole("button", { name: "原图.png", exact: true }).click(); await panel.getByRole("button", { name: "添加到画板" }).click();
+  await page.waitForFunction(() => window.snapshot().nodes.some(n => n.assetId === "external-original"));
+  await page.evaluate(() => {
+    window.pickedExternal = null;
+    window.addEventListener("bowerbird://board-asset-picked", event => { window.pickedExternal = event.detail; });
+    window.store.setState({ boardOpen: true });
+  });
+  const externalNode = page.getByRole("group", { name: /external-original，点击加入创作/ });
+  await externalNode.focus(); await externalNode.press("Enter");
+  await page.waitForFunction(() => window.pickedExternal?.assetId === "external-original" || window.pickedExternal?.id === "external-original");
+  await page.evaluate(() => window.store.setState({ boardOpen: false }));
+  const commands = await page.evaluate(() => window.calls.map(c => c.command));
+  assert.ok(commands.indexOf("project_canvas_materialize") < commands.indexOf("project_canvas_node_create"));
+  assert.equal(commands.includes("import_image_bytes"), false); assert.equal(commands.includes("import_files"), false);
+  const source = panel.getByRole("button", { name: "另一张.png", exact: true });
+  const sourceBox = await source.boundingBox(); const stageBox = await page.locator(".canvas-stage").boundingBox();
+  await page.mouse.move(sourceBox.x + 30, sourceBox.y + 30); await page.mouse.down();
+  await page.mouse.move(sourceBox.x + 50, sourceBox.y + 40, { steps: 6 });
+  await page.mouse.move(stageBox.x + stageBox.width * .7, stageBox.y + stageBox.height * .7, { steps: 20 }); await page.mouse.up();
+  await page.waitForFunction(() => window.snapshot().nodes.some(n => n.assetId === "external-other"));
+  await page.evaluate(() => window.save()); await page.reload(); await page.locator('.canvas-stage').waitFor();
+  await trigger.click(); await panel.getByRole("tab", { name: "外部引用" }).click();
+  await panel.getByText("external-original", { exact: true }).waitFor();
+  await page.evaluate(() => { window.referenceStatus = 'changed'; }); await panel.getByRole("button", { name: "检查引用" }).click();
+  await panel.getByRole("button", { name: "更新引用" }).first().click();
+  await page.getByRole("dialog", { name: "更新外部图片引用" }).getByRole("button", { name: "更新引用", exact: true }).click();
+  await page.waitForFunction(() => window.calls.some(c => c.command === 'external_files_update' && c.args.acceptChanges));
+  await panel.getByRole("button", { name: "复制到素材库" }).first().click();
+  await page.waitForFunction(() => window.calls.some(c => c.command === 'external_files_copy'));
+  await panel.getByRole("tab", { name: "浏览文件" }).click();
+  const path = panel.getByRole("textbox", { name: "文件夹路径" });
+  await path.fill("/missing"); await path.press("Enter"); await panel.getByRole("alert").waitFor();
+  assert.equal(await page.evaluate(() => localStorage.getItem("bowerbird.localFiles.lastDirectory")), "/pictures/travel");
+  await path.fill("/pictures"); await path.press("Enter");
+  await page.waitForFunction(() => localStorage.getItem("bowerbird.localFiles.lastDirectory") === "/pictures");
+  await mkdir('.tmp/local-files', { recursive: true });
+  for (const theme of ['light', 'dark']) {
+    await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+    await panel.evaluate(async element => {
+      await Promise.all(element.getAnimations({ subtree: true }).map(animation => animation.finished.catch(() => {})));
+    });
+    await page.screenshot({ path: `.tmp/local-files/${theme}.png` });
+  }
+  await page.setViewportSize({ width: 900, height: 700 }); await page.screenshot({ path: '.tmp/local-files/narrow.png' });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);
+  assert.deepEqual(errors, []);
+  console.log('Local files UI: toolbar order, remembered location, browse, materialization, button/drag references, reload, update, copy, missing-directory recovery and themes passed.');
+} finally { await browser.close(); await server.close(); }

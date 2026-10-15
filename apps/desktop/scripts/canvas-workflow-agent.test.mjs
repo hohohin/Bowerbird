@@ -1,3 +1,4 @@
+import { placeWorkflowCard } from "./fixtures/canvas-reference/place-card.mjs";
 import assert from 'node:assert/strict';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
@@ -8,7 +9,7 @@ const page = await browser.newPage({viewport:{width:1600,height:1000}});
 try {
   await page.goto('http://127.0.0.1:1599/scripts/fixtures/canvas-reference/preview.html');
   await page.locator('[data-canvas-node-id="old"]').waitFor();
-  await page.getByRole('button',{name:'新增 Agent 卡片',exact:true}).click();
+  await placeWorkflowCard(page, '新增 Agent 卡片');
   await page.getByRole('textbox',{name:'Agent 要求'}).waitFor();
   await page.getByRole('textbox',{name:'Agent 要求'}).fill('将「朱砂痣」替换为「春山可望」，保留文字的排布关系。');
   await page.evaluate(async()=>{
@@ -47,7 +48,7 @@ try {
     const upstream={...newWorkflowNode('instruction',0,0,'codex'),id:'upstream',action:'reuse',inputs:{image:[{assetId:'existing'}]}};
     const input={nodeId:'upstream',portId:'text'};
     const agent={...newWorkflowNode('agent',420,0,''),id:'agent',agentTransport:'cloud',prompt:'将 @[original] 中的朱砂痣替换为春山可望，其余保持',inputs:{text:[input]},promptReferences:[{id:'original',type:'text',input,label:'文本 1'}]};
-    check(workflowInputs(agent).length===2&&workflowInputs(agent)[0].type==='text'&&workflowInputs(agent)[1].type==='image','agent accepts source text');
+    check(workflowInputs(agent).length===3&&workflowInputs(agent)[0].type==='text'&&workflowInputs(agent)[1].type==='image'&&workflowInputs(agent)[2].type==='visual-profile','agent accepts source text, images and visual profile');
     check(workflowOutputs(agent)[0].type==='text','agent outputs text');
     const binding={nodeId:'agent',portId:'text'};
     const gen={...newWorkflowNode('generation',840,0,'codex'),id:'gen',prompt:'新海报：@[edited]',inputs:{text:[binding]},promptReferences:[{id:'edited',type:'text',input:binding,label:'改写文本'}]};

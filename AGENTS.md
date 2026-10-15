@@ -11,7 +11,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 | `dev-doc/VIDEO-API-PROVENANCE.json` | 视频增量原始快照/补丁哈希与冲突归因（历史证据） | 追溯原始视频增量时；不用于当前部署 |
 | `dev-doc/VIDEO-API-INTEGRATION.md` | 国内方舟视频 Cloud 实现、恢复/结算、离线验收与 CLI 前置归因 | 接续视频 API 接入、核验 2.5 模型与异步任务/计费边界时必读 |
 | `dev-doc/VIDEO-API-INTEGRATION-V3.md`、`dev-doc/VIDEO-API-INTEGRATION-V3.json` | 视频与 FFmpeg 历史集成、0058 迁移归属及阶段哈希 | 追溯 9 月 6 日集成；当前部署/回滚读 VIDEO-API-INTEGRATION.md |
-| `dev-doc/LOCAL-CLASSIFICATION.md` | 本地动态分类模型包、标签发现/自定义匹配、人工保护与验证记录 | 本地分类、自动标签、分类模型下载与运行时相关工作前必读 |
+| `dev-doc/LOCAL-CLASSIFICATION.md` | 自动分类、Jev 图片匹配与 Cloud 补标签、本地模型包、人工保护与验证记录 | 自动/本地分类、Jev 图片判断、自动标签、分类模型下载与运行时相关工作前必读 |
 | `dev-doc/EMBEDDED-BROWSER.md` | 探索内置浏览器、登录资料持久化、网页拖图入库/画板落点、素材栏折叠与隔离 WebView2 验证 | 内置浏览器、探索工作区、网页拖图、探索联动画板素材栏与登录状态相关工作前必读 |
 | `dev-doc/ONBOARDING.md` | 身份实操引导、三条真实操作路线、独立项目与进度恢复、跳步及隔离验证 | 入门引导、首启/升级介绍、引导素材导入或学习提示相关工作前必读 |
 | `dev-doc/DESKTOP-UPDATES.md` | 双端自动更新协议、密钥与发布流程、部署/回滚证据、验收边界及 Mac 协作共识 | 自动更新、更新包签名/清单发布、更新失败或双端上线状态核验前必读 |
@@ -36,11 +36,14 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 | `reference/theory.md` | 早期素材分类（A–F 类）草稿 | 仅在追溯原始意图时 |
 | `dev-doc/桌面端UI设计.html` | 早期三区外壳与创作板设计稿 | 仅作设计背景；当前 UI 契约读 PROJECT.md 与对应专项 |
 | `Windows/README.md` | Windows x64 开发、构建 NSIS 安装包与环境要求 | Windows 运行 / 打包前 |
+| `Windows/MAC-SYNC-2026-10-16.md` | Windows 接收 mac@300124d 的差异、0034/分类/工作流/截图同步与验证 | 接续本轮 Mac 同步、核对 Windows 平台保留项及未发版边界时 |
 | `Windows/Windows端更新内容-26.10.1001.md` | 相对 Mac d6027fb 的 Windows 按版本更新清单，含 1001 后二维表格、Agent 会话生图、视频截帧及诊断源码 | Mac 接收截至 2026-10-15 的 dev、区分已发布 1001 与后续未发版源码、核对同步及原生验收时 |
 | `Windows/MAC-SYNC-AUDIT-2026-10-09.md` | Mac 遗漏增量逐项审计、Windows 合并与正式构建限制 | 接续 10 月 9 日 Mac 同步或核对 Agent 卡片正式包行为时 |
 | `Windows/Windows-edited.md` | Windows 适配修改清单、交付产物与升级注意事项 | 维护 Windows override / 排查平台差异时 |
 | `macOS/WINDOWS-SYNC-2026-10-07.md` | 自上次 mac 推送以来的增量、Windows 同步步骤、平台边界与本轮验证 | 接收本轮 Mac 源码到 Windows、核对迁移与原生验收时 |
 | `macOS/DEV-SYNC-2026-10-10.md` | Windows dev 相对 Mac d6027fb 的更新、存档推送状态、共享功能及 Mac 接收验收 | Mac 接收 Windows 26.10.901–26.10.1001 源码、核对正式 Agent/视频卡/v3 布局与发布边界时 |
+| `macOS/DEV-SYNC-2026-10-13.md` | Windows 1001 后续二维表格/Agent 会话生图增量、Mac 本机改动组合与验证 | 接续 10 月 13 日 Mac 接收、核对比例/分类输出兼容与发布边界时 |
+| `macOS/CROSS-PLATFORM-SYNC-2026-10-15.md` | 10 月 15 日分叉合并、工作流/Agent 增量与跨端接收验证 | 其他端接收本次 mac 存档或核对 Intel 包与后续源码边界时 |
 | `macOS/README.md` | Intel / Apple Silicon 开发运行、DMG 固定拖动安装规范、重打包脚本与交付检查 | macOS 开发 / 构建 / 重打包 / 交付 / 排障前必读 |
 
 ## 文档维护规则

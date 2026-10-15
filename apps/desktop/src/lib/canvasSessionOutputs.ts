@@ -1,5 +1,5 @@
 import type { CanvasNode } from "./types";
-import { canvasNoteValue, readCanvasNote } from "./canvasNotes";
+import { canvasNoteValue, readCanvasNote, type CanvasNotePayload } from "./canvasNotes";
 import { activePromptReferences, workflowActiveSession, workflowBindingKey, type WorkflowInput, type WorkflowNode } from "./canvasWorkflow";
 
 function payload(node: CanvasNode) {
@@ -26,7 +26,13 @@ export function canvasInputValue(source: CanvasNode, cellId: string, nodes: read
   if (source.kind === "prompt" && cellId === "image") {
     return { type: "image" as const, assetIds: [...new Set(canvasSessionImages(source, nodes).map(node => node.assetId!))] };
   }
-  return source.kind === "note" ? canvasNoteValue(readCanvasNote(source), cellId) : undefined;
+  if (source.kind !== "note") return undefined;
+  const note = resolveGenerationCells(readCanvasNote(source), nodes);
+  const value = canvasNoteValue(note, cellId);
+  if (value?.type !== "image") return value;
+  const nodeIds = note.cells.flat().filter(cell => cellId === "*" || cell.id === cellId)
+    .flatMap(cell => cell.generation_ref && !cell.image_refs?.length ? [cell.generation_ref.session_node_id] : []);
+  return nodeIds.length ? { ...value, nodeIds: [...new Set(nodeIds)] } : value;
 }
 
 /** Source identity is independent of whether the source currently has a value. */
@@ -93,4 +99,23 @@ export function containedSessionOutputIds(nodes: readonly CanvasNode[], workflow
     }
   }
   return hidden;
+}
+
+/** Embedded generation is an exact saved turn, never a new model request. */
+export function resolveGenerationCells(note: CanvasNotePayload, nodes: readonly CanvasNode[]): CanvasNotePayload {
+  let changed = false;
+  const cells = note.cells.map(row => row.map(cell => {
+    const ref = cell.generation_ref;
+    if (!ref || cell.content_type !== "image") return cell;
+    const session = nodes.find(node => node.id === ref.session_node_id && node.kind === "prompt" && node.hiddenAt == null);
+    if (!session || payload(session).status !== "done") return cell;
+    const outputs = canvasSessionImages(session, nodes).filter(node => node.hiddenAt == null);
+    const output = ref.output_node_id ? outputs.find(node => node.id === ref.output_node_id) : outputs[outputs.length - 1];
+    if (!output?.assetId) return cell;
+    if (cell.image_refs?.length === 1 && cell.image_refs[0].asset_id === output.assetId && ref.output_node_id === output.id) return cell;
+    changed = true;
+    return { ...cell, text: "@图片1", image_refs: [{ asset_id: output.assetId, token: "@图片1" }],
+      generation_ref: { ...ref, output_node_id: output.id } };
+  }));
+  return changed ? { ...note, cells, text: cells.map(row => row.map(cell => cell.text).join("\t")).join("\n") } : note;
 }

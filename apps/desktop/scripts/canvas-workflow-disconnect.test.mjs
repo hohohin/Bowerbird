@@ -50,7 +50,7 @@ try {
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.find(node => node.id === 'target').inputs.text.length === 0);
   assert.equal(await menu.count(), 0);
   // Native whole-card inputs choose exactly one hidden writer and retain cell contents.
-  const tableInput = page.locator('[data-canvas-node-id="table"]').getByRole('button', { name: '内容卡片输入', exact: true });
+  const tableInput = page.locator('[data-canvas-node-id="table"]').getByRole('button', { name: '第 1 列文字输入', exact: true });
   await tableInput.click({ button: 'right', force: true }); await menu.waitFor();
   assert.match(await menu.innerText(), /第 1 行，第 1 列/); assert.match(await menu.innerText(), /第 2 行，第 1 列/);
   await menu.getByRole('menuitem', { name: /指令卡片 1/ }).click();

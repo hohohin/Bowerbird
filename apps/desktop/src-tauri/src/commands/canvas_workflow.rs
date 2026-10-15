@@ -11,6 +11,20 @@ pub struct WorkflowSnapshot { revision: i64, document: Value }
 
 fn invalid() -> AppError { AppError::Other("工作流数据无效".into()) }
 
+fn validate_image_output(value: &Value, assets: &mut HashSet<String>) -> AppResult<()> {
+    // An asynchronous image output may contain only exact generation-session references.
+    if value.get("assetIds").is_none() && value.get("nodeIds").is_none() { return Err(invalid()); }
+    if let Some(ids) = value.get("nodeIds") {
+        if ids.as_array().is_none_or(|ids| ids.iter().any(|id| id.as_str().is_none_or(str::is_empty))) { return Err(invalid()); }
+    }
+    if let Some(ids) = value.get("assetIds") {
+        for asset in ids.as_array().ok_or_else(invalid)? {
+            assets.insert(asset.as_str().ok_or_else(invalid)?.to_owned());
+        }
+    }
+    Ok(())
+}
+
 fn validate_loop(run: &Value, nodes: &[Value], assets: &mut HashSet<String>) -> AppResult<()> {
     let Some(state) = run.get("loop") else { return Ok(()); };
     let owner = state["nodeId"].as_str().ok_or_else(invalid)?;
@@ -50,7 +64,9 @@ fn validate_loop(run: &Value, nodes: &[Value], assets: &mut HashSet<String>) -> 
         for ports in outputs.values() {
             for value in ports.as_object().ok_or_else(invalid)?.values() {
                 if !matches!(value["type"].as_str(), Some("text" | "image" | "visual-profile" | "session")) { return Err(invalid()); }
-                if let Some(list) = value.get("assetIds") {
+                if value["type"] == "image" {
+                    validate_image_output(value, assets)?;
+                } else if let Some(list) = value.get("assetIds") {
                     for asset in list.as_array().ok_or_else(invalid)? {
                         assets.insert(asset.as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?.to_owned());
                     }
@@ -95,6 +111,16 @@ fn validate(document: &Value) -> AppResult<HashSet<String>> {
                 || inputs.values().filter_map(Value::as_array).map(Vec::len).sum::<usize>() != 1
                 || inputs.keys().any(|key| key != "text" && key != "image") { return Err(invalid()); }
             if nodes.iter().any(|other| other["id"] != node["id"] && other["kind"] == "text" && other["textTarget"]["nodeId"] == node["textTarget"]["nodeId"] && other["textTarget"]["cellId"] == node["textTarget"]["cellId"]) { return Err(invalid()); }
+            if let Some(axis) = node["textTarget"].get("appendAxis") {
+                if !matches!(axis.as_str(), Some("row" | "column")) || node["textTarget"]["append"] != true { return Err(invalid()); }
+                let cells = node["textTarget"]["axisCellIds"].as_array().filter(|cells| !cells.is_empty()).ok_or_else(invalid)?;
+                let mut unique = HashSet::new();
+                for cell in cells {
+                    let id = cell.as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?;
+                    if !unique.insert(id) { return Err(invalid()); }
+                }
+                if node["textTarget"].get("axisOffset").is_some_and(|offset| offset.as_u64().is_none()) { return Err(invalid()); }
+            }
             if let Some(value) = node["textTarget"].get("cellIds") {
                 let cells = value.as_array().ok_or_else(invalid)?;
                 let mut unique = HashSet::new();
@@ -147,9 +173,7 @@ fn validate(document: &Value) -> AppResult<HashSet<String>> {
         for value in node["outputs"].as_object().ok_or_else(invalid)?.values() {
             match value["type"].as_str() {
                 Some("session") if value["nodeIds"].as_array().is_some_and(|ids| ids.iter().all(|id| id.is_string())) => {},
-                Some("image") => for asset in value["assetIds"].as_array().ok_or_else(invalid)? {
-                    assets.insert(asset.as_str().ok_or_else(invalid)?.to_owned());
-                },
+                Some("image") => validate_image_output(value, &mut assets)?,
                 Some("text") if value["text"].is_string() => {
                     if let Some(ids) = value.get("assetIds") {
                         for asset in ids.as_array().ok_or_else(invalid)? {
@@ -240,6 +264,35 @@ mod tests {
     use super::*;
     fn node(id: &str, inputs: Value) -> Value { json!({"id":id,"kind":"generation","action":"describe","x":0,"y":0,"prompt":"test","provider":"codex","trigger":false,"inputs":inputs,"outputs":{},"outputPorts":[]}) }
     #[test]
+    fn agent_image_session_output_roundtrips_without_finished_assets() {
+        let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();
+        db.conn.lock().unwrap().execute("INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1)", []).unwrap();
+        let mut agent = node("agent", json!({})); agent["kind"] = json!("agent");
+        let mut doc = json!({"schema_version":1,"nodes":[agent],"run":null});
+        for (revision, value) in [
+            json!({"type":"image","nodeIds":["gen-prompt:original-job:original-turn:0"]}),
+            json!({"type":"image","assetIds":["existing-image"],"nodeIds":["gen-prompt:original-job:original-turn:0"]}),
+            json!({"type":"image","assetIds":[]}),
+            json!({"type":"session","nodeIds":["legacy-session"]}),
+        ].into_iter().enumerate() {
+            doc["nodes"][0]["outputs"] = json!({"image":value});
+            let assets = validate(&doc).unwrap();
+            assert_eq!(assets, if revision == 1 { HashSet::from(["existing-image".to_owned()]) } else { HashSet::new() });
+            db.workflow_save("p", revision as i64, doc.clone()).unwrap();
+            assert_eq!(db.workflow_get("p").unwrap().document, doc);
+        }
+        for value in [
+            json!({"type":"image"}), json!({"type":"image","nodeIds":"session"}),
+            json!({"type":"image","nodeIds":[12]}), json!({"type":"image","nodeIds":[""]}),
+            json!({"type":"image","assetIds":[],"nodeIds":null}),
+            json!({"type":"image","assetIds":[12],"nodeIds":["session"]}),
+        ] {
+            doc["nodes"][0]["outputs"] = json!({"image":value});
+            assert!(validate(&doc).is_err());
+        }
+    }
+
+    #[test]
     fn loop_checkpoint_roundtrip_and_completed_asset_references() {
         let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();
         db.conn.lock().unwrap().execute("INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1)", []).unwrap();
@@ -262,6 +315,14 @@ mod tests {
         done["runs"][0]["loop"]["completed"].as_array_mut().unwrap().push(doc["runs"][0]["loop"]["completed"][0].clone());
         done["runs"][0]["status"] = json!("done");
         assert!(validate(&done).is_ok());
+        // A completed Agent iteration keeps the submitted turn, even before pixels exist.
+        let mut sessions = doc.clone();
+        sessions["runs"][0]["loop"]["completed"][0]["outputs"]["draw"]["image"] = json!({"type":"image","nodeIds":["original-session"]});
+        assert_eq!(validate(&sessions).unwrap(), HashSet::from(["input".to_owned(),"second".to_owned()]));
+        db.workflow_save("p", 1, sessions.clone()).unwrap();
+        assert_eq!(db.workflow_get("p").unwrap().document, sessions);
+        sessions["runs"][0]["loop"]["completed"][0]["outputs"]["draw"]["image"]["nodeIds"] = json!([12]);
+        assert!(validate(&sessions).is_err());
     }
     #[test]
     fn loop_modes_and_unprepared_checkpoint_are_validated() {
@@ -308,6 +369,22 @@ mod tests {
         let doc = json!({"schema_version":1,"nodes":[agent,writer],"run":null});
         db.workflow_save("p", 0, doc.clone()).unwrap();
         assert_eq!(db.workflow_get("p").unwrap().document, doc);
+    }
+    #[test]
+    fn content_axis_targets_survive_storage_and_reject_invalid_axes() {
+        let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();
+        db.conn.lock().unwrap().execute("INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1)", []).unwrap();
+        let mut writer = node("writer", json!({"image":[{"assetId":"image"}]})); writer["kind"] = json!("text");
+        writer["textTarget"] = json!({"nodeId":"table","cellId":"b","cellIds":["b","c"],"append":true,"image":true,"appendAxis":"row","axisCellIds":["a","b","c"],"axisOffset":1});
+        let mut doc = json!({"schema_version":1,"nodes":[writer],"run":null});
+        db.workflow_save("p", 0, doc.clone()).unwrap();
+        assert_eq!(db.workflow_get("p").unwrap().document, doc);
+        doc["nodes"][0]["textTarget"]["appendAxis"] = json!("column");
+        assert!(validate(&doc).is_ok());
+        for (key, value) in [("appendAxis", json!("diagonal")), ("append", json!(false)), ("axisCellIds", json!([])), ("axisCellIds", json!(["a", "a"])), ("axisCellIds", json!([""])), ("axisOffset", json!(-1))] {
+            let mut invalid = doc.clone(); invalid["nodes"][0]["textTarget"][key] = value;
+            assert!(validate(&invalid).is_err(), "{key}");
+        }
     }
     #[test]
     fn describe_card_caches_survive_storage_independently() {

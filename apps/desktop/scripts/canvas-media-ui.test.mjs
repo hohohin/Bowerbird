@@ -39,6 +39,9 @@ try {
   });
   await page.reload();
   await node("wide").waitFor();
+  await page.locator('.canvas-workspace').evaluate(async element => {
+    await Promise.all(element.getAnimations().map(animation => animation.finished.catch(() => {})));
+  });
   const duplicateBefore = await node("duplicate").boundingBox();
   for (const [id, dx, dy] of [["wide", 60, 5], ["tall", -5, -80]]) {
     const before = (await page.evaluate(() => window.snapshot())).nodes.find(n => n.id === id);
@@ -91,6 +94,9 @@ try {
   await page.evaluate(() => window.save());
   await page.reload();
   await node("prompt").locator('[data-asset-id="a"] img').waitFor();
+  await page.locator('.canvas-workspace').evaluate(async element => {
+    await Promise.all(element.getAnimations().map(animation => animation.finished.catch(() => {})));
+  });
   assert.ok(Math.abs(await node("tall").locator(":scope > img").evaluate(e => e.clientWidth / e.clientHeight) - 0.25) < 0.01);
   assert.deepEqual(await node("wide").boundingBox(), resized, "custom asset size survives hydration/reload");
   for (const relation of ["retry", "branch"]) {

@@ -18,7 +18,12 @@ try {
       import('/src/components/CanvasConversationImages.tsx'), import('/src/lib/generationNotifications.ts'),
     ]);
     const root = createRoot(document.getElementById('root'));
-    window.renderImages = images => root.render(React.createElement(CanvasConversationImages, { images, onContextMenu: () => {} }));
+    function ConversationImages({ images }) {
+      const [selectedId, onSelect] = React.useState(undefined);
+      return React.createElement(CanvasConversationImages, { images, imageOnly: true, selectedId, onSelect,
+        onPointerDown: () => {}, onClick: () => {}, onDoubleClick: () => {}, onContextMenu: () => {} });
+    }
+    window.renderImages = images => root.render(React.createElement(ConversationImages, { images }));
     window.notifications = notifications;
     window.contexts = [];
     window.AudioContext = class {

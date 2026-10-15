@@ -268,6 +268,9 @@ try {
   await page.evaluate(() => window.save());
   await page.reload();
   await node(textId).waitFor();
+  await page.locator(".canvas-workspace").evaluate(async el => {
+    await Promise.all(el.getAnimations().map(animation => animation.finished.catch(() => {})));
+  });
   assert.equal(await page.locator(`[data-card-name="${sectionId}"] input`).inputValue(), "方案 A");
   assert.equal(await page.getByRole("textbox", { name: "第 3 行第 3 列", exact: true }).inputValue(), "复制这一格");
   assert.deepEqual(await text.boundingBox(), afterResize, "resized geometry survives reload");

@@ -49,7 +49,7 @@ try {
   assert.equal(await page.locator(".library-project-folder-title strong").innerText(), "新名称");
   assert.equal(await page.locator(".canvas-board-title").inputValue(), "新名称");
   assert.equal(await page.evaluate(() => window.persistedProject().title_source), "manual");
-  await page.locator(".library-project-folder").click();
+  await page.getByRole("button", { name: "展开项目 新名称" }).click();
   await open(page.locator(".library-project-frame header"));
   assert.equal(await input.inputValue(), "新名称");
   await input.fill("重试名称");

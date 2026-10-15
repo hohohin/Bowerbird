@@ -185,17 +185,6 @@ fn executable(path: &Path) -> bool {
     true
 }
 
-fn network_error(error: reqwest::Error) -> String {
-    use std::error::Error;
-    let mut message = error.to_string();
-    let mut cause = error.source();
-    while let Some(source) = cause {
-        message.push_str(&format!("：{source}"));
-        cause = source.source();
-    }
-    message
-}
-
 async fn cancellable<T>(
     cancel: &AtomicBool,
     future: impl std::future::Future<Output = Result<T, reqwest::Error>>,
@@ -243,6 +232,28 @@ fn verify(path: &Path, hash: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn network_error(error: reqwest::Error) -> String {
+    use std::error::Error;
+    // CDN URLs may carry temporary signed query strings; do not show those in errors.
+    let error = error.without_url();
+    let mut message = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        message.push_str(": ");
+        message.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    format!("{message}。请检查网络及系统代理设置后重试")
+}
+
+fn download_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(30))
+        .timeout(Duration::from_secs(3600))
+        .build()
+        .map_err(network_error)
+}
+
 async fn download(
     root: &Path,
     url: &str,
@@ -268,16 +279,12 @@ async fn download(
             .await
             .map_err(|e| e.to_string())?;
     }
-    let client = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(30))
-        .timeout(Duration::from_secs(3600))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = download_client()?;
     let response = cancellable(cancel, client.get(url).send())
         .await
         .map_err(|e| format!("下载 {name} 失败：{e}。请检查系统代理是否可用，以及当前网络能否访问 Hugging Face / GitHub。"))?
         .error_for_status()
-        .map_err(|e| format!("下载失败：{e}"))?;
+        .map_err(|e| format!("下载失败：{}", network_error(e)))?;
     let partial = root.join(format!("{name}.part"));
     let mut file = tokio::fs::File::create(&partial)
         .await
@@ -297,12 +304,7 @@ async fn download(
         let Some(bytes) = next else {
             break;
         };
-        let bytes = bytes.map_err(|e| {
-            format!(
-                "下载 {name} 中断：{}。请检查网络或系统代理后重试。",
-                network_error(e)
-            )
-        })?;
+        let bytes = bytes.map_err(network_error)?;
         done += bytes.len() as u64;
         if done > expected {
             return Err("下载文件大小与固定版本不符".into());
@@ -491,21 +493,51 @@ struct DecisionProperties<'a> {
 fn prediction_body(parameters: Value, schema: &Value, discover: bool) -> Result<String, String> {
     let mut body = parameters;
     body["response_format"] = json!({"type":"json_schema","json_schema":{"name":"classification","strict":true,"schema":schema}});
-    let encoded = body.to_string();
+    let mut encoded = body.to_string();
     if discover {
         return Ok(encoded);
     }
     // serde_json::Value sorts keys. Grammar order affects this small model: identify
     // the label before generating its evidence and decision. Reorder only our schema's
     // properties fragment, never the user's label data or application-wide JSON maps.
-    let properties = &schema["properties"]["decisions"]["items"]["properties"];
-    let ordered = serde_json::to_string(&DecisionProperties {
-        name: &properties["name"],
-        evidence: &properties["evidence"],
-        r#match: &properties["match"],
-    })
-    .map_err(|e| e.to_string())?;
-    Ok(encoded.replacen(&properties.to_string(), &ordered, 1))
+    let decisions = &schema["properties"]["decisions"];
+    let items: Vec<&Value> = match decisions["prefixItems"].as_array() {
+        Some(items) => items.iter().collect(),
+        None => vec![&decisions["items"]],
+    };
+    for item in items {
+        let properties = &item["properties"];
+        let ordered = serde_json::to_string(&DecisionProperties {
+            name: &properties["name"],
+            evidence: &properties["evidence"],
+            r#match: &properties["match"],
+        })
+        .map_err(|e| e.to_string())?;
+        encoded = encoded.replacen(&properties.to_string(), &ordered, 1);
+    }
+    Ok(encoded)
+}
+
+fn matching_schema(labels: &[Label]) -> Value {
+    // b10809 supports fixed tuples via prefixItems. Do not add `items: false`:
+    // its converter gives `items` precedence over prefixItems.
+    let items: Vec<_> = labels
+        .iter()
+        .map(|label| {
+            json!({
+                "type":"object",
+                "properties":{
+                    "name":{"type":"string","const":label.name},
+                    "evidence":{"type":"string"},
+                    "match":{"type":"boolean"}
+                },
+                "required":["name","evidence","match"],"additionalProperties":false
+            })
+        })
+        .collect();
+    json!({"type":"object","properties":{"decisions":{
+        "type":"array","prefixItems":items,"minItems":labels.len(),"maxItems":labels.len()
+    }},"required":["decisions"],"additionalProperties":false})
 }
 
 pub struct Server {
@@ -705,15 +737,14 @@ impl Server {
             if discover {
                 "请生成1到4个简短中文分类标签，每个标签都来自图中实际可见的主体、画法、材质或设计用途，图中没有的概念不要输出。已有标签仅用于统一命名：仅当你要提出的标签与某个已有标签含义相同时才复用该名称，含义不同就提出新名称。只返回JSON，description为简短中文视觉描述，tags为分类名称数组。"
             } else {
-                "逐个判断目标图片是否属于已有标签。每个标签先用evidence指出图中可见的具体依据（主体、画法或材质），再用match返回true或false。无法指出可见依据时match必须为false。所有标签都必须判断，不能因为只有一个候选就选中。只返回JSON，decisions为判断数组，每项包含name、evidence、match。"
+                "严格按照已有标签的给定顺序，逐个判断目标图片是否属于该标签。每个标签先写name，再用evidence简短说明图中是否具有要求的内容或风格，再用match返回true或false。目标图片不相关或缺少证据时必须返回false。所有标签都必须判断，不能因为只有一个候选就选中。只返回JSON，decisions为判断数组，每项包含name、evidence、match。"
             },
             serde_json::to_string(&definitions).map_err(|e| e.to_string())?
         );
-        let names: Vec<_> = labels.iter().map(|l| l.name.clone()).collect();
         let schema = if discover {
             json!({"type":"object","properties":{"description":{"type":"string"},"tags":{"type":"array","items":{"type":"string"},"maxItems":4}},"required":["description","tags"],"additionalProperties":false})
         } else {
-            json!({"type":"object","properties":{"decisions":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string","enum":names},"evidence":{"type":"string"},"match":{"type":"boolean"}},"required":["name","evidence","match"],"additionalProperties":false},"minItems":labels.len(),"maxItems":labels.len()}},"required":["decisions"],"additionalProperties":false})
+            matching_schema(labels)
         };
         let mut content = vec![json!({"type":"text","text":instruction})];
         for (image, positive) in examples {
@@ -755,39 +786,42 @@ impl Server {
         let text = result["choices"][0]["message"]["content"]
             .as_str()
             .ok_or("本地模型没有返回分类结果")?;
-        let mut output: Value = serde_json::from_str(text).map_err(|_| "本地模型返回了无效JSON")?;
-        if discover {
-            output["matches"] = json!([]);
-        } else {
-            let decisions = output["decisions"]
-                .as_array()
-                .ok_or("分类结果缺少判断数组")?;
-            let mut matches = Vec::new();
-            let mut seen = std::collections::HashSet::new();
-            for decision in decisions {
-                let label = labels
-                    .iter()
-                    .find(|l| Some(l.name.as_str()) == decision["name"].as_str())
-                    .ok_or("模型选择了未知标签")?;
-                if !seen.insert(label.id.clone()) {
-                    return Err(INCOMPLETE_DECISIONS.into());
-                }
-                if decision["match"].as_bool().ok_or("分类结果缺少判断")? {
-                    matches.push(label.id.clone());
-                }
-            }
-            if seen.len() != labels.len() {
-                return Err(INCOMPLETE_DECISIONS.into());
-            }
-            output = json!({"description":"","tags":[],"matches":matches});
-        }
-        super::data::parse_prediction(&output.to_string(), labels, discover)
-            .map_err(|e| e.to_string())
+        parse_model_output(text, labels, discover)
     }
 
     pub async fn stop(&mut self) {
         let _ = self.child.kill().await;
     }
+}
+
+fn parse_model_output(text: &str, labels: &[Label], discover: bool) -> Result<Prediction, String> {
+    let mut output: Value = serde_json::from_str(text).map_err(|_| "本地模型返回了无效JSON")?;
+    if discover {
+        output["matches"] = json!([]);
+    } else {
+        let decisions = output["decisions"]
+            .as_array()
+            .ok_or("分类结果缺少判断数组")?;
+        let mut matches = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for decision in decisions {
+            let label = labels
+                .iter()
+                .find(|l| Some(l.name.as_str()) == decision["name"].as_str())
+                .ok_or("模型选择了未知标签")?;
+            if !seen.insert(label.id.clone()) {
+                return Err(INCOMPLETE_DECISIONS.into());
+            }
+            if decision["match"].as_bool().ok_or("分类结果缺少判断")? {
+                matches.push(label.id.clone());
+            }
+        }
+        if seen.len() != labels.len() {
+            return Err(INCOMPLETE_DECISIONS.into());
+        }
+        output = json!({"description":"","tags":[],"matches":matches});
+    }
+    super::data::parse_prediction(&output.to_string(), labels, discover).map_err(|e| e.to_string())
 }
 
 /// Only library thumbnails are supplied, bounded and re-encoded before local inference.
@@ -824,6 +858,115 @@ pub fn image_data(path: &Path, library: &Path) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn batch_labels() -> Vec<Label> {
+        (0..8)
+            .map(|i| Label {
+                id: format!("id-{i}"),
+                name: format!("标签{i}\"测试"),
+                description: String::new(),
+                has_examples: false,
+                enabled: true,
+                count: 0,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn matching_grammar_binds_every_position_to_one_label() {
+        let labels = batch_labels();
+        let schema = matching_schema(&labels);
+        let parameters = json!({"messages":[{"content":null}]});
+        let body = prediction_body(parameters.clone(), &schema, false).unwrap();
+        let decoded: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(decoded["messages"], parameters["messages"]);
+        assert_eq!(decoded["response_format"]["json_schema"]["schema"], schema);
+        assert_eq!(body.matches("\"properties\":{\"name\":").count(), labels.len());
+        let decisions = &schema["properties"]["decisions"];
+        assert!(decisions.get("items").is_none());
+        assert_eq!(decisions["minItems"], 8);
+        assert_eq!(decisions["maxItems"], 8);
+        let items = decisions["prefixItems"].as_array().unwrap();
+        assert_eq!(items.len(), labels.len());
+        for (item, label) in items.iter().zip(&labels) {
+            assert_eq!(item["properties"]["name"]["const"], label.name);
+            assert_eq!(item["properties"]["match"]["type"], "boolean");
+        }
+    }
+
+    #[test]
+    fn repeated_missing_unknown_and_non_boolean_decisions_still_fail_closed() {
+        let labels = batch_labels();
+        let valid: Vec<_> = labels
+            .iter()
+            .enumerate()
+            .map(|(i, l)| json!({"name":l.name,"evidence":"可见内容","match":i==0}))
+            .collect();
+        let parse =
+            |items| parse_model_output(&json!({"decisions":items}).to_string(), &labels, false);
+        assert_eq!(parse(valid.clone()).unwrap().matches, vec!["id-0"]);
+        let mut duplicate = valid.clone();
+        duplicate[1] = duplicate[0].clone();
+        assert!(parse(duplicate).unwrap_err().contains("重复"));
+        assert!(parse(valid[..7].to_vec()).unwrap_err().contains("遗漏"));
+        let mut unknown = valid.clone();
+        unknown[1]["name"] = json!("未知");
+        assert!(parse(unknown).unwrap_err().contains("未知"));
+        let mut malformed = valid;
+        malformed[1]["match"] = json!("false");
+        assert!(parse(malformed).is_err());
+    }
+
+    /// Run with proxy environment variables unset to reproduce a Finder launch.
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    #[ignore = "requires network and the user's configured macOS system proxy"]
+    async fn real_model_download_uses_system_proxy() {
+        for name in [
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "all_proxy",
+        ] {
+            assert!(
+                std::env::var_os(name).is_none(),
+                "unset {name} before this test"
+            );
+        }
+        let url = format!("https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/{REV}/Qwen3.5-0.8B-Q4_K_M.gguf");
+        let response = download_client()
+            .unwrap()
+            .get(url)
+            .header(reqwest::header::RANGE, "bytes=0-3")
+            .timeout(Duration::from_secs(60))
+            .send()
+            .await
+            .map_err(network_error)
+            .unwrap()
+            .error_for_status()
+            .unwrap();
+        let mut stream = response.bytes_stream();
+        let bytes = stream.next().await.unwrap().unwrap();
+        assert!(bytes.starts_with(b"GGUF"));
+    }
+
+    #[tokio::test]
+    async fn network_failure_reports_cause_without_signed_url() {
+        let error = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .get("http://127.0.0.1:1/model?signature=private-value")
+            .send()
+            .await
+            .unwrap_err();
+        let message = network_error(error);
+        assert!(message.contains("系统代理"));
+        assert!(message.contains("connect"));
+        assert!(!message.contains("private-value"));
+    }
 
     #[test]
     fn mac_runtime_requires_its_deployment_target() {
@@ -1027,12 +1170,13 @@ mod tests {
         let requests = requests.await.unwrap();
         let candidates = |index: usize| {
             requests[index]["response_format"]["json_schema"]["schema"]["properties"]["decisions"]
-                ["items"]["properties"]["name"]["enum"]
-                .clone()
+                ["prefixItems"].as_array().unwrap().iter()
+                .map(|item| item["properties"]["name"]["const"].clone())
+                .collect::<Vec<_>>()
         };
-        assert_eq!(candidates(0), json!(["标签0", "标签1"]));
-        assert_eq!(candidates(1), json!(["标签0"]));
-        assert_eq!(candidates(2), json!(["标签1"]));
+        assert_eq!(candidates(0), vec![json!("标签0"), json!("标签1")]);
+        assert_eq!(candidates(1), vec![json!("标签0")]);
+        assert_eq!(candidates(2), vec![json!("标签1")]);
         server.stop().await;
     }
 

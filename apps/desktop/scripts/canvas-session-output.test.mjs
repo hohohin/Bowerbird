@@ -28,7 +28,9 @@ try {
   const output=page.locator('[data-workflow-session-output="session"]');
   assert.equal(await output.getAttribute('aria-label'),'输出：图片');
   assert.equal(await output.innerText(),'图片');
-  assert.equal(await output.evaluate(element=>getComputedStyle(element).opacity),'1','session output stays visible without hovering');
+  await output.focus();
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('[data-workflow-session-output="session"]')).opacity === '1');
+  assert.equal(await output.evaluate(element=>getComputedStyle(element).opacity),'1','session output is available on keyboard focus');
   assert.equal(await output.evaluate(element=>getComputedStyle(element).pointerEvents),'auto');
   await output.focus();await page.keyboard.press('Enter');
   await page.locator('.workflow-wires .is-draft').waitFor({state:'attached'});
@@ -37,7 +39,7 @@ try {
   const socket=await output.locator('i').boundingBox();
   await page.mouse.move(socket.x+socket.width/2,socket.y+socket.height/2);await page.mouse.down();
   await page.locator('[data-canvas-node-id="container"]').hover();
-  await page.locator('[data-canvas-node-id="container"] [data-workflow-text-input=""][data-content-input-type="image"]').hover();
+  await page.locator('[data-canvas-node-id="container"] [data-workflow-text-input^="column:"][data-content-input-type="image"]').hover();
   await page.mouse.up();
   await page.waitForFunction(()=>{
     const note=JSON.parse(window.snapshot().nodes.find(n=>n.id==='container').payloadJson);
@@ -85,7 +87,7 @@ try {
   });
   await session.waitFor({state:'detached'});
   await page.locator('[data-workflow-card="owner"]').getByRole('button',{name:'输出：图片',exact:true}).click();await page.locator('[data-canvas-node-id="container"]').hover();
-  await page.locator('[data-canvas-node-id="container"] [data-workflow-text-input=""][data-content-input-type="image"]').click();
+  await page.locator('[data-canvas-node-id="container"] [data-workflow-text-input^="column:"][data-content-input-type="image"]').click();
   await page.waitForFunction(async()=>{
     const {canvasWorkflowController}=await import('/src/lib/canvasWorkflowRuntime.ts');return canvasWorkflowController('p').document.nodes.some(n=>n.textTarget?.nodeId==='container'&&n.inputs.image?.[0].nodeId==='owner');
   });
