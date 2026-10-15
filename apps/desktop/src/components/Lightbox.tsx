@@ -4,6 +4,8 @@ import { createPortal } from "react-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import { useImageZoom } from "../lib/useImageZoom";
+import { VideoPlayer } from "./VideoPlayer";
+import type { VideoFrame } from "../lib/videoFrame";
 
 /**
  * 图片放大查看器（全屏遮罩）。
@@ -16,14 +18,17 @@ export function Lightbox({
   index,
   onClose,
   onIndexChange,
+  onAddVideoFrame,
 }: {
   images: string[];
   index: number;
   onClose: () => void;
   onIndexChange: (i: number) => void;
+  onAddVideoFrame?: (frame: VideoFrame) => Promise<void>;
 }) {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      if (e.key !== "Escape" && e.target instanceof Element && e.target.closest('[role="slider"]')) return;
       if (["Escape", "ArrowLeft", "ArrowRight"].includes(e.key)) e.stopPropagation();
       if (e.key === "Escape") {
         e.preventDefault();
@@ -53,8 +58,7 @@ export function Lightbox({
       aria-modal="true"
       aria-label={`媒体预览，${index + 1} / ${images.length}`}
     >
-      {isVideoPath(images[index]) ? <video key={images[index]} src={convertFileSrc(images[index])} controls preload="none"
-        onClick={(event) => event.stopPropagation()} className="max-h-[92vh] max-w-[92vw]" /> : <img
+      {isVideoPath(images[index]) ? <VideoPlayer key={images[index]} path={images[index]} onAddFrame={onAddVideoFrame} /> : <img
         ref={zoom.imgRef}
         src={convertFileSrc(images[index])}
         alt={`预览图 ${index + 1}`}

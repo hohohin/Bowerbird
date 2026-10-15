@@ -72,6 +72,7 @@ import {
 } from "lucide-react";
 import { MasonryGrid } from "./MasonryGrid";
 import { Lightbox } from "./Lightbox";
+import { videoTime, type VideoFrame } from "../lib/videoFrame";
 import { CreativeComposer } from "./CreativeComposer";
 import { CanvasConversation } from "./CanvasConversation";
 import { canvasConversationTurn, canvasConversationTurns } from "../lib/canvasConversation";
@@ -591,6 +592,7 @@ export function CanvasWorkspace({
   const [canvasMarquee, setCanvasMarquee] = useState<CanvasMarquee | null>(null);
   const [selectedCanvasNodeIds, setSelectedCanvasNodeIds] = useState<Set<string>>(() => new Set());
   const [canvasLightbox, setCanvasLightbox] = useState<{ images: string[]; index: number } | null>(null);
+  const videoFrameSaves = useRef(new Map<string, () => Promise<void>>());
   const [promptMenu, setPromptMenu] = useState<{ node: ProjectGraphNode | null; nodeIds: string[]; folder?: CanvasFolderNode; section?: { id: string; name: string } | null; x: number; y: number; point: CanvasPoint | null } | null>(null);
   const promptMenuRef = useRef<HTMLDivElement>(null);
   useEffect(() => { setPromptMenu(null); }, [projectId, viewMode]);
@@ -2596,6 +2598,60 @@ export function CanvasWorkspace({
     });
   }
 
+  async function addVideoFrame(frame: VideoFrame) {
+    const project = activeCanvasRef.current;
+    const stage = stageRef.current;
+    const route = useStore.getState();
+    if (!stage || loadingRef.current || route.projectRoutePending || route.activeProjectId !== project.id) {
+      throw new Error("请等待当前画板加载完成");
+    }
+    const key = `${project.id}\u0000${frame.path}\u0000${frame.time}`;
+    let save = videoFrameSaves.current.get(key);
+    if (!save) {
+      const { path, time } = frame;
+      let dataUrl = frame.dataUrl;
+      const bounds = stage.getBoundingClientRect();
+      const center = toBoardPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2);
+      const source = nodesRef.current.find(node => node.kind === "asset" && node.asset.storePath === path);
+      const frozenPan = { ...panRef.current }, frozenZoom = zoomRef.current;
+      const obstacles = nodesRef.current.map(nodeRect);
+      const nodeId = canvasId("asset");
+      let savedAsset: Asset | null = null, queued = false, completed = false;
+      save = async () => {
+        await retryPendingWrites();
+        if (completed) return;
+        if (!queued) {
+          queued = true;
+          await enqueueWrite(async () => {
+            await ensureMaterialized(project);
+            savedAsset ??= await api.importImageBytes({ dataUrl, projectId: project.id, source: "video-frame",
+              fileName: `${path.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, "") || "视频"}-${videoTime(time).replace(/:/g, "-")}.png` });
+            dataUrl = "";
+            const snapshot = createCanvasAssetSnapshot(savedAsset, nodeId);
+            const size = assetNodeSize(snapshot);
+            const origin = source ? { x: source.x + source.width + 32, y: source.y } : { x: center.x - size.width / 2, y: center.y - size.height / 2 };
+            const position = canvasPlacementForNewCard({ ...origin, ...size }, { x: 0, y: 0, width: bounds.width, height: bounds.height },
+              frozenPan, frozenZoom, obstacles) ?? origin;
+            const node: CanvasAssetNode = { kind: "asset", id: nodeId, asset: snapshot, ...position, ...size,
+              order: nodesRef.current.reduce((max, node) => Math.max(max, node.order), 0) + 1 };
+            await api.projectCanvasNodeCreate(newProjectCanvasAssetNode(project.id, node));
+            completed = true;
+            const current = useStore.getState();
+            if (stage.isConnected && activeCanvasRef.current.id === project.id && current.activeProjectId === project.id && !current.projectRoutePending) {
+              setCanvasAssets(assets => [...assets.filter(asset => asset.id !== savedAsset!.id), savedAsset!]);
+              commitNodes([...nodesRef.current.filter(existing => existing.id !== node.id), node]);
+              setSelectedCanvasNodeIds(new Set([node.id]));
+            }
+          });
+        }
+        if (writeJournalRef.current.failure != null) throw writeJournalRef.current.failure;
+      };
+      videoFrameSaves.current.set(key, save);
+    }
+    await save();
+    videoFrameSaves.current.delete(key);
+  }
+
   function activateCanvasMaterial(node: CanvasNode, assetAnchor?: HTMLElement) {
     if (node.kind === "folder") {
       setFolderExpanded(node.id, true);
@@ -4569,9 +4625,9 @@ export function CanvasWorkspace({
             onClose={() => setGenPanelOpen(false)}
           >
             {snapshotPrompt
-              ? <CanvasConversation turns={savedConversation} selectedId={snapshotPrompt.id} onReuse={reuseCanvasPrompt} />
+              ? <CanvasConversation turns={savedConversation} selectedId={snapshotPrompt.id} onReuse={reuseCanvasPrompt} onAddVideoFrame={addVideoFrame} />
               : activeSessionKind === "generation"
-              ? <GenerationPanel embedded hydratedAssets={canvasAssets} />
+              ? <GenerationPanel embedded hydratedAssets={canvasAssets} onAddVideoFrame={addVideoFrame} />
               : activeAgentRun
                 ? <CloudAgentSession embedded hydratedAssets={canvasAssets} />
                 : (
@@ -4664,6 +4720,7 @@ export function CanvasWorkspace({
         )}
         {canvasLightbox && (
           <Lightbox
+            onAddVideoFrame={addVideoFrame}
             images={canvasLightbox.images}
             index={canvasLightbox.index}
             onClose={() => setCanvasLightbox(null)}

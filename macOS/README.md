@@ -3,6 +3,10 @@
 本目录记录 Mac 上的本地开发、运行和未签名构建流程。Bowerbird 使用 canonical Tauri / React / Rust 源码，不维护 macOS override。构建架构以 `rustc -vV` 的 host 为准；Intel 为 `x86_64-apple-darwin`，Apple Silicon 原生工具链为 `aarch64-apple-darwin`。
 
 
+## 2026-10-15 接收 Windows 最新源码
+
+最新交接见 [Windows 端更新内容 — 26.10.1001](../Windows/Windows端更新内容-26.10.1001.md)：相对 Mac `d6027fb`，覆盖 901–1001 发布变更及其后二维表格、Agent 生图投普通会话、视频截帧与错误诊断。后四项仅源码存档，尚未包含在 Windows 1001 包；Mac 公开版本仍为 801。接收时核对文档对应提交，保留 Mac 配置与签名，按交接清单验证 WKWebView 与 release 行为。
+
 ## 2026-10-10 接收 Windows dev 更新
 
 相对上次完整 Mac 基线 `d6027fb`，Windows 本地 `dev@78eb8e6` 已加入容器/v3 布局、正式版图文/Codex Agent、视频生成卡及查询恢复，Windows 已发布 26.10.904。共享改动、Windows 专属安装钩子、Mac 验收及存档推送状态见 [Windows → Mac 更新交接](DEV-SYNC-2026-10-10.md)。本次已存档并推送 dev 交接；Mac 公开版本仍为 26.10.801，最新项目状态见 `PROJECT.md`。

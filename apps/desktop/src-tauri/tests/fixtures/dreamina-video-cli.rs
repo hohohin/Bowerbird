@@ -12,7 +12,9 @@ fn main() {
         eprintln!("do request: Post \"https://jimeng.jianying.com/mweb/v1/get_history_by_ids?agent_detect=unknown&aid=513695&cli_version=a857341-dirty&from=dreamina_cli\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)");
         std::process::exit(1);
     };
-    if args.first().map(String::as_str) == Some("query_result") {
+    if args.first().map(String::as_str) == Some("list_task") {
+        println!(r#"[{{"submit_id":"failed","gen_status":"fail","error_code":"upstream-42"}}]"#);
+    } else if args.first().map(String::as_str) == Some("query_result") {
         let id = value("--submit_id").unwrap();
         if id == "transient" || id == "offline-video-submit" {
             let counter = root.join(format!("{id}.count"));
@@ -37,7 +39,7 @@ fn main() {
                 println!(r#"{{"gen_status":"fail","fail_reason":"context deadline exceeded"}}"#);
                 std::process::exit(1);
             }
-            Some("failed") => println!(r#"{{"gen_status":"fail","fail_reason":"VIP required"}}"#),
+            Some("failed") => println!(r#"{{"submit_id":"failed","gen_status":"fail","fail_reason":"VIP required","logid":"log-test-42","debug_info":{{"error_code":42}}}}"#),
             Some("unknown") => println!(r#"{{"gen_status":"unexpected"}}"#),
             Some("pending") => println!(r#"{{"gen_status":"querying"}}"#),
             _ => {

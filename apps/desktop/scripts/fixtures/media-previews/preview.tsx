@@ -79,10 +79,11 @@ w.runMediaPreviewSmoke = async () => {
     flushSync(() => root.render(null));
     // The deliberate playback UI retains the original URL, but does not load until play.
     for (let i = 0; i < 5; i++) {
-      flushSync(() => root.render(<Lightbox images={[assets[0].store_path]} index={0}
-        onClose={() => root.render(null)} onIndexChange={() => {}} />));
+      flushSync(() => root.render(<React.StrictMode><Lightbox images={[assets[0].store_path]} index={0}
+        onClose={() => root.render(null)} onIndexChange={() => {}} /></React.StrictMode>));
       const video = document.querySelector("video")!;
-      check(video?.getAttribute("src") === assets[0].store_path && video.controls && video.preload === "none", "explicit playback contract");
+      check(video?.getAttribute("src") === assets[0].store_path && video.preload === "none"
+        && document.querySelector('[role="slider"][aria-label="视频时间轴"]') && document.querySelector('button[aria-label="播放"]'), "explicit playback contract");
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
       await tick();
       check(!document.querySelector("video"), "closed player remained mounted");

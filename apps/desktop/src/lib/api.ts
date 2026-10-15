@@ -477,6 +477,7 @@ export const api = {
   // force=true 跳过后端 120s TTL 缓存强制重检（重新检测 / 安装 / 登录 / 登出后）。
   dreaminaCreditBalance: () => invoke<number>("dreamina_credit_balance"),
   dreaminaTaskCredit: (submitId: string) => invoke<number | null>("dreamina_task_credit", { submitId }),
+  dreaminaTaskDiagnostics: (submitId: string) => invoke<Record<string, unknown>>("dreamina_task_diagnostics", { submitId }),
   dreaminaVideoModels: (kind: string) => invoke<import("./videoGeneration").VideoModelCapability[]>("dreamina_video_models", { kind }),
   dreaminaHealth: (force = false) => invoke<CodexHealth>("dreamina_health", { force }),
   dreaminaLogin: () => invoke<void>("dreamina_login"),

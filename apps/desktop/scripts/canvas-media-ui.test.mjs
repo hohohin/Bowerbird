@@ -65,7 +65,8 @@ try {
   const videoPreview = page.getByRole("dialog", { name: /媒体预览/ });
   await videoPreview.waitFor();
   assert.equal(await videoPreview.locator("video").getAttribute("src"), "demo-clip.mp4");
-  assert.equal(await videoPreview.locator("video").evaluate(video => video.controls), true);
+  assert.equal(await videoPreview.getByRole("slider", { name: "视频时间轴" }).count(), 1);
+  assert.equal(await videoPreview.getByRole("button", { name: "播放", exact: true }).count(), 1);
   await page.keyboard.press("Escape");
   await videoPreview.waitFor({ state: "detached" });
   assert.equal(await node("clip").locator("video").count(), 0);

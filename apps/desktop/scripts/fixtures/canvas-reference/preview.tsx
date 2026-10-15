@@ -54,7 +54,7 @@ w.calls = [];
 w.snapshot = () => structuredClone(snapshot);
 w.save = () => {
   sessionStorage.setItem("reference-fixture", JSON.stringify(snapshot));
-  sessionStorage.setItem("reference-drafts", JSON.stringify(assets.filter(asset => asset.source === "annotation")));
+  sessionStorage.setItem("reference-drafts", JSON.stringify(assets.filter(asset => asset.source === "annotation" || asset.source === "video-frame" || asset.ext === "mp4")));
 };
 w.emitChange = () => {
   for (const [handler, event] of listeners) if (event === "creative://changed") callbacks.get(handler)?.({ event, id: handler, payload: { projectId: "p" } });
@@ -259,6 +259,14 @@ w.__TAURI_INTERNALS__ = {
       const asset = { ...assets[0], id: `template-${assets.length}`, name: args.fileName, store_path: args.dataUrl, source: args.source };
       assets.push(asset); return asset;
     }
+    if (command === "import_image_bytes" && args.source === "video-frame") {
+      if (w.holdFrameImport) await new Promise(resolve => { w.releaseFrameImport = resolve; });
+      if (w.failFrameImport) throw "模拟截帧入库失败";
+      const image = new Image(); image.src = args.dataUrl; await image.decode();
+      const asset = { id: `frame-${assets.length}`, name: args.fileName, ext: "png", width: image.naturalWidth, height: image.naturalHeight,
+        store_path: args.dataUrl, thumb_path: args.dataUrl, source: args.source };
+      assets.push(asset); return asset;
+    }
     if (command === "read_image_data_url") return w.templateImageData ?? args.path;
     if (command === "project_canvas_ensure") {
       if (strictCanvas) await new Promise(resolve => setTimeout(resolve, 150));
@@ -294,4 +302,5 @@ function Fixture() {
     <AssetContextMenu /><ImageAnnotator /><ToastViewport /><VisualProfileDialog />{settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
   </div>;
 }
-createRoot(document.getElementById("root")!).render(<Fixture />);
+createRoot(document.getElementById("root")!).render(new URLSearchParams(location.search).has("strict")
+  ? <React.StrictMode><Fixture /></React.StrictMode> : <Fixture />);

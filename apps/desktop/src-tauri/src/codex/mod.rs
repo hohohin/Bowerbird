@@ -15,6 +15,7 @@ pub mod codex_cli;
 pub mod install;
 pub mod jimeng;
 pub mod jimeng_video;
+pub(crate) mod jimeng_diagnostics;
 pub mod openai_api;
 pub mod types;
 pub mod understand;

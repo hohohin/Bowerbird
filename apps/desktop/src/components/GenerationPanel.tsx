@@ -1,5 +1,6 @@
 import { cloudVideoOptions } from "../lib/videoGeneration";
 import { DreaminaTaskCredit } from "./creation/DreaminaCredits";
+import { DreaminaTaskDiagnostics } from "./creation/DreaminaTaskDiagnostics";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { ChevronLeft, ChevronRight } from "lucide-react";
@@ -21,6 +22,7 @@ import { canStartAnotherJob, canUseByo, canUseGenerationProvider } from "../lib/
 import { cloudProviderLabel, canonicalProviderKey, isCloudProvider, supportsAnnotationCoordinates } from "../lib/genProviders";
 import type { Asset, GenJob, GenTurn, VisualProfileCapsule, VisualProfileRuleValue } from "../lib/types";
 import { Lightbox } from "./Lightbox";
+import type { VideoFrame } from "../lib/videoFrame";
 import { useCreationEditor } from "./creation/useCreationEditor";
 import { RatioSelect } from "./creation/RatioSelect";
 import { ProviderSelect } from "./creation/ProviderSelect";
@@ -55,11 +57,13 @@ export function GenerationPanel({
   embedded = false,
   hydratedAssets = [],
   snapshot,
+  onAddVideoFrame,
 }: {
   readOnly?: boolean;
   embedded?: boolean;
   hydratedAssets?: Asset[];
   snapshot?: { job: GenJob; selectedTurnKey: string; onReuse: (turn: GenTurn) => void };
+  onAddVideoFrame?: (frame: VideoFrame) => Promise<void>;
 } = {}) {
   const genJobs = useStore((s) => s.genJobs);
   const listedAssets = useStore((s) => s.assets);
@@ -685,6 +689,7 @@ export function GenerationPanel({
       )}
       {lightbox && (
         <Lightbox
+          onAddVideoFrame={onAddVideoFrame}
           images={lightbox.images}
           index={lightbox.index}
           onClose={() => setLightbox(null)}
@@ -963,6 +968,7 @@ function TurnView({
             <div className="space-y-1.5 rounded border border-red-500/40 bg-red-500/10 p-2">
               <div className="text-[11px] font-semibold text-red-300">❌ 生成失败</div>
               <pre className="whitespace-pre-wrap break-all text-[11px] text-red-200/90">{turn.error}</pre>
+              {turn.media === "video" && turn.provider === "jimeng" && <DreaminaTaskDiagnostics submitId={turn.submitId} />}
               <button
                 onClick={onRetry}
                 disabled={!canRetry}

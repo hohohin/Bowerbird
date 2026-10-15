@@ -599,6 +599,7 @@ pub fn run() {
             commands::source_browser_capture::capture_source_browser_image,
             commands::dreamina_account::dreamina_credit_balance,
             commands::dreamina_account::dreamina_task_credit,
+            commands::dreamina_account::dreamina_task_diagnostics,
             commands::dreamina_account::dreamina_video_models,
             commands::jimeng::dreamina_health,
             commands::jimeng::dreamina_login,

@@ -2,7 +2,7 @@
 use crate::codex::jimeng::{dreamina_command, resolve_dreamina_binary};
 use crate::error::{AppError, AppResult};
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::time::Duration;
 
 async fn read(args: &[&str]) -> AppResult<String> {
@@ -64,6 +64,26 @@ pub struct VideoModelCapability {
     resolutions: Vec<String>,
     min_duration: u32,
     max_duration: u32,
+}
+
+/// Read-only diagnostics also work for terminal tasks; no recovery or generation is started.
+#[tauri::command]
+pub async fn dreamina_task_diagnostics(submit_id: String) -> AppResult<Value> {
+    if submit_id.is_empty() || submit_id.len() > 200 || !submit_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        return Err(AppError::Jimeng("无效的即梦任务编号".into()));
+    }
+    let binary = resolve_dreamina_binary().ok_or_else(|| AppError::Jimeng("未检测到即梦 CLI".into()))?;
+    let mut report = crate::codex::jimeng_diagnostics::collect(&binary, &submit_id).await;
+    if let Some(root) = crate::codex::codex_cli::app_data_dir() {
+        let dir = root.join("diagnostics/dreamina");
+        let path = dir.join(format!("{submit_id}.json"));
+        let saved = std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&path, serde_json::to_vec_pretty(&report)?));
+        match saved {
+            Ok(()) => report["saved_path"] = json!(path.to_string_lossy()),
+            Err(error) => report["save_error"] = json!(error.to_string()),
+        }
+    }
+    Ok(report)
 }
 
 fn capabilities(help: &str) -> Vec<VideoModelCapability> {

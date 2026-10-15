@@ -155,7 +155,9 @@ fn remote_failure(value: &serde_json::Value) -> AppError {
         ""
     };
     AppError::Jimeng(format!(
-        "即梦视频生成失败：{reason}{hint}（不会切换模型）"
+        "即梦视频生成失败：{}{hint}（不会切换模型）\n上游诊断：{}",
+        super::jimeng_diagnostics::redact_text(reason),
+        serde_json::to_string_pretty(&super::jimeng_diagnostics::sanitize(value)).unwrap_or_default()
     ))
 }
 
@@ -175,20 +177,32 @@ async fn run(binary: &str, args: &[OsString]) -> AppResult<serde_json::Value> {
     let parsed = response(&out.stdout);
     if let Ok(value) = &parsed {
         if value.get("gen_status").and_then(|v| v.as_str()) == Some("fail") {
-            return Err(remote_failure(value));
+            let mut diagnostic = value.clone();
+            diagnostic["cli_command"] = serde_json::json!(args.first().map(|arg| arg.to_string_lossy()));
+            diagnostic["cli_exit_code"] = serde_json::json!(out.status.code());
+            diagnostic["cli_stderr"] = serde_json::json!(super::jimeng_diagnostics::redact_text(&String::from_utf8_lossy(&out.stderr)));
+            if diagnostic.get("submit_id").is_none() {
+                if let Some(id) = args.iter().position(|arg| arg == "--submit_id").and_then(|i| args.get(i + 1)) {
+                    diagnostic["submit_id"] = serde_json::json!(id.to_string_lossy());
+                }
+            }
+            return Err(remote_failure(&diagnostic));
         }
     }
     if !out.status.success() {
         return Err(AppError::Jimeng(format!(
-            "dreamina 退出 {}：{}",
+            "dreamina 退出 {}：{}\n命令响应：{}",
             out.status,
-            String::from_utf8_lossy(&out.stderr)
-                .chars()
-                .take(500)
-                .collect::<String>()
+            super::jimeng_diagnostics::redact_text(&String::from_utf8_lossy(&out.stderr)),
+            match &parsed {
+                Ok(value) => super::jimeng_diagnostics::sanitize(value).to_string(),
+                Err(_) => super::jimeng_diagnostics::redact_text(&String::from_utf8_lossy(&out.stdout)),
+            }
         )));
     }
-    parsed
+    parsed.map_err(|error| AppError::Jimeng(format!("{error}\n标准输出：{}\n标准错误：{}",
+        super::jimeng_diagnostics::redact_text(&String::from_utf8_lossy(&out.stdout)),
+        super::jimeng_diagnostics::redact_text(&String::from_utf8_lossy(&out.stderr)))))
 }
 
 pub(crate) async fn generate(
@@ -311,7 +325,8 @@ async fn poll_video_with_interval(
             Some("fail") => return Err(remote_failure(&value)),
             _ => {
                 return Err(AppError::Jimeng(
-                    "视频查询返回未知状态；保留 submit_id 可核对取回".into(),
+                    format!("视频查询返回未知状态；保留 submit_id 可核对取回\n上游诊断：{}",
+                        super::jimeng_diagnostics::sanitize(&value)),
                 ))
             }
         }
@@ -540,6 +555,16 @@ mod tests {
         assert!(error.contains("取回原任务"));
         assert!(poll_video(binary, "unauthorized").await.unwrap_err().to_string().contains("please login"));
         assert!(poll_video(binary, "remote-timeout").await.unwrap_err().to_string().contains("即梦视频生成失败"));
+        let diagnostic = super::super::jimeng_diagnostics::collect(binary, "failed").await;
+        assert_eq!(diagnostic["query_result"]["response"]["logid"], "log-test-42");
+        assert_eq!(diagnostic["query_result"]["response"]["debug_info"]["error_code"], 42);
+        assert_eq!(diagnostic["list_task"]["response"][0]["error_code"], "upstream-42");
+        let partial = super::super::jimeng_diagnostics::collect(binary, "unauthorized").await;
+        assert_eq!(partial["query_result"]["exit_code"], 1);
+        assert!(partial["query_result"]["stderr"].as_str().unwrap().contains("please login"));
+        let diagnostic_calls = std::fs::read_to_string(dir.0.join("calls.txt")).unwrap();
+        assert!(diagnostic_calls.lines().any(|line| line == "query_result|--submit_id|failed"));
+        assert!(diagnostic_calls.lines().any(|line| line == "list_task|--submit_id|failed|--limit|1"));
         // Cancellation also interrupts retry backoff, without another query or submission.
         assert!(tokio::time::timeout(Duration::from_millis(500), poll_video(binary, "timeout")).await.is_err());
         let mut request = req(&[]);
