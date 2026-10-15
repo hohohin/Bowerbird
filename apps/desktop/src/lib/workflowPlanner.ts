@@ -152,7 +152,7 @@ function compilePlanSpec(plan: Record<string, unknown>, sources: PlanningSource[
 }
 
 /** Untrusted model output becomes fresh, typed cards; never deserialize a full canvas document. */
-export function buildWorkflowPlan(text: string, owner: WorkflowNode, sources: PlanningSource[], existing: WorkflowNode[], obstacles: { x: number; y: number; width: number; height: number }[] = []) {
+export function buildWorkflowPlan(text: string, owner: WorkflowNode, sources: PlanningSource[], existing: WorkflowNode[], obstacles: { x: number; y: number; width: number; height: number }[] = [], mode: "planner" | "template" = "planner") {
   if (text.length > 16000) throw new Error("编排方案过大");
   const rawPlan = record(JSON.parse(text));
   const plan = rawPlan.schemaVersion === 2 ? compilePlanSpec(rawPlan, sources) : rawPlan;
@@ -162,11 +162,23 @@ export function buildWorkflowPlan(text: string, owner: WorkflowNode, sources: Pl
   if (existing.length + plan.nodes.length > 500) throw new Error("画板工作流卡片数量已达上限");
   const aliases = new Map<string, WorkflowNode>();
   for (const raw of plan.nodes) {
-    const spec = record(raw); keys(spec, ["id", "kind", "action", "skill", "prompt", "ratio"]);
+    const spec = record(raw); keys(spec, ["id", "kind", "action", "skill", "prompt", "ratio", ...(mode === "template" ? ["loopMode", "loopStartItem", "agentTransport"] : [])]);
     const id = string(spec.id, 32);
     if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(id) || aliases.has(id) || sources.some(source => source.id === id)) throw new Error("卡片标识重复或无效");
-    if (!kinds.includes(spec.kind as typeof kinds[number])) throw new Error("方案使用了不存在的卡片类型");
+    if (!kinds.includes(spec.kind as typeof kinds[number]) && !(mode === "template" && spec.kind === "loop")) throw new Error("方案使用了不存在的卡片类型");
     const node = newWorkflowNode(spec.kind as typeof kinds[number], 0, 0, owner.provider);
+    if (spec.loopMode !== undefined) {
+      if (node.kind !== "loop" || !["images", "rows"].includes(String(spec.loopMode))) throw new Error("循环方式无效");
+      node.loopMode = spec.loopMode as "images" | "rows";
+    }
+    if (spec.loopStartItem !== undefined) {
+      if (node.kind !== "loop" || !Number.isInteger(spec.loopStartItem) || Number(spec.loopStartItem) < 1 || Number(spec.loopStartItem) > 100) throw new Error("循环起始项须为 1–100 的整数");
+      node.loopStartItem = Number(spec.loopStartItem);
+    }
+    if (spec.agentTransport !== undefined) {
+      if (node.kind !== "agent" || !["local-ds", "codex-cli", "cloud"].includes(String(spec.agentTransport))) throw new Error("Agent 通道无效");
+      node.agentTransport = spec.agentTransport as WorkflowNode["agentTransport"];
+    }
     if (spec.action !== undefined) {
       if (node.kind !== "instruction" || !["describe", "reuse", "layers"].includes(String(spec.action))) throw new Error("不支持的指令功能");
       node.action = spec.action as WorkflowNode["action"];
@@ -180,7 +192,7 @@ export function buildWorkflowPlan(text: string, owner: WorkflowNode, sources: Pl
       if (node.kind !== "generation" || !["1:1", "3:4", "4:3", "2:3", "3:2", "16:9", "9:16"].includes(String(spec.ratio))) throw new Error("不支持的画面比例");
       node.ratio = String(spec.ratio);
     }
-    if (["agent", "generation", "skill"].includes(node.kind)) string(node.prompt, 4000);
+    if (mode === "planner" && ["agent", "generation", "skill"].includes(node.kind)) string(node.prompt, 4000);
     aliases.set(id, node);
   }
   const nodes = [...aliases.values()], edges = new Set<string>();
@@ -203,9 +215,9 @@ export function buildWorkflowPlan(text: string, owner: WorkflowNode, sources: Pl
   }
   for (const [alias, node] of aliases) {
     assertWorkflowAcyclic([...existing, ...nodes], node.id);
-    if (node.kind === "instruction" && !node.inputs.image?.length) throw new Error("指令卡片缺少图片来源");
-    if (node.kind === "instruction" && node.action !== "describe" && node.inputs.image.length !== 1) throw new Error("复用和分层只接收一个图片来源");
-    if (node.kind === "visual-profile" && !node.prompt.trim() && !node.inputs.image?.length && !node.inputs.text?.length) throw new Error("视觉规范缺少要求或来源");
+    if (mode === "planner" && node.kind === "instruction" && !node.inputs.image?.length) throw new Error("指令卡片缺少图片来源");
+    if (node.kind === "instruction" && node.action !== "describe" && (node.inputs.image?.length ?? 0) > 1) throw new Error("复用和分层只接收一个图片来源");
+    if (mode === "planner" && node.kind === "visual-profile" && !node.prompt.trim() && !node.inputs.image?.length && !node.inputs.text?.length) throw new Error("视觉规范缺少要求或来源");
     if (node.prompt.includes("@[")) throw new Error("方案使用了内部引用标识");
     const bindings = referenceBindings.get(alias) ?? new Map(), used = new Set<string>();
     node.prompt = node.prompt.replace(/\{\{([^{}]+)\}\}/g, (_match, key: string) => {
@@ -219,7 +231,7 @@ export function buildWorkflowPlan(text: string, owner: WorkflowNode, sources: Pl
     });
     if (node.prompt.includes("{{") || node.prompt.includes("}}")) throw new Error("提示词引用格式无效");
     const unused = [...bindings.keys()].filter(key => !used.has(key));
-    if ((node.kind === "generation" || node.kind === "agent") && unused.length) throw new Error(`卡片 ${alias} 已连接的来源未用于提示词，请补充 ${unused.map(key => `{{${key}}}`).join("、")}`);
+    if (mode === "planner" && (node.kind === "generation" || node.kind === "agent") && unused.length) throw new Error(`卡片 ${alias} 已连接的来源未用于提示词，请补充 ${unused.map(key => `{{${key}}}`).join("、")}`);
   }
   const triggers = nodes.filter(node => node.kind === "trigger");
   if (triggers.length !== 1) throw new Error("方案必须包含一个触发器");

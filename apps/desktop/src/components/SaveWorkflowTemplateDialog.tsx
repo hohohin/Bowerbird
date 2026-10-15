@@ -16,7 +16,7 @@ export function SaveWorkflowTemplateDialog({ nodes, selectedIds, graphNodes, bou
 }) {
   const exporting = mode === "package";
   const [name, setName] = useState(exporting ? "分享工作流" : mode === "template" ? "新流程模板" : "新子流程");
-  const [carryImages, setCarryImages] = useState(true), [carryText, setCarryText] = useState(true);
+  const [carryImages, setCarryImages] = useState(!exporting), [carryText, setCarryText] = useState(!exporting);
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
   const [preview] = useState(() => templatePreview(nodes, graphNodes, selectedIds, bounds));
   const [enclosed, setEnclosed] = useState(new Set(preview.cards.map(card => card.id)));
@@ -57,7 +57,7 @@ export function SaveWorkflowTemplateDialog({ nodes, selectedIds, graphNodes, bou
             for (const [index, card] of preview.cards.entries()) if (card.kind !== "workflow") {
               values[`item${index + 1}`] = card.kind === "image" || !card.body.trim() && card.assets.length ? { type: "image", assetIds: card.assets } : { type: "text", text: card.body };
             }
-            saved = await includeTemplateContent({ ...template, schemaVersion: 3, layout, name: name.trim(), plan: { ...template.plan, summary: name.trim() } }, values, carryImages, carryText);
+            saved = await includeTemplateContent({ ...template, schemaVersion: 4, layout, name: name.trim(), plan: { ...template.plan, summary: name.trim() } }, values, carryImages, carryText);
           }
           if (exporting) await api.workflowTemplateExportDocument(saved!, path!);
           else if (enclosed.size) await onEncapsulate(name.trim(), [...enclosed], saved);
@@ -77,7 +77,7 @@ export function SaveWorkflowTemplateDialog({ nodes, selectedIds, graphNodes, bou
       <p>附带这些步骤用到的输入图片，换设备后也可使用。</p>
       <label><input type="checkbox" checked={carryText} disabled={busy} onChange={event => setCarryText(event.target.checked)} />带上文本</label>
       <p>附带内容卡中的输入文案。流程卡片里的操作指令始终保留。</p>
-      <p>未携带的内容会留作待填输入，使用模板时再选择素材或文案。</p>
+      <p>未携带的内容会恢复为空白内容卡，可在导入后补充。视觉规范只保留卡片与连线，导入后选择自己的规范。</p>
       {exporting && <p>发送数据包后，对方在画板右键「导入工作流数据包」，确认输入后添加到自己的画板。导入不会自动运行。</p>}
       </div>}
     </div>

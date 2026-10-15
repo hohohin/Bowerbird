@@ -1,16 +1,16 @@
 import { activePromptReferences, normalizeWorkflowInputSlots, workflowReferenceMatchesInput, assertWorkflowAcyclic, invalidateWorkflow, newWorkflowNode, workflowBindingKey, workflowOutputs, workflowTitle, type WorkflowInput, type WorkflowNode } from "./canvasWorkflow";
 import { buildWorkflowPlan, planningSnapshotKey, type PlanningSource } from "./workflowPlanner";
 
-type CardKind = "trigger" | "instruction" | "agent" | "generation" | "skill" | "visual-profile";
-interface CardSpec { id: string; kind: CardKind; prompt?: string; action?: string; skill?: string; ratio?: string | null; overwriteDescribe?: boolean }
+type CardKind = "trigger" | "instruction" | "agent" | "generation" | "skill" | "visual-profile" | "loop";
+interface CardSpec { id: string; kind: CardKind; prompt?: string; action?: string; skill?: string; ratio?: string | null; overwriteDescribe?: boolean; loopMode?: "images" | "rows"; loopStartItem?: number; agentTransport?: WorkflowNode["agentTransport"] }
 interface EdgeSpec { from: string; output: string; to: string; input: string }
 export interface TemplateContent { text?: string; images?: { dataUrl: string; token?: string }[] }
-export interface TemplateInput { id: string; label: string; type: "text" | "image"; content?: TemplateContent }
+export interface TemplateInput { id: string; label: string; type: "text" | "image"; content?: TemplateContent; whole?: boolean }
 export interface TemplateParameter { id: string; label: string; node: string; field: "suffix" | "ratio"; defaultValue: string }
 export interface TemplateOutput { id: string; label: string; node: string; port: string }
 export interface TemplateLayoutCard { id: string; node?: string; inputs?: string[]; type?: "text" | "image"; content?: TemplateContent; x: number; y: number; width: number; height: number; enclosed: boolean }
 export interface WorkflowTemplate {
-  format: "bowerbird-workflow-template"; schemaVersion: 1 | 2 | 3; id: string; revision: number;
+  format: "bowerbird-workflow-template"; schemaVersion: 1 | 2 | 3 | 4; id: string; revision: number;
   name: string; description: string;
   plan: { summary: string; nodes: CardSpec[]; edges: EdgeSpec[] };
   inputs: TemplateInput[]; parameters: TemplateParameter[]; outputs: TemplateOutput[];
@@ -55,29 +55,32 @@ function validateTemplateContent(input: Pick<TemplateInput, "type" | "content">)
 export function parseWorkflowTemplate(raw: string): WorkflowTemplate {
   if (new TextEncoder().encode(raw).length > TEMPLATE_MAX_BYTES) fail("模板超过 32 MB，请减少携带的素材");
   const value = JSON.parse(raw) as WorkflowTemplate;
-  keys(value, ["format", "schemaVersion", "id", "revision", "name", "description", "plan", "inputs", "parameters", "outputs", ...(value.schemaVersion === 3 ? ["layout"] : [])]);
-  if (value.format !== "bowerbird-workflow-template" || ![1, 2, 3].includes(value.schemaVersion) || !label(value.id, 80) || !Number.isSafeInteger(value.revision) || value.revision < 0
+  keys(value, ["format", "schemaVersion", "id", "revision", "name", "description", "plan", "inputs", "parameters", "outputs", ...(value.schemaVersion >= 3 ? ["layout"] : [])]);
+  if (value.format !== "bowerbird-workflow-template" || ![1, 2, 3, 4].includes(value.schemaVersion) || !label(value.id, 80) || !Number.isSafeInteger(value.revision) || value.revision < 0
     || !label(value.name) || typeof value.description !== "string" || value.description.length > 2000) fail("模板版本或基本信息无效");
   if (!Array.isArray(value.inputs) || value.inputs.length > 48 || !Array.isArray(value.parameters) || value.parameters.length > 48 || !Array.isArray(value.outputs) || !value.outputs.length || value.outputs.length > 48) fail("模板接口数量无效");
   keys(value.plan, ["summary", "nodes", "edges"]);
   const ids = new Set<string>();
   for (const input of value.inputs) {
-    keys(input, ["id", "label", "type", ...(value.schemaVersion >= 2 ? ["content"] : [])]);
+    keys(input, ["id", "label", "type", ...(value.schemaVersion >= 2 ? ["content"] : []), ...(value.schemaVersion >= 4 ? ["whole"] : [])]);
+    if (input.whole !== undefined && (typeof input.whole !== "boolean" || input.type !== "text")) fail("整表输入无效");
     if (!alias(input.id) || ids.has(input.id) || !label(input.label) || !["text", "image"].includes(input.type)) fail("模板输入无效或重复");
     ids.add(input.id);
     validateTemplateContent(input);
   }
   if (!Array.isArray(value.plan.nodes)) fail("模板步骤无效");
   for (const node of value.plan.nodes) {
+    keys(node, ["id", "kind", "action", "skill", "prompt", "ratio", "overwriteDescribe", ...(value.schemaVersion >= 4 ? ["loopMode", "loopStartItem", "agentTransport"] : [])]);
+    if (node.kind === "loop" && value.schemaVersion < 4) fail("循环卡片需要新版工作流数据包");
     if (node?.overwriteDescribe !== undefined && (typeof node.overwriteDescribe !== "boolean" || node.kind !== "instruction" || node.action !== "describe")) fail("仅反推步骤可以配置覆盖已有描述");
   }
-  const built = buildWorkflowPlan(JSON.stringify(executablePlan(value.plan)), newWorkflowNode("planner", 0, 0, ""), dummySources(value), []);
+  const built = buildWorkflowPlan(JSON.stringify(executablePlan(value.plan)), newWorkflowNode("planner", 0, 0, ""), dummySources(value), [], [], value.schemaVersion >= 4 ? "template" : "planner");
   for (const node of value.plan.nodes) ids.add(node.id);
   if (value.plan.nodes[0].kind !== "trigger") fail("模板第一张卡片必须是触发器");
   for (const param of value.parameters) {
     keys(param, ["id", "label", "node", "field", "defaultValue"]);
     const node = value.plan.nodes.find(node => node.id === param.node);
-    if (!alias(param.id) || ids.has(param.id) || !label(param.label) || !node || node.kind === "trigger" || !["suffix", "ratio"].includes(param.field)
+    if (!alias(param.id) || ids.has(param.id) || !label(param.label) || !node || node.kind === "trigger" || node.kind === "loop" || !["suffix", "ratio"].includes(param.field)
       || typeof param.defaultValue !== "string" || param.defaultValue.length > 2000 || (param.field === "ratio" && (node.kind !== "generation" || !ratios.includes(param.defaultValue)))
       || (param.field === "suffix" && node.kind === "instruction" && node.action !== "describe")
       || value.parameters.some(other => other !== param && other.node === param.node && other.field === param.field)) fail("模板参数无效或重复");
@@ -118,9 +121,7 @@ export function captureWorkflowTemplate(nodes: WorkflowNode[], selected: Set<str
   if (nodes.filter(node => selected.has(node.id) && node.kind === "trigger").length > 1) fail("一个模板暂时只能包含一个触发器，请分别保存这些流程");
   const cards = nodes.filter(node => selected.has(node.id)).map(node => normalizeWorkflowInputSlots(node));
   if (!cards.length || cards.filter(node => node.kind !== "trigger").length > 23 || cards.some(node => node.kind === "text" || node.kind === "planner")) fail("请选择 1–23 张执行卡片，可包含触发器；内容卡作为外部输入接入");
-  if (cards.some(node => node.kind === "loop")) fail("循环卡片暂不支持存为模板，请在画板上复制循环流程");
   if (cards.some(node => node.kind === "generation" && node.generation?.media === "video")) fail("视频生成卡片暂不支持存为模板或导出，请在画板上复制卡片");
-  if (cards.some(node => node.profileId)) fail("已绑定的个人视觉规范不能分享，请改成从输入提炼后保存");
   const work = cards.filter(node => node.kind !== "trigger");
   if (!work.length) fail("模板需要至少一张执行卡片");
   const aliases = new Map(work.map((node, i) => [node.id, `card${i + 1}`]));
@@ -130,7 +131,7 @@ export function captureWorkflowTemplate(nodes: WorkflowNode[], selected: Set<str
     if (type !== "text" && type !== "image") fail("外部视觉规范需要一并选入子流程，不能保存为他人账号的引用");
     const key = `${type}:${workflowBindingKey(binding)}`;
     let id = external.get(key);
-    if (!id) { id = `source${inputs.length + 1}`; external.set(key, id); inputs.push({ id, type, label: `${type === "text" ? "文本" : "图片"}输入 ${inputs.length + 1}` }); if (boundaryBindings) boundaryBindings[id] = structuredClone(binding); }
+    if (!id) { id = `source${inputs.length + 1}`; external.set(key, id); inputs.push({ id, type, label: `${type === "text" ? "文本" : "图片"}输入 ${inputs.length + 1}`, ...(type === "text" && (binding.cellId === "*text" || cards.some(node => node.kind === "loop" && node.loopMode === "rows" && node.inputs.text?.some(input => workflowBindingKey(input) === workflowBindingKey(binding)))) ? { whole: true } : {}) }); if (boundaryBindings) boundaryBindings[id] = structuredClone(binding); }
     return `${id}.${type}`;
   };
   const specs: CardSpec[] = [{ id: "start", kind: "trigger" }];
@@ -144,23 +145,28 @@ export function captureWorkflowTemplate(nodes: WorkflowNode[], selected: Set<str
       prompt = prompt.replaceAll(`@[${ref.id}]`, `{{${bindingAlias(input, ref.type)}}}`);
     }
     if (prompt.includes("@[")) fail("卡片存在失效引用，请先重新选择输入");
-    for (const [port, bindings] of Object.entries(node.inputs)) if (port !== "signal") for (const binding of bindings) {
+    for (const [port, bindings] of Object.entries(node.inputs)) for (const binding of bindings) {
+      if (port === "signal") {
+        if (binding.nodeId && aliases.has(binding.nodeId)) edges.push({ from: aliases.get(binding.nodeId)!, output: binding.portId ?? "signal", to: id, input: port });
+        continue;
+      }
       const [from, output] = bindingAlias(binding, port).split(".");
       edges.push({ from, output, to: id, input: port });
     }
     if (!Object.values(node.inputs).flat().some(input => input.nodeId && aliases.has(input.nodeId))) edges.push({ from: "start", output: "signal", to: id, input: "signal" });
-    specs.push({ id, kind: node.kind as CardKind, prompt, ...(node.kind === "instruction" ? { action: node.action, ...(node.action === "describe" ? { overwriteDescribe: !!node.overwriteDescribe } : {}) } : {}), ...(node.kind === "skill" ? { skill: node.skill } : {}), ...(node.kind === "generation" ? { ratio: node.ratio } : {}) });
+    specs.push({ id, kind: node.kind as CardKind, prompt, ...(node.kind === "instruction" ? { action: node.action, ...(node.action === "describe" ? { overwriteDescribe: !!node.overwriteDescribe } : {}) } : {}), ...(node.kind === "skill" ? { skill: node.skill } : {}), ...(node.kind === "generation" ? { ratio: node.ratio } : {}),
+      ...(node.kind === "loop" ? { loopMode: node.loopMode ?? "images", loopStartItem: node.loopStartItem ?? 1 } : {}), ...(node.kind === "agent" ? { agentTransport: node.agentTransport ?? "local-ds" } : {}) });
   }
   const outputs = work.filter(node => !work.some(other => Object.values(other.inputs).flat().some(input => input.nodeId === node.id)))
     .flatMap(node => workflowOutputs(node).filter(port => port.type !== "signal").map(port => ({ id: `out${aliases.get(node.id)}_${port.id.replaceAll("-", "_")}`, label: `${workflowTitle(node)} · ${port.label}`, node: aliases.get(node.id)!, port: port.id })));
-  return parseWorkflowTemplate(JSON.stringify({ format: "bowerbird-workflow-template", schemaVersion: 1, id: crypto.randomUUID(), revision: 0, name, description: "",
+  return parseWorkflowTemplate(JSON.stringify({ format: "bowerbird-workflow-template", schemaVersion: 4, id: crypto.randomUUID(), revision: 0, name, description: "",
     plan: { summary: name, nodes: specs, edges }, inputs, parameters: [], outputs }));
 }
 
 export const templateDefinition = (node: WorkflowNode) => {
   node = normalizeWorkflowInputSlots(node);
   return planningSnapshotKey({ kind: node.kind, action: node.action, skill: node.skill, prompt: node.prompt, ratio: node.ratio,
-  provider: node.provider, generation: node.generation, inputs: node.inputs, promptReferences: node.promptReferences, agentTransport: node.agentTransport, profileId: node.profileId, overwriteDescribe: !!node.overwriteDescribe });
+  provider: node.provider, generation: node.generation, inputs: node.inputs, promptReferences: node.promptReferences, agentTransport: node.agentTransport, profileId: node.profileId, loopMode: node.loopMode, loopStartItem: node.loopStartItem, overwriteDescribe: !!node.overwriteDescribe });
 };
 
 export function instantiateWorkflowTemplate(template: WorkflowTemplate, bindings: Record<string, WorkflowInput>, values: Record<string, string>, provider: string,
@@ -178,13 +184,14 @@ export function instantiateWorkflowTemplate(template: WorkflowTemplate, bindings
     const binding = bindings[input.id];
     if (!binding || ![binding.assetId, binding.nodeId, binding.canvasNodeId, binding.groupId].some(Boolean)) fail(`请选择「${input.label}」`);
     if (input.type === "text" && (binding.assetId || binding.groupId)) fail(`「${input.label}」需要文本来源`);
+    if (input.whole && binding.canvasNodeId && binding.cellId !== "*text") fail(`「${input.label}」需要整张内容卡`);
     if (binding.nodeId && !existing.some(node => node.id === binding.nodeId && workflowOutputs(node).some(port => port.id === binding.portId && port.type === input.type))) fail(`「${input.label}」的来源已失效`);
     return { ...input, input: structuredClone(binding) };
   });
   const owner = newWorkflowNode("planner", x - 380, y, provider);
-  const result = buildWorkflowPlan(JSON.stringify(executablePlan(plan)), owner, sources, existing).nodes;
+  const result = buildWorkflowPlan(JSON.stringify(executablePlan(plan)), owner, sources, existing, [], template.schemaVersion >= 4 ? "template" : "planner").nodes;
   result.forEach((node, i) => { if (plan.nodes[i].overwriteDescribe !== undefined) node.overwriteDescribe = plan.nodes[i].overwriteDescribe; });
-  const dx = x - Math.min(...result.map(node => node.x)); result.forEach(node => { node.x += dx; if (node.kind === "agent") node.agentTransport = "cloud"; });
+  const dx = x - Math.min(...result.map(node => node.x)); result.forEach(node => { node.x += dx; if (node.kind === "agent" && template.schemaVersion < 4) node.agentTransport = "cloud"; });
   for (const card of template.layout ?? []) if (card.node) {
     const node = result[plan.nodes.findIndex(node => node.id === card.node)];
     node.x = x + card.x; node.y = y + card.y;

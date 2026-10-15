@@ -35,8 +35,8 @@ fn content(value: &Value, kind: &Value) -> AppResult<()> {
 }
 fn validate(value: &Value) -> AppResult<()> {
     fields(value, &["format", "schemaVersion", "id", "revision", "name", "description", "plan", "inputs", "parameters", "outputs", "layout"])?;
-    if value.get("layout").is_some() && value["schemaVersion"] != 3 { return Err(invalid()); }
-    if value.to_string().len() > 32_000_000 || value["format"] != "bowerbird-workflow-template" || !matches!(value["schemaVersion"].as_i64(), Some(1 | 2 | 3))
+    if value.get("layout").is_some() && !matches!(value["schemaVersion"].as_i64(), Some(3 | 4)) { return Err(invalid()); }
+    if value.to_string().len() > 32_000_000 || value["format"] != "bowerbird-workflow-template" || !matches!(value["schemaVersion"].as_i64(), Some(1 | 2 | 3 | 4))
         || !text(&value["id"], 80) || !text(&value["name"], 120) || value["revision"].as_i64().is_none_or(|n| !(0..9_007_199_254_740_991).contains(&n))
         || value["description"].as_str().is_none_or(|s| s.encode_utf16().count() > 2000) { return Err(invalid()); }
     let plan = &value["plan"]; fields(plan, &["summary", "nodes", "edges"])?;
@@ -45,14 +45,21 @@ fn validate(value: &Value) -> AppResult<()> {
     let edges = plan["edges"].as_array().ok_or_else(invalid)?;
     if nodes.len() < 2 || nodes.len() > 24 || edges.len() > 64 { return Err(invalid()); }
     let mut ids = std::collections::HashSet::new();
+    let v4 = value["schemaVersion"] == 4;
     for node in nodes {
-        fields(node, &["id", "kind", "action", "skill", "prompt", "ratio", "overwriteDescribe"])?;
+        let mut node_fields = vec!["id", "kind", "action", "skill", "prompt", "ratio", "overwriteDescribe"];
+        if v4 { node_fields.extend(["loopMode", "loopStartItem", "agentTransport"]); }
+        fields(node, &node_fields)?;
+        if node.get("loopMode").is_some_and(|mode| node["kind"] != "loop" || !matches!(mode.as_str(), Some("images" | "rows")))
+            || node.get("loopStartItem").is_some_and(|item| node["kind"] != "loop" || item.as_u64().is_none_or(|n| !(1..=100).contains(&n)))
+            || node.get("agentTransport").is_some_and(|transport| node["kind"] != "agent" || !matches!(transport.as_str(), Some("local-ds" | "codex-cli" | "cloud"))) { return Err(invalid()); }
         if node.get("overwriteDescribe").is_some_and(|flag| !flag.is_boolean() || node["kind"] != "instruction" || node["action"] != "describe") { return Err(invalid()); }
         if !alias(&node["id"]) || !ids.insert(node["id"].as_str().unwrap())
-            || !matches!(node["kind"].as_str(), Some("trigger" | "instruction" | "agent" | "generation" | "skill" | "visual-profile"))
+            || !(matches!(node["kind"].as_str(), Some("trigger" | "instruction" | "agent" | "generation" | "skill" | "visual-profile")) || v4 && node["kind"] == "loop")
             || node.get("prompt").is_some_and(|p| p.as_str().is_none_or(|s| s.encode_utf16().count() > 4000)) { return Err(invalid()); }
     }
-    let input_fields = if value["schemaVersion"] != 1 { vec!["id", "label", "type", "content"] } else { vec!["id", "label", "type"] };
+    let mut input_fields = if value["schemaVersion"] != 1 { vec!["id", "label", "type", "content"] } else { vec!["id", "label", "type"] };
+    if v4 { input_fields.push("whole"); }
     for (section, allowed) in [("inputs", input_fields), ("parameters", vec!["id", "label", "node", "field", "defaultValue"]), ("outputs", vec!["id", "label", "node", "port"])] {
         let items = value[section].as_array().ok_or_else(invalid)?;
         if items.len() > 48 || section == "outputs" && items.is_empty() { return Err(invalid()); }
@@ -60,10 +67,11 @@ fn validate(value: &Value) -> AppResult<()> {
             fields(item, &allowed)?;
             if !alias(&item["id"]) || !ids.insert(item["id"].as_str().unwrap()) || !text(&item["label"], 120) { return Err(invalid()); }
             if section == "inputs" && !matches!(item["type"].as_str(), Some("text" | "image")) { return Err(invalid()); }
+            if section == "inputs" && item.get("whole").is_some_and(|whole| !whole.is_boolean() || item["type"] != "text") { return Err(invalid()); }
             if section == "inputs" { if let Some(value) = item.get("content") { content(value, &item["type"])?; } }
             if section != "inputs" && !nodes.iter().any(|node| node["id"] == item["node"]) { return Err(invalid()); }
             if section == "parameters" && (!matches!(item["field"].as_str(), Some("suffix" | "ratio")) || item["defaultValue"].as_str().is_none_or(|s| s.encode_utf16().count() > 2000)) { return Err(invalid()); }
-            if section == "outputs" && !matches!(item["port"].as_str(), Some("text" | "image" | "visual-profile")) { return Err(invalid()); }
+            if section == "outputs" && !(matches!(item["port"].as_str(), Some("text" | "image" | "visual-profile")) || v4 && item["port"] == "iteration" && nodes.iter().any(|node| node["id"] == item["node"] && node["kind"] == "loop")) { return Err(invalid()); }
         }
     }
     if let Some(layout) = value.get("layout") {
@@ -91,8 +99,9 @@ fn validate(value: &Value) -> AppResult<()> {
     }
     for edge in edges {
         fields(edge, &["from", "output", "to", "input"])?;
+        let iteration = v4 && edge["output"] == "iteration" && edge["input"] == "text" && nodes.iter().any(|node| node["id"] == edge["from"] && node["kind"] == "loop");
         if !nodes.iter().any(|node| node["id"] == edge["to"]) || !nodes.iter().chain(value["inputs"].as_array().unwrap()).any(|node| node["id"] == edge["from"])
-            || !matches!(edge["output"].as_str(), Some("signal" | "text" | "image" | "visual-profile")) || edge["input"] != edge["output"] { return Err(invalid()); }
+            || !(iteration || matches!(edge["output"].as_str(), Some("signal" | "text" | "image" | "visual-profile")) && edge["input"] == edge["output"]) { return Err(invalid()); }
     }
     Ok(())
 }
@@ -277,6 +286,40 @@ mod tests {
         for bad_content in [json!({"images":[{"dataUrl":"https://example.test/image.png"}]}), json!({"images":[{"dataUrl":"data:image/png;base64,bm90LWFuLWltYWdl"}]}), json!({"path":"private"}), json!({"assetId":"private"})] {
             let mut bad = document.clone(); bad["inputs"][0]["content"] = bad_content; assert!(validate(&bad).is_err());
         }
+    }
+    #[test]
+    fn v4_loop_and_empty_profile_round_trip_without_personal_bindings() {
+        let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();
+        let mut doc = template(); doc["schemaVersion"] = json!(4);
+        doc["plan"]["nodes"] = json!([
+            {"id":"start","kind":"trigger"},
+            {"id":"each","kind":"loop","loopMode":"rows","loopStartItem":2},
+            {"id":"style","kind":"visual-profile","prompt":""},
+            {"id":"draw","kind":"agent","agentTransport":"codex-cli","prompt":"处理 {{each.text}}，第 {{each.iteration}} 轮"}
+        ]);
+        doc["inputs"] = json!([{"id":"table","label":"内容表格","type":"text","whole":true}]);
+        doc["outputs"] = json!([{"id":"out","node":"draw","port":"text","label":"结果"},{"id":"count","node":"each","port":"iteration","label":"轮次"}]);
+        doc["plan"]["edges"] = json!([
+            {"from":"start","output":"signal","to":"each","input":"signal"},
+            {"from":"start","output":"signal","to":"style","input":"signal"},
+            {"from":"table","output":"text","to":"each","input":"text"},
+            {"from":"each","output":"text","to":"draw","input":"text"},
+            {"from":"each","output":"iteration","to":"draw","input":"text"},
+            {"from":"style","output":"visual-profile","to":"draw","input":"visual-profile"}
+        ]);
+        let saved = db.workflow_template_save(doc.clone(), 0).unwrap();
+        assert_eq!(db.workflow_templates_list().unwrap()[0], saved);
+        for version in [1, 2, 3] { let mut bad = doc.clone(); bad["schemaVersion"] = json!(version); assert!(validate(&bad).is_err()); }
+        for start in [json!(0), json!(1.5), json!(101), json!("2")] {
+            let mut bad = doc.clone(); bad["plan"]["nodes"][1]["loopStartItem"] = start; assert!(validate(&bad).is_err());
+        }
+        for field in ["profileId", "profileCache", "outputs", "sessionNodeIds"] {
+            let mut bad = doc.clone(); bad["plan"]["nodes"][2][field] = json!("private"); assert!(validate(&bad).is_err());
+        }
+        let mut bad = doc.clone(); bad["plan"]["nodes"][1]["loopMode"] = json!("unknown"); assert!(validate(&bad).is_err());
+        let mut bad = doc.clone(); bad["plan"]["edges"][4]["from"] = json!("style"); assert!(validate(&bad).is_err());
+        let mut bad = doc.clone(); bad["plan"]["nodes"][3]["agentTransport"] = json!("unknown"); assert!(validate(&bad).is_err());
+        let mut bad = doc; bad["inputs"][0]["whole"] = json!("true"); assert!(validate(&bad).is_err());
     }
     #[test]
     fn layout_round_trip_rejects_private_or_duplicate_members() {

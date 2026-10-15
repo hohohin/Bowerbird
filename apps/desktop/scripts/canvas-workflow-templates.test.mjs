@@ -156,6 +156,10 @@ try {
   await page.locator('[data-canvas-node-id="old"]').click({ button: 'right' });
   await page.getByRole('menuitem', { name: '导出工作流数据包', exact: true }).click();
   await page.getByRole('textbox', { name: '工作流名称', exact: true }).fill('直接分享');
+  assert.equal(await page.getByRole('checkbox', { name: '带上素材', exact: true }).isChecked(), false);
+  assert.equal(await page.getByRole('checkbox', { name: '带上文本', exact: true }).isChecked(), false);
+  await page.getByRole('checkbox', { name: '带上素材', exact: true }).check();
+  await page.getByRole('checkbox', { name: '带上文本', exact: true }).check();
   const exportCount = await page.evaluate(() => window.calls.filter(call => call.command === 'workflow_template_export').length);
   await page.evaluate(() => { window.cancelTemplateExport = true; });
   await page.getByRole('button', { name: '导出数据包', exact: true }).click();
@@ -226,7 +230,7 @@ try {
   await page.getByPlaceholder('搜索名称或说明').fill('选区-true-true');
   await page.getByRole('button', { name: '选区-true-true v1', exact: true }).click();
   await page.getByRole('button', { name: '导出分享文件', exact: true }).click();
-  await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-template-export')).schemaVersion === 3);
+  await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-template-export')).schemaVersion === 4);
   const portable = JSON.stringify(directPackage);
   await page.getByRole('button', { name: '关闭', exact: true }).click();
   await page.locator('.workflow-card.is-generation header').click({ button: 'right' });
