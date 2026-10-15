@@ -2,13 +2,29 @@
 
 本页集中维护自动更新的技术约定、发布操作和部署证据；[PROJECT.md](../PROJECT.md) 只保留项目级摘要及入口。更新代码、构建签名包、发布清单、排查双端差异前先读本页。
 
-## Apple Silicon 26.10.1502（2026-10-15，发布准备）
+## Apple Silicon 26.10.1502（2026-10-15，R2 已交付，官网待切换）
 
 本次按用户要求完成更新、存档、推送后发包。源码包含 `53c3c6a` 的双线合并及新增工作流分享 schema v4（循环起点/轮次/整表、个人视觉规范仅分享卡片结构、空白输入导入）；版本提升至 26.10.1502，SQLite 0034，沿用原 Mac updater 公钥和本机稳定代码签名。仅构建 Apple Silicon；其他平台接收源码后分别构建。存档后从固定提交快照构建，产物保留在 `macOS/dist/`，签名私钥与临时输出不入 Git。
 
 本轮追加验证：分享 27 项与真实 React 导入/导出/重载、模板 34 项、编排协议 52 项/22 次反馈、Rust 模板 7 项、TypeScript/Vite production、Mac 发布工具签名/篡改回归及 diff 检查通过；均使用临时库/合成 IPC，未调用真实模型。
 
 发布前通过本机 12000 代理重新核对：官网 ARM 26.10.801，Intel 404。后续记录实际构建、上传、验签与官网切换结果，不把上传等同于更新通道已发布。
+
+**本轮结果：** 源码及版本已存档并推送 `origin/mac@5fecb7c2c82641e636a5a4f86ef4d55c3c34ff34`；固定提交快照构建的签名 Apple Silicon 更新归档、DMG、签名/哈希与版本化清单共六件已上传 R2，完整公网下载哈希与本地一致，公网归档再次通过原 Mac 公钥验签。验证时间 `2026-10-15T14:31:26.741611+00:00`。后续文档提交不改变安装包代码基线。
+
+| 产物 | 字节数 | SHA-256 |
+|---|---:|---|
+| `Bowerbird_26.10.1502_aarch64.app.tar.gz` | 87,077,757 | `89aad2e8657931bb9acbb9658b6a97c605fa58b422ffa2e17a93b33a7a9a3e82` |
+| `Bowerbird_26.10.1502_aarch64-updater-installer.dmg` | 87,487,656 | `ee766d23293cb62347ffa13f0db91a979a2940a75b6d8e5b50ddc04024739dc8` |
+| `darwin-aarch64-26.10.1502.json` | 1,317 | `30744db09149c645b9bae544fad6973816663a514599fb392402a7a65d2f2b18` |
+
+本机核验：1,336 个存档文件与构建快照一致、67 个内置资源与源码一致、tar 内 72 个文件内容及执行权限一致；包内 26.10.1502/arm64/`bowerbird` 协议、Cloud 公共端点与发布 Key、原 Mac 公钥及 Windows 公钥缺席通过。原 updater key id `0b5a2efc4865664f`，主签名/可信备注及篡改拒绝通过；`Bowerbird Local Code Signing` 代码签名严格验证、DMG 完整性、只读挂载的 Applications 链接、背景、`.DS_Store` 与应用一致性通过。未做 Developer ID 公证，未替换本机安装或对正式用户库执行升级、真实账号/模型验收。此前 debug/合成 IPC 验证不能等同于本包原生升级全链路。
+
+构建配置：隔离快照只补入本机现有 Cloud 公共配置白名单；初次发现公共配置未进入 Git 快照即中止，最终产物已确认嵌入。共享依赖路径使 pnpm 自动安装检查误判，固定快照复用同锁文件依赖并将该检查设为 warn，未重装或改锁文件。私钥、上传凭据不入 Git/安装包。
+
+[Apple Silicon DMG](https://pub-5e4c00c218cd4682b622cbab5e58563e.r2.dev/mac_package/Bowerbird_26.10.1502_aarch64-updater-installer.dmg)；[版本化更新清单](https://pub-5e4c00c218cd4682b622cbab5e58563e.r2.dev/mac_package/darwin-aarch64-26.10.1502.json)。本地文件 `macOS/dist/Bowerbird_26.10.1502_aarch64-updater-installer.dmg`；证据 `macOS/dist/verification/release-26.10.1502/`，含固定提交、构建/回归/本地验证、R2 上传及公网报告。
+
+**官网尚未切换：** 本机没有 SSH 配置、私钥或 agent 身份，已向用户请求发布连接方式。发包后只读核验官网 ARM 仍为 **26.10.801**（清单 SHA-256 `06f74a3ebf68ed197dd0ceba186ebc33903eaaba8115b082dc5c1ebe35f7db76`）、Windows **26.10.1001**、Intel **404**。发布端取得本版已验签清单后，从现役站点复制候选，仅更新 ARM 清单与两份首页的 ARM 下载入口，候选核验后原子切换并保留旧目录回滚；不得用仓库旧首页整体覆盖现役 Windows，也不要替换 Intel 或 updater 公钥。R2 已交付不表示应用内更新已上线。
 
 ## Intel 26.10.1501 原 Mac 密钥补签（2026-10-15，官网待切换）
 
