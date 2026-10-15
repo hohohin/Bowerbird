@@ -1,6 +1,7 @@
 import { ProjectInspectorShell } from "./ProjectInspectorShell";
 import { WorkflowAgentDetail } from "./WorkflowAgentDetail";
 import { WORKFLOW_SKILL_ENABLED, WORKFLOW_PLANNER_ENABLED, WORKFLOW_TEMPLATE_LIBRARY_ENABLED } from "../lib/featureFlags";
+import { useThumbnailPinch } from "../lib/useThumbnailPinch";
 import { LearningHint } from "./OnboardingTour";
 import { CanvasTextCard } from "./CanvasTextCard";
 import { CanvasWorkflowLayer, WindingKey, type WorkflowLayerHandle, type WorkflowGeometry, type MaterialAnchor } from "./CanvasWorkflowLayer";
@@ -451,6 +452,7 @@ export function CanvasWorkspace({
     && state.guide.sessions.designer?.projectId === projectId && [2, 7, 8].includes(state.guide.sessions.designer.step));
   const sourcePanelId = useId();
   const sourceItemWidth = useStore(s => s.canvasThumbnailWidth);
+  const sourcePinchRef = useThumbnailPinch("canvas");
   const [sourceScope, setSourceScope] = useState<CanvasSourceScope>(() => project?.provisional ? "library" : "project");
   const [librarySourceAssets, setLibrarySourceAssets] = useState<Asset[]>([]);
   const [canvasAssets, setCanvasAssets] = useState<Asset[]>([]);
@@ -609,7 +611,7 @@ export function CanvasWorkspace({
   const resizeRef = useRef<{ pointerId: number; startX: number; width: number; moved: boolean } | null>(null);
   const marqueePressRef = useRef<CanvasMarqueePress | null>(null);
   const selectedCanvasNodeIdsRef = useRef(selectedCanvasNodeIds);
-  const [drawingTool, setDrawingTool] = useState<"select" | "pan" | "section" | "text" | "bubble">("select");
+  const [drawingTool, setDrawingTool] = useState<"select" | "pan" | "section" | "bubble" | Exclude<WorkflowKind, "trigger">>("select");
   const workflowRef = useRef<WorkflowLayerHandle>(null);
   const pastingRef = useRef(false);
   const [workflowRevision, setWorkflowRevision] = useState(0);
@@ -648,20 +650,19 @@ export function CanvasWorkspace({
     return !running && summary.status === "done" && images.length && images.every(image => !isVideoPath(image.storePath)) ? [id] : [];
   }));
   const visibleMaterials = useMemo(() => nodes.filter(node => !containedOutputIds.has(node.id) && !conversationCards.hiddenIds.has(node.id)), [nodes, containedOutputIds, conversationCards]);
-  function addWorkflowCard(kind: "planner" | "instruction" | "generation" | "skill" | "agent" | "visual-profile" | "trigger" | "loop") {
-    const bounds = stageRef.current?.getBoundingClientRect();
-    if (!bounds || loadingRef.current) return;
-    setDrawingTool("select");
-    const point = toBoardPoint(bounds.left + Math.max(100, bounds.width / 2 - 160), bounds.top + 100);
-    workflowRef.current?.add(kind, point.x, point.y);
+  function chooseCanvasTool(tool: typeof drawingTool) {
+    workflowRef.current?.cancelPlacement();
+    setDrawingTool(tool);
   }
-  function workflowCardTool(kind: Exclude<WorkflowKind, "text" | "trigger">) {
+  function canvasCardTool(kind: "bubble" | Exclude<WorkflowKind, "trigger">) {
     return {
       draggable: true,
-      onClick: () => addWorkflowCard(kind),
+      "aria-pressed": drawingTool === kind,
+      onClick: () => chooseCanvasTool(kind),
       onDragStart: (event: DragEvent<HTMLButtonElement>) => {
         if (loadingRef.current || useStore.getState().projectRoutePending) { event.preventDefault(); return; }
         event.stopPropagation();
+        chooseCanvasTool("select");
         event.dataTransfer.effectAllowed = "copy";
         event.dataTransfer.setData(WORKFLOW_CARD_DRAG_TYPE, JSON.stringify({ kind, projectId }));
       },
@@ -2085,10 +2086,9 @@ export function CanvasWorkspace({
       if (loadingRef.current || useStore.getState().projectRoutePending || (event.target as HTMLElement).closest(".canvas-drawing-tools")) return;
       try {
         const value = JSON.parse(event.dataTransfer.getData(WORKFLOW_CARD_DRAG_TYPE));
-        if (value.projectId !== projectId || !["instruction", "generation", "skill", "agent", "visual-profile", "loop", ...(import.meta.env.DEV ? ["planner"] : [])].includes(value.kind)) return;
-        setDrawingTool("select");
+        if (value.projectId !== projectId || !["text", "bubble", "instruction", "generation", "skill", "agent", "visual-profile", "loop", ...(import.meta.env.DEV ? ["planner"] : [])].includes(value.kind)) return;
         const point = toBoardPoint(event.clientX, event.clientY);
-        workflowRef.current?.add(value.kind, point.x, point.y);
+        placeCanvasCard(value.kind, point);
       } catch { /* Ignore unrelated or malformed external drag payloads. */ }
       return;
     }
@@ -2834,17 +2834,26 @@ export function CanvasWorkspace({
     setDrawingTool("select");
   }
 
+  function placeCanvasCard(kind: "bubble" | Exclude<WorkflowKind, "trigger">, point: CanvasPoint) {
+    chooseCanvasTool("select");
+    if (kind === "text" || kind === "bubble") {
+      createCanvasNote({ ...point, width: kind === "bubble" ? 240 : 320,
+        height: kind === "bubble" ? 120 : canvasTextMinSize([[emptyCanvasCell()]]).height }, kind);
+    } else {
+      workflowRef.current?.add(kind, point.x, point.y);
+    }
+  }
+
   function beginDrawing(event: PointerEvent<HTMLDivElement>) {
     if (!event.currentTarget.contains(event.target as Node)) return;
     if (drawingTool === "select" || drawingTool === "pan" || event.button !== 0 || spacePressedRef.current
-      || (event.target as HTMLElement).closest(".canvas-drawing-tools") || loadingRef.current) return;
+      || (event.target as HTMLElement).closest(".canvas-drawing-tools") || loadingRef.current || useStore.getState().projectRoutePending) return;
     event.preventDefault();
     event.stopPropagation();
     event.currentTarget.focus({ preventScroll: true });
     const start = toBoardPoint(event.clientX, event.clientY);
-    if (drawingTool === "text" || drawingTool === "bubble") {
-      createCanvasNote({ ...start, width: drawingTool === "bubble" ? 240 : 320,
-        height: drawingTool === "bubble" ? 120 : canvasTextMinSize([[emptyCanvasCell()]]).height }, drawingTool);
+    if (drawingTool !== "section") {
+      placeCanvasCard(drawingTool, start);
     } else {
       sectionDrawRef.current = { pointerId: event.pointerId, start };
       setSectionPreview({ ...start, width: 0, height: 0 });
@@ -3753,9 +3762,9 @@ export function CanvasWorkspace({
     <div
       ref={workspaceRef}
       data-onboarding-project={projectId ?? undefined}
-      className={`canvas-workspace${loading || projectRoutePending ? " is-route-pending" : ""}`}
+      className={`canvas-workspace${sourceCollapsed ? " is-source-collapsed" : ""}${sourceResizing ? " is-source-resizing" : ""}${loading || projectRoutePending ? " is-route-pending" : ""}`}
       aria-busy={loading || projectRoutePending}
-      style={{ gridTemplateColumns: sourceCollapsed ? "36px minmax(0, 1fr)" : `${sourceWidth}px 7px minmax(0, 1fr)` }}
+      style={{ gridTemplateColumns: sourceCollapsed ? "0px 0px minmax(0, 1fr)" : `${sourceWidth}px 7px minmax(0, 1fr)` }}
     >
       <aside id={sourcePanelId} className="canvas-source-panel" aria-label="画板素材库">
         {sourceCollapsed && <button
@@ -3770,7 +3779,7 @@ export function CanvasWorkspace({
             beginOnboardingOperation("expand-source", projectId)();
             requestAnimationFrame(() => workspaceRef.current?.querySelector<HTMLButtonElement>(".canvas-source-collapse")?.focus());
           }}
-        ><PanelLeftOpen size={14} /><span>素材库</span></button>}
+        ><PanelLeftOpen size={16} aria-hidden="true" /><span>素材库</span></button>}
         <div id={`${sourcePanelId}-content`} className="canvas-source-content" hidden={sourceCollapsed}>
         {nodes.length >= 4 && <LearningHint topic="arrange" />}
         <div className="canvas-source-header">
@@ -3847,7 +3856,7 @@ export function CanvasWorkspace({
             })}
           </div>
         )}
-        <div className="min-h-0 flex-1">
+        <div ref={sourcePinchRef} className="min-h-0 flex-1">
           {sourceScope === "library" && librarySourceLoading && librarySourceAssets.length === 0 ? (
             <div className="flex h-full items-center justify-center gap-2 text-xs text-muted" role="status">
               <LoaderCircle className="animate-spin" size={14} /> 正在载入中央素材
@@ -4112,20 +4121,19 @@ export function CanvasWorkspace({
           onDrop={onCanvasDrop}
         >
           <div className="canvas-drawing-tools" role="toolbar" aria-label="画板工具" onPointerDown={event => event.stopPropagation()}>
-            <button data-tip="选择" aria-label="选择工具" aria-pressed={drawingTool === "select"} onClick={() => setDrawingTool("select")}><MousePointer2 size={18} /></button>
-            <button data-tip="抓手 · 按住左键平移视图（Esc 退出）" aria-label="抓手工具" aria-pressed={drawingTool === "pan"} onClick={() => setDrawingTool("pan")}><Hand size={18} /></button>
+            <button data-tip="选择" aria-label="选择工具" aria-pressed={drawingTool === "select"} onClick={() => chooseCanvasTool("select")}><MousePointer2 size={18} /></button>
+            <button data-tip="抓手 · 按住左键平移视图（Esc 退出）" aria-label="抓手工具" aria-pressed={drawingTool === "pan"} onClick={() => chooseCanvasTool("pan")}><Hand size={18} /></button>
+            <button data-tip="分区 · 拖拽画框" aria-label="分区工具" aria-pressed={drawingTool === "section"} onClick={() => chooseCanvasTool("section")}><Frame size={18} /></button>
             <hr />
-            <button data-tip="分区 · 拖拽画框" aria-label="分区工具" aria-pressed={drawingTool === "section"} onClick={() => setDrawingTool("section")}><Frame size={18} /></button>
-            <button data-tip="内容卡片 · 点击放置，接收文字或图片" aria-label="内容卡片工具" aria-pressed={drawingTool === "text"} onClick={() => setDrawingTool("text")}><Type size={18} /></button>
-            <button data-tip="气泡便签 · 点击放置" aria-label="气泡便签工具" aria-pressed={drawingTool === "bubble"} onClick={() => setDrawingTool("bubble")}><MessageCircle size={18} /></button>
-            <hr />
-            <button data-tip="指令卡片" aria-label="新增指令卡片" {...workflowCardTool("instruction")}><List size={18} /></button>
-            <button data-tip="循环卡片 · 逐项处理" aria-label="新增循环卡片" {...workflowCardTool("loop")}><Repeat2 size={18} /></button>
-            <button data-tip="生成卡片" aria-label="新增生成卡片" {...workflowCardTool("generation")}><Images size={18} /></button>
-            {WORKFLOW_SKILL_ENABLED && <button data-tip="技能卡片" aria-label="新增技能卡片" {...workflowCardTool("skill")}><Sparkles size={18} /></button>}
-            {WORKFLOW_PLANNER_ENABLED && import.meta.env.DEV && <button data-tip="工作流助手 · AI 编排" aria-label="新增工作流助手" {...workflowCardTool("planner")}><Sparkles size={18} /></button>}
-            <button data-tip="Agent 卡片 · 文本改写" aria-label="新增 Agent 卡片" {...workflowCardTool("agent")}><TextCursorInput size={18} /></button>
-            <button data-tip="视觉规范卡片" aria-label="新增视觉规范卡片" {...workflowCardTool("visual-profile")}><Palette size={18} /></button>
+            <button data-tip="内容卡片 · 拖入画布或选中后点击放置" aria-label="内容卡片工具" {...canvasCardTool("text")}><Type size={18} /></button>
+            <button data-tip="气泡便签 · 拖入画布或选中后点击放置" aria-label="气泡便签工具" {...canvasCardTool("bubble")}><MessageCircle size={18} /></button>
+            <button data-tip="指令卡片 · 拖入画布或选中后点击放置" aria-label="新增指令卡片" {...canvasCardTool("instruction")}><List size={18} /></button>
+            <button data-tip="循环卡片 · 拖入画布或选中后点击放置" aria-label="新增循环卡片" {...canvasCardTool("loop")}><Repeat2 size={18} /></button>
+            <button data-tip="生成卡片 · 拖入画布或选中后点击放置" aria-label="新增生成卡片" {...canvasCardTool("generation")}><Images size={18} /></button>
+            {WORKFLOW_SKILL_ENABLED && <button data-tip="技能卡片 · 拖入画布或选中后点击放置" aria-label="新增技能卡片" {...canvasCardTool("skill")}><Sparkles size={18} /></button>}
+            {WORKFLOW_PLANNER_ENABLED && import.meta.env.DEV && <button data-tip="工作流助手 · 拖入画布或选中后点击放置" aria-label="新增工作流助手" {...canvasCardTool("planner")}><Sparkles size={18} /></button>}
+            <button data-tip="Agent 卡片 · 拖入画布或选中后点击放置" aria-label="新增 Agent 卡片" {...canvasCardTool("agent")}><TextCursorInput size={18} /></button>
+            <button data-tip="视觉规范卡片 · 拖入画布或选中后点击放置" aria-label="新增视觉规范卡片" {...canvasCardTool("visual-profile")}><Palette size={18} /></button>
             {WORKFLOW_TEMPLATE_LIBRARY_ENABLED && <button data-tip="模板库 · 子流程与分享" aria-label="工作流模板库" onClick={() => workflowRef.current?.templates()}><Copy size={18} /></button>}
             <button data-tip="发条 · 卡片上吸附，空白处创建" aria-label="发条触发器"
               onPointerDown={event => { if (event.button !== 0) return; event.preventDefault(); event.stopPropagation(); setDrawingTool("select"); workflowRef.current?.arm(event.clientX, event.clientY); }}

@@ -29,7 +29,7 @@ try {
             const groups = [".app-topbar-leading", ".app-search", ".app-topbar-actions"].map(selector => el.querySelector(selector).getBoundingClientRect());
             const controls = [...el.querySelectorAll("button, input")].map(control => control.getBoundingClientRect());
             const labels = [...el.querySelectorAll('.app-topbar-button-label')];
-            const surfaces = [...el.querySelectorAll('.app-topbar-leading > button, .app-topbar-import > button, .app-search input, .thumbnail-size-slider, .library-view-segments, .app-topbar-actions > button, .task-center-trigger')];
+            const surfaces = [...el.querySelectorAll('.app-topbar-leading > button, .app-topbar-import > button, .app-search input, .library-view-segments, .app-topbar-actions > button, .task-center-trigger')];
             return {
               height: bar.height,
               aligned: groups.every(box => Math.abs(box.y + box.height / 2 - (groups[0].y + groups[0].height / 2)) < 1),

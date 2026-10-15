@@ -1,3 +1,4 @@
+import { placeWorkflowCard } from "./fixtures/canvas-reference/place-card.mjs";
 import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
 import { createServer } from 'vite';
@@ -21,7 +22,7 @@ try {
   for (const name of ['新增技能卡片', '新增工作流助手', '工作流模板库']) {
     assert.equal(await page.getByRole('button', { name, exact: true }).count(), 0);
   }
-  await page.getByRole('button',{name:'新增指令卡片',exact:true}).click();
+  await placeWorkflowCard(page, '新增指令卡片');
   const instruction=page.locator('.workflow-card.is-instruction'); await instruction.waitFor();
   await instruction.getByLabel('指令功能').selectOption('reuse');
   await page.getByRole('button',{name:'适应内容',exact:true}).click();
@@ -40,7 +41,7 @@ try {
   await instruction.getByRole('button',{name:'上发条，运行工作流',exact:true}).click();
   await page.waitForFunction(()=>JSON.parse(sessionStorage.getItem('workflow-p'))?.document.run?.status==='done');
   assert.equal((await snapshot()).nodes[0].outputs.text.text,'保持产品主体，生成清晨场景');
-  await page.getByRole('button',{name:'新增生成卡片',exact:true}).click();
+  await placeWorkflowCard(page, '新增生成卡片');
   await page.getByRole('button',{name:'适应内容',exact:true}).click();
   const generation=page.locator('.workflow-card.is-generation'); await generation.waitFor();
   await generation.locator('header').click({button:'right'});
@@ -95,6 +96,7 @@ try {
     canvas.nodes.push({...base,id:'text-source',kind:'note',assetId:null,role:null,x:80,y:100,width:300,height:180,
       payloadJson:JSON.stringify({schema_version:1,note_type:'text',text:'单元格内容',cells:[[{text:'单元格内容',bold:false,italic:false,align:'left'}]],member_ids:[]})});
     const saved=JSON.parse(sessionStorage.getItem('workflow-p'));const gen=saved.document.nodes.find(node=>node.kind==='generation');
+    const instruction=saved.document.nodes.find(node=>node.kind==='instruction');instruction.x=80;instruction.y=550;
     gen.x=460;gen.y=100;gen.sessionNodeIds=['workflow-session'];
     canvas.nodes.push({...base,id:'workflow-session',kind:'prompt',assetId:null,role:null,x:880,y:100,width:260,height:148,positionLocked:true,
       payloadJson:JSON.stringify({schema_version:1,text:'工作流生成',status:'running',provider:'codex'})});
@@ -194,7 +196,7 @@ try {
   assert.equal(await shared.getByLabel('视觉规范来源').isDisabled(),true);
   assert.equal(await right.getByLabel('卡片指令',{exact:true}).getAttribute('contenteditable'),'false');
   await editable.getByLabel('卡片指令',{exact:true}).fill('并发时仍可编辑');
-  await page.getByRole('button',{name:'新增指令卡片',exact:true}).click();
+  await placeWorkflowCard(page, '新增指令卡片');
   await page.locator('.workflow-card.is-instruction').waitFor();
   assert.equal((await snapshot()).runs.filter(r=>r.status==='running').length,2);
   await page.getByRole('button',{name:'适应内容',exact:true}).click();

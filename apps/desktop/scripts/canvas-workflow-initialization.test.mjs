@@ -1,8 +1,9 @@
+import { placeWorkflowCard } from "./fixtures/canvas-reference/place-card.mjs";
 import assert from 'node:assert/strict';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
 
-const server=await createServer({configFile:false,root:process.cwd(),server:{host:'127.0.0.1',port:1604,strictPort:true,hmr:false,watch:null}});
+const server=await createServer({plugins: [{ name: 'enable-hidden-workflow-test', transform(code, id) { if (id.endsWith('/src/lib/featureFlags.ts')) return code.replace('export const WORKFLOW_PLANNER_ENABLED = false;', 'export const WORKFLOW_PLANNER_ENABLED = true;'); } }],configFile:false,root:process.cwd(),server:{host:'127.0.0.1',port:1604,strictPort:true,hmr:false,watch:null}});
 await server.listen();
 const browser=await chromium.launch({channel:'chrome',headless:true});
 const page=await browser.newPage({viewport:{width:1700,height:1100}});
@@ -35,9 +36,9 @@ try {
   await drag('planner');
   await page.getByRole('button',{name:'新增 Agent 卡片',exact:true}).dragTo(stage,{targetPosition:{x:350,y:300}});
   await page.locator('.workflow-card.is-agent').waitFor();
-  await page.locator('.workflow-card.is-agent').getByRole('textbox',{name:'文本修改要求'}).fill('改写提示词');
+  await page.locator('.workflow-card.is-agent').getByRole('textbox',{name:'Agent 要求'}).fill('改写提示词');
   await drag('agent');
-  await page.getByRole('button',{name:'新增生成卡片',exact:true}).click();
+  await placeWorkflowCard(page, '新增生成卡片');
   await page.locator('.workflow-card.is-generation').waitFor();await drag('generation');
   const saved=await workflow();await page.evaluate(()=>{window.save();const snapshot=JSON.parse(sessionStorage.getItem('reference-fixture'));snapshot.nodes=snapshot.nodes.filter(node=>node.id!=='far');sessionStorage.setItem('reference-fixture',JSON.stringify(snapshot));});await page.reload();
   await page.locator('.workflow-card.is-planner').waitFor();

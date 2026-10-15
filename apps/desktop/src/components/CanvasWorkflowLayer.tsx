@@ -51,6 +51,7 @@ export interface WorkflowLayerHandle {
   inputText: (nodeId: string, cellId?: string, disconnect?: boolean, type?: "text" | "image", point?: { x: number; y: number }) => void;
   connectCell: (nodeId: string, cellId: string, clientX: number, clientY: number) => void;
   add: (kind: WorkflowKind, x: number, y: number) => void; arm: (x?: number, y?: number) => void;
+  cancelPlacement: () => void;
   bounds: () => WorkflowGeometry[];
   position: (positions: ReadonlyMap<string, { x: number; y: number }>, persist?: boolean) => void;
   isLocked: (id: string) => boolean;
@@ -427,15 +428,12 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
       handle((async () => {
         await ensureMaterialized();
         const nodes = controller.document.nodes;
-        let nextY = y;
-        while (nodes.some(node => Math.abs(node.x - x) < WORKFLOW_CARD_WIDTH + 24 && Math.abs(node.y - nextY) < 350)
-          || materials.some(node => x < node.x + node.width + 20 && x + WORKFLOW_CARD_WIDTH + 20 > node.x && nextY < node.y + node.height + 20 && nextY + 350 > node.y)) nextY += 370;
-        const node = newWorkflowNode(kind, x, nextY, state.activeGenProvider || state.defaultProvider);
+        const node = newWorkflowNode(kind, x, y, state.activeGenProvider || state.defaultProvider);
         await edit([...nodes, node]); onSelect(node.id);
-        onPlaced({ x: node.x, y: node.y, width: WORKFLOW_CARD_WIDTH, height: 370 });
       })());
     },
     arm(x, y) { setArmed(value => !value); setConnection(null); if (x !== undefined && y !== undefined) setCursor({ x, y }); },
+    cancelPlacement() { setArmed(false); setConnection(null); },
     bounds() { return controller.document.nodes.filter(node => node.kind !== "text").map(node => ({ id: node.id, x: node.x, y: node.y, width: WORKFLOW_CARD_WIDTH, height: cardElements.current.get(node.id)?.offsetHeight ?? 330 })); },
     isLocked(id) { return controller.isLocked(id) || document.nodes.some(node => (node.textSource === id || node.textTarget?.nodeId === id || node.resultNodeIds?.includes(id)) && controller.isLocked(node.id)); },
     position(positions, persist = false) {

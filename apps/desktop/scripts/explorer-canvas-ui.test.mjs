@@ -21,6 +21,9 @@ async function drop(selector = "[data-canvas-stage]") {
   });
 }
 async function settled() { await page.waitForFunction(() => !document.querySelector(".explore-capture-status")); }
+const settleSource = () => page.locator(".canvas-workspace").evaluate(async element => {
+  await Promise.all(element.getAnimations().map(animation => animation.finished.catch(() => {})));
+});
 function atPoint(node, point) {
   assert.ok(Math.abs(node.x + node.width / 2 - point.x) < 0.01);
   assert.ok(Math.abs(node.y + node.height / 2 - point.y) < 0.01);
@@ -53,15 +56,19 @@ try {
     window.originalTransform = document.querySelector(".canvas-plane").style.transform;
   });
   await toggle.click();
+  await settleSource();
   assert.equal(await source.isVisible(), true, "manual expansion is allowed during exploration");
   await page.getByRole("tab", { name: "中央素材", exact: true }).click();
   await resizer.focus(); await page.keyboard.press("ArrowRight");
+  await settleSource();
   const sourceWidth = await source.evaluate(element => element.getBoundingClientRect().width);
   const boardWidth = await page.locator(".canvas-board-shell").evaluate(element => element.getBoundingClientRect().width);
   await toggle.click();
   assert.equal(await resizer.count(), 0, "the hidden library does not leave a resize gutter");
+  await settleSource();
   assert.ok(await page.locator(".canvas-board-shell").evaluate(element => element.getBoundingClientRect().width) > boardWidth + 200);
   await toggle.press("Enter");
+  await settleSource();
   assert.equal(await page.getByRole("tab", { name: "中央素材", exact: true }).getAttribute("aria-selected"), "true");
   assert.equal(await source.evaluate(element => element.getBoundingClientRect().width), sourceWidth);
   await page.getByRole("button", { name: "收起浏览器", exact: true }).click();

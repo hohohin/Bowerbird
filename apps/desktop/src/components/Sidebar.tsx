@@ -482,8 +482,7 @@ export function Sidebar() {
                   title={`tag:${t.name}`}
                 >
                   <span className="text-muted">#</span>
-                  <span className="flex-1 truncate">{t.name}</span>
-                  <span className="text-[10px] tabular-nums text-muted">{t.count}</span>
+                  <span className="flex-1 truncate text-[10px]">{t.name}</span>
                 </div>
               );
             })}

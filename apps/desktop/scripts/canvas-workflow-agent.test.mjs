@@ -1,3 +1,4 @@
+import { placeWorkflowCard } from "./fixtures/canvas-reference/place-card.mjs";
 import assert from 'node:assert/strict';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
@@ -8,7 +9,7 @@ const page = await browser.newPage({viewport:{width:1600,height:1000}});
 try {
   await page.goto('http://127.0.0.1:1599/scripts/fixtures/canvas-reference/preview.html');
   await page.locator('[data-canvas-node-id="old"]').waitFor();
-  await page.getByRole('button',{name:'新增 Agent 卡片',exact:true}).click();
+  await placeWorkflowCard(page, '新增 Agent 卡片');
   await page.getByRole('textbox',{name:'Agent 要求'}).waitFor();
   await page.getByRole('textbox',{name:'Agent 要求'}).fill('将「朱砂痣」替换为「春山可望」，保留文字的排布关系。');
   await page.evaluate(async()=>{

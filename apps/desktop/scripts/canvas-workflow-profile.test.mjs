@@ -1,3 +1,4 @@
+import { placeWorkflowCard } from "./fixtures/canvas-reference/place-card.mjs";
 import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
 import { createServer } from 'vite';
@@ -35,14 +36,14 @@ try {
       return {accepted:true};
     }});
   });
-  await page.getByRole('button',{name:'新增视觉规范卡片',exact:true}).click();
+  await placeWorkflowCard(page, '新增视觉规范卡片');
   const profile=page.locator('.workflow-card.is-visual-profile');
   await profile.getByLabel('规范名称').fill('蓝色系列');
   await profile.getByLabel('视觉要求').fill('使用蓝色，宽松留白');
   assert.equal(await profile.getByLabel('输入：文本',{exact:true}).count(),1);
   assert.equal(await profile.getByLabel('输入：图片',{exact:true}).count(),1);
   assert.equal(await profile.getByLabel('输出：视觉规范',{exact:true}).count(),1);
-  await page.getByRole('button',{name:'新增生成卡片',exact:true}).click();
+  await placeWorkflowCard(page, '新增生成卡片');
   const gen=page.locator('.workflow-card.is-generation');
   await gen.getByLabel('卡片指令').fill('画一张产品海报');
   await page.evaluate(async()=>{const {canvasWorkflowController}=await import('/src/lib/canvasWorkflowRuntime.ts');const c=canvasWorkflowController('p');await c.edit(c.document.nodes.map((n,i)=>({...n,x:700+i*440,y:240})));});

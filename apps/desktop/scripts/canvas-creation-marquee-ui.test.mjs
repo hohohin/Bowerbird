@@ -1,3 +1,4 @@
+import { placeWorkflowCard } from "./fixtures/canvas-reference/place-card.mjs";
 import assert from "node:assert/strict";
 import { createServer } from "vite";
 
@@ -37,12 +38,13 @@ try {
   await node("note").waitFor();
   await page.evaluate(() => window.store.getState().setBoardActive(true));
   await page.waitForSelector(".canvas-stage.is-creation-mode");
+  await page.waitForTimeout(500); // Let the source-panel transition settle before measuring the stage.
 
   // 创作模式下空白拖动即框选（原为浏览模式专属）。
   const stage = await page.locator(".canvas-stage").boundingBox();
-  await page.mouse.move(stage.x + 20, stage.y + 60);
+  await page.mouse.move(stage.x + 500, stage.y + 290);
   await page.mouse.down();
-  await page.mouse.move(stage.x + 400, stage.y + 290, { steps: 12 });
+  await page.mouse.move(stage.x + 65, stage.y + 75, { steps: 12 });
   await page.mouse.up();
   await page.waitForFunction(() => document.querySelectorAll("[data-canvas-node-id].is-selected").length === 2, null, { timeout: 5000 });
   assert.equal(await page.locator("[data-canvas-node-id].is-selected").count(), 2, "creation-mode marquee must select intersecting nodes");
@@ -105,7 +107,7 @@ try {
   await dragPrompt();
 
   // Editable rich text still selects normally; grabbing a workflow header clears it.
-  await page.getByRole("button", { name: "新增生成卡片", exact: true }).click();
+  await placeWorkflowCard(page, "新增生成卡片");
   await page.getByRole("button", { name: "适应内容", exact: true }).click();
   const generation = page.locator(".workflow-card.is-generation");
   const editor = generation.getByLabel("卡片指令", { exact: true });

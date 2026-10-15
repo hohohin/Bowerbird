@@ -20,72 +20,61 @@ function ProcessingAsset({ asset, total }: { asset: NonNullable<LocalClassificat
   </div>;
 }
 
-function JevAnswer({ probability, threshold, noMatch = false }: { probability: number | null; threshold: number; noMatch?: boolean }) {
-  if (probability === null) return <span className="text-muted">缺少有效结果</span>;
-  const options = [
-    { name: noMatch ? "是" : "匹配", value: probability },
-    { name: noMatch ? "否" : "不匹配", value: 1 - probability },
-  ].sort((a, b) => b.value - a.value);
-  return <div className="space-y-2">
-    {options.map((option, index) => <div key={option.name} className={`flex items-center gap-2 ${index === 0 ? "text-ink" : "text-muted"}`}>
-      <span className="min-w-0 flex-1">{option.name}</span>
-      <span className="font-mono tabular-nums" title={String(option.value)}>{(option.value * 100).toFixed(2)}%</span>
-      <svg viewBox="0 0 20 20" className="h-4 w-4 shrink-0 text-cold" aria-hidden="true">
-        <circle cx="10" cy="10" r="7" fill="none" stroke="currentColor" strokeWidth="4" opacity="0.2" />
-        <circle cx="10" cy="10" r="7" fill="none" stroke="currentColor" strokeWidth="4" pathLength="100"
-          strokeDasharray={`${option.value * 100} 100`} transform="rotate(-90 10 10)" />
-      </svg>
-    </div>)}
-    <p className="pt-1 text-xs text-muted">判定：{noMatch ? probability >= threshold ? "是" : "否" : probability >= threshold ? "匹配" : "不匹配"}</p>
-  </div>;
-}
-
 function JevResults({ progress }: { progress: NonNullable<LocalClassificationStatus["jev_progress"]> }) {
+  const report = progress.report;
   return <section aria-label="Jev 返回结果" className="overflow-hidden rounded-lg border border-edge">
     <div className="space-y-2 p-3">
       <h5 className="font-medium">Jev 返回结果</h5>
       <p className="text-xs text-muted break-all">素材：{progress.asset.name}</p>
       <p className="text-xs" role="status">{progress.message}</p>
-      <p className="text-xs text-muted">显示当前或最近一张素材的返回内容。匹配结果在此图全部处理成功后才保存。</p>
-      {progress.batches.length === 0 && <p className="text-xs text-muted">暂无 Jev 返回内容</p>}
+      <p className="text-xs text-muted">类型、风格、主体分别选一个标签；各维度内按候选概率排序。自动分类仅通过 Cloud 补充未匹配的维度。</p>
+      {!report && <p className="text-xs text-muted">暂无 Jev 返回内容</p>}
     </div>
-    <div className="max-h-[28rem] overflow-y-auto">
-      {progress.batches.map((batch) => <div key={batch.batch} className="border-t border-edge">
-        <div className="flex flex-wrap justify-between gap-1 bg-panel2 px-3 py-2 text-xs text-muted">
-          <span>第 {batch.batch} 批</span><span>匹配阈值 {(batch.threshold * 100).toFixed(0)}%</span>
+    {report && <>
+      {report.dimensions.map(dimension => <section key={dimension.dimension} aria-label={`Jev ${dimension.title}结果`} className="border-t border-edge">
+        <div className="space-y-1 bg-panel2 px-3 py-2 text-xs">
+          <h6 className="font-medium">{dimension.title} · Choice</h6>
+          <p>{dimension.no_match === null ? "结果不完整，未采用" : dimension.no_match ? "此维度无已有匹配标签" : "已选出此维度的标签"}</p>
+          <p className="text-muted">{report.model}{dimension.confidence !== null && ` · 置信度 ${(dimension.confidence * 100).toFixed(2)}%`}</p>
         </div>
-        <table className="w-full table-fixed text-xs">
-          <thead><tr className="border-b border-edge text-left text-muted">
-            <th className="w-1/2 px-3 py-3 font-normal">标签与判断说明</th>
-            <th className="break-all px-3 py-3 font-normal">{batch.model}</th>
-          </tr></thead>
-          <tbody>
-            {batch.labels.map((label, index) => <tr key={index} className="border-b border-edge align-top">
-              <td className="px-3 py-4">
-                <p className="break-all font-medium">{label.name}</p>
-                <p className="mt-2 whitespace-pre-wrap break-words leading-relaxed text-muted">{label.description || "判断目标图片是否属于此标签"}</p>
-              </td>
-              <td className="px-3 py-4"><JevAnswer probability={label.probability} threshold={batch.threshold} /></td>
-            </tr>)}
-            <tr className="align-top">
-              <td className="px-3 py-4">
-                <p className="font-medium">无已有匹配标签（本批）</p>
-                <p className="mt-2 leading-relaxed text-muted">目标图片是否不符合本批任何已有标签？</p>
-              </td>
-              <td className="px-3 py-4"><JevAnswer probability={batch.no_match} threshold={batch.threshold} noMatch /></td>
-            </tr>
-          </tbody>
-        </table>
-        <div className="space-y-2 px-3 pb-3">
-          <p className="text-xs text-muted">二元概率：否 = 1 − 是；不代表整图置信度。</p>
-          {batch.error && <p className="text-xs text-red-400">本批未采用：{batch.error}</p>}
-          <details className="text-xs">
-            <summary className="cursor-pointer text-muted">查看 Jev 原始返回（第 {batch.batch} 批）</summary>
-            <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded bg-panel2 p-2">{JSON.stringify(batch.response, null, 2)}</pre>
-          </details>
+        <div className="max-h-64 overflow-y-auto">
+          <table className="w-full table-fixed text-xs">
+            <thead><tr className="border-b border-edge text-left text-muted">
+              <th className="w-2/3 px-3 py-2 font-normal">候选标签与说明</th>
+              <th className="px-3 py-2 font-normal">概率</th>
+            </tr></thead>
+            <tbody>
+              {dimension.labels.map((label, index) => <tr key={label.key} className={`border-b border-edge align-top ${label.selected ? "bg-cold/5" : ""}`}>
+                <td className="px-3 py-3">
+                  <p className="break-all text-[10px] font-medium">{label.probability !== null ? `${index + 1}. ` : ""}{label.name}</p>
+                  {label.selected && <p className="mt-1 text-cold">{label.key === "no_match" ? "本维度无匹配" : "选中标签"}</p>}
+                  <p className="mt-1 whitespace-pre-wrap break-words leading-relaxed text-muted">{label.description}</p>
+                </td>
+                <td className="px-3 py-3">
+                  {label.probability === null ? <span className="text-muted">无有效概率</span> : <div className="flex items-center gap-2">
+                    <span className="font-mono tabular-nums" title={String(label.probability)}>{(label.probability * 100).toFixed(2)}%</span>
+                    <svg viewBox="0 0 20 20" className="h-4 w-4 shrink-0 text-cold" aria-hidden="true">
+                      <circle cx="10" cy="10" r="7" fill="none" stroke="currentColor" strokeWidth="4" opacity="0.2" />
+                      <circle cx="10" cy="10" r="7" fill="none" stroke="currentColor" strokeWidth="4" pathLength="100"
+                        strokeDasharray={`${label.probability * 100} 100`} transform="rotate(-90 10 10)" />
+                    </svg>
+                  </div>}
+                </td>
+              </tr>)}
+            </tbody>
+          </table>
         </div>
-      </div>)}
-    </div>
+        {dimension.error && <p className="p-3 text-xs text-red-400">{dimension.error}</p>}
+      </section>)}
+      <div className="space-y-2 p-3">
+        <p className="text-xs text-muted">每个维度取 Jev 返回的最高概率选项，各维度之间不比较概率。整图完成后保存为普通标签，重复标签只保存一次。</p>
+        {report.error && <p className="text-xs text-red-400">本图未采用：{report.error}</p>}
+        <details className="text-xs">
+          <summary className="cursor-pointer text-muted">查看 Jev 原始返回</summary>
+          <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded bg-panel2 p-2">{JSON.stringify(report.response, null, 2)}</pre>
+        </details>
+      </div>
+    </>}
   </section>;
 }
 
@@ -223,11 +212,11 @@ export function LocalClassificationDialog({ onClose }: { onClose: () => void }) 
           <ol className="grid gap-3 sm:grid-cols-2">
             <li className="rounded bg-panel2 p-3 space-y-1">
               <p className="font-medium">1. Jev 匹配已有标签</p>
-              <p className="text-xs text-muted">按图片、标签说明和人工示例判断，未设示例的标签也会参与。</p>
+              <p className="text-xs text-muted">一次按类型、风格、主体进行三个 Choice 判断，每个维度从已有标签与「无匹配」中选一个。</p>
             </li>
             <li className="rounded bg-panel2 p-3 space-y-1">
               <p className="font-medium">2. Cloud 补充新标签</p>
-              <p className="text-xs text-muted">仅在「无已有匹配标签」时调用豆包，生成 0–3 个新标签，不限定分类方向。</p>
+              <p className="text-xs text-muted">只为选中「无匹配」的维度调用豆包，每个缺失维度最多补一个标签；保存为普通标签。</p>
             </li>
           </ol>
           <label className="block space-y-2">
@@ -298,6 +287,7 @@ export function LocalClassificationDialog({ onClose }: { onClose: () => void }) 
               <progress className="w-full" value={status.download_done} max={status.download_total || 1} />
               <p className="text-xs text-muted">{Math.round(status.download_done / 1048576)} / {Math.round(status.download_total / 1048576)} MiB · 可关闭面板，下载继续</p>
             </>}
+            {statusIsCloud && status.total > 0 && <p className="text-xs text-muted" aria-label="云端队列进度">Jev 已分析 {status.jev_done} / {status.total} · Cloud 处理中 {status.cloud_running} · 排队 {status.cloud_queued}</p>}
             {status.total > 0 && <p className="text-xs text-muted">已尝试 {status.done} / {status.total} · 成功 {Math.max(0, status.done - status.failed)} · 未完成 {status.failed}</p>}
           </>}
         </div>

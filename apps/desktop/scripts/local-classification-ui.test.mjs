@@ -131,40 +131,69 @@ try {
   assert.equal(await dialog.evaluate(el => el.scrollWidth > el.clientWidth + 1), false);
   const jevResults = dialog.getByRole("region", { name: "Jev 返回结果", exact: true });
   await jevResults.getByText("正在等待 Jev 返回结果…", { exact: true }).waitFor();
-  const addJevBatch = async (batch, name, probability, noMatch, error = null) => page.evaluate(({ batch, name, probability, noMatch, error }) => {
-    window.classificationStatus.jev_progress.batches.push({ batch, model: "jev-test-version", threshold: 0.6,
-      labels: [{ name, description: "明亮柔和的光晕包裹主体边缘，具有梦幻氛围", probability }], no_match: noMatch, error,
-      response: { model: "jev-test-version", answers: { q0: { type: "noul", noul: probability }, no_match: { type: "noul", noul: noMatch } }, usage: { input_tokens: 123 } }
+  await page.evaluate(() => Object.assign(window.classificationStatus, { jev_done: 3, cloud_running: 2, cloud_queued: 1, current_asset: null, message: "Jev 分析已完成，正在等待 Cloud 补标签…" }));
+  await dialog.getByLabel("云端队列进度", { exact: true }).getByText("Jev 已分析 3 / 3 · Cloud 处理中 2 · 排队 1", { exact: true }).waitFor();
+  await preview.waitFor({ state: "hidden" });
+  assert.equal(await dialog.getByRole("button", { name: "停止", exact: true }).isEnabled(), true);
+  assert.equal(await dialog.getByRole("button", { name: "识别未处理素材", exact: true }).isDisabled(), true);
+  await page.evaluate(() => Object.assign(window.classificationStatus, { cloud_running: 0, cloud_queued: 0 }));
+  const setJevChoices = async (winners, error = null) => page.evaluate(({ winners, error }) => {
+    const names = ["插画", "梦幻柔光", "羊", "颗粒质感", "无已有匹配标签"];
+    const answers = {};
+    const dimensions = ["type", "style", "subject"].map((dimension, index) => {
+      const winner = winners[index] ?? 4;
+      const labels = names.map((name, i) => ({ key: i === 4 ? "no_match" : `label_${i}`, name,
+        description: name === "梦幻柔光" ? "明亮柔和的光晕包裹主体边缘，具有梦幻氛围" : "可复用的视觉特征",
+        probability: i === winner ? 0.92 : 0.02, selected: error ? null : i === winner }));
+      answers[dimension] = { type: "choice", choice: labels[winner].key, confidence: 0.81, probabilities: Object.fromEntries(labels.map(label => [label.key, label.probability])) };
+      labels.sort((a, b) => b.probability - a.probability);
+      return { dimension, title: ["类型", "风格", "主体"][index], confidence: 0.81, no_match: error ? null : winner === 4, labels, error: index === 1 ? error : null };
     });
-    window.classificationStatus.jev_progress.message = `Jev 已返回第 ${batch} 批结果，等待此图处理完成`;
-  }, { batch, name, probability, noMatch, error });
-  await addJevBatch(1, "梦幻柔光", 0.92, 0.08);
-  await jevResults.getByRole("row").filter({ hasText: "梦幻柔光" }).getByText("92.00%", { exact: true }).waitFor();
-  await jevResults.getByText("明亮柔和的光晕包裹主体边缘，具有梦幻氛围", { exact: true }).waitFor();
-  assert.equal(await jevResults.getByRole("row").filter({ hasText: "梦幻柔光" }).locator("svg").count(), 2);
-  await jevResults.getByText("查看 Jev 原始返回（第 1 批）", { exact: true }).click();
+    if (error) answers.style.confidence = 2;
+    window.classificationStatus.jev_progress.report = { model: "jev-test-version", dimensions, error,
+      response: { model: "jev-test-version", answers, usage: { input_tokens: 123 } }
+    };
+    window.classificationStatus.jev_progress.message = "Jev 已返回类型、风格、主体三个维度的结果，等待此图处理完成";
+  }, { winners, error });
+  await setJevChoices([0, 1, 2]);
+  const styleResults = jevResults.getByRole("region", { name: "Jev 风格结果", exact: true });
+  const dreamRow = styleResults.getByRole("row").filter({ hasText: "梦幻柔光" });
+  await dreamRow.getByText("92.00%", { exact: true }).waitFor();
+  await styleResults.getByText("jev-test-version · 置信度 81.00%", { exact: true }).waitFor();
+  await dreamRow.getByText("选中标签", { exact: true }).waitFor();
+  assert.equal(await jevResults.getByText("选中标签", { exact: true }).count(), 3);
+  assert.equal(await jevResults.getByText("已选出此维度的标签", { exact: true }).count(), 3);
+  await dreamRow.getByText("明亮柔和的光晕包裹主体边缘，具有梦幻氛围", { exact: true }).waitFor();
+  assert.equal(await dreamRow.locator("svg").count(), 1);
+  assert.equal(await styleResults.locator("tbody tr").first().getByText("1. 梦幻柔光", { exact: true }).isVisible(), true);
+  await jevResults.getByText("查看 Jev 原始返回", { exact: true }).click();
   await jevResults.locator("pre").filter({ hasText: '"input_tokens": 123' }).waitFor();
-  await addJevBatch(2, "颗粒质感", 0.12, 0.88);
-  await jevResults.getByRole("row").filter({ hasText: "颗粒质感" }).getByText("不匹配", { exact: true }).waitFor();
-  assert.equal(await jevResults.getByRole("table").count(), 2);
+  assert.equal(await jevResults.getByRole("table").count(), 3);
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "打开自动分类", exact: true }).click();
   await jevResults.getByText("92.00%", { exact: true }).first().waitFor();
-  await jevResults.scrollIntoViewIfNeeded();
+  await styleResults.scrollIntoViewIfNeeded();
   await page.screenshot({ path: ".tmp/classification-preview/jev-results-light-narrow.png" });
   assert.equal(await dialog.evaluate(el => el.scrollWidth > el.clientWidth + 1), false);
-  await addJevBatch(3, "错误结果", null, null, "缺少有效的无已有匹配标签结果");
-  await jevResults.getByText("本批未采用：缺少有效的无已有匹配标签结果", { exact: true }).waitFor();
-  // Terminal status must hide even a stale thumbnail from a delayed response.
+  // Terminal status hides the thumbnail but retains all three choices.
   await page.evaluate(() => { window.classificationStatus.busy = false; window.classificationStatus.phase = "complete"; });
   await preview.waitFor({ state: "hidden" });
   assert.equal(await jevResults.getByText("92.00%", { exact: true }).first().isVisible(), true);
   await page.setViewportSize({ width: 1050, height: 950 });
   await page.evaluate(() => document.documentElement.dataset.theme = "dark");
-  await dialog.getByRole("button", { name: "寻找匹配", exact: true }).click();
+  await dialog.getByRole("button", { name: "识别未处理素材", exact: true }).click();
   await jevResults.getByText("暂无 Jev 返回内容", { exact: true }).waitFor();
-  assert.equal(await jevResults.getByText("92.00%", { exact: true }).first().count(), 0);
-  await addJevBatch(1, "重试标签", 0.1, 0.9);
+  assert.equal(await jevResults.getByText("92.00%", { exact: true }).count(), 0);
+  await setJevChoices([0, null, 2]);
+  await styleResults.getByText("此维度无已有匹配标签", { exact: true }).waitFor();
+  assert.equal(await jevResults.getByText("选中标签", { exact: true }).count(), 2);
+  assert.equal(await styleResults.locator("tbody tr").first().getByText("1. 无已有匹配标签", { exact: true }).isVisible(), true);
+  await styleResults.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: ".tmp/classification-preview/jev-no-match-dark.png" });
+  await setJevChoices([0, null, 2], "风格：Jev Choice 置信度无效");
+  await jevResults.getByText("本图未采用：风格：Jev Choice 置信度无效", { exact: true }).waitFor();
+  assert.equal(await jevResults.getByText("结果不完整，未采用", { exact: true }).count(), 3);
+  assert.equal(await jevResults.getByText("选中标签", { exact: true }).count(), 0);
   await dialog.getByRole("button", { name: "停止", exact: true }).click();
   await jevResults.getByText("已停止；此图未完成的结果未写入", { exact: true }).waitFor();
   await dialog.getByLabel("自动处理新素材", { exact: true }).check();
@@ -259,5 +288,5 @@ try {
   assert.equal(await dialog.getByRole("radio", { name: "云端分类", exact: true }).isDisabled(), true);
   assert.equal(await dialog.getByRole("button", { name: "识别未处理素材", exact: true }).isDisabled(), true);
   assert.deepEqual(errors, []);
-  console.log("classification UI: separate local/cloud controls, keyboard mode selection, explicit apply/failure/reopen/key persistence, busy guard, scan/automatic/match, delete, processing thumbnails/switch/reopen/fallback/stop/complete Jev live batches/raw JSON/reopen/retention/errors/reset and themes passed");
+  console.log("classification UI: separate local/cloud controls, keyboard mode selection, explicit apply/failure/reopen/key persistence, busy guard, scan/automatic/match, delete, processing thumbnails/switch/reopen/fallback/stop/complete Jev three Choice tasks/per-dimension winner/partial no-match/raw JSON/reopen/retention/errors/reset and themes passed");
 } finally { await browser.close(); await server.close(); }

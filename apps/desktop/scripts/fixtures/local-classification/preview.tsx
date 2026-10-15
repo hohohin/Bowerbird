@@ -8,7 +8,7 @@ const w = window as any;
 w.getSmartFilter = () => useStore.getState().smartFilter;
 w.calls = [];
 w.failure = null;
-w.classificationStatus = { supported: true, installed: false, enabled: false, busy: false, phase: "", done: 0, total: 0, failed: 0, download_done: 0, download_total: 1401293979, message: "", model: "local-test", acceleration: "", vector_supported: true, vector_installed: false, current_asset: null, jev_progress: null };
+w.classificationStatus = { supported: true, installed: false, enabled: false, busy: false, phase: "", done: 0, total: 0, failed: 0, jev_done: 0, cloud_running: 0, cloud_queued: 0, download_done: 0, download_total: 1401293979, message: "", model: "local-test", acceleration: "", vector_supported: true, vector_installed: false, current_asset: null, jev_progress: null };
 w.previewAsset = { id: "preview-a", name: "柔光羊羔.png", position: 1, thumb_path: "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="180" height="100"><rect width="180" height="100" fill="#95bd61"/><ellipse cx="90" cy="52" rx="40" ry="22" fill="#fff9df"/></svg>') };
 w.labels = [];
 w.settings = { jev_image_classification_enabled: false, jev_api_key: null };
@@ -21,10 +21,10 @@ w.__TAURI_INTERNALS__ = { convertFileSrc: (path: string) => path, invoke: async 
     case "get_settings": return structuredClone(w.settings);
     case "update_settings": w.settings = { ...w.settings, ...args.settings }; return;
     case "local_classification_start":
-      w.classificationStatus.model = !args.install && w.settings.jev_image_classification_enabled ? "jev-first/cloud-discovery-v2" : "local-test";
+      w.classificationStatus.model = !args.install && w.settings.jev_image_classification_enabled ? "jev-choice-dimensions/cloud-discovery-v5" : "local-test";
       w.classificationStatus.current_asset = args.install ? null : structuredClone(w.previewAsset);
       if (!args.install) w.classificationStatus.total = 3;
-      w.classificationStatus.jev_progress = !args.install && w.settings.jev_image_classification_enabled ? { asset: structuredClone(w.previewAsset), batches: [], message: "正在等待 Jev 返回结果…" } : null;
+      w.classificationStatus.jev_progress = !args.install && w.settings.jev_image_classification_enabled ? { asset: structuredClone(w.previewAsset), report: null, message: "正在等待 Jev 返回结果…" } : null;
       w.classificationStatus.busy = true; w.classificationStatus.phase = args.install ? "downloading" : "classifying";
       w.classificationStatus.message = args.install ? "正在下载 model.gguf" : "正在识别素材"; return;
     case "local_classification_stop":

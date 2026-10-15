@@ -1,3 +1,4 @@
+import { placeWorkflowCard } from "./fixtures/canvas-reference/place-card.mjs";
 import assert from 'node:assert/strict';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
@@ -55,7 +56,7 @@ try {
   await page.locator('[data-workflow-card="source"]').getByRole('button',{name:'输出：图片',exact:true}).click();
   await card.hover(); await card.getByRole('button',{name:'第 1 列图片输入',exact:true}).click();
   await page.waitForFunction(()=>JSON.parse(window.snapshot().nodes.find(n=>JSON.parse(n.payloadJson).note_type==='text').payloadJson).cells.length===5);
-  await page.getByRole('button',{name:'新增生成卡片',exact:true}).click();
+  await placeWorkflowCard(page, '新增生成卡片');
   const gen=page.locator('.workflow-card.is-generation');await gen.waitFor();
   await page.getByRole('button',{name:'适应内容',exact:true}).click();
   await card.hover();await card.getByRole('button',{name:'输出容器图片',exact:true}).click();

@@ -6,8 +6,10 @@ import { groupLibraryAssets, type LibraryProjectGroup } from "../lib/libraryView
 import { notifyError } from "../lib/notify";
 import { MasonryGrid } from "./MasonryGrid";
 import { ProjectFolder } from "./ProjectFolder";
+import { ThumbnailSizeSlider } from "./ThumbnailSizeSlider";
 import { useProjectDeletion } from "./useProjectDeletion";
 import { useProjectAssetDrop } from "../lib/useProjectAssetDrop";
+import { useThumbnailPinch } from "../lib/useThumbnailPinch";
 
 function ExpandedProject({ group, onCollapse, onDelete, deleting }: {
   group: LibraryProjectGroup;
@@ -69,7 +71,6 @@ function ExpandedProject({ group, onCollapse, onDelete, deleting }: {
         onClick={() => { cancelled.current = false; setTitle(group.project.name); setEditing(true); }}>
         <span>{group.project.name}</span><Pencil size={12} />
       </button>}</h2>
-      <span>{group.assets.length} 张素材</span>
       <div className="library-project-actions">
         <button type="button" className="library-project-open" disabled={projectRoutePending}
           onClick={() => void useStore.getState().enterProject(group.project.id)
@@ -86,6 +87,7 @@ function ExpandedProject({ group, onCollapse, onDelete, deleting }: {
 }
 
 export function LibraryHome() {
+  const pinchRef = useThumbnailPinch("library");
   const assets = useStore((s) => s.assets);
   const projects = useStore((s) => s.projects);
   const memberships = useStore((s) => s.libraryMemberships);
@@ -124,7 +126,7 @@ export function LibraryHome() {
     }
   }, [focusAssetId, projectGroups, viewRevision]);
 
-  return <>
+  return <div ref={pinchRef} className="library-home">
     {projectGroups.length === 0 ? <MasonryGrid restrictGroupsToAssets
       assetsOverride={globalAssets} totalOverride={total} projectScopeId={null} />
       : <div className="library-home-expanded library-scroller">
@@ -134,13 +136,14 @@ export function LibraryHome() {
               onCollapse={() => setExpanded(group.project.id, false)}
               onDelete={() => void prepareDelete(group.project.id)} />
             : <ProjectFolder key={group.project.id} group={group}
-              onOpen={() => setExpanded(group.project.id, true)} />)}
+              onExpand={() => setExpanded(group.project.id, true)} />)}
         </div>
         {globalAssets.length > 0 && <section className="library-global-section" aria-label="全局素材">
           <h2>全局素材 <span>未归入项目 · {globalAssets.length} 张</span></h2>
           <MasonryGrid embedded restrictGroupsToAssets assetsOverride={globalAssets} totalOverride={globalAssets.length} projectScopeId={null} />
         </section>}
       </div>}
+    <ThumbnailSizeSlider scope="library" />
     {confirmation}
-  </>;
+  </div>;
 }

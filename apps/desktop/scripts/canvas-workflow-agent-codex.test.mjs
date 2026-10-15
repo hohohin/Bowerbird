@@ -1,3 +1,4 @@
+import { placeWorkflowCard } from "./fixtures/canvas-reference/place-card.mjs";
 import assert from 'node:assert/strict';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
@@ -10,7 +11,7 @@ try {
   await page.goto('http://127.0.0.1:1642/scripts/fixtures/canvas-reference/preview.html');
   await page.locator('[data-canvas-node-id="old"]').waitFor();
   for (const name of ['新增技能卡片', '工作流模板库', '新增工作流助手']) assert.equal(await page.getByRole('button', { name, exact: true }).count(), 0);
-  await page.getByRole('button', { name: '新增 Agent 卡片', exact: true }).click();
+  await placeWorkflowCard(page, '新增 Agent 卡片');
   const agent = page.locator('.workflow-card.is-agent');
   await agent.getByRole('button', { name: '输出：返回图片', exact: true }).waitFor();
   await page.getByRole('combobox', { name: 'Agent 执行引擎' }).selectOption('cloud');

@@ -1,3 +1,4 @@
+import { placeWorkflowCard } from "./fixtures/canvas-reference/place-card.mjs";
 import assert from 'node:assert/strict';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
@@ -10,6 +11,8 @@ try {
   await page.locator('[data-canvas-node-id="old"]').waitFor();
   await page.evaluate(() => { const s = window.snapshot(); s.nodes = s.nodes.filter(n => n.id !== 'far'); sessionStorage.setItem('reference-fixture', JSON.stringify(s)); });
   await page.reload();
+  await page.waitForSelector('.canvas-workspace[aria-busy="false"]');
+  await page.locator('.canvas-workspace').evaluate(async el => { await Promise.all(el.getAnimations().map(animation => animation.finished.catch(() => {}))); });
   assert.equal(await page.getByRole('button', { name: '新增触发器卡片', exact: true }).count(), 0);
   const tool = await page.getByRole('button', { name: '发条触发器', exact: true }).boundingBox();
   await page.mouse.move(tool.x + tool.width / 2, tool.y + tool.height / 2); await page.mouse.down();
@@ -43,7 +46,7 @@ try {
   await hoverTrigger();
   await page.evaluate(() => document.dispatchEvent(new PointerEvent('pointerleave')));
   await progress.waitFor({ state: 'hidden' });
-  await page.getByRole('button', { name: '新增指令卡片', exact: true }).click();
+  await placeWorkflowCard(page, '新增指令卡片');
   const instruction = page.locator('.workflow-card.is-instruction'); await instruction.getByLabel('指令功能').selectOption('reuse');
   await page.evaluate(async () => {
     const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');

@@ -1,3 +1,4 @@
+import { placeWorkflowCard } from "./fixtures/canvas-reference/place-card.mjs";
 import assert from 'node:assert/strict';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
@@ -96,7 +97,7 @@ try {
   await card('producer').getByRole('button', { name: '复制卡片', exact: true }).focus();
   await undo(); assert.equal((await persisted()).nodes.find(node => node.id === 'producer').action, 'describe');
   // New cards enter the same history.
-  await page.getByRole('button', { name: '新增生成卡片', exact: true }).click();
+  await placeWorkflowCard(page, '新增生成卡片');
   await page.waitForFunction(async () => { const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts'); return canvasWorkflowController('p').document.nodes.length === 4; });
   await undo(); assert.equal((await persisted()).nodes.length, 3);
   await page.reload(); await card('producer').waitFor();

@@ -10,6 +10,9 @@ export interface LocalClassificationStatus {
   done: number;
   total: number;
   failed: number;
+  jev_done: number;
+  cloud_running: number;
+  cloud_queued: number;
   download_done: number;
   download_total: number;
   message: string;
@@ -18,11 +21,16 @@ export interface LocalClassificationStatus {
   jev_progress: {
     asset: NonNullable<LocalClassificationStatus["current_asset"]>;
     message: string;
-    batches: {
-      batch: number; model: string; threshold: number;
-      labels: { name: string; description: string; probability: number | null }[];
-      no_match: number | null; error: string | null; response: unknown;
-    }[];
+    report: {
+      model: string;
+      dimensions: {
+        dimension: "type" | "style" | "subject"; title: string;
+        confidence: number | null; no_match: boolean | null;
+        labels: { key: string; name: string; description: string; probability: number | null; selected: boolean | null }[];
+        error: string | null;
+      }[];
+      error: string | null; response: unknown;
+    } | null;
   } | null;
   model: string;
   acceleration: string;

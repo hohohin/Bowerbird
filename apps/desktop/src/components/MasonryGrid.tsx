@@ -10,6 +10,7 @@ import { setDragAssets } from "../lib/dragPayload";
 import type { Asset } from "../lib/types";
 import type { LibraryProjectGroup } from "../lib/libraryView";
 import { ProjectFolder } from "./ProjectFolder";
+import { useMasonryLayout } from "../lib/useMasonryLayout";
 
 function parseColors(c: string | null | undefined): string[] {
   if (!c) return [];
@@ -615,31 +616,6 @@ export function MasonryGrid({
   const targetWidth = itemWidth ?? libraryThumbnailWidth;
   const gridRef = useRef<HTMLDivElement>(null);
   const [layoutElement, setLayoutElement] = useState<HTMLDivElement | null>(null);
-  const [colCount, setColCount] = useState(1);
-  useEffect(() => {
-    if (!layoutElement) return;
-    let timer = 0;
-    let measured = false;
-    const observer = new ResizeObserver(([entry]) => {
-      // Observe the layout inside its scroller: contentRect excludes padding and
-      // accounts for the vertical scrollbar. gap-2 is 8px between fluid columns.
-      if (entry.contentRect.width <= 0) return;
-      const next = Math.max(1, Math.floor((entry.contentRect.width + 8) / (targetWidth + 8)));
-      window.clearTimeout(timer);
-      if (!measured) {
-        measured = true;
-        setColCount(next);
-      } else {
-        // Keep cards stable while dragging; redistribute after the width settles.
-        timer = window.setTimeout(() => setColCount(next), 120);
-      }
-    });
-    observer.observe(layoutElement);
-    return () => {
-      window.clearTimeout(timer);
-      observer.disconnect();
-    };
-  }, [layoutElement, targetWidth]);
   const gridId = useId();
   const storeTotal = useStore((s) => s.total);
   const storeActiveProjectId = useStore((s) => s.activeProjectId);
@@ -714,27 +690,13 @@ export function MasonryGrid({
   // Shift 范围多选的有序依据：与渲染一致的可见卡片顺序（分组只算末位那张卡）。
   const orderedIds = useMemo(() => filtered.map((a) => a.id), [filtered]);
 
-  // 行式分列（Eagle 式）：按列表顺序（最新在前）逐张放进当前累计最矮的列，阅读
-  // 顺序近似从左到右、从上到下。高度用 DB width/height 估算（h/w 即相对高度，列宽
-  // 是公共因子；无尺寸的按方形兜底）——元数据即最终布局，无需 DOM 测量；列数变化
-  // （容器能容纳的目标宽度卡片数量改变）时重新分列；列内均分剩余宽度。
-  const columns = useMemo(() => {
-    type Item = { kind: "asset"; asset: Asset } | { kind: "project"; group: LibraryProjectGroup };
-    const cols: Item[][] = Array.from({ length: colCount }, () => []);
-    const heights = new Array<number>(colCount).fill(0);
-    const items: Item[] = [
-      ...projectGroups.map((group): Item => ({ kind: "project", group })),
-      ...filtered.map((asset): Item => ({ kind: "asset", asset })),
-    ];
-    for (const item of items) {
-      let min = 0;
-      for (let i = 1; i < colCount; i++) if (heights[i] < heights[min]) min = i;
-      cols[min].push(item);
-      heights[min] += item.kind === "project" ? 1.35
-        : item.asset.width && item.asset.height ? item.asset.height / item.asset.width : 1;
-    }
-    return cols;
-  }, [filtered, projectGroups, colCount]);
+  // Stable siblings retain image decoding, carousel position and keyboard focus
+  // when the shortest-column layout changes.
+  const items = useMemo(() => [
+    ...projectGroups.map(group => ({ kind: "project" as const, group })),
+    ...filtered.map(asset => ({ kind: "asset" as const, asset })),
+  ], [filtered, projectGroups]);
+  useMasonryLayout(layoutElement, targetWidth, items);
 
 
   function clearFilters() {
@@ -788,30 +750,25 @@ export function MasonryGrid({
       ) : (
         // paddingBottom 跟随底部浮动坞实际高度（会话「重新编辑」坞 --gen-dock-h、创作板
         // 对话框 --board-dock-h，坞/板挂载时由各自 ResizeObserver 写入）——否则底部浮动
-        // 坞会盖住最后一行素材，滚不到底。二者互斥，max() 只是兜底；无坞时变量为空归零。
-        <div className={embedded ? "" : "library-scroller h-full overflow-y-auto"} style={embedded ? undefined : { paddingBottom: "max(var(--gen-dock-h, 0px), var(--board-dock-h, 0px))" }}>
-          {/* 外层固定高度竖向滚动，内层 flex 行式 masonry（各列均分宽度、纵向
-              自然增长）——滚动容器与布局容器保持分离。 */}
-          <div ref={setLayoutElement} className="flex w-full items-start gap-2 p-2" data-tour="masonry">
-            {columns.map((col, i) => (
-              <div key={i} className="flex min-w-0 flex-1 flex-col">
-                {col.map((item) => item.kind === "project" ? (
-                  <ProjectFolder key={`project-${item.group.project.id}`} group={item.group}
-                    onOpen={() => onOpenProject?.(item.group.project.id)} />
-                ) : (
-                  <Thumb
-                    key={item.asset.id}
-                    asset={item.asset}
-                    group={groupMap[item.asset.id]}
-                    orderedIds={orderedIds}
-                    variant={variant}
-                    libraryProjectId={activeProjectId ?? undefined}
-                    idPrefix={embedded ? `${gridId}-` : ""}
-                    onOpenPreview={onOpenPreview}
-                  />
-                ))}
-              </div>
-            ))}
+        // 坞会盖住最后一行素材，滚不到底。主页另为悬浮缩略图滑块预留底部空间。
+        <div className={embedded ? "" : "library-scroller h-full overflow-y-auto"} style={embedded ? undefined : { paddingBottom: "max(var(--library-footer-space, 0px), var(--gen-dock-h, 0px), var(--board-dock-h, 0px))" }}>
+          <div ref={setLayoutElement} className="masonry-layout" data-tour="masonry">
+            {items.map(item => <div className="masonry-cell"
+              key={item.kind === "project" ? `project-${item.group.project.id}` : item.asset.id}>
+              {item.kind === "project" ? (
+                <ProjectFolder group={item.group} onExpand={() => onOpenProject?.(item.group.project.id)} />
+              ) : (
+                <Thumb
+                  asset={item.asset}
+                  group={groupMap[item.asset.id]}
+                  orderedIds={orderedIds}
+                  variant={variant}
+                  libraryProjectId={activeProjectId ?? undefined}
+                  idPrefix={embedded ? `${gridId}-` : ""}
+                  onOpenPreview={onOpenPreview}
+                />
+              )}
+            </div>)}
           </div>
         </div>
       )}

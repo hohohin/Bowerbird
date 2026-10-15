@@ -3,7 +3,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { ArrowLeft, Camera, ChevronDown, Compass, FolderOpen, LayoutDashboard, LoaderCircle, Monitor, Search, Upload, X } from "lucide-react";
 import { SidebarStatus } from "./SidebarStatus";
 import { GeneratedImageFilter } from "./GeneratedImageFilter";
-import { ThumbnailSizeSlider } from "./ThumbnailSizeSlider";
 import { useStore } from "../store";
 import { api } from "../lib/api";
 import { notifyError, notifySuccess } from "../lib/notify";
@@ -253,7 +252,6 @@ export function Toolbar({
 
       <div className="app-topbar-actions" aria-label="视图与任务">
         <div className="app-topbar-view-controls" role="group" aria-label="素材视图">
-          {!canvasMode && <ThumbnailSizeSlider scope="library" />}
           <GeneratedImageFilter />
           {!canvasMode && (
             <div className="library-view-control">

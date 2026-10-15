@@ -2,6 +2,7 @@
 mod cloud;
 pub mod data;
 pub mod jev;
+mod pipeline;
 pub mod runtime;
 #[cfg(test)]
 mod tests;
@@ -29,7 +30,7 @@ pub struct CurrentAsset {
 #[derive(Clone, Serialize)]
 pub struct JevProgress {
     pub asset: CurrentAsset,
-    pub batches: Vec<jev::BatchReport>,
+    pub report: Option<jev::Report>,
     pub message: String,
 }
 
@@ -43,6 +44,9 @@ pub struct Status {
     pub done: usize,
     pub total: usize,
     pub failed: usize,
+    pub jev_done: usize,
+    pub cloud_running: usize,
+    pub cloud_queued: usize,
     pub download_done: u64,
     pub download_total: u64,
     pub message: String,
@@ -333,6 +337,34 @@ impl LocalClassifier {
             }
             return Ok(());
         }
+        if let Some(judge) = &judge {
+            let cloud = crate::codex::understand::CloudUnderstandProvider::new(
+                app.state::<crate::cloud::CloudClient>().inner().clone(),
+                app.state::<crate::cloud::AuthClient>().inner().clone(),
+            );
+            self.run_jev_queue(
+                db,
+                library,
+                &targets,
+                tag.as_deref(),
+                judge,
+                &cloud,
+                |changed| {
+                    self.update(app, |_| {});
+                    if changed {
+                        let _ = app.emit("library://assets-changed", ());
+                    }
+                },
+            )
+            .await;
+            if !self.cancel.load(Ordering::Relaxed) && self.status.lock().unwrap().failed == 0 {
+                if let Some(tag) = tag {
+                    db.finish_local_label(&tag, job_revision)
+                        .map_err(|e| e.to_string())?;
+                }
+            }
+            return Ok(());
+        }
         let mut server = if judge.is_some() {
             None
         } else {
@@ -426,7 +458,7 @@ impl LocalClassifier {
                 s.jev_progress = if judge.is_some() {
                     Some(JevProgress {
                         asset: s.current_asset.clone().unwrap(),
-                        batches: vec![],
+                        report: None,
                         message: "正在等待 Jev 返回结果…".into(),
                     })
                 } else {
@@ -453,7 +485,7 @@ impl LocalClassifier {
                 s.current_asset = None;
                 if let Some(progress) = s.jev_progress.as_mut() {
                     progress.message = match &result {
-                        Ok(()) if progress.batches.is_empty() => {
+                        Ok(()) if progress.report.is_none() => {
                             "此图处理完成；无启用的已有标签，本图未调用 Jev".into()
                         }
                         Ok(()) => "此图处理完成".into(),
@@ -650,97 +682,129 @@ impl LocalClassifier {
         labels: &[data::Label],
         record_observation: bool,
     ) -> Result<(), String> {
+        let pending = self
+            .prepare_jev(judge, db, library, id, revision, labels, record_observation)
+            .await?;
+        self.finish_jev(db, cloud, pending).await
+    }
+
+    async fn prepare_jev(
+        &self,
+        judge: &jev::Judge,
+        db: &Database,
+        library: &LibraryPaths,
+        id: &str,
+        revision: i64,
+        labels: &[data::Label],
+        record_observation: bool,
+    ) -> Result<pipeline::PendingClassification, String> {
+        // Keep the vocabulary seen by this image. Other Cloud tasks may create the same
+        // tag meanwhile; the save transaction reuses it without losing this association.
+        let discovery_labels = if record_observation {
+            db.local_labels().map_err(|e| e.to_string())?
+        } else {
+            Vec::new()
+        };
         let image = Self::jev_image(db, library, id).await?;
         let mut prediction = data::Prediction {
             description: String::new(),
             tags: vec![],
             matches: vec![],
         };
-        for (batch_index, batch) in labels.chunks(jev::BATCH_SIZE).enumerate() {
+        let mut questions = Vec::new();
+        for label in labels {
             if self.cancel.load(Ordering::Relaxed) {
                 return Err("已停止分类".into());
             }
-            let mut questions = Vec::new();
-            for label in batch {
-                let mut examples = Vec::new();
-                for (asset, positive) in db
-                    .local_examples(&label.id, id)
-                    .map_err(|e| e.to_string())?
-                {
-                    examples.push((Self::jev_image(db, library, &asset).await?, positive));
-                }
-                questions.push(jev::Candidate {
-                    name: label.name.clone(),
-                    description: label.description.clone(),
-                    examples,
-                });
+            let mut examples = Vec::new();
+            for (asset, positive) in db
+                .local_examples(&label.id, id)
+                .map_err(|e| e.to_string())?
+            {
+                examples.push((Self::jev_image(db, library, &asset).await?, positive));
             }
-            // The explicit no-match answer must agree with all label answers.
-            let decisions = judge
-                .classify(&image, &questions, &self.cancel, |value, error| {
-                    let mut status = self.status.lock().unwrap();
-                    if let Some(progress) =
-                        status.jev_progress.as_mut().filter(|p| p.asset.id == id)
-                    {
-                        progress.batches.push(jev::BatchReport::from_response(
-                            batch_index + 1,
-                            &questions,
-                            value,
-                            error,
-                        ));
-                        progress.message =
-                            format!("Jev 已返回第 {} 批结果，等待此图处理完成", batch_index + 1);
-                    }
-                })
-                .await?;
-            for (label, matched) in batch.iter().zip(decisions) {
-                if matched {
-                    prediction.matches.push(label.id.clone());
+            questions.push(jev::Candidate {
+                name: label.name.clone(),
+                description: label.description.clone(),
+                examples,
+            });
+        }
+        // Three Choice questions share the ordinary label pool; dimensions are transient.
+        let decisions = judge
+            .classify(&image, &questions, &self.cancel, |value, error| {
+                let mut status = self.status.lock().unwrap();
+                if let Some(progress) = status.jev_progress.as_mut().filter(|p| p.asset.id == id) {
+                    progress.report = Some(jev::Report::from_response(&questions, value, error));
+                    progress.message =
+                        "Jev 已返回类型、风格、主体三个维度的结果，等待此图处理完成".into();
                 }
+            })
+            .await?;
+        for index in decisions.iter().flatten() {
+            let id = &labels[*index].id;
+            if !prediction.matches.contains(id) {
+                prediction.matches.push(id.clone());
             }
         }
+        let missing: Vec<_> = jev::Dimension::ALL
+            .into_iter()
+            .zip(decisions)
+            .filter_map(|(dimension, choice)| choice.is_none().then_some(dimension))
+            .collect();
+        Ok(pipeline::PendingClassification {
+            id: id.into(),
+            revision,
+            prediction,
+            record_observation,
+            evaluated: labels.iter().map(|label| label.id.clone()).collect(),
+            discovery_labels,
+            missing: if record_observation {
+                missing
+            } else {
+                Vec::new()
+            },
+        })
+    }
+
+    async fn finish_jev(
+        &self,
+        db: &Database,
+        cloud: Option<&dyn crate::codex::understand::UnderstandProvider>,
+        mut pending: pipeline::PendingClassification,
+    ) -> Result<(), String> {
         let mut definitions = Vec::new();
-        // A per-label search only tests that label; it never creates unrelated labels.
-        // An empty enabled vocabulary also has no existing match and bootstraps via Cloud.
-        if record_observation && prediction.matches.is_empty() {
-            if db.local_revision().map_err(|e| e.to_string())? != revision {
+        if !pending.missing.is_empty() {
+            if db.local_revision().map_err(|e| e.to_string())? != pending.revision {
                 return Err("标签已被人工修改，请重试此素材".into());
             }
             let provider = cloud.ok_or("Cloud 分类服务未就绪")?;
             let path = db
-                .local_image_path(id)
+                .local_image_path(&pending.id)
                 .map_err(|e| e.to_string())?
                 .ok_or("图片已删除或缺少缩略图")?;
-            let all_labels = db.local_labels().map_err(|e| e.to_string())?;
-            {
-                let mut status = self.status.lock().unwrap();
-                if let Some(progress) = status.jev_progress.as_mut().filter(|p| p.asset.id == id) {
-                    progress.message = if labels.is_empty() {
-                        "没有启用的已有标签，未调用 Jev；正在通过 Cloud 补标签…"
-                    } else {
-                        "Jev 全部批次无已有匹配标签，正在通过 Cloud 补标签…"
-                    }
-                    .into();
-                }
-            }
-            let discovered =
-                cloud::discover(provider, PathBuf::from(path), &all_labels, &self.cancel).await?;
+            let discovered = cloud::discover(
+                provider,
+                PathBuf::from(path),
+                &pending.discovery_labels,
+                &pending.missing,
+                &self.cancel,
+            )
+            .await?;
             for label in discovered {
-                prediction.tags.push(label.name.clone());
+                pending.prediction.tags.push(label.name.clone());
                 definitions.push((label.name, label.definition));
             }
         }
         if self.cancel.load(Ordering::Relaxed) {
             return Err("已停止分类".into());
         }
-        let evaluated: Vec<_> = labels.iter().map(|label| label.id.clone()).collect();
         if !db
             .apply_classification_with_definitions(
-                id,
-                revision,
-                &prediction,
-                record_observation,
-                &evaluated,
+                &pending.id,
+                pending.revision,
+                &pending.prediction,
+                pending.record_observation,
+                &pending.evaluated,
                 jev::OBSERVATION_MODEL,
                 &definitions,
             )

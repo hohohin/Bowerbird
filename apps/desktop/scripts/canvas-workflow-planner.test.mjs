@@ -1,3 +1,4 @@
+import { placeWorkflowCard } from "./fixtures/canvas-reference/place-card.mjs";
 import assert from 'node:assert/strict';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
@@ -10,7 +11,7 @@ const errors=[];page.on('pageerror',error=>errors.push(error.message));
 try {
   await page.goto('http://127.0.0.1:1603/scripts/fixtures/canvas-reference/preview.html');
   await page.locator('[data-canvas-node-id="old"]').waitFor();
-  await page.getByRole('button',{name:'新增工作流助手',exact:true}).click();
+  await placeWorkflowCard(page, '新增工作流助手');
   await page.getByRole('textbox',{name:'工作流需求'}).fill('生成一张春日海报，3:4。');
   await page.evaluate(async()=>{
     const {api}=await import('/src/lib/api.ts');

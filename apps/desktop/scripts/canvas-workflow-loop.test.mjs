@@ -1,3 +1,4 @@
+import { placeWorkflowCard } from "./fixtures/canvas-reference/place-card.mjs";
 import assert from 'node:assert/strict';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
@@ -9,7 +10,12 @@ const errors = []; page.on('pageerror', error => errors.push(error.message));
 try {
   await page.goto('http://127.0.0.1:1613/scripts/fixtures/canvas-reference/preview.html');
   await page.locator('[data-canvas-node-id="old"]').waitFor();
-  await page.getByRole('button', { name: '新增循环卡片', exact: true }).click();
+  await page.evaluate(() => {
+    const canvas = window.snapshot(); canvas.nodes = canvas.nodes.filter(node => node.id !== 'far');
+    sessionStorage.setItem('reference-fixture', JSON.stringify(canvas));
+  });
+  await page.reload(); await page.locator('[data-canvas-node-id="old"]').waitFor();
+  await placeWorkflowCard(page, '新增循环卡片');
   const card = page.locator('.workflow-card.is-loop'); await card.waitFor();
   assert.equal(await card.getByRole('button', { name: '输出：当前轮次', exact: true }).count(), 1);
   await card.getByRole('combobox', { name: '循环方式' }).selectOption('rows');
@@ -273,6 +279,7 @@ try {
     window.loopCompletedExample = completedExample; window.loopStoppedExample = stoppedExample; window.loopResultPosition = position;
     return 'loop: selected start/reload, offset numbering, invalid ranges, stopped restart with frozen input, sequential items, parallel branches, recovery, failed-row retry and produced-table offsets passed';
   }));
+  await page.getByRole('button', { name: '适应内容', exact: true }).click();
   await page.locator('.workflow-loop-results > summary').click();
   assert.equal(await page.locator('.workflow-loop-results > details > summary').first().textContent(), '第 2 项');
   assert.match(await page.locator('.workflow-loop [role="status"]').textContent(), /已完成 1 \/ 1 项 · 从第 2 项起/);

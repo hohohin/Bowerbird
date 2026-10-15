@@ -30,7 +30,7 @@ try {
   await page.waitForFunction(() => window.store.getState().assets.some(a => a.name === "test.png"));
   assert.equal((await imports()).length, 1);
   assert.equal((await imports())[0].args.projectId, "p");
-  assert.equal(await page.locator(card).getAttribute("aria-expanded"), "false");
+  assert.equal(await page.locator(card).locator(".library-project-expand").getAttribute("aria-expanded"), "false");
   // Header, editable controls, side rail and window whitespace share the fallback.
   for (const selector of ["[data-test-topbar]", "input", ".app-sidebar", "body"]) {
     const count = (await imports()).length;
@@ -40,7 +40,7 @@ try {
     await page.waitForFunction(count => window.calls.filter(c => c.command === "import_image_bytes").length === count + 1, count);
     assert.equal((await imports()).at(-1).args.projectId, null);
   }
-  await page.locator(card).click();
+  await page.locator(card).getByRole("button", { name: "展开项目 目标项目" }).click();
   const nested = '.library-project-frame[data-project-drop-id="p"] [data-asset-id="owned"]';
   await drag(nested, ["nested.png"]); await drop(nested);
   await page.waitForFunction(() => window.store.getState().assets.some(a => a.name === "nested.png"));
