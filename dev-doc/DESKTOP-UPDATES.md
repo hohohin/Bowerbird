@@ -8,7 +8,18 @@
 
 2026-10-15 只读公网复核：`darwin-aarch64` 最终 GET 200、version **26.10.801**；`darwin-x86_64` 最终 GET 404。本页 10 月 8 日“官网待切换”是历史记录，现已被公网事实取代。Windows 本轮未重新核验。
 
-Rust 全量 **482 passed / 0 failed / 10 ignored**；画板逻辑 **132/132**、删除契约 **5/5**、六组隔离 Chrome UI（本机文件、素材库布局、工具栏、分类、截图、画板素材栏）、TypeScript/Vite、Mac 更新签名/篡改工具与官网更新路由全部通过。首次沙箱运行的 14 项回环监听权限失败在获准监听后全量复跑通过；真实模型/下载等 ignored 项未启用。保留既有 Rust 警告和 Vite 大 chunk 提示。源码存档后构建/上传产物，最终哈希另记。本地证据 `macOS/dist/verification/release-26.10.1501/`。本机既有 `Bowerbird Local Code Signing` 试签及严格校验通过；它与 updater 签名/Apple 公证不同。真实付费模型、跨屏 DPI、原生旧版升级及 Windows/ARM64 不在本轮验收范围。
+Rust 全量 **482 passed / 0 failed / 10 ignored**；画板逻辑 **132/132**、删除契约 **5/5**、六组隔离 Chrome UI（本机文件、素材库布局、工具栏、分类、截图、画板素材栏）、TypeScript/Vite、Mac 更新签名/篡改工具与官网更新路由全部通过。首次沙箱运行的 14 项回环监听权限失败在获准监听后全量复跑通过；真实模型/下载等 ignored 项未启用。保留既有 Rust 警告和 Vite 大 chunk 提示。源码先存档并推送 `ef6b6f0`，再从该提交的隔离快照构建，防止混入并行修改。本地证据 `macOS/dist/verification/release-26.10.1501/`。本机既有 `Bowerbird Local Code Signing` 试签及严格校验通过；它与 updater 签名/Apple 公证不同。真实付费模型、跨屏 DPI、原生旧版升级及 Windows/ARM64 不在本轮验收范围。
+
+
+**本轮结果：** 源码 `ef6b6f00a12e8d535a02e6733857f3c3b623936d` 已推送 `origin/mac`；Intel 26.10.1501 DMG、待签名更新归档与签名交接 ZIP 已构建并校验。R2 **尚未上传**：本机缺少目标桶凭据，Wrangler 旧登录刷新失败；较宽的 `workers:write` 登录被自动审批拒绝，没有授予额外权限。待提供仅限目标桶的 R2 凭据路径后续传。官网清单未改。构建使用该提交隔离快照；构建期间新出现的 Jev score / 三维标签等并行修改保留在原工作区，不包含在本包。
+
+| 产物 | 大小（bytes） | SHA-256 |
+|---|---:|---|
+| Bowerbird_26.10.1501_x86_64.app.tar.gz | 87,365,199 | `983a99d0695468ebcda36b0210e373f54bc82dd63f4ace23408507143069528d` |
+| Bowerbird_26.10.1501_x86_64-updater-installer.dmg | 88,167,708 | `43795d39867adeb133460bf588fd492854846e775f3f052baafd197667a69740` |
+| Bowerbird_26.10.1501_Intel_Signing.zip | 175,545,282 | `dace40631613edd84515692948ec624bade7b9846e7eff9248159fcd1c722cd9` |
+
+发布侧检查：461 个源码输入指纹、67 个内置资源、包内 26.10.1501/x86_64/协议注册、原 Mac 公钥且无 Windows 公钥、代码签名 `--deep --strict`、DMG 完整性与固定布局/Applications 链接/应用一致性、tar 内 72 文件字节及执行权限、交接 ZIP CRC 与 SHA256SUMS 均通过。更新入口核验到冻结配置，未声称可在优化后二进制中直接搜索完整 URL。交接目录附原公钥、说明、发行说明及离线验签/生成版本化清单工具；没有正式 `.sig` 或更新清单。
 
 ## Mac 26.10.801 构建与 R2 上传（2026-10-08，官网待切换）
 
