@@ -3,6 +3,10 @@
 本目录记录 Mac 上的本地开发、运行和未签名构建流程。Bowerbird 使用 canonical Tauri / React / Rust 源码，不维护 macOS override。构建架构以 `rustc -vV` 的 host 为准；Intel 为 `x86_64-apple-darwin`，Apple Silicon 原生工具链为 `aarch64-apple-darwin`。
 
 
+## 2026-10-15 Intel 26.10.1501 已上线
+
+Intel 新包已完整下载核对哈希与旧公钥签名，官网 Intel DMG 按钮与 darwin-x86_64 自动更新通道已开放。Windows 26.10.1001 / M 系列 26.10.801 保持。使用 R2 版本化清单 darwin-x86_64-26.10.1501.json，固定 R2 清单仍旧，不可误用；Intel URL 被编译为分段写入，整串搜索失败不等于缺失。真实 Intel 安装、升级迁移与 Apple 公证未验收。详见 [桌面更新发布记录](../dev-doc/DESKTOP-UPDATES.md)。
+
 ## 2026-10-15 接收 Windows 最新源码
 
 最新交接见 [Windows 端更新内容 — 26.10.1001](../Windows/Windows端更新内容-26.10.1001.md)：相对 Mac `d6027fb`，覆盖 901–1001 发布变更及其后二维表格、Agent 生图投普通会话、视频截帧与错误诊断。后四项仅源码存档，尚未包含在 Windows 1001 包；Mac 公开版本仍为 801。接收时核对文档对应提交，保留 Mac 配置与签名，按交接清单验证 WKWebView 与 release 行为。
