@@ -1,5 +1,6 @@
 //! Automatic classification supports local matching or explicit Jev image API judgment.
 mod cloud;
+pub mod folder;
 pub mod data;
 pub mod jev;
 mod pipeline;
@@ -36,6 +37,7 @@ pub struct JevProgress {
 
 #[derive(Clone, Default, Serialize)]
 pub struct Status {
+    pub folder_root: Option<String>,
     pub supported: bool,
     pub installed: bool,
     pub enabled: bool,
@@ -168,7 +170,7 @@ impl LocalClassifier {
                 })
                 .await
             } else {
-                this.run(&app, &db, &library, tag, jev_key, pending_only)
+                this.run(&app, &db, &library, tag, jev_key, pending_only, None)
                     .await
             };
             let cancelled = this.cancel.load(Ordering::Relaxed);
@@ -307,6 +309,7 @@ impl LocalClassifier {
         tag: Option<String>,
         jev_key: Option<String>,
         pending_only: bool,
+        folder: Option<&folder::Session>,
     ) -> Result<(), String> {
         let judge = match jev_key {
             Some(key) => Some(jev::Judge::new(key)?),
@@ -342,6 +345,7 @@ impl LocalClassifier {
                 app.state::<crate::cloud::CloudClient>().inner().clone(),
                 app.state::<crate::cloud::AuthClient>().inner().clone(),
             );
+            let save_error = Mutex::new(None);
             self.run_jev_queue(
                 db,
                 library,
@@ -352,11 +356,18 @@ impl LocalClassifier {
                 |changed| {
                     self.update(app, |_| {});
                     if changed {
-                        let _ = app.emit("library://assets-changed", ());
+                        if let Some(folder) = folder {
+                            if let Err(error) = folder.save() {
+                                *save_error.lock().unwrap() = Some(error);
+                                self.cancel.store(true, Ordering::Relaxed);
+                            }
+                        }
+                        let _ = app.emit(if folder.is_some() { "folder-classification://changed" } else { "library://assets-changed" }, ());
                     }
                 },
             )
             .await;
+            if let Some(error) = save_error.into_inner().unwrap() { return Err(error); }
             if !self.cancel.load(Ordering::Relaxed) && self.status.lock().unwrap().failed == 0 {
                 if let Some(tag) = tag {
                     db.finish_local_label(&tag, job_revision)
@@ -500,7 +511,13 @@ impl LocalClassifier {
                 }
             });
             if result.is_ok() {
-                let _ = app.emit("library://assets-changed", ());
+                if let Some(folder) = folder {
+                    if let Err(error) = folder.save() {
+                        if let Some(server) = server.as_mut() { server.stop().await; }
+                        return Err(error);
+                    }
+                }
+                let _ = app.emit(if folder.is_some() { "folder-classification://changed" } else { "library://assets-changed" }, ());
             }
         }
         if let Some(server) = server.as_mut() {

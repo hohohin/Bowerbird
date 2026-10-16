@@ -10,6 +10,19 @@ use crate::{
 use std::{path::PathBuf, sync::Arc};
 use tauri::{AppHandle, Emitter, Manager, State};
 
+#[tauri::command]
+pub async fn external_files_media(app: AppHandle, path: String) -> Result<String, AppError> {
+    let path = tokio::task::spawn_blocking(move || -> Result<_, AppError> {
+        let path = std::fs::canonicalize(path)?;
+        if !path.is_file() || !(external_files::image_path(&path) || external_files::video_path(&path)) {
+            return Err(AppError::Other("请选择支持的图片或视频".into()));
+        }
+        Ok(path)
+    }).await.map_err(|e| AppError::Other(e.to_string()))??;
+    app.asset_protocol_scope().allow_file(&path).map_err(|e| AppError::Other(e.to_string()))?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
 fn allow(app: &AppHandle, asset: &Asset) -> Result<(), AppError> {
     if let Some(path) = &asset.store_path {
         app.asset_protocol_scope()
@@ -26,9 +39,10 @@ fn changed(app: &AppHandle) {
 pub async fn external_files_browse(
     path: Option<String>,
     offset: Option<usize>,
+    all: Option<bool>,
 ) -> Result<DirectoryPage, AppError> {
     tokio::task::spawn_blocking(move || {
-        external_files::browse(path.as_deref(), offset.unwrap_or(0))
+        external_files::browse_page(path.as_deref(), offset.unwrap_or(0), all.unwrap_or(false))
     })
     .await
     .map_err(|e| AppError::Other(e.to_string()))?
@@ -38,8 +52,10 @@ pub async fn external_files_preview(
     paths: State<'_, Arc<LibraryPaths>>,
     path: String,
 ) -> Result<String, AppError> {
+    static GATE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+    let permit = GATE.acquire().await.map_err(|e| AppError::Other(e.to_string()))?;
     let paths = paths.inner().clone();
-    tokio::task::spawn_blocking(move || external_files::preview(&paths, &PathBuf::from(path)))
+    tokio::task::spawn_blocking(move || { let _permit = permit; external_files::preview(&paths, &PathBuf::from(path)) })
         .await
         .map_err(|e| AppError::Other(e.to_string()))?
 }

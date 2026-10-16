@@ -53,6 +53,7 @@ dev-doc/*
 !dev-doc/PROJECT-CANVAS-PLAN.md
 !dev-doc/CANVAS-WORKFLOW.md
 !dev-doc/LOCAL-CLASSIFICATION.md
+!dev-doc/FOLDER-MODE.md
 !dev-doc/EMBEDDED-BROWSER.md
 !dev-doc/ONBOARDING.md
 !dev-doc/DESKTOP-UPDATES.md

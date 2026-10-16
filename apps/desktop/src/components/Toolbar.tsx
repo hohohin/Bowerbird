@@ -4,6 +4,7 @@ import { ArrowLeft, Camera, ChevronDown, Compass, FolderOpen, LayoutDashboard, L
 import { SidebarStatus } from "./SidebarStatus";
 import { GeneratedImageFilter } from "./GeneratedImageFilter";
 import { useStore } from "../store";
+import { useLocalFileMode } from "../lib/localFileMode";
 import { api } from "../lib/api";
 import { notifyError, notifySuccess } from "../lib/notify";
 import { beginOnboardingOperation, useOnboarding } from "../lib/onboardingStore";
@@ -30,10 +31,14 @@ export function Toolbar({
 }) {
   const setLoading = useStore((s) => s.setLoading);
   const busy = useStore((s) => s.loading);
-  const searchQuery = useStore((s) => s.searchQuery);
+  const libraryQuery = useStore((s) => s.searchQuery);
+  const folderQuery = useLocalFileMode(s => s.query);
+  const searchQuery = localFilesOpen ? folderQuery : libraryQuery;
   const activeProjectId = useStore((s) => s.activeProjectId);
   const projects = useStore((s) => s.projects);
-  const setSearchQuery = useStore((s) => s.setSearchQuery);
+  const setLibraryQuery = useStore((s) => s.setSearchQuery);
+  const setFolderQuery = useLocalFileMode(s => s.setQuery);
+  const setSearchQuery = localFilesOpen ? setFolderQuery : setLibraryQuery;
   const collectedNotice = useStore((s) => s.collectedNotice);
   const setCollectedNotice = useStore((s) => s.setCollectedNotice);
   const setCurrentFolder = useStore((s) => s.setCurrentFolder);
@@ -232,8 +237,8 @@ export function Toolbar({
           ref={searchRef}
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder={currentProject ? `搜索 ${currentProject.name} 中的素材…` : "搜索素材…"}
-          aria-label="搜索素材"
+          placeholder={localFilesOpen ? "搜索当前文件夹…" : currentProject ? `搜索 ${currentProject.name} 中的素材…` : "搜索素材…"}
+          aria-label={localFilesOpen ? "搜索当前文件夹" : "搜索素材"}
         />
         {searchQuery ? (
           <button
@@ -251,7 +256,7 @@ export function Toolbar({
       </div>
 
       <div className="app-topbar-actions" aria-label="视图与任务">
-        <div className="app-topbar-view-controls" role="group" aria-label="素材视图">
+        {!localFilesOpen && <div className="app-topbar-view-controls" role="group" aria-label="素材视图">
           <GeneratedImageFilter />
           {!canvasMode && (
             <div className="library-view-control">
@@ -261,7 +266,7 @@ export function Toolbar({
               </div>
             </div>
           )}
-        </div>
+        </div>}
         <button type="button" aria-label="截图" title="区域截图（可在设置 → 个性化与记忆中修改快捷键）"
           className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted hover:bg-panel2 hover:text-ink"
           onClick={() => { void invoke("screenshot_start").catch(error => notifyError(error, "截图失败")); }}><Camera size={16} /></button>

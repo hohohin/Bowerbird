@@ -6,6 +6,31 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
 
 #[tauri::command]
+pub async fn folder_classification_view(path: String) -> Result<crate::core::local_classification::folder::FolderView, String> {
+    tokio::task::spawn_blocking(move || crate::core::local_classification::folder::view(&path)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn folder_classification_start(
+    app: AppHandle, classifier: State<'_, Arc<LocalClassifier>>, paths: State<'_, Arc<LibraryPaths>>,
+    settings: State<'_, SettingsState>, root: String, recursive: bool, pending_only: bool, tag_id: Option<String>,
+) -> Result<(),String> {
+    let settings=settings.get();
+    let key=if settings.jev_image_classification_enabled { Some(settings.jev_api_key.unwrap_or_default()) } else { None };
+    classifier.start_folder(app,paths.inner().clone(),root,recursive,pending_only,tag_id,key)
+}
+
+#[tauri::command]
+pub async fn folder_classification_edit(
+    classifier: State<'_, Arc<LocalClassifier>>, root: String, action: String,
+    id: Option<String>, name: Option<String>, description: Option<String>, enabled: Option<bool>,
+    ids: Option<Vec<String>>, positive: Option<bool>,
+) -> Result<Option<String>,String> {
+    // Share the classifier's task gate: metadata edits cannot race a running scan.
+    classifier.edit_folder(root,action,id,name,description,enabled,ids,positive).await
+}
+
+#[tauri::command]
 pub async fn local_classification_status(
     classifier: State<'_, Arc<LocalClassifier>>,
     db: State<'_, Arc<Database>>,
@@ -61,7 +86,9 @@ pub async fn local_classification_stop(
     classifier: State<'_, Arc<LocalClassifier>>,
     db: State<'_, Arc<Database>>,
 ) -> Result<(), String> {
-    db.set_local_enabled(false).map_err(|e| e.to_string())?;
+    if classifier.snapshot(&db)?.folder_root.is_none() {
+        db.set_local_enabled(false).map_err(|e| e.to_string())?;
+    }
     classifier.cancel();
     Ok(())
 }

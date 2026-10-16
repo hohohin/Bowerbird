@@ -387,6 +387,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::external_files::external_files_browse,
+            commands::external_files::external_files_media,
             commands::external_files::external_files_preview,
             commands::external_files::external_files_index,
             commands::external_files::external_files_references,
@@ -558,6 +559,9 @@ pub fn run() {
             commands::library::set_asset_tags,
             commands::library::reclassify_all,
             commands::local_classification::local_classification_status,
+            commands::local_classification::folder_classification_view,
+            commands::local_classification::folder_classification_start,
+            commands::local_classification::folder_classification_edit,
             commands::local_classification::local_classification_vector_install,
             commands::local_classification::local_classification_vector_uninstall,
             commands::local_classification::local_classification_start,

@@ -11,6 +11,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 | `dev-doc/VIDEO-API-PROVENANCE.json` | 视频增量原始快照/补丁哈希与冲突归因（历史证据） | 追溯原始视频增量时；不用于当前部署 |
 | `dev-doc/VIDEO-API-INTEGRATION.md` | 国内方舟视频 Cloud 实现、恢复/结算、离线验收与 CLI 前置归因 | 接续视频 API 接入、核验 2.5 模型与异步任务/计费边界时必读 |
 | `dev-doc/VIDEO-API-INTEGRATION-V3.md`、`dev-doc/VIDEO-API-INTEGRATION-V3.json` | 视频与 FFmpeg 历史集成、0058 迁移归属及阶段哈希 | 追溯 9 月 6 日集成；当前部署/回滚读 VIDEO-API-INTEGRATION.md |
+| `dev-doc/FOLDER-MODE.md` | 主瀑布流文件夹模式、媒体浏览、独立分类记录、NAS 单写入及隔离验收 | 本机目录浏览、文件夹分类、目录标签或外部视频引用相关工作前必读 |
 | `dev-doc/LOCAL-CLASSIFICATION.md` | 自动分类、Jev 图片匹配与 Cloud 补标签、本地模型包、人工保护与验证记录 | 自动/本地分类、Jev 图片判断、自动标签、分类模型下载与运行时相关工作前必读 |
 | `dev-doc/EMBEDDED-BROWSER.md` | 探索内置浏览器、登录资料持久化、网页拖图入库/画板落点、素材栏折叠与隔离 WebView2 验证 | 内置浏览器、探索工作区、网页拖图、探索联动画板素材栏与登录状态相关工作前必读 |
 | `dev-doc/ONBOARDING.md` | 身份实操引导、三条真实操作路线、独立项目与进度恢复、跳步及隔离验证 | 入门引导、首启/升级介绍、引导素材导入或学习提示相关工作前必读 |

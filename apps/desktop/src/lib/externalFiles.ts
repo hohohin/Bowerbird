@@ -6,7 +6,9 @@ export interface ExternalReference { asset: Asset; status: "available" | "missin
 export const OPEN_LOCAL_FILES = "bowerbird:open-local-files";
 export const externalFiles = {
   browse: (path?: string, offset = 0) => invoke<LocalDirectory>("external_files_browse", { path: path || null, offset }),
+  browseAll: (path?: string) => invoke<LocalDirectory>("external_files_browse", { path: path || null, offset: 0, all: true }),
   preview: (path: string) => invoke<string>("external_files_preview", { path }),
+  media: (path: string) => invoke<string>("external_files_media", { path }),
   index: (path: string) => invoke<Asset>("external_files_index", { path }),
   references: (projectId: string) => invoke<ExternalReference[]>("external_files_references", { projectId }),
   update: (assetId: string, path: string, acceptChanges: boolean) => invoke<Asset>("external_files_update", { assetId, path, acceptChanges }),

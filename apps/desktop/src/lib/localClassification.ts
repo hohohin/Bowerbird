@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { AppSettings } from "./types";
 
 export interface LocalClassificationStatus {
+  folder_root?: string | null;
   supported: boolean;
   installed: boolean;
   enabled: boolean;

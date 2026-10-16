@@ -29,10 +29,13 @@ pub fn image_path(path: &Path) -> bool {
 fn original(path: &Path) -> AppResult<PathBuf> {
     let path =
         fs::canonicalize(path).map_err(|_| invalid("原图片不可用，请检查文件权限或重新定位"))?;
-    if !path.is_file() || !image_path(&path) {
-        return Err(invalid("请选择 PNG、JPEG、WebP、GIF 或 BMP 图片"));
+    if !path.is_file() || !(image_path(&path) || video_path(&path)) {
+        return Err(invalid("请选择支持的图片或视频"));
     }
     Ok(path)
+}
+pub fn video_path(path: &Path) -> bool {
+    crate::media::probe::is_video(path.extension().and_then(|s| s.to_str()).unwrap_or(""))
 }
 pub fn fingerprint(path: &Path) -> AppResult<String> {
     let mut file = fs::File::open(path)?;
@@ -63,6 +66,9 @@ pub struct DirectoryPage {
     pub total: usize,
 }
 pub fn browse(path: Option<&str>, offset: usize) -> AppResult<DirectoryPage> {
+    browse_page(path, offset, false)
+}
+pub fn browse_page(path: Option<&str>, offset: usize, all: bool) -> AppResult<DirectoryPage> {
     let path = path.map(PathBuf::from).unwrap_or_else(|| {
         std::env::var_os("HOME")
             .or_else(|| std::env::var_os("USERPROFILE"))
@@ -80,7 +86,7 @@ pub fn browse(path: Option<&str>, offset: usize) -> AppResult<DirectoryPage> {
         let Ok(metadata) = entry.metadata() else {
             continue;
         };
-        if metadata.is_dir() || (metadata.is_file() && image_path(&entry.path())) {
+        if metadata.is_dir() || (metadata.is_file() && (image_path(&entry.path()) || video_path(&entry.path()))) {
             entries.push(FileEntry {
                 path: entry.path().to_string_lossy().into_owned(),
                 name,
@@ -98,7 +104,7 @@ pub fn browse(path: Option<&str>, offset: usize) -> AppResult<DirectoryPage> {
     Ok(DirectoryPage {
         parent: path.parent().map(|p| p.to_string_lossy().into_owned()),
         path: path.to_string_lossy().into_owned(),
-        entries: entries.into_iter().skip(offset).take(120).collect(),
+        entries: entries.into_iter().skip(offset).take(if all { usize::MAX } else { 120 }).collect(),
         total,
     })
 }
@@ -117,7 +123,18 @@ pub fn preview(paths: &LibraryPaths, path: &Path) -> AppResult<String> {
     fs::create_dir_all(&folder)?;
     let destination = folder.join(format!("{hash}.jpg"));
     if !destination.is_file() {
-        crate::media::thumb::generate(&path, &destination, 480)?;
+        let temporary = folder.join(format!("{hash}-{}.jpg", ulid::Ulid::new()));
+        let result = (|| -> AppResult<()> {
+        if video_path(&path) {
+            crate::media::thumb::generate_video(&path, &temporary, 480)?;
+        } else {
+            crate::media::thumb::generate(&path, &temporary, 480)?;
+        }
+        fs::rename(&temporary, &destination)?;
+        Ok(())
+        })();
+        let _ = fs::remove_file(&temporary);
+        result?;
     }
     Ok(destination.to_string_lossy().into_owned())
 }
@@ -145,9 +162,9 @@ impl Database {
             return Err(invalid("这是库内文件，请从素材库引用"));
         }
         let hash = fingerprint(&path)?;
-        let dimensions =
-            image::image_dimensions(&path).map_err(|e| invalid(format!("无法读取图片：{e}")))?;
-        let thumb = preview(paths, &path)?;
+        let media = crate::media::probe::probe(&path)?;
+        let dimensions = (media.width, media.height);
+        let thumb = if video_path(&path) { preview(paths, &path).ok() } else { Some(preview(paths, &path)?) };
         if fingerprint(&path)? != hash {
             return Err(invalid("图片正在被修改，请稍后重试"));
         }
@@ -171,6 +188,7 @@ impl Database {
             let p = Path::new(&path);
             let metadata = fs::metadata(p)?;
             tx.execute("INSERT INTO assets(id,name,ext,origin_path,store_path,thumb_path,size,width,height,source,library_hidden,created_at) VALUES(?1,?2,?3,?4,?4,?5,?6,?7,?8,'external',1,?9)", params![id,p.file_stem().unwrap_or_default().to_string_lossy(),p.extension().unwrap_or_default().to_string_lossy().to_lowercase(),path,thumb,metadata.len() as i64,dimensions.0,dimensions.1,chrono::Utc::now().timestamp()])?;
+            tx.execute("UPDATE assets SET duration=?2 WHERE id=?1", params![id,media.duration])?;
             tx.execute(
                 "INSERT INTO external_assets(asset_id,fingerprint) VALUES(?1,?2)",
                 params![id, hash],
@@ -212,8 +230,9 @@ impl Database {
             return Err(invalid("重新定位请选择库外原图片"));
         }
         let hash = fingerprint(&path)?;
-        let dimensions = image::image_dimensions(&path).map_err(|e| invalid(e.to_string()))?;
-        let thumb = preview(paths, &path)?;
+        let media = crate::media::probe::probe(&path)?;
+        let dimensions = (media.width, media.height);
+        let thumb = if video_path(&path) { preview(paths, &path).ok() } else { Some(preview(paths, &path)?) };
         if fingerprint(&path)? != hash {
             return Err(invalid("图片正在被修改，请稍后重试"));
         }
@@ -250,6 +269,7 @@ impl Database {
             params![id, path],
         )?;
         tx.execute("UPDATE assets SET origin_path=?2,store_path=?2,thumb_path=?3,size=?4,width=?5,height=?6 WHERE id=?1",params![id,path,thumb,fs::metadata(&path)?.len() as i64,dimensions.0,dimensions.1])?;
+        tx.execute("UPDATE assets SET duration=?2,ext=?3 WHERE id=?1", params![id,media.duration,media.ext])?;
         tx.commit()?;
         drop(conn);
         self.get_asset(id)?.ok_or_else(|| invalid("引用不存在"))
@@ -281,7 +301,12 @@ impl Database {
             std::io::copy(&mut fs::File::open(source)?, &mut output)?;
             output.sync_all()?;
             self.resolve_external_paths(&[source.into()])?;
-            crate::media::thumb::generate(&destination, &managed_thumb, 480)?;
+            let copied_thumb = if video_path(&destination) {
+                crate::media::thumb::generate_video(&destination, &managed_thumb, 480).ok().map(|_| managed_thumb.to_string_lossy().into_owned())
+            } else {
+                crate::media::thumb::generate(&destination, &managed_thumb, 480)?;
+                Some(managed_thumb.to_string_lossy().into_owned())
+            };
             let conn = self.conn.lock().unwrap();
             let tx = conn.unchecked_transaction()?;
             let unchanged: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM external_assets e JOIN assets a ON a.id=e.asset_id WHERE a.id=?1 AND a.store_path=?2 AND e.fingerprint=?3)", params![id,source,expected], |r| r.get(0))?;
@@ -289,7 +314,7 @@ impl Database {
                 return Err(invalid("引用或原文件已变化，请重试复制"));
             }
             tx.execute("DELETE FROM external_assets WHERE asset_id=?1", [id])?;
-            tx.execute("UPDATE assets SET store_path=?2,thumb_path=?3,source='imported',library_hidden=0 WHERE id=?1",params![id,destination.to_string_lossy(),managed_thumb.to_string_lossy()])?;
+            tx.execute("UPDATE assets SET store_path=?2,thumb_path=?3,source='imported',library_hidden=0 WHERE id=?1",params![id,destination.to_string_lossy(),copied_thumb])?;
             tx.commit()?;
             Ok(())
         })();
@@ -381,6 +406,46 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.root);
         }
+    }
+    #[test]
+    fn directory_browser_lists_media_and_folders_without_indexing() {
+        let f = Fixture::new();
+        fs::write(f.root.join("video.MP4"), b"listed without decoding").unwrap();
+        fs::write(f.root.join("notes.txt"), b"not media").unwrap();
+        for i in 0..130 { fs::write(f.root.join(format!("image-{i}.jpg")), b"listed without decoding").unwrap(); }
+        let page = browse(Some(f.root.to_str().unwrap()),0).unwrap();
+        assert_eq!(page.entries.len(),120);
+        let all = browse_page(Some(f.root.to_str().unwrap()),0,true).unwrap();
+        assert_eq!(all.entries.len(),all.total);
+        assert!(all.entries[0].directory);
+        assert!(all.entries.iter().any(|e| e.name == "video.MP4"));
+        assert!(!all.entries.iter().any(|e| e.name == "notes.txt"));
+        assert_eq!(f.db.count_assets(None).unwrap(),0);
+    }
+    #[test]
+    #[ignore = "requires local ffmpeg for synthetic video and poster; no network or user library"]
+    fn external_video_reference_relink_and_copy_keep_original() {
+        let f=Fixture::new();
+        let video=f.root.join("clip.mp4");
+        let mut command=crate::media::tools::command(crate::media::tools::resolve(crate::media::tools::Tool::Ffmpeg).unwrap());
+        #[cfg(target_os="windows")]
+        { use std::os::windows::process::CommandExt; command.creation_flags(0x08000000); }
+        let output=command.args(["-y","-f","lavfi","-i","color=c=red:s=120x240:r=25","-t","0.4","-pix_fmt","yuv420p"]).arg(&video).output().unwrap();
+        assert!(output.status.success());
+        let original=fs::read(&video).unwrap();
+        let asset=f.db.index_external(&f.paths,&video).unwrap();
+        assert_eq!(asset.ext.as_deref(),Some("mp4"));
+        assert_eq!((asset.width,asset.height),(Some(120),Some(240)));
+        assert!((asset.duration.unwrap()-0.4).abs()<0.05);
+        assert!(asset.thumb_path.as_ref().is_some_and(|p| Path::new(p).is_file()));
+        assert_eq!(fs::read_dir(&f.paths.images).unwrap().count(),0);
+        let moved=f.root.join("moved.mp4"); fs::rename(&video,&moved).unwrap();
+        let relinked=f.db.update_external(&f.paths,&asset.id,&moved,false).unwrap();
+        assert_eq!(relinked.ext.as_deref(),Some("mp4"));
+        let copied=f.db.copy_external_to_library(&f.paths,&asset.id).unwrap();
+        assert_eq!(copied.id,asset.id);
+        assert_eq!(fs::read(&moved).unwrap(),original);
+        assert_eq!(fs::read(copied.store_path.unwrap()).unwrap(),original);
     }
     #[test]
     fn index_is_reference_only_deduplicated_hidden_and_persists() {

@@ -1,6 +1,8 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
-import { localClassification as local, type ClassificationLabel, type LocalClassificationStatus } from "../lib/localClassification";
+import { localClassification, type ClassificationLabel, type LocalClassificationStatus } from "../lib/localClassification";
+import { folderClassification } from "../lib/folderClassification";
+import { open } from "@tauri-apps/plugin-dialog";
 import { useStore } from "../store";
 import { ModalShell } from "./ModalShell";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -78,7 +80,17 @@ function JevResults({ progress }: { progress: NonNullable<LocalClassificationSta
   </section>;
 }
 
-export function LocalClassificationDialog({ onClose }: { onClose: () => void }) {
+export function LocalClassificationDialog({ onClose, folder, selectedFiles, onFilter }: { onClose: () => void; folder?: { root: string; recursive: boolean }; selectedFiles?: Set<string>; onFilter?: (id: string) => void }) {
+  const [target, setTarget] = useState(folder);
+  return <ClassificationSettings key={target?.root ?? "library"} onClose={onClose} folder={target} selectedFiles={target?.root === folder?.root ? selectedFiles : undefined} onFilter={target?.root === folder?.root ? onFilter : undefined} onTarget={setTarget} />;
+}
+
+function ClassificationSettings({ onClose, folder, selectedFiles, onFilter, onTarget }: {
+  onClose: () => void; folder?: { root: string; recursive: boolean }; selectedFiles?: Set<string>; onFilter?: (id: string) => void;
+  onTarget: (folder: {root:string; recursive:boolean} | undefined) => void;
+}) {
+  const [recursive, setRecursive] = useState(folder?.recursive ?? false);
+  const local = folder ? folderClassification.client(folder.root, recursive) : localClassification;
   const [status, setStatus] = useState<LocalClassificationStatus | null>(null);
   const [labels, setLabels] = useState<ClassificationLabel[]>([]);
   const [editing, setEditing] = useState<string | null>(null);
@@ -96,7 +108,8 @@ export function LocalClassificationDialog({ onClose }: { onClose: () => void }) 
   const [savedKey, setSavedKey] = useState("");
   const [configLoaded, setConfigLoaded] = useState(false);
   const lock = useRef(false);
-  const selected = useStore((s) => s.selectedIds);
+  const librarySelected = useStore((s) => s.selectedIds);
+  const selected = folder ? (selectedFiles ?? new Set<string>()) : librarySelected;
   const setSmartFilter = useStore((s) => s.setSmartFilter);
 
   async function refresh() {
@@ -151,8 +164,9 @@ export function LocalClassificationDialog({ onClose }: { onClose: () => void }) 
   const canRun = !busy && modeReady;
   const canMatch = canRun;
   const statusIsCloud = !!status?.model.startsWith("jev-") || !!status?.model.includes("/jev-");
-  const showProgress = status && cloudSelected === statusIsCloud && (status.busy || cloudSelected === cloudActive);
-  const currentAsset = status?.busy && status.phase === "classifying" ? status.current_asset : null;
+  const sameTarget = (status?.folder_root ?? null) === (folder?.root ?? null);
+  const showProgress = status && sameTarget && cloudSelected === statusIsCloud && (status.busy || cloudSelected === cloudActive);
+  const currentAsset = sameTarget && status?.busy && status.phase === "classifying" ? status.current_asset : null;
   const processingPreview = currentAsset && <ProcessingAsset key={`${currentAsset.id}:${currentAsset.thumb_path}`} asset={currentAsset} total={status?.total ?? 0} />;
   const jevResults = status?.jev_progress && <JevResults key={status.jev_progress.asset.id} progress={status.jev_progress} />;
   async function saveMode() {
@@ -170,7 +184,7 @@ export function LocalClassificationDialog({ onClose }: { onClose: () => void }) 
     await action(async () => {
       await local.deleteLabels(deleting.map((label) => label.id));
       if (deleting.some((label) => label.id === editing)) edit();
-      if (deleting.some((label) => useStore.getState().smartFilter === `tag:${label.name}`)) setSmartFilter(null);
+      if (!folder && deleting.some((label) => useStore.getState().smartFilter === `tag:${label.name}`)) setSmartFilter(null);
       setSelectedLabels((current) => new Set([...current].filter((id) => !deleting.some((label) => label.id === id))));
       setLabels((current) => current.filter((label) => !deleting.some((target) => target.id === label.id)));
       setNotice(`已删除 ${deleting.length} 个标签，素材文件已保留。`);
@@ -181,6 +195,20 @@ export function LocalClassificationDialog({ onClose }: { onClose: () => void }) 
   return <><ModalShell title="自动分类" width="lg" onClose={onClose} preventClose={deleting.length > 0}
     description="选择分类方式，再识别素材。标签与人工修正由两种方式共用。">
     <div className="space-y-5 text-sm">
+      <section className="space-y-2" aria-label="分类目标">
+        <p className="font-medium">分类目标：{folder ? "指定文件夹" : "素材库"}</p>
+        {folder && <><p className="break-all text-xs">{folder.root}</p><p className="text-xs text-muted">仅处理图片，记录保存在此目录的 .bowerbird 中，标签与主库隔离。</p>
+          <label className="flex items-center gap-2"><input type="checkbox" checked={recursive} disabled={busy} onChange={e => setRecursive(e.target.checked)} />包含子文件夹</label></>}
+        <div className="flex gap-2">
+          {folder && <button className="app-modal-button" disabled={busy} onClick={() => onTarget(undefined)}>选择素材库</button>}
+          <button className="app-modal-button" disabled={busy} onClick={() => void action(async () => {
+            const path = await open({ directory: true, multiple: false });
+            if (typeof path === "string") { const view = await folderClassification.view(path); onTarget({ root: view.root, recursive: view.record.recursive }); }
+          })}>选择目标文件夹</button>
+        </div>
+        {status?.folder_root && status.busy && <p role="status" className="text-xs break-all">正在分类文件夹：{status.folder_root}</p>}
+        {status?.busy && !sameTarget && <div className="space-y-2"><p role="status">另一分类范围的任务正在运行，完成或停止后可处理当前目标。</p><button className="app-modal-button" disabled={working} onClick={() => void action(() => local.stop())}>停止当前任务</button></div>}
+      </section>
       {error && <p role="alert" className="text-red-400">{error}</p>}
       <fieldset disabled={!configLoaded || busy} className="space-y-2">
         <legend className="font-medium mb-2">分类方式</legend>
@@ -274,12 +302,13 @@ export function LocalClassificationDialog({ onClose }: { onClose: () => void }) 
             <button className="app-modal-button" disabled={!canRun} onClick={() => void action(() => local.start({ pendingOnly: false }))}>重新扫描全部图片</button>
             {status?.busy && cloudSelected === statusIsCloud && <button className="app-modal-button" disabled={working} onClick={() => void action(() => local.stop())}>停止</button>}
           </div>
-          <label className="flex items-center gap-2">
+          {!folder && <><label className="flex items-center gap-2">
             <input type="checkbox" checked={status?.enabled ?? false} disabled={!modeReady || working}
               onChange={(e) => void action(() => local.enable(e.target.checked))} />
             自动处理新素材
           </label>
-          <p className="text-xs text-muted">自动处理使用当前已应用的分类方式。停止任务也会暂停自动处理。</p>
+          <p className="text-xs text-muted">自动处理使用当前已应用的分类方式。停止任务也会暂停自动处理。</p></>}
+          {folder && <p className="text-xs text-muted">文件夹按需扫描。再次识别会处理新增及内容变更的图片；关闭面板后任务继续。</p>}
           {showProgress && <>
             {status.message && <p role="status" aria-live="polite">{status.message}</p>}
             {status.last_error && <p className="text-xs text-red-400">最近一次未完成原因：{status.last_error}</p>}
@@ -332,7 +361,7 @@ export function LocalClassificationDialog({ onClose }: { onClose: () => void }) 
             onClick={() => requestDelete(checkedLabels)}>删除所选标签</button>
         </div>}
         {status?.busy && labels.length > 0 && <p className="text-xs text-muted">请先停止当前任务，再删除标签。</p>}
-        <p className="text-xs text-muted">先在素材库多选图片，再将它们设为某个标签的示例或反例。模型不会从自己的自动标签中学习偏好。</p>
+        <p className="text-xs text-muted">{folder ? "先扫描文件夹并选中图片，再将其设为此目录标签的示例或反例。" : "先在素材库多选图片，再将它们设为某个标签的示例或反例。"}模型不会从自己的自动标签中学习偏好。</p>
         {labels.length === 0 && <p className="text-muted py-3">还没有标签。识别图片后会自动发现，也可以先创建。</p>}
         <div className="max-h-64 overflow-y-auto divide-y divide-edge">
           {labels.map((label) => <div key={label.id} className="py-2 space-y-1">
@@ -343,7 +372,7 @@ export function LocalClassificationDialog({ onClose }: { onClose: () => void }) 
                   if (e.target.checked) next.add(label.id); else next.delete(label.id);
                   return next;
                 })} />
-              <button className="text-cold font-medium" onClick={() => { setSmartFilter(`tag:${label.name}`); onClose(); }}>#{label.name}</button>
+              <button className="text-cold font-medium" disabled={!!folder && !onFilter} title={folder && !onFilter ? "在本机文件中打开该目录后可按标签筛选" : undefined} onClick={() => { if (folder) onFilter?.(label.id); else setSmartFilter(`tag:${label.name}`); onClose(); }}>#{label.name}</button>
               <span className="text-xs text-muted">{label.count} 张{label.enabled ? (cloudActive || label.has_examples ? "" : " · 未设示例，不自动匹配") : " · 已停用自动匹配"}</span>
               <button className="text-xs" onClick={() => edit(label)}>编辑</button>
               <button className="text-xs text-red-400 disabled:opacity-40" aria-label={`删除标签 ${label.name}`} disabled={busy}

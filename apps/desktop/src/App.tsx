@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { LocalFileBrowser } from "./components/LocalFileBrowser";
+import { LocalFileWorkspace } from "./components/LocalFileWorkspace";
+import { useLocalFileMode } from "./lib/localFileMode";
+import { PreservedWorkspace } from "./components/PreservedWorkspace";
 import { OPEN_LOCAL_FILES } from "./lib/externalFiles";
 import { Toolbar } from "./components/Toolbar";
 import { WindowTitlebar } from "./components/WindowTitlebar";
@@ -66,7 +68,8 @@ function LibraryLoadingState() {
 
 function App() {
   const [initializing, setInitializing] = useState(true);
-  const [localFilesOpen, setLocalFilesOpen] = useState(false);
+  const localFilesOpen = useLocalFileMode(s => s.open);
+  const setLocalFilesOpen = useLocalFileMode(s => s.setOpen);
   useEffect(() => {
     const show = () => { setLocalFilesOpen(true); setSourceBrowserOpen(false); };
     window.addEventListener(OPEN_LOCAL_FILES, show);
@@ -674,6 +677,7 @@ function App() {
   // 焦点在 input/textarea/contenteditable（搜索框/创作板 ProseMirror）时不拦截，让正常文本/图片粘贴。
   useEffect(() => {
     function onPaste(e: ClipboardEvent) {
+      if (useLocalFileMode.getState().open) return;
       if (e.defaultPrevented || useStore.getState().collectionPanelId) return;
       const items = e.clipboardData?.items;
       if (!items) return;
@@ -845,7 +849,7 @@ function App() {
       <CloudAgentRuntimeCoordinator />
       <ToastViewport />
       <StartupUpdateDialog ready={!initializing} />
-      <FileDropImport />
+      {!localFilesOpen && <FileDropImport />}
       {/* 环境引导：codex/扩展/即梦由设置面板对应分区直接唤起，不再有「环境状态」总览 */}
       <CodexOnboarding />
       <ExtensionOnboarding />
@@ -871,8 +875,8 @@ function App() {
         localFilesOpen={localFilesOpen}
         onLocalFiles={() => { setLocalFilesOpen(value => !value); setSourceBrowserOpen(false); }}
         canvasMode={projectWorkspaceActive}
-        onCanvasModeChange={(active) => active ? createCreative(false) : exitCreative()}
-        onCreateCreative={createCreative}
+        onCanvasModeChange={(active) => { setLocalFilesOpen(false); return active ? createCreative(false) : exitCreative(); }}
+        onCreateCreative={(blank) => { const local = localFilesOpen; setLocalFilesOpen(false); return createCreative(local || blank); }}
         exploring={sourceBrowserOpen}
         onExplore={() => {
           setLocalFilesOpen(false);
@@ -887,16 +891,17 @@ function App() {
       />
       <div className="app-shell-hatch" aria-hidden="true"><span /></div>
       <div className="relative flex flex-1 overflow-hidden">
-        <Sidebar />
-        {localFilesOpen && <LocalFileBrowser onClose={() => { setLocalFilesOpen(false); document.querySelector<HTMLButtonElement>(".local-files-trigger")?.focus(); }} onCreateProject={() => void createCreative(true)} />}
+        <div style={{ display: localFilesOpen ? "none" : "contents" }}><Sidebar /></div>
         <main className="app-workspace relative flex flex-1 flex-col overflow-hidden bg-canvas">
+          {localFilesOpen && <LocalFileWorkspace onClose={() => { setLocalFilesOpen(false); document.querySelector<HTMLButtonElement>(".local-files-trigger")?.focus(); }} onCreateProject={() => createCreative(true)} />}
+          <PreservedWorkspace suspended={localFilesOpen}>
           <ExploreWorkspace url={sourceBrowserUrl} navigationId={sourceBrowserNavigation} open={sourceBrowserOpen && !collectionAddTargetId} onClose={() => setSourceBrowserOpen(false)}>
           {projectWorkspaceActive ? (
             initializing ? <LibraryLoadingState /> : (
               <CanvasWorkspace
                 key={workspaceProjectId}
                 projectId={workspaceProjectId}
-                exploring={(sourceBrowserOpen || localFilesOpen) && !collectionAddTargetId}
+                exploring={sourceBrowserOpen && !collectionAddTargetId}
                 focusThreadId={creativeTarget?.projectId === workspaceProjectId ? creativeTarget.threadId : null}
                 focusNodeId={creativeTarget?.projectId === workspaceProjectId ? creativeTarget.nodeId : null}
                 focusRequestId={creativeTarget?.projectId === workspaceProjectId ? creativeTarget.requestId : null}
@@ -941,6 +946,7 @@ function App() {
           )}
           <CollectionAddMode />
           </ExploreWorkspace>
+          </PreservedWorkspace>
         </main>
       </div>
     </div>

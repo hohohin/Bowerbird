@@ -1,3 +1,4 @@
+import { useLocalFileMode } from "../lib/localFileMode";
 import { ProjectInspectorShell } from "./ProjectInspectorShell";
 import { WorkflowAgentDetail } from "./WorkflowAgentDetail";
 import { WORKFLOW_SKILL_ENABLED, WORKFLOW_PLANNER_ENABLED, WORKFLOW_TEMPLATE_LIBRARY_ENABLED } from "../lib/featureFlags";
@@ -507,6 +508,7 @@ export function CanvasWorkspace({
       if (!promptMenuRef.current?.contains(event.target as Node)) setPromptMenu(null);
     }
     function onKey(event: KeyboardEvent) {
+      if (useLocalFileMode.getState().open) return;
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
@@ -1615,6 +1617,7 @@ export function CanvasWorkspace({
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
+      if (useLocalFileMode.getState().open) return;
       const target = event.target as HTMLElement | null;
       const editing = !!target && (
         target.isContentEditable

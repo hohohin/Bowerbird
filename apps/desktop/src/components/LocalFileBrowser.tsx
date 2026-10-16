@@ -29,7 +29,7 @@ function FilePreview({ path, revision }: { path: string; revision: number }) {
   return <span className="local-file-preview" ref={ref}>{src ? <img src={src} alt="" draggable={false} /> : <Image size={24} aria-hidden="true" />}</span>;
 }
 
-export function LocalFileBrowser({ onClose, onCreateProject }: { onClose: () => void; onCreateProject: () => void }) {
+export function LocalFileBrowser({ onClose, onCreateProject, initialTab = "files" }: { onClose: () => void; onCreateProject: () => void; initialTab?: "files" | "references" }) {
   const projectId = useStore(s => s.activeProjectId);
   const routePending = useStore(s => s.projectRoutePending);
   const [directory, setDirectory] = useState<LocalDirectory | null>(null);
@@ -40,7 +40,7 @@ export function LocalFileBrowser({ onClose, onCreateProject }: { onClose: () => 
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const [error, setError] = useState("");
-  const [tab, setTab] = useState<"files" | "references">("files");
+  const [tab, setTab] = useState<"files" | "references">(initialTab);
   const [references, setReferences] = useState<ExternalReference[]>([]);
   const [confirmUpdate, setConfirmUpdate] = useState<ExternalReference | null>(null);
   const [selected, setSelected] = useState<LocalFileEntry | null>(null);
@@ -76,7 +76,7 @@ export function LocalFileBrowser({ onClose, onCreateProject }: { onClose: () => 
   }
   useEffect(() => {
     mounted.current = true;
-    void navigate(lastDirectory());
+    if (initialTab === "files") void navigate(lastDirectory());
     const focus = requestAnimationFrame(() => document.querySelector<HTMLInputElement>(".local-file-browser input")?.focus());
     return () => { cancelAnimationFrame(focus); mounted.current = false; request.current++; referenceRequest.current++; };
   }, []);
@@ -143,7 +143,7 @@ export function LocalFileBrowser({ onClose, onCreateProject }: { onClose: () => 
     try {
       if (action === "copy") await externalFiles.copy(reference.asset.id);
       else {
-        const path = action === "relink" ? await open({ multiple: false, filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "webp", "gif", "bmp"] }] }) : reference.asset.store_path;
+        const path = action === "relink" ? await open({ multiple: false, filters: [{ name: "图片或视频", extensions: ["png", "jpg", "jpeg", "webp", "gif", "bmp", "mp4", "mov", "m4v", "webm", "mkv", "avi"] }] }) : reference.asset.store_path;
         if (typeof path !== "string") return;
         await externalFiles.update(reference.asset.id, path, action === "update");
       }
@@ -153,13 +153,13 @@ export function LocalFileBrowser({ onClose, onCreateProject }: { onClose: () => 
     finally { busyRef.current = false; if (mounted.current) { setBusy(false); setConfirmUpdate(null); } }
   }
 
-  return <aside className="local-file-browser" aria-label="本机文件资源管理器" aria-busy={busy}
+  return <aside className="local-file-browser" style={initialTab === "references" ? {width:"100%",minHeight:240,maxHeight:"65vh",borderRight:0} : undefined} aria-label="本机文件资源管理器" aria-busy={busy}
     onKeyDown={event => { if (event.key === "Escape" && !confirmUpdate && !busy) { event.stopPropagation(); onClose(); } }}>
     <header><Monitor size={17} aria-hidden="true" /><strong>本机文件</strong><button type="button" title="关闭本机文件资源管理器" aria-label="关闭本机文件资源管理器" onClick={onClose}><X size={16} /></button></header>
-    <div className="local-file-tabs" role="tablist" aria-label="本机文件视图">
+    {initialTab === "files" && <div className="local-file-tabs" role="tablist" aria-label="本机文件视图">
       <button role="tab" aria-selected={tab === "files"} onClick={() => setTab("files")}>浏览文件</button>
       <button role="tab" aria-selected={tab === "references"} onClick={() => setTab("references")}>外部引用</button>
-    </div>
+    </div>}
     {tab === "files" && <>
       <div className="local-file-navigation">
         <button title="返回上次目录" aria-label="返回上次目录" disabled={!back.length || loading} onClick={() => { const path = back[back.length - 1]; setBack(items => items.slice(0, -1)); void navigate(path, 0, false); }}><ArrowLeft size={16} /></button>
