@@ -1,4 +1,6 @@
 import { BRAND_OBSERVATION_TASK, loadBrandPrompt } from "../prompts/brand-visual.ts";
+import { replicationMessages, validateReplicationResult, validateReplicationVideo, type ReplicationPayload } from "./replication.ts";
+import { validateReplication } from "../../../cloud/supabase/functions/_shared/replication.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { IdlePollBackoff } from "../idle-poll-backoff.ts";
 
@@ -24,6 +26,8 @@ export interface UnderstandWorkerConfig {
   arkApiKey: string;
   arkBaseUrl: string;
   arkVisionModel: string;
+  arkReplicationVideoModel?: string;
+  arkReplicationTextModel?: string;
   mock: boolean;
   pollIntervalMs: number;
   heartbeatIntervalMs: number;
@@ -41,7 +45,9 @@ interface ClaimedJob {
 
 interface UnderstandInput {
   schema_version: number;
-  operation: "caption" | "autoname" | "classify";
+  operation: "caption" | "autoname" | "classify" | ReplicationPayload["operation"];
+  video?: ReplicationPayload["video"];
+  rewrite?: ReplicationPayload["rewrite"];
   /** null = 纯文本调用（生成图维度数据命名），图片不上云；caption/classify 必带一张图。 */
   image: { mime: "image/jpeg" | "image/png" | "image/webp"; base64: string } | null;
   instruction: string | null;
@@ -97,6 +103,8 @@ export function configFromEnv(env: Record<string, string | undefined>): Understa
     arkApiKey: required(env, "ARK_API_KEY"),
     arkBaseUrl: (env.ARK_BASE_URL?.trim() || "https://ark.cn-beijing.volces.com/api/v3").replace(/\/+$/, ""),
     arkVisionModel: required(env, "ARK_VISION_MODEL"),
+    arkReplicationVideoModel: env.ARK_REPLICATION_VIDEO_MODEL?.trim(),
+    arkReplicationTextModel: env.ARK_REPLICATION_TEXT_MODEL?.trim(),
     mock: (env.BOWERBIRD_CLOUD_MOCK ?? "false") === "true",
     pollIntervalMs: positiveInt(env.UNDERSTAND_POLL_INTERVAL_MS, 2_000, "UNDERSTAND_POLL_INTERVAL_MS"),
     heartbeatIntervalMs: positiveInt(env.UNDERSTAND_HEARTBEAT_INTERVAL_MS, 30_000, "UNDERSTAND_HEARTBEAT_INTERVAL_MS"),
@@ -165,7 +173,7 @@ class ArkVisionClient {
         return await this.requestOnce(input);
       } catch (error) {
         if (
-          error instanceof KnownProviderError && error.safeCode === "provider_burst" &&
+          !["video-analysis", "text-rewrite"].includes(input.operation) && error instanceof KnownProviderError && error.safeCode === "provider_burst" &&
           attempt < this.config.burstRetryMax
         ) {
           const delayMs = burstBackoffMs(attempt, this.config.burstRetryBaseMs);
@@ -184,15 +192,22 @@ class ArkVisionClient {
   }
 
   private async requestOnce(input: UnderstandInput): Promise<string> {
+    const replication = input.operation === "video-analysis" || input.operation === "text-rewrite";
+    const model = input.operation === "video-analysis" ? this.config.arkReplicationVideoModel
+      : input.operation === "text-rewrite" ? this.config.arkReplicationTextModel : this.config.arkVisionModel;
+    if (!model) throw new KnownProviderError("not_configured", "视频复刻模型尚未配置");
     const response = await this.fetch(`${this.config.arkBaseUrl}/chat/completions`, {
       method: "POST",
+      redirect: "error",
       headers: {
         authorization: `Bearer ${this.config.arkApiKey}`,
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        model: this.config.arkVisionModel,
-        messages: [{
+        model,
+        ...(replication ? { max_tokens: 6000, stream: false, thinking: { type: "disabled" } } : {}),
+        ...(input.operation === "video-analysis" ? { response_format: { type: "json_object" } } : {}),
+        messages: replication ? replicationMessages(input as ReplicationPayload) : [{
           role: "user",
           content: [
             // 纯文本调用（image=null）只发 text 部分——vision 模型同样接受无图消息。
@@ -226,6 +241,10 @@ class ArkVisionClient {
     if (content.length > MAX_RESULT_CHARS) {
       throw new KnownProviderError("invalid_provider_response", "豆包 Vision 返回文本超长");
     }
+    if (replication) {
+      try { return validateReplicationResult(input as ReplicationPayload, content, isRecord(choices[0]) ? choices[0].finish_reason : undefined); }
+      catch { throw new KnownProviderError("invalid_provider_response", "复刻结果不完整或分镜格式无效，请调整输入后新建任务"); }
+    }
     return content;
   }
 }
@@ -238,12 +257,14 @@ async function mockUnderstand(input: UnderstandInput): Promise<string> {
   }
   if (scenario === "failure") throw new KnownProviderError("provider_failed", "上游理解失败");
   if (scenario === "timeout") await new Promise<never>(() => {});
+  if (input.operation === "text-rewrite") return "模拟改写：围绕目标产品安排开场、展示和收束镜头。";
+  if (input.operation === "video-analysis") return validateReplicationResult(input as ReplicationPayload, JSON.stringify({ overview: "模拟参考分析", shots: [{ start: 0, end: input.video!.duration, subject: "模拟主体", action: "展示", camera: "固定", composition: "居中", lighting: "柔光", transition: "切" }], uncertainties: ["模拟数据"] }), "stop");
   return MOCK_UNDERSTAND_TEXT;
 }
 
 function parseInput(value: unknown): UnderstandInput {
   if (!isRecord(value) || value.schema_version !== 1 ||
-      !["caption", "autoname", "classify"].includes(String(value.operation))) {
+      !["caption", "autoname", "classify", "video-analysis", "text-rewrite"].includes(String(value.operation))) {
     throw new Error("invalid_understand_input");
   }
   // image=null 合法（纯文本命名）；带图时校验结构与编码。
@@ -251,6 +272,7 @@ function parseInput(value: unknown): UnderstandInput {
     (isRecord(value.image) && typeof value.image.base64 === "string" && !!value.image.base64 &&
       ["image/jpeg", "image/png", "image/webp"].includes(String(value.image.mime)));
   if (!imageOk) throw new Error("invalid_understand_input");
+  if (["video-analysis", "text-rewrite"].includes(String(value.operation))) validateReplication(value);
   return value as unknown as UnderstandInput;
 }
 
@@ -290,8 +312,9 @@ async function executeClaim(
   let submitted = false;
   try {
     const input = await fetchInput(fetchImpl, claimed.inputUrl, inputManifestHash);
+    if (input.operation === "video-analysis" && !config.mock) await validateReplicationVideo(input.video!);
     // Resolve once before submission; retries use the same prompt even during maintenance.
-    input.instruction = visionPrompt(input);
+    if (!["video-analysis", "text-rewrite"].includes(input.operation)) input.instruction = visionPrompt(input);
     await control.post({ action: "submitted", jobId, leaseId });
     submitted = true;
     const resultText = await ark.understand(input);

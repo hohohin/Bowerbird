@@ -2164,7 +2164,9 @@ impl Database {
         let tx = conn.unchecked_transaction()?;
         tx.execute(
             "DELETE FROM asset_tags WHERE asset_id = ?1 \
-             AND tag_id IN (SELECT id FROM tags WHERE source = ?2)",
+             AND tag_id IN (SELECT id FROM tags WHERE source = ?2) \
+             AND NOT (tag_id IN (SELECT id FROM tags WHERE name = '#ai生成') \
+               AND EXISTS (SELECT 1 FROM analyses WHERE asset_id = ?1 AND kind = 'replication_source'))",
             rusqlite::params![asset_id, source],
         )?;
         for tid in tag_ids {

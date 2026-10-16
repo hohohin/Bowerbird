@@ -10,6 +10,7 @@ import {
 import { ApiError, errorResponse, jsonResponse, requestId, safeLog } from "../_shared/errors.ts";
 import { assertReferenceImages, corsHeaders, withTimeout } from "../_shared/limits.ts";
 import { reserveManagedUsage } from "../_shared/usage.ts";
+import { isReplication, replicationOperations, replicationService, replicationPriceAvailable, validateReplication } from "../_shared/replication.ts";
 
 // 双模式：UNDERSTAND_ASYNC=false（默认）保持旧的「单次 Edge 请求内同步调方舟」行为；
 // true 时切换为生图 G0 同款异步任务模式（create/get 短请求 + VPS Worker 领取执行），
@@ -20,7 +21,9 @@ const asyncMode = (Deno.env.get("UNDERSTAND_ASYNC") ?? "false") === "true";
 
 interface UnderstandRequest {
   idempotency_key: string;
-  operation: "caption" | "autoname" | "classify";
+  operation: "caption" | "autoname" | "classify" | "video-analysis" | "text-rewrite";
+  video?: unknown;
+  rewrite?: unknown;
   /** null = 纯文本调用（生成图维度数据命名），图片不上云；caption/classify 必带一张图。 */
   image: ImageInput | null;
   instruction?: string;
@@ -48,8 +51,13 @@ function validate(body: unknown): UnderstandRequest {
   if (typeof value.idempotency_key !== "string" || !value.idempotency_key.trim()) {
     throw new ApiError("invalid_request", "缺少幂等键");
   }
-  if (!["caption", "autoname", "classify"].includes(String(value.operation))) {
+  if (!["caption", "autoname", "classify", ...replicationOperations].includes(String(value.operation))) {
     throw new ApiError("invalid_request", "未知理解操作");
+  }
+  if (isReplication(value.operation)) {
+    if ((value.idempotency_key as string).length > 200) throw new ApiError("invalid_request", "幂等键过长");
+    try { validateReplication(value); } catch (error) { throw new ApiError("invalid_request", error instanceof Error ? error.message : "复刻输入无效"); }
+    return value as unknown as UnderstandRequest;
   }
   if (value.image == null) {
     // 纯文本调用：无图时必须带非空 instruction（桌面维度数据命名恒满足）。
@@ -139,35 +147,46 @@ async function createJob(
   body: UnderstandRequest,
   cors: HeadersInit,
 ): Promise<Response> {
+  const replication = isReplication(body.operation);
+  const requestPayload = JSON.stringify({
+    schema_version: 1, operation: body.operation, image: body.image ?? null,
+    instruction: body.instruction ?? null, mock_scenario: body.mock_scenario ?? null,
+    ...(replication ? { video: body.video ?? null, rewrite: body.rewrite ?? null } : {}),
+  });
+  const manifestHash = await sha256Hex(requestPayload);
+  // Reopening an existing replication job never consumes quota or creates a new hold.
+  if (replication) {
+    const existing = await admin.from("understand_jobs").select("*").eq("user_id", userId).eq("idempotency_key", body.idempotency_key).maybeSingle();
+    if (existing.error) throw new ApiError("internal_error", "读取复刻任务失败", true);
+    if (existing.data) {
+      if (existing.data.input_manifest_hash !== manifestHash) throw new ApiError("invalid_request", "幂等键已用于不同内容", false, 409);
+      return jobResponse(existing.data as UnderstandJob, cors);
+    }
+    const capability = (await replicationCapabilities(admin)).find(item => item.operation === body.operation);
+    if (!capability?.available) throw new ApiError("not_configured", "此复刻能力尚未启价，暂不可提交");
+  }
   await ensureDailyCredits(admin, userId);
   const tier = await tierFor(admin, userId);
   let quotaConsumed = false;
   let holdId: string | undefined;
   let jobId: string | undefined;
   try {
-    if (tier === "free") {
+    if (!replication && tier === "free") {
       await consumeFreeQuota(admin, userId);
       quotaConsumed = true;
     }
-    const held = await holdCredits(admin, userId, body.idempotency_key, "caption");
+    const held = await holdCredits(admin, userId, body.idempotency_key, replication ? replicationService(body.operation) : "caption");
     holdId = held.holdId;
-    const requestPayload = JSON.stringify({
-      schema_version: 1,
-      operation: body.operation,
-      image: body.image,
-      instruction: body.instruction ?? null,
-      mock_scenario: body.mock_scenario ?? null,
-    });
-    const manifestHash = await sha256Hex(requestPayload);
 
     const existingResult = await admin.from("understand_jobs").select("*")
       .eq("hold_id", held.holdId).maybeSingle();
     if (existingResult.error) throw new ApiError("internal_error", "读取幂等云理解任务失败", true);
     let job = existingResult.data as unknown as UnderstandJob | null;
     if (job && job.input_manifest_hash !== manifestHash) {
+      if (replication) holdId = undefined;
       throw new ApiError("invalid_request", "幂等键已用于不同的理解内容", false, 409);
     }
-    if (job && job.status !== "uploading") return jobResponse(job, cors);
+    if (job && (replication || job.status !== "uploading")) return jobResponse(job, cors);
     if (job) jobId = job.id;
 
     if (!job) {
@@ -187,7 +206,11 @@ async function createJob(
         pricing_version: held.pricingVersion,
         content_expires_at: new Date(Date.now() + CONTENT_TTL_MS).toISOString(),
       }).select("*").single();
-      if (error || !data) throw new ApiError("internal_error", "创建云理解任务失败", true);
+      if (error || !data) {
+        // A concurrent create can own this same hold. Never roll its credits back.
+        if (replication) holdId = undefined;
+        throw new ApiError("internal_error", "创建云理解任务失败，请按原任务恢复", true);
+      }
       job = data as unknown as UnderstandJob;
       jobId = job.id;
     }
@@ -223,6 +246,35 @@ async function createJob(
   }
 }
 
+async function replicationCapabilities(admin: SupabaseClient) {
+  const prices = await admin.from("service_costs").select("service,unit_cost,active,parameters").in("service", replicationOperations.map(replicationService));
+  if (prices.error) throw new ApiError("internal_error", "读取复刻价格失败", true);
+  return replicationOperations.map(operation => {
+    const row = prices.data?.find(item => item.service === replicationService(operation));
+    const available = replicationPriceAvailable(row);
+    return { operation, available, credits: available ? Number(row!.unit_cost) : null };
+  });
+}
+
+async function readBody(request: Request): Promise<Record<string, unknown>> {
+  const reader = request.body?.getReader();
+  if (!reader) throw new ApiError("invalid_request", "缺少请求正文");
+  const decoder = new TextDecoder(); let bytes = 0; let text = "";
+  try {
+    while (true) {
+      const item = await reader.read(); if (item.done) break;
+      bytes += item.value.byteLength;
+      if (bytes > 50 * 1024 * 1024) { await reader.cancel(); throw new ApiError("payload_too_large", "复刻请求超过大小限制"); }
+      text += decoder.decode(item.value, { stream: true });
+    }
+    text += decoder.decode();
+    const value = JSON.parse(text);
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid");
+    return value;
+  } catch (error) { if (error instanceof ApiError) throw error; throw new ApiError("invalid_request", "请求正文格式错误"); }
+  finally { reader.releaseLock(); }
+}
+
 Deno.serve(async (request) => {
   const id = requestId(request);
   let cors: HeadersInit = {};
@@ -238,10 +290,18 @@ Deno.serve(async (request) => {
     const { user, admin } = await requireUser(request);
     userId = user.id;
     adminClient = admin;
-    const raw = await request.json() as Record<string, unknown>;
+    const raw = await readBody(request);
+    if (raw.action === "replication-capabilities") return jsonResponse({ services: await replicationCapabilities(admin) }, 200, cors);
+    if (raw.action === "get-by-key") {
+      if (typeof raw.idempotency_key !== "string" || raw.idempotency_key.length > 200 || !raw.idempotency_key.startsWith("replication:")) throw new ApiError("invalid_request", "复刻幂等键无效");
+      const result = await admin.from("understand_jobs").select("*").eq("user_id", user.id).eq("idempotency_key", raw.idempotency_key).maybeSingle();
+      if (result.error) throw new ApiError("internal_error", "查回原任务失败", true);
+      if (!result.data) throw new ApiError("invalid_request", "尚未找到原 Cloud 任务，请稍后重查", false, 404);
+      return jobResponse(result.data as UnderstandJob, cors);
+    }
 
     // Server-owned brand prompts are resolved exclusively on the VPS worker.
-    if (asyncMode || raw.instruction === "bowerbird:brand-visual-observation:v2" || raw.action === "get" || typeof raw.job_id === "string") {
+    if (asyncMode || isReplication(raw.operation) || raw.instruction === "bowerbird:brand-visual-observation:v2" || raw.action === "get" || typeof raw.job_id === "string") {
       const action = typeof raw.action === "string" ? raw.action : "";
       const jobId = typeof raw.job_id === "string" ? raw.job_id : "";
       let response: Response;
@@ -270,7 +330,7 @@ Deno.serve(async (request) => {
     holdId = held.holdId;
     await reserveManagedUsage(admin, user.id, holdId, held.estimated);
     const result = await withTimeout(createArkAdapter().understand({
-      operation: body.operation,
+      operation: body.operation as "caption" | "autoname" | "classify",
       image: body.image,
       instruction: body.instruction,
       scenario: body.mock_scenario,

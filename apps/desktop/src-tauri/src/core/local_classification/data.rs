@@ -145,6 +145,10 @@ impl Database {
             return Err(AppError::Other("同名标签已存在，请编辑已有标签".into()));
         }
         let result = if let Some(id) = id {
+            let fixed: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM tags t JOIN asset_tags a ON a.tag_id=t.id JOIN analyses p ON p.asset_id=a.asset_id AND p.kind='replication_source' WHERE t.id=?1 AND t.name='#ai生成')", [id], |r| r.get(0))?;
+            if fixed && name != "#ai生成" {
+                return Err(AppError::Other("视频复刻的 #ai生成 标签不能改名".into()));
+            }
             if tx.execute("UPDATE tags SET name=?2,classification_description=?3,classification_enabled=?4 WHERE id=?1",
                 params![id, name, description.trim(), enabled])? != 1 {
                 return Err(AppError::Other("标签已不存在".into()));
@@ -176,6 +180,8 @@ impl Database {
         let tx = conn.transaction()?;
         let mut deleted = 0;
         for id in ids {
+            let fixed: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM tags t JOIN asset_tags a ON a.tag_id=t.id JOIN analyses p ON p.asset_id=a.asset_id AND p.kind='replication_source' WHERE t.id=?1 AND t.name='#ai生成')", [id], |r| r.get(0))?;
+            if fixed { return Err(AppError::Other("视频复刻的 #ai生成 标签不能删除".into())); }
             deleted += tx.execute("DELETE FROM tags WHERE id=?1", [id])?;
         }
         if deleted > 0 {
@@ -227,7 +233,8 @@ impl Database {
             ids.push(id);
         }
         let old: Vec<String> = {
-            let mut stmt = tx.prepare("SELECT a.tag_id FROM asset_tags a JOIN tags t ON t.id=a.tag_id WHERE a.asset_id=?1 AND t.source=?2")?;
+            let mut stmt = tx.prepare("SELECT a.tag_id FROM asset_tags a JOIN tags t ON t.id=a.tag_id WHERE a.asset_id=?1 AND t.source=?2 \
+                AND NOT (t.name='#ai生成' AND EXISTS(SELECT 1 FROM analyses WHERE asset_id=?1 AND kind='replication_source'))")?;
             let rows = stmt.query_map(params![asset_id, source], |r| r.get(0))?;
             rows.collect::<Result<_, _>>()?
         };
@@ -303,6 +310,8 @@ impl Database {
                 )?;
                 tx.execute("INSERT INTO asset_tags(asset_id,tag_id,origin) VALUES(?1,?2,'manual') ON CONFLICT(asset_id,tag_id) DO UPDATE SET origin='manual'",params![asset,tag])?;
             } else {
+                let fixed: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM tags WHERE id=?1 AND name='#ai生成') AND EXISTS(SELECT 1 FROM analyses WHERE asset_id=?2 AND kind='replication_source')", params![tag,asset], |r| r.get(0))?;
+                if fixed { return Err(AppError::Other("视频复刻素材的 #ai生成 标签不能取消".into())); }
                 tx.execute(
                     "DELETE FROM asset_tags WHERE asset_id=?1 AND tag_id=?2",
                     params![asset, tag],

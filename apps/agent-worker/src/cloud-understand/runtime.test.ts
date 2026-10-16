@@ -3,6 +3,22 @@ import { deepEqual, equal, ok } from "node:assert/strict";
 import { test } from "node:test";
 import { BRAND_OBSERVATION_TASK, loadBrandPrompt } from "../prompts/brand-visual.ts";
 
+test("replication rewrite uses its model and rejects truncated text without retrying", async () => {
+  const input = JSON.stringify({ schema_version: 1, operation: "text-rewrite", image: null, instruction: null, mock_scenario: null, rewrite: { inputText: "原分镜", persona: "编导", rules: "保留节奏", product: null } });
+  let calls = 0;
+  const recorded = await runOnce(async () => { calls++; return { ok: true, status: 200, body: JSON.stringify({ choices: [{ finish_reason: "length", message: { content: "截断" } }] }) }; }, baseConfig({ arkReplicationTextModel: "text-model" }), input);
+  equal(calls, 1); equal(recorded.finishBody, null); equal(recorded.settleBody?.action, "fail");
+  const request = recorded.arkRequestBody as { model: string; messages: { role: string; content: string }[] };
+  equal(request.model, "text-model"); equal(request.messages[0].role, "system"); equal(JSON.parse(request.messages[1].content).referenceText, "原分镜");
+});
+
+test("replication transport uncertainty keeps the original task unknown", async () => {
+  const input = JSON.stringify({ schema_version: 1, operation: "text-rewrite", image: null, instruction: null, mock_scenario: null, rewrite: { inputText: "原文", persona: "编导", rules: "规范", product: null } });
+  let calls = 0;
+  const recorded = await runOnce(async () => { calls++; throw new Error("connection_reset"); }, baseConfig({ arkReplicationTextModel: "text-model" }), input);
+  equal(calls, 1); equal(recorded.settleBody?.action, "outcome_unknown"); equal(recorded.finishBody, null);
+});
+
 import {
   burstBackoffMs,
   configFromEnv,

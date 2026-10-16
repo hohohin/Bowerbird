@@ -4,6 +4,8 @@ import { WORKFLOW_SKILL_ENABLED, WORKFLOW_PLANNER_ENABLED, WORKFLOW_TEMPLATE_LIB
 import { useThumbnailPinch } from "../lib/useThumbnailPinch";
 import { LearningHint } from "./OnboardingTour";
 import { CanvasTextCard } from "./CanvasTextCard";
+import { CanvasToolbox } from "./CanvasToolbox";
+import { VideoReplicationDialog } from "./VideoReplicationDialog";
 import { CanvasWorkflowLayer, WindingKey, type WorkflowLayerHandle, type WorkflowGeometry, type MaterialAnchor } from "./CanvasWorkflowLayer";
 import { canvasConversationCards } from "../lib/canvasConversationCards";
 import { CanvasConversationImages } from "./CanvasConversationImages";
@@ -485,6 +487,8 @@ export function CanvasWorkspace({
   const [folderDropTargetId, setFolderDropTargetId] = useState<string | null>(null);
   const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(() => new Set());
   const [pendingProductGroup, setPendingProductGroup] = useState<{ projectId: string; id: string } | null>(null);
+  const [replicationProjectId, setReplicationProjectId] = useState<string | null>(null);
+  useEffect(() => { setReplicationProjectId(null); }, [projectId]);
   const expandedFolderIdsRef = useRef(expandedFolderIds);
   const [sourceResizing, setSourceResizing] = useState(false);
   const [externalDragOver, setExternalDragOver] = useState(false);
@@ -4195,6 +4199,8 @@ export function CanvasWorkspace({
               onPointerDown={event => { if (event.button !== 0) return; event.preventDefault(); event.stopPropagation(); setDrawingTool("select"); workflowRef.current?.arm(event.clientX, event.clientY); }}
               onClick={event => { if (event.detail === 0) { setDrawingTool("select"); workflowRef.current?.arm(); } }}><WindingKey size={21} /></button>
             <hr />
+            <CanvasToolbox onOpenReplication={() => { setDrawingTool("select"); if (projectId) setReplicationProjectId(projectId); }} />
+            <hr />
             <div className="canvas-assist-tools" role="group" aria-label="辅助">
               <span>辅助</span>
               <button type="button" data-tip={snapEnabled ? "关闭吸附对齐" : "开启吸附对齐"} aria-label="吸附对齐" aria-pressed={snapEnabled} onClick={() => {
@@ -4741,6 +4747,12 @@ export function CanvasWorkspace({
             </button>}
           </div>, document.body,
         )}
+        {replicationProjectId === projectId && replicationProjectId && <VideoReplicationDialog key={replicationProjectId} projectId={replicationProjectId}
+          onClose={() => setReplicationProjectId(null)} ensureProject={async () => {
+            const draft = activeCanvasRef.current;
+            if (!draft || draft.id !== replicationProjectId) throw new Error("项目已切换，请重新打开工具");
+            await ensureMaterialized(draft);
+          }} />}
         {canvasLightbox && (
           <Lightbox
             onAddVideoFrame={addVideoFrame}

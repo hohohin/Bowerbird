@@ -519,6 +519,7 @@ pub fn run() {
             commands::library::list_library_view,
             commands::library::get_assets_by_ids,
             commands::video_poster::video_poster,
+            commands::video_replication::video_replication,
             commands::library::count_assets,
             commands::library::list_folders,
             commands::library::create_folder,

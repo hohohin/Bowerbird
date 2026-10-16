@@ -1,0 +1,45 @@
+import React, { useState } from "react";
+import { createRoot } from "react-dom/client";
+import { CanvasToolbox } from "../../../src/components/CanvasToolbox";
+import { VideoReplicationDialog } from "../../../src/components/VideoReplicationDialog";
+import "../../../src/styles.css";
+import "../../../src/components/CanvasNotes.css";
+
+const w = window as any;
+w.calls = [];
+let tasks = JSON.parse(sessionStorage.getItem("replication-tasks") || "[]");
+let acquisitions: any[] = [];
+w.__TAURI_INTERNALS__ = {
+  convertFileSrc: (path: string) => path,
+  transformCallback: () => 1,
+  metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main" } },
+  invoke: async (command: string, args: any) => {
+    w.calls.push({ command, args });
+    if (command !== "video_replication") throw new Error(`Unexpected IPC ${command}`);
+    const { action, data } = args;
+    if (action === "douyin-list") return structuredClone(acquisitions);
+    if (action === "douyin-create") { const task = { id: "douyin", state: "needs_login", message: "需要登录验证", shareText: data.text, sourceUrl: "https://v.douyin.com/example/" }; acquisitions = [task]; return structuredClone(task); }
+    if (action === "douyin-login") { acquisitions[0] = { ...acquisitions[0], state: "ready", message: "视频已获取", reference: { id: "reference", name: "抖音参考视频.mp4", duration: 8, shareText: acquisitions[0].shareText, originalUrl: "https://www.douyin.com/video/1234567890123456" } }; return structuredClone(acquisitions[0]); }
+    if (action === "media") throw new Error("隔离测试不提供真实媒体文件，历史文本仍保留");
+    if (action === "preferences") return { products: [{ id: "product", name: "白色洗发水", description: "白色瓶身，其他信息待确认" }] };
+    if (action === "capabilities") return { services: ["video-analysis", "text-rewrite"].map(operation => ({ operation, available: location.search.includes("enabled"), credits: 3 })) };
+    if (action === "list") return structuredClone(tasks);
+    if (action === "create") {
+      const task = { ...data, id: crypto.randomUUID(), projectId: args.projectId, createdAt: new Date().toISOString(), state: "rewritten", rewrittenText: "镜头 1：白色瓶身置于台面，镜头缓慢推进。", rewriteOriginalText: "镜头 1：白色瓶身置于台面，镜头缓慢推进。", message: "改写完成", error: "", model: "mock", apiBase: "mock" };
+      tasks.unshift(task); sessionStorage.setItem("replication-tasks", JSON.stringify(tasks)); return structuredClone(task);
+    }
+    if (action === "save-result") { const task = tasks.find((item: any) => item.id === data.id); task.rewrittenText = data.text; sessionStorage.setItem("replication-tasks", JSON.stringify(tasks)); return structuredClone(task); }
+    if (action === "save-preferences") return data;
+    if (action === "sources") return [];
+    throw new Error(`Unexpected action ${action}`);
+  },
+};
+function App() {
+  const [opened, setOpened] = useState(false);
+  return <div style={{ height: "100vh", background: "var(--bb-bg)", color: "var(--bb-ink)", padding: 32 }}><h1>项目画板</h1>
+    <div className="canvas-drawing-tools"><CanvasToolbox onOpenReplication={() => setOpened(true)} /><hr /><div className="canvas-assist-tools" role="group" aria-label="辅助"><span>辅助</span><button aria-label="吸附对齐">⊔</button></div></div>
+    {opened && <VideoReplicationDialog projectId="p" ensureProject={async () => {}} onClose={() => setOpened(false)} />}
+  </div>;
+}
+document.documentElement.dataset.theme = "light";
+createRoot(document.getElementById("root")!).render(<React.StrictMode><App /></React.StrictMode>);
