@@ -17,11 +17,13 @@ use crate::error::AppResult;
 #[tauri::command]
 pub async fn project_canvas_materialize(
     db: State<'_, Arc<Database>>,
-    value: ProjectCanvasMaterializeInput,
+    mut value: ProjectCanvasMaterializeInput,
+    files: State<'_, Arc<crate::core::file_workspace::FileWorkspace>>,
     initial_threads: Vec<NewCreativeThread>,
     initial_nodes: Vec<NewCanvasNode>,
     initial_view: Option<CanvasViewInput>,
 ) -> AppResult<ProjectCanvas> {
+    value.workspace_path = files.project_directory(&value.project_id, &value.name)?.to_string_lossy().into_owned();
     db.materialize_project_canvas(
         &value,
         &initial_threads,

@@ -1,5 +1,19 @@
 # 画板工作流实现与验收
 
+## 视频卡片尾帧图片输出（2026-10-17，源码未发布）
+
+- 原视频素材端口通过 `assetId/assetNodeId`、视频会话通过精确 `canvasNodeId` 交付视频资产，虽标为图片但不提取封面或帧。现在这些图片端口按需交付原始尺寸尾帧 PNG，视频会话端口改标「尾帧图」，普通视频素材端口提示明确尾帧用途。
+- `workflowVideoFrames.ts` 在工作流编译下游输入前处理卡片输出，复用 `videoFrame.ts` 的尾帧寻址与原尺寸 PNG 采集、`importImageBytes(source=video-frame)` 精确字节去重入库。解码器限时加载、等待 seeked 后读取像素，成功/失败均释放源；失败阻断下游，不回退封面或视频文件。仅读取时入库到发起项目，不创建额外画板实例、不调用生成服务；停止后不继续导入或提交下游。
+- 原连接身份不改为某张固定图片，覆盖视频后下次执行重新读取当前文件；同路径地址增加独立修订参数避免旧解码缓存。逐图循环先解析尾帧再冻结迭代输入。工作流生成卡明确标为「视频」的输出仍交付完整视频；直接选择完整视频参考和内容格保存视频的原有专用路径保留。
+- `scripts/video-tail-output.test.mjs` 使用仅最后一帧为黄色的真实 H.264 MP4 验证尾帧像素与 320×180 PNG、普通卡/会话卡/循环写入、旧提示词引用映射、同路径覆写后绿色尾帧、入库失败/损坏视频拒绝、停止不导入及被动画板零提取。既有工作流视频四模式/两渠道/恢复、结果交付与播放器专项通过，TypeScript 通过。全部为本地合成视频与模拟 IPC，未调用模型或操作用户素材；原生 WebView 待实机验收，未打包发布。
+
+## 图片生成卡片对齐 Agent 会话输出（2026-10-17，源码未发布）
+
+- 图片生成卡的新运行沿普通 `startGeneration(..., returnOnStarted: true)`，提交前原子保存 job/turn、会话归属及 `WorkflowStep.generationSubmission: pending`；原生 started 确认后保存 submitted，`outputs.image.nodeIds` 交付精确会话。卡片显示「已提交生成」，会话展示图片进度；provider/比例仍由生成卡自身配置，不改用 Agent 的默认引擎。循环无需等待图片，实际图片消费者复用 Agent 的精确轮次等待与失败阻断。
+- 图片会话恢复普通画板展示，从生成卡图片口自动连到会话；入格后连到对应单元格，独立会话不重复显示，生成历史入口保留。内容 writer 即时保存 `generation_ref`，写入失败沿原交付恢复流程补写，不重投；完成后在原格解析本轮图片。已提交任务独立于工作流停止；未知提交只查询原 job/turn，无回退重投。旧运行无新标记时保持原完成取图恢复，视频生成保持旧执行及展示契约。无需原生接口或数据库迁移。
+- 新增 `canvas-workflow-generation-session.test.mjs` 使用真实 store、模拟 IPC 覆盖三 provider、比例、循环、提交凭据中断/未知/拒绝、入格及交付重载、完成更新、下游等待、停止独立性、旧运行恢复、会话连线/入格落点和历史详情；截图 `.tmp/workflow/generation-session-aligned.png`。串联/分支/重跑、调度、内容交付、Agent 会话/统一图片口/及时入格、会话拖入格、视频兼容和 28 项逻辑、TypeScript/Vite 通过。原测试的生成模拟补齐原生会话/产物投影，引用菜单断言更新为现行管道名称。
+- 广域验收边界：`canvas-workflow-runtime.test.mjs` 的反推主输入追加行断言失败，用 Git HEAD 运行时与原测试复跑相同失败；`creative-canvas.test.mjs` 仍有旧函数提取夹具缺少 `setPendingNewCards`、`useLocalFileMode`、`isVideoPath` 的失败，不归为本轮通过。未调用真实模型、改写用户库、打包或发布。
+
 ## 循环与视觉规范卡结构分享（2026-10-15，源码未发布）
 
 - `.bbworkflow.json` schema v4 支持循环卡 `loopMode/loopStartItem`、当前项与 `iteration → text` 连接，导入重建新卡片 ID、提示词引用及循环执行范围。Agent 保留 `local-ds/codex-cli/cloud` 通道枚举，provider 使用接收方当前选择；原运行进度、请求、结果、会话和缓存均不进入数据包。旧 v1–v3 继续读取，不把新字段伪装成旧版本。

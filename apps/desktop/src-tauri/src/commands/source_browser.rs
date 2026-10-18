@@ -133,12 +133,22 @@ pub async fn open_source_browser(
     let page_load_app = app.clone();
     let title_app = app.clone();
     let new_window_app = app.clone();
+    // A private, narrowly-scoped notification route; no remote Tauri IPC.
+    let drag_token = ulid::Ulid::new().to_string().to_ascii_lowercase();
+    let drag_script = include_str!("source_browser_drag.js")
+        .replace("__BOWERBIRD_DRAG_BRIDGE__", &format!("bowerbird-explorer://{drag_token}"));
+    let popup_drag_token = drag_token.clone();
     let builder = WebviewBuilder::new(SOURCE_BROWSER_LABEL, WebviewUrl::External(url))
         .data_directory(data_directory)
         .disable_drag_drop_handler()
         .initialization_script(include_str!("../../../../extension/candidate-utils.js"))
-        .initialization_script(include_str!("source_browser_drag.js"))
+        .initialization_script(include_str!("../../../src/lib/explorerDragVisual.js"))
+        .initialization_script(&drag_script)
         .on_navigation(move |url| {
+            if url.scheme() == "bowerbird-explorer" {
+                handle_drag_notice(&navigation_app, url, &drag_token);
+                return false;
+            }
             let allowed = navigation_allowed(url);
             if allowed {
                 emit_status(&navigation_app, url, true);
@@ -159,6 +169,10 @@ pub async fn open_source_browser(
             let _ = title_app.emit_to(MAIN_WEBVIEW_LABEL, SOURCE_BROWSER_TITLE_EVENT, title);
         })
         .on_new_window(move |url, _| {
+            if url.scheme() == "bowerbird-explorer" {
+                handle_drag_notice(&new_window_app, &url, &popup_drag_token);
+                return NewWindowResponse::Deny;
+            }
             if navigation_allowed(&url) {
                 let _ = new_window_app.emit_to(
                     MAIN_WEBVIEW_LABEL,
@@ -189,6 +203,40 @@ pub async fn open_source_browser(
         .set_focus()
         .map_err(|error| tauri_error("聚焦素材发现面板失败", error))?;
     Ok(())
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DragNotice {
+    pub id: String,
+    pub image_url: Option<String>,
+    pub page_url: Option<String>,
+}
+
+pub struct SourceDragHandler(pub fn(&AppHandle, bool, DragNotice));
+
+fn parse_drag_notice(url: &Url, token: &str) -> Option<DragNotice> {
+    if url.scheme() != "bowerbird-explorer" || url.host_str() != Some(token)
+        || !matches!(url.path(), "/start" | "/end") || url.as_str().len() > 50_000 { return None; }
+    let payload = url.query_pairs().find(|(key, _)| key == "data")?.1;
+    let notice: DragNotice = serde_json::from_str(&payload).ok()?;
+    if notice.id.len() != 32 || !notice.id.bytes().all(|c| c.is_ascii_hexdigit()) { return None; }
+    if url.path() == "/start" {
+        for raw in [notice.image_url.as_deref()?, notice.page_url.as_deref()?] {
+            if raw.len() > 8192 || parse_http_source_url(raw).is_err() { return None; }
+        }
+    }
+    Some(notice)
+}
+
+fn handle_drag_notice(app: &AppHandle, url: &Url, token: &str) {
+    let Some(notice) = parse_drag_notice(url, token) else { return; };
+    let start = url.path() == "/start";
+    let _ = app.emit_to(MAIN_WEBVIEW_LABEL, "source-browser://drag", serde_json::json!({
+        "phase": if start { "start" } else { "end" }, "id": notice.id,
+        "imageUrl": notice.image_url,
+    }));
+    if let Some(handler) = app.try_state::<SourceDragHandler>() { (handler.0)(app, url.path() == "/start", notice); }
 }
 
 #[tauri::command]
@@ -265,6 +313,22 @@ pub async fn hide_source_browser(app: AppHandle) -> AppResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn drag_notices_require_private_token_and_valid_http_image() {
+        let make = |image: &str| {
+            let mut url = Url::parse("bowerbird-explorer://private/start").unwrap();
+            url.query_pairs_mut().append_pair("data", &serde_json::json!({
+                "id": "a".repeat(32), "imageUrl": image, "pageUrl": "https://example.com/pin/1"
+            }).to_string());
+            url
+        };
+        assert!(parse_drag_notice(&make("https://cdn.example.com/a.jpg"), "private").is_some());
+        assert!(parse_drag_notice(&make("https://cdn.example.com/a.jpg"), "wrong").is_none());
+        for image in ["file:///secret", "javascript:alert(1)", "https://user:pass@example.com/a"] {
+            assert!(parse_drag_notice(&make(image), "private").is_none());
+        }
+    }
 
     #[test]
     fn accepts_http_sources_and_rejects_privileged_schemes() {

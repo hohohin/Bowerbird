@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ArrowLeft, Camera, ChevronDown, Compass, FolderOpen, LayoutDashboard, LoaderCircle, Monitor, Search, Upload, X } from "lucide-react";
+import { ArrowLeft, Camera, ChevronDown, Compass, FolderOpen, LayoutDashboard, LoaderCircle, Search, Upload, X } from "lucide-react";
 import { SidebarStatus } from "./SidebarStatus";
 import { GeneratedImageFilter } from "./GeneratedImageFilter";
+import { MediaTypeFilter } from "./MediaTypeFilter";
 import { useStore } from "../store";
 import { useLocalFileMode } from "../lib/localFileMode";
 import { api } from "../lib/api";
@@ -17,7 +18,6 @@ export function Toolbar({
   onCreateCreative,
   onExplore,
   exploring = false,
-  onLocalFiles,
   localFilesOpen = false,
 }: {
   onRefresh: () => Promise<void>;
@@ -26,7 +26,6 @@ export function Toolbar({
   onCreateCreative: (blank: boolean) => void;
   onExplore?: () => void;
   exploring?: boolean;
-  onLocalFiles?: () => void;
   localFilesOpen?: boolean;
 }) {
   const setLoading = useStore((s) => s.setLoading);
@@ -35,7 +34,6 @@ export function Toolbar({
   const folderQuery = useLocalFileMode(s => s.query);
   const searchQuery = localFilesOpen ? folderQuery : libraryQuery;
   const activeProjectId = useStore((s) => s.activeProjectId);
-  const projects = useStore((s) => s.projects);
   const setLibraryQuery = useStore((s) => s.setSearchQuery);
   const setFolderQuery = useLocalFileMode(s => s.setQuery);
   const setSearchQuery = localFilesOpen ? setFolderQuery : setLibraryQuery;
@@ -44,14 +42,11 @@ export function Toolbar({
   const setCurrentFolder = useStore((s) => s.setCurrentFolder);
   const setCurrentCollection = useStore((s) => s.setCurrentCollection);
   const setSmartFilter = useStore((s) => s.setSmartFilter);
-  const collapsed = useStore((s) => s.projectAssetsCollapsed);
-  const setCollapsed = useStore((s) => s.setProjectAssetsCollapsed);
+  const homeView = useStore(s => s.libraryHomeView);
   const setColorFilter = useStore((s) => s.setColorFilter);
   const [importOpen, setImportOpen] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const importRef = useRef<HTMLDivElement>(null);
-
-  const currentProject = projects.find((p) => p.id === activeProjectId) ?? null;
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -152,10 +147,6 @@ export function Toolbar({
   return (
     <header className={`app-topbar${canvasMode ? "" : " is-library"}`} aria-busy={busy}>
       <div className="app-topbar-leading">
-        <button type="button" className="app-button-secondary local-files-trigger" title="打开本机文件资源管理器"
-          aria-label="打开本机文件资源管理器" aria-expanded={localFilesOpen} onClick={onLocalFiles}>
-          <Monitor size={17} aria-hidden="true" />
-        </button>
         <div ref={importRef} className="app-topbar-import relative">
           <button
             type="button"
@@ -236,9 +227,12 @@ export function Toolbar({
         <input
           ref={searchRef}
           value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder={localFilesOpen ? "搜索当前文件夹…" : currentProject ? `搜索 ${currentProject.name} 中的素材…` : "搜索素材…"}
-          aria-label={localFilesOpen ? "搜索当前文件夹" : "搜索素材"}
+          onChange={(e) => {
+            setSearchQuery(e.target.value);
+            if (canvasMode && !localFilesOpen && e.target.value) useStore.getState().setCanvasLibraryOpen(true);
+          }}
+          placeholder={localFilesOpen ? "搜索当前文件夹…" : !canvasMode && homeView === "projects" ? "搜索项目…" : "搜索素材…"}
+          aria-label={localFilesOpen ? "搜索当前文件夹" : !canvasMode && homeView === "projects" ? "搜索项目" : "搜索素材"}
         />
         {searchQuery ? (
           <button
@@ -256,16 +250,10 @@ export function Toolbar({
       </div>
 
       <div className="app-topbar-actions" aria-label="视图与任务">
-        {!localFilesOpen && <div className="app-topbar-view-controls" role="group" aria-label="素材视图">
+        {!localFilesOpen && (canvasMode || homeView === "library") && <div className="app-topbar-view-controls" role="group" aria-label="素材视图">
           <GeneratedImageFilter />
-          {!canvasMode && (
-            <div className="library-view-control">
-              <div className="library-view-segments" role="group" aria-label="项目素材视图">
-                <button type="button" aria-pressed={collapsed} onClick={() => setCollapsed(true)}>收起</button>
-                <button type="button" aria-pressed={!collapsed} onClick={() => setCollapsed(false)}>展开</button>
-              </div>
-            </div>
-          )}
+          <MediaTypeFilter />
+
         </div>}
         <button type="button" aria-label="截图" title="区域截图（可在设置 → 个性化与记忆中修改快捷键）"
           className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted hover:bg-panel2 hover:text-ink"

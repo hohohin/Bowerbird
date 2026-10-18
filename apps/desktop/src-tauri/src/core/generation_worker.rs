@@ -235,6 +235,7 @@ pub async fn finalize_generation_assets(
     let db_b = db.clone();
     let paths_b = paths.clone();
     let gen_assets: Vec<Asset> = tokio::task::spawn_blocking(move || -> AppResult<Vec<Asset>> {
+        let paths_b = paths_b.for_project(&db_b, project_id.as_deref())?;
         let mut out: Vec<Asset> = Vec::new();
         for src in &src_images {
             out.push(ingest::ingest_generated(

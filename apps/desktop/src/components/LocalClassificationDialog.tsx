@@ -29,15 +29,15 @@ function JevResults({ progress }: { progress: NonNullable<LocalClassificationSta
       <h5 className="font-medium">Jev 返回结果</h5>
       <p className="text-xs text-muted break-all">素材：{progress.asset.name}</p>
       <p className="text-xs" role="status">{progress.message}</p>
-      <p className="text-xs text-muted">类型、风格、主体分别选一个标签；各维度内按候选概率排序。自动分类仅通过 Cloud 补充未匹配的维度。</p>
+      <p className="text-xs text-muted">所有启用标签统一按原始概率排序，最多取 4 个且每个不低于 30%；「无明显匹配项」参与判断，不保存为标签。</p>
       {!report && <p className="text-xs text-muted">暂无 Jev 返回内容</p>}
     </div>
     {report && <>
-      {report.dimensions.map(dimension => <section key={dimension.dimension} aria-label={`Jev ${dimension.title}结果`} className="border-t border-edge">
+      <section aria-label="Jev 标签排名" className="border-t border-edge">
         <div className="space-y-1 bg-panel2 px-3 py-2 text-xs">
-          <h6 className="font-medium">{dimension.title} · Choice</h6>
-          <p>{dimension.no_match === null ? "结果不完整，未采用" : dimension.no_match ? "此维度无已有匹配标签" : "已选出此维度的标签"}</p>
-          <p className="text-muted">{report.model}{dimension.confidence !== null && ` · 置信度 ${(dimension.confidence * 100).toFixed(2)}%`}</p>
+          <h6 className="font-medium">全部候选 · Choice</h6>
+          <p>{report.no_match === null ? "结果不完整，未采用" : report.no_match ? "没有真实标签达到 30%，转 Cloud 补充" : "已按概率与 30% 门槛选出标签"}</p>
+          <p className="text-muted">{report.model}{report.confidence !== null && ` · 置信度 ${(report.confidence * 100).toFixed(2)}%`}</p>
         </div>
         <div className="max-h-64 overflow-y-auto">
           <table className="w-full table-fixed text-xs">
@@ -46,10 +46,10 @@ function JevResults({ progress }: { progress: NonNullable<LocalClassificationSta
               <th className="px-3 py-2 font-normal">概率</th>
             </tr></thead>
             <tbody>
-              {dimension.labels.map((label, index) => <tr key={label.key} className={`border-b border-edge align-top ${label.selected ? "bg-cold/5" : ""}`}>
+              {report.labels.map((label, index) => <tr key={label.key} className={`border-b border-edge align-top ${label.selected ? "bg-cold/5" : ""}`}>
                 <td className="px-3 py-3">
                   <p className="break-all text-[10px] font-medium">{label.probability !== null ? `${index + 1}. ` : ""}{label.name}</p>
-                  {label.selected && <p className="mt-1 text-cold">{label.key === "no_match" ? "本维度无匹配" : "选中标签"}</p>}
+                  {label.selected && <p className="mt-1 text-cold">选中标签</p>}
                   <p className="mt-1 whitespace-pre-wrap break-words leading-relaxed text-muted">{label.description}</p>
                 </td>
                 <td className="px-3 py-3">
@@ -66,10 +66,9 @@ function JevResults({ progress }: { progress: NonNullable<LocalClassificationSta
             </tbody>
           </table>
         </div>
-        {dimension.error && <p className="p-3 text-xs text-red-400">{dimension.error}</p>}
-      </section>)}
+      </section>
       <div className="space-y-2 p-3">
-        <p className="text-xs text-muted">每个维度取 Jev 返回的最高概率选项，各维度之间不比较概率。整图完成后保存为普通标签，重复标签只保存一次。</p>
+        <p className="text-xs text-muted">使用候选原始概率，不重新归一化，也不以 Choice 整体置信度代替。只有没有合格标签时才由 Cloud 补充。</p>
         {report.error && <p className="text-xs text-red-400">本图未采用：{report.error}</p>}
         <details className="text-xs">
           <summary className="cursor-pointer text-muted">查看 Jev 原始返回</summary>
@@ -80,15 +79,17 @@ function JevResults({ progress }: { progress: NonNullable<LocalClassificationSta
   </section>;
 }
 
-export function LocalClassificationDialog({ onClose, folder, selectedFiles, onFilter }: { onClose: () => void; folder?: { root: string; recursive: boolean }; selectedFiles?: Set<string>; onFilter?: (id: string) => void }) {
+export function LocalClassificationDialog({ onClose, folder, selectedFiles, onFilter, initialView = "classification" }: { onClose: () => void; folder?: { root: string; recursive: boolean }; selectedFiles?: Set<string>; onFilter?: (id: string) => void; initialView?: "classification" | "labels" }) {
   const [target, setTarget] = useState(folder);
-  return <ClassificationSettings key={target?.root ?? "library"} onClose={onClose} folder={target} selectedFiles={target?.root === folder?.root ? selectedFiles : undefined} onFilter={target?.root === folder?.root ? onFilter : undefined} onTarget={setTarget} />;
+  return <ClassificationSettings key={target?.root ?? "library"} initialView={initialView} onClose={onClose} folder={target} selectedFiles={target?.root === folder?.root ? selectedFiles : undefined} onFilter={target?.root === folder?.root ? onFilter : undefined} onTarget={setTarget} />;
 }
 
-function ClassificationSettings({ onClose, folder, selectedFiles, onFilter, onTarget }: {
+function ClassificationSettings({ onClose, folder, selectedFiles, onFilter, onTarget, initialView }: {
   onClose: () => void; folder?: { root: string; recursive: boolean }; selectedFiles?: Set<string>; onFilter?: (id: string) => void;
   onTarget: (folder: {root:string; recursive:boolean} | undefined) => void;
+  initialView: "classification" | "labels";
 }) {
+  const [view, setView] = useState(initialView);
   const [recursive, setRecursive] = useState(folder?.recursive ?? false);
   const local = folder ? folderClassification.client(folder.root, recursive) : localClassification;
   const [status, setStatus] = useState<LocalClassificationStatus | null>(null);
@@ -192,13 +193,13 @@ function ClassificationSettings({ onClose, folder, selectedFiles, onFilter, onTa
     });
   }
 
-  return <><ModalShell title="自动分类" width="lg" onClose={onClose} preventClose={deleting.length > 0}
-    description="选择分类方式，再识别素材。标签与人工修正由两种方式共用。">
+  return <><ModalShell title={view === "labels" ? "管理分类数据" : "自动分类"} width="lg" onClose={onClose} preventClose={deleting.length > 0}
+    description={view === "labels" ? "管理分类标签、说明与人工示例。" : "选择分类方式，再识别素材。标签与人工修正由两种方式共用。"}>
     <div className="space-y-5 text-sm">
       <section className="space-y-2" aria-label="分类目标">
         <p className="font-medium">分类目标：{folder ? "指定文件夹" : "素材库"}</p>
         {folder && <><p className="break-all text-xs">{folder.root}</p><p className="text-xs text-muted">仅处理图片，记录保存在此目录的 .bowerbird 中，标签与主库隔离。</p>
-          <label className="flex items-center gap-2"><input type="checkbox" checked={recursive} disabled={busy} onChange={e => setRecursive(e.target.checked)} />包含子文件夹</label></>}
+          {view === "classification" && <label className="flex items-center gap-2"><input type="checkbox" checked={recursive} disabled={busy} onChange={e => setRecursive(e.target.checked)} />包含子文件夹</label>}</>}
         <div className="flex gap-2">
           {folder && <button className="app-modal-button" disabled={busy} onClick={() => onTarget(undefined)}>选择素材库</button>}
           <button className="app-modal-button" disabled={busy} onClick={() => void action(async () => {
@@ -210,6 +211,8 @@ function ClassificationSettings({ onClose, folder, selectedFiles, onFilter, onTa
         {status?.busy && !sameTarget && <div className="space-y-2"><p role="status">另一分类范围的任务正在运行，完成或停止后可处理当前目标。</p><button className="app-modal-button" disabled={working} onClick={() => void action(() => local.stop())}>停止当前任务</button></div>}
       </section>
       {error && <p role="alert" className="text-red-400">{error}</p>}
+      {view === "labels" && <button className="app-modal-button" onClick={() => setView("classification")}>自动分类设置</button>}
+      {view === "classification" && <>
       <fieldset disabled={!configLoaded || busy} className="space-y-2">
         <legend className="font-medium mb-2">分类方式</legend>
         <div className="grid grid-cols-2 gap-3">
@@ -240,11 +243,11 @@ function ClassificationSettings({ onClose, folder, selectedFiles, onFilter, onTa
           <ol className="grid gap-3 sm:grid-cols-2">
             <li className="rounded bg-panel2 p-3 space-y-1">
               <p className="font-medium">1. Jev 匹配已有标签</p>
-              <p className="text-xs text-muted">一次按类型、风格、主体进行三个 Choice 判断，每个维度从已有标签与「无匹配」中选一个。</p>
+              <p className="text-xs text-muted">所有启用标签及「无明显匹配项」一起判断。按候选概率降序，最多选 4 个真实标签，低于 30% 的不选入；不限制标签维度。</p>
             </li>
             <li className="rounded bg-panel2 p-3 space-y-1">
-              <p className="font-medium">2. Cloud 补充新标签</p>
-              <p className="text-xs text-muted">只为选中「无匹配」的维度调用豆包，每个缺失维度最多补一个标签；保存为普通标签。</p>
+              <p className="font-medium">2. Cloud 复核与补充</p>
+              <p className="text-xs text-muted">没有真实标签达到 30% 时，由豆包按完整词表优先复用已有标签；确实缺少类别才新增一个，附边界定义、排除情况与新增理由。看不清或类型不确定时返回「无法判断」。</p>
             </li>
           </ol>
           <label className="block space-y-2">
@@ -257,7 +260,7 @@ function ClassificationSettings({ onClose, folder, selectedFiles, onFilter, onTa
           <p className="text-xs text-muted">启用后，缩略图、人工正反例图片及标签说明会发送给 TypeSafe；无匹配时将目标缩略图发送给 Bowerbird Cloud。Jev 按 TypeSafe 规则计费。</p>
           <details className="text-xs text-muted">
             <summary className="cursor-pointer">云端处理说明</summary>
-            <p className="mt-2">Jev 图片能力目前为实验功能。首次切换会重新处理旧引擎识别过的素材。调用失败时不写入该图结果，自动处理会暂停；单标签寻找匹配不会生成新标签。</p>
+            <p className="mt-2">Jev 图片能力目前为实验功能。历史 Jev 结果不会自动重扫；需要使用新规则时请显式重新识别。调用失败时不写入该图结果，自动处理会暂停；单标签寻找匹配不会生成新标签。</p>
           </details>
         </> : <>
           <div>
@@ -322,6 +325,7 @@ function ClassificationSettings({ onClose, folder, selectedFiles, onFilter, onTa
         </div>
       </section>
 
+      </>}
       <div className="border-t border-edge pt-4 space-y-1">
         <h3 className="font-medium">标签管理</h3>
         <p className="text-xs text-muted">两种方式共用已有标签、说明与人工示例。手动添加的标签会保留，移除的标签不会自动贴回。</p>
@@ -391,7 +395,7 @@ function ClassificationSettings({ onClose, folder, selectedFiles, onFilter, onTa
   </ModalShell>
     <ConfirmDialog open={deleting.length > 0} title={deleting.length === 1 ? `删除标签「${deleting[0].name}」` : `删除 ${deleting.length} 个标签`}
       message={<>
-        将从全部素材中移除这些标签，并删除相关示例、排除记录和待匹配任务。素材文件会保留，此操作无法撤销。后续重新识别仍可能生成同名标签。
+        {folder ? "将从此文件夹的分类记录中移除这些标签，并删除相关示例、排除记录和待匹配任务。仅影响上述分类范围，独立分类目录和素材库不受影响。" : "将从全部素材中移除这些标签，并删除相关示例、排除记录和待匹配任务。"}素材文件会保留，此操作无法撤销。后续重新识别仍可能生成同名标签。
         {error && <span role="alert" className="block text-red-400">{error}</span>}
       </>}
       confirmLabel={working ? "正在删除…" : "确认删除"} danger confirmDisabled={busy}

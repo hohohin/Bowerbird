@@ -62,7 +62,8 @@ try {
     }
     // Narrow search remains editable and clearable; menus remain unclipped.
     await page.setViewportSize({ width: 900, height: 900 });
-    await page.getByRole("button", { name: "打开本机文件资源管理器", exact: true }).focus();
+    assert.equal(await page.getByRole("button", { name: "打开本机文件资源管理器", exact: true }).count(), 0);
+    await page.getByRole("button", { name: "导入", exact: true }).focus();
     await page.keyboard.press("/");
     assert.equal(await page.getByRole("textbox", { name: "搜索素材", exact: true }).evaluate(el => el === document.activeElement), true);
     await page.getByRole('textbox', { name: '搜索素材', exact: true }).fill('长搜索词测试');

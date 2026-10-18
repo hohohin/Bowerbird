@@ -172,7 +172,7 @@ pub fn import(
     let result = (|| -> AppResult<()> {
         for asset in pack.tables.get_mut("assets").unwrap() {
             let id = asset["id"].as_str().unwrap().to_string();
-            let store = paths.asset_store_path(&id, asset["ext"].as_str().unwrap());
+            let store = paths.asset_store_path(&id, asset["ext"].as_str().unwrap())?;
             let thumb = paths.thumb_path(&id);
             asset["origin_path"] = dir
                 .join(asset["origin_path"].as_str().unwrap())

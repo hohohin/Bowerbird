@@ -24,12 +24,8 @@ export interface LocalClassificationStatus {
     message: string;
     report: {
       model: string;
-      dimensions: {
-        dimension: "type" | "style" | "subject"; title: string;
-        confidence: number | null; no_match: boolean | null;
-        labels: { key: string; name: string; description: string; probability: number | null; selected: boolean | null }[];
-        error: string | null;
-      }[];
+      confidence: number | null; no_match: boolean | null;
+      labels: { key: string; name: string; description: string; probability: number | null; selected: boolean | null }[];
       error: string | null; response: unknown;
     } | null;
   } | null;

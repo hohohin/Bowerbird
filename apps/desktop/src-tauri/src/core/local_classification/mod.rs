@@ -1,5 +1,6 @@
 //! Automatic classification supports local matching or explicit Jev image API judgment.
 mod cloud;
+pub mod explorer;
 pub mod folder;
 pub mod data;
 pub mod jev;
@@ -13,7 +14,7 @@ use serde::Serialize;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -66,15 +67,23 @@ pub struct LocalClassifier {
     gate: Arc<tokio::sync::Mutex<()>>,
     cancel: AtomicBool,
     status: Mutex<Status>,
+    background: AtomicBool,
+    foreground_requests: AtomicUsize,
 }
 
 impl LocalClassifier {
+    pub fn folder_records_root(&self) -> PathBuf {
+        // Keep user records outside the downloadable/removable model package.
+        self.root.parent().unwrap_or(&self.root).join("folder-records")
+    }
     pub fn new(root: PathBuf) -> Self {
         Self {
             root,
             gate: Arc::new(tokio::sync::Mutex::new(())),
             cancel: AtomicBool::new(false),
             status: Mutex::new(Status::default()),
+            background: AtomicBool::new(false),
+            foreground_requests: AtomicUsize::new(0),
         }
     }
 
@@ -107,6 +116,10 @@ impl LocalClassifier {
         self.cancel.store(true, Ordering::Relaxed);
     }
 
+    fn should_yield(&self) -> bool {
+        self.background.load(Ordering::Relaxed) && self.foreground_requests.load(Ordering::Relaxed) > 0
+    }
+
     pub fn start(
         self: &Arc<Self>,
         app: AppHandle,
@@ -116,6 +129,13 @@ impl LocalClassifier {
         tag: Option<String>,
         jev_key: Option<String>,
         pending_only: bool,
+    ) -> Result<(), String> {
+        self.start_run(app, db, library, install, tag, jev_key, pending_only, false)
+    }
+
+    fn start_run(
+        self: &Arc<Self>, app: AppHandle, db: Arc<Database>, library: Arc<LibraryPaths>,
+        install: bool, tag: Option<String>, jev_key: Option<String>, pending_only: bool, background: bool,
     ) -> Result<(), String> {
         let needs_local = install || jev_key.is_none();
         if needs_local && !runtime::supported() {
@@ -140,6 +160,7 @@ impl LocalClassifier {
             }
         }
         self.cancel.store(false, Ordering::Relaxed);
+        self.background.store(background, Ordering::Relaxed);
         self.update(&app, |s| {
             *s = Status {
                 busy: true,
@@ -174,6 +195,10 @@ impl LocalClassifier {
                     .await
             };
             let cancelled = this.cancel.load(Ordering::Relaxed);
+            let pause_automatic = background && (result.is_err() || this.status.lock().unwrap().failed > 0);
+            // Record this run's failure before handing the gate to a queued drag;
+            // a later owner's status must not be mistaken for this scan's result.
+            if pause_automatic { let _ = db.set_local_enabled(false); }
             this.update(&app, |s| {
                 s.busy = false;
                 if cancelled && s.current_asset.is_some() {
@@ -203,6 +228,7 @@ impl LocalClassifier {
                         }
                     })
                 };
+                if pause_automatic { s.message.push_str("；自动处理已暂停"); }
             });
             let _ = app.emit("library://assets-changed", ());
         });
@@ -346,7 +372,7 @@ impl LocalClassifier {
                 app.state::<crate::cloud::AuthClient>().inner().clone(),
             );
             let save_error = Mutex::new(None);
-            self.run_jev_queue(
+            let completed = self.run_jev_queue(
                 db,
                 library,
                 &targets,
@@ -368,7 +394,7 @@ impl LocalClassifier {
             )
             .await;
             if let Some(error) = save_error.into_inner().unwrap() { return Err(error); }
-            if !self.cancel.load(Ordering::Relaxed) && self.status.lock().unwrap().failed == 0 {
+            if completed && !self.cancel.load(Ordering::Relaxed) && self.status.lock().unwrap().failed == 0 {
                 if let Some(tag) = tag {
                     db.finish_local_label(&tag, job_revision)
                         .map_err(|e| e.to_string())?;
@@ -449,7 +475,9 @@ impl LocalClassifier {
             app.state::<crate::cloud::CloudClient>().inner().clone(),
             app.state::<crate::cloud::AuthClient>().inner().clone(),
         );
+        let mut completed = true;
         for (index, id) in targets.iter().enumerate() {
+            if self.should_yield() { completed = false; break; }
             if self.cancel.load(Ordering::Relaxed) {
                 break;
             }
@@ -523,7 +551,7 @@ impl LocalClassifier {
         if let Some(server) = server.as_mut() {
             server.stop().await;
         }
-        if !self.cancel.load(Ordering::Relaxed) && self.status.lock().unwrap().failed == 0 {
+        if completed && !self.cancel.load(Ordering::Relaxed) && self.status.lock().unwrap().failed == 0 {
             if let Some(tag) = tag {
                 db.finish_local_label(&tag, job_revision)
                     .map_err(|e| e.to_string())?;
@@ -715,21 +743,33 @@ impl LocalClassifier {
         labels: &[data::Label],
         record_observation: bool,
     ) -> Result<pipeline::PendingClassification, String> {
-        // Keep the vocabulary seen by this image. Other Cloud tasks may create the same
-        // tag meanwhile; the save transaction reuses it without losing this association.
-        let discovery_labels = if record_observation {
-            db.local_labels().map_err(|e| e.to_string())?
-        } else {
-            Vec::new()
-        };
         let image = Self::jev_image(db, library, id).await?;
+        self.prepare_jev_image(judge, db, library, id, revision, labels, record_observation, image).await
+    }
+
+    async fn prepare_jev_image(
+        &self,
+        judge: &jev::Judge,
+        db: &Database,
+        library: &LibraryPaths,
+        id: &str,
+        revision: i64,
+        labels: &[data::Label],
+        record_observation: bool,
+        image: Vec<u8>,
+    ) -> Result<pipeline::PendingClassification, String> {
+        let evaluated = labels.iter().map(|label| label.id.clone()).collect();
+        let current_labels = db.local_labels().map_err(|e| e.to_string())?;
+        // Legacy dimension caches, including `other`, never exclude an enabled label.
+        let labels: Vec<_> = current_labels.iter()
+            .filter(|l| l.enabled && labels.iter().any(|original| original.id == l.id)).cloned().collect();
         let mut prediction = data::Prediction {
             description: String::new(),
             tags: vec![],
             matches: vec![],
         };
         let mut questions = Vec::new();
-        for label in labels {
+        for label in &labels {
             if self.cancel.load(Ordering::Relaxed) {
                 return Err("已停止分类".into());
             }
@@ -746,40 +786,35 @@ impl LocalClassifier {
                 examples,
             });
         }
-        // Three Choice questions share the ordinary label pool; dimensions are transient.
+        // One shared candidate pool; empty vocabulary goes straight to Cloud.
+        let mut preview = Vec::new();
         let decisions = judge
             .classify(&image, &questions, &self.cancel, |value, error| {
+                let report = jev::Report::from_response(&questions, value, error);
+                preview = report.preview();
                 let mut status = self.status.lock().unwrap();
                 if let Some(progress) = status.jev_progress.as_mut().filter(|p| p.asset.id == id) {
-                    progress.report = Some(jev::Report::from_response(&questions, value, error));
+                    progress.report = Some(report);
                     progress.message =
-                        "Jev 已返回类型、风格、主体三个维度的结果，等待此图处理完成".into();
+                        "Jev 已返回全部候选概率，按前四名且不低于 30% 筛选，等待此图处理完成".into();
                 }
             })
             .await?;
-        for index in decisions.iter().flatten() {
+        for index in &decisions {
             let id = &labels[*index].id;
             if !prediction.matches.contains(id) {
                 prediction.matches.push(id.clone());
             }
         }
-        let missing: Vec<_> = jev::Dimension::ALL
-            .into_iter()
-            .zip(decisions)
-            .filter_map(|(dimension, choice)| choice.is_none().then_some(dimension))
-            .collect();
+        let needs_discovery = record_observation && decisions.is_empty();
         Ok(pipeline::PendingClassification {
+            preview,
             id: id.into(),
             revision,
             prediction,
             record_observation,
-            evaluated: labels.iter().map(|label| label.id.clone()).collect(),
-            discovery_labels,
-            missing: if record_observation {
-                missing
-            } else {
-                Vec::new()
-            },
+            evaluated,
+            needs_discovery,
         })
     }
 
@@ -790,7 +825,7 @@ impl LocalClassifier {
         mut pending: pipeline::PendingClassification,
     ) -> Result<(), String> {
         let mut definitions = Vec::new();
-        if !pending.missing.is_empty() {
+        if pending.needs_discovery {
             if db.local_revision().map_err(|e| e.to_string())? != pending.revision {
                 return Err("标签已被人工修改，请重试此素材".into());
             }
@@ -799,17 +834,20 @@ impl LocalClassifier {
                 .local_image_path(&pending.id)
                 .map_err(|e| e.to_string())?
                 .ok_or("图片已删除或缺少缩略图")?;
+            // Queued images must see tags created since their Jev request, too.
+            let current_labels = db.local_labels().map_err(|e| e.to_string())?;
             let discovered = cloud::discover(
                 provider,
                 PathBuf::from(path),
-                &pending.discovery_labels,
-                &pending.missing,
+                &current_labels,
                 &self.cancel,
             )
             .await?;
-            for label in discovered {
+            pending.prediction.matches.extend(discovered.matches);
+            pending.prediction.description = discovered.description;
+            for label in discovered.labels {
                 pending.prediction.tags.push(label.name.clone());
-                definitions.push((label.name, label.definition));
+                definitions.push(label);
             }
         }
         if self.cancel.load(Ordering::Relaxed) {
@@ -876,6 +914,7 @@ pub fn watch(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths>) {
             if !db.local_enabled().unwrap_or(false) {
                 continue;
             }
+            if classifier.foreground_requests.load(Ordering::Relaxed) > 0 { continue; }
             let jev_key = {
                 let settings = app.state::<crate::core::settings::SettingsState>();
                 let snapshot = settings.get();
@@ -900,7 +939,7 @@ pub fn watch(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths>) {
                     .is_ok_and(|ids| !ids.is_empty())
             {
                 if classifier
-                    .start(
+                    .start_run(
                         app.clone(),
                         db.clone(),
                         paths.clone(),
@@ -908,24 +947,14 @@ pub fn watch(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths>) {
                         tag,
                         jev_key,
                         true,
+                        true,
                     )
                     .is_err()
                 {
                     continue;
                 }
-                // A failed asset is retried on explicit action or app restart, not every 15 seconds.
-                while classifier.status.lock().unwrap().busy {
-                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                }
-                let status = classifier.status.lock().unwrap().clone();
-                if status.failed > 0 || status.phase == "error" {
-                    let _ = db.set_local_enabled(false);
-                    classifier.update(&app, |s| s.message.push_str("；自动处理已暂停"));
-                    let _ = app.emit(
-                        "local-classification://progress",
-                        classifier.snapshot(&db).unwrap_or_default(),
-                    );
-                }
+                // start_run pauses automatic retries on its own failure before
+                // releasing the gate. Do not inspect a future owner's status here.
             }
         }
     });

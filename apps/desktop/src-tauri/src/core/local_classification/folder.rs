@@ -49,7 +49,21 @@ impl Default for Record {
 pub struct FolderView {
     pub root: String,
     pub record: Record,
+    pub storage: String,
 }
+
+pub(crate) fn local_record_root(root: &Path, local: &Path) -> PathBuf {
+    use sha2::{Digest, Sha256};
+    let key = root.to_string_lossy();
+    #[cfg(target_os = "windows")]
+    let key = key.to_lowercase();
+    local.join(format!("{:x}", Sha256::digest(key.as_bytes())))
+}
+fn record_root(root: &Path, local: Option<&Path>) -> PathBuf {
+    local.map(|p| local_record_root(root, p)).filter(|p| p.join(RECORD).is_file())
+        .unwrap_or_else(|| root.to_path_buf())
+}
+fn has_record(root: &Path, local: Option<&Path>) -> bool { record_root(root, local).join(RECORD).is_file() }
 
 fn safe_relative(path: &str) -> bool {
     !path.is_empty()
@@ -83,6 +97,9 @@ pub fn read(root: &Path) -> Result<Record, String> {
     if record.version != 1 {
         return Err("此文件夹分类版本不受支持，请升级应用".into());
     }
+    if record.labels.iter().any(|l| l.dimension.as_deref().is_some_and(|d| d != "other" && !matches!(d, "subject" | "type" | "style" | "mood"))) {
+        return Err("分类记录包含无效标签维度，原文件已保留".into());
+    }
     let ids: HashSet<_> = record.labels.iter().map(|l| l.id.as_str()).collect();
     let pictures: HashSet<_> = record.pictures.iter().map(|p| p.id.as_str()).collect();
     let paths: HashSet<_> = record.pictures.iter().map(|p| p.path.as_str()).collect();
@@ -103,17 +120,22 @@ pub fn read(root: &Path) -> Result<Record, String> {
     Ok(record)
 }
 pub fn view(path: &str) -> Result<FolderView, String> {
+    view_with_storage(path, None)
+}
+pub fn view_with_storage(path: &str, local: Option<&Path>) -> Result<FolderView, String> {
     let directory = fs::canonicalize(path).map_err(|e| e.to_string())?;
     if !directory.is_dir() {
         return Err("请选择文件夹".into());
     }
     for root in directory.ancestors() {
-        if root.join(RECORD).is_file() {
-            let record = read(root)?;
+        if has_record(root, local) {
+            let storage_root = record_root(root, local);
+            let record = read(&storage_root)?;
             if root == directory || record.recursive {
                 return Ok(FolderView {
                     root: root.to_string_lossy().into_owned(),
                     record,
+                    storage: if storage_root == root { "folder" } else { "local" }.into(),
                 });
             }
             break;
@@ -122,7 +144,52 @@ pub fn view(path: &str) -> Result<FolderView, String> {
     Ok(FolderView {
         root: directory.to_string_lossy().into_owned(),
         record: Record::default(),
+        storage: "folder".into(),
     })
+}
+
+pub fn tagged_images(path: &str, tag_id: &str) -> Result<Vec<external_files::FileEntry>, String> {
+    tagged_images_with_storage(path, tag_id, None)
+}
+pub fn tagged_images_with_storage(path: &str, tag_id: &str, local: Option<&Path>) -> Result<Vec<external_files::FileEntry>, String> {
+    let directory = fs::canonicalize(path).map_err(|e| e.to_string())?;
+    let scope = view_with_storage(path, local)?;
+    let root = PathBuf::from(&scope.root);
+    let mut entries = Vec::new();
+    let mut allowed_directories = HashMap::new();
+    for picture in scope.record.pictures {
+        if !picture.tags.iter().any(|(id, _)| id == tag_id) {
+            continue;
+        }
+        let file = root.join(&picture.path);
+        if !file.starts_with(&directory)
+            || (!scope.record.recursive && file.parent() != Some(root.as_path()))
+            || !external_files::image_path(&file)
+        {
+            continue;
+        }
+        // Records survive missing files and changes in scope. Only show existing
+        // images still owned by this catalog, without reading their pixels.
+        let allowed = file.parent().into_iter().flat_map(Path::ancestors)
+            .take_while(|parent| *parent != root)
+            .all(|parent| *allowed_directories.entry(parent.to_path_buf()).or_insert_with(|| {
+                fs::symlink_metadata(parent).is_ok_and(|m| m.is_dir() && !m.file_type().is_symlink())
+                    && !has_record(parent, local)
+            }));
+        if !allowed || !fs::symlink_metadata(&file).is_ok_and(|m| m.is_file() && !m.file_type().is_symlink()) {
+            continue;
+        }
+        if !fs::canonicalize(&file).is_ok_and(|p| p.starts_with(&root) && p.starts_with(&directory)) {
+            continue;
+        }
+        entries.push(external_files::FileEntry {
+            name: file.file_name().unwrap().to_string_lossy().into_owned(),
+            path: file.to_string_lossy().into_owned(),
+            directory: false,
+        });
+    }
+    entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then_with(|| a.path.cmp(&b.path)));
+    Ok(entries)
 }
 
 #[cfg(test)]
@@ -159,6 +226,41 @@ mod tests {
         }
     }
     #[test]
+    fn tag_results_flatten_only_existing_images_in_the_current_subtree() {
+        let f = Fixture::new();
+        fs::create_dir_all(f.root.join("a/sub/deep")).unwrap();
+        fs::create_dir_all(f.root.join("a/submarine")).unwrap();
+        for path in ["a/p.png", "a/sub/n.png", "a/sub/deep/d.png", "a/submarine/s.png"] {
+            f.image(path, 10);
+        }
+        let a = f.open("a");
+        a.scan(&f.cache, true, &AtomicBool::new(false)).unwrap();
+        let tag = a.db.save_local_label(None, "自然", "", true).unwrap();
+        a.db.local_example(&tag, &a.db.local_targets(true).unwrap(), true).unwrap();
+        a.save().unwrap();
+        let root = a.root.clone();
+        drop(a);
+        let before = fs::read(root.join(RECORD)).unwrap();
+        let all = tagged_images(root.to_str().unwrap(), &tag).unwrap();
+        assert_eq!(all.len(), 4);
+        assert!(all.iter().all(|e| !e.directory));
+        let sub = tagged_images(root.join("sub").to_str().unwrap(), &tag).unwrap();
+        assert_eq!(sub.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["d.png", "n.png"]);
+        assert!(tagged_images(root.to_str().unwrap(), "unknown").unwrap().is_empty());
+        fs::remove_file(root.join("p.png")).unwrap();
+        let nested = f.open("a/sub/deep");
+        nested.save().unwrap();
+        drop(nested);
+        let remaining = tagged_images(root.to_str().unwrap(), &tag).unwrap();
+        assert_eq!(remaining.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["n.png", "s.png"]);
+        assert_eq!(fs::read(root.join(RECORD)).unwrap(), before); // browsing never rewrites the catalog
+        let mut record = read(&root).unwrap();
+        record.recursive = false; // old descendant records may remain after shrinking the scope
+        fs::write(root.join(RECORD), serde_json::to_vec(&record).unwrap()).unwrap();
+        assert!(tagged_images(root.to_str().unwrap(), &tag).unwrap().is_empty());
+    }
+
+    #[test]
     fn folder_records_isolate_labels_and_move_without_original_copies() {
         let f = Fixture::new();
         f.image("a/p.png", 10);
@@ -169,6 +271,7 @@ mod tests {
             a.db.save_local_label(None, "产品", "仅目录 A", true)
                 .unwrap();
         a.db.local_example(&tag, &[id.clone()], true).unwrap();
+        a.db.cache_label_dimensions(a.db.local_revision().unwrap(), &a.db.local_labels().unwrap(), &["subject".into()]).unwrap();
         a.save().unwrap();
         let text = fs::read_to_string(a.root.join(RECORD)).unwrap();
         assert!(!text.contains(&f.root.to_string_lossy().replace('\\', "\\\\")));
@@ -184,6 +287,7 @@ mod tests {
             .scan(&f.cache, false, &AtomicBool::new(false))
             .unwrap();
         assert_eq!(moved.db.local_labels().unwrap()[0].name, "产品");
+        assert_eq!(moved.db.local_labels().unwrap()[0].dimension.as_deref(), Some("subject"));
         assert_eq!(moved.db.local_targets(true).unwrap(), vec![id]);
     }
     #[test]
@@ -237,6 +341,39 @@ mod tests {
         );
     }
     #[test]
+    #[cfg(windows)]
+    fn readonly_catalog_uses_persistent_local_records_and_preserves_scope() {
+        let f = Fixture::new();
+        f.image("a/p.png", 10); f.image("a/sub/n.png", 20);
+        let a = f.open("a");
+        a.scan(&f.cache, true, &AtomicBool::new(false)).unwrap(); a.save().unwrap();
+        let root = a.root.clone(); drop(a);
+        let original = fs::read(root.join(RECORD)).unwrap();
+        let mut permissions = fs::metadata(root.join(RECORD)).unwrap().permissions();
+        permissions.set_readonly(true); fs::set_permissions(root.join(RECORD), permissions).unwrap();
+        let local = f.root.join("persistent-records");
+        let a = Session::open_with_storage(root.to_str().unwrap(), Some(&local)).unwrap();
+        assert_ne!(a.storage_root, root);
+        a.scan(&f.cache, true, &AtomicBool::new(false)).unwrap();
+        let tag = a.db.save_local_label(None, "本机分类", "", true).unwrap();
+        a.db.local_example(&tag, &a.db.local_targets(true).unwrap(), true).unwrap(); a.save().unwrap();
+        assert!(Session::open_with_storage(root.to_str().unwrap(), Some(&local)).is_err());
+        drop(a);
+        let view = view_with_storage(root.to_str().unwrap(), Some(&local)).unwrap();
+        assert_eq!(view.storage, "local");
+        assert_eq!(tagged_images_with_storage(root.to_str().unwrap(), &tag, Some(&local)).unwrap().len(), 2);
+        let nested = Session::open_with_storage(root.join("sub").to_str().unwrap(), Some(&local)).unwrap();
+        nested.save().unwrap(); drop(nested);
+        assert_eq!(tagged_images_with_storage(root.to_str().unwrap(), &tag, Some(&local)).unwrap().len(), 1);
+        assert_eq!(fs::read(root.join(RECORD)).unwrap(), original);
+        let mut permissions = fs::metadata(root.join(RECORD)).unwrap().permissions();
+        permissions.set_readonly(false); fs::set_permissions(root.join(RECORD), permissions).unwrap();
+        // Restoring permission does not overwrite either version silently.
+        let reopened = Session::open_with_storage(root.to_str().unwrap(), Some(&local)).unwrap();
+        assert_ne!(reopened.storage_root, root);
+        assert_eq!(reopened.db.local_labels().unwrap()[0].name, "本机分类");
+    }
+    #[test]
     fn writer_lock_and_invalid_records_preserve_last_good_data() {
         let f = Fixture::new();
         let a = f.open("a");
@@ -285,6 +422,8 @@ pub struct Session {
     record: Mutex<Record>,
     lock: PathBuf,
     token: String,
+    storage_root: PathBuf,
+    local: Option<PathBuf>,
 }
 impl Drop for Session {
     fn drop(&mut self) {
@@ -295,14 +434,41 @@ impl Drop for Session {
 }
 impl Session {
     pub fn open(root: &str) -> Result<Self, String> {
+        Self::open_with_storage(root, None)
+    }
+    pub fn open_with_storage(root: &str, local: Option<&Path>) -> Result<Self, String> {
         let root = fs::canonicalize(root).map_err(|e| e.to_string())?;
         if !root.is_dir() {
             return Err("请选择文件夹".into());
         }
-        let metadata = root.join(".bowerbird");
-        fs::create_dir_all(&metadata).map_err(|e| format!("无法在目标文件夹保存分类数据：{e}"))?;
+        let mut storage_root = record_root(&root, local);
+        // Validate existing data before falling back; corruption is never treated as no permission.
+        let record = read(&storage_root)?;
+        let prepare = |storage: &Path| -> std::io::Result<()> {
+            fs::create_dir_all(storage.join(".bowerbird"))?;
+            if !fs::canonicalize(storage.join(".bowerbird"))?.starts_with(fs::canonicalize(storage)?) {
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "分类数据目录不能链接到目标文件夹之外"));
+            }
+            if storage.join(RECORD).exists() { fs::OpenOptions::new().write(true).open(storage.join(RECORD))?; }
+            let probe = storage.join(".bowerbird").join(format!("{}.probe", uuid::Uuid::new_v4()));
+            let file = fs::OpenOptions::new().write(true).create_new(true).open(&probe)?;
+            drop(file); fs::remove_file(probe)
+        };
+        if let Err(error) = prepare(&storage_root) {
+            let readonly = error.kind() == std::io::ErrorKind::PermissionDenied
+                || (cfg!(unix) && error.raw_os_error() == Some(30));
+            if !readonly || storage_root != root || local.is_none() {
+                return Err(format!("无法保存分类数据：{error}"));
+            }
+            storage_root = local_record_root(&root, local.unwrap());
+            prepare(&storage_root).map_err(|e| format!("本机分类资料无法保存：{e}"))?;
+            crate::core::file_workspace::write_json(&storage_root.join("source.json"), &serde_json::json!({
+                "version": 1, "root": root, "storage": "local"
+            })).map_err(|e| e.to_string())?;
+        }
+        let metadata = storage_root.join(".bowerbird");
         let resolved = fs::canonicalize(&metadata).map_err(|e| e.to_string())?;
-        if !resolved.starts_with(&root) {
+        if !resolved.starts_with(fs::canonicalize(&storage_root).map_err(|e| e.to_string())?) {
             return Err("分类数据目录不能链接到目标文件夹之外".into());
         }
         let lock = metadata.join("classification.lock");
@@ -317,13 +483,12 @@ impl Session {
             return Err(e.to_string());
         }
         let result = (|| {
-            let record = read(&root)?;
             let db = Arc::new(Database::open_in_memory().map_err(|e| e.to_string())?);
             db.migrate().map_err(|e| e.to_string())?;
             {
                 let conn = db.conn.lock().unwrap();
                 for l in &record.labels {
-                    conn.execute("INSERT INTO tags(id,name,source,classification_description,classification_enabled) VALUES(?1,?2,'auto',?3,?4)",params![l.id,l.name,l.description,l.enabled]).map_err(|e| e.to_string())?;
+                    conn.execute("INSERT INTO tags(id,name,source,classification_description,classification_enabled,classification_dimension) VALUES(?1,?2,'auto',?3,?4,?5)",params![l.id,l.name,l.description,l.enabled,l.dimension]).map_err(|e| e.to_string())?;
                 }
                 for p in &record.pictures {
                     conn.execute("INSERT INTO assets(id,name,ext,source,created_at) VALUES(?1,?2,'png','folder',0)",params![p.id,p.path]).map_err(|e| e.to_string())?;
@@ -356,6 +521,8 @@ impl Session {
                 record: Mutex::new(record),
                 lock: lock.clone(),
                 token: token.clone(),
+                storage_root,
+                local: local.map(Path::to_path_buf),
             })
         })();
         if result.is_err() {
@@ -390,7 +557,7 @@ impl Session {
                 }
                 let path = entry.path();
                 if kind.is_dir() {
-                    if recursive && !path.join(RECORD).is_file() {
+                    if recursive && !has_record(&path, self.local.as_deref()) {
                         directories.push(path);
                     }
                     continue;
@@ -519,7 +686,7 @@ impl Session {
         if bytes.len() as u64 > MAX_RECORD_BYTES {
             return Err("分类记录超过大小限制".into());
         }
-        let temporary = self.root.join(format!(".bowerbird/{}.tmp", self.token));
+        let temporary = self.storage_root.join(format!(".bowerbird/{}.tmp", self.token));
         let result = (|| -> Result<(), String> {
             let mut file = fs::OpenOptions::new()
                 .write(true)
@@ -530,7 +697,7 @@ impl Session {
                 .and_then(|_| file.sync_all())
                 .map_err(|e| e.to_string())?;
             drop(file);
-            fs::rename(&temporary, self.root.join(RECORD))
+            fs::rename(&temporary, self.storage_root.join(RECORD))
                 .map_err(|e| format!("保存失败，上一份分类记录已保留：{e}"))?;
             Ok(())
         })();
@@ -558,9 +725,10 @@ impl LocalClassifier {
             .clone()
             .try_lock_owned()
             .map_err(|_| "请先停止分类任务，再修改文件夹标签")?;
+        let local = self.folder_records_root();
         tokio::task::spawn_blocking(move || {
             let _guard = guard;
-            let session = Session::open(&root)?;
+            let session = Session::open_with_storage(&root, Some(&local))?;
             let result = match action.as_str() {
                 "save" => Some(
                     session
@@ -618,6 +786,7 @@ impl LocalClassifier {
             return Err("请先安装本地分类模型".into());
         }
         self.cancel.store(false, Ordering::Relaxed);
+        self.background.store(false, Ordering::Relaxed);
         self.update(&app, |s| {
             *s = Status {
                 busy: true,
@@ -640,7 +809,7 @@ impl LocalClassifier {
                 let worker = this.clone();
                 let cache = paths.clone();
                 let session = tokio::task::spawn_blocking(move || {
-                    let session = Session::open(&root)?;
+                    let session = Session::open_with_storage(&root, Some(&worker.folder_records_root()))?;
                     session.scan(&cache, recursive, &worker.cancel)?;
                     session.save()?;
                     Ok::<_, String>(session)

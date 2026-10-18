@@ -1,7 +1,7 @@
 import { cloudVideoOptions } from "../lib/videoGeneration";
 import { beginOnboardingOperation } from "../lib/onboardingStore";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { DEFAULT_VIDEO_OPTIONS, VIDEO_RATIOS, videoInputError, videoProvider, type GenerationSettings } from "../lib/videoGeneration";
+import { DEFAULT_VIDEO_OPTIONS, VIDEO_RATIOS, imageInputError, videoInputError, videoProvider, type GenerationSettings } from "../lib/videoGeneration";
 import { VideoControls } from "./creation/VideoControls";
 import { useStore } from "../store";
 import { canStartAnotherAgentRun, canStartAnotherJob, canUseAgentRun, canUseByo } from "../lib/entitlement";
@@ -217,6 +217,9 @@ export function CreationBoard({
     const timer = window.setTimeout(() => {
       if (!loadPrompt(promptLoadRequest)) return;
       setGeneration(promptLoadRequest.generation ?? { media: "image" });
+      if (promptLoadRequest.generation?.media === "video") {
+        setCloudAgentMode(false); setAgentMode("off"); setAgentZMode(false); setAgentGMode(false); setAgentDsMode(false);
+      }
       if (promptLoadRequest.generation?.ratio !== undefined) setRatio(promptLoadRequest.generation.ratio ?? null);
       appliedPromptLoadRef.current = promptLoadRequest.id;
       setBoardActive(true);
@@ -382,6 +385,7 @@ export function CreationBoard({
       // 在弹层处理按键前记录状态，防止同一次 Esc 关闭弹层后继续退出创作。
       const state = useStore.getState();
       escapeBlocked = composing || event.isComposing || event.keyCode === 229
+        || !!hostRef.current?.closest("[inert]")
         || !!state.captionRing || !!state.contextMenu
         || !!document.querySelector(
           '[role="dialog"][aria-modal="true"], [role="menu"], [role="listbox"], [aria-haspopup][aria-expanded="true"]',
@@ -473,6 +477,8 @@ export function CreationBoard({
       ? "即梦"
       : "codex";
   const sendTooltipId = useId();
+  const referenceError = !isVideo && !cloudAgentMode && !agentZMode && !agentGMode && !agentDsMode
+    ? imageInputError(references) : null;
   const sendDisabledReason = submitting
     ? "正在提交指令，任务启动后即可继续生成。"
     : agentZBusy
@@ -499,7 +505,7 @@ export function CreationBoard({
               ? !(rawPrompt || finalPrompt).trim() ? "请先输入创作要求。" : null
               : agentBusy
                 ? "Agent 正在整理意图，请等待处理完成。"
-                : targetUnavailableReason
+                : referenceError ?? targetUnavailableReason
                   ?? (!canStartAnotherJob(cloudEntitlement, runningJobCount)
                     ? "已达当前档位的并行生成上限，请等待已有任务完成或取消任务。"
                     : !finalPrompt ? "请先输入创作要求或添加参考内容。" : null);
@@ -545,6 +551,7 @@ export function CreationBoard({
     };
     const isCurrentSubmission = () => submissionClaim.isCurrent() && isCurrentWorkspace();
     if (!isCurrentSubmission()) return;
+    if (referenceError) { notifyError(referenceError, "参考素材不适用"); return; }
     if (isVideo) {
       const error = videoInputError(videoOptions, references, ratio, activeGenProvider);
       if (error) { notifyError(error, "视频参数无效"); return; }
@@ -1068,6 +1075,7 @@ export function CreationBoard({
         />
         {/* 编辑框内 image/keyword chip 的交互浮层（hover 放大图/维度正文 + 点击定位瀑布流） */}
         <BoardChipPreview hostRef={hostRef} />
+        {referenceError && <p role="alert" className="px-3 py-1 text-xs text-red-400">{referenceError}</p>}
         {/* 工具栏：对话框底部一行——左端帮助，中间快捷参数，右端发送（主题自适应按钮）。 */}
         <div className="generation-toolbar flex flex-wrap items-center gap-2">
           <div className="group relative flex shrink-0 items-center">

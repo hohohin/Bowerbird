@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { invokeGenerationWithDiagnostics } from "./generationDiagnostics";
 import type { LibraryView } from "./libraryView";
 import type { WorkflowTemplate } from "./workflowTemplates";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -71,6 +72,7 @@ export interface SourceBrowserBounds {
 
 export const api = {
   videoPoster: (sourcePath: string) => invoke<string | null>("video_poster", { sourcePath }),
+  trimVideo: (request: import("./videoTrim").VideoTrimRequest, projectId?: string) => invoke<Asset>("trim_video", { ...request, projectId: projectId ?? null }),
   canvasWorkflowGet: (projectId: string) => invoke<import("./canvasWorkflow").WorkflowSnapshot>("canvas_workflow_get", { projectId }),
   workflowTemplatesList: () => invoke<WorkflowTemplate[]>("workflow_templates_list"),
   workflowEncapsulate: (projectId: string, revision: number, name: string, members: string[], bounds: { id: string; x: number; y: number; width: number; height: number }[], template: WorkflowTemplate | null) =>
@@ -442,8 +444,13 @@ export const api = {
     invoke<void>("open_source_browser", { url, bounds }),
   resizeSourceBrowser: (bounds: SourceBrowserBounds, visible?: boolean, dimmed?: boolean) =>
     invoke<void>("resize_source_browser", { bounds, visible, dimmed }),
-  captureSourceBrowserImage: (imageUrl: string, pageUrl: string, projectId: string | null) =>
-    invoke<Asset>("capture_source_browser_image", { imageUrl, pageUrl, projectId }),
+  captureSourceBrowserImage: (imageUrl: string, pageUrl: string, projectId: string | null, dragId?: string) =>
+    invoke<Asset>("capture_source_browser_image", { imageUrl, pageUrl, projectId, ...(dragId ? { dragId } : {}) }),
+  claimSourceBrowserAnalysis: (dragId: string, imageUrl: string, pageUrl: string) =>
+    invoke<boolean>("claim_source_browser_analysis", { dragId, imageUrl, pageUrl }),
+  releaseSourceBrowserAnalysis: (dragId: string) => invoke<void>("release_source_browser_analysis", { dragId }),
+  finishSourceBrowserAnalysis: (dragId: string, assetId: string) =>
+    invoke<string[]>("finish_source_browser_analysis", { dragId, assetId }),
   navigateSourceBrowser: (url: string) => invoke<void>("navigate_source_browser", { url }),
   sourceBrowserBack: () => invoke<void>("source_browser_back"),
   sourceBrowserForward: () => invoke<void>("source_browser_forward"),
@@ -532,7 +539,7 @@ export const api = {
     /** 失败重试叠放锚点：被重试失败轮的 prompt 节点 id，新卡原样落它的位置。 */
     retryAnchorNodeId?: string | null;
   }) =>
-    invoke<string>("codex_create_image", {
+    invokeGenerationWithDiagnostics({
       internalAgent: req.internalAgent ?? false,
       media: req.media ?? "image",
       videoOptions: req.videoOptions ?? null,
@@ -558,7 +565,8 @@ export const api = {
       parentAssetPath: req.parentAssetPath ?? null,
       creativeRelation: req.creativeRelation ?? null,
       retryAnchorNodeId: req.retryAnchorNodeId ?? null,
-    }),
+    }, invoke),
+  generationDiagnostics: (jobId: string) => invoke<{ schemaVersion: number; jobId: string; attempts: unknown[]; task: unknown }>("generation_diagnostics", { jobId }),
   cancelCodexCreate: (jobId: string) => invoke<void>("cancel_codex_create", { jobId }),
   // 启动恢复（Task 5）：列出未完成生成 job，前端挂载时拉取重建 genJobs（恢复中 job 可见）。
   listGenJobs: () => invoke<GenJobSummary[]>("list_gen_jobs"),

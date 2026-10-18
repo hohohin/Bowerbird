@@ -7,6 +7,7 @@ use crate::{
 };
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State, Webview};
+use crate::core::local_classification::explorer::ExplorerAnalysis;
 
 fn capture_url(raw: &str) -> AppResult<tauri::Url> {
     let url = super::source_browser::parse_http_source_url(raw)?;
@@ -31,7 +32,8 @@ fn import_capture(
             return Err(AppError::Other("采集目标项目已被删除，未导入图片".into()));
         }
     }
-    let asset = ingest::ingest_from_bytes(paths, db, bytes, page_url, None, None, "extension")?;
+    let paths = paths.for_project(db, project_id)?;
+    let asset = ingest::ingest_from_bytes(&paths, db, bytes, page_url, None, None, "extension")?;
     if let Some(id) = project_id {
         db.add_assets_to_project(id, std::slice::from_ref(&asset.id))?;
     }
@@ -47,10 +49,13 @@ pub async fn capture_source_browser_image(
     image_url: String,
     page_url: String,
     project_id: Option<String>,
+    drag_id: Option<String>,
 ) -> AppResult<Asset> {
     if webview.label() != "main" {
         return Err(AppError::Other("只允许从素材库接收拖入图片".into()));
     }
+    let original_image = image_url.clone();
+    let original_page = page_url.clone();
     let image_url = capture_url(&image_url)?;
     let page_url = capture_url(&page_url)?;
     let browser = app
@@ -69,7 +74,15 @@ pub async fn capture_source_browser_image(
             return Err(AppError::Other("采集目标项目已不存在".into()));
         }
     }
-    let bytes = browser_bytes(&browser, image_url.as_str()).await?;
+    let analysis = app.state::<ExplorerAnalysis>();
+    let preview = if let Some(id) = &drag_id {
+        analysis.claim(id, &original_image, &original_page);
+        analysis.bytes(id, &original_image, &original_page).await.ok().flatten()
+    } else { None };
+    let bytes = match preview {
+        Some(bytes) => bytes,
+        None => Arc::new(browser_bytes(&browser, image_url.as_str()).await?),
+    };
     let paths = paths.inner().clone();
     let db = db.inner().clone();
     let import_db = db.clone();
@@ -77,16 +90,50 @@ pub async fn capture_source_browser_image(
         import_capture(
             &paths,
             &import_db,
-            &bytes,
+            bytes.as_slice(),
             page_url.as_str(),
             project_id.as_deref(),
         )
     })
     .await
     .map_err(|e| AppError::Other(e.to_string()))??;
+    if let Some(id) = &drag_id { analysis.bind(id, &asset.id); }
     crate::core::autoname::spawn_auto_analyze(app.clone(), db, asset.clone());
     let _ = app.emit("library://assets-changed", ());
     Ok(asset)
+}
+
+#[tauri::command]
+pub fn claim_source_browser_analysis(
+    app: AppHandle, webview: Webview, analysis: State<'_, ExplorerAnalysis>, drag_id: String, image_url: String, page_url: String,
+) -> AppResult<bool> {
+    if webview.label() != "main" { return Err(AppError::Other("只允许主窗口确认采集".into())); }
+    capture_url(&image_url)?;
+    capture_url(&page_url)?;
+    if !app.state::<Arc<Database>>().local_enabled()? {
+        analysis.release(&drag_id);
+        return Ok(false);
+    }
+    // A missed/expired dragstart must not silently turn off classification.
+    if !analysis.claim(&drag_id, &image_url, &page_url) {
+        analysis.begin(&app, drag_id.clone(), image_url.clone(), page_url.clone()).map_err(AppError::Other)?;
+    }
+    Ok(analysis.claim(&drag_id, &image_url, &page_url))
+}
+
+#[tauri::command]
+pub fn release_source_browser_analysis(webview: Webview, analysis: State<'_, ExplorerAnalysis>, drag_id: String) -> AppResult<()> {
+    if webview.label() != "main" { return Err(AppError::Other("只允许主窗口取消采集".into())); }
+    analysis.release(&drag_id);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn finish_source_browser_analysis(
+    app: AppHandle, webview: Webview, analysis: State<'_, ExplorerAnalysis>, drag_id: String, asset_id: String,
+) -> AppResult<Vec<String>> {
+    if webview.label() != "main" { return Err(AppError::Other("只允许主窗口完成采集".into())); }
+    analysis.finish(&app, &drag_id, &asset_id).await.map_err(AppError::Other)
 }
 
 #[cfg(test)]

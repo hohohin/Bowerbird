@@ -4,9 +4,27 @@
 > 当前契约：项目是一块画板；视觉规范独立保存，项目仅引用所选版本；旧用户可见会话不迁移、不 backfill，素材、文件、项目、计费和底层执行审计继续保留。
 > 本页保留数据边界与验收，已删除被替代的 CS 方案和 PB 历史回填执行单。历史实现见 Git。
 
+## 2026-10-16：生成失败诊断补齐（源码未发布）
+
+生成会话的可检索身份为 `GenJob.id` / `job_id`。前端获得 ID 不等于后端已接单；旧流程在预检、权限等阶段退出时没有 task_queue 或画板节点，导致 ID 无法定位错误。
+
+0035 增加独立的 `generation_diagnostics` 表，以 `attempt_id` 保存每次请求，按 `job_id` 索引。前端先调用 `begin_generation_diagnostic` 保存原始请求，再调用生成 IPC；参数解码错误由前端补记，执行函数内部的提前返回由原生 `track_attempt` 统一收尾。未带诊断编号的调用仍在原生入口记录。阶段更新包含显式输入与续轮合并后的参考路径、扩展名、存在性；`generation_diagnostics(jobId)` 返回全部尝试及当前任务记录。诊断查询不恢复、不重发任务。
+
+诊断记录不是可执行任务；未完成收尾仅表示记录中断，不能据此声称模型失败或成功。会话详情右键可复制完整报告，包含可选的当前内存快照；旧版本未持久化的失败不伪造历史。无需补写或改动原画板/素材关系。类型/浏览器与隔离数据库验证不代替付费模型验收；原生更新后执行迁移才生效。
+
 ---
 
 ## 0. 一页结论
+
+### 2026-10-18：画布内合成区域
+
+产品约定见 PROJECT.md「画布内合成画板」。此区域不是一级项目画板或新增 Agent Runner；复用 `note_type: section` 加 `artboard: { base_asset_id: string | null }`，旧分区不受影响。Rust note 白名单接受该字段并限制为 section，基底注册项目成员；前端精确素材 hydration 同时读取基底 ID。移除边框不删除中央素材，基底物理删除后合成拒绝，禁止以空白悄悄替换。
+
+`canvasArtboard.ts` 负责原图实例、object-fit 的实际图像矩形、相对像素坐标、裁切、层序与引用编号；同图实例不合并，原图附件按资产 ID 去重。`artboardRaster.ts` 通过既有 `read_image_data_url` 读取原图并保留透明区域，生成拼放 PNG 与干净基底编号红框 PNG。两张图与几何在打开合成窗口时一起冻结，像素基准长边最多 2048；画板范围以图片实际显示矩形为准，卡片边框和标题不计入。`CanvasArtboardDialog` 保存临时引用并调用现有普通生图入口，保留项目/线程/原实例对应关系；路由变更、原图缺失、超出参考数量和临时图失败不提交，提交按钮防重入。原图尺寸不等于模型最终输出分辨率，比例沿现有 provider 档位规则。
+
+验证入口：`node --experimental-strip-types --test scripts/canvas-artboard.test.mjs`、`node scripts/canvas-artboard-ui.test.mjs`、`node scripts/canvas-section-resize-ui.test.mjs`（均在 apps/desktop），以及 `cargo test --locked --offline --lib core::project_canvas::tests`。浏览器使用合成 IPC，Rust 使用内存库；没有真实模型消费或正式素材库写入。原生数据字段要求前后端一起更新，旧后端会拒绝新字段。
+
+扩展回归边界：合成画板、文本/画板逻辑合跑 47/50 通过，`creative-canvas.test.mjs` 的三个函数抽取夹具缺 `isVideoPath/useStore` 绑定，未改相应产品代码；本轮混合拖动夹具已补入新增 `expandArtboardSelection` 和原有 `setPendingNewCards`。`canvas-workflow-clipboard.test.mjs` 通过复制/粘贴数量检查后在 `copied workflow executes` 断言失败，尚未归因，不能宣称工作流完整回归通过。新增画板交互、透明像素、参考图准备失败零提交、请求坐标/引用、深浅色与窄窗口专项通过，截图在本机 `.tmp/canvas-artboard/`。
 
 Bowerbird 的用户侧一级创作对象收敛为“项目”：
 
@@ -622,4 +640,20 @@ UI command
 16. 调整画板素材栏右上角滑块时，缩略图按三档即时切换大小；切换项目或重启后仍保留选择，画板节点尺寸与缩放值保持不变。
 17. 新开空项目时默认处于浏览模式：点击单素材打开原图，点击素材组在画板原位置展开全部成员；聚焦创作框后，素材组仍只展开，单素材按当前单图约定加入创作框或打开维度环，退出创作模式后单图立即恢复预览行为。空白处按下并向任意方向拖动可立即框选多个素材，浏览与创作模式语义一致（2026-09-19 起创作模式同样允许框选），Shift 拖动框选可追加，普通空白点击清空框选；全程保持系统默认箭头光标。框选与拖动卡片（含文本便签）期间不得出现原生文字蓝底选区：便签容器 user-select 关闭（单元格 textarea 编辑选字不受影响），框选起点的 preventDefault 双模式生效。进入创作模式后画板蓝框、顶部刘海和编辑框蓝边应同步出现，退出后同步消失。
 18. 框选多个节点后拖动其中任一节点，所有已选节点保持原相对位置同步移动并逐项持久化；多选移动不能触发建组。右键已选素材应保留选区并打开与素材库一致的菜单，菜单顶部可一次移出全部选中节点；Delete/Backspace、工具栏“移除”和任一已选节点的移除按钮结果一致，均只修改画板，不删除中央素材。
-19. 新提交的普通生成指令卡或 Agent 卡锚定在当前可视区域左上角（被占时就近避让），不跟随引用图临时位置、不强制居中视角；视频 asset 卡带 `is-video` 独立样式与 ▶ 徽标；文本卡表格支持整表复制 CSV、行高/列宽拖拽（payload `column_widths`/`row_heights`，Escape 取消）与 T 图标右侧标题编辑。2026-09-20 起以 reference/notes/media UI 回归与 Rust note 契约测试为准。
+19. 新提交普通生成／Agent 卡片的落位与相机规则见下方「新生成卡片就近放置」，产品约定以 PROJECT.md 最新条目为准。视频 asset 卡及文本卡表格沿各自专项；历史 reference/notes/media UI 与 Rust note 契约测试不能替代最新规则验收。
+
+### 新生成卡片就近放置（2026-10-16）
+
+调研采用官方资料：
+
+- [yFiles 增量布局](https://www.yworks.com/pages/incremental-diagram-layout)：新增节点应尽量保留已有图形的相对位置，避免一次增量导致全图变化。
+- [yFiles 局部布局](https://docs.yworks.com/yfiles-html/dguide/partial_layout/)：可以固定已有图形，将新增部分安置在原位置或邻居附近。
+- [tldraw 坐标系统](https://tldraw.dev/sdk-features/coordinates)：持久画布坐标与屏幕／视口坐标分别处理；视角改变不应改写内容位置。
+
+针对本项目选择轻量局部插入，不引入全图自动布局库。原实现存在三条互相竞争的规则：后端全图最右端／引用节点旧坐标作为初值，前端碰撞时回退视口扫描，新卡又强制居中。折叠结果、拥挤位置和远处无关节点会放大跳动。
+
+`canvasReferencePlacement.ts` 负责可见来源解析与基于障碍边缘的就近搜索；间距使用固定画布单位，距离排序含稳定的方向平局规则。`CanvasWorkspace` 在当前挂载期间首次收到新卡时，以 DOM 实际尺寸和可见会话／素材组边界计算最终位置；先按引用顺序确定主锚点，避免多张分散引用的包围框角落落在所有图片之外。无可见来源时使用可用视口中心。分区框排除于障碍，已有素材不搬动；手动操作取消该卡尚未执行的自动落位。新卡队列逐项处理，避免一次快照只处理最后一张。相机调整与坐标计算分开，卡片可见即保持视图；Agent Run 接替已落位的启动卡，续轮折叠不重新摆放原会话。
+
+验证：`canvas-card-placement.test.mjs`、`canvas-reference-placement.test.mjs`、`canvas-logic.test.mjs`、`canvas-conversation-cards.test.mjs` 合计 37 项通过；`canvas-reference-ui.test.mjs` 覆盖远处初值、普通／分阶段 Agent、折叠结果、素材组、分区、同批双卡、手动位置、刷新与重载，`canvas-conversation-cards-ui.test.mjs` 验证图片与端口交互；TypeScript 通过。使用合成 IPC，未操作正式库或调用真实模型。
+
+边界：本轮改动为前端首次显示新卡时的最终落位，不对旧项目重排，不改后端离线投影或工作流手动放置契约。后台运行期间画板未挂载时仍保存既有后端坐标；重新打开项目沿恢复坐标，不以新规则覆盖历史。源码未打包发布。

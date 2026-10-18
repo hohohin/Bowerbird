@@ -10,14 +10,15 @@ use std::time::Duration;
 
 const CLOUD_CONCURRENCY: usize = 4;
 
+#[derive(Clone)]
 pub(super) struct PendingClassification {
     pub id: String,
     pub revision: i64,
     pub prediction: data::Prediction,
     pub record_observation: bool,
     pub evaluated: Vec<String>,
-    pub discovery_labels: Vec<data::Label>,
-    pub missing: Vec<jev::Dimension>,
+    pub needs_discovery: bool,
+    pub preview: Vec<jev::PreviewLabel>,
 }
 
 impl LocalClassifier {
@@ -30,7 +31,7 @@ impl LocalClassifier {
         judge: &jev::Judge,
         cloud: &dyn UnderstandProvider,
         notify: impl Fn(bool),
-    ) {
+    ) -> bool {
         let mut waiting = VecDeque::<PendingClassification>::new();
         let mut analysis: FuturesUnordered<
             BoxFuture<'_, (String, Result<PendingClassification, String>)>,
@@ -38,11 +39,15 @@ impl LocalClassifier {
         let mut completions: FuturesUnordered<BoxFuture<'_, (String, Result<(), String>)>> =
             FuturesUnordered::new();
         let mut next = 0;
+        let mut yielding = false;
         loop {
             if self.cancel.load(Ordering::Relaxed) {
                 // Dropping the scoped futures cancels local waits; no detached writer survives.
                 break;
             }
+            // Finish in-flight Jev/Cloud work, then let an explorer capture take
+            // the gate. The watcher will resume the remaining DB targets later.
+            yielding |= self.should_yield();
             while completions.len() < CLOUD_CONCURRENCY {
                 let Some(pending) = waiting.pop_front() else {
                     break;
@@ -55,7 +60,7 @@ impl LocalClassifier {
                     .boxed(),
                 );
             }
-            if analysis.is_empty() && next < targets.len() {
+            if !yielding && analysis.is_empty() && next < targets.len() {
                 let id = &targets[next];
                 let asset = db.get_asset(id).ok().flatten();
                 let current = CurrentAsset {
@@ -132,10 +137,9 @@ impl LocalClassifier {
                         status.current_asset = None;
                     }
                     match result {
-                        Ok(pending) if !pending.missing.is_empty() => {
-                            let dimensions = pending.missing.iter().map(|d| d.title()).collect::<Vec<_>>().join("、");
+                        Ok(pending) if pending.needs_discovery => {
                             if let Some(progress) = self.status.lock().unwrap().jev_progress.as_mut() {
-                                progress.message = format!("{}{}已加入 Cloud 补标签队列，Jev 继续分析下一张", if progress.report.is_none() { "没有启用的已有标签，未调用 Jev；" } else { "" }, dimensions);
+                                progress.message = format!("{}已加入 Cloud 补标签队列，Jev 继续分析下一张", if progress.report.is_none() { "没有启用标签，未调用 Jev；" } else { "没有真实标签达到 30%；" });
                             }
                             waiting.push_back(pending);
                         }
@@ -176,6 +180,7 @@ impl LocalClassifier {
         }
         drop(status);
         notify(false);
+        next == targets.len() && !self.cancel.load(Ordering::Relaxed)
     }
 
     fn complete_jev_asset(&self, id: &str, result: &Result<(), String>) {

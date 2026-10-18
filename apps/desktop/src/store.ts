@@ -1,4 +1,6 @@
+import { prepareFileWorkspace } from "./lib/fileWorkspace";
 import { create } from "zustand";
+import { filterAssetsByMediaType, type MediaFilter } from "./lib/mediaFilter";
 import { readThumbnailWidth, saveThumbnailWidth, type ThumbnailScope } from "./lib/thumbnailSize";
 import { beginOnboardingOperation } from "./lib/onboardingStore";
 import type { ProjectMembership } from "./lib/libraryView";
@@ -180,6 +182,11 @@ interface State {
   setThumbnailWidth: (scope: ThumbnailScope, value: number) => void;
   assets: Asset[];
   libraryMemberships: ProjectMembership[];
+  libraryHomeView: "projects" | "library";
+  setLibraryHomeView: (view: "projects" | "library") => void;
+  canvasLibraryOpen: boolean;
+  librarySelectionIds: string[] | null;
+  setCanvasLibraryOpen: (open: boolean) => void;
   projectAssetsCollapsed: boolean;
   projectAssetsViewRevision: number;
   setProjectAssetsCollapsed: (collapsed: boolean) => void;
@@ -193,6 +200,8 @@ interface State {
   palette: ColorBucket[]; // 全库色板（侧栏渲染，后端 palette_overview）
   searchQuery: string; // FTS5 搜索；空串 = 不搜
   smartFilter: string | null; // 智能查询（如 source:codex），与文件夹/搜索互斥；侧栏「✨ 生成图」用
+  mediaFilter: MediaFilter;
+  setMediaFilter: (filter: MediaFilter) => void;
   mode: Mode;
   collectionPanelId: string | null;
   collectionAddTargetId: string | null;
@@ -495,13 +504,13 @@ interface State {
     libraryProjectId?: string;
     addCanvasImagesToBoard?: { count: number; run: () => void };
     ungroupCanvasFolder?: () => void;
-    canvasSelection?: { projectId: string; nodeIds: string[] };
+    canvasSelection?: { projectId: string; nodeIds: string[]; assetIds?: string[] };
   } | null;
   openContextMenu: (
     x: number,
     y: number,
     assetId: string,
-    context?: { asset?: Asset; libraryProjectId?: string; canvasSelection?: { projectId: string; nodeIds: string[] }; addCanvasImagesToBoard?: { count: number; run: () => void }; ungroupCanvasFolder?: () => void },
+    context?: { asset?: Asset; libraryProjectId?: string; canvasSelection?: { projectId: string; nodeIds: string[]; assetIds?: string[] }; addCanvasImagesToBoard?: { count: number; run: () => void }; ungroupCanvasFolder?: () => void },
   ) => void;
   closeContextMenu: () => void;
   // —— 项目右键菜单（侧栏项目行 / 收起态圆标）——
@@ -703,6 +712,14 @@ export const useStore = create<State>((set, get) => {
   colorFilter: null,
   searchQuery: "",
   smartFilter: null,
+  mediaFilter: null,
+  libraryHomeView: "library",
+  setLibraryHomeView: (libraryHomeView) => set({ libraryHomeView, selectedIds: new Set(), rangeAnchorId: null, detailAssetId: null,
+    searchQuery: "", smartFilter: null, currentFolderId: null, currentCollectionId: null, colorFilter: null }),
+  canvasLibraryOpen: false,
+  librarySelectionIds: null,
+  setCanvasLibraryOpen: (canvasLibraryOpen) => set({ canvasLibraryOpen }),
+  setMediaFilter: (mediaFilter) => set({ mediaFilter, selectedIds: new Set(), rangeAnchorId: null }),
   mode: "browse",
   collectionPanelId: null,
   collectionAddTargetId: null,
@@ -713,7 +730,7 @@ export const useStore = create<State>((set, get) => {
     const folder = get().folders.find((item) => item.id === id && (item.kind ?? "folder") === "folder");
     if (!folder || id === "root") throw new Error("目标集合已不存在");
     if (get().activeProjectId) await get().exitProject();
-    set({ collectionPanelId: null, collectionAddTargetId: id, mode: "manage",
+    set({ libraryHomeView: "library", collectionPanelId: null, collectionAddTargetId: id, mode: "manage",
       selectedIds: new Set(), rangeAnchorId: null, detailAssetId: null,
       boardOpen: false, genEditing: null, genPanelOpen: false, contextMenu: null, captionRing: null });
   },
@@ -808,11 +825,12 @@ export const useStore = create<State>((set, get) => {
       return { selectedIds: next };
     }),
   clearSelect: () => set({ selectedIds: new Set(), rangeAnchorId: null }),
-  selectAll: () => set((s) => ({ selectedIds: new Set(s.assets.map((a) => a.id)) })),
+  selectAll: () => set((s) => ({ selectedIds: new Set(!s.activeProjectId && s.libraryHomeView === "projects" ? []
+    : s.librarySelectionIds ?? filterAssetsByMediaType(s.assets, s.mediaFilter).map((a) => a.id)) })),
   setLoading: (loading) => set({ loading }),
   // 切文件夹保留颜色筛选（P3：folder + color 叠加）；清详情 + smartFilter/收藏夹（互斥）。
   setCurrentFolder: (currentFolderId) =>
-    set({ currentFolderId, currentCollectionId: null, detailAssetId: null, smartFilter: null }),
+    set({ currentFolderId, currentCollectionId: null, detailAssetId: null, smartFilter: null, libraryHomeView: "library" }),
   // 收藏夹是独立 scope：不与普通文件夹/颜色/搜索/智能查询叠加。
   setCurrentCollection: (currentCollectionId) =>
     set({
@@ -825,7 +843,7 @@ export const useStore = create<State>((set, get) => {
     }),
   // 颜色与 smartFilter/search/收藏夹互斥（保留 folder 叠加）。
   setColorFilter: (colorFilter) =>
-    set({ colorFilter, currentCollectionId: null, smartFilter: null, searchQuery: "" }),
+    set({ colorFilter, currentCollectionId: null, smartFilter: null, searchQuery: "", libraryHomeView: "library" }),
   setSearchQuery: (searchQuery) =>
     set({
       searchQuery,
@@ -838,6 +856,7 @@ export const useStore = create<State>((set, get) => {
   setSmartFilter: (smartFilter) =>
     set({
       smartFilter,
+      libraryHomeView: "library",
       currentFolderId: null,
       currentCollectionId: null,
       colorFilter: null,
@@ -1001,16 +1020,17 @@ export const useStore = create<State>((set, get) => {
   }),
   beginProvisionalProject: (name = "未命名创作") => runProjectRoute(async () => {
     await get().projectCanvasFlush?.();
-    await api.setActiveProject(null);
     const id = crypto.randomUUID();
     const normalizedName = name.trim() || "未命名创作";
+    const workspacePath = await prepareFileWorkspace(id, normalizedName);
+    await api.setActiveProject(null);
     const titleSource = normalizedName === "未命名创作" || normalizedName === "未命名项目"
       ? "default"
       : "manual";
     const project: Project = {
       id,
       name: normalizedName,
-      workspace_path: `blank:${id}`,
+      workspace_path: workspacePath,
       created_at: Math.floor(Date.now() / 1000),
       asset_count: 0,
       kind: "blank",
@@ -1226,7 +1246,7 @@ export const useStore = create<State>((set, get) => {
     set({ promptedAssets, promptedAssetsLoaded: true });
   },
   setCaptionedIds: (ids) => set({ captionedIds: new Set(ids) }),
-  focusAsset: (id) => set({ focusAssetId: id }),
+  focusAsset: (id) => set({ focusAssetId: id, libraryHomeView: "library" }),
   clearFocusAsset: () => set({ focusAssetId: null }),
   // —— 维度环 ——
   openCaptionRing: (assetId) => {

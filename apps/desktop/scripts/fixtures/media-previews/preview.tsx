@@ -77,20 +77,21 @@ w.runMediaPreviewSmoke = async () => {
     check(document.querySelector("img")?.getAttribute("src") !== poster, "old cover leaked into a different video");
     check(!document.querySelector("video"), "failed extraction created a player");
     flushSync(() => root.render(null));
-    // The deliberate playback UI retains the original URL, but does not load until play.
+    check(!performance.getEntriesByType("resource").some(entry => /never-load-.*\.mp4/.test(entry.name)), "passive previews fetched video bytes");
+    // Only the deliberately opened playback UI loads the original video, without autoplay.
     for (let i = 0; i < 5; i++) {
       flushSync(() => root.render(<React.StrictMode><Lightbox images={[assets[0].store_path]} index={0}
         onClose={() => root.render(null)} onIndexChange={() => {}} /></React.StrictMode>));
       const video = document.querySelector("video")!;
-      check(video?.getAttribute("src") === assets[0].store_path && video.preload === "none"
+      check(video?.getAttribute("src") === assets[0].store_path && video.preload === "auto" && video.paused
         && document.querySelector('[role="slider"][aria-label="视频时间轴"]') && document.querySelector('button[aria-label="播放"]'), "explicit playback contract");
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
       await tick();
       check(!document.querySelector("video"), "closed player remained mounted");
+      check(!video.getAttribute("src"), "closed player retained its video source");
     }
-    check(!performance.getEntriesByType("resource").some(entry => /never-load-.*\.mp4/.test(entry.name)), "preview fetched video bytes before play");
     check(errors.length === 0, errors.join("; "));
-    return "PASS: cached async static posters, serialized/deduplicated extraction, failed/stale results, 30 project/library mount cycles with audio, 5 explicit player open/close cycles, zero video preload requests";
+    return "PASS: cached async static posters, serialized/deduplicated extraction, failed/stale results, 30 project/library mount cycles with audio and zero video requests, 5 explicit paused player open/close cycles with source release";
   } finally { cleanup?.(); }
 };
 if (new URLSearchParams(location.search).has("native")) {

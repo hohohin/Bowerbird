@@ -18,12 +18,29 @@ export function DouyinReferencePicker({ projectId, ensureProject, onUse }: { pro
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const guard = useRef(false);
+  const pendingId = useRef<string | null>(null);
+  const onUseRef = useRef(onUse);
+  onUseRef.current = onUse;
+  function useCompleted(task?: Acquisition) {
+    if (task?.id === pendingId.current && task.state === "ready" && task.reference) {
+      pendingId.current = null;
+      onUseRef.current(task.reference);
+    }
+  }
   const active = tasks.some(task => ["starting", "waiting", "downloading"].includes(task.state));
   useEffect(() => {
     let disposed = false;
     let timer: ReturnType<typeof setTimeout>;
     async function poll() {
-      try { const tasks = await call<Acquisition[]>("list"); if (!disposed) setTasks(tasks); }
+      try {
+        const tasks = await call<Acquisition[]>("list");
+        if (!disposed) {
+          // Resume an in-flight acquisition, but never replace the reference with old history.
+          pendingId.current ??= tasks.find(task => ["starting", "waiting", "downloading"].includes(task.state))?.id ?? null;
+          setTasks(current => JSON.stringify(current) === JSON.stringify(tasks) ? current : tasks);
+          useCompleted(tasks.find(task => task.id === pendingId.current));
+        }
+      }
       catch (e) { if (!disposed) setError(String(e)); }
       if (!disposed) timer = setTimeout(poll, 1500);
     }
@@ -37,22 +54,22 @@ export function DouyinReferencePicker({ projectId, ensureProject, onUse }: { pro
       await ensureProject();
       const value = await call<Acquisition>(action, data);
       setTasks(items => [value, ...items.filter(item => item.id !== value.id)]);
+      pendingId.current = action === "cancel" ? null : value.id;
+      useCompleted(value);
     } catch (e) { setError(String(e)); }
     finally { guard.current = false; setBusy(false); }
   }
   return <section className="vr-product-editor" aria-label="抖音视频获取">
-    <h3>从抖音获取参考视频</h3>
-    <label className="vr-field">抖音分享内容<textarea rows={3} maxLength={8000} value={text} onChange={event => setText(event.target.value)} placeholder="粘贴完整分享文案或视频链接" /></label>
-    <p className="vr-hint">先获取视频，再由你点击分析。需要登录或验证时，可打开独立的抖音窗口。</p>
+    <label className="vr-field"><textarea aria-label="抖音分享内容" rows={3} maxLength={8000} value={text} onChange={event => setText(event.target.value)} placeholder="粘贴完整分享文案或视频链接" /></label>
     {error && <p className="vr-message is-error" role="alert">{error}</p>}
     <div className="vr-actions"><button type="button" disabled={busy || active || !text.trim()} onClick={() => void run("create", { text })}>获取抖音视频</button></div>
     {tasks.map(task => <div className="vr-douyin-record" key={task.id}>
       <p className="vr-hint">{task.shareText}</p>
       <p className="vr-hint" role="status">{["starting", "waiting", "downloading"].includes(task.state) && <LoaderCircle size={13} className="animate-spin inline" />} {task.message}</p>
       <div className="vr-actions">
-        {task.state === "ready" && task.reference ? <button type="button" onClick={() => onUse(task.reference!)}>使用此视频：{task.reference.name}</button>
+        {task.state === "ready" && task.reference ? <button type="button" onClick={() => onUse(task.reference!)}>{task.reference.name}</button>
           : ["starting", "waiting", "downloading"].includes(task.state) ? <button type="button" disabled={busy} onClick={() => void run("cancel", { id: task.id })}>取消获取</button>
-          : <><button type="button" disabled={busy || active} onClick={() => void run("login", { id: task.id })}>打开登录 / 验证窗口</button><button type="button" disabled={busy || active} onClick={() => void run("retry", { id: task.id })}>重新获取</button></>}
+          : <><button type="button" disabled={busy || active} onClick={() => void run("login", { id: task.id })}>打开抖音窗口</button><button type="button" disabled={busy || active} onClick={() => void run("retry", { id: task.id })}>重新获取</button></>}
       </div>
     </div>)}
   </section>;

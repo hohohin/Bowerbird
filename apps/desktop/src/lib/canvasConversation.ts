@@ -21,7 +21,8 @@ export function canvasConversationTurn(node: CanvasNode, nodes: readonly CanvasN
       const asset = output?.assetId ? assets.get(output.assetId) : undefined;
       return asset ? [asset] : [];
     });
-  return { node, text: payload.text as string, ratio: typeof payload.ratio === "string" ? payload.ratio : null,
+  return { node, jobId: typeof payload.job_id === "string" && payload.job_id.trim() ? payload.job_id : null,
+    text: payload.text as string, ratio: typeof payload.ratio === "string" ? payload.ratio : null,
     provider: typeof payload.provider === "string" ? payload.provider : "codex-cli",
     appliedPrompt: typeof payload.applied_prompt === "string" ? payload.applied_prompt : payload.text,
     references, referenceNodeIds, outputs };

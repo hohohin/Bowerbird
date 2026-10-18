@@ -9,6 +9,7 @@ try {
     const carousel = kind === "carousel" || kind === "carousel-flip";
     const page = await browser.newPage();
     await page.addInitScript(await readFile("../extension/candidate-utils.js", "utf8"));
+    await page.addInitScript(await readFile("src/lib/explorerDragVisual.js", "utf8"));
     await page.addInitScript(await readFile("src-tauri/src/commands/source_browser_drag.js", "utf8"));
     await page.route("https://fixture.example/**", route => route.request().resourceType() === "image"
       ? route.fulfill({ contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect width="200" height="200" fill="blue"/></svg>' })

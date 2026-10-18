@@ -48,7 +48,7 @@ try {
   const resizer = page.getByRole("separator", { name: "调整素材面板宽度" });
   const toggle = page.locator(".canvas-source-toggle:visible");
   assert.equal(await page.locator(".canvas-board-toolbar .canvas-source-toggle").count(), 0);
-  assert.equal(await page.locator(".canvas-source-panel .canvas-source-toggle:visible").count(), 1);
+  assert.equal(await page.locator(".canvas-board-shell > .canvas-source-toggle:visible").count(), 1);
   assert.equal(await source.isVisible(), false, "opening a canvas with exploration already open collapses its library");
   await page.evaluate(() => {
     window.originalSource = document.querySelector(".canvas-source-panel");

@@ -1,20 +1,39 @@
-import { Minus, Plus } from "lucide-react";
+import { useState } from "react";
 import { useStore } from "../store";
-import { MAX_THUMBNAIL_WIDTH, MIN_THUMBNAIL_WIDTH, type ThumbnailScope } from "../lib/thumbnailSize";
+import { thumbnailWidthFromZoom, thumbnailZoomFromWidth, type ThumbnailScope } from "../lib/thumbnailSize";
 
 export function ThumbnailSizeSlider({ scope }: { scope: ThumbnailScope }) {
   const value = useStore(s => scope === "library" ? s.libraryThumbnailWidth : s.canvasThumbnailWidth);
   const setWidth = useStore(s => s.setThumbnailWidth);
-  const floating = scope === "library";
-  return <label className={`thumbnail-size-slider${floating ? " is-floating" : ""}`}
-    title={floating ? "素材缩略图大小调整" : `素材目标宽度 ${value}px，实际宽度随可用空间调整`}>
-    {floating ? <svg className="thumbnail-size-ticks" viewBox="0 0 120 28" aria-hidden="true">
-      <path d="M6 2v4 M33 2v4 M60 2v4 M87 2v4 M114 2v4 M6 22v4 M33 22v4 M60 22v4 M87 22v4 M114 22v4" />
-    </svg> : <Minus size={12} aria-hidden="true" />}
-    <input type="range" min={MIN_THUMBNAIL_WIDTH} max={MAX_THUMBNAIL_WIDTH} step={8} value={value}
-      aria-label={scope === "library" ? "主页素材大小" : "项目素材大小"}
-      aria-valuetext={`目标宽度 ${value} 像素`}
-      onChange={event => setWidth(scope, Number(event.target.value))} />
-    {!floating && <Plus size={12} aria-hidden="true" />}
-  </label>;
+  const zoom = thumbnailZoomFromWidth(value, scope);
+  const [draft, setDraft] = useState<string | null>(null);
+  const label = scope === "library" ? "主页素材大小" : "项目素材大小";
+  function commit() {
+    if (draft !== null && draft.trim() && Number.isFinite(Number(draft))) setWidth(scope, thumbnailWidthFromZoom(Number(draft), scope));
+    setDraft(null);
+  }
+  return <div className="thumbnail-size-slider is-floating" role="group" aria-label="素材缩略图大小调整"
+    title="素材缩略图大小调整" onKeyDown={event => event.stopPropagation()}>
+    <svg className="thumbnail-size-icon" viewBox="0 0 22 12" aria-hidden="true">
+      <rect x="0" y="7" width="3" height="3" rx=".5" />
+      <rect x="6" y="5" width="5" height="5" rx=".5" />
+      <rect x="14" y="2" width="8" height="8" rx=".5" />
+    </svg>
+    <div className="thumbnail-size-track">
+      <svg className="thumbnail-size-ticks" viewBox="0 0 120 20" preserveAspectRatio="none" aria-hidden="true">
+        <path d="M6 2v3 M33 2v3 M60 2v3 M87 2v3 M114 2v3 M6 15v3 M33 15v3 M60 15v3 M87 15v3 M114 15v3" />
+      </svg>
+      <input type="range" min={0} max={100} step={1} value={zoom}
+        aria-label={label} aria-valuetext={`素材大小 ${zoom}（0–100）`}
+        onChange={event => setWidth(scope, thumbnailWidthFromZoom(Number(event.target.value), scope))} />
+    </div>
+    <input className="thumbnail-size-value" type="number" inputMode="numeric"
+      min={0} max={100} step={1} value={draft ?? zoom}
+      aria-label={`${label}数值`} title="素材大小（0–100）"
+      onFocus={event => event.currentTarget.select()} onChange={event => setDraft(event.target.value)}
+      onBlur={commit} onKeyDown={event => {
+        if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); }
+        if (event.key === "Escape") { event.preventDefault(); setDraft(null); }
+      }} />
+  </div>;
 }

@@ -6,6 +6,13 @@ mod source_browser;
 #[path = "../src/commands/source_browser_network.rs"]
 mod source_browser_network;
 use tauri::Manager;
+#[derive(Default)]
+struct DragNotices(std::sync::Mutex<Vec<serde_json::Value>>);
+
+#[tauri::command]
+fn smoke_drag_notices(app: tauri::AppHandle) -> Vec<serde_json::Value> {
+    app.state::<DragNotices>().0.lock().unwrap().clone()
+}
 
 #[tauri::command]
 async fn smoke_exit(app: tauri::AppHandle) { app.exit(0); }
@@ -28,11 +35,17 @@ fn main() {
     ));
     context.config_mut().app.windows[0].additional_browser_args = Some("--remote-debugging-port=9557 --remote-debugging-address=127.0.0.1".into());
     tauri::Builder::default()
+        .manage(DragNotices::default())
+        .manage(source_browser::SourceDragHandler(|app, start, notice| {
+            app.state::<DragNotices>().0.lock().unwrap().push(serde_json::json!({
+                "start": start, "id": notice.id, "imageUrl": notice.image_url, "pageUrl": notice.page_url
+            }));
+        }))
         .invoke_handler(tauri::generate_handler![
             source_browser::open_source_browser, source_browser::resize_source_browser,
             source_browser::navigate_source_browser, source_browser::hide_source_browser,
             source_browser::source_browser_back, source_browser::source_browser_forward,
-            source_browser::reload_source_browser, smoke_capture, smoke_exit,
+            source_browser::reload_source_browser, smoke_capture, smoke_exit, smoke_drag_notices,
         ])
         .run(context)
         .expect("native explorer fixture failed");

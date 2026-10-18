@@ -13,6 +13,7 @@ import { ModalShell } from "./ModalShell";
 import { RedeemCodeCard } from "./RedeemCodeCard";
 import { ScreenshotSettings } from "./ScreenshotSettings";
 import { AppUpdateCard } from "./AppUpdateCard";
+import { FileWorkspaceMoveDialog } from "./FileWorkspaceMoveDialog";
 
 const STAGE_LABEL: Record<string, string> = {
   images: "复制原图",
@@ -156,6 +157,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
   // —— 素材库位置 ——
   const [libRoot, setLibRoot] = useState<string | null>(null);
   const [migrateTarget, setMigrateTarget] = useState<string | null>(null); // 确认迁移的旧→新
+  const [fileMoveOpen, setFileMoveOpen] = useState(false);
   const [migrating, setMigrating] = useState(false);
   const [migrateProgress, setMigrateProgress] = useState<MigrateProgress | null>(null);
   const [migrateError, setMigrateError] = useState<string | null>(null);
@@ -488,7 +490,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
       title="设置"
       eyebrow="Preferences"
       width="lg"
-      preventClose={migrating}
+      preventClose={migrating || fileMoveOpen}
       onClose={onClose}
     >
       {/* 固定高度：不随分区内容多少变化；右列内部滚动 */}
@@ -546,7 +548,12 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
 
               {/* 素材库位置 */}
               <div className="settings-card px-3 py-2.5">
-                <div className="text-ink">素材库位置</div>
+                <div className="text-ink">资料文件夹 · BowerbirdLibrary</div>
+                <p className="mt-1 text-xs text-muted">选择项目与随图资料的保存位置，或将历史素材按项目迁入当前位置。</p>
+                <button className="app-button-secondary mt-2" onClick={() => setFileMoveOpen(true)}>选择位置并迁移…</button>
+              </div>
+              <div className="settings-card px-3 py-2.5">
+                <div className="text-ink">历史素材索引与缓存位置</div>
                 <p className="mt-1 break-all text-[11px] text-muted" title={libRoot ?? ""}>
                   {libRoot ?? "读取中…"}
                 </p>
@@ -1163,6 +1170,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
           )}
         </div>
       </div>
+      {fileMoveOpen && <FileWorkspaceMoveDialog onClose={() => setFileMoveOpen(false)} />}
     </ModalShell>
   );
 }

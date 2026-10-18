@@ -1,5 +1,6 @@
 import { assignCanvasCardNames } from "./canvasCardNames";
 import { workflowTitle } from "./canvasWorkflow";
+import { resolveVideoCardOutputs } from "./workflowVideoFrames";
 import { api } from "./api";
 import { DEFAULT_VIDEO_OPTIONS, isVideoPath, videoInputError, videoProvider } from "./videoGeneration";
 import { autoRatioFromReferences } from "../components/creation/ratios";
@@ -521,7 +522,7 @@ export class CanvasWorkflowController {
     const active = Object.values(run.steps).filter(step => step.status === "running" || step.status === "waiting");
     // Keep the definition locked until cancellation requests have completed.
     await Promise.all(active.map(async step => {
-      if (step.jobId) await api.cancelCodexCreate(step.jobId);
+      if (step.jobId && step.generationSubmission !== "submitted") await api.cancelCodexCreate(step.jobId);
       for (const generation of Object.values(step.localDsGenerations ?? {})) {
         if (!generation.response) await api.cancelCodexCreate(generation.jobId);
       }
@@ -886,6 +887,8 @@ export class CanvasWorkflowController {
           const pending = values.image.filter(value => value.nodeIds?.length);
           if (pending.length && !await this.resolveInputGenerations(runId, node, pending, halted)) return;
         if (pending.length && accountId !== undefined && accountId !== (useStore.getState().cloudAuth?.user_id ?? null)) throw new Error("账号已切换，请登录原账号后继续，或停止此工作流");
+          await resolveVideoCardOutputs(node, values, canvas?.nodes ?? [], this.projectId, halted);
+          if (halted()) return;
           sourceItems = validateLoopItems(values.image.flatMap(value => value.assetIds ?? []).map(assetId => ({ text: "", assetIds: [assetId] })), node);
         }
         const items = validateLoopStart(sourceItems ?? workflowLoopItems(node, this.document.nodes, canvas?.nodes ?? [], readCell), loop.index, node);
@@ -910,6 +913,8 @@ export class CanvasWorkflowController {
           if (node.action === "describe" ? count < 1 : count !== 1) throw new Error("指令卡片的输入图片数量不符合要求");
         }
       }
+      await resolveVideoCardOutputs(node, values, canvas?.nodes ?? [], this.projectId, halted);
+      if (halted()) return;
       const generated = node.kind === "generation" ? compileGenerationPrompt(node, values) : null;
       const outputTargets = node.kind === "agent" ? step.agentOutputTargets ?? agentOutputTargets(node, this.document.nodes) : [];
       const agentInput = node.kind === "agent" ? compileAgentPrompt(node, values, outputTargets) : null;
@@ -1193,6 +1198,32 @@ export class CanvasWorkflowController {
         const generation = video ? { ...node.generation, media: "video" as const, videoOptions: node.generation?.videoOptions ?? DEFAULT_VIDEO_OPTIONS } : undefined;
         const provider = generation ? videoProvider(generation.videoChannel, generation.videoOptions) : node.provider;
         const ratio = generation ? generation.ratio ?? "16:9" : node.ratio;
+        const sessionOutput = !video && (!step.jobId || !!step.generationSubmission);
+        if (sessionOutput) {
+          let jobId = step.jobId, turnKey = step.turnKey;
+          if (!jobId) {
+            if (step.status !== "pending") throw new Error("无法确认上次提交状态，请检查任务中心");
+            jobId = crypto.randomUUID(); turnKey = crypto.randomUUID();
+            const sessionNodeId = `gen-prompt:${jobId}:${turnKey}:0`;
+            // Persist both recovery identity and ownership before calling the provider.
+            const run = this.run(runId);
+            await this.saveRun({ ...run, steps: { ...run.steps, [id]: { ...run.steps[id], status: "running", jobId, turnKey, generationSubmission: "pending" } } },
+              this.document.nodes.map(candidate => candidate.id === id ? { ...candidate, activeSessionNodeId: sessionNodeId,
+                sessionNodeIds: [...(candidate.sessionNodeIds ?? []), sessionNodeId] } : candidate));
+            const result = await useStore.getState().startGeneration(prompt, orderedAssets, ratio, provider, prompt,
+              undefined, undefined, undefined, visualProfileId, { projectId: this.projectId, threadId: this.run(runId).threadId }, true, undefined, { jobId, turnKey });
+            if (!result.accepted) throw new Error(result.error || "生成任务未提交");
+          } else if (step.generationSubmission !== "submitted") {
+            if (!turnKey || !await api.agentDsWorkflowGenerationJob(jobId, turnKey)) {
+              await this.step(runId, id, { status: "waiting", error: "无法确认原生成任务是否已提交，请检查任务中心后继续；不会重复提交" }); return;
+            }
+          }
+          if (halted()) return;
+          if (!turnKey) throw new Error("原生成任务缺少轮次身份，请检查原任务");
+          await this.step(runId, id, { generationSubmission: "submitted", detail: "生成任务已提交，图片进度请查看会话" });
+          await this.finish(runId, node, { image: { type: "image", nodeIds: [`gen-prompt:${jobId}:${turnKey}:0`] } });
+          return;
+        }
         let paths: string[] = [];
         if (step.jobId) {
           const previous = (await api.recentGenSessions(500)).find(job => job.id === step.jobId);

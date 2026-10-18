@@ -28,6 +28,11 @@ pub const MAX_PROJECT_CANVAS_ZOOM: f64 = 2.4;
 
 fn record_image_container_assets(tx: &Transaction<'_>, project_id: &str, payload: &str, now: i64) -> AppResult<()> {
     let value: serde_json::Value = serde_json::from_str(payload)?;
+    if let Some(id) = value["artboard"]["base_asset_id"].as_str() {
+        let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM assets WHERE id=?1)", [id], |row| row.get(0))?;
+        if !exists { return Err(AppError::NotFound(format!("artboard base {id}"))); }
+        tx.execute("INSERT OR IGNORE INTO project_assets(project_id,asset_id,created_at) VALUES (?1,?2,?3)", params![project_id,id,now])?;
+    }
     if value["note_type"] != "images" && value["note_type"] != "text" { return Ok(()); }
     for row in value["cells"].as_array().into_iter().flatten() {
         for cell in row.as_array().into_iter().flatten() {
@@ -3208,6 +3213,26 @@ mod tests {
         payload["cells"][0][0]["generation_ref"]["session_node_id"] = serde_json::json!("saved-session");
         payload["cells"][0][0]["content_type"] = serde_json::json!("text");
         assert!(db.update_canvas_note_payload("table", &payload.to_string()).is_err());
+    }
+
+    #[test]
+    fn artboard_base_survives_reload_and_records_project_membership() {
+        let db = db();
+        materialize(&db, "p1");
+        db.conn.lock().unwrap().execute("INSERT INTO assets(id,name,created_at) VALUES('artboard-base','model',1)", []).unwrap();
+        let mut value = note("p1", "artboard");
+        value.payload_json = r#"{"schema_version":1,"text":"画板","note_type":"section","cells":[],"member_ids":[],"artboard":{"base_asset_id":"artboard-base"}}"#.into();
+        db.create_canvas_node(&value).unwrap();
+        let snapshot = db.project_canvas_snapshot("p1").unwrap();
+        assert_eq!(snapshot.nodes.iter().find(|node| node.id == "artboard").unwrap().payload_json, value.payload_json);
+        assert_eq!(db.conn.lock().unwrap().query_row("SELECT COUNT(*) FROM project_assets WHERE project_id='p1' AND asset_id='artboard-base'", [], |row| row.get::<_,i64>(0)).unwrap(), 1);
+        let missing = value.payload_json.replace("artboard-base", "missing-base");
+        assert!(db.update_canvas_note_payload("artboard", &missing).is_err());
+        let wrong_kind = value.payload_json.replace("section", "text");
+        assert!(db.update_canvas_note_payload("artboard", &wrong_kind).is_err());
+        assert_eq!(db.project_canvas_snapshot("p1").unwrap().nodes.iter().find(|node| node.id == "artboard").unwrap().payload_json, value.payload_json);
+        db.remove_canvas_node("artboard").unwrap();
+        assert_eq!(db.conn.lock().unwrap().query_row("SELECT COUNT(*) FROM assets WHERE id='artboard-base'", [], |row| row.get::<_,i64>(0)).unwrap(), 1);
     }
 
     #[test]

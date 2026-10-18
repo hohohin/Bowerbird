@@ -10,6 +10,7 @@ try {
   console.log(await page.evaluate(async () => {
     const { api } = await import('/src/lib/api.ts');
     const { useStore } = await import('/src/store.ts');
+    const { publishGeneration } = await import('/scripts/fixtures/canvas-reference/generation.ts');
     const { CanvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
     const { newWorkflowNode } = await import('/src/lib/canvasWorkflow.ts');
     const check = (ok, message) => { if (!ok) throw Error(message); };
@@ -31,6 +32,7 @@ try {
       const identity = args[12];
       if (started) { started(); await new Promise(resolve => { release = resolve; }); }
       useStore.setState(s => ({ genJobs: { ...s.genJobs, [identity.jobId]: { turns: [{ turnKey: identity.turnKey, images: ['existing.png'] }] } } }));
+      await publishGeneration(args, ['existing.png']);
       return { accepted: true };
     } });
     await makeTable('receiver'); await makeTable('relay');
@@ -116,12 +118,14 @@ try {
     const { api } = await import('/src/lib/api.ts');
     const { useStore } = await import('/src/store.ts');
     const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+    const { publishGeneration } = await import('/scripts/fixtures/canvas-reference/generation.ts');
     const { newWorkflowNode } = await import('/src/lib/canvasWorkflow.ts');
     api.localAgentFindAssetId = async () => 'existing';
     await api.projectCanvasNodeCreate({ ...window.snapshot().nodes[0], id: 'ui-target', kind: 'note', assetId: null, role: null, payloadJson: JSON.stringify({ schema_version: 1, note_type: 'text', text: '', member_ids: [], cells: [[{ id: 'target', text: '', bold: false, italic: false, align: 'left' }]] }) });
     useStore.setState({ cloudAuth: null, startGeneration: async (...args) => {
       const identity = args[12];
       useStore.setState(s => ({ genJobs: { ...s.genJobs, [identity.jobId]: { turns: [{ turnKey: identity.turnKey, images: ['existing.png'] }] } } }));
+      await publishGeneration(args, ['existing.png']);
       return { accepted: true };
     } });
     const c = canvasWorkflowController('p'); await c.load();

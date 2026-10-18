@@ -9,6 +9,60 @@ fn db() -> Database {
 }
 
 #[test]
+fn label_dimensions_are_cached_revision_guarded_and_invalidated_only_by_semantic_edits() {
+    let db = db();
+    let id = db.save_local_label(None, "梦幻", "抽象情绪", true).unwrap();
+    db.local_example(&id, &["a".into()], true).unwrap();
+    let labels = db.local_labels().unwrap();
+    let revision = db.local_revision().unwrap();
+    assert!(db.cache_label_dimensions(revision, &labels, &["mood".into()]).unwrap());
+    assert_eq!(db.local_revision().unwrap(), revision);
+    assert_eq!(db.local_labels().unwrap()[0].dimension.as_deref(), Some("mood"));
+    assert_eq!(db.list_asset_tags("a").unwrap()[0].name, "梦幻");
+    db.save_local_label(Some(&id), "梦幻", "抽象情绪", false).unwrap();
+    assert_eq!(db.local_labels().unwrap()[0].dimension.as_deref(), Some("mood"));
+    db.save_local_label(Some(&id), "水彩晕染", "颜料晕开的表现手法", true).unwrap();
+    assert!(db.local_labels().unwrap()[0].dimension.is_none());
+    assert!(!db.cache_label_dimensions(revision, &labels, &["mood".into()]).unwrap());
+    assert!(db.local_labels().unwrap()[0].dimension.is_none());
+    assert!(db.cache_label_dimensions(db.local_revision().unwrap(), &db.local_labels().unwrap(), &["invalid".into()]).is_err());
+    assert_eq!(db.list_asset_tags("a").unwrap().len(), 1);
+}
+
+#[test]
+fn flat_rules_do_not_automatically_rescan_old_paid_observations() {
+    let db = db();
+    db.conn.lock().unwrap().execute("INSERT INTO local_visual_observations VALUES('a','jev-choice-dimensions/cloud-discovery-v5','旧结果',1)", []).unwrap();
+    assert_eq!(db.local_targets_for_model(true, super::jev::OBSERVATION_MODEL).unwrap(), vec!["b"]);
+    db.conn.lock().unwrap().execute("INSERT INTO local_visual_observations VALUES('b','jev-choice-dimensions/cloud-discovery-v6','旧结果',1)", []).unwrap();
+    assert!(db.local_targets_for_model(true, super::jev::OBSERVATION_MODEL).unwrap().is_empty());
+    assert_eq!(db.local_targets_for_model(false, super::jev::OBSERVATION_MODEL).unwrap(), vec!["a", "b"]);
+}
+
+#[test]
+fn old_folder_label_without_dimension_remains_readable() {
+    let label: Label = serde_json::from_value(serde_json::json!({
+        "id":"legacy", "name":"梦幻", "description":"情绪", "enabled":true, "count":1, "has_examples":false,
+    })).unwrap();
+    assert!(label.dimension.is_none());
+}
+
+#[test]
+fn concurrent_cloud_same_name_reuses_label_without_changing_legacy_metadata() {
+    let db = db();
+    let id = db.save_local_label(None, "梦幻", "情绪", true).unwrap();
+    let revision = db.local_revision().unwrap();
+    db.cache_label_dimensions(revision, &db.local_labels().unwrap(), &["mood".into()]).unwrap();
+    let prediction = Prediction { description: String::new(), tags: vec!["梦幻".into()], matches: vec![] };
+    let definition = super::cloud::NewLabel { name: "梦幻".into(), definition: "新的类别说明".into() };
+    assert!(db.apply_classification_with_definitions("a", revision, &prediction, true, &[], super::jev::OBSERVATION_MODEL, &[definition]).unwrap());
+    assert_eq!(db.list_asset_tags("a").unwrap().len(), 1);
+    assert_eq!(db.local_labels().unwrap()[0].description, "情绪");
+    assert_eq!(db.local_labels().unwrap()[0].id, id);
+    assert_eq!(db.local_labels().unwrap()[0].dimension.as_deref(), Some("mood"));
+}
+
+#[test]
 fn deleting_labels_cleans_relations_but_preserves_assets_and_observations() {
     let db = db();
     let p = Prediction {
@@ -265,6 +319,7 @@ fn discovery_reference_samples_per_asset_not_by_usage() {
                 enabled: true,
                 count: 9 - index as i64,
                 has_examples: false,
+                dimension: None,
             })
             .collect()
     }
@@ -300,6 +355,7 @@ fn discovered_existing_names_attach_directly() {
             enabled: true,
             count: 0,
             has_examples: false,
+            dimension: None,
         },
         Label {
             id: "bottle".into(),
@@ -308,6 +364,7 @@ fn discovered_existing_names_attach_directly() {
             enabled: true,
             count: 0,
             has_examples: false,
+            dimension: None,
         },
     ];
     let mut prediction = Prediction {
@@ -366,6 +423,7 @@ async fn real_local_model_smoke() {
             enabled: true,
             count: 0,
             has_examples: false,
+            dimension: None,
         },
         Label {
             id: "animal".into(),
@@ -374,6 +432,7 @@ async fn real_local_model_smoke() {
             enabled: true,
             count: 0,
             has_examples: false,
+            dimension: None,
         },
     ];
     let start = std::time::Instant::now();
@@ -394,6 +453,7 @@ async fn real_local_model_smoke() {
         enabled: true,
         count: 0,
         has_examples: false,
+        dimension: None,
     }];
     let custom_negative_before = server.predict(&image, &custom, false, &[], &cancel).await;
     println!(
@@ -415,6 +475,7 @@ async fn real_local_model_smoke() {
         enabled: true,
         count: 0,
         has_examples: false,
+        dimension: None,
     }];
     let example_match = server
         .predict(

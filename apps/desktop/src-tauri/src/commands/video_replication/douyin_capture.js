@@ -14,6 +14,9 @@
     if (!blocked && !urls.length) return;
     const value = { videoId:id, name:String(detail.desc || '抖音参考视频').slice(0,160), duration:Number(video.duration || detail.duration || 0)/1000, blocked, urls, userAgent:navigator.userAgent.slice(0,512) };
     sent = true;
+    // WebView2 can block custom-scheme navigation without a user gesture on
+    // remote pages. The native poll reads this same bounded result as well.
+    window.__bbDouyinResult = value;
     location.href = 'bb-replication-capture://result/?payload=' + encodeURIComponent(JSON.stringify(value));
   };
   function inspect(value) {
@@ -26,6 +29,7 @@
     }
     visit(value,0);
   }
+  window.__bbDouyinInspect = inspect;
   const relevant = url => {
     try { const parsed = new URL(url, location.href); return ['www.douyin.com','www.iesdouyin.com'].includes(parsed.hostname) && parsed.pathname === '/aweme/v1/web/aweme/detail/'; } catch { return false; }
   };

@@ -385,7 +385,8 @@ fn export_layer_asset(paths: &LibraryPaths, db: &Database, asset_id: String, doc
         std::fs::create_dir_all(temporary.parent().unwrap())?;
         std::fs::write(&temporary, &bytes)?;
         // Manual exports remain independent; workflow exports are keyed above.
-        let result = ingest::ingest_generated(&paths, &db, &temporary, None, "layer-edit");
+        let destination = paths.for_project(db, project_id.as_deref())?;
+        let result = ingest::ingest_generated(&destination, &db, &temporary, None, "layer-edit");
         let _ = std::fs::remove_file(&temporary);
         let mut asset = result?;
         db.conn.lock().unwrap().execute(

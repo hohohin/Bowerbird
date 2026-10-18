@@ -81,9 +81,23 @@ try {
       window.droppedText = event.dataTransfer.getData("text/plain");
     });
   });
+  await main.evaluate(async () => {
+    window.nativeDragEvents = [];
+    const handler = window.__TAURI_INTERNALS__.transformCallback(event => window.nativeDragEvents.push(event.payload));
+    await window.__TAURI_INTERNALS__.invoke("plugin:event|listen", { event: "source-browser://drag", target: { kind: "Any" }, handler });
+  });
   const { session: sourceSession, data: dragData } = await startBrowserDrag(source,
     ...(await source.locator("#image").boundingBox().then(rect => [rect.x + 30, rect.y + 30])));
   assert.ok(dragData.items.some(item => item.mimeType === "application/x-bowerbird-explorer"));
+  await source.locator("[data-explorer-drag-visual] .card").waitFor();
+  assert.equal(await source.locator("[data-explorer-drag-visual]").evaluate(el => getComputedStyle(el).pointerEvents), "none");
+  await main.waitForFunction(async () => (await window.__TAURI_INTERNALS__.invoke("smoke_drag_notices")).some(n => n.start));
+  const notices = await main.evaluate(() => window.__TAURI_INTERNALS__.invoke("smoke_drag_notices"));
+  const dragPayload = JSON.parse(dragData.items.find(item => item.mimeType === "application/x-bowerbird-explorer").data);
+  assert.equal(notices.at(-1).id, dragPayload.dragId, "native pre-analysis notification arrives before drop");
+  await main.waitForFunction(id => window.nativeDragEvents.some(event => event.phase === "start" && event.id === id), dragPayload.dragId);
+  assert.equal(notices.at(-1).imageUrl, "http://127.0.0.1:1559/protected.png");
+  assert.ok(source.url().startsWith("http://127.0.0.1:1558/"), "preview notification never navigates the page");
   const mainSession = await main.context().newCDPSession(main);
   // Exercise Windows' standard-text fallback without relying on custom MIME.
   await finishBrowserDrag(mainSession, { items: dragData.items.filter(item => item.mimeType === "text/plain"), dragOperationsMask: 1 }, 100, 200);
@@ -93,9 +107,13 @@ try {
   assert.equal(dropped?.pageUrl, "http://127.0.0.1:1558/pin/123");
   const droppedBytes = await main.evaluate(url => window.__TAURI_INTERNALS__.invoke("smoke_capture", { url }), dropped.imageUrl);
   assert.deepEqual(Buffer.from(droppedBytes, "base64"), png);
+  // Keep the source drag alive past the ordinary transient user-activation window.
+  await new Promise(resolve => setTimeout(resolve, 5500));
   await sourceSession.send("Input.dispatchDragEvent", { type: "dragCancel", x: 0, y: 0, data: dragData });
   await sourceSession.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: 0, y: 0, button: "left", buttons: 0 });
   await sourceSession.detach();
+  await source.locator("[data-explorer-drag-visual]").waitFor({ state: "detached" });
+  await main.waitForFunction(async id => (await window.__TAURI_INTERNALS__.invoke("smoke_drag_notices")).some(n => !n.start && n.id === id), dropped.dragId);
   await source.evaluate(() => {
     window.explorerDocumentToken = "same-live-document";
     const input = document.createElement("input"); input.id = "draft"; input.value = "unsaved web form"; document.body.append(input);

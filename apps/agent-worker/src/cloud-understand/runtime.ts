@@ -1,5 +1,5 @@
 import { BRAND_OBSERVATION_TASK, loadBrandPrompt } from "../prompts/brand-visual.ts";
-import { replicationMessages, validateReplicationResult, validateReplicationVideo, type ReplicationPayload } from "./replication.ts";
+import { replicationMessages, validateReplicationResult, validateReplicationVideo, REPLICATION_RESULT_ERRORS, type ReplicationPayload } from "./replication.ts";
 import { validateReplication } from "../../../cloud/supabase/functions/_shared/replication.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { IdlePollBackoff } from "../idle-poll-backoff.ts";
@@ -220,7 +220,7 @@ class ArkVisionClient {
             { type: "text", text: visionPrompt(input) },
           ],
         }],
-        temperature: 0.2,
+        temperature: input.operation === "video-analysis" ? 0.1 : 0.2,
       }),
       // Deliberately no AbortSignal timeout. The durable lease heartbeat, not
       // an Edge wall-clock deadline, owns liveness while Ark is still waiting.
@@ -243,7 +243,11 @@ class ArkVisionClient {
     }
     if (replication) {
       try { return validateReplicationResult(input as ReplicationPayload, content, isRecord(choices[0]) ? choices[0].finish_reason : undefined); }
-      catch { throw new KnownProviderError("invalid_provider_response", "复刻结果不完整或分镜格式无效，请调整输入后新建任务"); }
+      catch (error) {
+        const code = error instanceof Error ? error.message : "";
+        const safeMessage = Object.hasOwn(REPLICATION_RESULT_ERRORS, code) ? REPLICATION_RESULT_ERRORS[code] : undefined;
+        throw new KnownProviderError(safeMessage ? code : "invalid_provider_response", safeMessage ?? "豆包返回的复刻分析格式无效，请重试");
+      }
     }
     return content;
   }

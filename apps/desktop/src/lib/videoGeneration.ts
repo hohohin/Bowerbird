@@ -43,6 +43,12 @@ export function cloudVideoOptions(options: VideoOptions): VideoOptions {
 export function isVideoPath(path?: string | null): boolean {
   return !!path && /\.(mp4|mov|webm|m4v|avi|mkv)(?:[?#].*)?$/i.test(path);
 }
+/** Match the submitted original file, never its thumbnail or source video's metadata. */
+export function imageInputError(references: readonly Pick<Asset, "name" | "store_path">[]): string | null {
+  const index = references.findIndex(asset => isVideoPath(asset.store_path));
+  if (index < 0) return null;
+  return `第 ${index + 1} 个参考「${references[index].name}」是视频，不能用于图片生成。请替换为图片，或先从视频中截取所需画面再引用。`;
+}
 export function videoSupportsRatio(options: VideoOptions): boolean {
   return options.kind === "text2video" || options.kind === "multimodal2video";
 }

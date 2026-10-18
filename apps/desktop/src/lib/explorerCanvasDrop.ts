@@ -5,7 +5,7 @@ export interface ExplorerCanvasDropDetail {
   projectId: string;
   clientX: number;
   clientY: number;
-  place: ((asset: Asset) => Promise<void>) | null;
+  place: ((asset: Asset) => Promise<string | void>) | null;
 }
 
 // The enclosing collector owns ingestion; the actual canvas under the drop

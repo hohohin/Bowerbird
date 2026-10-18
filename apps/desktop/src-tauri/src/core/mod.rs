@@ -24,3 +24,8 @@ pub mod visual_profile;
 pub mod project_deletion;
 
 pub mod external_files;
+pub mod file_workspace;
+pub mod file_workspace_move;
+pub mod creative_files;
+pub mod creative_restore;
+pub mod generation_diagnostics;

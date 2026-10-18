@@ -64,6 +64,8 @@ export interface WorkflowStep {
   diagnostic?: import("./workflowDiagnostics").WorkflowDiagnostic;
   describeJobIds?: string[];
   turnKey?: string;
+  /** New image cards hand off a durable session; absent means legacy result-waiting. */
+  generationSubmission?: "pending" | "submitted";
   detail?: string;
   status: "pending" | "running" | "waiting" | "done" | "failed";
   error?: string; jobId?: string; agentRunId?: string; assetId?: string; profileId?: string; layerRequestKey?: string;

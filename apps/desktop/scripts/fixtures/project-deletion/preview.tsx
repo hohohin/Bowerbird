@@ -10,7 +10,7 @@ w.__TAURI_INTERNALS__={invoke:async(command:string,args:any)=>{
   if(command==='project_delete_impact') return {project_asset_count:8,thread_count:2,node_count:13,running_generation_count:w.running,running_agent_count:0,physical:{exclusive_asset_count:3,exclusive_file_count:6,preserved_shared_count:4,preserved_unsafe_count:1,confirmation:'test-confirmation'}};
   if(command==='delete_project') {
     if(w.failure) throw '项目素材或文件已变化，请重新打开删除确认';
-    return {deleted_assets:3,preserved_shared:5,removed_members:8,moved_assets:0,failed_moves:[],cleanup_pending:w.pending?['synthetic cleanup failure']:[]};
+    return {deleted_assets:3,preserved_shared:5,removed_members:8,moved_assets:w.transferred||0,failed_moves:[],cleanup_pending:w.pending?['synthetic cleanup failure']:[]};
   }
   return null;
 }};

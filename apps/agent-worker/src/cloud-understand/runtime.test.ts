@@ -8,6 +8,8 @@ test("replication rewrite uses its model and rejects truncated text without retr
   let calls = 0;
   const recorded = await runOnce(async () => { calls++; return { ok: true, status: 200, body: JSON.stringify({ choices: [{ finish_reason: "length", message: { content: "截断" } }] }) }; }, baseConfig({ arkReplicationTextModel: "text-model" }), input);
   equal(calls, 1); equal(recorded.finishBody, null); equal(recorded.settleBody?.action, "fail");
+  equal(recorded.settleBody?.safeErrorCode, "replication_result_truncated");
+  ok(String(recorded.settleBody?.safeMessage).includes("截断"));
   const request = recorded.arkRequestBody as { model: string; messages: { role: string; content: string }[] };
   equal(request.model, "text-model"); equal(request.messages[0].role, "system"); equal(JSON.parse(request.messages[1].content).referenceText, "原分镜");
 });

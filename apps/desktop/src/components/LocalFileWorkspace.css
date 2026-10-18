@@ -4,14 +4,17 @@
 .folder-navigation form { flex: 1; min-width: 0; }
 .folder-navigation input { width: 100%; height: 34px; padding: 0 10px; border: 1px solid rgb(var(--bb-line-rgb)); border-radius: 8px; background: transparent; font-size: 12px; }
 .folder-return { font-size: 12px; }
-.folder-scope-bar,.folder-tag-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 16px; font-size: 12px; }
+.folder-scope-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 16px; font-size: 12px; }
 .folder-scope-bar > span { margin-right: auto; opacity: .7; }
-.folder-scope-bar button,.folder-tag-bar button { padding: 5px 8px; border: 1px solid rgb(var(--bb-line-rgb)); border-radius: 6px; }
-.folder-tag-bar { max-height: 112px; overflow-y: auto; }
-.folder-tag-bar button[aria-pressed=true] { background: #4868ff; color: white; border-color: #4868ff; }
+.folder-scope-bar button { padding: 5px 8px; border: 1px solid rgb(var(--bb-line-rgb)); border-radius: 6px; }
+.file-locations { flex-wrap: nowrap; overflow-x: auto; flex-shrink: 0; }
+.file-locations > button { white-space: nowrap; flex-shrink: 0; }
+.file-locations .file-location { display: inline-flex; align-items: center; margin-right: 0; opacity: 1; flex-shrink: 0; }
+.file-location > button:first-child { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-locations button[aria-pressed="true"] { background: #4868ff18; border-color: #4868ff; }
 .local-file-workspace button:disabled { opacity: .4; cursor: default; }
-.local-file-workspace button:focus-visible { outline: 2px solid #4868ff; outline-offset: 2px; }
-.local-file-workspace button:not(:disabled):hover { background-color: #8882; }
+.local-file-workspace button:not(.library-tag-bar button):focus-visible { outline: 2px solid #4868ff; outline-offset: 2px; }
+.local-file-workspace button:not(:disabled):not(.library-tag-bar button):hover { background-color: #8882; }
 .folder-scroller { flex: 1; overflow: auto; min-height: 0; padding: 8px 12px 84px; }
 .folder-masonry { position: relative; width: 100%; }
 .folder-media-card { position: absolute; top: 0; left: 0; text-align: left; border: 1px solid rgb(var(--bb-line-rgb)); border-radius: 9px; overflow: hidden; background: rgb(var(--bb-surface-rgb)); }

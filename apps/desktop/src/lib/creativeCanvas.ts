@@ -350,11 +350,17 @@ export function persistedProjectActiveNodeId(
  * Browsing projections are intentionally not used because they paginate and
  * collapse generation sessions. */
 export function projectCanvasAssetIds(
-  nodes: readonly Pick<CanvasNode, "kind" | "assetId">[],
+  nodes: readonly (Pick<CanvasNode, "kind" | "assetId"> & Partial<Pick<CanvasNode, "payloadJson">>)[],
 ): string[] {
   const seen = new Set<string>();
   const ids: string[] = [];
   for (const node of nodes) {
+    if (node.kind === "note" && node.payloadJson) {
+      try {
+        const base = JSON.parse(node.payloadJson).artboard?.base_asset_id;
+        if (typeof base === "string" && !seen.has(base)) { seen.add(base); ids.push(base); }
+      } catch { /* Malformed legacy notes have no base reference. */ }
+    }
     if (node.kind !== "asset" || !node.assetId || seen.has(node.assetId)) continue;
     seen.add(node.assetId);
     ids.push(node.assetId);

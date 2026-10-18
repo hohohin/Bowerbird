@@ -2810,7 +2810,7 @@ pub async fn cloud_agent_ingest_final(
     let preview = download_artifact(&paths, &cloud, &auth, &record, &artifact_id).await?;
     let source = PathBuf::from(&preview.path);
     let db_for_ingest = db.inner().clone();
-    let paths_for_ingest = paths.inner().clone();
+    let paths_for_ingest = paths.for_project(&db, record.project_id.as_deref())?;
     let conversation = record.conversation_id.clone();
     let asset = tokio::task::spawn_blocking(move || {
         crate::core::ingest::ingest_generated(
@@ -3142,7 +3142,7 @@ pub async fn cloud_agent_ingest_artifacts(
             existing
         } else {
             let db_for_ingest = db.inner().clone();
-            let paths_for_ingest = paths.inner().clone();
+            let paths_for_ingest = paths.for_project(&db, record.project_id.as_deref())?;
             let conversation = record.conversation_id.clone();
             let source_for_ingest = source.clone();
             tokio::task::spawn_blocking(move || {

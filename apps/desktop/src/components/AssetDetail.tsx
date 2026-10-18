@@ -159,8 +159,22 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
   });
   const queued = queuePosition > 0;
   const [group, setGroup] = useState<Asset[]>([]);
+  const [resolvedAsset, setResolvedAsset] = useState<Asset | null>(null);
+  const listedAsset = assets.find((a) => a.id === id);
+  // 画板独有、中央来源或被筛选掉的素材不一定在当前列表中，按身份读取而不切换工作区。
+  useEffect(() => {
+    if (!id || listedAsset) return;
+    let alive = true;
+    api.getAssetsByIds([id]).then(([asset]) => {
+      if (alive) setResolvedAsset(asset ?? null);
+    }).catch(error => {
+      if (alive) notifyError(error, "无法读取图片详情");
+    });
+    return () => { alive = false; };
+  }, [id, listedAsset]);
   // 同流程轮播：生成图取整组过程图。sibling 可能被合并出主列表，故从 group 解析后再回退 assets。
-  const asset: Asset | undefined = group.find((a) => a.id === id) ?? assets.find((a) => a.id === id);
+  const asset: Asset | undefined = group.find((a) => a.id === id) ?? listedAsset
+    ?? (resolvedAsset?.id === id ? resolvedAsset : undefined);
   // 同流程轮播位置（生成图组内第几张；-1 = 不在组 / 非生成图）。
   const groupPos = asset ? group.findIndex((a) => a.id === asset.id) : -1;
 
@@ -600,8 +614,9 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
 
   if (!asset || !id) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-muted">
-        资产不存在
+      <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-muted">
+        暂未读取到素材
+        <button className="asset-detail-back" onClick={closeDetail}><ArrowLeft size={15} />返回</button>
       </div>
     );
   }

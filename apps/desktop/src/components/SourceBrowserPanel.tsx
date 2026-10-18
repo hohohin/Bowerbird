@@ -153,6 +153,9 @@ export function SourceBrowserPanel({ url, onClose, visible = true, suspended = f
     };
     const observer = new ResizeObserver(resize);
     observer.observe(viewport);
+    // Sidebar flex-basis animations move this fixed-width viewport without
+    // resizing it. Observe the layout slot too, including interrupted slides.
+    document.querySelectorAll(".app-sidebar-host").forEach(host => observer.observe(host));
     const overlays = new MutationObserver(resize);
     overlays.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["role", "hidden", "style", "class"] });
     window.addEventListener("resize", resize);

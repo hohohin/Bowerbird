@@ -21,7 +21,7 @@ w.__TAURI_INTERNALS__ = { convertFileSrc: (path: string) => path, invoke: async 
     case "get_settings": return structuredClone(w.settings);
     case "update_settings": w.settings = { ...w.settings, ...args.settings }; return;
     case "local_classification_start":
-      w.classificationStatus.model = !args.install && w.settings.jev_image_classification_enabled ? "jev-choice-dimensions/cloud-discovery-v5" : "local-test";
+      w.classificationStatus.model = !args.install && w.settings.jev_image_classification_enabled ? "jev-choice-flat-top4-30/cloud-discovery-v7" : "local-test";
       w.classificationStatus.current_asset = args.install ? null : structuredClone(w.previewAsset);
       if (!args.install) w.classificationStatus.total = 3;
       w.classificationStatus.jev_progress = !args.install && w.settings.jev_image_classification_enabled ? { asset: structuredClone(w.previewAsset), report: null, message: "正在等待 Jev 返回结果…" } : null;

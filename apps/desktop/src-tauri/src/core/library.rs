@@ -1878,7 +1878,8 @@ impl Database {
 
     /// 取某会话「最后一个有图轮」的产出图（截前 10 张，服务端参考图上限）——即梦/Cloud 续轮
     /// 的服务端权威回退：前端 job.turns 是易失内存（重启恢复/回看重建可能缺历史轮），续轮未显式
-    /// 携带参考图时从这里取上一轮产出图，避免即梦 text2image 丢上一轮图。无图返回空 Vec。
+    /// 携带参考图时从这里取上一轮产出图，避免即梦 text2image 丢上一轮图。
+    /// 历史 images 字段也保存视频路径；最新产出轮是视频时返回空，不回退到更早图片。
     pub fn last_generated_images_for_session(&self, session_id: &str) -> Vec<String> {
         let Ok(conn) = self.conn.lock() else {
             return Vec::new();
@@ -1889,7 +1890,12 @@ impl Database {
                     .into_iter()
                     .rev()
                     .find(|t| !t.images.is_empty())
-                    .map(|t| t.images.into_iter().take(10).collect())
+                    .filter(|t| t.media != "video")
+                    .map(|t| t.images.into_iter()
+                        // Older metadata may omit media; never auto-attach video files.
+                        .filter(|p| !Path::new(p).extension().and_then(|e| e.to_str())
+                            .is_some_and(crate::media::probe::is_video))
+                        .take(10).collect())
                     .unwrap_or_default()
             })
             .unwrap_or_default()
@@ -3280,6 +3286,42 @@ mod tests {
 
         // 未知 session / 无图会话 → 空。
         assert!(db.last_generated_images_for_session("sess-NOPE").is_empty());
+    }
+
+    #[test]
+    fn last_generated_images_does_not_inject_video_or_fall_back_to_an_older_image() {
+        let db = db();
+        for (session, turn, ext, media) in [
+            ("image-video", 1, "png", Some("image")),
+            ("image-video", 2, "mp4", Some("video")),
+            ("legacy-video", 1, "MOV", None),
+            ("video-image", 1, "mp4", Some("video")),
+            ("video-image", 2, "PNG", Some("image")),
+            ("video-poster", 1, "png", Some("video")),
+        ] {
+            let id = put_asset(&db, &format!("{session}-{turn}"));
+            let path = format!("/tmp/{session}-{turn}.{ext}");
+            db.conn.lock().unwrap().execute(
+                "UPDATE assets SET store_path = ?1, ext = ?2 WHERE id = ?3",
+                rusqlite::params![path, ext, id],
+            ).unwrap();
+            let mut payload = serde_json::json!({"session_id":session, "provider":"jimeng", "prompt":"test", "turn_key":turn.to_string()});
+            if let Some(media) = media { payload["media"] = media.into(); }
+            db.insert_analysis(&Analysis {
+                // Stable same-second ordering: independently generated ULIDs in one millisecond
+                // have random suffixes and do not encode this fixture's turn sequence.
+                id: format!("{session}-{turn:02}"), asset_id: id, kind: "generation_meta".into(),
+                provider: Some("jimeng".into()), created_at: Some(turn), payload: payload.to_string(),
+            }).unwrap();
+        }
+        for session in ["image-video", "legacy-video", "video-poster"] {
+            assert!(db.last_generated_images_for_session(session).is_empty(), "{session}");
+        }
+        assert_eq!(db.last_generated_images_for_session("video-image"), vec!["/tmp/video-image-2.PNG"]);
+        // Filtering implicit image references must not remove videos from history.
+        let history = db.generation_history_by_session("image-video", None).unwrap();
+        assert_eq!(history.turns.len(), 2);
+        assert_eq!(history.turns[1].images, vec!["/tmp/image-video-2.mp4"]);
     }
 
     #[test]

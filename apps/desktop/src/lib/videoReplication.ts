@@ -59,12 +59,49 @@ export interface ReplicationTask extends ReplicationInput {
 
 export const REPLICATION_PERSONA = "你是一名短视频广告编导，擅长根据参考视频的节奏和运镜，为新产品设计可执行的分镜。";
 export const REPLICATION_RULES = "保留参考内容中适合目标产品的节奏与镜头语言，围绕新产品重写主体、动作和场景。\n按镜头编号输出：时长、画面主体与动作、景别与运镜、光线与色彩、字幕或旁白。\n只使用明确提供的产品信息，不把原视频中的品牌、外观和功效套给新产品；缺失信息标注待确认。";
-export const REPLICATION_RATIOS = ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"];
 export const replicationStateLabel: Record<ReplicationTask["state"], string> = {
   queued: "排队中", analyzing: "分析中", analyzed: "分析完成", rewriting: "改写中", rewritten: "改写完成",
   generating: "生成中", completed: "生成完成", imported: "已加入素材库", failed: "未完成", interrupted: "已中断",
 };
 export const replicationRunning = (task: ReplicationTask) => ["queued", "analyzing", "rewriting", "generating"].includes(task.state);
+
+/** Use the timeline span, not summed shot lengths (shots may overlap). */
+export function replicationDuration(text: string): number | null {
+  const ranges: Array<[unknown, unknown]> = [];
+  const visit = (value: unknown) => {
+    if (!value || typeof value !== "object") return;
+    if (Array.isArray(value)) { value.forEach(visit); return; }
+    const item = value as Record<string, unknown>;
+    if ("start" in item || "end" in item) ranges.push([item.start, item.end]);
+    else Object.values(item).forEach(visit);
+  };
+  try { visit(JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, ""))); } catch { /* Plain-text model output. */ }
+  const time = "\\d+(?::\\d{1,2}){0,2}(?:\\.\\d+)?";
+  if (!ranges.length) {
+    let start: string | undefined;
+    for (const match of text.matchAll(new RegExp(`["']?\\b(start|end)\\b["']?\\s*[:=：]\\s*["']?(${time})`, "gi"))) {
+      if (match[1].toLowerCase() === "start") {
+        if (start !== undefined) return null;
+        start = match[2];
+      } else {
+        if (start === undefined) return null;
+        ranges.push([start, match[2]]); start = undefined;
+      }
+    }
+    if (start !== undefined) return null;
+    if (!ranges.length) for (const match of text.matchAll(new RegExp(`(?:时长|时间段|时间)\\s*[:：]\\s*(${time})\\s*(?:秒|s)?\\s*[-–—~～至]\\s*(${time})\\s*(?:秒|s)?`, "gi"))) ranges.push([match[1], match[2]]);
+  }
+  const seconds = (value: unknown): number => {
+    if (typeof value === "number") return value;
+    if (typeof value !== "string" || !/^\d+(?::\d{1,2}){0,2}(?:\.\d+)?(?:\s*(?:s|秒))?$/.test(value.trim())) return NaN;
+    const parts = value.trim().replace(/\s*(?:s|秒)$/, "").split(":").map(Number);
+    if (parts.slice(1).some(part => part >= 60)) return NaN;
+    return parts.reduce((total, part) => total * 60 + part, 0);
+  };
+  const parsed = ranges.map(([start, end]) => [seconds(start), seconds(end)]);
+  if (!parsed.length || parsed.some(([start, end]) => !Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start)) return null;
+  return Math.ceil(Math.max(...parsed.map(range => range[1])) - Math.min(...parsed.map(range => range[0])));
+}
 
 export function validateReplicationInput(input: ReplicationInput): string | null {
   const length = (value: string | undefined, max: number) => !!value?.trim() && [...value].length <= max;
@@ -76,9 +113,5 @@ export function validateReplicationInput(input: ReplicationInput): string | null
     if (!length(input.rules, 16000)) return "改写规范需为 1–16000 字";
     return null;
   }
-  if (!input.product?.name.trim()) return "请先选择目标产品";
-  if (!length(input.prompt, 12000)) return "生成提示词需为 1–12000 字，请精简后再提交";
-  if (!Number.isInteger(input.duration) || input.duration! < 4 || input.duration! > 12) return "视频时长需为 4–12 秒的整数";
-  if (!REPLICATION_RATIOS.includes(input.ratio ?? "")) return "请选择视频画幅";
-  return null;
+  return "请在画板对话框中生成视频";
 }

@@ -229,6 +229,8 @@ pub struct NoteNodePayloadV1 {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub member_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artboard: Option<CanvasArtboard>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_height_percent: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bubble_tail: Option<CanvasBubbleTail>,
@@ -239,6 +241,12 @@ pub struct NoteNodePayloadV1 {
     pub column_widths: Option<Vec<f64>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub row_heights: Option<Vec<f64>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CanvasArtboard {
+    pub base_asset_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -642,6 +650,11 @@ fn parse_node_payload_value(
         }
         CreativeNodeKind::Note => {
             let note: NoteNodePayloadV1 = serde_json::from_value(value)?;
+            if note.artboard.as_ref().is_some_and(|artboard|
+                note.note_type != Some(CanvasNoteType::Section)
+                    || artboard.base_asset_id.as_ref().is_some_and(|id| id.trim().is_empty())) {
+                return Err(CreativeContractError::InvalidNoteGrid);
+            }
             if note.note_type == Some(CanvasNoteType::Images) && note.cells.is_empty() {
                 return Err(CreativeContractError::InvalidNoteGrid);
             }

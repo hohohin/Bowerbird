@@ -1,11 +1,13 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { CanvasLayerMenuItem } from "./CanvasLayerMenuItem";
+import { CANVAS_ARTBOARD_FROM_IMAGE } from "../lib/canvasArtboard";
 import { createPortal } from "react-dom";
 import { ChevronRight, ClipboardCopy, FolderInput, FolderPlus, FolderTree, Layers, LayoutDashboard, MessageSquare, PenTool, ScanSearch, Trash2, Ungroup } from "lucide-react";
 import { understandEngineUsable, useStore } from "../store";
 import { api } from "../lib/api";
 import { loadDescribePrompt } from "../lib/describePrompt";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { CanvasAssetDeleteDialog } from "./CanvasAssetDeleteDialog";
 import { ModalShell } from "./ModalShell";
 import { RenameDialog } from "./RenameDialog";
 import { canUseByo } from "../lib/entitlement";
@@ -88,7 +90,6 @@ export function AssetContextMenu() {
   const menu = useStore((s) => s.contextMenu);
   const closeContextMenu = useStore((s) => s.closeContextMenu);
   const openDetail = useStore((s) => s.openDetail);
-  const exitProject = useStore((s) => s.exitProject);
   const detailAssetId = useStore((s) => s.detailAssetId);
   const addAssetToBoardFromDetail = useStore((s) => s.addAssetToBoardFromDetail);
   const activeProjectId = useStore((s) => s.activeProjectId);
@@ -127,6 +128,7 @@ export function AssetContextMenu() {
   const [newCollectionIds, setNewCollectionIds] = useState<string[] | null>(null);
   const [projectPickIds, setProjectPickIds] = useState<string[] | null>(null);
   const [pendingBatchDelete, setPendingBatchDelete] = useState<string[] | null>(null);
+  const [pendingCanvasDelete, setPendingCanvasDelete] = useState<{ assetIds: string[]; projectId: string } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -244,6 +246,10 @@ export function AssetContextMenu() {
   if (!menu) {
     return (
       <>
+        {pendingCanvasDelete && <CanvasAssetDeleteDialog
+          target={pendingCanvasDelete}
+          onClose={() => setPendingCanvasDelete(null)}
+        />}
         <ConfirmDialog
           open={pendingDeleteId !== null}
           danger
@@ -308,7 +314,7 @@ export function AssetContextMenu() {
   const asset = menu.asset ?? assets.find((a) => a.id === assetId);
   // 多选右键（manage 模式、选区 >1 且右键图在选区内）→ 专属批量菜单：
   // 单图操作（详情 / 重命名 / 标注 / 分层 / 文件类）不适用，换成集合 / 项目 / 批量反推 / 批量删除。
-  const multiIds = mode === "manage" && selectedIds.size > 1 && selectedIds.has(assetId)
+  const multiIds = !menu.canvasSelection && mode === "manage" && selectedIds.size > 1 && selectedIds.has(assetId)
     ? Array.from(selectedIds)
     : null;
   // 移入已有只列普通集合（排除 root、智能夹与收藏夹），与 BatchBar 一致。
@@ -592,20 +598,9 @@ export function AssetContextMenu() {
     zIndex: 60,
   };
 
-  async function showAssetDetail() {
+  function showAssetDetail() {
     closeContextMenu();
-    if (!activeProjectId) {
-      openDetail(assetId);
-      return;
-    }
-    try {
-      await exitProject();
-      const state = useStore.getState();
-      // 路由期间若用户已进入另一项目，不用迟到的详情请求覆盖新意图。
-      if (state.activeProjectId === null) state.openDetail(assetId);
-    } catch (error) {
-      notifyError(error, "无法打开图片详情，当前画板保持不变");
-    }
+    openDetail(assetId);
   }
 
   // 多选专属菜单：单列窄卡，只保留对整批有意义的操作（集合 / 项目 / 批量反推 / 批量删除）。
@@ -907,6 +902,14 @@ export function AssetContextMenu() {
             />
           )}
         </div>
+        {menu.canvasSelection && canChangeLibraryVisibility && menu.canvasSelection.nodeIds.length === 1 && (
+          <button type="button" role="menuitem" className="app-context-item px-2 py-1.5" disabled={busy}
+            title="在此图片旁新建画板，使用原图作为基底"
+            onClick={() => {
+              window.dispatchEvent(new CustomEvent(CANVAS_ARTBOARD_FROM_IMAGE, { detail: { ...menu.canvasSelection, assetId } }));
+              closeContextMenu();
+            }}><LayoutDashboard size={13} /> 以此图新建画板</button>
+        )}
         {isGenerated && (
           <button
             type="button"
@@ -1093,7 +1096,12 @@ export function AssetContextMenu() {
               role="menuitem"
               onClick={() => {
                 // 先收菜单再弹确认，避免两个浮层同时存在。
-                setPendingDeleteId({ id: assetId, external: asset?.source === "external" });
+                if (menu.canvasSelection) {
+                  setPendingCanvasDelete({ projectId: menu.canvasSelection.projectId,
+                    assetIds: [...new Set(menu.canvasSelection.assetIds ?? [assetId])] });
+                } else {
+                  setPendingDeleteId({ id: assetId, external: asset?.source === "external" });
+                }
                 closeContextMenu();
               }}
               disabled={busy}

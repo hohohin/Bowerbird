@@ -1,9 +1,23 @@
 // No Tauri IPC or library access is exposed to the remote page. The local drop
-// target is the only place that can request a capture.
+// target is the only place that can request a capture. Trusted drag events can
+// send a private, non-navigating preview notice; they cannot write library data.
 (() => {
   if (window.__bowerbirdExplorerInstalled) return;
   window.__bowerbirdExplorerInstalled = true;
   let pressed = null;
+  const bridge = "__BOWERBIRD_DRAG_BRIDGE__";
+  const openNotice = window.open.bind(window);
+  const notifyDrag = (kind, data) => {
+    if (!bridge.startsWith("bowerbird-explorer://")) return;
+    // Native on_new_window handles and denies this request. The source document
+    // never enters a pending navigation (including in WebView2's drag loop).
+    try { openNotice(bridge + "/" + kind + "?data=" + encodeURIComponent(JSON.stringify(data)), "_blank"); } catch { /* capture still works */ }
+  };
+  let dragId = null;
+  let visual = null;
+  window.addEventListener("dragover", event => visual?.move(event.clientX, event.clientY), true);
+  window.addEventListener("dragleave", event => { if (!event.relatedTarget) visual?.hide(); }, true);
+  window.addEventListener("pagehide", () => visual?.clear());
   function clearPressed() {
     if (pressed) {
       const { handle, draggable, userDrag, priority } = pressed;
@@ -55,6 +69,11 @@
   }, true);
   window.addEventListener("pointerup", clearPressed, true);
   window.addEventListener("dragend", clearPressed, true);
+  window.addEventListener("dragend", event => {
+    visual?.clear();
+    if (event.isTrusted && dragId) notifyDrag("end", { id: dragId });
+    dragId = null;
+  }, true);
   // Install on window before site scripts: a site's window capture handler runs
   // before any document handler and can otherwise cancel the drag first.
   window.addEventListener("dragstart", (event) => {
@@ -73,12 +92,23 @@
     if (link) {
       try { const target = new URL(link.href); if (target.origin === location.origin) pageUrl = target.href; } catch { /* use current page */ }
     }
-    const payload = JSON.stringify({ version: 1, imageUrl, pageUrl });
+    dragId = event.isTrusted && bridge.startsWith("bowerbird-explorer://")
+      ? [...crypto.getRandomValues(new Uint8Array(16))].map(n => n.toString(16).padStart(2, "0")).join("") : null;
+    const payload = JSON.stringify({ version: 1, imageUrl, pageUrl, ...(dragId ? { dragId } : {}) });
     event.dataTransfer.setData("application/x-bowerbird-explorer", payload);
     // Native WebView drag bridges may retain only standard text formats.
     event.dataTransfer.setData("text/plain", "bowerbird-explorer:" + payload);
     event.dataTransfer.effectAllowed = "copy";
+    if (event.isTrusted && window.createBowerbirdDragVisual) {
+      visual ??= window.createBowerbirdDragVisual();
+      visual.pick({ id: dragId, imageUrl: image.currentSrc || image.src }, event.clientX, event.clientY, image.getBoundingClientRect());
+      // A live DOM card can animate and carry tags; the OS drag bitmap cannot.
+      const transparent = document.createElement("canvas");
+      transparent.width = transparent.height = 1;
+      event.dataTransfer.setDragImage(transparent, 0, 0);
+    }
     // Keep site drag handlers from replacing the capture payload or cancelling it.
     event.stopImmediatePropagation();
+    if (dragId) notifyDrag("start", { id: dragId, imageUrl, pageUrl });
   }, true);
 })();

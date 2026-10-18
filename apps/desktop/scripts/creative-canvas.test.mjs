@@ -1,5 +1,6 @@
 import test from "node:test";
 import { canvasConversationTurn } from "../src/lib/canvasConversation.ts";
+import { isVideoPath } from "../src/lib/videoGeneration.ts";
 import assert from "node:assert/strict";
 import { performance } from "node:perf_hooks";
 import {
@@ -609,7 +610,7 @@ for (const collection of ["promptGraphNodes", "agentGraphNodes"]) {
       const summary = () => ({ status, jobId: "job", runId: "run" });
       const bindings = { React, X: () => null, selectCloudAgentResultArtifacts, promptNodeSummary: summary, agentGroupSummary: summary,
         conversationCards: { cards: new Map() }, nodeRect: (node) => node,
-        conversationImages: () => [], imageOnlyConversationIds: new Set(),
+        conversationImages: () => [], imageOnlyConversationIds: new Set(), isVideoPath, selectedConversationImage: () => null,
         cloudAgentRuns: {}, genJobs: {}, focusedNodeId: null, activeDragId: null, focusedThreadId: null,
         supersededTaskIds: new Set(), ReadonlyPrompt: () => null, CanvasResizeHandle: () => null, promptReferences: new Map(), graphNodes: [], agentPromptGroups: new Map(),
         selectedCanvasNodeIds: new Set(), selectedCanvasNodeIdsRef: { current: new Set() },
@@ -634,14 +635,15 @@ for (const collection of ["promptGraphNodes", "agentGraphNodes"]) {
 }
 
 import { snapCanvasRect, translateCanvasSelection, exceedsCanvasDragThreshold, isCanvasPanGesture, canvasNodeIdsInRect } from "../src/lib/canvasLogic.ts";
-import { expandCanvasSections } from "../src/lib/canvasNotes.ts";
+import { expandCanvasSections, readCanvasNote } from "../src/lib/canvasNotes.ts";
+import { intersectArtboard } from "../src/lib/canvasArtboard.ts";
 
 for (const dragKind of ["material", "execution"]) {
   for (const cancel of [false, true]) {
     test("mixed marquee drag from " + dragKind + (cancel ? " cancels both layouts" : " persists both layouts"), async () => {
       const source = readFileSync(new URL("../src/components/CanvasWorkspace.tsx", import.meta.url), "utf8");
       const file = ts.createSourceFile("canvas.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-      const names = ["selectionAnchors", "translateGraphSelection", "translateWorkflowSelection", "beginNodeDrag", "beginGraphNodeDrag", "moveNode", "moveGraphNode", "endNodeDrag", "endGraphNodeDrag", "persistGraphNodeGeometry"];
+      const names = ["selectionAnchors", "expandArtboardSelection", "translateGraphSelection", "translateWorkflowSelection", "beginNodeDrag", "beginGraphNodeDrag", "moveNode", "moveGraphNode", "endNodeDrag", "endGraphNodeDrag", "persistGraphNodeGeometry"];
       const declarations = [];
       function visit(node) {
         if (ts.isFunctionDeclaration(node) && names.includes(node.name?.text)) declarations.push(node.getText(file));
@@ -663,8 +665,8 @@ for (const dragKind of ["material", "execution"]) {
       const bindings = {
         conversationCardsRef: { current: { cards: new Map(), hiddenIds: new Set() } },
         window: { getSelection: () => null },
-        agentPromptGroupMap, expandCanvasSections, graphEdges: [],
-        containedSessionOutputIds: () => new Set(), workflowSessionIds: () => new Set(),
+        agentPromptGroupMap, expandCanvasSections, readCanvasNote, intersectArtboard, graphEdges: [], setPendingNewCards() {},
+        containedSessionOutputIds: () => new Set(), hiddenWorkflowSessionIds: () => new Set(),
         canvasWorkflowController: () => ({ document: { nodes: [] } }),
         workflowRef: { current: null }, drawingTool: "select",
         activateCanvasMaterial: () => activated++, hitNode: () => null,
@@ -808,7 +810,9 @@ test("canvas Ctrl+Z undoes removal without taking over text editing or adding to
     let prevented = 0;
     const bindings = { promptMenuRef: { current: null }, workflowAgentDetail: null, scopedInspectorOpen: false, viewModeRef: { current: "canvas" },
       nodeDragRef: { current: null }, graphNodeDragRef: { current: null }, undoHistoryRef: { current: [{}] },
-      document: { querySelector: () => null }, undoCanvasAction: () => undone++ };
+      document: { querySelector: () => null }, undoCanvasAction: () => undone++,
+      useStore: { getState: () => ({ canvasLibraryOpen: false }) },
+      useLocalFileMode: { getState: () => ({ open: false }) }, workspaceRef: { current: null } };
     const onKeyDown = new Function(...Object.keys(bindings), code + ";return onKeyDown;")(...Object.values(bindings));
     onKeyDown({ target, key: "z", code: "KeyZ", ...modifier, preventDefault() { prevented++; } });
     assert.equal(undone, expected);
@@ -908,6 +912,7 @@ test("canvas selection opens dimensions only in creation mode and anchors to the
     const bindings = {
       useStore: { getState: () => ({ boardOpen: creating, genEditing: null, promptedAssets: [{ id: "asset", sections: hasDimensions ? [{ title: "色彩" }] : [] }] }) },
       canvasPrimaryMaterialAction: (active) => active ? "compose" : "preview",
+      isVideoPath,
       stageRef: { current: { querySelectorAll: () => [otherInstance, anchor] } },
       BOARD_ASSET_PICK_EVENT: "pick",
       window: { dispatchEvent: (event) => events.push(event) },

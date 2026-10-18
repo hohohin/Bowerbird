@@ -41,3 +41,17 @@ test("truncated or invalid shot results are never accepted as complete", () => {
   const messages = replicationMessages(input) as { content: { type: string; video_url?: { fps: number } }[] }[];
   equal(messages[0].content[0].type, "video_url"); equal(messages[0].content[0].video_url?.fps, 1);
 });
+
+test("missing transition preserves complete analysis, while malformed required fields and times still fail", () => {
+  const input: ReplicationPayload = { operation: "video-analysis", video };
+  const shot = { start: 0, end: 5, subject: "人物", action: "展示", camera: "中景", composition: "居中", lighting: "自然光" };
+  for (const transition of [undefined, null]) {
+    const result = JSON.parse(validateReplicationResult(input, JSON.stringify({ shots: [{ ...shot, transition }] }), "stop"));
+    deepEqual(result.shots[0], { ...shot, transition: "未提供" });
+  }
+  for (const transition of ["硬切", ""]) equal(JSON.parse(validateReplicationResult(input, JSON.stringify({ shots: [{ ...shot, transition }] }), "stop")).shots[0].transition, transition);
+  throws(() => validateReplicationResult(input, JSON.stringify({ shots: [{ ...shot, action: null }] }), "stop"), /replication_shot_fields_invalid/);
+  throws(() => validateReplicationResult(input, JSON.stringify({ shots: [{ ...shot, end: 7 }] }), "stop"), /replication_shot_time_invalid/);
+  throws(() => validateReplicationResult(input, JSON.stringify({ shots: [shot] }), "length"), /replication_result_truncated/);
+  throws(() => validateReplicationResult(input, "{", "stop"), /replication_json_invalid/);
+});

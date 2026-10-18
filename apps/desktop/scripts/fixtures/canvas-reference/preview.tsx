@@ -7,9 +7,11 @@ import { useStore } from "../../../src/store";
 import { ExploreWorkspace } from "../../../src/components/ExploreWorkspace";
 import { ToastViewport } from "../../../src/components/ToastViewport";
 import { VisualProfileDialog } from "../../../src/components/VisualProfileDialog";
-import { LocalFileBrowser } from "../../../src/components/LocalFileBrowser";
+import { useLocalFileMode } from "../../../src/lib/localFileMode";
 import { Toolbar } from "../../../src/components/Toolbar";
 import { SettingsDialog } from "../../../src/components/SettingsDialog";
+import App from "../../../src/App";
+import { useOnboarding } from "../../../src/lib/onboardingStore";
 import "../../../src/styles.css";
 
 // Closed synthetic IPC fixture: never reads a library or invokes a provider.
@@ -19,6 +21,7 @@ const localFiles = new URLSearchParams(location.search).has("local-files");
 const sourceLibrary = new URLSearchParams(location.search).has("source-library");
 const canvasLibrary = new URLSearchParams(location.search).has("canvas-library");
 const strictCanvas = new URLSearchParams(location.search).has("strict-canvas");
+const detailRoute = new URLSearchParams(location.search).has("detail-route");
 let canvasExists = !strictCanvas;
 w.store = useStore;
 const callbacks = new Map();
@@ -41,6 +44,7 @@ if (sessionStorage.getItem("canvas-media-dimensions")) {
   }
 }
 assets.push(...JSON.parse(sessionStorage.getItem("reference-drafts") || "[]"));
+if (detailRoute) assets.push(...Array.from({ length: 60 }, (_, index) => ({ ...assets[0], id: `detail-${index}`, name: `返回位置测试 ${index}` })));
 if (canvasLibrary) {
   const hidden: string[] = JSON.parse(sessionStorage.getItem("canvas-only-assets") || "[]");
   for (const asset of assets) Object.assign(asset, { ext: "svg", library_hidden: hidden.includes(asset.id) });
@@ -89,7 +93,17 @@ w.__TAURI_INTERNALS__ = {
   metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main" } },
   invoke: async (command: string, args: any) => {
     w.calls.push({ command, args });
-    if (localFiles && command === "external_files_browse") {
+    if (detailRoute) {
+      if (command === "list_projects") return [project];
+      if (command === "list_library_view") return { assets, memberships: [], total: assets.length };
+      if (command === "generation_history") return { turns: [], references: [] };
+      if (command === "layer_workspace_asset_ids") return [];
+      if (command === "palette_overview") return [];
+      if (command === "codex_health" || command === "dreamina_health") return { ok: false };
+    }
+    if (command === "file_workspace_status") return { config: { root: null, places: [], projects: {} }, proposed_root: "/BowerbirdLibrary" };
+    if (command === "file_workspace_prepare") return args.projectId ? `/BowerbirdLibrary/项目/${args.projectId}` : "/BowerbirdLibrary";
+    if ((localFiles || sourceLibrary) && command === "external_files_browse") {
       if (args.path === "/missing") throw "目录不存在";
       const path = args.path || "/pictures";
       return { path, parent: path === "/" ? null : "/", total: 3, entries: [
@@ -98,7 +112,9 @@ w.__TAURI_INTERNALS__ = {
         { name: "另一张.png", path: `${path}/other.png`, directory: false },
       ] };
     }
-    if (localFiles && command === "external_files_preview") return image("#68a4b5");
+    if ((localFiles || sourceLibrary) && command === "external_files_preview") return image("#68a4b5");
+    if ((localFiles || sourceLibrary) && command === "folder_classification_view") return {root:args.path,record:{version:1,recursive:false,labels:[],pictures:[]}};
+    if ((localFiles || sourceLibrary) && command === "external_files_media") return image("#68a4b5");
     if (localFiles && command === "external_files_index") {
       if (w.holdIndex) await new Promise(resolve => { w.releaseIndex = resolve; });
       if (w.failIndex) throw "原图片不可用";
@@ -291,6 +307,17 @@ w.__TAURI_INTERNALS__ = {
         store_path: args.dataUrl, thumb_path: args.dataUrl, source: args.source };
       assets.push(asset); return asset;
     }
+    if (command === "trim_video") {
+      if (w.failVideoTrim) throw "模拟裁剪失败，原视频未修改";
+      if (w.holdVideoTrim) await new Promise(resolve => { w.releaseVideoTrim = resolve; });
+      const original = assets.find(asset => asset.store_path === args.sourcePath);
+      if (!original) throw "未找到视频";
+      const result = await w.trimFixture(args);
+      const asset = { ...original, ...result, id: args.overwrite ? original.id : `trim-${assets.length}`,
+        name: args.overwrite ? original.name : `${original.name}-裁剪`, duration: args.end - args.start, source: "video-trim" };
+      if (args.overwrite) Object.assign(original, asset); else assets.push(asset);
+      return asset;
+    }
     if (command === "read_image_data_url") return w.templateImageData ?? args.path;
     if (command === "project_canvas_ensure") {
       if (strictCanvas) await new Promise(resolve => setTimeout(resolve, 150));
@@ -298,12 +325,29 @@ w.__TAURI_INTERNALS__ = {
       return canvas;
     }
     if (command === "list_generation_groups") return {};
+    if ((sourceLibrary || localFiles) && command === "list_library_view") {
+      const filter = args.filter ?? {};
+      let visible = assets.filter((asset: any) => !asset.library_hidden);
+      if (filter.search) visible = visible.filter(asset => asset.name.includes(filter.search));
+      else if (filter.smart?.startsWith("tag:")) visible = filter.smart === "tag:插画" ? visible.filter(asset => asset.id === "existing") : [];
+      else if (filter.folderId) visible = visible.filter(asset => asset.id === "existing");
+      if (filter.smart === "source:generated" || filter.smart === "source:!generated") {
+        visible = visible.filter((asset: any) => !!asset.generation_session_id === (filter.smart === "source:generated"));
+      }
+      return { assets: visible, total: assets.length, memberships: [] };
+    }
     if (canvasLibrary && command === "list_projects") return [{ ...project, asset_count: assets.filter((asset: any) => !asset.library_hidden).length }];
+    if (command === "palette_overview") {
+      if (w.failPalette) throw "模拟色板失败";
+      return w.testPalette ?? [];
+    }
+    if (command === "recompute_colors") return null;
     if (sourceLibrary && command === "list_tags") {
       if (w.failTags) throw "模拟标签加载失败";
       return w.testTags ?? [{ id: "tag-a", name: "插画", count: 2 }, { id: "tag-b", name: "建筑", count: 0 }];
     }
     if (sourceLibrary && command === "list_assets_smart") return args.query === "tag:插画" ? assets.slice(0, 1) : [];
+    if (sourceLibrary && command === "search_assets") return assets.filter(asset => asset.name.includes(args.query));
     if (sourceLibrary && command === "list_assets") return assets.filter((asset: any) => !asset.library_hidden && (!args.folderId || asset.id === "existing"));
     if (sourceLibrary && command === "count_assets") return assets.filter((asset: any) => !asset.library_hidden).length;
     if (command === "count_assets") return 0;
@@ -313,25 +357,32 @@ w.__TAURI_INTERNALS__ = {
 };
 w.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
 useStore.setState({ projects: (explorer ? [project, { ...project, id: "q", name: "另一个项目" }] : [project]) as any, activeProjectId: "p", folders: sourceLibrary ? [{ id: "source-folder", name: "测试文件夹", kind: "folder" }] as any : [], assets: assets.filter((asset: any) => !asset.library_hidden) as any, boardOpen: false, settings: JSON.parse(sessionStorage.getItem("canvas-settings") || "{}") });
+if (detailRoute) {
+  useStore.setState({ loadSettings: async () => {}, loadCloudAccount: async () => {}, loadGenJobs: async () => {}, loadCloudAgentRuns: async () => {} });
+  useOnboarding.setState(state => ({ guide: { ...state.guide, status: "skipped" }, progress: { ...state.progress, updateSeen: true } }));
+}
 function Fixture() {
-  const [filesOpen, setFilesOpen] = React.useState(false);
+  const folderMode = useLocalFileMode(s => s.open);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
   w.openSettings = () => setSettingsOpen(true);
   const projectId = useStore(state => state.activeProjectId)!;
+  const reuse = useStore(state => state.pendingCreativeReuse);
   const [exploring, setExploring] = React.useState(explorer);
   const [toolbarCanvasMode, setToolbarCanvasMode] = React.useState(true);
   w.setToolbarCanvasMode = setToolbarCanvasMode;
   w.setExploring = setExploring;
   const canvas = <React.Profiler id="canvas" onRender={() => { w.canvasCommits = (w.canvasCommits || 0) + 1; }}>
-    <CanvasWorkspace key={projectId} projectId={projectId} exploring={exploring || filesOpen} />
+    <CanvasWorkspace key={projectId} projectId={projectId} exploring={exploring}
+      launchRequest={reuse?.targetProjectId === projectId ? { id: reuse.id, projectId, assetIds: [], promptLoad: reuse.promptLoad } : null}
+      onLaunchConsumed={id => useStore.getState().ackPendingCreativeReuse(id)} />
   </React.Profiler>;
   return <div className="app-shell" style={{ display: "flex", height: "100vh" }}>
     {sourceLibrary || localFiles ? <div className="flex min-w-0 flex-1 flex-col">
-      <Toolbar onLocalFiles={() => setFilesOpen(value => !value)} localFilesOpen={filesOpen} canvasMode={toolbarCanvasMode} onCanvasModeChange={setToolbarCanvasMode} onCreateCreative={() => {}} onRefresh={async () => {}} />
-      <div className="flex min-h-0 flex-1">{filesOpen && <LocalFileBrowser onClose={() => setFilesOpen(false)} onCreateProject={() => {}} />}{canvas}</div>
+      <Toolbar localFilesOpen={folderMode} canvasMode={toolbarCanvasMode} onCanvasModeChange={setToolbarCanvasMode} onCreateCreative={() => {}} onRefresh={async () => {}} />
+      <div className="flex min-h-0 flex-1">{canvas}</div>
     </div> : explorer ? <ExploreWorkspace url="https://www.pinterest.com/" open={exploring} onClose={() => setExploring(false)}>{canvas}</ExploreWorkspace> : canvas}
     <AssetContextMenu /><ImageAnnotator /><ToastViewport /><VisualProfileDialog />{settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
   </div>;
 }
 createRoot(document.getElementById("root")!).render(new URLSearchParams(location.search).has("strict")
-  ? <React.StrictMode><Fixture /></React.StrictMode> : <Fixture />);
+  ? <React.StrictMode>{detailRoute ? <App /> : <Fixture />}</React.StrictMode> : detailRoute ? <App /> : <Fixture />);

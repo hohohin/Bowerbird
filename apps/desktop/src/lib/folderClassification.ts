@@ -1,10 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import { localClassification, type ClassificationLabel } from "./localClassification";
+import type { LocalFileEntry } from "./externalFiles";
 
 export interface FolderPicture { id: string; path: string; fingerprint: string; tags: [string,string][]; rejected: string[]; observation: [string,string,number] | null }
-export interface FolderClassification { root: string; record: { version: number; recursive: boolean; labels: ClassificationLabel[]; pictures: FolderPicture[] } }
+export interface FolderClassification { root: string; storage?: "folder" | "local"; record: { version: number; recursive: boolean; labels: ClassificationLabel[]; pictures: FolderPicture[] } }
 export const folderClassification = {
   view: (path: string) => invoke<FolderClassification>("folder_classification_view", { path }),
+  images: (path: string, tagId: string) => invoke<LocalFileEntry[]>("folder_classification_images", { path, tagId }),
   client: (root: string, recursive: boolean) => ({
     ...localClassification,
     labels: async () => (await folderClassification.view(root)).record.labels,

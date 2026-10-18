@@ -578,7 +578,23 @@ pub async fn codex_create_image(
     // 失败重试的叠放锚点（被重试失败轮的 prompt 节点 id）：新卡原样落它的位置。
     retry_anchor_node_id: Option<String>,
     internal_agent: Option<bool>,
+    diagnostic_id: Option<String>,
 ) -> Result<String, AppError> {
+    // Record receipt before validation. These rows never enter the execution queue.
+    let diagnostic_job_id = job_id.clone();
+    let diagnostic_id = match diagnostic_id {
+        Some(id) => id,
+        None => db.begin_generation_diagnostic(&serde_json::json!({
+            "jobId":job_id,"turnKey":turn_key,"prompt":prompt,"promptRaw":prompt_raw,
+            "referenceImages":reference_images,"referenceNodeIds":reference_node_ids,
+            "media":media,"videoOptions":video_options,"provider":provider,"ratio":ratio,
+            "count":count,"transparent":transparent,"sessionId":session_id,
+            "projectId":project_id,"threadId":thread_id,"exactReferences":exact_references,
+            "parentNodeId":parent_node_id,"parentAssetPath":parent_asset_path
+        }))?,
+    };
+    crate::core::generation_diagnostics::track_attempt(db.inner(), &diagnostic_id, &diagnostic_job_id, async {
+    db.generation_diagnostic_phase(&diagnostic_id, &job_id, "validation", Some(&reference_images))?;
     let internal_agent = internal_agent.unwrap_or(false);
     let media = media.unwrap_or_else(|| "image".into());
     if !matches!(media.as_str(), "image" | "video") {
@@ -668,6 +684,7 @@ pub async fn codex_create_image(
     // exact_references=true（轮级重试/编辑）时跳过合并/附加：调用方已给该轮**当时实际下发**
     // 的完整参考图列表，精确重放（重试第 N 轮用当时的基图，而不是该轮自己产出的最新图）。
     let mut reference_images = {
+        db.generation_diagnostic_phase(&diagnostic_id, &job_id, "reference_resolution", None)?;
         let db = db.inner().clone();
         tokio::task::spawn_blocking(move || db.resolve_external_paths(&reference_images))
             .await.map_err(|e| AppError::Other(e.to_string()))??
@@ -812,6 +829,7 @@ pub async fn codex_create_image(
         transparent_background: transparent.then_some(true),
     };
 
+    db.generation_diagnostic_phase(&diagnostic_id, &job_id, "preflight", Some(&refs_for_meta))?;
     if let Some(options) = &video_options {
         if cloud_video { crate::codex::bowerbird_cloud::video_preflight(&req, options)?; }
         else { crate::codex::jimeng_video::preflight(&req, options)?; }
@@ -819,6 +837,7 @@ pub async fn codex_create_image(
         return Err(AppError::Other("图片生成不能使用视频文件作为参考，请切换即梦视频多模态模式或选择图片".into()));
     }
 
+    db.generation_diagnostic_phase(&diagnostic_id, &job_id, "entitlement", None)?;
     let entitlement_snapshot = entitlement.current_or_sync(&auth_client).await;
     if visual_profile.is_some() && !entitlement_snapshot.policy.can_use_visual_profiles {
         return Err(AppError::Other("当前权益不支持品牌视觉规范".into()));
@@ -933,6 +952,7 @@ pub async fn codex_create_image(
     // 先解析 provider（可能出错 → ?）：必须在注册 GENERATE_CANCEL 之前，否则出错提前返回
     // 会留下 stale cancel sender（下次 cancel_codex_create take 到它）。None → codex（默认）。
     // 即梦模型版本每次生成都从 settings 重读 → 设置页热修改下一次生成即生效。
+    db.generation_diagnostic_phase(&diagnostic_id, &job_id, "task_setup", None)?;
     let cloud_context = crate::codex::is_cloud_generation_provider(provider.as_deref())
         .then(|| (cloud_client.inner().clone(), auth_client.inner().clone()));
     let dreamina_model = settings.get().dreamina_model_version;
@@ -1064,6 +1084,7 @@ pub async fn codex_create_image(
     let generation_result: Result<(), AppError> = async {
         // generate_image 借用 tx 推 Delta；用 block 限定借期，结束后 command 才能 reuse tx 发 Done。
         // resume 句柄用 provider_resume（非 codex 原生会话切 codex = None 开新 thread）。
+        db.generation_diagnostic_phase(&diagnostic_id, &job_id, "provider", None)?;
         let outcome = {
             let gen_fut = async {
                 let _jimeng_permit = if matches!(provider_name.as_str(), "jimeng" | "dreamina") {
@@ -1091,6 +1112,10 @@ pub async fn codex_create_image(
 
         // 源图收尾入库（ingest + project link + generation_meta + caption + 自动命名）—— 抽到
         // generation_worker::finalize_generation_assets，与启动恢复 worker 共用、元数据一致。
+        // Provider output already exists: a diagnostic write failure must not block ingestion.
+        if let Err(error) = db.generation_diagnostic_phase(&diagnostic_id, &job_id, "ingestion", None) {
+            tracing::warn!(job_id=%job_id, "生成诊断阶段写入失败: {error}");
+        }
         let gen_assets = crate::core::generation_worker::finalize_generation_assets(
             app.clone(),
             db.inner().clone(),
@@ -1189,6 +1214,23 @@ pub async fn codex_create_image(
     // 生成图已入库，通知瀑布流刷新（finalize 已 emit analyses://changed + 自动命名）。
     let _ = app.emit("library://assets-changed", ());
     Ok(job_id)
+    }).await
+}
+
+#[tauri::command]
+pub fn begin_generation_diagnostic(db: State<'_, Arc<Database>>, request: serde_json::Value) -> Result<String, AppError> {
+    db.begin_generation_diagnostic(&request)
+}
+
+#[tauri::command]
+pub fn finish_generation_diagnostic(db: State<'_, Arc<Database>>, attempt_id: String, job_id: String, error: Option<String>) -> Result<(), AppError> {
+    db.finish_generation_diagnostic(&attempt_id, &job_id, error.as_deref())
+}
+
+#[tauri::command]
+pub fn generation_diagnostics(db: State<'_, Arc<Database>>, job_id: String) -> Result<serde_json::Value, AppError> {
+    Ok(serde_json::json!({"schemaVersion":1,"jobId":job_id,"attempts":db.generation_diagnostics(&job_id)?,
+        "task":crate::core::task_queue::Task::by_id(db.inner(), &job_id)?}))
 }
 
 /// 取消指定的图像生成任务（per-job）。无此 job 在跑则空操作。

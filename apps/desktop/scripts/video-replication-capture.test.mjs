@@ -18,6 +18,7 @@ test('observer ignores feed videos, preserves original URLs, and reports protect
   detail.aweme_id='1234567890123456';state.tick();
   const result=JSON.parse(new URL(state.location.href).searchParams.get('payload'));
   assert.deepEqual(result.urls,['https://v1.douyinvod.com/video?mark=1']);assert.equal(result.duration,5);
+  assert.equal(state.window.__bbDouyinResult.videoId,result.videoId);
   const blocked=setup();blocked.window._ROUTER_DATA={...detail,images:[{}]};blocked.tick();
   assert.equal(JSON.parse(new URL(blocked.location.href).searchParams.get('payload')).blocked,'image');
 });
@@ -25,4 +26,13 @@ test('observer reads the target detail response without generating any extra req
   const state=setup();state.window.payload={aweme_detail:{aweme_id:'1234567890123456',video:{drm_type:1}}};
   await state.window.fetch('unchanged');await new Promise(resolve=>setImmediate(resolve));
   assert.equal(JSON.parse(new URL(state.location.href).searchParams.get('payload')).blocked,'protected');
+});
+
+test('native response delivery still works after the page replaces fetch',()=>{
+  const state=setup();state.window.fetch=async()=>({});
+  state.window.__bbDouyinInspect({aweme_detail:{aweme_id:'9999999999999999',video:{play_addr:{url_list:['https://v1.douyinvod.com/wrong']}}}});
+  assert.equal(state.window.__bbDouyinResult,undefined);
+  state.window.__bbDouyinInspect({aweme_detail:{aweme_id:'1234567890123456',video:{duration:10100,play_addr:{url_list:['https://v1.douyinvod.com/original']}}}});
+  assert.equal(state.window.__bbDouyinResult.videoId,'1234567890123456');
+  assert.equal(state.window.__bbDouyinResult.duration,10.1);
 });

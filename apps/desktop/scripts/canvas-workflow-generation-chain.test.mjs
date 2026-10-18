@@ -15,6 +15,7 @@ try {
     const {CanvasWorkflowController}=await import('/src/lib/canvasWorkflowRuntime.ts');
     const {newWorkflowNode}=await import('/src/lib/canvasWorkflow.ts');
     const {useStore}=await import('/src/store.ts');
+    const {publishGeneration}=await import('/scripts/fixtures/canvas-reference/generation.ts');
     const check=(v,m)=>{if(!v)throw new Error(m);};
     const node=id=>({...newWorkflowNode('generation',0,0,'codex'),id,prompt:id});
     const source=node('source'),target=id=>({...node(id),prompt:'use @[result]',inputs:{image:[{nodeId:'source',portId:'image'}]},promptReferences:[{id:'result',type:'image',input:{nodeId:'source',portId:'image'},label:'本次生成图片'}]});
@@ -28,6 +29,7 @@ try {
       if(isSource&&fail)throw new Error('source failed');
       const images=isSource?(round===1?['a.png','b.png']:['c.png','d.png']):['existing.png'];
       useStore.setState(s=>({genJobs:{...s.genJobs,[identity.jobId]:{turns:[{turnKey:identity.turnKey,images},{turnKey:'manual-later',images:['wrong.png']}]} }}));
+      await publishGeneration(args, images);
       return {accepted:true};
     }});
     const running=c.start('source');await signal;
@@ -36,16 +38,17 @@ try {
     check(firstSession&&c.document.nodes[0].outputs.image===undefined,'new session binds before provider completes');
     release();await running;
     check(c.document.run.status==='done'&&calls.length===3,'chain and fanout complete');
-    check(calls.slice(1).every(call=>call.assets.join(',')==='a,b'),'both branches consume only this turn images');
+    check(calls.slice(1).every(call=>call.assets.join(',')==='b'),'both branches consume this turn latest image, as Agent session outputs do');
     round=2;signal=new Promise(resolve=>{started=resolve;});
     const rerun=c.start('source');await signal;
     const secondSession=c.document.nodes[0].activeSessionNodeId;
     check(secondSession!==firstSession&&c.document.nodes[0].sessionNodeIds.includes(firstSession),'rerun replaces current session but keeps history');
     check(!c.document.nodes[0].outputs.image&&calls.length===4,'old images unavailable during rerun');
     release();await rerun;
-    check(calls.slice(4).every(call=>call.assets.join(',')==='c,d'),'same reference resolves new images without rewiring');
+    check(calls.slice(4).every(call=>call.assets.join(',')==='d'),'same reference resolves new image without rewiring');
     check(c.document.nodes[1].promptReferences[0].assetId===undefined,'dynamic reference remains unpinned');
     const saved=structuredClone(c.document);saved.run.status='running';saved.run.steps.source.status='running';saved.nodes[0].outputs={};
+    delete saved.run.steps.source.generationSubmission; // Legacy result-waiting recovery remains supported.
     sessionStorage.setItem('workflow-image-chain-recovery',JSON.stringify({revision:1,document:saved}));
     api.recentGenSessions=async()=>[{id:saved.run.steps.source.jobId,status:'done',turns:[{turn_key:'manual-later',images:['wrong.png']},{turn_key:saved.run.steps.source.turnKey,images:['c.png','d.png']}]}];
     const recovered=new CanvasWorkflowController('image-chain-recovery');await recovered.load();await recovered.continue();
@@ -53,7 +56,7 @@ try {
     fail=true;delay=false;await c.start('source');
     check(c.document.run.status==='failed'&&calls.length===7&&!c.document.nodes[0].outputs.image,'failed rerun cannot feed stale images to downstream');
   });
-  // Actual UI: wire before results; history replaces both current and old session cards.
+  // Actual UI: wire before results; sessions are visible and history remains available.
   await page.evaluate(async()=>{
     const {canvasWorkflowController}=await import('/src/lib/canvasWorkflowRuntime.ts');
     const {newWorkflowNode}=await import('/src/lib/canvasWorkflow.ts');
@@ -66,7 +69,7 @@ try {
   await page.keyboard.press('Escape');assert.equal(await history.getAttribute('aria-expanded'),'false');
   await source.getByRole('button',{name:'输出：图片',exact:true}).click();await target.getByRole('button',{name:'输入：图片',exact:true}).click();
   await target.getByRole('textbox',{name:'卡片指令',exact:true}).pressSequentially('@');
-  const option=page.getByRole('option').filter({hasText:'生成结果 1'});await option.click();
+  const option=page.getByRole('option').filter({hasText:'图片来源 1'});await option.click();
   await page.evaluate(async()=>{
     const {canvasWorkflowController}=await import('/src/lib/canvasWorkflowRuntime.ts');const c=canvasWorkflowController('p');
     if(c.document.nodes[1].promptReferences?.length!==1||c.document.nodes[1].promptReferences[0].assetId)throw new Error('reference must follow output');
@@ -80,8 +83,8 @@ try {
   const wire=page.locator('[data-workflow-target="ui-target"]');await wire.waitFor();
   const directPath=await wire.getAttribute('d');
   assert.match(directPath,/^M 400 /,'wire starts at generator image socket');
-  assert.equal(await page.locator('[data-canvas-node-id="session-old"],[data-canvas-node-id="session-new"]').count(),0);
-  assert.equal(await page.locator('[data-workflow-session-output="session-old"],[data-workflow-session-link]').count(),0);
+  assert.equal(await page.locator('[data-canvas-node-id="session-old"],[data-canvas-node-id="session-new"]').count(),2);
+  assert.equal(await page.locator('[data-workflow-session-link]').count(),2);
   await history.click();const popup=page.getByRole('dialog',{name:'生成历史',exact:true});await popup.waitFor();
   assert.deepEqual(await popup.locator('[data-workflow-history-session]').evaluateAll(rows=>rows.map(row=>row.dataset.workflowHistorySession)),['session-new','session-old']);
   assert.equal(await popup.locator('time').first().getAttribute('datetime'),new Date((1790121600+420)*1000).toISOString());
@@ -105,7 +108,7 @@ try {
   await page.keyboard.press('Escape');
   await page.evaluate(async()=>{const {canvasWorkflowController}=await import('/src/lib/canvasWorkflowRuntime.ts');const c=canvasWorkflowController('p');await c.edit(c.document.nodes.map(n=>n.id==='ui-source'?{...n,activeSessionNodeId:'session-new'}:n));});
   assert.equal(await wire.getAttribute('d'),directPath,'new session does not move the wire');
-  assert.equal(await page.locator('[data-canvas-node-id="session-old"]').count(),0);
+  assert.equal(await page.locator('[data-canvas-node-id="session-old"]').count(),1);
   await page.reload();await source.waitFor();await history.click();await popup.waitFor();
   assert.equal(await popup.locator('[data-workflow-history-session]').count(),2);
   await page.mouse.click(1500,900);await popup.waitFor({state:'detached'});

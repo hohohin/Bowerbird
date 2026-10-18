@@ -83,6 +83,12 @@ pub fn migrations() -> Migrations<'static> {
         M::up(include_str!("../../sql/0032_parallel_canvas_workflows.sql")),
         M::up(include_str!("../../sql/0033_workflow_templates.sql")),
         M::up(include_str!("../../sql/0034_external_assets.sql")),
+        M::up(include_str!("../../sql/0035_generation_diagnostics.sql")),
+        M::up(include_str!("../../sql/0036_classification_dimensions.sql")),
+        M::up(include_str!("../../sql/0037_classification_presets.sql")),
+        M::up(include_str!("../../sql/0038_creative_file_queue.sql")),
+        M::up(include_str!("../../sql/0039_creative_file_fingerprints.sql")),
+        M::up(include_str!("../../sql/0040_file_workspace_moves.sql")),
     ])
 }
 
@@ -225,6 +231,22 @@ fn backfill_asset_reference_counts(tx: &rusqlite::Transaction) -> rusqlite_migra
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn classification_dimensions_upgrade_preserves_tags_assignments_and_observations() {
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        migrations().to_version(&mut conn, 35).unwrap();
+        conn.execute_batch("INSERT INTO assets(id,name,created_at) VALUES('a','旧图',1);
+            INSERT INTO tags(id,name,source,classification_description) VALUES('t','梦幻','manual','情绪');
+            INSERT INTO asset_tags(asset_id,tag_id,origin) VALUES('a','t','manual');
+            INSERT INTO local_visual_observations VALUES('a','jev-choice-dimensions/cloud-discovery-v5','旧结果',1);").unwrap();
+        migrations().to_latest(&mut conn).unwrap();
+        assert_eq!(conn.query_row("SELECT classification_dimension FROM tags WHERE id='t'", [], |r| r.get::<_, Option<String>>(0)).unwrap(), None);
+        assert_eq!(conn.query_row("SELECT origin FROM asset_tags WHERE asset_id='a' AND tag_id='t'", [], |r| r.get::<_, String>(0)).unwrap(), "manual");
+        assert_eq!(conn.query_row("SELECT description FROM local_visual_observations WHERE asset_id='a'", [], |r| r.get::<_, String>(0)).unwrap(), "旧结果");
+        assert!(conn.execute("UPDATE tags SET classification_dimension='invalid'", []).is_err());
+    }
 
     #[test]
     fn canvas_zoom_upgrade_preserves_view_and_constraints() {

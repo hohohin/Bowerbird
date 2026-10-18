@@ -91,6 +91,7 @@ pub async fn create_project(
 #[tauri::command]
 pub async fn create_blank_project(
     app: AppHandle,
+    files: State<'_, Arc<crate::core::file_workspace::FileWorkspace>>,
     db: State<'_, Arc<Database>>,
     name: String,
 ) -> Result<ProjectCreateResult, AppError> {
@@ -102,13 +103,14 @@ pub async fn create_blank_project(
     }
     .to_owned();
     let project_id = Ulid::new().to_string();
+    let workspace_path = files.project_directory(&project_id, &name)?.to_string_lossy().into_owned();
     // workspace_path/key：表有 UNIQUE 约束，blank 项目用 id 派生 key 保证互不冲突。
     let workspace_key = format!("blank:{project_id}");
     let db = db.inner().clone();
     let db_for_insert = db.clone();
     let id_for_insert = project_id.clone();
     tokio::task::spawn_blocking(move || {
-        db_for_insert.create_project(&id_for_insert, &name, "", &workspace_key, "blank")?;
+        db_for_insert.create_project(&id_for_insert, &name, &workspace_path, &workspace_key, "blank")?;
         db_for_insert.ensure_project_canvas(&id_for_insert)?;
         Ok::<_, AppError>(())
     })
@@ -254,8 +256,7 @@ pub async fn delete_project(
         } else {
             // A failed restore must not be followed by Keep: deleting its project marker
             // would make startup mistake an uncommitted physical deletion for a committed one.
-            db.recover_project_deletions(&paths)?;
-            db.delete_project(&id_for_delete, ProjectDeleteMode::Keep)
+            db.delete_project_keep_managed(&paths,&id_for_delete)
         }
     })
     .await

@@ -6,8 +6,15 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
 
 #[tauri::command]
-pub async fn folder_classification_view(path: String) -> Result<crate::core::local_classification::folder::FolderView, String> {
-    tokio::task::spawn_blocking(move || crate::core::local_classification::folder::view(&path)).await.map_err(|e| e.to_string())?
+pub async fn folder_classification_view(classifier: State<'_, Arc<LocalClassifier>>, path: String) -> Result<crate::core::local_classification::folder::FolderView, String> {
+    let local = classifier.folder_records_root();
+    tokio::task::spawn_blocking(move || crate::core::local_classification::folder::view_with_storage(&path, Some(&local))).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn folder_classification_images(classifier: State<'_, Arc<LocalClassifier>>, path: String, tag_id: String) -> Result<Vec<crate::core::external_files::FileEntry>, String> {
+    let local = classifier.folder_records_root();
+    tokio::task::spawn_blocking(move || crate::core::local_classification::folder::tagged_images_with_storage(&path, &tag_id, Some(&local))).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

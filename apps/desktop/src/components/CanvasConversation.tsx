@@ -3,12 +3,14 @@ import { GenerationPanel } from "./GenerationPanel";
 import type { GenJob } from "../lib/types";
 import type { canvasConversationTurns } from "../lib/canvasConversation";
 import type { VideoFrame } from "../lib/videoFrame";
+import type { SaveVideoTrim } from "../lib/videoTrim";
 
-export function CanvasConversation({ turns, selectedId, onReuse, onAddVideoFrame }: {
+export function CanvasConversation({ turns, selectedId, onReuse, onAddVideoFrame, onSaveVideoTrim }: {
   turns: ReturnType<typeof canvasConversationTurns>;
   selectedId: string;
   onReuse: (node: ReturnType<typeof canvasConversationTurns>[number]["node"]) => void;
   onAddVideoFrame?: (frame: VideoFrame) => Promise<void>;
+  onSaveVideoTrim?: SaveVideoTrim;
 }) {
   // A presentation-only job: never insert it into task state or reuse a provider session.
   const job = useMemo<GenJob | null>(() => {
@@ -25,8 +27,8 @@ export function CanvasConversation({ turns, selectedId, onReuse, onAddVideoFrame
         images: turn.outputs.flatMap(a => a.store_path ? [a.store_path] : []) })) };
   }, [turns]);
   if (!job) return null;
-  return <GenerationPanel embedded onAddVideoFrame={onAddVideoFrame} hydratedAssets={turns.flatMap(turn => [...turn.references, ...turn.outputs])}
-    snapshot={{ job, selectedTurnKey: selectedId, onReuse: turn => {
+  return <GenerationPanel embedded onAddVideoFrame={onAddVideoFrame} onSaveVideoTrim={onSaveVideoTrim} hydratedAssets={turns.flatMap(turn => [...turn.references, ...turn.outputs])}
+    snapshot={{ job, sourceJobId: turns.find(turn => turn.node.id === selectedId)?.jobId ?? null, selectedTurnKey: selectedId, onReuse: turn => {
       const source = turns.find(item => item.node.id === turn.turnKey);
       if (source) onReuse(source.node);
     } }} />;

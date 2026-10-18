@@ -1,6 +1,43 @@
 import type { CanvasRect } from "./canvasLogic";
 import type { CanvasEdge, CanvasNode } from "./types";
 
+/** Resolve execution inputs through their visible card/group, not hidden output coordinates. */
+export function canvasCardSourceRects(
+  card: CanvasNode, edges: readonly CanvasEdge[], anchors: ReadonlyMap<string, CanvasRect>,
+  aliases: ReadonlyMap<string, string>, newReferenceIds: ReadonlySet<string>,
+): CanvasRect[] {
+  const promptId = card.kind === "agent_group"
+    ? edges.find(edge => edge.toNodeId === card.id && edge.kind === "input"
+      && edge.projectId === card.projectId && edge.threadId === card.threadId)?.fromNodeId
+    : card.id;
+  const ids = new Set(edges.filter(edge => edge.toNodeId === promptId
+    && edge.projectId === card.projectId && edge.threadId === card.threadId
+    && !newReferenceIds.has(edge.fromNodeId))
+    .sort((a, b) => a.ordinal - b.ordinal || a.fromNodeId.localeCompare(b.fromNodeId))
+    .map(edge => aliases.get(edge.fromNodeId) ?? edge.fromNodeId));
+  return [...ids].flatMap(id => id !== card.id && anchors.has(id) ? [anchors.get(id)!] : []);
+}
+
+/** Incremental placement in canvas units. The camera never determines collision resolution. */
+export function placeCanvasCardNearSource(card: CanvasRect, obstacles: readonly CanvasRect[]) {
+  const gap = 32;
+  const fits = ({ x, y }: { x: number; y: number }) => !obstacles.some(other =>
+    x < other.x + other.width + gap && x + card.width + gap > other.x
+    && y < other.y + other.height + gap && y + card.height + gap > other.y);
+  const origin = { x: card.x, y: card.y };
+  if (fits(origin)) return origin;
+  // Edge candidates also find narrow gaps; a distant unrelated node cannot set the origin.
+  const candidates = obstacles.flatMap(other => {
+    const left = other.x - card.width - gap, right = other.x + other.width + gap;
+    const top = other.y - card.height - gap, bottom = other.y + other.height + gap;
+    return [{ x: right, y: card.y }, { x: card.x, y: bottom }, { x: card.x, y: top }, { x: left, y: card.y },
+      { x: right, y: bottom }, { x: right, y: top }, { x: left, y: bottom }, { x: left, y: top }];
+  });
+  const distance = (point: { x: number; y: number }) => (point.x - card.x) ** 2 + (point.y - card.y) ** 2;
+  candidates.sort((a, b) => distance(a) - distance(b) || b.x - a.x || b.y - a.y);
+  return candidates.find(fits)!; // The outermost obstacle edge always offers a free position.
+}
+
 /** Only automatic execution references first observed during this mount may follow
  * the initial card placement. Existing/dragged/locked/grouped references stay put. */
 export function trackNewCanvasReferences(

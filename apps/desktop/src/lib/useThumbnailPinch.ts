@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useStore } from "../store";
-import { clampThumbnailWidth, MAX_THUMBNAIL_WIDTH, MIN_THUMBNAIL_WIDTH, type ThumbnailScope } from "./thumbnailSize";
+import { clampThumbnailWidth, MAX_THUMBNAIL_WIDTH, minThumbnailWidth, type ThumbnailScope } from "./thumbnailSize";
 
 /** Attach to the library region once, including all its embedded project grids. */
 export function useThumbnailPinch(scope: ThumbnailScope) {
@@ -21,8 +21,8 @@ export function useThumbnailPinch(scope: ThumbnailScope) {
       if (readWidth() !== lastApplied) resetWidth();
       // Keep sub-step movement so slow pinches accumulate; clamp before rounding
       // so reversing at a limit responds immediately.
-      width = Math.max(MIN_THUMBNAIL_WIDTH, Math.min(MAX_THUMBNAIL_WIDTH, width * factor));
-      const next = clampThumbnailWidth(width);
+      width = Math.max(minThumbnailWidth(scope), Math.min(MAX_THUMBNAIL_WIDTH, width * factor));
+      const next = clampThumbnailWidth(width, scope);
       if (next === lastApplied) return;
       lastApplied = next;
       useStore.getState().setThumbnailWidth(scope, next);

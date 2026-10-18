@@ -43,7 +43,7 @@ try {
     useStore.setState({activeProjectId:'different-project'});
     release();await running;
     check(controller.document.run.status==='done','chain completes');
-    check(controller.document.nodes[1].outputs.image.assetIds[0]==='output'&&controller.document.nodes[1].activeSessionNodeId===controller.document.nodes[1].sessionNodeIds[0],'generation returns images and tracks its current session');
+    check(controller.document.nodes[1].outputs.image.nodeIds[0]===controller.document.nodes[1].activeSessionNodeId&&controller.document.nodes[1].activeSessionNodeId===controller.document.nodes[1].sessionNodeIds[0],'generation returns and tracks its exact session');
     check(controller.document.nodes[1].sessionNodeIds[0].startsWith('gen-prompt:'),'session binding is persisted');
     const single=await create('runtime-single',[a,b]);await single.start('a',true);
     check(single.document.run.order.join(',')==='a'&&submissions===1,'single card does not run descendants or require a key');

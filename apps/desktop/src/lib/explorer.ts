@@ -6,7 +6,7 @@ export const EXPLORER_SITES = [
   { name: "小红书", url: "https://www.xiaohongshu.com/explore" },
   { name: "即梦", url: "https://jimeng.jianying.com/ai-tool/home" },
 ] as const;
-export interface ExplorerImage { version: 1; imageUrl: string; pageUrl: string }
+export interface ExplorerImage { version: 1; imageUrl: string; pageUrl: string; dragId?: string }
 export function parseExplorerImage(data: Pick<DataTransfer, "getData">): ExplorerImage | null {
   const fallback = data.getData("text/plain");
   const text = data.getData(EXPLORER_MIME) || (fallback.startsWith("bowerbird-explorer:") ? fallback.slice(19) : "");
@@ -18,7 +18,8 @@ export function parseExplorerImage(data: Pick<DataTransfer, "getData">): Explore
       const url = new URL(raw);
       if (!/^https?:$/.test(url.protocol) || url.username || url.password) return null;
     }
-    return { version: 1, imageUrl: value.imageUrl, pageUrl: value.pageUrl };
+    if (value.dragId !== undefined && (typeof value.dragId !== "string" || !/^[a-f0-9]{32}$/.test(value.dragId))) return null;
+    return { version: 1, imageUrl: value.imageUrl, pageUrl: value.pageUrl, ...(value.dragId ? { dragId: value.dragId } : {}) };
   } catch { return null; }
 }
 

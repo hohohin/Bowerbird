@@ -26,11 +26,12 @@ export function useProjectDeletion(close: () => void = () => {}) {
       if (result?.cleanup_pending.length) {
         notifyError(`项目已删除，但物理文件清理尚未完成；重启应用将重试。${result.cleanup_pending.join("；")}`, "文件清理未完成");
       } else {
-        notifySuccess(mode === "discard-provisional"
+        const transferred = result?.moved_assets ? `；${result.moved_assets} 项共享素材已转存至其他引用项目` : "";
+        notifySuccess((mode === "discard-provisional"
           ? "未保存的空白项目已丢弃"
           : physical
             ? `项目已删除，已物理删除 ${result?.deleted_assets ?? 0} 项独有素材，保留 ${result?.preserved_shared ?? 0} 项受保护素材`
-            : "项目及其画板已删除，中央素材仍保留在素材库");
+            : "项目及其画板已删除，素材仍保留") + transferred);
       }
       close();
     } catch (e) {
@@ -85,6 +86,7 @@ export function useProjectDeletion(close: () => void = () => {}) {
             <>
               将删除 1 块项目画板、{pendingDelete?.impact.thread_count ?? 0} 条创作线程和 {pendingDelete?.impact.node_count ?? 0} 个节点；
               默认保留中央素材。账单与底层执行审计始终保留。
+              <span className="mt-2 block">存放在本项目目录且仍被其他项目引用的素材，会先转存至另一个引用项目；转存失败则不删除项目。</span>
               <label className="mt-3 flex items-start gap-2 rounded-lg border border-edge p-3 text-ink">
                 <input
                   type="checkbox"

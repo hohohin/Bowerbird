@@ -16,6 +16,32 @@ registerHooks({
 const { creationSchema: schema, imageAttrs } = await import("../src/components/creation/schema.ts");
 const { serializeDoc } = await import("../src/components/creation/serialize.ts");
 const { parsePromptToDoc } = await import("../src/components/creation/parse.ts");
+const { imageInputError } = await import("../src/lib/videoGeneration.ts");
+
+test("video references keep a visible type label even when they have an image poster", () => {
+  globalThis.window = { __TAURI_INTERNALS__: { convertFileSrc: path => path } };
+  try {
+    for (const ext of ["mp4", "MOV", "webm"]) {
+      const node = schema.nodes.image.create({ assetId: "video", name: "产品", ext, thumb: "/poster.jpg" });
+      const dom = schema.nodes.image.spec.toDOM(node);
+      assert.equal(dom[1]["data-media-kind"], "video");
+      assert.match(dom[1]["aria-label"], /视频.*产品/);
+      assert.ok(dom.slice(2).some(child => child[2] === "视频"));
+    }
+    const frame = schema.nodes.image.create({ assetId: "frame", name: "视频截帧", ext: "png", thumb: "/frame.jpg" });
+    assert.equal(schema.nodes.image.spec.toDOM(frame)[1]["data-media-kind"], "image");
+  } finally { delete globalThis.window; }
+});
+
+test("image preflight names the actual video reference and accepts captured PNG frames", () => {
+  const frame = { name: "截帧", store_path: "D:\\images\\frame.png", duration: 10 };
+  const product = { name: "产品", store_path: "D:\\images\\product.png", duration: 0 };
+  const video = { name: "产品视频", store_path: "D:\\images\\clip.mp4", thumb_path: "D:\\thumbnails\\clip.jpg", duration: 10.08 };
+  assert.equal(imageInputError([frame, product]), null);
+  assert.match(imageInputError([frame, video]), /第 2 个参考「产品视频」是视频/);
+  assert.match(imageInputError([frame, video]), /截取所需画面/);
+  assert.equal(video.store_path, "D:\\images\\clip.mp4", "validation must not substitute a cover or another image");
+});
 test("historical prompt load retains exact selected instances and first/last order", () => {
   const refs = ["first", "last"].map(id => ({ id, name: id, ext: "png", store_path: `/${id}.png` }));
   const assets = new Map(refs.map(asset => [asset.id, asset]));

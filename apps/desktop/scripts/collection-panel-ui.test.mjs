@@ -76,14 +76,14 @@ try {
   assert.equal(scrollMetrics.left, scrollMetrics.right);
   assert.equal(scrollMetrics.scroll, 160);
   const scrollbar = dialog.getByRole("scrollbar", { name: "集合素材滚动条" });
-  await page.waitForFunction(() => document.querySelector('.collection-scroll-rail')?.getAttribute('data-visible') === 'true');
-  await page.waitForFunction(() => getComputedStyle(document.querySelector('.collection-scroll-rail')).opacity === '1');
+  await page.waitForFunction(() => document.querySelector('.collection-panel .collection-scroll-rail')?.getAttribute('data-visible') === 'true');
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('.collection-panel .collection-scroll-rail')).opacity === '1');
   await page.mouse.move(10, 10);
-  await page.waitForFunction(() => getComputedStyle(document.querySelector('.collection-scroll-rail')).opacity === '0');
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('.collection-panel .collection-scroll-rail')).opacity === '0');
   const railBox = await scrollbar.boundingBox();
   assert.equal(await scrollbar.evaluate((el) => getComputedStyle(el).width), "14px");
   await page.mouse.move(railBox.x + 7, railBox.y + 40);
-  await page.waitForFunction(() => getComputedStyle(document.querySelector('.collection-scroll-rail')).opacity === '1');
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('.collection-panel .collection-scroll-rail')).opacity === '1');
   const thumbBox = await dialog.locator('.collection-scroll-thumb').boundingBox();
   await page.mouse.move(thumbBox.x + 2, thumbBox.y + 8);
   await page.mouse.down();
@@ -93,7 +93,7 @@ try {
   const beforeWheel = await viewport.evaluate((el) => el.scrollTop);
   await page.mouse.move(railBox.x + 7, railBox.y + 40);
   await page.mouse.wheel(0, 80);
-  await page.waitForFunction((top) => document.querySelector('.collection-scroll-viewport').scrollTop > top, beforeWheel);
+  await page.waitForFunction((top) => document.querySelector('.collection-panel .collection-scroll-viewport').scrollTop > top, beforeWheel);
   await scrollbar.focus();
   await page.keyboard.press("End");
   assert.ok(await viewport.evaluate((el) => el.scrollTop >= el.scrollHeight - el.clientHeight - 1));

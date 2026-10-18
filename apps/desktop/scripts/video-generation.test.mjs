@@ -115,6 +115,22 @@ test("video revision uses explicit references and never borrows the preceding MP
   assert.equal(h.requests[1].parentAssetPath, "C:/assets/previous.mp4");
 });
 
+test("switching a video session to image generation sends only the selected images", async () => {
+  const h = harness();
+  await h.start("image2video", [image("first")]);
+  const job = h.state.genJobs[h.requests[0].jobId];
+  job.sessionId = "submitted-video";
+  job.running = false;
+  job.turns[0].images = ["C:/assets/previous.mp4"];
+  await h.state.sendGenRevise(job.id, "生成图片", "jimeng", {
+    references: [image("selected")], generation: { media: "image" },
+  });
+  assert.equal(h.requests[1].media, "image");
+  assert.equal(h.requests[1].videoOptions, null);
+  assert.deepEqual(h.requests[1].referenceImages, ["C:/assets/selected.png"]);
+  assert.equal(h.requests[1].exactReferences, false);
+});
+
 test("Cloud and current official CLI both support Seedance 2.5 at 1080p", async () => {
   const o = { ...options("text2video"), video_resolution: "1080p" };
   assert.equal(videoInputError(o, [], "16:9", "jimeng"), null);

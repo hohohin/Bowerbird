@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { LocalFileWorkspace } from "./components/LocalFileWorkspace";
 import { useLocalFileMode } from "./lib/localFileMode";
 import { PreservedWorkspace } from "./components/PreservedWorkspace";
 import { OPEN_LOCAL_FILES } from "./lib/externalFiles";
@@ -84,6 +83,7 @@ function App() {
   } | null>(null);
   const [sourceBrowserUrl, setSourceBrowserUrl] = useState<string | null>(null);
   const [sourceBrowserOpen, setSourceBrowserOpen] = useState(false);
+  useEffect(() => { if (localFilesOpen) setSourceBrowserOpen(false); }, [localFilesOpen]);
   const [sourceBrowserNavigation, setSourceBrowserNavigation] = useState(0);
   const setAssets = useStore((s) => s.setAssets);
   const setTotal = useStore((s) => s.setTotal);
@@ -106,6 +106,7 @@ function App() {
   const currentCollectionId = useStore((s) => s.currentCollectionId);
   const searchQuery = useStore((s) => s.searchQuery);
   const smartFilter = useStore((s) => s.smartFilter);
+  const libraryHomeView = useStore(s => s.libraryHomeView);
   const mode = useStore((s) => s.mode);
   const collectionAddTargetId = useStore((s) => s.collectionAddTargetId);
   const detailAssetId = useStore((s) => s.detailAssetId);
@@ -303,7 +304,7 @@ function App() {
       && !initial.smartFilter;
     try {
       if (!expectedProjectId) {
-        const view = await api.listLibraryView({
+        const view = await api.listLibraryView(initial.libraryHomeView === "projects" ? {} : {
           search: initial.searchQuery,
           smart: initial.smartFilter,
           folderId: initial.currentFolderId,
@@ -364,7 +365,7 @@ function App() {
     // 依赖 currentFolderId / searchQuery / boardOpen / genEditing / settings：切换文件夹、搜索、
     // 开关创作板/进入会话编辑、或改了影响列表的设置（如隐藏项目素材）时重拉
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeProjectId, activeProjectIsProvisional, projectRoutePending, projectRouteRevision, currentFolderId, currentCollectionId, searchQuery, smartFilter, colorFilter, boardOpen, genEditing, settings]);
+  }, [activeProjectId, activeProjectIsProvisional, projectRoutePending, projectRouteRevision, currentFolderId, currentCollectionId, searchQuery, smartFilter, colorFilter, boardOpen, genEditing, settings, libraryHomeView]);
 
   // 有反推的资产 id 集合（project 级，缩略图标 🏷️ 用）：只随项目切换重拉，切 folder/filter 不重拉。
   useEffect(() => {
@@ -873,7 +874,6 @@ function App() {
       <Toolbar
         onRefresh={refresh}
         localFilesOpen={localFilesOpen}
-        onLocalFiles={() => { setLocalFilesOpen(value => !value); setSourceBrowserOpen(false); }}
         canvasMode={projectWorkspaceActive}
         onCanvasModeChange={(active) => { setLocalFilesOpen(false); return active ? createCreative(false) : exitCreative(); }}
         onCreateCreative={(blank) => { const local = localFilesOpen; setLocalFilesOpen(false); return createCreative(local || blank); }}
@@ -893,9 +893,8 @@ function App() {
       <div className="relative flex flex-1 overflow-hidden">
         <div style={{ display: localFilesOpen ? "none" : "contents" }}><Sidebar /></div>
         <main className="app-workspace relative flex flex-1 flex-col overflow-hidden bg-canvas">
-          {localFilesOpen && <LocalFileWorkspace onClose={() => { setLocalFilesOpen(false); document.querySelector<HTMLButtonElement>(".local-files-trigger")?.focus(); }} onCreateProject={() => createCreative(true)} />}
-          <PreservedWorkspace suspended={localFilesOpen}>
           <ExploreWorkspace url={sourceBrowserUrl} navigationId={sourceBrowserNavigation} open={sourceBrowserOpen && !collectionAddTargetId} onClose={() => setSourceBrowserOpen(false)}>
+          <PreservedWorkspace suspended={showDetail}>
           {projectWorkspaceActive ? (
             initializing ? <LibraryLoadingState /> : (
               <CanvasWorkspace
@@ -913,14 +912,13 @@ function App() {
             )
           ) : (
             <>
-              {mode === "manage" && !collectionAddTargetId && <BatchBar />}
-              <div className={`relative flex-1 overflow-hidden ${collectionAddTargetId ? "collection-add-workspace" : ""}`}>
+              {libraryHomeView === "library" && mode === "manage" && !collectionAddTargetId && <BatchBar />}
+              <div className={`relative flex-1 overflow-clip ${collectionAddTargetId ? "collection-add-workspace" : ""}`}>
                 {initializing ? (
                   <LibraryLoadingState />
-                ) : showDetail ? (
-                  <AssetDetail onExploreSource={url => { setSourceBrowserUrl(url); setSourceBrowserNavigation(id => id + 1); setSourceBrowserOpen(true); }} />
                 ) : (
-                  <LibraryHome />
+                  <LibraryHome onCreateProject={() => createCreative(true)}
+                    shortcutsEnabled={!sourceBrowserOpen && !collectionAddTargetId && !legacyInspectorOpen} />
                 )}
                 {/* 生成结果面板：主区覆盖层（像详情页） */}
                 {!collectionAddTargetId && legacyInspectorOpen && activeSessionKind === "generation" && <GenerationPanel readOnly />}
@@ -945,8 +943,11 @@ function App() {
             </>
           )}
           <CollectionAddMode />
-          </ExploreWorkspace>
           </PreservedWorkspace>
+          {showDetail && <div className="absolute inset-0 z-30 bg-canvas">
+            <AssetDetail onExploreSource={url => { setSourceBrowserUrl(url); setSourceBrowserNavigation(id => id + 1); setSourceBrowserOpen(true); }} />
+          </div>}
+          </ExploreWorkspace>
         </main>
       </div>
     </div>

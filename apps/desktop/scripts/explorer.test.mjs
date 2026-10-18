@@ -5,6 +5,9 @@ const data = value => ({ getData: type => type === EXPLORER_MIME ? JSON.stringif
 test("only image drag metadata crosses the untrusted page boundary", () => {
   const valid = { version: 1, imageUrl: "https://i.pinimg.com/image.jpg?x=1", pageUrl: "https://www.pinterest.com/pin/1" };
   assert.deepEqual(parseExplorerImage(data(valid)), valid);
+  const identified = { ...valid, dragId: "a".repeat(32) };
+  assert.deepEqual(parseExplorerImage(data(identified)), identified);
+  assert.equal(parseExplorerImage(data({ ...valid, dragId: "wrong" })), null);
   for (const imageUrl of ["file:///secret", "javascript:alert(1)", "https://user:pass@example.com/img"]) {
     assert.equal(parseExplorerImage(data({ ...valid, imageUrl })), null);
   }

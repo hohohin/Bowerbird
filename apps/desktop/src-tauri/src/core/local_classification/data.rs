@@ -14,6 +14,8 @@ pub struct Label {
     pub enabled: bool,
     pub count: i64,
     pub has_examples: bool,
+    #[serde(default)]
+    pub dimension: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -74,12 +76,30 @@ pub fn parse_prediction(raw: &str, allowed: &[Label], discover: bool) -> AppResu
 }
 
 impl Database {
+    /// Semantic metadata must never overwrite a concurrent human edit or another
+    /// classification result. This does not change assignments or schedule scans.
+    pub fn cache_label_dimensions(&self, revision: i64, labels: &[Label], dimensions: &[String]) -> AppResult<bool> {
+        if labels.len() != dimensions.len() || dimensions.iter().any(|d| d != "other" && !matches!(d.as_str(), "subject" | "type" | "style" | "mood")) {
+            return Err(AppError::Other("标签维度结果无效".into()));
+        }
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let current: i64 = tx.query_row("SELECT revision FROM local_classification_state WHERE id=1", [], |r| r.get(0))?;
+        if current != revision { return Ok(false); }
+        for (label, dimension) in labels.iter().zip(dimensions) {
+            tx.execute("UPDATE tags SET classification_dimension=?2 WHERE id=?1 AND classification_dimension IS NULL AND name=?3 AND classification_description=?4",
+                params![label.id, dimension, label.name, label.description])?;
+        }
+        tx.commit()?;
+        Ok(true)
+    }
+
     pub fn local_labels(&self) -> AppResult<Vec<Label>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT t.id,t.name,t.classification_description,t.classification_enabled,COUNT(a.asset_id), \
              EXISTS(SELECT 1 FROM asset_tags m WHERE m.tag_id=t.id AND m.origin='manual') \
-             OR EXISTS(SELECT 1 FROM local_tag_rejections r WHERE r.tag_id=t.id) \
+             OR EXISTS(SELECT 1 FROM local_tag_rejections r WHERE r.tag_id=t.id), t.classification_dimension \
              FROM tags t LEFT JOIN asset_tags a ON a.tag_id=t.id GROUP BY t.id ORDER BY COUNT(a.asset_id) DESC,t.name")?;
         let rows = stmt.query_map([], |r| {
             Ok(Label {
@@ -89,6 +109,7 @@ impl Database {
                 enabled: r.get(3)?,
                 count: r.get(4)?,
                 has_examples: r.get(5)?,
+                dimension: r.get(6)?,
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -149,7 +170,7 @@ impl Database {
             if fixed && name != "#ai生成" {
                 return Err(AppError::Other("视频复刻的 #ai生成 标签不能改名".into()));
             }
-            if tx.execute("UPDATE tags SET name=?2,classification_description=?3,classification_enabled=?4 WHERE id=?1",
+            if tx.execute("UPDATE tags SET classification_dimension=CASE WHEN name<>?2 OR classification_description<>?3 THEN NULL ELSE classification_dimension END,name=?2,classification_description=?3,classification_enabled=?4 WHERE id=?1",
                 params![id, name, description.trim(), enabled])? != 1 {
                 return Err(AppError::Other("标签已不存在".into()));
             }
@@ -281,7 +302,7 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare("SELECT a.id FROM assets a WHERE a.thumb_path IS NOT NULL \
             AND lower(COALESCE(a.ext,'')) IN ('jpg','jpeg','png','webp','gif','bmp') \
-            AND (?1=0 OR NOT EXISTS(SELECT 1 FROM local_visual_observations o WHERE o.asset_id=a.id AND o.model=?2)) \
+            AND (?1=0 OR NOT EXISTS(SELECT 1 FROM local_visual_observations o WHERE o.asset_id=a.id AND (o.model=?2 OR (?2 IN ('jev-choice-dimensions/cloud-discovery-v6','jev-choice-flat-top4-30/cloud-discovery-v7') AND o.model IN ('jev-choice-dimensions/cloud-discovery-v5','jev-choice-dimensions/cloud-discovery-v6'))))) \
             ORDER BY a.created_at,a.id")?;
         let rows = stmt.query_map(params![pending_only, model], |r| r.get(0))?;
         Ok(rows.collect::<Result<_, _>>()?)
@@ -386,7 +407,7 @@ impl Database {
         record_observation: bool,
         evaluated: &[String],
         model: &str,
-        definitions: &[(String, String)],
+        definitions: &[super::cloud::NewLabel],
     ) -> AppResult<bool> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
@@ -427,13 +448,16 @@ impl Database {
                 )
                 .optional()?;
             match existing {
-                Some((id, true)) => ids.push(id),
+                Some((id, true)) => {
+                    ids.push(id);
+                },
                 Some((_, false)) => {}
                 None => {
                     let id = ulid::Ulid::new().to_string();
+                    let definition = definitions.iter().find(|d| d.name == name);
                     tx.execute(
                         "INSERT INTO tags(id,name,source,classification_description) VALUES(?1,?2,'auto',?3)",
-                        params![id, name, definitions.iter().find(|(n, _)| n == &name).map(|(_, d)| d.as_str()).unwrap_or("")],
+                        params![id, name, definition.map(|d| d.definition.as_str()).unwrap_or("")],
                     )?;
                     ids.push(id);
                 }

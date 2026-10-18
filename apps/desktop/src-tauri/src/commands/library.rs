@@ -45,7 +45,7 @@ pub async fn import_files(
     sources: Vec<String>,
     project_id: Option<String>,
 ) -> Result<Vec<Asset>, AppError> {
-    let paths = paths.inner().clone();
+    let paths = Arc::new(paths.for_project(&db, project_id.as_deref())?);
     let db = db.inner().clone();
     let db_for_ingest = db.clone();
     let assets = tokio::task::spawn_blocking(move || {
@@ -96,7 +96,7 @@ pub async fn import_folder(
     path: String,
     project_id: Option<String>,
 ) -> Result<usize, AppError> {
-    let paths = paths.inner().clone();
+    let paths = Arc::new(paths.for_project(&db, project_id.as_deref())?);
     let db = db.inner().clone();
     if Path::new(&path)
         .join(crate::core::onboarding_pack::MANIFEST)
@@ -168,7 +168,7 @@ pub async fn import_image_bytes(
 ) -> Result<Asset, AppError> {
     let bytes = decode_data_url_bytes(&data_url)?;
     let skip_auto_analyze = source == "workflow-template" || source == "video-frame";
-    let paths = paths.inner().clone();
+    let paths = Arc::new(paths.for_project(&db, project_id.as_deref())?);
     let db = db.inner().clone();
     let db_for_ingest = db.clone();
     let asset = tokio::task::spawn_blocking(move || {
@@ -219,7 +219,7 @@ pub async fn save_annotated_image(
     annotation_json: String,
 ) -> Result<Asset, AppError> {
     let bytes = decode_data_url_bytes(&data_url)?;
-    let paths = paths.inner().clone();
+    let paths = Arc::new(paths.for_project(&db, project_id.as_deref())?);
     let db = db.inner().clone();
     let db_for_ingest = db.clone();
     let annotation = annotation_json.clone();

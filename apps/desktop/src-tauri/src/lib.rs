@@ -273,9 +273,18 @@ pub fn run() {
                     root.display()
                 );
             }
-            let paths = Arc::new(core::paths::LibraryPaths::init(
-                library_root.clone().unwrap_or_else(|| app_dir.clone()),
-            )?);
+            let file_config_root = debug_library_root_override.as_ref().unwrap_or(&app_dir);
+            let default_files_root = if cfg!(debug_assertions) {
+                file_config_root.join("BowerbirdLibrary")
+            } else {
+                core::file_workspace::default_root(&std::env::current_exe()?)?
+            };
+            let files = Arc::new(core::file_workspace::FileWorkspace::open(
+                file_config_root.join("file-workspace.json"), default_files_root)?);
+            let mut library_paths = core::paths::LibraryPaths::init(
+                library_root.clone().unwrap_or_else(|| app_dir.clone()))?;
+            library_paths.files = Some(files.clone());
+            let paths = Arc::new(library_paths);
             // convertFileSrc 走 asset 协议，其 scope 默认只放行应用数据目录；
             // 自定义库根（迁移到非系统盘）必须显式加入，否则缩略图/原图全部被拒（见踩坑）。
             app.asset_protocol_scope()
@@ -292,10 +301,16 @@ pub fn run() {
             }
             let db = Arc::new(db::Database::open(&paths.db)?);
             db.migrate()?;
+            db.initialize_classification_presets()?;
+            db.recover_project_deletions(&paths)?;
+            // Execute explicitly requested file-root migration before any background writer.
+            core::file_workspace_move::resume(&files, &db)?;
+            app.asset_protocol_scope().allow_directory(files.proposed_root(), true)?;
+            for path in files.snapshot().projects.values() { app.asset_protocol_scope().allow_directory(path, true)?; }
+            app.manage(files);
             for path in db.external_paths()? {
                 app.asset_protocol_scope().allow_file(path)?;
             }
-            db.recover_project_deletions(&paths)?;
 
             // 用自定义根打开成功后，清理应用数据目录里的旧库残留（迁移不删，留到此步释放系统盘）。
             if configured_library_root.is_some() && debug_library_root_override.is_none() {
@@ -344,12 +359,14 @@ pub fn run() {
             let orphan_scan_db = db.clone();
 
             app.manage(Arc::new(core::local_classification::LocalClassifier::new(
-                app.path()
-                    .app_data_dir()?
+                file_config_root.to_path_buf()
                     .join("local-classification")
                     .join(core::local_classification::runtime::PACK_ID),
             )));
             core::local_classification::watch(app.handle().clone(), db.clone(), paths.clone());
+            core::creative_files::watch(db.clone(), file_config_root.join("creative-records"));
+            app.manage(core::local_classification::explorer::ExplorerAnalysis::default());
+            app.manage(commands::source_browser::SourceDragHandler(core::local_classification::explorer::handle_notice));
 
             app.manage(extension_status);
             app.manage(active_project);
@@ -520,6 +537,7 @@ pub fn run() {
             commands::library::list_library_view,
             commands::library::get_assets_by_ids,
             commands::video_poster::video_poster,
+            commands::video_trim::trim_video,
             commands::video_replication::video_replication,
             commands::library::count_assets,
             commands::library::list_folders,
@@ -560,6 +578,7 @@ pub fn run() {
             commands::library::reclassify_all,
             commands::local_classification::local_classification_status,
             commands::local_classification::folder_classification_view,
+            commands::local_classification::folder_classification_images,
             commands::local_classification::folder_classification_start,
             commands::local_classification::folder_classification_edit,
             commands::local_classification::local_classification_vector_install,
@@ -588,6 +607,9 @@ pub fn run() {
             commands::codex::codex_describe_asset,
             commands::codex::cancel_codex_describe,
             commands::codex::codex_create_image,
+            commands::codex::begin_generation_diagnostic,
+            commands::codex::finish_generation_diagnostic,
+            commands::codex::generation_diagnostics,
             commands::codex::cancel_codex_create,
             commands::codex::list_gen_jobs,
             commands::codex::jimeng_retrieve_orphan,
@@ -604,6 +626,18 @@ pub fn run() {
             commands::collect::extension_folder_path,
             commands::settings::get_settings,
             commands::settings::update_settings,
+            commands::file_workspace::file_workspace_status,
+            commands::file_workspace::file_workspace_move_preview,
+            commands::file_workspace::file_workspace_move_schedule,
+            commands::file_workspace::file_workspace_move_cancel,
+            commands::file_workspace::file_workspace_history_preview,
+            commands::file_workspace::file_workspace_history_schedule,
+            commands::file_workspace::file_workspace_restore_preview,
+            commands::file_workspace::file_workspace_save_records,
+            commands::file_workspace::file_workspace_restore,
+            commands::file_workspace::file_workspace_all,
+            commands::file_workspace::file_workspace_prepare,
+            commands::file_workspace::file_workspace_place,
             commands::settings::library_root,
             commands::settings::migrate_library_root,
             commands::settings::restart_app,
@@ -615,6 +649,9 @@ pub fn run() {
             commands::source_browser::reload_source_browser,
             commands::source_browser::hide_source_browser,
             commands::source_browser_capture::capture_source_browser_image,
+            commands::source_browser_capture::claim_source_browser_analysis,
+            commands::source_browser_capture::release_source_browser_analysis,
+            commands::source_browser_capture::finish_source_browser_analysis,
             commands::dreamina_account::dreamina_credit_balance,
             commands::dreamina_account::dreamina_task_credit,
             commands::dreamina_account::dreamina_task_diagnostics,

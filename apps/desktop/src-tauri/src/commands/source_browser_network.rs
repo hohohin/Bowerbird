@@ -4,7 +4,7 @@ use tauri::Webview;
 const MAX_BYTES: usize = 50 * 1024 * 1024;
 
 #[cfg(windows)]
-async fn cdp(
+pub(crate) async fn cdp(
     webview: &Webview,
     method: &str,
     params: serde_json::Value,
@@ -57,7 +57,7 @@ fn decode_chunk(value: &serde_json::Value) -> AppResult<Vec<u8>> {
 }
 
 #[cfg(windows)]
-pub(super) async fn browser_bytes(webview: &Webview, url: &str) -> AppResult<Vec<u8>> {
+pub(crate) async fn browser_bytes(webview: &Webview, url: &str) -> AppResult<Vec<u8>> {
     use serde_json::json;
     let tree = cdp(webview, "Page.getFrameTree", json!({})).await?;
     let frame = tree["frameTree"]["frame"]["id"]
@@ -114,7 +114,7 @@ pub(super) async fn browser_bytes(webview: &Webview, url: &str) -> AppResult<Vec
 }
 
 #[cfg(target_os = "macos")]
-pub(super) async fn browser_bytes(webview: &Webview, url: &str) -> AppResult<Vec<u8>> {
+pub(crate) async fn browser_bytes(webview: &Webview, url: &str) -> AppResult<Vec<u8>> {
     use std::ffi::{c_char, c_void, CStr, CString};
     type Sender = tokio::sync::oneshot::Sender<AppResult<Vec<u8>>>;
     // The archive comes from build.rs; the attribute also covers targets that
@@ -172,7 +172,7 @@ pub(super) async fn browser_bytes(webview: &Webview, url: &str) -> AppResult<Vec
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-pub(super) async fn browser_bytes(_: &Webview, _: &str) -> AppResult<Vec<u8>> {
+pub(crate) async fn browser_bytes(_: &Webview, _: &str) -> AppResult<Vec<u8>> {
     Err(AppError::Other(
         "内置浏览器拖图采集目前支持 Windows 和 macOS；此平台可使用浏览器扩展采集".into(),
     ))

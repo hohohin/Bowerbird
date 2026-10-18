@@ -74,7 +74,7 @@ fn ingest_file_with_dedup(paths: &LibraryPaths, db: &Database, source: &Path, ap
         .unwrap_or("untitled")
         .to_string();
 
-    let store_path = paths.asset_store_path(&id, &meta.ext);
+    let store_path = paths.asset_store_path(&id, &meta.ext)?;
     fs::create_dir_all(store_path.parent().unwrap())?;
     fs::copy(source, &store_path)?;
 
@@ -189,7 +189,7 @@ pub fn ingest_generated(
         .unwrap_or("generated")
         .to_string();
 
-    let store_path = paths.asset_store_path(&id, &meta.ext);
+    let store_path = paths.asset_store_path(&id, &meta.ext)?;
     fs::create_dir_all(store_path.parent().unwrap())?;
     fs::copy(source, &store_path)?;
 

@@ -40,6 +40,8 @@ export const creationSchema = new Schema({
       },
       toDOM(node) {
         const { assetId, silent, thumb } = node.attrs;
+        const video = /^(mp4|mov|webm|m4v|avi|mkv)$/i.test(node.attrs.ext ?? "");
+        const label = `${video ? "视频" : "图片"}参考：${node.attrs.name || assetId}`;
         const klass = silent
           ? "border-edge bg-panel2 text-muted"
           : "border-accent/40 bg-accent/10 text-accent";
@@ -57,15 +59,19 @@ export const creationSchema = new Schema({
                   class:
                     "flex h-6 w-8 items-center justify-center rounded bg-panel2 text-[10px]",
                 },
-                /^(mp4|mov|webm|m4v|avi|mkv)$/i.test(node.attrs.ext ?? "") ? "▶" : "IMG",
+                video ? "▶" : "IMG",
               ]
         );
+        if (video) children.push(["span", { class: "text-[10px]", "aria-hidden": "true" }, "视频"]);
         // 只显缩略图不出图名（采集图名多为 hash/ulid 噪音）；hover 由 BoardChipPreview 弹放大图。
         return [
           "span",
           {
             class: `mx-1 inline-flex items-center gap-1 rounded border px-1 py-0.5 align-middle text-xs ${klass}`,
             "data-asset-id": assetId,
+            "data-media-kind": video ? "video" : "image",
+            "aria-label": label,
+            title: label,
             contentEditable: "false",
           },
           ...children,

@@ -1,27 +1,12 @@
 import { useEffect, useRef, useState, type CSSProperties, type FocusEvent, type MouseEvent } from "react";
-import { FolderOpen, FolderPlus, PanelLeftClose, PanelLeftOpen, RefreshCw } from "lucide-react";
+import { FolderOpen, FolderPlus, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { useStore } from "../store";
 import { api } from "../lib/api";
 import { getDragAssets } from "../lib/dragPayload";
-import { useProjectAssetDrop } from "../lib/useProjectAssetDrop";
-import { LocalClassificationDialog } from "./LocalClassificationDialog";
 import { notifyError, notifySuccess } from "../lib/notify";
-import { ProjectSection } from "./ProjectSection";
 import { SidebarAccount } from "./SidebarAccount";
 import { CollectionPanel } from "./CollectionPanel";
 import type { Folder } from "../lib/types";
-
-/** 颜色桶 key → 中文 label（P3；hex 由后端 palette_overview 带回）。 */
-const COLOR_LABELS: Record<string, string> = {
-  red: "红", orange: "橙", yellow: "黄", green: "绿", cyan: "青",
-  blue: "蓝", purple: "紫", pink: "粉", brown: "棕", gray: "灰",
-  white: "白", black: "黑",
-};
-
-/** 项目圆标首字（中文名取第一个字），空名兜底 P。 */
-function projectInitial(name: string) {
-  return Array.from(name.trim())[0]?.toUpperCase() ?? "P";
-}
 
 const SIDEBAR_COLLAPSED_KEY = "bowerbird.sidebarCollapsed";
 const SIDEBAR_WIDTH_KEY = "bowerbird.sidebarWidth";
@@ -45,26 +30,13 @@ function loadSidebarWidth() {
   }
 }
 
-/** 左侧栏：素材统计 + 文件夹/智能文件夹 + 颜色筛选 + 底部账号区。 */
+/** 左侧栏：素材统计 + 文件夹/智能文件夹 + 底部账号区。 */
 export function Sidebar() {
   const total = useStore((s) => s.total);
   const selectedCount = useStore((s) => s.selectedIds.size);
   const activeProjectId = useStore((s) => s.activeProjectId);
-  const projectDrop = useProjectAssetDrop();
-  const projectRoutePending = useStore((s) => s.projectRoutePending);
-  const projects = useStore((s) => s.projects);
-  const enterProject = useStore((s) => s.enterProject);
-  const exitProject = useStore((s) => s.exitProject);
-  const openProjectContextMenu = useStore((s) => s.openProjectContextMenu);
-  const colorFilter = useStore((s) => s.colorFilter);
-  const setColorFilter = useStore((s) => s.setColorFilter);
   const folders = useStore((s) => s.folders);
-  const smartFilter = useStore((s) => s.smartFilter);
-  const setSmartFilter = useStore((s) => s.setSmartFilter);
   const reloadFolders = useStore((s) => s.reloadFolders);
-  const autoTags = useStore((s) => s.autoTags);
-  const colorRebuild = useStore((s) => s.colorRebuild);
-  const [classificationOpen, setClassificationOpen] = useState(false);
 
   // inline 新建表单：none | folder | smart | collection（避开 window.prompt——Tauri WKWebView 拦截原生对话框）。
   const [creating, setCreating] = useState<"none" | "folder" | "smart" | "collection">("none");
@@ -97,10 +69,10 @@ export function Sidebar() {
   useEffect(() => {
     setAutoHidden(false);
     if (!activeProjectId || hovered || keyboardFocused || accountInteracting
-      || resizing || classificationOpen || openFolder || creating !== "none" || projectContextMenu) return;
+      || resizing || openFolder || creating !== "none" || projectContextMenu) return;
     const timer = window.setTimeout(() => setAutoHidden(true), 2000);
     return () => window.clearTimeout(timer);
-  }, [activeProjectId, hovered, keyboardFocused, accountInteracting, resizing, classificationOpen, openFolder, creating, projectContextMenu, collapsed]);
+  }, [activeProjectId, hovered, keyboardFocused, accountInteracting, resizing, openFolder, creating, projectContextMenu, collapsed]);
 
   const visibilityProps = {
     onMouseEnter: (event: MouseEvent<HTMLElement>) => {
@@ -130,7 +102,6 @@ export function Sidebar() {
       }} onClick={() => setAutoHidden(false)} />
   );
 
-  const palette = useStore((s) => s.palette);
   const normalFolders = folders.filter(
     (f) => f.id !== "root" && (f.kind ?? "folder") === "folder"
   );
@@ -285,45 +256,7 @@ export function Sidebar() {
           <PanelLeftOpen size={17} />
         </button>
         <div className="app-sidebar-rail-divider" />
-        {/* 项目圆标轨：G=全局 + 每个项目一枚首字圆标，点击直接切换（不展开侧栏）。 */}
-        <div className="app-sidebar-scroll flex w-full flex-1 flex-col items-center gap-2 overflow-y-auto py-1">
-          <button
-            type="button"
-            onClick={() => activeProjectId && void exitProject().catch((error) => {
-              notifyError(error, "项目仍有未保存修改，已留在当前画板");
-            })}
-            disabled={projectRoutePending}
-            className={`app-sidebar-project-badge ${activeProjectId ? "" : "is-active"}`}
-            title="全局素材"
-            aria-label="全局素材"
-          >
-            G
-          </button>
-          {projects.map((p) => {
-            const active = p.id === activeProjectId;
-            return (
-              <button
-                key={p.id}
-                {...projectDrop(p)}
-                type="button"
-                onClick={() => !active && void enterProject(p.id).catch((error) => {
-                  notifyError(error, "无法切换项目，当前画板保持不变");
-                })}
-                disabled={projectRoutePending}
-                onContextMenu={(e) => {
-                  // 收起态圆标同样支持项目右键菜单（更新项目文件等）。
-                  e.preventDefault();
-                  openProjectContextMenu(e.clientX, e.clientY, p.id);
-                }}
-                className={`app-sidebar-project-badge ${active ? "is-active" : ""}`}
-                title={p.name}
-                aria-label={`切换到项目 ${p.name}`}
-              >
-                {projectInitial(p.name)}
-              </button>
-            );
-          })}
-        </div>
+        <div className="flex-1" />
         <SidebarAccount collapsed onInteractionChange={setAccountInteracting} />
         {openFolder && <CollectionPanel key={openFolder.id} folder={openFolder} onClose={() => setOpenFolderId(null)} />}
       </aside></div>
@@ -347,8 +280,6 @@ export function Sidebar() {
         <PanelLeftClose size={16} />
       </button>
       <div className="app-sidebar-scroll flex-1 overflow-y-auto p-3 pt-4">
-      <ProjectSection />
-
       <div className="panel-kicker mb-2 flex items-center justify-between">
         <span>集合</span>
         <span className="flex gap-2 normal-case tracking-normal">
@@ -441,96 +372,6 @@ export function Sidebar() {
           <div className="space-y-1">
             {smartFolders.map((f) => (
               <FolderRow key={f.id} folder={f} />
-            ))}
-          </div>
-        </>
-      )}
-
-      {(
-        <>
-          <div className="panel-kicker mb-2 mt-5 flex items-center justify-between">
-            <span>分类标签</span>
-            <span className="flex items-center gap-1.5 normal-case tracking-normal">
-              {smartFilter?.startsWith("tag:") && (
-                <button
-                  onClick={() => setSmartFilter(null)}
-                  className="text-cold hover:opacity-80"
-                >
-                  清除
-                </button>
-              )}
-              <button
-                onClick={() => setClassificationOpen(true)}
-                title="自动分类：识别图片、创建标签和寻找匹配"
-                className="rounded px-1 text-cold hover:opacity-80 disabled:opacity-40"
-              >
-                管理
-              </button>
-            </span>
-          </div>
-          {classificationOpen && <LocalClassificationDialog onClose={() => setClassificationOpen(false)} />}
-          <div className="grid grid-cols-2 gap-1">
-            {autoTags.map((t) => {
-              const active = smartFilter === `tag:${t.name}`;
-              return (
-                <div
-                  key={t.id}
-                  className={`flex cursor-pointer items-center gap-1 rounded px-2 py-1.5 text-xs ${
-                    active ? "bg-panel2" : "hover:bg-panel2"
-                  }`}
-                  onClick={() => setSmartFilter(active ? null : `tag:${t.name}`)}
-                  title={`tag:${t.name}`}
-                >
-                  <span className="text-muted">#</span>
-                  <span className="flex-1 truncate text-[10px]">{t.name}</span>
-                </div>
-              );
-            })}
-          </div>
-        </>
-      )}
-
-      {palette.length > 0 && (
-        <>
-          <div className="panel-kicker mb-2 mt-5 flex items-center justify-between">
-            <span>颜色</span>
-            <span className="flex items-center gap-1.5 normal-case tracking-normal">
-              {colorRebuild && (
-                <span className="tabular-nums text-[10px] text-muted">
-                  重建中 {colorRebuild.done}/{colorRebuild.total}
-                </span>
-              )}
-              {colorFilter && (
-                <button
-                  onClick={() => setColorFilter(null)}
-                  className="text-cold hover:opacity-80"
-                >
-                  清除
-                </button>
-              )}
-              <button
-                onClick={() =>
-                  api.recomputeColors().catch((e) => console.error("recomputeColors failed", e))
-                }
-                disabled={!!colorRebuild}
-                title="重建色板（后台重新量化全库主色）"
-                className="rounded px-1 text-cold hover:opacity-80 disabled:opacity-40"
-              >
-                <RefreshCw size={13} />
-              </button>
-            </span>
-          </div>
-          <div className="grid grid-cols-6 gap-1.5">
-            {palette.map((c) => (
-              <button
-                key={c.key}
-                onClick={() => setColorFilter(colorFilter === c.key ? null : c.key)}
-                className={`aspect-square rounded ring-offset-2 ring-offset-panel ${
-                  colorFilter === c.key ? "ring-2 ring-accent" : ""
-                }`}
-                style={{ background: c.hex }}
-                title={`${COLOR_LABELS[c.key] ?? c.key} (${c.count})`}
-              />
             ))}
           </div>
         </>

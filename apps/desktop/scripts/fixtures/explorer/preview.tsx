@@ -6,9 +6,11 @@ import { ToastViewport } from "../../../src/components/ToastViewport";
 import { MasonryGrid } from "../../../src/components/MasonryGrid";
 import { Lightbox } from "../../../src/components/Lightbox";
 import { FileDropImport } from "../../../src/components/FileDropImport";
+import { Sidebar } from "../../../src/components/Sidebar";
 import { useStore } from "../../../src/store";
 import "../../../src/styles.css";
 const w = window as any;
+const withSidebar = new URLSearchParams(location.search).has("sidebar");
 w.calls = []; w.hold = false; w.fail = false; w.release = null; w.callbacks = {};
 w.store = useStore;
 w.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
@@ -19,6 +21,15 @@ w.__TAURI_INTERNALS__ = {
   invoke: async (command: string, args: any = {}) => {
     w.calls.push({ command, args });
     if (command === "plugin:event|listen") return w.calls.length;
+    if (command === "claim_source_browser_analysis") {
+      if (w.claimError) throw w.claimError;
+      return w.analyse ?? false;
+    }
+    if (command === "finish_source_browser_analysis") {
+      if (w.holdAnalysis) await new Promise(resolve => { w.finishAnalysis = resolve; });
+      if (w.failAnalysis) throw "模拟分类失败";
+      return w.analysisTags ?? ["插画", "柔光"];
+    }
     if (command === "capture_source_browser_image") {
       if (w.hold) await new Promise(resolve => { w.release = resolve; });
       if (w.fail) throw "模拟网站拒绝图片";
@@ -34,7 +45,7 @@ w.__TAURI_INTERNALS__ = {
     return null;
   },
 };
-useStore.setState({ assets: [], total: 0, projects: [], activeProjectId: null, projectRoutePending: false,
+useStore.setState({ assets: [], total: 0, projects: withSidebar ? [{ id: "p", name: "探索侧栏测试", kind: "blank" } as any] : [], activeProjectId: withSidebar ? "p" : null, projectRoutePending: false,
   projectRouteRevision: 0, settings: {}, mode: "browse", boardOpen: false, projectCanvasFlush: async () => {} });
 function Fixture() {
   const [opened, setOpened] = useState(false);
@@ -45,7 +56,7 @@ function Fixture() {
     <Toolbar canvasMode={false} onCanvasModeChange={() => {}} onCreateCreative={() => {}} onRefresh={async () => {}}
       onExplore={() => { setUrl("https://www.pinterest.com/"); setOpened(v => !v); }} exploring={opened} />
     <button onClick={() => setDialog(v => !v)}>测试弹窗</button>
-    <div className="relative min-h-0 flex-1"><ExploreWorkspace url={url} open={opened} onClose={() => setOpened(false)}>
+    <div className="relative min-h-0 flex flex-1">{withSidebar && <Sidebar />}<ExploreWorkspace url={url} open={opened} onClose={() => setOpened(false)}>
       <input aria-label="主页面草稿" defaultValue="" />
       <div className="min-h-0 flex-1"><MasonryGrid onOpenPreview={asset => setPreview(asset.thumb_path || null)} /></div>
     </ExploreWorkspace></div>

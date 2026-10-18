@@ -6,6 +6,7 @@ import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import { useImageZoom } from "../lib/useImageZoom";
 import { VideoPlayer } from "./VideoPlayer";
 import type { VideoFrame } from "../lib/videoFrame";
+import type { SaveVideoTrim } from "../lib/videoTrim";
 
 /**
  * 图片放大查看器（全屏遮罩）。
@@ -19,16 +20,18 @@ export function Lightbox({
   onClose,
   onIndexChange,
   onAddVideoFrame,
+  onSaveVideoTrim,
 }: {
   images: string[];
   index: number;
   onClose: () => void;
   onIndexChange: (i: number) => void;
   onAddVideoFrame?: (frame: VideoFrame) => Promise<void>;
+  onSaveVideoTrim?: SaveVideoTrim;
 }) {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.key !== "Escape" && e.target instanceof Element && e.target.closest('[role="slider"]')) return;
+      if (e.key !== "Escape" && e.target instanceof Element && e.target.closest('[role="slider"], input, textarea, select')) return;
       if (["Escape", "ArrowLeft", "ArrowRight"].includes(e.key)) e.stopPropagation();
       if (e.key === "Escape") {
         e.preventDefault();
@@ -58,7 +61,7 @@ export function Lightbox({
       aria-modal="true"
       aria-label={`媒体预览，${index + 1} / ${images.length}`}
     >
-      {isVideoPath(images[index]) ? <VideoPlayer key={images[index]} path={images[index]} onAddFrame={onAddVideoFrame} /> : <img
+      {isVideoPath(images[index]) ? <VideoPlayer key={images[index]} path={images[index]} onAddFrame={onAddVideoFrame} onSaveTrim={onSaveVideoTrim} /> : <img
         ref={zoom.imgRef}
         src={convertFileSrc(images[index])}
         alt={`预览图 ${index + 1}`}

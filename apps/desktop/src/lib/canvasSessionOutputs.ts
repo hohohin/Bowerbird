@@ -6,10 +6,15 @@ function payload(node: CanvasNode) {
   try { return JSON.parse(node.payloadJson); } catch { return {}; }
 }
 
-/** Workflow sessions remain in execution history, but have no standalone canvas card. */
+/** All generation-card sessions, including those visible on the canvas. */
 export function workflowSessionIds(workflow: readonly WorkflowNode[]) {
   return new Set(workflow.filter(node => node.kind === "generation")
     .flatMap(node => [...(node.sessionNodeIds ?? []), ...(node.activeSessionNodeId ? [node.activeSessionNodeId] : [])]));
+}
+
+/** Video cards retain their existing history-only presentation. */
+export function hiddenWorkflowSessionIds(workflow: readonly WorkflowNode[]) {
+  return workflowSessionIds(workflow.filter(node => node.generation?.media === "video"));
 }
 
 /** A session socket refers to this exact turn, never later turns of the same job. */

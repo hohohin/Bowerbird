@@ -157,6 +157,13 @@ impl Database {
     }
     pub fn index_external(&self, paths: &LibraryPaths, path: &Path) -> AppResult<Asset> {
         let path = original(path)?;
+        // Files created in BowerbirdLibrary keep their existing image identity when browsed.
+        let managed: Option<String> = self.conn.lock().unwrap().query_row(
+            "SELECT id FROM assets WHERE store_path=?1 AND NOT EXISTS(SELECT 1 FROM external_assets WHERE asset_id=assets.id)",
+            [path.to_string_lossy().as_ref()], |row| row.get(0)).optional()?;
+        if let Some(id) = managed {
+            return self.get_asset(&id)?.ok_or_else(|| invalid("素材已不存在"));
+        }
         // Never treat a managed library file as an external original.
         if path.starts_with(fs::canonicalize(&paths.images)?) {
             return Err(invalid("这是库内文件，请从素材库引用"));
@@ -226,7 +233,10 @@ impl Database {
         accept_changes: bool,
     ) -> AppResult<Asset> {
         let path = original(path)?;
-        if path.starts_with(fs::canonicalize(&paths.images)?) {
+        let managed: bool = self.conn.lock().unwrap().query_row(
+            "SELECT EXISTS(SELECT 1 FROM assets WHERE store_path=?1 AND NOT EXISTS(SELECT 1 FROM external_assets WHERE asset_id=assets.id))",
+            [path.to_string_lossy().as_ref()], |row| row.get(0))?;
+        if managed || path.starts_with(fs::canonicalize(&paths.images)?) {
             return Err(invalid("重新定位请选择库外原图片"));
         }
         let hash = fingerprint(&path)?;
@@ -289,7 +299,7 @@ impl Database {
             [id],
             |r| r.get(0),
         )?;
-        let destination = paths.asset_store_path(id, asset.ext.as_deref().unwrap_or("png"));
+        let destination = paths.asset_store_path(id, asset.ext.as_deref().unwrap_or("png"))?;
         fs::create_dir_all(destination.parent().unwrap())?;
         // create_new avoids overwriting unrelated data on interrupted retries.
         let mut output = fs::OpenOptions::new()

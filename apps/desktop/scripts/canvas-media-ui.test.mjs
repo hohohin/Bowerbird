@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { mkdir } from "node:fs/promises";
 import { createServer } from "vite";
 import { chromium } from "../../html-renderer/node_modules/playwright/index.mjs";
 const server = await createServer({ server: { host: "127.0.0.1", port: 1569, strictPort: true, hmr: false, watch: null } });
@@ -61,7 +62,13 @@ try {
   assert.equal(await node("clip").evaluate(e => e.classList.contains("is-video")), true, "video asset node gets the is-video class");
   assert.equal(await node("clip").locator("video").count(), 0);
   assert.match(await node("clip").locator(":scope > img").getAttribute("src"), /^data:image/);
-  assert.equal(await node("clip").locator(".canvas-video-badge").count(), 1);
+  assert.equal(await node("clip").locator(".canvas-video-film").count(), 1);
+  assert.equal(await page.locator(".canvas-video-badge").count(), 0, "film edges replace the play badge");
+  await mkdir(".tmp/canvas-video-film", { recursive: true });
+  for (const theme of ["light", "dark"]) {
+    await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+    await node("clip").screenshot({ path: `.tmp/canvas-video-film/asset-${theme}.png` });
+  }
   // Explicitly opening the card still loads the original video with playback controls.
   await node("clip").focus();
   await page.keyboard.press("Enter");
@@ -74,7 +81,7 @@ try {
   await videoPreview.waitFor({ state: "detached" });
   assert.equal(await node("clip").locator("video").count(), 0);
   assert.equal(await node("wide").evaluate(e => e.classList.contains("is-video")), false, "image nodes keep the plain asset style");
-  assert.equal(await node("wide").locator(".canvas-video-badge").count(), 0);
+  assert.equal(await node("wide").locator(".canvas-video-film").count(), 0);
   const resized = await node("wide").boundingBox();
   for (const [id, ratio] of [["wide", 4], ["tall", 0.25]]) {
     const geometry = await node(id).locator(":scope > img").evaluate(image => {

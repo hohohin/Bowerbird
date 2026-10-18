@@ -26,6 +26,8 @@ export interface CanvasNotePayload {
   cells: CanvasTextCell[][];
   member_ids: string[];
   workflow_container?: boolean;
+  /** A compositing artboard uses the same frame interactions as a section. */
+  artboard?: { base_asset_id: string | null };
   line_height_percent?: number;
   bubble_tail?: CanvasBubbleTail;
   title?: string;
@@ -117,6 +119,7 @@ export function readCanvasNote(node: Pick<CanvasNode, "payloadJson">): CanvasNot
       .map((row: CanvasTextCell[], r: number) => row.map((cell, c) => ({ ...cell, ...(value.note_type === "images" && !cell.content_type ? { content_type: "image" } : {}), id: cell.id ?? `cell-${r}-${c}` }))),
     member_ids: value.member_ids ?? [],
     ...(value.note_type === "section" && value.workflow_container === true ? { workflow_container: true } : {}),
+    ...(value.note_type === "section" && value.artboard ? { artboard: { base_asset_id: typeof value.artboard.base_asset_id === "string" ? value.artboard.base_asset_id : null } } : {}),
     line_height_percent: value.line_height_percent ?? 165,
     ...(typeof value.title === "string" ? { title: value.title } : {}),
     ...(Array.isArray(value.column_widths) ? { column_widths: value.column_widths } : {}),

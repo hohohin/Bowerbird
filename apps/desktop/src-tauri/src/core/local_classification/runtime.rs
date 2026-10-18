@@ -866,6 +866,7 @@ mod tests {
                 name: format!("标签{i}\"测试"),
                 description: String::new(),
                 has_examples: false,
+                dimension: None,
                 enabled: true,
                 count: 0,
             })
@@ -1057,6 +1058,7 @@ mod tests {
                 enabled: true,
                 count: 0,
                 has_examples: false,
+                dimension: None,
             })
             .collect()
     }

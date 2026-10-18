@@ -1,11 +1,11 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { Image, Maximize2, PanelsTopLeft } from "lucide-react";
+import { Image, Maximize2, MoreHorizontal, PanelsTopLeft } from "lucide-react";
 import { notifyError } from "../lib/notify";
 import { useStore } from "../store";
 import type { LibraryProjectGroup } from "../lib/libraryView";
 import { useProjectAssetDrop } from "../lib/useProjectAssetDrop";
 
-export function ProjectFolder({ group, onExpand }: { group: LibraryProjectGroup; onExpand: () => void }) {
+export function ProjectFolder({ group, onExpand }: { group: LibraryProjectGroup; onExpand?: () => void }) {
   const projectDrop = useProjectAssetDrop();
   const projectRoutePending = useStore((s) => s.projectRoutePending);
   return <div className="library-project-folder"
@@ -28,9 +28,13 @@ export function ProjectFolder({ group, onExpand }: { group: LibraryProjectGroup;
       </div>
       <div className="library-project-folder-title"><PanelsTopLeft size={14} aria-hidden="true" /><strong>{group.project.name}</strong></div>
     </button>
-    <button type="button" className="library-project-expand" title="展开项目"
+    {onExpand ? <button type="button" className="library-project-expand" title="展开项目"
       aria-label={`展开项目 ${group.project.name}`} aria-expanded={false} onClick={onExpand}>
       <Maximize2 size={15} aria-hidden="true" />
-    </button>
+    </button> : <button type="button" className="library-project-expand" title="项目操作"
+      aria-label={`项目操作 ${group.project.name}`} onClick={event => {
+        const bounds = event.currentTarget.getBoundingClientRect();
+        useStore.getState().openProjectContextMenu(bounds.left, bounds.bottom, group.project.id);
+      }}><MoreHorizontal size={15} aria-hidden="true" /></button>}
   </div>;
 }

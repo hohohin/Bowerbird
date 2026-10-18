@@ -13,7 +13,7 @@ import { canvasAssetMediaPath } from "../lib/creativeCanvas";
 import { expandCanvasSections, readCanvasNote } from "../lib/canvasNotes";
 import { contentInputPort } from "../lib/canvasContentInput";
 import { contentTableRows } from "../lib/contentTable";
-import { canvasInputValue, canvasWorkflowInputState, canvasSessionImages, workflowSessionIds } from "../lib/canvasSessionOutputs";
+import { canvasInputValue, canvasWorkflowInputState, canvasSessionImages, hiddenWorkflowSessionIds } from "../lib/canvasSessionOutputs";
 import { useStore } from "../store";
 import { getDragAssets } from "../lib/dragPayload";
 import { notifyError, notifySuccess } from "../lib/notify";
@@ -56,7 +56,7 @@ export interface WorkflowLayerHandle {
   position: (positions: ReadonlyMap<string, { x: number; y: number }>, persist?: boolean) => void;
   isLocked: (id: string) => boolean;
 }
-export interface MaterialAnchor { id: string; assetId?: string; groupId?: string; assetIds?: string[]; x: number; y: number; width: number; height: number }
+export interface MaterialAnchor { id: string; assetId?: string; video?: boolean; groupId?: string; assetIds?: string[]; x: number; y: number; width: number; height: number }
 interface Props {
   provisional?: boolean;
   graphNodes: CanvasNode[];
@@ -103,7 +103,7 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
   const document = controller.document;
   const nameCards = [
     ...document.nodes.filter(node => !node.textTarget && !node.textSource).map(node => ({ id: node.id, title: workflowTitle(node) })),
-    ...graphNodes.map(node => ({ id: node.id, title: node.kind === "note" ? ({ text: "内容卡片", images: "内容卡片", bubble: "气泡", section: "分区" }[readCanvasNote(node).note_type] ?? "内容卡片") : node.kind === "asset" ? "图片卡片" : "会话卡片" })),
+    ...graphNodes.map(node => ({ id: node.id, title: node.kind === "note" ? (readCanvasNote(node).artboard ? "画板" : { text: "内容卡片", images: "内容卡片", bubble: "气泡", section: "分区" }[readCanvasNote(node).note_type] ?? "内容卡片") : node.kind === "asset" ? "图片卡片" : "会话卡片" })),
     ...materials.filter(item => item.groupId).map(item => ({ id: item.groupId!, title: "素材组" })),
   ];
   const cardNames = assignCanvasCardNames(document.cardNames, nameCards);
@@ -125,7 +125,7 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
     if (!controller.ready || controller.error || provisional || JSON.stringify(cardNames) === JSON.stringify(document.cardNames ?? {})) return;
     handle(controller.save({ ...controller.document, cardNames }));
   }, [controller, document, graphNodes, materials, provisional]);
-  const sessionIds = workflowSessionIds(document.nodes);
+  const sessionIds = hiddenWorkflowSessionIds(document.nodes);
   const issue = controller.issue;
   const deliveryRunIds = new Set(workflowRuns(document).filter(run => {
     if (run.status !== "waiting" || run.loop) return false;
@@ -218,7 +218,7 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
   const assetKey = [...new Set([...[...loopPreviews.values()].flatMap(preview => preview.items?.flatMap(item => item.assetIds) ?? []), ...workflowRuns(document).flatMap(run => [...(run.loop?.items?.flatMap(item => item.assetIds) ?? []), ...(run.loop?.completed.flatMap(item => Object.values(item.outputs).flatMap(outputs => Object.values(outputs).flatMap(value => value.assetIds ?? []))) ?? [])]), ...document.nodes.flatMap(node => [
     ...Object.values(node.inputs).flat().flatMap(inputImages),
     ...Object.values(node.outputs).flatMap(output => output.assetIds ?? []),
-  ])])].sort().join("|");
+  ]), ...graphNodes.filter(node => node.kind === "asset" && node.role === "output").flatMap(node => node.assetId ? [node.assetId] : [])])].sort().join("|");
   useEffect(() => {
     let current = true;
     void api.getAssetsByIds(assetKey ? assetKey.split("|") : []).then(value => { if (current) setAssets(value); }).catch(() => {});
@@ -459,7 +459,7 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
     const contained = embeddedPoint(binding.canvasNodeId ?? binding.assetNodeId ?? "");
     if (contained) return contained;
     if (binding.canvasNodeId) {
-      const owner = document.nodes.find(node => workflowSessionIds([node]).has(binding.canvasNodeId!));
+      const owner = document.nodes.find(node => hiddenWorkflowSessionIds([node]).has(binding.canvasNodeId!));
       if (owner) return { x: owner.x + WORKFLOW_CARD_WIDTH, y: workflowPortY(owner, "output", "image"), selected: wireSelected(owner.id) };
       const session = graphNodes.find(node => node.id === binding.canvasNodeId && node.kind === "prompt" && node.hiddenAt == null);
       if (session) {
@@ -550,7 +550,7 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
     {materials.filter(item => item.groupId).map(item => nameEditor(item.groupId!, { left: item.x, top: item.y - 28, maxWidth: item.width }))}
     {disconnectMenu && <WorkflowDisconnectMenu {...disconnectMenu} onClose={() => setDisconnectMenu(null)} />}
     <svg className="workflow-wires">
-      {document.nodes.filter(node => node.kind === "agent").flatMap(node => (node.sessionNodeIds ?? []).map(id => {
+      {document.nodes.filter(node => node.kind === "agent" || node.kind === "generation" && node.generation?.media !== "video").flatMap(node => (node.sessionNodeIds ?? []).map(id => {
         const anchorId = conversationCards?.aliases.get(id) ?? id;
         const session = graphNodes.find(item => item.id === anchorId && item.hiddenAt == null);
         return session && <path key={`agent-session-${node.id}-${id}`} className={`is-image${wireSelected(node.id) || wireSelected(anchorId) ? " is-selected" : ""}`} data-workflow-session-link={id}
@@ -558,7 +558,7 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
             embeddedPoint(id, true) ?? { x: session.x, y: session.y + 40 })} />;
       }))}
       {document.nodes.filter(node => node.kind === "generation").flatMap(node =>
-        graphNodes.filter(session => workflowSessionIds([node]).has(session.id)).flatMap(session =>
+        graphNodes.filter(session => hiddenWorkflowSessionIds([node]).has(session.id)).flatMap(session =>
           canvasSessionImages(session, graphNodes).flatMap(output => {
             const visible = materials.find(material => material.id === output.id);
             if (!visible) return [];
@@ -604,9 +604,12 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
       const card = graphNodes.find(card => card.id === node.textSource && card.hiddenAt == null);
       return card && <div key={node.id} className="workflow-material-hotspot workflow-text-key" data-workflow-text-key={card.id} style={{ left: card.x, top: card.y, width: card.width, height: card.height }}>{node.inputs.signal?.length ? gearButton(node) : keyButton(node)}</div>;
     })}
-    {graphNodes.filter(card => card.kind === "prompt" && card.hiddenAt == null && !sessionIds.has(card.id) && !conversationCards?.hiddenIds.has(card.id)).map(card => <div key={`session-${card.id}`} className={`workflow-material-hotspot ${imageOnlyConversationIds?.has(card.id) ? "is-image-session" : ""} ${hoveredMaterial === card.id ? "is-hovered" : ""}`} style={{ left: card.x, top: card.y, width: card.width, height: card.height }}>
+    {graphNodes.filter(card => card.kind === "prompt" && card.hiddenAt == null && !sessionIds.has(card.id) && !conversationCards?.hiddenIds.has(card.id)).map(card => {
+      const latest = conversationCards?.cards.get(card.id)?.latest ?? card;
+      const video = canvasSessionImages(latest, graphNodes).some(output => isVideoPath(assets.find(asset => asset.id === output.assetId)?.store_path));
+      return <div key={`session-${card.id}`} className={`workflow-material-hotspot ${imageOnlyConversationIds?.has(card.id) ? "is-image-session" : ""} ${hoveredMaterial === card.id ? "is-hovered" : ""}`} style={{ left: card.x, top: card.y, width: card.width, height: card.height }}>
       <button data-workflow-session-output={card.id} data-workflow-material={card.id} className="workflow-port is-output is-image workflow-session-output" style={{ top: 40 }}
-        aria-label="输出：图片" title="拖到输入端口，或点击后选择输入端口" onPointerDown={event => {
+        aria-label={video ? "输出：尾帧图" : "输出：图片"} title={video ? "输出视频原尺寸尾帧图" : "拖到输入端口，或点击后选择输入端口"} onPointerDown={event => {
           event.stopPropagation(); event.preventDefault();
           const value: Connection = { canvasNodeId: conversationCards?.cards.get(card.id)?.latest.id ?? card.id, cellId: "image", type: "image" };
           connectionRef.current = value; setConnection(value); setCursor({ x: event.clientX, y: event.clientY });
@@ -614,10 +617,10 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
           if (event.detail !== 0) return;
           const value: Connection = { canvasNodeId: conversationCards?.cards.get(card.id)?.latest.id ?? card.id, cellId: "image", type: "image" };
           connectionRef.current = value; setConnection(value);
-        }} onContextMenu={event => { event.preventDefault(); event.stopPropagation(); }}><i /><span>图片</span></button>
-    </div>)}
+        }} onContextMenu={event => { event.preventDefault(); event.stopPropagation(); }}><i /><span>{video ? "尾帧图" : "图片"}</span></button>
+    </div>; })}
     {materials.map(material => <div key={material.id} className={`workflow-material-hotspot ${hoveredMaterial === material.id ? "is-hovered" : ""}`} style={{ left: material.x, top: material.y, width: material.width, height: material.height }}><button data-workflow-material={material.id} className="workflow-asset-port" style={{ left: material.width - 6, top: material.height / 2 - 6 }}
-      aria-label={material.groupId ? "连接文件夹图片到工作流" : "连接图片到工作流"} title={material.groupId ? `输出文件夹内 ${material.assetIds?.length ?? 0} 张图片` : "拖动连接到工作流图片输入"} onPointerDown={event => {
+      aria-label={material.groupId ? "连接文件夹图片到工作流" : material.video ? "连接视频尾帧图到工作流" : "连接图片到工作流"} title={material.groupId ? `输出文件夹内 ${material.assetIds?.length ?? 0} 张图片` : material.video ? "输出视频原尺寸尾帧图" : "拖动连接到工作流图片输入"} onPointerDown={event => {
         event.stopPropagation(); event.preventDefault();
         const value: Connection = material.groupId ? { groupId: material.groupId, assetIds: material.assetIds, type: "image" } : { assetId: material.assetId, assetNodeId: material.id, type: "image" };
         connectionRef.current = value; setConnection(value); setCursor({ x: event.clientX, y: event.clientY });
@@ -795,7 +798,7 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
             {step.diagnostic && <button onClick={() => controller.showIssue(step.diagnostic!)}>查看问题</button>}
           </p>}
           {node.kind !== "planner" && <footer>
-            <span>{node.kind === "loop" && run ? ({ running: "运行中", waiting: "等待继续", done: "已完成", stopped: "已停止", failed: "失败" }[run.status]) : node.kind === "trigger" && busy ? run?.status === "waiting" ? "等待继续" : "运行中" : step?.status === "pending" && run?.status === "failed" ? "因上游失败未执行" : step?.status === "pending" && run?.status === "stopped" ? "已停止，未执行" : step ? statusLabels[step.status] : node.trigger ? "工作流起点" : "未运行"}</span>
+            <span>{node.kind === "loop" && run ? ({ running: "运行中", waiting: "等待继续", done: "已完成", stopped: "已停止", failed: "失败" }[run.status]) : node.kind === "trigger" && busy ? run?.status === "waiting" ? "等待继续" : "运行中" : step?.status === "pending" && run?.status === "failed" ? "因上游失败未执行" : step?.status === "pending" && run?.status === "stopped" ? "已停止，未执行" : step?.status === "done" && step.generationSubmission === "submitted" ? "已提交生成" : step ? statusLabels[step.status] : node.trigger ? "工作流起点" : "未运行"}</span>
             {busy && run?.order.includes(node.id) ? <>
               {deliveryRunIds.has(run.id) && node.id === run.startId && <button onClick={() => handle(controller.continue(run.id))}>重试写入内容卡</button>}
               {run?.status === "waiting" && !Object.values(run.steps).some(step => step.status === "failed") && step?.status !== "done" && run.order.find(id => run!.steps[id].status !== "done") === node.id

@@ -1,10 +1,11 @@
 import { cloudVideoOptions } from "../lib/videoGeneration";
 import { DreaminaTaskCredit } from "./creation/DreaminaCredits";
 import { DreaminaTaskDiagnostics } from "./creation/DreaminaTaskDiagnostics";
+import { GenerationSessionSurface } from "./GenerationSessionSurface";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { ChevronLeft, ChevronRight } from "lucide-react";
-import { DEFAULT_VIDEO_OPTIONS, videoInputError, videoProvider, type VideoOptions } from "../lib/videoGeneration";
+import { DEFAULT_VIDEO_OPTIONS, imageInputError, videoInputError, videoProvider, type VideoOptions } from "../lib/videoGeneration";
 import { VideoControls } from "./creation/VideoControls";
 import { MediaPreview } from "./MediaPreview";
 import { useStore, type GenEditingMode } from "../store";
@@ -23,6 +24,7 @@ import { cloudProviderLabel, canonicalProviderKey, isCloudProvider, supportsAnno
 import type { Asset, GenJob, GenTurn, VisualProfileCapsule, VisualProfileRuleValue } from "../lib/types";
 import { Lightbox } from "./Lightbox";
 import type { VideoFrame } from "../lib/videoFrame";
+import type { SaveVideoTrim } from "../lib/videoTrim";
 import { useCreationEditor } from "./creation/useCreationEditor";
 import { RatioSelect } from "./creation/RatioSelect";
 import { ProviderSelect } from "./creation/ProviderSelect";
@@ -58,12 +60,14 @@ export function GenerationPanel({
   hydratedAssets = [],
   snapshot,
   onAddVideoFrame,
+  onSaveVideoTrim,
 }: {
   readOnly?: boolean;
   embedded?: boolean;
   hydratedAssets?: Asset[];
-  snapshot?: { job: GenJob; selectedTurnKey: string; onReuse: (turn: GenTurn) => void };
+  snapshot?: { job: GenJob; sourceJobId: string | null; selectedTurnKey: string; onReuse: (turn: GenTurn) => void };
   onAddVideoFrame?: (frame: VideoFrame) => Promise<void>;
+  onSaveVideoTrim?: SaveVideoTrim;
 } = {}) {
   const genJobs = useStore((s) => s.genJobs);
   const listedAssets = useStore((s) => s.assets);
@@ -541,7 +545,7 @@ export function GenerationPanel({
         // 会话全屏视图：进入编辑坞的 200ms 内保留挂载播退场（gen-view-out 下沉淡出，
         // pointer-events-none 让位给坞/瀑布流），从编辑坞回来时 gen-view-in 淡入上移。
         // 无 job 时即使 genEditing 也落在此分支（坞无会话可载，退回会话空态）。
-        <div
+        <GenerationSessionSurface jobId={snapshot ? snapshot.sourceJobId : activeJob?.id}
           className={`${embedded ? "flex min-h-0 flex-1 flex-col bg-canvas" : "absolute inset-0 z-10 flex flex-col bg-canvas"} ${
             floatingEditing && activeJob ? "gen-view-out pointer-events-none" : ""
           }`}
@@ -685,11 +689,12 @@ export function GenerationPanel({
         )}
       </div>
           </div>
-        </div>
+        </GenerationSessionSurface>
       )}
       {lightbox && (
         <Lightbox
           onAddVideoFrame={onAddVideoFrame}
+          onSaveVideoTrim={onSaveVideoTrim}
           images={lightbox.images}
           index={lightbox.index}
           onClose={() => setLightbox(null)}
@@ -1269,9 +1274,11 @@ function GenEditComposer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const referenceError = !isVideo ? imageInputError(references) : null;
   async function send() {
     // 续轮复用同 job（无新并行槽占用）；重新编辑开新 job 需过并行上限门。
     if (!finalPrompt || !targetReady || agentBusy || (!isRevise && !canStart)) return;
+    if (referenceError) { notifyError(referenceError, "参考素材不适用"); return; }
     if (isVideo) {
       const error = videoInputError(videoOptions, references, ratio, activeGenProvider);
       if (error) { notifyError(error, "视频参数无效"); return; }
@@ -1484,6 +1491,7 @@ function GenEditComposer({
       />
       {/* 编辑框内 chip 的交互浮层（hover 放大图/维度正文 + 点击定位瀑布流） */}
       <BoardChipPreview hostRef={hostRef} />
+      {referenceError && <p role="alert" className="px-3 py-1 text-xs text-red-400">{referenceError}</p>}
       <div className="generation-toolbar flex flex-wrap items-center gap-2">
           {isVideo ? <VideoControls channel={videoChannel} onChannelChange={channel => { setVideoChannel(channel); if (channel === "cloud") setVideoOptions(cloudVideoOptions(videoOptions)); }} options={videoOptions} onChange={setVideoOptions} ratio={ratio} onRatioChange={setRatio} /> : <>
           <RatioSelect value={ratio} onChange={setRatio} />
@@ -1565,8 +1573,8 @@ function GenEditComposer({
             <button
               type="button"
               onClick={() => void send()}
-              disabled={sendDisabled}
-              title={sendTitle}
+              disabled={sendDisabled || referenceError !== null}
+              title={referenceError ?? sendTitle}
               className="generation-send-button"
             >
               <Send size={12} />

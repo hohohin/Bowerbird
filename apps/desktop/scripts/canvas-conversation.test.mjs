@@ -14,6 +14,7 @@ test('imported conversation restores ordered hidden history and graph references
   assert.ok(turns.every(t=>t.references.every(a=>a.store_path)));
   assert.ok(!turns.some(t=>t.node.id==='pack:canvas_nodes:014'));
   const turn=canvasConversationTurn(selected,nodes,edges,assets);
+  assert.equal(turn.jobId,null,'imported history must not invent a diagnostic task ID');
   assert.deepEqual(turn.referenceNodeIds,['pack:canvas_nodes:016','pack:canvas_nodes:004']);
   assert.deepEqual(turn.references.map(a=>a.id),['pack:assets:006','pack:assets:002']);
   assert.ok(turn.references.every(a=>a.store_path.startsWith('/local/library/')));
@@ -35,5 +36,6 @@ test('workflow history can view a persisted job without mixing runs in the same 
   const first=turn('first','job-one'),later=turn('later','job-one'),other=turn('other','job-two');
   const turns=canvasConversationTurns(first,[first,later,other,...nodes],edges,assets,'job-one');
   assert.deepEqual(turns.map(t=>t.node.id),['first','later']);
+  assert.deepEqual(turns.map(t=>t.jobId),['job-one','job-one']);
   assert.equal(canvasConversationTurn(first,[first],[],assets),null,'live jobs remain excluded from imported-only callers');
 });

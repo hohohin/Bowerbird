@@ -92,7 +92,7 @@ export function CanvasSourceTags() {
     <button ref={buttonRef} type="button" className={`canvas-source-tag-toggle${active ? " is-active" : ""}`}
       title={active ? `分类标签：${active}` : "分类标签"} aria-label="分类标签"
       aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? id : undefined}
-      onClick={() => setOpen(value => !value)}><Tags size={14} aria-hidden="true" /></button>
+      onClick={() => setOpen(value => !value)}><Tags size={14} aria-hidden="true" /><span>筛选</span></button>
     {open && createPortal(<div ref={panelRef} id={id} role="dialog" aria-label="分类标签" tabIndex={-1}
       className="canvas-source-tag-popover" style={position}>
       <header><strong>分类标签</strong><button type="button" aria-label="关闭分类标签" onClick={close}><X size={14} /></button></header>

@@ -11,6 +11,11 @@ import type { Asset } from "../lib/types";
 import type { LibraryProjectGroup } from "../lib/libraryView";
 import { ProjectFolder } from "./ProjectFolder";
 import { useMasonryLayout } from "../lib/useMasonryLayout";
+import { OverlayScrollArea } from "./CollectionScrollArea";
+import { filterAssetsByMediaType } from "../lib/mediaFilter";
+
+// Keep layout inputs stable when the host only opens/closes its library drawer.
+const EMPTY_PROJECT_GROUPS: LibraryProjectGroup[] = [];
 
 function parseColors(c: string | null | undefined): string[] {
   if (!c) return [];
@@ -385,7 +390,7 @@ const Thumb = memo(function Thumb({
       aria-pressed={manageMode ? selected : undefined}
       className={`group relative mb-2 overflow-hidden rounded-sm bg-panel transition ${
         selected
-          ? addingToCollection ? "border-2 collection-add-selected" : "border-2 border-accent shadow-[inset_0_0_0_1px_#4868ff]"
+          ? addingToCollection ? "border collection-add-selected" : "border border-accent shadow-[inset_0_0_0_1px_#4868ff]"
           : "border border-edge hover:border-[#55505a]"
       } ${variant === "canvas-source" ? `${manageMode || pickMode ? "cursor-pointer" : "cursor-zoom-in"} active:cursor-grabbing` : "cursor-pointer"}`}
       draggable={!addingToCollection && (variant === "canvas-source" || !pickMode)}
@@ -506,6 +511,12 @@ const Thumb = memo(function Thumb({
           </button>
         </>
       )}
+      {video && (
+        <span className="pointer-events-none absolute bottom-3 right-1 z-10 flex items-center gap-1 rounded bg-black/75 px-1.5 py-0.5 text-[10px] text-white"
+          aria-label="视频素材">
+          <Play size={10} aria-hidden="true" />视频
+        </span>
+      )}
       {video && !thumbnailPath ? (
         <div
           className="flex min-h-24 w-full items-center justify-center gap-2 bg-panel2 text-xs text-muted"
@@ -514,6 +525,7 @@ const Thumb = memo(function Thumb({
         ><Play size={20} />视频 · 暂无封面</div>
       ) : (
         <img
+          key={thumbnailPath}
           ref={imgRef}
           className="block w-full bg-panel2"
           style={{ aspectRatio: ratio }}
@@ -591,7 +603,7 @@ export function MasonryGrid({
   totalOverride,
   projectScopeId,
   onOpenPreview,
-  projectGroups = [],
+  projectGroups = EMPTY_PROJECT_GROUPS,
   onOpenProject,
   embedded = false,
   restrictGroupsToAssets = false,
@@ -619,7 +631,9 @@ export function MasonryGrid({
   const gridId = useId();
   const storeTotal = useStore((s) => s.total);
   const storeActiveProjectId = useStore((s) => s.activeProjectId);
-  const assets = assetsOverride ?? storeAssets;
+  const mediaFilter = useStore(s => s.mediaFilter);
+  const sourceAssets = assetsOverride ?? storeAssets;
+  const assets = useMemo(() => filterAssetsByMediaType(sourceAssets, mediaFilter), [sourceAssets, mediaFilter]);
   const total = totalOverride ?? storeTotal;
   const activeProjectId = projectScopeId === undefined ? storeActiveProjectId : projectScopeId;
   const focusAssetId = useStore((s) => s.focusAssetId);
@@ -629,7 +643,10 @@ export function MasonryGrid({
   const setCurrentCollection = useStore((s) => s.setCurrentCollection);
   const setSmartFilter = useStore((s) => s.setSmartFilter);
   const setColorFilter = useStore((s) => s.setColorFilter);
-  const [groupMap, setGroupMap] = useState<Record<string, Asset[]>>({});
+  const [rawGroupMap, setGroupMap] = useState<Record<string, Asset[]>>({});
+  const groupMap = useMemo(() => mediaFilter
+    ? Object.fromEntries(Object.entries(rawGroupMap).map(([id, group]) => [id, filterAssetsByMediaType(group, mediaFilter)]))
+    : rawGroupMap, [rawGroupMap, mediaFilter]);
   // 创作板 chip 点击 focus：滚动定位到该素材并闪烁高亮。读完即清 store，便于连续 focus 同一张。
   const flashTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => {
@@ -700,6 +717,7 @@ export function MasonryGrid({
 
 
   function clearFilters() {
+    useStore.getState().setMediaFilter(null);
     setSearchQuery("");
     setCurrentFolder(null);
     setCurrentCollection(null);
@@ -708,6 +726,18 @@ export function MasonryGrid({
   }
 
   const libraryEmpty = total === 0;
+  const grid = <div ref={setLayoutElement} className="masonry-layout" data-tour="masonry">
+    {items.map(item => <div className="masonry-cell"
+      key={item.kind === "project" ? `project-${item.group.project.id}` : item.asset.id}>
+      {item.kind === "project" ? (
+        <ProjectFolder group={item.group} onExpand={() => onOpenProject?.(item.group.project.id)} />
+      ) : (
+        <Thumb asset={item.asset} group={groupMap[item.asset.id]} orderedIds={orderedIds}
+          variant={variant} libraryProjectId={activeProjectId ?? undefined}
+          idPrefix={embedded ? `${gridId}-` : ""} onOpenPreview={onOpenPreview} />
+      )}
+    </div>)}
+  </div>;
 
   return (
     <div
@@ -751,26 +781,10 @@ export function MasonryGrid({
         // paddingBottom 跟随底部浮动坞实际高度（会话「重新编辑」坞 --gen-dock-h、创作板
         // 对话框 --board-dock-h，坞/板挂载时由各自 ResizeObserver 写入）——否则底部浮动
         // 坞会盖住最后一行素材，滚不到底。主页另为悬浮缩略图滑块预留底部空间。
-        <div className={embedded ? "" : "library-scroller h-full overflow-y-auto"} style={embedded ? undefined : { paddingBottom: "max(var(--library-footer-space, 0px), var(--gen-dock-h, 0px), var(--board-dock-h, 0px))" }}>
-          <div ref={setLayoutElement} className="masonry-layout" data-tour="masonry">
-            {items.map(item => <div className="masonry-cell"
-              key={item.kind === "project" ? `project-${item.group.project.id}` : item.asset.id}>
-              {item.kind === "project" ? (
-                <ProjectFolder group={item.group} onExpand={() => onOpenProject?.(item.group.project.id)} />
-              ) : (
-                <Thumb
-                  asset={item.asset}
-                  group={groupMap[item.asset.id]}
-                  orderedIds={orderedIds}
-                  variant={variant}
-                  libraryProjectId={activeProjectId ?? undefined}
-                  idPrefix={embedded ? `${gridId}-` : ""}
-                  onOpenPreview={onOpenPreview}
-                />
-              )}
-            </div>)}
-          </div>
-        </div>
+        embedded ? grid : <OverlayScrollArea className="library-scroll-area" viewportClassName="library-scroller"
+          viewportStyle={{ paddingBottom: "max(var(--library-footer-space, 0px), var(--gen-dock-h, 0px), var(--board-dock-h, 0px))" }}>
+          {grid}
+        </OverlayScrollArea>
       )}
 
     </div>

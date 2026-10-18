@@ -171,8 +171,12 @@ fn handle_blob(
     }
     // 追溯优先页面 URL（如 Pinterest pin），无则最终图片 URL。
     let source_url = page_url.unwrap_or(effective_url);
+    let paths = match state.paths.for_project(&state.db, project_id) {
+        Ok(paths) => paths,
+        Err(error) => return serde_json::json!({ "ok": false, "error": error.to_string() }).to_string(),
+    };
     match ingest::ingest_from_bytes(
-        &state.paths,
+        &paths,
         &state.db,
         bytes,
         source_url,
@@ -326,9 +330,10 @@ async fn save_one(
     source_url: Option<&str>,
     project_id: Option<&str>,
 ) -> crate::error::AppResult<crate::core::library::Asset> {
+    let paths = state.paths.for_project(&state.db, project_id)?;
     let asset = match ingest::ingest_from_url(
         &state.client,
-        &state.paths,
+        &paths,
         &state.db,
         url,
         source_url,

@@ -1,10 +1,11 @@
-import React from "react";
+import React, { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { LibraryHome } from "../../../src/components/LibraryHome";
 import { AssetContextMenu } from "../../../src/components/AssetContextMenu";
 import { DescribeProviderPicker } from "../../../src/components/DescribeProviderPicker";
 import { ToastViewport } from "../../../src/components/ToastViewport";
 import { useStore } from "../../../src/store";
+import { useLocalFileMode } from "../../../src/lib/localFileMode";
 import "../../../src/styles.css";
 
 // 多选右键菜单合成夹具：全局素材库 manage 模式 + 3 张选中，验证批量菜单
@@ -25,6 +26,7 @@ w.__TAURI_INTERNALS__ = {
     w.calls.push({ command, args });
     if (command === "plugin:event|listen") return args.handler;
     if (command === "list_generation_groups") return {};
+    if (command === "list_tags") return [];
     if (command === "list_projects") return [
       { id: "p1", name: "画册项目", kind: "user" }, { id: "p2", name: "网站改版", kind: "user" }];
     if (command === "list_folders") return [
@@ -61,6 +63,7 @@ useStore.setState({
     { id: "p2", name: "网站改版", kind: "user" } as any,
   ],
   activeProjectId: null,
+  libraryHomeView: "projects",
   currentFolderId: null,
   libraryMemberships: [],
   mode: "manage",
@@ -81,6 +84,10 @@ w.fixtureStore = useStore;
 w.resetSelection = () => useStore.setState({ mode: "manage", selectedIds: new Set(["a1", "a2", "a3"]), currentFolderId: null });
 
 function Preview() {
+  useEffect(() => {
+    useStore.setState({ libraryHomeView: "library" });
+    useLocalFileMode.getState().setOpen(false);
+  }, []);
   return <div className="app-shell flex h-screen">
     <main className="relative min-w-0 flex flex-1 flex-col overflow-hidden">
       <div id="home" className="min-h-0 flex-1 overflow-y-auto"><LibraryHome /></div>

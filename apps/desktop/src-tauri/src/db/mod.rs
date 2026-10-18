@@ -9,6 +9,7 @@ use rusqlite::{Connection, OpenFlags};
 use crate::error::{AppError, AppResult};
 
 pub mod migrations;
+mod classification_presets;
 
 pub struct Database {
     pub conn: Mutex<Connection>,

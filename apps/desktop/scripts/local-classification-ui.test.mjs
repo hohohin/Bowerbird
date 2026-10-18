@@ -137,62 +137,59 @@ try {
   assert.equal(await dialog.getByRole("button", { name: "停止", exact: true }).isEnabled(), true);
   assert.equal(await dialog.getByRole("button", { name: "识别未处理素材", exact: true }).isDisabled(), true);
   await page.evaluate(() => Object.assign(window.classificationStatus, { cloud_running: 0, cloud_queued: 0 }));
-  const setJevChoices = async (winners, error = null) => page.evaluate(({ winners, error }) => {
-    const names = ["插画", "梦幻柔光", "羊", "颗粒质感", "无已有匹配标签"];
-    const answers = {};
-    const dimensions = ["type", "style", "subject"].map((dimension, index) => {
-      const winner = winners[index] ?? 4;
-      const labels = names.map((name, i) => ({ key: i === 4 ? "no_match" : `label_${i}`, name,
-        description: name === "梦幻柔光" ? "明亮柔和的光晕包裹主体边缘，具有梦幻氛围" : "可复用的视觉特征",
-        probability: i === winner ? 0.92 : 0.02, selected: error ? null : i === winner }));
-      answers[dimension] = { type: "choice", choice: labels[winner].key, confidence: 0.81, probabilities: Object.fromEntries(labels.map(label => [label.key, label.probability])) };
-      labels.sort((a, b) => b.probability - a.probability);
-      return { dimension, title: ["类型", "风格", "主体"][index], confidence: 0.81, no_match: error ? null : winner === 4, labels, error: index === 1 ? error : null };
-    });
-    if (error) answers.style.confidence = 2;
-    window.classificationStatus.jev_progress.report = { model: "jev-test-version", dimensions, error,
-      response: { model: "jev-test-version", answers, usage: { input_tokens: 123 } }
-    };
-    window.classificationStatus.jev_progress.message = "Jev 已返回类型、风格、主体三个维度的结果，等待此图处理完成";
-  }, { winners, error });
-  await setJevChoices([0, 1, 2]);
-  const styleResults = jevResults.getByRole("region", { name: "Jev 风格结果", exact: true });
-  const dreamRow = styleResults.getByRole("row").filter({ hasText: "梦幻柔光" });
-  await dreamRow.getByText("92.00%", { exact: true }).waitFor();
-  await styleResults.getByText("jev-test-version · 置信度 81.00%", { exact: true }).waitFor();
-  await dreamRow.getByText("选中标签", { exact: true }).waitFor();
-  assert.equal(await jevResults.getByText("选中标签", { exact: true }).count(), 3);
-  assert.equal(await jevResults.getByText("已选出此维度的标签", { exact: true }).count(), 3);
-  await dreamRow.getByText("明亮柔和的光晕包裹主体边缘，具有梦幻氛围", { exact: true }).waitFor();
-  assert.equal(await dreamRow.locator("svg").count(), 1);
-  assert.equal(await styleResults.locator("tbody tr").first().getByText("1. 梦幻柔光", { exact: true }).isVisible(), true);
+  const setJevChoices = async (probabilities, error = null) => page.evaluate(({ probabilities, error }) => {
+    const names = ["海报", "字体排版", "场景产品图", "角色设定图", "无明显匹配项"];
+    const labels = names.map((name, i) => ({ key: i === 4 ? "no_match" : `label_${i}`, name,
+      description: name === "字体排版" ? "字形及文字视觉组织构成画面重点" : "可复用的视觉特征",
+      probability: probabilities[i], selected: error ? null : i < 4 && probabilities[i] >= .3 }));
+    const choice = labels.reduce((a, b) => a.probability >= b.probability ? a : b).key;
+    const answers = { labels: { type: "choice", choice, confidence: error ? 2 : .81,
+      probabilities: Object.fromEntries(labels.map(label => [label.key, label.probability])) } };
+    labels.sort((a, b) => b.probability - a.probability);
+    window.classificationStatus.jev_progress.report = { model: "jev-test-version", labels, error,
+      confidence: error ? null : .81, no_match: error ? null : !labels.some(l => l.selected),
+      response: { model: "jev-test-version", answers, usage: { input_tokens: 123 } } };
+    window.classificationStatus.jev_progress.message = "Jev 已返回全部候选概率，按前四名且不低于 30% 筛选，等待此图处理完成";
+  }, { probabilities, error });
+  await setJevChoices([.4, .3, .29, .01, 0]);
+  const ranking = jevResults.getByRole("region", { name: "Jev 标签排名", exact: true });
+  const typography = ranking.getByRole("row").filter({ hasText: "字体排版" });
+  await typography.getByText("30.00%", { exact: true }).waitFor();
+  await ranking.getByText("jev-test-version · 置信度 81.00%", { exact: true }).waitFor();
+  await typography.getByText("选中标签", { exact: true }).waitFor();
+  assert.equal(await jevResults.getByText("选中标签", { exact: true }).count(), 2);
+  assert.equal(await ranking.getByRole("row").filter({ hasText: "场景产品图" }).getByText("选中标签").count(), 0);
+  await typography.getByText("字形及文字视觉组织构成画面重点", { exact: true }).waitFor();
+  assert.equal(await typography.locator("svg").count(), 1);
+  assert.equal(await ranking.locator("tbody tr").first().getByText("1. 海报", { exact: true }).isVisible(), true);
   await jevResults.getByText("查看 Jev 原始返回", { exact: true }).click();
-  await jevResults.locator("pre").filter({ hasText: '"input_tokens": 123' }).waitFor();
-  assert.equal(await jevResults.getByRole("table").count(), 3);
+  await jevResults.locator("pre").filter({ hasText: '\"input_tokens\": 123' }).waitFor();
+  assert.equal(await jevResults.getByRole("table").count(), 1);
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "打开自动分类", exact: true }).click();
-  await jevResults.getByText("92.00%", { exact: true }).first().waitFor();
-  await styleResults.scrollIntoViewIfNeeded();
+  await jevResults.getByText("40.00%", { exact: true }).waitFor();
+  await ranking.scrollIntoViewIfNeeded();
   await page.screenshot({ path: ".tmp/classification-preview/jev-results-light-narrow.png" });
   assert.equal(await dialog.evaluate(el => el.scrollWidth > el.clientWidth + 1), false);
-  // Terminal status hides the thumbnail but retains all three choices.
   await page.evaluate(() => { window.classificationStatus.busy = false; window.classificationStatus.phase = "complete"; });
   await preview.waitFor({ state: "hidden" });
-  assert.equal(await jevResults.getByText("92.00%", { exact: true }).first().isVisible(), true);
+  assert.equal(await jevResults.getByText("40.00%", { exact: true }).isVisible(), true);
   await page.setViewportSize({ width: 1050, height: 950 });
   await page.evaluate(() => document.documentElement.dataset.theme = "dark");
   await dialog.getByRole("button", { name: "识别未处理素材", exact: true }).click();
   await jevResults.getByText("暂无 Jev 返回内容", { exact: true }).waitFor();
-  assert.equal(await jevResults.getByText("92.00%", { exact: true }).count(), 0);
-  await setJevChoices([0, null, 2]);
-  await styleResults.getByText("此维度无已有匹配标签", { exact: true }).waitFor();
-  assert.equal(await jevResults.getByText("选中标签", { exact: true }).count(), 2);
-  assert.equal(await styleResults.locator("tbody tr").first().getByText("1. 无已有匹配标签", { exact: true }).isVisible(), true);
-  await styleResults.scrollIntoViewIfNeeded();
+  await setJevChoices([.2, .15, .1, .05, .5]);
+  await ranking.getByText("没有真实标签达到 30%，转 Cloud 补充", { exact: true }).waitFor();
+  assert.equal(await jevResults.getByText("选中标签", { exact: true }).count(), 0);
+  assert.equal(await ranking.locator("tbody tr").first().getByText("1. 无明显匹配项", { exact: true }).isVisible(), true);
+  await ranking.scrollIntoViewIfNeeded();
   await page.screenshot({ path: ".tmp/classification-preview/jev-no-match-dark.png" });
-  await setJevChoices([0, null, 2], "风格：Jev Choice 置信度无效");
-  await jevResults.getByText("本图未采用：风格：Jev Choice 置信度无效", { exact: true }).waitFor();
-  assert.equal(await jevResults.getByText("结果不完整，未采用", { exact: true }).count(), 3);
+  await setJevChoices([.35, 0, 0, 0, .65]);
+  await ranking.getByText("已按概率与 30% 门槛选出标签", { exact: true }).waitFor();
+  assert.equal(await jevResults.getByText("选中标签", { exact: true }).count(), 1);
+  await setJevChoices([.4, .3, .2, .1, 0], "Jev Choice 置信度无效");
+  await jevResults.getByText("本图未采用：Jev Choice 置信度无效", { exact: true }).waitFor();
+  assert.equal(await jevResults.getByText("结果不完整，未采用", { exact: true }).count(), 1);
   assert.equal(await jevResults.getByText("选中标签", { exact: true }).count(), 0);
   await dialog.getByRole("button", { name: "停止", exact: true }).click();
   await jevResults.getByText("已停止；此图未完成的结果未写入", { exact: true }).waitFor();
@@ -288,5 +285,5 @@ try {
   assert.equal(await dialog.getByRole("radio", { name: "云端分类", exact: true }).isDisabled(), true);
   assert.equal(await dialog.getByRole("button", { name: "识别未处理素材", exact: true }).isDisabled(), true);
   assert.deepEqual(errors, []);
-  console.log("classification UI: separate local/cloud controls, keyboard mode selection, explicit apply/failure/reopen/key persistence, busy guard, scan/automatic/match, delete, processing thumbnails/switch/reopen/fallback/stop/complete Jev three Choice tasks/per-dimension winner/partial no-match/raw JSON/reopen/retention/errors/reset and themes passed");
+  console.log("classification UI: separate local/cloud controls, keyboard mode selection, explicit apply/failure/reopen/key persistence, busy guard, scan/automatic/match, delete, processing thumbnails/switch/reopen/fallback/stop/complete Jev unified Choice ranking/raw 30% threshold/no-match winner/Cloud fallback/raw JSON/reopen/retention/errors/reset and themes passed");
 } finally { await browser.close(); await server.close(); }

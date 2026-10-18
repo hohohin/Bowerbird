@@ -134,7 +134,7 @@ fn path_key(path: &Path) -> String {
 }
 
 // No external originals, directories, symlinks, junctions or parent traversal. Only
-// images/ and thumbnails/ owned by this configured central library are eligible.
+// Only application-created media roots are eligible; browsing places confer no ownership.
 fn safe_file(paths: &LibraryPaths, raw: &Path) -> AppResult<PathBuf> {
     if !raw.is_absolute()
         || raw
@@ -144,19 +144,11 @@ fn safe_file(paths: &LibraryPaths, raw: &Path) -> AppResult<PathBuf> {
         return Err(AppError::Other("文件路径不安全".into()));
     }
     let canonical = fs::canonicalize(raw)?;
-    let root = fs::canonicalize(&paths.root)?;
-    let rel = canonical
-        .strip_prefix(&root)
-        .map_err(|_| AppError::Other("文件不在中央库内".into()))?;
-    if !matches!(
-        rel.components().next().and_then(|c| c.as_os_str().to_str()),
-        Some("images" | "thumbnails")
-    ) {
-        return Err(AppError::Other("文件不在中央素材目录内".into()));
-    }
+    let root = paths.managed_file_root(raw)
+        .ok_or_else(|| AppError::Other("文件不在应用创建的素材目录内".into()))?;
     // Inspect the supplied path too: canonicalization alone would follow internal links.
     let mut cursor = raw.to_path_buf();
-    while path_key(&cursor) != path_key(&paths.root) && cursor.parent().is_some() {
+    while path_key(&cursor) != path_key(&root) && cursor.parent().is_some() {
         let meta = fs::symlink_metadata(&cursor)?;
         #[cfg(windows)]
         {
@@ -363,16 +355,28 @@ impl Database {
         project: &str,
         confirmation: &str,
     ) -> AppResult<ProjectDeleteResult> {
+        self.delete_project_managed(paths,project,Some(confirmation))
+    }
+
+    pub fn delete_project_keep_managed(&self, paths: &LibraryPaths, project: &str) -> AppResult<ProjectDeleteResult> {
+        self.delete_project_managed(paths,project,None)
+    }
+
+    fn delete_project_managed(&self, paths: &LibraryPaths, project: &str, confirmation: Option<&str>) -> AppResult<ProjectDeleteResult> {
+        let _records=super::creative_files::RECORD_GATE.lock().unwrap();
         self.recover_project_deletions(paths)?;
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         ensure_project_has_no_unfinished_work(&tx, project)?;
-        let plan = plan(&tx, paths, project)?;
-        if confirmation.is_empty() || confirmation != plan.impact.confirmation {
+        let mut plan = plan(&tx, paths, project)?;
+        if confirmation.is_some_and(|value|value.is_empty() || value != plan.impact.confirmation) {
             return Err(AppError::Other(
                 "项目素材或文件已变化，请重新打开删除确认".into(),
             ));
         }
+        if confirmation.is_none() {plan.ids.clear();plan.files.clear();}
+        let (transferred,originals)=super::file_workspace_move::history::transfer_shared(&tx,paths,project)?;
+        plan.files.extend(originals);
         let removed_members: usize = tx.query_row(
             "SELECT COUNT(*) FROM project_assets WHERE project_id=?1",
             [project],
@@ -433,9 +437,9 @@ impl Database {
         Ok(ProjectDeleteResult {
             removed_members,
             deleted_assets: plan.ids.len(),
-            preserved_shared: plan.impact.preserved_shared_count
-                + plan.impact.preserved_unsafe_count,
-            moved_assets: 0,
+            preserved_shared: if confirmation.is_none() {removed_members} else {plan.impact.preserved_shared_count
+                + plan.impact.preserved_unsafe_count},
+            moved_assets: transferred,
             failed_moves: vec![],
             cleanup_pending,
         })
@@ -482,6 +486,25 @@ mod tests {
     }
     fn node(db: &Database, project: &str, id: &str, asset: &str) {
         db.conn.lock().unwrap().execute("INSERT INTO canvas_nodes(id,project_id,kind,asset_id,role,payload_json,x,y,width,height,created_at,updated_at) VALUES(?1,?2,'asset',?3,'reference','{\"schema_version\":1,\"snapshot\":{}}',0,0,100,100,1,1)",params![id,project,asset]).unwrap();
+    }
+    #[test]
+    fn managed_project_files_are_eligible_but_added_locations_are_not() {
+        let (db, mut paths) = fixture();
+        let files = std::sync::Arc::new(crate::core::file_workspace::FileWorkspace::open(
+            paths.root.join("file-workspace.json"), paths.root.join("BowerbirdLibrary")).unwrap());
+        let project = files.project_directory("p", "project").unwrap();
+        let managed = project.join("output.png"); fs::write(&managed, b"created").unwrap();
+        let external = paths.root.join("user-photos"); fs::create_dir(&external).unwrap();
+        fs::write(external.join("original.png"), b"user original").unwrap();
+        files.set_place(&external, true).unwrap(); paths.files = Some(files);
+        assert!(safe_file(&paths, &managed).is_ok());
+        assert!(safe_file(&paths, &external.join("original.png")).is_err());
+        db.conn.lock().unwrap().execute("INSERT INTO assets(id,name,store_path) VALUES('output','output',?1)", [managed.to_str()]).unwrap();
+        db.add_assets_to_project("p", &["output".into()]).unwrap();
+        assert_eq!(db.project_exclusive_impact(&paths, "p").unwrap().exclusive_asset_count, 1);
+        delete(&db, &paths).unwrap();
+        assert!(!managed.exists());
+        assert!(external.join("original.png").exists());
     }
     #[test]
     fn workflow_references_in_other_projects_protect_assets_without_membership() {
@@ -819,5 +842,21 @@ mod tests {
             .unwrap();
         db.recover_project_deletions(&paths).unwrap();
         assert!(!entry.path().exists());
+    }
+
+    #[test]
+    fn shared_transfer_cleanup_recovers_without_removing_the_new_copy() {
+        let (db,mut paths)=fixture();
+        let files=std::sync::Arc::new(super::super::file_workspace::FileWorkspace::open(paths.root.join("file-workspace.json"),paths.root.join("BowerbirdLibrary")).unwrap());
+        let source=files.project_directory("p","project").unwrap().join("shared.png");fs::write(&source,b"shared original").unwrap();
+        db.conn.lock().unwrap().execute("INSERT INTO assets(id,name,store_path) VALUES('shared','shared',?1)",[source.to_string_lossy()]).unwrap();
+        for project in ["p","other"] {db.add_assets_to_project(project,&["shared".into()]).unwrap();}
+        paths.files=Some(files.clone());FAIL_UNLINK.set(true);
+        let result=db.delete_project_keep_managed(&paths,"p").unwrap();FAIL_UNLINK.set(false);
+        assert_eq!(result.moved_assets,1);assert!(!result.cleanup_pending.is_empty());assert!(!source.exists());
+        let target=PathBuf::from(db.get_asset("shared").unwrap().unwrap().store_path.unwrap());
+        assert!(target.starts_with(&files.snapshot().projects["other"]));assert_eq!(fs::read(&target).unwrap(),b"shared original");
+        db.recover_project_deletions(&paths).unwrap();assert!(target.exists());
+        assert_eq!(fs::read_dir(paths.root.join(".project-deletions")).unwrap().count(),0);
     }
 }

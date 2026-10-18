@@ -8,6 +8,7 @@ try {
   await page.goto('http://127.0.0.1:1604/scripts/fixtures/canvas-reference/preview.html');await page.locator('[data-canvas-node-id="old"]').waitFor();
   console.log(await page.evaluate(async()=>{
     const {api}=await import('/src/lib/api.ts');const {useStore}=await import('/src/store.ts');
+    const {publishGeneration}=await import('/scripts/fixtures/canvas-reference/generation.ts');
     const {CanvasWorkflowController}=await import('/src/lib/canvasWorkflowRuntime.ts');const {newWorkflowNode}=await import('/src/lib/canvasWorkflow.ts');
     const check=(v,m)=>{if(!v)throw Error(m);};
     const until=async(fn,message)=>{for(let i=0;i<300;i++){if(fn())return;await new Promise(r=>setTimeout(r,10));}throw Error(message);};
@@ -29,6 +30,7 @@ try {
       const fail=await new Promise(resolve=>release.set(name,resolve));
       if(fail)return {accepted:false,error:'branch failed'};
       useStore.setState(s=>({genJobs:{...s.genJobs,[identity.jobId]:{turns:[{turnKey:identity.turnKey,images:[name+'.png']}]}}}));
+      await publishGeneration(args, [name+'.png']);
       return {accepted:true};
     }});
     const writer=(id,cell,source)=>({...newWorkflowNode('text',0,0,''),id,textTarget:{nodeId:'shared',cellId:cell,image:true},inputs:{image:[from(source)]}});
