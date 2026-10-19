@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 import { createServer } from "vite";
-const { chromium } = await import(process.env.BOWERBIRD_PLAYWRIGHT_MODULE || "playwright");
+const { chromium } = await import(process.env.BOWERBIRD_PLAYWRIGHT_MODULE || "../../html-renderer/node_modules/playwright/index.mjs");
 const server = await createServer({ server: { host: "127.0.0.1", port: 1487, strictPort: true, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: "chrome", headless: true });
@@ -126,6 +126,8 @@ try {
 
   // The library's existing bulk-delete route still uses its own selection.
   await page.goto("http://127.0.0.1:1487/scripts/fixtures/asset-multi-menu/preview.html");
+  await page.locator('[data-asset-id="a2"]').waitFor();
+  await page.evaluate(() => window.resetSelection());
   await page.locator('[data-asset-id="a2"]').click({ button: "right" });
   await page.getByRole("menu", { name: "已选 3 张素材的操作" }).getByRole("menuitem", { name: "物理删除", exact: true }).click();
   await dialog().getByRole("button", { name: "物理删除", exact: true }).click();

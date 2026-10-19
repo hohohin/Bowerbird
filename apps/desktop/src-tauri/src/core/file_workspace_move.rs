@@ -23,7 +23,7 @@ struct Entry { path: PathBuf, size: u64, modified: u128, directory: bool }
 
 /// Component-aware, case-insensitive on Windows; preserves the spelling of the suffix.
 fn remap(value: &str, source: &Path, target: &Path) -> Option<String> {
-    let normalized = value.replace('\\', "/");
+    let normalized = super::paths::expand_macos_system_alias(Path::new(value)).to_string_lossy().replace('\\', "/");
     let normalized = normalized.strip_prefix("//?/UNC/").map(|v|format!("//{v}"))
         .unwrap_or_else(||normalized.strip_prefix("//?/").unwrap_or(&normalized).to_owned());
     let old = path_key(source); let key = path_key(Path::new(value));

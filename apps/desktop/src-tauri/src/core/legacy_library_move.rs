@@ -51,6 +51,7 @@ fn filename(id: &str, source: &Path) -> AppResult<String> {
 // Check each existing ancestor, including Windows junctions, before any write.
 fn no_links(path: &Path) -> AppResult<()> {
     if !path.is_absolute() || path.components().any(|c|matches!(c,std::path::Component::ParentDir)) {return Err(invalid("迁移路径必须是无父目录跳转的绝对路径"));}
+    let path = crate::core::paths::expand_macos_system_alias(path);
     for ancestor in path.ancestors() {
         match fs::symlink_metadata(ancestor) {
             Ok(meta)=>{

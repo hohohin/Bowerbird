@@ -124,6 +124,7 @@ fn protected(conn: &Connection, project: &str, id: &str, store: Option<&str>) ->
 }
 
 fn path_key(path: &Path) -> String {
+    let path = super::paths::expand_macos_system_alias(path);
     let text = path.to_string_lossy().replace('\\', "/");
     let text = text.strip_prefix("//?/").unwrap_or(&text);
     if cfg!(windows) {

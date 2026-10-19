@@ -47,6 +47,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 | `macOS/DEV-SYNC-2026-10-10.md` | Windows dev 相对 Mac d6027fb 的更新、存档推送状态、共享功能及 Mac 接收验收 | Mac 接收 Windows 26.10.901–26.10.1001 源码、核对正式 Agent/视频卡/v3 布局与发布边界时 |
 | `macOS/DEV-SYNC-2026-10-13.md` | Windows 1001 后续二维表格/Agent 会话生图增量、Mac 本机改动组合与验证 | 接续 10 月 13 日 Mac 接收、核对比例/分类输出兼容与发布边界时 |
 | `macOS/CROSS-PLATFORM-SYNC-2026-10-15.md` | 10 月 15 日分叉合并、工作流/Agent 增量与跨端接收验证 | 其他端接收本次 mac 存档或核对 Intel 包与后续源码边界时 |
+| `macOS/DEV-SYNC-2026-10-19.md` | Windows dev 文件优先工作区、素材导航、分类／视频增量的 Apple Silicon 接收与系统路径别名修复 | 接续 10 月 19 日 M 系列 Mac 同步、核对 SQLite 0040 与 ARM64 验证边界时 |
 | `macOS/README.md` | Intel / Apple Silicon 开发运行、DMG 固定拖动安装规范、重打包脚本与交付检查 | macOS 开发 / 构建 / 重打包 / 交付 / 排障前必读 |
 
 ## 文档维护规则
