@@ -59,6 +59,7 @@ dev-doc/*
 !dev-doc/DESKTOP-UPDATES.md
 !dev-doc/CREATIVE-MEMORY-PLAN.md
 !dev-doc/SEEDANCE-2.5-INTEGRATION.md
+!dev-doc/COMFYUI-LOCAL-VIDEO.md
 !dev-doc/VIDEO-API-INTEGRATION.md
 !dev-doc/进展归档.md
 

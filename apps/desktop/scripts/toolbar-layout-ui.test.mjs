@@ -16,6 +16,8 @@ try {
   for (const mode of ["library", "canvas"]) {
     await page.goto(`http://127.0.0.1:1581/scripts/fixtures/project-drop/preview.html?layout${mode === "canvas" ? "&canvas-toolbar" : ""}`);
     await page.getByRole("button", { name: "探索", exact: true }).waitFor();
+    await page.getByRole('tab',{name:'文件浏览器',exact:true}).click();
+    await page.locator('.app-file-navigation-slot').waitFor();
     for (const theme of ["light", "dark"]) {
       await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
       // Include the native minimum width and both sides of every toolbar breakpoint.
@@ -26,8 +28,8 @@ try {
           await page.waitForFunction(busy => document.querySelector('.app-topbar').getAttribute('aria-busy') === String(busy), busy);
           const layout = await page.locator(".app-topbar").evaluate(el => {
             const bar = el.getBoundingClientRect();
-            const groups = [".app-topbar-leading", ".app-search", ".app-topbar-actions"].map(selector => el.querySelector(selector).getBoundingClientRect());
-            const controls = [...el.querySelectorAll("button, input")].map(control => control.getBoundingClientRect());
+            const groups = [".app-topbar-leading", ".app-search", ".app-topbar-actions", ".app-file-navigation-slot"].map(selector => el.querySelector(selector).getBoundingClientRect());
+            const controls = [...el.querySelectorAll("button, input")].map(control => control.getBoundingClientRect()).filter(box => box.width > 0 && box.height > 0);
             const labels = [...el.querySelectorAll('.app-topbar-button-label')];
             const surfaces = [...el.querySelectorAll('.app-topbar-leading > button, .app-topbar-import > button, .app-search input, .library-view-segments, .app-topbar-actions > button, .task-center-trigger')];
             return {
@@ -46,7 +48,7 @@ try {
           assert.equal(layout.height, 64, context);
           assert.equal(layout.aligned, true, context);
           assert.ok(layout.searchWidth >= 56, context);
-          assert.equal(layout.labelsVisible, true, context);
+          assert.equal(layout.labelsVisible, width > 900, context);
           assert.ok(layout.controlHeights.every(height => height === 36), context);
           assert.ok(layout.controlRadii.every(radius => radius === '8px'), context);
           assert.equal(layout.overflow, false, context);
@@ -65,10 +67,10 @@ try {
     assert.equal(await page.getByRole("button", { name: "打开本机文件资源管理器", exact: true }).count(), 0);
     await page.getByRole("button", { name: "导入", exact: true }).focus();
     await page.keyboard.press("/");
-    assert.equal(await page.getByRole("textbox", { name: "搜索素材", exact: true }).evaluate(el => el === document.activeElement), true);
-    await page.getByRole('textbox', { name: '搜索素材', exact: true }).fill('长搜索词测试');
+    assert.equal(await page.getByRole("textbox", { name: "搜索当前文件夹", exact: true }).evaluate(el => el === document.activeElement), true);
+    await page.getByRole('textbox', { name: '搜索当前文件夹', exact: true }).fill('长搜索词测试');
     await page.getByRole('button', { name: '清除搜索', exact: true }).click();
-    assert.equal(await page.getByRole('textbox', { name: '搜索素材', exact: true }).inputValue(), '');
+    assert.equal(await page.getByRole('textbox', { name: '搜索当前文件夹', exact: true }).inputValue(), '');
     await page.keyboard.press("Escape");
     await page.getByRole("button", { name: "导入", exact: true }).click();
     const importItem = page.getByRole("menuitem", { name: "导入图片", exact: true });
@@ -79,7 +81,7 @@ try {
     }), true);
   }
   assert.deepEqual(errors, []);
-  console.log("Toolbar layout: library/canvas, light/dark, 900–1920px, idle/importing, visible labels, uniform 36px height/8px radius, single row, no overlaps/clipping, search input/clear and import popup passed.");
+  console.log("Toolbar layout: library/canvas with file navigation, light/dark, 900–1920px, idle/importing, responsive labels, uniform 36px height/8px radius, single row, no overlaps/clipping, search input/clear and import popup passed.");
 } finally {
   await browser.close();
   await server.close();

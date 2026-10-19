@@ -50,12 +50,14 @@ pub fn fingerprint(path: &Path) -> AppResult<String> {
     }
     Ok(format!("{:x}", hash.finalize()))
 }
-#[derive(Serialize)]
+#[derive(Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileEntry {
     pub path: String,
     pub name: String,
     pub directory: bool,
+    pub version: Option<String>,
+    pub preview: Option<String>,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -91,6 +93,8 @@ pub fn browse_page(path: Option<&str>, offset: usize, all: bool) -> AppResult<Di
                 path: entry.path().to_string_lossy().into_owned(),
                 name,
                 directory: metadata.is_dir(),
+                version: preview_key(&entry.path(), &metadata).ok(),
+                preview: None,
             });
         }
     }
@@ -109,28 +113,75 @@ pub fn browse_page(path: Option<&str>, offset: usize, all: bool) -> AppResult<Di
     })
 }
 
-pub fn preview(paths: &LibraryPaths, path: &Path) -> AppResult<String> {
-    let path = original(path)?;
-    let metadata = fs::metadata(&path)?;
+fn preview_key(path: &Path, metadata: &fs::Metadata) -> AppResult<String> {
     let key = format!(
         "{}:{}:{:?}",
         path.display(),
         metadata.len(),
         metadata.modified()?
     );
-    let hash = format!("{:x}", Sha256::digest(key.as_bytes()));
+    Ok(format!("{:x}", Sha256::digest(key.as_bytes())))
+}
+
+/// Cache-only enumeration: never decode media or wait for the extraction queue.
+pub fn attach_previews(paths: &LibraryPaths, entries: &mut [FileEntry]) {
+    let folder = paths.root.join("external-previews");
+    for entry in entries.iter_mut().filter(|entry| !entry.directory) {
+        if entry.version.is_none() {
+            entry.version = fs::metadata(&entry.path).ok()
+                .and_then(|metadata| preview_key(Path::new(&entry.path), &metadata).ok());
+        }
+        if let Some(key) = &entry.version {
+            let cached = folder.join(format!("{key}.jpg"));
+            entry.preview = cached.is_file().then(|| cached.to_string_lossy().into_owned());
+        }
+    }
+}
+
+pub fn cached_preview(paths: &LibraryPaths, path: &Path) -> AppResult<Option<String>> {
+    let path = original(path)?;
+    let key = preview_key(&path, &fs::metadata(&path)?)?;
+    let cached = paths.root.join("external-previews").join(format!("{key}.jpg"));
+    Ok(cached.is_file().then(|| cached.to_string_lossy().into_owned()))
+}
+
+pub fn preview(paths: &LibraryPaths, path: &Path) -> AppResult<String> {
+    preview_with_index(paths, None, path)
+}
+
+pub fn preview_with_index(paths: &LibraryPaths, db: Option<&Database>, path: &Path) -> AppResult<String> {
+    let path = original(path)?;
+    let hash = preview_key(&path, &fs::metadata(&path)?)?;
     let folder = paths.root.join("external-previews");
     fs::create_dir_all(&folder)?;
     let destination = folder.join(format!("{hash}.jpg"));
     if !destination.is_file() {
         let temporary = folder.join(format!("{hash}-{}.jpg", ulid::Ulid::new()));
         let result = (|| -> AppResult<()> {
-        if video_path(&path) {
+        // Historical thumbnails remain usable after moving files. Validate content
+        // once on a cache miss; subsequent browsing only checks metadata/cache.
+        let indexed: Option<(String, String)> = if let Some(db) = db {
+            db.conn.lock().unwrap().query_row(
+                "SELECT a.thumb_path,COALESCE(e.fingerprint,f.sha256) FROM assets a LEFT JOIN external_assets e ON e.asset_id=a.id LEFT JOIN creative_file_fingerprints f ON f.asset_id=a.id WHERE a.store_path=?1 AND a.thumb_path IS NOT NULL AND COALESCE(e.fingerprint,f.sha256) IS NOT NULL LIMIT 1",
+                [path.to_string_lossy().as_ref()], |row| Ok((row.get(0)?,row.get(1)?))).optional()?
+        } else { None };
+        let reused = if let Some((thumb, expected)) = indexed {
+            if Path::new(&thumb).is_file() && fingerprint(&path)? == expected {
+                fs::copy(thumb, &temporary)?; true
+            } else { false }
+        } else { false };
+        if reused || shell_thumbnail(&path, &temporary) {
+            // Already rendered by the library or Windows; do not decode the original again.
+        } else if video_path(&path) {
             crate::media::thumb::generate_video(&path, &temporary, 480)?;
         } else {
             crate::media::thumb::generate(&path, &temporary, 480)?;
         }
-        fs::rename(&temporary, &destination)?;
+        if preview_key(&path, &fs::metadata(&path)?)? != hash {
+            return Err(invalid("文件正在变化，请刷新后重试缩略图"));
+        }
+        // Concurrent callers can complete the same thumbnail; keep the first.
+        if !destination.is_file() { fs::rename(&temporary, &destination)?; }
         Ok(())
         })();
         let _ = fs::remove_file(&temporary);
@@ -138,6 +189,10 @@ pub fn preview(paths: &LibraryPaths, path: &Path) -> AppResult<String> {
     }
     Ok(destination.to_string_lossy().into_owned())
 }
+
+#[path = "shell_thumbnail.rs"]
+mod shell_thumbnail;
+use shell_thumbnail::cached as shell_thumbnail;
 
 impl Database {
     pub fn is_external_asset(&self, id: &str) -> AppResult<bool> {
@@ -416,6 +471,41 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.root);
         }
+    }
+    #[test]
+    fn warm_directory_returns_previews_without_decoding_and_invalidates_changes() {
+        let f = Fixture::new();
+        let thumbnail = preview(&f.paths, &f.original).unwrap();
+        let mut page = browse_page(Some(f.root.to_str().unwrap()), 0, true).unwrap();
+        attach_previews(&f.paths, &mut page.entries);
+        let entry = page.entries.iter().find(|entry| entry.path == f.original.to_string_lossy()).unwrap();
+        assert_eq!(entry.preview.as_deref(), Some(thumbnail.as_str()));
+        let version = entry.version.clone();
+        assert_eq!(cached_preview(&f.paths, &f.original).unwrap(), Some(thumbnail));
+        fs::write(&f.original, b"changed and deliberately not decodable").unwrap();
+        let mut page = browse_page(Some(f.root.to_str().unwrap()), 0, true).unwrap();
+        attach_previews(&f.paths, &mut page.entries);
+        let entry = page.entries.iter().find(|entry| entry.path == f.original.to_string_lossy()).unwrap();
+        assert_ne!(entry.version, version);
+        assert!(entry.preview.is_none());
+        assert!(cached_preview(&f.paths, &f.original).unwrap().is_none());
+    }
+    #[test]
+    fn indexed_thumbnail_reused_only_when_original_content_matches() {
+        let f = Fixture::new();
+        let asset = ingest::ingest_file(&f.paths, &f.db, &f.original).unwrap();
+        let source = Path::new(asset.store_path.as_ref().unwrap());
+        let expected = fingerprint(source).unwrap();
+        f.db.conn.lock().unwrap().execute(
+            "INSERT INTO creative_file_fingerprints(asset_id,sha256,asset_size,asset_mtime) VALUES(?1,?2,?3,?4)",
+            params![asset.id, expected, asset.size, asset.file_mtime]).unwrap();
+        let thumb = fs::read(asset.thumb_path.unwrap()).unwrap();
+        let output = preview_with_index(&f.paths, Some(&f.db), source).unwrap();
+        assert_eq!(fs::read(&output).unwrap(), thumb);
+        image::RgbImage::from_pixel(60, 80, image::Rgb([240, 0, 0])).save(source).unwrap();
+        let changed = preview_with_index(&f.paths, Some(&f.db), source).unwrap();
+        assert_ne!(output, changed);
+        assert_ne!(fs::read(changed).unwrap(), thumb);
     }
     #[test]
     fn directory_browser_lists_media_and_folders_without_indexing() {

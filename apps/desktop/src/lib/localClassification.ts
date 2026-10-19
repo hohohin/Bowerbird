@@ -3,6 +3,8 @@ import type { AppSettings } from "./types";
 
 export interface LocalClassificationStatus {
   folder_root?: string | null;
+  global_scope?: boolean;
+  project_id?: string | null;
   supported: boolean;
   installed: boolean;
   enabled: boolean;
@@ -42,6 +44,16 @@ export interface ClassificationLabel {
   count: number;
   has_examples: boolean;
 }
+export interface GlobalClassificationView {
+  labels: ClassificationLabel[];
+  pictures: { id: string; path: string; tags: string[] }[];
+}
+export const globalClassification = {
+  view: (paths: string[]) => invoke<GlobalClassificationView>("global_classification_view", { paths }),
+  start: (options: { install?: boolean; tagId?: string; pendingOnly?: boolean } = {}) => options.install
+    ? localClassification.start(options)
+    : invoke<void>("global_classification_start", { tagId: null, pendingOnly: true, ...options }),
+};
 export const localClassification = {
   status: () => invoke<LocalClassificationStatus>("local_classification_status"),
   labels: () => invoke<ClassificationLabel[]>("local_classification_labels"),
@@ -56,14 +68,22 @@ export const localClassification = {
   example: (tagId: string, assetIds: string[], positive: boolean) =>
     invoke<void>("local_classification_example", { tagId, assetIds, positive }),
   deleteLabels: (tagIds: string[]) => invoke<void>("local_classification_delete_labels", { tagIds }),
-  jevConfig: async (): Promise<{ enabled: boolean; apiKey: string }> => {
+  jevConfig: async (): Promise<{ enabled: boolean }> => {
     const settings = await invoke<AppSettings>("get_settings");
-    return { enabled: settings.jev_image_classification_enabled, apiKey: settings.jev_api_key ?? "" };
+    return { enabled: settings.jev_image_classification_enabled };
   },
-  saveJevConfig: async (enabled: boolean, apiKey: string) => {
+  saveJevConfig: async (enabled: boolean) => {
     const settings = await invoke<AppSettings>("get_settings");
     settings.jev_image_classification_enabled = enabled;
-    settings.jev_api_key = apiKey.trim() ? apiKey.trim() : null;
     await invoke<void>("update_settings", { settings });
   },
 };
+
+export const projectClassification = (projectId: string) => ({
+  ...localClassification,
+  labels: () => invoke<ClassificationLabel[]>("project_classification_labels", { projectId }),
+  start: (options: { tagId?: string; pendingOnly?: boolean } = {}) =>
+    invoke<void>("project_classification_start", { projectId, tagId: null, pendingOnly: true, ...options }),
+  example: (tagId: string, assetIds: string[], positive: boolean) =>
+    invoke<void>("local_classification_example", { projectId, tagId, assetIds, positive }),
+});

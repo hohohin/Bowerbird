@@ -3,11 +3,11 @@ import { useStore } from "../store";
 import { thumbnailWidthFromZoom, thumbnailZoomFromWidth, type ThumbnailScope } from "../lib/thumbnailSize";
 
 export function ThumbnailSizeSlider({ scope }: { scope: ThumbnailScope }) {
-  const value = useStore(s => scope === "library" ? s.libraryThumbnailWidth : s.canvasThumbnailWidth);
+  const value = useStore(s => scope === "library" ? s.libraryThumbnailWidth : scope === "projects" ? s.projectsThumbnailWidth : s.canvasThumbnailWidth);
   const setWidth = useStore(s => s.setThumbnailWidth);
   const zoom = thumbnailZoomFromWidth(value, scope);
   const [draft, setDraft] = useState<string | null>(null);
-  const label = scope === "library" ? "主页素材大小" : "项目素材大小";
+  const label = scope === "library" ? "主页素材大小" : scope === "projects" ? "项目卡片大小" : "项目素材大小";
   function commit() {
     if (draft !== null && draft.trim() && Number.isFinite(Number(draft))) setWidth(scope, thumbnailWidthFromZoom(Number(draft), scope));
     setDraft(null);

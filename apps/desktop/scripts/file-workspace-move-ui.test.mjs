@@ -11,7 +11,9 @@ const dialog=page.getByRole('dialog',{name:'迁移 BowerbirdLibrary',exact:true}
 const count=command=>page.evaluate(command=>window.calls.filter(c=>c.command===command).length,command);
 try {
   await page.goto('http://127.0.0.1:1677/scripts/fixtures/folder-mode/preview.html');
-  await page.getByRole('tab',{name:'文件',exact:true}).click();
+  await page.getByRole('tab',{name:'全局素材',exact:true}).click();
+  await page.getByRole('tab',{name:'文件浏览器',exact:true}).click();
+  await page.getByRole('button', { name: '更多文件操作', exact: true }).click();
   await page.getByRole('button',{name:'迁移资料目录',exact:true}).click();
   await dialog.getByText('/BowerbirdLibrary',{exact:true}).waitFor();
   assert.equal(await dialog.getByRole('button',{name:'确认并重启迁移',exact:true}).isEnabled(),false);
@@ -37,6 +39,7 @@ try {
   await mkdir('.tmp/file-workspace-move',{recursive:true});
   await page.screenshot({path:'.tmp/file-workspace-move/preview.png'});
   await page.keyboard.press('Escape');assert.equal(await dialog.count(),0);
+  await page.getByRole('button', { name: '更多文件操作', exact: true }).click();
   await page.getByRole('button',{name:'迁移资料目录',exact:true}).click();
   await dialog.getByRole('button',{name:'选择目标文件夹…',exact:true}).click();
   await dialog.getByText('/picked/BowerbirdLibrary',{exact:true}).waitFor();
@@ -89,7 +92,7 @@ try {
   await dialog.getByRole('button',{name:'确认并重启迁移',exact:true}).evaluate(button=>{button.click();button.click();});
   await dialog.getByRole('alert').filter({hasText:'重启失败'}).waitFor();
   assert.equal(await count('file_workspace_history_schedule'),2);
-  assert.deepEqual(await page.evaluate(()=>window.calls.filter(c=>c.command==='file_workspace_history_schedule').at(-1).args),{token:'history-token'});
+  assert.deepEqual(await page.evaluate(()=>window.calls.filter(c=>c.command==='file_workspace_history_schedule').at(-1).args),{token:'history-token',skipMissing:false});
   await dialog.getByText(/删除存放项目时，先转存/).waitFor();
   await page.evaluate(()=>{window.restartError='';});
   await dialog.getByRole('button',{name:'重启并继续迁移',exact:true}).click();
@@ -97,6 +100,23 @@ try {
   assert.equal(await count('file_workspace_history_schedule'),2);
   await dialog.getByRole('button',{name:'取消待迁移计划',exact:true}).click();
   await dialog.getByRole('button',{name:'预览历史素材迁移',exact:true}).waitFor();
+  await page.evaluate(()=>{window.historyMissing=[{id:'lost-video',path:'/old/images/lost-video.mp4'}];});
+  await dialog.getByRole('button',{name:'预览历史素材迁移',exact:true}).click();
+  const skipMissing=dialog.getByRole('checkbox',{name:'跳过这 1 个缺失文件，仅迁移可用素材',exact:true});
+  await skipMissing.waitFor();assert.equal(await skipMissing.isChecked(),false);
+  assert.equal(await dialog.getByRole('button',{name:'确认并重启迁移',exact:true}).isEnabled(),false);
+  await dialog.getByText('查看缺失文件',{exact:true}).click();await dialog.getByText('/old/images/lost-video.mp4',{exact:true}).waitFor();
+  await skipMissing.check();assert.equal(await dialog.getByRole('button',{name:'确认并重启迁移',exact:true}).isEnabled(),true);
+  await page.screenshot({path:'.tmp/file-workspace-move/history-missing.png'});
+  await dialog.getByRole('button',{name:'预览历史素材迁移',exact:true}).click();await skipMissing.waitFor();assert.equal(await skipMissing.isChecked(),false);
+  await skipMissing.check();await dialog.getByRole('button',{name:'确认并重启迁移',exact:true}).click();
+  await page.waitForFunction(()=>window.calls.filter(c=>c.command==='restart_app').length===5);
+  assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.command==='file_workspace_history_schedule').at(-1).args.skipMissing),true);
+  await dialog.getByText('这些文件未迁移。找回原文件后，可重新预览迁移。',{exact:true}).waitFor();
+  await dialog.getByRole('button',{name:'取消待迁移计划',exact:true}).click();
+  await page.evaluate(()=>{window.historyEmpty=true;});await dialog.getByRole('button',{name:'预览历史素材迁移',exact:true}).click();
+  await dialog.getByText('没有可迁移的可用文件，请先找回缺失文件。',{exact:true}).waitFor();
+  assert.equal(await dialog.getByRole('button',{name:'确认并重启迁移',exact:true}).isEnabled(),false);
   assert.deepEqual(errors,[]);
-  console.log('PASS directory and history migration previews, single-copy shared policy, no-op prevention, stale plans, duplicate submit guard, restart recovery, cancellation and narrow layout');
+  console.log('PASS directory/history migration, explicit missing-file skip consent, retained missing list, no-op prevention, stale plans, restart recovery and narrow layout');
 }finally{await browser.close();await server.close();}

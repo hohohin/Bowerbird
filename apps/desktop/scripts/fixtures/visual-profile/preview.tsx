@@ -37,8 +37,19 @@ w.__TAURI_INTERNALS__ = {
   invoke: async (command: string, args: any) => {
     w.calls.push({ command, args });
     if (command === "set_active_project") return null;
+    if (command === "file_workspace_prepare") return "C:/synthetic/BowerbirdLibrary/project";
     if (w.hold === command) await new Promise((resolve) => w.pending.push(resolve));
     if (w.fail === command) throw "模拟网络或写入失败，请重试";
+    if (command === "plugin:dialog|save") return w.exportPath === undefined ? "C:/synthetic/brand.bowerbird-visual.json" : w.exportPath;
+    if (command === "visual_profile_export") { w.exported = structuredClone(w.profiles.find((p: any) => p.id === args.profileId)); return null; }
+    if (command === "visual_profile_import") {
+      const file = JSON.parse(args.content);
+      if (file.format !== "bowerbird.visual-profile" || file.schemaVersion !== 1) throw "不支持的视觉规范格式或版本";
+      const id = "imported-" + w.profiles.length;
+      const profile = { ...make(id), folderId: "import:" + id, name: file.name, summary: file.summary,
+        extractor: "shared_file", sourceCount: 0, sourceAssetIds: [], rules: file.rules, ruleCount: file.rules.length };
+      w.profiles.unshift(profile); return structuredClone(profile);
+    }
     if (command === "visual_profile_preview") return { assetIds: w.assets.map((a: any) => a.id), folderId: args.folderId, folderName: "自然生活品牌", inFolder: w.assets.length, effective: w.assets.length - w.missing.length, minRequired: 1, missing: w.missing.map((assetId: string) => ({ assetId, name: assetId, reason: "no_caption" })) };
     if (command === "get_assets_by_ids") return w.assets.filter((a: any) => args.assetIds.includes(a.id));
     if (command === "codex_describe_asset") { w.missing = w.missing.filter((id: string) => id !== args.assetId); return "analysis-id"; }

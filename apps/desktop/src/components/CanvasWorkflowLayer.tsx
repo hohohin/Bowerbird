@@ -34,6 +34,7 @@ import { ModalShell } from "./ModalShell";
 import { WorkflowPromptEditor } from "./WorkflowPromptEditor";
 import { WorkflowDescribeOption } from "./WorkflowDescribeOption";
 import { WorkflowGenerationHistory } from "./WorkflowGenerationHistory";
+import { ComfyVideoCard } from "./ComfyVideoCard";
 import { WorkflowPlannerCard } from "./WorkflowPlannerCard";
 import { WorkflowTemplateLibrary } from "./WorkflowTemplateLibrary";
 import { SaveWorkflowTemplateDialog } from "./SaveWorkflowTemplateDialog";
@@ -288,7 +289,7 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
     const missing = (node.kind === "generation" || node.kind === "agent")
       ? current.filter(input => canvasWorkflowInputState(input, graphNodes, nodes) === "missing").sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0))[0] : undefined;
     const connected = missing ? current.map(input => input === missing ? { ...binding, slot: missing.slot } : input) : [...current, binding];
-    patch(toId, { inputs: { ...node.inputs, [inputId]: (node.kind === "instruction" && node.action !== "describe") || (inputId === "visual-profile" || node.kind === "loop" && node.loopMode === "rows") ? [binding] : connected } });
+    patch(toId, { inputs: { ...node.inputs, [inputId]: (node.kind === "comfy-video" && inputId !== "text") || (node.kind === "instruction" && node.action !== "describe") || (inputId === "visual-profile" || node.kind === "loop" && node.loopMode === "rows") ? [binding] : connected } });
     setConnection(null); connectionRef.current = null;
   }
   function connectSignal(targetId: string, native = false) {
@@ -498,9 +499,9 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
     const bend = Math.max(50, Math.abs(to.x - from.x) * .45);
     return `M ${from.x} ${from.y} C ${from.x + bend} ${from.y}, ${to.x - bend} ${to.y}, ${to.x} ${to.y}`;
   }
-  function portButton(node: WorkflowNode, port: WorkflowPort, side: "input" | "output", index: number) {
+  function portButton(node: WorkflowNode, port: WorkflowPort, side: "input" | "output", _index: number) {
     const busy = controller.isLocked(node.id);
-    return <button key={port.id} className={`workflow-port is-${side} is-${port.type}`} style={{ top: 84 + index * 30 }}
+    return <button key={port.id} className={`workflow-port is-${side} is-${port.type}`} style={{ top: workflowPortY(node, side, port.id) - node.y - 10 }}
       aria-label={`${side === "input" ? "输入" : "输出"}：${port.label}`} title={port.type === "session" ? "运行后自动连接生成会话卡片" : side === "input" ? "连接输入；右键断开此端口" : "拖到输入端口，或点击后选择输入端口"}
       data-workflow-node={node.id} data-workflow-input={side === "input" ? port.id : undefined}
       onPointerDown={event => {
@@ -663,7 +664,7 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
             handle(edit(document.nodes.map(candidate => ({ ...candidate, trigger: candidate.id === node.id || (candidate.id !== previousKey && candidate.trigger),
               ...(candidate.id === node.id ? { inputs: { ...candidate.inputs, signal: [] } } : {}) })))); return;
           }
-          const ids = getDragAssets(); if (!ids?.length || node.kind === "trigger" || node.kind === "agent") return;
+          const ids = getDragAssets(); if (!ids?.length || node.kind === "trigger" || node.kind === "agent" || node.kind === "comfy-video") return;
           if (node.kind === "loop" && node.loopMode === "rows") { notifyError(null, "逐行模式请连接内容卡的整体文本输出"); return; }
           if (node.kind === "visual-profile" && node.profileId) { notifyError(null, "请先切换到从输入提炼"); return; }
           if (node.kind === "instruction" && node.action !== "describe" && ids.length !== 1) { notifyError(null, "此指令只接收一张图片"); return; }
@@ -729,7 +730,8 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
             {node.profileId && !profiles.some(p => p.id === node.profileId) && <option value={node.profileId}>已选规范不可用</option>}
             {profiles.map(p => <option key={p.id} value={p.id}>{p.name} · v{p.version}</option>)}
           </select>}
-          <div className="workflow-port-space" style={{ height: Math.max(inputPorts.length, outputPorts.length, 2) * 30 + (node.kind === "generation" ? 32 : 0) }} />
+          <div className="workflow-port-space" style={{ height: node.kind === "comfy-video" ? 68 : Math.max(inputPorts.length, outputPorts.length, 2) * 30 + (node.kind === "generation" ? 32 : 0) }} />
+          {node.kind === "comfy-video" && <ComfyVideoCard node={node} disabled={busy} assets={assets} inputImages={inputImages} onChange={changes => patch(node.id, changes)} />}
           {node.kind === "loop" && <section className="workflow-loop" aria-label="循环设置">
             <p className="workflow-hint">{node.loopMode === "rows" ? "连接内容卡整体文本输出，每行的文字和图片一起处理；空行跳过。" : "按输入顺序逐张处理图片。"}全部下游完成后再进入下一项，最多 100 项。</p>
             <WorkflowLoopStartSelect id={node.id} items={loopItems ?? []} assets={assets} value={node.loopStartItem ?? 1} disabled={busy} notice={loopInputNotice} onChange={loopStartItem => patch(node.id, { loopStartItem }, false)} />
@@ -760,7 +762,10 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
           {node.kind !== "planner" && node.kind !== "trigger" && node.kind !== "loop" && node.kind !== "generation" && node.kind !== "agent" && !(node.kind === "instruction" && node.action !== "describe") && !(node.kind === "visual-profile" && node.profileId) && <textarea aria-label={node.kind === "instruction" ? "反推要求" : node.kind === "visual-profile" ? "视觉要求" : "卡片指令"}
             disabled={busy} maxLength={node.kind === "visual-profile" ? 4000 : undefined} placeholder={node.kind === "instruction" ? "留空使用当前反推要求" : node.kind === "visual-profile" ? "描述配色、构图、光线等要求；可只接图片或只填文字…" : "输入创作要求，也可从文本端口接入…"}
             value={node.prompt} onChange={event => patch(node.id, { prompt: event.target.value })} />}
-          {selectedImages.length > 0 ? <div className="workflow-preview">{selectedImages.map(asset => {
+          {node.kind === "comfy-video" ? <>{node.outputs.image?.assetIds?.map(id => {
+            const asset = assets.find(asset => asset.id === id);
+            return asset?.store_path ? <video key={id} className="comfy-video-result" aria-label="H3 生成视频" controls preload="metadata" src={convertFileSrc(asset.store_path)} /> : null;
+          })}{step?.detail && <p role="status" className="workflow-hint">{step.detail}</p>}</> : selectedImages.length > 0 ? <div className="workflow-preview">{selectedImages.map(asset => {
             if (isVideoPath(asset.store_path)) return <VideoPoster key={asset.id} path={asset.store_path} poster={asset.thumb_path} title={asset.name} alt={asset.name} />;
             const path = canvasAssetMediaPath({ thumbPath: asset.thumb_path ?? null, storePath: asset.store_path ?? null }) ?? "";
             return <img key={asset.id} title={asset.name} alt={asset.name} src={path.startsWith("data:") ? path : convertFileSrc(path)} />;
@@ -793,7 +798,7 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
             })}</div>
           </details>}
           {Object.entries(node.inputs).some(([, bindings]) => bindings.length > 0) && <div className="workflow-bindings">{Object.entries(node.inputs).filter(([, bindings]) => bindings.length).map(([port, bindings]) =>
-            <button key={port} disabled={busy} title="断开此输入" onClick={event => disconnectPort(node.id, port, { x: event.clientX, y: event.clientY })}>{port === "signal" ? "触发器" : port === "text" ? "文本" : port === "visual-profile" ? "视觉规范" : "图片"} · {bindings.length} 个来源 <X size={11} /></button>)}</div>}
+            <button key={port} disabled={busy} title="断开此输入" onClick={event => disconnectPort(node.id, port, { x: event.clientX, y: event.clientY })}>{port === "signal" ? "触发器" : port === "text" ? "文本" : port === "visual-profile" ? "视觉规范" : port === "first-frame" ? "首帧" : port === "last-frame" ? "尾帧" : "图片"} · {bindings.length} 个来源 <X size={11} /></button>)}</div>}
           {step?.error && <p className={step.status === "failed" ? "workflow-error" : "workflow-waiting"} role={step.status === "failed" ? "alert" : "status"}>{step.error}
             {step.diagnostic && <button onClick={() => controller.showIssue(step.diagnostic!)}>查看问题</button>}
           </p>}
@@ -803,9 +808,10 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
               {deliveryRunIds.has(run.id) && node.id === run.startId && <button onClick={() => handle(controller.continue(run.id))}>重试写入内容卡</button>}
               {run?.status === "waiting" && !Object.values(run.steps).some(step => step.status === "failed") && step?.status !== "done" && run.order.find(id => run!.steps[id].status !== "done") === node.id
                 && <button aria-label="继续工作流" onClick={() => handle(controller.continue(run?.id))}><Play size={13} />继续</button>}
-              <button aria-label="停止工作流" onClick={() => handle(controller.stop(run?.id))}><Square size={12} /></button>
+              <button aria-label="停止工作流" title={node.kind === "comfy-video" ? "停止等待；ComfyUI 中的任务继续运行" : "停止工作流"} onClick={() => handle(controller.stop(run?.id))}><Square size={12} /></button>
             </> : <button disabled={busy || loopStartInvalid} aria-label={node.kind === "loop" ? "开始循环" : node.kind === "trigger" ? "触发下游" : "运行此卡片"} onClick={() => handle(controller.start(node.id, node.kind !== "trigger" && node.kind !== "loop"))}><Play size={13} />{node.kind === "loop" ? "开始循环" : node.kind === "trigger" ? "触发下游" : "运行此卡片"}</button>}
           </footer>}
+          {node.kind === "comfy-video" && run?.status === "stopped" && run.order.length === 1 && step?.jobId && step.status !== "done" && <button disabled={busy} className="workflow-detail" onClick={() => handle(controller.recoverComfyVideo(run.id))}>取回上次视频</button>}
           {node.kind === "agent" && step && <button className="workflow-detail" onClick={() => onOpenAgent(node.id)}>查看 Agent 详情</button>}
           {step?.agentRunId && node.kind !== "agent" && <button className="workflow-detail" onClick={() => handle((async () => {
             const run = await api.cloudAgentGet(step.agentRunId!); useStore.getState().openCloudAgentRun(run, { navigate: false }); setAgentOpen(true);

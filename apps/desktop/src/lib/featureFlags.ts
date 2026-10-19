@@ -1,6 +1,8 @@
 /** 功能开关：未完成的功能在此关闭 UI，完成后改回 true 恢复。 */
 // 「用途」（preset）：功能尚未开发完成，隐藏创作板「用途」栏与生成会话面板「登记为用途」入口。
 export const PRESET_FEATURE_ENABLED = false;
+// 暂时隐藏集合入口，保留已有集合数据与关系。
+export const COLLECTIONS_FEATURE_ENABLED = false;
 // 「智能精修」（LocalAgentPanel）：功能尚未开发完成，隐藏详情页「再创作」tab 下的卡片。
 export const SMART_REFINE_ENABLED = false;
 // codex 引导弹窗入口：设置「模型设置」的「查看引导」按钮暂隐，改为卡内「登录授权」一键流程；恢复入口改回 true。

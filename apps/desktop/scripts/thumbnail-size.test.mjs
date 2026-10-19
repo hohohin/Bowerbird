@@ -4,7 +4,7 @@ import { clampThumbnailWidth, readThumbnailWidth, saveThumbnailWidth,
   thumbnailWidthFromZoom, thumbnailZoomFromWidth } from "../src/lib/thumbnailSize.ts";
 
 test("0–100 maps linearly to the library and project width ranges", () => {
-  for (const [scope, minimum, midpoint] of [["library", 96, 208], ["canvas", 48, 184]]) {
+  for (const [scope, minimum, midpoint] of [["library", 96, 208], ["canvas", 48, 184], ["projects", 96, 208]]) {
     assert.equal(thumbnailWidthFromZoom(0, scope), minimum);
     assert.equal(thumbnailWidthFromZoom(50, scope), midpoint);
     assert.equal(thumbnailWidthFromZoom(100, scope), 320);
@@ -36,6 +36,11 @@ test("pixel preferences survive reload and retain separate scoped limits", () =>
   try {
     storage.set("bowerbird.libraryThumbnailWidth", "200");
     storage.set("bowerbird.canvasThumbnailWidth", "160");
+    assert.equal(readThumbnailWidth("library"), 200);
+    assert.equal(readThumbnailWidth("canvas"), 160);
+    assert.equal(readThumbnailWidth("projects"), 200);
+    saveThumbnailWidth("projects", 280);
+    assert.equal(readThumbnailWidth("projects"), 280);
     assert.equal(readThumbnailWidth("library"), 200);
     assert.equal(readThumbnailWidth("canvas"), 160);
     saveThumbnailWidth("canvas", 48);

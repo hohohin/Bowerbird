@@ -37,12 +37,16 @@ fn changed(app: &AppHandle) {
 }
 #[tauri::command]
 pub async fn external_files_browse(
+    paths: State<'_, Arc<LibraryPaths>>,
     path: Option<String>,
     offset: Option<usize>,
     all: Option<bool>,
 ) -> Result<DirectoryPage, AppError> {
+    let paths = paths.inner().clone();
     tokio::task::spawn_blocking(move || {
-        external_files::browse_page(path.as_deref(), offset.unwrap_or(0), all.unwrap_or(false))
+        let mut page = external_files::browse_page(path.as_deref(), offset.unwrap_or(0), all.unwrap_or(false))?;
+        external_files::attach_previews(&paths, &mut page.entries);
+        Ok(page)
     })
     .await
     .map_err(|e| AppError::Other(e.to_string()))?
@@ -50,12 +54,18 @@ pub async fn external_files_browse(
 #[tauri::command]
 pub async fn external_files_preview(
     paths: State<'_, Arc<LibraryPaths>>,
+    db: State<'_, Arc<Database>>,
     path: String,
 ) -> Result<String, AppError> {
     static GATE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
-    let permit = GATE.acquire().await.map_err(|e| AppError::Other(e.to_string()))?;
     let paths = paths.inner().clone();
-    tokio::task::spawn_blocking(move || { let _permit = permit; external_files::preview(&paths, &PathBuf::from(path)) })
+    let db = db.inner().clone();
+    let cached_paths = paths.clone(); let cached_path = path.clone();
+    let cached = tokio::task::spawn_blocking(move || external_files::cached_preview(&cached_paths, &PathBuf::from(cached_path)))
+        .await.map_err(|e| AppError::Other(e.to_string()))??;
+    if let Some(cached) = cached { return Ok(cached); }
+    let permit = GATE.acquire().await.map_err(|e| AppError::Other(e.to_string()))?;
+    tokio::task::spawn_blocking(move || { let _permit = permit; external_files::preview_with_index(&paths, Some(&db), &PathBuf::from(path)) })
         .await
         .map_err(|e| AppError::Other(e.to_string()))?
 }

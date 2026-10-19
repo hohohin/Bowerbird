@@ -31,7 +31,7 @@ export function LibraryTagBar({ projectId = null }: { projectId?: string | null 
     <TagIndex key={projectId ?? "library"} tags={tags} active={tags.find(tag => tag.name === active)?.id ?? active}
       onSelect={id => select(tags.find(tag => tag.id === id)?.name ?? null)} onManage={() => setManagement(true)}
       manageButtonRef={manageButton} failed={failed} onRetry={() => setRevision(value => value + 1)} />
-    {management && <LocalClassificationDialog onClose={() => {
+    {management && <LocalClassificationDialog projectId={projectId ?? undefined} initialView="labels" onClose={() => {
       setManagement(false); setRevision(value => value + 1); manageButton.current?.focus();
     }} />}
   </>;

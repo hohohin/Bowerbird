@@ -12,6 +12,7 @@ const CLOUD_CONCURRENCY: usize = 4;
 
 #[derive(Clone)]
 pub(super) struct PendingClassification {
+    pub cloud_request: Option<(jev::Judge, String, Vec<u8>)>,
     pub id: String,
     pub revision: i64,
     pub prediction: data::Prediction,

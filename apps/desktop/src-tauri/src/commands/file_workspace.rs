@@ -1,4 +1,5 @@
 use crate::{core::file_workspace::{FileWorkspace, FileWorkspaceConfig}, error::AppResult};
+use crate::core::paths::LibraryPaths;
 use std::{path::PathBuf, sync::Arc};
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -65,10 +66,10 @@ pub async fn file_workspace_history_preview(files: State<'_, Arc<FileWorkspace>>
 }
 
 #[tauri::command]
-pub async fn file_workspace_history_schedule(files: State<'_, Arc<FileWorkspace>>, paths: State<'_, Arc<crate::core::paths::LibraryPaths>>, db: State<'_, Arc<crate::db::Database>>, classifier: State<'_, Arc<crate::core::local_classification::LocalClassifier>>, token: String) -> AppResult<()> {
+pub async fn file_workspace_history_schedule(files: State<'_, Arc<FileWorkspace>>, paths: State<'_, Arc<crate::core::paths::LibraryPaths>>, db: State<'_, Arc<crate::db::Database>>, classifier: State<'_, Arc<crate::core::local_classification::LocalClassifier>>, token: String, skip_missing: Option<bool>) -> AppResult<()> {
     if classifier.snapshot(&db).map_err(crate::error::AppError::Other)?.busy {return Err(crate::error::AppError::Other("请先停止自动分类，再迁移历史素材".into()));}
     let files=files.inner().clone();let paths=paths.inner().clone();let db=db.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || crate::core::file_workspace_move::history::schedule(&files,&db,&paths.images,&token)).await.map_err(|e|crate::error::AppError::Other(e.to_string()))?
+    tauri::async_runtime::spawn_blocking(move || crate::core::file_workspace_move::history::schedule(&files,&db,&paths.images,&token,skip_missing.unwrap_or(false))).await.map_err(|e|crate::error::AppError::Other(e.to_string()))?
 }
 
 #[tauri::command]
@@ -102,13 +103,18 @@ pub struct AllFiles {
     pub unavailable: Vec<String>,
 }
 #[tauri::command]
-pub async fn file_workspace_all(files: State<'_, Arc<FileWorkspace>>) -> AppResult<AllFiles> {
+pub async fn file_workspace_all(files: State<'_, Arc<FileWorkspace>>, paths: State<'_, Arc<LibraryPaths>>) -> AppResult<AllFiles> {
     let config = files.snapshot();
-    tauri::async_runtime::spawn_blocking(move || collect_files(config))
+    let paths = paths.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut result = collect_files(config)?;
+        crate::core::external_files::attach_previews(&paths, &mut result.entries);
+        Ok(result)
+    })
         .await.map_err(|e| crate::error::AppError::Other(e.to_string()))?
 }
 
-fn collect_files(config: FileWorkspaceConfig) -> AppResult<AllFiles> {
+pub(crate) fn collect_files(config: FileWorkspaceConfig) -> AppResult<AllFiles> {
         let mut roots = config.places;
         if let Some(root) = config.root { roots.push(root); }
         roots.extend(config.projects.into_values());
@@ -137,6 +143,7 @@ fn collect_files(config: FileWorkspaceConfig) -> AppResult<AllFiles> {
                 else if kind.is_file() && (crate::core::external_files::image_path(&path) || crate::core::external_files::video_path(&path)) {
                     result.entries.push(crate::core::external_files::FileEntry {
                         path: path.to_string_lossy().into_owned(), name: entry.file_name().to_string_lossy().into_owned(), directory: false,
+                        ..Default::default()
                     });
                 }
             }

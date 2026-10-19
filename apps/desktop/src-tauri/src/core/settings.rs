@@ -96,7 +96,7 @@ pub struct AppSettings {
     #[serde(default)]
     pub jev_image_classification_enabled: bool,
 
-    /// TypeSafe API Key；图片分类开启而 Key 为空时拒绝运行。
+    /// 旧版 TypeSafe Key，仅兼容历史设置；托管分类不读取、不上传。
     #[serde(default)]
     pub jev_api_key: Option<String>,
 

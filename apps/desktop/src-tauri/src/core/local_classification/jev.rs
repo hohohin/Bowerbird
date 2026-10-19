@@ -1,6 +1,9 @@
 //! Jev image classification: every supplied label is judged against the image itself.
-//! Images and manual examples are sent to TypeSafe only in the image-classification mode.
+//! Cloud owns upstream credentials and counts images with labels, five per credit.
 
+use base64::Engine;
+use tauri::Manager;
+use crate::cloud::{AuthClient, CloudClient};
 use image::{ImageDecoder, ImageFormat, ImageReader};
 use reqwest::multipart::{Form, Part};
 use serde::Serialize;
@@ -11,7 +14,7 @@ use std::time::Duration;
 
 pub const MODEL: &str = "jev-latest";
 pub const OBSERVATION_MODEL: &str = "jev-choice-flat-top4-30/cloud-discovery-v7";
-pub const ENDPOINT: &str = "https://api.typesafe.ai/v1/systemone";
+
 pub const NO_MATCH_LABEL: &str = "无明显匹配项";
 
 pub struct Candidate {
@@ -95,17 +98,39 @@ impl Report {
     }
 }
 
+#[derive(Clone)]
 pub struct Judge {
     client: reqwest::Client,
     key: String,
     url: String,
+    auth: Option<AuthClient>,
 }
 
 impl Judge {
-    pub fn new(key: String) -> Result<Self, String> {
-        Self::at(key, ENDPOINT.into())
+    pub fn new(app: &tauri::AppHandle) -> Result<Self, String> {
+        let cloud = app.state::<CloudClient>();
+        let url = cloud.config().endpoint("jev-proxy").ok_or("当前构建未配置 Bowerbird Cloud")?;
+        let auth = app.state::<AuthClient>().inner().clone();
+        if !auth.snapshot().logged_in { return Err("请先登录 Bowerbird 账号再使用云端分类".into()); }
+        Ok(Self { client: cloud.http().clone(), key: String::new(), url, auth: Some(auth) })
     }
 
+    pub async fn post(&self, body: &Value) -> Result<Value, String> {
+        let response = self.auth.as_ref().ok_or("Cloud 分类服务未就绪")?
+            .send_authorized(self.client.post(&self.url).json(body), "云端分类请求失败")
+            .await.map_err(|e| e.to_string())?;
+        let status = response.status();
+        let value: Value = response.json().await.map_err(|_| "云端分类响应无效")?;
+        if !status.is_success() {
+            return Err(value.pointer("/error/message").and_then(Value::as_str)
+                .unwrap_or("云端分类请求失败，此图未写入标签").to_string());
+        }
+        Ok(value)
+    }
+
+    pub fn is_cloud(&self) -> bool { self.auth.is_some() }
+
+    #[cfg(test)]
     fn at(key: String, url: String) -> Result<Self, String> {
         if key.trim().is_empty() {
             return Err("请先保存 Jev API Key".into());
@@ -119,17 +144,27 @@ impl Judge {
                 .map_err(|e| e.to_string())?,
             key: key.trim().to_string(),
             url,
+            auth: None,
         })
     }
 
+    #[cfg(test)]
     pub async fn classify(
+        &self, image: &[u8], candidates: &[Candidate], cancel: &AtomicBool,
+        on_response: impl FnMut(&Value, Option<&str>),
+    ) -> Result<Decisions, String> {
+        self.classify_mode(image, candidates, cancel, true, on_response).await
+    }
+
+    pub async fn classify_mode(
         &self,
         image: &[u8],
         candidates: &[Candidate],
         cancel: &AtomicBool,
+        allow_discovery: bool,
         mut on_response: impl FnMut(&Value, Option<&str>),
     ) -> Result<Decisions, String> {
-        if candidates.is_empty() {
+        if candidates.is_empty() && !self.is_cloud() {
             return Ok(Vec::new());
         }
         // Choice supports at most 255 options, including no_match.
@@ -139,41 +174,24 @@ impl Judge {
             );
         }
         let (body, images) = request_body(image, candidates);
-        let mut form = Form::new().part(
-            "request",
-            Part::text(body.to_string())
-                .mime_str("application/json")
-                .map_err(|e| e.to_string())?,
-        );
-        for (index, bytes) in images.into_iter().enumerate() {
-            form = form.part(
-                format!("image{index}"),
-                Part::bytes(bytes)
-                    .file_name(format!("image{index}.jpg"))
-                    .mime_str("image/jpeg")
-                    .map_err(|e| e.to_string())?,
-            );
-        }
         let operation = async {
-            let response = self
-                .client
-                .post(&self.url)
-                .bearer_auth(&self.key)
-                .header("TypeSafe-Danger-Zone-Images", "true")
-                .multipart(form)
-                .send()
-                .await
-                .map_err(|e| format!("Jev 图片判断请求失败：{}", e.without_url()))?;
-            if !response.status().is_success() {
-                return Err(format!(
-                    "Jev 图片判断返回 {}，此图未写入标签",
-                    response.status()
-                ));
-            }
-            let value: Value = response
-                .json()
-                .await
-                .map_err(|e| format!("Jev 图片判断响应无效：{}", e.without_url()))?;
+            let value: Value = if self.is_cloud() {
+                self.post(&json!({
+                    "action":"judge", "idempotency_key":ulid::Ulid::new().to_string(),
+                    "allow_discovery":allow_discovery, "request":body,
+                    "images":images.iter().map(|bytes| base64::engine::general_purpose::STANDARD.encode(bytes)).collect::<Vec<_>>()
+                })).await?
+            } else {
+                let mut form = Form::new().part("request", Part::text(body.to_string()).mime_str("application/json").map_err(|e| e.to_string())?);
+                for (index, bytes) in images.into_iter().enumerate() {
+                    form = form.part(format!("image{index}"), Part::bytes(bytes).file_name(format!("image{index}.jpg")).mime_str("image/jpeg").map_err(|e| e.to_string())?);
+                }
+                let response = self.client.post(&self.url).bearer_auth(&self.key)
+                    .header("TypeSafe-Danger-Zone-Images", "true").multipart(form).send().await
+                    .map_err(|e| format!("Jev 图片判断请求失败：{}", e.without_url()))?;
+                if !response.status().is_success() { return Err(format!("Jev 图片判断返回 {}，此图未写入标签", response.status())); }
+                response.json().await.map_err(|e| format!("Jev 图片判断响应无效：{}", e.without_url()))?
+            };
             let result = parse_answers(&value, candidates);
             on_response(&value, result.as_ref().err().map(String::as_str));
             result
@@ -409,8 +427,12 @@ mod tests {
                     if let Some(offset) = bytes.windows(4).position(|b| b == b"\r\n\r\n") {
                         let header = String::from_utf8_lossy(&bytes[..offset]).to_lowercase();
                         let is_json = header.contains("content-type: application/json");
-                        assert!(!is_json, "flat classification never submits text-only routing");
-                        if !is_json {
+                        if is_json {
+                            assert!(header.contains("authorization: bearer test-user-session"));
+                            assert!(header.contains("apikey: test-public"));
+                            assert!(!header.contains("legacy-secret"));
+                            assert!(!header.contains("typesafe-danger-zone-images"));
+                        } else {
                             assert!(header.contains("typesafe-danger-zone-images: true"));
                             assert!(header.contains("multipart/form-data; boundary="));
                         }
@@ -483,6 +505,36 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn managed_transport_uses_session_and_reuses_image_ticket_for_free_discovery() {
+        let mut response = ranked_answers(&[0.1], 0.9);
+        response["classification_id"] = json!("test-ticket");
+        let discovery = json!({"status":"matched","label_ids":["poster"]});
+        let (mut judge, server) = mock_jev(vec![("200 OK", response), ("200 OK", discovery)]).await;
+        let cloud = CloudClient::new(crate::cloud::config::CloudConfig {
+            supabase_url: Some(judge.url.clone()), supabase_publishable_key: Some("test-public".into()),
+        }).unwrap();
+        judge.auth = Some(AuthClient::with_test_session(cloud));
+        // A legacy locally saved provider key must never go into the Cloud body.
+        judge.key = "legacy-secret-not-forwarded".into();
+        let mut ticket = String::new();
+        let image = b"exact-prepared-image";
+        let result = judge.classify_mode(image, &[candidate("海报")], &AtomicBool::new(false), true, |v,_| {
+            ticket = v["classification_id"].as_str().unwrap().into();
+        }).await.unwrap();
+        assert!(result.is_empty());
+        let labels = vec![super::super::data::Label { id:"poster".into(), name:"海报".into(), description:"完整版式".into(), enabled:true, count:0, has_examples:false, dimension:None }];
+        let result = super::super::cloud::discover_managed(&judge, &ticket, image, &labels, &AtomicBool::new(false)).await.unwrap();
+        assert_eq!(result.matches, vec!["poster"]);
+        let requests = server.await.unwrap();
+        assert_eq!(requests[0]["action"], "judge");
+        assert_eq!(requests[0]["allow_discovery"], true);
+        assert_eq!(requests[1]["action"], "discover");
+        assert_eq!(requests[1]["classification_id"], "test-ticket");
+        assert_eq!(requests[0]["images"][0], requests[1]["image"]);
+        assert!(!serde_json::to_string(&requests).unwrap().contains("legacy-secret"));
+    }
+
     #[test]
     fn image_preparation_preserves_aspect_and_meets_minimum_size() {
         for (w, h) in [(1, 1), (480, 20), (20, 480), (256, 256), (1600, 900)] {
@@ -539,7 +591,7 @@ mod tests {
             Vec::<usize>::new()
         );
         request.abort();
-        assert!(Judge::new("  ".into()).is_err());
+        assert!(Judge::at("  ".into(), "http://127.0.0.1".into()).is_err());
     }
 
     fn pipeline_fixture() -> (crate::db::Database, crate::core::paths::LibraryPaths) {

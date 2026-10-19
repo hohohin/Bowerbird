@@ -618,6 +618,8 @@ export const api = {
   visualProfileInputPreview: (assetIds: string[], requirements = "") => invoke<string[]>("visual_profile_input_preview", { assetIds, requirements }),
   visualProfileExtractInputs: (scopeKey: string, name: string, assetIds: string[], requirements: string) =>
     invoke<VisualProfileDetail>("visual_profile_extract_inputs", { scopeKey, name, assetIds, requirements }),
+  visualProfileExport: (profileId: string, path: string) => invoke<void>("visual_profile_export", { profileId, path }),
+  visualProfileImport: (content: string) => invoke<VisualProfileDetail>("visual_profile_import", { content }),
   visualProfileUpdateDraft: (profileId: string, rules: VisualProfileRuleEdit[]) =>
     invoke<VisualProfileDetail>("visual_profile_update_draft", { profileId, rules }),
   visualProfileGenerateValidation: (profileId: string, theme: string) =>

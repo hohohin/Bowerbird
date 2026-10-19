@@ -1059,17 +1059,13 @@ pub async fn reclassify_all(app: AppHandle, db: State<'_, Arc<Database>>) -> Res
         .inner()
         .clone();
     let paths = app.state::<Arc<LibraryPaths>>().inner().clone();
-    let jev_key = {
+    let use_jev = {
         let settings = app.state::<crate::core::settings::SettingsState>();
         let snapshot = settings.get();
-        if snapshot.jev_image_classification_enabled {
-            Some(snapshot.jev_api_key.unwrap_or_default())
-        } else {
-            None
-        }
+        snapshot.jev_image_classification_enabled
     };
     classifier
-        .start(app, db.inner().clone(), paths, false, None, jev_key, true)
+        .start(app, db.inner().clone(), paths, false, None, use_jev, true)
         .map_err(AppError::Other)
 }
 

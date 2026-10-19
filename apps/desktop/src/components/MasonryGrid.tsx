@@ -599,6 +599,7 @@ const Thumb = memo(function Thumb({
 export function MasonryGrid({
   variant = "library",
   itemWidth,
+  layoutInset = 8,
   assetsOverride,
   totalOverride,
   projectScopeId,
@@ -615,6 +616,7 @@ export function MasonryGrid({
   variant?: "library" | "canvas-source";
   /** Target minimum width; columns share any remaining horizontal space. */
   itemWidth?: number;
+  layoutInset?: number;
   /** Project workspace source switch can render a separately loaded library scope. */
   assetsOverride?: Asset[];
   totalOverride?: number;
@@ -713,7 +715,7 @@ export function MasonryGrid({
     ...projectGroups.map(group => ({ kind: "project" as const, group })),
     ...filtered.map(asset => ({ kind: "asset" as const, asset })),
   ], [filtered, projectGroups]);
-  useMasonryLayout(layoutElement, targetWidth, items);
+  useMasonryLayout(layoutElement, targetWidth, items, layoutInset);
 
 
   function clearFilters() {

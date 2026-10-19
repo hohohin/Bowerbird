@@ -3,9 +3,10 @@ import { open } from "@tauri-apps/plugin-dialog";
 import type { LocalFileEntry } from "./externalFiles";
 
 export interface FileWorkspaceConfig { root: string | null; places: string[]; projects: Record<string, string> }
-export interface FileMoveStatus { id: string; state: "pending" | "copying" | "completed" | "failed" | "cancelled"; source: string; target: string; error: string | null; history?: unknown }
+export interface FileMoveStatus { id: string; state: "pending" | "copying" | "completed" | "failed" | "cancelled"; source: string; target: string; error: string | null; history?: { missing?: MissingHistoryFile[] } }
 export interface FileMovePreview { source: string; target: string; files: number; bytes: number; projects: number; token: string; create_only?: boolean }
-export interface HistoryMovePreview extends FileMovePreview { global: number; shared: number; folders: { id: string; name: string; path: string; files: number }[] }
+export interface MissingHistoryFile { id: string; path: string }
+export interface HistoryMovePreview extends FileMovePreview { global: number; shared: number; folders: { id: string; name: string; path: string; files: number }[]; missing?: MissingHistoryFile[] }
 export interface FileWorkspaceStatus { config: FileWorkspaceConfig; proposed_root: string; migration?: FileMoveStatus | null }
 export interface RestoreItem { record_path: string; file: string; asset_id: string | null; action: "import" | "relink" | "existing" | "blocked"; message: string }
 export interface RestorePreview { token: string; items: RestoreItem[] }
@@ -15,7 +16,7 @@ export const fileWorkspace = {
   moveSchedule: (parent: string, token: string) => invoke<void>("file_workspace_move_schedule", { parent, token }),
   moveCancel: () => invoke<void>("file_workspace_move_cancel"),
   historyPreview: () => invoke<HistoryMovePreview>("file_workspace_history_preview"),
-  historySchedule: (token: string) => invoke<void>("file_workspace_history_schedule", { token }),
+  historySchedule: (token: string, skipMissing = false) => invoke<void>("file_workspace_history_schedule", { token, skipMissing }),
   place: (path: string, added: boolean) => invoke<FileWorkspaceConfig>("file_workspace_place", { path, added }),
   all: () => invoke<{ entries: LocalFileEntry[]; unavailable: string[] }>("file_workspace_all"),
   previewRestore: (root: string, recursive: boolean) => invoke<RestorePreview>("file_workspace_restore_preview", { root, recursive }),

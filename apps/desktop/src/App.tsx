@@ -23,7 +23,7 @@ import { APPEND_TEXT_EVENT } from "./components/creation/useCreationEditor";
 import { GenerationPanel } from "./components/GenerationPanel";
 import { CloudAgentSession } from "./components/CloudAgentPanel";
 import { CloudAgentRuntimeCoordinator } from "./components/CloudAgentRuntimeCoordinator";
-import { LEGACY_CREATIVE_SESSION_FALLBACK_ENABLED } from "./lib/featureFlags";
+import { COLLECTIONS_FEATURE_ENABLED, LEGACY_CREATIVE_SESSION_FALLBACK_ENABLED } from "./lib/featureFlags";
 import { ExploreWorkspace } from "./components/ExploreWorkspace";
 import { DEFAULT_EXPLORER_URL } from "./lib/explorer";
 import { CodexOnboarding } from "./components/CodexOnboarding";
@@ -70,7 +70,7 @@ function App() {
   const localFilesOpen = useLocalFileMode(s => s.open);
   const setLocalFilesOpen = useLocalFileMode(s => s.setOpen);
   useEffect(() => {
-    const show = () => { setLocalFilesOpen(true); setSourceBrowserOpen(false); };
+    const show = () => { useLocalFileMode.getState().openBrowser(); setSourceBrowserOpen(false); };
     window.addEventListener(OPEN_LOCAL_FILES, show);
     return () => window.removeEventListener(OPEN_LOCAL_FILES, show);
   }, []);
@@ -889,9 +889,9 @@ function App() {
           setSourceBrowserOpen(current => !current);
         }}
       />
-      <div className="app-shell-hatch" aria-hidden="true"><span /></div>
+      {!projectWorkspaceActive && <div className="app-shell-hatch" aria-hidden="true"><span /></div>}
       <div className="relative flex flex-1 overflow-hidden">
-        <div style={{ display: localFilesOpen ? "none" : "contents" }}><Sidebar /></div>
+        {COLLECTIONS_FEATURE_ENABLED && !projectWorkspaceActive && !localFilesOpen && <Sidebar />}
         <main className="app-workspace relative flex flex-1 flex-col overflow-hidden bg-canvas">
           <ExploreWorkspace url={sourceBrowserUrl} navigationId={sourceBrowserNavigation} open={sourceBrowserOpen && !collectionAddTargetId} onClose={() => setSourceBrowserOpen(false)}>
           <PreservedWorkspace suspended={showDetail}>
@@ -913,7 +913,7 @@ function App() {
           ) : (
             <>
               {libraryHomeView === "library" && mode === "manage" && !collectionAddTargetId && <BatchBar />}
-              <div className={`relative flex-1 overflow-clip ${collectionAddTargetId ? "collection-add-workspace" : ""}`}>
+              <div className={`relative min-h-0 flex-1 overflow-clip ${collectionAddTargetId ? "collection-add-workspace" : ""}`}>
                 {initializing ? (
                   <LibraryLoadingState />
                 ) : (

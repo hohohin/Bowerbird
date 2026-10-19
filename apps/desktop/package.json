@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "test:comfy-video": "node scripts/comfy-video-ui.test.mjs",
     "test:screenshot": "node scripts/screenshot-ui.test.mjs",
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
@@ -11,6 +12,7 @@
     "tauri": "tauri",
     "lint": "tsc --noEmit",
     "test:local-files": "node scripts/local-files-ui.test.mjs",
+    "test:global-files": "node scripts/global-files-ui.test.mjs",
     "test:library:ui": "node scripts/library-layout-ui.test.mjs",
     "test:library:pages": "node scripts/library-pages-ui.test.mjs",
     "test:library:media-filter": "node scripts/library-media-filter-ui.test.mjs",

@@ -11,11 +11,14 @@ pub struct Item {
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
 pub struct Folder { pub id: String, pub name: String, pub path: PathBuf, pub files: usize }
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
-pub struct Plan { items: Vec<Item>, folders: Vec<Folder> }
+pub struct MissingFile { pub id: String, pub path: PathBuf }
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
+pub struct Plan { items: Vec<Item>, folders: Vec<Folder>, #[serde(default)] missing: Vec<MissingFile> }
 #[derive(Serialize)]
 pub struct HistoryPreview {
     pub source: PathBuf, pub target: PathBuf, pub files: usize, pub bytes: u64,
     pub projects: usize, pub global: usize, pub shared: usize, pub folders: Vec<Folder>, pub token: String,
+    pub missing: Vec<MissingFile>,
 }
 
 // The oldest referencing project owns the single physical file. Hidden canvas uses
@@ -77,6 +80,8 @@ fn destination(conn: &Connection, root: &Path, item: &Item) -> AppResult<()> {
     Ok(())
 }
 fn build(files: &FileWorkspace, conn: &Connection, images: &Path) -> AppResult<(PathBuf,Plan)> {
+    no_links(images)?;
+    if !fs::metadata(images).map_err(|e|invalid(format!("历史素材目录不可访问，请先连接原磁盘：{e}")))?.is_dir() {return Err(invalid("历史素材目录不可用"));}
     let root=root_path(files)?;
     if nested(&root,images) || nested(images,&root) {return Err(invalid("历史素材与资料目录不能重叠"));}
     let config=files.snapshot();
@@ -84,10 +89,16 @@ fn build(files: &FileWorkspace, conn: &Connection, images: &Path) -> AppResult<(
     let mut stmt=conn.prepare("SELECT id,store_path FROM assets WHERE store_path IS NOT NULL AND id NOT IN (SELECT asset_id FROM external_assets) ORDER BY id")?;
     let assets=stmt.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?)))?.collect::<Result<Vec<_>,_>>()?;
     let mut items=Vec::new();
+    let mut missing=Vec::new();
     for (id,raw) in assets {
         let source=PathBuf::from(raw);if !nested(&source,images) {continue;}
         no_links(&source)?;
-        if !source.is_file(){return Err(invalid(format!("历史素材文件不可用，请先恢复原文件：{}",source.display())));}
+        match fs::metadata(&source) {
+            Ok(meta) if meta.is_file()=>(),
+            Ok(_)=>return Err(invalid(format!("历史素材路径不是文件：{}",source.display()))),
+            Err(e) if e.kind()==std::io::ErrorKind::NotFound=>{missing.push(MissingFile{id,path:source});continue;},
+            Err(e)=>return Err(invalid(format!("无法读取历史素材 {}：{e}",source.display()))),
+        }
         let refs=references(conn,&id,&source)?;
         for (project,name) in &refs {
             if !folders.contains_key(project) {
@@ -102,20 +113,21 @@ fn build(files: &FileWorkspace, conn: &Connection, images: &Path) -> AppResult<(
         let item=Item{id,hash:fingerprint(&source)?,bytes:fs::metadata(&source)?.len(),source,target,projects:refs.into_iter().map(|(id,_)|id).collect()};
         destination(conn,&root,&item)?;items.push(item);
     }
-    Ok((root,Plan{items,folders:folders.into_values().collect()}))
+    Ok((root,Plan{items,folders:folders.into_values().collect(),missing}))
 }
 fn token(config: &FileWorkspaceConfig, plan: &Plan) -> AppResult<String> {Ok(format!("{:x}",Sha256::digest(serde_json::to_vec(&(config,plan))?)))}
 pub fn preview(files: &FileWorkspace, db: &Database, images: &Path) -> AppResult<HistoryPreview> {
     let (target,plan)=build(files,&db.conn.lock().unwrap(),images)?;
-    Ok(HistoryPreview{source:images.into(),target,files:plan.items.len(),bytes:plan.items.iter().map(|i|i.bytes).sum(),projects:plan.folders.len(),global:plan.items.iter().filter(|i|i.projects.is_empty()).count(),shared:plan.items.iter().filter(|i|i.projects.len()>1).count(),token:token(&files.snapshot(),&plan)?,folders:plan.folders})
+    Ok(HistoryPreview{source:images.into(),target,files:plan.items.len(),bytes:plan.items.iter().map(|i|i.bytes).sum(),projects:plan.folders.len(),global:plan.items.iter().filter(|i|i.projects.is_empty()).count(),shared:plan.items.iter().filter(|i|i.projects.len()>1).count(),token:token(&files.snapshot(),&plan)?,folders:plan.folders,missing:plan.missing})
 }
-pub fn schedule(files: &FileWorkspace, db: &Database, images: &Path, expected: &str) -> AppResult<()> {
+pub fn schedule(files: &FileWorkspace, db: &Database, images: &Path, expected: &str, skip_missing: bool) -> AppResult<()> {
     let _gate=PLAN_GATE.lock().unwrap();
     if status(files)?.is_some_and(|s|matches!(s.state.as_str(),"pending"|"copying")) {return Err(invalid("已有待迁移计划，请先取消或重启完成"));}
     let conn=db.conn.lock().unwrap();ensure_idle(&conn)?;
     let (target,plan)=build(files,&conn,images)?;let old_config=files.snapshot();
     if plan.items.is_empty() {return Err(invalid("没有需要迁移的历史素材"));}
     if token(&old_config,&plan)?!=expected {return Err(invalid("素材、项目归属或文件已变化，请重新预览"));}
+    if !plan.missing.is_empty() && !skip_missing {return Err(invalid("存在缺失文件，请在预览中确认跳过后再迁移"));}
     let probe_root=if target.exists(){target.clone()}else{target.parent().unwrap().into()};
     let probe=probe_root.join(format!(".bowerbird-write-{}",uuid::Uuid::new_v4()));
     let file=fs::OpenOptions::new().write(true).create_new(true).open(&probe).map_err(|e|invalid(format!("资料目录不可写，请先选择可写位置：{e}")))?;file.sync_all()?;drop(file);fs::remove_file(probe)?;

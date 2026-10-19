@@ -81,6 +81,26 @@ pub async fn visual_profile_preview(
 }
 
 #[tauri::command]
+pub async fn visual_profile_export(
+    db: State<'_, std::sync::Arc<Database>>, profile_id: String, path: String,
+) -> Result<(), AppError> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        let content = db.export_visual_profile(&profile_id)?;
+        std::fs::write(path, content).map_err(|error| AppError::Other(format!("导出规范失败：{error}")))
+    }).await.map_err(|error| AppError::Other(format!("导出规范失败：{error}")))?
+}
+
+#[tauri::command]
+pub async fn visual_profile_import(
+    db: State<'_, std::sync::Arc<Database>>, content: String,
+) -> Result<VisualProfileDetail, AppError> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || db.import_visual_profile(&content))
+        .await.map_err(|error| AppError::Other(format!("导入规范失败：{error}")))?
+}
+
+#[tauri::command]
 pub async fn visual_profile_extract(
     db: State<'_, std::sync::Arc<Database>>,
     project_id: Option<String>,

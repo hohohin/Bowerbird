@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { CanvasLayerMenuItem } from "./CanvasLayerMenuItem";
 import { CANVAS_ARTBOARD_FROM_IMAGE } from "../lib/canvasArtboard";
+import { COLLECTIONS_FEATURE_ENABLED } from "../lib/featureFlags";
 import { createPortal } from "react-dom";
 import { ChevronRight, ClipboardCopy, FolderInput, FolderPlus, FolderTree, Layers, LayoutDashboard, MessageSquare, PenTool, ScanSearch, Trash2, Ungroup } from "lucide-react";
 import { understandEngineUsable, useStore } from "../store";
@@ -616,6 +617,7 @@ export function AssetContextMenu() {
       >
         <div className="asset-context-column">
           <div className="app-context-label">已选 {multiIds.length} 张素材</div>
+          {COLLECTIONS_FEATURE_ENABLED && <>
           <button
             type="button"
             role="menuitem"
@@ -671,6 +673,7 @@ export function AssetContextMenu() {
               </div>
             )}
           </div>
+          </>}
           {!activeProjectId && projects.length > 0 && (
             <button
               type="button"

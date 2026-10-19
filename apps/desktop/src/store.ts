@@ -179,6 +179,7 @@ export type DescribeTask =
 interface State {
   libraryThumbnailWidth: number;
   canvasThumbnailWidth: number;
+  projectsThumbnailWidth: number;
   setThumbnailWidth: (scope: ThumbnailScope, value: number) => void;
   assets: Asset[];
   libraryMemberships: ProjectMembership[];
@@ -687,9 +688,10 @@ export const useStore = create<State>((set, get) => {
   return {
   libraryThumbnailWidth: readThumbnailWidth("library"),
   canvasThumbnailWidth: readThumbnailWidth("canvas"),
+  projectsThumbnailWidth: readThumbnailWidth("projects"),
   setThumbnailWidth: (scope, value) => {
     const width = saveThumbnailWidth(scope, value);
-    set(scope === "library" ? { libraryThumbnailWidth: width } : { canvasThumbnailWidth: width });
+    set(scope === "library" ? { libraryThumbnailWidth: width } : scope === "projects" ? { projectsThumbnailWidth: width } : { canvasThumbnailWidth: width });
   },
   assets: [],
   libraryMemberships: [],

@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Asset } from "./types";
-export interface LocalFileEntry { path: string; name: string; directory: boolean }
+export interface LocalFileEntry { path: string; name: string; directory: boolean; version?: string | null; preview?: string | null }
 export interface LocalDirectory { path: string; parent: string | null; entries: LocalFileEntry[]; total: number }
 export interface ExternalReference { asset: Asset; status: "available" | "missing" | "changed" }
 export const OPEN_LOCAL_FILES = "bowerbird:open-local-files";

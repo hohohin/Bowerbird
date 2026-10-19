@@ -1,4 +1,4 @@
-//! New-label discovery through the same authenticated Cloud route as reverse captioning.
+//! Validated label discovery; managed Jev fallback shares its per-image billing ticket.
 use super::data::{clean_label, Label};
 use crate::codex::types::CodexRequest;
 use crate::codex::understand::{UnderstandOperation, UnderstandProvider};
@@ -146,6 +146,27 @@ pub async fn discover(
         }
         tokio::select! {
             result = &mut operation => return parse(&result.map_err(|e| format!("Cloud 补标签失败：{e}"))?.text, labels),
+            _ = tokio::time::sleep(Duration::from_millis(100)) => {},
+        }
+    }
+}
+
+/// Jev fallback belongs to the same server-side image and never pays caption fees.
+pub async fn discover_managed(
+    judge: &super::jev::Judge, ticket: &str, image: &[u8], labels: &[Label], cancel: &AtomicBool,
+) -> Result<Discovery, String> {
+    use base64::Engine;
+    let body = serde_json::json!({
+        "action":"discover", "classification_id":ticket,
+        "image":base64::engine::general_purpose::STANDARD.encode(image),
+        "labels":labels.iter().map(|l| serde_json::json!({"id":l.id,"name":l.name,"definition":l.description,"enabled":l.enabled})).collect::<Vec<_>>()
+    });
+    let operation = judge.post(&body);
+    tokio::pin!(operation);
+    loop {
+        if cancel.load(Ordering::Relaxed) { return Err("已停止分类".into()); }
+        tokio::select! {
+            result = &mut operation => return parse(&result?.to_string(), labels),
             _ = tokio::time::sleep(Duration::from_millis(100)) => {},
         }
     }

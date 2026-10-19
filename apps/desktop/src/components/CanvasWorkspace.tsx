@@ -83,6 +83,7 @@ import { MasonryGrid } from "./MasonryGrid";
 import { filterAssetsByMediaType } from "../lib/mediaFilter";
 import { LibraryTagBar } from "./LibraryTagBar";
 import { LibraryViewSwitch } from "./LibraryViewSwitch";
+import { LibraryTagFilter } from "./LibraryTagFilter";
 import { LibraryFilterButton } from "./LibraryFilterButton";
 import { ThumbnailSizeSlider } from "./ThumbnailSizeSlider";
 import { Lightbox } from "./Lightbox";
@@ -476,15 +477,19 @@ export function CanvasWorkspace({
   const sourcePinchRef = useThumbnailPinch("canvas");
   const [sourceScope, setSourceScope] = useState<CanvasSourceScope>("project");
   const localFilesOpen = useLocalFileMode(state => state.open);
+  const fileMode = useLocalFileMode(state => state.mode);
   const tabOrder = useLibraryTabOrder(state => state.order);
+  const sourceOrder = useMemo<(LibraryTab | "project")[]>(() => ["project", ...tabOrder], [tabOrder]);
   const setTabOrder = useLibraryTabOrder(state => state.setOrder);
   function changeSource(value: string) {
-    useLocalFileMode.getState().setOpen(value === "files");
-    if (value !== "files") setSourceScope(value as CanvasSourceScope);
+    if (value === "project") { useLocalFileMode.getState().setOpen(false); setSourceScope("project"); }
+    else if (value === "files") useLocalFileMode.getState().openBrowser();
+    else useLocalFileMode.getState().openGlobal();
     useStore.getState().clearSelect();
   }
   function closeSource() {
     useLocalFileMode.getState().setOpen(false);
+    setSourceScope("project");
     setSourceCollapsed(true);
     requestAnimationFrame(() => boardShellRef.current?.querySelector<HTMLButtonElement>('.canvas-source-toggle')?.focus());
   }
@@ -1633,7 +1638,8 @@ export function CanvasWorkspace({
         || event.defaultPrevented || exploring || workspaceRef.current?.closest("[inert]")
         || loadingRef.current || useStore.getState().projectRoutePending) return;
       const target = event.target as HTMLElement | null;
-      if (event.key === "Tab" && (target?.isContentEditable || target?.closest('input, textarea, select'))) return;
+      if (event.key === "Tab" && (target?.isContentEditable || target?.closest('input, textarea, select, .app-topbar'))) return;
+      if (event.key === "Escape" && target?.closest('[data-folder-path-editor]')) return;
       if (target?.closest('[role="dialog"], [role="menu"]')
         || document.querySelector('[role="dialog"], [role="menu"]') || useStore.getState().contextMenu
         || useStore.getState().projectContextMenu) return;
@@ -1641,14 +1647,14 @@ export function CanvasWorkspace({
       if (event.key === "Escape" && !open) return;
       event.preventDefault(); event.stopPropagation();
       if (event.key === "Escape") { closeSource(); return; }
-      if (!open) { setCanvasLibraryOpen(true); beginOnboardingOperation("expand-source", projectId)(); return; }
-      const current = useLocalFileMode.getState().open || sourceScope === "library" ? "files" : "project";
-      changeSource(tabOrder[(tabOrder.indexOf(current) + (event.shiftKey ? -1 : 1) + tabOrder.length) % tabOrder.length]);
+      if (!open) { changeSource("project"); setCanvasLibraryOpen(true); beginOnboardingOperation("expand-source", projectId)(); return; }
+      const current = useLocalFileMode.getState().open ? useLocalFileMode.getState().mode : sourceScope === "project" ? "project" : "global";
+      changeSource(sourceOrder[(sourceOrder.indexOf(current) + (event.shiftKey ? -1 : 1) + sourceOrder.length) % sourceOrder.length]);
       requestAnimationFrame(() => sourcePanelRef.current?.focus({ preventScroll: true }));
     }
     window.addEventListener("keydown", toggleLibrary, true);
     return () => window.removeEventListener("keydown", toggleLibrary, true);
-  }, [exploring, projectId, sourceScope, tabOrder, setCanvasLibraryOpen]);
+  }, [exploring, projectId, sourceScope, sourceOrder, setCanvasLibraryOpen]);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -2629,10 +2635,25 @@ export function CanvasWorkspace({
       const { path, time } = frame;
       let dataUrl = frame.dataUrl;
       const bounds = stage.getBoundingClientRect();
-      const center = toBoardPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2);
-      const source = nodesRef.current.find(node => node.kind === "asset" && node.asset.storePath === path);
-      const frozenPan = { ...panRef.current }, frozenZoom = zoomRef.current;
-      const obstacles = nodesRef.current.map(nodeRect);
+      const composer = stage.parentElement?.querySelector(".canvas-composer-host")?.getBoundingClientRect();
+      const visibleBottom = composer && composer.height > 0 ? Math.min(bounds.bottom, composer.top) : bounds.bottom;
+      const center = toBoardPoint(bounds.left + bounds.width / 2, (bounds.top + visibleBottom) / 2);
+      const sections = new Set(graphNodesRef.current.filter(node => node.kind === "note"
+        && readCanvasNote(node).note_type === "section").map(node => node.id));
+      const elements = new Map(Array.from(stage.querySelectorAll<HTMLElement>("[data-canvas-node-id]"))
+        .map(element => [element.dataset.canvasNodeId, element]));
+      const anchors = selectionAnchors().filter(anchor => !sections.has(anchor.id)).map(anchor => {
+        const rect = elements.get(anchor.id)?.getBoundingClientRect();
+        return { ...anchor, rect: rect ? { ...toBoardPoint(rect.left, rect.top), width: rect.width / zoomRef.current,
+          height: rect.height / zoomRef.current } : { ...anchor.rect } };
+      });
+      const sourceIds = new Set(nodesRef.current.flatMap(node => node.kind === "folder"
+        ? node.assets.some(asset => asset.storePath === path) ? [node.id] : []
+        : node.asset.storePath === path ? [conversationCardsRef.current.aliases.get(node.id) ?? node.id] : []));
+      const distance = (rect: CanvasRect) => (rect.x + rect.width / 2 - center.x) ** 2 + (rect.y + rect.height / 2 - center.y) ** 2;
+      const source = anchors.filter(anchor => sourceIds.has(anchor.id)).sort((a, b) =>
+        Number(selectedCanvasNodeIds.has(b.id)) - Number(selectedCanvasNodeIds.has(a.id)) || distance(a.rect) - distance(b.rect))[0]?.rect;
+      const obstacles = anchors.map(anchor => anchor.rect);
       const nodeId = canvasId("asset");
       let savedAsset: Asset | null = null, queued = false, completed = false;
       save = async () => {
@@ -2648,8 +2669,7 @@ export function CanvasWorkspace({
             const snapshot = createCanvasAssetSnapshot(savedAsset, nodeId);
             const size = assetNodeSize(snapshot);
             const origin = source ? { x: source.x + source.width + 32, y: source.y } : { x: center.x - size.width / 2, y: center.y - size.height / 2 };
-            const position = canvasPlacementForNewCard({ ...origin, ...size }, { x: 0, y: 0, width: bounds.width, height: bounds.height },
-              frozenPan, frozenZoom, obstacles) ?? origin;
+            const position = source ? placeCanvasCardNearSource({ ...origin, ...size }, obstacles) : origin;
             const node: CanvasAssetNode = { kind: "asset", id: nodeId, asset: snapshot, ...position, ...size,
               order: nodesRef.current.reduce((max, node) => Math.max(max, node.order), 0) + 1 };
             await api.projectCanvasNodeCreate(newProjectCanvasAssetNode(project.id, node));
@@ -3998,7 +4018,7 @@ export function CanvasWorkspace({
             </button>
             {onExit && (
               <button type="button" className="app-button-secondary" onClick={onExit}>
-                返回素材库
+                返回主页
               </button>
             )}
           </div>
@@ -4013,9 +4033,13 @@ export function CanvasWorkspace({
   </button>;
   const sourceNavigation = <header className="library-browser-heading">
           <div data-tour="source-scope" className="library-floating-navigation">
-            <LibraryViewSwitch value={localFilesOpen || sourceScope === "library" ? "files" : "project"} onChange={changeSource} onReorder={setTabOrder}
-              label="画板素材来源" options={tabOrder.map(value => ({ value, label: ({ project: "项目素材", files: "文件" } satisfies Record<LibraryTab, string>)[value] }))} />
-            {!localFilesOpen && sourceScope === "library" && <LibraryFilterButton />}
+            <LibraryViewSwitch value={localFilesOpen ? fileMode : sourceScope === "project" ? "project" : "global"} onChange={changeSource}
+              onReorder={values => { if (values[0] === "project") setTabOrder(values.slice(1)); }}
+              label="素材视图切换条" options={sourceOrder.map(value => ({ value, label: ({ project: "项目素材", global: "全局素材", files: "文件浏览器" } satisfies Record<LibraryTab | "project", string>)[value] }))} />
+            {!localFilesOpen && <div className="library-navigation-actions">
+              {libraryTagFilter && <LibraryTagFilter name={libraryTagFilter.slice(4)} onClear={() => { useStore.getState().setSmartFilter(null); useStore.getState().clearSelect(); }} />}
+              {sourceScope === "library" && <LibraryFilterButton />}
+            </div>}
           </div>
         </header>;
 
@@ -4040,10 +4064,11 @@ export function CanvasWorkspace({
         }}>
         {localFilesOpen ? <LocalFileWorkspace navigation={sourceNavigation} closeAction={sourceCloseButton} onClose={closeSource} onLegacy={() => { useLocalFileMode.getState().setOpen(false); setSourceScope("library"); }} />
           : <div className="canvas-source-close">{sourceCloseButton}</div>}
+        {!localFilesOpen && sourceNavigation}
         <div id={`${sourcePanelId}-content`} className="canvas-source-content" style={localFilesOpen ? { display: "none" } : undefined}>
 
         {sourceScope === "library" && <div className="folder-scope-bar"><button onClick={() => changeSource("files")}>返回文件浏览</button><span>历史素材</span></div>}
-        <LibraryTagBar projectId={sourceScope === "project" && !project?.provisional ? projectId : null} />
+        <LibraryTagBar projectId={sourceScope === "project" ? projectId : null} />
         {sourceScope === "library" && libraryFolders.length > 0 && (
           <div className="canvas-source-folders" role="group" aria-label="全局素材文件夹">
             {libraryFolders.map((folder) => {
@@ -4068,7 +4093,6 @@ export function CanvasWorkspace({
           </div>
         )}
         <div ref={sourcePinchRef} className="canvas-source-media min-h-0 flex-1">
-        {sourceNavigation}
           {sourceScope === "library" && librarySourceError ? (
             <div className="library-page-empty" role="alert">素材加载失败 <button type="button" className="underline" onClick={() => setLibrarySourceRevision(value => value + 1)}>重试</button></div>
           ) : sourceScope === "library" && librarySourceLoading && librarySourceAssets.length === 0 ? (
@@ -4099,6 +4123,7 @@ export function CanvasWorkspace({
           aria-expanded={!sourceCollapsed}
           aria-controls={`${sourcePanelId}-content`}
           onClick={() => {
+            if (sourceCollapsed) changeSource("project");
             setSourceCollapsed(!sourceCollapsed);
             if (sourceCollapsed) beginOnboardingOperation("expand-source", projectId)();
           }}
@@ -4313,7 +4338,7 @@ export function CanvasWorkspace({
               onPointerDown={event => { if (event.button !== 0) return; event.preventDefault(); event.stopPropagation(); setDrawingTool("select"); workflowRef.current?.arm(event.clientX, event.clientY); }}
               onClick={event => { if (event.detail === 0) { setDrawingTool("select"); workflowRef.current?.arm(); } }}><WindingKey size={21} /></button>
             <hr />
-            <CanvasToolbox onOpenReplication={() => { setDrawingTool("select"); if (projectId) setReplicationProjectId(projectId); }} />
+            <CanvasToolbox onOpenReplication={() => { setDrawingTool("select"); if (projectId) setReplicationProjectId(projectId); }} onOpenLocalVideo={() => chooseCanvasTool("comfy-video")} />
             <hr />
             <div className="canvas-assist-tools" role="group" aria-label="辅助">
               <span>辅助</span>

@@ -1,0 +1,26 @@
+.comfy-video-card { display: grid; gap: 10px; }
+.comfy-frame-slots { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.comfy-frame-slot { border: 1px dashed var(--bb-line); border-radius: 8px; min-height: 112px; padding: 8px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; font-size: 11px; }
+.comfy-frame-slot img { width: 100%; height: 80px; object-fit: contain; }
+.comfy-frame-slot span { color: var(--bb-muted); text-align: center; }
+.comfy-video-options { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; border: 0; padding: 0; margin: 0; min-width: 0; }
+.comfy-video-card label { display: grid; gap: 4px; font-size: 11px; min-width: 0; }
+.comfy-video-card input, .comfy-video-card select { width: 100%; min-width: 0; box-sizing: border-box; }
+.comfy-video-card input { padding: 6px 8px; border: 1px solid var(--bb-line); border-radius: 6px; background: var(--bb-surface-2); color: var(--bb-ink); }
+.comfy-video-card details { font-size: 11px; }
+.comfy-video-card details > :not(summary) { margin-top: 8px; }
+.comfy-video-card details p { overflow-wrap: anywhere; }
+.comfy-video-result { width: 100%; max-height: 260px; border-radius: 8px; background: #111; }
+.comfy-environment { border: 1px solid var(--bb-line); border-radius: 8px; padding: 10px; display: grid; gap: 8px; min-width: 0; font-size: 11px; }
+.comfy-environment-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.comfy-environment-heading strong { font-size: 12px; }
+.comfy-environment p { margin: 0; overflow-wrap: anywhere; }
+.comfy-environment small { color: var(--bb-muted); line-height: 1.5; }
+.comfy-environment progress { width: 100%; height: 8px; accent-color: var(--bb-ink); }
+.comfy-install-path { overflow-wrap: anywhere; color: var(--bb-muted); }
+.comfy-environment-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.comfy-environment-actions button:first-child { padding: 6px 10px; border-radius: 6px; background: var(--bb-ink); color: var(--bb-surface); }
+.comfy-environment button:disabled { opacity: .45; cursor: not-allowed; }
+.comfy-environment button { min-height: 28px; }
+.comfy-environment.is-ready { background: var(--bb-surface-2); }
+.comfy-environment.is-ready > p { display: none; }

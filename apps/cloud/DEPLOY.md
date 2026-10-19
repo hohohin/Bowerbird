@@ -3,6 +3,17 @@
 > 目标：把 `apps/cloud/` 的 Supabase 迁移 + Edge Functions 推上云端，完成 Auth/积分/算力的真实联调。
 > 前提：你已在 Supabase 控制台拿到 Project URL / publishable key / secret key，并已在 `apps/cloud/.env` 填好方舟 key 与 endpoint id。
 
+## Jev 同步托管分类（2026-10-19，待部署）
+
+1. 审核并应用 `0065_classification_proxy.sql`；不要直接对有其他待迁移内容的工作区执行未筛选的全量 push。
+2. 在 Supabase Secrets 配置 `JEV_API_KEY` 和 `JEV_CLASSIFICATION_COST_MICROS`。后者为一次 Jev 判断加最坏一次 Cloud 补标签的保守人民币微元预算，必须根据实际供应商费用填写；不从客户端读取密钥，也不能以用户售价代替供应商成本。沿用 `DAILY_COST_LIMIT_CNY`、`RATE_LIMIT_PER_USER_PER_MIN`、`FREE_CAPTION_DAILY_LIMIT`、方舟 Vision 配置，生产设置 `BOWERBIRD_CLOUD_MOCK=false`。
+3. 部署 `jev-proxy`（用户 JWT + 内部 `requireUser`），再部署 `understand-worker --no-verify-jwt`。已有 worker 的 `cleanup_expired` 负责清理分类挂起请求和过期响应，不承担分类推理。每次新分类也会尝试清理。
+4. 构建并重启新桌面后端后再启用客户端入口；旧后端仍要求本地 Jev Key。上线以同一测试账号验证第 1–4 张实际扣 0、第 5 张扣 1、跨批次累计、Jev/Cloud 混合、无法判断/失败/重复请求及 24 小时响应清理。
+
+新接口在单次请求中同步完成 Jev 或补标签调用，不上传对象存储、不创建 worker 排队任务、不轮询。数据库只保留计费/幂等记录及 24 小时响应；图片只在请求内存中。一次图像流程先暂时预留 1 积分（并发请求各自预留），完成后实际扣 0 或 1 并释放余款。取消等待不撤回已经完成的云端结果，云端产生有效标签即算成功；不以客户端声明作为计费依据。挂起超过 10 分钟按未完成退还预留款；供应商成本预算不退回，避免失败重试绕过熔断。免费账号沿用云理解额度，失败/无法判断退还次数，补标签不重复扣次数。
+
+当前仅完成隔离验证，未配置生产 Jev 密钥、未执行迁移或部署、未实测供应商延迟。源码验收详情见 `dev-doc/LOCAL-CLASSIFICATION.md`。
+
 ## 需要手工做的事（按顺序）
 
 ### 1. 安装 Supabase CLI

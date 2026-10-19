@@ -76,6 +76,8 @@ async function assertLease(admin: SupabaseClient, jobId: string, leaseId: string
 }
 
 async function actionCleanupExpired(admin: SupabaseClient): Promise<Response> {
+  const classification = await admin.rpc("cleanup_classification");
+  if (classification.error) throw new ApiError("internal_error", "过期分类请求清理失败", true);
   const now = Date.now();
   const { data, error } = await admin.from("understand_jobs")
     .select("id,request_object_key")

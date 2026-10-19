@@ -16,19 +16,19 @@ try {
   await page.goto(base);
   await box().click();
   const articleTool = () => page.getByRole('menuitem',{name:/视频转图文/});
-  const localImageTool = () => page.getByRole('menuitem',{name:/本地生图/});
+  const localImageTool = () => page.getByRole('menuitem',{name:/本地 H3 视频/});
   assert.equal(await articleTool().count(),0,'logged out hides video-to-article');
   assert.equal(await localImageTool().count(),0,'logged out hides local image generation');
   await page.evaluate(() => window.store.setState({ cloudAuth:{logged_in:true,user_id:'tester'}, cloudEntitlement:{user_id:'tester',is_test_account:false} }));
   assert.equal(await articleTool().count(),0,'ordinary accounts hide video-to-article');
   assert.equal(await localImageTool().count(),0,'ordinary accounts hide local image generation');
   await page.evaluate(() => {
-    window.notices=[];
+    window.notices=[]; window.localPlacements=0; window.addEventListener('local-video-placement',()=>window.localPlacements++);
     window.addEventListener('bowerbird://notify',event=>window.notices.push(event.detail.message));
     window.store.setState({cloudEntitlement:{user_id:'tester',is_test_account:true}});
   });
   await articleTool().waitFor();
-  assert.deepEqual(await page.getByRole('menuitem').allTextContents(),['视频复刻工具分析参考 · 改写分镜 · 生成视频','视频转图文功能开发中','本地生图功能开发中']);
+  assert.deepEqual(await page.getByRole('menuitem').allTextContents(),['视频复刻工具分析参考 · 改写分镜 · 生成视频','视频转图文功能开发中','本地 H3 视频首尾帧 · 提示词 · 生成视频']);
   await page.keyboard.press('ArrowDown');
   assert.equal(await articleTool().evaluate(el=>el===document.activeElement),true);
   await page.keyboard.press('Enter');
@@ -39,7 +39,8 @@ try {
   await page.keyboard.press('End');
   assert.equal(await localImageTool().evaluate(el=>el===document.activeElement),true);
   await page.keyboard.press('Enter');
-  assert.deepEqual(await page.evaluate(()=>window.notices),['功能开发中','功能开发中']);
+  assert.deepEqual(await page.evaluate(()=>window.notices),['功能开发中']);
+  assert.equal(await page.evaluate(()=>window.localPlacements),1);
   assert.equal(await page.evaluate(()=>window.calls.length),0,'placeholder does not call a model or IPC');
   await box().click();
   await page.evaluate(()=>window.store.setState({cloudAuth:{logged_in:true,user_id:'other'}}));

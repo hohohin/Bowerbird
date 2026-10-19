@@ -1,11 +1,11 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { BriefcaseBusiness, Clapperboard, Images, ImagePlus } from "lucide-react";
+import { BriefcaseBusiness, Clapperboard, Images, Film } from "lucide-react";
 import { useStore } from "../store";
 import { notify } from "../lib/notify";
 import "./CanvasToolbox.css";
 
-export function CanvasToolbox({ onOpenReplication }: { onOpenReplication: () => void }) {
+export function CanvasToolbox({ onOpenReplication, onOpenLocalVideo }: { onOpenReplication: () => void; onOpenLocalVideo: () => void }) {
   const isTestAccount = useStore(state => state.cloudAuth?.logged_in === true && !!state.cloudAuth.user_id
     && state.cloudEntitlement?.user_id === state.cloudAuth.user_id && state.cloudEntitlement?.is_test_account === true);
   const [open, setOpen] = useState(false);
@@ -60,8 +60,8 @@ export function CanvasToolbox({ onOpenReplication }: { onOpenReplication: () => 
       {isTestAccount && <button type="button" role="menuitem" onClick={() => { setOpen(false); button.current?.focus(); notify("功能开发中"); }}>
         <Images size={19} aria-hidden="true" /><span><strong>视频转图文</strong><small>功能开发中</small></span>
       </button>}
-      {isTestAccount && <button type="button" role="menuitem" onClick={() => { setOpen(false); button.current?.focus(); notify("功能开发中"); }}>
-        <ImagePlus size={19} aria-hidden="true" /><span><strong>本地生图</strong><small>功能开发中</small></span>
+      {isTestAccount && <button type="button" role="menuitem" onClick={() => { setOpen(false); onOpenLocalVideo(); }}>
+        <Film size={19} aria-hidden="true" /><span><strong>本地 H3 视频</strong><small>首尾帧 · 提示词 · 生成视频</small></span>
       </button>}
     </div>, document.body)}
   </div>;

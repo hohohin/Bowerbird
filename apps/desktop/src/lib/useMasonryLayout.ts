@@ -3,7 +3,7 @@ import { useLayoutEffect } from "react";
 const GAP = 8;
 
 /** Keep keyed cards under one parent so reflow never reloads their images. */
-export function useMasonryLayout(element: HTMLDivElement | null, targetWidth: number, items: readonly unknown[]) {
+export function useMasonryLayout(element: HTMLDivElement | null, targetWidth: number, items: readonly unknown[], inset = GAP) {
   useLayoutEffect(() => {
     if (!element) return;
     const cells = Array.from(element.children) as HTMLElement[];
@@ -13,7 +13,7 @@ export function useMasonryLayout(element: HTMLDivElement | null, targetWidth: nu
     function layout() {
       frame = 0;
       if (disposed || !element) return;
-      const available = element.clientWidth - GAP * 2;
+      const available = element.clientWidth - inset * 2;
       if (available <= 0) return;
       const targetColumns = Math.max(1, Math.floor((available + GAP) / (targetWidth + GAP)));
       const target = (available - GAP * (targetColumns - 1)) / targetColumns;
@@ -23,15 +23,15 @@ export function useMasonryLayout(element: HTMLDivElement | null, targetWidth: nu
       // visible cards fit, rather than switching columns before the size changes.
       const width = cells[0].getBoundingClientRect().width;
       const columns = Math.max(1, Math.floor((available + GAP + 0.1) / (width + GAP)));
-      const heights = new Array<number>(columns).fill(GAP);
+      const heights = new Array<number>(columns).fill(inset);
       const sizes = cells.map(cell => cell.getBoundingClientRect().height);
       cells.forEach((cell, index) => {
         let column = 0;
         for (let i = 1; i < columns; i++) if (heights[i] < heights[column]) column = i;
-        cell.style.transform = `translate3d(${GAP + column * (width + GAP)}px, ${heights[column]}px, 0)`;
+        cell.style.transform = `translate3d(${inset + column * (width + GAP)}px, ${heights[column]}px, 0)`;
         heights[column] += sizes[index] + GAP;
       });
-      element.style.height = `${Math.max(...heights)}px`;
+      element.style.height = `${Math.max(...heights) - GAP + inset}px`;
       element.dataset.columns = String(columns);
       const fresh = cells.filter(cell => !cell.dataset.positioned);
       if (fresh.length) {
@@ -54,5 +54,5 @@ export function useMasonryLayout(element: HTMLDivElement | null, targetWidth: nu
       cancelAnimationFrame(frame);
       observer.disconnect();
     };
-  }, [element, targetWidth, items]);
+  }, [element, targetWidth, items, inset]);
 }

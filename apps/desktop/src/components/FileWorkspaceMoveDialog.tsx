@@ -9,6 +9,7 @@ export function FileWorkspaceMoveDialog({ onClose }: { onClose: () => void }) {
   const [status, setStatus] = useState<FileWorkspaceStatus | null>(null);
   const [preview, setPreview] = useState<FileMovePreview | null>(null);
   const [historyPreview, setHistoryPreview] = useState<HistoryMovePreview | null>(null);
+  const [skipMissing, setSkipMissing] = useState(false);
   const [parent, setParent] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -21,7 +22,7 @@ export function FileWorkspaceMoveDialog({ onClose }: { onClose: () => void }) {
   }, []);
   async function choose() {
     if (operation.current) return;
-    operation.current = true; setBusy(true); setError(""); setPreview(null); setHistoryPreview(null);
+    operation.current = true; setBusy(true); setError(""); setPreview(null); setHistoryPreview(null); setSkipMissing(false);
     try {
       const selected = await open({ directory: true, multiple: false, title: "选择保存 BowerbirdLibrary 的文件夹" });
       if (!selected || Array.isArray(selected) || !alive.current) return;
@@ -33,7 +34,7 @@ export function FileWorkspaceMoveDialog({ onClose }: { onClose: () => void }) {
   }
   async function inspectHistory() {
     if (operation.current) return;
-    operation.current = true; setBusy(true); setError(""); setPreview(null); setHistoryPreview(null);
+    operation.current = true; setBusy(true); setError(""); setPreview(null); setHistoryPreview(null); setSkipMissing(false);
     try {
       const value = await fileWorkspace.historyPreview();
       if (alive.current) { setHistoryPreview(value); setPreview(value); }
@@ -49,7 +50,7 @@ export function FileWorkspaceMoveDialog({ onClose }: { onClose: () => void }) {
         await useStore.getState().projectCanvasFlush?.();
         if (status?.migration?.state !== "pending") {
           if (!preview) return;
-          if (historyPreview) await fileWorkspace.historySchedule(preview.token);
+          if (historyPreview) await fileWorkspace.historySchedule(preview.token, skipMissing);
           else await fileWorkspace.moveSchedule(parent, preview.token);
           // Remember the saved plan even if restarting fails; never submit it twice.
           const next = await fileWorkspace.status();
@@ -65,11 +66,13 @@ export function FileWorkspaceMoveDialog({ onClose }: { onClose: () => void }) {
   const pending = status?.migration?.state === "pending";
   const move = status?.migration;
   const history = !!historyPreview || (pending && !!move?.history);
+  const missing = historyPreview?.missing ?? (!preview ? move?.history?.missing ?? [] : []);
+  const needsMissingConfirmation = !!historyPreview?.missing?.length && !skipMissing;
   return <ModalShell title="迁移 BowerbirdLibrary" width="lg" onClose={onClose} preventClose={busy}
     description="选择资料文件夹的新位置，或将历史素材按项目整理到当前位置。确认后重启应用，再复制、校验并更新引用。"
     footer={<><button className="app-button-secondary" disabled={busy} onClick={onClose}>关闭</button>
       {pending && <button className="app-button-secondary" disabled={busy} onClick={() => void execute(true)}>取消待迁移计划</button>}
-      <button className="app-button-primary" disabled={busy || (!preview && !pending) || (!!historyPreview && !historyPreview.files)} onClick={() => void execute()}>{busy ? "正在处理…" : pending ? "重启并继续迁移" : "确认并重启迁移"}</button></>}>
+      <button className="app-button-primary" disabled={busy || (!preview && !pending) || (!!historyPreview && !historyPreview.files) || needsMissingConfirmation} onClick={() => void execute()}>{busy ? "正在处理…" : pending ? "重启并继续迁移" : "确认并重启迁移"}</button></>}>
     <p className="text-sm text-muted">当前位置</p><p className="mt-1 break-all text-sm">{status?.proposed_root ?? "读取中…"}</p>
     {!pending && <button className="app-button-secondary mt-4" disabled={busy || !status} onClick={() => void choose()}>选择目标文件夹…</button>}
     {!pending && <button className="app-button-secondary mt-4 ml-2" disabled={busy || !status} onClick={() => void inspectHistory()}>预览历史素材迁移</button>}
@@ -80,10 +83,16 @@ export function FileWorkspaceMoveDialog({ onClose }: { onClose: () => void }) {
       {preview?.create_only && <p className="mt-2">默认目录尚未建立，将直接在所选位置创建资料文件夹。</p>}
       {historyPreview && <>
         <p className="mt-2">{historyPreview.global} 个未归属项目的素材放入「全局素材」；{historyPreview.shared} 个共享素材只保存一份。</p>
-        {!historyPreview.files && <p role="status" className="mt-2">没有需要迁移的历史素材。</p>}
+        {!historyPreview.files && <p role="status" className="mt-2">{missing.length ? "没有可迁移的可用文件，请先找回缺失文件。" : "没有需要迁移的历史素材。"}</p>}
         <ul className="mt-2 max-h-40 overflow-y-auto space-y-2" aria-label="历史素材目标文件夹">{historyPreview.folders.map(folder => <li key={folder.id} className="break-all"><span>{folder.name} · {folder.files} 个文件</span><p className="text-xs text-muted">{folder.path}</p></li>)}</ul>
       </>}
       {pending && <p role="status">计划已保存，将在下次启动时执行。当前仍使用原目录。</p>}
+    </div>}
+    {missing.length > 0 && <div className="my-3 rounded-lg border border-line p-3 text-sm">
+      <p role="status">{missing.length} 个历史文件缺失；其素材记录、资料和项目关联将保留在原位置。</p>
+      <details className="mt-2"><summary className="cursor-pointer">查看缺失文件</summary><ul className="mt-2 max-h-32 overflow-y-auto space-y-1">{missing.map(item => <li key={item.id} className="break-all text-xs text-muted">{item.path}</li>)}</ul></details>
+      {historyPreview && historyPreview.files > 0 && <label className="mt-3 flex items-start gap-2"><input type="checkbox" className="mt-1" checked={skipMissing} disabled={busy} onChange={event => setSkipMissing(event.target.checked)} /><span>跳过这 {missing.length} 个缺失文件，仅迁移可用素材</span></label>}
+      {!historyPreview && <p className="mt-2 text-muted">这些文件未迁移。找回原文件后，可重新预览迁移。</p>}
     </div>}
     {history ? <>
       <p className="my-3 text-sm text-muted">一个项目一个文件夹，未归属项目的素材进入「全局素材」。共享素材存入最早创建的引用项目，其他项目继续引用；删除存放项目时，先转存至另一个引用项目。</p>

@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, Check, ChevronDown, Palette, Pencil, RotateCcw, Sparkles, Trash2 } from "lucide-react";
+import { ArrowLeft, Check, ChevronDown, Download, Palette, Pencil, RotateCcw, Sparkles, Trash2 } from "lucide-react";
+import { save as saveFileDialog } from "@tauri-apps/plugin-dialog";
+import { VisualProfileImportButton } from "./VisualProfileImportButton";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { api } from "../lib/api";
 import { beginOnboardingOperation } from "../lib/onboardingStore";
@@ -159,7 +161,7 @@ function BrandVisualSession({ folder }: { folder: { id: string; name: string; pr
   }, [deleting]);
 
   function backToCollection() {
-    if (folder.id.startsWith("workflow:")) { close(); return; }
+    if (folder.id.startsWith("workflow:") || folder.id.startsWith("import:")) { close(); return; }
     clearValidation(); setDetail(null); setRules([]); setDirection(null); setEditing(false);
     setTaskId(undefined); setHistoryExpanded(true); setError(null); setNotice(null);
   }
@@ -253,6 +255,16 @@ function BrandVisualSession({ folder }: { folder: { id: string; name: string; pr
       close();
     });
   }
+  function exportProfile() {
+    if (!detail || detail.status !== "confirmed") return;
+    void perform("正在导出规范…", async () => {
+      const filename = detail.name.replace(/[<>:"/\\|?*\x00-\x1f]/g, "_").slice(0, 80) || "视觉规范";
+      const path = await saveFileDialog({ defaultPath: `${filename}.bowerbird-visual.json`, filters: [{ name: "Bowerbird 视觉规范", extensions: ["json"] }] });
+      if (!path) return;
+      await api.visualProfileExport(detail.id, path);
+      if (alive.current) setNotice("已导出。将此文件发给对方，在品牌规范旁点击「导入视觉规范」即可复用；文件不包含原图。");
+    });
+  }
   function openVersion(id: string) {
     navigate(() => void perform("正在打开…", async () => {
       const value = await api.visualProfileGet(id);
@@ -307,13 +319,15 @@ function BrandVisualSession({ folder }: { folder: { id: string; name: string; pr
       </> : detail ? <>
         <button className="app-modal-button" onClick={() => navigate(backToCollection)}><ArrowLeft size={15} />返回</button>
         <button className="app-modal-button bv-delete-button" onClick={() => setDeleting(detail)}><Trash2 size={15} />删除规范</button>
+        {!draft && <button className="app-modal-button" onClick={exportProfile} title="导出规范文件，可发送给他人导入复用"><Download size={15} />导出分享</button>}
         {editing && <button className="app-modal-button" onClick={() => navigate(() => setEditing(false))}>返回预览</button>}
         <button className="app-modal-button is-primary" disabled={draft && !!invalid} onClick={draft ? confirmProfile : close}><Check size={15} />{draft ? "保存规范" : "完成"}</button>
-      </> : <><button className="app-modal-button" onClick={close}>取消</button><button className="app-modal-button is-primary" disabled={!ready} onClick={summarize}><Sparkles size={15} />开始提炼</button></>}
+      </> : <><VisualProfileImportButton disabled={!!deleting} /><button className="app-modal-button" onClick={close}>取消</button><button className="app-modal-button is-primary" disabled={!ready} onClick={summarize}><Sparkles size={15} />开始提炼</button></>}
     </>}>
     {error && <div className="bv-message is-error" role="alert"><span>{error}</span>{!detail && !busy && !deleting && <button onClick={() => void perform("正在重新读取…", async () => { await readSource(); })}>重新读取图片</button>}</div>}
     {deleting && <div ref={deleteMessage} className="bv-message" role="alert"><span>删除「{deleting.name} · v{deleting.version}」？删除后将无法在创作中选用；原素材和已生成内容会保留。</span></div>}
     {notice && <div className="bv-message" role="status">{notice}</div>}
+    {detail?.extractor === "shared_file" && <p className="bv-hint">这是导入的独立规范，不包含原图。{draft ? "请查看规则，点击「保存规范」后使用。" : "已保存，可在创作中选择使用。"}</p>}
     {detail?.sourceRequirements && <details className="bv-secondary"><summary>提炼时的文字要求</summary><p style={{ whiteSpace: "pre-wrap" }}>{detail.sourceRequirements}</p></details>}
     {busy && <div className="bv-working" role="status"><span className="app-spinner" /><div><strong>{busy}</strong><span>{taskRunning ? "可关闭面板，在任务中心查看进度；完成后会提醒你。" : "交给 Bowerbird，稍等片刻。"}</span></div></div>}
     <fieldset className="bv-fields" disabled={!!busy || !!leave || !!deleting}>
@@ -324,12 +338,12 @@ function BrandVisualSession({ folder }: { folder: { id: string; name: string; pr
       {scope && scope.missing.length > 0 && cloudAvailable && <p className="bv-disclosure">开始后将使用 Cloud 分析集合素材并提炼规范。</p>}
     </section> : <div className="bv-result">
       <section className="bv-brand-heading"><div className="bv-brand-icon"><Palette size={23} /></div><div><span>视觉规范 · v{detail.version}</span><h3>{detail.name}</h3></div>{draft && <button className="bv-text-button" onClick={() => setEditing(!editing)}><Pencil size={13} />{editing ? "预览" : "微调描述"}</button>}</section>
-      <section className="bv-saved-sources" aria-label="提炼时的素材">
+      {detail.extractor !== "shared_file" && <section className="bv-saved-sources" aria-label="提炼时的素材">
         <h4>提炼时的素材 <span>{detail.sourceAssetIds?.length ?? detail.sourceCount} 张</span></h4>
         {savedSources?.profileId !== detail.id ? <p className="bv-hint">正在读取当时的素材…</p> : savedSources.error ? <div className="bv-message" role="alert"><span>{savedSources.error}</span><button onClick={() => setSourceRetry((n) => n + 1)}>重新读取来源素材</button></div> : detail.sourceAssetIds?.length ? <div className="bv-image-grid">{detail.sourceAssetIds.map((id, index) => <SourceThumbnail key={id} asset={savedSources.assets.find((asset) => asset.id === id)} index={index} />)}</div> : <p className="bv-hint">该版本没有可读取的来源素材记录。</p>}
-      </section>
+      </section>}
       <p className="bv-overview">{needsDirection ? "发现了不止一种视觉风格。选择你想延续的感觉，我们会保留对应的品牌特征。" : brandOverview({ ...detail, summary: direction ? "" : detail.summary, rules: visibleRules })}</p>
-      {detail.sourceCount < 3 && <p className="bv-hint">这是从当前图片总结的初步风格，补充更多品牌作品后可以进一步完善。</p>}
+      {detail.extractor !== "shared_file" && detail.sourceCount < 3 && <p className="bv-hint">这是从当前图片总结的初步风格，补充更多品牌作品后可以进一步完善。</p>}
       {draft && detail.conflicts.length > 0 && detail.candidateDirections.length > 1 && <div className="bv-directions" aria-label="选择品牌感觉">{detail.candidateDirections.map((d) => <button key={d.label} aria-pressed={direction === d.label} onClick={() => setDirection(d.label)}>{d.label.replace(/\|/g, " · ")}</button>)}</div>}
       {invalid && <p className="bv-hint" role="alert">{invalid}</p>}
       <details className="bv-secondary bv-rule-details" open={editing || undefined}><summary>查看规范详情</summary>

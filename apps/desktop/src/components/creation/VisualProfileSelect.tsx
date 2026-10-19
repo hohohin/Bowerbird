@@ -2,6 +2,7 @@ import { Palette, Settings2 } from "lucide-react";
 import { useEffect } from "react";
 import { useStore } from "../../store";
 import { beginOnboardingOperation } from "../../lib/onboardingStore";
+import { VisualProfileImportButton } from "../VisualProfileImportButton";
 
 export function VisualProfileSelect({
   value,
@@ -53,6 +54,7 @@ export function VisualProfileSelect({
         ))}
       </select>
     </label>
+    <VisualProfileImportButton disabled={disabled} compact />
     {selectedProfile && <button type="button" disabled={disabled}
       className="flex h-7 w-7 shrink-0 items-center justify-center rounded border border-edge text-muted hover:text-ink focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent disabled:opacity-40"
       aria-label="管理当前品牌规范" title="查看当前选择的视觉规范"

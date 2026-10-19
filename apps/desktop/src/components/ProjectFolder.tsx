@@ -5,7 +5,7 @@ import { useStore } from "../store";
 import type { LibraryProjectGroup } from "../lib/libraryView";
 import { useProjectAssetDrop } from "../lib/useProjectAssetDrop";
 
-export function ProjectFolder({ group, onExpand }: { group: LibraryProjectGroup; onExpand?: () => void }) {
+export function ProjectFolder({ group, onExpand, onOpen }: { group: LibraryProjectGroup; onExpand?: () => void; onOpen?: () => void }) {
   const projectDrop = useProjectAssetDrop();
   const projectRoutePending = useStore((s) => s.projectRoutePending);
   return <div className="library-project-folder"
@@ -18,6 +18,7 @@ export function ProjectFolder({ group, onExpand }: { group: LibraryProjectGroup;
     <button type="button" className="library-project-enter" disabled={projectRoutePending}
       aria-label={`打开项目 ${group.project.name}`}
       onClick={() => void useStore.getState().enterProject(group.project.id)
+        .then(() => onOpen?.())
         .catch((error) => notifyError(error, "无法打开项目画板"))}>
       <div className="library-project-mosaic" aria-hidden="true">
         {Array.from({ length: 9 }, (_, index) => {

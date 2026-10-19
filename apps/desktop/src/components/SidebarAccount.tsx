@@ -5,15 +5,18 @@ import { understandReady } from "../lib/entitlement";
 import { SettingsDialog } from "./SettingsDialog";
 
 /**
- * 左边栏底部账号区（chatgpt 式）：头像 + 用户名 + 档位徽章，点击向上展开 inline 菜单。
+ * 共用账号入口：顶栏显示头像并向下展开菜单，旧侧栏布局保留兼容。
  * 已登录 → 升级账号（应用内账号管理）/ 设置 / 登出；未登录 → 登录 Bowerbird 账号 / 设置。
  * 账号详情（账号名 / 积分明细 / 升级）已移入设置面板「账号管理」。
- * 菜单沿 ProviderSelect/RatioSelect 的 inline 面板范式（不发明浮层），展开在账号行上方。
  */
-export function SidebarAccount({ collapsed = false, onInteractionChange }: {
+export function SidebarAccount({ collapsed = false, onInteractionChange, placement = "sidebar" }: {
+  placement?: "sidebar" | "topbar";
   collapsed?: boolean;
   onInteractionChange?: (active: boolean) => void;
 }) {
+  const topbar = placement === "topbar";
+  const compact = topbar || collapsed;
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const cloudAuth = useStore((s) => s.cloudAuth);
   const cloudEntitlement = useStore((s) => s.cloudEntitlement);
   const cloudBusy = useStore((s) => s.cloudBusy);
@@ -44,8 +47,9 @@ export function SidebarAccount({ collapsed = false, onInteractionChange }: {
 
   useEffect(() => {
     if (!open) return;
+    const frame = topbar ? requestAnimationFrame(() => rootRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus()) : null;
     function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape") setOpen(false);
+      if (event.key === "Escape") { event.preventDefault(); setOpen(false); triggerRef.current?.focus(); }
     }
     function onMouseDown(event: MouseEvent) {
       if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
@@ -53,15 +57,16 @@ export function SidebarAccount({ collapsed = false, onInteractionChange }: {
     window.addEventListener("keydown", onKey);
     window.addEventListener("mousedown", onMouseDown);
     return () => {
+      if (frame !== null) cancelAnimationFrame(frame);
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("mousedown", onMouseDown);
     };
-  }, [open]);
+  }, [open, topbar]);
 
   return (
-    <div ref={rootRef} className={`relative border-t border-edge px-1 pb-1 pt-2 ${collapsed ? "mt-auto w-full" : "mt-2"}`}>
+    <div ref={rootRef} className={topbar ? "topbar-account" : `relative border-t border-edge px-1 pb-1 pt-2 ${collapsed ? "mt-auto w-full" : "mt-2"}`}>
       {open && (
-        <div className={`app-popover mb-1.5 flex flex-col gap-0.5 ${collapsed ? "absolute bottom-full left-1 z-[60] w-56" : ""}`} role="menu" aria-label="账号与设置">
+        <div className={`app-popover mb-1.5 flex flex-col gap-0.5 ${topbar ? "topbar-account-menu" : collapsed ? "absolute bottom-full left-1 z-[60] w-56" : ""}`} role="menu" aria-label="账号与设置">
           {loggedIn ? (
             <>
               <div className="px-2 py-1 text-[11px] text-muted">
@@ -148,9 +153,10 @@ export function SidebarAccount({ collapsed = false, onInteractionChange }: {
       )}
 
       <button
+        ref={triggerRef}
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className={`flex w-full items-center rounded-lg py-2 hover:bg-panel2 ${collapsed ? "justify-center" : "gap-2 px-2"}`}
+        className={topbar ? "topbar-account-trigger" : `flex w-full items-center rounded-lg py-2 hover:bg-panel2 ${collapsed ? "justify-center" : "gap-2 px-2"}`}
         title={loggedIn ? `${name} · ${tier || "已登录"}` : "未登录"}
         aria-label={loggedIn ? `${name}，账号与设置` : "未登录，账号与设置"}
         data-tour="sidebar-account"
@@ -164,7 +170,7 @@ export function SidebarAccount({ collapsed = false, onInteractionChange }: {
             {loggedIn ? (name[0] ?? "?").toUpperCase() : "?"}
           </span>
         )}
-        {!collapsed && <><span className="min-w-0 flex-1 truncate text-left text-xs text-ink">
+        {!compact && <><span className="min-w-0 flex-1 truncate text-left text-xs text-ink">
           {loggedIn ? name : "未登录"}
         </span>
         {tier && (
@@ -175,7 +181,7 @@ export function SidebarAccount({ collapsed = false, onInteractionChange }: {
         {open ? <ChevronUp size={13} className="shrink-0 text-muted" /> : <ChevronDown size={13} className="shrink-0 text-muted" />}</>}
       </button>
 
-      {settingsOpen && <SettingsDialog initialSection={settingsSection} onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && <SettingsDialog initialSection={settingsSection} onClose={() => { setSettingsOpen(false); triggerRef.current?.focus(); }} />}
     </div>
   );
 }

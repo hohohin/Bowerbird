@@ -585,6 +585,120 @@ pub struct VisualRuleValue {
     pub polarity: String,
 }
 
+/// Portable rules only: never carry local provenance or asset identities.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VisualProfileShare {
+    format: String,
+    schema_version: u8,
+    name: String,
+    summary: String,
+    source_version: i64,
+    rules: Vec<VisualRuleValue>,
+}
+
+#[cfg(test)]
+mod sharing_tests {
+    use crate::db::Database;
+    fn file() -> serde_json::Value {
+        serde_json::json!({"format":"bowerbird.visual-profile", "schemaVersion":1,
+            "name":"共享品牌", "summary":"暖白与自然绿", "sourceVersion":3,
+            "rules":[{"category":"palette","value":"保持暖白背景","polarity":"must"},
+                {"category":"light","value":"避免生硬闪光","polarity":"avoid"}]})
+    }
+    #[test]
+    fn share_roundtrip_is_independent_and_requires_confirmation() {
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let first = db.import_visual_profile(&file().to_string()).unwrap();
+        assert_eq!(first.summary.status, "draft");
+        assert!(first.summary.project_id.is_none());
+        assert!(first.source_asset_ids.is_empty());
+        assert!(db.export_visual_profile(&first.summary.id).is_err());
+        assert!(db.visual_profile_capsule(&first.summary.id).is_err());
+        db.confirm_visual_profile(&first.summary.id).unwrap();
+        let exported = db.export_visual_profile(&first.summary.id).unwrap();
+        assert!(!exported.contains(&first.summary.id));
+        assert!(!exported.contains("asset"));
+        let imported = db.import_visual_profile(&exported).unwrap();
+        assert_ne!(first.summary.id, imported.summary.id);
+        assert_ne!(first.summary.folder_id, imported.summary.folder_id);
+        assert_eq!(imported.rules.len(), 2);
+        let a: serde_json::Value = serde_json::from_str(&exported).unwrap();
+        db.confirm_visual_profile(&imported.summary.id).unwrap();
+        let b: serde_json::Value = serde_json::from_str(&db.export_visual_profile(&imported.summary.id).unwrap()).unwrap();
+        assert_eq!(a, b);
+        db.delete_visual_profile(&first.summary.id).unwrap();
+        assert!(db.export_visual_profile(&first.summary.id).is_err());
+        assert!(db.visual_profile_capsule(&imported.summary.id).is_ok());
+    }
+    #[test]
+    fn malformed_shares_never_insert_partial_profiles() {
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        for (key, value) in [("schemaVersion", serde_json::json!(2)), ("format", serde_json::json!("unknown")),
+            ("name", serde_json::json!("")), ("rules", serde_json::json!([])),
+            ("rules", serde_json::json!([{"category":"palette","value":"ok","polarity":"must"},
+                {"category":"unknown","value":"bad","polarity":"must"}]))] {
+            let mut content = file(); content[key] = value;
+            assert!(db.import_visual_profile(&content.to_string()).is_err());
+        }
+        assert!(db.import_visual_profile("not json").is_err());
+        assert!(db.import_visual_profile(&" ".repeat(256 * 1024 + 1)).is_err());
+        assert!(db.list_visual_profiles("", None).unwrap().is_empty());
+    }
+}
+
+impl crate::db::Database {
+    pub fn export_visual_profile(&self, id: &str) -> AppResult<String> {
+        let profile = self.visual_profile_get(id)?;
+        if profile.summary.status != "confirmed" {
+            return Err(AppError::Other("请先保存规范，再导出分享".into()));
+        }
+        let share = VisualProfileShare {
+            format: "bowerbird.visual-profile".into(), schema_version: 1,
+            name: profile.summary.name, summary: profile.summary.summary,
+            source_version: profile.summary.version,
+            rules: profile.rules.into_iter().map(|rule| VisualRuleValue {
+                category: rule.category, value: rule.value, polarity: rule.polarity,
+            }).collect(),
+        };
+        Ok(serde_json::to_string_pretty(&share)?)
+    }
+
+    pub fn import_visual_profile(&self, content: &str) -> AppResult<VisualProfileDetail> {
+        if content.len() > 256 * 1024 {
+            return Err(AppError::Other("规范文件不能超过 256 KB".into()));
+        }
+        let share: VisualProfileShare = serde_json::from_str(content.trim_start_matches('\u{feff}'))
+            .map_err(|_| AppError::Other("无法读取规范文件，请选择 Bowerbird 导出的视觉规范 JSON".into()))?;
+        if share.format != "bowerbird.visual-profile" || share.schema_version != 1 {
+            return Err(AppError::Other("不支持的视觉规范格式或版本，请更新 Bowerbird 后重试".into()));
+        }
+        if share.name.trim().is_empty() || share.name.chars().count() > 200
+            || share.summary.chars().count() > 4000 || share.source_version < 1
+            || share.rules.is_empty() || share.rules.len() > 64 {
+            return Err(AppError::Other("规范名称、摘要或规则数量无效（需有 1–64 条规则）".into()));
+        }
+        for rule in &share.rules { validate_rule_shape(&rule.category, &rule.value, &rule.polarity)?; }
+        let id = Ulid::new().to_string();
+        let scope = format!("import:{id}");
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute("INSERT INTO project_visual_profiles
+            (id, source_folder_id, name, version, status, summary, source_scope_hash, source_payload, created_at, extractor)
+            VALUES (?1, ?2, ?3, 1, 'draft', ?4, ?5, '[]', CAST(strftime('%s','now') AS INTEGER), 'shared_file')",
+            rusqlite::params![id, scope, share.name.trim(), share.summary, hex_digest(content)])?;
+        for rule in share.rules {
+            tx.execute("INSERT INTO visual_profile_rules (id, profile_id, category, value, polarity)
+                VALUES (?1, ?2, ?3, ?4, ?5)", rusqlite::params![Ulid::new().to_string(), id, rule.category, rule.value, rule.polarity])?;
+        }
+        let detail = Self::visual_profile_detail(&tx, &id)?;
+        tx.commit()?;
+        Ok(detail)
+    }
+}
+
 /// 已确认视觉设定的只读、版本化快照（AGENT-RUNTIME-PLAN §8.8 / V4）。
 /// `hash` 对除自身外的全部字段做 canonical JSON SHA-256，供生成历史与 Agent Run 追溯。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

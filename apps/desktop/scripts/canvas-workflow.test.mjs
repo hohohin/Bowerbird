@@ -4,6 +4,16 @@ import { newWorkflowNode, workflowConnectionError, workflowOrder, workflowInputV
 const node = (id, kind = 'skill') => ({ ...newWorkflowNode(kind, 0, 0, 'codex'), id });
 const mentionText = node => { node.prompt = '@[text]'; node.promptReferences = [{ id: 'text', type: 'text', input: node.inputs.text[0], label: '文本' }]; };
 
+test('local H3 keeps first/last frame roles independent and receives text without prompt mentions',()=>{
+  const source={...node('source','instruction'),outputs:{text:{type:'text',text:'上游分镜'}}};
+  const h3={...node('h3','comfy-video'),prompt:'镜头缓慢推进',inputs:{'first-frame':[{assetId:'first'}],'last-frame':[{assetId:'last'}],text:[{nodeId:'source',portId:'text'}]}};
+  const values=workflowInputValues([source,h3],generationInputNode(h3));
+  assert.deepEqual(values['first-frame'][0].assetIds,['first']);assert.deepEqual(values['last-frame'][0].assetIds,['last']);
+  assert.equal(values.text[0].text,'上游分镜');assert.deepEqual(workflowOutputs(h3),[{id:'image',label:'视频',type:'image'}]);
+  assert.equal(workflowConnectionError([source,h3],'source','text','h3','text'),null);
+  assert.ok(workflowConnectionError([source,h3],'source','text','h3','first-frame'));
+});
+
 test('single-card execution includes receivers and content relays but no other executable cards', () => {
   const source = { ...node('source', 'generation'), inputs: { signal: [{ nodeId: 'key', portId: 'signal' }] } };
   const writer = { ...node('writer', 'text'), textTarget: { nodeId: 'table', cellId: 'cell', image: true }, inputs: { image: [{ nodeId: 'source', portId: 'image' }] } };

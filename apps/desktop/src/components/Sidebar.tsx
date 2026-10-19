@@ -4,6 +4,7 @@ import { useStore } from "../store";
 import { api } from "../lib/api";
 import { getDragAssets } from "../lib/dragPayload";
 import { notifyError, notifySuccess } from "../lib/notify";
+import { COLLECTIONS_FEATURE_ENABLED } from "../lib/featureFlags";
 import { SidebarAccount } from "./SidebarAccount";
 import { CollectionPanel } from "./CollectionPanel";
 import type { Folder } from "../lib/types";
@@ -32,6 +33,10 @@ function loadSidebarWidth() {
 
 /** 左侧栏：素材统计 + 文件夹/智能文件夹 + 底部账号区。 */
 export function Sidebar() {
+  return COLLECTIONS_FEATURE_ENABLED ? <SidebarContent /> : null;
+}
+
+function SidebarContent() {
   const total = useStore((s) => s.total);
   const selectedCount = useStore((s) => s.selectedIds.size);
   const activeProjectId = useStore((s) => s.activeProjectId);

@@ -16,6 +16,25 @@ export function TagIndex({ tags: sourceTags, active, onSelect, onManage, manageB
   const center = hovered ?? focused;
   useEffect(() => {
     const bar = barRef.current;
+    if (!bar) return;
+    function wheel(event: WheelEvent) {
+      if (event.ctrlKey || event.metaKey || !event.deltaY) return;
+      const menu = (event.target as Element).closest<HTMLElement>(".library-tag-menu");
+      // The tag overlay and gallery are siblings, so native scroll chaining
+      // cannot reach the gallery when the tag list has no room left to scroll.
+      if (menu && (event.deltaY > 0 ? menu.scrollTop + menu.clientHeight < menu.scrollHeight - 1 : menu.scrollTop > 0)) return;
+      const library = bar!.closest(".local-file-workspace, .library-browser");
+      const viewport = Array.from(library?.querySelectorAll<HTMLElement>(".library-scroller") ?? []).find(el => el.clientHeight > 0);
+      if (!viewport) return;
+      event.preventDefault(); event.stopPropagation();
+      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? viewport.clientHeight : 1;
+      viewport.scrollTop += event.deltaY * unit;
+    }
+    bar.addEventListener("wheel", wheel, { passive: false });
+    return () => bar.removeEventListener("wheel", wheel);
+  }, []);
+  useEffect(() => {
+    const bar = barRef.current;
     const library = bar?.closest(".local-file-workspace, .library-browser");
     if (!bar || !library) return;
     // Observe the edge without placing a mouse-blocking layer over the assets.
@@ -92,7 +111,7 @@ export function TagIndex({ tags: sourceTags, active, onSelect, onManage, manageB
       </nav>
       <div className="library-tag-actions">
         {active && <button type="button" aria-label="清除标签筛选" title="清除标签筛选" onClick={() => onSelect(null)}><X size={13} /></button>}
-        <button ref={manageButtonRef} type="button" aria-label="管理标签" title="管理标签" disabled={disabled} onClick={onManage}><Settings2 size={13} /></button>
+        <button ref={manageButtonRef} type="button" className="library-tag-manage" aria-label="管理标签" title="分类管理" disabled={disabled} onClick={onManage}><Settings2 size={13} /></button>
       </div>
       </div>
     </aside>

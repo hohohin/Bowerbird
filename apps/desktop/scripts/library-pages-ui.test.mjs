@@ -42,7 +42,8 @@ async function checkColorStrip(scope, allVisible = true) {
   if (allVisible) assert.equal(geometry.full, true, 'all colors and actions fit without scrolling');
 }
 async function openHistory(scope) {
-  await scope.getByRole('tab', { name: '文件', exact: true }).click();
+  await scope.getByRole('tab', { name: '全局素材', exact: true }).click();
+  await scope.getByRole('button', { name: '更多文件操作', exact: true }).click();
   await scope.getByRole('button', { name: '历史素材', exact: true }).click();
 }
 async function settle() {
@@ -228,7 +229,7 @@ try {
   await page.getByRole('textbox', { name: '搜索项目', exact: true }).fill('空项目');
   assert.equal(await home.locator('.library-project-folder').count(), 1);
   await openHistory(home);
-  assert.equal(await home.getByRole('tab', { name: '文件', exact: true }).getAttribute('aria-selected'), 'true');
+  assert.equal(await home.getByRole('tab', { name: '全局素材', exact: true }).getAttribute('aria-selected'), 'true');
   assert.equal(await home.locator('[data-asset-id]').count(), 4);
   await home.getByRole('tab', { name: '项目管理', exact: true }).click();
   assert.equal(await home.locator('.library-project-folder').count(), 2);
@@ -306,36 +307,32 @@ try {
   assert.equal(await page.getByRole('button', {name:'打开本机文件资源管理器',exact:true}).count(), 0);
   const tabs = () => panel.getByRole('tablist', {name:'画板素材来源'});
   const tabNames = () => tabs().getByRole('tab').allTextContents();
-  assert.deepEqual(await tabNames(), ['项目素材', '文件']);
+  assert.deepEqual(await tabNames(), ['项目素材', '全局素材']);
   await page.keyboard.press('Tab');
   await panel.getByRole('region',{name:'本机文件',exact:true}).waitFor();
   await panel.getByRole('button',{name:'原图.png',exact:true}).waitFor();
-  assert.equal(await tabs().getByRole('tab',{name:'文件'}).getAttribute('aria-selected'), 'true');
+  assert.equal(await tabs().getByRole('tab',{name:'全局素材'}).getAttribute('aria-selected'), 'true');
   await panel.locator('.local-file-workspace').evaluate(async el => {
     await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
     await Promise.all(el.getAnimations({subtree:true}).map(a=>a.finished.catch(()=>{})));
   });
   await page.screenshot({path:'.tmp/library-pages/local-files-tab.png'});
-  const closePlacement = await panel.locator('.folder-navigation').evaluate(el => {
-    const refresh = el.querySelector('[aria-label="刷新文件夹"]');
-    const close = el.querySelector('.library-return-canvas');
-    const a = refresh.getBoundingClientRect(), b = close.getBoundingClientRect();
-    return { followsRefresh: refresh.nextElementSibling === close, last: close === el.lastElementChild,
-      gap: b.left - a.right, centerOffset: Math.abs((b.top + b.height / 2) - (a.top + a.height / 2)) };
+  assert.equal(await page.locator('.app-topbar .folder-navigation').count(), 1);
+  const closePlacement = await panel.evaluate(el => {
+    const controls = el.querySelector('.folder-floating-controls').getBoundingClientRect();
+    const back = el.querySelector('.library-return-canvas').getBoundingClientRect();
+    return { separate: controls.right <= back.left || controls.bottom <= back.top, inside: back.right <= el.getBoundingClientRect().right };
   });
-  assert.equal(closePlacement.followsRefresh, true);
-  assert.equal(closePlacement.last, true, 'close control is the rightmost item in the directory header');
-  assert.equal(closePlacement.gap, 8);
-  assert.ok(closePlacement.centerOffset < 1);
+  assert.deepEqual(closePlacement, { separate: true, inside: true });
   await panel.getByRole('button', { name: '返回画板', exact: true }).click(); await libraryOpen(false);
   assert.equal(await page.getByRole('button', { name: '展开画板素材库', exact: true }).evaluate(el => el === document.activeElement), true);
   await page.keyboard.press('Tab'); await libraryOpen(true);
-  await tabs().getByRole('tab', { name: '文件' }).click();
+  await tabs().getByRole('tab', { name: '全局素材' }).click();
   await panel.getByRole('button',{name:'原图.png',exact:true}).waitFor();
   await page.getByRole('textbox',{name:'搜索当前文件夹'}).fill('原图');
   assert.equal(await panel.locator('.folder-media-card').count(),1);
   await page.keyboard.press('Tab');
-  assert.equal(await tabs().getByRole('tab',{name:'文件'}).getAttribute('aria-selected'), 'true', 'typing Tab remains normal focus navigation');
+  assert.equal(await tabs().getByRole('tab',{name:'全局素材'}).getAttribute('aria-selected'), 'true', 'typing Tab remains normal focus navigation');
   await page.getByRole('textbox',{name:'搜索当前文件夹'}).fill('');
   await panel.getByRole('button',{name:'原图.png',exact:true}).dblclick();
   await page.getByRole('dialog').waitFor(); await page.keyboard.press('Escape');
@@ -343,12 +340,12 @@ try {
   await panel.focus(); await page.keyboard.press('Tab');
   assert.equal(await tabs().getByRole('tab',{name:'项目素材'}).getAttribute('aria-selected'), 'true');
   // A short click switches; a held drag reorders without selecting or starting an asset drag.
-  const from = await tabs().getByRole('tab',{name:'文件'}).boundingBox();
+  const from = await tabs().getByRole('tab',{name:'全局素材'}).boundingBox();
   const to = await tabs().getByRole('tab',{name:'项目素材'}).boundingBox();
   await page.mouse.move(from.x+from.width/2,from.y+from.height/2); await page.mouse.down();
   await page.waitForFunction(()=>document.querySelector('.canvas-source-panel [data-dragging="true"]'));
   await page.mouse.move(to.x+to.width/2,to.y+to.height/2,{steps:8}); await page.mouse.up();
-  assert.deepEqual(await tabNames(),['文件','项目素材']);
+  assert.deepEqual(await tabNames(),['全局素材','项目素材']);
   assert.equal(await tabs().getByRole('tab',{name:'项目素材'}).getAttribute('aria-selected'),'true','sorting keeps active source');
   assert.deepEqual(await page.evaluate(()=>JSON.parse(localStorage.getItem('bowerbird.library.tabOrder'))),['files','project']);
   const restoredContext = await browser.newContext({storageState:await page.context().storageState()});
@@ -356,29 +353,33 @@ try {
   await restored.goto(root + 'canvas-reference/preview.html?source-library');
   await restored.locator('.canvas-workspace[aria-busy="false"]').waitFor();
   await restored.getByRole('button',{name:'展开画板素材库',exact:true}).click();
-  assert.deepEqual(await restored.getByRole('tablist',{name:'画板素材来源'}).getByRole('tab').allTextContents(),['文件','项目素材'],'order restores in a fresh document');
+  assert.deepEqual(await restored.getByRole('tablist',{name:'画板素材来源'}).getByRole('tab').allTextContents(),['全局素材','项目素材'],'order restores in a fresh document');
   await restoredContext.close();
   await panel.focus(); await page.keyboard.press('Shift+Tab');
   await panel.getByRole('region',{name:'本机文件',exact:true}).waitFor();
-  await panel.getByRole('textbox',{name:'文件夹路径'}).focus(); await page.keyboard.press('Escape'); await libraryOpen(false);
+  await page.getByRole('group',{name:'文件夹地址栏'}).click({position:{x:2,y:2}});
+  await page.keyboard.press('Escape'); await libraryOpen(true);
+  assert.equal(await page.getByRole('textbox',{name:'文件夹路径'}).count(),0);
+  await page.keyboard.press('Escape'); await libraryOpen(false);
   await page.keyboard.press('Tab'); await libraryOpen(true);
-  assert.deepEqual(await tabNames(),['文件','项目素材'],'order survives reopening');
+  assert.deepEqual(await tabNames(),['全局素材','项目素材'],'order survives reopening');
   // Restore order with the keyboard alternative and continue the existing library regression.
-  await tabs().getByRole('tab',{name:'文件'}).focus();
+  await tabs().getByRole('tab',{name:'全局素材'}).focus();
   await page.keyboard.press('Alt+ArrowRight');
-  assert.deepEqual(await tabNames(),['项目素材','文件']);
+  assert.deepEqual(await tabNames(),['项目素材','全局素材']);
   await tabs().getByRole('tab',{name:'项目素材'}).click();
   const size = await page.locator('.canvas-workspace').evaluate(el => {
     const workspace = el.getBoundingClientRect(), source = el.querySelector('.canvas-source-panel').getBoundingClientRect();
     return { gaps: [source.left - workspace.left, source.top - workspace.top, workspace.right - source.right, workspace.bottom - source.bottom],
       radius: getComputedStyle(el.querySelector('.canvas-source-panel')).borderRadius,
       outline: getComputedStyle(el.querySelector('.canvas-source-panel')).outlineStyle,
-      originOffset: source.top - el.querySelector('.canvas-source-toggle').getBoundingClientRect().top };
+      toolbarGap: source.top - document.querySelector('.app-topbar').getBoundingClientRect().bottom };
   });
   assert.equal(size.gaps[0], 0, 'drawer is attached to the left workspace edge');
-  assert.equal(size.originOffset, 0, 'drawer top aligns with the library opening button');
-  assert.ok(size.gaps.slice(1).every(gap => gap >= 12 && gap <= 24), 'drawer retains canvas space on the other three sides');
-  assert.equal(size.radius, '0px 22px 22px 0px');
+  assert.equal(size.toolbarGap, 0, 'drawer top meets the app toolbar');
+  assert.equal(size.gaps[1], 0);
+  assert.ok(size.gaps.slice(2).every(gap => gap >= 12 && gap <= 24), 'drawer retains canvas space on the right and bottom');
+  assert.equal(size.radius, '0px 0px 22px');
   assert.equal(size.outline, 'none', 'box border is not the browser black focus outline');
   assert.equal(await panel.locator('.library-browser-heading .library-return-canvas').count(), 0, 'close is separate from the floating source tabs');
   assert.equal(await panel.locator('.canvas-source-close .library-return-canvas').count(), 1);
@@ -440,7 +441,7 @@ try {
   assert.ok(reveal.content[3] > -5 && Math.abs(reveal.content[4]) < .1, 'materials catch up and settle without an offset');
   await libraryOpen(true);
   assert.equal(await panel.locator('.library-scroller').evaluate(el => el.scrollTop), scroll, 'scroll position survives close/open');
-  assert.equal(await panel.getByRole('tab', { name: '文件', exact: true }).getAttribute('aria-selected'), 'true');
+  assert.equal(await panel.getByRole('tab', { name: '全局素材', exact: true }).getAttribute('aria-selected'), 'true');
   for (let i = 0; i < 3; i++) {
     await page.evaluate(() => window.store.getState().setCanvasLibraryOpen(false));
     await page.waitForTimeout(70);
@@ -574,7 +575,7 @@ try {
   assert.equal(await page.evaluate(() => window.store.getState().activeProjectId), 'p');
   await page.evaluate(() => window.store.getState().registerProjectCanvasFlush(window.savedFlush));
   await navigation.click();
-  await page.locator('.library-home').getByRole('tab',{name:'文件',exact:true}).click();
+  await page.locator('.library-home').getByRole('tab',{name:'全局素材',exact:true}).click();
   await page.getByRole('region',{name:'本机文件',exact:true}).getByRole('button',{name:'原图.png',exact:true}).waitFor();
   const localBounds = await page.getByRole('region',{name:'本机文件',exact:true}).boundingBox();
   const workspaceBounds = await page.locator('.app-workspace').boundingBox();
@@ -583,11 +584,11 @@ try {
   await page.screenshot({path:'.tmp/library-pages/home-local-files.png'});
   // Home uses the same ordered Tab cycle, with editing and modal guards.
   const homeTabs = () => home.getByRole('tablist', { name: '主页视图' });
-  await homeTabs().getByRole('tab', { name: '文件', exact: true }).focus();
+  await homeTabs().getByRole('tab', { name: '全局素材', exact: true }).focus();
   await page.keyboard.press('Tab');
   assert.equal(await homeTabs().getByRole('tab', { name: '项目管理', exact: true }).getAttribute('aria-selected'), 'true');
   await page.keyboard.press('Tab');
-  assert.equal(await homeTabs().getByRole('tab', { name: '文件', exact: true }).getAttribute('aria-selected'), 'true');
+  assert.equal(await homeTabs().getByRole('tab', { name: '全局素材', exact: true }).getAttribute('aria-selected'), 'true');
   await page.keyboard.press('Shift+Tab');
   assert.equal(await homeTabs().getByRole('tab', { name: '项目管理', exact: true }).getAttribute('aria-selected'), 'true');
   await home.getByRole('spinbutton', { name: '主页素材大小数值', exact: true }).focus();
@@ -596,20 +597,21 @@ try {
   await page.getByRole('textbox', { name: '搜索项目', exact: true }).focus();
   await page.keyboard.press('Tab');
   assert.equal(await homeTabs().getByRole('tab', { name: '项目管理', exact: true }).getAttribute('aria-selected'), 'true', 'search retains native Tab');
-  await homeTabs().getByRole('tab', { name: '文件', exact: true }).focus();
+  await homeTabs().getByRole('tab', { name: '全局素材', exact: true }).focus();
   await page.keyboard.press('Alt+ArrowLeft');
-  assert.deepEqual(await homeTabs().getByRole('tab').allTextContents(), ['文件', '项目管理']);
+  assert.deepEqual(await homeTabs().getByRole('tab').allTextContents(), ['全局素材', '项目管理']);
   await homeTabs().getByRole('tab', { name: '项目管理', exact: true }).focus();
   await page.keyboard.press('Tab');
   await home.getByRole('button', { name: '原图.png', exact: true }).waitFor();
-  assert.equal(await homeTabs().getByRole('tab', { name: '文件', exact: true }).getAttribute('aria-selected'), 'true', 'Tab follows reordered home sources');
-  await home.getByRole('textbox', { name: '文件夹路径', exact: true }).press('Tab');
-  assert.equal(await homeTabs().getByRole('tab', { name: '文件', exact: true }).getAttribute('aria-selected'), 'true');
+  assert.equal(await homeTabs().getByRole('tab', { name: '全局素材', exact: true }).getAttribute('aria-selected'), 'true', 'Tab follows reordered home sources');
+  await page.getByRole('group', { name: '文件夹地址栏' }).click({position:{x:2,y:2}});
+  await page.getByRole('textbox', { name: '文件夹路径', exact: true }).press('Tab');
+  assert.equal(await homeTabs().getByRole('tab', { name: '全局素材', exact: true }).getAttribute('aria-selected'), 'true');
   await home.getByRole('button', { name: '原图.png', exact: true }).dblclick();
   await page.getByRole('dialog').waitFor(); await page.keyboard.press('Tab');
-  assert.equal(await homeTabs().getByRole('tab', { name: '文件', exact: true }).getAttribute('aria-selected'), 'true', 'preview keeps Tab inside the dialog');
+  assert.equal(await homeTabs().getByRole('tab', { name: '全局素材', exact: true }).getAttribute('aria-selected'), 'true', 'preview keeps Tab inside the dialog');
   await page.keyboard.press('Escape');
-  await homeTabs().getByRole('tab', { name: '文件', exact: true }).focus();
+  await homeTabs().getByRole('tab', { name: '全局素材', exact: true }).focus();
   await page.keyboard.press('Alt+ArrowRight');
 
   await openHistory(home);

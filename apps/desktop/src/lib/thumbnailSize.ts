@@ -1,4 +1,4 @@
-export type ThumbnailScope = "library" | "canvas";
+export type ThumbnailScope = "library" | "canvas" | "projects";
 export const MIN_THUMBNAIL_WIDTH = 96;
 export const MAX_THUMBNAIL_WIDTH = 320;
 
@@ -22,7 +22,7 @@ export function thumbnailWidthFromZoom(value: number, scope: ThumbnailScope): nu
 }
 
 export function readThumbnailWidth(scope: ThumbnailScope): number {
-  const fallback = scope === "library" ? 200 : 160;
+  const fallback = scope === "canvas" ? 160 : 200;
   try {
     const stored = Number(localStorage.getItem(`bowerbird.${scope}ThumbnailWidth`));
     if (Number.isFinite(stored) && stored > 0) return clampThumbnailWidth(stored, scope);

@@ -20,7 +20,7 @@ import {
 import { useStore } from "../store";
 import { canUseByo } from "../lib/entitlement";
 import { api } from "../lib/api";
-import { SMART_REFINE_ENABLED } from "../lib/featureFlags";
+import { COLLECTIONS_FEATURE_ENABLED, SMART_REFINE_ENABLED } from "../lib/featureFlags";
 import { sourceDiscoveryFor } from "../lib/sourceDiscovery";
 import { useImageZoom } from "../lib/useImageZoom";
 import { notifyError, notifySuccess } from "../lib/notify";
@@ -690,7 +690,7 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
             发现更多
           </button>
         )}
-        <button
+        {COLLECTIONS_FEATURE_ENABLED && <button
           onClick={() => {
             setDetailTab("info");
             setCollectionPanelOpen((v) => !v);
@@ -706,7 +706,7 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
         >
           <Bookmark size={14} fill={assetCollections.length > 0 ? "currentColor" : "none"} />
           {assetCollections.length > 0 ? `已收藏 ${assetCollections.length}` : "收藏"}
-        </button>
+        </button>}
       </header>
       <div className="hatch-divider is-compact" aria-hidden="true"><span /></div>
 
@@ -793,7 +793,7 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
 
           {detailTab === "info" && (
             <>
-          {collectionPanelOpen && (
+          {COLLECTIONS_FEATURE_ENABLED && collectionPanelOpen && (
             <div className="asset-detail-card space-y-2 text-xs">
               <div className="flex items-center justify-between">
                 <div className="font-medium uppercase tracking-wide text-accent">收藏到</div>

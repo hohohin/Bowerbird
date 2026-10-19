@@ -25,7 +25,7 @@ try {
   await reset(); await screenshot("collection-start-dark");
   await page.evaluate(() => document.documentElement.dataset.theme = "light"); await screenshot("collection-start-light");
   assert.equal(await page.locator(".bv-image-grid img:visible").count(), 8);
-  assert.equal(await page.locator("input[type=file]").count(), 0);
+  assert.equal(await page.locator("input[type=file]:visible").count(), 0);
   assert.equal(await calls("visual_profile_cloud_extract"), 0);
   assert.equal(await page.getByText("查看集合素材", { exact: true }).count(), 0);
   assert.doesNotMatch(await dialog.innerText(), /有效反推|本地基线|支持率|覆盖率|必须：|规则强度/);
@@ -51,7 +51,7 @@ try {
   await page.evaluate(() => window.fixtureStore.getState().openVisualProfile({ id: "f", name: "空集合" }));
   await page.getByText("这个集合还没有可提炼的图片，请先回到集合添加素材。").waitFor();
   assert.equal(await button("开始提炼").isDisabled(), true);
-  assert.equal(await page.locator("input[type=file]").count(), 0);
+  assert.equal(await page.locator("input[type=file]:visible").count(), 0);
   // A collection with one image follows the same extraction pipeline.
   await reset(); await page.evaluate(() => { window.assets = window.assets.slice(0, 1); window.missing = ["a0"]; window.fixtureStore.getState().closeVisualProfile(); });
   await page.evaluate(() => window.fixtureStore.getState().openVisualProfile({ id: "f", name: "单图集合" }));

@@ -102,6 +102,15 @@ w.__TAURI_INTERNALS__ = {
       if (command === "codex_health" || command === "dreamina_health") return { ok: false };
     }
     if (command === "file_workspace_status") return { config: { root: null, places: [], projects: {} }, proposed_root: "/BowerbirdLibrary" };
+    if (command === "file_workspace_all") return {entries:[
+      {name:"原图.png",path:"/pictures/original.png",directory:false},
+      {name:"另一张.png",path:"/pictures/other.png",directory:false},
+    ],unavailable:[]};
+    if (command === "global_classification_view") return {labels:[],pictures:[]};
+    if (command === "local_classification_status") return {busy:false,installed:true,supported:true,model:"qwen",enabled:false,done:0,total:0,failed:0,message:"",last_error:"",current_asset:null,jev_progress:null};
+    if (command === "local_classification_labels") return [];
+    if (command === "project_classification_labels") return [{id:"project-label",name:"插画",description:"共享规则",enabled:true,count:1,has_examples:false}];
+    if (command === "project_classification_start") return null;
     if (command === "file_workspace_prepare") return args.projectId ? `/BowerbirdLibrary/项目/${args.projectId}` : "/BowerbirdLibrary";
     if ((localFiles || sourceLibrary) && command === "external_files_browse") {
       if (args.path === "/missing") throw "目录不存在";

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { ArrowLeft, Camera, ChevronDown, Compass, FolderOpen, LayoutDashboard, LoaderCircle, Search, Upload, X } from "lucide-react";
-import { SidebarStatus } from "./SidebarStatus";
+import { ArrowLeft, ChevronDown, Compass, FolderOpen, LayoutDashboard, LoaderCircle, Search, Upload, X } from "lucide-react";
+import { SidebarAccount } from "./SidebarAccount";
+import { ProjectManagerPanel } from "./ProjectManagerPanel";
 import { GeneratedImageFilter } from "./GeneratedImageFilter";
 import { MediaTypeFilter } from "./MediaTypeFilter";
 import { useStore } from "../store";
@@ -10,7 +10,7 @@ import { api } from "../lib/api";
 import { notifyError, notifySuccess } from "../lib/notify";
 import { beginOnboardingOperation, useOnboarding } from "../lib/onboardingStore";
 
-/** 顶部工具栏：导入 + 画布模式 + 搜索 + 运行状态。（创作板对话框已常驻。） */
+/** 顶部工具栏：导入 + 项目/主页入口 + 搜索 + 用户中心。 */
 export function Toolbar({
   onRefresh,
   canvasMode,
@@ -32,6 +32,7 @@ export function Toolbar({
   const busy = useStore((s) => s.loading);
   const libraryQuery = useStore((s) => s.searchQuery);
   const folderQuery = useLocalFileMode(s => s.query);
+  const setNavigationHost = useLocalFileMode(s => s.setNavigationHost);
   const searchQuery = localFilesOpen ? folderQuery : libraryQuery;
   const activeProjectId = useStore((s) => s.activeProjectId);
   const setLibraryQuery = useStore((s) => s.setSearchQuery);
@@ -45,11 +46,15 @@ export function Toolbar({
   const homeView = useStore(s => s.libraryHomeView);
   const setColorFilter = useStore((s) => s.setColorFilter);
   const [importOpen, setImportOpen] = useState(false);
+  const [projectsOpen, setProjectsOpen] = useState(false);
+  const fileMode = useLocalFileMode(s => s.mode);
+  const showFileNavigation = localFilesOpen && fileMode === "files";
   const searchRef = useRef<HTMLInputElement>(null);
   const importRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
+      if (document.querySelector('[role="dialog"]')) return;
       const target = e.target as HTMLElement | null;
       const typing =
         target instanceof HTMLInputElement ||
@@ -145,7 +150,7 @@ export function Toolbar({
   }
 
   return (
-    <header className={`app-topbar${canvasMode ? "" : " is-library"}`} aria-busy={busy}>
+    <header className={`app-topbar${canvasMode ? "" : " is-library"}${showFileNavigation ? " has-file-navigation" : ""}`} aria-busy={busy}>
       <div className="app-topbar-leading">
         <div ref={importRef} className="app-topbar-import relative">
           <button
@@ -200,28 +205,29 @@ export function Toolbar({
           <button
             type="button"
             className="app-button-dark canvas-mode-toggle is-active"
-            title="返回素材库"
-            aria-label="返回素材库"
+            title="返回主页"
+            aria-label="返回主页"
             onClick={() => onCanvasModeChange(false)}
           >
             <ArrowLeft size={15} />
-            <span className="app-topbar-button-label">返回素材库</span>
+            <span className="app-topbar-button-label">返回主页</span>
           </button>
         ) : (
           <button
             type="button"
             className="app-button-accent"
             data-tour="new-creation"
-            title="用当前明确选中的素材开始一项新创作"
-            aria-label="新建创作"
-            onClick={() => onCreateCreative(false)}
+            title="打开项目管理"
+            aria-label="我的项目"
+            onClick={() => setProjectsOpen(true)}
           >
             <LayoutDashboard size={15} />
-            <span className="app-topbar-button-label">新建创作</span>
+            <span className="app-topbar-button-label">我的项目</span>
           </button>
         )}
       </div>
 
+      {showFileNavigation && <div className="app-file-navigation-slot" ref={setNavigationHost} />}
       <div className="app-search">
         <Search size={15} strokeWidth={1.8} aria-hidden />
         <input
@@ -231,8 +237,8 @@ export function Toolbar({
             setSearchQuery(e.target.value);
             if (canvasMode && !localFilesOpen && e.target.value) useStore.getState().setCanvasLibraryOpen(true);
           }}
-          placeholder={localFilesOpen ? "搜索当前文件夹…" : !canvasMode && homeView === "projects" ? "搜索项目…" : "搜索素材…"}
-          aria-label={localFilesOpen ? "搜索当前文件夹" : !canvasMode && homeView === "projects" ? "搜索项目" : "搜索素材"}
+          placeholder={localFilesOpen ? fileMode === "global" ? "搜索全局素材…" : "搜索当前文件夹…" : "搜索素材…"}
+          aria-label={localFilesOpen ? fileMode === "global" ? "搜索全局素材" : "搜索当前文件夹" : "搜索素材"}
         />
         {searchQuery ? (
           <button
@@ -249,16 +255,13 @@ export function Toolbar({
         )}
       </div>
 
-      <div className="app-topbar-actions" aria-label="视图与任务">
+      <div className="app-topbar-actions" aria-label="视图与账号">
         {!localFilesOpen && (canvasMode || homeView === "library") && <div className="app-topbar-view-controls" role="group" aria-label="素材视图">
           <GeneratedImageFilter />
           <MediaTypeFilter />
 
         </div>}
-        <button type="button" aria-label="截图" title="区域截图（可在设置 → 个性化与记忆中修改快捷键）"
-          className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted hover:bg-panel2 hover:text-ink"
-          onClick={() => { void invoke("screenshot_start").catch(error => notifyError(error, "截图失败")); }}><Camera size={16} /></button>
-        <SidebarStatus />
+        <SidebarAccount placement="topbar" />
       </div>
       {collectedNotice && (
         <button
@@ -270,6 +273,7 @@ export function Toolbar({
         </button>
       )}
       {busy && <div className="app-progress-line" aria-hidden="true" />}
+      {projectsOpen && <ProjectManagerPanel onClose={() => setProjectsOpen(false)} onCreate={() => onCreateCreative(true)} />}
     </header>
   );
 }

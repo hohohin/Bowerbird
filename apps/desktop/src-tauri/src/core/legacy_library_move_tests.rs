@@ -19,7 +19,7 @@ impl Fixture {
         for project in projects {self.db.add_assets_to_project(project,&[id.into()]).unwrap();}
         path
     }
-    fn schedule(&self) {let view=preview(&self.files,&self.db,&self.paths.images).unwrap();schedule(&self.files,&self.db,&self.paths.images,&view.token).unwrap();}
+    fn schedule(&self) {let view=preview(&self.files,&self.db,&self.paths.images).unwrap();schedule(&self.files,&self.db,&self.paths.images,&view.token,false).unwrap();}
     fn run(&self) {self.schedule();super::super::resume(&self.files,&self.db).unwrap();assert_eq!(status(&self.files).unwrap().unwrap().state,"completed");}
     fn path(&self,id:&str)->PathBuf {self.db.get_asset(id).unwrap().unwrap().store_path.unwrap().into()}
 }
@@ -60,11 +60,11 @@ fn history_missing_conflicting_and_stale_inputs_do_not_change_index() {
     let f=Fixture::new();let old=f.asset("a",&["p1"]);
     let view=preview(&f.files,&f.db,&f.paths.images).unwrap();
     f.db.add_assets_to_project("p2",&["a".into()]).unwrap();
-    assert!(schedule(&f.files,&f.db,&f.paths.images,&view.token).is_err());
+    assert!(schedule(&f.files,&f.db,&f.paths.images,&view.token,false).is_err());
     let view=preview(&f.files,&f.db,&f.paths.images).unwrap();let target=view.folders[0].path.join("a.png");
     fs::create_dir_all(target.parent().unwrap()).unwrap();fs::write(&target,b"unrelated").unwrap();
     assert!(preview(&f.files,&f.db,&f.paths.images).is_err());assert_eq!(fs::read(&target).unwrap(),b"unrelated");
-    fs::remove_file(&target).unwrap();fs::remove_file(&old).unwrap();assert!(preview(&f.files,&f.db,&f.paths.images).is_err());
+    fs::remove_file(&target).unwrap();fs::remove_file(&old).unwrap();let missing=preview(&f.files,&f.db,&f.paths.images).unwrap();assert_eq!(missing.files,0);assert_eq!(missing.missing.len(),1);
     assert_eq!(f.path("a"),old);assert!(status(&f.files).unwrap().is_none());
 }
 
@@ -73,7 +73,7 @@ fn history_conflicting_alias_cannot_be_overwritten_even_with_identical_bytes() {
     let f=Fixture::new();f.asset("a",&[]);let view=preview(&f.files,&f.db,&f.paths.images).unwrap();let target=view.target.join("全局素材/a.png");
     let conn=f.db.conn.lock().unwrap();conn.execute("INSERT INTO assets(id,name) VALUES('other','other')",[]).unwrap();
     conn.execute("INSERT INTO external_asset_paths(asset_id,path) VALUES('other',?1)",[target.to_string_lossy()]).unwrap();drop(conn);
-    assert!(schedule(&f.files,&f.db,&f.paths.images,&view.token).is_err());assert!(!target.exists());
+    assert!(schedule(&f.files,&f.db,&f.paths.images,&view.token,false).is_err());assert!(!target.exists());
 }
 
 #[test]
@@ -90,7 +90,7 @@ fn duplicate_source_identity_is_rejected_and_active_work_blocks_shared_transfer(
 fn history_cancel_and_active_tasks_never_copy_files() {
     let f=Fixture::new();f.asset("a",&[]);let view=preview(&f.files,&f.db,&f.paths.images).unwrap();
     f.db.conn.lock().unwrap().execute_batch("INSERT INTO task_queue(id,kind,payload,status,created_at) VALUES('running','generation','{}','running',1);").unwrap();
-    assert!(schedule(&f.files,&f.db,&f.paths.images,&view.token).is_err());
+    assert!(schedule(&f.files,&f.db,&f.paths.images,&view.token,false).is_err());
     f.db.conn.lock().unwrap().execute("UPDATE task_queue SET status='done'",[]).unwrap();f.schedule();
     super::super::cancel(&f.files).unwrap();super::super::resume(&f.files,&f.db).unwrap();assert!(!view.target.exists());
 }
@@ -153,4 +153,44 @@ fn historical_generation_session_is_project_ownership_without_membership() {
     f.db.conn.lock().unwrap().execute_batch("UPDATE assets SET generation_session_id='session' WHERE id='generated'; INSERT INTO task_queue(id,kind,payload,status,created_at,project_id) VALUES('job','generation','{\"session_id\":\"session\"}','done',1,'p2');").unwrap();
     let view=preview(&f.files,&f.db,&f.paths.images).unwrap();assert_eq!(view.shared,1);f.run();
     f.db.delete_project_keep_managed(&f.paths,"p1").unwrap();assert!(f.path("generated").starts_with(&f.files.snapshot().projects["p2"]));
+}
+
+#[test]
+fn confirmed_missing_files_are_skipped_without_losing_records_or_project_links() {
+    let f=Fixture::new();let good=f.asset("good",&["p1"]);let missing=f.asset("missing",&["p1","p2"]);fs::remove_file(&missing).unwrap();
+    let view=preview(&f.files,&f.db,&f.paths.images).unwrap();assert_eq!(view.files,1);assert_eq!(view.missing.len(),1);assert_eq!(view.missing[0].path,missing);
+    assert!(schedule(&f.files,&f.db,&f.paths.images,&view.token,false).is_err());assert!(status(&f.files).unwrap().is_none());
+    schedule(&f.files,&f.db,&f.paths.images,&view.token,true).unwrap();super::super::resume(&f.files,&f.db).unwrap();
+    let state=status(&f.files).unwrap().unwrap();assert_eq!(state.state,"completed");assert_eq!(state.history.unwrap().missing.len(),1);
+    assert_ne!(f.path("good"),good);assert!(good.exists());assert_eq!(f.path("missing"),missing);
+    let links:i64=f.db.conn.lock().unwrap().query_row("SELECT count(*) FROM project_assets WHERE asset_id='missing'",[],|r|r.get(0)).unwrap();assert_eq!(links,2);
+    let remaining=preview(&f.files,&f.db,&f.paths.images).unwrap();assert_eq!(remaining.files,0);assert_eq!(remaining.missing.len(),1);
+    assert!(schedule(&f.files,&f.db,&f.paths.images,&remaining.token,true).is_err());
+    fs::write(&missing,b"recovered original").unwrap();let recovered=preview(&f.files,&f.db,&f.paths.images).unwrap();assert_eq!(recovered.files,1);assert!(recovered.missing.is_empty());f.run();assert_ne!(f.path("missing"),missing);
+}
+
+#[test]
+fn missing_set_changes_require_a_new_preview_and_never_expand_silent_skips() {
+    for restore in [false,true] {
+        let f=Fixture::new();let good=f.asset("good",&[]);let missing=f.asset("missing",&[]);fs::remove_file(&missing).unwrap();
+        let view=preview(&f.files,&f.db,&f.paths.images).unwrap();schedule(&f.files,&f.db,&f.paths.images,&view.token,true).unwrap();
+        if restore {fs::write(&missing,b"found").unwrap();} else {fs::remove_file(&good).unwrap();}
+        super::super::resume(&f.files,&f.db).unwrap();assert_eq!(status(&f.files).unwrap().unwrap().state,"failed");assert_eq!(f.path("good"),good);assert_eq!(f.path("missing"),missing);assert!(!view.target.exists());
+    }
+}
+
+#[test]
+fn offline_history_root_and_non_file_paths_are_not_skippable_missing_files() {
+    let f=Fixture::new();let path=f.asset("a",&[]);fs::remove_file(&path).unwrap();fs::create_dir(&path).unwrap();
+    assert!(preview(&f.files,&f.db,&f.paths.images).is_err());fs::remove_dir(&path).unwrap();
+    fs::rename(&f.paths.images,f.paths.root.join("images-offline")).unwrap();assert!(preview(&f.files,&f.db,&f.paths.images).is_err());
+}
+
+#[cfg(windows)]
+#[test]
+fn unreadable_existing_file_is_not_reported_as_missing() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let f=Fixture::new();let path=f.asset("a",&[]);
+    let _lock=fs::OpenOptions::new().read(true).share_mode(0).open(path).unwrap();
+    assert!(preview(&f.files,&f.db,&f.paths.images).is_err());
 }

@@ -13,7 +13,7 @@ export class WorkflowInputError extends WorkflowNodeError {
 }
 
 /** Editable workflow wiring is independent from immutable generation history edges. */
-export type WorkflowKind = "instruction" | "generation" | "skill" | "agent" | "visual-profile" | "text" | "trigger" | "planner" | "loop";
+export type WorkflowKind = "instruction" | "generation" | "skill" | "agent" | "comfy-video" | "visual-profile" | "text" | "trigger" | "planner" | "loop";
 export const WORKFLOW_CARD_DRAG_TYPE = "application/x-bowerbird-workflow-card";
 export type WorkflowAction = "describe" | "reuse" | "layers";
 export type WorkflowPortType = "text" | "image" | "visual-profile" | "session" | "signal";
@@ -25,6 +25,7 @@ export interface WorkflowNode {
   id: string; kind: WorkflowKind; x: number; y: number;
   action: WorkflowAction; skill: string; prompt: string; ratio: string | null; provider: string;
   generation?: import("./videoGeneration").GenerationSettings;
+  comfyVideo?: import("./comfyVideo").ComfyVideoOptions;
   promptReferences?: WorkflowPromptReference[];
   overwriteDescribe?: boolean;
   describeCache?: { instruction: string; results: { assetId: string; sections: { title: string; body: string }[] }[] };
@@ -102,6 +103,7 @@ export const WORKFLOW_SKILLS = [
 
 export function workflowInputs(node: WorkflowNode): WorkflowPort[] {
   if (node.kind === "trigger" || node.textSource) return [];
+  if (node.kind === "comfy-video") return [{ id: "text", label: "文本", type: "text" }, { id: "first-frame", label: "首帧", type: "image" }, { id: "last-frame", label: "尾帧（可选）", type: "image" }];
   if (node.kind === "loop") return node.loopMode === "rows" ? [{ id: "text", label: "内容行", type: "text" }] : [{ id: "image", label: "图片列表", type: "image" }];
   if (node.kind === "instruction") return [{ id: "image", label: "图片", type: "image" }];
   const ports: WorkflowPort[] = [{ id: "text", label: "文本", type: "text" }, { id: "image", label: node.kind === "generation" && node.generation?.media === "video" ? "参考素材" : "图片", type: "image" }];
@@ -109,6 +111,7 @@ export function workflowInputs(node: WorkflowNode): WorkflowPort[] {
   return ports;
 }
 export function workflowOutputs(node: WorkflowNode): WorkflowPort[] {
+  if (node.kind === "comfy-video") return [{ id: "image", label: "视频", type: "image" }];
   if (node.kind === "planner") return [];
   if (node.kind === "loop") return node.loopMode === "rows"
     ? [{ id: "text", label: "当前行文字", type: "text" }, { id: "image", label: "当前行图片", type: "image" }, { id: "iteration", label: "当前轮次", type: "text" }]
@@ -125,6 +128,7 @@ export function workflowOutputs(node: WorkflowNode): WorkflowPort[] {
   return [{ id: "image", label: "产物", type: "image" }];
 }
 export function workflowTitle(node: WorkflowNode): string {
+  if (node.kind === "comfy-video") return "本地 H3 视频";
   if (node.templateInstance) return `子流程 · ${node.templateInstance.template.name}`;
   if (node.kind === "planner") return "工作流助手";
   if (node.kind === "loop") return "循环卡片";
@@ -466,5 +470,5 @@ export function workflowActiveSession(node: WorkflowNode): string | null {
 export const WORKFLOW_CARD_WIDTH = 320;
 export function workflowPortY(node: WorkflowNode, side: "input" | "output", portId: string): number {
   const ports = side === "input" ? workflowInputs(node) : workflowOutputs(node);
-  return node.y + 94 + Math.max(0, ports.findIndex(port => port.id === portId)) * 30;
+  return node.y + (node.kind === "comfy-video" ? 62 : 94) + Math.max(0, ports.findIndex(port => port.id === portId)) * (node.kind === "comfy-video" ? 24 : 30);
 }

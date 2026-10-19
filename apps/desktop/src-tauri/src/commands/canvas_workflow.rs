@@ -86,7 +86,7 @@ fn validate(document: &Value) -> AppResult<HashSet<String>> {
     let mut dependencies: HashMap<&str, Vec<&str>> = HashMap::new();
     for node in nodes {
         let id = node["id"].as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?;
-        if !ids.insert(id) || !matches!(node["kind"].as_str(), Some("instruction" | "generation" | "skill" | "agent" | "visual-profile" | "text" | "trigger" | "planner" | "loop"))
+        if !ids.insert(id) || !matches!(node["kind"].as_str(), Some("instruction" | "generation" | "skill" | "agent" | "comfy-video" | "visual-profile" | "text" | "trigger" | "planner" | "loop"))
             || !matches!(node["action"].as_str(), Some("describe" | "reuse" | "layers"))
             || node["x"].as_f64().filter(|v| v.is_finite()).is_none()
             || node["y"].as_f64().filter(|v| v.is_finite()).is_none()
@@ -133,7 +133,8 @@ fn validate(document: &Value) -> AppResult<HashSet<String>> {
         }
         let mut deps = Vec::new();
         for (port, bindings) in inputs {
-            if !matches!(port.as_str(), "text" | "image" | "visual-profile" | "signal") { return Err(invalid()); }
+            let image_port = port == "image" || node["kind"] == "comfy-video" && matches!(port.as_str(), "first-frame" | "last-frame");
+            if !image_port && !matches!(port.as_str(), "text" | "visual-profile" | "signal") { return Err(invalid()); }
             for binding in bindings.as_array().ok_or_else(invalid)? {
                 if port == "signal" {
                     let producer = nodes.iter().find(|node| node["id"] == binding["nodeId"]).ok_or_else(invalid)?;
@@ -143,17 +144,17 @@ fn validate(document: &Value) -> AppResult<HashSet<String>> {
                 }
                 if binding["portId"] == "signal" { return Err(invalid()); }
                 if binding["groupId"].is_string() {
-                    if port != "image" || binding.get("nodeId").is_some() || binding.get("assetId").is_some() || binding.get("canvasNodeId").is_some() { return Err(invalid()); }
+                    if !image_port || binding.get("nodeId").is_some() || binding.get("assetId").is_some() || binding.get("canvasNodeId").is_some() { return Err(invalid()); }
                     for asset in binding["assetIds"].as_array().ok_or_else(invalid)? {
                         assets.insert(asset.as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?.to_owned());
                     }
                 } else if let Some(asset) = binding["assetId"].as_str() {
-                    if port != "image" || binding.get("nodeId").is_some() { return Err(invalid()); }
+                    if !image_port || binding.get("nodeId").is_some() { return Err(invalid()); }
                     assets.insert(asset.to_owned());
                 } else if binding["canvasNodeId"].is_string() {
-                    if (port != "text" && port != "image") || !binding["cellId"].is_string() || binding.get("nodeId").is_some() { return Err(invalid()); }
+                    if (port != "text" && !image_port) || !binding["cellId"].is_string() || binding.get("nodeId").is_some() { return Err(invalid()); }
                     if binding["cellId"] == "*" || binding["cellId"] == "*text" {
-                        if (binding["cellId"] == "*" && port != "image") || (binding["cellId"] == "*text" && port != "text") { return Err(invalid()); }
+                        if (binding["cellId"] == "*" && !image_port) || (binding["cellId"] == "*text" && port != "text") { return Err(invalid()); }
                         for producer in nodes.iter().filter(|node| node["kind"] == "text" && node["textTarget"]["nodeId"] == binding["canvasNodeId"]) {
                             deps.push(producer["id"].as_str().ok_or_else(invalid)?);
                         }
@@ -263,6 +264,18 @@ pub async fn canvas_workflow_save(db: State<'_, Arc<Database>>, project_id: Stri
 mod tests {
     use super::*;
     fn node(id: &str, inputs: Value) -> Value { json!({"id":id,"kind":"generation","action":"describe","x":0,"y":0,"prompt":"test","provider":"codex","trigger":false,"inputs":inputs,"outputs":{},"outputPorts":[]}) }
+    #[test]
+    fn comfy_video_frame_ports_and_single_video_survive_storage() {
+        let db=Database::open_in_memory().unwrap();db.migrate().unwrap();
+        db.conn.lock().unwrap().execute("INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1)",[]).unwrap();
+        let mut card=node("h3",json!({"first-frame":[{"assetId":"first"}],"last-frame":[{"assetId":"last"}],"text":[{"nodeId":"source","portId":"text"}]}));
+        card["kind"]=json!("comfy-video");card["comfyVideo"]=json!({"seconds":11,"ratio":"4:3","resolution":0.6,"endpoint":"http://127.0.0.1:8000"});
+        card["outputs"]=json!({"image":{"type":"image","assetIds":["video"]}});
+        let doc=json!({"schema_version":1,"nodes":[node("source",json!({})),card],"run":null});
+        assert_eq!(validate(&doc).unwrap(),HashSet::from(["first".into(),"last".into(),"video".into()]));
+        db.workflow_save("p",0,doc.clone()).unwrap();assert_eq!(db.workflow_get("p").unwrap().document,doc);
+        let mut invalid_doc=doc.clone();invalid_doc["nodes"][1]["kind"]=json!("generation");assert!(validate(&invalid_doc).is_err());
+    }
     #[test]
     fn agent_image_session_output_roundtrips_without_finished_assets() {
         let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();

@@ -28,6 +28,7 @@ export function LibraryFilterButton() {
     const navigation = root.current?.closest<HTMLElement>(".library-floating-navigation");
     const heading = navigation?.closest<HTMLElement>(".library-browser-heading");
     const control = root.current?.querySelector<HTMLElement>(".library-color-control");
+    const actions = root.current?.closest<HTMLElement>(".library-navigation-actions");
     if (!navigation || !heading || !control) return;
     function fit() {
       const bounds = heading!.getBoundingClientRect();
@@ -37,9 +38,10 @@ export function LibraryFilterButton() {
       const right = back && back.left >= bounds.left + bounds.width / 2 ? back.left - 8 : bounds.right;
       const width = navigation!.offsetWidth;
       const button = bounds.height;
-      const available = Math.max(button, right - left - width - 8);
+      const preceding = actions ? root.current!.getBoundingClientRect().left - actions.getBoundingClientRect().left : 0;
+      const available = Math.max(button, right - left - width - 8 - preceding);
       control!.style.maxWidth = `${available}px`;
-      const end = bounds.left + (bounds.width - width) / 2 + width + 8 + control!.getBoundingClientRect().width;
+      const end = bounds.left + (bounds.width - width) / 2 + width + 8 + preceding + control!.getBoundingClientRect().width;
       navigation!.style.setProperty("--library-navigation-shift", `${Math.min(0, right - end)}px`);
     }
     fit();
@@ -47,6 +49,7 @@ export function LibraryFilterButton() {
     observer.observe(heading);
     observer.observe(navigation);
     observer.observe(control);
+    if (actions) observer.observe(actions);
     const back = heading.closest(".canvas-source-panel")?.querySelector<HTMLElement>(".library-return-canvas");
     if (back) observer.observe(back);
     return () => { observer.disconnect(); navigation.style.removeProperty("--library-navigation-shift"); };

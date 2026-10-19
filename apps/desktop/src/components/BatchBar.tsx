@@ -6,6 +6,7 @@ import { loadDescribePrompt } from "../lib/describePrompt";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { notifyError, notifySuccess } from "../lib/notify";
 import type { AssetDeleteMode } from "../lib/types";
+import { COLLECTIONS_FEATURE_ENABLED } from "../lib/featureFlags";
 import { canMoveAssetOut } from "../lib/assetDeletion";
 
 /**
@@ -201,7 +202,7 @@ export function BatchBar() {
       <Divider />
 
       {/* 整理区：移入新/已有文件夹 + 加入项目 */}
-      {!folderInput && !moveExisting ? (
+      {COLLECTIONS_FEATURE_ENABLED && (!folderInput && !moveExisting ? (
         <>
           <button
             onClick={() => setFolderInput(true)}
@@ -294,7 +295,7 @@ export function BatchBar() {
             取消
           </button>
         </div>
-      )}
+      ))}
 
       {!activeProjectId && projects.length > 0 && !projectInput && (
         <button

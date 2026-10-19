@@ -2,6 +2,7 @@
 mod cloud;
 pub mod explorer;
 pub mod folder;
+pub mod global;
 pub mod data;
 pub mod jev;
 mod pipeline;
@@ -39,6 +40,8 @@ pub struct JevProgress {
 #[derive(Clone, Default, Serialize)]
 pub struct Status {
     pub folder_root: Option<String>,
+    pub global_scope: bool,
+    pub project_id: Option<String>,
     pub supported: bool,
     pub installed: bool,
     pub enabled: bool,
@@ -127,17 +130,33 @@ impl LocalClassifier {
         library: Arc<LibraryPaths>,
         install: bool,
         tag: Option<String>,
-        jev_key: Option<String>,
+        use_jev: bool,
         pending_only: bool,
     ) -> Result<(), String> {
-        self.start_run(app, db, library, install, tag, jev_key, pending_only, false)
+        self.start_run(app, db, library, install, tag, use_jev, pending_only, false, None, None)
+    }
+
+    pub fn start_global(
+        self: &Arc<Self>, app: AppHandle, db: Arc<Database>, library: Arc<LibraryPaths>,
+        config: super::file_workspace::FileWorkspaceConfig, tag: Option<String>, use_jev: bool, pending_only: bool,
+    ) -> Result<(), String> {
+        self.start_run(app, db, library, false, tag, use_jev, pending_only, false, Some(config), None)
+    }
+
+    pub fn start_project(
+        self: &Arc<Self>, app: AppHandle, db: Arc<Database>, library: Arc<LibraryPaths>,
+        project: String, tag: Option<String>, use_jev: bool, pending_only: bool,
+    ) -> Result<(), String> {
+        self.start_run(app, db, library, false, tag, use_jev, pending_only, false, None, Some(project))
     }
 
     fn start_run(
         self: &Arc<Self>, app: AppHandle, db: Arc<Database>, library: Arc<LibraryPaths>,
-        install: bool, tag: Option<String>, jev_key: Option<String>, pending_only: bool, background: bool,
+        install: bool, tag: Option<String>, use_jev: bool, pending_only: bool, background: bool,
+        global: Option<super::file_workspace::FileWorkspaceConfig>,
+        project: Option<String>,
     ) -> Result<(), String> {
-        let needs_local = install || jev_key.is_none();
+        let needs_local = install || !use_jev;
         if needs_local && !runtime::supported() {
             return Err(runtime::UNSUPPORTED_MESSAGE.into());
         }
@@ -149,6 +168,7 @@ impl LocalClassifier {
         if !install && needs_local && !runtime::installed(&self.root) {
             return Err("请先安装本地分类模型".into());
         }
+        let project_scope = project.as_deref().map(|id| global::project_ids(&db, id)).transpose()?;
         if let Some(id) = &tag {
             if !db
                 .local_labels()
@@ -163,8 +183,10 @@ impl LocalClassifier {
         self.background.store(background, Ordering::Relaxed);
         self.update(&app, |s| {
             *s = Status {
+                global_scope: global.is_some(),
+                project_id: project,
                 busy: true,
-                model: if jev_key.is_some() && !install {
+                model: if use_jev && !install {
                     jev::OBSERVATION_MODEL.into()
                 } else {
                     data::MODEL_ID.into()
@@ -191,8 +213,28 @@ impl LocalClassifier {
                 })
                 .await
             } else {
-                this.run(&app, &db, &library, tag, jev_key, pending_only, None)
-                    .await
+                async {
+                    let scope = if let Some(config) = global {
+                        let worker = this.clone(); let database = db.clone(); let paths = library.clone(); let handle = app.clone();
+                        Some(tokio::task::spawn_blocking(move || {
+                            global::prepare(&database, &paths, config, &worker.cancel, |message| {
+                                worker.update(&handle, |s| s.message = message);
+                            })
+                        }).await.map_err(|e| e.to_string())??)
+                    } else { project_scope.map(|ids| global::Scope { ids, unavailable: vec![], failed: 0 }) };
+                    if !this.cancel.load(Ordering::Relaxed) {
+                        this.run(&app, &db, &library, tag, use_jev, pending_only, None, scope.as_ref().map(|s| &s.ids)).await?;
+                    }
+                    if let Some(scope) = scope {
+                        this.update(&app, |s| {
+                            s.failed += scope.failed;
+                            s.done += scope.failed;
+                            s.total += scope.failed;
+                            if !scope.unavailable.is_empty() { s.last_error = scope.unavailable.join("；"); }
+                        });
+                    }
+                    Ok(())
+                }.await
             };
             let cancelled = this.cancel.load(Ordering::Relaxed);
             let pause_automatic = background && (result.is_err() || this.status.lock().unwrap().failed > 0);
@@ -223,6 +265,8 @@ impl LocalClassifier {
                             "本地模型已安装".into()
                         } else if s.failed > 0 {
                             format!("处理完成，{} 张未完成；可重试未识别素材", s.failed)
+                        } else if !s.last_error.is_empty() {
+                            "处理完成，部分位置未能读取，详见下方原因".into()
                         } else {
                             "处理完成".into()
                         }
@@ -333,23 +377,22 @@ impl LocalClassifier {
         db: &Database,
         library: &LibraryPaths,
         tag: Option<String>,
-        jev_key: Option<String>,
+        use_jev: bool,
         pending_only: bool,
         folder: Option<&folder::Session>,
+        scope: Option<&std::collections::HashSet<String>>,
     ) -> Result<(), String> {
-        let judge = match jev_key {
-            Some(key) => Some(jev::Judge::new(key)?),
-            None => None,
-        };
+        let judge = if use_jev { Some(jev::Judge::new(app)?) } else { None };
         let observation_model = if judge.is_some() {
             jev::OBSERVATION_MODEL
         } else {
             data::MODEL_ID
         };
         let job_revision = db.local_revision().map_err(|e| e.to_string())?;
-        let targets = db
+        let mut targets = db
             .local_targets_for_model(pending_only && tag.is_none(), observation_model)
             .map_err(|e| e.to_string())?;
+        global::retain_scope(&mut targets, scope);
         self.update(app, |s| {
             s.total = targets.len();
             s.message = if judge.is_some() {
@@ -360,7 +403,7 @@ impl LocalClassifier {
             .into();
         });
         if targets.is_empty() {
-            if let Some(tag) = tag {
+            if let Some(tag) = tag.filter(|_| scope.is_none()) {
                 db.finish_local_label(&tag, job_revision)
                     .map_err(|e| e.to_string())?;
             }
@@ -395,7 +438,7 @@ impl LocalClassifier {
             .await;
             if let Some(error) = save_error.into_inner().unwrap() { return Err(error); }
             if completed && !self.cancel.load(Ordering::Relaxed) && self.status.lock().unwrap().failed == 0 {
-                if let Some(tag) = tag {
+                if let Some(tag) = tag.filter(|_| scope.is_none()) {
                     db.finish_local_label(&tag, job_revision)
                         .map_err(|e| e.to_string())?;
                 }
@@ -552,7 +595,7 @@ impl LocalClassifier {
             server.stop().await;
         }
         if completed && !self.cancel.load(Ordering::Relaxed) && self.status.lock().unwrap().failed == 0 {
-            if let Some(tag) = tag {
+            if let Some(tag) = tag.filter(|_| scope.is_none()) {
                 db.finish_local_label(&tag, job_revision)
                     .map_err(|e| e.to_string())?;
             }
@@ -788,8 +831,10 @@ impl LocalClassifier {
         }
         // One shared candidate pool; empty vocabulary goes straight to Cloud.
         let mut preview = Vec::new();
+        let mut ticket = None;
         let decisions = judge
-            .classify(&image, &questions, &self.cancel, |value, error| {
+            .classify_mode(&image, &questions, &self.cancel, record_observation, |value, error| {
+                ticket = value["classification_id"].as_str().map(str::to_string);
                 let report = jev::Report::from_response(&questions, value, error);
                 preview = report.preview();
                 let mut status = self.status.lock().unwrap();
@@ -807,7 +852,9 @@ impl LocalClassifier {
             }
         }
         let needs_discovery = record_observation && decisions.is_empty();
+        if judge.is_cloud() && ticket.is_none() { return Err("Cloud 分类缺少请求凭据".into()); }
         Ok(pipeline::PendingClassification {
+            cloud_request: ticket.map(|ticket| (judge.clone(), ticket, image)),
             preview,
             id: id.into(),
             revision,
@@ -829,20 +876,15 @@ impl LocalClassifier {
             if db.local_revision().map_err(|e| e.to_string())? != pending.revision {
                 return Err("标签已被人工修改，请重试此素材".into());
             }
-            let provider = cloud.ok_or("Cloud 分类服务未就绪")?;
-            let path = db
-                .local_image_path(&pending.id)
-                .map_err(|e| e.to_string())?
-                .ok_or("图片已删除或缺少缩略图")?;
             // Queued images must see tags created since their Jev request, too.
             let current_labels = db.local_labels().map_err(|e| e.to_string())?;
-            let discovered = cloud::discover(
-                provider,
-                PathBuf::from(path),
-                &current_labels,
-                &self.cancel,
-            )
-            .await?;
+            let discovered = if let Some((judge, ticket, image)) = &pending.cloud_request {
+                cloud::discover_managed(judge, ticket, image, &current_labels, &self.cancel).await?
+            } else {
+                let provider = cloud.ok_or("Cloud 分类服务未就绪")?;
+                let path = db.local_image_path(&pending.id).map_err(|e| e.to_string())?.ok_or("图片已删除或缺少缩略图")?;
+                cloud::discover(provider, PathBuf::from(path), &current_labels, &self.cancel).await?
+            };
             pending.prediction.matches.extend(discovered.matches);
             pending.prediction.description = discovered.description;
             for label in discovered.labels {
@@ -915,19 +957,15 @@ pub fn watch(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths>) {
                 continue;
             }
             if classifier.foreground_requests.load(Ordering::Relaxed) > 0 { continue; }
-            let jev_key = {
+            let use_jev = {
                 let settings = app.state::<crate::core::settings::SettingsState>();
                 let snapshot = settings.get();
-                if snapshot.jev_image_classification_enabled {
-                    Some(snapshot.jev_api_key.unwrap_or_default())
-                } else {
-                    None
-                }
+                snapshot.jev_image_classification_enabled
             };
-            if jev_key.is_none() && !runtime::installed(&classifier.root) {
+            if !use_jev && !runtime::installed(&classifier.root) {
                 continue;
             }
-            let model = if jev_key.is_some() {
+            let model = if use_jev {
                 jev::OBSERVATION_MODEL
             } else {
                 data::MODEL_ID
@@ -945,9 +983,11 @@ pub fn watch(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths>) {
                         paths.clone(),
                         false,
                         tag,
-                        jev_key,
+                        use_jev,
                         true,
                         true,
+                        None,
+                        None,
                     )
                     .is_err()
                 {

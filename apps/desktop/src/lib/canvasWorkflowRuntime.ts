@@ -26,6 +26,7 @@ import { assertWorkflowAcyclic, rebindGenerationReferences, normalizeWorkflowInp
 import { WorkflowNodeError, workflowDiagnostic, type WorkflowDiagnostic } from "./workflowDiagnostics";
 import { enqueueCloudAgentRunOperation } from "./cloudAgentRuntime";
 import { describeBrandImage } from "./describeBrandImage";
+import { comfyVideo, DEFAULT_COMFY_VIDEO, type ComfyVideoStatus } from "./comfyVideo";
 import { compileAgentPrompt, activePromptReferences, compileGenerationPrompt, generationInputNode, workflowImageContainer, emptyWorkflow, newWorkflowNode, invalidateWorkflow, workflowExecutionNodes, workflowDependencies, workflowWriteNodes, workflowAccessConflict, workflowLockedNodes, workflowRuns, workflowRunActive, workflowInputProducers, workflowInputValues, workflowOrder, WORKFLOW_SKILLS,
   type WorkflowInput, type WorkflowRun, type WorkflowNode, type WorkflowStep, type WorkflowValue } from "./canvasWorkflow";
 
@@ -522,7 +523,7 @@ export class CanvasWorkflowController {
     const active = Object.values(run.steps).filter(step => step.status === "running" || step.status === "waiting");
     // Keep the definition locked until cancellation requests have completed.
     await Promise.all(active.map(async step => {
-      if (step.jobId && step.generationSubmission !== "submitted") await api.cancelCodexCreate(step.jobId);
+      if (step.jobId && step.generationSubmission !== "submitted" && !this.document.nodes.some(node => node.kind === "comfy-video" && run.steps[node.id] === step)) await api.cancelCodexCreate(step.jobId);
       for (const generation of Object.values(step.localDsGenerations ?? {})) {
         if (!generation.response) await api.cancelCodexCreate(generation.jobId);
       }
@@ -849,6 +850,54 @@ export class CanvasWorkflowController {
     });
   }
 
+  private async runComfyVideo(runId: string, node: WorkflowNode, halted: () => boolean, input?: import("./comfyVideo").ComfyVideoInput) {
+    const id = node.id, step = this.run(runId).steps[id], accountId = this.run(runId).accountId;
+    let jobId = step.jobId;
+    let result: ComfyVideoStatus;
+    let terminalFailure = false;
+    try {
+      if (!jobId) {
+        if (step.status !== "pending") throw new Error("上次提交状态未知，请核对本机 ComfyUI 队列");
+        jobId = crypto.randomUUID();
+        await this.step(runId, id, { status: "running", jobId, detail: "检查本机工作流并上传首尾帧" });
+        result = await comfyVideo("start", this.projectId, jobId, input);
+      } else {
+        await this.step(runId, id, { status: "running", error: undefined });
+        result = await comfyVideo("status", this.projectId, jobId);
+      }
+      while (!halted()) {
+        if (accountId !== (useStore.getState().cloudAuth?.user_id ?? null)) {
+          await this.step(runId, id, { status: "waiting", error: "请登录原账号后继续取回视频" }); return;
+        }
+        if (result.status === "done" && result.asset) {
+          await this.step(runId, id, { detail: "视频已生成", error: undefined });
+          await this.finish(runId, node, { image: { type: "image", assetIds: [result.asset.id] } });
+          await emit("creative://changed", { projectId: this.projectId }); return;
+        }
+        if (result.status === "failed") { terminalFailure = true; throw new Error(result.message); }
+        if (result.status === "unknown") { await this.step(runId, id, { status: "waiting", error: result.message }); return; }
+        this.progress(runId, id, result.message);
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        if (halted()) return;
+        result = await comfyVideo("status", this.projectId, jobId);
+      }
+    } catch (error) {
+      if (halted()) return;
+      if (terminalFailure) throw error;
+      // Preserve the durable identity on all transport errors. Continue never submits anew.
+      await this.step(runId, id, { status: "waiting", error: `${String(error)}。可继续查询原任务；停止仅停止等待，本机任务可能仍在运行。` });
+    }
+  }
+
+  async recoverComfyVideo(runId: string) {
+    const run = this.run(runId);
+    if (!run || run.status !== "stopped" || run.order.length !== 1 || this.executing.has(runId) || this.stopping.has(runId)) return;
+    const node = this.document.nodes.find(node => node.id === run.startId);
+    if (node?.kind !== "comfy-video" || !run.steps[node.id]?.jobId || this.isLocked(node.id)) throw new Error("当前卡片无法取回旧任务");
+    await this.saveRun({ ...run, status: "waiting", steps: { ...run.steps, [node.id]: { ...run.steps[node.id], status: "waiting", error: undefined } } });
+    await this.continue(runId);
+  }
+
   async continue(runId = this.document.run?.id) {
     if (!runId || this.executing.has(runId) || this.stopping.has(runId) || !this.run(runId) || !workflowRunActive(this.run(runId))) return;
     if (this.issue?.runId === runId) this.issue = null;
@@ -867,6 +916,7 @@ export class CanvasWorkflowController {
       const step = this.run(runId).steps[id];
       if (step.status === "done" || halted()) return;
       this.progress(runId, id, node.kind === "generation" ? `生成${node.generation?.media === "video" ? "视频" : "图片"}，等待会话结果` : node.kind === "skill" ? "执行技能，等待任务结果或审批" : node.kind === "visual-profile" ? "处理视觉规范" : node.kind === "trigger" ? "触发下游流程" : "读取输入素材");
+      if (node.kind === "comfy-video" && step.jobId) { await this.runComfyVideo(runId, node, halted); return; }
       const hasCells = Object.values(node.inputs).flat().some(input => input.canvasNodeId);
       const cellTexts = this.run(runId).cellTexts;
       const canvas = hasCells || node.kind === "loop" ? await api.projectCanvasGet(this.projectId) : null;
@@ -918,7 +968,7 @@ export class CanvasWorkflowController {
       const generated = node.kind === "generation" ? compileGenerationPrompt(node, values) : null;
       const outputTargets = node.kind === "agent" ? step.agentOutputTargets ?? agentOutputTargets(node, this.document.nodes) : [];
       const agentInput = node.kind === "agent" ? compileAgentPrompt(node, values, outputTargets) : null;
-      const assetIds = generated?.assetIds ?? step.agentInput?.assetIds ?? agentInput?.assetIds ?? [...new Set([...(values.image ?? []), ...(values.text ?? [])].flatMap(value => value.assetIds ?? []))];
+      const assetIds = generated?.assetIds ?? step.agentInput?.assetIds ?? agentInput?.assetIds ?? [...new Set([...(values.image ?? []), ...(values.text ?? []), ...(values["first-frame"] ?? []), ...(values["last-frame"] ?? [])].flatMap(value => value.assetIds ?? []))];
       const assets = await api.getAssetsByIds(assetIds);
       const video = node.kind === "generation" && node.generation?.media === "video";
       const acceptsVideo = video || node.kind === "text" && node.textTarget?.image;
@@ -1194,6 +1244,16 @@ export class CanvasWorkflowController {
         if (halted()) return;
         await this.finish(runId, node, outputs);
         await emit("creative://changed", { projectId: this.projectId });
+      } else if (node.kind === "comfy-video") {
+        const account = useStore.getState();
+        if (!account.cloudAuth?.logged_in || !account.cloudEntitlement?.is_test_account || account.cloudEntitlement.user_id !== account.cloudAuth.user_id) throw new Error("本地 H3 视频仅对测试账号开放");
+        const first = (values["first-frame"] ?? []).flatMap(value => value.assetIds ?? []);
+        const last = (values["last-frame"] ?? []).flatMap(value => value.assetIds ?? []);
+        const options = node.comfyVideo ?? DEFAULT_COMFY_VIDEO;
+        if (first.length !== 1 || last.length > 1) throw new Error("请连接一张首帧，尾帧最多一张");
+        if (!prompt || prompt.length > 16000) throw new Error("请填写 1–16000 字提示词");
+        if (!Number.isFinite(options.seconds) || options.seconds < 1 || options.seconds > 15) throw new Error("视频时长需为 1–15 秒");
+        await this.runComfyVideo(runId, node, halted, { ...options, firstFrame: first[0], lastFrame: last[0], prompt });
       } else if (node.kind === "generation") {
         const generation = video ? { ...node.generation, media: "video" as const, videoOptions: node.generation?.videoOptions ?? DEFAULT_VIDEO_OPTIONS } : undefined;
         const provider = generation ? videoProvider(generation.videoChannel, generation.videoOptions) : node.provider;

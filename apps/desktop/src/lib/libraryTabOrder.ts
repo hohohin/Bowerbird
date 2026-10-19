@@ -1,8 +1,8 @@
 import { create } from "zustand";
 
-export type LibraryTab = "project" | "files";
-const defaults: LibraryTab[] = ["project", "files"];
-const key = "bowerbird.library.tabOrder";
+export type LibraryTab = "global" | "files";
+const defaults: LibraryTab[] = ["global", "files"];
+const key = "bowerbird.library.materialTabOrder";
 function readOrder(): LibraryTab[] {
   try {
     const value: unknown = JSON.parse(localStorage.getItem(key) ?? "null");

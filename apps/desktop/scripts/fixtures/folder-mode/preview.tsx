@@ -19,6 +19,11 @@ let labels=[label];
 const pictures=['photo.png','sub/other.png','sub/deep/forest.png'].map((path,i)=>({id:i?`folder-picture-${i}`:'folder-picture',path,fingerprint:'hash',tags:[['folder-label','local']],rejected:[],observation:null}));
 w.__TAURI_INTERNALS__={convertFileSrc:(path:string)=>path.endsWith('.png')?poster:path,transformCallback:()=>1,metadata:{currentWindow:{label:'main'},currentWebview:{label:'main'}},invoke:async(command:string,args:any={})=>{
   w.calls.push({command,args});
+  if(command==='file_colors') {
+    if(w.colorDelay) await new Promise(r=>setTimeout(r,w.colorDelay));
+    if(w.colorFailure) throw new Error('颜色读取失败');
+    return args.path.endsWith('.mp4')?['blue']:['red'];
+  }
   if(command==='file_workspace_status') return {config:fileConfig,proposed_root:'/BowerbirdLibrary',migration:w.fileMove||null};
   if(command==='file_workspace_move_preview') {
     if(w.fileMoveError) throw new Error(w.fileMoveError);
@@ -33,12 +38,12 @@ w.__TAURI_INTERNALS__={convertFileSrc:(path:string)=>path.endsWith('.png')?poste
   if(command==='file_workspace_move_cancel') {w.fileMove={...w.fileMove,state:'cancelled'};return null;}
   if(command==='file_workspace_history_preview') {
     if(w.fileMoveError) throw new Error(w.fileMoveError);
-    return {source:'/old/images',target:'/BowerbirdLibrary',files:w.historyEmpty?0:8,bytes:1024*1024*16,projects:2,global:3,shared:2,token:'history-token',folders:[{id:'p1',name:'海报',path:'/BowerbirdLibrary/项目/海报-p1',files:4},{id:'p2',name:'品牌',path:'/BowerbirdLibrary/项目/品牌-p2',files:1}]};
+    return {source:'/old/images',target:'/BowerbirdLibrary',files:w.historyEmpty?0:8,bytes:1024*1024*16,projects:2,global:3,shared:2,token:'history-token',missing:w.historyMissing||[],folders:[{id:'p1',name:'海报',path:'/BowerbirdLibrary/项目/海报-p1',files:4},{id:'p2',name:'品牌',path:'/BowerbirdLibrary/项目/品牌-p2',files:1}]};
   }
   if(command==='file_workspace_history_schedule') {
     if(w.fileMoveDelay) await new Promise(r=>setTimeout(r,w.fileMoveDelay));
     if(w.fileMoveError) throw new Error(w.fileMoveError);
-    w.fileMove={id:'history',state:'pending',source:'/old/images',target:'/BowerbirdLibrary',history:{},error:null};return null;
+    w.fileMove={id:'history',state:'pending',source:'/old/images',target:'/BowerbirdLibrary',history:{missing:w.historyMissing||[]},error:null};return null;
   }
   if(command==='restart_app') {if(w.restartError) throw new Error(w.restartError);return null;}
   if(command==='file_workspace_restore_preview') {
@@ -63,16 +68,16 @@ w.__TAURI_INTERNALS__={convertFileSrc:(path:string)=>path.endsWith('.png')?poste
     fileConfig={...fileConfig,places:[...fileConfig.places.filter(p=>p!==args.path),...(args.added?[args.path]:[])]};
     return fileConfig;
   }
-  if(command==='file_workspace_all') return {entries:fileConfig.places.map(path=>({path:path+'/photo.png',name:'photo.png',directory:false})),unavailable:w.offlineLocations||[]};
+  if(command==='file_workspace_all') return {entries:w.globalEntries||fileConfig.places.map(path=>({path:path+'/photo.png',name:'photo.png',directory:false})),unavailable:w.offlineLocations||[]};
   if(command==='set_active_project') return null;
   if(command==='external_files_browse') {
     const path=args.path||'/pictures';
     if(path==='/missing') throw new Error('目录不可用');
     if(path==='/slow') await new Promise(r=>setTimeout(r,500));
     const entries=path==='/pictures'?[{path:'/pictures/sub',name:'旅行',directory:true},{path:'/pictures/photo.png',name:'photo.png',directory:false},{path:'/pictures/clip.mp4',name:'clip.mp4',directory:false}]:[{path:path+'/other.png',name:'other.png',directory:false}];
-    return {path,parent:path==='/pictures'?'/': '/pictures',entries:args.offset?[]:entries,total:entries.length};
+    return {path,parent:path==='/pictures'?'/': '/pictures',entries:args.offset?[]:entries.map(entry=>({...entry,version:w.previewVersion||'1',preview:w.directoryCache&&!entry.directory?poster:null})),total:entries.length};
   }
-  if(command==='external_files_preview') return poster;
+  if(command==='external_files_preview') { if(w.previewDelay) await new Promise(r=>setTimeout(r,w.previewDelay)); return poster; }
   if(command==='external_files_media') return args.path;
   if(command==='external_files_index') return {id:'explicit-copy',external_path:args.path};
   if(command==='external_files_copy') return {id:args.assetId};
@@ -83,6 +88,9 @@ w.__TAURI_INTERNALS__={convertFileSrc:(path:string)=>path.endsWith('.png')?poste
     return pictures.map(p=>({path:'/pictures/'+p.path,name:p.path.split('/').pop(),directory:false})).filter(p=>p.path.startsWith(args.path+'/'));
   }
   if(command==='local_classification_status') return {busy:false,installed:w.modelInstalled!==false,supported:true,model:'qwen',enabled:false,done:0,total:0,failed:0,message:'',last_error:'',current_asset:null,jev_progress:null};
+  if(command==='global_classification_view') {if(w.failGlobalMapping) throw new Error('映射读取失败');return {labels:w.globalLabels||[],pictures:(w.globalPictures||[]).filter(p=>args.paths.includes(p.path))};}
+  if(command==='local_classification_labels') return w.globalLabels||[];
+  if(command==='global_classification_start') return null;
   if(command==='folder_classification_edit') {
     if(w.editFailure) throw new Error('分类记录只读');
     if(args.action==='save') {
@@ -95,7 +103,8 @@ w.__TAURI_INTERNALS__={convertFileSrc:(path:string)=>path.endsWith('.png')?poste
     return null;
   }
   if(command==='folder_classification_start') return null;
-  if(command==='get_settings') return {jev_image_classification_enabled:false,jev_api_key:null};
+  if(command==='get_settings') return w.settings || {jev_image_classification_enabled:false,jev_api_key:null};
+  if(command==='update_settings') {w.settings=args.settings;return null;}
   if(command==='plugin:dialog|open') return w.cancelFolderPicker?null:'/picked';
   if(command.startsWith('plugin:event|')) return 1;
   throw new Error('Unexpected IPC '+command);
@@ -103,8 +112,9 @@ w.__TAURI_INTERNALS__={convertFileSrc:(path:string)=>path.endsWith('.png')?poste
 useStore.setState({searchQuery:'主库搜索',selectedIds:new Set(['library-selection']),smartFilter:'tag:主库标签'});
 function App(){
  const opened=useLocalFileMode(s=>s.open);const setOpen=useLocalFileMode(s=>s.setOpen);
+ const mode=useLocalFileMode(s=>s.mode);
  const order=useLibraryTabOrder(s=>s.order);const setOrder=useLibraryTabOrder(s=>s.setOrder);
- const navigation=<header className="library-browser-heading"><LibraryViewSwitch value={opened?'files':'project'} label="主页视图" onChange={value=>setOpen(value==='files')} onReorder={setOrder} options={order.map(value=>({value,label:{project:'项目管理',files:'文件'}[value]}))}/></header>;
+ const navigation=<header className="library-browser-heading"><LibraryViewSwitch value={mode} label="素材视图切换条" onChange={value=>value==='files'?useLocalFileMode.getState().openBrowser():useLocalFileMode.getState().openGlobal()} onReorder={setOrder} options={order.map(value=>({value,label:{global:'全局素材',files:'文件浏览器'}[value]}))}/></header>;
  return <div className="app-shell" style={{height:'100vh',display:'flex',flexDirection:'column'}}>
    <Toolbar onRefresh={async()=>{}} canvasMode={false} onCanvasModeChange={()=>{}} onCreateCreative={()=>{}} onExplore={()=>{}} localFilesOpen={opened}/>
    <main className="relative flex min-h-0 flex-1 flex-col bg-canvas">

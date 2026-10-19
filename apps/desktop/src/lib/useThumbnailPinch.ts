@@ -9,7 +9,7 @@ export function useThumbnailPinch(scope: ThumbnailScope) {
     if (!element) return;
     const readWidth = () => {
       const state = useStore.getState();
-      return scope === "library" ? state.libraryThumbnailWidth : state.canvasThumbnailWidth;
+      return scope === "library" ? state.libraryThumbnailWidth : scope === "projects" ? state.projectsThumbnailWidth : state.canvasThumbnailWidth;
     };
     let width = readWidth();
     let lastApplied = width;

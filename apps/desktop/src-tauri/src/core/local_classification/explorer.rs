@@ -99,18 +99,17 @@ pub fn handle_notice(app: &AppHandle, start: bool, notice: crate::commands::sour
     }
 }
 
-fn classification_key(settings: &AppSettings, automatic: bool) -> Result<String, String> {
+fn classification_enabled(settings: &AppSettings, automatic: bool) -> Result<(), String> {
     if !automatic { return Err("自动处理新素材已关闭".into()); }
     if !settings.jev_image_classification_enabled {
         return Err("请先在自动分类中应用 Jev 云端分类".into());
     }
-    settings.jev_api_key.clone().filter(|key| !key.trim().is_empty())
-        .ok_or_else(|| "请先在自动分类中保存 Jev API Key".into())
+    Ok(())
 }
 
-fn enabled(app: &AppHandle) -> Result<String, String> {
+fn enabled(app: &AppHandle) -> Result<(), String> {
     let automatic = app.state::<Arc<Database>>().local_enabled().map_err(|e| e.to_string())?;
-    classification_key(&app.state::<SettingsState>().get(), automatic)
+    classification_enabled(&app.state::<SettingsState>().get(), automatic)
 }
 
 async fn receive<T: Clone>(rx: &mut watch::Receiver<Option<Result<T, String>>>) -> Result<T, String> {
@@ -123,7 +122,8 @@ async fn receive<T: Clone>(rx: &mut watch::Receiver<Option<Result<T, String>>>) 
 impl ExplorerAnalysis {
     pub fn begin(&self, app: &AppHandle, id: String, image_url: String, page_url: String) -> Result<(), String> {
         let db = app.state::<Arc<Database>>().inner().clone();
-        let key = enabled(app)?;
+        enabled(app)?;
+        let judge = jev::Judge::new(app)?;
         let mut slot = self.0.lock().unwrap();
         if slot.as_ref().is_some_and(|p| p.id == id) { return Ok(()); }
         if slot.as_ref().is_some_and(|p| p.claimed) { return Err("分类任务忙，请稍后重试".into()); }
@@ -171,7 +171,7 @@ impl ExplorerAnalysis {
                 let revision = db.local_revision().map_err(|e| e.to_string())?;
                 let labels: Vec<_> = db.local_labels().map_err(|e| e.to_string())?
                     .into_iter().filter(|l| l.enabled).collect();
-                let pending = worker.prepare_jev_image(&jev::Judge::new(key)?, &db, &library, "", revision, &labels, true, image).await?;
+                let pending = worker.prepare_jev_image(&judge, &db, &library, "", revision, &labels, true, image).await?;
                 if !worker.cancel.load(Ordering::Relaxed) && enabled(&preview_app).is_ok() {
                     let _ = preview_app.emit_to(tauri::EventTarget::webview("main"), "source-browser://drag-preview", serde_json::json!({
                         "id": preview_id, "labels": pending.preview,
@@ -318,21 +318,21 @@ mod tests {
     }
 
     #[test]
-    fn explorer_requires_automatic_processing_image_consent_and_key() {
+    fn explorer_requires_automatic_processing_and_image_consent() {
         let db = Database::open_in_memory().unwrap();
         db.migrate().unwrap();
         db.set_local_enabled(false).unwrap();
         let mut settings = AppSettings::default();
         settings.jev_api_key = Some("test-key".into());
-        assert!(classification_key(&settings, true).unwrap_err().contains("应用 Jev"));
+        assert!(classification_enabled(&settings, true).unwrap_err().contains("应用 Jev"));
         settings.jev_image_classification_enabled = true;
-        assert!(classification_key(&settings, db.local_enabled().unwrap()).unwrap_err().contains("已关闭"));
+        assert!(classification_enabled(&settings, db.local_enabled().unwrap()).unwrap_err().contains("已关闭"));
         db.set_local_enabled(true).unwrap();
-        assert_eq!(classification_key(&settings, db.local_enabled().unwrap()).unwrap(), "test-key");
+        assert!(classification_enabled(&settings, db.local_enabled().unwrap()).is_ok());
         db.set_local_enabled(false).unwrap();
-        assert!(classification_key(&settings, db.local_enabled().unwrap()).is_err());
+        assert!(classification_enabled(&settings, db.local_enabled().unwrap()).is_err());
         settings.jev_api_key = Some("  ".into());
-        assert!(classification_key(&settings, true).unwrap_err().contains("API Key"));
+        assert!(classification_enabled(&settings, true).is_ok());
     }
 
     fn preview(id: &str) -> Preview {

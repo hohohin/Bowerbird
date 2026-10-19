@@ -7,6 +7,7 @@ import { Sidebar } from "../../../src/components/Sidebar";
 import { ToastViewport } from "../../../src/components/ToastViewport";
 import { FileDropImport } from "../../../src/components/FileDropImport";
 import { useStore } from "../../../src/store";
+import { useLocalFileMode } from "../../../src/lib/localFileMode";
 import "../../../src/styles.css";
 
 // Closed synthetic IPC. Production components and drag payload; no user data or provider calls.
@@ -20,6 +21,8 @@ w.__TAURI_INTERNALS__ = {
   convertFileSrc: (path: string) => path,
   invoke: async (command: string, args: any) => {
     if (command === "file_workspace_status") return { config: { root: null, places: [], projects: {} }, proposed_root: "/BowerbirdLibrary" };
+    if (command === "file_workspace_all") return {entries:[],unavailable:[]};
+    if (command === "global_classification_view") return {labels:[],pictures:[]};
     if (command === "external_files_browse") return { path: args.path || "/pictures", parent: null, entries: [], total: 0 };
     if (command === "folder_classification_view") return { root: args.path, storage: "folder", record: { version: 1, recursive: false, labels: [], pictures: [] } };
     w.calls.push({ command, args });
@@ -66,6 +69,10 @@ function Library() {
   const mode = useStore(s => s.mode);
   return <>{mode === "manage" && <BatchBar />}<LibraryHome /></>;
 }
+function TestToolbar() {
+  const localFilesOpen=useLocalFileMode(s=>s.open);
+  return <Toolbar localFilesOpen={localFilesOpen} canvasMode={new URL(location.href).searchParams.has("canvas-toolbar")} onExplore={()=>{}} onCanvasModeChange={()=>{}} onCreateCreative={()=>{w.createdProjects=(w.createdProjects||0)+1;}} onRefresh={async()=>{}}/>;
+}
 createRoot(document.getElementById("root")!).render(<div className="app-shell" style={{ display: "flex", height: "100vh" }}>
-  <FileDropImport /><Sidebar /><main style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0, overflow: "hidden" }}><header data-test-topbar>测试工具栏 <input aria-label="测试搜索框" /></header>{new URL(location.href).searchParams.has("layout") && <Toolbar canvasMode={new URL(location.href).searchParams.has("canvas-toolbar")} onExplore={() => {}} onCanvasModeChange={() => {}} onCreateCreative={() => {}} onRefresh={async () => {}} />}<Library /></main><ToastViewport />
+  <FileDropImport /><Sidebar /><main style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0, overflow: "hidden" }}><header data-test-topbar>测试工具栏 <input aria-label="测试搜索框" /></header>{new URL(location.href).searchParams.has("layout") && <TestToolbar/>}<Library /></main><ToastViewport />
 </div>);

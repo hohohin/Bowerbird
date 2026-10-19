@@ -186,6 +186,7 @@ pub fn tagged_images_with_storage(path: &str, tag_id: &str, local: Option<&Path>
             name: file.file_name().unwrap().to_string_lossy().into_owned(),
             path: file.to_string_lossy().into_owned(),
             directory: false,
+            ..Default::default()
         });
     }
     entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then_with(|| a.path.cmp(&b.path)));
@@ -775,14 +776,14 @@ impl LocalClassifier {
         recursive: bool,
         pending: bool,
         tag: Option<String>,
-        key: Option<String>,
+        use_jev: bool,
     ) -> Result<(), String> {
         let guard = self
             .gate
             .clone()
             .try_lock_owned()
             .map_err(|_| "已有分类或下载任务在运行")?;
-        if key.is_none() && !super::runtime::installed(&self.root) {
+        if !use_jev && !super::runtime::installed(&self.root) {
             return Err("请先安装本地分类模型".into());
         }
         self.cancel.store(false, Ordering::Relaxed);
@@ -793,7 +794,7 @@ impl LocalClassifier {
                 folder_root: Some(root.clone()),
                 phase: "scanning".into(),
                 message: "正在扫描文件夹图片…".into(),
-                model: if key.is_some() {
+                model: if use_jev {
                     super::jev::OBSERVATION_MODEL
                 } else {
                     super::data::MODEL_ID
@@ -816,7 +817,7 @@ impl LocalClassifier {
                 })
                 .await
                 .map_err(|e| e.to_string())??;
-                this.run(&app, &session.db, &paths, tag, key, pending, Some(&session))
+                this.run(&app, &session.db, &paths, tag, use_jev, pending, Some(&session), None)
                     .await
             }
             .await;

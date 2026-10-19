@@ -64,7 +64,10 @@ pub mod dreamina_account;
 
 pub mod video_poster;
 pub mod video_trim;
+pub mod comfy_video;
+pub mod comfy_setup;
 pub mod video_replication;
 
 pub mod external_files;
+pub mod file_colors;
 pub mod file_workspace;

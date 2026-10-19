@@ -195,6 +195,17 @@ fn session_needs_refresh(session: &Session, now: DateTime<Utc>) -> bool {
 }
 
 impl AuthClient {
+    #[cfg(test)]
+    pub(crate) fn with_test_session(cloud: CloudClient) -> Self {
+        let auth = Self::new(cloud);
+        *auth.inner.session.write().unwrap() = Some(Session {
+            access_token: "test-user-session".into(), user_id: Some("test-user".into()),
+            email: None, display_name: None, avatar_url: None,
+            expires_at: Utc::now() + chrono::Duration::hours(1),
+        });
+        auth
+    }
+
     pub fn new(cloud: CloudClient) -> Self {
         Self {
             inner: Arc::new(AuthInner {

@@ -551,7 +551,7 @@ export interface AppSettings {
   dreamina_model_version: string;
   /** Jev 图片 API 分类；默认关闭，启用后上传目标缩略图及人工示例。 */
   jev_image_classification_enabled: boolean;
-  /** TypeSafe API Key；启用图片分类后必填。 */
+  /** 旧版 TypeSafe Key，仅兼容历史设置；托管分类不读取、不上传。 */
   jev_api_key: string | null;
   // —— 开发者选项（仅测试账号可见）：对话框 Agent 模式开关，默认只开正式 Agent，
   //    关闭的模式不在创作板 / 会话编辑坞对话框渲染。
