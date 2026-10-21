@@ -15,26 +15,42 @@ export function comfyVideoSize(options: ComfyVideoOptions) {
     frames: Math.max(5, Math.ceil((options.seconds * 24 - 5) / 17) * 17 + 5) };
 }
 export interface ComfyVideoInput extends ComfyVideoOptions { firstFrame: string; lastFrame?: string; prompt: string }
-export interface ComfyVideoStatus { status: "queued" | "running" | "unknown" | "failed" | "done"; message: string; asset?: Asset }
-export function comfyVideo(action: "start" | "status", projectId: string, requestId: string, input?: ComfyVideoInput) {
+export interface ComfyVideoProgress { label: string; value?: number | null; max?: number | null }
+export interface ComfyVideoStatus { status: "queued" | "running" | "unknown" | "failed" | "done" | "cancelled"; message: string; asset?: Asset; progress?: ComfyVideoProgress | null; elapsedMs?: number | null }
+export function comfyVideo(action: "start" | "status" | "cancel", projectId: string, requestId: string, input?: ComfyVideoInput) {
   return invoke<ComfyVideoStatus>("comfy_video", { action, projectId, requestId, input: input ?? null });
 }
 export function checkComfyVideo(endpoint: string) { return invoke<string>("comfy_video_check", { endpoint }); }
 
 export interface ComfyEnvironment {
-  phase: "missing" | "ready" | "installing" | "failed" | "cancelled";
+  phase: "missing" | "ready" | "installing" | "starting" | "stopped" | "unavailable" | "failed" | "cancelled";
   message: string; endpoint: string; directory: string; canInstall: boolean; installed: boolean;
   downloadBytes: number; requiredBytes: number; completedBytes: number; totalBytes: number;
+  existing?: { path: string; name: string; endpoint: string; canStart: boolean; modelsFound: number }[];
+}
+// Readiness means Run can proceed without user setup, even when the service is stopped.
+export function comfyEnvironmentReady(environment?: ComfyEnvironment) {
+  if (!environment) return false;
+  if (environment.phase === "ready") return true;
+  if (!["stopped", "missing", "starting"].includes(environment.phase)) return false;
+  const instance = environment.existing?.[0];
+  return instance ? instance.canStart && instance.modelsFound === 5 : environment.installed && environment.canInstall;
 }
 // Multiple visible cards share a read-only detection request; installation is singleton in native code.
 const detections = new Map<string, Promise<ComfyEnvironment>>();
-export function comfyEnvironment(action: "detect" | "status" | "install" | "cancel", endpoint: string, directory?: string) {
-  const key = JSON.stringify([endpoint, directory]);
+export function comfyEnvironment(action: "detect" | "status" | "prepare" | "install" | "cancel" | "select_existing" | "start_existing", endpoint: string, directory?: string, existingDirectory?: string) {
+  const key = JSON.stringify([endpoint, directory, existingDirectory]);
   if (action === "detect" && detections.has(key)) return detections.get(key)!;
-  const request = invoke<ComfyEnvironment>("comfy_video_environment", { action, endpoint, directory: directory ?? null });
+  const request = invoke<ComfyEnvironment>("comfy_video_environment", { action, endpoint, directory: directory ?? null, existingDirectory: existingDirectory ?? null });
   if (action === "detect") {
     detections.set(key, request);
     void request.finally(() => detections.delete(key)).catch(() => {});
   }
   return request;
+}
+
+export function comfyVideoElapsed(milliseconds?: number | null) {
+  if (milliseconds == null || !Number.isFinite(milliseconds) || milliseconds < 0) return "";
+  const seconds = Math.round(milliseconds / 1000);
+  return seconds < 60 ? `${seconds} 秒` : `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
 }

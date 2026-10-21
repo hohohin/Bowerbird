@@ -11,6 +11,8 @@ pub mod jimeng;
 #[cfg(target_os = "macos")]
 mod macos_terminal;
 pub mod library;
+pub mod material_catalog;
+pub mod asset_archive;
 pub mod layers;
 pub mod layer_text;
 pub mod layer_export;
@@ -66,6 +68,7 @@ pub mod video_poster;
 pub mod video_trim;
 pub mod comfy_video;
 pub mod comfy_setup;
+mod comfy_discovery;
 pub mod video_replication;
 
 pub mod external_files;

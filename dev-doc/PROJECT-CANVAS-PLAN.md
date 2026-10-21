@@ -120,6 +120,7 @@ PCU0–PCU6 完成前：
 
 ### 2.4 创作线程
 
+- 2026-10-20 普通生图参考图来源与隐式续轮规则见 `PROJECT.md`「普通生图按参考图来源决定画布连线」。专项验证入口：`scripts/canvas-reference-origin.test.mjs` 与 `scripts/canvas-reference-origin-ui.test.mjs`（在 apps/desktop 执行），后端覆盖 `core::project_canvas::tests`、`core::creative_session_contract::tests` 和 `core::generation_worker::tests`。
 - 一条线程是一组有明确因果关系的执行图，可以同时包含普通生成、不同 provider 和 Agent Run。
 - 在空白区域发送无父结果的新 prompt 时创建线程。
 - 普通组稿引用多张画板结果但没有唯一父结果时，也作为无父结果的新创作发送，保留全部参考图及精确输入节点；不得仅因多图引用要求选择父结果。显式继续/重试及已确定唯一父结果时仍沿原线程（2026-10-10 修复，Windows 26.10.1001 已发布）。

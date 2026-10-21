@@ -14,6 +14,7 @@ const dialog = () => page.getByRole("dialog");
 const deleteCalls = () => page.evaluate(() => window.deleteCalls ?? []);
 async function openDelete(id = "a") {
   await node(id).click({ button: "right", position: { x: 30, y: 30 } });
+  await page.getByRole("menuitem", { name: "删除", exact: true }).click();
   await page.getByRole("menuitem", { name: "物理删除", exact: true }).click();
   await dialog().getByRole("list", { name: "待删除素材" }).waitFor();
 }
@@ -115,6 +116,7 @@ try {
   await reset();
   await page.evaluate(() => { window.failPreview = true; });
   await node("outside").click({ button: "right", position: { x: 30, y: 30 } });
+  await page.getByRole("menuitem", { name: "删除", exact: true }).click();
   await page.getByRole("menuitem", { name: "物理删除", exact: true }).click();
   await dialog().getByRole("alert").waitFor();
   assert.equal(await dialog().getByRole("button", { name: "物理删除", exact: true }).isDisabled(), true);
@@ -124,13 +126,15 @@ try {
   await dialog().getByText("仅移除引用 · 保留原文件").waitFor();
   assert.deepEqual(await deleteCalls(), []);
 
-  // The library's existing bulk-delete route still uses its own selection.
+  // The library batch menu keeps its own scope through the same confirmation flow.
   await page.goto("http://127.0.0.1:1487/scripts/fixtures/asset-multi-menu/preview.html");
-  await page.locator('[data-asset-id="a2"]').click({ button: "right" });
-  await page.getByRole("menu", { name: "已选 3 张素材的操作" }).getByRole("menuitem", { name: "物理删除", exact: true }).click();
+  await page.waitForFunction(() => window.openMenu);
+  await page.evaluate(() => window.openMenu('multi'));
+  await page.getByRole("menuitem", { name: "删除", exact: true }).click();
+  await page.getByRole("menuitem", { name: "物理删除", exact: true }).click();
   await dialog().getByRole("button", { name: "物理删除", exact: true }).click();
-  await page.getByText("已物理删除 3 张素材", { exact: true }).waitFor();
-  assert.deepEqual(await page.evaluate(() => window.deleted.map(call => call.id).sort()), ["a1", "a2", "a3"]);
+  await dialog().waitFor({ state: 'detached' });
+  assert.deepEqual(await page.evaluate(() => window.calls.filter(c => c.command === 'delete_asset_with_mode').map(c => c.args.id)), ['a1','a2']);
   assert.deepEqual(errors, []);
   console.log("PASS canvas batch delete: marquee, frozen previews, deduplication, library-selection isolation, cancel/outside selection, partial failure/retry, busy guard, reload, preview error, external reference, themes/narrow layout");
 } catch (error) {

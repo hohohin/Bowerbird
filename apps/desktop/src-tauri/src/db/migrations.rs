@@ -89,6 +89,7 @@ pub fn migrations() -> Migrations<'static> {
         M::up(include_str!("../../sql/0038_creative_file_queue.sql")),
         M::up(include_str!("../../sql/0039_creative_file_fingerprints.sql")),
         M::up(include_str!("../../sql/0040_file_workspace_moves.sql")),
+        M::up(include_str!("../../sql/0041_external_library_members.sql")),
     ])
 }
 
@@ -231,6 +232,23 @@ fn backfill_asset_reference_counts(tx: &rusqlite::Transaction) -> rusqlite_migra
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn external_library_members_upgrade_keeps_old_references_hidden() {
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        let ms = migrations();
+        ms.to_version(&mut conn, 40).unwrap();
+        conn.execute_batch("INSERT INTO assets(id,name,library_hidden,created_at) VALUES('external','reference',1,1);
+            INSERT INTO external_assets(asset_id,fingerprint) VALUES('external','hash');").unwrap();
+        ms.to_latest(&mut conn).unwrap();
+        conn.execute("UPDATE assets SET library_hidden=0 WHERE id='external'", []).unwrap();
+        let hidden = || conn.query_row("SELECT library_hidden FROM assets WHERE id='external'", [], |r| r.get::<_, bool>(0)).unwrap();
+        assert!(hidden());
+        conn.execute("UPDATE external_assets SET library_member=1 WHERE asset_id='external'", []).unwrap();
+        conn.execute("UPDATE assets SET library_hidden=0 WHERE id='external'", []).unwrap();
+        assert!(!hidden());
+        assert_eq!(conn.query_row("SELECT fingerprint FROM external_assets WHERE asset_id='external'", [], |r| r.get::<_, String>(0)).unwrap(), "hash");
+    }
 
     #[test]
     fn classification_dimensions_upgrade_preserves_tags_assignments_and_observations() {

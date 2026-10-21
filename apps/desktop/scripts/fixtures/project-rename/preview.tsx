@@ -1,8 +1,7 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { ProjectSection } from "../../../src/components/ProjectSection";
-import { Sidebar } from "../../../src/components/Sidebar";
-import { LibraryHome } from "../../../src/components/LibraryHome";
+import { ProjectFolder } from "../../../src/components/ProjectFolder";
 import { CanvasWorkspace } from "../../../src/components/CanvasWorkspace";
 import { ProjectContextMenu } from "../../../src/components/ProjectContextMenu";
 import { useStore } from "../../../src/store";
@@ -15,8 +14,6 @@ w.failure = false;
 w.missing = false;
 const provisional = new URL(location.href).searchParams.has("provisional");
 const inactive = new URL(location.href).searchParams.has("inactive");
-const rail = new URL(location.href).searchParams.has("rail");
-if (rail) localStorage.setItem("bowerbird.sidebarCollapsed", "1");
 let project = { id: "p", name: "测试项目", kind: "blank", workspace_path: "blank:p", asset_count: 1,
   title_source: "default", created_at: 1, updated_at: 1, provisional };
 const canvas = { projectId: "p", draftJson: "{}", createdAt: 1, updatedAt: 1 };
@@ -41,6 +38,8 @@ w.__TAURI_INTERNALS__ = {
     if (command === "project_canvas_ensure") return canvas;
     if (command === "project_canvas_get") return { canvas, nodes: [], edges: [], groups: [], groupItems: [], threads: [], executionLinks: [], view: null };
     if (command === "list_generation_groups") return {};
+    if (command === "material_catalog") return { tags: [], collections: [], prompts: [], tag_asset_ids: {} };
+    if (command === "material_catalog_assets") return [];
     if (command === "count_assets") return 0;
     if (command === "project_delete_impact") return { project_asset_count: 1, thread_count: 0, node_count: 0,
       running_generation_count: 0, running_agent_count: 0, physical: { exclusive_asset_count: 1, exclusive_file_count: 1,
@@ -57,9 +56,10 @@ useStore.setState({ projects: [{ ...project }] as any, activeProjectId: inactive
 w.fixtureStore = useStore;
 w.persistedProject = () => project;
 function Preview() {
+  const projects = useStore(s => s.projects);
   return <div className="app-shell" style={{ padding: 20 }}>
-    <div style={{ display: "flex", height: 330 }}><aside style={{ width: 240 }}>{rail ? <Sidebar /> : <ProjectSection />}</aside>
-      <main style={{ flex: 1 }}><LibraryHome /></main></div>
+    <div style={{ display: "flex", height: 330 }}><aside style={{ width: 240 }}><ProjectSection /></aside>
+      <main style={{ width: 250 }}>{projects.map(project => <ProjectFolder key={project.id} group={{ project, assets: [] }} />)}</main></div>
     {!inactive && <div style={{ height: 480 }}><CanvasWorkspace projectId="p" /></div>}
     <ProjectContextMenu />
   </div>;

@@ -28,6 +28,7 @@ export function DouyinReferencePicker({ projectId, ensureProject, onUse }: { pro
     }
   }
   const active = tasks.some(task => ["starting", "waiting", "downloading"].includes(task.state));
+  const needsVerification = tasks[0]?.state === "needs_login" && (!text.trim() || text.trim() === tasks[0].shareText.trim());
   useEffect(() => {
     let disposed = false;
     let timer: ReturnType<typeof setTimeout>;
@@ -59,17 +60,18 @@ export function DouyinReferencePicker({ projectId, ensureProject, onUse }: { pro
     } catch (e) { setError(String(e)); }
     finally { guard.current = false; setBusy(false); }
   }
-  return <section className="vr-product-editor" aria-label="抖音视频获取">
+  return <section className="vr-picker" aria-label="抖音视频获取">
     <label className="vr-field"><textarea aria-label="抖音分享内容" rows={3} maxLength={8000} value={text} onChange={event => setText(event.target.value)} placeholder="粘贴完整分享文案或视频链接" /></label>
     {error && <p className="vr-message is-error" role="alert">{error}</p>}
-    <div className="vr-actions"><button type="button" disabled={busy || active || !text.trim()} onClick={() => void run("create", { text })}>获取抖音视频</button></div>
+    {!needsVerification && <div className="vr-actions"><button type="button" disabled={busy || active || !text.trim()} onClick={() => void run("create", { text })}>获取抖音视频</button></div>}
     {tasks.map(task => <div className="vr-douyin-record" key={task.id}>
       <p className="vr-hint">{task.shareText}</p>
-      <p className="vr-hint" role="status">{["starting", "waiting", "downloading"].includes(task.state) && <LoaderCircle size={13} className="animate-spin inline" />} {task.message}</p>
+      <p className="vr-hint" role={task.state === "failed" ? "alert" : "status"}>{["starting", "waiting", "downloading"].includes(task.state) && <LoaderCircle size={13} className="animate-spin inline" />} {task.message}</p>
       <div className="vr-actions">
         {task.state === "ready" && task.reference ? <button type="button" onClick={() => onUse(task.reference!)}>{task.reference.name}</button>
           : ["starting", "waiting", "downloading"].includes(task.state) ? <button type="button" disabled={busy} onClick={() => void run("cancel", { id: task.id })}>取消获取</button>
-          : <><button type="button" disabled={busy || active} onClick={() => void run("login", { id: task.id })}>打开抖音窗口</button><button type="button" disabled={busy || active} onClick={() => void run("retry", { id: task.id })}>重新获取</button></>}
+          : task.state === "needs_login" ? <button type="button" className="is-primary" disabled={busy || active} onClick={() => void run("login", { id: task.id })}>打开抖音窗口</button>
+          : <button type="button" disabled={busy || active} onClick={() => void run("retry", { id: task.id })}>重新获取</button>}
       </div>
     </div>)}
   </section>;

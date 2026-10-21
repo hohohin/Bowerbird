@@ -5,6 +5,8 @@ use serde_json::{json, Value};
 use rusqlite::OptionalExtension;
 use tauri::{AppHandle, Emitter, State};
 use crate::{cloud::{AuthClient, EntitlementService}, core::{ingest, library::Asset, paths::LibraryPaths}, db::Database, error::{AppError, AppResult}};
+#[path = "comfy_progress.rs"]
+mod progress;
 
 static IO: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 const WORKFLOW: &str = "10_H3_768p_Turbo8_Review_First";
@@ -13,16 +15,17 @@ const CLIP: &str = "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors";
 const VAE: &str = "minimax_h3_video_vae_int8_convrot.safetensors";
 const AUDIO: &str = "minimax_h3_audio_vae_fp32.safetensors";
 const LORA: &str = "minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors";
+pub(super) fn model_names() -> [&'static str; 5] { [UNET, CLIP, VAE, AUDIO, LORA] }
 
 fn error(message: impl Into<String>) -> AppError { AppError::Other(message.into()) }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Input { endpoint: String, seconds: f64, ratio: String, resolution: f64, first_frame: String, last_frame: Option<String>, prompt: String }
 #[derive(Deserialize, Serialize)]
-struct Record { account: String, project: String, input: Input, prompt_id: Option<String>, submitted: bool, asset_id: Option<String>, failure: Option<String> }
+struct Record { account: String, project: String, input: Input, prompt_id: Option<String>, submitted: bool, asset_id: Option<String>, failure: Option<String>, #[serde(default)] cancelled: bool, #[serde(default)] elapsed_ms: Option<u64> }
 #[derive(Serialize)]
-pub struct Status { status: &'static str, message: String, asset: Option<Asset> }
-fn status(state: &'static str, message: &str) -> Status { Status { status: state, message: message.into(), asset: None } }
+pub struct Status { status: &'static str, message: String, asset: Option<Asset>, progress: Option<progress::Progress>, #[serde(rename = "elapsedMs")] elapsed_ms: Option<u64> }
+fn status(state: &'static str, message: &str) -> Status { Status { status: state, message: message.into(), asset: None, progress: None, elapsed_ms: None } }
 
 pub(super) fn endpoint(value: &str) -> AppResult<String> {
     let url = reqwest::Url::parse(value).map_err(|_| error("请输入本机 ComfyUI 地址，例如 http://127.0.0.1:8000"))?;
@@ -146,9 +149,16 @@ async fn start(http: &reqwest::Client, db: &Database, path: &Path, record: &mut 
     save(path,record)
 }
 fn request_match(item: &Value, request: &str) -> bool { item[3]["bowerbird_request_id"].as_str() == Some(request) }
+fn execution_elapsed(result: &Value, prompt_id: &str) -> Option<u64> {
+    let messages = result["status"]["messages"].as_array()?;
+    let timestamp = |event: &str| messages.iter().find(|m| m[0] == event && m[1]["prompt_id"].as_str() == Some(prompt_id))
+        .and_then(|m| m[1]["timestamp"].as_u64());
+    timestamp("execution_success")?.checked_sub(timestamp("execution_start")?)
+}
 async fn poll(http: &reqwest::Client, db: &Database, paths: &LibraryPaths, path: &Path, record: &mut Record, request: &str, owner: &(dyn Fn() -> AppResult<()> + Sync)) -> AppResult<Status> {
     owner()?;
-    if let Some(id) = &record.asset_id { return Ok(Status { status:"done",message:"视频已生成".into(),asset:Some(db.get_asset(id)?.ok_or_else(|| error("生成的视频已被删除"))?) }); }
+    if let Some(id) = &record.asset_id { return Ok(Status { status:"done",message:"视频已生成".into(),asset:Some(db.get_asset(id)?.ok_or_else(|| error("生成的视频已被删除"))?),progress:None,elapsed_ms:record.elapsed_ms }); }
+    if record.cancelled { return Ok(status("cancelled","本机生成已取消")); }
     if let Some(message) = &record.failure { return Ok(status("failed",message)); }
     if !record.submitted { return Ok(status("failed","尚未提交到 ComfyUI，请停止后重新运行")); }
     let base = endpoint(&record.input.endpoint)?;
@@ -172,6 +182,7 @@ async fn poll(http: &reqwest::Client, db: &Database, paths: &LibraryPaths, path:
             else if queue["queue_pending"].as_array().is_some_and(|items| items.iter().any(|item| item[1].as_str() == Some(id))) { status("queued","已加入本机队列") }
             else { status("unknown","原任务暂不可见，请确认 ComfyUI 仍在运行；不会自动重新提交") });
     }
+    record.elapsed_ms = execution_elapsed(result,id);
     let outputs = result["outputs"]["27"]["images"].as_array().filter(|v| v.len()==1).ok_or_else(|| error("基准工作流未返回唯一视频"))?;
     let output = &outputs[0];
     let filename = output["filename"].as_str().filter(|v| v.ends_with(".mp4") && !v.contains(['/', '\\'])).ok_or_else(|| error("ComfyUI 视频文件名无效"))?;
@@ -198,7 +209,56 @@ async fn poll(http: &reqwest::Client, db: &Database, paths: &LibraryPaths, path:
     db.add_assets_to_project(&record.project,&[asset.id.clone()])?;
     record.asset_id = Some(asset.id.clone()); save(path,record)?;
     let _ = fs::remove_file(video);
-    Ok(Status { status:"done",message:"视频已生成".into(),asset:db.get_asset(&asset.id)? })
+    Ok(Status { status:"done",message:"视频已生成".into(),asset:db.get_asset(&asset.id)?,progress:None,elapsed_ms:record.elapsed_ms })
+}
+
+async fn cancel(http: &reqwest::Client, path: &Path, record: &mut Record, request: &str, owner: &(dyn Fn() -> AppResult<()> + Sync)) -> AppResult<Status> {
+    owner()?;
+    if record.asset_id.is_some() { return Ok(status("done","视频已完成，可取回已有结果")); }
+    if record.cancelled { return Ok(status("cancelled","本机生成已取消")); }
+    if !record.submitted {
+        record.cancelled = true; save(path,record)?;
+        return Ok(status("cancelled","已取消，未提交生成"));
+    }
+    let base = endpoint(&record.input.endpoint)?;
+    let mut dispatched = false;
+    for _ in 0..30 {
+        owner()?;
+        let queue = json_response(http.get(format!("{base}/queue")).timeout(Duration::from_secs(5))).await?;
+        let history = json_response(http.get(match &record.prompt_id {
+            Some(id) => format!("{base}/history/{id}"), None => format!("{base}/history?max_items=500"),
+        }).timeout(Duration::from_secs(5))).await?;
+        let queued = queue["queue_running"].as_array().into_iter().flatten().chain(queue["queue_pending"].as_array().into_iter().flatten());
+        if record.prompt_id.is_none() {
+            record.prompt_id = queued.clone().find(|item| request_match(item,request)).and_then(|item| item[1].as_str()).map(str::to_owned)
+                .or_else(|| history.as_object().and_then(|items| items.iter().find(|(_,item)| request_match(&item["prompt"],request)).map(|(id,_)| id.clone())));
+            save(path,record)?;
+        }
+        let id = record.prompt_id.as_deref().ok_or_else(|| error("未能确认原任务编号，无法确认已停止；请稍后再次停止，不会重新生成"))?;
+        let result = &history[id];
+        if result["status"]["completed"] == true && result["status"]["status_str"] == "success" {
+            return Ok(status("done","视频已先于停止请求完成，可取回已有结果"));
+        }
+        if !queued.clone().any(|item| item[1].as_str() == Some(id)) {
+            if dispatched || result["status"]["status_str"] == "error" {
+                record.cancelled = true; save(path,record)?;
+                return Ok(status("cancelled","本机生成已中断"));
+            }
+            return Err(error("原任务不在队列且没有完成记录，暂无法确认已停止；请稍后再次停止"));
+        }
+        // ComfyUI's job API atomically checks the running prompt ID. Never use global /interrupt.
+        let mut cancel_url = reqwest::Url::parse(&base).map_err(|_| error("服务地址无效"))?;
+        cancel_url.path_segments_mut().map_err(|_| error("服务地址无效"))?.extend(["api","jobs",id,"cancel"]);
+        let response = http.post(cancel_url).timeout(Duration::from_secs(5)).send().await.map_err(|e| error(format!("取消请求失败：{e}")))?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(error("此 ComfyUI 版本不支持按任务安全中断，请更新 ComfyUI；当前任务尚未确认停止"));
+        }
+        let response = response.error_for_status().map_err(|e| error(format!("取消请求失败：{e}")))?
+            .json::<Value>().await.map_err(|_| error("取消接口返回无效响应，尚未确认停止"))?;
+        dispatched |= response["cancelled"] == true;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    Err(error("已请求中断，但 ComfyUI 仍在处理当前计算；尚未确认停止，请稍后再次停止"))
 }
 #[tauri::command]
 pub async fn comfy_video(app: AppHandle, db: State<'_, Arc<Database>>, paths: State<'_, Arc<LibraryPaths>>, auth: State<'_, AuthClient>, entitlement: State<'_, EntitlementService>,
@@ -210,18 +270,27 @@ pub async fn comfy_video(app: AppHandle, db: State<'_, Arc<Database>>, paths: St
     let directory: PathBuf = paths.root.join("comfy-video"); fs::create_dir_all(&directory)?;
     let path = directory.join(format!("{request}.json"));
     let mut record: Record = if path.exists() { serde_json::from_slice(&fs::read(&path)?)? } else {
+        if action == "cancel" { return Ok(status("cancelled","已取消，未提交生成")); }
         if action != "start" { return Ok(status("unknown","未找到本地提交记录；请核对本机队列，不会重新提交")); }
         let input = input.clone().ok_or_else(|| error("缺少视频参数"))?;
         endpoint(&input.endpoint)?; dimensions(&input)?;
         if input.first_frame.is_empty() || input.prompt.trim().is_empty() || input.prompt.chars().count() > 16000 { return Err(error("请提供首帧及 1–16000 字提示词")); }
-        Record { account:account.clone(),project:project_id.clone(),input,prompt_id:None,submitted:false,asset_id:None,failure:None }
+        Record { account:account.clone(),project:project_id.clone(),input,prompt_id:None,submitted:false,asset_id:None,failure:None,cancelled:false,elapsed_ms:None }
     };
     if record.account != account || record.project != project_id || input.as_ref().is_some_and(|i| i != &record.input) { return Err(error("任务归属或参数不匹配")); }
     let http = client()?;
     let owner = || { let login = auth.snapshot(); if login.logged_in && login.user_id.as_deref() == Some(account.as_str()) { Ok(()) } else { Err(error("账号已切换，请登录原账号后继续")) } };
+    if action == "cancel" {
+        let result = cancel(&http,&path,&mut record,&request,&owner).await?;
+        progress::stop(&request);
+        return Ok(result);
+    }
+    if !record.cancelled && record.asset_id.is_none() && record.failure.is_none() { progress::watch(&request,&endpoint(&record.input.endpoint)?).await; }
     if action == "start" && !path.exists() { save(&path,&record)?; start(&http,&db,&path,&mut record,&request,&owner).await?; }
     else if !matches!(action.as_str(),"start"|"status") { return Err(error("未知的视频操作")); }
-    let result = poll(&http,&db,&paths,&path,&mut record,&request,&owner).await?;
+    let mut result = poll(&http,&db,&paths,&path,&mut record,&request,&owner).await?;
+    if result.status == "running" { result.progress = progress::current(&request,record.prompt_id.as_deref()); }
+    if matches!(result.status,"done"|"failed"|"cancelled") { progress::stop(&request); }
     if result.asset.is_some() { let _ = app.emit("library://assets-changed",()); }
     Ok(result)
 }
@@ -229,6 +298,59 @@ pub async fn comfy_video(app: AppHandle, db: State<'_, Arc<Database>>, paths: St
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn h3_elapsed_uses_service_execution_timestamps() {
+        let result=json!({"status":{"messages":[["execution_start",{"prompt_id":"own","timestamp":1000}],["execution_success",{"prompt_id":"own","timestamp":274960}]]}});
+        assert_eq!(execution_elapsed(&result,"own"),Some(273960));
+        assert_eq!(execution_elapsed(&result,"other"),None);
+        assert_eq!(execution_elapsed(&json!({}),"own"),None);
+        let mut reversed=result.clone();reversed["status"]["messages"][1][1]["timestamp"]=json!(999);
+        assert_eq!(execution_elapsed(&reversed,"own"),None);
+    }
+    #[tokio::test]
+    async fn h3_cancel_targets_only_own_job_and_confirms_queue_exit() {
+        use axum::{Router, routing::{get, post}, Json, extract::State as AxumState};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct Mock { mode: AtomicUsize, posts: AtomicUsize }
+        let shared = Arc::new(Mock { mode: AtomicUsize::new(0), posts: AtomicUsize::new(0) });
+        let app = Router::new()
+            .route("/queue",get(|AxumState(s): AxumState<Arc<Mock>>| async move {
+                let own = json!([0,"own",{},{"bowerbird_request_id":"request"},[]]);
+                Json(match s.mode.load(Ordering::SeqCst) {
+                    0 => json!({"queue_running":[[1,"other",{},{}]],"queue_pending":[own]}),
+                    1 => json!({"queue_running":[own],"queue_pending":[[1,"other",{},{}]]}),
+                    _ => json!({"queue_running":[[1,"other",{},{}]],"queue_pending":[]}),
+                })
+            }))
+            .route("/history/own",get(|AxumState(s): AxumState<Arc<Mock>>| async move {
+                Json(if s.mode.load(Ordering::SeqCst)==3 { json!({"own":{"status":{"completed":true,"status_str":"success"}}}) } else {json!({})})
+            }))
+            .route("/api/jobs/own/cancel",post(|AxumState(s): AxumState<Arc<Mock>>| async move {
+                s.posts.fetch_add(1,Ordering::SeqCst);
+                s.mode.store(2,Ordering::SeqCst);
+                Json(json!({"cancelled":true}))
+            })).with_state(shared.clone());
+        let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut i=input(); i.endpoint=format!("http://{}",listener.local_addr().unwrap());
+        let server=tokio::spawn(async move {axum::serve(listener,app).await.unwrap()});
+        let root=std::env::temp_dir().join(format!("h3-cancel-{}",uuid::Uuid::new_v4()));fs::create_dir_all(&root).unwrap();
+        let path=root.join("record.json");let http=client().unwrap();
+        let mut record=Record { account:"tester".into(),project:"p".into(),input:i,prompt_id:Some("own".into()),submitted:true,asset_id:None,failure:None,cancelled:false,elapsed_ms:None };
+        for mode in [0,1] {
+            shared.mode.store(mode,Ordering::SeqCst);record.cancelled=false;
+            assert_eq!(cancel(&http,&path,&mut record,"request",&|| Ok(())).await.unwrap().status,"cancelled");
+            assert!(serde_json::from_slice::<Record>(&fs::read(&path).unwrap()).unwrap().cancelled);
+        }
+        assert_eq!(shared.posts.load(Ordering::SeqCst),2);
+        record.cancelled=false;shared.mode.store(3,Ordering::SeqCst);
+        assert_eq!(cancel(&http,&path,&mut record,"request",&|| Ok(())).await.unwrap().status,"done");
+        assert!(!record.cancelled);assert_eq!(shared.posts.load(Ordering::SeqCst),2);
+        shared.mode.store(2,Ordering::SeqCst);
+        assert!(cancel(&http,&path,&mut record,"request",&|| Ok(())).await.is_err());
+        assert!(!record.cancelled);
+        assert!(cancel(&http,&path,&mut record,"request",&|| Err(error("account switched"))).await.is_err());
+        server.abort(); let _=server.await; fs::remove_dir_all(root).unwrap();
+    }
     fn input() -> Input { Input { endpoint:"http://127.0.0.1:8188".into(), seconds:8.0, ratio:"9:16".into(), resolution:0.8, first_frame:"first".into(), last_frame:None, prompt:"test prompt".into() } }
     #[test]
     fn h3_graph_preserves_native_audio_branch_and_exact_parameters() {
@@ -304,7 +426,7 @@ mod tests {
         let server=tokio::spawn(async move {axum::serve(listener,app).await.unwrap()});
         let mut i=input();i.endpoint=base;i.first_frame=frame.id.clone();i.last_frame=Some(frame.id.clone());
         let request=uuid::Uuid::new_v4().to_string();let path=root.join(format!("{request}.json"));
-        let mut record=Record {account:"tester".into(),project:"p".into(),input:i,prompt_id:None,submitted:false,asset_id:None,failure:None};
+        let mut record=Record {account:"tester".into(),project:"p".into(),input:i,prompt_id:None,submitted:false,asset_id:None,failure:None,cancelled:false,elapsed_ms:None};
         save(&path,&record).unwrap();let http=client().unwrap();
         start(&http,&db,&path,&mut record,&request,&|| Ok(())).await.unwrap();
         assert_eq!(shared.uploads.load(Ordering::SeqCst),2);assert_eq!(shared.posts.load(Ordering::SeqCst),1);
@@ -321,7 +443,7 @@ mod tests {
         assert_eq!(db.count_assets(None).unwrap(),2);assert_eq!(shared.posts.load(Ordering::SeqCst),1);
         record.asset_id=None;shared.phase.store(2,Ordering::SeqCst);
         let failed=poll(&http,&db,&paths,&path,&mut record,&request,&|| Ok(())).await.unwrap();assert_eq!(failed.status,"failed");assert!(failed.message.contains("mock GPU error"));
-        let mut denied=Record {account:"tester".into(),project:"p".into(),input:record.input.clone(),prompt_id:None,submitted:false,asset_id:None,failure:None};
+        let mut denied=Record {account:"tester".into(),project:"p".into(),input:record.input.clone(),prompt_id:None,submitted:false,asset_id:None,failure:None,cancelled:false,elapsed_ms:None};
         let denied_path=root.join("denied.json");
         assert!(start(&http,&db,&denied_path,&mut denied,"denied",&|| Err(error("account switched"))).await.is_err());
         assert!(!denied.submitted);assert_eq!(shared.posts.load(Ordering::SeqCst),1);

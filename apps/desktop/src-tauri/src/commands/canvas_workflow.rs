@@ -95,7 +95,8 @@ fn validate(document: &Value) -> AppResult<HashSet<String>> {
         let inputs = node["inputs"].as_object().ok_or_else(invalid)?;
         if node["kind"] == "planner" && (node["trigger"] != false || inputs.keys().any(|key| key != "text" && key != "image")
             || node["outputs"].as_object().is_none_or(|outputs| !outputs.is_empty()) || node["outputPorts"].as_array().is_none_or(|ports| !ports.is_empty())) { return Err(invalid()); }
-        if node["kind"] == "trigger" && !inputs.is_empty() { return Err(invalid()); }
+        if node["kind"] == "trigger" && inputs.keys().any(|key| key != "completion") { return Err(invalid()); }
+        if node.get("triggerCount").is_some_and(|count| node["kind"] != "trigger" || count.as_u64().is_none_or(|count| count > 9999)) { return Err(invalid()); }
         if node["kind"] == "loop" {
             if node.get("loopMode").is_some_and(|mode| !matches!(mode.as_str(), Some("images" | "rows"))) { return Err(invalid()); }
             if node.get("loopStartItem").is_some_and(|value| value.as_u64().is_none_or(|item| !(1..=100).contains(&item))) { return Err(invalid()); }
@@ -133,6 +134,16 @@ fn validate(document: &Value) -> AppResult<HashSet<String>> {
         }
         let mut deps = Vec::new();
         for (port, bindings) in inputs {
+            if port == "completion" {
+                if node["kind"] != "trigger" { return Err(invalid()); }
+                for binding in bindings.as_array().ok_or_else(invalid)? {
+                    let producer = nodes.iter().find(|source| source["id"] == binding["nodeId"]).ok_or_else(invalid)?;
+                    if matches!(producer["kind"].as_str(), Some("trigger" | "planner")) || producer.get("textSource").is_some()
+                        || !matches!(binding["portId"].as_str(), Some("text" | "image" | "visual-profile" | "iteration"))
+                        || binding.as_object().is_none_or(|value| value.len() != 2) { return Err(invalid()); }
+                }
+                continue; // Completion events do not participate in the data dependency DAG.
+            }
             let image_port = port == "image" || node["kind"] == "comfy-video" && matches!(port.as_str(), "first-frame" | "last-frame");
             if !image_port && !matches!(port.as_str(), "text" | "visual-profile" | "signal") { return Err(invalid()); }
             for binding in bindings.as_array().ok_or_else(invalid)? {
@@ -203,6 +214,11 @@ fn validate(document: &Value) -> AppResult<HashSet<String>> {
     let mut run_ids = HashSet::new();
     let mut accesses: Vec<(HashSet<&str>, HashSet<&str>)> = Vec::new();
     for run in runs {
+        if let Some(queue) = run.get("triggerQueue") {
+            for id in queue.as_array().ok_or_else(invalid)? {
+                if !nodes.iter().any(|node| node["id"] == *id && node["kind"] == "trigger") { return Err(invalid()); }
+            }
+        }
         validate_loop(run, nodes, &mut assets)?;
         if run["order"].as_array().is_some_and(|order| order.iter().any(|id| nodes.iter().any(|node| node["id"] == *id && node["kind"] == "planner"))) { return Err(invalid()); }
         if !matches!(run["status"].as_str(), Some("running" | "waiting" | "done" | "failed" | "stopped"))
@@ -445,6 +461,29 @@ mod tests {
         assert!(validate(&doc).is_err());
         doc["nodes"][0]["inputs"] = json!({"image":[{"groupId":"folder","assetIds":[12]}]});
         assert!(validate(&doc).is_err());
+    }
+    #[test]
+    fn completion_trigger_allows_bounded_feedback_but_not_data_cycles() {
+        let mut switch = node("switch", json!({"completion":[{"nodeId":"video","portId":"image"}]}));
+        switch["kind"] = json!("trigger"); switch["triggerCount"] = json!(2);
+        let mut video = node("video", json!({"signal":[{"nodeId":"switch","portId":"signal"}]}));
+        video["kind"] = json!("comfy-video");
+        let doc = json!({"schema_version":1,"nodes":[switch,video],"run":null});
+        assert!(validate(&doc).is_ok());
+        let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();
+        db.conn.lock().unwrap().execute("INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1)", []).unwrap();
+        let mut queued = doc.clone();
+        queued["run"] = json!({"id":"run","threadId":"thread","startId":"video","status":"waiting","order":["video"],"steps":{"video":{"status":"done"}},"triggerQueue":["switch"],"lockedNodeIds":["switch","video"],"writeNodeIds":["switch","video"]});
+        db.workflow_save("p", 0, queued.clone()).unwrap();
+        assert_eq!(db.workflow_get("p").unwrap().document, queued);
+        queued["run"]["triggerQueue"] = json!(["missing"]); assert!(validate(&queued).is_err());
+        for count in [json!(-1), json!(1.5), json!(10000), json!("2")] {
+            let mut bad = doc.clone(); bad["nodes"][0]["triggerCount"] = count; assert!(validate(&bad).is_err());
+        }
+        let mut zero = doc.clone(); zero["nodes"][0]["triggerCount"] = json!(0); assert!(validate(&zero).is_ok());
+        let mut missing = doc.clone(); missing["nodes"][0]["inputs"]["completion"][0]["nodeId"] = json!("missing"); assert!(validate(&missing).is_err());
+        let mut self_event = doc.clone(); self_event["nodes"][0]["inputs"]["completion"][0]["nodeId"] = json!("switch"); assert!(validate(&self_event).is_err());
+        let mut data_cycle = doc.clone(); data_cycle["nodes"][1]["inputs"]["text"] = json!([{"nodeId":"video","portId":"text"}]); assert!(validate(&data_cycle).is_err());
     }
     #[test]
     fn trigger_signal_targets_cards_without_data_ports() {

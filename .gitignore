@@ -58,6 +58,7 @@ dev-doc/*
 !dev-doc/ONBOARDING.md
 !dev-doc/DESKTOP-UPDATES.md
 !dev-doc/CREATIVE-MEMORY-PLAN.md
+!dev-doc/ARCH-ADJUST-PROGRESS.md
 !dev-doc/SEEDANCE-2.5-INTEGRATION.md
 !dev-doc/COMFYUI-LOCAL-VIDEO.md
 !dev-doc/VIDEO-API-INTEGRATION.md

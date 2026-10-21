@@ -10,7 +10,7 @@ try {
     create schema auth; create schema extensions; create table auth.users(id uuid primary key);
     create function auth.uid() returns uuid language sql as $$ select null::uuid $$;
     create function extensions.gen_random_uuid() returns uuid language sql as $$ select gen_random_uuid() $$;`);
-  for (const prefix of ["0001","0002","0003","0004","0005","0009","0010","0023","0065"]) {
+  for (const prefix of ["0001","0002","0003","0004","0005","0009","0010","0023","0065","0066"]) {
     const file=fs.readdirSync("apps/cloud/supabase/migrations").find(f=>f.startsWith(prefix));
     await db.exec(fs.readFileSync(`apps/cloud/supabase/migrations/${file}`,"utf8").replace("create extension if not exists pgcrypto with schema extensions;",""));
   }
@@ -18,7 +18,7 @@ try {
   const user="aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa", other="bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb";
   await q("insert into auth.users values($1),($2)",[user,other]);
   await q("insert into credit_lots(user_id,bucket,source_key,original_amount,remaining_amount,expires_at) values($1,'topup','test',100,100,now()+interval '1 year')",[user]);
-  const begin=async(key,uid=user,free=null,discovery=true)=>(await q("select begin_classification($1,$2,'input','image',$3,100,1000000,1000,$4) r",[uid,key,discovery,free]))[0].r;
+  const begin=async(key,uid=user,free=null,discovery=true)=>(await q("select begin_classification($1,$2,'input','image',$3,100,1000000,null,$4) r",[uid,key,discovery,free]))[0].r;
   const advance=async(row,action,success=false,response={},uid=user)=>(await q("select advance_classification($1,$2,$3,null,null,$4,$5) r",[uid,row.id,action,JSON.stringify(response),success]))[0].r;
   const spent=async()=>Number((await q("select coalesce(sum(actual_amount),0) n from credit_holds where service='classification' and status='confirmed'"))[0].n);
   const successes=async()=>Number((await q("select successful_images n from classification_meters where user_id=$1",[user]))[0]?.n??0);
@@ -67,5 +67,12 @@ try {
   await q("update credit_lots set remaining_amount=0 where user_id=$1",[other]);
   await assert.rejects(()=>begin("no-credit",other));
   assert.equal((await q("select count(*)::int n from classification_requests where user_id=$1",[other]))[0].n,0);
-  console.log("PASS: 5 images/credit, multi-label single count, Jev + Cloud combined, cross-batch remainder, failures/unknown refunds, idempotency, interleaved completion, ownership, TTL, RPC permissions, insufficient credits");
+  // Classification bypasses even an already-full shared user minute bucket.
+  await q("insert into usage_minute(user_id,minute_start,request_count) values($1,date_trunc('minute',now()),10)",[user]);
+  for(let i=0;i<20;i++) await advance((await begin(`unlimited-${i}`)).request,"fail");
+  assert.equal((await q("select request_count from usage_minute where user_id=$1",[user]))[0].request_count,10);
+  await assert.rejects(()=>q("select begin_classification($1,'limited','input','image',true,100,1000000,10,null)",[user]), /rate reached/);
+  await assert.rejects(()=>q("select begin_classification($1,'cost-cap','input','image',true,100,1,null,null)",[user]), /cost limit/);
+  assert.equal(await successes(),10); assert.equal(await spent(),2);
+  console.log("PASS: classification bypasses full minute bucket, other callers still limited, cost cap preserved, 5 images/credit, multi-label single count, Jev + Cloud combined, cross-batch remainder, failures/unknown refunds, idempotency, interleaved completion, ownership, TTL, RPC permissions, insufficient credits");
 } finally {await db.close();}

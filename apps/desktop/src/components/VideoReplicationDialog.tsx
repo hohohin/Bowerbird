@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { ArrowRight, Copy, LoaderCircle, Plus } from "lucide-react";
+import { ArrowRight, Copy, History, ImagePlus, LoaderCircle, Play, Plus } from "lucide-react";
 import { ModalShell } from "./ModalShell";
 import { VideoPlayer } from "./VideoPlayer";
 import { DouyinReferencePicker } from "./DouyinReferencePicker";
 import { ReplicationFields, replicationTabs } from "./VideoReplicationForms";
-import { REPLICATION_PERSONA, REPLICATION_RULES, replicationDuration, replicationRunning, replicationStateLabel, validateReplicationInput, type ReplicationInput, type ReplicationOperation, type ReplicationProduct, type ReplicationReference, type ReplicationTask } from "../lib/videoReplication";
+import { REPLICATION_PERSONA, REPLICATION_RULES, replicationDuration, replicationRewriteParts, replicationRunning, replicationStateLabel, validateReplicationInput, type ReplicationInput, type ReplicationOperation, type ReplicationProduct, type ReplicationReference, type ReplicationTask, type ReplicationFrameReference, type ReplicationImageRequest } from "../lib/videoReplication";
+import { api } from "../lib/api";
+import { videoTime, type VideoFrame } from "../lib/videoFrame";
 import { DEFAULT_VIDEO_OPTIONS } from "../lib/videoGeneration";
 import { notify } from "../lib/notify";
 import { useStore } from "../store";
@@ -17,7 +19,7 @@ interface Preferences { persona: string; rules: string; products: ReplicationPro
 interface Capability { operation: "video-analysis" | "text-rewrite"; available: boolean; credits: number | null }
 const fresh = (operation: Exclude<ReplicationOperation, "generate">, prefs: Preferences): ReplicationInput => ({ operation, title: operation === "analyze" ? "视频分析" : "内容改写", persona: prefs.persona, rules: prefs.rules, ratio: "9:16" });
 
-export function VideoReplicationDialog({ projectId, onClose, ensureProject }: { projectId: string; onClose: () => void; ensureProject: () => Promise<void> }) {
+export function VideoReplicationDialog({ projectId, onClose, ensureProject, onGenerateImage }: { projectId: string; onClose: () => void; ensureProject: () => Promise<void>; onGenerateImage?: (request: ReplicationImageRequest) => Promise<void> }) {
   const call = <T,>(action: string, data: unknown = {}) => invoke<T>("video_replication", { projectId, action, data });
   const [prefs, setPrefs] = useState<Preferences>({ persona: REPLICATION_PERSONA, rules: REPLICATION_RULES, products: [] });
   const [input, setInput] = useState<ReplicationInput>(() => fresh("analyze", prefs));
@@ -40,12 +42,15 @@ export function VideoReplicationDialog({ projectId, onClose, ensureProject }: { 
   const [sources, setSources] = useState<Asset[]>([]);
   const [query, setQuery] = useState("");
   const [offset, setOffset] = useState(0);
-  const [productEditor, setProductEditor] = useState(false);
-  const [productName, setProductName] = useState("");
-  const [productText, setProductText] = useState("");
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [playerOpen, setPlayerOpen] = useState(false);
+  const [firstFramePrompt, setFirstFramePrompt] = useState("");
+  const [frameReference, setFrameReference] = useState<ReplicationFrameReference | null>(null);
+  const [framePreview, setFramePreview] = useState("");
   const [edited, setEdited] = useState("");
   const dirty = useRef(false);
-  const edits = useRef(new Map<string, string>());
+  const edits = useRef(new Map<string, { text: string; prompt: string; frame: ReplicationFrameReference | null }>());
+  const drafts = useRef(new Map<string, { input: ReplicationInput; selectedId: string | null; reference: ReplicationReference | null; frame: ReplicationFrameReference | null }>());
   const operation = selected?.operation ?? input.operation;
   const available = capabilities.services.find(item => item.operation === (operation === "analyze" ? "video-analysis" : "text-rewrite"));
 
@@ -110,15 +115,32 @@ export function VideoReplicationDialog({ projectId, onClose, ensureProject }: { 
   }, [projectId, authIdentity, capabilityRefresh]);
   useEffect(() => {
     dirty.current = selectedId !== null && edits.current.has(selectedId);
-    setEdited((selectedId ? edits.current.get(selectedId) : undefined) ?? selected?.rewrittenText ?? "");
+    const edit = selectedId ? edits.current.get(selectedId) : undefined;
+    const parts = replicationRewriteParts(selected?.rewrittenText ?? "");
+    setEdited(edit?.text ?? (selected?.firstFramePrompt === undefined ? parts.text : selected.rewrittenText));
+    setFirstFramePrompt(edit?.prompt ?? selected?.firstFramePrompt ?? parts.firstFramePrompt);
+    if (selected) setFrameReference(edit ? edit.frame : selected.frameReference ?? null);
   }, [selectedId]);
-  useEffect(() => { if (!dirty.current) setEdited(selected?.rewrittenText ?? ""); }, [selected?.rewrittenText]);
-  const referenceId = selected?.referenceId ?? (selected?.sourceAnalysisId ? tasks.find(task => task.id === selected.sourceAnalysisId)?.referenceId : undefined) ?? (!selected ? reference?.id : undefined);
+  useEffect(() => { if (!dirty.current) {
+    const parts = replicationRewriteParts(selected?.rewrittenText ?? "");
+    setEdited(selected?.firstFramePrompt === undefined ? parts.text : selected.rewrittenText);
+    setFirstFramePrompt(selected?.firstFramePrompt ?? parts.firstFramePrompt);
+  } }, [selected?.rewrittenText, selected?.firstFramePrompt]);
+  const referenceId = selected?.referenceId ?? reference?.id ?? input.referenceId ?? (input.sourceAnalysisId ? tasks.find(task => task.id === input.sourceAnalysisId)?.referenceId : undefined);
+  const viewIdentity = useRef("");
+  viewIdentity.current = `${operation}:${selectedId ?? "draft"}:${referenceId ?? ""}`;
   useEffect(() => {
-    let disposed = false; setMediaPath(null); setMediaError("");
+    let disposed = false; setMediaPath(null); setMediaError(""); setPlayerOpen(false);
     if (referenceId) void call<string>("media", { id: referenceId }).then(value => !disposed && setMediaPath(value)).catch(e => !disposed && setMediaError(String(e)));
     return () => { disposed = true; };
   }, [referenceId, projectId]);
+  useEffect(() => {
+    let disposed = false; setFramePreview("");
+    if (frameReference) void api.getAssetsByIds([frameReference.assetId]).then(items => {
+      if (!disposed) setFramePreview(items[0]?.store_path ? convertFileSrc(items[0].store_path) : "");
+    }).catch(e => !disposed && setError(`参考图读取失败：${String(e)}`));
+    return () => { disposed = true; };
+  }, [frameReference?.assetId]);
   useEffect(() => {
     if (!picker) return;
     let disposed = false;
@@ -127,24 +149,60 @@ export function VideoReplicationDialog({ projectId, onClose, ensureProject }: { 
   }, [picker, query, offset, projectId]);
 
   function newDraft(next: Exclude<ReplicationOperation, "generate">, patch: Partial<ReplicationInput> = {}) {
-    setSelectedId(null); setReference(null); setPicker(false); setDouyinPicker(false); setInput({ ...fresh(next, prefs), ...patch }); setError(""); setNotice("");
+    remember();
+    setSelectedId(null); setReference(patch.referenceId === reference?.id ? reference : null); setFrameReference(patch.frameReference ?? null);
+    setPicker(false); setDouyinPicker(false); setPlayerOpen(false); setInput({ ...fresh(next, prefs), ...patch, product: null }); setError(""); setNotice("");
+  }
+  function remember() { drafts.current.set(operation, { input, selectedId, reference, frame: frameReference }); }
+  function switchTab(next: "analyze" | "rewrite") {
+    if (next === operation) return;
+    remember();
+    const draft = drafts.current.get(next);
+    setSelectedId(draft?.selectedId ?? null); setInput(draft?.input ?? fresh(next, prefs)); setReference(draft?.reference ?? null); setFrameReference(draft?.frame ?? null);
+    setPlayerOpen(false); setPicker(false); setDouyinPicker(false); setError(""); setNotice("");
+  }
+  function selectTask(task: ReplicationTask) {
+    remember();
+    setSelectedId(task.id); setInput({ ...task, product: null }); setReference(task.reference ?? tasks.find(item => item.id === task.sourceAnalysisId)?.reference ?? null);
+    setPlayerOpen(false); setHistoryOpen(false); setPicker(false); setDouyinPicker(false); setError(""); setNotice("");
+  }
+  function changeResult(text: string, prompt = firstFramePrompt, frame = frameReference) {
+    if (!selected) return;
+    dirty.current = true; edits.current.set(selected.id, { text, prompt, frame });
+    setEdited(text); setFirstFramePrompt(prompt); setFrameReference(frame);
+  }
+  async function saveResult() {
+    if (!selected) throw new Error("请选择改写记录");
+    const value = await call<ReplicationTask>("save-result", { id: selected.id, text: edited, firstFramePrompt, frameReference });
+    if (alive.current) { edits.current.delete(selected.id); dirty.current = false; put(value); }
+    return value;
+  }
+  async function captureFrame(frame: VideoFrame) {
+    const view = viewIdentity.current;
+    await ensureProject();
+    const asset = await api.importImageBytes({ dataUrl: frame.dataUrl, projectId, source: "video-frame", fileName: `复刻参考-${frame.time.toFixed(3)}.png` });
+    if (!alive.current || viewIdentity.current !== view) return;
+    const value = { assetId: asset.id, time: frame.time, name: reference?.name ?? "参考视频" };
+    setFrameReference(value);
+    if (selected?.rewrittenText) changeResult(edited, firstFramePrompt, value);
+    setNotice(`已截取 ${videoTime(frame.time)} 的画面作为首帧参考图`);
   }
   async function chooseReference(data: { path?: string; assetId?: string }) {
     await ensureProject();
     const value = await call<ReplicationReference>("reference", data);
     if (!alive.current) return;
-    setReference(value); setInput(current => ({ ...current, referenceId: value.id, title: value.name.slice(0,100) })); setPicker(false);
+    setSelectedId(null); setReference(value); setFrameReference(null); setInput(current => ({ ...current, referenceId: value.id, title: value.name.slice(0,100) })); setPicker(false);
   }
   async function submit() {
     const issue = validateReplicationInput(input); if (issue) throw new Error(issue);
     await ensureProject();
-    const task = await call<ReplicationTask>("create", input);
+    const task = await call<ReplicationTask>("create", { ...input, frameReference, product: null });
     if (alive.current) put(task);
   }
   async function carryRewrite() {
     if ([...edited].length > 12000) throw new Error("改写结果超过 12000 字，请精简后带入生成");
     if (!edited.trim() || !selected) throw new Error("请先填写改写结果");
-    const saved = await call<ReplicationTask>("save-result", { id: selected.id, text: edited });
+    const saved = await saveResult();
     if (!alive.current || useStore.getState().activeProjectId !== projectId) return;
     edits.current.delete(selected.id);
     dirty.current = false;
@@ -156,61 +214,78 @@ export function VideoReplicationDialog({ projectId, onClose, ensureProject }: { 
     if (duration === null) notify("未识别到有效分镜时间，已填入默认 5 秒，请在发送前调整");
   }
 
-  return <ModalShell title="视频复刻工具" eyebrow="工具箱" description="分析参考、改写分镜，插入画板对话框后生成。" width="lg" className="video-replication" onClose={onClose} preventClose={busy}
-    headerActions={<button type="button" className="app-modal-button" onClick={() => setProductEditor(value => !value)}>产品资料</button>}>
-    <aside className="vr-history" aria-label="复刻历史"><div className="vr-history-heading">本项目记录 <button type="button" aria-label="新建复刻记录" onClick={() => newDraft(operation === "generate" ? "rewrite" : operation)}><Plus size={15} /></button></div>
+  async function generateFirstFrame() {
+    if (!firstFramePrompt.trim() || !onGenerateImage) throw new Error("请填写首帧画面提示词");
+    await saveResult();
+    if (!alive.current || useStore.getState().activeProjectId !== projectId) return;
+    await onGenerateImage({ prompt: firstFramePrompt, referenceId: frameReference?.assetId, ratio: selected?.ratio ?? "9:16" });
+    if (alive.current) onClose();
+  }
+
+  const running = !!selected && replicationRunning(selected);
+  const analyzed = !!selected?.analysis;
+  const rewritten = !!selected?.rewriteOriginalText;
+  const invalid = validateReplicationInput(input);
+  const credits = available?.available ? ` · ${available.credits} 积分` : "";
+  const displayedReference = reference ?? selected?.reference ?? null;
+  const changeInput = (patch: Partial<ReplicationInput>) => setInput(current => ({ ...current, ...patch }));
+  return <ModalShell title="视频复刻工具" eyebrow="工具箱" width="lg" className="video-replication" onClose={onClose} preventClose={busy}
+    headerActions={<div className="vr-actions"><button type="button" aria-expanded={historyOpen} onClick={() => setHistoryOpen(value => !value)}><History size={15} />记录</button><button type="button" aria-label="新建复刻记录" disabled={busy} onClick={() => newDraft(operation === "generate" ? "rewrite" : operation)}><Plus size={15} />新建</button></div>}>
+    {historyOpen && <aside className="vr-history" aria-label="复刻历史"><div className="vr-history-heading">本项目记录</div>
       {!tasks.length && <p className="vr-hint">执行记录会保存在这里</p>}
-      {tasks.map(task => <button key={task.id} type="button" aria-current={selectedId === task.id} onClick={() => { setSelectedId(task.id); setError(""); }}><strong>{task.title}</strong><small>{replicationTabs.find(tab => tab.id === task.operation)?.label ?? "历史生成"} · {replicationStateLabel[task.state]}</small></button>)}
-    </aside>
+      {tasks.map(task => <button key={task.id} type="button" disabled={busy} aria-current={selectedId === task.id} onClick={() => selectTask(task)}><strong>{task.title}</strong><small>{replicationTabs.find(tab => tab.id === task.operation)?.label ?? "历史生成"} · {replicationStateLabel[task.state]}</small></button>)}
+    </aside>}
     <main className="vr-main">
-      <nav className="vr-tabs" aria-label="复刻操作">{replicationTabs.map(tab => <button type="button" key={tab.id} aria-pressed={operation === tab.id} onClick={() => newDraft(tab.id)}><tab.icon size={20} /><span><strong>{tab.label}</strong><small>{tab.description}</small></span></button>)}</nav>
+      <nav className="vr-tabs" aria-label="复刻操作">{replicationTabs.map(tab => <button type="button" key={tab.id} disabled={busy} aria-pressed={operation === tab.id} onClick={() => switchTab(tab.id)}><tab.icon size={18} /><strong>{tab.label}</strong></button>)}</nav>
       {error && <div className="vr-message is-error" role="alert">{error}</div>}{notice && <div className="vr-message" role="status">{notice}</div>}
-      {productEditor && <section className="vr-product-editor"><h3>产品资料</h3><p className="vr-hint">仅保存名称与文字信息；改写时冻结快照，生成时不自动附加。</p>
-        {prefs.products.map(product => <p key={product.id} className="vr-hint">{product.name}</p>)}
-        <label className="vr-field">产品名称<input value={productName} maxLength={100} onChange={e => setProductName(e.target.value)} /></label>
-        <label className="vr-field">品牌、外观、卖点与注意事项<textarea rows={4} value={productText} maxLength={8000} onChange={e => setProductText(e.target.value)} /></label>
-        <div className="vr-actions"><button type="button" disabled={busy || !productName.trim() || !productText.trim()} onClick={() => void action(async () => {
-          const product = { id: crypto.randomUUID(), name: productName.trim(), description: productText.trim() };
-          const next = { ...prefs, products: [...prefs.products, product] }; await call("save-preferences", next); setPrefs(next); setInput(current => ({ ...current, product })); setProductEditor(false); setProductName(""); setProductText("");
-        })}>保存产品资料</button></div>
-      </section>}
-      {selected ? <>
-        <h3>{selected.title}</h3><p className="vr-hint">{new Date(selected.createdAt).toLocaleString()} · {replicationStateLabel[selected.state]}</p>
-        <div className="vr-message" role="status">{replicationRunning(selected) && <LoaderCircle size={14} className="animate-spin inline" />} {selected.message || replicationStateLabel[selected.state]}</div>
-        {selected.error && <div className="vr-message is-error" role="alert">{selected.error}</div>}
-        {(selected.reference || referenceId) && <p className="vr-hint">参考视频：{selected.reference?.name || tasks.find(task => task.id === selected.sourceAnalysisId)?.reference?.name}</p>}
-        {selected.reference?.shareText && <p className="vr-hint">原分享：{selected.reference.shareText}<br />作品链接：{selected.reference.originalUrl}</p>}
-        {mediaError && <div className="vr-message is-error">{mediaError}</div>}{mediaPath && <VideoPlayer key={mediaPath} path={mediaPath} />}
-        {selected.analysis && <><pre className="vr-result">{selected.analysis}</pre><div className="vr-actions"><button type="button" onClick={() => newDraft("rewrite", { inputText: selected.analysis, sourceAnalysisId: selected.id })}>改写此分析 <ArrowRight size={14} /></button><button type="button" onClick={() => void action(async () => { await navigator.clipboard.writeText(selected.analysis); setNotice("已复制分析文本"); })}><Copy size={14} />复制</button></div></>}
-        {selected.rewriteOriginalText && <>
-          <label className="vr-field">改写结果（可编辑）<textarea rows={12} maxLength={50000} value={edited} onChange={e => { dirty.current = true; edits.current.set(selected.id, e.target.value); setEdited(e.target.value); }} /></label>
-          <div className="vr-actions"><button type="button" disabled={busy} onClick={() => void action(async () => { const value = await call<ReplicationTask>("save-result", { id: selected.id, text: edited }); edits.current.delete(selected.id); dirty.current = false; put(value); setNotice("已保存修改"); })}>保存修改</button>
-            <button type="button" onClick={() => void action(async () => { await navigator.clipboard.writeText(edited); setNotice("已复制改写结果"); })}>复制</button>
-            <button type="button" disabled={busy} className="is-primary" onClick={() => void action(carryRewrite)}>插入到对话框 <ArrowRight size={14} /></button>
-            <button type="button" onClick={() => newDraft("rewrite", { inputText: edited, persona: selected.persona, rules: selected.rules, product: selected.product, sourceAnalysisId: selected.sourceAnalysisId })}>调整后新建改写</button></div>
-          <details><summary className="vr-hint">查看模型原文与提交快照</summary><pre className="vr-result">{selected.rewriteOriginalText}</pre><pre className="vr-result">{selected.persona}{"\n\n"}{selected.rules}{"\n\n"}{selected.inputText}</pre></details>
-        </>}
-        {selected.operation === "generate" && <><pre className="vr-result">{selected.prompt}</pre>
+      {selected?.operation === "generate" ? <section className="vr-legacy"><pre className="vr-result">{selected.prompt}</pre>
           <p className="vr-hint">视频生成已统一到项目画板。</p>
-          {selected.generationJobId && <div className="vr-actions"><button type="button" onClick={() => { useStore.getState().openGenerationJob(selected.generationJobId!); onClose(); }}>查看画板生成会话</button></div>}</>}
-        {selected.operation !== "generate" && ["failed", "interrupted"].includes(selected.state) && <div className="vr-actions"><button type="button" disabled={busy} onClick={() => void action(async () => put(await call<ReplicationTask>("resume", { id: selected.id }))) }>恢复原任务</button><button type="button" disabled={busy} onClick={() => { newDraft(selected.operation === "analyze" ? "analyze" : "rewrite", { title: selected.title, referenceId: selected.referenceId, inputText: selected.inputText, persona: selected.persona, rules: selected.rules, product: selected.product, sourceAnalysisId: selected.sourceAnalysisId }); setReference(selected.reference ?? null); }}>调整后新建任务</button></div>}
-        <p className="vr-hint">模型用量：{selected.usage ? `输入 ${selected.usage.inputTokens ?? "未记录"} · 缓存输入 ${selected.usage.cachedInputTokens ?? "未记录"} · 输出 ${selected.usage.outputTokens ?? "未记录"}` : "未记录"}</p>
-      </> : <>
-        <ReplicationFields input={input} onChange={patch => setInput(current => ({ ...current, ...patch }))} products={prefs.products} reference={reference} disabled={busy}
+          {selected.generationJobId && <div className="vr-actions"><button type="button" onClick={() => { useStore.getState().openGenerationJob(selected.generationJobId!); onClose(); }}>查看画板生成会话</button></div>}</section>
+      : <div className="vr-workbench"><section className="vr-context" aria-label="输入区">
+        {operation === "rewrite" && referenceId && <section className="vr-video-reference" aria-label="改写参考视频">
+          <div className="vr-video-summary">{mediaPath && !playerOpen && <video src={convertFileSrc(mediaPath)} preload="metadata" muted playsInline aria-label="参考视频封面" />}<div><strong>{displayedReference?.name || "参考视频"}</strong><p className="vr-hint">{displayedReference?.duration?.toFixed(1)} 秒 · 来自本次分析</p><button type="button" className="vr-text-button" disabled={!mediaPath} aria-expanded={playerOpen} onClick={() => setPlayerOpen(value => !value)}><Play size={14} />{playerOpen ? "收起播放器" : "查看 / 截帧"}</button></div></div>
+          {mediaPath && playerOpen && <VideoPlayer key={mediaPath} path={mediaPath} embedded frameTarget="reference" onAddFrame={captureFrame} />}
+        </section>}
+        <h3>{operation === "analyze" ? "参考视频" : "改写输入"}</h3>
+        <ReplicationFields input={input} onChange={changeInput} reference={displayedReference} disabled={busy || running}
           onUpload={() => void action(async () => { const path = await open({ multiple: false, filters: [{ name: "视频", extensions: ["mp4", "mov", "m4v", "webm", "mkv", "avi"] }] }); if (typeof path === "string") await chooseReference({ path }); })}
           onPickLibrary={() => { setPicker(value => !value); setDouyinPicker(false); setOffset(0); }}
           onPickDouyin={() => { setDouyinPicker(value => !value); setPicker(false); }}
           onSaveDefaults={() => void action(async () => { const next = { ...prefs, persona: input.persona!, rules: input.rules! }; await call("save-preferences", next); setPrefs(next); setNotice("默认人设与规范已保存"); })} />
-        {douyinPicker && operation === "analyze" && <DouyinReferencePicker projectId={projectId} ensureProject={ensureProject} onUse={value => { setReference(value); setInput(current => ({ ...current, referenceId: value.id, title: value.name.slice(0,100) })); setDouyinPicker(false); }} />}
+        {douyinPicker && operation === "analyze" && <DouyinReferencePicker projectId={projectId} ensureProject={ensureProject} onUse={value => { setSelectedId(null); setReference(value); changeInput({ referenceId: value.id, title: value.name.slice(0,100) }); setDouyinPicker(false); }} />}
         {picker && <section className="vr-picker"><label className="vr-field">搜索素材库视频<input value={query} onChange={e => { setQuery(e.target.value); setOffset(0); }} /></label>{sources.map(asset => <button type="button" key={asset.id} disabled={busy} onClick={() => void action(() => chooseReference({ assetId: asset.id }))}>{asset.name} · {(asset.duration ?? 0).toFixed(1)} 秒</button>)}{!sources.length && <p className="vr-hint">没有匹配的视频</p>}<div className="vr-actions"><button type="button" disabled={!offset} onClick={() => setOffset(Math.max(0,offset-40))}>上一页</button><button type="button" disabled={sources.length<40} onClick={() => setOffset(offset+40)}>下一页</button></div></section>}
-        {mediaError && <div className="vr-message is-error">{mediaError}</div>}{mediaPath && <VideoPlayer key={mediaPath} path={mediaPath} />}
-        <>
+        {mediaError && <div className="vr-message is-error" role="alert">{mediaError}</div>}{operation === "analyze" && mediaPath && <VideoPlayer key={mediaPath} path={mediaPath} embedded />}
+        <details className="vr-record-title"><summary>记录名称</summary><label className="vr-field">标题<input value={input.title} maxLength={100} disabled={busy || running} onChange={event => changeInput({ title: event.target.value })} /></label></details>
+      </section><section className="vr-output" aria-label="结果区">
+        <div className="vr-output-heading"><h3>{operation === "analyze" ? "视频分析" : "改写结果"}</h3><span className="vr-hint">{selected ? replicationStateLabel[selected.state] : operation === "analyze" ? "待分析" : "待改写"}</span></div>
+        {running && <p className="vr-message" role="status"><LoaderCircle size={14} className="animate-spin inline" /> {selected?.message || "处理中…"}</p>}
+        {selected?.error && <div className="vr-message is-error" role="alert">{selected.error}</div>}
+        {!selected && <p className="vr-result-placeholder">{operation === "analyze" ? referenceId ? "视频已就绪，点击下方「开始分析」。" : "获取视频后开始分析。" : "填写参考文本与改写方向，点击下方「开始改写」。"}</p>}
+        {analyzed && <><pre className="vr-result">{selected!.analysis}</pre><div className="vr-actions"><button type="button" onClick={() => void action(async () => { await navigator.clipboard.writeText(selected!.analysis); setNotice("已复制分析文本"); })}><Copy size={14} />复制</button></div></>}
+        {rewritten && <>
+          <label className="vr-field">改写结果（可编辑）<textarea aria-label="改写结果（可编辑）" rows={9} maxLength={50000} disabled={busy} value={edited} onChange={e => changeResult(e.target.value)} /></label>
+          <div className="vr-output-heading"><span className="vr-hint">{replicationDuration(edited) ? `生成时长 ${replicationDuration(edited)} 秒` : "未识别分镜时长"}</span><div className="vr-actions"><button type="button" disabled={busy} onClick={() => void action(async () => { await saveResult(); setNotice("已保存修改"); })}>保存修改</button><button type="button" onClick={() => void action(async () => { await navigator.clipboard.writeText(edited); setNotice("已复制改写结果"); })}>复制</button></div></div>
+          <section className="vr-first-frame"><h3>首帧画面提示词</h3><label className="vr-field"><span className="vr-hint">来自本次改写结果 · 可编辑</span><textarea aria-label="首帧画面提示词" rows={4} maxLength={12000} disabled={busy} value={firstFramePrompt} onChange={event => changeResult(edited, event.target.value)} /></label>
+            {!firstFramePrompt.trim() && <p className="vr-hint">未识别到首帧提示词，可在这里补写，或从模型原文粘贴。</p>}
+            {frameReference && <div className="vr-frame-reference">{framePreview && <img src={framePreview} alt="首帧生成参考图" />}<div><strong>参考图 · 视频截帧</strong><p className="vr-hint">{frameReference.name} · {videoTime(frameReference.time)}</p><div className="vr-actions"><button type="button" disabled={!mediaPath} onClick={() => setPlayerOpen(true)}>更换</button><button type="button" disabled={busy} onClick={() => changeResult(edited, firstFramePrompt, null)}>移除</button></div></div></div>}
+            <div className="vr-actions"><button type="button" disabled={busy || !onGenerateImage || !firstFramePrompt.trim()} onClick={() => void action(generateFirstFrame)}><ImagePlus size={15} />生成首帧图片</button></div><p className="vr-hint">在画板新建生成卡片 · 使用当前图片渠道</p>
+          </section>
+        </>}
+        {selected && <details className="vr-original"><summary>查看模型原文与提交快照</summary><pre className="vr-payload">{selected.rewriteOriginalText || selected.analysis}</pre><pre className="vr-payload">{selected.persona}{"\n\n"}{selected.rules}{"\n\n"}{selected.inputText}{"\n\n"}{selected.rewriteDirection}</pre><p className="vr-hint">模型用量：{selected.usage ? `输入 ${selected.usage.inputTokens ?? "未记录"} · 输出 ${selected.usage.outputTokens ?? "未记录"}` : "未记录"}</p></details>}
+      </section></div>}
+    </main>
+    {operation !== "generate" && <footer className="vr-footer"><div>
             <p className="vr-hint" role="status">Bowerbird Cloud · {operation === "analyze" ? "视频分析" : "文本改写"} · {capabilities.status === "loading" ? "正在读取价格…" : capabilities.status === "error" ? "价格读取失败" : available?.available ? `${available.credits} 积分 / 次` : operation === "analyze" ? "分析服务暂不可用" : "改写尚未启用"}</p>
             {capabilities.status === "error" && <p className="vr-message is-error" role="alert">{capabilities.error}</p>}
             {capabilities.status !== "loading" && (capabilities.status === "error" || !available?.available) && <button type="button" className="vr-text-button" onClick={() => setCapabilityRefresh(value => value + 1)}>重新读取 Cloud 状态</button>}
-        </>
-        <div className="vr-actions"><button type="button" className="is-primary" disabled={busy || !available?.available} onClick={() => void action(submit)}>{busy ? "处理中…" : operation === "analyze" ? "开始豆包分析" : "提交 Cloud 改写"}</button></div>
-      </>}
-    </main>
+            {!selected && invalid && <p className="vr-hint">{invalid}</p>}
+      </div><div className="vr-actions">
+        {selected && ["failed", "interrupted"].includes(selected.state) && <button type="button" disabled={busy} onClick={() => void action(async () => put(await call<ReplicationTask>("resume", { id: selected.id })))}>恢复原任务</button>}
+        {(analyzed || rewritten || selected && !running) && <button type="button" disabled={busy || !available?.available || !!invalid} onClick={() => void action(submit)}>{operation === "analyze" ? "重新分析" : "重新改写"}{credits}</button>}
+        {analyzed ? <button type="button" className="is-primary" disabled={busy} onClick={() => newDraft("rewrite", { inputText: selected!.analysis, sourceAnalysisId: selected!.id, referenceId: selected!.referenceId })}>开始改写 <ArrowRight size={14} /></button>
+          : rewritten ? <button type="button" className="is-primary" disabled={busy || !edited.trim()} onClick={() => void action(carryRewrite)}>插入到对话框 <ArrowRight size={14} /></button>
+          : !selected && <button type="button" className="is-primary" disabled={busy || !available?.available || !!invalid} onClick={() => void action(submit)}>{busy ? "处理中…" : operation === "analyze" ? "开始分析" : "开始改写"}{credits}</button>}
+        {running && <span className="vr-hint">{replicationStateLabel[selected!.state]}</span>}
+      </div></footer>}
   </ModalShell>;
 }

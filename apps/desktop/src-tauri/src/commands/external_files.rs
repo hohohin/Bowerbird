@@ -35,6 +35,27 @@ fn changed(app: &AppHandle) {
     let _ = app.emit("library://assets-changed", ());
     let _ = app.emit("external-files://changed", ());
 }
+
+#[tauri::command]
+pub async fn local_file_rename(app: AppHandle, db: State<'_, Arc<Database>>, asset_id: String, path: String, name: String) -> Result<(), AppError> {
+    let db = db.inner().clone();
+    let asset = tokio::task::spawn_blocking(move || {
+        db.rename_local_file(&asset_id, &path, &name)?;
+        db.get_asset(&asset_id)?.ok_or_else(|| AppError::Other("素材已不存在".into()))
+    }).await.map_err(|e| AppError::Other(e.to_string()))??;
+    allow(&app, &asset)?;
+    changed(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn local_file_delete(app: AppHandle, db: State<'_, Arc<Database>>, asset_id: String, path: String) -> Result<(), AppError> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || db.delete_local_file(&asset_id, &path))
+        .await.map_err(|e| AppError::Other(e.to_string()))??;
+    changed(&app);
+    Ok(())
+}
 #[tauri::command]
 pub async fn external_files_browse(
     paths: State<'_, Arc<LibraryPaths>>,

@@ -38,6 +38,7 @@ import { FileDropImport } from "./components/FileDropImport";
 import { prepareGenerationSound } from "./lib/generationNotifications";
 import { useStore } from "./store";
 import { api } from "./lib/api";
+import { prepareFileWorkspace } from "./lib/fileWorkspace";
 import { notify, notifyError, notifySuccess } from "./lib/notify";
 import {
   creativeLaunchAssetIds,
@@ -836,6 +837,24 @@ function App() {
     if (state.mode === "manage") state.exitManage();
   }
 
+  async function createProjectFromAssets(assetIds?: string[]) {
+    if (!assetIds?.length) return createCreative(true);
+    const revision = useStore.getState().projectRouteRevision;
+    await prepareFileWorkspace();
+    const { project } = await api.createBlankProject("未命名项目");
+    try {
+      await api.addAssetsToProject(project.id, assetIds);
+    } finally {
+      await useStore.getState().reloadProjects();
+    }
+    const state = useStore.getState();
+    if (state.projectRouteRevision !== revision || state.projectRoutePending) return;
+    setCreativeLaunch(null);
+    setCreativeTarget(null);
+    setSourceBrowserOpen(false);
+    await state.enterProject(project.id);
+  }
+
   function exitCreative() {
     setSourceBrowserOpen(false);
     setCreativeLaunch(null);
@@ -917,7 +936,7 @@ function App() {
                 {initializing ? (
                   <LibraryLoadingState />
                 ) : (
-                  <LibraryHome onCreateProject={() => createCreative(true)}
+                  <LibraryHome onCreateProject={createProjectFromAssets}
                     shortcutsEnabled={!sourceBrowserOpen && !collectionAddTargetId && !legacyInspectorOpen} />
                 )}
                 {/* 生成结果面板：主区覆盖层（像详情页） */}

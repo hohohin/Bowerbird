@@ -1,10 +1,8 @@
 import assert from "node:assert/strict";
 import { createServer } from "vite";
-import { chromium } from "../../html-renderer/node_modules/playwright/index.mjs";
+const { chromium } = await import(process.env.BOWERBIRD_PLAYWRIGHT_MODULE || "playwright");
 
-// 生成图像按钮 → 会话卡片生成成功时自动退出创作模式：普通生成提交后创作模式保持
-// 激活（生成期间可继续组稿），job 成功结算（末轮有产出图）才退出；失败结算保持创作
-// 模式。终端型 / Cloud Agent 路径仍完成即退出（不在本测试范围）。
+// 后端确认启动后退出；提交中／拒绝时保留；旧任务完成不打断新的组稿。
 const server = await createServer({ server: { host: "127.0.0.1", port: 1594, strictPort: true, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: "chrome", headless: true });
@@ -22,6 +20,10 @@ try {
     // fixture 未覆盖 project_thread_create（resolveCreativeThread 首发新建线程）。
     const original = window.__TAURI_INTERNALS__.invoke;
     window.__TAURI_INTERNALS__.invoke = async (command, args) => {
+      if (command === "codex_create_image") {
+        if (window.rejectGeneration) throw new Error("模拟提交被拒绝");
+        return new Promise(resolve => { window.finishGeneration = resolve; });
+      }
       if (command === "project_thread_create") {
         return { id: args.value.id, projectId: args.value.projectId, title: args.value.title,
           archivedAt: null, createdAt: 1, updatedAt: 1 };
@@ -35,7 +37,7 @@ try {
     });
   });
 
-  // 首次发送：提交成功后创作模式保持激活（不立即退出）。
+  // 尚未收到后端启动确认时不退出。
   await editor.click();
   await editor.fill("第一轮提示词");
   await page.waitForFunction(() => window.store.getState().boardOpen === true);
@@ -43,37 +45,49 @@ try {
   await page.waitForFunction(() => Object.keys(window.store.getState().genJobs).length === 1);
   await page.waitForTimeout(200);
   assert.equal(await page.evaluate(() => window.store.getState().boardOpen), true,
-    "提交被接受后创作模式应保持激活，等会话卡片生成成功再退出");
+    "提交中应保持创作模式");
 
-  // 成功结算（done + 产出图）→ 自动退出创作模式，对话框收起。
+  // 启动成功即可退出，无须等待生成结果。
   await page.evaluate(() => {
     const jobId = window.store.getState().activeJobId;
-    window.store.getState().applyGenChunk({ kind: "done", job_id: jobId, images: ["out.png"], session_id: "s1", provider: "jimeng" });
+    window.store.getState().applyGenChunk({ kind: "started", job_id: jobId });
   });
   await page.waitForFunction(() => window.store.getState().boardOpen === false);
+  assert.equal(await page.evaluate(() => {
+    const s = window.store.getState();
+    return s.genJobs[s.activeJobId].running && s.genJobs[s.activeJobId].turns[0].images.length === 0;
+  }), true, "退出时任务仍在后台生成");
   assert.equal(await dock.evaluate(el => el.classList.contains("is-collapsed")), true,
     "退出创作模式后对话框应收起");
 
-  // 失败路径：重新激活创作模式再发一轮，error 结算不退出（保持组稿/重试）。
+  // 用户开始组新稿后，上一任务成功不能再退出创作模式。
   await editor.click();
   await editor.fill("第二轮提示词");
   await page.waitForFunction(() => window.store.getState().boardOpen === true);
-  await dock.getByRole("button", { name: "生成图像", exact: true }).click();
-  await page.waitForFunction(() => Object.keys(window.store.getState().genJobs).length === 2);
   await page.evaluate(() => {
     const jobId = window.store.getState().activeJobId;
-    window.store.getState().applyGenChunk({ kind: "error", job_id: jobId, message: "模拟引擎失败" });
+    window.store.getState().applyGenChunk({ kind: "done", job_id: jobId, images: ["out.png"], session_id: "s1", provider: "jimeng" });
+    window.finishGeneration(null);
   });
+  await page.waitForTimeout(200);
+  assert.equal(await page.evaluate(() => window.store.getState().boardOpen), true,
+    "旧任务生成成功不能打断新的创作");
+
+  // 提交被拒绝时保留创作模式和草稿。
+  await page.evaluate(() => { window.rejectGeneration = true; });
+  await dock.getByRole("button", { name: "生成图像", exact: true }).click();
+  await page.waitForFunction(() => Object.keys(window.store.getState().genJobs).length === 2);
   await page.waitForFunction(() => {
     const s = window.store.getState();
     return !s.genJobs[s.activeJobId].running;
   });
   await page.waitForTimeout(200);
   assert.equal(await page.evaluate(() => window.store.getState().boardOpen), true,
-    "生成失败的会话卡片不应退出创作模式");
+    "提交失败不应退出创作模式");
+  assert.equal(await editor.innerText(), "第二轮提示词");
 
   assert.deepEqual(errors, []);
-  console.log("PASS: ordinary generation keeps creation mode active until the session card succeeds");
+  console.log("PASS: startup exits creation mode; pending/rejected submissions retain drafts; completion leaves new composition active");
 } finally {
   await browser.close();
   await server.close();

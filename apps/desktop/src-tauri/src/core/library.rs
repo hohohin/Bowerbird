@@ -334,7 +334,7 @@ fn synth_annotation_asset(annotations_dir: &Path, store_path: &str) -> Option<Pr
     })
 }
 
-fn asset_from_row(r: &rusqlite::Row) -> rusqlite::Result<Asset> {
+pub(crate) fn asset_from_row(r: &rusqlite::Row) -> rusqlite::Result<Asset> {
     Ok(Asset {
         id: r.get("id")?,
         name: r.get("name")?,
@@ -404,7 +404,7 @@ pub fn delete_asset_files(store_path: Option<&Path>, thumb_path: Option<&Path>) 
 /// 文件 stem 净化（`rename_asset_files` 用）：替换 Windows 非法字符与控制字符
 /// （对齐 projects.rs `move_destination` 的替换表）、trim 首尾空白 + 尾随 `.`/空格、
 /// 限长 64 字符；空或命中 Windows 保留名（CON/PRN/AUX/NUL/COM1-9/LPT1-9）→ 回退 id。
-fn sanitize_file_stem(raw: &str, id: &str) -> String {
+pub(crate) fn sanitize_file_stem(raw: &str, id: &str) -> String {
     let mut s: String = raw
         .chars()
         .map(|c| {
@@ -476,8 +476,8 @@ impl Database {
         conn.execute(
             "INSERT INTO assets (id, name, ext, origin_path, store_path, thumb_path, size, width, \
              height, duration, phash, colors, rating, source, source_url, folder_id, created_at, \
-             file_mtime, generation_session_id) \
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)",
+             file_mtime, generation_session_id, library_hidden) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)",
             rusqlite::params![
                 a.id,
                 a.name,
@@ -498,6 +498,7 @@ impl Database {
                 a.created_at,
                 a.file_mtime,
                 a.generation_session_id,
+                a.library_hidden,
             ],
         )?;
         Ok(())

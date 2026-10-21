@@ -17,9 +17,14 @@ localStorage.setItem("bowerbird.sidebarCollapsed", new URL(location.href).search
 const image = "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="240" height="160"><rect width="240" height="160" fill="#a5b5a0"/></svg>');
 const assets = ["owned", "one", "two", "three"].map(id => ({ id, name: id, width: 240, height: 160, ext: "png", source: "imported", thumb_path: image, store_path: image }));
 const projects = ["p", "q"].map((id, i) => ({ id, name: i ? "空项目" : "目标项目", kind: "blank", workspace_path: "blank:" + id, asset_count: i ? 0 : 1, created_at: 1, updated_at: 1 }));
+let callbackId = 0;
+w.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
 w.__TAURI_INTERNALS__ = {
+  transformCallback: () => ++callbackId,
   convertFileSrc: (path: string) => path,
   invoke: async (command: string, args: any) => {
+    if (command === "plugin:event|listen") return args.handler;
+    if (command === "plugin:event|unlisten") return null;
     if (command === "file_workspace_status") return { config: { root: null, places: [], projects: {} }, proposed_root: "/BowerbirdLibrary" };
     if (command === "file_workspace_all") return {entries:[],unavailable:[]};
     if (command === "global_classification_view") return {labels:[],pictures:[]};
@@ -67,12 +72,12 @@ useStore.setState({ assets: assets as any, total: assets.length, projects: proje
 w.store = useStore;
 function Library() {
   const mode = useStore(s => s.mode);
-  return <>{mode === "manage" && <BatchBar />}<LibraryHome /></>;
+  return <>{mode === "manage" && <BatchBar />}<LibraryHome onCreateProject={async ids => { w.catalogCreatedProjectAssets = ids; }} /></>;
 }
 function TestToolbar() {
   const localFilesOpen=useLocalFileMode(s=>s.open);
   return <Toolbar localFilesOpen={localFilesOpen} canvasMode={new URL(location.href).searchParams.has("canvas-toolbar")} onExplore={()=>{}} onCanvasModeChange={()=>{}} onCreateCreative={()=>{w.createdProjects=(w.createdProjects||0)+1;}} onRefresh={async()=>{}}/>;
 }
 createRoot(document.getElementById("root")!).render(<div className="app-shell" style={{ display: "flex", height: "100vh" }}>
-  <FileDropImport /><Sidebar /><main style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0, overflow: "hidden" }}><header data-test-topbar>测试工具栏 <input aria-label="测试搜索框" /></header>{new URL(location.href).searchParams.has("layout") && <TestToolbar/>}<Library /></main><ToastViewport />
+  <FileDropImport /><Sidebar /><main className="explore-main" style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0 }}><header data-test-topbar>测试工具栏 <input aria-label="测试搜索框" /></header>{new URL(location.href).searchParams.has("layout") && <TestToolbar/>}<Library /></main><ToastViewport />
 </div>);

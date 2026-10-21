@@ -9,6 +9,122 @@ fn db() -> Database {
 }
 
 #[test]
+fn playback_records_committed_tags_and_failures_without_candidate_leakage() {
+    let db = db();
+    let classifier = super::LocalClassifier::new(std::env::temp_dir().join("classification-playback-test"));
+    let tag = db.save_local_label(None, "已保存类别", "", true).unwrap();
+    db.local_example(&tag, &["a".into()], true).unwrap();
+    classifier.status.lock().unwrap().done = 1;
+    classifier.record_classification_result(&db, "a", &Ok(()));
+    classifier.status.lock().unwrap().done = 2;
+    classifier.record_classification_result(&db, "b", &Err("请求失败".into()));
+    let status = classifier.status.lock().unwrap();
+    assert_eq!(status.recent_results[0].tags, vec!["已保存类别"]);
+    assert_eq!(status.recent_results[1].sequence, 2);
+    assert!(status.recent_results[1].tags.is_empty());
+    assert_eq!(status.recent_results[1].error.as_deref(), Some("请求失败"));
+    drop(status);
+    for sequence in 3..=80 {
+        classifier.status.lock().unwrap().done = sequence;
+        classifier.record_classification_result(&db, "b", &Ok(()));
+    }
+    let status = classifier.status.lock().unwrap();
+    assert_eq!(status.recent_results.len(), 64);
+    assert_eq!(status.recent_results.first().unwrap().sequence, 17);
+    assert_eq!(status.recent_results.last().unwrap().sequence, 80);
+}
+
+#[test]
+fn full_rescan_resets_scoped_automatic_results_and_keeps_human_rules() {
+    let db = db();
+    let old = db.save_local_label(None, "旧自动A", "保留词表定义", false).unwrap();
+    let next = db.save_local_label(None, "新分类B", "", true).unwrap();
+    let manual = db.save_local_label(None, "人工C", "", true).unwrap();
+    let legacy_manual = db.save_local_label(None, "旧人工D", "", true).unwrap();
+    let rejected = db.save_local_label(None, "排除E", "", true).unwrap();
+    db.local_example(&manual, &["b".into()], true).unwrap();
+    db.local_example(&rejected, &["a".into()], false).unwrap();
+    {
+        let conn = db.conn.lock().unwrap();
+        // A label's creator cannot tell us who assigned a legacy association.
+        conn.execute("UPDATE tags SET source='auto' WHERE id=?1 OR id=?2", rusqlite::params![old,legacy_manual]).unwrap();
+        conn.execute("INSERT INTO asset_tags VALUES('a',?1,'local'),('b',?1,'local')", [&old]).unwrap();
+        conn.execute("INSERT INTO asset_tags VALUES('a',?1,'local')", [&next]).unwrap();
+        conn.execute("INSERT INTO asset_tags VALUES('a',?1,'legacy')", [&legacy_manual]).unwrap();
+        conn.execute_batch("INSERT INTO local_visual_observations VALUES('a','old','old',1),('b','old','old',1)").unwrap();
+    }
+    let old_revision = db.local_revision().unwrap();
+    assert_eq!(db.reset_classification_results(&[], old_revision).unwrap(), (old_revision, vec![]));
+    let (revision, targets) = db.reset_classification_results(&["a".into()], old_revision).unwrap();
+    assert_eq!(targets, vec!["a"]);
+    let names: Vec<_> = db.list_asset_tags("a").unwrap().into_iter().map(|t| t.name).collect();
+    assert_eq!(names, vec!["旧人工D"]);
+    assert_eq!(db.list_asset_tags("b").unwrap().len(), 2);
+    assert_eq!(db.local_examples(&manual, "").unwrap(), vec![("b".into(), true)]);
+    assert_eq!(db.local_examples(&rejected, "").unwrap(), vec![("a".into(), false)]);
+    assert_eq!(db.local_targets_for_model(true, "old").unwrap(), vec!["a"]);
+    assert_eq!(db.local_labels().unwrap().iter().find(|l| l.id==old).unwrap().description, "保留词表定义");
+    let prediction = Prediction { description:"new".into(), matches:vec![next, rejected], tags:vec![] };
+    assert!(!db.apply_local_prediction("a", old_revision, &prediction, true, &[]).unwrap());
+    assert!(db.apply_local_prediction("a", revision, &prediction, true, &[]).unwrap());
+    let names: Vec<_> = db.list_asset_tags("a").unwrap().into_iter().map(|t| t.name).collect();
+    assert_eq!(names.len(), 2);
+    assert!(names.contains(&"新分类B".into()));
+    assert!(!names.contains(&"旧自动A".into()) && !names.contains(&"排除E".into()));
+    assert!(db.local_targets_for_model(true, MODEL_ID).unwrap().iter().all(|id| id != "a"));
+}
+
+#[test]
+fn full_rescan_skips_entire_manually_classified_images() {
+    let db = db();
+    let manual = db.save_local_label(None, "停用人工标签", "", false).unwrap();
+    let automatic = db.save_local_label(None, "自动标签", "", true).unwrap();
+    db.local_example(&manual, &["a".into()], true).unwrap();
+    db.local_example(&manual, &["b".into()], false).unwrap();
+    {
+        let conn = db.conn.lock().unwrap();
+        conn.execute("INSERT INTO asset_tags VALUES('a',?1,'local'),('b',?1,'local')", [&automatic]).unwrap();
+        conn.execute_batch("INSERT INTO local_visual_observations VALUES('a','old','人工素材原结果',1),('b','old','old',1)").unwrap();
+    }
+    let revision = db.local_revision().unwrap();
+    // An all-manual scope is a no-op, with no model targets or revision bump.
+    assert_eq!(db.reset_classification_results(&["a".into()], revision).unwrap(), (revision, vec![]));
+    let (next_revision, targets) = db.reset_classification_results(&["a".into(), "b".into()], revision).unwrap();
+    assert_eq!(next_revision, revision + 1);
+    assert_eq!(targets, vec!["b"]); // Negative examples alone do not exclude an image.
+    assert_eq!(db.list_asset_tags("a").unwrap().len(), 2);
+    assert!(db.list_asset_tags("b").unwrap().is_empty());
+    assert_eq!(db.local_targets_for_model(true, "old").unwrap(), vec!["b"]);
+    assert_eq!(db.local_examples(&manual, "").unwrap(), vec![("a".into(), true), ("b".into(), false)]);
+    let conn = db.conn.lock().unwrap();
+    let description: String = conn.query_row("SELECT description FROM local_visual_observations WHERE asset_id='a'", [], |r| r.get(0)).unwrap();
+    assert_eq!(description, "人工素材原结果");
+}
+
+#[test]
+fn full_rescan_is_atomic_revision_guarded_and_keeps_fixed_provenance() {
+    let db = db();
+    let automatic = db.save_local_label(None, "旧自动", "", true).unwrap();
+    let fixed = db.save_local_label(None, "#ai生成", "", true).unwrap();
+    // clean_label strips '#'; the reserved provenance name is created by its own feature.
+    {
+        let conn = db.conn.lock().unwrap();
+        conn.execute("UPDATE tags SET name='#ai生成' WHERE id=?1", [&fixed]).unwrap();
+        conn.execute("INSERT INTO asset_tags VALUES('a',?1,'local'),('b',?1,'local')", [&automatic]).unwrap();
+        conn.execute("INSERT INTO asset_tags VALUES('a',?1,'local')", [&fixed]).unwrap();
+        conn.execute_batch("INSERT INTO analyses(id,asset_id,kind,payload) VALUES('provenance','a','replication_source','{}');
+          CREATE TRIGGER reset_test_failure BEFORE DELETE ON asset_tags WHEN OLD.asset_id='b' BEGIN SELECT RAISE(ABORT,'test failure'); END;").unwrap();
+    }
+    let revision = db.local_revision().unwrap();
+    assert!(db.reset_classification_results(&["a".into()], revision-1).is_err());
+    assert!(db.reset_classification_results(&["a".into(),"b".into()], revision).is_err());
+    assert_eq!(db.list_asset_tags("a").unwrap().len(), 2);
+    assert_eq!(db.local_revision().unwrap(), revision);
+    db.reset_classification_results(&["a".into()], revision).unwrap();
+    assert_eq!(db.list_asset_tags("a").unwrap()[0].name, "#ai生成");
+}
+
+#[test]
 fn label_dimensions_are_cached_revision_guarded_and_invalidated_only_by_semantic_edits() {
     let db = db();
     let id = db.save_local_label(None, "梦幻", "抽象情绪", true).unwrap();

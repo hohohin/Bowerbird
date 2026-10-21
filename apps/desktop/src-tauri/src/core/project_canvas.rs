@@ -16,7 +16,8 @@ use crate::core::creative_session_contract::{
     edge_endpoints_are_valid, parse_node_payload, project_canvas_node_requires_thread,
     validate_node_kind_role, AgentGroupNodePayloadV1, AssetExecutionRefV1, AssetNodePayloadV1,
     AssetSnapshotV1, CreativeEdgeKind, CreativeGroupRole, CreativeNodeKind, CreativeNodePayload,
-    CreativeNodeRole, CreativeThreadOrigin, PromptNodePayloadV1, VisualProfileRefV1,
+    CreativeNodeRole, CreativeThreadOrigin, PromptNodePayloadV1, PromptReferenceAssetV1,
+    VisualProfileRefV1,
 };
 use crate::core::library::Asset;
 use crate::db::Database;
@@ -1996,6 +1997,18 @@ impl Database {
             }
         }
         let new_prompt = get_node_tx(&tx, &prompt_node_id)?.is_none();
+        let mut reference_assets = Vec::new();
+        for path in &value.references {
+            if let Some((asset_id, snapshot)) = asset_snapshot_by_store_path_tx(&tx, path)? {
+                if new_prompt {
+                    tx.execute(
+                        "INSERT OR IGNORE INTO project_assets (project_id,asset_id,created_at) VALUES (?1,?2,?3)",
+                        params![value.project_id, asset_id, now],
+                    )?;
+                }
+                reference_assets.push(PromptReferenceAssetV1 { asset_id, snapshot });
+            }
+        }
         let prompt_payload = serde_json::to_string(&PromptNodePayloadV1 {
             schema_version: 1,
             text: value.prompt.clone(),
@@ -2007,6 +2020,7 @@ impl Database {
             ratio: value.ratio.clone(),
             visual_profile: value.visual_profile.clone(),
             status: Some("running".into()),
+            reference_assets,
         })?;
         upsert_projection_node_tx(
             &tx,
@@ -2134,6 +2148,12 @@ impl Database {
         let mut new_reference_ids = Vec::new();
         let mut seen = std::collections::HashSet::new();
         for (index, store_path) in value.references.iter().enumerate() {
+            // The editor sends null for library/file references and a node ID
+            // only for a canvas pick. Do not guess by matching the asset path.
+            // Missing slots are legacy callers; their projection stays compatible.
+            if matches!(value.reference_node_ids.get(index), Some(None)) {
+                continue;
+            }
             if !seen.insert(store_path.as_str())
                 || value.parent_asset_path.as_deref() == Some(store_path.as_str())
             {
@@ -2424,6 +2444,7 @@ impl Database {
                     ratio: value.ratio.clone(),
                     visual_profile: value.visual_profile.clone(),
                     status: Some("creating".into()),
+                    reference_assets: vec![],
                 })?,
                 x: prompt_x,
                 y: prompt_y,
@@ -4942,6 +4963,57 @@ mod tests {
         input.parent_node_id = Some(detached.id);
         input.parent_asset_path = Some("/asset-1.png".into());
         assert!(db.begin_project_generation_turn(&input).is_err());
+    }
+
+    #[test]
+    fn library_references_keep_history_without_canvas_nodes_or_edges_on_recovery() {
+        let db = reference_placement_fixture();
+        let job: crate::core::task_queue::GenJob = serde_json::from_value(serde_json::json!({
+            "id":"library-only","provider":"jimeng","status":"running","prompt":"使用素材库参考",
+            "created_at":1,"project_id":"p1","thread_id":"t1","turn_key":"turn",
+            "references":["/existing.png","/a.png"],"reference_node_ids":[null,null]
+        })).unwrap();
+        let before = db.project_canvas_snapshot("p1").unwrap();
+        for _ in 0..2 {
+            crate::core::generation_worker::recover_project_generation_projection(&db, &job, "running").unwrap();
+            let snapshot = db.project_canvas_snapshot("p1").unwrap();
+            assert_eq!(snapshot.nodes.len(), before.nodes.len() + 1, "only the conversation card is new");
+            assert_eq!(snapshot.edges.len(), before.edges.len(), "even an existing matching canvas image is not connected");
+            let prompt = snapshot.nodes.iter().find(|node| node.kind == CreativeNodeKind::Prompt).unwrap();
+            let payload: PromptNodePayloadV1 = serde_json::from_str(&prompt.payload_json).unwrap();
+            assert_eq!(payload.reference_assets.iter().map(|r| r.asset_id.as_str()).collect::<Vec<_>>(), vec!["existing", "a"]);
+            assert_eq!(payload.reference_assets[1].snapshot.name, "a");
+        }
+        assert_eq!(job.references, vec!["/existing.png", "/a.png"], "provider references remain intact");
+        assert!(db.conn.lock().unwrap().query_row(
+            "SELECT EXISTS(SELECT 1 FROM project_assets WHERE project_id='p1' AND asset_id='a')", [], |row| row.get::<_, bool>(0),
+        ).unwrap());
+    }
+
+    #[test]
+    fn mixed_reference_sources_only_connect_explicit_canvas_inputs() {
+        let db = reference_placement_fixture();
+        let mut input = ProjectGenerationTurnInput {
+            project_id: "p1".into(), thread_id: "t1".into(), generation_conversation_id: "mixed".into(),
+            job_id: "mixed".into(), turn_key: "turn".into(), prompt: "混合引用".into(), applied_prompt: "混合引用".into(),
+            provider: "jimeng".into(), provider_session_id: None, ratio: None, visual_profile: None,
+            references: vec!["/a.png".into(), "/existing.png".into()],
+            reference_node_ids: vec![None, Some("original".into())],
+            parent_node_id: None, parent_asset_path: None, relation: None, retry_anchor_node_id: None,
+        };
+        let graph = db.begin_project_generation_turn(&input).unwrap();
+        assert_eq!(graph.reference_node_ids, vec!["original"]);
+        assert_eq!(db.begin_project_generation_turn(&input).unwrap(), graph);
+        let snapshot = db.project_canvas_snapshot("p1").unwrap();
+        let edges: Vec<_> = snapshot.edges.iter().filter(|edge| edge.to_node_id == graph.prompt_node_id).collect();
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].from_node_id, "original");
+        assert_eq!(edges[0].ordinal, 1, "null slots must not shift exact reference bindings");
+        assert!(!snapshot.nodes.iter().any(|node| node.asset_id.as_deref() == Some("a")));
+        input.reference_node_ids.clear();
+        input.job_id = "legacy".into();
+        let legacy = db.begin_project_generation_turn(&input).unwrap();
+        assert_eq!(legacy.reference_node_ids.len(), 2, "legacy callers keep their projection");
     }
 
 }

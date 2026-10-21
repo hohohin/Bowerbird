@@ -575,6 +575,26 @@ mod tests {
         assert_eq!(fs::read(&f.original).unwrap(), bytes);
     }
     #[test]
+    fn explicit_project_library_membership_preserves_original_without_canvas_or_copy() {
+        let f = Fixture::new();
+        let a = f.index();
+        let bytes = fs::read(&f.original).unwrap();
+        f.project("library-project", &a.id);
+        f.db.ensure_project_canvas("library-project").unwrap();
+        assert_eq!(f.db.count_assets(Some("library-project")).unwrap(), 1);
+        assert_eq!(f.db.get_project("library-project").unwrap().unwrap().asset_count, 1);
+        assert!(!f.index().library_hidden);
+        let snapshot = f.db.project_canvas_snapshot("library-project").unwrap();
+        assert!(snapshot.nodes.is_empty());
+        assert!(snapshot.threads.is_empty());
+        assert!(f.db.is_external_asset(&a.id).unwrap());
+        assert_eq!(fs::read_dir(&f.paths.images).unwrap().count(), 0);
+        assert_eq!(fs::read(&f.original).unwrap(), bytes);
+        let reopened = Database::open(&f.paths.db).unwrap();
+        reopened.migrate().unwrap();
+        assert_eq!(reopened.count_assets(Some("library-project")).unwrap(), 1);
+    }
+    #[test]
     fn external_rename_and_all_delete_modes_preserve_original() {
         let f = Fixture::new();
         let bytes = fs::read(&f.original).unwrap();
@@ -601,7 +621,7 @@ mod tests {
         f.db.delete_project("p", ProjectDeleteMode::MoveOut)
             .unwrap();
         assert_eq!(fs::read(&f.original).unwrap(), bytes);
-        assert!(f.db.get_asset(&a.id).unwrap().unwrap().library_hidden);
+        assert!(!f.db.get_asset(&a.id).unwrap().unwrap().library_hidden);
     }
     #[test]
     fn missing_changed_and_relinked_references_validate_before_generation() {
@@ -697,7 +717,7 @@ mod tests {
             .save(&f.original)
             .unwrap();
         let asset = f.index();
-        f.project("p", &asset.id);
+        f.db.create_project("p", "p", f.root.to_str().unwrap(), "p", "user").unwrap();
         f.db.ensure_project_canvas("p").unwrap();
         f.db.create_creative_thread(&NewCreativeThread {
             id: "t".into(),

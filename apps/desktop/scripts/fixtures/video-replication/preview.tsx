@@ -40,7 +40,7 @@ w.__TAURI_INTERNALS__ = {
       const task = { ...data, id: crypto.randomUUID(), projectId: args.projectId, createdAt: new Date().toISOString(), state: "rewritten", rewrittenText: "镜头 1：白色瓶身置于台面，镜头缓慢推进。", rewriteOriginalText: "镜头 1：白色瓶身置于台面，镜头缓慢推进。", message: "改写完成", error: "", model: "mock", apiBase: "mock" };
       tasks.unshift(task); sessionStorage.setItem("replication-tasks", JSON.stringify(tasks)); return structuredClone(task);
     }
-    if (action === "save-result") { const task = tasks.find((item: any) => item.id === data.id); task.rewrittenText = data.text; sessionStorage.setItem("replication-tasks", JSON.stringify(tasks)); return structuredClone(task); }
+    if (action === "save-result") { const task = tasks.find((item: any) => item.id === data.id); Object.assign(task, { rewrittenText: data.text, firstFramePrompt: data.firstFramePrompt, frameReference: data.frameReference }); sessionStorage.setItem("replication-tasks", JSON.stringify(tasks)); return structuredClone(task); }
     if (action === "save-preferences") return data;
     if (action === "sources") return [];
     throw new Error(`Unexpected action ${action}`);

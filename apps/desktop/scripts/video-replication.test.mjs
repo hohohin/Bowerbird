@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import { equal } from 'node:assert/strict';
-import { replicationDuration, validateReplicationInput } from '../src/lib/videoReplication.ts';
+import { replicationDuration, replicationRewriteParts, replicationRewriteInput, validateReplicationInput } from '../src/lib/videoReplication.ts';
 
 test('rewrite duration spans start/end, rounds up and does not clamp to model limits', () => {
   equal(replicationDuration('{"shots":[{"start":2,"end":5},{"end":12.1,"start":4}]}'),11);
@@ -20,4 +20,19 @@ test('analysis is independent of products; pasted rewrite is independent of anal
 test('generation cannot be submitted from the replication tool', () => {
   const value={ operation:'generate',title:'视频',product:{id:'p',name:'产品',description:'说明'},prompt:'镜头',duration:5,ratio:'9:16' };
   equal(validateReplicationInput(value),'请在画板对话框中生成视频');
+});
+
+test('explicit first-frame fields are separated without guessing or consuming later sections', () => {
+  let result=replicationRewriteParts('start: 0, end: 5\n产品特写\n\n## 首帧画面提示词\n白色瓶身、柔光。\n\n## 配音\n欢迎。');
+  equal(result.firstFramePrompt,'白色瓶身、柔光。');equal(result.text,'start: 0, end: 5\n产品特写\n\n## 配音\n欢迎。');
+  result=replicationRewriteParts('```json\n{"shots":[{"start":0,"end":6}],"first_frame_prompt":"柔光"}\n```');
+  equal(result.firstFramePrompt,'柔光');equal(replicationDuration(result.text),6);
+  equal(replicationRewriteParts('**首帧画面提示词：** 清晨浴室').firstFramePrompt,'清晨浴室');
+  equal(replicationRewriteParts('镜头的首帧画面提示词不要放在视频中').firstFramePrompt,'');
+  equal(replicationRewriteParts('start: 0, end: 3\n一瓶香水').firstFramePrompt,'');
+});
+test('rewrite direction is submitted alongside the reference, with a combined length limit', () => {
+  equal(replicationRewriteInput({inputText:'原文',rewriteDirection:' 改成夜景 '}),'【参考文本】\n原文\n\n【改写方向】\n改成夜景');
+  equal(replicationRewriteInput({inputText:'原文'}),'原文');
+  equal(validateReplicationInput({operation:'rewrite',title:'改写',inputText:'a'.repeat(49990),rewriteDirection:'夜景',persona:'编导',rules:'保留节奏'}),'参考文本与改写方向合计不能超过 50000 字');
 });

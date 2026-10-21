@@ -481,9 +481,11 @@ dependencies = [
  "tauri-plugin-shell",
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
+ "tempfile",
  "thiserror 1.0.69",
  "tokenizers",
  "tokio",
+ "tokio-tungstenite",
  "tracing",
  "tracing-subscriber",
  "ulid",
@@ -491,6 +493,7 @@ dependencies = [
  "webview2-com",
  "windows 0.61.3",
  "xcap",
+ "zip",
 ]
 
 [[package]]
@@ -7856,6 +7859,7 @@ checksum = "caa8cd6af31c3b31c6631b8f483848b91589021b28fffe50adada48d4f4d2ed1"
 dependencies = [
  "arbitrary",
  "crc32fast",
+ "flate2",
  "indexmap 2.14.0",
  "memchr",
 ]

@@ -133,6 +133,7 @@ try {
   assert.equal(await page.locator('[data-project-inspector]').count(),0);
   // Removing the group hides all its turns/results; undo restores one group.
   await card.click({button:'right',position:{x:10,y:10}});
+  await page.getByRole("menuitem", { name: "删除", exact: true }).click();
   await page.getByRole('menuitem',{name:/从画布移出/}).click();
   await card.waitFor({state:'detached'});
   assert.equal(await page.locator('.canvas-prompt-node').count(),0);

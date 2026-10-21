@@ -294,6 +294,41 @@ impl Database {
         self.local_targets_for_model(pending_only, MODEL_ID)
     }
 
+    /// Explicit full rescan: reset automatic results only within the resolved image scope.
+    /// Return only eligible targets; manually classified images remain entirely untouched.
+    pub fn reset_classification_results(&self, assets: &[String], revision: i64) -> AppResult<(i64, Vec<String>)> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let current: i64 = tx.query_row("SELECT revision FROM local_classification_state WHERE id=1", [], |r| r.get(0))?;
+        if current != revision {
+            return Err(AppError::Other("分类已被人工修改，请重新发起扫描".into()));
+        }
+        let targets = {
+            let mut stmt = tx.prepare("SELECT EXISTS(SELECT 1 FROM asset_tags WHERE asset_id=?1 AND origin='manual')")?;
+            let mut targets = Vec::new();
+            for asset in assets {
+                if !stmt.query_row([asset], |r| r.get::<_, bool>(0))? {
+                    targets.push(asset.clone());
+                }
+            }
+            targets
+        };
+        if targets.is_empty() { return Ok((current, targets)); }
+        for asset in &targets {
+            tx.execute(
+                "DELETE FROM asset_tags WHERE asset_id=?1 \
+                 AND origin='local' \
+                 AND NOT (tag_id IN (SELECT id FROM tags WHERE name='#ai生成') \
+                   AND EXISTS(SELECT 1 FROM analyses WHERE asset_id=?1 AND kind='replication_source'))",
+                [asset],
+            )?;
+            tx.execute("DELETE FROM local_visual_observations WHERE asset_id=?1", [asset])?;
+        }
+        tx.execute("UPDATE local_classification_state SET revision=revision+1 WHERE id=1", [])?;
+        tx.commit()?;
+        Ok((current + 1, targets))
+    }
+
     pub fn local_targets_for_model(
         &self,
         pending_only: bool,

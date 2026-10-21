@@ -356,6 +356,15 @@ impl Database {
                 rusqlite::params![project_id, asset_id],
             )?;
         }
+        // Explicit library membership makes indexed local references visible;
+        // hidden generation/layer intermediates retain their existing policy.
+        for asset_id in asset_ids {
+            tx.execute("UPDATE external_assets SET library_member=1 WHERE asset_id=?1", [asset_id])?;
+            tx.execute(
+                "UPDATE assets SET library_hidden=0 WHERE id=?1 AND id IN (SELECT asset_id FROM external_assets)",
+                [asset_id],
+            )?;
+        }
         tx.commit()?;
         Ok(added)
     }

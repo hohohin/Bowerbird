@@ -1,19 +1,23 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { ContextMenu } from "./ContextMenu";
+import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
-import { ArrowLeft, ArrowUp, Check, ChevronRight, Copy, Folder, FolderOpen, Image, MoreHorizontal, Play, Plus, RefreshCw, X } from "lucide-react";
+import { ArrowLeft, ArrowUp, ChevronRight, Copy, FolderOpen, MoreHorizontal, Plus, RefreshCw, X } from "lucide-react";
 import { externalFiles, type LocalDirectory, type LocalFileEntry } from "../lib/externalFiles";
-import { createFilePreviewQueue } from "../lib/filePreviewQueue";
+import { FileMediaCard } from "./FileMediaCard";
+import { FileColorFilter } from "./FileColorFilter";
+import { LibraryFloatingControls } from "./LibraryFloatingControls";
+import { useLibraryGlass } from "./useLibraryGlass";
 import { fileWorkspace, prepareFileWorkspace, type FileWorkspaceStatus } from "../lib/fileWorkspace";
 import { folderClassification, type FolderClassification } from "../lib/folderClassification";
 import { globalClassification, localClassification, type ClassificationLabel, type GlobalClassificationView } from "../lib/localClassification";
-import { FILE_COLORS, useFileColors } from "../lib/useFileColors";
+import { useFileColors } from "../lib/useFileColors";
 import { useLocalFileMode } from "../lib/localFileMode";
 import { useMasonryLayout } from "../lib/useMasonryLayout";
 import { useThumbnailPinch } from "../lib/useThumbnailPinch";
 import { isVideoPath } from "../lib/videoGeneration";
-import { prepareExplorerCanvasDrop } from "../lib/explorerCanvasDrop";
+import { addMaterialAssets } from "../lib/materialActions";
 import { useStore } from "../store";
 import { notifyError, notifySuccess } from "../lib/notify";
 import { Lightbox } from "./Lightbox";
@@ -22,14 +26,13 @@ import { LocalFileBrowser } from "./LocalFileBrowser";
 import { ModalShell } from "./ModalShell";
 import { ThumbnailSizeSlider } from "./ThumbnailSizeSlider";
 import { OverlayScrollArea } from "./CollectionScrollArea";
-import { TagIndex } from "./TagIndex";
+import { LibraryBrowserButton } from "./LibraryBrowserButton";
 import { LibraryTagFilter } from "./LibraryTagFilter";
 import { FileRecordsDialog } from "./FileRecordsDialog";
 import { FileWorkspaceMoveDialog } from "./FileWorkspaceMoveDialog";
 import "./LocalFileWorkspace.css";
 
 const KEY = "bowerbird.localFiles.lastDirectory";
-const previews = createFilePreviewQueue(externalFiles.preview);
 function lastPath() { try { return localStorage.getItem(KEY) || ""; } catch { return ""; } }
 function normalize(path: string) { return path.replace(/^\\\\\?\\UNC\\/i, "//").replace(/^\\\\\?\\/, "").replace(/\\/g, "/").replace(/\/$/, ""); }
 function relative(root: string, path: string) {
@@ -48,56 +51,18 @@ function breadcrumbs(path: string) {
     }) ];
 }
 
-function FileCard({ entry, selected, revision, labels, onSelect, onOpen }: {
-  entry: LocalFileEntry; selected: boolean; revision: number; labels: string[];
-  onSelect: (additive: boolean, range: boolean) => void; onOpen: () => void;
-}) {
-  const ref = useRef<HTMLButtonElement>(null);
-  const previewKey = `${entry.path}:${entry.version ?? revision}`;
-  const [preview, setPreview] = useState<string | null>(() => entry.preview ?? previews.peek(previewKey) ?? null);
-  const [failedPreview, setFailedPreview] = useState<string | null>(null);
-  useEffect(() => {
-    if (entry.directory) return;
-    const cached = (entry.preview !== failedPreview ? entry.preview : null) ?? previews.peek(previewKey);
-    if (cached) { previews.remember(previewKey, cached); setPreview(cached); return; }
-    let alive = true; let priority = 1;
-    let request: ReturnType<typeof previews.request> | undefined;
-    setPreview(null);
-    const visible = new IntersectionObserver(entries => {
-      priority = entries.some(e => e.isIntersecting) ? 0 : 1;
-      request?.priority(priority);
-    });
-    const observer = new IntersectionObserver(entries => {
-      if (!entries.some(e => e.isIntersecting)) { request?.cancel(); request = undefined; return; }
-      if (request) return;
-      const ready = previews.peek(previewKey);
-      if (ready) { setPreview(ready); return; }
-      request = previews.request(previewKey, entry.path, priority, path => { if (alive) setPreview(path); });
-    }, { rootMargin: "400px" });
-    if (ref.current) { visible.observe(ref.current); observer.observe(ref.current); }
-    return () => { alive = false; request?.cancel(); visible.disconnect(); observer.disconnect(); };
-  }, [entry.path, entry.directory, entry.preview, previewKey, failedPreview]);
-  return <button ref={ref} type="button" className={`folder-media-card${selected ? " is-selected" : ""}`} aria-pressed={selected}
-    aria-label={entry.directory ? `文件夹 ${entry.name}` : entry.name} title={[entry.path, labels.map(name => `#${name}`).join(" · ")].filter(Boolean).join("\n")}
-    onClick={e => onSelect(e.ctrlKey || e.metaKey, e.shiftKey)} onDoubleClick={onOpen}
-    onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); onOpen(); } }}>
-    <span className={`folder-media-preview${entry.directory ? " is-folder" : ""}`}>
-      {entry.directory ? <Folder size={52} strokeWidth={1.3} /> : preview ? <img src={convertFileSrc(preview)} alt="" draggable={false} loading="lazy" decoding="async" onError={() => { previews.forget(previewKey); setFailedPreview(preview); setPreview(null); }} /> : isVideoPath(entry.path) ? <Play size={32} /> : <Image size={32} />}
-      {!entry.directory && isVideoPath(entry.path) && <span className="folder-media-kind"><Play size={11} />视频</span>}
-    </span>
-    {entry.directory && <span className="folder-media-name">{entry.name}</span>}
-  </button>;
-}
-
-export function LocalFileWorkspace({ onClose, onCreateProject, navigation, closeAction, onLegacy }: { onClose: () => void; onCreateProject?: () => Promise<unknown>; navigation?: ReactNode; closeAction?: ReactNode; onLegacy?: () => void }) {
+export function LocalFileWorkspace({ onClose, onCreateProject, navigation, onLegacy }: { onClose: () => void; onCreateProject?: (assetIds?: string[]) => Promise<unknown>; navigation?: ReactNode; onLegacy?: () => void }) {
+  const glass = useLibraryGlass();
   const [locations, setLocations] = useState<FileWorkspaceStatus | null>(null);
+  const [savingPlace, setSavingPlace] = useState(false);
+  const placePending = useRef(false);
   const mode = useLocalFileMode(s => s.mode);
   const [allLocations, setAllLocations] = useState(() => useLocalFileMode.getState().mode === "global");
   const globalRequest = useLocalFileMode(s => s.globalRequest);
   const [directory, setDirectory] = useState<LocalDirectory | null>(null);
   const [pathInput, setPathInput] = useState(lastPath);
   const [editingPath, setEditingPath] = useState(false);
-  const [panel, setPanel] = useState<"locations" | "actions" | "colors" | null>(null);
+  const [panel, setPanel] = useState<"actions" | "colors" | null>(null);
   const header = useRef<HTMLDivElement>(null);
   const addressInput = useRef<HTMLInputElement>(null);
   const addressButton = useRef<HTMLDivElement>(null);
@@ -105,25 +70,24 @@ export function LocalFileWorkspace({ onClose, onCreateProject, navigation, close
   const navigationHost = useLocalFileMode(s => s.navigationHost);
   const [color, setColor] = useState<string | null>(null);
   const [media, setMedia] = useState<"image" | "video" | null>(null);
-  const locationsButton = useRef<HTMLButtonElement>(null);
   const actionsButton = useRef<HTMLButtonElement>(null);
   const [history, setHistory] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [revision, setRevision] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [multiSelect, setMultiSelect] = useState(false);
   const anchor = useRef<string | null>(null);
   const [classification, setClassification] = useState<FolderClassification | null>(null);
   const [globalView, setGlobalView] = useState<GlobalClassificationView | null>(null);
   const [globalLabels, setGlobalLabels] = useState<ClassificationLabel[]>([]);
-  const [globalLabelsError, setGlobalLabelsError] = useState(false);
+  const [, setGlobalLabelsError] = useState(false);
   const [tag, setTag] = useState<string | null>(null);
   const [taggedEntries, setTaggedEntries] = useState<LocalFileEntry[]>([]);
   const [tagLoading, setTagLoading] = useState(false);
   const [tagError, setTagError] = useState("");
   const [classifyOpen, setClassifyOpen] = useState(false);
   const [classificationView, setClassificationView] = useState<"classification" | "labels">("classification");
-  const manageButton = useRef<HTMLButtonElement>(null);
   const [referencesOpen, setReferencesOpen] = useState(false);
   const [recordsRoot, setRecordsRoot] = useState<string | null>(null);
   const [moveOpen, setMoveOpen] = useState(false);
@@ -132,6 +96,8 @@ export function LocalFileWorkspace({ onClose, onCreateProject, navigation, close
   const busyRef = useRef(false);
   const sequence = useRef(0);
   const previewSequence = useRef(0);
+  const menuSequence = useRef(0);
+  const [preparingMenu, setPreparingMenu] = useState<{ x: number; y: number; count: number; version: number } | null>(null);
   const alive = useRef(true);
   const [grid, setGrid] = useState<HTMLDivElement | null>(null);
   const scroll = useRef<HTMLDivElement>(null);
@@ -174,17 +140,78 @@ export function LocalFileWorkspace({ onClose, onCreateProject, navigation, close
     return () => { current = false; };
   }, [directory?.path, tag, tagRevision, revision, allLocations]);
   useEffect(() => {
-    setSelected(new Set()); anchor.current = null;
+    setSelected(new Set()); setMultiSelect(false); anchor.current = null;
     if (scroll.current) scroll.current.scrollTop = 0;
   }, [tag, query, color, media]);
   useMasonryLayout(grid, width, entries, project ? 8 : 4);
+
+  useEffect(() => {
+    // A delayed file lookup must not reopen a menu after dismissal or a source change.
+    const cancel = () => { menuSequence.current++; setPreparingMenu(null); };
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape" || event.key === "Tab") cancel(); };
+    window.addEventListener("pointerdown", cancel, true);
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      cancel();
+      window.removeEventListener("pointerdown", cancel, true);
+      window.removeEventListener("keydown", onKey, true);
+      if (useStore.getState().contextMenu?.fileSelection) useStore.getState().closeContextMenu();
+    };
+  }, [mode, directory?.path, tag, query, color, media, project]);
+
+  useEffect(() => {
+    if (!directory || mode !== (allLocations ? "global" : "files")) return;
+    let current = true; let request = 0; let timer: number | undefined;
+    const unlisten = listen("library://assets-changed", () => {
+      const version = ++request;
+      window.clearTimeout(timer);
+      timer = window.setTimeout(async () => {
+        try {
+          const next = allLocations
+            ? { ...directory, entries: (await fileWorkspace.all()).entries }
+            : await externalFiles.browseAll(directory.path);
+          if (!current || version !== request) return;
+          setDirectory(next); setRevision(value => value + 1);
+          setSelected(previous => new Set([...previous].filter(path => next.entries.some(entry => entry.path === path))));
+        } catch (error) { if (current && version === request) notifyError(error, "刷新素材失败"); }
+      }, 150);
+    });
+    return () => { current = false; window.clearTimeout(timer); void unlisten.then(stop => stop()); };
+  }, [mode, directory?.path, allLocations]);
+
+  function finishSelection() { setSelected(new Set()); setMultiSelect(false); anchor.current = null; }
+  async function openFileMenu(entry: LocalFileEntry, x: number, y: number) {
+    if (entry.directory || busy || working) return;
+    const version = ++menuSequence.current;
+    const files = selected.has(entry.path) ? entries.filter(item => !item.directory && selected.has(item.path)) : [entry];
+    if (!selected.has(entry.path)) { setSelected(new Set([entry.path])); anchor.current = entry.path; }
+    useStore.getState().closeContextMenu();
+    setPreparingMenu({ x, y, count: files.length, version });
+    try {
+      // Resolve canonical asset identities only for this explicit operation; never copy the files.
+      const assets = [];
+      for (const file of files) {
+        assets.push(await externalFiles.index(file.path));
+        if (!alive.current || version !== menuSequence.current) return;
+      }
+      const asset = assets[files.indexOf(entry)];
+      setPreparingMenu(null);
+      useStore.getState().openContextMenu(x, y, asset.id, { asset, fileSelection: {
+        assets: [...new Map(assets.map(item => [item.id, item])).values()],
+        localPaths: mode === "files" ? Object.fromEntries(assets.map((item, index) => [item.id, files[index].path])) : undefined,
+        openReferences: () => setReferencesOpen(true),
+        onComplete: finishSelection,
+        select: () => { setMultiSelect(true); anchor.current = entry.path; setSelected(previous => new Set([...previous, entry.path])); },
+      } });
+    } catch (error) { if (alive.current && version === menuSequence.current) { setPreparingMenu(null); notifyError(error, "打开素材菜单失败"); } }
+  }
 
   function editPath() {
     if (editingPath) { addressInput.current?.focus(); addressInput.current?.select(); return; }
     setPanel(null); setPathInput(directory?.path ?? ""); setEditingPath(true);
   }
   function closePanel() {
-    (panel === "locations" ? locationsButton : panel === "colors" ? colorsButton : actionsButton).current?.focus({ preventScroll: true });
+    (panel === "colors" ? colorsButton : actionsButton).current?.focus({ preventScroll: true });
     setPanel(null);
   }
   function menuAction(action: () => void) { closePanel(); action(); }
@@ -202,35 +229,19 @@ export function LocalFileWorkspace({ onClose, onCreateProject, navigation, close
     if (editingPath) { addressInput.current?.focus(); addressInput.current?.select(); }
   }, [editingPath]);
   useEffect(() => {
-    if (!panel) return;
-    header.current?.querySelector<HTMLButtonElement>('.folder-popover button:not(:disabled)')?.focus({ preventScroll: true });
+    if (!panel || panel === "colors") return;
+    header.current?.querySelector<HTMLButtonElement>('[role="dialog"] button:not(:disabled)')?.focus({ preventScroll: true });
     const dismiss = (event: PointerEvent) => {
       const target = event.target as Node;
-      if (!header.current?.querySelector('.folder-popover')?.contains(target)
-        && !locationsButton.current?.contains(target) && !actionsButton.current?.contains(target) && !colorsButton.current?.contains(target)) setPanel(null);
+      if (!header.current?.querySelector('[role="dialog"]')?.contains(target)
+        && !actionsButton.current?.contains(target) && !colorsButton.current?.contains(target)) setPanel(null);
     };
     document.addEventListener("pointerdown", dismiss);
     return () => document.removeEventListener("pointerdown", dismiss);
   }, [panel]);
-
-  async function changePlace(path: string, added: boolean) {
-    try {
-      const config = await fileWorkspace.place(path, added);
-      if (alive.current) setLocations(previous => previous ? { ...previous, config } : null);
-      if (alive.current && allLocations) await showAll();
-    } catch (error) { notifyError(error, "保存常用位置失败"); }
-  }
-  async function openDefault() {
-    try {
-      const path = await prepareFileWorkspace();
-      if (!alive.current) return;
-      setLocations(await fileWorkspace.status());
-      await navigate(path);
-    } catch (error) { notifyError(error, "打开资料目录失败"); }
-  }
   async function showAll() {
     const version = ++sequence.current; ++previewSequence.current;
-    setLoading(true); setError(""); setPreview(null); setSelected(new Set()); anchor.current = null;
+    setLoading(true); setError(""); setPreview(null); setSelected(new Set()); setMultiSelect(false); anchor.current = null;
     setTag(null); setClassification(null); setGlobalView(null);
     try {
       const result = await fileWorkspace.all();
@@ -247,7 +258,7 @@ export function LocalFileWorkspace({ onClose, onCreateProject, navigation, close
   }
   async function navigate(path?: string, back = false) {
     const version = ++sequence.current; ++previewSequence.current;
-    setLoading(true); setError(""); setPreview(null); setSelected(new Set()); anchor.current = null;
+    setLoading(true); setError(""); setPreview(null); setSelected(new Set()); setMultiSelect(false); anchor.current = null;
     try {
       // One enumeration includes the whole current level; previews remain lazy.
       const result = await externalFiles.browseAll(path);
@@ -325,6 +336,28 @@ export function LocalFileWorkspace({ onClose, onCreateProject, navigation, close
     void reload(); const timer = window.setInterval(() => void reload(), 3000);
     return () => { current = false; window.clearInterval(timer); };
   }, [directory, allLocations, classifyOpen]);
+  async function changePlace(path: string, added: boolean) {
+    if (placePending.current) return;
+    placePending.current = true; setSavingPlace(true);
+    try {
+      const config = await fileWorkspace.place(path, added);
+      if (alive.current) setLocations(previous => previous ? { ...previous, config } : null);
+    } catch (error) { notifyError(error, "保存常用目录失败"); }
+    finally { placePending.current = false; if (alive.current) setSavingPlace(false); }
+  }
+  async function openDataDirectory() {
+    if (placePending.current) return;
+    placePending.current = true; setSavingPlace(true);
+    try {
+      const path = await prepareFileWorkspace();
+      if (!alive.current) return;
+      const status = await fileWorkspace.status();
+      if (!alive.current) return;
+      setLocations(status);
+      await navigate(path);
+    } catch (error) { notifyError(error, "打开资料目录失败"); }
+    finally { placePending.current = false; if (alive.current) setSavingPlace(false); }
+  }
   async function choose() {
     try { const path = await open({ directory: true, multiple: false, title: "选择文件夹", defaultPath: directory?.path || lastPath() || undefined }); if (typeof path === "string") void navigate(path); }
     catch (e) { setError(String(e)); }
@@ -345,23 +378,9 @@ export function LocalFileWorkspace({ onClose, onCreateProject, navigation, close
       const assets = [];
       if (copy) await prepareFileWorkspace();
       for (const file of files) { const asset = await externalFiles.index(file.path); assets.push(copy ? await externalFiles.copy(asset.id) : asset); }
-      if (!copy) {
-        if (useStore.getState().activeProjectId !== destinationProject) throw new Error("项目已切换，请重新选择目标画板");
-        if (!destinationProject) await onCreateProject?.();
-        const id = useStore.getState().activeProjectId;
-        if (!id) throw new Error("请先打开项目画板");
-        onClose();
-        await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
-        const stage = document.querySelector<HTMLElement>(".canvas-stage:not(.is-view-hidden)");
-        if (!stage) throw new Error("画板尚未就绪，请重试");
-        const rect = stage.getBoundingClientRect();
-        for (let i=0;i<assets.length;i++) {
-          const put = prepareExplorerCanvasDrop(stage,id,rect.left+rect.width/2+i*24,rect.top+rect.height/2+i*24);
-          if (!put) throw new Error("画板已切换，请重试");
-          await put(assets[i]);
-        }
-      }
-      notifySuccess(copy ? "已复制到收集箱，原文件保留" : "已添加到画板，引用原文件");
+      if (!copy) await addMaterialAssets(assets, destinationProject, onClose, onCreateProject);
+      finishSelection();
+      notifySuccess(copy ? "已复制到收集箱，原文件保留" : destinationProject ? "已添加到画板，引用原文件" : "所选素材已添加到新项目素材库，原文件保留");
     } catch (e) { notifyError(e,"处理所选文件失败"); }
     finally { busyRef.current = false; if (alive.current) setWorking(false); }
   }
@@ -399,24 +418,29 @@ export function LocalFileWorkspace({ onClose, onCreateProject, navigation, close
       <button className={loading ? "is-loading" : ""} aria-label="刷新文件夹" title="刷新" disabled={loading} onClick={() => void (allLocations ? showAll() : navigate(directory?.path))}><RefreshCw size={16}/></button>
       </div>
     </div>;
-  return <section className="local-file-workspace" aria-label="本机文件" ref={pinchRef} aria-busy={busy}
+  return <section className="local-file-workspace" aria-label="本机文件" ref={pinchRef} aria-busy={busy} style={glass.style}
     onKeyDown={e => {
       if (e.target instanceof Element && e.target.closest('input,textarea,[contenteditable="true"],[role="dialog"]')) return;
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") { e.preventDefault(); e.stopPropagation(); setSelected(new Set(entries.map(entry => entry.path))); }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") { e.preventDefault(); e.stopPropagation(); setMultiSelect(true); setSelected(new Set(entries.filter(entry => !entry.directory).map(entry => entry.path))); }
       if (e.altKey && e.key === "ArrowUp" && directory?.parent) { e.preventDefault(); void navigate(directory.parent); }
     }}>
+    {glass.definition}
+    {preparingMenu && <ContextMenu x={preparingMenu.x} y={preparingMenu.y} label="正在准备素材操作" onClose={() => {
+      if (menuSequence.current === preparingMenu.version) { menuSequence.current++; setPreparingMenu(null); }
+    }}>
+      <p className="px-2 py-2 text-muted" role="status">正在准备 {preparingMenu.count} 项素材…</p>
+      <button role="menuitem" className="app-context-item px-2 py-1.5" onClick={() => { menuSequence.current++; setPreparingMenu(null); }}>取消</button>
+    </ContextMenu>}
     {mode === "files" && (navigationHost ? createPortal(addressNavigation, navigationHost) : addressNavigation)}
     <div className="file-view-heading">
       {navigation}
-      <div className="folder-floating-controls" ref={header}>
+      <LibraryFloatingControls controlsRef={header}>
+      <LibraryBrowserButton/>
       {tag && labelNames.has(tag) && <LibraryTagFilter name={labelNames.get(tag)!} onClear={() => setTag(null)} />}
-      <button ref={locationsButton} className="library-filter-trigger" title="文件位置" aria-label="文件位置" aria-expanded={panel === "locations"} aria-haspopup="dialog" onClick={() => setPanel(panel === "locations" ? null : "locations")}><FolderOpen size={14}/></button>
-      <button ref={colorsButton} className="library-filter-trigger" aria-label="颜色筛选" title="颜色筛选" data-active={!!color || undefined} aria-expanded={panel === "colors"} aria-haspopup="dialog" onClick={() => setPanel(panel === "colors" ? null : "colors")}>
-        <span className="library-rgb-orb" aria-hidden="true"/>{color && <span className="library-filter-dot"/>}
-      </button>
+      <FileColorFilter open={panel === "colors"} onOpenChange={open => setPanel(open ? "colors" : null)} color={color} onColorChange={setColor} palette={palette} triggerRef={colorsButton}/>
       <button ref={actionsButton} className="library-filter-trigger" data-active={!!media || undefined} aria-label="更多文件操作" title="更多" aria-expanded={panel === "actions"} aria-haspopup="dialog" onClick={() => setPanel(panel === "actions" ? null : "actions")}><MoreHorizontal size={16}/></button>
       {!navigation && <button className="folder-return" onClick={onClose}><X size={15}/>{project ? "返回画板" : "返回素材库"}</button>}
-      {panel && <div className="folder-popover" role="dialog" aria-label={panel === "locations" ? "文件位置" : panel === "colors" ? "颜色筛选" : "更多文件操作"}
+      {panel && panel !== "colors" && <div className="folder-popover" role="dialog" aria-label="更多文件操作"
         onBlur={e => { if (e.relatedTarget && !e.currentTarget.contains(e.relatedTarget as Node) && !header.current?.contains(e.relatedTarget as Node)) setPanel(null); }}
         onKeyDown={e => {
           if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closePanel(); }
@@ -427,26 +451,9 @@ export function LocalFileWorkspace({ onClose, onCreateProject, navigation, close
             buttons[e.key === "Home" ? 0 : e.key === "End" ? buttons.length - 1 : (index + (e.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length]?.focus();
           }
         }}>
-        {panel === "colors" ? <>
-          <div className="folder-menu-label">颜色筛选</div>
-          <div className="file-color-swatches">{FILE_COLORS.map(([key, label, hex]) => <button key={key} aria-label={label} aria-pressed={color === key} title={label} style={{ background: hex }} onClick={() => setColor(color === key ? null : key)}>{color === key && <Check size={12}/>}</button>)}</div>
-          {palette.pending && <p className="folder-menu-label" role="status">正在读取颜色…</p>}
-          {!!palette.failed && <button onClick={palette.retry}>{palette.failed} 项读取失败 · 重试</button>}
-          {color && <button onClick={() => setColor(null)}>清除颜色筛选</button>}
-        </> : panel === "locations" ? <>
-          <button disabled={loading} aria-pressed={allLocations} onClick={() => menuAction(() => void showAll())}>全局素材</button>
-          <button disabled={loading} onClick={() => menuAction(() => void openDefault())}>资料文件夹</button>
-          <button onClick={() => menuAction(() => void choose())}><FolderOpen size={15}/>选择文件夹…</button>
-          {!!locations?.config.places.length && <div className="folder-menu-label">常用位置</div>}
-          {locations?.config.places.map(path => <div className="file-location" key={path}>
-            <button title={path} aria-pressed={!allLocations && directory?.path === path} onClick={() => menuAction(() => void navigate(path))}>{path.split(/[\\/]/).filter(Boolean).slice(-1)[0]}</button>
-            <button aria-label={`移除常用位置 ${path}`} title="移除常用位置" onClick={() => void changePlace(path, false)}><X size={13}/></button>
-          </div>)}
-          <div className="folder-menu-divider"/>
-          <button disabled={!directory?.path || loading || locations?.config.places.includes(directory.path)} onClick={() => void changePlace(directory!.path, true)}><Plus size={15}/>添加当前目录</button>
-        </> : <>
           {allLocations && <button disabled={loading} onClick={() => menuAction(() => void showAll())}><RefreshCw size={15}/>刷新素材</button>}
           <div className="folder-menu-label">素材类型</div>
+          <button onClick={() => menuAction(() => setMultiSelect(true))}>多选素材</button>
           <div className="file-media-options" role="group" aria-label="素材类型筛选">
             <button aria-pressed={media === null} onClick={() => setMedia(null)}>全部</button>
             <button aria-label="只看图片" aria-pressed={media === "image"} onClick={() => setMedia(media === "image" ? null : "image")}>图片</button>
@@ -460,45 +467,66 @@ export function LocalFileWorkspace({ onClose, onCreateProject, navigation, close
           <button onClick={() => menuAction(() => setReferencesOpen(true))}>外部引用</button>
           <button onClick={() => menuAction(() => setMoveOpen(true))}>迁移资料目录</button>
           {onLegacy && <button onClick={() => menuAction(onLegacy)}>历史素材</button>}
-        </>}
       </div>}
-      </div>
+      </LibraryFloatingControls>
     </div>
-    {closeAction && <div className="canvas-source-close">{closeAction}</div>}
     {error && <p role="alert" className="folder-error">{error}</p>}
     {locations?.migration?.state === "failed" && <p role="alert" className="folder-error">资料目录迁移未完成：{locations.migration.error}</p>}
     {(allLocations || tag) && tagError && <p role="alert" className="folder-error">{tagError}</p>}
+    <div className="file-browser-body">
+    <aside className="file-browser-places" aria-label="文件浏览器目录">
+      <button className="file-place-row" disabled={loading || savingPlace || !locations}
+        title={locations?.config.root ?? "打开资料目录"}
+        aria-current={directory?.path && directory.path === locations?.config.root ? "location" : undefined}
+        onClick={() => void openDataDirectory()}><FolderOpen size={15}/><span>资料目录</span></button>
+      <div className="file-places-heading"><span>常用目录</span>
+        <button aria-label="将当前目录添加到常用目录" title="添加当前目录"
+          disabled={!directory?.path || loading || savingPlace || !locations || locations.config.places.includes(directory.path)}
+          onClick={() => { if (directory?.path) void changePlace(directory.path, true); }}><Plus size={14}/></button>
+      </div>
+      <OverlayScrollArea className="file-places-scroll" viewportClassName="file-places-list" label="常用目录滚动条">
+        {locations?.config.places.map(path => <div className="file-place-item" key={path}>
+          <button className="file-place-row" title={path} disabled={loading || savingPlace}
+            aria-current={directory?.path === path ? "location" : undefined} onClick={() => void navigate(path)}>
+            <FolderOpen size={14}/><span>{breadcrumbs(path).slice(-1)[0]?.name || path}</span>
+          </button>
+          <button className="file-place-remove" aria-label={`从常用目录移除 ${path}`} title="从常用目录移除"
+            disabled={savingPlace} onClick={() => void changePlace(path, false)}><X size={12}/></button>
+        </div>)}
+        {locations && !locations.config.places.length && <p className="file-places-empty">浏览文件夹后，点击 + 收藏</p>}
+      </OverlayScrollArea>
+    </aside>
     <div className="library-browser-grid folder-browser-grid">
-    <TagIndex key={directory?.path} tags={labels} active={tag} onSelect={setTag}
-      failed={allLocations && globalLabelsError} onRetry={() => setRevision(value => value + 1)}
-      disabled={(!allLocations && !classification) || loading} manageButtonRef={manageButton}
-      onManage={() => { setClassificationView("labels"); setClassifyOpen(true); }} />
     <OverlayScrollArea scrollRef={scroll} className="folder-scroll-area" viewportClassName="folder-scroller library-scroller" label="文件夹素材滚动条">
       {color && palette.pending && <p className="folder-empty" role="status">正在筛选颜色…</p>}
       {busy && showLoading && <p className="folder-loading" role="status">{tag ? "正在读取标签图片…" : mode === "global" ? "正在读取全局素材…" : "正在读取文件夹…"}</p>}
-      {!busy && !palette.pending && !tagError && !entries.length && <p className="folder-empty">{color || media ? "没有符合筛选条件的素材，可更换或清除筛选。" : tag ? "没有匹配的图片，可切换标签或清除筛选。" : query ? "没有匹配的媒体。" : allLocations ? "暂无全局素材。切换到文件浏览器，并在文件位置菜单中添加目录。" : "此文件夹没有支持的图片、视频或子文件夹。"}</p>}
+      {!busy && !palette.pending && !tagError && !entries.length && <p className="folder-empty">{color || media ? "没有符合筛选条件的素材，可更换或清除筛选。" : tag ? "没有匹配的图片，可切换标签或清除筛选。" : query ? "没有匹配的媒体。" : allLocations ? "暂无全局素材。可通过地址栏选择要浏览的文件夹。" : "此文件夹没有支持的图片、视频或子文件夹。"}</p>}
       <div ref={setGrid} className="folder-masonry" aria-label={tag ? "标签图片" : "目录内容"}>
-        {mode === (allLocations ? "global" : "files") && entries.map(entry => <FileCard key={entry.path} entry={entry} selected={selected.has(entry.path)} revision={revision}
+        {mode === (allLocations ? "global" : "files") && entries.map(entry => <FileMediaCard key={entry.path} entry={entry} selected={selected.has(entry.path)} revision={revision}
           labels={(allLocations ? globalPictures.get(entry.path)?.tags ?? [] : pictures.get(relative(classification?.root ?? "",entry.path) ?? "")?.tags.map(([id]) => id) ?? []).map(id => labelNames.get(id) ?? "").filter(Boolean)}
           onSelect={(additive, range) => {
             const start = entries.findIndex(item => item.path === anchor.current);
             if (range && start >= 0) { const end = entries.indexOf(entry); setSelected(new Set(entries.slice(Math.min(start,end),Math.max(start,end)+1).map(item => item.path))); }
-            else { anchor.current = entry.path; setSelected(previous => { const next = new Set(additive ? previous : []); if (additive && next.has(entry.path)) next.delete(entry.path); else next.add(entry.path); return next; }); }
+            else { anchor.current = entry.path; setSelected(previous => { const next = new Set(additive || multiSelect ? previous : []); if ((additive || multiSelect) && next.has(entry.path)) next.delete(entry.path); else next.add(entry.path); return next; }); }
           }}
+          onContextMenu={(x, y) => void openFileMenu(entry, x, y)}
           onOpen={() => { if (!busy) void openEntry(entry); }} />)}
       </div>
     </OverlayScrollArea>
-    {mediaSelected > 0 && <div className="folder-selection-bar" role="group" aria-label="所选文件操作">
-      <button aria-label="取消文件选择" title="取消选择" disabled={working} onClick={() => setSelected(new Set())}><X size={14}/></button>
+    {(mediaSelected > 0 || multiSelect) && <div className="folder-selection-bar" role="group" aria-label="所选文件操作">
+      <button aria-label="取消文件选择" title="取消选择并退出多选" disabled={working} onClick={finishSelection}><X size={14}/></button>
       <span>已选 {mediaSelected} 项</span>
-      <button disabled={working || busy} onClick={() => void useSelected(true)}><Copy size={14}/><span>复制到收集箱</span></button>
-      <button className="folder-selection-primary" disabled={working || busy} onClick={() => void useSelected(false)}><Plus size={14}/><span>{project ? "添加到画板" : "新建画板并引用"}</span></button>
+      <button aria-pressed={multiSelect} onClick={() => setMultiSelect(value => !value)}>多选</button>
+      {multiSelect && <button onClick={() => setSelected(new Set(entries.filter(entry => !entry.directory).map(entry => entry.path)))}>全选</button>}
+      <button disabled={working || busy || !mediaSelected} onClick={() => void useSelected(true)}><Copy size={14}/><span>复制到收集箱</span></button>
+      <button className="folder-selection-primary" disabled={working || busy || !mediaSelected} onClick={() => void useSelected(false)}><Plus size={14}/><span>{project ? "添加到画板" : "把所选素材添加到新项目"}</span></button>
     </div>}
     <ThumbnailSizeSlider scope="library"/>
     </div>
+    </div>
     {preview && <Lightbox images={[preview]} index={0} onIndexChange={() => {}} onClose={() => { ++previewSequence.current; setPreview(null); }}/>}
     {classifyOpen && (allLocations || classification) && <LocalClassificationDialog initialView={classificationView} globalScope={allLocations} globalPaths={allLocations ? directory?.entries.map(entry => entry.path) : undefined} folder={!allLocations && classification ? { root: classification.root, recursive: classification.record.recursive } : undefined} selectedFiles={selectedFiles}
-      onFilter={setTag} onClose={() => { setClassifyOpen(false); manageButton.current?.focus({ preventScroll: true }); }}/>}
+      onFilter={setTag} onClose={() => { setClassifyOpen(false); actionsButton.current?.focus({ preventScroll: true }); }}/>}
     {referencesOpen && <ModalShell title="外部引用" width="lg" onClose={() => setReferencesOpen(false)}><LocalFileBrowser initialTab="references" onClose={() => setReferencesOpen(false)} onCreateProject={() => void onCreateProject?.()}/></ModalShell>}
     {recordsRoot && <FileRecordsDialog root={recordsRoot} onClose={() => setRecordsRoot(null)} onRestored={() => setRevision(value => value + 1)} />}
     {moveOpen && <FileWorkspaceMoveDialog onClose={() => setMoveOpen(false)} />}

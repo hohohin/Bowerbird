@@ -728,7 +728,7 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
                     // 右键打开菜单；preventDefault 让 zoom onMouseDown 不会误平移。
                     e.preventDefault();
                     e.stopPropagation();
-                    openContextMenu(e.clientX, e.clientY, asset.id);
+                      openContextMenu(e.clientX, e.clientY, asset.id, { asset });
                   }}
                   className="max-h-full max-w-full select-none object-contain"
                   style={zoom.style}

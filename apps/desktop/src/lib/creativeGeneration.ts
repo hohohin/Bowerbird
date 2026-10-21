@@ -165,6 +165,8 @@ export function resolveContinuationParent<T extends { id: string }>(
     } | null;
     focusedNodeId?: string | null;
     focusedThreadId?: string | null;
+    /** When supplied, only explicit canvas chips may imply a continuation. */
+    referenceNodeIds?: readonly (string | null)[];
   } = {},
 ): CreativeParentSelection<T> | null {
   const referencesById = new Map(references.map((reference) => [reference.id, reference]));
@@ -188,16 +190,22 @@ export function resolveContinuationParent<T extends { id: string }>(
       };
     }
   }
+  const canvasReferences = options.referenceNodeIds
+    ? new Map(references.map((reference, index) => [reference.id, options.referenceNodeIds?.[index]]))
+    : null;
+  const implicit = canvasReferences
+    ? eligible.filter(candidate => canvasReferences.get(candidate.assetId) === candidate.nodeId)
+    : eligible;
   const focused = options.focusedNodeId
-    ? eligible.find((candidate) => candidate.nodeId === options.focusedNodeId)
+    ? implicit.find((candidate) => candidate.nodeId === options.focusedNodeId)
     : null;
   if (focused) {
     return { asset: referencesById.get(focused.assetId)!, nodeId: focused.nodeId, threadId: focused.threadId };
   }
   const inFocusedThread = options.focusedThreadId
-    ? eligible.filter((candidate) => candidate.threadId === options.focusedThreadId)
+    ? implicit.filter((candidate) => candidate.threadId === options.focusedThreadId)
     : [];
-  const pool = inFocusedThread.length > 0 ? inFocusedThread : eligible;
+  const pool = inFocusedThread.length > 0 ? inFocusedThread : implicit;
   const selected = pool.length === 1 ? pool[0] : null;
   return selected
     ? { asset: referencesById.get(selected.assetId)!, nodeId: selected.nodeId, threadId: selected.threadId }

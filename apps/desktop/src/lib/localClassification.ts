@@ -2,6 +2,10 @@ import { invoke } from "@tauri-apps/api/core";
 import type { AppSettings } from "./types";
 
 export interface LocalClassificationStatus {
+  run_id?: string;
+  recent_results?: ClassificationResult[];
+  recent_cloud_handoffs?: ClassificationResult["asset"][];
+  diagnostics?: ClassificationDiagnostic[];
   folder_root?: string | null;
   global_scope?: boolean;
   project_id?: string | null;
@@ -35,6 +39,19 @@ export interface LocalClassificationStatus {
   acceleration: string;
   vector_supported: boolean;
   vector_installed: boolean;
+}
+export interface ClassificationDiagnostic {
+  id: string;
+  name: string;
+  elapsed_ms: number;
+  finished: boolean;
+  steps: { stage: string; at_ms: number; detail: string }[];
+}
+export interface ClassificationResult {
+  sequence: number;
+  asset: NonNullable<LocalClassificationStatus["current_asset"]>;
+  tags: string[];
+  error: string | null;
 }
 export interface ClassificationLabel {
   id: string;

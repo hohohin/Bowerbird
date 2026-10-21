@@ -1,0 +1,96 @@
+import assert from 'node:assert/strict';
+import { createServer } from 'vite';
+import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
+
+const server = await createServer({ cacheDir: '.tmp/library-click/vite', server: { host: '127.0.0.1', port: 1701, strictPort: true, hmr: false, watch: null } });
+await server.listen();
+const browser = await chromium.launch({ channel: 'chrome', headless: true });
+const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
+page.setDefaultTimeout(10000);
+const errors = [];
+page.on('pageerror', error => errors.push(error.message));
+await page.route('**/*', route => new URL(route.request().url()).hostname === '127.0.0.1' ? route.continue() : route.abort());
+const library = page.locator('.categorized-library');
+const card = id => library.locator(`[data-asset-id="${id}"]`);
+const preview = page.getByRole('dialog', { name: /^媒体预览/ });
+async function assertBrowseClicks() {
+  await card('existing').click();
+  await preview.waitFor();
+  assert.equal(await library.locator('[aria-pressed="true"].folder-media-card').count(), 0);
+  assert.equal(await page.evaluate(() => window.store.getState().detailAssetId), null);
+  await page.keyboard.press('Escape');
+  await card('a').dblclick({ delay: 70 });
+  await page.waitForFunction(() => window.store.getState().detailAssetId === 'a');
+  await page.locator('.asset-detail-back').click();
+  await page.waitForTimeout(350);
+  assert.equal(await preview.count(), 0, 'double click cancels the pending preview');
+  await card('existing').click({ modifiers: ['Control'] });
+  await card('a').click();
+  assert.equal(await library.locator('.folder-media-card[aria-pressed="true"]').count(), 2, 'explicit multi-select remains additive');
+  await card('existing').click();
+  assert.equal(await library.locator('.folder-media-card[aria-pressed="true"]').count(), 1);
+  await library.getByRole('button', { name: '取消选择', exact: true }).click();
+}
+try {
+  await page.goto('http://127.0.0.1:1701/scripts/fixtures/canvas-reference/preview.html?source-library&detail-route');
+  await page.locator('.canvas-workspace[aria-busy="false"]').waitFor();
+  await page.evaluate(() => {
+    const previous = window.__TAURI_INTERNALS__.invoke;
+    const assets = window.store.getState().assets.filter(a => ['existing', 'a', 'b'].includes(a.id));
+    window.__TAURI_INTERNALS__.invoke = async (command, args) => {
+      if (command === 'material_catalog') return { tags: [], collections: [{ id: 'test', name: '测试集合', kind: 'collection' }], prompts: [], tag_asset_ids: {} };
+      if (command === 'material_catalog_assets') return assets;
+      if (command === 'external_file_media') return args.path;
+      return previous(command, args);
+    };
+    window.picks = [];
+    window.addEventListener('bowerbird://board-asset-picked', event => window.picks.push(event.detail));
+  });
+  await page.getByRole('button', { name: '返回主页', exact: true }).click();
+  await card('existing').waitFor();
+  await assertBrowseClicks();
+  await page.locator('[role="tab"][aria-selected="true"]').focus();
+  await page.keyboard.press('Tab');
+  await page.getByRole('region', { name: '按集合浏览素材', exact: true }).waitFor();
+  await assertBrowseClicks();
+  await page.getByRole('button', { name: '我的项目', exact: true }).click();
+  await page.getByRole('button', { name: '打开项目 引用布局合成验收', exact: true }).click();
+  await page.waitForFunction(() => document.activeElement?.classList.contains('canvas-stage'));
+  await page.keyboard.press('Tab');
+  await card('existing').waitFor();
+  await assertBrowseClicks();
+  await page.evaluate(() => window.store.setState({ boardOpen: true }));
+  const editor = page.locator('.ProseMirror:not([aria-readonly])');
+  await editor.fill('前后');
+  await editor.press('ArrowLeft');
+  await card('existing').click();
+  await editor.locator('[data-asset-id="existing"]').waitFor();
+  assert.equal(await preview.count(), 0, 'creation mode inserts instead of previewing');
+  const parts = await editor.locator('p').first().evaluate(el => [...el.childNodes].map(n => n.nodeType === Node.TEXT_NODE ? n.textContent : n.getAttribute?.('data-asset-id')).filter(Boolean));
+  assert.deepEqual(parts, ['前', 'existing', '后'], 'reference is inserted at the saved caret');
+  const before = await page.evaluate(() => window.picks.length);
+  await card('a').dblclick({ delay: 70 });
+  await page.waitForFunction(() => window.store.getState().detailAssetId === 'a');
+  await page.locator('.asset-detail-back').click();
+  await page.waitForTimeout(350);
+  assert.equal(await page.evaluate(() => window.picks.length), before, 'double click does not insert a reference');
+  assert.equal(await library.locator('.folder-media-card[aria-pressed="true"]').count(), 0);
+  await card('b').click();
+  await page.getByRole('button', { name: '关闭素材库', exact: true }).click();
+  await page.waitForTimeout(350);
+  assert.equal(await page.evaluate(() => window.picks.length), before, 'closing the drawer cancels a pending activation');
+  await page.goto('http://127.0.0.1:1701/scripts/fixtures/canvas-reference/preview.html?source-library&local-files&detail-route');
+  await page.getByRole('button', { name: '返回主页', exact: true }).click();
+  await page.getByRole('button', { name: '文件浏览器', exact: true }).click();
+  const file = page.locator('.folder-media-card[aria-label="原图.png"]');
+  await file.click();
+  assert.equal(await file.getAttribute('aria-pressed'), 'true', 'file browser retains native selection behavior');
+  await file.dblclick();
+  await preview.waitFor();
+  await page.keyboard.press('Escape');
+  assert.deepEqual(errors, []);
+  console.log('PASS home tags/collections and project preview/detail clicks, persistent explicit multi-select, creation caret insertion, no double-click side effects');
+} finally {
+  await browser.close();
+  await server.close();
+}

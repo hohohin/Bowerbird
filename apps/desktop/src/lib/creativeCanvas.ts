@@ -63,23 +63,36 @@ export function canvasAssetNodeSize(asset: Pick<CanvasAssetSnapshot, "width" | "
 export function canvasPromptReferences(promptId: string, nodes: readonly CanvasNode[], edges: readonly CanvasEdge[], assets: Map<string, Asset>): Array<Asset & { referenceNames: string[] }> {
   const byId = new Map(nodes.map(node => [node.id, node]));
   const seen = new Set<string>();
-  return edges.filter(edge => ["input", "continued", "retry", "branch"].includes(edge.kind) && edge.toNodeId === promptId)
+  const snapshots = promptReferenceAssets(byId.get(promptId)?.payloadJson);
+  const linked = edges.filter(edge => ["input", "continued", "retry", "branch"].includes(edge.kind) && edge.toNodeId === promptId)
     .sort((a, b) => a.ordinal - b.ordinal || a.id.localeCompare(b.id))
     .flatMap(edge => {
       const node = byId.get(edge.fromNodeId);
       if (node?.kind !== "asset") return [];
-      const id = node.assetId ?? node.id;
-      if (seen.has(id)) return [];
-      seen.add(id);
-      const asset = node.assetId ? assets.get(node.assetId) : undefined;
-      const snapshot = parseAssetPayload(node.payloadJson)?.snapshot;
-      return [{ ...asset, id, name: snapshot?.name ?? asset?.name ?? "引用图",
-        referenceNames: [asset?.name, asset?.origin_path?.split(/[\\/]/).pop(), asset?.store_path?.split(/[\\/]/).pop()]
-          .filter((name): name is string => !!name),
-        ext: asset?.ext ?? null,
-        thumb_path: canvasAssetMediaPath({ thumbPath: asset?.thumb_path ?? null, storePath: asset?.duration ? null : asset?.store_path ?? null }),
-        store_path: asset?.store_path ?? null } as Asset & { referenceNames: string[] }];
+      return [{ asset_id: node.assetId ?? node.id, snapshot: parseAssetPayload(node.payloadJson)?.snapshot }];
     });
+  return [...snapshots, ...linked].flatMap(reference => {
+    const id = reference.asset_id;
+    if (seen.has(id)) return [];
+    seen.add(id);
+    const asset = assets.get(id);
+    const snapshot = reference.snapshot;
+    return [{ ...asset, id, name: snapshot?.name ?? asset?.name ?? "引用图",
+      referenceNames: [asset?.name, asset?.origin_path?.split(/[\\/]/).pop(), asset?.store_path?.split(/[\\/]/).pop()]
+        .filter((name): name is string => !!name),
+      ext: asset?.ext ?? null,
+      thumb_path: canvasAssetMediaPath({ thumbPath: asset?.thumb_path ?? null, storePath: asset?.duration ? null : asset?.store_path ?? null }),
+      store_path: asset?.store_path ?? null } as Asset & { referenceNames: string[] }];
+  });
+}
+
+function promptReferenceAssets(payloadJson?: string): Array<{ asset_id: string; snapshot?: { name: string } }> {
+  if (!payloadJson) return [];
+  try {
+    const references = JSON.parse(payloadJson).reference_assets;
+    return Array.isArray(references) ? references.filter(reference => reference && typeof reference.asset_id === "string"
+      && typeof reference.snapshot?.name === "string") : [];
+  } catch { return []; }
 }
 
 /** Keep Agent launch prompts as history, with their group as the canvas card. */
@@ -355,6 +368,11 @@ export function projectCanvasAssetIds(
   const seen = new Set<string>();
   const ids: string[] = [];
   for (const node of nodes) {
+    if (node.kind === "prompt") {
+      for (const reference of promptReferenceAssets(node.payloadJson)) {
+        if (!seen.has(reference.asset_id)) { seen.add(reference.asset_id); ids.push(reference.asset_id); }
+      }
+    }
     if (node.kind === "note" && node.payloadJson) {
       try {
         const base = JSON.parse(node.payloadJson).artboard?.base_asset_id;

@@ -262,6 +262,36 @@ mod tests {
     }
 
     #[test]
+    fn full_rescan_reset_survives_stop_and_folder_reopen() {
+        let f = Fixture::new();
+        f.image("a/p.png", 10);
+        f.image("a/q.png", 20);
+        let a = f.open("a");
+        a.scan(&f.cache, false, &AtomicBool::new(false)).unwrap();
+        let ids = a.db.local_targets(false).unwrap();
+        let manual = a.db.save_local_label(None, "人工", "人工定义", true).unwrap();
+        let automatic = a.db.save_local_label(None, "旧自动", "自动定义", true).unwrap();
+        a.db.local_example(&manual, &ids[..1], true).unwrap();
+        for id in &ids {
+            a.db.apply_local_prediction(id, a.db.local_revision().unwrap(), &super::super::data::Prediction {
+                matches:vec![automatic.clone()], tags:vec![], description:"旧结果".into(),
+            }, true, &[]).unwrap();
+        }
+        a.save().unwrap();
+        let (_, targets) = a.db.reset_classification_results(&ids, a.db.local_revision().unwrap()).unwrap();
+        assert_eq!(targets, ids[1..]);
+        a.save().unwrap(); // No model result follows: cancellation / failed request.
+        drop(a);
+        let reopened = f.open("a");
+        reopened.scan(&f.cache, false, &AtomicBool::new(false)).unwrap();
+        assert_eq!(reopened.db.local_targets(true).unwrap(), targets);
+        assert_eq!(reopened.db.list_asset_tags(&ids[0]).unwrap().len(), 2);
+        assert!(reopened.db.list_asset_tags(&ids[1]).unwrap().is_empty());
+        assert_eq!(reopened.db.local_examples(&manual, "").unwrap(), vec![(ids[0].clone(), true)]);
+        assert!(reopened.db.local_labels().unwrap().iter().any(|l| l.id==automatic && l.description=="自动定义"));
+    }
+
+    #[test]
     fn folder_records_isolate_labels_and_move_without_original_copies() {
         let f = Fixture::new();
         f.image("a/p.png", 10);
@@ -790,6 +820,7 @@ impl LocalClassifier {
         self.background.store(false, Ordering::Relaxed);
         self.update(&app, |s| {
             *s = Status {
+                run_id: ulid::Ulid::new().to_string(),
                 busy: true,
                 folder_root: Some(root.clone()),
                 phase: "scanning".into(),

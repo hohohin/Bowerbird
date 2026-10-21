@@ -1,6 +1,6 @@
 import { cloudVideoOptions } from "../lib/videoGeneration";
 import { beginOnboardingOperation } from "../lib/onboardingStore";
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { DEFAULT_VIDEO_OPTIONS, VIDEO_RATIOS, imageInputError, videoInputError, videoProvider, type GenerationSettings } from "../lib/videoGeneration";
 import { VideoControls } from "./creation/VideoControls";
 import { useStore } from "../store";
@@ -33,7 +33,10 @@ import { ImageGenOptions } from "./creation/ImageGenOptions";
 import { ProviderSelect } from "./creation/ProviderSelect";
 import { VisualProfileSelect } from "./creation/VisualProfileSelect";
 import { BoardChipPreview } from "./creation/BoardChipPreview";
-import { ChevronDown, Info, Sparkles } from "lucide-react";
+import { ArrowUp, ChevronDown, Image, Info, Plus, Sparkles, Video } from "lucide-react";
+import { useLibraryGlass } from "./useLibraryGlass";
+import { OverlayScrollArea } from "./CollectionScrollArea";
+import "./CreationBoard.css";
 
 // 画面比例偏好记忆（照 AssetDetail 的 localStorage 范式：bowerbird.<name> 前缀、try/catch 兜底）。
 const BOARD_RATIO_KEY = "bowerbird.boardRatio";
@@ -59,18 +62,18 @@ function saveBoardRatio(v: string | null) {
 export const AGENT_DS_DONE_EVENT = "bowerbird://agent-ds-done";
 
 /**
- * 创作板 UI 外壳（jimeng 网页端式底部浮动对话框，常驻显示）：宽而矮的黑色半透明
- * 毛玻璃卡片，浮在瀑布流下方居中、底边贴应用底边；工具栏在对话框内底部一行。编辑器
+ * 创作板 UI 外壳：沿用素材库液态玻璃材质，顶部选择图片／视频／Agent 与品牌规范，
+ * 正文保留句中引用，输出参数和发送集中在底部。编辑器
  * 内核（ProseMirror doc / 光标 / 序列化）下沉到 useCreationEditor + creation/* 模块，
  * 本组件只管「组稿周边」：用途（preset）CRUD / 复制 / 发送 / 预览。
  *
  * 两态：常驻未激活（普通浏览：点图开详情、筛选生效）⇄ 创作模式激活（store.boardOpen，
  * 等同旧「创作板」按钮：点图插参考图、瀑布流蓝线框 + 顶部「创作模式」刘海）。编辑框
- * 获得焦点（onFocus，ProseMirror contenteditable 冒泡）即激活；对话框右上角突出的
- * 档案标签页签（⌄ 退出创作模式，V 形下箭头示意「收起/退出」）退出。会话「重新编辑」坞期间本组件整体让位
+ * 获得焦点（onFocus，ProseMirror contenteditable 冒泡）即激活；右上角收起按钮退出。
+ * 本框不提供续轮入口，续轮由绘画详情承载。会话「重新编辑」坞期间本组件整体让位
  * （App 按 !genEditing 挂载）。
  *
- * 非创作模式未聚焦时向下收起 70%，点击露出区域或键盘聚焦后展开；创作模式保持展开。
+ * 非创作模式未聚焦时只露出正文首行（复用原编辑器，不复制文本）；点击或键盘聚焦后展开。
  * 在工具栏与内部菜单间操作保持展开，草稿与创作模式不因失焦被清空。
  *
  * 参考图入口：创作模式激活时点瀑布流任意图即在光标处插 image chip；也可手输 @图名，
@@ -88,6 +91,7 @@ export interface CreationBoardProps {
   promptLoadRequest?: CreativePromptLoadRequest | null;
   onPromptLoadConsumed?: (requestId: string) => void;
   onDraftChange?: (draft: CreationEditorDraft) => void;
+  onOpenLibrary?: () => void;
   registerDraftFlush?: (flush: (() => void) | null) => void;
   beforeGenerate?: () => Promise<void>;
   resolveCreativeThread?: (
@@ -110,10 +114,17 @@ export function CreationBoard({
   promptLoadRequest = null,
   onPromptLoadConsumed,
   onDraftChange,
+  onOpenLibrary,
   registerDraftFlush,
   beforeGenerate,
   resolveCreativeThread,
 }: CreationBoardProps = {}) {
+  const glass = useLibraryGlass();
+  const editorLabelId = useId();
+  const editorScrollRef = useRef<HTMLDivElement>(null);
+  const agentMenuRef = useRef<HTMLDivElement>(null);
+  const agentTriggerRef = useRef<HTMLButtonElement>(null);
+  const [agentMenuOpen, setAgentMenuOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const codexHealth = useStore((s) => s.codexHealth);
   const creating = useStore((s) => s.boardOpen);
@@ -124,17 +135,6 @@ export function CreationBoard({
   const cloudAvailable = cloudAuth?.cloud_available ?? false;
   const isTestAccount = cloudEntitlement?.is_test_account === true;
   const runningJobCount = useStore((s) => Object.values(s.genJobs).filter((j) => j.running).length);
-  // 会话卡片生成成功 → 自动退出创作模式的观察目标（普通生成路径提交时登记，
-  // 见 send()；成功/失败结算时清除，详见下方 useEffect）。按值选择器只暴露
-  // 结算结果，避免生成期间流式 delta 触发对话框整树重渲染。
-  const [successExitJobId, setSuccessExitJobId] = useState<string | null>(null);
-  const successExitOutcome = useStore((s): "idle" | "pending" | "succeeded" | "failed" => {
-    if (!successExitJobId) return "idle";
-    const job = s.genJobs[successExitJobId];
-    if (!job || job.running) return "pending";
-    const last = job.turns[job.turns.length - 1];
-    return last && last.images.length > 0 ? "succeeded" : "failed";
-  });
   const selectedImageProvider = useStore((s) => s.activeGenProvider);
   const [generation, setGeneration] = useState<GenerationSettings>(() => initialDraft?.generation ?? { media: "image" });
   const isVideo = generation.media === "video";
@@ -284,12 +284,12 @@ export function CreationBoard({
   const [agentDsBusy, setAgentDsBusy] = useState(false);
   // 设置「开发者选项」的对话框模式开关（settings 未加载 = 默认：仅正式 Agent 开）。
   // 关闭的模式按钮不渲染；可用性健康检查（agentAvailable / agentZAvailable / codexHealth）照常叠加。
-  const agentModeOn = !isVideo && (settings?.agent_mode_enabled ?? true);
-  const agentAOn = !isVideo && (settings?.agent_a_mode_enabled ?? false);
-  const agentBOn = !isVideo && (settings?.agent_b_mode_enabled ?? false);
-  const agentZOn = !isVideo && (settings?.agent_z_mode_enabled ?? false);
-  const agentGOn = !isVideo && (settings?.agent_g_mode_enabled ?? false);
-  const agentDsOn = !isVideo && (settings?.agent_ds_mode_enabled ?? false);
+  const agentModeOn = settings?.agent_mode_enabled ?? true;
+  const agentAOn = settings?.agent_a_mode_enabled ?? false;
+  const agentBOn = settings?.agent_b_mode_enabled ?? false;
+  const agentZOn = settings?.agent_z_mode_enabled ?? false;
+  const agentGOn = settings?.agent_g_mode_enabled ?? false;
+  const agentDsOn = settings?.agent_ds_mode_enabled ?? false;
   // 生成选项（张数 + 透明图层）只在即梦 / Cloud 生图（且非 Agent 模式）下显示。
   const countSupported = !isVideo && !cloudAgentMode
     && (activeGenProvider === "jimeng" || isCloudProvider(activeGenProvider));
@@ -325,22 +325,50 @@ export function CreationBoard({
 
   // 设置里关闭的模式：隐藏按钮同时复位其激活态（含「开启 Agent 模式再试」等异步置位路径）。
   useEffect(() => {
-    if (!agentModeOn && cloudAgentMode) {
+    if ((isVideo || !agentModeOn) && cloudAgentMode) {
       setCloudAgentMode(false);
     }
-    if (!agentAOn && agentMode === "a") setAgentMode("off");
-    if (!agentBOn && agentMode === "b") setAgentMode("off");
-    if (!agentZOn && agentZMode) setAgentZMode(false);
-    if (!agentGOn && agentGMode) setAgentGMode(false);
-    if (!agentDsOn && agentDsMode) setAgentDsMode(false);
+    if ((isVideo || !agentAOn) && agentMode === "a") setAgentMode("off");
+    if ((isVideo || !agentBOn) && agentMode === "b") setAgentMode("off");
+    if ((isVideo || !agentZOn) && agentZMode) setAgentZMode(false);
+    if ((isVideo || !agentGOn) && agentGMode) setAgentGMode(false);
+    if ((isVideo || !agentDsOn) && agentDsMode) setAgentDsMode(false);
   }, [
-    agentModeOn, agentAOn, agentBOn, agentZOn, agentGOn, agentDsOn,
+    isVideo, agentModeOn, agentAOn, agentBOn, agentZOn, agentGOn, agentDsOn,
     cloudAgentMode, agentMode, agentZMode, agentGMode, agentDsMode,
   ]);
 
   // 记录焦点收起状态；创作模式优先保持展开，退出后恢复收起。
   const dockRef = useRef<HTMLDivElement>(null);
   const [collapsed, setCollapsed] = useState(true);
+  const isCollapsed = !creating && collapsed;
+  useLayoutEffect(() => {
+    if (isCollapsed && editorScrollRef.current) editorScrollRef.current.scrollTop = 0;
+  }, [isCollapsed]);
+  useEffect(() => {
+    const editor = hostRef.current?.querySelector(".ProseMirror");
+    editor?.setAttribute("role", "textbox");
+    editor?.setAttribute("aria-labelledby", editorLabelId);
+    editor?.setAttribute("aria-multiline", "true");
+  }, [hostRef, editorLabelId]);
+  useEffect(() => {
+    if (!agentMenuOpen) return;
+    const frame = requestAnimationFrame(() => agentMenuRef.current?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus());
+    function outside(event: PointerEvent) {
+      if (event.target instanceof Node && !agentMenuRef.current?.contains(event.target)
+        && !agentTriggerRef.current?.contains(event.target)) setAgentMenuOpen(false);
+    }
+    function escape(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      setAgentMenuOpen(false);
+      agentTriggerRef.current?.focus();
+    }
+    document.addEventListener("pointerdown", outside);
+    document.addEventListener("keydown", escape);
+    return () => { cancelAnimationFrame(frame); document.removeEventListener("pointerdown", outside); document.removeEventListener("keydown", escape); };
+  }, [agentMenuOpen]);
   useEffect(() => {
     function onPointerDown(event: PointerEvent) {
       if (event.target instanceof Node && !dockRef.current?.contains(event.target)) setCollapsed(true);
@@ -354,26 +382,23 @@ export function CreationBoard({
     };
   }, []);
   function exitCreationMode() {
+    setAgentMenuOpen(false);
     setBoardActive(false);
     const focused = document.activeElement;
     if (focused instanceof HTMLElement && dockRef.current?.contains(focused)) focused.blur();
     setCollapsed(true);
   }
 
+  function selectMedia(media: "image" | "video") {
+    const nextRatio = media === "video" && !VIDEO_RATIOS.includes(ratio ?? "") ? "16:9" : ratio;
+    setRatio(nextRatio);
+    setGeneration({ ...generation, media, videoOptions, ratio: nextRatio });
+    setCloudAgentMode(false); setAgentMode("off"); setAgentZMode(false); setAgentGMode(false); setAgentDsMode(false);
+    setAgentMenuOpen(false);
+  }
+
   const exitCreationModeRef = useRef(exitCreationMode);
   exitCreationModeRef.current = exitCreationMode;
-
-  // 会话卡片生成成功 → 自动退出创作模式：普通生成（生成图像/生成视频按钮）提交后
-  // 创作模式保持激活（生成期间可继续挑图组下一轮稿），job 结算时成功（末轮有产出
-  // 图）才退出，回普通浏览；失败/被拒则保持创作模式继续组稿或重试。只跟踪最近一次
-  // 提交的 job：更早的 job 成功时用户多半已在组新稿，不再打断。
-  useEffect(() => {
-    if (successExitOutcome !== "succeeded" && successExitOutcome !== "failed") return;
-    setSuccessExitJobId(null);
-    if (successExitOutcome === "succeeded" && useStore.getState().boardOpen) {
-      exitCreationModeRef.current();
-    }
-  }, [successExitOutcome]);
 
   useEffect(() => {
     let composing = false;
@@ -417,7 +442,7 @@ export function CreationBoard({
   }, [hostRef]);
 
   // 对话框高度 → --board-dock-h：瀑布流滚动容器据此留底部 padding，最后一行素材
-  // 不被对话框盖住（与会话编辑坞 --gen-dock-h 同款；收起是纯 transform，高度不变）。
+  // 不被对话框盖住；收起和展开按实际可见高度更新。
   useEffect(() => {
     if (embedded) return;
     const el = dockRef.current;
@@ -518,9 +543,8 @@ export function CreationBoard({
   // 把当前组稿发 provider 生成。生成期间编辑器仍可继续组下一轮稿（prompt 在此快照进 store）。
   // provider / visual profile 与 prompt、refs 一样在点击时冻结；异步 Agent
   // 整理或画板准备期间的 UI 切换只影响下一次发送。
-  // 普通生成（生成图像/生成视频）提交后创作模式保持激活，会话卡片生成成功时自动退出
-  // （同「退出创作模式」页签：回普通浏览，左键恢复开详情）；校验不过/提交失败/生成失败
-  // 则保持创作模式继续组稿或重试。终端型 / Cloud Agent 路径完成即退出（无生成会话卡片）。
+  // 普通生成任务启动、会话卡片创建成功后退出创作模式，后台继续生成；
+  // 校验不过或提交失败保留组稿。后续任务结算不影响用户重新开启的创作模式。
   async function send() {
     const originRoute = useStore.getState();
     const originProjectId = projectId ?? originRoute.activeProjectId;
@@ -760,6 +784,7 @@ export function CreationBoard({
           sidecar: originContinuation,
           focusedNodeId: focusedContinuationNodeId,
           focusedThreadId: focusedContinuationThreadId,
+          referenceNodeIds,
         },
       );
       const parentAsset = parentSelection?.asset ?? null;
@@ -806,9 +831,7 @@ export function CreationBoard({
     if (continuation?.continuationRequestId) {
       ackPendingCreativeContinuation(continuation.continuationRequestId);
     }
-    // 提交成功不立即退出创作模式：登记本次 job，会话卡片生成成功（末轮有产出图）
-    // 时由上方 effect 自动退出；失败/被拒则保持创作模式继续组稿或重试。
-    if (isCurrentSubmission()) setSuccessExitJobId(startedGeneration.jobId);
+    if (isCurrentSubmission()) exitCreationMode();
     } catch (error) {
       if (submissionClaim.isCurrent()) notifyError(error, "无法提交生成任务");
     } finally {
@@ -869,279 +892,65 @@ export function CreationBoard({
     }
   }
 
+  const terminalAgent = agentZMode || agentGMode || agentDsMode;
+  const agentSelected = cloudAgentMode || agentMode !== "off" || terminalAgent;
+  const showAgent = agentSelected || (agentModeOn && cloudAgentEntitled)
+    || (agentAvailable && (agentAOn || agentBOn)) || (agentZAvailable && agentZOn)
+    || (agentZAvailable && codexHealth?.ok && agentGOn) || (agentDsAvailable && agentDsOn);
+  const selectedMode = agentSelected ? 2 : isVideo ? 1 : 0;
+  const agentLabel = cloudAgentMode ? "Agent" : agentZMode ? "Agent Z" : agentGMode ? "Agent G"
+    : agentDsMode ? "Agent DS" : agentMode === "a" ? "Agent A" : agentMode === "b" ? "Agent B" : "Agent";
+
   return (
     // 外层横向定位条（pointer-events-none 不挡瀑布流点击），section 内 pointer-events-auto。
     // z-20：盖过瀑布流与生成会话面板（z-10，发送后面板弹出、板仍可继续组稿），
     // 让位右键菜单(60)/维度环(65)/tour(70)。
-    <div className={`pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center ${embedded ? "canvas-composer-host" : ""}`}>
+    <div className={`composer-host-glass pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center ${embedded ? "canvas-composer-host" : ""}`}>
       <section
         ref={dockRef}
         onPointerDown={(e) => {
-          if (!(e.target instanceof Element && e.target.closest(".creation-exit-tab"))) {
+          if (!(e.target instanceof Element && e.target.closest(".creation-exit-tab, .composer-expand"))) {
             setCollapsed(false);
           }
         }}
         onClick={(e) => {
           if (e.target === e.currentTarget) focus();
         }}
-        onFocusCapture={() => setCollapsed(false)}
+        onFocusCapture={event => {
+          if (!(event.target instanceof Element && event.target.closest(".composer-expand"))) setCollapsed(false);
+        }}
         onBlurCapture={(e) => {
-          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setCollapsed(true);
+          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+            setCollapsed(true);
+            setAgentMenuOpen(false);
+          }
         }}
         aria-label="创作板"
-        className={`creation-dock pointer-events-auto relative w-[min(760px,calc(100%-24px))] rounded-t-2xl p-2.5 pb-2 ${creating ? "is-creating" : ""} ${embedded ? "is-canvas-composer" : ""} ${
-          !creating && collapsed ? "is-collapsed" : ""
+        style={glass.style}
+        className={`creation-dock composer-glass pointer-events-auto relative ${creating ? "is-creating" : ""} ${embedded ? "is-canvas-composer" : ""} ${
+          isCollapsed ? "is-collapsed" : ""
         }`}
       >
-        {/* 退出创作模式：素材库与项目画板共用同一显式退出入口。 */}
-        {creating && (
-          <button
-            type="button"
-            onClick={exitCreationMode}
-            className="creation-exit-tab"
-            data-tour="board-exit"
-            title={embedded
-              ? "退出创作模式（回到画板浏览：点图放大，按住空白拖动框选）"
-              : "退出创作模式（回普通浏览并收起对话框）"}
-            aria-label="退出创作模式"
-          >
-            <ChevronDown size={13} aria-hidden="true" />
-            退出创作模式
-          </button>
-        )}
-        {/* 用途（preset）：发送时作为基底注入；登记=把当前编辑框内容存为用途（只需用途名）。
-            功能未完成，PRESET_FEATURE_ENABLED 关闭整块 UI（store 注入逻辑随之不可达）。 */}
-        {PRESET_FEATURE_ENABLED && (
-        <>
-        <div className="mb-2 flex flex-wrap items-center gap-1.5 text-xs">
-          <span className="shrink-0 text-muted">用途</span>
-          <select
-            value={activePresetId ?? ""}
-            onChange={(e) => setActivePreset(e.target.value || null)}
-            className="min-w-0 flex-1 rounded bg-panel2 px-1.5 py-1 text-ink outline-none ring-1 ring-edge focus:ring-accent"
-          >
-            <option value="">默认</option>
-            {presets.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-          {creatingPreset ? (
-            <>
-              <input
-                autoFocus
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") void savePreset();
-                  if (e.key === "Escape") {
-                    e.preventDefault();
-                    setCreatingPreset(false);
-                  }
-                }}
-                placeholder="用途名"
-                className="w-24 rounded bg-panel2 px-1.5 py-1 text-ink outline-none ring-1 ring-edge focus:ring-accent"
-              />
-              <button
-                onClick={savePreset}
-                disabled={!newName.trim() || !finalPrompt.trim()}
-                className="shrink-0 rounded bg-accent px-2 py-1 font-semibold text-black disabled:opacity-50"
-                title="把当前编辑框内容存为该用途"
-              >
-                ✓
-              </button>
-              <button
-                onClick={() => {
-                  setCreatingPreset(false);
-                  setNewName("");
-                }}
-                className="shrink-0 rounded bg-panel2 px-2 py-1 text-ink hover:bg-edge"
-              >
-                ✕
-              </button>
-            </>
-          ) : (
-            <button
-              onClick={() => setCreatingPreset(true)}
-              disabled={!finalPrompt.trim()}
-              className="shrink-0 rounded bg-panel2 px-2 py-1 text-ink hover:bg-edge disabled:opacity-50"
-              title={finalPrompt.trim() ? "把当前编辑框内容登记为一个用途" : "编辑框为空，无内容可登记"}
-            >
-              登记
-            </button>
-          )}
-        </div>
-        {activePreset && editingPresetId === activePreset.id ? (
-          <div className="mb-2 space-y-1.5 rounded bg-panel2 p-2">
-            <input
-              autoFocus
-              value={editName}
-              onChange={(e) => setEditName(e.target.value)}
-              placeholder="用途名"
-              className="w-full rounded bg-panel px-1.5 py-1 text-xs text-ink outline-none ring-1 ring-edge focus:ring-accent"
-            />
-            <textarea
-              value={editBody}
-              onChange={(e) => setEditBody(e.target.value)}
-              rows={4}
-              placeholder="用途内容（发送时作为基底注入）"
-              className="max-h-40 w-full resize-y overflow-y-auto rounded bg-panel px-1.5 py-1 text-[11px] leading-5 text-ink outline-none ring-1 ring-edge focus:ring-accent"
-            />
-            <div className="flex gap-1.5">
-              <button
-                onClick={saveEditPreset}
-                disabled={!editName.trim() || !editBody.trim()}
-                className="shrink-0 rounded bg-accent px-2 py-1 text-xs font-semibold text-black disabled:opacity-50"
-              >
-                保存
-              </button>
-              <button
-                onClick={() => setEditingPresetId(null)}
-                className="shrink-0 rounded bg-panel px-2 py-1 text-xs text-ink hover:bg-edge"
-              >
-                取消
-              </button>
-            </div>
-          </div>
-        ) : activePreset ? (
-          <div className="mb-2 space-y-1">
-            <div className="flex items-start gap-2">
-              <div
-                className="line-clamp-2 flex-1 text-[10px] leading-4 text-muted"
-                title={activePreset.body}
-              >
-                基底：{activePreset.body}
-              </div>
-              <button
-                onClick={startEditPreset}
-                className="shrink-0 text-[10px] text-accent hover:underline"
-                title="编辑该用途的名字与内容"
-              >
-                编辑
-              </button>
-              {confirmDeleteId === activePreset.id ? (
-                <>
-                  <button
-                    onClick={() => {
-                      void deletePresetById(activePreset.id);
-                      setConfirmDeleteId(null);
-                    }}
-                    className="shrink-0 text-[10px] text-red-400 hover:underline"
-                  >
-                    确认删除
-                  </button>
-                  <button
-                    onClick={() => setConfirmDeleteId(null)}
-                    className="shrink-0 text-[10px] text-muted hover:underline"
-                  >
-                    取消
-                  </button>
-                </>
-              ) : (
-                <button
-                  onClick={() => setConfirmDeleteId(activePreset.id)}
-                  className="shrink-0 text-[10px] text-muted hover:text-red-400 hover:underline"
-                  title="删除该用途"
-                >
-                  删除
-                </button>
-              )}
-            </div>
-          </div>
-        ) : null}
-        </>
-        )}
-        {/* 编辑框：随主题切换的独立输入区；超高后内部滚动（不触发主区滚动收起）。
-            获得焦点（contenteditable 冒泡）= 激活创作模式（等同旧「创作板」按钮）。 */}
-        <div
-          ref={hostRef}
-          onClick={(event) => {
-            // 正文点击完全交给 ProseMirror 原生定位：冒泡后再 focus() 会把编辑器
-            // 旧选区写回 DOM、覆盖点击落点（光标跳到别行，同官网 2026-08-02 踩坑）。
-            // 只有点到内容区外的宿主空白（内边距）才手动聚焦。
-            if (!(event.target instanceof Element && event.target.closest(".ProseMirror"))) focus();
-          }}
-          onFocus={() => { setBoardActive(true); beginOnboardingOperation("activate-composer", useStore.getState().activeProjectId)(); }}
-          onKeyDown={(event) => {
-            if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
-              event.preventDefault();
-              void send();
-            }
-          }}
-          data-onboarding-composer
-          data-tour="creation-editor"
-          className="creation-editor generation-input min-h-16 max-h-56 cursor-text overflow-y-auto px-3 py-2 text-sm leading-8 text-ink"
-        />
-        {/* 编辑框内 image/keyword chip 的交互浮层（hover 放大图/维度正文 + 点击定位瀑布流） */}
-        <BoardChipPreview hostRef={hostRef} />
-        {referenceError && <p role="alert" className="px-3 py-1 text-xs text-red-400">{referenceError}</p>}
-        {/* 工具栏：对话框底部一行——左端帮助，中间快捷参数，右端发送（主题自适应按钮）。 */}
-        <div className="generation-toolbar flex flex-wrap items-center gap-2">
-          <div className="group relative flex shrink-0 items-center">
-            <button
-              type="button"
-              className="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-white/10 hover:text-ink"
-              aria-label="使用说明"
-            >
-              <Info size={13} />
-            </button>
-            <div className="pointer-events-none absolute bottom-full left-0 z-10 mb-1.5 hidden w-60 rounded-lg bg-panel2 p-2 text-[11px] leading-4 text-muted ring-1 ring-edge group-hover:block group-focus-within:block">
-              像跟 AI 输入 prompt 一样书写；<span className="text-accent">点瀑布流图片</span>，有维度数据时打开维度环，仅添加所选维度，不自动插入参考图；无维度数据时插入参考图。也可输入 <span className="text-accent">@图名</span> 插入参考图（空格/标点后自动识别）。<span className="text-accent">长按任意图片</span>四周会出现<span className="text-accent">维度环</span>，点环上扇区即可把该维度加入创作板（创作板未打开会自动打开）；无维度数据的图会提示先右键反推。
-              {isVideo && <p className="mt-2 text-[11px] leading-4 text-muted">{videoOptions.kind === "frames2video" ? "按编辑框中的参考顺序：第 1 张为首帧，第 2 张为尾帧。" : videoOptions.kind === "multimodal2video" ? `支持图片与视频参考；参考视频每段及总时长均须为 2–${videoOptions.model_version === "seedance2.5" ? 30 : 15} 秒。` : ""}{generation.videoChannel === "cloud" ? "使用 Bowerbird 积分，按成功任务实际用量结算。" : "使用即梦积分，模型权限以官方账号为准。"}提交后停止等待，远端任务仍可能完成并计费。</p>}
-              {cloudAgentMode && (
-                <p className="mt-2 text-[10px] leading-4 text-muted">
-                  隐私说明：本次文字和所选参考图会加密上传至 Bowerbird Cloud，仅用于规划与执行。输入和过程内容通常最长保留 24 小时，最终结果最长保留 7 天；取消会停止后续调用，已上传副本仍按上述期限清理。接受后的图片保存到本地素材库，其余素材和本地数据库不会上传。
-                </p>
-              )}
-            </div>
-          </div>
-          <select aria-label="生成媒体" value={isVideo ? "video" : "image"}
-            className="h-7 rounded border border-edge bg-panel2 px-2 text-xs text-ink"
-            onChange={(event) => {
-              const media = event.target.value === "video" ? "video" : "image";
-              const nextRatio = media === "video" && !VIDEO_RATIOS.includes(ratio ?? "") ? "16:9" : ratio;
-              setRatio(nextRatio);
-              setGeneration({ ...generation, media, videoOptions, ratio: nextRatio });
-              if (media === "video") { setCloudAgentMode(false); setAgentMode("off"); setAgentZMode(false); setAgentGMode(false); setAgentDsMode(false); }
-            }}><option value="image">图片</option><option value="video">视频</option></select>
-          {isVideo && <VideoControls channel={generation.videoChannel} onChannelChange={(videoChannel) => setGeneration({ ...generation, videoChannel, videoOptions: videoChannel === "cloud" ? cloudVideoOptions(videoOptions) : videoOptions })} options={videoOptions} onChange={(options) => setGeneration({ ...generation, media: "video", videoOptions: options, ratio })} ratio={ratio} onRatioChange={selectRatio} />}
-          {/* Cloud Agent 仍接受显式比例；仅终端型 Agent 不走 Bowerbird 生图参数。
-              flex：比例 / 生成选项两个选择器水平并排（外层缺 flex 时 block 根会竖着叠成
-              两行，按钮挤在同一列）。 */}
-          <div className={`flex shrink-0 items-center gap-2 ${agentZMode || agentGMode || agentDsMode ? "pointer-events-none opacity-40" : ""}`}>
-            {!isVideo && <RatioSelect value={ratio} onChange={selectRatio} />}
-            {countSupported && (
-              <ImageGenOptions
-                count={genCount}
-                onCountChange={selectGenCount}
-                transparent={transparentLayer}
-                onTransparentChange={selectTransparentLayer}
-              />
-            )}
-          </div>
-          <VisualProfileSelect
-            value={activeVisualProfileId}
-            onChange={setActiveVisualProfile}
-          />
-          {isVideo ? null : cloudAgentMode ? (
-            <span className="text-[11px] text-muted" title="Agent 使用 Bowerbird Cloud 工具">Bowerbird Cloud</span>
-          ) : (
-          <div className={`${agentZMode || agentGMode || agentDsMode ? "pointer-events-none opacity-40" : ""}`}>
-            <ProviderSelect
-              value={activeGenProvider}
-              onChange={setActiveGenProvider}
-              codexHealth={codexHealth}
-              dreaminaHealth={dreaminaHealth}
-              cloudAvailable={cloudAvailable}
-              cloudAuth={cloudAuth}
-              cloudEntitlement={cloudEntitlement}
-              defaultProvider={defaultProvider}
-              onSetDefaultProvider={setDefaultProvider}
-            />
-          </div>
-          )}
-          {agentModeOn && (
+        {glass.definition}
+        <div className="composer-heading">
+          <div className="composer-mode-picker library-floating-surface" role="group" aria-label="创作方式"
+            style={{ "--switch-count": showAgent ? 3 : 2, "--switch-index": selectedMode } as CSSProperties}>
+            <span className="composer-mode-thumb" aria-hidden="true" />
+            <button type="button" aria-pressed={!isVideo && !agentSelected} onClick={() => selectMedia("image")}><Image size={15} aria-hidden="true" />图片</button>
+            <button type="button" aria-pressed={isVideo && !agentSelected} onClick={() => selectMedia("video")}><Video size={15} aria-hidden="true" />视频</button>
+            {showAgent && <button ref={agentTriggerRef} type="button" aria-pressed={agentSelected}
+              aria-label="选择 Agent 模式" aria-haspopup="dialog" aria-expanded={agentMenuOpen}
+              onClick={() => setAgentMenuOpen(open => !open)}><Sparkles size={15} aria-hidden="true" />{agentLabel}<ChevronDown size={12} aria-hidden="true" /></button>}
+            {agentMenuOpen && <div ref={agentMenuRef} className="composer-agent-menu app-popover" role="dialog" aria-label="Agent 模式"
+              onClick={event => {
+                const button = (event.target as HTMLElement).closest("button");
+                if (!button || button.disabled) return;
+                setGeneration(current => ({ ...current, media: "image" }));
+                setAgentMenuOpen(false);
+                agentTriggerRef.current?.focus();
+              }}>
+              <div className="app-popover-title">选择 Agent</div>
+          {agentModeOn && (cloudAgentEntitled || cloudAgentMode) && (
           <div className="flex items-center gap-1">
           <button
             type="button"
@@ -1289,13 +1098,250 @@ export function CreationBoard({
               </span>
             </button>
           )}
+
+            </div>}
+          </div>
+          <div className="composer-profile"><VisualProfileSelect value={activeVisualProfileId} onChange={setActiveVisualProfile} /></div>
+          <button type="button" className="composer-collapse creation-exit-tab" data-tour="board-exit"
+            title="退出创作模式，收起并保留草稿" aria-label="退出创作模式" onClick={exitCreationMode}><ChevronDown size={16} aria-hidden="true" /></button>
+        </div>
+        {/* 用途（preset）：发送时作为基底注入；登记=把当前编辑框内容存为用途（只需用途名）。
+            功能未完成，PRESET_FEATURE_ENABLED 关闭整块 UI（store 注入逻辑随之不可达）。 */}
+        {PRESET_FEATURE_ENABLED && (
+        <>
+        <div className="mb-2 flex flex-wrap items-center gap-1.5 text-xs">
+          <span className="shrink-0 text-muted">用途</span>
+          <select
+            value={activePresetId ?? ""}
+            onChange={(e) => setActivePreset(e.target.value || null)}
+            className="min-w-0 flex-1 rounded bg-panel2 px-1.5 py-1 text-ink outline-none ring-1 ring-edge focus:ring-accent"
+          >
+            <option value="">默认</option>
+            {presets.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+          {creatingPreset ? (
+            <>
+              <input
+                autoFocus
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void savePreset();
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    setCreatingPreset(false);
+                  }
+                }}
+                placeholder="用途名"
+                className="w-24 rounded bg-panel2 px-1.5 py-1 text-ink outline-none ring-1 ring-edge focus:ring-accent"
+              />
+              <button
+                onClick={savePreset}
+                disabled={!newName.trim() || !finalPrompt.trim()}
+                className="shrink-0 rounded bg-accent px-2 py-1 font-semibold text-black disabled:opacity-50"
+                title="把当前编辑框内容存为该用途"
+              >
+                ✓
+              </button>
+              <button
+                onClick={() => {
+                  setCreatingPreset(false);
+                  setNewName("");
+                }}
+                className="shrink-0 rounded bg-panel2 px-2 py-1 text-ink hover:bg-edge"
+              >
+                ✕
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={() => setCreatingPreset(true)}
+              disabled={!finalPrompt.trim()}
+              className="shrink-0 rounded bg-panel2 px-2 py-1 text-ink hover:bg-edge disabled:opacity-50"
+              title={finalPrompt.trim() ? "把当前编辑框内容登记为一个用途" : "编辑框为空，无内容可登记"}
+            >
+              登记
+            </button>
+          )}
+        </div>
+        {activePreset && editingPresetId === activePreset.id ? (
+          <div className="mb-2 space-y-1.5 rounded bg-panel2 p-2">
+            <input
+              autoFocus
+              value={editName}
+              onChange={(e) => setEditName(e.target.value)}
+              placeholder="用途名"
+              className="w-full rounded bg-panel px-1.5 py-1 text-xs text-ink outline-none ring-1 ring-edge focus:ring-accent"
+            />
+            <textarea
+              value={editBody}
+              onChange={(e) => setEditBody(e.target.value)}
+              rows={4}
+              placeholder="用途内容（发送时作为基底注入）"
+              className="max-h-40 w-full resize-y overflow-y-auto rounded bg-panel px-1.5 py-1 text-[11px] leading-5 text-ink outline-none ring-1 ring-edge focus:ring-accent"
+            />
+            <div className="flex gap-1.5">
+              <button
+                onClick={saveEditPreset}
+                disabled={!editName.trim() || !editBody.trim()}
+                className="shrink-0 rounded bg-accent px-2 py-1 text-xs font-semibold text-black disabled:opacity-50"
+              >
+                保存
+              </button>
+              <button
+                onClick={() => setEditingPresetId(null)}
+                className="shrink-0 rounded bg-panel px-2 py-1 text-xs text-ink hover:bg-edge"
+              >
+                取消
+              </button>
+            </div>
+          </div>
+        ) : activePreset ? (
+          <div className="mb-2 space-y-1">
+            <div className="flex items-start gap-2">
+              <div
+                className="line-clamp-2 flex-1 text-[10px] leading-4 text-muted"
+                title={activePreset.body}
+              >
+                基底：{activePreset.body}
+              </div>
+              <button
+                onClick={startEditPreset}
+                className="shrink-0 text-[10px] text-accent hover:underline"
+                title="编辑该用途的名字与内容"
+              >
+                编辑
+              </button>
+              {confirmDeleteId === activePreset.id ? (
+                <>
+                  <button
+                    onClick={() => {
+                      void deletePresetById(activePreset.id);
+                      setConfirmDeleteId(null);
+                    }}
+                    className="shrink-0 text-[10px] text-red-400 hover:underline"
+                  >
+                    确认删除
+                  </button>
+                  <button
+                    onClick={() => setConfirmDeleteId(null)}
+                    className="shrink-0 text-[10px] text-muted hover:underline"
+                  >
+                    取消
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={() => setConfirmDeleteId(activePreset.id)}
+                  className="shrink-0 text-[10px] text-muted hover:text-red-400 hover:underline"
+                  title="删除该用途"
+                >
+                  删除
+                </button>
+              )}
+            </div>
+          </div>
+        ) : null}
+        </>
+        )}
+        {/* 编辑框：随主题切换的独立输入区；超高后内部滚动（不触发主区滚动收起）。
+            获得焦点（contenteditable 冒泡）= 激活创作模式（等同旧「创作板」按钮）。 */}
+        <div className="composer-description-heading">
+          <span id={editorLabelId}>创作描述</span>
+          {isCollapsed && <button type="button" className="composer-expand" aria-label="展开创作描述" title="展开创作描述" onClick={focus}><ArrowUp size={15} aria-hidden="true" /></button>}
+        </div>
+        <OverlayScrollArea className="composer-editor-scroll" scrollRef={editorScrollRef} label="创作描述滚动条">
+        <div
+          ref={hostRef}
+          onClick={(event) => {
+            // 正文点击完全交给 ProseMirror 原生定位：冒泡后再 focus() 会把编辑器
+            // 旧选区写回 DOM、覆盖点击落点（光标跳到别行，同官网 2026-08-02 踩坑）。
+            // 只有点到内容区外的宿主空白（内边距）才手动聚焦。
+            if (!(event.target instanceof Element && event.target.closest(".ProseMirror"))) focus();
+          }}
+          onFocus={() => { setBoardActive(true); beginOnboardingOperation("activate-composer", useStore.getState().activeProjectId)(); }}
+          onKeyDown={(event) => {
+            if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+              event.preventDefault();
+              void send();
+            }
+          }}
+          data-onboarding-composer
+          data-tour="creation-editor"
+          className="creation-editor composer-description cursor-text text-ink"
+        />
+        </OverlayScrollArea>
+        {/* 编辑框内 image/keyword chip 的交互浮层（hover 放大图/维度正文 + 点击定位瀑布流） */}
+        <BoardChipPreview hostRef={hostRef} />
+        {referenceError && <p role="alert" className="px-3 py-1 text-xs text-red-400">{referenceError}</p>}
+        {/* 视频参数独占一行，下方放素材、积分提示与发送操作。 */}
+        <div className={`generation-toolbar composer-toolbar${isVideo ? " is-video" : ""}`}>
+          {onOpenLibrary && <button type="button" className="composer-add-material" aria-label="添加参考素材" title="打开素材库（Tab）"
+            onMouseDown={event => event.preventDefault()} onClick={() => { setBoardActive(true); onOpenLibrary(); }}><Plus size={16} aria-hidden="true" />素材<kbd>Tab</kbd></button>}
+          <div className="group relative flex shrink-0 items-center composer-help">
+            <button
+              type="button"
+              className="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-white/10 hover:text-ink"
+              aria-label="使用说明"
+            >
+              <Info size={13} />
+            </button>
+            <div className="pointer-events-none absolute bottom-full left-0 z-10 mb-1.5 hidden w-60 rounded-lg bg-panel2 p-2 text-[11px] leading-4 text-muted ring-1 ring-edge group-hover:block group-focus-within:block">
+              像跟 AI 输入 prompt 一样书写；<span className="text-accent">点击素材库图片</span>，将参考图插入当前光标处。也可输入 <span className="text-accent">@图名</span> 插入参考图（空格/标点后自动识别）。<span className="text-accent">长按任意图片</span>四周会出现<span className="text-accent">维度环</span>，点环上扇区即可把该维度加入创作板（创作板未打开会自动打开）；无维度数据的图会提示先右键反推。
+              {isVideo && <p className="mt-2 text-[11px] leading-4 text-muted">{videoOptions.kind === "frames2video" ? "按编辑框中的参考顺序：第 1 张为首帧，第 2 张为尾帧。" : videoOptions.kind === "multimodal2video" ? `支持图片与视频参考；参考视频每段及总时长均须为 2–${videoOptions.model_version === "seedance2.5" ? 30 : 15} 秒。` : ""}{generation.videoChannel === "cloud" ? "使用 Bowerbird 积分，按成功任务实际用量结算。" : "使用即梦积分，模型权限以官方账号为准。"}提交后停止等待，远端任务仍可能完成并计费。</p>}
+              {cloudAgentMode && (
+                <p className="mt-2 text-[10px] leading-4 text-muted">
+                  隐私说明：本次文字和所选参考图会加密上传至 Bowerbird Cloud，仅用于规划与执行。输入和过程内容通常最长保留 24 小时，最终结果最长保留 7 天；取消会停止后续调用，已上传副本仍按上述期限清理。接受后的图片保存到本地素材库，其余素材和本地数据库不会上传。
+                </p>
+              )}
+            </div>
+          </div>
+          <div className="composer-parameters">
+          {isVideo && <VideoControls composer channel={generation.videoChannel} onChannelChange={(videoChannel) => setGeneration({ ...generation, videoChannel, videoOptions: videoChannel === "cloud" ? cloudVideoOptions(videoOptions) : videoOptions })} options={videoOptions} onChange={(options) => setGeneration({ ...generation, media: "video", videoOptions: options, ratio })} ratio={ratio} onRatioChange={selectRatio} />}
+          {/* Cloud Agent 仍接受显式比例；仅终端型 Agent 不走 Bowerbird 生图参数。
+              flex：比例 / 生成选项两个选择器水平并排（外层缺 flex 时 block 根会竖着叠成
+              两行，按钮挤在同一列）。 */}
+          {!terminalAgent && !isVideo && <div className="flex shrink-0 items-center gap-2">
+            {!isVideo && <RatioSelect value={ratio} onChange={selectRatio} />}
+            {countSupported && (
+              <ImageGenOptions
+                alwaysShowCount
+                count={genCount}
+                onCountChange={selectGenCount}
+                transparent={transparentLayer}
+                onTransparentChange={selectTransparentLayer}
+              />
+            )}
+          </div>}
+          {isVideo || terminalAgent ? null : cloudAgentMode ? (
+            <span className="text-[11px] text-muted" title="Agent 使用 Bowerbird Cloud 工具">Bowerbird Cloud</span>
+          ) : (
+          <div>
+            <ProviderSelect
+              value={activeGenProvider}
+              onChange={setActiveGenProvider}
+              codexHealth={codexHealth}
+              dreaminaHealth={dreaminaHealth}
+              cloudAvailable={cloudAvailable}
+              cloudAuth={cloudAuth}
+              cloudEntitlement={cloudEntitlement}
+              defaultProvider={defaultProvider}
+              onSetDefaultProvider={setDefaultProvider}
+            />
+          </div>
+          )}
+          </div>
           {annotationWarning && (
-            <span className="flex shrink-0 items-center text-red-400" title="该模型不支持标注参数，标注图可以被发送，但控制效果可能不及预期。">
+            <span className="composer-annotation-warning flex shrink-0 items-center text-red-400" title="该模型不支持标注参数，标注图可以被发送，但控制效果可能不及预期。">
               <Info size={14} aria-label="该模型不支持标注参数，标注图可以被发送，但控制效果可能不及预期。" />
             </span>
           )}
           <div
-            className="group relative ml-auto"
+            className="group relative ml-auto composer-send"
             tabIndex={sendDisabledReason ? 0 : undefined}
             aria-label={sendDisabledReason ? "生成暂不可用" : undefined}
             aria-describedby={sendDisabledReason ? sendTooltipId : undefined}
@@ -1318,7 +1364,6 @@ export function CreationBoard({
               className={`generation-send-button ${sendDisabledReason ? "pointer-events-none" : ""}`}
             >
               <span className="generation-button-content gap-1.5">
-                <Sparkles size={13} />
                 {submitting && !cloudAgentBusy && !agentZBusy && !agentDsBusy && !agentBusy
                   ? "正在提交…"
                   : cloudAgentBusy
@@ -1338,6 +1383,7 @@ export function CreationBoard({
                           : agentBusy
                             ? "Agent 正在整理意图…"
                             : isVideo ? "生成视频" : "生成图像"}
+                <ArrowUp size={15} aria-hidden="true" />
               </span>
             </button>
             {sendDisabledReason && (

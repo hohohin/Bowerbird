@@ -181,6 +181,18 @@ pub fn ingest_generated(
     session_id: Option<&str>,
     source_tag: &str,
 ) -> AppResult<Asset> {
+    ingest_generated_with_visibility(paths, db, source, session_id, source_tag, false)
+}
+
+/// Persist visibility with the asset so intermediate products never appear in browse queries.
+pub fn ingest_generated_with_visibility(
+    paths: &LibraryPaths,
+    db: &Database,
+    source: &Path,
+    session_id: Option<&str>,
+    source_tag: &str,
+    library_hidden: bool,
+) -> AppResult<Asset> {
     let meta = media::probe::probe(source)?;
     let id = Ulid::new().to_string();
     let name = source
@@ -250,7 +262,7 @@ pub fn ingest_generated(
         file_mtime: Some(now),
         generation_session_id: session_id.map(|s| s.to_string()),
         reference_count: 0,
-        library_hidden: false,
+        library_hidden,
     };
     db.insert_asset(&asset)?;
     link_colors(db, &asset.id, asset.colors.as_deref());

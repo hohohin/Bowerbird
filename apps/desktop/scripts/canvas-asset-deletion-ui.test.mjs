@@ -39,8 +39,9 @@ try {
       const menuBox = await menu.boundingBox();
       assert.ok(menuBox.width <= 401, `context menu should stay compact, got ${menuBox.width}px`);
       assert.equal(await menu.locator(".asset-context-column").count(), 2);
-      assert.equal(await menu.locator(".asset-context-label-with-icon svg").count(), 1);
-      assert.equal(await menu.getByRole("menuitem", { name: "从画布移出", exact: true }).locator("svg").count(), 0);
+      assert.equal(await menu.getByRole("menuitem", { name: "删除", exact: true }).locator("svg").count(), 2);
+      await menu.getByRole("menuitem", { name: "删除", exact: true }).click();
+      assert.equal(await page.getByRole("menu", { name: "删除", exact: true }).getByRole("menuitem", { name: "从画布移出", exact: true }).locator("svg").count(), 0);
       if (mode === "keep") {
         const moveOutOfProject = page.getByRole("menuitem", { name: "移出当前项目", exact: true });
         assert.equal(await moveOutOfProject.getAttribute("title"), "仅移出当前项目 · 素材留在全局");
@@ -55,6 +56,7 @@ try {
     assert.equal(await node("old").count(), 1);
     assert.equal(await node("copy").count(), 1);
     await page.keyboard.press("Escape");
+    if (await page.locator('.context-menu-surface').count()) await page.keyboard.press("Escape");
     await page.evaluate(() => { window.failAssetDelete = false; });
     await remove();
     await node("old").waitFor({ state: "detached", timeout: 10000 });

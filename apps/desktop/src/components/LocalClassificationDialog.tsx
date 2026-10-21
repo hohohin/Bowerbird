@@ -1,4 +1,4 @@
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState } from "react";
 import { globalClassification, localClassification, projectClassification, type ClassificationLabel, type LocalClassificationStatus } from "../lib/localClassification";
 import { folderClassification } from "../lib/folderClassification";
@@ -7,21 +7,8 @@ import { Plus } from "lucide-react";
 import { useStore } from "../store";
 import { ModalShell } from "./ModalShell";
 import { ConfirmDialog } from "./ConfirmDialog";
-
-function ProcessingAsset({ asset, total }: { asset: NonNullable<LocalClassificationStatus["current_asset"]>; total: number }) {
-  const [failed, setFailed] = useState(false);
-  return <div className="flex items-center gap-3 rounded-lg border border-edge bg-panel2 p-3" aria-label="当前处理素材">
-    <div className="flex h-24 w-24 shrink-0 items-center justify-center overflow-hidden rounded bg-panel">
-      {asset.thumb_path && !failed
-        ? <img src={convertFileSrc(asset.thumb_path)} alt={`正在处理：${asset.name}`} className="h-full w-full object-contain" onError={() => setFailed(true)} />
-        : <span className="text-xs text-muted">暂无缩略图</span>}
-    </div>
-    <div className="min-w-0 space-y-1">
-      <p className="text-xs text-muted" role="status">正在分析 · 第 {asset.position} / {total} 张</p>
-      <p className="line-clamp-2 break-all font-medium" title={asset.name}>{asset.name}</p>
-    </div>
-  </div>;
-}
+import { ClassificationPlayback } from "./ClassificationPlayback";
+import { ClassificationDiagnostics } from "./ClassificationDiagnostics";
 
 function JevResults({ progress }: { progress: NonNullable<LocalClassificationStatus["jev_progress"]> }) {
   const report = progress.report;
@@ -109,6 +96,8 @@ function ClassificationSettings({ onClose, folder, globalScope, globalPaths, sel
   const [working, setWorking] = useState(false);
   const [selectedLabels, setSelectedLabels] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState<ClassificationLabel[]>([]);
+  const [reclassify, setReclassify] = useState(false);
+  const [confirmRescan, setConfirmRescan] = useState(false);
   const [notice, setNotice] = useState("");
   const lock = useRef(false);
   const projectName = useStore(s => s.projects.find(p => p.id === projectId)?.name);
@@ -135,8 +124,11 @@ function ClassificationSettings({ onClose, folder, globalScope, globalPaths, sel
       finally { fetching = false; }
     };
     void poll();
+    const unlisten = listen<LocalClassificationStatus>("local-classification://progress", event => {
+      if (active) setStatus(event.payload);
+    }).catch(() => () => {});
     const timer = window.setInterval(() => void poll(), 1000);
-    return () => { active = false; window.clearInterval(timer); };
+    return () => { active = false; window.clearInterval(timer); void unlisten.then(stop => stop()); };
   }, []);
 
   async function action(fn: () => Promise<unknown>) {
@@ -158,8 +150,6 @@ function ClassificationSettings({ onClose, folder, globalScope, globalPaths, sel
   const sameTarget = (status?.project_id ?? null) === (projectId ?? null) && (status?.folder_root ?? null) === (folder?.root ?? null)
     && (!!status?.global_scope === globalScope || (!folder && status?.phase === "downloading"));
   const showProgress = status && sameTarget;
-  const currentAsset = sameTarget && status?.busy && status.phase === "classifying" ? status.current_asset : null;
-  const processingPreview = currentAsset && <ProcessingAsset key={`${currentAsset.id}:${currentAsset.thumb_path}`} asset={currentAsset} total={status?.total ?? 0} />;
   const jevResults = status?.jev_progress && <JevResults key={status.jev_progress.asset.id} progress={status.jev_progress} />;
   async function ensureCloud() {
     if (!(await local.jevConfig()).enabled) await local.saveJevConfig(true);
@@ -167,6 +157,11 @@ function ClassificationSettings({ onClose, folder, globalScope, globalPaths, sel
   async function startClassification(options: { tagId?: string; pendingOnly?: boolean } = {}) {
     await ensureCloud();
     await local.start(options);
+  }
+  function requestClassification() {
+    if (!canRun) return;
+    if (reclassify) { setError(""); setConfirmRescan(true); }
+    else void action(() => startClassification({ pendingOnly: true }));
   }
   const checkedLabels = labels.filter((label) => selectedLabels.has(label.id));
   function requestDelete(targets: ClassificationLabel[]) {
@@ -183,15 +178,34 @@ function ClassificationSettings({ onClose, folder, globalScope, globalPaths, sel
       setDeleting([]);
     });
   }
+  const targetName = folder ? "指定文件夹" : globalScope ? "全局素材" : projectId ? `项目 · ${projectName || "当前项目"}` : "素材库";
+  const runControls = <div className="classification-run-controls">
+    <div className="classification-run-buttons">
+      <button className="app-modal-button is-primary classification-start" disabled={!canRun} onClick={requestClassification}>进行分类</button>
+      {status?.busy && sameTarget && <button className="app-modal-button" disabled={working} onClick={() => void action(() => local.stop())}>停止</button>}
+    </div>
+    <label className="classification-run-option">
+      <input type="checkbox" checked={reclassify} disabled={busy} onChange={e => setReclassify(e.target.checked)} />
+      重新分类已有标签的素材
+    </label>
+  </div>;
 
-  return <><ModalShell title={view === "labels" ? "管理分类数据" : "自动分类"} width="md" className="classification-panel" onClose={onClose} preventClose={deleting.length > 0}
-    description={view === "classification" ? "使用云端分类，优先匹配已有标签。" : undefined}>
+  return <><ModalShell title={view === "labels" ? "管理分类数据" : "自动分类"} width="md" className="classification-panel" onClose={onClose} preventClose={deleting.length > 0 || confirmRescan}
+    description={view === "classification" ? "使用云端分类，优先匹配已有标签。" : undefined}
+    footer={view === "labels" ? <div className="classification-run-footer">
+      <div className="classification-run-target">
+        <span className="text-xs text-muted">分类目标</span>
+        <p className="text-sm font-medium" title={folder?.root ?? targetName}>{targetName}</p>
+        {folder && <p className="text-xs text-muted" title={folder.root}>{folder.root}</p>}
+        {showProgress && status.busy && <p role="status" className="text-xs text-muted">{status.message || "正在分类…"}</p>}
+      </div>
+      {runControls}
+    </div> : undefined}>
     <div className="space-y-3 text-sm">
-      <section className="space-y-2" aria-label="分类目标">
-        <p className="font-medium">分类目标：{folder ? "指定文件夹" : globalScope ? "全局素材" : projectId ? `项目 · ${projectName || "当前项目"}` : "素材库"}</p>
-        {projectId && <p className="text-xs text-muted">仅识别和匹配当前项目素材，标签规则全局共用。</p>}
-        {folder && <><p className="break-all text-xs">{folder.root}</p>
-          {view === "classification" && <label className="flex items-center gap-2"><input type="checkbox" checked={recursive} disabled={busy} onChange={e => setRecursive(e.target.checked)} />包含子文件夹</label>}</>}
+      {(view === "classification" || allowFolderSelection || (status?.busy && !sameTarget)) && <section className="space-y-2" aria-label="分类目标">
+        {view === "classification" && <p className="font-medium">分类目标：{targetName}</p>}
+        {folder && view === "classification" && <><p className="break-all text-xs">{folder.root}</p>
+          <label className="flex items-center gap-2"><input type="checkbox" checked={recursive} disabled={busy} onChange={e => setRecursive(e.target.checked)} />包含子文件夹</label></>}
         {allowFolderSelection && <div className="flex gap-2">
           {folder && <button className="app-modal-button" disabled={busy} onClick={() => onTarget(undefined)}>选择素材库</button>}
           <button className="app-modal-button" disabled={busy} onClick={() => void action(async () => {
@@ -201,23 +215,17 @@ function ClassificationSettings({ onClose, folder, globalScope, globalPaths, sel
         </div>}
         {status?.folder_root && status.busy && <p role="status" className="text-xs break-all">正在分类文件夹：{status.folder_root}</p>}
         {status?.busy && !sameTarget && <div className="space-y-2"><p role="status">另一分类范围的任务正在运行，完成或停止后可处理当前目标。</p><button className="app-modal-button" disabled={working} onClick={() => void action(() => local.stop())}>停止当前任务</button></div>}
-      </section>
+      </section>}
       {error && <p role="alert" className="text-red-400">{error}</p>}
-      {view === "labels" && sameTarget && status?.busy && <div className="flex items-center justify-between gap-3 rounded-lg border border-edge p-3">
-        <p role="status" className="text-xs text-muted">{status.message || "正在分类…"}</p>
-        <button className="app-modal-button" disabled={working} onClick={() => void action(() => local.stop())}>停止</button>
-      </div>}
+      <ClassificationPlayback status={showProgress ? status : null} />
+      {import.meta.env.DEV && showProgress && status && <ClassificationDiagnostics status={status} />}
       {view === "classification" && <section aria-label="云端分类" className="rounded-lg border border-edge p-4 space-y-3">
         <div className="space-y-1">
           <h3 className="font-medium">云端分类</h3>
           <p className="text-xs text-muted">优先匹配已有标签，没有合适类别时再补充新标签。</p>
           <p className="text-xs text-muted">累计 5 张图片获得标签扣 1 积分，未满 5 张跨批次累计；无法判断或请求失败不计数。</p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <button className="app-modal-button is-primary" disabled={!canRun} onClick={() => void action(() => startClassification())}>识别未处理素材</button>
-          <button className="app-modal-button" disabled={!canRun} onClick={() => void action(() => startClassification({ pendingOnly: false }))}>重新扫描全部图片</button>
-          {status?.busy && sameTarget && <button className="app-modal-button" disabled={working} onClick={() => void action(() => local.stop())}>停止</button>}
-        </div>
+        {runControls}
         {!folder && !globalScope && !projectId && <label className="flex items-center gap-2">
           <input type="checkbox" checked={status?.enabled ?? false} disabled={!status || working || (!status.enabled && status.busy)}
             onChange={(e) => { const enabled = e.target.checked; void action(async () => { if (enabled) await ensureCloud(); await local.enable(enabled); }); }} />
@@ -226,15 +234,13 @@ function ClassificationSettings({ onClose, folder, globalScope, globalPaths, sel
         {folder && <p className="text-xs text-muted">按需扫描当前文件夹，关闭面板后任务继续。</p>}
         {globalScope && <p className="text-xs text-muted">按需扫描已添加位置，离线或不可读文件会跳过并显示原因。</p>}
         {showProgress && <>
-          {processingPreview}
           {statusIsCloud && jevResults}
           {status.message && <p role="status" aria-live="polite">{status.message}</p>}
           {status.last_error && <p className="text-xs text-red-400">最近一次未完成原因：{status.last_error}</p>}
-          {statusIsCloud && status.total > 0 && <p className="text-xs text-muted" aria-label="云端队列进度">Jev 已分析 {status.jev_done} / {status.total} · Cloud 处理中 {status.cloud_running} · 排队 {status.cloud_queued}</p>}
           {status.total > 0 && <p className="text-xs text-muted">已尝试 {status.done} / {status.total} · 成功 {Math.max(0, status.done - status.failed)} · 未完成 {status.failed}</p>}
         </>}
       </section>}
-      <div className="flex items-center justify-between border-t border-edge pt-3">
+      <div className={`flex items-center justify-between ${view === "classification" ? "border-t border-edge pt-3" : ""}`}>
         <h3 className="font-medium">已有标签 · {labels.length}</h3>
         <button className="app-modal-button inline-flex items-center gap-1" disabled={working} onClick={() => edit()}><Plus size={14} />新建标签</button>
       </div>
@@ -299,6 +305,13 @@ function ClassificationSettings({ onClose, folder, globalScope, globalPaths, sel
       </section>
     </div>
   </ModalShell>
+    <ConfirmDialog open={confirmRescan} title="确认重新分类" danger
+      message={<>此操作会删除当前范围内参与重分类素材的已有自动标签，再重新分类，是否确认？已有人工归类的素材会跳过，人工正反例及来源不明的旧版归属会保留。
+        {error && <span role="alert" className="block text-red-400">{error}</span>}
+      </>}
+      confirmLabel={working ? "正在开始…" : "确认并进行分类"} confirmDisabled={!canRun}
+      onConfirm={() => { if (canRun) void action(async () => { await startClassification({ pendingOnly: false }); setConfirmRescan(false); }); }}
+      onCancel={() => { if (!lock.current) { setConfirmRescan(false); setError(""); } }} />
     <ConfirmDialog open={deleting.length > 0} title={deleting.length === 1 ? `删除标签「${deleting[0].name}」` : `删除 ${deleting.length} 个标签`}
       message={<>
         {folder ? "将从此文件夹的分类记录中移除这些标签，并删除相关示例、排除记录和待匹配任务。仅影响上述分类范围，独立分类目录和素材库不受影响。" : "将从本机全局索引（含历史素材）中移除这些标签，并删除相关示例、排除记录和待匹配任务。各目录的独立分类记录保留。"}素材文件会保留，此操作无法撤销。后续重新识别仍可能生成同名标签。

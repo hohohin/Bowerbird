@@ -769,10 +769,16 @@ pub async fn codex_create_image(
         }
     }
     let refs_for_meta = reference_images.clone();
-    let reference_node_ids_for_meta = refs_for_meta
-        .iter()
-        .map(|path| reference_nodes_by_path.get(path).cloned())
-        .collect::<Vec<_>>();
+    // An omitted/legacy locator list keeps legacy projection semantics. An
+    // explicit null slot is a composer-only reference, never an implicit node.
+    let reference_node_ids_for_meta = if supplied_reference_node_ids.is_empty() {
+        vec![]
+    } else {
+        refs_for_meta
+            .iter()
+            .map(|path| reference_nodes_by_path.get(path).cloned())
+            .collect::<Vec<_>>()
+    };
     // 「自动」比例解析（后端权威）：显式选档照传；自动（空）且有参考图时，跟随**第一张参考图**
     // （续轮 = 参考图合并后的首位 = 上一轮产出图）的宽高比吸附到最近档位、显式下发——即梦
     // omit --ratio 固定回退 16:9（竖图被横切）；解析不了（无参考图/读不出尺寸）维持自动。

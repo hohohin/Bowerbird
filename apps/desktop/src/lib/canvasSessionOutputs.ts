@@ -17,12 +17,12 @@ export function hiddenWorkflowSessionIds(workflow: readonly WorkflowNode[]) {
   return workflowSessionIds(workflow.filter(node => node.generation?.media === "video"));
 }
 
-/** A session socket refers to this exact turn, never later turns of the same job. */
+/** A session socket exposes only this turn's results, never its reference images or later turns. */
 export function canvasSessionImages(session: CanvasNode, nodes: readonly CanvasNode[]) {
   const turn = payload(session);
   if (session.kind !== "prompt" || !turn.job_id || !turn.turn_key) return [];
   return nodes.filter(node => {
-    const execution = node.kind === "asset" && payload(node).execution;
+    const execution = node.kind === "asset" && node.role === "output" && payload(node).execution;
     return node.assetId && node.projectId === session.projectId && execution?.job_id === turn.job_id && execution?.turn_key === turn.turn_key;
   });
 }

@@ -49,6 +49,7 @@ export function Toolbar({
   const [projectsOpen, setProjectsOpen] = useState(false);
   const fileMode = useLocalFileMode(s => s.mode);
   const showFileNavigation = localFilesOpen && fileMode === "files";
+  const materialSearchLabel = ({ global: "搜索全局素材", files: "搜索当前文件夹", tags: "搜索分类素材", collections: "搜索集合素材" })[fileMode];
   const searchRef = useRef<HTMLInputElement>(null);
   const importRef = useRef<HTMLDivElement>(null);
 
@@ -150,7 +151,7 @@ export function Toolbar({
   }
 
   return (
-    <header className={`app-topbar${canvasMode ? "" : " is-library"}${showFileNavigation ? " has-file-navigation" : ""}`} aria-busy={busy}>
+    <header className={`app-topbar${canvasMode ? "" : " is-library"}${showFileNavigation ? " has-file-navigation" : localFilesOpen ? " is-global-materials" : ""}`} aria-busy={busy}>
       <div className="app-topbar-leading">
         <div ref={importRef} className="app-topbar-import relative">
           <button
@@ -237,8 +238,8 @@ export function Toolbar({
             setSearchQuery(e.target.value);
             if (canvasMode && !localFilesOpen && e.target.value) useStore.getState().setCanvasLibraryOpen(true);
           }}
-          placeholder={localFilesOpen ? fileMode === "global" ? "搜索全局素材…" : "搜索当前文件夹…" : "搜索素材…"}
-          aria-label={localFilesOpen ? fileMode === "global" ? "搜索全局素材" : "搜索当前文件夹" : "搜索素材"}
+          placeholder={localFilesOpen ? `${materialSearchLabel}…` : "搜索素材…"}
+          aria-label={localFilesOpen ? materialSearchLabel : "搜索素材"}
         />
         {searchQuery ? (
           <button

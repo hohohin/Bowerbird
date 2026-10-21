@@ -13,6 +13,7 @@ export function CreativeComposer({
   promptLoadRequest = null,
   onPromptLoadConsumed,
   onDraftChange,
+  onOpenLibrary,
   registerDraftFlush,
   beforeGenerate,
   resolveCreativeThread,
@@ -26,6 +27,7 @@ export function CreativeComposer({
   promptLoadRequest?: CreativePromptLoadRequest | null;
   onPromptLoadConsumed?: (requestId: string) => void;
   onDraftChange: (draftJson: string) => void;
+  onOpenLibrary?: () => void;
   registerDraftFlush?: (flush: (() => void) | null) => void;
   beforeGenerate?: () => Promise<void>;
   resolveCreativeThread: (
@@ -48,6 +50,7 @@ export function CreativeComposer({
       promptLoadRequest={promptLoadRequest}
       onPromptLoadConsumed={onPromptLoadConsumed}
       onDraftChange={(composer) => onDraftChange(serializeCreativeComposerDraft(composer))}
+      onOpenLibrary={onOpenLibrary}
       registerDraftFlush={registerDraftFlush}
       beforeGenerate={beforeGenerate}
       resolveCreativeThread={resolveCreativeThread}

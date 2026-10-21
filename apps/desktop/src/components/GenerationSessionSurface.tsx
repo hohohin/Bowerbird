@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { createPortal } from "react-dom";
+import { ContextMenu } from "./ContextMenu";
 import { Copy } from "lucide-react";
 import { notifyError, notifySuccess } from "../lib/notify";
 import { api } from "../lib/api";
@@ -12,33 +12,8 @@ export function GenerationSessionSurface({ jobId, className, children }: {
   children: ReactNode;
 }) {
   const surfaceRef = useRef<HTMLDivElement>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   useEffect(() => { setMenu(null); }, [jobId]);
-  useEffect(() => {
-    if (!menu) return;
-    menuRef.current?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
-    function closeOutside(event: PointerEvent) {
-      if (!menuRef.current?.contains(event.target as Node)) setMenu(null);
-    }
-    function closeOnKey(event: KeyboardEvent) {
-      if (event.key !== "Escape" && event.key !== "Tab") return;
-      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); }
-      setMenu(null);
-      surfaceRef.current?.focus({ preventScroll: true });
-    }
-    function close() { setMenu(null); }
-    window.addEventListener("pointerdown", closeOutside);
-    window.addEventListener("keydown", closeOnKey, true);
-    window.addEventListener("resize", close);
-    window.addEventListener("blur", close);
-    return () => {
-      window.removeEventListener("pointerdown", closeOutside);
-      window.removeEventListener("keydown", closeOnKey, true);
-      window.removeEventListener("resize", close);
-      window.removeEventListener("blur", close);
-    };
-  }, [menu]);
 
   return <div ref={surfaceRef} className={className} tabIndex={0} aria-label="生成会话详情"
     onContextMenu={event => {
@@ -59,21 +34,7 @@ export function GenerationSessionSurface({ jobId, className, children }: {
       setMenu({ x: rect.left + 16, y: rect.top + 16 });
     }}>
     {children}
-    {menu && createPortal(<div ref={menuRef} role="menu" aria-label="生成会话操作"
-      className="app-context-menu p-1.5 text-xs"
-      style={{ position: "fixed", zIndex: 60, width: 224,
-        left: Math.max(4, Math.min(menu.x, window.innerWidth - 232)),
-        top: Math.max(4, Math.min(menu.y, window.innerHeight - 82)) }}
-      onContextMenu={event => { event.preventDefault(); event.stopPropagation(); }}
-      onKeyDown={event => {
-        if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
-        event.preventDefault(); event.stopPropagation();
-        const items = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("button:not(:disabled)"));
-        const index = items.indexOf(document.activeElement as HTMLButtonElement);
-        const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1
-          : (index + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
-        items[next]?.focus();
-      }}>
+    {menu && <ContextMenu x={menu.x} y={menu.y} label="生成会话操作" trigger={surfaceRef.current} onClose={() => setMenu(null)}>
       <button type="button" role="menuitem" disabled={!jobId}
         className="app-context-item px-2 py-1.5 focus-visible:outline focus-visible:outline-accent"
         title={jobId || "此历史会话未记录任务 ID"}
@@ -107,6 +68,6 @@ export function GenerationSessionSurface({ jobId, className, children }: {
             notifyError(error, "复制会话诊断信息失败");
           }
         }}><Copy size={13} />复制本次会话诊断信息</button>
-    </div>, document.body)}
+    </ContextMenu>}
   </div>;
 }

@@ -49,8 +49,8 @@ try {
   assert.equal(await page.locator(".library-project-folder-title strong").innerText(), "新名称");
   assert.equal(await page.locator(".canvas-board-title").inputValue(), "新名称");
   assert.equal(await page.evaluate(() => window.persistedProject().title_source), "manual");
-  await page.getByRole("button", { name: "展开项目 新名称" }).click();
-  await open(page.locator(".library-project-frame header"));
+  await page.getByRole("button", { name: "项目操作 新名称" }).click();
+  await page.getByRole("menuitem", { name: "重命名", exact: true }).click();
   assert.equal(await input.inputValue(), "新名称");
   await input.fill("重试名称");
   await page.evaluate(() => { window.failure = true; });
@@ -64,11 +64,12 @@ try {
   await page.evaluate(() => { window.failure = false; });
   await dialog.getByRole("button", { name: "保存名称" }).click();
   await dialog.waitFor({ state: "detached" });
-  assert.equal(await page.locator(".library-project-title-button span").innerText(), "重试名称");
+  assert.equal(await page.locator(".library-project-folder-title strong").innerText(), "重试名称");
   assert.equal(await page.locator(".project-name").innerText(), "重试名称");
   assert.equal(await page.locator(".canvas-board-title").inputValue(), "重试名称");
   await page.locator(".project-name").click({ button: "right" });
-  assert.equal(await page.getByRole("menuitem", { name: "更新项目文件" }).isDisabled(), true);
+  assert.equal(await page.getByRole("menuitem", { name: "更新项目文件" }).count(), 0);
+  await page.getByRole("menuitem", { name: "删除", exact: true }).click();
   await page.getByRole("menuitem", { name: "删除项目 · 素材保留" }).click();
   const checkbox = page.getByRole("checkbox");
   await checkbox.waitFor();
@@ -96,15 +97,12 @@ try {
   assert.equal(project.id, "p");
   assert.equal(project.title_source, "manual");
   assert.equal(project.provisional, false);
-  await page.goto(`${base}?inactive&rail`);
-  await open(page.getByRole("button", { name: "切换到项目 测试项目", exact: true }));
-  await input.fill("收起侧栏改名");
-  await input.press("Enter");
-  await dialog.waitFor({ state: "detached" });
-  assert.equal(await page.getByRole("button", { name: "切换到项目 收起侧栏改名", exact: true }).count(), 1);
-  assert.equal(await page.locator(".library-project-folder-title strong").innerText(), "收起侧栏改名");
   assert.deepEqual(errors, []);
-  console.log("PASS: real project menu/sidebar/home/canvas; blank/cancel/Escape/IME; success sync/manual title; failure retry/missing; inactive/provisional; deletion opt-in retained");
+  console.log("PASS: project context/overflow menus and canvas; blank/cancel/Escape/IME; success sync/manual title; failure retry/missing; inactive/provisional; deletion opt-in retained");
+} catch (error) {
+  console.error('Browser errors:', errors);
+  console.error((await page.locator('body').innerText()).slice(-3000));
+  throw error;
 } finally {
   await browser.close();
   await server.close();

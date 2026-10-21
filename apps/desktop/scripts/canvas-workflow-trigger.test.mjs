@@ -18,7 +18,9 @@ try {
   await page.mouse.move(tool.x + tool.width / 2, tool.y + tool.height / 2); await page.mouse.down();
   await page.mouse.move(1400, 300, { steps: 12 }); await page.mouse.up();
   const trigger = page.locator('.workflow-card.is-trigger'); await trigger.waitFor();
-  assert.equal(await trigger.locator('textarea,.workflow-port.is-input').count(), 0);
+  assert.equal(await trigger.locator('textarea').count(), 0);
+  assert.equal(await trigger.getByRole('button', { name: '输入：完成触发', exact: true }).count(), 1);
+  assert.equal(await trigger.getByRole('spinbutton', { name: '剩余触发次数' }).inputValue(), '1');
   const progress = page.getByRole('tooltip');
   const hoverTrigger = async () => {
     await page.mouse.move(5, 5);
@@ -95,6 +97,7 @@ try {
   await page.keyboard.press('Tab');
   await attachedKey.focus(); await progress.waitFor({ state: 'visible' });
   await page.keyboard.press('Escape'); await progress.waitFor({ state: 'hidden' });
+  if (await page.getByRole('button', { name: '收起画板素材库', exact: true }).count()) await page.getByRole('button', { name: '收起画板素材库', exact: true }).press('Enter');
   await attachedKey.blur();
   await attachedKey.focus(); await progress.waitFor({ state: 'visible' });
   await attachedKey.blur(); await progress.waitFor({ state: 'hidden' });

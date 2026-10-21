@@ -1,5 +1,6 @@
 //! Automatic classification supports local matching or explicit Jev image API judgment.
 mod cloud;
+mod diagnostics;
 pub mod explorer;
 pub mod folder;
 pub mod global;
@@ -39,6 +40,11 @@ pub struct JevProgress {
 
 #[derive(Clone, Default, Serialize)]
 pub struct Status {
+    #[cfg(debug_assertions)]
+    pub diagnostics: Vec<diagnostics::Row>,
+    pub run_id: String,
+    pub recent_results: Vec<ClassificationResult>,
+    pub recent_cloud_handoffs: Vec<CurrentAsset>,
     pub folder_root: Option<String>,
     pub global_scope: bool,
     pub project_id: Option<String>,
@@ -65,7 +71,16 @@ pub struct Status {
     pub vector_installed: bool,
 }
 
+#[derive(Clone, Serialize)]
+pub struct ClassificationResult {
+    pub sequence: usize,
+    pub asset: CurrentAsset,
+    pub tags: Vec<String>,
+    pub error: Option<String>,
+}
+
 pub struct LocalClassifier {
+    diagnostics: diagnostics::Diagnostics,
     pub root: PathBuf,
     gate: Arc<tokio::sync::Mutex<()>>,
     cancel: AtomicBool,
@@ -81,6 +96,7 @@ impl LocalClassifier {
     }
     pub fn new(root: PathBuf) -> Self {
         Self {
+            diagnostics: diagnostics::Diagnostics::default(),
             root,
             gate: Arc::new(tokio::sync::Mutex::new(())),
             cancel: AtomicBool::new(false),
@@ -92,6 +108,8 @@ impl LocalClassifier {
 
     pub fn snapshot(&self, db: &Database) -> Result<Status, String> {
         let mut result = self.status.lock().unwrap().clone();
+        #[cfg(debug_assertions)]
+        { result.diagnostics = self.diagnostics.snapshot(); }
         result.supported = runtime::supported();
         result.installed = runtime::installed(&self.root);
         result.enabled = db.local_enabled().map_err(|e| e.to_string())?;
@@ -107,11 +125,16 @@ impl LocalClassifier {
     }
 
     fn update(&self, app: &AppHandle, update: impl FnOnce(&mut Status)) {
-        let status = {
+        #[allow(unused_mut)]
+        let mut status = {
             let mut state = self.status.lock().unwrap();
+            let previous_run = state.run_id.clone();
             update(&mut state);
+            if state.run_id != previous_run { self.diagnostics.clear(); }
             state.clone()
         };
+        #[cfg(debug_assertions)]
+        { status.diagnostics = self.diagnostics.snapshot(); }
         let _ = app.emit("local-classification://progress", status);
     }
 
@@ -183,6 +206,7 @@ impl LocalClassifier {
         self.background.store(background, Ordering::Relaxed);
         self.update(&app, |s| {
             *s = Status {
+                run_id: ulid::Ulid::new().to_string(),
                 global_scope: global.is_some(),
                 project_id: project,
                 busy: true,
@@ -388,11 +412,20 @@ impl LocalClassifier {
         } else {
             data::MODEL_ID
         };
-        let job_revision = db.local_revision().map_err(|e| e.to_string())?;
+        let mut job_revision = db.local_revision().map_err(|e| e.to_string())?;
         let mut targets = db
             .local_targets_for_model(pending_only && tag.is_none(), observation_model)
             .map_err(|e| e.to_string())?;
         global::retain_scope(&mut targets, scope);
+        if tag.is_none() && !pending_only {
+            if self.cancel.load(Ordering::Relaxed) { return Ok(()); }
+            (job_revision, targets) = db.reset_classification_results(&targets, job_revision).map_err(|e| e.to_string())?;
+            if !targets.is_empty() {
+                // Persist the reset even if all subsequent inference fails or the user stops.
+                if let Some(folder) = folder { folder.save()?; }
+                let _ = app.emit(if folder.is_some() { "folder-classification://changed" } else { "library://assets-changed" }, ());
+            }
+        }
         self.update(app, |s| {
             s.total = targets.len();
             s.message = if judge.is_some() {
@@ -590,6 +623,8 @@ impl LocalClassifier {
                 }
                 let _ = app.emit(if folder.is_some() { "folder-classification://changed" } else { "library://assets-changed" }, ());
             }
+            self.record_classification_result(db, id, &result);
+            self.update(app, |_| {});
         }
         if let Some(server) = server.as_mut() {
             server.stop().await;
@@ -786,6 +821,8 @@ impl LocalClassifier {
         labels: &[data::Label],
         record_observation: bool,
     ) -> Result<pipeline::PendingClassification, String> {
+        #[cfg(debug_assertions)]
+        self.diagnostics.begin(id, &db.get_asset(id).ok().flatten().map(|a| a.name).unwrap_or_else(|| id.into()));
         let image = Self::jev_image(db, library, id).await?;
         self.prepare_jev_image(judge, db, library, id, revision, labels, record_observation, image).await
     }
@@ -832,6 +869,11 @@ impl LocalClassifier {
         // One shared candidate pool; empty vocabulary goes straight to Cloud.
         let mut preview = Vec::new();
         let mut ticket = None;
+        #[cfg(debug_assertions)]
+        let observed_judge = judge.observed(self.diagnostics.clone(), id);
+        #[cfg(debug_assertions)]
+        let judge = &observed_judge;
+        self.diagnostics.step(id, "judge", "Jev 匹配请求（含网络、认证和服务端处理）");
         let decisions = judge
             .classify_mode(&image, &questions, &self.cancel, record_observation, |value, error| {
                 ticket = value["classification_id"].as_str().map(str::to_string);
@@ -873,6 +915,7 @@ impl LocalClassifier {
     ) -> Result<(), String> {
         let mut definitions = Vec::new();
         if pending.needs_discovery {
+            self.diagnostics.step(&pending.id, "discover", "Cloud 补标签请求（含网络和服务端处理）");
             if db.local_revision().map_err(|e| e.to_string())? != pending.revision {
                 return Err("标签已被人工修改，请重试此素材".into());
             }
@@ -895,6 +938,7 @@ impl LocalClassifier {
         if self.cancel.load(Ordering::Relaxed) {
             return Err("已停止分类".into());
         }
+        self.diagnostics.step(&pending.id, "save", "保存标签和分类观察记录");
         if !db
             .apply_classification_with_definitions(
                 &pending.id,

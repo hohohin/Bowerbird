@@ -1,10 +1,9 @@
 import { useLocalFileMode } from "../lib/localFileMode";
-import { useLibraryTabOrder, type LibraryTab } from "../lib/libraryTabOrder";
+import type { LibrarySource } from "../lib/localFileMode";
 import { LocalFileWorkspace } from "./LocalFileWorkspace";
 import { ProjectInspectorShell } from "./ProjectInspectorShell";
 import { WorkflowAgentDetail } from "./WorkflowAgentDetail";
 import { WORKFLOW_SKILL_ENABLED, WORKFLOW_PLANNER_ENABLED, WORKFLOW_TEMPLATE_LIBRARY_ENABLED } from "../lib/featureFlags";
-import { useThumbnailPinch } from "../lib/useThumbnailPinch";
 import { CanvasTextCard } from "./CanvasTextCard";
 import { CanvasArtboardDialog } from "./CanvasArtboardDialog";
 import { CANVAS_ARTBOARD_FROM_IMAGE, artboardComposition, containArtboardImage, intersectArtboard, type ArtboardComposition, type ArtboardImage } from "../lib/canvasArtboard";
@@ -16,9 +15,11 @@ import { CanvasConversationImages } from "./CanvasConversationImages";
 import { containedSessionOutputIds, hiddenWorkflowSessionIds, resolveGenerationCells, canvasSessionImages } from "../lib/canvasSessionOutputs";
 import { canvasWorkflowController } from "../lib/canvasWorkflowRuntime";
 import { restoreWorkflowEdit, workflowEditUndo, type WorkflowEditUndo } from "../lib/workflowUndo";
-import { WORKFLOW_CARD_DRAG_TYPE, workflowNodeRun, type WorkflowInput, type WorkflowKind } from "../lib/canvasWorkflow";
+import { WORKFLOW_CARD_DRAG_TYPE, newWorkflowNode, workflowNodeRun, type WorkflowInput, type WorkflowKind, type WorkflowNode } from "../lib/canvasWorkflow";
 import { captureCanvasClipboard, cloneCanvasClipboard, parseCanvasClipboard, serializeCanvasClipboard, type CanvasClipboard } from "../lib/canvasClipboard";
 import { CanvasResizeHandle } from "./CanvasResizeHandle";
+import { CanvasLibraryResize } from "./CanvasLibraryResize";
+import { exportAssetArchive } from "../lib/assetArchive";
 import { CanvasLayerMenuItem } from "./CanvasLayerMenuItem";
 import { CANVAS_LAYER_STEP_EVENT, stepCanvasLayers, type CanvasLayerStepDetail } from "../lib/canvasLayers";
 import { ReadonlyPrompt } from "./creation/ReadonlyPrompt";
@@ -43,7 +44,7 @@ import {
   type PointerEvent,
   type WheelEvent,
 } from "react";
-import { createPortal } from "react-dom";
+import { ContextMenu, DeleteSubmenu } from "./ContextMenu";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
@@ -65,7 +66,7 @@ import {
   MessageCircle,
   Frame,
   Scan,
-  Type,
+  Table2,
   TextCursorInput,
   GripHorizontal,
   Hand,
@@ -79,13 +80,8 @@ import {
   Trash2,
   Ungroup,
 } from "lucide-react";
-import { MasonryGrid } from "./MasonryGrid";
-import { filterAssetsByMediaType } from "../lib/mediaFilter";
-import { LibraryTagBar } from "./LibraryTagBar";
-import { LibraryViewSwitch } from "./LibraryViewSwitch";
-import { LibraryTagFilter } from "./LibraryTagFilter";
-import { LibraryFilterButton } from "./LibraryFilterButton";
-import { ThumbnailSizeSlider } from "./ThumbnailSizeSlider";
+import { LibrarySourceTabs } from "./LibrarySourceTabs";
+import { CategorizedLibrary } from "./CategorizedLibrary";
 import { Lightbox } from "./Lightbox";
 import { videoTime, type VideoFrame } from "../lib/videoFrame";
 import type { VideoTrimRequest } from "../lib/videoTrim";
@@ -194,7 +190,6 @@ const CANVAS_SNAP_ENABLED_KEY = "bowerbird.canvasSnapEnabled";
 type CanvasNode = ProjectCanvasUiNode;
 type CanvasAssetNode = Extract<CanvasNode, { kind: "asset" }>;
 type CanvasFolderNode = Extract<CanvasNode, { kind: "folder" }>;
-type CanvasSourceScope = "project" | "library";
 
 interface CanvasMarquee {
   startX: number;
@@ -410,16 +405,9 @@ export function CanvasWorkspace({
   onExit?: () => void;
 }) {
   const assets = useStore((state) => state.assets);
-  const smartFilter = useStore((state) => state.smartFilter);
-  const searchQuery = useStore(state => state.searchQuery);
-  const colorFilter = useStore(state => state.colorFilter);
-  const currentCollectionId = useStore(state => state.currentCollectionId);
-  const assetTotal = useStore((state) => state.total);
-  const mediaFilter = useStore(state => state.mediaFilter);
   const promptedAssets = useStore((state) => state.promptedAssets);
   const captionedIds = useStore((state) => state.captionedIds);
   const layerWorkspaceIds = useStore((state) => state.layerWorkspaceIds);
-  const folders = useStore((state) => state.folders);
   const projects = useStore((state) => state.projects);
   const reloadProjects = useStore((state) => state.reloadProjects);
   const openContextMenu = useStore((state) => state.openContextMenu);
@@ -473,36 +461,23 @@ export function CanvasWorkspace({
   const explainTutorialSources = useOnboarding(state => state.guide.status === "active" && state.guide.role === "designer"
     && state.guide.sessions.designer?.projectId === projectId && [2, 7, 8].includes(state.guide.sessions.designer.step));
   const sourcePanelId = useId();
-  const sourceItemWidth = useStore(s => s.canvasThumbnailWidth);
-  const sourcePinchRef = useThumbnailPinch("canvas");
-  const [sourceScope, setSourceScope] = useState<CanvasSourceScope>("project");
+  const sourceScope = useLocalFileMode(state => state.source);
   const localFilesOpen = useLocalFileMode(state => state.open);
   const fileMode = useLocalFileMode(state => state.mode);
-  const tabOrder = useLibraryTabOrder(state => state.order);
-  const sourceOrder = useMemo<(LibraryTab | "project")[]>(() => ["project", ...tabOrder], [tabOrder]);
-  const setTabOrder = useLibraryTabOrder(state => state.setOrder);
+  const libraryMedia = useLocalFileMode(state => state.media);
   function changeSource(value: string) {
-    if (value === "project") { useLocalFileMode.getState().setOpen(false); setSourceScope("project"); }
-    else if (value === "files") useLocalFileMode.getState().openBrowser();
-    else useLocalFileMode.getState().openGlobal();
+    useLocalFileMode.getState().openSource(value as LibrarySource);
     useStore.getState().clearSelect();
   }
   function closeSource() {
     useLocalFileMode.getState().setOpen(false);
-    setSourceScope("project");
     setSourceCollapsed(true);
     requestAnimationFrame(() => boardShellRef.current?.querySelector<HTMLButtonElement>('.canvas-source-toggle')?.focus());
   }
   useEffect(() => { if (localFilesOpen) setCanvasLibraryOpen(true); }, [localFilesOpen, setCanvasLibraryOpen]);
 
-  const [librarySourceAssets, setLibrarySourceAssets] = useState<Asset[]>([]);
   const [canvasAssets, setCanvasAssets] = useState<Asset[]>([]);
-  const [librarySourceTotal, setLibrarySourceTotal] = useState(0);
-  const [librarySourceLoading, setLibrarySourceLoading] = useState(false);
-  const [librarySourceError, setLibrarySourceError] = useState(false);
-  const [librarySourceRevision, setLibrarySourceRevision] = useState(0);
-  // 中央素材 tab 的文件夹筛选（null = 全部）。
-  const [librarySourceFolderId, setLibrarySourceFolderId] = useState<string | null>(null);
+  const [catalogAssets, setCatalogAssets] = useState<Asset[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
   const [loadRevision, setLoadRevision] = useState(0);
@@ -539,35 +514,7 @@ export function CanvasWorkspace({
   const videoFrameSaves = useRef(new Map<string, () => Promise<void>>());
   const videoTrimSaves = useRef(new Map<string, () => Promise<Asset>>());
   const [promptMenu, setPromptMenu] = useState<{ node: ProjectGraphNode | null; nodeIds: string[]; folder?: CanvasFolderNode; section?: { id: string; name: string } | null; x: number; y: number; point: CanvasPoint | null } | null>(null);
-  const promptMenuRef = useRef<HTMLDivElement>(null);
   useEffect(() => { setPromptMenu(null); }, [projectId, viewMode]);
-  useEffect(() => {
-    if (!promptMenu) return;
-    function closeOutside(event: globalThis.PointerEvent) {
-      if (!promptMenuRef.current?.contains(event.target as Node)) setPromptMenu(null);
-    }
-    function onKey(event: KeyboardEvent) {
-      if (useStore.getState().canvasLibraryOpen || useLocalFileMode.getState().open || workspaceRef.current?.closest("[inert]")) return;
-      if (event.key === "Escape") {
-        event.preventDefault();
-        event.stopPropagation();
-        setPromptMenu(null);
-      }
-      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
-      event.preventDefault();
-      const buttons = Array.from(promptMenuRef.current?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") ?? []);
-      const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
-      buttons[(index + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length]?.focus();
-    }
-    const frame = requestAnimationFrame(() => promptMenuRef.current?.querySelector<HTMLButtonElement>("button")?.focus());
-    window.addEventListener("pointerdown", closeOutside, true);
-    window.addEventListener("keydown", onKey, true);
-    return () => {
-      cancelAnimationFrame(frame);
-      window.removeEventListener("pointerdown", closeOutside, true);
-      window.removeEventListener("keydown", onKey, true);
-    };
-  }, [promptMenu]);
   const [viewRevision, setViewRevision] = useState(0);
   const activeGenerationJob = activeJobId ? genJobs[activeJobId] ?? null : null;
   const activeAgentRun = activeCloudAgentRunId ? cloudAgentRuns[activeCloudAgentRunId] ?? null : null;
@@ -800,10 +747,10 @@ export function CanvasWorkspace({
     const map = new Map<string, Asset>();
     for (const asset of promptedAssets) map.set(asset.id, asset);
     for (const asset of assets) map.set(asset.id, asset);
-    for (const asset of librarySourceAssets) map.set(asset.id, asset);
+    for (const asset of catalogAssets) map.set(asset.id, asset);
     for (const asset of canvasAssets) map.set(asset.id, asset);
     return map;
-  }, [assets, canvasAssets, librarySourceAssets, promptedAssets]);
+  }, [assets, canvasAssets, catalogAssets, promptedAssets]);
   const assetByIdRef = useRef(assetById);
   assetByIdRef.current = assetById;
 
@@ -811,23 +758,6 @@ export function CanvasWorkspace({
     const hydrated = rehydrateProjectCanvasAssets(nodesRef.current, assetById);
     if (hydrated !== nodesRef.current) commitNodes(hydrated);
   }, [assetById]);
-
-  const sourceAssets = useMemo(() => {
-    const scopedAssets = sourceScope === "library" ? librarySourceAssets : assets;
-    if (smartFilter !== "source:generated" && smartFilter !== "source:!generated") return scopedAssets;
-    return scopedAssets.filter((asset) => (asset.generation_session_id != null) === (smartFilter === "source:generated"));
-  }, [sourceScope, librarySourceAssets, assets, smartFilter]);
-  useLayoutEffect(() => {
-    useStore.setState({ librarySelectionIds: sourceCollapsed ? null : filterAssetsByMediaType(sourceAssets, mediaFilter).map(asset => asset.id) });
-    return () => { useStore.setState({ librarySelectionIds: null }); };
-  }, [sourceCollapsed, sourceAssets, mediaFilter]);
-  const sourceTotal = sourceScope === "library" ? librarySourceTotal : assetTotal;
-  const libraryTagFilter = smartFilter?.startsWith("tag:") ? smartFilter : null;
-  // 素材库 tab 顶部文件夹区域：仅普通文件夹（约定 12：collection/smart 不承载 folder_id 位置）。
-  const libraryFolders = useMemo(
-    () => folders.filter((folder) => folder.id !== "root" && (folder.kind ?? "folder") === "folder"),
-    [folders],
-  );
 
   function reportError(reason: unknown) {
     setError(reason instanceof Error ? reason.message : String(reason));
@@ -1337,44 +1267,13 @@ export function CanvasWorkspace({
   }
 
   useEffect(() => {
-    // A fresh provisional project has no members yet, so start from the central
-    // library. Persisted projects open on their own materialized asset scope.
-    setSourceScope("project");
+    const state = useLocalFileMode.getState();
+    useLocalFileMode.setState({ source: "project", mode: (state.media === "images" ? state.views : state.videoViews).project, query: "" });
   }, [projectId]);
 
   useEffect(() => {
-    if (sourceScope !== "library") return;
-    let alive = true;
-    let unlisten: UnlistenFn | undefined;
-    let requestVersion = 0;
-
-    async function loadCentralLibrary() {
-      const version = ++requestVersion;
-      setLibrarySourceLoading(true);
-      setLibrarySourceError(false);
-      try {
-        const view = await api.listLibraryView({ search: searchQuery, smart: smartFilter,
-          folderId: librarySourceFolderId, collectionId: currentCollectionId, color: colorFilter });
-        if (!alive || version !== requestVersion) return;
-        setLibrarySourceAssets(view.assets);
-        setLibrarySourceTotal(view.total);
-      } catch (reason) {
-        if (alive && version === requestVersion) { setLibrarySourceError(true); reportError(reason); }
-      } finally {
-        if (alive && version === requestVersion) setLibrarySourceLoading(false);
-      }
-    }
-
-    void loadCentralLibrary();
-    listen("library://assets-changed", () => void loadCentralLibrary()).then((cleanup) => {
-      if (alive) unlisten = cleanup;
-      else cleanup();
-    });
-    return () => {
-      alive = false;
-      unlisten?.();
-    };
-  }, [sourceScope, librarySourceFolderId, smartFilter, searchQuery, colorFilter, currentCollectionId, librarySourceRevision]);
+    if (!sourceCollapsed) useLocalFileMode.getState().setOpen(true);
+  }, [sourceCollapsed]);
 
   useEffect(() => {
     const token = ++loadTokenRef.current;
@@ -1613,6 +1512,21 @@ export function CanvasWorkspace({
 
   useEffect(() => { setCanvasLibraryOpen(false); }, [projectId, setCanvasLibraryOpen]);
 
+  const entryFocusProject = useRef<string | null>(null);
+  useEffect(() => {
+    if (loading || loadFailed || projectRoutePending || entryFocusProject.current === projectId) return;
+    // Wait for the project picker to close and restore its trigger focus first.
+    const frame = requestAnimationFrame(() => {
+      entryFocusProject.current = projectId;
+      if (exploring || viewMode !== "canvas" || !sourceCollapsed || scopedInspectorOpen
+        || workspaceRef.current?.closest("[inert]") || document.querySelector('[role="dialog"], [role="menu"]')) return;
+      const focused = document.activeElement as HTMLElement | null;
+      if (workspaceRef.current?.contains(focused) && focused?.closest('input, textarea, select, [contenteditable="true"]')) return;
+      stageRef.current?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [projectId, loading, loadFailed, projectRoutePending, exploring, viewMode, sourceCollapsed, scopedInspectorOpen]);
+
   useEffect(() => {
     if (exploring) {
       setSourceCollapsed(true);
@@ -1620,11 +1534,10 @@ export function CanvasWorkspace({
   }, [exploring]);
 
   useEffect(() => {
-    if (explainTutorialSources) { setSourceCollapsed(false); setSourceScope("project"); }
+    if (explainTutorialSources) { changeSource("project"); setSourceCollapsed(false); }
   }, [explainTutorialSources, exploring]);
 
   useLayoutEffect(() => {
-    if (boardShellRef.current) boardShellRef.current.inert = !sourceCollapsed;
     if (sourcePanelRef.current) sourcePanelRef.current.inert = sourceCollapsed;
     // Typing in the global search also reveals the library; keep that input focused.
     if (!sourceCollapsed && !document.activeElement?.matches('input, textarea, select, [contenteditable="true"]')) {
@@ -1634,39 +1547,52 @@ export function CanvasWorkspace({
 
   useEffect(() => {
     function toggleLibrary(event: KeyboardEvent) {
-      if (!["Tab", "Escape"].includes(event.key) || event.ctrlKey || event.metaKey || event.altKey || event.repeat
+      if (!["tab", "escape", "q", "e"].includes(event.key.toLowerCase()) || event.ctrlKey || event.metaKey || event.altKey || event.repeat || event.isComposing || event.keyCode === 229
         || event.defaultPrevented || exploring || workspaceRef.current?.closest("[inert]")
         || loadingRef.current || useStore.getState().projectRoutePending) return;
       const target = event.target as HTMLElement | null;
-      if (event.key === "Tab" && (target?.isContentEditable || target?.closest('input, textarea, select, .app-topbar'))) return;
+      const composerTab = event.key === "Tab" && !event.shiftKey && !!target
+        && workspaceRef.current?.contains(target)
+        && !!target.closest('.creation-editor .ProseMirror, [data-generation-composer] .ProseMirror');
+      if (!composerTab && event.key !== "Escape" && (target?.isContentEditable || target?.closest('input, textarea, select, .app-topbar'))) return;
       if (event.key === "Escape" && target?.closest('[data-folder-path-editor]')) return;
       if (target?.closest('[role="dialog"], [role="menu"]')
         || document.querySelector('[role="dialog"], [role="menu"]') || useStore.getState().contextMenu
         || useStore.getState().projectContextMenu) return;
       const open = useStore.getState().canvasLibraryOpen;
-      if (event.key === "Escape" && !open) return;
+      if (event.key !== "Tab" && !open) return;
+      if (["q", "e"].includes(event.key.toLowerCase()) && target && boardShellRef.current?.contains(target)) return;
+      // Escape belongs to the canvas while it is being used alongside the drawer.
+      if (event.key === "Escape" && target && boardShellRef.current?.contains(target)) return;
       event.preventDefault(); event.stopPropagation();
       if (event.key === "Escape") { closeSource(); return; }
-      if (!open) { changeSource("project"); setCanvasLibraryOpen(true); beginOnboardingOperation("expand-source", projectId)(); return; }
-      const current = useLocalFileMode.getState().open ? useLocalFileMode.getState().mode : sourceScope === "project" ? "project" : "global";
-      changeSource(sourceOrder[(sourceOrder.indexOf(current) + (event.shiftKey ? -1 : 1) + sourceOrder.length) % sourceOrder.length]);
+      if (composerTab) {
+        if (!open) { changeSource("global"); setCanvasLibraryOpen(true); beginOnboardingOperation("expand-source", projectId)(); }
+        requestAnimationFrame(() => sourcePanelRef.current?.focus({ preventScroll: true }));
+        return;
+      }
+      if (!open) { changeSource("global"); setCanvasLibraryOpen(true); beginOnboardingOperation("expand-source", projectId)(); return; }
+      if (event.key === "Tab") useLocalFileMode.getState().toggleCatalog();
+      else changeSource(event.key.toLowerCase() === "q" ? "global" : "project");
       requestAnimationFrame(() => sourcePanelRef.current?.focus({ preventScroll: true }));
     }
     window.addEventListener("keydown", toggleLibrary, true);
     return () => window.removeEventListener("keydown", toggleLibrary, true);
-  }, [exploring, projectId, sourceScope, sourceOrder, setCanvasLibraryOpen]);
+  }, [exploring, projectId, setCanvasLibraryOpen]);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (useStore.getState().canvasLibraryOpen || useLocalFileMode.getState().open || workspaceRef.current?.closest("[inert]")) return;
+      if (workspaceRef.current?.closest("[inert]")) return;
       const target = event.target as HTMLElement | null;
+      if ((useStore.getState().canvasLibraryOpen || useLocalFileMode.getState().open)
+        && (!target || !boardShellRef.current?.contains(target))) return;
       const editing = !!target && (
         target.isContentEditable
         || target.tagName === "INPUT"
         || target.tagName === "TEXTAREA"
         || target.tagName === "SELECT"
       );
-      if (promptMenuRef.current || workflowAgentDetail && target?.closest("[data-project-inspector]")) return;
+      if (document.querySelector("[data-context-owner]") || workflowAgentDetail && target?.closest("[data-project-inspector]")) return;
       if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "z"
         && !editing && !event.defaultPrevented && !scopedInspectorOpen && viewModeRef.current === "canvas"
         && !nodeDragRef.current && !graphNodeDragRef.current
@@ -2583,6 +2509,7 @@ export function CanvasWorkspace({
     for (const asset of canvasImagesForSelection(nodeIds)) {
       window.dispatchEvent(new CustomEvent(BOARD_ASSET_PICK_EVENT, { detail: asset }));
     }
+    setSelectedCanvasNodeIds(new Set());
   }
 
   function openCanvasAssetContextMenu(
@@ -2916,12 +2843,12 @@ export function CanvasWorkspace({
     }
   }
 
-  function updateCanvasNote(nodeId: string, value: CanvasNotePayload) {
+  function updateCanvasNote(nodeId: string, value: CanvasNotePayload, size?: { width: number; height: number }) {
     const payloadJson = JSON.stringify(value);
     const node = graphNodesRef.current.find(candidate => candidate.id === nodeId);
     if (!node) return;
     const minimum = value.note_type !== "section" ? canvasTextMinSize(value.cells, value.note_type === "images", value.note_type === "bubble") : node;
-    const updated = { ...node, payloadJson, width: Math.max(node.width, minimum.width), height: Math.max(node.height, minimum.height) };
+    const updated = { ...node, payloadJson, width: Math.max(size?.width ?? node.width, minimum.width), height: Math.max(size?.height ?? node.height, minimum.height) };
     graphNodesRef.current = graphNodesRef.current.map(candidate => candidate.id === nodeId ? updated : candidate);
     setGraphNodes(graphNodesRef.current);
     void enqueueWrite(async () => { await api.projectCanvasNoteUpdate(nodeId, payloadJson); });
@@ -3127,6 +3054,7 @@ export function CanvasWorkspace({
       return;
     }
     event.preventDefault();
+    event.currentTarget.focus({ preventScroll: true });
     panDragRef.current = {
       pointerId: event.pointerId,
       startX: event.clientX,
@@ -3375,8 +3303,8 @@ export function CanvasWorkspace({
   useEffect(() => {
     const allowed = (event: ClipboardEvent) => {
       const target = event.target as HTMLElement | null;
-      return !useStore.getState().canvasLibraryOpen && !event.defaultPrevented && !target?.closest('input,textarea,select,[contenteditable="true"]')
-        && (target === document.body || (target instanceof Node && stageRef.current?.contains(target)))
+      return !event.defaultPrevented && !target?.closest('input,textarea,select,[contenteditable="true"]')
+        && ((target === document.body && !useStore.getState().canvasLibraryOpen) || (target instanceof Node && stageRef.current?.contains(target)))
         && viewModeRef.current === "canvas" && !useStore.getState().projectRoutePending && !scopedInspectorOpen
         && !document.querySelector('[role="dialog"][aria-modal="true"]') && !!stageRef.current;
     };
@@ -4027,21 +3955,11 @@ export function CanvasWorkspace({
     );
   }
 
-  const sourceCloseButton = <button type="button" className="library-return-canvas" aria-label="返回画板" title="返回画板 · Esc"
-    onClick={closeSource}>
-    <PanelLeftClose size={15} aria-hidden="true" />返回画板 <kbd>Esc</kbd>
-  </button>;
   const sourceNavigation = <header className="library-browser-heading">
-          <div data-tour="source-scope" className="library-floating-navigation">
-            <LibraryViewSwitch value={localFilesOpen ? fileMode : sourceScope === "project" ? "project" : "global"} onChange={changeSource}
-              onReorder={values => { if (values[0] === "project") setTabOrder(values.slice(1)); }}
-              label="素材视图切换条" options={sourceOrder.map(value => ({ value, label: ({ project: "项目素材", global: "全局素材", files: "文件浏览器" } satisfies Record<LibraryTab | "project", string>)[value] }))} />
-            {!localFilesOpen && <div className="library-navigation-actions">
-              {libraryTagFilter && <LibraryTagFilter name={libraryTagFilter.slice(4)} onClear={() => { useStore.getState().setSmartFilter(null); useStore.getState().clearSelect(); }} />}
-              {sourceScope === "library" && <LibraryFilterButton />}
-            </div>}
-          </div>
-        </header>;
+    <div data-tour="source-scope" className="library-floating-navigation">
+      <LibrarySourceTabs project value={sourceScope} onChange={changeSource}/>
+    </div>
+  </header>;
 
   return (
     <div
@@ -4062,59 +3980,16 @@ export function CanvasWorkspace({
             setSourceCollapsed(true);
           });
         }}>
-        {localFilesOpen ? <LocalFileWorkspace navigation={sourceNavigation} closeAction={sourceCloseButton} onClose={closeSource} onLegacy={() => { useLocalFileMode.getState().setOpen(false); setSourceScope("library"); }} />
-          : <div className="canvas-source-close">{sourceCloseButton}</div>}
-        {!localFilesOpen && sourceNavigation}
-        <div id={`${sourcePanelId}-content`} className="canvas-source-content" style={localFilesOpen ? { display: "none" } : undefined}>
-
-        {sourceScope === "library" && <div className="folder-scope-bar"><button onClick={() => changeSource("files")}>返回文件浏览</button><span>历史素材</span></div>}
-        <LibraryTagBar projectId={sourceScope === "project" ? projectId : null} />
-        {sourceScope === "library" && libraryFolders.length > 0 && (
-          <div className="canvas-source-folders" role="group" aria-label="全局素材文件夹">
-            {libraryFolders.map((folder) => {
-              const active = !libraryTagFilter && librarySourceFolderId === folder.id;
-              return (
-                <button
-                  key={folder.id}
-                  type="button"
-                  className={active ? "is-active" : ""}
-                  aria-pressed={active}
-                  title={folder.name}
-                  onClick={() => {
-                    if (libraryTagFilter) useStore.getState().setSmartFilter(null);
-                    setLibrarySourceFolderId(active ? null : folder.id);
-                  }}
-                >
-                  <Folder size={11} aria-hidden="true" />
-                  <span>{folder.name}</span>
-                </button>
-              );
-            })}
-          </div>
-        )}
-        <div ref={sourcePinchRef} className="canvas-source-media min-h-0 flex-1">
-          {sourceScope === "library" && librarySourceError ? (
-            <div className="library-page-empty" role="alert">素材加载失败 <button type="button" className="underline" onClick={() => setLibrarySourceRevision(value => value + 1)}>重试</button></div>
-          ) : sourceScope === "library" && librarySourceLoading && librarySourceAssets.length === 0 ? (
-            <div className="flex h-full items-center justify-center gap-2 text-xs text-muted" role="status">
-              <LoaderCircle className="animate-spin" size={14} /> 正在载入全局素材
-            </div>
-          ) : (
-            <MasonryGrid
-              variant="canvas-source"
-              itemWidth={sourceItemWidth}
-              assetsOverride={sourceAssets}
-              totalOverride={sourceTotal}
-              projectScopeId={sourceScope === "library" ? null : projectId}
-              onOpenPreview={openCanvasSourcePreview}
-            />
-          )}
-          <ThumbnailSizeSlider scope="canvas" />
-        </div>
+        <div id={`${sourcePanelId}-content`} className="canvas-source-content">
+          {fileMode === "tags" || fileMode === "collections"
+            ? <CategorizedLibrary key={`${projectId}:${sourceScope}:${fileMode}:${libraryMedia}`} kind={fileMode} media={libraryMedia} projectId={projectId}
+                projectScope={sourceScope === "project"} navigation={sourceNavigation} onClose={closeSource} onAssetsChange={setCatalogAssets}/>
+            : <LocalFileWorkspace navigation={sourceNavigation} onClose={closeSource}/>}
         </div>
       </aside>
+      <CanvasLibraryResize panelId={sourcePanelId} collapsed={sourceCollapsed} onClose={closeSource} />
 
-      <section ref={boardShellRef} aria-hidden={!sourceCollapsed || undefined} className={`canvas-board-shell${(scopedInspectorOpen && !inspectorEditing || workflowAgentDetail?.projectId === projectId && !loading && !genPanelOpen) ? " has-project-inspector" : ""}`}>
+      <section ref={boardShellRef} className={`canvas-board-shell${(scopedInspectorOpen && !inspectorEditing || workflowAgentDetail?.projectId === projectId && !loading && !genPanelOpen) ? " has-project-inspector" : ""}`}>
         <button
           type="button"
           className={`canvas-source-toggle ${sourceCollapsed ? "canvas-source-expand" : "canvas-source-collapse"}`}
@@ -4123,7 +3998,7 @@ export function CanvasWorkspace({
           aria-expanded={!sourceCollapsed}
           aria-controls={`${sourcePanelId}-content`}
           onClick={() => {
-            if (sourceCollapsed) changeSource("project");
+            if (sourceCollapsed) changeSource("global");
             setSourceCollapsed(!sourceCollapsed);
             if (sourceCollapsed) beginOnboardingOperation("expand-source", projectId)();
           }}
@@ -4324,7 +4199,7 @@ export function CanvasWorkspace({
             <button data-tip="分区 · 拖拽画框" aria-label="分区工具" aria-pressed={drawingTool === "section"} onClick={() => chooseCanvasTool("section")}><Frame size={18} /></button>
             <button data-tip="画板 · 拖框后拼放图片" aria-label="画板工具" aria-pressed={drawingTool === "artboard"} onClick={() => chooseCanvasTool("artboard")}><Scan size={18} /></button>
             <hr />
-            <button data-tip="内容卡片 · 拖入画布或选中后点击放置" aria-label="内容卡片工具" {...canvasCardTool("text")}><Type size={18} /></button>
+            <button data-tip="内容卡片 · 拖入画布或选中后点击放置" aria-label="内容卡片工具" {...canvasCardTool("text")}><Table2 size={18} /></button>
             <button data-tip="气泡便签 · 拖入画布或选中后点击放置" aria-label="气泡便签工具" {...canvasCardTool("bubble")}><MessageCircle size={18} /></button>
             <button data-tip="指令卡片 · 拖入画布或选中后点击放置" aria-label="新增指令卡片" {...canvasCardTool("instruction")}><List size={18} /></button>
             <button data-tip="循环卡片 · 拖入画布或选中后点击放置" aria-label="新增循环卡片" {...canvasCardTool("loop")}><Repeat2 size={18} /></button>
@@ -4427,7 +4302,7 @@ export function CanvasWorkspace({
                   onInput={(cellId, disconnect, type, point) => workflowRef.current?.inputText(node.id, cellId, disconnect, type, point)}
                   inputLocked={workflowRef.current?.isLocked(node.id)}
                   onResize={(size, finished, cancelled) => resizeCanvasNote(node.id, size, finished, cancelled)} onSelect={() => setSelectedCanvasNodeIds(new Set([node.id]))}
-                  onChange={next => updateCanvasNote(node.id, next)} />}
+                  onChange={(next, size) => updateCanvasNote(node.id, next, size)} />}
               </div>;
             })}
             {sectionPreview && <div className="canvas-section-preview" style={{ left: sectionPreview.x, top: sectionPreview.y, width: sectionPreview.width, height: sectionPreview.height }} />}
@@ -4777,6 +4652,14 @@ export function CanvasWorkspace({
             promptLoadRequest={promptLoadRequest}
             onPromptLoadConsumed={onLaunchConsumed}
             onDraftChange={persistComposerDraft}
+            onOpenLibrary={() => {
+              if (!useStore.getState().canvasLibraryOpen) {
+                changeSource("global");
+                setCanvasLibraryOpen(true);
+                beginOnboardingOperation("expand-source", projectId)();
+              }
+              requestAnimationFrame(() => sourcePanelRef.current?.focus({ preventScroll: true }));
+            }}
             registerDraftFlush={(flush) => {
               composerDraftFlushRef.current = flush;
             }}
@@ -4815,39 +4698,39 @@ export function CanvasWorkspace({
                   )}
           </ProjectInspectorShell>
         )}
-        {promptMenu && createPortal(
-          <div
-            ref={promptMenuRef}
-            role="menu"
-            aria-label={promptMenu.node?.kind === "agent_group" ? "Agent 执行组菜单" : promptMenu.node ? "生成指令菜单" : "画板节点菜单"}
-            className="fixed z-[60] max-h-[calc(100vh-16px)] w-[200px] overflow-y-auto rounded-lg border border-edge bg-panel p-1 shadow-xl"
-            style={{ left: Math.max(8, Math.min(promptMenu.x, window.innerWidth - 208)), top: Math.max(8, Math.min(promptMenu.y, window.innerHeight - 280)) }}
-            onContextMenu={(event) => event.preventDefault()}
-          >
-            {promptMenu.point && <button type="button" role="menuitem" className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs hover:bg-panel2" onClick={() => newDraftAt(promptMenu.point!)}>
+        {promptMenu && <ContextMenu key={`${promptMenu.x}:${promptMenu.y}`} x={promptMenu.x} y={promptMenu.y}
+          label={promptMenu.node?.kind === "agent_group" ? "Agent 执行组菜单" : promptMenu.node ? "生成指令菜单" : "画板节点菜单"}
+          onClose={() => setPromptMenu(null)}>
+            {promptMenu.point && <button type="button" role="menuitem" className="app-context-item px-2 py-1.5" onClick={() => newDraftAt(promptMenu.point!)}>
               <PenTool size={14} /> 新建草稿
             </button>}
-            {promptMenu.point && <button type="button" role="menuitem" className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs hover:bg-panel2" onClick={() => {
+            {promptMenu.point && <button type="button" role="menuitem" className="app-context-item px-2 py-1.5" onClick={() => {
               createCanvasNote({ ...promptMenu.point!, width: 480, height: 360 }, "section", { base_asset_id: null }); setPromptMenu(null);
             }}><Scan size={14} /> 新建画板</button>}
-            {promptMenu.nodeIds.length > 0 && <button type="button" role="menuitem" className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs hover:bg-panel2" onClick={() => {
+            {promptMenu.nodeIds.length > 0 && <button type="button" role="menuitem" className="app-context-item px-2 py-1.5" onClick={() => {
               void copyCanvasSelection(promptMenu.nodeIds); setPromptMenu(null);
             }}><Copy size={14} /> 复制所选卡片</button>}
-            {promptMenu.nodeIds.length > 0 && <button type="button" role="menuitem" className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs hover:bg-panel2" onClick={() => {
+            {canvasImagesForSelection(promptMenu.nodeIds, true).length > 0 && <button type="button" role="menuitem" title="将所选内容制成压缩包"
+              className="app-context-item px-2 py-1.5" onClick={() => {
+                const ids = canvasImagesForSelection(promptMenu.nodeIds, true).map(asset => asset.assetId);
+                setPromptMenu(null);
+                void exportAssetArchive(ids);
+              }}><Archive size={14} /> 将所选内容打包</button>}
+            {promptMenu.nodeIds.length > 0 && <button type="button" role="menuitem" className="app-context-item px-2 py-1.5" onClick={() => {
               workflowRef.current?.saveTemplate(promptMenu.nodeIds, "container"); setPromptMenu(null);
             }}><Frame size={14} /> 封装为容器</button>}
             {WORKFLOW_TEMPLATE_LIBRARY_ENABLED && [...expandCanvasSections(new Set(promptMenu.nodeIds), graphNodes)].some(id => canvasWorkflowController(activeCanvasRef.current.id).document.nodes.some(node => node.id === id && !["trigger", "text", "planner"].includes(node.kind))) &&
-              <button type="button" role="menuitem" className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs hover:bg-panel2" onClick={() => {
+              <button type="button" role="menuitem" className="app-context-item px-2 py-1.5" onClick={() => {
                 workflowRef.current?.saveTemplate(promptMenu.nodeIds); setPromptMenu(null);
               }}><Copy size={14} /> 存为模板</button>}
             {promptMenu.nodeIds.some(id => canvasWorkflowController(activeCanvasRef.current.id).document.nodes.some(node => node.id === id && !["trigger", "text", "planner"].includes(node.kind))) &&
-              <button type="button" role="menuitem" className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs hover:bg-panel2" onClick={() => {
+              <button type="button" role="menuitem" className="app-context-item px-2 py-1.5" onClick={() => {
                 workflowRef.current?.saveTemplate(promptMenu.nodeIds, "package"); setPromptMenu(null);
               }}><Copy size={14} /> 导出工作流数据包</button>}
-            <button type="button" role="menuitem" className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs hover:bg-panel2" onClick={() => {
+            <button type="button" role="menuitem" className="app-context-item px-2 py-1.5" onClick={() => {
               workflowRef.current?.templates(true); setPromptMenu(null);
             }}><Copy size={14} /> 导入工作流数据包</button>
-            <button type="button" role="menuitem" className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs hover:bg-panel2" onClick={() => {
+            <button type="button" role="menuitem" className="app-context-item px-2 py-1.5" onClick={() => {
               const point = promptMenu.point ?? toBoardPoint(promptMenu.x, promptMenu.y); setPromptMenu(null);
               void navigator.clipboard.readText().catch(() => canvasClipboardText).then(text => {
                 const value = parseCanvasClipboard(text);
@@ -4855,35 +4738,36 @@ export function CanvasWorkspace({
                 notify("剪贴板中没有可粘贴的画板卡片", "info");
               });
             }}><Copy size={14} /> 粘贴卡片</button>
-            {promptMenu.section && <button type="button" role="menuitem" title="移除分区框，保留其中的卡片" className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs text-red-400 hover:bg-panel2" onClick={() => {
-              removeNodes([promptMenu.section!.id]);
-              setPromptMenu(null);
-            }}>
-              <Trash2 size={14} className="shrink-0" /> {graphNodes.some(node => node.id === promptMenu.section!.id && readCanvasNote(node).workflow_container) ? "解封容器" : graphNodes.some(node => node.id === promptMenu.section!.id && readCanvasNote(node).artboard) ? "移除画板" : "移除分区"}「{promptMenu.section.name}」
-            </button>}
             {promptMenu.nodeIds.length > 0 && !promptMenu.nodeIds.some(id => workflowRef.current?.bounds().some(node => node.id === id)) && <CanvasLayerMenuItem projectId={activeCanvasRef.current.id} nodeIds={promptMenu.nodeIds}
-              className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs hover:bg-panel2" />}
-            {canvasImagesForSelection(promptMenu.nodeIds).length > 0 && <button type="button" role="menuitem" className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs hover:bg-panel2" onClick={() => addCanvasImagesToBoard(promptMenu.nodeIds)}>
+              className="app-context-item px-2 py-1.5" />}
+            {canvasImagesForSelection(promptMenu.nodeIds).length > 0 && <button type="button" role="menuitem" className="app-context-item px-2 py-1.5" onClick={() => addCanvasImagesToBoard(promptMenu.nodeIds)}>
               <Images size={14} className="shrink-0" /> {canvasImagesForSelection(promptMenu.nodeIds).length > 1
                 ? `添加所选 ${canvasImagesForSelection(promptMenu.nodeIds).length} 张图片到对话框`
                 : "添加到对话框"}
             </button>}
-            {promptMenu.nodeIds.length > 0 && <button type="button" role="menuitem" className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs hover:bg-panel2" onClick={() => {
+            {promptMenu.nodeIds.length > 0 && <button type="button" role="menuitem" className="app-context-item px-2 py-1.5" onClick={() => {
               arrangeNodes(promptMenu.nodeIds);
               setPromptMenu(null);
             }}>
               <LayoutDashboard size={14} /> 整理
             </button>}
-            {promptMenu.node && <button type="button" role="menuitem" className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs hover:bg-panel2" onClick={() => reuseCanvasPrompt(promptMenu.node!)}>
+            {promptMenu.node && promptMenu.nodeIds.length === 1 && <button type="button" role="menuitem" className="app-context-item px-2 py-1.5" onClick={() => reuseCanvasPrompt(promptMenu.node!)}>
               <Copy size={14} /> 复用提示词
             </button>}
-            {promptMenu.folder && <button type="button" role="menuitem" className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs hover:bg-panel2" onClick={() => {
+            {(promptMenu.section || (promptMenu.folder && promptMenu.nodeIds.length === 1) || (promptMenu.nodeIds.length > 0 && !promptMenu.nodeIds.some(id => workflowRef.current?.bounds().some(node => node.id === id)))) && <><div className="app-context-divider" /><DeleteSubmenu>
+            {promptMenu.section && <button type="button" role="menuitem" title="移除分区框，保留其中的卡片" className="app-context-item is-danger px-2 py-1.5" onClick={() => {
+              removeNodes([promptMenu.section!.id]);
+              setPromptMenu(null);
+            }}>
+              <Trash2 size={14} className="shrink-0" /> {graphNodes.some(node => node.id === promptMenu.section!.id && readCanvasNote(node).workflow_container) ? "解封容器" : graphNodes.some(node => node.id === promptMenu.section!.id && readCanvasNote(node).artboard) ? "移除画板" : "移除分区"}「{promptMenu.section.name}」
+            </button>}
+            {promptMenu.folder && promptMenu.nodeIds.length === 1 && <button type="button" role="menuitem" className="app-context-item px-2 py-1.5" onClick={() => {
               ungroupFolder(promptMenu.folder!);
               setPromptMenu(null);
             }}>
               <Ungroup size={14} /> 解散素材组
             </button>}
-            {promptMenu.nodeIds.length > 0 && !promptMenu.nodeIds.some(id => workflowRef.current?.bounds().some(node => node.id === id)) && <button type="button" role="menuitem" className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs text-red-400 hover:bg-panel2" onClick={() => {
+            {promptMenu.nodeIds.length > 0 && !promptMenu.nodeIds.some(id => workflowRef.current?.bounds().some(node => node.id === id)) && <button type="button" role="menuitem" className="app-context-item is-danger px-2 py-1.5" onClick={() => {
               removeNodes(promptMenu.nodeIds);
               setPromptMenu(null);
             }}>
@@ -4891,14 +4775,14 @@ export function CanvasWorkspace({
                 ? `从画布移出所选 ${promptMenu.nodeIds.length} 项`
                 : "从画布移出"}
             </button>}
-            {promptMenu.node?.kind === "prompt" && <button type="button" role="menuitem" className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs text-red-400 hover:bg-panel2 disabled:opacity-40"
+            {promptMenu.node?.kind === "prompt" && promptMenu.nodeIds.length === 1 && <button type="button" role="menuitem" className="app-context-item is-danger px-2 py-1.5 disabled:opacity-40"
               disabled={promptSessionJobs(promptMenu.node).some((job) => job.running)}
               title={promptSessionJobs(promptMenu.node).some((job) => job.running) ? "生成中，请结束后再删除会话" : "删除会话记录及指令卡片，保留已生成图片"}
               onClick={() => deletePromptSession(promptMenu.node!)}>
               <Trash2 size={14} /> 删除会话
             </button>}
-          </div>, document.body,
-        )}
+            </DeleteSubmenu></>}
+        </ContextMenu>}
         {artboardDialog && <CanvasArtboardDialog composition={artboardDialog.composition} onClose={() => setArtboardDialog(null)}
           onSubmit={async (prompt, instruction, references, provider) => {
             const origin = artboardDialog;
@@ -4917,6 +4801,32 @@ export function CanvasWorkspace({
             if (!result.accepted) throw new Error(result.error || "合成提交失败");
           }} />}
         {replicationProjectId === projectId && replicationProjectId && <VideoReplicationDialog key={`replication-${replicationProjectId}`} projectId={replicationProjectId}
+          onGenerateImage={async request => {
+            const draft = activeCanvasRef.current, stage = stageRef.current;
+            if (!draft || draft.id !== replicationProjectId || !stage) throw new Error("项目已切换，请重新打开工具");
+            await ensureMaterialized(draft); await flushCanvasWrites(false);
+            if (activeCanvasRef.current?.id !== draft.id) throw new Error("项目已切换，请重新打开工具");
+            const controller = canvasWorkflowController(draft.id);
+            await controller.load();
+            if (activeCanvasRef.current?.id !== draft.id) throw new Error("项目已切换，请重新打开工具");
+            if (!controller.ready || controller.error) throw new Error(controller.error || "画板正在载入");
+            const bounds = stage.getBoundingClientRect();
+            const center = toBoardPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2);
+            const rect = { ...placeCanvasCardNearSource({ x: center.x - 180, y: center.y - 160, width: 360, height: 360 }, selectionAnchors().map(item => item.rect)), width: 360, height: 360 };
+            const current = useStore.getState();
+            const imageInput = request.referenceId ? { assetId: request.referenceId, slot: 1 } : null;
+            const node: WorkflowNode = { ...newWorkflowNode("generation", rect.x, rect.y, current.activeGenProvider || current.defaultProvider),
+              prompt: request.prompt + (imageInput ? "\n\n参考图：@[replication-frame]" : ""), ratio: request.ratio, generation: { media: "image" },
+              inputs: { image: imageInput ? [imageInput] : [] },
+              promptReferences: imageInput ? [{ id: "replication-frame", type: "image", label: "视频截帧", slot: 1, input: imageInput }] : [] };
+            await controller.edit([...controller.document.nodes, node]);
+            if (activeCanvasRef.current?.id !== draft.id) throw new Error("项目已切换，首帧卡片已保存在原项目，尚未启动");
+            setSelectedCanvasNodeIds(new Set([node.id]));
+            const view = canvasViewForNewCard(rect, { x: 80, y: 60, width: Math.max(200, bounds.width - 120), height: Math.max(200, bounds.height - 270) }, panRef.current, zoomRef.current, true);
+            if (view) { panRef.current = view.pan; zoomRef.current = view.zoom; setPan(view.pan); setZoom(view.zoom); markViewDirty(); }
+            // Once the card is durable, its ordinary workflow owns validation, submission and recovery.
+            void controller.start(node.id, true).catch(error => notifyError(error, "首帧生成未启动，可在画板卡片中检查"));
+          }}
           onClose={() => setReplicationProjectId(null)} ensureProject={async () => {
             const draft = activeCanvasRef.current;
             if (!draft || draft.id !== replicationProjectId) throw new Error("项目已切换，请重新打开工具");

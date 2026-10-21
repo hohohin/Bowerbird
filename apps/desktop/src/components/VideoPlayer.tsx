@@ -6,7 +6,7 @@ import type { SaveVideoTrim } from "../lib/videoTrim";
 import { captureVideoFrame, loadVideoStrip, seekVideoLastFrame, videoTime, type VideoFrame } from "../lib/videoFrame";
 import "./VideoPlayer.css";
 
-export function VideoPlayer({ path, onAddFrame, onSaveTrim }: { path: string; onAddFrame?: (frame: VideoFrame) => Promise<void>; onSaveTrim?: SaveVideoTrim }) {
+export function VideoPlayer({ path, onAddFrame, onSaveTrim, embedded = false, frameTarget = "canvas" }: { path: string; onAddFrame?: (frame: VideoFrame) => Promise<void>; onSaveTrim?: SaveVideoTrim; embedded?: boolean; frameTarget?: "canvas" | "reference" }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const controlsRef = useRef<HTMLDivElement>(null);
   const [dimensions, setDimensions] = useState({ width: 720, height: 405 });
@@ -74,8 +74,9 @@ export function VideoPlayer({ path, onAddFrame, onSaveTrim }: { path: string; on
     function onSpace(event: KeyboardEvent) {
       if (event.code !== "Space" || event.ctrlKey || event.metaKey || event.altKey || event.isComposing) return;
       const target = event.target;
-      if (target instanceof HTMLElement && target.closest(".video-player")
+      if (target instanceof HTMLElement && (embedded || target.closest(".video-player"))
         && (target.isContentEditable || target.closest("input, textarea, select"))) return;
+      if (embedded && (!(target instanceof HTMLElement) || !videoRef.current?.closest(".video-player")?.contains(target))) return;
       event.preventDefault();
       event.stopPropagation();
       if (event.type === "keydown" && !event.repeat) void togglePlay();
@@ -86,7 +87,7 @@ export function VideoPlayer({ path, onAddFrame, onSaveTrim }: { path: string; on
       window.removeEventListener("keydown", onSpace, true);
       window.removeEventListener("keyup", onSpace, true);
     };
-  }, [togglePlay]);
+  }, [togglePlay, embedded]);
   useEffect(() => {
     const controls = controlsRef.current;
     if (!controls) return;
@@ -189,8 +190,8 @@ export function VideoPlayer({ path, onAddFrame, onSaveTrim }: { path: string; on
         <output className="video-player-time" aria-label="当前播放时间">{videoTime(time)} <span>/ {videoTime(duration)}</span></output>
         <button aria-label={muted ? "取消静音" : "静音"} onClick={() => setMuted(!muted)}>{muted ? <VolumeX size={17} /> : <Volume2 size={17} />}</button>
         <button className="video-player-fine" aria-pressed={fine} disabled={saving || dragging} onClick={() => setFine(!fine)}>细调</button>
-        <button aria-label="裁剪视频" title="调整入点和出点" aria-pressed={trimming} disabled={!ready || saving || dragging}
-          onClick={() => { videoRef.current?.pause(); setTrimming(!trimming); setSavedMessage(""); }}><Scissors size={16} />裁剪</button>
+        {!embedded && <button aria-label="裁剪视频" title="调整入点和出点" aria-pressed={trimming} disabled={!ready || saving || dragging}
+          onClick={() => { videoRef.current?.pause(); setTrimming(!trimming); setSavedMessage(""); }}><Scissors size={16} />裁剪</button>}
       </div>
       {trimming && <div className="video-player-trim" aria-label="视频裁剪范围">
         <div className="video-player-trim-selection" aria-hidden="true"><i style={{ left: `${inPoint / duration * 100}%`, width: `${(outPoint - inPoint) / duration * 100}%` }} /></div>
@@ -236,10 +237,10 @@ export function VideoPlayer({ path, onAddFrame, onSaveTrim }: { path: string; on
         <span>左右拖动选画面 · {fine ? "细调已开启 · 方向键 0.01 秒" : "方向键 0.1 秒"}</span>
         {onAddFrame && <div className="video-player-frame-actions">
           <button className="video-player-add" disabled={!paused || !ready || seeking || dragging || saving || savedTime === time}
-            onClick={() => void addFrame()}>{savedTime === time ? <Check size={16} /> : <ImagePlus size={16} />}{savingTarget === "current" ? "正在添加…" : savedTime === time ? "已添加到画板" : "添加该帧到画板"}</button>
-          <button disabled={!ready || !duration || seeking || dragging || saving || savedLastFrame} onClick={() => void addFrame(true)}>
+            onClick={() => void addFrame()}>{savedTime === time ? <Check size={16} /> : <ImagePlus size={16} />}{savingTarget === "current" ? "正在添加…" : savedTime === time ? (frameTarget === "reference" ? "已选作参考图" : "已添加到画板") : frameTarget === "reference" ? "截取当前帧作参考" : "添加该帧到画板"}</button>
+          {frameTarget === "canvas" && <button disabled={!ready || !duration || seeking || dragging || saving || savedLastFrame} onClick={() => void addFrame(true)}>
             {savedLastFrame ? <Check size={16} /> : <ImagePlus size={16} />}{savingTarget === "last" ? "正在添加尾帧…" : savedLastFrame ? "尾帧已添加" : "添加尾帧到画板"}
-          </button>
+          </button>}
         </div>}
       </div>
       {error && <p className="video-player-error" role="alert">{error}</p>}

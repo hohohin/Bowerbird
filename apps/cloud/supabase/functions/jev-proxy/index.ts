@@ -36,9 +36,9 @@ function rpcError(error: any): never {
       "积分不足，分类需预留 1 积分，累计成功 5 张后扣除",
     );
   }
-  if (
-    detail === "rate_limit_per_minute" || detail === "understand_daily_limit"
-  ) throw new ApiError("rate_limited", "分类调用额度已用完，请稍后重试");
+  if (detail === "understand_daily_limit") {
+    throw new ApiError("rate_limited", "今日分类调用额度已用完");
+  }
   if (detail === "daily_cost_limit") {
     throw new ApiError("cost_limit_reached", "今日云端分类额度已用完");
   }
@@ -127,7 +127,7 @@ export async function handler(req: Request): Promise<Response> {
         p_allow_discovery: body.allow_discovery,
         p_cost_micros: cost,
         p_daily_limit: positive("DAILY_COST_LIMIT_CNY", 500) * 1_000_000,
-        p_rate_limit: positive("RATE_LIMIT_PER_USER_PER_MIN", 10),
+        p_rate_limit: null, // Classification has no Bowerbird per-user frequency limit.
         p_free_limit: paid ? null : positive("FREE_CAPTION_DAILY_LIMIT", 10),
       });
       if (error) rpcError(error);

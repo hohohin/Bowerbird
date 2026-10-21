@@ -88,7 +88,8 @@ try {
     await group.hover();
     assert.equal(await group.getByRole("button", { name: "解散素材组" }).count(), 0);
     await group.locator(surface).first().click({ button: "right" });
-    await page.getByRole("menuitem", { name: "解散素材组", exact: true }).click();
+    await page.getByRole("menuitem", { name: "删除", exact: true }).click();
+  await page.getByRole("menuitem", { name: "解散素材组", exact: true }).click();
     await page.waitForFunction(() => window.snapshot().groups.length === 0);
     assert.equal(await page.getByRole("menu").count(), 0);
     assert.equal(await page.locator(".canvas-node.is-folder").count(), 0);

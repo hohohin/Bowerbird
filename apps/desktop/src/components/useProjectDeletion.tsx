@@ -7,7 +7,7 @@ import type { ProjectDeleteImpact } from "../lib/types";
 import { workspaceProjectDeleteMode, type WorkspaceProjectDeleteMode } from "../lib/workspaceRoute";
 
 /** Shared project deletion flow for the sidebar menu and library project frames. */
-export function useProjectDeletion(close: () => void = () => {}) {
+export function useProjectDeletion(close: () => void = () => {}, isCurrent: () => boolean = () => true) {
   const deleteProjectCanvas = useStore((s) => s.deleteProjectCanvas);
   const [busy, setBusy] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<{
@@ -65,6 +65,7 @@ export function useProjectDeletion(close: () => void = () => {}) {
         return;
       }
       const impact = await api.projectDeleteImpact(projectId);
+      if (!isCurrent()) return;
       setPendingDelete({ projectId, impact, mode, physical: false });
       close();
     } catch (error) {

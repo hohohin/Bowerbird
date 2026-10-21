@@ -1,26 +1,35 @@
 .comfy-video-card { display: grid; gap: 10px; }
+.workflow-card .comfy-video-prompt { display: block; width: calc(100% - 51.4px); margin: 0 25.7px; min-height: 220px; max-height: 360px; box-sizing: border-box; }
+.workflow-card.is-comfy-video .workflow-port span { max-width: 48px; padding: 0 4px; font-size: 10px; }
 .comfy-frame-slots { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.comfy-frame-slot { border: 1px dashed var(--bb-line); border-radius: 8px; min-height: 112px; padding: 8px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; font-size: 11px; }
-.comfy-frame-slot img { width: 100%; height: 80px; object-fit: contain; }
-.comfy-frame-slot span { color: var(--bb-muted); text-align: center; }
+.comfy-frame-slot { position: relative; overflow: hidden; aspect-ratio: 4 / 3; border: 1px dashed var(--bb-line); border-radius: 8px; min-height: 112px; display: flex; align-items: center; justify-content: center; font-size: 11px; }
+.comfy-frame-slot img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.comfy-frame-badge { position: absolute; z-index: 1; top: 7px; left: 7px; padding: 3px 6px; border-radius: 4px; background: rgb(0 0 0 / 72%); color: #fff; font-weight: 500; white-space: nowrap; pointer-events: none; }
+.comfy-frame-slot span { padding: 28px 10px 10px; color: var(--bb-muted); text-align: center; }
 .comfy-video-options { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; border: 0; padding: 0; margin: 0; min-width: 0; }
 .comfy-video-card label { display: grid; gap: 4px; font-size: 11px; min-width: 0; }
 .comfy-video-card input, .comfy-video-card select { width: 100%; min-width: 0; box-sizing: border-box; }
 .comfy-video-card input { padding: 6px 8px; border: 1px solid var(--bb-line); border-radius: 6px; background: var(--bb-surface-2); color: var(--bb-ink); }
-.comfy-video-card details { font-size: 11px; }
-.comfy-video-card details > :not(summary) { margin-top: 8px; }
-.comfy-video-card details p { overflow-wrap: anywhere; }
-.comfy-video-result { width: 100%; max-height: 260px; border-radius: 8px; background: #111; }
-.comfy-environment { border: 1px solid var(--bb-line); border-radius: 8px; padding: 10px; display: grid; gap: 8px; min-width: 0; font-size: 11px; }
-.comfy-environment-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.comfy-environment-heading strong { font-size: 12px; }
-.comfy-environment p { margin: 0; overflow-wrap: anywhere; }
-.comfy-environment small { color: var(--bb-muted); line-height: 1.5; }
-.comfy-environment progress { width: 100%; height: 8px; accent-color: var(--bb-ink); }
-.comfy-install-path { overflow-wrap: anywhere; color: var(--bb-muted); }
-.comfy-environment-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.comfy-environment-actions button:first-child { padding: 6px 10px; border-radius: 6px; background: var(--bb-ink); color: var(--bb-surface); }
-.comfy-environment button:disabled { opacity: .45; cursor: not-allowed; }
-.comfy-environment button { min-height: 28px; }
-.comfy-environment.is-ready { background: var(--bb-surface-2); }
-.comfy-environment.is-ready > p { display: none; }
+/* The header keeps a full button hit target around the small status dot. */
+.workflow-card > header .comfy-environment-dot { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; background: transparent; }
+.comfy-environment-dot > span { width: 8px; height: 8px; border-radius: 50%; background: var(--bb-danger-strong); }
+.comfy-environment-dot.is-ready > span { background: #22c55e; }
+.comfy-environment-dot:focus-visible, .comfy-environment-panel button:focus-visible { outline: 2px solid var(--bb-blue); outline-offset: 2px; }
+.comfy-environment-panel { width: min(360px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto; box-sizing: border-box; padding: 22px; border: 1px solid var(--bb-line); border-radius: 12px; background: var(--bb-surface); color: var(--bb-ink); box-shadow: 0 16px 48px rgb(var(--bb-shadow-rgb) / 20%); font-size: 13px; }
+.comfy-environment-panel::backdrop { background: rgb(0 0 0 / 24%); }
+.comfy-environment-panel h2 { margin: 0 0 16px; font-size: 16px; font-weight: 600; }
+.comfy-environment-panel p { margin: 0 0 12px; overflow-wrap: anywhere; line-height: 1.6; }
+.comfy-environment-panel small, .comfy-install-path { color: var(--bb-muted); }
+.comfy-environment-panel progress { display: block; width: 100%; height: 8px; margin: 12px 0; accent-color: var(--bb-blue); }
+.comfy-environment-actions { display: flex; gap: 10px; margin-top: 20px; }
+.comfy-environment-actions button { flex: 1; min-height: 36px; border: 1px solid var(--bb-line); border-radius: 7px; background: var(--bb-surface-2); }
+.comfy-environment-actions button:last-child { background: var(--bb-blue); color: white; border-color: transparent; }
+.comfy-environment-actions button:disabled { opacity: .45; cursor: not-allowed; }
+
+.comfy-generation-progress { display: grid; gap: 7px; margin: 10px 0; color: var(--bb-muted); font-size: 12px; }
+/* Adapted from dylanharriscameron / ancient-falcon-18 (Uiverse), MIT.
+   https://uiverse.io/dylanharriscameron/ancient-falcon-18
+   See ComfyVideoProgress.LICENSE.txt. Width follows service progress; no loop animation. */
+.comfy-progress-bar { position: relative; display: grid; place-items: center; height: 18px; box-sizing: border-box; overflow: hidden; border: 1px solid #006dfe; border-radius: 10px; background: #f9f9f9; }
+.comfy-progress-fill { position: absolute; inset: 0 auto 0 0; height: 100%; border-radius: inherit; background: repeating-linear-gradient(45deg, #0031f2 0 30px, #006dfe 0 40px); }
+.comfy-progress-percent { position: relative; padding: 0 5px; border-radius: 6px; background: #f9f9f9; color: #0031a8; font-size: 11px; line-height: 14px; font-variant-numeric: tabular-nums; pointer-events: none; }

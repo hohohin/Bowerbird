@@ -38,6 +38,7 @@ export interface WorkflowNode {
   outputs: Record<string, WorkflowValue>;
   outputPorts: WorkflowPort[];
   trigger: boolean;
+  triggerCount?: number;
   sessionNodeIds?: string[];
   activeSessionNodeId?: string | null;
   resultNodeIds?: string[];
@@ -50,6 +51,9 @@ export interface WorkflowNode {
 }
 export interface WorkflowAgentEvent { id: string; kind: "message" | "tool"; text: string; status: string; at: number }
 export interface WorkflowStep {
+  comfyProgress?: import("./comfyVideo").ComfyVideoProgress;
+  comfyCancelled?: boolean;
+  comfyStopping?: boolean;
   agentInput?: { prompt: string; source: string; assetIds: string[]; visualProfile?: import("./types").VisualProfileDetail | null };
   agentOutputs?: Record<string, WorkflowValue>;
   agentProgress?: { text: string; at: number }[];
@@ -83,6 +87,9 @@ export interface WorkflowRun {
   cellTexts?: Record<string, string>;
   cellValues?: Record<string, WorkflowValue>;
   loop?: WorkflowLoop;
+  /** Durable completion events, consumed together with the next execution and counter. */
+  triggerQueue?: string[];
+  completionRecoveryOnly?: boolean;
 }
 export interface WorkflowLoopItem { text: string; assetIds: string[]; table?: ContentTable }
 export interface WorkflowLoop {
@@ -102,8 +109,9 @@ export const WORKFLOW_SKILLS = [
 ] as const;
 
 export function workflowInputs(node: WorkflowNode): WorkflowPort[] {
-  if (node.kind === "trigger" || node.textSource) return [];
-  if (node.kind === "comfy-video") return [{ id: "text", label: "文本", type: "text" }, { id: "first-frame", label: "首帧", type: "image" }, { id: "last-frame", label: "尾帧（可选）", type: "image" }];
+  if (node.kind === "trigger") return [{ id: "completion", label: "完成触发", type: "signal" }];
+  if (node.textSource) return [];
+  if (node.kind === "comfy-video") return [{ id: "first-frame", label: "首帧", type: "image" }, { id: "last-frame", label: "尾帧（可选）", type: "image" }, { id: "text", label: "文本", type: "text" }];
   if (node.kind === "loop") return node.loopMode === "rows" ? [{ id: "text", label: "内容行", type: "text" }] : [{ id: "image", label: "图片列表", type: "image" }];
   if (node.kind === "instruction") return [{ id: "image", label: "图片", type: "image" }];
   const ports: WorkflowPort[] = [{ id: "text", label: "文本", type: "text" }, { id: "image", label: node.kind === "generation" && node.generation?.media === "video" ? "参考素材" : "图片", type: "image" }];
@@ -140,7 +148,7 @@ export function workflowTitle(node: WorkflowNode): string {
 }
 export function newWorkflowNode(kind: WorkflowKind, x: number, y: number, provider: string): WorkflowNode {
   return { id: crypto.randomUUID(), kind, x, y, action: "describe", skill: "image-edit", prompt: "", ratio: null,
-    provider, inputs: {}, outputs: {}, outputPorts: [], trigger: false };
+    provider, inputs: {}, outputs: {}, outputPorts: [], trigger: false, ...(kind === "trigger" ? { triggerCount: 1 } : {}) };
 }
 
 export function workflowConnectionError(nodes: WorkflowNode[], fromId: string, portId: string, toId: string, inputId: string): string | null {
@@ -148,6 +156,7 @@ export function workflowConnectionError(nodes: WorkflowNode[], fromId: string, p
   if (!from || !to) return "连接的卡片已不存在";
   if (fromId === toId) return "不能连接卡片自身";
   const output = workflowOutputs(from).find(port => port.id === portId);
+  if (to.kind === "trigger" && inputId === "completion") return output && from.kind !== "trigger" && !from.textSource ? null : "请连接执行卡片的输出端口";
   const input = inputId === "signal" && to.kind !== "trigger" && to.kind !== "planner" ? { type: "signal" } : workflowInputs(to).find(port => port.id === inputId);
   if (!output || !input || input.type !== output.type) return "只能连接相同类型的端口";
   const visited = new Set<string>();
@@ -155,7 +164,7 @@ export function workflowConnectionError(nodes: WorkflowNode[], fromId: string, p
     if (id === fromId) return true;
     if (visited.has(id)) return false;
     visited.add(id);
-    return nodes.some(node => Object.values(node.inputs).flat().some(binding => workflowInputProducers(nodes, binding).includes(id)) && visit(node.id));
+    return nodes.some(node => Object.values(workflowExecutionInputs(node)).flat().some(binding => workflowInputProducers(nodes, binding).includes(id)) && visit(node.id));
   };
   return visit(toId) ? "这条连接会形成循环" : null;
 }
@@ -180,7 +189,7 @@ export function assertWorkflowAcyclic(nodes: WorkflowNode[], startId: string): v
     if (visiting.has(id)) throw new Error("这条连接会形成循环");
     if (visited.has(id)) return;
     visiting.add(id);
-    for (const input of Object.values(byId.get(id)?.inputs ?? {}).flat()) {
+    for (const input of Object.values(byId.has(id) ? workflowExecutionInputs(byId.get(id)!) : {}).flat()) {
       for (const producer of workflowInputProducers(nodes, input)) visit(producer);
     }
     visiting.delete(id);
@@ -242,12 +251,33 @@ export function workflowOrder(nodes: WorkflowNode[], startId: string, single = f
 /** A text-card start reads current cells without rerunning their producers. */
 export function workflowExecutionNodes(nodes: WorkflowNode[], startId: string): WorkflowNode[] {
   nodes = nodes.filter(node => node.kind !== "planner");
-  nodes = nodes.map(generationInputNode);
+  nodes = nodes.map(node => generationInputNode({ ...node, inputs: workflowExecutionInputs(node) }));
   const start = nodes.find(node => node.id === startId);
   const sources = nodes.filter(node => node.textSource && (node.id === startId || (start?.kind === "trigger" && node.inputs.signal?.some(input => input.nodeId === startId))));
   if (!sources.length) return nodes;
   return nodes.map(node => ({ ...node, inputs: Object.fromEntries(Object.entries(node.inputs).map(([port, inputs]) =>
     [port, inputs.map(input => { const source = sources.find(source => source.textSource === input.canvasNodeId); return source ? { ...input, canvasNodeId: undefined, cellId: undefined, nodeId: source.id, portId: input.cellId } : input; })])) }));
+}
+
+/** Completion wires are events, never data prerequisites or an ordinary graph cycle. */
+function workflowExecutionInputs(node: WorkflowNode): WorkflowNode["inputs"] {
+  return node.kind === "trigger" ? {} : node.inputs;
+}
+export function workflowCompletionTriggers(nodes: WorkflowNode[], sourceId: string): WorkflowNode[] {
+  return nodes.filter(node => node.kind === "trigger" && (node.triggerCount ?? 0) > 0
+    && node.inputs.completion?.some(input => input.nodeId === sourceId));
+}
+/** Reserve all possible repeat targets before running; unrelated runs cannot race a repeat. */
+export function workflowTriggerScope(nodes: WorkflowNode[], order: string[]): string[] {
+  const scope = new Set(order);
+  const expanded = new Set<string>();
+  const uncached = nodes.map(node => ({ ...node, outputs: {} }));
+  for (const id of scope) for (const trigger of workflowCompletionTriggers(nodes, id)) {
+    if (expanded.has(trigger.id)) continue;
+    expanded.add(trigger.id);
+    for (const target of workflowOrder(uncached, trigger.id)) scope.add(target);
+  }
+  return [...scope];
 }
 
 export const workflowReferenceToken = (id: string) => `@[${id}]`;
@@ -461,14 +491,19 @@ export function workflowAccessConflict(readsAndWrites: string[], writes: string[
   return writes.some(id => otherAccess.includes(id)) || otherWrites.some(id => readsAndWrites.includes(id));
 }
 export function workflowNodeRun(document: CanvasWorkflow, nodeId: string): WorkflowRun | undefined {
-  const runs = workflowRuns(document).filter(run => run.order.includes(nodeId));
+  const runs = workflowRuns(document).filter(run => run.steps[nodeId] || workflowRunActive(run) && run.lockedNodeIds?.includes(nodeId));
   return runs.find(workflowRunActive) ?? runs[runs.length - 1];
 }
 export function workflowActiveSession(node: WorkflowNode): string | null {
   return node.activeSessionNodeId !== undefined ? node.activeSessionNodeId : node.sessionNodeIds?.[node.sessionNodeIds.length - 1] ?? null;
 }
 export const WORKFLOW_CARD_WIDTH = 320;
+export function workflowCardWidth(node: Pick<WorkflowNode, "kind">) {
+  return node.kind === "comfy-video" ? WORKFLOW_CARD_WIDTH * 1.3 : WORKFLOW_CARD_WIDTH;
+}
 export function workflowPortY(node: WorkflowNode, side: "input" | "output", portId: string): number {
   const ports = side === "input" ? workflowInputs(node) : workflowOutputs(node);
-  return node.y + (node.kind === "comfy-video" ? 62 : 94) + Math.max(0, ports.findIndex(port => port.id === portId)) * (node.kind === "comfy-video" ? 24 : 30);
+  // H3: two 4:3 frame previews above the prompt (34px card inset, 8px gap, 10px row gap).
+  const frameRowOffset = node.kind === "comfy-video" ? (workflowCardWidth(node) - 42) * 3 / 8 + 10 : 0;
+  return node.y + frameRowOffset + (node.kind === "comfy-video" ? 74 : 94) + Math.max(0, ports.findIndex(port => port.id === portId)) * (node.kind === "comfy-video" ? 24 : 30);
 }
