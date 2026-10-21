@@ -1,6 +1,6 @@
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState } from "react";
-import { globalClassification, localClassification, projectClassification, type ClassificationLabel, type LocalClassificationStatus } from "../lib/localClassification";
+import { globalClassification, localClassification, mergeClassificationProgress, projectClassification, type ClassificationLabel, type LocalClassificationStatus } from "../lib/localClassification";
 import { folderClassification } from "../lib/folderClassification";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Plus } from "lucide-react";
@@ -100,6 +100,9 @@ function ClassificationSettings({ onClose, folder, globalScope, globalPaths, sel
   const [confirmRescan, setConfirmRescan] = useState(false);
   const [notice, setNotice] = useState("");
   const lock = useRef(false);
+  const statusRead = useRef(0);
+  const progressVersion = useRef(0);
+  const latestProgress = useRef<LocalClassificationStatus | null>(null);
   const projectName = useStore(s => s.projects.find(p => p.id === projectId)?.name);
   const projectAssets = useStore(s => s.assets);
   const librarySelected = useStore((s) => s.selectedIds);
@@ -107,33 +110,41 @@ function ClassificationSettings({ onClose, folder, globalScope, globalPaths, sel
   const setSmartFilter = useStore((s) => s.setSmartFilter);
 
   async function refresh() {
-    const [nextStatus, nextLabels] = await Promise.all([local.status(), local.labels()]);
-    setStatus(nextStatus);
-    setLabels(nextLabels);
+    const request = ++statusRead.current, version = progressVersion.current;
+    try {
+      const [nextStatus, nextLabels] = await Promise.all([local.status(), local.labels()]);
+      if (request !== statusRead.current) return;
+      // A slow poll must not rewind a newer completion event or reset its animation.
+      setStatus(version !== progressVersion.current && latestProgress.current
+        ? mergeClassificationProgress(nextStatus, latestProgress.current) : nextStatus);
+      setLabels(nextLabels);
+    } catch (error) { if (request === statusRead.current) throw error; }
   }
   useEffect(() => {
     let active = true;
     let fetching = false;
     const poll = async () => {
-      if (fetching) return;
+      if (fetching || lock.current) return;
       fetching = true;
       try {
-        const [nextStatus, nextLabels] = await Promise.all([local.status(), local.labels()]);
-        if (active) { setStatus(nextStatus); setLabels(nextLabels); }
+        await refresh();
       } catch (e) { if (active) setError(String(e)); }
       finally { fetching = false; }
     };
     void poll();
     const unlisten = listen<LocalClassificationStatus>("local-classification://progress", event => {
-      if (active) setStatus(event.payload);
+      if (!active) return;
+      progressVersion.current++;
+      latestProgress.current = event.payload;
+      setStatus(current => current ? mergeClassificationProgress(current, event.payload) : current);
     }).catch(() => () => {});
     const timer = window.setInterval(() => void poll(), 1000);
-    return () => { active = false; window.clearInterval(timer); void unlisten.then(stop => stop()); };
+    return () => { active = false; statusRead.current++; window.clearInterval(timer); void unlisten.then(stop => stop()); };
   }, []);
 
   async function action(fn: () => Promise<unknown>) {
     if (lock.current) return;
-    lock.current = true; setWorking(true); setError("");
+    lock.current = true; statusRead.current++; setWorking(true); setError("");
     try { await fn(); await refresh(); }
     catch (e) { setError(String(e)); }
     finally { lock.current = false; setWorking(false); }
@@ -217,6 +228,15 @@ function ClassificationSettings({ onClose, folder, globalScope, globalPaths, sel
         {status?.busy && !sameTarget && <div className="space-y-2"><p role="status">另一分类范围的任务正在运行，完成或停止后可处理当前目标。</p><button className="app-modal-button" disabled={working} onClick={() => void action(() => local.stop())}>停止当前任务</button></div>}
       </section>}
       {error && <p role="alert" className="text-red-400">{error}</p>}
+      {!folder && !globalScope && <section aria-label="新素材自动分类" className="rounded-lg border border-edge p-3 space-y-2">
+        <label className="flex items-center gap-2">
+          <input type="checkbox" checked={status?.enabled ?? false} disabled={!status || working || (!status.enabled && status.busy)}
+            onChange={(e) => { const enabled = e.target.checked; void action(async () => { if (enabled) await ensureCloud(); await localClassification.enable(enabled); }); }} />
+          自动处理新素材
+        </label>
+        <p className="text-xs text-muted">全库设置：自动分类新采集、导入及生成的图片，也会补处理库内尚未分类的图片。</p>
+        <p className="text-xs text-muted">使用云端分类，累计 5 张图片获得标签扣 1 积分，无法判断或请求失败不计数。</p>
+      </section>}
       <ClassificationPlayback status={showProgress ? status : null} />
       {import.meta.env.DEV && showProgress && status && <ClassificationDiagnostics status={status} />}
       {view === "classification" && <section aria-label="云端分类" className="rounded-lg border border-edge p-4 space-y-3">
@@ -226,11 +246,6 @@ function ClassificationSettings({ onClose, folder, globalScope, globalPaths, sel
           <p className="text-xs text-muted">累计 5 张图片获得标签扣 1 积分，未满 5 张跨批次累计；无法判断或请求失败不计数。</p>
         </div>
         {runControls}
-        {!folder && !globalScope && !projectId && <label className="flex items-center gap-2">
-          <input type="checkbox" checked={status?.enabled ?? false} disabled={!status || working || (!status.enabled && status.busy)}
-            onChange={(e) => { const enabled = e.target.checked; void action(async () => { if (enabled) await ensureCloud(); await local.enable(enabled); }); }} />
-          自动处理新素材
-        </label>}
         {folder && <p className="text-xs text-muted">按需扫描当前文件夹，关闭面板后任务继续。</p>}
         {globalScope && <p className="text-xs text-muted">按需扫描已添加位置，离线或不可读文件会跳过并显示原因。</p>}
         {showProgress && <>

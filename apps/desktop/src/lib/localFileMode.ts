@@ -11,6 +11,8 @@ export const useLocalFileMode = create<{
   source: LibrarySource;
   views: Record<LibrarySource, CatalogKind>;
   media: LibraryMedia;
+  generatedFilter: "source:generated" | "source:!generated" | null;
+  setGeneratedFilter: (filter: "source:generated" | "source:!generated" | null) => void;
   videoViews: Record<LibrarySource, CatalogKind>;
   setMedia: (media: LibraryMedia) => void;
   globalRequest: number;
@@ -29,6 +31,8 @@ export const useLocalFileMode = create<{
 }>((set, get) => ({
   open: false, query: "", source: "global", views: { global: "tags", project: "tags" },
   media: "images", videoViews: { global: "tags", project: "tags" },
+  generatedFilter: null,
+  setGeneratedFilter: generatedFilter => set({ generatedFilter }),
   navigationHost: null, globalRequest: 0, mode: "tags", viewTransition: null,
   setMode: mode => set({ mode }),
   openSource: source => set(state => ({ open: true, source, mode: (state.media === "images" ? state.views : state.videoViews)[source], query: "", viewTransition: null })),

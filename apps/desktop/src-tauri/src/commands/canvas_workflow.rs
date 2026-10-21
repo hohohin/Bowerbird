@@ -97,6 +97,13 @@ fn validate(document: &Value) -> AppResult<HashSet<String>> {
             || node["outputs"].as_object().is_none_or(|outputs| !outputs.is_empty()) || node["outputPorts"].as_array().is_none_or(|ports| !ports.is_empty())) { return Err(invalid()); }
         if node["kind"] == "trigger" && inputs.keys().any(|key| key != "completion") { return Err(invalid()); }
         if node.get("triggerCount").is_some_and(|count| node["kind"] != "trigger" || count.as_u64().is_none_or(|count| count > 9999)) { return Err(invalid()); }
+        if let Some(seen) = node.get("completionSeen") {
+            if node["kind"] != "trigger" { return Err(invalid()); }
+            let mut unique = HashSet::new();
+            for session in seen.as_array().ok_or_else(invalid)? {
+                if !unique.insert(session.as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?) { return Err(invalid()); }
+            }
+        }
         if node["kind"] == "loop" {
             if node.get("loopMode").is_some_and(|mode| !matches!(mode.as_str(), Some("images" | "rows"))) { return Err(invalid()); }
             if node.get("loopStartItem").is_some_and(|value| value.as_u64().is_none_or(|item| !(1..=100).contains(&item))) { return Err(invalid()); }
@@ -137,6 +144,11 @@ fn validate(document: &Value) -> AppResult<HashSet<String>> {
             if port == "completion" {
                 if node["kind"] != "trigger" { return Err(invalid()); }
                 for binding in bindings.as_array().ok_or_else(invalid)? {
+                    if binding.get("canvasNodeId").is_some() {
+                        if binding["canvasNodeId"].as_str().is_none_or(str::is_empty) || binding["cellId"] != "image"
+                            || binding.as_object().is_none_or(|value| value.len() != 2) { return Err(invalid()); }
+                        continue;
+                    }
                     let producer = nodes.iter().find(|source| source["id"] == binding["nodeId"]).ok_or_else(invalid)?;
                     if matches!(producer["kind"].as_str(), Some("trigger" | "planner")) || producer.get("textSource").is_some()
                         || !matches!(binding["portId"].as_str(), Some("text" | "image" | "visual-profile" | "iteration"))
@@ -484,6 +496,49 @@ mod tests {
         let mut missing = doc.clone(); missing["nodes"][0]["inputs"]["completion"][0]["nodeId"] = json!("missing"); assert!(validate(&missing).is_err());
         let mut self_event = doc.clone(); self_event["nodes"][0]["inputs"]["completion"][0]["nodeId"] = json!("switch"); assert!(validate(&self_event).is_err());
         let mut data_cycle = doc.clone(); data_cycle["nodes"][1]["inputs"]["text"] = json!([{"nodeId":"video","portId":"text"}]); assert!(validate(&data_cycle).is_err());
+    }
+    #[test]
+    fn queued_completion_requires_expanded_execution_scope_before_next_wave() {
+        let mut switch = node("switch", json!({"completion":[{"nodeId":"video","portId":"image"}]}));
+        switch["kind"] = json!("trigger"); switch["triggerCount"] = json!(1);
+        let mut video = node("video", json!({"signal":[{"nodeId":"switch","portId":"signal"}]}));
+        video["kind"] = json!("comfy-video");
+        // The trigger was armed while this source was running, so it was not initially reserved.
+        let mut doc = json!({"schema_version":1,"nodes":[switch,video],"run":{
+            "id":"run","threadId":"thread","startId":"video","status":"waiting","order":["video"],
+            "steps":{"video":{"status":"done"}},"triggerQueue":["switch"],"lockedNodeIds":["video"],"writeNodeIds":["video"]}});
+        let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();
+        db.conn.lock().unwrap().execute("INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1)", []).unwrap();
+        db.workflow_save("p", 0, doc.clone()).unwrap();
+        doc["nodes"][0]["triggerCount"] = json!(0);
+        doc["run"]["startId"] = json!("switch"); doc["run"]["order"] = json!(["switch","video"]);
+        doc["run"]["triggerQueue"] = json!([]);
+        doc["run"]["steps"] = json!({"switch":{"status":"pending"},"video":{"status":"pending"}});
+        assert!(db.workflow_save("p", 1, doc.clone()).is_err());
+        assert_eq!(db.workflow_get("p").unwrap().revision, 1);
+        doc["run"]["lockedNodeIds"] = json!(["video","switch"]);
+        doc["run"]["writeNodeIds"] = json!(["video","switch"]);
+        db.workflow_save("p", 1, doc.clone()).unwrap();
+        assert_eq!(db.workflow_get("p").unwrap().document, doc);
+    }
+    #[test]
+    fn completion_trigger_accepts_native_sessions_and_persists_deduplication() {
+        let mut switch = node("switch", json!({"completion":[{"canvasNodeId":"session","cellId":"image"}]}));
+        switch["kind"] = json!("trigger"); switch["triggerCount"] = json!(1);
+        switch["completionSeen"] = json!(["previous-turn"]);
+        let doc = json!({"schema_version":1,"nodes":[switch],"run":null});
+        assert!(validate(&doc).is_ok());
+        let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();
+        db.conn.lock().unwrap().execute("INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1)", []).unwrap();
+        db.workflow_save("p", 0, doc.clone()).unwrap();
+        assert_eq!(db.workflow_get("p").unwrap().document, doc);
+        for binding in [json!({"canvasNodeId":"","cellId":"image"}), json!({"canvasNodeId":"session","cellId":"text"}),
+            json!({"assetId":"asset"}), json!({"canvasNodeId":"session","cellId":"image","nodeId":"switch"})] {
+            let mut bad = doc.clone(); bad["nodes"][0]["inputs"]["completion"] = json!([binding]); assert!(validate(&bad).is_err());
+        }
+        for seen in [json!("session"), json!([""]), json!(["turn","turn"]), json!([1])] {
+            let mut bad = doc.clone(); bad["nodes"][0]["completionSeen"] = seen; assert!(validate(&bad).is_err());
+        }
     }
     #[test]
     fn trigger_signal_targets_cards_without_data_ports() {

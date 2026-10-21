@@ -1,16 +1,17 @@
 import { useEffect, useRef, useState, type DragEventHandler } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { Folder, Image, Play } from "lucide-react";
+import { Folder, Image, Play, Sparkles } from "lucide-react";
 import { externalFiles, type LocalFileEntry } from "../lib/externalFiles";
 import { createFilePreviewQueue } from "../lib/filePreviewQueue";
 import { isVideoPath } from "../lib/videoGeneration";
 const previews = createFilePreviewQueue(externalFiles.preview);
-export function FileMediaCard({ entry, selected, revision, labels, onSelect, onActivate, onOpen, onContextMenu, aspectRatio, assetId, onDragStart, onDragEnd }: {
+export function FileMediaCard({ entry, selected, revision, labels, onSelect, onActivate, onOpen, onContextMenu, aspectRatio, assetId, generated = false, onDragStart, onDragEnd }: {
   entry: LocalFileEntry; selected: boolean; revision: number; labels: string[];
   onSelect: (additive: boolean, range: boolean) => void; onOpen: () => void;
   onActivate?: () => void;
   onContextMenu: (x: number, y: number) => void;
   aspectRatio?: number;
+  generated?: boolean;
   assetId?: string; onDragStart?: DragEventHandler<HTMLButtonElement>; onDragEnd?: DragEventHandler<HTMLButtonElement>;
 }) {
   const ref = useRef<HTMLButtonElement>(null);
@@ -61,6 +62,7 @@ export function FileMediaCard({ entry, selected, revision, labels, onSelect, onA
     <span className={`folder-media-preview${entry.directory ? " is-folder" : ""}`} style={aspectRatio ? { aspectRatio, minHeight: 0 } : undefined}>
       {entry.directory ? <Folder size={52} strokeWidth={1.3} /> : preview ? <img src={convertFileSrc(preview)} style={aspectRatio ? { position: "absolute", inset: 0, height: "100%", objectFit: "contain" } : undefined} alt="" draggable={false} loading="lazy" decoding="async" onError={() => { previews.forget(previewKey); setFailedPreview(preview); setPreview(null); }} /> : isVideoPath(entry.path) ? <Play size={32} /> : <Image size={32} />}
       {!entry.directory && isVideoPath(entry.path) && <span className="folder-media-kind"><Play size={11} />视频</span>}
+      {!entry.directory && generated && <span className="folder-media-generated" title="生成图" aria-label="生成图"><Sparkles size={12} aria-hidden="true"/></span>}
     </span>
     {entry.directory && <span className="folder-media-name">{entry.name}</span>}
   </button>;

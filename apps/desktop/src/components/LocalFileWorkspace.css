@@ -57,6 +57,7 @@
 .folder-media-preview.is-folder { aspect-ratio: 1.7; color: var(--bb-muted); background: var(--bb-surface); }
 .folder-media-preview img { display: block; width: 100%; height: auto; }
 .folder-media-kind { position: absolute; bottom: 8px; right: 8px; display: flex; align-items: center; gap: 4px; font-size: 10px; color: white; background: #0009; border-radius: 5px; padding: 3px 5px; }
+.folder-media-generated { position:absolute; left:4px; top:4px; display:grid; place-items:center; width:22px; height:20px; border-radius:999px; background:#000b; color:#fff; pointer-events:none; }
 .folder-media-name { display: block; padding: 0 12px 12px; font-size: 12px; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .folder-error { margin: 8px 16px; font-size: 12px; color: var(--bb-danger-strong); overflow-wrap: anywhere; }
 .folder-empty { text-align: center; padding: 48px 24px; font-size: 13px; color: var(--bb-muted); }

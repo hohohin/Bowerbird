@@ -47,6 +47,13 @@ export interface ClassificationDiagnostic {
   finished: boolean;
   steps: { stage: string; at_ms: number; detail: string }[];
 }
+
+// Progress events contain task state; these fields are populated only by the status RPC.
+export function mergeClassificationProgress(snapshot: LocalClassificationStatus, progress: LocalClassificationStatus): LocalClassificationStatus {
+  return { ...progress, enabled: snapshot.enabled, supported: snapshot.supported, installed: snapshot.installed,
+    vector_supported: snapshot.vector_supported, vector_installed: snapshot.vector_installed,
+    model: progress.model || snapshot.model, download_total: progress.download_total || snapshot.download_total };
+}
 export interface ClassificationResult {
   sequence: number;
   asset: NonNullable<LocalClassificationStatus["current_asset"]>;

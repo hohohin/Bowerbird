@@ -13,7 +13,7 @@ import { canvasAssetMediaPath } from "../lib/creativeCanvas";
 import { expandCanvasSections, readCanvasNote } from "../lib/canvasNotes";
 import { contentInputPort } from "../lib/canvasContentInput";
 import { contentTableRows } from "../lib/contentTable";
-import { canvasInputValue, canvasWorkflowInputState, canvasSessionImages, hiddenWorkflowSessionIds } from "../lib/canvasSessionOutputs";
+import { canvasInputValue, canvasWorkflowInputState, canvasSessionImages, hiddenWorkflowSessionIds, completedCanvasSessions } from "../lib/canvasSessionOutputs";
 import { useStore } from "../store";
 import { getDragAssets } from "../lib/dragPayload";
 import { notifyError, notifySuccess } from "../lib/notify";
@@ -278,8 +278,10 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
     const node = nodes.find(node => node.id === toId)!;
     const port = workflowInputs(node).find(port => port.id === inputId);
     const producers = workflowInputProducers(nodes, source);
+    const sessionCompletion = node.kind === "trigger" && inputId === "completion" && source.cellId === "image"
+      && graphNodes.some(card => card.id === source.canvasNodeId && card.kind === "prompt" && card.hiddenAt == null);
     const error = producers.map(producer => workflowConnectionError(nodes, producer, source.portId ?? source.type, toId, inputId)).find(Boolean)
-      ?? (node.kind === "trigger" && inputId === "completion" ? (!source.nodeId ? "请连接执行卡片的输出端口" : null) : port?.type !== source.type ? "只能连接相同类型的端口" : null);
+      ?? (node.kind === "trigger" && inputId === "completion" ? (!source.nodeId && !sessionCompletion ? "请连接执行卡片或绘画会话的输出端口" : null) : port?.type !== source.type ? "只能连接相同类型的端口" : null);
     if (error) { notifyError(null, error); return; }
     const { type: _type, ...binding } = source;
     const current = node.inputs[inputId] ?? [];
@@ -289,7 +291,8 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
     const missing = (node.kind === "generation" || node.kind === "agent")
       ? current.filter(input => canvasWorkflowInputState(input, graphNodes, nodes) === "missing").sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0))[0] : undefined;
     const connected = missing ? current.map(input => input === missing ? { ...binding, slot: missing.slot } : input) : [...current, binding];
-    patch(toId, { inputs: { ...node.inputs, [inputId]: (node.kind === "comfy-video" && inputId !== "text") || (node.kind === "instruction" && node.action !== "describe") || (inputId === "visual-profile" || node.kind === "loop" && node.loopMode === "rows") ? [binding] : connected } });
+    patch(toId, { ...(sessionCompletion ? { completionSeen: [...new Set([...(node.completionSeen ?? []), ...completedCanvasSessions([binding], graphNodes, useStore.getState().genJobs)])] } : {}),
+      inputs: { ...node.inputs, [inputId]: (node.kind === "comfy-video" && inputId !== "text") || (node.kind === "instruction" && node.action !== "describe") || (inputId === "visual-profile" || node.kind === "loop" && node.loopMode === "rows") ? [binding] : connected } });
     setConnection(null); connectionRef.current = null;
   }
   function connectSignal(targetId: string, native = false) {
@@ -771,7 +774,8 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
             : node.kind !== "planner" && node.kind !== "loop" && <p className="workflow-hint">{node.kind === "agent" ? (node.agentTransport !== "cloud" ? `${node.agentTransport === "codex-cli" ? "Codex CLI" : "本机 Agent DS"} · 自动接收已连接图文，@ 指定用途 · 每卡独立会话` : "Cloud DSH · 按 @ 引用原文，再描述修改要求") : node.kind === "trigger" ? <>上游成功完成后，扣 1 次并触发下游；为 0 时停止自动触发。</> : <><ImagePlus size={14} />{node.kind === "visual-profile" ? "图片可选 · 规范只影响连接的下游" : "拖入图片，或连接左侧端口"}</>}</p>}
           {node.kind === "trigger" && <label className="workflow-trigger-count">剩余触发次数
             <input type="number" min={0} max={9999} step={1} value={node.triggerCount ?? 0} disabled={busy}
-              onChange={event => { const value = event.currentTarget.valueAsNumber; if (Number.isInteger(value) && value >= 0 && value <= 9999) patch(node.id, { triggerCount: value }, false); }} />
+              onChange={event => { const value = event.currentTarget.valueAsNumber; if (Number.isInteger(value) && value >= 0 && value <= 9999) patch(node.id, { triggerCount: value,
+                ...(value > (node.triggerCount ?? 0) ? { completionSeen: [...new Set([...(node.completionSeen ?? []), ...completedCanvasSessions(node.inputs.completion ?? [], graphNodes, useStore.getState().genJobs)])] } : {}) }, false); }} />
           </label>}
           {node.kind === "visual-profile" && <>
             {!node.profileId && <p className="workflow-hint">提炼 2 积分 · 图片分析另用账号额度 · 保存后继续</p>}
@@ -808,7 +812,8 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
             <span>{node.kind === "comfy-video" && run?.status === "stopped" ? step?.comfyCancelled ? "已取消" : "已停止" : node.kind === "loop" && run ? ({ running: "运行中", waiting: "等待继续", done: "已完成", stopped: "已停止", failed: "失败" }[run.status]) : node.kind === "trigger" && busy ? run?.status === "waiting" ? "等待继续" : "运行中" : step?.status === "pending" && run?.status === "failed" ? "因上游失败未执行" : step?.status === "pending" && run?.status === "stopped" ? "已停止，未执行" : step?.status === "done" && step.generationSubmission === "submitted" ? "已提交生成" : step ? statusLabels[step.status] : node.trigger ? "工作流起点" : "未运行"}</span>
             {busy && run?.order.includes(node.id) ? <>
               {deliveryRunIds.has(run.id) && node.id === run.startId && <button onClick={() => handle(controller.continue(run.id))}>重试写入内容卡</button>}
-              {run?.status === "waiting" && !Object.values(run.steps).some(step => step.status === "failed") && step?.status !== "done" && run.order.find(id => run!.steps[id].status !== "done") === node.id
+              {run?.status === "waiting" && !Object.values(run.steps).some(step => step.status === "failed")
+                && (run.order.find(id => run!.steps[id].status !== "done") ?? (run.triggerQueue?.length ? run.startId : null)) === node.id
                 && <button aria-label="继续工作流" onClick={() => handle(controller.continue(run?.id))}><Play size={13} />继续</button>}
               <button disabled={!!step?.comfyStopping} aria-label="停止工作流" title={node.kind === "comfy-video" ? "取消排队或中断本次生成" : "停止工作流"} onClick={() => handle(controller.stop(run?.id))}><Square size={12} /></button>
             </> : <button disabled={busy || loopStartInvalid} aria-label={node.kind === "loop" ? "开始循环" : node.kind === "trigger" ? "触发下游" : "运行此卡片"} onClick={() => handle(controller.start(node.id, node.kind !== "trigger" && node.kind !== "loop"))}><Play size={13} />{node.kind === "loop" ? "开始循环" : node.kind === "trigger" ? "触发下游" : "运行此卡片"}</button>}

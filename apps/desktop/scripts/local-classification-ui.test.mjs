@@ -252,6 +252,27 @@ try {
   await dialog.getByRole("button", {name:"进行分类",exact:true}).click();
   await dialog.getByRole("alert").waitFor();
   assert.equal(await page.evaluate(() => window.calls.filter(c => c.command === "local_classification_start").length),countBeforeFailure);
+  for (const scope of ["labels", "project"]) {
+    await page.goto(`http://127.0.0.1:1456/scripts/fixtures/local-classification/preview.html?${scope}`);
+    const settings = page.getByRole("dialog", {name:"管理分类数据",exact:true});
+    const automatic = settings.getByRole("checkbox", {name:"自动处理新素材",exact:true});
+    await automatic.waitFor();
+    assert.equal(await settings.getByText(/^全库设置：/).count(),1);
+    assert.equal(await page.evaluate(() => window.calls.some(c => c.command === "update_settings" || c.command === "local_classification_enable")),false,"opening management does not enable automatic classification");
+    await automatic.check();
+    assert.equal(await page.evaluate(() => window.classificationStatus.enabled),true);
+    assert.deepEqual(await page.evaluate(() => window.calls.filter(c => c.command === "local_classification_enable").at(-1).args),{enabled:true},"project panel changes the explicit global setting");
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", {name:"打开自动分类",exact:true}).click();
+    await page.waitForFunction(() => document.querySelector('section[aria-label="新素材自动分类"] input')?.checked);
+    await automatic.uncheck();
+    assert.equal(await page.evaluate(() => window.classificationStatus.enabled),false);
+    await page.evaluate(() => window.failure = "local_classification_enable");
+    await automatic.click();
+    await settings.getByRole("alert").waitFor();
+    assert.equal(await automatic.isChecked(),false,"failed saving does not leave the switch enabled");
+    await page.evaluate(() => window.failure = null);
+  }
   await page.goto("http://127.0.0.1:1456/scripts/fixtures/local-classification/preview.html?project");
   const management = page.getByRole("dialog", {name:"管理分类数据",exact:true});
   const classify = management.getByRole("button", {name:"进行分类",exact:true});
@@ -290,6 +311,7 @@ try {
   assert.equal(await classify.isVisible(),true);
   for (const scope of ["global","folder"]) {
     await page.goto(`http://127.0.0.1:1456/scripts/fixtures/local-classification/preview.html?${scope}`);
+    assert.equal(await management.getByRole("checkbox", {name:"自动处理新素材",exact:true}).count(),0,"directory classification stays on demand");
     const command = `${scope}_classification_start`;
     await classify.click();
     assert.equal(await page.evaluate(command => window.calls.find(c => c.command === command).args.pendingOnly,command),true);

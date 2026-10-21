@@ -236,7 +236,7 @@ try {
   await page.keyboard.press('Tab'); await page.waitForTimeout(150);
   await page.keyboard.press('Tab'); await page.waitForTimeout(150);
   await page.keyboard.press('Tab');
-  assert.equal(await sources.locator('.library-tab-view-label').innerText(),'标签分类','rapid input replaces the previous animation');
+  assert.equal(await sources.locator('.library-catalog-layer:not([data-outgoing]) .library-tab-view-label').textContent(),'标签分类','rapid input replaces the previous animation');
   await page.waitForTimeout(800);
   assert.equal(await sources.locator('.library-tab-feedback').count(),1,'old timeout does not clear newest feedback');
   await page.waitForTimeout(300);

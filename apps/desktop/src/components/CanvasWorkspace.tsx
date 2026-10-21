@@ -81,7 +81,7 @@ import {
   Ungroup,
 } from "lucide-react";
 import { LibrarySourceTabs } from "./LibrarySourceTabs";
-import { CategorizedLibrary } from "./CategorizedLibrary";
+import { LibraryCatalogTransition } from "./LibraryCatalogTransition";
 import { Lightbox } from "./Lightbox";
 import { videoTime, type VideoFrame } from "../lib/videoFrame";
 import type { VideoTrimRequest } from "../lib/videoTrim";
@@ -3982,7 +3982,7 @@ export function CanvasWorkspace({
         }}>
         <div id={`${sourcePanelId}-content`} className="canvas-source-content">
           {fileMode === "tags" || fileMode === "collections"
-            ? <CategorizedLibrary key={`${projectId}:${sourceScope}:${fileMode}:${libraryMedia}`} kind={fileMode} media={libraryMedia} projectId={projectId}
+            ? <LibraryCatalogTransition key={`${projectId}:${sourceScope}:${libraryMedia}`} kind={fileMode} media={libraryMedia} projectId={projectId}
                 projectScope={sourceScope === "project"} navigation={sourceNavigation} onClose={closeSource} onAssetsChange={setCatalogAssets}/>
             : <LocalFileWorkspace navigation={sourceNavigation} onClose={closeSource}/>}
         </div>

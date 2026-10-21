@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useStore } from "../store";
 import { LibrarySourceTabs } from "./LibrarySourceTabs";
-import { CategorizedLibrary } from "./CategorizedLibrary";
+import { LibraryCatalogTransition } from "./LibraryCatalogTransition";
 import { LocalFileWorkspace } from "./LocalFileWorkspace";
 import { useLocalFileMode } from "../lib/localFileMode";
 
@@ -34,7 +34,7 @@ export function LibraryHome({ onCreateProject, shortcutsEnabled = true }: { onCr
   </div></header>;
   return <div ref={homeRef} tabIndex={-1} className="library-home library-browser">
     {mode === "tags" || mode === "collections"
-      ? <CategorizedLibrary key={`${mode}:${media}`} kind={mode} media={media} navigation={navigation} onClose={() => useLocalFileMode.getState().setOpen(false)} onCreateProject={onCreateProject}/>
+      ? <LibraryCatalogTransition key={media} kind={mode} media={media} navigation={navigation} onClose={() => useLocalFileMode.getState().setOpen(false)} onCreateProject={onCreateProject}/>
       : <LocalFileWorkspace navigation={navigation} onClose={() => useLocalFileMode.getState().closeBrowser()} onCreateProject={onCreateProject}/>}
   </div>;
 }

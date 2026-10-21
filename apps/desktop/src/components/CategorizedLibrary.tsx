@@ -19,6 +19,7 @@ import { FileColorFilter } from "./FileColorFilter";
 import { LibraryFloatingControls } from "./LibraryFloatingControls";
 import { LibraryBrowserButton } from "./LibraryBrowserButton";
 import { LibraryMediaSwitch } from "./LibraryMediaSwitch";
+import { GeneratedImageFilter } from "./GeneratedImageFilter";
 import { useLibraryGlass } from "./useLibraryGlass";
 import { OverlayScrollArea } from "./CollectionScrollArea";
 import { ThumbnailSizeSlider } from "./ThumbnailSizeSlider";
@@ -31,7 +32,7 @@ import { CatalogTagIndex } from "./CatalogTagIndex";
 import { ContextMenu, DeleteSubmenu } from "./ContextMenu";
 import "./CategorizedLibrary.css";
 
-type BrowsePosition = { active: string | null; top: number; alphabetic: boolean; color: string | null; query: string };
+type BrowsePosition = { active: string | null; top: number; alphabetic: boolean; color: string | null; query: string; generatedFilter: string | null };
 const browsePositions = new Map<string, BrowsePosition>();
 
 export function CategorizedLibrary({ kind, media = "images", projectId = null, projectScope = false, navigation, onClose, onCreateProject, onAssetsChange }: {
@@ -53,6 +54,8 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
   const [catalogLoading, setCatalogLoading] = useState(true);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const loadedCatalogScope = useRef<string | null>(null);
+  const loadedAssetScope = useRef<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [multiple, setMultiple] = useState(false);
   const [alphabetic, setAlphabetic] = useState(savedPosition?.alphabetic ?? false);
@@ -81,6 +84,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
   const [jump, setJump] = useState<{ id: string; sequence: number } | null>(null);
   const scroll = useRef<HTMLDivElement>(null);
   const query = useLocalFileMode(s => s.query);
+  const generatedFilter = useLocalFileMode(s => s.generatedFilter);
   const pinnedTags = useCatalogPins(s => s.ids);
   const togglePin = useCatalogPins(s => s.toggle);
   const width = useStore(s => s.libraryThumbnailWidth);
@@ -89,7 +93,8 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
   const files = useMemo(() => mediaAssets.filter(a => a.store_path).map(a => ({ path: a.store_path!, name: a.name, directory: false })), [mediaAssets]);
   const palette = useFileColors(files, colorsOpen || !!color, revision);
   const entries = useMemo(() => mediaAssets.filter(a => (!query || a.name.toLocaleLowerCase().includes(query.toLocaleLowerCase()))
-    && (!color || (a.store_path && palette.colors.get(a.store_path)?.includes(color)))), [mediaAssets, query, color, palette.colors]);
+    && (!generatedFilter || (a.generation_session_id != null) === (generatedFilter === "source:generated"))
+    && (!color || (a.store_path && palette.colors.get(a.store_path)?.includes(color)))), [mediaAssets, query, generatedFilter, color, palette.colors]);
   const tags = useMemo(() => orderCatalogTags(catalog.tags, catalog.prompts, !!projectId && !alphabetic, pinnedTags), [catalog, projectId, alphabetic, pinnedTags]);
   const groups = useMemo(() => groupCatalogAssets(tags, entries, catalog.tag_asset_ids ?? {}), [tags, entries, catalog.tag_asset_ids]);
   const visibleTags = useMemo(() => tags.filter(tag => groups.some(group => group.id === tag.id)), [tags, groups]);
@@ -99,8 +104,8 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
   const selectedAssets = entries.filter(a => selected.has(a.id));
   const scope = kind === "collections" ? currentCollection?.id ?? null : null;
   const reading = loading || catalogLoading || (!!color && palette.pending);
-  const position = useRef({ active, alphabetic, color, query });
-  position.current = { active, alphabetic, color, query };
+  const position = useRef({ active, alphabetic, color, query, generatedFilter });
+  position.current = { active, alphabetic, color, query, generatedFilter };
   useLayoutEffect(() => {
     const view = scroll.current;
     return () => { browsePositions.set(positionKey, { ...position.current, top: view?.scrollTop ?? 0 }); };
@@ -109,11 +114,11 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
     if (reading || !grid || !restorePosition.current) return;
     const saved = restorePosition.current;
     const frame = requestAnimationFrame(() => {
-      if (scroll.current && saved.query === query) scroll.current.scrollTop = saved.top;
+      if (scroll.current && saved.query === query && saved.generatedFilter === generatedFilter) scroll.current.scrollTop = saved.top;
       restorePosition.current = undefined;
     });
     return () => cancelAnimationFrame(frame);
-  }, [reading, grid, entries, query]);
+  }, [reading, grid, entries, query, generatedFilter]);
   useEffect(() => {
     onAssetsChange?.(mediaAssets);
     return () => onAssetsChange?.([]);
@@ -146,9 +151,12 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
     return () => { alive.current = false; previewVersion.current++; window.clearTimeout(timer); void unlisten.then(stop => stop()); };
   }, []);
   useEffect(() => {
-    let current = true; setCatalogError(""); setCatalogLoading(true);
+    const scopeKey = JSON.stringify([projectId, kind]);
+    let current = true; setCatalogError("");
+    if (loadedCatalogScope.current !== scopeKey) setCatalogLoading(true);
     materialCatalog.read(projectId).then(value => {
       if (!current) return;
+      loadedCatalogScope.current = scopeKey;
       setCatalog(value);
       setActive(id => kind === "collections"
         ? value.collections.some(item => item.id === id) ? id : collectionRows(value.collections)[0]?.item.id ?? null
@@ -157,10 +165,14 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
     return () => { current = false; };
   }, [projectId, kind, revision]);
   useEffect(() => {
-    let current = true; setLoading(true); setError(""); setAssets([]);
+    const scopeKey = JSON.stringify([kind, scope, projectScope, projectId]);
+    let current = true; setError("");
+    // Classification emits an assets-changed event per image. Keep the current
+    // scope visible while refreshing; only a real scope change clears its cards.
+    if (loadedAssetScope.current !== scopeKey) { setLoading(true); setAssets([]); }
     // The collection browser only reads a concrete collection, never the whole library.
     if (kind === "collections" && !scope) { setLoading(false); return; }
-    materialCatalog.assets(kind, scope, projectScope ? projectId : null).then(value => { if (current) { setAssets(value); setSelected(previous => new Set([...previous].filter(id => value.some(a => a.id === id)))); } })
+    materialCatalog.assets(kind, scope, projectScope ? projectId : null).then(value => { if (current) { loadedAssetScope.current = scopeKey; setAssets(value); setSelected(previous => new Set([...previous].filter(id => value.some(a => a.id === id)))); } })
       .catch(error => { if (current) setError(String(error)); }).finally(() => { if (current) setLoading(false); });
     return () => { current = false; };
   }, [kind, scope, revision, projectScope, projectId]);
@@ -181,7 +193,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
     useStore.getState().closeContextMenu();
     setPinnedSection(null);
     if (scroll.current) scroll.current.scrollTop = 0;
-  }, [kind, scope, query, color, projectId, projectScope]);
+  }, [kind, scope, query, color, generatedFilter, projectId, projectScope]);
   useLayoutEffect(() => {
     if (kind !== "tags" || !jump || reading || !grid || !scroll.current) return;
     const frame = requestAnimationFrame(() => {
@@ -341,6 +353,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
           {navigation}
           <LibraryFloatingControls>
             <LibraryMediaSwitch/>
+            <GeneratedImageFilter floating value={generatedFilter} onChange={useLocalFileMode.getState().setGeneratedFilter}/>
             <LibraryBrowserButton/>
             <FileColorFilter open={colorsOpen} onOpenChange={setColorsOpen} color={color} onColorChange={setColor} palette={palette}/>
           </LibraryFloatingControls>
@@ -348,7 +361,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
         {flat && catalogError && <p className="catalog-error" role="alert">{catalogError}<button onClick={() => setRevision(v => v + 1)}>重试</button></p>}
         {error && <p role="alert" className="catalog-error">{error}<button onClick={() => setRevision(v => v + 1)}>重试</button></p>}
         <OverlayScrollArea scrollRef={scroll} className="catalog-scroll" viewportClassName="catalog-scroller library-scroller">
-          {reading ? <p className="catalog-hint catalog-empty" role="status">正在读取素材…</p> : !entries.length && !error && !catalogError ? <p className="catalog-hint catalog-empty">{kind === "collections" && !currentCollection ? "还没有集合，点击左侧 ＋ 新建集合。" : query || color ? "没有匹配的素材。" : kind === "tags" ? "还没有已登记的素材。" : "集合还没有素材。可在素材右键菜单中选择「添加到集合」。"}</p> : null}
+          {reading ? <p className="catalog-hint catalog-empty" role="status">正在读取素材…</p> : !entries.length && !error && !catalogError ? <p className="catalog-hint catalog-empty">{kind === "collections" && !currentCollection ? "还没有集合，点击左侧 ＋ 新建集合。" : query || color || generatedFilter ? "没有匹配的素材。" : kind === "tags" ? "还没有已登记的素材。" : "集合还没有素材。可在素材右键菜单中选择「添加到集合」。"}</p> : null}
           {color && !!palette.failed && <p className="catalog-error" role="alert">{palette.failed} 项颜色读取失败<button onClick={palette.retry}>重试</button></p>}
           <div ref={setGrid} className={`catalog-sections${kind === "tags" ? " catalog-tag-sections" : ""}`} aria-label="分类素材">
             {entries.length > 0 && (flat ? <CatalogMediaGrid assets={entries} width={width} selected={selected} revision={revision} onSelect={select} onActivate={multiple ? undefined : activate} onOpen={openDetail} onContextMenu={context}/> : kind === "tags" ? !reading && !error && !catalogError && groups.map(group => <CatalogSection key={group.id} tagId={group.id} title={group.name} pinned={pinnedSection === group.id}>
@@ -403,7 +416,7 @@ function CatalogMediaGrid({ assets, width, selected, revision, onSelect, onActiv
   return <div ref={setElement} className="folder-masonry" style={assets.length ? undefined : { height: 0 }}>{assets.map(asset => <FileMediaCard key={asset.id}
     entry={{ path: asset.store_path ?? "", name: asset.name, directory: false, preview: asset.thumb_path, version: `${asset.id}:${asset.file_mtime ?? 0}:${asset.thumb_path}` }}
     selected={selected.has(asset.id)} revision={revision} labels={[]} aspectRatio={asset.width && asset.height ? asset.width / asset.height : undefined}
-    assetId={asset.id} onDragStart={event => {
+    assetId={asset.id} generated={asset.generation_session_id != null} onDragStart={event => {
       const ids = selected.has(asset.id) ? [...selected] : [asset.id];
       setDragAssets(ids); event.dataTransfer.effectAllowed = "copy";
       event.dataTransfer.setData("text/plain", ids.join(","));

@@ -1,9 +1,23 @@
 import type { CanvasNode } from "./types";
+import { canvasConversationCards } from "./canvasConversationCards";
 import { canvasNoteValue, readCanvasNote, type CanvasNotePayload } from "./canvasNotes";
 import { activePromptReferences, workflowActiveSession, workflowBindingKey, type WorkflowInput, type WorkflowNode } from "./canvasWorkflow";
 
 function payload(node: CanvasNode) {
   try { return JSON.parse(node.payloadJson); } catch { return {}; }
+}
+
+/** Completion follows the connected conversation, while image data stays tied to its exact turn. */
+export function completedCanvasSessions(inputs: WorkflowInput[], nodes: readonly CanvasNode[], jobs: Parameters<typeof canvasConversationCards>[1]) {
+  const conversations = canvasConversationCards(nodes, jobs);
+  const sessions = inputs.flatMap(input => {
+    if (!input.canvasNodeId || input.cellId !== "image") return [];
+    const source = nodes.find(node => node.id === input.canvasNodeId && node.kind === "prompt" && node.hiddenAt == null);
+    if (!source) return [];
+    return conversations.cards.get(conversations.aliases.get(source.id) ?? source.id)?.sessions ?? [source];
+  });
+  return [...new Set(sessions.filter(session => payload(session).status === "done"
+    && canvasSessionImages(session, nodes).some(output => output.hiddenAt == null)).map(session => session.id))];
 }
 
 /** All generation-card sessions, including those visible on the canvas. */

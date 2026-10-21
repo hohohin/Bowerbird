@@ -39,6 +39,8 @@ export interface WorkflowNode {
   outputPorts: WorkflowPort[];
   trigger: boolean;
   triggerCount?: number;
+  /** Native session turns already observed; prevents duplicate completion events. */
+  completionSeen?: string[];
   sessionNodeIds?: string[];
   activeSessionNodeId?: string | null;
   resultNodeIds?: string[];
