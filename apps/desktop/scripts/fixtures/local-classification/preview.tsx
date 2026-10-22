@@ -58,7 +58,7 @@ w.__TAURI_INTERNALS__ = {
       w.classificationStatus.message = args.install ? "正在下载 model.gguf" : "正在识别素材"; return;
     case "local_classification_stop":
       if (w.classificationStatus.jev_progress) w.classificationStatus.jev_progress.message = "已停止；此图未完成的结果未写入";
-      w.classificationStatus.current_asset = null; w.classificationStatus.busy = false; w.classificationStatus.enabled = false; w.classificationStatus.message = "已停止"; return;
+      w.classificationStatus.current_asset = null; w.classificationStatus.busy = false; w.classificationStatus.message = "已停止"; return;
     case "local_classification_vector_install":
       w.classificationStatus.model = "local-test";
       w.classificationStatus.busy = true; w.classificationStatus.phase = "downloading";

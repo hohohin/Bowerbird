@@ -3981,7 +3981,7 @@ export function CanvasWorkspace({
           });
         }}>
         <div id={`${sourcePanelId}-content`} className="canvas-source-content">
-          {fileMode === "tags" || fileMode === "collections"
+          {fileMode === "all" || fileMode === "tags" || fileMode === "collections"
             ? <LibraryCatalogTransition key={`${projectId}:${sourceScope}:${libraryMedia}`} kind={fileMode} media={libraryMedia} projectId={projectId}
                 projectScope={sourceScope === "project"} navigation={sourceNavigation} onClose={closeSource} onAssetsChange={setCatalogAssets}/>
             : <LocalFileWorkspace navigation={sourceNavigation} onClose={closeSource}/>}

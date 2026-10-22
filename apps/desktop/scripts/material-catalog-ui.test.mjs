@@ -29,7 +29,7 @@ async function collectionAction(name, action) {
     await page.getByRole('menu', { name: '删除', exact: true }).getByRole('menuitem', { name: action, exact: true }).click();
   } else await menu.getByRole('menuitem', { name: action, exact: true }).click();
 }
-const tab = name => page.locator(`[role="tab"][data-tab-value="${name==='全局素材'?'global':'project'}"]`);
+const tab = name => page.locator(name === '全局素材' ? '[role="tab"][data-tab-value="global"], .library-home [role="tab"][data-tab-value="tags"]' : '[role="tab"][data-tab-value="project"]');
 const card = name => page.locator('.categorized-library').getByRole('button',{name,exact:true});
 async function view(kind) {
   const root=page.locator('.categorized-library');
@@ -38,7 +38,7 @@ async function view(kind) {
     await clickControl('文件浏览器');
     await clickControl('文件浏览器');
   } else {
-    await page.locator('[role="tab"][aria-selected="true"]').focus(); await page.keyboard.press('Tab');
+    await page.evaluate(async kind => (await import('/src/lib/localFileMode.ts')).useLocalFileMode.getState().setCatalogView(kind), kind);
   }
   await page.getByRole('region',{name:kind==='tags' ? '按标签浏览素材' : '按集合浏览素材',exact:true}).waitFor();
 }
@@ -134,7 +134,7 @@ async function assertLayout(name) {
   const surface=await page.locator('.categorized-library').evaluate(root=>{
     const heading=root.querySelector('.catalog-section-heading'), pill=heading.querySelector('.catalog-section-title');
     const nav=root.querySelector('.library-view-switch');
-    const appearance=el=>{const s=getComputedStyle(el);return [s.height,s.borderRadius,s.backgroundColor,s.backdropFilter,s.boxShadow,s.border];};
+    const appearance=el=>{const s=getComputedStyle(el);return [s.height,s.borderRadius,s.backgroundColor,s.backdropFilter,s.boxShadow,s.borderRight];};
     const section=heading.parentElement, grid=section.querySelector('.folder-masonry');
     const viewport=root.querySelector('.catalog-scroller');
     return {title:appearance(pill),switch:appearance(nav),pinned:heading.classList.contains('is-pinned'),rowBackground:getComputedStyle(heading).backgroundColor,
@@ -230,11 +230,12 @@ async function assertStickyTags(name) {
   async function assertPinnedAppearance() {
     const result=await page.locator('.categorized-library').evaluate(root=>{
       const title=root.querySelector('.is-pinned .catalog-section-title'), nav=root.querySelector('.library-view-switch');
-      const style=el=>{const s=getComputedStyle(el);return [s.height,s.borderRadius,s.backgroundColor,s.backdropFilter,s.boxShadow,s.border];};
-      return {title:style(title),nav:style(nav),titleTop:title.getBoundingClientRect().top,navTop:nav.getBoundingClientRect().top,
+      const style=el=>{const s=getComputedStyle(el);return [s.height,s.borderRadius,s.backgroundColor,s.backdropFilter,s.boxShadow,s.borderRight];};
+      return {title:style(title),nav:style(nav),leftBorder:getComputedStyle(title).borderLeftColor,titleTop:title.getBoundingClientRect().top,navTop:nav.getBoundingClientRect().top,
         plain:[...root.querySelectorAll('.catalog-section-heading:not(.is-pinned) .catalog-section-title')].every(el=>getComputedStyle(el).backgroundColor==='rgba(0, 0, 0, 0)' && !el.classList.contains('library-floating-surface'))};
     });
     assert.equal(result.title[1],'0px 8px 8px 0px','pinned heading has square left corners and rounded right corners');
+    assert.equal(result.leftBorder,'rgba(0, 0, 0, 0)','pinned heading has no visible left border');
     assert.notEqual(result.title[1],result.nav[1],'heading is distinct from source switch capsule');
     assert.deepEqual(result.title.filter((_,i)=>i!==1),result.nav.filter((_,i)=>i!==1),'pinned title retains shared floating surface');
     assert.ok(Math.abs(result.titleTop-result.navTop)<1,'pinned capsule aligns exactly with the switch');
@@ -270,7 +271,7 @@ try {
   await mkdir('.tmp/material-catalog',{recursive:true});
   await page.goto('http://127.0.0.1:1698/scripts/fixtures/project-drop/preview.html?layout');
   await tab('全局素材').waitFor(); await mockCatalog();
-  assert.deepEqual(await page.getByRole('tab').allTextContents(),['标签分类']);
+  assert.deepEqual(await page.getByRole('tab').allTextContents(),['全部','标签分类','集合分类']);
   await view('tags'); await card('建筑.png').waitFor();
   assert.deepEqual(await page.locator('.catalog-tag-list .catalog-row span').allTextContents(),['插画','海报','建筑']);
   assert.equal(await page.locator('.catalog-sidebar').isVisible(),true);

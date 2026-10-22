@@ -81,7 +81,7 @@ try {
         return { label: a.textContent, weight: getComputedStyle(el).fontWeight, fill: getComputedStyle(el).fill,
           ratio: (b.x.baseVal[0].value - a.x.baseVal[0].value) / a.getComputedTextLength(), slope: m.b / m.a };
       });
-      assert.match(typography.label, /^切换至(标签|集合)视图$/);
+      assert.match(typography.label, /^切换至(全部|标签|集合)视图$/);
       assert.equal(typography.weight, '300'); assert.equal(typography.fill, 'rgb(255, 255, 255)');
       assert.ok(Math.abs(typography.ratio - 2) < .001);
       assert.ok(Math.abs(typography.slope + Math.tan(22 * Math.PI / 180)) < .001);
@@ -111,7 +111,7 @@ try {
     await page.locator('.catalog-view-wipe').waitFor({ state: 'detached' });
     const finalKind = await page.evaluate(() => window.catalogMode.getState().mode);
     assert.equal(await page.locator('.categorized-library').count(), 1);
-    assert.equal(await page.locator('.categorized-library').getAttribute('aria-label'), finalKind === 'tags' ? '按标签浏览素材' : '按集合浏览素材');
+    assert.equal(await page.locator('.categorized-library').getAttribute('aria-label'), finalKind === 'all' ? '平铺浏览全部图片' : finalKind === 'tags' ? '按标签浏览素材' : '按集合浏览素材');
     await page.evaluate(() => window.catalogMode.getState().toggleCatalog());
     await page.waitForTimeout(50);
     await page.evaluate(() => window.catalogMode.getState().openBrowser());

@@ -49,7 +49,7 @@ export function Toolbar({
   const [projectsOpen, setProjectsOpen] = useState(false);
   const fileMode = useLocalFileMode(s => s.mode);
   const showFileNavigation = localFilesOpen && fileMode === "files";
-  const materialSearchLabel = ({ global: "搜索全局素材", files: "搜索当前文件夹", tags: "搜索分类素材", collections: "搜索集合素材" })[fileMode];
+  const materialSearchLabel = ({ all: "搜索全部图片", global: "搜索全局素材", files: "搜索当前文件夹", tags: "搜索分类素材", collections: "搜索集合素材" })[fileMode];
   const searchRef = useRef<HTMLInputElement>(null);
   const importRef = useRef<HTMLDivElement>(null);
 

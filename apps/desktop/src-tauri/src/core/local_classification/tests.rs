@@ -9,6 +9,85 @@ fn db() -> Database {
 }
 
 #[test]
+fn automatic_classification_only_accepts_inserts_during_current_opt_in() {
+    let db = db();
+    let model = super::jev::OBSERVATION_MODEL;
+    db.set_local_enabled(true).unwrap();
+    assert!(db.local_auto_targets(model).unwrap().is_empty(), "old unclassified assets are not new");
+    assert_eq!(db.local_targets_for_model(true, model).unwrap(), vec!["a", "b"], "manual scan still sees old assets");
+    let add = |id: &str| { db.conn.lock().unwrap().execute(
+        "INSERT INTO assets(id,name,ext,created_at) VALUES(?1,?1,'png',0)", [id]).unwrap(); };
+    add("new");
+    assert!(db.local_auto_targets(model).unwrap().is_empty(), "wait for thumbnail");
+    db.conn.lock().unwrap().execute("UPDATE assets SET thumb_path='ready.png'", []).unwrap();
+    assert_eq!(db.local_auto_targets(model).unwrap(), vec!["new"], "actual insert order, not file timestamps");
+    db.set_local_enabled(true).unwrap();
+    assert_eq!(db.local_auto_targets(model).unwrap(), vec!["new"], "idempotent enable preserves new arrivals");
+    db.stop_local_auto_pending(None).unwrap();
+    assert!(db.local_enabled().unwrap());
+    assert!(db.local_auto_targets(model).unwrap().is_empty(), "stop and reopening cannot resume the backlog");
+    add("after-stop");
+    db.conn.lock().unwrap().execute("UPDATE assets SET thumb_path='ready.png'", []).unwrap();
+    assert_eq!(db.local_auto_targets(model).unwrap(), vec!["after-stop"]);
+    db.conn.lock().unwrap().execute("INSERT INTO local_visual_observations VALUES('after-stop',?1,'done',0)", [model]).unwrap();
+    db.conn.lock().unwrap().execute("DELETE FROM local_visual_observations", []).unwrap();
+    assert!(db.local_auto_targets(model).unwrap().is_empty(), "reset does not requeue old imports");
+    db.save_local_label(None, "新规则", "", true).unwrap();
+    assert!(db.local_auto_targets(model).unwrap().is_empty(), "label jobs do not enqueue old images");
+    db.set_local_enabled(false).unwrap();
+    add("disabled");
+    db.set_local_enabled(true).unwrap();
+    db.conn.lock().unwrap().execute("UPDATE assets SET thumb_path='ready.png'", []).unwrap();
+    assert!(db.local_auto_targets(model).unwrap().is_empty(), "reenabling excludes images added while disabled");
+}
+
+#[test]
+fn stopping_project_preserves_other_new_assets_and_future_imports() {
+    let db = db();
+    db.set_local_enabled(true).unwrap();
+    db.conn.lock().unwrap().execute_batch(
+        "INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',0);
+         INSERT INTO assets(id,name,ext,thumb_path) VALUES('inside','inside','png','ready.png'),('outside','outside','png','ready.png');
+         INSERT INTO project_assets(project_id,asset_id,created_at) VALUES('p','inside',0);"
+    ).unwrap();
+    db.stop_local_auto_pending(Some("p")).unwrap();
+    assert_eq!(db.local_auto_targets(MODEL_ID).unwrap(), vec!["outside"]);
+    db.conn.lock().unwrap().execute_batch(
+        "INSERT INTO assets(id,name,ext,thumb_path) VALUES('future','future','png','ready.png');
+         INSERT INTO project_assets(project_id,asset_id,created_at) VALUES('p','future',0);"
+    ).unwrap();
+    let targets = db.local_auto_targets(MODEL_ID).unwrap();
+    assert_eq!(targets.len(), 2);
+    assert!(targets.contains(&"future".to_string()));
+    assert!(db.local_enabled().unwrap());
+}
+
+#[test]
+fn automatic_classification_upgrade_and_reopen_do_not_backfill() {
+    let path = std::env::temp_dir().join(format!("auto-classification-{}.db", ulid::Ulid::new()));
+    {
+        let db = Database::open(&path).unwrap();
+        crate::db::migrations::migrations().to_version(&mut db.conn.lock().unwrap(), 41).unwrap();
+        db.conn.lock().unwrap().execute_batch("UPDATE local_classification_state SET enabled=1; INSERT INTO assets(id,name,ext,thumb_path) VALUES('old','old','png','old.png');").unwrap();
+        db.migrate().unwrap();
+        assert!(db.local_auto_targets(MODEL_ID).unwrap().is_empty());
+        db.conn.lock().unwrap().execute_batch("INSERT INTO assets(id,name,ext,thumb_path) VALUES('new','new','png','new.png');").unwrap();
+    }
+    {
+        let db = Database::open(&path).unwrap();
+        db.migrate().unwrap();
+        assert_eq!(db.local_auto_targets(MODEL_ID).unwrap(), vec!["new"], "new arrivals survive restart; old assets stay excluded");
+        db.stop_local_auto_pending(None).unwrap();
+    }
+    {
+        let db = Database::open(&path).unwrap();
+        assert!(db.local_enabled().unwrap());
+        assert!(db.local_auto_targets(MODEL_ID).unwrap().is_empty(), "stopped work stays stopped after restart");
+    }
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn playback_records_committed_tags_and_failures_without_candidate_leakage() {
     let db = db();
     let classifier = super::LocalClassifier::new(std::env::temp_dir().join("classification-playback-test"));

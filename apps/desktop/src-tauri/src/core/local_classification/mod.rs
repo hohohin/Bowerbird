@@ -413,9 +413,11 @@ impl LocalClassifier {
             data::MODEL_ID
         };
         let mut job_revision = db.local_revision().map_err(|e| e.to_string())?;
-        let mut targets = db
-            .local_targets_for_model(pending_only && tag.is_none(), observation_model)
-            .map_err(|e| e.to_string())?;
+        let mut targets = if self.background.load(Ordering::Relaxed) {
+            db.local_auto_targets(observation_model)
+        } else {
+            db.local_targets_for_model(pending_only && tag.is_none(), observation_model)
+        }.map_err(|e| e.to_string())?;
         global::retain_scope(&mut targets, scope);
         if tag.is_none() && !pending_only {
             if self.cancel.load(Ordering::Relaxed) { return Ok(()); }
@@ -1014,10 +1016,8 @@ pub fn watch(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths>) {
             } else {
                 data::MODEL_ID
             };
-            let tag = db.pending_local_label().ok().flatten();
-            if tag.is_some()
-                || db
-                    .local_targets_for_model(true, model)
+            if db
+                    .local_auto_targets(model)
                     .is_ok_and(|ids| !ids.is_empty())
             {
                 if classifier
@@ -1026,7 +1026,7 @@ pub fn watch(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths>) {
                         db.clone(),
                         paths.clone(),
                         false,
-                        tag,
+                        None,
                         use_jev,
                         true,
                         true,

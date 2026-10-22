@@ -9,6 +9,7 @@ import { FileMediaCard } from "./FileMediaCard";
 import { FileColorFilter } from "./FileColorFilter";
 import { LibraryFloatingControls } from "./LibraryFloatingControls";
 import { useLibraryGlass } from "./useLibraryGlass";
+import { LibraryMotion } from "./LibraryMotion";
 import { fileWorkspace, prepareFileWorkspace, type FileWorkspaceStatus } from "../lib/fileWorkspace";
 import { folderClassification, type FolderClassification } from "../lib/folderClassification";
 import { globalClassification, localClassification, type ClassificationLabel, type GlobalClassificationView } from "../lib/localClassification";
@@ -425,6 +426,7 @@ export function LocalFileWorkspace({ onClose, onCreateProject, navigation, onLeg
       if (e.altKey && e.key === "ArrowUp" && directory?.parent) { e.preventDefault(); void navigate(directory.parent); }
     }}>
     {glass.definition}
+    <LibraryMotion />
     {preparingMenu && <ContextMenu x={preparingMenu.x} y={preparingMenu.y} label="正在准备素材操作" onClose={() => {
       if (menuSequence.current === preparingMenu.version) { menuSequence.current++; setPreparingMenu(null); }
     }}>

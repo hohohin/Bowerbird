@@ -21,6 +21,7 @@ import { LibraryBrowserButton } from "./LibraryBrowserButton";
 import { LibraryMediaSwitch } from "./LibraryMediaSwitch";
 import { GeneratedImageFilter } from "./GeneratedImageFilter";
 import { useLibraryGlass } from "./useLibraryGlass";
+import { LibraryMotion } from "./LibraryMotion";
 import { OverlayScrollArea } from "./CollectionScrollArea";
 import { ThumbnailSizeSlider } from "./ThumbnailSizeSlider";
 import { Lightbox } from "./Lightbox";
@@ -44,7 +45,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
   const positionKey = JSON.stringify([projectId, projectScope, media, kind]);
   const [savedPosition] = useState(() => browsePositions.get(positionKey));
   const restorePosition = useRef(savedPosition);
-  const flat = media === "videos" && kind === "tags";
+  const flat = kind === "all" || (media === "videos" && kind === "tags");
   const [catalog, setCatalog] = useState<MaterialCatalog>({ tags: [], collections: [], prompts: [], tag_asset_ids: {} });
   const [active, setActive] = useState<string | null>(savedPosition?.active ?? null);
   const [pinnedSection, setPinnedSection] = useState<string | null>(null);
@@ -294,9 +295,10 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
     const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : Math.max(0, Math.min(items.length - 1, index + (event.key === "ArrowDown" ? 1 : -1)));
     event.preventDefault(); event.stopPropagation(); items[next]?.focus();
   }
-  return <section className={`categorized-library${kind === "tags" && !flat ? " is-tag-catalog" : ""}`} aria-label={flat ? "平铺浏览视频" : kind === "tags" ? "按标签浏览素材" : "按集合浏览素材"}
+  return <section className={`categorized-library${kind === "tags" && !flat ? " is-tag-catalog" : ""}`} aria-label={flat ? media === "videos" ? "平铺浏览视频" : "平铺浏览全部图片" : kind === "tags" ? "按标签浏览素材" : "按集合浏览素材"}
     style={{ ...glass.style, ...(sidebarWidth !== null ? { "--catalog-sidebar-width": `${sidebarWidth}px` } : {}) } as CSSProperties}>
     {glass.definition}
+    <LibraryMotion />
     <div className="catalog-body">
       {!flat && <aside ref={sidebar} className="catalog-sidebar" aria-label={kind === "tags" ? "标签分类" : "集合目录"}>
         <div className="catalog-sidebar-heading"><strong>{kind === "tags" ? "标签" : "集合"}</strong>
@@ -361,7 +363,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
         {flat && catalogError && <p className="catalog-error" role="alert">{catalogError}<button onClick={() => setRevision(v => v + 1)}>重试</button></p>}
         {error && <p role="alert" className="catalog-error">{error}<button onClick={() => setRevision(v => v + 1)}>重试</button></p>}
         <OverlayScrollArea scrollRef={scroll} className="catalog-scroll" viewportClassName="catalog-scroller library-scroller">
-          {reading ? <p className="catalog-hint catalog-empty" role="status">正在读取素材…</p> : !entries.length && !error && !catalogError ? <p className="catalog-hint catalog-empty">{kind === "collections" && !currentCollection ? "还没有集合，点击左侧 ＋ 新建集合。" : query || color || generatedFilter ? "没有匹配的素材。" : kind === "tags" ? "还没有已登记的素材。" : "集合还没有素材。可在素材右键菜单中选择「添加到集合」。"}</p> : null}
+          {reading ? <p className="catalog-hint catalog-empty" role="status">正在读取素材…</p> : !entries.length && !error && !catalogError ? <p className="catalog-hint catalog-empty">{kind === "collections" && !currentCollection ? "还没有集合，点击左侧 ＋ 新建集合。" : query || color || generatedFilter ? "没有匹配的素材。" : kind !== "collections" ? "还没有已登记的素材。" : "集合还没有素材。可在素材右键菜单中选择「添加到集合」。"}</p> : null}
           {color && !!palette.failed && <p className="catalog-error" role="alert">{palette.failed} 项颜色读取失败<button onClick={palette.retry}>重试</button></p>}
           <div ref={setGrid} className={`catalog-sections${kind === "tags" ? " catalog-tag-sections" : ""}`} aria-label="分类素材">
             {entries.length > 0 && (flat ? <CatalogMediaGrid assets={entries} width={width} selected={selected} revision={revision} onSelect={select} onActivate={multiple ? undefined : activate} onOpen={openDetail} onContextMenu={context}/> : kind === "tags" ? !reading && !error && !catalogError && groups.map(group => <CatalogSection key={group.id} tagId={group.id} title={group.name} pinned={pinnedSection === group.id}>

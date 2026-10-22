@@ -33,7 +33,7 @@ export function LibraryHome({ onCreateProject, shortcutsEnabled = true }: { onCr
     <LibrarySourceTabs value="global" onChange={() => useLocalFileMode.getState().openSource("global")} />
   </div></header>;
   return <div ref={homeRef} tabIndex={-1} className="library-home library-browser">
-    {mode === "tags" || mode === "collections"
+    {mode === "all" || mode === "tags" || mode === "collections"
       ? <LibraryCatalogTransition key={media} kind={mode} media={media} navigation={navigation} onClose={() => useLocalFileMode.getState().setOpen(false)} onCreateProject={onCreateProject}/>
       : <LocalFileWorkspace navigation={navigation} onClose={() => useLocalFileMode.getState().closeBrowser()} onCreateProject={onCreateProject}/>}
   </div>;

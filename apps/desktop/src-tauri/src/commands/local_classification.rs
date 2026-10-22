@@ -123,8 +123,8 @@ pub async fn local_classification_stop(
     db: State<'_, Arc<Database>>,
 ) -> Result<(), String> {
     let status = classifier.snapshot(&db)?;
-    if status.folder_root.is_none() && !status.global_scope && status.project_id.is_none() {
-        db.set_local_enabled(false).map_err(|e| e.to_string())?;
+    if status.folder_root.is_none() {
+        db.stop_local_auto_pending(status.project_id.as_deref()).map_err(|e| e.to_string())?;
     }
     classifier.cancel();
     Ok(())

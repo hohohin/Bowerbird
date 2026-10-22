@@ -284,6 +284,7 @@ try {
   const checkRect = await includeTagged.boundingBox();
   assert.ok(checkRect.y >= buttonRect.y + buttonRect.height, "option sits below the start button");
   assert.equal(await classify.evaluate(el => !!el.closest(".app-modal-footer")),true,"classification belongs to the fixed footer");
+  await page.evaluate(() => window.classificationStatus.enabled = true);
   await classify.click();
   assert.equal(await page.getByRole("dialog",{name:"确认重新分类",exact:true}).count(),0);
   assert.deepEqual(await page.evaluate(() => window.calls.find(c => c.command === "project_classification_start").args),
@@ -297,6 +298,12 @@ try {
   assert.deepEqual(await page.evaluate(() => window.calls.filter(c => c.command === "project_classification_start").at(-1).args),
     {projectId:"project-test",tagId:null,pendingOnly:false});
   await management.getByRole("button",{name:"停止",exact:true}).click();
+  const stoppedStarts = await page.evaluate(() => window.calls.filter(c => c.command.endsWith('classification_start')).length);
+  await management.getByRole('button',{name:'关闭',exact:true}).click();
+  await page.getByRole('button',{name:'打开自动分类',exact:true}).click();
+  await page.waitForTimeout(1600);
+  assert.equal(await page.evaluate(() => window.classificationStatus.enabled),true,'stopping preserves opt-in for future arrivals');
+  assert.equal(await page.evaluate(() => window.calls.filter(c => c.command.endsWith('classification_start')).length),stoppedStarts,'reopening never starts a stopped scan');
   await includeTagged.uncheck();
   await page.evaluate(() => window.labels = ["海报","标志","字体排版","图案纹样","包装展示图","品牌应用图","白底产品图","场景产品图","产品局部特写","产品图解","标题卡","图文卡片","信息图","漫画页","表情贴图","分镜板","角色设定图","场景图","道具图","角色立绘","面部特写","半身人像","全身人像","群像","静物","材质纹理","布光示意图"].map((name,i) => ({id:`preset-${i}`,name,description:"",enabled:true,count:0})));
   await management.getByText("#海报",{exact:true}).waitFor();

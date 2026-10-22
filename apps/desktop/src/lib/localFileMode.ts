@@ -3,7 +3,8 @@ import type { CatalogKind } from "./materialCatalog";
 
 export type LibrarySource = "global" | "project";
 export type LibraryMedia = "images" | "videos";
-export const catalogViewName = (kind: CatalogKind, media: LibraryMedia) => kind === "collections" ? "集合分类" : media === "videos" ? "视频平铺" : "标签分类";
+export const catalogViews = (media: LibraryMedia): CatalogKind[] => media === "images" ? ["all", "tags", "collections"] : ["tags", "collections"];
+export const catalogViewName = (kind: CatalogKind, media: LibraryMedia) => kind === "all" ? "全部" : kind === "collections" ? "集合分类" : media === "videos" ? "视频平铺" : "标签分类";
 // "global" here is the file browser's aggregate directory, not a source tab.
 type FileMode = CatalogKind | "files" | "global";
 export const useLocalFileMode = create<{
@@ -20,6 +21,7 @@ export const useLocalFileMode = create<{
   viewTransition: { source: LibrarySource; kind: CatalogKind; startedAt: number } | null;
   setMode: (mode: FileMode) => void;
   openSource: (source: LibrarySource) => void;
+  setCatalogView: (view: CatalogKind) => void;
   toggleCatalog: () => void;
   closeBrowser: () => void;
   openGlobal: () => void;
@@ -37,13 +39,18 @@ export const useLocalFileMode = create<{
   setMode: mode => set({ mode }),
   openSource: source => set(state => ({ open: true, source, mode: (state.media === "images" ? state.views : state.videoViews)[source], query: "", viewTransition: null })),
   setMedia: media => set(state => ({ media, mode: (media === "images" ? state.views : state.videoViews)[state.source], viewTransition: null })),
-  toggleCatalog: () => set(state => {
-    // The ungrouped video view uses the same all-assets query as image tags.
+  setCatalogView: view => set(state => {
+    if (state.mode === view || !catalogViews(state.media).includes(view)) return state;
     const key = state.media === "images" ? "views" : "videoViews";
-    const view = state[key][state.source] === "tags" ? "collections" : "tags";
     return { open: true, mode: view, [key]: { ...state[key], [state.source]: view },
       viewTransition: { source: state.source, kind: view, startedAt: Date.now() } };
   }),
+  toggleCatalog: () => {
+    const state = get();
+    const views = catalogViews(state.media);
+    const current = (state.media === "images" ? state.views : state.videoViews)[state.source];
+    state.setCatalogView(views[(views.indexOf(current) + 1) % views.length]);
+  },
   closeBrowser: () => set(state => ({ mode: (state.media === "images" ? state.views : state.videoViews)[state.source], query: "" })),
   openGlobal: () => get().openSource("global"),
   openBrowser: () => set(state => ({ open: true, mode: "files", query: "", globalRequest: state.globalRequest + 1, viewTransition: null })),

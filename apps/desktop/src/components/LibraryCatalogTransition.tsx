@@ -23,7 +23,7 @@ export function LibraryCatalogTransition(props: Props) {
   const cover = useCallback(() => setView(value => ({ ...value, previous: null, covered: true })), []);
   const finish = useCallback(() => setView(value => ({ ...value, previous: null, covered: true, running: false })), []);
   return <div className="library-catalog-transition" aria-busy={view.running}>
-    {(["tags", "collections"] as const).filter(kind => kind === view.kind || kind === view.previous).map(kind => {
+    {(["all", "tags", "collections"] as const).filter(kind => kind === view.kind || kind === view.previous).map(kind => {
       const outgoing = kind === view.previous;
       return <div key={kind} className="library-catalog-layer" data-outgoing={outgoing || undefined}
         style={{ visibility: !outgoing && !view.covered ? "hidden" : undefined }} aria-hidden={outgoing || !view.covered || undefined}
@@ -31,7 +31,7 @@ export function LibraryCatalogTransition(props: Props) {
         <CategorizedLibrary {...props} kind={kind} onAssetsChange={outgoing ? undefined : props.onAssetsChange}/>
       </div>;
     })}
-    {view.running && <CatalogWipe key={view.sequence} label={`切换至${view.kind === "collections" ? "集合" : props.media === "videos" ? "平铺" : "标签"}视图`}
+    {view.running && <CatalogWipe key={view.sequence} label={`切换至${view.kind === "all" ? "全部" : view.kind === "collections" ? "集合" : props.media === "videos" ? "平铺" : "标签"}视图`}
       onCovered={cover} onFinish={finish}/>}
   </div>;
 }

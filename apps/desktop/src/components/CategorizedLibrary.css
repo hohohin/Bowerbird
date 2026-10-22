@@ -27,7 +27,7 @@
 .catalog-section-heading { position:sticky; top:0; z-index:2; height:40px; padding:12px 8px 0; pointer-events:none; }
 .catalog-section-title { display:inline-block; height:28px; max-width:var(--catalog-title-max-width, 100%); padding:0 10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; line-height:26px; font-weight:600; pointer-events:auto; }
 .catalog-section-title:not(.library-floating-surface) { border:1px solid transparent; }
-.catalog-section-heading.is-pinned .catalog-section-title { font-size:11px; border-radius:0 8px 8px 0; }
+.catalog-section-heading.is-pinned .catalog-section-title { font-size:11px; border-radius:0 8px 8px 0; border-left-color:transparent; }
 .catalog-sections > section:last-child { min-height:var(--catalog-viewport-height, 200px); }
 .catalog-sections .folder-media-card[data-positioned] { transition:none; }
 .catalog-sidebar-heading { display:flex; align-items:center; justify-content:space-between; padding:10px 16px; font-size:13px; }

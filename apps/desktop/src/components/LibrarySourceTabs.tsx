@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { LibraryViewSwitch } from "./LibraryViewSwitch";
-import { catalogViewName, useLocalFileMode } from "../lib/localFileMode";
+import { catalogViews, catalogViewName, useLocalFileMode } from "../lib/localFileMode";
 
 const duration = 1000;
 
@@ -17,9 +17,14 @@ export function LibrarySourceTabs({ value, onChange, project = false }: { value:
   }, [transition]);
   const feedback = transition?.source === value && transition.startedAt !== expired && Date.now() - transition.startedAt < duration
     ? { key: transition.startedAt, label: catalogViewName(transition.kind, media) } : undefined;
-  const hint = media === "images" ? "Tab 切换标签／集合" : "Tab 切换平铺／集合";
-  return <LibraryViewSwitch value={value} onChange={onChange} label="素材视图切换条" hint={project ? `Q 全局素材 · E 项目素材 · ${hint}` : hint}
+  const hint = media === "images" ? "Tab 切换全部／标签／集合" : "Tab 切换平铺／集合";
+  if (!project) return <LibraryViewSwitch value={view} label="素材视图切换条" hint={hint}
+    onChange={value => {
+      const kind = catalogViews(media).find(kind => kind === value);
+      if (kind) useLocalFileMode.getState().setCatalogView(kind);
+    }} options={catalogViews(media).map(kind => ({ value: kind, label: catalogViewName(kind, media) }))} />;
+  return <LibraryViewSwitch value={value} onChange={onChange} label="素材视图切换条" hint={`Q 全局素材 · E 项目素材 · ${hint}`}
     feedback={feedback}
-    options={[{ value: "global", label: project ? "全局素材" : catalogViewName(view, media), shortcut: project ? "Q" : undefined },
-      ...(project ? [{ value: "project", label: "项目素材", shortcut: "E" }] : [])]} />;
+    options={[{ value: "global", label: "全局素材", shortcut: "Q" },
+      { value: "project", label: "项目素材", shortcut: "E" }]} />;
 }
