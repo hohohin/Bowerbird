@@ -324,6 +324,8 @@ impl Database {
         }
         if accept_changes && expected != hash {
             tx.execute("DELETE FROM analyses WHERE asset_id=?1", [id])?;
+            tx.execute("DELETE FROM asset_colors WHERE asset_id=?1", [id])?;
+            tx.execute("UPDATE assets SET colors=NULL WHERE id=?1", [id])?;
         }
         tx.execute(
             "UPDATE external_assets SET fingerprint=?2 WHERE asset_id=?1",
@@ -628,6 +630,11 @@ mod tests {
         let f = Fixture::new();
         let a = f.index();
         f.project("p", &a.id);
+        {
+            let conn = f.db.conn.lock().unwrap();
+            conn.execute("UPDATE assets SET colors='[\"#D92424\"]' WHERE id=?1", [&a.id]).unwrap();
+            conn.execute("INSERT INTO asset_colors(asset_id,bucket) VALUES(?1,'red')", [&a.id]).unwrap();
+        }
         let old = a.store_path.unwrap();
         let moved = f.root.join("moved.png");
         fs::rename(&f.original, &moved).unwrap();
@@ -635,6 +642,7 @@ mod tests {
         assert_eq!(references(&f.db, "p").unwrap()[0].status, "missing");
         f.db.update_external(&f.paths, &a.id, &moved, false)
             .unwrap();
+        assert_eq!(f.db.conn.lock().unwrap().query_row("SELECT COUNT(*) FROM asset_colors WHERE asset_id=?1", [&a.id], |r| r.get::<_, i64>(0)).unwrap(), 1);
         assert_eq!(
             f.db.resolve_external_paths(&[old.clone()]).unwrap()[0],
             moved.to_str().unwrap()
@@ -650,6 +658,8 @@ mod tests {
         assert_eq!(references(&f.db, "p").unwrap()[0].status, "changed");
         let refreshed = f.db.update_external(&f.paths, &a.id, &moved, true).unwrap();
         assert_eq!(refreshed.width, Some(15));
+        assert!(refreshed.colors.is_none());
+        assert_eq!(f.db.conn.lock().unwrap().query_row("SELECT COUNT(*) FROM asset_colors WHERE asset_id=?1", [&a.id], |r| r.get::<_, i64>(0)).unwrap(), 0);
         assert!(f.db.resolve_external_paths(&[old]).is_ok());
     }
     #[test]

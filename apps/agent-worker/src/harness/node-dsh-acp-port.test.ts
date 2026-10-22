@@ -153,12 +153,14 @@ test("formal Node DSH port passes only the loopback model proxy capability and r
       DEEPSEEK_API_KEY: "real-parent-key-must-not-pass",
       DEEPSEEK_BASE_URL: "https://api.deepseek.example",
       ARK_API_KEY: "must-not-pass",
+      OPENAI_API_KEY: "must-not-pass",
       AGENT_WORKER_TOKEN: "must-not-pass",
     },
   });
   equal(environment.DEEPSEEK_API_KEY, "c".repeat(64));
   equal(environment.DEEPSEEK_BASE_URL, "http://127.0.0.1:43124");
   equal(environment.ARK_API_KEY, undefined);
+  equal(environment.OPENAI_API_KEY, undefined);
   equal(environment.AGENT_WORKER_TOKEN, undefined);
   throws(() => buildDshChildEnvironment(runtime, {
     profileTemplateDir: "/immutable",

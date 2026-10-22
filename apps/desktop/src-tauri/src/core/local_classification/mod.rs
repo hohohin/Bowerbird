@@ -885,7 +885,7 @@ impl LocalClassifier {
                 if let Some(progress) = status.jev_progress.as_mut().filter(|p| p.asset.id == id) {
                     progress.report = Some(report);
                     progress.message =
-                        "Jev 已返回全部候选概率，按前四名且不低于 30% 筛选，等待此图处理完成".into();
+                        "Jev 已返回全部候选概率，按前三名且不低于 42% 筛选，等待此图处理完成".into();
                 }
             })
             .await?;

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { open as openExternal } from "@tauri-apps/plugin-shell";
 import { useStore } from "../store";
 import { ModalShell } from "./ModalShell";
+import { accountErrorMessage } from "../lib/accountError";
 
 /**
  * Bowerbird 账号面板（独立于「环境状态」总览）：侧栏底部账号区「登录 / 管理账号」唤起，
@@ -118,7 +119,7 @@ export function AccountOnboarding() {
             </div>
             {auth && !auth.cloud_available && <p className="app-inline-status is-warning">当前版本未配置 Bowerbird Cloud；请安装官方构建。</p>}
             {sent && <p className="app-inline-status is-success">邮件已发送，请在本机浏览器完成验证。</p>}
-            {error && <p className="app-inline-status is-error">{error}</p>}
+            {error && <p role="alert" className="app-inline-status is-error">{accountErrorMessage(error)}</p>}
           </div>
         )}
     </ModalShell>

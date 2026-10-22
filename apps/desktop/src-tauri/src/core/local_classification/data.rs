@@ -7,6 +7,17 @@ use crate::error::{AppError, AppResult};
 pub const MODEL_ID: &str = "qwen3.5-0.8b-q4km-f16/b10809/v1";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LabelProvenance {
+    pub kind: String,
+    pub asset_id: Option<String>,
+    pub asset_name: Option<String>,
+    pub reason: Option<String>,
+    pub created_at: i64,
+    #[serde(default)]
+    pub preview_hash: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Label {
     pub id: String,
     pub name: String,
@@ -16,6 +27,8 @@ pub struct Label {
     pub has_examples: bool,
     #[serde(default)]
     pub dimension: Option<String>,
+    #[serde(default)]
+    pub provenance: Option<LabelProvenance>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -94,12 +107,21 @@ impl Database {
         Ok(true)
     }
 
+    pub fn local_label_source(&self, tag_id: &str) -> AppResult<Option<String>> {
+        let labels = self.local_labels()?;
+        let label = labels.iter().find(|l| l.id == tag_id).ok_or_else(|| AppError::Other("标签已不存在".into()))?;
+        let Some(id) = label.provenance.as_ref().and_then(|p| p.asset_id.as_ref()) else { return Ok(None); };
+        let expected = label.provenance.as_ref().and_then(|p| p.preview_hash.as_ref());
+        Ok(self.get_asset(id)?.and_then(|a| a.thumb_path)
+            .filter(|path| expected.is_some() && crate::core::external_files::fingerprint(std::path::Path::new(path)).ok().as_ref() == expected))
+    }
+
     pub fn local_labels(&self) -> AppResult<Vec<Label>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT t.id,t.name,t.classification_description,t.classification_enabled,COUNT(a.asset_id), \
              EXISTS(SELECT 1 FROM asset_tags m WHERE m.tag_id=t.id AND m.origin='manual') \
-             OR EXISTS(SELECT 1 FROM local_tag_rejections r WHERE r.tag_id=t.id), t.classification_dimension \
+             OR EXISTS(SELECT 1 FROM local_tag_rejections r WHERE r.tag_id=t.id), t.classification_dimension, t.classification_provenance \
              FROM tags t LEFT JOIN asset_tags a ON a.tag_id=t.id GROUP BY t.id ORDER BY COUNT(a.asset_id) DESC,t.name")?;
         let rows = stmt.query_map([], |r| {
             Ok(Label {
@@ -110,6 +132,8 @@ impl Database {
                 count: r.get(4)?,
                 has_examples: r.get(5)?,
                 dimension: r.get(6)?,
+                provenance: r.get::<_, Option<String>>(7)?.map(|json| serde_json::from_str(&json)
+                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(7, rusqlite::types::Type::Text, Box::new(e)))).transpose()?,
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -357,7 +381,7 @@ impl Database {
               AND EXISTS(SELECT 1 FROM local_auto_classification_pending p WHERE p.asset_id=a.id) \
               AND NOT EXISTS(SELECT 1 FROM asset_tags t WHERE t.asset_id=a.id AND t.origin='manual'))) \
             AND lower(COALESCE(a.ext,'')) IN ('jpg','jpeg','png','webp','gif','bmp') \
-            AND (?1=0 OR NOT EXISTS(SELECT 1 FROM local_visual_observations o WHERE o.asset_id=a.id AND (o.model=?2 OR (?2 IN ('jev-choice-dimensions/cloud-discovery-v6','jev-choice-flat-top4-30/cloud-discovery-v7') AND o.model IN ('jev-choice-dimensions/cloud-discovery-v5','jev-choice-dimensions/cloud-discovery-v6'))))) \
+            AND (?1=0 OR NOT EXISTS(SELECT 1 FROM local_visual_observations o WHERE o.asset_id=a.id AND (o.model=?2 OR (?2 IN ('jev-choice-dimensions/cloud-discovery-v6','jev-choice-flat-top4-30/cloud-discovery-v7','jev-choice-flat-top3-42/cloud-discovery-v8') AND o.model IN ('jev-choice-dimensions/cloud-discovery-v5','jev-choice-dimensions/cloud-discovery-v6','jev-choice-flat-top4-30/cloud-discovery-v7'))))) \
             ORDER BY a.created_at,a.id")?;
         let rows = stmt.query_map(params![pending_only, model, automatic], |r| r.get(0))?;
         Ok(rows.collect::<Result<_, _>>()?)
@@ -510,9 +534,19 @@ impl Database {
                 None => {
                     let id = ulid::Ulid::new().to_string();
                     let definition = definitions.iter().find(|d| d.name == name);
+                    let provenance = LabelProvenance {
+                        kind: if definition.is_some() { "cloud" } else { "local" }.into(),
+                        asset_id: Some(asset.into()),
+                        asset_name: Some(tx.query_row("SELECT name FROM assets WHERE id=?1", [asset], |r| r.get::<_, String>(0))?),
+                        reason: definition.and_then(|_| serde_json::from_str::<serde_json::Value>(&prediction.description).ok())
+                            .and_then(|value| value.get("reason").and_then(|reason| reason.as_str()).map(str::to_owned)),
+                        created_at: chrono::Utc::now().timestamp(),
+                        preview_hash: tx.query_row("SELECT thumb_path FROM assets WHERE id=?1", [asset], |r| r.get::<_, Option<String>>(0))?
+                            .and_then(|path| crate::core::external_files::fingerprint(std::path::Path::new(&path)).ok()),
+                    };
                     tx.execute(
-                        "INSERT INTO tags(id,name,source,classification_description) VALUES(?1,?2,'auto',?3)",
-                        params![id, name, definition.map(|d| d.definition.as_str()).unwrap_or("")],
+                        "INSERT INTO tags(id,name,source,classification_description,classification_provenance) VALUES(?1,?2,'auto',?3,?4)",
+                        params![id, name, definition.map(|d| d.definition.as_str()).unwrap_or(""), serde_json::to_string(&provenance).map_err(|e| AppError::Other(e.to_string()))?],
                     )?;
                     ids.push(id);
                 }

@@ -8,9 +8,9 @@ use rusqlite::{params, OptionalExtension};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
-const IMAGE: &str = "lower(COALESCE(a.ext,'')) IN ('png','jpg','jpeg','webp','gif','bmp','svg','avif','tif','tiff')";
-const VIDEO: &str = "lower(COALESCE(a.ext,'')) IN ('mp4','mov','webm','m4v','avi','mkv')";
-const VISIBLE: &str =
+pub(super) const IMAGE: &str = "lower(COALESCE(a.ext,'')) IN ('png','jpg','jpeg','webp','gif','bmp','svg','avif','tif','tiff')";
+pub(super) const VIDEO: &str = "lower(COALESCE(a.ext,'')) IN ('mp4','mov','webm','m4v','avi','mkv')";
+pub(super) const VISIBLE: &str =
     "(a.library_hidden=0 OR EXISTS(SELECT 1 FROM external_assets e WHERE e.asset_id=a.id))";
 
 #[derive(Serialize)]
@@ -58,47 +58,11 @@ impl Database {
             let (tag, asset) = row?;
             tag_asset_ids.entry(tag).or_default().push(asset);
         }
-        let mut prompts = BTreeSet::new();
-        if let Some(project) = project {
-            // Execution ownership, not current output membership, determines prompt provenance.
-            let mut stmt = conn.prepare("SELECT payload FROM task_queue WHERE project_id=?1 AND kind='generation'
-                UNION ALL SELECT payload FROM analyses WHERE kind='generation_meta' AND json_valid(payload)
-                AND json_extract(payload,'$.project_id')=?1")?;
-            for row in stmt.query_map([project], |r| r.get::<_, String>(0))? {
-                let Ok(value) = serde_json::from_str::<serde_json::Value>(&row?) else {
-                    continue;
-                };
-                for turn in std::iter::once(&value).chain(
-                    value
-                        .get("turns")
-                        .and_then(|v| v.as_array())
-                        .into_iter()
-                        .flatten(),
-                ) {
-                    if turn
-                        .get("media")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("image")
-                        != "image"
-                    {
-                        continue;
-                    }
-                    for key in ["prompt_raw", "prompt", "applied_prompt", "appliedPrompt"] {
-                        if let Some(text) = turn
-                            .get(key)
-                            .and_then(|v| v.as_str())
-                            .filter(|s| !s.trim().is_empty())
-                        {
-                            prompts.insert(text.to_owned());
-                        }
-                    }
-                }
-            }
-        }
+        let prompts = catalog_prompts(&conn, project)?;
         Ok(MaterialCatalog {
             tags,
             collections,
-            prompts: prompts.into_iter().collect(),
+            prompts,
             tag_asset_ids,
         })
     }
@@ -441,4 +405,46 @@ mod tests {
             "private"
         );
     }
+}
+
+// Shared read-only project relevance context; never fetches asset membership lists.
+pub(super) fn catalog_prompts(conn: &rusqlite::Connection, project: Option<&str>) -> AppResult<Vec<String>> {
+    let mut prompts = BTreeSet::new();
+    if let Some(project) = project {
+        // Execution ownership, not current output membership, determines prompt provenance.
+        let mut stmt = conn.prepare("SELECT payload FROM task_queue WHERE project_id=?1 AND kind='generation'
+            UNION ALL SELECT payload FROM analyses WHERE kind='generation_meta' AND json_valid(payload)
+            AND json_extract(payload,'$.project_id')=?1")?;
+        for row in stmt.query_map([project], |r| r.get::<_, String>(0))? {
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&row?) else {
+                continue;
+            };
+            for turn in std::iter::once(&value).chain(
+                value
+                    .get("turns")
+                    .and_then(|v| v.as_array())
+                    .into_iter()
+                    .flatten(),
+            ) {
+                if turn
+                    .get("media")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("image")
+                    != "image"
+                {
+                    continue;
+                }
+                for key in ["prompt_raw", "prompt", "applied_prompt", "appliedPrompt"] {
+                    if let Some(text) = turn
+                        .get(key)
+                        .and_then(|v| v.as_str())
+                        .filter(|s| !s.trim().is_empty())
+                    {
+                        prompts.insert(text.to_owned());
+                    }
+                }
+            }
+        }
+    }
+    Ok(prompts.into_iter().collect())
 }

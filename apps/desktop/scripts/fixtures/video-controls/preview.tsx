@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { VideoControls } from "../../../src/components/creation/VideoControls";
 import { DreaminaTaskCredit } from "../../../src/components/creation/DreaminaCredits";
-import { DEFAULT_VIDEO_OPTIONS, cloudVideoOptions } from "../../../src/lib/videoGeneration";
+import { DEFAULT_VIDEO_OPTIONS } from "../../../src/lib/videoGeneration";
 import { useStore } from "../../../src/store";
 import "../../../src/styles.css";
 
@@ -12,6 +12,7 @@ w.balance = 9434;
 w.cost = 240;
 w.fail = false;
 w.store = useStore;
+useStore.setState({ cloudAuth: { logged_in: true, cloud_available: true } as any, cloudEntitlement: { policy: { can_use_byo: true }, balances: { daily: 100, sub: 0, topup: 0 } } as any, dreaminaHealth: { ok: true } });
 w.__TAURI_INTERNALS__ = { invoke: async (command: string, args: any) => {
   w.calls.push({ command, args });
   if (w.fail) throw "模拟网络错误";
@@ -22,6 +23,8 @@ w.__TAURI_INTERNALS__ = { invoke: async (command: string, args: any) => {
   }
   if (command === "dreamina_video_models") return [
     { model_version: "seedance2.5", resolutions: ["480p", "720p", "1080p"], min_duration: 4, max_duration: 30 },
+    { model_version: "seedance2.0", resolutions: ["720p"], min_duration: 4, max_duration: 15 },
+    { model_version: "seedance2.0mini", resolutions: ["720p"], min_duration: 4, max_duration: 15 },
     { model_version: "seedance2.0fast", resolutions: ["720p"], min_duration: 4, max_duration: 15 },
     { model_version: "seedance2.0_vip", resolutions: ["720p", "1080p", "4k"], min_duration: 4, max_duration: 15 },
     ...(args.kind === "image2video" ? [{ model_version: "seedance1.0fast", resolutions: ["720p"], min_duration: 5, max_duration: 10 }] : []),
@@ -34,10 +37,11 @@ function Preview() {
   const [bill, setBill] = useState({ submitId: "first", busy: false });
   w.setBill = setBill;
   w.options = options;
+  w.setOptions = setOptions;
   w.channel = channel;
   return <main className="m-3 rounded border border-edge bg-panel p-3 text-ink">
-    <div className="flex flex-wrap gap-2"><VideoControls options={options} onChange={setOptions} channel={channel}
-      onChannelChange={value => { setChannel(value); if (value === "cloud") setOptions(cloudVideoOptions(options)); }} ratio="16:9" onRatioChange={() => {}} /></div>
+    <div className="flex flex-wrap gap-2"><VideoControls options={options} onChange={(value, nextChannel) => { setOptions(value); if (nextChannel) setChannel(nextChannel); }} channel={channel}
+      ratio="16:9" onRatioChange={() => {}} /></div>
     <div className="mt-4"><DreaminaTaskCredit {...bill} /></div>
   </main>;
 }

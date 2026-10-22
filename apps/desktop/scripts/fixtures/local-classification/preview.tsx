@@ -29,6 +29,7 @@ w.__TAURI_INTERNALS__ = {
   switch (command) {
     case "plugin:event|listen": w.listeners[args.handler] = args.handler; return args.handler;
     case "plugin:event|unlisten": delete w.listeners[args.eventId]; return;
+    case "local_classification_source": return w.sourcePreview ?? null;
     case "local_classification_status": return structuredClone(w.classificationStatus);
     case "project_classification_labels":
     case "local_classification_labels": return structuredClone(w.labels);
@@ -50,7 +51,7 @@ w.__TAURI_INTERNALS__ = {
       w.classificationStatus.project_id = args.projectId ?? null;
       w.classificationStatus.global_scope = command === "global_classification_start";
       w.classificationStatus.folder_root = args.root ?? null;
-      w.classificationStatus.model = !args.install && w.settings.jev_image_classification_enabled ? "jev-choice-flat-top4-30/cloud-discovery-v7" : "local-test";
+      w.classificationStatus.model = !args.install && w.settings.jev_image_classification_enabled ? "jev-choice-flat-top3-42/cloud-discovery-v8" : "local-test";
       w.classificationStatus.current_asset = args.install ? null : structuredClone(w.previewAsset);
       if (!args.install) w.classificationStatus.total = 3;
       w.classificationStatus.jev_progress = !args.install && w.settings.jev_image_classification_enabled ? { asset: structuredClone(w.previewAsset), report: null, message: "正在等待 Jev 返回结果…" } : null;

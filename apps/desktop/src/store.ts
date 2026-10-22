@@ -1267,11 +1267,9 @@ export const useStore = create<State>((set, get) => {
     const expectedProjectId = s.activeProjectId;
     const expectedRouteRevision = s.projectRouteRevision;
     const requestId = ++promptedAssetsReadRequestId;
-    const expectedProject = s.projects.find((candidate) => candidate.id === expectedProjectId);
-    const backendProjectId = expectedProject?.provisional ? null : expectedProjectId;
     set({ promptedAssetsLoaded: false });
     api
-      .listPromptedAssets(backendProjectId)
+      .getPromptedAsset(assetId)
       .then((prompted) => {
         const current = get();
         if (!isLatestProjectScopeRead({
@@ -1283,7 +1281,7 @@ export const useStore = create<State>((set, get) => {
           requestId,
           latestRequestId: promptedAssetsReadRequestId,
         })) return;
-        set({ promptedAssets: prompted, promptedAssetsLoaded: true });
+        set({ promptedAssets: prompted ? [...current.promptedAssets.filter(a => a.id !== assetId), prompted] : current.promptedAssets, promptedAssetsLoaded: true });
       })
       .catch((e) => {
         console.error("load promptedAssets for ring failed", e);

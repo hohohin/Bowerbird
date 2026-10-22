@@ -116,7 +116,7 @@ try {
     const names = ["海报", "字体排版", "场景产品图", "角色设定图", "无明显匹配项"];
     const labels = names.map((name, i) => ({ key: i === 4 ? "no_match" : `label_${i}`, name,
       description: name === "字体排版" ? "字形及文字视觉组织构成画面重点" : "可复用的视觉特征",
-      probability: probabilities[i], selected: error ? null : i < 4 && probabilities[i] >= .3 }));
+      probability: probabilities[i], selected: error ? null : i < 4 && probabilities[i] >= .42 }));
     const choice = labels.reduce((a, b) => a.probability >= b.probability ? a : b).key;
     const answers = { labels: { type: "choice", choice, confidence: error ? 2 : .81,
       probabilities: Object.fromEntries(labels.map(label => [label.key, label.probability])) } };
@@ -124,12 +124,12 @@ try {
     window.classificationStatus.jev_progress.report = { model: "jev-test-version", labels, error,
       confidence: error ? null : .81, no_match: error ? null : !labels.some(l => l.selected),
       response: { model: "jev-test-version", answers, usage: { input_tokens: 123 } } };
-    window.classificationStatus.jev_progress.message = "Jev 已返回全部候选概率，按前四名且不低于 30% 筛选，等待此图处理完成";
+    window.classificationStatus.jev_progress.message = "Jev 已返回全部候选概率，按前三名且不低于 42% 筛选，等待此图处理完成";
   }, { probabilities, error });
-  await setJevChoices([.4, .3, .29, .01, 0]);
+  await setJevChoices([.5, .42, .07, .01, 0]);
   const ranking = jevResults.getByRole("region", { name: "Jev 标签排名", exact: true });
   const typography = ranking.getByRole("row").filter({ hasText: "字体排版" });
-  await typography.getByText("30.00%", { exact: true }).waitFor();
+  await typography.getByText("42.00%", { exact: true }).waitFor();
   await ranking.getByText("jev-test-version · 置信度 81.00%", { exact: true }).waitFor();
   await typography.getByText("选中标签", { exact: true }).waitFor();
   assert.equal(await jevResults.getByText("选中标签", { exact: true }).count(), 2);
@@ -142,25 +142,25 @@ try {
   assert.equal(await jevResults.getByRole("table").count(), 1);
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "打开自动分类", exact: true }).click();
-  await jevResults.getByText("40.00%", { exact: true }).waitFor();
+  await jevResults.getByText("50.00%", { exact: true }).waitFor();
   await ranking.scrollIntoViewIfNeeded();
   await page.screenshot({ path: ".tmp/classification-preview/jev-results-light-narrow.png" });
   assert.equal(await dialog.evaluate(el => el.scrollWidth > el.clientWidth + 1), false);
   await page.evaluate(() => { window.classificationStatus.busy = false; window.classificationStatus.phase = "complete"; });
   await preview.waitFor({ state: "hidden" });
-  assert.equal(await jevResults.getByText("40.00%", { exact: true }).isVisible(), true);
+  assert.equal(await jevResults.getByText("50.00%", { exact: true }).isVisible(), true);
   await page.setViewportSize({ width: 1050, height: 950 });
   await page.evaluate(() => document.documentElement.dataset.theme = "dark");
   await dialog.getByRole("button", { name: "进行分类", exact: true }).click();
   await jevResults.getByText("暂无 Jev 返回内容", { exact: true }).waitFor();
   await setJevChoices([.2, .15, .1, .05, .5]);
-  await ranking.getByText("没有真实标签达到 30%，转 Cloud 补充", { exact: true }).waitFor();
+  await ranking.getByText("没有真实标签达到 42%，转 Cloud 补充", { exact: true }).waitFor();
   assert.equal(await jevResults.getByText("选中标签", { exact: true }).count(), 0);
   assert.equal(await ranking.locator("tbody tr").first().getByText("1. 无明显匹配项", { exact: true }).isVisible(), true);
   await ranking.scrollIntoViewIfNeeded();
   await page.screenshot({ path: ".tmp/classification-preview/jev-no-match-dark.png" });
-  await setJevChoices([.35, 0, 0, 0, .65]);
-  await ranking.getByText("已按概率与 30% 门槛选出标签", { exact: true }).waitFor();
+  await setJevChoices([.42, 0, 0, 0, .58]);
+  await ranking.getByText("已按概率与 42% 门槛选出标签", { exact: true }).waitFor();
   assert.equal(await jevResults.getByText("选中标签", { exact: true }).count(), 1);
   await setJevChoices([.4, .3, .2, .1, 0], "Jev Choice 置信度无效");
   await jevResults.getByText("本图未采用：Jev Choice 置信度无效", { exact: true }).waitFor();

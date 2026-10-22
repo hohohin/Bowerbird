@@ -45,6 +45,11 @@ try {
   assert.deepEqual(await page.getByRole('tab').allTextContents(),['全部','标签分类','集合分类']);
   assert.equal(await page.locator('.library-source-key-hint').count(),0,'home has no source-switch hints');
   await page.getByRole('region',{name:'按标签浏览素材',exact:true}).waitFor();
+  for(const name of ['按集合浏览素材','平铺浏览全部图片','按标签浏览素材']) {
+    await page.getByRole('tab',{selected:true}).click();
+    await page.getByRole('region',{name,exact:true}).waitFor();
+    await page.locator('.catalog-view-wipe').waitFor({state:'detached'});
+  }
   assert.equal(await page.getByRole('group',{name:'文件夹地址栏'}).count(),0);
   const aggregateCalls = await page.evaluate(() => window.aggregateCalls);
   await clickControl('文件浏览器');
@@ -58,11 +63,11 @@ try {
   await page.getByRole('button',{name:'child.png',exact:true}).waitFor();
   await page.getByRole('button',{name:'上一级',exact:true}).click();
   await page.getByRole('button',{name:'文件夹 sub',exact:true}).waitFor();
-  await tab('全局素材').click();
+  await clickControl('文件浏览器');
   await page.evaluate(() => window.slowBrowse = true);
   await clickControl('文件浏览器');
   await page.getByRole('status').filter({hasText:'正在读取文件夹'}).waitFor();
-  await tab('全局素材').click(); await page.waitForTimeout(800);
+  await clickControl('文件浏览器'); await page.waitForTimeout(800);
   await page.getByRole('region',{name:'按标签浏览素材',exact:true}).waitFor();
   assert.equal(await page.locator('.local-file-workspace').count(),0,'late file responses cannot replace category view');
   await tab('全局素材').focus(); await page.keyboard.press('Tab');
@@ -123,6 +128,15 @@ try {
   await region('tags').waitFor();
   assert.deepEqual(await sources.getByRole('tab').evaluateAll(tabs=>tabs.map(tab=>tab.getAttribute('aria-label'))),['全局素材','项目素材']);
   assert.equal(await tab('全局素材').getAttribute('aria-selected'),'true','Tab opens the first source');
+  for(const [name,label] of [['按集合浏览素材','集合分类'],['平铺浏览全部图片','全部'],['按标签浏览素材','标签分类']]) {
+    await tab('全局素材').click();
+    await page.getByRole('region',{name,exact:true}).waitFor();
+    assert.equal(await tab('全局素材').getAttribute('aria-selected'),'true','reselecting cycles views without changing source');
+    assert.equal(await sources.locator('.library-catalog-layer:not([data-outgoing]) .library-tab-view-label').textContent(),label,'click reuses Tab feedback');
+    await page.locator('.catalog-view-wipe').waitFor({state:'detached'});
+  }
+  await tab('全局素材').press('Home');
+  await page.getByRole('region',{name:'按标签浏览素材',exact:true}).waitFor();
   await tab('项目素材').click();
   await sources.evaluate(async el => { await Promise.all(el.getAnimations({subtree:true}).filter(a=>a.effect?.getComputedTiming().iterations!==Infinity).map(animation=>animation.finished.catch(()=>{}))); });
   const switchBox=await sources.locator('.library-view-switch').boundingBox();
@@ -338,6 +352,19 @@ try {
   await page.screenshot({path:'.tmp/material-navigation/remembered-width-centered.png'});
   await grip.focus(); await grip.press('End');
   assert.equal(await page.evaluate(()=>localStorage.getItem('bowerbird.canvasLibraryWidth')),null,'restore maximum clears the saved width');
+  await clickControl('视频'); await closeControls();
+  await page.getByRole('region',{name:'平铺浏览视频',exact:true}).waitFor();
+  await tab('全局素材').click(); await region('collections').waitFor();
+  await page.locator('.catalog-view-wipe').waitFor({state:'detached'});
+  await tab('全局素材').click();
+  await page.getByRole('region',{name:'平铺浏览视频',exact:true}).waitFor();
+  await page.locator('.catalog-view-wipe').waitFor({state:'detached'});
+  await tab('项目素材').click();
+  await page.getByRole('region',{name:'平铺浏览视频',exact:true}).waitFor();
+  await tab('项目素材').click(); await region('collections').waitFor();
+  await page.locator('.catalog-view-wipe').waitFor({state:'detached'});
+  await tab('项目素材').press('e'); await region('collections').waitFor();
+  assert.equal(await tab('项目素材').getAttribute('aria-selected'),'true','Q/E still select sources without cycling views');
   assert.deepEqual(errors,[]);
   console.log('PASS two-source Q/E navigation, per-source Tab views, IME/editor/dialog guards, independent browser and stale response protection, project manager');
 } finally { await browser.close(); await server.close(); }

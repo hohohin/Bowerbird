@@ -1,3 +1,4 @@
+import { installCatalogPagingMock } from "../catalogPagingMock";
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { CanvasWorkspace } from "../../../src/components/CanvasWorkspace";
@@ -426,5 +427,6 @@ function Fixture() {
     <AssetContextMenu /><ImageAnnotator /><ToastViewport /><VisualProfileDialog />{settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
   </div>;
 }
+installCatalogPagingMock(window);
 createRoot(document.getElementById("root")!).render(new URLSearchParams(location.search).has("strict")
   ? <React.StrictMode>{detailRoute ? <App /> : <Fixture />}</React.StrictMode> : detailRoute ? <App /> : <Fixture />);

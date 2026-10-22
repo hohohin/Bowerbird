@@ -1,20 +1,19 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { ChevronDown, ChevronRight, Folder, MoreHorizontal, Pencil, Plus, Settings2, Trash2, X } from "lucide-react";
-import { materialCatalog, type CatalogKind, type MaterialCatalog } from "../lib/materialCatalog";
-import { catalogInitial, collectionRows, groupCatalogAssets, orderCatalogTags, isCatalogVideo } from "../lib/materialCatalogOrder";
+import { materialCatalog, type CatalogKind, type MaterialCatalog, type CatalogFilter } from "../lib/materialCatalog";
+import { catalogInitial, collectionRows, orderCatalogTags, UNTAGGED_SECTION } from "../lib/materialCatalogOrder";
 import { useLocalFileMode, type LibraryMedia } from "../lib/localFileMode";
 import { useCatalogPins } from "../lib/catalogPins";
-import { setDragAssets } from "../lib/dragPayload";
-import { useMasonryLayout } from "../lib/useMasonryLayout";
+import { api } from "../lib/api";
+import { VirtualCatalog, type CatalogLocation } from "./VirtualCatalog";
+import type { CatalogSectionInfo } from "../lib/catalogVirtualLayout";
 import { useThumbnailPinch } from "../lib/useThumbnailPinch";
-import { useFileColors } from "../lib/useFileColors";
 import { addMaterialAssets } from "../lib/materialActions";
 import { externalFiles } from "../lib/externalFiles";
 import { notifyError, notifySuccess } from "../lib/notify";
 import { useStore } from "../store";
 import type { Asset, Folder as Collection } from "../lib/types";
-import { FileMediaCard } from "./FileMediaCard";
 import { FileColorFilter } from "./FileColorFilter";
 import { LibraryFloatingControls } from "./LibraryFloatingControls";
 import { LibraryBrowserButton } from "./LibraryBrowserButton";
@@ -44,19 +43,15 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
   const glass = useLibraryGlass();
   const positionKey = JSON.stringify([projectId, projectScope, media, kind]);
   const [savedPosition] = useState(() => browsePositions.get(positionKey));
-  const restorePosition = useRef(savedPosition);
   const flat = kind === "all" || (media === "videos" && kind === "tags");
   const [catalog, setCatalog] = useState<MaterialCatalog>({ tags: [], collections: [], prompts: [], tag_asset_ids: {} });
   const [active, setActive] = useState<string | null>(savedPosition?.active ?? null);
-  const [pinnedSection, setPinnedSection] = useState<string | null>(null);
-  const [assets, setAssets] = useState<Asset[]>([]);
+  const [total, setTotal] = useState(0);
+  const [untagged, setUntagged] = useState(0);
   const [revision, setRevision] = useState(0);
   const [catalogError, setCatalogError] = useState("");
   const [catalogLoading, setCatalogLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(true);
   const loadedCatalogScope = useRef<string | null>(null);
-  const loadedAssetScope = useRef<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [multiple, setMultiple] = useState(false);
   const [alphabetic, setAlphabetic] = useState(savedPosition?.alphabetic ?? false);
@@ -71,11 +66,13 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
   const [working, setWorking] = useState(false);
   const [colorsOpen, setColorsOpen] = useState(false);
   const [color, setColor] = useState<string | null>(savedPosition?.color ?? null);
+  const [colorProgress, setColorProgress] = useState({ pending: false, failed: 0 });
+  const [colorRetry, setColorRetry] = useState(0);
   const lock = useRef(false);
-  const anchor = useRef<string | null>(null);
+  const anchor = useRef<CatalogLocation | null>(null);
+  const selectionVersion = useRef(0);
   const alive = useRef(true);
   const previewVersion = useRef(0);
-  const [grid, setGrid] = useState<HTMLDivElement | null>(null);
   const sidebar = useRef<HTMLElement>(null);
   const resizing = useRef<{ pointer: number; x: number; width: number } | null>(null);
   const [sidebarMetrics, setSidebarMetrics] = useState({ width: 208, max: 320 });
@@ -90,40 +87,49 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
   const togglePin = useCatalogPins(s => s.toggle);
   const width = useStore(s => s.libraryThumbnailWidth);
   const pinch = useThumbnailPinch("library");
-  const mediaAssets = useMemo(() => assets.filter(a => isCatalogVideo(a) === (media === "videos")), [assets, media]);
-  const files = useMemo(() => mediaAssets.filter(a => a.store_path).map(a => ({ path: a.store_path!, name: a.name, directory: false })), [mediaAssets]);
-  const palette = useFileColors(files, colorsOpen || !!color, revision);
-  const entries = useMemo(() => mediaAssets.filter(a => (!query || a.name.toLocaleLowerCase().includes(query.toLocaleLowerCase()))
-    && (!generatedFilter || (a.generation_session_id != null) === (generatedFilter === "source:generated"))
-    && (!color || (a.store_path && palette.colors.get(a.store_path)?.includes(color)))), [mediaAssets, query, generatedFilter, color, palette.colors]);
   const tags = useMemo(() => orderCatalogTags(catalog.tags, catalog.prompts, !!projectId && !alphabetic, pinnedTags), [catalog, projectId, alphabetic, pinnedTags]);
-  const groups = useMemo(() => groupCatalogAssets(tags, entries, catalog.tag_asset_ids ?? {}), [tags, entries, catalog.tag_asset_ids]);
-  const visibleTags = useMemo(() => tags.filter(tag => groups.some(group => group.id === tag.id)), [tags, groups]);
-  const selectionOrder = useMemo(() => kind === "tags" && !flat ? [...new Map(groups.flatMap(group => group.assets).map(asset => [asset.id, asset])).values()] : entries, [kind, flat, groups, entries]);
+  const visibleTags = useMemo(() => tags.filter(tag => tag.count > 0), [tags]);
   const rows = useMemo(() => collectionRows(catalog.collections), [catalog.collections]);
   const currentCollection = catalog.collections.find(c => c.id === active);
-  const selectedAssets = entries.filter(a => selected.has(a.id));
   const scope = kind === "collections" ? currentCollection?.id ?? null : null;
-  const reading = loading || catalogLoading || (!!color && palette.pending);
+  const filter = useMemo<CatalogFilter>(() => ({ kind: flat ? "all" : kind, id: scope, projectId: projectScope ? projectId : null, media,
+    query, generated: generatedFilter ? generatedFilter === "source:generated" : null, color }), [kind, flat, scope, projectScope, projectId, media, query, generatedFilter, color]);
+  const filterKey = JSON.stringify([filter, projectId]);
+  const filterKeyRef = useRef(filterKey); filterKeyRef.current = filterKey;
+  const reading = catalogLoading;
+  const palette = { colors: new Map<string, string[]>(), ...colorProgress, retry: () => setColorRetry(v => v + 1) };
+  const colorScope = JSON.stringify({ ...filter, color: null });
+  const indexColors = colorsOpen || !!color;
+  useEffect(() => {
+    if (!indexColors) { setColorProgress({ pending: false, failed: 0 }); return; }
+    let current = true;
+    setColorProgress({ pending: true, failed: 0 });
+    void (async () => {
+      let after: string | null = null, failed = 0;
+      try {
+        do {
+          const batch = await materialCatalog.prepareColors(JSON.parse(colorScope), after);
+          if (!current) return;
+          failed += batch.failed; after = batch.after;
+          setColorProgress({ pending: batch.more, failed });
+          if (batch.updated) setRevision(v => v + 1);
+          if (!batch.more) break;
+        } while (current);
+      } catch { if (current) setColorProgress({ pending: false, failed: failed + 1 }); }
+    })();
+    return () => { current = false; };
+  }, [colorScope, indexColors, colorRetry]);
+  const sections = useMemo<CatalogSectionInfo[]>(() => flat ? [{ id: "all", name: "", count: total, tagId: null }]
+    : kind === "tags" ? [...visibleTags.map(tag => ({ id: tag.id, name: tag.name, count: tag.count, tagId: tag.id })),
+      ...(untagged ? [{ id: UNTAGGED_SECTION, name: "未分类", count: untagged, tagId: UNTAGGED_SECTION }] : [])]
+    : currentCollection ? [{ id: "collection", name: currentCollection.name, count: total, tagId: null }] : [], [flat, kind, total, visibleTags, untagged, currentCollection]);
+  const onActive = useCallback((id: string | null) => { if (kind === "tags" && !flat) setActive(id); }, [kind, flat]);
   const position = useRef({ active, alphabetic, color, query, generatedFilter });
   position.current = { active, alphabetic, color, query, generatedFilter };
   useLayoutEffect(() => {
     const view = scroll.current;
     return () => { browsePositions.set(positionKey, { ...position.current, top: view?.scrollTop ?? 0 }); };
   }, [positionKey]);
-  useLayoutEffect(() => {
-    if (reading || !grid || !restorePosition.current) return;
-    const saved = restorePosition.current;
-    const frame = requestAnimationFrame(() => {
-      if (scroll.current && saved.query === query && saved.generatedFilter === generatedFilter) scroll.current.scrollTop = saved.top;
-      restorePosition.current = undefined;
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [reading, grid, entries, query, generatedFilter]);
-  useEffect(() => {
-    onAssetsChange?.(mediaAssets);
-    return () => onAssetsChange?.([]);
-  }, [mediaAssets, onAssetsChange]);
   function navigateTag(id: string) { setActive(id); setJump(previous => ({ id, sequence: (previous?.sequence ?? 0) + 1 })); }
   function navigateLetter(letter: string) {
     const target = orderCatalogTags(visibleTags, [], false).find(tag => !pinnedTags.includes(tag.id) && catalogInitial(tag.name) === letter)
@@ -152,31 +158,18 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
     return () => { alive.current = false; previewVersion.current++; window.clearTimeout(timer); void unlisten.then(stop => stop()); };
   }, []);
   useEffect(() => {
-    const scopeKey = JSON.stringify([projectId, kind]);
     let current = true; setCatalogError("");
-    if (loadedCatalogScope.current !== scopeKey) setCatalogLoading(true);
-    materialCatalog.read(projectId).then(value => {
+    if (loadedCatalogScope.current !== filterKey) setCatalogLoading(true);
+    materialCatalog.overview(filter, projectId).then(value => {
       if (!current) return;
-      loadedCatalogScope.current = scopeKey;
-      setCatalog(value);
+      loadedCatalogScope.current = filterKey;
+      setCatalog(value.catalog); setTotal(value.total); setUntagged(value.untagged);
       setActive(id => kind === "collections"
-        ? value.collections.some(item => item.id === id) ? id : collectionRows(value.collections)[0]?.item.id ?? null
-        : id && !value.tags.some(item => item.id === id) ? null : id);
+        ? value.catalog.collections.some(item => item.id === id) ? id : collectionRows(value.catalog.collections)[0]?.item.id ?? null
+        : id);
     }).catch(error => { if (current) setCatalogError(String(error)); }).finally(() => { if (current) setCatalogLoading(false); });
     return () => { current = false; };
-  }, [projectId, kind, revision]);
-  useEffect(() => {
-    const scopeKey = JSON.stringify([kind, scope, projectScope, projectId]);
-    let current = true; setError("");
-    // Classification emits an assets-changed event per image. Keep the current
-    // scope visible while refreshing; only a real scope change clears its cards.
-    if (loadedAssetScope.current !== scopeKey) { setLoading(true); setAssets([]); }
-    // The collection browser only reads a concrete collection, never the whole library.
-    if (kind === "collections" && !scope) { setLoading(false); return; }
-    materialCatalog.assets(kind, scope, projectScope ? projectId : null).then(value => { if (current) { loadedAssetScope.current = scopeKey; setAssets(value); setSelected(previous => new Set([...previous].filter(id => value.some(a => a.id === id)))); } })
-      .catch(error => { if (current) setError(String(error)); }).finally(() => { if (current) setLoading(false); });
-    return () => { current = false; };
-  }, [kind, scope, revision, projectScope, projectId]);
+  }, [filterKey, revision]);
   useEffect(() => {
     if (kind !== "collections" || !currentCollection) return;
     setCollapsed(previous => {
@@ -192,55 +185,65 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
   useEffect(() => {
     setSelected(new Set()); setMultiple(false); anchor.current = null; previewVersion.current++; setPreview(null); setJump(null);
     useStore.getState().closeContextMenu();
-    setPinnedSection(null);
+    selectionVersion.current++;
     if (scroll.current) scroll.current.scrollTop = 0;
-  }, [kind, scope, query, color, generatedFilter, projectId, projectScope]);
-  useLayoutEffect(() => {
-    if (kind !== "tags" || !jump || reading || !grid || !scroll.current) return;
-    const frame = requestAnimationFrame(() => {
-      const view = scroll.current;
-      const target = [...grid.querySelectorAll<HTMLElement>('[data-tag-section]')].find(el => el.dataset.tagSection === jump.id);
-      if (target && view) view.scrollTop += target.getBoundingClientRect().top - view.getBoundingClientRect().top;
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [kind, jump, reading, grid, groups]);
-  useEffect(() => {
-    const view = scroll.current;
-    if (!view || !grid) return;
-    let frame = 0;
-    const update = () => {
-      frame = 0;
-      const top = view.getBoundingClientRect().top;
-      const sections = [...grid.querySelectorAll<HTMLElement>('[data-catalog-section]')];
-      const reached = [...sections].reverse().find(el => el.getBoundingClientRect().top <= top + 0.5);
-      setPinnedSection(view.scrollTop > 0 && reached ? reached.dataset.catalogSection ?? null : null);
-      const current = reached ?? sections[0];
-      if (kind === "tags" && current) setActive(current.dataset.tagSection ?? null);
-    };
-    const schedule = () => { if (!frame) frame = requestAnimationFrame(update); };
-    const observer = new ResizeObserver(() => { grid.style.setProperty("--catalog-viewport-height", `${view.clientHeight}px`); schedule(); });
-    observer.observe(view); observer.observe(grid); view.addEventListener("scroll", schedule);
-    schedule();
-    return () => { observer.disconnect(); cancelAnimationFrame(frame); view.removeEventListener("scroll", schedule); };
-  }, [kind, grid, groups]);
+  }, [filterKey]);
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "a" || document.querySelector('[role="dialog"], [role="menu"]')) return;
       const target = event.target as HTMLElement | null;
-      if (!target?.closest('.categorized-library') || target.closest('input,textarea,select,[contenteditable="true"]') || !grid?.offsetWidth) return;
-      event.preventDefault(); setMultiple(true); setSelected(new Set(entries.map(a => a.id)));
+      if (!target?.closest('.categorized-library') || target.closest('input,textarea,select,[contenteditable="true"]')) return;
+      event.preventDefault(); void selectAll();
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [entries, grid]);
-  function finishSelection() { setSelected(new Set()); setMultiple(false); anchor.current = null; }
-  function select(asset: Asset, additive: boolean, range: boolean) {
+  }, [filterKey, total, working]);
+  function finishSelection() { selectionVersion.current++; setSelected(new Set()); setMultiple(false); anchor.current = null; }
+  async function readIds(queryFilter: CatalogFilter, start: number, count: number) {
+    const result: string[] = [], version = selectionVersion.current;
+    for (let offset = start; offset < start + count; offset += 2000) {
+      if (!alive.current || version !== selectionVersion.current) return [];
+      const ids = await materialCatalog.ids(queryFilter, offset, Math.min(2000, start + count - offset));
+      result.push(...ids);
+      if (ids.length < Math.min(2000, start + count - offset)) break;
+    }
+    return result;
+  }
+  async function selectAll() {
+    if (working || reading) return;
+    const version = selectionVersion.current;
+    await run(async () => {
+      const ids = await readIds(filter, 0, total);
+      if (alive.current && selectionVersion.current === version) { setSelected(new Set(ids)); setMultiple(true); }
+    });
+  }
+  async function resolveSelection(ids = [...selected]) {
+    const assets: Asset[] = [];
+    for (let i = 0; i < ids.length; i += 200) assets.push(...await api.getAssetsByIds(ids.slice(i, i + 200)));
+    if (assets.length !== ids.length) throw new Error("部分所选素材已不存在，请重新选择");
+    return assets;
+  }
+  function select(asset: Asset, additive: boolean, range: boolean, location: CatalogLocation) {
     if (working) return;
     if (range && anchor.current) {
-      const start = selectionOrder.findIndex(a => a.id === anchor.current), end = selectionOrder.indexOf(asset);
-      if (start >= 0) { setSelected(previous => new Set([...previous, ...selectionOrder.slice(Math.min(start,end), Math.max(start,end) + 1).map(a => a.id)])); setMultiple(true); return; }
+      const from = anchor.current, version = selectionVersion.current;
+      const a = sections.findIndex(s => s.id === from.section), b = sections.findIndex(s => s.id === location.section);
+      if (a >= 0 && b >= 0) {
+        void run(async () => {
+          const forward = a < b || (a === b && from.index <= location.index);
+          const first = forward ? from : location, last = forward ? location : from;
+          const ids: string[] = [];
+          for (let i = Math.min(a,b); i <= Math.max(a,b); i++) {
+            const section = sections[i], start = section.id === first.section ? first.index : 0;
+            const end = section.id === last.section ? last.index : section.count - 1;
+            for (const id of await readIds({ ...filter, id: section.tagId ?? filter.id }, start, end - start + 1)) ids.push(id);
+          }
+          if (alive.current && selectionVersion.current === version) { setSelected(previous => new Set([...previous, ...ids])); setMultiple(true); }
+        });
+        return;
+      }
     }
-    anchor.current = asset.id;
+    anchor.current = location;
     if (additive || range || multiple) setSelected(previous => { const next = new Set(previous); if (next.has(asset.id)) next.delete(asset.id); else next.add(asset.id); return next; });
     else setSelected(new Set([asset.id]));
     if (additive || range) setMultiple(true);
@@ -269,10 +272,15 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
   }
   function context(asset: Asset, x: number, y: number) {
     if (working) return;
-    const targets = selected.has(asset.id) ? selectedAssets : [asset];
+    const ids = selected.has(asset.id) ? [...selected] : [asset.id];
+    const key = filterKey;
     if (!selected.has(asset.id)) setSelected(new Set([asset.id]));
-    useStore.getState().openContextMenu(x, y, asset.id, { asset, libraryProjectId: projectScope ? projectId ?? undefined : undefined, fileSelection: { assets: targets, openReferences: () => setReferences(true),
-      onComplete: finishSelection, select: () => { setMultiple(true); setSelected(previous => new Set([...previous, asset.id])); } } });
+    void run(async () => {
+      const targets = ids.length === 1 ? [asset] : await resolveSelection(ids);
+      if (!alive.current || filterKeyRef.current !== key) return;
+      useStore.getState().openContextMenu(x, y, asset.id, { asset, libraryProjectId: projectScope ? projectId ?? undefined : undefined, fileSelection: { assets: targets, openReferences: () => setReferences(true),
+        onComplete: finishSelection, select: () => { setMultiple(true); setSelected(previous => new Set([...previous, asset.id])); } } });
+    });
   }
   async function run(action: () => Promise<void>) {
     if (lock.current) return;
@@ -361,25 +369,19 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
           </LibraryFloatingControls>
         </div>
         {flat && catalogError && <p className="catalog-error" role="alert">{catalogError}<button onClick={() => setRevision(v => v + 1)}>重试</button></p>}
-        {error && <p role="alert" className="catalog-error">{error}<button onClick={() => setRevision(v => v + 1)}>重试</button></p>}
-        <OverlayScrollArea scrollRef={scroll} className="catalog-scroll" viewportClassName="catalog-scroller library-scroller">
-          {reading ? <p className="catalog-hint catalog-empty" role="status">正在读取素材…</p> : !entries.length && !error && !catalogError ? <p className="catalog-hint catalog-empty">{kind === "collections" && !currentCollection ? "还没有集合，点击左侧 ＋ 新建集合。" : query || color || generatedFilter ? "没有匹配的素材。" : kind !== "collections" ? "还没有已登记的素材。" : "集合还没有素材。可在素材右键菜单中选择「添加到集合」。"}</p> : null}
-          {color && !!palette.failed && <p className="catalog-error" role="alert">{palette.failed} 项颜色读取失败<button onClick={palette.retry}>重试</button></p>}
-          <div ref={setGrid} className={`catalog-sections${kind === "tags" ? " catalog-tag-sections" : ""}`} aria-label="分类素材">
-            {entries.length > 0 && (flat ? <CatalogMediaGrid assets={entries} width={width} selected={selected} revision={revision} onSelect={select} onActivate={multiple ? undefined : activate} onOpen={openDetail} onContextMenu={context}/> : kind === "tags" ? !reading && !error && !catalogError && groups.map(group => <CatalogSection key={group.id} tagId={group.id} title={group.name} pinned={pinnedSection === group.id}>
-              <CatalogMediaGrid assets={group.assets} width={width} selected={selected} revision={revision} onSelect={select} onActivate={multiple ? undefined : activate} onOpen={openDetail} onContextMenu={context}/>
-            </CatalogSection>) : currentCollection && <CatalogSection title={currentCollection.name} pinned={pinnedSection === "collection"}>
-              <CatalogMediaGrid assets={entries} width={width} selected={selected} revision={revision} onSelect={select} onActivate={multiple ? undefined : activate} onOpen={openDetail} onContextMenu={context}/>
-            </CatalogSection>)}
-          </div>
+        <OverlayScrollArea scrollRef={scroll} className="catalog-scroll" viewportClassName="catalog-scroller library-scroller" viewportStyle={{ paddingBottom: 0, overflowAnchor: "none" }}>
+          {reading ? <p className="catalog-hint catalog-empty" role="status">正在读取素材…</p> : !total && !catalogError ? <p className="catalog-hint catalog-empty">{kind === "collections" && !currentCollection ? "还没有集合，点击左侧 ＋ 新建集合。" : query || color || generatedFilter ? "没有匹配的素材。" : kind !== "collections" ? "还没有已登记的素材。" : "集合还没有素材。可在素材右键菜单中选择「添加到集合」。"}</p> : null}
+          {loadedCatalogScope.current === filterKey && <VirtualCatalog key={filterKey} filter={filter} sections={sections} headings={!flat} width={width} revision={revision} scroll={scroll}
+            selected={selected} jump={jump} initialTop={savedPosition?.query === query && savedPosition?.color === color && savedPosition?.generatedFilter === generatedFilter ? savedPosition.top : 0}
+            onActive={onActive} onAssetsChange={onAssetsChange} onSelect={select} onActivate={multiple || working ? undefined : activate} onOpen={openDetail} onContextMenu={context}/>}
         </OverlayScrollArea>
         <ThumbnailSizeSlider scope="library"/>
-        {(selectedAssets.length > 0 || multiple) && <div className="catalog-selection" role="group" aria-label="分类素材所选操作">
+        {(selected.size > 0 || multiple) && <div className="catalog-selection" role="group" aria-label="分类素材所选操作">
           <button aria-label="取消选择" disabled={working} onClick={finishSelection}><X size={14}/></button>
-          <span>{selectedAssets.length} 项</span><button disabled={working} onClick={() => { setMultiple(true); setSelected(new Set(entries.map(a => a.id))); }}>全选</button>
-          <button disabled={working || !selectedAssets.length} onClick={() => setAssign(selectedAssets.map(a => a.id))}>添加到集合</button>
-          {kind === "collections" && active && <button disabled={working || !selectedAssets.length} onClick={() => void run(async () => { await materialCatalog.members(active, selectedAssets.map(a => a.id), false); finishSelection(); setRevision(v => v + 1); })}>移出集合</button>}
-          <button disabled={working || !selectedAssets.length} onClick={() => void run(async () => { await addMaterialAssets(selectedAssets, projectId, onClose, onCreateProject); finishSelection(); notifySuccess(projectId ? "已添加到画板" : "已添加到新项目素材库"); })}>{projectId ? "添加到画板" : "添加到新项目"}</button>
+          <span>{working ? "正在处理…" : `${selected.size} 项`}</span><button disabled={working} onClick={() => void selectAll()}>全选</button>
+          <button disabled={working || !selected.size} onClick={() => setAssign([...selected])}>添加到集合</button>
+          {kind === "collections" && active && <button disabled={working || !selected.size} onClick={() => void run(async () => { await materialCatalog.members(active, [...selected], false); finishSelection(); setRevision(v => v + 1); })}>移出集合</button>}
+          <button disabled={working || !selected.size} onClick={() => void run(async () => { const key = filterKey; const assets = await resolveSelection(); if (!alive.current || filterKeyRef.current !== key) return; await addMaterialAssets(assets, projectId, onClose, onCreateProject); finishSelection(); notifySuccess(projectId ? "已添加到画板" : "已添加到新项目素材库"); })}>{projectId ? "添加到画板" : "添加到新项目"}</button>
         </div>}
       </div>
     </div>
@@ -397,32 +399,4 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
       <button className="app-button-dark" disabled={working} onClick={() => void run(async () => { await materialCatalog.deleteCollection(deleting.id); setDeleting(null); setActive(null); setRevision(v => v + 1); })}>{working ? "删除中…" : "删除集合"}</button>
     </ModalShell>}
   </section>;
-}
-
-/** Tags and collections share the same floating heading and content layout. */
-function CatalogSection({ tagId, title, pinned, children }: { tagId?: string; title: string; pinned: boolean; children: ReactNode }) {
-  return <section data-catalog-section={tagId ?? "collection"} data-tag-section={tagId} aria-label={`${title}${tagId ? "图片" : "素材"}`}>
-    <h3 className={`catalog-section-heading${pinned ? " is-pinned" : ""}`}><span className={`catalog-section-title${pinned ? " library-floating-surface" : ""}`} title={title}>{title}</span></h3>
-    {children}
-  </section>;
-}
-
-function CatalogMediaGrid({ assets, width, selected, revision, onSelect, onActivate, onOpen, onContextMenu }: {
-  assets: Asset[]; width: number; selected: Set<string>; revision: number;
-  onSelect: (asset: Asset, additive: boolean, range: boolean) => void; onOpen: (asset: Asset) => void;
-  onActivate?: (asset: Asset) => void;
-  onContextMenu: (asset: Asset, x: number, y: number) => void;
-}) {
-  const [element, setElement] = useState<HTMLDivElement | null>(null);
-  useMasonryLayout(element, width, assets, 8);
-  return <div ref={setElement} className="folder-masonry" style={assets.length ? undefined : { height: 0 }}>{assets.map(asset => <FileMediaCard key={asset.id}
-    entry={{ path: asset.store_path ?? "", name: asset.name, directory: false, preview: asset.thumb_path, version: `${asset.id}:${asset.file_mtime ?? 0}:${asset.thumb_path}` }}
-    selected={selected.has(asset.id)} revision={revision} labels={[]} aspectRatio={asset.width && asset.height ? asset.width / asset.height : undefined}
-    assetId={asset.id} generated={asset.generation_session_id != null} onDragStart={event => {
-      const ids = selected.has(asset.id) ? [...selected] : [asset.id];
-      setDragAssets(ids); event.dataTransfer.effectAllowed = "copy";
-      event.dataTransfer.setData("text/plain", ids.join(","));
-    }} onDragEnd={() => setDragAssets(null)}
-    onSelect={(additive, range) => onSelect(asset, additive, range)} onActivate={onActivate ? () => onActivate(asset) : undefined}
-    onOpen={() => onOpen(asset)} onContextMenu={(x,y) => onContextMenu(asset,x,y)}/>)}</div>;
 }

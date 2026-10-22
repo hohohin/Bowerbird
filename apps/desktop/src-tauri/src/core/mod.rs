@@ -8,6 +8,7 @@ pub mod ingest;
 pub mod library;
 pub mod library_view;
 pub mod material_catalog;
+pub mod catalog_browser;
 pub mod canvas_library;
 pub mod local_classification;
 pub mod migrate;

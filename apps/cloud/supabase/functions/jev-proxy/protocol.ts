@@ -72,6 +72,9 @@ export async function hash(value: string | Uint8Array): Promise<string> {
 // Reconstruct the only allowed upstream operation. No URLs, tools, model overrides,
 // arbitrary questions, or client-selected upstream headers are forwarded.
 export function judgeInput(body: any) {
+  // Released clients omit this field and still classify at 30% locally.
+  if (body.matching_version !== undefined && body.matching_version !== 8) invalid("分类协议版本不支持，请更新客户端");
+  const minProbability = body.matching_version === 8 ? 0.42 : 0.30;
   const raw = object(body.request), source = object(raw.assets);
   if (
     !Array.isArray(body.images) || !body.images.length ||
@@ -144,9 +147,9 @@ export function judgeInput(body: any) {
       },
     },
   };
-  return { request, images, count: keys.length };
+  return { request, images, count: keys.length, minProbability };
 }
-export function hasMatches(response: any, count: number): boolean {
+export function hasMatches(response: any, count: number, minProbability = 0.42): boolean {
   const a = object(object(response.answers).labels),
     p = object(a.probabilities);
   const keys = [
@@ -164,7 +167,7 @@ export function hasMatches(response: any, count: number): boolean {
   ) {
     throw new ApiError("upstream_failed", "Jev 返回的候选概率无效，此图不计费");
   }
-  return keys.some((k) => k !== "no_match" && p[k] >= 0.30);
+  return keys.some((k) => k !== "no_match" && p[k] >= minProbability);
 }
 export interface Label {
   id: string;

@@ -20,6 +20,7 @@ import {
   text,
 } from "./protocol.ts";
 import { PROMPT } from "./prompt.ts";
+import { recordDiscoveryUsage } from "./usage.ts";
 
 function positive(name: string, fallback?: number): number {
   const value = Number(Deno.env.get(name) ?? fallback);
@@ -189,7 +190,7 @@ export async function handler(req: Request): Promise<Response> {
         }
         response = await readJson(upstream, 512 * 1024);
       }
-      const success = hasMatches(response, input.count);
+      const success = hasMatches(response, input.count, input.minProbability);
       settling = true;
       const row = await advance(
         !success && body.allow_discovery ? "await_discovery" : "judge_done",
@@ -224,11 +225,19 @@ export async function handler(req: Request): Promise<Response> {
         return jsonResponse(replay(claim.request, "discover"), 200, cors);
       }
       claimedId = ticket;
+      const { data: started, error: usageError } = await admin.rpc("start_classification_usage", {
+        p_user_id: userId,
+        p_id: ticket,
+        p_provider: (Deno.env.get("BOWERBIRD_CLOUD_MOCK") ?? "true") === "true" ? "mock" : "ark",
+        p_requested_model: Deno.env.get("ARK_VISION_MODEL")?.trim() || null,
+      });
+      if (usageError) rpcError(usageError);
+      if (!started) throw new ApiError("invalid_request", "补标签请求已开始，请勿重复提交");
       const result = await createArkAdapter().understand({
         operation: "classify",
         image: { mime: "image/jpeg", base64: body.image },
         instruction,
-      });
+      }, (usage) => recordDiscoveryUsage(admin, userId!, ticket, usage));
       const parsed = discoveryResult(result.text, labels);
       settling = true;
       const row = await advance("discovery_done", {

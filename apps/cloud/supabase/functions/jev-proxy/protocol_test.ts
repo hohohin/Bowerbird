@@ -68,15 +68,25 @@ Deno.test("Only bounded image choice requests are forwarded; model/instructions 
   assertThrows(() => judgeInput(negative));
   assertThrows(() => catalogue([...labels, ...labels]));
 });
-Deno.test("Raw 30% includes exact threshold and ignores no_match winner, malformed probabilities never charge", () => {
-  assertEquals(hasMatches(response(0.3), 1), true);
-  assertEquals(hasMatches(response(0.299), 1), false);
+Deno.test("Raw 42% includes exact threshold and ignores no_match winner, malformed probabilities never charge", () => {
+  assertEquals(hasMatches(response(0.42), 1), true);
+  assertEquals(hasMatches(response(0.41999), 1), false);
+  assertEquals(hasMatches(response(0.30), 1), false);
   const bad = response();
   bad.answers.labels.probabilities.no_match = 0.5;
   assertThrows(() => hasMatches(bad, 1));
   const winner = response();
   winner.answers.labels.choice = "no_match";
   assertThrows(() => hasMatches(winner, 1));
+});
+Deno.test("Versioned matching keeps released 30% clients consistent with settlement", () => {
+  const old = judgeInput(input());
+  const current = judgeInput({ ...input(), matching_version: 8 });
+  assertEquals(hasMatches(response(0.30), old.count, old.minProbability), true);
+  assertEquals(hasMatches(response(0.29999), old.count, old.minProbability), false);
+  assertEquals(hasMatches(response(0.41999), current.count, current.minProbability), false);
+  assertEquals(hasMatches(response(0.42), current.count, current.minProbability), true);
+  for (const version of [null, 7, 9, "8", 0.01]) assertThrows(() => judgeInput({ ...input(), matching_version: version }));
 });
 Deno.test("Cloud fallback validates reusable IDs, one new label + boundaries; unknown doesn't count", () => {
   assertEquals(
@@ -143,9 +153,13 @@ Deno.test("Authenticated synchronous proxy uses server secret, same-image free f
   Object.entries(vars).forEach(([k, v]) => Deno.env.set(k, v));
   let upstreamCalls = 0, cloudCalls = 0;
   let failed = false, matched = true;
+  let probability: number | undefined;
   let limit: string | null = null;
   let row: any = { id: target, status: "judging" };
   const advances: any[] = [];
+  const usages: any[] = [];
+  let startAllowed = true, replayDiscovery = false, usageFailures = 0;
+  let cloudText = '{"status":"matched","label_ids":["poster"]}';
   const json = (v: unknown, status = 200) =>
     new Response(JSON.stringify(v), {
       status,
@@ -168,10 +182,19 @@ Deno.test("Authenticated synchronous proxy uses server secret, same-image free f
         if (limit) return json({code:"P0001",details:limit,message:"limit"},400);
         return json({ claimed: true, request: row });
       }
+      if (rpc === "start_classification_usage") {
+        assertEquals(args.p_provider, "ark");
+        return startAllowed ? json(true) : json({message:"db unavailable"},500);
+      }
+      if (rpc === "record_classification_usage") {
+        if (usageFailures-- > 0) return json({message:"db unavailable"},500);
+        usages.push(args.p_usage);
+        return json(null);
+      }
       if (rpc === "advance_classification") {
         advances.push(args);
         if (args.p_action === "claim_discovery") {
-          return json({ claimed: true, request: row });
+          return json({ claimed: !replayDiscovery, request: row });
         }
         row = {
           ...row,
@@ -200,13 +223,16 @@ Deno.test("Authenticated synchronous proxy uses server secret, same-image free f
       assertEquals(raw.model, "jev-latest");
       return failed
         ? json({ secret: "not exposed" }, 401)
-        : json(response(matched ? 0.7 : 0.1));
+        : json(response(probability ?? (matched ? 0.7 : 0.1)));
     }
     if (url.hostname === "ark.cn-beijing.volces.com") {
       cloudCalls++;
       return json({
+        id: "chatcmpl-test", model: "resolved-model", created: 1792600000,
+        usage: {prompt_tokens:1000,completion_tokens:200,total_tokens:1200,
+          prompt_tokens_details:{cached_tokens:300},completion_tokens_details:{reasoning_tokens:50}},
         choices: [{
-          message: { content: '{"status":"matched","label_ids":["poster"]}' },
+          message: { content: cloudText },
         }],
       });
     }
@@ -240,6 +266,27 @@ Deno.test("Authenticated synchronous proxy uses server secret, same-image free f
     assertEquals(advances.at(-1).p_action, "discovery_done");
     assertEquals(advances.at(-1).p_success, true);
     assertEquals(cloudCalls, 1);
+    assertEquals(usages[0], {response_id:"chatcmpl-test",model:"resolved-model",provider_created:1792600000,
+      prompt_tokens:1000,completion_tokens:200,total_tokens:1200,cached_tokens:300,reasoning_tokens:50});
+    const again = () => call({action:"discover",classification_id:target,image,labels});
+    replayDiscovery = true;
+    assertEquals((await again()).status,200);
+    assertEquals(usages.length,1); assertEquals(cloudCalls,1);
+    replayDiscovery = false; startAllowed = false;
+    assertEquals((await again()).status,500); assertEquals(cloudCalls,1);
+    startAllowed = true; usageFailures = 2; cloudText = "";
+    assertEquals((await again()).status,502);
+    assertEquals(cloudCalls,2); assertEquals(usages.length,2);
+    assertEquals(advances.at(-1).p_action,"fail");
+    cloudText = "invalid label JSON";
+    assertEquals((await again()).status,502);
+    assertEquals(usages.length,3); assertEquals(cloudCalls,3);
+    cloudText = '{"status":"undetermined"}';
+    assertEquals((await again()).status,200);
+    assertEquals(usages.length,4); assertEquals(advances.at(-1).p_success,false);
+    usageFailures = 3;
+    assertEquals((await again()).status,500);
+    assertEquals(cloudCalls,5); assertEquals(usages.length,4); // No inference retry on ledger outage.
     failed = true;
     const failure = await call(input());
     assertEquals(failure.status, 502);
@@ -255,6 +302,14 @@ Deno.test("Authenticated synchronous proxy uses server secret, same-image free f
     assertEquals(daily.headers.get("retry-after"), null);
     assertEquals((await daily.json()).error.retryable, false);
     assertEquals(upstreamCalls, 15); // Daily quota still blocks the supplier.
+    limit = null;
+    probability = 0.35;
+    assertEquals((await call(input())).status, 200);
+    assertEquals(advances.at(-1).p_action, "judge_done");
+    assertEquals(advances.at(-1).p_success, true);
+    assertEquals((await call({ ...input(), matching_version: 8 })).status, 200);
+    assertEquals(advances.at(-1).p_action, "await_discovery");
+    assertEquals(advances.at(-1).p_success, false);
   } finally {
     globalThis.fetch = fetch;
     Object.entries(previous).forEach(([k, v]) =>

@@ -3,6 +3,7 @@ import { ArrowLeft, ArrowRight, CheckCircle2, QrCode } from "lucide-react";
 import { open as openExternal } from "@tauri-apps/plugin-shell";
 import { useStore } from "../store";
 import { ModalShell } from "./ModalShell";
+import { accountErrorMessage } from "../lib/accountError";
 import brandIcon from "../../src-tauri/icons/128x128.png";
 
 export function OnboardingCompletion({ onComplete, onPrevious, disabled, error, stepNumber, totalSteps }: {
@@ -24,7 +25,7 @@ export function OnboardingCompletion({ onComplete, onPrevious, disabled, error, 
       await openExternal(url);
       setStarted(true);
     } catch (cause) {
-      setLoginError(typeof cause === "string" ? cause : cause instanceof Error ? cause.message : "扫码登录未能打开，请重试。");
+      setLoginError(accountErrorMessage(cause));
     } finally { setOpening(false); }
   }
 

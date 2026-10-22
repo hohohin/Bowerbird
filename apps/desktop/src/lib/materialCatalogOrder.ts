@@ -1,5 +1,3 @@
-import { isVideoPath } from "./videoGeneration.ts";
-
 // Deterministic, local relevance. No model calls and no changes to saved tag order.
 const alphabetic = new Intl.Collator("zh-Hans-CN-u-co-pinyin", { numeric: true, sensitivity: "base" });
 const normalize = (text: string) => text.normalize("NFKC").toLocaleLowerCase();
@@ -49,21 +47,6 @@ export function orderCatalogTags<T extends { id: string; name: string; descripti
 }
 
 export const UNTAGGED_SECTION = "__catalog_untagged__";
-export const isCatalogVideo = (asset: { ext?: string | null; store_path?: string | null }) => isVideoPath(asset.store_path) || isVideoPath(`file.${asset.ext ?? ""}`);
-export function groupCatalogAssets<T extends { id: string; ext?: string | null; store_path?: string | null }>(tags: { id: string; name: string }[], assets: T[], memberships: Record<string, string[]>) {
-  const images = assets.filter(asset => !isCatalogVideo(asset));
-  const byId = new Map(images.map(asset => [asset.id, asset]));
-  const tagged = new Set<string>();
-  const groups = tags.map(tag => {
-    const members = [...new Set(memberships[tag.id] ?? [])].flatMap(id => {
-      tagged.add(id); const asset = byId.get(id); return asset ? [asset] : [];
-    });
-    return { ...tag, assets: members };
-  }).filter(group => group.assets.length > 0);
-  const untagged = images.filter(asset => !tagged.has(asset.id));
-  if (untagged.length) groups.push({ id: UNTAGGED_SECTION, name: "未分类", assets: untagged });
-  return groups;
-}
 export function collectionRows<T extends { id: string; name: string; parent_id?: string | null }>(collections: T[]) {
   const result: { item: T; depth: number; path: string }[] = [];
   const visited = new Set<string>();

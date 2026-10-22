@@ -14,6 +14,7 @@ try {
   await page.evaluate(() => { const canvas = window.snapshot(); canvas.nodes = canvas.nodes.filter(node => node.id !== 'far'); sessionStorage.setItem('reference-fixture', JSON.stringify(canvas)); });
   await page.reload(); await page.locator('[data-canvas-node-id="old"]').waitFor();
   const mockCatalog = () => page.evaluate(async () => {
+    window.store.setState({ cloudAuth: { logged_in: true, cloud_available: true }, cloudEntitlement: { policy: { can_use_byo: true }, balances: { daily: 100, sub: 0, topup: 0 } }, codexHealth: { ok: true }, dreaminaHealth: { ok: true } });
     const { api } = await import('/src/lib/api.ts');
     api.dreaminaVideoModels = async () => [{ model_version: 'seedance2.5', resolutions: ['480p', '720p', '1080p'], min_duration: 4, max_duration: 30 }];
     api.dreaminaCreditBalance = async () => ({ total_credit: 10 });
@@ -23,8 +24,16 @@ try {
   await page.getByRole('button', { name: '适应内容', exact: true }).click();
   const card = page.locator('.workflow-card.is-generation').first();
   await card.hover();
+  await card.getByTitle('选择出图引擎', { exact: true }).click();
+  const imageMenu = page.getByRole('dialog', { name: '图像模型', exact: true });
+  assert.equal(await imageMenu.locator('.model-select-column').count(), 2);
+  assert.equal(await imageMenu.locator('[data-model-key="bowerbird-cloud-image_fast"]').count(), 0);
+  await imageMenu.locator('[data-model-key="bowerbird-cloud-image_lite"]').click();
+  await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes[0].provider === 'bowerbird-cloud-image_lite');
+  assert.ok((await card.locator('.model-select-name').innerText()).includes('Seedream 5.0 Lite'));
   await card.getByLabel('生成类型', { exact: true }).selectOption('video');
-  await card.getByLabel('视频生成渠道').selectOption('cloud');
+  await card.getByTitle('选择视频模型', { exact: true }).click();
+  await page.getByRole('dialog', { name: '视频模型', exact: true }).locator('[data-model-key="cloud:seedance2.5"]').click();
   await card.getByLabel('视频生成模式').selectOption('frames2video');
   await card.getByLabel('视频时长（秒）').fill('8');
   await card.getByLabel('视频分辨率').selectOption('1080p');

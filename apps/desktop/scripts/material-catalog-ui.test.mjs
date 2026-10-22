@@ -479,7 +479,8 @@ try {
   await page.waitForFunction(()=>window.calls.some(c=>c.command==='project_canvas_node_create' && JSON.stringify(c.args).includes('catalog-0')));
   await page.locator('.categorized-library [data-asset-id="catalog-0"]').dispatchEvent('dragend',{dataTransfer:dragData}); await dragData.dispose();
   await page.getByRole('button',{name:'展开画板素材库',exact:true}).click();
-  await tab('全局素材').click(); await card('建筑.png').waitFor();
+  if (await tab('全局素材').getAttribute('aria-selected') !== 'true') await tab('全局素材').click();
+  await view('tags'); await card('建筑.png').waitFor();
   await card('建筑.png').click({button:'right'});
   await page.getByRole('menuitem',{name:'添加到集合',exact:true}).click();
   dialog=page.getByRole('dialog',{name:'添加到集合',exact:true});
@@ -609,7 +610,8 @@ try {
         return result;
       };
     });
-    await tab('全局素材').click(); await view('tags');
+    if (await tab('全局素材').getAttribute('aria-selected') !== 'true') await tab('全局素材').click();
+    await view('tags');
     await card('建筑.png').waitFor();
     assert.equal(await card('project-video.mp4').count(),0,'image type excludes videos, even tagged videos');
     assert.equal(await page.locator('.catalog-video-row,[data-tag-section="__catalog_videos__"]').count(),0);

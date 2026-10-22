@@ -397,7 +397,7 @@ impl AuthClient {
             .header("apikey", publishable)
             .send()
             .await
-            .map_err(|error| AppError::Cloud(format!("连接微信登录服务失败: {error}")))?;
+            .map_err(|error| cloud_request_error("连接微信登录服务失败", error))?;
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
@@ -480,7 +480,7 @@ impl AuthClient {
             .json(&serde_json::json!({ "code": code, "state": callback_state }))
             .send()
             .await
-            .map_err(|error| AppError::Cloud(format!("连接微信登录服务失败: {error}")))?;
+            .map_err(|error| cloud_request_error("连接微信登录服务失败", error))?;
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
@@ -779,15 +779,7 @@ impl AuthClient {
 }
 
 fn cloud_request_error(context: &str, error: reqwest::Error) -> AppError {
-    if error.is_timeout() {
-        AppError::Cloud(format!("{context}: 等待云端响应超时，请稍后重试"))
-    } else if error.is_connect() {
-        AppError::Cloud(format!(
-            "{context}: 无法连接 Bowerbird Cloud，请检查网络后重试"
-        ))
-    } else {
-        AppError::Cloud(format!("{context}: {error}"))
-    }
+    super::client::request_error(context, error)
 }
 
 #[cfg(test)]

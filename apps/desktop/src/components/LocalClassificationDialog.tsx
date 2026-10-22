@@ -9,6 +9,7 @@ import { ModalShell } from "./ModalShell";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ClassificationPlayback } from "./ClassificationPlayback";
 import { ClassificationDiagnostics } from "./ClassificationDiagnostics";
+import { ClassificationLabelDetails, classificationOrigin } from "./ClassificationLabelDetails";
 
 function JevResults({ progress }: { progress: NonNullable<LocalClassificationStatus["jev_progress"]> }) {
   const report = progress.report;
@@ -17,14 +18,14 @@ function JevResults({ progress }: { progress: NonNullable<LocalClassificationSta
       <h5 className="font-medium">Jev 返回结果</h5>
       <p className="text-xs text-muted break-all">素材：{progress.asset.name}</p>
       <p className="text-xs" role="status">{progress.message}</p>
-      <p className="text-xs text-muted">所有启用标签统一按原始概率排序，最多取 4 个且每个不低于 30%；「无明显匹配项」参与判断，不保存为标签。</p>
+      <p className="text-xs text-muted">所有启用标签统一按原始概率排序，最多取 3 个且每个不低于 42%；「无明显匹配项」参与判断，不保存为标签。</p>
       {!report && <p className="text-xs text-muted">暂无 Jev 返回内容</p>}
     </div>
     {report && <>
       <section aria-label="Jev 标签排名" className="border-t border-edge">
         <div className="space-y-1 bg-panel2 px-3 py-2 text-xs">
           <h6 className="font-medium">全部候选 · Choice</h6>
-          <p>{report.no_match === null ? "结果不完整，未采用" : report.no_match ? "没有真实标签达到 30%，转 Cloud 补充" : "已按概率与 30% 门槛选出标签"}</p>
+          <p>{report.no_match === null ? "结果不完整，未采用" : report.no_match ? "没有真实标签达到 42%，转 Cloud 补充" : "已按概率与 42% 门槛选出标签"}</p>
           <p className="text-muted">{report.model}{report.confidence !== null && ` · 置信度 ${(report.confidence * 100).toFixed(2)}%`}</p>
         </div>
         <div className="max-h-64 overflow-y-auto">
@@ -89,6 +90,7 @@ function ClassificationSettings({ onClose, folder, globalScope, globalPaths, sel
   const [labels, setLabels] = useState<ClassificationLabel[]>([]);
   const [editing, setEditing] = useState<string | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
+  const [detailId, setDetailId] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [enabled, setEnabled] = useState(true);
@@ -305,6 +307,9 @@ function ClassificationSettings({ onClose, folder, globalScope, globalPaths, sel
                 })} />
               <button className="text-cold font-medium" disabled={!!folder && !onFilter} title={folder && !onFilter ? "在本机文件中打开该目录后可按标签筛选" : undefined} onClick={() => { if (folder || globalScope) onFilter?.(label.id); else setSmartFilter(`tag:${label.name}`); onClose(); }}>#{label.name}</button>
               <span className="text-xs text-muted">{label.count} 张{!label.enabled && " · 已停用自动匹配"}</span>
+              <span className="text-xs text-muted">{classificationOrigin(label)}</span>
+              <button className="text-xs text-cold" aria-label={`查看标签 ${label.name} 的详情`} aria-expanded={detailId === label.id}
+                onClick={() => setDetailId(current => current === label.id ? null : label.id)}>详情</button>
               <button className="text-xs" onClick={() => edit(label)}>编辑</button>
               <button className="text-xs text-red-400 disabled:opacity-40" aria-label={`删除标签 ${label.name}`} disabled={busy}
                 onClick={() => requestDelete([label])}>删除</button>
@@ -315,6 +320,7 @@ function ClassificationSettings({ onClose, folder, globalScope, globalPaths, sel
               </>}
             </div>
             {label.description && <p className="text-xs text-muted">{label.description}</p>}
+            {detailId === label.id && <ClassificationLabelDetails key={label.id} label={label} root={folder?.root} />}
           </div>)}
         </div>
       </section>

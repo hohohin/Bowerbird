@@ -68,6 +68,8 @@ try {
   assert.equal(await page.locator('.workflow-card.is-comfy-video').count(),0,'tool arms placement first');
   await page.mouse.click(890,180);
   const card=page.locator('.workflow-card.is-comfy-video');await card.waitFor();
+  assert.equal(await card.locator('.provider-quota[data-quota="local"]').innerText(), '本机算力 · 不扣额度');
+  await card.screenshot({path:'.tmp/comfy-video/quota-local.png'});
   const dot=card.locator('.comfy-environment-dot');
   const panel=page.getByRole('dialog',{name:'本地部署工作流环境设置',exact:true});
   await page.waitForFunction(()=>window.environmentCalls?.some(call=>call.action==='detect'));

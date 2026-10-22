@@ -27,7 +27,7 @@ import type { Asset, CanvasNode, VisualProfileSummary } from "../lib/types";
 import { ProviderSelect } from "./creation/ProviderSelect";
 import { RatioSelect } from "./creation/RatioSelect";
 import { VideoControls } from "./creation/VideoControls";
-import { cloudVideoOptions, DEFAULT_VIDEO_OPTIONS, isVideoPath } from "../lib/videoGeneration";
+import { DEFAULT_VIDEO_OPTIONS, isVideoPath } from "../lib/videoGeneration";
 import { VideoPoster } from "./VideoPoster";
 import { CloudAgentSession } from "./CloudAgentPanel";
 import { ModalShell } from "./ModalShell";
@@ -757,8 +757,7 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
           {node.kind === "visual-profile" && !node.profileId && <input className="workflow-profile-name" aria-label="规范名称" disabled={busy} maxLength={80} placeholder="画板视觉规范" value={node.profileName ?? ""} onChange={event => patch(node.id, { profileName: event.target.value }, false)} />}
           {node.kind === "generation" && node.generation?.media === "video" && <fieldset className="workflow-video-controls" disabled={busy} onPointerDown={event => event.stopPropagation()}>
             <VideoControls options={node.generation.videoOptions ?? DEFAULT_VIDEO_OPTIONS} channel={node.generation.videoChannel ?? "jimeng"}
-              onChange={videoOptions => patch(node.id, { generation: { ...node.generation, videoOptions } })}
-              onChannelChange={videoChannel => patch(node.id, { generation: { ...node.generation, videoChannel, videoOptions: videoChannel === "cloud" ? cloudVideoOptions(node.generation?.videoOptions ?? DEFAULT_VIDEO_OPTIONS) : node.generation?.videoOptions } })}
+              onChange={(videoOptions, videoChannel = node.generation?.videoChannel) => patch(node.id, { generation: { ...node.generation, videoChannel, videoOptions } })}
               ratio={node.generation.ratio ?? "16:9"} onRatioChange={ratio => patch(node.id, { generation: { ...node.generation, ratio } })} />
             <p>按 @ 引用顺序传入素材；首尾帧模式依次为首帧、尾帧。</p>
           </fieldset>}

@@ -29,7 +29,7 @@ import { beginOnboardingOperation, useOnboarding } from "../lib/onboardingStore"
 import { notify, notifyError } from "../lib/notify";
 import { arrangeCanvasNodes } from "../lib/canvasArrangement";
 import { canvasCardSourceRects, placeCanvasCardNearSource, newReferencesForCanvasCard, placeNewCanvasReferences, trackNewCanvasReferences } from "../lib/canvasReferencePlacement";
-import { isVideoPath } from "../lib/videoGeneration";
+import { isVideoPath, videoModelLabel } from "../lib/videoGeneration";
 import { VideoPoster } from "./VideoPoster";
 import {
   useCallback,
@@ -115,7 +115,7 @@ import {
   shouldCloseProjectInspectorOnEscape,
 } from "../lib/projectInspector";
 import { cloudAgentStatusLabel } from "../lib/cloudAgent";
-import { cloudProviderLabel, isCloudProvider } from "../lib/genProviders";
+import { imageProviderLabel } from "../lib/genProviders";
 import { expectedCreativeContinuation } from "../lib/creativeGeneration";
 import {
   canvasNodeIdsInRect,
@@ -2055,7 +2055,7 @@ export function CanvasWorkspace({
     setHover({ kind: "external", key, targetId: target.id, assets: incoming });
   }
 
-  function onCanvasDrop(event: DragEvent<HTMLDivElement>) {
+  async function onCanvasDrop(event: DragEvent<HTMLDivElement>) {
     if (event.dataTransfer.types.includes(WORKFLOW_CARD_DRAG_TYPE)) {
       event.preventDefault(); event.stopPropagation();
       if (loadingRef.current || useStore.getState().projectRoutePending || (event.target as HTMLElement).closest(".canvas-drawing-tools")) return;
@@ -2067,21 +2067,41 @@ export function CanvasWorkspace({
       } catch { /* Ignore unrelated or malformed external drag payloads. */ }
       return;
     }
-    const incoming = draggedSnapshots();
-    if (incoming.length === 0) return;
+    let incoming = draggedSnapshots();
+    const draggedIds = getDragAssets() ?? [];
+    if (draggedIds.length === 0) return;
     event.preventDefault();
+    const expectedProject = activeCanvasRef.current.id;
+    const expectedRevision = useStore.getState().projectRouteRevision;
+    const clientX = event.clientX, clientY = event.clientY;
     const hover = hoverRef.current;
+    // Virtualized library pages can have evicted selected items. Resolve all
+    // missing identities before committing, never silently drop only a subset.
+    const known = new Set(incoming.map(asset => asset.assetId));
+    const missing = draggedIds.filter(id => !known.has(id));
+    if (missing.length) {
+      try {
+        const resolved: Asset[] = [];
+        for (let i = 0; i < missing.length; i += 200) resolved.push(...await api.getAssetsByIds(missing.slice(i, i + 200)));
+        const state = useStore.getState();
+        if (state.activeProjectId !== expectedProject || state.projectRouteRevision !== expectedRevision || state.projectRoutePending) return;
+        if (resolved.length !== missing.length) throw new Error("部分所选素材已不存在，请重新选择");
+        const byId = new Map(incoming.map(asset => [asset.assetId, asset]));
+        resolved.forEach(asset => byId.set(asset.id, createCanvasAssetSnapshot(asset, canvasId("asset"))));
+        incoming = draggedIds.map(id => byId.get(id)!);
+      } catch (error) { clearExternalDrag(); notifyError(error, "无法添加所选素材"); return; }
+    }
     setExternalDragOver(false);
     setHover(null);
     setFolderDropTargetId(null);
-    const cell = hitContentCell(event.clientX, event.clientY);
+    const cell = hitContentCell(clientX, clientY);
     if (hover?.ready && hover.intent.kind === "cell" && !hover.intent.movingId && incoming.length === 1
       && incoming[0].assetId === hover.intent.source.assetId && cell?.targetId === hover.intent.targetId && cell.cellId === hover.intent.cellId) {
       fillHoveredCell(hover.intent);
       externalInstancesRef.current = null;
       return;
     }
-    const point = toBoardPoint(event.clientX, event.clientY);
+    const point = toBoardPoint(clientX, clientY);
     const target = hitNode(point);
     if (target && (target.kind === "folder" || (hover?.ready
       && hover.intent.kind === "external" && hover.intent.targetId === target.id
@@ -3849,19 +3869,15 @@ export function CanvasWorkspace({
     if (!scopedInspectorOpen) return null;
     if (snapshotPrompt) {
       const provider = savedConversation[0]?.provider;
-      const providerLabel = provider === "jimeng" ? "即梦" : isCloudProvider(provider)
-        ? cloudProviderLabel(provider, cloudEntitlement) ?? "Bowerbird Cloud" : "codex";
+      const providerLabel = imageProviderLabel(provider, cloudEntitlement, null);
       return projectInspectorHeader({ kind: "generation", prompt: savedConversation[0]?.text,
         detail: `${savedConversation.length} 轮 · ${savedConversation.reduce((total, turn) => total + turn.outputs.length, 0)} 图 · ${providerLabel}`, running: false });
     }
     if (activeSessionKind === "generation") {
       const imageCount = activeGenerationJob?.turns.reduce((total, turn) => total + turn.images.length, 0) ?? 0;
       const provider = activeGenerationJob?.provider;
-      const providerLabel = provider === "jimeng"
-        ? "即梦"
-        : isCloudProvider(provider)
-          ? cloudProviderLabel(provider, cloudEntitlement) ?? "Bowerbird Cloud"
-          : "codex";
+      const providerLabel = activeGenerationJob?.media === "video" && activeGenerationJob.videoOptions ? videoModelLabel(activeGenerationJob.videoOptions.model_version)
+        : imageProviderLabel(provider, cloudEntitlement, null);
       return projectInspectorHeader({
         kind: "generation",
         prompt: activeGenerationJob?.turns[0]?.promptRaw

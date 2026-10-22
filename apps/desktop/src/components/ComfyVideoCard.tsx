@@ -8,6 +8,7 @@ import { notifyError } from "../lib/notify";
 import type { Asset } from "../lib/types";
 import type { WorkflowNode, WorkflowStep } from "../lib/canvasWorkflow";
 import "./ComfyVideoCard.css";
+import { ProviderQuota } from "./creation/ProviderQuota";
 
 export function ComfyGenerationProgress({ step }: { step: WorkflowStep }) {
   const progress = step.comfyStopping ? undefined : step.comfyProgress;
@@ -169,5 +170,6 @@ export function ComfyVideoCard({ node, disabled, assets, inputImages, onChange }
         {[0.6, 0.8, 1].map(value => <option value={value} key={value}>{value.toFixed(1)}</option>)}
       </select></label>
     </fieldset>
+    <ProviderQuota source="local" badge />
   </section>;
 }

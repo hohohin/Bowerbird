@@ -177,7 +177,7 @@ mod tests {
     use super::*;
     fn label(id: &str, name: &str, enabled: bool) -> Label {
         Label { id: id.into(), name: name.into(), description: "完整边界定义".into(),
-            enabled, count: 0, has_examples: false, dimension: Some("other".into()) }
+            enabled, count: 0, has_examples: false, dimension: Some("other".into()), provenance: None }
     }
 
     #[test]

@@ -3,7 +3,19 @@
 > 目标：把 `apps/cloud/` 的 Supabase 迁移 + Edge Functions 推上云端，完成 Auth/积分/算力的真实联调。
 > 前提：你已在 Supabase 控制台拿到 Project URL / publishable key / secret key，并已在 `apps/cloud/.env` 填好方舟 key 与 endpoint id。
 
-## Jev 同步托管分类（2026-10-20 已部署）
+## 42% 分类协议发布准备（2026-10-22）
+
+发布兼容补充：新版 judge 请求带 `matching_version=8`，云端采用 42%；已发布旧客户端未带字段仍用 30%，未知版本在推理前拒绝。版本字段参与现有请求哈希，重放不能换规则。部署先兼容云端、后新版桌面，无须强制所有客户端同时升级。13 项 Deno 包含真实 handler 的 35% 新旧分流及结算参数，Rust 检查请求字段。
+
+仅部署 jev-proxy；不应用 0068 或其他待迁移项。现役 v5 已下载备份，候选依赖仅 index.ts/protocol.ts 与线上不同；token 账本与五图计费保持。证据及回滚源码 `.tmp/release-windows-26.10.2202/cloud/`。
+
+## Cloud 补标签 token 计量（2026-10-22 已部署）
+
+当前 `jev-proxy` 为 **v5**，数据库新增 **0067**。补标签先建立持久账本，再调用方舟；响应 usage 在标签校验前写入，独立保留，不随 24 小时响应清理删除。缺失或超时标记待核对，不能按零成本统计。部署顺序为定向应用 `0067_classification_usage.sql` → 部署 `jev-proxy`；无新 Secret、VPS 或桌面变更。重部署勿全量 push 其他待迁移项。
+
+12 项 Deno 测试、隔离数据库回归及一次真实方舟补标签通过；生产核验输入 2103 / 缓存 0 / 输出 126 / 总计 2229 token，重复调用无新增账本，用户积分规则保持。证据及旧代理位于 `.tmp/classification-usage-20261022/`。回滚仅恢复其中 `rollback/` 的旧代理，保留 0067 和已保存数据；旧代理不再采集新用量。字段、缺失状态、核算与查询见 [分类专项](../../dev-doc/LOCAL-CLASSIFICATION.md#2026-10-22-cloud-补标签真实-token-账本已上线)。
+
+## Jev 同步托管分类（2026-10-20 初次部署）
 
 0065/0066 已定向应用；`jev-proxy` v4 / `understand-worker` v21 已上线，Jev Secret 已配置。用户确认 `JEV_CLASSIFICATION_COST_MICROS=100000`（0.10 元/张保守成本预算，不是用户售价）。临时测试账号的 4 次真实 Jev + 1 次 Cloud 补标签验证了五张扣一积分及重复请求幂等；证据 `.tmp/classification-deploy-20261020/`。后续重部署仍遵守以下顺序。
 
@@ -15,6 +27,39 @@
 新接口在单次请求中同步完成 Jev 或补标签调用，不上传对象存储、不创建 worker 排队任务、不轮询。数据库只保留计费/幂等记录及 24 小时响应；图片只在请求内存中。一次图像流程先暂时预留 1 积分（并发请求各自预留），完成后实际扣 0 或 1 并释放余款。取消等待不撤回已经完成的云端结果，云端产生有效标签即算成功；不以客户端声明作为计费依据。挂起超过 10 分钟按未完成退还预留款；供应商成本预算不退回，避免失败重试绕过熔断。免费账号沿用云理解额度，失败/无法判断退还次数，补标签不重复扣次数。
 
 线上与隔离验收详情见 `dev-doc/LOCAL-CLASSIFICATION.md`。当前成本参数为保守预算，需按后续实际供应商账单校准；分类每用户分钟限流已取消，当前代理传入 NULL 跳过分钟门控及计数。五图计费、免费每日额度和全站成本预算保留。0066 必须先于 v4 代理部署；旧代理和数据库函数备份位于 `.tmp/classification-no-rate-20261020/rollback/`，回退先恢复旧代理，再恢复旧数据库函数。
+
+## GPT Image 2.5（2026-10-22 源码接入，未部署／未启价）
+
+普通 Cloud 生图新增两个独立服务：`image_gpt25_sunburst` → `gpt-image-2.5-sunburst`，`image_gpt25_flare` → `gpt-image-2.5-flare`。使用现有 generation 队列、租约、产物上传与积分结算；本轮不改 Agent 的 `generate_image` 工具或本机 Codex 路线。模型与 `quality=high` 固定在 Worker，单任务生成一张 PNG。文本调用 `/v1/images/generations`，参考图调用 `/v1/images/edits` 的 JSON `images[].image_url`，支持七档比例和透明背景。自动比例在桌面无法推断时使用 1024×1024，明确比例按原比例输出、最长边不超过 1536。
+
+**API key 填写位置：**
+
+- 本地准备：现有 gitignored `apps/cloud/.env` 已预留 `OPENAI_API_KEY=`，在等号后填写；也可使用 `.env.local`，模板见 [.env.example](.env.example)。本地在 `apps/agent-worker` 目录启动时显式使用 `node --env-file=../cloud/.env src/cloud-generation/main.ts`（选择 `.env.local` 时相应改路径），该文件还须包含原有 Worker 配置。
+- **线上实际生效位置：VPS `/opt/bowerbird/agent-worker/.env.generation`**，加入同名 `OPENAI_API_KEY`。两个模型共用一个有对应模型权限的 OpenAI API key；文件权限保持 `0600`。本地填写不会自动同步到 VPS。
+- Compose 的 `env_file` 已加载该文件；更新 Worker 镜像后需重建容器使新环境生效。此 key 不用设置为 Supabase Secret，也不进入桌面、网页或 DSH 子进程。未配置时仅 GPT 两档在提交前失败，方舟保持可用。
+
+上线顺序：
+
+1. 同步新 Worker 源码并构建候选镜像，完成离线检查，填写 VPS key；部署时保留现役镜像与环境备份。
+2. 应用 `0068_gpt_image_25.sql`。迁移创建两条 `active=false / unit_cost=0 / pricing_ready=false` 的档位；只迁移不会把未定价模型开放给用户。
+3. 分别确认 Sunburst / Flare 的每张积分价格，再在同一更新中设置各自 `unit_cost`（正整数）、`parameters.pricing_ready=true`、`active=true`，增加 `pricing_version` 并更新 `updated_at`。数据库约束拒绝零价或未确认价格直接启用。测试中的 17/18 分仅为隔离夹具，不是产品价格。
+4. 刷新账号权益后，桌面现有动态 provider 列表会显示两项，key 分别为 `bowerbird-cloud-image_gpt25_sunburst` / `bowerbird-cloud-image_gpt25_flare`；无需为此修改桌面选项。完成真实生成、参考图编辑与单次扣费验收后记录部署证据。
+
+OpenAI 明确拒绝参数／权限／配额时沿失败回滚处理；网络中断、408/5xx、无效成功响应或产物上传失败保留 `outcome_unknown`，不自动重发或退款。回滚时先停用两档、等待在途 GPT 任务结算，再恢复旧 Worker，避免旧 Worker 将新 service 当方舟默认档处理；保留迁移与账本。
+
+离线验证（仓库根目录；不加载真实 key、不访问模型）：
+
+```powershell
+node --test apps/agent-worker/src/cloud-generation/*.test.ts
+node --test --test-name-pattern="passes only the loopback model proxy" apps/agent-worker/src/harness/node-dsh-acp-port.test.ts
+node apps/cloud/scripts/gpt-image-db.test.mjs <本地PGlite目录>/dist/index.js
+```
+
+协议依据：[OpenAI Images generation](https://developers.openai.com/api/reference/resources/images/methods/generate)、[Images edits](https://developers.openai.com/api/reference/resources/images/methods/edit)。
+
+本轮验证：35 项 cloud-generation 测试、DSH 环境白名单单测、Worker 完整 TypeScript、桌面动态档位映射及 PGlite 计费回归通过。完整 DSH port 套件中的两项生命周期测试受当前 Windows `symlink EPERM` 阻挡；密钥隔离使用不创建链接的 `buildDshChildEnvironment` 测试验证，未改动该运行时。
+
+2026-10-22 11:49（北京时间）本地真实访问：直连超时，经系统代理后 `GET /v1/models/gpt-image-2.5-sunburst` 与 Flare 对应查询均为 200。使用新增 provider 的实际请求／解析代码分别提交一次 high / 1024×1024 生图，两次均为 `429 / credit_balance_exhausted / insufficient_quota`，未返回图片或 usage，无自动重试。Sunburst 请求 ID `req_5d0c811b4a0d44889760e4ff03c53063`，Flare `req_c1285a5d68c6471abebac135e1d7dd82`。证据及不含密钥的测试脚本位于 `.tmp/gpt-image-real-20261022/{access.json,generation.json,probe.mjs,generate.mjs}`。本次直接测试 OpenAI API，未走 Bowerbird 积分或生产任务队列；不能推断供应商费用为零。待补足 OpenAI API 额度后继续真实出图验收，线上仍未部署／启价。
 
 ## 需要手工做的事（按顺序）
 

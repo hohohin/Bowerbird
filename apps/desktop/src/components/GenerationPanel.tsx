@@ -1,11 +1,10 @@
-import { cloudVideoOptions } from "../lib/videoGeneration";
 import { DreaminaTaskCredit } from "./creation/DreaminaCredits";
 import { DreaminaTaskDiagnostics } from "./creation/DreaminaTaskDiagnostics";
 import { GenerationSessionSurface } from "./GenerationSessionSurface";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { ChevronLeft, ChevronRight } from "lucide-react";
-import { DEFAULT_VIDEO_OPTIONS, imageInputError, videoInputError, videoProvider, type VideoOptions } from "../lib/videoGeneration";
+import { DEFAULT_VIDEO_OPTIONS, imageInputError, videoInputError, videoModelLabel, videoProvider, type VideoOptions } from "../lib/videoGeneration";
 import { VideoControls } from "./creation/VideoControls";
 import { MediaPreview } from "./MediaPreview";
 import { useStore, type GenEditingMode } from "../store";
@@ -20,7 +19,7 @@ import {
 import { PRESET_FEATURE_ENABLED } from "../lib/featureFlags";
 import { notify, notifyError, notifySuccess } from "../lib/notify";
 import { canStartAnotherJob, canUseByo, canUseGenerationProvider } from "../lib/entitlement";
-import { cloudProviderLabel, canonicalProviderKey, isCloudProvider, supportsAnnotationCoordinates } from "../lib/genProviders";
+import { imageProviderLabel, canonicalProviderKey, isCloudProvider, supportsAnnotationCoordinates } from "../lib/genProviders";
 import type { Asset, GenJob, GenTurn, VisualProfileCapsule, VisualProfileRuleValue } from "../lib/types";
 import { Lightbox } from "./Lightbox";
 import type { VideoFrame } from "../lib/videoFrame";
@@ -567,11 +566,7 @@ export function GenerationPanel({
             {activeJob && (
               <span className="shrink-0 rounded-full border border-edge px-2 py-0.5 text-[11px] text-muted">
                 {activeJob.turns.length} 轮 · {imageCount} 图
-                {activeJob.provider === "jimeng"
-                  ? " · 即梦"
-                  : isCloudProvider(activeJob.provider)
-                    ? ` · ${cloudProviderLabel(activeJob.provider, cloudEntitlement) ?? "Bowerbird Cloud"}`
-                    : ""}
+                {` · ${activeJob.media === "video" && activeJob.videoOptions ? videoModelLabel(activeJob.videoOptions.model_version) : imageProviderLabel(activeJob.provider, cloudEntitlement, null)}`}
               </span>
             )}
             {readOnly && <span className="rounded-full border border-edge px-2 py-0.5 text-[10px] text-muted">旧会话 · 只读</span>}
@@ -775,12 +770,8 @@ function TurnView({
   const elapsedLabel = busy && turn.startedAt ? fmtDuration(now - turn.startedAt) : null;
   const durationLabel = turn.durationMs != null ? fmtDuration(turn.durationMs) : null;
   const turnEntitlement = useStore((s) => s.cloudEntitlement);
-  const viaLabel =
-    turn.provider && turn.provider !== "codex-cli"
-      ? turn.provider === "jimeng"
-        ? "即梦"
-        : cloudProviderLabel(turn.provider, turnEntitlement) ?? turn.provider
-      : null;
+  const viaLabel = turn.media === "video" && turn.videoOptions ? videoModelLabel(turn.videoOptions.model_version)
+    : turn.provider ? imageProviderLabel(turn.provider, turnEntitlement, null) : null;
   const refThumbs = (refAssets ?? [])
     .map((a) => ({ src: a.thumb_path ?? a.store_path ?? "", name: a.name }))
     .filter((t) => t.src);
@@ -917,7 +908,7 @@ function TurnView({
         <div className="min-w-0 flex-1 space-y-2">
           {(viaLabel || durationLabel) && (
             <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-muted">
-              {viaLabel && <span>via {viaLabel}{turn.media === "video" && turn.videoOptions ? ` · ${turn.videoOptions.model_version}` : ""}</span>}
+              {viaLabel && <span>via {viaLabel}</span>}
               {durationLabel && <span>{viaLabel ? "· " : ""}用时 {durationLabel}</span>}
             </div>
           )}
@@ -1493,7 +1484,7 @@ function GenEditComposer({
       <BoardChipPreview hostRef={hostRef} />
       {referenceError && <p role="alert" className="px-3 py-1 text-xs text-red-400">{referenceError}</p>}
       <div className="generation-toolbar flex flex-wrap items-center gap-2">
-          {isVideo ? <VideoControls channel={videoChannel} onChannelChange={channel => { setVideoChannel(channel); if (channel === "cloud") setVideoOptions(cloudVideoOptions(videoOptions)); }} options={videoOptions} onChange={setVideoOptions} ratio={ratio} onRatioChange={setRatio} /> : <>
+          {isVideo ? <VideoControls channel={videoChannel} options={videoOptions} onChange={(options, channel) => { if (channel) setVideoChannel(channel); setVideoOptions(options); }} ratio={ratio} onRatioChange={setRatio} /> : <>
           <RatioSelect value={ratio} onChange={setRatio} />
           {!isRevise && <ProviderSelect
             value={activeGenProvider}

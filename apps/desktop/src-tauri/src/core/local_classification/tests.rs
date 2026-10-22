@@ -231,6 +231,8 @@ fn flat_rules_do_not_automatically_rescan_old_paid_observations() {
     assert_eq!(db.local_targets_for_model(true, super::jev::OBSERVATION_MODEL).unwrap(), vec!["b"]);
     db.conn.lock().unwrap().execute("INSERT INTO local_visual_observations VALUES('b','jev-choice-dimensions/cloud-discovery-v6','旧结果',1)", []).unwrap();
     assert!(db.local_targets_for_model(true, super::jev::OBSERVATION_MODEL).unwrap().is_empty());
+    db.conn.lock().unwrap().execute("UPDATE local_visual_observations SET model='jev-choice-flat-top4-30/cloud-discovery-v7'", []).unwrap();
+    assert!(db.local_targets_for_model(true, super::jev::OBSERVATION_MODEL).unwrap().is_empty());
     assert_eq!(db.local_targets_for_model(false, super::jev::OBSERVATION_MODEL).unwrap(), vec!["a", "b"]);
 }
 
@@ -240,6 +242,38 @@ fn old_folder_label_without_dimension_remains_readable() {
         "id":"legacy", "name":"梦幻", "description":"情绪", "enabled":true, "count":1, "has_examples":false,
     })).unwrap();
     assert!(label.dimension.is_none());
+    assert!(label.provenance.is_none());
+}
+
+#[test]
+fn cloud_creation_evidence_survives_reuse_edit_rescan_and_source_deletion() {
+    let db = db();
+    let path = std::env::temp_dir().join(format!("classification-source-{}.jpg", ulid::Ulid::new()));
+    std::fs::write(&path, b"original preview").unwrap();
+    db.conn.lock().unwrap().execute("UPDATE assets SET thumb_path=?1 WHERE id='a'", [path.to_str().unwrap()]).unwrap();
+    let prediction = Prediction { description: r#"{"source":"cloud","reason":"透明笔触"}"#.into(), tags: vec!["水彩".into()], matches: vec![] };
+    let definition = super::cloud::NewLabel { name: "水彩".into(), definition: "透明颜料笔触".into() };
+    let revision = db.local_revision().unwrap();
+    assert!(!db.apply_classification_with_definitions("a", revision + 1, &prediction, true, &[], super::jev::OBSERVATION_MODEL, std::slice::from_ref(&definition)).unwrap());
+    assert!(db.local_labels().unwrap().is_empty());
+    assert!(db.apply_classification_with_definitions("a", revision, &prediction, true, &[], super::jev::OBSERVATION_MODEL, std::slice::from_ref(&definition)).unwrap());
+    let label = db.local_labels().unwrap().remove(0);
+    let origin = label.provenance.as_ref().unwrap();
+    assert_eq!(origin.kind, "cloud");
+    assert_eq!(origin.asset_id.as_deref(), Some("a"));
+    assert_eq!(origin.asset_name.as_deref(), Some("a"));
+    assert_eq!(origin.reason.as_deref(), Some("透明笔触"));
+    assert_eq!(db.local_label_source(&label.id).unwrap().as_deref(), path.to_str());
+    assert!(db.apply_classification_with_definitions("b", revision, &prediction, true, &[], super::jev::OBSERVATION_MODEL, &[definition]).unwrap());
+    db.save_local_label(Some(&label.id), "水彩修改", "人工修改定义", true).unwrap();
+    db.reset_classification_results(&["a".into(), "b".into()], db.local_revision().unwrap()).unwrap();
+    assert_eq!(serde_json::to_value(&db.local_labels().unwrap()[0].provenance).unwrap(), serde_json::to_value(&label.provenance).unwrap());
+    std::fs::write(&path, b"replacement preview").unwrap();
+    assert!(db.local_label_source(&label.id).unwrap().is_none());
+    std::fs::remove_file(path).unwrap();
+    db.conn.lock().unwrap().execute("DELETE FROM assets WHERE id='a'", []).unwrap();
+    assert!(db.local_label_source(&label.id).unwrap().is_none());
+    assert_eq!(db.local_labels().unwrap()[0].provenance.as_ref().unwrap().asset_name.as_deref(), Some("a"));
 }
 
 #[test]
@@ -255,6 +289,7 @@ fn concurrent_cloud_same_name_reuses_label_without_changing_legacy_metadata() {
     assert_eq!(db.local_labels().unwrap()[0].description, "情绪");
     assert_eq!(db.local_labels().unwrap()[0].id, id);
     assert_eq!(db.local_labels().unwrap()[0].dimension.as_deref(), Some("mood"));
+    assert!(db.local_labels().unwrap()[0].provenance.is_none(), "matching an existing label must not claim Cloud created it");
 }
 
 #[test]
@@ -514,7 +549,7 @@ fn discovery_reference_samples_per_asset_not_by_usage() {
                 enabled: true,
                 count: 9 - index as i64,
                 has_examples: false,
-                dimension: None,
+                dimension: None, provenance: None,
             })
             .collect()
     }
@@ -550,7 +585,7 @@ fn discovered_existing_names_attach_directly() {
             enabled: true,
             count: 0,
             has_examples: false,
-            dimension: None,
+            dimension: None, provenance: None,
         },
         Label {
             id: "bottle".into(),
@@ -559,7 +594,7 @@ fn discovered_existing_names_attach_directly() {
             enabled: true,
             count: 0,
             has_examples: false,
-            dimension: None,
+            dimension: None, provenance: None,
         },
     ];
     let mut prediction = Prediction {
@@ -618,7 +653,7 @@ async fn real_local_model_smoke() {
             enabled: true,
             count: 0,
             has_examples: false,
-            dimension: None,
+            dimension: None, provenance: None,
         },
         Label {
             id: "animal".into(),
@@ -627,7 +662,7 @@ async fn real_local_model_smoke() {
             enabled: true,
             count: 0,
             has_examples: false,
-            dimension: None,
+            dimension: None, provenance: None,
         },
     ];
     let start = std::time::Instant::now();
@@ -648,7 +683,7 @@ async fn real_local_model_smoke() {
         enabled: true,
         count: 0,
         has_examples: false,
-        dimension: None,
+        dimension: None, provenance: None,
     }];
     let custom_negative_before = server.predict(&image, &custom, false, &[], &cancel).await;
     println!(
@@ -670,7 +705,7 @@ async fn real_local_model_smoke() {
         enabled: true,
         count: 0,
         has_examples: false,
-        dimension: None,
+        dimension: None, provenance: None,
     }];
     let example_match = server
         .predict(

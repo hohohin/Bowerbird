@@ -34,9 +34,40 @@ export interface UnderstandResult {
   actualCost: number;
 }
 
+/** Supplier counters only; null means not reported, never an estimated zero. */
+export interface ArkUnderstandUsage {
+  response_id: string | null;
+  model: string | null;
+  provider_created: number | null;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  total_tokens: number | null;
+  cached_tokens: number | null;
+  reasoning_tokens: number | null;
+}
+type UsageObserver = (usage: ArkUnderstandUsage) => Promise<void>;
+
+export function arkUnderstandUsage(payload: Record<string, unknown>): ArkUnderstandUsage {
+  const object = (v: unknown): Record<string, unknown> =>
+    v !== null && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : {};
+  const count = (v: unknown): number | null =>
+    typeof v === "number" && Number.isSafeInteger(v) && v >= 0 ? v : null;
+  const usage = object(payload.usage);
+  return {
+    response_id: safeIdentifier(payload.id) ?? null,
+    model: safeIdentifier(payload.model) ?? null,
+    provider_created: count(payload.created),
+    prompt_tokens: count(usage.prompt_tokens),
+    completion_tokens: count(usage.completion_tokens),
+    total_tokens: count(usage.total_tokens),
+    cached_tokens: count(object(usage.prompt_tokens_details).cached_tokens),
+    reasoning_tokens: count(object(usage.completion_tokens_details).reasoning_tokens),
+  };
+}
+
 export interface ArkAdapter {
   generate(input: GenerateInput): Promise<GenerateResult>;
-  understand(input: UnderstandInput): Promise<UnderstandResult>;
+  understand(input: UnderstandInput, onUsage?: UsageObserver): Promise<UnderstandResult>;
 }
 
 const ONE_PIXEL_PNG =
@@ -346,9 +377,10 @@ export class MockArkAdapter implements ArkAdapter {
     };
   }
 
-  async understand(input: UnderstandInput): Promise<UnderstandResult> {
+  async understand(input: UnderstandInput, onUsage?: UsageObserver): Promise<UnderstandResult> {
     const scenario = this.scenario(input.scenario);
     await this.applyScenario(scenario);
+    await onUsage?.(arkUnderstandUsage({}));
     return {
       text: "**类型**\nMock 图像描述\n\n**构图**\n居中构图",
       sections: [
@@ -397,7 +429,7 @@ export class VolcArkAdapter implements ArkAdapter {
     return { status: "succeeded", images, actualCost: 5 };
   }
 
-  async understand(input: UnderstandInput): Promise<UnderstandResult> {
+  async understand(input: UnderstandInput, onUsage?: UsageObserver): Promise<UnderstandResult> {
     const model = requiredEnv("ARK_VISION_MODEL");
     const payload = await arkFetchJson(this.baseUrl, this.apiKey, "/chat/completions", {
       model,
@@ -413,6 +445,9 @@ export class VolcArkAdapter implements ArkAdapter {
       }],
       temperature: 0.2,
     }, understandUpstreamTimeout());
+    // Persist supplier usage before validating content: empty/invalid labels can
+    // still cost tokens. Awaiting this hook prevents a successful unmetered result.
+    await onUsage?.(arkUnderstandUsage(payload));
     const choices = Array.isArray(payload.choices) ? payload.choices as Array<Record<string, unknown>> : [];
     const message = choices[0]?.message as Record<string, unknown> | undefined;
     const text = typeof message?.content === "string" ? message.content.trim() : "";

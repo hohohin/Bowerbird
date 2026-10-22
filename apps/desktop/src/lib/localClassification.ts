@@ -67,6 +67,7 @@ export interface ClassificationLabel {
   enabled: boolean;
   count: number;
   has_examples: boolean;
+  provenance?: { kind: string; asset_id: string | null; asset_name: string | null; reason: string | null; created_at: number } | null;
 }
 export interface GlobalClassificationView {
   labels: ClassificationLabel[];
@@ -79,6 +80,7 @@ export const globalClassification = {
     : invoke<void>("global_classification_start", { tagId: null, pendingOnly: true, ...options }),
 };
 export const localClassification = {
+  source: (tagId: string, root: string | null = null) => invoke<string | null>("local_classification_source", { tagId, root }),
   status: () => invoke<LocalClassificationStatus>("local_classification_status"),
   labels: () => invoke<ClassificationLabel[]>("local_classification_labels"),
   start: (options: { install?: boolean; tagId?: string; pendingOnly?: boolean } = {}) =>

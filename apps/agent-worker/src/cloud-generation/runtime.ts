@@ -4,6 +4,7 @@ import { executeVideo } from "./video.ts";
 import type { VideoInput } from "../../../cloud/supabase/functions/_shared/video-contract.ts";
 import { LAYER_MODEL, validateLayerRequest, type LayerOptions } from "../../../cloud/supabase/functions/_shared/layer-contract.ts";
 import { layerPayload, parseLayerResult } from "./layers.ts";
+import { GPT_IMAGE_MODELS, gptImageRequest, generateGptImage } from "./gpt-image.ts";
 
 const CLEANUP_INTERVAL_MS = 10 * 60_000;
 
@@ -42,6 +43,8 @@ export interface GenerationWorkerConfig {
   /** Lite 模型（即官方标准版，同一模型）；image_sd 为其遗留别名，未配置时该档任务干净失败。 */
   arkImageModelLite?: string;
   arkImageSize: string;
+  /** GPT Image 两档共用的服务端凭据；缺失时不影响方舟。 */
+  openaiApiKey?: string;
   mock: boolean;
   pollIntervalMs: number;
   heartbeatIntervalMs: number;
@@ -53,7 +56,7 @@ interface ClaimedJob {
   inputUrl?: string;
 }
 
-interface GenerationInput {
+export interface GenerationInput {
   schema_version: number;
   media: "image";
   prompt: string;
@@ -104,6 +107,7 @@ export function configFromEnv(env: Record<string, string | undefined>): Generati
     arkImageModel: required(env, "ARK_IMAGE_MODEL"),
     arkImageModelLite: env.ARK_IMAGE_MODEL_LITE?.trim() || undefined,
     arkImageSize: env.ARK_IMAGE_SIZE?.trim() || "2K",
+    openaiApiKey: env.OPENAI_API_KEY?.trim() || undefined,
     mock: (env.BOWERBIRD_CLOUD_MOCK ?? "false") === "true",
     pollIntervalMs: positiveInt(env.GENERATION_POLL_INTERVAL_MS, 2_000, "GENERATION_POLL_INTERVAL_MS"),
     heartbeatIntervalMs: positiveInt(env.GENERATION_HEARTBEAT_INTERVAL_MS, 30_000, "GENERATION_HEARTBEAT_INTERVAL_MS"),
@@ -188,14 +192,23 @@ export function mapArkHttpError(status: number, body: string, requestIdHeader?: 
   return new KnownProviderError("provider_failed", `方舟服务暂时不可用${detail}`);
 }
 
-/** service 对应的方舟调用参数：模型 + 提示词优化档（仅 Pro fast 档显式下发 fast）。 */
+/** service 对应的 provider、模型和方舟提示词优化档。未指定 provider 时沿用方舟。 */
 export interface ServiceModelChoice {
   model: string;
   optimizePromptMode: "standard" | "fast" | null;
+  provider?: "openai";
 }
 
-/** service → 方舟模型：image_hd/image_fast=Pro（默认兜底）/ image_lite 与遗留 image_sd=Lite。 */
+/** GPT 两档显式走 OpenAI；image_hd/image_fast=Pro，image_lite/image_sd=Lite，其余沿用方舟兜底。 */
 export function modelForService(config: GenerationWorkerConfig, service: string): ServiceModelChoice {
+  if (service.startsWith("image_gpt")) {
+    const model = GPT_IMAGE_MODELS[service];
+    if (!model) throw new KnownProviderError("model_not_configured", "GPT Image 档位尚未配置");
+    if (!config.mock && !config.openaiApiKey) {
+      throw new KnownProviderError("model_not_configured", "GPT Image 服务暂未配置 API key");
+    }
+    return { provider: "openai", model, optimizePromptMode: null };
+  }
   if (service === "image_lite" || service === "image_sd") {
     // Lite 即官方标准版（同一模型）；image_sd 是多模型改造前的遗留 service，旧构建仍在发。
     if (!config.arkImageModelLite) {
@@ -390,10 +403,15 @@ async function executeClaim(
     if (!service.startsWith("image_")) throw new Error("image_service_mismatch");
     const layerOptions = validateLayerRequest(input as unknown as Record<string, unknown>, service);
     if (layerOptions && config.mock) throw new KnownProviderError("layer_mock_disabled", "分层服务需要真实模型，当前尚未启用");
-    const choice = layerOptions ? { model: LAYER_MODEL, optimizePromptMode: null } : modelForService(config, service);
+    const choice: ServiceModelChoice = layerOptions ? { model: LAYER_MODEL, optimizePromptMode: null } : modelForService(config, service);
+    // Validate and serialize before the durable submission boundary. OpenAI edits
+    // use their own JSON contract, never the Ark image/watermark parameters.
+    const gptRequest = choice.provider === "openai" ? gptImageRequest(input, choice.model) : null;
     await control.post({ action: "submitted", jobId, leaseId });
     submitted = true;
-    const image = await ark.generate(input, choice);
+    const image = gptRequest && !config.mock
+      ? await generateGptImage(config.openaiApiKey!, gptRequest, fetchImpl)
+      : await ark.generate(input, choice);
     const upload = await control.post({ action: "output_upload", jobId, leaseId, mime: image.mime });
     if (typeof upload.uploadUrl !== "string" || typeof upload.objectKey !== "string") {
       throw new Error("invalid_upload_response");
@@ -432,7 +450,7 @@ async function executeClaim(
     const safeErrorCode = known ? error.safeCode : safeErrorKind(error);
     const safeMessage = known
       ? error.safeMessage
-      : submitted ? "请求已提交方舟，但 Worker 与上游或控制面连接中断，结果状态暂时无法确认" : "生成任务启动失败";
+      : submitted ? "请求已提交生成服务，但 Worker 与上游或控制面连接中断，结果状态暂时无法确认" : "生成任务启动失败";
     try {
       await control.post({ action, jobId, leaseId, safeErrorCode, safeMessage });
     } catch (settlementError) {

@@ -1,9 +1,10 @@
 import type { CSSProperties } from "react";
 
-export function LibraryViewSwitch({ value, options, onChange, label, hint, feedback }: {
+export function LibraryViewSwitch({ value, options, onChange, onReselect, label, hint, feedback }: {
   value: string;
   options: readonly { value: string; label: string; shortcut?: string }[];
   onChange: (value: string) => void;
+  onReselect?: () => void;
   label: string;
   hint?: string;
   feedback?: { key: number; label: string };
@@ -17,7 +18,7 @@ export function LibraryViewSwitch({ value, options, onChange, label, hint, feedb
       aria-label={option.label}
       aria-keyshortcuts={option.shortcut?.toLowerCase()}
       aria-selected={value === option.value} tabIndex={index === i ? 0 : -1}
-      onClick={() => onChange(option.value)} onKeyDown={event => {
+      onClick={() => value === option.value && onReselect ? onReselect() : onChange(option.value)} onKeyDown={event => {
         if (event.ctrlKey || event.metaKey || event.altKey || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
         event.preventDefault(); event.stopPropagation();
         const next = event.key === "Home" ? 0 : event.key === "End" ? options.length - 1

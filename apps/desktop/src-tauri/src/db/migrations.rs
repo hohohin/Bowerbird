@@ -91,6 +91,8 @@ pub fn migrations() -> Migrations<'static> {
         M::up(include_str!("../../sql/0040_file_workspace_moves.sql")),
         M::up(include_str!("../../sql/0041_external_library_members.sql")),
         M::up(include_str!("../../sql/0042_classification_new_assets.sql")),
+        M::up(include_str!("../../sql/0043_catalog_paging.sql")),
+        M::up(include_str!("../../sql/0044_classification_provenance.sql")),
     ])
 }
 

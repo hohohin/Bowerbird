@@ -1,5 +1,49 @@
 # 自动分类（Jev 匹配 / Bowerbird Cloud 补标签）
 
+## 2026-10-22 42% 匹配、文件夹规则继承与来源详情（源码未发布）
+
+本节覆盖下方旧前四/30% 门槛和目录从空词表开始的说明；产品决策以 PROJECT.md 为准。
+
+- Jev `MAX_MATCHES=3`、`MIN_PROBABILITY=0.42`，使用原始概率降序，等于门槛可入选；不归一化、不让最高的 no_match 否决合格真实标签。Choice 概率总和为 1，因此当前协议下实际至多两个标签能同时达到 42%，三项仍是明确上限。Cloud `hasMatches` 同步使用 42%，零合格项才补标签；Cloud 语义复核本身没有概率，仍沿原有标签复用/单个新类别协议。观察版本 `jev-choice-flat-top3-42/cloud-discovery-v8`，未处理扫描继续认可 v5/v6/v7，应用新门槛需显式重分类。
+- `folder_classification_start` 只读取得主库规则快照，在独立 Session 扫描前事务补入缺项。按 ID 或不区分大小写名称去重；已有说明、启停与目录 Cloud 来源不覆盖。只复制规则名称、说明、启停，不复制主库素材关联与正反例身份。后续主库新增规则可补入，目录生成标签从不反写主库。继承规则标注「来自主库规则」。
+- 0044 为 tags 增加 `classification_provenance` JSON，Label/目录记录使用可选字段兼容旧版。首次真正创建标签时与标签/图片关联同事务记录 `kind=cloud/local`、来源 asset ID、名称快照、Cloud 新增理由、时间和预览 SHA256；复用同名标签不伪造新的创建来源。来源独立于现有成员、观察记录，编辑/重扫/删除来源图片后保留。
+- 管理页每条标签增加来源文字和「详情」展开入口，按需调用 `local_classification_source`；主库/项目按原 asset ID 查预览，目录按目录记录与原图指纹定位，缺少本机缓存时可从未变化原图重建预览而不改目录记录。预览指纹不一致、来源缺失/离线则展示不可用与原名称，不展示替换图片。旧标签明确显示来源未记录，不从今日成员反推历史。侧栏沿当前范围的非零计数隐藏空项，管理页仍可查看、编辑空规则。
+- 验证：Rust 分类 **82 passed / 6 ignored**（真实模型用例继续忽略）；5 项 Deno `protocol_test.ts`、全量 TypeScript、独立目录 Vite 构建、分类界面与新增来源/空标签 Chromium 回归通过。覆盖 41.999%/42% 边界、概率排序、旧结果兼容、主库 30/目录 35 隔离、再次继承与同名保护、来源事务/复用/编辑/重扫/删图/换图，以及主库/项目/目录详情、键盘操作、深浅主题和窄窗。截图 `apps/desktop/.tmp/classification-provenance/`。
+- 扩展验证：完整 Rust 库测试 645 passed / 5 failed / 21 ignored。失败为 `codex::jimeng_video::tests::offline_cli_submit_download_recovery_and_cancel_protocol` 及 4 项 `commands::agent_ds::codex` CLI 用例，报启动器路径不存在（os error 3）或等待超时；单独复跑写入检查用例同样失败。未改动这些 CLI 模块，不能将本次全量库测试称为通过；分类专项最终复跑仍为 82 passed / 6 ignored。
+- 上线边界：新增原生命令与迁移必须由新桌面后端加载，前端热更新不能替代；`jev-proxy` 新门槛须配套部署，避免旧云端 30% 与新桌面 42% 发生分流/计费判断差异。本轮没有修改线上服务、真实数据库或调用付费模型，没有发布安装包。
+
+
+
+发布兼容补充：新版 judge 请求带 `matching_version=8`，云端采用 42%；已发布旧客户端未带字段仍用 30%，未知版本在推理前拒绝。版本字段参与现有请求哈希，重放不能换规则。部署先兼容云端、后新版桌面，无须强制所有客户端同时升级。13 项 Deno 包含真实 handler 的 35% 新旧分流及结算参数，Rust 检查请求字段。
+
+## 2026-10-22 Cloud 补标签真实 token 账本（已上线）
+
+09:30（北京时间）定向部署 `0067_classification_usage.sql` 和 `jev-proxy` v5；无需桌面升级。范围为 `jev-proxy action=discover` 的方舟补标签，不代表其他理解入口或 Jev 已实现相同计量。五张成功图片扣一积分、免费额度及成本保护预算不变。
+
+- `classification_usage` 与分类请求一一关联，保留账号、开始/接收时间、请求模型、实际模型、方舟响应体 `id`/`created`、输入/输出/总 token、缓存命中及推理 token。只存白名单计量字段，不存图片、提示词或标签正文；独立于分类响应的 24 小时清理。
+- 调用方舟前先写 `pending`；账本不可写则不发起推理。收到响应后，在空文本及标签校验前保存 usage，因此非法输出、无法判断、后续结算失败也保留供应商消耗。只重试幂等账本写入（最多三次），不重试模型调用；已接收明细不可被不同值覆盖，客户端无法读写账本/RPC。
+- `recorded` 要求响应 ID、实际模型、输入/输出/总量一致且缓存计数有效；`partial` 保留不完整或不一致明细，`missing` 表示响应无基础 token 数，`mock` 单独隔离。缺失数值用 NULL，真实零保留 0。`pending` 长时间未完成表示未获可信响应或持久化失败，不能当作零成本；网络中断无法仅凭本地状态判断供应商是否计费。三次持久化失败会留下 `classification_usage_persist_failed` 白名单日志及 pending 行，可按分类 ID、供应商响应 ID人工核对并重试同一记录 RPC。
+- 核算公式为 `(输入−缓存命中)×未缓存输入单价 + 缓存命中×缓存单价 + 输出×输出单价`，单价若按百万 token 则整体除以 1,000,000。推理 token 是输出的子集，不能再加一次；图片输入已包含在供应商输入总量中。按调用时模型、上下文阶梯和当时有效价格逐笔计算；供应商账单中的折扣、赠额等仍需另对账，不把内部 0.10 元/张预算或应用积分当实际费用。
+
+后台只读汇总示例（替换账号、时间范围；必须展示所有状态，不能静默排除缺失记录）：
+
+```sql
+select u.model,u.usage_status,r.status as classification_status,count(*) as calls,
+       sum(u.prompt_tokens) as input_tokens,sum(u.cached_tokens) as cached_tokens,
+       sum(u.completion_tokens) as output_tokens,sum(u.total_tokens) as total_tokens,
+       sum(u.reasoning_tokens) as reasoning_tokens
+from public.classification_usage u
+join public.classification_requests r on r.id=u.classification_id
+where u.user_id='<账号 UUID>'::uuid
+  and u.started_at>='2026-10-22T09:30:00+08:00'
+  and u.started_at<'2026-11-01T00:00:00+08:00'
+group by u.model,u.usage_status,r.status;
+```
+
+验证：Deno 12/12、PGlite 分类计费与用量回归通过，覆盖重放、跨账号拒绝、缺失/零/部分/Mock 区分、失败输出、空文本、无法判断、TTL 保留、数据库重试与迟到补录。线上下载源码与本地核对一致、RLS/权限通过。独立临时账号仅调用一次真实方舟：`doubao-seed-2-0-lite-260428` 输入 **2103**、缓存 **0**、输出 **126**、总量 **2229**、输出中推理 **115**；重放未新增记录、首张成功扣 0 积分，普通账号直读账本被拒绝，临时账号已删除。证据 `.tmp/classification-usage-20261022/{deployment.json,smoke.json}`。历史未保存的 usage 无法回填，旧版本部署前已在途调用不保证有记录。
+
+回滚：以 `.tmp/classification-usage-20261022/rollback/supabase/functions/` 恢复旧代理，保留 0067 与账本，不删除已采集数据；回滚后新补标签将不再记录 usage，须明确告知此边界。其他 Edge/VPS 未重新部署。
+
 ## 2026-10-22 自动处理仅接收启用后新增素材
 
 「自动处理新素材」不再扫描整库未处理记录，也不因标签规则待更新而扫描旧素材。SQLite 0042 增加持久待处理队列：只有开关启用期间实际插入的素材进入队列，缩略图就绪后才处理；采用插入事件而非文件时间。升级不回填旧库，开关切换清空旧队列，同值保存不清空。完成观察记录后出队，重置分类结果不会重新入队；人工归属仍受保护。手动「进行分类」继续按既有范围处理未识别素材或显式重新分类。

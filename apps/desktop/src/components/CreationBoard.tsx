@@ -1,11 +1,11 @@
-import { cloudVideoOptions } from "../lib/videoGeneration";
 import { beginOnboardingOperation } from "../lib/onboardingStore";
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { DEFAULT_VIDEO_OPTIONS, VIDEO_RATIOS, imageInputError, videoInputError, videoProvider, type GenerationSettings } from "../lib/videoGeneration";
+import { DEFAULT_VIDEO_OPTIONS, VIDEO_RATIOS, imageInputError, videoInputError, videoModelLabel, videoProvider, type GenerationSettings } from "../lib/videoGeneration";
 import { VideoControls } from "./creation/VideoControls";
+import { ProviderQuota } from "./creation/ProviderQuota";
 import { useStore } from "../store";
 import { canStartAnotherAgentRun, canStartAnotherJob, canUseAgentRun, canUseByo } from "../lib/entitlement";
-import { cloudProviderLabel, isCloudProvider, supportsAnnotationCoordinates } from "../lib/genProviders";
+import { imageProviderLabel, isCloudProvider, supportsAnnotationCoordinates } from "../lib/genProviders";
 import { api } from "../lib/api";
 import {
   acquireCreativeSubmission,
@@ -496,11 +496,7 @@ export function CreationBoard({
     cloudAvailable &&
     !!cloudAuth?.logged_in &&
     cloudBalance >= cloudAgentRequiredBalance;
-  const targetProviderLabel = isCloudProvider(activeGenProvider)
-    ? (cloudProviderLabel(activeGenProvider, cloudEntitlement) ?? "Bowerbird Cloud")
-    : activeGenProvider === "jimeng"
-      ? "即梦"
-      : "codex";
+  const targetProviderLabel = isVideo ? videoModelLabel(videoOptions.model_version) : imageProviderLabel(activeGenProvider, cloudEntitlement, settings?.dreamina_model_version);
   const sendTooltipId = useId();
   const referenceError = !isVideo && !cloudAgentMode && !agentZMode && !agentGMode && !agentDsMode
     ? imageInputError(references) : null;
@@ -920,7 +916,9 @@ export function CreationBoard({
           if (!(event.target instanceof Element && event.target.closest(".composer-expand"))) setCollapsed(false);
         }}
         onBlurCapture={(e) => {
-          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+          const modelMenu = e.relatedTarget instanceof Element ? e.relatedTarget.closest(".model-select-menu") : null;
+          const ownModelMenu = modelMenu && e.currentTarget.querySelector(`[aria-controls="${modelMenu.id}"]`);
+          if (!e.currentTarget.contains(e.relatedTarget as Node | null) && !ownModelMenu) {
             setCollapsed(true);
             setAgentMenuOpen(false);
           }
@@ -1278,7 +1276,7 @@ export function CreationBoard({
         {/* 编辑框内 image/keyword chip 的交互浮层（hover 放大图/维度正文 + 点击定位瀑布流） */}
         <BoardChipPreview hostRef={hostRef} />
         {referenceError && <p role="alert" className="px-3 py-1 text-xs text-red-400">{referenceError}</p>}
-        {/* 视频参数独占一行，下方放素材、积分提示与发送操作。 */}
+        {/* 素材、模型参数、帮助与发送保持同一条底栏。 */}
         <div className={`generation-toolbar composer-toolbar${isVideo ? " is-video" : ""}`}>
           {onOpenLibrary && <button type="button" className="composer-add-material" aria-label="添加参考素材" title="打开素材库（Tab）"
             onMouseDown={event => event.preventDefault()} onClick={() => { setBoardActive(true); onOpenLibrary(); }}><Plus size={16} aria-hidden="true" />素材<kbd>Tab</kbd></button>}
@@ -1301,7 +1299,7 @@ export function CreationBoard({
             </div>
           </div>
           <div className="composer-parameters">
-          {isVideo && <VideoControls composer channel={generation.videoChannel} onChannelChange={(videoChannel) => setGeneration({ ...generation, videoChannel, videoOptions: videoChannel === "cloud" ? cloudVideoOptions(videoOptions) : videoOptions })} options={videoOptions} onChange={(options) => setGeneration({ ...generation, media: "video", videoOptions: options, ratio })} ratio={ratio} onRatioChange={selectRatio} />}
+          {isVideo && <VideoControls composer channel={generation.videoChannel} options={videoOptions} onChange={(options, videoChannel = generation.videoChannel) => setGeneration({ ...generation, media: "video", videoChannel, videoOptions: options, ratio })} ratio={ratio} onRatioChange={selectRatio} />}
           {/* Cloud Agent 仍接受显式比例；仅终端型 Agent 不走 Bowerbird 生图参数。
               flex：比例 / 生成选项两个选择器水平并排（外层缺 flex 时 block 根会竖着叠成
               两行，按钮挤在同一列）。 */}
@@ -1318,7 +1316,7 @@ export function CreationBoard({
             )}
           </div>}
           {isVideo || terminalAgent ? null : cloudAgentMode ? (
-            <span className="text-[11px] text-muted" title="Agent 使用 Bowerbird Cloud 工具">Bowerbird Cloud</span>
+            <ProviderQuota source="bowerbird" badge />
           ) : (
           <div>
             <ProviderSelect

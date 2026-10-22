@@ -286,9 +286,9 @@ try {
   await page.screenshot({path:'.tmp/onboarding-designer-finish-narrow.png'});
   await page.setViewportSize({width:1600,height:1000});
   await page.evaluate(()=>{window.failWechat=true;});
-  await button('使用微信扫码登录').click(); await completion.getByRole('alert').filter({hasText:'模拟扫码登录失败'}).waitFor();
+  await button('使用微信扫码登录').click(); await completion.getByRole('alert').filter({hasText:'微信登录未能完成，请重新点击扫码登录。'}).waitFor();
   await page.evaluate(()=>{window.failWechat=false;window.failWechatBrowser=true;});
-  await button('使用微信扫码登录').click(); await completion.getByRole('alert').filter({hasText:'模拟浏览器打开失败'}).waitFor();
+  await button('使用微信扫码登录').click(); await completion.getByRole('alert').filter({hasText:'暂时无法打开浏览器，请确认已设置默认浏览器后重试。'}).waitFor();
   await page.evaluate(()=>{window.failWechatBrowser=false;});
   await button('使用微信扫码登录').click();
   await page.getByText('已打开二维码，请用微信扫码确认。',{exact:true}).waitFor();

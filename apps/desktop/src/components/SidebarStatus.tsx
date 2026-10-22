@@ -3,7 +3,8 @@ import { Activity, Circle, CircleAlert, Clock3, Sparkles, X } from "lucide-react
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { useStore } from "../store";
 import { cloudAgentStatusLabel } from "../lib/cloudAgent";
-import { isCloudProvider } from "../lib/genProviders";
+import { imageProviderLabel } from "../lib/genProviders";
+import { videoModelLabel } from "../lib/videoGeneration";
 import { notifyError } from "../lib/notify";
 import {
   creativeTaskOwnerState,
@@ -17,10 +18,9 @@ import { agentReminderKey, describeReminderKey, generationReminderKey, orphanRem
 import { useTaskReminders } from "../lib/useTaskReminders";
 import { stopVisualProfileTask, useVisualProfileTasks, visualProfileTaskScope } from "../lib/visualProfileTasks";
 
-function providerLabel(provider?: string | null): string {
-  if (provider === "jimeng") return "即梦";
-  if (isCloudProvider(provider)) return "云端";
-  return "codex";
+function providerLabel(job: GenJob): string {
+  return job.media === "video" && job.videoOptions ? videoModelLabel(job.videoOptions.model_version)
+    : imageProviderLabel(job.provider, useStore.getState().cloudEntitlement, null);
 }
 
 /** 顶部次级任务入口。按需呈现 active/attention 投影，卡片仍是项目详情主入口。 */
@@ -260,7 +260,7 @@ export function SidebarStatus() {
           type="button"
           disabled={projectRoutePending || invalidOwner}
           onClick={() => openJob(j.id, unowned)}
-          title={`${providerLabel(j.provider)} · ${firstLine || "生成任务"}${unowned ? " · 未归属" : invalidOwner ? " · 归属异常，无法打开" : ""}`}
+          title={`${providerLabel(j)} · ${firstLine || "生成任务"}${unowned ? " · 未归属" : invalidOwner ? " · 归属异常，无法打开" : ""}`}
           className="block w-full rounded px-2 py-1.5 pr-6 text-left hover:bg-panel2 disabled:pointer-events-none disabled:opacity-50"
         >
           <div className="flex items-center gap-2">

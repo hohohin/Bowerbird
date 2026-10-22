@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 pub const MODEL: &str = "jev-latest";
-pub const OBSERVATION_MODEL: &str = "jev-choice-flat-top4-30/cloud-discovery-v7";
+pub const OBSERVATION_MODEL: &str = "jev-choice-flat-top3-42/cloud-discovery-v8";
 
 pub const NO_MATCH_LABEL: &str = "无明显匹配项";
 
@@ -24,8 +24,8 @@ pub struct Candidate {
 }
 
 const QUESTION: &str = "labels";
-const MAX_MATCHES: usize = 4;
-const MIN_PROBABILITY: f64 = 0.30;
+const MAX_MATCHES: usize = 3;
+const MIN_PROBABILITY: f64 = 0.42;
 pub type Decisions = Vec<usize>;
 
 fn pool_keys(count: usize) -> Vec<String> {
@@ -218,7 +218,7 @@ impl Judge {
             let value: Value = if self.is_cloud() {
                 self.post(&json!({
                     "action":"judge", "idempotency_key":ulid::Ulid::new().to_string(),
-                    "allow_discovery":allow_discovery, "request":body,
+                    "allow_discovery":allow_discovery, "matching_version":8, "request":body,
                     "images":images.iter().map(|bytes| base64::engine::general_purpose::STANDARD.encode(bytes)).collect::<Vec<_>>()
                 })).await?
             } else {
@@ -607,12 +607,13 @@ mod tests {
             ticket = v["classification_id"].as_str().unwrap().into();
         }).await.unwrap();
         assert!(result.is_empty());
-        let labels = vec![super::super::data::Label { id:"poster".into(), name:"海报".into(), description:"完整版式".into(), enabled:true, count:0, has_examples:false, dimension:None }];
+        let labels = vec![super::super::data::Label { id:"poster".into(), name:"海报".into(), description:"完整版式".into(), enabled:true, count:0, has_examples:false, dimension:None, provenance:None }];
         let result = super::super::cloud::discover_managed(&judge, &ticket, image, &labels, &AtomicBool::new(false)).await.unwrap();
         assert_eq!(result.matches, vec!["poster"]);
         let requests = server.await.unwrap();
         assert_eq!(requests[0]["action"], "judge");
         assert_eq!(requests[0]["allow_discovery"], true);
+        assert_eq!(requests[0]["matching_version"], 8);
         assert_eq!(requests[1]["action"], "discover");
         assert_eq!(requests[1]["classification_id"], "test-ticket");
         assert_eq!(requests[0]["images"][0], requests[1]["image"]);
@@ -739,9 +740,10 @@ mod tests {
     fn raw_probabilities_drive_threshold_order_and_sentinel_exclusion() {
         let candidates: Vec<_> = (0..5).map(|i| candidate(&format!("标签{i}"))).collect();
         let cases = [
-            (vec![0.29999, 0.30, 0.40001, 0.0, 0.0], 0.0, vec![2, 1]),
-            (vec![0.30, 0.30, 0.30, 0.09, 0.0], 0.01, vec![0, 1, 2]),
-            (vec![0.35, 0.0, 0.0, 0.0, 0.0], 0.65, vec![0]),
+            (vec![0.41999, 0.42, 0.16001, 0.0, 0.0], 0.0, vec![1]),
+            (vec![0.42, 0.50, 0.06, 0.01, 0.0], 0.01, vec![1, 0]),
+            (vec![0.42, 0.0, 0.0, 0.0, 0.0], 0.58, vec![0]),
+            (vec![0.35, 0.30, 0.30, 0.0, 0.0], 0.05, vec![]),
             (vec![0.29, 0.28, 0.27, 0.06, 0.05], 0.05, vec![]),
             (vec![0.0; 5], 1.0, vec![]),
         ];
@@ -789,7 +791,7 @@ mod tests {
         let labels = db.local_labels().unwrap();
         let enabled: Vec<_> = labels.iter().filter(|l| l.enabled).collect();
         let weights: Vec<_> = enabled.iter().map(|l| match l.name.as_str() {
-            "海报" => 0.4, "字体排版" => 0.3, "场景产品图" => 0.29, _ => 0.0,
+            "海报" => 0.50, "字体排版" => 0.42, "场景产品图" => 0.07, _ => 0.0,
         }).collect();
         let (judge, requests) = mock_jev(vec![("200 OK", ranked_answers(&weights, 0.01))]).await;
         let classifier = crate::core::local_classification::LocalClassifier::new(library.root.join("no-model"));
@@ -832,14 +834,14 @@ mod tests {
     }
 
     #[test]
-    fn preview_preserves_top_four_raw_probabilities_and_distinguishes_accepted_labels() {
+    fn preview_preserves_top_three_raw_probabilities_and_distinguishes_accepted_labels() {
         let candidates: Vec<_> = (0..5).map(|i| candidate(&i.to_string())).collect();
-        let response = ranked_answers(&[0.4, 0.3, 0.1, 0.04, 0.01], 0.15);
+        let response = ranked_answers(&[0.42, 0.3, 0.1, 0.04, 0.01], 0.13);
         let report = Report::from_response(&candidates, &response, None);
         let preview = report.preview();
-        assert_eq!(preview.len(), 4);
-        assert_eq!(preview.iter().map(|p| p.probability).collect::<Vec<_>>(), vec![0.4, 0.3, 0.15, 0.1]);
-        assert_eq!(preview.iter().map(|p| p.selected).collect::<Vec<_>>(), vec![true, true, false, false]);
+        assert_eq!(preview.len(), 3);
+        assert_eq!(preview.iter().map(|p| p.probability).collect::<Vec<_>>(), vec![0.42, 0.3, 0.13]);
+        assert_eq!(preview.iter().map(|p| p.selected).collect::<Vec<_>>(), vec![true, false, false]);
         assert_eq!(preview[2].key, "no_match");
     }
 
@@ -909,7 +911,7 @@ mod tests {
         db.save_local_label(None, "海报", "版式", true).unwrap();
         let classifier = crate::core::local_classification::LocalClassifier::new(library.root.join("no-model"));
         let cloud = cloud("must not be called");
-        let (judge, requests) = mock_jev(vec![("200 OK", ranked_answers(&[0.35], 0.65))]).await;
+        let (judge, requests) = mock_jev(vec![("200 OK", ranked_answers(&[0.42], 0.58))]).await;
         classifier.classify_with_jev(&judge, Some(&cloud), &db, &library, "target", db.local_revision().unwrap(), &db.local_labels().unwrap(), true).await.unwrap();
         requests.await.unwrap();
         assert_eq!(cloud.calls.load(Ordering::Relaxed), 0);
@@ -929,7 +931,7 @@ mod tests {
         db.local_example(&id("人工保留"), &["target".into()], true).unwrap();
         db.local_example(&id("字体排版"), &["target".into()], false).unwrap();
         let labels = db.local_labels().unwrap();
-        let weights: Vec<_> = labels.iter().map(|l| match l.name.as_str() { "海报" => 0.4, "字体排版" => 0.35, "人工保留" => 0.2, _ => 0.05 }).collect();
+        let weights: Vec<_> = labels.iter().map(|l| match l.name.as_str() { "海报" => 0.50, "字体排版" => 0.42, "人工保留" => 0.03, _ => 0.05 }).collect();
         let response = ranked_answers(&weights, 0.0);
         let classifier = crate::core::local_classification::LocalClassifier::new(library.root.join("no-model"));
         let (judge, requests) = mock_jev(vec![("200 OK", response.clone()), ("200 OK", response)]).await;

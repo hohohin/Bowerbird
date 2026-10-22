@@ -1,6 +1,6 @@
 # 收费化架构调整 · 当前进度
 
-2026-10-20 已实测托管分类与五图计费部署；10 月 16 日视频复刻分析及改写保持，其他条目依据仓库内已保存部署记录。产品决策见 [PROJECT.md](../PROJECT.md)，原任务分解见 [ARCH-ADJUST-PLAN.md](ARCH-ADJUST-PLAN.md)，部署操作见 [apps/cloud/DEPLOY.md](../apps/cloud/DEPLOY.md)。
+2026-10-22 已部署补标签实际 token 账本（0067、jev-proxy v5），独立账号一次真实方舟调用及重放计量验证通过；10 月 20 日托管分类五图计费、10 月 16 日视频复刻分析及改写保持，其他条目依据仓库内已保存部署记录。产品决策见 [PROJECT.md](../PROJECT.md)，原任务分解见 [ARCH-ADJUST-PLAN.md](ARCH-ADJUST-PLAN.md)，部署操作见 [apps/cloud/DEPLOY.md](../apps/cloud/DEPLOY.md)。
 
 ## 已完成与最近部署
 
@@ -8,6 +8,7 @@ P0–P8 基础代码、P6.1 多层权益门控、P9-T2/T3/T4/T5 的既有回归/
 
 | 范围 | 最近保存的发布事实 | 证据与回滚 |
 |---|---|---|
+| 补标签 token 计量 | 10 月 22 日：0067、jev-proxy v5；实际输入/缓存/输出/推理 token、模型、响应 ID 独立持久化；一次真实调用总量 2229 token，重放不重复计量，五图积分规则不变 | [LOCAL-CLASSIFICATION.md](LOCAL-CLASSIFICATION.md)，`.tmp/classification-usage-20261022/`；回滚旧代理，保留账本 |
 | 托管分类 | 10 月 20 日：0065/0066、jev-proxy v4、understand-worker v21，Jev 密钥服务器托管；成功五图扣一积分，内部成本预算 0.10 元/张；4 张 Jev + 1 张 Cloud 真实分类、跨请求累计及幂等通过；同日取消分类每用户分钟限流，线上回滚事务验证已满分钟桶后 20 张共 4 积分 | [LOCAL-CLASSIFICATION.md](LOCAL-CLASSIFICATION.md)，`.tmp/classification-deploy-20261020/`，worker 旧源码在其中 `rollback/`；分钟限流取消证据及旧代理/数据库定义见 `.tmp/classification-no-rate-20261020/` |
 | 视频复刻分析/改写 | 10 月 16 日：0062/0063/0064、understand-proxy v35、Worker `sha256:b18d88d42633…`（含分镜转场字段容错）；豆包 Seed 2.0 Mini，分析及改写各暂定 3 积分，两项真实结果及独立单次扣费通过 | [VIDEO-REPLICATION.md](VIDEO-REPLICATION.md#2026-10-16-分析上线与真实验收) |
 | 视频基础 | 9 月 11 日：数据库 0001–0056 + 0058，12 个 Edge 入口和 Worker 同步；0057 保持未集成预留；视频价格未启用 | [VIDEO-API-INTEGRATION.md](VIDEO-API-INTEGRATION.md#2026-09-11-云端同步部署) |

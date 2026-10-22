@@ -305,15 +305,11 @@ function App() {
       && !initial.smartFilter;
     try {
       if (!expectedProjectId) {
-        const view = await api.listLibraryView(initial.libraryHomeView === "projects" ? {} : {
-          search: initial.searchQuery,
-          smart: initial.smartFilter,
-          folderId: initial.currentFolderId,
-          collectionId: initial.currentCollectionId,
-          color: initial.colorFilter,
-        });
+        // The catalog owns its paged reads. Keep only a small legacy picker seed,
+        // otherwise opening the homepage still hydrates the entire library here.
+        const [assets, total] = await Promise.all([api.listAssets(undefined, null, 200), api.countAssets(null)]);
         if (!isCurrentRefresh()) return;
-        useStore.setState({ assets: view.assets, total: view.total, libraryMemberships: view.memberships });
+        useStore.setState({ assets, total, libraryMemberships: [] });
       } else {
         const [assets, total] = await Promise.all([
           pickAll
@@ -337,9 +333,8 @@ function App() {
         setAssets(assets);
         setTotal(total);
       }
-      // promptedAssets 无条件拉取：对话框常驻（未激活也可能有草稿 chip），序列化/维度环
-      // 随时要 caption/sections，不能只在创作模式激活时才有。
-      const prompted = await api.listPromptedAssets(assetProjectId);
+      // Project captions remain scoped; global picker chips/rings hydrate by ID.
+      const prompted = assetProjectId ? await api.listPromptedAssets(assetProjectId) : [];
       if (!isCurrentRefresh()) return;
       setPromptedAssets(prompted);
       await reloadFolders();
@@ -499,7 +494,8 @@ function App() {
           // promptedAssets，编辑坞期间新反推的维度也能进编辑器 assetById 供展开。
           const current = useStore.getState();
           if (current.boardOpen || current.genEditing) {
-            const promptedAssets = await api.listPromptedAssets(assetProjectId);
+            const promptedAssets = assetProjectId ? await api.listPromptedAssets(assetProjectId)
+              : (await Promise.all(current.promptedAssets.map(asset => api.getPromptedAsset(asset.id)))).filter((asset): asset is NonNullable<typeof asset> => asset !== null);
             if (!isCurrentRead()) return;
             setPromptedAssets(promptedAssets);
           }
@@ -539,20 +535,6 @@ function App() {
       unlisten?.();
     };
   }, [setClassifyProgress]);
-
-  // Wait for the library to be ready; every new guide starts with identity selection.
-  useEffect(() => {
-    let alive = true;
-    const timer = setTimeout(() => {
-      void Promise.all([api.countAssets(), api.listProjects()]).then(() => {
-        if (!alive) return;
-        const lesson = useOnboarding.getState();
-        if (lesson.panel !== "closed" || lesson.progress.status !== "new" || lesson.progress.updateSeen) return;
-        lesson.show("welcome");
-      }).catch(() => { /* Settings still offers the lesson after a library read failure. */ });
-    }, 1500);
-    return () => { alive = false; clearTimeout(timer); };
-  }, []);
 
   // 重建色板进度（P3）：color://rebuild-progress {done,total,ended?}；ended 时清空。
   // 从 Toolbar 提到全局——设置面板开关不影响后台重建进度的跟踪。
