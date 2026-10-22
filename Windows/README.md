@@ -2,9 +2,9 @@
 
 这里存放 Bowerbird 的 Windows 开发、构建与独立扩展加载工具。平台兼容行为已经并入项目主源码；脚本只把 canonical 项目复制到 Windows/.work，不再用整文件 override 替换源码。Windows/overrides/ 仅保留退役说明，不参与构建。
 
-## 2026-10-22 Windows 26.10.2201 发布准备
+## 2026-10-22 Windows 26.10.2201 已发布
 
-已确认存档推送后发布：全部图片视图、自动分类仅处理启用后新增素材、素材库轻动效，连同 1001 后已存档的文件工作区／画板／Agent／视频增量进入候选包。SQLite 至 0042；原 Windows 公钥与 `/UPDATE` 保留登录规则保持。源码验证通过，安装包与公网切换尚待完成；最终状态、验证和回滚见 [桌面自动更新](../dev-doc/DESKTOP-UPDATES.md)。
+源码 f98283ec 已存档推送，全部图片视图、新素材自动分类与停止恢复修正、轻动效及 1001 后文件工作区／画板／Agent／视频增量已签名发布，SQLite 至 0042。TypeScript/Vite、Rust 643 passed / 20 ignored、50 项逻辑、13 组界面回归、生产条件 Agent、私有 CLI 与实际 NSIS 钩子通过；909 个构建输入、67 个资源、包内等待和完整公网下载／验签通过。应用内更新保留登录，Mac 两通道保持；真实旧版安装升级仍待实机验收。产物 `Windows/dist/Bowerbird_26.10.2201_x64-setup.exe`，发布与回滚见 [桌面自动更新](../dev-doc/DESKTOP-UPDATES.md)。
 
 ## 2026-10-16 同步 Mac 最新源码
 
