@@ -1,6 +1,6 @@
 # 收费化架构调整 · 当前进度
 
-2026-10-22 已部署补标签实际 token 账本（0067、jev-proxy v5），独立账号一次真实方舟调用及重放计量验证通过；10 月 20 日托管分类五图计费、10 月 16 日视频复刻分析及改写保持，其他条目依据仓库内已保存部署记录。产品决策见 [PROJECT.md](../PROJECT.md)，原任务分解见 [ARCH-ADJUST-PLAN.md](ARCH-ADJUST-PLAN.md)，部署操作见 [apps/cloud/DEPLOY.md](../apps/cloud/DEPLOY.md)。
+2026-10-22 jev-proxy v6 已配套 Windows 26.10.2202 上线，兼容新版 42%／旧版 30%；此前已部署补标签实际 token 账本（0067、jev-proxy v5），独立账号一次真实方舟调用及重放计量验证通过；10 月 20 日托管分类五图计费、10 月 16 日视频复刻分析及改写保持，其他条目依据仓库内已保存部署记录。产品决策见 [PROJECT.md](../PROJECT.md)，原任务分解见 [ARCH-ADJUST-PLAN.md](ARCH-ADJUST-PLAN.md)，部署操作见 [apps/cloud/DEPLOY.md](../apps/cloud/DEPLOY.md)。
 
 ## 已完成与最近部署
 

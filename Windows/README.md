@@ -2,9 +2,9 @@
 
 这里存放 Bowerbird 的 Windows 开发、构建与独立扩展加载工具。平台兼容行为已经并入项目主源码；脚本只把 canonical 项目复制到 Windows/.work，不再用整文件 override 替换源码。Windows/overrides/ 仅保留退役说明，不参与构建。
 
-## 2026-10-22 Windows 26.10.2202 发布准备
+## 2026-10-22 Windows 26.10.2202 已发布
 
-已确认素材库后端分页／虚拟瀑布流、分类规则继承及来源详情、模型与额度双列菜单、视频单行底栏、点击当前标签循环视图、登录中文错误提示／诊断及暂关首启自动引导存档并发布，SQLite 至 0044；TypeScript、Vite、Rust **652 passed / 21 ignored**、50 项逻辑、14 组 Chromium、13 项 Deno、分类／GPT 价格门控与结算 PGlite、Worker 类型及密钥隔离回归通过。安装包及公网切换待完成，原 updater key 与应用内更新保留登录规则保持，详情见 [桌面自动更新](../dev-doc/DESKTOP-UPDATES.md)。
+源码 d6bad0c3 已存档推送，素材分页、分类来源与规则继承、统一模型菜单／视频底栏、登录提示与引导修正已签名上线，SQLite 至 0044。TypeScript/Vite、Rust 652 passed / 21 ignored、50 项逻辑、14 组界面及 13 项云协议通过；929 个构建输入、67 个资源、原公钥验签／篡改拒绝、包内等待及完整公网下载核对通过。云端 v6 兼容新旧门槛，GPT 与 Mac 保持。安装包 `Windows/dist/Bowerbird_26.10.2202_x64-setup.exe`；真实原生升级及原机微信故障待验，发布和回滚见 [桌面自动更新](../dev-doc/DESKTOP-UPDATES.md)。
 
 ## 2026-10-22 Windows 26.10.2201 已发布
 

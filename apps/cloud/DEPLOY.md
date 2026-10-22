@@ -3,7 +3,11 @@
 > 目标：把 `apps/cloud/` 的 Supabase 迁移 + Edge Functions 推上云端，完成 Auth/积分/算力的真实联调。
 > 前提：你已在 Supabase 控制台拿到 Project URL / publishable key / secret key，并已在 `apps/cloud/.env` 填好方舟 key 与 endpoint id。
 
-## 42% 分类协议发布准备（2026-10-22）
+## 2026-10-22 分类 v6 与 Windows 26.10.2202 已发布
+
+jev-proxy v6 已上线并下载核对全部依赖源码；matching_version=8 为 42%，无字段的旧客户端保留 30%，未知版本调用前拒绝。Windows 26.10.2202 包含 SQLite 0043/0044 与新版请求字段。13 项 Deno（含真实 handler 的新旧分流）、Rust 最终 652/0/21 和 14 组界面通过；线上未登录请求返回 401，未调用真实模型。原 0067 及五图计费保持，没有迁移或 Worker 部署，0068/GPT 保持未开放。旧 v5 源码备份及发布报告在 .tmp/release-windows-26.10.2202/cloud/；v5 不支持新门槛，新桌面仍在线时不直接回退。
+
+## 42% 分类协议发布准备（2026-10-22，历史准备记录）
 
 发布兼容补充：新版 judge 请求带 `matching_version=8`，云端采用 42%；已发布旧客户端未带字段仍用 30%，未知版本在推理前拒绝。版本字段参与现有请求哈希，重放不能换规则。部署先兼容云端、后新版桌面，无须强制所有客户端同时升级。13 项 Deno 包含真实 handler 的 35% 新旧分流及结算参数，Rust 检查请求字段。
 
