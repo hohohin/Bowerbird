@@ -92,6 +92,7 @@ try {
   assert.deepEqual(await page.evaluate(() => window.picks.map(item => item.assetId).sort()), ["a", "b", "c", "d", "existing"]);
 
   await member("member-5").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "删除", exact: true }).click();
   await page.getByRole("menuitem", { name: "解散素材组", exact: true }).click();
   await page.waitForFunction(() => window.snapshot().groups.length === 0);
   assert.equal(await page.locator(".canvas-node.is-asset").count(), 7);

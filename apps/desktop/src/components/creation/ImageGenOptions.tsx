@@ -15,11 +15,13 @@ export function ImageGenOptions({
   onCountChange,
   transparent,
   onTransparentChange,
+  alwaysShowCount = false,
 }: {
   count: number;
   onCountChange: (v: number) => void;
   transparent: boolean;
   onTransparentChange: (v: boolean) => void;
+  alwaysShowCount?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -41,7 +43,7 @@ export function ImageGenOptions({
     };
   }, [open]);
 
-  const label = transparent && current > 1 ? `透明 · ${current} 张` : transparent ? "透明" : current > 1 ? `${current} 张` : "选项";
+  const label = transparent && current > 1 ? `透明 · ${current} 张` : transparent ? "透明" : current > 1 || alwaysShowCount ? `${current} 张` : "选项";
 
   return (
     <div ref={rootRef} className="relative shrink-0">

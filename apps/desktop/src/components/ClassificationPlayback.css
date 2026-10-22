@@ -1,0 +1,71 @@
+.classification-playback { --classification-tag-bg: #f6cc45; --classification-tag-ink: #392b08; --classification-tag-line: #c59a24; position: relative; isolation: isolate; margin-bottom: 18px; }
+.classification-playback-meta { display: flex; justify-content: space-between; gap: 12px; color: var(--bb-muted); font-size: 12px; line-height: 1.6; }
+.classification-playback-count { margin-left: 8px; font-variant-numeric: tabular-nums; color: var(--bb-ink); }
+.classification-playback-stage { --float-width: 108px; --float-height: calc(var(--float-width) * 1.125); --launch-scale: .5925926; --dock-top: 316px; --stage-width: 550px; position: relative; height: 414px; margin-top: 12px; overflow: hidden; contain: layout paint; }
+.classification-playback-air { position: absolute; inset: 0; pointer-events: none; }
+.classification-playback-slot { --travel-x: calc((var(--stage-width) - var(--float-width) - 36px) * var(--float-x) + (var(--float-width) - 64px) / 2); position: absolute; z-index: 2; top: calc(var(--dock-top) + 36px - var(--float-height) / 2); left: calc(18px + (64px - var(--float-width)) / 2); width: var(--float-width); transform-origin: 50% calc(var(--float-height) / 2); animation: classification-result-float var(--float-duration) linear both; }
+.classification-playback-air .classification-playback-picture { height: var(--float-height); background: transparent; border: 0; border-radius: 0; box-shadow: none; }
+.classification-playback-air .classification-playback-picture img { inset: 0; width: 100%; height: 100%; border-radius: 0; }
+.classification-playback-slot.is-exit { z-index: 4; top: var(--dock-top); left: 18px; width: 64px; animation: classification-result-exit var(--float-duration) cubic-bezier(.22,.61,.36,1) both; }
+.classification-playback-slot.is-exit .classification-playback-picture { height: 72px; }
+.classification-playback-card { transform-origin: 50% 30%; }
+.classification-playback-picture { position: relative; height: 120px; border-radius: 8px; border: 1px solid var(--bb-line); background: var(--bb-surface-2); box-shadow: 0 5px 14px var(--bb-shadow-card); display: grid; place-items: center; overflow: hidden; color: var(--bb-muted); }
+.classification-playback-picture img { position: absolute; inset: 4px; width: calc(100% - 8px); height: calc(100% - 8px); object-fit: contain; border-radius: 4px; }
+.classification-playback-placeholder { display: grid; justify-items: center; gap: 8px; font-size: 12px; text-align: center; }
+.classification-playback-tags { position: relative; z-index: 1; margin: -13px 0 0 4px; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; pointer-events: none; }
+.classification-playback-tag { position: relative; max-width: 100%; padding: 3px 6px 3px 19px; font-size: 12px; line-height: 17px; color: var(--classification-tag-ink); background: var(--classification-tag-bg); border: 1px solid var(--classification-tag-line); border-radius: 2px; clip-path: polygon(9px 0,100% 0,100% 100%,9px 100%,0 50%); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transform-origin: 10px 50%; transform: rotate(var(--tag-angle)); animation: classification-tag-stamp 340ms cubic-bezier(.2,.9,.25,1.2) var(--tag-delay) both; }
+.classification-playback-tag i { position: absolute; left: 7px; top: calc(50% - 2px); width: 4px; height: 4px; border: 1px solid var(--classification-tag-ink); border-radius: 50%; }
+.classification-playback-name { margin: 7px 0 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--bb-muted); }
+.classification-playback-dock { position: absolute; z-index: 3; top: var(--dock-top); left: 0; right: 0; padding: 0 18px 12px; background: var(--bb-surface-modal-body); }
+.classification-playback-dock::before { content: ""; position: absolute; left: 0; right: 0; top: -18px; height: 18px; background: linear-gradient(transparent,var(--bb-surface-modal-body)); pointer-events: none; }
+.classification-playback-current { display: flex; align-items: center; gap: 12px; min-height: 72px; margin-bottom: 12px; }
+.classification-playback-stack { width: 64px; flex-shrink: 0; }
+.classification-playback-stack .classification-playback-picture { height: 72px; }
+.classification-playback-stack .classification-playback-placeholder { font-size: 10px; gap: 2px; }
+.classification-playback-current-copy { flex: 1; min-width: 0; }
+.classification-playback-current > .classification-playback-count { flex-shrink: 0; margin-left: 0; font-size: 12px; }
+.classification-playback-heading { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--bb-blue); }
+.classification-playback-hint { font-size: 12px; line-height: 1.6; color: var(--bb-muted); }
+.classification-playback-spinner { animation: classification-spin 1.4s linear infinite; }
+.classification-playback-track { height: 2px; overflow: hidden; background: var(--bb-line); }
+.classification-playback-track > span { display: block; height: 100%; background: var(--bb-blue); transform-origin: left; transition: transform 300ms ease; }
+.classification-playback-summary { margin: 10px 0; font-size: 12px; color: var(--bb-muted); }
+.classification-playback-error { margin-top: 8px; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; color: var(--bb-danger, #e66c6c); }
+.classification-diagnostics { border-top: 1px solid var(--bb-line); padding: 10px 0; font-size: 12px; color: var(--bb-muted); }
+.classification-diagnostics > summary { cursor: pointer; color: var(--bb-ink); }
+.classification-diagnostics > summary span { margin-left: 8px; color: var(--bb-muted); }
+.classification-diagnostics p { margin: 10px 0; line-height: 1.6; }
+.classification-diagnostics-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.classification-diagnostics-rows { max-height: 300px; overflow: auto; margin-top: 8px; }
+.classification-diagnostics-row { border-top: 1px solid var(--bb-line); padding: 8px 0; }
+.classification-diagnostics-row > summary { display: grid; grid-template-columns: minmax(0,1fr) auto auto; gap: 12px; cursor: pointer; }
+.classification-diagnostics-row > summary span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.classification-diagnostics-row strong { color: var(--bb-ink); font-weight: 500; }
+.classification-diagnostics-row ol { padding-left: 16px; }
+.classification-diagnostics-row li { display: flex; justify-content: space-between; gap: 12px; margin: 7px 0; }
+.classification-diagnostics-row time { flex-shrink: 0; font-variant-numeric: tabular-nums; }
+@keyframes classification-tag-stamp { 0% { opacity: 0; transform: translateY(-16px) rotate(-12deg) scale(1.45); } 68% { opacity: 1; transform: rotate(var(--tag-angle)) scale(.94); } 100% { opacity: 1; transform: rotate(var(--tag-angle)) scale(1); } }
+@keyframes classification-spin { to { transform: rotate(360deg); } }
+@keyframes classification-result-exit {
+  0% { opacity: 1; transform: translateX(0); }
+  100% { opacity: 0; transform: translateX(150px); }
+}
+@keyframes classification-result-float {
+  0% { opacity: 1; transform: translate(0,0) scale(var(--launch-scale)); }
+  12% { opacity: 1; transform: translate(var(--travel-x),calc(var(--float-y) * -1)) rotate(var(--float-tilt)) scale(1); }
+  54% { opacity: 1; }
+  78% { opacity: .55; }
+  100% { opacity: 0; transform: translate(calc(var(--travel-x) + var(--float-drift)),-550px) rotate(calc(var(--float-tilt) * -1)) scale(1); }
+}
+@media (max-width: 480px) {
+  .classification-playback-stage { --float-width: 84px; --launch-scale: .7619048; }
+  .classification-playback-current { gap: 8px; }
+  .classification-playback-current > .classification-playback-count { max-width: 64px; text-align: right; }
+  .classification-playback-meta { flex-wrap: wrap; gap: 2px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .classification-playback-slot, .classification-playback-slot.is-exit, .classification-playback-tag, .classification-playback-spinner { animation: none; }
+  .classification-playback-slot { transform: translate(var(--travel-x),calc(var(--float-y) * -1)); }
+  .classification-playback-slot.is-exit { transform: none; opacity: 0; }
+  .classification-playback-track > span { transition: none; }
+}

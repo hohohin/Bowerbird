@@ -324,34 +324,17 @@ pub async fn save_annotation_temp(
 
 /// 读本地图片为 data URL。标注面板导出用：convertFileSrc 的 asset 协议图属跨域源，
 /// 画进 canvas 会污染画布、toDataURL 抛 SecurityError；data URL 同源不污染。
-/// 只放行库根内文件或已登记且指纹一致的外部引用，避免读取任意本地图片。
+/// 只放行库根、应用管理的素材目录或已登记且指纹一致的外部引用。
 #[tauri::command]
 pub async fn read_image_data_url(
     paths: State<'_, Arc<LibraryPaths>>,
     db: State<'_, Arc<Database>>,
     path: String,
 ) -> Result<String, AppError> {
-    let root = paths.inner().root.clone();
+    let paths = paths.inner().clone();
     let db = db.inner().clone();
     tokio::task::spawn_blocking(move || {
-        let p = PathBuf::from(&path);
-        if !p.is_file() {
-            return Err(AppError::Other(format!("文件不存在: {path}")));
-        }
-        // canonicalize 统一解析符号链接 / Windows \\?\ 前缀后再做前缀比较，防 ..\ 逃逸。
-        let canonical = p
-            .canonicalize()
-            .map_err(|e| AppError::Other(format!("读取路径失败: {e}")))?;
-        let root = root
-            .canonicalize()
-            .map_err(|e| AppError::Other(format!("素材库根不可用: {e}")))?;
-        if !canonical.starts_with(&root) {
-            let key = canonical.to_string_lossy().into_owned();
-            if !db.external_paths()?.contains(&key) {
-                return Err(AppError::Other(format!("只允许读取库内图片或已登记的外部引用: {path}")));
-            }
-            db.resolve_external_paths(&[key])?;
-        }
+        let canonical = readable_image_path(&paths, &db, &path)?;
         let bytes = std::fs::read(&canonical)?;
         let ext = canonical
             .extension()
@@ -373,6 +356,30 @@ pub async fn read_image_data_url(
     .await
     .map_err(|e| AppError::Other(e.to_string()))?
 }
+
+fn readable_image_path(paths: &LibraryPaths, db: &Database, path: &str) -> Result<PathBuf, AppError> {
+    let p = Path::new(path);
+    if !p.is_file() {
+        return Err(AppError::Other(format!("文件不存在: {path}")));
+    }
+    // Resolve links, traversal and Windows verbatim prefixes before checking ownership.
+    let canonical = p.canonicalize()
+        .map_err(|e| AppError::Other(format!("读取路径失败: {e}")))?;
+    let root = paths.root.canonicalize()
+        .map_err(|e| AppError::Other(format!("素材库根不可用: {e}")))?;
+    if !canonical.starts_with(&root) && paths.managed_file_root(&canonical).is_none() {
+        let key = canonical.to_string_lossy().into_owned();
+        if !db.external_paths()?.contains(&key) {
+            return Err(AppError::Other(format!("只允许读取库内图片或已登记的外部引用: {path}")));
+        }
+        db.resolve_external_paths(&[key])?;
+    }
+    Ok(canonical)
+}
+
+#[cfg(test)]
+#[path = "library_image_read_tests.rs"]
+mod image_read_tests;
 
 fn empty_asset(id: String) -> Asset {
     Asset {

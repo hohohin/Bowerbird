@@ -13,13 +13,17 @@ const hide = () => page.getByRole("menuitem", { name: "从库中删除 · 在画
 try {
   await page.goto("http://127.0.0.1:1578/scripts/fixtures/canvas-reference/preview.html?source-library&canvas-library");
   await node("old").waitFor();
+  await page.getByRole("button", { name: "展开画板素材库", exact: true }).click();
+  await page.getByRole("tab", { name: "项目素材", exact: true }).click();
   // Only project-library images have the entry; it requires a retained visible canvas instance.
   await source("a").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "删除", exact: true }).click();
   await hide().waitFor();
   assert.equal(await hide().isDisabled(), true);
   await page.keyboard.press("Escape");
-  await page.getByRole("tab", { name: "中央素材", exact: true }).click();
+  await page.getByRole("tab", { name: "全局素材", exact: true }).click();
   await source("existing").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "删除", exact: true }).click();
   assert.equal(await hide().count(), 0);
   await page.keyboard.press("Escape");
   await page.getByRole("tab", { name: "项目素材", exact: true }).click();
@@ -28,21 +32,24 @@ try {
   const original = await node("old").locator(":scope > img").getAttribute("src");
   await page.evaluate(() => { window.failLibraryVisibility = true; });
   await source("existing").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "删除", exact: true }).click();
   await hide().click();
   await page.getByText(/模拟归属修改失败/).waitFor();
   assert.equal(await source("existing").count(), 1);
   assert.deepEqual(await page.evaluate(() => window.snapshot()), before);
   await page.evaluate(() => { window.failLibraryVisibility = false; });
+  await page.getByRole("menuitem", { name: "删除", exact: true }).click();
   await hide().click();
   await source("existing").waitFor({ state: "detached" });
   assert.deepEqual(await node("old").boundingBox(), geometry);
   assert.equal(await node("old").locator(":scope > img").getAttribute("src"), original);
   assert.deepEqual(await page.evaluate(() => window.snapshot()), before);
-  await page.getByRole("tab", { name: "中央素材", exact: true }).click();
+  await page.getByRole("tab", { name: "全局素材", exact: true }).click();
   await page.waitForFunction(() => !document.querySelector('.canvas-source-panel [data-asset-id="existing"]'));
   await page.evaluate(() => window.save());
   await page.reload();
   await node("old").waitFor();
+  await page.getByRole("button", { name: "展开画板素材库", exact: true }).click();
   assert.equal(await source("existing").count(), 0);
   await node("old").click({ button: "right", position: { x: 30, y: 30 } });
   await page.getByRole("menuitem", { name: "加入素材库", exact: true }).click();

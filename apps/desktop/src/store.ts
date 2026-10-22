@@ -501,7 +501,9 @@ interface State {
     x: number;
     y: number;
     assetId: string;
+    workspaceProjectId?: string | null;
     asset?: Asset;
+    fileSelection?: { assets: Asset[]; select: () => void; onComplete?: () => void; openReferences: () => void; localPaths?: Record<string, string> };
     libraryProjectId?: string;
     addCanvasImagesToBoard?: { count: number; run: () => void };
     ungroupCanvasFolder?: () => void;
@@ -511,7 +513,7 @@ interface State {
     x: number,
     y: number,
     assetId: string,
-    context?: { asset?: Asset; libraryProjectId?: string; canvasSelection?: { projectId: string; nodeIds: string[]; assetIds?: string[] }; addCanvasImagesToBoard?: { count: number; run: () => void }; ungroupCanvasFolder?: () => void },
+    context?: { asset?: Asset; fileSelection?: { assets: Asset[]; select: () => void; onComplete?: () => void; openReferences: () => void; localPaths?: Record<string, string> }; libraryProjectId?: string; canvasSelection?: { projectId: string; nodeIds: string[]; assetIds?: string[] }; addCanvasImagesToBoard?: { count: number; run: () => void }; ungroupCanvasFolder?: () => void },
   ) => void;
   closeContextMenu: () => void;
   // —— 项目右键菜单（侧栏项目行 / 收起态圆标）——
@@ -2538,11 +2540,11 @@ export const useStore = create<State>((set, get) => {
   closeLayerEditor: () => set({ layerEditor: null }),
   // —— 右键菜单 ——
   contextMenu: null,
-  openContextMenu: (x, y, assetId, context) => set({ contextMenu: { x, y, assetId, ...context } }),
+  openContextMenu: (x, y, assetId, context) => set({ contextMenu: { x, y, assetId, workspaceProjectId: get().activeProjectId, ...context }, projectContextMenu: null }),
   closeContextMenu: () => set({ contextMenu: null }),
   // —— 项目右键菜单 ——
   projectContextMenu: null,
-  openProjectContextMenu: (x, y, projectId) => set({ projectContextMenu: { x, y, projectId } }),
+  openProjectContextMenu: (x, y, projectId) => set({ projectContextMenu: { x, y, projectId }, contextMenu: null }),
   closeProjectContextMenu: () => set({ projectContextMenu: null }),
   visualProfileFolder: null,
   openVisualProfile: (visualProfileFolder) => set({ visualProfileFolder }),

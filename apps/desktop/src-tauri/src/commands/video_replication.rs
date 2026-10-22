@@ -36,6 +36,23 @@ fn bounded(v: &Value, key: &str, max: usize) -> AppResult<()> {
     }
     Ok(())
 }
+fn rewrite_input(task: &Value) -> AppResult<String> {
+    let direction = field(task, "rewriteDirection").trim();
+    let text = if direction.is_empty() { field(task, "inputText").to_owned() }
+        else { format!("【参考文本】\n{}\n\n【改写方向】\n{direction}", field(task, "inputText")) };
+    if text.chars().count() > 50000 { return Err(error("参考文本与改写方向合计不能超过 50000 字")); }
+    Ok(text)
+}
+fn frame_reference(data: &Value) -> AppResult<Value> {
+    let value = &data["frameReference"];
+    if value.is_null() { return Ok(Value::Null); }
+    bounded(value, "assetId", 100)?;
+    bounded(value, "name", 300)?;
+    if !value["time"].as_f64().is_some_and(|time| time.is_finite() && (0.0..=120.0).contains(&time)) {
+        return Err(error("截帧时间无效"));
+    }
+    Ok(json!({"assetId":value["assetId"],"name":value["name"],"time":value["time"]}))
+}
 fn folder(root: &Path, id: &str) -> AppResult<PathBuf> {
     if id.len() != 32
         || !id
@@ -292,7 +309,7 @@ async fn execute(root: PathBuf, id: String, cloud: CloudClient, auth: AuthClient
             if analyze {
                 patch(&root, &id, json!({"message":"正在制作无音轨分析代理"}))?;
                 request["video"] = proxy_video(&root, &task).await?;
-            } else { request["rewrite"] = json!({"inputText":task["inputText"],"persona":task["persona"],"rules":task["rules"],"product":task["product"]}); }
+            } else { request["rewrite"] = json!({"inputText":rewrite_input(&task)?,"persona":task["persona"],"rules":task["rules"],"product":task["product"]}); }
             // Save the uncertain window before any possibly billable create.
             patch(&root, &id, json!({"submissionPending":true,"message":"正在提交 Bowerbird Cloud"}))?;
             cloud_request(&cloud, &auth, request).await?
@@ -489,6 +506,7 @@ pub async fn video_replication(
                 "sourceAnalysisId",
                 "sourceRewriteId",
                 "inputText",
+                "rewriteDirection",
                 "persona",
                 "rules",
                 "product",
@@ -540,6 +558,8 @@ pub async fn video_replication(
                 bounded(&data, "inputText", 50000)?;
                 bounded(&data, "persona", 8000)?;
                 bounded(&data, "rules", 16000)?;
+                rewrite_input(&data)?;
+                task["frameReference"] = frame_reference(&data)?;
             }
             for key in ["sourceAnalysisId", "sourceRewriteId"] {
                 if let Some(id) = data[key].as_str() {
@@ -583,7 +603,15 @@ pub async fn video_replication(
                 return Err(error("只能编辑已完成的改写结果"));
             }
             bounded(&data, "text", 50000)?;
-            patch(&root, id, json!({"rewrittenText":data["text"]}))
+            let mut changes = json!({"rewrittenText":data["text"]});
+            if let Some(prompt) = data.get("firstFramePrompt") {
+                if !prompt.is_string() || prompt.as_str().unwrap().chars().count() > 12000 {
+                    return Err(error("首帧提示词不能超过 12000 字"));
+                }
+                changes["firstFramePrompt"] = prompt.clone();
+            }
+            if data.get("frameReference").is_some() { changes["frameReference"] = frame_reference(&data)?; }
+            patch(&root, id, changes)
         }
         "export" => {
             let task = generation_view(&db, own(&root, field(&data, "id"), &project_id)?)?;
@@ -685,6 +713,14 @@ pub async fn video_replication(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn rewrite_direction_and_frame_reference_contract() {
+        assert_eq!(rewrite_input(&json!({"inputText":"原文","rewriteDirection":" 改成夜景 "})).unwrap(), "【参考文本】\n原文\n\n【改写方向】\n改成夜景");
+        assert_eq!(rewrite_input(&json!({"inputText":"旧记录"})).unwrap(), "旧记录");
+        assert!(rewrite_input(&json!({"inputText":"a".repeat(49999),"rewriteDirection":"夜景"})).is_err());
+        assert!(frame_reference(&json!({"frameReference":{"assetId":"a","name":"视频","time":3.2}})).is_ok());
+        assert!(frame_reference(&json!({"frameReference":{"assetId":"a","name":"视频","time":-1}})).is_err());
+    }
     #[test]
     fn history_is_atomic_project_scoped_and_preserves_original() {
         let root = std::env::temp_dir().join(format!("bb-replication-{}", uuid::Uuid::new_v4()));

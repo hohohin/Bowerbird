@@ -57,6 +57,9 @@ let snapshot = JSON.parse(sessionStorage.getItem("reference-fixture") || "null")
   executionLinks: [], view: { projectId: "p", panX: 100, panY: 60, zoom: 0.9, sourcePanelWidth: 300, viewMode: "canvas", timelineScope: "all" },
 };
 w.calls = [];
+const fileChanges = new Map<string, { path: string; name: string } | null>();
+const currentFiles = (entries: any[]) => entries.flatMap(entry => fileChanges.has(entry.path)
+  ? fileChanges.get(entry.path) ? [{ ...entry, ...fileChanges.get(entry.path) }] : [] : [entry]);
 w.snapshot = () => structuredClone(snapshot);
 w.save = () => {
   sessionStorage.setItem("reference-fixture", JSON.stringify(snapshot));
@@ -94,7 +97,20 @@ w.__TAURI_INTERNALS__ = {
   invoke: async (command: string, args: any) => {
     w.calls.push({ command, args });
     if (detailRoute) {
-      if (command === "list_projects") return [project];
+      if (command === "create_blank_project") {
+        w.libraryProject = { ...project, id: "library-project", name: args.name, workspace_path: "/BowerbirdLibrary/项目/library-project", asset_count: 0 };
+        return { project: w.libraryProject, imported_count: 0, member_count: 0 };
+      }
+      if (command === "add_assets_to_project") {
+        w.libraryMembers = args.assetIds;
+        for (const asset of assets) if (args.assetIds.includes(asset.id)) Object.assign(asset, { library_hidden: false });
+        w.libraryProject.asset_count = args.assetIds.length;
+        return args.assetIds.length;
+      }
+      if (command === "list_projects") return [project, ...(w.libraryProject ? [w.libraryProject] : [])];
+      if (command === "project_canvas_get" && args.projectId === "library-project") return {
+        ...structuredClone(snapshot), canvas: { ...canvas, projectId: args.projectId }, nodes: [], edges: [], groups: [], groupItems: [], threads: [], view: null,
+      };
       if (command === "list_library_view") return { assets, memberships: [], total: assets.length };
       if (command === "generation_history") return { turns: [], references: [] };
       if (command === "layer_workspace_asset_ids") return [];
@@ -102,10 +118,10 @@ w.__TAURI_INTERNALS__ = {
       if (command === "codex_health" || command === "dreamina_health") return { ok: false };
     }
     if (command === "file_workspace_status") return { config: { root: null, places: [], projects: {} }, proposed_root: "/BowerbirdLibrary" };
-    if (command === "file_workspace_all") return {entries:[
+    if (command === "file_workspace_all") return {entries:currentFiles([
       {name:"原图.png",path:"/pictures/original.png",directory:false},
       {name:"另一张.png",path:"/pictures/other.png",directory:false},
-    ],unavailable:[]};
+    ]),unavailable:[]};
     if (command === "global_classification_view") return {labels:[],pictures:[]};
     if (command === "local_classification_status") return {busy:false,installed:true,supported:true,model:"qwen",enabled:false,done:0,total:0,failed:0,message:"",last_error:"",current_asset:null,jev_progress:null};
     if (command === "local_classification_labels") return [];
@@ -115,11 +131,11 @@ w.__TAURI_INTERNALS__ = {
     if ((localFiles || sourceLibrary) && command === "external_files_browse") {
       if (args.path === "/missing") throw "目录不存在";
       const path = args.path || "/pictures";
-      return { path, parent: path === "/" ? null : "/", total: 3, entries: [
+      return { path, parent: path === "/" ? null : "/", total: 3, entries: currentFiles([
         { name: "旅行", path: "/pictures/travel", directory: true },
         { name: "原图.png", path: `${path}/original.png`, directory: false },
         { name: "另一张.png", path: `${path}/other.png`, directory: false },
-      ] };
+      ]) };
     }
     if ((localFiles || sourceLibrary) && command === "external_files_preview") return image("#68a4b5");
     if ((localFiles || sourceLibrary) && command === "folder_classification_view") return {root:args.path,record:{version:1,recursive:false,labels:[],pictures:[]}};
@@ -129,8 +145,23 @@ w.__TAURI_INTERNALS__ = {
       if (w.failIndex) throw "原图片不可用";
       const id = args.path.endsWith("other.png") ? "external-other" : "external-original";
       let asset = assets.find(asset => asset.id === id);
-      if (!asset) { asset = { id, name: id, width: 190, height: 150, store_path: image("#68a4b5"), thumb_path: image("#68a4b5"), source: "external" }; assets.push(asset); }
-      Object.assign(asset, { library_hidden: true }); return asset;
+      if (!asset) { asset = { id, name: id, width: 190, height: 150, store_path: image("#68a4b5"), thumb_path: image("#68a4b5"), source: "external" }; Object.assign(asset, { ext: "png" }); assets.push(asset); }
+      Object.assign(asset, { library_hidden: !w.libraryMembers?.includes(id) }); return asset;
+    }
+    if (localFiles && command === "local_file_rename") {
+      if (w.failFileRename) throw "同名文件已存在";
+      const path = args.path.replace(/[^/]+$/, args.name + '.png');
+      fileChanges.set(args.path, { path, name: args.name + '.png' });
+      Object.assign(assets.find(asset => asset.id === args.assetId)!, { name: args.name });
+      w.emitAssetsChanged(); return null;
+    }
+    if (localFiles && command === "local_file_delete") {
+      if (w.failFileDeleteId === args.assetId) throw "文件正在使用中";
+      const original = [...fileChanges].find(([, value]) => value?.path === args.path)?.[0] ?? args.path;
+      fileChanges.set(original, null);
+      const index = assets.findIndex(asset => asset.id === args.assetId);
+      if (index >= 0) assets.splice(index, 1);
+      w.emitAssetsChanged(); return null;
     }
     if (localFiles && command === "external_files_references") return assets.filter(asset => asset.source === "external" && snapshot.nodes.some((node: any) => node.assetId === asset.id)).map(asset => ({ asset, status: w.referenceStatus || "available" }));
     if (localFiles && command === "external_files_copy") { const asset = assets.find(asset => asset.id === args.assetId)!; Object.assign(asset, { source: "imported", library_hidden: false }); return asset; }
@@ -357,8 +388,10 @@ w.__TAURI_INTERNALS__ = {
     }
     if (sourceLibrary && command === "list_assets_smart") return args.query === "tag:插画" ? assets.slice(0, 1) : [];
     if (sourceLibrary && command === "search_assets") return assets.filter(asset => asset.name.includes(args.query));
-    if (sourceLibrary && command === "list_assets") return assets.filter((asset: any) => !asset.library_hidden && (!args.folderId || asset.id === "existing"));
+    if (sourceLibrary && command === "list_assets") return assets.filter((asset: any) => !asset.library_hidden && (!args.folderId || asset.id === "existing") && (args.projectId !== "library-project" || w.libraryMembers?.includes(asset.id)));
     if (sourceLibrary && command === "count_assets") return assets.filter((asset: any) => !asset.library_hidden).length;
+    if (command === "material_catalog") return { tags: [], collections: [], prompts: [] };
+    if (command === "material_catalog_assets") return canvasLibrary ? assets.filter((asset: any) => !asset.library_hidden) : [];
     if (command === "count_assets") return 0;
     if (command.startsWith("list_")) return [];
     return null;

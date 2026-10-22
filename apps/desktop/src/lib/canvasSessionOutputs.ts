@@ -1,9 +1,23 @@
 import type { CanvasNode } from "./types";
+import { canvasConversationCards } from "./canvasConversationCards";
 import { canvasNoteValue, readCanvasNote, type CanvasNotePayload } from "./canvasNotes";
 import { activePromptReferences, workflowActiveSession, workflowBindingKey, type WorkflowInput, type WorkflowNode } from "./canvasWorkflow";
 
 function payload(node: CanvasNode) {
   try { return JSON.parse(node.payloadJson); } catch { return {}; }
+}
+
+/** Completion follows the connected conversation, while image data stays tied to its exact turn. */
+export function completedCanvasSessions(inputs: WorkflowInput[], nodes: readonly CanvasNode[], jobs: Parameters<typeof canvasConversationCards>[1]) {
+  const conversations = canvasConversationCards(nodes, jobs);
+  const sessions = inputs.flatMap(input => {
+    if (!input.canvasNodeId || input.cellId !== "image") return [];
+    const source = nodes.find(node => node.id === input.canvasNodeId && node.kind === "prompt" && node.hiddenAt == null);
+    if (!source) return [];
+    return conversations.cards.get(conversations.aliases.get(source.id) ?? source.id)?.sessions ?? [source];
+  });
+  return [...new Set(sessions.filter(session => payload(session).status === "done"
+    && canvasSessionImages(session, nodes).some(output => output.hiddenAt == null)).map(session => session.id))];
 }
 
 /** All generation-card sessions, including those visible on the canvas. */
@@ -17,12 +31,12 @@ export function hiddenWorkflowSessionIds(workflow: readonly WorkflowNode[]) {
   return workflowSessionIds(workflow.filter(node => node.generation?.media === "video"));
 }
 
-/** A session socket refers to this exact turn, never later turns of the same job. */
+/** A session socket exposes only this turn's results, never its reference images or later turns. */
 export function canvasSessionImages(session: CanvasNode, nodes: readonly CanvasNode[]) {
   const turn = payload(session);
   if (session.kind !== "prompt" || !turn.job_id || !turn.turn_key) return [];
   return nodes.filter(node => {
-    const execution = node.kind === "asset" && payload(node).execution;
+    const execution = node.kind === "asset" && node.role === "output" && payload(node).execution;
     return node.assetId && node.projectId === session.projectId && execution?.job_id === turn.job_id && execution?.turn_key === turn.turn_key;
   });
 }

@@ -2,14 +2,15 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import { LocalFileWorkspace } from "../../../src/components/LocalFileWorkspace";
 import { PreservedWorkspace } from "../../../src/components/PreservedWorkspace";
-import { LibraryViewSwitch } from "../../../src/components/LibraryViewSwitch";
-import { useLibraryTabOrder } from "../../../src/lib/libraryTabOrder";
+import { LibrarySourceTabs } from "../../../src/components/LibrarySourceTabs";
+import { LibraryBrowserButton } from "../../../src/components/LibraryBrowserButton";
 import { Toolbar } from "../../../src/components/Toolbar";
 import { useStore } from "../../../src/store";
 import { useLocalFileMode } from "../../../src/lib/localFileMode";
 import { prepareFileWorkspace } from "../../../src/lib/fileWorkspace";
 import "../../../src/styles.css";
 const w = window as any;
+w.__TAURI_EVENT_PLUGIN_INTERNALS__={unregisterListener:()=>{}};
 w.calls=[]; w.store=useStore; w.mode=useLocalFileMode;
 w.prepareFiles=prepareFileWorkspace;
 let fileConfig={root:null as string|null,places:[] as string[],projects:{} as Record<string,string>};
@@ -21,7 +22,7 @@ w.__TAURI_INTERNALS__={convertFileSrc:(path:string)=>path.endsWith('.png')?poste
   w.calls.push({command,args});
   if(command==='file_colors') {
     if(w.colorDelay) await new Promise(r=>setTimeout(r,w.colorDelay));
-    if(w.colorFailure) throw new Error('颜色读取失败');
+    if(w.colorFailure || w.colorFailurePath === args.path) throw new Error('颜色读取失败');
     return args.path.endsWith('.mp4')?['blue']:['red'];
   }
   if(command==='file_workspace_status') return {config:fileConfig,proposed_root:'/BowerbirdLibrary',migration:w.fileMove||null};
@@ -112,9 +113,7 @@ w.__TAURI_INTERNALS__={convertFileSrc:(path:string)=>path.endsWith('.png')?poste
 useStore.setState({searchQuery:'主库搜索',selectedIds:new Set(['library-selection']),smartFilter:'tag:主库标签'});
 function App(){
  const opened=useLocalFileMode(s=>s.open);const setOpen=useLocalFileMode(s=>s.setOpen);
- const mode=useLocalFileMode(s=>s.mode);
- const order=useLibraryTabOrder(s=>s.order);const setOrder=useLibraryTabOrder(s=>s.setOrder);
- const navigation=<header className="library-browser-heading"><LibraryViewSwitch value={mode} label="素材视图切换条" onChange={value=>value==='files'?useLocalFileMode.getState().openBrowser():useLocalFileMode.getState().openGlobal()} onReorder={setOrder} options={order.map(value=>({value,label:{global:'全局素材',files:'文件浏览器'}[value]}))}/></header>;
+ const navigation=<header className="library-browser-heading"><LibrarySourceTabs value="global" onChange={()=>useLocalFileMode.getState().openGlobal()}/>{!opened&&<LibraryBrowserButton/>}</header>;
  return <div className="app-shell" style={{height:'100vh',display:'flex',flexDirection:'column'}}>
    <Toolbar onRefresh={async()=>{}} canvasMode={false} onCanvasModeChange={()=>{}} onCreateCreative={()=>{}} onExplore={()=>{}} localFilesOpen={opened}/>
    <main className="relative flex min-h-0 flex-1 flex-col bg-canvas">

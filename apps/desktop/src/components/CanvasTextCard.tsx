@@ -6,7 +6,8 @@ import { canvasAssetMediaPath } from "../lib/creativeCanvas";
 import { BoardChipPreview } from "./creation/BoardChipPreview";
 import { CanvasResizeHandle } from "./CanvasResizeHandle";
 import { CanvasBubbleTail } from "./CanvasBubbleTail";
-import { AlignCenter, AlignLeft, AlignRight, Bold, Check, ChevronsDownUp, ChevronsUpDown, Copy, GripHorizontal, Images, Italic, Minus, Plus, Type, Undo2 } from "lucide-react";
+import { CanvasCellMarkdown } from "./CanvasCellMarkdown";
+import { AlignCenter, AlignLeft, AlignRight, Bold, Check, ChevronsDownUp, ChevronsUpDown, Copy, GripHorizontal, Italic, Minus, Plus, Table2, Type, Undo2 } from "lucide-react";
 import { canvasCellValue, canvasGridWeights, canvasTextCsv, canvasTextMinSize, emptyCanvasCell, type CanvasNotePayload, type CanvasTextCell } from "../lib/canvasNotes";
 import { notifyError } from "../lib/notify";
 import { parseCanvasTableClipboard, pasteCanvasTable } from "../lib/canvasTablePaste";
@@ -25,11 +26,12 @@ export function CanvasTextCard({ value, selected, width, height, zoom, onChange,
   width: number;
   height: number;
   zoom: number;
-  onChange: (value: CanvasNotePayload) => void;
+  onChange: (value: CanvasNotePayload, size?: { width: number; height: number }) => void;
   onSelect: () => void;
   onResize: (size: { width: number; height: number }, finished: boolean, cancelled?: boolean) => void;
 }) {
   const [active, setActive] = useState<[number, number]>([0, 0]);
+  const [editingCell, setEditingCell] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const [removing, setRemoving] = useState<{ axis: "row" | "column"; index: number } | null>(null);
   const [removed, setRemoved] = useState<{ value: CanvasNotePayload; active: [number, number] } | null>(null);
@@ -72,6 +74,16 @@ export function CanvasTextCard({ value, selected, width, height, zoom, onChange,
     const cells = value.cells.map((line, r) => line.map((item, c) => r === row && c === column ? { ...item, ...(change.content_type !== undefined || change.text !== undefined || change.image_refs !== undefined ? { generation_ref: undefined } : {}), ...change } : item));
     onChange({ ...value, cells, text: cells.map(line => line.map(item => item.text).join("\t")).join("\n") });
   }
+  function changeGrid(next: CanvasNotePayload) {
+    const rect = grid.current?.getBoundingClientRect();
+    const total = (weights: number[]) => weights.reduce((sum, weight) => sum + weight, 0);
+    // Grow by the new weights, keeping existing cells at their current world sizes.
+    const growth = (before: number[], after: number[]) => after.length > before.length ? Math.max(0, total(after) / total(before) - 1) : 0;
+    onChange(next, rect ? {
+      width: width + rect.width / zoom * growth(columnWeights, canvasGridWeights(next.column_widths, next.cells[0].length)),
+      height: height + rect.height / zoom * growth(rowWeights, canvasGridWeights(next.row_heights, next.cells.length)),
+    } : undefined);
+  }
   function insert(axis: "row" | "column", index: number) {
     if (inputLocked) return;
     setRemoved(null);
@@ -83,7 +95,7 @@ export function CanvasTextCard({ value, selected, width, height, zoom, onChange,
     weights.splice(index, 0, 1);
     setActive(axis === "row" ? [index, active[1]] : [active[0], index]);
     onSelect();
-    onChange({
+    changeGrid({
       ...value,
       cells,
       text: cells.map(line => line.map(item => item.text).join("\t")).join("\n"),
@@ -191,7 +203,7 @@ export function CanvasTextCard({ value, selected, width, height, zoom, onChange,
         setRemoved(null);
       }}><Undo2 size={16} /></button></>}
     </div>}
-    <div className="canvas-text-handle" title="拖动内容卡片"><GripHorizontal size={15} />{images ? <Images size={14} /> : <Type size={14} />}</div>
+    <div className="canvas-text-handle" title="拖动内容卡片"><GripHorizontal size={15} />{bubble ? <Type size={14} /> : <Table2 size={14} />}</div>
     {!bubble && onConnectCell && <button className="workflow-cell-port workflow-image-output" data-workflow-cell="*" aria-label="输出容器图片" title="输出全部图片"
       onPointerDown={event => { event.preventDefault(); event.stopPropagation(); onConnectCell("*", event.clientX, event.clientY); }}
       onClick={event => { if (event.detail === 0) onConnectCell("*", event.clientX, event.clientY); }} />}
@@ -237,10 +249,13 @@ export function CanvasTextCard({ value, selected, width, height, zoom, onChange,
           {onConnectCell && <button className={`workflow-cell-port ${images ? "is-image-output" : ""}`} data-workflow-cell={item.id} aria-label={`输出第 ${row + 1} 行第 ${column + 1} 列${images ? "图片" : "文本"}`}
             title={images ? "拖动连接图片输入" : "拖动连接文本输入"} onPointerDown={event => { event.preventDefault(); event.stopPropagation(); onConnectCell(item.id!, event.clientX, event.clientY); }}
             onClick={event => { if (event.detail === 0) onConnectCell(item.id!, event.clientX, event.clientY); }} />}
-          {!images && <textarea aria-label={bubble ? "气泡便签内容" : `第 ${row + 1} 行第 ${column + 1} 列`} placeholder={bubble ? "添加说明或标签…" : "输入文本…"} value={item.text}
+          {!images && <textarea aria-label={bubble ? "气泡便签内容" : `第 ${row + 1} 行第 ${column + 1} 列`} placeholder={bubble ? "添加说明或标签…" : "输入文本，支持 Markdown…"} value={item.text}
+            className={!bubble && item.text && editingCell !== item.id ? "has-markdown-preview" : undefined}
             readOnly={inputLocked}
             style={{ fontWeight: item.bold ? 700 : 400, fontStyle: item.italic ? "italic" : "normal", textAlign: item.align, lineHeight: lineHeight / 100 }}
-            onFocus={() => { setActive([row, column]); onSelect(); }}
+            onFocus={() => { setEditingCell(item.id ?? null); setActive([row, column]); onSelect(); }}
+            onBlur={() => setEditingCell(null)}
+            onKeyDown={event => { if (!bubble && event.key === "Escape") { event.stopPropagation(); event.currentTarget.blur(); } }}
             onPaste={event => {
               if (bubble || inputLocked) return;
               try {
@@ -251,13 +266,18 @@ export function CanvasTextCard({ value, selected, width, height, zoom, onChange,
                 const next = pasteCanvasTable(value, table, row, column);
                 setRemoved(null);
                 setCopied(null);
-                onChange(next);
+                changeGrid(next);
               } catch (error) {
                 event.preventDefault();
                 notifyError(error, "粘贴表格失败");
               }
             }}
             onChange={event => updateCell(row, column, { text: event.target.value })} />}
+          {!bubble && !images && item.text && editingCell !== item.id && <div className="canvas-cell-markdown" title={inputLocked ? undefined : "点击编辑 Markdown；Esc 预览"}
+            style={{ fontWeight: item.bold ? 700 : 400, fontStyle: item.italic ? "italic" : "normal", textAlign: item.align, lineHeight: lineHeight / 100 }}
+            onClick={event => { if (!(event.target as HTMLElement).closest("a")) event.currentTarget.parentElement?.querySelector("textarea")?.focus(); }}>
+            <CanvasCellMarkdown text={item.text} />
+          </div>}
           {images && !item.image_refs?.length && (item.generation_ref && renderGeneration ? renderGeneration(item) : <div className="canvas-image-empty">连接图片输入</div>)}
           {!!canvasCellValue(item).imageRefs.length && <div className={images ? "canvas-image-content" : "canvas-cell-images"}>{canvasCellValue(item).imageRefs.map(ref => {
             const asset = referenceAssets.find(asset => asset.id === ref.asset_id);

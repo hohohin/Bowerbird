@@ -196,12 +196,13 @@ try {
   const [rowOneBefore] = await rowCells();
   const rowHandle = text.getByRole("separator", { name: "调整第 1 行高度", exact: true });
   const rowHandleBox = await rowHandle.boundingBox();
-  await page.mouse.move(rowHandleBox.x + rowHandleBox.width / 2, rowHandleBox.y + rowHandleBox.height / 2);
+  // A growing card can bring the column grip over the row grip's centre; use its clear left end.
+  await page.mouse.move(rowHandleBox.x + 3, rowHandleBox.y + rowHandleBox.height / 2);
   await page.mouse.down();
-  await page.mouse.move(rowHandleBox.x + rowHandleBox.width / 2, rowHandleBox.y + rowHandleBox.height / 2 + 36, { steps: 8 });
+  await page.mouse.move(rowHandleBox.x + 3, rowHandleBox.y + rowHandleBox.height / 2 + 36, { steps: 8 });
   await page.mouse.up();
   const [rowOneAfter] = await rowCells();
-  assert.ok(Math.abs(rowOneAfter.height - rowOneBefore.height - 36) < 2, "first row grows by the drag delta");
+  assert.ok(Math.abs(rowOneAfter.height - rowOneBefore.height - 36) < 2, `first row grows by the drag delta: ${rowOneBefore.height} -> ${rowOneAfter.height}`);
   await saved();
   notePayload = JSON.parse((await page.evaluate(() => window.snapshot())).nodes.find(n => n.id === textId).payloadJson);
   assert.ok(notePayload.row_heights[0] > notePayload.row_heights[1], `dragged row weights persist: ${notePayload.row_heights}`);
@@ -277,7 +278,7 @@ try {
   assert.ok(Math.abs(await cell.evaluate(e => parseFloat(getComputedStyle(e).lineHeight)) - 18.6) < 0.01, "line spacing survives reload");
   assert.deepEqual(await cell.evaluate(e => [getComputedStyle(e).fontWeight, getComputedStyle(e).fontStyle, getComputedStyle(e).textAlign]), ["700", "italic", "center"]);
   assert.equal(await page.getByRole("toolbar", { name: "文本样式（当前单元格）" }).count(), 0);
-  await cell.click();
+  await text.locator('.canvas-cell-markdown').first().click();
   await page.getByRole("toolbar", { name: "文本样式（当前单元格）" }).waitFor();
   // Pointer deltas are converted from screen pixels at the current canvas zoom.
   await page.getByRole("button", { name: "缩小", exact: true }).click();
@@ -340,6 +341,7 @@ try {
   await saved();
   assert.ok((await node(textId).boundingBox()).x > textBefore.x + 20);
   await textSection.locator(".canvas-section-heading svg").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "删除", exact: true }).click();
   await page.getByRole("menuitem", { name: /从画布移出/ }).click();
   assert.equal(await node(textId).count(), 1);
   assert.equal(await node(textSectionId).count(), 0);
@@ -356,6 +358,7 @@ try {
   assert.ok(insideX > memberBounds.x + memberBounds.width || insideY > memberBounds.y + memberBounds.height,
     "右键落点在分区内且避开成员卡片");
   await page.mouse.click(insideX, insideY, { button: "right" });
+  await page.getByRole("menuitem", { name: "删除", exact: true }).click();
   await page.getByRole("menuitem", { name: /移除分区/ }).click();
   assert.equal(await node(textId).count(), 1);
   assert.equal(await node(textSectionId).count(), 0);

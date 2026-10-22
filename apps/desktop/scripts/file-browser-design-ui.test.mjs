@@ -18,7 +18,7 @@ async function edit(value) {
 }
 try {
   await page.goto('http://127.0.0.1:1682/scripts/fixtures/folder-mode/preview.html');
-  await page.locator('[role="tab"][data-tab-value="files"]').click();
+  await page.getByRole('button', { name: '文件浏览器', exact: true }).click();
   await page.getByRole('button', { name: 'photo.png', exact: true }).waitFor();
   assert.equal(await page.getByRole('textbox', { name: '文件夹路径' }).count(), 0);
   assert.equal(await page.getByText('浏览不入库', { exact: false }).count(), 0);
@@ -43,10 +43,46 @@ try {
   assert.equal(await page.evaluate(() => window.calls.filter(c => c.command === 'file_colors').length), 0, 'browsing does not scan colors');
   await page.getByRole('button', { name: '颜色筛选', exact: true }).click();
   const colors = page.getByRole('dialog', { name: '颜色筛选', exact: true });
+  await colors.getByRole('button', { name:'红', exact:true }).focus();
+  await page.keyboard.press('ArrowDown');
+  assert.equal(await page.evaluate(()=>document.activeElement?.getAttribute('aria-label')), '橙');
+  await page.keyboard.press('ArrowUp');
+  assert.equal(await page.evaluate(()=>document.activeElement?.getAttribute('aria-label')), '红');
+  for (const width of [1280, 760]) {
+    await page.setViewportSize({ width, height: 840 });
+    await page.waitForTimeout(220);
+    const layout = await colors.evaluate(el => {
+      const pill = el.closest('.library-color-control');
+      const trigger = pill.querySelector('.library-filter-trigger').getBoundingClientRect();
+      const bounds = pill.getBoundingClientRect();
+      const swatches = [...el.querySelectorAll('.library-filter-colors button')].map(button => button.getBoundingClientRect());
+      const popup = el.getBoundingClientRect();
+      return { height: bounds.height, triggerLeft: trigger.left, panelLeft: popup.left, below:popup.top>=trigger.bottom+7,
+        right: bounds.right, rows: new Set(swatches.map(rect => Math.round(rect.top))).size, count: swatches.length,
+        visible: swatches.every(rect => rect.left >= popup.left && rect.right <= popup.right && rect.top >= popup.top && rect.bottom <= popup.bottom),
+        detached: el.classList.contains('folder-popover') };
+    });
+    assert.equal(layout.height, 28);
+    assert.equal(layout.rows, 12);
+    assert.equal(layout.count, 12);
+    assert.equal(layout.visible, true);
+    assert.equal(layout.detached, false);
+    assert.ok(Math.abs(layout.panelLeft-layout.triggerLeft)<=1 && layout.below && layout.right <= width, JSON.stringify(layout));
+  }
+  await page.setViewportSize({ width: 1280, height: 840 });
   await colors.getByRole('button', { name: '红', exact: true }).click();
   await page.waitForFunction(() => document.querySelectorAll('.folder-media-card').length === 1);
   assert.equal(await page.locator('.folder-media-card').getAttribute('aria-label'), 'photo.png');
   await page.keyboard.press('Escape');
+  const colorReads = () => page.evaluate(() => window.calls.filter(c => c.command === 'file_colors').length);
+  const beforeSearch = await colorReads();
+  const search = page.getByRole('textbox', { name: '搜索当前文件夹', exact: true });
+  await search.fill('photo');
+  await page.waitForTimeout(150);
+  await search.fill('');
+  await page.waitForTimeout(150);
+  assert.equal(await colorReads(), beforeSearch, 'search changes reuse colors already read in this directory');
+  assert.equal(await page.locator('.folder-media-card').getAttribute('aria-label'), 'photo.png');
   await page.getByRole('button', { name: '更多文件操作', exact: true }).click();
   await page.getByRole('button', { name: '只看视频', exact: true }).click();
   assert.equal(await page.locator('.folder-media-card').count(), 0, 'color and type filters combine');
@@ -57,14 +93,18 @@ try {
   await page.keyboard.press('Escape');
   assert.equal(await page.locator('.folder-media-card').count(), 3);
   assert.equal(await page.evaluate(() => window.calls.some(c => c.command === 'external_files_index')), false);
-  await page.evaluate(() => { window.colorFailure = true; });
+  const beforeRefresh = await colorReads();
+  await page.evaluate(() => { window.colorFailurePath = '/pictures/clip.mp4'; });
   await page.getByRole('button', { name: '刷新文件夹' }).click();
   await page.getByRole('button', { name: '颜色筛选', exact: true }).click();
-  await colors.getByRole('button', { name: '2 项读取失败 · 重试', exact: true }).waitFor();
-  await page.evaluate(() => { window.colorFailure = false; });
-  await colors.getByRole('button', { name: '2 项读取失败 · 重试', exact: true }).click();
+  await colors.getByRole('button', { name: '1 项读取失败 · 重试', exact: true }).waitFor();
+  assert.equal(await colorReads(), beforeRefresh + 2, 'explicit refresh invalidates the previous colors');
+  await page.evaluate(() => { window.colorFailurePath = null; });
+  await colors.getByRole('button', { name: '1 项读取失败 · 重试', exact: true }).click();
   await page.waitForFunction(() => !document.querySelector('.folder-popover')?.textContent.includes('读取失败') && !document.querySelector('.folder-popover [role="status"]'));
-  await page.keyboard.press('Escape');
+  assert.equal(await colorReads(), beforeRefresh + 3, 'retry only rereads the failed file');
+  await page.keyboard.press("Escape");
+  // Filter/version cache transitions are covered by file-color-cache-ui; the old tag flyout was removed.
   const initialCount = await browseCount();
   await edit(''); await page.keyboard.press('Enter');
   assert.equal(await browseCount(), initialCount, 'empty paths never navigate');
@@ -94,9 +134,29 @@ try {
   assert.equal(await page.evaluate(() => document.activeElement.textContent), '迁移资料目录');
   await page.keyboard.press('Escape');
   assert.equal(await page.getByRole('button', { name: '更多文件操作', exact: true }).evaluate(e => document.activeElement === e), true);
-  await page.getByRole('button', { name: '文件位置', exact: true }).click();
+  assert.equal(await page.getByRole('button', { name: '文件位置', exact: true }).count(), 0);
+  await page.getByRole('button', { name: '更多文件操作', exact: true }).click();
   await page.locator('.folder-masonry').click({ position: { x: 3, y: 3 } });
   assert.equal(await page.getByRole('dialog', { name: '文件位置', exact: true }).count(), 0);
+
+  const places=page.getByRole('complementary',{name:'文件浏览器目录'});
+  await places.getByRole('button',{name:'将当前目录添加到常用目录'}).click();
+  await places.locator('.file-place-item').waitFor();
+  assert.equal(await places.getByRole('button',{name:'将当前目录添加到常用目录'}).isDisabled(),true,'already saved directory cannot be duplicated');
+  await places.getByRole('button',{name:'资料目录',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('[aria-label="文件夹路径"]').value==='/BowerbirdLibrary');
+  assert.equal(await places.getByRole('button',{name:'资料目录',exact:true}).getAttribute('aria-current'),'location');
+  await page.evaluate(()=>window.mode.getState().setOpen(false));
+  await places.waitFor({state:'detached'});
+  await page.evaluate(()=>window.mode.getState().openBrowser());
+  await places.locator('.file-place-item').waitFor();
+  await places.locator('.file-place-item .file-place-row').click();
+  await page.waitForFunction(()=>document.querySelector('[aria-label="文件夹路径"]').value==='/');
+  await places.locator('.file-place-item').hover();
+  await places.getByRole('button',{name:'从常用目录移除 /',exact:true}).click();
+  await places.locator('.file-place-item').waitFor({state:'detached'});
+  assert.equal(await pathValue(),'/','removing a shortcut preserves the open folder');
+  assert.deepEqual(await page.evaluate(()=>window.calls.filter(c=>c.command==='file_workspace_place').map(c=>c.args)),[{path:'/',added:true},{path:'/',added:false}]);
 
   // Use bundled sample art and synthetic directory data; no user's filesystem or database.
   await page.evaluate(() => {
@@ -114,6 +174,8 @@ try {
   });
   await edit('/灵感素材/视觉参考'); await page.keyboard.press('Enter');
   await page.getByRole('button', { name: 'sample-1.png', exact: true }).waitFor();
+  await places.getByRole('button',{name:'将当前目录添加到常用目录'}).click();
+  await places.locator('.file-place-item').waitFor();
   await page.waitForFunction(() => [...document.querySelectorAll('.folder-media-preview img')].filter(img => img.complete && img.naturalWidth > 0).length >= 6);
   const card = page.getByRole('button', { name: 'sample-1.png', exact: true });
   const size = page.getByRole('spinbutton', { name: '主页素材大小数值' });
@@ -165,6 +227,7 @@ try {
   await page.screenshot({ path: '.tmp/file-browser-design/actions.png' });
   await page.keyboard.press('Escape');
   await page.getByRole('button', { name: '颜色筛选', exact: true }).click();
+  await page.waitForTimeout(240);
   await page.screenshot({ path: '.tmp/file-browser-design/colors.png' });
   assert.deepEqual(errors, []);
   console.log('PASS compact navigation, path edit/cancel/blur/shortcut, drive and UNC ancestors, menu keyboard/outside dismissal, image-only cards, slider geometry/hit target, selection, bundled-art light/dark wide/narrow screenshots');

@@ -75,7 +75,7 @@ try {
    await page.keyboard.press('Escape');
    await page.getByRole('button',{name:'更多文件操作',exact:true}).click();
    await page.getByRole('button',{name:'自动分类全局素材',exact:true}).click();
-   await page.getByRole('dialog',{name:'自动分类',exact:true}).getByRole('button',{name:'识别未处理素材',exact:true}).click();
+   await page.getByRole('dialog',{name:'自动分类',exact:true}).getByRole('button',{name:'进行分类',exact:true}).click();
    const calls=await page.evaluate(()=>window.calls);
    assert.equal(calls.filter(c=>c.command==='global_classification_start').length,1);
    assert.equal(calls.filter(c=>c.command==='folder_classification_start'||c.command==='folder_classification_edit'||c.command==='external_files_index').length,0);

@@ -30,9 +30,14 @@ export function CanvasLayerMenuItem({ projectId, nodeIds, className, disabled = 
     };
   }, [projectId, nodeIds.join("\u0000")]);
   return <button ref={button} type="button" role="menuitem" disabled={disabled}
-    aria-label="调整层级" title="按住并上下滑动：每 0.4 秒移动一层，回到起点附近暂停"
+    aria-label="调整层级" title="按住并上下滑动调整；键盘 Enter 上移一层，Shift+Enter 下移一层"
     className={className} style={{ cursor: "ns-resize", touchAction: "none", userSelect: "none" }}
-    onClick={event => event.stopPropagation()}
+    onClick={event => {
+      event.stopPropagation();
+      if (event.detail === 0) window.dispatchEvent(new CustomEvent<CanvasLayerStepDetail>(CANVAS_LAYER_STEP_EVENT, {
+        detail: { projectId, nodeIds, direction: event.shiftKey ? -1 : 1 },
+      }));
+    }}
     onPointerDown={event => {
       if (event.button !== 0) return;
       event.preventDefault(); event.stopPropagation(); stop();

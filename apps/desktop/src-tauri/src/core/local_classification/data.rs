@@ -294,17 +294,72 @@ impl Database {
         self.local_targets_for_model(pending_only, MODEL_ID)
     }
 
+    /// Explicit full rescan: reset automatic results only within the resolved image scope.
+    /// Return only eligible targets; manually classified images remain entirely untouched.
+    pub fn reset_classification_results(&self, assets: &[String], revision: i64) -> AppResult<(i64, Vec<String>)> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let current: i64 = tx.query_row("SELECT revision FROM local_classification_state WHERE id=1", [], |r| r.get(0))?;
+        if current != revision {
+            return Err(AppError::Other("分类已被人工修改，请重新发起扫描".into()));
+        }
+        let targets = {
+            let mut stmt = tx.prepare("SELECT EXISTS(SELECT 1 FROM asset_tags WHERE asset_id=?1 AND origin='manual')")?;
+            let mut targets = Vec::new();
+            for asset in assets {
+                if !stmt.query_row([asset], |r| r.get::<_, bool>(0))? {
+                    targets.push(asset.clone());
+                }
+            }
+            targets
+        };
+        if targets.is_empty() { return Ok((current, targets)); }
+        for asset in &targets {
+            tx.execute(
+                "DELETE FROM asset_tags WHERE asset_id=?1 \
+                 AND origin='local' \
+                 AND NOT (tag_id IN (SELECT id FROM tags WHERE name='#ai生成') \
+                   AND EXISTS(SELECT 1 FROM analyses WHERE asset_id=?1 AND kind='replication_source'))",
+                [asset],
+            )?;
+            tx.execute("DELETE FROM local_visual_observations WHERE asset_id=?1", [asset])?;
+        }
+        tx.execute("UPDATE local_classification_state SET revision=revision+1 WHERE id=1", [])?;
+        tx.commit()?;
+        Ok((current + 1, targets))
+    }
+
     pub fn local_targets_for_model(
         &self,
         pending_only: bool,
         model: &str,
     ) -> AppResult<Vec<String>> {
+        self.classification_targets(pending_only, model, false)
+    }
+
+    pub fn local_auto_targets(&self, model: &str) -> AppResult<Vec<String>> {
+        self.classification_targets(true, model, true)
+    }
+
+    /// Stopping a scan must not leave its images eligible for the automatic watcher.
+    /// Future inserts still enter the queue while the opt-in switch remains enabled.
+    pub fn stop_local_auto_pending(&self, project: Option<&str>) -> AppResult<()> {
+        self.conn.lock().unwrap().execute(
+            "DELETE FROM local_auto_classification_pending WHERE ?1 IS NULL OR asset_id IN \
+             (SELECT asset_id FROM project_assets WHERE project_id=?1)", [project])?;
+        Ok(())
+    }
+
+    fn classification_targets(&self, pending_only: bool, model: &str, automatic: bool) -> AppResult<Vec<String>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare("SELECT a.id FROM assets a WHERE a.thumb_path IS NOT NULL \
+            AND (?3=0 OR ((SELECT enabled FROM local_classification_state WHERE id=1)=1 \
+              AND EXISTS(SELECT 1 FROM local_auto_classification_pending p WHERE p.asset_id=a.id) \
+              AND NOT EXISTS(SELECT 1 FROM asset_tags t WHERE t.asset_id=a.id AND t.origin='manual'))) \
             AND lower(COALESCE(a.ext,'')) IN ('jpg','jpeg','png','webp','gif','bmp') \
             AND (?1=0 OR NOT EXISTS(SELECT 1 FROM local_visual_observations o WHERE o.asset_id=a.id AND (o.model=?2 OR (?2 IN ('jev-choice-dimensions/cloud-discovery-v6','jev-choice-flat-top4-30/cloud-discovery-v7') AND o.model IN ('jev-choice-dimensions/cloud-discovery-v5','jev-choice-dimensions/cloud-discovery-v6'))))) \
             ORDER BY a.created_at,a.id")?;
-        let rows = stmt.query_map(params![pending_only, model], |r| r.get(0))?;
+        let rows = stmt.query_map(params![pending_only, model, automatic], |r| r.get(0))?;
         Ok(rows.collect::<Result<_, _>>()?)
     }
 

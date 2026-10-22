@@ -25,7 +25,7 @@ async function reset() {
 }
 async function marquee(width = 970, height = 290, count = 4) {
   const rect = await page.locator(".canvas-stage").boundingBox();
-  await page.mouse.move(rect.x + 20, rect.y + 60);
+  await page.mouse.move(rect.x + 60, rect.y + 50);
   await page.mouse.down();
   await page.mouse.move(rect.x + width, rect.y + height, { steps: 12 });
   await page.mouse.up();
@@ -37,6 +37,7 @@ async function addFromMenu(name) {
   await page.waitForFunction(() => document.querySelectorAll(".ProseMirror:not([aria-readonly]) [data-asset-id]").length > 0);
   assert.match(await editor.innerText(), /保留已有指令/);
   assert.equal(await page.getByRole("menu").count(), 0);
+  assert.equal(await page.locator("[data-canvas-node-id].is-selected").count(), 0, "adding references clears the canvas selection");
 }
 
 try {
@@ -72,7 +73,7 @@ try {
 
   await reset();
   await marquee();
-  await page.locator(".canvas-stage").click({ button: "right", position: { x: 20, y: 60 } });
+  await page.locator(".canvas-stage").click({ button: "right", position: { x: 60, y: 50 } });
   await addFromMenu("添加所选 2 张图片到对话框");
   assert.deepEqual(await chips(), ["existing", "a"], "blank-space menu keeps the marquee selection");
 
@@ -137,7 +138,7 @@ try {
   await page.keyboard.press("Delete");
   assert.equal(await page.locator("[data-canvas-node-id]").count(), 7);
   await page.evaluate(() => document.getElementById("test-modal").remove());
-  await page.locator(".canvas-stage").click({ position: { x: 20, y: 60 } });
+  await page.locator(".canvas-stage").click({ position: { x: 60, y: 50 } });
   await node("old").focus();
   await page.keyboard.press("Delete");
   assert.equal(await page.locator("[data-canvas-node-id]").count(), 7, "focus alone is not a selection");
@@ -153,16 +154,18 @@ try {
     await page.keyboard.press("Backspace");
     assert.equal(await page.locator("[data-canvas-node-id]").count(), 7, "Backspace cannot remove canvas content");
     // Clear the multi-selection before checking the single-node context action.
-    await page.locator(".canvas-stage").click({ position: { x: 20, y: 60 } });
+    await page.locator(".canvas-stage").click({ position: { x: 60, y: 50 } });
     await node(id).click({ button: "right", position: { x: 30, y: 30 } });
-    await page.getByRole("menuitem", { name: "从画布移出", exact: true }).click();
+    await page.getByRole("menuitem", { name: "删除", exact: true }).click();
+  await page.getByRole("menuitem", { name: "从画布移出", exact: true }).click();
     await node(id).waitFor({ state: "detached" });
     await page.keyboard.press(`${primaryModifier}+z`);
     await node(id).waitFor();
   }
   await reset();
   await marquee();
-  await page.locator(".canvas-stage").click({ button: "right", position: { x: 20, y: 60 } });
+  await page.locator(".canvas-stage").click({ button: "right", position: { x: 60, y: 50 } });
+  await page.getByRole("menuitem", { name: "删除", exact: true }).click();
   await page.getByRole("menuitem", { name: "从画布移出所选 4 项", exact: true }).click();
   for (const id of ["old", "a", "duplicate-a", "prompt"]) await node(id).waitFor({ state: "detached" });
   assert.equal(await node("outside").count(), 1, "unselected material stays on the canvas");

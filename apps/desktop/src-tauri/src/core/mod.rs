@@ -7,6 +7,7 @@ pub mod generation_worker;
 pub mod ingest;
 pub mod library;
 pub mod library_view;
+pub mod material_catalog;
 pub mod canvas_library;
 pub mod local_classification;
 pub mod migrate;
@@ -24,6 +25,7 @@ pub mod visual_profile;
 pub mod project_deletion;
 
 pub mod external_files;
+pub mod local_file_operations;
 pub mod file_workspace;
 pub mod file_workspace_move;
 pub mod creative_files;

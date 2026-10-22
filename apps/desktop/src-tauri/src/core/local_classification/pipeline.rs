@@ -33,6 +33,7 @@ impl LocalClassifier {
         cloud: &dyn UnderstandProvider,
         notify: impl Fn(bool),
     ) -> bool {
+        self.diagnostics.clear();
         let mut waiting = VecDeque::<PendingClassification>::new();
         let mut analysis: FuturesUnordered<
             BoxFuture<'_, (String, Result<PendingClassification, String>)>,
@@ -139,25 +140,34 @@ impl LocalClassifier {
                     }
                     match result {
                         Ok(pending) if pending.needs_discovery => {
-                            if let Some(progress) = self.status.lock().unwrap().jev_progress.as_mut() {
-                                progress.message = format!("{}已加入 Cloud 补标签队列，Jev 继续分析下一张", if progress.report.is_none() { "没有启用标签，未调用 Jev；" } else { "没有真实标签达到 30%；" });
+                            self.diagnostics.step(&id, "queued", "等待本地 Cloud 并发槽（最多 4 张）");
+                            {
+                                let mut status = self.status.lock().unwrap();
+                                if let Some(progress) = status.jev_progress.as_mut() {
+                                    progress.message = format!("{}已加入 Cloud 补标签队列，Jev 继续分析下一张", if progress.report.is_none() { "没有启用标签，未调用 Jev；" } else { "没有真实标签达到 30%；" });
+                                    let asset = progress.asset.clone();
+                                    status.recent_cloud_handoffs.push(asset);
+                                    if status.recent_cloud_handoffs.len() > 64 {
+                                        status.recent_cloud_handoffs.remove(0);
+                                    }
+                                }
                             }
                             waiting.push_back(pending);
                         }
                         Ok(pending) => {
                             let result = self.finish_jev(db, None, pending).await;
-                            self.complete_jev_asset(&id, &result);
+                            self.complete_jev_asset(db, &id, &result);
                             notify(result.is_ok());
                         }
                         Err(error) => {
-                            self.complete_jev_asset(&id, &Err(error));
+                            self.complete_jev_asset(db, &id, &Err(error));
                             notify(false);
                         }
                     }
                 }
                 Some((id, result)) = completions.next(), if !completions.is_empty() => {
                     if self.cancel.load(Ordering::Relaxed) { break; }
-                    self.complete_jev_asset(&id, &result);
+                    self.complete_jev_asset(db, &id, &result);
                     notify(result.is_ok());
                 }
                 _ = async {
@@ -170,6 +180,7 @@ impl LocalClassifier {
         // All work belongs to this run and must be dropped before the busy gate is released.
         drop(analysis);
         drop(completions);
+        if self.cancel.load(Ordering::Relaxed) { self.diagnostics.cancel_remaining(); }
         let mut status = self.status.lock().unwrap();
         status.current_asset = None;
         status.cloud_running = 0;
@@ -184,7 +195,9 @@ impl LocalClassifier {
         next == targets.len() && !self.cancel.load(Ordering::Relaxed)
     }
 
-    fn complete_jev_asset(&self, id: &str, result: &Result<(), String>) {
+    fn complete_jev_asset(&self, db: &Database, id: &str, result: &Result<(), String>) {
+        self.diagnostics.step(id, if result.is_ok() { "complete" } else { "failed" },
+            if result.is_ok() { "分类结果已保存" } else { "处理失败，详情见分类错误" });
         let mut status = self.status.lock().unwrap();
         status.done += 1;
         if let Some(progress) = status.jev_progress.as_mut().filter(|p| p.asset.id == id) {
@@ -197,5 +210,31 @@ impl LocalClassifier {
             status.failed += 1;
             status.last_error = format!("素材 {id}：{error}");
         }
+        drop(status);
+        self.record_classification_result(db, id, result);
+    }
+
+    pub(super) fn record_classification_result(&self, db: &Database, id: &str, result: &Result<(), String>) {
+        let asset = db.get_asset(id).ok().flatten();
+        // Read committed labels, including Cloud discoveries and manual exclusions.
+        // A preview candidate is never presented as a saved classification.
+        let tags = if result.is_ok() {
+            db.list_asset_tags(id).unwrap_or_default().into_iter().map(|tag| tag.name).collect()
+        } else { Vec::new() };
+        let mut status = self.status.lock().unwrap();
+        let sequence = status.done;
+        status.recent_results.push(super::ClassificationResult {
+            sequence,
+            asset: CurrentAsset {
+                id: id.into(),
+                name: asset.as_ref().map(|a| a.name.clone()).unwrap_or_else(|| "素材已移除".into()),
+                thumb_path: asset.and_then(|a| a.thumb_path),
+                position: sequence,
+            },
+            tags,
+            error: result.as_ref().err().cloned(),
+        });
+        // Progress events deliver every completion; retain a bounded polling fallback.
+        if status.recent_results.len() > 64 { status.recent_results.remove(0); }
     }
 }

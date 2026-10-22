@@ -81,7 +81,7 @@ try {
  const dialog=page.getByRole('dialog',{name:'自动分类',exact:true});
  await dialog.getByText('分类目标：指定文件夹').waitFor();
  await dialog.getByRole('checkbox',{name:'包含子文件夹'}).check();
- await dialog.getByRole('button',{name:'识别未处理素材',exact:true}).click();
+ await dialog.getByRole('button',{name:'进行分类',exact:true}).click();
  await page.waitForFunction(()=>window.calls.some(c=>c.command==='folder_classification_start'));
  assert.deepEqual(await page.evaluate(()=>window.calls.find(c=>c.command==='folder_classification_start').args),{root:'/pictures',recursive:true,pendingOnly:true,tagId:null});
  await dialog.getByRole('button',{name:'加入所选 1 张作为示例'}).click();

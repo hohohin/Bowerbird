@@ -386,16 +386,15 @@ fn export_layer_asset(paths: &LibraryPaths, db: &Database, asset_id: String, doc
         std::fs::write(&temporary, &bytes)?;
         // Manual exports remain independent; workflow exports are keyed above.
         let destination = paths.for_project(db, project_id.as_deref())?;
-        let result = ingest::ingest_generated(&destination, &db, &temporary, None, "layer-edit");
+        let result = ingest::ingest_generated_with_visibility(&destination, &db, &temporary, None, "layer-edit", workflow);
         let _ = std::fs::remove_file(&temporary);
         let mut asset = result?;
         db.conn.lock().unwrap().execute(
-            "UPDATE assets SET name=?1,origin_path=NULL,library_hidden=?3 WHERE id=?2",
-            rusqlite::params![name, asset.id, workflow],
+            "UPDATE assets SET name=?1,origin_path=NULL WHERE id=?2",
+            rusqlite::params![name, asset.id],
         )?;
         asset.name = name;
         asset.origin_path = None;
-        asset.library_hidden = workflow;
         save_workspace(&paths, &db, &asset.id, &workspace)?;
         if let Some(key) = export_key {
             db.insert_analysis(&crate::core::library::Analysis { id: Ulid::new().to_string(), asset_id: asset.id.clone(), kind: "workflow_layer_product".into(), payload: key, provider: None, created_at: None })?;
@@ -586,6 +585,12 @@ mod tests {
         let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();
         db.conn.lock().unwrap().execute("INSERT INTO assets(id,name) VALUES('source','source')", []).unwrap();
         db.conn.lock().unwrap().execute("INSERT INTO projects(id,name,workspace_path,workspace_key,created_at,updated_at,last_opened_at) VALUES('p','p','p','p',1,1,1)", []).unwrap();
+        // Catch even temporary visibility during insertion, before export finalization.
+        db.conn.lock().unwrap().execute_batch(
+            "CREATE TABLE inserted_layer_visibility(hidden INTEGER);
+             CREATE TRIGGER record_layer_visibility AFTER INSERT ON assets WHEN NEW.source='layer-edit'
+             BEGIN INSERT INTO inserted_layer_visibility VALUES(NEW.library_hidden); END;"
+        ).unwrap();
         let mut png = std::io::Cursor::new(Vec::new());
         image::DynamicImage::new_rgba8(8,8).write_to(&mut png, image::ImageFormat::Png).unwrap();
         let url = format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(png.into_inner()));
@@ -599,6 +604,22 @@ mod tests {
         assert_ne!(edited.id,first.id);
         let manual=export_layer_asset(&paths,&db,"source".into(),doc,url,Some("p".into()),false).unwrap();
         assert_ne!(manual.id,first.id);assert!(!manual.library_hidden);
+        let inserted: Vec<bool> = db.conn.lock().unwrap().prepare("SELECT hidden FROM inserted_layer_visibility ORDER BY rowid")
+            .unwrap().query_map([], |row| row.get(0)).unwrap().collect::<Result<_, _>>().unwrap();
+        assert_eq!(inserted, vec![true, true, false]);
+        let collection = db.save_collection_node(None, "分层产物", None).unwrap();
+        db.set_collection_members(&collection, &[first.id.clone(), edited.id.clone(), manual.id.clone()], true).unwrap();
+        for project in [None, Some("p")] {
+            for kind in ["tags", "collections"] {
+                let assets = db.material_catalog_assets(kind, None, project).unwrap();
+                assert_eq!(assets.iter().map(|asset| &asset.id).collect::<Vec<_>>(), vec![&manual.id]);
+            }
+        }
+        for asset in [&first, &edited] {
+            assert!(db.get_asset(&asset.id).unwrap().unwrap().library_hidden);
+            assert!(std::path::Path::new(asset.store_path.as_ref().unwrap()).is_file());
+            assert!(db.list_analyses_by_asset(&asset.id).unwrap().iter().any(|analysis| analysis.kind == "layer_workspace"));
+        }
         drop(db);std::fs::remove_dir_all(root).unwrap();
     }
     #[test]

@@ -134,6 +134,16 @@ pub struct PromptNodePayloadV1 {
     pub visual_profile: Option<VisualProfileRefV1>,
     #[serde(default)]
     pub status: Option<String>,
+    /// Reference snapshots for history without requiring visible canvas instances.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reference_assets: Vec<PromptReferenceAssetV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PromptReferenceAssetV1 {
+    pub asset_id: String,
+    pub snapshot: AssetSnapshotV1,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -132,6 +132,7 @@ Deno.test("Authenticated synchronous proxy uses server secret, same-image free f
     SUPABASE_SECRET_KEY: "secret-test",
     JEV_API_KEY: "jev-server-secret",
     JEV_CLASSIFICATION_COST_MICROS: "100",
+    RATE_LIMIT_PER_USER_PER_MIN: "1",
     BOWERBIRD_CLOUD_MOCK: "false",
     ARK_API_KEY: "ark-test",
     ARK_VISION_MODEL: "vision-test",
@@ -142,6 +143,7 @@ Deno.test("Authenticated synchronous proxy uses server secret, same-image free f
   Object.entries(vars).forEach(([k, v]) => Deno.env.set(k, v));
   let upstreamCalls = 0, cloudCalls = 0;
   let failed = false, matched = true;
+  let limit: string | null = null;
   let row: any = { id: target, status: "judging" };
   const advances: any[] = [];
   const json = (v: unknown, status = 200) =>
@@ -162,6 +164,8 @@ Deno.test("Authenticated synchronous proxy uses server secret, same-image free f
       if (rpc === "cleanup_classification") return json(null);
       if (rpc === "ensure_daily_credits") return json([{ daily_balance: 30 }]);
       if (rpc === "begin_classification") {
+        assertEquals(args.p_rate_limit, null);
+        if (limit) return json({code:"P0001",details:limit,message:"limit"},400);
         return json({ claimed: true, request: row });
       }
       if (rpc === "advance_classification") {
@@ -242,6 +246,15 @@ Deno.test("Authenticated synchronous proxy uses server secret, same-image free f
     assertEquals(advances.at(-1).p_action, "fail");
     assertEquals((await failure.text()).includes("not exposed"), false);
     assertEquals(upstreamCalls, 3);
+    failed = false;
+    for (let i = 0; i < 12; i++) assertEquals((await call(input())).status, 200);
+    assertEquals(upstreamCalls, 15); // Shared limit=1 never throttles classification.
+    limit = "understand_daily_limit";
+    const daily = await call(input());
+    assertEquals(daily.status, 429);
+    assertEquals(daily.headers.get("retry-after"), null);
+    assertEquals((await daily.json()).error.retryable, false);
+    assertEquals(upstreamCalls, 15); // Daily quota still blocks the supplier.
   } finally {
     globalThis.fetch = fetch;
     Object.entries(previous).forEach(([k, v]) =>

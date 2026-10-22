@@ -60,8 +60,8 @@ try {
  assert.equal(await page.getByRole('button',{name:'移入已有',exact:true}).count(),0);
  await page.goto('http://127.0.0.1:1697/scripts/fixtures/asset-multi-menu/preview.html');
  await page.waitForFunction(()=>window.fixtureStore);
- await page.evaluate(()=>{window.resetSelection();window.fixtureStore.getState().openContextMenu(100,100,'a1');});
- await page.getByRole('menu',{name:'已选 3 张素材的操作'}).waitFor();
+ await page.evaluate(()=>window.openMenu('multi'));
+ await page.getByRole('menu',{name:'已选 2 项素材的操作'}).waitFor();
  assert.equal(await page.getByRole('menuitem',{name:'用选中的内容新建集合',exact:true}).count(),0);
  assert.equal(await page.getByRole('menuitem',{name:'移入已有集合',exact:true}).count(),0);
  await page.getByRole('menuitem',{name:'加入项目',exact:true}).waitFor();

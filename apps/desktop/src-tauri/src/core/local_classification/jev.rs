@@ -100,6 +100,8 @@ impl Report {
 
 #[derive(Clone)]
 pub struct Judge {
+    #[cfg(debug_assertions)]
+    observer: Option<(super::diagnostics::Diagnostics, String)>,
     client: reqwest::Client,
     key: String,
     url: String,
@@ -112,20 +114,56 @@ impl Judge {
         let url = cloud.config().endpoint("jev-proxy").ok_or("当前构建未配置 Bowerbird Cloud")?;
         let auth = app.state::<AuthClient>().inner().clone();
         if !auth.snapshot().logged_in { return Err("请先登录 Bowerbird 账号再使用云端分类".into()); }
-        Ok(Self { client: cloud.http().clone(), key: String::new(), url, auth: Some(auth) })
+        Ok(Self {
+            #[cfg(debug_assertions)]
+            observer: None,
+            client: cloud.http().clone(), key: String::new(), url, auth: Some(auth),
+        })
+    }
+
+    #[cfg(debug_assertions)]
+    pub(super) fn observed(&self, diagnostics: super::diagnostics::Diagnostics, id: &str) -> Self {
+        let mut judge = self.clone();
+        judge.observer = Some((diagnostics, id.into()));
+        judge
+    }
+
+    #[cfg(debug_assertions)]
+    fn trace(&self, stage: &str, detail: &str) {
+        if let Some((diagnostics, id)) = &self.observer { diagnostics.step(id, stage, detail); }
     }
 
     pub async fn post(&self, body: &Value) -> Result<Value, String> {
-        let response = self.auth.as_ref().ok_or("Cloud 分类服务未就绪")?
-            .send_authorized(self.client.post(&self.url).json(body), "云端分类请求失败")
-            .await.map_err(|e| e.to_string())?;
-        let status = response.status();
-        let value: Value = response.json().await.map_err(|_| "云端分类响应无效")?;
-        if !status.is_success() {
-            return Err(value.pointer("/error/message").and_then(Value::as_str)
-                .unwrap_or("云端分类请求失败，此图未写入标签").to_string());
+        for attempt in 0..3 {
+            #[cfg(debug_assertions)]
+            self.trace("request", &format!("{} · 第 {} 次请求；等待响应头（网络 + 服务端）",
+                if body["action"] == "discover" { "Cloud 补标签" } else { "Jev 匹配" }, attempt + 1));
+            let response = self.auth.as_ref().ok_or("Cloud 分类服务未就绪")?
+                .send_authorized(self.client.post(&self.url).json(body), "云端分类请求失败")
+                .await.map_err(|e| e.to_string())?;
+            let status = response.status();
+            #[cfg(debug_assertions)]
+            self.trace("response", &format!("HTTP {}；接收及解析响应", status.as_u16()));
+            let retry_after = response.headers().get("retry-after")
+                .and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u64>().ok());
+            let value: Value = response.json().await.map_err(|_| "云端分类响应无效")?;
+            if status.is_success() { return Ok(value); }
+            if attempt < 2 && status.as_u16() == 429
+                && value.pointer("/error/retryable").and_then(Value::as_bool) == Some(true)
+                && matches!(retry_after, Some(1..=120))
+            {
+                #[cfg(debug_assertions)]
+                self.trace("backoff", &format!("HTTP 429 分钟限流；等待 {} 秒后重试", retry_after.unwrap()));
+                // Reuse the exact idempotency key. Only a pre-submission minute
+                // limit retries; daily quota/unknown upstream outcomes never do.
+                // classify_mode / discover_managed cancellation drops this wait.
+                tokio::time::sleep(Duration::from_secs(retry_after.unwrap())).await;
+                continue;
+            }
+            return Err(value.pointer("/error/message").or_else(|| value.get("message")).and_then(Value::as_str)
+                .map(str::to_string).unwrap_or_else(|| format!("云端分类请求失败（HTTP {status}），此图未写入标签")));
         }
-        Ok(value)
+        unreachable!()
     }
 
     pub fn is_cloud(&self) -> bool { self.auth.is_some() }
@@ -136,6 +174,8 @@ impl Judge {
             return Err("请先保存 Jev API Key".into());
         }
         Ok(Self {
+            #[cfg(debug_assertions)]
+            observer: None,
             client: reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
                 .connect_timeout(Duration::from_secs(15))
@@ -503,6 +543,50 @@ mod tests {
             description: "图中可见主体".into(),
             examples: vec![],
         }
+    }
+
+    #[tokio::test]
+    async fn managed_minute_limit_retries_same_request_and_can_be_cancelled() {
+        let limited = json!({"error":{"message":"稍候继续","retryable":true}});
+        let (mut judge, server) = mock_jev(vec![
+            ("429 Too Many Requests\r\nRetry-After: 1", limited.clone()),
+            ("200 OK", json!({"ok":true})),
+            ("429 Too Many Requests", json!({"error":{"message":"今日额度已用完","retryable":false}})),
+        ]).await;
+        let cloud = CloudClient::new(crate::cloud::config::CloudConfig {
+            supabase_url: Some(judge.url.clone()), supabase_publishable_key: Some("test-public".into()),
+        }).unwrap();
+        judge.auth = Some(AuthClient::with_test_session(cloud));
+        let diagnostics = super::super::diagnostics::Diagnostics::default();
+        diagnostics.begin("test-image", "测试");
+        let judge = judge.observed(diagnostics.clone(), "test-image");
+        let body = json!({"action":"judge","idempotency_key":"same-paid-image"});
+        assert_eq!(judge.post(&body).await.unwrap()["ok"], true);
+        let rows = diagnostics.snapshot();
+        let steps = &rows[0].steps;
+        assert!(steps.iter().any(|s| s.stage == "backoff" && s.detail.contains("HTTP 429")));
+        let requests: Vec<_> = steps.iter().filter(|s| s.stage == "request").collect();
+        assert_eq!(requests.len(), 2);
+        assert!(requests[1].at_ms >= 1000, "diagnostics measure the real throttle wait");
+        assert!(!serde_json::to_string(&rows).unwrap().contains("same-paid-image"));
+        assert!(judge.post(&body).await.unwrap_err().contains("今日额度"));
+        let requests = server.await.unwrap();
+        assert_eq!(requests.len(), 3);
+        assert_eq!(requests[0], requests[1], "a throttle retry keeps the original idempotency key");
+
+        let (mut judge, server) = mock_jev(vec![("429 Too Many Requests\r\nRetry-After: 61", limited)]).await;
+        let cloud = CloudClient::new(crate::cloud::config::CloudConfig {
+            supabase_url: Some(judge.url.clone()), supabase_publishable_key: Some("test-public".into()),
+        }).unwrap();
+        judge.auth = Some(AuthClient::with_test_session(cloud));
+        let cancel = AtomicBool::new(false);
+        let candidates = [candidate("海报")];
+        let (result, _) = tokio::join!(
+            tokio::time::timeout(Duration::from_secs(2), judge.classify_mode(b"image", &candidates, &cancel, true, |_,_| {})),
+            async { tokio::time::sleep(Duration::from_millis(100)).await; cancel.store(true, Ordering::Relaxed); },
+        );
+        assert_eq!(result.unwrap().unwrap_err(), "已停止分类");
+        assert_eq!(server.await.unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -983,6 +1067,9 @@ mod tests {
                     );
                     assert_eq!(status.cloud_running, 4);
                     assert_eq!(status.cloud_queued, 3);
+                    assert_eq!(status.recent_cloud_handoffs.len(), 7);
+                    assert!(status.recent_cloud_handoffs.iter().enumerate()
+                        .all(|(i, asset)| asset.id == targets[i] && asset.position == i + 1));
                     assert!(status.current_asset.is_none());
                     assert_eq!(cloud.calls.load(Ordering::Relaxed), 4);
                     cloud.release.add_permits(7);

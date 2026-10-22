@@ -99,7 +99,7 @@ export function LibraryFilterButton() {
   }
   return <>
     <div ref={root} className="library-floating-filter">
-      <div className={`library-color-control${open ? " is-open" : ""}`}>
+      <div className={`library-color-control library-floating-surface${open ? " is-open" : ""}`}>
         <button type="button" data-filter="colors" className="library-filter-trigger" aria-label="颜色筛选"
           title={`颜色筛选${color ? " · 已启用" : ""}`} data-active={!!color || undefined}
           aria-expanded={open} aria-haspopup="dialog" aria-controls={open ? id : undefined}

@@ -3,10 +3,11 @@ import { api } from "../../lib/api";
 import { VIDEO_RATIOS, videoDurationRange, videoResolutions, videoSupportsRatio, type VideoModelCapability, type VideoOptions } from "../../lib/videoGeneration";
 import { DreaminaBalance } from "./DreaminaCredits";
 
-export function VideoControls({ options, onChange, ratio, onRatioChange, channel = "jimeng", onChannelChange }: {
+export function VideoControls({ options, onChange, ratio, onRatioChange, channel = "jimeng", onChannelChange, composer = false }: {
   options: VideoOptions; onChange: (options: VideoOptions) => void;
   ratio: string | null; onRatioChange: (ratio: string) => void;
   channel?: "jimeng" | "cloud"; onChannelChange?: (channel: "jimeng" | "cloud") => void;
+  composer?: boolean;
 }) {
   const control = "h-7 rounded border border-edge bg-panel2 px-2 text-xs text-ink";
   const [catalog, setCatalog] = useState<{ kind: string; models: VideoModelCapability[]; error?: string } | null>(null);
@@ -23,7 +24,8 @@ export function VideoControls({ options, onChange, ratio, onRatioChange, channel
   const selected = models.find(model => model.model_version === options.model_version);
   const resolutions = channel === "cloud" ? videoResolutions("seedance2.5") : selected?.resolutions ?? [];
   const [minDuration, maxDuration] = selected ? [selected.min_duration, selected.max_duration] : videoDurationRange(options.model_version);
-  return <>
+  const retry = channel === "jimeng" && catalog?.error && <button type="button" title={catalog.error} className="text-[11px] text-muted underline" onClick={() => setRefresh(value => value + 1)}>模型查询失败，重试</button>;
+  const fields = <>
     <select aria-label="视频生成渠道" className={control} value={channel} onChange={event => {
       const next = event.target.value as "jimeng" | "cloud";
       onChannelChange?.(next);
@@ -41,7 +43,7 @@ export function VideoControls({ options, onChange, ratio, onRatioChange, channel
         {models.map(model => <option key={model.model_version} value={model.model_version}>{model.model_version.replace("seedance", "Seedance ").replace("_vip", " · VIP")}</option>)}
       </>}
     </select>
-    {channel === "jimeng" && catalog?.error && <button type="button" title={catalog.error} className="text-[11px] text-muted underline" onClick={() => setRefresh(value => value + 1)}>模型查询失败，重试</button>}
+    {!composer && retry}
     <select aria-label="视频分辨率" className={control} value={options.video_resolution} onChange={event => onChange({ ...options, video_resolution: event.target.value as VideoOptions["video_resolution"] })}>
       {!resolutions.includes(options.video_resolution) && <option value={options.video_resolution}>{options.video_resolution} · 待核验</option>}
       {resolutions.map(value => <option key={value} value={value}>{value}</option>)}
@@ -61,6 +63,13 @@ export function VideoControls({ options, onChange, ratio, onRatioChange, channel
       onChange={(event) => onRatioChange(event.target.value)}>
       {VIDEO_RATIOS.map((value) => <option key={value} value={value}>{value}</option>)}
     </select> : <span className="text-[11px] text-muted">比例由{options.kind === "frames2video" ? "首帧" : "输入图"}决定</span>}
-    {channel === "jimeng" && <div className="flex w-full flex-wrap items-center gap-x-3 gap-y-1"><DreaminaBalance /><span className="text-[11px] text-muted">暂无官方生成前报价；提交后显示任务消耗</span></div>}
+  </>;
+  return <>
+    {composer ? <div className="composer-video-fields">{fields}</div> : fields}
+    {channel === "jimeng" && <div className={composer ? "composer-video-status" : "flex w-full flex-wrap items-center gap-x-3 gap-y-1"}>
+      <DreaminaBalance />
+      {composer && retry}
+      <span className="text-[11px] text-muted">暂无官方生成前报价；提交后显示任务消耗</span>
+    </div>}
   </>;
 }

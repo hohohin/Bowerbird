@@ -23,6 +23,8 @@ export interface ReplicationInput {
   sourceAnalysisId?: string;
   sourceRewriteId?: string;
   inputText?: string;
+  rewriteDirection?: string;
+  frameReference?: ReplicationFrameReference | null;
   persona?: string;
   rules?: string;
   product?: ReplicationProduct | null;
@@ -46,6 +48,7 @@ export interface ReplicationTask extends ReplicationInput {
   analysis: string;
   rewriteOriginalText: string;
   rewrittenText: string;
+  firstFramePrompt?: string;
   remoteTaskId?: string | null;
   submissionPending: boolean;
   outputAssetId?: string | null;
@@ -55,6 +58,38 @@ export interface ReplicationTask extends ReplicationInput {
   generationTurnKey?: string;
   outputPath?: string | null;
   usage?: { inputTokens?: number; cachedInputTokens?: number; outputTokens?: number } | null;
+}
+
+export interface ReplicationFrameReference { assetId: string; time: number; name: string }
+export interface ReplicationImageRequest { prompt: string; referenceId?: string; ratio: string }
+
+/** Only extract an explicitly named field/section; never infer an image prompt from a shot. */
+export function replicationRewriteParts(text: string): { text: string; firstFramePrompt: string } {
+  const keys = ["firstFramePrompt", "first_frame_prompt", "first_frame_image_prompt", "首帧画面提示词", "首帧提示词"];
+  try {
+    const value = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, ""));
+    if (value && !Array.isArray(value) && typeof value === "object") {
+      const key = keys.find(key => typeof value[key] === "string");
+      if (key) {
+        const firstFramePrompt = value[key].trim();
+        delete value[key];
+        return { text: typeof value.rewrittenText === "string" ? value.rewrittenText : JSON.stringify(value, null, 2), firstFramePrompt };
+      }
+    }
+  } catch { /* Most rewrite responses are Markdown/plain text. */ }
+  const heading = /^(?:#{1,6}\s*|\*\*|【)?(?:\d+[.、]\s*)?(?:首帧画面提示词|首帧图片提示词|首帧提示词|first[ _-]?frame[ _-]?(?:image[ _-]?)?prompt)(?:】|\*\*)?\s*[:：]?\s*(?:\*\*)?\s*/im.exec(text);
+  if (!heading) return { text, firstFramePrompt: "" };
+  const rest = text.slice(heading.index + heading[0].length);
+  const next = /\n(?=#{1,6}\s|【[^】\n]+】|\*\*[^*\n]+\*\*\s*[:：]?\s*$)/m.exec(rest);
+  const end = next?.index ?? rest.length;
+  return {
+    text: (text.slice(0, heading.index).trimEnd() + (next ? "\n\n" + rest.slice(end).trimStart() : "")).trim(),
+    firstFramePrompt: rest.slice(0, end).trim().replace(/^```(?:text|plaintext)?\s*\n/i, "").replace(/\n```$/, "").trim(),
+  };
+}
+
+export function replicationRewriteInput(input: Pick<ReplicationInput, "inputText" | "rewriteDirection">): string {
+  return input.rewriteDirection?.trim() ? `【参考文本】\n${input.inputText ?? ""}\n\n【改写方向】\n${input.rewriteDirection.trim()}` : input.inputText ?? "";
 }
 
 export const REPLICATION_PERSONA = "你是一名短视频广告编导，擅长根据参考视频的节奏和运镜，为新产品设计可执行的分镜。";
@@ -109,6 +144,7 @@ export function validateReplicationInput(input: ReplicationInput): string | null
   if (input.operation === "analyze") return input.referenceId ? null : "请先选择参考视频";
   if (input.operation === "rewrite") {
     if (!length(input.inputText, 50000)) return "待改写文本需为 1–50000 字";
+    if ([...replicationRewriteInput(input)].length > 50000) return "参考文本与改写方向合计不能超过 50000 字";
     if (!length(input.persona, 8000)) return "人设需为 1–8000 字";
     if (!length(input.rules, 16000)) return "改写规范需为 1–16000 字";
     return null;

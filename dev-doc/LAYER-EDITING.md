@@ -53,6 +53,8 @@ Windows 字体来自原生 GDI 字体族枚举（系统/用户已安装字体，
 - `layer_cloud_request`：仅允许分层创建、报价与原任务查询/取消，经既有 AuthClient 发往 generate-proxy。成功包验证同源下载、字节数与 SHA-256。
 - `layer_export`：合成 PNG 作为新资产入库，另存独立图层工程副本，原图不会被覆盖或被去重合并。原图和合成图均可右键继续编辑。
 
+工作流拆分的单层产物通过 `workflow=true` 导出，调用 `ingest_generated_with_visibility` 在资产 INSERT 时保存隐藏标志；手动合成导出仍为可见素材。`workflow_exports_reuse_assets_and_stay_out_of_central_library` 同时检查插入瞬间的可见性、重跑复用、工程/文件保留及全局/项目标签和集合查询，避免仅在导出返回值中隐藏而数据库仍公开。产品范围见 `PROJECT.md`「拆分图层默认不进素材库」。
+
 撤销历史使用可选 `history: { images, documents }`，兼容无历史的旧工程。快照只存图层属性和图片索引：负数 `-index-1` 引用当前工程图层图片，非负数引用去重的旧图片池；重复移动/改字不会复制整张图片。最近 30 步随手动保存、暂时退出和云结果保存一起落盘，文字识别及 AI 替换也保留之前的图层。原生校验快照结构、图片索引、历史步数及全部图片，沿用 256 MiB 总大小上限。`node scripts/layer-history-ui.test.mjs` 覆盖自动保存、重开撤销文字/转换/坐标/AI 原图、舍弃不写盘、失败保留、Esc/拖动中退出、云端等待退出与原任务恢复；截图 `apps/desktop/.tmp/layer-history.png`。
 
 本地工程仍使用 Bowerbird 格式，并可另存 PSD / AI 工程。图层包上限 256 MiB，单输出图片上限 30 MiB；上限失败明确显示，不能漏层后报告成功。
