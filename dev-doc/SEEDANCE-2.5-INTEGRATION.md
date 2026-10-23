@@ -1,5 +1,7 @@
 # Seedance 2.5 视频接入与验收记录
 
+**2026-10-23 发布补记：** 本页当日桌面源码已随 Windows **26.10.2301** 发布（源码 4156e8e0），下方“待发布／未打包”是专项验证时的历史状态。正式包、签名、CDN 及回滚证据见 [桌面自动更新](DESKTOP-UPDATES.md)。原有真实安装／GPU、原生 UI 和 Mac 实机验收边界继续保留。
+
 ## 2026-10-23：桌面视频元数据增加系统回退（源码未发布）
 
 - 读取顺序为内置 MP4/MOV/M4V 解析 → Windows Media Foundation / macOS AVFoundation → 可选 ffprobe。`--video-probe-worker` 在主程序初始化前执行；系统探测与 ffprobe 实际探测均在独立进程内，15 秒超时结束并回收，响应限读 64 KiB。复用已有原生静态库与 Windows DLL 延迟加载，不增加媒体工具二进制或依赖包，不修改云端、裁剪/转码或工具发现协议。
