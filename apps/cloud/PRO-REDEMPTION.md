@@ -23,6 +23,20 @@
 
 页面源码在 `website/admin/`，随现有官网 build 输出到 `dist/admin/`。官网路径 `/admin/`（`/admin` 自动跳转）支持邮箱 Magic Link 登录；管理员可以生成每批 1–1000 个码、填写批次备注及兑换截止时间、查看总数与状态、分页/筛选/搜索批次或尾号或领取账号、按码查看/复制、按批次导出仍可使用的码，以及确认后停用未使用码。**已于 2026-09-14 发布至 https://bowerbird.cn/admin/；正式管理员为 `admin@bowerbird.cn`。**
 
+### 用户管理（2026-10-22，已上线）
+
+`/admin/` 左侧新增「用户管理」，沿用同一管理员登录与 `bowerbird_admin=true` 鉴权。支持按邮箱或用户 ID 子串搜索、全部／仅测试／非测试筛选及每页 50 人分页，展示邮箱、Auth UUID、注册时间、最近登录和测试资格；无邮箱账号以 UUID 识别，管理员标记只读显示。行内「设为测试账号／取消测试资格」经确认后保存，成功提示用户在桌面端「刷新权益」。会员、积分、密码及管理员权限不在此入口修改。
+
+- `0069_user_admin.sql` 增加仅 service role 可调用的 `admin_list_users` / `admin_set_test_account`，每次 RPC 再检查 Auth 中当前管理员标记；不向客户端返回完整 metadata。搜索把 `%`、`_` 当普通字符。
+- 沿用 `code-admin`，新增 `list_users` / `set_test_account` 操作。调用者 ID 来自已验证会话，目标用户 ID 与布尔值严格校验；只按目标 UUID 修改 `bowerbird_test`，保留其他 app metadata。行锁内记录 `user_admin_events` 操作人、目标、前后状态及时间；设置为同一状态不重复写审计。
+- 响应禁用缓存；失败显示提示，网络结果未知时刷新确认，不自动反转状态。撤权、退出或切换账号清空用户数据，迟到响应不能回填；移动端保留导航。
+- 本地验收：Deno 5 项测试、Edge 类型检查、PGlite 兑换码及用户权限/筛选/分页/审计/会员积分不变回归、官网 production build、隔离 Chromium 用户搜索/分页/授予/取消/Esc/网络结果丢失/窄屏/撤权/退出迟到响应。仅合成账号，没有修改线上账号。
+- 上线需先核对远端迁移基线并定向应用 0069，再部署 `code-admin`，最后发布官网；不可把其他未发布迁移或工作区修改一并推送。无新 Secret 或桌面构建要求。回退可先恢复上一版官网和 Edge，保留新增审计记录；已修改的账号资格不会随代码回退自动撤销。
+
+2026-10-22 经用户授权完成上线：在 0067 基线上只应用 0069 并登记迁移历史，0068 保持未应用；`code-admin` v3 → **v4**，JWT 开启，下载回读的全部依赖与候选一致，其他 Edge 版本未变。官网以最新 Windows 26.10.2203 发布目录为基础，仅替换 `dist/admin/` 三个静态文件；账号网关、服务源码、环境、下载与更新清单保持，现役目录 `/opt/bowerbird/website-releases/20261022-user-admin`，回滚目录 `/opt/bowerbird/website-releases/20261022-windows-26.10.2203`。为节省磁盘，未变文件使用硬链接克隆，admin 文件通过替换 inode 写入，原目录哈希已复核不变；以后修改任一发布目录的共享文件须先替换副本，不得原地写入。
+
+真实验收覆盖公网三文件哈希、未登录 401、普通用户 403、搜索与筛选、严格布尔值／不存在用户、重复设置唯一审计、其他 metadata／管理员权限保留、会员积分不变、RPC／审计表越权拒绝、权益刷新、真实浏览器取消资格与管理员撤权后旧 JWT 拒绝及页面清空。测试通过后临时 Auth 账号全部删除，审计保留；未发送邮件、发码、调用模型或修改正式账号资格。首轮测试将权益刷新的 `updated_at` 变化误计入余额变化，核对 `refresh_user_credit_snapshot` 后修正测试口径并完整复验；不修改生产计费逻辑。证据 `.tmp/user-admin-20261022/{published.json,deployment.json,smoke.json,live-users.png}`；旧 Edge 源码在其中 `rollback/`，原官网目录保留。官网回滚切回上述 2203 目录并重启 `bowerbird-website.service`，Edge 回滚部署该 `rollback/` 中的 `code-admin`；保留 0069 及审计，避免删除已发生操作的记录。
+
 ### 管理员授权
 
 2026-09-14 已核验 `admin@bowerbird.cn` 为已验证邮箱的现有账号，并通过 Auth 管理 API 合并添加 `bowerbird_admin=true`；随后重新读取账号，确认权限生效、其他 app metadata 保持。仅变更这一账号标记，未发送登录邮件或修改密码、订阅与积分。部署后未登录调用两个接口均返回 401，官网后台返回 200；正式管理员标记已再次回读确认。无密钥的验证回执保留在本地 `.tmp/code-admin-account-verified.json`。

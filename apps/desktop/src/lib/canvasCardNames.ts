@@ -1,6 +1,10 @@
 /** Names belong to canvas identities, so copies get new names and reloads keep old ones. */
 export function assignCanvasCardNames(previous: Record<string, string> = {}, cards: { id: string; title: string }[]): Record<string, string> {
   const names = { ...previous };
+  // Older clients assigned every asset an image name. Only replace that default pattern.
+  for (const card of cards) {
+    if (card.title === "视频卡片" && /^图片卡片 [1-9]\d*$/.test(names[card.id] ?? "")) delete names[card.id];
+  }
   const used = new Set(Object.values(names));
   for (const card of cards) {
     if (names[card.id]) continue;

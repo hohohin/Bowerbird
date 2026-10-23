@@ -1,15 +1,22 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Asset } from "./types";
+import type { Asset, AuthSnapshot, EntitlementSnapshot } from "./types";
+
+export function canUseComfyVideo(auth: AuthSnapshot | null, entitlement: EntitlementSnapshot | null) {
+  return auth?.logged_in === true && !!auth.user_id && entitlement?.user_id === auth.user_id
+    && (entitlement.offline_state === "fresh" || entitlement.offline_state === "grace")
+    && (entitlement.is_test_account === true || entitlement.tier === "pro" || entitlement.tier === "studio");
+}
 
 export interface ComfyVideoOptions {
   endpoint: string;
   seconds: number;
-  ratio: "9:16" | "16:9" | "4:3";
+  ratio: "9:16" | "16:9" | "4:3" | "3:4" | "1:1" | "auto";
   resolution: 0.6 | 0.8 | 1;
 }
 export const DEFAULT_COMFY_VIDEO: ComfyVideoOptions = { endpoint: "http://127.0.0.1:8000", seconds: 8, ratio: "9:16", resolution: 0.8 };
-export function comfyVideoSize(options: ComfyVideoOptions) {
-  const [w, h] = options.ratio.split(":").map(Number);
+export function comfyVideoSize(options: ComfyVideoOptions, firstFrame?: { width?: number | null; height?: number | null }) {
+  const [w, h] = options.ratio === "auto" ? [firstFrame?.width, firstFrame?.height] : options.ratio.split(":").map(Number);
+  if (!w || !h || !Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return null;
   const scale = Math.sqrt(options.resolution * 1024 * 1024 / (w * h));
   return { width: Math.round(w * scale / 32) * 32, height: Math.round(h * scale / 32) * 32,
     frames: Math.max(5, Math.ceil((options.seconds * 24 - 5) / 17) * 17 + 5) };

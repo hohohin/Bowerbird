@@ -63,6 +63,18 @@ export interface ReplicationTask extends ReplicationInput {
 export interface ReplicationFrameReference { assetId: string; time: number; name: string }
 export interface ReplicationImageRequest { prompt: string; referenceId?: string; ratio: string }
 
+export type ReplicationSource = "douyin" | "local" | "library";
+export interface ReplicationCase {
+  id: string; projectId: string; title: string; createdAt: string; updatedAt?: string;
+  step: 1 | 2 | 3 | 4; sourceMethod: ReplicationSource; shareText: string;
+  referenceId?: string; reference?: ReplicationReference; mediaPath?: string;
+  analysisText?: string; rewriteDirection?: string; persona?: string; rules?: string;
+  rewrittenText?: string; firstFramePrompt?: string; frameReference?: ReplicationFrameReference | null;
+  appliedAnalysisId?: string; appliedRewriteId?: string; workflowId?: string;
+  analysisJob?: ReplicationTask; rewriteJob?: ReplicationTask;
+}
+export interface ReplicationWorkflowRequest extends ReplicationImageRequest { id: string; videoPrompt: string; duration: number }
+
 /** Only extract an explicitly named field/section; never infer an image prompt from a shot. */
 export function replicationRewriteParts(text: string): { text: string; firstFramePrompt: string } {
   const keys = ["firstFramePrompt", "first_frame_prompt", "first_frame_image_prompt", "首帧画面提示词", "首帧提示词"];

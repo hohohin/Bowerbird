@@ -257,8 +257,7 @@ impl AuthClient {
         }
         let config = self.inner.cloud.config();
         let base = config
-            .supabase_url
-            .as_deref()
+            .auth_base_url()
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| AppError::Cloud("Supabase URL 未配置".into()))?;
         let anon = config
@@ -380,7 +379,7 @@ impl AuthClient {
     pub async fn start_wechat_login(&self) -> AppResult<String> {
         let config = self.inner.cloud.config();
         let endpoint = config
-            .endpoint("wechat-login")
+            .account_endpoint("wechat-login")
             .ok_or_else(|| AppError::Cloud("Supabase URL 未配置".into()))?;
         let publishable = publishable_key(config)
             .ok_or_else(|| AppError::Cloud("Supabase publishable key 未配置".into()))?;
@@ -467,7 +466,7 @@ impl AuthClient {
 
         let config = self.inner.cloud.config();
         let endpoint = config
-            .endpoint("wechat-login")
+            .account_endpoint("wechat-login")
             .ok_or_else(|| AppError::Cloud("Supabase URL 未配置".into()))?;
         let publishable = publishable_key(config)
             .ok_or_else(|| AppError::Cloud("Supabase publishable key 未配置".into()))?;
@@ -671,8 +670,7 @@ impl AuthClient {
     ) -> Result<TokenResponse, TokenRequestFailure> {
         let config = self.inner.cloud.config();
         let base = config
-            .supabase_url
-            .as_deref()
+            .auth_base_url()
             .ok_or_else(|| TokenRequestFailure {
                 error: AppError::Cloud("Supabase URL 未配置".into()),
                 session_rejected: false,
@@ -798,6 +796,7 @@ mod tests {
             CloudClient::new(CloudConfig {
                 supabase_url: Some("https://example.supabase.co".into()),
                 supabase_publishable_key: Some("sb_publishable_test".into()),
+                account_api_url: None,
             })
             .unwrap(),
         )

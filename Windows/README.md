@@ -2,6 +2,10 @@
 
 这里存放 Bowerbird 的 Windows 开发、构建与独立扩展加载工具。平台兼容行为已经并入项目主源码；脚本只把 canonical 项目复制到 Windows/.work，不再用整文件 override 替换源码。Windows/overrides/ 仅保留退役说明，不参与构建。
 
+## 2026-10-23 Windows 26.10.2301 发布准备
+
+视频复刻任务管理／四步编辑与工作流交付、Pro/Studio H3 权限及入口修复、魔搭优先／TOS 回退安装与自动比例、原生视频封面及元数据回退、项目管理面板、生成卡片布局／视频卡样式、画布筛选和积分展示，并存档已上线的账号网关／用户管理／下载授权源码。TypeScript、Rust **669 passed / 22 ignored**、13 组桌面 Chromium 回归、8 项前端逻辑、11 项官网网关、8 项 Deno 权限协议及后台 PGlite／界面回归通过。源码冻结后构建签名，安装包走 CDN；SQLite 0044，原更新保留登录规则保持。构建和公网结果见 [桌面自动更新](../dev-doc/DESKTOP-UPDATES.md)。
+
 ## 2026-10-22 Windows 26.10.2202 已发布
 
 源码 d6bad0c3 已存档推送，素材分页、分类来源与规则继承、统一模型菜单／视频底栏、登录提示与引导修正已签名上线，SQLite 至 0044。TypeScript/Vite、Rust 652 passed / 21 ignored、50 项逻辑、14 组界面及 13 项云协议通过；929 个构建输入、67 个资源、原公钥验签／篡改拒绝、包内等待及完整公网下载核对通过。云端 v6 兼容新旧门槛，GPT 与 Mac 保持。安装包 `Windows/dist/Bowerbird_26.10.2202_x64-setup.exe`；真实原生升级及原机微信故障待验，发布和回滚见 [桌面自动更新](../dev-doc/DESKTOP-UPDATES.md)。
@@ -78,7 +82,7 @@ cargo test --locked --offline --manifest-path apps/desktop/src-tauri/Cargo.toml 
 3. Rust MSVC 工具链：`rustup default stable-x86_64-pc-windows-msvc`。
 4. Visual Studio 2022 Build Tools，勾选“使用 C++ 的桌面开发”和 Windows 10/11 SDK。
 5. AI 功能可在应用内一键安装 codex CLI（自动下载独立版，无需 Node.js）并登录 ChatGPT；不安装时素材库仍可用，AI 按项目约定降级置灰。
-6. Windows 视频封面提取仍需 `ffmpeg`；MP4/MOV/M4V 的尺寸/时长优先用内置解析器，失败及其他格式回退 `ffprobe`。应用会检查随附工具、PATH、Windows 注册表 Path 及常见 WinGet/Scoop/Chocolatey 安装位置。特殊安装可用 `BOWERBIRD_FFMPEG_BINARY` / `BOWERBIRD_FFPROBE_BINARY` 指定绝对路径；缺少封面工具不阻止原生解析成功的 MP4 入库。图片功能不依赖它们。
+6. Windows 视频封面在 2026-10-23 后续源码中优先通过独立 Media Foundation 子进程提取，常见 H.264 MP4 不再要求安装 `ffmpeg`；现役 26.10.2203 安装包仍使用旧 FFmpeg 路径，需后续更新。系统缺少解码器或原生提取失败时回退已有 `ffmpeg`。尺寸/时长依次尝试 MP4/MOV/M4V 内置解析、独立 Media Foundation 读取、已有可选 `ffprobe`；不随包附带或自动下载工具。分片 MP4 依据样本时序取时长，普通旋转视频按显示方向取宽高；特殊编码仍可能需要 ffprobe，裁剪/分析转码仍需要 FFmpeg。工具发现检查随附目录、PATH、Windows 注册表 Path 及常见 WinGet/Scoop/Chocolatey 安装位置，特殊安装可用 `BOWERBIRD_FFMPEG_BINARY` / `BOWERBIRD_FFPROBE_BINARY` 指定绝对路径。图片功能不依赖它们。
 
 ## 开发运行
 

@@ -13,7 +13,7 @@ test('rewrite duration spans start/end, rounds up and does not clamp to model li
 test('missing or invalid shot boundaries do not guess a duration', () => {
   for (const text of ['白色瓶身，缓慢推进。', '{"start":3,"end":2}', '{"start":-1,"end":5}', '{"start":0}', '[{"start":0,"end":5},{"start":5}]', '{"start":"00:70","end":"01:20"}', 'start: 0\nstart: 5\nend: 8']) equal(replicationDuration(text),null);
 });
-test('analysis is independent of products; pasted rewrite is independent of analysis', () => {
+test('legacy direct-operation validation remains compatible; task UI supplies its video and analysis', () => {
   equal(validateReplicationInput({ operation:'analyze', title:'视频', referenceId:'ref' }),null);
   equal(validateReplicationInput({ operation:'rewrite', title:'改写', inputText:'原文', persona:'编导', rules:'保持节奏' }),null);
 });

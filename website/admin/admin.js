@@ -22,6 +22,7 @@ const KERNEL_SKILLS = {
 };
 let client, config, session, inventory, busy = false, page = 0, exportRows = [], disableTarget = null, view = "codes";
 let pendingIssue = null;
+let authorized = false, accountEpoch = 0, userPage = 0, testTarget = null;
 const pendingKey = "bowerbird.admin.pending-issue";
 const date = (value) => value ? new Date(value).toLocaleString("zh-CN", { hour12: false, timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—";
 function notice(message, error = false) {
@@ -35,10 +36,20 @@ function clearCodes() {
   $("codes-dialog").close(); $("disable-dialog").close();
 }
 function showLogin(message) {
+  authorized = false;
+  clearUsers();
   clearCodes(); inventory = null; $("code-rows").replaceChildren();
   $("console").hidden = true; $("skills-console").hidden = true; $("login-panel").hidden = false;
   $("login-form").hidden = Boolean(session);
   $("login-status").textContent = message;
+}
+function clearUsers() {
+  testTarget = null;
+  $("test-account-dialog").close();
+  $("test-account-description").textContent = "";
+  $("user-rows").replaceChildren();
+  $("users-count").textContent = "—";
+  $("users-console").hidden = true;
 }
 function setPending(value) {
   pendingIssue = value;
@@ -49,6 +60,7 @@ function setPending(value) {
 }
 async function api(action, fields = {}) {
   const identity = session?.user.id;
+  const epoch = accountEpoch;
   const { data } = await client.auth.getSession();
   if (!data.session || data.session.user.id !== identity) throw new Error("登录状态已变化，请重新登录");
   async function send(token) {
@@ -63,8 +75,8 @@ async function api(action, fields = {}) {
     const { data: refreshed } = await client.auth.refreshSession();
     if (refreshed.session?.user.id === identity) response = await send(refreshed.session.access_token);
   }
-  if (session?.user.id !== identity) throw new Error("账号已切换，已隐藏本次结果");
   const payload = await response.json().catch(() => ({}));
+  if (session?.user.id !== identity || accountEpoch !== epoch) throw new Error("账号已切换，已隐藏本次结果");
   if (!response.ok) {
     const message = payload.error?.message || (response.status === 401 ? "登录已过期，请重新登录" : "管理服务暂时不可用，请重试");
     if (response.status === 401 || response.status === 403) showLogin(message);
@@ -75,9 +87,15 @@ async function api(action, fields = {}) {
 async function run(work) {
   if (busy) return;
   busy = true; $("console").inert = true; $("console").setAttribute("aria-busy", "true"); $("logout").disabled = true;
+  $("users-console").inert = true; $("users-console").setAttribute("aria-busy", "true");
   try { await work(); }
-  catch (error) { notice(error.name === "TimeoutError" ? "请求超时。发码可用同一请求重试确认，或刷新清单查看结果。" : error.message, true); }
-  finally { busy = false; $("console").inert = false; $("console").removeAttribute("aria-busy"); $("logout").disabled = false; }
+  catch (error) {
+    const uncertain = error.name === "TimeoutError" || error instanceof TypeError;
+    notice(uncertain && view === "users" ? "请求未完成，变更可能已保存。请刷新用户列表确认实际状态后再操作。"
+      : error.name === "TimeoutError" ? "请求超时。发码可用同一请求重试确认，或刷新清单查看结果。" : error.message, true);
+  }
+  finally { busy = false; $("console").inert = false; $("console").removeAttribute("aria-busy"); $("logout").disabled = false;
+    $("users-console").inert = false; $("users-console").removeAttribute("aria-busy"); }
 }
 function cell(text, small) {
   const td = document.createElement("td"); td.textContent = text;
@@ -85,21 +103,23 @@ function cell(text, small) {
   return td;
 }
 function syncConsoleVisibility() {
-  const authorized = Boolean(session);
   $("console").hidden = !(authorized && view === "codes");
   $("skills-console").hidden = !(authorized && view === "skills");
+  $("users-console").hidden = !(authorized && view === "users");
   $("login-panel").hidden = authorized;
 }
 function switchView(next) {
-  if (view === next) return;
+  if (view === next || busy) return;
   view = next;
   for (const item of document.querySelectorAll(".nav-item")) {
     const active = item.dataset.view === next;
     item.classList.toggle("active", active);
     if (active) item.setAttribute("aria-current", "page"); else item.removeAttribute("aria-current");
   }
-  $("topbar-crumb").textContent = next === "skills" ? "Kernel 技能" : "兑换码";
+  $("topbar-crumb").textContent = { skills: "Kernel 技能", users: "用户管理", codes: "兑换码" }[next];
+  notice("");
   syncConsoleVisibility();
+  if (next === "users" && authorized) void run(loadUsers);
 }
 for (const item of document.querySelectorAll(".nav-item")) item.addEventListener("click", () => switchView(item.dataset.view));
 function renderKernelSkills() {
@@ -177,8 +197,52 @@ function selectBatch(id, label) {
 }
 async function loadList() {
   inventory = await api("list", { status: $("status-filter").value, search: $("search").value.trim(), batch_id: $("batch-filter").value || null, page });
+  authorized = true;
   render(); syncConsoleVisibility();
 }
+async function loadUsers() {
+  const result = await api("list_users", { search: $("users-search").value.trim(), filter: $("users-filter").value, page: userPage });
+  if (userPage > 0 && userPage * 50 >= result.total) { userPage = Math.max(0, Math.ceil(result.total / 50) - 1); return loadUsers(); }
+  $("users-count").textContent = `${result.total} 位用户`;
+  $("user-rows").replaceChildren(...result.rows.map((row) => {
+    const tr = document.createElement("tr");
+    const account = cell(row.email || "未绑定邮箱", row.id); account.className = "user-identity";
+    if (row.is_admin) account.append(Object.assign(document.createElement("small"), { textContent: "管理员" }));
+    const status = cell(""); status.append(Object.assign(document.createElement("span"), {
+      className: `badge ${row.is_test_account ? "unused" : "expired"}`, textContent: row.is_test_account ? "测试账号" : "非测试账号",
+    }));
+    const action = cell(""); action.className = "right";
+    const button = Object.assign(document.createElement("button"), { className: "secondary", textContent: row.is_test_account ? "取消测试资格" : "设为测试账号" });
+    button.addEventListener("click", () => {
+      testTarget = { id: row.id, enabled: !row.is_test_account };
+      $("test-account-dialog").returnValue = "cancel";
+      $("test-account-title").textContent = row.is_test_account ? "取消测试资格？" : "设为测试账号？";
+      $("test-account-description").textContent = `${row.email || "未绑定邮箱"} · ${row.id}`;
+      $("test-account-dialog").showModal();
+    });
+    action.append(button);
+    tr.append(account, status, cell(date(row.created_at)), cell(date(row.last_sign_in_at)), action);
+    return tr;
+  }));
+  $("users-empty").hidden = result.rows.length !== 0;
+  $("users-previous").disabled = userPage === 0;
+  $("users-next").disabled = (userPage + 1) * 50 >= result.total;
+  $("users-page-label").textContent = `第 ${userPage + 1} / ${Math.max(1, Math.ceil(result.total / 50))} 页 · 每页 50 条`;
+}
+$("users-filter-form").addEventListener("submit", (event) => { event.preventDefault(); void run(async () => { userPage = 0; await loadUsers(); }); });
+$("users-filter").addEventListener("change", () => void run(async () => { userPage = 0; await loadUsers(); }));
+$("users-refresh").addEventListener("click", () => void run(async () => { await loadUsers(); notice("用户列表已更新。"); }));
+$("users-previous").addEventListener("click", () => void run(async () => { userPage--; await loadUsers(); }));
+$("users-next").addEventListener("click", () => void run(async () => { userPage++; await loadUsers(); }));
+$("test-account-dialog").addEventListener("close", () => {
+  const target = testTarget; testTarget = null;
+  if ($("test-account-dialog").returnValue !== "confirm" || !target || !authorized) return;
+  void run(async () => {
+    await api("set_test_account", { user_id: target.id, enabled: target.enabled });
+    notice(`${target.enabled ? "已设为测试账号" : "已取消测试资格"}。请让用户在桌面端点击「刷新权益」。`);
+    await loadUsers();
+  });
+});
 function showCodes(rows, label) {
   if (!rows.length) { notice("没有可导出的兑换码：可能已兑换、停用、过期，或来自旧版离线脚本。"); return; }
   exportRows = rows;
@@ -248,14 +312,18 @@ $("logout").addEventListener("click", async () => {
 });
 async function accountChanged(next) {
   const previous = session?.user.id;
+  if (previous !== next?.user.id) {
+    accountEpoch++; authorized = false; clearUsers(); userPage = 0;
+    $("users-search").value = ""; $("users-filter").value = ""; notice("");
+  }
   if (previous && previous !== next?.user.id) setPending(null);
   session = next;
   $("logout").hidden = !session;
   $("account-email").textContent = session?.user.email || "管理员入口";
   if (!session) { setPending(null); showLogin("输入管理员邮箱，接收安全登录链接。"); return; }
-  if (previous === session.user.id && inventory) return;
+  if (previous === session.user.id && inventory && authorized) return;
   clearCodes();
-  try { await loadList(); }
+  try { await loadList(); if (view === "users") await run(loadUsers); }
   catch (error) { showLogin(error.message); }
 }
 async function init() {

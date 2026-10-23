@@ -11,7 +11,6 @@ const errors=[];page.on('pageerror',error=>errors.push(error.message));
 page.on('console', message => { if (message.type() === 'error' && /same key|Maximum update depth/.test(message.text())) errors.push(message.text()); });
 const base='http://127.0.0.1:1658/scripts/fixtures/video-replication/preview.html';
 const box=()=>page.getByRole('button',{name:'工具箱',exact:true});
-async function openTool() { await box().click(); await page.getByRole('menuitem',{name:/视频复刻工具/}).click(); await page.getByRole('dialog',{name:'视频复刻工具'}).waitFor(); }
 try {
   await page.goto(base);
   await box().click();
@@ -22,10 +21,25 @@ try {
   await page.evaluate(() => window.store.setState({ cloudAuth:{logged_in:true,user_id:'tester'}, cloudEntitlement:{user_id:'tester',is_test_account:false} }));
   assert.equal(await articleTool().count(),0,'ordinary accounts hide video-to-article');
   assert.equal(await localImageTool().count(),0,'ordinary accounts hide local image generation');
+  for (const tier of ['pro','studio']) {
+    for (const offline_state of ['fresh','grace']) {
+      await page.evaluate(({tier,offline_state}) => window.store.setState({cloudEntitlement:{user_id:'tester',tier,offline_state,is_test_account:false}}), {tier,offline_state});
+      await localImageTool().waitFor();
+      assert.equal(await articleTool().count(),0,'paid entitlement does not unlock video-to-article');
+    }
+  }
+  for (const offline_state of ['expired','invalid',null]) {
+    await page.evaluate(offline_state => window.store.setState({cloudEntitlement:{user_id:'tester',tier:'pro',offline_state,is_test_account:false}}), offline_state);
+    await localImageTool().waitFor({state:'detached'});
+  }
+  await page.evaluate(() => window.store.setState({cloudEntitlement:{user_id:'other',tier:'pro',offline_state:'fresh',is_test_account:false}}));
+  assert.equal(await localImageTool().count(),0,'mismatched paid entitlement stays hidden');
+  await page.evaluate(() => window.store.setState({cloudAuth:{logged_in:false,user_id:'tester'},cloudEntitlement:{user_id:'tester',tier:'pro',offline_state:'fresh',is_test_account:false}}));
+  assert.equal(await localImageTool().count(),0,'paid entitlement after logout stays hidden');
   await page.evaluate(() => {
     window.notices=[]; window.localPlacements=0; window.addEventListener('local-video-placement',()=>window.localPlacements++);
     window.addEventListener('bowerbird://notify',event=>window.notices.push(event.detail.message));
-    window.store.setState({cloudEntitlement:{user_id:'tester',is_test_account:true}});
+    window.store.setState({cloudAuth:{logged_in:true,user_id:'tester'},cloudEntitlement:{user_id:'tester',tier:'free',offline_state:'fresh',is_test_account:true}});
   });
   await articleTool().waitFor();
   assert.deepEqual(await page.getByRole('menuitem').allTextContents(),['视频复刻工具分析参考 · 改写分镜 · 生成视频','视频转图文功能开发中','本地 H3 视频首尾帧 · 提示词 · 生成视频']);
@@ -49,177 +63,8 @@ try {
   await page.evaluate(()=>window.store.setState({cloudAuth:{logged_in:false,user_id:'tester'}}));
   assert.equal(await articleTool().count(),0,'stale test entitlement after logout stays hidden');
   assert.equal(await localImageTool().count(),0,'stale test entitlement after logout hides local image generation');
-  await page.goto(`${base}?capability=pending`);await openTool();
-  assert.equal(await page.getByRole('navigation',{name:'复刻操作'}).getByRole('button').count(),2);
-  assert.equal(await page.getByRole('button',{name:'复刻视频 确认提示词后生成'}).count(),0);
-  await page.getByText('Bowerbird Cloud · 视频分析 · 正在读取价格…',{exact:true}).waitFor();
-  assert.equal(await page.getByRole('button',{name:/^开始分析/}).isDisabled(),true);
-  assert.doesNotMatch(await page.getByRole('dialog').innerText(),/尚未启价/);
-  await page.evaluate(()=>{window.capabilityMode='analysis-only';window.releaseCapabilities();});
-  await page.getByText('Bowerbird Cloud · 视频分析 · 3 积分 / 次',{exact:true}).waitFor();
-  assert.equal(await page.getByRole('button',{name:/^开始分析/}).isDisabled(),true);
-  await page.getByRole('button',{name:'改写内容',exact:true}).click();
-  await page.getByText('Bowerbird Cloud · 文本改写 · 改写尚未启用',{exact:true}).waitFor();
-  assert.equal(await page.getByRole('button',{name:/^开始改写/}).isDisabled(),true);
-  await page.getByLabel('参考文本',{exact:true}).fill('启用改写时保留我的分镜草稿');
-  await page.evaluate(()=>{window.capabilityMode='all-enabled';window.dispatchEvent(new Event('focus'));});
-  await page.getByText('Bowerbird Cloud · 文本改写 · 3 积分 / 次',{exact:true}).waitFor();
-  assert.equal(await page.getByRole('button',{name:/^开始改写/}).isEnabled(),true);
-  assert.equal(await page.getByPlaceholder('粘贴文本，或从分析记录带入').inputValue(),'启用改写时保留我的分镜草稿');
-  assert.equal(await page.evaluate(()=>window.calls.filter(call=>call.args?.action==='create').length),0,'enabling rewrite does not submit automatically');
-  await page.goto(`${base}?capability=error`);await openTool();
-  await page.getByText('Bowerbird Cloud · 视频分析 · 价格读取失败',{exact:true}).waitFor();
-  assert.match(await page.getByRole('alert').innerText(),/连接中断/);
-  assert.doesNotMatch(await page.getByRole('dialog').innerText(),/尚未启价/);
-  await page.getByRole('button',{name:'从抖音获取',exact:true}).click();
-  await page.getByLabel('抖音分享内容').fill('保留我的分享链接');
-  await page.evaluate(()=>{window.capabilityMode='analysis-only';});
-  await page.getByRole('button',{name:'重新读取 Cloud 状态'}).click();
-  await page.getByText('Bowerbird Cloud · 视频分析 · 3 积分 / 次',{exact:true}).waitFor();
-  assert.equal(await page.getByLabel('抖音分享内容').inputValue(),'保留我的分享链接');
-  await page.evaluate(()=>{window.capabilityMode='error';window.dispatchEvent(new Event('focus'));});
-  await page.getByText('Bowerbird Cloud · 视频分析 · 价格读取失败',{exact:true}).waitFor();
-  await page.evaluate(()=>{window.capabilityMode='analysis-only';});
-  await page.getByText('Bowerbird Cloud · 视频分析 · 3 积分 / 次',{exact:true}).waitFor({timeout:10000});
-  assert.equal(await page.getByRole('button',{name:/^开始分析/}).isDisabled(),true);
-  assert.equal(await page.evaluate(()=>window.calls.filter(call=>call.args?.action==='create').length),0);
-  await page.goto(`${base}?capability=malformed`);await openTool();
-  await page.getByText('Bowerbird Cloud · 视频分析 · 价格读取失败',{exact:true}).waitFor();
-  assert.match(await page.getByRole('alert').innerText(),/状态不完整/);
-  await page.goto(base);
-  await box().focus();await page.keyboard.press('ArrowDown');
-  assert.equal(await page.getByRole('menu',{name:'工具箱'}).count(),1);
-  await page.keyboard.press('Escape');assert.equal(await box().getAttribute('aria-expanded'),'false');assert.equal(await box().evaluate(el=>el===document.activeElement),true);
-  await openTool();assert.equal(await page.getByRole('button',{name:/^开始分析/}).isDisabled(),true);
-  assert.equal(await page.locator('.vr-empty').count(),0);
-  assert.doesNotMatch(await page.getByRole('dialog').innerText(),/从一段参考视频开始|分析仅输出分镜文本/);
-  assert.match(await page.getByRole('dialog').innerText(),/分析服务暂不可用/);
-  await page.getByRole('button',{name:'从抖音获取',exact:true}).click();
-  assert.doesNotMatch(await page.getByRole('dialog').innerText(),/先获取视频，再由你点击分析|从抖音获取参考视频|抖音分享内容/);
-  await page.getByLabel('抖音分享内容').fill('分享 https://v.douyin.com/example/');
-  await page.getByRole('button',{name:'获取抖音视频',exact:true}).click();
-  await page.getByRole('button',{name:'打开抖音窗口',exact:true}).waitFor();
-  assert.match(await page.getByRole('button',{name:'打开抖音窗口',exact:true}).getAttribute('class'),/is-primary/);
-  assert.equal(await page.getByRole('button',{name:'获取抖音视频',exact:true}).count(),0);
-  assert.equal(await page.getByRole('button',{name:'重新获取',exact:true}).count(),0);
-  await page.getByRole('button',{name:'打开抖音窗口',exact:true}).click();
-  await page.getByText('隔离测试不提供真实媒体文件，历史文本仍保留',{exact:false}).waitFor();
-  assert.equal(await page.getByLabel('抖音分享内容').count(),0);
-  assert.equal(await page.getByRole('button',{name:/使用此视频/}).count(),0);
-  assert.equal(await page.getByRole('button',{name:/^开始分析/}).isDisabled(),true);
-  assert.equal(await page.evaluate(()=>window.calls.filter(call=>call.args?.action==='create').length),0);
-  await page.waitForTimeout(400);await page.screenshot({path:'.tmp/video-replication/analysis-light.png'});
-  await page.getByRole('button',{name:'从抖音获取',exact:true}).click();
-  await page.waitForTimeout(1800);
-  assert.equal(await page.getByLabel('抖音分享内容').count(),1,'old ready history does not auto-select on reopen');
-  await page.goto(`${base}?immediate`);await openTool();
-  await page.getByRole('button',{name:'从抖音获取',exact:true}).click();
-  await page.getByLabel('抖音分享内容').fill('分享 https://v.douyin.com/example/');
-  await page.getByRole('button',{name:'获取抖音视频',exact:true}).click();
-  await page.getByRole('button',{name:'打开抖音窗口',exact:true}).click();
-  await page.getByText('隔离测试不提供真实媒体文件，历史文本仍保留',{exact:false}).waitFor();
-  assert.equal(await page.getByLabel('抖音分享内容').count(),0,'immediate ready response also auto-selects');
-  assert.equal(await page.evaluate(()=>window.calls.filter(call=>call.args?.action==='create').length),0,'acquisition never submits paid analysis');
-  await page.goto(`${base}?enabled`);await openTool();
-  await page.getByRole('button',{name:'改写内容',exact:true}).click();
-  await page.getByLabel('参考文本',{exact:true}).fill('参考文本，保留节奏。');
-  await page.getByRole('button',{name:/^开始改写/}).click();
-  const result=page.getByLabel('改写结果（可编辑）');await result.waitFor();await result.fill('用户精修：白色瓶身，缓慢推进。');
-  await page.waitForTimeout(3000);assert.equal(await result.inputValue(),'用户精修：白色瓶身，缓慢推进。');
-  await page.getByRole('button',{name:'分析视频',exact:true}).click();
-  await page.getByRole('button',{name:'记录',exact:true}).click();await page.getByRole('button',{name:/内容改写.*改写完成/}).click();
-  await page.waitForFunction(()=>document.querySelector('.vr-output textarea')?.value==='用户精修：白色瓶身，缓慢推进。');
-  await page.locator('.vr-original summary').click();assert.match(await page.locator('.vr-original').innerText(),/镜头 1：/);
-  await page.screenshot({path:'.tmp/video-replication/rewrite-light.png'});
-  await page.getByRole('button',{name:'插入到对话框'}).click();
-  await page.getByRole('dialog',{name:'视频复刻工具'}).waitFor({state:'detached'});
-  const request = await page.evaluate(()=>window.store.getState().pendingCreativeReuse);
-  assert.equal(request.promptLoad.prompt,'用户精修：白色瓶身，缓慢推进。');
-  assert.equal(request.promptLoad.generation.media,'video');
-  assert.equal(request.promptLoad.generation.videoOptions.duration,5);
-  const creates=await page.evaluate(()=>window.calls.filter(call=>call.args?.action==='create'));
-  assert.equal(creates.length,1);assert.equal(creates[0].args.data.operation,'rewrite');
-  await openTool();
-  await page.evaluate(()=>document.documentElement.dataset.theme='dark');await page.waitForTimeout(400);await page.screenshot({path:'.tmp/video-replication/generate-dark.png'});
-  await page.setViewportSize({width:760,height:720});
-  assert.equal(await page.locator('.app-modal').evaluate(el=>el.scrollWidth<=el.clientWidth),true);
-  await page.screenshot({path:'.tmp/video-replication/narrow.png'});
-  await page.getByRole('button',{name:'关闭',exact:true}).click();await openTool();
-  await page.getByRole('button',{name:'记录',exact:true}).click();await page.getByRole('button',{name:/内容改写.*改写完成/}).click();
-  await page.waitForFunction(()=>document.querySelector('.vr-output textarea')?.value==='用户精修：白色瓶身，缓慢推进。');
-  assert.equal(await result.inputValue(),'用户精修：白色瓶身，缓慢推进。');
-  await page.evaluate(()=>sessionStorage.setItem('replication-tasks',JSON.stringify([{id:'legacy',operation:'generate',title:'旧视频记录',createdAt:new Date().toISOString(),state:'completed',prompt:'旧提示词',generationJobId:'legacy-job'}])));
-  await page.goto(`${base}?enabled`);await openTool();
-  await page.getByRole('button',{name:'记录',exact:true}).click();await page.getByRole('button',{name:/旧视频记录.*历史生成/}).click();
-  assert.equal(await page.getByRole('button',{name:'查看画板生成会话'}).count(),1);
-  assert.equal(await page.getByRole('button',{name:'新建生成版本'}).count(),0);
-  await page.getByRole('button',{name:'新建复刻记录'}).click();
-  await page.getByPlaceholder('粘贴文本，或从分析记录带入').waitFor();
-  assert.equal(await page.getByRole('button',{name:'确认并生成视频'}).count(),0);
-  assert.equal(await page.getByLabel('生成渠道').count(),0);
-  await page.setViewportSize({width:1440,height:1000});
-  await page.goto('http://127.0.0.1:1658/scripts/fixtures/canvas-reference/preview.html');
-  await page.locator('[data-canvas-node-id="old"]').waitFor();
-  const toolboxBounds=await box().boundingBox();
-  const magnetBounds=await page.getByRole('button',{name:'吸附对齐',exact:true}).boundingBox();
-  assert.ok(toolboxBounds.y < magnetBounds.y);
-  await box().click();await page.getByRole('menuitem',{name:/视频复刻工具/}).waitFor();
-  await page.screenshot({path:'.tmp/video-replication/toolbox-canvas.png'});
-  await page.keyboard.press('Escape');
-  await page.evaluate(() => {
-    const invoke = window.__TAURI_INTERNALS__.invoke;
-    window.__TAURI_INTERNALS__.invoke = (command, args) => command === 'video_replication'
-      ? args.action === 'capabilities' ? Promise.reject('未知 action')
-        : Promise.resolve(args.action === 'preferences' ? {} : [])
-      : invoke(command, args);
-  });
-  await page.locator('.creation-editor .ProseMirror').fill('保留画板草稿');
-  const composer = await page.locator('.creation-editor .ProseMirror').elementHandle();
-  await openTool();
-  await page.waitForTimeout(500);
-  assert.doesNotMatch(await page.getByRole('dialog').innerText(),/Cloud 暂不可用|未知 action/);
-  assert.equal(await page.locator('.canvas-composer-host').count(),1);
-  const before = await page.evaluate(() => window.canvasCommits);
-  await page.getByRole('button',{name:'从抖音获取',exact:true}).click();
-  await page.getByLabel('抖音分享内容').fill('分享 https://v.douyin.com/Ws0YGRXuyi0/');
-  await page.waitForTimeout(3500);
-  const commits = await page.evaluate(() => window.canvasCommits) - before;
-  assert.ok(commits < 30, `opening replication caused ${commits} canvas commits`);
-  assert.equal(await page.getByLabel('抖音分享内容').evaluate(el => el === document.activeElement), true);
-  await page.getByRole('button',{name:'关闭',exact:true}).click();
-  assert.equal(await page.locator('.canvas-composer-host').isVisible(),true);
-  assert.equal(await composer.evaluate(el => el.isConnected && el.textContent === '保留画板草稿'),true);
-  await page.evaluate(() => {
-    const invoke = window.__TAURI_INTERNALS__.invoke;
-    const task = { id:'rewrite',projectId:'p',operation:'rewrite',title:'内容改写',state:'rewritten',createdAt:new Date().toISOString(),rewrittenText:'[{"start":0,"end":3,"subject":"白色瓶身"},{"start":3,"end":10.731,"subject":"缓慢推进"}]',rewriteOriginalText:'模型原文' };
-    window.__TAURI_INTERNALS__.invoke = async (command,args) => {
-      if (command === 'dreamina_video_models') return [{ model_version:'seedance2.5',resolutions:['720p'],min_duration:4,max_duration:30 }];
-      if (command === 'video_replication') {
-        window.calls.push({command,args});
-        if (args.action === 'list') return [structuredClone(task)];
-        if (args.action === 'save-result') return {...task,rewrittenText:args.data.text};
-        if (args.action === 'capabilities') return {services:['video-analysis','text-rewrite'].map(operation=>({operation,available:true,credits:3}))};
-        return {};
-      }
-      return invoke(command,args);
-    };
-  });
-  await openTool();
-  await page.getByRole('button',{name:'记录',exact:true}).click();await page.getByRole('button',{name:/内容改写.*改写完成/}).click();
-  const editedShots = '[{"start":0,"end":4,"subject":"用户精修"},{"start":4,"end":12.2,"subject":"白色瓶身"}]';
-  await page.getByLabel('改写结果（可编辑）').fill(editedShots);
-  await page.getByRole('button',{name:'插入到对话框'}).click();
-  await page.getByRole('dialog',{name:'视频复刻工具'}).waitFor({state:'detached'});
-  await page.getByLabel('视频时长（秒）').waitFor();
-  assert.equal(await page.getByLabel('生成媒体').inputValue(),'video');
-  assert.equal(await page.getByLabel('视频时长（秒）').inputValue(),'13');
-  assert.equal(await page.locator('.creation-editor .ProseMirror').innerText(),editedShots);
-  await page.waitForFunction(()=>document.activeElement?.classList.contains('ProseMirror'));
-  await page.waitForTimeout(1000);
-  const savedDraft=await page.evaluate(()=>JSON.parse(window.calls.filter(call=>call.command==='project_canvas_update_draft').at(-1).args.draftJson));
-  assert.equal(savedDraft.composer.generation.media,'video');
-  assert.equal(savedDraft.composer.generation.videoOptions.duration,13);
-  assert.equal(await page.evaluate(()=>window.calls.filter(call=>call.args?.action==='create' || /^(generate|start_generation|cloud_agent_start)/.test(call.command)).length),0,'inserting never submits a model task');
-  await page.screenshot({path:'.tmp/video-replication/insert-composer.png'});
-  assert.deepEqual(errors,[]);console.log('PASS toolbox keyboard/menu, unpriced gate, independent rewrite, original preservation, polling edits, explicit handoff, history reload and narrow layout');
-} finally {await browser.close();await server.close();}
+  assert.deepEqual(errors,[]);
+  console.log('PASS toolbox Pro/Studio/test access, expired/mismatched/logged-out denial and keyboard/menu');
+
+} finally { await browser.close(); await server.close(); }
+if (!process.argv.includes('--toolbox-only')) await import('./video-replication-workbench-ui.test.mjs');

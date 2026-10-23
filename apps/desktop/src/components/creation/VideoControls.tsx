@@ -53,6 +53,7 @@ export function VideoControls({ options, onChange, ratio, onRatioChange, channel
   </>;
   const fields = <>
     <ModelSelect kind="视频" value={`${channel}:${options.model_version}`} label={videoModelLabel(options.model_version)} source={channel === "cloud" ? "cloud" : "personal"}
+      cloudBalance={entitlement ? balance : null} cloudLoggedIn={auth?.logged_in}
       options={modelOptions} onChange={selectModel} footer={composer ? status : undefined} quotaDetail={channel === "cloud" ? "使用 Bowerbird 账号积分" : "使用自有即梦账号额度，不扣 Bowerbird 积分"} />
     <select aria-label="视频分辨率" className={control} value={options.video_resolution} onChange={event => onChange({ ...options, video_resolution: event.target.value as VideoOptions["video_resolution"] })}>
       {!resolutions.includes(options.video_resolution) && <option value={options.video_resolution}>{options.video_resolution} · 待核验</option>}

@@ -554,7 +554,7 @@ mod tests {
             ("429 Too Many Requests", json!({"error":{"message":"今日额度已用完","retryable":false}})),
         ]).await;
         let cloud = CloudClient::new(crate::cloud::config::CloudConfig {
-            supabase_url: Some(judge.url.clone()), supabase_publishable_key: Some("test-public".into()),
+            supabase_url: Some(judge.url.clone()), supabase_publishable_key: Some("test-public".into()), account_api_url: None,
         }).unwrap();
         judge.auth = Some(AuthClient::with_test_session(cloud));
         let diagnostics = super::super::diagnostics::Diagnostics::default();
@@ -576,7 +576,7 @@ mod tests {
 
         let (mut judge, server) = mock_jev(vec![("429 Too Many Requests\r\nRetry-After: 61", limited)]).await;
         let cloud = CloudClient::new(crate::cloud::config::CloudConfig {
-            supabase_url: Some(judge.url.clone()), supabase_publishable_key: Some("test-public".into()),
+            supabase_url: Some(judge.url.clone()), supabase_publishable_key: Some("test-public".into()), account_api_url: None,
         }).unwrap();
         judge.auth = Some(AuthClient::with_test_session(cloud));
         let cancel = AtomicBool::new(false);
@@ -596,7 +596,7 @@ mod tests {
         let discovery = json!({"status":"matched","label_ids":["poster"]});
         let (mut judge, server) = mock_jev(vec![("200 OK", response), ("200 OK", discovery)]).await;
         let cloud = CloudClient::new(crate::cloud::config::CloudConfig {
-            supabase_url: Some(judge.url.clone()), supabase_publishable_key: Some("test-public".into()),
+            supabase_url: Some(judge.url.clone()), supabase_publishable_key: Some("test-public".into()), account_api_url: None,
         }).unwrap();
         judge.auth = Some(AuthClient::with_test_session(cloud));
         // A legacy locally saved provider key must never go into the Cloud body.

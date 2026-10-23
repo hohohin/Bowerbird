@@ -13,7 +13,7 @@ const errors=[];page.on('pageerror',error=>errors.push(error.message));
 const snapshot=()=>page.evaluate(()=>JSON.parse(sessionStorage.getItem('workflow-p')).document);
 async function installMock() {
   await page.evaluate(() => {
-    window.store.setState({cloudAuth:{logged_in:true,user_id:'tester'},cloudEntitlement:{user_id:'tester',is_test_account:true,balances:{daily:0,sub:0,topup:0},policy:{can_use_cloud:true,can_use_byo:true},generation_services:[]}});
+    window.store.setState({cloudAuth:{logged_in:true,user_id:'tester'},cloudEntitlement:{user_id:'tester',tier:'pro',offline_state:'fresh',is_test_account:false,balances:{daily:0,sub:0,topup:0},policy:{can_use_cloud:true,can_use_byo:true},generation_services:[]}});
     const invoke=window.__TAURI_INTERNALS__.invoke;
     window.comfyMode='unknown';window.comfyCalls=[];window.environmentCalls=[];window.environmentPhase='missing';
     const video={id:'h3-video',name:'H3 合成测试视频',store_path:'/synthetic-h3.mp4',ext:'mp4',width:672,height:1216,duration:8,source:'comfy-h3'};
@@ -148,10 +148,25 @@ try {
   await page.evaluate(()=>{window.keepExisting=false;window.environmentPhase='stopped';window.dispatchEvent(new Event('focus'));});
   await page.waitForFunction(()=>document.querySelector('.comfy-environment-dot')?.title.includes('运行卡片时会自动启动'));
   await page.screenshot({path:'.tmp/comfy-video/existing-stopped.png'});
-  assert.deepEqual(await card.getByLabel('H3 比例').locator('option').allTextContents(),['9:16','16:9','4:3']);
+  await card.getByLabel('H3 比例').click();
+  assert.deepEqual(await card.getByRole('listbox',{name:'画面比例'}).getByRole('option').allTextContents(),['自动','1:1','3:4','4:3','16:9','9:16']);
+  await page.screenshot({path:'.tmp/comfy-video/ratio-menu-light.png'});
+  await page.keyboard.press('Escape');
+  assert.equal(await card.getByRole('listbox').count(),0);
+  for (const ratio of ['3:4','1:1','4:3','auto']) {
+    await card.getByLabel('H3 比例').click();
+    await card.getByRole('option',{name:ratio==='auto'?'自动':ratio,exact:true}).click();
+    assert.equal((await snapshot()).nodes[0].comfyVideo.ratio,ratio);
+  }
+  await card.getByLabel('H3 比例').focus();
+  await page.keyboard.press('Enter');
+  await card.getByRole('option',{name:'3:4',exact:true}).focus();
+  await page.keyboard.press('Enter');
+  assert.equal((await snapshot()).nodes[0].comfyVideo.ratio,'3:4');
+  await card.getByLabel('H3 比例').click();
+  await card.getByRole('option',{name:'自动',exact:true}).click();
   assert.deepEqual(await card.getByLabel('H3 分辨率').locator('option').allTextContents(),['0.6','0.8','1.0']);
   await card.getByLabel('H3 时长').fill('11');
-  await card.getByLabel('H3 比例').selectOption('4:3');
   await card.getByLabel('H3 分辨率').selectOption('0.6');
   await card.getByLabel('卡片指令',{exact:true}).fill('镜头平稳推进，主体自然转动');
   await page.locator('[data-canvas-node-id="old"]').hover();
@@ -184,7 +199,8 @@ try {
   await page.screenshot({path:'.tmp/comfy-video/card-light.png'});
   await page.reload();await card.waitFor();await installMock();
   assert.equal(await card.getByLabel('H3 时长').inputValue(),'11');
-  assert.equal(await card.getByLabel('H3 比例').inputValue(),'4:3');
+  assert.match(await card.getByLabel('H3 比例').innerText(),/自动/);
+  assert.equal((await snapshot()).nodes[0].comfyVideo.ratio,'auto');
   assert.equal(await card.getByLabel('H3 分辨率').inputValue(),'0.6');
   assert.equal((await snapshot()).nodes[0].inputs['last-frame'][0].assetId,'b');
   // Preparation errors occur before submission identity; they are not unknown video jobs.
@@ -207,7 +223,7 @@ try {
   let calls=await page.evaluate(()=>JSON.parse(sessionStorage.getItem('comfy-calls')));
   const submitted=calls.find(call=>call.action==='start');
   assert.equal(submitted.input.firstFrame,'existing');assert.equal(submitted.input.lastFrame,'b');assert.equal(submitted.input.seconds,11);
-  assert.equal(submitted.input.ratio,'4:3');assert.equal(submitted.input.resolution,0.6);
+  assert.equal(submitted.input.ratio,'auto');assert.equal(submitted.input.resolution,0.6);
   assert.equal(submitted.input.endpoint,'http://127.0.0.1:18189','submission uses the automatically prepared service');assert.match(submitted.input.prompt,/镜头平稳/);
   assert.ok((await page.evaluate(()=>window.environmentCalls)).some(call=>call.action==='prepare'));
   assert.ok((await page.evaluate(()=>window.environmentCalls)).every(call=>call.action!=='install' && call.action!=='start_existing'),'run requires no standalone installation/start action');

@@ -35,7 +35,7 @@ export function CanvasConversationImages({ images, imageOnly, selectedId, onSele
     {isVideoPath(shown.storePath) ? <VideoPoster path={shown.storePath} poster={shown.thumbPath} alt={shown.name} draggable={false} />
       : path ? <img src={convertFileSrc(path)} alt={shown.name} draggable={false} />
       : <div className="canvas-node-placeholder">{isVideoPath(shown.storePath) ? "视频 · 暂无封面" : shown.name}</div>}
-    {isVideoPath(shown.storePath) && <span className="canvas-video-film" role="img" aria-label="视频" />}
+    {isVideoPath(shown.storePath) && <span className="canvas-video-badge" role="img" aria-label="视频" />}
     {(!imageOnly || images.length > 1) && <span className="canvas-conversation-count">{!imageOnly && "✨ "}{index + 1}/{images.length}</span>}
     {images.length > 1 && <>
       <button type="button" className="previous" aria-label="上一张生成图片" disabled={index === 0}

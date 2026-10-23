@@ -2,6 +2,46 @@
 
 本页集中维护自动更新的技术约定、发布操作和部署证据；[PROJECT.md](../PROJECT.md) 只保留项目级摘要及入口。更新代码、构建签名包、发布清单、排查双端差异前先读本页。
 
+## Windows 26.10.2301 发布准备（2026-10-23）
+
+用户确认将 视频复刻任务管理／四步编辑与工作流交付、Pro/Studio H3 权限及入口修复、魔搭优先／TOS 回退安装与自动比例、原生视频封面及元数据回退、项目管理面板、生成卡片布局／视频卡样式、画布筛选和积分展示 存档推送后发布。纳入此前 2203 账号网关、后台用户管理 0069、ComfyUI 授权与 TOS/CDN 分发源码；服务已上线，本轮保留现役网关和后台，不重部署云函数或应用 0068。SQLite 0044，Mac ARM 801／Intel 1501 保持。
+
+TypeScript、Rust **669 passed / 22 ignored**、13 组桌面 Chromium 回归、8 项前端逻辑、11 项官网网关、8 项 Deno 权限协议及后台 PGlite／界面回归通过。初轮两处测试失败分别为 Playwright 路径和旧主页瀑布流夹具，修正测试后通过；专项旧记录中的 16 项类型错误本轮未复现。冻结 Git 提交构建，沿用原 updater 公钥和应用内更新保留登录协议；先上传 TOS 并完整校验 CDN，再切官网清单。现役／回滚基线为 /opt/bowerbird/website-releases/20261023-cdn-distribution；候选保留其余所有文件，账号、用户管理、下载授权及两条 Mac 清单均核对保持。证据目录 .tmp/release-windows-26.10.2301/。正式包、原生 worker、签名、候选和公网验证待完成补记；真实升级、全新 H3 安装／GPU、原机视频及 Mac 原生编译不在本机验收结果内。
+
+## 火山 CDN 下载地址（2026-10-23，已上线）
+
+2026-10-23 **11:48:08（北京时间）** 公网验收通过：双首页、Windows 下载配置及三平台更新清单的安装包 URL 改为 `https://cdn.bowerbird.cn/`，对象路径保持。更新检查与清单仍由官网提供并返回 `no-store`；Windows **26.10.2203**、ARM **26.10.801**、Intel **26.10.1501** 的版本、签名、发布时间与包字节不变，ARM 1502 未启用。源码双首页与 server 默认 URL 同步。
+
+- 5 个现役安装／更新包经 CDN 完整 GET 的大小、SHA-256 均与原 TOS 迁移清单一致；Range 返回 206，缓存响应为 `TCP_HIT`。三份签名与原清单一致。
+- 从现役 `20261023-comfy-tos` 复制候选，仅改双首页、server、环境配置中的下载 URL 和三份更新清单，其余文件哈希一致；大包使用硬链接。候选、现役与公网回归通过，覆盖更新 GET/HEAD、清单与签名、首页资源、下载配置、后台、旧包、账号入口及 ComfyUI 未授权拒绝。
+- 现役目录 `/opt/bowerbird/website-releases/20261023-cdn-distribution`，回滚目录 `/opt/bowerbird/website-releases/20261023-comfy-tos`；回滚时原子恢复 `/opt/bowerbird/website` 链接并重启 `bowerbird-website.service`。证据及脚本在本机 `.tmp/cdn-distribution/` 和服务器 `/tmp/bowerbird-cdn-distribution/`。
+- 本次只切桌面安装包分发。ComfyUI 模型仍优先魔搭，Portable／模型回退仍走受控原始 TOS 签名 URL。当前 CDN 的 `/comfyui/` 路径可匿名读取，不能把 TOS 对象 private 等同于 CDN 访问受限；未配置 CDN 访问鉴权前不将该路径用于受控安装下载。本次未修改 CDN 账户配置。
+- 未重新打包客户端；同日 H3 权益状态 IPC 修复不包含在上述已发布包内。国内不同运营商性能及真实旧客户端原生升级仍需实机验收。
+
+## 火山 TOS 分发迁移（2026-10-23，已上线）
+
+按用户决定，后续安装包及 ComfyUI 资源以火山引擎 TOS 为目标存储。本次先完成桌面分发迁移：桶 `bowerbird`，地域 `cn-guangzhou`，公网基地址 `https://bowerbird.tos-cn-guangzhou.volces.com`。本机配置在根目录 `.env.tos`，由现有 `.env.*` 规则忽略；AK/SK 仅用于本机上传，不写入官网、应用或版本清单。桶整体权限未改，仅本次公开分发对象设置 public-read。
+
+共上传并验证 **22 个对象**：Windows 26.10.2203 安装包、Mac ARM 26.10.801 与 26.10.1502 的更新归档/DMG、Intel 26.10.1501 更新归档/DMG，附原签名、SHA-256 文件及四份 TOS 版本化清单。Windows 对象前缀为 `windows_package/`，Mac 为 `mac_package/`，不可变清单为 `updates/<platform>-<version>.json`。完整文件保持原始字节；四份更新包通过原公钥验签及篡改拒绝。所有对象完成本机关闭代理后的完整 GET 哈希核对和 Range 206 检查。ARM 1502 仅迁移保存，未将当前 ARM 通道从 801 升级。
+
+2026-10-23 **01:12:45（北京时间）** 公网验收通过。官网双首页下载、Windows 下载配置和三平台自动更新清单中的包 URL 已切到 TOS；应用检查入口仍为官网 `/api/desktop-update/<platform>`。当前通道仍为 Windows **26.10.2203**、ARM **26.10.801**、Intel **26.10.1501**。版本、发布说明、签名及发布时间未改，未重新打包。源码双首页及 server 默认 Windows URL 同步到本次分发地址，避免旧源码默认仍指向 902。
+
+现役目录 `/opt/bowerbird/website-releases/20261023-tos-distribution`，回滚目录 `/opt/bowerbird/website-releases/20261022-user-admin`。从真实现役目录复制候选，仅修改七个文件：三份清单、双首页、server 默认下载 URL 和 `.env.production` 中 Windows 下载 URL；其余文件逐一哈希一致，保留账号代理、用户管理后台与原配置。历史大包通过硬链接保留，未重复占用服务器磁盘。候选、现役、公网验证覆盖 GET/HEAD 更新入口、no-store、清单和签名、首页与静态资源、下载配置、健康检查、后台、旧安装包以及火山 Windows 包完整哈希。健康检查原协议为 204，首次候选脚本误断言 200 已修正，未因此切换失败候选。
+
+本机证据与可重入上传脚本：`.tmp/tos-migration/`（`migrate.py`、`uploaded.jsonl`、四份 TOS 清单、`site-prepared.json`、候选/现役/公网报告）；服务端脚本和报告 `/tmp/bowerbird-tos-migration/`。回滚使用同目录 `rollback-site.sh`，恢复到上述 user-admin 目录并重启 `bowerbird-website.service`；已下载的版本不降级。原 R2、官网旧包及目录均保留。后续发布应先向 TOS 上传并验证新包，再切官网清单；旧 `macOS/release.sh` 的 R2 上传路径不代表当前生产分发目的地。
+
+**边界：** 上述 01:12 分发切换仅涉及桌面安装包；同日 **03:01** 已将 ComfyUI 的 6 个资源（44,048,479,273 bytes）及许可/来源文档保存为 TOS 私有对象，完整回读哈希和 Range 校验通过。随后受控下载服务已上线，安装器源码接入 TOS 并进一步改为魔搭优先、TOS 回退；客户端尚未打包发布。当前规则与验收见 [本机 H3](COMFYUI-LOCAL-VIDEO.md)，最新桌面分发域名以上方 CDN 记录为准。
+
+## Windows 26.10.2203 已发布（2026-10-22）
+
+2026-10-22 17:59:15（北京时间）完成发布后公网复核。账号链路改走官网受控入口，覆盖微信、邮件 OTP/验证/PKCE、刷新、权益及兑换；保留 2202 的简短错误提示、原用户鉴权和权益签名。生成、分类及 Storage 路由保持。网关协议与邮件模板/回滚见 [Cloud 部署](../apps/cloud/DEPLOY.md#55-桌面账号官网网关2026-10-22)。源码基线 `3602f454`（2202 发布记录）加本轮工作区增量，未声称新改动已提交；构建输入冻结哈希与补丁保存在 `.tmp/release-windows-26.10.2203/`。
+
+安装包 `Bowerbird_26.10.2203_x64-setup.exe`：**84,581,158 bytes**，SHA-256 `a9c3db62d215dd5868dcc7d62dc5b8a2e430b11d24cea891cb846ac56812482a`。Windows 清单 SHA-256 `74d9ed63d91f37cb54af4c0698041c353030e83f4414c531838c006cd24fd0ec`，现役 `server.mjs` 为 `3d78116f07b47d9afcd49e9497561dd22a88329508b0099615b72fe392200ce3`。929 个冻结输入、67 个资源、x64/版本、解包主程序与构建字节（仅 NSIS marker 差异）、内置网关地址及升级保留登录钩子已核对；原 updater 公钥验签与篡改拒绝通过。Rust Cloud 44 项、Node 网关 10 项、生产账号文案 5 项、官网更新入口及 TypeScript 通过。
+
+先上传不可变包，17:57:05 完成完整公网下载/验签，再切 Windows 清单、双首页和下载配置；候选与现役再次完整读取包核对哈希，17:59:15 核对公网三平台清单、链接、签名文件、包大小及登录网关。Mac ARM/Intel 清单逐字节保持。现役 `/opt/bowerbird/website-releases/20261022-windows-26.10.2203`；桌面发布回滚目录 `/opt/bowerbird/website-releases/20261022-account-gateway`，其仍保留账号网关和 2202 清单，不能回滚到不支持新账号路径的旧官网。服务器脚本/证据 `/tmp/bowerbird-release-windows-26.10.2203/`；保留旧包及独立配置/清单，仅对不可变下载包共享硬链接以节省磁盘。
+
+真实临时账号的邮件验证、刷新及 Ed25519 权益通过，已清理；没有发送真实邮件或调用付费模型。另一台电脑的扫码回跳、真实 PKCE 邮件投递及用户库原生升级尚待实机确认，本轮未替用户安装或重启应用。
+
 ## Windows 26.10.2202 已发布（2026-10-22）
 
 2026-10-22 15:57:14（北京时间）完成公网验收。源码／测试／版本／文档存档为 `d6bad0c39fc582c1f177929516f2104b4461f3a6` 并推送 dev 后冻结构建。包含素材库分页与虚拟瀑布流、分类规则继承／来源详情、统一模型额度菜单、视频单行底栏、点击循环视图、登录提示／诊断及关闭首启自动引导；SQLite 0043/0044。云端 jev-proxy v6 已上线，新版 matching_version=8 使用 42%，旧版无字段继续 30%，未知版本在推理前拒绝；已部署源码下载核对一致，其他函数版本保持，未应用数据库迁移或部署 Worker。0067 token 账本保持；GPT 2.5 仅存档，0068 未应用、未启价。
@@ -442,3 +482,8 @@ pnpm --filter @bowerbird/desktop test:app-updater
 已验收：候选/正式服务及公网 GET/HEAD、禁止缓存清单、完整包哈希、双端公钥验签/篡改拒绝、ARM64 包内版本和公钥、官网/后台/健康接口及旧 Windows 下载；UI 合成 IPC 覆盖离线/最新/新版本、进度、关闭重开、重复操作、签名失败、重试、任务/保存保护及安装/重启失败。
 
 未验收：两端原生旧版到新版的实际安装替换与重启；Windows 本次真实升级的登录重置/素材保留；Mac 本次真实升级的登录保留、Developer ID 签名/公证和干净机器验收；Intel 全流程。不要把构建成功、HEAD 200、UI 合成 IPC 或 minisign 验签扩写为完整实机验收。
+
+
+### ComfyUI 安装源接入（2026-10-23，未发布桌面版本）
+
+10:16:15（北京时间）官网现役改为 `/opt/bowerbird/website-releases/20261023-comfy-tos`，回滚 `20261023-tos-distribution`；仅新增账号网关的 ComfyUI 下载授权 POST 路由，三平台更新版本、清单、签名、首页及包保持。新 Edge 签发固定 TOS 私有对象临时 GET URL，桌面安装器源码已切源并支持续签/断点续传，Pro／Studio 与测试账号可用；既有公开包仍为旧安装器，须随新客户端发布才能生效。资源与授权验证、Secrets 刷新版本号及线上 Pro 验收边界见 [本机 H3](COMFYUI-LOCAL-VIDEO.md)。

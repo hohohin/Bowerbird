@@ -9,6 +9,7 @@ const page = await browser.newPage();
 const errors = [];
 page.on('pageerror', error => errors.push(error.message));
 try {
+  await page.route('**/poster.jpg', route => route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="90"><rect width="160" height="90" fill="red"/></svg>' }));
   await page.route('**/media-lifecycle-test', route => route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' }));
   await page.goto('http://127.0.0.1:1598/media-lifecycle-test');
   await page.evaluate(async () => {

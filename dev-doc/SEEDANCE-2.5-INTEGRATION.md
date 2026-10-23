@@ -1,5 +1,26 @@
 # Seedance 2.5 视频接入与验收记录
 
+## 2026-10-23：桌面视频元数据增加系统回退（源码未发布）
+
+- 读取顺序为内置 MP4/MOV/M4V 解析 → Windows Media Foundation / macOS AVFoundation → 可选 ffprobe。`--video-probe-worker` 在主程序初始化前执行；系统探测与 ffprobe 实际探测均在独立进程内，15 秒超时结束并回收，响应限读 64 KiB。复用已有原生静态库与 Windows DLL 延迟加载，不增加媒体工具二进制或依赖包，不修改云端、裁剪/转码或工具发现协议。
+- 统一拒绝零宽高、未知/非有限/非正时长。普通 90/270° 旋转在内置解析、系统接口和 ffprobe 三路按显示方向处理。ffprobe 输出改为 JSON，读取旋转 side data；未知时长不降级成有效零值。
+- 验证发现 Windows Media Foundation 把 0.4 秒分片 MP4 的 0.08 秒呈现偏移当成时长，因此内置解析补充 `moof/traf/trun/tfdt` 样本时序，保留多个音视频分片的时长；`mvhd` 版本 1 不再把超过 u32 的正常时长当作未知。两份合成分片夹具及生成命令位于 `src-tauri/tests/fixtures/media/`，运行单元测试无需 FFmpeg。
+- Windows 独立 `video_probe_smoke` 十项真实文件检查通过：中文路径的 40ms 单帧、旋转 MP4、单/多分片（含音频）MP4、MKV、AVI、WebM 在将 `BOWERBIRD_FFPROBE_BINARY` 指向不存在文件后读取成功；系统不支持的 FFV1 MKV 在无工具时失败，提供 ffprobe 后成功；坏文件明确失败。结果位于 `.tmp/video-probe-20261023/smoke.log`，隔离脚本与构建/单测日志同目录。测试只使用合成文件，不操作用户素材库。
+- Rust 元数据专项 **7 passed**，覆盖原生 MP4、旋转、单/多分片时长、JSON/未知时长、损坏输入及超时结束回收；Windows 主程序 `cargo check --bin bowerbird-desktop` 通过，保留既有警告。独立系统 worker 的旋转视频尺寸/时长通过；共用原生库的封面测试重建后，在禁用 FFmpeg 时通过 40ms 单帧、旋转画面与参考图对照及损坏文件拒绝，未回归此前的首帧修复。
+- Mac 实现使用 AVFoundation 精确时长与轨道 preferredTransform，但本机不能编译/运行 macOS 原生代码；接收端须运行 `cargo test --lib media::probe::tests`、构建 `video_probe_smoke` 并复验普通/旋转 MP4、系统支持及不支持格式、缺 ffprobe 和损坏文件。格式可用性取决于系统媒体组件，Windows N 缺组件场景也仍待实机验证。本轮未打包或发布更新。
+
+复现入口：`cargo test --locked --offline --manifest-path apps/desktop/src-tauri/Cargo.toml --lib media::probe::tests`；`cargo build --locked --offline --manifest-path apps/desktop/src-tauri/Cargo.toml --example video_probe_smoke`；示例参数为 `VIDEO WIDTH HEIGHT SECONDS`，传 `0 0 0` 断言读取失败。
+
+## 2026-10-23：Windows 生成视频静态封面修复（源码未发布）
+
+- 用户报告另一台电脑生成的视频在画板只见胶片装饰和播放标记，点击可正常播放。旧 Windows 入库可原生解析 MP4，但封面只走本机 FFmpeg；没有可用 FFmpeg 时仍入库、封面为空。另一缺口是前端信任已有封面路径，加载失败后不重建。本次没有取得原机日志，不能断言该机具体是哪一种情况。
+- 新增 `windows/video-thumbnail.cpp`，通过 Windows Media Foundation Source Reader 解码首个显示帧；复用 `--video-thumbnail-worker` 的独立隐藏子进程，15 秒超时结束并回收。按显示区域剔除解码器补齐像素（540 → 544），保留旋转与行方向，在 Rust 中等比缩小并转 JPEG。父进程校验后替换缓存，失败回退原 FFmpeg 路径。媒体 DLL 延迟加载，避免缺少 Media Foundation 的系统在主程序启动时直接失败；该系统变体未实机验证。
+- `VideoPoster` 在已有封面实际加载失败时仅发起一次补建，修复后使用新请求地址；重建仍失败则显示占位图，不留下破图或透明空白，不循环解码。后端复用封面前验证图片可解码，可修复丢失/损坏缓存。沿现有串行队列与注册素材校验，画板不创建隐式视频播放器、不修改原视频或重发生成任务。
+- 验证：Windows 独立 `video_poster_smoke` 在测试进程将 `BOWERBIRD_FFMPEG_BINARY` 指向不存在路径，验证中文路径、40ms 单帧、旋转 H.264 MP4、270×480 JPEG、真实画面和损坏视频拒绝；输入由 FFmpeg 合成，仅用于测试。Rust 封面测试 3 项通过，覆盖缓存丢失/损坏、复用、无锁解码及删除竞态。`media-previews-ui`、`media-lifecycle-ui`、`canvas-media-ui` 和 TypeScript 通过，覆盖 StrictMode、失效封面单次修复、修复失败占位、切换隔离及被动预览零视频请求。旧生命周期夹具的 `poster.jpg` 原本不存在，现补充实际图片响应以符合加载失败修复语义。
+- 独立测试输出/日志位于本机 `.tmp/video-poster-20261023/`。未构建安装包或发布更新，另一台电脑需更新后实机复验；原生 WebView 的完整卡片到后端链路及特殊编码仍未由以上测试替代。
+
+原生实现依据：[Source Reader 视频处理](https://learn.microsoft.com/en-us/windows/win32/medfound/mf-source-reader-enable-video-processing)、[MP4 源与旋转信息](https://learn.microsoft.com/en-us/windows/win32/medfound/mpeg-4-file-source)。
+
 ## 2026-10-19：截帧就近落位（源码未发布）
 
 - 原 `addVideoFrame` 使用隐藏视频产物坐标，碰撞后沿通用视口搜索，导致截图离开源卡。现在解析可见会话/素材组的别名和实际显示边界，排除分区框，把截图优先放在视频右侧；碰撞调用 `placeCanvasCardNearSource`，不再回退到视口搜索。多个相同视频实例按选中优先、距可见中心最近排序。

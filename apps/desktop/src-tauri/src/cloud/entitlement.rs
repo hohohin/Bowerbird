@@ -97,7 +97,8 @@ pub struct EntitlementSnapshot {
     pub is_test_account: bool,
     #[serde(default = "Utc::now")]
     pub last_trusted_server_time: DateTime<Utc>,
-    #[serde(skip)]
+    // Computed natively and returned over IPC; never trust a value from the server/cache.
+    #[serde(skip_deserializing)]
     pub offline_state: Option<OfflineState>,
     /// 签名是否已通过内置公钥的 Ed25519 验签（加载/同步时计算，不持久化；
     /// 离线宽限只信任 signature_version>=1 且此标记为真的快照）。
@@ -171,7 +172,7 @@ impl EntitlementService {
         let endpoint = self
             .cloud
             .config()
-            .endpoint("entitlement")
+            .account_endpoint("entitlement")
             .ok_or_else(|| AppError::Cloud("当前构建未配置 Bowerbird Cloud".into()))?;
         let response = auth
             .send_authorized(self.cloud.http().get(endpoint), "同步权益失败")
@@ -230,7 +231,7 @@ impl EntitlementService {
         let endpoint = self
             .cloud
             .config()
-            .endpoint("redeem-code")
+            .account_endpoint("redeem-code")
             .ok_or_else(|| AppError::Cloud("当前构建未配置 Bowerbird Cloud".into()))?;
         let response = auth
             .send_authorized(
@@ -302,7 +303,9 @@ impl EntitlementService {
         if let Some(parent) = self.cache_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let json = serde_json::to_vec_pretty(snapshot)?;
+        let mut persisted = serde_json::to_value(snapshot)?;
+        persisted.as_object_mut().unwrap().remove("offline_state");
+        let json = serde_json::to_vec_pretty(&persisted)?;
         std::fs::write(&self.cache_path, json)?;
         Ok(())
     }
@@ -467,6 +470,21 @@ mod tests {
             last_trusted_server_time: now,
             offline_state: None,
             signature_valid: true,
+        }
+    }
+
+    #[test]
+    fn entitlement_ipc_includes_computed_state_but_deserialization_cannot_restore_it() {
+        for (state, name) in [(OfflineState::Fresh, "fresh"), (OfflineState::Grace, "grace"),
+            (OfflineState::Expired, "expired"), (OfflineState::Invalid, "invalid")] {
+            let mut snapshot = signed(Utc::now());
+            snapshot.offline_state = Some(state);
+            let ipc = serde_json::to_value(&snapshot).unwrap();
+            assert_eq!(ipc["offline_state"], name, "H3 visibility needs the native state over IPC");
+            assert!(ipc.get("signature_valid").is_none());
+            let restored: EntitlementSnapshot = serde_json::from_value(ipc).unwrap();
+            assert!(restored.offline_state.is_none(), "cached or remote state must be recomputed");
+            assert!(!restored.signature_valid);
         }
     }
 

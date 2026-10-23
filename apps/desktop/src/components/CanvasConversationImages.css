@@ -1,7 +1,6 @@
 .canvas-conversation-images { position: relative; margin: 12px -14px 0; height: 230px; overflow: hidden; }
 .canvas-conversation-images img, .canvas-conversation-images video { display: block; width: 100%; height: 100%; object-fit: contain; }
 .canvas-conversation-count { position: absolute; left: 8px; top: 8px; padding: 3px 7px; border-radius: 6px; background: #0009; color: white; font-size: 11px; }
-.canvas-conversation-images.is-video .canvas-conversation-count { top: 22px; }
 .canvas-conversation-images button { position: absolute; top: 50%; transform: translateY(-50%); padding: 5px 9px; background: #0008; color: white; font-size: 20px; opacity: 0; cursor: pointer; }
 .canvas-conversation-images .previous { left: 0; }
 .canvas-conversation-images .next { right: 0; }

@@ -8,6 +8,29 @@ const server = await createServer({ configFile: false, root: process.cwd(), serv
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1600, height: 1100 } });
+async function assertCompactCard(card) {
+  const layout = await card.evaluate(el => {
+    const bounds = el.getBoundingClientRect(), scale = bounds.width / el.offsetWidth;
+    const header = el.querySelector('header').getBoundingClientRect();
+    const parameters = el.querySelector('.workflow-generation-parameters');
+    const content = parameters.getBoundingClientRect();
+    return { gap: (content.top - header.bottom) / scale,
+      parametersInside: content.left >= bounds.left && content.right <= bounds.right && content.bottom < bounds.bottom,
+      parametersVisible: getComputedStyle(parameters).opacity === '1' && getComputedStyle(parameters).position === 'static',
+      historyInHeader: !!el.querySelector('header .workflow-generation-history'),
+      overflow: el.querySelector('.workflow-card-body').scrollWidth > el.querySelector('.workflow-card-body').clientWidth + 2,
+      ports: [...el.querySelectorAll('.workflow-port')].map(port => {
+        const socket = port.querySelector('i').getBoundingClientRect(), label = port.querySelector('span').getBoundingClientRect();
+        const input = port.classList.contains('is-input');
+        return { anchor: Math.abs((socket.left + socket.width / 2 - (input ? bounds.left : bounds.right)) / scale),
+          labelOutside: input ? label.right <= bounds.left : label.left >= bounds.right };
+      }) };
+  });
+  assert.ok(layout.gap >= 0 && layout.gap <= 14, `content starts directly below header: ${JSON.stringify(layout)}`);
+  assert.ok(layout.historyInHeader && !layout.overflow, JSON.stringify(layout));
+  assert.ok(layout.parametersInside && layout.parametersVisible, `parameters stay inside the card: ${JSON.stringify(layout)}`);
+  assert.ok(layout.ports.every(port => port.anchor < 2 && port.labelOutside), `socket anchors and outward labels: ${JSON.stringify(layout)}`);
+}
 try {
   await page.goto('http://127.0.0.1:1637/scripts/fixtures/canvas-reference/preview.html');
   await page.locator('[data-canvas-node-id="old"]').waitFor();
@@ -24,6 +47,13 @@ try {
   await page.getByRole('button', { name: '适应内容', exact: true }).click();
   const card = page.locator('.workflow-card.is-generation').first();
   await card.hover();
+  await mkdir('.tmp/workflow-video', { recursive: true });
+  for (const theme of ['light', 'dark']) {
+    await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+    await assertCompactCard(card);
+    await page.screenshot({ path: `.tmp/workflow-video/image-compact-${theme}.png` });
+  }
+  await page.evaluate(() => document.documentElement.dataset.theme = 'light');
   await card.getByTitle('选择出图引擎', { exact: true }).click();
   const imageMenu = page.getByRole('dialog', { name: '图像模型', exact: true });
   assert.equal(await imageMenu.locator('.model-select-column').count(), 2);
@@ -45,14 +75,8 @@ try {
   assert.equal(await card.getByLabel('视频时长（秒）').inputValue(), '8');
   assert.equal(await card.getByLabel('视频生成模式').inputValue(), 'frames2video');
   assert.equal(await card.getByRole('button', { name: '输出：视频', exact: true }).count(), 1);
-  // Controls must lie below sockets, inside the card, without horizontal overflow.
-  const layout = await card.evaluate(el => {
-    const controls = el.querySelector('.workflow-video-controls').getBoundingClientRect();
-    const socket = el.querySelector('.workflow-port.is-input').getBoundingClientRect();
-    const fieldset = el.querySelector('.workflow-video-controls');
-    return { top: controls.top, bottom: socket.bottom, scroll: fieldset.scrollWidth, width: fieldset.clientWidth };
-  });
-  assert.ok(layout.top > layout.bottom && layout.scroll <= layout.width + 2, JSON.stringify(layout));
+  // Outward socket labels free the top of both image and video cards for content.
+  await assertCompactCard(card);
   await page.getByRole('button', { name: '适应内容', exact: true }).click();
   await mkdir('.tmp/workflow-video', { recursive: true });
   await page.screenshot({ path: '.tmp/workflow-video/controls.png' });

@@ -9,6 +9,11 @@ import type { Asset } from "../lib/types";
 import type { WorkflowNode, WorkflowStep } from "../lib/canvasWorkflow";
 import "./ComfyVideoCard.css";
 import { ProviderQuota } from "./creation/ProviderQuota";
+import { RatioSelect } from "./creation/RatioSelect";
+import { RATIOS } from "./creation/ratios";
+import h3License from "../assets/comfy-licenses/MiniMax-H3-LICENSE.txt?raw";
+
+const H3_RATIOS = RATIOS.filter(ratio => ["9:16", "16:9", "4:3", "3:4", "1:1"].includes(ratio.key));
 
 export function ComfyGenerationProgress({ step }: { step: WorkflowStep }) {
   const progress = step.comfyStopping ? undefined : step.comfyProgress;
@@ -116,6 +121,7 @@ export function ComfyEnvironmentControl({ node, disabled, onChange }: {
       <h2>本地部署工作流</h2>
       <p role="status">{message}</p>
       <p className="comfy-install-path">{environment?.directory || directory || "正在读取安装位置…"}</p>
+      <details><summary>MiniMax H3 使用许可</summary><p>点击安装即同意以下许可（含适用地区及用途限制）。许可与来源文件将保存在安装目录的 licenses 文件夹。</p><pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", maxHeight: 180, overflow: "auto" }}>{h3License}</pre></details>
       {environment && !ready && !existing.length && !environment.installed && !preparing && <small>下载 {gb(environment.downloadBytes)} · 需空闲 {gb(environment.requiredBytes)}</small>}
       {environment?.phase === "installing" && <>
         <progress aria-label="环境下载进度" max={environment.totalBytes || 1} value={environment.completedBytes} />
@@ -162,13 +168,13 @@ export function ComfyVideoCard({ node, disabled, assets, inputImages, onChange }
       placeholder="输入视频提示词，也可从文本端口接入…" value={node.prompt}
       onChange={event => onChange({ prompt: event.target.value })} />
     <fieldset disabled={disabled} className="comfy-video-options">
-      <label>时长（秒）<input aria-label="H3 时长" type="number" min={1} max={15} step={1} value={options.seconds} onChange={event => update({ seconds: Number(event.target.value) })} /></label>
-      <label>比例<select aria-label="H3 比例" value={options.ratio} onChange={event => update({ ratio: event.target.value as ComfyVideoOptions["ratio"] })}>
-        {["9:16", "16:9", "4:3"].map(ratio => <option key={ratio}>{ratio}</option>)}
-      </select></label>
-      <label>分辨率<select aria-label="H3 分辨率" value={options.resolution} onChange={event => update({ resolution: Number(event.target.value) as ComfyVideoOptions["resolution"] })}>
+      <label>时长<input aria-label="H3 时长" type="number" min={1} max={15} step={1} value={options.seconds} onChange={event => update({ seconds: Number(event.target.value) })} />秒</label>
+      <RatioSelect ariaLabel="H3 比例" value={options.ratio === "auto" ? null : options.ratio} ratios={H3_RATIOS}
+        autoTitle="按运行时首帧图片的实际宽高比生成，尺寸按模型要求对齐"
+        onChange={ratio => update({ ratio: (ratio ?? "auto") as ComfyVideoOptions["ratio"] })} />
+      <select aria-label="H3 分辨率" title="分辨率（MP）" value={options.resolution} onChange={event => update({ resolution: Number(event.target.value) as ComfyVideoOptions["resolution"] })}>
         {[0.6, 0.8, 1].map(value => <option value={value} key={value}>{value.toFixed(1)}</option>)}
-      </select></label>
+      </select>
     </fieldset>
     <ProviderQuota source="local" badge />
   </section>;

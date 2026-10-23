@@ -29,5 +29,6 @@ export function ProviderSelect({ value, onChange, codexHealth, dreaminaHealth, c
   return <ModelSelect value={canonicalProviderKey(value)} label={imageProviderLabel(value, cloudEntitlement, dreaminaVersion)}
     source={isCloudProvider(value) ? "cloud" : quota === "unknown" ? undefined : "personal"}
     quotaDetail={QUOTA_SOURCES[quota].detail} options={options} onChange={onChange}
+    cloudBalance={cloudEntitlement ? balance : null} cloudLoggedIn={cloudAuth?.logged_in}
     defaultKey={canonicalProviderKey(defaultProvider)} onSetDefault={onSetDefaultProvider} />;
 }

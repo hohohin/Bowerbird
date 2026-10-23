@@ -39,13 +39,19 @@ function RatioIcon({
 export function RatioSelect({
   value,
   onChange,
+  ratios = RATIOS,
+  ariaLabel,
+  autoTitle = "有参考图时跟随首张参考图的比例，否则由引擎决定",
 }: {
   value: string | null;
   onChange: (v: string | null) => void;
+  ratios?: Ratio[];
+  ariaLabel?: string;
+  autoTitle?: string;
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
-  const current = RATIOS.find((r) => r.key === value) ?? null;
+  const current = ratios.find((r) => r.key === value) ?? null;
 
   useEffect(() => {
     if (!open) return;
@@ -75,6 +81,7 @@ export function RatioSelect({
         onClick={() => setOpen((v) => !v)}
         className="flex h-7 items-center gap-1.5 rounded-[3px] border border-edge bg-panel2 px-2 text-xs text-ink outline-none hover:border-accent/60 hover:bg-edge focus:border-accent"
         title="选择画面比例"
+        aria-label={ariaLabel}
         aria-haspopup="listbox"
         aria-expanded={open}
       >
@@ -105,7 +112,7 @@ export function RatioSelect({
               onClick={() => pick(null)}
               role="option"
               aria-selected={value === null}
-              title="有参考图时跟随首张参考图的比例，否则由引擎决定"
+              title={autoTitle}
               className={`flex items-center gap-1.5 rounded px-1.5 py-1.5 text-xs ${
                 value === null
                   ? "bg-panel2 font-medium text-ink"
@@ -116,7 +123,7 @@ export function RatioSelect({
               <span className="min-w-0 flex-1 text-left">自动</span>
               {value === null && <Check size={13} className="shrink-0 text-accent" />}
             </button>
-            {RATIOS.map((r) => {
+            {ratios.map((r) => {
               const selected = r.key === value;
               return (
                 <button

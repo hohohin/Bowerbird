@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, ChevronDown, Compass, FolderOpen, LayoutDashboard, LoaderCircle, Search, Upload, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, Coins, Compass, FolderOpen, LayoutDashboard, LoaderCircle, Search, Upload, X } from "lucide-react";
 import { SidebarAccount } from "./SidebarAccount";
 import { ProjectManagerPanel } from "./ProjectManagerPanel";
 import { GeneratedImageFilter } from "./GeneratedImageFilter";
@@ -44,6 +44,11 @@ export function Toolbar({
   const setCurrentCollection = useStore((s) => s.setCurrentCollection);
   const setSmartFilter = useStore((s) => s.setSmartFilter);
   const homeView = useStore(s => s.libraryHomeView);
+  const loggedIn = useStore(s => s.cloudAuth?.logged_in === true);
+  const balances = useStore(s => s.cloudEntitlement?.balances);
+  const credits = loggedIn && balances ? balances.daily + balances.sub + balances.topup : null;
+  const creditsText = credits == null ? "—" : credits.toLocaleString("zh-CN");
+  const creditsLabel = !loggedIn ? "登录后查看 Bowerbird 积分" : credits == null ? "Bowerbird 积分余额暂不可用" : `Bowerbird 可用积分：${creditsText}`;
   const setColorFilter = useStore((s) => s.setColorFilter);
   const [importOpen, setImportOpen] = useState(false);
   const [projectsOpen, setProjectsOpen] = useState(false);
@@ -262,6 +267,10 @@ export function Toolbar({
           <MediaTypeFilter />
 
         </div>}
+        <div className="app-topbar-credits" role="status" aria-label={creditsLabel} title={creditsLabel}>
+          <Coins size={16} aria-hidden="true" />
+          <span>{creditsText}</span>
+        </div>
         <SidebarAccount placement="topbar" />
       </div>
       {collectedNotice && (

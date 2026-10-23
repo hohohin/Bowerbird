@@ -14,6 +14,7 @@ mod media;
 mod prompt;
 
 pub use media::thumb::video_thumbnail_worker;
+pub use media::probe::video_probe_worker;
 pub use agent_generation_wait::agent_generation_wait_worker;
 
 use std::sync::Arc;

@@ -3,11 +3,13 @@ import { createPortal } from "react-dom";
 import { BriefcaseBusiness, Clapperboard, Images, Film } from "lucide-react";
 import { useStore } from "../store";
 import { notify } from "../lib/notify";
+import { canUseComfyVideo } from "../lib/comfyVideo";
 import "./CanvasToolbox.css";
 
 export function CanvasToolbox({ onOpenReplication, onOpenLocalVideo }: { onOpenReplication: () => void; onOpenLocalVideo: () => void }) {
   const isTestAccount = useStore(state => state.cloudAuth?.logged_in === true && !!state.cloudAuth.user_id
     && state.cloudEntitlement?.user_id === state.cloudAuth.user_id && state.cloudEntitlement?.is_test_account === true);
+  const canUseLocalVideo = useStore(state => canUseComfyVideo(state.cloudAuth, state.cloudEntitlement));
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState({ left: 0, top: 0 });
   const button = useRef<HTMLButtonElement>(null);
@@ -24,7 +26,7 @@ export function CanvasToolbox({ onOpenReplication, onOpenLocalVideo }: { onOpenR
     menu.current?.querySelector<HTMLButtonElement>("button")?.focus();
     window.addEventListener("resize", place);
     return () => window.removeEventListener("resize", place);
-  }, [open, isTestAccount]);
+  }, [open, isTestAccount, canUseLocalVideo]);
 
   useEffect(() => {
     if (!open) return;
@@ -60,7 +62,7 @@ export function CanvasToolbox({ onOpenReplication, onOpenLocalVideo }: { onOpenR
       {isTestAccount && <button type="button" role="menuitem" onClick={() => { setOpen(false); button.current?.focus(); notify("功能开发中"); }}>
         <Images size={19} aria-hidden="true" /><span><strong>视频转图文</strong><small>功能开发中</small></span>
       </button>}
-      {isTestAccount && <button type="button" role="menuitem" onClick={() => { setOpen(false); onOpenLocalVideo(); }}>
+      {canUseLocalVideo && <button type="button" role="menuitem" onClick={() => { setOpen(false); onOpenLocalVideo(); }}>
         <Film size={19} aria-hidden="true" /><span><strong>本地 H3 视频</strong><small>首尾帧 · 提示词 · 生成视频</small></span>
       </button>}
     </div>, document.body)}

@@ -3,6 +3,7 @@ import { createReadStream } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, extname, isAbsolute, join, resolve, sep } from "node:path";
+import { createAccountProxy } from "./account-proxy.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const ASSET_FILES = new Map(Array.from({ length: 8 }, (_, index) => [`p${index + 1}`, `p${index + 1}.jpg`]));
@@ -23,7 +24,7 @@ const PROVIDERS = {
   flux: { label: "FLUX.2 Klein 9B", model: () => process.env.BFL_FLUX_ENDPOINT || "flux-2-klein-9b" },
 };
 const DEFAULT_WINDOWS_DOWNLOAD_URL =
-  "https://bowerbird.cn/downloads/Bowerbird_26.10.902_x64-setup.exe";
+  "https://cdn.bowerbird.cn/windows_package/Bowerbird_26.10.2301_x64-setup.exe";
 const rateBuckets = new Map();
 
 await loadLocalEnv(join(SCRIPT_DIR, ".env.local"));
@@ -462,8 +463,10 @@ async function serveStatic(request, response, root) {
 
 export function startServer(options = parseArgs(process.argv.slice(2))) {
   const root = isAbsolute(options.root) ? options.root : resolve(SCRIPT_DIR, options.root);
+  const accountProxy = createAccountProxy();
   const server = createServer(async (request, response) => {
     try {
+      if (request.url.split("?", 1)[0].startsWith("/api/account/")) return await accountProxy(request, response);
       const pathname = new URL(request.url, "http://localhost").pathname;
       if ((request.method === "GET" || request.method === "HEAD") && pathname === "/admin") {
         response.writeHead(308, { Location: "/admin/", "Cache-Control": "no-store" });

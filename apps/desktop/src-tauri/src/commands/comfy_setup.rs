@@ -11,7 +11,7 @@ use super::comfy_discovery::{self, Installation};
 const MANAGED_ENDPOINT: &str = "http://127.0.0.1:18188";
 const VERSION: &str = "h3-v1-comfy-0.42.1";
 const RESERVE: u64 = 12 * 1024 * 1024 * 1024;
-struct Download { file: &'static str, url: &'static str, size: u64, sha: &'static str }
+struct Download { file: &'static str, size: u64, sha: &'static str }
 fn label(item: &Download) -> &'static str {
     if item.file == "portable.7z" { "ComfyUI 与 Python" }
     else if item.file.contains("diffusion_models/") { "视频主模型" }
@@ -22,13 +22,39 @@ fn label(item: &Download) -> &'static str {
 }
 // Pinned upstream revisions and LFS hashes; never substitute a similarly named LoRA.
 const DOWNLOADS: &[Download] = &[
-    Download { file: "portable.7z", url: "https://github.com/Comfy-Org/ComfyUI/releases/download/v0.42.1/ComfyUI_windows_portable_nvidia.7z", size: 2018444114, sha: "496afd18790ec685d99ebba2edf200d7371a29fbdd3a992bb0f4f52f244a6874" },
-    Download { file: "models/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors", url: "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/e5eb578a89295337b8ff433a035929ce0279e0b6/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors", size: 20970379616, sha: "e889202c41dafb67b10d67b97f0d8541508036a6090af23425a5c2615d03c47a" },
-    Download { file: "models/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors", url: "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/e5eb578a89295337b8ff433a035929ce0279e0b6/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors", size: 15687142551, sha: "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6" },
-    Download { file: "models/vae/minimax_h3_audio_vae_fp32.safetensors", url: "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/e5eb578a89295337b8ff433a035929ce0279e0b6/vae/minimax_h3_audio_vae_fp32.safetensors", size: 605254808, sha: "8e505d95dd1561d47abd43d4238fd40d9bb1ae9e147ed0a4cba778d76ae4db48" },
-    Download { file: "models/vae/minimax_h3_video_vae_int8_convrot.safetensors", url: "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/e5eb578a89295337b8ff433a035929ce0279e0b6/vae/minimax_h3_video_vae_int8_convrot.safetensors", size: 2811065184, sha: "52a2c8c73583c86e4f41cdcce3a6ad0ea562987bc0bf3d60a0cef5f5c8e60c0e" },
-    Download { file: "models/loras/minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors", url: "https://huggingface.co/lightx2v/Minimax-h3-Turbo/resolve/a29e57d195f80ead07c89f89e55ecf2911e893c5/minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors", size: 1956193000, sha: "08cfe946033af7d27719b964b6e0a0e50c32138daabbd6ce4137e23df6bf9980" },
+    Download { file: "portable.7z", size: 2018444114, sha: "496afd18790ec685d99ebba2edf200d7371a29fbdd3a992bb0f4f52f244a6874" },
+    Download { file: "models/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors", size: 20970379616, sha: "e889202c41dafb67b10d67b97f0d8541508036a6090af23425a5c2615d03c47a" },
+    Download { file: "models/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors", size: 15687142551, sha: "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6" },
+    Download { file: "models/vae/minimax_h3_audio_vae_fp32.safetensors", size: 605254808, sha: "8e505d95dd1561d47abd43d4238fd40d9bb1ae9e147ed0a4cba778d76ae4db48" },
+    Download { file: "models/vae/minimax_h3_video_vae_int8_convrot.safetensors", size: 2811065184, sha: "52a2c8c73583c86e4f41cdcce3a6ad0ea562987bc0bf3d60a0cef5f5c8e60c0e" },
+    Download { file: "models/loras/minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors", size: 1956193000, sha: "08cfe946033af7d27719b964b6e0a0e50c32138daabbd6ce4137e23df6bf9980" },
 ];
+fn modelscope_url(item: &Download) -> Option<String> {
+    let path = item.file.strip_prefix("models/")?;
+    let (repo, revision, path) = match path {
+        "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors" => ("Comfy-Org/MiniMax-H3", "02d0e736e1112426c30683e0ed8fd7182a4e5d6d", path),
+        "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors" => ("Comfy-Org/MiniMax-H3", "160418ce87d04db418a33a0dbe904d5a2d774e3f", path),
+        "vae/minimax_h3_audio_vae_fp32.safetensors" => ("Comfy-Org/MiniMax-H3", "dcdcca14e93e72d8cba0b6312771cf0779e85cc1", path),
+        "vae/minimax_h3_video_vae_int8_convrot.safetensors" => ("Comfy-Org/MiniMax-H3", "28f23183b0ec49739a0c01184f04384e5470042e", path),
+        "loras/minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors" => ("lightx2v/Minimax-h3-Turbo", "b9591d0cd28b7e64106551ac3843dcfee07d7785", path.strip_prefix("loras/").unwrap()),
+        _ => return None,
+    };
+    Some(format!("https://modelscope.cn/models/{repo}/resolve/{revision}/{path}"))
+}
+fn modelscope_redirect_allowed(url: &reqwest::Url) -> bool {
+    url.scheme() == "https" && url.port().is_none() && url.username().is_empty() && url.password().is_none()
+        && url.host_str().is_some_and(|host| host == "modelscope.cn" || host.ends_with(".modelscope.cn"))
+}
+fn modelscope_client() -> AppResult<reqwest::Client> {
+    reqwest::Client::builder().no_proxy().https_only(true)
+        .user_agent(concat!("Bowerbird/", env!("CARGO_PKG_VERSION")))
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if attempt.previous().len() < 5 && modelscope_redirect_allowed(attempt.url()) { attempt.follow() }
+            else { attempt.stop() }
+        }))
+        .connect_timeout(Duration::from_secs(15)).read_timeout(Duration::from_secs(30))
+        .build().map_err(|_| err("无法初始化模型下载连接"))
+}
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Environment {
@@ -159,7 +185,35 @@ async fn hash(path: &Path, cancel: &AtomicBool) -> AppResult<String> {
     loop { cancelled(cancel)?; let read = file.read(&mut buf).await?; if read == 0 { break; } sha.update(&buf[..read]); }
     Ok(format!("{:x}", sha.finalize()))
 }
-async fn download(http: &reqwest::Client, item: &Download, root: &Path, cancel: &AtomicBool, done: u64) -> AppResult<()> {
+#[derive(serde::Deserialize)]
+struct DownloadGrant { url: String, file: String, size: u64, sha256: String }
+fn validate_grant(grant: DownloadGrant, item: &Download) -> AppResult<String> {
+    let url = reqwest::Url::parse(&grant.url).map_err(|_| err("下载授权地址无效"))?;
+    if url.scheme() != "https" || url.host_str() != Some("bowerbird.tos-cn-guangzhou.volces.com")
+        || url.port().is_some() || !url.username().is_empty() || url.password().is_some() || url.fragment().is_some()
+        || url.path() != format!("/comfyui/{VERSION}/{}", item.file)
+        || grant.file != item.file || grant.size != item.size || grant.sha256 != item.sha {
+        return Err(err("下载授权与固定安装资源不匹配，请更新客户端"));
+    }
+    Ok(grant.url)
+}
+async fn download_grant(app: &AppHandle, http: &reqwest::Client, item: &Download, owner: &str) -> AppResult<String> {
+    let auth = app.state::<AuthClient>();
+    let entitlement = app.state::<EntitlementService>();
+    if comfy_video::account(&auth, &entitlement).await? != owner { return Err(err("账号已切换，安装已停止")); }
+    let endpoint = crate::cloud::config::CloudConfig::official().account_endpoint("comfy-download").ok_or_else(|| err("下载授权服务未配置"))?;
+    let response = auth.send_authorized(http.post(endpoint).timeout(Duration::from_secs(30))
+        .json(&serde_json::json!({"version": VERSION, "file": item.file})), "获取安装下载授权失败").await?;
+    if !response.status().is_success() {
+        return Err(err(if response.status() == reqwest::StatusCode::FORBIDDEN { "下载需要有效的 Pro／Studio 权益或测试账号资格" }
+            else { "获取下载授权失败，请稍后重试" }));
+    }
+    let grant = response.json::<DownloadGrant>().await.map_err(|_| err("下载授权响应无效"))?;
+    if auth.snapshot().user_id.as_deref() != Some(owner) { return Err(err("账号已切换，安装已停止")); }
+    validate_grant(grant, item)
+}
+async fn download<F, Fut>(http: &reqwest::Client, item: &Download, root: &Path, cancel: &AtomicBool, done: u64, mut grant: F) -> AppResult<()>
+where F: FnMut() -> Fut, Fut: std::future::Future<Output = AppResult<String>> {
     cancelled(cancel)?;
     let target = root.join(item.file); let part = target.with_extension("part");
     tokio::fs::create_dir_all(target.parent().unwrap()).await?;
@@ -170,13 +224,28 @@ async fn download(http: &reqwest::Client, item: &Download, root: &Path, cancel: 
     }
     let mut offset = tokio::fs::metadata(&part).await.map(|m| m.len()).unwrap_or(0);
     if offset > item.size { return Err(err("断点文件大小异常，请更换安装位置")); }
-    if offset < item.size {
-        let mut request = http.get(item.url);
+    let mut attempts = 0;
+    while offset < item.size {
+        cancelled(cancel)?;
+        if attempts >= 4 { return Err(err("下载暂时中断，已保留进度，点击重试可继续")); }
+        if attempts > 0 {
+            progress(format!("正在恢复{}下载…", label(item)), done + offset);
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_secs(attempts)) => {},
+                _ = wait_cancel(cancel) => return cancelled(cancel),
+            }
+        }
+        attempts += 1;
+        let url = tokio::select! { value = grant() => value?, _ = wait_cancel(cancel) => return cancelled(cancel) };
+        // TOS grants are refreshed for each connection; ModelScope resolves its pinned revision again.
+        // Never put account credentials on resource requests or include signed URLs in errors/logs.
+        let mut request = http.get(url);
         if offset > 0 { request = request.header(reqwest::header::RANGE, format!("bytes={offset}-")); }
         let mut response = tokio::select! {
-            result = request.send() => result.map_err(|e| err(format!("下载连接失败，可重试：{e}")))?,
+            result = request.send() => match result { Ok(response) => response, Err(_) => continue },
             _ = wait_cancel(cancel) => return cancelled(cancel),
         };
+        if matches!(response.status().as_u16(), 401 | 403 | 408 | 429 | 500..=599) { continue; }
         if response.status() == reqwest::StatusCode::PARTIAL_CONTENT {
             let expected = format!("bytes {offset}-{}/{}", item.size - 1, item.size);
             if response.headers().get(reqwest::header::CONTENT_RANGE).and_then(|h| h.to_str().ok()) != Some(expected.as_str()) { return Err(err("下载服务器返回了错误的断点范围")); }
@@ -185,7 +254,7 @@ async fn download(http: &reqwest::Client, item: &Download, root: &Path, cancel: 
         let mut file = tokio::fs::OpenOptions::new().create(true).write(true).truncate(offset == 0).append(offset > 0).open(&part).await?;
         loop {
             let chunk = tokio::select! {
-                result = response.chunk() => result.map_err(|e| err(format!("下载中断，可继续：{e}")))?,
+                result = response.chunk() => match result { Ok(chunk) => chunk, Err(_) => break },
                 _ = wait_cancel(cancel) => { file.sync_all().await?; return cancelled(cancel); },
             };
             let Some(chunk) = chunk else { break; };
@@ -201,7 +270,33 @@ async fn download(http: &reqwest::Client, item: &Download, root: &Path, cancel: 
     tokio::fs::rename(part, target).await?;
     Ok(())
 }
+async fn download_resource<F, Fut>(http: &reqwest::Client, mirror: Option<(&reqwest::Client, &str)>, item: &Download, root: &Path, cancel: &AtomicBool, done: u64, grant: F) -> AppResult<()>
+where F: FnMut() -> Fut, Fut: std::future::Future<Output = AppResult<String>> {
+    // Reuse verified files without contacting either source. Both sources share the same hash and .part.
+    if !root.join(item.file).is_file() {
+        if let Some((mirror_http, url)) = mirror {
+            if download(mirror_http, item, root, cancel, done, || std::future::ready(Ok(url.to_owned()))).await.is_ok() { return Ok(()); }
+            cancelled(cancel)?;
+            progress(format!("正在切换备用下载源：{}…", label(item)), done);
+        }
+    }
+    download(http, item, root, cancel, done, grant).await
+}
 async fn wait_cancel(cancel: &AtomicBool) { while !cancel.load(Ordering::Relaxed) { tokio::time::sleep(Duration::from_millis(200)).await; } }
+async fn write_licenses(root: &Path) -> AppResult<()> {
+    let directory = root.join("licenses");
+    tokio::fs::create_dir_all(&directory).await?;
+    for (name, content) in [
+        ("MiniMax-H3-LICENSE.txt", include_str!("../../../src/assets/comfy-licenses/MiniMax-H3-LICENSE.txt")),
+        ("NOTICE.txt", include_str!("../../../src/assets/comfy-licenses/NOTICE.txt")),
+        ("Qwen3-VL-LICENSE.txt", include_str!("../../../src/assets/comfy-licenses/Qwen3-VL-LICENSE.txt")),
+        ("ComfyUI-v0.42.1-LICENSE.txt", include_str!("../../../src/assets/comfy-licenses/ComfyUI-v0.42.1-LICENSE.txt")),
+        ("Comfy-Org-MiniMax-H3-README.md", include_str!("../../../src/assets/comfy-licenses/Comfy-Org-MiniMax-H3-README.md")),
+        ("LightX2V-README.md", include_str!("../../../src/assets/comfy-licenses/LightX2V-README.md")),
+        ("sources.json", include_str!("../../../src/assets/comfy-licenses/sources.json")),
+    ] { tokio::fs::write(directory.join(name), content).await?; }
+    Ok(())
+}
 async fn install(app: &AppHandle, root: &Path, cancel: &AtomicBool, owner: &str) -> AppResult<()> {
     prerequisites().map_err(err)?;
     let state = plan(root);
@@ -219,9 +314,18 @@ async fn install(app: &AppHandle, root: &Path, cancel: &AtomicBool, owner: &str)
         Ok(())
     };
     if !state.installed {
-        let http = reqwest::Client::builder().https_only(true).connect_timeout(Duration::from_secs(30)).read_timeout(Duration::from_secs(60)).build().map_err(|e| err(e.to_string()))?;
+        let http = reqwest::Client::builder().no_proxy().https_only(true).redirect(reqwest::redirect::Policy::none()).connect_timeout(Duration::from_secs(30)).read_timeout(Duration::from_secs(60)).build().map_err(|e| err(e.to_string()))?;
+        // Separate unauthenticated client: only ModelScope downloads may follow its CDN redirects.
+        let mirror_http = modelscope_client()?;
         let mut done = 0;
-        for item in DOWNLOADS { check_owner()?; download(&http, item, root, cancel, done).await?; done += item.size; }
+        write_licenses(root).await?;
+        for item in DOWNLOADS {
+            check_owner()?;
+            if comfy_video::account(&app.state::<AuthClient>(), &app.state::<EntitlementService>()).await? != owner { return Err(err("账号已切换，安装已停止")); }
+            let mirror_url = modelscope_url(item);
+            download_resource(&http, mirror_url.as_deref().map(|url| (&mirror_http, url)), item, root, cancel, done, || download_grant(app, &http, item, owner)).await?;
+            done += item.size;
+        }
         check_owner()?; progress("正在解压 ComfyUI 与 Python 环境…".into(), done);
         let mut child = command("tar.exe").arg("-xf").arg(root.join("portable.7z")).arg("-C").arg(root).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn()?;
         loop {
@@ -427,10 +531,14 @@ mod tests {
         for item in DOWNLOADS {
             assert_eq!(item.sha.len(), 64);
             assert!(item.sha.chars().all(|c| c.is_ascii_hexdigit()));
-            assert!(item.url.starts_with("https://"));
+            let cloud: serde_json::Value = serde_json::from_str(include_str!("../../../../cloud/supabase/functions/_shared/comfy-download-manifest.json")).unwrap();
+            assert_eq!(cloud["version"], VERSION);
+            assert_eq!(cloud["files"].as_array().unwrap().len(), DOWNLOADS.len());
+            let remote = cloud["files"].as_array().unwrap().iter().find(|f| f["file"] == item.file).unwrap();
+            assert_eq!(remote["size"], item.size); assert_eq!(remote["sha256"], item.sha);
             assert!(!Path::new(item.file).is_absolute());
         }
-        assert!(DOWNLOADS[5].url.contains("768p"));
+        assert!(DOWNLOADS[5].file.contains("768p"));
         assert_eq!(DOWNLOADS[5].sha, "08cfe946033af7d27719b964b6e0a0e50c32138daabbd6ce4137e23df6bf9980");
     }
     #[tokio::test]
@@ -472,25 +580,147 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let task = tokio::spawn(async move { axum::serve(listener, server).await.unwrap() });
         let sha = format!("{:x}", Sha256::digest(b"abcdef"));
-        let item = |route: &str| Download { file:"model.bin", url:Box::leak(format!("http://{address}/{route}").into_boxed_str()), size:6, sha:Box::leak(sha.clone().into_boxed_str()) };
+        let item = Download { file:"model.bin", size:6, sha:Box::leak(sha.clone().into_boxed_str()) };
+        let url = |route: &str| { let url = format!("http://{address}/{route}"); move || std::future::ready(Ok(url.clone())) };
         let http = reqwest::Client::builder().no_proxy().build().unwrap();
         let cancel = AtomicBool::new(false);
         for route in ["resume", "whole"] {
             let root = scratch(); std::fs::write(root.join("model.part"), b"abc").unwrap();
-            download(&http, &item(route), &root, &cancel, 0).await.unwrap();
+            download(&http, &item, &root, &cancel, 0, url(route)).await.unwrap();
             assert_eq!(std::fs::read(root.join("model.bin")).unwrap(), b"abcdef");
             // A complete verified file must be reused, without another HTTP request.
-            download(&http, &item("not-found"), &root, &cancel, 0).await.unwrap();
+            download(&http, &item, &root, &cancel, 0, url("not-found")).await.unwrap();
         }
         let root = scratch(); std::fs::write(root.join("model.part"), b"abc").unwrap();
-        assert!(download(&http, &item("wrong-range"), &root, &cancel, 0).await.is_err());
+        assert!(download(&http, &item, &root, &cancel, 0, url("wrong-range")).await.is_err());
         assert_eq!(std::fs::read(root.join("model.part")).unwrap(), b"abc");
         let root = scratch();
-        assert!(download(&http, &item("corrupt"), &root, &cancel, 0).await.is_err());
+        assert!(download(&http, &item, &root, &cancel, 0, url("corrupt")).await.is_err());
         assert!(!root.join("model.bin").exists()); assert!(!root.join("model.part").exists());
         cancel.store(true, Ordering::Relaxed);
-        assert!(download(&http, &item("whole"), &root, &cancel, 0).await.is_err());
+        assert!(download(&http, &item, &root, &cancel, 0, url("whole")).await.is_err());
         assert!(!root.join("model.part").exists());
+        task.abort();
+    }
+    #[test]
+    fn h3_setup_grant_is_bound_to_exact_tos_object_and_pinned_hash() {
+        let item = &DOWNLOADS[0];
+        let make = |url: String| DownloadGrant { url, file:item.file.into(), size:item.size, sha256:item.sha.into() };
+        let good = format!("https://bowerbird.tos-cn-guangzhou.volces.com/comfyui/{VERSION}/portable.7z?X-Tos-Signature=test");
+        assert!(validate_grant(make(good.clone()), item).is_ok());
+        for bad in [good.replace("https:", "http:"), good.replace("bowerbird.tos-cn-guangzhou.volces.com", "evil.example"), good.replace("portable.7z", "other.7z"), format!("{good}#fragment")] {
+            assert!(validate_grant(make(bad), item).is_err());
+        }
+        let mut wrong = make(good); wrong.sha256 = "0".repeat(64);
+        assert!(validate_grant(wrong, item).is_err());
+    }
+    #[test]
+    fn h3_setup_modelscope_sources_and_redirects_are_pinned() {
+        assert!(modelscope_url(&DOWNLOADS[0]).is_none());
+        for item in &DOWNLOADS[1..] {
+            let url = reqwest::Url::parse(&modelscope_url(item).unwrap()).unwrap();
+            assert_eq!(url.host_str(), Some("modelscope.cn"));
+            assert!(url.path().ends_with(item.file.rsplit('/').next().unwrap()));
+            let revision = url.path().split("/resolve/").nth(1).unwrap().split('/').next().unwrap();
+            assert_eq!(revision.len(), 40); assert!(revision.chars().all(|c| c.is_ascii_hexdigit()));
+            assert!(modelscope_redirect_allowed(&url));
+        }
+        assert!(modelscope_redirect_allowed(&reqwest::Url::parse("https://cdn-lfs-cn-1.modelscope.cn/file?signature=test").unwrap()));
+        for bad in ["http://modelscope.cn/file", "https://modelscope.cn.evil.example/file", "https://evilmodelscope.cn/file", "https://127.0.0.1/file", "https://modelscope.cn:8443/file", "https://user:pass@modelscope.cn/file"] {
+            assert!(!modelscope_redirect_allowed(&reqwest::Url::parse(bad).unwrap()));
+        }
+    }
+    #[tokio::test]
+    #[ignore = "Read-only ModelScope check: downloads 1 KiB per model, no installation or generation"]
+    async fn h3_setup_modelscope_pinned_downloads_read_only() {
+        let http = modelscope_client().unwrap();
+        for item in &DOWNLOADS[1..] {
+            let url = modelscope_url(item).unwrap();
+            let mut response = http.get(url).header(reqwest::header::RANGE, "bytes=0-1023").send().await.unwrap();
+            assert_eq!(response.status(), reqwest::StatusCode::PARTIAL_CONTENT, "{}", item.file);
+            assert_eq!(response.headers().get(reqwest::header::CONTENT_RANGE).unwrap().to_str().unwrap(), format!("bytes 0-1023/{}", item.size));
+            assert!(modelscope_redirect_allowed(response.url()));
+            let mut bytes = 0;
+            while let Some(chunk) = response.chunk().await.unwrap() { bytes += chunk.len(); assert!(bytes <= 1024); }
+            assert_eq!(bytes, 1024);
+        }
+    }
+    #[tokio::test]
+    async fn h3_setup_modelscope_preferred_fallback_resume_hash_and_cancel() {
+        let server = Router::new()
+            .route("/mirror", get(|headers: HeaderMap| async move {
+                assert!(headers.get("authorization").is_none()); "abcdef"
+            }))
+            .route("/corrupt", get(|| async { "broken" }))
+            .route("/partial", get(|headers: HeaderMap| async move {
+                if headers.get("range").is_some() { StatusCode::NOT_FOUND.into_response() }
+                else { "abc".into_response() }
+            }))
+            .route("/tos", get(|headers: HeaderMap| async move {
+                assert!(headers.get("authorization").is_none());
+                if let Some(range) = headers.get("range") {
+                    assert_eq!(range, "bytes=3-");
+                    (StatusCode::PARTIAL_CONTENT, [("content-range", "bytes 3-5/6")], "def").into_response()
+                } else { "abcdef".into_response() }
+            }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move { axum::serve(listener, server).await.unwrap() });
+        let http = reqwest::Client::builder().no_proxy().build().unwrap();
+        let item = Download { file:"model.bin", size:6, sha:"bef57ec7f53a6d40beb640a780a639c83bc29ac8a9816f1fc6c5c6dcd93c4721" };
+        for route in ["mirror", "missing", "partial", "corrupt"] {
+            let root = scratch(); let cancel = AtomicBool::new(false); let mut grants = 0;
+            let mirror = format!("http://{address}/{route}");
+            download_resource(&http, Some((&http, &mirror)), &item, &root, &cancel, 0, || {
+                grants += 1; std::future::ready(Ok(format!("http://{address}/tos")))
+            }).await.unwrap();
+            assert_eq!(grants, if route == "mirror" { 0 } else { 1 });
+            assert_eq!(std::fs::read(root.join(item.file)).unwrap(), b"abcdef");
+            download_resource(&http, Some((&http, &mirror)), &item, &root, &cancel, 0, || {
+                panic!("verified file must not request TOS authorization");
+                #[allow(unreachable_code)] std::future::ready(Err(err("unexpected grant")))
+            }).await.unwrap();
+        }
+        let root = scratch(); let cancel = AtomicBool::new(true); let mut grants = 0;
+        let mirror = format!("http://{address}/missing");
+        assert!(download_resource(&http, Some((&http, &mirror)), &item, &root, &cancel, 0, || {
+            grants += 1; std::future::ready(Ok(format!("http://{address}/tos")))
+        }).await.is_err());
+        assert_eq!(grants, 0); assert!(!root.join("model.part").exists());
+        // Portable has no mirror, and TOS authorization errors must not be bypassed.
+        let cancel = AtomicBool::new(false);
+        let error = download_resource(&http, None, &item, &root, &cancel, 0, || {
+            std::future::ready(Err(err("download denied")))
+        }).await.unwrap_err();
+        assert!(error.to_string().contains("download denied"));
+        task.abort();
+    }
+    #[tokio::test]
+    async fn h3_setup_refreshes_expired_grants_and_resumes_partial_streams() {
+        let server = Router::new()
+            .route("/expired", get(|| async { StatusCode::FORBIDDEN }))
+            .route("/partial", get(|| async { "abc" }))
+            .route("/resume", get(|headers: HeaderMap| async move {
+                assert!(headers.get("authorization").is_none());
+                assert_eq!(headers.get("range").unwrap(), "bytes=3-");
+                (StatusCode::PARTIAL_CONTENT, [("content-range", "bytes 3-5/6")], "def")
+            }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move { axum::serve(listener, server).await.unwrap() });
+        let http = reqwest::Client::builder().no_proxy().build().unwrap();
+        let item = Download { file:"model.bin", size:6, sha:"bef57ec7f53a6d40beb640a780a639c83bc29ac8a9816f1fc6c5c6dcd93c4721" };
+        for first in ["expired", "partial"] {
+            let root = scratch(); let cancel = AtomicBool::new(false); let mut grants = 0;
+            if first == "expired" { std::fs::write(root.join("model.part"), b"abc").unwrap(); }
+            download(&http, &item, &root, &cancel, 0, || {
+                grants += 1;
+                std::future::ready(Ok(format!("http://{address}/{}", if grants == 1 { first } else { "resume" })))
+            }).await.unwrap();
+            assert_eq!(grants, 2); assert_eq!(std::fs::read(root.join("model.bin")).unwrap(), b"abcdef");
+            write_licenses(&root).await.unwrap();
+            assert!(std::fs::read_to_string(root.join("licenses/NOTICE.txt")).unwrap().contains("MiniMax H3 Community License"));
+        }
         task.abort();
     }
     #[test]

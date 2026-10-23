@@ -432,6 +432,9 @@ html[data-theme="light"] [role="button"]:focus-visible {
   border-right: 1px solid var(--bb-line-strong);
 }
 
+.app-topbar-credits { display: flex; align-items: center; gap: 6px; flex-shrink: 0; height: 36px; padding: 0 8px; color: var(--bb-blue); font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.app-topbar-credits svg { flex-shrink: 0; }
+
 .library-view-control { display: flex; flex-direction: column; gap: 3px; }
 .library-view-control > span { color: var(--bb-muted); font-size: 10px; padding-left: 3px; }
 .library-view-segments { display: flex; padding: 2px; border: 1px solid var(--bb-line); border-radius: 7px; background: rgb(var(--bb-ink-rgb) / 3%); }
@@ -4163,6 +4166,20 @@ html[data-theme="light"] .app-form-input:focus {
 
 .canvas-node.is-moving { cursor: grabbing; }
 
+/* Filters emphasize media without removing nodes or changing saved geometry. */
+.canvas-stage [data-canvas-filter] {
+  transition: opacity 200ms ease, filter 140ms ease, border-color 120ms ease, box-shadow 120ms ease;
+}
+.canvas-stage [data-canvas-filter="dim"] { opacity: 0.2; }
+.canvas-stage [data-canvas-filter="match"] { animation: canvas-filter-lift 420ms cubic-bezier(.2,.7,.3,1); }
+@keyframes canvas-filter-lift {
+  0%, 100% { translate: 0 0; }
+  40% { translate: 0 -6px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .canvas-stage [data-canvas-filter] { transition: none; animation: none; }
+}
+
 .canvas-node.is-asset { cursor: zoom-in; background: transparent; }
 .canvas-node.is-folder { cursor: pointer; }
 .canvas-stage.is-creation-mode .canvas-node.is-asset { cursor: copy; }
@@ -4251,41 +4268,30 @@ html[data-theme="light"] .app-form-input:focus {
 .canvas-node.is-asset > img { background: transparent; }
 .canvas-node-name { background: var(--bb-surface-card); }
 
-/* Film perforations identify passive video cards without changing their geometry. */
-.canvas-node.is-asset.is-video,
-.canvas-node.is-asset.is-video:hover,
-.canvas-node.is-asset.is-video:focus-visible {
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-}
-
-.canvas-node.is-asset.is-video:focus-visible { outline: 2px solid var(--bb-blue); outline-offset: 3px; }
-
-.canvas-node.is-asset.is-video .canvas-node-name {
-  background: transparent;
-}
-
-.canvas-video-film {
+/* Video assets share the image card frame, with a blue corner flag for identification. */
+.canvas-video-badge {
   position: absolute;
-  inset: 0;
+  right: 0;
+  bottom: 0;
+  width: 48px;
+  height: 48px;
+  clip-path: polygon(100% 0, 100% 100%, 0 100%);
+  background: var(--bb-blue);
+  color: white;
   pointer-events: none;
 }
-
-.canvas-video-film::before,
-.canvas-video-film::after {
+.canvas-video-badge::before {
   content: "";
   position: absolute;
-  left: 0;
-  right: 0;
-  height: 14px;
-  background: #22211f url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='14'%3E%3Crect x='5' y='4' width='10' height='6' rx='1.5' fill='%23e5e0d4'/%3E%3C/svg%3E") repeat-x center;
+  right: 8px;
+  bottom: 8px;
+  width: 0;
+  height: 0;
+  border-top: 6px solid transparent;
+  border-bottom: 6px solid transparent;
+  border-left: 9px solid currentColor;
 }
-
-.canvas-video-film::before { top: 0; }
-.canvas-video-film::after { bottom: 0; }
-.canvas-node.is-asset:not(.is-name-hidden) > .canvas-video-film { bottom: 30px; }
+.canvas-node.is-asset:not(.is-name-hidden) > .canvas-video-badge { bottom:30px; }
 
 .canvas-folder-grid > video,
 .canvas-folder-asset:has(> video) {

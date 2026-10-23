@@ -3,6 +3,12 @@
 > 目标：把 `apps/cloud/` 的 Supabase 迁移 + Edge Functions 推上云端，完成 Auth/积分/算力的真实联调。
 > 前提：你已在 Supabase 控制台拿到 Project URL / publishable key / secret key，并已在 `apps/cloud/.env` 填好方舟 key 与 endpoint id。
 
+## 2026-10-22 后台用户管理已发布
+
+仅定向应用 **0069**（0068 保持未应用），`code-admin` **v4** 已上线、JWT 开启，其他 Edge 保持。官网 `/admin/` 新增用户列表／搜索／测试账号筛选及资格授予／取消，复用服务端管理员标记并原子留审计。现役官网目录 `/opt/bowerbird/website-releases/20261022-user-admin`，基于并保留 `20261022-windows-26.10.2203`；仅更新 admin 三文件，账号网关、下载配置和更新通道未改。
+
+真实临时账号 API、浏览器操作、权益刷新、幂等审计、越权／撤权、会员积分不变通过；临时账号已清理，审计保留。证据 `.tmp/user-admin-20261022/`；上线与回滚细节见 [用户管理](PRO-REDEMPTION.md#用户管理2026-10-22已上线)。旧 Edge 位于证据目录 `rollback/`；官网回滚切回 2203 并重启服务。未变官网文件使用硬链接克隆，后续修改须替换 inode，禁止原地写共享文件。未部署 Worker、桌面或 GPT 模型。
+
 ## 2026-10-22 分类 v6 与 Windows 26.10.2202 已发布
 
 jev-proxy v6 已上线并下载核对全部依赖源码；matching_version=8 为 42%，无字段的旧客户端保留 30%，未知版本调用前拒绝。Windows 26.10.2202 包含 SQLite 0043/0044 与新版请求字段。13 项 Deno（含真实 handler 的新旧分流）、Rust 最终 652/0/21 和 14 组界面通过；线上未登录请求返回 401，未调用真实模型。原 0067 及五图计费保持，没有迁移或 Worker 部署，0068/GPT 保持未开放。旧 v5 源码备份及发布报告在 .tmp/release-windows-26.10.2202/cloud/；v5 不支持新门槛，新桌面仍在线时不直接回退。
@@ -254,6 +260,32 @@ supabase functions deploy wechat-login --no-verify-jwt   # §4 的 secrets（H5 
 2. `wechat-callback.html` 随官网 `dist/` 一起部署（`WECHAT_REDIRECT_URI=https://bowerbird.cn/wechat-callback.html`）；与官网同源，nginx/官网 server.mjs 无需任何改动。
 3. `ALLOWED_ORIGINS` 必须包含 `https://bowerbird.cn`（官网浏览器直调该函数走 CORS）。
 4. Supabase Dashboard 无需改动：微信链路不经过 GoTrue redirect/邮件模板，会话由 service role 经 `generateLink`+`verify` 直接签发。
+
+### 5.5 桌面账号官网网关（2026-10-22）
+
+桌面账号传输入口为 `https://bowerbird.cn/api/account`。实现位于 `website/account-proxy.mjs`，由 `website/server.mjs` 挂载；桌面 `CloudConfig.account_api_url` 在官方构建中固定配置，测试配置为空时才使用测试 Supabase 地址。微信 GET/POST、邮件 OTP、PKCE/refresh token 交换、签名权益和兑换走此入口；生成、理解、分类及 Storage 仍使用各自现有 Cloud 路径。本次不改 Edge Function、SQL、计费或密钥。
+
+- 严格开放上述方法和路径；邮箱验证仅 GET `/auth/v1/verify`，token grant 仅 `pkce` / `refresh_token`。上游从服务器公开配置读取，函数区域固定 `ap-northeast-1`，不接受客户端目标地址。官网仍只配置 publishable/anon key，不放 service role；权益和兑换原样转发用户 Bearer，由 Supabase 校验。
+- 输入 64 KiB、输出 1 MiB，上游 20 秒超时；不跟随上游重定向、不自动重发授权码或刷新令牌、不转发 cookie。邮件验证只允许桌面 `bowerbird://auth/callback`、官网同源，以及原有开发 Site URL `http://localhost:3000`。返回的 state/code 保持完整，登录客户端继续执行 pending state / PKCE 校验。
+- Nginx `/api/account/` 禁止 access/error 请求日志、缓存和 Referer 泄漏，限制上传及等待时间；Node 不记录请求正文、查询参数、用户令牌。网关错误只输出固定文案与错误码，桌面仍使用 `accountErrorMessage`。有效业务 JSON 字节保持，客户端继续使用原公钥验签权益。
+- 按 IP 限制账号 120 次/分钟、邮件 5 次/10 分钟，最多 10,000 个内存桶；仅在 loopback 且显式信任代理时使用 Nginx 覆写的 `X-Real-IP`。Supabase 自身限流仍生效；不使用需要 secret key 的 `Sb-Forwarded-For`，故 Auth 上游也可能按 VPS 出口聚合限流。扩容时应单独评估，不能靠放宽鉴权解决。
+- Supabase 的 magic link / confirmation 两个模板，仅将原 `ConfirmationURL` 链接改成官网 verify 路径，保留 `TokenHash`，type 分别 `magiclink` / `signup`，`RedirectTo` 经 Go 模板 `urlquery` 编码。原 Site URL、回调白名单保持；已发送的旧邮件仍是旧入口。管理 API 同时将 `mailer_templates_custom_contents` 中对应的自定义模板状态置 true；应核对内容和此派生状态，而不是忽略所有额外字段变化。
+
+首轮网关发布目录 `/opt/bowerbird/website-releases/20261022-account-gateway`，此前目录 `20261022-windows-26.10.2202` 保留。`account-proxy.mjs` SHA-256 `1e0bcd8680bcc19d5d45e6efe7de02af248503772228496e01e078641e1cf49a`。服务器 `/tmp/bowerbird-account-gateway-20261022/` 保存部署/回滚脚本及 Nginx 原配置；本机 `.tmp/account-gateway-20261022/` 保存原邮箱模板、只读回查与链路报告。回滚模板须先逐字核对现值仍为本次内容，再只恢复这两个模板；最后回滚网关，避免已发新邮件失效。后续桌面发布会继承网关，不能只回退目录而遗忘仍在使用新路径的客户端。
+
+验证：Node 网关 10 项和官网更新入口回归、Rust Cloud 44 项、TypeScript；候选/现役/公网二维码 HTTP 200、无效刷新 400、匿名权益 401、邮件验证 303；实际 Rust CloudClient 四项网关对照通过。独立临时账号经真实邮件验证（admin generateLink，不发邮件）、刷新和权益查询通过，Ed25519 验签成功，无效兑换被拒绝，账号已删除。真实 PKCE 邮件投递及另一台电脑的微信扫码完整回跳尚待实机确认，不能用这些测试声称原机已登录成功。
+
+部署时曾因完整复制下载目录耗尽磁盘；已对本轮目录与上一版相同的 38 个不可变包逐字节核对，再原子共享硬链接，释放 1,149,724,089 bytes，所有下载路径保留。后续发布只对不可变安装包共享链接，配置、首页、更新 JSON 必须独立复制，避免修改现役或回滚清单。
+
+### 5.6 ComfyUI TOS 安装授权（2026-10-23）
+
+新增 `comfy-download` v1：平台 `verify_jwt=true`，函数再通过 `requireUser` 验证身份，实时读取订阅并允许有效 Pro／Studio 或 `app_metadata.bowerbird_test=true`。仅为 `_shared/comfy-download-manifest.json` 的六个固定资源签发 1 小时 GET URL，不接收自定义桶/主机/路径、不扣积分、不转发大文件。签名与原生清单交叉检查及官方 SDK 向量验证见 [本机 H3](../../dev-doc/COMFYUI-LOCAL-VIDEO.md#tos-安装下载接入2026-10-23服务已上线客户端待发布)。
+
+Secrets 仅新增 `COMFY_TOS_ACCESS_KEY_ID`、`COMFY_TOS_SECRET_ACCESS_KEY`，从用户填写的根 `.env.tos` 安全导入，临时 env 文件已删除；不放进网页或桌面。Supabase Secrets 更新使既有 15 个函数版本号各加 1，原代码包 SHA/JWT 配置逐一相同，无其他函数源码、数据库迁移、价格或 Worker 部署。
+
+官网 `/api/account/functions/v1/comfy-download` 仅 POST，经现有无日志、no-store、限流网关；10:16:15（北京时间）现役 `/opt/bowerbird/website-releases/20261023-comfy-tos`，前版 `/opt/bowerbird/website-releases/20261023-tos-distribution` 保留。唯一文件差异 `account-proxy.mjs`，SHA-256 `363bdde73b028bcaf90cb31dfb0af756abeab7955c61cf0b87f3eb2bd875a53e`；回滚时原子恢复前版 symlink 并重启 `bowerbird-website.service`，必要时另移除本次新函数及其专用 Secrets。不要还原其他函数或改桶 ACL。
+
+代码、候选/现役/公网拒绝未授权、三平台更新保持、账号网关及 6 个对象真实签名 Range/匿名/过期拒绝已验证。自动审批阻止了临时生产账号写入验收，因此没有声称线上真实 Pro 登录至下载的完整链路通过；全新安装/GPU 和新客户端发布仍待完成。证据本机 `.tmp/tos-migration/comfy-*` 及 VPS `/tmp/bowerbird-comfy-tos/`。当前公开桌面包仍使用旧安装器，须发布包含新原生代码的版本。
 
 ## 6. 验证
 

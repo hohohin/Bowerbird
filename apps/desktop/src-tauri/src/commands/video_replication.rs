@@ -1,5 +1,7 @@
 //! Local replication history; model work belongs to the existing Cloud understand queue.
 mod douyin;
+mod cases;
+mod poster;
 use crate::{
     cloud::{AuthClient, CloudClient},
     core::paths::LibraryPaths,
@@ -380,6 +382,7 @@ pub async fn video_replication(
         "save-preferences",
         "sources",
         "douyin-list",
+        "case-list",
     ]
     .contains(&action.as_str())
     {
@@ -397,6 +400,9 @@ pub async fn video_replication(
         return douyin::handle(&app, &root, &project_id, &action, data).await;
     }
     match action.as_str() {
+        "case-list" => cases::list(&root, &project_id),
+        "case-save" => cases::update(&root, &project_id, &data),
+        "reference-poster" => poster::load(root, field(&data, "id").to_owned(), project_id).await,
         "capabilities" => {
             cloud_request(
                 app.state::<CloudClient>().inner(),
@@ -411,7 +417,7 @@ pub async fn video_replication(
                 let entry = entry?;
                 if let Some(id) = entry.file_name().to_str() {
                     if let Ok(value) = own(&root, id, &project_id) {
-                        if value["kind"] != "reference" && value["kind"] != "douyin" {
+                        if value["kind"] != "reference" && value["kind"] != "douyin" && value["kind"] != "case" {
                             records.push(public(generation_view(&db, value)?));
                         }
                     }
@@ -501,6 +507,7 @@ pub async fn video_replication(
             let mut task = json!({});
             for key in [
                 "operation",
+                "caseId",
                 "title",
                 "referenceId",
                 "sourceAnalysisId",
@@ -553,6 +560,13 @@ pub async fn video_replication(
                 let (reference, _) =
                     verified_reference(&root, field(&data, "referenceId"), &project_id)?;
                 task["reference"] = public(reference);
+            }
+            if let Some(id) = data["caseId"].as_str() {
+                let parent = cases::require(&root, id, &project_id)?;
+                if field(&parent,"referenceId").is_empty() || parent["referenceId"] != data["referenceId"] {
+                    return Err(error("请先获取本任务的参考视频"));
+                }
+                verified_reference(&root, field(&parent,"referenceId"), &project_id)?;
             }
             if operation == "rewrite" {
                 bounded(&data, "inputText", 50000)?;

@@ -12,10 +12,12 @@ import { VideoReplicationDialog } from "./VideoReplicationDialog";
 import { CanvasWorkflowLayer, WindingKey, type WorkflowLayerHandle, type WorkflowGeometry, type MaterialAnchor } from "./CanvasWorkflowLayer";
 import { canvasConversationCards } from "../lib/canvasConversationCards";
 import { CanvasConversationImages } from "./CanvasConversationImages";
+import { canvasMaterialFilterState, type CanvasMaterialFilterState } from "../lib/canvasMaterialFilter";
 import { containedSessionOutputIds, hiddenWorkflowSessionIds, resolveGenerationCells, canvasSessionImages } from "../lib/canvasSessionOutputs";
 import { canvasWorkflowController } from "../lib/canvasWorkflowRuntime";
 import { restoreWorkflowEdit, workflowEditUndo, type WorkflowEditUndo } from "../lib/workflowUndo";
-import { WORKFLOW_CARD_DRAG_TYPE, newWorkflowNode, workflowNodeRun, type WorkflowInput, type WorkflowKind, type WorkflowNode } from "../lib/canvasWorkflow";
+import { WORKFLOW_CARD_DRAG_TYPE, workflowNodeRun, type WorkflowInput, type WorkflowKind } from "../lib/canvasWorkflow";
+import { replicationWorkflow } from "../lib/replicationWorkflow";
 import { captureCanvasClipboard, cloneCanvasClipboard, parseCanvasClipboard, serializeCanvasClipboard, type CanvasClipboard } from "../lib/canvasClipboard";
 import { CanvasResizeHandle } from "./CanvasResizeHandle";
 import { CanvasLibraryResize } from "./CanvasLibraryResize";
@@ -352,8 +354,10 @@ function agentGroupSummary(node: ProjectGraphNode) {
 function FolderPreview({
   node,
   onAssetContextMenu,
+  filterState,
 }: {
   node: CanvasFolderNode;
+  filterState: (asset: CanvasAssetSnapshot) => CanvasMaterialFilterState;
   onAssetContextMenu: (event: React.MouseEvent<HTMLElement>, asset: CanvasAssetSnapshot) => void;
 }) {
   const layerWorkspaceIds = useStore((state) => state.layerWorkspaceIds);
@@ -361,8 +365,8 @@ function FolderPreview({
     <div className="canvas-folder-grid" aria-hidden="true">
       {node.assets.slice(0, 4).map((asset) => {
         const path = canvasAssetMediaPath(asset);
-        return isVideoPath(asset.storePath) ? <VideoPoster key={asset.id} path={asset.storePath} poster={asset.thumbPath} alt={asset.name} onContextMenu={event => onAssetContextMenu(event, asset)} /> : path ? (
-          <div key={asset.id} className="relative min-h-0" onContextMenu={(event) => onAssetContextMenu(event, asset)}>
+        return isVideoPath(asset.storePath) ? <VideoPoster key={asset.id} data-canvas-filter={filterState(asset)} path={asset.storePath} poster={asset.thumbPath} alt={asset.name} onContextMenu={event => onAssetContextMenu(event, asset)} /> : path ? (
+          <div key={asset.id} data-canvas-filter={filterState(asset)} className="relative min-h-0" onContextMenu={(event) => onAssetContextMenu(event, asset)}>
             <img
               src={convertFileSrc(path)}
               alt=""
@@ -372,7 +376,7 @@ function FolderPreview({
             {asset.assetId && layerWorkspaceIds.has(asset.assetId) && <span className="pointer-events-none absolute left-1 top-1 z-10 rounded-full bg-black/70 px-1.5 py-1 text-white backdrop-blur" title="有分层工程" aria-label="有分层工程"><Layers size={12} /></span>}
           </div>
         ) : (
-          <span key={asset.id} onContextMenu={(event) => onAssetContextMenu(event, asset)}>
+          <span key={asset.id} data-canvas-filter={filterState(asset)} onContextMenu={(event) => onAssetContextMenu(event, asset)}>
             {asset.name.slice(0, 1)}
           </span>
         );
@@ -405,6 +409,8 @@ export function CanvasWorkspace({
   onExit?: () => void;
 }) {
   const assets = useStore((state) => state.assets);
+  const smartFilter = useStore((state) => state.smartFilter);
+  const mediaFilter = useStore((state) => state.mediaFilter);
   const promptedAssets = useStore((state) => state.promptedAssets);
   const captionedIds = useStore((state) => state.captionedIds);
   const layerWorkspaceIds = useStore((state) => state.layerWorkspaceIds);
@@ -753,6 +759,14 @@ export function CanvasWorkspace({
   }, [assets, canvasAssets, catalogAssets, promptedAssets]);
   const assetByIdRef = useRef(assetById);
   assetByIdRef.current = assetById;
+  const generatedAssetIds = useMemo(() => new Set(graphNodes
+    .filter(node => node.kind === "asset" && node.role === "output" && node.assetId)
+    .map(node => node.assetId)), [graphNodes]);
+  const materialFilterState = (asset: CanvasAssetSnapshot) => canvasMaterialFilterState(
+    asset.storePath,
+    !!asset.assetId && (!!assetById.get(asset.assetId)?.generation_session_id || generatedAssetIds.has(asset.assetId)),
+    smartFilter, mediaFilter,
+  );
 
   useEffect(() => {
     const hydrated = rehydrateProjectCanvasAssets(nodesRef.current, assetById);
@@ -4367,6 +4381,7 @@ export function CanvasWorkspace({
                   data-canvas-node
                   data-canvas-node-id={node.id}
                   role="button"
+                  data-canvas-filter={images.length ? materialFilterState(selectedConversationImage(node.id, images)!) : undefined}
                   tabIndex={0}
                   aria-busy={running}
                   aria-label={imageOnly ? `${selectedConversationImage(node.id, images)?.name ?? "生成图片"}，${selectedVideo ? "点击播放视频" : `${boardOpen || genEditing ? "单击加入创作" : "单击查看生成会话"}，双击放大`}` : undefined}
@@ -4520,6 +4535,7 @@ export function CanvasWorkspace({
                   tabIndex={0}
                   aria-label={`${node.kind === "asset" ? `${node.asset.name}，${boardOpen || genEditing ? "点击加入创作" : "点击放大"}` : `素材组，${node.assets.length} 个素材，${expanded ? "已展开" : "点击展开"}`}${selectedCanvasNodeIds.has(node.id) ? "，已选中" : ""}`}
                   aria-expanded={node.kind === "folder" ? expanded : undefined}
+                  data-canvas-filter={node.kind === "asset" ? materialFilterState(node.asset) : undefined}
                   className={`canvas-node is-${node.kind} ${node.kind === "asset" && isVideoPath(node.asset.storePath) ? "is-video" : ""} ${expanded ? "is-expanded" : ""} ${!showAssetNames ? "is-name-hidden" : ""} ${focusedNodeId === node.id ? "is-focused" : ""} ${selectedCanvasNodeIds.has(node.id) ? "is-selected" : ""} ${movingWithSelection ? "is-moving" : ""} ${holding ? "is-folder-target" : ""} ${directFolderTarget ? "is-folder-drop-target" : ""} `}
                   style={{
                     width: nodeRect(node).width,
@@ -4560,7 +4576,7 @@ export function CanvasWorkspace({
                       ) : (
                         <div className="canvas-node-placeholder">{node.asset.name.slice(0, 1)}</div>
                       )}
-                      {isVideoPath(node.asset.storePath) && <span className="canvas-video-film" role="img" aria-label="视频" />}
+                      {isVideoPath(node.asset.storePath) && <span className="canvas-video-badge" role="img" aria-label="视频" />}
                       <div className="pointer-events-none absolute left-1 top-1 z-10 flex items-center gap-1">
                         {node.asset.assetId && layerWorkspaceIds.has(node.asset.assetId) && <span className="rounded-full bg-black/70 px-1.5 py-1 text-white backdrop-blur" title="有分层工程" aria-label="有分层工程"><Layers size={12} /></span>}
                         {node.asset.assetId && captionedIds.has(node.asset.assetId) && (
@@ -4587,6 +4603,7 @@ export function CanvasWorkspace({
                           {node.assets.map((asset, index) => {
                             const assetPath = canvasAssetMediaPath(asset);
                             return <button type="button" key={asset.id} data-canvas-folder-asset-id={asset.id}
+                              data-canvas-filter={materialFilterState(asset)}
                               className="canvas-folder-asset" aria-label={asset.name}
                               onPointerDown={(event) => { if (!isCanvasPanGesture(event.button, spacePressedRef.current, drawingTool === "pan")) event.stopPropagation(); }}
                               onKeyDown={(event) => { if (event.key === "Enter" || event.key === " " || event.key.startsWith("Arrow")) event.stopPropagation(); }}
@@ -4599,7 +4616,7 @@ export function CanvasWorkspace({
                           })}
                         </div>
                       </> : <>
-                        <FolderPreview node={node} onAssetContextMenu={(event, asset) => openCanvasAssetContextMenu(event, node, asset)} />
+                        <FolderPreview node={node} filterState={materialFilterState} onAssetContextMenu={(event, asset) => openCanvasAssetContextMenu(event, node, asset)} />
                         <span className="canvas-folder-name"><Folder size={13} /> 素材组 · {node.assets.length}</span>
                       </>}
                     </>
@@ -4817,7 +4834,8 @@ export function CanvasWorkspace({
             if (!result.accepted) throw new Error(result.error || "合成提交失败");
           }} />}
         {replicationProjectId === projectId && replicationProjectId && <VideoReplicationDialog key={`replication-${replicationProjectId}`} projectId={replicationProjectId}
-          onGenerateImage={async request => {
+          onAddFrame={addVideoFrame}
+          onCreateWorkflow={async request => {
             const draft = activeCanvasRef.current, stage = stageRef.current;
             if (!draft || draft.id !== replicationProjectId || !stage) throw new Error("项目已切换，请重新打开工具");
             await ensureMaterialized(draft); await flushCanvasWrites(false);
@@ -4828,20 +4846,25 @@ export function CanvasWorkspace({
             if (!controller.ready || controller.error) throw new Error(controller.error || "画板正在载入");
             const bounds = stage.getBoundingClientRect();
             const center = toBoardPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2);
-            const rect = { ...placeCanvasCardNearSource({ x: center.x - 180, y: center.y - 160, width: 360, height: 360 }, selectionAnchors().map(item => item.rect)), width: 360, height: 360 };
+            const position = placeCanvasCardNearSource({ x: center.x - 180, y: center.y - 160, width: 1460, height: 680 }, selectionAnchors().map(item => item.rect));
             const current = useStore.getState();
-            const imageInput = request.referenceId ? { assetId: request.referenceId, slot: 1 } : null;
-            const node: WorkflowNode = { ...newWorkflowNode("generation", rect.x, rect.y, current.activeGenProvider || current.defaultProvider),
-              prompt: request.prompt + (imageInput ? "\n\n参考图：@[replication-frame]" : ""), ratio: request.ratio, generation: { media: "image" },
-              inputs: { image: imageInput ? [imageInput] : [] },
-              promptReferences: imageInput ? [{ id: "replication-frame", type: "image", label: "视频截帧", slot: 1, input: imageInput }] : [] };
-            await controller.edit([...controller.document.nodes, node]);
-            if (activeCanvasRef.current?.id !== draft.id) throw new Error("项目已切换，首帧卡片已保存在原项目，尚未启动");
-            setSelectedCanvasNodeIds(new Set([node.id]));
+            const built = replicationWorkflow(request, draft.id, current.activeGenProvider || current.defaultProvider, position.x, position.y);
+            const existing = await api.projectCanvasGet(draft.id);
+            for (const note of built.notes) {
+              if (existing.nodes.some(item => item.id === note.id)) continue;
+              const { hiddenAt: _hidden, createdAt: _created, updatedAt: _updated, ...input } = note;
+              await api.projectCanvasNodeCreate(input);
+            }
+            await controller.edit([...controller.document.nodes, ...built.nodes.filter(node => !controller.document.nodes.some(item => item.id === node.id))]);
+            if (activeCanvasRef.current?.id !== draft.id) throw new Error("项目已切换，工作流已保存在原项目，尚未运行");
+            const snapshot = await api.projectCanvasGet(draft.id);
+            if (activeCanvasRef.current?.id !== draft.id) return;
+            graphNodesRef.current = snapshot.nodes; setGraphNodes(snapshot.nodes);
+            setSelectedCanvasNodeIds(new Set([built.selectedId]));
+            const first = controller.document.nodes.find(node => node.id === built.selectedId)!;
+            const rect = { ...built.rect, x: first.x, y: first.y };
             const view = canvasViewForNewCard(rect, { x: 80, y: 60, width: Math.max(200, bounds.width - 120), height: Math.max(200, bounds.height - 270) }, panRef.current, zoomRef.current, true);
             if (view) { panRef.current = view.pan; zoomRef.current = view.zoom; setPan(view.pan); setZoom(view.zoom); markViewDirty(); }
-            // Once the card is durable, its ordinary workflow owns validation, submission and recovery.
-            void controller.start(node.id, true).catch(error => notifyError(error, "首帧生成未启动，可在画板卡片中检查"));
           }}
           onClose={() => setReplicationProjectId(null)} ensureProject={async () => {
             const draft = activeCanvasRef.current;

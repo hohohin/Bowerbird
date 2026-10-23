@@ -8,6 +8,8 @@ P0–P8 基础代码、P6.1 多层权益门控、P9-T2/T3/T4/T5 的既有回归/
 
 | 范围 | 最近保存的发布事实 | 证据与回滚 |
 |---|---|---|
+| 后台用户管理 | 10 月 22 日：0069、code-admin v4、官网用户清单及测试资格管理上线；真实 API／浏览器／权益／撤权验收通过，临时账号已清理，0068 保持未应用 | [用户管理](../apps/cloud/PRO-REDEMPTION.md#用户管理2026-10-22已上线)，`.tmp/user-admin-20261022/`；官网回退 26.10.2203 目录、Edge 回退已备份 v3 源码，保留审计 |
+| 桌面账号网关 | 10 月 22 日：官网受控账号入口与 Windows 26.10.2203 已发布；临时账号邮件验证/刷新/签名权益通过，原机扫码待验；原鉴权、签名及计费保持 | [Cloud 部署](../apps/cloud/DEPLOY.md#55-桌面账号官网网关2026-10-22)，`.tmp/account-gateway-20261022/`；桌面发布回滚保留网关 |
 | 补标签 token 计量 | 10 月 22 日：0067、jev-proxy v5；实际输入/缓存/输出/推理 token、模型、响应 ID 独立持久化；一次真实调用总量 2229 token，重放不重复计量，五图积分规则不变 | [LOCAL-CLASSIFICATION.md](LOCAL-CLASSIFICATION.md)，`.tmp/classification-usage-20261022/`；回滚旧代理，保留账本 |
 | 托管分类 | 10 月 20 日：0065/0066、jev-proxy v4、understand-worker v21，Jev 密钥服务器托管；成功五图扣一积分，内部成本预算 0.10 元/张；4 张 Jev + 1 张 Cloud 真实分类、跨请求累计及幂等通过；同日取消分类每用户分钟限流，线上回滚事务验证已满分钟桶后 20 张共 4 积分 | [LOCAL-CLASSIFICATION.md](LOCAL-CLASSIFICATION.md)，`.tmp/classification-deploy-20261020/`，worker 旧源码在其中 `rollback/`；分钟限流取消证据及旧代理/数据库定义见 `.tmp/classification-no-rate-20261020/` |
 | 视频复刻分析/改写 | 10 月 16 日：0062/0063/0064、understand-proxy v35、Worker `sha256:b18d88d42633…`（含分镜转场字段容错）；豆包 Seed 2.0 Mini，分析及改写各暂定 3 积分，两项真实结果及独立单次扣费通过 | [VIDEO-REPLICATION.md](VIDEO-REPLICATION.md#2026-10-16-分析上线与真实验收) |

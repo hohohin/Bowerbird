@@ -6,7 +6,7 @@ import type { SaveVideoTrim } from "../lib/videoTrim";
 import { captureVideoFrame, loadVideoStrip, seekVideoLastFrame, videoTime, type VideoFrame } from "../lib/videoFrame";
 import "./VideoPlayer.css";
 
-export function VideoPlayer({ path, onAddFrame, onSaveTrim, embedded = false, frameTarget = "canvas" }: { path: string; onAddFrame?: (frame: VideoFrame) => Promise<void>; onSaveTrim?: SaveVideoTrim; embedded?: boolean; frameTarget?: "canvas" | "reference" }) {
+export function VideoPlayer({ path, onAddFrame, onReferenceFrame, onSaveTrim, embedded = false, frameTarget = "canvas" }: { path: string; onAddFrame?: (frame: VideoFrame) => Promise<void>; onReferenceFrame?: (frame: VideoFrame) => Promise<void>; onSaveTrim?: SaveVideoTrim; embedded?: boolean; frameTarget?: "canvas" | "reference" }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const controlsRef = useRef<HTMLDivElement>(null);
   const [dimensions, setDimensions] = useState({ width: 720, height: 405 });
@@ -21,7 +21,7 @@ export function VideoPlayer({ path, onAddFrame, onSaveTrim, embedded = false, fr
   const [dragging, setDragging] = useState(false);
   const [fine, setFine] = useState(false);
   const [muted, setMuted] = useState(false);
-  const [savingTarget, setSavingTarget] = useState<"current" | "last" | "copy" | "overwrite" | null>(null);
+  const [savingTarget, setSavingTarget] = useState<"current" | "last" | "copy" | "overwrite" | "reference" | null>(null);
   const saving = savingTarget !== null;
   const [savedLastFrame, setSavedLastFrame] = useState(false);
   const [savedTime, setSavedTime] = useState<number | null>(null);
@@ -132,6 +132,14 @@ export function VideoPlayer({ path, onAddFrame, onSaveTrim, embedded = false, fr
     if (edge === "in") setInPoint(next); else setOutPoint(next);
     setSavedMessage(""); seek(next);
   }
+  async function referenceFrame() {
+    const video = videoRef.current;
+    if (!video || !onReferenceFrame || savingRef.current || !video.paused || !ready || seeking || dragging) return;
+    savingRef.current = true; setSavingTarget("reference"); setError("");
+    try { await onReferenceFrame(captureVideoFrame(video, path)); }
+    catch (cause) { setError(String(cause)); }
+    finally { savingRef.current = false; setSavingTarget(null); }
+  }
   async function saveTrim(overwrite: boolean) {
     const video = videoRef.current;
     if (!video || savingRef.current || !trimChanged) return;
@@ -235,6 +243,7 @@ export function VideoPlayer({ path, onAddFrame, onSaveTrim, embedded = false, fr
       </div>
       <div className="video-player-footer">
         <span>左右拖动选画面 · {fine ? "细调已开启 · 方向键 0.01 秒" : "方向键 0.1 秒"}</span>
+        {onReferenceFrame && <button className="video-player-add" disabled={!paused || !ready || seeking || dragging || saving} onClick={() => void referenceFrame()}><ImagePlus size={16} />{savingTarget === "reference" ? "正在添加…" : "添加该帧为参考图"}</button>}
         {onAddFrame && <div className="video-player-frame-actions">
           <button className="video-player-add" disabled={!paused || !ready || seeking || dragging || saving || savedTime === time}
             onClick={() => void addFrame()}>{savedTime === time ? <Check size={16} /> : <ImagePlus size={16} />}{savingTarget === "current" ? "正在添加…" : savedTime === time ? (frameTarget === "reference" ? "已选作参考图" : "已添加到画板") : frameTarget === "reference" ? "截取当前帧作参考" : "添加该帧到画板"}</button>

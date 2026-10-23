@@ -25,7 +25,7 @@ try {
       return original(command, args);
     };
     window.store.setState({ activeGenProvider: 'jimeng', codexHealth: { ok: true }, dreaminaHealth: { ok: true }, cloudAuth: { logged_in: true, cloud_available: true },
-      cloudEntitlement: { plan: 'pro', policy: { can_use_byo: true }, balances: { daily: 100, sub: 0, topup: 0 } } });
+      cloudEntitlement: { plan: 'pro', policy: { can_use_byo: true }, balances: { daily: 30, sub: 60, topup: 10 } } });
   });
   const dock = page.locator('.composer-glass');
   const editor = dock.locator('.ProseMirror');
@@ -68,6 +68,13 @@ try {
     assert.equal(await dock.locator('.composer-heading').isVisible(), true, 'portal focus must not collapse the composer');
     assert.equal(await imageMenu.locator('.model-select-column').count(), 2);
     assert.equal(await imageMenu.locator('.model-select-column-title').first().innerText(), '自有订阅');
+    assert.equal(await imageMenu.getByRole('status').innerText(), '100', 'Cloud total remains visible regardless of selected source');
+    const heading = imageMenu.locator('[data-source="cloud"] .model-select-column-heading');
+    const titleBox = await heading.locator('.model-select-column-title').boundingBox();
+    const balanceBox = await heading.getByRole('status').boundingBox();
+    assert.ok(Math.abs(titleBox.y + titleBox.height / 2 - balanceBox.y - balanceBox.height / 2) < 1, 'balance and column title share one row');
+    assert.ok(balanceBox.x >= titleBox.x + titleBox.width, 'balance does not overlap the title');
+    assert.ok((await heading.boundingBox()).height < 50, 'balance does not increase the menu header height');
     assert.equal(await imageMenu.locator('[data-model-key="bowerbird-cloud-image_fast"]').count(), 0, 'Fast is absent from new selections');
     await imageMenu.locator(`[data-model-key="${key}"]`).click();
     assert.equal(await provider.getAttribute('data-source'), source);
@@ -121,7 +128,20 @@ try {
   }
   await page.evaluate(() => window.store.setState({ activeGenProvider: 'jimeng', dreaminaHealth: { ok: false, reason: '请登录即梦' } }));
   await provider.click();
+  await page.evaluate(() => {
+    window.savedEntitlement = window.store.getState().cloudEntitlement;
+    window.store.setState({ cloudEntitlement: { ...window.savedEntitlement, balances: { daily: 1, sub: 200, topup: 3000 } } });
+  });
+  await imageMenu.getByRole('status').filter({ hasText: '3,201' }).waitFor();
+  await page.evaluate(() => window.store.setState({ cloudEntitlement: null }));
+  await imageMenu.getByRole('status', { name: 'Bowerbird 积分余额暂不可用' }).waitFor();
+  await page.evaluate(() => window.store.setState({ cloudEntitlement: window.savedEntitlement, cloudAuth: { ...window.store.getState().cloudAuth, logged_in: false } }));
+  await imageMenu.getByRole('status', { name: '登录后查看 Bowerbird 积分' }).waitFor();
+  await page.evaluate(() => window.store.setState({ cloudAuth: { ...window.store.getState().cloudAuth, logged_in: true } }));
+  await imageMenu.getByRole('status').filter({ hasText: '100' }).waitFor();
   assert.equal(await imageMenu.locator('[data-model-key="jimeng"]').isDisabled(), true);
+  // Changing account eligibility can disable the focused option and move focus to the body.
+  await imageMenu.locator('[data-model-key="codex"]').focus();
   await page.keyboard.press('Escape');
   await page.evaluate(() => window.store.setState({ dreaminaHealth: { ok: true }, settings: { ...window.store.getState().settings, dreamina_model_version: '4.5' } }));
   assert.ok((await provider.innerText()).includes('Seedream 4.5'), 'model label follows actual Dreamina settings');
@@ -135,6 +155,7 @@ try {
   ] } }));
   await provider.click();
   const cloudColumn = imageMenu.locator('[data-source="cloud"]');
+  await cloudColumn.locator('[data-model-key="bowerbird-cloud-image_gpt25_flare"]').waitFor();
   assert.deepEqual(await cloudColumn.locator('.model-select-option').allTextContents(), [
     'Seedream 5.0 Pro', 'Seedream 5.0 Lite', 'gpt-image-2.5-sunburst', 'gpt-image-2.5-flare',
   ], 'dynamic models remain available and models of each family stay adjacent without series headings');
@@ -147,6 +168,7 @@ try {
     policy: { can_use_byo: false }, balances: { daily: 0, sub: 0, topup: 0 } } }));
   await provider.click();
   assert.equal(await imageMenu.locator('.model-select-option:enabled').count(), 0, 'Pro and credit gates remain enforced');
+  assert.equal(await imageMenu.getByRole('status').innerText(), '0', 'known zero is distinct from an unavailable balance');
   await page.keyboard.press('Escape');
   await page.evaluate(() => window.store.setState({ cloudEntitlement: { ...window.store.getState().cloudEntitlement,
     policy: { can_use_byo: true }, balances: { daily: 100, sub: 0, topup: 0 } } }));
@@ -200,6 +222,7 @@ try {
   const chooseVideo = async (key) => {
     await dock.locator('.model-select-trigger').click();
     const menu = page.getByRole('dialog', { name: '视频模型', exact: true });
+    assert.equal(await menu.locator('.model-select-balance').innerText(), '100', 'video model menu also displays Cloud balance');
     assert.equal(await menu.locator('[data-model-key*="fast"]').count(), 0);
     await menu.locator(`[data-model-key="${key}"]`).click();
   };

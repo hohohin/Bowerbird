@@ -46,16 +46,27 @@ async fn json_response(request: reqwest::RequestBuilder) -> AppResult<Value> {
     if !code.is_success() { return Err(error(format!("ComfyUI 请求失败（{code}）：{}", body.to_string().chars().take(1500).collect::<String>()))); }
     Ok(body)
 }
-fn dimensions(input: &Input) -> AppResult<(u32, u32, u32)> {
-    let (w, h) = match input.ratio.as_str() { "9:16" => (9.0_f64,16.0), "16:9" => (16.0,9.0), "4:3" => (4.0,3.0), _ => return Err(error("不支持的宽高比")) };
+fn validate_options(input: &Input) -> AppResult<()> {
+    if !matches!(input.ratio.as_str(), "9:16" | "16:9" | "4:3" | "3:4" | "1:1" | "auto") { return Err(error("不支持的宽高比")); }
     if ![0.6,0.8,1.0].contains(&input.resolution) || !input.seconds.is_finite() || !(1.0..=15.0).contains(&input.seconds) {
         return Err(error("时长需为 1–15 秒，分辨率需为 0.6、0.8 或 1.0"));
     }
-    let scale = (input.resolution * 1024.0 * 1024.0 / (w*h)).sqrt();
-    Ok((((w*scale/32.0).round()*32.0) as u32, ((h*scale/32.0).round()*32.0) as u32, (((input.seconds*24.0-5.0)/17.0).ceil()*17.0+5.0).max(5.0) as u32))
+    Ok(())
 }
-fn graph(input: &Input, first: &str, last: Option<&str>, seed: u64, request: &str) -> AppResult<Value> {
-    let (width,height,length) = dimensions(input)?;
+fn dimensions(input: &Input, first_size: Option<(u32,u32)>) -> AppResult<(u32, u32, u32)> {
+    validate_options(input)?;
+    let (w, h) = match input.ratio.as_str() {
+        "auto" => first_size.filter(|(w,h)| *w > 0 && *h > 0).ok_or_else(|| error("无法识别首帧尺寸，请重新选择图片或指定比例"))?,
+        "9:16" => (9,16), "16:9" => (16,9), "4:3" => (4,3), "3:4" => (3,4), "1:1" => (1,1), _ => unreachable!(),
+    };
+    let (w,h) = (w as f64,h as f64);
+    let scale = (input.resolution * 1024.0 * 1024.0 / (w*h)).sqrt();
+    let (width,height) = (((w*scale/32.0).round()*32.0) as u32, ((h*scale/32.0).round()*32.0) as u32);
+    if width == 0 || height == 0 { return Err(error("首帧比例过于极端，请指定视频比例")); }
+    Ok((width, height, (((input.seconds*24.0-5.0)/17.0).ceil()*17.0+5.0).max(5.0) as u32))
+}
+fn graph(input: &Input, first: &str, last: Option<&str>, seed: u64, request: &str, first_size: Option<(u32,u32)>) -> AppResult<Value> {
+    let (width,height,length) = dimensions(input, first_size)?;
     let mut graph = json!({
         "1":{"class_type":"UNETLoader","inputs":{"unet_name":UNET,"weight_dtype":"default"}},
         "2":{"class_type":"CLIPLoader","inputs":{"clip_name":CLIP,"type":"minimax","device":"default"}},
@@ -81,7 +92,7 @@ fn graph(input: &Input, first: &str, last: Option<&str>, seed: u64, request: &st
 pub(super) async fn check(http: &reqwest::Client, base: &str) -> AppResult<()> {
     let info = json_response(http.get(format!("{base}/object_info"))).await?;
     let sample = Input { endpoint: base.into(), seconds:8.0, ratio:"9:16".into(), resolution:0.8, first_frame:"".into(), last_frame:None, prompt:"".into() };
-    for node in graph(&sample,"",None,0,"check")?.as_object().unwrap().values() {
+    for node in graph(&sample,"",None,0,"check",None)?.as_object().unwrap().values() {
         let class = node["class_type"].as_str().unwrap();
         if !info[class].is_object() { return Err(error("本机 ComfyUI 尚不支持此 H3 工作流，需要准备兼容版本")); }
     }
@@ -95,9 +106,16 @@ pub(super) async fn check(http: &reqwest::Client, base: &str) -> AppResult<()> {
 pub(super) async fn account(auth: &AuthClient, entitlement: &EntitlementService) -> AppResult<String> {
     let snapshot = entitlement.current_or_sync(auth).await;
     let login = auth.snapshot();
-    if !login.logged_in || !snapshot.is_test_account || login.user_id.as_deref() != Some(snapshot.user_id.as_str())
-        || !matches!(snapshot.offline_state, Some(crate::cloud::entitlement::OfflineState::Fresh | crate::cloud::entitlement::OfflineState::Grace)) { return Err(error("本地 H3 视频仅对有效测试账号开放")); }
+    check_access(&login, &snapshot)?;
     Ok(snapshot.user_id)
+}
+fn check_access(login: &crate::cloud::auth::AuthSnapshot, snapshot: &crate::cloud::entitlement::EntitlementSnapshot) -> AppResult<()> {
+    if !login.logged_in || snapshot.user_id.is_empty() || login.user_id.as_deref() != Some(snapshot.user_id.as_str())
+        || !(snapshot.is_test_account || matches!(snapshot.tier.as_str(), "pro" | "studio"))
+        || !matches!(snapshot.offline_state, Some(crate::cloud::entitlement::OfflineState::Fresh | crate::cloud::entitlement::OfflineState::Grace)) {
+        return Err(error("本地 H3 视频需要有效的 Pro／Studio 权益或测试账号资格"));
+    }
+    Ok(())
 }
 #[tauri::command]
 pub async fn comfy_video_check(auth: State<'_, AuthClient>, entitlement: State<'_, EntitlementService>, endpoint: String) -> AppResult<String> {
@@ -111,30 +129,30 @@ fn save(path: &Path, record: &Record) -> AppResult<()> {
     fs::rename(temp,path)?;
     Ok(())
 }
-async fn upload(http: &reqwest::Client, base: &str, db: &Database, id: &str, request: &str, role: &str) -> AppResult<String> {
+async fn upload(http: &reqwest::Client, base: &str, db: &Database, id: &str, request: &str, role: &str) -> AppResult<(String,(u32,u32))> {
     let asset = db.get_asset(id)?.ok_or_else(|| error("输入图片不存在"))?;
     let path = asset.store_path.ok_or_else(|| error("输入图片没有本地文件"))?;
     // Decode and normalize to PNG: no arbitrary local files are forwarded to ComfyUI.
-    let bytes = tokio::task::spawn_blocking(move || -> AppResult<Vec<u8>> {
+    let (bytes,size) = tokio::task::spawn_blocking(move || -> AppResult<(Vec<u8>,(u32,u32))> {
         let image = image::open(path)?;
         let mut bytes = std::io::Cursor::new(Vec::new());
         image.write_to(&mut bytes,image::ImageFormat::Png)?;
-        Ok(bytes.into_inner())
+        Ok((bytes.into_inner(),(image.width(),image.height())))
     }).await.map_err(|e| error(e.to_string()))??;
     let part = reqwest::multipart::Part::bytes(bytes).file_name(format!("{request}-{role}.png")).mime_str("image/png").map_err(|e| error(e.to_string()))?;
     let result = json_response(http.post(format!("{base}/upload/image")).multipart(reqwest::multipart::Form::new().part("image",part).text("type","input").text("overwrite","true").text("subfolder","bowerbird"))).await?;
     let name = result["name"].as_str().ok_or_else(|| error("ComfyUI 未返回上传图片名称"))?;
     let folder = result["subfolder"].as_str().unwrap_or("");
-    Ok(if folder.is_empty() { name.into() } else { format!("{folder}/{name}") })
+    Ok((if folder.is_empty() { name.into() } else { format!("{folder}/{name}") },size))
 }
 // /prompt has no idempotency guarantee: a durable submitted marker prevents retries.
 async fn start(http: &reqwest::Client, db: &Database, path: &Path, record: &mut Record, request: &str, owner: &(dyn Fn() -> AppResult<()> + Sync)) -> AppResult<()> {
     let base = endpoint(&record.input.endpoint)?;
     check(http,&base).await?;
-    let first = upload(http,&base,db,&record.input.first_frame,request,"first").await?;
-    let last = match record.input.last_frame.as_deref() { Some(id) => Some(upload(http,&base,db,id,request,"last").await?), None => None };
+    let (first,first_size) = upload(http,&base,db,&record.input.first_frame,request,"first").await?;
+    let last = match record.input.last_frame.as_deref() { Some(id) => Some(upload(http,&base,db,id,request,"last").await?.0), None => None };
     let seed = u64::from_le_bytes(uuid::Uuid::new_v4().as_bytes()[..8].try_into().unwrap()) & ((1_u64<<53)-1);
-    let prompt = graph(&record.input,&first,last.as_deref(),seed,request)?;
+    let prompt = graph(&record.input,&first,last.as_deref(),seed,request,Some(first_size))?;
     owner()?;
     record.submitted = true; save(path,record)?;
     let response = http.post(format!("{base}/prompt")).json(&json!({"prompt":prompt,"client_id":request,"extra_data":{"bowerbird_request_id":request,"workflow":WORKFLOW}}))
@@ -273,7 +291,7 @@ pub async fn comfy_video(app: AppHandle, db: State<'_, Arc<Database>>, paths: St
         if action == "cancel" { return Ok(status("cancelled","已取消，未提交生成")); }
         if action != "start" { return Ok(status("unknown","未找到本地提交记录；请核对本机队列，不会重新提交")); }
         let input = input.clone().ok_or_else(|| error("缺少视频参数"))?;
-        endpoint(&input.endpoint)?; dimensions(&input)?;
+        endpoint(&input.endpoint)?; validate_options(&input)?;
         if input.first_frame.is_empty() || input.prompt.trim().is_empty() || input.prompt.chars().count() > 16000 { return Err(error("请提供首帧及 1–16000 字提示词")); }
         Record { account:account.clone(),project:project_id.clone(),input,prompt_id:None,submitted:false,asset_id:None,failure:None,cancelled:false,elapsed_ms:None }
     };
@@ -298,6 +316,34 @@ pub async fn comfy_video(app: AppHandle, db: State<'_, Arc<Database>>, paths: St
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn h3_access_allows_paid_or_test_accounts_with_valid_matching_entitlement() {
+        use crate::cloud::{auth::AuthSnapshot, entitlement::{EntitlementSnapshot, OfflineState}};
+        let now = chrono::Utc::now();
+        let mut snapshot: EntitlementSnapshot = serde_json::from_value(json!({
+            "user_id":"member", "tier":"pro", "balances":{"daily":0,"sub":0,"topup":0},
+            "policy":crate::cloud::policy::FeaturePolicy::for_tier("pro"),
+            "issued_at":now, "refresh_after":now, "grace_until":now,
+            "entitlement_version":1, "signature_version":1, "signature":null
+        })).unwrap();
+        let mut login = AuthSnapshot { cloud_available:true, logged_in:true, user_id:Some("member".into()),
+            email:None, display_name:None, avatar_url:None, access_expires_at:None, reason:None };
+        for tier in ["free", "pro", "studio", "unknown"] {
+            for is_test in [false, true] {
+                for state in [Some(OfflineState::Fresh), Some(OfflineState::Grace), Some(OfflineState::Expired), Some(OfflineState::Invalid), None] {
+                    snapshot.tier = tier.into(); snapshot.is_test_account = is_test; snapshot.offline_state = state.clone();
+                    let expected = (is_test || matches!(tier, "pro" | "studio"))
+                        && matches!(state, Some(OfflineState::Fresh | OfflineState::Grace));
+                    assert_eq!(check_access(&login, &snapshot).is_ok(), expected, "{tier} test={is_test} state={state:?}");
+                }
+            }
+        }
+        snapshot.tier = "pro".into(); snapshot.is_test_account = false; snapshot.offline_state = Some(OfflineState::Fresh);
+        login.user_id = Some("other".into()); assert!(check_access(&login, &snapshot).is_err());
+        login.user_id = Some("member".into()); login.logged_in = false; assert!(check_access(&login, &snapshot).is_err());
+        login.logged_in = true; login.user_id = None; assert!(check_access(&login, &snapshot).is_err());
+        login.user_id = Some(String::new()); snapshot.user_id.clear(); assert!(check_access(&login, &snapshot).is_err());
+    }
     #[test]
     fn h3_elapsed_uses_service_execution_timestamps() {
         let result=json!({"status":{"messages":[["execution_start",{"prompt_id":"own","timestamp":1000}],["execution_success",{"prompt_id":"own","timestamp":274960}]]}});
@@ -355,11 +401,11 @@ mod tests {
     #[test]
     fn h3_graph_preserves_native_audio_branch_and_exact_parameters() {
         let mut i=input();
-        for (ratio,resolution,expected) in [("9:16",0.6,(608,1056)),("9:16",0.8,(672,1216)),("9:16",1.0,(768,1376)),("16:9",1.0,(1376,768)),("4:3",0.6,(928,672))] {
+        for (ratio,resolution,expected) in [("9:16",0.6,(608,1056)),("9:16",0.8,(672,1216)),("9:16",1.0,(768,1376)),("16:9",1.0,(1376,768)),("4:3",0.6,(928,672)),("3:4",0.6,(672,928)),("1:1",1.0,(1024,1024))] {
             i.ratio=ratio.into();i.resolution=resolution;
-            let (w,h,frames)=dimensions(&i).unwrap();assert_eq!((w,h),expected);assert_eq!(frames,192);
+            let (w,h,frames)=dimensions(&i,None).unwrap();assert_eq!((w,h),expected);assert_eq!(frames,192);
         }
-        let graph=graph(&i,"first.png",Some("last.png"),42,"request").unwrap();
+        let graph=graph(&i,"first.png",Some("last.png"),42,"request",None).unwrap();
         assert_eq!(graph["9"]["inputs"]["last_frame"],json!(["30",0]));
         assert_eq!(graph["30"]["inputs"]["image"],"last.png");
         assert_eq!(graph["10"]["inputs"]["noise_seed"],42);
@@ -368,12 +414,32 @@ mod tests {
         assert_eq!(graph["27"]["inputs"]["format.codec"],"auto");
         assert_eq!(graph.as_object().unwrap().values().filter(|v|v["class_type"]=="SaveVideo").count(),1);
         assert!(!graph.to_string().contains("Upscale"));
-        let single=super::graph(&i,"first.png",None,42,"request").unwrap();
+        let single=super::graph(&i,"first.png",None,42,"request",None).unwrap();
         assert!(single.get("30").is_none());assert!(single["9"]["inputs"].get("last_frame").is_none());
-        i.seconds=11.0;assert_eq!(dimensions(&i).unwrap().2,277);
-        for seconds in [0.0,16.0,f64::NAN] { i.seconds=seconds;assert!(dimensions(&i).is_err()); }
-        i=input();i.ratio="1:1".into();assert!(dimensions(&i).is_err());
-        i=input();i.resolution=0.98;assert!(dimensions(&i).is_err());
+        i.seconds=11.0;assert_eq!(dimensions(&i,None).unwrap().2,277);
+        for seconds in [0.0,16.0,f64::NAN] { i.seconds=seconds;assert!(dimensions(&i,None).is_err()); }
+        i=input();i.ratio="5:7".into();assert!(dimensions(&i,None).is_err());
+        i=input();i.resolution=0.98;assert!(dimensions(&i,None).is_err());
+    }
+    #[test]
+    fn h3_auto_ratio_uses_current_first_frame_and_keeps_resolution_budget() {
+        let mut i=input();i.ratio="auto".into();
+        for resolution in [0.6,0.8,1.0] {
+            i.resolution=resolution;
+            for (size,ratio) in [((600,800),"3:4"),((800,600),"4:3"),((900,900),"1:1"),((900,1600),"9:16")] {
+                let mut fixed=i.clone();fixed.ratio=ratio.into();
+                assert_eq!(dimensions(&i,Some(size)).unwrap(),dimensions(&fixed,None).unwrap());
+                let graph=graph(&i,"first",Some("different-last"),1,"auto",Some(size)).unwrap();
+                let (w,h,_)=dimensions(&fixed,None).unwrap();
+                assert_eq!(graph["9"]["inputs"]["width"],w);
+                assert_eq!(graph["9"]["inputs"]["height"],h);
+            }
+        }
+        assert!(dimensions(&i,None).is_err());
+        assert!(dimensions(&i,Some((0,800))).is_err());
+        assert!(dimensions(&i,Some((1,u32::MAX))).is_err());
+        i.resolution=1.0;
+        assert_eq!(dimensions(&i,Some((1000,700))).unwrap(),(1216,864,192));
     }
     #[test]
     fn h3_endpoint_is_loopback_only_and_has_no_credentials_or_extra_routes() {
@@ -398,7 +464,7 @@ mod tests {
         assert!(output.status.success(),"{}",String::from_utf8_lossy(&output.stderr));
         let shared=Arc::new(Mock { prompt:Mutex::new(None),uploads:AtomicUsize::new(0),posts:AtomicUsize::new(0),phase:AtomicUsize::new(0),video:fs::read(video).unwrap() });
         let mut info=json!({});
-        for node in graph(&input(),"x",None,0,"r").unwrap().as_object().unwrap().values() { info[node["class_type"].as_str().unwrap()]=json!({"input":{"required":{}}}); }
+        for node in graph(&input(),"x",None,0,"r",None).unwrap().as_object().unwrap().values() { info[node["class_type"].as_str().unwrap()]=json!({"input":{"required":{}}}); }
         for (class,field,models) in [("UNETLoader","unet_name",vec![UNET]),("CLIPLoader","clip_name",vec![CLIP]),("VAELoader","vae_name",vec![VAE,AUDIO]),("LoraLoaderModelOnly","lora_name",vec![LORA])] { info[class]["input"]["required"][field]=json!([models]); }
         async fn history(AxumState(s): AxumState<Arc<Mock>>) -> Json<Value> {
             let prompt=s.prompt.lock().unwrap().clone().unwrap();
@@ -424,12 +490,14 @@ mod tests {
         let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base=format!("http://{}",listener.local_addr().unwrap());
         let server=tokio::spawn(async move {axum::serve(listener,app).await.unwrap()});
-        let mut i=input();i.endpoint=base;i.first_frame=frame.id.clone();i.last_frame=Some(frame.id.clone());
+        let mut i=input();i.endpoint=base;i.first_frame=frame.id.clone();i.last_frame=Some(frame.id.clone());i.ratio="auto".into();
         let request=uuid::Uuid::new_v4().to_string();let path=root.join(format!("{request}.json"));
         let mut record=Record {account:"tester".into(),project:"p".into(),input:i,prompt_id:None,submitted:false,asset_id:None,failure:None,cancelled:false,elapsed_ms:None};
         save(&path,&record).unwrap();let http=client().unwrap();
         start(&http,&db,&path,&mut record,&request,&|| Ok(())).await.unwrap();
         assert_eq!(shared.uploads.load(Ordering::SeqCst),2);assert_eq!(shared.posts.load(Ordering::SeqCst),1);
+        assert_eq!(shared.prompt.lock().unwrap().as_ref().unwrap()["prompt"]["9"]["inputs"]["width"],928);
+        assert_eq!(shared.prompt.lock().unwrap().as_ref().unwrap()["prompt"]["9"]["inputs"]["height"],928);
         // Simulate losing the POST response; recovery discovers the original queue item.
         record.prompt_id=None;save(&path,&record).unwrap();
         assert_eq!(poll(&http,&db,&paths,&path,&mut record,&request,&|| Ok(())).await.unwrap().status,"running");

@@ -16,10 +16,10 @@ function family(label: string): string {
   return label.toLowerCase().startsWith("gpt-image") ? "gpt" : label.toLowerCase().split(" ")[0];
 }
 
-export function ModelSelect({ value, label, source, options, onChange, defaultKey, onSetDefault, kind = "图像", quotaDetail, footer }: {
+export function ModelSelect({ value, label, source, options, onChange, defaultKey, onSetDefault, kind = "图像", quotaDetail, cloudBalance, cloudLoggedIn, footer }: {
   value: string; label: string; source?: ModelSource; options: ModelOption[];
   onChange: (key: string) => void; defaultKey?: string; onSetDefault?: (key: string) => void;
-  kind?: string; quotaDetail?: string; footer?: ReactNode;
+  kind?: string; quotaDetail?: string; cloudBalance?: number | null; cloudLoggedIn?: boolean; footer?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState<{ left: number; top?: number; bottom?: number; width: number; height: number }>();
@@ -28,6 +28,7 @@ export function ModelSelect({ value, label, source, options, onChange, defaultKe
   const id = useId();
   const sourceLabel = source === "cloud" ? "Bowerbird 积分" : source === "personal" ? "自有订阅" : "来源待确认";
   const SourceIcon = source === "cloud" ? Coins : source === "personal" ? UserRound : CircleHelp;
+  const balanceLabel = !cloudLoggedIn ? "登录后查看 Bowerbird 积分" : cloudBalance == null ? "Bowerbird 积分余额暂不可用" : `Bowerbird 可用积分：${cloudBalance.toLocaleString("zh-CN")}`;
   function close(restore = false) {
     setOpen(false);
     if (restore) trigger.current?.focus();
@@ -102,7 +103,12 @@ export function ModelSelect({ value, label, source, options, onChange, defaultKe
           const ordered = families.flatMap(group => entries.filter(option => family(option.label) === group));
           const Icon = column === "cloud" ? Coins : UserRound;
           return <section key={column} className="model-select-column" data-source={column} aria-label={`${column === "cloud" ? "Bowerbird积分" : "自有订阅"}模型`}>
-            <div className="model-select-column-title"><span className="model-source-badge"><Icon size={12} strokeWidth={2.8} aria-hidden="true" /></span>{column === "cloud" ? "Bowerbird 积分" : "自有订阅"}</div>
+            <div className="model-select-column-heading">
+              <div className="model-select-column-title"><span className="model-source-badge"><Icon size={12} strokeWidth={2.8} aria-hidden="true" /></span><span className="model-select-column-label">{column === "cloud" ? "Bowerbird 积分" : "自有订阅"}</span></div>
+              {column === "cloud" && <div className="model-select-balance" role="status" aria-label={balanceLabel} title={balanceLabel}>
+                <Coins size={13} aria-hidden="true" /><strong>{cloudLoggedIn && cloudBalance != null ? cloudBalance.toLocaleString("zh-CN") : "—"}</strong>
+              </div>}
+            </div>
             <div className="model-select-options">{ordered.map(option => <div key={option.key} className="model-select-row">
               <button type="button" data-model-option data-model-key={option.key} className="model-select-option" disabled={!!option.reason}
                 aria-pressed={value === option.key} title={option.reason ?? option.label}
