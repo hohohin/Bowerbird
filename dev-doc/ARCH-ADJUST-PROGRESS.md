@@ -1,5 +1,7 @@
 # 收费化架构调整 · 当前进度
 
+**2026-10-24 发布状态：** 本轮相关桌面源码已随 Windows **26.10.2401** 发布，分类 Cloud **0075／jev-proxy v10** 已先行上线，图谱保持隐藏；此前专项中的「未发布」为开发时记录。完整验证范围、现役与回滚见 [桌面自动更新](DESKTOP-UPDATES.md)。
+
 最近保存的 VPS 发布为 2026-10-24 部署入口与旧路径清理：Worker `834246b4560cc…`、understand-proxy v40、jev-proxy v9；196 项 VPS 回归、两次 DSH 探针及四消费者上线核验通过，未改迁移、价格、env 或 test-only 闸门。扫描与磁盘剩余问题、镜像及回滚以 [Cloud DEPLOY.md](../apps/cloud/DEPLOY.md) 顶部记录为准；官网和 Windows 下载发布以 [DESKTOP-UPDATES.md](DESKTOP-UPDATES.md) 为准。下方按日期保留历史验收，旧镜像/价格不代表当前配置。
 
 ## 2026-10-23 Bcoin 新规则：Cloud 已上线，桌面待发版

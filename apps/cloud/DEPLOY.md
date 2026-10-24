@@ -3,6 +3,14 @@
 > 目标：把 `apps/cloud/` 的 Supabase 迁移 + Edge Functions 推上云端，完成 Auth/积分/算力的真实联调。
 > 前提：你已在 Supabase 控制台拿到 Project URL / publishable key / secret key，并已在 `apps/cloud/.env` 填好方舟 key 与 endpoint id。
 
+## 2026-10-24 分类英文规则与 Windows 2401 已发布
+
+本轮先存档源码 fd948497 并推送，再于 20:11（北京时间）定向应用 **0075**、部署 **jev-proxy v10**。从 v9 下载实际依赖构建候选，仅替换 jev 的 index／prompt／protocol、新增 translation 和 Ark 输出上限参数；其余依赖原样。生产 schema 演练事务回滚核对后正式应用，advance_classification 仅将过期依据从 created_at 改为 updated_at，原 Bcoin 结算保留。
+
+候选类型／24 项 Deno／PGlite 与桌面 Rust 回归通过，下载已部署源码逐文件一致，JWT 开启；新表强制 RLS、普通角色无内部准备 RPC 权限、service_role 可执行，匿名请求 401。原价格和其他 Edge 版本保持，Worker 834246b4560cc… 不重部署，0068 未应用。无付费模型调用，线上翻译质量仍待真实样本验收。随后 Windows 2401／SQLite 0045 已上线，官网同步中文错误提示。
+
+本机证据与旧 v9 完整接口备份：`.tmp/release-windows-26.10.2401/cloud/`。保留 0075 表、账本和缓存，不执行 down migration；新版客户端仍在线时不能恢复不支持英文协议的代理，应做向前兼容修复。官网与桌面分发回滚另见 [桌面更新](../../dev-doc/DESKTOP-UPDATES.md)。
+
 ## 2026-10-24 VPS 磁盘清理（已完成）
 
 19:53（北京时间）按用户确认清单完成。删除 `/opt/bowerbird/website-releases/` 内明确列出的 30 个旧发布目录、`/tmp/bowerbird-release-windows-*` 内 8 个经 SHA-256 比对的重复安装包；执行 `docker builder prune --filter until=168h --force`，工具报告回收 2.469 GB 构建缓存。磁盘由 98%／约 1.1 GiB 可用降至 **69%／约 14.6 GiB 可用**，实际增加可用空间约 **13.5 GiB**；以磁盘实测为准，不累加 Docker 共享层估算。

@@ -2,9 +2,9 @@
 
 这里存放 Bowerbird 的 Windows 开发、构建与独立扩展加载工具。平台兼容行为已经并入项目主源码；脚本只把 canonical 项目复制到 Windows/.work，不再用整文件 override 替换源码。Windows/overrides/ 仅保留退役说明，不参与构建。
 
-## 2026-10-24 Windows 26.10.2401 发布准备
+## 2026-10-24 Windows 26.10.2401 已发布
 
-视频素材导入、创作框 H3 首尾帧与安装／驱动指引、项目管理及删除预检／剩余结果放弃、连线右键取消、视频复刻多来源／普通文本与转写、分类内部英文规则、Bcoin 账号／试用与工作流门控、设置精简及全应用中文错误提示、中文／English 安装语言选择。TypeScript、Rust **700 passed / 24 ignored**、18 组桌面 Chromium、前端逻辑／Bcoin 与分类 PGlite、24 项 Deno、32 项 Worker、官网错误提示／网关／更新回归及官网构建通过；双语实际 NSIS 隔离安装／重装／更新保留登录及失败重试通过。SQLite 0045，先部署兼容分类接口；双语安装和原更新登录保留协议保持。源码冻结构建及最终发布证据见 [桌面自动更新](../dev-doc/DESKTOP-UPDATES.md)。
+源码 fd948497 已存档推送，视频导入、创作框 H3 首尾帧／环境安装与驱动指引、项目管理／删除预检与剩余结果处理、右键取消连线、视频复刻多来源及普通文本／语音转写、分类内部英文规则、Bcoin 账号／试用与工作流门控、设置精简及中文错误提示、中文／English 安装语言选择已签名上线。TypeScript／Vite、Rust **700 passed / 24 ignored**、18 组桌面 Chromium、前端逻辑／Bcoin 与分类 PGlite、24 项 Deno、32 项 Worker、官网错误提示／网关／更新和构建通过。双语 NSIS 与更新登录保留、冻结输入、资源、签名及 CDN 完整下载通过。SQLite 0045；Cloud 0075／jev-proxy v10 先行部署，Mac 保持。安装包 `Windows/dist/Bowerbird_26.10.2401_x64-setup.exe`；完整证据与回滚见 [桌面自动更新](../dev-doc/DESKTOP-UPDATES.md)。
 
 ## 2026-10-23 Windows 26.10.2301 已发布
 
