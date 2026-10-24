@@ -1,4 +1,4 @@
-// Offline container probe: imports the production generation path and probes a
+// Offline container probe: imports all four production consumers and probes a
 // synthetic clip under /tmp. No worker loops, user files, or provider requests.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -6,6 +6,9 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import '../src/cloud-generation/runtime.ts';
+import '../src/cloud-understand/runtime.ts';
+import '../src/cloud-visual/runtime.ts';
+import '../src/cloud-agent/main.ts';
 import { probeVideo } from '../src/cloud-generation/video.ts';
 
 const directory = await mkdtemp(join(tmpdir(), 'bowerbird-video-container-'));

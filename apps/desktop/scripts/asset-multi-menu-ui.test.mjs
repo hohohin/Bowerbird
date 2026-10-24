@@ -116,7 +116,7 @@ try {
   await page.setViewportSize({width:1280,height:840});
   await page.locator('#project').click();
   assert.equal(await page.getByRole('menuitem', { name: '更新项目文件' }).count(), 0);
-  await page.keyboard.press('End'); assert.equal(await focused(), '删除'); await page.keyboard.press('Escape');
+  await page.keyboard.press('End'); assert.equal(await focused(), '删除项目 · 素材保留'); await page.keyboard.press('Escape');
   await page.locator('#disconnect').click(); await page.waitForFunction(() => document.activeElement?.textContent?.includes('图片输入')); await page.keyboard.press('Escape');
   await page.locator('.session-test').focus(); await page.keyboard.press('Shift+F10'); await page.getByRole('menu', { name: '生成会话操作' }).waitFor();
   await page.keyboard.press('End'); assert.equal(await focused(), '复制本次会话诊断信息'); await page.keyboard.press('Escape');

@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../../lib/userError";
 import type { AuthSnapshot, CodexHealth, EntitlementSnapshot } from "../../lib/types";
 import { canUseByo } from "../../lib/entitlement";
 import { canonicalProviderKey, genProviders, imageProviderLabel, isCloudProvider } from "../../lib/genProviders";
@@ -22,7 +23,7 @@ export function ProviderSelect({ value, onChange, codexHealth, dreaminaHealth, c
       ? !cloudAvailable ? "当前版本未配置 Bowerbird Cloud"
         : !cloudAuth?.logged_in ? "请先登录 Bowerbird 账号" : balance <= 0 ? "积分不足" : undefined
       : !canUseByo(cloudEntitlement) ? "升级 Pro 解锁自有订阅"
-        : !health?.ok ? health?.reason || "请先登录对应账号并检查引擎" : undefined;
+        : !health?.ok ? userErrorMessage(health?.reason, "请先登录对应账号并检查引擎") : undefined;
     return { ...option, source: cloud ? "cloud" : "personal", reason };
   });
   const quota = providerQuota(value);

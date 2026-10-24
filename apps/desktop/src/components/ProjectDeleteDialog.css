@@ -1,0 +1,8 @@
+.project-delete-dialog .app-modal-body { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
+.project-delete-dialog .app-modal-body::before { display: none; }
+.project-delete-content { padding: 18px; display: flex; flex-direction: column; gap: 18px; }
+.project-delete-dialog .app-modal-footer { flex-wrap: wrap; }
+.project-delete-dialog input[type="checkbox"] { flex-shrink: 0; width: 16px; height: 16px; accent-color: var(--bb-blue); }
+.project-delete-scan progress { display: block; height: 4px; margin-bottom: 8px; border: 0; border-radius: 4px; overflow: hidden; accent-color: var(--bb-blue); }
+.project-delete-scan progress::-webkit-progress-bar { background: var(--bb-line); border-radius: 4px; }
+.project-delete-scan progress::-webkit-progress-value { background: var(--bb-blue); border-radius: 4px; }

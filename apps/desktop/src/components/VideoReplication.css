@@ -33,6 +33,9 @@
 .vr-field { display:flex; flex-direction:column; gap:8px; font-size:13px; margin:0 0 18px; color:var(--bb-ink); }
 .vr-field input,.vr-field textarea { width:100%; min-width:0; border:1px solid var(--bb-line-strong); border-radius:8px; padding:10px 12px; background:var(--bb-surface); color:var(--bb-ink); font-size:13px; line-height:1.65; }
 .vr-field textarea { resize:vertical; min-height:64px; }
+.vr-analysis-provider { border:0; padding:0; min-width:0; margin:0 0 20px; }
+.vr-analysis-provider legend { font-size:13px; margin-bottom:8px; }
+.vr-analysis-provider .vr-hint { margin-top:8px; }
 .vr-hint { color:var(--bb-muted); font-size:12px; line-height:1.7; overflow-wrap:anywhere; }
 .vr-actions { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin:14px 0; }
 .vr-actions button,.vr-library-picker>button { display:inline-flex; align-items:center; justify-content:center; gap:8px; padding:10px 14px; border:1px solid var(--bb-line); border-radius:8px; font-size:13px; }

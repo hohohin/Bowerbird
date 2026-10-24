@@ -1,5 +1,5 @@
 import { assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
-import { arkTransportError, arkUnderstandUsage, DEFAULT_IMAGE_UPSTREAM_TIMEOUT_MS, upstreamError } from "./ark.ts";
+import { arkTransportError, arkUnderstandUsage, DEFAULT_UNDERSTAND_UPSTREAM_TIMEOUT_MS, upstreamError, VolcArkAdapter } from "./ark.ts";
 
 Deno.test("Ark usage keeps missing counters unknown and rejects unsafe values", () => {
   const parsed = arkUnderstandUsage({id:"unsafe\nbody",model:"model-1",usage:{
@@ -11,8 +11,8 @@ Deno.test("Ark usage keeps missing counters unknown and rejects unsafe values", 
   assertEquals(arkUnderstandUsage({usage:null}).cached_tokens,null);
 });
 
-Deno.test("Ark image timeout leaves room for proxy settlement", () => {
-  assertEquals(DEFAULT_IMAGE_UPSTREAM_TIMEOUT_MS, 135_000);
+Deno.test("Ark understand timeout leaves room for proxy settlement", () => {
+  assertEquals(DEFAULT_UNDERSTAND_UPSTREAM_TIMEOUT_MS, 110_000);
 });
 
 Deno.test("Ark text moderation has a distinct safe message", () => {
@@ -65,4 +65,35 @@ Deno.test("Ark transport classifier keeps safe network detail", () => {
   const mapped = arkTransportError(failure, 5_000, 120_000);
   assertEquals(mapped.kind, "connection_reset");
   assertStringIncludes(mapped.error.message, "连接被重置");
+});
+
+Deno.test("synchronous understand still forwards text budget and persists usage before parsing", async () => {
+  const originalFetch = globalThis.fetch;
+  const names = ["ARK_API_KEY", "ARK_BASE_URL", "ARK_VISION_MODEL"];
+  const old = names.map((name) => Deno.env.get(name));
+  try {
+    Deno.env.set("ARK_API_KEY", "test-only");
+    Deno.env.set("ARK_BASE_URL", "https://ark.invalid/v3");
+    Deno.env.set("ARK_VISION_MODEL", "test-vision");
+    let observedTokens: number | null = null;
+    globalThis.fetch = async (input, init) => {
+      assertEquals(String(input), "https://ark.invalid/v3/chat/completions");
+      const request = JSON.parse(String(init?.body));
+      assertEquals(request.max_tokens, 6000);
+      assertEquals(request.messages[0].content, [{ type: "text", text: "translate labels" }]);
+      return Response.json({
+        id: "test-response", usage: { total_tokens: 12 },
+        choices: [{ message: { content: "**类型**\n插画\n[[CAT: 插画]]" } }],
+      });
+    };
+    const result = await new VolcArkAdapter().understand({
+      operation: "classify", image: null, instruction: "translate labels", maxOutputTokens: 6000,
+    }, async (usage) => { observedTokens = usage.total_tokens; });
+    assertEquals(observedTokens, 12);
+    assertEquals(result.categories, ["插画"]);
+    assertEquals(result.sections[0].title, "类型");
+  } finally {
+    globalThis.fetch = originalFetch;
+    names.forEach((name, i) => old[i] === undefined ? Deno.env.delete(name) : Deno.env.set(name, old[i]!));
+  }
 });

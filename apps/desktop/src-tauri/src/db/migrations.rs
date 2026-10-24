@@ -93,6 +93,7 @@ pub fn migrations() -> Migrations<'static> {
         M::up(include_str!("../../sql/0042_classification_new_assets.sql")),
         M::up(include_str!("../../sql/0043_catalog_paging.sql")),
         M::up(include_str!("../../sql/0044_classification_provenance.sql")),
+        M::up(include_str!("../../sql/0045_classification_english.sql")),
     ])
 }
 
@@ -235,6 +236,26 @@ fn backfill_asset_reference_counts(tx: &rusqlite::Transaction) -> rusqlite_migra
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn classification_english_upgrade_preserves_rules_assignments_and_revision() {
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        let ms = migrations();
+        ms.to_version(&mut conn, 44).unwrap();
+        conn.execute_batch("INSERT INTO assets(id,name) VALUES('a','图片');
+            INSERT INTO tags(id,name,source,classification_description,classification_enabled) VALUES('t','旧标签','manual','原有排除条件',0);
+            INSERT INTO asset_tags(asset_id,tag_id,origin) VALUES('a','t','manual');
+            UPDATE local_classification_state SET revision=8;").unwrap();
+        ms.to_latest(&mut conn).unwrap();
+        let rule: (String, String, bool, Option<String>) = conn.query_row(
+            "SELECT name,classification_description,classification_enabled,classification_english FROM tags WHERE id='t'", [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        ).unwrap();
+        assert_eq!(rule, ("旧标签".into(), "原有排除条件".into(), false, None));
+        assert_eq!(conn.query_row("SELECT origin FROM asset_tags WHERE asset_id='a' AND tag_id='t'", [], |r| r.get::<_, String>(0)).unwrap(), "manual");
+        assert_eq!(conn.query_row("SELECT revision FROM local_classification_state", [], |r| r.get::<_, i64>(0)).unwrap(), 8);
+        ms.to_latest(&mut conn).unwrap();
+    }
 
     #[test]
     fn external_library_members_upgrade_keeps_old_references_hidden() {

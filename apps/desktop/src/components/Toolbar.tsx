@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, ChevronDown, Coins, Compass, FolderOpen, LayoutDashboard, LoaderCircle, Search, Upload, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, Compass, FolderOpen, LayoutDashboard, LoaderCircle, Search, Upload, X } from "lucide-react";
 import { SidebarAccount } from "./SidebarAccount";
 import { ProjectManagerPanel } from "./ProjectManagerPanel";
 import { GeneratedImageFilter } from "./GeneratedImageFilter";
@@ -7,6 +7,8 @@ import { MediaTypeFilter } from "./MediaTypeFilter";
 import { useStore } from "../store";
 import { useLocalFileMode } from "../lib/localFileMode";
 import { api } from "../lib/api";
+import { prepareMediaImport, showImportedMedia } from "../lib/mediaImport";
+import { prepareExplorerCanvasDrop } from "../lib/explorerCanvasDrop";
 import { notifyError, notifySuccess } from "../lib/notify";
 import { beginOnboardingOperation, useOnboarding } from "../lib/onboardingStore";
 
@@ -44,11 +46,6 @@ export function Toolbar({
   const setCurrentCollection = useStore((s) => s.setCurrentCollection);
   const setSmartFilter = useStore((s) => s.setSmartFilter);
   const homeView = useStore(s => s.libraryHomeView);
-  const loggedIn = useStore(s => s.cloudAuth?.logged_in === true);
-  const balances = useStore(s => s.cloudEntitlement?.balances);
-  const credits = loggedIn && balances ? balances.daily + balances.sub + balances.topup : null;
-  const creditsText = credits == null ? "—" : credits.toLocaleString("zh-CN");
-  const creditsLabel = !loggedIn ? "登录后查看 Bowerbird 积分" : credits == null ? "Bowerbird 积分余额暂不可用" : `Bowerbird 可用积分：${creditsText}`;
   const setColorFilter = useStore((s) => s.setColorFilter);
   const [importOpen, setImportOpen] = useState(false);
   const [projectsOpen, setProjectsOpen] = useState(false);
@@ -118,13 +115,22 @@ export function Toolbar({
   }
 
   function importFiles() {
+    const revision = useStore.getState().projectRouteRevision;
+    const stage = canvasMode ? document.querySelector<HTMLElement>(".canvas-stage:not(.is-view-hidden)") : null;
+    const rect = stage?.getBoundingClientRect();
+    const place = rect ? prepareExplorerCanvasDrop(stage, activeProjectId, rect.left + rect.width / 2, rect.top + rect.height / 2) : null;
     const completeLesson = beginOnboardingOperation("import", activeProjectId);
     setImportOpen(false);
     void withBusy(async () => {
-      const paths = await api.pickImageFiles();
+      const paths = await api.pickMediaFiles();
       if (!paths.length) return null;
+      if (canvasMode && !place) throw new Error("画布尚未就绪，请稍后重试");
+      await prepareMediaImport(activeProjectId, revision);
       const assets = await api.importFiles(paths, activeProjectId);
       if (!assets.length) throw new Error("未导入任何素材，请检查所选文件是否可读取");
+      if (place) for (const asset of assets) await place(asset);
+      const current = useStore.getState();
+      if (current.activeProjectId === activeProjectId && current.projectRouteRevision === revision && !current.projectRoutePending) showImportedMedia(assets);
       completeLesson();
       if (assets.length < paths.length) notifyError(null, `${paths.length - assets.length} 个文件导入失败`);
       return `已导入 ${assets.length} 个文件（相同文件复用已有素材）`;
@@ -184,7 +190,7 @@ export function Toolbar({
                 role="menuitem"
               >
                 <Upload size={14} className="text-muted" />
-                导入图片
+                导入图片或视频
               </button>
               <button
                 type="button"
@@ -267,10 +273,6 @@ export function Toolbar({
           <MediaTypeFilter />
 
         </div>}
-        <div className="app-topbar-credits" role="status" aria-label={creditsLabel} title={creditsLabel}>
-          <Coins size={16} aria-hidden="true" />
-          <span>{creditsText}</span>
-        </div>
         <SidebarAccount placement="topbar" />
       </div>
       {collectedNotice && (

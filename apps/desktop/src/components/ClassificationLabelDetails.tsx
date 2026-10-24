@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { useEffect, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { localClassification, type ClassificationLabel } from "../lib/localClassification";
@@ -38,6 +39,6 @@ export function ClassificationLabelDetails({ label, root }: { label: Classificat
       {origin.reason && <p className="text-xs whitespace-pre-wrap break-words">新增理由：{origin.reason}</p>}
     </>}
     {origin?.created_at ? <p className="text-xs text-muted">{origin.kind === "library" ? "复制" : "创建"}时间：{new Date(origin.created_at * 1000).toLocaleString()}</p> : null}
-    {error && <p role="alert" className="text-xs text-red-400">{error}</p>}
+    {error && <p role="alert" className="text-xs text-red-400">{userErrorMessage(error, "标签来源暂时无法读取，请重新打开后重试。")}</p>}
   </section>;
 }

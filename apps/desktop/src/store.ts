@@ -222,7 +222,7 @@ interface State {
   enterProject: (id: string) => Promise<void>;
   exitProject: () => Promise<void>;
   beginProvisionalProject: (name?: string) => Promise<string>;
-  deleteProjectCanvas: (id: string, mode?: ProjectDeleteMode, confirmation?: string) => Promise<ProjectDeleteResult | undefined>;
+  deleteProjectCanvas: (id: string, mode?: ProjectDeleteMode, confirmation?: string, discardPendingResults?: string[]) => Promise<ProjectDeleteResult | undefined>;
   projectCanvasFlush: (() => Promise<void>) | null;
   projectCanvasRename: ((title: string) => Promise<void>) | null;
   registerProjectCanvasFlush: (flush: (() => Promise<void>) | null) => void;
@@ -1063,7 +1063,7 @@ export const useStore = create<State>((set, get) => {
     }));
     return id;
   }),
-  deleteProjectCanvas: (id, mode = "keep", confirmation) => runProjectRoute(async () => {
+  deleteProjectCanvas: (id, mode = "keep", confirmation, discardPendingResults) => runProjectRoute(async () => {
     const project = get().projects.find((candidate) => candidate.id === id);
     const deletingActiveProject = get().activeProjectId === id;
     if (workspaceProjectDeleteMode(project) === "discard-provisional") {
@@ -1098,7 +1098,12 @@ export const useStore = create<State>((set, get) => {
       return;
     }
     if (deletingActiveProject) await get().projectCanvasFlush?.();
-    const result = await api.deleteProject(id, mode, confirmation);
+    const result = await api.deleteProject(id, mode, confirmation, discardPendingResults);
+    // Match the durable deletion's detached execution records, so a stale UI
+    // snapshot cannot keep scheduling result ingestion for the deleted project.
+    set({ cloudAgentRuns: Object.fromEntries(Object.entries(get().cloudAgentRuns).map(([key, run]) => [key,
+      run.projectId === id ? { ...run, projectId: null, threadId: null, creativeLaunchId: null } : run,
+    ])) });
     if (deletingActiveProject) {
       set({
         projects: get().projects.filter((project) => project.id !== id),

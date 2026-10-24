@@ -3,6 +3,64 @@
 > 目标：把 `apps/cloud/` 的 Supabase 迁移 + Edge Functions 推上云端，完成 Auth/积分/算力的真实联调。
 > 前提：你已在 Supabase 控制台拿到 Project URL / publishable key / secret key，并已在 `apps/cloud/.env` 填好方舟 key 与 endpoint id。
 
+## 2026-10-24 VPS 磁盘清理（已完成）
+
+19:53（北京时间）按用户确认清单完成。删除 `/opt/bowerbird/website-releases/` 内明确列出的 30 个旧发布目录、`/tmp/bowerbird-release-windows-*` 内 8 个经 SHA-256 比对的重复安装包；执行 `docker builder prune --filter until=168h --force`，工具报告回收 2.469 GB 构建缓存。磁盘由 98%／约 1.1 GiB 可用降至 **69%／约 14.6 GiB 可用**，实际增加可用空间约 **13.5 GiB**；以磁盘实测为准，不累加 Docker 共享层估算。
+
+**保留与回滚边界**：官网现役 `20261023-windows-26.10.2301`，最近两份回滚 `20261023-cdn-distribution`、`20261023-comfy-tos`，以及含独有视频的 `20260824191404` 均保留。其余 30 个旧官网目录已删除，历史文档所列对应回滚路径仅为当时记录，不再可直接执行。现役旧包下载、全部 Docker 镜像／标签、Worker 回滚、部署备份与证据均保留；旧目录中的 55 份环境配置已存入 VPS 受限备份 `old-release-env.tar`，没有下载到本机。
+
+**验证与证据**：539 个保留文件哈希／权限与符号链接核验通过；77 个镜像标签及其 ID/digest 一致；两个容器 running、restart=0，renderer healthy，官网 PID 与现役链接未变，无服务重启。公网首页／后台、healthz 204、三平台更新跳转及清单、8 个旧包 HEAD 均通过，清单与 Windows 2301 发布基线一致。首轮镜像检查误比较了相对时间 CreatedSince；改按仓库／标签／ID／digest 复核通过，没有重跑清理。清单、日志、结果及公网报告在本机 `.tmp/vps-disk-cleanup-20261024/`，VPS `/opt/bowerbird/deploy-backups/disk-cleanup-20261024/` 保存保留文件校验、镜像清单、旧环境备份及结果。依赖漏洞和既有 understand/visual TTL 缺陷仍需独立处理。
+
+## 2026-10-24 部署入口与旧路径清理（已上线）
+
+19:04（北京时间）完成上线后核验。现役 Worker **`sha256:834246b4560cc60113c4f341c5c519c1c9cdf847585d0d156547dfaafbd4f77d`**，`understand-proxy v40`、`jev-proxy v9`，两条 Edge 均保持 JWT。基于实际现役源码定向清理：Worker 删除未接线 Agent DS 启动链、可选模板模式及其独占图片放行选项，移出未注册系列导演草案；Edge 仅修改各自的 `_shared/ark.ts`，移除无调用的同步生图实现，保留同步理解与 usage 账本。服务器两个 Dockerfile 已补齐六个共享文件，原基础镜像 digest 保留。
+
+**部署范围**：保留线上三份已通过哈希校验的 Skill、449 个依赖包、env、Compose、安全资源约束和 test-only 闸门；未应用迁移，0068/0075 仍未应用，不带 GPT/分类英文规则等其他未发布源码。Edge 理解输出预算仍为已部署的 2000；本地 0075 的 6000 参数扩展未随本轮发布。官网、renderer、桌面及价格不变。仓库中的配置示例、旧脚本退役与历史文档修订不通过覆盖生产 env 生效。
+
+**验证**：候选在 VPS 断网、只读、非 root 容器中 196/196 回归通过；两次 DSH 探针均通过 ACP 初始化、临时目录清理、统一/旧受控 processor、durable ledger、usage 与闭合工具面；四消费者导入与真实合成视频 ffprobe 通过。两条现役 Edge 候选 13 项 Deno 及入口类型检查通过，发布后逐文件下载核对，只有 ark.ts 变化。上线后四类消费者启动、running、restart=0，env 原样、源码哈希及安全约束通过；匿名请求均 401，队列与迁移保持，两个历史 outcome_unknown 不变。未调用真实模型、未产生本轮真实模型用量或用户扣费；本轮不替代新功能真实 E2E。
+
+**扫描与剩余运维**：固定 Trivy 0.74.0 / `sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969` 离线扫描候选，密钥检出 0，漏洞条目 CRITICAL 12 / HIGH 295。候选继承全部原镜像层，前后完整依赖 SBOM 一致；未扩大开放、未升级依赖，也未宣称漏洞已修复。新漏洞库解压约 1.6 GiB 一度耗尽磁盘，已仅删除本轮可再生成扫描缓存；报告与回滚仍保留。基线同库重扫未完成，不能声称有完整扫描差分。此次部署结束时磁盘 98%，可用约 1.1 GiB；随后空间治理已完成，见上方同日磁盘清理记录。依赖漏洞与既有 understand/visual TTL 缺陷仍需独立处理。
+
+**本地检出限制**：此前 Windows 全量检查的 CRLF/统一 Skill 哈希、DSH 符号链接问题没有绕过或修改 manifest；现役下载的三个 Skill 原始内容均通过哈希，候选沿用该版本。禁止把当前本地全部源码直接覆盖 VPS。
+
+**证据与回滚**：本地 `.tmp/vps-cleanup-deploy-20261024/` 保存 published.json、payload-manifest.json、base-comparison.json、两条 Edge 的 rollback/edge/verified 源码及扫描/SBOM/测试证据；VPS `/opt/bowerbird/deploy-backups/vps-cleanup-20261024/` 保存源码备份、0600 env 与验收报告。镜像回滚标签 `bowerbird/generation-worker:rollback-vps-cleanup-20261024` 指向此前 `92bd83125ab2…`；回退时恢复该镜像及本轮改动源码，两条 Edge 可分别重部署已保存的 v39/v8 源码并保持 JWT；无数据库 down migration。环境备份仅留 VPS，不下载入库。
+
+## 2026-10-24 分类英文规则（源码，未部署）
+
+本轮只涉及 `0075_classification_translation_usage.sql`、`jev-proxy` 及其 `_shared/ark.ts` 输出上限参数；不部署其他待办功能。先定向应用 0075，再部署保持 JWT 的 `jev-proxy`，最后加载 SQLite 0045 的新桌面。无新 Secret；继续使用服务器 Jev 和方舟配置。旧客户端无 `prompt_language`，保留原响应；新客户端校验英文协议标记，不能先发桌面再留旧代理。
+
+缺译规则每个请求只准备一批，沿同一图片、原 body／幂等键续传；全部就绪后唯一领取 Jev。新增独立翻译 usage 与短期英文缓存，不存图片。准备期积分预留采用 `pending_settlement`，避免大词表误触通用 30 分钟预留过期；分类自己的 10 分钟无进展清理继续退款，活跃步骤更新活动时间，busy 查询不延活。0075 用精确锚点保留当前 `advance_classification` 财务实现，只调整其补标签过期依据；上线前须在生产函数备份上验证锚点，禁止覆盖现役 Bcoin 结算。每批增加内部供应商预算，用户仍按成功图片结算一次。
+
+离线 Rust 分类 92 项、迁移 10 项、Deno 17 项及现役 Bcoin 模型上的 PGlite 通过，包括 254 条／64 批、并发／丢失缓存确认、长时间预留、重放和失败退款。未调用真实模型。回退保留 0075 账本和数据；新桌面仍在线时不可回退到不支持英文协议的代理。实现与用例见 [分类专项](../../dev-doc/LOCAL-CLASSIFICATION.md#2026-10-24-jev-内部英文规则源码未部署)。
+
+## 2026-10-24 视频复刻普通文本已上线
+
+视频分析改用 `response_format.type=text` 与文字提示词，保留 thinking 和独立语音转写。现役 Worker `sha256:92bd83125ab25006fc1638ba77da2754cd14df93b724e45b60e2079b69c16bc6`；24 项候选回归及真实文字分析／转写／单次 3 积分结算通过，测试账号已清理。环境、Edge、模型、账本不变。回滚标签 `rollback-replication-text-20261024` 指向前次 thinking 镜像。详见 [视频复刻](../../dev-doc/VIDEO-REPLICATION.md#2026-10-24-分析改为普通文本cloud-已部署桌面源码待发布)。
+
+## 2026-10-24 视频复刻 thinking 已上线
+
+在下方 Bcoin 现役 Worker 上定向将视频分析请求改为 `thinking.type=enabled`，运行镜像更新至 `sha256:30198cd72cf7cb414591c5bd91a59f11f12888770c1ef365b94d143c52538cab`；环境、Edge、模型、价格及账本保持。23 项断网回归与真实带语音视频分析通过，返回独立转写、一次 3 积分结算，测试账号已清理。回滚标签 `rollback-replication-thinking-20261024` 指向此前 Bcoin 镜像 `29f3e4b518be…`。完整记录见 [视频复刻](../../dev-doc/VIDEO-REPLICATION.md#2026-10-24-豆包分析开启-thinkingcloud-已部署)。
+
+## 2026-10-23 Bcoin 计费已上线
+
+2026-10-23 **18:59:12（北京时间）**恢复接单。先下载现役七个 Edge 及 Worker 源码、备份计费配置／订单／钱包批次／订阅／数据库函数，再在回滚事务中演练；临时阻止新计费和支付写入，确认活动任务为 0 后，原子应用 **0070–0074**。**0068 未应用**，旧余额与有效期逐条核对未变，两个历史 outcome_unknown 任务保持。新分类每成功图片 1 Bcoin；免费账号可购买算力，不再受旧免费分类每日 10 张限制，全站成本熔断及余额校验保留。
+
+现役 Edge：`generate-proxy v41`、`generation-worker v32`、`understand-proxy v39`、`jev-proxy v8`、`entitlement v41`、`create-checkout v29`、`payment-webhook v30`。均下载实际源码与冻结候选逐文件一致，原 JWT 策略及其他 Edge 版本不变。理解代理首轮候选缺少 image-metadata.ts、打包未成功，补齐后部署 v39；未产生半成品活动版本。
+
+Worker 基于现场现役 `971c1cb0…`（包含当天音轨修复）做最小覆盖，镜像 **`sha256:29f3e4b518be51aeae2ee3d7d994f2d5b5c6e7655151c45a63e7a4d87429ea0a`**；保留原 env、compose、其他模块，不带尚未部署的 GPT Image 源码。模型：Pro `doubao-seedream-5-0-pro-260628`、Lite `doubao-seedream-5-0-260128`、理解 Seed 2.0 Lite、复刻 Seed 2.0 Mini，真实模式保持。候选在 VPS 无网络容器中 **42 项测试通过**，上线后 running、restart=0。
+
+验收：PGlite 财务与迁移回归、12 项 Deno（分类另补免费账号断言复跑 6 项）通过。生产隔离账号验证 6 个商品报价、签名权益、注册／每日不赠币、永久充值、预扣全退、入账／退款重放、Pro 不赠币、一次 7 天试用不延长及过期离线宽限、禁售 Studio、170 分层上限与超长标准理解拒绝。真实短文本理解 **1 Bcoin**、Pro 1K 生图 **10 Bcoin** 成功，重放同一任务，余额共减少 **11**；临时账号已删除，测试财务审计保留。未做本轮真实分层模型调用，分层 pixels／退差额由候选与数据库回归覆盖。
+
+支付边界：创建订单仍为 **Mock、不收真实款**。本机未提供 Mock 回调签名密钥，入账／退款验证通过服务端原子 RPC 完成，不能称为支付渠道回调端到端验收。Cloud 视频三个档位保持 inactive，GPT／Flash 未启价，Agent 原预算和测试门控不变。
+
+本轮仅上线 Cloud；**Windows 仍为 26.10.2301，Mac 与官网更新通道未切换**。桌面新增 Bcoin 文案、试用按钮和工作流原生门控源码待后续桌面发版；旧包的动态生图价格可通过权益刷新获得，固定文案不会随云部署更新。未修改官网页面；官网当前没有该方案的正式购买报价，仍处于 Beta 展示。
+
+证据：`.tmp/bcoin-rollout-20261023/` 下 published.json、release-hashes.json、state-verified.json、sources-verified.json、smoke.json、real-generation.json、rollback/、worker-before.tar；财务快照只保留在本地私有证据中，不提交。VPS 备份 `/opt/bowerbird/deploy-backups/bcoin-20261023/`，旧镜像标签 `bowerbird/generation-worker:rollback-bcoin-20261023`。
+
+回退不能直接把旧 Edge／Worker 套在新账本上：先暂停新计费，保留新价格快照、0070–0074 表列、永久充值及历史流水；已接受的新任务须由兼容新快照的 Worker 完成或按失败状态退款，禁止旧分层接口把 170 预扣全部结算。源码备份用于定向修复／兼容回退，不执行删列、重算旧余额或缩短新充值有效期。临时维护触发器已全部撤除。
+
+上线后只读健康检查发现既有 TTL 清理缺陷：understand_jobs_check2／visual_profile_jobs_check2 要求 succeeded 的 result_text 非空，而旧清理代码将 result_text 置空；现场分别有 473／17 条过期成功记录未标记 deleted_at，最早于 8 月到期。该约束与清理 Edge 不在本轮改动中；真实新任务／扣费验收通过。自动审批拒绝主动调用 cleanup_expired（会删除过期对象并更新记录），因此仅查询约束与计数，没有执行额外清理或修改约束。证据 cleanup-readonly.json；此历史问题需独立修复和数据清理验收。
+
 ## 2026-10-22 后台用户管理已发布
 
 仅定向应用 **0069**（0068 保持未应用），`code-admin` **v4** 已上线、JWT 开启，其他 Edge 保持。官网 `/admin/` 新增用户列表／搜索／测试账号筛选及资格授予／取消，复用服务端管理员标记并原子留审计。现役官网目录 `/opt/bowerbird/website-releases/20261022-user-admin`，基于并保留 `20261022-windows-26.10.2203`；仅更新 admin 三文件，账号网关、下载配置和更新通道未改。
@@ -25,9 +83,11 @@ jev-proxy v6 已上线并下载核对全部依赖源码；matching_version=8 为
 
 12 项 Deno 测试、隔离数据库回归及一次真实方舟补标签通过；生产核验输入 2103 / 缓存 0 / 输出 126 / 总计 2229 token，重复调用无新增账本，用户积分规则保持。证据及旧代理位于 `.tmp/classification-usage-20261022/`。回滚仅恢复其中 `rollback/` 的旧代理，保留 0067 和已保存数据；旧代理不再采集新用量。字段、缺失状态、核算与查询见 [分类专项](../../dev-doc/LOCAL-CLASSIFICATION.md#2026-10-22-cloud-补标签真实-token-账本已上线)。
 
-## Jev 同步托管分类（2026-10-20 初次部署）
+## Jev 同步托管分类（2026-10-20 历史初次部署）
 
-0065/0066 已定向应用；`jev-proxy` v4 / `understand-worker` v21 已上线，Jev Secret 已配置。用户确认 `JEV_CLASSIFICATION_COST_MICROS=100000`（0.10 元/张保守成本预算，不是用户售价）。临时测试账号的 4 次真实 Jev + 1 次 Cloud 补标签验证了五张扣一积分及重复请求幂等；证据 `.tmp/classification-deploy-20261020/`。后续重部署仍遵守以下顺序。
+> 以下保留首次部署与五图一积分的历史证据，不是当前重部署步骤。10 月 23 日 Bcoin 已改为每张成功图片 1 Bcoin、无免费分类配额；当前迁移与验收以本文顶部 Bcoin 和 0075 状态为准，禁止回灌旧价格/免费额度。
+
+0065/0066 已定向应用；`jev-proxy` v4 / `understand-worker` v21 已上线，Jev Secret 已配置。用户确认 `JEV_CLASSIFICATION_COST_MICROS=100000`（0.10 元/张保守成本预算，不是用户售价）。临时测试账号的 4 次真实 Jev + 1 次 Cloud 补标签验证了五张扣一积分及重复请求幂等；证据 `.tmp/classification-deploy-20261020/`。以下为当时执行顺序。
 
 1. 审核并应用 `0065_classification_proxy.sql`、`0066_classification_no_rate_limit.sql`；不要直接对有其他待迁移内容的工作区执行未筛选的全量 push。
 2. 在 Supabase Secrets 配置 `JEV_API_KEY` 和 `JEV_CLASSIFICATION_COST_MICROS`。后者为一次 Jev 判断加最坏一次 Cloud 补标签的保守人民币微元预算，必须根据实际供应商费用填写；不从客户端读取密钥，也不能以用户售价代替供应商成本。沿用 `DAILY_COST_LIMIT_CNY`、`FREE_CAPTION_DAILY_LIMIT`；分类不再读取 `RATE_LIMIT_PER_USER_PER_MIN`。继续使用方舟 Vision 配置，生产设置 `BOWERBIRD_CLOUD_MOCK=false`。
@@ -125,12 +185,16 @@ Windows 用 `tauri dev` 验收时，桌面端会在 debug 环境运行时注册 
 
 ```bash
 cd apps/cloud
-npx --yes supabase@latest --agent no db push
+npx --yes supabase@latest --agent no db push --dry-run
+# 只审阅待迁移列表，不直接全量 push；按本次发布清单定向应用并登记迁移。
+# 当前 0068 未应用，0075 尚待部署，不可因补齐历史编号而自动执行。
 ```
 
-会按文件名顺序执行全部本地迁移；当前 Agent Runtime 要求至少到 `0039_agent_clarification_answer.sql`。`0010` 必须先于新版 `generate-proxy` / `understand-proxy`；`0011` 必须先于新版 `entitlement` / `generate-proxy` / `understand-proxy`；`0015` 必须先于异步版 `generate-proxy`、`generation-worker` 与 VPS consumer；`0019` 必须先于异步版 `understand-proxy`、`understand-worker` 与 VPS understand consumer；`0028`–`0030` 必须先于支持 Codex/即梦本机生图停车交接的链路；`0031`/`0032` 必须先于文本 usage 可信计量和定时 TTL 清理版 `agent-worker`；`0033`/`0034` 必须先于 Agent 账单 marker 与原子容量闸版 `entitlement` / `agent-run`；`0035` 负责过期未租约 parked Run 的原子取消，`0036` 负责生产/测试监控样本隔离，`0037`/`0038` 修复已部署早期迁移遗留的 Codex Run、本机任务与 usage provider 数据库约束，`0039` 原子应用有限澄清答案并使旧计划审批失效。统一 Agent 进入多图片最终结果版本前，必须先应用 `0053_unified_agent_multi_final_results.sql`，使数据库终态结算与 Edge 的多 `final_result` 策略一致；legacy Skill 仍要求唯一最终结果。
+上面 dry-run 仅列出差异。未加 dry-run 的全量 push 会执行待迁移文件，不能用于当前有意保留编号空洞的部署。以下为历史依赖关系，并非当前完整迁移上限：早期 Agent Runtime 要求至少到 `0039_agent_clarification_answer.sql`。`0010` 必须先于新版 `generate-proxy` / `understand-proxy`；`0011` 必须先于新版 `entitlement` / `generate-proxy` / `understand-proxy`；`0015` 必须先于异步版 `generate-proxy`、`generation-worker` 与 VPS consumer；`0019` 必须先于异步版 `understand-proxy`、`understand-worker` 与 VPS understand consumer；`0028`–`0030` 必须先于支持 Codex/即梦本机生图停车交接的链路；`0031`/`0032` 必须先于文本 usage 可信计量和定时 TTL 清理版 `agent-worker`；`0033`/`0034` 必须先于 Agent 账单 marker 与原子容量闸版 `entitlement` / `agent-run`；`0035` 负责过期未租约 parked Run 的原子取消，`0036` 负责生产/测试监控样本隔离，`0037`/`0038` 修复已部署早期迁移遗留的 Codex Run、本机任务与 usage provider 数据库约束，`0039` 原子应用有限澄清答案并使旧计划审批失效。统一 Agent 进入多图片最终结果版本前，必须先应用 `0053_unified_agent_multi_final_results.sql`，使数据库终态结算与 Edge 的多 `final_result` 策略一致；legacy Skill 仍要求唯一最终结果。
 
 ### 4. 部署 Edge Functions 并注入 Secrets
+
+以下为入口与配置参考；每次只部署发布清单涉及的函数与 Secret，不整段重放。新建 Agent 仅支持 unified DSH，Edge/Worker 两侧闸门见 [Runbook](../agent-worker/UNIFIED-HARNESS-RUNBOOK.md)。生图模型只配置在 VPS；同步理解与 Jev 补标签仍需要 Edge 方舟 Vision 配置。
 
 ```bash
 # 部署函数
@@ -143,6 +207,8 @@ supabase functions deploy create-checkout
 supabase functions deploy payment-webhook
 supabase functions deploy agent-run
 supabase functions deploy agent-worker --no-verify-jwt
+supabase functions deploy visual-profile
+supabase functions deploy visual-profile-worker --no-verify-jwt
 supabase functions deploy wechat-login --no-verify-jwt
 
 # 注入 secrets（从 .env 读取；只上传一次，函数运行环境持有）
@@ -151,13 +217,10 @@ supabase secrets set SUPABASE_PUBLISHABLE_KEY=$SUPABASE_PUBLISHABLE_KEY
 supabase secrets set SUPABASE_SECRET_KEY=$SUPABASE_SECRET_KEY
 supabase secrets set ARK_API_KEY=$ARK_API_KEY
 supabase secrets set ARK_BASE_URL=$ARK_BASE_URL
-supabase secrets set ARK_IMAGE_MODEL=$ARK_IMAGE_MODEL
-supabase secrets set ARK_VIDEO_MODEL=$ARK_VIDEO_MODEL
 supabase secrets set ARK_VISION_MODEL=$ARK_VISION_MODEL
 supabase secrets set ALLOWED_ORIGINS="https://bowerbird.cn,http://127.0.0.1:5173,http://localhost:5173"
 supabase secrets set DAILY_COST_LIMIT_CNY=500
 supabase secrets set COST_CNY_PER_CREDIT=0.047
-supabase secrets set ARK_IMAGE_TIMEOUT_MS=135000
 supabase secrets set PROXY_TIMEOUT_MS=140000
 supabase secrets set RATE_LIMIT_PER_USER_PER_MIN=10
 supabase secrets set AGENT_GLOBAL_ACTIVE_LIMIT=100
@@ -165,6 +228,7 @@ supabase secrets set BOWERBIRD_CLOUD_MOCK=false
 supabase secrets set GENERATION_WORKER_TOKEN=$GENERATION_WORKER_TOKEN
 supabase secrets set UNDERSTAND_WORKER_TOKEN=$UNDERSTAND_WORKER_TOKEN
 supabase secrets set AGENT_WORKER_TOKEN=$AGENT_WORKER_TOKEN
+supabase secrets set VISUAL_PROFILE_WORKER_TOKEN=$VISUAL_PROFILE_WORKER_TOKEN
 supabase secrets set BOWERBIRD_PAYMENT_MOCK=true
 supabase secrets set SUPERUN_WEBHOOK_SECRET=$SUPERUN_WEBHOOK_SECRET
 supabase secrets set WECHAT_APP_ID=$WECHAT_APP_ID
@@ -192,13 +256,13 @@ supabase functions deploy entitlement
 
 验收：桌面登录后 `entitlement.json` 缓存含非空 `signature`；断网重启 app，权益面板仍显示 Pro/Studio（Fresh/Grace），7 天后降级 free。未配置 Secret 时函数自动回落 `signature_version=0`（在线可信、无离线宽限），不会报错。轮换 = 换密钥对 + 同步换桌面内置公钥发版；旧签名验签失败自动降级，用户在线重同步即可。
 
-`generation-worker` / `understand-worker` / `agent-worker` 必须使用 `--no-verify-jwt` 部署，因为 VPS 使用专用 Worker Token 而不是用户 JWT；Function 内部会常量时间校验各自的 `GENERATION_WORKER_TOKEN` / `UNDERSTAND_WORKER_TOKEN` / `AGENT_WORKER_TOKEN`。VPS 只持这些 Token、DeepSeek 与方舟 Key，绝不能持 Supabase secret/service-role。
+`generation-worker` / `understand-worker` / `agent-worker` / `visual-profile-worker` 必须使用 `--no-verify-jwt` 部署，因为 VPS 使用专用 Worker Token 而不是用户 JWT；Function 内部会常量时间校验各自的 `GENERATION_WORKER_TOKEN` / `UNDERSTAND_WORKER_TOKEN` / `AGENT_WORKER_TOKEN` / `VISUAL_PROFILE_WORKER_TOKEN`。VPS 只持这些 Token、DeepSeek 与方舟 Key，绝不能持 Supabase secret/service-role。
 
-`understand-proxy` 由 `UNDERSTAND_ASYNC` 开关控制双模式（默认 `false` 保持旧的同步单次请求行为）。上线顺序：先部署函数（开关关）→ 更新 VPS 容器 → 发布新版桌面端（create/轮询兼容两种响应）→ 最后 `supabase secrets set UNDERSTAND_ASYNC=true` 切到异步任务模式，摆脱 Edge 墙钟上限。观察稳定后旧同步路径随生图 135/140s 回退一并移除。
+`understand-proxy` 由 `UNDERSTAND_ASYNC` 控制双模式，当前部署保持 `true`。首次迁移时曾按函数 → VPS → 兼容桌面 → 开关的顺序上线；这不是更新现有部署时关闭开关的要求。同步理解 adapter 仍服务兼容模式及 Jev 补标签，必须保留；已无调用的 Edge 同步生图 adapter 已移除。
 
-### 4.1 部署 VPS Worker（生图 + 理解消费循环，同一容器）
+### 4.1 部署 VPS Worker（生图、理解、Agent、视觉规范四类消费者）
 
-把 `apps/agent-worker/{Dockerfile.unified-harness-candidate,compose.generation.yml,src,scripts}` 部署到 `/opt/bowerbird/agent-worker`，把 `spikes/unified-agent-harness-u1/profiles/bowerbird-u1` 部署到 `/opt/bowerbird/dsh-profile`，并创建权限 `0600` 的 `.env.generation`。仓库内 Compose 默认使用相对 Profile 路径；VPS 扁平目录必须通过同一 env 文件显式覆盖 build context：
+把 `apps/agent-worker/{Dockerfile.unified-harness-candidate,compose.generation.yml,src,scripts}` 部署到 `/opt/bowerbird/agent-worker`，把 `spikes/unified-agent-harness-u1/profiles/bowerbird-u1` 部署到 `/opt/bowerbird/dsh-profile`，并在首次安装时创建权限 `0600` 的 `.env.generation`。更新现有部署时保留服务器配置与已验收 test-only 闸门；下面关闭闸门的模板不能覆盖现役 env。仓库内 Compose 默认使用相对 Profile 路径；VPS 扁平目录必须通过同一 env 文件显式覆盖 build context：
 
 ```dotenv
 GENERATION_CONTROL_URL=https://<project-ref>.supabase.co/functions/v1/generation-worker
@@ -215,6 +279,17 @@ GENERATION_HEARTBEAT_INTERVAL_MS=30000
 UNDERSTAND_CONTROL_URL=https://<project-ref>.supabase.co/functions/v1/understand-worker
 UNDERSTAND_WORKER_TOKEN=<与 Supabase Secret 完全一致的高熵随机值>
 UNDERSTAND_WORKER_ID=lighthouse-guangzhou-1
+AGENT_CONTROL_URL=https://<project-ref>.supabase.co/functions/v1/agent-worker
+AGENT_WORKER_TOKEN=<与对应 Edge Secret 一致的独立高熵随机值>
+AGENT_WORKER_ID=lighthouse-guangzhou-1
+AGENT_HEARTBEAT_INTERVAL_MS=20000
+AGENT_WORKSPACE_ROOT=/workspaces
+DEEPSEEK_API_KEY=<DeepSeek Key>
+DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
+DEEPSEEK_MODEL=deepseek-chat
+VISUAL_PROFILE_CONTROL_URL=https://<project-ref>.supabase.co/functions/v1/visual-profile-worker
+VISUAL_PROFILE_WORKER_TOKEN=<与对应 Edge Secret 一致的独立高熵随机值>
+VISUAL_PROFILE_WORKER_ID=lighthouse-guangzhou-1
 ARK_VISION_MODEL=<豆包 Vision endpoint id>
 ARK_REPLICATION_VIDEO_MODEL=doubao-seed-2-0-mini-260428
 ARK_REPLICATION_TEXT_MODEL=doubao-seed-2-0-mini-260428
@@ -242,13 +317,13 @@ sudo docker compose --env-file .env.generation -f compose.generation.yml logs --
 
 `html-renderer` 只连接 `internal: true` 的 `bowerbird-internal` 网络，无宿主端口和公网出口；Worker 同时连接默认出站网络与该内部网络，通过固定 `RENDERER_URL` 调用。先启动 renderer 创建内部网络，再启动 Worker。两个 env 文件中的 `RENDER_INTERNAL_TOKEN` 必须一致且权限为 `0600`，不得写入仓库或日志。
 
-Worker 容器不映射入站端口、只读根文件系统、非 root、丢弃全部 capabilities，并限制 1536 MiB 内存、1.75 CPU、256 PID、256 MiB workspace tmpfs 与 10 MiB × 3 JSON 日志。容器入口为 `src/main.ts` 组合入口：按 `GENERATION_CONTROL_URL` / `UNDERSTAND_CONTROL_URL` / `AGENT_CONTROL_URL` 是否配置分别启动生图、理解与 Agent 三个消费循环，互不阻塞。方舟同步请求（生图与理解）不设置 120/135 秒主动终止；等待期间每 30 秒向 Bowerbird 控制面续租。Agent 循环每 10 分钟运行 TTL/orphan 清理并输出不含用户内容的控制面与磁盘健康指标；可在运维端运行 `node apps/cloud/scripts/check-agent-runtime-health.mjs` 做阈值探测。
+Worker 容器不映射入站端口、只读根文件系统、非 root、丢弃全部 capabilities，并限制 1536 MiB 内存、1.75 CPU、256 PID、256 MiB workspace tmpfs 与 10 MiB × 3 JSON 日志。容器入口为 `src/main.ts` 组合入口：按 `GENERATION_CONTROL_URL` / `UNDERSTAND_CONTROL_URL` / `AGENT_CONTROL_URL` / `VISUAL_PROFILE_CONTROL_URL` 是否配置分别启动生图、理解、Agent 与视觉规范四个消费循环，互不阻塞。方舟同步请求（生图与理解）不设置 120/135 秒主动终止；等待期间每 30 秒向 Bowerbird 控制面续租。Agent 循环每 10 分钟运行 TTL/orphan 清理并输出不含用户内容的控制面与磁盘健康指标；可在运维端运行 `node apps/cloud/scripts/check-agent-runtime-health.mjs` 做阈值探测。
 
-视频 Worker 镜像安装 `ca-certificates` 与 `ffmpeg`（包含 `ffprobe`），并从 `cloud-shared` 构建上下文复制 `video-contract.ts` 与 `task-authorization.ts` 到 `/cloud/supabase/functions/_shared/`，保持源码跨包导入路径。VPS 上将仓库 `apps/cloud/supabase/functions/_shared/` 中这两个文件同步到 `/opt/bowerbird/cloud-shared/`；不得把包含 `.env` 的整个 Cloud 目录当作构建上下文。直接调用 `docker build` 时也要传 `--build-context cloud-shared=<上述目录>`。生产 `/tmp` 为有界 640 MiB，覆盖单个 500 MiB 视频探测文件；其他 CPU/内存/PID 限制不变。候选镜像需在无网络、只读根目录和可写 `/tmp` 下运行 `node /app/scripts/video-readonly-probe.mjs`，核验生产入口导入及真实合成 MP4 探测；加 `--max-size` 用合法 MP4 free box 检查 500 MiB 上限（采用 640 MiB /tmp 和原 1536 MiB 内存限制），不调用模型或替代真实下载/并发验收。视频上线同时需要 `0058` 迁移和 `generate-proxy` / `generation-worker`；迁移默认不启价，价格须另行确认。
+视频 Worker 镜像安装 `ca-certificates` 与 `ffmpeg`（包含 `ffprobe`），并从 `cloud-shared` 构建上下文复制 `video-contract.ts`、`task-authorization.ts`、`layer-contract.ts`、`image-metadata.ts`、`replication.ts`、`bcoin-text.ts` 到 `/cloud/supabase/functions/_shared/`，保持源码跨包导入路径。VPS 上将仓库 `apps/cloud/supabase/functions/_shared/` 中这六个文件同步到 `/opt/bowerbird/cloud-shared/`；不得把包含 `.env` 的整个 Cloud 目录当作构建上下文。直接调用 `docker build` 时也要传 `--build-context cloud-shared=<上述目录>`。生产 `/tmp` 为有界 640 MiB，覆盖单个 500 MiB 视频探测文件；其他 CPU/内存/PID 限制不变。候选镜像需在无网络、只读根目录和可写 `/tmp` 下运行 `node /app/scripts/video-readonly-probe.mjs`，核验生产入口导入及真实合成 MP4 探测；加 `--max-size` 用合法 MP4 free box 检查 500 MiB 上限（采用 640 MiB /tmp 和原 1536 MiB 内存限制），不调用模型或替代真实下载/并发验收。视频上线同时需要 `0058` 迁移和 `generate-proxy` / `generation-worker`；迁移默认不启价，价格须另行确认。
 
 ### 5. 微信扫码登录（H5，备案域名 bowerbird.cn）
 
-登录链路：桌面/官网 → 系统浏览器打开 `open.weixin.qq.com/connect/qrconnect`（appid/回调域由 `wechat-login` GET 按 Secrets 组装）→ 微信回调到备案域名静态中转页 [website/wechat-callback.html](../../website/wechat-callback.html)（VPS 直接伺服该静态文件）→ 按 `state` 前缀分流：`dt_` 跳 `bowerbird://wechat/callback` deep link 由桌面 Rust 校验后 POST 换会话；`web_` 中转页同源校验 sessionStorage 后自行 POST 换会话。`wechat-login` Function 用 service role `generateLink(magiclink)` 取得 `hashed_token` 与 GoTrue 返回的 `verification_type`，再调用 `/auth/v1/verify` 铸真实 GoTrue 会话（unionid→确定性合成邮箱建号，注册触发器照常发 30 分）。
+登录链路：桌面/官网 → 系统浏览器打开 `open.weixin.qq.com/connect/qrconnect`（appid/回调域由 `wechat-login` GET 按 Secrets 组装）→ 微信回调到备案域名静态中转页 [website/wechat-callback.html](../../website/wechat-callback.html)（VPS 直接伺服该静态文件）→ 按 `state` 前缀分流：`dt_` 跳 `bowerbird://wechat/callback` deep link 由桌面 Rust 校验后 POST 换会话；`web_` 中转页同源校验 sessionStorage 后自行 POST 换会话。`wechat-login` Function 用 service role `generateLink(magiclink)` 取得 `hashed_token` 与 GoTrue 返回的 `verification_type`，再调用 `/auth/v1/verify` 铸真实 GoTrue 会话（unionid→确定性合成邮箱建号，0070 后注册不再赠送 Bcoin）。
 
 ```bash
 supabase functions deploy wechat-login --no-verify-jwt   # §4 的 secrets（H5 段）备好后执行

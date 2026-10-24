@@ -5,6 +5,33 @@ import { replicationMessages, validateReplicationResult, validateReplicationVide
 import { validateReplication, replicationPriceAvailable } from "../../../cloud/supabase/functions/_shared/replication.ts";
 
 const video = { mime: "video/mp4" as const, duration: 5, base64: Buffer.from(new Uint8Array([0,0,0,24,102,116,121,112,105,115,111,109,0,0,0,0])).toString("base64") };
+test("text analysis preserves prose and separates speech without requiring JSON or shot fields", () => {
+  const input: ReplicationPayload = { operation: "video-analysis", video };
+  const parse = (text: string) => JSON.parse(validateReplicationResult(input, text, "stop"));
+  const analysis = "整体暖色。\nstart: 0, end: 5\n人物拿起杯子，镜头缓慢推进。";
+  deepEqual(parse(`【视频分析】\n${analysis}\n\n【语音转写】\n你好，欢迎。\n【转写状态】\ntranscribed`), { analysisText: analysis, transcript: "你好，欢迎。", transcriptStatus: "transcribed" });
+  equal(parse(`## 【视频分析】\r\n${analysis}\r\n**【语音转写】**\r\n\r\n【转写状态】\r\nno_speech`).transcriptStatus, "no_speech");
+  equal(parse(`【视频分析】\n${analysis}\n【语音转写】\n\n【转写状态】\nunavailable`).transcriptStatus, "unavailable");
+  deepEqual(parse(analysis), { analysisText: analysis, transcript: "", transcriptStatus: "unavailable" });
+  equal(parse('"普通文字"').analysisText, '"普通文字"');
+  throws(() => validateReplicationResult(input, analysis, "length"), /replication_result_truncated/);
+  throws(() => parse("  "), /replication_result_incomplete/);
+  throws(() => parse("a".repeat(50001)), /replication_result_incomplete/);
+  throws(() => parse(`【视频分析】\n${analysis}\n【语音转写】\n${"a".repeat(20001)}`), /replication_transcript_invalid/);
+});
+test("analysis preserves actual speech separately and distinguishes missing audio from silence", () => {
+  const input: ReplicationPayload = { operation: "video-analysis", video };
+  const base = { shots: [{ start: 0, end: 5, subject: "产品", action: "展示", camera: "固定", composition: "居中", lighting: "柔光", transition: "切" }] };
+  const parsed = (value: object) => JSON.parse(validateReplicationResult(input, JSON.stringify(value), "stop"));
+  equal(parsed({ ...base, transcript: "今天介绍这款产品。", transcriptStatus: "transcribed" }).transcript, "今天介绍这款产品。");
+  equal(parsed({ ...base, transcript: "", transcriptStatus: "no_speech" }).transcriptStatus, "no_speech");
+  equal(parsed(base).transcriptStatus, "unavailable");
+  equal(parsed({ shots: [{ ...base.shots[0], transcript: "分镜中的实际语音", transcriptStatus: "transcribed" }] }).transcript, "分镜中的实际语音");
+  throws(() => parsed({ shots: [{ ...base.shots[0], transcript: [] }] }), /replication_transcript_invalid/);
+  for (const transcript of [[], 12, "a".repeat(20001)]) throws(() => parsed({ ...base, transcript }), /replication_transcript_invalid/);
+  throws(() => parsed({ ...base, transcript: "伪造", transcriptStatus: "no_speech" }), /replication_transcript_invalid/);
+  ok(JSON.stringify(replicationMessages(input)).includes("不能把画面字幕或推测当成听到的语音"));
+});
 test("unpriced operations stay disabled until a positive separate price is explicitly ready", () => {
   for (const row of [undefined, {}, {active:true,unit_cost:3}, {active:false,unit_cost:3,parameters:{pricing_ready:true}}, {active:true,unit_cost:0,parameters:{pricing_ready:true}}, {active:true,unit_cost:3,parameters:{pricing_ready:"true"}}]) equal(replicationPriceAvailable(row),false);
   equal(replicationPriceAvailable({active:true,unit_cost:3,parameters:{pricing_ready:true}}),true);
@@ -37,7 +64,7 @@ test("truncated or invalid shot results are never accepted as complete", () => {
   throws(() => validateReplicationResult(input, JSON.stringify({ shots: [shot] }), "length"));
   throws(() => validateReplicationResult(input, JSON.stringify({ shots: [{ ...shot, end: 10 }] }), "stop"));
   throws(() => validateReplicationResult(input, JSON.stringify({ shots: [shot, shot] }), "stop"));
-  throws(() => validateReplicationResult(input, "{}", "stop"));
+  throws(() => validateReplicationResult(input, '{"shots":[]}', "stop"));
   const messages = replicationMessages(input) as { content: { type: string; video_url?: { fps: number } }[] }[];
   equal(messages[0].content[0].type, "video_url"); equal(messages[0].content[0].video_url?.fps, 1);
 });
@@ -53,5 +80,5 @@ test("missing transition preserves complete analysis, while malformed required f
   throws(() => validateReplicationResult(input, JSON.stringify({ shots: [{ ...shot, action: null }] }), "stop"), /replication_shot_fields_invalid/);
   throws(() => validateReplicationResult(input, JSON.stringify({ shots: [{ ...shot, end: 7 }] }), "stop"), /replication_shot_time_invalid/);
   throws(() => validateReplicationResult(input, JSON.stringify({ shots: [shot] }), "length"), /replication_result_truncated/);
-  throws(() => validateReplicationResult(input, "{", "stop"), /replication_json_invalid/);
+  equal(JSON.parse(validateReplicationResult(input, "普通分镜描述", "stop")).analysisText, "普通分镜描述");
 });

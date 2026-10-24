@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api } from "../lib/api";
@@ -37,7 +38,7 @@ export function WorkflowDescribeOption({ node, assetIds, checked, disabled, onCh
     {anchor && createPortal(<div className="workflow-caption-preview" role="tooltip" aria-label="已有反推数据"
       style={{ left: Math.max(8, Math.min(anchor.x, window.innerWidth - 368)), top: Math.max(8, Math.min(anchor.y + 6, window.innerHeight - 330)) }}
       onMouseEnter={keep} onMouseLeave={close} onPointerDown={event => event.stopPropagation()} onWheel={event => event.stopPropagation()}>
-      <strong>本卡片已有反推</strong>{error ? <p>{error}</p> : rows === null ? <p>正在读取…</p> : !rows.length ? <p>尚未收到图片，请先连接图片或运行上游</p>
+      <strong>本卡片已有反推</strong>{error ? <p>{userErrorMessage(error, "反推结果暂时无法读取，请重新打开后重试。")}</p> : rows === null ? <p>正在读取…</p> : !rows.length ? <p>尚未收到图片，请先连接图片或运行上游</p>
         : rows.map(row => <section key={row.id}><b>{row.name}</b><p>{row.text || "暂无反推数据"}</p></section>)}
     </div>, document.body)}
   </div>;

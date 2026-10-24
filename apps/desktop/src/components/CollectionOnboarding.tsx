@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { useState } from "react";
 import { api } from "../lib/api";
 import { useOnboarding } from "../lib/onboardingStore";
@@ -81,6 +82,6 @@ export function CollectionOnboarding() {
         {folders.map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
       </select><button className="app-modal-button" disabled={busy || !selectedId} onClick={() => void openCollection(false)}>打开所选集合</button></div>
     </div>}
-    {error && <p className="mt-3 text-sm text-red-400" role="alert">{error}</p>}
+    {error && <p className="mt-3 text-sm text-red-400" role="alert">{userErrorMessage(error, "引导素材未准备好，请稍后重试。")}</p>}
   </ModalShell>;
 }

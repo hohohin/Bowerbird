@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { useEffect, useMemo, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { api } from "../lib/api";
@@ -103,14 +104,14 @@ export function WorkflowAgentDetail({ projectId, nodeId, graphNodes, onOpenGener
       </section>}
       <section><h3>执行过程</h3><small>公开过程说明与工具状态</small>
         {progress.length ? <ol className="workflow-agent-events">{progress.map((event, index) => <li key={`${event.id}:${index}`} data-event-kind={event.kind}>
-          <time>{new Date(event.at).toLocaleTimeString("zh-CN")}</time><p>{event.text}</p>{event.status && <small>{event.status === "running" && !active ? "未记录完成" : statusLabels[event.status]}</small>}
-        </li>)}</ol> : <p>{step?.detail || "等待 Agent 返回过程记录。"}</p>}
+          <time>{new Date(event.at).toLocaleTimeString("zh-CN")}</time><p>{/fail|error/i.test(event.status) || event.kind === "tool" ? userErrorMessage(event.text, /fail|error/i.test(event.status) ? "本次操作未完成，请查看任务结果。" : event.status === "done" ? "本次操作已完成。" : "正在处理任务…") : event.text}</p>{event.status && <small>{event.status === "running" && !active ? "未记录完成" : statusLabels[event.status]}</small>}
+        </li>)}</ol> : <p>{userErrorMessage(step?.detail, "等待 Agent 返回过程记录。")}</p>}
         {step?.localAgentTransport !== "codex-cli" && <small>此通道提供任务阶段与生图记录，尚未提供逐条执行消息。</small>}
         {progressError && <p role="status">{progressError}</p>}
         {generations.map(call => <details key={call.request.id}><summary>生成任务 · {call.response?.error ? "失败" : call.response?.submitted ? "已提交" : call.response ? "已完成" : "处理中"}</summary>
-          <p>{call.request.prompt}</p>{call.request.ratio && <p>比例：{call.request.ratio}</p>}{call.response?.error && <p role="alert">{call.response.error}</p>}
+          <p>{call.request.prompt}</p>{call.request.ratio && <p>比例：{call.request.ratio}</p>}{call.response?.error && <p role="alert">{userErrorMessage(call.response.error, "本次生成未完成，请打开生成会话查看并重试。")}</p>}
         </details>)}
-        {step?.error && <p role="alert">{step.error}</p>}
+        {step?.error && <p role="alert">{userErrorMessage(step.error, "助手任务未完成，请检查输入后重试。")}</p>}
       </section>
       <section><h3>输出</h3>
         {Object.entries(outputs).filter(([, value]) => value.type === "text").map(([port, value]) => <p key={port}>{valueText(value)}</p>)}

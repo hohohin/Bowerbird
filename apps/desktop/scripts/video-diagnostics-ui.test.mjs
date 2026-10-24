@@ -11,9 +11,9 @@ try {
   const page = await browser.newPage({ viewport: { width: 480, height: 800 } });
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   await page.goto('http://127.0.0.1:1657/scripts/fixtures/video-diagnostics/preview.html');
-  const query = () => page.getByRole('button', { name: '查询完整错误', exact: true });
+  const query = () => page.getByRole('button', { name: '查询诊断信息', exact: true });
   await query().click();
-  assert.equal(await page.getByRole('button', { name: '正在查询完整错误…' }).isDisabled(), true);
+  assert.equal(await page.getByRole('button', { name: '正在查询诊断信息…' }).isDisabled(), true);
   await page.getByRole('button', { name: '切换任务', exact: true }).click();
   await query().click();
   await page.evaluate(() => window.pending[0].resolve({ submit_id: 'task-a', logid: 'stale-a' }));
@@ -26,7 +26,8 @@ try {
   assert.match(await page.evaluate(() => window.copied), /"error_code": 42/);
   await query().click();
   await page.evaluate(() => window.pending[2].reject('network timeout'));
-  await page.getByText('诊断查询失败：network timeout', { exact: false }).waitFor();
+  await page.getByText('诊断查询失败：等待响应超时', { exact: false }).waitFor();
+  assert.doesNotMatch(await page.getByLabel('完整错误诊断').innerText(), /network timeout/);
   await page.getByRole('button', { name: '没有编号' }).click();
   assert.equal(await query().isDisabled(), true);
   const calls = await page.evaluate(() => window.calls);

@@ -158,6 +158,10 @@ test("Rust completion checkpoint uses the same wire identity as the frontend", (
   assert.equal(cloudAgentIngestionFingerprint(record), wire.fingerprint);
   assert.equal(cloudAgentIngestionPersisted(record), true);
   assert.equal(cloudAgentNeedsAttention(record), false);
+  const legacy = { ...record, threadId: null };
+  assert.equal(cloudAgentNeedsIngestion(legacy), false);
+  assert.equal(cloudAgentIngestionPersisted(legacy), true);
+  assert.equal(cloudAgentNeedsAttention(legacy), false);
 });
 
 test("accepted succeeded project runs remain owned by the background ingestion lifecycle", () => {
@@ -166,6 +170,19 @@ test("accepted succeeded project runs remain owned by the background ingestion l
   assert.equal(cloudAgentNeedsIngestion(accepted), true);
   assert.equal(cloudAgentNeedsIngestion(acceptedRun({ feedbackAction: "retry" })), false);
   assert.equal(cloudAgentNeedsIngestion(acceptedRun({ projectId: null })), false);
+});
+
+test("legacy pending results stay visible even when they cannot be automatically ingested", () => {
+  for (const record of [
+    acceptedRun({ threadId: null }),
+    acceptedRun({ snapshot: { run: { result_feedback_action: "accept" }, artifacts: [] } }),
+  ]) {
+    assert.equal(cloudAgentNeedsIngestion(record), false);
+    assert.equal(cloudAgentNeedsAttention(record), true);
+    assert.equal(cloudAgentShouldAttemptIngestion(record, getCloudAgentIngestState(record.runId), 0), false);
+  }
+  assert.equal(cloudAgentNeedsAttention(acceptedRun({ projectId: null, threadId: null })), false);
+  assert.equal(cloudAgentNeedsAttention(acceptedRun({ feedbackAction: "retry" })), false);
 });
 
 test("artifact fingerprint is stable and changes when the accepted result group changes", () => {

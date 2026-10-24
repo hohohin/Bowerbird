@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { useState } from "react";
 import { Check, Clapperboard, Megaphone, Palette } from "lucide-react";
 import { ONBOARDING_ROLES, type OnboardingRole } from "../lib/onboardingRoutes";
@@ -72,7 +73,7 @@ export function RoleOnboarding() {
       </button>;
     })}</div>
     {busy && <p className="mt-3 text-sm text-muted" role="status">正在准备入门引导…</p>}
-    {error && <p className="mt-3 text-sm text-red-400" role="alert">{error}</p>}
+    {error && <p className="mt-3 text-sm text-red-400" role="alert">{userErrorMessage(error, "引导项目未准备好，请稍后重试。")}</p>}
     {missingRole && <button className="app-modal-button mt-3" onClick={() => void choose(missingRole, true)}>重新开始这个身份的实操</button>}
   </ModalShell>;
 }

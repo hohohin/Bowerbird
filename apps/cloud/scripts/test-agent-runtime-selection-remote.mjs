@@ -10,10 +10,13 @@ if (!process.argv.includes(CLI_FLAG) || process.env.BOWERBIRD_U4_ALLOW_REMOTE_CO
   console.error(`需要 ${CLI_FLAG} 与 BOWERBIRD_U4_ALLOW_REMOTE_CONTROL_PLANE_SMOKE=1`);
   process.exit(2);
 }
-const skillMode = process.argv.includes("--skill=unified") ? "unified" : "controlled";
-const skillId = skillMode === "unified"
-  ? "bowerbird-unified-agent"
-  : "bowerbird-controlled-image-edit";
+// Reject retired or misspelled skill selections before reading credentials.
+if (process.argv.some((arg) => arg.startsWith("--skill") && arg !== "--skill=unified")) {
+  console.error("当前控制面只允许 --skill=unified；旧 controlled 新建路径已退役");
+  process.exit(2);
+}
+const skillMode = "unified";
+const skillId = "bowerbird-unified-agent";
 
 function namedKey(directName, objectName, legacyName) {
   const direct = process.env[directName]?.trim();
@@ -86,6 +89,20 @@ async function createAccount(isTest) {
     }),
   });
   accounts.push(created.id);
+  if (isTest) {
+    // 0070 removed signup gifts. Fund only this newly created disposable account.
+    // This is a short-lived test fixture, not a payment or a product entitlement.
+    await jsonRequest("fund isolated smoke account", baseUrl + "/rest/v1/rpc/grant_topup_credits", {
+      method: "POST",
+      headers: adminHeaders,
+      body: JSON.stringify({
+        p_user_id: created.id,
+        p_order_id: "agent-control-smoke:" + created.id,
+        p_amount: 30,
+        p_expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+      }),
+    });
+  }
   const session = await jsonRequest("login account", `${baseUrl}/auth/v1/token?grant_type=password`, {
     method: "POST",
     headers: { apikey: publishableKey, "content-type": "application/json" },
@@ -99,18 +116,16 @@ async function createAccount(isTest) {
 }
 
 function createBody(idempotencyKey, runtime) {
-  const manifest = skillMode === "unified"
-    ? JSON.stringify({
-      schemaVersion: 1,
-      goal: "U6 unified runtime selection smoke",
-      references: [],
-      htmlOutput: {
-        viewport: { widthCssPx: 900, heightCssPx: 700, deviceScaleFactor: 1 },
-        capture: { mode: "full_page_and_slices", sliceHeightCssPx: 900, overlapCssPx: 0 },
-        background: "opaque",
-      },
-    })
-    : JSON.stringify({ schemaVersion: 1, intentPrompt: "U4 runtime selection smoke", references: [] });
+  const manifest = JSON.stringify({
+    schemaVersion: 1,
+    goal: "U6 unified runtime selection smoke",
+    references: [],
+    htmlOutput: {
+      viewport: { widthCssPx: 900, heightCssPx: 700, deviceScaleFactor: 1 },
+      capture: { mode: "full_page_and_slices", sliceHeightCssPx: 900, overlapCssPx: 0 },
+      background: "opaque",
+    },
+  });
   return {
     manifest,
     body: {
@@ -153,7 +168,7 @@ try {
     body: JSON.stringify(drifted.body),
   });
   assert.ok(
-    skillMode === "unified" ? [400, 409].includes(driftResult.status) : driftResult.status === 409,
+    [400, 409].includes(driftResult.status),
     "idempotency replay must not change runtime",
   );
 

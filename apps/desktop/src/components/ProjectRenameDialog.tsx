@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { useRef, useState } from "react";
 import { api } from "../lib/api";
 import { notifySuccess } from "../lib/notify";
@@ -69,6 +70,6 @@ export function ProjectRenameDialog({ projectId, currentName, onClose }: {
         if (event.key === "Escape") { event.stopPropagation(); if (!saving.current) onClose(); }
       }} />
     {!trimmed && <p className="mt-2 text-xs text-muted">项目名称不能为空</p>}
-    {error && <p role="alert" className="mt-3 text-xs text-red-500">{error}</p>}
+    {error && <p role="alert" className="mt-3 text-xs text-red-500">{userErrorMessage(error, "项目名称未保存，请稍后重试。")}</p>}
   </ModalShell>;
 }

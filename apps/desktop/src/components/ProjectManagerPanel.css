@@ -1,100 +1,197 @@
-.project-manager-panel { grid-template-columns: minmax(0, 1fr); }
+/* Project directory console. Scope all surfaces and feedback to this modal. */
+.project-manager-panel {
+  --pm-ink: #e4e6eb;
+  --pm-muted: #9c9fa9;
+  --pm-blue: #849aff;
+  --pm-panel: rgba(29, 34, 36, .88);
+  --pm-screen: rgba(206, 215, 220, .055);
+  --pm-lit: rgba(221, 228, 232, .15);
+  --pm-wash: rgba(221, 228, 232, .09);
+  --pm-depth-surface: rgba(49, 57, 59, .97);
+  --pm-depth-hover: rgba(43, 50, 52, .92);
+  --pm-depth-shadow: rgba(0, 0, 0, .42);
+  --pm-depth-sheen: rgba(255, 255, 255, .065);
+  --pm-signal: #a0b6ac;
+  --pm-base: #191f21;
+  grid-template-columns: minmax(0, 1fr); background: rgba(10, 13, 15, .46); backdrop-filter: blur(3px);
+}
+html:not([data-theme="dark"]) .project-manager-panel {
+  --pm-ink: #292c32;
+  --pm-muted: #777b82;
+  --pm-blue: #4562e9;
+  --pm-panel: rgba(245, 244, 240, .88);
+  --pm-screen: rgba(255, 255, 255, .34);
+  --pm-lit: rgba(255, 255, 255, .66);
+  --pm-wash: rgba(69, 98, 233, .075);
+  --pm-depth-surface: rgba(252, 252, 249, .94);
+  --pm-depth-hover: rgba(251, 251, 248, .82);
+  --pm-depth-shadow: rgba(37, 43, 42, .18);
+  --pm-depth-sheen: rgba(255, 255, 255, .24);
+  --pm-signal: #58706a;
+  --pm-base: #f5f4f0;
+  background: rgba(24, 28, 30, .2);
+}
 .project-manager-panel.app-modal-backdrop .app-modal[data-width="lg"] {
-  min-width: 0;
-  justify-self: center;
-  width: 92vw;
-  max-width: 1440px;
-  height: 88vh;
-  max-height: calc(100vh - 40px);
-  border-radius: 20px;
-  background: var(--bb-surface);
+  position: relative; isolation: isolate; min-width: 0; justify-self: center;
+  width: calc(100vw - 64px); max-width: none; height: calc(100dvh - 80px); max-height: none;
+  border: 0; border-radius: 0; box-shadow: none; background: var(--pm-panel);
+  color: var(--pm-ink); backdrop-filter: blur(22px); animation: none;
+  font-family: "Segoe UI", "Microsoft YaHei", sans-serif; font-size: 16px; line-height: normal;
 }
 .project-manager-panel.app-modal-backdrop .app-modal::before { display: none; }
-.project-manager-panel.app-modal-backdrop .app-modal-header { align-items: center; padding: 24px 28px 18px; border: 0; background: transparent; }
-.project-manager-panel.app-modal-backdrop .app-modal-header > .min-w-0 { display: flex; align-items: baseline; gap: 16px; }
-.project-manager-panel.app-modal-backdrop .app-modal-title { font-size: 24px; white-space: nowrap; }
-.project-manager-panel.app-modal-backdrop .app-modal-description { margin: 0; font-size: 13px; white-space: nowrap; }
-.project-manager-panel.app-modal-backdrop .app-modal-header .app-button-accent { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 8px 16px; border-radius: 9px; background: var(--bb-blue); color: #fff; font-size: 14px; }
-.project-manager-panel.app-modal-backdrop .app-modal-close { width: 40px; height: 40px; border-radius: 9px; background: var(--bb-surface-2); }
-.project-manager-panel.app-modal-backdrop .app-modal > .app-modal-body { background: transparent; }
-.project-manager-panel .project-manager-toolbar { display: flex; flex-shrink: 0; align-items: center; gap: 12px; padding: 0 28px 18px; }
-.project-manager-panel .project-manager-search { flex: 1; min-width: 0; min-height: 42px; margin: 0; background: rgb(var(--bb-ink-rgb) / 3%); }
-.project-manager-panel .project-manager-search > svg { flex-shrink: 0; }
-.project-manager-toolbar select { min-height: 42px; max-width: 140px; padding: 8px 12px; border: 1px solid var(--bb-line); border-radius: 9px; background: var(--bb-surface); color: var(--bb-ink); font-size: 13px; }
-.project-manager-views { display: flex; flex-shrink: 0; gap: 4px; padding: 4px; border: 1px solid var(--bb-line); border-radius: 9px; background: rgb(var(--bb-ink-rgb) / 3%); }
-.project-manager-views button { display: grid; place-items: center; width: 36px; height: 32px; border-radius: 6px; color: var(--bb-muted); }
-.project-manager-views button:hover { background: var(--bb-surface-hover); }
-.project-manager-views button[aria-pressed="true"] { background: var(--bb-blue); color: #fff; }
-.project-manager-panel .project-manager-gallery { background: transparent; }
-.project-manager-panel .library-project-page { padding: 2px 28px 12px; }
-.project-manager-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--project-card-width)), 1fr)); gap: 16px; }
-.project-manager-panel .project-manager-card { min-width: 0; margin: 0; border: 1px solid var(--bb-line); border-radius: 12px; background: var(--bb-surface); transition: border-color 140ms ease; }
-.project-manager-panel .project-manager-card:hover,
-.project-manager-panel .project-manager-card[data-active="true"] { border-color: var(--bb-blue); background: var(--bb-surface); }
-.project-manager-panel .project-manager-card[data-active="true"] { box-shadow: 0 0 0 1px var(--bb-blue); }
-.project-manager-card .library-project-enter { padding: 5px; }
-.project-manager-card .library-project-mosaic { position: relative; grid-template-columns: repeat(4, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); gap: 6px; aspect-ratio: 1.6; padding: 8px; border: 0; border-radius: 8px 8px 0 0; background: radial-gradient(rgb(var(--bb-ink-rgb) / 10%) .6px, transparent .8px) 0 0 / 10px 10px, var(--bb-bg); }
-.project-manager-card .library-project-mosaic > span { border-radius: 2px; }
+.project-manager-panel.app-modal-backdrop .app-modal-header { align-items: center; padding: 26px 30px 28px; border: 0; background: transparent; }
+.project-manager-panel.app-modal-backdrop .app-modal-eyebrow { font: 9px Consolas, monospace; letter-spacing: 2.4px; color: var(--pm-muted); margin-bottom: 0; }
+.project-manager-panel.app-modal-backdrop .app-modal-title { font-size: 26px; font-weight: 500; color: var(--pm-ink); line-height: normal; letter-spacing: 1px; margin-top: 9px; }
+.project-manager-panel.app-modal-backdrop .app-modal-title::after { content: '/ DIRECTORY'; margin-left: 12px; font: 10px Consolas, monospace; letter-spacing: 2px; vertical-align: middle; color: var(--pm-muted); }
+.project-manager-panel .project-manager-create { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 8px 16px; font-size: 12px; background: var(--pm-lit); color: var(--pm-ink); }
+.project-manager-panel.app-modal-backdrop .app-modal-close { width: 40px; height: 40px; background: transparent; color: var(--pm-muted); border-radius: 0; }
+.project-manager-panel.app-modal-backdrop .app-modal > .app-modal-body { position: static; display: flex; flex-direction: row; flex: 1; min-height: 0; gap: 28px; padding: 0 30px; overflow: hidden; background: transparent; color: var(--pm-ink); }
+.project-manager-index { display: flex; flex-direction: column; flex: 0 0 146px; min-width: 0; padding-top: 6px; }
+.project-manager-index-label, .project-manager-view-label { font: 9px Consolas, monospace; letter-spacing: 1.5px; color: var(--pm-muted); }
+.project-manager-count { font: 300 68px/1 Consolas, monospace; letter-spacing: -5px; margin: 12px 0 8px; }
+.project-manager-index-caption { font-size: 12px; color: var(--pm-muted); }
+.project-manager-view-label { margin: 40px 0 14px; font-size: 8px; letter-spacing: 1px; }
+.project-manager-views { display: flex; flex-direction: column; gap: 6px; }
+.project-manager-views button { display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 8px 12px; text-align: left; color: var(--pm-muted); font-size: 11px; }
+.project-manager-panel .project-manager-views button[aria-pressed="true"] { color: var(--pm-ink); background: var(--pm-lit); box-shadow: none; }
+.project-manager-index-foot { margin-top: auto; padding: 30px 0 26px; display: flex; flex-direction: column; gap: 9px; color: var(--pm-muted); }
+.project-manager-index-foot span { font: 9px Consolas, monospace; letter-spacing: 1px; }
+.project-manager-index-foot small { font-size: 10px; }
+.project-manager-main { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
+.project-manager-panel .project-manager-toolbar { display: flex; align-items: center; flex-shrink: 0; gap: 10px; padding: 0; margin-bottom: 22px; }
+.project-manager-panel .project-manager-search { flex: 1; min-width: 0; min-height: 42px; margin: 0; padding: 10px 14px; border: 0; border-radius: 0; background: var(--pm-screen); color: var(--pm-muted); }
+.project-manager-search > svg { flex-shrink: 0; }
+.project-manager-panel .project-manager-search input { color: var(--pm-ink); font-size: 12px; }
+.project-manager-search input::placeholder { color: var(--pm-muted); }
+.project-manager-panel .project-manager-search:focus-within { background: var(--pm-lit); box-shadow: none; }
+.project-manager-toolbar select { min-height: 42px; max-width: 140px; padding: 8px 10px; border: 0; border-radius: 0; background: transparent; color: var(--pm-muted); font-size: 12px; }
+.project-manager-toolbar select option { background: var(--bb-surface); color: var(--bb-ink); }
+.project-manager-section { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; flex-shrink: 0; color: var(--pm-muted); font-size: 11px; }
+.project-manager-section small, .project-manager-section > span:last-child { font: 9px Consolas, monospace; letter-spacing: 1px; }
+.project-manager-section small { margin-left: 8px; }
+.project-manager-panel .project-manager-gallery { background: transparent; margin-inline: -18px; }
+.project-manager-panel .library-project-page { padding: 20px 18px 34px; }
+.project-manager-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--project-card-width)), 1fr)); gap: 28px 18px; }
+.project-manager-panel .project-manager-card { min-width: 0; margin: 0; border: 0; border-radius: 0; background: var(--pm-screen); transition: none; box-shadow: none; }
+.project-manager-panel .project-manager-card:hover, .project-manager-panel .project-manager-card[data-active="true"] { background: var(--pm-screen); border: 0; box-shadow: none; }
+.project-manager-card .library-project-enter { position: relative; z-index: 2; pointer-events: none; isolation: auto; transform-style: preserve-3d; padding: 0; border-radius: 0; color: var(--pm-ink); }
+.project-manager-panel .project-manager-card .project-manager-activate { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 1; padding: 0; background: transparent; border: 0; }
+.project-manager-activate:disabled { cursor: wait; }
+.project-manager-card-head { height: 30px; display: flex; align-items: center; justify-content: space-between; padding: 0 44px 0 12px; font: 9px Consolas, monospace; letter-spacing: 1.3px; color: var(--pm-muted); }
+.project-manager-card-head svg { opacity: .4; }
+.project-manager-card .library-project-mosaic { grid-template-columns: 1.6fr 1fr; grid-template-rows: repeat(2, minmax(0, 1fr)); gap: 3px; aspect-ratio: auto; height: 150px; margin-inline: 12px; padding: 0; border: 0; border-radius: 0; background: var(--pm-screen); }
+.project-manager-card .library-project-mosaic > span { position: relative; min-width: 0; border-radius: 0; }
+.project-manager-card .library-project-mosaic img { position: absolute; inset: 0; display: block; min-width: 0; min-height: 0; width: 100%; height: 100%; object-fit: cover; }
 .project-manager-card .library-project-mosaic > span:first-child { grid-row: span 2; }
-.project-manager-card .library-project-mosaic > span:nth-child(2) { grid-row: span 2; }
 .project-manager-card .library-project-mosaic[data-count="1"] { grid-template-columns: 1fr; }
-.project-manager-card .library-project-mosaic[data-count="2"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.project-manager-card .library-project-mosaic[data-count="3"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.project-manager-card .library-project-mosaic[data-count="3"] > span { grid-row: span 2; }
-.project-manager-card .library-project-mosaic[data-count="4"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.project-manager-card .library-project-mosaic[data-count="5"] > span:last-of-type { grid-column: span 2; }
-.project-manager-empty-cover { grid-column: 1 / -1; grid-row: 1 / -1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; color: var(--bb-muted); font-size: 13px; }
-.project-manager-open { position: absolute; right: 12px; bottom: 12px; display: flex; align-items: center; gap: 4px; padding: 6px 10px; border: 1px solid var(--bb-blue); border-radius: 20px; background: var(--bb-surface); color: var(--bb-blue); font-size: 12px; opacity: 0; transition: opacity 140ms ease; }
-.project-manager-card:hover .project-manager-open,
-.project-manager-card:focus-within .project-manager-open,
-.project-manager-card[data-active="true"] .project-manager-open { opacity: 1; }
-.project-manager-card .project-folder-info { min-width: 0; padding: 12px 12px 10px; }
-.project-manager-card .library-project-folder-title { margin: 0; padding-right: 30px; }
-.project-manager-card .library-project-folder-title strong { font-size: 15px; font-weight: 600; }
-.project-manager-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 6px; color: var(--bb-muted); font-size: 12px; }
-.project-manager-card .library-project-expand { top: auto; bottom: 38px; right: 12px; width: 28px; height: 28px; border: 0; border-radius: 6px; background: transparent; box-shadow: none; }
-.project-manager-card .library-project-expand:hover { background: var(--bb-surface-hover); }
-.project-manager-card .library-project-expand svg { width: 19px; height: 19px; }
-.project-manager-grid.is-list { grid-template-columns: 1fr; }
-.project-manager-grid.is-list .library-project-enter { display: flex; align-items: center; gap: 14px; }
-.project-manager-grid.is-list .library-project-mosaic { flex: 0 0 clamp(100px, calc(var(--project-card-width) * .4), 200px); border-radius: 7px; }
-.project-manager-grid.is-list .project-folder-info { flex: 1; padding-right: 42px; }
-.project-manager-grid.is-list .library-project-expand { top: 50%; bottom: auto; transform: translateY(-50%); }
-.project-manager-grid.is-list .project-manager-open { display: none; }
-.project-manager-panel.app-modal-backdrop .app-modal-footer { align-items: center; justify-content: space-between; gap: 16px; padding: 12px 28px 18px; border: 0; background: transparent; }
-.project-manager-hint { color: var(--bb-muted); font-size: 12px; }
-.project-manager-size { display: flex; flex-shrink: 0; align-items: center; gap: 12px; color: var(--bb-muted); }
-.project-manager-size input { appearance: none; width: 148px; height: 28px; margin: 0; background: transparent; cursor: pointer; }
-.project-manager-size input::-webkit-slider-runnable-track { height: 4px; border-radius: 3px; background: linear-gradient(to right, var(--bb-blue) 0 var(--size-fill), var(--bb-line-strong) var(--size-fill) 100%); }
-.project-manager-size input::-webkit-slider-thumb { appearance: none; width: 17px; height: 17px; margin-top: -6.5px; border: 1px solid var(--bb-line-strong); border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgb(var(--bb-shadow-rgb) / 18%); }
-.project-manager-size input::-moz-range-track { height: 4px; border-radius: 3px; background: var(--bb-line-strong); }
-.project-manager-size input::-moz-range-progress { height: 4px; border-radius: 3px; background: var(--bb-blue); }
-.project-manager-size input::-moz-range-thumb { width: 16px; height: 16px; border: 1px solid var(--bb-line-strong); border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgb(var(--bb-shadow-rgb) / 18%); }
-.project-manager-panel button:focus-visible,
-.project-manager-panel select:focus-visible,
-.project-manager-size input:focus-visible { outline: 2px solid var(--bb-blue); outline-offset: 3px; }
-.project-manager-error { padding: 0 28px 12px; color: var(--bb-danger); font-size: 13px; }
-.project-manager-error button { margin-left: 8px; text-decoration: underline; }
-@media (max-width: 700px) {
-  .project-manager-panel.app-modal-backdrop .app-modal[data-width="lg"] { width: 100%; height: calc(100dvh - 24px); max-height: calc(100dvh - 24px); border-radius: 16px; }
-  .project-manager-panel.app-modal-backdrop .app-modal-header { gap: 10px; padding: 18px 16px; }
-  .project-manager-panel.app-modal-backdrop .app-modal-title { font-size: 20px; }
-  .project-manager-panel.app-modal-backdrop .app-modal-header > .min-w-0 { flex-wrap: wrap; gap: 4px 10px; }
-  .project-manager-panel .project-manager-toolbar { flex-wrap: wrap; gap: 10px; padding: 0 16px 14px; }
-  .project-manager-panel .project-manager-search { flex-basis: 100%; }
-  .project-manager-panel .library-project-page { padding: 2px 16px 8px; }
-  .project-manager-panel.app-modal-backdrop .app-modal-footer { flex-wrap: wrap; padding: 12px 16px; }
-  .project-manager-size { margin-left: auto; }
-  .project-manager-grid.is-list .library-project-enter { gap: 0; }
-  .project-manager-grid.is-list .library-project-mosaic { flex-basis: 90px; }
-  .project-manager-grid.is-list .project-folder-info { padding: 10px 28px 10px 8px; }
-  .project-manager-grid.is-list .library-project-folder-title { padding-right: 0; }
+.project-manager-card .library-project-mosaic[data-count="2"] > span { grid-row: span 2; }
+.project-manager-empty-cover { grid-column: 1 / -1; grid-row: 1 / -1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: var(--pm-muted); font-size: 12px; }
+.project-manager-empty-cover svg { opacity: .5; }
+.project-manager-card .project-folder-info { position: relative; isolation: isolate; min-width: 0; padding: 14px 14px 13px; }
+.project-manager-card-kind { font-size: 9px; letter-spacing: 1px; color: var(--pm-muted); }
+.project-manager-card .library-project-folder-title { margin: 5px 0 13px; }
+.project-manager-card .library-project-folder-title strong { flex: 1; min-width: 0; color: var(--pm-ink); font-size: 14px; line-height: 22px; font-weight: 500; }
+.project-manager-meta { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; color: var(--pm-muted); font-size: 10px; }
+.project-manager-meta > span[aria-hidden] { display: none; }
+.project-manager-panel.app-modal-backdrop .project-manager-card .project-manager-open { pointer-events: none; position: absolute; top: 2px; right: 4px; width: 28px; height: 26px; display: grid; place-items: center; padding: 0; border: 0; background: transparent; color: var(--pm-ink); z-index: 4; }
+.project-manager-panel .project-manager-menu { pointer-events: auto; flex: 0 0 28px; height: 22px; padding: 0; display: grid; place-items: center; background: transparent; color: var(--pm-muted); z-index: 3; }
+.project-manager-slot { position: relative; perspective: 1100px; min-width: 0; }
+.project-manager-slot:is(:hover,:focus-within) { z-index: 3; }
+.project-manager-slot:has([data-active="true"]) { z-index: 2; }
+.project-manager-panel .project-manager-card { height: 100%; isolation: auto; transform-style: preserve-3d; transform-origin: 50% 55%; transition: transform 280ms cubic-bezier(.2,.75,.25,1), background 220ms, box-shadow 280ms; }
+.project-manager-card .library-project-enter::before { content: ''; position: absolute; inset: 0; background: radial-gradient(ellipse at var(--pm-pointer-x,50%) var(--pm-pointer-y,20%), var(--pm-depth-sheen), transparent 68%); opacity: 0; transform: translateZ(.1px); pointer-events: none; transition: opacity 220ms; }
+.project-manager-card-head, .project-manager-card .library-project-mosaic, .project-manager-card .project-folder-info { transform: translateZ(0); transition: transform 280ms cubic-bezier(.2,.75,.25,1); }
+.project-manager-panel .project-manager-card[data-active="true"] { background: var(--pm-depth-surface); transform: translateY(-8px); box-shadow: 0 20px 26px -12px var(--pm-depth-shadow), 0 8px 12px -8px var(--pm-depth-shadow); }
+.project-manager-card[data-active="true"] .library-project-mosaic { transform: translateZ(22px); box-shadow: 0 10px 15px -12px var(--pm-depth-shadow); }
+.project-manager-card[data-active="true"] .library-project-enter::before { opacity: 1; }
+.project-manager-card[data-active="true"] .project-manager-card-head { color: var(--pm-ink); }
+.project-manager-selected { font: 8px Consolas, monospace; letter-spacing: 1px; }
+.project-manager-panel .project-manager-card .project-manager-activate:focus-visible { outline: 2px solid var(--pm-muted); outline-offset: 5px; }
+@media (hover: hover) and (pointer: fine) {
+  .project-manager-slot:hover .project-manager-card { background: var(--pm-depth-hover); transform: translateY(-7px) rotateX(var(--pm-tilt-x,3deg)) rotateY(var(--pm-tilt-y,-3deg)); box-shadow: 0 20px 28px -14px var(--pm-depth-shadow), 0 6px 10px -6px var(--pm-depth-shadow); }
+  .project-manager-slot:hover .project-manager-card[data-active="true"] { background: var(--pm-depth-surface); transform: translateY(-10px) rotateX(var(--pm-tilt-x,3deg)) rotateY(var(--pm-tilt-y,-3deg)); }
+  .project-manager-slot:hover .library-project-enter::before { opacity: 1; }
+  .project-manager-slot:hover .library-project-mosaic { transform: translateZ(24px); box-shadow: 0 10px 15px -12px var(--pm-depth-shadow); }
+  .project-manager-slot:hover .project-folder-info { transform: translateZ(14px); }
+  .project-manager-slot:hover .project-manager-card-head { transform: translateZ(8px); color: var(--pm-ink); }
 }
-@media (max-width: 420px) {
-  .project-manager-panel.app-modal-backdrop .app-modal-header .app-button-accent { gap: 4px; padding: 8px; font-size: 12px; }
-  .project-manager-panel.app-modal-backdrop .app-modal-close { width: 32px; }
-  .project-manager-panel.app-modal-backdrop .app-modal-description { font-size: 12px; }
+.project-manager-grid.is-list .project-manager-card[data-active="true"] { transform: translateY(-3px) rotateX(1deg); }
+.project-manager-grid.is-list .project-manager-card[data-active="true"] .library-project-mosaic { transform: translateZ(10px); }
+.project-manager-grid.is-list .project-manager-selected { font-size: 7px; letter-spacing: 0; }
+@keyframes pm-acquire { 0% { opacity: .28; } 28% { opacity: 1; } 48% { opacity: .42; } 100% { opacity: 1; } }
+.project-manager-panel button:not(.library-project-enter):not(.project-manager-activate) { position: relative; isolation: isolate; border-radius: 0; }
+.project-manager-panel button:not(.library-project-enter):not(.project-manager-activate)::before { content: ''; position: absolute; inset: 0; background: var(--pm-wash); opacity: 0; z-index: -1; pointer-events: none; }
+.project-manager-panel button:not(.library-project-enter):not(.project-manager-activate):not(:disabled):is(:hover,:focus-visible)::before { opacity: 1; animation: pm-acquire 110ms steps(1,end) 1; }
+.project-manager-panel .project-manager-create:hover { color: var(--pm-ink); background: var(--pm-lit); }
+.project-manager-grid.is-list { grid-template-columns: 1fr; gap: 18px; }
+.project-manager-grid.is-list .library-project-enter { display: flex; align-items: stretch; }
+.project-manager-grid.is-list .project-manager-card-head { flex: 0 0 64px; flex-direction: column; height: auto; padding: 12px 8px; font-size: 8px; letter-spacing: 0; }
+.project-manager-grid.is-list .library-project-mosaic { flex: 0 0 130px; aspect-ratio: auto; height: 106px; }
+.project-manager-grid.is-list .project-folder-info { flex: 1; padding-right: 36px; }
+.project-manager-panel.app-modal-backdrop .app-modal-footer { align-items: center; justify-content: space-between; gap: 16px; padding: 17px 0 22px; flex-shrink: 0; border: 0; background: transparent; }
+.project-manager-hint { color: var(--pm-muted); font-size: 10px; }
+.project-manager-size { display: flex; flex-shrink: 0; align-items: center; gap: 12px; color: var(--pm-muted); }
+.project-manager-size svg { width: 14px; height: 14px; }
+.project-manager-size input { appearance: none; width: 90px; height: 20px; margin: 0; background: transparent; cursor: pointer; }
+.project-manager-size input::-webkit-slider-runnable-track { height: 2px; background: rgb(var(--bb-ink-rgb) / 22%); }
+.project-manager-size input::-webkit-slider-thumb { appearance: none; width: 5px; height: 10px; margin-top: -4px; border: 0; border-radius: 0; background: var(--pm-muted); box-shadow: none; }
+.project-manager-size input::-moz-range-track { height: 2px; background: rgb(var(--bb-ink-rgb) / 22%); }
+.project-manager-size input::-moz-range-thumb { width: 5px; height: 10px; border: 0; border-radius: 0; background: var(--pm-muted); }
+.project-manager-panel button:focus-visible, .project-manager-panel select:focus-visible, .project-manager-size input:focus-visible { outline: 2px solid var(--pm-muted); outline-offset: 2px; }
+.project-manager-error { padding: 0 0 12px; color: var(--bb-danger); font-size: 13px; }
+.project-manager-error button { margin-left: 8px; text-decoration: underline; }
+.project-manager-ambient { position: absolute; inset: 0; z-index: -1; pointer-events: none; overflow: hidden; color: var(--pm-signal); opacity: .72; }
+.project-manager-ambient::after { content: ''; position: absolute; inset: 0; background: radial-gradient(ellipse at center, transparent 35%, var(--pm-base) 100%); opacity: .35; }
+.project-manager-ambient svg { width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 1; }
+.project-manager-ambient path { vector-effect: non-scaling-stroke; stroke-linecap: square; stroke-linejoin: miter; }
+.project-manager-ambient text { font: 8px Consolas, monospace; letter-spacing: 1.5px; stroke: none; fill: currentColor; }
+.pm-signal { opacity: .38; }
+.pm-signal-top, .pm-signal:nth-child(6) { color: #b29065; }
+@media (max-width: 950px) {
+  .project-manager-index { flex-basis: 112px; }
+  .project-manager-panel.app-modal-backdrop .app-modal > .app-modal-body { gap: 20px; padding-inline: 24px; }
+  .project-manager-panel.app-modal-backdrop .app-modal-title::after { display: none; }
+}
+@media (max-width: 700px) {
+  .project-manager-panel.app-modal-backdrop { padding: 12px; }
+  .project-manager-panel.app-modal-backdrop .app-modal[data-width="lg"] { width: 100%; height: calc(100dvh - 32px); max-height: calc(100dvh - 32px); }
+  .project-manager-panel.app-modal-backdrop .app-modal-header { gap: 8px; padding: 18px 16px; }
+  .project-manager-panel.app-modal-backdrop .app-modal-title { font-size: 22px; }
+  .project-manager-panel.app-modal-backdrop .app-modal-eyebrow { font-size: 8px; letter-spacing: .8px; }
+  .project-manager-panel .project-manager-create { gap: 4px; padding: 8px; font-size: 12px; }
+  .project-manager-panel.app-modal-backdrop .app-modal-close { width: 28px; }
+  .project-manager-panel.app-modal-backdrop .app-modal > .app-modal-body { flex-direction: column; gap: 14px; padding-inline: 16px; }
+  .project-manager-index { flex: 0 0 auto; flex-direction: row; align-items: center; gap: 10px; padding: 0; }
+  .project-manager-index-label, .project-manager-view-label, .project-manager-index-foot { display: none; }
+  .project-manager-count { font-size: 26px; letter-spacing: -1px; margin: 0; }
+  .project-manager-index-caption { font-size: 10px; }
+  .project-manager-views { flex-direction: row; margin-left: auto; gap: 4px; }
+  .project-manager-views button { min-height: 34px; padding: 8px; }
+  .project-manager-views button span, .project-manager-section small { display: none; }
+  .project-manager-panel .project-manager-toolbar { gap: 6px; margin-bottom: 16px; }
+  .project-manager-panel .project-manager-search { gap: 6px; padding: 10px; }
+  .project-manager-toolbar select { font-size: 10px; max-width: 100px; padding: 8px 4px; }
+  .project-manager-grid { gap: 16px; }
+  .project-manager-panel .project-manager-gallery { margin-inline: -10px; }
+  .project-manager-panel .library-project-page { padding-inline: 10px; }
+  .project-manager-panel .project-manager-card[data-active="true"] { transform: translateY(-5px); }
+  .project-manager-grid.is-list .project-manager-selected { font-size: 0; }
+  .project-manager-grid.is-list .project-manager-selected::after { content: '✓'; font-size: 12px; }
+  .project-manager-card .library-project-mosaic { height: 170px; }
+  .project-manager-grid.is-list .project-manager-card-head { flex-basis: 38px; font-size: 7px; }
+  .project-manager-grid.is-list .library-project-mosaic { flex-basis: 78px; height: 110px; }
+  .project-manager-grid.is-list .project-folder-info { padding: 12px 26px 12px 10px; }
+  .project-manager-grid.is-list .project-manager-meta { flex-direction: column; align-items: flex-start; gap: 4px; }
+  .project-manager-panel.app-modal-backdrop .app-modal-footer { flex-wrap: wrap; padding: 17px 0 16px; gap: 8px; }
+  .project-manager-size { margin-left: auto; }
+  .project-manager-hint { font-size: 10px; }
+  .project-manager-size input { width: 90px; }
+  .pm-signal-top { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .project-manager-card, .project-manager-open { transition: none !important; }
+  .project-manager-panel *, .project-manager-panel *::before, .project-manager-panel *::after { animation: none !important; transition: none !important; }
+  .project-manager-panel .project-manager-card, .project-manager-card-head, .project-manager-card .library-project-mosaic, .project-manager-card .project-folder-info { transform: none !important; }
 }
+
+
+.project-manager-panel .project-manager-card[data-project-drop-state]::after { z-index: 5; border-radius: 0; }

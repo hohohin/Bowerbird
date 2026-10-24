@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { useEffect, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-shell";
@@ -191,7 +192,7 @@ export function DreaminaOnboarding() {
           </div>
         ) : (
           <div className="app-inline-status is-error">
-            当前状态：{reason || "检测中…"}
+            当前状态：{reason ? userErrorMessage(reason, "即梦暂时无法使用，请重新检测或登录。") : "检测中…"}
           </div>
         )}
 
@@ -218,12 +219,12 @@ export function DreaminaOnboarding() {
                     : "一键安装 dreamina CLI"}
               </button>
               {installState === "running" && lines.length > 0 && (
-                <div className="mt-1.5 truncate text-[11px] text-muted" title={lines[lines.length - 1]}>
-                  {lines[lines.length - 1]}
+                <div className="mt-1.5 truncate text-[11px] text-muted" title={userErrorMessage(lines[lines.length - 1], "正在安装，请稍候…")}>
+                  {userErrorMessage(lines[lines.length - 1], "正在安装，请稍候…")}
                 </div>
               )}
               {installState === "error" && (
-                <div className="mt-1.5 text-xs text-red-300">{installReason}</div>
+                <div className="mt-1.5 text-xs text-red-300">{userErrorMessage(installReason, "安装未完成，请检查网络后重试。")}</div>
               )}
             </div>
             <div className="mt-1 pl-7 text-xs text-muted">
@@ -273,7 +274,7 @@ export function DreaminaOnboarding() {
                 </button>
               )}
               {loginError && (
-                <div className="mt-1.5 text-xs text-red-300">{loginError}</div>
+                <div className="mt-1.5 text-xs text-red-300">{userErrorMessage(loginError, "即梦授权未完成，请重新登录。")}</div>
               )}
             </div>
             <div className="mt-1 pl-7 text-xs text-muted">

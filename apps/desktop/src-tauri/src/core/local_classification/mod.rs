@@ -472,6 +472,9 @@ impl LocalClassifier {
             )
             .await;
             if let Some(error) = save_error.into_inner().unwrap() { return Err(error); }
+            // Folder DBs are in memory. Retain completed translation batches
+            // even when the subsequent image request fails or is cancelled.
+            if let Some(folder) = folder { folder.save()?; }
             if completed && !self.cancel.load(Ordering::Relaxed) && self.status.lock().unwrap().failed == 0 {
                 if let Some(tag) = tag.filter(|_| scope.is_none()) {
                     db.finish_local_label(&tag, job_revision)
@@ -865,6 +868,7 @@ impl LocalClassifier {
             questions.push(jev::Candidate {
                 name: label.name.clone(),
                 description: label.description.clone(),
+                english: label.english.clone(),
                 examples,
             });
         }
@@ -877,7 +881,12 @@ impl LocalClassifier {
         let judge = &observed_judge;
         self.diagnostics.step(id, "judge", "Jev 匹配请求（含网络、认证和服务端处理）");
         let decisions = judge
-            .classify_mode(&image, &questions, &self.cancel, record_observation, |value, error| {
+            .classify_mode(&image, &questions, &self.cancel, record_observation, |translated| {
+                for (index, english) in translated {
+                    db.cache_label_english(&labels[*index], english).map_err(|e| e.to_string())?;
+                }
+                Ok(())
+            }, |value, error| {
                 ticket = value["classification_id"].as_str().map(str::to_string);
                 let report = jev::Report::from_response(&questions, value, error);
                 preview = report.preview();

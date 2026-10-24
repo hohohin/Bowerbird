@@ -53,7 +53,7 @@ export function policyFor(tier: string): FeaturePolicy {
     can_use_byo: false,
     can_use_cloud: true,
     max_parallel_jobs: 1,
-    understand_daily_limit: 10,
+    understand_daily_limit: null,
     can_use_priority_queue: false,
     can_hd_export: false,
     max_parallel_agent_runs: 1,
@@ -102,7 +102,7 @@ export function activeTier(subscription: {
   status?: string | null;
   current_period_end?: string | null;
 } | null | undefined, now = Date.now()): string {
-  const active = subscription?.status === "active" &&
+  const active = (subscription?.status === "active" || subscription?.status === "canceled") &&
     (!subscription.current_period_end || Date.parse(subscription.current_period_end) > now);
   return active ? subscription?.tier ?? "free" : "free";
 }

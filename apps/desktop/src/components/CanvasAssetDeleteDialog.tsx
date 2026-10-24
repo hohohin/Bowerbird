@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { useEffect, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { api } from "../lib/api";
@@ -36,7 +37,7 @@ export function CanvasAssetDeleteDialog({ target, onClose, onComplete }: {
       }
       setAssets(target.assetIds.map(id => byId.get(id)!));
     }).catch(error => {
-      if (alive) setError(`读取待删除素材失败：${error instanceof Error ? error.message : String(error)}`);
+      if (alive) setError(userErrorMessage(error, "待删除素材暂时无法读取，请重新打开后重试。"));
     });
     return () => { alive = false; };
   }, [target, attempt]);
@@ -58,7 +59,8 @@ export function CanvasAssetDeleteDialog({ target, onClose, onComplete }: {
         else await api.deleteAssetWithMode(asset.id, "delete", target.projectId);
       } catch (error) {
         remaining.push(asset);
-        failures.push(`${asset.name}：${error instanceof Error ? error.message : String(error)}`);
+        console.error("Asset deletion failed", error);
+        failures.push(`${asset.name}：${userErrorMessage(error, "删除未完成，请稍后重试。")}`);
       }
       setProgress(index + 1);
     }

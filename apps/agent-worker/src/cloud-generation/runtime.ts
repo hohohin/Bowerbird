@@ -1,10 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
+import { Buffer } from "node:buffer";
 import { IdlePollBackoff } from "../idle-poll-backoff.ts";
 import { executeVideo } from "./video.ts";
 import type { VideoInput } from "../../../cloud/supabase/functions/_shared/video-contract.ts";
 import { LAYER_MODEL, validateLayerRequest, type LayerOptions } from "../../../cloud/supabase/functions/_shared/layer-contract.ts";
 import { layerPayload, parseLayerResult } from "./layers.ts";
 import { GPT_IMAGE_MODELS, gptImageRequest, generateGptImage } from "./gpt-image.ts";
+import { imageMetadata } from "../../../cloud/supabase/functions/_shared/image-metadata.ts";
 
 const CLEANUP_INTERVAL_MS = 10 * 60_000;
 
@@ -66,6 +68,7 @@ export interface GenerationInput {
   transparent?: boolean;
   mock_scenario?: string | null;
   layer_options?: LayerOptions;
+  billing?: { output_size?: string };
 }
 
 interface GeneratedImage {
@@ -76,6 +79,19 @@ interface GeneratedImage {
 const ONE_PIXEL_PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+
+/** Charge actual encoded output pixels, never the layer's canvas bounding box. */
+export function outputLayerPixels(bundle: Uint8Array): number[] {
+  const value = JSON.parse(new TextDecoder().decode(bundle));
+  const layers = value?.document?.layers;
+  if (!Array.isArray(layers) || layers.length < 1 || layers.length > 17) throw new Error("invalid_billing_layers");
+  return layers.map(layer => {
+    const data = typeof layer.dataUrl === "string" ? layer.dataUrl.split(",")[1] : undefined;
+    const meta = data ? imageMetadata(Buffer.from(data, "base64")) : null;
+    if (!meta) throw new Error("invalid_billing_layer_image");
+    return meta.width * meta.height;
+  });
+}
 
 function defaultFetch(): WorkerFetch {
   const candidate = (globalThis as unknown as { fetch?: WorkerFetch }).fetch;
@@ -267,7 +283,7 @@ export function arkImageRequestBody(
       ? { optimize_prompt_options: { mode: choice.optimizePromptMode } }
       : {}),
     ...(input.transparent ? { background: "transparent" } : {}),
-    size: config.arkImageSize,
+    size: input.billing?.output_size ?? config.arkImageSize,
     response_format: "b64_json",
     watermark: false,
   };
@@ -430,6 +446,7 @@ async function executeClaim(
       mime: image.mime,
       bytes: image.bytes.byteLength,
       sha256: sha256(image.bytes),
+      ...(layerOptions?.operation === "decompose" ? { layerPixels: outputLayerPixels(image.bytes) } : {}),
     });
     console.log(JSON.stringify({
       event: "generation_succeeded",

@@ -240,11 +240,12 @@ async function actionComplete(
     await assertUploadedObject(admin, objectKey, bytes);
   }
   const isVideo = leasedJob.service.startsWith("video_");
-  const result = await admin.rpc(isVideo ? "complete_generation_video_job" : "complete_generation_job", {
+  const result = await admin.rpc(isVideo ? "complete_generation_video_job" : "complete_bcoin_image_job", {
     p_job_id: jobId,
     p_lease_id: leaseId,
     p_status: status,
     ...(isVideo ? { p_completion_tokens: status === "succeeded" ? body.completionTokens : null } : {}),
+    ...(!isVideo ? { p_layer_pixels: status === "succeeded" && leasedJob.service === "image_layer_decompose" ? body.layerPixels ?? null : null } : {}),
     p_output_object_key: objectKey,
     p_output_mime: mime,
     p_output_bytes: status === "succeeded" ? bytes : null,

@@ -68,12 +68,6 @@ export type MeteredDeepSeekProxyOptions = {
   maxOutputTokens?: number;
   allowedToolNames?: readonly string[];
   fetch?: MeteredDeepSeekProxyFetch;
-  /**
-   * Local dev-only "Agent DS" relaxation: let image content parts reach the
-   * upstream (deepseek-flash is multimodal). Production runtimes keep the
-   * text-only boundary and never set this.
-   */
-  allowImageContent?: boolean;
   /** Optional test-only observer for unexpected local persistence/control errors. */
   onUnexpectedError?: (error: unknown, identity: {
     callId: string;
@@ -205,11 +199,11 @@ function containsImage(value: unknown): boolean {
   return Object.values(record).some(containsImage);
 }
 
-function validateRequest(value: unknown, model: string, allowImages: boolean): ProxyRequest {
+function validateRequest(value: unknown, model: string): ProxyRequest {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new ProxyHttpError(400, "request_invalid");
   const request = value as ProxyRequest;
   if (request.model !== model || request.stream !== true || !Array.isArray(request.messages) ||
-      (!allowImages && containsImage(request.messages))) {
+      containsImage(request.messages)) {
     throw new ProxyHttpError(400, "request_invalid");
   }
   return request;
@@ -545,7 +539,7 @@ export async function startMeteredDeepSeekProxy(options: MeteredDeepSeekProxyOpt
     if (inFlight) return sendJson(response, 409, "request_in_flight");
     inFlight = true;
     try {
-      const modelRequest = validateRequest(await readJson(request), upstream.model, options.allowImageContent === true);
+      const modelRequest = validateRequest(await readJson(request), upstream.model);
       if (options.allowedToolNames && Array.isArray(modelRequest.tools)) {
         modelRequest.tools = modelRequest.tools.filter((tool) => {
           const name = (tool as { function?: { name?: string } })?.function?.name;

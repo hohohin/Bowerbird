@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { ImageIcon, LoaderCircle } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
@@ -107,7 +108,7 @@ export function ClassificationPlayback({ status }: { status: LocalClassification
             {status.busy && <LoaderCircle size={14} className="classification-playback-spinner" aria-hidden="true" />}
             {current ? cloudCurrent ? "Cloud 补标签中" : "正在分类" : status.busy ? "等待分类结果" : "本轮处理结束"}
           </div>
-          <p className="classification-playback-name">{current?.name ?? status.message}</p>
+          <p className="classification-playback-name">{current?.name ?? userErrorMessage(status.message, status.busy ? "正在分类…" : status.last_error ? "本轮分类未完成，请稍后重试。" : "本轮处理结束")}</p>
           {current && <p className="classification-playback-hint">{cloudCurrent ? "正在补充分类标签" : `正在分析 · 第 ${current.position} / ${status.total} 张`}</p>}
         </div>
         <span className="classification-playback-count">已处理 {status.done} / {status.total}</span>
@@ -117,8 +118,8 @@ export function ClassificationPlayback({ status }: { status: LocalClassification
     </div>
     </div>
     </div>
-    {!status.busy && <p className="classification-playback-summary" role="status">{status.message}</p>}
+    {!status.busy && <p className="classification-playback-summary" role="status">{userErrorMessage(status.message, status.last_error ? "本轮分类未完成，请稍后重试。" : "本轮处理结束")}</p>}
     {status.busy && status.run_id === undefined && <p className="classification-playback-summary">重启应用后可展示完整分类结果动画，当前分类继续进行。</p>}
-    {status.last_error && <p className="classification-playback-error" role="alert">最近未完成原因：{status.last_error}</p>}
+    {status.last_error && <p className="classification-playback-error" role="alert">最近未完成原因：{userErrorMessage(status.last_error, "部分素材分类未完成，请稍后重试。")}</p>}
   </section>;
 }

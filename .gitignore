@@ -57,6 +57,7 @@ dev-doc/*
 !dev-doc/EMBEDDED-BROWSER.md
 !dev-doc/ONBOARDING.md
 !dev-doc/DESKTOP-UPDATES.md
+!dev-doc/USER-FACING-ERRORS.md
 !dev-doc/CREATIVE-MEMORY-PLAN.md
 !dev-doc/ARCH-ADJUST-PROGRESS.md
 !dev-doc/SEEDANCE-2.5-INTEGRATION.md

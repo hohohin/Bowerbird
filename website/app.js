@@ -1,3 +1,4 @@
+import { reportUserError } from "./user-error.js";
 import { Schema } from "prosemirror-model";
 import { EditorState } from "prosemirror-state";
 import { EditorView } from "prosemirror-view";
@@ -718,12 +719,12 @@ async function startWechatLogin() {
     );
     const payload = await response.json();
     if (!response.ok || !payload.qrconnect_url) {
-      throw new Error(payload?.error?.message || `微信登录暂不可用（HTTP ${response.status}）`);
+      throw Object.assign(new Error(payload?.error?.message || "微信登录暂不可用"), { status: response.status, code: payload?.error?.code });
     }
     window.location.href = payload.qrconnect_url;
   } catch (error) {
     try { window.sessionStorage.removeItem(WECHAT_LOGIN_STATE_KEY); } catch { /* 忽略 */ }
-    accountState.textContent = error?.message || "微信登录发起失败";
+    accountState.textContent = reportUserError(error, "微信登录暂不可用，请稍后重新扫码。");
     accountState.onclick = () => showAccountLoginMenu();
   }
 }
@@ -733,14 +734,16 @@ function startEmailLogin() {
   if (!email || !email.includes("@")) return;
   (async () => {
     try {
-      await supabaseClient?.auth.signInWithOtp({
+      if (!supabaseClient) throw new Error("账号服务暂不可用");
+      const { error } = await supabaseClient.auth.signInWithOtp({
         email,
         options: { emailRedirectTo: window.location.origin },
       });
+      if (error) throw error;
       accountState.textContent = "邮件已发送，请查收并点击验证链接";
       accountState.onclick = null;
     } catch (error) {
-      accountState.textContent = "登录邮件发送失败，请重试";
+      accountState.textContent = reportUserError(error, "登录邮件未能发送，请稍后重试。");
     }
   })();
 }
@@ -823,7 +826,23 @@ function addGeneratedAsset(imageUrl) {
 }
 
 function showGenerationMessage(title, detail, state = "ready") {
-  if (!generationStatus) return;
+  if (!generationStatus) {
+    // Current pages use the graph for normal progress, but failures still need
+    // a readable explanation next to the generation action.
+    let feedback = document.getElementById("generation-feedback");
+    if (!feedback && state === "error") {
+      feedback = document.createElement("p");
+      feedback.id = "generation-feedback";
+      feedback.className = "generation-feedback";
+      feedback.setAttribute("role", "status");
+      generationResult.append(feedback);
+    }
+    if (feedback) {
+      feedback.hidden = state !== "error";
+      feedback.textContent = state === "error" ? `${title}。${detail || ""}` : "";
+    }
+    return;
+  }
   generationResult.classList.toggle("is-loading", state === "loading");
   generationResult.classList.toggle("is-error", state === "error");
   generationPlaceholder.hidden = false;
@@ -841,7 +860,7 @@ function applyDownloadConfig(url) {
 
 async function loadImageService() {
   if (window.location.protocol === "file:") {
-    showGenerationMessage("当前是静态预览", "运行 pnpm --filter @bowerbird/website dev 后即可真实生成");
+    showGenerationMessage("当前是静态预览", "请打开 Bowerbird 官网在线体验，或使用桌面应用继续创作。");
     return;
   }
 
@@ -860,10 +879,10 @@ async function loadImageService() {
     }
     const detail = payload.configured
       ? `每位访客每日可体验 ${demoDailyLimit} 次 · 生成结果自动进入左侧素材库`
-      : "请先在 website/.env.local 配置服务端密钥";
-    showGenerationMessage(`${payload.label}${payload.configured ? " 已就绪" : " 待配置"}`, detail);
+      : "在线创作暂不可用，请稍后再试，或使用桌面应用继续创作。";
+    showGenerationMessage(payload.configured ? `${payload.label} 已就绪` : "在线创作暂不可用", detail, payload.configured ? "ready" : "error");
   } catch {
-    showGenerationMessage("未连接到生成服务", "请通过项目开发服务器打开本页", "error");
+    showGenerationMessage("未连接到生成服务", "请检查网络后刷新页面，或使用桌面应用继续创作。", "error");
   }
 }
 
@@ -873,13 +892,13 @@ generateButton.addEventListener("click", async () => {
     return;
   }
   if (window.location.protocol === "file:") {
-    showGenerationMessage("静态文件无法安全调用生图 API", "请用项目开发服务器打开；API Key 不会写进网页", "error");
+    showGenerationMessage("当前预览无法生成图片", "请打开 Bowerbird 官网在线体验，或使用桌面应用继续创作。", "error");
     return;
   }
 
   const { prompt, references } = serializeDoc(view.state.doc);
   if (!prompt.trim()) {
-    showGenerationMessage("先写下你的创作意图", "Prompt 不能为空", "error");
+    showGenerationMessage("先写下你的创作意图", "描述你想要的画面后再开始创作。", "error");
     view.focus();
     return;
   }
@@ -922,7 +941,7 @@ generateButton.addEventListener("click", async () => {
         }
         return;
       }
-      throw new Error(payload.error || `生成失败（${response.status}）`);
+      throw Object.assign(new Error(payload.error?.message || (typeof payload.error === "string" ? payload.error : "生成未完成")), { status: response.status, code: payload.error?.code });
     }
     if (!payload.image) throw new Error("服务未返回图片");
 
@@ -937,10 +956,10 @@ generateButton.addEventListener("click", async () => {
     else showGenerationMessage("生成完成，已自动入库", `新作品已进入左侧素材库 · 今日还可体验 ${remaining} 次`);
     imageService = { ...imageService, label: payload.providerLabel || imageService?.label };
   } catch (error) {
-    const message = error.name === "AbortError" ? "生成超时，请稍后重试" : error.message;
+    const message = reportUserError(error, "请稍后确认结果，或使用桌面应用继续创作。");
     graphOutputState = "error";
     renderCreationGraph();
-    showGenerationMessage("这次没有生成成功", message, "error");
+    showGenerationMessage("暂未获得生成结果", message, "error");
   } finally {
     window.clearTimeout(timeoutId);
     if (!hasCompletedDemo()) {

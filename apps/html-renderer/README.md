@@ -75,13 +75,7 @@ node scripts/e2e-render-check.mjs --url http://127.0.0.1:3917   # 容器内/隧�
 
 ## 镜像扫描与 Chromium 安全更新流程（H5-T2）
 
-- **扫描**（VPS 实测命令；GitHub/ghcr 在腾讯云线路不可达，漏洞库走 ECR 公共镜像）：
-  ```bash
-  sudo docker run --rm -e TRIVY_DB_REPOSITORY=public.ecr.aws/aquasecurity/trivy-db:2 \
-    -v /var/run/docker.sock:/var/run/docker.sock -v /tmp:/out aquasec/trivy:latest \
-    image --scanners vuln --severity HIGH,CRITICAL --output /out/trivy.html bowerbird/html-renderer:local
-  ```
-  高危 CVE 未处理不得扩大开放；扫描结果与处理记录随部署归档（首扫台账见 PROJECT.md 2026-08-28 H5 条目）。
+- **扫描**：按 [统一 Harness Runbook §3](../agent-worker/UNIFIED-HARNESS-RUNBOOK.md#3-镜像扫描与依赖审计) 的通用镜像流程执行：固定并记录 Trivy 版本/digest，公开漏洞库使用 ECR；候选导出为 tar 后断网扫描，不挂载 Docker socket，也不使用浮动 `latest`。报告与候选 digest 一起归档，高危 CVE 未处理不得扩大开放。首扫历史台账见 PROJECT.md 2026-08-28 H5 条目。
 - **Chromium 安全更新**：唯一路径是升级 `package.json` 的 `playwright` 精确钉版 → 重建镜像 → `rendererFingerprint` 随之变化（记录进 PROJECT.md/部署记录）→ `verify-container.mjs` + `e2e-render-check.mjs --url` 复跑通过后才可对外。禁止在容器内手工替换 Chromium 二进制或临时加 flag。
 - **回滚**：重建前保留旧镜像 tag（`docker tag bowerbird/html-renderer:local bowerbird/html-renderer:rollback-<日期>`）；回滚 = compose 指回旧 tag 重建，fingerprint 应回到记录值。
 

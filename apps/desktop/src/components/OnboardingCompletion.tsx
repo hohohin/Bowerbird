@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { useState } from "react";
 import { ArrowLeft, ArrowRight, CheckCircle2, QrCode } from "lucide-react";
 import { open as openExternal } from "@tauri-apps/plugin-shell";
@@ -43,7 +44,7 @@ export function OnboardingCompletion({ onComplete, onPrevious, disabled, error, 
         <h3>恭喜你，已完成设计师入门引导！</h3>
         <p>现在你已经准备好生成了，开始筑巢吧。</p>
         <p>你也可以随时从入门引导中选择其他身份，继续了解园丁鸟。</p>
-        {error && <p role="alert" className="app-inline-status is-error">{error}</p>}
+        {error && <p role="alert" className="app-inline-status is-error">{userErrorMessage(error, "引导进度未保存，请稍后重试。")}</p>}
       </section>
       <section className="onboarding-completion-login" aria-label="扫码登录">
         {auth?.logged_in ? <>
@@ -61,7 +62,7 @@ export function OnboardingCompletion({ onComplete, onPrevious, disabled, error, 
           </button>
           {started && <p role="status">已打开二维码，请用微信扫码确认。</p>}
           {auth && !auth.cloud_available && <p role="status">当前版本未配置登录服务，请安装官方构建。</p>}
-          {loginError && <p role="alert" className="app-inline-status is-error">{loginError}</p>}
+          {loginError && <p role="alert" className="app-inline-status is-error">{userErrorMessage(loginError, "登录未完成，请稍后重试。")}</p>}
         </>}
       </section>
     </div>

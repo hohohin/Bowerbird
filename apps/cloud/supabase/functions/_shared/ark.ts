@@ -1,29 +1,19 @@
 import { ApiError } from "./errors.ts";
 
-export type MockScenario = "success" | "async" | "moderation" | "failure" | "timeout";
+export type MockScenario = "success" | "moderation" | "failure" | "timeout";
 
 export interface ImageInput {
   mime: "image/jpeg" | "image/png" | "image/webp";
   base64: string;
 }
 
-export interface GenerateInput {
-  media: "image" | "video";
-  prompt: string;
-  referenceImages: ImageInput[];
-  ratio?: string;
-  scenario?: MockScenario;
-}
-
-export type GenerateResult =
-  | { status: "succeeded"; images: ImageInput[]; actualCost: number }
-  | { status: "queued"; remoteTaskId: string; actualCost?: number };
-
 export interface UnderstandInput {
   operation: "caption" | "autoname" | "classify";
   /** null = 纯文本调用（生成图维度数据命名），不带图；caption/classify 必带一张图。 */
   image: ImageInput | null;
   instruction?: string;
+  /** Server-selected bound; classification translation uses the larger budget. */
+  maxOutputTokens?: 2000 | 6000;
   scenario?: MockScenario;
 }
 
@@ -66,15 +56,11 @@ export function arkUnderstandUsage(payload: Record<string, unknown>): ArkUnderst
 }
 
 export interface ArkAdapter {
-  generate(input: GenerateInput): Promise<GenerateResult>;
   understand(input: UnderstandInput, onUsage?: UsageObserver): Promise<UnderstandResult>;
 }
 
-const ONE_PIXEL_PNG =
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 const DEFAULT_ARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3";
-const MAX_UPSTREAM_IMAGE_BYTES = 20 * 1024 * 1024;
-export const DEFAULT_IMAGE_UPSTREAM_TIMEOUT_MS = 135_000;
+export const DEFAULT_UNDERSTAND_UPSTREAM_TIMEOUT_MS = 110_000;
 
 function requiredEnv(name: string): string {
   const value = Deno.env.get(name)?.trim();
@@ -82,36 +68,13 @@ function requiredEnv(name: string): string {
   return value;
 }
 
-function upstreamTimeout(): number {
-  const value = Number.parseInt(
-    Deno.env.get("ARK_IMAGE_TIMEOUT_MS") ?? String(DEFAULT_IMAGE_UPSTREAM_TIMEOUT_MS),
-    10,
-  );
-  return Number.isFinite(value) && value > 0 ? value : DEFAULT_IMAGE_UPSTREAM_TIMEOUT_MS;
-}
-
 function understandUpstreamTimeout(): number {
-  const value = Number.parseInt(Deno.env.get("UNDERSTAND_UPSTREAM_TIMEOUT_MS") ?? "110000", 10);
-  return Number.isFinite(value) && value > 0 ? value : 110_000;
+  const value = Number.parseInt(Deno.env.get("UNDERSTAND_UPSTREAM_TIMEOUT_MS") ?? String(DEFAULT_UNDERSTAND_UPSTREAM_TIMEOUT_MS), 10);
+  return Number.isFinite(value) && value > 0 ? value : DEFAULT_UNDERSTAND_UPSTREAM_TIMEOUT_MS;
 }
 
 function dataUri(image: ImageInput): string {
   return `data:${image.mime};base64,${image.base64}`;
-}
-
-function bytesToBase64(bytes: Uint8Array): string {
-  const chunkSize = 0x8000;
-  let binary = "";
-  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
-  }
-  return btoa(binary);
-}
-
-function imageMime(contentType: string | null): ImageInput["mime"] {
-  const mime = contentType?.split(";", 1)[0]?.trim().toLowerCase();
-  if (mime === "image/jpeg" || mime === "image/webp") return mime;
-  return "image/png";
 }
 
 interface ArkErrorInfo {
@@ -246,7 +209,7 @@ async function arkFetchJson(
   apiKey: string,
   path: string,
   body: unknown,
-  timeoutMs = upstreamTimeout(),
+  timeoutMs: number,
 ): Promise<Record<string, unknown>> {
   const started = performance.now();
   let response: Response;
@@ -283,25 +246,6 @@ async function arkFetchJson(
   } catch {
     throw new ApiError("upstream_failed", "方舟返回格式无效", true, 502);
   }
-}
-
-async function imageFromUrl(url: string): Promise<ImageInput> {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    throw new ApiError("upstream_failed", "方舟返回的图片地址无效", true, 502);
-  }
-  if (parsed.protocol !== "https:") {
-    throw new ApiError("upstream_failed", "方舟返回的图片地址不安全", true, 502);
-  }
-  const response = await fetch(parsed, { signal: AbortSignal.timeout(30_000) });
-  if (!response.ok) throw new ApiError("upstream_failed", "下载方舟生成图片失败", true, 502);
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  if (!bytes.length || bytes.length > MAX_UPSTREAM_IMAGE_BYTES) {
-    throw new ApiError("upstream_failed", "方舟生成图片大小无效", true, 502);
-  }
-  return { mime: imageMime(response.headers.get("content-type")), base64: bytesToBase64(bytes) };
 }
 
 function sectionLines(text: string): Array<{ title: string; body: string }> {
@@ -364,19 +308,6 @@ export class MockArkAdapter implements ArkAdapter {
     if (scenario === "timeout") await new Promise(() => {});
   }
 
-  async generate(input: GenerateInput): Promise<GenerateResult> {
-    const scenario = this.scenario(input.scenario);
-    await this.applyScenario(scenario);
-    if (scenario === "async" || input.media === "video") {
-      return { status: "queued", remoteTaskId: `mock-${crypto.randomUUID()}` };
-    }
-    return {
-      status: "succeeded",
-      images: [{ mime: "image/png", base64: ONE_PIXEL_PNG }],
-      actualCost: 5,
-    };
-  }
-
   async understand(input: UnderstandInput, onUsage?: UsageObserver): Promise<UnderstandResult> {
     const scenario = this.scenario(input.scenario);
     await this.applyScenario(scenario);
@@ -398,41 +329,12 @@ export class VolcArkAdapter implements ArkAdapter {
   private readonly baseUrl = (Deno.env.get("ARK_BASE_URL")?.trim() || DEFAULT_ARK_BASE_URL)
     .replace(/\/+$/, "");
 
-  async generate(input: GenerateInput): Promise<GenerateResult> {
-    if (input.media === "video") {
-      const model = Deno.env.get("ARK_VIDEO_MODEL")?.trim();
-      if (!model || model.includes("x-x")) {
-        throw new ApiError("not_configured", "Seedance 视频模型尚未配置");
-      }
-      throw new ApiError("not_configured", "Seedance 异步任务 adapter 尚待真实模型联调");
-    }
-
-    const model = requiredEnv("ARK_IMAGE_MODEL");
-    const payload = await arkFetchJson(this.baseUrl, this.apiKey, "/images/generations", {
-      model,
-      prompt: input.prompt,
-      ...(input.referenceImages.length ? { image: input.referenceImages.map(dataUri) } : {}),
-      size: Deno.env.get("ARK_IMAGE_SIZE")?.trim() || "2K",
-      response_format: "b64_json",
-      watermark: false,
-    });
-    const data = Array.isArray(payload.data) ? payload.data as Array<Record<string, unknown>> : [];
-    const images: ImageInput[] = [];
-    for (const item of data) {
-      if (typeof item.b64_json === "string" && item.b64_json) {
-        images.push({ mime: "image/png", base64: item.b64_json });
-      } else if (typeof item.url === "string" && item.url) {
-        images.push(await imageFromUrl(item.url));
-      }
-    }
-    if (!images.length) throw new ApiError("upstream_failed", "Seedream 未返回图片", true, 502);
-    return { status: "succeeded", images, actualCost: 5 };
-  }
-
   async understand(input: UnderstandInput, onUsage?: UsageObserver): Promise<UnderstandResult> {
     const model = requiredEnv("ARK_VISION_MODEL");
     const payload = await arkFetchJson(this.baseUrl, this.apiKey, "/chat/completions", {
       model,
+      max_tokens: input.maxOutputTokens ?? 2000,
+      thinking: { type: "disabled" },
       messages: [{
         role: "user",
         content: [

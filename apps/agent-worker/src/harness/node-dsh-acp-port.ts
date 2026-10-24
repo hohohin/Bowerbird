@@ -47,7 +47,7 @@ export type NodeDshAcpPortOptions = {
   parentEnvironment?: Record<string, string | undefined>;
   timeoutMs?: number;
   activity?: ToolActivity;
-  profileMode?: "planning" | "controlled-model" | "html-execution" | "content-execution" | "agent-ds";
+  profileMode?: "planning" | "controlled-model" | "html-execution" | "content-execution";
 };
 
 export type NodeDshAcpPortDependencies = {
@@ -100,12 +100,6 @@ function resolvePatch(runtime: DshRuntimeHome, mode?: NodeDshAcpPortOptions["pro
   if (mode === "content-execution") return runtime.contentExecutionPatch;
   if (mode === "html-execution") return runtime.htmlExecutionPatch;
   if (mode === "controlled-model") return runtime.controlledModelPatch;
-  if (mode === "agent-ds") {
-    // Optional local dev files: a template without them must fail closed
-    // instead of silently falling back to another mode's patch.
-    if (!runtime.agentDsPatch) throw new Error("dsh_profile_template_incomplete");
-    return runtime.agentDsPatch;
-  }
   return runtime.bridgePatch;
 }
 

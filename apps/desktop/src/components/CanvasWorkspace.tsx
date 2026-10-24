@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { useLocalFileMode } from "../lib/localFileMode";
 import type { LibrarySource } from "../lib/localFileMode";
 import { LocalFileWorkspace } from "./LocalFileWorkspace";
@@ -93,7 +94,7 @@ import { canvasConversationTurn, canvasConversationTurns } from "../lib/canvasCo
 import { GenerationPanel } from "./GenerationPanel";
 import { CloudAgentSession } from "./CloudAgentPanel";
 import { AgentApprovalToggle } from "./AgentApprovalToggle";
-import { CreativeTimeline } from "./CreativeTimeline";
+import { CreativeTimeline, generationStatusLabel } from "./CreativeTimeline";
 import { api } from "../lib/api";
 import { countCloudAgentResultImages, selectCloudAgentResultArtifacts } from "../lib/cloudAgentResult";
 import { getDragAssets } from "../lib/dragPayload";
@@ -116,7 +117,7 @@ import {
   resolveProjectInspectorPlacement,
   shouldCloseProjectInspectorOnEscape,
 } from "../lib/projectInspector";
-import { cloudAgentStatusLabel } from "../lib/cloudAgent";
+import { cloudAgentStatusLabel, cloudAgentStepLabel } from "../lib/cloudAgent";
 import { imageProviderLabel } from "../lib/genProviders";
 import { expectedCreativeContinuation } from "../lib/creativeGeneration";
 import {
@@ -3969,7 +3970,7 @@ export function CanvasWorkspace({
           <span className="panel-kicker">项目画板</span>
           <h2>未能载入项目</h2>
           <p>为避免把暂时读取失败误当成空画板，编辑功能已暂停。原项目数据没有被覆盖。</p>
-          {error && <code>{error}</code>}
+          {error && <p>{userErrorMessage(error, "画板暂时无法加载，请重新打开项目。")}</p>}
           <div>
             <button type="button" className="app-button-primary" onClick={() => setLoadRevision((value) => value + 1)}>
               重试载入
@@ -4077,7 +4078,7 @@ export function CanvasWorkspace({
             <small className={`canvas-save-state${loading || savingVisible ? " is-visible" : ""}`} aria-hidden={!loading && !savingVisible}>
               <LoaderCircle size={12} /> {loading ? "载入中" : "保存中"}
             </small>
-            {error && <small className="canvas-save-error" title={error}>保存失败，修改仍保留在当前画面
+            {error && <small className="canvas-save-error" title={userErrorMessage(error, "画板未能保存，请重试保存。")}>保存失败，修改仍保留在当前画面
               {writeJournalRef.current.failure != null && <button type="button" className="ml-2 underline" onClick={() => { void retryPendingWrites().catch(error => notifyError(error, "画板保存失败")); }}>重试保存画板</button>}
             </small>}
           </div>
@@ -4412,7 +4413,7 @@ export function CanvasWorkspace({
                     event.currentTarget.click();
                   }}
                 >
-                  {!imageOnly && <div><span>{conversation?.outputs.length ? "生成会话" : "生成指令"}</span><small>{summary.provider} · {summary.status}</small></div>}
+                  {!imageOnly && <div><span>{conversation?.outputs.length ? "生成会话" : "生成指令"}</span><small>{summary.provider} · {generationStatusLabel(summary.status)}</small></div>}
                   {conversation && <CanvasConversationImages images={images} imageOnly={imageOnly}
                     selectedId={selectedConversationImage(node.id, images)?.id}
                     onSelect={selected => { cancelConversationImageClick(); setConversationImageSelection(previous => ({ ...previous, [node.id]: { newest: images[images.length - 1].id, selected } })); }} onPointerDown={event => {
@@ -4494,8 +4495,8 @@ export function CanvasWorkspace({
                     event.currentTarget.click();
                   }}
                 >
-                  <div><span>Agent 执行组</span><small>{summary.status}</small></div>
-                  <strong>{summary.currentStep ?? summary.skill}</strong>
+                  <div><span>Agent 执行组</span><small>{cloudAgentStatusLabel(summary.status)}</small></div>
+                  <strong>{cloudAgentStepLabel(summary.currentStep ?? "")}</strong>
                   {(() => {
                     const prompt = graphNodes.find(candidate => agentPromptGroups.get(candidate.id)?.id === node.id);
                     return prompt ? <section className="canvas-prompt-content"><ReadonlyPrompt prompt={promptNodeSummary(prompt).text} references={promptReferences.get(prompt.id) ?? []} /></section> : null;
@@ -4697,6 +4698,14 @@ export function CanvasWorkspace({
               composerDraftFlushRef.current = flush;
             }}
             beforeGenerate={prepareForGeneration}
+            onGenerateLocalVideo={async request => {
+              const workflow = workflowRef.current;
+              const bounds = stageRef.current?.getBoundingClientRect();
+              if (!workflow || !bounds) throw new Error("画板正在载入，请稍后重试");
+              const point = toBoardPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 3);
+              const position = placeCanvasCardNearSource({ ...point, width: 416, height: 360 }, selectionAnchors().map(anchor => anchor.rect));
+              await workflow.startLocalVideo(request, position);
+            }}
             resolveCreativeThread={resolveCreativeThread}
           />
         )}

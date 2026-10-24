@@ -20,10 +20,15 @@ async function installMock() {
     window.__TAURI_INTERNALS__.invoke=async (command,args)=>{
       if(command==='plugin:dialog|open') return 'D:\\Local-Workflows';
       if(command==='comfy_video_check') return '已连接 · 模拟工作流所需节点与模型可用';
+      if(command==='plugin:shell|open') { (window.driverLinks??=[]).push(args.path); if(window.driverOpenError) throw new Error('模拟浏览器打开失败'); return; }
       if(command==='comfy_video_environment') {
         window.environmentCalls.push(args);
         if(args.action==='detect' && window.detectError) throw new Error('模拟环境检测失败');
-        if(args.action==='install') window.environmentPhase='installing';
+        if(args.action==='install') {
+          if(window.holdInstall) await new Promise(resolve=>{window.finishInstall=resolve;});
+          if(window.installError) throw new Error(window.installError);
+          window.environmentPhase='installing';
+        }
         if(args.action==='cancel') window.environmentPhase='cancelled';
         if(args.action==='select_existing') window.environmentPhase='stopped';
         if(args.action==='start_existing') window.environmentPhase='starting';
@@ -33,7 +38,7 @@ async function installMock() {
         }
         if(args.action==='status' && window.environmentPhase==='starting' && !window.holdStartup) window.environmentPhase='ready';
         const existing=window.keepExisting || ['stopped','starting','unavailable'].includes(window.environmentPhase)?[{path:'D:\\Existing-Comfy-Desktop\\ComfyUI',name:'已有 ComfyUI',endpoint:'http://127.0.0.1:8199',canStart:!window.noPython,modelsFound:window.modelsMissing?4:5}]:[];
-        return {phase:window.environmentPhase,existing,message:window.environmentPhase==='ready'?'本机环境已就绪 · 模型与节点可用':window.environmentPhase==='starting'?'正在自动启动测试环境':existing.length?'已找到已有环境，服务未启动':'模拟：尚未安装本机运行环境',endpoint:window.environmentPhase==='ready'?(window.detectedEndpoint||'http://127.0.0.1:18189'):args.endpoint,directory:'D:\\Bowerbird-ComfyUI',canInstall:!existing.length && !window.blockInstall,installed:!!window.managedInstalled,downloadBytes:44048479273,requiredBytes:56933381161,completedBytes:1024000,totalBytes:44048479273};
+        return {hardware:window.driverOld?{driverRequired:true,gpus:[{name:'NVIDIA GeForce RTX 3060',driver:'576.80',memoryMib:12288}]}:null, driverDownload:args.action==='driver'?{url:window.driverFallback?'https://www.nvidia.cn/drivers/':'https://cn.download.nvidia.com/Windows/581.80/driver.exe',message:'driver download'}:null,phase:window.environmentPhase,existing,message:window.environmentMessage || (window.environmentPhase==='ready'?'本机环境已就绪 · 模型与节点可用':window.environmentPhase==='starting'?'正在自动启动测试环境':existing.length?'已找到已有环境，服务未启动':'模拟：尚未安装本机运行环境'),endpoint:window.environmentPhase==='ready'?(window.detectedEndpoint||'http://127.0.0.1:18189'):args.endpoint,directory:'D:\\Bowerbird-ComfyUI',canInstall:!existing.length && !window.blockInstall,installed:!!window.managedInstalled,downloadBytes:44048479273,requiredBytes:56933381161,completedBytes:1024000,totalBytes:44048479273};
       }
       if(command==='comfy_video'){
         window.comfyCalls.push({command,...args});
@@ -85,26 +90,47 @@ try {
   await page.evaluate(()=>{window.environmentPhase='missing';window.dispatchEvent(new Event('focus'));});
   await card.locator('.comfy-environment-dot:not(.is-ready)').waitFor();
   await dot.click();await panel.waitFor();
-  await page.waitForFunction(()=>!document.querySelector('.comfy-environment-panel button:last-child').disabled);
+  await page.waitForFunction(()=>!document.querySelector('.comfy-environment-actions > :last-child button').disabled);
   assert.deepEqual(await panel.getByRole('button').allTextContents(),['安装位置','安装']);
   await page.screenshot({path:'.tmp/comfy-video/setup-missing.png'});
   await panel.getByRole('button',{name:'安装位置',exact:true}).click();
   await page.waitForFunction(()=>window.environmentCalls.some(call=>call.directory==='D:\\Local-Workflows'));
   assert.ok((await page.evaluate(()=>window.environmentCalls)).every(call=>call.action==='detect'),'choosing destination does not install');
+  await page.evaluate(()=>{
+    window.holdInstall=true;
+    window.addEventListener('pointerdown',()=>window.dispatchEvent(new Event('focus')),{once:true,capture:true});
+  });
   await panel.getByRole('button',{name:'安装',exact:true}).click();
+  await page.waitForFunction(()=>typeof window.finishInstall==='function');
+  const detectsBeforeInstallFocus=await page.evaluate(()=>window.environmentCalls.filter(call=>call.action==='detect').length);
+  await page.evaluate(async()=>{window.dispatchEvent(new Event('focus'));await new Promise(resolve=>setTimeout(resolve,400));});
+  assert.equal(await page.evaluate(()=>window.environmentCalls.filter(call=>call.action==='detect').length),detectsBeforeInstallFocus,'focus must not replace an in-flight installation with another detection');
+  await page.evaluate(()=>{window.holdInstall=false;window.finishInstall();delete window.finishInstall;});
   await panel.getByLabel('环境下载进度',{exact:true}).waitFor();
   assert.deepEqual(await panel.getByRole('button').allTextContents(),['安装位置','安装中…'],'no extra controls');
   assert.equal((await page.evaluate(()=>window.environmentCalls)).find(call=>call.action==='install').directory,'D:\\Local-Workflows');
   assert.equal(await panel.getByRole('button',{name:'安装中…',exact:true}).isDisabled(),true);
   assert.equal(await panel.getByRole('button',{name:'安装位置',exact:true}).isDisabled(),true);
+  const locationHint=panel.locator('.comfy-environment-action').first();
+  await locationHint.hover();
+  await locationHint.getByRole('tooltip').waitFor();
+  assert.match(await locationHint.getByRole('tooltip').innerText(),/等待当前操作完成/);
+  await page.mouse.move(20,20);
   await page.keyboard.press('Escape');await panel.waitFor({state:'hidden'});
   assert.equal(await dot.evaluate(el=>document.activeElement===el),true,'Escape returns focus to dot');
   await dot.click();await panel.getByLabel('环境下载进度',{exact:true}).waitFor();
   assert.equal((await page.evaluate(()=>window.environmentCalls)).filter(call=>call.action==='install').length,1,'reopening panel does not install again');
   await page.evaluate(()=>{window.environmentPhase='failed';});
-  await page.waitForFunction(()=>!document.querySelector('.comfy-environment-panel button:last-child').disabled);
+  await page.waitForFunction(()=>!document.querySelector('.comfy-environment-actions > :last-child button').disabled);
+  await page.evaluate(()=>{window.installError='模拟安装授权请求失败，请重试安装';});
+  await panel.getByRole('button',{name:'重试安装',exact:true}).click();
+  await panel.getByRole('status').filter({hasText:'模拟安装授权请求失败'}).waitFor();
+  assert.equal(await panel.getByRole('button',{name:'重新检测',exact:true}).count(),0,'installation errors must not become detection-only actions');
+  const detectsBeforeRetry=await page.evaluate(()=>window.environmentCalls.filter(call=>call.action==='detect').length);
+  await page.evaluate(()=>{window.installError='';});
   await panel.getByRole('button',{name:'重试安装',exact:true}).click();
   await panel.getByLabel('环境下载进度',{exact:true}).waitFor();
+  assert.equal(await page.evaluate(()=>window.environmentCalls.filter(call=>call.action==='detect').length),detectsBeforeRetry,'one retry click submits install directly');
   await page.evaluate(()=>{window.environmentPhase='ready';});
   await card.locator('.comfy-environment-dot.is-ready').waitFor();await panel.waitFor({state:'hidden'});
   await dot.click();assert.equal(await panel.isVisible(),false,'green dot does not open setup');
@@ -126,12 +152,69 @@ try {
   await card.locator('.comfy-environment-dot.is-ready').waitFor();await panel.waitFor({state:'hidden'});
   await page.evaluate(()=>{window.detectError=true;window.dispatchEvent(new Event('focus'));});
   await card.locator('.comfy-environment-dot:not(.is-ready)').waitFor();await dot.click();
-  await panel.getByText('Error: 模拟环境检测失败',{exact:true}).waitFor();
-  await page.waitForFunction(()=>{const button=document.querySelector('.comfy-environment-panel button:last-child');return button?.textContent==='重新检测' && !button.disabled;});
+  await panel.getByText('模拟环境检测失败',{exact:true}).waitFor();
+  assert.doesNotMatch(await panel.innerText(), /Error:/);
+  await page.waitForFunction(()=>{const button=document.querySelector('.comfy-environment-actions > :last-child button');return button?.textContent==='重新检测' && !button.disabled;});
   await page.evaluate(()=>{window.detectError=false;window.blockInstall=true;window.environmentPhase='missing';});
   await panel.getByRole('button',{name:'重新检测',exact:true}).click();
   await panel.getByRole('button',{name:'暂不可安装',exact:true}).waitFor();
   assert.equal(await panel.getByRole('button',{name:'暂不可安装',exact:true}).isDisabled(),true);
+  await page.evaluate(()=>{
+    window.environmentMessage='读取环境失败：TypeError: missing_runtime at C:\\private-runtime\\install.ts:20';
+    window.dispatchEvent(new Event('focus'));
+  });
+  await panel.getByRole('status').filter({hasText:'环境未就绪，请重新检测或检查安装位置。'}).waitFor();
+  assert.doesNotMatch(await panel.innerText(),/TypeError|missing_runtime|private-runtime/);
+  assert.doesNotMatch(await dot.getAttribute('title'),/TypeError|missing_runtime|private-runtime/);
+  // Every disabled action explains its reason on pointer hover and keyboard focus.
+  const blockedMessages=[
+    '一键安装目前支持 Windows x64 + NVIDIA；其他系统请连接已有 ComfyUI',
+    '未能识别 NVIDIA 显卡，请在设备管理器确认显卡已启用且驱动正常。',
+    '未找到 Windows tar 解压工具，请更新 Windows 或连接已有 ComfyUI',
+    '安装磁盘空间不足：需空闲 56.9 GB，当前可用 10.0 GB，还差 46.9 GB。请清理磁盘或更换安装位置。',
+    '无法检查安装磁盘，请确认磁盘已连接并选择可访问的磁盘。',
+    '安装目录已有其他文件，无法安全安装，请通过安装位置选择其他文件夹。',
+  ];
+  const blockedAction=panel.locator('.comfy-environment-action').last();
+  for (const message of blockedMessages) {
+    await page.evaluate(message=>{window.environmentMessage=message;window.dispatchEvent(new Event('focus'));},message);
+    await page.waitForFunction(message=>document.querySelector('.comfy-environment-panel [role="status"]')?.textContent===message,message);
+    await panel.getByRole('button',{name:'暂不可安装',exact:true}).waitFor();
+    await blockedAction.hover();
+    const tooltip=blockedAction.getByRole('tooltip');await tooltip.waitFor();
+    assert.equal(await tooltip.innerText(),message);
+    assert.equal(await blockedAction.getByRole('button').getAttribute('aria-describedby'),await tooltip.getAttribute('id'));
+    const before=await page.evaluate(()=>window.environmentCalls.filter(call=>call.action==='install').length);
+    await blockedAction.click();await page.keyboard.press('Enter');await page.keyboard.press('Space');
+    assert.equal(await page.evaluate(()=>window.environmentCalls.filter(call=>call.action==='install').length),before,'disabled action never installs');
+    await page.mouse.move(20,20);await blockedAction.focus();await tooltip.waitFor();
+    await page.keyboard.press('Escape');await tooltip.waitFor({state:'hidden'});
+    assert.equal(await panel.isVisible(),true,'Escape dismisses tooltip before dialog');
+    await blockedAction.evaluate(el=>el.blur());
+  }
+  await blockedAction.hover();
+  await page.screenshot({path:'.tmp/comfy-video/install-disabled-tooltip.png'});
+  await page.mouse.move(20,20);
+  await page.evaluate(()=>{delete window.environmentMessage;});
+  await page.evaluate(()=>{window.driverOld=true;window.dispatchEvent(new Event('focus'));});
+  const driverButton=panel.getByRole('button',{name:'下载显卡驱动',exact:true});
+  await driverButton.waitFor();assert.equal(await driverButton.isDisabled(),false);
+  await panel.getByText(/RTX 3060.*显存 12.0 GB.*576.80/).waitFor();
+  assert.equal(await panel.getByRole('button').count(),2,'driver assistance reuses existing action');
+  await page.screenshot({path:'.tmp/comfy-video/driver-update.png'});
+  const beforeDriver=await page.evaluate(()=>window.environmentCalls.filter(call=>call.action==='install').length);
+  await driverButton.click();
+  await page.waitForFunction(()=>window.driverLinks?.length===1);
+  assert.equal(await page.evaluate(()=>window.driverLinks[0]),'https://cn.download.nvidia.com/Windows/581.80/driver.exe');
+  assert.equal(await page.evaluate(()=>window.environmentCalls.filter(call=>call.action==='install').length),beforeDriver);
+  await page.evaluate(()=>{window.driverFallback=true;});
+  await driverButton.click();await page.waitForFunction(()=>window.driverLinks?.length===2);
+  assert.equal(await page.evaluate(()=>window.driverLinks[1]),'https://www.nvidia.cn/drivers/');
+  await page.evaluate(()=>{window.driverOpenError=true;});
+  await driverButton.click();await panel.getByRole('status').filter({hasText:'模拟浏览器打开失败'}).waitFor();
+  await page.evaluate(()=>{window.driverOpenError=false;window.driverOld=false;window.blockInstall=false;window.dispatchEvent(new Event('focus'));});
+  await panel.getByRole('button',{name:'安装',exact:true}).waitFor();
+  assert.equal(await panel.getByRole('button',{name:'安装',exact:true}).isDisabled(),false,'driver update unlocks setup on return');
   await page.evaluate(()=>{window.blockInstall=false;window.environmentPhase='cancelled';window.dispatchEvent(new Event('focus'));});
   await panel.getByRole('button',{name:'继续安装',exact:true}).waitFor();
   assert.equal(await panel.getByRole('button',{name:'继续安装',exact:true}).isDisabled(),false);

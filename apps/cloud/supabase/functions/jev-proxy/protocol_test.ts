@@ -172,13 +172,14 @@ Deno.test("Authenticated synchronous proxy uses server secret, same-image free f
         return json({ id: target, email: "test@example.test" });
       }
       if (url.pathname === "/rest/v1/subscriptions") {
-        return json({ tier: "pro", status: "active" });
+        return json({ tier: "free", status: "active" });
       }
       const rpc = url.pathname.split("/").at(-1), args = await req.json();
       if (rpc === "cleanup_classification") return json(null);
       if (rpc === "ensure_daily_credits") return json([{ daily_balance: 30 }]);
       if (rpc === "begin_classification") {
         assertEquals(args.p_rate_limit, null);
+        assertEquals(args.p_free_limit, null);
         if (limit) return json({code:"P0001",details:limit,message:"limit"},400);
         return json({ claimed: true, request: row });
       }

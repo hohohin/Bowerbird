@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type PointerEvent } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { Check, ImagePlus, Pause, Play, Scissors, Volume2, VolumeX } from "lucide-react";
@@ -252,7 +253,7 @@ export function VideoPlayer({ path, onAddFrame, onReferenceFrame, onSaveTrim, em
           </button>}
         </div>}
       </div>
-      {error && <p className="video-player-error" role="alert">{error}</p>}
+      {error && <p className="video-player-error" role="alert">{userErrorMessage(error, "视频操作未完成，请检查原文件和保存位置后重试。")}</p>}
       {savedMessage && <p className="video-player-saved" role="status">{savedMessage}</p>}
     </div>
   </section>;

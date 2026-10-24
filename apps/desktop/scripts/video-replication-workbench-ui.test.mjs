@@ -21,7 +21,7 @@ async function installMock() {
   const {useStore}=await import('/src/store.ts');
   const {canvasWorkflowController}=await import('/src/lib/canvasWorkflowRuntime.ts');
   window.controller=canvasWorkflowController('p');
-  useStore.setState({activeGenProvider:'codex',defaultProvider:'codex'});
+  useStore.setState({activeGenProvider:'codex',defaultProvider:'codex',codexHealth:{ok:true,reason:''},cloudAuth:{cloud_available:true,logged_in:true},cloudEntitlement:{tier:'pro',policy:{can_use_byo:true},balances:{daily:0,sub:100,topup:0}}});
   window.capabilityMode='enabled';window.saveFailure=false;
   window.caseData=JSON.parse(sessionStorage.getItem('cases')||'{}');
   window.jobs=JSON.parse(sessionStorage.getItem('jobs')||'[]');
@@ -63,7 +63,7 @@ async function installMock() {
    if(action==='create'){
     const text='start: 0, end: 6.2\n清晨浴室产品特写\n\n## 首帧画面提示词\n白色瓶身，柔和自然光。';
     const job={...data,id:crypto.randomUUID(),projectId:'p',createdAt:new Date().toISOString(),state:data.operation==='analyze'?'analyzed':'rewritten',
-      ...(data.operation==='analyze'?{analysis:'start: 0, end: 6.2\n展示产品'}:{rewrittenText:text,rewriteOriginalText:text})};
+      ...(data.operation==='analyze'?{analysis:data.analysisProvider==='codex'?'start: 0, end: 6.2\n展示产品':JSON.stringify({analysisText:'start: 0, end: 6.2\n展示产品',transcript:'欢迎了解这款产品。',transcriptStatus:'transcribed'}),transcript:data.analysisProvider==='codex'?'':'欢迎了解这款产品。',transcriptStatus:data.analysisProvider==='codex'?'unavailable':'transcribed'}:{rewrittenText:text,rewriteOriginalText:text})};
     window.jobs.unshift(job);persist();return structuredClone(job);
    }
    throw Error('Unexpected replication action '+action);
@@ -74,6 +74,7 @@ try {
  await page.goto('http://127.0.0.1:1697/scripts/fixtures/canvas-reference/preview.html?strict');
  await page.locator('[data-canvas-node-id="old"]').waitFor();await installMock();
  await openTool();await page.getByRole('button',{name:'新建任务',exact:true}).click();
+ await page.getByRole('button',{name:/豆包.*选择视频分析模型/}).click();await page.screenshot({path:directory+'/analysis-providers.png'});await page.keyboard.press('Escape');
  assert.equal(await page.getByRole('navigation',{name:'复刻步骤'}).getByRole('button').count(),4);
  assert.equal(await page.getByRole('navigation',{name:'复刻步骤'}).getByRole('button').nth(1).isDisabled(),true);
  const share='分享 https://v.douyin.com/example/';
@@ -114,6 +115,7 @@ try {
  await page.evaluate(()=>window.capabilityMode='enabled');await page.getByRole('button',{name:'重新读取 Cloud 状态'}).click();
  await page.getByRole('button',{name:'分析视频 · 3 积分',exact:true}).click();
  await page.getByRole('button',{name:'进行改写',exact:true}).waitFor();
+ assert.equal(await page.getByLabel('语音转写',{exact:true}).inputValue(),'欢迎了解这款产品。');await page.getByLabel('语音转写',{exact:true}).scrollIntoViewIfNeeded();await page.screenshot({path:directory+'/analysis-transcript.png'});
  await page.getByLabel('分析文本',{exact:true}).fill('start: 0, end: 6.2\n用户修订分镜');
  await page.getByRole('button',{name:'进行改写',exact:true}).click();
  assert.equal(await page.getByLabel('参考文本',{exact:true}).count(),0,'step 3 has no duplicate reference editor');
@@ -131,7 +133,7 @@ try {
  await page.getByRole('button',{name:'开始改写 · 3 积分',exact:true}).click();
  await page.getByLabel('首帧画面提示词',{exact:true}).waitFor();
  const rewrite=await page.evaluate(()=>window.calls.find(c=>c.args?.action==='create' && c.args.data.operation==='rewrite').args.data);
- assert.equal(rewrite.inputText,'start: 0, end: 6.2\n用户修订分镜');assert.equal(rewrite.rewriteDirection.trim(),'改为清晨浴室');
+ assert.equal(rewrite.inputText,'start: 0, end: 6.2\n用户修订分镜\n\n【语音转写】\n欢迎了解这款产品。');assert.equal(rewrite.rewriteDirection.trim(),'改为清晨浴室');
  assert.equal(await page.getByLabel('首帧画面提示词',{exact:true}).inputValue(),'白色瓶身，柔和自然光。');
  assert.equal(await video.evaluate(v=>v===window.playerIdentity && v.currentTime>1),true);
  await page.getByLabel('首帧画面提示词',{exact:true}).fill('精修后的首帧画面：清晨浴室');
@@ -199,6 +201,20 @@ try {
  await page.getByRole('button',{name:'素材库',exact:true}).click();await page.getByRole('button',{name:'全部任务',exact:true}).click();
  await page.getByRole('button',{name:'新建任务',exact:true}).click();
  assert.equal(await page.getByRole('button',{name:'素材库',exact:true}).getAttribute('aria-pressed'),'true','source choice remembered');
+ await page.getByRole('button',{name:/豆包.*选择视频分析模型/}).click();
+ await page.getByRole('button',{name:'本机 Codex',exact:true}).click();
+ await page.getByRole('button',{name:'素材库视频.mp4',exact:true}).click();
+ await page.waitForFunction(()=>document.querySelector('.video-player video')?.readyState>=2);
+ await page.evaluate(()=>{window.capabilityMode='error';window.dispatchEvent(new Event('focus'));});
+ const local=page.getByRole('button',{name:'分析视频 · 自有订阅',exact:true});
+ assert.equal(await local.isEnabled(),true,'local analysis does not depend on Cloud price');
+ await local.click();await page.getByRole('button',{name:'进行改写',exact:true}).waitFor();
+ assert.equal(await page.getByLabel('语音转写',{exact:true}).inputValue(),'');
+ assert.match(await page.getByLabel('语音转写',{exact:true}).getAttribute('placeholder'),/本机 Codex/);
+ assert.equal(await page.evaluate(()=>window.jobs[0].analysisProvider),'codex');
+ await page.getByRole('button',{name:'全部任务',exact:true}).click();
+ await page.locator('.vr-task-tile').first().click();
+ assert.equal(await page.getByRole('button',{name:'重新分析 · 自有订阅',exact:true}).count(),1,'provider survives reopening');
  assert.deepEqual(errors,[]);
  console.log('PASS task persistence/reload, source memory, verification recovery, video gates, Cloud retry, stable player, exact frame/reference/canvas import, draft failure recovery, four connected cards, no auto-run, idempotent handoff, dark/narrow');
 } catch(e){await page.screenshot({path:directory+'/failure.png'});throw e;}

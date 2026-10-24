@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "../store";
 import { api } from "../lib/api";
@@ -54,6 +55,6 @@ export function CanvasArtboardDialog({ composition, onClose, onSubmit }: {
     <label className="canvas-artboard-prompt">合成提示词<textarea data-modal-autofocus value={instruction} disabled={busy}
       onChange={event => setInstruction(event.target.value)} placeholder="例如：给人物戴上耳饰，保持人物和背景不变" rows={3} /></label>
     <p className="text-xs text-muted">发送范围内独立图片的拼放图、编号红框图及对应原图，附带位置、尺寸和层叠顺序。越界部分裁切；原图与画板保留，结果进入新的生成会话。素材组请先解散，文字卡片和视频不参与合成。</p>
-    {error && <p role="alert" className="mt-2 text-sm text-red-400">{error}</p>}
+    {error && <p role="alert" className="mt-2 text-sm text-red-400">{userErrorMessage(error, "画板设置未完成，请重新打开后重试。")}</p>}
   </ModalShell>;
 }

@@ -12,7 +12,7 @@ use rusqlite::{params, Connection, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeSet, HashMap},
     fs,
     io::Write,
     path::{Path, PathBuf},
@@ -21,6 +21,8 @@ use std::{
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct ExclusiveDeleteImpact {
     pub exclusive_asset_count: usize,
+    #[serde(default)]
+    pub exclusive_asset_ids: Vec<String>,
     pub exclusive_file_count: usize,
     pub preserved_shared_count: usize,
     pub preserved_unsafe_count: usize,
@@ -47,7 +49,8 @@ const CANDIDATES: &str = "SELECT a.id, a.store_path, a.thumb_path, a.origin_path
    OR EXISTS(SELECT 1 FROM cloud_agent_artifact_assets f WHERE f.run_id=r.run_id AND f.asset_id=a.id)))
  ORDER BY a.id";
 
-fn protected(conn: &Connection, project: &str, id: &str, store: Option<&str>) -> AppResult<bool> {
+fn protected(conn: &Connection, project: &str, id: &str, store: Option<&str>, check: &dyn Fn() -> AppResult<()>) -> AppResult<bool> {
+    check()?;
     // local_agent_runs.target_asset_id CASCADE would destroy execution evidence: always protect.
     // Global collections and saved prompt bindings are independent uses, not project ownership.
     let linked: bool = conn.query_row("SELECT
@@ -91,6 +94,7 @@ fn protected(conn: &Connection, project: &str, id: &str, store: Option<&str>) ->
         "SELECT payload FROM analyses WHERE kind='generation_meta' AND asset_id<>?2 AND ?1 IS NOT NULL",
     ];
     for sql in json_sources {
+        check()?;
         let mut stmt = conn.prepare(sql)?;
         stmt.raw_bind_parameter(1, project)?;
         if stmt.parameter_count() > 1 {
@@ -98,6 +102,7 @@ fn protected(conn: &Connection, project: &str, id: &str, store: Option<&str>) ->
         }
         let mut rows = stmt.raw_query();
         while let Some(row) = rows.next()? {
+            check()?;
             let raw: String = row.get(0)?;
             // Unknown/malformed persisted reference data is not evidence of exclusivity.
             let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
@@ -169,11 +174,18 @@ fn safe_file(paths: &LibraryPaths, raw: &Path) -> AppResult<PathBuf> {
 }
 
 fn plan(conn: &Connection, paths: &LibraryPaths, project: &str) -> AppResult<Plan> {
+    plan_with_progress(conn, paths, project, &|| Ok(()), &mut |_, _, _| {})
+}
+
+fn plan_with_progress(conn: &Connection, paths: &LibraryPaths, project: &str,
+    check: &dyn Fn() -> AppResult<()>, report: &mut dyn FnMut(&str, usize, usize)) -> AppResult<Plan> {
+    check()?;
+    report("candidates", 0, 0);
     let kind: String = conn.query_row("SELECT kind FROM projects WHERE id=?1", [project], |r| {
         r.get(0)
     })?;
     let mut stmt = conn.prepare(CANDIDATES)?;
-    let candidates = stmt
+    let candidate_rows = stmt
         .query_map([project], |r| {
             Ok((
                 r.get::<_, String>(0)?,
@@ -181,32 +193,30 @@ fn plan(conn: &Connection, paths: &LibraryPaths, project: &str) -> AppResult<Pla
                 r.get::<_, Option<String>>(2)?,
                 r.get::<_, Option<String>>(3)?,
             ))
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
+        })?;
+    let mut candidates = Vec::new();
+    for row in candidate_rows {
+        check()?;
+        candidates.push(row?);
+    }
     let mut out = Plan {
         impact: ExclusiveDeleteImpact::default(),
         ids: vec![],
         files: BTreeSet::new(),
     };
-    let all_paths = {
-        let mut stmt =
-            conn.prepare("SELECT id, store_path, thumb_path, origin_path FROM assets")?;
-        let rows = stmt.query_map([], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                [r.get::<_, Option<String>>(1)?, r.get(2)?, r.get(3)?],
-            ))
-        })?;
-        rows.collect::<Result<Vec<_>, _>>()?
-    };
-    for (id, store, thumb, origin) in candidates {
-        if kind == "builtin" || protected(conn, project, &id, store.as_deref())? {
+    let mut path_owners: Option<HashMap<String, BTreeSet<String>>> = None;
+    let total = candidates.len();
+    for (index, (id, store, thumb, origin)) in candidates.into_iter().enumerate() {
+        check()?;
+        report("assets", index, total);
+        if kind == "builtin" || protected(conn, project, &id, store.as_deref(), check)? {
             out.impact.preserved_shared_count += 1;
             continue;
         }
         let mut files = BTreeSet::new();
         let mut unsafe_path = store.is_none();
         for raw in [store.as_deref(), thumb.as_deref()].into_iter().flatten() {
+            check()?;
             match safe_file(paths, Path::new(raw)) {
                 Ok(file) => {
                     files.insert(file);
@@ -224,13 +234,29 @@ fn plan(conn: &Connection, paths: &LibraryPaths, project: &str) -> AppResult<Pla
             out.impact.preserved_unsafe_count += 1;
             continue;
         }
-        let shared_path = all_paths.iter().any(|(other, refs)| {
-            other != &id
-                && refs.iter().flatten().any(|p| {
-                    let canonical = fs::canonicalize(p).unwrap_or_else(|_| PathBuf::from(p));
-                    files.iter().any(|f| path_key(f) == path_key(&canonical))
-                })
-        });
+        // Resolve library paths once, and only if a candidate can actually be deleted.
+        if path_owners.is_none() {
+            let path_total: usize = conn.query_row("SELECT COUNT(*) FROM assets", [], |r| r.get(0))?;
+            let mut stmt = conn.prepare("SELECT id, store_path, thumb_path, origin_path FROM assets")?;
+            let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?,
+                [r.get::<_, Option<String>>(1)?, r.get(2)?, r.get(3)?])))?;
+            let mut owners: HashMap<String, BTreeSet<String>> = HashMap::new();
+            for (path_index, row) in rows.enumerate() {
+                check()?;
+                report("paths", path_index, path_total);
+                let (other, refs) = row?;
+                for raw in refs.iter().flatten() {
+                    check()?;
+                    let canonical = fs::canonicalize(raw).unwrap_or_else(|_| PathBuf::from(raw));
+                    owners.entry(path_key(&canonical)).or_default().insert(other.clone());
+                }
+            }
+            report("paths", path_total, path_total);
+            path_owners = Some(owners);
+            report("assets", index, total);
+        }
+        let shared_path = files.iter().any(|file| path_owners.as_ref().unwrap().get(&path_key(file))
+            .is_some_and(|owners| owners.iter().any(|other| other != &id)));
         if shared_path {
             out.impact.preserved_shared_count += 1;
             continue;
@@ -238,7 +264,10 @@ fn plan(conn: &Connection, paths: &LibraryPaths, project: &str) -> AppResult<Pla
         out.ids.push(id);
         out.files.extend(files);
     }
+    check()?;
+    report("assets", total, total);
     out.impact.exclusive_asset_count = out.ids.len();
+    out.impact.exclusive_asset_ids = out.ids.clone();
     out.impact.exclusive_file_count = out.files.len();
     let mut digest = Sha256::new();
     digest.update(serde_json::to_vec(&(
@@ -248,12 +277,16 @@ fn plan(conn: &Connection, paths: &LibraryPaths, project: &str) -> AppResult<Pla
         out.impact.preserved_shared_count,
         out.impact.preserved_unsafe_count,
     ))?);
-    for file in &out.files {
+    for (index, file) in out.files.iter().enumerate() {
+        check()?;
+        report("fingerprint", index, out.files.len());
         let meta = fs::metadata(file)?;
         digest.update(meta.len().to_le_bytes());
         digest.update(format!("{:?}", meta.modified()?));
     }
     out.impact.confirmation = format!("{:x}", digest.finalize());
+    check()?;
+    report("fingerprint", out.files.len(), out.files.len());
     Ok(out)
 }
 
@@ -314,6 +347,20 @@ fn finish_manifest(
 }
 
 impl Database {
+    /// Cancellable preview only. Final deletion still recomputes the plan inside its transaction.
+    pub fn project_exclusive_impact_progress(&self, paths: &LibraryPaths, project: &str,
+        check: &dyn Fn() -> AppResult<()>, report: &mut dyn FnMut(&str, usize, usize)) -> AppResult<ExclusiveDeleteImpact> {
+        report("waiting", 0, 0);
+        loop {
+            check()?;
+            match self.conn.try_lock() {
+                Ok(conn) => return plan_with_progress(&conn, paths, project, check, report).map(|p| p.impact),
+                Err(std::sync::TryLockError::WouldBlock) => std::thread::sleep(std::time::Duration::from_millis(20)),
+                Err(_) => return Err(AppError::Other("无法读取素材库".into())),
+            }
+        }
+    }
+
     pub fn project_exclusive_impact(
         &self,
         paths: &LibraryPaths,
@@ -355,26 +402,39 @@ impl Database {
         project: &str,
         confirmation: &str,
     ) -> AppResult<ProjectDeleteResult> {
-        self.delete_project_managed(paths,project,Some(confirmation))
+        self.delete_project_managed(paths,project,Some(confirmation),None)
     }
 
     pub fn delete_project_keep_managed(&self, paths: &LibraryPaths, project: &str) -> AppResult<ProjectDeleteResult> {
-        self.delete_project_managed(paths,project,None)
+        self.delete_project_managed(paths,project,None,None)
     }
 
-    fn delete_project_managed(&self, paths: &LibraryPaths, project: &str, confirmation: Option<&str>) -> AppResult<ProjectDeleteResult> {
+    pub fn delete_project_managed(&self, paths: &LibraryPaths, project: &str, confirmation: Option<&str>, discard_pending_results: Option<&[String]>) -> AppResult<ProjectDeleteResult> {
         let _records=super::creative_files::RECORD_GATE.lock().unwrap();
         self.recover_project_deletions(paths)?;
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        ensure_project_has_no_unfinished_work(&tx, project)?;
-        let mut plan = plan(&tx, paths, project)?;
+        if let Some(expected) = discard_pending_results {
+            let actual = super::projects::pending_agent_results(&tx, project)?;
+            let expected: std::collections::BTreeSet<_> = expected.iter().map(String::as_str).collect();
+            let actual: std::collections::BTreeSet<_> = actual.iter().map(|result| result.run_id.as_str()).collect();
+            if expected != actual {
+                return Err(AppError::Other("待入库任务已变化，请重新打开删除确认".into()));
+            }
+        }
+        ensure_project_has_no_unfinished_work(&tx, project, discard_pending_results.is_some())?;
+        let mut plan = if confirmation.is_some() {
+            plan(&tx, paths, project)?
+        } else {
+            // Keep mode never deletes assets, so it needs no second exclusivity scan.
+            tx.query_row("SELECT id FROM projects WHERE id=?1", [project], |r| r.get::<_, String>(0))?;
+            Plan { impact: ExclusiveDeleteImpact::default(), ids: vec![], files: BTreeSet::new() }
+        };
         if confirmation.is_some_and(|value|value.is_empty() || value != plan.impact.confirmation) {
             return Err(AppError::Other(
                 "项目素材或文件已变化，请重新打开删除确认".into(),
             ));
         }
-        if confirmation.is_none() {plan.ids.clear();plan.files.clear();}
         let (transferred,originals)=super::file_workspace_move::history::transfer_shared(&tx,paths,project)?;
         plan.files.extend(originals);
         let removed_members: usize = tx.query_row(
@@ -401,6 +461,9 @@ impl Database {
         journal.sync_all()?;
         drop(journal);
         let execution = (|| -> AppResult<()> {
+            if discard_pending_results.is_some() {
+                super::projects::discard_project_pending_results(&tx, project)?;
+            }
             for (i, file) in manifest.files.iter().enumerate() {
                 safe_file(paths, file)?;
                 let dest = staged(file, &manifest.operation, i);
@@ -464,6 +527,60 @@ mod tests {
         }
         (db, paths)
     }
+
+    #[test]
+    fn explicit_pending_result_abandonment_unblocks_deletion_and_preserves_audit() {
+        let (db, paths) = fixture();
+        let file = asset(&db, &paths, "already-ingested");
+        {
+            let conn = db.conn.lock().unwrap();
+            for (id, project) in [("legacy", "p"), ("unrelated", "other")] {
+                conn.execute("INSERT INTO cloud_agent_runs(run_id,conversation_id,skill_id,status,intent_prompt,reference_asset_ids,project_id,snapshot_json,feedback_action,final_asset_id,created_at,updated_at) VALUES(?1,?1,'skill','succeeded','test','[]',?2,'{}','accept','already-ingested',1,1)", params![id, project]).unwrap();
+            }
+        }
+        let impact = db.project_delete_impact("p").unwrap();
+        assert_eq!(impact.running_agent_count, 1);
+        assert_eq!(impact.pending_agent_results[0].run_id, "legacy");
+        assert!(db.delete_project_keep_managed(&paths, "p").is_err());
+        // A stale physical confirmation must roll back the abandonment too.
+        assert!(db.delete_project_managed(&paths, "p", Some("stale"), Some(&["legacy".into()])).is_err());
+        assert!(db.delete_project_managed(&paths, "p", None, Some(&["unreviewed".into()])).unwrap_err().to_string().contains("待入库任务已变化"));
+        assert_eq!(db.project_delete_impact("p").unwrap().running_agent_count, 1);
+        let result = db.delete_project_managed(&paths, "p", None, Some(&["legacy".into()])).unwrap();
+        assert_eq!(result.deleted_assets, 0);
+        assert!(file.is_file());
+        assert!(db.get_asset("already-ingested").unwrap().is_some());
+        assert!(db.get_project("p").unwrap().is_none());
+        assert_eq!(db.project_delete_impact("other").unwrap().running_agent_count, 1);
+        let conn = db.conn.lock().unwrap();
+        let audit: (String, String, Option<String>, String) = conn.query_row("SELECT status,feedback_action,project_id,json_extract(snapshot_json,'$._bowerbirdResultAbandonedV1.reason') FROM cloud_agent_runs WHERE run_id='legacy'", [], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap();
+        assert_eq!(audit, ("succeeded".into(),"accept".into(),None,"project_deleted".into()));
+        assert_eq!(conn.query_row("SELECT snapshot_json FROM cloud_agent_runs WHERE run_id='unrelated'", [], |r| r.get::<_,String>(0)).unwrap(), "{}");
+    }
+
+    #[test]
+    fn result_abandonment_never_bypasses_active_or_unknown_agent_states() {
+        let (db, paths) = fixture();
+        for status in ["running", "awaiting_local_task", "awaiting_result_feedback", "cancel_requested", "future_state"] {
+            db.conn.lock().unwrap().execute("INSERT OR REPLACE INTO cloud_agent_runs(run_id,conversation_id,skill_id,status,intent_prompt,reference_asset_ids,project_id,snapshot_json,created_at,updated_at) VALUES('active','conversation','skill',?1,'test','[]','p','{}',1,1)", [status]).unwrap();
+            assert!(db.delete_project_managed(&paths, "p", None, Some(&[])).is_err(), "{status}");
+            assert!(db.get_project("p").unwrap().is_some());
+        }
+    }
+
+    #[test]
+    fn pending_result_abandonment_keeps_physical_delete_confirmation_required() {
+        let (db, paths) = fixture();
+        let file = asset(&db, &paths, "exclusive");
+        db.conn.lock().unwrap().execute("INSERT INTO cloud_agent_runs(run_id,conversation_id,skill_id,status,intent_prompt,reference_asset_ids,project_id,snapshot_json,feedback_action,created_at,updated_at) VALUES('legacy','conversation','skill','succeeded','test','[]','p','{}','accept',1,1)", []).unwrap();
+        assert!(db.delete_project_managed(&paths, "p", Some(""), Some(&["legacy".into()])).is_err());
+        assert!(file.is_file());
+        let confirmation = db.project_exclusive_impact(&paths, "p").unwrap().confirmation;
+        let result = db.delete_project_managed(&paths, "p", Some(&confirmation), Some(&["legacy".into()])).unwrap();
+        assert_eq!(result.deleted_assets, 1);
+        assert!(!file.exists());
+        assert_eq!(db.conn.lock().unwrap().query_row("SELECT COUNT(*) FROM cloud_agent_runs WHERE run_id='legacy' AND project_id IS NULL AND status='succeeded'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
+    }
     fn asset(db: &Database, paths: &LibraryPaths, id: &str) -> PathBuf {
         let file = paths.images.join(format!("{id}.png"));
         let thumb = paths.thumbnails.join(format!("{id}.jpg"));
@@ -483,6 +600,72 @@ mod tests {
     fn delete(db: &Database, paths: &LibraryPaths) -> AppResult<ProjectDeleteResult> {
         let impact = db.project_exclusive_impact(paths, "p")?;
         db.delete_project_exclusive(paths, "p", &impact.confirmation)
+    }
+    #[test]
+    fn cancelled_preview_releases_database_without_changing_files_or_project() {
+        let (db, paths) = fixture();
+        let file = asset(&db, &paths, "cancel-preview");
+        let cancelled = std::cell::Cell::new(false);
+        let mut events = Vec::new();
+        let result = db.project_exclusive_impact_progress(&paths, "p",
+            &|| if cancelled.get() { Err(AppError::Other("cancelled".into())) } else { Ok(()) },
+            &mut |phase, completed, total| {
+                events.push((phase.to_string(), completed, total));
+                if phase == "paths" { cancelled.set(true); }
+            });
+        assert!(result.is_err());
+        assert!(events.iter().any(|e| e.0 == "paths"));
+        assert!(db.conn.try_lock().is_ok());
+        assert!(db.get_project("p").unwrap().is_some());
+        assert!(db.get_asset("cancel-preview").unwrap().is_some());
+        assert!(file.is_file());
+        let expected = db.project_exclusive_impact(&paths, "p").unwrap();
+        let actual = db.project_exclusive_impact_progress(&paths, "p", &|| Ok(()),
+            &mut |phase, completed, total| events.push((phase.to_string(), completed, total))).unwrap();
+        assert_eq!(actual.confirmation, expected.confirmation);
+        assert_eq!(actual.exclusive_asset_ids, expected.exclusive_asset_ids);
+        assert_eq!(events.last().unwrap(), &("fingerprint".into(), 2, 2));
+    }
+    #[test]
+    fn preview_can_be_cancelled_while_waiting_for_database() {
+        let (db, paths) = fixture();
+        let _locked = db.conn.lock().unwrap();
+        let checks = std::cell::Cell::new(0);
+        let result = db.project_exclusive_impact_progress(&paths, "p", &|| {
+            checks.set(checks.get() + 1);
+            if checks.get() >= 2 { Err(AppError::Other("cancelled".into())) } else { Ok(()) }
+        }, &mut |_, _, _| {});
+        assert!(result.is_err());
+        assert_eq!(checks.get(), 2);
+    }
+    #[test]
+    fn protected_only_preview_skips_library_path_scan() {
+        let (db, paths) = fixture();
+        asset(&db, &paths, "shared-preview");
+        db.add_assets_to_project("other", &["shared-preview".into()]).unwrap();
+        let impact = db.project_exclusive_impact_progress(&paths, "p", &|| Ok(()),
+            &mut |phase, _, _| assert_ne!(phase, "paths")).unwrap();
+        assert_eq!(impact.exclusive_asset_count, 0);
+        assert_eq!(impact.preserved_shared_count, 1);
+    }
+    #[test]
+    fn managed_keep_preserves_exclusive_shared_and_missing_assets() {
+        let (db, paths) = fixture();
+        let exclusive = asset(&db, &paths, "keep-exclusive");
+        let shared = asset(&db, &paths, "keep-shared");
+        let missing = asset(&db, &paths, "keep-missing");
+        db.add_assets_to_project("other", &["keep-shared".into()]).unwrap();
+        fs::remove_file(missing).unwrap();
+        let result = db.delete_project_keep_managed(&paths, "p").unwrap();
+        assert_eq!(result.deleted_assets, 0);
+        assert_eq!(result.preserved_shared, 3);
+        assert!(exclusive.is_file());
+        assert!(shared.is_file());
+        for id in ["keep-exclusive", "keep-shared", "keep-missing"] {
+            assert!(db.get_asset(id).unwrap().is_some());
+        }
+        assert!(db.get_project("p").unwrap().is_none());
+        assert!(db.delete_project_keep_managed(&paths, "p").is_err());
     }
     fn node(db: &Database, project: &str, id: &str, asset: &str) {
         db.conn.lock().unwrap().execute("INSERT INTO canvas_nodes(id,project_id,kind,asset_id,role,payload_json,x,y,width,height,created_at,updated_at) VALUES(?1,?2,'asset',?3,'reference','{\"schema_version\":1,\"snapshot\":{}}',0,0,100,100,1,1)",params![id,project,asset]).unwrap();
@@ -544,6 +727,7 @@ mod tests {
         assert_eq!(impact.exclusive_asset_count, 1);
         assert_eq!(impact.exclusive_file_count, 2);
         assert_eq!(impact.preserved_shared_count, 2);
+        assert_eq!(impact.exclusive_asset_ids, vec!["only".to_string()]);
         let result = delete(&db, &paths).unwrap();
         assert_eq!(result.deleted_assets, 1);
         assert!(result.cleanup_pending.is_empty());

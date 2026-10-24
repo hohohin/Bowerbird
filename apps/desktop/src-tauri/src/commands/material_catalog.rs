@@ -1,4 +1,6 @@
-use crate::core::catalog_browser::{CatalogColorBatch, CatalogFilter, CatalogOverview};
+use crate::core::catalog_browser::{
+    CatalogColorBatch, CatalogFilter, CatalogGraphPage, CatalogOverview,
+};
 use crate::{
     core::{library::Asset, material_catalog::MaterialCatalog},
     db::Database,
@@ -41,6 +43,21 @@ pub async fn catalog_overview(
     .await
     .map_err(|e| crate::error::AppError::Other(e.to_string()))?
 }
+#[tauri::command]
+pub async fn catalog_graph_page(
+    db: State<'_, Arc<Database>>,
+    filter: CatalogFilter,
+    after: Option<String>,
+    limit: i64,
+) -> AppResult<CatalogGraphPage> {
+    let db = db.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        db.catalog_graph_page(&filter, after.as_deref(), limit)
+    })
+    .await
+    .map_err(|e| crate::error::AppError::Other(e.to_string()))?
+}
+
 #[tauri::command]
 pub async fn catalog_page(
     db: State<'_, Arc<Database>>,

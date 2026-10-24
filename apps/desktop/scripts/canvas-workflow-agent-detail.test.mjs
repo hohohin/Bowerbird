@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
-const server = await createServer({ configFile: false, root: process.cwd(), server: { host: '127.0.0.1', port: 1654, strictPort: true, hmr: false, watch: null } });
+const server = await createServer({ configFile: false, root: process.cwd(), cacheDir: '.tmp/workflow-agent-errors-vite', server: { host: '127.0.0.1', port: 1654, strictPort: true, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1600, height: 1100 } });
@@ -70,6 +70,17 @@ try {
   });
   await detail.getByRole('alert').filter({hasText:'模拟工具失败'}).waitFor();
   assert.equal(await detail.getByText('第一轮输出',{exact:true}).count(),0);
+  await page.evaluate(async()=>{
+    const {canvasWorkflowController}=await import('/src/lib/canvasWorkflowRuntime.ts');const c=canvasWorkflowController('p');
+    const run=structuredClone(c.document.run);
+    window.rawAgentFailure='执行失败：SQLITE_BUSY at C:\\private\\agent.ts:52';
+    run.steps.agent.error=window.rawAgentFailure;
+    run.steps.agent.detail=window.rawAgentFailure;
+    await c.save({...c.document,run,runs:[run]});
+  });
+  await detail.getByRole('alert').filter({hasText:'资料库正忙，请稍候再试。'}).waitFor();
+  assert.doesNotMatch(await detail.innerText(),/SQLITE_BUSY|private|agent\.ts/);
+  assert.equal(await page.evaluate(async()=>{const {canvasWorkflowController}=await import('/src/lib/canvasWorkflowRuntime.ts');return canvasWorkflowController('p').document.run.steps.agent.error;}),await page.evaluate(()=>window.rawAgentFailure));
   await page.keyboard.press('Escape');assert.equal(await detail.count(),0);assert.deepEqual(errors,[]);
   console.log('PASS Agent detail: running click, live public progress, input images, close without cancellation, output, snapshot/reload, no resubmission, loop history and Escape');
 } finally {await browser.close();await server.close();}

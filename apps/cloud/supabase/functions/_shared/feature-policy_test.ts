@@ -20,6 +20,7 @@ Deno.test("agent policy is derived with the rest of the tier policy", () => {
   assertEquals(free.agent_budget_options, ["controlled-min", "controlled-standard"]);
   assertEquals([free.max_parallel_agent_runs, pro.max_parallel_agent_runs, studio.max_parallel_agent_runs], [1, 2, 4]);
   assertEquals(free.can_use_byo, false);
+  assertEquals(free.understand_daily_limit, null);
   assertEquals(pro.can_use_byo, true);
 });
 
@@ -30,6 +31,7 @@ Deno.test("expired subscriptions fail closed to free policy", () => {
     current_period_end: "2026-01-01T00:00:00.000Z",
   }, Date.parse("2026-01-02T00:00:00.000Z")), "free");
   assertEquals(activeTier({ tier: "pro", status: "active", current_period_end: null }), "pro");
+  assertEquals(activeTier({ tier: "pro", status: "canceled", current_period_end: "2027-01-01T00:00:00Z" }, Date.parse("2026-01-01T00:00:00Z")), "pro");
 });
 
 Deno.test("A8 test-only access mode hides agent capability for unmarked accounts only", () => {

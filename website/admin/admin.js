@@ -1,3 +1,4 @@
+import { reportUserError } from "../user-error.js";
 const $ = (id) => document.getElementById(id);
 const statusLabels = { unused: "可发放", redeemed: "已兑换", disabled: "已停用", expired: "已过期" };
 // Kernel 技能目录快照：与 Worker 镜像内 BuiltinSkillRegistry 和统一 Agent 领域方法
@@ -79,8 +80,9 @@ async function api(action, fields = {}) {
   if (session?.user.id !== identity || accountEpoch !== epoch) throw new Error("账号已切换，已隐藏本次结果");
   if (!response.ok) {
     const message = payload.error?.message || (response.status === 401 ? "登录已过期，请重新登录" : "管理服务暂时不可用，请重试");
-    if (response.status === 401 || response.status === 403) showLogin(message);
-    throw Object.assign(new Error(message), { status: response.status });
+    const error = Object.assign(new Error(message), { status: response.status, code: payload.error?.code });
+    if (response.status === 401 || response.status === 403) showLogin(reportUserError(error, "管理服务暂时不可用，请稍后重试。"));
+    throw error;
   }
   return payload;
 }
@@ -91,8 +93,9 @@ async function run(work) {
   try { await work(); }
   catch (error) {
     const uncertain = error.name === "TimeoutError" || error instanceof TypeError;
+    if (uncertain) console.warn("Bowerbird admin result not confirmed", error);
     notice(uncertain && view === "users" ? "请求未完成，变更可能已保存。请刷新用户列表确认实际状态后再操作。"
-      : error.name === "TimeoutError" ? "请求超时。发码可用同一请求重试确认，或刷新清单查看结果。" : error.message, true);
+      : uncertain ? "暂未确认操作结果。发码请使用同一请求重试确认，或刷新清单查看结果。" : reportUserError(error, "操作未完成，请刷新清单确认当前状态后再试。"), true);
   }
   finally { busy = false; $("console").inert = false; $("console").removeAttribute("aria-busy"); $("logout").disabled = false;
     $("users-console").inert = false; $("users-console").removeAttribute("aria-busy"); }
@@ -302,7 +305,7 @@ $("login-form").addEventListener("submit", async (event) => {
     const { error } = await client.auth.signInWithOtp({ email: $("login-email").value.trim(), options: { shouldCreateUser: false, emailRedirectTo: `${location.origin}/admin/` } });
     if (error) throw error;
     $("login-status").textContent = "登录链接已发送，请在邮箱中打开。";
-  } catch (error) { $("login-status").textContent = error.message; }
+  } catch (error) { $("login-status").textContent = reportUserError(error, "登录邮件未能发送，请稍后重试。"); }
   finally { $("login-submit").disabled = false; }
 });
 $("logout").addEventListener("click", async () => {
@@ -324,7 +327,7 @@ async function accountChanged(next) {
   if (previous === session.user.id && inventory && authorized) return;
   clearCodes();
   try { await loadList(); if (view === "users") await run(loadUsers); }
-  catch (error) { showLogin(error.message); }
+  catch (error) { showLogin(reportUserError(error, "账号服务暂时不可用，请稍后刷新页面。")); }
 }
 async function init() {
   $("login-submit").disabled = true;
@@ -352,6 +355,6 @@ async function init() {
       } catch { setPending(null); }
     }
     $("login-submit").disabled = false;
-  } catch (error) { showLogin(error.message); }
+  } catch (error) { showLogin(reportUserError(error, "账号服务暂时不可用，请稍后刷新页面。")); }
 }
 void init();

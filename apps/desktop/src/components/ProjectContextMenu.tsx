@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { ContextMenu, DeleteSubmenu } from "./ContextMenu";
-import { FolderSync, Pencil } from "lucide-react";
+import { ContextMenu } from "./ContextMenu";
+import { FolderSync, Pencil, Trash2 } from "lucide-react";
 import { useStore } from "../store";
 import { api } from "../lib/api";
 import { useProjectDeletion } from "./useProjectDeletion";
@@ -20,7 +20,7 @@ export function ProjectContextMenu() {
   const menu = useStore((s) => s.projectContextMenu);
   const close = () => { if (useStore.getState().projectContextMenu === menu) useStore.getState().closeProjectContextMenu(); };
   const projects = useStore((s) => s.projects);
-  const { busy: deleting, prepareDelete, confirmation } = useProjectDeletion(close, () => useStore.getState().projectContextMenu === menu);
+  const { busy: deleting, prepareDelete, confirmation } = useProjectDeletion(close);
   const [busy, setBusy] = useState(false);
   const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
 
@@ -84,7 +84,6 @@ export function ProjectContextMenu() {
       </button>}
 
       <div className="app-context-divider" />
-      <DeleteSubmenu disabled={busy || deleting}>
       <button
         type="button"
         role="menuitem"
@@ -92,11 +91,10 @@ export function ProjectContextMenu() {
           void prepareDelete(projectId);
         }}
         disabled={busy || deleting}
-        title="删除项目画板和内部线程；中央素材保留"
+        title="删除项目，默认保留素材"
         className="app-context-item is-danger px-2 py-1.5"
       >
-        删除项目 · 素材保留
+        <Trash2 size={13} aria-hidden="true" />删除项目 · 素材保留
       </button>
-      </DeleteSubmenu>
     </ContextMenu>;
 }

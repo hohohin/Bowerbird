@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { ChevronDown, ChevronRight, Folder, MoreHorizontal, Pencil, Plus, Settings2, Trash2, X } from "lucide-react";
@@ -256,13 +257,13 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
       window.dispatchEvent(new CustomEvent("bowerbird://board-asset-picked", { detail: asset.id }));
     } else void openPreview(asset);
   }
-  function openDetail(asset: Asset) {
+  function openDetail(asset: Pick<Asset, "id">) {
     if (working) return;
     previewVersion.current++;
     setPreview(null);
     useStore.getState().openDetail(asset.id);
   }
-  async function openPreview(asset: Asset) {
+  async function openPreview(asset: Pick<Asset, "store_path">) {
     const version = ++previewVersion.current;
     try {
       if (!asset.store_path) throw new Error("素材原文件不可用");
@@ -303,7 +304,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
     const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : Math.max(0, Math.min(items.length - 1, index + (event.key === "ArrowDown" ? 1 : -1)));
     event.preventDefault(); event.stopPropagation(); items[next]?.focus();
   }
-  return <section className={`categorized-library${kind === "tags" && !flat ? " is-tag-catalog" : ""}`} aria-label={flat ? media === "videos" ? "平铺浏览视频" : "平铺浏览全部图片" : kind === "tags" ? "按标签浏览素材" : "按集合浏览素材"}
+  return <section data-file-import-project-id={projectScope ? projectId ?? "" : ""} className={`categorized-library${kind === "tags" && !flat ? " is-tag-catalog" : ""}`} aria-label={flat ? media === "videos" ? "平铺浏览视频" : "平铺浏览全部图片" : kind === "tags" ? "按标签浏览素材" : "按集合浏览素材"}
     style={{ ...glass.style, ...(sidebarWidth !== null ? { "--catalog-sidebar-width": `${sidebarWidth}px` } : {}) } as CSSProperties}>
     {glass.definition}
     <LibraryMotion />
@@ -313,7 +314,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
           <button title={kind === "tags" ? "管理标签" : "新建集合"} aria-label={kind === "tags" ? "管理标签" : "新建集合"}
             onClick={() => kind === "tags" ? setManageTags(true) : setEditor({ parentId: null })}>{kind === "tags" ? <Settings2 size={15}/> : <Plus size={16}/>}</button></div>
         {kind === "tags" && <p className="catalog-sort-note">{projectId ? <button onClick={() => { setAlphabetic(v => !v); setJump(null); if (scroll.current) scroll.current.scrollTop = 0; }} title="根据本项目生图提示词和素材标签在本机排序；点击切换拼音顺序">{alphabetic ? "拼音 A–Z" : "项目相关优先"}</button> : "拼音 A–Z"}</p>}
-        {catalogError && <p className="catalog-error" role="alert">{catalogError}<button onClick={() => setRevision(v => v + 1)}>重试</button></p>}
+        {catalogError && <p className="catalog-error" role="alert">{userErrorMessage(catalogError, "素材列表暂时无法读取，请重试。")}<button onClick={() => setRevision(v => v + 1)}>重试</button></p>}
         {kind === "tags" ? <CatalogTagIndex tags={visibleTags} active={active} alphabetic={!projectId || alphabetic} pinned={pinnedTags} onTogglePin={id => { togglePin(id); setJump(null); if (scroll.current) scroll.current.scrollTop = 0; }} onNavigate={navigateTag} onLetter={navigateLetter}/> : <OverlayScrollArea className="catalog-tree-scroll" viewportClassName="catalog-index" label="集合目录滚动条">
           <div role="tree" aria-label="集合层级" onKeyDown={listKey}>
             {rows.filter(row => !hidden(row.item.id)).map(({ item, depth, path }) => {
@@ -368,7 +369,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
             <FileColorFilter open={colorsOpen} onOpenChange={setColorsOpen} color={color} onColorChange={setColor} palette={palette}/>
           </LibraryFloatingControls>
         </div>
-        {flat && catalogError && <p className="catalog-error" role="alert">{catalogError}<button onClick={() => setRevision(v => v + 1)}>重试</button></p>}
+        {flat && catalogError && <p className="catalog-error" role="alert">{userErrorMessage(catalogError, "素材列表暂时无法读取，请重试。")}<button onClick={() => setRevision(v => v + 1)}>重试</button></p>}
         <OverlayScrollArea scrollRef={scroll} className="catalog-scroll" viewportClassName="catalog-scroller library-scroller" viewportStyle={{ paddingBottom: 0, overflowAnchor: "none" }}>
           {reading ? <p className="catalog-hint catalog-empty" role="status">正在读取素材…</p> : !total && !catalogError ? <p className="catalog-hint catalog-empty">{kind === "collections" && !currentCollection ? "还没有集合，点击左侧 ＋ 新建集合。" : query || color || generatedFilter ? "没有匹配的素材。" : kind !== "collections" ? "还没有已登记的素材。" : "集合还没有素材。可在素材右键菜单中选择「添加到集合」。"}</p> : null}
           {loadedCatalogScope.current === filterKey && <VirtualCatalog key={filterKey} filter={filter} sections={sections} headings={!flat} width={width} revision={revision} scroll={scroll}

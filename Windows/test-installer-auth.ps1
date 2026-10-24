@@ -1,3 +1,4 @@
+param([ValidateSet(1033, 2052)][int]$Language = 2052)
 $ErrorActionPreference = 'Stop'
 $workspace = Split-Path $PSScriptRoot -Parent
 $testDirectory = Join-Path $workspace ('.tmp/installer-auth-' + [Guid]::NewGuid().ToString('N'))
@@ -9,6 +10,8 @@ $hook = Join-Path $workspace 'apps/desktop/src-tauri/windows/installer-hooks.nsh
 $installer = Join-Path $testDirectory 'test-setup.exe'
 $script = @'
 Unicode true
+LoadLanguageFile "${NSISDIR}\Contrib\Language files\English.nlf"
+LoadLanguageFile "${NSISDIR}\Contrib\Language files\SimpChinese.nlf"
 !include LogicLib.nsh
 !include FileFunc.nsh
 Name "Bowerbird login reset test"
@@ -21,6 +24,7 @@ SilentInstall silent
 OutFile "@@OUTPUT@@"
 Var UpdateMode
 Function .onInit
+  StrCpy $LANGUAGE @@LANGUAGE@@
   ${GetOptions} $CMDLINE "/UPDATE" $UpdateMode
   ${IfNot} ${Errors}
     StrCpy $UpdateMode 1
@@ -32,7 +36,7 @@ File /oname=fixture.exe "@@FIXTURE@@"
 !insertmacro NSIS_HOOK_POSTINSTALL
 SectionEnd
 '@
-$script = $script.Replace('@@HOOK@@', $hook).Replace('@@OUTPUT@@', $installer).Replace('@@FIXTURE@@', $fixture)
+$script = $script.Replace('@@HOOK@@', $hook).Replace('@@OUTPUT@@', $installer).Replace('@@FIXTURE@@', $fixture).Replace('@@LANGUAGE@@', [string]$Language)
 $source = Join-Path $testDirectory 'installer.nsi'
 [IO.File]::WriteAllText($source, $script)
 $makensis = Join-Path $env:LOCALAPPDATA 'tauri/NSIS/makensis.exe'
@@ -69,4 +73,4 @@ if ([IO.File]::ReadAllText($loginFile) -ne $login) { throw 'update changed login
 [IO.File]::Delete((Join-Path $destination 'fail-reset'))
 if ((Install) -ne 0) { throw 'retry failed' }
 if ((Get-Content (Join-Path $destination 'reset-count')) -ne '3') { throw 'retry did not complete reset' }
-Write-Output 'PASS: actual NSIS hook preserves login on passive/silent UPDATE without calling reset or creating a marker; ordinary reinstall resets; earlier failed reset remains pending; retry completes'
+Write-Output "PASS language $Language`: actual NSIS hook preserves login on passive/silent UPDATE without calling reset or creating a marker; ordinary reinstall resets; earlier failed reset remains pending; retry completes"

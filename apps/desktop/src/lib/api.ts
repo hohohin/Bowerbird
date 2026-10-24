@@ -1,4 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
+import type { ProjectDeleteScanProgress } from "./types";
 import { invokeGenerationWithDiagnostics } from "./generationDiagnostics";
 import type { LibraryView } from "./libraryView";
 import type { WorkflowTemplate } from "./workflowTemplates";
@@ -189,10 +190,13 @@ export const api = {
     invoke<number>("add_assets_to_project", { projectId, assetIds }),
   removeAssetsFromProject: (projectId: string, assetIds: string[]) =>
     invoke<number>("remove_assets_from_project", { projectId, assetIds }),
-  deleteProject: (projectId: string, mode: ProjectDeleteMode, confirmation?: string) =>
-    invoke<ProjectDeleteResult>("delete_project", { projectId, mode, confirmation: confirmation ?? null }),
-  projectDeleteImpact: (projectId: string) =>
-    invoke<ProjectDeleteImpact>("project_delete_impact", { projectId }),
+  deleteProject: (projectId: string, mode: ProjectDeleteMode, confirmation?: string, discardPendingResults?: string[]) =>
+    invoke<ProjectDeleteResult>("delete_project", { projectId, mode, confirmation: confirmation ?? null, ...(discardPendingResults ? { discardPendingResults } : {}) }),
+  projectDeleteImpact: (projectId: string, includePhysical = true) =>
+    invoke<ProjectDeleteImpact>("project_delete_impact", { projectId, includePhysical }),
+  projectExclusiveScan: (projectId: string, requestId: string, onProgress: (progress: ProjectDeleteScanProgress) => void) =>
+    invoke<ProjectDeleteImpact["physical"] | null>("project_exclusive_scan", { projectId, requestId, onProgress: new Channel(onProgress) }),
+  cancelProjectExclusiveScan: (requestId: string) => invoke<void>("cancel_project_exclusive_scan", { requestId }),
   // 「更新项目文件」：重新扫描 workspace 文件夹，新增图片入库进项目（手动同步）。
   refreshProject: (projectId: string) =>
     invoke<ProjectRefreshResult>("refresh_project", { projectId }),
@@ -382,6 +386,14 @@ export const api = {
   deletePreset: (id: string) => invoke<void>("delete_preset", { id }),
 
   // 文件选择对话框
+  pickMediaFiles: async (): Promise<string[]> => {
+    const videos = ["mp4", "mov", "webm", "mkv", "avi", "m4v"];
+    const r = await open({ multiple: true, filters: [
+      { name: "图片与视频", extensions: [...IMAGE_EXT, ...videos] },
+      { name: "视频", extensions: videos }, { name: "图片", extensions: IMAGE_EXT },
+    ] });
+    return r ? Array.isArray(r) ? r : [r] : [];
+  },
   pickImageFiles: async (): Promise<string[]> => {
     const r = await open({
       multiple: true,
@@ -600,6 +612,8 @@ export const api = {
   cloudEntitlement: () => invoke<EntitlementSnapshot>("cloud_entitlement"),
   cloudSyncEntitlement: () =>
     invoke<EntitlementSnapshot>("cloud_sync_entitlement"),
+  cloudStartProTrial: () => invoke<EntitlementSnapshot>("cloud_start_pro_trial"),
+  canvasWorkflowAuthorize: () => invoke<void>("canvas_workflow_authorize"),
   cloudRedeemCode: (code: string) =>
     invoke<CodeRedemption>("cloud_redeem_code", { code }),
   visualProfilePreview: (folderId: string) =>

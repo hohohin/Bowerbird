@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { useEffect } from "react";
 import { createPortal } from "react-dom";
 import { Cloud, Laptop2 } from "lucide-react";
@@ -109,14 +110,14 @@ export function DescribeProviderPicker() {
             role="menuitem"
             disabled={!opt.ok}
             onClick={() => runDescribePicker(opt.key)}
-            title={!opt.ok ? opt.reason : `用 ${opt.label} 反推`}
+            title={!opt.ok ? userErrorMessage(opt.reason, "此方式暂不可用，请在设置中重新登录。") : `用 ${opt.label} 反推`}
             className="app-popover-option"
           >
             <Icon size={15} aria-hidden="true" />
             <span className="min-w-0 flex-1">
               <span className="block text-xs font-medium">{opt.label}</span>
               <span className="mt-0.5 block truncate text-[10px] text-muted">
-                {opt.ok ? "当前可用" : opt.reason}
+                {opt.ok ? "当前可用" : userErrorMessage(opt.reason, "此方式暂不可用，请在设置中重新登录。")}
               </span>
             </span>
             <span className={`app-status-dot ${opt.ok ? "is-ready" : ""}`} aria-hidden="true" />

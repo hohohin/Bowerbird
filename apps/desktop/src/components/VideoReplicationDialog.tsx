@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { useEffect, useRef, useState } from "react";
 import { Film, Plus } from "lucide-react";
 import { ModalShell } from "./ModalShell";
@@ -42,7 +43,7 @@ export function VideoReplicationDialog(props: ReplicationDialogProps) {
   return <ModalShell title="复刻任务" eyebrow="工具箱" width="lg" className="video-replication vr-manager" onClose={props.onClose} preventClose={creating}
     headerActions={<div className="vr-actions"><button className="is-primary" disabled={creating || loading} onClick={() => void create()}><Plus size={16} />新建任务</button></div>}>
     <div className="vr-manager-body">
-      {error && <p className="vr-message is-error" role="alert">{error}</p>}
+      {error && <p className="vr-message is-error" role="alert">{userErrorMessage(error, "视频复刻任务未能加载，请稍后重试。")}</p>}
       {loading ? <p role="status">正在读取复刻任务…</p> : !cases.length ? <div className="vr-empty-tasks"><Film size={32} /><p>从一个参考视频开始</p><span>新建任务，获取视频后继续分析与改写。</span></div> : <div className="vr-task-grid">
         {cases.map(item => <button className="vr-task-tile" key={item.id} onClick={() => setSelected(item.id)}>
           <div className="vr-task-cover">{item.referenceId ? <ReplicationPoster projectId={props.projectId} referenceId={item.referenceId} alt={item.title || "参考视频"} /> : <><Film size={30} /><span>待获取视频</span></>}</div>

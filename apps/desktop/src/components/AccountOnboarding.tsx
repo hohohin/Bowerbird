@@ -3,6 +3,7 @@ import { open as openExternal } from "@tauri-apps/plugin-shell";
 import { useStore } from "../store";
 import { ModalShell } from "./ModalShell";
 import { accountErrorMessage } from "../lib/accountError";
+import { CreditDetails } from "./CreditDetails";
 
 /**
  * Bowerbird 账号面板（独立于「环境状态」总览）：侧栏底部账号区「登录 / 管理账号」唤起，
@@ -49,24 +50,7 @@ export function AccountOnboarding() {
                 <div className="mt-0.5 text-xs text-muted">当前档位：{entitlement?.tier?.toUpperCase() || "FREE"}</div>
               </div>
             </div>
-            <div className="mt-3 grid grid-cols-3 gap-2 text-center text-[11px]">
-              <div className="rounded-lg border border-edge bg-canvas/70 p-2"><div className="text-muted">每日</div><div className="mt-0.5 text-sm font-semibold text-ink">{entitlement?.balances.daily ?? 0}</div></div>
-              <div className="rounded-lg border border-edge bg-canvas/70 p-2"><div className="text-muted">订阅</div><div className="mt-0.5 text-sm font-semibold text-ink">{entitlement?.balances.sub ?? 0}</div></div>
-              <div className="rounded-lg border border-edge bg-canvas/70 p-2"><div className="text-muted">充值</div><div className="mt-0.5 text-sm font-semibold text-ink">{entitlement?.balances.topup ?? 0}</div></div>
-            </div>
-            {(entitlement?.recent_transactions?.length ?? 0) > 0 && (
-              <div className="mt-3 border-t border-edge pt-2">
-                <div className="text-[10px] uppercase tracking-wide text-muted">最近积分流水</div>
-                <ul className="mt-1 max-h-40 space-y-1 overflow-y-auto text-[11px]">
-                  {entitlement!.recent_transactions.slice(0, 50).map((tx, index) => (
-                    <li key={`${tx.created_at}-${index}`} className="flex items-center justify-between gap-2 text-muted">
-                      <span className="truncate">{tx.meta?.entity_type === "agent_run" ? `Agent Run · ${tx.meta.final_status}` : tx.kind}{tx.service ? ` · ${tx.service}` : ""}</span>
-                      <span className={tx.amount >= 0 ? "text-green-400" : "text-red-300"}>{tx.amount >= 0 ? `+${tx.amount}` : tx.amount}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
+            <div className="mt-3"><CreditDetails entitlement={entitlement} /></div>
             <button type="button" onClick={() => void logout()} disabled={busy} className="app-modal-button is-danger mt-3">
               {busy && <span className="app-spinner" aria-hidden="true" />}
               登出账号

@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { useEffect, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -6,7 +7,10 @@ import { ModalShell } from "./ModalShell";
 import { VideoPlayer } from "./VideoPlayer";
 import { DouyinReferencePicker } from "./DouyinReferencePicker";
 import { useReplicationCapabilities } from "./useReplicationCapabilities";
-import { replicationDuration, replicationRewriteParts, replicationRunning, type ReplicationCase, type ReplicationReference, type ReplicationTask } from "../lib/videoReplication";
+import { replicationAnalysisParts, replicationDuration, replicationRewriteParts, replicationRunning, type ReplicationCase, type ReplicationReference, type ReplicationTask } from "../lib/videoReplication";
+import { ModelSelect, type ModelOption } from "./creation/ModelSelect";
+import { useStore } from "../store";
+import { canUseByo } from "../lib/entitlement";
 import { api } from "../lib/api";
 import { videoTime, type VideoFrame } from "../lib/videoFrame";
 import type { Asset } from "../lib/types";
@@ -22,6 +26,12 @@ export function ReplicationTaskPanel({ initial, defaults, onUpdate, onBack, ...p
   const [sources, setSources] = useState<Asset[]>([]), [query, setQuery] = useState(""), [offset, setOffset] = useState(0);
   const [framePreview, setFramePreview] = useState("");
   const caps = useReplicationCapabilities(props.projectId);
+  const codexHealth = useStore(s => s.codexHealth), entitlement = useStore(s => s.cloudEntitlement), auth = useStore(s => s.cloudAuth);
+  const balance = entitlement ? entitlement.balances.daily + entitlement.balances.sub + entitlement.balances.topup : 0;
+  const localReason = !canUseByo(entitlement) ? "升级 Pro 解锁自有订阅" : !codexHealth?.ok ? userErrorMessage(codexHealth?.reason, "请先在设置中登录本机 Codex") : undefined;
+  const provider = draft.analysisProvider || "doubao";
+  const analysisOptions: ModelOption[] = [{ key: "codex", label: "本机 Codex", source: "personal", reason: localReason },
+    { key: "doubao", label: "豆包", source: "cloud", reason: !auth?.cloud_available ? "当前版本未配置 Bowerbird Cloud" : !auth.logged_in ? "请先登录 Bowerbird 账号" : balance <= 0 ? "积分不足" : undefined }];
   const analysisJob = initial.analysisJob, rewriteJob = initial.rewriteJob;
   const running = !!(analysisJob && replicationRunning(analysisJob) || rewriteJob && replicationRunning(rewriteJob));
   const step = draft.step || 1;
@@ -54,7 +64,7 @@ export function ReplicationTaskPanel({ initial, defaults, onUpdate, onBack, ...p
   useEffect(() => {
     const patch: Partial<ReplicationCase> = {};
     if (!draftRef.current.referenceId && initial.referenceId) Object.assign(patch, { referenceId: initial.referenceId, reference: initial.reference, step: 2, title: initial.reference?.name?.slice(0,100) || draftRef.current.title });
-    if (analysisJob?.analysis && draftRef.current.appliedAnalysisId !== analysisJob.id) Object.assign(patch, { analysisText: analysisJob.analysis, appliedAnalysisId: analysisJob.id, step: 2 });
+    if (analysisJob?.analysis && draftRef.current.appliedAnalysisId !== analysisJob.id) Object.assign(patch, { ...replicationAnalysisParts(analysisJob), appliedAnalysisId: analysisJob.id, step: 2 });
     if (rewriteJob?.rewriteOriginalText && draftRef.current.appliedRewriteId !== rewriteJob.id) {
       const parts = replicationRewriteParts(rewriteJob.rewrittenText || rewriteJob.rewriteOriginalText);
       Object.assign(patch, { rewrittenText: parts.text, firstFramePrompt: rewriteJob.firstFramePrompt ?? parts.firstFramePrompt, appliedRewriteId: rewriteJob.id, step: 4 });
@@ -91,7 +101,9 @@ export function ReplicationTaskPanel({ initial, defaults, onUpdate, onBack, ...p
     if (operation === "rewrite" && !value.analysisText?.trim()) throw new Error("请先分析视频");
     await flush();
     const job = await call<ReplicationTask>(props.projectId, "create", { caseId: value.id, operation, title: value.title, referenceId: value.referenceId,
-      inputText: value.analysisText, rewriteDirection: value.rewriteDirection, persona: value.persona, rules: value.rules, frameReference: value.frameReference, product: null, ratio: "9:16" });
+      analysisProvider: value.analysisProvider || "doubao",
+      inputText: value.transcript?.trim() ? `${value.analysisText}\n\n【语音转写】\n${value.transcript}` : value.analysisText,
+      rewriteDirection: value.rewriteDirection, persona: value.persona, rules: value.rules, frameReference: value.frameReference, product: null, ratio: "9:16" });
     onUpdate({ ...initial, ...draftRef.current, ...(operation === "analyze" ? { analysisJob: job } : { rewriteJob: job }) });
   }
   async function exit(back: boolean) { await flush(); onUpdate({ ...initial, ...draftRef.current }); back ? onBack() : props.onClose(); }
@@ -105,7 +117,9 @@ export function ReplicationTaskPanel({ initial, defaults, onUpdate, onBack, ...p
   }
   const capability = caps.services.find(s => s.operation === (step === 2 ? "video-analysis" : "text-rewrite"));
   const job = step === 2 ? analysisJob : rewriteJob;
-  const price = capability?.available ? ` · ${capability.credits} 积分` : "";
+  const localAnalysis = step === 2 && provider === "codex";
+  const available = localAnalysis ? !localReason : !!capability?.available;
+  const price = localAnalysis ? " · 自有订阅" : capability?.available ? ` · ${capability.credits} 积分` : "";
   const canStep = (index: number) => index === 1 || !!draft.referenceId && (index === 2 || !!draft.appliedAnalysisId && !!draft.analysisText?.trim() && (index === 3 || !!draft.appliedRewriteId));
   return <ModalShell title={draft.reference?.name || draft.title || "复刻任务"} eyebrow="视频复刻" width="lg" className="video-replication vr-task-panel" onClose={() => void action(() => exit(false))} preventClose={busy}
     headerActions={<div className="vr-actions"><span className="vr-hint" role="status">{saveStatus}</span><button disabled={busy} onClick={() => void action(() => exit(true))}><ArrowLeft size={15} />全部任务</button></div>}>
@@ -113,21 +127,28 @@ export function ReplicationTaskPanel({ initial, defaults, onUpdate, onBack, ...p
       <nav className="vr-step-nav" aria-label="复刻步骤">{steps.map((name, index) => <button key={name} aria-current={step === index + 1 ? "step" : undefined} disabled={busy || !canStep(index + 1)} onClick={() => change({ step: (index + 1) as ReplicationCase["step"] })}><span>{index + 1}</span><div><small>流程 {index + 1}</small><strong>{name}</strong></div></button>)}</nav>
       <section className="vr-fixed-video" aria-label="任务参考视频">
         {media ? <VideoPlayer key={media} path={media} embedded onReferenceFrame={capture} onAddFrame={props.onAddFrame} /> : <div className="vr-video-placeholder"><Film size={36} /><p>{draft.referenceId ? "正在载入参考视频…" : "请先在右侧获取视频"}</p><button disabled>添加该帧为参考图</button><button disabled>添加该帧到画板</button></div>}
-        {mediaError && <p className="vr-message is-error" role="alert">{mediaError}</p>}
+        {mediaError && <p className="vr-message is-error" role="alert">{userErrorMessage(mediaError, "参考视频暂时无法加载，请重新获取视频。")}</p>}
         {draft.reference && <p className="vr-hint">{draft.reference.name} · {draft.reference.duration.toFixed(1)} 秒</p>}
         {draft.frameReference && <div className="vr-frame-reference">{framePreview && <img src={framePreview} alt="首帧生成参考图" />}<div><strong>已选参考帧</strong><p>{videoTime(draft.frameReference.time)}</p><button disabled={busy} onClick={() => change({ frameReference: null })}>移除参考图</button></div></div>}
       </section>
       <section className="vr-step-content" aria-label={steps[step - 1]}>
         <h3>{steps[step - 1]}</h3>
-        {error && <div className="vr-message is-error" role="alert">{error}{saveStatus === "保存失败" && <button onClick={() => void action(flush)}>重试保存</button>}</div>}
+        {error && <div className="vr-message is-error" role="alert">{userErrorMessage(error, saveStatus === "保存失败" ? "任务未能保存，请点击重试保存。" : "操作未完成，请稍后重试。")}{saveStatus === "保存失败" && <button onClick={() => void action(flush)}>重试保存</button>}</div>}
+        {step === 1 && <fieldset className="vr-analysis-provider" disabled={busy || running}><legend>分析供应商</legend>
+          <ModelSelect kind="视频分析" value={provider} label={provider === "codex" ? "本机 Codex" : "豆包"} source={provider === "codex" ? "personal" : "cloud"}
+            options={analysisOptions} onChange={key => { if (!busy && !running && (key === "codex" || key === "doubao")) change({ analysisProvider: key }); }}
+            cloudBalance={entitlement ? balance : null} cloudLoggedIn={auth?.logged_in} />
+          <p className="vr-hint">{provider === "codex" ? "使用本机 Codex 订阅分析画面，不扣 Bowerbird 积分；暂不支持语音转写。" : "通过 Bowerbird Cloud 分析画面与音轨，按次消耗积分。"}</p>
+        </fieldset>}
         {step === 1 && (draft.referenceId ? <><p className="vr-message">此任务已获取参考视频。</p><p className="vr-hint">{draft.shareText}</p><div className="vr-actions"><button className="is-primary" onClick={() => change({ step: 2 })}>继续分析视频</button></div></> : <>
           <div className="vr-source-tabs" role="group" aria-label="获取途径">{([["douyin", "抖音链接"], ["local", "本地视频"], ["library", "素材库"]] as const).map(([id, name]) => <button key={id} disabled={busy} aria-pressed={draft.sourceMethod === id} onClick={() => { localStorage.setItem(sourceKey,id); change({ sourceMethod: id }); }}>{name}</button>)}</div>
           {draft.sourceMethod === "douyin" && <DouyinReferencePicker projectId={props.projectId} caseId={draft.id} shareText={draft.shareText} onShareText={shareText => change({ shareText })} ensureProject={flush} onUse={reference => void action(() => useReference(reference))} />}
           {draft.sourceMethod === "local" && <div className="vr-actions"><button disabled={busy} className="is-primary" onClick={() => void action(async () => { const path = await open({ multiple: false, filters: [{ name: "视频", extensions: ["mp4","mov","m4v","webm","mkv","avi"] }] }); if (typeof path === "string") await choose({ path }); })}>选择本地视频</button></div>}
           {draft.sourceMethod === "library" && <div className="vr-library-picker"><label className="vr-field">搜索视频<input value={query} onChange={e => { setQuery(e.target.value); setOffset(0); }} /></label>{sources.map(asset => <button disabled={busy} key={asset.id} onClick={() => void action(() => choose({ assetId: asset.id }))}>{asset.name}</button>)}{!sources.length && <p className="vr-hint">没有匹配的视频</p>}<div className="vr-actions"><button disabled={!offset} onClick={() => setOffset(Math.max(0,offset-40))}>上一页</button><button disabled={sources.length < 40} onClick={() => setOffset(offset+40)}>下一页</button></div></div>}
         </>)}
-        {step === 2 && <><label className="vr-field">分析文本<textarea aria-label="分析文本" rows={16} value={draft.analysisText || ""} disabled={busy || running} onChange={e => change({ analysisText: e.target.value })} placeholder="点击分析视频，结果将填写在这里" maxLength={50000} /></label>
-          <div className="vr-actions">{draft.appliedAnalysisId ? <><button className="is-primary" disabled={busy || running || !draft.analysisText?.trim()} onClick={() => change({ step: 3 })}>进行改写</button><button disabled={busy || running || !capability?.available || !media} onClick={() => void action(() => submit("analyze"))}>重新分析{price}</button></> : <button className="is-primary" disabled={busy || running || !capability?.available || !media} onClick={() => void action(() => submit("analyze"))}>分析视频{price}</button>}</div></>}
+        {step === 2 && <><label className="vr-field">分析文本<textarea aria-label="分析文本" rows={10} value={draft.analysisText || ""} disabled={busy || running} onChange={e => change({ analysisText: e.target.value })} placeholder="点击分析视频，结果将填写在这里" maxLength={50000} /></label>
+          <label className="vr-field">语音转写<textarea aria-label="语音转写" rows={5} readOnly value={draft.transcript || ""} placeholder={!draft.appliedAnalysisId ? "分析完成后显示语音转写文本" : draft.transcriptStatus === "no_speech" ? "视频中未检测到语音" : analysisJob?.analysisProvider === "codex" ? "本机 Codex 当前仅分析画面，未进行语音转写" : "本次分析未返回转写文本"} /></label>
+          <div className="vr-actions">{draft.appliedAnalysisId ? <><button className="is-primary" disabled={busy || running || !draft.analysisText?.trim()} onClick={() => change({ step: 3 })}>进行改写</button><button disabled={busy || running || !available || !media} onClick={() => void action(() => submit("analyze"))}>重新分析{price}</button></> : <button className="is-primary" disabled={busy || running || !available || !media} onClick={() => void action(() => submit("analyze"))}>分析视频{price}</button>}</div></>}
         {step === 3 && <>
           <label className="vr-field">改写方向<textarea aria-label="改写方向" rows={4} value={draft.rewriteDirection || ""} maxLength={8000} disabled={busy || running} onChange={e => change({ rewriteDirection: e.target.value })} placeholder="希望保留什么、改变什么？" /></label>
           <label className="vr-field">人设<textarea aria-label="人设" rows={2} value={draft.persona || ""} maxLength={8000} disabled={busy || running} onChange={e => change({ persona: e.target.value })} /></label>
@@ -139,10 +160,10 @@ export function ReplicationTaskPanel({ initial, defaults, onUpdate, onBack, ...p
           <div className="vr-actions"><button className="is-primary" disabled={busy || !props.onCreateWorkflow || !draft.firstFramePrompt?.trim() || !draft.rewrittenText?.trim()} onClick={() => void action(workflow)}>生成工作流</button></div>
           <p className="vr-hint">建立四张相连卡片：首帧生成 → 图片内容列 → 视频生成 → 视频内容列。填好提示词与参考图，暂不运行。</p>
         </>}
-        {(step === 2 || step === 3) && <><p className="vr-hint" role="status">{running ? job?.message || "正在处理…" : caps.loading ? "正在读取 Cloud 价格…" : caps.error ? "价格读取失败" : capability?.available ? `Bowerbird Cloud · ${capability.credits} 积分 / 次` : "服务暂不可用"}</p>
-          {(caps.error || !caps.loading && !capability?.available) && <div className="vr-actions"><span role="alert">{caps.error}</span><button onClick={caps.refresh}>重新读取 Cloud 状态</button></div>}
-          {job?.error && <p className="vr-message is-error" role="alert">{job.error}</p>}
-          {job && ["failed","interrupted"].includes(job.state) && <button disabled={busy} onClick={() => void action(async () => { const result = await call<ReplicationTask>(props.projectId,"resume",{ id: job.id }); onUpdate({ ...initial, ...(step === 2 ? { analysisJob: result } : { rewriteJob: result }) }); })}>恢复原任务</button>}
+        {(step === 2 || step === 3) && <><p className="vr-hint" role="status">{running ? userErrorMessage(job?.message, "正在处理…") : localAnalysis ? localReason || "本机 Codex · 自有订阅 · 不扣 Bowerbird 积分" : caps.loading ? "正在读取 Cloud 价格…" : caps.error ? "价格读取失败" : capability?.available ? `Bowerbird Cloud · ${capability.credits} 积分 / 次` : "服务暂不可用"}</p>
+          {!localAnalysis && (caps.error || !caps.loading && !capability?.available) && <div className="vr-actions"><span role="alert">{userErrorMessage(caps.error, "暂时无法读取服务价格，请重新读取。")}</span><button onClick={caps.refresh}>重新读取 Cloud 状态</button></div>}
+          {job?.error && <p className="vr-message is-error" role="alert">{userErrorMessage(job.error, "本次处理未完成，请稍后重试。")}</p>}
+          {job && job.analysisProvider !== "codex" && ["failed","interrupted"].includes(job.state) && <button disabled={busy} onClick={() => void action(async () => { const result = await call<ReplicationTask>(props.projectId,"resume",{ id: job.id }); onUpdate({ ...initial, ...(step === 2 ? { analysisJob: result } : { rewriteJob: result }) }); })}>恢复原任务</button>}
         </>}
         {(analysisJob?.analysis || rewriteJob?.rewriteOriginalText) && step > 1 && <details className="vr-original"><summary>查看模型原文</summary><pre className="vr-payload">{step === 4 ? rewriteJob?.rewriteOriginalText : analysisJob?.analysis}</pre></details>}
       </section>

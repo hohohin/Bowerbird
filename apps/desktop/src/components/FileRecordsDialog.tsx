@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { useEffect, useRef, useState } from "react";
 import { fileWorkspace, type RestorePreview } from "../lib/fileWorkspace";
 import { ModalShell } from "./ModalShell";
@@ -63,12 +64,12 @@ export function FileRecordsDialog({ root, onClose, onRestored }: { root: string;
     <p className="text-xs opacity-70">保存仅处理当前层已登记的素材，用于更新旧版随图资料；只读目录的资料保存在本机。恢复不会重新启动生成任务或重建整个画板。</p>
     {busy && <p role="status" className="my-3 text-sm">正在校验文件内容…</p>}
     {message && <p role="status" className="my-3 text-sm">{message}</p>}
-    {error && <p role="alert" className="folder-error">{error}</p>}
+    {error && <p role="alert" className="folder-error">{userErrorMessage(error, "随图资料处理未完成，请检查文件夹后重试。")}</p>}
     {preview && !preview.items.length && <p className="my-4 text-sm">未找到随图资料。可先在原设备保存资料，再将图片连同 .bowerbird 文件夹一起复制。</p>}
     {!!preview?.items.length && <ul className="space-y-2 my-4 max-h-[45vh] overflow-auto" aria-label="资料恢复预览">
       {preview.items.map(item => <li key={item.record_path} className="border border-line rounded-lg p-3 text-sm">
         <div className="break-all font-medium">{item.file}</div>
-        <p className="mt-1 text-xs opacity-70">{item.message}</p>
+        <p className="mt-1 text-xs opacity-70">{item.action === "blocked" ? userErrorMessage(item.message, "这份资料无法恢复，请检查文件是否完整。") : item.message}</p>
       </li>)}
     </ul>}
   </ModalShell>;

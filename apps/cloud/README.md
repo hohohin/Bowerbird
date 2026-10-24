@@ -84,10 +84,12 @@ node scripts/test-payment.mjs
 |---|---|---|
 | `generate-proxy` | POST | JWT → hold → 私有输入暂存 → `202 + job_id`；提供 get/cancel/artifact_received 短请求 |
 | `generation-worker` | POST | Worker Token → claim/heartbeat/submitted/upload/finish/fail/outcome_unknown；VPS 不直连数据库 |
-| `understand-proxy` | POST | JWT → Free 日限额 → hold → 同步理解（`UNDERSTAND_ASYNC=false`）或 create/get 异步任务（`true`）→ confirm/rollback |
+| `understand-proxy` | POST | JWT → 服务端价格/余额校验 → hold → 同步理解（`UNDERSTAND_ASYNC=false`）或 create/get 异步任务（`true`）→ confirm/rollback |
 | `understand-worker` | POST | Worker Token → claim/heartbeat/submitted/finish/fail/outcome_unknown；VPS 不直连数据库 |
 | `entitlement` | GET | 返回 tier、三类余额与 FeaturePolicy |
 
 统一错误：401 未登录 / 402 积分不足 / 413 体积超限 / 429 限流 / 502 上游失败 / 503 熔断或未配置 / 504 超时。`BOWERBIRD_CLOUD_MOCK=true` 时只用于开发；生产必须关闭，且未配置真实 adapter 时应返回 503，不能静默输出 Mock 结果。
 
-本机 Docker/Supabase/Deno 验证现已可用。通用 Agent Harness 本地专用脚本 `scripts/test-unified-agent-approval-local.mjs` 会拒绝非 localhost URL，并覆盖真实 Edge create/upload/enqueue、claim/checkpoint、图片 artifact 服务端尺寸提取、计划停车、无租约重放、漂移拒绝、用户批准与 fresh claim 尺寸回传；U4 另覆盖 test-only `dsh` create/get/claim、同幂等键 runtime 漂移拒绝和历史默认 legacy。运行时只使用本地测试账号、本地 Worker Token 与 Mock Seedream，不调用模型或真实 provider。远端 test-only 部署后，`scripts/test-agent-runtime-selection-remote.mjs` 以参数 + env 双闸运行；必须先确认队列为空并停止常驻 Worker，再验证普通账号 403、测试账号 DSH create/get/claim、幂等漂移 409 和直接 cancel，保证 processor/provider 调用数为 0，最后恢复 Worker。2026-09-01 远端 `0047`–`0050`、agent-run v42、agent-worker v46 与 VPS controlled DSH processor 已按该流程上线并通过。真实图片继续走 `test-controlled-agent-e2e.mjs` 的参数 + env 费用双闸；`--expect-reclaim` 只采集批准后的执行 lease，并要求外部编排真实 kill/restart。legacy/DSH 同 case 已各自通过两个执行 lease、唯一 Ark side effect/final artifact 和实际积分对账；raw recovery JSON 与 paired Markdown 保存在 gitignored `apps/cloud/artifacts/`。
+当前新建 Agent 仅接受 `bowerbird-unified-agent` + `dsh`；旧 controlled/legacy 任务保留读取与恢复。远端控制面冒烟使用 `scripts/test-agent-runtime-selection-remote.mjs`（默认 unified，也接受 `--skill=unified`），仍需参数与 env 双闸、队列为空并先停止常驻 Worker，验证完恢复。它只做 create/get/claim/cancel，不运行 processor/provider。真实 HTML E2E 使用 `scripts/test-unified-agent-e2e.mjs`，保留费用双闸及显式输入要求。这两种当前脚本会为自身新建的临时测试账号准备 30 Bcoin、1 小时有效的独立测试额度（不是支付，不依赖注册赠分）；执行后沿原有清理流程删除临时账号。
+
+旧 `test-controlled-agent-e2e.mjs` 与 `test-agent-control-plane.mjs` 已退役，直接运行会在读取凭据前退出；历史 recovery evidence 与 paired 报告仍保留，不能用已停用的新建接口重跑。`test-unified-agent-approval-local.mjs` 是隔离本地控制面的历史兼容夹具，不作为当前生产新建入口。部署闸门与回滚见 [统一 Harness Runbook](../agent-worker/UNIFIED-HARNESS-RUNBOOK.md)。

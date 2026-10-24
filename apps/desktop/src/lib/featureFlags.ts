@@ -9,6 +9,8 @@ export const SMART_REFINE_ENABLED = false;
 export const CODEX_ONBOARDING_ENABLED = false;
 // dreamina 引导弹窗入口：同 codex，设置「模型设置」的「查看引导」按钮暂隐；恢复入口改回 true。
 export const DREAMINA_ONBOARDING_ENABLED = false;
+// 旧版本功能：浏览器扩展状态/引导、Shift 引入与隐藏项目素材设置不再显示；保留旧配置兼容。
+export const LEGACY_SETTINGS_ENABLED = false;
 // Agent Z（创作板 × Claude Code TUI 互通，dev 测试）：仅 debug 构建且本机能找到 claude CLI 时生效。
 export const AGENT_Z_ENABLED = true;
 // Agent DS（创作板 × DeepSeek 对话 harness，dev 测试）：对话发生在创作板内（回复追加进编辑器），

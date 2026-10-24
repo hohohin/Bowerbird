@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { LoaderCircle } from "lucide-react";
@@ -66,11 +67,11 @@ export function DouyinReferencePicker({ projectId, ensureProject, onUse, caseId,
   }
   return <section className="vr-picker" aria-label="抖音视频获取">
     <label className="vr-field"><textarea aria-label="抖音分享内容" rows={3} maxLength={8000} value={value} onChange={event => { setText(event.target.value); onShareText?.(event.target.value); }} placeholder="粘贴完整分享文案或视频链接" /></label>
-    {error && <p className="vr-message is-error" role="alert">{error}</p>}
+    {error && <p className="vr-message is-error" role="alert">{userErrorMessage(error, "视频获取未完成，请检查分享链接后重试。")}</p>}
     {!needsVerification && <div className="vr-actions"><button type="button" disabled={busy || active || !value.trim()} onClick={() => void run("create", { text: value })}>获取抖音视频</button></div>}
     {tasks.map(task => <div className="vr-douyin-record" key={task.id}>
       <p className="vr-hint">{task.shareText}</p>
-      <p className="vr-hint" role={task.state === "failed" ? "alert" : "status"}>{["starting", "waiting", "downloading"].includes(task.state) && <LoaderCircle size={13} className="animate-spin inline" />} {task.message}</p>
+      <p className="vr-hint" role={task.state === "failed" ? "alert" : "status"}>{["starting", "waiting", "downloading"].includes(task.state) && <LoaderCircle size={13} className="animate-spin inline" />} {task.state === "failed" || task.state === "interrupted" ? userErrorMessage(task.message, "视频获取未完成，请重新获取。") : task.message}</p>
       <div className="vr-actions">
         {task.state === "ready" && task.reference ? <button type="button" onClick={() => onUse(task.reference!)}>{task.reference.name}</button>
           : ["starting", "waiting", "downloading"].includes(task.state) ? <button type="button" disabled={busy} onClick={() => void run("cancel", { id: task.id })}>取消获取</button>

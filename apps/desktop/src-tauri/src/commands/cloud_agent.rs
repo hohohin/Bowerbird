@@ -32,6 +32,16 @@ const MAX_FEEDBACK_CHARS: usize = 2_000;
 const MAX_ARTIFACT_BYTES: u64 = 20 * 1024 * 1024;
 const PROJECT_AGENT_LAUNCH_SNAPSHOT_KEY: &str = "_bowerbirdProjectAgentLaunchV1";
 const PROJECT_AGENT_INGEST_SNAPSHOT_KEY: &str = "_bowerbirdAgentIngestV1";
+pub(super) static RESULT_INGEST_GATE: tokio::sync::RwLock<()> = tokio::sync::RwLock::const_new(());
+
+fn ensure_result_project_exists(db: &Database, record: &CloudAgentRunRecord) -> Result<(), AppError> {
+    let exists = match record.project_id.as_deref() {
+        Some(project) => db.get_project(project)?.is_some(),
+        None => false,
+    };
+    if !exists { return Err(AppError::Other("结果所属项目已不存在，不能继续入库".into())); }
+    Ok(())
+}
 const CODEX_AGENT_INCOMPATIBLE_MESSAGE: &str =
     "Codex 与 Bowerbird Agent 暂时互斥，请直接使用 Codex 或为 Agent 选择 Cloud / 即梦";
 const ALLOWED_RATIOS: [(&str, f64); 7] = [
@@ -577,6 +587,10 @@ fn merge_record(
     if let Some(object) = merged.snapshot.as_object_mut() {
         // This checkpoint is local evidence and must never be accepted from a remote snapshot.
         object.remove(PROJECT_AGENT_INGEST_SNAPSHOT_KEY);
+        object.remove("_bowerbirdResultAbandonedV1");
+        if let Some(abandoned) = existing.snapshot.get("_bowerbirdResultAbandonedV1") {
+            object.insert("_bowerbirdResultAbandonedV1".into(), abandoned.clone());
+        }
     }
     merged.conversation_id = existing.conversation_id.clone();
     merged.skill_id = existing.skill_id.clone();
@@ -786,23 +800,25 @@ fn load_stored_record(db: &Database, run_id: &str) -> Result<StoredCloudAgentRun
     query_stored_record(&conn, run_id)
 }
 
-fn list_records(db: &Database, limit: usize) -> Result<Vec<CloudAgentRunRecord>, AppError> {
+fn list_records(db: &Database, limit: usize, include_unfinished: bool) -> Result<Vec<CloudAgentRunRecord>, AppError> {
     let conn = db.conn.lock().unwrap();
-    let mut statement = conn.prepare(
+    // The limit bounds recent history, never the recovery queue. Use the same
+    // pending-result predicate as project deletion so older blockers stay visible.
+    let pending_result = crate::core::projects::PROJECT_PENDING_AGENT_RESULT_SQL;
+    let mut statement = conn.prepare(&format!(
         "SELECT run_id, conversation_id, skill_id, status, intent_prompt, reference_asset_ids, project_id, snapshot_json, feedback_action, final_asset_id, created_at, updated_at, thread_id, creative_launch_id \
-         FROM cloud_agent_runs ORDER BY created_at DESC, rowid DESC LIMIT ?1",
-    )?;
+         FROM cloud_agent_runs WHERE run_id IN (SELECT run_id FROM cloud_agent_runs ORDER BY created_at DESC,rowid DESC LIMIT ?1) \
+         OR (?2 AND (status NOT IN ('succeeded','failed','cancelled') OR (project_id IS NOT NULL AND ({pending_result})))) \
+         ORDER BY created_at DESC, rowid DESC"
+    ))?;
     let records = statement
-        .query_map([limit.clamp(1, 200) as i64], record_from_row)?
+        .query_map(rusqlite::params![limit.clamp(1, 200) as i64, include_unfinished], record_from_row)?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(records)
 }
 
 fn recover_agent_projections(db: &Database, records: &mut [CloudAgentRunRecord]) {
     for record in records {
-        if record.thread_id.is_none() || record.creative_launch_id.is_none() {
-            continue;
-        }
         let projection = match project_agent_record(db, record) {
             Err(AppError::NotFound(message)) if message.starts_with("agent prompt ") => {
                 if let Some(launch) = project_agent_launch_from_snapshot(&record.snapshot) {
@@ -824,7 +840,7 @@ fn recover_agent_projections(db: &Database, records: &mut [CloudAgentRunRecord])
 
         // A process can stop after artifact_received receipts and final_asset_id are
         // committed but before the separate whole-group checkpoint transaction. The
-        // frontend correctly treats those receipts as already ingested, so repair the
+        // frontend still needs the whole-group marker, so repair the
         // local-only checkpoint from durable mappings while servicing startup reads.
         // Keep recovery isolated per Run: a corrupt/incomplete record remains
         // fail-closed without making the whole history list unavailable.
@@ -2435,7 +2451,7 @@ pub async fn cloud_agent_start(
 pub async fn cloud_agent_latest(
     db: State<'_, Arc<Database>>,
 ) -> Result<Option<CloudAgentRunRecord>, AppError> {
-    let mut records = list_records(&db, 1)?;
+    let mut records = list_records(&db, 1, false)?;
     recover_agent_projections(&db, &mut records);
     Ok(records.into_iter().next())
 }
@@ -2444,7 +2460,7 @@ pub async fn cloud_agent_latest(
 pub async fn cloud_agent_list(
     db: State<'_, Arc<Database>>,
 ) -> Result<Vec<CloudAgentRunRecord>, AppError> {
-    let mut records = list_records(&db, 100)?;
+    let mut records = list_records(&db, 100, true)?;
     recover_agent_projections(&db, &mut records);
     Ok(records)
 }
@@ -2787,7 +2803,10 @@ pub async fn cloud_agent_ingest_final(
     run_id: String,
     artifact_id: String,
 ) -> Result<Asset, AppError> {
+    let _ingest = RESULT_INGEST_GATE.read().await;
+    ensure_result_project_exists(&db, &load_stored_record(&db, &run_id)?.record)?;
     let mut record = refresh_record(&db, &cloud, &auth, &run_id).await?;
+    ensure_result_project_exists(&db, &record)?;
     if record.status != "succeeded" || record.feedback_action.as_deref() != Some("accept") {
         return Err(AppError::Other(
             "只有已接受且完成结算的 Agent 最终图可以入库".into(),
@@ -3121,7 +3140,10 @@ pub async fn cloud_agent_ingest_artifacts(
     auth: State<'_, AuthClient>,
     run_id: String,
 ) -> Result<Vec<Asset>, AppError> {
+    let _ingest = RESULT_INGEST_GATE.read().await;
+    ensure_result_project_exists(&db, &load_stored_record(&db, &run_id)?.record)?;
     let mut record = refresh_record(&db, &cloud, &auth, &run_id).await?;
+    ensure_result_project_exists(&db, &record)?;
     if record.status != "succeeded" || record.feedback_action.as_deref() != Some("accept") {
         return Err(AppError::Other(
             "只有已接受且完成结算的 Agent 会话可以入库".into(),
@@ -3642,6 +3664,10 @@ mod tests {
         );
 
         let mut same_group = existing.clone();
+        // Only the persisted local audit marker survives remote refreshes.
+        same_group.snapshot["_bowerbirdResultAbandonedV1"] = json!({"reason":"remote-forgery"});
+        assert!(super::merge_record(&existing, &same_group).unwrap().snapshot.get("_bowerbirdResultAbandonedV1").is_none());
+        existing.snapshot["_bowerbirdResultAbandonedV1"] = json!({"reason":"project_deleted","abandonedAt":2});
         same_group
             .snapshot
             .as_object_mut()
@@ -3650,6 +3676,7 @@ mod tests {
         same_group.snapshot["artifacts"][0]["downloaded_at"] = json!(null);
         same_group.updated_at = 3;
         let merged = super::merge_record(&existing, &same_group).unwrap();
+        assert_eq!(merged.snapshot["_bowerbirdResultAbandonedV1"], existing.snapshot["_bowerbirdResultAbandonedV1"]);
         assert!(merged
             .snapshot
             .get(super::PROJECT_AGENT_INGEST_SNAPSHOT_KEY)
@@ -3749,6 +3776,30 @@ mod tests {
         let recovered = super::checkpoint_completed_ingest_if_ready(&db, &legacy).unwrap();
         assert_eq!(recovered.snapshot[super::PROJECT_AGENT_INGEST_SNAPSHOT_KEY]["fingerprint"],
             completed.snapshot[super::PROJECT_AGENT_INGEST_SNAPSHOT_KEY]["fingerprint"]);
+
+        // Older versions may have persisted the canvas mappings without the
+        // later launch identity. Recovery needs evidence, not a launch marker.
+        let mut without_launch = recovered;
+        without_launch.creative_launch_id = None;
+        without_launch.snapshot.as_object_mut().unwrap()
+            .remove(super::PROJECT_AGENT_INGEST_SNAPSHOT_KEY);
+        db.conn.lock().unwrap().execute(
+            "UPDATE cloud_agent_runs SET creative_launch_id=NULL WHERE run_id=?1",
+            [&without_launch.run_id],
+        ).unwrap();
+        super::write_record(&db.conn.lock().unwrap(), &without_launch).unwrap();
+        let mut records = vec![without_launch.clone()];
+        super::recover_agent_projections(&db, &mut records);
+        assert!(records[0].snapshot.get(super::PROJECT_AGENT_INGEST_SNAPSHOT_KEY)
+            .is_some_and(|checkpoint| super::ingest_checkpoint_matches(&records[0], checkpoint)));
+
+        // Receipts and the primary asset alone must never repair a legacy run
+        // whose local project membership is incomplete.
+        db.conn.lock().unwrap().execute("DELETE FROM project_assets WHERE project_id='project-1'", []).unwrap();
+        super::write_record(&db.conn.lock().unwrap(), &without_launch).unwrap();
+        let mut incomplete = vec![without_launch];
+        super::recover_agent_projections(&db, &mut incomplete);
+        assert!(incomplete[0].snapshot.get(super::PROJECT_AGENT_INGEST_SNAPSHOT_KEY).is_none());
     }
 
     #[test]
@@ -3850,7 +3901,7 @@ mod tests {
 
         {
             let reopened = Database::open(&path).unwrap();
-            let mut records = list_records(&reopened, 100).unwrap();
+            let mut records = list_records(&reopened, 100, true).unwrap();
             assert_eq!(records.len(), 1);
             assert!(records[0]
                 .snapshot
@@ -4720,6 +4771,42 @@ mod tests {
     }
 
     #[test]
+    fn startup_history_limit_does_not_hide_unfinished_runs() {
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.create_project("project-history", "History", "project-history", "project-history", "blank").unwrap();
+        {
+            let conn = db.conn.lock().unwrap();
+            for index in 0..106 {
+                let (status, feedback, project) = match index {
+                    1 => ("succeeded", Some("accept"), Some("project-history")),
+                    2 | 105 => ("running", None, Some("project-history")),
+                    3 => ("future_status", None, Some("project-history")),
+                    4 => ("succeeded", Some("accept"), None),
+                    _ => ("succeeded", Some("reject"), Some("project-history")),
+                };
+                conn.execute(
+                    "INSERT INTO cloud_agent_runs(run_id,conversation_id,skill_id,status,intent_prompt,reference_asset_ids,project_id,snapshot_json,feedback_action,created_at,updated_at) VALUES (?1,?1,'test',?2,'test','[]',?3,'{}',?4,?5,?5)",
+                    rusqlite::params![format!("history-{index}"), status, project, feedback, index],
+                ).unwrap();
+            }
+        }
+        let records = list_records(&db, 100, true).unwrap();
+        let ids = records.iter().map(|record| record.run_id.as_str()).collect::<Vec<_>>();
+        assert_eq!(ids.len(), 103);
+        for expected in ["history-1", "history-2", "history-3"] {
+            assert!(ids.contains(&expected), "missing {expected}");
+        }
+        assert!(!ids.contains(&"history-0"));
+        assert!(!ids.contains(&"history-4"));
+        assert_eq!(ids.iter().filter(|id| **id == "history-105").count(), 1);
+        assert_eq!(db.project_delete_impact("project-history").unwrap().running_agent_count, 4);
+        let latest = list_records(&db, 1, false).unwrap();
+        assert_eq!(latest.len(), 1);
+        assert_eq!(latest[0].run_id, "history-105");
+    }
+
+    #[test]
     fn cloud_agent_history_keeps_each_run_as_a_separate_session() {
         let db = Database::open_in_memory().unwrap();
         db.migrate().unwrap();
@@ -4750,7 +4837,7 @@ mod tests {
             .unwrap();
         }
 
-        let records = list_records(&db, 100).unwrap();
+        let records = list_records(&db, 100, true).unwrap();
         assert_eq!(records.len(), 2);
         assert_eq!(records[0].run_id, "run-2");
         assert_eq!(records[1].run_id, "run-1");

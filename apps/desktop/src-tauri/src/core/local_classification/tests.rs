@@ -252,7 +252,7 @@ fn cloud_creation_evidence_survives_reuse_edit_rescan_and_source_deletion() {
     std::fs::write(&path, b"original preview").unwrap();
     db.conn.lock().unwrap().execute("UPDATE assets SET thumb_path=?1 WHERE id='a'", [path.to_str().unwrap()]).unwrap();
     let prediction = Prediction { description: r#"{"source":"cloud","reason":"透明笔触"}"#.into(), tags: vec!["水彩".into()], matches: vec![] };
-    let definition = super::cloud::NewLabel { name: "水彩".into(), definition: "透明颜料笔触".into() };
+    let definition = super::cloud::NewLabel { name: "水彩".into(), definition: "透明颜料笔触".into(), english: None };
     let revision = db.local_revision().unwrap();
     assert!(!db.apply_classification_with_definitions("a", revision + 1, &prediction, true, &[], super::jev::OBSERVATION_MODEL, std::slice::from_ref(&definition)).unwrap());
     assert!(db.local_labels().unwrap().is_empty());
@@ -283,7 +283,7 @@ fn concurrent_cloud_same_name_reuses_label_without_changing_legacy_metadata() {
     let revision = db.local_revision().unwrap();
     db.cache_label_dimensions(revision, &db.local_labels().unwrap(), &["mood".into()]).unwrap();
     let prediction = Prediction { description: String::new(), tags: vec!["梦幻".into()], matches: vec![] };
-    let definition = super::cloud::NewLabel { name: "梦幻".into(), definition: "新的类别说明".into() };
+    let definition = super::cloud::NewLabel { name: "梦幻".into(), definition: "新的类别说明".into(), english: None };
     assert!(db.apply_classification_with_definitions("a", revision, &prediction, true, &[], super::jev::OBSERVATION_MODEL, &[definition]).unwrap());
     assert_eq!(db.list_asset_tags("a").unwrap().len(), 1);
     assert_eq!(db.local_labels().unwrap()[0].description, "情绪");
@@ -549,7 +549,7 @@ fn discovery_reference_samples_per_asset_not_by_usage() {
                 enabled: true,
                 count: 9 - index as i64,
                 has_examples: false,
-                dimension: None, provenance: None,
+                dimension: None, provenance: None, english: None,
             })
             .collect()
     }
@@ -585,7 +585,7 @@ fn discovered_existing_names_attach_directly() {
             enabled: true,
             count: 0,
             has_examples: false,
-            dimension: None, provenance: None,
+            dimension: None, provenance: None, english: None,
         },
         Label {
             id: "bottle".into(),
@@ -594,7 +594,7 @@ fn discovered_existing_names_attach_directly() {
             enabled: true,
             count: 0,
             has_examples: false,
-            dimension: None, provenance: None,
+            dimension: None, provenance: None, english: None,
         },
     ];
     let mut prediction = Prediction {
@@ -653,7 +653,7 @@ async fn real_local_model_smoke() {
             enabled: true,
             count: 0,
             has_examples: false,
-            dimension: None, provenance: None,
+            dimension: None, provenance: None, english: None,
         },
         Label {
             id: "animal".into(),
@@ -662,7 +662,7 @@ async fn real_local_model_smoke() {
             enabled: true,
             count: 0,
             has_examples: false,
-            dimension: None, provenance: None,
+            dimension: None, provenance: None, english: None,
         },
     ];
     let start = std::time::Instant::now();
@@ -683,7 +683,7 @@ async fn real_local_model_smoke() {
         enabled: true,
         count: 0,
         has_examples: false,
-        dimension: None, provenance: None,
+        dimension: None, provenance: None, english: None,
     }];
     let custom_negative_before = server.predict(&image, &custom, false, &[], &cancel).await;
     println!(
@@ -705,7 +705,7 @@ async fn real_local_model_smoke() {
         enabled: true,
         count: 0,
         has_examples: false,
-        dimension: None, provenance: None,
+        dimension: None, provenance: None, english: None,
     }];
     let example_match = server
         .predict(

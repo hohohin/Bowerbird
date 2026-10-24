@@ -7,6 +7,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use crate::{cloud::{AuthClient, EntitlementService}, error::{AppError, AppResult}};
 use super::comfy_video;
 use super::comfy_discovery::{self, Installation};
+#[path = "comfy_driver.rs"]
+mod driver;
 
 const MANAGED_ENDPOINT: &str = "http://127.0.0.1:18188";
 const VERSION: &str = "h3-v1-comfy-0.42.1";
@@ -62,11 +64,23 @@ pub struct Environment {
     can_install: bool, installed: bool, download_bytes: u64, required_bytes: u64,
     completed_bytes: u64, total_bytes: u64,
     existing: Vec<Installation>,
+    hardware: Option<driver::Hardware>,
+    driver_download: Option<driver::DriverDownload>,
 }
 struct Job { owner: String, state: Environment, cancel: Arc<AtomicBool> }
 static JOB: Mutex<Option<Job>> = Mutex::new(None);
 fn err(message: impl Into<String>) -> AppError { AppError::Other(message.into()) }
 fn active(state: &Environment) -> bool { matches!(state.phase.as_str(), "installing" | "starting") }
+fn retain_setup_outcome(state: &mut Environment, previous: Option<&Environment>) {
+    let Some(previous) = previous.filter(|old| matches!(old.phase.as_str(), "failed" | "cancelled") && old.directory == state.directory
+        && old.existing.first().map(|i| &i.path) == state.existing.first().map(|i| &i.path)) else { return; };
+    // A successful prerequisite check does not mean a previous installation/start succeeded.
+    // Prefer new readiness/blocker information; otherwise keep the failure available for retry.
+    if (state.phase == "missing" && state.can_install) || (state.phase == "stopped" && state.existing.first().is_some_and(|i| i.can_start)) {
+        state.phase = previous.phase.clone();
+        state.message = previous.message.clone();
+    }
+}
 fn progress(message: String, bytes: u64) {
     if let Some(job) = JOB.lock().unwrap().as_mut() { job.state.message = message; job.state.completed_bytes = bytes; }
 }
@@ -76,7 +90,7 @@ fn cancelled(cancel: &AtomicBool) -> AppResult<()> {
 fn config(app: &AppHandle) -> AppResult<PathBuf> { Ok(app.path().app_local_data_dir().map_err(|e| err(e.to_string()))?.join("comfy-install-location.json")) }
 fn location(app: &AppHandle, directory: Option<String>) -> AppResult<PathBuf> {
     if let Some(directory) = directory {
-        let parent = PathBuf::from(directory).canonicalize()?;
+        let parent = PathBuf::from(directory).canonicalize().map_err(|error| err(format!("无法访问所选安装位置：{error}。请确认磁盘已连接，并通过“安装位置”选择可访问的文件夹。")))?;
         if !parent.is_dir() { return Err(err("请选择安装文件夹")); }
         return Ok(parent.join("Bowerbird-ComfyUI"));
     }
@@ -98,14 +112,8 @@ fn command(name: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
     #[cfg(windows)] { use std::os::windows::process::CommandExt; cmd.creation_flags(0x08000000); }
     cmd
 }
-fn prerequisites() -> Result<(), String> {
-    if !cfg!(all(windows, target_arch = "x86_64")) { return Err("一键安装目前支持 Windows x64 + NVIDIA；其他系统请连接已有 ComfyUI".into()); }
-    let gpu = command("nvidia-smi").args(["--query-gpu=driver_version", "--format=csv,noheader"]).output().map_err(|_| "未检测到 NVIDIA 驱动，请安装显卡驱动后重新检测")?;
-    if !gpu.status.success() { return Err("NVIDIA 驱动不可用，请先安装或更新驱动".into()); }
-    // CUDA 13 Windows minimum driver branch (official portable uses cu130).
-    if !String::from_utf8_lossy(&gpu.stdout).lines().any(|line| line.trim().split('.').next().and_then(|v| v.parse::<u32>().ok()).is_some_and(|v| v >= 580)) {
-        return Err("此安装包需要 NVIDIA 580 或更新驱动，请更新驱动后重新检测".into());
-    }
+fn prerequisites(hardware: &driver::Hardware) -> Result<(), String> {
+    if let Some(issue) = &hardware.issue { return Err(issue.clone()); }
     if !command("tar.exe").arg("--version").output().is_ok_and(|out| out.status.success()) { return Err("未找到 Windows tar 解压工具，请更新 Windows 或连接已有 ComfyUI".into()); }
     Ok(())
 }
@@ -121,13 +129,32 @@ fn free_bytes(path: &Path) -> AppResult<u64> {
     }
     #[cfg(not(windows))] { let _ = path; Err(err("此平台暂不支持一键安装")) }
 }
+// Read-only preflight: report directory conflicts before enabling installation.
+fn check_destination(root: &Path) -> AppResult<()> {
+    match std::fs::metadata(root) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(err(format!("无法访问安装目录 {}：{error}。请连接磁盘或通过“安装位置”选择有权限的文件夹。", root.display()))),
+        Ok(meta) if !meta.is_dir() => return Err(err(format!("安装路径 {} 已被文件占用，请通过“安装位置”选择其他文件夹。", root.display()))),
+        Ok(_) => {},
+    }
+    let mut entries = std::fs::read_dir(root).map_err(|error| err(format!("无法读取安装目录 {}：{error}。请通过“安装位置”选择有权限的文件夹。", root.display())))?;
+    if !root.join("bowerbird-setup.txt").is_file() && entries.next().transpose()?.is_some() {
+        return Err(err(format!("安装目录 {} 已有其他文件，无法安全安装。请通过“安装位置”选择其他文件夹；不会覆盖原文件。", root.display())));
+    }
+    Ok(())
+}
+fn check_disk_space(available: u64, required: u64) -> AppResult<()> {
+    if available >= required { return Ok(()); }
+    Err(err(format!("安装磁盘空间不足：需空闲 {:.1} GB，当前可用 {:.1} GB，还差 {:.1} GB。请清理磁盘或通过“安装位置”更换磁盘后重试。",
+        required as f64 / 1e9, available as f64 / 1e9, (required - available) as f64 / 1e9)))
+}
 fn plan(root: &Path) -> Environment {
     let download_bytes = DOWNLOADS.iter().map(|item| {
         let path = root.join(item.file);
         let bytes = std::fs::metadata(&path).or_else(|_| std::fs::metadata(path.with_extension("part"))).map(|m| m.len()).unwrap_or(0);
         item.size.saturating_sub(bytes.min(item.size))
     }).sum();
-    Environment { phase: "missing".into(), message: "未发现运行中的 ComfyUI，也未找到已登记的安装".into(), endpoint: MANAGED_ENDPOINT.into(), directory: root.to_string_lossy().into(), can_install: false, installed: installed(root), download_bytes, required_bytes: download_bytes + RESERVE, completed_bytes: 0, total_bytes: DOWNLOADS.iter().map(|d| d.size).sum(), existing: Vec::new() }
+    Environment { phase: "missing".into(), message: "未发现运行中的 ComfyUI，也未找到已登记的安装".into(), endpoint: MANAGED_ENDPOINT.into(), directory: root.to_string_lossy().into(), can_install: false, installed: installed(root), download_bytes, required_bytes: download_bytes + RESERVE, completed_bytes: 0, total_bytes: DOWNLOADS.iter().map(|d| d.size).sum(), existing: Vec::new(), hardware: None, driver_download: None }
 }
 async fn probe(http: &reqwest::Client, base: &str) -> Option<AppResult<()>> {
     let response = match http.get(format!("{base}/system_stats")).timeout(Duration::from_secs(8)).send().await {
@@ -162,20 +189,31 @@ async fn detect(root: &Path, preferred: &str, existing: Vec<Installation>) -> Ap
     }
     if let Some(instance) = state.existing.first() {
         state.phase = "stopped".into(); state.endpoint = instance.endpoint.clone();
-        state.message = format!("已找到 {}，但服务未启动。{}", instance.name,
-            if instance.can_start { "可直接启动已有环境，无需重新下载。" } else { "请在 ComfyUI Desktop 中启动后重新检测。" });
+        state.message = if !instance.can_start {
+            format!("已找到 {}，但缺少可用的 Python 程序，暂时无法自动启动。请在 ComfyUI Desktop 中修复环境并启动，或修复该安装的 Python 后返回应用重新检测。安装目录：{}", instance.name, instance.path.display())
+        } else if instance.models_found < comfy_video::model_names().len() {
+            format!("已找到 {}，磁盘检查仅定位到 {}/{} 个所需模型。可点击启动进一步检查；若仍提示缺失，请在已有 ComfyUI 中补齐模型后返回应用。", instance.name, instance.models_found, comfy_video::model_names().len())
+        } else { format!("已找到 {}，但服务未启动。可直接启动已有环境，无需重新下载。", instance.name) };
         return Ok(state);
     }
-    let support = tokio::task::spawn_blocking(prerequisites).await.map_err(|e| err(e.to_string()))?;
+    let hardware = driver::detect().await;
+    let checked = hardware.clone();
+    let support = tokio::task::spawn_blocking(move || prerequisites(&checked)).await.map_err(|e| err(e.to_string()))?;
+    state.hardware = Some(hardware);
     match support {
         Ok(()) => {
+            if !state.installed {
+                if let Err(error) = check_destination(root) { state.message = error.to_string(); return Ok(state); }
+            }
             match free_bytes(root) {
-                Ok(bytes) if bytes >= state.required_bytes || state.installed => { state.can_install = true; }
-                Ok(_) => state.message.push_str("。安装磁盘空间不足，请更换位置"),
-                Err(error) => state.message.push_str(&format!("。无法检查安装磁盘：{error}")),
+                Ok(bytes) => match if state.installed { Ok(()) } else { check_disk_space(bytes, state.required_bytes) } {
+                    Ok(()) => state.can_install = true,
+                    Err(error) => state.message = error.to_string(),
+                },
+                Err(error) => state.message = format!("无法检查安装磁盘 {}：{error}。请确认磁盘已连接，并通过“安装位置”选择可访问的磁盘。", root.display()),
             }
         }
-        Err(reason) => state.message.push_str(&format!("。{reason}")),
+        Err(reason) => state.message = reason,
     }
     Ok(state)
 }
@@ -298,11 +336,11 @@ async fn write_licenses(root: &Path) -> AppResult<()> {
     Ok(())
 }
 async fn install(app: &AppHandle, root: &Path, cancel: &AtomicBool, owner: &str) -> AppResult<()> {
-    prerequisites().map_err(err)?;
+    prerequisites(&driver::detect().await).map_err(err)?;
     let state = plan(root);
-    if !state.installed && free_bytes(root)? < state.required_bytes { return Err(err("安装磁盘空间不足，请更换位置后重试")); }
+    if !state.installed { check_disk_space(free_bytes(root)?, state.required_bytes)?; }
     let marker = root.join("bowerbird-setup.txt");
-    if root.exists() && !marker.is_file() && std::fs::read_dir(root)?.next().is_some() { return Err(err("此安装位置已有其他文件，请选择空文件夹")); }
+    check_destination(root)?;
     tokio::fs::create_dir_all(root).await?;
     tokio::fs::write(&marker, VERSION).await?;
     let location = config(app)?;
@@ -411,8 +449,8 @@ fn preparation_target(state: &Environment, action: &str) -> AppResult<Option<Ins
 #[tauri::command]
 pub async fn comfy_video_environment(app: AppHandle, auth: State<'_, AuthClient>, entitlement: State<'_, EntitlementService>, action: String, endpoint: String, directory: Option<String>, existing_directory: Option<String>) -> AppResult<Environment> {
     let owner = comfy_video::account(&auth, &entitlement).await?;
-    if !matches!(action.as_str(), "detect" | "status" | "prepare" | "install" | "cancel" | "select_existing" | "start_existing") { return Err(err("不支持的环境操作")); }
-    {
+    if !matches!(action.as_str(), "detect" | "status" | "prepare" | "install" | "cancel" | "select_existing" | "start_existing" | "driver") { return Err(err("不支持的环境操作")); }
+    let previous = {
         let job = JOB.lock().unwrap();
         if let Some(job) = job.as_ref() {
             if active(&job.state) {
@@ -422,7 +460,8 @@ pub async fn comfy_video_environment(app: AppHandle, auth: State<'_, AuthClient>
             }
             if action == "status" && job.owner == owner { return Ok(job.state.clone()); }
         }
-    }
+        job.as_ref().filter(|job| job.owner == owner).map(|job| job.state.clone())
+    };
     let selection_file = config(&app)?.with_file_name("comfy-existing-location.json");
     let saved: Option<PathBuf> = std::fs::read(&selection_file).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok());
     let selected = existing_directory.map(PathBuf::from).or(saved);
@@ -444,8 +483,24 @@ pub async fn comfy_video_environment(app: AppHandle, auth: State<'_, AuthClient>
     }
     let root = location(&app, directory)?;
     let mut state = detect(&root, &endpoint, existing).await?;
-    if !matches!(action.as_str(), "prepare" | "install" | "start_existing") { return Ok(state); }
+    if action == "driver" {
+        if let Some(hardware) = state.hardware.as_ref().filter(|v| v.driver_required) {
+            let download = driver::lookup(hardware).await;
+            let login = auth.snapshot();
+            if !login.logged_in || login.user_id.as_deref() != Some(owner.as_str()) { return Err(err("账号已切换，请重新检测环境")); }
+            state.message = download.message.clone();
+            state.driver_download = Some(download);
+        }
+        return Ok(state);
+    }
+    if !matches!(action.as_str(), "prepare" | "install" | "start_existing") {
+        retain_setup_outcome(&mut state, previous.as_ref());
+        return Ok(state);
+    }
     if state.phase == "ready" { return Ok(state); }
+    // Prerequisites may have changed since the UI check. Return the actual blocker to the UI
+    // instead of converting it into an IPC error that invites another detection-only click.
+    if action == "install" && !state.can_install && state.existing.is_empty() { return Ok(state); }
     let start = preparation_target(&state, &action)?;
     let cancel = Arc::new(AtomicBool::new(false));
     state.phase = if start.is_some() || state.installed { "starting" } else { "installing" }.into();
@@ -477,7 +532,13 @@ pub async fn comfy_video_environment(app: AppHandle, auth: State<'_, AuthClient>
             job.state.installed = remaining.installed;
             match result {
                 Ok(()) => { job.state.phase = "ready".into(); job.state.endpoint = if start.is_some() { "http://127.0.0.1:18189" } else { MANAGED_ENDPOINT }.into(); job.state.message = "本机环境已就绪 · 可以生成视频".into(); job.state.installed = start.is_none(); }
-                Err(error) => { job.state.phase = if cancel.load(Ordering::Relaxed) { "cancelled" } else { "failed" }.into(); job.state.message = error.to_string(); }
+                Err(error) => {
+                    job.state.phase = if cancel.load(Ordering::Relaxed) { "cancelled" } else { "failed" }.into();
+                    job.state.message = match error {
+                        AppError::Io(error) => format!("{}时无法读写所需文件：{error}。请检查安装目录权限、剩余磁盘空间及安全软件拦截后重试。", if start.is_some() { "启动已有环境" } else { "安装环境" }),
+                        other => other.to_string(),
+                    };
+                }
             }
         }
     });
@@ -491,6 +552,43 @@ mod tests {
     fn scratch() -> PathBuf {
         let root = std::env::temp_dir().join(format!("bowerbird-h3-setup-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap(); root
+    }
+    #[test]
+    fn h3_setup_detection_preserves_failure_until_retry_or_conditions_change() {
+        let root = scratch();
+        let mut previous = plan(&root);
+        previous.phase = "failed".into(); previous.message = "下载授权失败，请重试".into();
+        let mut detected = plan(&root); detected.can_install = true;
+        retain_setup_outcome(&mut detected, Some(&previous));
+        assert_eq!(detected.phase, "failed"); assert_eq!(detected.message, previous.message);
+        assert!(preparation_target(&detected, "install").unwrap().is_none());
+        detected = plan(&root); detected.message = "磁盘空间不足".into();
+        retain_setup_outcome(&mut detected, Some(&previous));
+        assert_eq!(detected.message, "磁盘空间不足"); assert_eq!(detected.phase, "missing");
+        detected.phase = "ready".into(); retain_setup_outcome(&mut detected, Some(&previous));
+        assert_eq!(detected.phase, "ready");
+        detected = plan(&root.join("different")); detected.can_install = true;
+        retain_setup_outcome(&mut detected, Some(&previous)); assert_eq!(detected.phase, "missing");
+        detected = plan(&root); detected.can_install = true; previous.phase = "cancelled".into();
+        retain_setup_outcome(&mut detected, Some(&previous)); assert_eq!(detected.phase, "cancelled");
+    }
+    #[test]
+    fn h3_setup_preflight_reports_directory_conflicts_and_disk_shortfall() {
+        let root = scratch();
+        assert!(check_destination(&root.join("not-created")).is_ok());
+        assert!(!root.join("not-created").exists(), "detection must not create files");
+        assert!(check_destination(&root).is_ok());
+        let user_file = root.join("keep.txt");
+        std::fs::write(&user_file, "keep").unwrap();
+        let reason = check_destination(&root).unwrap_err().to_string();
+        assert!(reason.contains("已有其他文件") && reason.contains("安装位置"));
+        assert!(check_destination(&user_file).unwrap_err().to_string().contains("被文件占用"));
+        assert_eq!(std::fs::read_to_string(&user_file).unwrap(), "keep");
+        std::fs::write(root.join("bowerbird-setup.txt"), VERSION).unwrap();
+        assert!(check_destination(&root).is_ok(), "managed partial install can resume");
+        let reason = check_disk_space(10_000_000_000, 56_900_000_000).unwrap_err().to_string();
+        assert!(reason.contains("56.9 GB") && reason.contains("10.0 GB") && reason.contains("46.9 GB"));
+        assert!(check_disk_space(56_900_000_000, 56_900_000_000).is_ok());
     }
     #[test]
     fn h3_setup_startup_failure_reports_actual_error_from_bounded_log_tail() {

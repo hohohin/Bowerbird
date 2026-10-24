@@ -14,6 +14,18 @@ export interface ComfyVideoOptions {
   resolution: 0.6 | 0.8 | 1;
 }
 export const DEFAULT_COMFY_VIDEO: ComfyVideoOptions = { endpoint: "http://127.0.0.1:8000", seconds: 8, ratio: "9:16", resolution: 0.8 };
+export interface ComposerLocalVideoRequest { prompt: string; firstFrame: string; lastFrame?: string; options: ComfyVideoOptions }
+/** Match the editor's ordered image references; never submit extra images or videos. */
+export function localVideoFrames(references: Asset[]) {
+  return references.filter(asset => /\.(png|jpe?g|webp|bmp)(?:[?#].*)?$/i.test(asset.store_path ?? ""));
+}
+export function localVideoInputError(prompt: string, frames: Asset[], options: ComfyVideoOptions): string | null {
+  if (!frames.length) return "请在创作描述中添加首帧图片。";
+  if (!prompt.trim() || prompt.length > 16000) return "请填写 1–16000 字创作描述。";
+  if (!Number.isInteger(options.seconds) || options.seconds < 1 || options.seconds > 15) return "本地视频时长须为 1–15 秒的整数。";
+  if (![0.6, 0.8, 1].includes(options.resolution) || !["auto", "9:16", "16:9", "4:3", "3:4", "1:1"].includes(options.ratio)) return "请选择本地视频支持的比例和分辨率。";
+  return null;
+}
 export function comfyVideoSize(options: ComfyVideoOptions, firstFrame?: { width?: number | null; height?: number | null }) {
   const [w, h] = options.ratio === "auto" ? [firstFrame?.width, firstFrame?.height] : options.ratio.split(":").map(Number);
   if (!w || !h || !Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return null;
@@ -34,6 +46,8 @@ export interface ComfyEnvironment {
   message: string; endpoint: string; directory: string; canInstall: boolean; installed: boolean;
   downloadBytes: number; requiredBytes: number; completedBytes: number; totalBytes: number;
   existing?: { path: string; name: string; endpoint: string; canStart: boolean; modelsFound: number }[];
+  hardware?: { gpus: { name: string; driver?: string | null; memoryMib?: number | null }[]; driverRequired: boolean; issue?: string | null } | null;
+  driverDownload?: { url: string; message: string } | null;
 }
 // Readiness means Run can proceed without user setup, even when the service is stopped.
 export function comfyEnvironmentReady(environment?: ComfyEnvironment) {
@@ -45,7 +59,7 @@ export function comfyEnvironmentReady(environment?: ComfyEnvironment) {
 }
 // Multiple visible cards share a read-only detection request; installation is singleton in native code.
 const detections = new Map<string, Promise<ComfyEnvironment>>();
-export function comfyEnvironment(action: "detect" | "status" | "prepare" | "install" | "cancel" | "select_existing" | "start_existing", endpoint: string, directory?: string, existingDirectory?: string) {
+export function comfyEnvironment(action: "detect" | "status" | "prepare" | "install" | "cancel" | "select_existing" | "start_existing" | "driver", endpoint: string, directory?: string, existingDirectory?: string) {
   const key = JSON.stringify([endpoint, directory, existingDirectory]);
   if (action === "detect" && detections.has(key)) return detections.get(key)!;
   const request = invoke<ComfyEnvironment>("comfy_video_environment", { action, endpoint, directory: directory ?? null, existingDirectory: existingDirectory ?? null });

@@ -5,7 +5,7 @@ import { open } from "@tauri-apps/plugin-shell";
 import { Moon, RefreshCw, Sun } from "lucide-react";
 import { useStore, understandEngineUsable } from "../store";
 import { api } from "../lib/api";
-import { CODEX_ONBOARDING_ENABLED, DREAMINA_ONBOARDING_ENABLED } from "../lib/featureFlags";
+import { CODEX_ONBOARDING_ENABLED, DREAMINA_ONBOARDING_ENABLED, LEGACY_SETTINGS_ENABLED } from "../lib/featureFlags";
 import { DEFAULT_AUTO_ANALYZE_PROMPT, WEBSITE_URL } from "../lib/constants";
 import type { MigrateProgress } from "../lib/types";
 import { useOnboarding } from "../lib/onboardingStore";
@@ -14,6 +14,8 @@ import { RedeemCodeCard } from "./RedeemCodeCard";
 import { ScreenshotSettings } from "./ScreenshotSettings";
 import { AppUpdateCard } from "./AppUpdateCard";
 import { FileWorkspaceMoveDialog } from "./FileWorkspaceMoveDialog";
+import { CreditDetails } from "./CreditDetails";
+import { userErrorMessage } from "../lib/userError";
 
 const STAGE_LABEL: Record<string, string> = {
   images: "复制原图",
@@ -23,9 +25,7 @@ const STAGE_LABEL: Record<string, string> = {
 
 type SectionKey = "system" | "account" | "models" | "personalization" | "about" | "developer";
 
-/** 即梦 CLI 模型版本选项（dreamina `--model_version`；仅保留 4.7+——image2image 仅 4.0+，
- *  而创作板参考图生成是核心路径；与后端 settings 默认一致取 5.0Pro）。 */
-const DREAMINA_MODEL_OPTIONS = ["4.7", "5.0", "5.0Pro"];
+// 仅供保存其他设置时兼容旧配置，不再在订阅卡片中选择模型版本。
 const DEFAULT_DREAMINA_MODEL_VERSION = "5.0Pro";
 
 /**
@@ -98,9 +98,9 @@ const DEVELOPER_SECTION = { key: "developer", label: "开发者选项" } as cons
 /**
  * 设置面板（约定 13 全屏 Modal 形态）：常见两列式——左侧分区导航，右侧具体内容。
  *
- * 五分区：系统设置（外观 / 素材库位置 / 浏览器扩展 / 新手教程）、账号管理（账号名 / 等级与升级 / 积分明细）、
- * 模型设置（codex CLI / 即梦 CLI / 默认反推模型 / 入库自动反推）、个性化与记忆（创作板 Shift 引入
- * / 全局素材隐藏项目素材开关），
+ * 五分区：系统设置（外观 / 素材库位置 / 新手教程）、账号管理（账号名 / 等级与升级 / 积分明细）、
+ * 模型设置（订阅授权 / 默认反推模型 / 入库自动反推）、个性化与记忆（快捷键 / 素材名称 / 完成提醒），
+ * 旧版本扩展检测、Shift 引入和隐藏项目素材设置由 LEGACY_SETTINGS_ENABLED 隐藏。
  * 关于我们（当前版本 / 前往官网）。原「环境状态」总览已删除，各引导由对应分区直接唤起。
  * 另有「开发者选项」分区仅测试账号可见：对话框 Agent 模式开关集中在此，关闭的模式不在
  * 创作板 / 会话编辑坞渲染（默认只开正式 Agent）。
@@ -132,6 +132,8 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
   const setDefaultUnderstandProvider = useStore((s) => s.setDefaultUnderstandProvider);
 
   const [section, setSection] = useState<SectionKey>(initialSection);
+  const [trialBusy, setTrialBusy] = useState(false);
+  const [trialMessage, setTrialMessage] = useState("");
   const [appVersion, setAppVersion] = useState<string | null>(null);
   const [checkingCodex, setCheckingCodex] = useState(true);
   const [codexLogoutBusy, setCodexLogoutBusy] = useState(false);
@@ -287,7 +289,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
       await api.restartApp();
     } catch (error) {
       setMigrating(false);
-      setMigrateError(typeof error === "string" ? error : "迁移失败");
+      setMigrateError(userErrorMessage(error, "迁移未完成，请检查保存位置后重试。"));
     }
   }
 
@@ -325,7 +327,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
         if (!installed.ok) {
           setCodexHealth(installed);
           setCodexAuthFailed(true);
-          setCodexAuthLine(installed.reason);
+          setCodexAuthLine(userErrorMessage(installed.reason, "安装未完成，请稍后重试。"));
           return;
         }
         h = await api.codexHealth();
@@ -339,13 +341,13 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
       const r = await api.codexLogin();
       setCodexHealth(r);
       setCodexAuthFailed(!r.ok);
-      setCodexAuthLine(r.ok ? "✓ 授权成功" : r.reason);
+      setCodexAuthLine(r.ok ? "✓ 授权成功" : userErrorMessage(r.reason, "授权未完成，请重新登录。"));
     } catch (e) {
       const msg = String(e);
       if (msg.includes("已取消")) setCodexAuthLine(null);
       else {
         setCodexAuthFailed(true);
-        setCodexAuthLine(msg);
+        setCodexAuthLine(userErrorMessage(e, "授权未完成，请重新登录。"));
       }
     } finally {
       codexAuthRunningRef.current = false;
@@ -363,7 +365,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
       setCodexAuthLine("已退出登录，可以重新授权或更换账号");
     } catch (error) {
       setCodexAuthFailed(true);
-      setCodexAuthLine(String(error));
+      setCodexAuthLine(userErrorMessage(error, "退出登录未完成，请重试。"));
     } finally {
       setCodexLogoutBusy(false);
     }
@@ -402,7 +404,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
         if (!installed.ok) {
           setDreaminaHealth(installed);
           setDreaminaAuthFailed(true);
-          setDreaminaAuthLine(installed.reason);
+          setDreaminaAuthLine(userErrorMessage(installed.reason, "安装未完成，请稍后重试。"));
           return;
         }
         h = await api.dreaminaHealth(true);
@@ -425,13 +427,13 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
       const r = await api.dreaminaCheckLogin(flow.device_code);
       setDreaminaHealth(r);
       setDreaminaAuthFailed(!r.ok);
-      setDreaminaAuthLine(r.ok ? "✓ 授权成功" : r.reason);
+      setDreaminaAuthLine(r.ok ? "✓ 授权成功" : userErrorMessage(r.reason, "即梦授权未完成，请重新登录。"));
     } catch (e) {
       const msg = String(e);
       if (msg.includes("已取消")) setDreaminaAuthLine(null);
       else {
         setDreaminaAuthFailed(true);
-        setDreaminaAuthLine(msg);
+        setDreaminaAuthLine(userErrorMessage(e, "即梦授权未完成，请重新登录。"));
       }
     } finally {
       dreaminaAuthRunningRef.current = false;
@@ -449,7 +451,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
       setDreaminaAuthLine(null);
     } catch (e) {
       setDreaminaAuthFailed(true);
-      setDreaminaAuthLine(String(e));
+      setDreaminaAuthLine(userErrorMessage(e, "退出即梦登录未完成，请重试。"));
     }
   }
 
@@ -479,8 +481,6 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
   const loggedIn = cloudAuth?.logged_in === true;
   const accountName = cloudAuth?.display_name || cloudAuth?.email || cloudAuth?.user_id || "";
   const tier = cloudEntitlement?.tier?.toUpperCase() ?? "FREE";
-  const balances = cloudEntitlement?.balances;
-  const transactions = cloudEntitlement?.recent_transactions ?? [];
   // 测试账号（bowerbird_test 标记，云端随权益快照下发）才追加「开发者选项」分区。
   const isTestAccount = cloudEntitlement?.is_test_account === true;
   const sections = isTestAccount ? [...SECTIONS, DEVELOPER_SECTION] : SECTIONS;
@@ -627,8 +627,8 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
                 )}
               </div>
 
-              {/* 浏览器扩展（原「环境状态」拆出）：状态 + 安装引导 */}
-              <div className="settings-card px-3 py-2.5">
+              {/* 旧版本功能：浏览器扩展检测与未就绪提醒已隐藏。 */}
+              {LEGACY_SETTINGS_ENABLED && <div className="settings-card px-3 py-2.5">
                 <div className="flex items-center justify-between">
                   <span className="text-ink">浏览器扩展</span>
                   <span
@@ -653,7 +653,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
                 >
                   {extensionConnected ? "查看引导" : "前往配置"}
                 </button>
-              </div>
+              </div>}
 
               {/* 入门引导：主线续学与按需教程 */}
               <div className="settings-card px-3 py-2">
@@ -718,9 +718,13 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
                       {tier}
                     </span>
                   </span>
-                  <p className="mt-2 text-xs text-ink">
-                    Pro 可使用自有 ChatGPT / 即梦订阅进行创作，本机引擎生成不扣 Bowerbird 积分；Cloud 生成按服务消耗积分。
-                  </p>
+                  {tier === "FREE" && <button className="app-button mt-2" disabled={trialBusy} onClick={async () => {
+                    if (trialBusy) return; setTrialBusy(true); setTrialMessage("");
+                    try { const next = await api.cloudStartProTrial(); useStore.setState({ cloudEntitlement: next }); setTrialMessage("7 天 Pro 功能体验已领取；Cloud 仍按用量计费，到期不会自动扣款。"); }
+                    catch (error) { setTrialMessage(userErrorMessage(error, "暂时无法领取体验，请稍后重试。")); }
+                    finally { setTrialBusy(false); }
+                  }}>{trialBusy ? "领取中…" : "领取一次 7 天 Pro 功能体验"}</button>}
+                  {trialMessage && <p role="status" className="mt-1 text-xs text-muted">{trialMessage}</p>}
                   <p className="mt-1 text-[11px] text-muted">
                     在线购买暂未开放。如有 Pro 兑换码，可在下方兑换，权益将同步到当前账号。
                   </p>
@@ -732,42 +736,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
               {/* credits 明细 */}
               {loggedIn && (
                 <div className="settings-card px-3 py-2.5">
-                  <div className="text-ink">积分明细</div>
-                  <div className="mt-2 grid grid-cols-3 gap-2 text-center text-[11px]">
-                    <div className="rounded-lg border border-edge bg-canvas/70 p-2">
-                      <div className="text-muted">每日</div>
-                      <div className="mt-0.5 text-sm font-semibold text-ink">{balances?.daily ?? 0}</div>
-                    </div>
-                    <div className="rounded-lg border border-edge bg-canvas/70 p-2">
-                      <div className="text-muted">订阅</div>
-                      <div className="mt-0.5 text-sm font-semibold text-ink">{balances?.sub ?? 0}</div>
-                    </div>
-                    <div className="rounded-lg border border-edge bg-canvas/70 p-2">
-                      <div className="text-muted">充值</div>
-                      <div className="mt-0.5 text-sm font-semibold text-ink">{balances?.topup ?? 0}</div>
-                    </div>
-                  </div>
-                  {transactions.length > 0 && (
-                    <div className="mt-3 border-t border-edge pt-2">
-                      <div className="text-[10px] uppercase tracking-wide text-muted">最近积分流水</div>
-                      <ul className="mt-1 max-h-40 space-y-1 overflow-y-auto text-[11px]">
-                        {transactions.slice(0, 50).map((tx, index) => (
-                          <li
-                            key={`${tx.created_at}-${index}`}
-                            className="flex items-center justify-between gap-2 text-muted"
-                          >
-                            <span className="truncate">
-                              {tx.meta?.entity_type === "agent_run" ? `Agent Run · ${tx.meta.final_status}` : tx.kind}
-                              {tx.service ? ` · ${tx.service}` : ""}
-                            </span>
-                            <span className={tx.amount >= 0 ? "text-green-400" : "text-red-300"}>
-                              {tx.amount >= 0 ? `+${tx.amount}` : tx.amount}
-                            </span>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
+                  <CreditDetails entitlement={cloudEntitlement} />
                   <button
                     onClick={() => void logoutCloud()}
                     disabled={cloudBusy}
@@ -793,7 +762,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
                           ? "bg-green-500/15 text-green-400"
                           : "bg-red-500/15 text-red-300"
                       }`}
-                      title={codexHealth?.reason}
+                      title={codexHealth?.reason ? userErrorMessage(codexHealth.reason, "暂时无法使用，请重新检测或登录。") : undefined}
                     >
                       {codexHealth?.ok ? "✓ 已登录" : "✗ 未就绪"}
                     </span>
@@ -836,9 +805,9 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
                       className={`min-w-0 truncate text-[11px] ${
                         codexAuthFailed ? "text-red-300" : "text-muted"
                       }`}
-                      title={codexAuthLine}
+                      title={userErrorMessage(codexAuthLine, codexAuthFailed ? "授权未完成，请重新登录。" : "正在准备授权，请稍候…")}
                     >
-                      {codexAuthLine}
+                      {userErrorMessage(codexAuthLine, codexAuthFailed ? "授权未完成，请重新登录。" : "正在准备授权，请稍候…")}
                     </span>
                   )}
                 </div>
@@ -866,7 +835,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
                           ? "bg-green-500/15 text-green-400"
                           : "bg-red-500/15 text-red-300"
                       }`}
-                      title={dreaminaHealth?.reason}
+                      title={dreaminaHealth?.reason ? userErrorMessage(dreaminaHealth.reason, "即梦暂时无法使用，请重新检测或登录。") : undefined}
                     >
                       {dreaminaHealth?.ok ? "✓ 就绪" : "✗ 未就绪"}
                     </span>
@@ -907,9 +876,9 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
                       className={`min-w-0 truncate text-[11px] ${
                         dreaminaAuthFailed ? "text-red-300" : "text-muted"
                       }`}
-                      title={dreaminaAuthLine}
+                      title={userErrorMessage(dreaminaAuthLine, dreaminaAuthFailed ? "即梦授权未完成，请重新登录。" : "正在准备即梦授权，请稍候…")}
                     >
-                      {dreaminaAuthLine}
+                      {userErrorMessage(dreaminaAuthLine, dreaminaAuthFailed ? "即梦授权未完成，请重新登录。" : "正在准备即梦授权，请稍候…")}
                     </span>
                   )}
                 </div>
@@ -923,30 +892,6 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
                   >
                     {dreaminaHealth?.ok ? "查看引导" : "前往配置"}
                   </button>
-                )}
-                {/* 即梦模型版本：登录后才显示；每次生成前后端从 settings 重读，修改下一次生成即生效（热切换） */}
-                {dreaminaHealth?.ok && (
-                  <div className="mt-2 border-t border-edge pt-2">
-                    <div className="text-xs text-ink">模型版本</div>
-                    <div className="mt-1.5 flex flex-wrap gap-1.5">
-                      {DREAMINA_MODEL_OPTIONS.map((v) => (
-                        <button
-                          key={v}
-                          type="button"
-                          onClick={() =>
-                            settings && void updateSettings({ ...settings, dreamina_model_version: v })
-                          }
-                          className={`rounded px-2.5 py-1 text-xs ${
-                            (settings?.dreamina_model_version ?? DEFAULT_DREAMINA_MODEL_VERSION) === v
-                              ? "bg-accent font-medium text-black"
-                              : "bg-panel text-ink hover:bg-edge"
-                          }`}
-                        >
-                          {v}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
                 )}
               </div>
 
@@ -1060,7 +1005,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
                 </label>
                 <p className="mt-2 text-xs text-muted">默认开启；可分别关闭，设置自动保存。弹窗显示在应用右上角。</p>
               </div>
-              <div className="settings-card px-3 py-2.5">
+              {LEGACY_SETTINGS_ENABLED && <div className="settings-card px-3 py-2.5">
                 <div className="flex items-center justify-between">
                   <span className="text-ink">创作板打开时，Shift + 左键点击素材引入</span>
                   <Toggle
@@ -1074,9 +1019,10 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
                   开启后，在创作板激活期间需按住 Shift
                   再点击素材，才会作为参考素材引入，避免误触；普通左键会弹出菜单，可选择添加到编辑框或打开图片详情。关闭则点击素材直接引入。
                 </p>
-              </div>
+              </div>}
 
-              <div className="settings-card px-3 py-2.5">
+              {/* 旧版本功能：只隐藏设置入口，历史偏好继续兼容。 */}
+              {LEGACY_SETTINGS_ENABLED && <div className="settings-card px-3 py-2.5">
                 <div className="flex items-center justify-between">
                   <span className="text-ink">在画板的全局素材栏中隐藏项目素材</span>
                   <Toggle
@@ -1089,7 +1035,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
                 <p className="mt-1 text-xs text-muted">
                   控制画板内全局素材栏的显示范围。首页的项目素材由右上角「收起 / 展开」控制，始终可按项目浏览。
                 </p>
-              </div>
+              </div>}
             </>
           )}
 

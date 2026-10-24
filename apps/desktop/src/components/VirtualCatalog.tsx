@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { materialCatalog, type CatalogFilter } from "../lib/materialCatalog";
 import { catalogLayout, catalogScrollScale, masonryGeometry, visibleCatalogBlocks, CATALOG_CACHE_PAGES, CATALOG_PAGE_SIZE, type CatalogSectionInfo } from "../lib/catalogVirtualLayout";
@@ -134,7 +135,7 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
         const geometry = page ? masonryGeometry(page.assets, viewport.width, width) : null;
         return <div key={block.key} data-catalog-page={block.key} data-columns={geometry?.columns} className="folder-masonry catalog-virtual-page" style={{ position: "absolute", top: block.top - logicalTop + viewport.top - layout.groups[index].top * scale, height: block.height }}
           onFocusCapture={() => setFocused(block.key)} onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setFocused(null); }}>
-          {error && <p className="catalog-error" role="alert">{error}<button onClick={() => { errors.current.delete(block.key); setTick(v => v + 1); }}>重试</button></p>}
+          {error && <p className="catalog-error" role="alert">{userErrorMessage(error, "素材列表暂时无法读取，请重试。")}<button onClick={() => { errors.current.delete(block.key); setTick(v => v + 1); }}>重试</button></p>}
           {!page && !error && <p className="catalog-hint" role="status">正在读取素材…</p>}
           {page?.assets.map((asset, index) => {
             const cell = geometry!.cells[index];

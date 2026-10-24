@@ -473,7 +473,8 @@ html[data-theme="light"] [role="button"]:focus-visible {
 .library-home { position: relative; flex: 1; min-height: 0; height: 100%; --library-footer-space: 34px; }
 .library-home .masonry-layout { padding:4px; }
 .topbar-account { position:relative; flex-shrink:0; }
-.topbar-account-trigger { display:grid; place-items:center; width:36px; height:36px; border-radius:999px; }
+.topbar-account-trigger { display:flex; align-items:center; gap:8px; height:36px; padding:2px 3px 2px 10px; border-radius:999px; background:rgb(var(--bb-ink-rgb) / 4%); }
+.topbar-account-trigger .app-topbar-credits { height:auto; padding:0; }
 .topbar-account-trigger:hover { background:var(--bb-surface-hover); }
 .topbar-account-menu { position:absolute; right:0; top:calc(100% + 8px); z-index:70; width:224px; max-width:calc(100vw - 24px); }
 .library-scroll-area { height: 100%; min-width: 0; }

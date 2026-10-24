@@ -3,6 +3,8 @@ import { createRoot } from "react-dom/client";
 import { AppUpdateCard } from "../../../src/components/AppUpdateCard";
 import { StartupUpdateDialog } from "../../../src/components/StartupUpdateDialog";
 import { ModalShell } from "../../../src/components/ModalShell";
+import { ToastViewport } from "../../../src/components/ToastViewport";
+import { notify, notifyError } from "../../../src/lib/notify";
 import { useAppUpdater } from "../../../src/lib/appUpdater";
 import { useStore } from "../../../src/store";
 import "../../../src/styles.css";
@@ -12,6 +14,8 @@ const w = window as any;
 w.updater = useAppUpdater;
 w.store = useStore;
 w.calls = [];
+w.notify = notify;
+w.notifyError = notifyError;
 const params = new URLSearchParams(location.search);
 w.mode = params.get("mode") ?? "available";
 w.__TAURI_INTERNALS__ = {
@@ -19,6 +23,7 @@ w.__TAURI_INTERNALS__ = {
   unregisterCallback: () => {},
   invoke: async (command: string, args: any) => {
     w.calls.push(command);
+    if (w.failures?.[command]) throw w.failures[command];
     if (command === "plugin:updater|check") {
       if (w.mode === "offline") throw "网络不可用";
       if (w.mode === "current") return null;
@@ -50,6 +55,7 @@ function Fixture() {
   return <div className="min-h-screen bg-bg p-8 text-ink"><button onClick={() => setVisible(!visible)}>切换设置</button>
     <button onClick={() => setStartupMounted(!startupMounted)}>切换启动组件</button>
     <button onClick={() => setReady(true)}>初始化完成</button>
+    <ToastViewport />
     {startupMounted && <StartupUpdateDialog ready={ready} />}
     {blocked && <ModalShell title="素材库迁移" onClose={() => setBlocked(false)}>
       <button onClick={() => setBlocked(false)}>迁移完成</button>

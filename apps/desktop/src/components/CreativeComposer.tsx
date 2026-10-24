@@ -2,6 +2,7 @@ import { CreationBoard } from "./CreationBoard";
 import type { CreativePromptLoadRequest } from "../lib/creativeLaunch";
 import { parseCreativeComposerDraft, serializeCreativeComposerDraft } from "../lib/creativeDraft";
 import type { CreativeParentCandidate, CreativeThreadResolution } from "../lib/creativeGeneration";
+import type { ComposerLocalVideoRequest } from "../lib/comfyVideo";
 
 export function CreativeComposer({
   projectId,
@@ -16,6 +17,7 @@ export function CreativeComposer({
   onOpenLibrary,
   registerDraftFlush,
   beforeGenerate,
+  onGenerateLocalVideo,
   resolveCreativeThread,
 }: {
   projectId: string;
@@ -30,6 +32,7 @@ export function CreativeComposer({
   onOpenLibrary?: () => void;
   registerDraftFlush?: (flush: (() => void) | null) => void;
   beforeGenerate?: () => Promise<void>;
+  onGenerateLocalVideo?: (request: ComposerLocalVideoRequest) => Promise<void>;
   resolveCreativeThread: (
     parentAssetId: string | null,
     prompt: string,
@@ -53,6 +56,7 @@ export function CreativeComposer({
       onOpenLibrary={onOpenLibrary}
       registerDraftFlush={registerDraftFlush}
       beforeGenerate={beforeGenerate}
+      onGenerateLocalVideo={onGenerateLocalVideo}
       resolveCreativeThread={resolveCreativeThread}
     />
   );

@@ -5,9 +5,11 @@ export interface CatalogTag { id: string; name: string; description: string; cou
 export interface MaterialCatalog { tags: CatalogTag[]; collections: Folder[]; prompts: string[]; tag_asset_ids: Record<string, string[]> }
 export interface CatalogFilter { kind: CatalogKind; id: string | null; projectId: string | null; media: "images" | "videos"; query: string; generated: boolean | null; color: string | null }
 export interface CatalogOverview { catalog: MaterialCatalog; total: number; untagged: number }
+export interface CatalogGraphAsset { id: string; name: string; store_path: string | null; thumb_path: string | null; tag_ids: string[] }
 export const materialCatalog = {
   overview: (filter: CatalogFilter, contextProject: string | null) => invoke<CatalogOverview>("catalog_overview", { filter, contextProject }),
   page: (filter: CatalogFilter, offset: number, limit: number) => invoke<Asset[]>("catalog_page", { filter, offset, limit }),
+  graphPage: (filter: CatalogFilter, after: string | null) => invoke<{ assets: CatalogGraphAsset[]; after: string | null }>("catalog_graph_page", { filter, after, limit: 512 }),
   ids: (filter: CatalogFilter, offset: number, limit: number) => invoke<string[]>("catalog_ids", { filter, offset, limit }),
   prepareColors: (filter: CatalogFilter, after: string | null) => invoke<{ after: string | null; more: boolean; failed: number; updated: number }>("catalog_prepare_colors", { filter, after }),
   saveCollection: (id: string | null, name: string, parentId: string | null) => invoke<string>("save_collection_node", { id, name, parentId }),

@@ -21,10 +21,15 @@
 .comfy-environment-panel p { margin: 0 0 12px; overflow-wrap: anywhere; line-height: 1.6; }
 .comfy-environment-panel small, .comfy-install-path { color: var(--bb-muted); }
 .comfy-environment-panel progress { display: block; width: 100%; height: 8px; margin: 12px 0; accent-color: var(--bb-blue); }
-.comfy-environment-actions { display: flex; gap: 10px; margin-top: 20px; }
+.comfy-environment-actions { position: relative; display: flex; gap: 10px; margin-top: 20px; }
+.comfy-environment-action { display: flex; flex: 1; min-width: 0; }
+.comfy-environment-action[tabindex] { cursor: not-allowed; }
+.comfy-environment-action:focus-visible { outline: 2px solid var(--bb-blue); outline-offset: 2px; border-radius: 7px; }
+.comfy-environment-tooltip { position: absolute; bottom: 100%; left: 0; right: 0; z-index: 1; padding: 10px; border: 1px solid var(--bb-line); border-radius: 7px; background: var(--bb-surface); color: var(--bb-ink); box-shadow: 0 4px 16px rgb(var(--bb-shadow-rgb) / 16%); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.comfy-environment-tooltip[hidden] { display: none; }
 .comfy-environment-actions button { flex: 1; min-height: 36px; border: 1px solid var(--bb-line); border-radius: 7px; background: var(--bb-surface-2); }
-.comfy-environment-actions button:last-child { background: var(--bb-blue); color: white; border-color: transparent; }
-.comfy-environment-actions button:disabled { opacity: .45; cursor: not-allowed; }
+.comfy-environment-actions > :last-child button { background: var(--bb-blue); color: white; border-color: transparent; }
+.comfy-environment-actions button:disabled { opacity: .45; cursor: not-allowed; pointer-events: none; }
 
 .comfy-generation-progress { display: grid; gap: 7px; margin: 10px 0; color: var(--bb-muted); font-size: 12px; }
 /* Adapted from dylanharriscameron / ancient-falcon-18 (Uiverse), MIT.

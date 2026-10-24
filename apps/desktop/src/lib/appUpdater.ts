@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { userErrorMessage } from "./userError";
 
 type Phase = "idle" | "checking" | "current" | "available" | "downloading" | "ready" | "installing" | "installed";
 interface AppUpdaterState {
@@ -39,7 +40,8 @@ export const useAppUpdater = create<AppUpdaterState>((set, get) => ({
         startupPrompt: startup && update !== null });
       await previous?.close().catch(() => {});
     } catch (error) {
-      set({ phase: previous ? "available" : "idle", error: startup ? null : `检查更新失败：${String(error)}` });
+      console.warn("[updater] check failed", error);
+      set({ phase: previous ? "available" : "idle", error: startup ? null : userErrorMessage(error, "暂时无法检查更新，请稍后再试。") });
     }
   },
   download: async () => {
@@ -55,7 +57,8 @@ export const useAppUpdater = create<AppUpdaterState>((set, get) => ({
       // (including signature verification) before enabling installation.
       set({ phase: "ready" });
     } catch (error) {
-      set({ phase: "available", error: `下载或校验失败：${String(error)}` });
+      console.warn("[updater] download or verification failed", error);
+      set({ phase: "available", error: userErrorMessage(error, "更新包下载或验证未完成，请重新下载。") });
     }
   },
   install: async (beforeInstall) => {
@@ -68,7 +71,8 @@ export const useAppUpdater = create<AppUpdaterState>((set, get) => ({
       // relaunches the app. Other desktop platforms return and need relaunch().
       await update.install();
     } catch (error) {
-      set({ phase: "ready", error: `安装未完成：${String(error)}` });
+      console.warn("[updater] install failed", error);
+      set({ phase: "ready", error: userErrorMessage(error, "更新尚未安装，请检查当前任务和保存状态后重试。") });
       return;
     }
     set({ phase: "installed" });
@@ -78,6 +82,9 @@ export const useAppUpdater = create<AppUpdaterState>((set, get) => ({
     if (get().phase !== "installed") return;
     set({ error: null });
     try { await relaunch(); }
-    catch (error) { set({ error: `更新已安装，请关闭并重新打开应用：${String(error)}` }); }
+    catch (error) {
+      console.warn("[updater] restart failed", error);
+      set({ error: "更新已安装，请关闭并重新打开应用。" });
+    }
   },
 }));

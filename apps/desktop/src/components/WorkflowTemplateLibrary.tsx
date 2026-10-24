@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { useEffect, useRef, useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { emit } from "@tauri-apps/api/event";
@@ -99,7 +100,7 @@ export function WorkflowTemplateLibrary({ controller, selectedIds, graphNodes, p
   return <ModalShell title={instanceRoot ? "配置子流程" : importPackage ? "导入工作流数据包" : "工作流模板库"} width="lg" preventClose={busy} onClose={onClose}
     panelProps={{ onPointerDown: event => event.stopPropagation(), onWheel: event => event.stopPropagation(), onKeyDown: event => { if (event.key !== "Escape" && event.key !== "Tab") event.stopPropagation(); } }}>
     <div className="workflow-template-library">
-      {error && <p role="alert" className="workflow-error">{error}</p>}{notice && <p role="status">{notice}</p>}
+      {error && <p role="alert" className="workflow-error">{userErrorMessage(error, "工作流模板操作未完成，请检查模板内容后重试。")}</p>}{notice && <p role="status">{notice}</p>}
       {instanceRoot ? configure : <>
         {importPackage && <p>选择对方发送的 .bbworkflow.json 数据包，查看步骤并确认输入，再添加到当前画板。导入不会自动运行。</p>}
         <div className="workflow-template-actions"><input aria-label="搜索工作流模板" placeholder="搜索名称或说明" value={search} onChange={event => setSearch(event.target.value)} />

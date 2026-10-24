@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { useAppUpdater } from "../lib/appUpdater";
 import { useStore } from "../store";
 import { isAgentTaskActive } from "../lib/projectActivity";
@@ -62,7 +63,7 @@ export function AppUpdateCard({ version, migrating, downloadLabel = "下载更�
         {phase === "installing" && <p className="mt-1">正在保存画板并启动安装，请稍候…</p>}
         {update?.body && <p className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap">{update.body}</p>}
       </div>
-      {error && <p className="mt-2 break-words text-xs text-red-400" role="alert">{error}</p>}
+      {error && <p className="mt-2 break-words text-xs text-red-400" role="alert">{userErrorMessage(error, "更新未完成，请稍后重试。")}</p>}
     </div>
   );
 }

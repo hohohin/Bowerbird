@@ -5,6 +5,7 @@ import { canUseByo } from "../lib/entitlement";
 import { loadDescribePrompt } from "../lib/describePrompt";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { notifyError, notifySuccess } from "../lib/notify";
+import { userErrorMessage } from "../lib/userError";
 import type { AssetDeleteMode } from "../lib/types";
 import { COLLECTIONS_FEATURE_ENABLED } from "../lib/featureFlags";
 import { canMoveAssetOut } from "../lib/assetDeletion";
@@ -397,7 +398,7 @@ export function BatchBar() {
         </div>
       )}
 
-      {failedNotice && <span className="text-xs text-red-400">{failedNotice}</span>}
+      {failedNotice && <span className="text-xs text-red-400" role="alert">{userErrorMessage(failedNotice, "删除未完成，请稍后重试。")}</span>}
 
       <button
         onClick={exitManage}

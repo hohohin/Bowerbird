@@ -445,7 +445,7 @@ dependencies = [
 
 [[package]]
 name = "bowerbird-desktop"
-version = "26.10.2301"
+version = "26.10.2401"
 dependencies = [
  "anyhow",
  "arboard",
@@ -464,6 +464,7 @@ dependencies = [
  "ndarray",
  "ort",
  "palette",
+ "regex",
  "reqwest 0.12.28",
  "rusqlite",
  "rusqlite_migration",

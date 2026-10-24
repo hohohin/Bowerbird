@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { useEffect, useRef, useState, useId } from "react";
 import { Activity, Circle, CircleAlert, Clock3, Sparkles, X } from "lucide-react";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -434,8 +435,8 @@ export function SidebarStatus() {
                   <span className="min-w-0 flex-1 truncate">{failure.name}</span>
                   <span className="text-[10px] task-state-failed">失败</span>
                 </div>
-                <div className="mt-1 break-words pl-5 text-[10px] leading-4 task-state-failed" title={failure.reason}>
-                  {failure.reason}
+                <div className="mt-1 break-words pl-5 text-[10px] leading-4 task-state-failed" title={userErrorMessage(failure.reason, "图片反推未完成，请稍后重试。")}>
+                  {userErrorMessage(failure.reason, "图片反推未完成，请稍后重试。")}
                 </div>
                 <div className="mt-1 flex justify-end gap-1 pl-5">
                   <button
@@ -472,7 +473,7 @@ export function SidebarStatus() {
           {task.status === "running" ? "提炼中" : task.status === "succeeded" ? "提炼完成" : "提炼失败"}
         </span>
       </div>
-      <p className="mt-1 break-words text-[10px] text-muted">{task.error ?? task.progress}</p>
+      <p className="mt-1 break-words text-[10px] text-muted">{task.error ? userErrorMessage(task.error, "视觉规范提炼未完成，请稍后重试。") : task.progress}</p>
       <div className="mt-1 flex justify-end gap-2">
         <button type="button" className="text-accent" onClick={() => {
           closePanel(true);

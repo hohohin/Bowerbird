@@ -62,9 +62,18 @@ export function CanvasToolbox({ onOpenReplication, onOpenLocalVideo }: { onOpenR
       {isTestAccount && <button type="button" role="menuitem" onClick={() => { setOpen(false); button.current?.focus(); notify("功能开发中"); }}>
         <Images size={19} aria-hidden="true" /><span><strong>视频转图文</strong><small>功能开发中</small></span>
       </button>}
-      {canUseLocalVideo && <button type="button" role="menuitem" onClick={() => { setOpen(false); onOpenLocalVideo(); }}>
-        <Film size={19} aria-hidden="true" /><span><strong>本地 H3 视频</strong><small>首尾帧 · 提示词 · 生成视频</small></span>
-      </button>}
+      <button type="button" role="menuitem" onClick={() => {
+        setOpen(false);
+        const account = useStore.getState();
+        if (!canUseComfyVideo(account.cloudAuth, account.cloudEntitlement)) {
+          button.current?.focus();
+          notify("本地 H3 视频为 Pro 专享，请在设置中查看账号与订阅，升级 Pro 后使用。");
+          return;
+        }
+        onOpenLocalVideo();
+      }}>
+        <Film size={19} aria-hidden="true" /><span><strong>本地 H3 视频</strong><small>{canUseLocalVideo ? "首尾帧 · 提示词 · 生成视频" : "Pro 专享 · 升级后使用"}</small></span>
+      </button>
     </div>, document.body)}
   </div>;
 }

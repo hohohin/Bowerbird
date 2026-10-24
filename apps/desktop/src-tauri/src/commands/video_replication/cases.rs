@@ -84,6 +84,10 @@ pub(super) fn update(root: &Path, project: &str, data: &Value) -> AppResult<Valu
         if !matches!(step.as_u64(),Some(1..=4)) { return Err(error("任务步骤无效")); }
         value["step"] = step.clone();
     }
+    if let Some(provider) = data.get("analysisProvider") {
+        if !["codex", "doubao"].contains(&provider.as_str().unwrap_or("")) { return Err(error("分析供应商无效")); }
+        value["analysisProvider"] = provider.clone();
+    }
     if let Some(method) = data.get("sourceMethod") {
         if !["douyin","local","library"].contains(&method.as_str().unwrap_or("")) { return Err(error("获取途径无效")); }
         value["sourceMethod"] = method.clone();
@@ -96,6 +100,13 @@ pub(super) fn update(root: &Path, project: &str, data: &Value) -> AppResult<Valu
         }
         value["referenceId"] = reference.clone();
     }
+    // Transcription is model output, not a user-editable draft. Restore it after binding the reference (including legacy cases).
+    if let Some(job_id) = data["appliedAnalysisId"].as_str().filter(|id| !id.is_empty()) {
+        let job = own(root, job_id, project)?;
+        if job["operation"] != "analyze" || job["referenceId"] != value["referenceId"] { return Err(error("分析记录与参考视频不匹配")); }
+        value["transcript"] = job["transcript"].clone();
+        value["transcriptStatus"] = job["transcriptStatus"].clone();
+    }
     if data.get("frameReference").is_some() { value["frameReference"] = frame_reference(data)?; }
     value["updatedAt"] = json!(now());
     save(root,&value)?;
@@ -104,6 +115,19 @@ pub(super) fn update(root: &Path, project: &str, data: &Value) -> AppResult<Valu
 
 #[cfg(test)] mod tests {
     use super::*;
+    #[test] fn provider_and_transcript_survive_first_save_of_a_legacy_task() {
+        let root=std::env::temp_dir().join(uuid::Uuid::new_v4().to_string()); fs::create_dir_all(&root).unwrap();
+        let reference=uuid::Uuid::new_v4().simple().to_string();
+        let job=uuid::Uuid::new_v4().simple().to_string();
+        let id=uuid::Uuid::new_v4().simple().to_string();
+        save(&root,&json!({"id":reference,"kind":"reference","projectId":"p"})).unwrap();
+        save(&root,&json!({"id":job,"operation":"analyze","projectId":"p","referenceId":reference,"transcript":"原音轨文字","transcriptStatus":"transcribed"})).unwrap();
+        let saved=update(&root,"p",&json!({"id":id,"referenceId":reference,"analysisProvider":"doubao","appliedAnalysisId":job,"transcript":"不可信的前端文本"})).unwrap();
+        assert_eq!(saved["transcript"],"原音轨文字"); assert_eq!(saved["analysisProvider"],"doubao");
+        assert!(update(&root,"p",&json!({"id":id,"analysisProvider":"unknown"})).is_err());
+        assert_eq!(read(&root,&id).unwrap()["transcriptStatus"],"transcribed");
+        fs::remove_dir_all(root).unwrap();
+    }
     #[test] fn task_survives_before_video_and_groups_attempts_without_mutating_history() {
         let root=std::env::temp_dir().join(uuid::Uuid::new_v4().to_string()); fs::create_dir_all(&root).unwrap();
         let id=uuid::Uuid::new_v4().simple().to_string();

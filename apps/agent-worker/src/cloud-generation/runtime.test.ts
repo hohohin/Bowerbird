@@ -3,6 +3,13 @@ import { test } from "node:test";
 
 import { configFromEnv, mapArkHttpError, modelForService, arkImageRequestBody, KnownProviderError } from "./runtime.ts";
 
+test("accepted Bcoin size overrides the worker default, legacy input retains its default", () => {
+  const input = { schema_version: 1, media: "image" as const, prompt: "test", reference_images: [] };
+  const choice = { model: "pro", optimizePromptMode: null };
+  equal(arkImageRequestBody(input, choice, { arkImageSize: "2K" }).size, "2K");
+  equal(arkImageRequestBody({ ...input, billing: { output_size: "1K" } }, choice, { arkImageSize: "2K" }).size, "1K");
+});
+
 test("config requires dedicated control credentials", () => {
   const config = configFromEnv({
     GENERATION_CONTROL_URL: "https://example.supabase.co/functions/v1/generation-worker",

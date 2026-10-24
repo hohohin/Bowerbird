@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
@@ -103,7 +104,7 @@ export function FileWorkspaceMoveDialog({ onClose }: { onClose: () => void }) {
     </>}
     <p className="my-3 text-sm text-muted">请先完成或取消生成、Agent、工作流和分类任务。大目录在重启时需要较长时间，请等待迁移完成。</p>
     {move?.state === "completed" && <p role="status" className="my-3 text-sm break-all">{move.history ? "历史素材迁移已完成" : "上次迁移已完成"}：{move.target}。原目录保留在 {move.source}。</p>}
-    {move?.state === "failed" && <p role="alert" className="folder-error">{move.error}</p>}
-    {error && <p role="alert" className="folder-error">{error}</p>}
+    {move?.state === "failed" && <p role="alert" className="folder-error">{userErrorMessage(move.error, "资料迁移未完成，请检查目标位置和可用空间后重试。")}</p>}
+    {error && <p role="alert" className="folder-error">{userErrorMessage(error, "资料迁移未完成，请检查目标位置后重试。")}</p>}
   </ModalShell>;
 }

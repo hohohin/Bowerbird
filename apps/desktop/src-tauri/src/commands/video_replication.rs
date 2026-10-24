@@ -2,6 +2,7 @@
 mod douyin;
 mod cases;
 mod poster;
+mod local;
 use crate::{
     cloud::{AuthClient, CloudClient},
     core::paths::LibraryPaths,
@@ -274,7 +275,12 @@ async fn proxy_video(root: &Path, task: &Value) -> AppResult<Value> {
         .args([
             "-map",
             "0:v:0",
-            "-an",
+            "-map",
+            "0:a:0?",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "96k",
             "-vf",
             "scale=640:640:force_original_aspect_ratio=decrease:force_divisible_by=2,fps=10",
             "-c:v",
@@ -309,7 +315,7 @@ async fn execute(root: PathBuf, id: String, cloud: CloudClient, auth: AuthClient
             if task["submissionPending"] == true { return Err(error("提交结果尚未确认，请恢复原 Cloud 任务，不能重复提交")); }
             let mut request = json!({"action":"create","idempotency_key":format!("replication:{id}"),"operation":if analyze {"video-analysis"} else {"text-rewrite"},"image":null});
             if analyze {
-                patch(&root, &id, json!({"message":"正在制作无音轨分析代理"}))?;
+                patch(&root, &id, json!({"message":"正在准备分析视频（保留音轨）"}))?;
                 request["video"] = proxy_video(&root, &task).await?;
             } else { request["rewrite"] = json!({"inputText":rewrite_input(&task)?,"persona":task["persona"],"rules":task["rules"],"product":task["product"]}); }
             // Save the uncertain window before any possibly billable create.
@@ -324,7 +330,8 @@ async fn execute(root: PathBuf, id: String, cloud: CloudClient, auth: AuthClient
                 "succeeded" => {
                     let text = field(&response, "text");
                     if text.trim().is_empty() { return Err(error("Cloud 未返回结果或结果已过期")); }
-                    patch(&root, &id, if analyze { json!({"state":"analyzed","analysis":text,"message":"分析完成","error":"","charge":response["charge"]}) }
+                    let output: Value = serde_json::from_str(text).unwrap_or(Value::Null);
+                    patch(&root, &id, if analyze { json!({"state":"analyzed","analysis":output["analysisText"].as_str().unwrap_or(text),"transcript":output["transcript"],"transcriptStatus":output["transcriptStatus"],"message":"分析完成","error":"","charge":response["charge"]}) }
                         else { json!({"state":"rewritten","rewriteOriginalText":text,"rewrittenText":text,"message":"改写完成","error":"","charge":response["charge"]}) })?;
                     return Ok::<_, AppError>(());
                 }
@@ -357,6 +364,10 @@ fn start(root: PathBuf, id: String, app: &tauri::AppHandle) -> AppResult<Value> 
             return Err(e);
         }
     };
+    if value["operation"] == "analyze" && value["analysisProvider"] == "codex" {
+        tauri::async_runtime::spawn(local::execute(root,id));
+        return Ok(public(value));
+    }
     let cloud = app.state::<CloudClient>().inner().clone();
     let auth = app.state::<AuthClient>().inner().clone();
     tauri::async_runtime::spawn(execute(root, id, cloud, auth));
@@ -505,6 +516,12 @@ pub async fn video_replication(
                 return Err(error("未知操作"));
             }
             let mut task = json!({});
+            if operation == "analyze" {
+                let provider = data["analysisProvider"].as_str().unwrap_or("doubao");
+                if !["codex", "doubao"].contains(&provider) { return Err(error("分析供应商无效")); }
+                if provider == "codex" { local::preflight(&app).await?; }
+                task["analysisProvider"] = json!(provider);
+            }
             for key in [
                 "operation",
                 "caseId",
@@ -603,6 +620,7 @@ pub async fn video_replication(
                 task["generationJobId"] = json!(format!("replication-{id}"));
                 task["generationTurnKey"] = json!(uuid::Uuid::new_v4().simple().to_string());
             }
+            if task["analysisProvider"] == "codex" { task["model"]=json!("本机 Codex"); task["apiBase"]=json!("自有订阅"); }
             save(&root, &task)?;
             if operation == "generate" {
                 Ok(task)
@@ -693,6 +711,7 @@ pub async fn video_replication(
         "resume" => {
             let id = field(&data, "id").to_owned();
             let task = own(&root, &id, &project_id)?;
+            if task["analysisProvider"] == "codex" { return Err(error("本机分析无法查询原 Cloud 任务，请点击重新分析")); }
             if field(&task, "operation") == "generate" {
                 return Err(error("请在原生成会话中恢复视频任务"));
             }

@@ -224,6 +224,19 @@ impl EntitlementService {
         self.sync(auth).await.unwrap_or(current)
     }
 
+    pub async fn start_trial(&self, auth: &AuthClient) -> AppResult<EntitlementSnapshot> {
+        let endpoint = self.cloud.config().account_endpoint("entitlement")
+            .ok_or_else(|| AppError::Cloud("当前构建未配置 Bowerbird Cloud".into()))?;
+        let response = auth.send_authorized(self.cloud.http().post(endpoint)
+            .json(&serde_json::json!({"action":"start_trial"})), "领取体验失败").await?;
+        if !response.status().is_success() {
+            let body: serde_json::Value = response.json().await.unwrap_or_default();
+            return Err(AppError::Cloud(body.pointer("/error/message").and_then(|v| v.as_str())
+                .unwrap_or("领取体验失败，请稍后重试").into()));
+        }
+        self.sync(auth).await
+    }
+
     pub async fn redeem_code(&self, auth: &AuthClient, code: &str) -> AppResult<CodeRedemption> {
         if code.len() > 128 || code.trim().is_empty() {
             return Err(AppError::Cloud("请输入有效的兑换码".into()));

@@ -40,6 +40,7 @@ import { useStore } from "./store";
 import { api } from "./lib/api";
 import { prepareFileWorkspace } from "./lib/fileWorkspace";
 import { notify, notifyError, notifySuccess } from "./lib/notify";
+import { userErrorMessage } from "./lib/userError";
 import {
   creativeLaunchAssetIds,
   creativeLaunchTargetsProject,
@@ -632,7 +633,7 @@ function App() {
           if (phase === "error") notifyError(text, "Agent DS 本轮处理失败");
           window.dispatchEvent(new CustomEvent(AGENT_DS_DONE_EVENT));
         } else if (text) {
-          notify(text, "info");
+          notify(userErrorMessage(text, "助手正在处理，请稍候。"), "info");
         }
         return;
       }
@@ -851,7 +852,7 @@ function App() {
       <CloudAgentRuntimeCoordinator />
       <ToastViewport />
       <StartupUpdateDialog ready={!initializing} />
-      {!localFilesOpen && <FileDropImport />}
+      <FileDropImport />
       {/* 环境引导：codex/扩展/即梦由设置面板对应分区直接唤起，不再有「环境状态」总览 */}
       <CodexOnboarding />
       <ExtensionOnboarding />

@@ -195,6 +195,18 @@ const startedAt = Date.now();
 const outputDirectory = path.join(cloudDirectory, "artifacts");
 try {
   account = await createAccount();
+  // 0070 removed signup gifts; seed only the disposable test account after it
+  // has been registered for cleanup. The existing real-provider cost gates apply.
+  await jsonRequest("准备临时测试额度（非支付）", baseUrl + "/rest/v1/rpc/grant_topup_credits", {
+    method: "POST",
+    headers: adminHeaders,
+    body: JSON.stringify({
+      p_user_id: account.userId,
+      p_order_id: "unified-agent-e2e:" + account.userId,
+      p_amount: 30,
+      p_expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+    }),
+  });
   const referenceArtifactId = randomUUID();
   const manifestObject = {
     schemaVersion: 1,

@@ -1,0 +1,191 @@
+[
+  {
+    "id": "preset_classification_01",
+    "name": "海报",
+    "description": "围绕一个明确主题形成完整、独立的平面版式，主视觉、标题、辅助文字或图形之间具有明显的视觉层级。横版、竖版、方形均可，包括活动、产品、品牌等主题的海报。不能仅因为图片中有文字就判为海报；只有一张照片或插画、缺少明确版式组织依据时不输出。短标题占绝对主导、其他信息很少时，优先考虑「标题卡」。",
+    "name_en": "Poster",
+    "description_en": "A complete, self-contained graphic layout organized around a clear theme, with a distinct visual hierarchy among the main visual, headline, supporting text, or graphics. Landscape, portrait, and square formats all qualify, including posters for events, products, and brands. Do not classify an image as a Poster merely because it contains text; do not output this label for a photograph or illustration alone without clear evidence of an organized layout. When a short title overwhelmingly dominates and there is little other information, prefer Title Card."
+  },
+  {
+    "id": "preset_classification_02",
+    "name": "标志",
+    "description": "以独立的图形标识、字标、字母组合或组合标志为主要内容，也包括同一标志的变体、组合方式与构成展示。不要求识别出具体品牌名称，但应有明确的标识形态。角落水印、商品表面的小 Logo、普通正文中的品牌名称不单独触发此标签；主要展示标志在具体载体上的应用时，考虑「品牌应用图」。",
+    "name_en": "Logo",
+    "description_en": "The main content is a standalone graphic mark, wordmark, monogram, or combination mark, including variations, arrangements, and construction presentations of the same logo. Recognizing the specific brand name is not required, but there must be a clear visual identity mark. A corner watermark, a small logo on a product, or a brand name in ordinary body text does not independently trigger this label. When the main content demonstrates a logo applied to specific physical items or surfaces, consider Brand Applications."
+  },
+  {
+    "id": "preset_classification_03",
+    "name": "字体排版",
+    "description": "字形及文字本身的视觉组织构成画面重点，例如字体样张、字形变形、文字拼组，以及显著的字距、方向、大小或层次变化。常规标题和正文不因使用了文字就自动命中；以独立字标为主体时，优先考虑「标志」。如果一张海报同时以文字构图为主要视觉特征，可以同时命中「海报」与「字体排版」。",
+    "name_en": "Typography",
+    "description_en": "Letterforms and the visual organization of text itself are the focus, such as type specimens, altered letterforms, text-based compositions, and prominent changes in spacing, direction, size, or hierarchy. Conventional headings and body text do not qualify merely because they use text. When a standalone wordmark is the subject, prefer Logo. A poster whose principal visual feature is its text-based composition may receive both Poster and Typography."
+  },
+  {
+    "id": "preset_classification_04",
+    "name": "图案纹样",
+    "description": "由几何、花卉、符号等可识别的图形单元构成装饰性图样，可以重复排列、连续平铺，也可以形成有组织的单幅组合。判定重点是图形单元及其排列关系；以木纹、石纹、颗粒、纤维等表面质感为主时，优先考虑「材质纹理」。图案只是服装、包装或其他物品上的次要细节时，不单独输出此标签。",
+    "name_en": "Decorative Pattern",
+    "description_en": "A decorative design made from recognizable graphic units, such as geometric shapes, flowers, or symbols. The units may repeat, tile continuously, or form an organized composition within a single image. Judge the graphic units and their arrangement. When the focus is surface qualities such as wood grain, stone veining, granules, or fibers, prefer Material Texture. Do not output this label separately when a pattern is only a secondary detail on clothing, packaging, or another object."
+  },
+  {
+    "id": "preset_classification_05",
+    "name": "包装展示图",
+    "description": "以包装盒、包装袋、瓶罐、封套、贴标容器等包装载体的结构及表面图文为主要内容，包括立体展示、平面展开、多角度组合和包装细节展示。应能从画面确认包装形态或包装结构，不能把缺少包装依据的孤立插画、图形直接视为包装设计。包装只是背景陪衬时不命中；包装同时具有明确的产品展示或品牌应用特征时，可以交叉标注。",
+    "name_en": "Packaging Presentation",
+    "description_en": "The main content is the structure and surface graphics or text of packaging, such as boxes, bags, bottles, cans, sleeves, or labeled containers. This includes three-dimensional presentations, flat unfolded layouts, multiple-angle compositions, and packaging details. The image must establish a packaging form or structure; do not treat an isolated illustration or graphic as packaging design without evidence of packaging. Packaging that serves only as a background accessory does not qualify. When the packaging also has clear product-presentation or brand-application features, overlapping labels are allowed."
+  },
+  {
+    "id": "preset_classification_06",
+    "name": "品牌应用图",
+    "description": "同一标志、字样或一致的识别元素，被明确展示在名片、信纸、杯子、服饰、招牌、包装等具体载体上。较充分的依据包括多种载体使用同一视觉元素，或独立标志与承载该标志的物品被并置展示。单件商品上自然出现一个 Logo，本身不足以判定为品牌应用图；若包装也是画面的主要内容，可以同时命中「包装展示图」。",
+    "name_en": "Brand Applications",
+    "description_en": "The same logo, lettering, or consistent identity elements are clearly shown on specific items or surfaces, such as business cards, stationery, cups, clothing, signs, or packaging. Sufficient evidence includes the same visual element used across multiple types of items, or a standalone logo displayed alongside an object bearing that logo. A logo naturally appearing on a single product is not sufficient by itself. When packaging is also a main part of the image, Packaging Presentation may apply at the same time."
+  },
+  {
+    "id": "preset_classification_07",
+    "name": "白底产品图",
+    "description": "一个或少量产品、物件的完整或基本完整外观构成画面主体，背景为纯白或近白，明显的空间环境和陪衬道具很少，允许存在接触阴影或柔和投影。不要求出现品牌、价格或电商信息。物体本身是白色不代表符合此标签；主要展示产品局部时，优先考虑「产品局部特写」；人物构成主要主体时，按人像相关标签判断。",
+    "name_en": "White-Background Product Image",
+    "description_en": "The complete or nearly complete appearance of one or a few products or objects forms the main subject, against a white or near-white background with little evident spatial setting or supporting props. Contact shadows and soft cast shadows are allowed. Branding, pricing, or e-commerce information is not required. An object being white does not by itself qualify. When the main content is part of a product, prefer Product Detail Close-Up. When a person is the main subject, use the relevant portrait labels."
+  },
+  {
+    "id": "preset_classification_08",
+    "name": "场景产品图",
+    "description": "一个或少量产品、物件清楚地构成主要主体，并置于可辨识的生活空间、台面或搭建场景中，周边环境与主体形成摆放、使用或衬托关系。判断依据是物件与环境的主次关系，不推断商业用途。单纯的纯色或渐变背景不构成充分的场景依据；环境整体成为主要内容、物件只是点景时，归入「场景图」。",
+    "name_en": "Product in Context",
+    "description_en": "One or a few products or objects clearly form the main subject within a recognizable living space, tabletop setting, or constructed scene. The surrounding environment relates to the subject through placement, use, or visual support. Judge the visual priority of the object relative to the environment; do not infer commercial intent. A plain solid-color or gradient background alone is insufficient evidence of a setting. When the environment as a whole is the main content and objects are only incidental accents, use Environment Image."
+  },
+  {
+    "id": "preset_classification_09",
+    "name": "产品局部特写",
+    "description": "产品的部件、边缘、接口、接缝或表面局部占据主要画面，并且仍能从轮廓、结构或上下文确认其为某种器物的局部。将完整的小物件放大展示，不自动算作局部特写。若画面主要是连续纹路或表面肌理，具体物件身份和结构不突出，优先考虑「材质纹理」；局部特写同时带有明确解释性标注时，可与「产品图解」同时命中。",
+    "name_en": "Product Detail Close-Up",
+    "description_en": "A product's component, edge, connector, seam, or localized surface occupies most of the image, while its outline, structure, or context still identifies it as part of an object. Enlarging a small object shown in its entirety does not automatically make it a detail close-up. When the main content is continuous patterning or surface texture and the specific object's identity and structure are not prominent, prefer Material Texture. A detail close-up with clear explanatory annotations may also receive Product Diagram."
+  },
+  {
+    "id": "preset_classification_10",
+    "name": "产品图解",
+    "description": "以产品为对象，画面中存在可以确认的解释关系，例如尺寸标注、部件名称、结构分层、原理示意、功能对应或操作步骤。说明可以通过文字与图形结合，也可以主要通过结构图、箭头或步骤画面表达。只有 Logo、售价或广告口号不足以命中；当图形同时表达清楚的数据、流程或关系时，可以与「信息图」交叉标注。",
+    "name_en": "Product Diagram",
+    "description_en": "A product is the subject and the image contains an identifiable explanatory relationship, such as dimensions, component names, structural layers, operating principles, functions mapped to parts, or operating steps. The explanation may combine text and graphics or be conveyed mainly through structural diagrams, arrows, or sequences of step images. A logo, price, or advertising slogan alone is insufficient. When the graphics also clearly express data, a process, or relationships, Infographic may apply as an overlapping label."
+  },
+  {
+    "id": "preset_classification_11",
+    "name": "标题卡",
+    "description": "一个或少量短标题、章节文字或简短语句构成画面的主要信息，背景照片、图形、纹理或色块明显从属，正文和其他信息很少。不需要判断它是否用于视频片头、封面或章节过渡。具有多个层级的完整主题信息时，考虑「海报」；具有明显正文或条目结构时，考虑「图文卡片」；独立 Logo 不自动视为标题卡。",
+    "name_en": "Title Card",
+    "description_en": "One or a few short titles, chapter headings, or brief statements form the main information. Background photographs, graphics, textures, or color blocks are clearly subordinate, and there is little body text or other information. There is no need to determine whether it is intended as a video opening, cover, or chapter transition. When there is complete thematic information across multiple hierarchical levels, consider Poster. When there is a clear body-text or list structure, consider Information Card. A standalone logo is not automatically a Title Card."
+  },
+  {
+    "id": "preset_classification_12",
+    "name": "图文卡片",
+    "description": "以一条或多条可阅读的信息为核心，通过正文、条目、配图或图标，组织成相对独立的信息块，例如知识说明、内容清单、引用文字或简短介绍。方形、圆角和边框都不是必要条件。只有一句醒目大标题、缺少正文或信息块结构时，优先考虑「标题卡」；信息关系主要由图表、流程或结构示意表达时，可以同时考虑「信息图」。",
+    "name_en": "Information Card",
+    "description_en": "One or more readable pieces of information form the core, organized into a relatively self-contained information block using body text, list items, accompanying images, or icons. Examples include explanations, content lists, quotations, and brief introductions. A square shape, rounded corners, and borders are not required. When there is only one prominent large headline without body text or an information-block structure, prefer Title Card. When information relationships are expressed mainly through charts, processes, or structural diagrams, Infographic may also be considered."
+  },
+  {
+    "id": "preset_classification_13",
+    "name": "信息图",
+    "description": "画面通过统计图表、流程、时间线、分项对比、层级关系或结构示意来表达信息，图形结构本身承担数量、顺序、比较或关联的表达。装饰性小图标、箭头或色块不能单独作为判定依据；普通照片配一段文字不自动属于信息图。以产品为说明对象且符合上述特征时，可以同时命中「产品图解」。",
+    "name_en": "Infographic",
+    "description_en": "The image communicates information through statistical charts, processes, timelines, itemized comparisons, hierarchies, or structural diagrams. The graphic structure itself conveys quantity, sequence, comparison, or relationships. Decorative small icons, arrows, or color blocks alone are insufficient evidence. An ordinary photograph accompanied by a paragraph is not automatically an Infographic. When a product is being explained and the image meets these criteria, Product Diagram may apply at the same time."
+  },
+  {
+    "id": "preset_classification_14",
+    "name": "漫画页",
+    "description": "通过角色、动作和情境组织漫画叙事，可以由连续分格构成，也可以是具有明确漫画表达的单格画面。对话气泡、旁白框、拟声文字和连续情节是常见依据，但不要求全部出现，也不要求一定有文字。单张二次元角色插画不自动属于漫画页；只有无法确认性质的多格连续画面时，不应仅凭画风或精细程度区分漫画与分镜。",
+    "name_en": "Comic Page",
+    "description_en": "Characters, actions, and situations organize a comic narrative, either as a sequence of panels or as a single panel with clear comic storytelling. Speech balloons, narration boxes, sound-effect text, and a continuous plot are common evidence, but not all are required and text is not mandatory. A single anime-style character illustration is not automatically a Comic Page. When there is only a sequence of panels whose nature cannot be established, do not distinguish comics from storyboards solely by art style or level of finish."
+  },
+  {
+    "id": "preset_classification_15",
+    "name": "表情贴图",
+    "description": "以人物、动物或拟人对象的表情、动作，或简短的反应文字为主要内容，呈现为独立、紧凑的贴图形态，可以是单个图形，也可以成组展示。夸张表情、简化背景、透明背景、贴纸轮廓或粗描边可作为辅助依据，但不能单独决定分类。普通微笑人像、普通角色插画或一般透明背景切图，不自动命中此标签。",
+    "name_en": "Reaction Sticker",
+    "description_en": "The main content is the expression or action of a person, animal, or personified subject, or brief reaction text, presented in a compact, self-contained sticker form. It may be a single graphic or a set. Exaggerated expressions, simplified or transparent backgrounds, sticker-shaped outlines, and thick strokes can provide supporting evidence, but none determines the classification alone. An ordinary smiling portrait, ordinary character illustration, or generic cutout on a transparent background does not automatically qualify."
+  },
+  {
+    "id": "preset_classification_16",
+    "name": "分镜板",
+    "description": "按镜头顺序排列的一组画面，并具有能够确认镜头表达的线索，例如镜头编号、景别、时长、机位、运镜方向或镜头动作说明。多格布局、黑白画面、粗略绘制都不能单独作为分镜依据；单张具有电影感的图片也不属于分镜板。与漫画难以区分时，应依据明确的镜头信息判断，缺少依据则不输出此标签。",
+    "name_en": "Storyboard",
+    "description_en": "A sequence of images arranged in shot order, with evidence establishing shot planning, such as shot numbers, shot sizes, durations, camera positions, camera-movement directions, or descriptions of action within shots. A multi-panel layout, black-and-white images, or rough drawings alone do not establish a storyboard; a single cinematic-looking image does not qualify either. When it is difficult to distinguish from a comic, rely on explicit shot information. Without that evidence, do not output this label."
+  },
+  {
+    "id": "preset_classification_17",
+    "name": "角色设定图",
+    "description": "围绕同一角色或同一组角色，对多视角、多表情、服装或配色变体、比例、局部结构等进行系统化展示，画面中能够看到对应、比较或说明关系。单个角色画得细致，不足以说明它是角色设定图；任意人物图片拼贴也不自动成立。完整角色形象与背面视图、表情或细节说明共同展示时，可以同时命中「角色立绘」。",
+    "name_en": "Character Sheet",
+    "description_en": "A systematic presentation of the same character or group of characters, covering multiple views, expressions, clothing or color variants, proportions, or local structural details, with visible correspondence, comparison, or explanatory relationships. A single finely rendered character is not sufficient to establish a Character Sheet, nor is an arbitrary collage of people. When a complete character depiction is shown together with a rear view, expressions, or detail explanations, Standalone Character Art may also apply."
+  },
+  {
+    "id": "preset_classification_18",
+    "name": "场景图",
+    "description": "以环境本身为主要内容，包括室内空间、建筑环境、自然景观和虚构环境，主要呈现空间整体、景物布局及远近关系。允许出现人物或物件作为陪衬，但环境必须是画面重点。人物或产品构成明确主体、环境只是背景时，不因画面中存在环境就输出此标签；产品与场景共同出现且产品主导时，优先考虑「场景产品图」。",
+    "name_en": "Environment Image",
+    "description_en": "The environment itself is the main content, including interiors, architectural settings, natural landscapes, and fictional environments. The image primarily presents the overall space, the arrangement of scenery, and near-to-far spatial relationships. People or objects may appear as supporting elements, but the environment must be the focus. When a person or product is the clear main subject and the environment is merely the background, do not output this label just because an environment is present. When a product and a setting appear together and the product dominates, prefer Product in Context."
+  },
+  {
+    "id": "preset_classification_19",
+    "name": "道具图",
+    "description": "按“器物的设定或造型展示”识别：工具、装备、武器、容器等独立物件的轮廓、构造或设计方案构成画面主体，常见多视角、部件拆分、细节标注或造型变化等展示方式。场景中出现普通物件不单独触发此标签，也不能仅凭三维感推断它是道具。只有普通成品展示、缺少器物设定或造型展示依据时，采用能够明确确认的产品或静物标签。",
+    "name_en": "Prop Design",
+    "description_en": "Identify this by an object's design or form presentation: the outline, construction, or design concept of a standalone tool, piece of equipment, weapon, container, or similar object forms the main subject. Common presentations include multiple views, separated components, detail annotations, or variations in form. Ordinary objects appearing in a scene do not independently trigger this label, and a three-dimensional appearance alone does not establish a prop. When only an ordinary finished object is presented without evidence of object-design or form exploration, use the product or still-life labels that can be clearly established."
+  },
+  {
+    "id": "preset_classification_20",
+    "name": "角色立绘",
+    "description": "一个或少量角色以独立形象展示，轮廓、服饰与姿态清楚，背景简化、透明或明显从属；可以是全身或半身，也不要求角色必须站立。需要有明确的角色形象展示依据，例如具有辨识度的角色造型、角色名称或成组的独立角色展示。普通白底人像不能仅因背景简单就认定为立绘；角色同时完整呈现全身时，可以命中「全身人像」。",
+    "name_en": "Standalone Character Art",
+    "description_en": "One or a few characters are presented as self-contained figures with clear silhouettes, clothing, and poses, against a simplified, transparent, or clearly subordinate background. They may be full-body or partial-body, and do not have to be standing. There must be clear evidence of a character presentation, such as a distinctive character design, a character name, or a group of separately presented characters. An ordinary portrait on white cannot be classified this way solely because the background is simple. When the character's full body is also shown, Full-Body Portrait may apply."
+  },
+  {
+    "id": "preset_classification_21",
+    "name": "面部特写",
+    "description": "人物或人形角色的脸部、头部或五官局部构成主要画面，躯干基本不出现，肩部至多作为少量陪衬。眼睛、嘴唇等五官细节可以属于此类。肩部、胸部或更多躯干已经成为构图的重要组成时，优先考虑「半身人像」；不能仅因为普通人物图片中能看见脸，就输出面部特写。",
+    "name_en": "Facial Close-Up",
+    "description_en": "The face, head, or details of facial features of a person or humanoid character dominate the image. The torso is essentially absent, and the shoulders are at most minor supporting elements. Details such as eyes or lips may qualify. When shoulders, chest, or more of the torso are already an important part of the composition, prefer Partial-Body Portrait. Do not output Facial Close-Up merely because a face is visible in an ordinary image of a person."
+  },
+  {
+    "id": "preset_classification_22",
+    "name": "半身人像",
+    "description": "人物或人形角色的头部与部分躯干构成主要内容，身体有明显裁切，未完整或基本完整地呈现全身。包括头肩像、胸像和腰部以上人像；本词表也将裁切到大腿或膝部的七分身画面统一归入此类，不要求恰好裁切在腰部。面部几乎独占画面时归入「面部特写」；只有独立手部、腿部等身体局部时，不自动归入半身人像。",
+    "name_en": "Partial-Body Portrait",
+    "description_en": "The head and part of the torso of a person or humanoid character form the main content, with a clearly cropped body rather than a complete or nearly complete full-body view. This includes head-and-shoulders, bust, and waist-up portraits. This vocabulary also groups portraits cropped at the thighs or knees into this category; the crop need not be exactly at the waist. When the face occupies almost the entire image, use Facial Close-Up. Isolated body parts such as hands or legs do not automatically qualify as Partial-Body Portrait."
+  },
+  {
+    "id": "preset_classification_23",
+    "name": "全身人像",
+    "description": "主要人物或人形角色从头到脚完整或基本完整地呈现，能够观察整体身体轮廓与姿态，站立、坐姿、卧姿和动作姿态均可。轻微遮挡或少量裁切脚尖不必排除，但明显裁去腿部或下半身时不属于此类。背景中很小的全身人物不单独触发标签；此标签不限视觉表现形式，可以与「角色立绘」或「群像」同时成立。",
+    "name_en": "Full-Body Portrait",
+    "description_en": "The main person or humanoid character is shown completely or nearly completely from head to toe, allowing the overall body outline and pose to be observed. Standing, sitting, lying, and action poses all qualify. Minor occlusion or a small crop at the toes need not exclude the image, but a substantial crop of the legs or lower body does. A tiny full-body figure in the background does not independently trigger the label. This label is not restricted to any visual medium or style and may apply together with Standalone Character Art or Group Portrait."
+  },
+  {
+    "id": "preset_classification_24",
+    "name": "群像",
+    "description": "两个及以上人物或角色，在同一场面或共同构图中一起构成主要主体，例如合照、群体活动或群体角色画面。背景路人、远处陪衬人物不计入主要人物数量。同一角色的多视图、表情组，或同一人物的多张照片拼板，不因为出现多个人形就自动判为群像。符合明确取景范围时，可以与相应的人像标签交叉标注。",
+    "name_en": "Group Portrait",
+    "description_en": "Two or more people or characters together form the main subject within the same scene or shared composition, such as a group photograph, group activity, or character ensemble. Background passersby and distant supporting figures do not count toward the number of main subjects. Multiple views or expressions of the same character, or a montage of several photographs of the same person, do not automatically qualify merely because multiple human forms appear. When a definite framing range is established, the corresponding portrait labels may also apply."
+  },
+  {
+    "id": "preset_classification_25",
+    "name": "静物",
+    "description": "以器皿、花卉、食物、书籍等静态对象为主要内容，通过物体的摆放、组合、光影或色彩关系构成画面，可以是单件，也可以是多件组合。不能仅因为物体没有运动就判为静物。孤立单件物品的白底外观展示，优先考虑「白底产品图」；环境整体成为主体时，考虑「场景图」。同时具有明确产品主体和静物构图时，可以与「场景产品图」交叉。",
+    "name_en": "Still Life",
+    "description_en": "Static subjects such as vessels, flowers, food, or books are the main content, with a composition built through their arrangement, grouping, light and shadow, or color relationships. A single object or a group may qualify. Do not classify something as Still Life solely because the object is not moving. For an isolated single item whose appearance is presented against white, prefer White-Background Product Image. When the overall environment becomes the subject, consider Environment Image. When there is both a clear product subject and a still-life composition, Product in Context may apply as an overlapping label."
+  },
+  {
+    "id": "preset_classification_26",
+    "name": "材质纹理",
+    "description": "以表面的颗粒、纤维、纹路、凹凸或肌理为主要视觉内容，例如木纹、石纹、皮革、金属拉丝和布面质感。不要求纹理能够无缝平铺，也不根据画面推断真实材料来源或制作方式。可识别的装饰图形单元及其排列成为重点时，优先考虑「图案纹样」；产品部件身份和结构关系明显成为主体时，优先考虑「产品局部特写」。",
+    "name_en": "Material Texture",
+    "description_en": "The main visual content is surface granules, fibers, grain, grooves, relief, or texture, such as wood grain, stone veining, leather, brushed metal, or fabric texture. Seamless tiling is not required, and the image should not be used to infer the actual material's source or how it was made. When recognizable decorative graphic units and their arrangement become the focus, prefer Decorative Pattern. When the identity of a product component and its structural relationships clearly become the subject, prefer Product Detail Close-Up."
+  },
+  {
+    "id": "preset_classification_27",
+    "name": "布光示意图",
+    "description": "通过灯位符号、光照方向、光路、灯具与主体或相机的相对位置，以及相关标注，明确表达布光关系。可以是平面示意、三维示意，也可以是在现场照片上添加说明。普通摄影棚照片、灯具照片或单纯呈现光影效果的作品，若没有明确说明布光关系的图解或标注，不属于布光示意图。",
+    "name_en": "Lighting Diagram",
+    "description_en": "Lighting relationships are explicitly explained through light-position symbols, illumination directions, light paths, the relative positions of lights, subject, or camera, and associated annotations. The image may be a two-dimensional diagram, a three-dimensional diagram, or an on-location photograph with added explanations. Ordinary studio photographs, photographs of lighting equipment, or works that simply show light and shadow effects do not qualify without diagrams or annotations explicitly explaining the lighting arrangement."
+  }
+]

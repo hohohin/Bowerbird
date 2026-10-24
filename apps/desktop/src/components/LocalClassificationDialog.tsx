@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState } from "react";
 import { globalClassification, localClassification, mergeClassificationProgress, projectClassification, type ClassificationLabel, type LocalClassificationStatus } from "../lib/localClassification";
@@ -17,7 +18,7 @@ function JevResults({ progress }: { progress: NonNullable<LocalClassificationSta
     <div className="space-y-2 p-3">
       <h5 className="font-medium">Jev 返回结果</h5>
       <p className="text-xs text-muted break-all">素材：{progress.asset.name}</p>
-      <p className="text-xs" role="status">{progress.message}</p>
+      <p className="text-xs" role="status">{userErrorMessage(progress.message, progress.report?.error ? "这张图片未完成分类，请稍后重试。" : "正在识别图片…")}</p>
       <p className="text-xs text-muted">所有启用标签统一按原始概率排序，最多取 3 个且每个不低于 42%；「无明显匹配项」参与判断，不保存为标签。</p>
       {!report && <p className="text-xs text-muted">暂无 Jev 返回内容</p>}
     </div>
@@ -58,11 +59,11 @@ function JevResults({ progress }: { progress: NonNullable<LocalClassificationSta
       </section>
       <div className="space-y-2 p-3">
         <p className="text-xs text-muted">使用候选原始概率，不重新归一化，也不以 Choice 整体置信度代替。只有没有合格标签时才由 Cloud 补充。</p>
-        {report.error && <p className="text-xs text-red-400">本图未采用：{report.error}</p>}
-        <details className="text-xs">
+        {report.error && <p className="text-xs text-red-400">本图未采用：{userErrorMessage(report.error, "未能识别这张图片，请稍后重新分类。")}</p>}
+        {import.meta.env.DEV && <details className="text-xs">
           <summary className="cursor-pointer text-muted">查看 Jev 原始返回</summary>
           <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded bg-panel2 p-2">{JSON.stringify(report.response, null, 2)}</pre>
-        </details>
+        </details>}
       </div>
     </>}
   </section>;
@@ -210,7 +211,7 @@ function ClassificationSettings({ onClose, folder, globalScope, globalPaths, sel
         <span className="text-xs text-muted">分类目标</span>
         <p className="text-sm font-medium" title={folder?.root ?? targetName}>{targetName}</p>
         {folder && <p className="text-xs text-muted" title={folder.root}>{folder.root}</p>}
-        {showProgress && status.busy && <p role="status" className="text-xs text-muted">{status.message || "正在分类…"}</p>}
+        {showProgress && status.busy && <p role="status" className="text-xs text-muted">{userErrorMessage(status.message, "正在分类…")}</p>}
       </div>
       {runControls}
     </div> : undefined}>
@@ -229,7 +230,7 @@ function ClassificationSettings({ onClose, folder, globalScope, globalPaths, sel
         {status?.folder_root && status.busy && <p role="status" className="text-xs break-all">正在分类文件夹：{status.folder_root}</p>}
         {status?.busy && !sameTarget && <div className="space-y-2"><p role="status">另一分类范围的任务正在运行，完成或停止后可处理当前目标。</p><button className="app-modal-button" disabled={working} onClick={() => void action(() => local.stop())}>停止当前任务</button></div>}
       </section>}
-      {error && <p role="alert" className="text-red-400">{error}</p>}
+      {error && <p role="alert" className="text-red-400">{userErrorMessage(error, "分类操作未完成，请稍后重试。")}</p>}
       {!folder && !globalScope && <section aria-label="新素材自动分类" className="rounded-lg border border-edge p-3 space-y-2">
         <label className="flex items-center gap-2">
           <input type="checkbox" checked={status?.enabled ?? false} disabled={!status || working || (!status.enabled && status.busy)}
@@ -237,7 +238,7 @@ function ClassificationSettings({ onClose, folder, globalScope, globalPaths, sel
           自动处理新素材
         </label>
         <p className="text-xs text-muted">全库设置：自动分类新采集、导入及生成的图片，也会补处理库内尚未分类的图片。</p>
-        <p className="text-xs text-muted">使用云端分类，累计 5 张图片获得标签扣 1 积分，无法判断或请求失败不计数。</p>
+        <p className="text-xs text-muted">使用云端分类，每张成功获得标签扣 1 Bcoin，包含必要的补标签；无法判断或请求失败不收费。</p>
       </section>}
       <ClassificationPlayback status={showProgress ? status : null} />
       {import.meta.env.DEV && showProgress && status && <ClassificationDiagnostics status={status} />}
@@ -245,15 +246,15 @@ function ClassificationSettings({ onClose, folder, globalScope, globalPaths, sel
         <div className="space-y-1">
           <h3 className="font-medium">云端分类</h3>
           <p className="text-xs text-muted">优先匹配已有标签，没有合适类别时再补充新标签。</p>
-          <p className="text-xs text-muted">累计 5 张图片获得标签扣 1 积分，未满 5 张跨批次累计；无法判断或请求失败不计数。</p>
+          <p className="text-xs text-muted">每张成功获得标签扣 1 Bcoin，技术重试不重复收费；无法判断或请求失败退回预留。</p>
         </div>
         {runControls}
         {folder && <p className="text-xs text-muted">按需扫描当前文件夹，关闭面板后任务继续。</p>}
         {globalScope && <p className="text-xs text-muted">按需扫描已添加位置，离线或不可读文件会跳过并显示原因。</p>}
         {showProgress && <>
           {statusIsCloud && jevResults}
-          {status.message && <p role="status" aria-live="polite">{status.message}</p>}
-          {status.last_error && <p className="text-xs text-red-400">最近一次未完成原因：{status.last_error}</p>}
+          {status.message && <p role="status" aria-live="polite">{userErrorMessage(status.message, status.busy ? "正在分类…" : status.last_error ? "本轮分类未完成，请稍后重试。" : "本轮处理结束")}</p>}
+          {status.last_error && <p className="text-xs text-red-400">最近一次未完成原因：{userErrorMessage(status.last_error, "部分素材分类未完成，请稍后重试。")}</p>}
           {status.total > 0 && <p className="text-xs text-muted">已尝试 {status.done} / {status.total} · 成功 {Math.max(0, status.done - status.failed)} · 未完成 {status.failed}</p>}
         </>}
       </section>}
@@ -328,7 +329,7 @@ function ClassificationSettings({ onClose, folder, globalScope, globalPaths, sel
   </ModalShell>
     <ConfirmDialog open={confirmRescan} title="确认重新分类" danger
       message={<>此操作会删除当前范围内参与重分类素材的已有自动标签，再重新分类，是否确认？已有人工归类的素材会跳过，人工正反例及来源不明的旧版归属会保留。
-        {error && <span role="alert" className="block text-red-400">{error}</span>}
+        {error && <span role="alert" className="block text-red-400">{userErrorMessage(error, "分类设置未保存，请稍后重试。")}</span>}
       </>}
       confirmLabel={working ? "正在开始…" : "确认并进行分类"} confirmDisabled={!canRun}
       onConfirm={() => { if (canRun) void action(async () => { await startClassification({ pendingOnly: false }); setConfirmRescan(false); }); }}
@@ -336,7 +337,7 @@ function ClassificationSettings({ onClose, folder, globalScope, globalPaths, sel
     <ConfirmDialog open={deleting.length > 0} title={deleting.length === 1 ? `删除标签「${deleting[0].name}」` : `删除 ${deleting.length} 个标签`}
       message={<>
         {folder ? "将从此文件夹的分类记录中移除这些标签，并删除相关示例、排除记录和待匹配任务。仅影响上述分类范围，独立分类目录和素材库不受影响。" : "将从本机全局索引（含历史素材）中移除这些标签，并删除相关示例、排除记录和待匹配任务。各目录的独立分类记录保留。"}素材文件会保留，此操作无法撤销。后续重新识别仍可能生成同名标签。
-        {error && <span role="alert" className="block text-red-400">{error}</span>}
+        {error && <span role="alert" className="block text-red-400">{userErrorMessage(error, "分类设置未保存，请稍后重试。")}</span>}
       </>}
       confirmLabel={working ? "正在删除…" : "确认删除"} danger confirmDisabled={busy}
       onConfirm={() => void deleteLabels()} onCancel={() => { if (!lock.current) { setDeleting([]); setError(""); } }} />

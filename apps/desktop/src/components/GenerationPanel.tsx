@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { DreaminaTaskCredit } from "./creation/DreaminaCredits";
 import { DreaminaTaskDiagnostics } from "./creation/DreaminaTaskDiagnostics";
 import { GenerationSessionSurface } from "./GenerationSessionSurface";
@@ -136,7 +137,7 @@ export function GenerationPanel({
         : cloudBalance <= 0
           ? "积分不足"
           : "Bowerbird Cloud 不可用"
-      : targetHealth?.reason || "当前 provider 不可用";
+      : userErrorMessage(targetHealth?.reason, "当前生成服务暂不可用，请在设置中检查登录状态。");
   // 重试要新开 job（版本分支），与「重新编辑」同过并行上限门。
   const canStartAnother = canStartAnotherJob(cloudEntitlement, runningJobCount);
 
@@ -963,7 +964,7 @@ function TurnView({
           ) : turn.error ? (
             <div className="space-y-1.5 rounded border border-red-500/40 bg-red-500/10 p-2">
               <div className="text-[11px] font-semibold text-red-300">❌ 生成失败</div>
-              <pre className="whitespace-pre-wrap break-all text-[11px] text-red-200/90">{turn.error}</pre>
+              <pre className="whitespace-pre-wrap break-all text-[11px] text-red-200/90">{userErrorMessage(turn.error, "本次生成未完成，请稍后重试。")}</pre>
               {turn.media === "video" && turn.provider === "jimeng" && <DreaminaTaskDiagnostics submitId={turn.submitId} />}
               <button
                 onClick={onRetry}
@@ -983,7 +984,7 @@ function TurnView({
               {/* 流式过程日志（codex CLI 输出），生成期间实时滚动 */}
               {streaming && (
                 <pre className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded border border-edge bg-panel px-2.5 py-2 font-mono text-[10.5px] leading-4 text-muted">
-                  {streaming}
+                  {userErrorMessage(streaming, "生成仍在进行，请稍候。详细运行记录可从会话菜单复制。")}
                 </pre>
               )}
             </div>
@@ -1222,8 +1223,7 @@ function GenEditComposer({
             : "Bowerbird Cloud 不可用"
       : !canUseByo(cloudEntitlement)
         ? "升级 Pro 解锁本机 Codex / 即梦 CLI"
-        : (activeGenProvider === "jimeng" ? dreaminaHealth?.reason : codexHealth?.reason) ||
-          "当前 provider 不可用";
+        : userErrorMessage(activeGenProvider === "jimeng" ? dreaminaHealth?.reason : codexHealth?.reason, "当前生成服务暂不可用，请在设置中检查登录状态。");
 
   // 编辑坞高度 → CSS 变量：瀑布流滚动容器据此留出底部 padding，避免坞盖住最后一行素材。
   const dockRef = useRef<HTMLDivElement>(null);

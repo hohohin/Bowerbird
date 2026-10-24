@@ -12,6 +12,7 @@ import { corsHeaders } from "../_shared/limits.ts";
 import {
   catalogue,
   discoveryResult,
+  englishMode,
   hash,
   hasMatches,
   jpeg,
@@ -19,8 +20,9 @@ import {
   readJson,
   text,
 } from "./protocol.ts";
-import { PROMPT } from "./prompt.ts";
+import { discoveryPrompt } from "./prompt.ts";
 import { recordDiscoveryUsage } from "./usage.ts";
+import { translateBatch, translationBatches } from "./translation.ts";
 
 function positive(name: string, fallback?: number): number {
   const value = Number(Deno.env.get(name) ?? fallback);
@@ -34,7 +36,7 @@ function rpcError(error: any): never {
   if (detail === "insufficient_credits") {
     throw new ApiError(
       "insufficient_credits",
-      "积分不足，分类需预留 1 积分，累计成功 5 张后扣除",
+      "Bcoin 不足，分类每张预留 1 Bcoin，成功获得标签后扣除",
     );
   }
   if (detail === "understand_daily_limit") {
@@ -109,17 +111,14 @@ export async function handler(req: Request): Promise<Response> {
       }
       const apiKey = Deno.env.get("JEV_API_KEY")?.trim();
       if (!apiKey) throw new ApiError("not_configured", "云端 Jev 尚未配置");
-      const cost = positive("JEV_CLASSIFICATION_COST_MICROS"); // Includes possible Cloud fallback; conservative reservation.
+      const batches = translationBatches(input.translations);
+      // Translation shares the image's charge but each bounded supplier call
+      // reserves an additional conservative internal cost budget.
+      const cost = positive("JEV_CLASSIFICATION_COST_MICROS") * (1 + batches.length);
+      if (!Number.isSafeInteger(cost)) throw new ApiError("not_configured", "分类成本预算配置无效");
       const { error: cleanupError } = await admin.rpc("cleanup_classification");
       if (cleanupError) rpcError(cleanupError);
       await ensureDailyCredits(admin, userId!);
-      const { data: tier, error: tierError } = await admin.from("subscriptions")
-        .select("tier,status,current_period_end").eq("user_id", userId)
-        .maybeSingle();
-      if (tierError) rpcError(tierError);
-      const paid = tier && tier.tier !== "free" && tier.status === "active" &&
-        (!tier.current_period_end ||
-          Date.parse(tier.current_period_end) > Date.now());
       const { data: claim, error } = await admin.rpc("begin_classification", {
         p_user_id: userId,
         p_key: key,
@@ -129,13 +128,47 @@ export async function handler(req: Request): Promise<Response> {
         p_cost_micros: cost,
         p_daily_limit: positive("DAILY_COST_LIMIT_CNY", 500) * 1_000_000,
         p_rate_limit: null, // Classification has no Bowerbird per-user frequency limit.
-        p_free_limit: paid ? null : positive("FREE_CAPTION_DAILY_LIMIT", 10),
+        p_free_limit: null, // Bcoin usage is available to every tier; wallet and global cost limits still apply.
       });
       if (error) rpcError(error);
-      if (!claim.claimed) {
+      if (!claim.claimed && !(batches.length && claim.request.status === "judging")) {
         return jsonResponse(replay(claim.request, "judge"), 200, cors);
       }
-      claimedId = claim.request.id;
+      const ticket = claim.request.id;
+      let translations = [];
+      if (batches.length) {
+        const { data: preparation, error: prepareError } = await admin.rpc("claim_classification_preparation", {
+          p_user_id: userId, p_id: ticket, p_batch_count: batches.length,
+          p_provider: (Deno.env.get("BOWERBIRD_CLOUD_MOCK") ?? "true") === "true" ? "mock" : "ark",
+          p_requested_model: Deno.env.get("ARK_VISION_MODEL")?.trim() || null,
+        });
+        if (prepareError) {
+          // Even the first begin caller may lose the preparation claim to a
+          // concurrent replay. Only a known operation owner may fail/refund it.
+          rpcError(prepareError);
+        }
+        translations = preparation.translations;
+        if (preparation.phase === "busy") return jsonResponse({ preparing: true, retry_after_ms: 1000,
+          classification_id: ticket, prompt_language: "en", label_translations: translations }, 200, cors);
+        claimedId = ticket;
+        if (preparation.phase === "translate") {
+          const translated = await translateBatch(admin, userId!, ticket, preparation.batch, batches[preparation.batch]);
+          // A lost cache-write acknowledgement must preserve the same ticket:
+          // its committed translation can be recovered without paying twice.
+          settling = true;
+          const { data: saved, error: saveError } = await admin.rpc("finish_classification_preparation", {
+            p_user_id: userId, p_id: ticket, p_batch: preparation.batch, p_translations: translated,
+          });
+          if (saveError) rpcError(saveError);
+          return jsonResponse({ preparing: true, retry_after_ms: 0, classification_id: ticket,
+            prompt_language: "en", label_translations: saved }, 200, cors);
+        }
+      } else claimedId = ticket;
+      for (const label of translations) {
+        const criterion = input.request.questions.labels.criteria[label.key] as Record<string, unknown>;
+        criterion.name = label.name;
+        criterion.description = label.description;
+      }
       let response: any;
       if (input.count === 0) {
         response = {
@@ -191,6 +224,7 @@ export async function handler(req: Request): Promise<Response> {
         response = await readJson(upstream, 512 * 1024);
       }
       const success = hasMatches(response, input.count, input.minProbability);
+      if (input.english) response = { ...response, prompt_language: "en", label_translations: translations };
       settling = true;
       const row = await advance(
         !success && body.allow_discovery ? "await_discovery" : "judge_done",
@@ -203,8 +237,8 @@ export async function handler(req: Request): Promise<Response> {
       if (!/^[0-9a-f-]{36}$/i.test(ticket)) {
         throw new ApiError("invalid_request", "分类凭据无效");
       }
-      const bytes = jpeg(body.image), labels = catalogue(body.labels);
-      const instruction = `${PROMPT}\n当前完整词表（JSON）：${
+      const bytes = jpeg(body.image), labels = catalogue(body.labels), english = englishMode(body);
+      const instruction = `${discoveryPrompt(english)}\n当前完整词表（JSON）：${
         JSON.stringify(labels)
       }`;
       if (instruction.length > 20_000) {
@@ -237,8 +271,9 @@ export async function handler(req: Request): Promise<Response> {
         operation: "classify",
         image: { mime: "image/jpeg", base64: body.image },
         instruction,
+        maxOutputTokens: english ? 6000 : 2000,
       }, (usage) => recordDiscoveryUsage(admin, userId!, ticket, usage));
-      const parsed = discoveryResult(result.text, labels);
+      const parsed = discoveryResult(result.text, labels, english);
       settling = true;
       const row = await advance("discovery_done", {
         p_response: parsed.value,

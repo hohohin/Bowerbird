@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Check, ChevronDown, Download, Palette, Pencil, RotateCcw, Sparkles, Trash2 } from "lucide-react";
 import { save as saveFileDialog } from "@tauri-apps/plugin-dialog";
@@ -324,7 +325,7 @@ function BrandVisualSession({ folder }: { folder: { id: string; name: string; pr
         <button className="app-modal-button is-primary" disabled={draft && !!invalid} onClick={draft ? confirmProfile : close}><Check size={15} />{draft ? "保存规范" : "完成"}</button>
       </> : <><VisualProfileImportButton disabled={!!deleting} /><button className="app-modal-button" onClick={close}>取消</button><button className="app-modal-button is-primary" disabled={!ready} onClick={summarize}><Sparkles size={15} />开始提炼</button></>}
     </>}>
-    {error && <div className="bv-message is-error" role="alert"><span>{error}</span>{!detail && !busy && !deleting && <button onClick={() => void perform("正在重新读取…", async () => { await readSource(); })}>重新读取图片</button>}</div>}
+    {error && <div className="bv-message is-error" role="alert"><span>{userErrorMessage(error, "视觉规范操作未完成，请稍后重试。")}</span>{!detail && !busy && !deleting && <button onClick={() => void perform("正在重新读取…", async () => { await readSource(); })}>重新读取图片</button>}</div>}
     {deleting && <div ref={deleteMessage} className="bv-message" role="alert"><span>删除「{deleting.name} · v{deleting.version}」？删除后将无法在创作中选用；原素材和已生成内容会保留。</span></div>}
     {notice && <div className="bv-message" role="status">{notice}</div>}
     {detail?.extractor === "shared_file" && <p className="bv-hint">这是导入的独立规范，不包含原图。{draft ? "请查看规则，点击「保存规范」后使用。" : "已保存，可在创作中选择使用。"}</p>}
@@ -340,7 +341,7 @@ function BrandVisualSession({ folder }: { folder: { id: string; name: string; pr
       <section className="bv-brand-heading"><div className="bv-brand-icon"><Palette size={23} /></div><div><span>视觉规范 · v{detail.version}</span><h3>{detail.name}</h3></div>{draft && <button className="bv-text-button" onClick={() => setEditing(!editing)}><Pencil size={13} />{editing ? "预览" : "微调描述"}</button>}</section>
       {detail.extractor !== "shared_file" && <section className="bv-saved-sources" aria-label="提炼时的素材">
         <h4>提炼时的素材 <span>{detail.sourceAssetIds?.length ?? detail.sourceCount} 张</span></h4>
-        {savedSources?.profileId !== detail.id ? <p className="bv-hint">正在读取当时的素材…</p> : savedSources.error ? <div className="bv-message" role="alert"><span>{savedSources.error}</span><button onClick={() => setSourceRetry((n) => n + 1)}>重新读取来源素材</button></div> : detail.sourceAssetIds?.length ? <div className="bv-image-grid">{detail.sourceAssetIds.map((id, index) => <SourceThumbnail key={id} asset={savedSources.assets.find((asset) => asset.id === id)} index={index} />)}</div> : <p className="bv-hint">该版本没有可读取的来源素材记录。</p>}
+        {savedSources?.profileId !== detail.id ? <p className="bv-hint">正在读取当时的素材…</p> : savedSources.error ? <div className="bv-message" role="alert"><span>{userErrorMessage(savedSources.error, "来源素材暂时无法读取，请重试。")}</span><button onClick={() => setSourceRetry((n) => n + 1)}>重新读取来源素材</button></div> : detail.sourceAssetIds?.length ? <div className="bv-image-grid">{detail.sourceAssetIds.map((id, index) => <SourceThumbnail key={id} asset={savedSources.assets.find((asset) => asset.id === id)} index={index} />)}</div> : <p className="bv-hint">该版本没有可读取的来源素材记录。</p>}
       </section>}
       <p className="bv-overview">{needsDirection ? "发现了不止一种视觉风格。选择你想延续的感觉，我们会保留对应的品牌特征。" : brandOverview({ ...detail, summary: direction ? "" : detail.summary, rules: visibleRules })}</p>
       {detail.extractor !== "shared_file" && detail.sourceCount < 3 && <p className="bv-hint">这是从当前图片总结的初步风格，补充更多品牌作品后可以进一步完善。</p>}

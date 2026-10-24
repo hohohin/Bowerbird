@@ -1,4 +1,5 @@
 export type ReplicationOperation = "analyze" | "rewrite" | "generate";
+export type ReplicationAnalysisProvider = "codex" | "doubao";
 
 export interface ReplicationReference {
   id: string;
@@ -20,6 +21,7 @@ export interface ReplicationInput {
   operation: ReplicationOperation;
   title: string;
   referenceId?: string;
+  analysisProvider?: ReplicationAnalysisProvider;
   sourceAnalysisId?: string;
   sourceRewriteId?: string;
   inputText?: string;
@@ -46,6 +48,8 @@ export interface ReplicationTask extends ReplicationInput {
   error: string;
   reference?: ReplicationReference | null;
   analysis: string;
+  transcript?: string;
+  transcriptStatus?: "transcribed" | "no_speech" | "unavailable";
   rewriteOriginalText: string;
   rewrittenText: string;
   firstFramePrompt?: string;
@@ -69,11 +73,29 @@ export interface ReplicationCase {
   step: 1 | 2 | 3 | 4; sourceMethod: ReplicationSource; shareText: string;
   referenceId?: string; reference?: ReplicationReference; mediaPath?: string;
   analysisText?: string; rewriteDirection?: string; persona?: string; rules?: string;
+  analysisProvider?: ReplicationAnalysisProvider;
+  transcript?: string; transcriptStatus?: "transcribed" | "no_speech" | "unavailable";
   rewrittenText?: string; firstFramePrompt?: string; frameReference?: ReplicationFrameReference | null;
   appliedAnalysisId?: string; appliedRewriteId?: string; workflowId?: string;
   analysisJob?: ReplicationTask; rewriteJob?: ReplicationTask;
 }
 export interface ReplicationWorkflowRequest extends ReplicationImageRequest { id: string; videoPrompt: string; duration: number }
+
+export function replicationAnalysisParts(task: Pick<ReplicationTask, "analysis" | "transcript" | "transcriptStatus">) {
+  let analysis = task.analysis;
+  let transcript = task.transcript || "";
+  let status = task.transcriptStatus || "unavailable";
+  try {
+    const value = JSON.parse(analysis);
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      transcript = typeof value.transcript === "string" ? value.transcript : transcript;
+      status = value.transcriptStatus || (transcript ? "transcribed" : status);
+      delete value.transcript; delete value.transcriptStatus;
+      analysis = typeof value.analysisText === "string" ? value.analysisText : JSON.stringify(value, null, 2);
+    }
+  } catch { /* Old plain-text analyses stay readable. */ }
+  return { analysisText: analysis, transcript, transcriptStatus: status as ReplicationCase["transcriptStatus"] };
+}
 
 /** Only extract an explicitly named field/section; never infer an image prompt from a shot. */
 export function replicationRewriteParts(text: string): { text: string; firstFramePrompt: string } {

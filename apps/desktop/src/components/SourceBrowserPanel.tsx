@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { type FormEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-shell";
@@ -66,7 +67,7 @@ export function SourceBrowserPanel({ url, onClose, visible = true, suspended = f
   const navigate = useCallback(async (nextUrl: string) => {
     const normalized = normalizeSourceAddress(nextUrl);
     if (!normalized) {
-      setError("请输入有效的 HTTP(S) 网址");
+      setError("网址格式不正确，请复制浏览器地址栏中的完整网址。");
       return;
     }
     setError(null);
@@ -277,7 +278,7 @@ export function SourceBrowserPanel({ url, onClose, visible = true, suspended = f
         <span>登录状态保存在本机</span>
       </nav>
 
-      {error && <div className="source-browser-error" role="alert">{error}</div>}
+      {error && <div className="source-browser-error" role="alert">{userErrorMessage(error, "网页暂时无法打开，请检查网络和网址后重试。")}</div>}
       <div ref={viewportRef} className="source-browser-viewport" data-source-browser-viewport>
         <div className="source-browser-placeholder" aria-hidden>
           {occluded ? "网页暂时隐藏，操作结束后恢复" : loading ? <><LoaderCircle size={20} className="animate-spin" />正在打开 {host}</> : "网页已就绪"}

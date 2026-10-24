@@ -32,6 +32,21 @@ pub struct CatalogOverview {
 }
 
 #[derive(Serialize)]
+pub struct CatalogGraphAsset {
+    pub id: String,
+    pub name: String,
+    pub store_path: Option<String>,
+    pub thumb_path: Option<String>,
+    pub tag_ids: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub struct CatalogGraphPage {
+    pub assets: Vec<CatalogGraphAsset>,
+    pub after: Option<String>,
+}
+
+#[derive(Serialize)]
 pub struct CatalogColorBatch {
     pub after: Option<String>,
     pub more: bool,
@@ -109,6 +124,48 @@ impl CatalogFilter {
 }
 
 impl Database {
+    /// Read topology and previews without full asset metadata or one query per tag.
+    /// Limit assets before joining memberships, so a multi-tag asset is never split.
+    pub fn catalog_graph_page(
+        &self,
+        filter: &CatalogFilter,
+        after: Option<&str>,
+        limit: i64,
+    ) -> AppResult<CatalogGraphPage> {
+        let (condition, mut values) = filter.sql()?;
+        let limit = limit.clamp(1, 512);
+        values.push(Value::Text(after.unwrap_or("").to_string()));
+        values.push(Value::Integer(limit));
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(&format!(
+            "WITH page AS (SELECT a.id,a.name,a.store_path,a.thumb_path FROM assets a WHERE {condition} AND a.id>? ORDER BY a.id LIMIT ?) \
+             SELECT a.id,a.name,a.store_path,a.thumb_path,t.tag_id FROM page a LEFT JOIN asset_tags t ON t.asset_id=a.id ORDER BY a.id,t.tag_id"
+        ))?;
+        let mut assets: Vec<CatalogGraphAsset> = Vec::new();
+        let mut rows = stmt.query(params_from_iter(values))?;
+        while let Some(row) = rows.next()? {
+            let id: String = row.get(0)?;
+            if assets.last().map(|asset| asset.id.as_str()) != Some(id.as_str()) {
+                assets.push(CatalogGraphAsset {
+                    id,
+                    name: row.get(1)?,
+                    store_path: row.get(2)?,
+                    thumb_path: row.get(3)?,
+                    tag_ids: Vec::new(),
+                });
+            }
+            if let Some(tag) = row.get::<_, Option<String>>(4)? {
+                assets.last_mut().unwrap().tag_ids.push(tag);
+            }
+        }
+        let after = if assets.len() == limit as usize {
+            assets.last().map(|asset| asset.id.clone())
+        } else {
+            None
+        };
+        Ok(CatalogGraphPage { assets, after })
+    }
+
     /// Repair only missing color indexes, in small user-requested batches. Existing
     /// managed colors are reused; old external references need their preview once.
     pub fn catalog_prepare_colors(
@@ -306,6 +363,109 @@ mod tests {
             ..Default::default()
         }
     }
+    #[test]
+    fn graph_batches_keep_all_memberships_without_duplicate_images() {
+        let db = fixture();
+        let first = db.catalog_graph_page(&filter(), None, 1).unwrap();
+        assert_eq!(first.assets.len(), 1);
+        assert_eq!(first.assets[0].id, "a");
+        assert_eq!(first.assets[0].tag_ids, vec!["a", "b"]);
+        assert_eq!(first.after.as_deref(), Some("a"));
+        let rest = db
+            .catalog_graph_page(&filter(), first.after.as_deref(), 512)
+            .unwrap();
+        assert_eq!(
+            rest.assets
+                .iter()
+                .map(|a| a.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["b", "c", "f"]
+        );
+        assert!(rest.assets[1].tag_ids.is_empty());
+        assert!(rest.after.is_none());
+        let mut expected = db.catalog_ids(&filter(), 0, 2000).unwrap();
+        expected.sort();
+        let all = db.catalog_graph_page(&filter(), None, 512).unwrap();
+        assert_eq!(
+            all.assets.iter().map(|a| a.id.clone()).collect::<Vec<_>>(),
+            expected
+        );
+        let project = db
+            .catalog_graph_page(
+                &CatalogFilter {
+                    project_id: Some("p".into()),
+                    ..filter()
+                },
+                None,
+                512,
+            )
+            .unwrap();
+        assert_eq!(project.assets.len(), 1);
+        assert_eq!(project.assets[0].id, "a");
+        assert_eq!(project.assets[0].tag_ids, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn graph_filters_and_limit_match_catalog_visibility() {
+        let db = fixture();
+        for f in [
+            CatalogFilter {
+                query: Some("%_".into()),
+                ..filter()
+            },
+            CatalogFilter {
+                generated: Some(true),
+                ..filter()
+            },
+            CatalogFilter {
+                color: Some("red".into()),
+                ..filter()
+            },
+            CatalogFilter {
+                project_id: Some("missing".into()),
+                ..filter()
+            },
+        ] {
+            let mut expected = db.catalog_ids(&f, 0, 2000).unwrap();
+            expected.sort();
+            assert_eq!(
+                db.catalog_graph_page(&f, None, 512)
+                    .unwrap()
+                    .assets
+                    .into_iter()
+                    .map(|a| a.id)
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
+        assert_eq!(
+            db.catalog_graph_page(&filter(), None, -1)
+                .unwrap()
+                .assets
+                .len(),
+            1
+        );
+        {
+            let mut conn = db.conn.lock().unwrap();
+            let tx = conn.transaction().unwrap();
+            for i in 0..520 {
+                tx.execute(
+                    "INSERT INTO assets(id,name,ext) VALUES(?1,'graph','jpg')",
+                    [format!("graph-{i:06}")],
+                )
+                .unwrap();
+            }
+            tx.commit().unwrap();
+        }
+        let first = db.catalog_graph_page(&filter(), None, i64::MAX).unwrap();
+        assert_eq!(first.assets.len(), 512);
+        let second = db
+            .catalog_graph_page(&filter(), first.after.as_deref(), 512)
+            .unwrap();
+        assert_eq!(second.assets.len(), 12);
+        assert!(second.after.is_none());
+    }
+
     #[test]
     fn bounded_pages_have_stable_ties_null_dates_and_unique_ids() {
         let db = fixture();

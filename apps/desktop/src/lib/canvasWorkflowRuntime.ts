@@ -208,6 +208,7 @@ export class CanvasWorkflowController {
     await this.writing.catch(() => {}); this.writing = Promise.resolve(); await this.save();
   }
   async edit(nodes: WorkflowNode[], history?: { removedRuns: WorkflowRun[]; runOrder: string[] }) {
+    if (nodes.some(node => node.kind !== "text") || this.document.nodes.some(node => node.kind !== "text")) await api.canvasWorkflowAuthorize();
     if (this.encapsulating) throw new Error("正在封装卡片，请稍后再编辑");
     if (!this.ready) throw new Error("工作流尚未载入");
     nodes = nodes.map(node => this.isLocked(node.id) ? node : normalizeWorkflowInputSlots(node, this.document.nodes.find(previous => previous.id === node.id)));
@@ -411,16 +412,17 @@ export class CanvasWorkflowController {
     } });
   }
 
-  async start(startId: string, single = false) {
+  async start(startId: string, single = false, background = false) {
     this.issue = null; this.emit();
-    try { await this.startRun(startId, single); }
+    try { await this.startRun(startId, single, undefined, background); }
     catch (error) {
       const node = this.document.nodes.find(node => node.id === startId);
       if (node) { this.issue = workflowDiagnostic(error, node, "validation"); this.emit(); }
       throw error;
     }
   }
-  private async startRun(startId: string, single = false, completionSessionId?: string) {
+  private async startRun(startId: string, single = false, completionSessionId?: string, background = false) {
+    if (this.document.nodes.some(node => node.kind !== "text")) await api.canvasWorkflowAuthorize();
     if (this.encapsulating) throw new Error("正在封装卡片，请稍后再运行");
     if (!this.ready) throw new Error("工作流尚未载入");
     if (this.document.nodes.find(node => node.id === startId)?.kind === "loop") single = false;
@@ -594,7 +596,9 @@ export class CanvasWorkflowController {
       accountId: useStore.getState().cloudAuth?.user_id ?? null,
       steps: Object.fromEntries(order.map(id => [id, { status: "pending" as const }])) }, nodes);
     } finally { this.reservations.delete(runId); this.emit(); }
-    await this.continue(runId);
+    const execution = this.continue(runId);
+    if (background) void execution.catch(error => { this.error = String(error); this.emit(); });
+    else await execution;
   }
   async stop(runId = this.document.run?.id) {
     if (!runId) return;

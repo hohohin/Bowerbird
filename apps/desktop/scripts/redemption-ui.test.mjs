@@ -44,6 +44,13 @@ try {
   await page.getByRole("status").filter({ hasText: "权益暂未同步" }).waitFor();
   await page.getByRole("button", { name: "刷新权益", exact: true }).click();
   await page.waitForFunction(() => window.store.getState().cloudBusy === false);
+  await page.evaluate(() => { window.mode = "new"; });
+  await input.fill("new-pro-code"); await button.click();
+  await page.getByRole("status").filter({ hasText: "本兑换码不含 Bcoin" }).waitFor();
+  await page.evaluate(() => window.store.setState({ cloudEntitlement: window.free }));
+  await page.getByRole("button", { name: "领取一次 7 天 Pro 功能体验" }).click();
+  await page.getByRole("status").filter({ hasText: "到期不会自动扣款" }).waitFor();
+  assert.deepEqual(await page.evaluate(() => window.store.getState().cloudEntitlement.balances), { daily: 0, sub: 0, topup: 0 });
   await mkdir(".tmp", { recursive: true });
   await page.screenshot({ path: ".tmp/redemption-settings.png" });
   await page.evaluate(() => window.store.setState({ cloudAuth: { ...window.store.getState().cloudAuth, logged_in: false } }));

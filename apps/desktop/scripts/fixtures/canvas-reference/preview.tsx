@@ -1,4 +1,7 @@
 import { installCatalogPagingMock } from "../catalogPagingMock";
+import { installMediaImportMock } from "../mediaImportMock";
+import { FileDropImport } from "../../../src/components/FileDropImport";
+import { LibraryHome } from "../../../src/components/LibraryHome";
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { CanvasWorkspace } from "../../../src/components/CanvasWorkspace";
@@ -17,6 +20,8 @@ import "../../../src/styles.css";
 
 // Closed synthetic IPC fixture: never reads a library or invokes a provider.
 const w = window as any;
+const mediaImport = new URLSearchParams(location.search).has("media-import");
+const mediaHome = new URLSearchParams(location.search).has("media-home");
 const explorer = new URLSearchParams(location.search).has("explorer");
 const localFiles = new URLSearchParams(location.search).has("local-files");
 const sourceLibrary = new URLSearchParams(location.search).has("source-library");
@@ -404,6 +409,7 @@ if (detailRoute) {
   useStore.setState({ loadSettings: async () => {}, loadCloudAccount: async () => {}, loadGenJobs: async () => {}, loadCloudAgentRuns: async () => {} });
   useOnboarding.setState(state => ({ guide: { ...state.guide, status: "skipped" }, progress: { ...state.progress, updateSeen: true } }));
 }
+if (mediaHome) useStore.setState({ activeProjectId: null });
 function Fixture() {
   const folderMode = useLocalFileMode(s => s.open);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
@@ -419,7 +425,11 @@ function Fixture() {
       launchRequest={reuse?.targetProjectId === projectId ? { id: reuse.id, projectId, assetIds: [], promptLoad: reuse.promptLoad } : null}
       onLaunchConsumed={id => useStore.getState().ackPendingCreativeReuse(id)} />
   </React.Profiler>;
+  if (mediaHome) return <div className="app-shell" style={{ display: "flex", flexDirection: "column", height: "100vh" }}><FileDropImport />
+    <Toolbar localFilesOpen={folderMode} canvasMode={false} onCanvasModeChange={() => {}} onCreateCreative={() => {}} onRefresh={async () => {}} />
+    <main style={{ flex: 1, minHeight: 0 }}><LibraryHome /></main><ToastViewport /></div>;
   return <div className="app-shell" style={{ display: "flex", height: "100vh" }}>
+    {mediaImport && <FileDropImport />}
     {sourceLibrary || localFiles ? <div className="flex min-w-0 flex-1 flex-col">
       <Toolbar localFilesOpen={folderMode} canvasMode={toolbarCanvasMode} onCanvasModeChange={setToolbarCanvasMode} onCreateCreative={() => {}} onRefresh={async () => {}} />
       <div className="flex min-h-0 flex-1">{canvas}</div>
@@ -428,5 +438,6 @@ function Fixture() {
   </div>;
 }
 installCatalogPagingMock(window);
+if (mediaImport) installMediaImportMock(w, assets);
 createRoot(document.getElementById("root")!).render(new URLSearchParams(location.search).has("strict")
   ? <React.StrictMode>{detailRoute ? <App /> : <Fixture />}</React.StrictMode> : detailRoute ? <App /> : <Fixture />);

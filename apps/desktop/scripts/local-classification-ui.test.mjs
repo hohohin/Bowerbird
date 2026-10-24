@@ -163,7 +163,8 @@ try {
   await ranking.getByText("已按概率与 42% 门槛选出标签", { exact: true }).waitFor();
   assert.equal(await jevResults.getByText("选中标签", { exact: true }).count(), 1);
   await setJevChoices([.4, .3, .2, .1, 0], "Jev Choice 置信度无效");
-  await jevResults.getByText("本图未采用：Jev Choice 置信度无效", { exact: true }).waitFor();
+  await jevResults.getByText("本图未采用：未能识别这张图片，请稍后重新分类。", { exact: true }).waitFor();
+  assert.doesNotMatch(await jevResults.innerText(), /Jev Choice 置信度无效/);
   assert.equal(await jevResults.getByText("结果不完整，未采用", { exact: true }).count(), 1);
   assert.equal(await jevResults.getByText("选中标签", { exact: true }).count(), 0);
   await dialog.getByRole("button", { name: "停止", exact: true }).click();

@@ -1,6 +1,14 @@
 import { test } from 'node:test';
 import { equal } from 'node:assert/strict';
-import { replicationDuration, replicationRewriteParts, replicationRewriteInput, validateReplicationInput } from '../src/lib/videoReplication.ts';
+import { replicationAnalysisParts, replicationDuration, replicationRewriteParts, replicationRewriteInput, validateReplicationInput } from '../src/lib/videoReplication.ts';
+
+test('analysis separates speech from shot text and keeps old results readable', () => {
+  const result=replicationAnalysisParts({analysis:JSON.stringify({overview:'画面',shots:[],transcript:'你好',transcriptStatus:'transcribed'})});
+  equal(result.transcript,'你好');equal(result.transcriptStatus,'transcribed');equal(result.analysisText.includes('transcript'),false);
+  const legacy=replicationAnalysisParts({analysis:'旧分析'});equal(legacy.analysisText,'旧分析');equal(legacy.transcriptStatus,'unavailable');
+  const plain=replicationAnalysisParts({analysis:JSON.stringify({analysisText:'start: 0, end: 5\n产品特写。',transcript:'你好',transcriptStatus:'transcribed'})});
+  equal(plain.analysisText,'start: 0, end: 5\n产品特写。');equal(plain.transcript,'你好');equal(plain.transcriptStatus,'transcribed');
+});
 
 test('rewrite duration spans start/end, rounds up and does not clamp to model limits', () => {
   equal(replicationDuration('{"shots":[{"start":2,"end":5},{"end":12.1,"start":4}]}'),11);
